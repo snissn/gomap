@@ -276,6 +276,19 @@ diagnostics, and cleanup accounting. A higher cleaned or published `WALLSN` from
 one collection must never cause recovery to skip a lower unapplied
 `CollectionSeq` from another collection.
 
+Collection WAL recovery must enforce the abstract state machine in
+`collection-wal-durability-plan.md`. In particular:
+
+- descriptor-only and watermark-only backend commits are invalid in WAL-on
+  modes and must stop open unless a future format provides an explicit repair
+  protocol;
+- replay skip requires the same collection's applied sequence plus matching
+  guard history, never global `WALLSN` ranges;
+- side refs referenced by complete uncleaned WAL remain protected until
+  `CanCleanSideRef` is true;
+- read-only recovery detection uses `CanSkipReplay` and `CanReplay`, not raw file
+  presence alone.
+
 Read-write recovery must run collection WAL replay before collection managers,
 native-wire servers, or user collection handles can observe collection state.
 Read-only open must fail with recovery-required if unapplied committed

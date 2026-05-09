@@ -98,6 +98,13 @@ physical deltas already committed to collection WAL.
 
 That future contract requires WAL-before-visibility ordering. WAL-on collection
 writers must use private planning, durable commit, and visible install phases.
+The visible install guard is the `CanInstallVisible` predicate in
+`collection-wal-durability-plan.md`: no mutable, queued, publishing, planner, or
+unique-check state may observe a WAL-on mutation until its canonical root delta,
+required side-ref closure, side-ref protection, and complete collection WAL
+frame are recoverable. WAL-off relaxed writes keep the current weaker
+flush-boundary contract and must not create collection WAL frames for unflushed
+visible state.
 During private planning, root deltas, side refs, uniqueness reservations,
 publish inputs, and schema/index barrier state are not reachable from any read,
 scan, uniqueness check, update/delete planner, queued unit, publishing unit, or

@@ -223,6 +223,10 @@ Acceptance:
 - a node distinguishes `consensus_committed`, `locally_applied`, and
   `locally_recoverable`; client `raft_committed` success is not returned until
   the responding node satisfies the selected local apply durability rule,
+- persistent applied-index, idempotency-result, and catalog-guard outcome
+  metadata cannot advance past a collection mutation unless that mutation is
+  `CollectionWALRecoverable` locally, or a later stable-Raft replay design proves
+  the entry is replayed before serving;
 - the same committed entry sequence applied to fresh DBs in separate processes
   produces the same logical state digest,
 - snapshot restore plus log-tail replay produces the same logical state digest

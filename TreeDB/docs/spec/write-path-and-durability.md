@@ -76,7 +76,10 @@ WAL-on collection writes add a stronger visibility boundary: no collection read,
 scan, uniqueness check, update/delete planner, or pending-state merge may observe
 a mutation before its collection WAL transaction is committed/recoverable. The
 write path is private planning, side-ref preparation/protection, collection WAL
-commit, then visible install.
+commit, then visible install. The authoritative guard is `CanInstallVisible` in
+`collection-wal-durability-plan.md`; WAL-on implementations must reject any
+path that can return success or expose pending visibility without satisfying
+that predicate.
 
 The collection WAL is a local storage apply log, not a Raft log and not a
 native-wire deterministic command entry. Non-sync collection APIs under WAL-on

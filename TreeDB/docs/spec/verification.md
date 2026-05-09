@@ -256,6 +256,15 @@ Required coverage:
 - `TestCollectionWALValueLogGCBlockedByPendingSideRef`
 - `TestCollectionWALValueLogGCReleasedAfterWatermarkCheckpoint`
 - `TestCollectionWALArtifactRedaction`
+- `TestCollectionWALModelDescriptorWatermarkSplitRejected`
+- `TestCollectionWALModelVisibleImpliesRecoverable`
+- `TestCollectionWALModelSideRefProtectHappensBeforeGuardRelease`
+- `TestCollectionWALModelDeterministicReplayDigest`
+- `TestCollectionWALModelStateClassifierExclusive`
+- `TestCollectionWALModelSkipUsesCollectionSeqOnly`
+- `TestCollectionWALModelMaintenanceGuardBlocksRewrite`
+- `TestCollectionWALModelRaftAppliedIndexRequiresLocalRecoverability`
+- `TestCollectionWALTypedPublishWrapperRejectsFreeFormSystemDelta`
 - `TestCollectionWALCostEstimatorMatchesEncoder`
 - `TestCollectionWALRootDeltaSpillThresholds`
 - `TestCollectionWALOversizedTransactionFailsBeforeAck`
@@ -268,6 +277,28 @@ Required coverage:
 - `TestCollectionWALSegmentRotationAndCheckpointRotation`
 - `TestCollectionWALDurableSyncBatchCaps`
 - `TestColumnWALSideRefCapacityLimits`
+
+Formal invariant mapping:
+
+| Invariant | Required evidence |
+|---|---|
+| `I1` gap-free sequence | `TestCollectionWALWatermarkOutOfOrderTxnDoesNotSkipLowerUnapplied`; model transition test for missing lower same-collection sequence. |
+| `I2` WAL-before-visible | `TestCollectionWALModelVisibleImpliesRecoverable`; fault injection before/after side-ref prepare, WAL marker, and visible install. |
+| `I3` side refs before WAL | `TestCollectionWALPartialFrameAndMissingSideRefNoPhantomRoots`; side-ref closure fuzz target. |
+| `I4` WAL side-ref protection | `TestCollectionWALModelSideRefProtectHappensBeforeGuardRelease`; GC/rewrite interleaving model test. |
+| `I5` descriptor/watermark atomicity | `TestCollectionWALModelDescriptorWatermarkSplitRejected`; `TestCollectionWALTypedPublishWrapperRejectsFreeFormSystemDelta`. |
+| `I6` per-collection skip | `TestCollectionWALModelSkipUsesCollectionSeqOnly`; mixed-collection segment cleanup model test. |
+| `I7` whole-transaction publish | Indexed insert/update/delete recovery tests and root-group publish fault tests. |
+| `I8` checkpoint before cleanup | `TestCollectionWALRecoveryCrashAndCleanupAreIdempotent`; cleanup manifest corruption fixtures. |
+| `I9` deterministic replay | `TestCollectionWALModelDeterministicReplayDigest`; replay accumulator property test comparing live and recovery digests. |
+| `I10` no double apply | Repeated recovery after `S4 Applied` watermark and crash-after-publish tests. |
+| `I11` maintenance serialized | `TestCollectionWALModelMaintenanceGuardBlocksRewrite`; value-log GC/rewrite blocked-by-pending-side-ref tests. |
+| `I12` Raft local metadata | `TestCollectionWALModelRaftAppliedIndexRequiresLocalRecoverability`; future Raft apply crash matrix. |
+| `I13` WAL-off exception | `TestCollectionWALOffRelaxedNoIndexAckBeforeFlushDoesNotClaimRecovery`; WAL-off model branch. |
+
+The invariant table is evidence only when each entry points to an executable Go
+test, model-checkable transition test, fuzz target, or generated proof artifact
+recorded in `artifacts/collection-wal/<milestone>/acceptance.json`.
 
 Acceptance artifacts:
 - The collection WAL gate requires exact byte fixtures, not only round-trip

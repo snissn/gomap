@@ -1583,27 +1583,417 @@ immutable unit before inclusion in a view or copied into the view.
 
 ## 9. Recovery Algorithm
 
-### 9.1 Collection WAL Recovery States
+### 9.1 Abstract Model and State Machine
 
-A collection WAL transaction is in exactly one durable recovery state:
+This section is normative for WAL-on collection durability. Product code may use
+different internal types, but every implementation and test model must be able
+to express these variables, predicates, transitions, and invariants.
 
-| State | Meaning | Recovery behavior |
+State variables:
+
+```text
+Mode in {DurabilityDurable, DurabilityWALOnRelaxed,
+         DurabilityWALOffRelaxed}
+
+Txn identity:
+  CollectionUID, CollectionSeq, WALLSN, CollectionGeneration,
+  SchemaEpoch, CatalogDigest
+
+Transaction existence:
+  PlannedHidden(t)
+  PreparedSideRefsExist(t)
+  CompleteWALFrame(t)
+  CommitMarkerDurable(t)
+  VisiblePending(t)
+  VisibleInstalled(t)
+  VisibleInstallWasAfterWALCommit(t)
+  PublishingInFlight(t)
+  MaterializedUnpublished(t)
+  Applied(t)
+  CheckpointCovered(t)
+  Cleaned(t)
+  Quarantined(CollectionUID)
+
+Root group:
+  RootDeltas(t)
+  RootDescriptorBefore(root)
+  RootDescriptorAfter(root)
+  RootGeneration(root)
+  SystemDeltaTemplate(t)
+  DescriptorCommitID(t)
+  DescWrites(commit, CollectionUID)
+  Cover(commit, CollectionUID)
+
+Watermarks:
+  AppliedSeq[CollectionUID]
+  CheckpointSeq[CollectionUID]
+  CleanupManifestRanges
+  GlobalWALLSNRanges     // cleanup scan aid only, never replay dependency
+
+Side refs:
+  RequiredRefs(t)
+  DeclaredRefs(t)
+  EmbeddedRefs(t)
+  Prepared(ref)
+  FreshReadable(ref)
+  ChecksumOK(ref)
+  PrepareGuardHeld(ref)
+  ProtectedByWAL(ref,t)
+  RootReachable(ref)
+  ReadViewPinned(ref)
+
+Checkpoint and cleanup:
+  BackendMetaBoundaryID
+  BackendBoundaryDurable(boundary)
+  SegmentCleanupState in {None, Planned, Unlinked, DirSynced}
+  SegmentDecodedTransactions(segment)
+
+Raft extension:
+  ConsensusCommitted(index)
+  LocalWALRecoverable(index)
+  LocalOutcomeDurable(index)
+  IdempotencyResultDurable(index)
+  CatalogGuardOutcomeDurable(index)
+  PersistentAppliedIndex
+```
+
+State predicates:
+
+```text
+CanonicalSideRefClosure(t) :=
+    all side refs reachable from encoded root values, column descriptors,
+    value pointers, external page/log descriptors, and transitive descriptor refs
+
+SideRefsReady(t) :=
+    RequiredRefs(t) = CanonicalSideRefClosure(t)
+  and DeclaredRefs(t) = RequiredRefs(t)
+  and DeclaredRefs(t) are sorted and unique
+  and for every ref in RequiredRefs(t):
+        Prepared(ref) and FreshReadable(ref) and ChecksumOK(ref)
+
+SideRefsProtected(t) :=
+    for every ref in RequiredRefs(t):
+        ProtectedByWAL(ref,t) or PrepareGuardHeld(ref)
+
+Recoverable(t) :=
+    Applied(t)
+  or (Mode in {DurabilityDurable, DurabilityWALOnRelaxed}
+      and CompleteWALFrame(t)
+      and CommitMarkerDurable(t)
+      and SideRefsReady(t))
+
+Visible(t) :=
+    VisiblePending(t) or VisibleInstalled(t)
+
+CanAppendWAL(t) :=
+    PlannedHidden(t)
+  and CanonicalRootDelta(t)
+  and for every ref in RequiredRefs(t):
+        Prepared(ref)
+        and FreshReadable(ref)
+        and ChecksumOK(ref)
+        and PrepareGuardHeld(ref)
+
+CanInstallVisible(t) :=
+    if Mode = DurabilityWALOffRelaxed:
+        VisibleInstallIsNonFailing(t)
+    else:
+        PlannedHidden(t)
+        and CanonicalRootDelta(t)
+        and RequiredRefs(t) = CanonicalSideRefClosure(t)
+        and SideRefsReady(t)
+        and SideRefsProtected(t)
+        and CompleteWALFrame(t)
+        and CommitMarkerDurable(t)
+        and VisibleInstallIsNonFailing(t)
+
+CanAck(t) :=
+    if Mode = DurabilityWALOffRelaxed:
+        VisibleInstalled(t)
+    else:
+        CanInstallVisible(t)
+        and VisibleInstalled(t)
+        and VisibleInstallWasAfterWALCommit(t)
+
+CanReplay(t,A) :=
+    Mode in {DurabilityDurable, DurabilityWALOnRelaxed}
+  and CompleteWALFrame(t)
+  and not Applied(t)
+  and SideRefsReady(t)
+  and t.CollectionSeq = A.NextSeq(t.CollectionUID)
+  and t.DependsOnCollectionSeq = t.CollectionSeq - 1
+  and (t.DependsOnCollectionSeq <= AppliedSeq[t.CollectionUID]
+       or t.DependsOnCollectionSeq in A.CoveredSeqs(t.CollectionUID))
+  and IdentitySchemaCatalogGuardsHold(t,A)
+  and RootGenerationGuardsHold(t,A)
+  and SystemDeltaTemplatePreconditionsHold(t,A)
+
+CanPublish(c,N,M,A) :=
+    N = AppliedSeq_before[c]
+  and M >= N
+  and transactions {c,N+1 ... c,M} are all present in accumulator A
+  and no gaps exist in [N+1, M]
+  and all root deltas for all covered transactions are folded
+  and SystemDeltaTemplate produces exactly descriptor updates for folded roots
+  and the same backend commit advances AppliedSeq[c] to M
+
+CanSkipReplay(t) :=
+    CompleteWALFrame(t)
+  and AppliedSeq[t.CollectionUID] >= t.CollectionSeq
+  and CollectionIdentityGuardOK(t)
+  and CatalogHistoryAllows(t)
+  and if segment is missing then CleanupManifestCovers(t)
+
+CanCleanSideRef(ref,t) :=
+    Applied(t)
+  and CheckpointCovered(t)
+  and RootReachabilityTrackerContainsOrFullScanProves(ref)
+  and not ReadViewPinned(ref)
+  and DurableCleanupMetadataWillRelease(ref,t)
+  and no uncleaned complete transaction references ref
+
+CanClean(segment) :=
+    for every complete transaction t in SegmentDecodedTransactions(segment):
+        Applied(t)
+        and CheckpointCovered(t)
+        and for every ref in RequiredRefs(t): CanCleanSideRef(ref,t)
+    and cleanup manifest update is durable before a missing segment is accepted
+
+CanStartMaintenance(op, object) :=
+    RecoveryComplete
+  and no PrepareGuardHeld(object)
+  and no CompleteUncleanedTxnReferences(object)
+  and no LiveReadViewPins(object)
+  and if op rewrites published root descriptors then op has its own
+      collection maintenance transaction and CollectionSeq
+
+CanAdvanceRaftAppliedIndex(i) :=
+    for every command entry e <= i assigned to this node:
+        LocalOutcomeDurable(e)
+        and IdempotencyResultDurable(e)
+        and CatalogGuardOutcomeDurable(e)
+        and (CollectionWALRecoverable(e)
+             or StableRaftReplayBeforeServingProven(e))
+```
+
+Append/protect happens-before rule:
+
+```text
+AppendWAL(t) postcondition:
+    CompleteWALFrame(t)
+  and for every ref in RequiredRefs(t): ProtectedByWAL(ref,t)
+
+ReleasePrepareGuard(ref,t) is allowed only after:
+    CompleteWALFrame(t) and ProtectedByWAL(ref,t)
+or:
+    AbortPreparedSideRef(ref,t) and no complete WAL frame can reference ref
+```
+
+Descriptor/watermark atomicity rule:
+
+```text
+For every backend commit K and collection c:
+
+DescWrites(K,c) is non-empty
+  iff there exist N,M such that:
+       N = AppliedSeq_before[c]
+       and M > N
+       and Cover(K,c) = { txn(c,s) | N < s and s <= M }
+       and no gaps exist in [N+1, M]
+       and DescWrites(K,c) = DescriptorResult(Fold(Cover(K,c)))
+       and AppliedSeq_after[c] = M
+
+AppliedSeq_after[c] > AppliedSeq_before[c]
+  implies DescWrites(K,c) is exactly the descriptor/root metadata produced by
+  the same covered transaction range.
+
+Descriptor-only and watermark-only backend commits are invalid states in
+WAL-on modes.
+```
+
+Transition table:
+
+| Transition | Guard | Postcondition |
 |---|---|---|
-| `S0 Absent` | No complete collection WAL frame exists. | Do not publish roots. Any side files not referenced by a committed WAL transaction or published root are orphan-prepared and may be quarantined or deleted. |
-| `S1 PreparedSideRefs` | Side bytes may exist, but no complete committed WAL frame references them. | Do not publish roots. Reclaim only after proving no complete WAL transaction and no published root references the bytes. |
-| `S2 CommittedWAL` | A complete collection WAL frame with valid checksums exists and is not covered by the durable applied watermark. | Validate all required side refs, identity, schema, generations, and dependencies; then replay in collection sequence order. Missing or corrupt required side refs stop open. |
-| `S3 MaterializedUnpublished` | Recovery or live publish built root pages or publish-output files, but backend meta/system-root commit did not publish root descriptors. | Not externally visible. After crash, retry from `S2` or skip if `S4` is observed. |
-| `S4 Applied` | One backend meta/system-root commit atomically published root descriptor changes and applied watermark entries covering the transaction. | Skip during replay. Reapplying an `S4` transaction is a bug. |
-| `S5 Cleanable` | Transaction is `S4`, and a durable checkpoint/meta boundary exists such that descriptors, watermarks, and side-ref reachability tracking for published roots are durable. | WAL files and WAL-only side-ref protection may be cleaned idempotently. |
-| `S6 Cleaned` | Durable cleanup metadata says the segment or transaction range is safely cleaned. | Missing segment files are acceptable only for ranges covered by this metadata. Missing uncleaned segments stop open. |
+| `PlanWrite` | Collection open, admission gate allows write, schema/catalog guards captured. | `PlannedHidden(t)`; no reader can observe it. |
+| `PrepareSideRefs` | `PlannedHidden(t)` and canonical side-ref set known. | Side bytes readable/checksummed; prepare guards held. |
+| `AppendWAL` | `CanAppendWAL(t)`. | Complete frame and commit marker exist; refs are WAL-protected before guard release. |
+| `InstallVisible` | WAL-off: local policy allows. WAL-on: `CanInstallVisible(t)`. | `VisiblePending(t)`; WAL-on `Visible(t) implies Recoverable(t)`. |
+| `Ack` | `CanAck(t)`. | Client success is legal; post-commit bookkeeping failures become fatal/ambiguous, not ordinary mutation errors. |
+| `PublishRootGroup` | `CanPublish(c,N,M,A)`. | One backend commit writes all affected root descriptors and advances applied watermark. |
+| `AdvanceWatermark` | Not a standalone transition in WAL-on. | Happens only inside `PublishRootGroup`. |
+| `Checkpoint` | Admission cut selected; admitted writes drained or excluded by cut. | Durable backend boundary covers descriptors, watermarks, and reachability state. |
+| `CleanWALSegment` | `CanClean(segment)`. | Cleanup metadata durable; segment may be unlinked; missing segment acceptable only if metadata covers it. |
+| `RecoveryScan` | Exclusive recovery/maintenance lock. | Reads cleanup metadata, segments, watermarks, refs; classifies every transaction. |
+| `Replay` | `CanReplay(t,A)`. | Accumulator includes `t`; eventual publish covers whole transactions only. |
+| `SkipApplied` | `CanSkipReplay(t)`. | Transaction is not replayed. |
+| `BlockRecovery` | Missing lower same-collection transaction or corrupt required side ref. | Open fails or collection is explicitly quarantined. |
+| `Quarantine` | Recovery policy permits per-collection quarantine. | Collection unavailable; no normal reads/writes until repair. |
+| `MaintenanceRewrite` | `CanStartMaintenance(op, object)`. | No change, or a WAL-covered maintenance transaction with its own `CollectionSeq`. |
+| `WALOffFlushPublish` | WAL-off mode and flush/close/checkpoint boundary. | Backend roots become durable; no collection-WAL replay state is created. |
+| `AdvanceRaftAppliedIndex` | `CanAdvanceRaftAppliedIndex(i)`. | Persistent applied-index/idempotency state cannot outrun local recoverability. |
+
+Invariants:
+
+```text
+I1. Gap-free sequence:
+    For every collection c, recovery never applies c:s+1 before c:s.
+
+I2. WAL-before-visible in WAL-on:
+    Mode != DurabilityWALOffRelaxed implies Visible(t) implies Recoverable(t).
+
+I3. Side refs before WAL:
+    CompleteWALFrame(t) implies SideRefsReady(t) was true at append time.
+
+I4. WAL side-ref protection:
+    CompleteWALFrame(t) and not CanCleanSideRef(ref,t)
+    implies ProtectedByWAL(ref,t).
+
+I5. Descriptor/watermark atomicity:
+    No backend commit may publish collection root descriptors without the
+    matching applied-watermark advance, and no watermark may advance without the
+    matching descriptor result.
+
+I6. Per-collection skip:
+    Replay skip is based only on same-collection applied watermark plus guard
+    history, never on global WALLSN.
+
+I7. Whole-transaction publish:
+    A transaction is applied only if every root delta, descriptor update,
+    side-ref dependency, and watermark update for that transaction committed
+    together.
+
+I8. Checkpoint before cleanup:
+    WAL files and WAL-only side-ref protections are cleanable only after applied
+    watermark plus durable checkpoint boundary plus reachability/read-view proof.
+
+I9. Deterministic replay:
+    Live publish and recovery replay of the same valid committed transaction
+    prefix produce the same logical root descriptors, catalog digest, watermark,
+    and replay digest.
+
+I10. No double apply:
+    AppliedSeq[c] >= s implies recovery must not reapply txn(c,s).
+
+I11. Maintenance is serialized:
+    Maintenance cannot delete, rewrite, reset, or unprotect an object reachable
+    from complete uncleaned WAL, published roots, or live read views.
+
+I12. Raft local metadata:
+    Persistent applied-index/idempotency state cannot move past local collection
+    mutation recoverability unless a future stable Raft replay proof replaces
+    that local-WAL requirement.
+
+I13. WAL-off exception:
+    WAL-off visible pending writes are allowed to be unrecoverable, but they
+    must not create collection-WAL files or claim durable-at-ack.
+```
+
+Deterministic replay theorem:
+
+```text
+Given the same durable backend base state B, the same valid committed
+transaction prefix P for a collection, the same verified side-ref bytes,
+canonical root-delta decoding, and no free-form system builders, Fold(P,B)
+produces the same logical root descriptors, catalog digest, applied watermark,
+and ReplayDigest independent of process, crash point, batching, async flush
+timing, or recovery pass count.
+```
+
+Commutativity and total-order rules:
+
+```text
+Total order required:
+  same CollectionUID mutations by CollectionSeq;
+  schema/index/catalog changes relative to same-collection mutations;
+  overlay compaction and maintenance txns relative to same-collection writes;
+  checkpoint admission cuts relative to admitted writes;
+  cleanup relative to checkpoint metadata;
+  Raft applied-index relative to local mutation outcome.
+
+Commutative only if:
+  operations touch disjoint CollectionUIDs,
+  do not share catalog/schema/root descriptor keys,
+  do not share side refs or maintenance guards,
+  and their backend commits can be serialized without changing each operation's
+  guards or digest.
+```
+
+WAL-off branch:
+
+```text
+Mode = DurabilityWALOffRelaxed:
+  CanAck(t) := VisibleInstalled(t)
+  CompleteWALFrame(t) must be false for unflushed writes
+  CanReplay(t) := false for unflushed writes
+  CanPublish(t) uses normal backend root publish at Flush/Close/Checkpoint
+  Visible(t) does not imply Recoverable(t)
+  Published(t) implies RecoverableFromBackendRoots(t)
+```
+
+### 9.2 Collection WAL Recovery State Classifier
+
+A collection WAL transaction is classified into exactly one durable recovery
+state by priority:
+
+| Priority | State | Predicate | Recovery behavior |
+|---:|---|---|---|
+| 1 | `S6 Cleaned` | `CleanupManifestCovers(t)`. | Missing segment files are acceptable only for ranges covered by this metadata. Missing uncleaned segments stop open. |
+| 2 | `S5 Cleanable` | `Applied(t)` and `CheckpointCovered(t)`. | WAL files and WAL-only side-ref protection may be cleaned idempotently when read-view and side-ref guards allow it. |
+| 3 | `S4 Applied` | One backend meta/system-root commit atomically published root descriptor changes and applied watermark entries covering the transaction. | Skip during replay. Reapplying an `S4` transaction is a bug. |
+| 4 | `S3 MaterializedUnpublished` | Recovery or live publish built root pages or publish-output files, but backend meta/system-root commit did not publish root descriptors. | Not externally visible. After crash, retry from `S2` or skip if `S4` is observed. |
+| 5 | `S2 CommittedWAL` | A complete collection WAL frame with valid checksums exists and is not covered by the durable applied watermark. | Validate all required side refs, identity, schema, generations, and dependencies; then replay in collection sequence order. Missing or corrupt required side refs stop open. |
+| 6 | `S1 PreparedSideRefs` | Side bytes may exist, but no complete committed WAL frame references them. | Do not publish roots. Reclaim only after proving no complete WAL transaction and no published root references the bytes. |
+| 7 | `S0 Absent` | No complete collection WAL frame exists. | Do not publish roots. Any side files not referenced by a committed WAL transaction or published root are orphan-prepared and may be quarantined or deleted. |
+
+Orthogonal volatile predicates are not durable states and must be modeled
+separately: `VisiblePending(t)`, `ReadViewPinned(t)`, `PublishingInFlight(t)`,
+`MaintenanceGuardHeld(ref)`, `Quarantined(CollectionUID)`, and
+`CloseAdmitted(t)`.
+
+Crash/recovery rules:
+
+| Crash point | Durable state after restart | Recovery rule |
+|---|---|---|
+| Before side-ref prepare | `S0 Absent` | Nothing to replay. |
+| After side bytes, before complete WAL marker | `S1 PreparedSideRefs` | Do not publish; delete/quarantine only after proving no complete WAL/root ref. |
+| After complete WAL marker, before visible install | `S2 CommittedWAL` | Validate refs/guards; replay in `CollectionSeq` order. |
+| After visible install, before client response | `S2 CommittedWAL` unless already applied | Replay may make write visible after reopen; client result is commit-ambiguous. |
+| After client ack, before publish | `S2 CommittedWAL` | Replay required. |
+| After root pages/files materialized, before backend meta commit | `S3 MaterializedUnpublished` | Materialized outputs are not authoritative; retry from WAL. |
+| After descriptor plus watermark backend commit | `S4 Applied` | Skip; reapply is a bug. |
+| Descriptor without watermark, or watermark without descriptor | Invalid | Stop open unless a proven repair protocol exists. |
+| After durable checkpoint boundary covers applied state | `S5 Cleanable` | WAL and WAL-only side-ref protection may be cleaned if read-view/reachability guards pass. |
+| During cleanup before durable cleanup metadata | Still not safely cleaned | Missing segment is not acceptable. |
+| After durable cleanup metadata covers range | `S6 Cleaned` | Missing segment is acceptable only for covered range. |
+| Complete WAL with missing/corrupt required side ref | Corrupt or quarantinable | Stop open or explicitly quarantine affected collection; do not skip later same-collection txns. |
+
+Cleanup rule:
+
+```text
+A WAL segment is cleanable only if every complete transaction in the segment is
+individually proven safe:
+
+for each transaction t in segment:
+  AppliedSeq[t.CollectionUID] >= t.CollectionSeq
+  and CheckpointSeq[t.CollectionUID] >= t.CollectionSeq
+  and all required side refs are root-reachable, still retained, or proven no
+      longer needed
+  and no live CollectionReadView pins roots, pending state, side refs, or
+      snapshots requiring the WAL segment
+  and cleanup metadata will be durable before the segment may be missing
+
+Global segment MaxWALLSN may speed scanning, but it is not proof of cleanup.
+```
 
 Root descriptors published without the matching applied watermark are not a
 valid state. If an implementation bug or future format can produce that split,
 recovery must stop open unless the format also provides a proven idempotent
 repair protocol. PR1 must make the split unrepresentable by publishing
-descriptor ops and watermark ops in one backend commit.
+descriptor ops and watermark ops through a typed collection-WAL publish wrapper
+in one backend commit.
 
-### 9.2 Startup Recovery
+### 9.3 Startup Recovery
 
 Startup recovery should extend the existing recovery order while preserving
 the current invariant that side-store scans run before cached commit-log replay:
@@ -1683,7 +2073,7 @@ Read-only open must scan enough collection WAL metadata to detect unapplied
 collection WAL transactions. Production column-store read-only open must not
 silently hide acknowledged WAL-on writes after crash.
 
-### 9.2.1 Column Side-File Recovery
+### 9.3.1 Column Side-File Recovery
 
 Before collection WAL replay, recovery scans column prepare directories and
 final column file classes and builds a side-file availability map. For each
@@ -1716,7 +2106,7 @@ reachable root, pending WAL transaction, and prepared or orphaned column
 directory. Reusing a `PartID` or `FileID` that appears in an unclassified
 prepare group is forbidden.
 
-### 9.3 Buffered Transaction Replay and Accumulation
+### 9.4 Buffered Transaction Replay and Accumulation
 
 PR1 uses per-collection replay-side accumulation. Merged flush-unit WAL
 transactions are deferred because they are incompatible with durable-at-ack for
@@ -1774,7 +2164,7 @@ This rule applies to no-index buffered writes, indexed mutable runs, queued
 flush units, async publishing states, overlay compaction, schema/index changes,
 and future column-store delta-part descriptor updates.
 
-### 9.4 Failure Behavior
+### 9.5 Failure Behavior
 
 | Failure point | Required behavior |
 |---|---|
@@ -1810,8 +2200,7 @@ Segment cleanup must decode the candidate segment and prove coverage for every
 complete transaction in that segment. A segment maximum transaction id,
 maximum `WALLSN`, or per-collection high value is not sufficient unless it is
 paired with proof that every complete transaction in the segment is covered by
-that transaction's collection watermark or by a valid global contiguous
-watermark.
+that transaction's own collection watermark and durable checkpoint boundary.
 
 Prepared side files use a two-state lifecycle:
 
@@ -2410,7 +2799,7 @@ Required assertions:
 - oversized inline transactions fail before ack or spill to side-payload refs
   with the same side-ref fence;
 - future Raft apply cannot report an applied index whose logical mutation is
-  neither locally recoverable nor guaranteed to be replayed from the Raft log.
+  neither locally recoverable nor guaranteed to be replayed from the Raft log;
 - descriptor side-ref closure is complete for column manifests, substreams,
   filters, delete bitmaps, dictionaries, compression metadata, and granule roots;
 - missing or corrupt required column side refs fail recovery for complete
@@ -2489,14 +2878,51 @@ Read-only open:
 - after read-write recovery completes, read-only reopen sees the recovered write
   without needing collection WAL replay.
 
-### 11.5 Fuzz Tests
+### 11.5 Model and Property Tests
+
+The formal model may be an abstract Go model, a TLA/PlusCal model, or another
+checked transition system, but it must generate machine-readable artifacts for
+the acceptance gate. The model must include variables for `mode`,
+`txn[collection][seq]`, side-ref state, visible state, `appliedSeq`,
+`checkpointSeq`, cleanup manifests, read views, maintenance operations, and
+future `raftAppliedIndex`.
+
+Required counterexample classes:
+
+- descriptor-only commit;
+- watermark-only commit;
+- global-`WALLSN` replay skip;
+- side-ref deletion before `CanCleanSideRef`;
+- double apply after applied watermark;
+- WAL-on visible-before-recoverable;
+- WAL-off visible-unrecoverable allowed and unreplayed;
+- same-base replay accumulation with overlapping keys;
+- cleanup crash before durable manifest;
+- Raft applied-index before local recoverability.
+
+Required property tests:
+
+- for each generated committed prefix, live publish digest equals recovery
+  replay digest;
+- replaying after `AppliedSeq[c] >= s` never changes roots;
+- interleaved collections cannot cause cross-collection skip;
+- cleanup proof is monotonic with checkpoints and read-view releases, but
+  maintenance cannot make an uncleaned required ref disappear;
+- async flush requeue preserves the exact original WAL coverage range and side
+  refs.
+
+### 11.6 Fuzz Tests
 
 - transaction decoder fuzzing;
 - recovery ordering fuzzing with multiple collections and duplicate keys;
 - side-ref fence fuzzing with missing and truncated payloads;
-- root-delta replay fuzzing against an in-memory oracle.
+- root-delta replay fuzzing against an in-memory oracle;
+- cleanup manifest fuzzing with missing segments, torn records, overlapping
+  ranges, and mixed-collection segments;
+- system-delta template fuzzing with descriptor/watermark split attempts and
+  malformed coverage ranges.
 
-### 11.6 Required Named Acceptance Tests
+### 11.7 Required Named Acceptance Tests
 
 These tests or equivalent subtests must exist before implementation can be
 considered complete. Names are normative so CI, verification docs, and
@@ -2514,6 +2940,15 @@ acceptance artifacts can point to stable evidence.
 | `TestCollectionWALWatermarkOutOfOrderTxnDoesNotSkipLowerUnapplied` | Two collections; force higher `WALLSN` publish/watermark before a lower `WALLSN`; crash/reopen. | Per-collection watermark logic cannot skip lower unapplied transactions. |
 | `TestCollectionWALRecoveryCrashAndCleanupAreIdempotent` | Fault hook exits during recovery after N transactions, after watermark commit, and during segment cleanup; reopen repeatedly. | No double-apply, no lost writes, cleanup eventually converges. |
 | `TestCollectionWALGCRewriteCompactionSnapshotsProtectPendingSideRefs` | Create pending WAL transaction whose side ref has no published root owner; pin snapshot/read view; run GC/rewrite/compaction; crash/reopen. | Side refs are protected until watermark plus checkpoint handoff, and snapshots do not observe dangling roots. |
+| `TestCollectionWALModelDescriptorWatermarkSplitRejected` | Abstract model and backend wrapper try descriptor-only and watermark-only commits for `c:1` and `c:2`. | Split descriptor/watermark states are unrepresentable or rejected before recovery can skip/replay incorrectly. |
+| `TestCollectionWALModelVisibleImpliesRecoverable` | Fault model injects crashes after planning, side-ref prepare, before marker, after marker, before visible install, and after visible install. | WAL-on traces never contain `Visible(t)` without `Recoverable(t)`; WAL-off traces may, but are labeled non-durable and unreplayed. |
+| `TestCollectionWALModelSideRefProtectHappensBeforeGuardRelease` | Interleave prepare, append, guard release, GC delete, crash, and recover. | Complete WAL frames always have protected side refs before maintenance can delete or rewrite them. |
+| `TestCollectionWALModelDeterministicReplayDigest` | Generate same-base transactions with overlapping keys, deletes, index deltas, and schema guards; compare live publish and recovery. | Fold order produces the same descriptor digest and watermark across crashes and repeated recovery. |
+| `TestCollectionWALModelStateClassifierExclusive` | Randomly add applied, checkpoint, cleanup, visibility, read-view, and quarantine predicates. | Durable state classifier returns exactly one `S0` through `S6`; volatile predicates remain orthogonal. |
+| `TestCollectionWALModelSkipUsesCollectionSeqOnly` | Interleave two collections and try to skip using global `WALLSN` or another collection's watermark. | Model rejects any skip not proven by the same collection's applied sequence and guard history. |
+| `TestCollectionWALModelMaintenanceGuardBlocksRewrite` | Interleave value-log rewrite, overlay compaction, side-file cleanup, committed WAL refs, and live read views. | Maintenance delete/rewrite occurs only after `CanStartMaintenance`. |
+| `TestCollectionWALModelRaftAppliedIndexRequiresLocalRecoverability` | Future Raft model crashes after consensus commit, local planning, WAL append, idempotency write, and applied-index write. | `PersistentAppliedIndex` cannot outrun local mutation recoverability and durable idempotency/catalog outcomes. |
+| `TestCollectionWALTypedPublishWrapperRejectsFreeFormSystemDelta` | Attempt to publish WAL-on collection descriptors through a free-form system builder without coverage metadata. | Only typed collection-WAL covered publish can update descriptors and applied watermark in WAL-on modes. |
 | `TestCollectionWALPendingDebtSoftStopHardLimits` | Block async publish/checkpoint/cleanup and keep admitting collection writes until each configured debt threshold is crossed. | Soft threshold triggers maintenance, stop threshold blocks, hard threshold rejects before ack. |
 | `TestCollectionWALBackpressureResumeWatermark` | Fill pending debt past stop, release publish/checkpoint/cleanup, then retry blocked writes. | Writes resume only after debt drops to or below 70 percent of the stop limit. |
 | `TestCollectionWALReplayAccumulatorSoftCapChunksOrSpills` | Recover many same-base-root transactions with distinct keys until the soft accumulator cap is reached. | Recovery chunk-publishes or spills deterministically without changing final roots. |
@@ -2523,7 +2958,7 @@ acceptance artifacts can point to stable evidence.
 | `TestCollectionWALDurableSyncBatchCaps` | Run concurrent durable-sync writers. | Group fsync batches respect max delay, byte, and transaction caps while preserving ack semantics. |
 | `TestColumnWALSideRefCapacityLimits` | Plan column side refs beyond file, manifest, and side-ref-per-transaction limits. | Persistent column roots remain blocked and fail before ack/publish. |
 
-### 11.7 Required Fault Points
+### 11.8 Required Fault Points
 
 The crash harness must expose these named fault points. Each point must support
 both "return injected error" and "process exit" modes when the code path can
@@ -2827,16 +3262,17 @@ Traceability matrix:
 |---|---|---|---|
 | Current contract | 2, 6 | M0 | existing behavior tests and docs |
 | Testability decisions | 15 | M0.5 | closed PR1 choices and acceptance artifact |
+| Formal state machine | 9.1, 9.2 | M0.5, M1, M5 | abstract model tests, invariant mapping, and counterexample fixtures |
 | WAL format | `storage-format.md` Section 9 plus this doc 7.2, 7.4, 7.5 | M1 | exact-byte golden, fuzz, corrupt-tail, feature-gate, and migration-state tests |
-| Recovery state machine | 9.1, 9.2, 9.4 | M1, M5 | crash-state and stop-open tests |
-| Identity and sequencing | 7.3, 7.6, 9.3 | M1, M5 | collection-seq, epoch, generation tests |
+| Recovery state machine | 9.1, 9.2, 9.3, 9.5 | M1, M5 | crash-state and stop-open tests |
+| Identity and sequencing | 7.3, 7.6, 9.4 | M1, M5 | collection-seq, epoch, generation tests |
 | System-root template | 7.2, 8.6 | M1, M5 | descriptor-op and watermark atomicity tests |
 | Side-file fences | 7.7, 10 | M2 | missing-ref and GC protection tests |
 | Segment cleanup metadata | 7.5, 10 | M1, M5 | missing-segment and cleanup-manifest tests |
 | Write-domain integration | 8 | M3, M4 | insert/update/delete recovery tests |
 | Visibility/admission barriers | 6.2, 6.3, 8, 8.9 | M3, M6 | read-race, checkpoint-cut, and close-race tests |
 | Collection read views | 3, 6.3, 8.10, 10 | M4, M6 | long-iterator and side-ref pinning tests |
-| Recovery replay | 9 | M4, M4.5 | crash matrix, accumulation, and deterministic replay tests |
+| Recovery replay | 9 | M4, M4.5 | crash matrix, accumulation, deterministic replay, and replay theorem tests |
 | Checkpoint/cleanup | 10 | M5 | watermark and segment cleanup tests |
 | Resource accounting/admission | 10.1, 12 | M0.5, M1, M2, M4.5, M6.5 | cost-estimator, backpressure, replay-cap, cleanup-debt, and benchmark-report artifacts |
 | Lock ordering | 8.9, 11.4 | M0, M6 | debug lock assertions and deadlock stress |
@@ -2863,7 +3299,7 @@ Acceptance matrix:
 | Gate | Required evidence | Pass criteria |
 |---|---|---|
 | M0 Contract and harness freeze | Existing current-contract tests and crash helper skeleton. | Current flush-boundary behavior remains documented; named fault hooks can stop at side prepare, WAL append, staging, publish, watermark, cleanup, and recovery replay. |
-| M0.5 Testability decisions | Closed PR1 decisions in Section 15. | File class, transaction identity, checkpoint behavior, missing side-ref policy, buffered replay model, GC protection, and overlay compaction rule are testable. |
+| M0.5 Testability decisions | Closed PR1 decisions in Section 15. | File class, transaction identity, formal model, checkpoint behavior, missing side-ref policy, buffered replay model, GC protection, and overlay compaction rule are testable. |
 | M1 WAL format | Golden fixtures, checksum/corruption/truncation tests, decoder fuzzing. | Decoder is deterministic; safe terminal truncation is accepted; hard corruption fails. |
 | M2 Side-ref fences | Missing-ref, side-payload, and GC/rewrite protection tests. | No root points at missing bytes; WAL-pending side refs are retained. |
 | M3 No-index WAL integration | WAL-on/WAL-off no-index crash tests and append-failure tests. | WAL-on crash recovers acknowledged writes; WAL-off expectations stay relaxed; append failure has no visibility. |
@@ -2907,12 +3343,14 @@ M1 starts, the implementation owner must confirm the exact testable choices for:
 
 - collection WAL segment format and filename class;
 - storage-format feature gates, migration states, and byte envelope;
+- abstract model variables, state predicates, transition guards, invariant list,
+  and counterexample classes from Section 9.1;
 - `CollectionSeq` and `WALLSN` allocation and persistence;
 - missing side-ref behavior by durability mode;
 - checkpoint behavior for PR1;
 - buffered replay model;
 - GC/rewrite side-ref protection mechanism;
-- overlay compaction durability rule.
+- overlay compaction durability rule;
 - resource accounting defaults for transaction size, inline spill, side-payload
   limits, replay accumulator caps, debt soft/stop/hard limits, and durable-sync
   group fsync caps.
@@ -2939,9 +3377,12 @@ Deliverables:
   `CollectionWALStats.Snapshot()` counters/gauges for append, pending,
   protected side refs, recovery, cleanup debt, and value-log GC blockers;
 - stable root-delta encode/decode APIs independent of transient in-memory
-  `batch.Batch` layout.
+  `batch.Batch` layout;
 - encoder-backed byte estimator, inline/side-payload threshold enforcement,
-  segment rotation defaults, and capacity error names from Section 10.1.
+  segment rotation defaults, and capacity error names from Section 10.1;
+- small model or property-test harness for descriptor/watermark split,
+  WAL-before-visible, side-ref protection, per-collection skip, deterministic
+  replay, maintenance guards, WAL-off exception, and future Raft local metadata.
 
 Tests:
 
@@ -2954,8 +3395,11 @@ Tests:
 - truncated tail;
 - decoder fuzzing;
 - replay digest tests;
+- abstract model counterexample tests for descriptor-only commits,
+  watermark-only commits, global-`WALLSN` skip, side-ref deletion before
+  cleanability, visible-before-recoverable, and WAL-off unrecovered visibility;
 - descriptor-op placeholder instantiation tests;
-- cleanup metadata and missing-segment classification tests.
+- cleanup metadata and missing-segment classification tests;
 - metrics emitted for append success, append failure, recovery skip, recovery
   hard failure, and cleanup failure.
 
@@ -3432,8 +3876,9 @@ Recovery:
 
 - Duplicate `WALLSN` or duplicate `(CollectionUID, CollectionSeq)` is fatal
   unless covered by an explicit legacy quarantine path.
-- A transaction is skipped only if its own collection watermark or a valid
-  global contiguous watermark covers it.
+- A transaction is skipped only if its own collection watermark and guard
+  history cover it. Global `WALLSN` ranges are cleanup-scan aids only and are
+  never replay-skip proof.
 - Missing required side ref for a complete unwatermarked transaction is
   fatal/quarantine, never silent skip.
 - A watermark advance includes every root delta and metadata delta in the
@@ -3784,6 +4229,59 @@ Module-specific constraints:
   `cmd/collection_bench_report` own the resource-budget benchmark artifact
   schema. CI must fail when required columns are absent even if raw Go
   benchmarks complete successfully.
+
+Runtime assertions required in WAL-on modes:
+
+- Assert no visible install occurs without `CompleteWALFrame`.
+- Assert `CollectionSeq == previous + 1` at allocation and replay.
+- Assert `DependsOnCollectionSeq == CollectionSeq - 1` for PR1 single-write
+  transactions.
+- Assert canonical embedded side refs equal declared required refs before
+  append.
+- Assert every required side ref is prepared and protected before a WAL marker
+  becomes replayable.
+- Assert every collection root descriptor commit carries a typed coverage range
+  and matching watermark op.
+- Assert async flush units carry immutable WAL coverage: `CollectionUID`,
+  contiguous sequence range, root names, root generations, required refs, and
+  `WALLSN` range.
+- Assert cleanup decodes every complete transaction in candidate segments and
+  proves same-collection watermark/checkpoint coverage.
+- Assert recovery skip never uses global `WALLSN`.
+- Assert read-only open fails when committed unapplied collection WAL exists,
+  unless explicit stale/read-only mode is selected.
+
+Internal APIs that must enforce transition guards:
+
+- `appendCollectionWALTransaction(t)` enforces `CanAppendWAL`.
+- `installCollectionVisible(t)` enforces `CanInstallVisible`.
+- `publishCollectionWALCoveredGroup(c,N,M,txns)` is the only WAL-on collection
+  root publish path.
+- `advanceAppliedWatermark` is not public; it is part of
+  `publishCollectionWALCoveredGroup`.
+- `recoverCollectionWAL()` owns replay, skip, block, fail, and quarantine
+  transitions.
+- `cleanupCollectionWALSegment(segment)` owns cleanup proof and manifest
+  update.
+- `prepareSideRefs` and maintenance APIs share the same guard/protected-index
+  mechanism.
+- Future Raft apply must call the same local WAL append and publish wrappers
+  before persistent applied-index advancement.
+
+Forbidden state transitions:
+
+- `PlannedHidden -> VisiblePending` in WAL-on without complete WAL.
+- `PreparedSideRefs -> VisiblePending` without complete WAL.
+- `CompleteWALFrame -> ReleaseGuard` without `ProtectedByWAL`.
+- `RootDescriptorCommit -> AppliedWatermarkUnchanged` in WAL-on.
+- `AppliedWatermarkAdvance -> MissingDescriptorCommit`.
+- `AppliedSeq[c] = N -> M` with any missing `CollectionSeq` in `(N,M]`.
+- `CommittedWAL -> Cleaned` without `Applied` and `CheckpointCovered`.
+- `S2 CommittedWAL` skip based on `WALLSN`.
+- `PersistentRaftAppliedIndex >= i` before local recoverability and
+  idempotency durability for entry `i`.
+- Maintenance delete/rewrite while a ref is WAL-protected, root-reachable, or
+  read-view pinned.
 
 Recommended implementation sequence:
 
