@@ -402,6 +402,65 @@ func TestTemplateV1IndexedWriteMemtablesResolveBufferedTemplateAcrossBatches(t *
 	}
 }
 
+func TestTemplateV1MaterializerOwnsBufferedTemplateRuns(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatTemplateV1,
+		},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city", ValueType: IndexValueString}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+
+	var encoder TemplateV1Encoder
+	doc, err := encoder.EncodeDocument([]string{"email", "city"}, []any{"ada@example.com", "hnl"})
+	if err != nil {
+		t.Fatalf("encode doc: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("u1")}, [][]byte{doc}); err != nil {
+		t.Fatalf("insert buffered template-v1 doc: %v", err)
+	}
+	col.writeDomain.mu.RLock()
+	bufferedTemplateRuns := len(pendingIndexedRootRunsLocked(col.writeDomain, collectionTemplateRootName("users")))
+	col.writeDomain.mu.RUnlock()
+	if bufferedTemplateRuns == 0 {
+		t.Fatal("expected buffered template run before creating materializer")
+	}
+	materializer, err := col.NewStoredDocumentJSONMaterializer()
+	if err != nil {
+		t.Fatalf("new materializer: %v", err)
+	}
+	defer func() { _ = materializer.Close() }()
+
+	stored, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get buffered stored doc: %v", err)
+	}
+	if err := mgr.FlushAll(); err != nil {
+		t.Fatalf("flush buffered template run: %v", err)
+	}
+
+	jsonDoc, err := materializer.StoredDocumentJSON(stored)
+	if err != nil {
+		t.Fatalf("materialize after buffered run release: %v", err)
+	}
+	if !bytes.Contains(jsonDoc, []byte(`"email":"ada@example.com"`)) || !bytes.Contains(jsonDoc, []byte(`"city":"hnl"`)) {
+		t.Fatalf("materialized json=%s", jsonDoc)
+	}
+}
+
 func TestTemplateV1IndexedFlushUnitResolveBufferedTemplate(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
