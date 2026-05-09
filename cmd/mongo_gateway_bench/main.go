@@ -1892,11 +1892,9 @@ func directStoredDocumentToBSON(collection *collections.Collection, materializer
 		return nil, errors.New("direct TreeDB benchmark requires a document materializer")
 	}
 	if materializer.DocumentFormat() == collections.DocumentFormatBSON {
-		raw := bson.Raw(stored)
-		if err := raw.Validate(); err != nil {
-			return nil, err
-		}
-		return raw, nil
+		// Match the gateway hot read path: stored BSON was validated on write,
+		// so direct read timing should not include repeated full validation.
+		return bson.Raw(stored), nil
 	}
 	materialized, err := materializer.StoredDocumentJSON(stored)
 	if err != nil {
