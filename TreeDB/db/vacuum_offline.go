@@ -212,6 +212,72 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) error {
 		}
 	}
 
+	if err := resetLeafGenerationAfterOfflineVacuum(opts.Dir, meta.CommitSeq); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func resetLeafGenerationAfterOfflineVacuum(dir string, commitSeq uint64) error {
+	leafDir := LeafLogDirPath(dir)
+	if leafDir == "" {
+		return nil
+	}
+	if _, err := os.Stat(leafDir); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("vacuum: stat leaf_vlog dir: %w", err)
+	}
+
+	files, err := listLeafGenerationBootstrapFiles(leafDir)
+	if err != nil {
+		return fmt.Errorf("vacuum: list leaf_vlog files: %w", err)
+	}
+	_, manifestExists, err := loadLeafGenerationManifest(leafDir)
+	if err != nil {
+		return fmt.Errorf("vacuum: load leaf generation manifest: %w", err)
+	}
+	sidecarPaths, err := filepath.Glob(filepath.Join(leafDir, "value-l*.log"+leafGenerationRecordLengthIndexSuffix))
+	if err != nil {
+		return fmt.Errorf("vacuum: list leaf generation record-length indexes: %w", err)
+	}
+	if len(files) == 0 && !manifestExists && len(sidecarPaths) == 0 {
+		return nil
+	}
+
+	for _, file := range files {
+		path := leafGenerationFallbackPath(dir, file.rawFileID)
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("vacuum: remove stale leaf generation file %s: %w", path, err)
+		}
+		indexPath := leafGenerationRecordLengthIndexPath(dir, file.rawFileID)
+		if err := os.Remove(indexPath); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("vacuum: remove stale leaf generation record-length index %s: %w", indexPath, err)
+		}
+	}
+	for _, indexPath := range sidecarPaths {
+		if err := os.Remove(indexPath); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("vacuum: remove stale leaf generation record-length index %s: %w", indexPath, err)
+		}
+	}
+	if runtime.GOOS != "windows" {
+		if dirFile, err := os.Open(leafDir); err == nil {
+			_ = dirFile.Sync()
+			_ = dirFile.Close()
+		}
+	}
+
+	if err := saveLeafGenerationManifest(leafDir, newLeafGenerationManifest(commitSeq)); err != nil {
+		return fmt.Errorf("vacuum: reset leaf generation manifest: %w", err)
+	}
+	if runtime.GOOS != "windows" {
+		if dirFile, err := os.Open(leafDir); err == nil {
+			_ = dirFile.Sync()
+			_ = dirFile.Close()
+		}
+	}
 	return nil
 }
 
