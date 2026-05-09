@@ -21,7 +21,7 @@ func TestBSONSetUpdateAppendReplacementUsesDestinationArena(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new BSON set update: %v", err)
 	}
-	arena := make([]byte, 7, 256)
+	arena := make([]byte, 7, len(doc)+bsonSetReplacementSlackBytes+16)
 	for i := range arena {
 		arena[i] = 0x7f
 	}
@@ -66,7 +66,7 @@ func TestBSONSetUpdateAppendReplacementUnchangedRestoresDestination(t *testing.T
 	if err != nil {
 		t.Fatalf("new BSON set update: %v", err)
 	}
-	arena := make([]byte, 3, 128)
+	arena := make([]byte, 3, len(doc)+bsonSetReplacementSlackBytes+16)
 	out, replacement, changed, err := update.appendReplacement(arena, doc)
 	if err != nil {
 		t.Fatalf("append replacement: %v", err)
