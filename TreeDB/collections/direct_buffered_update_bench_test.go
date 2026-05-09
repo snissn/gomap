@@ -189,6 +189,7 @@ func collectionManagerStatsBenchmarkDelta(after, before CollectionManagerStats) 
 		UpdateBatchBufferedBatches:       after.UpdateBatchBufferedBatches - before.UpdateBatchBufferedBatches,
 		UpdateBatchCurrentRead:           after.UpdateBatchCurrentRead - before.UpdateBatchCurrentRead,
 		UpdateBatchCallback:              after.UpdateBatchCallback - before.UpdateBatchCallback,
+		UpdateBatchStructuredApply:       after.UpdateBatchStructuredApply - before.UpdateBatchStructuredApply,
 		UpdateBatchPrepareDocuments:      after.UpdateBatchPrepareDocuments - before.UpdateBatchPrepareDocuments,
 		UpdateBatchIndexStateExtract:     after.UpdateBatchIndexStateExtract - before.UpdateBatchIndexStateExtract,
 		UpdateBatchOldIndexStateExtract:  after.UpdateBatchOldIndexStateExtract - before.UpdateBatchOldIndexStateExtract,
@@ -268,6 +269,7 @@ func reportCollectionUpdateStatsForBenchmark(b *testing.B, stats CollectionManag
 	reportUintPerDoc(stats.UpdateBatchUniqueCheckSkips, "update_unique_check_skips/doc")
 	reportDurationPerDoc(stats.UpdateBatchCurrentRead, "update_current_read_ns/doc")
 	reportDurationPerDoc(stats.UpdateBatchCallback, "update_callback_ns/doc")
+	reportDurationPerDoc(stats.UpdateBatchStructuredApply, "update_structured_apply_ns/doc")
 	reportDurationPerDoc(stats.UpdateBatchPrepareDocuments, "update_prepare_ns/doc")
 	reportDurationPerDoc(stats.UpdateBatchIndexStateExtract, "update_index_state_extract_ns/doc")
 	reportDurationPerDoc(stats.UpdateBatchOldIndexStateExtract, "update_old_index_state_extract_ns/doc")

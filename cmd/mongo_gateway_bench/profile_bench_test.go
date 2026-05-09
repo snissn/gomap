@@ -28,7 +28,6 @@ import (
 )
 
 var (
-	errUpdatedPrimaryKey      = errors.New("profile benchmark update changed _id")
 	errProfileBenchUpdateMiss = errors.New("profile benchmark update missed document")
 )
 
@@ -195,6 +194,19 @@ func TestProfileBenchParsedUpdateDocsUsesDistinctCityPhases(t *testing.T) {
 	}
 }
 
+func TestProfileBenchParsedUpdateDocsUsesDistinctSequencePhases(t *testing.T) {
+	warmup := profileBenchParsedUpdateDocs(t, false, "warmup")
+	timed := profileBenchParsedUpdateDocs(t, false, "timed")
+	if len(warmup) == 0 || len(timed) == 0 {
+		t.Fatal("expected parsed update docs")
+	}
+	warmupSeq := profileBenchSetUpdateFieldInt64(t, warmup[0], "concurrent_update_seq")
+	timedSeq := profileBenchSetUpdateFieldInt64(t, timed[0], "concurrent_update_seq")
+	if warmupSeq == timedSeq {
+		t.Fatalf("sequence update phases both produced %d; timed sequence updates must differ from warmup", warmupSeq)
+	}
+}
+
 func TestProfileBenchParsedUpdateDocsChangesCityAcrossFullSweep(t *testing.T) {
 	updateDocs := profileBenchParsedUpdateDocs(t, true, "timed")
 	if len(updateDocs) == 0 {
@@ -236,6 +248,23 @@ func profileBenchSetUpdateFieldStringAt(t *testing.T, update profileBenchSetUpda
 	}
 	t.Fatalf("missing update field %q in %+v", key, update.fields)
 	return ""
+}
+
+func profileBenchSetUpdateFieldInt64(t *testing.T, update profileBenchSetUpdate, key string) int64 {
+	t.Helper()
+	for _, field := range update.fields {
+		if field.key != key {
+			continue
+		}
+		value := profileBenchSetFieldValueForOperation(field, -1, 0, 0)
+		got, ok := value.Int64OK()
+		if !ok {
+			t.Fatalf("field %q raw value=%v is not an int64", key, value.Type)
+		}
+		return got
+	}
+	t.Fatalf("missing update field %q in %+v", key, update.fields)
+	return 0
 }
 
 func TestProfileBenchDeltaUintStat(t *testing.T) {
@@ -781,20 +810,21 @@ func compactProfileBenchOverlayRootsAfterFlush(tb testing.TB, collection *collec
 	return stats
 }
 
-func profileBenchParsedUpdateDocs(tb testing.TB, updateCity bool, cityPhase string) []profileBenchSetUpdate {
+func profileBenchParsedUpdateDocs(tb testing.TB, updateCity bool, updatePhase string) []profileBenchSetUpdate {
 	tb.Helper()
 	updateDocs := make([]profileBenchSetUpdate, profileBenchUpdateDocPoolSize)
+	dynamicSequenceValues := profileBenchUpdatedSequenceRawValues(updatePhase)
 	var dynamicCityValues []bson.RawValue
 	if updateCity {
-		dynamicCityValues = profileBenchUpdatedCityRawValues(tb, cityPhase)
+		dynamicCityValues = profileBenchUpdatedCityRawValues(tb, updatePhase)
 	}
 	for i := range updateDocs {
 		set := bson.D{
 			{Key: "concurrent_updated", Value: true},
-			{Key: "concurrent_update_seq", Value: int64(i)},
+			{Key: "concurrent_update_seq", Value: profileBenchUpdatedSequenceValue(updatePhase, i)},
 		}
 		if updateCity {
-			set = append(set, bson.E{Key: "city", Value: cityPhase + "-" + benchmarkUpdatedCity(i, i, profileBenchUpdateDocPoolSize)})
+			set = append(set, bson.E{Key: "city", Value: updatePhase + "-" + benchmarkUpdatedCity(i, i, profileBenchUpdateDocPoolSize)})
 		}
 		updateRaw, err := bson.Marshal(bson.D{{Key: "$set", Value: set}})
 		if err != nil {
@@ -804,12 +834,14 @@ func profileBenchParsedUpdateDocs(tb testing.TB, updateCity bool, cityPhase stri
 		if err != nil {
 			tb.Fatalf("parse update document: %v", err)
 		}
-		if len(dynamicCityValues) > 0 {
-			for fieldIdx := range parsed.fields {
-				if parsed.fields[fieldIdx].key == "city" {
-					parsed.fields[fieldIdx].dynamicCityValues = dynamicCityValues
-					break
+		for fieldIdx := range parsed.fields {
+			switch parsed.fields[fieldIdx].key {
+			case "city":
+				if len(dynamicCityValues) > 0 {
+					parsed.fields[fieldIdx].dynamicValues = dynamicCityValues
 				}
+			case "concurrent_update_seq":
+				parsed.fields[fieldIdx].dynamicValues = dynamicSequenceValues
 			}
 		}
 		updateDocs[i] = parsed
@@ -827,6 +859,32 @@ func profileBenchUpdatedCityRawValues(tb testing.TB, cityPhase string) []bson.Ra
 		}
 	}
 	return values
+}
+
+func profileBenchUpdatedSequenceRawValues(updatePhase string) []bson.RawValue {
+	values := make([]bson.RawValue, profileBenchUpdatedSequenceValueCount)
+	for i := range values {
+		values[i] = bson.RawValue{
+			Type:  bson.TypeInt64,
+			Value: bsoncore.AppendInt64(nil, profileBenchUpdatedSequenceValue(updatePhase, i)),
+		}
+	}
+	return values
+}
+
+// Keep the sequence cardinality large enough to avoid revisiting replacement
+// values during the profile sweep without coupling it to city value generation.
+const profileBenchUpdatedSequenceValueCount = 65521
+
+func profileBenchUpdatedSequenceValue(updatePhase string, i int) int64 {
+	switch updatePhase {
+	case "warmup":
+		return int64(i)
+	case "timed":
+		return int64(i) + 1_000_000_000
+	default:
+		return int64(i) + 2_000_000_000
+	}
 }
 
 func profileBenchDeltaUintStat(after, before map[string]string, key string) uint64 {
@@ -1093,6 +1151,7 @@ func deltaCollectionManagerUpdateStats(after, before collections.CollectionManag
 		UpdateBatchBufferedBatches:       after.UpdateBatchBufferedBatches - before.UpdateBatchBufferedBatches,
 		UpdateBatchCurrentRead:           after.UpdateBatchCurrentRead - before.UpdateBatchCurrentRead,
 		UpdateBatchCallback:              after.UpdateBatchCallback - before.UpdateBatchCallback,
+		UpdateBatchStructuredApply:       after.UpdateBatchStructuredApply - before.UpdateBatchStructuredApply,
 		UpdateBatchPrepareDocuments:      after.UpdateBatchPrepareDocuments - before.UpdateBatchPrepareDocuments,
 		UpdateBatchIndexStateExtract:     after.UpdateBatchIndexStateExtract - before.UpdateBatchIndexStateExtract,
 		UpdateBatchOldIndexStateExtract:  after.UpdateBatchOldIndexStateExtract - before.UpdateBatchOldIndexStateExtract,
@@ -1228,6 +1287,7 @@ func TestDeltaCollectionManagerUpdateStatsIncludesCombinerStats(t *testing.T) {
 		UpdateCombineWait:                200 * time.Nanosecond,
 		UpdateCombineDrain:               300 * time.Nanosecond,
 		UpdateCombineRun:                 400 * time.Nanosecond,
+		UpdateBatchStructuredApply:       50 * time.Nanosecond,
 		UpdateBatchIndexStateExtract:     70 * time.Nanosecond,
 		UpdateBatchOldIndexStateExtract:  30 * time.Nanosecond,
 		UpdateBatchNewIndexStateExtract:  40 * time.Nanosecond,
@@ -1286,6 +1346,7 @@ func TestDeltaCollectionManagerUpdateStatsIncludesCombinerStats(t *testing.T) {
 		UpdateCombineWait:                1400 * time.Nanosecond,
 		UpdateCombineDrain:               2100 * time.Nanosecond,
 		UpdateCombineRun:                 2800 * time.Nanosecond,
+		UpdateBatchStructuredApply:       500 * time.Nanosecond,
 		UpdateBatchIndexStateExtract:     700 * time.Nanosecond,
 		UpdateBatchOldIndexStateExtract:  300 * time.Nanosecond,
 		UpdateBatchNewIndexStateExtract:  400 * time.Nanosecond,
@@ -1359,6 +1420,9 @@ func TestDeltaCollectionManagerUpdateStatsIncludesCombinerStats(t *testing.T) {
 			got.UpdateCombineDrain,
 			got.UpdateCombineRun,
 		)
+	}
+	if got.UpdateBatchStructuredApply != 450*time.Nanosecond {
+		t.Fatalf("UpdateBatchStructuredApply=%s want 450ns", got.UpdateBatchStructuredApply)
 	}
 	if got.UpdateBatchIndexStateExtract != 630*time.Nanosecond || got.UpdateBatchOldIndexStateExtract != 270*time.Nanosecond || got.UpdateBatchNewIndexStateExtract != 360*time.Nanosecond {
 		t.Fatalf("index state timing delta total/old/new=%s/%s/%s want 630ns/270ns/360ns",
@@ -1488,6 +1552,7 @@ func TestReportCollectionManagerUpdateStatsIncludesIndexedFlushMetrics(t *testin
 		PrimaryOnlyRootDeltaKeyBytes:   1200,
 		PrimaryOnlyRootDeltaValueBytes: 12000,
 		PrimaryOnlyCoalescedDocs:       600,
+		UpdateBatchStructuredApply:     1800 * time.Nanosecond,
 		UpdateBatchIndexValueChanges:   300,
 		UpdateBatchIndexValueUnchanged: 900,
 		UpdateBatchMaskFallbacks:       60,
@@ -1538,6 +1603,7 @@ func TestReportCollectionManagerUpdateStatsIncludesIndexedFlushMetrics(t *testin
 		"primary_root_delta_entries/doc":        1,
 		"primary_root_delta_bytes/doc":          22,
 		"primary_only_coalesced_docs/publish":   1,
+		"update_structured_apply_ns/doc":        3,
 		"update_index_value_changes/doc":        0.5,
 		"update_index_value_unchanged/doc":      1.5,
 		"changed_index_fast_mask_fallbacks/doc": 0.1,
@@ -1826,6 +1892,7 @@ func reportCollectionManagerUpdateStats(b *testing.B, stats collections.Collecti
 	}
 	reportDuration("update_current_read_ns/doc", stats.UpdateBatchCurrentRead)
 	reportDuration("update_callback_ns/doc", stats.UpdateBatchCallback)
+	reportDuration("update_structured_apply_ns/doc", stats.UpdateBatchStructuredApply)
 	reportDuration("update_prepare_ns/doc", stats.UpdateBatchPrepareDocuments)
 	reportDuration("update_index_state_extract_ns/doc", stats.UpdateBatchIndexStateExtract)
 	reportDuration("update_old_index_state_extract_ns/doc", stats.UpdateBatchOldIndexStateExtract)
@@ -1888,7 +1955,7 @@ func runProfileBenchDirectCollectionConcurrentUpdates(
 		go func() {
 			defer wg.Done()
 			pprof.SetGoroutineLabels(runCtx)
-			updateScratch := make([]byte, 0, 512)
+			setFields := make([]collections.BSONSetField, 0, 8)
 			for {
 				if err := runCtx.Err(); err != nil {
 					return
@@ -1900,19 +1967,8 @@ func runProfileBenchDirectCollectionConcurrentUpdates(
 				documentOrdinal := (op * idStride) % documentCount
 				id := ids[documentOrdinal]
 				updateDoc := updateDocs[op%len(updateDocs)]
-				matched, _, err := collection.Update(id, func(stored []byte) ([]byte, bool, error) {
-					raw := bson.Raw(stored)
-					originalID := raw.Lookup("_id")
-					updated, nextScratch, shouldWrite, err := profileBenchApplyParsedSetUpdateToOperation(updateScratch[:0], raw, updateDoc, op, documentOrdinal, documentCount)
-					updateScratch = nextScratch
-					if err != nil {
-						return nil, false, err
-					}
-					if !updated.Lookup("_id").Equal(originalID) {
-						return nil, false, errUpdatedPrimaryKey
-					}
-					return []byte(updated), shouldWrite, nil
-				})
+				setFields = profileBenchCollectionSetFieldsForOperation(setFields[:0], updateDoc, op, documentOrdinal, documentCount)
+				matched, _, err := collection.UpdateBSONSet(id, setFields)
 				if err != nil {
 					recordErr(err)
 					return
@@ -1931,11 +1987,21 @@ func runProfileBenchDirectCollectionConcurrentUpdates(
 	return ctx.Err()
 }
 
+func profileBenchCollectionSetFieldsForOperation(dst []collections.BSONSetField, update profileBenchSetUpdate, operation, documentOrdinal, documentCount int) []collections.BSONSetField {
+	for _, field := range update.fields {
+		dst = append(dst, collections.BSONSetField{
+			Key:   field.key,
+			Value: profileBenchSetFieldValueForOperation(field, operation, documentOrdinal, documentCount),
+		})
+	}
+	return dst
+}
+
 type profileBenchSetField struct {
-	key               string
-	keyBytes          []byte
-	value             bson.RawValue
-	dynamicCityValues []bson.RawValue
+	key           string
+	keyBytes      []byte
+	value         bson.RawValue
+	dynamicValues []bson.RawValue
 }
 
 type profileBenchSetUpdate struct {
@@ -2144,15 +2210,15 @@ func profileBenchApplyParsedSetUpdateToOperation(dst []byte, doc bson.Raw, updat
 }
 
 func profileBenchSetFieldValueForOperation(field profileBenchSetField, operation, documentOrdinal, documentCount int) bson.RawValue {
-	if len(field.dynamicCityValues) == 0 || operation < 0 {
+	if len(field.dynamicValues) == 0 || operation < 0 {
 		return field.value
 	}
-	index := benchmarkUpdatedCityIndex(operation, documentOrdinal, documentCount, len(field.dynamicCityValues))
+	index := benchmarkUpdatedCityIndex(operation, documentOrdinal, documentCount, len(field.dynamicValues))
 	if documentCount > 0 && operation >= documentCount {
-		previousIndex := benchmarkUpdatedCityIndex(operation-documentCount, documentOrdinal, documentCount, len(field.dynamicCityValues))
-		index = avoidBenchmarkUpdatedCityRepeat(index, previousIndex, len(field.dynamicCityValues))
+		previousIndex := benchmarkUpdatedCityIndex(operation-documentCount, documentOrdinal, documentCount, len(field.dynamicValues))
+		index = avoidBenchmarkUpdatedCityRepeat(index, previousIndex, len(field.dynamicValues))
 	}
-	return field.dynamicCityValues[index]
+	return field.dynamicValues[index]
 }
 
 func TestProfileBenchApplySetUpdateHappyPath(t *testing.T) {
