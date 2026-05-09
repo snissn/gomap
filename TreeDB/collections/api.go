@@ -6442,6 +6442,19 @@ func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON b
 			closePlanningSnapshot()
 			return nil, err
 		}
+		if normalizedDocumentFormat(plannerOptions.documentFormat) == DocumentFormatTemplateV1 {
+			// Clone buffered template runs first, then refresh the fallback snapshot.
+			// This closes the race where async publish removes a template run from the
+			// buffered overlay after the original snapshot but before the clone.
+			catalog, meta, plannerOptions, err = c.refreshTemplateV1PlanningSnapshot(&snap, trustedValidBSON, bufferedTemplateRuns, true)
+			if err != nil {
+				closePlanningSnapshot()
+				return nil, err
+			}
+			c.meta = meta
+			indexedMemtablesEnabled = c.shouldBufferIndexedInserts(meta)
+			bufferIndexedInserts = c.shouldBufferIndexedInsertBatch(meta, len(documents))
+		}
 	}
 	baseSystemRoot := snapshotSystemRoot(snap)
 	baseCommitSeq := snapshotCommitSeq(snap)
@@ -6569,6 +6582,47 @@ func shouldUnlockInsertPlanning(opts collectionOptions, indexedMemtablesEnabled,
 		return false
 	}
 	return true
+}
+
+func (c *Collection) refreshTemplateV1PlanningSnapshot(snap **backenddb.Snapshot, trustedValidBSON bool, bufferedTemplateRuns []memtable.Table, rejectBufferedOverlays bool) (*collectionCatalog, CollectionMeta, collectionOptions, error) {
+	if snap == nil {
+		return nil, CollectionMeta{}, collectionOptions{}, errors.New("collections: missing planning snapshot")
+	}
+	if *snap != nil {
+		_ = (*snap).Close()
+		*snap = nil
+	}
+	refreshed := c.db.AcquireSnapshot()
+	if refreshed == nil {
+		return nil, CollectionMeta{}, collectionOptions{}, backenddb.ErrClosed
+	}
+	*snap = refreshed
+	catalog, err := c.catalogForSnapshot(refreshed)
+	if err != nil {
+		return nil, CollectionMeta{}, collectionOptions{}, err
+	}
+	if catalog == nil {
+		return nil, CollectionMeta{}, collectionOptions{}, errCollectionNotFound
+	}
+	if rejectBufferedOverlays {
+		if err := rejectCatalogRootOverlaysForIndexedBufferWrite(catalog); err != nil {
+			return nil, CollectionMeta{}, collectionOptions{}, err
+		}
+	}
+	meta := catalog.meta
+	plannerOptions, err := collectionPlannerOptions(meta)
+	if err != nil {
+		return nil, CollectionMeta{}, collectionOptions{}, err
+	}
+	plannerOptions, err = collectionOptionsWithTrustedBSONDocuments(plannerOptions, trustedValidBSON)
+	if err != nil {
+		return nil, CollectionMeta{}, collectionOptions{}, err
+	}
+	plannerOptions = collectionOptionsWithTemplateV1Resolver(plannerOptions, refreshed, catalog)
+	if len(bufferedTemplateRuns) > 0 {
+		plannerOptions = collectionOptionsWithBufferedTemplateV1RunsResolver(plannerOptions, bufferedTemplateRuns)
+	}
+	return catalog, meta, plannerOptions, nil
 }
 
 func insertBatchPlanRootNamesAndBaseIDs(plan *insertBatchPlan, catalog *collectionCatalog) ([]string, map[string]uint64) {
@@ -11939,6 +11993,10 @@ func (c *Collection) NewStoredDocumentJSONMaterializer() (*StoredDocumentJSONMat
 		}
 		plannerOptions = collectionOptionsWithTemplateV1Resolver(plannerOptions, snap, catalog)
 		plannerOptions, bufferedTemplateRuns, err = collectionOptionsWithClonedBufferedTemplateV1Resolver(plannerOptions, c.writeDomain, c.meta.Name)
+		if err != nil {
+			return nil, err
+		}
+		_, _, plannerOptions, err = c.refreshTemplateV1PlanningSnapshot(&snap, false, bufferedTemplateRuns, false)
 		if err != nil {
 			return nil, err
 		}
