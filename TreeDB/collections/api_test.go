@@ -3153,6 +3153,10 @@ func TestCollectionCatalogOverlayRootsAreVisibleAfterReopen(t *testing.T) {
 	mgr := NewCollectionManager(db)
 	if _, err := mgr.CreateCollection(&CollectionMeta{
 		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedAsyncFlush:        true,
+			BufferedIndexedWriteMaxDocuments: 1,
+		},
 		Indexes: []IndexDefinition{
 			{Name: "city", Field: "city", ValueType: IndexValueString},
 		},
@@ -7686,6 +7690,205 @@ func TestCollectionSingleInsertBufferedNoIndexRejectsBufferedDuplicate(t *testin
 	}
 	if want := []byte(`{"name":"ada"}`); !bytes.Equal(got, want) {
 		t.Fatalf("u1=%q want %q", got, want)
+	}
+}
+
+func TestCollectionIndexedDeleteBuffersNonUniqueTombstones(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Indexes: []IndexDefinition{
+			{Name: "city", Field: "city", ValueType: IndexValueString},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	writer, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open writer: %v", err)
+	}
+	reader, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open reader: %v", err)
+	}
+	if _, err := writer.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{
+			[]byte(`{"city":"hnl"}`),
+			[]byte(`{"city":"hnl"}`),
+		},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	if err := writer.Flush(); err != nil {
+		t.Fatalf("flush inserts: %v", err)
+	}
+
+	deleted, err := writer.DeleteDocument([]byte("u1"))
+	if err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if !deleted {
+		t.Fatal("delete reported missing document")
+	}
+	if writer.writeDomain == nil {
+		t.Fatal("missing write domain")
+	}
+	if writer.writeDomain.count != 1 || !writer.writeDomain.indexedDeletesOnly {
+		t.Fatalf("write domain delete state count=%d deleteOnly=%v", writer.writeDomain.count, writer.writeDomain.indexedDeletesOnly)
+	}
+	got, err := reader.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("reader get pending deleted document: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("reader saw pending deleted document %q", got)
+	}
+	ids, err := reader.FindByIndex("city", "hnl")
+	if err != nil {
+		t.Fatalf("find by city: %v", err)
+	}
+	if !reflect.DeepEqual(ids, [][]byte{[]byte("u2")}) {
+		t.Fatalf("city ids=%q want [u2]", ids)
+	}
+	deleted, err = writer.DeleteDocument([]byte("u1"))
+	if err != nil {
+		t.Fatalf("delete already buffered u1: %v", err)
+	}
+	if deleted {
+		t.Fatal("second delete of pending tombstone reported deleted")
+	}
+	deleted, err = writer.DeleteDocument([]byte("u2"))
+	if err != nil {
+		t.Fatalf("delete u2 after primary run index exists: %v", err)
+	}
+	if !deleted {
+		t.Fatal("delete u2 reported missing document")
+	}
+	got, err = reader.Get([]byte("u2"))
+	if err != nil {
+		t.Fatalf("reader get second pending deleted document: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("reader saw second pending deleted document %q", got)
+	}
+	if err := writer.Flush(); err != nil {
+		t.Fatalf("flush delete: %v", err)
+	}
+	got, err = reader.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("reader get flushed deleted document: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("reader saw flushed deleted document %q", got)
+	}
+}
+
+func TestCollectionIndexedDeleteRevalidatesBeforeSkippingFlush(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	writerMgr := NewCollectionManager(d)
+	if _, err := writerMgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Indexes: []IndexDefinition{
+			{Name: "city", Field: "city", ValueType: IndexValueString},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	writer, err := writerMgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open writer: %v", err)
+	}
+	if _, err := writer.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{
+			[]byte(`{"email":"a@example.com","city":"hnl"}`),
+			[]byte(`{"email":"b@example.com","city":"hnl"}`),
+		},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	if err := writer.Flush(); err != nil {
+		t.Fatalf("flush inserts: %v", err)
+	}
+	if deleted, err := writer.DeleteDocument([]byte("u1")); err != nil || !deleted {
+		t.Fatalf("buffer delete deleted=%v err=%v", deleted, err)
+	}
+
+	indexMgr := NewCollectionManager(d)
+	indexer, err := indexMgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open indexer: %v", err)
+	}
+	if _, err := indexer.CreateIndex(IndexDefinition{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true}); err != nil {
+		t.Fatalf("create unique index: %v", err)
+	}
+
+	if _, err := writer.DeleteDocument([]byte("u2")); err == nil || !strings.Contains(err.Error(), "concurrent schema modification") {
+		t.Fatalf("delete after schema change err=%v want concurrent schema modification", err)
+	}
+	writer.writeDomain.mu.RLock()
+	count := writer.writeDomain.count
+	deleteOnly := writer.writeDomain.indexedDeletesOnly
+	writer.writeDomain.mu.RUnlock()
+	if count != 1 || !deleteOnly {
+		t.Fatalf("write domain count=%d deleteOnly=%v want pending original delete", count, deleteOnly)
+	}
+}
+
+func TestCollectionIndexedDeleteThenReinsertFlushesPendingTombstone(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Indexes: []IndexDefinition{
+			{Name: "city", Field: "city", ValueType: IndexValueString},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.Insert([]byte("u1"), []byte(`{"city":"hnl"}`)); err != nil {
+		t.Fatalf("insert original: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush insert: %v", err)
+	}
+	deleted, err := col.DeleteDocument([]byte("u1"))
+	if err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if !deleted {
+		t.Fatal("delete reported missing document")
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("u1")}, [][]byte{[]byte(`{"city":"sea"}`)}); err != nil {
+		t.Fatalf("reinsert after buffered delete: %v", err)
+	}
+	got, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get reinserted document: %v", err)
+	}
+	if string(got) != `{"city":"sea"}` {
+		t.Fatalf("reinserted document=%s want sea", got)
 	}
 }
 

@@ -4163,6 +4163,7 @@ func normalizeNativeWireBenchmarkCollectionMeta(meta collections.CollectionMeta)
 	if len(meta.Indexes) == 0 {
 		meta.Options.BufferedIndexedWrites = false
 		meta.Options.BufferedIndexedAsyncFlush = false
+		meta.Options.BufferedIndexedOverlayRoots = false
 		meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits = 0
 		return meta
 	}
@@ -4213,6 +4214,7 @@ func normalizeNativeWireBenchmarkOptions(opts collections.CollectionOptions, ind
 	if !indexed {
 		opts.BufferedIndexedWrites = false
 		opts.BufferedIndexedAsyncFlush = false
+		opts.BufferedIndexedOverlayRoots = false
 		opts.BufferedIndexedAsyncFlushMaxQueuedUnits = 0
 		return opts
 	}
