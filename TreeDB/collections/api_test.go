@@ -10461,25 +10461,34 @@ type bufferedUsersUpdateFixture struct {
 }
 
 func bufferedIndexedUpdateHighThresholdOptionsForTests() CollectionOptions {
+	return bufferedIndexedUpdateHighThresholdOptionsForTestsWithAsync(true)
+}
+
+func bufferedIndexedUpdateNoAsyncHighThresholdOptionsForTests() CollectionOptions {
+	return bufferedIndexedUpdateHighThresholdOptionsForTestsWithAsync(false)
+}
+
+func bufferedIndexedUpdateHighThresholdOptionsForTestsWithAsync(async bool) CollectionOptions {
+	queuedUnits := 0
+	if async {
+		queuedUnits = bufferedIndexedUpdateNoThresholdQueueLimitForTests
+	}
 	return CollectionOptions{
 		BufferedIndexedWrites:                   true,
 		BufferedIndexedWriteMaxDocuments:        bufferedIndexedUpdateNoThresholdDocumentLimitForTests,
 		BufferedIndexedWriteMaxBytes:            bufferedIndexedUpdateNoThresholdByteLimitForTests,
 		BufferedIndexedWriteMaxRootRuns:         bufferedIndexedUpdateNoThresholdRootRunLimitForTests,
-		BufferedIndexedAsyncFlush:               true,
-		BufferedIndexedAsyncFlushMaxQueuedUnits: bufferedIndexedUpdateNoThresholdQueueLimitForTests,
+		BufferedIndexedAsyncFlush:               async,
+		DisableBufferedIndexedAsyncFlush:        !async,
+		BufferedIndexedAsyncFlushMaxQueuedUnits: queuedUnits,
 	}
 }
 
-func bufferedIndexedUpdateNoAsyncHighThresholdOptionsForTests() CollectionOptions {
-	opts := bufferedIndexedUpdateHighThresholdOptionsForTests()
-	opts.BufferedIndexedAsyncFlush = false
-	opts.BufferedIndexedAsyncFlushMaxQueuedUnits = 0
-	opts.DisableBufferedIndexedAsyncFlush = true
-	return opts
+func newBufferedUsersUpdateFixtureWithDocs(t *testing.T, opts CollectionOptions, docs []bufferedUsersUpdateDoc) bufferedUsersUpdateFixture {
+	return newBufferedUsersUpdateFixtureWithDocsCleanup(t, opts, docs, false)
 }
 
-func newBufferedUsersUpdateFixtureWithDocs(t *testing.T, opts CollectionOptions, docs []bufferedUsersUpdateDoc) bufferedUsersUpdateFixture {
+func newBufferedUsersUpdateFixtureWithDocsCleanup(t *testing.T, opts CollectionOptions, docs []bufferedUsersUpdateDoc, allowConcurrentMutationCleanup bool) bufferedUsersUpdateFixture {
 	t.Helper()
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -10488,11 +10497,11 @@ func newBufferedUsersUpdateFixtureWithDocs(t *testing.T, opts CollectionOptions,
 	var mgr *CollectionManager
 	t.Cleanup(func() {
 		if mgr != nil {
-			if err := mgr.FlushAll(); err != nil && !errors.Is(err, backenddb.ErrClosed) && !errors.Is(err, ErrConcurrentMutation) {
+			if err := mgr.FlushAll(); err != nil && !errors.Is(err, backenddb.ErrClosed) && !(allowConcurrentMutationCleanup && errors.Is(err, ErrConcurrentMutation)) {
 				t.Errorf("flush buffered user fixture: %v", err)
 			}
 		}
-		if err := d.Close(); err != nil && !errors.Is(err, backenddb.ErrClosed) && !errors.Is(err, ErrConcurrentMutation) {
+		if err := d.Close(); err != nil && !errors.Is(err, backenddb.ErrClosed) && !(allowConcurrentMutationCleanup && errors.Is(err, ErrConcurrentMutation)) {
 			t.Errorf("close buffered user fixture DB: %v", err)
 		}
 	})
@@ -10778,12 +10787,13 @@ func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesBoundsStaleBuffered
 }
 
 func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesFlushesRootMismatchInsteadOfReplanning(t *testing.T) {
-	fixture := newBufferedUsersUpdateFixtureWithDocs(t,
+	fixture := newBufferedUsersUpdateFixtureWithDocsCleanup(t,
 		bufferedIndexedUpdateHighThresholdOptionsForTests(),
 		[]bufferedUsersUpdateDoc{
 			{id: "u1", email: "a@example.com", city: "hnl"},
 			{id: "u2", email: "b@example.com", city: "hnl"},
 		},
+		true,
 	)
 	d := fixture.db
 	mgr := fixture.manager

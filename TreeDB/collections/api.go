@@ -9248,6 +9248,7 @@ func (c *Collection) updateBatchOnce(items []updateBatchItem, mode updateBatchMo
 				if err := c.flushBufferedWrites(); err != nil {
 					return err
 				}
+				replanWaitAttempt = maxUpdateBatchBufferedReadReplans
 				useBufferedRead = false
 				replan = true
 				return nil
