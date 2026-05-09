@@ -179,6 +179,9 @@ func (u bsonSetUpdate) fieldIndex(key string) int {
 
 func (u bsonSetUpdate) fieldIndexBytes(key []byte) int {
 	if u.fieldIndexes != nil {
+		// elem.KeyBytes returns a stable slice into current for the duration of
+		// apply. The unsafe string is used only for this map lookup and is never
+		// retained, so it cannot outlive or observe mutation of the BSON buffer.
 		idx, ok := u.fieldIndexes[unsafeStringFromBytes(key)]
 		if ok {
 			return idx
