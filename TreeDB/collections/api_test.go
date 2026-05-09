@@ -10730,7 +10730,7 @@ func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesFlushesRootMismatch
 		if !errors.Is(err, ErrConcurrentMutation) {
 			t.Fatalf("stale-root UpdateBatchIfNoSecondaryUniqueIndexChanges err=%v want %v", err, ErrConcurrentMutation)
 		}
-		if !strings.Contains(err.Error(), "buffered root base mismatch") {
+		if !isBufferedRootBaseMismatch(err) {
 			t.Fatalf("stale-root UpdateBatchIfNoSecondaryUniqueIndexChanges err=%v want buffered root base mismatch context", err)
 		}
 		if !isConcurrentRootModification(err) {
