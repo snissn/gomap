@@ -9465,7 +9465,7 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 	}
 	if itemIndex := updateBatchBSONSetItemIndex(items); itemIndex >= 0 && normalizedDocumentFormat(plannerOptions.documentFormat) != DocumentFormatBSON {
 		_ = snap.Close()
-		return nil, updateBatchItemError(itemIndex, errors.New("collections: BSON $set update requires BSON document format"))
+		return nil, updateBatchItemError(itemIndex, errBSONSetRequiresBSONFormat)
 	}
 	plannerOptions = collectionOptionsWithTemplateV1Resolver(plannerOptions, snap, catalog)
 	baseUserRoot := snapshotUserRoot(snap)
@@ -9584,7 +9584,7 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 			}
 			phaseStart = updateBatchStatsNow(detailedStats)
 			if prepared.knownAffectedIndexes {
-				prepared.oldState, err = orderedIndexStateForDocumentRuntimeMask(current.value, runtimes, prepared.affectedIndexRuntimeMask, plannerOptions, stateArena)
+				prepared.oldState, err = orderedIndexStateForKnownValidDocumentRuntimeMask(current.value, runtimes, prepared.affectedIndexRuntimeMask, plannerOptions, stateArena)
 			} else {
 				prepared.oldState, err = orderedIndexStateForDocumentWithArena(current.value, runtimes, plannerOptions, stateArena)
 			}
@@ -9688,7 +9688,7 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 		if len(runtimes) > 0 {
 			phaseStart = updateBatchStatsNow(detailedStats)
 			if changed[i].knownAffectedIndexes {
-				changed[i].newState, err = orderedIndexStateForDocumentRuntimeMask(changed[i].document, runtimes, changed[i].affectedIndexRuntimeMask, plannerOptions, stateArena)
+				changed[i].newState, err = orderedIndexStateForKnownValidDocumentRuntimeMask(changed[i].document, runtimes, changed[i].affectedIndexRuntimeMask, plannerOptions, stateArena)
 			} else {
 				changed[i].newState, err = orderedIndexStateForDocumentWithArena(changed[i].document, runtimes, plannerOptions, stateArena)
 			}
