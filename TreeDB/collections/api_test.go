@@ -6324,6 +6324,27 @@ func TestDetachMutableIndexedRunTablesKeepsRunsVisible(t *testing.T) {
 	resetCollectionTables(detached)
 }
 
+func TestFreezeIndexedRunTablesOutsideLockAllowsNilDomain(t *testing.T) {
+	table := newFreezeSortRunTable()
+	if err := applyCollectionRunEntriesWithFlags(table, 2, func(i int) (key, value []byte, ptr page.ValuePtr, flags byte, err error) {
+		if i == 0 {
+			return []byte("b"), []byte("value-b"), page.ValuePtr{}, node.FlagInline, nil
+		}
+		return []byte("a"), []byte("value-a"), page.ValuePtr{}, node.FlagInline, nil
+	}); err != nil {
+		t.Fatalf("append entries: %v", err)
+	}
+	freezeDuration, lockReleased, relockWait := freezeIndexedRunTablesOutsideLock(nil, []memtable.Table{table})
+	if freezeDuration <= 0 {
+		t.Fatalf("freeze duration=%s want positive", freezeDuration)
+	}
+	if lockReleased != 0 || relockWait != 0 {
+		t.Fatalf("lock released=%s relock wait=%s want 0/0", lockReleased, relockWait)
+	}
+	requireFreezeSortRunIterator(t, table.NewIterator(nil, nil), []string{"a", "b"})
+	resetCollectionRunTable(table)
+}
+
 func TestIndexedPrepareFreezeWaitsUntilFinished(t *testing.T) {
 	domain := &collectionWriteDomain{}
 	domain.mu.Lock()
@@ -6331,17 +6352,26 @@ func TestIndexedPrepareFreezeWaitsUntilFinished(t *testing.T) {
 	domain.mu.Unlock()
 
 	done := make(chan time.Duration, 1)
+	waiterReady := make(chan struct{})
 	go func() {
 		domain.mu.Lock()
+		if domain.indexedPrepareFreezes <= 0 {
+			domain.mu.Unlock()
+			done <- 0
+			return
+		}
+		close(waiterReady)
 		waited := domain.waitIndexedPrepareFreezeLocked()
 		domain.mu.Unlock()
 		done <- waited
 	}()
 
 	select {
-	case <-done:
-		t.Fatal("prepare freeze wait returned before finish")
-	case <-time.After(10 * time.Millisecond):
+	case <-waiterReady:
+	case waited := <-done:
+		t.Fatalf("prepare freeze wait returned before finish duration=%s", waited)
+	case <-time.After(time.Second):
+		t.Fatal("prepare freeze waiter did not start")
 	}
 
 	domain.mu.Lock()

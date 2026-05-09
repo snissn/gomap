@@ -3618,6 +3618,11 @@ func freezeIndexedRunTablesOutsideLock(domain *collectionWriteDomain, tables []m
 	if len(tables) == 0 {
 		return 0, 0, 0
 	}
+	if domain == nil {
+		freezeStart := time.Now()
+		freezeIndexedRunTables(tables)
+		return collectionObservedElapsedSince(freezeStart), 0, 0
+	}
 	domain.beginIndexedPrepareFreezeLocked()
 	unlockStart := time.Now()
 	domain.mu.Unlock()
@@ -10024,6 +10029,22 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 	if shouldAutoFlushAfterAdding {
 		checkpoint = checkpointBufferedIndexedDomain(domain)
 	}
+	freezePreAppendTables := func() {
+		if len(preAppendFreezeTables) == 0 {
+			return
+		}
+		freezeDuration, lockReleased, relockWait := freezeIndexedRunTablesOutsideLock(domain, preAppendFreezeTables)
+		if lockReleased > 0 {
+			lockReleasedDuringHold += lockReleased
+			if domain.writeGeneration != checkpoint.writeGeneration+1 {
+				rollbackOnError = false
+			}
+		}
+		plan.stats.BufferStageLockWait += updateBatchStatsDuration(detailedStats, relockWait)
+		plan.stats.BufferStageFreeze += updateBatchStatsDuration(detailedStats, freezeDuration)
+		preAppendFreezeTables = nil
+	}
+	defer freezePreAppendTables()
 	plan.stats.BufferStageDomainPrepare += updateBatchStatsSince(detailedStats, phaseStart)
 
 	phaseStart = updateBatchStatsNow(detailedStats)
@@ -10126,17 +10147,7 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 		return false, err
 	}
 	if shouldFlushBufferedIndexedWrites(domain, plan.meta.Options) {
-		if len(preAppendFreezeTables) > 0 {
-			freezeDuration, lockReleased, relockWait := freezeIndexedRunTablesOutsideLock(domain, preAppendFreezeTables)
-			if lockReleased > 0 {
-				lockReleasedDuringHold += lockReleased
-				if domain.writeGeneration != checkpoint.writeGeneration+1 {
-					rollbackOnError = false
-				}
-			}
-			plan.stats.BufferStageLockWait += updateBatchStatsDuration(detailedStats, relockWait)
-			plan.stats.BufferStageFreeze += updateBatchStatsDuration(detailedStats, freezeDuration)
-		}
+		freezePreAppendTables()
 		flushDuration, lockReleased, relockWait, err := c.flushBufferedIndexedAfterThresholdLocked(domain, plan.meta.Options)
 		if lockReleased > 0 {
 			lockReleasedDuringHold += lockReleased
