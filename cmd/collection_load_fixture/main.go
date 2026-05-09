@@ -390,7 +390,7 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 	if cfg.DisableBufferedIndexedAsyncFlush && cfg.BufferedIndexedAsyncFlushMaxQueuedUnits != 0 {
 		return config{}, fmt.Errorf("cannot set -buffered-indexed-async-flush-max-queued-units when -disable-buffered-indexed-async-flush is set")
 	}
-	effectiveAsyncFlush := !cfg.DisableBufferedIndexedAsyncFlush || cfg.BufferedIndexedAsyncFlush
+	effectiveAsyncFlush := !cfg.DisableBufferedIndexedAsyncFlush
 	if !seenFlags["buffered-indexed-write-max-root-runs"] &&
 		(seenFlags["buffered-indexed-write-max-docs"] || seenFlags["buffered-indexed-write-max-bytes"]) &&
 		(cfg.BufferedIndexedWriteMaxDocs != 0 || cfg.BufferedIndexedWriteMaxBytes != 0) {
@@ -676,7 +676,7 @@ func runFixture(cfg config) (loadSummary, error) {
 		BufferedIndexedWriteMaxDocs:             collectionMeta.Options.BufferedIndexedWriteMaxDocuments,
 		BufferedIndexedWriteMaxBytes:            collectionMeta.Options.BufferedIndexedWriteMaxBytes,
 		BufferedIndexedWriteMaxRuns:             collectionMeta.Options.BufferedIndexedWriteMaxRootRuns,
-		DisableBufferedIndexedAsyncFlush:        collectionMeta.Options.DisableBufferedIndexedAsyncFlush && collectionMeta.Options.BufferedIndexedWrites,
+		DisableBufferedIndexedAsyncFlush:        collectionMeta.Options.DisableBufferedIndexedAsyncFlush,
 		BufferedIndexedAsyncFlush:               collectionMeta.Options.BufferedIndexedAsyncFlush && collectionMeta.Options.BufferedIndexedWrites,
 		BufferedIndexedAsyncFlushMaxQueuedUnits: collectionMeta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits,
 		DataOuterLeavesInValueLog:               cfg.DataOuterLeavesInValueLog,
@@ -818,7 +818,7 @@ func createFixtureCollection(backend *backenddb.DB, cfg config) (*collections.Co
 			BufferedIndexedWriteMaxDocuments:        bufferedIndexedWriteMaxDocs,
 			BufferedIndexedWriteMaxBytes:            bufferedIndexedWriteMaxBytes,
 			BufferedIndexedWriteMaxRootRuns:         bufferedIndexedWriteMaxRuns,
-			DisableBufferedIndexedAsyncFlush:        cfg.DisableBufferedIndexedAsyncFlush && bufferedIndexedWrites,
+			DisableBufferedIndexedAsyncFlush:        cfg.DisableBufferedIndexedAsyncFlush,
 			BufferedIndexedAsyncFlush:               bufferedIndexedAsyncFlush,
 			BufferedIndexedAsyncFlushMaxQueuedUnits: bufferedIndexedAsyncFlushMaxQueuedUnits,
 		},
