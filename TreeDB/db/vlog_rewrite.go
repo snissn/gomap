@@ -1739,6 +1739,25 @@ func (db *DB) valueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	writer.blockCompression = db.valueLogCompression != ValueLogCompressionOff
 	writer.blockCodec = valuelogBlockCodecFromDB(db.valueLogBlockCodec)
 	writer.leafBlockCodec = leafPageBlockCodecFromOptions(db.valueLogCompression, db.valueLogAutoPolicy, db.valueLogBlockCodec, db.indexOuterLeavesInValueLog)
+	if writer.blockCompression &&
+		db.valueLogCompression != ValueLogCompressionOff &&
+		db.valueLogCompression != ValueLogCompressionBlock &&
+		db.valueLogDictCurrentForClass != nil &&
+		db.valueLogDictLookup != nil {
+		dictID, err := db.valueLogDictCurrentForClass(ctx, "single_value")
+		if err != nil {
+			return stats, err
+		}
+		if dictID != 0 {
+			dictBytes, err := db.valueLogDictLookup(dictID)
+			if err != nil {
+				return stats, err
+			}
+			if len(dictBytes) > 0 {
+				writer.SetValueDictMode(dictID, dictBytes)
+			}
+		}
+	}
 	if db.indexOuterLeavesInValueLog {
 		if state := db.State(); state != nil {
 			leafDictID, leafDictBytes, leafDictUseRawPages, err := prepareRewriteLeafDict(db, state, db.valueLogDictCurrentForClass, db.valueLogDictLeafPayloadMode, db.valueLogDictLookup, db.valueLogDictPut, db.valueLogDictSetCurrentForClass, db.valueLogDictSetLeafPayloadMode, compression.TrainConfig{})
@@ -3305,6 +3324,8 @@ type rewriteWriter struct {
 	leafDictID              uint64
 	leafDict                []byte
 	leafDictUseRawPages     bool
+	valueDictID             uint64
+	valueDict               []byte
 	templateMode            template.Mode
 	templateEngineValue     *template.Engine
 	templateEngineOuterLeaf *template.Engine
@@ -3341,6 +3362,7 @@ type rewriteWriter struct {
 	pendingDict        []byte
 	pendingDictStart   int64
 	pendingDictRaw     int
+	pendingDictArena   []byte
 	pendingDictRecords []valuelog.Record
 	pendingDictPtrs    []page.ValuePtr
 	pendingDictDst     []page.ValuePtr
@@ -3434,6 +3456,11 @@ func (w *rewriteWriter) resetPendingDictBatch() {
 	w.pendingDict = nil
 	w.pendingDictStart = 0
 	w.pendingDictRaw = 0
+	if cap(w.pendingDictArena) > rewriteBlockBatchMaxRawBytes*2 {
+		w.pendingDictArena = nil
+	} else {
+		w.pendingDictArena = w.pendingDictArena[:0]
+	}
 	w.pendingDictRecords = w.pendingDictRecords[:0]
 	w.pendingDictPtrs = w.pendingDictPtrs[:0]
 }
@@ -3978,6 +4005,19 @@ func (w *rewriteWriter) SetLeafDictMode(dictID uint64, dict []byte, useRawPages 
 	w.leafDictUseRawPages = useRawPages
 }
 
+func (w *rewriteWriter) SetValueDictMode(dictID uint64, dict []byte) {
+	if w == nil {
+		return
+	}
+	if dictID == 0 || len(dict) == 0 {
+		w.valueDictID = 0
+		w.valueDict = nil
+		return
+	}
+	w.valueDictID = dictID
+	w.valueDict = append(w.valueDict[:0], dict...)
+}
+
 func (w *rewriteWriter) SetTemplateCompression(mode template.Mode, cfg template.Config, store template.Store) {
 	if w == nil {
 		return
@@ -4146,6 +4186,9 @@ func (w *rewriteWriter) appendRaw(raw []byte, length uint32) (page.ValuePtr, err
 }
 
 func (w *rewriteWriter) appendValue(rid uint64, value []byte) (page.ValuePtr, error) {
+	if w.blockCompression && w.valueDictID != 0 && len(w.valueDict) > 0 {
+		return w.appendValueWithDictClass(rewriteTemplateClassPointerValue, w.valueDictID, w.valueDict, rid, value)
+	}
 	return w.appendValueWithDictClass(rewriteTemplateClassPointerValue, 0, nil, rid, value)
 }
 
@@ -4281,7 +4324,8 @@ func (w *rewriteWriter) appendValueWithDictClass(class rewriteTemplateClass, dic
 	if maxK > valuelog.MaxFrameK {
 		maxK = valuelog.MaxFrameK
 	}
-	if w.hasPendingDictBatch() && len(w.pendingDictRecords) >= maxK {
+	if w.hasPendingDictBatch() &&
+		(len(w.pendingDictRecords) >= maxK || w.pendingDictRaw+len(value) > rewriteBlockBatchMaxRawBytes) {
 		if err := w.flushPendingDictBatch(); err != nil {
 			return page.ValuePtr{}, err
 		}
@@ -4318,11 +4362,14 @@ func (w *rewriteWriter) appendValueWithDictClass(class rewriteTemplateClass, dic
 		w.pendingDictRaw = 0
 	}
 
+	valueStart := len(w.pendingDictArena)
+	w.pendingDictArena = append(w.pendingDictArena, value...)
+	ownedValue := w.pendingDictArena[valueStart:]
 	w.pendingDictRecords = append(w.pendingDictRecords, valuelog.Record{
 		RID:   rid,
-		Value: value,
+		Value: ownedValue,
 	})
-	w.pendingDictRaw += len(value)
+	w.pendingDictRaw += len(ownedValue)
 	subIndex := len(w.pendingDictRecords) - 1
 	ptr := page.ValuePtr{
 		Offset: uint64(w.pendingDictStart + 4),
