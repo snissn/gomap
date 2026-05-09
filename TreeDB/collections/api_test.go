@@ -10373,6 +10373,18 @@ type bufferedUsersUpdateDoc struct {
 	city  string
 }
 
+type bufferedUsersUpdateJSONDoc struct {
+	Email string `json:"email"`
+	City  string `json:"city"`
+}
+
+const (
+	bufferedIndexedUpdateHighDocumentLimitForTests = 1 << 20
+	bufferedIndexedUpdateHighByteLimitForTests     = int64(1) << 40
+	bufferedIndexedUpdateHighRootRunLimitForTests  = 1 << 20
+	bufferedIndexedUpdateHighQueueLimitForTests    = 1 << 20
+)
+
 type bufferedUsersUpdateFixture struct {
 	db         *backenddb.DB
 	manager    *CollectionManager
@@ -10382,11 +10394,11 @@ type bufferedUsersUpdateFixture struct {
 func bufferedIndexedUpdateHighThresholdOptionsForTests() CollectionOptions {
 	return CollectionOptions{
 		BufferedIndexedWrites:                   true,
-		BufferedIndexedWriteMaxDocuments:        1 << 20,
-		BufferedIndexedWriteMaxBytes:            int64(1) << 40,
-		BufferedIndexedWriteMaxRootRuns:         1 << 20,
+		BufferedIndexedWriteMaxDocuments:        bufferedIndexedUpdateHighDocumentLimitForTests,
+		BufferedIndexedWriteMaxBytes:            bufferedIndexedUpdateHighByteLimitForTests,
+		BufferedIndexedWriteMaxRootRuns:         bufferedIndexedUpdateHighRootRunLimitForTests,
 		BufferedIndexedAsyncFlush:               true,
-		BufferedIndexedAsyncFlushMaxQueuedUnits: 1 << 20,
+		BufferedIndexedAsyncFlushMaxQueuedUnits: bufferedIndexedUpdateHighQueueLimitForTests,
 	}
 }
 
@@ -10403,7 +10415,7 @@ func newBufferedUsersUpdateFixtureWithDocs(t *testing.T, opts CollectionOptions,
 				t.Errorf("flush buffered user fixture: %v", err)
 			}
 		}
-		if err := d.Close(); err != nil && !errors.Is(err, ErrConcurrentMutation) {
+		if err := d.Close(); err != nil && !errors.Is(err, backenddb.ErrClosed) && !errors.Is(err, ErrConcurrentMutation) {
 			t.Errorf("close buffered user fixture DB: %v", err)
 		}
 	})
@@ -10428,9 +10440,9 @@ func newBufferedUsersUpdateFixtureWithDocs(t *testing.T, opts CollectionOptions,
 		values := make([][]byte, len(docs))
 		for i, doc := range docs {
 			ids[i] = []byte(doc.id)
-			values[i], err = json.Marshal(map[string]string{
-				"email": doc.email,
-				"city":  doc.city,
+			values[i], err = json.Marshal(bufferedUsersUpdateJSONDoc{
+				Email: doc.email,
+				City:  doc.city,
 			})
 			if err != nil {
 				t.Fatalf("marshal user fixture doc: %v", err)
@@ -10693,7 +10705,7 @@ func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesFlushesRootMismatch
 	col := fixture.collection
 	otherMgr := NewCollectionManager(d)
 	t.Cleanup(func() {
-		if err := otherMgr.FlushAll(); err != nil {
+		if err := otherMgr.FlushAll(); err != nil && !errors.Is(err, backenddb.ErrClosed) && !errors.Is(err, ErrConcurrentMutation) {
 			t.Errorf("flush second collection manager: %v", err)
 		}
 	})
@@ -10743,7 +10755,15 @@ func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesFlushesRootMismatch
 			t.Fatalf("stale-root UpdateBatchIfNoSecondaryUniqueIndexChanges err=%v want root modification context", err)
 		}
 	case <-timer.C:
-		t.Fatal("stale-root UpdateBatchIfNoSecondaryUniqueIndexChanges timed out, likely replanning without flushing")
+		_ = d.Close()
+		unblockTimer := time.NewTimer(collectionTestTimeout(t, time.Second))
+		defer unblockTimer.Stop()
+		select {
+		case err := <-done:
+			t.Fatalf("stale-root UpdateBatchIfNoSecondaryUniqueIndexChanges timed out, likely replanning without flushing; unblocked after close with err=%v", err)
+		case <-unblockTimer.C:
+			t.Fatal("stale-root UpdateBatchIfNoSecondaryUniqueIndexChanges timed out and did not unblock after DB close")
+		}
 	}
 	after := mgr.StatsSnapshot()
 	if got := after.IndexedFlushForcedDrains - before.IndexedFlushForcedDrains; got != 1 {
