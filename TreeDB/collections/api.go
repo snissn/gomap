@@ -8320,6 +8320,9 @@ func errBufferedRootBaseMismatch(collectionName, rootName string) error {
 	return bufferedRootBaseMismatchError{cause: concurrentRootModificationError{collectionName: collectionName, rootName: rootName}}
 }
 
+// isConcurrentRootModification includes buffered root base mismatches because
+// bufferedRootBaseMismatchError unwraps to concurrentRootModificationError.
+// Use isBufferedRootBaseMismatch when callers need to distinguish that case.
 func isConcurrentRootModification(err error) bool {
 	var rootErr concurrentRootModificationError
 	return errors.As(err, &rootErr)
@@ -9214,8 +9217,10 @@ func (c *Collection) updateBatchOnce(items []updateBatchItem, mode updateBatchMo
 			}
 			var results []UpdateBatchResult
 			replan := false
+			replanWaitAttempt := -1
 			replanBufferedRead := func() error {
 				if bufferedReadReplans < maxUpdateBatchBufferedReadReplans {
+					replanWaitAttempt = bufferedReadReplans
 					bufferedReadReplans++
 					replan = true
 					return nil
@@ -9303,6 +9308,9 @@ func (c *Collection) updateBatchOnce(items []updateBatchItem, mode updateBatchMo
 				return nil, err
 			}
 			if replan {
+				if replanWaitAttempt >= 0 {
+					waitBeforeCollectionMutationRetry(replanWaitAttempt)
+				}
 				continue
 			}
 			if primaryOnlyNoPublish && c.writeDomain != nil {
