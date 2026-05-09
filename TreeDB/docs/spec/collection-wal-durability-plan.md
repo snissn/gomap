@@ -1372,6 +1372,12 @@ If async publish fails, in-memory units can be requeued as they are today. The
 collection WAL transaction remains the recovery source until a successful
 publish advances the watermark.
 
+Async publish failure is not an unbounded admission license. Every acknowledged
+collection WAL transaction continues to count against pending WAL bytes,
+root-delta side-payload bytes, protected side-ref logical bytes, retained
+segment debt, unpublished root-delta entries, and oldest-unapplied age until
+publish, checkpoint, and cleanup release those charges under Section 10.1.
+
 Every queued or publishing flush unit must carry the collection WAL coverage it
 covers:
 
@@ -1729,6 +1735,15 @@ For each root, the accumulator records:
 - the merged ordered delta entries in transaction order;
 - whether cold-build tombstones must be preserved.
 
+Recovery-side accumulation is bounded resource state, not a best-effort heap.
+Before admitting another transaction into an accumulator, recovery must project
+accumulator bytes, decoded entries, and root-group transaction fan-in against the
+Section 10.1 replay limits. At the soft cap, recovery must publish a bounded
+chunk or spill deterministic sorted chunks to temporary replay side payloads. At
+the hard cap, recovery must stop before serving collection APIs with
+`ErrCollectionWALRecoveryCapacityExceeded` unless a chunk/spill path has already
+reduced the projected charge.
+
 The PR1 fold order is `(CollectionSeq, RootDeltaOrdinal, EntryOrdinal)`.
 `CollectionSeq` is the transaction order key; if a future record also exposes a
 diagnostic `TxnID`, it must not replace `CollectionSeq` for same-collection
@@ -1778,7 +1793,7 @@ and future column-store delta-part descriptor updates.
 | Root pages are built but backend meta commit fails | Built pages are unreachable. WAL transaction remains source of truth. |
 | Descriptor update succeeds without watermark | Not permitted. Descriptor updates and watermark update are the same system-root commit. |
 | Watermark update succeeds without descriptor update | Not permitted. Descriptor updates and watermark update are the same system-root commit. |
-| Cleanup fails after watermark/checkpoint | Safe leak. Retry cleanup later. |
+| Cleanup fails after watermark/checkpoint | Safe leak only while cleanup debt remains below the Section 10.1 stop and hard limits. Retry cleanup later and charge the retained bytes. |
 | WAL segment unlink/rename fails during cleanup | Cleanup remains retryable. Startup accepts missing segments only with durable cleanup metadata. |
 | GC/rewrite wants a side ref protected by unapplied WAL | Must keep it in place or abort maintenance. Rewrite requires an explicit crash-tested WAL metadata protocol. |
 
@@ -1878,6 +1893,393 @@ and include collection WAL side refs in value-log and side-file reachability
 before any prune, rewrite, or deletion. If a future checkpoint mode leaves
 replayable collection WAL unpublished, it must report collection WAL debt and
 preserve all side-ref protections; it is not a clean collection-WAL boundary.
+
+### 10.1 Collection WAL Resource Accounting and Admission
+
+Collection WAL durable-at-ack is enabled only when the implementation enforces a
+capacity model for write admission, replay, cleanup, and maintenance. These
+limits are part of the durability contract: an implementation must reject or
+block before acknowledgement rather than accept writes that can create
+unbounded WAL, side-ref, root-delta, replay, or cleanup debt.
+
+#### WAL bytes per document
+
+Definitions:
+
+| Symbol | Meaning |
+|---|---|
+| `N` | Documents in the transaction or measured batch. |
+| `I` | Secondary indexes whose entries are written for a document. |
+| `C` | Secondary indexes whose extracted value changes on update. |
+| `T` | Template or index-state root entries emitted for a document. |
+| `D` | Delete-root or overlay tombstone entries emitted for a document. |
+| `Kp`, `Vp` | Encoded primary key bytes and encoded primary value bytes. |
+| `Ksi[j]`, `Vsi[j]` | Encoded secondary-index key/value bytes for index `j`. |
+| `Htxn` | Encoded transaction and frame metadata bytes. |
+| `Hroot[r]` | Encoded metadata bytes for root delta `r`, excluding payload. |
+| `Href[s]` | Encoded metadata bytes for side ref `s`, excluding referenced file bytes. |
+| `Binline` | Sum of inline root-delta payload bytes. |
+| `BrootSide` | Root-delta side-payload file bytes. |
+| `BsideLogical` | Logical side-ref payload bytes, including value-log records, root-delta payloads, and column files. |
+| `BsideRetained` | Incremental retained segment/file bytes caused by protected side refs. |
+
+Entry encoding must be measured by the actual encoder. The estimator must use
+the same primitive model as the encoder:
+
+```text
+put_entry_bytes(key, value) =
+    1
+  + uvarint_len(len(key)) + len(key)
+  + uvarint_len(len(value)) + len(value)
+  + uvarint_len(entry_ordinal_delta)
+  + entry_flags_bytes
+
+delete_entry_bytes(key) =
+    1
+  + uvarint_len(len(key)) + len(key)
+  + uvarint_len(entry_ordinal_delta)
+  + entry_flags_bytes
+```
+
+Then:
+
+```text
+root_delta_payload_bytes =
+  sum(put_entry_bytes(key, value))
++ sum(delete_entry_bytes(key))
+
+collection_wal_bytes =
+  Htxn
++ sum(Hroot[r])
++ Binline
++ sum(Href[s])
+
+collection_wal_bytes_per_doc =
+  collection_wal_bytes / N
+
+side_ref_metadata_bytes_per_doc =
+  sum(Href[s]) / N
+
+side_ref_payload_bytes_per_doc =
+  BsideLogical / N
+
+retained_side_ref_debt_bytes_per_doc =
+  BsideRetained / N
+
+unpublished_disk_debt_bytes_per_doc =
+  collection_wal_bytes_per_doc
++ root_delta_side_payload_bytes_per_doc
++ side_ref_payload_bytes_per_doc
++ retained_side_ref_debt_bytes_per_doc
+
+collection_wal_byte_amplification =
+  collection_wal_bytes_per_doc / avg_logical_document_bytes
+
+unpublished_disk_debt_amplification =
+  unpublished_disk_debt_bytes_per_doc / avg_logical_document_bytes
+```
+
+Expected root-delta entries per document:
+
+| Workload | Root-delta entries/doc | WAL value bytes | Side-ref bytes/doc |
+|---|---:|---|---|
+| No-index insert | `1 + T` | Primary value inline or stable `ValuePtr` encoding. | `0` when primary value is inline; value-log record bytes when pointer-backed. |
+| One-index insert | `2 + T` | Primary put plus one secondary-index put. | Same as no-index, plus any side refs required by index storage. |
+| Multi-index insert | `1 + I + T` | Primary put plus one secondary put per index. | Same as no-index, plus any side refs required by index storage. |
+| Update, indexed values unchanged | `1 + T` | Primary put only; no secondary delete/put. | New value-log side ref when pointer-backed update writes a new value. |
+| Update, indexed values changed | `1 + 2C + T` | Primary put, old secondary delete, and new secondary put for each changed index. | New value-log side ref when pointer-backed. |
+| Delete | `1 + I + D` | Primary delete/tombstone plus secondary deletes and optional overlay/delete-root tombstone. | No new document side ref; protected old refs remain until cleanup proves unreachable. |
+| Template-v1 insert/update | Above plus `Ttemplate` | Primary value is template-v1 encoded; new or changed template descriptors are root-delta entries. | Template descriptor side refs only when descriptor payload is external. |
+| Future column-store publish | Descriptor/root entries, not full column bytes. | Row locator, part descriptor, delete bitmap, secondary deltas. | Column part files, dictionaries, bloom files, compression metadata, and manifests. |
+
+For pointer-backed document values, value-log debt includes value-log frame
+overhead. With current value-log constants, a single uncompressed value-log
+record is approximately:
+
+```text
+single_vlog_record_bytes = document_value_bytes + 48
+```
+
+For grouped uncompressed frames of `K` records:
+
+```text
+grouped_vlog_record_bytes_per_doc =
+  document_value_bytes + 12 + (36 / K)
+```
+
+Those bytes are side-ref payload debt when the value-log record is required for
+collection WAL recovery.
+
+#### Side-ref debt
+
+Every side ref is charged as metadata, logical payload, and retained segment
+debt:
+
+```text
+side_ref_logical_charge =
+  referenced_payload_bytes
++ encoded_side_ref_metadata_bytes
+
+side_ref_retained_segment_charge =
+  incremental bytes of any value-log, root-delta-payload, or column-file
+  segment that cannot be deleted because this ref is protected
+
+protected_side_ref_charge =
+  side_ref_logical_charge
++ side_ref_retained_segment_charge
+```
+
+For value-log segments, `side_ref_retained_segment_charge` is the incremental
+retained segment bytes if the protected ref prevents deletion of an otherwise
+collectible segment. A tiny protected ref that pins a large segment is charged by
+the segment debt, not only by the referenced byte range.
+
+#### Replay memory bound
+
+Recovery must estimate:
+
+```text
+estimated_replay_accumulator_bytes =
+  accumulator_struct_overhead
++ sum(encoded_or_decoded_entry_bytes)
++ sum(key_bytes_retained)
++ sum(value_or_pointer_bytes_retained)
++ tombstone_bytes
++ per_root_group_overhead
++ per_txn_range_overhead
+```
+
+Recovery must enforce:
+
+```text
+estimated_replay_accumulator_bytes <= CollectionWAL.MaxReplayAccumulatorBytes
+```
+
+If projected accumulator state exceeds the soft limit, recovery must publish a
+bounded chunk or spill deterministic sorted chunks to temporary replay side
+payloads. If projected state would exceed the hard limit and no spill/publish
+path is available, recovery stops before serving collection APIs with
+`ErrCollectionWALRecoveryCapacityExceeded`.
+
+| Limit | Default | Behavior |
+|---|---:|---|
+| `CollectionWAL.ReplayAccumulatorSoftBytes` | 128 MiB | Adaptive chunk publish or spill trigger. |
+| `CollectionWAL.ReplayAccumulatorHardBytes` | 512 MiB | Hard recovery cap before serving APIs. |
+| `CollectionWAL.ReplayAccumulatorMaxEntries` | 2,000,000 | Hard cap unless spilling is active. |
+| `CollectionWAL.ReplayRootGroupMaxTxns` | 250,000 | Adaptive chunk publish trigger; hard cap without spill. |
+
+#### Replay time bound
+
+Recovery must expose the estimate:
+
+```text
+estimated_replay_seconds =
+    pending_collection_wal_bytes / measured_wal_scan_bytes_per_sec
+  + root_delta_entries / measured_replay_entries_per_sec
+  + side_ref_count / measured_side_ref_validation_refs_per_sec
+  + root_publish_count * measured_root_publish_seconds
+```
+
+Replay time is a benchmark gate and warning metric. Replay memory is an enforced
+hard cap.
+
+| Pending docs | No-index recovery gate | Indexed recovery gate | Peak heap gate |
+|---:|---:|---:|---:|
+| 1K | <= 1 s | <= 2 s | <= 128 MiB |
+| 100K | >= 50K docs/s and <= 5 s | >= 20K docs/s and <= 10 s | <= 256 MiB |
+| 1M | >= 50K docs/s and <= 20 s | >= 20K docs/s and <= 50 s | <= 512 MiB |
+| >1M | Must publish/spill in bounded chunks. | Must publish/spill in bounded chunks. | <= configured hard cap |
+
+#### Cleanup debt bound
+
+Cleanup debt is:
+
+```text
+cleanup_debt_bytes =
+  pending_collection_wal_segment_bytes
++ cleanable_but_unremoved_collection_wal_segment_bytes
++ pending_root_delta_side_payload_bytes
++ protected_side_ref_logical_bytes
++ protected_side_ref_retained_segment_bytes
++ protected_column_file_bytes
+```
+
+| Limit | Default | Behavior |
+|---|---:|---|
+| `CollectionWAL.CleanupDebtSoftBytes` | 256 MiB | Adaptive cleanup trigger. |
+| `CollectionWAL.CleanupDebtStopBytes` | 1 GiB | Block collection writes until below resume watermark. |
+| `CollectionWAL.CleanupDebtHardBytes` | 2 GiB | Hard error for new collection writes before ack. |
+| Cleanable segment age warning | 2 checkpoint intervals or 60 s | Metric warning and diagnostic event. |
+| Protected side-ref max age | 5 min | Blocking wait unless a live read view is the only blocker. |
+| Protected side-ref hard age | 30 min | Hard error for new writes; existing refs remain protected. |
+
+Cleanup failure is a safe leak only while the cleanup debt budget permits it.
+When cleanup debt reaches stop or hard limits, new collection writes block or
+fail before acknowledgement.
+
+#### Admission charge and backpressure
+
+Every collection write must reserve projected capacity before the WAL commit
+marker can be acknowledged:
+
+```text
+projected_debt =
+  pending_collection_wal_bytes
++ pending_root_delta_side_payload_bytes
++ protected_side_ref_logical_bytes
++ protected_side_ref_retained_segment_bytes
++ cleanable_but_unremoved_collection_wal_bytes
++ unpublished_root_delta_estimated_bytes
+```
+
+Admission behavior:
+
+```text
+if projected_debt >= hard_limit:
+    reject before ack with ErrCollectionWALCapacityExceeded
+
+else if projected_debt >= stop_limit:
+    block until projected_debt <= resume_limit or context deadline/DB close
+    if deadline:
+        return ErrCollectionWALBackpressure
+
+else if projected_debt >= soft_limit:
+    trigger async publish, checkpoint, cleanup, and optional writer flush assist
+    continue admitting writes
+```
+
+The default resume watermark is:
+
+```text
+resume_limit = stop_limit * 0.70
+```
+
+| Condition | Behavior |
+|---|---|
+| Debt crosses soft limit | Continue writes; trigger publish, checkpoint, and cleanup. |
+| Debt crosses stop limit | Block new collection writes until debt is at or below 70 percent of stop limit. |
+| Caller context expires while blocked | Return `ErrCollectionWALBackpressure`. |
+| DB is closing while blocked | Return close/shutdown error; do not ack. |
+| Debt crosses hard limit | Return `ErrCollectionWALCapacityExceeded` before ack. |
+| Cleanup failure | Preserve files, keep protections, charge debt, and continue only until stop/hard limit. |
+| Async publish failure | Preserve WAL and side refs, charge debt, retry, and block writes at stop limit. |
+| Live read view pins protected refs | Charge retained bytes and block new writes at stop limit rather than deleting pinned refs. |
+
+#### Inline, side-payload, and transaction thresholds
+
+| Limit | Default | Behavior |
+|---|---:|---|
+| `CollectionWAL.MaxInlineRootDeltaBytes` | 64 KiB | Spill this root delta to root-delta side payload. |
+| `CollectionWAL.MaxInlineTxnBytes` | 256 KiB | Spill root deltas until inline payload is below the limit. |
+| `CollectionWAL.MaxEncodedTxnBytes` | 1 MiB | Hard error before ack after spill attempts. |
+| `CollectionWAL.MaxRootDeltaSidePayloadBytes` | 16 MiB | Hard error before ack; caller must split batch. |
+| `CollectionWAL.MaxTxnDecodedEntries` | 100,000 | Hard error before ack; recovery rejects/quarantines corrupt oversize WAL. |
+| `CollectionWAL.MaxRootDeltasPerTxn` | 256 | Hard error before ack; caller must split batch. |
+
+#### Segment, compression, rotation, and sync batching
+
+| Limit | Default | Behavior |
+|---|---:|---|
+| `CollectionWAL.SegmentBytes` | 64 MiB | Rotate before appending a frame that would exceed the segment size. |
+| `CollectionWAL.WriterBufferBytes` | 4 MiB | Flush when full; not a durability boundary by itself. |
+| Max WAL frame bytes | 1 MiB inline metadata; side payload external | Hard error before ack when exceeded. |
+| `CollectionWAL.CompressionMinBytes` | 64 KiB payload | Compression attempted only above threshold. |
+| Compression keep rule | compressed bytes plus metadata < raw bytes | Otherwise store uncompressed. |
+| `DurableSync.MaxBatchDelay` | 1 ms | Group fsync trigger. |
+| `DurableSync.MaxBatchBytes` | 4 MiB | Group fsync trigger. |
+| `DurableSync.MaxBatchTxns` | 4096 | Group fsync trigger. |
+| Rotation on checkpoint | required for a clean checkpoint boundary | Rotate and sync segment metadata. |
+| Rotation after large transaction | required when one transaction exceeds 25 percent of segment size | Avoid pinning unrelated short-lived debt. |
+
+Group commit and write coalescing are allowed only when per-write visibility
+fences are preserved. Durable sync mode may group fsyncs up to the delay, byte,
+or transaction cap above; WAL-on relaxed mode still must make required side refs
+and WAL frames fresh-process-readable before acknowledgement.
+
+#### Mode-specific gates
+
+| Mode | Capacity caps | Sync behavior | Required benchmark gates |
+|---|---|---|---|
+| WAL-on relaxed | Same byte, memory, and debt caps as durable mode. | WAL frame and required side refs must be recoverable to a fresh-process boundary; no per-write fsync unless checkpoint/sync barrier. | WAL bytes/doc, pending debt, replay time, recovery heap, cleanup debt. |
+| Durable sync | Same byte, memory, and debt caps as WAL-on relaxed. | Required side refs and WAL frame must be fsynced or covered by group fsync before ack. | All WAL-on gates plus p50/p95/p99 ack latency and fsync batch efficiency. |
+| WAL-off relaxed | No collection WAL durable-at-ack claim. | Existing relaxed behavior only. | Must not emit collection WAL recovery claims for unflushed writes. |
+
+#### Column-store capacity gates
+
+Persistent column-store roots remain blocked until the capacity table below is
+enforced and the benchmark artifacts prove bounded memory, file count, and
+replay time.
+
+| Limit | Default | Behavior |
+|---|---:|---|
+| `ColumnWAL.MaxFilesPerPart` | 1024 | Hard error before persistent root publish. |
+| `ColumnWAL.MaxSideRefsPerTxn` | 100,000 | Hard error before ack. |
+| `ColumnWAL.MaxManifestBytesPerPart` | 4 MiB | Hard error before persistent root publish. |
+| `ColumnWAL.MaxSideRefMetadataBytesPerRow` | formula plus 10 percent | Benchmark and admission gate. |
+| `ColumnWAL.MaxSideRefValidationPeakHeapBytes` | 512 MiB unless configured lower | Hard validation cap before serving. |
+
+#### Error names and default configuration
+
+Required capacity errors:
+
+| Error | When |
+|---|---|
+| `ErrCollectionWALCapacityExceeded` | Hard capacity limit would be exceeded before ack. |
+| `ErrCollectionWALBackpressure` | Stop limit reached and caller context deadline/cancel occurs before resume. |
+| `ErrCollectionWALOversizedTransaction` | Transaction still exceeds encoded or entry limits after side-payload spill. |
+| `ErrCollectionWALRecoveryCapacityExceeded` | Recovery cannot replay within memory cap and no spill/chunk path is available. |
+| `ErrCollectionWALMissingRequiredSideRef` | Required side ref is missing/corrupt during append validation or recovery. |
+| `ErrColumnWALCapacityExceeded` | Column side-ref, file-count, or manifest limits exceeded before persistent root publish. |
+
+Default configuration:
+
+```text
+CollectionWAL.MaxInlineRootDeltaBytes              = 64 KiB
+CollectionWAL.MaxInlineTxnBytes                    = 256 KiB
+CollectionWAL.MaxEncodedTxnBytes                   = 1 MiB
+CollectionWAL.MaxRootDeltaSidePayloadBytes         = 16 MiB
+CollectionWAL.MaxTxnDecodedEntries                 = 100_000
+CollectionWAL.MaxRootDeltasPerTxn                  = 256
+
+CollectionWAL.SegmentBytes                         = 64 MiB
+CollectionWAL.WriterBufferBytes                    = 4 MiB
+CollectionWAL.CompressionMinBytes                  = 64 KiB
+
+CollectionWAL.PendingDebtSoftBytes                 = 256 MiB
+CollectionWAL.PendingDebtStopBytes                 = 1 GiB
+CollectionWAL.PendingDebtHardBytes                 = 2 GiB
+CollectionWAL.ResumeFraction                       = 0.70
+
+CollectionWAL.ProtectedSideRefSoftBytes            = 512 MiB
+CollectionWAL.ProtectedSideRefStopBytes            = 2 GiB
+CollectionWAL.ProtectedSideRefHardBytes            = 4 GiB
+CollectionWAL.MaxProtectedSideFileCount            = 1_000_000
+
+CollectionWAL.CleanupDebtSoftBytes                 = 256 MiB
+CollectionWAL.CleanupDebtStopBytes                 = 1 GiB
+CollectionWAL.CleanupDebtHardBytes                 = 2 GiB
+
+CollectionWAL.UnpublishedRootDeltaEntriesSoft      = 100_000
+CollectionWAL.UnpublishedRootDeltaEntriesStop      = 500_000
+CollectionWAL.UnpublishedRootDeltaEntriesHard      = 1_000_000
+
+CollectionWAL.OldestUnappliedAgeSoft               = 30 s
+CollectionWAL.OldestUnappliedAgeStop               = 5 min
+
+CollectionWAL.ReplayAccumulatorSoftBytes           = 128 MiB
+CollectionWAL.ReplayAccumulatorHardBytes           = 512 MiB
+CollectionWAL.ReplayAccumulatorMaxEntries          = 2_000_000
+CollectionWAL.ReplayRootGroupMaxTxns               = 250_000
+
+DurableSync.MaxBatchDelay                          = 1 ms
+DurableSync.MaxBatchBytes                          = 4 MiB
+DurableSync.MaxBatchTxns                           = 4096
+
+ColumnWAL.MaxFilesPerPart                          = 1024
+ColumnWAL.MaxSideRefsPerTxn                        = 100_000
+ColumnWAL.MaxManifestBytesPerPart                  = 4 MiB
+ColumnWAL.MaxSideRefMetadataBytesPerRow            = formula + 10 percent
+```
 
 ## 11. Test Plan
 
@@ -2112,6 +2514,14 @@ acceptance artifacts can point to stable evidence.
 | `TestCollectionWALWatermarkOutOfOrderTxnDoesNotSkipLowerUnapplied` | Two collections; force higher `WALLSN` publish/watermark before a lower `WALLSN`; crash/reopen. | Per-collection watermark logic cannot skip lower unapplied transactions. |
 | `TestCollectionWALRecoveryCrashAndCleanupAreIdempotent` | Fault hook exits during recovery after N transactions, after watermark commit, and during segment cleanup; reopen repeatedly. | No double-apply, no lost writes, cleanup eventually converges. |
 | `TestCollectionWALGCRewriteCompactionSnapshotsProtectPendingSideRefs` | Create pending WAL transaction whose side ref has no published root owner; pin snapshot/read view; run GC/rewrite/compaction; crash/reopen. | Side refs are protected until watermark plus checkpoint handoff, and snapshots do not observe dangling roots. |
+| `TestCollectionWALPendingDebtSoftStopHardLimits` | Block async publish/checkpoint/cleanup and keep admitting collection writes until each configured debt threshold is crossed. | Soft threshold triggers maintenance, stop threshold blocks, hard threshold rejects before ack. |
+| `TestCollectionWALBackpressureResumeWatermark` | Fill pending debt past stop, release publish/checkpoint/cleanup, then retry blocked writes. | Writes resume only after debt drops to or below 70 percent of the stop limit. |
+| `TestCollectionWALReplayAccumulatorSoftCapChunksOrSpills` | Recover many same-base-root transactions with distinct keys until the soft accumulator cap is reached. | Recovery chunk-publishes or spills deterministically without changing final roots. |
+| `TestCollectionWALReplayAccumulatorHardCapStopsRecovery` | Disable spill/chunk support and recover a backlog projected above the hard cap. | Recovery fails closed before serving APIs with the capacity error. |
+| `TestCollectionWALProtectedSideRefRetainedSegmentDebt` | Protect a tiny value-log side ref that pins an otherwise collectible large segment. | Admission and GC metrics charge retained segment debt, not only logical ref bytes. |
+| `TestCollectionWALSegmentRotationAndCheckpointRotation` | Append frames across the segment limit and force checkpoint boundaries. | Writer rotates at configured limits and checkpoint rotation prevents unrelated long-lived debt from pinning short-lived segments. |
+| `TestCollectionWALDurableSyncBatchCaps` | Run concurrent durable-sync writers. | Group fsync batches respect max delay, byte, and transaction caps while preserving ack semantics. |
+| `TestColumnWALSideRefCapacityLimits` | Plan column side refs beyond file, manifest, and side-ref-per-transaction limits. | Persistent column roots remain blocked and fail before ack/publish. |
 
 ### 11.7 Required Fault Points
 
@@ -2176,7 +2586,7 @@ do
 
   go test ./TreeDB/collections \
     -run '^$' \
-    -bench '^(BenchmarkCollectionWALNoIndexInsertBatch|BenchmarkCollectionWALOneUniqueIndexInsertBatch|BenchmarkCollectionWALThreeIndexInsertBatch|BenchmarkCollectionWALUpdateBatchUnchangedIndexedValues|BenchmarkCollectionWALUpdateBatchChangedIndexedValues|BenchmarkCollectionWALDeleteHeavy|BenchmarkCollectionWALAsyncIndexedFlushStalled|BenchmarkCollectionWALFlushPending)$' \
+    -bench '^(BenchmarkCollectionWALNoIndexInsertBatch|BenchmarkCollectionWALOneUniqueIndexInsertBatch|BenchmarkCollectionWALThreeIndexInsertBatch|BenchmarkCollectionWALUpdateBatchUnchangedIndexedValues|BenchmarkCollectionWALUpdateBatchChangedIndexedValues|BenchmarkCollectionWALDeleteHeavy|BenchmarkCollectionWALTemplateV1InsertBatch|BenchmarkCollectionWALAsyncIndexedFlushStalled|BenchmarkCollectionWALCleanupLag|BenchmarkCollectionWALFlushPending)$' \
     -benchmem -count=10 \
     > "artifacts/collection-wal/bench-${1}-${2}.txt"
 done
@@ -2201,7 +2611,7 @@ TREEDB_COLLECTION_BENCH_ENGINE=durable \
 TREEDB_COLLECTION_BENCH_BATCH_SIZE=8000 \
 go test ./TreeDB/collections \
   -run '^$' \
-  -bench '^(BenchmarkCollectionWALNoIndexInsertBatch|BenchmarkCollectionWALOneUniqueIndexInsertBatch|BenchmarkCollectionWALFlushPending)$' \
+  -bench '^(BenchmarkCollectionWALNoIndexInsertBatch|BenchmarkCollectionWALOneUniqueIndexInsertBatch|BenchmarkCollectionWALDurableSyncBatch|BenchmarkCollectionWALFlushPending)$' \
   -benchmem -count=5 \
   > artifacts/collection-wal/durable-smoke.txt
 ```
@@ -2223,6 +2633,35 @@ ratio, fsync count when applicable, and side-ref verification time. Inline
 thresholds, side-payload thresholds, and compression defaults are not eligible
 for stronger-default status until these artifacts exist.
 
+Required benchmark/report tools:
+
+- `cmd/collection_workload_bench` runs phase-isolated collection workloads with
+  null-WAL, WAL-on relaxed, and durable-sync modes.
+- `cmd/collection_bench_matrix` expands the storage-policy, document-format,
+  mutation-class, durability-mode, batch-size, and side-ref-class matrix.
+- `cmd/collection_bench_report` reads raw benchmark output plus collection WAL
+  stats snapshots and emits the required JSON/CSV columns below.
+- `cmd/unified_bench` must accept a collection WAL suite or delegate to the
+  collection benchmark commands instead of silently omitting collection WAL
+  resource gates.
+
+Required column-store side-ref benchmark command before persistent column roots:
+
+```bash
+TREEDB_COLLECTION_BENCH_ENGINE=wal_on_fast \
+TREEDB_COLUMN_WAL_SIDE_REFS=1000,100000,1000000 \
+go test ./TreeDB/collections \
+  -run '^$' \
+  -bench '^BenchmarkColumnStoreWALSideRefClosure$' \
+  -benchmem -benchtime=1x -count=5 \
+  > artifacts/collection-wal/column-side-ref-closure.txt
+```
+
+Collection WAL workload benchmarks must isolate phase costs with a null-WAL
+baseline, a WAL-on relaxed run, and a durable-sync run. Required phases are
+planning, side-ref prepare, value-log flush/sync, collection WAL encode, append,
+sync, visible install, async publish, checkpoint, cleanup, and recovery.
+
 Every benchmark row must report these metrics when the harness can measure them:
 
 | Metric | Purpose |
@@ -2242,6 +2681,86 @@ Every benchmark row must report these metrics when the harness can measure them:
 | `cleanup_ns/segment` | Segment cleanup cost. |
 | `allocs/doc`, `bytes_allocated/doc` | Heap regression. |
 
+Every JSON/CSV row emitted by the collection benchmark report must include these
+labels when applicable:
+
+```text
+bench_label
+durability_mode
+storage_cell
+document_format
+mutation_class
+docs
+indexes
+batch_size
+doc_bytes_avg
+primary_key_bytes/doc
+primary_value_bytes/doc
+secondary_key_bytes/doc
+secondary_value_bytes/doc
+secondary_entries/doc
+root_deltas/txn
+root_delta_entries/doc
+root_delta_payload_bytes/doc
+collection_wal_frame_bytes/doc
+collection_wal_metadata_bytes/doc
+collection_wal_bytes/doc
+collection_wal_compressed_bytes/doc
+root_delta_side_payload_bytes/doc
+side_ref_metadata_bytes/doc
+side_ref_payload_bytes/doc
+protected_side_ref_bytes
+protected_side_ref_retained_segment_bytes
+pending_collection_wal_bytes
+pending_root_delta_side_payload_bytes
+cleanable_collection_wal_bytes
+cleanup_debt_bytes
+applied_watermark_lag_txns
+oldest_unapplied_age_ms
+ack_ns_p50
+ack_ns_p95
+ack_ns_p99
+collection_wal_encode_ns/doc
+collection_wal_append_ns/doc
+side_ref_prepare_ns/doc
+visible_install_ns/doc
+publish_ns/doc
+checkpoint_wait_ns
+sync_batch_txns
+sync_batch_bytes
+fsyncs/sec
+recovery_docs/sec
+recovery_root_delta_entries/sec
+recovery_scan_MB/sec
+recovery_side_refs/sec
+recovery_peak_heap_bytes
+recovery_peak_rss_bytes
+replay_accumulator_peak_bytes
+replay_spill_bytes
+cleanup_ns/segment
+cleanup_bytes/sec
+blocked_writes
+backpressure_wait_ns_p99
+errors
+```
+
+Required workload-specific benchmark gates:
+
+| Benchmark | Workload | Gate |
+|---|---|---|
+| `BenchmarkCollectionWALNoIndexInsertBatch` | Batched no-index inserts across JSON, BSON, template-v1, inline values, pointer-backed values, WAL-on relaxed, and durable sync. | Entries/doc = `1 + T`; WAL bytes/doc <= formula plus 10 percent; p99 ack latency below selected absolute limit; no debt over soft limit. |
+| `BenchmarkCollectionWALOneUniqueIndexInsertBatch` | Insert with one unique secondary index. | Entries/doc = `2 + T`; WAL bytes/doc <= formula plus 10 percent. |
+| `BenchmarkCollectionWALThreeIndexInsertBatch` | Insert with unique, nonunique, and multikey secondary indexes when supported. | Entries/doc = `1 + I + T`; WAL bytes/doc <= formula plus 10 percent; p99 ack latency below selected absolute limit. |
+| `BenchmarkCollectionWALUpdateBatchUnchangedIndexedValues` | Update non-indexed fields only. | No secondary delete/put entries; entries/doc = `1 + T`. |
+| `BenchmarkCollectionWALUpdateBatchChangedIndexedValues` | Update indexed fields. | Entries/doc = `1 + 2C + T`; WAL bytes/doc <= formula plus 10 percent. |
+| `BenchmarkCollectionWALDeleteHeavy` | Deletes after indexed inserts. | Entries/doc = `1 + I + D`; cleanup debt remains below stop limit. |
+| `BenchmarkCollectionWALTemplateV1InsertBatch` | Template-v1 repeated-shape and new-shape inserts. | Repeated-shape WAL bytes/doc excludes duplicate template descriptors; new-shape bytes/doc <= formula plus 10 percent. |
+| `BenchmarkCollectionWALAsyncIndexedFlushStalled` | Indexed inserts while async publish is intentionally blocked. | Soft trigger fires; stop limit blocks; hard limit is never exceeded; no unbounded heap growth. |
+| `BenchmarkCollectionWALRecoveryReplayPendingDocs` | Recovery with 1K, 100K, and 1M pending no-index, indexed, update, delete, and template-v1 WAL transactions. | Meets Section 10.1 replay throughput/time gates and peak heap <= 512 MiB for 1M pending documents. |
+| `BenchmarkCollectionWALCleanupLag` | Publish succeeds but cleanup is blocked, then released. | Cleanable debt triggers cleanup; debt drops below stop limit after release; protected refs are not deleted early. |
+| `BenchmarkCollectionWALDurableSyncBatch` | Concurrent durable-sync writers. | Sync batches respect 1 ms, 4 MiB, and 4096 transaction caps; p95/p99 ack latency below selected absolute gates. |
+| `BenchmarkColumnStoreWALSideRefClosure` | 1K, 100K, and 1M column side refs with manifests, dictionaries, bloom files, compression metadata, and delete bitmaps. | Memory <= configured cap; file count <= 1024 per part; metadata bytes/row <= formula plus 10 percent. |
+
 Gate thresholds:
 
 | Metric | Initial implementation gate | Stronger-default gate |
@@ -2255,7 +2774,7 @@ Gate thresholds:
 | Flush pending WAL-backed deltas | <=30 percent | <=20 percent |
 | Recovery, no-index | >=50K docs/sec | >=100K docs/sec target |
 | Recovery, indexed | >=20K docs/sec and >=50K root-delta entries/sec | >=50K docs/sec target |
-| WAL bytes/doc | Reported and below chosen formula threshold | Required; exceeding threshold blocks stronger default |
+| WAL bytes/doc | Reported and below Section 10.1 formula budget plus 10 percent | Required; exceeding threshold blocks stronger default |
 | Async stalled memory | Numeric cap reported; queue bounds enforced | Same, plus no steady-state leak across repeated cycles |
 | Cleanup | No unapplied segment removed; fully applied segments cleaned after safe checkpoint | Same |
 
@@ -2263,6 +2782,14 @@ Use `benchstat -count=10` for microbenchmarks. A performance gate fails only
 when both the mean regression crosses the threshold and `benchstat` reports a
 statistically significant change. Correctness gates do not depend on benchmark
 variance and must pass before any performance gate can be considered.
+
+Regression gates are necessary but insufficient. A collection WAL performance
+gate also fails when any absolute resource ceiling from Section 10.1 is
+exceeded, including encoded transaction size, replay heap, pending debt,
+protected side-ref retained segment debt, cleanup debt, durable-sync p95/p99
+ack latency, replay time, or cleanup time. The measured `collection_wal_bytes/doc`
+for each mutation class must be less than or equal to the formula-derived budget
+plus 10 percent.
 
 The stronger-default gate is required before enabling WAL-on collection
 durable-at-ack as a default profile. The initial implementation gate is enough
@@ -2311,6 +2838,7 @@ Traceability matrix:
 | Collection read views | 3, 6.3, 8.10, 10 | M4, M6 | long-iterator and side-ref pinning tests |
 | Recovery replay | 9 | M4, M4.5 | crash matrix, accumulation, and deterministic replay tests |
 | Checkpoint/cleanup | 10 | M5 | watermark and segment cleanup tests |
+| Resource accounting/admission | 10.1, 12 | M0.5, M1, M2, M4.5, M6.5 | cost-estimator, backpressure, replay-cap, cleanup-debt, and benchmark-report artifacts |
 | Lock ordering | 8.9, 11.4 | M0, M6 | debug lock assertions and deadlock stress |
 | Performance | 12 | M6.5 | benchstat gates and artifacts |
 | Column-store unblock | 6.4, 10 | M7 | side-file fence and root-group recovery proof |
@@ -2385,6 +2913,9 @@ M1 starts, the implementation owner must confirm the exact testable choices for:
 - buffered replay model;
 - GC/rewrite side-ref protection mechanism;
 - overlay compaction durability rule.
+- resource accounting defaults for transaction size, inline spill, side-payload
+  limits, replay accumulator caps, debt soft/stop/hard limits, and durable-sync
+  group fsync caps.
 
 Gate:
 
@@ -2409,6 +2940,8 @@ Deliverables:
   protected side refs, recovery, cleanup debt, and value-log GC blockers;
 - stable root-delta encode/decode APIs independent of transient in-memory
   `batch.Batch` layout.
+- encoder-backed byte estimator, inline/side-payload threshold enforcement,
+  segment rotation defaults, and capacity error names from Section 10.1.
 
 Tests:
 
@@ -2444,6 +2977,8 @@ Deliverables:
 - protected side-ref index updated by WAL append/cleanup and rebuilt during
   recovery;
 - side-ref prepare guard that excludes GC/rewrite/cleanup during preparation;
+- protected side-ref accounting for metadata bytes, logical payload bytes, and
+  retained segment debt;
 - value-log GC/rewrite protection for unapplied collection WAL side refs;
 - fail-hard recovery behavior for complete transactions with missing required
   side refs.
@@ -2562,9 +3097,13 @@ Deliverables:
   `CollectionSeq` ranges;
 - replay-side accumulator handles multiple root deltas sharing the same
   persisted base root;
+- replay accumulator soft and hard caps from Section 10.1 are enforced by
+  chunk publish or deterministic spill before serving APIs;
 - async publish failure requeues without changing WAL identity or cleanup
   eligibility;
-- memory and queue bounds remain enforced when async publish is stalled.
+- memory, queue, pending WAL, protected side-ref, retained segment, cleanup
+  debt, and oldest-unapplied-age bounds remain enforced when async publish is
+  stalled.
 
 Tests:
 
@@ -2573,7 +3112,10 @@ Tests:
 - `TestCollectionWALPublishingUnitCrashRecovers`;
 - `TestCollectionWALAsyncPublishFailureRequeueKeepsWAL`;
 - `TestCollectionWALAsyncPublishNoWatermarkOutOfPrefixOrder`;
-- async stalled benchmark reports numeric memory and queue caps.
+- `TestCollectionWALReplayAccumulatorSoftCapChunksOrSpills`;
+- `TestCollectionWALReplayAccumulatorHardCapStopsRecovery`;
+- async stalled benchmark reports numeric memory, queue, WAL-debt, side-ref,
+  retained-segment, cleanup-debt, and blocked-write caps.
 
 Gate:
 
@@ -2666,8 +3208,12 @@ Deliverables:
 - required collection WAL microbenchmarks implemented under
   `TreeDB/collections`;
 - required recovery benchmarks implemented;
+- `cmd/collection_workload_bench`, `cmd/collection_bench_matrix`, and
+  `cmd/collection_bench_report` implemented or wired into `cmd/unified_bench`;
 - benchmark runner writes artifacts under `artifacts/collection-wal/`;
 - metrics from Section 12 are emitted for each benchmark row;
+- benchmark artifacts include phase-isolated null-WAL, WAL-on relaxed, and
+  durable-sync results;
 - metric presence tests prove every required Section 17 metric and benchmark
   artifact field is emitted with stable names;
 - baseline/new `benchstat` output is attached to the acceptance artifact.
@@ -2677,6 +3223,8 @@ Gate:
 - correctness gates M1 through M6 are green;
 - initial implementation thresholds from Section 12 pass for guarded/internal
   enablement;
+- absolute resource ceilings from Section 10.1 pass in addition to relative
+  `benchstat` thresholds;
 - stronger-default thresholds from Section 12 pass before WAL-on
   durable-at-ack becomes a default profile.
 
@@ -2691,6 +3239,9 @@ Prerequisites:
 - the verification matrix lists every passing collection-WAL test by exact name;
 - baseline/new `benchstat` output exists for the required benchmark rows and
   storage cells;
+- column side-ref capacity benchmarks prove file count, manifest bytes,
+  side-ref metadata bytes/row, validation throughput, and peak heap stay within
+  Section 10.1 column limits;
 - synthetic external side-file tests pass before real column-file writes are
   exposed;
 - the column-store PR checklist links to the exact collection-WAL acceptance
@@ -2970,7 +3521,10 @@ Required aggregate metrics:
 | `treedb.collection_wal.pending.txns_current` | gauge | unapplied transactions required for recovery |
 | `treedb.collection_wal.pending.docs_current` | gauge | documents covered by pending transactions |
 | `treedb.collection_wal.pending.bytes_current` | gauge | pending WAL bytes |
+| `treedb.collection_wal.pending.root_delta_side_payload_bytes_current` | gauge | pending root-delta side-payload bytes |
 | `treedb.collection_wal.pending.side_refs_current` | gauge | pending required side refs |
+| `treedb.collection_wal.pending.side_ref_logical_bytes_current` | gauge | pending required side-ref payload bytes |
+| `treedb.collection_wal.pending.unpublished_root_delta_entries_current` | gauge | unpublished root-delta entry count |
 | `treedb.collection_wal.pending.oldest_age_ms` | gauge | age of oldest pending transaction |
 | `treedb.collection_wal.segment.open_current` | gauge | open collection WAL segments |
 | `treedb.collection_wal.segment.bytes_current` | gauge | bytes retained in collection WAL segments |
@@ -2978,9 +3532,12 @@ Required aggregate metrics:
 | `treedb.collection_wal.segment.blocked_current` | gauge | segments blocked from cleanup |
 | `treedb.collection_wal.side_ref.protected.count_current` | gauge | protected side-ref count |
 | `treedb.collection_wal.side_ref.protected.bytes_current` | gauge | protected side-ref bytes |
+| `treedb.collection_wal.side_ref.protected.logical_bytes_current` | gauge | protected logical referenced bytes |
+| `treedb.collection_wal.side_ref.protected.retained_segment_bytes_current` | gauge | segment/file bytes retained only by protected side refs |
 | `treedb.collection_wal.side_ref.protected.oldest_age_ms` | gauge | oldest protected side-ref age |
 | `treedb.collection_wal.side_ref.protected.by_class.<class>.count_current` | gauge | protected side refs by class |
 | `treedb.collection_wal.side_ref.protected.by_class.<class>.bytes_current` | gauge | protected bytes by class |
+| `treedb.collection_wal.side_ref.protected.by_class.<class>.retained_segment_bytes_current` | gauge | retained segment bytes by side-ref class |
 | `treedb.collection_wal.applied_watermark.lag_txns_current` | gauge | transaction lag between appended and applied |
 | `treedb.collection_wal.applied_watermark.lag_bytes_current` | gauge | byte lag between appended and applied |
 | `treedb.collection_wal.cleanup.debt.bytes_current` | gauge | retained bytes awaiting safe cleanup |
@@ -3005,6 +3562,13 @@ Required aggregate metrics:
 | `treedb.collection_wal.value_log_gc.blocked_side_refs_current` | gauge | value-log side refs blocking GC |
 | `treedb.collection_wal.value_log_gc.blocked_by_pending_txns_current` | gauge | transactions blocking value-log GC |
 | `treedb.collection_wal.value_log_gc.blocked_bytes_total` | counter | cumulative bytes observed as GC-blocked |
+| `treedb.collection_wal.backpressure.blocked_writes_current` | gauge | writes currently blocked by collection WAL capacity limits |
+| `treedb.collection_wal.backpressure.blocked_writes_total` | counter | writes blocked by collection WAL capacity limits |
+| `treedb.collection_wal.backpressure.wait_ns_total` | counter | total writer wait time under collection WAL backpressure |
+| `treedb.collection_wal.backpressure.capacity_errors_total` | counter | writes rejected before ack by hard collection WAL capacity limits |
+| `treedb.collection_wal.replay.accumulator_peak_bytes_current` | gauge | peak replay accumulator bytes from last recovery/open |
+| `treedb.collection_wal.replay.spill_bytes_total` | counter | bytes written to replay spill side payloads |
+| `treedb.collection_wal.replay.chunk_publishes_total` | counter | bounded replay chunk publishes |
 | `treedb.collection_wal.quarantine.files_total` | counter | files quarantined |
 | `treedb.collection_wal.quarantine.bytes_total` | counter | bytes quarantined |
 | `treedb.collection_wal.txn_index.entries_current` | gauge | transaction-summary index entries |
@@ -3039,10 +3603,13 @@ CollectionWALStats {
         latency_ns_total, flush_ns_total, sync_ns_total, failures_total,
         failures_by_category_total;
     pending gauges: txns_current, docs_current, bytes_current,
-        side_refs_current, oldest_unix_nano;
+        root_delta_side_payload_bytes_current, side_refs_current,
+        side_ref_logical_bytes_current, unpublished_root_delta_entries_current,
+        oldest_unix_nano;
     segment gauges: open_current, bytes_current, cleanable_current,
         blocked_current;
     side-ref gauges: protected_count_current, protected_bytes_current,
+        protected_logical_bytes_current, protected_retained_segment_bytes_current,
         protected_oldest_unix_nano, protected_by_class;
     watermark gauges: lag_txns_current, lag_bytes_current;
     cleanup gauges: debt_bytes_current, debt_segments_current,
@@ -3055,6 +3622,10 @@ CollectionWALStats {
     GC blocker stats: blocked_bytes_current, blocked_segments_current,
         blocked_side_refs_current, blocked_by_pending_txns_current,
         blocked_bytes_total;
+    backpressure stats: blocked_writes_current, blocked_writes_total,
+        wait_ns_total, capacity_errors_total;
+    replay capacity stats: accumulator_peak_bytes_current, spill_bytes_total,
+        chunk_publishes_total;
 }
 ```
 
@@ -3135,6 +3706,17 @@ Module-specific constraints:
   `CollectionGeneration`, `SchemaEpoch`, `CatalogDigest`,
   `RootDescriptorEpochs`, `CollectionSeq`, `WALLSN`, root-delta ordinals, and
   canonical side refs before it can encode a replayable record.
+- `TreeDB/internal/collectionwal` owns the encoder-backed cost estimator,
+  inline/side-payload threshold checks, segment rotation policy, compression
+  threshold, durable-sync group-fsync caps, and capacity error classification
+  from Section 10.1. The estimator must compare projected bytes with the actual
+  encoder output in tests.
+- Collection WAL admission must reserve projected pending WAL bytes,
+  root-delta side-payload bytes, side-ref metadata bytes, logical side-ref
+  payload bytes, retained segment debt, unpublished root-delta entries, and
+  oldest-unapplied-age charge before the commit marker can be acknowledged.
+  Soft limits trigger publish/checkpoint/cleanup, stop limits block until the
+  resume watermark, and hard limits reject before ack.
 - Required storage-feature gates for `collection_wal_v1` must be written before
   any WAL-on collection write can be acknowledged. `format.json` is the
   early-open gate, the system root is the authoritative recovered gate, and WAL
@@ -3151,6 +3733,11 @@ Module-specific constraints:
   arbitrary error strings. `_total` metrics are monotonic within one process;
   `_current`, `_age_ms`, `_lag_*_current`, and `_last_*` values are reset-safe
   gauges or diagnostics.
+- Collection WAL recovery must enforce replay accumulator soft and hard caps.
+  At the soft cap it must chunk-publish or spill deterministic sorted chunks to
+  temporary replay side payloads. At the hard cap it must fail closed before
+  collection APIs serve unless the chunk/spill path has reduced the projected
+  charge.
 - `TreeDB/db`, `TreeDB/caching`, expvar, and native-wire stats must expose the
   same `treedb.collection_wal.*` keys. The expvar whitelist must include the
   `treedb.collection_wal.` prefix. High-cardinality per-collection values use
@@ -3181,16 +3768,22 @@ Module-specific constraints:
   report clean WAL state or prune required bytes while collection WAL
   transactions remain needed for recovery.
 - `TreeDB/internal/valuelog` and future column-file maintenance must consult the
-  protected side-ref index and side-ref prepare guard. PR1 rewrite refuses
-  protected refs rather than moving them and patching WAL records.
+  protected side-ref index and side-ref prepare guard. They must charge both
+  logical protected bytes and incremental retained segment bytes to collection
+  WAL backpressure. PR1 rewrite refuses protected refs rather than moving them
+  and patching WAL records.
 - Column-store implementation may not publish persistent column parts until
   part files, descriptor deltas, primary locator deltas, delete bitmap roots,
   secondary roots, filter roots, and schema roots can be committed as one
   collection WAL transaction. Column files must have side-ref closure
   extraction, temp/final naming, file fsync, rename, directory fsync,
   manifest/checksum validation, `PartID`/`FileID` allocator recovery, dictionary
-  and compression metadata protection, and cleanup tests before production
-  enablement.
+  and compression metadata protection, column capacity gates, and cleanup tests
+  before production enablement.
+- `cmd/collection_workload_bench`, `cmd/collection_bench_matrix`, and
+  `cmd/collection_bench_report` own the resource-budget benchmark artifact
+  schema. CI must fail when required columns are absent even if raw Go
+  benchmarks complete successfully.
 
 Recommended implementation sequence:
 
@@ -3199,7 +3792,8 @@ Recommended implementation sequence:
    recovery replay. These tests may initially document expected failures before
    product behavior is implemented.
 2. Add `internal/collectionwal` plus stable root-delta encode/decode golden
-   tests. Keep this package independent from collection planner internals.
+   tests, cost-estimator tests, capacity error names, and segment/sync defaults.
+   Keep this package independent from collection planner internals.
 3. Add file-class side-ref preparation APIs for prepare, flush-readable,
    verify, protect, and quarantine; wire value-log pointerization to flush or
    sync side refs to the required boundary before collection WAL append.
@@ -3209,8 +3803,10 @@ Recommended implementation sequence:
    the backend open path before collection managers or native-wire servers can
    observe state.
 6. Integrate async flush ownership, checkpoint, close, cleanup metadata, and
-   protected side-ref GC/rewrite behavior.
-7. Add performance gates and tune side-payload thresholds only after correctness
+   protected side-ref GC/rewrite behavior, including pending-debt admission and
+   retained-segment accounting.
+7. Add replay accumulator chunk/spill enforcement, performance gates, benchmark
+   reporting commands, and side-payload threshold tuning only after correctness
    crash tests pass.
 8. Unblock persistent column-store writes only after the row/template collection
    WAL path proves the shared recovery and side-ref protocol.

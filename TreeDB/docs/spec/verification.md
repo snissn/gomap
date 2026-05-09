@@ -256,6 +256,18 @@ Required coverage:
 - `TestCollectionWALValueLogGCBlockedByPendingSideRef`
 - `TestCollectionWALValueLogGCReleasedAfterWatermarkCheckpoint`
 - `TestCollectionWALArtifactRedaction`
+- `TestCollectionWALCostEstimatorMatchesEncoder`
+- `TestCollectionWALRootDeltaSpillThresholds`
+- `TestCollectionWALOversizedTransactionFailsBeforeAck`
+- `TestCollectionWALPendingDebtSoftStopHardLimits`
+- `TestCollectionWALBackpressureResumeWatermark`
+- `TestCollectionWALReplayAccumulatorSoftCapChunksOrSpills`
+- `TestCollectionWALReplayAccumulatorHardCapStopsRecovery`
+- `TestCollectionWALProtectedSideRefRetainedSegmentDebt`
+- `TestCollectionWALCleanupDebtBackpressure`
+- `TestCollectionWALSegmentRotationAndCheckpointRotation`
+- `TestCollectionWALDurableSyncBatchCaps`
+- `TestColumnWALSideRefCapacityLimits`
 
 Acceptance artifacts:
 - The collection WAL gate requires exact byte fixtures, not only round-trip
@@ -289,6 +301,26 @@ Acceptance artifacts:
   `cleanup_ns/segment`, `recovery_docs/sec`,
   `recovery_root_delta_entries/sec`, `recovery_peak_heap_bytes`, `allocs/doc`,
   and `bytes_allocated/doc`.
+- Resource-budget benchmark artifacts must include the phase-isolated columns
+  from `collection-wal-durability-plan.md`: mutation class, storage cell,
+  document format, doc bytes, key/value bytes, root deltas/transaction,
+  root-delta entries/doc, root-delta payload bytes/doc, collection WAL frame and
+  metadata bytes/doc, compressed bytes/doc, root-delta side-payload bytes/doc,
+  side-ref metadata bytes/doc, side-ref payload bytes/doc, protected side-ref
+  retained segment bytes, pending WAL bytes, pending side-payload bytes,
+  cleanable WAL bytes, cleanup debt bytes, applied watermark lag, oldest
+  unapplied age, ack p50/p95/p99, encode/append/prepare/publish/checkpoint
+  phase timings, sync batch txns/bytes, fsyncs/sec, recovery scan MB/sec,
+  recovery side refs/sec, peak heap/RSS, replay spill bytes, cleanup bytes/sec,
+  blocked writes, backpressure wait p99, and error count.
+- The benchmark gate fails when required columns are missing, when
+  formula-derived bytes/doc is exceeded by more than 10 percent, or when an
+  absolute ceiling from the resource accounting section is exceeded, even when
+  relative `benchstat` regression thresholds pass.
+- Required resource benchmark commands include
+  `cmd/collection_workload_bench`, `cmd/collection_bench_matrix`, and
+  `cmd/collection_bench_report`, or an equivalent `cmd/unified_bench`
+  collection WAL suite that emits the same schema.
 - Collection WAL observability tests must prove every required metric is emitted
   on successful append, append failure before commit marker, replay success,
   incomplete-tail skip, missing side-ref hard failure, and cleanup failure after

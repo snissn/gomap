@@ -44,6 +44,15 @@ durable applied collection watermark, the root descriptors containing the refs
 are durable, and the value-log reachability tracker has incorporated those
 published roots or a full reachability scan has completed.
 
+Collection WAL protected value-log refs are also capacity charges. Admission,
+GC, rewrite, checkpoint, and cleanup must charge both the logical referenced
+bytes and the incremental retained segment bytes that cannot be deleted because
+of the protected ref. A tiny protected byte range that pins an otherwise
+collectible large value-log segment is charged by the retained segment debt, not
+only by the byte range. When protected value-log debt reaches the collection WAL
+soft threshold, maintenance is triggered; at the stop threshold, new collection
+writes block; at the hard threshold, new collection writes fail before ack.
+
 Collection read views are also retention roots. If a live `CollectionReadView`
 can reach a pending mutable, queued, or publishing unit that references a
 value-log record, GC and rewrite must retain that record even if the collection
@@ -70,7 +79,9 @@ Health states:
 blocked by collection WAL side refs. Required collection WAL blocker fields are
 `gc_blocked`, `gc_blocked_bytes`, `gc_blocked_segments`,
 `gc_blocked_side_refs`, `oldest_blocking_age_ms`, `blocking_txn_ids`,
-`blocking_side_refs`, and `blocking_reason`.
+`blocking_side_refs`, `blocking_reason`,
+`protected_side_ref_logical_bytes`, and
+`protected_side_ref_retained_segment_bytes`.
 
 ### 3.2 Incremental Accounting Fast Path
 
