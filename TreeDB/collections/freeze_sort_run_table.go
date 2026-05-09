@@ -57,7 +57,9 @@ func newFreezeSortRunTable() memtable.Table {
 		freezeSortRunTablePool.tables = freezeSortRunTablePool.tables[:n-1]
 		freezeSortRunTablePool.entryCapacity -= cap(t.entries)
 		freezeSortRunTablePool.mu.Unlock()
+		t.mu.Lock()
 		t.released = false
+		t.mu.Unlock()
 		return t
 	}
 	freezeSortRunTablePool.mu.Unlock()
