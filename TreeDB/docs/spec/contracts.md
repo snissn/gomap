@@ -164,13 +164,14 @@ flush units, in-flight async publishing units, then persisted roots.
 
 `BufferedIndexedAsyncFlush` is enabled by default for indexed schemas. It is a
 throughput feature, not a durable-at-ack mutation log. The current contract is
-flush-boundary durable: callers may treat `Collection.Flush`,
+durability-boundary durable: callers may treat `Collection.Flush`,
 `CollectionManager.FlushAll`, or backend `DB.Close` as collection write-domain
-publish boundaries when those operations return successfully. Threshold publish
-may also publish a subset of staged writes, but it must not be described as a
-per-update durability guarantee for earlier acknowledgements. Acknowledged
-writes that remain only in mutable, queued, or publishing write-domain state
-must not be advertised as crash-durable.
+durability boundaries when those operations return successfully. Foreground or
+background threshold publish may also move a subset of staged writes into
+persisted roots, but completing such a publish must not be described as a
+per-update durability guarantee for earlier acknowledgements. Acknowledged writes
+that remain only in mutable, queued, or publishing write-domain state must not be
+advertised as crash-durable.
 
 Operations that need persisted roots as planning input, including schema/index
 changes, must drain pending indexed write-domain state and wait for in-flight

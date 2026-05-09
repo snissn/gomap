@@ -3621,8 +3621,9 @@ func freezeIndexedRunTables(tables []memtable.Table) {
 	}
 }
 
-// freezeIndexedRunTablesOutsideLock releases domain.mu for expensive table-local
-// sort/coalesce work, then reacquires domain.mu before returning.
+// freezeIndexedRunTablesOutsideLock requires domain.mu to be held by the caller.
+// It releases domain.mu for expensive table-local sort/coalesce work, then
+// reacquires domain.mu before returning.
 func freezeIndexedRunTablesOutsideLock(domain *collectionWriteDomain, tables []memtable.Table) (freezeDuration, lockReleased, relockWait time.Duration) {
 	if len(tables) == 0 {
 		return 0, 0, 0
@@ -7094,6 +7095,9 @@ func validateUpdateBatchItems(items []UpdateBatchItem) error {
 		if len(item.DocumentID) == 0 {
 			return fmt.Errorf("collections: document id cannot be empty at index %d", i)
 		}
+		if item.Update != nil && item.hasBSONSet {
+			return fmt.Errorf("collections: update item cannot set both update function and BSON $set at index %d", i)
+		}
 		if item.Update == nil && !item.hasBSONSet {
 			return fmt.Errorf("collections: update function is nil at index %d", i)
 		}
@@ -7833,6 +7837,9 @@ func validateCollectionUpdateCombineRequest(req collectionUpdateCombineRequest) 
 	}
 	if len((&req).documentIDBytes()) == 0 {
 		return errors.New("collections: document id cannot be empty")
+	}
+	if req.update != nil && req.hasBSONSet {
+		return errors.New("collections: update request cannot set both update function and BSON $set")
 	}
 	if req.update == nil && !req.hasBSONSet {
 		return errors.New("collections: update function is nil")
@@ -9483,6 +9490,11 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 		var document []byte
 		var changedOne bool
 		if item.hasBSONSet {
+			currentID, err = captureBSONIDSnapshot(current.value, plannerOptions)
+			if err != nil {
+				_ = snap.Close()
+				return nil, updateBatchItemError(i, err)
+			}
 			phaseStart = updateBatchStatsNow(detailedStats)
 			scratch.bsonSetDocumentScratch, document, changedOne, err = item.bsonSet.appendReplacement(scratch.bsonSetDocumentScratch[:0], current.value)
 			stats.Callback += updateBatchStatsSince(detailedStats, phaseStart)
@@ -9514,9 +9526,7 @@ func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBa
 			_ = snap.Close()
 			return nil, updateBatchItemError(i, errors.New("changed replacement document cannot be empty"))
 		}
-		if !item.hasBSONSet {
-			err = validateBSONReplacementPreservesIDSnapshot(currentID, document, plannerOptions)
-		}
+		err = validateBSONReplacementPreservesIDSnapshot(currentID, document, plannerOptions)
 		if err != nil {
 			_ = snap.Close()
 			return nil, updateBatchItemError(i, err)
@@ -10130,7 +10140,7 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 		freezeDuration, lockReleased, relockWait := freezeIndexedRunTablesOutsideLock(domain, preAppendFreezeTables)
 		if lockReleased > 0 {
 			lockReleasedDuringHold += lockReleased
-			if domain.writeGeneration != checkpoint.writeGeneration+1 {
+			if domain.writeGeneration != checkpoint.writeGeneration {
 				rollbackOnError = false
 			}
 		}
