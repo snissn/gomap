@@ -157,6 +157,7 @@ const (
 	ErrCursorNotFound
 	ErrCatalogChanged
 	ErrIdempotencyConflict
+	ErrCommitAmbiguous
 	errCodeSentinel
 )
 

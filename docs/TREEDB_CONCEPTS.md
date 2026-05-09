@@ -73,8 +73,10 @@ not the recommended user-facing way to obtain a fully compacted storage number.
 
 ### Inline vs value-log values
 
-TreeDB stores small values inline in leaf pages up to an internal threshold (currently `256` bytes).
-Larger values are stored out-of-line in the value log and referenced by a pointer stored in the tree.
+TreeDB stores small values inline in leaf pages up to the canonical inline
+threshold defined in `TreeDB/docs/spec/write-path-and-durability.md#21-threshold-selection`.
+Larger values are stored out-of-line in the value log and referenced by a
+pointer stored in the tree.
 
 ### Copy-on-write and the “zipper” merge
 

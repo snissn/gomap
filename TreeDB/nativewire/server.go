@@ -794,6 +794,8 @@ func wireErrorMessage(code iwire.ErrorCode, err error) string {
 		return "catalog changed"
 	case iwire.ErrIdempotencyConflict:
 		return "idempotency conflict"
+	case iwire.ErrCommitAmbiguous:
+		return "commit ambiguous"
 	default:
 		return "internal error"
 	}

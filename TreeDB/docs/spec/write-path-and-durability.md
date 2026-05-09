@@ -25,6 +25,14 @@ This document defines write semantics for TreeDB cached mode and backend mode.
 - Sync operations are relaxed.
 - Durable boundary for recent writes is checkpoint/flush based, not per-write journal replay.
 
+This document owns the canonical durability-mode matrix. Other docs may
+summarize these modes but should not maintain independent durability matrices.
+Collection APIs currently have an additional write-domain distinction: before
+collection WAL lands, acknowledged collection writes can remain flush-boundary
+durable rather than durable-at-ack. That current behavior is owned by
+`collections-write-domain.md`; the target WAL-on collection overlay is owned by
+`collection-wal-durability-plan.md` until accepted.
+
 ## 2. Value Placement (Inline vs Pointer)
 
 ### 2.1 Threshold selection
@@ -66,6 +74,30 @@ sequence acts as a durable commit fence:
 This prevents replaying partial pointer commits and avoids phantom pointer
 visibility after crash recovery.
 
+This skip behavior is specific to the existing cached key/value commit log and
+its RID fence. Collection WAL transactions use stricter side-ref semantics:
+a complete WAL-on collection transaction with a missing required side ref is a
+recovery error, not a skipped batch, because later same-collection transactions
+depend on collection-local sequencing and root-group atomicity.
+
+WAL-on collection writes add a stronger visibility boundary: no collection read,
+scan, uniqueness check, update/delete planner, or pending-state merge may observe
+a mutation before its collection WAL transaction is committed/recoverable. The
+write path is private planning, side-ref preparation/protection, collection WAL
+commit, then visible install. The authoritative guard is `CanInstallVisible` in
+`collection-wal-durability-plan.md`; WAL-on implementations must reject any
+path that can return success or expose pending visibility without satisfying
+that predicate.
+
+The collection WAL is a local storage apply log, not a Raft log and not a
+native-wire deterministic command entry. Non-sync collection APIs under WAL-on
+modes provide process-crash recoverability after local collection WAL commit
+only for capabilities explicitly enabled by the collection WAL plan. The
+PR1-min capability is no-index row `Insert`/`InsertBatch` only; unsupported
+paths must retain the old flush-boundary contract or fail before visibility.
+These APIs do not imply power-loss fsync durability unless a sync/checkpoint
+boundary is requested by the configured durability mode.
+
 ## 4. Backend Commit Model
 
 Backend applies flushed operations through copy-on-write zipper merge.
@@ -88,6 +120,33 @@ Commit visibility sequence:
 
 - `SetSync`, `DeleteSync`, `Batch.WriteSync`: in durable mode, fsync durability boundary; in relaxed modes, relaxed boundary only.
 
+### 5.3 Collection API Durability
+
+Collection mutators do not have separate `*Sync` Go methods. Their baseline
+acknowledgement is mode-dependent. Current shipped collection write-domain
+behavior is flush-boundary durable, as defined in
+`collections-write-domain.md`. The bullets below describe the target collection
+WAL overlay for paths that have passed the collection WAL gate:
+
+- `DurabilityDurable`: non-sync collection mutator success is process-crash
+  recoverable through collection WAL. It is not by itself a power-loss fsync
+  guarantee. `Flush`, `FlushAll`, `Checkpoint`, `Close`, or native-wire
+  `ack_policy=synced` can add the configured fsync boundary when the server can
+  actually satisfy that boundary.
+- `DurabilityWALOnRelaxed`: collection mutator success is process-crash
+  recoverable through collection WAL once the WAL frame and required side refs
+  are fresh-process-readable. It is not a power-loss guarantee. Native-wire
+  `synced` must be rejected unless the server advertises a separately named
+  mode-relative relaxed sync policy.
+- `DurabilityWALOffRelaxed`: collection mutator success is not durable-at-ack.
+  `Flush`, `FlushAll`, `Checkpoint`, and `Close` are the public persistence
+  boundaries for pending collection state.
+
+`Flush` and `FlushAll` publish roots and watermarks. `Checkpoint` is the
+database-wide durability/cleanup boundary. `Close` is a final admission-cut and
+safe-reopen boundary, not a promise that every safe-to-delete WAL file was
+physically removed.
+
 ## 6. Checkpoint Semantics
 
 `DB.Checkpoint()` in cached mode is a forced durability/cleanup boundary.
@@ -104,6 +163,23 @@ Current behavior:
 
 In backend-only mode, checkpoint is implemented as an empty sync batch write.
 
+Under the full collection WAL contract, `DB.Checkpoint()` is also a
+collection-aware boundary. That later gate must close admission for the
+checkpoint cut, wait for in-flight collection writes admitted before the cut,
+drain async publish and write domains, publish root groups, advance applied
+watermarks, create the backend durability boundary containing those watermarks,
+and only then report a clean collection WAL state or clean collection WAL
+segments. PR1-min retains collection WAL and must not report clean collection
+WAL state merely because backend checkpoint completed. A future
+checkpoint-without-publication mode must report collection WAL debt and retain
+all required WAL segments and side refs.
+
+Under the full collection WAL target, `DB.Checkpoint()` success must cover
+collection WAL. A checkpoint that cannot
+publish or watermark pre-cut collection WAL transactions must return an error
+or expose explicit collection WAL debt through a new API; it must not return
+`nil` and call the collection WAL state clean.
+
 ## 7. Auto-Checkpoint Defaults (Cached Mode)
 
 When WAL is enabled, public `treedb.Open` defaults to:
@@ -119,8 +195,8 @@ These bound uncheckpointed log growth in long-running workloads.
 Profiles map high-level intent to durability/integrity bundles:
 
 - `ProfileDurable`: durable mode + checksum verification.
-- `ProfileFast`: WAL off relaxed + checksum skip + index optimization bundle + 4 MiB pager chunks with moderate pager sync parallelism + the current run_celestia value-log compression defaults (`auto` / balanced / snappy / medium autotune).
-- `ProfileWALOnFast`: WAL on relaxed + checksum skip + the same index + pager chunk/sync + value-log compression bundle.
+- `ProfileFast`: WAL off relaxed + checksum skip + index optimization bundle + 4 MiB pager chunks with moderate pager sync parallelism + the current run_celestia value-log compression defaults (`auto` / balanced / snappy / medium autotune). Collection write success is not durable-at-ack; use `Flush`, `FlushAll`, `Checkpoint`, or `Close` for a persistence boundary.
+- `ProfileWALOnFast`: WAL on relaxed + checksum skip + the same index + pager chunk/sync + value-log compression bundle. After the collection WAL contract lands, collection write success is recoverable after process crash but not after power loss.
 - `ProfileBench`: fast profile plus disabled background checkpoint/prune triggers for determinism.
 
 ## 9. Required Invariants

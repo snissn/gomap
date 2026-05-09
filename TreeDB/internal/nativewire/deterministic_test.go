@@ -431,6 +431,8 @@ func TestDeterministicEntryStableAcrossTransportOnlySections(t *testing.T) {
 		t.Fatalf("AppendDeterministicEntry: %v", err)
 	}
 	variant := []Section{
+		{ID: SectionAckPolicy, Bytes: deterministicUvarintPayload(uint64(AckSynced))},
+		{ID: SectionConsistencyPolicy, Bytes: deterministicUvarintPayload(3)},
 		{ID: SectionCompression, Bytes: []byte{1}},
 		{ID: SectionTraceContext, Bytes: []byte("trace")},
 		{ID: SectionDeadline, Bytes: []byte("deadline")},
@@ -1323,41 +1325,45 @@ func TestDeterministicEntryRejectsNonCanonicalSectionPayloads(t *testing.T) {
 	}
 }
 
-func TestDeterministicEntryIncludesAckPolicy(t *testing.T) {
+func TestDeterministicEntryStripsAckPolicy(t *testing.T) {
 	registry := MustV1Registry()
-	sections := append(insertBatchDeterministicSections(), Section{ID: SectionAckPolicy, Bytes: []byte{byte(AckVisible)}})
-	cmd, err := registry.ValidateRequestSections(sections)
+	baseSections := insertBatchDeterministicSections()
+	cmd, err := registry.ValidateRequestSections(baseSections)
 	if err != nil {
-		t.Fatalf("ValidateRequestSections visible ack: %v", err)
+		t.Fatalf("ValidateRequestSections base: %v", err)
 	}
-	visible, err := AppendDeterministicEntry(nil, cmd)
+	base, err := AppendDeterministicEntry(nil, cmd)
 	if err != nil {
-		t.Fatalf("AppendDeterministicEntry visible ack: %v", err)
+		t.Fatalf("AppendDeterministicEntry base: %v", err)
 	}
 
-	sections[len(sections)-1].Bytes = []byte{byte(AckFlushed)}
-	cmd, err = registry.ValidateRequestSections(sections)
-	if err != nil {
-		t.Fatalf("ValidateRequestSections flushed ack: %v", err)
-	}
-	flushed, err := AppendDeterministicEntry(nil, cmd)
-	if err != nil {
-		t.Fatalf("AppendDeterministicEntry flushed ack: %v", err)
-	}
-	if bytes.Equal(visible, flushed) {
-		t.Fatalf("deterministic entry did not include ack_policy")
+	for _, policy := range []AckPolicy{AckVisible, AckFlushed, AckSynced} {
+		sections := append(insertBatchDeterministicSections(), Section{ID: SectionAckPolicy, Bytes: deterministicUvarintPayload(uint64(policy))})
+		cmd, err := registry.ValidateRequestSections(sections)
+		if err != nil {
+			t.Fatalf("ValidateRequestSections ack=%d: %v", policy, err)
+		}
+		entry, err := AppendDeterministicEntry(nil, cmd)
+		if err != nil {
+			t.Fatalf("AppendDeterministicEntry ack=%d: %v", policy, err)
+		}
+		if !bytes.Equal(entry, base) {
+			t.Fatalf("ack_policy=%d changed deterministic entry\ngot  %s\nwant %s", policy, hex.EncodeToString(entry), hex.EncodeToString(base))
+		}
+		if DeterministicEntryDigest(entry) != DeterministicEntryDigest(base) {
+			t.Fatalf("ack_policy=%d changed deterministic digest", policy)
+		}
 	}
 }
 
-func TestDeterministicEntryRejectsUnsupportedAckPolicy(t *testing.T) {
-	registry := MustV1Registry()
-	sections := append(insertBatchDeterministicSections(), Section{ID: SectionAckPolicy, Bytes: []byte{99}})
-	cmd, err := registry.ValidateRequestSections(sections)
-	if err != nil {
-		t.Fatalf("ValidateRequestSections: %v", err)
-	}
-	if _, err := AppendDeterministicEntry(nil, cmd); codeOf(err) != ErrInvalidCommand {
-		t.Fatalf("unsupported ack_policy err=%v code=%d want invalid command", err, codeOf(err))
+func TestDecodeDeterministicEntryRejectsAckPolicySection(t *testing.T) {
+	sections := append(deterministicEntrySectionsOnly(insertBatchDeterministicSections()),
+		Section{ID: SectionAckPolicy, Bytes: deterministicUvarintPayload(uint64(AckVisible))},
+	)
+	sortSectionsByID(sections)
+	raw := deterministicEntryTestRaw(CommandInsertBatch, sections...)
+	if _, err := DecodeDeterministicEntry(raw, Limits{}); codeOf(err) != ErrInvalidCommand {
+		t.Fatalf("DecodeDeterministicEntry ack_policy err=%v code=%d want invalid command", err, codeOf(err))
 	}
 }
 

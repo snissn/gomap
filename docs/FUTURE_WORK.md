@@ -9,7 +9,7 @@ Active roadmap is tracked in `TODO.md`.
 - **Goal**: Continue hardening Windows-specific file-locking and mmap edge cases (crash recovery, file rename semantics, and cleanup).
 
 ### TreeDB Compression
-- **Current Status**: TreeDB stores values inline in the B+Tree or out-of-line in the persistent value log (`Dir/maindb/wal/`). The value log supports Zstandard compression and optional dictionary training/autotune.
+- **Current Status**: TreeDB stores values inline in the B+Tree or out-of-line in the persistent value log (`Dir/maindb/value_vlog/`). The value log supports Zstandard compression and optional dictionary training/autotune.
 - **Goal**: Evaluate additional compression opportunities (e.g., page-level compression) and improve operator ergonomics (GC/rewrite tooling and observability).
 
 ### TreeDB Index Compaction (Online)

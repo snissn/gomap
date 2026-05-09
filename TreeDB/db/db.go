@@ -95,7 +95,8 @@ type DB struct {
 	freelistRegionPages  uint64
 	freelistRegionRadius int
 
-	readOnly bool
+	readOnly   bool
+	durability DurabilityMode
 
 	keepRecent                     uint64
 	policy                         WritePolicy
@@ -631,7 +632,9 @@ type Options struct {
 	IgnoreFormatConfig bool
 	// ReadOnly opens the database without acquiring an exclusive lock and without
 	// modifying on-disk state (no recovery truncation, no WAL replay, no background
-	// maintenance). Only read operations are supported.
+	// maintenance). Only read operations are supported. Under the collection WAL
+	// target contract, read-only open must fail with a recovery-required error if
+	// committed unapplied collection WAL needs mutating recovery.
 	ReadOnly  bool
 	ChunkSize int64 // Default 256KiB
 	// DictDBChunkSize controls the mmap chunk size used for the `dictdb/` side
@@ -1372,6 +1375,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		preferAppendAlloc:              opts.PreferAppendAlloc,
 		freelistRegionPages:            opts.FreelistRegionPages,
 		freelistRegionRadius:           opts.FreelistRegionRadius,
+		durability:                     opts.Durability,
 		policy: WritePolicy{
 			InlineThreshold: inlineThreshold,
 			FlushThreshold:  opts.FlushThreshold,

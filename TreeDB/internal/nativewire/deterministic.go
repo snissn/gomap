@@ -903,17 +903,6 @@ func validateDeterministicSectionPayload(section Section, limits Limits) error {
 			return validateDeterministicDocumentIDs(section.Bytes, limits)
 		}
 		return validateByteVector(section.Bytes, limits)
-	case SectionAckPolicy:
-		policy, n, err := readUvarint(section.Bytes)
-		if err != nil {
-			return err
-		}
-		if n != len(section.Bytes) {
-			return protocolError(ErrMalformedFrame, "section %d has %d trailing bytes", section.ID, len(section.Bytes)-n)
-		}
-		if err := validateDeterministicAckPolicyEnum(policy); err != nil {
-			return err
-		}
 	case SectionCollectionMeta:
 		if err := validateDeterministicOpaquePayload("collection_meta", section.Bytes, limits); err != nil {
 			return err
@@ -1117,15 +1106,6 @@ func validateDeterministicIndexValueTypeEnum(value uint64) error {
 		return nil
 	default:
 		return protocolError(ErrInvalidCommand, "unsupported index_value_type enum %d", value)
-	}
-}
-
-func validateDeterministicAckPolicyEnum(value uint64) error {
-	switch AckPolicy(value) {
-	case 0, AckVisible, AckFlushed, AckSynced, AckRaftCommitted:
-		return nil
-	default:
-		return protocolError(ErrInvalidCommand, "unsupported ack_policy enum %d", value)
 	}
 }
 
