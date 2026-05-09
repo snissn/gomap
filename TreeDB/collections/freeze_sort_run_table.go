@@ -34,9 +34,9 @@ type freezeSortRunTable struct {
 }
 
 const (
-	freezeSortRunTableMaxPooledEntryCapacity      = 512 << 10
-	freezeSortRunTableMaxPooledTotalEntryCapacity = 1 << 20
-	freezeSortRunTableMaxPooledTables             = 32
+	freezeSortRunTableMaxPooledEntries      = 512 << 10
+	freezeSortRunTableMaxPooledTotalEntries = 1 << 20
+	freezeSortRunTableMaxPooledTables       = 32
 )
 
 var freezeSortRunTablePool struct {
@@ -99,6 +99,7 @@ func (t *freezeSortRunTable) SetEntrySteal(key, value []byte, ptr page.ValuePtr,
 		ptr = page.ValuePtr{}
 	}
 	t.mu.Lock()
+	t.mustMutableLocked()
 	idx := len(t.entries)
 	t.entries = append(t.entries, freezeSortRunEntry{
 		key:   key,
@@ -127,6 +128,7 @@ func (t *freezeSortRunTable) ApplyStealEntryFunc(count int, emit func(i int) (ke
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.mustMutableLocked()
 	t.entries = slices.Grow(t.entries, count)
 	for i := 0; i < count; i++ {
 		key, value, ptr, flags, err := emit(i)
@@ -268,6 +270,7 @@ func (t *freezeSortRunTable) Freeze() {
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.mustMutableLocked()
 	if t.frozen {
 		return
 	}
@@ -282,6 +285,7 @@ func (t *freezeSortRunTable) Reset() {
 		return
 	}
 	t.mu.Lock()
+	t.mustMutableLocked()
 	t.resetLocked(false)
 	t.mu.Unlock()
 }
@@ -300,12 +304,12 @@ func (t *freezeSortRunTable) Release() {
 	entryCapacity := cap(t.entries)
 	t.mu.Unlock()
 
-	if entryCapacity == 0 || entryCapacity > freezeSortRunTableMaxPooledEntryCapacity {
+	if entryCapacity == 0 || entryCapacity > freezeSortRunTableMaxPooledEntries {
 		return
 	}
 	freezeSortRunTablePool.mu.Lock()
 	if len(freezeSortRunTablePool.tables) >= freezeSortRunTableMaxPooledTables ||
-		freezeSortRunTablePool.entryCapacity+entryCapacity > freezeSortRunTableMaxPooledTotalEntryCapacity {
+		freezeSortRunTablePool.entryCapacity+entryCapacity > freezeSortRunTableMaxPooledTotalEntries {
 		freezeSortRunTablePool.mu.Unlock()
 		t.mu.Lock()
 		t.entries = nil
@@ -318,7 +322,7 @@ func (t *freezeSortRunTable) Release() {
 }
 
 func (t *freezeSortRunTable) resetLocked(dropOversizedEntries bool) {
-	if dropOversizedEntries && cap(t.entries) > freezeSortRunTableMaxPooledEntryCapacity {
+	if dropOversizedEntries && cap(t.entries) > freezeSortRunTableMaxPooledEntries {
 		t.entries = nil
 	} else {
 		clear(t.entries)
@@ -329,6 +333,12 @@ func (t *freezeSortRunTable) resetLocked(dropOversizedEntries bool) {
 	t.frozen = false
 	t.sizeBytes = 0
 	t.nextSeq = 0
+}
+
+func (t *freezeSortRunTable) mustMutableLocked() {
+	if t.released {
+		panic("collections: freeze-sort run table used after Release")
+	}
 }
 
 func (t *freezeSortRunTable) NewIterator(start, end []byte) iterator.UnsafeIterator {
