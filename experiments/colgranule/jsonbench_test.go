@@ -70,10 +70,18 @@ func TestRunJSONBenchQueriesSample(t *testing.T) {
 }
 
 func TestLoadJSONBenchColumnsLocal1MIfPresent(t *testing.T) {
-	if _, err := os.Stat(DefaultJSONBenchPath); err != nil {
-		t.Skipf("local JSONBench fixture not present at %s", DefaultJSONBenchPath)
+	path := os.Getenv("JSONBENCH_DATA")
+	if path == "" {
+		t.Skip("JSONBENCH_DATA not set")
 	}
-	ds, err := LoadJSONBenchColumns(DefaultJSONBenchPath, 1000)
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Skipf("local JSONBench fixture not present at %s", path)
+	}
+	if info.IsDir() {
+		t.Skipf("JSONBENCH_DATA points to directory %s; file-only local fixture test skipped", path)
+	}
+	ds, err := LoadJSONBenchColumns(path, 1000)
 	if err != nil {
 		t.Fatalf("LoadJSONBenchColumns(local): %v", err)
 	}
@@ -86,10 +94,18 @@ func TestLoadJSONBenchColumnsLocal1MIfPresent(t *testing.T) {
 }
 
 func TestLoadJSONBenchColumnsLocalDirIfPresent(t *testing.T) {
-	if _, err := os.Stat(DefaultJSONBenchDir); err != nil {
-		t.Skipf("local JSONBench fixture directory not present at %s", DefaultJSONBenchDir)
+	path := os.Getenv("JSONBENCH_DATA")
+	if path == "" {
+		t.Skip("JSONBENCH_DATA not set")
 	}
-	ds, err := LoadJSONBenchColumns(DefaultJSONBenchDir, 1000)
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Skipf("local JSONBench fixture directory not present at %s", path)
+	}
+	if !info.IsDir() {
+		t.Skipf("JSONBENCH_DATA points to file %s; directory-only local fixture test skipped", path)
+	}
+	ds, err := LoadJSONBenchColumns(path, 1000)
 	if err != nil {
 		t.Fatalf("LoadJSONBenchColumns(local dir): %v", err)
 	}
