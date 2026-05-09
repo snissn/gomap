@@ -1447,13 +1447,35 @@ follow the same durable-pointer rules as value-log pointers.
 WAL-on write ordering:
 
 1. Build column parts, filters, marks, and descriptors.
-2. Append `TCS1` payloads to the column file class.
-3. Append the commit-log batch that describes root mutations, primary locator
-   changes, secondary index changes, delete/tombstone changes, and part
-   descriptor additions.
-4. Publish the root group only after the column bytes are readable at the
+2. Write `TCS1` payloads, filter files, delete bitmap files, and dictionary
+   files through the collection WAL side-ref prepare protocol.
+3. Fsync files, atomically rename temp files to final paths, and fsync parent
+   directories before the collection WAL commit marker may reference them.
+4. Append the collection WAL transaction that describes root mutations, primary
+   locator changes, secondary index changes, delete/tombstone changes, part
+   descriptor additions, and every required external side ref.
+5. Validate that the declared side-ref set matches the canonical embedded refs
+   in part descriptors, filter descriptors, delete bitmap refs, dictionary refs,
+   and root-delta values.
+6. Publish the root group only after the column bytes are readable at the
    required durability boundary.
-5. On recovery, replay either the complete root group or none of it.
+7. On recovery, replay either the complete root group or none of it.
+
+Column-store side refs use the same lifecycle as collection WAL side refs:
+
+- temp-only files with no committed WAL/root reference are orphan-prepared and
+  may be quarantined or deleted after recovery;
+- a complete WAL-on transaction that references a missing or corrupt column
+  file, filter file, delete bitmap, or dictionary is a recovery error, not a
+  skipped column-store write;
+- before root publication, required column side refs are retained by the
+  collection WAL protected side-ref index;
+- after root publication, WAL-only protection may be released only after the
+  applied collection watermark is durable, root descriptors are durable, and the
+  column-file reachability tracker or a full reachability scan has incorporated
+  the published roots;
+- cleanup must retain files referenced by unapplied WAL, published roots, old
+  snapshots, and active iterators.
 
 WAL-off relaxed mode may acknowledge writes according to current TreeDB
 semantics, but it must not weaken pointer safety: a visible root must never
@@ -1467,9 +1489,12 @@ Minimum shared collection durability deliverables:
   collection root group;
 - external file references in the same commit record when column files are
   involved;
+- validation that declared external refs match the canonical refs embedded in
+  column descriptors and root deltas;
 - recovery that replays complete committed root groups and ignores incomplete
   ones;
-- cleanup of prepared but unpublished column files;
+- cleanup of prepared but unpublished column files, and retention of files
+  referenced by WAL, roots, snapshots, or active iterators;
 - row-store indexed insert/update/delete recovery tests with secondary indexes;
 - column-store insert/update/delete recovery tests with secondary indexes and
   column files.
