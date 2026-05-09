@@ -6306,6 +6306,8 @@ func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON b
 		return nil, err
 	}
 
+	var bufferedTemplateRuns []memtable.Table
+	defer func() { resetCollectionTables(bufferedTemplateRuns) }()
 	snap := c.db.AcquireSnapshot()
 	if snap == nil {
 		return nil, backenddb.ErrClosed
@@ -6383,7 +6385,11 @@ func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON b
 		bufferIndexedInserts = c.shouldBufferIndexedInsertBatch(meta, len(documents))
 	}
 	if bufferIndexedInserts {
-		plannerOptions = collectionOptionsWithBufferedTemplateV1Resolver(plannerOptions, c.writeDomain, meta.Name)
+		plannerOptions, bufferedTemplateRuns, err = collectionOptionsWithClonedBufferedTemplateV1Resolver(plannerOptions, c.writeDomain, meta.Name)
+		if err != nil {
+			closePlanningSnapshot()
+			return nil, err
+		}
 	}
 	baseSystemRoot := snapshotSystemRoot(snap)
 	baseCommitSeq := snapshotCommitSeq(snap)
