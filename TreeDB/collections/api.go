@@ -4878,42 +4878,14 @@ func cloneCollectionRunTableFromIterator(table memtable.Table, it iterator.Unsaf
 	return table, nil
 }
 
-func cloneCollectionRunTablesFromIterators(iterators []iterator.UnsafeIterator) ([]memtable.Table, error) {
-	if len(iterators) == 0 {
-		return nil, nil
-	}
-	out := make([]memtable.Table, 0, len(iterators))
-	for _, it := range iterators {
-		if it == nil {
-			out = append(out, nil)
-			continue
-		}
-		table := newCollectionRunTable(0)
-		cloned, err := cloneCollectionRunTableFromIterator(table, it)
-		if err != nil {
-			resetCollectionTables(out)
-			return nil, err
-		}
-		out = append(out, cloned)
-	}
-	return out, nil
-}
-
 func collectionOptionsWithClonedBufferedTemplateV1Resolver(opts collectionOptions, domain *collectionWriteDomain, collectionName string) (collectionOptions, []memtable.Table, error) {
 	if normalizedDocumentFormat(opts.documentFormat) != DocumentFormatTemplateV1 || domain == nil || collectionName == "" {
 		return opts, nil, nil
 	}
 	rootName := collectionTemplateRootName(collectionName)
 	domain.mu.RLock()
-	pendingRuns := pendingIndexedRootRunsLocked(domain, rootName)
-	runs := make([]memtable.Table, 0, len(pendingRuns))
-	for _, run := range pendingRuns {
-		if run != nil {
-			runs = append(runs, run)
-		}
-	}
+	cloned, err := cloneCollectionRunTables(pendingIndexedRootRunsLocked(domain, rootName))
 	domain.mu.RUnlock()
-	cloned, err := cloneCollectionRunTables(runs)
 	if err != nil {
 		return opts, nil, err
 	}
