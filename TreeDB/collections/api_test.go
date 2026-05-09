@@ -9568,19 +9568,31 @@ func TestCollectionUpdateBSONSetDirectFallbackReportsStructuredApply(t *testing.
 		t.Fatalf("flush insert buffer: %v", err)
 	}
 
-	matched, modified, err := col.UpdateBSONSet([]byte("u1"), []BSONSetField{{
-		Key:   "email",
-		Value: mustBSONRawValue(t, "b@example.com"),
-	}})
-	if err != nil {
-		t.Fatalf("UpdateBSONSet: %v", err)
+	var stats CollectionUpdateStats
+	sawStructuredApply := false
+	lastEmail := ""
+	const updateAttempts = 64
+	for i := 0; i < updateAttempts; i++ {
+		email := fmt.Sprintf("b%03d@example.com", i)
+		lastEmail = email
+		matched, modified, err := col.UpdateBSONSet([]byte("u1"), []BSONSetField{{
+			Key:   "email",
+			Value: mustBSONRawValue(t, email),
+		}})
+		if err != nil {
+			t.Fatalf("UpdateBSONSet %d: %v", i, err)
+		}
+		if !matched || !modified {
+			t.Fatalf("update %d matched=%v modified=%v want true/true", i, matched, modified)
+		}
+		stats = col.LastUpdateStats()
+		if stats.StructuredUpdateApply > 0 {
+			sawStructuredApply = true
+			break
+		}
 	}
-	if !matched || !modified {
-		t.Fatalf("matched=%v modified=%v want true/true", matched, modified)
-	}
-	stats := col.LastUpdateStats()
 	if stats.StructuredUpdateApply <= 0 {
-		t.Fatalf("structured apply duration=%s want positive", stats.StructuredUpdateApply)
+		t.Fatalf("structured apply duration remained %s after %d direct fallback updates", stats.StructuredUpdateApply, updateAttempts)
 	}
 	if stats.Callback != 0 {
 		t.Fatalf("callback duration=%s want zero for BSON set direct fallback", stats.Callback)
@@ -9588,7 +9600,10 @@ func TestCollectionUpdateBSONSetDirectFallbackReportsStructuredApply(t *testing.
 	if got, want := stats.UniqueIndexChecks, 1; got != want {
 		t.Fatalf("unique checks=%d want %d", got, want)
 	}
-	ids, err := col.FindByIndex("email", "b@example.com")
+	if !sawStructuredApply {
+		t.Fatal("structured apply timing was not observed")
+	}
+	ids, err := col.FindByIndex("email", lastEmail)
 	if err != nil {
 		t.Fatalf("find updated email: %v", err)
 	}
