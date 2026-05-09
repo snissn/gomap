@@ -354,3 +354,256 @@ BenchmarkRangeScanInt64Granule/random/delta_varint/none/minmax_skip#01-8        
 PASS
 ok  	github.com/snissn/gomap/experiments/colgranule	459.746s
 ```
+
+## JSONBench 1M Local Data Report
+
+This section was generated from the local JSONBench 1M Bluesky fixture. The 129 MiB compressed input file is not vendored.
+
+```sh
+go run ./experiments/colgranule/cmd/jsonbench_colgranule \
+  -data /Users/michaelseiler/data/bluesky/file_0001.json.gz \
+  -limit 1000000 \
+  -rows-per-granule 8192
+```
+
+```text
+jsonbench_colgranule data=/Users/michaelseiler/data/bluesky/file_0001.json.gz rows=1000000 columns=17 rows_per_granule=8192 load_duration=9.093565875s
+column=cid_bytes rows=1000000 min=0 max=59
+column=commit_collection_code rows=1000000 min=1 max=15
+column=commit_operation_code rows=1000000 min=1 max=4
+column=commit_rev_bytes rows=1000000 min=0 max=13
+column=commit_rkey_bytes rows=1000000 min=0 max=15
+column=did_bytes rows=1000000 min=14 max=32
+column=kind_code rows=1000000 min=1 max=2
+column=line_bytes rows=1000000 min=196 max=10980
+column=record_created_at_unix_ms rows=1000000 min=0 max=1918531872156
+column=record_has_reply rows=1000000 min=0 max=1
+column=record_has_subject rows=1000000 min=0 max=1
+column=record_langs_count rows=1000000 min=0 max=3
+column=record_subject_string_bytes rows=1000000 min=0 max=71
+column=record_text_bytes rows=1000000 min=0 max=1079
+column=record_type_code rows=1000000 min=1 max=15
+column=row_index rows=1000000 min=0 max=999999
+column=time_us rows=1000000 min=1732206349000167 max=1732207162789926
+cid_bytes	rows=1000000	granules=123	encoding=raw_int64	requested=none	actual=none:123	value_bytes=8000000	encoded_raw_bytes=8000000	stored_bytes=8000000	ratio_vs_values=1.000000	ratio_vs_encoded=1.000000	encode=2.889334ms	decode=2.771542ms	range_scan=2.024625ms	range_matches=0
+cid_bytes	rows=1000000	granules=123	encoding=raw_int64	requested=snappy	actual=snappy:123	value_bytes=8000000	encoded_raw_bytes=8000000	stored_bytes=503178	ratio_vs_values=0.062897	ratio_vs_encoded=0.062897	encode=5.683708ms	decode=4.580416ms	range_scan=3.826ms	range_matches=0
+cid_bytes	rows=1000000	granules=123	encoding=raw_int64	requested=lz4	actual=lz4:123	value_bytes=8000000	encoded_raw_bytes=8000000	stored_bytes=317971	ratio_vs_values=0.039746	ratio_vs_encoded=0.039746	encode=6.5955ms	decode=5.001792ms	range_scan=3.608792ms	range_matches=0
+cid_bytes	rows=1000000	granules=123	encoding=delta_varint	requested=none	actual=none:123	value_bytes=8000000	encoded_raw_bytes=1000000	stored_bytes=1000000	ratio_vs_values=0.125000	ratio_vs_encoded=1.000000	encode=6.085584ms	decode=6.444084ms	range_scan=3.997125ms	range_matches=0
+cid_bytes	rows=1000000	granules=123	encoding=delta_varint	requested=snappy	actual=snappy:123	value_bytes=8000000	encoded_raw_bytes=1000000	stored_bytes=127657	ratio_vs_values=0.015957	ratio_vs_encoded=0.127657	encode=7.003333ms	decode=5.27925ms	range_scan=4.668292ms	range_matches=0
+cid_bytes	rows=1000000	granules=123	encoding=delta_varint	requested=lz4	actual=lz4:123	value_bytes=8000000	encoded_raw_bytes=1000000	stored_bytes=144683	ratio_vs_values=0.018085	ratio_vs_encoded=0.144683	encode=7.418542ms	decode=5.586833ms	range_scan=4.85825ms	range_matches=0
+commit_collection_code	rows=1000000	granules=123	encoding=raw_int64	requested=none	actual=none:123	value_bytes=8000000	encoded_raw_bytes=8000000	stored_bytes=8000000	ratio_vs_values=1.000000	ratio_vs_encoded=1.000000	encode=2.777209ms	decode=2.889083ms	range_scan=1.794125ms	range_matches=14040
+commit_collection_code	rows=1000000	granules=123	encoding=raw_int64	requested=snappy	actual=snappy:123	value_bytes=8000000	encoded_raw_bytes=8000000	stored_bytes=1363781	ratio_vs_values=0.170473	ratio_vs_encoded=0.170473	encode=13.368209ms	decode=7.605583ms	range_scan=5.969375ms	range_matches=14040
+commit_collection_code	rows=1000000	granules=123	encoding=raw_int64	requested=lz4	actual=lz4:123	value_bytes=8000000	encoded_raw_bytes=8000000	stored_bytes=1769494	ratio_vs_values=0.221187	ratio_vs_encoded=0.221187	encode=16.425083ms	decode=6.810459ms	range_scan=5.488792ms	range_matches=14040
+commit_collection_code	rows=1000000	granules=123	encoding=delta_varint	requested=none	actual=none:123	value_bytes=8000000	encoded_raw_bytes=1000000	stored_bytes=1000000	ratio_vs_values=0.125000	ratio_vs_encoded=1.000000	encode=5.268333ms	decode=4.611958ms	range_scan=3.289375ms	range_matches=14040
+commit_collection_code	rows=1000000	granules=123	encoding=delta_varint	requested=snappy	actual=snappy:123	value_bytes=8000000	encoded_raw_bytes=1000000	stored_bytes=537086	ratio_vs_values=0.067136	ratio_vs_encoded=0.537086	encode=8.374875ms	decode=5.548583ms	range_scan=4.566625ms	range_matches=14040
+commit_collection_code	rows=1000000	granules=123	encoding=delta_varint	requested=lz4	actual=lz4:123	value_bytes=8000000	encoded_raw_bytes=1000000	stored_bytes=613390	ratio_vs_values=0.076674	ratio_vs_encoded=0.613390	encode=9.291417ms	decode=5.323708ms	range_scan=4.538916ms	range_matches=14040
+commit_operation_code	rows=1000000	granules=123	encoding=raw_int64	requested=none	actual=none:123	value_bytes=8000000	encoded_raw_bytes=8000000	stored_bytes=8000000	ratio_vs_values=1.000000	ratio_vs_encoded=1.000000	encode=3.28225ms	decode=3.075083ms	range_scan=1.729584ms	range_matches=5328
+commit_operation_code	rows=1000000	granules=123	encoding=raw_int64	requested=snappy	actual=snappy:123	value_bytes=8000000	encoded_raw_bytes=8000000	stored_bytes=483057	ratio_vs_values=0.060382	ratio_vs_encoded=0.060382	encode=4.7245ms	decode=4.266458ms	range_scan=3.250458ms	range_matches=5328
+commit_operation_code	rows=1000000	granules=123	encoding=raw_int64	requested=lz4	actual=lz4:123	value_bytes=8000000	encoded_raw_bytes=8000000	stored_bytes=301424	ratio_vs_values=0.037678	ratio_vs_encoded=0.037678	encode=5.582125ms	decode=3.909167ms	range_scan=3.11625ms	range_matches=5328
+commit_operation_code	rows=1000000	granules=123	encoding=delta_varint	requested=none	actual=none:123	value_bytes=8000000	encoded_raw_bytes=1000000	stored_bytes=1000000	ratio_vs_values=0.125000	ratio_vs_encoded=1.000000	encode=5.382041ms	decode=4.617875ms	range_scan=3.506083ms	range_matches=5328
+commit_operation_code	rows=1000000	granules=123	encoding=delta_varint	requested=snappy	actual=snappy:123	value_bytes=8000000	encoded_raw_bytes=1000000	stored_bytes=148297	ratio_vs_values=0.018537	ratio_vs_encoded=0.148297	encode=6.27525ms	decode=5.007083ms	range_scan=4.308708ms	range_matches=5328
+commit_operation_code	rows=1000000	granules=123	encoding=delta_varint	requested=lz4	actual=lz4:123	value_bytes=8000000	encoded_raw_bytes=1000000	stored_bytes=168739	ratio_vs_values=0.021092	ratio_vs_encoded=0.168739	encode=7.013916ms	decode=5.547875ms	range_scan=4.460041ms	range_matches=5328
+commit_rev_bytes	rows=1000000	granules=123	encoding=raw_int64	requested=none	actual=none:123	value_bytes=8000000	encoded_raw_bytes=8000000	stored_bytes=8000000	ratio_vs_values=1.000000	ratio_vs_encoded=1.000000	encode=2.656375ms	decode=2.798834ms	range_scan=1.446417ms	range_matches=0
+commit_rev_bytes	rows=1000000	granules=123	encoding=raw_int64	requested=snappy	actual=snappy:123	value_bytes=8000000	encoded_raw_bytes=8000000	stored_bytes=393838	ratio_vs_values=0.049230	ratio_vs_encoded=0.049230	encode=3.292958ms	decode=4.183166ms	range_scan=2.631917ms	range_matches=0
+commit_rev_bytes	rows=1000000	granules=123	encoding=raw_int64	requested=lz4	actual=lz4:123	value_bytes=8000000	encoded_raw_bytes=8000000	stored_bytes=75050	ratio_vs_values=0.009381	ratio_vs_encoded=0.009381	encode=3.921917ms	decode=3.415417ms	range_scan=2.325ms	range_matches=0
+commit_rev_bytes	rows=1000000	granules=123	encoding=delta_varint	requested=none	actual=none:123	value_bytes=8000000	encoded_raw_bytes=1000000	stored_bytes=1000000	ratio_vs_values=0.125000	ratio_vs_encoded=1.000000	encode=5.353084ms	decode=5.511917ms	range_scan=3.165167ms	range_matches=0
+commit_rev_bytes	rows=1000000	granules=123	encoding=delta_varint	requested=snappy	actual=snappy:123	value_bytes=8000000	encoded_raw_bytes=1000000	stored_bytes=58457	ratio_vs_values=0.007307	ratio_vs_encoded=0.058457	encode=5.500084ms	decode=4.248917ms	range_scan=3.476875ms	range_matches=0
+commit_rev_bytes	rows=1000000	granules=123	encoding=delta_varint	requested=lz4	actual=lz4:123	value_bytes=8000000	encoded_raw_bytes=1000000	stored_bytes=31257	ratio_vs_values=0.003907	ratio_vs_encoded=0.031257	encode=5.699584ms	decode=4.847959ms	range_scan=3.908458ms	range_matches=0
+commit_rkey_bytes	rows=1000000	granules=123	encoding=raw_int64	requested=none	actual=none:123	value_bytes=8000000	encoded_raw_bytes=8000000	stored_bytes=8000000	ratio_vs_values=1.000000	ratio_vs_encoded=1.000000	encode=2.455208ms	decode=2.921709ms	range_scan=1.518542ms	range_matches=0
+commit_rkey_bytes	rows=1000000	granules=123	encoding=raw_int64	requested=snappy	actual=snappy:123	value_bytes=8000000	encoded_raw_bytes=8000000	stored_bytes=420284	ratio_vs_values=0.052535	ratio_vs_encoded=0.052535	encode=3.536875ms	decode=3.811125ms	range_scan=2.987ms	range_matches=0
+commit_rkey_bytes	rows=1000000	granules=123	encoding=raw_int64	requested=lz4	actual=lz4:123	value_bytes=8000000	encoded_raw_bytes=8000000	stored_bytes=147447	ratio_vs_values=0.018431	ratio_vs_encoded=0.018431	encode=4.748166ms	decode=3.8255ms	range_scan=2.734667ms	range_matches=0
+commit_rkey_bytes	rows=1000000	granules=123	encoding=delta_varint	requested=none	actual=none:123	value_bytes=8000000	encoded_raw_bytes=1000000	stored_bytes=1000000	ratio_vs_values=0.125000	ratio_vs_encoded=1.000000	encode=5.632042ms	decode=4.991458ms	range_scan=3.736083ms	range_matches=0
+commit_rkey_bytes	rows=1000000	granules=123	encoding=delta_varint	requested=snappy	actual=snappy:123	value_bytes=8000000	encoded_raw_bytes=1000000	stored_bytes=86947	ratio_vs_values=0.010868	ratio_vs_encoded=0.086947	encode=5.811791ms	decode=4.783875ms	range_scan=3.693583ms	range_matches=0
+commit_rkey_bytes	rows=1000000	granules=123	encoding=delta_varint	requested=lz4	actual=lz4:123	value_bytes=8000000	encoded_raw_bytes=1000000	stored_bytes=86179	ratio_vs_values=0.010772	ratio_vs_encoded=0.086179	encode=6.103334ms	decode=5.119209ms	range_scan=4.065292ms	range_matches=0
+did_bytes	rows=1000000	granules=123	encoding=raw_int64	requested=none	actual=none:123	value_bytes=8000000	encoded_raw_bytes=8000000	stored_bytes=8000000	ratio_vs_values=1.000000	ratio_vs_encoded=1.000000	encode=2.551541ms	decode=2.746166ms	range_scan=43.125µs	range_matches=0
+did_bytes	rows=1000000	granules=123	encoding=raw_int64	requested=snappy	actual=snappy:123	value_bytes=8000000	encoded_raw_bytes=8000000	stored_bytes=375999	ratio_vs_values=0.047000	ratio_vs_encoded=0.047000	encode=3.063625ms	decode=4.37025ms	range_scan=63.5µs	range_matches=0
+did_bytes	rows=1000000	granules=123	encoding=raw_int64	requested=lz4	actual=lz4:123	value_bytes=8000000	encoded_raw_bytes=8000000	stored_bytes=34582	ratio_vs_values=0.004323	ratio_vs_encoded=0.004323	encode=3.674166ms	decode=4.498209ms	range_scan=53.292µs	range_matches=0
+did_bytes	rows=1000000	granules=123	encoding=delta_varint	requested=none	actual=none:123	value_bytes=8000000	encoded_raw_bytes=1000000	stored_bytes=1000000	ratio_vs_values=0.125000	ratio_vs_encoded=1.000000	encode=5.368625ms	decode=5.022708ms	range_scan=67.958µs	range_matches=0
+did_bytes	rows=1000000	granules=123	encoding=delta_varint	requested=snappy	actual=snappy:123	value_bytes=8000000	encoded_raw_bytes=1000000	stored_bytes=47502	ratio_vs_values=0.005938	ratio_vs_encoded=0.047502	encode=5.319458ms	decode=4.638583ms	range_scan=69.125µs	range_matches=0
+did_bytes	rows=1000000	granules=123	encoding=delta_varint	requested=lz4	actual=lz4:123	value_bytes=8000000	encoded_raw_bytes=1000000	stored_bytes=6749	ratio_vs_values=0.000844	ratio_vs_encoded=0.006749	encode=5.457458ms	decode=6.505292ms	range_scan=87.166µs	range_matches=0
+kind_code	rows=1000000	granules=123	encoding=raw_int64	requested=none	actual=none:123	value_bytes=8000000	encoded_raw_bytes=8000000	stored_bytes=8000000	ratio_vs_values=1.000000	ratio_vs_encoded=1.000000	encode=3.141083ms	decode=2.726542ms	range_scan=1.663792ms	range_matches=994672
+kind_code	rows=1000000	granules=123	encoding=raw_int64	requested=snappy	actual=snappy:123	value_bytes=8000000	encoded_raw_bytes=8000000	stored_bytes=388956	ratio_vs_values=0.048620	ratio_vs_encoded=0.048620	encode=3.641791ms	decode=4.015208ms	range_scan=2.659459ms	range_matches=994672
+kind_code	rows=1000000	granules=123	encoding=raw_int64	requested=lz4	actual=lz4:123	value_bytes=8000000	encoded_raw_bytes=8000000	stored_bytes=66507	ratio_vs_values=0.008313	ratio_vs_encoded=0.008313	encode=3.847667ms	decode=3.935667ms	range_scan=2.287334ms	range_matches=994672
+kind_code	rows=1000000	granules=123	encoding=delta_varint	requested=none	actual=none:123	value_bytes=8000000	encoded_raw_bytes=1000000	stored_bytes=1000000	ratio_vs_values=0.125000	ratio_vs_encoded=1.000000	encode=5.407542ms	decode=4.273708ms	range_scan=3.282583ms	range_matches=994672
+kind_code	rows=1000000	granules=123	encoding=delta_varint	requested=snappy	actual=snappy:123	value_bytes=8000000	encoded_raw_bytes=1000000	stored_bytes=58567	ratio_vs_values=0.007321	ratio_vs_encoded=0.058567	encode=5.886833ms	decode=4.545042ms	range_scan=3.744708ms	range_matches=994672
+kind_code	rows=1000000	granules=123	encoding=delta_varint	requested=lz4	actual=lz4:123	value_bytes=8000000	encoded_raw_bytes=1000000	stored_bytes=31312	ratio_vs_values=0.003914	ratio_vs_encoded=0.031312	encode=5.672417ms	decode=5.00525ms	range_scan=4.006167ms	range_matches=994672
+line_bytes	rows=1000000	granules=123	encoding=raw_int64	requested=none	actual=none:123	value_bytes=8000000	encoded_raw_bytes=8000000	stored_bytes=8000000	ratio_vs_values=1.000000	ratio_vs_encoded=1.000000	encode=2.483416ms	decode=2.827917ms	range_scan=109.542µs	range_matches=0
+line_bytes	rows=1000000	granules=123	encoding=raw_int64	requested=snappy	actual=snappy:123	value_bytes=8000000	encoded_raw_bytes=8000000	stored_bytes=1567568	ratio_vs_values=0.195946	ratio_vs_encoded=0.195946	encode=12.577708ms	decode=7.476375ms	range_scan=527.958µs	range_matches=0
+line_bytes	rows=1000000	granules=123	encoding=raw_int64	requested=lz4	actual=lz4:123	value_bytes=8000000	encoded_raw_bytes=8000000	stored_bytes=1918019	ratio_vs_values=0.239752	ratio_vs_encoded=0.239752	encode=17.083667ms	decode=6.838417ms	range_scan=465.084µs	range_matches=0
+line_bytes	rows=1000000	granules=123	encoding=delta_varint	requested=none	actual=none:123	value_bytes=8000000	encoded_raw_bytes=1495892	stored_bytes=1495892	ratio_vs_values=0.186986	ratio_vs_encoded=1.000000	encode=9.9275ms	decode=8.0765ms	range_scan=558.791µs	range_matches=0
+line_bytes	rows=1000000	granules=123	encoding=delta_varint	requested=snappy	actual=snappy:123	value_bytes=8000000	encoded_raw_bytes=1495892	stored_bytes=952538	ratio_vs_values=0.119067	ratio_vs_encoded=0.636769	encode=13.462791ms	decode=9.494042ms	range_scan=665µs	range_matches=0
+line_bytes	rows=1000000	granules=123	encoding=delta_varint	requested=lz4	actual=lz4:123	value_bytes=8000000	encoded_raw_bytes=1495892	stored_bytes=1008386	ratio_vs_values=0.126048	ratio_vs_encoded=0.674103	encode=15.371875ms	decode=9.52625ms	range_scan=648.25µs	range_matches=0
+record_created_at_unix_ms	rows=1000000	granules=123	encoding=raw_int64	requested=none	actual=none:123	value_bytes=8000000	encoded_raw_bytes=8000000	stored_bytes=8000000	ratio_vs_values=1.000000	ratio_vs_encoded=1.000000	encode=2.63075ms	decode=2.421917ms	range_scan=1.573208ms	range_matches=0
+record_created_at_unix_ms	rows=1000000	granules=123	encoding=raw_int64	requested=snappy	actual=snappy:123	value_bytes=8000000	encoded_raw_bytes=8000000	stored_bytes=4078138	ratio_vs_values=0.509767	ratio_vs_encoded=0.509767	encode=17.272584ms	decode=10.311292ms	range_scan=9.075708ms	range_matches=0
+record_created_at_unix_ms	rows=1000000	granules=123	encoding=raw_int64	requested=lz4	actual=lz4:123	value_bytes=8000000	encoded_raw_bytes=8000000	stored_bytes=3850216	ratio_vs_values=0.481277	ratio_vs_encoded=0.481277	encode=24.658583ms	decode=9.362875ms	range_scan=8.183708ms	range_matches=0
+record_created_at_unix_ms	rows=1000000	granules=123	encoding=delta_varint	requested=none	actual=none:123	value_bytes=8000000	encoded_raw_bytes=3007639	stored_bytes=3007639	ratio_vs_values=0.375955	ratio_vs_encoded=1.000000	encode=10.144625ms	decode=9.257583ms	range_scan=8.266167ms	range_matches=0
+record_created_at_unix_ms	rows=1000000	granules=123	encoding=delta_varint	requested=snappy	actual=snappy:123	value_bytes=8000000	encoded_raw_bytes=3007639	stored_bytes=2968163	ratio_vs_values=0.371020	ratio_vs_encoded=0.986875	encode=11.392167ms	decode=9.79425ms	range_scan=8.804208ms	range_matches=0
+record_created_at_unix_ms	rows=1000000	granules=123	encoding=delta_varint	requested=lz4	actual=none:8,lz4:115	value_bytes=8000000	encoded_raw_bytes=3007639	stored_bytes=2973046	ratio_vs_values=0.371631	ratio_vs_encoded=0.988498	encode=13.281042ms	decode=9.382875ms	range_scan=8.555084ms	range_matches=0
+record_has_reply	rows=1000000	granules=123	encoding=raw_int64	requested=none	actual=none:123	value_bytes=8000000	encoded_raw_bytes=8000000	stored_bytes=8000000	ratio_vs_values=1.000000	ratio_vs_encoded=1.000000	encode=2.5205ms	decode=2.456291ms	range_scan=1.678292ms	range_matches=954566
+record_has_reply	rows=1000000	granules=123	encoding=raw_int64	requested=snappy	actual=snappy:123	value_bytes=8000000	encoded_raw_bytes=8000000	stored_bytes=462747	ratio_vs_values=0.057843	ratio_vs_encoded=0.057843	encode=4.031125ms	decode=4.196167ms	range_scan=3.612166ms	range_matches=954566
+record_has_reply	rows=1000000	granules=123	encoding=raw_int64	requested=lz4	actual=lz4:123	value_bytes=8000000	encoded_raw_bytes=8000000	stored_bytes=261670	ratio_vs_values=0.032709	ratio_vs_encoded=0.032709	encode=5.191958ms	decode=7.509583ms	range_scan=7.104375ms	range_matches=954566
+record_has_reply	rows=1000000	granules=123	encoding=delta_varint	requested=none	actual=none:123	value_bytes=8000000	encoded_raw_bytes=1000000	stored_bytes=1000000	ratio_vs_values=0.125000	ratio_vs_encoded=1.000000	encode=4.96775ms	decode=4.0645ms	range_scan=3.272875ms	range_matches=954566
+record_has_reply	rows=1000000	granules=123	encoding=delta_varint	requested=snappy	actual=snappy:123	value_bytes=8000000	encoded_raw_bytes=1000000	stored_bytes=144988	ratio_vs_values=0.018124	ratio_vs_encoded=0.144988	encode=6.088541ms	decode=4.822833ms	range_scan=3.961708ms	range_matches=954566
+record_has_reply	rows=1000000	granules=123	encoding=delta_varint	requested=lz4	actual=lz4:123	value_bytes=8000000	encoded_raw_bytes=1000000	stored_bytes=167973	ratio_vs_values=0.020997	ratio_vs_encoded=0.167973	encode=6.321417ms	decode=4.740209ms	range_scan=4.076459ms	range_matches=954566
+record_has_subject	rows=1000000	granules=123	encoding=raw_int64	requested=none	actual=none:123	value_bytes=8000000	encoded_raw_bytes=8000000	stored_bytes=8000000	ratio_vs_values=1.000000	ratio_vs_encoded=1.000000	encode=2.344541ms	decode=3.1775ms	range_scan=2.339417ms	range_matches=138240
+record_has_subject	rows=1000000	granules=123	encoding=raw_int64	requested=snappy	actual=snappy:123	value_bytes=8000000	encoded_raw_bytes=8000000	stored_bytes=800289	ratio_vs_values=0.100036	ratio_vs_encoded=0.100036	encode=6.856208ms	decode=6.262ms	range_scan=5.908875ms	range_matches=138240
+record_has_subject	rows=1000000	granules=123	encoding=raw_int64	requested=lz4	actual=lz4:123	value_bytes=8000000	encoded_raw_bytes=8000000	stored_bytes=892686	ratio_vs_values=0.111586	ratio_vs_encoded=0.111586	encode=10.190917ms	decode=5.789917ms	range_scan=5.534917ms	range_matches=138240
+record_has_subject	rows=1000000	granules=123	encoding=delta_varint	requested=none	actual=none:123	value_bytes=8000000	encoded_raw_bytes=1000000	stored_bytes=1000000	ratio_vs_values=0.125000	ratio_vs_encoded=1.000000	encode=5.58325ms	decode=4.593167ms	range_scan=4.2255ms	range_matches=138240
+record_has_subject	rows=1000000	granules=123	encoding=delta_varint	requested=snappy	actual=snappy:123	value_bytes=8000000	encoded_raw_bytes=1000000	stored_bytes=261203	ratio_vs_values=0.032650	ratio_vs_encoded=0.261203	encode=7.028125ms	decode=6.193958ms	range_scan=5.308958ms	range_matches=138240
+record_has_subject	rows=1000000	granules=123	encoding=delta_varint	requested=lz4	actual=lz4:123	value_bytes=8000000	encoded_raw_bytes=1000000	stored_bytes=300622	ratio_vs_values=0.037578	ratio_vs_encoded=0.300622	encode=7.7395ms	decode=5.114875ms	range_scan=5.108667ms	range_matches=138240
+record_langs_count	rows=1000000	granules=123	encoding=raw_int64	requested=none	actual=none:123	value_bytes=8000000	encoded_raw_bytes=8000000	stored_bytes=8000000	ratio_vs_values=1.000000	ratio_vs_encoded=1.000000	encode=2.390125ms	decode=2.98375ms	range_scan=1.910208ms	range_matches=77066
+record_langs_count	rows=1000000	granules=123	encoding=raw_int64	requested=snappy	actual=snappy:123	value_bytes=8000000	encoded_raw_bytes=8000000	stored_bytes=530708	ratio_vs_values=0.066338	ratio_vs_encoded=0.066338	encode=5.095375ms	decode=4.677875ms	range_scan=4.535042ms	range_matches=77066
+record_langs_count	rows=1000000	granules=123	encoding=raw_int64	requested=lz4	actual=lz4:123	value_bytes=8000000	encoded_raw_bytes=8000000	stored_bytes=409312	ratio_vs_values=0.051164	ratio_vs_encoded=0.051164	encode=6.518ms	decode=8.701209ms	range_scan=7.52775ms	range_matches=77066
+record_langs_count	rows=1000000	granules=123	encoding=delta_varint	requested=none	actual=none:123	value_bytes=8000000	encoded_raw_bytes=1000000	stored_bytes=1000000	ratio_vs_values=0.125000	ratio_vs_encoded=1.000000	encode=4.908166ms	decode=6.05075ms	range_scan=3.580042ms	range_matches=77066
+record_langs_count	rows=1000000	granules=123	encoding=delta_varint	requested=snappy	actual=snappy:123	value_bytes=8000000	encoded_raw_bytes=1000000	stored_bytes=192851	ratio_vs_values=0.024106	ratio_vs_encoded=0.192851	encode=6.483833ms	decode=5.756625ms	range_scan=4.788292ms	range_matches=77066
+record_langs_count	rows=1000000	granules=123	encoding=delta_varint	requested=lz4	actual=lz4:123	value_bytes=8000000	encoded_raw_bytes=1000000	stored_bytes=223469	ratio_vs_values=0.027934	ratio_vs_encoded=0.223469	encode=7.214708ms	decode=5.519417ms	range_scan=4.768167ms	range_matches=77066
+record_subject_string_bytes	rows=1000000	granules=123	encoding=raw_int64	requested=none	actual=none:123	value_bytes=8000000	encoded_raw_bytes=8000000	stored_bytes=8000000	ratio_vs_values=1.000000	ratio_vs_encoded=1.000000	encode=2.457792ms	decode=2.756375ms	range_scan=1.14925ms	range_matches=0
+record_subject_string_bytes	rows=1000000	granules=123	encoding=raw_int64	requested=snappy	actual=snappy:123	value_bytes=8000000	encoded_raw_bytes=8000000	stored_bytes=916427	ratio_vs_values=0.114553	ratio_vs_encoded=0.114553	encode=9.039375ms	decode=6.69725ms	range_scan=5.47525ms	range_matches=0
+record_subject_string_bytes	rows=1000000	granules=123	encoding=raw_int64	requested=lz4	actual=lz4:123	value_bytes=8000000	encoded_raw_bytes=8000000	stored_bytes=1105301	ratio_vs_values=0.138163	ratio_vs_encoded=0.138163	encode=11.467125ms	decode=8.59775ms	range_scan=6.357625ms	range_matches=0
+record_subject_string_bytes	rows=1000000	granules=123	encoding=delta_varint	requested=none	actual=none:123	value_bytes=8000000	encoded_raw_bytes=1001231	stored_bytes=1001231	ratio_vs_values=0.125154	ratio_vs_encoded=1.000000	encode=5.248ms	decode=4.367ms	range_scan=3.0355ms	range_matches=0
+record_subject_string_bytes	rows=1000000	granules=123	encoding=delta_varint	requested=snappy	actual=snappy:123	value_bytes=8000000	encoded_raw_bytes=1001231	stored_bytes=347079	ratio_vs_values=0.043385	ratio_vs_encoded=0.346652	encode=7.36675ms	decode=5.625833ms	range_scan=3.745833ms	range_matches=0
+record_subject_string_bytes	rows=1000000	granules=123	encoding=delta_varint	requested=lz4	actual=lz4:123	value_bytes=8000000	encoded_raw_bytes=1001231	stored_bytes=387822	ratio_vs_values=0.048478	ratio_vs_encoded=0.387345	encode=7.723042ms	decode=6.293875ms	range_scan=4.35425ms	range_matches=0
+record_text_bytes	rows=1000000	granules=123	encoding=raw_int64	requested=none	actual=none:123	value_bytes=8000000	encoded_raw_bytes=8000000	stored_bytes=8000000	ratio_vs_values=1.000000	ratio_vs_encoded=1.000000	encode=3.229584ms	decode=3.165709ms	range_scan=984.708µs	range_matches=25
+record_text_bytes	rows=1000000	granules=123	encoding=raw_int64	requested=snappy	actual=snappy:123	value_bytes=8000000	encoded_raw_bytes=8000000	stored_bytes=627621	ratio_vs_values=0.078453	ratio_vs_encoded=0.078453	encode=5.998416ms	decode=5.262583ms	range_scan=3.073375ms	range_matches=25
+record_text_bytes	rows=1000000	granules=123	encoding=raw_int64	requested=lz4	actual=lz4:123	value_bytes=8000000	encoded_raw_bytes=8000000	stored_bytes=492980	ratio_vs_values=0.061622	ratio_vs_encoded=0.061622	encode=7.495291ms	decode=10.495ms	range_scan=6.406708ms	range_matches=25
+record_text_bytes	rows=1000000	granules=123	encoding=delta_varint	requested=none	actual=none:123	value_bytes=8000000	encoded_raw_bytes=1083152	stored_bytes=1083152	ratio_vs_values=0.135394	ratio_vs_encoded=1.000000	encode=5.948042ms	decode=4.753791ms	range_scan=2.475625ms	range_matches=25
+record_text_bytes	rows=1000000	granules=123	encoding=delta_varint	requested=snappy	actual=snappy:123	value_bytes=8000000	encoded_raw_bytes=1083152	stored_bytes=372759	ratio_vs_values=0.046595	ratio_vs_encoded=0.344143	encode=7.730875ms	decode=5.880667ms	range_scan=3.307375ms	range_matches=25
+record_text_bytes	rows=1000000	granules=123	encoding=delta_varint	requested=lz4	actual=lz4:123	value_bytes=8000000	encoded_raw_bytes=1083152	stored_bytes=401782	ratio_vs_values=0.050223	ratio_vs_encoded=0.370938	encode=9.492792ms	decode=5.591958ms	range_scan=3.38125ms	range_matches=25
+record_type_code	rows=1000000	granules=123	encoding=raw_int64	requested=none	actual=none:123	value_bytes=8000000	encoded_raw_bytes=8000000	stored_bytes=8000000	ratio_vs_values=1.000000	ratio_vs_encoded=1.000000	encode=2.680958ms	decode=2.601417ms	range_scan=1.498542ms	range_matches=13838
+record_type_code	rows=1000000	granules=123	encoding=raw_int64	requested=snappy	actual=snappy:123	value_bytes=8000000	encoded_raw_bytes=8000000	stored_bytes=1389487	ratio_vs_values=0.173686	ratio_vs_encoded=0.173686	encode=12.665583ms	decode=6.953ms	range_scan=6.086166ms	range_matches=13838
+record_type_code	rows=1000000	granules=123	encoding=raw_int64	requested=lz4	actual=lz4:123	value_bytes=8000000	encoded_raw_bytes=8000000	stored_bytes=1811941	ratio_vs_values=0.226493	ratio_vs_encoded=0.226493	encode=16.228916ms	decode=7.392167ms	range_scan=5.753333ms	range_matches=13838
+record_type_code	rows=1000000	granules=123	encoding=delta_varint	requested=none	actual=none:123	value_bytes=8000000	encoded_raw_bytes=1000000	stored_bytes=1000000	ratio_vs_values=0.125000	ratio_vs_encoded=1.000000	encode=5.391625ms	decode=4.506ms	range_scan=3.427584ms	range_matches=13838
+record_type_code	rows=1000000	granules=123	encoding=delta_varint	requested=snappy	actual=snappy:123	value_bytes=8000000	encoded_raw_bytes=1000000	stored_bytes=571548	ratio_vs_values=0.071443	ratio_vs_encoded=0.571548	encode=8.693292ms	decode=5.998292ms	range_scan=4.603417ms	range_matches=13838
+record_type_code	rows=1000000	granules=123	encoding=delta_varint	requested=lz4	actual=lz4:123	value_bytes=8000000	encoded_raw_bytes=1000000	stored_bytes=658413	ratio_vs_values=0.082302	ratio_vs_encoded=0.658413	encode=9.634166ms	decode=5.450375ms	range_scan=4.357833ms	range_matches=13838
+row_index	rows=1000000	granules=123	encoding=raw_int64	requested=none	actual=none:123	value_bytes=8000000	encoded_raw_bytes=8000000	stored_bytes=8000000	ratio_vs_values=1.000000	ratio_vs_encoded=1.000000	encode=3.361208ms	decode=3.1805ms	range_scan=37.375µs	range_matches=15625
+row_index	rows=1000000	granules=123	encoding=raw_int64	requested=snappy	actual=snappy:123	value_bytes=8000000	encoded_raw_bytes=8000000	stored_bytes=4002443	ratio_vs_values=0.500305	ratio_vs_encoded=0.500305	encode=11.944792ms	decode=7.694208ms	range_scan=104.584µs	range_matches=15625
+row_index	rows=1000000	granules=123	encoding=raw_int64	requested=lz4	actual=lz4:123	value_bytes=8000000	encoded_raw_bytes=8000000	stored_bytes=4003725	ratio_vs_values=0.500466	ratio_vs_encoded=0.500466	encode=19.370292ms	decode=8.710958ms	range_scan=124.875µs	range_matches=15625
+row_index	rows=1000000	granules=123	encoding=delta_varint	requested=none	actual=none:123	value_bytes=8000000	encoded_raw_bytes=1000244	stored_bytes=1000244	ratio_vs_values=0.125030	ratio_vs_encoded=1.000000	encode=5.36675ms	decode=4.321875ms	range_scan=63.542µs	range_matches=15625
+row_index	rows=1000000	granules=123	encoding=delta_varint	requested=snappy	actual=snappy:123	value_bytes=8000000	encoded_raw_bytes=1000244	stored_bytes=47733	ratio_vs_values=0.005967	ratio_vs_encoded=0.047721	encode=5.669542ms	decode=5.064917ms	range_scan=65.208µs	range_matches=15625
+row_index	rows=1000000	granules=123	encoding=delta_varint	requested=lz4	actual=lz4:123	value_bytes=8000000	encoded_raw_bytes=1000244	stored_bytes=6738	ratio_vs_values=0.000842	ratio_vs_encoded=0.006736	encode=5.467625ms	decode=6.587542ms	range_scan=102.459µs	range_matches=15625
+time_us	rows=1000000	granules=123	encoding=raw_int64	requested=none	actual=none:123	value_bytes=8000000	encoded_raw_bytes=8000000	stored_bytes=8000000	ratio_vs_values=1.000000	ratio_vs_encoded=1.000000	encode=2.6785ms	decode=2.570458ms	range_scan=44.833µs	range_matches=15022
+time_us	rows=1000000	granules=123	encoding=raw_int64	requested=snappy	actual=snappy:123	value_bytes=8000000	encoded_raw_bytes=8000000	stored_bytes=5005356	ratio_vs_values=0.625669	ratio_vs_encoded=0.625669	encode=16.01875ms	decode=6.641584ms	range_scan=132.75µs	range_matches=15022
+time_us	rows=1000000	granules=123	encoding=raw_int64	requested=lz4	actual=lz4:123	value_bytes=8000000	encoded_raw_bytes=8000000	stored_bytes=5028110	ratio_vs_values=0.628514	ratio_vs_encoded=0.628514	encode=24.255334ms	decode=7.705333ms	range_scan=162.291µs	range_matches=15022
+time_us	rows=1000000	granules=123	encoding=delta_varint	requested=none	actual=none:123	value_bytes=8000000	encoded_raw_bytes=2007816	stored_bytes=2007816	ratio_vs_values=0.250977	ratio_vs_encoded=1.000000	encode=5.662709ms	decode=5.158ms	range_scan=112.25µs	range_matches=15022
+time_us	rows=1000000	granules=123	encoding=delta_varint	requested=snappy	actual=snappy:123	value_bytes=8000000	encoded_raw_bytes=2007816	stored_bytes=2008563	ratio_vs_values=0.251070	ratio_vs_encoded=1.000372	encode=5.59025ms	decode=5.259ms	range_scan=107.791µs	range_matches=15022
+time_us	rows=1000000	granules=123	encoding=delta_varint	requested=lz4	actual=none:123	value_bytes=8000000	encoded_raw_bytes=2007816	stored_bytes=2007816	ratio_vs_values=0.250977	ratio_vs_encoded=1.000000	encode=5.747042ms	decode=5.870458ms	range_scan=113.833µs	range_matches=15022
+```
+
+## JSONBench 1M Go Benchmark Smoke
+
+This benchmark loads the local 1M-row JSONBench fixture once, then runs one summarization iteration per derived column and codec configuration.
+
+```sh
+go test ./experiments/colgranule -run '^$' -bench '^BenchmarkJSONBenchLocalColumns$' -benchmem -benchtime=1x -timeout 5m
+```
+
+```text
+goos: darwin
+goarch: arm64
+pkg: github.com/snissn/gomap/experiments/colgranule
+cpu: Apple M3
+BenchmarkJSONBenchLocalColumns/cid_bytes/raw_int64/none-8         	       1	   5291917 ns/op	1511.74 MB/s	47920352 B/op	    2476 allocs/op
+BenchmarkJSONBenchLocalColumns/cid_bytes/raw_int64/snappy-8       	       1	   8362875 ns/op	 956.61 MB/s	65920992 B/op	    2722 allocs/op
+BenchmarkJSONBenchLocalColumns/cid_bytes/raw_int64/lz4-8          	       1	   9139375 ns/op	 875.33 MB/s	65060712 B/op	    2725 allocs/op
+BenchmarkJSONBenchLocalColumns/cid_bytes/delta_varint/none-8      	       1	   9400792 ns/op	 850.99 MB/s	34919840 B/op	    2476 allocs/op
+BenchmarkJSONBenchLocalColumns/cid_bytes/delta_varint/snappy-8    	       1	  10761584 ns/op	 743.38 MB/s	37107376 B/op	    2723 allocs/op
+BenchmarkJSONBenchLocalColumns/cid_bytes/delta_varint/lz4-8       	       1	  10959292 ns/op	 729.97 MB/s	37216488 B/op	    2725 allocs/op
+BenchmarkJSONBenchLocalColumns/commit_collection_code/raw_int64/none-8         	       1	   5122584 ns/op	1561.71 MB/s	47920352 B/op	    2476 allocs/op
+BenchmarkJSONBenchLocalColumns/commit_collection_code/raw_int64/snappy-8       	       1	  17328083 ns/op	 461.68 MB/s	65920992 B/op	    2722 allocs/op
+BenchmarkJSONBenchLocalColumns/commit_collection_code/raw_int64/lz4-8          	       1	  18893750 ns/op	 423.42 MB/s	65060712 B/op	    2725 allocs/op
+BenchmarkJSONBenchLocalColumns/commit_collection_code/delta_varint/none-8      	       1	   8878583 ns/op	 901.04 MB/s	34919840 B/op	    2476 allocs/op
+BenchmarkJSONBenchLocalColumns/commit_collection_code/delta_varint/snappy-8    	       1	  12177334 ns/op	 656.96 MB/s	37107360 B/op	    2722 allocs/op
+BenchmarkJSONBenchLocalColumns/commit_collection_code/delta_varint/lz4-8       	       1	  12711125 ns/op	 629.37 MB/s	37216488 B/op	    2725 allocs/op
+BenchmarkJSONBenchLocalColumns/commit_operation_code/raw_int64/none-8          	       1	   5467083 ns/op	1463.30 MB/s	47920352 B/op	    2476 allocs/op
+BenchmarkJSONBenchLocalColumns/commit_operation_code/raw_int64/snappy-8        	       1	   8718417 ns/op	 917.60 MB/s	65920992 B/op	    2722 allocs/op
+BenchmarkJSONBenchLocalColumns/commit_operation_code/raw_int64/lz4-8           	       1	   8909209 ns/op	 897.95 MB/s	65060712 B/op	    2725 allocs/op
+BenchmarkJSONBenchLocalColumns/commit_operation_code/delta_varint/none-8       	       1	   9017417 ns/op	 887.17 MB/s	34919840 B/op	    2476 allocs/op
+BenchmarkJSONBenchLocalColumns/commit_operation_code/delta_varint/snappy-8     	       1	  10564708 ns/op	 757.24 MB/s	37107360 B/op	    2722 allocs/op
+BenchmarkJSONBenchLocalColumns/commit_operation_code/delta_varint/lz4-8        	       1	  11042875 ns/op	 724.45 MB/s	37216488 B/op	    2725 allocs/op
+BenchmarkJSONBenchLocalColumns/commit_rev_bytes/raw_int64/none-8               	       1	   5112833 ns/op	1564.69 MB/s	47920352 B/op	    2476 allocs/op
+BenchmarkJSONBenchLocalColumns/commit_rev_bytes/raw_int64/snappy-8             	       1	   7307750 ns/op	1094.73 MB/s	65920992 B/op	    2722 allocs/op
+BenchmarkJSONBenchLocalColumns/commit_rev_bytes/raw_int64/lz4-8                	       1	   6886584 ns/op	1161.68 MB/s	65060712 B/op	    2725 allocs/op
+BenchmarkJSONBenchLocalColumns/commit_rev_bytes/delta_varint/none-8            	       1	   8705875 ns/op	 918.92 MB/s	34919840 B/op	    2476 allocs/op
+BenchmarkJSONBenchLocalColumns/commit_rev_bytes/delta_varint/snappy-8          	       1	   9271209 ns/op	 862.89 MB/s	37107360 B/op	    2722 allocs/op
+BenchmarkJSONBenchLocalColumns/commit_rev_bytes/delta_varint/lz4-8             	       1	  10049208 ns/op	 796.08 MB/s	37216488 B/op	    2725 allocs/op
+BenchmarkJSONBenchLocalColumns/commit_rkey_bytes/raw_int64/none-8              	       1	   5179833 ns/op	1544.45 MB/s	47920352 B/op	    2476 allocs/op
+BenchmarkJSONBenchLocalColumns/commit_rkey_bytes/raw_int64/snappy-8            	       1	   7717833 ns/op	1036.56 MB/s	65920992 B/op	    2722 allocs/op
+BenchmarkJSONBenchLocalColumns/commit_rkey_bytes/raw_int64/lz4-8               	       1	   7524791 ns/op	1063.15 MB/s	65060712 B/op	    2725 allocs/op
+BenchmarkJSONBenchLocalColumns/commit_rkey_bytes/delta_varint/none-8           	       1	   8862250 ns/op	 902.71 MB/s	34919840 B/op	    2476 allocs/op
+BenchmarkJSONBenchLocalColumns/commit_rkey_bytes/delta_varint/snappy-8         	       1	   9528333 ns/op	 839.60 MB/s	37107360 B/op	    2722 allocs/op
+BenchmarkJSONBenchLocalColumns/commit_rkey_bytes/delta_varint/lz4-8            	       1	  10264792 ns/op	 779.36 MB/s	37216488 B/op	    2725 allocs/op
+BenchmarkJSONBenchLocalColumns/did_bytes/raw_int64/none-8                      	       1	   3880834 ns/op	2061.41 MB/s	47920352 B/op	    2476 allocs/op
+BenchmarkJSONBenchLocalColumns/did_bytes/raw_int64/snappy-8                    	       1	   5760042 ns/op	1388.88 MB/s	58051808 B/op	    2601 allocs/op
+BenchmarkJSONBenchLocalColumns/did_bytes/raw_int64/lz4-8                       	       1	   5577791 ns/op	1434.26 MB/s	57191528 B/op	    2604 allocs/op
+BenchmarkJSONBenchLocalColumns/did_bytes/delta_varint/none-8                   	       1	   6657417 ns/op	1201.67 MB/s	34919840 B/op	    2476 allocs/op
+BenchmarkJSONBenchLocalColumns/did_bytes/delta_varint/snappy-8                 	       1	   6861250 ns/op	1165.97 MB/s	36123744 B/op	    2601 allocs/op
+BenchmarkJSONBenchLocalColumns/did_bytes/delta_varint/lz4-8                    	       1	   8030833 ns/op	 996.16 MB/s	36232872 B/op	    2604 allocs/op
+BenchmarkJSONBenchLocalColumns/kind_code/raw_int64/none-8                      	       1	   5346500 ns/op	1496.31 MB/s	47920352 B/op	    2476 allocs/op
+BenchmarkJSONBenchLocalColumns/kind_code/raw_int64/snappy-8                    	       1	   7255291 ns/op	1102.64 MB/s	65920992 B/op	    2722 allocs/op
+BenchmarkJSONBenchLocalColumns/kind_code/raw_int64/lz4-8                       	       1	   6921083 ns/op	1155.89 MB/s	65060712 B/op	    2725 allocs/op
+BenchmarkJSONBenchLocalColumns/kind_code/delta_varint/none-8                   	       1	   8660042 ns/op	 923.78 MB/s	34919840 B/op	    2476 allocs/op
+BenchmarkJSONBenchLocalColumns/kind_code/delta_varint/snappy-8                 	       1	   9294042 ns/op	 860.77 MB/s	37107360 B/op	    2722 allocs/op
+BenchmarkJSONBenchLocalColumns/kind_code/delta_varint/lz4-8                    	       1	   9908959 ns/op	 807.35 MB/s	37216488 B/op	    2725 allocs/op
+BenchmarkJSONBenchLocalColumns/line_bytes/raw_int64/none-8                     	       1	   3933416 ns/op	2033.86 MB/s	47920352 B/op	    2476 allocs/op
+BenchmarkJSONBenchLocalColumns/line_bytes/raw_int64/snappy-8                   	       1	  14437666 ns/op	 554.11 MB/s	58576096 B/op	    2609 allocs/op
+BenchmarkJSONBenchLocalColumns/line_bytes/raw_int64/lz4-8                      	       1	  16678833 ns/op	 479.65 MB/s	57715816 B/op	    2612 allocs/op
+BenchmarkJSONBenchLocalColumns/line_bytes/delta_varint/none-8                  	       1	  12386292 ns/op	 645.88 MB/s	35485152 B/op	    2476 allocs/op
+BenchmarkJSONBenchLocalColumns/line_bytes/delta_varint/snappy-8                	       1	  16654791 ns/op	 480.34 MB/s	37476704 B/op	    2609 allocs/op
+BenchmarkJSONBenchLocalColumns/line_bytes/delta_varint/lz4-8                   	       1	  17074291 ns/op	 468.54 MB/s	37339368 B/op	    2612 allocs/op
+BenchmarkJSONBenchLocalColumns/record_created_at_unix_ms/raw_int64/none-8      	       1	   5168708 ns/op	1547.78 MB/s	47920352 B/op	    2476 allocs/op
+BenchmarkJSONBenchLocalColumns/record_created_at_unix_ms/raw_int64/snappy-8    	       1	  25120917 ns/op	 318.46 MB/s	65920992 B/op	    2722 allocs/op
+BenchmarkJSONBenchLocalColumns/record_created_at_unix_ms/raw_int64/lz4-8       	       1	  29276208 ns/op	 273.26 MB/s	65060712 B/op	    2725 allocs/op
+BenchmarkJSONBenchLocalColumns/record_created_at_unix_ms/delta_varint/none-8   	       1	  19727667 ns/op	 405.52 MB/s	43251808 B/op	    2721 allocs/op
+BenchmarkJSONBenchLocalColumns/record_created_at_unix_ms/delta_varint/snappy-8 	       1	  21138583 ns/op	 378.45 MB/s	50202592 B/op	    2967 allocs/op
+BenchmarkJSONBenchLocalColumns/record_created_at_unix_ms/delta_varint/lz4-8    	       1	  22170958 ns/op	 360.83 MB/s	49542760 B/op	    2962 allocs/op
+BenchmarkJSONBenchLocalColumns/record_has_reply/raw_int64/none-8               	       1	   4949792 ns/op	1616.23 MB/s	47920352 B/op	    2476 allocs/op
+BenchmarkJSONBenchLocalColumns/record_has_reply/raw_int64/snappy-8             	       1	   9046667 ns/op	 884.30 MB/s	65920992 B/op	    2722 allocs/op
+BenchmarkJSONBenchLocalColumns/record_has_reply/raw_int64/lz4-8                	       1	  13557042 ns/op	 590.10 MB/s	65060712 B/op	    2725 allocs/op
+BenchmarkJSONBenchLocalColumns/record_has_reply/delta_varint/none-8            	       1	   8862334 ns/op	 902.70 MB/s	34919840 B/op	    2476 allocs/op
+BenchmarkJSONBenchLocalColumns/record_has_reply/delta_varint/snappy-8          	       1	  10640792 ns/op	 751.82 MB/s	37107360 B/op	    2722 allocs/op
+BenchmarkJSONBenchLocalColumns/record_has_reply/delta_varint/lz4-8             	       1	  11151209 ns/op	 717.41 MB/s	37216488 B/op	    2725 allocs/op
+BenchmarkJSONBenchLocalColumns/record_has_subject/raw_int64/none-8             	       1	   5413375 ns/op	1477.82 MB/s	47920352 B/op	    2476 allocs/op
+BenchmarkJSONBenchLocalColumns/record_has_subject/raw_int64/snappy-8           	       1	  13231375 ns/op	 604.62 MB/s	65920992 B/op	    2722 allocs/op
+BenchmarkJSONBenchLocalColumns/record_has_subject/raw_int64/lz4-8              	       1	  14434334 ns/op	 554.23 MB/s	65060712 B/op	    2725 allocs/op
+BenchmarkJSONBenchLocalColumns/record_has_subject/delta_varint/none-8          	       1	   9298958 ns/op	 860.31 MB/s	34919840 B/op	    2476 allocs/op
+BenchmarkJSONBenchLocalColumns/record_has_subject/delta_varint/snappy-8        	       1	  11955500 ns/op	 669.15 MB/s	37107360 B/op	    2722 allocs/op
+BenchmarkJSONBenchLocalColumns/record_has_subject/delta_varint/lz4-8           	       1	  12289584 ns/op	 650.96 MB/s	37216488 B/op	    2725 allocs/op
+BenchmarkJSONBenchLocalColumns/record_langs_count/raw_int64/none-8             	       1	   5144250 ns/op	1555.13 MB/s	47920352 B/op	    2476 allocs/op
+BenchmarkJSONBenchLocalColumns/record_langs_count/raw_int64/snappy-8           	       1	  10125333 ns/op	 790.10 MB/s	65920992 B/op	    2722 allocs/op
+BenchmarkJSONBenchLocalColumns/record_langs_count/raw_int64/lz4-8              	       1	  14986917 ns/op	 533.80 MB/s	65060712 B/op	    2725 allocs/op
+BenchmarkJSONBenchLocalColumns/record_langs_count/delta_varint/none-8          	       1	   9140500 ns/op	 875.23 MB/s	34919840 B/op	    2476 allocs/op
+BenchmarkJSONBenchLocalColumns/record_langs_count/delta_varint/snappy-8        	       1	  11244875 ns/op	 711.44 MB/s	37107360 B/op	    2722 allocs/op
+BenchmarkJSONBenchLocalColumns/record_langs_count/delta_varint/lz4-8           	       1	  11554000 ns/op	 692.40 MB/s	37216488 B/op	    2725 allocs/op
+BenchmarkJSONBenchLocalColumns/record_subject_string_bytes/raw_int64/none-8    	       1	   4537208 ns/op	1763.20 MB/s	47920352 B/op	    2476 allocs/op
+BenchmarkJSONBenchLocalColumns/record_subject_string_bytes/raw_int64/snappy-8  	       1	  14486500 ns/op	 552.24 MB/s	65920992 B/op	    2722 allocs/op
+BenchmarkJSONBenchLocalColumns/record_subject_string_bytes/raw_int64/lz4-8     	       1	  18876750 ns/op	 423.80 MB/s	65060712 B/op	    2725 allocs/op
+BenchmarkJSONBenchLocalColumns/record_subject_string_bytes/delta_varint/none-8 	       1	   8850917 ns/op	 903.86 MB/s	35076000 B/op	    2476 allocs/op
+BenchmarkJSONBenchLocalColumns/record_subject_string_bytes/delta_varint/snappy-8         	       1	  11254917 ns/op	 710.80 MB/s	37419680 B/op	    2722 allocs/op
+BenchmarkJSONBenchLocalColumns/record_subject_string_bytes/delta_varint/lz4-8            	       1	  11696750 ns/op	 683.95 MB/s	37528808 B/op	    2725 allocs/op
+BenchmarkJSONBenchLocalColumns/record_text_bytes/raw_int64/none-8                        	       1	   4356833 ns/op	1836.20 MB/s	47920352 B/op	    2476 allocs/op
+BenchmarkJSONBenchLocalColumns/record_text_bytes/raw_int64/snappy-8                      	       1	  10167291 ns/op	 786.84 MB/s	64081120 B/op	    2693 allocs/op
+BenchmarkJSONBenchLocalColumns/record_text_bytes/raw_int64/lz4-8                         	       1	  15385709 ns/op	 519.96 MB/s	63220840 B/op	    2696 allocs/op
+BenchmarkJSONBenchLocalColumns/record_text_bytes/delta_varint/none-8                     	       1	   9293041 ns/op	 860.86 MB/s	35076064 B/op	    2476 allocs/op
+BenchmarkJSONBenchLocalColumns/record_text_bytes/delta_varint/snappy-8                   	       1	  12021917 ns/op	 665.45 MB/s	37294560 B/op	    2693 allocs/op
+BenchmarkJSONBenchLocalColumns/record_text_bytes/delta_varint/lz4-8                      	       1	  12451666 ns/op	 642.48 MB/s	37263144 B/op	    2696 allocs/op
+BenchmarkJSONBenchLocalColumns/record_type_code/raw_int64/none-8                         	       1	   4845417 ns/op	1651.04 MB/s	47920352 B/op	    2476 allocs/op
+BenchmarkJSONBenchLocalColumns/record_type_code/raw_int64/snappy-8                       	       1	  17150500 ns/op	 466.46 MB/s	65920992 B/op	    2722 allocs/op
+BenchmarkJSONBenchLocalColumns/record_type_code/raw_int64/lz4-8                          	       1	  18924042 ns/op	 422.74 MB/s	65060712 B/op	    2725 allocs/op
+BenchmarkJSONBenchLocalColumns/record_type_code/delta_varint/none-8                      	       1	   8773958 ns/op	 911.79 MB/s	34919840 B/op	    2476 allocs/op
+BenchmarkJSONBenchLocalColumns/record_type_code/delta_varint/snappy-8                    	       1	  12360875 ns/op	 647.20 MB/s	37107360 B/op	    2722 allocs/op
+BenchmarkJSONBenchLocalColumns/record_type_code/delta_varint/lz4-8                       	       1	  12788042 ns/op	 625.58 MB/s	37216488 B/op	    2725 allocs/op
+BenchmarkJSONBenchLocalColumns/row_index/raw_int64/none-8                                	       1	   3988583 ns/op	2005.72 MB/s	47920352 B/op	    2476 allocs/op
+BenchmarkJSONBenchLocalColumns/row_index/raw_int64/snappy-8                              	       1	  12506834 ns/op	 639.65 MB/s	58051808 B/op	    2601 allocs/op
+BenchmarkJSONBenchLocalColumns/row_index/raw_int64/lz4-8                                 	       1	  17798292 ns/op	 449.48 MB/s	57191528 B/op	    2604 allocs/op
+BenchmarkJSONBenchLocalColumns/row_index/delta_varint/none-8                             	       1	   6681625 ns/op	1197.31 MB/s	35074784 B/op	    2476 allocs/op
+BenchmarkJSONBenchLocalColumns/row_index/delta_varint/snappy-8                           	       1	   7073208 ns/op	1131.03 MB/s	36281312 B/op	    2601 allocs/op
+BenchmarkJSONBenchLocalColumns/row_index/delta_varint/lz4-8                              	       1	   8146583 ns/op	 982.01 MB/s	36390376 B/op	    2604 allocs/op
+BenchmarkJSONBenchLocalColumns/time_us/raw_int64/none-8                                  	       1	   3842917 ns/op	2081.75 MB/s	47920352 B/op	    2476 allocs/op
+BenchmarkJSONBenchLocalColumns/time_us/raw_int64/snappy-8                                	       1	  16206791 ns/op	 493.62 MB/s	58117344 B/op	    2602 allocs/op
+BenchmarkJSONBenchLocalColumns/time_us/raw_int64/lz4-8                                   	       1	  21899416 ns/op	 365.31 MB/s	57257064 B/op	    2605 allocs/op
+BenchmarkJSONBenchLocalColumns/time_us/delta_varint/none-8                               	       1	   7455041 ns/op	1073.10 MB/s	38826336 B/op	    2599 allocs/op
+BenchmarkJSONBenchLocalColumns/time_us/delta_varint/snappy-8                             	       1	   7631541 ns/op	1048.28 MB/s	41381600 B/op	    2725 allocs/op
+BenchmarkJSONBenchLocalColumns/time_us/delta_varint/lz4-8                                	       1	   7975458 ns/op	1003.08 MB/s	41216744 B/op	    2725 allocs/op
+PASS
+ok  	github.com/snissn/gomap/experiments/colgranule	6.950s
+```

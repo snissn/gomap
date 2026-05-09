@@ -1,0 +1,64 @@
+package colgranule
+
+import (
+	"os"
+	"testing"
+)
+
+func TestLoadJSONBenchColumnsSample(t *testing.T) {
+	ds, err := LoadJSONBenchColumns("testdata/jsonbench_sample.jsonl", 0)
+	if err != nil {
+		t.Fatalf("LoadJSONBenchColumns(sample): %v", err)
+	}
+	if ds.Rows != 5 {
+		t.Fatalf("rows=%d want 5", ds.Rows)
+	}
+	for _, name := range []string{"time_us", "line_bytes", "commit_collection_code", "record_created_at_unix_ms", "record_text_bytes"} {
+		if got := len(ds.Columns[name]); got != ds.Rows {
+			t.Fatalf("column %s len=%d want %d", name, got, ds.Rows)
+		}
+	}
+	if got := ds.Columns["record_has_reply"][0]; got != 1 {
+		t.Fatalf("record_has_reply[0]=%d want 1", got)
+	}
+	if got := ds.Columns["record_has_subject"][1]; got != 1 {
+		t.Fatalf("record_has_subject[1]=%d want 1", got)
+	}
+	if got := ds.Columns["record_subject_string_bytes"][2]; got == 0 {
+		t.Fatalf("record_subject_string_bytes[2]=0 want nonzero")
+	}
+}
+
+func TestSummarizeJSONBenchDatasetSample(t *testing.T) {
+	ds, err := LoadJSONBenchColumns("testdata/jsonbench_sample.jsonl", 0)
+	if err != nil {
+		t.Fatalf("LoadJSONBenchColumns(sample): %v", err)
+	}
+	summaries, err := SummarizeJSONBenchDataset(ds, 2, DefaultJSONBenchConfigs())
+	if err != nil {
+		t.Fatalf("SummarizeJSONBenchDataset: %v", err)
+	}
+	want := len(ds.Columns) * len(DefaultJSONBenchConfigs())
+	if len(summaries) != want {
+		t.Fatalf("summaries=%d want %d", len(summaries), want)
+	}
+	if summaries[0].Rows != ds.Rows {
+		t.Fatalf("summary rows=%d want %d", summaries[0].Rows, ds.Rows)
+	}
+}
+
+func TestLoadJSONBenchColumnsLocal1MIfPresent(t *testing.T) {
+	if _, err := os.Stat(DefaultJSONBenchPath); err != nil {
+		t.Skipf("local JSONBench fixture not present at %s", DefaultJSONBenchPath)
+	}
+	ds, err := LoadJSONBenchColumns(DefaultJSONBenchPath, 1000)
+	if err != nil {
+		t.Fatalf("LoadJSONBenchColumns(local): %v", err)
+	}
+	if ds.Rows != 1000 {
+		t.Fatalf("rows=%d want 1000", ds.Rows)
+	}
+	if got := len(ds.Columns["time_us"]); got != 1000 {
+		t.Fatalf("time_us len=%d want 1000", got)
+	}
+}
