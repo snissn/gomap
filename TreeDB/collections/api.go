@@ -6474,7 +6474,7 @@ func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON b
 				closePlanningSnapshot()
 				return nil, err
 			}
-			if len(bufferedTemplateRuns) > 0 {
+			if templateV1PlanningSnapshotNeedsRefresh(c.writeDomain, snap, bufferedTemplateRuns) {
 				// Clone buffered template runs first, then refresh the fallback snapshot.
 				// This closes the race where async publish removes a template run from the
 				// buffered overlay after the original snapshot but before the clone.
@@ -6656,6 +6656,13 @@ func (c *Collection) refreshTemplateV1PlanningSnapshot(snap **backenddb.Snapshot
 		plannerOptions = collectionOptionsWithBufferedTemplateV1RunsResolver(plannerOptions, bufferedTemplateRuns)
 	}
 	return catalog, meta, plannerOptions, nil
+}
+
+func templateV1PlanningSnapshotNeedsRefresh(domain *collectionWriteDomain, snap *backenddb.Snapshot, bufferedTemplateRuns []memtable.Table) bool {
+	if len(bufferedTemplateRuns) > 0 {
+		return true
+	}
+	return collectionWriteDomainSnapshotStale(domain, snapshotCommitSeq(snap), snapshotSystemRoot(snap))
 }
 
 func insertBatchPlanRootNamesAndBaseIDs(plan *insertBatchPlan, catalog *collectionCatalog) ([]string, map[string]uint64) {
@@ -9665,6 +9672,15 @@ func updateBatchBufferedSnapshotStaleLocked(domain *collectionWriteDomain, baseC
 	return true
 }
 
+func collectionWriteDomainSnapshotStale(domain *collectionWriteDomain, baseCommitSeq uint64, baseSystemRoot uint64) bool {
+	if domain == nil {
+		return false
+	}
+	domain.mu.RLock()
+	defer domain.mu.RUnlock()
+	return updateBatchBufferedSnapshotStaleLocked(domain, baseCommitSeq, baseSystemRoot)
+}
+
 func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBatchMode, useBufferedRead bool) (*updateBatchPlan, error) {
 	results := make([]UpdateBatchResult, len(items))
 	snap := c.db.AcquireSnapshot()
@@ -12192,7 +12208,7 @@ func (c *Collection) NewStoredDocumentJSONMaterializer() (*StoredDocumentJSONMat
 		if err != nil {
 			return nil, err
 		}
-		if len(bufferedTemplateRuns) > 0 {
+		if templateV1PlanningSnapshotNeedsRefresh(c.writeDomain, snap, bufferedTemplateRuns) {
 			_, _, plannerOptions, err = c.refreshTemplateV1PlanningSnapshot(&snap, false, bufferedTemplateRuns, false)
 			if err != nil {
 				return nil, err

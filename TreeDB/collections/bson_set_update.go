@@ -136,19 +136,19 @@ func newBSONSetUpdate(fields []BSONSetField) (bsonSetUpdate, error) {
 
 func validateBSONSetFieldKey(key string) error {
 	if key == "" {
-		return errors.New("collections: BSON $set field name cannot be empty")
+		return errors.New("field name cannot be empty")
 	}
 	if key == "_id" {
-		return errBSONIDMutation
+		return errors.New("cannot modify _id")
 	}
 	if strings.Contains(key, ".") {
-		return errors.New("collections: BSON $set currently supports top-level fields only")
+		return errors.New("currently supports top-level fields only")
 	}
 	if strings.HasPrefix(key, "$") {
-		return errors.New("collections: BSON $set field names cannot start with $")
+		return errors.New("field names cannot start with $")
 	}
 	if strings.Contains(key, "\x00") {
-		return errors.New("collections: BSON $set field names cannot contain NUL")
+		return errors.New("field names cannot contain NUL")
 	}
 	return nil
 }
@@ -210,9 +210,8 @@ func (u bsonSetUpdate) apply(current []byte) ([]byte, bool, error) {
 // replacement aliases current. When changed, replacement aliases the returned
 // dst. On error, the returned dst is restored to its original length while
 // preserving any grown backing store for caller reuse.
-func (u bsonSetUpdate) appendReplacement(dst, current []byte) (returned []byte, replacement []byte, changedResult bool, err error) {
+func (u bsonSetUpdate) appendReplacement(dst, current []byte) (returned []byte, replacement []byte, changed bool, err error) {
 	start := len(dst)
-	changed := false
 	var out []byte
 	resetDst := func() []byte {
 		if changed && out != nil {
@@ -224,7 +223,7 @@ func (u bsonSetUpdate) appendReplacement(dst, current []byte) (returned []byte, 
 		if recovered := recover(); recovered != nil {
 			returned = resetDst()
 			replacement = nil
-			changedResult = false
+			changed = false
 			err = collectionUpdatePanicError("structured", recovered)
 		}
 	}()
@@ -233,7 +232,7 @@ func (u bsonSetUpdate) appendReplacement(dst, current []byte) (returned []byte, 
 	}
 	length, rem, ok := bsoncore.ReadLength(current)
 	if !ok {
-		return dst, nil, false, bsoncore.NewInsufficientBytesError(current, rem)
+		return resetDst(), nil, false, bsoncore.NewInsufficientBytesError(current, rem)
 	}
 	length -= 4
 	var usedInline [8]bool
