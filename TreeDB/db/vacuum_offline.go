@@ -238,7 +238,7 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) error {
 	}
 
 	if !outputHasLeafLogRefs {
-		if err := resetLeafGenerationAfterOfflineVacuum(opts.Dir, meta.CommitSeq); err != nil {
+		if err := resetLeafGenerationAfterOfflineVacuum(opts.Dir, meta.CommitSeq, nil); err != nil {
 			return err
 		}
 		if err := removeLeafGenerationResetPendingAfterOfflineVacuum(opts.Dir); err != nil {
@@ -317,7 +317,7 @@ func vacuumTreeHasLeafLogRefs(p *pager.Pager, rootID uint64) (bool, error) {
 	return walk(rootID)
 }
 
-func resetLeafGenerationAfterOfflineVacuum(dir string, commitSeq uint64) error {
+func resetLeafGenerationAfterOfflineVacuum(dir string, commitSeq uint64, evictSegment func(uint32) error) error {
 	leafDir := LeafLogDirPath(dir)
 	if leafDir == "" {
 		return nil
@@ -352,6 +352,11 @@ func resetLeafGenerationAfterOfflineVacuum(dir string, commitSeq uint64) error {
 	}
 
 	for _, file := range files {
+		if evictSegment != nil {
+			if err := evictSegment(file.rawFileID); err != nil {
+				return fmt.Errorf("vacuum: evict stale leaf generation file %s: %w", leafGenerationFallbackPath(dir, file.rawFileID), err)
+			}
+		}
 		path := leafGenerationFallbackPath(dir, file.rawFileID)
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("vacuum: remove stale leaf generation file %s: %w", path, err)
@@ -405,7 +410,7 @@ func removeLeafGenerationResetPendingAfterOfflineVacuum(dir string) error {
 	return nil
 }
 
-func recoverLeafGenerationResetAfterOfflineVacuum(dir string, p *pager.Pager, reader tree.SlabReader, userRoot, systemRoot, commitSeq uint64) (bool, error) {
+func recoverLeafGenerationResetAfterOfflineVacuum(dir string, p *pager.Pager, reader tree.SlabReader, userRoot, systemRoot, commitSeq uint64, beforeReset func() error, evictSegment func(uint32) error) (bool, error) {
 	markerPath := leafGenerationResetPendingAfterOfflineVacuumPath(dir)
 	if _, err := os.Stat(markerPath); err != nil {
 		if os.IsNotExist(err) {
@@ -418,7 +423,12 @@ func recoverLeafGenerationResetAfterOfflineVacuum(dir string, p *pager.Pager, re
 		return false, err
 	}
 	if !hasLeafLogRefs {
-		if err := resetLeafGenerationAfterOfflineVacuum(dir, commitSeq); err != nil {
+		if beforeReset != nil {
+			if err := beforeReset(); err != nil {
+				return false, err
+			}
+		}
+		if err := resetLeafGenerationAfterOfflineVacuum(dir, commitSeq, evictSegment); err != nil {
 			return false, err
 		}
 	}

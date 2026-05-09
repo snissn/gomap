@@ -1432,9 +1432,17 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	}
 	recoverySet := vm.CurrentSet()
 	reader := newValueReader(recoverySet)
-	recoveredLeafReset, err := recoverLeafGenerationResetAfterOfflineVacuum(opts.Dir, p, reader, db.meta.UserRootPageID, db.meta.SystemRootPageID, db.meta.CommitSeq)
-	if recoverySet != nil {
-		vm.Release(recoverySet)
+	releaseRecoverySet := func() error {
+		if recoverySet == nil {
+			return nil
+		}
+		err := vm.Release(recoverySet)
+		recoverySet = nil
+		return err
+	}
+	recoveredLeafReset, err := recoverLeafGenerationResetAfterOfflineVacuum(opts.Dir, p, reader, db.meta.UserRootPageID, db.meta.SystemRootPageID, db.meta.CommitSeq, releaseRecoverySet, vm.EvictSegment)
+	if releaseErr := releaseRecoverySet(); err == nil && releaseErr != nil {
+		err = releaseErr
 	}
 	if err != nil {
 		db.Close()

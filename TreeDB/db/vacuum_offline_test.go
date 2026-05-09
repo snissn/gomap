@@ -158,7 +158,7 @@ func TestResetLeafGenerationAfterOfflineVacuum_RemovesStaleFilesAfterManifest(t 
 		t.Fatalf("save stale manifest: %v", err)
 	}
 
-	if err := resetLeafGenerationAfterOfflineVacuum(dir, 42); err != nil {
+	if err := resetLeafGenerationAfterOfflineVacuum(dir, 42, nil); err != nil {
 		t.Fatalf("reset leaf generation: %v", err)
 	}
 	if _, err := os.Stat(segmentPath); !os.IsNotExist(err) {
@@ -210,7 +210,7 @@ func TestResetLeafGenerationAfterOfflineVacuum_WritesResetManifestBeforeDeletion
 	syncDirFn = func(_ string) error {
 		return errors.New("stop after reset manifest")
 	}
-	if err := resetLeafGenerationAfterOfflineVacuum(dir, 42); err == nil {
+	if err := resetLeafGenerationAfterOfflineVacuum(dir, 42, nil); err == nil {
 		t.Fatal("expected injected sync error")
 	}
 	if _, err := os.Stat(segmentPath); err != nil {
