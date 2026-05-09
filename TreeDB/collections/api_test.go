@@ -9557,6 +9557,50 @@ func TestBuildUpdateBatchPlanBSONSetRejectsInvalidCurrentBSON(t *testing.T) {
 	}
 }
 
+func TestBSONSetAppendReplacementGrowsSmallDestination(t *testing.T) {
+	spec, err := newBSONSetUpdate([]BSONSetField{{
+		Key:   "city",
+		Value: mustBSONRawValue(t, "sea"),
+	}})
+	if err != nil {
+		t.Fatalf("new BSON set update: %v", err)
+	}
+	current := mustBSONCollectionDocument(t, bson.D{
+		{Key: "_id", Value: "u1"},
+		{Key: "email", Value: "a@example.com"},
+		{Key: "city", Value: "hnl"},
+		{Key: "active", Value: true},
+	})
+	dst := []byte("prefix")
+	dst = dst[:len(dst):len(dst)]
+
+	out, replacement, changed, err := spec.appendReplacement(dst, current)
+	if err != nil {
+		t.Fatalf("appendReplacement: %v", err)
+	}
+	if !changed {
+		t.Fatal("changed=false want true")
+	}
+	if len(out) <= len(dst) {
+		t.Fatalf("out len=%d want appended replacement after prefix len=%d", len(out), len(dst))
+	}
+	if cap(out) <= cap(dst) {
+		t.Fatalf("out cap=%d want growth beyond dst cap=%d", cap(out), cap(dst))
+	}
+	if !bytes.Equal(out[:len(dst)], dst) {
+		t.Fatalf("out prefix=%q want %q", out[:len(dst)], dst)
+	}
+	if len(replacement) == 0 || &replacement[0] != &out[len(dst)] {
+		t.Fatal("replacement does not point at appended output region")
+	}
+	if got := bson.Raw(replacement).Lookup("city").StringValue(); got != "sea" {
+		t.Fatalf("city=%q want sea", got)
+	}
+	if got := bson.Raw(replacement).Lookup("_id").StringValue(); got != "u1" {
+		t.Fatalf("_id=%q want u1", got)
+	}
+}
+
 func TestCollectionUpdateBSONSetRejectsInvalidFieldNames(t *testing.T) {
 	for _, tc := range []struct {
 		name string
