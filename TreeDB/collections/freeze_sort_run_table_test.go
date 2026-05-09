@@ -136,6 +136,128 @@ func TestFreezeSortRunTableApplyStealEntryFunc(t *testing.T) {
 	}
 }
 
+func TestFreezeSortRunTableReleaseReusesClearedEntryScratch(t *testing.T) {
+	resetFreezeSortRunTablePoolForTest(t)
+
+	handle := newFreezeSortRunTable().(freezeSortRunTableHandle)
+	table := handle.table
+	for i := 0; i < 16; i++ {
+		handle.SetEntrySteal([]byte{byte('a' + i)}, []byte("old"), page.ValuePtr{}, node.FlagInline)
+	}
+	handle.Freeze()
+	if handle.Len() != 16 {
+		t.Fatalf("table Len=%d want 16 before release", handle.Len())
+	}
+	capBefore := cap(table.entries)
+
+	handle.Release()
+	handle.Release()
+	freezeSortRunTablePool.mu.Lock()
+	pooledTables := len(freezeSortRunTablePool.tables)
+	freezeSortRunTablePool.mu.Unlock()
+	if pooledTables != 1 {
+		t.Fatalf("pooled tables after double release=%d want 1", pooledTables)
+	}
+
+	reusedHandle := newFreezeSortRunTable().(freezeSortRunTableHandle)
+	reused := reusedHandle.table
+	if reused != table {
+		t.Fatal("freeze-sort table was not reused from pool")
+	}
+	if reusedHandle.Len() != 0 {
+		t.Fatalf("reused table Len=%d want 0", reusedHandle.Len())
+	}
+	if reusedHandle.Size() != 0 {
+		t.Fatalf("reused table Size=%d want 0", reusedHandle.Size())
+	}
+	if reused.frozen {
+		t.Fatal("reused table is still frozen")
+	}
+	if cap(reused.entries) != capBefore {
+		t.Fatalf("reused entry capacity=%d want %d", cap(reused.entries), capBefore)
+	}
+
+	reusedHandle.SetEntrySteal([]byte("z"), []byte("new"), page.ValuePtr{}, node.FlagInline)
+	reusedHandle.Freeze()
+	requireFreezeSortRunIterator(t, reusedHandle.NewIterator(nil, nil), []string{"z"})
+
+	reusedHandle.Reset()
+	reusedHandle.Release()
+	freezeSortRunTablePool.mu.Lock()
+	pooledTables = len(freezeSortRunTablePool.tables)
+	freezeSortRunTablePool.mu.Unlock()
+	if pooledTables != 1 {
+		t.Fatalf("pooled tables after reacquire/reset/release=%d want 1", pooledTables)
+	}
+}
+
+func TestFreezeSortRunTableStaleReleaseDoesNotAffectReusedOwner(t *testing.T) {
+	resetFreezeSortRunTablePoolForTest(t)
+
+	stale := newFreezeSortRunTable().(freezeSortRunTableHandle)
+	stale.Set([]byte("a"), []byte("old"))
+	stale.Release()
+
+	current := newFreezeSortRunTable().(freezeSortRunTableHandle)
+	if current.table != stale.table {
+		t.Fatal("freeze-sort table was not reused from pool")
+	}
+	current.Set([]byte("b"), []byte("new-b"))
+	stale.Release()
+	current.Set([]byte("c"), []byte("new-c"))
+	if got := current.Len(); got != 2 {
+		t.Fatalf("current Len=%d want 2 after stale release no-op", got)
+	}
+	current.Freeze()
+	requireFreezeSortRunIterator(t, current.NewIterator(nil, nil), []string{"b", "c"})
+	current.Release()
+}
+
+func TestFreezeSortRunTablePanicsOnStaleMutationAfterReuse(t *testing.T) {
+	resetFreezeSortRunTablePoolForTest(t)
+
+	stale := newFreezeSortRunTable().(freezeSortRunTableHandle)
+	stale.Set([]byte("a"), []byte("old"))
+	stale.Release()
+	current := newFreezeSortRunTable().(freezeSortRunTableHandle)
+	if current.table != stale.table {
+		t.Fatal("freeze-sort table was not reused from pool")
+	}
+
+	defer func() {
+		if recovered := recover(); recovered == nil {
+			t.Fatal("stale mutation after reuse did not panic")
+		}
+	}()
+	stale.Set([]byte("z"), []byte("stale"))
+}
+
+func TestFreezeSortRunTablePanicsOnMutationAfterRelease(t *testing.T) {
+	resetFreezeSortRunTablePoolForTest(t)
+
+	table := newFreezeSortRunTable().(freezeSortRunTableHandle)
+	table.Set([]byte("a"), []byte("value-a"))
+	table.Release()
+	defer func() {
+		if recovered := recover(); recovered == nil {
+			t.Fatal("Reset after Release did not panic")
+		}
+	}()
+	table.Reset()
+}
+
+func resetFreezeSortRunTablePoolForTest(t *testing.T) {
+	t.Helper()
+	reset := func() {
+		freezeSortRunTablePool.mu.Lock()
+		freezeSortRunTablePool.tables = nil
+		freezeSortRunTablePool.entryCapacity = 0
+		freezeSortRunTablePool.mu.Unlock()
+	}
+	reset()
+	t.Cleanup(reset)
+}
+
 func requireFreezeSortRunIterator(t *testing.T, it interface {
 	Valid() bool
 	Next()
