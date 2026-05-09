@@ -848,6 +848,7 @@ type bufferedIndexedCheckpoint struct {
 	uniqueValueRuns        map[string][]memtable.Table
 	uniqueValueMutableRuns map[string]memtable.Table
 	rootRunCount           int
+	indexedDeletesOnly     bool
 }
 
 type bufferedUniqueValueIndex struct {
@@ -917,6 +918,7 @@ type collectionWriteDomain struct {
 	mutableBytes           int64
 	rootRunCount           int
 	writeGeneration        uint64
+	indexedDeletesOnly     bool
 
 	mutationLockCalls                  atomic.Uint64
 	mutationLockWaitTotalNs            atomic.Uint64
@@ -3436,6 +3438,7 @@ func (c *Collection) flushBufferedNoIndexLocked(domain *collectionWriteDomain) e
 	domain.primaryRoot = rootIDs[0]
 	domain.table = newCollectionRunTable(0)
 	domain.count = 0
+	domain.indexedDeletesOnly = false
 	domain.mutableCount = 0
 	domain.mutableBytes = 0
 	c.meta = meta
@@ -3446,6 +3449,42 @@ func (c *Collection) flushBufferedNoIndexLocked(domain *collectionWriteDomain) e
 
 func (c *Collection) shouldBufferIndexedInserts(meta CollectionMeta) bool {
 	return c != nil && c.writeDomain != nil && meta.Options.BufferedIndexedWrites && len(meta.Indexes) > 0
+}
+
+func (c *Collection) shouldBufferIndexedDeletes(meta CollectionMeta) bool {
+	return c != nil &&
+		c.writeDomain != nil &&
+		meta.Options.BufferedIndexedWrites &&
+		len(meta.Indexes) > 0 &&
+		!collectionMetaHasSecondaryUniqueIndex(meta)
+}
+
+func (c *Collection) shouldFlushBeforeIndexedDelete(meta CollectionMeta) bool {
+	if !c.shouldBufferIndexedDeletes(meta) {
+		return true
+	}
+	domain := c.writeDomain
+	domain.mu.Lock()
+	defer domain.mu.Unlock()
+	if !domain.indexedDeletesOnly {
+		return true
+	}
+	currentCommitSeq, currentSystemRoot := dbCommitSeqAndSystemRoot(c.db)
+	catalog, err := c.revalidateBufferedWriteDomainLocked(domain, currentCommitSeq, currentSystemRoot)
+	if err != nil {
+		return true
+	}
+	return !c.shouldBufferIndexedDeletes(catalog.meta)
+}
+
+func (c *Collection) hasBufferedIndexedDeletesOnly() bool {
+	if c == nil || c.writeDomain == nil {
+		return false
+	}
+	domain := c.writeDomain
+	domain.mu.RLock()
+	defer domain.mu.RUnlock()
+	return domain.count > 0 && domain.indexedDeletesOnly
 }
 
 func (c *Collection) shouldBufferIndexedInsertBatch(meta CollectionMeta, documentCount int) bool {
@@ -3599,6 +3638,7 @@ func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, b
 	domain.bufferedBytes = saturatingAddNonNegativeInt64(domain.bufferedBytes, stagedBytes)
 	domain.mutableCount = saturatingAddNonNegativeInt(domain.mutableCount, len(plan.resultIDs))
 	domain.mutableBytes = saturatingAddNonNegativeInt64(domain.mutableBytes, stagedBytes)
+	domain.indexedDeletesOnly = false
 	domain.writeGeneration++
 	domain.observeIndexedStage(len(plan.resultIDs), stagedBytes, stagedRootRuns)
 	c.meta = catalog.meta
@@ -3830,6 +3870,7 @@ func (c *Collection) initializeWriteDomainFromCatalogLocked(domain *collectionWr
 	domain.rootBaseIDs = nil
 	domain.rootValueArenas = nil
 	domain.rootRunCount = 0
+	domain.indexedDeletesOnly = false
 	domain.mutableCount = 0
 	domain.mutableBytes = 0
 	domain.primaryIDIndex = nil
@@ -4779,6 +4820,7 @@ func checkpointBufferedIndexedDomain(domain *collectionWriteDomain) bufferedInde
 		uniqueValueRuns:        cloneTableRunMap(domain.uniqueValueRuns),
 		uniqueValueMutableRuns: cloneMutableRunMap(domain.uniqueValueMutableRuns),
 		rootRunCount:           domain.rootRunCount,
+		indexedDeletesOnly:     domain.indexedDeletesOnly,
 	}
 }
 
@@ -4809,6 +4851,7 @@ func rollbackBufferedIndexedDomain(domain *collectionWriteDomain, checkpoint buf
 	domain.rootBaseIDs = checkpoint.rootBaseIDs
 	domain.rootValueArenas = checkpoint.rootValueArenas
 	domain.rootRunCount = checkpoint.rootRunCount
+	domain.indexedDeletesOnly = checkpoint.indexedDeletesOnly
 	pendingRuns := indexedFlushUnitPendingRootRunMap(indexedFlushUnitsWithPublishing(checkpoint.indexedPublishingUnits, checkpoint.indexedFlushUnits), checkpoint.rootRuns)
 	domain.primaryIDIndex = rebuildBufferedPrimaryIDIndex(checkpoint.meta.Name, pendingRuns)
 	if checkpoint.primaryRunIndexActive {
@@ -6149,6 +6192,7 @@ func (c *Collection) prepareIndexedAsyncPublishLocked(domain *collectionWriteDom
 		domain.rootMutableRuns = nil
 		domain.rootValueArenas = nil
 		domain.count = 0
+		domain.indexedDeletesOnly = false
 		domain.bufferedBytes = 0
 		domain.mutableCount = 0
 		domain.mutableBytes = 0
@@ -6619,6 +6663,7 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (
 		domain.rootMutableRuns = nil
 		domain.rootValueArenas = nil
 		domain.count = 0
+		domain.indexedDeletesOnly = false
 		domain.bufferedBytes = 0
 		domain.mutableCount = 0
 		domain.mutableBytes = 0
@@ -6730,6 +6775,7 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (
 	domain.uniqueValueMutableRuns = nil
 	domain.uniqueValueIndex = nil
 	domain.count = 0
+	domain.indexedDeletesOnly = false
 	domain.bufferedBytes = 0
 	domain.mutableCount = 0
 	domain.mutableBytes = 0
@@ -7095,7 +7141,18 @@ func (c *Collection) insertOneViaBatch(id, document []byte) ([]byte, error) {
 // batch recoverable as one mutation boundary. Ordinary pre-commit errors expose
 // no partial batch. Post-commit failures must be reported as commit-ambiguous.
 func (c *Collection) InsertBatch(ids, documents [][]byte) ([][]byte, error) {
-	return c.insertBatch(ids, documents, false)
+	return c.insertBatch(ids, documents, false, nil)
+}
+
+// InsertBatchWithTemplateV1Encoder inserts template-v1 documents and teaches
+// encoder any numeric template IDs resolved by the successful insert. Later
+// EncodeDocument calls on the same encoder can then emit compact TD1D stored
+// documents directly instead of hash-addressed TD1H insert documents.
+func (c *Collection) InsertBatchWithTemplateV1Encoder(ids, documents [][]byte, encoder *TemplateV1Encoder) ([][]byte, error) {
+	if encoder == nil {
+		return nil, errors.New("collections: template-v1 encoder cannot be nil")
+	}
+	return c.insertBatch(ids, documents, false, encoder)
 }
 
 // InsertBatchValidatedBSON inserts native BSON documents that the caller has
@@ -7103,10 +7160,10 @@ func (c *Collection) InsertBatch(ids, documents [][]byte) ([][]byte, error) {
 // BSON while parsing the request and need to avoid a duplicate full-document
 // validation pass on the insert hot path.
 func (c *Collection) InsertBatchValidatedBSON(ids, documents [][]byte) ([][]byte, error) {
-	return c.insertBatch(ids, documents, true)
+	return c.insertBatch(ids, documents, true, nil)
 }
 
-func (c *Collection) insertBatch(ids, documents [][]byte, trustedValidBSON bool) ([][]byte, error) {
+func (c *Collection) insertBatch(ids, documents [][]byte, trustedValidBSON bool, templateEncoder *TemplateV1Encoder) ([][]byte, error) {
 	if c == nil {
 		return nil, errCollectionNil
 	}
@@ -7118,7 +7175,7 @@ func (c *Collection) insertBatch(ids, documents [][]byte, trustedValidBSON bool)
 	}
 
 	return retryInsertBatchMutation(func() ([][]byte, error) {
-		return c.insertBatchOnce(ids, documents, trustedValidBSON)
+		return c.insertBatchOnce(ids, documents, trustedValidBSON, templateEncoder)
 	})
 }
 
@@ -7136,7 +7193,7 @@ func retryInsertBatchMutation(run func() ([][]byte, error)) ([][]byte, error) {
 	return nil, collectionMutationRetryExhausted(lastErr)
 }
 
-func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON bool) ([][]byte, error) {
+func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON bool, templateEncoder *TemplateV1Encoder) ([][]byte, error) {
 	unlockMutation := c.lockMutation()
 	mutationLocked := true
 	unlockIfLocked := func() {
@@ -7162,6 +7219,11 @@ func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON b
 	}
 	if !skipInitialNoIndexFlush {
 		if err := c.flushBufferedNoIndex(); err != nil {
+			return nil, err
+		}
+	}
+	if c.hasBufferedIndexedDeletesOnly() {
+		if err := c.flushBufferedWrites(); err != nil {
 			return nil, err
 		}
 	}
@@ -7203,6 +7265,16 @@ func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON b
 		closePlanningSnapshot()
 		return nil, err
 	}
+	if templateEncoder != nil && normalizedDocumentFormat(plannerOptions.documentFormat) != DocumentFormatTemplateV1 {
+		closePlanningSnapshot()
+		return nil, errors.New("collections: InsertBatchWithTemplateV1Encoder requires a template-v1 collection")
+	}
+	if templateEncoder.learnedTemplateV1ScopeMismatch(c) {
+		closePlanningSnapshot()
+		return nil, errors.New("collections: template-v1 encoder is bound to a different collection")
+	}
+	plannerOptions.learnTemplateIDs = templateEncoder != nil
+	plannerOptions.allowTemplateV1Stored = templateEncoder.allowsTemplateV1StoredDocuments(c)
 	plannerOptions = collectionOptionsWithTemplateV1Resolver(plannerOptions, snap, catalog)
 	if skipInitialNoIndexFlush && (len(meta.Indexes) != 0 || normalizedDocumentFormat(plannerOptions.documentFormat) != DocumentFormatBSON) {
 		catalog, meta, plannerOptions, err = c.reloadInsertBatchPlanningSnapshot(&snap, trustedValidBSON, c.flushBufferedNoIndex)
@@ -7246,6 +7318,16 @@ func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON b
 			closePlanningSnapshot()
 			return nil, err
 		}
+		if templateEncoder != nil && normalizedDocumentFormat(plannerOptions.documentFormat) != DocumentFormatTemplateV1 {
+			closePlanningSnapshot()
+			return nil, errors.New("collections: InsertBatchWithTemplateV1Encoder requires a template-v1 collection")
+		}
+		if templateEncoder.learnedTemplateV1ScopeMismatch(c) {
+			closePlanningSnapshot()
+			return nil, errors.New("collections: template-v1 encoder is bound to a different collection")
+		}
+		plannerOptions.learnTemplateIDs = templateEncoder != nil
+		plannerOptions.allowTemplateV1Stored = templateEncoder.allowsTemplateV1StoredDocuments(c)
 		plannerOptions = collectionOptionsWithTemplateV1Resolver(plannerOptions, snap, catalog)
 		indexedMemtablesEnabled = c.shouldBufferIndexedInserts(meta)
 		bufferIndexedInserts = c.shouldBufferIndexedInsertBatch(meta, len(documents))
@@ -7267,6 +7349,8 @@ func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON b
 					return nil, err
 				}
 				c.meta = meta
+				plannerOptions.learnTemplateIDs = templateEncoder != nil
+				plannerOptions.allowTemplateV1Stored = templateEncoder.allowsTemplateV1StoredDocuments(c)
 				indexedMemtablesEnabled = c.shouldBufferIndexedInserts(meta)
 				bufferIndexedInserts = c.shouldBufferIndexedInsertBatch(meta, len(documents))
 			}
@@ -7324,6 +7408,7 @@ func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON b
 	}
 	if !insertBatchPlanHasRootWork(plan) {
 		closePlanningSnapshot()
+		templateEncoder.learnTemplateV1Templates(c, plan.templateLearned)
 		c.setLastInsertStats(plan.stats.CollectionInsertStats)
 		return plan.resultIDs, nil
 	}
@@ -7349,6 +7434,7 @@ func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON b
 			return nil, err
 		}
 		plan.stats.Publish += bufferFlushElapsed
+		templateEncoder.learnTemplateV1Templates(c, plan.templateLearned)
 		c.setLastInsertStats(plan.stats.CollectionInsertStats)
 		return resultIDs, nil
 	}
@@ -7406,6 +7492,7 @@ func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON b
 	nextCatalog := cloneCatalogWithRootUpdates(currentCatalog, meta, rootNames, rootIDs)
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
+	templateEncoder.learnTemplateV1Templates(c, plan.templateLearned)
 	c.setLastInsertStats(plan.stats.CollectionInsertStats)
 	return plan.resultIDs, nil
 }
@@ -7860,8 +7947,10 @@ func (c *Collection) DeleteDocument(documentID []byte) (bool, error) {
 	}
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()
-	if err := c.flushBufferedWrites(); err != nil {
-		return false, err
+	if c.shouldFlushBeforeIndexedDelete(c.meta) {
+		if err := c.flushBufferedWrites(); err != nil {
+			return false, err
+		}
 	}
 
 	var lastErr error
@@ -7869,6 +7958,9 @@ func (c *Collection) DeleteDocument(documentID []byte) (bool, error) {
 		deleted, err := c.deleteDocumentOnce(documentID)
 		if errors.Is(err, ErrConcurrentMutation) {
 			lastErr = err
+			if flushErr := c.flushBufferedWrites(); flushErr != nil {
+				return false, flushErr
+			}
 			waitBeforeCollectionMutationRetry(attempt)
 			continue
 		}
@@ -7917,14 +8009,19 @@ func (c *Collection) DeleteBatch(documentIDs [][]byte) (int, error) {
 	}
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()
-	if err := c.flushBufferedWrites(); err != nil {
-		return 0, err
+	if c.shouldFlushBeforeIndexedDelete(c.meta) {
+		if err := c.flushBufferedWrites(); err != nil {
+			return 0, err
+		}
 	}
 	var lastErr error
 	for attempt := 0; attempt < maxCollectionMutationRetries; attempt++ {
 		deleted, err := c.deleteBatchOnce(ids)
 		if errors.Is(err, ErrConcurrentMutation) {
 			lastErr = err
+			if flushErr := c.flushBufferedWrites(); flushErr != nil {
+				return 0, flushErr
+			}
 			waitBeforeCollectionMutationRetry(attempt)
 			continue
 		}
@@ -7982,6 +8079,14 @@ func (c *Collection) deleteBatchOnce(documentIDs [][]byte) (int, error) {
 	}
 	existing := make([]existingDelete, 0, len(documentIDs))
 	for _, documentID := range documentIDs {
+		if c.writeDomain != nil {
+			c.writeDomain.mu.RLock()
+			alreadyDeleted := c.bufferedIndexedDeleteTombstoneLocked(c.writeDomain, documentID)
+			c.writeDomain.mu.RUnlock()
+			if alreadyDeleted {
+				continue
+			}
+		}
 		entry, _, err := collectionGetEntryAtCatalogRoot(snap, catalog, primaryRootName, documentID)
 		if errors.Is(err, tree.ErrKeyNotFound) {
 			continue
@@ -8063,6 +8168,15 @@ func (c *Collection) deleteBatchOnce(documentIDs [][]byte) (int, error) {
 		}
 	}
 
+	if buffered, err := c.bufferIndexedDeleteTablesLocked(catalog, baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, policies, deltaTables, len(existing)); buffered || err != nil {
+		_ = snap.Close()
+		if err != nil {
+			resetCollectionTables(deltaTables)
+			return 0, err
+		}
+		return len(existing), err
+	}
+
 	defer func() { _ = snap.Close() }()
 	defer func() { resetCollectionTables(deltaTables) }()
 	ordered, cleanupDeltas, err := buildRootDeltaBatchPublishInputsFromTables(c.meta.Name, rootNames, deltaTables, baseRootIDs, policies)
@@ -8121,6 +8235,15 @@ func (c *Collection) deleteDocumentOnce(documentID []byte) (bool, error) {
 	baseCommitSeq := snapshotCommitSeq(snap)
 
 	primaryRootName := collectionPrimaryRootName(c.meta.Name)
+	if c.writeDomain != nil {
+		c.writeDomain.mu.RLock()
+		alreadyDeleted := c.bufferedIndexedDeleteTombstoneLocked(c.writeDomain, documentID)
+		c.writeDomain.mu.RUnlock()
+		if alreadyDeleted {
+			_ = snap.Close()
+			return false, nil
+		}
+	}
 	entry, primaryRoot, err := collectionGetEntryAtCatalogRoot(snap, catalog, primaryRootName, documentID)
 	if errors.Is(err, tree.ErrKeyNotFound) {
 		_ = snap.Close()
@@ -8196,6 +8319,13 @@ func (c *Collection) deleteDocumentOnce(documentID []byte) (bool, error) {
 	}
 	// Keep the base snapshot pinned through publish so page reuse cannot invalidate
 	// base roots before stale-root validation rejects concurrent modifications.
+	if buffered, err := c.bufferIndexedDeleteTablesLocked(catalog, baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, policies, deltaTables, 1); buffered || err != nil {
+		_ = snap.Close()
+		if err != nil {
+			resetCollectionTables(deltaTables)
+		}
+		return buffered, err
+	}
 	defer func() { _ = snap.Close() }()
 
 	defer func() {
@@ -9588,7 +9718,7 @@ func (c *Collection) updateDocumentOnceApply(documentID []byte, update func(curr
 		return false, false, err
 	}
 	phaseStart = updateBatchStatsNow(detailedStats)
-	preparedDocuments, templateRecords, templateResolver, err := prepareInsertDocuments([][]byte{document}, plannerOptions)
+	preparedDocuments, templateRecords, _, templateResolver, err := prepareInsertDocuments([][]byte{document}, plannerOptions)
 	stats.PrepareDocuments += updateBatchStatsSince(detailedStats, phaseStart)
 	if err != nil {
 		_ = snap.Close()
@@ -11108,11 +11238,11 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 	}
 
 	phaseStart := updateBatchStatsNow(detailedStats)
-	preparedDocuments, templateRecords, templateResolver, err := prepareInsertDocuments(changedDocuments, plannerOptions)
+	preparedDocuments, templateRecords, _, templateResolver, err := prepareInsertDocuments(changedDocuments, plannerOptions)
 	stats.PrepareDocuments += updateBatchStatsSince(detailedStats, phaseStart)
 	if err != nil {
 		for i, document := range changedDocuments {
-			if _, _, _, itemErr := prepareInsertDocuments([][]byte{document}, plannerOptions); itemErr != nil {
+			if _, _, _, _, itemErr := prepareInsertDocuments([][]byte{document}, plannerOptions); itemErr != nil {
 				_ = snap.Close()
 				return nil, updateBatchItemError(changed[i].itemIndex, itemErr)
 			}
@@ -11790,6 +11920,7 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 	domain.bufferedBytes = saturatingAddNonNegativeInt64(domain.bufferedBytes, direct.stagedBytes)
 	domain.mutableCount = saturatingAddNonNegativeInt(domain.mutableCount, modifiedCount)
 	domain.mutableBytes = saturatingAddNonNegativeInt64(domain.mutableBytes, direct.stagedBytes)
+	domain.indexedDeletesOnly = false
 	domain.writeGeneration++
 	if rollbackOnError {
 		rollbackGeneration = domain.writeGeneration
@@ -12052,6 +12183,7 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 	domain.bufferedBytes = saturatingAddNonNegativeInt64(domain.bufferedBytes, stagedBytes)
 	domain.mutableCount = saturatingAddNonNegativeInt(domain.mutableCount, modifiedCount)
 	domain.mutableBytes = saturatingAddNonNegativeInt64(domain.mutableBytes, stagedBytes)
+	domain.indexedDeletesOnly = false
 	domain.writeGeneration++
 	if rollbackOnError {
 		rollbackGeneration = domain.writeGeneration
@@ -12443,6 +12575,7 @@ func (c *Collection) noteWriteDomainCatalog(systemRoot uint64, catalog *collecti
 	domain.rootBaseIDs = nil
 	domain.rootValueArenas = nil
 	domain.rootRunCount = 0
+	domain.indexedDeletesOnly = false
 	domain.primaryIDIndex = nil
 	domain.primaryRunIndex = nil
 	domain.uniqueValueRuns = nil
@@ -12696,6 +12829,127 @@ func buildDeleteRootDeltaTable(deleteKeys [][]byte) memtable.Table {
 	}
 	table.Freeze()
 	return table
+}
+
+func (c *Collection) bufferedIndexedDeleteTombstoneLocked(domain *collectionWriteDomain, documentID []byte) bool {
+	if c == nil || domain == nil || domain.count == 0 || !domain.indexedDeletesOnly {
+		return false
+	}
+	_, buffered, found := c.getBufferedDocumentIntoLocked(domain, documentID, nil)
+	return buffered && !found
+}
+
+func (c *Collection) bufferIndexedDeleteTablesLocked(
+	catalog *collectionCatalog,
+	baseCommitSeq uint64,
+	baseSystemRoot uint64,
+	rootNames []string,
+	baseRootIDs map[string]uint64,
+	policies []backenddb.OrderedRootStoragePolicy,
+	deltaTables []memtable.Table,
+	deleted int,
+) (bool, error) {
+	if c == nil || c.writeDomain == nil || catalog == nil || deleted == 0 || len(deltaTables) == 0 {
+		return false, nil
+	}
+	meta := catalog.meta
+	if !c.shouldBufferIndexedDeletes(meta) {
+		return false, nil
+	}
+	if len(rootNames) != len(deltaTables) || len(rootNames) != len(policies) {
+		return false, fmt.Errorf("collections: Delete collection %q invalid plan lengths roots=%d deltas=%d policies=%d", meta.Name, len(rootNames), len(deltaTables), len(policies))
+	}
+	domain := c.writeDomain
+	domain.mu.Lock()
+	defer domain.mu.Unlock()
+	if domain.count != 0 && !domain.indexedDeletesOnly {
+		return false, nil
+	}
+	if err := c.validateRootDescriptorSystemDeltaForMeta(meta, baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs); err != nil {
+		return false, err
+	}
+	checkpoint := checkpointBufferedIndexedDomain(domain)
+	collectionMetaCheckpoint := c.meta
+	rollback := func() {
+		rollbackBufferedIndexedDomain(domain, checkpoint)
+		c.meta = collectionMetaCheckpoint
+	}
+	if domain.count == 0 {
+		c.initializeWriteDomainFromCatalogLocked(domain, catalog, baseCommitSeq, baseSystemRoot)
+	}
+	if domain.rootPolicies == nil {
+		domain.rootPolicies = make(map[string]backenddb.OrderedRootStoragePolicy, len(rootNames))
+	}
+	if domain.rootBaseIDs == nil {
+		domain.rootBaseIDs = make(map[string]uint64, len(rootNames))
+	}
+	if domain.rootRuns == nil {
+		domain.rootRuns = make(map[string][]memtable.Table, len(rootNames))
+	}
+	freezeMutableIndexedRunMapsLocked(domain)
+	domain.primaryRunIndex = nil
+	var stagedBytes int64
+	stagedRootRuns := 0
+	for i, rootName := range rootNames {
+		table := deltaTables[i]
+		if table == nil || table.Len() == 0 {
+			continue
+		}
+		baseRoot := baseRootIDs[rootName]
+		if pendingBaseRoot, ok := pendingIndexedRootBaseIDLocked(domain, rootName); ok && pendingBaseRoot != baseRoot {
+			rollback()
+			return false, errBufferedRootBaseMismatch(meta.Name, rootName)
+		}
+	}
+	for i, rootName := range rootNames {
+		table := deltaTables[i]
+		if table == nil || table.Len() == 0 {
+			continue
+		}
+		baseRoot := baseRootIDs[rootName]
+		if _, ok := domain.rootBaseIDs[rootName]; !ok {
+			domain.rootBaseIDs[rootName] = baseRoot
+		}
+		domain.rootPolicies[rootName] = policies[i]
+		domain.rootRuns[rootName] = append(domain.rootRuns[rootName], table)
+		domain.rootRunCount = saturatingAddNonNegativeInt(domain.rootRunCount, 1)
+		stagedRootRuns++
+		stagedBytes = saturatingAddNonNegativeInt64(stagedBytes, table.Size())
+		deltaTables[i] = nil
+	}
+	if stagedRootRuns == 0 {
+		rollback()
+		return false, nil
+	}
+	domain.loaded = true
+	domain.meta = meta
+	domain.catalog = catalog
+	domain.baseCommitSeq = baseCommitSeq
+	domain.baseSystemRoot = baseSystemRoot
+	domain.primaryRoot = catalog.rootID(collectionPrimaryRootName(meta.Name))
+	domain.count += deleted
+	domain.bufferedBytes = saturatingAddNonNegativeInt64(domain.bufferedBytes, stagedBytes)
+	domain.mutableCount = saturatingAddNonNegativeInt(domain.mutableCount, deleted)
+	domain.mutableBytes = saturatingAddNonNegativeInt64(domain.mutableBytes, stagedBytes)
+	domain.indexedDeletesOnly = true
+	domain.writeGeneration++
+	domain.observeIndexedStage(deleted, stagedBytes, stagedRootRuns)
+	c.meta = meta
+	compactedObsolete, err := maybeCompactBufferedIndexedMutableRunsLocked(domain, meta.Options)
+	if err != nil {
+		rollback()
+		return false, err
+	}
+	if shouldFlushBufferedIndexedWrites(domain, meta.Options) {
+		flushElapsed, _, _, err := c.flushBufferedIndexedAfterThresholdLocked(domain, meta.Options)
+		_ = flushElapsed
+		if err != nil {
+			rollback()
+			return false, err
+		}
+	}
+	resetCollectionTables(compactedObsolete)
+	return true, nil
 }
 
 func buildCreateIndexBackfillPlan(
@@ -13531,13 +13785,13 @@ func (c *Collection) getBufferedDocumentIntoLocked(domain *collectionWriteDomain
 		var value []byte
 		var flags byte
 		found := false
-		if ref, ok := domain.primaryRunIndex.lookupRef(documentID); ok {
+		if domain.primaryRunIndex == nil {
+			value, _, flags, found = getBufferedRunEntry(pendingIndexedRootRunsLocked(domain, name), documentID)
+		} else if ref, ok := domain.primaryRunIndex.lookupRef(documentID); ok {
 			value, flags, found = ref.value, ref.flags, ref.entryValid
 			if !found && ref.table != nil {
 				value, _, flags, found = ref.table.GetEntry(documentID)
 			}
-		} else if domain.primaryRunIndex == nil {
-			value, _, flags, found = getBufferedRunEntry(pendingIndexedRootRunsLocked(domain, name), documentID)
 		}
 		if found {
 			if flags&node.FlagTombstone != 0 {

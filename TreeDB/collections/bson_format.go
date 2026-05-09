@@ -7,13 +7,13 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
-func prepareBSONInsertDocuments(documents [][]byte) ([][]byte, []templateV1Record, templateV1Resolver, error) {
+func prepareBSONInsertDocuments(documents [][]byte) ([][]byte, []templateV1Record, []templateV1LearnedTemplate, templateV1Resolver, error) {
 	for i, document := range documents {
 		if err := validateBSONDocument(document); err != nil {
-			return nil, nil, nil, fmt.Errorf("collections: BSON document %d: %w", i, err)
+			return nil, nil, nil, nil, fmt.Errorf("collections: BSON document %d: %w", i, err)
 		}
 	}
-	return documents, nil, nil, nil
+	return documents, nil, nil, nil, nil
 }
 
 func validateBSONDocument(document []byte) error {

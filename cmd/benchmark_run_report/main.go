@@ -1105,6 +1105,7 @@ func collectionChart(rows []collectionRow, kind string) collectionChartRows {
 		indexPos[idx] = pos
 	}
 	values := make(map[string][]float64)
+	priorities := make(map[string][]int)
 	labels := make(map[string]string)
 	orders := make(map[string]string)
 	for _, row := range rows {
@@ -1126,13 +1127,17 @@ func collectionChart(rows []collectionRow, kind string) collectionChartRows {
 		key := family + "\x00" + canonicalFormat(row.Format)
 		if _, ok := values[key]; !ok {
 			values[key] = make([]float64, len(indexes))
+			priorities[key] = make([]int, len(indexes))
 			labels[key] = collectionSeriesLabel(family, row.Format, kind)
 			orders[key] = collectionSeriesOrder(family, row.Format)
 		}
-		if kind == "bytes" {
-			values[key][pos] = row.BytesPerDoc
-		} else {
-			values[key][pos] = row.DocsPerSec
+		value, priority, ok := collectionChartMetric(row, kind)
+		if !ok {
+			continue
+		}
+		if priority >= priorities[key][pos] {
+			values[key][pos] = value
+			priorities[key][pos] = priority
 		}
 	}
 	keys := make([]string, 0, len(values))
@@ -1150,6 +1155,30 @@ func collectionChart(rows []collectionRow, kind string) collectionChartRows {
 		series = append(series, chartSeries{Name: labels[key], Values: values[key], Color: collectionSeriesColor(key)})
 	}
 	return collectionChartRows{Categories: categories, Series: nonZeroSeries(series)}
+}
+
+func collectionChartMetric(row collectionRow, kind string) (float64, int, bool) {
+	if kind == "bytes" {
+		if row.BytesPerDoc <= 0 {
+			return 0, 0, false
+		}
+		return row.BytesPerDoc, 1, true
+	}
+	if row.DocsPerSec <= 0 {
+		return 0, 0, false
+	}
+	return row.DocsPerSec, collectionDocsPriority(row), true
+}
+
+func collectionDocsPriority(row collectionRow) int {
+	switch row.MeasurementKind {
+	case "go_benchmark":
+		return 3
+	case "fixture_wall_timed":
+		return 2
+	default:
+		return 1
+	}
 }
 
 func collectionEngineFamily(row collectionRow) string {
