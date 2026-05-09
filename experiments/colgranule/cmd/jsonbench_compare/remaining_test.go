@@ -70,6 +70,30 @@ func TestRemainingBSONDocumentRemovesClickHouseTypedPaths(t *testing.T) {
 	}
 }
 
+func TestRemainingBSONDocumentPreservesIntegerNumbers(t *testing.T) {
+	raw := []byte(`{"time_us":1732206349000167,"commit":{"record":{"reply_count":12,"score":1.5,"langs":["en"]}}}`)
+	encoded, err := remainingBSONDocument(raw, remainingShapeConservative)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := bson.Raw(encoded)
+	if value := doc.Lookup("time_us"); value.Type != 0 {
+		t.Fatal("time_us should be removed in conservative remaining shape")
+	}
+	record := doc.Lookup("commit").Document().Lookup("record").Document()
+	replyCount := record.Lookup("reply_count")
+	if replyCount.Type != bson.TypeInt64 {
+		t.Fatalf("reply_count BSON type=%v want %v", replyCount.Type, bson.TypeInt64)
+	}
+	if got := replyCount.Int64(); got != 12 {
+		t.Fatalf("reply_count=%d want 12", got)
+	}
+	score := record.Lookup("score")
+	if score.Type != bson.TypeDouble {
+		t.Fatalf("score BSON type=%v want %v", score.Type, bson.TypeDouble)
+	}
+}
+
 func TestRemainingJSONDocumentConservativeOnlyRemovesTimeUS(t *testing.T) {
 	raw := []byte(`{"did":"did:plc:1","time_us":1732206349000167,"kind":"commit","commit":{"operation":"create","collection":"app.bsky.feed.post"}}`)
 	encoded, err := remainingJSONDocument(raw, remainingShapeConservative)

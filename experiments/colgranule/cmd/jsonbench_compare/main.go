@@ -589,7 +589,7 @@ func remainingDocument(raw []byte, format collections.DocumentFormat, shape rema
 
 func remainingBSONDocument(raw []byte, shape remainingShape) ([]byte, error) {
 	var doc map[string]any
-	if err := json.Unmarshal(raw, &doc); err != nil {
+	if err := decodeJSONPreserveNumbers(raw, &doc); err != nil {
 		return nil, fmt.Errorf("decode remaining JSON: %w", err)
 	}
 	removeRemainingPaths(doc, shape)
@@ -601,6 +601,63 @@ func remainingBSONDocument(raw []byte, shape remainingShape) ([]byte, error) {
 		return nil, fmt.Errorf("validate remaining BSON: %w", err)
 	}
 	return encoded, nil
+}
+
+func decodeJSONPreserveNumbers(raw []byte, v any) error {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	if err := dec.Decode(v); err != nil {
+		return err
+	}
+	return normalizeJSONNumbers(v)
+}
+
+func normalizeJSONNumbers(v any) error {
+	switch x := v.(type) {
+	case map[string]any:
+		for key, value := range x {
+			normalized, err := normalizeJSONNumberValue(value)
+			if err != nil {
+				return err
+			}
+			x[key] = normalized
+		}
+	case []any:
+		for i, value := range x {
+			normalized, err := normalizeJSONNumberValue(value)
+			if err != nil {
+				return err
+			}
+			x[i] = normalized
+		}
+	}
+	return nil
+}
+
+func normalizeJSONNumberValue(value any) (any, error) {
+	switch x := value.(type) {
+	case json.Number:
+		if i, err := x.Int64(); err == nil {
+			return i, nil
+		}
+		f, err := x.Float64()
+		if err != nil {
+			return nil, err
+		}
+		return f, nil
+	case map[string]any:
+		if err := normalizeJSONNumbers(x); err != nil {
+			return nil, err
+		}
+		return x, nil
+	case []any:
+		if err := normalizeJSONNumbers(x); err != nil {
+			return nil, err
+		}
+		return x, nil
+	default:
+		return value, nil
+	}
 }
 
 func remainingJSONDocument(raw []byte, shape remainingShape) ([]byte, error) {
