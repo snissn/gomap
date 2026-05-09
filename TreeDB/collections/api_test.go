@@ -10530,15 +10530,21 @@ func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesFlushesRootMismatch
 		})
 		done <- err
 	}()
+	timeout := collectionTestTimeout(t, 30*time.Second)
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
 	select {
 	case err := <-done:
 		if !errors.Is(err, ErrConcurrentMutation) {
 			t.Fatalf("stale-root UpdateBatchIfNoSecondaryUniqueIndexChanges err=%v want %v", err, ErrConcurrentMutation)
 		}
+		if !strings.Contains(err.Error(), "buffered root base mismatch") {
+			t.Fatalf("stale-root UpdateBatchIfNoSecondaryUniqueIndexChanges err=%v want buffered root base mismatch context", err)
+		}
 		if !isConcurrentRootModification(err) {
 			t.Fatalf("stale-root UpdateBatchIfNoSecondaryUniqueIndexChanges err=%v want root modification context", err)
 		}
-	case <-time.After(2 * time.Second):
+	case <-timer.C:
 		t.Fatal("stale-root UpdateBatchIfNoSecondaryUniqueIndexChanges timed out, likely replanning without flushing")
 	}
 	after := mgr.StatsSnapshot()

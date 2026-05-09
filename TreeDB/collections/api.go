@@ -7070,7 +7070,7 @@ func (c *Collection) updateBatchOwnedItems(items []UpdateBatchItem, mode updateB
 			return make([]UpdateBatchResult, len(items)), false, nil
 		}
 		if isBufferedRootBaseMismatch(err) {
-			return results, false, err
+			return make([]UpdateBatchResult, len(items)), false, err
 		}
 		if errors.Is(err, ErrConcurrentMutation) {
 			lastErr = err
@@ -8081,7 +8081,7 @@ type bufferedRootBaseMismatchError struct {
 }
 
 func (err bufferedRootBaseMismatchError) Error() string {
-	return err.err.Error()
+	return fmt.Sprintf("%s: buffered root base mismatch for collection=%q root=%q", ErrConcurrentMutation, err.err.collectionName, err.err.rootName)
 }
 
 func (err bufferedRootBaseMismatchError) Unwrap() error {
