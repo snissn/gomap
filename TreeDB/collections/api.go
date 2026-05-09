@@ -102,8 +102,22 @@ var (
 type UpdateBatchItem struct {
 	DocumentID []byte
 	Update     func(current []byte) (replacement []byte, changed bool, err error)
+}
+
+type updateBatchItem struct {
+	UpdateBatchItem
 	bsonSet    bsonSetUpdate
 	hasBSONSet bool
+}
+
+func newBSONSetUpdateBatchItem(documentID []byte, spec bsonSetUpdate) updateBatchItem {
+	return updateBatchItem{
+		UpdateBatchItem: UpdateBatchItem{
+			DocumentID: bytes.Clone(documentID),
+		},
+		bsonSet:    spec,
+		hasBSONSet: true,
+	}
 }
 
 type updateBatchMode uint8
@@ -884,7 +898,7 @@ type collectionWriteDomain struct {
 	updateCombineLastRequestUnixNano   atomic.Int64
 	updateInlineDocumentID             [collectionUpdateCombineInlineDocumentIDMax]byte
 	updateInlineDocumentIDHeap         []byte
-	updateInlineItems                  [1]UpdateBatchItem
+	updateInlineItems                  [1]updateBatchItem
 	updateCombineEnqueueNs             atomic.Uint64
 	updateCombineWaitNs                atomic.Uint64
 	updateCombineDrainNs               atomic.Uint64
@@ -7203,14 +7217,14 @@ func (c *Collection) updateBatch(items []UpdateBatchItem, mode updateBatchMode) 
 		c.setLastUpdateStats(CollectionUpdateStats{})
 		return nil, true, nil
 	}
-	if err := validateUpdateBatchItems(items); err != nil {
+	ownedItems, err := prepareUpdateBatchItems(items)
+	if err != nil {
 		return nil, false, err
 	}
-	items = cloneUpdateBatchItems(items)
-	return c.updateBatchOwnedItems(items, mode)
+	return c.updateBatchOwnedItems(ownedItems, mode)
 }
 
-func (c *Collection) updateBatchOwnedItems(items []UpdateBatchItem, mode updateBatchMode) ([]UpdateBatchResult, bool, error) {
+func (c *Collection) updateBatchOwnedItems(items []updateBatchItem, mode updateBatchMode) ([]UpdateBatchResult, bool, error) {
 	var lastErr error
 	for attempt := 0; attempt < maxCollectionMutationRetries; attempt++ {
 		results, err := c.updateBatchOnce(items, mode)
@@ -7242,27 +7256,36 @@ func (c *Collection) ensureWriteDomainOpen() error {
 }
 
 func validateUpdateBatchItems(items []UpdateBatchItem) error {
+	_, err := prepareUpdateBatchItems(items)
+	return err
+}
+
+func prepareUpdateBatchItems(items []UpdateBatchItem) ([]updateBatchItem, error) {
+	out := make([]updateBatchItem, len(items))
 	seen := make(map[string]struct{}, len(items))
 	for i, item := range items {
 		if len(item.DocumentID) == 0 {
-			return fmt.Errorf("collections: document id cannot be empty at index %d", i)
+			return nil, fmt.Errorf("collections: document id cannot be empty at index %d", i)
 		}
-		if item.Update != nil && item.hasBSONSet {
-			return fmt.Errorf("collections: update item cannot set both update function and BSON $set at index %d", i)
-		}
-		if item.Update == nil && !item.hasBSONSet {
-			return fmt.Errorf("collections: update function is nil at index %d", i)
+		if item.Update == nil {
+			return nil, fmt.Errorf("collections: update function is nil at index %d", i)
 		}
 		key := string(item.DocumentID)
 		if _, ok := seen[key]; ok {
-			return fmt.Errorf("%w at index %d", ErrDuplicateDocumentID, i)
+			return nil, fmt.Errorf("%w at index %d", ErrDuplicateDocumentID, i)
 		}
 		seen[key] = struct{}{}
+		out[i] = updateBatchItem{
+			UpdateBatchItem: UpdateBatchItem{
+				DocumentID: bytes.Clone(item.DocumentID),
+				Update:     item.Update,
+			},
+		}
 	}
-	return nil
+	return out, nil
 }
 
-func updateBatchBSONSetItemIndex(items []UpdateBatchItem) int {
+func updateBatchBSONSetItemIndex(items []updateBatchItem) int {
 	for i, item := range items {
 		if item.hasBSONSet {
 			return i
@@ -7289,7 +7312,7 @@ type collectionUpdateCombiner struct {
 	stopped  bool
 
 	batchScratch []collectionUpdateCombineRequest
-	itemsScratch []UpdateBatchItem
+	itemsScratch []updateBatchItem
 	waiters      sync.Pool
 	drainYield   func()
 }
@@ -7410,9 +7433,16 @@ func (c *Collection) updateSingleInlineWithoutCombiner(domain *collectionWriteDo
 	return results[0].Matched, results[0].Modified, nil
 }
 
-func (domain *collectionWriteDomain) prepareInlineUpdateItems(documentID []byte, update func(current []byte) (replacement []byte, changed bool, err error), bsonSet bsonSetUpdate, hasBSONSet bool) []UpdateBatchItem {
+func (domain *collectionWriteDomain) prepareInlineUpdateItems(documentID []byte, update func(current []byte) (replacement []byte, changed bool, err error), bsonSet bsonSetUpdate, hasBSONSet bool) []updateBatchItem {
 	if domain == nil {
-		return []UpdateBatchItem{{DocumentID: documentID, Update: update, bsonSet: bsonSet, hasBSONSet: hasBSONSet}}
+		return []updateBatchItem{{
+			UpdateBatchItem: UpdateBatchItem{
+				DocumentID: documentID,
+				Update:     update,
+			},
+			bsonSet:    bsonSet,
+			hasBSONSet: hasBSONSet,
+		}}
 	}
 	var ownedDocumentID []byte
 	if len(documentID) <= len(domain.updateInlineDocumentID) {
@@ -7427,9 +7457,11 @@ func (domain *collectionWriteDomain) prepareInlineUpdateItems(documentID []byte,
 		copy(domain.updateInlineDocumentIDHeap, documentID)
 		ownedDocumentID = domain.updateInlineDocumentIDHeap[:len(documentID):len(documentID)]
 	}
-	domain.updateInlineItems[0] = UpdateBatchItem{
-		DocumentID: ownedDocumentID,
-		Update:     update,
+	domain.updateInlineItems[0] = updateBatchItem{
+		UpdateBatchItem: UpdateBatchItem{
+			DocumentID: ownedDocumentID,
+			Update:     update,
+		},
 		bsonSet:    bsonSet,
 		hasBSONSet: hasBSONSet,
 	}
@@ -7440,7 +7472,7 @@ func (domain *collectionWriteDomain) clearInlineUpdateItems() {
 	if domain == nil {
 		return
 	}
-	domain.updateInlineItems[0] = UpdateBatchItem{}
+	domain.updateInlineItems[0] = updateBatchItem{}
 }
 
 func (c *Collection) updateCombiner() *collectionUpdateCombiner {
@@ -7896,15 +7928,17 @@ func (combiner *collectionUpdateCombiner) runBatch(batch []collectionUpdateCombi
 		return
 	}
 	if cap(combiner.itemsScratch) < len(batch) {
-		combiner.itemsScratch = make([]UpdateBatchItem, len(batch))
+		combiner.itemsScratch = make([]updateBatchItem, len(batch))
 	}
 	clear(combiner.itemsScratch)
 	items := combiner.itemsScratch[:len(batch)]
 	for i := range batch {
 		req := &batch[i]
-		items[i] = UpdateBatchItem{
-			DocumentID: req.documentIDBytes(),
-			Update:     req.update,
+		items[i] = updateBatchItem{
+			UpdateBatchItem: UpdateBatchItem{
+				DocumentID: req.documentIDBytes(),
+				Update:     req.update,
+			},
 			bsonSet:    req.bsonSet,
 			hasBSONSet: req.hasBSONSet,
 		}
@@ -8087,15 +8121,6 @@ func collectionUpdateCombineHasDuplicateIDs(batch []collectionUpdateCombineReque
 		}
 	}
 	return false
-}
-
-func cloneUpdateBatchItems(items []UpdateBatchItem) []UpdateBatchItem {
-	out := make([]UpdateBatchItem, len(items))
-	for i, item := range items {
-		out[i] = item
-		out[i].DocumentID = bytes.Clone(item.DocumentID)
-	}
-	return out
 }
 
 func validateBSONReplacementPreservesID(current, replacement []byte, opts collectionOptions) error {
@@ -9056,7 +9081,7 @@ func (c *Collection) shouldUseDirectBufferedUpdatePlan(meta CollectionMeta, opts
 	return !persistIndexStateForOptions(opts)
 }
 
-func (c *Collection) updateBatchOnce(items []UpdateBatchItem, mode updateBatchMode) ([]UpdateBatchResult, error) {
+func (c *Collection) updateBatchOnce(items []updateBatchItem, mode updateBatchMode) ([]UpdateBatchResult, error) {
 	if c.shouldPlanUpdateBatchWithBufferedWrites(mode) {
 		useBufferedRead := true
 		for {
@@ -9321,7 +9346,7 @@ func readUpdateBatchCurrentDocumentAtCatalogRoot(snap *backenddb.Snapshot, catal
 
 const updateBatchBufferedPrimaryDirectProbeLimit = 1024
 
-func snapshotUpdateBatchBufferedPrimaryEntries(runs []memtable.Table, items []UpdateBatchItem) ([]updateBatchBufferedEntry, *updateBatchBufferedEntryBuffer, error) {
+func snapshotUpdateBatchBufferedPrimaryEntries(runs []memtable.Table, items []updateBatchItem) ([]updateBatchBufferedEntry, *updateBatchBufferedEntryBuffer, error) {
 	entries, buffer := getUpdateBatchBufferedEntries(len(items))
 	if len(runs) == 0 || len(items) == 0 {
 		return entries, buffer, nil
@@ -9371,7 +9396,7 @@ func snapshotUpdateBatchBufferedPrimaryEntries(runs []memtable.Table, items []Up
 	return entries, buffer, nil
 }
 
-func snapshotUpdateBatchBufferedPrimaryEntriesFromIndex(index *bufferedPrimaryRunIndex, items []UpdateBatchItem) ([]updateBatchBufferedEntry, *updateBatchBufferedEntryBuffer, error) {
+func snapshotUpdateBatchBufferedPrimaryEntriesFromIndex(index *bufferedPrimaryRunIndex, items []updateBatchItem) ([]updateBatchBufferedEntry, *updateBatchBufferedEntryBuffer, error) {
 	entries, buffer := getUpdateBatchBufferedEntries(len(items))
 	if index == nil || len(items) == 0 {
 		return entries, buffer, nil
@@ -9400,7 +9425,7 @@ func snapshotUpdateBatchBufferedPrimaryEntriesFromIndex(index *bufferedPrimaryRu
 	return entries, buffer, nil
 }
 
-func snapshotUpdateBatchBufferedRead(domain *collectionWriteDomain, meta CollectionMeta, baseSystemRoot uint64, items []UpdateBatchItem, documentFormat DocumentFormat) (updateBatchBufferedRead, []memtable.Table, bool, error) {
+func snapshotUpdateBatchBufferedRead(domain *collectionWriteDomain, meta CollectionMeta, baseSystemRoot uint64, items []updateBatchItem, documentFormat DocumentFormat) (updateBatchBufferedRead, []memtable.Table, bool, error) {
 	if domain == nil {
 		return updateBatchBufferedRead{}, nil, false, nil
 	}
@@ -9428,7 +9453,7 @@ func snapshotUpdateBatchBufferedRead(domain *collectionWriteDomain, meta Collect
 	return read, templateRuns, blocked, err
 }
 
-func snapshotUpdateBatchBufferedReadLocked(domain *collectionWriteDomain, meta CollectionMeta, baseSystemRoot uint64, items []UpdateBatchItem, documentFormat DocumentFormat, allowPrimaryRunIndexBuild bool) (updateBatchBufferedRead, []memtable.Table, bool, bool, error) {
+func snapshotUpdateBatchBufferedReadLocked(domain *collectionWriteDomain, meta CollectionMeta, baseSystemRoot uint64, items []updateBatchItem, documentFormat DocumentFormat, allowPrimaryRunIndexBuild bool) (updateBatchBufferedRead, []memtable.Table, bool, bool, error) {
 	if updateBatchCanReadBufferedDomainLocked(domain, meta, baseSystemRoot) {
 		bufferedCollectionName := bufferedDomainCollectionName(domain, meta.Name)
 		if allowPrimaryRunIndexBuild && domain.primaryRunIndex == nil && hasBufferedPrimaryRootRuns(domain, bufferedCollectionName) {
@@ -9466,7 +9491,7 @@ func snapshotUpdateBatchBufferedReadLocked(domain *collectionWriteDomain, meta C
 	return updateBatchBufferedRead{}, nil, false, false, nil
 }
 
-func (c *Collection) buildUpdateBatchPlan(items []UpdateBatchItem, mode updateBatchMode, useBufferedRead bool) (*updateBatchPlan, error) {
+func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBatchMode, useBufferedRead bool) (*updateBatchPlan, error) {
 	results := make([]UpdateBatchResult, len(items))
 	snap := c.db.AcquireSnapshot()
 	if snap == nil {
