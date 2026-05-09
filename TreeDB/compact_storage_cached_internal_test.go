@@ -109,6 +109,13 @@ func TestCachedValueLogRewriteOnlineReclaimsObservedActiveSources(t *testing.T) 
 			t.Fatalf("source segment %s retained after observed-source reclaim: err=%v", segment.path, err)
 		}
 	}
+	leafGC, err := db.LeafGenerationGC(context.Background(), LeafGenerationGCOptions{DryRun: true})
+	if err != nil {
+		t.Fatalf("LeafGenerationGC dry-run after rewrite: %v", err)
+	}
+	if leafGC.GenerationsEligible != 0 || leafGC.FilesDeleted != 0 {
+		t.Fatalf("rewrite left eligible leaf generations: %+v", leafGC)
+	}
 	for key, want := range expected {
 		got, err := db.Get([]byte(key))
 		if err != nil {

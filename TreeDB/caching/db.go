@@ -4319,8 +4319,8 @@ func (db *DB) ValueLogProtectedPaths() []string {
 }
 
 // ReclaimObservedValueLogSources rotates cached writers past rewrite-selected
-// source segments and runs observed-source GC for segments already proven
-// unreferenced by backend rewrite.
+// source segments and reclaims storage classes that backend rewrite already
+// proved obsolete.
 func (db *DB) ReclaimObservedValueLogSources(ctx context.Context, ids []uint32) error {
 	if db == nil || len(ids) == 0 {
 		return nil
@@ -4347,19 +4347,24 @@ func (db *DB) ReclaimObservedValueLogSources(ctx context.Context, ids []uint32) 
 		return err
 	}
 
-	gcer, ok := db.backend.(backendValueLogGCer)
-	if !ok {
-		return nil
-	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	_, err := gcer.ValueLogGC(ctx, backenddb.ValueLogGCOptions{
-		ObservedSourceFileIDs:            observed,
-		ObservedSourceAssumeUnreferenced: true,
-		ObservedSourceReclaimActive:      true,
-	})
-	return err
+	if gcer, ok := db.backend.(backendValueLogGCer); ok {
+		if _, err := gcer.ValueLogGC(ctx, backenddb.ValueLogGCOptions{
+			ObservedSourceFileIDs:            observed,
+			ObservedSourceAssumeUnreferenced: true,
+			ObservedSourceReclaimActive:      true,
+		}); err != nil {
+			return err
+		}
+	}
+	if gcer, ok := db.backend.(backendLeafGenerationGCRunner); ok {
+		if _, err := gcer.LeafGenerationGC(ctx, backenddb.LeafGenerationGCOptions{}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (db *DB) valueLogGCOptions(dryRun bool) backenddb.ValueLogGCOptions {
