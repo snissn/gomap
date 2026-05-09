@@ -6761,6 +6761,130 @@ func TestShouldFlushBufferedIndexedWritesAfterAddingBoundaries(t *testing.T) {
 	}
 }
 
+func TestDetachMutableIndexedRunTablesKeepsRunsVisible(t *testing.T) {
+	domain := &collectionWriteDomain{}
+	primaryName := collectionPrimaryRootName("users")
+	secondaryName := collectionSecondaryRootName("users", "city")
+
+	domain.mu.Lock()
+	primary, created := mutableRootRunLocked(domain, primaryName)
+	if !created || primary == nil {
+		domain.mu.Unlock()
+		t.Fatal("primary mutable root run was not created")
+	}
+	city, created := mutableRootRunLocked(domain, secondaryName)
+	if !created || city == nil {
+		domain.mu.Unlock()
+		t.Fatal("city mutable root run was not created")
+	}
+	domain.mu.Unlock()
+	if err := applyCollectionRunEntriesWithFlags(primary, 2, func(i int) (key, value []byte, ptr page.ValuePtr, flags byte, err error) {
+		if i == 0 {
+			return []byte("u2"), []byte("old-u2"), page.ValuePtr{}, node.FlagInline, nil
+		}
+		return []byte("u1"), []byte("value-u1"), page.ValuePtr{}, node.FlagInline, nil
+	}); err != nil {
+		t.Fatalf("append primary entries: %v", err)
+	}
+	if err := applyCollectionRunEntriesWithFlags(city, 1, func(i int) (key, value []byte, ptr page.ValuePtr, flags byte, err error) {
+		return []byte("city\x00u1"), nil, page.ValuePtr{}, node.FlagInline, nil
+	}); err != nil {
+		t.Fatalf("append city entries: %v", err)
+	}
+
+	domain.mu.Lock()
+	detached := detachMutableIndexedRunTablesLocked(domain)
+	if got := len(detached); got != 2 {
+		domain.mu.Unlock()
+		t.Fatalf("detached tables=%d want 2", got)
+	}
+	if domain.rootMutableRuns != nil {
+		domain.mu.Unlock()
+		t.Fatal("rootMutableRuns still has append targets after detach")
+	}
+	if got := pendingIndexedRootRunsLocked(domain, primaryName); len(got) != 1 || got[0] != primary {
+		domain.mu.Unlock()
+		t.Fatalf("pending primary runs=%v want original primary table", got)
+	}
+	if got := pendingIndexedRootRunsLocked(domain, secondaryName); len(got) != 1 || got[0] != city {
+		domain.mu.Unlock()
+		t.Fatalf("pending city runs=%v want original city table", got)
+	}
+	domain.mu.Unlock()
+
+	requireFreezeSortRunIterator(t, primary.NewIterator(nil, nil), []string{"u1", "u2"})
+	freezeIndexedRunTables(detached)
+	requireFreezeSortRunIterator(t, primary.NewIterator(nil, nil), []string{"u1", "u2"})
+
+	resetCollectionTables(detached)
+}
+
+func TestFreezeIndexedRunTablesOutsideLockAllowsNilDomain(t *testing.T) {
+	table := newFreezeSortRunTable()
+	if err := applyCollectionRunEntriesWithFlags(table, 2, func(i int) (key, value []byte, ptr page.ValuePtr, flags byte, err error) {
+		if i == 0 {
+			return []byte("b"), []byte("value-b"), page.ValuePtr{}, node.FlagInline, nil
+		}
+		return []byte("a"), []byte("value-a"), page.ValuePtr{}, node.FlagInline, nil
+	}); err != nil {
+		t.Fatalf("append entries: %v", err)
+	}
+	freezeDuration := freezeIndexedRunTablesObserved([]memtable.Table{table})
+	if freezeDuration <= 0 {
+		t.Fatalf("freeze duration=%s want positive", freezeDuration)
+	}
+	requireFreezeSortRunIterator(t, table.NewIterator(nil, nil), []string{"a", "b"})
+	resetCollectionRunTable(table)
+}
+
+func TestIndexedPrepareFreezeWaitsUntilFinished(t *testing.T) {
+	domain := &collectionWriteDomain{}
+	domain.mu.Lock()
+	domain.beginIndexedPrepareFreezeLocked()
+	domain.mu.Unlock()
+
+	done := make(chan time.Duration, 1)
+	waiterReady := make(chan struct{})
+	go func() {
+		domain.mu.Lock()
+		if domain.indexedPrepareFreezes <= 0 {
+			close(waiterReady)
+			domain.mu.Unlock()
+			done <- 0
+			return
+		}
+		close(waiterReady)
+		waited := domain.waitIndexedPrepareFreezeLocked()
+		domain.mu.Unlock()
+		done <- waited
+	}()
+
+	<-waiterReady
+	select {
+	case waited := <-done:
+		t.Fatalf("prepare freeze wait returned before finish: %s", waited)
+	default:
+	}
+
+	domain.mu.Lock()
+	domain.finishIndexedPrepareFreezeLocked()
+	domain.mu.Unlock()
+
+	<-done
+}
+
+func TestIndexedPrepareFreezeFinishRequiresBegin(t *testing.T) {
+	domain := &collectionWriteDomain{}
+	domain.mu.Lock()
+	defer domain.mu.Unlock()
+	defer func() {
+		if recovered := recover(); recovered == nil {
+			t.Fatal("finish without begin did not panic")
+		}
+	}()
+	domain.finishIndexedPrepareFreezeLocked()
+}
+
 func TestRollbackBufferedIndexedDomainRestoresMetadata(t *testing.T) {
 	catalog := &collectionCatalog{
 		meta:  CollectionMeta{Name: "users"},
