@@ -224,6 +224,26 @@ func TestRunFixtureReportsBufferedIndexedWritesOnlyWhenIndexesUseThem(t *testing
 			noIndexSummary.BufferedIndexedAsyncFlush, noIndexSummary.BufferedIndexedAsyncFlushMaxQueuedUnits)
 	}
 
+	noIndexOptOutDir := filepath.Join(t.TempDir(), "no-index-opt-out")
+	noIndexOptOutCfg, err := parseConfig([]string{
+		"-dir", noIndexOptOutDir,
+		"-docs", "1",
+		"-indexes", "0",
+		"-disable-buffered-indexed-async-flush",
+		"-reopen-verify=false",
+		"-progress=false",
+	}, io.Discard)
+	if err != nil {
+		t.Fatalf("parse no-index opt-out config: %v", err)
+	}
+	noIndexOptOutSummary, err := runFixture(noIndexOptOutCfg)
+	if err != nil {
+		t.Fatalf("run no-index opt-out fixture: %v", err)
+	}
+	if !noIndexOptOutSummary.DisableBufferedIndexedAsyncFlush {
+		t.Fatal("no-index summary dropped indexed async flush opt-out")
+	}
+
 	indexedDir := filepath.Join(t.TempDir(), "indexed")
 	indexedCfg, err := parseConfig([]string{
 		"-dir", indexedDir,
