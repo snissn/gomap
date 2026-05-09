@@ -210,9 +210,8 @@ func (u bsonSetUpdate) apply(current []byte) ([]byte, bool, error) {
 // replacement aliases current. When changed, replacement aliases the returned
 // dst. On error, the returned dst is restored to its original length while
 // preserving any grown backing store for caller reuse.
-func (u bsonSetUpdate) appendReplacement(dst, current []byte) (returned []byte, replacement []byte, changedResult bool, err error) {
+func (u bsonSetUpdate) appendReplacement(dst, current []byte) (returned []byte, replacement []byte, changed bool, err error) {
 	start := len(dst)
-	changed := false
 	var out []byte
 	resetDst := func() []byte {
 		if changed && out != nil {
@@ -224,7 +223,7 @@ func (u bsonSetUpdate) appendReplacement(dst, current []byte) (returned []byte, 
 		if recovered := recover(); recovered != nil {
 			returned = resetDst()
 			replacement = nil
-			changedResult = false
+			changed = false
 			err = collectionUpdatePanicError("structured", recovered)
 		}
 	}()
@@ -233,7 +232,7 @@ func (u bsonSetUpdate) appendReplacement(dst, current []byte) (returned []byte, 
 	}
 	length, rem, ok := bsoncore.ReadLength(current)
 	if !ok {
-		return dst, nil, false, bsoncore.NewInsufficientBytesError(current, rem)
+		return resetDst(), nil, false, bsoncore.NewInsufficientBytesError(current, rem)
 	}
 	length -= 4
 	var usedInline [8]bool
