@@ -422,6 +422,9 @@ func measureRawJSONTreeDB(ctx context.Context, files []string, rows int, dbDir s
 		out.RewriteValueBytes = rewriteStats.ValueBytesCopied
 		out.RewriteSourceBytes = rewriteStats.SourceBytesRequested
 	}
+	if err := validateRawJSONTreeDB(files, rows, dbDir); err != nil {
+		return out, err
+	}
 	after, afterFiles, err := directoryUsage(dbDir)
 	if err != nil {
 		return out, err
@@ -460,8 +463,9 @@ func insertRawJSONRows(files []string, rows int, db *treedb.DB, out *remainingTr
 				return errStopScan
 			}
 			out.Rows++
-			out.RawDocumentBytes += int64(len(raw))
-			if err := batch.Set(documentID(uint64(out.Rows)), raw); err != nil {
+			rawCopy := append([]byte(nil), raw...)
+			out.RawDocumentBytes += int64(len(rawCopy))
+			if err := batch.Set(documentID(uint64(out.Rows)), rawCopy); err != nil {
 				return fmt.Errorf("set raw JSON row %d: %w", out.Rows, err)
 			}
 			if out.Rows%batchSize == 0 {
@@ -473,6 +477,41 @@ func insertRawJSONRows(files []string, rows int, db *treedb.DB, out *remainingTr
 		}
 	}
 	return flush()
+}
+
+func validateRawJSONTreeDB(files []string, rows int, dbDir string) error {
+	opts := treedb.OptionsFor(treedb.ProfileBench, dbDir)
+	db, err := treedb.Open(opts)
+	if err != nil {
+		return fmt.Errorf("open raw TreeDB for validation: %w", err)
+	}
+	defer func() { _ = db.Close() }()
+	var checked int
+	for _, file := range files {
+		if checked >= rows {
+			break
+		}
+		if err := scanJSONBenchFile(file, func(raw []byte) error {
+			if checked >= rows {
+				return errStopScan
+			}
+			checked++
+			value, err := db.Get(documentID(uint64(checked)))
+			if err != nil {
+				return fmt.Errorf("get raw JSON row %d: %w", checked, err)
+			}
+			if !bytes.Equal(value, raw) {
+				return fmt.Errorf("raw JSON row %d validation mismatch: source bytes=%d stored bytes=%d", checked, len(raw), len(value))
+			}
+			return nil
+		}); err != nil {
+			return fmt.Errorf("validate raw JSON %s: %w", file, err)
+		}
+	}
+	if checked != rows {
+		return fmt.Errorf("validated %d raw JSON rows, want %d", checked, rows)
+	}
+	return nil
 }
 
 func valueLogFileIDs(dbDir string) ([]uint32, error) {

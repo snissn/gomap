@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -121,7 +122,9 @@ func TestRemainingJSONDocumentConservativeOnlyRemovesTimeUS(t *testing.T) {
 }
 
 func TestMeasureRawJSONTreeDBSample(t *testing.T) {
-	result, err := measureRawJSONTreeDB(context.Background(), []string{filepath.Join("..", "..", "testdata", "jsonbench_sample.jsonl")}, 5, t.TempDir())
+	dbDir := t.TempDir()
+	source := filepath.Join("..", "..", "testdata", "jsonbench_sample.jsonl")
+	result, err := measureRawJSONTreeDB(context.Background(), []string{source}, 5, dbDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,5 +139,32 @@ func TestMeasureRawJSONTreeDBSample(t *testing.T) {
 	}
 	if !strings.Contains(result.StoredShape, "key/value") {
 		t.Fatalf("stored shape %q does not describe raw key/value storage", result.StoredShape)
+	}
+	if err := validateRawJSONTreeDB([]string{source}, 5, dbDir); err != nil {
+		t.Fatalf("validate raw JSON TreeDB: %v", err)
+	}
+}
+
+func TestValidateRawJSONTreeDBDetectsMismatchedRows(t *testing.T) {
+	dbDir := t.TempDir()
+	source := filepath.Join("..", "..", "testdata", "jsonbench_sample.jsonl")
+	if _, err := measureRawJSONTreeDB(context.Background(), []string{source}, 5, dbDir); err != nil {
+		t.Fatal(err)
+	}
+	corrupt := filepath.Join(t.TempDir(), "corrupt.jsonl")
+	data, err := os.ReadFile(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data = []byte(strings.Replace(string(data), `"kind":"commit"`, `"kind":"changed"`, 1))
+	if err := os.WriteFile(corrupt, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err = validateRawJSONTreeDB([]string{corrupt}, 5, dbDir)
+	if err == nil {
+		t.Fatal("expected validation error")
+	}
+	if !strings.Contains(err.Error(), "validation mismatch") {
+		t.Fatalf("validation error %q does not mention mismatch", err)
 	}
 }
