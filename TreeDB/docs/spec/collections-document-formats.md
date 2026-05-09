@@ -140,11 +140,11 @@ The collection planner persists any template records from the envelope into the
 the hash-addressed insert document to compact `TD1D`, and stores only that
 compact document in the primary root.
 
-Scoped encoder inserts may also provide compact `TD1D` bytes directly when the
-referenced numeric template IDs already exist in the persisted template root
-visible to the operation's snapshot. Ordinary `InsertBatch` rejects bare `TD1D`
-input because numeric template IDs are collection-local; use
-`InsertBatchWithTemplateV1Encoder` for learned-ID bytes.
+Scoped encoder inserts may also provide compact `TD1D` bytes directly after the
+same encoder has learned numeric template IDs for the logical collection.
+Ordinary `InsertBatch` rejects bare `TD1D` input because numeric template IDs
+are collection-local; use `InsertBatchWithTemplateV1Encoder` for learned-ID
+bytes.
 
 `TemplateV1Encoder` is a stateful helper for repeated shapes. It emits template
 records the first time a shape is seen and then emits hash-addressed `TD1H`

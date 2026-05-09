@@ -890,6 +890,10 @@ func (e *TemplateV1Encoder) learnedTemplateV1ScopeMismatch(collection *Collectio
 	return e != nil && len(e.ids) > 0 && e.hasScope && e.scope != templateV1EncoderScopeForCollection(collection)
 }
 
+func (e *TemplateV1Encoder) allowsTemplateV1StoredDocuments(collection *Collection) bool {
+	return e != nil && len(e.ids) > 0 && e.hasScope && e.scope == templateV1EncoderScopeForCollection(collection)
+}
+
 func (e *TemplateV1Encoder) learnTemplateV1Templates(collection *Collection, templates []templateV1LearnedTemplate) {
 	if e == nil || len(templates) == 0 {
 		return

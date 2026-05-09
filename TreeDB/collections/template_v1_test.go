@@ -591,6 +591,10 @@ func TestTemplateV1StoredDocsRequireScopedEncoderInsert(t *testing.T) {
 	if _, err := events.InsertBatch([][]byte{[]byte("e1")}, [][]byte{learnedDoc}); err == nil {
 		t.Fatal("expected ordinary InsertBatch to reject learned stored template-v1 document")
 	}
+	var freshEncoder TemplateV1Encoder
+	if _, err := events.InsertBatchWithTemplateV1Encoder([][]byte{[]byte("e2")}, [][]byte{learnedDoc}, &freshEncoder); err == nil {
+		t.Fatal("expected fresh encoder insert to reject learned stored template-v1 document")
+	}
 }
 
 func TestTemplateV1EncoderAllowsSameCollectionHandleReuse(t *testing.T) {
