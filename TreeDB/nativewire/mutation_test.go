@@ -416,6 +416,34 @@ func TestMutationExplicitZeroAckUsesDefault(t *testing.T) {
 	}
 }
 
+func TestMutationUnsupportedAckPolicyRejectedBeforeWrite(t *testing.T) {
+	client, mgr, _ := serveCollectionPipe(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	if _, err := client.CreateCollection(ctx, collections.CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	guard, err := client.replicatedMutationGuard(ctx, "insert_batch_bad_ack")
+	if err != nil {
+		t.Fatalf("mutation guard: %v", err)
+	}
+	req := append(guard,
+		collectionNameRef("users"),
+		documentFormatSection(collections.DocumentFormatJSON),
+		iwire.Section{ID: iwire.SectionDocumentIDs, Bytes: iwire.AppendByteVector(nil, []byte("u1"))},
+		iwire.Section{ID: iwire.SectionDocuments, Bytes: iwire.AppendByteVector(nil, []byte(`{"x":1}`))},
+		ackSection(AckPolicy(99)),
+	)
+	_, err = client.commandSections(ctx, iwire.CommandInsertBatch, req...)
+	if !isRemoteError(err, iwire.ErrInvalidCommand) {
+		t.Fatalf("InsertBatch unsupported ack err=%v want invalid command", err)
+	}
+	assertDocumentMissing(t, mgr, "users", "u1")
+}
+
 func TestMutationTemplateRecordsSectionFeedsTemplateV1Insert(t *testing.T) {
 	client, mgr, _ := serveCollectionPipe(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -706,6 +734,41 @@ func TestMutationBarrierAckAPIs(t *testing.T) {
 	}
 	if err := client.FlushCollectionWithAck(ctx, "users", AckSynced); !isRemoteError(err, iwire.ErrDurabilityUnavailable) {
 		t.Fatalf("FlushCollectionWithAck synced err=%v want durability unavailable", err)
+	}
+}
+
+func TestNativewireAckSyncedRejectedInWALOnRelaxed(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{
+		Dir:        t.TempDir(),
+		Durability: backenddb.DurabilityWALOnRelaxed,
+	})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mgr := collections.NewCollectionManager(db)
+	server := NewServer(ServerOptions{Collections: mgr, Backend: db})
+	client, _ := servePipe(t, server)
+	t.Cleanup(func() { _ = db.Close() })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	if _, err := client.CreateCollection(ctx, collections.CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	_, err = client.InsertBatch(ctx, "users", collections.DocumentFormatJSON,
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"x":1}`)},
+		AckSynced,
+	)
+	if !isRemoteError(err, iwire.ErrDurabilityUnavailable) {
+		t.Fatalf("InsertBatch synced relaxed err=%v want durability unavailable", err)
+	}
+	assertDocumentMissing(t, mgr, "users", "u1")
+	if err := client.CheckpointWithAck(ctx, AckSynced); !isRemoteError(err, iwire.ErrDurabilityUnavailable) {
+		t.Fatalf("CheckpointWithAck synced relaxed err=%v want durability unavailable", err)
 	}
 }
 

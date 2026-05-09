@@ -41,6 +41,16 @@ system should replicate boring, deterministic metadata and mutation commands.
 8. Every roadmap round must end with a dedicated performance pass before the
    next round starts.
 
+Collection WAL is local physical durability state and is not a Raft log entry.
+Applying a committed deterministic command to TreeDB must use the local
+collection WAL/root-delta path defined by
+`collection-wal-durability-plan.md` when the command mutates collections. A node
+must not report `locally_recoverable`, advance durable
+applied-index/idempotency metadata, or return `ack_policy=raft_committed`
+success from that node until the local collection WAL transaction and any
+metadata ordering rule are recoverable, unless a later Raft stable-store
+recovery spec explicitly guarantees replay before serving reads.
+
 ## 3. Phase-Close Performance Passes
 
 Each roadmap round, such as R0, R1, R2, and R3, MUST reserve its final sprint
@@ -182,8 +192,9 @@ Acceptance:
 - cross-process/cross-map-order stability tests,
 - idempotency-key tests,
 - same logical mutation encoded from shuffled sections, different request IDs,
-  deadlines, compression choices, and trace metadata produces the same canonical
-  entry digest,
+  acknowledgement policies, consistency policies, deadlines, compression
+  choices, response-shaping flags, and trace metadata produces the same
+  canonical entry digest,
 - rejection tests for non-deterministic sections, duplicate singleton sections,
   unsupported command versions, local handles, and missing guards.
 
@@ -219,6 +230,13 @@ Acceptance:
   guard-failure results on every replica,
 - failed leadership changes do not double-apply mutations,
 - restart tests preserve Raft log, stable metadata, and applied collection state,
+- a node distinguishes `consensus_committed`, `locally_applied`, and
+  `locally_recoverable`; client `raft_committed` success is not returned until
+  the responding node satisfies the selected local apply durability rule,
+- persistent applied-index, idempotency-result, and catalog-guard outcome
+  metadata cannot advance past a collection mutation unless that mutation is
+  `CollectionWALRecoverable` locally, or a later stable-Raft replay design proves
+  the entry is replayed before serving;
 - the same committed entry sequence applied to fresh DBs in separate processes
   produces the same logical state digest,
 - snapshot restore plus log-tail replay produces the same logical state digest
@@ -508,6 +526,9 @@ affect routing, snapshots, or catch-up behavior.
 - Choose Raft library or implementation boundary.
 - Define `CommandEntryV1` bytes.
 - Define idempotency record storage.
+- Finalize the stable-store byte format for the required applied-index and
+  idempotency ordering rule: those metadata records must not advance past local
+  collection WAL recoverability for collection mutations.
 - Define stable store and log store mappings.
 - Define snapshot/export/restore format.
 - Define read-index or equivalent linearizable-read mechanism.

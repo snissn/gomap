@@ -60,6 +60,12 @@ func errorCodeFor(err error) iwire.ErrorCode {
 		return iwire.ErrDocumentExists
 	case errors.Is(err, collections.ErrUniqueIndexConflict):
 		return iwire.ErrUniqueIndexConflict
+	case errors.Is(err, collections.ErrDurabilityUnavailable):
+		return iwire.ErrDurabilityUnavailable
+	case errors.Is(err, collections.ErrCommitAmbiguous):
+		return iwire.ErrCommitAmbiguous
+	case errors.Is(err, collections.ErrRecoveryRequired):
+		return iwire.ErrDurabilityUnavailable
 	case errors.Is(err, backenddb.ErrClosed), errors.Is(err, ErrServerClosed), errors.Is(err, net.ErrClosed), errors.Is(err, io.ErrClosedPipe):
 		return iwire.ErrCanceled
 	}

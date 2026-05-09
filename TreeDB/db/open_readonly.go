@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 
 	"github.com/snissn/gomap/TreeDB/freelist"
+	"github.com/snissn/gomap/TreeDB/internal/collectionwal"
 	"github.com/snissn/gomap/TreeDB/internal/lockfile"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/pager"
@@ -24,6 +25,10 @@ func openReadOnly(opts Options) (*DB, error) {
 	if l, err := lockfile.AcquireShared(lockPath); err == nil {
 		lock = l
 	} else if !(errors.Is(err, os.ErrNotExist) || errors.Is(err, lockfile.ErrUnsupported)) {
+		return nil, err
+	}
+	if err := collectionwal.RequireCleanForReadOnlyOpen(opts.Dir); err != nil {
+		_ = lock.Close()
 		return nil, err
 	}
 
@@ -151,6 +156,9 @@ func openReadOnlyNoLock(opts Options) (*DB, error) {
 		return nil, err
 	}
 	if err := ensureNoLegacyMixedWALValueSegments(opts.Dir); err != nil {
+		return nil, err
+	}
+	if err := collectionwal.RequireCleanForReadOnlyOpen(opts.Dir); err != nil {
 		return nil, err
 	}
 	idxPath := filepath.Join(opts.Dir, indexFileName)

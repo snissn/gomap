@@ -1,11 +1,13 @@
 # TreeDB Native Wire Protocol v1
 
-Status: draft proposal, non-normative.
+Status: normative for code that advertises native-wire v1. Distributed/Raft
+behavior remains target/non-normative until cluster mode lands.
 
 TreeDB is pre-alpha. This document defines the target native network protocol
 shape for TreeDB collections and raw ordered-key operations. It is intended to
 guide implementation, benchmark work, and the future Raft/distributed database
-surface. It does not describe current shipped server behavior.
+surface. Sections marked distributed or Raft target do not describe current
+single-node server behavior.
 
 Normative keywords are conformance requirements for code that advertises
 native-wire v1. Until a phase lands, unmatched requirements are design
@@ -74,6 +76,12 @@ Only layer 3 is eligible for Raft log storage. Layer 1 MUST be excluded from
 Raft entries. Layer 2 MAY contain optional client/server convenience sections
 that are also excluded from deterministic entries unless explicitly marked as
 deterministic command input.
+
+Collection WAL is local physical durability state and is not a Raft log entry.
+Native-wire deterministic command entries describe logical mutations; each node
+that applies such a command must still satisfy the local collection WAL
+recoverability rule before reporting local or Raft-backed success for collection
+mutations.
 
 Protocol compatibility is based on explicit version and feature negotiation, not
 best-effort decoding of unknown required fields. Unknown required frame flags,
@@ -258,6 +266,12 @@ Initial common section IDs:
 12 cursor_meta
 ```
 
+`ack_policy`, `consistency_policy`, deadlines, tracing, compression, and
+response-shaping sections are common request/transport policy. They are not
+deterministic command input. Schema registries must mark `ack_policy`
+non-deterministic for every command version, and deterministic-entry encoders
+must strip it before canonical entry construction.
+
 Command-specific sections start at `100`.
 
 Initial command-specific section IDs used by v1 commands and responses:
@@ -282,6 +296,8 @@ Initial command-specific section IDs used by v1 commands and responses:
 116 presence_bitmap           bitset, least-significant bit first
 117 truncated                 bool
 118 status_vector             byte_vector of per-item status records, reserved
+119 catalog_guard             CatalogGuardV1
+120 existence_guard           ExistenceGuardV1
 ```
 
 `cursor_limits` encodes both fields. A zero `max_items` or `max_bytes` means
@@ -324,11 +340,30 @@ Initial response metadata fields:
 ```text
 actual_ack_policy        uvarint optional
 actual_consistency       uvarint optional
+commit_state             uvarint optional
+durability_mode          uvarint optional
 commit_seq              uvarint optional
 catalog_version         uvarint optional
 applied_log_index       uvarint optional
 serving_node_id         bytes optional
 leader_node_id          bytes optional
+```
+
+`commit_state` values:
+
+```text
+0 unknown
+1 not_committed
+2 committed_recoverable
+3 committed_or_unknown_after_commit
+```
+
+`durability_mode` values:
+
+```text
+1 durable
+2 wal_on_relaxed
+3 wal_off_relaxed
 ```
 
 Single-node implementations may omit cluster fields. Cluster implementations
@@ -459,10 +494,12 @@ representation.
 2 connection_local_handle
 ```
 
-Collection names are stable command input. Connection-local handles are a
+Collection names are request input and API/display text. They are not replay
+identity for replicated mutating commands. Connection-local handles are a
 transport optimization returned by `open_collection`; they are never valid
 outside the connection that received them and MUST NOT appear in deterministic
-command entries.
+command entries. Before a mutating command is appended as a deterministic entry,
+names and handles must be resolved to `CatalogGuardV1` stable IDs.
 
 Collection metadata commands SHOULD use the same logical fields as the current
 `CollectionMeta` and `IndexDefinition` model:
@@ -483,15 +520,45 @@ index_storage_policy
 ```
 
 Metadata mutation responses SHOULD include the resulting catalog version or
-equivalent schema guard. Later mutation requests MAY use
+equivalent schema guard. Later single-node mutation requests MAY use
 `expected_catalog_version` to fail fast when a client planned against stale
-metadata.
+metadata. Replicated deterministic mutation entries MUST use `CatalogGuardV1`.
 
 For distributed mode, collection and index mutation entries MUST include a
-deterministic catalog guard: either `expected_catalog_version` or an equivalent
-catalog epoch plus stable collection/index IDs resolved from committed metadata.
+deterministic catalog guard with stable IDs resolved from committed metadata.
 Connection-local handles and unguarded client names MUST be resolved before
 append and MUST NOT be stored in the deterministic entry.
+
+Canonical guard sections:
+
+```text
+CatalogGuardV1 {
+    CollectionUID           uuid128
+    CollectionGeneration    uint64
+    SchemaEpoch             uint64
+    LogicalCatalogDigest    bytes32
+    ExpectedName            string optional diagnostic/existence guard
+    IndexGuards             repeated {
+        IndexUID            uuid128
+        IndexGeneration     uint64
+        DefinitionDigest    bytes32
+    }
+}
+
+ExistenceGuardV1 {
+    TargetKind              collection | index
+    ExpectedState           absent | present
+    StableName              string
+    ExistingUID             uuid128 optional
+    AssignedUID             uuid128 optional for create
+    CatalogEpoch            uint64
+}
+```
+
+Metadata commands must include deterministic existence guards and stable
+assigned IDs when they are encoded as replicated commands. Guard mismatch is a
+deterministic state-machine result and must update idempotency state with the
+failure outcome.
 
 ## 10. Initial Command Set
 
@@ -531,6 +598,8 @@ handles.
 commands. `flush_collection`, `flush_all`, and `checkpoint` are local durability
 barriers in v1 and MUST NOT be replicated as Raft state-machine commands unless
 a future distributed barrier command gives them explicit consensus semantics.
+An `ack_policy` common section may be present on mutation requests, but it is
+request/response policy only and is not part of deterministic command identity.
 
 `insert_batch` sections:
 
@@ -541,6 +610,7 @@ a future distributed barrier command gives them explicit consensus semantics.
 103 documents byte_vector
 104 template_records optional byte_vector
 105 expected_catalog_version optional
+119 catalog_guard required for distributed mode
 ```
 
 `replace_batch` sections:
@@ -553,6 +623,7 @@ a future distributed barrier command gives them explicit consensus semantics.
 104 template_records optional byte_vector
 105 expected_catalog_version optional
 106 replacement_mode
+119 catalog_guard required for distributed mode
 ```
 
 `delete_batch` sections:
@@ -561,6 +632,7 @@ a future distributed barrier command gives them explicit consensus semantics.
 100 collection_ref
 102 document_ids byte_vector
 105 expected_catalog_version optional
+119 catalog_guard required for distributed mode
 ```
 
 Duplicate IDs in one mutation batch MUST be rejected unless a future command
@@ -572,6 +644,13 @@ and is part of state-machine deduplication state. Reuse of the same identity
 with the same canonical command digest MUST return the prior outcome. Reuse with
 a different digest MUST fail with `idempotency_conflict`. Transport `request_id`
 MUST NOT participate in this identity.
+
+Single-node mutation retries are not exactly-once unless the server persists a
+durable idempotency record with the logical mutation outcome. If a client times
+out or disconnects after commit but before response, retry may observe duplicate
+document IDs or unique-index conflicts from the prior commit. Non-idempotent
+updates must be guarded by application-level version/compare predicates or a
+durable idempotency key before clients can treat blind retry as safe.
 
 Mutation responses SHOULD include:
 
@@ -679,26 +758,48 @@ mutation:
 ```
 
 `visible` means the mutation is visible to reads through the serving process or
-owning write domain. It is not necessarily crash-durable.
+owning write domain. For WAL-on collection modes this also requires local
+collection WAL recoverability. For WAL-off relaxed mode this is process-local
+visibility only.
 
-`flushed` means collection write-domain state has been published to backend
-roots for that collection or all touched roots.
+`flushed` means all touched collection state for the command has been published
+to backend roots, and WAL-backed transactions have their applied watermark
+advanced in the same backend commit.
 
-`synced` means the operation reached the strongest local durability boundary
-available under the server's configured TreeDB durability mode.
+`synced` means `flushed` plus an fsync-capable local durability boundary. A
+server running a mode that cannot provide fsync for the touched state MUST fail
+with `durability_unavailable`; it must not reinterpret `synced` as a relaxed
+checkpoint.
 
-`raft_committed` is reserved for distributed mode. It means the command has been
-committed by consensus and applied according to the cluster's state-machine
-policy.
+`raft_committed` is reserved for distributed mode. It means consensus commit
+plus the cluster-defined local apply/recoverability rule. It is not local WAL
+append and is not part of deterministic command identity.
 
 If `ack_policy` is absent, the server uses its advertised default. The initial
-single-node native server SHOULD default to `visible` to match current
-collection API behavior, but clients that need a durability boundary SHOULD ask
-for `flushed` or `synced` explicitly.
+single-node native server SHOULD default to `visible`, but clients that need a
+publication or sync boundary SHOULD ask for `flushed` or `synced` explicitly.
 
 A server MUST either satisfy the requested minimum policy or fail the request.
 It MUST NOT silently downgrade `synced` to a relaxed or checkpoint-only
 guarantee. Successful responses SHOULD report `actual_ack_policy`.
+Local policies are ordered only within the local family:
+`visible < flushed < synced`. `raft_committed` is a named cluster policy and
+must not be treated as a numeric extension of local durability ordering unless a
+future cluster spec explicitly defines the implied local durability level.
+
+If validation succeeds but collection WAL append fails before the commit marker,
+the server returns `durability_unavailable`, `retryable=true`,
+`commit_state=not_committed`, and the mutation must not be visible.
+
+If the commit marker reached the required local boundary but visible install,
+flush, publication, checkpoint, or response construction fails, the server
+returns `commit_ambiguous`, `retryable=false` unless a durable idempotency record
+makes replay safe, and `commit_state=committed_or_unknown_after_commit`.
+
+If a command requested `ack_policy=flushed` or `ack_policy=synced` and the
+logical mutation committed but the requested barrier failed, the error must
+still expose the post-commit state. It must not look like an ordinary mutation
+rejection.
 
 Read `consistency_policy` values:
 
@@ -730,6 +831,13 @@ Machine-readable request or stream metadata MAY be carried in a sibling
 future command or negotiated feature must define a separate critical detail
 section before typed details are emitted.
 
+Default error messages and metadata must be redacted. They must not include raw
+documents, raw user keys, raw document IDs, raw collection names, raw index
+names, raw root names, tenant-sensitive path components, or absolute host paths.
+Use stable error codes, counts, sizes, collection UIDs, file IDs, offsets,
+checksums, and keyed hashes by default. Raw diagnostic values require an
+explicit local admin/debug mode outside the default wire response.
+
 Initial error classes:
 
 ```text
@@ -755,6 +863,7 @@ Initial error classes:
 20 cursor_not_found
 21 catalog_changed
 22 idempotency_conflict
+23 commit_ambiguous
 ```
 
 Errors that map to current collection duplicate-key conditions SHOULD preserve a
@@ -811,6 +920,9 @@ be copied into the deterministic entry. Optional fields MUST either be omitted
 or encoded with explicit defaults according to the command schema; both forms
 MUST NOT be accepted for the same `command_version`.
 
+`ack_policy` is a common request section, but it is never deterministic command
+input. Encoders must strip it before deterministic-entry construction.
+
 The deterministic Raft command set is an allowlist. Logical metadata mutations
 and logical collection mutations MAY be replicated. Reads, cursors, explain,
 stats, open/close handles, `ack_policy`, `consistency_policy`, deadlines,
@@ -825,6 +937,7 @@ The following MUST NOT be included in deterministic command entries:
 - stream IDs,
 - transport deadlines,
 - trace context,
+- `ack_policy` and `consistency_policy`,
 - negotiated compression choices,
 - non-deterministic server timestamps,
 - response-shaping hints that do not change state.
@@ -833,7 +946,7 @@ The following SHOULD be included when present:
 
 - collection metadata mutation input,
 - collection mutation IDs and document bytes,
-- expected catalog version or equivalent conflict guard,
+- `CatalogGuardV1` or legacy `expected_catalog_version` conflict guard,
 - idempotency key or `client_id + client_sequence`,
 - deterministic command flags.
 

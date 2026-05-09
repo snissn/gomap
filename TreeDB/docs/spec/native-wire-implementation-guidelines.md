@@ -70,7 +70,10 @@ boundaries:
   behavior and owns parity tests against direct collection calls.
 - **Deterministic entry codec:** encodes and decodes canonical Raft command-entry
   bytes. It must not depend on connection state, negotiated compression, request
-  IDs, cursor state, deadlines, or tracing.
+  IDs, cursor state, deadlines, tracing, local durability policy, or response
+  shaping. It strips `ack_policy`, `consistency_policy`, deadlines, tracing,
+  compression, response shaping, request IDs, stream IDs, and local handles
+  before deterministic-entry construction.
 - **Conformance fixtures:** stores golden wire frames, canonical entries, and
   rejection cases that can be reused by future clients or compatibility tests.
 
@@ -184,8 +187,13 @@ caps so malformed input cannot turn into unbounded allocation.
 Before Raft, add deterministic-entry tests that prove:
 
 - the same logical mutation encoded with different request IDs, deadlines, trace
-  metadata, compression choices, and section order produces the same canonical
-  entry digest;
+  metadata, compression choices, acknowledgement policies, consistency policies,
+  response-shaping flags, and section order produces the same canonical entry
+  digest;
+- `ack_policy=visible`, `flushed`, `synced`, and absent/default do not produce
+  different deterministic command bytes, while rejected single-node
+  `raft_committed` handling remains a request-validation/server-admission error
+  rather than deterministic-entry semantics;
 - shuffled Go map iteration and cross-process execution produce the same bytes;
 - unsupported command versions and non-deterministic sections are rejected before
   append;

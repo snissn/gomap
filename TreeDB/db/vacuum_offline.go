@@ -8,6 +8,7 @@ import (
 	"runtime"
 
 	"github.com/snissn/gomap/TreeDB/internal/bulk"
+	"github.com/snissn/gomap/TreeDB/internal/collectionwal"
 	"github.com/snissn/gomap/TreeDB/internal/lockfile"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -56,6 +57,9 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) error {
 	defer func() { _ = lock.Close() }()
 
 	if err := recoverIndexSwap(opts.Dir); err != nil {
+		return err
+	}
+	if err := collectionwal.RequireCleanForOfflineMaintenance(opts.Dir); err != nil {
 		return err
 	}
 

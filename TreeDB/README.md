@@ -12,7 +12,7 @@ Use that folder for architecture, format, durability, recovery, lifecycle, and v
 
 ## Features
 
--   **ACID Transactions:** Atomic commits using Copy-On-Write (COW) and redundant superblocks (Meta Pages).
+-   **Crash-consistent commits:** Atomic batch commits and recovery behavior according to the selected durability mode.
 -   **Snapshot Isolation:** Lock-free concurrent readers using Multi-Version Concurrency Control (MVCC) and Reference Counting.
 -   **Hybrid Storage:**
     -   **Index:** Memory-mapped B+Tree for keys and small values.
@@ -141,13 +141,19 @@ existing placement rules.
 - Optional hard cap: `Options.ValueLog.MaxRetainedBytesHard` disables value-log pointers for new large values once retained bytes exceed the threshold.
 - TreeDB is pre-alpha; public APIs and on-disk format may change without backward-compatibility guarantees.
 
-### Durability Matrix (Cached Mode)
+### Durability Overview (Cached Mode)
 
-| Mode | Journal | Sync boundary | Power-loss durability | Notes |
-| --- | --- | --- | --- | --- |
-| `DurabilityDurable` (default) | on | fsync | yes | safest default |
-| `DurabilityWALOnRelaxed` | on | flush-only | no | crash-consistent only |
-| `DurabilityWALOffRelaxed` | off | flush-only | no | fastest, least safe; use `Checkpoint()` for durable boundaries |
+The canonical durability-mode matrix is
+`TreeDB/docs/spec/write-path-and-durability.md#1-durability-modes`.
+
+In short: durable mode gives fsync durability at sync/checkpoint boundaries;
+WAL-on relaxed mode is process-crash-oriented and is not a power-loss fsync
+guarantee; WAL-off relaxed mode has no per-write journal replay and relies on
+flush/checkpoint/close boundaries. Collection writes currently remain governed
+by `TreeDB/docs/spec/collections-write-domain.md`; the target durable-at-ack
+collection overlay is gated by
+`TreeDB/docs/spec/collection-wal-durability-plan.md`; it is target behavior
+after the collection WAL gate, not current behavior.
 
 ## Tuning (Cached Mode)
 
