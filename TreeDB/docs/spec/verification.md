@@ -192,6 +192,49 @@ matrix:
 - `data_outer=false,index_outer=false` (fast/control),
 - `data_outer=false,index_outer=true` (low-priority compatibility cell).
 
+## 11.5 Planned Collection WAL Durability Gate
+
+Invariant:
+- Current indexed collection writes remain flush-boundary durable until the
+  collection WAL implementation lands.
+- Under the collection WAL PR1 contract, WAL-on collection write visibility
+  implies crash recoverability from either backend roots or a committed
+  collection WAL transaction.
+- Under `DurabilityWALOffRelaxed`, acknowledged writes before flush are not
+  promised after process crash, and collection WAL files must not be created for
+  unflushed writes.
+- Collection WAL recovery must publish root groups and applied watermarks
+  atomically, validate declared and embedded side refs, and clean only after a
+  safe watermark plus checkpoint boundary.
+
+Required coverage:
+- `TestCollectionWALOnRelaxedNoIndexAckBeforeFlushRecovers`
+- `TestCollectionWALDurableNoIndexAckBeforeFlushRecovers`
+- `TestCollectionWALOffRelaxedNoIndexAckBeforeFlushDoesNotClaimRecovery`
+- `TestCollectionWALAppendFailureRejectsWriteBeforeVisibility`
+- `TestCollectionWALIndexedInsertRecoverAtomically`
+- `TestCollectionWALIndexedUpdateChangedSecondaryRecoverAtomically`
+- `TestCollectionWALIndexedUpdateUnchangedSecondarySkipsSecondaryRootsAfterRecovery`
+- `TestCollectionWALIndexedDeleteRecoverAtomically`
+- `TestCollectionWALUniqueReuseAfterDeleteRecovery`
+- `TestCollectionWALBufferedSameBaseRootTransactionsReplayByAccumulator`
+- `TestCollectionWALPartialFrameAndMissingSideRefNoPhantomRoots`
+- `TestCollectionWALWatermarkOutOfOrderTxnDoesNotSkipLowerUnapplied`
+- `TestCollectionWALRecoveryCrashAndCleanupAreIdempotent`
+- `TestCollectionWALGCRewriteCompactionSnapshotsProtectPendingSideRefs`
+- `TestCollectionWALCheckpointChosenRule`
+- `TestCollectionWALCloseSuccessfulWritesReopenVisible`
+- `TestCollectionWALReadOnlyOpenWithPendingWAL`
+
+Acceptance artifacts:
+- Every completed milestone must write
+  `artifacts/collection-wal/<milestone>/acceptance.json`.
+- Benchmark artifacts must include the storage matrix above, baseline/new
+  `benchstat` output, required metric rows from
+  `collection-wal-durability-plan.md`, and the pass/fail decision.
+- Production persistent column-store writes may start only after the M7
+  column-store sign-off artifact links to green M1-M6 collection WAL evidence.
+
 ## 12. Collections Document Formats
 
 Invariant:

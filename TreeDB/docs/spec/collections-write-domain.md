@@ -86,11 +86,11 @@ Durability is established when one of these barriers returns successfully:
 A background async publish may complete before an explicit flush, but that is an
 implementation outcome, not a durable-at-ack API guarantee.
 
-If TreeDB later needs durable-at-ack async collection writes, it MUST add a
-replayable collection mutation log or equivalent recovery mechanism before
-advertising that stronger contract.
+If TreeDB later needs durable-at-ack async collection writes, it MUST add the
+collection WAL root-delta recovery mechanism before advertising that stronger
+contract.
 
-The draft collection WAL plan strengthens this future contract by making
+The collection WAL plan strengthens this future contract by making
 acknowledged WAL-on mutations durable as collection-local root-delta
 transactions. Under that plan, mutable/queued/publishing state remains a
 visibility and publish-amortization mechanism, but it must be backed by exact

@@ -2,7 +2,9 @@
 
 Status: normative implementation gate once Milestones 0-7 are complete.
 Sections marked MUST/SHOULD define the production collection durability
-contract; explicitly marked future-work sections remain non-normative.
+contract; explicitly marked future-work sections remain non-normative. Open
+questions in Section 15 must be resolved before any milestone that depends on
+them can pass.
 Target repository studied: `https://github.com/snissn/gomap/tree/7431ba92f7a1a456c15f70ac019314090e22af31`
 Primary code paths studied: `TreeDB/collections`, `TreeDB/db`,
 `TreeDB/caching`, `TreeDB/internal/commitlog`, `TreeDB/internal/valuelog`  
@@ -1937,39 +1939,173 @@ Read-only open:
 - side-ref fence fuzzing with missing and truncated payloads;
 - root-delta replay fuzzing against an in-memory oracle.
 
+### 11.6 Required Named Acceptance Tests
+
+These tests or equivalent subtests must exist before implementation can be
+considered complete. Names are normative so CI, verification docs, and
+acceptance artifacts can point to stable evidence.
+
+| Test | Harness shape | Must prove |
+|---|---|---|
+| `TestCollectionWALOnRelaxedNoIndexAckBeforeFlushRecovers` | Child process opens with `DurabilityWALOnRelaxed`, inserts a no-index document, exits without `Flush`/`Close`; parent reopens. | WAL-on relaxed is durable-at-ack for process crash. |
+| `TestCollectionWALOffRelaxedNoIndexAckBeforeFlushDoesNotClaimRecovery` | Same fixture under `DurabilityWALOffRelaxed`, with a second subtest that calls `Flush` first. | WAL-off remains relaxed before flush; explicit flush remains a persistence boundary. |
+| `TestCollectionWALAppendFailureRejectsWriteBeforeVisibility` | Fault hook fails collection WAL append after private planning; assert API error, `Get` misses, reopen misses. | WAL append precedes visibility and acknowledgement. |
+| `TestCollectionWALIndexedInsertUpdateDeleteRecoverAtomically` | WAL-on crash helper performs indexed insert, update changing indexed values, and delete, then exits before flush. | Primary, template/index-state, unique secondary, and nonunique secondary roots recover as one group. |
+| `TestCollectionWALUniqueNonUniqueSecondaryIndexesAfterRecovery` | Insert two documents with one unique index and one shared nonunique value; crash/reopen; attempt duplicate unique insert and nonunique lookup. | Unique helpers are rebuildable and nonunique indexes preserve multiplicity. |
+| `TestCollectionWALBufferedSameBaseRootTransactionsReplayByAccumulator` | Force multiple acknowledged buffered transactions with the same persisted `BaseRootID`; crash before publish. | Recovery accumulates/rebases rather than losing later transactions or failing on root mismatch. |
+| `TestCollectionWALPartialFrameAndMissingSideRefNoPhantomRoots` | Corrupt/truncate collection WAL tail and remove a required value-log or leaf-log side ref. | Tail truncation is ignored only when safe; missing required side refs never publish phantom roots. |
+| `TestCollectionWALWatermarkOutOfOrderTxnDoesNotSkipLowerUnapplied` | Two collections; force higher `WALLSN` publish/watermark before a lower `WALLSN`; crash/reopen. | Per-collection watermark logic cannot skip lower unapplied transactions. |
+| `TestCollectionWALRecoveryCrashAndCleanupAreIdempotent` | Fault hook exits during recovery after N transactions, after watermark commit, and during segment cleanup; reopen repeatedly. | No double-apply, no lost writes, cleanup eventually converges. |
+| `TestCollectionWALGCRewriteCompactionSnapshotsProtectPendingSideRefs` | Create pending WAL transaction whose side ref has no published root owner; pin snapshot/read view; run GC/rewrite/compaction; crash/reopen. | Side refs are protected until watermark plus checkpoint handoff, and snapshots do not observe dangling roots. |
+
+### 11.7 Required Fault Points
+
+The crash harness must expose these named fault points. Each point must support
+both "return injected error" and "process exit" modes when the code path can
+observe both outcomes.
+
+```text
+before_side_file_prepare
+after_side_file_prepare_before_wal_append
+before_collection_wal_append
+after_collection_wal_append_before_visibility
+after_ack_before_root_publish
+queued_flush_unit_before_publish
+publishing_unit_after_state_move_before_publish
+after_root_pages_built_before_system_root_commit
+after_system_root_commit_before_watermark_visible
+after_watermark_commit_before_wal_cleanup
+during_wal_segment_cleanup
+during_prepared_side_file_quarantine
+during_recovery_after_n_transactions
+during_value_log_gc_scan_with_pending_collection_wal
+during_value_log_rewrite_with_pending_collection_wal
+during_overlay_compaction_publish
+```
+
+`after_system_root_commit_before_watermark_visible` should be untriggerable in a
+correct PR1 implementation because descriptor changes and watermark advancement
+are one backend commit. The fault point exists to prove the implementation does
+not expose or test a two-phase publish path.
+
 ## 12. Benchmark Plan
 
-Benchmarks must compare before/after on the same host with `benchstat`.
+Benchmarks must compare baseline and new implementation on the same host with
+`benchstat`. Use the current `ProfileWALOnFast` / `wal_on_fast` collection
+profile as the primary baseline when measuring WAL-on collection overhead, with
+the same storage-policy cell, document format, batch size, and fixture data.
+Durable-mode benchmarks are smoke gates for sync behavior, not the primary
+regression baseline.
 
-Core rows:
+Required storage-policy cells:
 
-- no-index `InsertBatch`;
-- one unique secondary index `InsertBatch`;
-- three secondary indexes `InsertBatch`;
-- `UpdateBatch` with unchanged indexed values;
-- `UpdateBatch` with changed indexed values;
-- delete-heavy workload;
-- async indexed flush workload;
-- `Flush`;
-- crash-recovery replay of 1K, 100K, and 1M pending documents.
+- `data_outer=true,index_outer=false` (production-mainline priority);
+- `data_outer=true,index_outer=true` (fully compressed);
+- `data_outer=false,index_outer=false` (fast/control);
+- `data_outer=false,index_outer=true` (low-priority compatibility cell).
 
-Initial gates:
+Required collection WAL microbenchmark command:
 
-- WAL-on no-index insert throughput regression <= 10 percent after warmup;
-- WAL-on one-index insert throughput regression <= 15 percent;
-- WAL-on three-index insert throughput regression <= 20 percent;
-- recovery throughput >= 50K root-delta entries/sec on the deterministic
-  fixture before optimization;
-- collection WAL bytes/doc reported for every benchmark;
-- no unbounded memory growth when async publish is stalled.
+```bash
+for cell in \
+  "true false" \
+  "true true" \
+  "false false" \
+  "false true"
+do
+  set -- $cell
+  export TREEDB_COLLECTION_DATA_OUTER_LEAVES_IN_VLOG=$1
+  export TREEDB_COLLECTION_INDEX_OUTER_LEAVES_IN_VLOG=$2
+  export TREEDB_COLLECTION_BENCH_ENGINE=wal_on_fast
+  export TREEDB_COLLECTION_BENCH_BATCH_SIZE=8000
+
+  go test ./TreeDB/collections \
+    -run '^$' \
+    -bench '^(BenchmarkCollectionWALNoIndexInsertBatch|BenchmarkCollectionWALOneUniqueIndexInsertBatch|BenchmarkCollectionWALThreeIndexInsertBatch|BenchmarkCollectionWALUpdateBatchUnchangedIndexedValues|BenchmarkCollectionWALUpdateBatchChangedIndexedValues|BenchmarkCollectionWALDeleteHeavy|BenchmarkCollectionWALAsyncIndexedFlushStalled|BenchmarkCollectionWALFlushPending)$' \
+    -benchmem -count=10 \
+    > "artifacts/collection-wal/bench-${1}-${2}.txt"
+done
+```
+
+Required recovery benchmark command:
+
+```bash
+TREEDB_COLLECTION_BENCH_ENGINE=wal_on_fast \
+TREEDB_COLLECTION_WAL_RECOVERY_DOCS=1000,100000,1000000 \
+go test ./TreeDB/collections \
+  -run '^$' \
+  -bench '^BenchmarkCollectionWALRecoveryReplayPendingDocs$' \
+  -benchmem -benchtime=1x -count=5 \
+  > artifacts/collection-wal/recovery.txt
+```
+
+Required durable-mode smoke benchmark command:
+
+```bash
+TREEDB_COLLECTION_BENCH_ENGINE=durable \
+TREEDB_COLLECTION_BENCH_BATCH_SIZE=8000 \
+go test ./TreeDB/collections \
+  -run '^$' \
+  -bench '^(BenchmarkCollectionWALNoIndexInsertBatch|BenchmarkCollectionWALOneUniqueIndexInsertBatch|BenchmarkCollectionWALFlushPending)$' \
+  -benchmem -count=5 \
+  > artifacts/collection-wal/durable-smoke.txt
+```
+
+Every benchmark row must report these metrics when the harness can measure them:
+
+| Metric | Purpose |
+|---|---|
+| `docs/sec`, `ns/doc` | Primary throughput. |
+| `ack_ns/doc` | Acknowledgement latency cost. |
+| `collection_wal_append_ns/doc` | WAL append overhead. |
+| `collection_wal_bytes/doc` | Write amplification. |
+| `root_delta_entries/doc` | Workload normalization. |
+| `side_refs/doc` | Side-file pressure. |
+| `pending_collection_wal_bytes` | Cleanup debt. |
+| `applied_watermark_lag_txns` | Recovery debt. |
+| `recovery_docs/sec` | Reopen speed. |
+| `recovery_root_delta_entries/sec` | Replay throughput. |
+| `recovery_peak_rss_bytes` or `recovery_peak_heap_bytes` | Replay memory bound. |
+| `gc_protected_side_ref_bytes` | GC/rewrite retention cost. |
+| `cleanup_ns/segment` | Segment cleanup cost. |
+| `allocs/doc`, `bytes_allocated/doc` | Heap regression. |
+
+Gate thresholds:
+
+| Metric | Initial implementation gate | Stronger-default gate |
+|---|---:|---:|
+| No-index WAL-on insert regression | <=25 percent | <=10 percent |
+| One-unique-index insert regression | <=30 percent | <=15 percent |
+| Three-index insert regression | <=35 percent | <=20 percent |
+| Update unchanged indexed values | <=20 percent | <=10 percent |
+| Update changed indexed values | <=30 percent | <=20 percent |
+| Delete-heavy workload | <=30 percent | <=20 percent |
+| Flush pending WAL-backed deltas | <=30 percent | <=20 percent |
+| Recovery, no-index | >=50K docs/sec | >=100K docs/sec target |
+| Recovery, indexed | >=20K docs/sec and >=50K root-delta entries/sec | >=50K docs/sec target |
+| WAL bytes/doc | Reported and below chosen formula threshold | Required; exceeding threshold blocks stronger default |
+| Async stalled memory | Numeric cap reported; queue bounds enforced | Same, plus no steady-state leak across repeated cycles |
+| Cleanup | No unapplied segment removed; fully applied segments cleaned after safe checkpoint | Same |
+
+Use `benchstat -count=10` for microbenchmarks. A performance gate fails only
+when both the mean regression crosses the threshold and `benchstat` reports a
+statistically significant change. Correctness gates do not depend on benchmark
+variance and must pass before any performance gate can be considered.
+
+The stronger-default gate is required before enabling WAL-on collection
+durable-at-ack as a default profile. The initial implementation gate is enough
+to merge guarded/internal code paths when all correctness gates are green and
+all metrics above are emitted.
 
 Column-store gates added before persistent column writes:
 
-- column part prepare plus WAL append overhead reported as ns/row and bytes/row;
+- column part prepare plus WAL append overhead reported as `ns/row` and
+  `bytes/row`;
 - side-ref closure validation throughput reported on deterministic descriptors
   with 1K, 100K, and 1M file refs;
-- recovery throughput reported by row count and file count;
-- recovery of many small update-delta parts does not grow memory unbounded;
+- recovery throughput reported by row count, root-delta entry count, and file
+  count;
+- recovery of many small update-delta parts has numeric peak memory bounds;
 - file count per default update micro-batch stays under the configured policy;
 - column WAL bytes/row and side-ref metadata bytes/row are reported;
 - orphan cleanup of prepared files has a bounded benchmark target;
@@ -1980,9 +2116,9 @@ Column-store gates added before persistent column writes:
 - read-only recovery-required scan has bounded latency and does not parse full
   column payloads.
 
-These gates are provisional. If the current write path cannot meet them with
-inline root deltas, PR2 should move large deltas to side payloads before
-weakening durability.
+If inline root-delta WAL exceeds 2.5x serialized root-delta payload plus fixed
+frame overhead, side-payload mode must be implemented before the
+stronger-default gate can pass.
 
 ## 13. Roadmap and Gates
 
@@ -1991,6 +2127,7 @@ Traceability matrix:
 | Design area | Sections | Milestones | Required evidence |
 |---|---|---|---|
 | Current contract | 2, 6 | M0 | existing behavior tests and docs |
+| Testability decisions | 15 | M0.5 | closed PR1 choices and acceptance artifact |
 | WAL format | 7.2, 7.4, 7.5 | M1 | golden, fuzz, corrupt-tail tests |
 | Recovery state machine | 9.1, 9.2, 9.4 | M1, M5 | crash-state and stop-open tests |
 | Identity and sequencing | 7.3, 7.6, 9.3 | M1, M5 | collection-seq, epoch, generation tests |
@@ -2000,12 +2137,42 @@ Traceability matrix:
 | Write-domain integration | 8 | M3, M4 | insert/update/delete recovery tests |
 | Visibility/admission barriers | 6.2, 6.3, 8, 8.9 | M3, M6 | read-race, checkpoint-cut, and close-race tests |
 | Collection read views | 3, 6.3, 8.10, 10 | M4, M6 | long-iterator and side-ref pinning tests |
-| Recovery replay | 9 | M4 | crash matrix, accumulation, and deterministic replay tests |
+| Recovery replay | 9 | M4, M4.5 | crash matrix, accumulation, and deterministic replay tests |
 | Checkpoint/cleanup | 10 | M5 | watermark and segment cleanup tests |
 | Lock ordering | 8.9, 11.4 | M0, M6 | debug lock assertions and deadlock stress |
-| Performance | 12 | M6 | benchstat gates and artifacts |
+| Performance | 12 | M6.5 | benchstat gates and artifacts |
 | Column-store unblock | 6.4, 10 | M7 | side-file fence and root-group recovery proof |
 | Native-wire/Raft layering | 2.4, 6.2, 7.9, 8.8 | M8 | deterministic-entry apply and local-WAL durability tests |
+
+Each milestone must produce a machine-readable acceptance artifact at
+`artifacts/collection-wal/<milestone>/acceptance.json` with:
+
+- git commit;
+- test command;
+- test result;
+- benchmark command when applicable;
+- benchmark result path when applicable;
+- enabled durability mode;
+- storage-policy cell;
+- collection document format;
+- fault points exercised;
+- pass/fail decision.
+
+Acceptance matrix:
+
+| Gate | Required evidence | Pass criteria |
+|---|---|---|
+| M0 Contract and harness freeze | Existing current-contract tests and crash helper skeleton. | Current flush-boundary behavior remains documented; named fault hooks can stop at side prepare, WAL append, staging, publish, watermark, cleanup, and recovery replay. |
+| M0.5 Testability decisions | Closed PR1 decisions in Section 15. | File class, transaction identity, checkpoint behavior, missing side-ref policy, buffered replay model, GC protection, and overlay compaction rule are testable. |
+| M1 WAL format | Golden fixtures, checksum/corruption/truncation tests, decoder fuzzing. | Decoder is deterministic; safe terminal truncation is accepted; hard corruption fails. |
+| M2 Side-ref fences | Missing-ref, side-payload, and GC/rewrite protection tests. | No root points at missing bytes; WAL-pending side refs are retained. |
+| M3 No-index WAL integration | WAL-on/WAL-off no-index crash tests and append-failure tests. | WAL-on crash recovers acknowledged writes; WAL-off expectations stay relaxed; append failure has no visibility. |
+| M4 Indexed integration | Indexed insert/update/delete atomic recovery tests. | Primary, template/index-state, unique, and nonunique roots agree after reopen. |
+| M4.5 Buffered/async states | Mutable, queued, publishing, requeue, and accumulator tests. | No acknowledged write is lost in any write-domain state. |
+| M5 Watermark/recovery/cleanup | Repeated reopen, watermark, missing segment, and cleanup-crash tests. | Replay is idempotent; no double-apply; no premature cleanup. |
+| M6 Barriers and modes | Flush, FlushAll, checkpoint, close, and read-only open tests. | Chosen barrier semantics are deterministic and documented. |
+| M6.5 Performance | Required benchmark commands and `benchstat` artifacts. | Correctness is green; metrics are emitted; thresholds pass for the selected gate. |
+| M7 Column-store sign-off | M1-M6 artifacts, synthetic side-file tests, benchmark artifacts, and column PR checklist links. | Persistent column roots and side refs stay blocked until the sign-off artifact is green. |
 
 ### Milestone 0: Contract Freeze
 
@@ -2032,6 +2199,24 @@ Gate:
 
 - no production column-store persistent work starts before this milestone is
   complete.
+
+### Milestone 0.5: Testability Decisions
+
+The PR1 decisions in Section 15 are prerequisites for executable tests. Before
+M1 starts, the implementation owner must confirm the exact testable choices for:
+
+- collection WAL segment format and filename class;
+- `CollectionSeq` and `WALLSN` allocation and persistence;
+- missing side-ref behavior by durability mode;
+- checkpoint behavior for PR1;
+- buffered replay model;
+- GC/rewrite side-ref protection mechanism;
+- overlay compaction durability rule.
+
+Gate:
+
+- no collection-WAL implementation PR may claim milestone completion while an
+  applicable testability decision remains open or has no acceptance artifact.
 
 ### Milestone 1: Collection WAL Format Package
 
@@ -2112,16 +2297,24 @@ Deliverables:
 
 Tests:
 
-- crash after ack before flush recovers document;
+- `TestCollectionWALOnRelaxedNoIndexAckBeforeFlushRecovers`;
+- `TestCollectionWALDurableNoIndexAckBeforeFlushRecovers`;
+- `TestCollectionWALOffRelaxedNoIndexAckBeforeFlushDoesNotClaimRecovery`;
+- `TestCollectionWALAppendFailureRejectsWriteBeforeVisibility`;
+- `TestCollectionWALNoIndexInsertBatchAckBeforeFlushRecovers`;
+- no-index `Update`, `UpdateBatch`, `Delete`, and `DeleteBatch` either publish
+  synchronously under the documented current rule or are WAL-backed before ack;
+  whichever rule is chosen must have crash/reopen tests;
 - crash before WAL append does not expose document;
-- WAL append failure leaves no visible no-index pending state;
 - concurrent reads and planners blocked around WAL append cannot observe the
   private mutation;
-- checkpoint behavior updated to the new contract.
+- checkpoint behavior updated to the new contract;
+- WAL-off mode creates no collection WAL files for unflushed writes.
 
 Gate:
 
-- no-index insert regression <= 10 percent in WAL-on benchmark fixture.
+- no-index insert benchmark meets the M6 initial implementation gate and emits
+  all required metrics.
 
 ### Milestone 4: Indexed Insert/Update/Delete Integration
 
@@ -2147,14 +2340,22 @@ Deliverables:
 
 Tests:
 
+- `TestCollectionWALIndexedInsertRecoverAtomically`;
+- `TestCollectionWALIndexedUpdateChangedSecondaryRecoverAtomically`;
+- `TestCollectionWALIndexedUpdateUnchangedSecondarySkipsSecondaryRootsAfterRecovery`;
+- `TestCollectionWALIndexedDeleteRecoverAtomically`;
+- `TestCollectionWALUniqueReuseAfterDeleteRecovery`;
+- `TestCollectionWALIndexedInsertUpdateDeleteRecoverAtomically`;
 - crash after ack before async publish;
 - crash during async publish;
-- WAL append failure for indexed insert/update/delete leaves no visible primary,
+- WAL append failure for indexed `Insert`, `InsertBatch`, `Update`,
+  `UpdateBatch`, `Delete`, and `DeleteBatch` leaves no visible primary,
   secondary, unique-helper, queued, or publishing state;
 - long-running iterators remain valid while async publish completes and cleanup
   waits for read-view release;
-- unique secondary correctness after recovery;
-- update/delete secondary roots recover atomically;
+- unique and nonunique secondary correctness after recovery;
+- unchanged indexed-value update, changed unique value, changed nonunique value,
+  delete followed by unique-value reuse, and duplicate conflict after recovery;
 - two acknowledged buffered writes against one persisted base both survive
   crash/reopen;
 - per-collection ordering gaps block later same-collection transactions;
@@ -2165,9 +2366,35 @@ Tests:
 
 Gate:
 
-- one-index insert regression <= 15 percent;
-- three-index insert regression <= 20 percent;
+- one-index and three-index insert benchmarks meet the M6 initial implementation
+  gate and emit all required metrics;
 - async flush cannot lose acknowledged documents under process crash.
+
+### Milestone 4.5: Buffered and Async State Recovery
+
+Deliverables:
+
+- mutable, queued, and publishing units carry WAL ownership and contiguous
+  `CollectionSeq` ranges;
+- replay-side accumulator handles multiple root deltas sharing the same
+  persisted base root;
+- async publish failure requeues without changing WAL identity or cleanup
+  eligibility;
+- memory and queue bounds remain enforced when async publish is stalled.
+
+Tests:
+
+- `TestCollectionWALBufferedSameBaseRootTransactionsReplayByAccumulator`;
+- `TestCollectionWALQueuedFlushUnitCrashRecovers`;
+- `TestCollectionWALPublishingUnitCrashRecovers`;
+- `TestCollectionWALAsyncPublishFailureRequeueKeepsWAL`;
+- `TestCollectionWALAsyncPublishNoWatermarkOutOfPrefixOrder`;
+- async stalled benchmark reports numeric memory and queue caps.
+
+Gate:
+
+- no acknowledged write is lost from mutable, queued, or publishing state under
+  the required crash harness.
 
 ### Milestone 5: Recovery, Watermark, and Cleanup
 
@@ -2187,8 +2414,18 @@ Deliverables:
 
 Tests:
 
+- `TestCollectionWALWatermarkOutOfOrderTxnDoesNotSkipLowerUnapplied`;
+- `TestCollectionWALRecoveryCrashAfterNTransactionsIdempotent`;
+- `TestCollectionWALCleanupCrashIdempotent`;
+- `TestCollectionWALPreparedUncommittedSideFilesQuarantined`;
 - crash after root page build or watermark commit before cleanup does not
   double-apply;
+- crash during recovery after publishing a subset of unapplied transactions is
+  idempotent after repeated reopen;
+- crash after watermark commit before WAL cleanup leaves the transaction
+  skipped by watermark and cleanup retryable;
+- crash during WAL segment cleanup is idempotent;
+- crash during prepared side-file quarantine/delete is idempotent;
 - out-of-order async publish cannot advance a watermark that hides a lower
   unapplied collection sequence;
 - accumulated publishes advance only contiguous `CollectionSeq` prefixes;
@@ -2238,9 +2475,42 @@ Gate:
 
 - no stale collection WAL files after clean close and checkpoint.
 
-### Milestone 7: Column-Store Unblock Gate
+### Milestone 6.5: Performance Acceptance
 
 Deliverables:
+
+- required collection WAL microbenchmarks implemented under
+  `TreeDB/collections`;
+- required recovery benchmarks implemented;
+- benchmark runner writes artifacts under `artifacts/collection-wal/`;
+- metrics from Section 12 are emitted for each benchmark row;
+- baseline/new `benchstat` output is attached to the acceptance artifact.
+
+Gate:
+
+- correctness gates M1 through M6 are green;
+- initial implementation thresholds from Section 12 pass for guarded/internal
+  enablement;
+- stronger-default thresholds from Section 12 pass before WAL-on
+  durable-at-ack becomes a default profile.
+
+### Milestone 7: Column-Store Persistent Write Unblock Sign-Off
+
+M7 is a release gate, not a standalone implementation milestone. It cannot pass
+unless M1 through M6, including the required benchmark artifacts, are complete.
+
+Prerequisites:
+
+- M1 through M6 acceptance artifacts are present and green;
+- the verification matrix lists every passing collection-WAL test by exact name;
+- baseline/new `benchstat` output exists for the required benchmark rows and
+  storage cells;
+- synthetic external side-file tests pass before real column-file writes are
+  exposed;
+- the column-store PR checklist links to the exact collection-WAL acceptance
+  artifact.
+
+Additional column-store evidence:
 
 - explicit column root-kind inventory for parts, granules, locators, deletes,
   schema, filters, count/visibility metadata, compression metadata, primary, and
@@ -2259,30 +2529,11 @@ Deliverables:
 - column compaction, delete-bitmap compaction, and recompression modeled as
   collection WAL transactions.
 
-Tests:
-
-- crash before side-file prepare completes;
-- crash after side-file prepare before WAL append;
-- crash after final rename before WAL append;
-- crash after WAL append before root publish;
-- crash during root publish before watermark;
-- crash after watermark before WAL cleanup;
-- missing/corrupt required manifest, substream, filter, delete bitmap,
-  dictionary, compression metadata, or metadata side ref;
-- descriptor side-ref closure mismatch;
-- orphan prepare/final column directories are quarantined or deleted;
-- read-only open refuses unapplied collection WAL;
-- GC/rewrite cannot delete bytes referenced only by pending collection WAL or
-  live `CollectionReadView`;
-- update-delta publish with primary locator changes, delete bitmaps,
-  count/visibility metadata, and secondary unique/nonunique changes;
-- compaction/recompression publish cannot expose duplicate rows from both source
-  and compacted parts.
-
 Gate:
 
-- persistent column-store writes may start only after these tests pass under
-  WAL-on durable and WAL-on relaxed profiles.
+- no production or public-facing column-store collection API may publish
+  persistent roots, descriptor roots, secondary indexes to column rows, or
+  column-file side refs until this sign-off gate is green.
 
 ### Milestone 8: Native-Wire and Raft Apply Coordination
 
@@ -2398,11 +2649,8 @@ Future questions that do not weaken PR1 correctness:
 1. Should `Collection.Flush` gain a sync variant, or should callers use
    `DB.Checkpoint` for fsync-style barriers?
 2. How large can inline root deltas be before side-payload mode becomes
-   mandatory?
-3. What metric names should expose pending collection WAL bytes, applied
-   collection-sequence lag, replay count, fenced transactions, protected side
-   refs, and cleanup debt?
-4. For Raft R3, should applied-index/idempotency metadata live in TreeDB system
+   mandatory beyond the Section 12 stronger-default threshold?
+3. For Raft R3, should applied-index/idempotency metadata live in TreeDB system
    roots, in a Raft library stable store, or in both with an explicit ordering
    rule?
 
