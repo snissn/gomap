@@ -6984,9 +6984,6 @@ func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON b
 			}
 		}
 	}
-	baseSystemRoot := snapshotSystemRoot(snap)
-	baseCommitSeq := snapshotCommitSeq(snap)
-
 	if len(meta.Indexes) == 0 && normalizedDocumentFormat(plannerOptions.documentFormat) == DocumentFormatBSON && trustedValidBSON {
 		if resultIDs, buffered, err := c.bufferNoIndexInsertBatchLocked(c.writeDomain, catalog, snap, plannerOptions, ids, documents); buffered {
 			closePlanningSnapshot()
@@ -7028,6 +7025,8 @@ func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON b
 			plannerOptions = collectionOptionsWithTemplateV1Resolver(plannerOptions, snap, catalog)
 		}
 	}
+	baseSystemRoot := snapshotSystemRoot(snap)
+	baseCommitSeq := snapshotCommitSeq(snap)
 	if len(meta.Indexes) == 0 {
 		if plannerOptions.documentFormat == DocumentFormatJSON {
 			return c.insertBatchNoIndex(catalog, snap, baseCommitSeq, baseSystemRoot, plannerOptions, ids, documents)
