@@ -9801,7 +9801,7 @@ func TestBSONSetUpdateApplyNoopDoesNotAllocateReplacement(t *testing.T) {
 			t.Fatalf("apply during alloc check: %v", err)
 		}
 		if changed || !bytes.Equal(got, current) {
-			t.Fatalf("alloc check changed=%v got=%x want original", changed, got)
+			t.Fatalf("alloc check changed=%v got=%#v want original %#v", changed, got, current)
 		}
 	})
 	if allocs != 0 {
