@@ -4906,30 +4906,21 @@ func collectionOptionsWithClonedBufferedTemplateV1Resolver(opts collectionOption
 	rootName := collectionTemplateRootName(collectionName)
 	domain.mu.RLock()
 	pendingRuns := pendingIndexedRootRunsLocked(domain, rootName)
-	iterators := make([]iterator.UnsafeIterator, 0, len(pendingRuns))
+	runs := make([]memtable.Table, 0, len(pendingRuns))
 	for _, run := range pendingRuns {
-		if run == nil {
-			iterators = append(iterators, nil)
-			continue
+		if run != nil {
+			runs = append(runs, run)
 		}
-		iterators = append(iterators, run.NewIterator(nil, nil))
 	}
 	domain.mu.RUnlock()
-	defer func() {
-		for _, it := range iterators {
-			if it != nil {
-				_ = it.Close()
-			}
-		}
-	}()
-	runs, err := cloneCollectionRunTablesFromIterators(iterators)
+	cloned, err := cloneCollectionRunTables(runs)
 	if err != nil {
 		return opts, nil, err
 	}
-	if len(runs) == 0 {
+	if len(cloned) == 0 {
 		return opts, nil, nil
 	}
-	return collectionOptionsWithBufferedTemplateV1RunsResolver(opts, runs), runs, nil
+	return collectionOptionsWithBufferedTemplateV1RunsResolver(opts, cloned), cloned, nil
 }
 
 type bufferedRootRunHeapItem struct {

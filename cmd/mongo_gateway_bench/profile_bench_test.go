@@ -1092,6 +1092,7 @@ func deltaCollectionManagerUpdateStats(after, before collections.CollectionManag
 		UpdateBatchBufferedBatches:       after.UpdateBatchBufferedBatches - before.UpdateBatchBufferedBatches,
 		UpdateBatchCurrentRead:           after.UpdateBatchCurrentRead - before.UpdateBatchCurrentRead,
 		UpdateBatchCallback:              after.UpdateBatchCallback - before.UpdateBatchCallback,
+		UpdateBatchStructuredApply:       after.UpdateBatchStructuredApply - before.UpdateBatchStructuredApply,
 		UpdateBatchPrepareDocuments:      after.UpdateBatchPrepareDocuments - before.UpdateBatchPrepareDocuments,
 		UpdateBatchIndexStateExtract:     after.UpdateBatchIndexStateExtract - before.UpdateBatchIndexStateExtract,
 		UpdateBatchOldIndexStateExtract:  after.UpdateBatchOldIndexStateExtract - before.UpdateBatchOldIndexStateExtract,
@@ -1227,6 +1228,7 @@ func TestDeltaCollectionManagerUpdateStatsIncludesCombinerStats(t *testing.T) {
 		UpdateCombineWait:                200 * time.Nanosecond,
 		UpdateCombineDrain:               300 * time.Nanosecond,
 		UpdateCombineRun:                 400 * time.Nanosecond,
+		UpdateBatchStructuredApply:       50 * time.Nanosecond,
 		UpdateBatchIndexStateExtract:     70 * time.Nanosecond,
 		UpdateBatchOldIndexStateExtract:  30 * time.Nanosecond,
 		UpdateBatchNewIndexStateExtract:  40 * time.Nanosecond,
@@ -1285,6 +1287,7 @@ func TestDeltaCollectionManagerUpdateStatsIncludesCombinerStats(t *testing.T) {
 		UpdateCombineWait:                1400 * time.Nanosecond,
 		UpdateCombineDrain:               2100 * time.Nanosecond,
 		UpdateCombineRun:                 2800 * time.Nanosecond,
+		UpdateBatchStructuredApply:       500 * time.Nanosecond,
 		UpdateBatchIndexStateExtract:     700 * time.Nanosecond,
 		UpdateBatchOldIndexStateExtract:  300 * time.Nanosecond,
 		UpdateBatchNewIndexStateExtract:  400 * time.Nanosecond,
@@ -1358,6 +1361,9 @@ func TestDeltaCollectionManagerUpdateStatsIncludesCombinerStats(t *testing.T) {
 			got.UpdateCombineDrain,
 			got.UpdateCombineRun,
 		)
+	}
+	if got.UpdateBatchStructuredApply != 450*time.Nanosecond {
+		t.Fatalf("UpdateBatchStructuredApply=%s want 450ns", got.UpdateBatchStructuredApply)
 	}
 	if got.UpdateBatchIndexStateExtract != 630*time.Nanosecond || got.UpdateBatchOldIndexStateExtract != 270*time.Nanosecond || got.UpdateBatchNewIndexStateExtract != 360*time.Nanosecond {
 		t.Fatalf("index state timing delta total/old/new=%s/%s/%s want 630ns/270ns/360ns",
@@ -1487,6 +1493,7 @@ func TestReportCollectionManagerUpdateStatsIncludesIndexedFlushMetrics(t *testin
 		PrimaryOnlyRootDeltaKeyBytes:   1200,
 		PrimaryOnlyRootDeltaValueBytes: 12000,
 		PrimaryOnlyCoalescedDocs:       600,
+		UpdateBatchStructuredApply:     1800 * time.Nanosecond,
 		UpdateBatchIndexValueChanges:   300,
 		UpdateBatchIndexValueUnchanged: 900,
 		UpdateBatchMaskFallbacks:       60,
@@ -1537,6 +1544,7 @@ func TestReportCollectionManagerUpdateStatsIncludesIndexedFlushMetrics(t *testin
 		"primary_root_delta_entries/doc":        1,
 		"primary_root_delta_bytes/doc":          22,
 		"primary_only_coalesced_docs/publish":   1,
+		"update_structured_apply_ns/doc":        3,
 		"update_index_value_changes/doc":        0.5,
 		"update_index_value_unchanged/doc":      1.5,
 		"changed_index_fast_mask_fallbacks/doc": 0.1,
@@ -1825,6 +1833,7 @@ func reportCollectionManagerUpdateStats(b *testing.B, stats collections.Collecti
 	}
 	reportDuration("update_current_read_ns/doc", stats.UpdateBatchCurrentRead)
 	reportDuration("update_callback_ns/doc", stats.UpdateBatchCallback)
+	reportDuration("update_structured_apply_ns/doc", stats.UpdateBatchStructuredApply)
 	reportDuration("update_prepare_ns/doc", stats.UpdateBatchPrepareDocuments)
 	reportDuration("update_index_state_extract_ns/doc", stats.UpdateBatchIndexStateExtract)
 	reportDuration("update_old_index_state_extract_ns/doc", stats.UpdateBatchOldIndexStateExtract)
