@@ -3,6 +3,7 @@ package collections
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"strings"
 	"testing"
 
@@ -406,6 +407,102 @@ func TestTemplateV1IndexedWriteMemtablesResolveBufferedTemplateAcrossBatches(t *
 	}
 	if len(ids) != 1 || !bytes.Equal(ids[0], []byte("u2")) {
 		t.Fatalf("city ids=%q want [u2]", ids)
+	}
+}
+
+func TestTemplateV1BufferedResolverRefreshesFallbackAfterAsyncPublishRace(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatTemplateV1,
+		},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city", ValueType: IndexValueString}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+
+	var encoder TemplateV1Encoder
+	doc, err := encoder.EncodeDocument([]string{"email", "city"}, []any{"ada@example.com", "hnl"})
+	if err != nil {
+		t.Fatalf("encode doc: %v", err)
+	}
+	stored, _, err := parseTemplateV1InsertDocument(doc)
+	if err != nil {
+		t.Fatalf("parse stored doc: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("u1")}, [][]byte{doc}); err != nil {
+		t.Fatalf("insert buffered template-v1 doc: %v", err)
+	}
+
+	stale := d.AcquireSnapshot()
+	if stale == nil {
+		t.Fatal("acquire stale snapshot")
+	}
+	defer func() {
+		if stale != nil {
+			_ = stale.Close()
+		}
+	}()
+	catalog, err := col.catalogForSnapshot(stale)
+	if err != nil {
+		t.Fatalf("load stale catalog: %v", err)
+	}
+	if catalog == nil {
+		t.Fatal("missing stale catalog")
+	}
+	staleOptions, err := collectionPlannerOptions(col.meta)
+	if err != nil {
+		t.Fatalf("planner options: %v", err)
+	}
+	staleOptions = collectionOptionsWithTemplateV1Resolver(staleOptions, stale, catalog)
+
+	work, err := col.prepareIndexedAsyncPublish()
+	if err != nil {
+		t.Fatalf("prepare async publish: %v", err)
+	}
+	if work == nil {
+		t.Fatal("prepare async publish returned nil work")
+	}
+	if err := col.publishPreparedIndexedFlush(work); err != nil {
+		t.Fatalf("publish async flush: %v", err)
+	}
+
+	staleOptions, clonedRuns, err := collectionOptionsWithClonedBufferedTemplateV1Resolver(staleOptions, col.writeDomain, "users")
+	if err != nil {
+		t.Fatalf("clone buffered template resolver: %v", err)
+	}
+	defer resetCollectionTables(clonedRuns)
+	if len(clonedRuns) != 0 {
+		t.Fatalf("cloned template runs=%d want 0 after publish removed buffered overlay", len(clonedRuns))
+	}
+	err = validateTemplateV1StoredDocumentTemplates(stored, staleOptions.templateResolver)
+	if err == nil {
+		t.Fatal("stale resolver unexpectedly found just-published template")
+	}
+	if !errors.Is(err, errTemplateV1MissingTemplateRoot) && !errors.Is(err, errTemplateV1TemplateNotFound) {
+		t.Fatalf("stale resolver err=%v want missing template", err)
+	}
+
+	_, meta, refreshedOptions, err := col.refreshTemplateV1PlanningSnapshot(&stale, false, clonedRuns, false)
+	if err != nil {
+		t.Fatalf("refresh template-v1 planning snapshot: %v", err)
+	}
+	if meta.Name != "users" {
+		t.Fatalf("refreshed meta name=%q want users", meta.Name)
+	}
+	if err := validateTemplateV1StoredDocumentTemplates(stored, refreshedOptions.templateResolver); err != nil {
+		t.Fatalf("refreshed resolver did not find published template: %v", err)
 	}
 }
 
