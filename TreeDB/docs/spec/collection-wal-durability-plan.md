@@ -5,6 +5,13 @@ Sections marked MUST/SHOULD define the production collection durability
 contract; explicitly marked future-work sections remain non-normative. Open
 questions in Section 15 must be resolved before any milestone that depends on
 them can pass.
+
+This document defines the minimum implementation contract for durable-at-ack
+collection writes. Until the requirements and crash tests in this document pass,
+TreeDB must not merge production persistent column-store collection APIs, column
+part descriptor roots, column-file side refs in published roots, or
+crash/reopen safety claims for column-store writes.
+
 Target repository studied: `https://github.com/snissn/gomap/tree/7431ba92f7a1a456c15f70ac019314090e22af31`
 Primary code paths studied: `TreeDB/collections`, `TreeDB/db`,
 `TreeDB/caching`, `TreeDB/internal/commitlog`, `TreeDB/internal/valuelog`  
@@ -56,8 +63,9 @@ PR1 makes these decisions normative:
   chains and replay-side accumulation;
 - reject true multi-collection collection WAL transactions before writing side
   refs or WAL records;
-- use a stable persisted `CollectionID`, `SchemaEpoch`, and per-root
-  `RootGeneration` as replay guards;
+- use a stable persisted `CollectionID`/`CollectionUID`, mandatory
+  `CollectionGeneration`, `SchemaEpoch`, `CatalogDigest`, and per-root
+  `RootGeneration`/root descriptor epochs as replay guards;
 - include a versioned `SystemDeltaTemplate` in every replayable transaction;
 - fail recovery on any complete collection WAL transaction with a missing
   required side ref in WAL-on modes;
@@ -211,7 +219,7 @@ side refs.
 Applied watermark:
 
 System-root metadata that records the highest contiguous collection sequence
-published into backend roots for one `CollectionID`. Recovery uses the watermark
+published into backend roots for one `CollectionUID`. Recovery uses the watermark
 to avoid double-applying transactions after a crash that occurs after root
 publish but before WAL cleanup.
 
@@ -232,7 +240,11 @@ Recoverable:
 
 After process crash and read-write recovery, the transaction can be made visible
 from backend roots or from a complete committed collection WAL transaction
-without relying on pre-crash memory.
+without relying on pre-crash memory. For `DurabilityWALOnRelaxed`, the complete
+collection WAL frame and every required side ref have reached a file-writer
+flush boundary sufficient for a fresh process to open the files, read the exact
+ranges, and verify recorded checksums. Bytes accepted only into in-memory writer
+buffers are not recoverable.
 
 WAL append commit point:
 
@@ -242,8 +254,9 @@ durability mode.
 
 Side-ref prepared:
 
-The referenced external bytes have been written and are readable at the selected
-side-ref durability boundary.
+The referenced external bytes have been written, made readable by a new file
+reader at the selected side-ref durability boundary, and verified against the
+recorded checksum over exactly `[offset, offset+size)`.
 
 Side-ref protected:
 
@@ -269,7 +282,7 @@ reach it.
 `CollectionSeq`:
 
 A gap-free, monotonically increasing sequence number scoped to one
-`CollectionID`. It is the replay, dependency, and skip key.
+`CollectionUID`. It is the replay, dependency, and skip key.
 
 `WALLSN`:
 
@@ -359,6 +372,14 @@ marked `Required=false` must not be referenced by any published root value.
 | `DurabilityDurable` | For non-sync collection APIs, write success means the collection WAL transaction has reached the configured local WAL append/flush boundary needed for process-crash recovery. Non-sync APIs do not imply power-loss durability. Sync barriers additionally fsync according to durable mode. |
 | `DurabilityWALOnRelaxed` | Write success means the collection WAL transaction has left process-local memory and is recoverable under the same process-crash assumptions as the existing WAL-on relaxed commit log. It does not claim power-loss durability. |
 | `DurabilityWALOffRelaxed` | No durable-at-ack promise. Collection writes remain flush/checkpoint/close-boundary durable, and docs must say so directly. In this mode, `visible` acknowledgements are process-local visibility only. |
+
+Recoverable means readable by a fresh process after process crash. For
+`DurabilityWALOnRelaxed`, success requires that the complete collection WAL
+frame and every required side ref have reached a file-writer flush boundary
+sufficient for fresh-process reads. For `DurabilityDurable` sync barriers,
+success additionally requires the configured fsync boundary for the WAL frame
+and required side refs. Bytes accepted only into in-memory writer buffers are
+not recoverable.
 
 If the engine cannot append the collection WAL transaction in a WAL-on mode, the
 collection write must fail before becoming visible to any reader, planner, or
@@ -485,7 +506,7 @@ turning the design into code:
    transactions for a collection in `CollectionSeq` order. PR1 has no
    same-collection independence skip.
 5. Watermark coverage is contiguous and atomic. A backend publish may advance
-   `applied_collection_seq[CollectionID]` only over the next contiguous prefix,
+   `applied_collection_seq[CollectionUID]` only over the next contiguous prefix,
    and descriptor updates plus watermark updates must be one backend commit.
 6. Cleanup requires applied plus checkpointed. A collection WAL segment or side
    ref is cleanable only after every referencing transaction is covered by a
@@ -555,19 +576,20 @@ CollectionWALTransaction {
 
     // Identity and ordering.
     WALLSN                   uint64
-    CollectionID             uuid128
+    CollectionUID            uuid128
     CollectionName           string diagnostic
+    CollectionGeneration     uint64
     CollectionSeq            uint64
     DependsOnCollectionSeq   uint64
 
     // Catalog guard.
     SchemaEpoch              uint64
-    CollectionEpoch          uint64 required for column-store collections
     SchemaVersion            uint32 optional for row-store, required for column-store
     BaseCommitSeq            uint64
     BaseSystemRootID         uint64
-    BaseCatalogDigest        bytes optional
-    CatalogDigest            bytes optional, recommended for column-store
+    BaseCatalogDigest        bytes
+    CatalogDigest            bytes
+    RootDescriptorEpochs     map[root-name]uint64
     MutationClass            uint8
 
     // Physical mutation.
@@ -588,10 +610,11 @@ CollectionWALTransaction {
 CollectionRootDelta {
     RootName                 string
     RootKind                 uint16
-    RootDeltaIndex           uint32
+    RootDeltaOrdinal         uint32
 
     BaseRootID               uint64
     BaseRootGeneration       uint64
+    BaseRootDescriptorEpoch  uint64
     BaseCollectionSeq        uint64
 
     StoragePolicy            uint8
@@ -621,13 +644,13 @@ DescriptorOp {
                              ReplaceRootList | PutMeta | DeleteMeta
     Key                      bytes
     ExpectedValueDigest      bytes optional
-    RootDeltaIndex           uint32 optional
+    RootDeltaOrdinal         uint32 optional
     RootIDPlaceholder        uint32 optional
     RootListPlaceholders     []uint32 optional
 }
 
 AppliedWatermarkOp {
-    CollectionID             uuid128
+    CollectionUID            uuid128
     AdvanceCollectionSeqTo   uint64
     OptionalWALLSN           uint64
 }
@@ -655,17 +678,22 @@ OrderedRootPublishOptions {
 }
 ```
 
-This record is not portable across replicas. `WALLSN`, `CollectionSeq`,
-`BaseSystemRootID`, `BaseRootID`, root names as resolved by local storage,
-side-ref paths/RIDs, timestamps, stats, and other local observability metadata
-are meaningful only in the database directory that wrote the record. A follower
-applying the same deterministic command entry may produce different local root
-ids, side refs, file names, and collection WAL bytes.
+This record is not portable across replicas. `CollectionUID` is the durable
+collection identity; existing code or system metadata may call the same value
+`CollectionID`, but `CollectionName` is diagnostic only and must not be used as
+the replay identity. `WALLSN`, `CollectionSeq`, `BaseSystemRootID`,
+`BaseRootID`, root names as resolved by local storage, side-ref paths/RIDs,
+timestamps, stats, and other local observability metadata are meaningful only in
+the database directory that wrote the record. A follower applying the same
+deterministic command entry may produce different local root ids, side refs,
+file names, and collection WAL bytes.
 
-Column-store transactions must carry enough catalog identity to make replay
-schema-stable. `CollectionEpoch` guards collection incarnation and catalog-level
-schema evolution. `SchemaVersion` guards physical column decode. `CatalogDigest`
-is optional but recommended for debugging and precondition checks. The
+All collection WAL transactions must carry enough catalog identity to make
+replay schema-stable. `CollectionGeneration` guards collection incarnation and
+drop/recreate. `SchemaEpoch` guards catalog-level schema/index evolution.
+`SchemaVersion` guards physical column decode for column-store roots.
+`BaseCatalogDigest`, `CatalogDigest`, and `RootDescriptorEpochs` are mandatory
+replay guards. The
 `MutationClass` values are versioned and include at least `row_insert`,
 `row_update`, `row_delete`, `column_insert`, `column_update_delta`,
 `column_delete`, `column_compaction`, `column_recompression`, and
@@ -675,8 +703,9 @@ A transaction is replayable only when:
 
 1. the record checksum is valid;
 2. every required side ref is present and passes integrity checks;
-3. `CollectionID`, `SchemaEpoch`, base root ids, and base root generations match
-   the current replay state or an explicit replay accumulator state;
+3. `CollectionUID`, `CollectionGeneration`, `SchemaEpoch`, `CatalogDigest`,
+   base root ids, base root generations, and root descriptor epochs match the
+   current replay state or an explicit replay accumulator state;
 4. `DependsOnCollectionSeq` is covered by the collection applied watermark or by
    the active accumulator;
 5. the `SystemDeltaTemplate` can be instantiated with the produced root ids and
@@ -708,24 +737,28 @@ Two digests are required:
 
 ### 7.3 Collection Identity and Root Generations
 
-Every collection must have a stable `CollectionID` persisted in collection
-metadata. `CollectionName` is diagnostic and must not be the replay identity.
-Dropping and recreating a collection with the same name creates a new
-`CollectionID`. Renaming a collection, if supported, preserves `CollectionID`
-and changes only catalog metadata.
+Every collection must have a stable `CollectionUID` persisted in collection
+metadata. The term `CollectionID` in older code/spec text refers to this same
+durable UID, not to the collection name. `CollectionName` is diagnostic and must
+not be the replay identity. Dropping and recreating a collection with the same
+name creates a new `CollectionUID` and a new `CollectionGeneration`. Renaming a
+collection, if supported, preserves `CollectionUID` and increments only the
+catalog metadata required by the rename.
 
 Every schema or index metadata change increments `SchemaEpoch`. Every root
-descriptor change increments that root's `RootGeneration`. Overlay descriptor
-changes and overlay compaction also increment the affected root generation.
+descriptor change increments that root's `RootGeneration` and descriptor epoch.
+Overlay descriptor changes and overlay compaction also increment the affected
+root generation and descriptor epoch.
 
-A collection WAL transaction records `CollectionID`, `SchemaEpoch`,
-`BaseRootID`, and `BaseRootGeneration` for every root it mutates. Recovery must
-reject or block a transaction whose identity or generation guard does not match
-the replay state, unless the mismatch is explicitly explained by the active
-replay accumulator. An unapplied transaction whose `CollectionID` is absent from
-the recovered catalog must not be replayed into a collection with the same name;
-PR1 must stop open or quarantine according to a documented recovery-admin
-procedure rather than silently applying the transaction to a later incarnation.
+A collection WAL transaction records `CollectionUID`, `CollectionGeneration`,
+`SchemaEpoch`, `CatalogDigest`, `RootDescriptorEpochs`, `BaseRootID`, and
+`BaseRootGeneration` for every root it mutates. Recovery must reject or block a
+transaction whose identity or generation guard does not match the replay state,
+unless the mismatch is explicitly explained by the active replay accumulator. An
+unapplied transaction whose `CollectionUID` is absent from the recovered catalog
+must not be replayed into a collection with the same name; PR1 must stop open or
+quarantine according to a documented recovery-admin procedure rather than
+silently applying the transaction to a later incarnation.
 
 Maintenance that rewrites root ids or descriptor values must not run for a
 collection with unapplied WAL transactions unless the maintenance operation is
@@ -747,6 +780,7 @@ but the durable encoding is versioned independently.
 RootDeltaEncodingV1:
   entries sorted by bytewise key;
   keys unique per root delta after intra-transaction merge;
+  stable EntryOrdinal for fold/replay diagnostics;
   entry op: PutInline | PutValuePtr | DeleteTombstone;
   key length + key bytes;
   value length + value bytes OR stable ValuePtr encoding;
@@ -763,6 +797,13 @@ Small deltas may be inline in the WAL transaction. Large deltas should use a
 rules: if two accumulated deltas affect the same key, the later
 `CollectionSeq` wins, and deletes suppress older values according to normal
 collection visibility rules.
+
+A collection WAL transaction has a configured maximum encoded byte size,
+maximum root-delta count, and maximum decoded entry count. Larger root deltas
+must spill to `RootDeltaPayload` side refs with the same side-ref preparation
+and protection rules as value-log or column-file refs. Recovery must be able to
+decode and fold root deltas in bounded memory; a transaction that exceeds the
+configured limits fails before acknowledgement or uses side-payload mode.
 
 Root kinds are explicit, versioned values. PR1 row-store root kinds include
 `primary`, `template`, `index_state`, `secondary`, `overlay`,
@@ -866,7 +907,8 @@ segment.
 
 ### 7.6 Applied Progress and Skip Rules
 
-The system root stores applied progress by `CollectionID`:
+The system root stores applied progress by `CollectionID`, which is the same
+durable value called `CollectionUID` in the transaction record:
 
 ```text
 treedb/collection-wal/global-contiguous-cleanup-wallsn -> uint64 optional
@@ -876,9 +918,9 @@ treedb/collection-wal/collection/<collection-id>/applied-collection-seq -> uint6
 `WALLSN` is the globally monotonic append position. It is useful for segment
 ordering, diagnostics, and cleanup scans. `CollectionSeq` is the replay and skip
 key. Recovery may skip a transaction only when
-`txn.CollectionSeq <= applied-collection-seq` for the same `CollectionID` and
-the transaction's `CollectionID`/`SchemaEpoch` guard matches the catalog history
-covered by that watermark.
+`txn.CollectionSeq <= applied-collection-seq` for the same `CollectionUID` and
+the transaction's `CollectionUID`/`SchemaEpoch` guard matches the catalog
+history covered by that watermark.
 
 A global contiguous `WALLSN` cleanup marker may be used only as a cleanup-scan
 optimization when every lower `WALLSN` is known applied or intentionally absent.
@@ -896,7 +938,7 @@ PR1 uses per-write WAL transactions with per-collection dependency chains:
 
 ```text
 WALLSN                   uint64  // global append position for diagnostics/cleanup
-CollectionSeq            uint64  // strictly increasing per CollectionID
+CollectionSeq            uint64  // strictly increasing per CollectionUID
 DependsOnCollectionSeq   uint64  // previous collection transaction observed
 ```
 
@@ -972,7 +1014,17 @@ parameters, dictionary ids, dictionary registry/version, and codec registry
 version must be persisted in descriptors or manifests and protected until every
 dependent payload is unreachable.
 
-Readable and integrity-passing means class-specific validation:
+Side refs are resolved by `RefClass` and `RefID`/`FileID` through a file-class
+registry. `RelativePath`, when encoded, is advisory validation data. It must
+normalize to a relative path with no `..` components, no absolute prefix, no
+empty path elements after cleaning, and no symlink traversal. It must remain
+confined to the owning file-class root and match the `RefID`/`FileID` registry
+entry. Cleanup and quarantine operations must refuse paths outside the owning
+file-class root, symlinks, and path/FileID mismatches.
+
+Prepared, readable, and integrity-passing means the file-class writer has made
+the referenced range visible to a fresh file reader, and class-specific
+validation passes:
 
 - `ValueLogRecord`: segment exists, offset/length are in bounds, RID or grouped
   sub-index matches when present, and record checksum passes.
@@ -994,6 +1046,11 @@ Readable and integrity-passing means class-specific validation:
 - `ColumnMetadataFile`: metadata bytes exist, checksum matches, and the owning
   descriptor names the expected metadata class and generation.
 
+Collection WAL append must not start until every required side ref in the
+transaction is prepared under this definition. In-memory append buffers,
+unflushed value-log buffers, temp files that are not fresh-process-readable, and
+side files whose checksums have not been verified do not satisfy the boundary.
+
 Column part prepare protocol:
 
 A column part builder must write files into a prepare namespace before the WAL
@@ -1006,7 +1063,7 @@ Dir/maindb/columns/.prepare/txn-<wallsn>/part-<part-id>/
 The prepare group must contain a manifest or prepare record that names every
 file/range, final relative path, size, checksum, `PartID`, `FileID`,
 `SchemaVersion`, compression pipeline, dictionary ids, and owning
-`CollectionID`.
+`CollectionUID`.
 
 Before a WAL-on transaction can be acknowledged:
 
@@ -1026,11 +1083,13 @@ A root descriptor must not be published before the referenced final bytes are
 readable. Temp-only files with no committed WAL/root reference are
 orphan-prepared and may be quarantined or deleted after recovery.
 
-A complete transaction with a missing required side ref is a recovery error in
-WAL-on durable/recoverable modes, except for an incomplete tail transaction that
-lacks a valid commit marker. Recovery must not skip a complete collection
-transaction and continue applying later transactions for the same
-`CollectionID`.
+A complete, unwatermarked transaction with a missing or checksum-invalid
+required side ref is a recovery error in WAL-on durable/recoverable modes and
+must either fail the database open or quarantine the affected collection as
+unavailable under an explicit recovery-admin path. Only a clearly incomplete
+tail transaction whose frame was not made recoverable may be ignored. Recovery
+must not skip a complete collection transaction and continue applying later
+transactions for the same `CollectionUID`.
 
 Collection WAL side refs are also retention roots. Value-log GC, value-log
 rewrite, column-file cleanup, and future side-file maintenance must treat every
@@ -1045,6 +1104,11 @@ a value-log segment or column file is referenced only by pending collection WAL,
 maintenance must keep it in place or abort. A future rewrite mode may rewrite
 protected refs only if it publishes replacement side refs and collection WAL
 metadata atomically under an explicit crash-tested protocol.
+
+Collection WAL append and side-ref protection registration are one critical
+section with respect to value-log GC, value-log rewrite, leaf-log GC, column-file
+GC, and side-file cleanup. A maintenance pass must either see the transaction's
+side refs or be ordered before the transaction can be acknowledged.
 
 A writer preparing side refs must hold a side-ref prepare guard from before the
 first side-ref append/write until either the collection WAL frame referencing
@@ -1081,11 +1145,14 @@ Hidden staging is private. It must not be reachable from any collection read,
 scan, uniqueness check, update/delete planner, schema/index barrier, queued unit,
 publishing unit, or pending-state merge before the commit marker is complete.
 
-After the commit marker reaches the required durability boundary, the mutation is
-committed for recovery. The implementation must not return an ordinary mutation
-error after that point. If the process crashes before the client observes the
-response, recovery may expose the mutation; this is committed-before-response
-ambiguity, not an incomplete transaction.
+After the commit marker reaches the required durability boundary, the complete
+collection WAL transaction is the logical commit point. The implementation must
+not return an ordinary mutation error after that point. It must either stage and
+return success, return an explicit committed/ambiguous status that tells the
+caller the mutation may recover after restart, or terminate before a response is
+observed. If the process crashes before the client observes the response,
+recovery may expose the mutation; this is committed-before-response ambiguity,
+not an incomplete transaction.
 
 The visible in-memory staging step after the commit marker must be non-failing.
 If an implementation cannot guarantee that, it must use a two-phase in-memory
@@ -1140,6 +1207,15 @@ A committed Raft entry has three distinct states:
 
 Raft commit alone is insufficient for `locally_recoverable`.
 
+After collection WAL is enabled, collection catalog metadata, root descriptor
+metadata, idempotency records, catalog guard outcomes, and Raft/local
+applied-index metadata that affect collection mutation replay must be advanced
+in the same collection root-group commit or in a metadata transaction with an
+explicit total order against collection WAL `CollectionSeq`/`WALLSN` records.
+Normal cached commit-log replay must not silently move those metadata values
+past a collection WAL transaction that was planned against an earlier catalog or
+idempotency state.
+
 ## 8. Write Path
 
 Every WAL-on collection mutation has three phases:
@@ -1186,6 +1262,12 @@ model. In WAL-on modes they must either append a collection WAL transaction and
 then publish/watermark it through the same collection-specific publish wrapper,
 or be limited to `DurabilityWALOffRelaxed`/debug paths whose weaker contract is
 explicitly documented. Uniform WAL-on behavior should log first, then publish.
+This no-bypass rule applies to every collection write API path, including
+`Insert`, `InsertBatch`, `Update`, `UpdateBatch`, `Delete`, `DeleteBatch`,
+disabled-memtable paths, large-batch direct publish paths, direct update paths,
+and delete-batch paths. An implementation may claim an equivalent durable
+root-group/side-ref fence only if it is tested at the same crash points as the
+collection WAL path.
 
 ### 8.1 No-Index Inserts
 
@@ -1309,6 +1391,11 @@ metadata removal, count/visibility metadata preservation, and unchanged logical
 secondary-index state in one atomic root group. The optional overlay-compaction
 maintenance shortcut does not apply to physical column parts.
 
+Descriptor replacement, delete-bitmap rewrite, filter rewrite, and side-file
+rewrite are also collection WAL maintenance transactions unless a separate
+backend-only protocol is specified with equivalent side-ref, watermark,
+ordering, and crash-test guarantees.
+
 ### 8.6 Collection-Specific Publish Wrapper
 
 Collection WAL recovery, flush, async publish, checkpoint, close, and
@@ -1317,7 +1404,9 @@ reconstructing ad hoc runtime system-builder closures.
 
 ```text
 PublishCollectionWALTransaction(txn, options) {
-    validate txn.CollectionID, SchemaEpoch, BaseRootGeneration, dependencies
+    validate txn.CollectionUID, CollectionGeneration, SchemaEpoch,
+             CatalogDigest, RootDescriptorEpochs, BaseRootGeneration,
+             dependencies
     materialize root deltas from txn
     apply root deltas
     instantiate txn.SystemDeltaTemplate with produced root ids
@@ -1447,7 +1536,7 @@ A `CollectionReadView` captures:
 - side refs reachable from those units;
 - generated secondary-index views and unique-helper state needed by the scan or
   planner;
-- the `CollectionID`, `CollectionSeq`, and `WALLSN` values that own pending
+- the `CollectionUID`, `CollectionSeq`, and `WALLSN` values that own pending
   visible units.
 
 Flush, async publish completion, rollback, overlay compaction, root rewrite,
@@ -1511,7 +1600,7 @@ the current invariant that side-store scans run before cached commit-log replay:
    any maintenance can run.
 10. Load applied collection-sequence watermark metadata from the recovered system
    root.
-11. Sort unapplied transactions by `CollectionID`, `CollectionSeq`, and
+11. Sort unapplied transactions by `CollectionUID`, `CollectionSeq`, and
    `WALLSN` for deterministic diagnostics.
 12. For each uncovered transaction, validate declared side refs and the
    canonical embedded required side-ref set extracted from root deltas and
@@ -1544,6 +1633,13 @@ point is after normal cached key/value WAL replay and side-store inventory, but
 before recovered roots are exposed to user-visible state, snapshots, native-wire
 servers, or collection managers.
 
+PR1 recovery must publish all replayable transactions before collection APIs can
+serve reads or writes. If a future implementation chooses to keep recoverable
+transactions as a durable pending overlay after open, it must rebuild primary
+visibility, secondary visibility, and unique-index helper state from WAL before
+serving any collection API; otherwise duplicate unique values can be admitted
+before pending durable state is published.
+
 Read-only open cannot perform steps that mutate backend state. If unapplied
 committed collection WAL exists, read-only open must fail with a clear
 recovery-required error unless an explicit stale-read-only mode is requested.
@@ -1557,7 +1653,7 @@ Before collection WAL replay, recovery scans column prepare directories and
 final column file classes and builds a side-file availability map. For each
 complete unapplied column-store transaction, recovery:
 
-1. validates transaction checksum, `CollectionEpoch`, `SchemaVersion`, and
+1. validates transaction checksum, `CollectionGeneration`, `SchemaVersion`, and
    catalog identity;
 2. extracts column file refs from descriptor, manifest, filter, delete bitmap,
    granule/mark, count/visibility, schema, compression metadata, and locator root
@@ -1591,7 +1687,7 @@ transactions are deferred because they are incompatible with durable-at-ack for
 independently acknowledged buffered writes unless those writes wait for the
 merged unit to become durable.
 
-Recovery processes transactions in `CollectionID`, `CollectionSeq` order. A
+Recovery processes transactions in `CollectionUID`, `CollectionSeq` order. A
 transaction may enter the accumulator only if its `DependsOnCollectionSeq` is
 already applied or already present in that accumulator. A complete missing
 transaction blocks later transactions for the same collection.
@@ -1603,16 +1699,24 @@ For each root, the accumulator records:
 - the merged ordered delta entries in transaction order;
 - whether cold-build tombstones must be preserved.
 
-If two accumulated deltas affect the same key, later `CollectionSeq` wins
-according to root-delta merge rules. Deletes/tombstones must suppress older
-values from the same accumulator and from older persisted or overlay roots
-according to normal collection visibility rules.
+The PR1 fold order is `(CollectionSeq, RootDeltaOrdinal, EntryOrdinal)`.
+`CollectionSeq` is the transaction order key; if a future record also exposes a
+diagnostic `TxnID`, it must not replace `CollectionSeq` for same-collection
+dependency ordering. `RootDeltaOrdinal` is the order of root deltas within the
+transaction, and `EntryOrdinal` is the stable operation order exposed by the
+root-delta codec. If two accumulated deltas affect the same key, the last
+operation in fold order wins. Deletes/tombstones are first-class operations and
+must suppress older values from the same accumulator and from older persisted or
+overlay roots according to normal collection visibility rules.
 
 A successful accumulated publish must cover whole transactions, not individual
-roots. The system-root commit must update every affected root descriptor and
-advance the collection watermark to the highest contiguous `CollectionSeq`
-covered by the publish. If any root in a transaction cannot be applied, no root
-from that transaction may be considered applied.
+roots. A transaction is covered only when every root delta in that transaction,
+every catalog/root descriptor update, every required side ref, and the applied
+watermark update have committed in one backend root-group commit. The
+system-root commit must update every affected root descriptor and advance the
+collection watermark to the highest contiguous `CollectionSeq` covered by the
+publish. If any root in a transaction cannot be applied, no root from that
+transaction may be considered applied.
 
 The applied watermark may advance from `N` to `M` only when the publish covers
 every transaction with `CollectionSeq` in `(N, M]` for that collection, with no
@@ -1656,6 +1760,13 @@ Collection WAL cleanup is safe only when both are true:
    applied sequence watermark;
 2. the backend checkpoint/meta boundary containing that watermark is durable for
    the selected mode.
+
+Segment cleanup must decode the candidate segment and prove coverage for every
+complete transaction in that segment. A segment maximum transaction id,
+maximum `WALLSN`, or per-collection high value is not sufficient unless it is
+paired with proof that every complete transaction in the segment is covered by
+that transaction's collection watermark or by a valid global contiguous
+watermark.
 
 Prepared side files use a two-state lifecycle:
 
@@ -1728,14 +1839,15 @@ after cleanup record write, after unlink/rename, and before/after directory
 fsync. Missing segments are acceptable only for `S6 Cleaned` ranges covered by
 durable cleanup metadata.
 
-`DB.Checkpoint` must call registered collection checkpoint hooks before
-reporting a clean collection WAL state. PR1 checkpoint hooks force publication
-of replayable collection WAL admitted before the checkpoint cut, wait for
-in-flight async publish, drain known write domains, advance watermarks, create
-the backend checkpoint/meta durability boundary, and then allow collection WAL
-cleanup. If a future checkpoint mode leaves replayable collection WAL
-unpublished, it must report collection WAL debt and preserve all side-ref
-protections; it is not a clean collection-WAL boundary.
+`DB.Checkpoint` must coordinate with collection WAL before reporting a clean
+collection WAL state. PR1 checkpoint hooks freeze collection WAL admission for
+the checkpoint cut, force publication of replayable collection WAL admitted
+before the cut, wait for in-flight async publish, drain known write domains,
+advance watermarks, persist the backend checkpoint/meta durability boundary,
+and include collection WAL side refs in value-log and side-file reachability
+before any prune, rewrite, or deletion. If a future checkpoint mode leaves
+replayable collection WAL unpublished, it must report collection WAL debt and
+preserve all side-ref protections; it is not a clean collection-WAL boundary.
 
 ## 11. Test Plan
 
@@ -1773,44 +1885,51 @@ Keep and expand tests that document current behavior:
 
 Crash/fault points:
 
-1. before collection WAL append;
-2. after side-file prepare before collection WAL append;
-3. after WAL commit marker before visible staging;
-4. after visible staging before response;
-5. after acknowledgement before root publish;
-6. during async publish;
-7. after root pages are built but before the system-root commit advances the
+1. after side-file append before side-file flush;
+2. after side-file flush before collection WAL append;
+3. before collection WAL append;
+4. after WAL commit marker before visible staging;
+5. after visible staging before response;
+6. after acknowledgement before root publish;
+7. during async publish;
+8. after root pages are built but before the system-root commit advances the
    applied watermark;
-8. after applied watermark before WAL cleanup;
-9. during overlay compaction;
-10. during column-file prepare once column store exists;
-11. after two or more acknowledged buffered transactions with the same
+9. after applied watermark before WAL cleanup;
+10. during overlay compaction;
+11. during column-file prepare once column store exists;
+12. after two or more acknowledged buffered transactions with the same
     persisted `BaseRootID`;
-12. after a higher `WALLSN` from another collection publishes before a
+13. after a higher `WALLSN` from another collection publishes before a
     lower `WALLSN`;
-13. after value-log GC/rewrite is requested while an unapplied collection WAL
+14. after value-log GC/rewrite is requested while an unapplied collection WAL
     transaction is the only owner of a side ref;
-14. after a schema/index change is planned while lower `CollectionSeq`
+15. after a schema/index change is planned while lower `CollectionSeq`
     transactions are durable but unpublished;
-15. after a drop/recreate under the same collection name;
-16. after a root descriptor generation rewrite attempt with unapplied WAL;
-17. after collection WAL cleanup record write before unlink;
-18. after collection WAL segment unlink before directory fsync;
-19. after read-only open observes unapplied committed collection WAL;
-20. after a multi-collection operation reaches the collection WAL planner;
-21. after Raft commit before local collection WAL append once Raft apply exists;
-22. after local collection WAL append before Raft applied-index/idempotency
+16. after a drop/recreate under the same collection name;
+17. after a root descriptor generation rewrite attempt with unapplied WAL;
+18. after collection WAL cleanup record write before unlink;
+19. after collection WAL segment unlink before directory fsync;
+20. after read-only open observes unapplied committed collection WAL;
+21. after a multi-collection operation reaches the collection WAL planner;
+22. after direct `InsertBatch`, `UpdateBatch`, `DeleteBatch`, disabled
+    indexed-memtable path, or large-batch path enters WAL-on execution;
+23. after an oversized inline root delta chooses fail-before-ack or side-payload
+    mode;
+24. after recovery decodes a side ref with `../`, absolute, symlinked, or
+    path/FileID-mismatched `RelativePath`;
+25. after Raft commit before local collection WAL append once Raft apply exists;
+26. after local collection WAL append before Raft applied-index/idempotency
     metadata advancement once Raft apply exists.
-23. midway through a column substream file;
-24. after all column files are written but before manifest write;
-25. after manifest write before final rename;
-26. during update-delta publish with secondary unique/nonunique index changes;
-27. during delete bitmap or filter publish;
-28. during column compaction/recompression after output files are prepared but
+27. midway through a column substream file;
+28. after all column files are written but before manifest write;
+29. after manifest write before final rename;
+30. during update-delta publish with secondary unique/nonunique index changes;
+31. during delete bitmap or filter publish;
+32. during column compaction/recompression after output files are prepared but
     before descriptor supersession;
-29. during column compaction/recompression after descriptor supersession before
+33. during column compaction/recompression after descriptor supersession before
     cleanup;
-30. during column file GC while an old snapshot or `CollectionReadView` still
+34. during column file GC while an old snapshot or `CollectionReadView` still
     references source parts.
 
 Required assertions:
@@ -1826,6 +1945,8 @@ Required assertions:
 - unique indexes reject duplicates after recovery;
 - reads do not need stale in-memory write domains after recovery;
 - roots never reference missing value-log or column-file bytes;
+- side refs with unsafe relative paths, symlinks, or path/FileID mismatches are
+  rejected before recovery or cleanup touches files;
 - collection WAL files are cleaned only after safe watermark/checkpoint
   boundaries;
 - buffered transactions with shared persisted bases replay by accumulation or
@@ -1852,6 +1973,10 @@ Required assertions:
 - missing uncleaned segments stop open;
 - root descriptors published without matching watermarks are unrepresentable or
   stop open under fault injection;
+- direct-publish, disabled-memtable, direct update, delete batch, and large-batch
+  paths pass the same WAL-on crash matrix or are rejected under WAL-on modes;
+- oversized inline transactions fail before ack or spill to side-payload refs
+  with the same side-ref fence;
 - future Raft apply cannot report an applied index whose logical mutation is
   neither locally recoverable nor guaranteed to be replayed from the Raft log.
 - descriptor side-ref closure is complete for column manifests, substreams,
@@ -2226,7 +2351,7 @@ Deliverables:
 - encoder/decoder;
 - segment reader/writer;
 - WALLSN and per-collection sequence allocator interfaces;
-- persisted `CollectionID`, `SchemaEpoch`, and root generation descriptor
+- persisted `CollectionUID`, `SchemaEpoch`, and root generation descriptor
   encoding;
 - `SystemDeltaTemplate` and descriptor-op encoding;
 - segment metadata and cleanup record encoding;
@@ -2592,7 +2717,7 @@ Gate:
 | Value-log GC/rewrite removes bytes referenced only by pending collection WAL. | Treat required collection WAL side refs as GC/rewrite roots through a protected side-ref index until safe applied watermark and checkpoint cleanup. |
 | A global `WALLSN` marker skips lower unapplied transactions. | Use per-collection `CollectionSeq` watermarks as the replay key; keep any global `WALLSN` marker cleanup-only and segment-verified. |
 | Buffered transactions share an old persisted `BaseRootID`. | Use per-collection dependency chains plus replay-side accumulation in PR1. |
-| A drop/recreate or schema change makes an old WAL transaction look applicable. | Persist `CollectionID`, `SchemaEpoch`, and per-root `RootGeneration` guards and block mismatches. |
+| A drop/recreate or schema change makes an old WAL transaction look applicable. | Persist `CollectionUID`, `CollectionGeneration`, `SchemaEpoch`, `CatalogDigest`, root descriptor epochs, and per-root `RootGeneration` guards and block mismatches. |
 | API returns a normal error after the WAL commit marker. | Reserve fallible state before commit; after commit marker, allow only success, process death, or commit-ambiguous/fatal reporting. |
 | Async flush races with WAL cleanup. | Treat async flush as publish-only; cleanup requires applied watermark and checkpoint boundary. |
 | Unique index helpers are lost on crash. | Rebuild helpers from durable root deltas or persisted roots during recovery. |
@@ -2643,6 +2768,16 @@ PR1 closes the correctness-critical questions that block implementation:
 15. Column compaction, delete-bitmap compaction, and recompression that create
     external files are collection WAL transactions, not optional backend-only
     maintenance commits.
+16. `CollectionUID`, `CollectionGeneration`, `SchemaEpoch`, `CatalogDigest`,
+    and root descriptor epochs are mandatory replay guards.
+17. Side-ref cleanup resolves files through a class registry by ref class and
+    file id; relative paths are confined validation data and cannot authorize
+    cleanup outside the class root.
+18. Direct publish and disabled-memtable write paths are not bypasses under
+    WAL-on modes; they must emit collection WAL or prove an equivalent crash
+    fence.
+19. Metadata that affects collection replay must share the collection root-group
+    commit or have an explicit total order against collection WAL records.
 
 Future questions that do not weaken PR1 correctness:
 
@@ -2659,7 +2794,109 @@ durability control and is stripped before deterministic-entry construction. A
 future cluster-visible barrier must be a separate deterministic command or a
 new deterministic command field with explicit state-machine semantics.
 
-## 16. Implementation Notes
+## 16. Required Runtime Assertions
+
+The implementation should enforce these assertions in debug, fault-injection, or
+always-on validation paths where practical.
+
+Write path:
+
+- Before acknowledging a WAL-on collection write: `CollectionSeq != 0`,
+  `WALLSN != 0`, `CollectionUID != 0`, `CollectionGeneration` and `SchemaEpoch`
+  are present, `CatalogDigest` is present, root delta count is nonzero, and all
+  root names are valid for the catalog epoch.
+- Before appending a collection WAL transaction: every required side ref has
+  reached the fresh-process-readable boundary and checksum verification has
+  succeeded in debug/fault-injection builds.
+- Before staging visible pending state: the WAL transaction is recoverable. In
+  WAL-off mode, the code path is explicitly marked relaxed.
+- After WAL append succeeds: ordinary failure returns are disallowed unless the
+  return status is explicitly committed/ambiguous.
+- Direct insert/update/delete paths assert either `collectionWALTxn != nil` or
+  `equivalentDurableRootFence == true`, and the latter must be covered by the
+  same crash matrix.
+
+Recovery:
+
+- Duplicate `WALLSN` or duplicate `(CollectionUID, CollectionSeq)` is fatal
+  unless covered by an explicit legacy quarantine path.
+- A transaction is skipped only if its own collection watermark or a valid
+  global contiguous watermark covers it.
+- Missing required side ref for a complete unwatermarked transaction is
+  fatal/quarantine, never silent skip.
+- A watermark advance includes every root delta and metadata delta in the
+  covered transaction set.
+- Base root mismatch is allowed only through formal accumulator state;
+  otherwise recovery fails.
+- Replaying the same directory twice produces the same collection root
+  descriptor digest and applied watermark.
+
+Cleanup and GC:
+
+- Before deleting a WAL segment, decode it and prove every complete transaction
+  is covered.
+- Before deleting, moving, or rewriting value-log, leaf-log, column, filter,
+  delete-bitmap, dictionary, or metadata bytes, prove the range is not reachable
+  from current roots, snapshots, live `CollectionReadView`s, unapplied
+  collection WAL, not-yet-cleanable collection WAL, or the protected side-ref
+  index.
+- Cleanup may stop protecting side refs only after applied watermark plus
+  durable checkpoint/meta boundary.
+- Side-file cleanup refuses paths outside the class root, symlinks, and
+  path/FileID mismatches.
+
+Serving:
+
+- No collection API serves after write-open recovery while replayable collection
+  WAL remains unapplied, unless a durable replay overlay with rebuilt primary,
+  secondary, and unique-helper state is installed.
+- Read-only open with pending collection WAL fails or installs a read-only
+  replay overlay.
+- Unique-index checks assert that pending WAL/replay state has rebuilt unique
+  helpers or has already been published.
+
+Column store:
+
+- Every published column part descriptor references readable files with matching
+  checksums, row counts, block directories, and schema epoch.
+- Primary locator rows, part descriptor row counts, delete bitmap counts, and
+  secondary index deltas agree before root-group publish.
+- Column compaction asserts that source descriptors are removed/superseded and
+  target descriptors are added in one covered maintenance transaction.
+- GC asserts old column files remain reachable while any snapshot root,
+  `CollectionReadView`, or unapplied WAL transaction can reference them.
+
+## 17. Production Observability
+
+Expose metrics and structured logs for:
+
+- collection WAL appended transactions, bytes, flush/sync latency, and failed
+  appends;
+- oldest unapplied transaction age and bytes by `CollectionUID`;
+- written `WALLSN`, per-collection applied watermark, and global contiguous
+  cleanup watermark when present;
+- recovery replay count, skipped-tail count, missing side-ref errors, checksum
+  failures, duplicate `WALLSN` failures, and duplicate `(CollectionUID,
+  CollectionSeq)` failures;
+- side refs protected by class, count, bytes, and oldest age;
+- GC bytes blocked by collection WAL side refs;
+- checkpoint blocked time due to pending collection WAL;
+- committed-but-not-staged return count;
+- direct-path writes that used collection WAL versus an equivalent durable
+  fence;
+- recovery accumulator groups, transactions per group, and base-root mismatch
+  failures;
+- read-only opens refused due to pending collection WAL;
+- column side-file prepared, referenced, reachable, quarantined, and deleted
+  counts;
+- overlay and column maintenance WAL transactions and cleanup lag.
+
+Structured log fields should include `wallsn`, `collection_uid`,
+`collection_name`, `collection_generation`, `schema_epoch`, `root_names`,
+`base_root_ids`, `new_root_ids`, `side_ref_class`, `file_id`, `offset`, `size`,
+`checksum`, `durability_mode`, and `watermark_after`.
+
+## 18. Implementation Notes
 
 - Prefer adding the collection WAL package below `TreeDB/internal` until the
   format stabilizes.
@@ -2688,6 +2925,10 @@ Module-specific constraints:
   applied watermark/checkpoint boundary. It may reuse or extract generic frame
   encoding from `internal/commitlog`, but it must not reuse the key/value
   `commitlog.Record` schema as the collection transaction schema.
+- The collection WAL transaction builder must require `CollectionUID`,
+  `CollectionGeneration`, `SchemaEpoch`, `CatalogDigest`,
+  `RootDescriptorEpochs`, `CollectionSeq`, `WALLSN`, root-delta ordinals, and
+  canonical side refs before it can encode a replayable record.
 - `TreeDB/collections` owns final physical delta planning before
   acknowledgement. WAL-on collection planners must serialize primary,
   template/index-state, secondary, overlay, delete, schema, and future
@@ -2725,14 +2966,17 @@ Recommended implementation sequence:
    product behavior is implemented.
 2. Add `internal/collectionwal` plus stable root-delta encode/decode golden
    tests. Keep this package independent from collection planner internals.
-3. Refactor collection write paths into prepare -> WAL append -> stage, starting
+3. Add file-class side-ref preparation APIs for prepare, flush-readable,
+   verify, protect, and quarantine; wire value-log pointerization to flush or
+   sync side refs to the required boundary before collection WAL append.
+4. Refactor collection write paths into prepare -> WAL append -> stage, starting
    with no-index buffered inserts and then indexed insert/update/delete.
-4. Add backend-owned collection WAL recovery and per-collection watermarks in
+5. Add backend-owned collection WAL recovery and per-collection watermarks in
    the backend open path before collection managers or native-wire servers can
    observe state.
-5. Integrate async flush ownership, checkpoint, close, cleanup metadata, and
+6. Integrate async flush ownership, checkpoint, close, cleanup metadata, and
    protected side-ref GC/rewrite behavior.
-6. Add performance gates and tune side-payload thresholds only after correctness
+7. Add performance gates and tune side-payload thresholds only after correctness
    crash tests pass.
-7. Unblock persistent column-store writes only after the row/template collection
+8. Unblock persistent column-store writes only after the row/template collection
    WAL path proves the shared recovery and side-ref protocol.
