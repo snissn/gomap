@@ -4850,6 +4850,23 @@ func cloneCollectionRunTable(run memtable.Table) (memtable.Table, error) {
 	return table, nil
 }
 
+func collectionOptionsWithClonedBufferedTemplateV1Resolver(opts collectionOptions, domain *collectionWriteDomain, collectionName string) (collectionOptions, []memtable.Table, error) {
+	if normalizedDocumentFormat(opts.documentFormat) != DocumentFormatTemplateV1 || domain == nil || collectionName == "" {
+		return opts, nil, nil
+	}
+	rootName := collectionTemplateRootName(collectionName)
+	domain.mu.RLock()
+	runs, err := cloneCollectionRunTables(pendingIndexedRootRunsLocked(domain, rootName))
+	domain.mu.RUnlock()
+	if err != nil {
+		return opts, nil, err
+	}
+	if len(runs) == 0 {
+		return opts, nil, nil
+	}
+	return collectionOptionsWithBufferedTemplateV1RunsResolver(opts, runs), runs, nil
+}
+
 type bufferedRootRunHeapItem struct {
 	idx      int
 	priority int
@@ -11838,8 +11855,10 @@ func (c *Collection) NewStoredDocumentJSONMaterializer() (*StoredDocumentJSONMat
 			return nil, backenddb.ErrClosed
 		}
 		closeOnErr := true
+		var bufferedTemplateRuns []memtable.Table
 		defer func() {
 			if closeOnErr {
+				resetCollectionTables(bufferedTemplateRuns)
 				_ = snap.Close()
 			}
 		}()
@@ -11855,12 +11874,18 @@ func (c *Collection) NewStoredDocumentJSONMaterializer() (*StoredDocumentJSONMat
 			return nil, err
 		}
 		plannerOptions = collectionOptionsWithTemplateV1Resolver(plannerOptions, snap, catalog)
-		plannerOptions = collectionOptionsWithBufferedTemplateV1Resolver(plannerOptions, c.writeDomain, c.meta.Name)
+		plannerOptions, bufferedTemplateRuns, err = collectionOptionsWithClonedBufferedTemplateV1Resolver(plannerOptions, c.writeDomain, c.meta.Name)
+		if err != nil {
+			return nil, err
+		}
 		closeOnErr = false
 		return &StoredDocumentJSONMaterializer{
 			documentFormat:   documentFormat,
 			templateResolver: plannerOptions.templateResolver,
-			closeFn:          snap.Close,
+			closeFn: func() error {
+				resetCollectionTables(bufferedTemplateRuns)
+				return snap.Close()
+			},
 		}, nil
 	default:
 		return nil, fmt.Errorf("collections: unsupported document format %q", c.meta.Options.DocumentFormat)
