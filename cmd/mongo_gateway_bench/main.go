@@ -4162,9 +4162,14 @@ func normalizeNativeWireBenchmarkCollectionMeta(meta collections.CollectionMeta)
 	}
 	if len(meta.Indexes) == 0 {
 		meta.Options.BufferedIndexedWrites = false
+		meta.Options.BufferedIndexedAsyncFlush = false
+		meta.Options.BufferedIndexedOverlayRoots = false
 		return meta
 	}
 	meta.Options.BufferedIndexedWrites = true
+	if !meta.Options.DisableBufferedIndexedAsyncFlush {
+		meta.Options.BufferedIndexedAsyncFlush = true
+	}
 	defaultMaxDocuments := collections.DefaultIndexedWriteMemtableMaxDocuments
 	defaultMaxRootRuns := collections.DefaultIndexedWriteMemtableMaxRootRuns
 	if meta.Options.BufferedIndexedAsyncFlush {
@@ -4204,9 +4209,14 @@ func normalizeNativeWireBenchmarkOptions(opts collections.CollectionOptions, ind
 	}
 	if !indexed {
 		opts.BufferedIndexedWrites = false
+		opts.BufferedIndexedAsyncFlush = false
+		opts.BufferedIndexedOverlayRoots = false
 		return opts
 	}
 	opts.BufferedIndexedWrites = true
+	if !opts.DisableBufferedIndexedAsyncFlush {
+		opts.BufferedIndexedAsyncFlush = true
+	}
 	defaultMaxDocuments := collections.DefaultIndexedWriteMemtableMaxDocuments
 	defaultMaxRootRuns := collections.DefaultIndexedWriteMemtableMaxRootRuns
 	if opts.BufferedIndexedAsyncFlush {

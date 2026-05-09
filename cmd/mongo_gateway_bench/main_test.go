@@ -886,8 +886,10 @@ func TestValidateNativeWireBenchmarkCollectionNormalizesExpectedMeta(t *testing.
 	}
 	actual := expected
 	actual.Options.BufferedIndexedWrites = true
-	actual.Options.BufferedIndexedWriteMaxDocuments = collections.DefaultIndexedWriteMemtableMaxDocuments
-	actual.Options.BufferedIndexedWriteMaxRootRuns = collections.DefaultIndexedWriteMemtableMaxRootRuns
+	actual.Options.BufferedIndexedWriteMaxDocuments = collections.DefaultIndexedWriteMemtableAsyncFlushMaxDocuments
+	actual.Options.BufferedIndexedWriteMaxRootRuns = collections.DefaultIndexedWriteMemtableAsyncFlushMaxRootRuns
+	actual.Options.BufferedIndexedAsyncFlush = true
+	actual.Options.BufferedIndexedAsyncFlushMaxQueuedUnits = collections.DefaultIndexedWriteMemtableAsyncFlushMaxQueuedUnits
 	if err := validateNativeWireBenchmarkCollection(actual, expected); err != nil {
 		t.Fatalf("validateNativeWireBenchmarkCollection normalized expected metadata: %v", err)
 	}
@@ -904,8 +906,10 @@ func TestValidateNativeWireBenchmarkCollectionNormalizesJSONDocumentFormat(t *te
 	actual := expected
 	actual.Options.DocumentFormat = collections.DocumentFormatDefault
 	actual.Options.BufferedIndexedWrites = true
-	actual.Options.BufferedIndexedWriteMaxDocuments = collections.DefaultIndexedWriteMemtableMaxDocuments
-	actual.Options.BufferedIndexedWriteMaxRootRuns = collections.DefaultIndexedWriteMemtableMaxRootRuns
+	actual.Options.BufferedIndexedWriteMaxDocuments = collections.DefaultIndexedWriteMemtableAsyncFlushMaxDocuments
+	actual.Options.BufferedIndexedWriteMaxRootRuns = collections.DefaultIndexedWriteMemtableAsyncFlushMaxRootRuns
+	actual.Options.BufferedIndexedAsyncFlush = true
+	actual.Options.BufferedIndexedAsyncFlushMaxQueuedUnits = collections.DefaultIndexedWriteMemtableAsyncFlushMaxQueuedUnits
 	if err := validateNativeWireBenchmarkCollection(actual, expected); err != nil {
 		t.Fatalf("validateNativeWireBenchmarkCollection normalized JSON document format: %v", err)
 	}
@@ -2495,14 +2499,7 @@ func TestEnsureNativeWireBenchmarkCollectionCreatesPrimaryOnlyCollection(t *test
 	if len(meta.Indexes) != 0 {
 		t.Fatalf("indexes=%+v want primary-only collection", meta.Indexes)
 	}
-	if meta.Options.DocumentFormat != collections.DocumentFormatTemplateV1 ||
-		meta.Options.DataRootStoragePolicy != collections.RootStorageCompressed ||
-		meta.Options.IndexStateStoragePolicy != collections.RootStorageCompressed ||
-		meta.Options.BufferedIndexedWriteMaxDocuments != 123 ||
-		meta.Options.BufferedIndexedWriteMaxBytes != 456 ||
-		meta.Options.BufferedIndexedWriteMaxRootRuns != 7 ||
-		!meta.Options.BufferedIndexedAsyncFlush ||
-		meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits != 2 {
+	if !sameNativeWireBenchmarkOptions(meta.Options, treeDBBenchmarkCollectionOptions(cfg), false) {
 		t.Fatalf("meta options=%+v", meta.Options)
 	}
 }
@@ -2537,22 +2534,25 @@ func TestEnsureNativeWireBenchmarkCollectionRejectsExistingIndexDrift(t *testing
 	}
 	defer func() { _ = db.Close() }()
 	manager := collections.NewCollectionManager(db)
-	if _, err := manager.CreateCollection(&collections.CollectionMeta{
-		Name: "bench.docs",
-		Indexes: []collections.IndexDefinition{{
-			Name:      "wrong_1",
-			Field:     "email",
-			ValueType: collections.IndexValueString,
-			Unique:    true,
-		}},
-	}); err != nil {
-		t.Fatalf("CreateCollection: %v", err)
-	}
 	cfg := config{
 		Database:             "bench",
 		Collection:           "docs",
 		TreeDBDocumentFormat: collections.DocumentFormatJSON,
 		SecondaryIndexes:     1,
+	}
+	existing := nativeWireBenchmarkCollectionMeta(cfg, "bench.docs")
+	existing.Indexes = []collections.IndexDefinition{{
+		Name:      "wrong_1",
+		Field:     "email",
+		ValueType: collections.IndexValueString,
+		Unique:    true,
+	}}
+	if _, err := manager.CreateCollection(&collections.CollectionMeta{
+		Name:    existing.Name,
+		Options: existing.Options,
+		Indexes: existing.Indexes,
+	}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
 	}
 	if err := ensureNativeWireBenchmarkCollection(cfg, &benchTarget{collections: manager}); err == nil || !strings.Contains(err.Error(), "missing index") {
 		t.Fatalf("ensureNativeWireBenchmarkCollection err=%v want index drift", err)
