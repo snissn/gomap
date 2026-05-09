@@ -212,8 +212,10 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) error {
 		}
 	}
 
-	if err := resetLeafGenerationAfterOfflineVacuum(opts.Dir, meta.CommitSeq); err != nil {
-		return err
+	if !opts.IndexOuterLeavesInValueLog {
+		if err := resetLeafGenerationAfterOfflineVacuum(opts.Dir, meta.CommitSeq); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -246,6 +248,15 @@ func resetLeafGenerationAfterOfflineVacuum(dir string, commitSeq uint64) error {
 	if len(files) == 0 && !manifestExists && len(sidecarPaths) == 0 {
 		return nil
 	}
+	if manifestExists {
+		manifestPath := leafGenerationManifestPath(leafDir)
+		if err := os.Remove(manifestPath); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("vacuum: remove stale leaf generation manifest %s: %w", manifestPath, err)
+		}
+		if err := syncDirFn(leafDir); err != nil {
+			return fmt.Errorf("vacuum: sync leaf_vlog dir after manifest removal: %w", err)
+		}
+	}
 
 	for _, file := range files {
 		path := leafGenerationFallbackPath(dir, file.rawFileID)
@@ -262,21 +273,15 @@ func resetLeafGenerationAfterOfflineVacuum(dir string, commitSeq uint64) error {
 			return fmt.Errorf("vacuum: remove stale leaf generation record-length index %s: %w", indexPath, err)
 		}
 	}
-	if runtime.GOOS != "windows" {
-		if dirFile, err := os.Open(leafDir); err == nil {
-			_ = dirFile.Sync()
-			_ = dirFile.Close()
-		}
+	if err := syncDirFn(leafDir); err != nil {
+		return fmt.Errorf("vacuum: sync leaf_vlog dir after stale file removal: %w", err)
 	}
 
 	if err := saveLeafGenerationManifest(leafDir, newLeafGenerationManifest(commitSeq)); err != nil {
 		return fmt.Errorf("vacuum: reset leaf generation manifest: %w", err)
 	}
-	if runtime.GOOS != "windows" {
-		if dirFile, err := os.Open(leafDir); err == nil {
-			_ = dirFile.Sync()
-			_ = dirFile.Close()
-		}
+	if err := syncDirFn(leafDir); err != nil {
+		return fmt.Errorf("vacuum: sync leaf_vlog dir after manifest reset: %w", err)
 	}
 	return nil
 }

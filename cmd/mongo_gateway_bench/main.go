@@ -4592,7 +4592,7 @@ func runTreeDBMaintenanceStack(ctx context.Context, target *benchTarget, result 
 		if err != nil {
 			return nil, "", err
 		}
-		return compactStorageMetrics(stats), compactStorageSkipReason(stats), nil
+		return compactStorageMetrics(stats), "", nil
 	}); err != nil {
 		return err
 	}
@@ -4654,16 +4654,6 @@ func compactStorageMetrics(stats backenddb.CompactStorageStats) map[string]int64
 	metrics["leaf_generation_pack_leaf_frames_written"] = packFrames
 	metrics["leaf_generation_pack_bytes_copied"] = packBytes
 	return metrics
-}
-
-func compactStorageSkipReason(stats backenddb.CompactStorageStats) string {
-	if stats.FullyCompacted {
-		return ""
-	}
-	if stats.RemainingDebt.Empty() {
-		return ""
-	}
-	return "remaining_debt"
 }
 
 func boolInt64(v bool) int64 {
