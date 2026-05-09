@@ -9486,15 +9486,15 @@ func snapshotUpdateBatchBufferedPrimaryEntriesFromIndex(index *bufferedPrimaryRu
 	return entries, buffer, nil
 }
 
-func snapshotUpdateBatchBufferedRead(domain *collectionWriteDomain, meta CollectionMeta, baseSystemRoot uint64, items []updateBatchItem, documentFormat DocumentFormat) (updateBatchBufferedRead, []memtable.Table, bool, error) {
+func snapshotUpdateBatchBufferedRead(domain *collectionWriteDomain, meta CollectionMeta, baseCommitSeq uint64, baseSystemRoot uint64, items []updateBatchItem, documentFormat DocumentFormat) (updateBatchBufferedRead, []memtable.Table, bool, bool, error) {
 	if domain == nil {
-		return updateBatchBufferedRead{}, nil, false, nil
+		return updateBatchBufferedRead{}, nil, false, false, nil
 	}
 	domain.mu.RLock()
-	read, templateRuns, blocked, needPrimaryRunIndex, err := snapshotUpdateBatchBufferedReadLocked(domain, meta, baseSystemRoot, items, documentFormat, true)
+	read, templateRuns, blocked, staleSnapshot, needPrimaryRunIndex, err := snapshotUpdateBatchBufferedReadLocked(domain, meta, baseCommitSeq, baseSystemRoot, items, documentFormat, true)
 	domain.mu.RUnlock()
 	if err != nil || !needPrimaryRunIndex {
-		return read, templateRuns, blocked, err
+		return read, templateRuns, blocked, staleSnapshot, err
 	}
 
 	domain.mu.Lock()
@@ -9503,22 +9503,22 @@ func snapshotUpdateBatchBufferedRead(domain *collectionWriteDomain, meta Collect
 	if updateBatchCanReadBufferedDomainLocked(domain, meta, baseSystemRoot) && domain.primaryRunIndex == nil && hasBufferedPrimaryRootRuns(domain, bufferedCollectionName) {
 		index, err := rebuildBufferedPrimaryRunIndex(bufferedCollectionName, pendingIndexedRootRunMapLocked(domain))
 		if err != nil {
-			return updateBatchBufferedRead{}, nil, false, err
+			return updateBatchBufferedRead{}, nil, false, false, err
 		}
 		if index == nil {
 			index = newBufferedPrimaryRunIndex(0)
 		}
 		domain.primaryRunIndex = index
 	}
-	read, templateRuns, blocked, _, err = snapshotUpdateBatchBufferedReadLocked(domain, meta, baseSystemRoot, items, documentFormat, false)
-	return read, templateRuns, blocked, err
+	read, templateRuns, blocked, staleSnapshot, _, err = snapshotUpdateBatchBufferedReadLocked(domain, meta, baseCommitSeq, baseSystemRoot, items, documentFormat, false)
+	return read, templateRuns, blocked, staleSnapshot, err
 }
 
-func snapshotUpdateBatchBufferedReadLocked(domain *collectionWriteDomain, meta CollectionMeta, baseSystemRoot uint64, items []updateBatchItem, documentFormat DocumentFormat, allowPrimaryRunIndexBuild bool) (updateBatchBufferedRead, []memtable.Table, bool, bool, error) {
+func snapshotUpdateBatchBufferedReadLocked(domain *collectionWriteDomain, meta CollectionMeta, baseCommitSeq uint64, baseSystemRoot uint64, items []updateBatchItem, documentFormat DocumentFormat, allowPrimaryRunIndexBuild bool) (updateBatchBufferedRead, []memtable.Table, bool, bool, bool, error) {
 	if updateBatchCanReadBufferedDomainLocked(domain, meta, baseSystemRoot) {
 		bufferedCollectionName := bufferedDomainCollectionName(domain, meta.Name)
 		if allowPrimaryRunIndexBuild && domain.primaryRunIndex == nil && hasBufferedPrimaryRootRuns(domain, bufferedCollectionName) {
-			return updateBatchBufferedRead{}, nil, false, true, nil
+			return updateBatchBufferedRead{}, nil, false, false, true, nil
 		}
 		var primaryEntries []updateBatchBufferedEntry
 		var primaryBuffer *updateBatchBufferedEntryBuffer
@@ -9530,13 +9530,13 @@ func snapshotUpdateBatchBufferedReadLocked(domain *collectionWriteDomain, meta C
 			primaryEntries, primaryBuffer, err = snapshotUpdateBatchBufferedPrimaryEntries(primaryRuns, items)
 		}
 		if err != nil {
-			return updateBatchBufferedRead{}, nil, false, false, err
+			return updateBatchBufferedRead{}, nil, false, false, false, err
 		}
 		var templateRuns []memtable.Table
 		if normalizedDocumentFormat(documentFormat) == DocumentFormatTemplateV1 {
 			templateRuns, err = cloneCollectionRunTables(pendingIndexedRootRunsLocked(domain, collectionTemplateRootName(bufferedCollectionName)))
 			if err != nil {
-				return updateBatchBufferedRead{}, nil, false, false, err
+				return updateBatchBufferedRead{}, nil, false, false, false, err
 			}
 		}
 		return updateBatchBufferedRead{
@@ -9544,12 +9544,28 @@ func snapshotUpdateBatchBufferedReadLocked(domain *collectionWriteDomain, meta C
 			primaryEntries:  primaryEntries,
 			primaryBuffer:   primaryBuffer,
 			writeGeneration: domain.writeGeneration,
-		}, templateRuns, false, false, nil
+		}, templateRuns, false, false, false, nil
 	}
 	if domain.count > 0 && hasBufferedIndexedRootRuns(domain) {
-		return updateBatchBufferedRead{}, nil, true, false, nil
+		return updateBatchBufferedRead{}, nil, true, false, false, nil
 	}
-	return updateBatchBufferedRead{}, nil, false, false, nil
+	if updateBatchBufferedSnapshotStaleLocked(domain, baseCommitSeq, baseSystemRoot) {
+		return updateBatchBufferedRead{}, nil, false, true, false, nil
+	}
+	return updateBatchBufferedRead{}, nil, false, false, false, nil
+}
+
+func updateBatchBufferedSnapshotStaleLocked(domain *collectionWriteDomain, baseCommitSeq uint64, baseSystemRoot uint64) bool {
+	if domain == nil || !domain.loaded || domain.catalog == nil {
+		return false
+	}
+	if domain.baseSystemRoot == 0 || domain.baseSystemRoot == baseSystemRoot {
+		return false
+	}
+	if domain.baseCommitSeq != 0 && baseCommitSeq != 0 && domain.baseCommitSeq <= baseCommitSeq {
+		return false
+	}
+	return true
 }
 
 func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBatchMode, useBufferedRead bool) (*updateBatchPlan, error) {
@@ -9603,10 +9619,15 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 	defer func() { resetCollectionTables(bufferedTemplateRuns) }()
 	bufferedReadBlocked := false
 	if domain := c.writeDomain; useBufferedRead && domain != nil && mode != updateBatchModeAny {
-		bufferedRead, bufferedTemplateRuns, bufferedReadBlocked, err = snapshotUpdateBatchBufferedRead(domain, meta, baseSystemRoot, items, plannerOptions.documentFormat)
+		var staleBufferedSnapshot bool
+		bufferedRead, bufferedTemplateRuns, bufferedReadBlocked, staleBufferedSnapshot, err = snapshotUpdateBatchBufferedRead(domain, meta, baseCommitSeq, baseSystemRoot, items, plannerOptions.documentFormat)
 		if err != nil {
 			_ = snap.Close()
 			return nil, err
+		}
+		if staleBufferedSnapshot {
+			_ = snap.Close()
+			return nil, ErrConcurrentMutation
 		}
 		defer putUpdateBatchBufferedEntries(bufferedRead.primaryEntries, bufferedRead.primaryBuffer)
 		if len(bufferedTemplateRuns) > 0 {
