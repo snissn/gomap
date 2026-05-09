@@ -7732,6 +7732,51 @@ func TestCollectionIndexedDeleteRevalidatesBeforeSkippingFlush(t *testing.T) {
 	}
 }
 
+func TestCollectionIndexedDeleteThenReinsertFlushesPendingTombstone(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Indexes: []IndexDefinition{
+			{Name: "city", Field: "city", ValueType: IndexValueString},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.Insert([]byte("u1"), []byte(`{"city":"hnl"}`)); err != nil {
+		t.Fatalf("insert original: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush insert: %v", err)
+	}
+	deleted, err := col.DeleteDocument([]byte("u1"))
+	if err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if !deleted {
+		t.Fatal("delete reported missing document")
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("u1")}, [][]byte{[]byte(`{"city":"sea"}`)}); err != nil {
+		t.Fatalf("reinsert after buffered delete: %v", err)
+	}
+	got, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get reinserted document: %v", err)
+	}
+	if string(got) != `{"city":"sea"}` {
+		t.Fatalf("reinserted document=%s want sea", got)
+	}
+}
+
 func TestCollectionSingleInsertBufferedNoIndexRejectsConcurrentSchemaChange(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

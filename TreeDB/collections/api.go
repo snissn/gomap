@@ -3372,6 +3372,16 @@ func (c *Collection) shouldFlushBeforeIndexedDelete(meta CollectionMeta) bool {
 	return !c.shouldBufferIndexedDeletes(catalog.meta)
 }
 
+func (c *Collection) hasBufferedIndexedDeletesOnly() bool {
+	if c == nil || c.writeDomain == nil {
+		return false
+	}
+	domain := c.writeDomain
+	domain.mu.RLock()
+	defer domain.mu.RUnlock()
+	return domain.count > 0 && domain.indexedDeletesOnly
+}
+
 func (c *Collection) shouldBufferIndexedInsertBatch(meta CollectionMeta, documentCount int) bool {
 	if !c.shouldBufferIndexedInserts(meta) {
 		return false
@@ -7089,6 +7099,11 @@ func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON b
 	if err := c.flushBufferedNoIndex(); err != nil {
 		return nil, err
 	}
+	if c.hasBufferedIndexedDeletesOnly() {
+		if err := c.flushBufferedWrites(); err != nil {
+			return nil, err
+		}
+	}
 
 	var bufferedTemplateRuns []memtable.Table
 	defer func() { resetCollectionTables(bufferedTemplateRuns) }()
@@ -7932,6 +7947,7 @@ func (c *Collection) deleteBatchOnce(documentIDs [][]byte) (int, error) {
 		_ = snap.Close()
 		if err != nil {
 			resetCollectionTables(deltaTables)
+			return 0, err
 		}
 		return len(existing), err
 	}
@@ -13511,13 +13527,13 @@ func (c *Collection) getBufferedDocumentIntoLocked(domain *collectionWriteDomain
 		var value []byte
 		var flags byte
 		found := false
-		if ref, ok := domain.primaryRunIndex.lookupRef(documentID); ok {
+		if domain.primaryRunIndex == nil {
+			value, _, flags, found = getBufferedRunEntry(pendingIndexedRootRunsLocked(domain, name), documentID)
+		} else if ref, ok := domain.primaryRunIndex.lookupRef(documentID); ok {
 			value, flags, found = ref.value, ref.flags, ref.entryValid
 			if !found && ref.table != nil {
 				value, _, flags, found = ref.table.GetEntry(documentID)
 			}
-		} else if domain.primaryRunIndex == nil {
-			value, _, flags, found = getBufferedRunEntry(pendingIndexedRootRunsLocked(domain, name), documentID)
 		}
 		if found {
 			if flags&node.FlagTombstone != 0 {
