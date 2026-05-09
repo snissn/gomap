@@ -9718,8 +9718,8 @@ func TestCollectionUpdateBSONSetRejectsInvalidFieldNames(t *testing.T) {
 			if err == nil {
 				t.Fatal("newBSONSetUpdate err=nil want error")
 			}
-			if !strings.Contains(err.Error(), tc.want) {
-				t.Fatalf("err=%q want containing %q", err, tc.want)
+			if !strings.Contains(err.Error(), tc.want) || !strings.Contains(err.Error(), "field") {
+				t.Fatalf("err=%q want field context containing %q", err, tc.want)
 			}
 		})
 	}
