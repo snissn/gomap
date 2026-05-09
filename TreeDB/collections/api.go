@@ -7738,6 +7738,9 @@ func (c *Collection) DeleteDocument(documentID []byte) (bool, error) {
 		deleted, err := c.deleteDocumentOnce(documentID)
 		if errors.Is(err, ErrConcurrentMutation) {
 			lastErr = err
+			if flushErr := c.flushBufferedWrites(); flushErr != nil {
+				return false, flushErr
+			}
 			waitBeforeCollectionMutationRetry(attempt)
 			continue
 		}
@@ -7796,6 +7799,9 @@ func (c *Collection) DeleteBatch(documentIDs [][]byte) (int, error) {
 		deleted, err := c.deleteBatchOnce(ids)
 		if errors.Is(err, ErrConcurrentMutation) {
 			lastErr = err
+			if flushErr := c.flushBufferedWrites(); flushErr != nil {
+				return 0, flushErr
+			}
 			waitBeforeCollectionMutationRetry(attempt)
 			continue
 		}
