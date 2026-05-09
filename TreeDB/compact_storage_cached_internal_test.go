@@ -127,6 +127,82 @@ func TestCachedValueLogRewriteOnlineReclaimsObservedActiveSources(t *testing.T) 
 	}
 }
 
+func TestBackendValueLogRewriteReclaimsLeafGenerationDebt(t *testing.T) {
+	dir := t.TempDir()
+	opts := cachedRewriteReclaimTestOptions(dir)
+	db, err := Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	expected := make(map[string][]byte)
+	for i := 0; i < 256; i++ {
+		key := cachedRewriteReclaimKey(i)
+		value := cachedRewriteReclaimValue(i)
+		if err := db.Set(key, value); err != nil {
+			t.Fatalf("set %d: %v", i, err)
+		}
+		expected[string(key)] = value
+	}
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close after load: %v", err)
+	}
+
+	source := listValueLogSegmentFiles(t, backenddb.ValueLogDirPath(dir))
+	if len(source) == 0 {
+		t.Fatalf("expected value-log source segments")
+	}
+	sourceIDs := make([]uint32, 0, len(source))
+	for _, segment := range source {
+		sourceIDs = append(sourceIDs, segment.id)
+	}
+
+	backend, cleanup, err := OpenBackendWithCachedLeafLog(opts)
+	if err != nil {
+		t.Fatalf("OpenBackendWithCachedLeafLog: %v", err)
+	}
+	stats, rewriteErr := backend.ValueLogRewriteOnline(context.Background(), backenddb.ValueLogRewriteOnlineOptions{
+		SourceFileIDs: sourceIDs,
+		BatchSize:     64,
+		SyncEachBatch: true,
+	})
+	cleanupErr := cleanup()
+	if rewriteErr != nil {
+		t.Fatalf("backend ValueLogRewriteOnline: %v", rewriteErr)
+	}
+	if cleanupErr != nil {
+		t.Fatalf("cleanup after backend rewrite: %v", cleanupErr)
+	}
+	if len(stats.SourceFileIDsUnreferenced) == 0 {
+		t.Fatalf("backend rewrite reported no unreferenced source IDs")
+	}
+
+	reopen, err := Open(opts)
+	if err != nil {
+		t.Fatalf("reopen after backend rewrite: %v", err)
+	}
+	defer func() { _ = reopen.Close() }()
+	leafGC, err := reopen.LeafGenerationGC(context.Background(), LeafGenerationGCOptions{DryRun: true})
+	if err != nil {
+		t.Fatalf("LeafGenerationGC dry-run after backend rewrite: %v", err)
+	}
+	if leafGC.GenerationsEligible != 0 {
+		t.Fatalf("backend rewrite left eligible leaf generations: %+v", leafGC)
+	}
+	for key, want := range expected {
+		got, err := reopen.Get([]byte(key))
+		if err != nil {
+			t.Fatalf("get %x after backend rewrite: %v", []byte(key), err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("value mismatch for %x: got %dB want %dB", []byte(key), len(got), len(want))
+		}
+	}
+}
+
 func writeTestValueLogSegment(t *testing.T, path string, lane, seq uint32, value []byte) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

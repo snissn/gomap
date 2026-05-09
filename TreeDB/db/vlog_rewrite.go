@@ -2154,6 +2154,11 @@ func (db *DB) valueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	if err := updateValueLogHealthAfterRewrite(db.dir, oldValueIDs, postSet); err != nil {
 		return stats, err
 	}
+	if db.indexOuterLeavesInValueLog && stats.RecordsCopied > 0 {
+		if _, err := db.leafGenerationGC(context.Background(), LeafGenerationGCOptions{}, false); err != nil {
+			return stats, err
+		}
+	}
 
 	if postSet != nil {
 		stats.SegmentsAfter, stats.BytesAfter = valueLogSegmentStatsFromFiles(db.valueOnlyValueLogFiles(postSet.Files))
