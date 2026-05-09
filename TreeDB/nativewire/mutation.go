@@ -22,6 +22,7 @@ const (
 
 	replacementModeExistingOnly uint64 = 1
 	templateV1InputMagic               = "TD1I"
+	templateV1HashMagic                = "TD1H"
 	templateV1StoredMagic              = "TD1D"
 	templateV1RecordMagic              = "TD1T"
 )
@@ -155,10 +156,12 @@ func applyTemplateRecords(format collections.DocumentFormat, sections []iwire.Se
 		switch {
 		case bytes.HasPrefix(doc, []byte(templateV1InputMagic)):
 			out[i] = doc
-		case bytes.HasPrefix(doc, []byte(templateV1StoredMagic)):
+		case bytes.HasPrefix(doc, []byte(templateV1HashMagic)):
 			out[i] = appendTemplateRecordEnvelope(nil, records, doc)
+		case bytes.HasPrefix(doc, []byte(templateV1StoredMagic)):
+			out[i] = doc
 		default:
-			return nil, protocolError(iwire.ErrInvalidCommand, "template-v1 document %d is not TD1I or TD1D", i)
+			return nil, protocolError(iwire.ErrInvalidCommand, "template-v1 document %d is not TD1I, TD1H, or TD1D", i)
 		}
 	}
 	return out, nil
