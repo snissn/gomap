@@ -3632,15 +3632,30 @@ func freezeIndexedRunTablesOutsideLock(domain *collectionWriteDomain, tables []m
 		return collectionObservedElapsedSince(freezeStart), 0, 0
 	}
 	domain.beginIndexedPrepareFreezeLocked()
+	prepareFinished := false
+	lockHeld := true
+	defer func() {
+		if prepareFinished {
+			return
+		}
+		if !lockHeld {
+			domain.mu.Lock()
+			lockHeld = true
+		}
+		domain.finishIndexedPrepareFreezeLocked()
+	}()
 	unlockStart := time.Now()
 	domain.mu.Unlock()
+	lockHeld = false
 	freezeStart := time.Now()
 	freezeIndexedRunTables(tables)
 	freezeDuration = collectionObservedElapsedSince(freezeStart)
 	relockStart := time.Now()
 	domain.mu.Lock()
+	lockHeld = true
 	relockWait = time.Since(relockStart)
 	domain.finishIndexedPrepareFreezeLocked()
+	prepareFinished = true
 	lockReleased = time.Since(unlockStart)
 	return freezeDuration, lockReleased, relockWait
 }
@@ -10037,6 +10052,7 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 	if shouldAutoFlushAfterAdding {
 		checkpoint = checkpointBufferedIndexedDomain(domain)
 	}
+	rollbackGeneration := checkpoint.writeGeneration
 	freezePreAppendTables := func() {
 		if len(preAppendFreezeTables) == 0 {
 			return
@@ -10044,7 +10060,7 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 		freezeDuration, lockReleased, relockWait := freezeIndexedRunTablesOutsideLock(domain, preAppendFreezeTables)
 		if lockReleased > 0 {
 			lockReleasedDuringHold += lockReleased
-			if domain.writeGeneration != checkpoint.writeGeneration {
+			if rollbackOnError && domain.writeGeneration != rollbackGeneration {
 				rollbackOnError = false
 			}
 		}
@@ -10144,6 +10160,9 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 	domain.mutableCount = saturatingAddNonNegativeInt(domain.mutableCount, modifiedCount)
 	domain.mutableBytes = saturatingAddNonNegativeInt64(domain.mutableBytes, direct.stagedBytes)
 	domain.writeGeneration++
+	if rollbackOnError {
+		rollbackGeneration = domain.writeGeneration
+	}
 	domain.observeIndexedStage(modifiedCount, direct.stagedBytes, actualRootRuns)
 	c.meta = plan.meta
 	compactedObsolete, err := maybeCompactBufferedIndexedMutableRunsLocked(domain, plan.meta.Options)
@@ -10159,7 +10178,9 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 		flushDuration, lockReleased, relockWait, err := c.flushBufferedIndexedAfterThresholdLocked(domain, plan.meta.Options)
 		if lockReleased > 0 {
 			lockReleasedDuringHold += lockReleased
-			rollbackOnError = false
+			if rollbackOnError && domain.writeGeneration != rollbackGeneration {
+				rollbackOnError = false
+			}
 		}
 		plan.stats.BufferStageLockWait += updateBatchStatsDuration(detailedStats, relockWait)
 		plan.stats.BufferStageFlush += updateBatchStatsDuration(detailedStats, flushDuration)
@@ -10314,9 +10335,11 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 	}
 	var checkpoint bufferedIndexedCheckpoint
 	collectionMetaCheckpoint := c.meta
+	rollbackOnError := shouldAutoFlushAfterAdding
 	if shouldAutoFlushAfterAdding {
 		checkpoint = checkpointBufferedIndexedDomain(domain)
 	}
+	rollbackGeneration := checkpoint.writeGeneration
 	plan.stats.BufferStageDomainPrepare += updateBatchStatsSince(detailedStats, phaseStart)
 	for i, rootName := range plan.rootNames {
 		baseRoot := plan.baseRootIDs[rootName]
@@ -10335,7 +10358,7 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 			if err := addBufferedPrimaryRunIndexEntries(domain.primaryRunIndex, table); err != nil {
 				plan.stats.BufferStagePrimaryIdx += updateBatchStatsSince(detailedStats, phaseStart)
 				domain.primaryRunIndex = nil
-				if shouldAutoFlushAfterAdding {
+				if rollbackOnError {
 					rollbackBufferedIndexedDomain(domain, checkpoint)
 					c.meta = collectionMetaCheckpoint
 				}
@@ -10348,7 +10371,7 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 			uniqueValueTable, uniquePrefixes, err := bufferedUniqueIndexValueRun(table, indexDef.ValueType)
 			if err != nil {
 				plan.stats.BufferStageUniqueIdx += updateBatchStatsSince(detailedStats, phaseStart)
-				if shouldAutoFlushAfterAdding {
+				if rollbackOnError {
 					rollbackBufferedIndexedDomain(domain, checkpoint)
 					c.meta = collectionMetaCheckpoint
 				}
@@ -10399,11 +10422,14 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 	domain.mutableCount = saturatingAddNonNegativeInt(domain.mutableCount, modifiedCount)
 	domain.mutableBytes = saturatingAddNonNegativeInt64(domain.mutableBytes, stagedBytes)
 	domain.writeGeneration++
+	if rollbackOnError {
+		rollbackGeneration = domain.writeGeneration
+	}
 	domain.observeIndexedStage(modifiedCount, stagedBytes, stagedRootRuns)
 	c.meta = plan.meta
 	compactedObsolete, err := maybeCompactBufferedIndexedMutableRunsLocked(domain, plan.meta.Options)
 	if err != nil {
-		if shouldAutoFlushAfterAdding {
+		if rollbackOnError {
 			rollbackBufferedIndexedDomain(domain, checkpoint)
 			c.meta = collectionMetaCheckpoint
 		}
@@ -10413,11 +10439,14 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 		flushDuration, lockReleased, relockWait, err := c.flushBufferedIndexedAfterThresholdLocked(domain, plan.meta.Options)
 		if lockReleased > 0 {
 			lockReleasedDuringHold += lockReleased
+			if rollbackOnError && domain.writeGeneration != rollbackGeneration {
+				rollbackOnError = false
+			}
 		}
 		plan.stats.BufferStageLockWait += updateBatchStatsDuration(detailedStats, relockWait)
 		plan.stats.BufferStageFlush += updateBatchStatsDuration(detailedStats, flushDuration)
 		if err != nil {
-			if shouldAutoFlushAfterAdding {
+			if rollbackOnError {
 				rollbackBufferedIndexedDomain(domain, checkpoint)
 				c.meta = collectionMetaCheckpoint
 			}
