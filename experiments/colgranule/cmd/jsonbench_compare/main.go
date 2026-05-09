@@ -51,6 +51,9 @@ type comparisonRaw struct {
 	RemainingTreeDB     remainingTreeDBResult             `json:"remaining_treedb"`
 	RemainingTreeDBJSON remainingTreeDBResult             `json:"remaining_treedb_json"`
 	RemainingTreeDBTpl  remainingTreeDBResult             `json:"remaining_treedb_template_v1"`
+	ConservativeBSON    remainingTreeDBResult             `json:"conservative_remaining_treedb_bson"`
+	ConservativeJSON    remainingTreeDBResult             `json:"conservative_remaining_treedb_json"`
+	ConservativeTpl     remainingTreeDBResult             `json:"conservative_remaining_treedb_template_v1"`
 	QueryTimings        []colgranule.JSONBenchQueryTiming `json:"query_timings"`
 	ColumnSummaries     []colgranule.ColumnCodecSummary   `json:"column_summaries"`
 	BestColumnStorage   []bestColumnStorage               `json:"best_column_storage"`
@@ -90,6 +93,13 @@ type bestColumnStorage struct {
 	ActualCompressionMix map[colgranule.Compression]int `json:"actual_compression_mix"`
 }
 
+type remainingShape string
+
+const (
+	remainingShapeClickHouseTyped remainingShape = "clickhouse_typed_paths_removed"
+	remainingShapeConservative    remainingShape = "time_us_only_removed"
+)
+
 func main() {
 	data := flag.String("data", colgranule.DefaultJSONBenchDir, "JSONBench input file or directory")
 	limit := flag.Int("limit", 1_000_000, "maximum rows to load; <=0 means all rows")
@@ -114,12 +124,21 @@ func main() {
 	var remaining remainingTreeDBResult
 	var remainingJSON remainingTreeDBResult
 	var remainingTpl remainingTreeDBResult
+	var conservativeBSON remainingTreeDBResult
+	var conservativeJSON remainingTreeDBResult
+	var conservativeTpl remainingTreeDBResult
 	if *measureRemaining {
-		remaining, err = measureRemainingTreeDB(context.Background(), ds.Files, ds.Rows, *remainingDBDir+"-bson", collections.DocumentFormatBSON)
+		remaining, err = measureRemainingTreeDB(context.Background(), ds.Files, ds.Rows, *remainingDBDir+"-clickhouse-bson", collections.DocumentFormatBSON, remainingShapeClickHouseTyped)
 		must(err)
-		remainingJSON, err = measureRemainingTreeDB(context.Background(), ds.Files, ds.Rows, *remainingDBDir+"-json", collections.DocumentFormatJSON)
+		remainingJSON, err = measureRemainingTreeDB(context.Background(), ds.Files, ds.Rows, *remainingDBDir+"-clickhouse-json", collections.DocumentFormatJSON, remainingShapeClickHouseTyped)
 		must(err)
-		remainingTpl, err = measureRemainingTreeDB(context.Background(), ds.Files, ds.Rows, *remainingDBDir+"-template-v1", collections.DocumentFormatTemplateV1)
+		remainingTpl, err = measureRemainingTreeDB(context.Background(), ds.Files, ds.Rows, *remainingDBDir+"-clickhouse-template-v1", collections.DocumentFormatTemplateV1, remainingShapeClickHouseTyped)
+		must(err)
+		conservativeBSON, err = measureRemainingTreeDB(context.Background(), ds.Files, ds.Rows, *remainingDBDir+"-conservative-bson", collections.DocumentFormatBSON, remainingShapeConservative)
+		must(err)
+		conservativeJSON, err = measureRemainingTreeDB(context.Background(), ds.Files, ds.Rows, *remainingDBDir+"-conservative-json", collections.DocumentFormatJSON, remainingShapeConservative)
+		must(err)
+		conservativeTpl, err = measureRemainingTreeDB(context.Background(), ds.Files, ds.Rows, *remainingDBDir+"-conservative-template-v1", collections.DocumentFormatTemplateV1, remainingShapeConservative)
 		must(err)
 	}
 
@@ -136,6 +155,9 @@ func main() {
 		RemainingTreeDB:     remaining,
 		RemainingTreeDBJSON: remainingJSON,
 		RemainingTreeDBTpl:  remainingTpl,
+		ConservativeBSON:    conservativeBSON,
+		ConservativeJSON:    conservativeJSON,
+		ConservativeTpl:     conservativeTpl,
 		QueryTimings:        timings,
 		ColumnSummaries:     summaries,
 		BestColumnStorage:   bestColumns(summaries),
@@ -153,13 +175,20 @@ func readClickHouseResult(path string) clickHouseResult {
 	return result
 }
 
-func measureRemainingTreeDB(ctx context.Context, files []string, rows int, dbDir string, format collections.DocumentFormat) (remainingTreeDBResult, error) {
+func measureRemainingTreeDB(ctx context.Context, files []string, rows int, dbDir string, format collections.DocumentFormat, shape remainingShape) (remainingTreeDBResult, error) {
 	var out remainingTreeDBResult
 	out.Enabled = true
 	out.DocumentFormat = string(format)
 	out.StoragePolicy = string(collections.RootStorageCompressed)
 	out.DBDir = dbDir
-	out.StoredShape = fmt.Sprintf("original JSON object converted to %s with ClickHouse typed JSON paths removed", format)
+	switch shape {
+	case remainingShapeClickHouseTyped:
+		out.StoredShape = fmt.Sprintf("original JSON object converted to %s with ClickHouse typed JSON paths removed", format)
+	case remainingShapeConservative:
+		out.StoredShape = fmt.Sprintf("original JSON object converted to %s with only top-level time_us removed", format)
+	default:
+		return out, fmt.Errorf("unknown remaining shape %q", shape)
+	}
 	if rows <= 0 {
 		return out, errors.New("remaining TreeDB measurement requires positive row count")
 	}
@@ -195,7 +224,7 @@ func measureRemainingTreeDB(ctx context.Context, files []string, rows int, dbDir
 		if err != nil {
 			return fmt.Errorf("open remaining collection: %w", err)
 		}
-		if err := insertRemainingDocuments(files, rows, col, format, &out); err != nil {
+		if err := insertRemainingDocuments(files, rows, col, format, shape, &out); err != nil {
 			return err
 		}
 		flushStart := time.Now()
@@ -325,7 +354,7 @@ func valueLogFileIDs(dbDir string) ([]uint32, error) {
 	return ids, nil
 }
 
-func insertRemainingDocuments(files []string, rows int, col *collections.Collection, format collections.DocumentFormat, out *remainingTreeDBResult) error {
+func insertRemainingDocuments(files []string, rows int, col *collections.Collection, format collections.DocumentFormat, shape remainingShape, out *remainingTreeDBResult) error {
 	const batchSize = 16_000
 	batchLimit := batchSize
 	if format == collections.DocumentFormatTemplateV1 {
@@ -364,7 +393,7 @@ func insertRemainingDocuments(files []string, rows int, col *collections.Collect
 			if out.Rows >= rows {
 				return errStopScan
 			}
-			doc, err := remainingDocument(raw, format)
+			doc, err := remainingDocument(raw, format, shape)
 			if err != nil {
 				return err
 			}
@@ -383,14 +412,14 @@ func insertRemainingDocuments(files []string, rows int, col *collections.Collect
 	return flush()
 }
 
-func remainingDocument(raw []byte, format collections.DocumentFormat) ([]byte, error) {
+func remainingDocument(raw []byte, format collections.DocumentFormat, shape remainingShape) ([]byte, error) {
 	switch format {
 	case collections.DocumentFormatBSON:
-		return remainingBSONDocument(raw)
+		return remainingBSONDocument(raw, shape)
 	case collections.DocumentFormatJSON:
-		return remainingJSONDocument(raw)
+		return remainingJSONDocument(raw, shape)
 	case collections.DocumentFormatTemplateV1:
-		doc, err := remainingJSONDocument(raw)
+		doc, err := remainingJSONDocument(raw, shape)
 		if err != nil {
 			return nil, err
 		}
@@ -400,12 +429,12 @@ func remainingDocument(raw []byte, format collections.DocumentFormat) ([]byte, e
 	}
 }
 
-func remainingBSONDocument(raw []byte) ([]byte, error) {
+func remainingBSONDocument(raw []byte, shape remainingShape) ([]byte, error) {
 	var doc map[string]any
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		return nil, fmt.Errorf("decode remaining JSON: %w", err)
 	}
-	removeClickHouseTypedPaths(doc)
+	removeRemainingPaths(doc, shape)
 	encoded, err := bson.Marshal(doc)
 	if err != nil {
 		return nil, fmt.Errorf("encode remaining BSON: %w", err)
@@ -416,12 +445,12 @@ func remainingBSONDocument(raw []byte) ([]byte, error) {
 	return encoded, nil
 }
 
-func remainingJSONDocument(raw []byte) ([]byte, error) {
+func remainingJSONDocument(raw []byte, shape remainingShape) ([]byte, error) {
 	var doc map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		return nil, fmt.Errorf("decode remaining JSON: %w", err)
 	}
-	if err := removeClickHouseTypedRawPaths(doc); err != nil {
+	if err := removeRemainingRawPaths(doc, shape); err != nil {
 		return nil, err
 	}
 	encoded, err := json.Marshal(doc)
@@ -431,8 +460,11 @@ func remainingJSONDocument(raw []byte) ([]byte, error) {
 	return encoded, nil
 }
 
-func removeClickHouseTypedPaths(doc map[string]any) {
+func removeRemainingPaths(doc map[string]any, shape remainingShape) {
 	delete(doc, "time_us")
+	if shape == remainingShapeConservative {
+		return
+	}
 	delete(doc, "kind")
 	delete(doc, "did")
 	commit, ok := doc["commit"].(map[string]any)
@@ -443,8 +475,11 @@ func removeClickHouseTypedPaths(doc map[string]any) {
 	delete(commit, "collection")
 }
 
-func removeClickHouseTypedRawPaths(doc map[string]json.RawMessage) error {
+func removeRemainingRawPaths(doc map[string]json.RawMessage, shape remainingShape) error {
 	delete(doc, "time_us")
+	if shape == remainingShapeConservative {
+		return nil
+	}
 	delete(doc, "kind")
 	delete(doc, "did")
 	rawCommit, ok := doc["commit"]
@@ -554,6 +589,12 @@ func writeMarkdown(path string, raw comparisonRaw) {
 	combinedQueryJSON := int64(queryBest) + raw.RemainingTreeDBJSON.AfterCompactBytes
 	combinedAllTpl := int64(allBest) + raw.RemainingTreeDBTpl.AfterCompactBytes
 	combinedQueryTpl := int64(queryBest) + raw.RemainingTreeDBTpl.AfterCompactBytes
+	conservativeAllBSON := int64(allBest) + raw.ConservativeBSON.AfterCompactBytes
+	conservativeQueryBSON := int64(queryBest) + raw.ConservativeBSON.AfterCompactBytes
+	conservativeAllJSON := int64(allBest) + raw.ConservativeJSON.AfterCompactBytes
+	conservativeQueryJSON := int64(queryBest) + raw.ConservativeJSON.AfterCompactBytes
+	conservativeAllTpl := int64(allBest) + raw.ConservativeTpl.AfterCompactBytes
+	conservativeQueryTpl := int64(queryBest) + raw.ConservativeTpl.AfterCompactBytes
 	fmt.Fprintf(&b, "| Item | Bytes | MiB | Notes |\n")
 	fmt.Fprintf(&b, "|---|---:|---:|---|\n")
 	fmt.Fprintf(&b, "| JSONBench compressed input files | %d | %.2f | Local `.json.gz` source bytes read by this run. |\n", raw.InputBytes, mib(raw.InputBytes))
@@ -577,9 +618,24 @@ func writeMarkdown(path string, raw comparisonRaw) {
 		fmt.Fprintf(&b, "| Granules all derived columns + TreeDB Template-v1 remaining fields | %d | %.2f | %.2f%% of ClickHouse local total. |\n", combinedAllTpl, mib(combinedAllTpl), ratio(float64(combinedAllTpl)*100, float64(raw.ClickHouseLocal.TotalSize)))
 		fmt.Fprintf(&b, "| Granules query/index paths + TreeDB Template-v1 remaining fields | %d | %.2f | %.2f%% of ClickHouse local total. |\n", combinedQueryTpl, mib(combinedQueryTpl), ratio(float64(combinedQueryTpl)*100, float64(raw.ClickHouseLocal.TotalSize)))
 	}
+	if raw.ConservativeBSON.Enabled {
+		fmt.Fprintf(&b, "| Conservative TreeDB BSON remaining fields after compaction + value-log rewrite | %d | %.2f | Stores original JSON minus only `time_us` as BSON in a compressed no-index collection. |\n", raw.ConservativeBSON.AfterCompactBytes, mib(raw.ConservativeBSON.AfterCompactBytes))
+		fmt.Fprintf(&b, "| Granules all derived columns + conservative TreeDB BSON remaining fields | %d | %.2f | %.2f%% of ClickHouse local total. |\n", conservativeAllBSON, mib(conservativeAllBSON), ratio(float64(conservativeAllBSON)*100, float64(raw.ClickHouseLocal.TotalSize)))
+		fmt.Fprintf(&b, "| Granules query/index paths + conservative TreeDB BSON remaining fields | %d | %.2f | %.2f%% of ClickHouse local total. |\n", conservativeQueryBSON, mib(conservativeQueryBSON), ratio(float64(conservativeQueryBSON)*100, float64(raw.ClickHouseLocal.TotalSize)))
+	}
+	if raw.ConservativeJSON.Enabled {
+		fmt.Fprintf(&b, "| Conservative TreeDB JSON remaining fields after compaction + value-log rewrite | %d | %.2f | Stores original JSON minus only `time_us` as JSON in a compressed no-index collection. |\n", raw.ConservativeJSON.AfterCompactBytes, mib(raw.ConservativeJSON.AfterCompactBytes))
+		fmt.Fprintf(&b, "| Granules all derived columns + conservative TreeDB JSON remaining fields | %d | %.2f | %.2f%% of ClickHouse local total. |\n", conservativeAllJSON, mib(conservativeAllJSON), ratio(float64(conservativeAllJSON)*100, float64(raw.ClickHouseLocal.TotalSize)))
+		fmt.Fprintf(&b, "| Granules query/index paths + conservative TreeDB JSON remaining fields | %d | %.2f | %.2f%% of ClickHouse local total. |\n", conservativeQueryJSON, mib(conservativeQueryJSON), ratio(float64(conservativeQueryJSON)*100, float64(raw.ClickHouseLocal.TotalSize)))
+	}
+	if raw.ConservativeTpl.Enabled {
+		fmt.Fprintf(&b, "| Conservative TreeDB Template-v1 remaining fields after compaction + value-log rewrite | %d | %.2f | Stores original JSON minus only `time_us` as Template-v1 in a compressed no-index collection. |\n", raw.ConservativeTpl.AfterCompactBytes, mib(raw.ConservativeTpl.AfterCompactBytes))
+		fmt.Fprintf(&b, "| Granules all derived columns + conservative TreeDB Template-v1 remaining fields | %d | %.2f | %.2f%% of ClickHouse local total. |\n", conservativeAllTpl, mib(conservativeAllTpl), ratio(float64(conservativeAllTpl)*100, float64(raw.ClickHouseLocal.TotalSize)))
+		fmt.Fprintf(&b, "| Granules query/index paths + conservative TreeDB Template-v1 remaining fields | %d | %.2f | %.2f%% of ClickHouse local total. |\n", conservativeQueryTpl, mib(conservativeQueryTpl), ratio(float64(conservativeQueryTpl)*100, float64(raw.ClickHouseLocal.TotalSize)))
+	}
 	fmt.Fprintf(&b, "\n")
 	if raw.RemainingTreeDB.Enabled {
-		fmt.Fprintf(&b, "The remaining-fields TreeDB collection stores each original JSON row after deleting the same explicitly typed JSON paths used by the local ClickHouse JSONBench schema: `time_us`, `kind`, `did`, `commit.operation`, and `commit.collection`. The removed paths are represented by granule columns in this experiment. Nested values such as `commit.rev`, `commit.rkey`, `commit.cid`, `commit.record.text`, `langs`, `reply`, and `subject` remain in the TreeDB payload.\n\n")
+		fmt.Fprintf(&b, "The ClickHouse-aligned remaining-fields TreeDB collections store each original JSON row after deleting the same explicitly typed JSON paths used by the local ClickHouse JSONBench schema: `time_us`, `kind`, `did`, `commit.operation`, and `commit.collection`. The removed paths are represented by granule columns in this experiment. Nested values such as `commit.rev`, `commit.rkey`, `commit.cid`, `commit.record.text`, `langs`, `reply`, and `subject` remain in the TreeDB payload. The conservative rows keep those string paths in the TreeDB payload and remove only `time_us`.\n\n")
 		fmt.Fprintf(&b, "BSON remaining-fields compaction detail: before compact `%d` bytes across `%d` files; after compact plus value-log rewrite `%d` bytes across `%d` files; compaction wall time `%.3fs`; rewrite wall time `%.3fs`; rewritten records `%d`; rewritten value bytes `%d`; rewritten source bytes `%d`; BSON payload bytes before TreeDB storage `%d`.\n\n", raw.RemainingTreeDB.BeforeCompactBytes, raw.RemainingTreeDB.BeforeCompactFiles, raw.RemainingTreeDB.AfterCompactBytes, raw.RemainingTreeDB.AfterCompactFiles, raw.RemainingTreeDB.CompactionDuration, raw.RemainingTreeDB.RewriteDuration, raw.RemainingTreeDB.RewriteRecordsCopied, raw.RemainingTreeDB.RewriteValueBytes, raw.RemainingTreeDB.RewriteSourceBytes, raw.RemainingTreeDB.RawDocumentBytes)
 	}
 	if raw.RemainingTreeDBJSON.Enabled {
@@ -588,6 +644,15 @@ func writeMarkdown(path string, raw comparisonRaw) {
 	if raw.RemainingTreeDBTpl.Enabled {
 		fmt.Fprintf(&b, "Template-v1 remaining-fields compaction detail: before compact `%d` bytes across `%d` files; after compact plus value-log rewrite `%d` bytes across `%d` files; compaction wall time `%.3fs`; rewrite wall time `%.3fs`; rewritten records `%d`; rewritten value bytes `%d`; rewritten source bytes `%d`; Template-v1 payload bytes before TreeDB storage `%d`.\n\n", raw.RemainingTreeDBTpl.BeforeCompactBytes, raw.RemainingTreeDBTpl.BeforeCompactFiles, raw.RemainingTreeDBTpl.AfterCompactBytes, raw.RemainingTreeDBTpl.AfterCompactFiles, raw.RemainingTreeDBTpl.CompactionDuration, raw.RemainingTreeDBTpl.RewriteDuration, raw.RemainingTreeDBTpl.RewriteRecordsCopied, raw.RemainingTreeDBTpl.RewriteValueBytes, raw.RemainingTreeDBTpl.RewriteSourceBytes, raw.RemainingTreeDBTpl.RawDocumentBytes)
 		fmt.Fprintf(&b, "Template-v1 is loaded as one large insert batch in this experiment so template records and compact stored documents are learned together. The rewritten record count includes template-root records as well as primary documents.\n\n")
+	}
+	if raw.ConservativeBSON.Enabled {
+		fmt.Fprintf(&b, "Conservative BSON remaining-fields compaction detail: before compact `%d` bytes across `%d` files; after compact plus value-log rewrite `%d` bytes across `%d` files; compaction wall time `%.3fs`; rewrite wall time `%.3fs`; rewritten records `%d`; rewritten value bytes `%d`; rewritten source bytes `%d`; BSON payload bytes before TreeDB storage `%d`.\n\n", raw.ConservativeBSON.BeforeCompactBytes, raw.ConservativeBSON.BeforeCompactFiles, raw.ConservativeBSON.AfterCompactBytes, raw.ConservativeBSON.AfterCompactFiles, raw.ConservativeBSON.CompactionDuration, raw.ConservativeBSON.RewriteDuration, raw.ConservativeBSON.RewriteRecordsCopied, raw.ConservativeBSON.RewriteValueBytes, raw.ConservativeBSON.RewriteSourceBytes, raw.ConservativeBSON.RawDocumentBytes)
+	}
+	if raw.ConservativeJSON.Enabled {
+		fmt.Fprintf(&b, "Conservative JSON remaining-fields compaction detail: before compact `%d` bytes across `%d` files; after compact plus value-log rewrite `%d` bytes across `%d` files; compaction wall time `%.3fs`; rewrite wall time `%.3fs`; rewritten records `%d`; rewritten value bytes `%d`; rewritten source bytes `%d`; JSON payload bytes before TreeDB storage `%d`.\n\n", raw.ConservativeJSON.BeforeCompactBytes, raw.ConservativeJSON.BeforeCompactFiles, raw.ConservativeJSON.AfterCompactBytes, raw.ConservativeJSON.AfterCompactFiles, raw.ConservativeJSON.CompactionDuration, raw.ConservativeJSON.RewriteDuration, raw.ConservativeJSON.RewriteRecordsCopied, raw.ConservativeJSON.RewriteValueBytes, raw.ConservativeJSON.RewriteSourceBytes, raw.ConservativeJSON.RawDocumentBytes)
+	}
+	if raw.ConservativeTpl.Enabled {
+		fmt.Fprintf(&b, "Conservative Template-v1 remaining-fields compaction detail: before compact `%d` bytes across `%d` files; after compact plus value-log rewrite `%d` bytes across `%d` files; compaction wall time `%.3fs`; rewrite wall time `%.3fs`; rewritten records `%d`; rewritten value bytes `%d`; rewritten source bytes `%d`; Template-v1 payload bytes before TreeDB storage `%d`.\n\n", raw.ConservativeTpl.BeforeCompactBytes, raw.ConservativeTpl.BeforeCompactFiles, raw.ConservativeTpl.AfterCompactBytes, raw.ConservativeTpl.AfterCompactFiles, raw.ConservativeTpl.CompactionDuration, raw.ConservativeTpl.RewriteDuration, raw.ConservativeTpl.RewriteRecordsCopied, raw.ConservativeTpl.RewriteValueBytes, raw.ConservativeTpl.RewriteSourceBytes, raw.ConservativeTpl.RawDocumentBytes)
 	}
 	fmt.Fprintf(&b, "The table below is one-column-at-a-time storage for the experimental granule codecs. It picks the smallest stored byte count observed for each derived `int64` column across raw, delta-varint, snappy, and lz4 combinations.\n\n")
 	fmt.Fprintf(&b, "| Column | Best codec | Stored bytes | Ratio vs int64 values | Ratio vs ClickHouse total |\n")

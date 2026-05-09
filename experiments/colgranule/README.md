@@ -64,10 +64,10 @@ This writes:
   remaining-field measurements;
 - `JSONBENCH_COMPARISON_REPORT.md`: human-readable timing and storage summary.
 
-By default, the comparison command also builds temporary TreeDB collections at
-`artifacts/colgranule_remaining_treedb-json` and
-`artifacts/colgranule_remaining_treedb-bson`, stores the original JSON rows with
-the ClickHouse typed JSON paths removed, flushes and compacts each database, and
-adds both disk footprints to the report. Those removed paths are `time_us`,
-`kind`, `did`, `commit.operation`, and `commit.collection`. Disable this part with
-`-measure-remaining-treedb=false`.
+By default, the comparison command also builds temporary TreeDB collections
+under `artifacts/colgranule_remaining_treedb-*`, flushes and compacts each
+database, and adds the disk footprints to the report. It records two
+remaining-field shapes: a conservative shape with only top-level `time_us`
+removed, and a ClickHouse-aligned shape with the typed JSON paths removed:
+`time_us`, `kind`, `did`, `commit.operation`, and `commit.collection`. Disable
+this part with `-measure-remaining-treedb=false`.
