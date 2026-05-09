@@ -723,6 +723,7 @@ func directoryUsage(dir string) (int64, int, error) {
 func writeJSON(path string, raw comparisonRaw) {
 	data, err := json.MarshalIndent(raw, "", "  ")
 	must(err)
+	must(os.MkdirAll(filepath.Dir(path), 0o755))
 	must(os.WriteFile(path, append(data, '\n'), 0o644))
 }
 
@@ -828,7 +829,8 @@ func writeMarkdown(path string, raw comparisonRaw) {
 		fmt.Fprintf(&b, "| `%s` | `%s` + `%s` | %d | %.6f | %.4f%% |\n", col.Column, col.Encoding, col.RequestedCompression, col.StoredBytes, col.RatioVsValues, ratio(float64(col.StoredBytes)*100, float64(raw.ClickHouseLocal.TotalSize)))
 	}
 	fmt.Fprintf(&b, "\n## Raw Data\n\n")
-	fmt.Fprintf(&b, "Machine-readable raw data is in `experiments/colgranule/JSONBENCH_COMPARISON_RAW.json`.\n")
+	fmt.Fprintf(&b, "Machine-readable raw data is written beside this report when using the default output directory.\n")
+	must(os.MkdirAll(filepath.Dir(path), 0o755))
 	must(os.WriteFile(path, []byte(b.String()), 0o644))
 }
 
