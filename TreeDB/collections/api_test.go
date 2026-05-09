@@ -3718,6 +3718,10 @@ func TestCollectionIndexedWriteMemtablesDefaultSkipsNoIndexSchemas(t *testing.T)
 		t.Fatalf("no-index buffered limits docs=%d bytes=%d rootRuns=%d want zero",
 			meta.Options.BufferedIndexedWriteMaxDocuments, meta.Options.BufferedIndexedWriteMaxBytes, meta.Options.BufferedIndexedWriteMaxRootRuns)
 	}
+	if meta.Options.DisableBufferedIndexedAsyncFlush || meta.Options.BufferedIndexedAsyncFlush || meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits != 0 {
+		t.Fatalf("no-index async flush fields disable=%v enabled=%v maxQueued=%d want false/false/0",
+			meta.Options.DisableBufferedIndexedAsyncFlush, meta.Options.BufferedIndexedAsyncFlush, meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits)
+	}
 }
 
 func TestCollectionIndexedWriteMemtablesPreserveNoIndexThresholdsForFutureIndexes(t *testing.T) {
