@@ -2346,6 +2346,75 @@ func TestCollectionInsertBatchStatsExposeNoIndexFastPath(t *testing.T) {
 	}
 }
 
+func TestCollectionInsertBatchBuffersNoIndexBSONBeforeFlush(t *testing.T) {
+	dir := t.TempDir()
+	d, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "users",
+		Options: CollectionOptions{DocumentFormat: DocumentFormatBSON},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	writer, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open writer: %v", err)
+	}
+	reader, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open reader: %v", err)
+	}
+	docs := [][]byte{
+		mustBSONCollectionDocument(t, bson.D{{Key: "name", Value: "ada"}}),
+		mustBSONCollectionDocument(t, bson.D{{Key: "name", Value: "grace"}}),
+	}
+	if _, err := writer.InsertBatchValidatedBSON([][]byte{[]byte("u1"), []byte("u2")}, docs); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	if writer.writeDomain == nil {
+		t.Fatal("missing write domain")
+	}
+	if writer.writeDomain.count != 2 || writer.writeDomain.table == nil || writer.writeDomain.table.Len() != 2 {
+		t.Fatalf("write domain count=%d table=%v want two pending rows", writer.writeDomain.count, writer.writeDomain.table)
+	}
+	got, err := reader.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("reader get buffered BSON doc: %v", err)
+	}
+	if !bytes.Equal(got, docs[0]) {
+		t.Fatalf("buffered BSON doc=%v want %v", got, docs[0])
+	}
+	if err := writer.Flush(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	if got := writer.writeDomain.count; got != 0 {
+		t.Fatalf("pending docs after flush=%d want 0", got)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+
+	reopened, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open reopened collection: %v", err)
+	}
+	got, err = reopenedCol.Get([]byte("u2"))
+	if err != nil {
+		t.Fatalf("get after reopen: %v", err)
+	}
+	if !bytes.Equal(got, docs[1]) {
+		t.Fatalf("reopened BSON doc=%v want %v", got, docs[1])
+	}
+}
+
 func TestCollectionInsertBatchBridge_ReturnedIDsAndDocumentsAreOwned(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

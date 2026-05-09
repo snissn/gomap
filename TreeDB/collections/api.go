@@ -3021,6 +3021,104 @@ func (c *Collection) insertOneNoIndexBuffered(id, document []byte) ([]byte, erro
 	return resultID, nil
 }
 
+func (c *Collection) bufferNoIndexInsertBatchLocked(
+	domain *collectionWriteDomain,
+	catalog *collectionCatalog,
+	snap *backenddb.Snapshot,
+	plannerOptions collectionOptions,
+	ids, documents [][]byte,
+) ([][]byte, bool, error) {
+	if domain == nil || catalog == nil || snap == nil || len(catalog.meta.Indexes) > 0 {
+		return nil, false, nil
+	}
+	switch normalizedDocumentFormat(plannerOptions.documentFormat) {
+	case DocumentFormatJSON, DocumentFormatBSON:
+	default:
+		return nil, false, nil
+	}
+	if len(ids) != len(documents) {
+		return nil, true, fmt.Errorf("collections: caller-provided batch ids length mismatch")
+	}
+	if len(documents) == 0 {
+		c.setLastInsertStats(CollectionInsertStats{
+			Documents: 0,
+			Indexes:   len(catalog.meta.Indexes),
+		})
+		return nil, true, nil
+	}
+	resultIDs, err := cloneBatchDocumentIDs(ids)
+	if err != nil {
+		return nil, true, err
+	}
+	preparedDocuments, _, _, err := prepareInsertDocuments(documents, plannerOptions)
+	if err != nil {
+		return nil, true, err
+	}
+	entries := make([]noIndexBatchEntry, len(preparedDocuments))
+	for i := range preparedDocuments {
+		entries[i] = noIndexBatchEntry{
+			id:       resultIDs[i],
+			document: preparedDocuments[i],
+		}
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		return bytes.Compare(entries[i].id, entries[j].id) < 0
+	})
+	for i := 1; i < len(entries); i++ {
+		if bytes.Equal(entries[i-1].id, entries[i].id) {
+			return nil, true, ErrDuplicateDocumentID
+		}
+	}
+
+	domain.mu.Lock()
+	defer domain.mu.Unlock()
+	currentCatalog, currentOptions, indexed, err := c.ensureWriteDomainLocked(domain)
+	if err != nil {
+		return nil, true, err
+	}
+	if indexed || currentCatalog == nil || !sameCollectionMeta(currentCatalog.meta, catalog.meta) {
+		return nil, false, nil
+	}
+	switch normalizedDocumentFormat(currentOptions.documentFormat) {
+	case DocumentFormatJSON, DocumentFormatBSON:
+	default:
+		return nil, false, nil
+	}
+	c.meta = currentCatalog.meta
+	if domain.table == nil {
+		domain.table = newCollectionRunTable(0)
+	}
+	for _, entry := range entries {
+		if _, _, flags, found := domain.table.GetEntry(entry.id); found && flags&node.FlagTombstone == 0 {
+			return nil, true, ErrDocumentExists
+		}
+	}
+	if domain.primaryRoot != 0 {
+		keys := make([][]byte, len(entries))
+		for i := range entries {
+			keys[i] = entries[i].id
+		}
+		exists, err := snap.HasAnySortedAtRoot(domain.primaryRoot, keys)
+		if err != nil {
+			return nil, true, err
+		}
+		if exists {
+			return nil, true, ErrDocumentExists
+		}
+	}
+	domain.storagePolicy = currentOptions.dataStoragePolicy
+	for _, entry := range entries {
+		domain.table.SetEntry(entry.id, entry.document, page.ValuePtr{}, node.FlagInline)
+	}
+	domain.count += len(entries)
+	c.setLastInsertStats(CollectionInsertStats{
+		Documents: len(entries),
+		Indexes:   0,
+		Runs:      1,
+	})
+	return resultIDs, true, nil
+}
+
 func (c *Collection) ensureWriteDomainLocked(domain *collectionWriteDomain) (*collectionCatalog, collectionOptions, bool, error) {
 	if domain == nil {
 		return nil, collectionOptions{}, false, errors.New("collections: missing write domain")
@@ -6738,8 +6836,16 @@ func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON b
 		})
 		return nil, nil
 	}
-	if err := c.flushBufferedNoIndex(); err != nil {
-		return nil, err
+	skipInitialNoIndexFlush := false
+	if trustedValidBSON && c.writeDomain != nil && len(c.meta.Indexes) == 0 {
+		if documentFormat, err := normalizeDocumentFormat(c.meta.Options.DocumentFormat); err == nil && documentFormat == DocumentFormatBSON {
+			skipInitialNoIndexFlush = true
+		}
+	}
+	if !skipInitialNoIndexFlush {
+		if err := c.flushBufferedNoIndex(); err != nil {
+			return nil, err
+		}
 	}
 
 	var bufferedTemplateRuns []memtable.Table
@@ -6845,8 +6951,16 @@ func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON b
 	baseSystemRoot := snapshotSystemRoot(snap)
 	baseCommitSeq := snapshotCommitSeq(snap)
 
-	if len(meta.Indexes) == 0 && plannerOptions.documentFormat == DocumentFormatJSON {
-		return c.insertBatchNoIndex(catalog, snap, baseCommitSeq, baseSystemRoot, plannerOptions, ids, documents)
+	if len(meta.Indexes) == 0 && normalizedDocumentFormat(plannerOptions.documentFormat) == DocumentFormatBSON && trustedValidBSON {
+		if resultIDs, buffered, err := c.bufferNoIndexInsertBatchLocked(c.writeDomain, catalog, snap, plannerOptions, ids, documents); buffered {
+			closePlanningSnapshot()
+			return resultIDs, err
+		}
+	}
+	if len(meta.Indexes) == 0 {
+		if plannerOptions.documentFormat == DocumentFormatJSON {
+			return c.insertBatchNoIndex(catalog, snap, baseCommitSeq, baseSystemRoot, plannerOptions, ids, documents)
+		}
 	}
 
 	unlockForPlanning := shouldUnlockInsertPlanning(plannerOptions, indexedMemtablesEnabled, bufferIndexedInserts)
