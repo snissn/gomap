@@ -13449,9 +13449,7 @@ func normalizeCollectionMeta(meta CollectionMeta) (CollectionMeta, error) {
 		meta.Options.BufferedIndexedWriteMaxDocuments = 0
 		meta.Options.BufferedIndexedWriteMaxBytes = 0
 		meta.Options.BufferedIndexedWriteMaxRootRuns = 0
-		meta.Options.BufferedIndexedAsyncFlush = false
 		meta.Options.BufferedIndexedOverlayRoots = false
-		meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits = 0
 	} else if len(meta.Indexes) == 0 {
 		meta.Options.BufferedIndexedWrites = false
 	} else {
@@ -13478,6 +13476,11 @@ func normalizeCollectionMeta(meta CollectionMeta) (CollectionMeta, error) {
 		if meta.Options.BufferedIndexedAsyncFlush && meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits == 0 {
 			meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits = DefaultIndexedWriteMemtableAsyncFlushMaxQueuedUnits
 		}
+	}
+	if !meta.Options.BufferedIndexedWrites {
+		meta.Options.DisableBufferedIndexedAsyncFlush = false
+		meta.Options.BufferedIndexedAsyncFlush = false
+		meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits = 0
 	}
 	return meta, nil
 }
