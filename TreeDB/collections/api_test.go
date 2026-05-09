@@ -8114,6 +8114,123 @@ func TestCollectionUpdateBypassesIdleCombinerWhenNoBatchPressure(t *testing.T) {
 	collectionMaintenanceRequireUnorderedIDs(t, ids, []byte("u1"))
 }
 
+func TestCollectionCloseWaitsForInlineUpdateWithoutCombiner(t *testing.T) {
+	dir := t.TempDir()
+	d, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites: true,
+		},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city", ValueType: IndexValueString}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("u1")}, [][]byte{[]byte(`{"city":"hnl","score":0}`)}); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+
+	enteredUpdate := make(chan struct{})
+	releaseUpdate := make(chan struct{})
+	updateDone := make(chan error, 1)
+	go func() {
+		matched, modified, err := col.Update([]byte("u1"), func([]byte) ([]byte, bool, error) {
+			close(enteredUpdate)
+			<-releaseUpdate
+			return []byte(`{"city":"sea","score":1}`), true, nil
+		})
+		if err == nil && (!matched || !modified) {
+			err = fmt.Errorf("update matched=%v modified=%v", matched, modified)
+		}
+		updateDone <- err
+	}()
+	select {
+	case <-enteredUpdate:
+	case <-time.After(collectionTestTimeout(t, time.Second)):
+		t.Fatal("inline update callback did not start")
+	}
+
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- d.Close()
+	}()
+
+	closingDeadline := time.NewTimer(collectionTestTimeout(t, time.Second))
+	defer closingDeadline.Stop()
+	closingTicker := time.NewTicker(time.Millisecond)
+	defer closingTicker.Stop()
+	for !col.writeDomain.closingWrites.Load() {
+		select {
+		case err := <-closeDone:
+			t.Fatalf("close returned before marking writes closing: %v", err)
+		case <-closingDeadline.C:
+			t.Fatal("close did not reach write-domain drain")
+		case <-closingTicker.C:
+		}
+	}
+
+	closeBlocked := time.NewTimer(20 * time.Millisecond)
+	select {
+	case err := <-closeDone:
+		closeBlocked.Stop()
+		t.Fatalf("close returned while inline update callback was blocked: %v", err)
+	case <-closeBlocked.C:
+	}
+	close(releaseUpdate)
+
+	var updateErr error
+	select {
+	case updateErr = <-updateDone:
+	case <-time.After(collectionTestTimeout(t, time.Second)):
+		t.Fatal("inline update did not finish after release")
+	}
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("close after inline update: %v", err)
+		}
+	case <-time.After(collectionTestTimeout(t, time.Second)):
+		t.Fatal("close did not finish after inline update completed")
+	}
+	if updateErr != nil && !errors.Is(updateErr, backenddb.ErrClosed) {
+		t.Fatalf("inline update err=%v want nil or ErrClosed", updateErr)
+	}
+	if updateErr != nil {
+		return
+	}
+
+	reopened, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	reopenedMgr := NewCollectionManager(reopened)
+	reopenedCol, err := reopenedMgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open reopened collection: %v", err)
+	}
+	got, err := reopenedCol.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get reopened document: %v", err)
+	}
+	if !bytes.Contains(got, []byte(`"city":"sea"`)) {
+		t.Fatalf("reopened document=%s want city sea", got)
+	}
+}
+
 func TestCollectionUpdateUsesCombinerWhenInlineUpdateInFlight(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -8186,6 +8303,8 @@ func TestCollectionUpdateUsesCombinerWhenInlineUpdateInFlight(t *testing.T) {
 	}()
 
 	deadline := time.After(collectionTestTimeout(t, time.Second))
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
 	for {
 		stats := mgr.StatsSnapshot()
 		if stats.UpdateCombineRequests-before.UpdateCombineRequests > 0 {
@@ -8194,7 +8313,7 @@ func TestCollectionUpdateUsesCombinerWhenInlineUpdateInFlight(t *testing.T) {
 		select {
 		case <-deadline:
 			t.Fatal("second update did not enqueue through combiner")
-		case <-time.After(time.Millisecond):
+		case <-ticker.C:
 		}
 	}
 
@@ -8229,7 +8348,7 @@ func TestCollectionUpdateUsesCombinerWhenInlineUpdateInFlight(t *testing.T) {
 	}
 	collectionMaintenanceRequireUnorderedIDs(t, ids, []byte("u2"))
 
-	col.writeDomain.updateCombineLastRequestUnixNano.Store(uint64(time.Now().Add(time.Hour).UnixNano()))
+	col.writeDomain.updateCombineLastRequestUnixNano.Store(time.Now().Add(time.Hour).UnixNano())
 	combineBeforeCooldownCheck := after.UpdateCombineRequests
 	inlineBeforeCooldownCheck := after.UpdateCombineInlineRequests
 	matched, modified, err := col.Update([]byte("u2"), func([]byte) ([]byte, bool, error) {
