@@ -9528,6 +9528,75 @@ func TestCollectionUpdateBSONSetReusesUnchangedIndexState(t *testing.T) {
 	}
 }
 
+func TestCollectionUpdateBSONSetDirectFallbackReportsStructuredApply(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	mgr.SetUpdateBatchDetailedStatsEnabled(true)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat:        DocumentFormatBSON,
+			BufferedIndexedWrites: true,
+		},
+		Indexes: []IndexDefinition{
+			{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true},
+			{Name: "city", Field: "city", ValueType: IndexValueString},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{mustBSONCollectionDocument(t, bson.D{
+			{Key: "_id", Value: "u1"},
+			{Key: "email", Value: "a@example.com"},
+			{Key: "city", Value: "hnl"},
+		})},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush insert buffer: %v", err)
+	}
+
+	matched, modified, err := col.UpdateBSONSet([]byte("u1"), []BSONSetField{{
+		Key:   "email",
+		Value: mustBSONRawValue(t, "b@example.com"),
+	}})
+	if err != nil {
+		t.Fatalf("UpdateBSONSet: %v", err)
+	}
+	if !matched || !modified {
+		t.Fatalf("matched=%v modified=%v want true/true", matched, modified)
+	}
+	stats := col.LastUpdateStats()
+	if stats.StructuredUpdateApply <= 0 {
+		t.Fatalf("structured apply duration=%s want positive", stats.StructuredUpdateApply)
+	}
+	if stats.Callback != 0 {
+		t.Fatalf("callback duration=%s want zero for BSON set direct fallback", stats.Callback)
+	}
+	if got, want := stats.UniqueIndexChecks, 1; got != want {
+		t.Fatalf("unique checks=%d want %d", got, want)
+	}
+	ids, err := col.FindByIndex("email", "b@example.com")
+	if err != nil {
+		t.Fatalf("find updated email: %v", err)
+	}
+	if len(ids) != 1 || !bytes.Equal(ids[0], []byte("u1")) {
+		t.Fatalf("updated email ids=%q want [u1]", ids)
+	}
+}
+
 func TestCollectionUpdateBSONSetRequiresBSONFormat(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

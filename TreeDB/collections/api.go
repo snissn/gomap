@@ -7191,6 +7191,26 @@ func (c *Collection) updateDirect(documentID []byte, update func(current []byte)
 	return false, false, collectionMutationRetryExhausted(lastErr)
 }
 
+func (c *Collection) updateDirectBSONSet(documentID []byte, spec bsonSetUpdate) (bool, bool, error) {
+	unlockMutation := c.lockMutation()
+	defer unlockMutation.Unlock()
+	if err := c.flushBufferedWrites(); err != nil {
+		return false, false, err
+	}
+
+	var lastErr error
+	for attempt := 0; attempt < maxCollectionMutationRetries; attempt++ {
+		matched, modified, err := c.updateDocumentBSONSetOnce(documentID, spec)
+		if errors.Is(err, ErrConcurrentMutation) {
+			lastErr = err
+			waitBeforeCollectionMutationRetry(attempt)
+			continue
+		}
+		return matched, modified, err
+	}
+	return false, false, collectionMutationRetryExhausted(lastErr)
+}
+
 // UpdateBatch applies a unique set of document updates under one collection
 // mutation. Missing documents report Matched=false. Duplicate document IDs are
 // rejected so callers that require same-document ordering can fall back to
@@ -7442,9 +7462,7 @@ func (c *Collection) updateSingleInlineWithoutCombiner(domain *collectionWriteDo
 	results, batched, err := c.updateBatchOwnedItems(items, updateBatchModeNoSecondaryUniqueIndexChanges)
 	if !batched && err == nil {
 		if items[0].hasBSONSet {
-			return c.updateDirect(items[0].DocumentID, func(current []byte) ([]byte, bool, error) {
-				return callBSONSetUpdateApply(items[0].bsonSet, current)
-			})
+			return c.updateDirectBSONSet(items[0].DocumentID, items[0].bsonSet)
 		}
 		return c.updateDirect(items[0].DocumentID, items[0].Update)
 	}
@@ -8265,6 +8283,14 @@ func errConcurrentRootModification(collectionName, rootName string) error {
 }
 
 func (c *Collection) updateDocumentOnce(documentID []byte, update func(current []byte) (replacement []byte, changed bool, err error)) (bool, bool, error) {
+	return c.updateDocumentOnceApply(documentID, update, bsonSetUpdate{}, false)
+}
+
+func (c *Collection) updateDocumentBSONSetOnce(documentID []byte, spec bsonSetUpdate) (bool, bool, error) {
+	return c.updateDocumentOnceApply(documentID, nil, spec, true)
+}
+
+func (c *Collection) updateDocumentOnceApply(documentID []byte, update func(current []byte) (replacement []byte, changed bool, err error), bsonSet bsonSetUpdate, hasBSONSet bool) (bool, bool, error) {
 	detailedStats := c.updateBatchDetailedStatsEnabled()
 	snap := c.db.AcquireSnapshot()
 	if snap == nil {
@@ -8346,8 +8372,15 @@ func (c *Collection) updateDocumentOnce(documentID []byte, update func(current [
 	}
 
 	phaseStart = updateBatchStatsNow(detailedStats)
-	document, changed, err := callCollectionUpdateCallback(update, currentValue)
-	stats.Callback += updateBatchStatsSince(detailedStats, phaseStart)
+	var document []byte
+	var changed bool
+	if hasBSONSet {
+		document, changed, err = callBSONSetUpdateApply(bsonSet, currentValue)
+		stats.StructuredUpdateApply += updateBatchStatsSince(detailedStats, phaseStart)
+	} else {
+		document, changed, err = callCollectionUpdateCallback(update, currentValue)
+		stats.Callback += updateBatchStatsSince(detailedStats, phaseStart)
+	}
 	if err != nil {
 		_ = snap.Close()
 		return false, false, err

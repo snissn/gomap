@@ -783,6 +783,7 @@ func compactProfileBenchOverlayRootsAfterFlush(tb testing.TB, collection *collec
 func profileBenchParsedUpdateDocs(tb testing.TB, updateCity bool, cityPhase string) []profileBenchSetUpdate {
 	tb.Helper()
 	updateDocs := make([]profileBenchSetUpdate, profileBenchUpdateDocPoolSize)
+	dynamicSequenceValues := profileBenchUpdatedSequenceRawValues()
 	var dynamicCityValues []bson.RawValue
 	if updateCity {
 		dynamicCityValues = profileBenchUpdatedCityRawValues(tb, cityPhase)
@@ -803,12 +804,14 @@ func profileBenchParsedUpdateDocs(tb testing.TB, updateCity bool, cityPhase stri
 		if err != nil {
 			tb.Fatalf("parse update document: %v", err)
 		}
-		if len(dynamicCityValues) > 0 {
-			for fieldIdx := range parsed.fields {
-				if parsed.fields[fieldIdx].key == "city" {
-					parsed.fields[fieldIdx].dynamicCityValues = dynamicCityValues
-					break
+		for fieldIdx := range parsed.fields {
+			switch parsed.fields[fieldIdx].key {
+			case "city":
+				if len(dynamicCityValues) > 0 {
+					parsed.fields[fieldIdx].dynamicValues = dynamicCityValues
 				}
+			case "concurrent_update_seq":
+				parsed.fields[fieldIdx].dynamicValues = dynamicSequenceValues
 			}
 		}
 		updateDocs[i] = parsed
@@ -823,6 +826,17 @@ func profileBenchUpdatedCityRawValues(tb testing.TB, cityPhase string) []bson.Ra
 		values[i] = bson.RawValue{
 			Type:  bson.TypeString,
 			Value: bsoncore.AppendString(nil, cityPhase+"-"+benchmarkUpdatedCityValue(i)),
+		}
+	}
+	return values
+}
+
+func profileBenchUpdatedSequenceRawValues() []bson.RawValue {
+	values := make([]bson.RawValue, benchmarkUpdatedCityValueCount)
+	for i := range values {
+		values[i] = bson.RawValue{
+			Type:  bson.TypeInt64,
+			Value: bsoncore.AppendInt64(nil, int64(i)),
 		}
 	}
 	return values
@@ -1939,10 +1953,10 @@ func profileBenchCollectionSetFieldsForOperation(dst []collections.BSONSetField,
 }
 
 type profileBenchSetField struct {
-	key               string
-	keyBytes          []byte
-	value             bson.RawValue
-	dynamicCityValues []bson.RawValue
+	key           string
+	keyBytes      []byte
+	value         bson.RawValue
+	dynamicValues []bson.RawValue
 }
 
 type profileBenchSetUpdate struct {
@@ -2151,15 +2165,15 @@ func profileBenchApplyParsedSetUpdateToOperation(dst []byte, doc bson.Raw, updat
 }
 
 func profileBenchSetFieldValueForOperation(field profileBenchSetField, operation, documentOrdinal, documentCount int) bson.RawValue {
-	if len(field.dynamicCityValues) == 0 || operation < 0 {
+	if len(field.dynamicValues) == 0 || operation < 0 {
 		return field.value
 	}
-	index := benchmarkUpdatedCityIndex(operation, documentOrdinal, documentCount, len(field.dynamicCityValues))
+	index := benchmarkUpdatedCityIndex(operation, documentOrdinal, documentCount, len(field.dynamicValues))
 	if documentCount > 0 && operation >= documentCount {
-		previousIndex := benchmarkUpdatedCityIndex(operation-documentCount, documentOrdinal, documentCount, len(field.dynamicCityValues))
-		index = avoidBenchmarkUpdatedCityRepeat(index, previousIndex, len(field.dynamicCityValues))
+		previousIndex := benchmarkUpdatedCityIndex(operation-documentCount, documentOrdinal, documentCount, len(field.dynamicValues))
+		index = avoidBenchmarkUpdatedCityRepeat(index, previousIndex, len(field.dynamicValues))
 	}
-	return field.dynamicCityValues[index]
+	return field.dynamicValues[index]
 }
 
 func TestProfileBenchApplySetUpdateHappyPath(t *testing.T) {
