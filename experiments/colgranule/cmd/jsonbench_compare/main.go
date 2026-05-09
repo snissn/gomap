@@ -109,8 +109,8 @@ func main() {
 	clickHouseLocalPath := flag.String("clickhouse-local", "", "optional local ClickHouse JSONBench result")
 	remainingDBDir := flag.String("remaining-db-dir", "artifacts/colgranule_remaining_treedb", "temporary TreeDB directory prefix for remaining payload measurement")
 	measureRemaining := flag.Bool("measure-remaining-treedb", true, "load remaining JSON shapes into JSON, BSON, and Template-v1 TreeDB collections, compact them, and include disk usage")
-	outJSON := flag.String("out-json", "experiments/colgranule/JSONBENCH_COMPARISON_RAW.json", "raw JSON output")
-	outMarkdown := flag.String("out-md", "experiments/colgranule/JSONBENCH_COMPARISON_REPORT.md", "Markdown report output")
+	outJSON := flag.String("out-json", "artifacts/colgranule/JSONBENCH_COMPARISON_RAW.json", "raw JSON output")
+	outMarkdown := flag.String("out-md", "artifacts/colgranule/JSONBENCH_COMPARISON_REPORT.md", "Markdown report output")
 	flag.Parse()
 
 	start := time.Now()

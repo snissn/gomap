@@ -3357,6 +3357,7 @@ type rewriteWriter struct {
 	pendingDict        []byte
 	pendingDictStart   int64
 	pendingDictRaw     int
+	pendingDictArena   []byte
 	pendingDictRecords []valuelog.Record
 	pendingDictPtrs    []page.ValuePtr
 	pendingDictDst     []page.ValuePtr
@@ -3450,6 +3451,11 @@ func (w *rewriteWriter) resetPendingDictBatch() {
 	w.pendingDict = nil
 	w.pendingDictStart = 0
 	w.pendingDictRaw = 0
+	if cap(w.pendingDictArena) > rewriteBlockBatchMaxRawBytes*2 {
+		w.pendingDictArena = nil
+	} else {
+		w.pendingDictArena = w.pendingDictArena[:0]
+	}
 	w.pendingDictRecords = w.pendingDictRecords[:0]
 	w.pendingDictPtrs = w.pendingDictPtrs[:0]
 }
@@ -4351,7 +4357,9 @@ func (w *rewriteWriter) appendValueWithDictClass(class rewriteTemplateClass, dic
 		w.pendingDictRaw = 0
 	}
 
-	ownedValue := append([]byte(nil), value...)
+	valueStart := len(w.pendingDictArena)
+	w.pendingDictArena = append(w.pendingDictArena, value...)
+	ownedValue := w.pendingDictArena[valueStart:]
 	w.pendingDictRecords = append(w.pendingDictRecords, valuelog.Record{
 		RID:   rid,
 		Value: ownedValue,
