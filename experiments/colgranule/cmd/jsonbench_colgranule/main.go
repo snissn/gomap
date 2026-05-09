@@ -10,7 +10,7 @@ import (
 )
 
 func main() {
-	data := flag.String("data", colgranule.DefaultJSONBenchPath, "JSONBench .json or .json.gz input path")
+	data := flag.String("data", colgranule.DefaultJSONBenchDir, "JSONBench input file or directory with sorted .json/.json.gz files")
 	limit := flag.Int("limit", 1_000_000, "maximum rows to load; <=0 means all rows")
 	rowsPerGranule := flag.Int("rows-per-granule", colgranule.DefaultRowsPerGranule, "rows per encoded granule")
 	flag.Parse()
@@ -23,8 +23,8 @@ func main() {
 	}
 	loadDuration := time.Since(start)
 
-	fmt.Printf("jsonbench_colgranule data=%s rows=%d columns=%d rows_per_granule=%d load_duration=%s\n",
-		*data, ds.Rows, len(ds.Columns), *rowsPerGranule, loadDuration)
+	fmt.Printf("jsonbench_colgranule data=%s files=%d rows=%d columns=%d rows_per_granule=%d load_duration=%s\n",
+		*data, len(ds.Files), ds.Rows, len(ds.Columns), *rowsPerGranule, loadDuration)
 	for _, name := range ds.ColumnNames() {
 		values := ds.Columns[name]
 		min, max := int64(0), int64(0)

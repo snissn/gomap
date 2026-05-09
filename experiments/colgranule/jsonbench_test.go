@@ -62,3 +62,19 @@ func TestLoadJSONBenchColumnsLocal1MIfPresent(t *testing.T) {
 		t.Fatalf("time_us len=%d want 1000", got)
 	}
 }
+
+func TestLoadJSONBenchColumnsLocalDirIfPresent(t *testing.T) {
+	if _, err := os.Stat(DefaultJSONBenchDir); err != nil {
+		t.Skipf("local JSONBench fixture directory not present at %s", DefaultJSONBenchDir)
+	}
+	ds, err := LoadJSONBenchColumns(DefaultJSONBenchDir, 1000)
+	if err != nil {
+		t.Fatalf("LoadJSONBenchColumns(local dir): %v", err)
+	}
+	if ds.Rows != 1000 {
+		t.Fatalf("rows=%d want 1000", ds.Rows)
+	}
+	if len(ds.Files) == 0 {
+		t.Fatalf("files=0 want nonzero")
+	}
+}

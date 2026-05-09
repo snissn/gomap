@@ -15,14 +15,17 @@ It currently covers:
 
 ## Local JSONBench Data
 
-The JSONBench 1M fixture is expected at:
+The JSONBench data directory is expected at:
 
 ```text
-/Users/michaelseiler/data/bluesky/file_0001.json.gz
+/Users/michaelseiler/data/bluesky
 ```
 
 That path matches the default output from `/Users/michaelseiler/dev/snissn/JSONBench/download_data.sh`
-for the 1m Bluesky data set.
+for the Bluesky data set. The upstream downloader writes larger scales into the
+same directory: 1m is `file_0001.json.gz`, 10m is `file_0001.json.gz` through
+`file_0010.json.gz`, 100m through `file_0100.json.gz`, and 1000m through
+`file_1000.json.gz`.
 
 The repository includes a tiny `testdata/jsonbench_sample.jsonl` fixture for
 tests. The 129 MiB compressed 1M-row file is intentionally not vendored.
@@ -31,7 +34,7 @@ Run the full local 1M-row column summary:
 
 ```sh
 go run ./experiments/colgranule/cmd/jsonbench_colgranule \
-  -data /Users/michaelseiler/data/bluesky/file_0001.json.gz \
+  -data /Users/michaelseiler/data/bluesky \
   -limit 1000000 \
   -rows-per-granule 8192
 ```

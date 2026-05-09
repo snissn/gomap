@@ -8,10 +8,10 @@ import (
 func BenchmarkJSONBenchLocalColumns(b *testing.B) {
 	path := os.Getenv("JSONBENCH_DATA")
 	if path == "" {
-		path = DefaultJSONBenchPath
+		path = DefaultJSONBenchDir
 	}
 	if _, err := os.Stat(path); err != nil {
-		b.Skipf("JSONBench data not present; set JSONBENCH_DATA or install %s", DefaultJSONBenchPath)
+		b.Skipf("JSONBench data not present; set JSONBENCH_DATA or install %s", DefaultJSONBenchDir)
 	}
 	limit := 1000000
 	ds, err := LoadJSONBenchColumns(path, limit)

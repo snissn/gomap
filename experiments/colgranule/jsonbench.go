@@ -13,32 +13,22 @@ import (
 )
 
 const DefaultJSONBenchPath = "/Users/michaelseiler/data/bluesky/file_0001.json.gz"
+const DefaultJSONBenchDir = "/Users/michaelseiler/data/bluesky"
 
 type JSONBenchDataset struct {
 	Rows    int
+	Files   []string
 	Columns map[string][]int64
 }
 
 func LoadJSONBenchColumns(path string, limit int) (JSONBenchDataset, error) {
 	if path == "" {
-		path = DefaultJSONBenchPath
+		path = DefaultJSONBenchDir
 	}
-	f, err := os.Open(path)
+	files, err := jsonBenchInputFiles(path)
 	if err != nil {
 		return JSONBenchDataset{}, err
 	}
-	defer f.Close()
-
-	var r io.Reader = f
-	if filepath.Ext(path) == ".gz" {
-		gz, err := gzip.NewReader(f)
-		if err != nil {
-			return JSONBenchDataset{}, err
-		}
-		defer gz.Close()
-		r = gz
-	}
-
 	ds := JSONBenchDataset{Columns: map[string][]int64{
 		"row_index":                   nil,
 		"time_us":                     nil,
@@ -65,24 +55,77 @@ func LoadJSONBenchColumns(path string, limit int) (JSONBenchDataset, error) {
 		"record_type_code":       {},
 	}
 
+	for _, file := range files {
+		if limit > 0 && ds.Rows >= limit {
+			break
+		}
+		if err := loadJSONBenchFile(file, limit, &ds, dicts); err != nil {
+			return JSONBenchDataset{}, err
+		}
+		ds.Files = append(ds.Files, file)
+	}
+	return ds, nil
+}
+
+func jsonBenchInputFiles(path string) ([]string, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !info.IsDir() {
+		return []string{path}, nil
+	}
+
+	var files []string
+	for _, pattern := range []string{"*.json.gz", "*.jsonl.gz", "*.json", "*.jsonl"} {
+		matches, err := filepath.Glob(filepath.Join(path, pattern))
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, matches...)
+	}
+	sort.Strings(files)
+	if len(files) == 0 {
+		return nil, fmt.Errorf("no JSONBench input files found in %s", path)
+	}
+	return files, nil
+}
+
+func loadJSONBenchFile(path string, limit int, ds *JSONBenchDataset, dicts map[string]*stringDictionary) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	var r io.Reader = f
+	if filepath.Ext(path) == ".gz" {
+		gz, err := gzip.NewReader(f)
+		if err != nil {
+			return err
+		}
+		defer gz.Close()
+		r = gz
+	}
+
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 0, 256<<10), 8<<20)
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		var ev jsonBenchEvent
 		if err := json.Unmarshal(line, &ev); err != nil {
-			return JSONBenchDataset{}, fmt.Errorf("decode jsonbench row %d: %w", ds.Rows, err)
+			return fmt.Errorf("decode jsonbench row %d in %s: %w", ds.Rows, path, err)
 		}
-		appendJSONBenchRow(&ds, dicts, line, &ev)
+		appendJSONBenchRow(ds, dicts, line, &ev)
 		ds.Rows++
 		if limit > 0 && ds.Rows >= limit {
 			break
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return JSONBenchDataset{}, err
+		return err
 	}
-	return ds, nil
+	return nil
 }
 
 func (d JSONBenchDataset) ColumnNames() []string {
