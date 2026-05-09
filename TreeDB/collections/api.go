@@ -9897,11 +9897,29 @@ func buildDirectBufferedTemplateRootEntries(records []templateV1Record) []direct
 	if len(records) == 0 {
 		return nil
 	}
-	entries := make([]directBufferedRootEntry, len(records))
-	for i := range records {
-		entries[i] = directBufferedRootEntry{
-			key:   bytes.Clone(records[i].id[:]),
-			value: bytes.Clone(records[i].raw),
+	entryCount := len(records)*2 + 1
+	entries := make([]directBufferedRootEntry, entryCount)
+	var maxID uint64
+	for _, record := range records {
+		if record.id > maxID {
+			maxID = record.id
+		}
+	}
+	entries[0] = directBufferedRootEntry{
+		key:   templateV1NextIDKey(),
+		value: encodeTemplateV1ID(maxID + 1),
+		flags: node.FlagInline,
+	}
+	for i, record := range records {
+		entryOffset := i*2 + 1
+		entries[entryOffset] = directBufferedRootEntry{
+			key:   templateV1HashKey(record.hash),
+			value: encodeTemplateV1ID(record.id),
+			flags: node.FlagInline,
+		}
+		entries[entryOffset+1] = directBufferedRootEntry{
+			key:   templateV1RecordKey(record.id),
+			value: bytes.Clone(record.raw),
 			flags: node.FlagInline,
 		}
 	}
@@ -11220,8 +11238,8 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 		baseRootIDs[primaryRootName] = primaryRoot
 		policies = append(policies, plannerOptions.dataStoragePolicy)
 		var stagedBytes int64
-		for i := range templateRecords {
-			stagedBytes = saturatingAddNonNegativeInt64(stagedBytes, int64(len(templateRecords[i].id)+len(templateRecords[i].raw)))
+		for i := range templateEntries {
+			stagedBytes = saturatingAddNonNegativeInt64(stagedBytes, int64(len(templateEntries[i].key)+len(templateEntries[i].value)))
 		}
 		for i := range changed {
 			results[changed[i].itemIndex].Modified = true

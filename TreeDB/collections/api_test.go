@@ -11432,17 +11432,18 @@ func TestDirectBufferedRootEntriesOwnKeysAndRetainDocumentArena(t *testing.T) {
 	}
 
 	templateRecords := []templateV1Record{{
-		id:  [32]byte{1, 2, 3},
-		raw: []byte("template-record"),
+		hash: [32]byte{1, 2, 3},
+		id:   7,
+		raw:  []byte("template-record"),
 	}}
 	templateEntries := buildDirectBufferedTemplateRootEntries(templateRecords)
-	if len(templateEntries) != 1 {
-		t.Fatalf("template entries=%d want 1", len(templateEntries))
+	if len(templateEntries) != 3 {
+		t.Fatalf("template entries=%d want 3", len(templateEntries))
 	}
-	templateRecords[0].id[0] = 9
+	templateRecords[0].hash[0] = 9
 	templateRecords[0].raw[0] = 'X'
-	if templateEntries[0].key[0] != 1 || !bytes.Equal(templateEntries[0].value, []byte("template-record")) {
-		t.Fatalf("template entry key[0]=%d value=%q, want owned original bytes", templateEntries[0].key[0], templateEntries[0].value)
+	if templateEntries[1].key[1] != 1 || !bytes.Equal(templateEntries[2].value, []byte("template-record")) {
+		t.Fatalf("template hash key[1]=%d record value=%q, want owned original bytes", templateEntries[1].key[1], templateEntries[2].value)
 	}
 }
 

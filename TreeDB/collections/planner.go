@@ -733,13 +733,28 @@ func (p insertBatchPlanner) emitTemplateRun(plan *insertBatchPlan, records []tem
 	if err != nil {
 		return err
 	}
-	table := newCollectionRunTable(len(records))
-	if err := applyCollectionRunEntries(table, len(records), func(i int) (key, value []byte, err error) {
-		raw := records[i].raw
+	entryCount := len(records)*2 + 1
+	var maxID uint64
+	for _, record := range records {
+		if record.id > maxID {
+			maxID = record.id
+		}
+	}
+	nextID := maxID + 1
+	table := newCollectionRunTable(entryCount)
+	if err := applyCollectionRunEntries(table, entryCount, func(i int) (key, value []byte, err error) {
+		if i == 0 {
+			return templateV1NextIDKey(), encodeTemplateV1ID(nextID), nil
+		}
+		record := records[(i-1)/2]
+		if (i-1)%2 == 0 {
+			return templateV1HashKey(record.hash), encodeTemplateV1ID(record.id), nil
+		}
+		raw := record.raw
 		if p.cloneTemplateRunValues {
 			raw = bytes.Clone(raw)
 		}
-		return records[i].id[:], raw, nil
+		return templateV1RecordKey(record.id), raw, nil
 	}); err != nil {
 		return err
 	}
@@ -826,14 +841,32 @@ func (p insertBatchPlanner) directBufferedTemplateRootEntries(records []template
 	if err != nil {
 		return nil, err
 	}
-	entries := make([]directBufferedRootEntry, len(records))
-	for i := range records {
-		raw := records[i].raw
+	entryCount := len(records)*2 + 1
+	entries := make([]directBufferedRootEntry, entryCount)
+	var maxID uint64
+	for _, record := range records {
+		if record.id > maxID {
+			maxID = record.id
+		}
+	}
+	entries[0] = directBufferedRootEntry{
+		key:   templateV1NextIDKey(),
+		value: encodeTemplateV1ID(maxID + 1),
+		flags: node.FlagInline,
+	}
+	for i, record := range records {
+		raw := record.raw
 		if p.cloneTemplateRunValues {
 			raw = bytes.Clone(raw)
 		}
-		entries[i] = directBufferedRootEntry{
-			key:   bytes.Clone(records[i].id[:]),
+		entryOffset := i*2 + 1
+		entries[entryOffset] = directBufferedRootEntry{
+			key:   templateV1HashKey(record.hash),
+			value: encodeTemplateV1ID(record.id),
+			flags: node.FlagInline,
+		}
+		entries[entryOffset+1] = directBufferedRootEntry{
+			key:   templateV1RecordKey(record.id),
 			value: raw,
 			flags: node.FlagInline,
 		}
