@@ -11,6 +11,7 @@ func TestIsSegmentName(t *testing.T) {
 	valid := []string{
 		"collection-l0-000000.log",
 		"collection-l1-000123.log",
+		"collection-l2-1000000.log",
 		"collection-l4294967295-999999.log",
 	}
 	for _, name := range valid {
