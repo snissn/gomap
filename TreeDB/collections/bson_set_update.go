@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"math/bits"
 	"strings"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -35,6 +36,9 @@ func (c *Collection) UpdateBSONSet(documentID []byte, fields []BSONSetField) (bo
 	if err := validateCollectionUpdateDocumentInput(c, documentID); err != nil {
 		return false, false, err
 	}
+	if err := c.validateBSONSetDocumentFormat(); err != nil {
+		return false, false, err
+	}
 	if combiner, domain := c.updateFastPathWithoutCreatingCombiner(); combiner != nil {
 		return combiner.update(c, documentID, nil, spec, true)
 	} else if domain != nil {
@@ -48,11 +52,26 @@ func (c *Collection) UpdateBSONSet(documentID []byte, fields []BSONSetField) (bo
 	return c.updateBSONSetDirect(documentID, spec)
 }
 
+func (c *Collection) validateBSONSetDocumentFormat() error {
+	if c == nil {
+		return errCollectionNil
+	}
+	if normalizedDocumentFormat(c.meta.Options.DocumentFormat) != DocumentFormatBSON {
+		return errors.New("collections: BSON $set update requires BSON document format")
+	}
+	return nil
+}
+
 func (c *Collection) updateBSONSetDirect(documentID []byte, spec bsonSetUpdate) (bool, bool, error) {
+	if err := c.validateBSONSetDocumentFormat(); err != nil {
+		return false, false, err
+	}
 	items := []UpdateBatchItem{{DocumentID: documentID, bsonSet: spec, hasBSONSet: true}}
 	results, batched, err := c.updateBatchOwnedItems(items, updateBatchModeNoSecondaryUniqueIndexChanges)
 	if !batched && err == nil {
-		return c.updateDirect(documentID, spec.apply)
+		return c.updateDirect(documentID, func(current []byte) ([]byte, bool, error) {
+			return callBSONSetUpdateApply(spec, current)
+		})
 	}
 	if err != nil {
 		var itemErr *UpdateBatchItemError
@@ -72,15 +91,15 @@ func newBSONSetUpdate(fields []BSONSetField) (bsonSetUpdate, error) {
 	if len(fields) == 0 {
 		return spec, nil
 	}
-	for i, field := range fields {
+	seen := make(map[string]struct{}, len(fields))
+	for _, field := range fields {
 		if err := validateBSONSetFieldKey(field.Key); err != nil {
 			return bsonSetUpdate{}, err
 		}
-		for j := 0; j < i; j++ {
-			if fields[j].Key == field.Key {
-				return bsonSetUpdate{}, fmt.Errorf("collections: duplicate BSON $set field %q", field.Key)
-			}
+		if _, ok := seen[field.Key]; ok {
+			return bsonSetUpdate{}, fmt.Errorf("collections: duplicate BSON $set field %q", field.Key)
 		}
+		seen[field.Key] = struct{}{}
 	}
 	spec.fields = fields
 	return spec, nil
@@ -98,6 +117,9 @@ func validateBSONSetFieldKey(key string) error {
 	}
 	if strings.HasPrefix(key, "$") {
 		return errors.New("collections: BSON $set field names cannot start with $")
+	}
+	if strings.Contains(key, "\x00") {
+		return errors.New("collections: BSON $set field names cannot contain NUL")
 	}
 	return nil
 }
@@ -125,6 +147,11 @@ func (u bsonSetUpdate) apply(current []byte) ([]byte, bool, error) {
 	return replacement, changed, err
 }
 
+// appendReplacement appends changed replacements to dst and returns both the
+// possibly-grown dst and the replacement document view. When unchanged,
+// replacement aliases current. When changed, replacement aliases the returned
+// dst. On error, the returned dst is restored to its original length while
+// preserving any grown backing store for caller reuse.
 func (u bsonSetUpdate) appendReplacement(dst, current []byte) ([]byte, []byte, bool, error) {
 	if len(u.fields) == 0 {
 		return dst, current, false, nil
@@ -135,12 +162,6 @@ func (u bsonSetUpdate) appendReplacement(dst, current []byte) ([]byte, []byte, b
 	}
 	length -= 4
 	start := len(dst)
-	if cap(dst)-len(dst) < len(current)+64 {
-		grown := make([]byte, len(dst), len(dst)+len(current)+64)
-		copy(grown, dst)
-		dst = grown
-	}
-	idx, out := bsoncore.AppendDocumentStart(dst)
 	var usedInline [8]bool
 	used := usedInline[:]
 	if len(u.fields) > len(usedInline) {
@@ -149,17 +170,40 @@ func (u bsonSetUpdate) appendReplacement(dst, current []byte) ([]byte, []byte, b
 		used = used[:len(u.fields)]
 	}
 	changed := false
+	var idx int32
+	var out []byte
+	resetDst := func() []byte {
+		if changed {
+			return out[:start]
+		}
+		return dst[:start]
+	}
+	initOut := func(elemStart int) {
+		changed = true
+		if cap(dst)-len(dst) < len(current)+64 {
+			grown := make([]byte, len(dst), len(dst)+len(current)+64)
+			copy(grown, dst)
+			out = grown
+		} else {
+			out = dst
+		}
+		idx, out = bsoncore.AppendDocumentStart(out)
+		out = append(out, current[4:elemStart]...)
+	}
 	var elem bsoncore.Element
 	for length > 1 {
 		var elemOK bool
+		elemStart := len(current) - len(rem)
 		elem, rem, elemOK = bsoncore.ReadElement(rem)
 		length -= int32(len(elem))
 		if !elemOK {
-			return dst[:start], nil, false, bsoncore.NewInsufficientBytesError(current, rem)
+			return resetDst(), nil, false, bsoncore.NewInsufficientBytesError(current, rem)
 		}
 		replacement := u.fieldIndexBytes(elem.KeyBytes())
 		if replacement < 0 {
-			out = append(out, elem...)
+			if changed {
+				out = append(out, elem...)
+			}
 			continue
 		}
 		used[replacement] = true
@@ -167,34 +211,63 @@ func (u bsonSetUpdate) appendReplacement(dst, current []byte) ([]byte, []byte, b
 		value := field.Value
 		currentValue := elem.Value()
 		if bsonCoreValueEqualRawValue(currentValue, value) {
-			out = append(out, elem...)
+			if changed {
+				out = append(out, elem...)
+			}
 			continue
+		}
+		if !changed {
+			initOut(elemStart)
 		}
 		out = bsoncore.AppendValueElement(out, field.Key, bsoncore.Value{
 			Type: bsoncore.Type(value.Type),
 			Data: value.Value,
 		})
-		changed = true
 	}
 	for i, field := range u.fields {
 		if used[i] {
 			continue
 		}
 		value := field.Value
+		if !changed {
+			initOut(len(current) - len(rem))
+		}
 		out = bsoncore.AppendValueElement(out, field.Key, bsoncore.Value{
 			Type: bsoncore.Type(value.Type),
 			Data: value.Value,
 		})
-		changed = true
 	}
 	if !changed {
 		return dst[:start], current, false, nil
 	}
 	raw, err := bsoncore.AppendDocumentEnd(out, idx)
 	if err != nil {
-		return dst[:start], nil, false, err
+		return resetDst(), nil, false, err
 	}
-	return raw, bson.Raw(raw[start:len(raw):len(raw)]), true, nil
+	return raw, raw[start:len(raw):len(raw)], true, nil
+}
+
+func callBSONSetUpdateApply(update bsonSetUpdate, current []byte) (replacement []byte, changed bool, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			replacement = nil
+			changed = false
+			err = collectionUpdatePanicError("structured", recovered)
+		}
+	}()
+	return update.apply(current)
+}
+
+func callBSONSetUpdateAppendReplacement(update bsonSetUpdate, dst, current []byte) (out []byte, replacement []byte, changed bool, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			out = dst
+			replacement = nil
+			changed = false
+			err = collectionUpdatePanicError("structured", recovered)
+		}
+	}()
+	return update.appendReplacement(dst, current)
 }
 
 func bsonCoreValueEqualRawValue(left bsoncore.Value, right bson.RawValue) bool {
@@ -252,8 +325,9 @@ func orderedIndexStateForDocumentRuntimeMask(document []byte, runtimes []indexRu
 	state := encoder.appendState(len(runtimes))
 	var inline [8]indexRuntime
 	subset := inline[:0]
-	if bitsSet64(mask) > len(inline) {
-		subset = make([]indexRuntime, 0, bitsSet64(mask))
+	count := bits.OnesCount64(mask)
+	if count > len(inline) {
+		subset = make([]indexRuntime, 0, count)
 	}
 	for runtimeIdx, runtime := range runtimes {
 		if mask&(uint64(1)<<uint(runtimeIdx)) == 0 {
@@ -274,13 +348,4 @@ func orderedIndexStateForDocumentRuntimeMask(document []byte, runtimes []indexRu
 		subsetOffset++
 	}
 	return state, nil
-}
-
-func bitsSet64(v uint64) int {
-	n := 0
-	for v != 0 {
-		v &= v - 1
-		n++
-	}
-	return n
 }

@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/x/bsonx/bsoncore"
 )
 
 func TestBSONSetUpdateAppendReplacementUsesDestinationArena(t *testing.T) {
@@ -36,6 +37,9 @@ func TestBSONSetUpdateAppendReplacementUsesDestinationArena(t *testing.T) {
 	}
 	if len(replacement) == 0 {
 		t.Fatal("empty replacement")
+	}
+	if len(out) == 0 || &out[0] != &arena[0] {
+		t.Fatal("output does not reuse destination arena backing array")
 	}
 	if &replacement[0] != &out[len(arena)] {
 		t.Fatal("replacement does not reference appended destination arena")
@@ -78,6 +82,50 @@ func TestBSONSetUpdateAppendReplacementUnchangedRestoresDestination(t *testing.T
 	}
 }
 
+func TestBSONSetUpdateAppendReplacementErrorPreservesGrownDestination(t *testing.T) {
+	doc := mustBSONCollectionDocument(t, bson.D{
+		{Key: "city", Value: "hnl"},
+		{Key: "email", Value: "a@example.com"},
+	})
+	_, rem, ok := bsoncore.ReadLength(doc)
+	if !ok {
+		t.Fatal("read BSON length")
+	}
+	elem, _, ok := bsoncore.ReadElement(rem)
+	if !ok {
+		t.Fatal("read first BSON element")
+	}
+	malformed := doc[:4+len(elem)]
+	update, err := newBSONSetUpdate([]BSONSetField{{
+		Key:   "city",
+		Value: mustBSONRawValue(t, "sea"),
+	}})
+	if err != nil {
+		t.Fatalf("new BSON set update: %v", err)
+	}
+	arena := []byte("prefix")
+	arena = arena[:len(arena):len(arena)]
+	out, replacement, changed, err := update.appendReplacement(arena, malformed)
+	if err == nil {
+		t.Fatal("append replacement err=nil want malformed BSON error")
+	}
+	if changed {
+		t.Fatal("changed=true want false on error")
+	}
+	if replacement != nil {
+		t.Fatalf("replacement=%x want nil on error", replacement)
+	}
+	if len(out) != len(arena) {
+		t.Fatalf("out len=%d want restored len %d", len(out), len(arena))
+	}
+	if string(out) != string(arena) {
+		t.Fatalf("out prefix=%q want %q", out, arena)
+	}
+	if cap(out) <= cap(arena) {
+		t.Fatalf("out cap=%d want preserved grown capacity > %d", cap(out), cap(arena))
+	}
+}
+
 func BenchmarkBSONSetUpdateApplyCity(b *testing.B) {
 	doc := mustBSONCollectionDocument(b, bson.D{
 		{Key: "_id", Value: "u1"},
@@ -96,6 +144,7 @@ func BenchmarkBSONSetUpdateApplyCity(b *testing.B) {
 	}
 	b.ReportAllocs()
 	b.SetBytes(int64(len(doc)))
+	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		replacement, changed, err := update.apply(doc)
 		if err != nil {
@@ -126,6 +175,7 @@ func BenchmarkBSONSetUpdateAppendReplacementCity(b *testing.B) {
 	arena := make([]byte, 0, len(doc)+64)
 	b.ReportAllocs()
 	b.SetBytes(int64(len(doc)))
+	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		var replacement []byte
 		var changed bool

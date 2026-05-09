@@ -644,7 +644,7 @@ func TestCollectionUpdateBatchStatsExposeIndexRunShape(t *testing.T) {
 	if stats.SecondaryKeyBytes == 0 {
 		t.Fatal("stats secondary key bytes=0 want positive")
 	}
-	if stats.CurrentRead != 0 || stats.Callback != 0 ||
+	if stats.CurrentRead != 0 || stats.Callback != 0 || stats.StructuredUpdateApply != 0 ||
 		stats.OldIndexStateExtract != 0 || stats.NewIndexStateExtract != 0 ||
 		stats.BufferStage != 0 ||
 		stats.BufferStagePrecheck != 0 ||
@@ -959,6 +959,37 @@ func TestCollectionUpdateIndexStateBreakdownStatsSnapshotAndAdd(t *testing.T) {
 		if got, want := exported[tc.key], fmt.Sprintf("%d", tc.want.Nanoseconds()); got != want {
 			t.Fatalf("exported %s=%q want %q", tc.key, got, want)
 		}
+	}
+}
+
+func TestCollectionUpdateStructuredApplyStatsSnapshotAndAdd(t *testing.T) {
+	updateStats := CollectionUpdateStats{
+		Callback:              3 * time.Nanosecond,
+		StructuredUpdateApply: 5 * time.Nanosecond,
+	}
+	domain := &collectionWriteDomain{}
+	domain.observeUpdateBatchStats(updateStats)
+	snapshot := domain.statsSnapshot()
+	var merged CollectionManagerStats
+	merged.add(snapshot)
+	exported := (&CollectionManager{domains: map[string]*collectionWriteDomain{"test": domain}}).Stats()
+	if got := snapshot.UpdateBatchCallback; got != updateStats.Callback {
+		t.Fatalf("snapshot callback=%s want %s", got, updateStats.Callback)
+	}
+	if got := snapshot.UpdateBatchStructuredApply; got != updateStats.StructuredUpdateApply {
+		t.Fatalf("snapshot structured apply=%s want %s", got, updateStats.StructuredUpdateApply)
+	}
+	if got := merged.UpdateBatchCallback; got != updateStats.Callback {
+		t.Fatalf("merged callback=%s want %s", got, updateStats.Callback)
+	}
+	if got := merged.UpdateBatchStructuredApply; got != updateStats.StructuredUpdateApply {
+		t.Fatalf("merged structured apply=%s want %s", got, updateStats.StructuredUpdateApply)
+	}
+	if got, want := exported["treedb.collections.write_domain.update_batch.callback_ns_total"], fmt.Sprintf("%d", updateStats.Callback.Nanoseconds()); got != want {
+		t.Fatalf("exported callback=%q want %q", got, want)
+	}
+	if got, want := exported["treedb.collections.write_domain.update_batch.structured_apply_ns_total"], fmt.Sprintf("%d", updateStats.StructuredUpdateApply.Nanoseconds()); got != want {
+		t.Fatalf("exported structured apply=%q want %q", got, want)
 	}
 }
 
@@ -3652,6 +3683,29 @@ func TestCollectionIndexedWriteMemtablesCanDisableDefaultAsyncFlush(t *testing.T
 	}
 }
 
+func TestCollectionIndexedWriteMemtablesRejectConflictingAsyncFlushOptions(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	_, err = NewCollectionManager(d).CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedAsyncFlush:        true,
+			DisableBufferedIndexedAsyncFlush: true,
+		},
+		Indexes: []IndexDefinition{{Name: "email", Field: "email", ValueType: IndexValueString}},
+	})
+	if err == nil {
+		t.Fatal("create collection with conflicting async flush options succeeded")
+	}
+	if !strings.Contains(err.Error(), "both enabled and disabled") {
+		t.Fatalf("err=%q want conflicting async flush options", err)
+	}
+}
+
 func TestCollectionIndexedWriteMemtablesCanDisableRootRunLimitWithDocumentLimit(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -3694,6 +3748,67 @@ func TestCollectionIndexedWriteMemtablesDefaultSkipsNoIndexSchemas(t *testing.T)
 	if meta.Options.BufferedIndexedWriteMaxDocuments != 0 || meta.Options.BufferedIndexedWriteMaxBytes != 0 || meta.Options.BufferedIndexedWriteMaxRootRuns != 0 {
 		t.Fatalf("no-index buffered limits docs=%d bytes=%d rootRuns=%d want zero",
 			meta.Options.BufferedIndexedWriteMaxDocuments, meta.Options.BufferedIndexedWriteMaxBytes, meta.Options.BufferedIndexedWriteMaxRootRuns)
+	}
+	if meta.Options.DisableBufferedIndexedAsyncFlush || meta.Options.BufferedIndexedAsyncFlush || meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits != 0 {
+		t.Fatalf("no-index async flush fields disable=%v enabled=%v maxQueued=%d want false/false/0",
+			meta.Options.DisableBufferedIndexedAsyncFlush, meta.Options.BufferedIndexedAsyncFlush, meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits)
+	}
+}
+
+func TestCollectionIndexedWriteMemtablesPreserveNoIndexAsyncFlushOptOutForFutureIndexes(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	meta, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DisableBufferedIndexedAsyncFlush: true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	if meta.Options.BufferedIndexedWrites {
+		t.Fatal("no-index collection enabled indexed write memtables")
+	}
+	if !meta.Options.DisableBufferedIndexedAsyncFlush || meta.Options.BufferedIndexedAsyncFlush {
+		t.Fatalf("no-index async flags disable=%v enabled=%v want true/false",
+			meta.Options.DisableBufferedIndexedAsyncFlush, meta.Options.BufferedIndexedAsyncFlush)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	meta, err = col.CreateIndex(IndexDefinition{Name: "email", Field: "email", ValueType: IndexValueString})
+	if err != nil {
+		t.Fatalf("create index: %v", err)
+	}
+	if !meta.Options.BufferedIndexedWrites {
+		t.Fatal("indexed collection did not enable indexed write memtables")
+	}
+	if !meta.Options.DisableBufferedIndexedAsyncFlush || meta.Options.BufferedIndexedAsyncFlush {
+		t.Fatalf("indexed async flags disable=%v enabled=%v want true/false",
+			meta.Options.DisableBufferedIndexedAsyncFlush, meta.Options.BufferedIndexedAsyncFlush)
+	}
+}
+
+func TestCollectionIndexedWriteMemtablesRejectDisabledAsyncFlushQueueLimit(t *testing.T) {
+	_, err := normalizeCollectionMeta(CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DisableBufferedIndexedAsyncFlush:        true,
+			BufferedIndexedAsyncFlushMaxQueuedUnits: 2,
+		},
+		Indexes: []IndexDefinition{{Name: "email", Field: "email", ValueType: IndexValueString}},
+	})
+	if err == nil {
+		t.Fatal("normalize disabled async flush queue limit err=nil want error")
+	}
+	if !strings.Contains(err.Error(), "max queued units") {
+		t.Fatalf("err=%q want max queued units error", err)
 	}
 }
 
@@ -6367,6 +6482,27 @@ func TestDetachMutableIndexedRunTablesKeepsRunsVisible(t *testing.T) {
 	resetCollectionTables(detached)
 }
 
+func TestFreezeIndexedRunTablesOutsideLockAllowsNilDomain(t *testing.T) {
+	table := newFreezeSortRunTable()
+	if err := applyCollectionRunEntriesWithFlags(table, 2, func(i int) (key, value []byte, ptr page.ValuePtr, flags byte, err error) {
+		if i == 0 {
+			return []byte("b"), []byte("value-b"), page.ValuePtr{}, node.FlagInline, nil
+		}
+		return []byte("a"), []byte("value-a"), page.ValuePtr{}, node.FlagInline, nil
+	}); err != nil {
+		t.Fatalf("append entries: %v", err)
+	}
+	freezeDuration, lockReleased, relockWait := freezeIndexedRunTablesOutsideLock(nil, []memtable.Table{table})
+	if freezeDuration <= 0 {
+		t.Fatalf("freeze duration=%s want positive", freezeDuration)
+	}
+	if lockReleased != 0 || relockWait != 0 {
+		t.Fatalf("lock released=%s relock wait=%s want 0/0", lockReleased, relockWait)
+	}
+	requireFreezeSortRunIterator(t, table.NewIterator(nil, nil), []string{"a", "b"})
+	resetCollectionRunTable(table)
+}
+
 func TestIndexedPrepareFreezeWaitsUntilFinished(t *testing.T) {
 	domain := &collectionWriteDomain{}
 	domain.mu.Lock()
@@ -6374,31 +6510,44 @@ func TestIndexedPrepareFreezeWaitsUntilFinished(t *testing.T) {
 	domain.mu.Unlock()
 
 	done := make(chan time.Duration, 1)
+	waiterReady := make(chan struct{})
+	releaseWaiter := make(chan struct{})
 	go func() {
 		domain.mu.Lock()
+		if domain.indexedPrepareFreezes <= 0 {
+			domain.mu.Unlock()
+			done <- 0
+			return
+		}
+		close(waiterReady)
+		<-releaseWaiter
 		waited := domain.waitIndexedPrepareFreezeLocked()
 		domain.mu.Unlock()
 		done <- waited
 	}()
 
-	select {
-	case <-done:
-		t.Fatal("prepare freeze wait returned before finish")
-	case <-time.After(10 * time.Millisecond):
-	}
+	<-waiterReady
 
+	close(releaseWaiter)
 	domain.mu.Lock()
 	domain.finishIndexedPrepareFreezeLocked()
 	domain.mu.Unlock()
 
-	select {
-	case waited := <-done:
-		if waited <= 0 {
-			t.Fatalf("prepare freeze wait duration=%s want positive", waited)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("prepare freeze wait did not unblock after finish")
+	if waited := <-done; waited <= 0 {
+		t.Fatalf("prepare freeze wait duration=%s want positive", waited)
 	}
+}
+
+func TestIndexedPrepareFreezeFinishRequiresBegin(t *testing.T) {
+	domain := &collectionWriteDomain{}
+	domain.mu.Lock()
+	defer domain.mu.Unlock()
+	defer func() {
+		if recovered := recover(); recovered == nil {
+			t.Fatal("finish without begin did not panic")
+		}
+	}()
+	domain.finishIndexedPrepareFreezeLocked()
 }
 
 func TestRollbackBufferedIndexedDomainRestoresMetadata(t *testing.T) {
@@ -8157,6 +8306,123 @@ func TestCollectionUpdateBypassesIdleCombinerWhenNoBatchPressure(t *testing.T) {
 	collectionMaintenanceRequireUnorderedIDs(t, ids, []byte("u1"))
 }
 
+func TestCollectionCloseWaitsForInlineUpdateWithoutCombiner(t *testing.T) {
+	dir := t.TempDir()
+	d, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites: true,
+		},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city", ValueType: IndexValueString}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("u1")}, [][]byte{[]byte(`{"city":"hnl","score":0}`)}); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+
+	enteredUpdate := make(chan struct{})
+	releaseUpdate := make(chan struct{})
+	updateDone := make(chan error, 1)
+	go func() {
+		matched, modified, err := col.Update([]byte("u1"), func([]byte) ([]byte, bool, error) {
+			close(enteredUpdate)
+			<-releaseUpdate
+			return []byte(`{"city":"sea","score":1}`), true, nil
+		})
+		if err == nil && (!matched || !modified) {
+			err = fmt.Errorf("update matched=%v modified=%v", matched, modified)
+		}
+		updateDone <- err
+	}()
+	select {
+	case <-enteredUpdate:
+	case <-time.After(collectionTestTimeout(t, time.Second)):
+		t.Fatal("inline update callback did not start")
+	}
+
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- d.Close()
+	}()
+
+	closingDeadline := time.NewTimer(collectionTestTimeout(t, time.Second))
+	defer closingDeadline.Stop()
+	closingTicker := time.NewTicker(time.Millisecond)
+	defer closingTicker.Stop()
+	for !col.writeDomain.closingWrites.Load() {
+		select {
+		case err := <-closeDone:
+			t.Fatalf("close returned before marking writes closing: %v", err)
+		case <-closingDeadline.C:
+			t.Fatal("close did not reach write-domain drain")
+		case <-closingTicker.C:
+		}
+	}
+
+	closeBlocked := time.NewTimer(20 * time.Millisecond)
+	select {
+	case err := <-closeDone:
+		closeBlocked.Stop()
+		t.Fatalf("close returned while inline update callback was blocked: %v", err)
+	case <-closeBlocked.C:
+	}
+	close(releaseUpdate)
+
+	var updateErr error
+	select {
+	case updateErr = <-updateDone:
+	case <-time.After(collectionTestTimeout(t, time.Second)):
+		t.Fatal("inline update did not finish after release")
+	}
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("close after inline update: %v", err)
+		}
+	case <-time.After(collectionTestTimeout(t, time.Second)):
+		t.Fatal("close did not finish after inline update completed")
+	}
+	if updateErr != nil && !errors.Is(updateErr, backenddb.ErrClosed) {
+		t.Fatalf("inline update err=%v want nil or ErrClosed", updateErr)
+	}
+	if updateErr != nil {
+		return
+	}
+
+	reopened, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	reopenedMgr := NewCollectionManager(reopened)
+	reopenedCol, err := reopenedMgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open reopened collection: %v", err)
+	}
+	got, err := reopenedCol.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get reopened document: %v", err)
+	}
+	if !bytes.Contains(got, []byte(`"city":"sea"`)) {
+		t.Fatalf("reopened document=%s want city sea", got)
+	}
+}
+
 func TestCollectionUpdateUsesCombinerWhenInlineUpdateInFlight(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -8229,6 +8495,8 @@ func TestCollectionUpdateUsesCombinerWhenInlineUpdateInFlight(t *testing.T) {
 	}()
 
 	deadline := time.After(collectionTestTimeout(t, time.Second))
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
 	for {
 		stats := mgr.StatsSnapshot()
 		if stats.UpdateCombineRequests-before.UpdateCombineRequests > 0 {
@@ -8237,7 +8505,7 @@ func TestCollectionUpdateUsesCombinerWhenInlineUpdateInFlight(t *testing.T) {
 		select {
 		case <-deadline:
 			t.Fatal("second update did not enqueue through combiner")
-		case <-time.After(time.Millisecond):
+		case <-ticker.C:
 		}
 	}
 
@@ -8272,7 +8540,7 @@ func TestCollectionUpdateUsesCombinerWhenInlineUpdateInFlight(t *testing.T) {
 	}
 	collectionMaintenanceRequireUnorderedIDs(t, ids, []byte("u2"))
 
-	col.writeDomain.updateCombineLastRequestUnixNano.Store(uint64(time.Now().Add(time.Hour).UnixNano()))
+	col.writeDomain.updateCombineLastRequestUnixNano.Store(time.Now().Add(time.Hour).UnixNano())
 	combineBeforeCooldownCheck := after.UpdateCombineRequests
 	inlineBeforeCooldownCheck := after.UpdateCombineInlineRequests
 	matched, modified, err := col.Update([]byte("u2"), func([]byte) ([]byte, bool, error) {
@@ -9249,6 +9517,260 @@ func TestCollectionUpdateBSONSetReusesUnchangedIndexState(t *testing.T) {
 	}
 	if len(ids) != 1 || !bytes.Equal(ids[0], []byte("u1")) {
 		t.Fatalf("email ids=%q want [u1]", ids)
+	}
+}
+
+func TestCollectionUpdateBSONSetRequiresBSONFormat(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	matched, modified, err := col.UpdateBSONSet([]byte("u1"), []BSONSetField{{
+		Key:   "city",
+		Value: mustBSONRawValue(t, "sea"),
+	}})
+	if err == nil {
+		t.Fatalf("UpdateBSONSet err=nil matched=%v modified=%v", matched, modified)
+	}
+	if !strings.Contains(err.Error(), "requires BSON document format") {
+		t.Fatalf("UpdateBSONSet err=%q want BSON format error", err)
+	}
+}
+
+func TestValidateUpdateBatchItemsRejectsBSONSetWithCallback(t *testing.T) {
+	spec, err := newBSONSetUpdate([]BSONSetField{{
+		Key:   "city",
+		Value: mustBSONRawValue(t, "sea"),
+	}})
+	if err != nil {
+		t.Fatalf("new BSON set update: %v", err)
+	}
+	err = validateUpdateBatchItems([]UpdateBatchItem{{
+		DocumentID: []byte("u1"),
+		Update: func(current []byte) ([]byte, bool, error) {
+			return current, false, nil
+		},
+		bsonSet:    spec,
+		hasBSONSet: true,
+	}})
+	if err == nil {
+		t.Fatal("validateUpdateBatchItems err=nil want error")
+	}
+	if !strings.Contains(err.Error(), "cannot set both") {
+		t.Fatalf("validateUpdateBatchItems err=%q want mixed update error", err)
+	}
+}
+
+func TestBuildUpdateBatchPlanBSONSetRejectsInvalidCurrentBSON(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatBSON,
+		},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city", ValueType: IndexValueString}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("acquire snapshot")
+	}
+	catalog, err := loadCollectionCatalog(snap, "users")
+	baseCommitSeq := snapshotCommitSeq(snap)
+	baseSystemRoot := snapshotSystemRoot(snap)
+	_ = snap.Close()
+	if err != nil {
+		t.Fatalf("load catalog: %v", err)
+	}
+	rootName := collectionPrimaryRootName("users")
+	baseRoot := catalog.rootID(rootName)
+	table := newCollectionRunTable(1)
+	setCollectionRunValue(table, []byte("u1"), []byte{0x05, 0x00, 0x00, 0x00})
+	table.Freeze()
+	defer resetCollectionRunTable(table)
+
+	_, rootIDs, err := d.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder([]backenddb.OrderedRootDeltaPublishInput{{
+		BaseRoot:      baseRoot,
+		Iter:          table.NewIterator(nil, nil),
+		StoragePolicy: backenddb.OrderedRootStorageDefault,
+	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		return col.buildRootDescriptorSystemDeltaIterator(
+			baseCommitSeq,
+			baseSystemRoot,
+			[]string{rootName},
+			map[string]uint64{rootName: baseRoot},
+			rootIDs,
+		)
+	})
+	if err != nil {
+		t.Fatalf("publish invalid BSON primary root: %v", err)
+	}
+	if len(rootIDs) != 1 {
+		t.Fatalf("published root IDs=%d want 1", len(rootIDs))
+	}
+
+	spec, err := newBSONSetUpdate([]BSONSetField{{
+		Key:   "city",
+		Value: mustBSONRawValue(t, "sea"),
+	}})
+	if err != nil {
+		t.Fatalf("new BSON set update: %v", err)
+	}
+	plan, err := col.buildUpdateBatchPlan([]UpdateBatchItem{{
+		DocumentID: []byte("u1"),
+		bsonSet:    spec,
+		hasBSONSet: true,
+	}}, updateBatchModeNoSecondaryUniqueIndexChanges, false)
+	if plan != nil {
+		plan.close()
+	}
+	if err == nil {
+		t.Fatal("buildUpdateBatchPlan err=nil want invalid current BSON")
+	}
+	if !strings.Contains(err.Error(), "current BSON document") {
+		t.Fatalf("buildUpdateBatchPlan err=%q want current BSON validation error", err)
+	}
+}
+
+func TestBSONSetAppendReplacementGrowsSmallDestination(t *testing.T) {
+	spec, err := newBSONSetUpdate([]BSONSetField{{
+		Key:   "city",
+		Value: mustBSONRawValue(t, "sea"),
+	}})
+	if err != nil {
+		t.Fatalf("new BSON set update: %v", err)
+	}
+	current := mustBSONCollectionDocument(t, bson.D{
+		{Key: "_id", Value: "u1"},
+		{Key: "email", Value: "a@example.com"},
+		{Key: "city", Value: "hnl"},
+		{Key: "active", Value: true},
+	})
+	dst := []byte("prefix")
+	dst = dst[:len(dst):len(dst)]
+
+	out, replacement, changed, err := spec.appendReplacement(dst, current)
+	if err != nil {
+		t.Fatalf("appendReplacement: %v", err)
+	}
+	if !changed {
+		t.Fatal("changed=false want true")
+	}
+	if len(out) <= len(dst) {
+		t.Fatalf("out len=%d want appended replacement after prefix len=%d", len(out), len(dst))
+	}
+	if cap(out) <= cap(dst) {
+		t.Fatalf("out cap=%d want growth beyond dst cap=%d", cap(out), cap(dst))
+	}
+	if !bytes.Equal(out[:len(dst)], dst) {
+		t.Fatalf("out prefix=%q want %q", out[:len(dst)], dst)
+	}
+	if len(replacement) == 0 || &replacement[0] != &out[len(dst)] {
+		t.Fatal("replacement does not point at appended output region")
+	}
+	if got := bson.Raw(replacement).Lookup("city").StringValue(); got != "sea" {
+		t.Fatalf("city=%q want sea", got)
+	}
+	if got := bson.Raw(replacement).Lookup("_id").StringValue(); got != "u1" {
+		t.Fatalf("_id=%q want u1", got)
+	}
+}
+
+func TestBSONSetUpdateApplyNoopDoesNotAllocateReplacement(t *testing.T) {
+	current := mustBSONCollectionDocument(t, bson.D{
+		{Key: "_id", Value: "u1"},
+		{Key: "city", Value: "hnl"},
+	})
+	spec, err := newBSONSetUpdate([]BSONSetField{{
+		Key:   "city",
+		Value: mustBSONRawValue(t, "hnl"),
+	}})
+	if err != nil {
+		t.Fatalf("new BSON set update: %v", err)
+	}
+	got, changed, err := spec.apply(current)
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if changed {
+		t.Fatal("apply changed=true want false")
+	}
+	if len(got) == 0 || len(current) == 0 || &got[0] != &current[0] {
+		t.Fatal("no-op BSON set did not return the original document backing")
+	}
+	allocs := testing.AllocsPerRun(1000, func() {
+		got, changed, err := spec.apply(current)
+		if err != nil {
+			t.Fatalf("apply during alloc check: %v", err)
+		}
+		if changed || !bytes.Equal(got, current) {
+			t.Fatalf("alloc check changed=%v got=%x want original", changed, got)
+		}
+	})
+	if allocs != 0 {
+		t.Fatalf("no-op BSON set allocations=%g want 0", allocs)
+	}
+}
+
+func TestCollectionUpdateBSONSetRejectsInvalidFieldNames(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		key  string
+		want string
+	}{
+		{name: "empty", key: "", want: "empty"},
+		{name: "id", key: "_id", want: "_id"},
+		{name: "dotted", key: "profile.city", want: "top-level"},
+		{name: "dollar", key: "$city", want: "$"},
+		{name: "nul", key: "city\x00name", want: "NUL"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := newBSONSetUpdate([]BSONSetField{{
+				Key:   tc.key,
+				Value: mustBSONRawValue(t, "sea"),
+			}})
+			if err == nil {
+				t.Fatal("newBSONSetUpdate err=nil want error")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err=%q want containing %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestCollectionUpdateBSONSetRejectsDuplicateFields(t *testing.T) {
+	_, err := newBSONSetUpdate([]BSONSetField{
+		{Key: "city", Value: mustBSONRawValue(t, "sea")},
+		{Key: "city", Value: mustBSONRawValue(t, "sfo")},
+	})
+	if err == nil {
+		t.Fatal("newBSONSetUpdate err=nil want duplicate field error")
+	}
+	if !strings.Contains(err.Error(), "duplicate") {
+		t.Fatalf("newBSONSetUpdate err=%q want duplicate field error", err)
 	}
 }
 

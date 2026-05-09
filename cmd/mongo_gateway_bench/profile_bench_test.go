@@ -127,6 +127,7 @@ func TestProfileBenchBufferedIndexedAsyncFlushEnv(t *testing.T) {
 	if !profileBenchBufferedIndexedAsyncFlush(t) {
 		t.Fatal("async flush env=true want true")
 	}
+	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_ASYNC_FLUSH", "")
 	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_DISABLE_BUFFERED_INDEXED_ASYNC_FLUSH", "true")
 	if !profileBenchDisableBufferedIndexedAsyncFlush(t) {
 		t.Fatal("disable async flush env=true want true")
@@ -2531,6 +2532,15 @@ func profileBenchCompactOverlayRootsAfterFlush(tb testing.TB) bool {
 
 func profileBenchCollectionOptions(tb testing.TB, format collections.DocumentFormat) collections.CollectionOptions {
 	tb.Helper()
+	disableAsyncFlush := profileBenchDisableBufferedIndexedAsyncFlush(tb)
+	asyncFlush := profileBenchBufferedIndexedAsyncFlush(tb)
+	asyncFlushMaxQueuedUnits := profileBenchBufferedIndexedAsyncFlushMaxQueuedUnits(tb)
+	if disableAsyncFlush && asyncFlush {
+		tb.Fatalf("cannot set both MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_ASYNC_FLUSH and MONGO_GATEWAY_PROFILE_BENCH_DISABLE_BUFFERED_INDEXED_ASYNC_FLUSH")
+	}
+	if disableAsyncFlush && asyncFlushMaxQueuedUnits != 0 {
+		tb.Fatalf("cannot set MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_ASYNC_FLUSH_MAX_QUEUED_UNITS when MONGO_GATEWAY_PROFILE_BENCH_DISABLE_BUFFERED_INDEXED_ASYNC_FLUSH is set")
+	}
 	return collections.CollectionOptions{
 		DocumentFormat:                          format,
 		DataRootStoragePolicy:                   collections.RootStorageCompressed,
@@ -2538,10 +2548,10 @@ func profileBenchCollectionOptions(tb testing.TB, format collections.DocumentFor
 		BufferedIndexedWriteMaxDocuments:        profileBenchBufferedIndexedWriteMaxDocuments(tb),
 		BufferedIndexedWriteMaxBytes:            profileBenchBufferedIndexedWriteMaxBytes(tb),
 		BufferedIndexedWriteMaxRootRuns:         profileBenchBufferedIndexedWriteMaxRootRuns(tb),
-		DisableBufferedIndexedAsyncFlush:        profileBenchDisableBufferedIndexedAsyncFlush(tb),
-		BufferedIndexedAsyncFlush:               profileBenchBufferedIndexedAsyncFlush(tb),
+		DisableBufferedIndexedAsyncFlush:        disableAsyncFlush,
+		BufferedIndexedAsyncFlush:               asyncFlush,
 		BufferedIndexedOverlayRoots:             profileBenchBufferedIndexedOverlayRoots(tb),
-		BufferedIndexedAsyncFlushMaxQueuedUnits: profileBenchBufferedIndexedAsyncFlushMaxQueuedUnits(tb),
+		BufferedIndexedAsyncFlushMaxQueuedUnits: asyncFlushMaxQueuedUnits,
 	}
 }
 
