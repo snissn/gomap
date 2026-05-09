@@ -9717,6 +9717,19 @@ func TestCollectionUpdateBSONSetRejectsInvalidFieldNames(t *testing.T) {
 	}
 }
 
+func TestCollectionUpdateBSONSetRejectsDuplicateFields(t *testing.T) {
+	_, err := newBSONSetUpdate([]BSONSetField{
+		{Key: "city", Value: mustBSONRawValue(t, "sea")},
+		{Key: "city", Value: mustBSONRawValue(t, "sfo")},
+	})
+	if err == nil {
+		t.Fatal("newBSONSetUpdate err=nil want duplicate field error")
+	}
+	if !strings.Contains(err.Error(), "duplicate") {
+		t.Fatalf("newBSONSetUpdate err=%q want duplicate field error", err)
+	}
+}
+
 func TestCollectionUpdateBatchDirectBufferedBSONDoesNotReserveUnchangedUnique(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
