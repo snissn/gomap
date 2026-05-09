@@ -2371,9 +2371,12 @@ func TestCollectionInsertBatchBuffersNoIndexBSONBeforeFlush(t *testing.T) {
 		mustBSONCollectionDocument(t, bson.D{{Key: "name", Value: "ada"}}),
 		mustBSONCollectionDocument(t, bson.D{{Key: "name", Value: "grace"}}),
 	}
+	wantU1 := bytes.Clone(docs[0])
+	wantU2 := bytes.Clone(docs[1])
 	if _, err := writer.InsertBatchValidatedBSON([][]byte{[]byte("u1"), []byte("u2")}, docs); err != nil {
 		t.Fatalf("insert batch: %v", err)
 	}
+	docs[0][len(docs[0])-1] ^= 0xff
 	if writer.writeDomain == nil {
 		t.Fatal("missing write domain")
 	}
@@ -2384,8 +2387,8 @@ func TestCollectionInsertBatchBuffersNoIndexBSONBeforeFlush(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reader get buffered BSON doc: %v", err)
 	}
-	if !bytes.Equal(got, docs[0]) {
-		t.Fatalf("buffered BSON doc=%v want %v", got, docs[0])
+	if !bytes.Equal(got, wantU1) {
+		t.Fatalf("buffered BSON doc=%v want %v", got, wantU1)
 	}
 	if err := writer.Flush(); err != nil {
 		t.Fatalf("flush: %v", err)
@@ -2410,8 +2413,8 @@ func TestCollectionInsertBatchBuffersNoIndexBSONBeforeFlush(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get after reopen: %v", err)
 	}
-	if !bytes.Equal(got, docs[1]) {
-		t.Fatalf("reopened BSON doc=%v want %v", got, docs[1])
+	if !bytes.Equal(got, wantU2) {
+		t.Fatalf("reopened BSON doc=%v want %v", got, wantU2)
 	}
 }
 

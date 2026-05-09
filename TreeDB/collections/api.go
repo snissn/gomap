@@ -3058,7 +3058,7 @@ func (c *Collection) bufferNoIndexInsertBatchLocked(
 	for i := range preparedDocuments {
 		entries[i] = noIndexBatchEntry{
 			id:       resultIDs[i],
-			document: preparedDocuments[i],
+			document: bytes.Clone(preparedDocuments[i]),
 		}
 	}
 	sort.Slice(entries, func(i, j int) bool {
@@ -6886,6 +6886,42 @@ func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON b
 		return nil, err
 	}
 	plannerOptions = collectionOptionsWithTemplateV1Resolver(plannerOptions, snap, catalog)
+	if skipInitialNoIndexFlush && (len(meta.Indexes) != 0 || normalizedDocumentFormat(plannerOptions.documentFormat) != DocumentFormatBSON) {
+		closePlanningSnapshot()
+		if err := c.flushBufferedNoIndex(); err != nil {
+			return nil, err
+		}
+		snap = c.db.AcquireSnapshot()
+		if snap == nil {
+			return nil, backenddb.ErrClosed
+		}
+		catalog, err = c.catalogForSnapshot(snap)
+		if err != nil {
+			closePlanningSnapshot()
+			return nil, err
+		}
+		if catalog == nil {
+			closePlanningSnapshot()
+			return nil, errCollectionNotFound
+		}
+		if err := rejectCatalogRootOverlaysForIndexedBufferWrite(catalog); err != nil {
+			closePlanningSnapshot()
+			return nil, err
+		}
+		meta = catalog.meta
+		c.meta = meta
+		plannerOptions, err = collectionPlannerOptionsForDB(c.db, meta)
+		if err != nil {
+			closePlanningSnapshot()
+			return nil, err
+		}
+		plannerOptions, err = collectionOptionsWithTrustedBSONDocuments(plannerOptions, trustedValidBSON)
+		if err != nil {
+			closePlanningSnapshot()
+			return nil, err
+		}
+		plannerOptions = collectionOptionsWithTemplateV1Resolver(plannerOptions, snap, catalog)
+	}
 	indexedMemtablesEnabled := c.shouldBufferIndexedInserts(meta)
 	bufferIndexedInserts := c.shouldBufferIndexedInsertBatch(meta, len(documents))
 	if indexedMemtablesEnabled && !bufferIndexedInserts {
@@ -6955,6 +6991,41 @@ func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON b
 		if resultIDs, buffered, err := c.bufferNoIndexInsertBatchLocked(c.writeDomain, catalog, snap, plannerOptions, ids, documents); buffered {
 			closePlanningSnapshot()
 			return resultIDs, err
+		} else if skipInitialNoIndexFlush {
+			closePlanningSnapshot()
+			if err := c.flushBufferedNoIndex(); err != nil {
+				return nil, err
+			}
+			snap = c.db.AcquireSnapshot()
+			if snap == nil {
+				return nil, backenddb.ErrClosed
+			}
+			catalog, err = c.catalogForSnapshot(snap)
+			if err != nil {
+				closePlanningSnapshot()
+				return nil, err
+			}
+			if catalog == nil {
+				closePlanningSnapshot()
+				return nil, errCollectionNotFound
+			}
+			if err := rejectCatalogRootOverlaysForIndexedBufferWrite(catalog); err != nil {
+				closePlanningSnapshot()
+				return nil, err
+			}
+			meta = catalog.meta
+			c.meta = meta
+			plannerOptions, err = collectionPlannerOptionsForDB(c.db, meta)
+			if err != nil {
+				closePlanningSnapshot()
+				return nil, err
+			}
+			plannerOptions, err = collectionOptionsWithTrustedBSONDocuments(plannerOptions, trustedValidBSON)
+			if err != nil {
+				closePlanningSnapshot()
+				return nil, err
+			}
+			plannerOptions = collectionOptionsWithTemplateV1Resolver(plannerOptions, snap, catalog)
 		}
 	}
 	if len(meta.Indexes) == 0 {
