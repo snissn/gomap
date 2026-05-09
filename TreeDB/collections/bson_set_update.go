@@ -98,6 +98,9 @@ func newBSONSetUpdate(fields []BSONSetField) (bsonSetUpdate, error) {
 		if err := validateBSONSetFieldKey(field.Key); err != nil {
 			return bsonSetUpdate{}, err
 		}
+		if err := validateBSONSetRawValue(field.Value); err != nil {
+			return bsonSetUpdate{}, fmt.Errorf("collections: BSON $set field %q value: %w", field.Key, err)
+		}
 		if _, ok := seen[field.Key]; ok {
 			return bsonSetUpdate{}, fmt.Errorf("collections: duplicate BSON $set field %q", field.Key)
 		}
@@ -122,6 +125,14 @@ func validateBSONSetFieldKey(key string) error {
 	}
 	if strings.Contains(key, "\x00") {
 		return errors.New("collections: BSON $set field names cannot contain NUL")
+	}
+	return nil
+}
+
+func validateBSONSetRawValue(value bson.RawValue) error {
+	_, rem, ok := bsoncore.ReadValue(value.Value, bsoncore.Type(value.Type))
+	if !ok || len(rem) != 0 {
+		return errors.New("invalid BSON raw value")
 	}
 	return nil
 }
@@ -306,8 +317,9 @@ func (u bsonSetUpdate) affectedIndexMask(runtimes []indexRuntime, opts collectio
 
 // orderedIndexStateForKnownValidDocumentRuntimeMask extracts only index states
 // covered by mask. Callers must already have validated BSON documents; the BSON
-// $set update path does that via ID preservation checks before using this
-// helper, which avoids rescanning the whole document when mask is zero.
+// $set update path validates current documents before old-state extraction and
+// validates replacements via ID preservation checks before new-state extraction.
+// That avoids rescanning the whole document when mask is zero.
 func orderedIndexStateForKnownValidDocumentRuntimeMask(document []byte, runtimes []indexRuntime, mask uint64, opts collectionOptions, encoder *indexEncodeArena) (orderedDocumentIndexState, error) {
 	if len(runtimes) == 0 {
 		return nil, nil

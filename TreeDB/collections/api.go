@@ -3633,6 +3633,15 @@ func freezeIndexedRunTables(tables []memtable.Table) {
 	}
 }
 
+func freezeIndexedRunTablesObserved(tables []memtable.Table) time.Duration {
+	if len(tables) == 0 {
+		return 0
+	}
+	freezeStart := time.Now()
+	freezeIndexedRunTables(tables)
+	return collectionObservedElapsedSince(freezeStart)
+}
+
 // freezeIndexedRunTablesOutsideLock requires domain.mu to be held by the caller.
 // It releases domain.mu for expensive table-local sort/coalesce work, then
 // reacquires domain.mu before returning.
@@ -3641,9 +3650,7 @@ func freezeIndexedRunTablesOutsideLock(domain *collectionWriteDomain, tables []m
 		return 0, 0, 0
 	}
 	if domain == nil {
-		freezeStart := time.Now()
-		freezeIndexedRunTables(tables)
-		return collectionObservedElapsedSince(freezeStart), 0, 0
+		return freezeIndexedRunTablesObserved(tables), 0, 0
 	}
 	domain.beginIndexedPrepareFreezeLocked()
 	prepareFinished := false
@@ -13539,7 +13546,7 @@ func normalizeCollectionMeta(meta CollectionMeta) (CollectionMeta, error) {
 		return CollectionMeta{}, errors.New("collections: buffered indexed async flush cannot be both enabled and disabled")
 	}
 	if meta.Options.DisableBufferedIndexedAsyncFlush && meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits != 0 {
-		return CollectionMeta{}, errors.New("collections: buffered indexed async flush max queued units require async flush to be enabled")
+		return CollectionMeta{}, errors.New("collections: buffered indexed async flush max queued units cannot be set when async flush is disabled")
 	}
 	documentFormat, err := normalizeDocumentFormat(meta.Options.DocumentFormat)
 	if err != nil {
@@ -13586,6 +13593,9 @@ func normalizeCollectionMeta(meta CollectionMeta) (CollectionMeta, error) {
 		meta.Options.BufferedIndexedWrites = false
 	} else {
 		meta.Options.BufferedIndexedWrites = true
+		// Indexed schemas publish threshold flushes asynchronously by default.
+		// Foreground threshold publish is an explicit opt-out so old metadata with
+		// BufferedIndexedAsyncFlush=false still normalizes to the current default.
 		if meta.Options.DisableBufferedIndexedAsyncFlush {
 			meta.Options.BufferedIndexedAsyncFlush = false
 			meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits = 0
