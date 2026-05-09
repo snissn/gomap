@@ -1,15 +1,27 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
+	"compress/gzip"
+	"context"
+	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
+	treedb "github.com/snissn/gomap/TreeDB"
+	"github.com/snissn/gomap/TreeDB/collections"
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/experiments/colgranule"
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 type clickHouseResult struct {
@@ -26,18 +38,40 @@ type clickHouseResult struct {
 }
 
 type comparisonRaw struct {
-	GeneratedAt       string                            `json:"generated_at"`
-	DataPath          string                            `json:"data_path"`
-	Limit             int                               `json:"limit"`
-	Rows              int                               `json:"rows"`
-	Files             []string                          `json:"files"`
-	InputBytes        int64                             `json:"input_bytes"`
-	RowsPerGranule    int                               `json:"rows_per_granule"`
-	LoadDuration      time.Duration                     `json:"load_duration"`
-	ClickHouseLocal   clickHouseResult                  `json:"clickhouse_local"`
-	QueryTimings      []colgranule.JSONBenchQueryTiming `json:"query_timings"`
-	ColumnSummaries   []colgranule.ColumnCodecSummary   `json:"column_summaries"`
-	BestColumnStorage []bestColumnStorage               `json:"best_column_storage"`
+	GeneratedAt         string                            `json:"generated_at"`
+	DataPath            string                            `json:"data_path"`
+	Limit               int                               `json:"limit"`
+	Rows                int                               `json:"rows"`
+	Files               []string                          `json:"files"`
+	InputBytes          int64                             `json:"input_bytes"`
+	RowsPerGranule      int                               `json:"rows_per_granule"`
+	LoadDuration        time.Duration                     `json:"load_duration"`
+	ClickHouseLocal     clickHouseResult                  `json:"clickhouse_local"`
+	RemainingTreeDB     remainingTreeDBResult             `json:"remaining_treedb"`
+	RemainingTreeDBJSON remainingTreeDBResult             `json:"remaining_treedb_json"`
+	QueryTimings        []colgranule.JSONBenchQueryTiming `json:"query_timings"`
+	ColumnSummaries     []colgranule.ColumnCodecSummary   `json:"column_summaries"`
+	BestColumnStorage   []bestColumnStorage               `json:"best_column_storage"`
+}
+
+type remainingTreeDBResult struct {
+	Enabled              bool    `json:"enabled"`
+	DocumentFormat       string  `json:"document_format"`
+	StoragePolicy        string  `json:"storage_policy"`
+	DBDir                string  `json:"db_dir"`
+	Rows                 int     `json:"rows"`
+	RawDocumentBytes     int64   `json:"raw_document_bytes"`
+	LoadDuration         float64 `json:"load_seconds"`
+	FlushDuration        float64 `json:"flush_seconds"`
+	CheckpointDuration   float64 `json:"checkpoint_seconds"`
+	BeforeCompactBytes   int64   `json:"before_compact_bytes"`
+	BeforeCompactFiles   int     `json:"before_compact_files"`
+	AfterCompactBytes    int64   `json:"after_compact_bytes"`
+	AfterCompactFiles    int     `json:"after_compact_files"`
+	CompactionDuration   float64 `json:"compaction_seconds"`
+	FullyCompacted       bool    `json:"fully_compacted"`
+	CompactedBytesPerRow float64 `json:"compacted_bytes_per_row"`
+	StoredShape          string  `json:"stored_shape"`
 }
 
 type bestColumnStorage struct {
@@ -56,6 +90,8 @@ func main() {
 	rowsPerGranule := flag.Int("rows-per-granule", colgranule.DefaultRowsPerGranule, "rows per encoded granule")
 	attempts := flag.Int("attempts", 5, "query timing attempts")
 	clickHouseLocalPath := flag.String("clickhouse-local", "/Users/michaelseiler/dev/snissn/JSONBench/clickhouse/local_results/fresh_1m_20260508_121356_clickhouse/result.json", "local ClickHouse JSONBench result")
+	remainingDBDir := flag.String("remaining-db-dir", "artifacts/colgranule_remaining_treedb", "temporary TreeDB directory prefix for remaining payload measurement")
+	measureRemaining := flag.Bool("measure-remaining-treedb", true, "load original JSON minus time_us into JSON and BSON TreeDB collections, compact them, and include disk usage")
 	outJSON := flag.String("out-json", "experiments/colgranule/JSONBENCH_COMPARISON_RAW.json", "raw JSON output")
 	outMarkdown := flag.String("out-md", "experiments/colgranule/JSONBENCH_COMPARISON_REPORT.md", "Markdown report output")
 	flag.Parse()
@@ -69,20 +105,30 @@ func main() {
 	must(err)
 	timings, err := colgranule.RunJSONBenchQueries(ds, *attempts)
 	must(err)
+	var remaining remainingTreeDBResult
+	var remainingJSON remainingTreeDBResult
+	if *measureRemaining {
+		remaining, err = measureRemainingTreeDB(context.Background(), ds.Files, ds.Rows, *remainingDBDir+"-bson", collections.DocumentFormatBSON)
+		must(err)
+		remainingJSON, err = measureRemainingTreeDB(context.Background(), ds.Files, ds.Rows, *remainingDBDir+"-json", collections.DocumentFormatJSON)
+		must(err)
+	}
 
 	raw := comparisonRaw{
-		GeneratedAt:       time.Now().UTC().Format(time.RFC3339),
-		DataPath:          *data,
-		Limit:             *limit,
-		Rows:              ds.Rows,
-		Files:             ds.Files,
-		InputBytes:        inputBytes(ds.Files),
-		RowsPerGranule:    *rowsPerGranule,
-		LoadDuration:      loadDuration,
-		ClickHouseLocal:   readClickHouseResult(*clickHouseLocalPath),
-		QueryTimings:      timings,
-		ColumnSummaries:   summaries,
-		BestColumnStorage: bestColumns(summaries),
+		GeneratedAt:         time.Now().UTC().Format(time.RFC3339),
+		DataPath:            *data,
+		Limit:               *limit,
+		Rows:                ds.Rows,
+		Files:               ds.Files,
+		InputBytes:          inputBytes(ds.Files),
+		RowsPerGranule:      *rowsPerGranule,
+		LoadDuration:        loadDuration,
+		ClickHouseLocal:     readClickHouseResult(*clickHouseLocalPath),
+		RemainingTreeDB:     remaining,
+		RemainingTreeDBJSON: remainingJSON,
+		QueryTimings:        timings,
+		ColumnSummaries:     summaries,
+		BestColumnStorage:   bestColumns(summaries),
 	}
 
 	writeJSON(*outJSON, raw)
@@ -95,6 +141,263 @@ func readClickHouseResult(path string) clickHouseResult {
 	var result clickHouseResult
 	must(json.Unmarshal(data, &result))
 	return result
+}
+
+func measureRemainingTreeDB(ctx context.Context, files []string, rows int, dbDir string, format collections.DocumentFormat) (remainingTreeDBResult, error) {
+	var out remainingTreeDBResult
+	out.Enabled = true
+	out.DocumentFormat = string(format)
+	out.StoragePolicy = string(collections.RootStorageCompressed)
+	out.DBDir = dbDir
+	out.StoredShape = fmt.Sprintf("original JSON object converted to %s with top-level time_us removed", format)
+	if rows <= 0 {
+		return out, errors.New("remaining TreeDB measurement requires positive row count")
+	}
+	if err := os.RemoveAll(dbDir); err != nil {
+		return out, fmt.Errorf("reset remaining TreeDB dir: %w", err)
+	}
+	if err := os.MkdirAll(dbDir, 0o755); err != nil {
+		return out, fmt.Errorf("create remaining TreeDB dir: %w", err)
+	}
+
+	opts := treedb.OptionsFor(treedb.ProfileBench, dbDir)
+	opts.ValueLog.PointerThreshold = 1
+	opts.ValueLog.ForcePointers = true
+	backend, cleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)
+	if err != nil {
+		return out, fmt.Errorf("open remaining TreeDB: %w", err)
+	}
+
+	loadStart := time.Now()
+	loadErr := func() error {
+		defer func() { _ = cleanup() }()
+		mgr := collections.NewCollectionManager(backend)
+		if _, err := mgr.CreateCollection(&collections.CollectionMeta{
+			Name: "jsonbench_remaining_" + string(format),
+			Options: collections.CollectionOptions{
+				DocumentFormat:        format,
+				DataRootStoragePolicy: collections.RootStorageCompressed,
+			},
+		}); err != nil {
+			return fmt.Errorf("create remaining collection: %w", err)
+		}
+		col, err := mgr.OpenCollection("jsonbench_remaining_" + string(format))
+		if err != nil {
+			return fmt.Errorf("open remaining collection: %w", err)
+		}
+		if err := insertRemainingDocuments(files, rows, col, format, &out); err != nil {
+			return err
+		}
+		flushStart := time.Now()
+		if err := col.Flush(); err != nil {
+			return fmt.Errorf("flush remaining collection: %w", err)
+		}
+		if err := mgr.FlushAll(); err != nil {
+			return fmt.Errorf("flush all remaining collection: %w", err)
+		}
+		out.FlushDuration = time.Since(flushStart).Seconds()
+		checkpointStart := time.Now()
+		if err := backend.Checkpoint(); err != nil {
+			return fmt.Errorf("checkpoint remaining TreeDB: %w", err)
+		}
+		out.CheckpointDuration = time.Since(checkpointStart).Seconds()
+		return nil
+	}()
+	out.LoadDuration = time.Since(loadStart).Seconds()
+	if loadErr != nil {
+		return out, loadErr
+	}
+	if out.Rows != rows {
+		return out, fmt.Errorf("remaining TreeDB loaded %d rows, want %d", out.Rows, rows)
+	}
+	before, beforeFiles, err := directoryUsage(dbDir)
+	if err != nil {
+		return out, err
+	}
+	out.BeforeCompactBytes = before
+	out.BeforeCompactFiles = beforeFiles
+
+	compactStart := time.Now()
+	maintenance, maintenanceCleanup, err := treedb.OpenBackend(opts)
+	if err != nil {
+		return out, fmt.Errorf("open remaining TreeDB for compaction: %w", err)
+	}
+	stats, compactErr := maintenance.CompactStorage(ctx, backenddb.CompactStorageOptions{
+		SyncEachPhase:                   true,
+		ValueLogRewriteBatchSize:        16_000,
+		LeafPackMinExpectedReclaimBytes: 1,
+		LeafPackMinReclaimPerCopyPPM:    1,
+	})
+	cleanupErr := maintenanceCleanup()
+	if compactErr != nil {
+		return out, fmt.Errorf("compact remaining TreeDB: %w", compactErr)
+	}
+	if cleanupErr != nil {
+		return out, fmt.Errorf("close remaining TreeDB compaction handle: %w", cleanupErr)
+	}
+	out.CompactionDuration = time.Since(compactStart).Seconds()
+	out.FullyCompacted = stats.FullyCompacted
+	after, afterFiles, err := directoryUsage(dbDir)
+	if err != nil {
+		return out, err
+	}
+	out.AfterCompactBytes = after
+	out.AfterCompactFiles = afterFiles
+	out.CompactedBytesPerRow = float64(after) / float64(out.Rows)
+	return out, nil
+}
+
+func insertRemainingDocuments(files []string, rows int, col *collections.Collection, format collections.DocumentFormat, out *remainingTreeDBResult) error {
+	const batchSize = 16_000
+	var ids [][]byte
+	var docs [][]byte
+	flush := func() error {
+		if len(ids) == 0 {
+			return nil
+		}
+		var err error
+		switch format {
+		case collections.DocumentFormatBSON:
+			_, err = col.InsertBatchValidatedBSON(ids, docs)
+		case collections.DocumentFormatJSON:
+			_, err = col.InsertBatch(ids, docs)
+		default:
+			err = fmt.Errorf("unsupported remaining document format %q", format)
+		}
+		if err != nil {
+			return fmt.Errorf("insert remaining %s batch ending row %d: %w", format, out.Rows, err)
+		}
+		ids = ids[:0]
+		docs = docs[:0]
+		return nil
+	}
+	for _, file := range files {
+		if out.Rows >= rows {
+			break
+		}
+		if err := scanJSONBenchFile(file, func(raw []byte) error {
+			if out.Rows >= rows {
+				return errStopScan
+			}
+			doc, err := remainingDocument(raw, format)
+			if err != nil {
+				return err
+			}
+			out.RawDocumentBytes += int64(len(doc))
+			out.Rows++
+			ids = append(ids, documentID(uint64(out.Rows)))
+			docs = append(docs, doc)
+			if len(ids) >= batchSize {
+				return flush()
+			}
+			return nil
+		}); err != nil {
+			return fmt.Errorf("scan remaining JSON %s: %w", file, err)
+		}
+	}
+	return flush()
+}
+
+func remainingDocument(raw []byte, format collections.DocumentFormat) ([]byte, error) {
+	switch format {
+	case collections.DocumentFormatBSON:
+		return remainingBSONDocument(raw)
+	case collections.DocumentFormatJSON:
+		return remainingJSONDocument(raw)
+	default:
+		return nil, fmt.Errorf("unsupported remaining document format %q", format)
+	}
+}
+
+func remainingBSONDocument(raw []byte) ([]byte, error) {
+	var doc map[string]any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return nil, fmt.Errorf("decode remaining JSON: %w", err)
+	}
+	delete(doc, "time_us")
+	encoded, err := bson.Marshal(doc)
+	if err != nil {
+		return nil, fmt.Errorf("encode remaining BSON: %w", err)
+	}
+	if err := bson.Raw(encoded).Validate(); err != nil {
+		return nil, fmt.Errorf("validate remaining BSON: %w", err)
+	}
+	return encoded, nil
+}
+
+func remainingJSONDocument(raw []byte) ([]byte, error) {
+	var doc map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return nil, fmt.Errorf("decode remaining JSON: %w", err)
+	}
+	delete(doc, "time_us")
+	encoded, err := json.Marshal(doc)
+	if err != nil {
+		return nil, fmt.Errorf("encode remaining JSON: %w", err)
+	}
+	return encoded, nil
+}
+
+var errStopScan = errors.New("stop scan")
+
+func scanJSONBenchFile(path string, fn func(raw []byte) error) error {
+	file, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = file.Close() }()
+	var reader io.Reader = file
+	var gz *gzip.Reader
+	if strings.HasSuffix(path, ".gz") {
+		gz, err = gzip.NewReader(file)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = gz.Close() }()
+		reader = gz
+	}
+	scanner := bufio.NewScanner(reader)
+	scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024*1024)
+	for scanner.Scan() {
+		raw := bytes.TrimSpace(scanner.Bytes())
+		if len(raw) == 0 {
+			continue
+		}
+		if err := fn(raw); err != nil {
+			if errors.Is(err, errStopScan) {
+				return nil
+			}
+			return err
+		}
+	}
+	return scanner.Err()
+}
+
+func documentID(row uint64) []byte {
+	out := make([]byte, 8)
+	binary.BigEndian.PutUint64(out, row)
+	return out
+}
+
+func directoryUsage(dir string) (int64, int, error) {
+	var total int64
+	var count int
+	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		total += info.Size()
+		count++
+		return nil
+	})
+	return total, count, err
 }
 
 func writeJSON(path string, raw comparisonRaw) {
@@ -118,6 +421,10 @@ func writeMarkdown(path string, raw comparisonRaw) {
 	fmt.Fprintf(&b, "\n## Storage Footprint\n\n")
 	allBest := bestTotal(raw.BestColumnStorage, nil)
 	queryBest := bestTotal(raw.BestColumnStorage, queryPathColumns())
+	combinedAllBSON := int64(allBest) + raw.RemainingTreeDB.AfterCompactBytes
+	combinedQueryBSON := int64(queryBest) + raw.RemainingTreeDB.AfterCompactBytes
+	combinedAllJSON := int64(allBest) + raw.RemainingTreeDBJSON.AfterCompactBytes
+	combinedQueryJSON := int64(queryBest) + raw.RemainingTreeDBJSON.AfterCompactBytes
 	fmt.Fprintf(&b, "| Item | Bytes | MiB | Notes |\n")
 	fmt.Fprintf(&b, "|---|---:|---:|---|\n")
 	fmt.Fprintf(&b, "| JSONBench compressed input files | %d | %.2f | Local `.json.gz` source bytes read by this run. |\n", raw.InputBytes, mib(raw.InputBytes))
@@ -126,7 +433,24 @@ func writeMarkdown(path string, raw comparisonRaw) {
 	fmt.Fprintf(&b, "| ClickHouse local index | %d | %.2f | `index_size` from local ClickHouse JSONBench result. |\n", raw.ClickHouseLocal.IndexSize, mib(raw.ClickHouseLocal.IndexSize))
 	fmt.Fprintf(&b, "| Granule best-codec all derived columns | %d | %.2f | %.2f%% of ClickHouse local total. |\n", allBest, mib(int64(allBest)), ratio(float64(allBest)*100, float64(raw.ClickHouseLocal.TotalSize)))
 	fmt.Fprintf(&b, "| Granule best-codec query/index paths | %d | %.2f | %.2f%% of ClickHouse local total. |\n", queryBest, mib(int64(queryBest)), ratio(float64(queryBest)*100, float64(raw.ClickHouseLocal.TotalSize)))
+	if raw.RemainingTreeDB.Enabled {
+		fmt.Fprintf(&b, "| TreeDB BSON remaining fields after compaction | %d | %.2f | Stores original JSON minus `time_us` as BSON in a compressed no-index collection. |\n", raw.RemainingTreeDB.AfterCompactBytes, mib(raw.RemainingTreeDB.AfterCompactBytes))
+		fmt.Fprintf(&b, "| Granules all derived columns + TreeDB BSON remaining fields | %d | %.2f | %.2f%% of ClickHouse local total. |\n", combinedAllBSON, mib(combinedAllBSON), ratio(float64(combinedAllBSON)*100, float64(raw.ClickHouseLocal.TotalSize)))
+		fmt.Fprintf(&b, "| Granules query/index paths + TreeDB BSON remaining fields | %d | %.2f | %.2f%% of ClickHouse local total. |\n", combinedQueryBSON, mib(combinedQueryBSON), ratio(float64(combinedQueryBSON)*100, float64(raw.ClickHouseLocal.TotalSize)))
+	}
+	if raw.RemainingTreeDBJSON.Enabled {
+		fmt.Fprintf(&b, "| TreeDB JSON remaining fields after compaction | %d | %.2f | Stores original JSON minus `time_us` as JSON in a compressed no-index collection. |\n", raw.RemainingTreeDBJSON.AfterCompactBytes, mib(raw.RemainingTreeDBJSON.AfterCompactBytes))
+		fmt.Fprintf(&b, "| Granules all derived columns + TreeDB JSON remaining fields | %d | %.2f | %.2f%% of ClickHouse local total. |\n", combinedAllJSON, mib(combinedAllJSON), ratio(float64(combinedAllJSON)*100, float64(raw.ClickHouseLocal.TotalSize)))
+		fmt.Fprintf(&b, "| Granules query/index paths + TreeDB JSON remaining fields | %d | %.2f | %.2f%% of ClickHouse local total. |\n", combinedQueryJSON, mib(combinedQueryJSON), ratio(float64(combinedQueryJSON)*100, float64(raw.ClickHouseLocal.TotalSize)))
+	}
 	fmt.Fprintf(&b, "\n")
+	if raw.RemainingTreeDB.Enabled {
+		fmt.Fprintf(&b, "The remaining-fields TreeDB collection stores each original JSON row after deleting only `time_us`, because `time_us` is represented exactly by a granule column. It intentionally keeps raw strings and nested JSON values such as `did`, `kind`, `commit.*`, `commit.record.text`, `langs`, `reply`, and `subject`; this avoids pretending dictionary payloads or nested object payloads are free.\n\n")
+		fmt.Fprintf(&b, "BSON remaining-fields compaction detail: before compact `%d` bytes across `%d` files; after compact `%d` bytes across `%d` files; compaction wall time `%.3fs`; BSON payload bytes before TreeDB storage `%d`.\n\n", raw.RemainingTreeDB.BeforeCompactBytes, raw.RemainingTreeDB.BeforeCompactFiles, raw.RemainingTreeDB.AfterCompactBytes, raw.RemainingTreeDB.AfterCompactFiles, raw.RemainingTreeDB.CompactionDuration, raw.RemainingTreeDB.RawDocumentBytes)
+	}
+	if raw.RemainingTreeDBJSON.Enabled {
+		fmt.Fprintf(&b, "JSON remaining-fields compaction detail: before compact `%d` bytes across `%d` files; after compact `%d` bytes across `%d` files; compaction wall time `%.3fs`; JSON payload bytes before TreeDB storage `%d`.\n\n", raw.RemainingTreeDBJSON.BeforeCompactBytes, raw.RemainingTreeDBJSON.BeforeCompactFiles, raw.RemainingTreeDBJSON.AfterCompactBytes, raw.RemainingTreeDBJSON.AfterCompactFiles, raw.RemainingTreeDBJSON.CompactionDuration, raw.RemainingTreeDBJSON.RawDocumentBytes)
+	}
 	fmt.Fprintf(&b, "The table below is one-column-at-a-time storage for the experimental granule codecs. It picks the smallest stored byte count observed for each derived `int64` column across raw, delta-varint, snappy, and lz4 combinations.\n\n")
 	fmt.Fprintf(&b, "| Column | Best codec | Stored bytes | Ratio vs int64 values | Ratio vs ClickHouse total |\n")
 	fmt.Fprintf(&b, "|---|---|---:|---:|---:|\n")

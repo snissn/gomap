@@ -60,5 +60,13 @@ go run ./experiments/colgranule/cmd/jsonbench_compare \
 This writes:
 
 - `JSONBENCH_COMPARISON_RAW.json`: raw ClickHouse result imports, column codec
-  summaries, and query-kernel timing attempts;
+  summaries, query-kernel timing attempts, and the compacted TreeDB JSON/BSON
+  remaining-field measurements;
 - `JSONBENCH_COMPARISON_REPORT.md`: human-readable timing and storage summary.
+
+By default, the comparison command also builds temporary TreeDB collections at
+`artifacts/colgranule_remaining_treedb-json` and
+`artifacts/colgranule_remaining_treedb-bson`, stores the original JSON rows with
+only top-level `time_us` removed, flushes and compacts each database, and adds
+both disk footprints to the report. Disable this part with
+`-measure-remaining-treedb=false`.
