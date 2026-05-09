@@ -535,7 +535,7 @@ func parseConfig(args []string) (config, error) {
 	if cfg.TreeDBDisableBufferedIndexedAsyncFlush && cfg.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits != 0 {
 		return config{}, errors.New("cannot set -treedb-buffered-indexed-async-flush-max-queued-units when -treedb-disable-buffered-indexed-async-flush is set")
 	}
-	treeDBEffectiveAsyncFlush := !cfg.TreeDBDisableBufferedIndexedAsyncFlush || cfg.TreeDBBufferedIndexedAsyncFlush
+	treeDBEffectiveAsyncFlush := !cfg.TreeDBDisableBufferedIndexedAsyncFlush
 	if !seenFlags["treedb-buffered-indexed-write-max-root-runs"] &&
 		(seenFlags["treedb-buffered-indexed-write-max-documents"] || seenFlags["treedb-buffered-indexed-write-max-bytes"]) &&
 		(cfg.TreeDBBufferedIndexedWriteMaxDocuments != 0 || cfg.TreeDBBufferedIndexedWriteMaxBytes != 0) {
