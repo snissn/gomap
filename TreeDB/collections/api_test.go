@@ -1023,12 +1023,16 @@ func TestCollectionUpdateBatchStatsExposeIndexRunShape(t *testing.T) {
 	if stats.SecondaryKeyBytes == 0 {
 		t.Fatal("stats secondary key bytes=0 want positive")
 	}
-	if stats.CurrentRead != 0 || stats.Callback != 0 || stats.BufferStage != 0 ||
+	if stats.CurrentRead != 0 || stats.Callback != 0 ||
+		stats.OldIndexStateExtract != 0 || stats.NewIndexStateExtract != 0 ||
+		stats.BufferStage != 0 ||
 		stats.BufferStagePrecheck != 0 ||
 		stats.BufferStageLockWait != 0 || stats.BufferStageLockHold != 0 ||
 		stats.BufferStageValidation != 0 || stats.BufferStageRootScan != 0 ||
-		stats.BufferStageDomainPrepare != 0 ||
+		stats.BufferStageDomainPrepare != 0 || stats.BufferStageFreeze != 0 ||
+		stats.BufferStageRootTable != 0 ||
 		stats.BufferStagePrimaryIdx != 0 || stats.BufferStageUniqueIdx != 0 ||
+		stats.BufferStagePrimaryAppend != 0 || stats.BufferStageSecondaryAppend != 0 ||
 		stats.BufferStageRootAppend != 0 || stats.BufferStageFlush != 0 {
 		t.Fatalf("default update timings=%+v want zero unless detailed stats enabled", stats)
 	}
@@ -1091,14 +1095,20 @@ func TestCollectionUpdateBatchStatsExposeIndexRunShape(t *testing.T) {
 		}
 	}
 	for _, key := range []string{
+		"treedb.collections.write_domain.update_batch.old_index_state_extract_ns_total",
+		"treedb.collections.write_domain.update_batch.new_index_state_extract_ns_total",
 		"treedb.collections.write_domain.update_batch.buffer_stage_precheck_ns_total",
 		"treedb.collections.write_domain.update_batch.buffer_stage_lock_wait_ns_total",
 		"treedb.collections.write_domain.update_batch.buffer_stage_lock_hold_ns_total",
 		"treedb.collections.write_domain.update_batch.buffer_stage_validation_ns_total",
 		"treedb.collections.write_domain.update_batch.buffer_stage_root_scan_ns_total",
 		"treedb.collections.write_domain.update_batch.buffer_stage_domain_prepare_ns_total",
+		"treedb.collections.write_domain.update_batch.buffer_stage_freeze_ns_total",
+		"treedb.collections.write_domain.update_batch.buffer_stage_root_table_ns_total",
 		"treedb.collections.write_domain.update_batch.buffer_stage_primary_index_ns_total",
 		"treedb.collections.write_domain.update_batch.buffer_stage_unique_index_ns_total",
+		"treedb.collections.write_domain.update_batch.buffer_stage_primary_append_ns_total",
+		"treedb.collections.write_domain.update_batch.buffer_stage_secondary_append_ns_total",
 		"treedb.collections.write_domain.update_batch.buffer_stage_root_append_ns_total",
 		"treedb.collections.write_domain.update_batch.buffer_stage_flush_ns_total",
 	} {
@@ -1262,8 +1272,12 @@ func TestCollectionUpdateBufferBreakdownStatsSnapshotAndAdd(t *testing.T) {
 		{"validation", "treedb.collections.write_domain.update_batch.buffer_stage_validation_ns_total", func(s *CollectionUpdateStats, d time.Duration) { s.BufferStageValidation = d }, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchBufferValidation }},
 		{"root_scan", "treedb.collections.write_domain.update_batch.buffer_stage_root_scan_ns_total", func(s *CollectionUpdateStats, d time.Duration) { s.BufferStageRootScan = d }, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchBufferRootScan }},
 		{"domain_prepare", "treedb.collections.write_domain.update_batch.buffer_stage_domain_prepare_ns_total", func(s *CollectionUpdateStats, d time.Duration) { s.BufferStageDomainPrepare = d }, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchBufferDomainPrepare }},
+		{"freeze", "treedb.collections.write_domain.update_batch.buffer_stage_freeze_ns_total", func(s *CollectionUpdateStats, d time.Duration) { s.BufferStageFreeze = d }, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchBufferFreeze }},
+		{"root_table", "treedb.collections.write_domain.update_batch.buffer_stage_root_table_ns_total", func(s *CollectionUpdateStats, d time.Duration) { s.BufferStageRootTable = d }, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchBufferRootTable }},
 		{"primary_index", "treedb.collections.write_domain.update_batch.buffer_stage_primary_index_ns_total", func(s *CollectionUpdateStats, d time.Duration) { s.BufferStagePrimaryIdx = d }, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchBufferPrimaryIdx }},
 		{"unique_index", "treedb.collections.write_domain.update_batch.buffer_stage_unique_index_ns_total", func(s *CollectionUpdateStats, d time.Duration) { s.BufferStageUniqueIdx = d }, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchBufferUniqueIdx }},
+		{"primary_append", "treedb.collections.write_domain.update_batch.buffer_stage_primary_append_ns_total", func(s *CollectionUpdateStats, d time.Duration) { s.BufferStagePrimaryAppend = d }, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchBufferPrimaryAppend }},
+		{"secondary_append", "treedb.collections.write_domain.update_batch.buffer_stage_secondary_append_ns_total", func(s *CollectionUpdateStats, d time.Duration) { s.BufferStageSecondaryAppend = d }, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchBufferSecondaryAppend }},
 		{"root_append", "treedb.collections.write_domain.update_batch.buffer_stage_root_append_ns_total", func(s *CollectionUpdateStats, d time.Duration) { s.BufferStageRootAppend = d }, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchBufferRootAppend }},
 		{"flush", "treedb.collections.write_domain.update_batch.buffer_stage_flush_ns_total", func(s *CollectionUpdateStats, d time.Duration) { s.BufferStageFlush = d }, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchBufferFlush }},
 	}
@@ -1287,6 +1301,75 @@ func TestCollectionUpdateBufferBreakdownStatsSnapshotAndAdd(t *testing.T) {
 			t.Fatalf("merged %s=%s want %s", tc.name, got, want)
 		}
 		if got, want := exported[tc.key], fmt.Sprintf("%d", want.Nanoseconds()); got != want {
+			t.Fatalf("exported %s=%q want %q", tc.key, got, want)
+		}
+	}
+}
+
+func TestCollectionUpdateIndexStateBreakdownStatsSnapshotAndAdd(t *testing.T) {
+	updateStats := CollectionUpdateStats{
+		IndexStateExtraction: 11 * time.Nanosecond,
+		OldIndexStateExtract: 5 * time.Nanosecond,
+		NewIndexStateExtract: 6 * time.Nanosecond,
+	}
+	domain := &collectionWriteDomain{}
+	domain.observeUpdateBatchStats(updateStats)
+	snapshot := domain.statsSnapshot()
+	var merged CollectionManagerStats
+	merged.add(snapshot)
+	exported := (&CollectionManager{domains: map[string]*collectionWriteDomain{"test": domain}}).Stats()
+	cases := []struct {
+		name string
+		key  string
+		want time.Duration
+		get  func(CollectionManagerStats) time.Duration
+	}{
+		{"total", "treedb.collections.write_domain.update_batch.index_state_extract_ns_total", 11 * time.Nanosecond, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchIndexStateExtract }},
+		{"old", "treedb.collections.write_domain.update_batch.old_index_state_extract_ns_total", 5 * time.Nanosecond, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchOldIndexStateExtract }},
+		{"new", "treedb.collections.write_domain.update_batch.new_index_state_extract_ns_total", 6 * time.Nanosecond, func(s CollectionManagerStats) time.Duration { return s.UpdateBatchNewIndexStateExtract }},
+	}
+	for _, tc := range cases {
+		if got := tc.get(snapshot); got != tc.want {
+			t.Fatalf("snapshot %s=%s want %s", tc.name, got, tc.want)
+		}
+		if got := tc.get(merged); got != tc.want {
+			t.Fatalf("merged %s=%s want %s", tc.name, got, tc.want)
+		}
+		if got, want := exported[tc.key], fmt.Sprintf("%d", tc.want.Nanoseconds()); got != want {
+			t.Fatalf("exported %s=%q want %q", tc.key, got, want)
+		}
+	}
+}
+
+func TestCollectionUpdateCombineTimingStatsSnapshotAndAdd(t *testing.T) {
+	domain := &collectionWriteDomain{}
+	domain.observeUpdateCombineEnqueue(3 * time.Nanosecond)
+	domain.observeUpdateCombineWait(5 * time.Nanosecond)
+	domain.observeUpdateCombineDrain(7 * time.Nanosecond)
+	domain.observeUpdateCombineRun(11 * time.Nanosecond)
+	snapshot := domain.statsSnapshot()
+	var merged CollectionManagerStats
+	merged.add(snapshot)
+	exported := (&CollectionManager{domains: map[string]*collectionWriteDomain{"test": domain}}).Stats()
+	cases := []struct {
+		name string
+		key  string
+		want time.Duration
+		get  func(CollectionManagerStats) time.Duration
+	}{
+		{"enqueue", "treedb.collections.write_domain.update_combine.enqueue_ns_total", 3 * time.Nanosecond, func(s CollectionManagerStats) time.Duration { return s.UpdateCombineEnqueue }},
+		{"wait", "treedb.collections.write_domain.update_combine.wait_ns_total", 5 * time.Nanosecond, func(s CollectionManagerStats) time.Duration { return s.UpdateCombineWait }},
+		{"drain", "treedb.collections.write_domain.update_combine.drain_ns_total", 7 * time.Nanosecond, func(s CollectionManagerStats) time.Duration { return s.UpdateCombineDrain }},
+		{"run", "treedb.collections.write_domain.update_combine.run_ns_total", 11 * time.Nanosecond, func(s CollectionManagerStats) time.Duration { return s.UpdateCombineRun }},
+	}
+	for _, tc := range cases {
+		if got := tc.get(snapshot); got != tc.want {
+			t.Fatalf("snapshot %s=%s want %s", tc.name, got, tc.want)
+		}
+		if got := tc.get(merged); got != tc.want {
+			t.Fatalf("merged %s=%s want %s", tc.name, got, tc.want)
+		}
+		if got, want := exported[tc.key], fmt.Sprintf("%d", tc.want.Nanoseconds()); got != want {
 			t.Fatalf("exported %s=%q want %q", tc.key, got, want)
 		}
 	}
@@ -1830,6 +1913,69 @@ func TestCollectionManagerResetUpdateCombineQueueDepthMax(t *testing.T) {
 	domain.observeUpdateCombineRequest(5)
 	if got := mgr.StatsSnapshot().UpdateCombineQueueDepthMax; got != 5 {
 		t.Fatalf("queue depth max after new observation=%d want 5", got)
+	}
+}
+
+func TestCollectionManagerResetUpdateCombinersForProfiling(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("u1")}, [][]byte{[]byte(`{"name":"ada"}`)}); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	if _, _, err := col.Update([]byte("u1"), func(current []byte) ([]byte, bool, error) {
+		return []byte(`{"name":"ada","n":1}`), true, nil
+	}); err != nil {
+		t.Fatalf("first update: %v", err)
+	}
+	domain := col.writeDomain
+	if domain == nil {
+		t.Fatal("collection write domain is nil")
+	}
+	domain.updateCombineMu.Lock()
+	first := domain.updateCombiner
+	draining := domain.updateDraining
+	domain.updateCombineMu.Unlock()
+	if first == nil {
+		t.Fatal("first update combiner is nil")
+	}
+	if draining != nil {
+		t.Fatal("unexpected draining combiner before reset")
+	}
+
+	mgr.ResetUpdateCombinersForProfiling()
+	domain.updateCombineMu.Lock()
+	afterReset := domain.updateCombiner
+	afterResetDraining := domain.updateDraining
+	domain.updateCombineMu.Unlock()
+	if afterReset != nil || afterResetDraining != nil {
+		t.Fatalf("combiner after reset=%p draining=%p want nil/nil", afterReset, afterResetDraining)
+	}
+
+	if _, _, err := col.Update([]byte("u1"), func(current []byte) ([]byte, bool, error) {
+		return []byte(`{"name":"ada","n":2}`), true, nil
+	}); err != nil {
+		t.Fatalf("second update after reset: %v", err)
+	}
+	domain.updateCombineMu.Lock()
+	second := domain.updateCombiner
+	domain.updateCombineMu.Unlock()
+	if second == nil {
+		t.Fatal("second update combiner is nil")
+	}
+	if second == first {
+		t.Fatal("second update reused stopped combiner after profiling reset")
 	}
 }
 
