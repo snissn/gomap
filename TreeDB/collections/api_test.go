@@ -9555,30 +9555,6 @@ func TestCollectionUpdateBSONSetRequiresBSONFormat(t *testing.T) {
 	}
 }
 
-func TestValidateUpdateBatchItemsRejectsBSONSetWithCallback(t *testing.T) {
-	spec, err := newBSONSetUpdate([]BSONSetField{{
-		Key:   "city",
-		Value: mustBSONRawValue(t, "sea"),
-	}})
-	if err != nil {
-		t.Fatalf("new BSON set update: %v", err)
-	}
-	err = validateUpdateBatchItems([]UpdateBatchItem{{
-		DocumentID: []byte("u1"),
-		Update: func(current []byte) ([]byte, bool, error) {
-			return current, false, nil
-		},
-		bsonSet:    spec,
-		hasBSONSet: true,
-	}})
-	if err == nil {
-		t.Fatal("validateUpdateBatchItems err=nil want error")
-	}
-	if !strings.Contains(err.Error(), "cannot set both") {
-		t.Fatalf("validateUpdateBatchItems err=%q want mixed update error", err)
-	}
-}
-
 func TestBuildUpdateBatchPlanBSONSetRejectsInvalidCurrentBSON(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -9646,11 +9622,9 @@ func TestBuildUpdateBatchPlanBSONSetRejectsInvalidCurrentBSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new BSON set update: %v", err)
 	}
-	plan, err := col.buildUpdateBatchPlan([]UpdateBatchItem{{
-		DocumentID: []byte("u1"),
-		bsonSet:    spec,
-		hasBSONSet: true,
-	}}, updateBatchModeNoSecondaryUniqueIndexChanges, false)
+	plan, err := col.buildUpdateBatchPlan([]updateBatchItem{
+		newBSONSetUpdateBatchItem([]byte("u1"), spec),
+	}, updateBatchModeNoSecondaryUniqueIndexChanges, false)
 	if plan != nil {
 		plan.close()
 	}
@@ -10411,9 +10385,13 @@ func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesRejectsStaleBuffere
 		t.Fatalf("first batch was declined")
 	}
 
-	plan, err := col.buildUpdateBatchPlan([]UpdateBatchItem{
+	items, err := prepareUpdateBatchItems([]UpdateBatchItem{
 		{DocumentID: []byte("u1"), Update: setJSONCity("sfo")},
-	}, updateBatchModeNoSecondaryUniqueIndexChanges, true)
+	})
+	if err != nil {
+		t.Fatalf("prepare stale plan items: %v", err)
+	}
+	plan, err := col.buildUpdateBatchPlan(items, updateBatchModeNoSecondaryUniqueIndexChanges, true)
 	if err != nil {
 		t.Fatalf("build stale plan: %v", err)
 	}
@@ -10455,7 +10433,7 @@ func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesRejectsStaleZeroDel
 		t.Fatalf("first batch was declined")
 	}
 
-	plan, err := col.buildUpdateBatchPlan([]UpdateBatchItem{
+	items, err := prepareUpdateBatchItems([]UpdateBatchItem{
 		{
 			DocumentID: []byte("u1"),
 			Update: func(current []byte) ([]byte, bool, error) {
@@ -10465,7 +10443,11 @@ func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesRejectsStaleZeroDel
 				return current, false, nil
 			},
 		},
-	}, updateBatchModeNoSecondaryUniqueIndexChanges, true)
+	})
+	if err != nil {
+		t.Fatalf("prepare stale zero-delta plan items: %v", err)
+	}
+	plan, err := col.buildUpdateBatchPlan(items, updateBatchModeNoSecondaryUniqueIndexChanges, true)
 	if err != nil {
 		t.Fatalf("build stale zero-delta plan: %v", err)
 	}
@@ -10800,7 +10782,9 @@ func TestSnapshotUpdateBatchBufferedReadCachesEmptyPrimaryRunIndex(t *testing.T)
 		},
 	}
 
-	read, _, blocked, err := snapshotUpdateBatchBufferedRead(domain, meta, 7, []UpdateBatchItem{{DocumentID: []byte("missing")}}, DocumentFormatJSON)
+	read, _, blocked, err := snapshotUpdateBatchBufferedRead(domain, meta, 7, []updateBatchItem{{
+		UpdateBatchItem: UpdateBatchItem{DocumentID: []byte("missing")},
+	}}, DocumentFormatJSON)
 	if err != nil {
 		t.Fatalf("snapshotUpdateBatchBufferedRead: %v", err)
 	}
@@ -10856,7 +10840,7 @@ func TestSnapshotUpdateBatchBufferedReadPrimaryRunIndexAvoidsCollectingPendingRu
 			rootRunCount: 8,
 		})
 	}
-	items := []UpdateBatchItem{{DocumentID: []byte("u1")}}
+	items := []updateBatchItem{{UpdateBatchItem: UpdateBatchItem{DocumentID: []byte("u1")}}}
 	assertRead := func() {
 		t.Helper()
 		read, _, blocked, needPrimaryRunIndex, err := snapshotUpdateBatchBufferedReadLocked(domain, meta, 7, items, DocumentFormatJSON, false)
@@ -10890,10 +10874,10 @@ func TestSnapshotUpdateBatchBufferedPrimaryEntriesFromIndexUsesValueArena(t *tes
 	if err := addBufferedPrimaryRunIndexEntries(primaryIndex, primaryTable); err != nil {
 		t.Fatalf("add primary run index entries: %v", err)
 	}
-	items := []UpdateBatchItem{
-		{DocumentID: []byte("u1")},
-		{DocumentID: []byte("u2")},
-		{DocumentID: []byte("u3")},
+	items := []updateBatchItem{
+		{UpdateBatchItem: UpdateBatchItem{DocumentID: []byte("u1")}},
+		{UpdateBatchItem: UpdateBatchItem{DocumentID: []byte("u2")}},
+		{UpdateBatchItem: UpdateBatchItem{DocumentID: []byte("u3")}},
 	}
 	assertRead := func() {
 		t.Helper()
@@ -10944,12 +10928,12 @@ func TestUpdateBatchBufferedEntryBufferCopyValuePreservesEmptySlice(t *testing.T
 func BenchmarkSnapshotUpdateBatchBufferedPrimaryEntriesFromIndexValues(b *testing.B) {
 	const entriesCount = 256
 	primaryTable := newCollectionRunTable(entriesCount)
-	items := make([]UpdateBatchItem, 0, entriesCount)
+	items := make([]updateBatchItem, 0, entriesCount)
 	value := []byte(strings.Repeat("x", 512))
 	for i := 0; i < entriesCount; i++ {
 		id := []byte(fmt.Sprintf("u%05d", i))
 		setCollectionRunValue(primaryTable, id, value)
-		items = append(items, UpdateBatchItem{DocumentID: id})
+		items = append(items, updateBatchItem{UpdateBatchItem: UpdateBatchItem{DocumentID: id}})
 	}
 	primaryTable.Freeze()
 	defer resetCollectionRunTable(primaryTable)
@@ -11162,7 +11146,7 @@ func BenchmarkSnapshotUpdateBatchBufferedReadPrimaryRunIndexPendingUnits(b *test
 			rootRunCount: 8,
 		})
 	}
-	items := []UpdateBatchItem{{DocumentID: []byte("u1")}}
+	items := []updateBatchItem{{UpdateBatchItem: UpdateBatchItem{DocumentID: []byte("u1")}}}
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
