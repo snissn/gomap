@@ -26,7 +26,12 @@ type bsonSetUpdate struct {
 
 var errBSONSetRequiresBSONFormat = errors.New("collections: BSON $set update requires BSON document format")
 
-const bsonSetFieldIndexMapThreshold = 8
+// bsonSetReplacementSlackBytes reserves expected growth beyond the current BSON
+// document size so most changed documents append without a second grow.
+const (
+	bsonSetFieldIndexMapThreshold = 8
+	bsonSetReplacementSlackBytes  = 64
+)
 
 // UpdateBSONSet applies a structured top-level BSON $set update to one
 // document. The collection must use DocumentFormatBSON. Missing documents
@@ -199,12 +204,38 @@ func unsafeStringFromBytes(b []byte) string {
 }
 
 func (u bsonSetUpdate) apply(current []byte) ([]byte, bool, error) {
+	_, replacement, changed, err := u.appendReplacement(nil, current)
+	return replacement, changed, err
+}
+
+// appendReplacement appends changed replacements to dst and returns both the
+// possibly-grown dst and the replacement document view. When unchanged,
+// replacement aliases current. When changed, replacement aliases the returned
+// dst. On error, the returned dst is restored to its original length while
+// preserving any grown backing store for caller reuse.
+func (u bsonSetUpdate) appendReplacement(dst, current []byte) (returned []byte, replacement []byte, changed bool, err error) {
+	start := len(dst)
+	var out []byte
+	resetDst := func() []byte {
+		if changed && out != nil {
+			return out[:start]
+		}
+		return dst[:start]
+	}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			returned = resetDst()
+			replacement = nil
+			changed = false
+			err = collectionUpdatePanicError("structured", recovered)
+		}
+	}()
 	if len(u.fields) == 0 {
-		return current, false, nil
+		return dst, current, false, nil
 	}
 	length, rem, ok := bsoncore.ReadLength(current)
 	if !ok {
-		return nil, false, bsoncore.NewInsufficientBytesError(current, rem)
+		return resetDst(), nil, false, bsoncore.NewInsufficientBytesError(current, rem)
 	}
 	length -= 4
 	var usedInline [8]bool
@@ -214,9 +245,19 @@ func (u bsonSetUpdate) apply(current []byte) ([]byte, bool, error) {
 	} else {
 		used = used[:len(u.fields)]
 	}
-	changed := false
 	var idx int32
-	var out []byte
+	initOut := func(elemStart int) {
+		changed = true
+		if cap(dst)-len(dst) < len(current)+bsonSetReplacementSlackBytes {
+			grown := make([]byte, len(dst), len(dst)+len(current)+bsonSetReplacementSlackBytes)
+			copy(grown, dst)
+			out = grown
+		} else {
+			out = dst
+		}
+		idx, out = bsoncore.AppendDocumentStart(out)
+		out = append(out, current[4:elemStart]...)
+	}
 	var elem bsoncore.Element
 	for length > 1 {
 		var elemOK bool
@@ -224,7 +265,7 @@ func (u bsonSetUpdate) apply(current []byte) ([]byte, bool, error) {
 		elem, rem, elemOK = bsoncore.ReadElement(rem)
 		length -= int32(len(elem))
 		if !elemOK {
-			return nil, false, bsoncore.NewInsufficientBytesError(current, rem)
+			return resetDst(), nil, false, bsoncore.NewInsufficientBytesError(current, rem)
 		}
 		replacementFieldIndex := u.fieldIndexBytes(elem.KeyBytes())
 		if replacementFieldIndex < 0 {
@@ -244,10 +285,7 @@ func (u bsonSetUpdate) apply(current []byte) ([]byte, bool, error) {
 			continue
 		}
 		if !changed {
-			changed = true
-			out = make([]byte, 0, len(current)+64)
-			idx, out = bsoncore.AppendDocumentStart(out)
-			out = append(out, current[4:elemStart]...)
+			initOut(elemStart)
 		}
 		out = bsoncore.AppendValueElement(out, field.Key, bsoncore.Value{
 			Type: bsoncore.Type(value.Type),
@@ -260,10 +298,7 @@ func (u bsonSetUpdate) apply(current []byte) ([]byte, bool, error) {
 		}
 		value := field.Value
 		if !changed {
-			changed = true
-			out = make([]byte, 0, len(current)+64)
-			idx, out = bsoncore.AppendDocumentStart(out)
-			out = append(out, current[4:len(current)-len(rem)]...)
+			initOut(len(current) - len(rem))
 		}
 		out = bsoncore.AppendValueElement(out, field.Key, bsoncore.Value{
 			Type: bsoncore.Type(value.Type),
@@ -271,13 +306,13 @@ func (u bsonSetUpdate) apply(current []byte) ([]byte, bool, error) {
 		})
 	}
 	if !changed {
-		return current, false, nil
+		return dst[:start], current, false, nil
 	}
 	raw, err := bsoncore.AppendDocumentEnd(out, idx)
 	if err != nil {
-		return nil, false, err
+		return resetDst(), nil, false, err
 	}
-	return raw, true, nil
+	return raw, raw[start:len(raw):len(raw)], true, nil
 }
 
 func callBSONSetUpdateApply(update bsonSetUpdate, current []byte) (replacement []byte, changed bool, err error) {
@@ -289,6 +324,10 @@ func callBSONSetUpdateApply(update bsonSetUpdate, current []byte) (replacement [
 		}
 	}()
 	return update.apply(current)
+}
+
+func callBSONSetUpdateAppendReplacement(update bsonSetUpdate, dst, current []byte) (out []byte, replacement []byte, changed bool, err error) {
+	return update.appendReplacement(dst, current)
 }
 
 func bsonCoreValueEqualRawValue(left bsoncore.Value, right bson.RawValue) bool {

@@ -9375,15 +9375,16 @@ func newUpdateBatchPlan() *updateBatchPlan {
 }
 
 type updateBatchPlanScratch struct {
-	changed          []preparedBatchUpdate
-	changedDocuments [][]byte
-	documentArena    []byte
-	stateArena       indexEncodeArena
-	rootNames        []string
-	baseRootIDs      map[string]uint64
-	policies         []backenddb.OrderedRootStoragePolicy
-	deltaTables      []memtable.Table
-	uniqueSecondary  []int
+	changed                []preparedBatchUpdate
+	changedDocuments       [][]byte
+	documentArena          []byte
+	bsonSetDocumentScratch []byte
+	stateArena             indexEncodeArena
+	rootNames              []string
+	baseRootIDs            map[string]uint64
+	policies               []backenddb.OrderedRootStoragePolicy
+	deltaTables            []memtable.Table
+	uniqueSecondary        []int
 }
 
 var updateBatchPlanScratchPool sync.Pool
@@ -9393,6 +9394,9 @@ const (
 	updateBatchPlanScratchDocumentBytes           = 256
 	updateBatchPlanScratchMaxInitialDocumentArena = 4 << 20
 	updateBatchPlanScratchMaxDocumentArena        = 8 << 20
+	// Keep BSON replacement scratch below the primary document arena so pooled
+	// steady-state memory cannot double while retaining typical multi-MiB docs.
+	updateBatchPlanScratchMaxBSONSetDocumentBytes = updateBatchPlanScratchMaxDocumentArena / 2
 	updateBatchPlanScratchMaxRootNameCap          = 64
 	updateBatchPlanScratchMaxStateArenaCap        = 4 << 20
 	updateBatchPlanScratchMaxStateSliceCap        = 1 << 16
@@ -9433,6 +9437,7 @@ func getUpdateBatchPlanScratch(itemCount, runtimeCount int) *updateBatchPlanScra
 	} else {
 		scratch.documentArena = scratch.documentArena[:0]
 	}
+	scratch.bsonSetDocumentScratch = scratch.bsonSetDocumentScratch[:0]
 	arenaBytes := estimateIndexEncodeArenaBytesForCount(itemCount*2, runtimeCount)
 	if cap(scratch.stateArena.buf) < arenaBytes {
 		scratch.stateArena.buf = make([]byte, 0, arenaBytes)
@@ -9500,6 +9505,11 @@ func putUpdateBatchPlanScratch(scratch *updateBatchPlanScratch) {
 		scratch.documentArena = nil
 	} else {
 		scratch.documentArena = scratch.documentArena[:0]
+	}
+	if cap(scratch.bsonSetDocumentScratch) > updateBatchPlanScratchMaxBSONSetDocumentBytes {
+		scratch.bsonSetDocumentScratch = nil
+	} else {
+		scratch.bsonSetDocumentScratch = scratch.bsonSetDocumentScratch[:0]
 	}
 	if cap(scratch.stateArena.buf) > updateBatchPlanScratchMaxStateArenaCap {
 		scratch.stateArena.buf = nil
@@ -10294,8 +10304,11 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 		var changedOne bool
 		if item.hasBSONSet {
 			phaseStart = updateBatchStatsNow(detailedStats)
-			document, changedOne, err = callBSONSetUpdateApply(item.bsonSet, current.value)
+			scratch.bsonSetDocumentScratch, document, changedOne, err = callBSONSetUpdateAppendReplacement(item.bsonSet, scratch.bsonSetDocumentScratch[:0], current.value)
 			stats.StructuredUpdateApply += updateBatchStatsSince(detailedStats, phaseStart)
+			// When changedOne is true, document aliases bsonSetDocumentScratch
+			// until it is copied into the plan document arena below. No-op
+			// updates may return current.value and are discarded before staging.
 			if err != nil {
 				_ = snap.Close()
 				return nil, updateBatchItemError(i, err)
