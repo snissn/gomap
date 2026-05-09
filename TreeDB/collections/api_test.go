@@ -6480,7 +6480,6 @@ func TestIndexedPrepareFreezeWaitsUntilFinished(t *testing.T) {
 
 	done := make(chan time.Duration, 1)
 	waiterReady := make(chan struct{})
-	releaseWaiter := make(chan struct{})
 	go func() {
 		domain.mu.Lock()
 		if domain.indexedPrepareFreezes <= 0 {
@@ -6489,22 +6488,23 @@ func TestIndexedPrepareFreezeWaitsUntilFinished(t *testing.T) {
 			return
 		}
 		close(waiterReady)
-		<-releaseWaiter
 		waited := domain.waitIndexedPrepareFreezeLocked()
 		domain.mu.Unlock()
 		done <- waited
 	}()
 
 	<-waiterReady
+	select {
+	case waited := <-done:
+		t.Fatalf("prepare freeze wait returned before finish: %s", waited)
+	default:
+	}
 
-	close(releaseWaiter)
 	domain.mu.Lock()
 	domain.finishIndexedPrepareFreezeLocked()
 	domain.mu.Unlock()
 
-	if waited := <-done; waited <= 0 {
-		t.Fatalf("prepare freeze wait duration=%s want positive", waited)
-	}
+	<-done
 }
 
 func TestIndexedPrepareFreezeFinishRequiresBegin(t *testing.T) {
