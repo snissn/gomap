@@ -2348,10 +2348,12 @@ func TestCollectionInsertBatchStatsExposeNoIndexFastPath(t *testing.T) {
 
 func TestCollectionInsertBatchBuffersNoIndexBSONBeforeFlush(t *testing.T) {
 	dir := t.TempDir()
-	d, err := backenddb.Open(backenddb.Options{Dir: dir})
+	d, err := backenddb.Open(backenddb.Options{Dir: dir, Durability: backenddb.DurabilityWALOffRelaxed})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
+	closeDB := collectionMaintenanceCloseOnce(d.Close)
+	defer func() { _ = closeDB() }()
 	mgr := NewCollectionManager(d)
 	if _, err := mgr.CreateCollection(&CollectionMeta{
 		Name:    "users",
@@ -2396,11 +2398,11 @@ func TestCollectionInsertBatchBuffersNoIndexBSONBeforeFlush(t *testing.T) {
 	if got := writer.writeDomain.count; got != 0 {
 		t.Fatalf("pending docs after flush=%d want 0", got)
 	}
-	if err := d.Close(); err != nil {
+	if err := closeDB(); err != nil {
 		t.Fatalf("close db: %v", err)
 	}
 
-	reopened, err := backenddb.Open(backenddb.Options{Dir: dir})
+	reopened, err := backenddb.Open(backenddb.Options{Dir: dir, Durability: backenddb.DurabilityWALOffRelaxed})
 	if err != nil {
 		t.Fatalf("reopen db: %v", err)
 	}
@@ -2415,6 +2417,43 @@ func TestCollectionInsertBatchBuffersNoIndexBSONBeforeFlush(t *testing.T) {
 	}
 	if !bytes.Equal(got, wantU2) {
 		t.Fatalf("reopened BSON doc=%v want %v", got, wantU2)
+	}
+}
+
+func TestCollectionInsertBatchValidatedBSONNoIndexDurablePublishesBeforeReturn(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "users",
+		Options: CollectionOptions{DocumentFormat: DocumentFormatBSON},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	before := d.State()
+	if _, err := col.InsertBatchValidatedBSON(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{
+			mustBSONCollectionDocument(t, bson.D{{Key: "name", Value: "ada"}}),
+			mustBSONCollectionDocument(t, bson.D{{Key: "name", Value: "grace"}}),
+		},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	if got := col.writeDomain.count; got != 0 {
+		t.Fatalf("pending docs=%d want durable publish before ack", got)
+	}
+	after := d.State()
+	if after.CommitSeq != before.CommitSeq+1 {
+		t.Fatalf("commit seq advanced by %d want 1", after.CommitSeq-before.CommitSeq)
 	}
 }
 

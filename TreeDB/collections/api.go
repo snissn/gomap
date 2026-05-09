@@ -3021,7 +3021,14 @@ func (c *Collection) insertOneNoIndexBuffered(id, document []byte) ([]byte, erro
 	return resultID, nil
 }
 
-func (c *Collection) bufferNoIndexInsertBatchLocked(
+func (c *Collection) canBufferNoIndexInsertBatchAck() bool {
+	return c != nil &&
+		c.db != nil &&
+		c.writeDomain != nil &&
+		c.db.DurabilityMode() == backenddb.DurabilityWALOffRelaxed
+}
+
+func (c *Collection) bufferNoIndexInsertBatch(
 	domain *collectionWriteDomain,
 	catalog *collectionCatalog,
 	snap *backenddb.Snapshot,
@@ -6837,7 +6844,7 @@ func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON b
 		return nil, nil
 	}
 	skipInitialNoIndexFlush := false
-	if trustedValidBSON && c.writeDomain != nil && len(c.meta.Indexes) == 0 {
+	if trustedValidBSON && c.canBufferNoIndexInsertBatchAck() && len(c.meta.Indexes) == 0 {
 		if documentFormat, err := normalizeDocumentFormat(c.meta.Options.DocumentFormat); err == nil && documentFormat == DocumentFormatBSON {
 			skipInitialNoIndexFlush = true
 		}
@@ -6984,8 +6991,8 @@ func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON b
 			}
 		}
 	}
-	if len(meta.Indexes) == 0 && normalizedDocumentFormat(plannerOptions.documentFormat) == DocumentFormatBSON && trustedValidBSON {
-		if resultIDs, buffered, err := c.bufferNoIndexInsertBatchLocked(c.writeDomain, catalog, snap, plannerOptions, ids, documents); buffered {
+	if len(meta.Indexes) == 0 && normalizedDocumentFormat(plannerOptions.documentFormat) == DocumentFormatBSON && trustedValidBSON && c.canBufferNoIndexInsertBatchAck() {
+		if resultIDs, buffered, err := c.bufferNoIndexInsertBatch(c.writeDomain, catalog, snap, plannerOptions, ids, documents); buffered {
 			closePlanningSnapshot()
 			return resultIDs, err
 		} else if skipInitialNoIndexFlush {
