@@ -4844,6 +4844,10 @@ func cloneCollectionRunTable(run memtable.Table) (memtable.Table, error) {
 	table := newCollectionRunTable(max(0, run.Len()))
 	it := run.NewIterator(nil, nil)
 	defer func() { _ = it.Close() }()
+	return cloneCollectionRunTableFromIterator(table, it)
+}
+
+func cloneCollectionRunTableFromIterator(table memtable.Table, it iterator.UnsafeIterator) (memtable.Table, error) {
 	for it.Valid() {
 		value, ptr, flags := it.UnsafeEntry()
 		table.SetEntrySteal(bytes.Clone(it.UnsafeKey()), bytes.Clone(value), ptr, flags)
@@ -4857,14 +4861,51 @@ func cloneCollectionRunTable(run memtable.Table) (memtable.Table, error) {
 	return table, nil
 }
 
+func cloneCollectionRunTablesFromIterators(iterators []iterator.UnsafeIterator) ([]memtable.Table, error) {
+	if len(iterators) == 0 {
+		return nil, nil
+	}
+	out := make([]memtable.Table, 0, len(iterators))
+	for _, it := range iterators {
+		if it == nil {
+			out = append(out, nil)
+			continue
+		}
+		table := newCollectionRunTable(0)
+		cloned, err := cloneCollectionRunTableFromIterator(table, it)
+		if err != nil {
+			resetCollectionTables(out)
+			return nil, err
+		}
+		out = append(out, cloned)
+	}
+	return out, nil
+}
+
 func collectionOptionsWithClonedBufferedTemplateV1Resolver(opts collectionOptions, domain *collectionWriteDomain, collectionName string) (collectionOptions, []memtable.Table, error) {
 	if normalizedDocumentFormat(opts.documentFormat) != DocumentFormatTemplateV1 || domain == nil || collectionName == "" {
 		return opts, nil, nil
 	}
 	rootName := collectionTemplateRootName(collectionName)
 	domain.mu.RLock()
-	runs, err := cloneCollectionRunTables(pendingIndexedRootRunsLocked(domain, rootName))
+	pendingRuns := pendingIndexedRootRunsLocked(domain, rootName)
+	iterators := make([]iterator.UnsafeIterator, 0, len(pendingRuns))
+	for _, run := range pendingRuns {
+		if run == nil {
+			iterators = append(iterators, nil)
+			continue
+		}
+		iterators = append(iterators, run.NewIterator(nil, nil))
+	}
 	domain.mu.RUnlock()
+	defer func() {
+		for _, it := range iterators {
+			if it != nil {
+				_ = it.Close()
+			}
+		}
+	}()
+	runs, err := cloneCollectionRunTablesFromIterators(iterators)
 	if err != nil {
 		return opts, nil, err
 	}
