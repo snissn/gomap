@@ -313,16 +313,25 @@ type CollectionSecondaryRunStats struct {
 
 // CollectionUpdateStats captures phase timings and counters from the most
 // recent successful Update/UpdateBatch-style call on a Collection handle.
+//
+// Some timings are nested rather than additive siblings. IndexStateExtraction
+// is the total time spent extracting old and new index state; OldIndexStateExtract
+// and NewIndexStateExtract are components of that total. BufferStageRootAppend
+// overlaps with BufferStagePrimaryAppend and BufferStageSecondaryAppend, and
+// BufferStageLockHold encloses other buffer-stage subphases while the write
+// domain mutex is held.
 type CollectionUpdateStats struct {
-	Items                int
-	Matched              int
-	Modified             int
-	Indexes              int
-	Runs                 int
-	BufferedBatches      int
-	CurrentRead          time.Duration
-	Callback             time.Duration
-	PrepareDocuments     time.Duration
+	Items            int
+	Matched          int
+	Modified         int
+	Indexes          int
+	Runs             int
+	BufferedBatches  int
+	CurrentRead      time.Duration
+	Callback         time.Duration
+	PrepareDocuments time.Duration
+	// IndexStateExtraction includes both OldIndexStateExtract and
+	// NewIndexStateExtract; do not add all three together.
 	IndexStateExtraction time.Duration
 	OldIndexStateExtract time.Duration
 	NewIndexStateExtract time.Duration
@@ -353,7 +362,9 @@ type CollectionUpdateStats struct {
 	BufferStageUniqueIdx       time.Duration
 	BufferStagePrimaryAppend   time.Duration
 	BufferStageSecondaryAppend time.Duration
-	BufferStageRootAppend      time.Duration
+	// BufferStageRootAppend is the total root-append time and overlaps with
+	// BufferStagePrimaryAppend and BufferStageSecondaryAppend.
+	BufferStageRootAppend time.Duration
 	// BufferStageFlush measures local threshold-flush schedule/publish work
 	// performed while staging an indexed buffered update batch. It excludes
 	// waits for an already-running async flush that leave no local schedule or
@@ -408,75 +419,83 @@ type CollectionUpdateIndexStats struct {
 // CollectionManagerStats captures aggregate write-domain counters for a
 // CollectionManager. The counters are process-local observability; they are
 // not persisted with collection metadata.
+//
+// The update-batch timing aggregates preserve the same nesting semantics as
+// CollectionUpdateStats: UpdateBatchIndexStateExtract includes old/new index
+// extraction, UpdateBatchBufferRootAppend overlaps with primary/secondary
+// append timings, and UpdateBatchBufferLockHold encloses other buffer-stage
+// work done while holding the write-domain mutex.
 type CollectionManagerStats struct {
-	Domains                         int
-	PendingDocuments                int
-	PendingBytes                    int64
-	PendingRootRuns                 int
-	PendingIndexedFlushUnits        int
-	OverlayMutableDocuments         int
-	OverlayQueuedIndexedFlushUnits  int
-	OverlayActiveIndexedFlushUnits  int
-	OverlayVisibleDepth             int
-	IndexedAsyncFlushRunning        int
-	MutationLockCalls               uint64
-	MutationLockWait                time.Duration
-	MutationLockHold                time.Duration
-	IndexedStageBatches             uint64
-	IndexedStageDocs                uint64
-	IndexedStageBytes               uint64
-	IndexedStageRootRuns            uint64
-	IndexedAutoFlushes              uint64
-	IndexedAsyncFlushScheduled      uint64
-	IndexedAsyncFlushBackpressure   uint64
-	IndexedAsyncFlushWait           time.Duration
-	IndexedAsyncFlushErrors         uint64
-	IndexedFlushCalls               uint64
-	IndexedFlushErrors              uint64
-	IndexedFlushForcedDrains        uint64
-	IndexedFlushUnits               uint64
-	IndexedFlushDocs                uint64
-	IndexedFlushBytes               uint64
-	IndexedFlushRootRuns            uint64
-	IndexedFlushRoots               uint64
-	IndexedFlushDuration            time.Duration
-	IndexedFlushMaterialize         time.Duration
-	IndexedFlushPublish             time.Duration
-	RootDeltaPlanPrimaryRoots       uint64
-	RootDeltaPlanTemplateRoots      uint64
-	RootDeltaPlanIndexStateRoots    uint64
-	RootDeltaPlanSecondaryRoots     uint64
-	RootDeltaPlanEntries            uint64
-	RootDeltaPlanKeyBytes           uint64
-	RootDeltaPlanValueBytes         uint64
-	RootDeltaPlanTombstones         uint64
-	PrimaryOnlyUpdateCalls          uint64
-	PrimaryOnlyMatched              uint64
-	PrimaryOnlyModified             uint64
-	PrimaryOnlyBufferedCalls        uint64
-	PrimaryOnlyRootPublishes        uint64
-	PrimaryOnlyRootDeltaEntries     uint64
-	PrimaryOnlyRootDeltaKeyBytes    uint64
-	PrimaryOnlyRootDeltaValueBytes  uint64
-	PrimaryOnlyCoalescedDocs        uint64
-	UpdateCombineRequests           uint64
-	UpdateCombineBatches            uint64
-	UpdateCombineBatchedRequests    uint64
-	UpdateCombineFallbackRequests   uint64
-	UpdateCombineQueueDepthMax      uint64
-	UpdateCombineEnqueue            time.Duration
-	UpdateCombineWait               time.Duration
-	UpdateCombineDrain              time.Duration
-	UpdateCombineRun                time.Duration
-	UpdateBatchCalls                uint64
-	UpdateBatchItems                uint64
-	UpdateBatchMatched              uint64
-	UpdateBatchModified             uint64
-	UpdateBatchRuns                 uint64
-	UpdateBatchBufferedBatches      uint64
-	UpdateBatchCurrentRead          time.Duration
-	UpdateBatchCallback             time.Duration
-	UpdateBatchPrepareDocuments     time.Duration
+	Domains                        int
+	PendingDocuments               int
+	PendingBytes                   int64
+	PendingRootRuns                int
+	PendingIndexedFlushUnits       int
+	OverlayMutableDocuments        int
+	OverlayQueuedIndexedFlushUnits int
+	OverlayActiveIndexedFlushUnits int
+	OverlayVisibleDepth            int
+	IndexedAsyncFlushRunning       int
+	MutationLockCalls              uint64
+	MutationLockWait               time.Duration
+	MutationLockHold               time.Duration
+	IndexedStageBatches            uint64
+	IndexedStageDocs               uint64
+	IndexedStageBytes              uint64
+	IndexedStageRootRuns           uint64
+	IndexedAutoFlushes             uint64
+	IndexedAsyncFlushScheduled     uint64
+	IndexedAsyncFlushBackpressure  uint64
+	IndexedAsyncFlushWait          time.Duration
+	IndexedAsyncFlushErrors        uint64
+	IndexedFlushCalls              uint64
+	IndexedFlushErrors             uint64
+	IndexedFlushForcedDrains       uint64
+	IndexedFlushUnits              uint64
+	IndexedFlushDocs               uint64
+	IndexedFlushBytes              uint64
+	IndexedFlushRootRuns           uint64
+	IndexedFlushRoots              uint64
+	IndexedFlushDuration           time.Duration
+	IndexedFlushMaterialize        time.Duration
+	IndexedFlushPublish            time.Duration
+	RootDeltaPlanPrimaryRoots      uint64
+	RootDeltaPlanTemplateRoots     uint64
+	RootDeltaPlanIndexStateRoots   uint64
+	RootDeltaPlanSecondaryRoots    uint64
+	RootDeltaPlanEntries           uint64
+	RootDeltaPlanKeyBytes          uint64
+	RootDeltaPlanValueBytes        uint64
+	RootDeltaPlanTombstones        uint64
+	PrimaryOnlyUpdateCalls         uint64
+	PrimaryOnlyMatched             uint64
+	PrimaryOnlyModified            uint64
+	PrimaryOnlyBufferedCalls       uint64
+	PrimaryOnlyRootPublishes       uint64
+	PrimaryOnlyRootDeltaEntries    uint64
+	PrimaryOnlyRootDeltaKeyBytes   uint64
+	PrimaryOnlyRootDeltaValueBytes uint64
+	PrimaryOnlyCoalescedDocs       uint64
+	UpdateCombineRequests          uint64
+	UpdateCombineBatches           uint64
+	UpdateCombineBatchedRequests   uint64
+	UpdateCombineFallbackRequests  uint64
+	UpdateCombineQueueDepthMax     uint64
+	UpdateCombineEnqueue           time.Duration
+	UpdateCombineWait              time.Duration
+	UpdateCombineDrain             time.Duration
+	UpdateCombineRun               time.Duration
+	UpdateBatchCalls               uint64
+	UpdateBatchItems               uint64
+	UpdateBatchMatched             uint64
+	UpdateBatchModified            uint64
+	UpdateBatchRuns                uint64
+	UpdateBatchBufferedBatches     uint64
+	UpdateBatchCurrentRead         time.Duration
+	UpdateBatchCallback            time.Duration
+	UpdateBatchPrepareDocuments    time.Duration
+	// UpdateBatchIndexStateExtract includes UpdateBatchOldIndexStateExtract
+	// and UpdateBatchNewIndexStateExtract; do not add all three together.
 	UpdateBatchIndexStateExtract    time.Duration
 	UpdateBatchOldIndexStateExtract time.Duration
 	UpdateBatchNewIndexStateExtract time.Duration
@@ -503,7 +522,9 @@ type CollectionManagerStats struct {
 	UpdateBatchBufferUniqueIdx       time.Duration
 	UpdateBatchBufferPrimaryAppend   time.Duration
 	UpdateBatchBufferSecondaryAppend time.Duration
-	UpdateBatchBufferRootAppend      time.Duration
+	// UpdateBatchBufferRootAppend is the total root-append time and overlaps
+	// with UpdateBatchBufferPrimaryAppend and UpdateBatchBufferSecondaryAppend.
+	UpdateBatchBufferRootAppend time.Duration
 	// UpdateBatchBufferFlush measures only threshold-flush work that was
 	// actually scheduled/executed while staging indexed buffered update batches.
 	UpdateBatchBufferFlush         time.Duration
@@ -1271,9 +1292,11 @@ func (m *CollectionManager) ResetUpdateCombineQueueDepthMax() {
 }
 
 // ResetUpdateCombinersForProfiling stops current update combiners so subsequent
-// profiling operations recreate them inside the measured context. Call it after
-// benchmark warmup and before the measured phase; it does not flush collection
-// contents or change update semantics.
+// profiling operations recreate them inside the measured context. It is
+// intended for benchmark/profiling harnesses; it may block while a combiner
+// drains in-flight updates. Call it after benchmark warmup and before the
+// measured phase; it does not flush collection contents or change update
+// semantics.
 func (m *CollectionManager) ResetUpdateCombinersForProfiling() {
 	if m == nil {
 		return
@@ -7031,34 +7054,35 @@ func (c *Collection) updateCombiner() *collectionUpdateCombiner {
 }
 
 func (domain *collectionWriteDomain) stopUpdateCombiner() {
-	if domain == nil {
-		return
-	}
-	domain.closingWrites.Store(true)
-	domain.updateCombineMu.Lock()
-	combiner := domain.updateCombiner
-	draining := domain.updateDraining
-	domain.updateCombiner = nil
-	domain.updateDraining = nil
-	domain.updateCombineDone = true
-	domain.updateCombineMu.Unlock()
-	if combiner != nil {
-		combiner.stop()
-	}
-	if draining != nil && draining != combiner {
-		draining.waitDone()
-	}
+	domain.drainUpdateCombiner(updateCombinerDrainClose)
 }
 
 func (domain *collectionWriteDomain) resetUpdateCombinerForProfiling() {
+	domain.drainUpdateCombiner(updateCombinerDrainResetForProfiling)
+}
+
+type updateCombinerDrainMode uint8
+
+const (
+	updateCombinerDrainClose updateCombinerDrainMode = iota
+	updateCombinerDrainResetForProfiling
+)
+
+func (domain *collectionWriteDomain) drainUpdateCombiner(mode updateCombinerDrainMode) {
 	if domain == nil {
 		return
+	}
+	if mode == updateCombinerDrainClose {
+		domain.closingWrites.Store(true)
 	}
 	domain.updateCombineMu.Lock()
 	combiner := domain.updateCombiner
 	draining := domain.updateDraining
 	domain.updateCombiner = nil
-	if combiner != nil {
+	if mode == updateCombinerDrainClose {
+		domain.updateDraining = nil
+		domain.updateCombineDone = true
+	} else if combiner != nil {
 		domain.updateDraining = combiner
 	}
 	domain.updateCombineMu.Unlock()
@@ -7067,6 +7091,9 @@ func (domain *collectionWriteDomain) resetUpdateCombinerForProfiling() {
 	}
 	if draining != nil && draining != combiner {
 		draining.waitDone()
+	}
+	if mode != updateCombinerDrainResetForProfiling {
+		return
 	}
 	domain.updateCombineMu.Lock()
 	if combiner != nil && domain.updateDraining == combiner {
@@ -9949,6 +9976,7 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 		return false, err
 	}
 	plan.stats.BufferStageValidation += updateBatchStatsSince(detailedStats, phaseStart)
+	primaryRootName := collectionPrimaryRootName(plan.meta.Name)
 	var stagedBytes int64
 	stagedRootRuns := 0
 	phaseStart = updateBatchStatsNow(detailedStats)
@@ -10021,7 +10049,7 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 		if _, ok := domain.rootBaseIDs[rootName]; !ok {
 			domain.rootBaseIDs[rootName] = baseRoot
 		}
-		if rootName == collectionPrimaryRootName(plan.meta.Name) && domain.primaryRunIndex != nil {
+		if rootName == primaryRootName && domain.primaryRunIndex != nil {
 			phaseStart = updateBatchStatsNow(detailedStats)
 			if err := addBufferedPrimaryRunIndexEntries(domain.primaryRunIndex, table); err != nil {
 				plan.stats.BufferStagePrimaryIdx += updateBatchStatsSince(detailedStats, phaseStart)
@@ -10067,10 +10095,12 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 		domain.rootRunCount = saturatingAddNonNegativeInt(domain.rootRunCount, 1)
 		plan.deltaTables[i] = nil
 		appendDuration := updateBatchStatsSince(detailedStats, phaseStart)
-		if rootName == collectionPrimaryRootName(plan.meta.Name) {
-			plan.stats.BufferStagePrimaryAppend += appendDuration
-		} else {
-			plan.stats.BufferStageSecondaryAppend += appendDuration
+		if appendDuration > 0 {
+			if rootName == primaryRootName {
+				plan.stats.BufferStagePrimaryAppend += appendDuration
+			} else {
+				plan.stats.BufferStageSecondaryAppend += appendDuration
+			}
 		}
 		plan.stats.BufferStageRootAppend += appendDuration
 	}
@@ -10081,7 +10111,7 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 	domain.baseCommitSeq = plan.baseCommitSeq
 	domain.baseSystemRoot = plan.baseSystemRoot
 	if plan.catalog != nil {
-		domain.primaryRoot = plan.catalog.rootID(collectionPrimaryRootName(plan.meta.Name))
+		domain.primaryRoot = plan.catalog.rootID(primaryRootName)
 	}
 	domain.count += modifiedCount
 	domain.bufferedBytes = saturatingAddNonNegativeInt64(domain.bufferedBytes, stagedBytes)
