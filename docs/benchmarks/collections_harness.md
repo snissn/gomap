@@ -147,10 +147,13 @@ scripts/bench_collections_harness.sh \
   --include-sqlite
 ```
 
-TreeDB maintenance rows run value-log rewrite, checkpoint, then value-log GC and
-checkpoint after the timed benchmark iteration. SQLite maintenance rows run
-`VACUUM` and a WAL checkpoint. These metrics are opt-in because they add
-substantial untimed I/O and can perturb cache state between cells.
+TreeDB maintenance rows in this harness are low-level diagnostics for specific
+maintenance primitives (`value_vlog` rewrite/GC and `leaf_vlog` generation
+pack/GC). Use the high-level `CompactStorage` path, for example
+`treemap compact <db-dir> -rw`, for final storage-footprint measurements.
+SQLite maintenance rows run `VACUUM` and a WAL checkpoint. These metrics are
+opt-in because they add substantial untimed I/O and can perturb cache state
+between cells.
 
 ## Focused Profiles
 
@@ -187,8 +190,8 @@ includes a disk-usage section that compares total bytes, collection bytes, and
 index bytes; when an engine does not expose a direct object split, index bytes
 are derived from the per-doc delta against the matching zero-index row.
 
-The maintenance summary reports untimed TreeDB total disk bytes before online
-value-log rewrite, after rewrite, and after value-log GC. SQLite rows report
-total disk bytes before and after `VACUUM`. Latency columns in both the per-cell
-reports and matrix summaries include adjacent throughput columns such as
-`ns/op` plus `ops/sec`.
+The maintenance summary reports untimed TreeDB total disk bytes around the
+selected low-level maintenance primitive. SQLite rows report total disk bytes
+before and after `VACUUM`. Latency columns in both the per-cell reports and
+matrix summaries include adjacent throughput columns such as `ns/op` plus
+`ops/sec`.

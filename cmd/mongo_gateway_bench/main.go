@@ -4584,53 +4584,19 @@ func runTreeDBMaintenanceStack(ctx context.Context, target *benchTarget, result 
 	if target == nil || target.db == nil {
 		return nil
 	}
-	if err := appendTreeDBMaintenanceStep(ctx, target, result, "vlog_rewrite", func() (map[string]int64, string, error) {
-		stats, err := target.db.ValueLogRewriteOnline(ctx, backenddb.ValueLogRewriteOnlineOptions{})
-		if err != nil {
-			return nil, "", err
-		}
-		return valueLogRewriteMetrics(stats), "", nil
-	}); err != nil {
-		return err
-	}
-	if err := appendTreeDBMaintenanceStep(ctx, target, result, "vlog_gc", func() (map[string]int64, string, error) {
-		stats, err := target.db.ValueLogGC(ctx, backenddb.ValueLogGCOptions{})
-		if err != nil {
-			return nil, "", err
-		}
-		return valueLogGCMetrics(stats), "", nil
-	}); err != nil {
-		return err
-	}
-	if err := appendTreeDBMaintenanceStep(ctx, target, result, "leafgen_pack", func() (map[string]int64, string, error) {
-		stats, err := target.db.LeafGenerationPackRunOnce(ctx, backenddb.LeafGenerationPackFromPlanOptions{
-			Force: true,
-			Sync:  true,
+	if err := appendTreeDBMaintenanceStep(ctx, target, result, "compact_storage", func() (map[string]int64, string, error) {
+		stats, err := target.db.CompactStorage(ctx, backenddb.CompactStorageOptions{
+			Mode:          backenddb.CompactStorageFull,
+			SyncEachPhase: true,
 		})
 		if err != nil {
 			return nil, "", err
 		}
-		skipped := ""
-		if !stats.Ran {
-			skipped = stats.SkipReason
-			if skipped == "" {
-				skipped = "not_applicable"
-			}
-		}
-		return leafGenerationPackRunOnceMetrics(stats), skipped, nil
+		return compactStorageMetrics(stats), compactStorageSkipReason(stats), nil
 	}); err != nil {
 		return err
 	}
-	if err := appendTreeDBMaintenanceStep(ctx, target, result, "leafgen_gc", func() (map[string]int64, string, error) {
-		stats, err := target.db.LeafGenerationGC(ctx, backenddb.LeafGenerationGCOptions{})
-		if err != nil {
-			return nil, "", err
-		}
-		return leafGenerationGCMetrics(stats), "", nil
-	}); err != nil {
-		return err
-	}
-	if err := appendTreeDBMaintenanceStep(ctx, target, result, "index_vacuum", func() (map[string]int64, string, error) {
+	if err := appendTreeDBMaintenanceStep(ctx, target, result, "index_vacuum_offline", func() (map[string]int64, string, error) {
 		cleanupCtx, cancelCleanup := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancelCleanup()
 		if err := closeBenchTargetKeepDir(cleanupCtx, target); err != nil {
@@ -4644,6 +4610,67 @@ func runTreeDBMaintenanceStack(ctx context.Context, target *benchTarget, result 
 		return err
 	}
 	return nil
+}
+
+func compactStorageMetrics(stats backenddb.CompactStorageStats) map[string]int64 {
+	metrics := map[string]int64{
+		"fully_compacted":                             boolInt64(stats.FullyCompacted),
+		"phases":                                      int64(len(stats.Phases)),
+		"remaining_value_log_rewrite_segments":        int64(stats.RemainingDebt.ValueLogRewriteSegments),
+		"remaining_value_log_rewrite_bytes":           stats.RemainingDebt.ValueLogRewriteBytes,
+		"remaining_value_log_gc_segments":             int64(stats.RemainingDebt.ValueLogGCSegments),
+		"remaining_value_log_gc_bytes":                stats.RemainingDebt.ValueLogGCBytes,
+		"remaining_leaf_pack_generations":             int64(stats.RemainingDebt.LeafPackGenerations),
+		"remaining_leaf_pack_bytes":                   stats.RemainingDebt.LeafPackBytes,
+		"remaining_leaf_gc_generations":               int64(stats.RemainingDebt.LeafGCGenerations),
+		"remaining_leaf_gc_bytes":                     stats.RemainingDebt.LeafGCBytes,
+		"zero_byte_value_log_files_deleted":           int64(stats.ZeroByteValueLogFilesDeleted),
+		"value_log_rewrite_records_copied":            int64(stats.ValueLogRewrite.RecordsCopied),
+		"value_log_rewrite_value_records_copied":      int64(stats.ValueLogRewrite.ValueRecordsCopied),
+		"value_log_rewrite_value_bytes_copied":        stats.ValueLogRewrite.ValueBytesCopied,
+		"value_log_gc_segments_deleted":               int64(stats.ValueLogGC.SegmentsDeleted),
+		"value_log_gc_bytes_deleted":                  stats.ValueLogGC.BytesDeleted,
+		"leaf_generation_gc_generations_deleted":      int64(stats.LeafGenerationGC.GenerationsDeleted),
+		"leaf_generation_gc_files_deleted":            int64(stats.LeafGenerationGC.FilesDeleted),
+		"leaf_generation_gc_bytes_deleted":            stats.LeafGenerationGC.BytesDeleted,
+		"leaf_generation_pack_runs":                   int64(len(stats.LeafGenerationPacks)),
+		"leaf_generation_plan_candidate_generations":  int64(len(stats.LeafGenerationPlan.CandidateGenerationIDs)),
+		"leaf_generation_plan_expected_reclaim_bytes": stats.LeafGenerationPlan.ExpectedReclaimBytes,
+	}
+	var packRan int64
+	var packPages int64
+	var packFrames int64
+	var packBytes int64
+	for _, pack := range stats.LeafGenerationPacks {
+		if pack.Ran {
+			packRan++
+		}
+		packPages += int64(pack.Pack.LeafPagesCopied)
+		packFrames += int64(pack.Pack.LeafFramesWritten)
+		packBytes += pack.Pack.BytesCopied
+	}
+	metrics["leaf_generation_pack_runs_executed"] = packRan
+	metrics["leaf_generation_pack_leaf_pages_copied"] = packPages
+	metrics["leaf_generation_pack_leaf_frames_written"] = packFrames
+	metrics["leaf_generation_pack_bytes_copied"] = packBytes
+	return metrics
+}
+
+func compactStorageSkipReason(stats backenddb.CompactStorageStats) string {
+	if stats.FullyCompacted {
+		return ""
+	}
+	if stats.RemainingDebt.Empty() {
+		return ""
+	}
+	return "remaining_debt"
+}
+
+func boolInt64(v bool) int64 {
+	if v {
+		return 1
+	}
+	return 0
 }
 
 func collectTreeDBStatsFromDir(cfg config, target *benchTarget) (map[string]string, error) {
