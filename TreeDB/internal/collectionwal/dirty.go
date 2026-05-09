@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -55,6 +56,7 @@ func DirtySegments(dbDir string) ([]string, error) {
 			dirty = append(dirty, filepath.Join(walDir, name))
 		}
 	}
+	sort.Strings(dirty)
 	return dirty, nil
 }
 
