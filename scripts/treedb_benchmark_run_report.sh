@@ -18,7 +18,7 @@ COLLECTION_PROFILE_BENCHTIME="${COLLECTION_PROFILE_BENCHTIME:-}"
 COLLECTION_PROFILE_COUNT="${COLLECTION_PROFILE_COUNT:-1}"
 MONGO_BATCH_SIZE="${MONGO_BATCH_SIZE:-10000}"
 INSERT_PRODUCERS="${INSERT_PRODUCERS:-8}"
-MONGO_MODE="${MONGO_MODE:-external}"
+MONGO_MODE="${MONGO_MODE:-docker}"
 MONGO_URI="${MONGO_URI:-mongodb://127.0.0.1:27017}"
 MONGO_MAX_POOL_SIZE="${MONGO_MAX_POOL_SIZE:-128}"
 MONGO_MAX_CONNECTING="${MONGO_MAX_CONNECTING:-32}"
@@ -56,7 +56,7 @@ Options:
   --raw-keys N           Override raw engine key count.
   --collection-docs N    Override collection/SQLite document count.
   --mongo-docs N         Override Mongo-compatible document count.
-  --mongo-mode MODE      Mongo mode for full/load comparison: external or docker. Default: external.
+  --mongo-mode MODE      Mongo mode for full/load comparison: docker or external. Default: docker.
   --mongo-uri URI        MongoDB URI for external/scaling runs. Default: mongodb://127.0.0.1:27017.
   --timeout DURATION     Per-cell timeout for Mongo gateway commands. Default: 120m.
   --title TITLE          HTML report title.
