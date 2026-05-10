@@ -3041,6 +3041,13 @@ func (c *Collection) canBufferNoIndexInsertBatchAck() bool {
 		c.db.DurabilityMode() == backenddb.DurabilityWALOffRelaxed
 }
 
+func (c *Collection) canBufferNoIndexUpdateAck() bool {
+	return c != nil &&
+		c.db != nil &&
+		c.writeDomain != nil &&
+		c.db.DurabilityMode() == backenddb.DurabilityWALOffRelaxed
+}
+
 func (c *Collection) bufferNoIndexInsertBatch(
 	domain *collectionWriteDomain,
 	catalog *collectionCatalog,
@@ -10630,6 +10637,11 @@ func (c *Collection) updateBatchOnce(items []updateBatchItem, mode updateBatchMo
 				}
 				if buffered {
 					c.meta = plan.meta
+					if plan.directBufferedUpdate != nil && len(plan.meta.Indexes) == 0 && !c.canBufferNoIndexUpdateAck() {
+						if err := c.flushBufferedWrites(); err != nil {
+							return err
+						}
+					}
 					results = plan.results
 					return nil
 				}
@@ -10714,6 +10726,11 @@ func (c *Collection) updateBatchOnce(items []updateBatchItem, mode updateBatchMo
 			return bufferErr
 		}
 		if buffered {
+			if plan.directBufferedUpdate != nil && len(plan.meta.Indexes) == 0 && !c.canBufferNoIndexUpdateAck() {
+				if err := c.flushBufferedWrites(); err != nil {
+					return err
+				}
+			}
 			results = plan.results
 			return nil
 		}

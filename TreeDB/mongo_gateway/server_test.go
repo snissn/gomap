@@ -1177,7 +1177,7 @@ func TestServerUpdateAppliesEarlierOrderedUpdatesBeforeLaterWriteError(t *testin
 }
 
 func TestServerUpdateCoalescesConcurrentDistinctIDs(t *testing.T) {
-	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), Durability: backenddb.DurabilityWALOnRelaxed})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
@@ -1239,8 +1239,8 @@ func TestServerUpdateCoalescesConcurrentDistinctIDs(t *testing.T) {
 		assertInt32(t, response.doc, "nModified", 1)
 	}
 	after := db.State()
-	if after.CommitSeq != before.CommitSeq {
-		t.Fatalf("coalesced BSON set updates advanced commit seq by %d before flush, want buffered", after.CommitSeq-before.CommitSeq)
+	if after.CommitSeq != before.CommitSeq+1 {
+		t.Fatalf("coalesced BSON set updates advanced commit seq to %d from %d, want one WAL-on publish before ack", after.CommitSeq, before.CommitSeq)
 	}
 	for i, id := range []string{"u1", "u2"} {
 		findResponse := serveCommand(t, server, int32(2270+i), bson.D{
@@ -1259,8 +1259,8 @@ func TestServerUpdateCoalescesConcurrentDistinctIDs(t *testing.T) {
 	if err := col.Flush(); err != nil {
 		t.Fatalf("flush coalesced updates: %v", err)
 	}
-	if flushed := db.State(); flushed.CommitSeq != before.CommitSeq+1 {
-		t.Fatalf("coalesced update flush advanced commit seq to %d from %d, want one publish", flushed.CommitSeq, before.CommitSeq)
+	if flushed := db.State(); flushed.CommitSeq != after.CommitSeq {
+		t.Fatalf("coalesced update flush advanced commit seq to %d from %d, want already drained", flushed.CommitSeq, after.CommitSeq)
 	}
 }
 
