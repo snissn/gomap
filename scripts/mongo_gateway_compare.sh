@@ -15,6 +15,7 @@ MONGO_MAX_POOL_SIZE="${MONGO_MAX_POOL_SIZE:-0}"
 MONGO_MIN_POOL_SIZE="${MONGO_MIN_POOL_SIZE:-0}"
 MONGO_MAX_CONNECTING="${MONGO_MAX_CONNECTING:-0}"
 PREBUILD_DOCUMENTS="${PREBUILD_DOCUMENTS:-false}"
+MONGO_COMPACT="${MONGO_COMPACT:-true}"
 RANGE_INDEX="${RANGE_INDEX:-false}"
 PROFILE_TREEDB="${PROFILE_TREEDB:-false}"
 READS="${READS:-}"
@@ -39,7 +40,7 @@ CONCURRENT_WRITES="${CONCURRENT_WRITES:-}"
 CONCURRENT_WRITES_DIVISOR="${CONCURRENT_WRITES_DIVISOR:-10}"
 MONGO_MODE="${MONGO_MODE:-docker}"
 MONGO_URI="${MONGO_URI:-mongodb://127.0.0.1:27017}"
-MONGO_IMAGE="${MONGO_IMAGE:-mongo:7}"
+MONGO_IMAGE="${MONGO_IMAGE:-mongo}"
 MONGO_CLIENT_MODE="${MONGO_CLIENT_MODE:-driver}"
 MONGO_CLIENT_MODES="${MONGO_CLIENT_MODES:-$MONGO_CLIENT_MODE}"
 DATABASE_PREFIX="${DATABASE_PREFIX:-mongo_gateway_compare}"
@@ -79,6 +80,8 @@ Options:
                         MongoDB Go driver minPoolSize. Default: 0, use driver default.
   --mongo-max-connecting N
                         MongoDB Go driver maxConnecting. Default: 0, use driver default.
+  --mongo-compact       Compact the MongoDB collection before final stats collection.
+                        Set to true/false, default: true.
   --prebuild-documents  Prebuild documents before timed load phases.
   --range-index         Create age_1 for the range-read phase.
   --profile-treedb      Capture per-phase TreeDB pprof artifacts in profiles/.
@@ -117,7 +120,7 @@ Options:
                         Concurrent updates per target/cell.
   --mongo-mode MODE     docker or external. Default: docker.
   --mongo-uri URI       MongoDB URI for --mongo-mode external.
-  --mongo-image IMAGE   Docker image for --mongo-mode docker. Default: mongo:7.
+  --mongo-image IMAGE   Docker image for --mongo-mode docker. Default: mongo.
   --mongo-client-mode MODE
                         Single MongoDB client mode: driver, driver-find-raw,
                         driver-command, driver-command-raw, or driver-unack.
@@ -152,7 +155,7 @@ Environment overrides:
   CONCURRENT_RANGE_READERS, CONCURRENT_RANGE_READS, CONCURRENT_RANGE_READS_DIVISOR,
   CONCURRENT_RANGE_READER_SWEEP,
   CONCURRENT_WRITERS, CONCURRENT_WRITER_SWEEP, CONCURRENT_WRITES, CONCURRENT_WRITES_DIVISOR,
-  MONGO_MODE, MONGO_URI, MONGO_IMAGE, DATABASE_PREFIX, COLLECTION, TIMEOUT,
+  MONGO_MODE, MONGO_URI, MONGO_IMAGE, MONGO_COMPACT, DATABASE_PREFIX, COLLECTION, TIMEOUT,
   MONGO_CLIENT_MODE, MONGO_CLIENT_MODES,
   TREEDB_PROFILE, TREEDB_DOCUMENT_FORMAT, TREEDB_DOCUMENT_FORMATS,
   TREEDB_CLIENT_MODE, TREEDB_CLIENT_MODES,
@@ -269,6 +272,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --mongo-image)
       MONGO_IMAGE="$2"
+      shift 2
+      ;;
+    --mongo-compact)
+      MONGO_COMPACT="$2"
       shift 2
       ;;
     --mongo-client-mode)
@@ -696,6 +703,10 @@ if [[ "$PROFILE_TREEDB" != "true" && "$PROFILE_TREEDB" != "false" ]]; then
   echo "invalid PROFILE_TREEDB=$PROFILE_TREEDB (want true or false)" >&2
   exit 2
 fi
+if [[ "$MONGO_COMPACT" != "true" && "$MONGO_COMPACT" != "false" ]]; then
+  echo "invalid MONGO_COMPACT=$MONGO_COMPACT (want true or false)" >&2
+  exit 2
+fi
 MONGO_CLIENT_MODES=$(normalize_unique_word_list MONGO_CLIENT_MODES "$MONGO_CLIENT_MODES")
 validate_mongo_client_modes "$MONGO_CLIENT_MODES"
 TREEDB_CLIENT_MODES=$(normalize_unique_word_list TREEDB_CLIENT_MODES "$TREEDB_CLIENT_MODES")
@@ -879,6 +890,7 @@ fi
   echo "insert producers: $INSERT_PRODUCERS"
   echo "mongo pool options: maxPoolSize=$MONGO_MAX_POOL_SIZE minPoolSize=$MONGO_MIN_POOL_SIZE maxConnecting=$MONGO_MAX_CONNECTING"
   echo "prebuild documents: $PREBUILD_DOCUMENTS"
+  echo "mongo compact before final stats: $MONGO_COMPACT"
   echo "range index: $RANGE_INDEX"
   echo "profile TreeDB: $PROFILE_TREEDB"
   echo "reads: ${READS:-documents / $READS_DIVISOR}"
@@ -1015,9 +1027,10 @@ for docs in $DOCS_LIST; do
           exit 1
         fi
       fi
-      run_target mongo "$docs" "$indexes" "$mongo_raw" "$database" "$reads" "$range_reads" "$updates" "$DELETES" \
+    run_target mongo "$docs" "$indexes" "$mongo_raw" "$database" "$reads" "$range_reads" "$updates" "$DELETES" \
         "$CONCURRENT_READERS" "$concurrent_reads" "$CONCURRENT_RANGE_READERS" "$concurrent_range_reads" "$CONCURRENT_WRITERS" "$concurrent_writes" \
         -mongo-uri "$mongo_uri" \
+        -mongo-compact "$MONGO_COMPACT" \
         -client-mode "$mongo_client_mode"
       if [[ "$MONGO_MODE" == "docker" ]]; then
         stop_mongo_container "$mongo_container"
@@ -1070,6 +1083,7 @@ cat >"$README" <<EOF
 - concurrent writer sweep: \`${CONCURRENT_WRITER_SWEEP:-none}\`
 - concurrent writes: \`${CONCURRENT_WRITES:-documents / $CONCURRENT_WRITES_DIVISOR when writers or writer sweep is set}\`
 - MongoDB mode: \`$MONGO_MODE\`
+- MongoDB compact before final stats: \`$MONGO_COMPACT\`
 - MongoDB image: \`$MONGO_IMAGE\`
 - MongoDB client modes: \`$MONGO_CLIENT_MODES\`
 - benchmark timeout: \`$TIMEOUT\`
