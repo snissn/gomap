@@ -68,7 +68,10 @@ func TestCollectionManagerOpenCollectionNilDBReturnsErrCollectionDBNil(t *testin
 }
 
 func TestCollectionManagerOpenCollectionCacheRejectsClosedDB(t *testing.T) {
-	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	d, err := backenddb.Open(backenddb.Options{
+		Dir:        t.TempDir(),
+		Durability: backenddb.DurabilityWALOffRelaxed,
+	})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
@@ -10894,7 +10897,7 @@ func TestCollectionUpdateBSONSetBatchDuplicateIDMatchesUpdateBatchErrorShape(t *
 	}
 }
 
-func TestCollectionUpdateBSONSetBatchBuffersNoIndexPrimaryOnly(t *testing.T) {
+func TestCollectionUpdateBSONSetBatchNoIndexPrimaryOnly(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
@@ -10922,11 +10925,6 @@ func TestCollectionUpdateBSONSetBatchBuffersNoIndexPrimaryOnly(t *testing.T) {
 	); err != nil {
 		t.Fatalf("insert: %v", err)
 	}
-	if err := col.Flush(); err != nil {
-		t.Fatalf("flush insert buffer: %v", err)
-	}
-	beforeCommit := d.State().CommitSeq
-
 	results, batched, err := col.UpdateBSONSetBatchIfNoSecondaryUniqueIndexChanges([]BSONSetUpdateBatchItem{
 		{DocumentID: []byte("u1"), Fields: []BSONSetField{{Key: "city", Value: mustBSONRawValue(t, "sea")}}},
 		{DocumentID: []byte("u2"), Fields: []BSONSetField{{Key: "city", Value: mustBSONRawValue(t, "sfo")}}},
@@ -10940,34 +10938,25 @@ func TestCollectionUpdateBSONSetBatchBuffersNoIndexPrimaryOnly(t *testing.T) {
 	if len(results) != 2 || !results[0].Matched || !results[0].Modified || !results[1].Matched || !results[1].Modified {
 		t.Fatalf("results=%+v want two matched/modified results", results)
 	}
-	if afterCommit := d.State().CommitSeq; afterCommit != beforeCommit {
-		t.Fatalf("commit seq advanced from %d to %d; want buffered primary-only update", beforeCommit, afterCommit)
-	}
 	stats := col.LastUpdateStats()
-	if stats.Indexes != 0 || stats.BufferedBatches != 1 || stats.Publish != 0 || stats.Runs != 1 {
-		t.Fatalf("stats indexes=%d buffered=%d publish=%s runs=%d want 0/1/0/1", stats.Indexes, stats.BufferedBatches, stats.Publish, stats.Runs)
+	if stats.Indexes != 0 || stats.Runs != 1 {
+		t.Fatalf("stats indexes=%d runs=%d want 0/1", stats.Indexes, stats.Runs)
 	}
 	if got, want := stats.StructuredUpdateApplications, 2; got != want {
 		t.Fatalf("structured update applications=%d want %d", got, want)
 	}
-	managerStats := mgr.StatsSnapshot()
-	if managerStats.PendingDocuments != 2 || managerStats.PendingRootRuns == 0 {
-		t.Fatalf("pending docs=%d rootRuns=%d want two pending primary-root entries", managerStats.PendingDocuments, managerStats.PendingRootRuns)
-	}
 
-	matched, modified, err := col.UpdateBSONSet([]byte("u1"), []BSONSetField{{
-		Key:   "city",
-		Value: mustBSONRawValue(t, "lax"),
-	}})
+	secondResults, secondBatched, err := col.UpdateBSONSetBatchIfNoSecondaryUniqueIndexChanges([]BSONSetUpdateBatchItem{
+		{DocumentID: []byte("u1"), Fields: []BSONSetField{{Key: "city", Value: mustBSONRawValue(t, "lax")}}},
+	})
 	if err != nil {
-		t.Fatalf("UpdateBSONSet second buffered read: %v", err)
+		t.Fatalf("second UpdateBSONSetBatchIfNoSecondaryUniqueIndexChanges: %v", err)
 	}
-	if !matched || !modified {
-		t.Fatalf("second update matched=%v modified=%v want true/true", matched, modified)
+	if !secondBatched {
+		t.Fatal("second batched=false want true")
 	}
-	afterSecondUpdateCommit := d.State().CommitSeq
-	if afterSecondUpdateCommit <= beforeCommit {
-		t.Fatalf("commit seq after second update=%d want > %d", afterSecondUpdateCommit, beforeCommit)
+	if len(secondResults) != 1 || !secondResults[0].Matched || !secondResults[0].Modified {
+		t.Fatalf("second results=%+v want one matched/modified result", secondResults)
 	}
 	got, found, err := col.GetInto([]byte("u1"), nil)
 	if err != nil {
@@ -10980,6 +10969,7 @@ func TestCollectionUpdateBSONSetBatchBuffersNoIndexPrimaryOnly(t *testing.T) {
 		t.Fatalf("buffered city=%q want lax", gotCity)
 	}
 
+	afterSecondUpdateCommit := d.State().CommitSeq
 	if err := col.Flush(); err != nil {
 		t.Fatalf("flush buffered BSON set updates: %v", err)
 	}

@@ -3048,6 +3048,13 @@ func (c *Collection) canBufferNoIndexInsertBatchAck() bool {
 		c.db.DurabilityMode() == backenddb.DurabilityWALOffRelaxed
 }
 
+func (c *Collection) canBufferNoIndexBSONSetBatchAck() bool {
+	return c != nil &&
+		c.db != nil &&
+		c.writeDomain != nil &&
+		c.db.DurabilityMode() == backenddb.DurabilityWALOffRelaxed
+}
+
 func (c *Collection) bufferNoIndexInsertBatch(
 	domain *collectionWriteDomain,
 	catalog *collectionCatalog,
@@ -8628,7 +8635,7 @@ func updateBatchBSONSetItemIndex(items []updateBatchItem) int {
 	return -1
 }
 
-func updateBatchItemsAllBSONSet(items []updateBatchItem) bool {
+func updateBatchItemsEligibleForNoIndexBSONSetBuffer(items []updateBatchItem) bool {
 	if len(items) == 0 {
 		return false
 	}
@@ -10526,7 +10533,10 @@ func (c *Collection) shouldUseDirectBufferedUpdatePlan(meta CollectionMeta, opts
 		return false
 	}
 	if len(meta.Indexes) == 0 {
-		return allItemsBSONSet && mode == updateBatchModeNoSecondaryUniqueIndexChanges && normalizedDocumentFormat(opts.documentFormat) == DocumentFormatBSON
+		return allItemsBSONSet &&
+			mode == updateBatchModeNoSecondaryUniqueIndexChanges &&
+			normalizedDocumentFormat(opts.documentFormat) == DocumentFormatBSON &&
+			c.canBufferNoIndexBSONSetBatchAck()
 	}
 	if !meta.Options.BufferedIndexedWrites {
 		return false
@@ -11059,7 +11069,7 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 		_ = snap.Close()
 		return nil, err
 	}
-	allItemsBSONSet := updateBatchItemsAllBSONSet(items)
+	allItemsBSONSet := updateBatchItemsEligibleForNoIndexBSONSetBuffer(items)
 	if itemIndex := updateBatchBSONSetItemIndex(items); itemIndex >= 0 && normalizedDocumentFormat(plannerOptions.documentFormat) != DocumentFormatBSON {
 		_ = snap.Close()
 		return nil, updateBatchItemError(itemIndex, errBSONSetRequiresBSONFormat)

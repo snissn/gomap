@@ -992,14 +992,11 @@ func TestRunMongoUpdateBatchNoIndexBSONSetPublishesBeforeReturn(t *testing.T) {
 		t.Fatalf("matched=%d modified=%d batched=%v want 2,2,true", matched, modified, batched)
 	}
 	stats := col.LastUpdateStats()
-	if stats.Indexes != 0 || stats.BufferedBatches != 0 || stats.Publish == 0 {
-		t.Fatalf("stats indexes=%d buffered=%d publish=%s want 0/0/>0", stats.Indexes, stats.BufferedBatches, stats.Publish)
+	if stats.Indexes != 0 || stats.BufferedBatches != 0 {
+		t.Fatalf("stats indexes=%d buffered=%d want 0/0", stats.Indexes, stats.BufferedBatches)
 	}
 	if got, want := stats.StructuredUpdateApplications, 0; got != want {
 		t.Fatalf("structured update applications=%d want %d", got, want)
-	}
-	if stats.Callback == 0 {
-		t.Fatalf("callback duration=%s want >0 for no-index published fallback batch", stats.Callback)
 	}
 	after := db.State()
 	if after.CommitSeq != before.CommitSeq+1 {

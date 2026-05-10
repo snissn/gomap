@@ -585,22 +585,12 @@ func runMongoUpdateBatchResults(col *collections.Collection, updates []mongoUpda
 		// collections by using the generic batch callback path, which still
 		// publishes before returning success.
 		if len(col.Meta().Indexes) == 0 {
-			materializer, err := storedDocumentMaterializerForCollection(col)
+			items, materializer, err := buildMongoCallbackUpdateBatchItems(col, updates)
 			if err != nil {
 				return nil, false, err
 			}
 			if materializer != nil {
 				defer func() { _ = materializer.Close() }()
-			}
-			items := make([]collections.UpdateBatchItem, len(updates))
-			for i, update := range updates {
-				update := update
-				items[i] = collections.UpdateBatchItem{
-					DocumentID: update.key,
-					Update: func(stored []byte) ([]byte, bool, error) {
-						return applyMongoUpdateToStoredDocument(col, materializer, update, stored)
-					},
-				}
 			}
 			return col.UpdateBatchIfNoSecondaryUniqueIndexChanges(items)
 		}
@@ -613,22 +603,12 @@ func runMongoUpdateBatchResults(col *collections.Collection, updates []mongoUpda
 		}
 		return col.UpdateBSONSetBatchIfNoSecondaryUniqueIndexChanges(items)
 	}
-	materializer, err := storedDocumentMaterializerForCollection(col)
+	items, materializer, err := buildMongoCallbackUpdateBatchItems(col, updates)
 	if err != nil {
 		return nil, false, err
 	}
 	if materializer != nil {
 		defer func() { _ = materializer.Close() }()
-	}
-	items := make([]collections.UpdateBatchItem, len(updates))
-	for i, update := range updates {
-		update := update
-		items[i] = collections.UpdateBatchItem{
-			DocumentID: update.key,
-			Update: func(stored []byte) ([]byte, bool, error) {
-				return applyMongoUpdateToStoredDocument(col, materializer, update, stored)
-			},
-		}
 	}
 	results, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges(items)
 	if !batched {
@@ -641,6 +621,24 @@ func runMongoUpdateBatchResults(col *collections.Collection, updates []mongoUpda
 		return nil, true, err
 	}
 	return results, true, nil
+}
+
+func buildMongoCallbackUpdateBatchItems(col *collections.Collection, updates []mongoUpdateItem) ([]collections.UpdateBatchItem, *collections.StoredDocumentJSONMaterializer, error) {
+	materializer, err := storedDocumentMaterializerForCollection(col)
+	if err != nil {
+		return nil, nil, err
+	}
+	items := make([]collections.UpdateBatchItem, len(updates))
+	for i, update := range updates {
+		update := update
+		items[i] = collections.UpdateBatchItem{
+			DocumentID: update.key,
+			Update: func(stored []byte) ([]byte, bool, error) {
+				return applyMongoUpdateToStoredDocument(col, materializer, update, stored)
+			},
+		}
+	}
+	return items, materializer, nil
 }
 
 func applyMongoUpdateToStoredDocument(col *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, update mongoUpdateItem, stored []byte) ([]byte, bool, error) {
