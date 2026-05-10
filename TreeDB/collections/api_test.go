@@ -10849,7 +10849,7 @@ func TestCollectionUpdateBSONSetRequiresBSONFormat(t *testing.T) {
 	}
 }
 
-func TestCollectionUpdateBSONSetBatchEmptyReturnsEmptyResults(t *testing.T) {
+func TestCollectionUpdateBSONSetBatchEmptyMatchesUpdateBatchResultShape(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
@@ -10875,12 +10875,12 @@ func TestCollectionUpdateBSONSetBatchEmptyReturnsEmptyResults(t *testing.T) {
 	if !batched {
 		t.Fatal("batched=false want true")
 	}
-	if results == nil || len(results) != 0 {
-		t.Fatalf("results=%v want non-nil empty slice", results)
+	if results != nil {
+		t.Fatalf("results=%v want nil empty-batch result", results)
 	}
 }
 
-func TestCollectionUpdateBSONSetBatchDuplicateIDWrapsItemError(t *testing.T) {
+func TestCollectionUpdateBSONSetBatchDuplicateIDMatchesUpdateBatchErrorShape(t *testing.T) {
 	_, err := prepareBSONSetUpdateBatchItems([]BSONSetUpdateBatchItem{
 		{DocumentID: []byte("u1")},
 		{DocumentID: []byte("u1")},
@@ -10889,11 +10889,8 @@ func TestCollectionUpdateBSONSetBatchDuplicateIDWrapsItemError(t *testing.T) {
 		t.Fatalf("duplicate err=%v want ErrDuplicateDocumentID", err)
 	}
 	var itemErr *UpdateBatchItemError
-	if !errors.As(err, &itemErr) {
-		t.Fatalf("duplicate err=%T want UpdateBatchItemError", err)
-	}
-	if itemErr.Index != 1 {
-		t.Fatalf("duplicate item index=%d want 1", itemErr.Index)
+	if errors.As(err, &itemErr) {
+		t.Fatalf("duplicate err=%T want plain duplicate validation error", err)
 	}
 }
 

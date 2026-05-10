@@ -127,7 +127,7 @@ func (c *Collection) updateBSONSetBatch(items []BSONSetUpdateBatchItem, mode upd
 	}
 	if len(items) == 0 {
 		c.setLastUpdateStats(CollectionUpdateStats{})
-		return []UpdateBatchResult{}, true, nil
+		return nil, true, nil
 	}
 	ownedItems, err := prepareBSONSetUpdateBatchItems(items)
 	if err != nil {
@@ -147,11 +147,11 @@ func prepareBSONSetUpdateBatchItems(items []BSONSetUpdateBatchItem) ([]updateBat
 		hash := maphash.Bytes(bsonSetBatchDocumentIDHashSeed, item.DocumentID)
 		if first, ok := seen[hash]; ok {
 			if bytes.Equal(items[first].DocumentID, item.DocumentID) {
-				return nil, updateBatchItemError(i, ErrDuplicateDocumentID)
+				return nil, fmt.Errorf("%w at index %d", ErrDuplicateDocumentID, i)
 			}
 			for _, prev := range collisions[hash] {
 				if bytes.Equal(items[prev].DocumentID, item.DocumentID) {
-					return nil, updateBatchItemError(i, ErrDuplicateDocumentID)
+					return nil, fmt.Errorf("%w at index %d", ErrDuplicateDocumentID, i)
 				}
 			}
 			collisions[hash] = append(collisions[hash], i)
