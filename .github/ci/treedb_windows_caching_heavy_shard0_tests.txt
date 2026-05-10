@@ -1,0 +1,3 @@
+# Isolated because this Windows caching-heavy test takes most of the job
+# wall time by itself.
+TestCachedGenerationalMaintenance_LeafRefsRemainReopenable

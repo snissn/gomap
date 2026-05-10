@@ -91,7 +91,18 @@ jobs:
           GOMEMLIMIT: 4GiB
           GOMAXPROCS: 2
         run: |
-          set -e -o pipefail
+          set -euo pipefail
+          tmp_dir="$(mktemp -d)"
+          cleanup() {
+            rm -rf "$tmp_dir"
+          }
+          make_tmp() {
+            mktemp "$tmp_dir/tmp.XXXXXX"
+          }
+          ci_list() {
+            sed -e 's/\r$//' -e '/^#/d' -e '/^$/d' "$1"
+          }
+          trap cleanup EXIT
           case "${{ matrix.shard_kind }}" in
             all)
               go test -json -timeout 30m -p 1 ./... | tee treedb-test.jsonl
@@ -105,23 +116,27 @@ jobs:
               if [ -z "$package_shard_count" ] || [ "$package_shard_count" -lt 1 ]; then
                 package_shard_count=1
               fi
-              package_file="$(mktemp)"
-              root_all_file="$(mktemp)"
-              root_test_file="$(mktemp)"
-              db_all_file="$(mktemp)"
-              db_test_file="$(mktemp)"
+              package_file="$(make_tmp)"
+              root_all_file="$(make_tmp)"
+              root_test_file="$(make_tmp)"
+              root_pin_file="$(make_tmp)"
+              db_all_file="$(make_tmp)"
+              db_test_file="$(make_tmp)"
+              db_pin_file="$(make_tmp)"
               go list ./... | grep -v '^github.com/snissn/gomap/TreeDB$' | grep -v '^github.com/snissn/gomap/TreeDB/caching$' | grep -v '^github.com/snissn/gomap/TreeDB/db$' | awk -v idx="$package_shard_index" -v n="$package_shard_count" 'BEGIN { c = 0 } { if ((c % n) == idx) print; c++ }' > "$package_file"
-              go test . -list 'Test.*' | tr -d '\r' | grep '^Test' > "$root_all_file"
+              go test . -list '^(Test|Example).*' | tr -d '\r' | grep -E '^(Test|Example)' > "$root_all_file"
               go test ./db -list 'Test.*' | tr -d '\r' | grep '^Test' > "$db_all_file"
+              ci_list ../.github/ci/treedb_root_weighted_shard0_tests.txt > "$root_pin_file"
+              ci_list ../.github/ci/treedb_db_weighted_shard0_tests.txt > "$db_pin_file"
               if [ "$package_shard_count" -eq 2 ]; then
                 case "$package_shard_index" in
                   0)
-                    grep -F -x 'TestProfileFast_BulkRestoreMaintainsKeyValueParity' "$root_all_file" > "$root_test_file" || true
-                    grep -F -x 'TestValidateFragmentationReport_EndToEnd' "$db_all_file" > "$db_test_file" || true
+                    grep -F -x -f "$root_pin_file" "$root_all_file" > "$root_test_file" || true
+                    grep -F -x -f "$db_pin_file" "$db_all_file" > "$db_test_file" || true
                     ;;
                   1)
-                    grep -F -x -v 'TestProfileFast_BulkRestoreMaintainsKeyValueParity' "$root_all_file" > "$root_test_file"
-                    grep -F -x -v 'TestValidateFragmentationReport_EndToEnd' "$db_all_file" > "$db_test_file"
+                    grep -F -x -v -f "$root_pin_file" "$root_all_file" > "$root_test_file"
+                    grep -F -x -v -f "$db_pin_file" "$db_all_file" > "$db_test_file"
                     ;;
                   *)
                     : > "$root_test_file"
@@ -133,23 +148,34 @@ jobs:
                 awk -v idx="$package_shard_index" -v n="$package_shard_count" 'BEGIN { c = 0 } { if ((c % n) == idx) print; c++ }' "$db_all_file" > "$db_test_file"
               fi
               echo "TreeDB windows-core package shard=${package_shard_index}/${package_shard_count}"
-              xargs go test -json -timeout 30m -p 1 < "$package_file" | tee treedb-test.jsonl
+              ran_tests=false
+              if [ -s "$package_file" ]; then
+                xargs go test -json -timeout 30m -p 1 < "$package_file" | tee treedb-test.jsonl
+                ran_tests=true
+              fi
               if [ -s "$root_test_file" ]; then
                 root_regex="^($(paste -sd'|' "$root_test_file"))$"
                 echo "TreeDB root test shard=${package_shard_index}/${package_shard_count} regex=${root_regex}"
                 go test -json -timeout 30m -p 1 . -run "$root_regex" | tee -a treedb-test.jsonl
+                ran_tests=true
               fi
               if [ -s "$db_test_file" ]; then
                 db_regex="^($(paste -sd'|' "$db_test_file"))$"
                 echo "TreeDB/db test shard=${package_shard_index}/${package_shard_count} regex=${db_regex}"
                 go test -json -timeout 30m -p 1 ./db -run "$db_regex" | tee -a treedb-test.jsonl
+                ran_tests=true
               fi
-              rm -f "$package_file" "$root_all_file" "$root_test_file" "$db_all_file" "$db_test_file"
+              if [ "$ran_tests" = false ]; then
+                echo "no TreeDB windows-core tests found for shard ${package_shard_index}/${package_shard_count}; skipping"
+                printf '{"Time":"%s","Action":"skip","Package":"github.com/snissn/gomap/TreeDB"}\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > treedb-test.jsonl
+              fi
               ;;
             windows-caching-heavy)
-              heavy_file="$(mktemp)"
-              heavy_shard_file="$(mktemp)"
-              tr -d '\r' < ../.github/ci/treedb_windows_caching_heavy_tests.txt | grep -v '^#' | sed '/^$/d' > "$heavy_file"
+              heavy_file="$(make_tmp)"
+              heavy_pin_file="$(make_tmp)"
+              heavy_shard_file="$(make_tmp)"
+              ci_list ../.github/ci/treedb_windows_caching_heavy_tests.txt > "$heavy_file"
+              ci_list ../.github/ci/treedb_windows_caching_heavy_shard0_tests.txt > "$heavy_pin_file"
               heavy_shard_index="${{ matrix.heavy_shard_index }}"
               heavy_shard_count="${{ matrix.heavy_shard_count }}"
               if [ -z "$heavy_shard_index" ]; then
@@ -161,10 +187,10 @@ jobs:
               if [ "$heavy_shard_count" -eq 2 ]; then
                 case "$heavy_shard_index" in
                   0)
-                    grep -F -x 'TestCachedGenerationalMaintenance_LeafRefsRemainReopenable' "$heavy_file" > "$heavy_shard_file"
+                    grep -F -x -f "$heavy_pin_file" "$heavy_file" > "$heavy_shard_file"
                     ;;
                   1)
-                    grep -F -x -v 'TestCachedGenerationalMaintenance_LeafRefsRemainReopenable' "$heavy_file" > "$heavy_shard_file"
+                    grep -F -x -v -f "$heavy_pin_file" "$heavy_file" > "$heavy_shard_file"
                     ;;
                   *)
                     : > "$heavy_shard_file"
@@ -176,19 +202,17 @@ jobs:
               if ! [ -s "$heavy_shard_file" ]; then
                 echo "no heavy caching tests found for shard ${heavy_shard_index}/${heavy_shard_count}; skipping"
                 printf '{"Time":"%s","Action":"skip","Package":"github.com/snissn/gomap/TreeDB/caching"}\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > treedb-test.jsonl
-                rm -f "$heavy_file" "$heavy_shard_file"
                 exit 0
               fi
               regex="^($(paste -sd'|' "$heavy_shard_file"))$"
               echo "TreeDB/caching heavy shard=${heavy_shard_index}/${heavy_shard_count} regex=${regex}"
               go test -json -timeout 30m -p 1 ./caching -run "$regex" | tee treedb-test.jsonl
-              rm -f "$heavy_file" "$heavy_shard_file"
               ;;
             windows-caching-rest)
-              heavy_file="$(mktemp)"
-              rest_file="$(mktemp)"
-              rest_shard_file="$(mktemp)"
-              tr -d '\r' < ../.github/ci/treedb_windows_caching_heavy_tests.txt | grep -v '^#' | sed '/^$/d' > "$heavy_file"
+              heavy_file="$(make_tmp)"
+              rest_file="$(make_tmp)"
+              rest_shard_file="$(make_tmp)"
+              ci_list ../.github/ci/treedb_windows_caching_heavy_tests.txt > "$heavy_file"
               go test ./caching -list 'Test.*' | tr -d '\r' | grep '^Test' | grep -F -x -v -f "$heavy_file" > "$rest_file"
               rest_shard_index="${{ matrix.rest_shard_index }}"
               rest_shard_count="${{ matrix.rest_shard_count }}"
@@ -203,12 +227,10 @@ jobs:
               if [ "$rest_regex" = '^()$' ]; then
                 echo "no non-heavy caching tests found for shard ${rest_shard_index}/${rest_shard_count}; skipping"
                 printf '{"Time":"%s","Action":"skip","Package":"github.com/snissn/gomap/TreeDB/caching"}\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > treedb-test.jsonl
-                rm -f "$heavy_file" "$rest_file" "$rest_shard_file"
                 exit 0
               fi
               echo "TreeDB/caching rest shard=${rest_shard_index}/${rest_shard_count} regex=${rest_regex}"
               go test -json -timeout 30m -p 1 ./caching -run "$rest_regex" | tee treedb-test.jsonl
-              rm -f "$heavy_file" "$rest_file" "$rest_shard_file"
               ;;
             *)
               echo "unknown shard kind: ${{ matrix.shard_kind }}" >&2
@@ -267,31 +289,48 @@ jobs:
         working-directory: TreeDB
         shell: bash
         run: |
-          set -e -o pipefail
+          set -euo pipefail
+          tmp_dir="$(mktemp -d)"
+          cleanup() {
+            rm -rf "$tmp_dir"
+          }
+          make_tmp() {
+            mktemp "$tmp_dir/tmp.XXXXXX"
+          }
+          ci_list() {
+            sed -e 's/\r$//' -e '/^#/d' -e '/^$/d' "$1"
+          }
+          trap cleanup EXIT
           shard_index="${{ matrix.shard_index }}"
           shard_count="${{ matrix.shard_count }}"
-          package_file="$(mktemp)"
-          root_all_file="$(mktemp)"
-          root_test_file="$(mktemp)"
-          caching_all_file="$(mktemp)"
-          caching_test_file="$(mktemp)"
-          db_all_file="$(mktemp)"
-          db_test_file="$(mktemp)"
+          package_file="$(make_tmp)"
+          root_all_file="$(make_tmp)"
+          root_test_file="$(make_tmp)"
+          root_pin_file="$(make_tmp)"
+          caching_all_file="$(make_tmp)"
+          caching_test_file="$(make_tmp)"
+          caching_pin_file="$(make_tmp)"
+          db_all_file="$(make_tmp)"
+          db_test_file="$(make_tmp)"
+          db_pin_file="$(make_tmp)"
           go list ./... | grep -v '^github.com/snissn/gomap/TreeDB$' | grep -v '^github.com/snissn/gomap/TreeDB/caching$' | grep -v '^github.com/snissn/gomap/TreeDB/db$' | awk -v idx="$shard_index" -v n="$shard_count" 'BEGIN { c = 0 } { if ((c % n) == idx) print; c++ }' > "$package_file"
-          go test . -list 'Test.*' | grep '^Test' > "$root_all_file"
+          go test . -list '^(Test|Example).*' | grep -E '^(Test|Example)' > "$root_all_file"
           go test ./caching -list 'Test.*' | grep '^Test' > "$caching_all_file"
           go test ./db -list 'Test.*' | grep '^Test' > "$db_all_file"
+          ci_list ../.github/ci/treedb_root_weighted_shard0_tests.txt > "$root_pin_file"
+          ci_list ../.github/ci/treedb_caching_race_weighted_shard0_tests.txt > "$caching_pin_file"
+          ci_list ../.github/ci/treedb_db_weighted_shard0_tests.txt > "$db_pin_file"
           if [ "$shard_count" -eq 2 ]; then
             case "$shard_index" in
               0)
-                grep -F -x 'TestProfileFast_BulkRestoreMaintainsKeyValueParity' "$root_all_file" > "$root_test_file" || true
-                grep -F -x 'TestCheckpoint_KickSkipsWhenMaintenancePhaseNonSteady' "$caching_all_file" > "$caching_test_file" || true
-                grep -F -x 'TestValidateFragmentationReport_EndToEnd' "$db_all_file" > "$db_test_file" || true
+                grep -F -x -f "$root_pin_file" "$root_all_file" > "$root_test_file" || true
+                grep -F -x -f "$caching_pin_file" "$caching_all_file" > "$caching_test_file" || true
+                grep -F -x -f "$db_pin_file" "$db_all_file" > "$db_test_file" || true
                 ;;
               1)
-                grep -F -x -v 'TestProfileFast_BulkRestoreMaintainsKeyValueParity' "$root_all_file" > "$root_test_file"
-                grep -F -x -v 'TestCheckpoint_KickSkipsWhenMaintenancePhaseNonSteady' "$caching_all_file" > "$caching_test_file"
-                grep -F -x -v 'TestValidateFragmentationReport_EndToEnd' "$db_all_file" > "$db_test_file"
+                grep -F -x -v -f "$root_pin_file" "$root_all_file" > "$root_test_file"
+                grep -F -x -v -f "$caching_pin_file" "$caching_all_file" > "$caching_test_file"
+                grep -F -x -v -f "$db_pin_file" "$db_all_file" > "$db_test_file"
                 ;;
               *)
                 : > "$root_test_file"
@@ -304,31 +343,35 @@ jobs:
             awk -v idx="$shard_index" -v n="$shard_count" 'BEGIN { c = 0 } { if ((c % n) == idx) print; c++ }' "$caching_all_file" > "$caching_test_file"
             awk -v idx="$shard_index" -v n="$shard_count" 'BEGIN { c = 0 } { if ((c % n) == idx) print; c++ }' "$db_all_file" > "$db_test_file"
           fi
-          if ! [ -s "$package_file" ]; then
-            echo "no packages found for race shard ${shard_index}/${shard_count}; skipping"
-            printf '{"Time":"%s","Action":"skip","Package":"github.com/snissn/gomap/TreeDB"}\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > treedb-race.jsonl
-            rm -f "$package_file" "$root_all_file" "$root_test_file" "$caching_all_file" "$caching_test_file" "$db_all_file" "$db_test_file"
-            exit 0
-          fi
           echo "TreeDB race package shard=${shard_index}/${shard_count}"
-          cat "$package_file"
-          GOMEMLIMIT=4GiB GOMAXPROCS=2 xargs go test -json -race -p 1 < "$package_file" | tee treedb-race.jsonl
+          ran_tests=false
+          if [ -s "$package_file" ]; then
+            cat "$package_file"
+            GOMEMLIMIT=4GiB GOMAXPROCS=2 xargs go test -json -race -p 1 < "$package_file" | tee treedb-race.jsonl
+            ran_tests=true
+          fi
           if [ -s "$root_test_file" ]; then
             root_regex="^($(paste -sd'|' "$root_test_file"))$"
             echo "TreeDB root race test shard=${shard_index}/${shard_count} regex=${root_regex}"
             GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -json -race -p 1 . -run "$root_regex" | tee -a treedb-race.jsonl
+            ran_tests=true
           fi
           if [ -s "$caching_test_file" ]; then
             caching_regex="^($(paste -sd'|' "$caching_test_file"))$"
             echo "TreeDB/caching race test shard=${shard_index}/${shard_count} regex=${caching_regex}"
             GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -json -race -p 1 ./caching -run "$caching_regex" | tee -a treedb-race.jsonl
+            ran_tests=true
           fi
           if [ -s "$db_test_file" ]; then
             db_regex="^($(paste -sd'|' "$db_test_file"))$"
             echo "TreeDB/db race test shard=${shard_index}/${shard_count} regex=${db_regex}"
             GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -json -race -p 1 ./db -run "$db_regex" | tee -a treedb-race.jsonl
+            ran_tests=true
           fi
-          rm -f "$package_file" "$root_all_file" "$root_test_file" "$caching_all_file" "$caching_test_file" "$db_all_file" "$db_test_file"
+          if [ "$ran_tests" = false ]; then
+            echo "no TreeDB race tests found for shard ${shard_index}/${shard_count}; skipping"
+            printf '{"Time":"%s","Action":"skip","Package":"github.com/snissn/gomap/TreeDB"}\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > treedb-race.jsonl
+          fi
 
       - name: Summarize race timing
         if: always()
