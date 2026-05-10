@@ -80,8 +80,9 @@ Options:
                         MongoDB Go driver minPoolSize. Default: 0, use driver default.
   --mongo-max-connecting N
                         MongoDB Go driver maxConnecting. Default: 0, use driver default.
-  --mongo-compact       Compact the MongoDB collection before final stats collection.
+ --mongo-compact       Compact the MongoDB collection before final stats collection.
                         Set to true/false, default: true.
+                        Provide as -mongo-compact=<true|false>.
   --prebuild-documents  Prebuild documents before timed load phases.
   --range-index         Create age_1 for the range-read phase.
   --profile-treedb      Capture per-phase TreeDB pprof artifacts in profiles/.
@@ -1030,8 +1031,8 @@ for docs in $DOCS_LIST; do
     run_target mongo "$docs" "$indexes" "$mongo_raw" "$database" "$reads" "$range_reads" "$updates" "$DELETES" \
         "$CONCURRENT_READERS" "$concurrent_reads" "$CONCURRENT_RANGE_READERS" "$concurrent_range_reads" "$CONCURRENT_WRITERS" "$concurrent_writes" \
         -mongo-uri "$mongo_uri" \
-        -mongo-compact "$MONGO_COMPACT" \
-        -client-mode "$mongo_client_mode"
+    -mongo-compact="$MONGO_COMPACT" \
+      -client-mode "$mongo_client_mode"
       if [[ "$MONGO_MODE" == "docker" ]]; then
         stop_mongo_container "$mongo_container"
         mongo_physical=$(docker_du_bytes "$mongo_cell_data")

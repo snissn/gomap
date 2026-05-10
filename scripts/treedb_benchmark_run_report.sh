@@ -436,7 +436,7 @@ run_mongo_full_sweep() {
       --concurrent-writes "$MONGO_CONCURRENT_WRITES" \
       --mongo-mode "$MONGO_MODE" \
       --mongo-image "$MONGO_IMAGE" \
-      --mongo-compact "$MONGO_COMPACT" \
+      --mongo-compact="$MONGO_COMPACT" \
       --mongo-uri "$MONGO_URI" \
       --timeout "$TIMEOUT" \
       --title "Mongo API Full Sweep"
@@ -476,7 +476,7 @@ run_mongo_load_modes() {
       --indexes "$INDEXES_LIST" \
       --mongo-mode "$MONGO_MODE" \
       --mongo-image "$MONGO_IMAGE" \
-      --mongo-compact "$MONGO_COMPACT" \
+      --mongo-compact="$MONGO_COMPACT" \
       --mongo-uri "$MONGO_URI" \
       --timeout "$TIMEOUT" \
       --title "Mongo API Client-Mode Load Matrix"
@@ -504,7 +504,7 @@ run_mongo_scaling() {
       --include-mongo \
       --mongo-mode "$MONGO_MODE" \
       --mongo-image "$MONGO_IMAGE" \
-      --mongo-compact "$MONGO_COMPACT" \
+      --mongo-compact="$MONGO_COMPACT" \
       --mongo-uri "$MONGO_URI" \
       --timeout "$TIMEOUT" \
       --title "Mongo API Reader/Writer Scaling, ${indexes} indexes"

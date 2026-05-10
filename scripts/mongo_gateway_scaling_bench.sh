@@ -67,6 +67,7 @@ Options:
   --mongo-image IMAGE    Docker image for --mongo-mode docker. Default: mongo.
   --mongo-compact       Compact the MongoDB collection before final stats collection.
                         Set to true/false, default: true.
+                        Provide as --mongo-compact=<true|false>.
   --database-prefix NAME MongoDB database prefix. Default: mongo_gateway_scaling_<run_id>.
   --treedb-format NAME   TreeDB document format. Default: bson.
   --client-mode NAME     TreeDB client mode. Default: driver-command-raw.
@@ -618,7 +619,7 @@ run_cell() {
     echo "==> MongoDB $scenario readers=$readers writers=$writers"
     run_bench mongo "$mongo_raw" "$database" "$readers" "$reads" "$writers" "$writes" \
       -mongo-uri "$mongo_uri" \
-      -mongo-compact "$MONGO_COMPACT_TEXT"
+      -mongo-compact="$MONGO_COMPACT_TEXT"
     if [[ "$MONGO_MODE" == "docker" ]]; then
       stop_mongo_container "$mongo_container"
       mongo_physical=$(docker_du_bytes "$mongo_data")
