@@ -4260,7 +4260,23 @@ func (db *DB) ValueLogRetainedPaths() []string {
 // PruneRetainedValueLogsForMaintenance runs a synchronous retained value-log
 // prune before full backend maintenance computes reclaim candidates.
 func (db *DB) PruneRetainedValueLogsForMaintenance() {
-	db.runRetainedValueLogPruneInline(true, nil)
+	if db == nil || !db.valueLogEnabled() {
+		return
+	}
+	for {
+		db.waitForRetainedValueLogPrune()
+		if _, ran := db.runRetainedValueLogPruneInline(true, nil); ran {
+			return
+		}
+		db.retainedPruneMu.Lock()
+		done := db.retainedPruneDone
+		closing := db.closing.Load()
+		db.retainedPruneMu.Unlock()
+		if closing || done == nil {
+			return
+		}
+		<-done
+	}
 }
 
 func mergeUniqueNonEmptyStrings(pathSets ...[]string) []string {

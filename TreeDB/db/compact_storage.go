@@ -65,11 +65,12 @@ type CompactStorageOptions struct {
 	// foreground writers.
 	ReserveRIDs func(count int) (start uint64, err error)
 
-	// ValueLogReclaimFencedUnreferenced permits CompactStorage to reclaim
+	// UnsafeValueLogReclaimFencedUnreferenced permits CompactStorage to reclaim
 	// unreferenced value-log segments that cached retained/current-writer
-	// protection would otherwise hide. Cached-mode callers set this only after
-	// checkpointing and fencing writers; backend-only callers leave it disabled.
-	ValueLogReclaimFencedUnreferenced bool
+	// protection would otherwise hide. Callers must first checkpoint, fence
+	// writers, rotate away from any candidate writer segment, and refresh the
+	// value-log set. Backend-only callers should leave it disabled.
+	UnsafeValueLogReclaimFencedUnreferenced bool
 
 	// DisableZeroByteValueLogCleanup leaves zero-byte value_vlog segment files in
 	// place. This is intended for specialty diagnostics that need to inspect
@@ -187,7 +188,7 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (C
 	}
 	stats.Before = before
 
-	initialDebt, err := db.populateCompactStorageAudit(ctx, opts, &stats, !maintenanceLocked)
+	initialDebt, err := db.populateCompactStorageAudit(ctx, opts, &stats, !maintenanceLocked, nil)
 	if err != nil {
 		return stats, err
 	}
@@ -345,7 +346,7 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (C
 	stats.After = after
 
 	var finalAudit CompactStorageStats
-	finalDebt, err := db.populateCompactStorageAudit(ctx, opts, &finalAudit, !maintenanceLocked)
+	finalDebt, err := db.populateCompactStorageAudit(ctx, opts, &finalAudit, !maintenanceLocked, nil)
 	if err != nil {
 		return stats, err
 	}
@@ -360,11 +361,8 @@ func (db *DB) settleCompactStorageGC(ctx context.Context, opts CompactStorageOpt
 	const maxSettlePasses = 4
 	for pass := 0; pass < maxSettlePasses; pass++ {
 		var audit CompactStorageStats
-		debt, err := db.populateCompactStorageAudit(ctx, opts, &audit, lockMaintenance)
-		if err != nil {
-			return err
-		}
-		fencedIDs, _, err := db.compactStorageFencedUnreferencedValueLogIDs(ctx, opts)
+		var fencedIDs []uint32
+		debt, err := db.populateCompactStorageAudit(ctx, opts, &audit, lockMaintenance, &fencedIDs)
 		if err != nil {
 			return err
 		}
@@ -495,7 +493,7 @@ func compactStorageRewritePlanOptions(protectedPaths []string) ValueLogRewriteOn
 	}
 }
 
-func (db *DB) populateCompactStorageAudit(ctx context.Context, opts CompactStorageOptions, stats *CompactStorageStats, lockMaintenance bool) (CompactStorageDebt, error) {
+func (db *DB) populateCompactStorageAudit(ctx context.Context, opts CompactStorageOptions, stats *CompactStorageStats, lockMaintenance bool, fencedIDsOut *[]uint32) (CompactStorageDebt, error) {
 	var debt CompactStorageDebt
 	protectedPaths := compactStorageFencedValueLogProtectedPaths(opts)
 	rewritePlan, err := db.ValueLogRewritePlan(ctx, compactStorageRewritePlanOptions(protectedPaths))
@@ -519,6 +517,9 @@ func (db *DB) populateCompactStorageAudit(ctx context.Context, opts CompactStora
 	fencedValueLogIDs, fencedValueLogBytes, err := db.compactStorageFencedUnreferencedValueLogIDs(ctx, opts)
 	if err != nil {
 		return debt, err
+	}
+	if fencedIDsOut != nil {
+		*fencedIDsOut = append((*fencedIDsOut)[:0], fencedValueLogIDs...)
 	}
 	debt.ValueLogGCSegments += len(fencedValueLogIDs)
 	debt.ValueLogGCBytes += fencedValueLogBytes
@@ -560,7 +561,7 @@ func (db *DB) populateCompactStorageAudit(ctx context.Context, opts CompactStora
 }
 
 func (db *DB) compactStorageFencedUnreferencedValueLogIDs(ctx context.Context, opts CompactStorageOptions) ([]uint32, int64, error) {
-	if db == nil || !opts.ValueLogReclaimFencedUnreferenced || db.valueLogManager == nil {
+	if db == nil || !opts.UnsafeValueLogReclaimFencedUnreferenced || db.valueLogManager == nil {
 		return nil, 0, nil
 	}
 	referenced, err := db.compactStorageScannedValueLogRefs(ctx)
@@ -780,7 +781,7 @@ func compactStorageFencedValueLogProtectedPaths(opts CompactStorageOptions) []st
 }
 
 func compactStorageCleanupValueLogProtectedPaths(opts CompactStorageOptions) []string {
-	if opts.ValueLogReclaimFencedUnreferenced {
+	if opts.UnsafeValueLogReclaimFencedUnreferenced {
 		return compactStorageFencedValueLogProtectedPaths(opts)
 	}
 	return compactStorageValueLogProtectedPaths(opts)

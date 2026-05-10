@@ -70,7 +70,7 @@ func (db *DB) CompactStorage(ctx context.Context, opts CompactStorageOptions) (C
 		return out, err
 	}
 	finishValueLogFence := func() {}
-	if db.cached != nil && opts.ValueLogReclaimFencedUnreferenced {
+	if db.cached != nil && opts.UnsafeValueLogReclaimFencedUnreferenced {
 		var err error
 		finishValueLogFence, err = db.cached.BeginValueLogMaintenanceFence(ctx)
 		if err != nil {
@@ -136,7 +136,7 @@ func (db *DB) applyCachedCompactStorageOptions(opts *CompactStorageOptions, chec
 		opts.ReserveRIDs = db.cached.ReserveValueLogRIDs
 	}
 	if checkpoint && len(explicitProtectedPaths) == 0 && userProtectedPathsFunc == nil {
-		opts.ValueLogReclaimFencedUnreferenced = true
+		opts.UnsafeValueLogReclaimFencedUnreferenced = true
 		if opts.ValueLogFencedProtectedPathsFunc == nil {
 			opts.ValueLogFencedProtectedPathsFunc = func() []string { return nil }
 		}
