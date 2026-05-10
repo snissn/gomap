@@ -10993,6 +10993,81 @@ func TestCollectionUpdateBSONSetNoIndexFlushesBeforePendingInsertTable(t *testin
 	}
 }
 
+func TestCollectionUpdateBSONSetNoIndexFlushesBeforeNormalInsertBatch(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatBSON,
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{mustBSONCollectionDocument(t, bson.D{
+			{Key: "_id", Value: "u1"},
+			{Key: "score", Value: int32(0)},
+		})},
+	); err != nil {
+		t.Fatalf("insert initial: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush initial insert: %v", err)
+	}
+
+	beforeUpdate := d.State()
+	matched, modified, err := col.UpdateBSONSet([]byte("u1"), []BSONSetField{{
+		Key:   "score",
+		Value: mustBSONRawValue(t, int32(13)),
+	}})
+	if err != nil {
+		t.Fatalf("UpdateBSONSet: %v", err)
+	}
+	if !matched || !modified {
+		t.Fatalf("matched=%v modified=%v want true/true", matched, modified)
+	}
+	if afterUpdate := d.State(); afterUpdate.CommitSeq != beforeUpdate.CommitSeq {
+		t.Fatalf("UpdateBSONSet advanced commit seq by %d before flush, want buffered", afterUpdate.CommitSeq-beforeUpdate.CommitSeq)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u2")},
+		[][]byte{mustBSONCollectionDocument(t, bson.D{
+			{Key: "_id", Value: "u2"},
+			{Key: "score", Value: int32(2)},
+		})},
+	); err != nil {
+		t.Fatalf("normal insert after buffered update: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush after normal insert: %v", err)
+	}
+	got, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get flushed update: %v", err)
+	}
+	if score := bson.Raw(got).Lookup("score").Int32(); score != 13 {
+		t.Fatalf("updated score=%d want 13", score)
+	}
+	got, err = col.Get([]byte("u2"))
+	if err != nil {
+		t.Fatalf("get normal insert: %v", err)
+	}
+	if score := bson.Raw(got).Lookup("score").Int32(); score != 2 {
+		t.Fatalf("inserted score=%d want 2", score)
+	}
+}
+
 func TestCollectionUpdateNoIndexBSONCallbackPublishesSynchronously(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

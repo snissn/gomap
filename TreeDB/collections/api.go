@@ -3488,14 +3488,18 @@ func (c *Collection) hasBufferedIndexedDeletesOnly() bool {
 	return domain.count > 0 && domain.indexedDeletesOnly
 }
 
-func (c *Collection) hasBufferedRootRuns() bool {
+func (c *Collection) hasBufferedNoIndexBSONRootRuns() bool {
 	if c == nil || c.writeDomain == nil {
 		return false
 	}
 	domain := c.writeDomain
 	domain.mu.RLock()
 	defer domain.mu.RUnlock()
-	return domain.count > 0 && hasBufferedIndexedRootRuns(domain)
+	if domain.count == 0 || !hasBufferedIndexedRootRuns(domain) || len(domain.meta.Indexes) != 0 {
+		return false
+	}
+	documentFormat, err := normalizeDocumentFormat(domain.meta.Options.DocumentFormat)
+	return err == nil && documentFormat == DocumentFormatBSON
 }
 
 func (c *Collection) shouldBufferIndexedInsertBatch(meta CollectionMeta, documentCount int) bool {
@@ -7228,7 +7232,7 @@ func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON b
 			skipInitialNoIndexFlush = true
 		}
 	}
-	if skipInitialNoIndexFlush && c.hasBufferedRootRuns() {
+	if c.hasBufferedNoIndexBSONRootRuns() {
 		if err := c.flushBufferedWrites(); err != nil {
 			return nil, err
 		}
