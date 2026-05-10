@@ -69,10 +69,31 @@ func (db *DB) CompactStorage(ctx context.Context, opts CompactStorageOptions) (C
 	if err := db.applyCachedCompactStorageOptions(&opts, true); err != nil {
 		return out, err
 	}
+	finishValueLogFence := func() {}
+	if db.cached != nil && opts.UnsafeValueLogReclaimFencedUnreferenced {
+		var err error
+		finishValueLogFence, err = db.cached.BeginValueLogMaintenanceFence(ctx)
+		if err != nil {
+			return out, err
+		}
+		db.cached.PruneRetainedValueLogsForMaintenance()
+		if err := db.backend.RefreshValueLogSet(); err != nil {
+			finishValueLogFence()
+			return out, err
+		}
+	}
+	fenceActive := true
+	defer func() {
+		if fenceActive {
+			finishValueLogFence()
+		}
+	}()
 	stats, err := db.backend.CompactStorage(ctx, treedbdb.CompactStorageOptions(opts))
 	if err = db.reconcileCachedBackendMaintenance(err); err != nil {
 		return out, err
 	}
+	finishValueLogFence()
+	fenceActive = false
 	if db.cached != nil && len(stats.ValueLogRewrite.SourceFileIDsUnreferenced) > 0 {
 		if err := db.cached.ReclaimObservedValueLogSources(ctx, stats.ValueLogRewrite.SourceFileIDsUnreferenced); err != nil {
 			return out, err
@@ -110,6 +131,12 @@ func (db *DB) applyCachedCompactStorageOptions(opts *CompactStorageOptions, chec
 	opts.ValueLogProtectedPaths = explicitProtectedPaths
 	if opts.ReserveRIDs == nil {
 		opts.ReserveRIDs = db.cached.ReserveValueLogRIDs
+	}
+	if checkpoint && len(explicitProtectedPaths) == 0 && userProtectedPathsFunc == nil {
+		opts.UnsafeValueLogReclaimFencedUnreferenced = true
+		if opts.ValueLogFencedProtectedPathsFunc == nil {
+			opts.ValueLogFencedProtectedPathsFunc = db.cached.ValueLogInUsePaths
+		}
 	}
 	return nil
 }

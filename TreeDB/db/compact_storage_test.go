@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -448,6 +449,129 @@ func TestCompactStorageDefaultProtectedPathsActivatesActiveProtection(t *testing
 	paths := compactStorageValueLogProtectedPaths(CompactStorageOptions{})
 	if len(paths) != 1 || paths[0] != "" {
 		t.Fatalf("default protected paths=%q want sentinel", paths)
+	}
+}
+
+func TestCompactStorageFencedProtectedPathsIncludeExplicitPaths(t *testing.T) {
+	paths := compactStorageFencedValueLogProtectedPaths(CompactStorageOptions{
+		ValueLogProtectedPaths: []string{"explicit-a", "shared"},
+		ValueLogFencedProtectedPathsFunc: func() []string {
+			return []string{"dynamic-a", "shared"}
+		},
+	})
+	want := []string{"explicit-a", "shared", "dynamic-a"}
+	if !reflect.DeepEqual(paths, want) {
+		t.Fatalf("fenced protected paths=%q want %q", paths, want)
+	}
+}
+
+func TestCompactStorageFencedReclaimProtectsByFileID(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	valueLogDir := ValueLogDirPath(dir)
+	if err := os.MkdirAll(valueLogDir, 0755); err != nil {
+		t.Fatalf("mkdir value_vlog: %v", err)
+	}
+	path := filepath.Join(valueLogDir, "value-l0-000002.log")
+	if err := os.WriteFile(path, []byte("value-log-bytes"), 0644); err != nil {
+		t.Fatalf("write value log: %v", err)
+	}
+	fileID, err := valuelog.EncodeFileID(0, 2)
+	if err != nil {
+		t.Fatalf("encode file ID: %v", err)
+	}
+	if err := d.valueLogManager.RegisterSegment(path, fileID); err != nil {
+		t.Fatalf("register segment: %v", err)
+	}
+
+	ids, _, err := d.compactStorageFencedUnreferencedValueLogIDs(context.Background(), CompactStorageOptions{
+		UnsafeValueLogReclaimFencedUnreferenced: true,
+		ValueLogFencedProtectedPathsFunc: func() []string {
+			return []string{filepath.Join(t.TempDir(), "value-l0-000002.log")}
+		},
+	})
+	if err != nil {
+		t.Fatalf("compactStorageFencedUnreferencedValueLogIDs: %v", err)
+	}
+	if len(ids) != 0 {
+		t.Fatalf("fenced reclaim IDs=%v want none", ids)
+	}
+}
+
+func TestZeroByteValueLogCleanupProtectsByFileID(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "value-l0-000002.log")
+	if err := os.WriteFile(path, nil, 0644); err != nil {
+		t.Fatalf("write zero-byte value log: %v", err)
+	}
+	fileID, err := valuelog.EncodeFileID(0, 2)
+	if err != nil {
+		t.Fatalf("encode file ID: %v", err)
+	}
+	count, err := zeroByteValueLogSegmentFiles(dir, nil, []uint32{fileID})
+	if err != nil {
+		t.Fatalf("zero-byte scan with protected file ID: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("protected zero-byte count=%d want 0", count)
+	}
+	count, err = zeroByteValueLogSegmentFiles(dir, nil, nil)
+	if err != nil {
+		t.Fatalf("zero-byte scan without protection: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("unprotected zero-byte count=%d want 1", count)
+	}
+}
+
+func TestCompactStorageKeepsCurrentWritableZeroByteValueLogFiles(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	valueLogDir := ValueLogDirPath(dir)
+	if err := os.MkdirAll(valueLogDir, 0755); err != nil {
+		t.Fatalf("mkdir value_vlog: %v", err)
+	}
+	path := filepath.Join(valueLogDir, "value-l0-000002.log")
+	if err := os.WriteFile(path, nil, 0644); err != nil {
+		t.Fatalf("write zero-byte value log: %v", err)
+	}
+	fileID, err := valuelog.EncodeFileID(0, 2)
+	if err != nil {
+		t.Fatalf("encode file ID: %v", err)
+	}
+	if err := d.valueLogManager.RegisterSegment(path, fileID); err != nil {
+		t.Fatalf("register segment: %v", err)
+	}
+	if err := d.valueLogManager.PromoteCurrentWritable(fileID); err != nil {
+		t.Fatalf("promote current writable: %v", err)
+	}
+
+	plan, err := d.CompactStoragePlan(context.Background(), CompactStorageOptions{})
+	if err != nil {
+		t.Fatalf("CompactStoragePlan: %v", err)
+	}
+	if got := plan.RemainingDebt.ZeroByteValueLogFiles; got != 0 {
+		t.Fatalf("current writable zero-byte debt=%d want 0", got)
+	}
+	stats, err := d.CompactStorage(context.Background(), CompactStorageOptions{})
+	if err != nil {
+		t.Fatalf("CompactStorage: %v", err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("current writable zero-byte file was removed: %v", err)
+	}
+	if stats.ZeroByteValueLogFilesDeleted != 0 {
+		t.Fatalf("deleted current writable zero-byte files=%d want 0", stats.ZeroByteValueLogFilesDeleted)
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -44,6 +45,11 @@ type CompactStorageOptions struct {
 	// this so foreground writer rotations that happen during a multi-phase
 	// compaction cannot leave newly queued value-log segments unprotected.
 	ValueLogProtectedPathsFunc func() []string
+	// ValueLogFencedProtectedPathsFunc refreshes paths that remain unsafe for
+	// fenced observed-only reclaim after the caller has performed its write
+	// fence. Cached callers use this to protect in-use writer paths without
+	// preserving retained paths that are independently proven unreachable.
+	ValueLogFencedProtectedPathsFunc func() []string
 
 	// Leaf-generation pack knobs. Defaults are intentionally bounded to keep a
 	// single compaction request finite while still draining ordinary debt.
@@ -58,6 +64,13 @@ type CompactStorageOptions struct {
 	// ReserveRIDs lets cached-mode callers share the live RID allocator with
 	// foreground writers.
 	ReserveRIDs func(count int) (start uint64, err error)
+
+	// UnsafeValueLogReclaimFencedUnreferenced permits CompactStorage to reclaim
+	// unreferenced value-log segments that cached retained/current-writer
+	// protection would otherwise hide. Callers must first checkpoint, fence
+	// writers, rotate away from any candidate writer segment, and refresh the
+	// value-log set. Backend-only callers should leave it disabled.
+	UnsafeValueLogReclaimFencedUnreferenced bool
 
 	// DisableZeroByteValueLogCleanup leaves zero-byte value_vlog segment files in
 	// place. This is intended for specialty diagnostics that need to inspect
@@ -175,7 +188,7 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (C
 	}
 	stats.Before = before
 
-	initialDebt, err := db.populateCompactStorageAudit(ctx, opts, &stats, !maintenanceLocked)
+	initialDebt, err := db.populateCompactStorageAudit(ctx, opts, &stats, !maintenanceLocked, nil)
 	if err != nil {
 		return stats, err
 	}
@@ -318,7 +331,7 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (C
 		})
 	} else {
 		if err := db.runCompactStoragePhase(&stats, "prune-empty-value-log-files", func() error {
-			deleted, err := db.pruneZeroByteValueLogFiles(compactStorageValueLogProtectedPaths(opts))
+			deleted, err := db.pruneZeroByteValueLogFiles(compactStorageCleanupValueLogProtectedPaths(opts))
 			stats.ZeroByteValueLogFilesDeleted = deleted
 			return err
 		}); err != nil {
@@ -333,7 +346,7 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (C
 	stats.After = after
 
 	var finalAudit CompactStorageStats
-	finalDebt, err := db.populateCompactStorageAudit(ctx, opts, &finalAudit, !maintenanceLocked)
+	finalDebt, err := db.populateCompactStorageAudit(ctx, opts, &finalAudit, !maintenanceLocked, nil)
 	if err != nil {
 		return stats, err
 	}
@@ -348,17 +361,43 @@ func (db *DB) settleCompactStorageGC(ctx context.Context, opts CompactStorageOpt
 	const maxSettlePasses = 4
 	for pass := 0; pass < maxSettlePasses; pass++ {
 		var audit CompactStorageStats
-		debt, err := db.populateCompactStorageAudit(ctx, opts, &audit, lockMaintenance)
+		var fencedIDs []uint32
+		debt, err := db.populateCompactStorageAudit(ctx, opts, &audit, lockMaintenance, &fencedIDs)
 		if err != nil {
 			return err
 		}
-		if debt.ValueLogGCSegments == 0 && debt.LeafGCGenerations == 0 {
+		if debt.ValueLogGCSegments == 0 && debt.LeafGCGenerations == 0 && len(fencedIDs) == 0 {
 			return nil
 		}
 		if debt.ValueLogGCSegments > 0 {
 			phaseName := fmt.Sprintf("settle-value-log-gc-%d", pass+1)
 			if err := db.runCompactStoragePhase(stats, phaseName, func() error {
 				gc, err := db.valueLogGC(ctx, ValueLogGCOptions{ProtectedPaths: compactStorageValueLogProtectedPaths(opts)}, lockMaintenance)
+				stats.ValueLogGC = gc
+				return err
+			}); err != nil {
+				return err
+			}
+			if err := db.runCompactStoragePhase(stats, fmt.Sprintf("checkpoint-after-%s", phaseName), func() error {
+				return db.Checkpoint()
+			}); err != nil {
+				return err
+			}
+		}
+		if len(fencedIDs) > 0 {
+			phaseName := fmt.Sprintf("settle-fenced-value-log-gc-%d", pass+1)
+			if err := db.runCompactStoragePhase(stats, phaseName, func() error {
+				// Fenced IDs are independently proven unreachable by a fresh
+				// root scan below. Cached callers rotate and block writers
+				// before enabling this path, so ReclaimActive can collect the
+				// formerly-active files that would otherwise reappear as debt
+				// after close/reopen.
+				gc, err := db.valueLogGC(ctx, ValueLogGCOptions{
+					ObservedSourceFileIDs:            fencedIDs,
+					ObservedSourceAssumeUnreferenced: true,
+					ObservedSourceReclaimActive:      true,
+					ProtectedPaths:                   compactStorageFencedValueLogProtectedPaths(opts),
+				}, lockMaintenance)
 				stats.ValueLogGC = gc
 				return err
 			}); err != nil {
@@ -454,9 +493,9 @@ func compactStorageRewritePlanOptions(protectedPaths []string) ValueLogRewriteOn
 	}
 }
 
-func (db *DB) populateCompactStorageAudit(ctx context.Context, opts CompactStorageOptions, stats *CompactStorageStats, lockMaintenance bool) (CompactStorageDebt, error) {
+func (db *DB) populateCompactStorageAudit(ctx context.Context, opts CompactStorageOptions, stats *CompactStorageStats, lockMaintenance bool, fencedIDsOut *[]uint32) (CompactStorageDebt, error) {
 	var debt CompactStorageDebt
-	protectedPaths := compactStorageValueLogProtectedPaths(opts)
+	protectedPaths := compactStorageFencedValueLogProtectedPaths(opts)
 	rewritePlan, err := db.ValueLogRewritePlan(ctx, compactStorageRewritePlanOptions(protectedPaths))
 	if err != nil {
 		return debt, err
@@ -475,6 +514,15 @@ func (db *DB) populateCompactStorageAudit(ctx context.Context, opts CompactStora
 	stats.ValueLogGC = valueGC
 	debt.ValueLogGCSegments = valueGC.SegmentsEligible
 	debt.ValueLogGCBytes = valueGC.BytesEligible
+	fencedValueLogIDs, fencedValueLogBytes, err := db.compactStorageFencedUnreferencedValueLogIDs(ctx, opts)
+	if err != nil {
+		return debt, err
+	}
+	if fencedIDsOut != nil {
+		*fencedIDsOut = append((*fencedIDsOut)[:0], fencedValueLogIDs...)
+	}
+	debt.ValueLogGCSegments += len(fencedValueLogIDs)
+	debt.ValueLogGCBytes += fencedValueLogBytes
 
 	leafPlan, err := db.LeafGenerationPlan(ctx, LeafGenerationPlanOptions{
 		MinExpectedReclaimBytes:    opts.LeafPackMinExpectedReclaimBytes,
@@ -503,13 +551,94 @@ func (db *DB) populateCompactStorageAudit(ctx context.Context, opts CompactStora
 		return debt, err
 	}
 	if !opts.DisableZeroByteValueLogCleanup {
-		zeroBytes, err := zeroByteValueLogFilesFromUsage(usage, protectedPaths)
+		currentPaths, currentIDs := db.currentValueLogProtectedRefs()
+		allProtectedPaths := mergeUniqueNonEmptyPaths(protectedPaths, currentPaths)
+		zeroBytes, err := zeroByteValueLogFilesFromUsage(usage, allProtectedPaths, currentIDs)
 		if err != nil {
 			return debt, err
 		}
 		debt.ZeroByteValueLogFiles = zeroBytes
 	}
 	return debt, nil
+}
+
+func (db *DB) compactStorageFencedUnreferencedValueLogIDs(ctx context.Context, opts CompactStorageOptions) ([]uint32, int64, error) {
+	if db == nil || !opts.UnsafeValueLogReclaimFencedUnreferenced || db.valueLogManager == nil {
+		return nil, 0, nil
+	}
+	referenced, err := db.compactStorageScannedValueLogRefs(ctx)
+	if err != nil {
+		return nil, 0, err
+	}
+	set := db.valueLogManager.CurrentSetNoRefresh()
+	if set == nil || len(set.Files) == 0 {
+		if set != nil {
+			_ = db.valueLogManager.Release(set)
+		}
+		if err := db.valueLogManager.Refresh(); err != nil {
+			return nil, 0, err
+		}
+		set = db.valueLogManager.CurrentSetNoRefresh()
+	}
+	if set == nil || len(set.Files) == 0 {
+		if set != nil {
+			_ = db.valueLogManager.Release(set)
+		}
+		return nil, 0, nil
+	}
+	defer func() { _ = db.valueLogManager.Release(set) }()
+
+	files := db.valueOnlyValueLogFiles(set.Files)
+	protectedPaths := compactStorageFencedValueLogProtectedPaths(opts)
+	protected := compactStorageProtectedPathSet(protectedPaths)
+	protectedFileIDs := compactStorageProtectedFileIDSet(protectedPaths, nil)
+	ids := make([]uint32, 0, len(files))
+	var bytes int64
+	for id, f := range files {
+		if _, ok := referenced[id]; ok {
+			continue
+		}
+		if f == nil {
+			continue
+		}
+		if _, ok := protected[filepath.Clean(f.Path)]; ok {
+			continue
+		}
+		if _, ok := protectedFileIDs[id]; ok {
+			continue
+		}
+		size := fileSize(f)
+		if size <= 0 {
+			continue
+		}
+		ids = append(ids, id)
+		bytes += size
+	}
+	sort.Slice(ids, func(i, j int) bool {
+		return ids[i] < ids[j]
+	})
+	return ids, bytes, nil
+}
+
+func (db *DB) compactStorageScannedValueLogRefs(ctx context.Context) (map[uint32]struct{}, error) {
+	counts, _, err := db.scanValueLogRefCounts(ctx)
+	if err != nil && errors.Is(err, valuelog.ErrFileNotFound) {
+		if refreshErr := db.RefreshValueLogSet(); refreshErr != nil {
+			return nil, refreshErr
+		}
+		counts, _, err = db.scanValueLogRefCounts(ctx)
+	}
+	if err != nil {
+		return nil, err
+	}
+	refs := make(map[uint32]struct{}, len(counts))
+	for fileID, n := range counts {
+		if n == 0 {
+			continue
+		}
+		refs[fileID] = struct{}{}
+	}
+	return refs, nil
 }
 
 func (db *DB) runCompactStoragePhase(stats *CompactStorageStats, name string, fn func() error) error {
@@ -595,10 +724,10 @@ func compactStoragePathUsage(name, path string) (CompactStorageUsage, error) {
 	return usage, err
 }
 
-func zeroByteValueLogFilesFromUsage(usage []CompactStorageUsage, protectedPaths []string) (int, error) {
+func zeroByteValueLogFilesFromUsage(usage []CompactStorageUsage, protectedPaths []string, protectedFileIDs []uint32) (int, error) {
 	for _, domain := range usage {
 		if domain.Name == "value_vlog" {
-			return zeroByteValueLogSegmentFiles(domain.Path, protectedPaths)
+			return zeroByteValueLogSegmentFiles(domain.Path, protectedPaths, protectedFileIDs)
 		}
 	}
 	return 0, nil
@@ -640,6 +769,50 @@ func compactStorageValueLogProtectedPaths(opts CompactStorageOptions) []string {
 	return out
 }
 
+func compactStorageFencedValueLogProtectedPaths(opts CompactStorageOptions) []string {
+	if opts.ValueLogFencedProtectedPathsFunc == nil {
+		return compactStorageValueLogProtectedPaths(opts)
+	}
+	dynamic := opts.ValueLogFencedProtectedPathsFunc()
+	if len(opts.ValueLogProtectedPaths) > 0 {
+		if len(dynamic) == 0 {
+			return opts.ValueLogProtectedPaths
+		}
+		return compactStorageMergeProtectedPaths(opts.ValueLogProtectedPaths, dynamic)
+	}
+	if len(dynamic) == 0 {
+		return []string{""}
+	}
+	return dynamic
+}
+
+func compactStorageMergeProtectedPaths(static, dynamic []string) []string {
+	seen := make(map[string]struct{}, len(static)+len(dynamic))
+	out := make([]string, 0, len(static)+len(dynamic))
+	for _, path := range static {
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		seen[path] = struct{}{}
+		out = append(out, path)
+	}
+	for _, path := range dynamic {
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		seen[path] = struct{}{}
+		out = append(out, path)
+	}
+	return out
+}
+
+func compactStorageCleanupValueLogProtectedPaths(opts CompactStorageOptions) []string {
+	if opts.UnsafeValueLogReclaimFencedUnreferenced {
+		return compactStorageFencedValueLogProtectedPaths(opts)
+	}
+	return compactStorageValueLogProtectedPaths(opts)
+}
+
 func (db *DB) pruneZeroByteValueLogFiles(protectedPaths []string) (int, error) {
 	layout := resolveStorageLayout(db.dir)
 	entries, err := os.ReadDir(layout.valueVLogDir)
@@ -649,7 +822,10 @@ func (db *DB) pruneZeroByteValueLogFiles(protectedPaths []string) (int, error) {
 		}
 		return 0, err
 	}
+	currentPaths, currentIDs := db.currentValueLogProtectedRefs()
+	protectedPaths = mergeUniqueNonEmptyPaths(protectedPaths, currentPaths)
 	protected := compactStorageProtectedPathSet(protectedPaths)
+	protectedFileIDs := compactStorageProtectedFileIDSet(protectedPaths, currentIDs)
 	deleted := 0
 	for _, entry := range entries {
 		if entry.IsDir() {
@@ -662,6 +838,11 @@ func (db *DB) pruneZeroByteValueLogFiles(protectedPaths []string) (int, error) {
 		path := filepath.Join(layout.valueVLogDir, name)
 		if _, ok := protected[filepath.Clean(path)]; ok {
 			continue
+		}
+		if fileID, ok := compactStorageValueLogFileID(name); ok {
+			if _, ok := protectedFileIDs[fileID]; ok {
+				continue
+			}
 		}
 		info, err := entry.Info()
 		if err != nil {
@@ -698,10 +879,13 @@ func (db *DB) pruneZeroByteValueLogFiles(protectedPaths []string) (int, error) {
 			}
 		}
 		if err := os.Remove(path); err != nil {
-			if !os.IsNotExist(err) {
-				return deleted, err
+			if os.IsNotExist(err) {
+				continue
 			}
-			continue
+			if compactStorageIsBusyRemoveError(err) {
+				continue
+			}
+			return deleted, err
 		}
 		deleted++
 	}
@@ -713,7 +897,30 @@ func (db *DB) pruneZeroByteValueLogFiles(protectedPaths []string) (int, error) {
 	return deleted, nil
 }
 
-func zeroByteValueLogSegmentFiles(dir string, protectedPaths []string) (int, error) {
+func (db *DB) currentValueLogProtectedRefs() ([]string, []uint32) {
+	if db == nil {
+		return nil, nil
+	}
+	var fileIDs []uint32
+	if db.valueLogManager != nil {
+		fileIDs = append(fileIDs, db.valueLogManager.CurrentWritableFileIDs()...)
+	}
+	appender := db.currentValueLogAppender()
+	if appender == nil {
+		return nil, fileIDs
+	}
+	path, fileID, ok := appender.CurrentValueLogSegment()
+	var paths []string
+	if ok && path != "" {
+		paths = []string{path}
+	}
+	if ok && fileID != 0 {
+		fileIDs = append(fileIDs, fileID)
+	}
+	return paths, fileIDs
+}
+
+func zeroByteValueLogSegmentFiles(dir string, protectedPaths []string, protectedFileIDs []uint32) (int, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -722,12 +929,19 @@ func zeroByteValueLogSegmentFiles(dir string, protectedPaths []string) (int, err
 		return 0, err
 	}
 	protected := compactStorageProtectedPathSet(protectedPaths)
+	protectedIDs := compactStorageProtectedFileIDSet(protectedPaths, protectedFileIDs)
 	count := 0
 	for _, entry := range entries {
-		if entry.IsDir() || !compactStorageIsValueLogSegmentName(entry.Name()) {
+		name := entry.Name()
+		if entry.IsDir() || !compactStorageIsValueLogSegmentName(name) {
 			continue
 		}
-		path := filepath.Join(dir, entry.Name())
+		if fileID, ok := compactStorageValueLogFileID(name); ok {
+			if _, ok := protectedIDs[fileID]; ok {
+				continue
+			}
+		}
+		path := filepath.Join(dir, name)
 		if _, ok := protected[filepath.Clean(path)]; ok {
 			continue
 		}
@@ -749,6 +963,25 @@ func compactStorageProtectedPathSet(paths []string) map[string]struct{} {
 			continue
 		}
 		protected[filepath.Clean(path)] = struct{}{}
+	}
+	return protected
+}
+
+func compactStorageProtectedFileIDSet(paths []string, fileIDs []uint32) map[uint32]struct{} {
+	protected := make(map[uint32]struct{}, len(paths)+len(fileIDs))
+	for _, fileID := range fileIDs {
+		if fileID == 0 {
+			continue
+		}
+		protected[fileID] = struct{}{}
+	}
+	for _, path := range paths {
+		if path == "" {
+			continue
+		}
+		if fileID, ok := compactStorageValueLogFileID(filepath.Base(path)); ok {
+			protected[fileID] = struct{}{}
+		}
 	}
 	return protected
 }

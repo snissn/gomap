@@ -4257,6 +4257,28 @@ func (db *DB) ValueLogRetainedPaths() []string {
 	return db.valueLogRetainedPaths()
 }
 
+// PruneRetainedValueLogsForMaintenance runs a synchronous retained value-log
+// prune before full backend maintenance computes reclaim candidates.
+func (db *DB) PruneRetainedValueLogsForMaintenance() {
+	if db == nil || !db.valueLogEnabled() {
+		return
+	}
+	for {
+		db.waitForRetainedValueLogPrune()
+		if _, ran := db.runRetainedValueLogPruneInline(true, nil); ran {
+			return
+		}
+		db.retainedPruneMu.Lock()
+		done := db.retainedPruneDone
+		closing := db.closing.Load()
+		db.retainedPruneMu.Unlock()
+		if closing || done == nil {
+			return
+		}
+		<-done
+	}
+}
+
 func mergeUniqueNonEmptyStrings(pathSets ...[]string) []string {
 	seen := make(map[string]struct{})
 	var out []string
@@ -4318,6 +4340,14 @@ func (db *DB) ValueLogProtectedPaths() []string {
 	return db.valueLogProtectedPaths()
 }
 
+// ValueLogInUsePaths returns value-log segment paths currently backing cached
+// mutable/queued writer state. It excludes retained lifecycle paths so callers
+// that already hold a writer fence can still reclaim independently proven
+// unreachable retained sources.
+func (db *DB) ValueLogInUsePaths() []string {
+	return db.valueOnlyLogPaths(db.valueLogInUsePaths())
+}
+
 // ReclaimObservedValueLogSources rotates cached writers past rewrite-selected
 // source segments and reclaims storage classes that backend rewrite already
 // proved obsolete.
@@ -4358,11 +4388,13 @@ func (db *DB) ReclaimObservedValueLogSources(ctx context.Context, ids []uint32) 
 	if err := db.rotateObservedValueLogSources(ctx, seen); err != nil {
 		return err
 	}
-	db.runRetainedValueLogPruneInline(false, seen)
+	db.runRetainedValueLogPruneInline(true, seen)
 
 	if hasValueLogGC {
 		opts := db.valueLogGCOptions(false)
 		opts.ObservedSourceFileIDs = observed
+		opts.ObservedSourceAssumeUnreferenced = true
+		opts.ObservedSourceReclaimActive = true
 		if _, err := gcer.ValueLogGC(ctx, opts); err != nil {
 			return err
 		}
@@ -4373,6 +4405,63 @@ func (db *DB) ReclaimObservedValueLogSources(ctx context.Context, ids []uint32) 
 		}
 	}
 	return nil
+}
+
+// BeginValueLogMaintenanceFence blocks cached writers and rotates current
+// value-log writers so backend maintenance can reclaim formerly active
+// unreachable segments without racing mutable cached state.
+func (db *DB) BeginValueLogMaintenanceFence(ctx context.Context) (func(), error) {
+	if db == nil {
+		return func() {}, nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	db.writeMu.Lock()
+	unlock := func() {
+		db.writeMu.Unlock()
+	}
+	if !db.splitValueLogEnabled() {
+		return unlock, nil
+	}
+	for i := range db.lanes {
+		if err := ctx.Err(); err != nil {
+			unlock()
+			return nil, err
+		}
+		l := &db.lanes[i]
+		l.vlogMu.Lock()
+		if l.vlogPath != "" {
+			db.markValueLogRetain(l.vlogPath)
+			err := db.rotateValueLogMuHeld(l)
+			l.vlogMu.Unlock()
+			if err != nil {
+				unlock()
+				return nil, err
+			}
+			continue
+		}
+		l.vlogMu.Unlock()
+	}
+	if db.indexOuterLeavesInValueLog {
+		l := &db.leafLog
+		l.vlogMu.Lock()
+		if l.vlogPath != "" {
+			db.markValueLogRetain(l.vlogPath)
+			err := db.rotateValueLogMuHeld(l)
+			l.vlogMu.Unlock()
+			if err != nil {
+				unlock()
+				return nil, err
+			}
+		} else {
+			l.vlogMu.Unlock()
+		}
+	}
+	return unlock, nil
 }
 
 func (db *DB) rotateObservedValueLogSources(ctx context.Context, ids map[uint32]struct{}) error {
