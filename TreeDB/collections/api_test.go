@@ -10965,8 +10965,9 @@ func TestCollectionUpdateBSONSetBatchBuffersNoIndexPrimaryOnly(t *testing.T) {
 	if !matched || !modified {
 		t.Fatalf("second update matched=%v modified=%v want true/true", matched, modified)
 	}
-	if afterCommit := d.State().CommitSeq; afterCommit != beforeCommit {
-		t.Fatalf("commit seq advanced after second update from %d to %d", beforeCommit, afterCommit)
+	afterSecondUpdateCommit := d.State().CommitSeq
+	if afterSecondUpdateCommit <= beforeCommit {
+		t.Fatalf("commit seq after second update=%d want > %d", afterSecondUpdateCommit, beforeCommit)
 	}
 	got, found, err := col.GetInto([]byte("u1"), nil)
 	if err != nil {
@@ -10982,8 +10983,8 @@ func TestCollectionUpdateBSONSetBatchBuffersNoIndexPrimaryOnly(t *testing.T) {
 	if err := col.Flush(); err != nil {
 		t.Fatalf("flush buffered BSON set updates: %v", err)
 	}
-	if afterFlush := d.State().CommitSeq; afterFlush <= beforeCommit {
-		t.Fatalf("commit seq after flush=%d want > %d", afterFlush, beforeCommit)
+	if afterFlush := d.State().CommitSeq; afterFlush < afterSecondUpdateCommit {
+		t.Fatalf("commit seq after flush=%d want >= %d", afterFlush, afterSecondUpdateCommit)
 	}
 	got, found, err = col.GetInto([]byte("u1"), nil)
 	if err != nil {

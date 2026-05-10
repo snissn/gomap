@@ -931,7 +931,7 @@ func TestRunMongoUpdateBatchResultsDeclineReturnsZeroResults(t *testing.T) {
 	}
 }
 
-func TestRunMongoUpdateBatchBuffersNoIndexBSONSet(t *testing.T) {
+func TestRunMongoUpdateBatchNoIndexBSONSetPublishesBeforeReturn(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
@@ -992,32 +992,25 @@ func TestRunMongoUpdateBatchBuffersNoIndexBSONSet(t *testing.T) {
 		t.Fatalf("matched=%d modified=%d batched=%v want 2,2,true", matched, modified, batched)
 	}
 	stats := col.LastUpdateStats()
-	if stats.Indexes != 0 || stats.BufferedBatches != 1 || stats.Publish != 0 {
-		t.Fatalf("stats indexes=%d buffered=%d publish=%s want 0/1/0", stats.Indexes, stats.BufferedBatches, stats.Publish)
+	if stats.Indexes != 0 || stats.BufferedBatches != 0 || stats.Publish == 0 {
+		t.Fatalf("stats indexes=%d buffered=%d publish=%s want 0/0/>0", stats.Indexes, stats.BufferedBatches, stats.Publish)
 	}
-	if got, want := stats.StructuredUpdateApplications, 2; got != want {
+	if got, want := stats.StructuredUpdateApplications, 0; got != want {
 		t.Fatalf("structured update applications=%d want %d", got, want)
 	}
-	if stats.Callback != 0 {
-		t.Fatalf("callback duration=%s want zero for BSON set gateway batch", stats.Callback)
+	if stats.Callback == 0 {
+		t.Fatalf("callback duration=%s want >0 for no-index published fallback batch", stats.Callback)
 	}
 	after := db.State()
-	if after.CommitSeq != before.CommitSeq {
-		t.Fatalf("buffered no-index batch advanced commit seq by %d, want 0", after.CommitSeq-before.CommitSeq)
+	if after.CommitSeq != before.CommitSeq+1 {
+		t.Fatalf("published no-index update batch advanced commit seq by %d, want 1", after.CommitSeq-before.CommitSeq)
 	}
 	got, found, err := col.GetInto(id1, nil)
 	if err != nil {
-		t.Fatalf("get buffered id1: %v", err)
+		t.Fatalf("get updated id1: %v", err)
 	}
 	if !found || bson.Raw(got).Lookup("city").StringValue() != "sea" {
-		t.Fatalf("buffered id1 found=%v doc=%v want city sea", found, got)
-	}
-	if err := col.Flush(); err != nil {
-		t.Fatalf("flush buffered no-index mongo update batch: %v", err)
-	}
-	flushed := db.State()
-	if flushed.CommitSeq <= before.CommitSeq {
-		t.Fatalf("flushed commit seq=%d want > %d", flushed.CommitSeq, before.CommitSeq)
+		t.Fatalf("updated id1 found=%v doc=%v want city sea", found, got)
 	}
 }
 

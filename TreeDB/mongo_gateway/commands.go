@@ -581,6 +581,29 @@ func runMongoUpdateBatchResults(col *collections.Collection, updates []mongoUpda
 		return make([]collections.UpdateBatchResult, len(updates)), false, nil
 	}
 	if mongoUpdateItemsCanUseBSONSet(col, updates) {
+		// Preserve Mongo update command durability behavior for no-index
+		// collections by using the generic batch callback path, which still
+		// publishes before returning success.
+		if len(col.Meta().Indexes) == 0 {
+			materializer, err := storedDocumentMaterializerForCollection(col)
+			if err != nil {
+				return nil, false, err
+			}
+			if materializer != nil {
+				defer func() { _ = materializer.Close() }()
+			}
+			items := make([]collections.UpdateBatchItem, len(updates))
+			for i, update := range updates {
+				update := update
+				items[i] = collections.UpdateBatchItem{
+					DocumentID: update.key,
+					Update: func(stored []byte) ([]byte, bool, error) {
+						return applyMongoUpdateToStoredDocument(col, materializer, update, stored)
+					},
+				}
+			}
+			return col.UpdateBatchIfNoSecondaryUniqueIndexChanges(items)
+		}
 		items := make([]collections.BSONSetUpdateBatchItem, len(updates))
 		for i, update := range updates {
 			items[i] = collections.BSONSetUpdateBatchItem{

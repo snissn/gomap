@@ -156,8 +156,9 @@ type UpdateBatchItem struct {
 
 type updateBatchItem struct {
 	UpdateBatchItem
-	bsonSet    bsonSetUpdate
-	hasBSONSet bool
+	bsonSet                   bsonSetUpdate
+	hasBSONSet                bool
+	allowNoIndexBSONSetBuffer bool
 }
 
 func newBSONSetUpdateBatchItem(documentID []byte, spec bsonSetUpdate) updateBatchItem {
@@ -168,6 +169,12 @@ func newBSONSetUpdateBatchItem(documentID []byte, spec bsonSetUpdate) updateBatc
 		bsonSet:    spec,
 		hasBSONSet: true,
 	}
+}
+
+func newBSONSetUpdateBatchItemAllowNoIndexBuffer(documentID []byte, spec bsonSetUpdate) updateBatchItem {
+	item := newBSONSetUpdateBatchItem(documentID, spec)
+	item.allowNoIndexBSONSetBuffer = true
+	return item
 }
 
 type updateBatchMode uint8
@@ -8626,7 +8633,7 @@ func updateBatchItemsAllBSONSet(items []updateBatchItem) bool {
 		return false
 	}
 	for _, item := range items {
-		if !item.hasBSONSet {
+		if !item.hasBSONSet || !item.allowNoIndexBSONSetBuffer {
 			return false
 		}
 	}

@@ -86,6 +86,11 @@ func (c *Collection) updateBSONSetDirect(documentID []byte, spec bsonSetUpdate) 
 	if err := c.validateBSONSetDocumentFormat(); err != nil {
 		return false, false, err
 	}
+	// Preserve single-update durability behavior for no-index BSON collections:
+	// acknowledge only after synchronous publish.
+	if len(c.meta.Indexes) == 0 {
+		return c.updateDirectBSONSet(documentID, spec)
+	}
 	items := []updateBatchItem{newBSONSetUpdateBatchItem(documentID, spec)}
 	results, batched, err := c.updateBatchOwnedItems(items, updateBatchModeNoSecondaryUniqueIndexChanges)
 	if !batched && err == nil {
@@ -162,7 +167,7 @@ func prepareBSONSetUpdateBatchItems(items []BSONSetUpdateBatchItem) ([]updateBat
 		if err != nil {
 			return nil, updateBatchItemError(i, err)
 		}
-		out[i] = newBSONSetUpdateBatchItem(item.DocumentID, spec)
+		out[i] = newBSONSetUpdateBatchItemAllowNoIndexBuffer(item.DocumentID, spec)
 	}
 	return out, nil
 }
