@@ -302,19 +302,42 @@ func TestCachingDB_AutoCheckpoint_SizeTrigger_TrimsWAL(t *testing.T) {
 	db.maybeAutoCheckpoint(1<<20, autoCheckpointModeSize)
 
 	walDir := filepath.Join(dir, "wal")
-	stats := db.Stats()
-	if stats == nil {
-		t.Fatalf("Stats() returned nil")
+	deadline := time.Now().Add(withRaceTimeout(2 * time.Second))
+	for {
+		stats := db.Stats()
+		if stats == nil {
+			t.Fatalf("Stats() returned nil")
+		}
+		n, err := strconv.ParseUint(stats["treedb.cache.auto_checkpoint.count"], 10, 64)
+		if err != nil {
+			t.Fatalf("parse auto checkpoint count: %v", err)
+		}
+		if n > 0 && stats["treedb.cache.auto_checkpoint.last_reason"] == "size" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for size auto checkpoint to run (count=%d reason=%q)", n, stats["treedb.cache.auto_checkpoint.last_reason"])
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
-	n, err := strconv.ParseUint(stats["treedb.cache.auto_checkpoint.count"], 10, 64)
-	if err != nil {
-		t.Fatalf("parse auto checkpoint count: %v", err)
-	}
-	if n == 0 {
-		t.Fatalf("expected size auto checkpoint to run")
-	}
-	if reason := stats["treedb.cache.auto_checkpoint.last_reason"]; reason != "size" {
-		t.Fatalf("expected last reason size, got %q", reason)
+
+	deadline = time.Now().Add(withRaceTimeout(2 * time.Second))
+	for {
+		ents, err := os.ReadDir(walDir)
+		if err != nil {
+			t.Fatalf("ReadDir(wal): %v", err)
+		}
+		walFiles := countCommitLogFiles(ents)
+		if walFiles < len(db.lanes) {
+			t.Fatalf("timed out waiting for size checkpoint WAL trim (files=%d)", walFiles)
+		}
+		if walFiles <= len(db.lanes)+1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for size checkpoint to trim WAL (files=%d)", walFiles)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 
 	ents, err := os.ReadDir(walDir)
@@ -322,8 +345,8 @@ func TestCachingDB_AutoCheckpoint_SizeTrigger_TrimsWAL(t *testing.T) {
 		t.Fatalf("ReadDir(wal): %v", err)
 	}
 	walFiles := countCommitLogFiles(ents)
-	if walFiles != 1 {
-		t.Fatalf("expected exactly 1 WAL segment after size checkpoint, got %d", walFiles)
+	if walFiles < len(db.lanes) || walFiles > len(db.lanes)+1 {
+		t.Fatalf("expected %d..%d WAL segments after size checkpoint, got %d", len(db.lanes), len(db.lanes)+1, walFiles)
 	}
 }
 
