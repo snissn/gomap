@@ -5,7 +5,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -1051,7 +1050,19 @@ func mongoUpdateCoalescerUsesSingleCollection(batch []mongoUpdateCoalescerReques
 		if col.SameCachedCatalog(req.col) {
 			continue
 		}
-		if !reflect.DeepEqual(baseMeta, req.col.Meta()) {
+		if !sameCollectionMetaForUpdateCoalescing(baseMeta, req.col.Meta()) {
+			return false
+		}
+	}
+	return true
+}
+
+func sameCollectionMetaForUpdateCoalescing(a, b collections.CollectionMeta) bool {
+	if a.Name != b.Name || a.Options != b.Options || len(a.Indexes) != len(b.Indexes) {
+		return false
+	}
+	for i := range a.Indexes {
+		if a.Indexes[i] != b.Indexes[i] {
 			return false
 		}
 	}
