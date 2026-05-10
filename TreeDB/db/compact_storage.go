@@ -551,7 +551,9 @@ func (db *DB) populateCompactStorageAudit(ctx context.Context, opts CompactStora
 		return debt, err
 	}
 	if !opts.DisableZeroByteValueLogCleanup {
-		zeroBytes, err := zeroByteValueLogFilesFromUsage(usage, mergeUniqueNonEmptyPaths(protectedPaths, db.currentValueLogProtectedPaths()))
+		currentPaths, currentIDs := db.currentValueLogProtectedRefs()
+		allProtectedPaths := mergeUniqueNonEmptyPaths(protectedPaths, currentPaths)
+		zeroBytes, err := zeroByteValueLogFilesFromUsage(usage, allProtectedPaths, currentIDs)
 		if err != nil {
 			return debt, err
 		}
@@ -724,10 +726,10 @@ func compactStoragePathUsage(name, path string) (CompactStorageUsage, error) {
 	return usage, err
 }
 
-func zeroByteValueLogFilesFromUsage(usage []CompactStorageUsage, protectedPaths []string) (int, error) {
+func zeroByteValueLogFilesFromUsage(usage []CompactStorageUsage, protectedPaths []string, protectedFileIDs []uint32) (int, error) {
 	for _, domain := range usage {
 		if domain.Name == "value_vlog" {
-			return zeroByteValueLogSegmentFiles(domain.Path, protectedPaths)
+			return zeroByteValueLogSegmentFiles(domain.Path, protectedPaths, protectedFileIDs)
 		}
 	}
 	return 0, nil
@@ -822,7 +824,10 @@ func (db *DB) pruneZeroByteValueLogFiles(protectedPaths []string) (int, error) {
 		}
 		return 0, err
 	}
-	protected := compactStorageProtectedPathSet(mergeUniqueNonEmptyPaths(protectedPaths, db.currentValueLogProtectedPaths()))
+	currentPaths, currentIDs := db.currentValueLogProtectedRefs()
+	protectedPaths = mergeUniqueNonEmptyPaths(protectedPaths, currentPaths)
+	protected := compactStorageProtectedPathSet(protectedPaths)
+	protectedFileIDs := compactStorageProtectedFileIDSet(protectedPaths, currentIDs)
 	deleted := 0
 	for _, entry := range entries {
 		if entry.IsDir() {
@@ -835,6 +840,11 @@ func (db *DB) pruneZeroByteValueLogFiles(protectedPaths []string) (int, error) {
 		path := filepath.Join(layout.valueVLogDir, name)
 		if _, ok := protected[filepath.Clean(path)]; ok {
 			continue
+		}
+		if fileID, ok := compactStorageValueLogFileID(name); ok {
+			if _, ok := protectedFileIDs[fileID]; ok {
+				continue
+			}
 		}
 		info, err := entry.Info()
 		if err != nil {
@@ -886,22 +896,27 @@ func (db *DB) pruneZeroByteValueLogFiles(protectedPaths []string) (int, error) {
 	return deleted, nil
 }
 
-func (db *DB) currentValueLogProtectedPaths() []string {
+func (db *DB) currentValueLogProtectedRefs() ([]string, []uint32) {
 	if db == nil {
-		return nil
+		return nil, nil
 	}
 	appender := db.currentValueLogAppender()
 	if appender == nil {
-		return nil
+		return nil, nil
 	}
-	path, _, ok := appender.CurrentValueLogSegment()
-	if !ok || path == "" {
-		return nil
+	path, fileID, ok := appender.CurrentValueLogSegment()
+	var paths []string
+	var fileIDs []uint32
+	if ok && path != "" {
+		paths = []string{path}
 	}
-	return []string{path}
+	if ok && fileID != 0 {
+		fileIDs = []uint32{fileID}
+	}
+	return paths, fileIDs
 }
 
-func zeroByteValueLogSegmentFiles(dir string, protectedPaths []string) (int, error) {
+func zeroByteValueLogSegmentFiles(dir string, protectedPaths []string, protectedFileIDs []uint32) (int, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -910,12 +925,19 @@ func zeroByteValueLogSegmentFiles(dir string, protectedPaths []string) (int, err
 		return 0, err
 	}
 	protected := compactStorageProtectedPathSet(protectedPaths)
+	protectedIDs := compactStorageProtectedFileIDSet(protectedPaths, protectedFileIDs)
 	count := 0
 	for _, entry := range entries {
-		if entry.IsDir() || !compactStorageIsValueLogSegmentName(entry.Name()) {
+		name := entry.Name()
+		if entry.IsDir() || !compactStorageIsValueLogSegmentName(name) {
 			continue
 		}
-		path := filepath.Join(dir, entry.Name())
+		if fileID, ok := compactStorageValueLogFileID(name); ok {
+			if _, ok := protectedIDs[fileID]; ok {
+				continue
+			}
+		}
+		path := filepath.Join(dir, name)
 		if _, ok := protected[filepath.Clean(path)]; ok {
 			continue
 		}
@@ -937,6 +959,25 @@ func compactStorageProtectedPathSet(paths []string) map[string]struct{} {
 			continue
 		}
 		protected[filepath.Clean(path)] = struct{}{}
+	}
+	return protected
+}
+
+func compactStorageProtectedFileIDSet(paths []string, fileIDs []uint32) map[uint32]struct{} {
+	protected := make(map[uint32]struct{}, len(paths)+len(fileIDs))
+	for _, fileID := range fileIDs {
+		if fileID == 0 {
+			continue
+		}
+		protected[fileID] = struct{}{}
+	}
+	for _, path := range paths {
+		if path == "" {
+			continue
+		}
+		if fileID, ok := compactStorageValueLogFileID(filepath.Base(path)); ok {
+			protected[fileID] = struct{}{}
+		}
 	}
 	return protected
 }

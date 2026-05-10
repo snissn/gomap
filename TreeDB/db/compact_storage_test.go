@@ -465,6 +465,32 @@ func TestCompactStorageFencedProtectedPathsIncludeExplicitPaths(t *testing.T) {
 	}
 }
 
+func TestZeroByteValueLogCleanupProtectsByFileID(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "value-l0-000002.log")
+	if err := os.WriteFile(path, nil, 0644); err != nil {
+		t.Fatalf("write zero-byte value log: %v", err)
+	}
+	fileID, err := valuelog.EncodeFileID(0, 2)
+	if err != nil {
+		t.Fatalf("encode file ID: %v", err)
+	}
+	count, err := zeroByteValueLogSegmentFiles(dir, nil, []uint32{fileID})
+	if err != nil {
+		t.Fatalf("zero-byte scan with protected file ID: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("protected zero-byte count=%d want 0", count)
+	}
+	count, err = zeroByteValueLogSegmentFiles(dir, nil, nil)
+	if err != nil {
+		t.Fatalf("zero-byte scan without protection: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("unprotected zero-byte count=%d want 1", count)
+	}
+}
+
 func TestCompactStoragePlanReadOnlyDoesNotDeleteZeroByteValueLogFiles(t *testing.T) {
 	dir := t.TempDir()
 	d, err := Open(Options{Dir: dir})
