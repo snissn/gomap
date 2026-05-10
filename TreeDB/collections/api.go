@@ -8626,25 +8626,25 @@ func validateUpdateBatchItem(item UpdateBatchItem, index int, seen map[string]st
 	return nil
 }
 
-func updateBatchBSONSetItemIndex(items []updateBatchItem) int {
+func scanUpdateBatchBSONSet(items []updateBatchItem) (firstBSONSetIndex int, allItemsEligibleForNoIndexBSONSetBuffer bool) {
+	firstBSONSetIndex = -1
+	if len(items) == 0 {
+		return firstBSONSetIndex, false
+	}
+	allItemsEligibleForNoIndexBSONSetBuffer = true
 	for i, item := range items {
 		if item.hasBSONSet {
-			return i
+			if firstBSONSetIndex < 0 {
+				firstBSONSetIndex = i
+			}
+		} else {
+			allItemsEligibleForNoIndexBSONSetBuffer = false
+		}
+		if !item.allowNoIndexBSONSetBuffer {
+			allItemsEligibleForNoIndexBSONSetBuffer = false
 		}
 	}
-	return -1
-}
-
-func updateBatchItemsEligibleForNoIndexBSONSetBuffer(items []updateBatchItem) bool {
-	if len(items) == 0 {
-		return false
-	}
-	for _, item := range items {
-		if !item.hasBSONSet || !item.allowNoIndexBSONSetBuffer {
-			return false
-		}
-	}
-	return true
+	return firstBSONSetIndex, allItemsEligibleForNoIndexBSONSetBuffer
 }
 
 func updateBatchItemError(index int, err error) error {
@@ -11069,8 +11069,8 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 		_ = snap.Close()
 		return nil, err
 	}
-	allItemsBSONSet := updateBatchItemsEligibleForNoIndexBSONSetBuffer(items)
-	if itemIndex := updateBatchBSONSetItemIndex(items); itemIndex >= 0 && normalizedDocumentFormat(plannerOptions.documentFormat) != DocumentFormatBSON {
+	itemIndex, allItemsBSONSet := scanUpdateBatchBSONSet(items)
+	if itemIndex >= 0 && normalizedDocumentFormat(plannerOptions.documentFormat) != DocumentFormatBSON {
 		_ = snap.Close()
 		return nil, updateBatchItemError(itemIndex, errBSONSetRequiresBSONFormat)
 	}
