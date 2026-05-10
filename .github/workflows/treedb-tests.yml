@@ -137,8 +137,8 @@ jobs:
                     grep -F -x -f "$db_pin_file" "$db_all_file" > "$db_test_file" || true
                     ;;
                   1)
-                    grep -F -x -v -f "$root_pin_file" "$root_all_file" > "$root_test_file"
-                    grep -F -x -v -f "$db_pin_file" "$db_all_file" > "$db_test_file"
+                    grep -F -x -v -f "$root_pin_file" "$root_all_file" > "$root_test_file" || true
+                    grep -F -x -v -f "$db_pin_file" "$db_all_file" > "$db_test_file" || true
                     ;;
                   *)
                     : > "$root_test_file"
@@ -192,7 +192,7 @@ jobs:
                     grep -F -x -f "$heavy_pin_file" "$heavy_file" > "$heavy_shard_file"
                     ;;
                   1)
-                    grep -F -x -v -f "$heavy_pin_file" "$heavy_file" > "$heavy_shard_file"
+                    grep -F -x -v -f "$heavy_pin_file" "$heavy_file" > "$heavy_shard_file" || true
                     ;;
                   *)
                     : > "$heavy_shard_file"
@@ -330,9 +330,9 @@ jobs:
                 grep -F -x -f "$db_pin_file" "$db_all_file" > "$db_test_file" || true
                 ;;
               1)
-                grep -F -x -v -f "$root_pin_file" "$root_all_file" > "$root_test_file"
-                grep -F -x -v -f "$caching_pin_file" "$caching_all_file" > "$caching_test_file"
-                grep -F -x -v -f "$db_pin_file" "$db_all_file" > "$db_test_file"
+                grep -F -x -v -f "$root_pin_file" "$root_all_file" > "$root_test_file" || true
+                grep -F -x -v -f "$caching_pin_file" "$caching_all_file" > "$caching_test_file" || true
+                grep -F -x -v -f "$db_pin_file" "$db_all_file" > "$db_test_file" || true
                 ;;
               *)
                 : > "$root_test_file"
