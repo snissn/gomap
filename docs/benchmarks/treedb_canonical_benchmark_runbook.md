@@ -5,6 +5,59 @@ TreeDB collections, and Mongo-compatible collection workloads. Use it when a PR
 or issue needs reproducible throughput, latency, profile, or disk-usage
 evidence.
 
+## One Command: Full Benchmark Run Report
+
+Use this entrypoint when you need the full `TreeDB Benchmark Run Report` with
+raw TreeDB engine profiles, TreeDB collections vs SQLite, Mongo API full sweep,
+Mongo client-mode load matrix, Mongo reader/writer scaling, and the final
+`deep_report.html`.
+
+The collections section runs a separate pprof capture pass for every
+TreeDB/SQLite timed-matrix cell by default. Those profiles are attribution
+artifacts; the canonical throughput rows still come from the unprofiled timed
+benchmark pass.
+
+```sh
+scripts/treedb_benchmark_run_report.sh \
+  --out /tmp/gomap_treedb_benchmark_run_$(date +%Y%m%d_%H%M%S) \
+  --tier pr \
+  --indexes "0 1 2" \
+  --mongo-mode external \
+  --mongo-uri mongodb://127.0.0.1:27017 \
+  --title "TreeDB Benchmark Run Report"
+```
+
+The script writes the exact artifact layout consumed by
+`cmd/benchmark_run_report`:
+
+```text
+$RUN_ROOT/
+  HEAD.txt
+  RUNBOOK.md
+  raw_engine_full_matrix/
+  collections_sqlite_canonical_1m/
+    indexes_*/timed_matrix/*/profiles/collection_profile_manifest.json
+    indexes_*/timed_matrix/*/profiles/{cpu.pprof,allocs.pprof,block.pprof,mutex.pprof,profile_go_test.txt}
+  mongo_gateway_full_sweep_1m_expanded/
+  mongo_client_mode_load_matrix_1m/
+  mongo_gateway_reader_writer_scaling_1m/
+  deep_report.html
+```
+
+Size presets:
+
+- `--tier smoke`: harness/report validation.
+- `--tier pr`: reviewable PR evidence.
+- `--tier large`: scale evidence, expected to take substantially longer.
+
+Use `--skip-raw`, `--skip-collections`, `--skip-mongo`, `--skip-load-modes`, or
+`--skip-scaling` only for resumable/debug runs. Published reports should state
+any skipped section explicitly.
+
+Use `--skip-collection-profiles` only when validating non-profile report logic;
+it removes the collection pprof manifests from the final Profiling Follow-Up
+section.
+
 ## Principles
 
 - Start every report with the git commit, branch, host, OS, Go version, command,
@@ -181,6 +234,12 @@ Collection report files to preserve:
 - `collections_maintenance_summary.tsv`
 - `<cell>/collections_report.md`
 - `<cell>/go_test.json`
+- `<cell>/profiles/collection_profile_manifest.json`
+- `<cell>/profiles/cpu.pprof`
+- `<cell>/profiles/allocs.pprof`
+- `<cell>/profiles/block.pprof`
+- `<cell>/profiles/mutex.pprof`
+- `<cell>/profiles/profile_go_test.txt`
 
 Use `CGO_ENABLED=1` when the SQLite cells or SQLite native-column baselines are
 part of the comparison.
@@ -225,9 +284,10 @@ scripts/mongo_gateway_compare.sh \
   --range-reads 5000 \
   --range-index \
   --updates 5000 \
+  --concurrent-read-kinds "id,email,range" \
   --concurrent-reader-sweep "1,2,4,8,16" \
   --concurrent-reads 50000 \
-  --concurrent-writers 8 \
+  --concurrent-writer-sweep "1,2,4,8,16" \
   --concurrent-writes 10000 \
   --insert-producers 8 \
   --mongo-max-pool-size 128 \

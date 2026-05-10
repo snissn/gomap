@@ -26,6 +26,7 @@ GOWORK=off go run ./cmd/mongo_gateway_bench \
   -reads 10000 \
   -range-reads 1000 \
   -updates 1000 \
+  -concurrent-read-kinds id,email,range \
   -concurrent-readers 8 \
   -concurrent-reads 10000 \
   -concurrent-writers 4 \
@@ -195,6 +196,7 @@ GOWORK=off go run ./cmd/mongo_gateway_bench \
   -reads 10000 \
   -range-reads 1000 \
   -updates 1000 \
+  -concurrent-read-kinds id,email,range \
   -concurrent-readers 8 \
   -concurrent-reads 10000 \
   -concurrent-writers 4 \
@@ -250,9 +252,10 @@ scripts/mongo_gateway_compare.sh \
   --out /tmp/gomap_mongo_gateway_compare \
   --docs "1000 10000" \
   --indexes "0 2" \
+  --concurrent-read-kinds "id,email,range" \
   --concurrent-readers 8 \
   --concurrent-reads 10000 \
-  --concurrent-writers 4 \
+  --concurrent-writer-sweep "1,4" \
   --concurrent-writes 1000 \
   --insert-producers 4 \
   --mongo-max-pool-size 32 \
@@ -308,8 +311,10 @@ Useful overrides:
   TreeDB cell and retain per-phase profiles under the bundle's `profiles/`
   directory.
 - `CONCURRENT_READERS=16`, `CONCURRENT_READS=50000`
-- `CONCURRENT_RANGE_READER_SWEEP="1,2,4,8,16"`,
-  `CONCURRENT_RANGE_READS=5000`
+- Use either `CONCURRENT_READ_KINDS="id,email,range"` with
+  `CONCURRENT_READER_SWEEP`, or `CONCURRENT_RANGE_READER_SWEEP` with
+  `CONCURRENT_RANGE_READS`; the two range-concurrency paths share phase names
+  and are intentionally not combined.
 - `CONCURRENT_WRITERS=8`, `CONCURRENT_WRITES=10000`
 - `BATCH_SIZE=1000`
 - `MONGO_IMAGE=mongo:8`
@@ -326,11 +331,10 @@ BATCH_SIZE=5000 scripts/mongo_gateway_compare.sh \
   --range-reads 5000 \
   --range-index \
   --updates 5000 \
+  --concurrent-read-kinds "id,email,range" \
   --concurrent-reader-sweep "1,2,4,8,16" \
   --concurrent-reads 50000 \
-  --concurrent-range-reader-sweep "1,2,4,8,16" \
-  --concurrent-range-reads 5000 \
-  --concurrent-writers 8 \
+  --concurrent-writer-sweep "1,2,4,8,16" \
   --concurrent-writes 10000 \
   --timeout 120m
 ```
@@ -350,9 +354,10 @@ for docs in 1000 10000 100000; do
       -reads "$docs" \
       -range-reads "$((docs / 10))" \
       -updates "$((docs / 10))" \
+      -concurrent-read-kinds id,email,range \
       -concurrent-readers 8 \
       -concurrent-reads "$((docs / 10))" \
-      -concurrent-writers 4 \
+      -concurrent-writer-sweep 1,4 \
       -concurrent-writes "$((docs / 20))" \
       -secondary-indexes "$indexes" \
       -format json > "treedb-${docs}-${indexes}.json"
@@ -363,9 +368,10 @@ for docs in 1000 10000 100000; do
       -reads "$docs" \
       -range-reads "$((docs / 10))" \
       -updates "$((docs / 10))" \
+      -concurrent-read-kinds id,email,range \
       -concurrent-readers 8 \
       -concurrent-reads "$((docs / 10))" \
-      -concurrent-writers 4 \
+      -concurrent-writer-sweep 1,4 \
       -concurrent-writes "$((docs / 20))" \
       -secondary-indexes "$indexes" \
       -format json > "mongo-${docs}-${indexes}.json"
@@ -399,16 +405,24 @@ The initial workload phases are:
   loaded database. The legacy `-concurrent-range-readers N` flag emits one
   fanout phase and cannot be combined with `-concurrent-range-reader-sweep`.
 - `id_update_set`: `$set` update by `_id`.
-- `concurrent_id_find_one_rN`: total `_id` point reads split across `N`
-  goroutines. Use `-concurrent-reader-sweep 1,2,4,8,16` with
-  `-concurrent-reads` to emit multiple `concurrent_id_find_one_rN` phases from
-  one loaded database. The comparison report groups these rows into a
-  "Concurrent Read Sweep" table so the reader-count scaling is visible as one
-  throughput sweep rather than unrelated phases. The legacy
-  `-concurrent-readers N` flag still emits one `concurrent_id_find_one_rN`
-  phase and cannot be combined with `-concurrent-reader-sweep`.
+- `concurrent_id_find_one_rN`, `concurrent_email_find_one_rN`,
+  `concurrent_age_range_scan_limit_10_rN`, and
+  `concurrent_age_range_indexed_limit_10_rN`: total read operations split across
+  `N` goroutines. Use `-concurrent-read-kinds id,email,range` or
+  `-concurrent-read-kinds all` to select the saturated read shapes. Use
+  `-concurrent-reader-sweep 1,2,4,8,16` with `-concurrent-reads` to emit
+  multiple reader-count phases from one loaded database. The comparison report
+  groups `_id`/email rows into the "Concurrent Read Sweep" table and renders
+  `concurrent_age_range_*_rN` rows in the dedicated range-read section. The
+  generic `range` read kind cannot be combined with
+  `-concurrent-range-readers` or `-concurrent-range-reader-sweep`, because those
+  options emit the same range phase names. The legacy `-concurrent-readers N`
+  flag still emits one reader-count phase per selected kind and cannot be
+  combined with `-concurrent-reader-sweep`.
 - `concurrent_id_update_set_wN`: total `$set` updates split across `N`
-  goroutines.
+  goroutines. Use `-concurrent-writer-sweep 1,2,4,8,16` with
+  `-concurrent-writes` to emit multiple writer-count phases from one loaded
+  database.
 - `id_delete_one`: optional deletes; disabled unless `-deletes` is non-zero.
 
 Update phases change only non-indexed fields by default.
@@ -502,7 +516,7 @@ when you specifically want post-GC heap snapshots.
 For insert-scaling investigations, run the same command repeatedly with
 `-insert-producers 1`, `2`, `4`, `8`, and `16` while keeping `-documents`,
 `-batch-size`, `-client-mode`, and document format constant. For write-contention
-investigations, keep the load shape fixed and vary `-concurrent-writers` /
+investigations, keep the load shape fixed and use `-concurrent-writer-sweep` /
 `-concurrent-writes`.
 
 ## Reader/Writer Scaling Wrapper

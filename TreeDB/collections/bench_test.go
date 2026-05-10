@@ -209,6 +209,9 @@ func benchmarkReportTreeDBDiskUsage(b *testing.B, backend *backenddb.DB, docs in
 	if docs <= 0 {
 		return
 	}
+	if !benchmarkBoolEnv(b, "TREEDB_COLLECTION_REPORT_DISK_USAGE", true) {
+		return
+	}
 	if err := backend.Checkpoint(); err != nil {
 		b.Fatalf("checkpoint before TreeDB disk usage stats: %v", err)
 	}

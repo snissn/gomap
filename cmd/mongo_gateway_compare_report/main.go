@@ -43,7 +43,10 @@ type benchmarkResult struct {
 	SecondaryIndexes           int               `json:"secondary_indexes"`
 	RangeIndex                 bool              `json:"range_index"`
 	ClientMode                 string            `json:"client_mode,omitempty"`
+	ConcurrentReadKinds        []string          `json:"concurrent_read_kinds,omitempty"`
+	SkippedConcurrentReadKinds []string          `json:"skipped_concurrent_read_kinds,omitempty"`
 	ConcurrentReaderSweep      []int             `json:"concurrent_reader_sweep,omitempty"`
+	ConcurrentWriterSweep      []int             `json:"concurrent_writer_sweep,omitempty"`
 	ConcurrentRangeReaderSweep []int             `json:"concurrent_range_reader_sweep,omitempty"`
 	TreeDBDocumentFormat       string            `json:"treedb_document_format,omitempty"`
 	Phases                     []phaseResult     `json:"phases"`
@@ -674,6 +677,7 @@ func renderReport(cfg config, cells []cellComparison, generatedAt time.Time) str
 	b.WriteString("- MongoDB physical bytes are the preferred local disk comparison when the matrix runner has an isolated data directory, such as Docker mode.\n")
 	b.WriteString("- Wall ops/sec values include the full benchmark phase loop. Sampled ops/sec values isolate the timed driver/gateway call inside each phase and are useful when prebuilt fixtures are enabled.\n")
 	b.WriteString("- `concurrent_id_find_one_rN` phases are an `_id` read throughput sweep over `N` concurrent readers, and are grouped in the Concurrent Read Sweep section when present.\n")
+	b.WriteString("- `concurrent_email_find_one_rN` phases are an email read throughput sweep over `N` concurrent readers, and are also grouped in the Concurrent Read Sweep section when present.\n")
 	b.WriteString("- `concurrent_age_range_*_rN` phases are an age range-read throughput sweep over `N` concurrent readers, and are grouped in the Concurrent Range Read Sweep section when present.\n")
 	b.WriteString("- Range-query benchmark rows use explicit phase names: `age_range_indexed_limit_10` means `-range-index` created `age_1`; `age_range_scan_limit_10` means bounded scan fallback.\n")
 	b.WriteString("- Main comparison tables label the MongoDB config chosen as the baseline. In multi-mode matrices, all other MongoDB rows remain visible in the Mongo Matrix Rows section.\n")
@@ -970,16 +974,17 @@ func renderConcurrentReadSweepTable(b *strings.Builder, cells []cellComparison) 
 		return
 	}
 	b.WriteString("## Concurrent Read Sweep\n\n")
-	b.WriteString("These rows group `concurrent_id_find_one_rN` phases as one `_id` read throughput sweep. Serial `id_find_one` remains a separate single-in-flight latency phase.\n\n")
-	b.WriteString("| docs | indexes | TreeDB config | MongoDB baseline config | readers | TreeDB wall ops/sec | TreeDB sampled ops/sec | MongoDB wall ops/sec | MongoDB sampled ops/sec | TreeDB / MongoDB wall | TreeDB p95 us | MongoDB p95 us |\n")
-	b.WriteString("| ---: | ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
+	b.WriteString("These rows group `concurrent_*_rN` phases as read throughput sweeps. Serial read phases remain separate single-in-flight latency phases.\n\n")
+	b.WriteString("| docs | indexes | TreeDB config | MongoDB baseline config | phase | readers | TreeDB wall ops/sec | TreeDB sampled ops/sec | MongoDB wall ops/sec | MongoDB sampled ops/sec | TreeDB / MongoDB wall | TreeDB p95 us | MongoDB p95 us |\n")
+	b.WriteString("| ---: | ---: | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
 	for _, cmp := range rows {
 		readers, _ := concurrentReadReaders(cmp.Name)
-		fmt.Fprintf(b, "| %d | %d | `%s` | %s | %d | %s | %s | %s | %s | %s | %s | %s |\n",
+		fmt.Fprintf(b, "| %d | %d | `%s` | %s | `%s` | %d | %s | %s | %s | %s | %s | %s | %s |\n",
 			cmp.Cell.Documents,
 			cmp.Cell.SecondaryIndexes,
 			cmp.Cell.TreeDBConfig,
 			formatConfig(cmp.MongoConfig),
+			cmp.Name,
 			readers,
 			formatPhaseOps(cmp.HasTreeDB, cmp.TreeDBPhase.OpsPerSecond),
 			formatPhaseOps(cmp.HasTreeDB && cmp.TreeDBPhase.SampledOpsPerSecond > 0, cmp.TreeDBPhase.SampledOpsPerSecond),
@@ -1036,6 +1041,9 @@ func concurrentReadSweepComparisons(cells []cellComparison) []phaseComparison {
 			mongoPhaseMap = cell.Mongo.PhaseMap
 		}
 		for _, name := range phaseNames(cell.TreeDB.Result.Phases, mongoPhases) {
+			if _, ok := concurrentRangeReadReaders(name); ok {
+				continue
+			}
 			if _, ok := concurrentReadReaders(name); !ok {
 				continue
 			}
@@ -1064,6 +1072,11 @@ func concurrentReadSweepComparisons(cells []cellComparison) []phaseComparison {
 		}
 		if left.Cell.TreeDBConfig != right.Cell.TreeDBConfig {
 			return left.Cell.TreeDBConfig < right.Cell.TreeDBConfig
+		}
+		leftBase := concurrentReadBase(left.Name)
+		rightBase := concurrentReadBase(right.Name)
+		if leftBase != rightBase {
+			return leftBase < rightBase
 		}
 		leftReaders, _ := concurrentReadReaders(left.Name)
 		rightReaders, _ := concurrentReadReaders(right.Name)
@@ -1273,15 +1286,29 @@ func writerSweepComparisons(cells []cellComparison) []phaseComparison {
 }
 
 func concurrentReadReaders(name string) (int, bool) {
-	const prefix = "concurrent_id_find_one_r"
-	if !strings.HasPrefix(name, prefix) {
+	base := concurrentReadBase(name)
+	if base == "" {
 		return 0, false
 	}
-	readers, err := strconv.Atoi(strings.TrimPrefix(name, prefix))
+	readers, err := strconv.Atoi(strings.TrimPrefix(name, base+"_r"))
 	if err != nil || readers <= 0 {
 		return 0, false
 	}
 	return readers, true
+}
+
+func concurrentReadBase(name string) string {
+	for _, base := range []string{
+		"concurrent_id_find_one",
+		"concurrent_email_find_one",
+		"concurrent_age_range_indexed_limit_10",
+		"concurrent_age_range_scan_limit_10",
+	} {
+		if strings.HasPrefix(name, base+"_r") {
+			return base
+		}
+	}
+	return ""
 }
 
 func concurrentRangeReadReaders(name string) (int, bool) {

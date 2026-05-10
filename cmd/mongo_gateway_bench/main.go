@@ -46,6 +46,12 @@ const (
 	maxRawWireTCPPipelineDepth     = 4096
 )
 
+const (
+	concurrentReadKindID    = "id"
+	concurrentReadKindEmail = "email"
+	concurrentReadKindRange = "range"
+)
+
 type config struct {
 	Target                                        string
 	MongoURI                                      string
@@ -68,10 +74,12 @@ type config struct {
 	ConcurrentRangeReads                          int
 	Updates                                       int
 	Deletes                                       int
+	ConcurrentReadKinds                           []string
 	ConcurrentReaders                             int
 	ConcurrentReaderSweep                         []int
 	ConcurrentReads                               int
 	ConcurrentWriters                             int
+	ConcurrentWriterSweep                         []int
 	ConcurrentWrites                              int
 	UpdateIndexedField                            bool
 	RangeIndex                                    bool
@@ -101,28 +109,31 @@ type config struct {
 }
 
 type benchmarkResult struct {
-	Target                     string `json:"target"`
-	MongoURI                   string `json:"mongo_uri,omitempty"`
-	TreeDBDir                  string `json:"treedb_dir,omitempty"`
-	Database                   string `json:"database"`
-	Collection                 string `json:"collection"`
-	Documents                  int    `json:"documents"`
-	BatchSize                  int    `json:"batch_size"`
-	InsertProducers            int    `json:"insert_producers"`
-	MongoMaxPoolSize           int    `json:"mongo_max_pool_size,omitempty"`
-	MongoMinPoolSize           int    `json:"mongo_min_pool_size,omitempty"`
-	MongoMaxConnecting         int    `json:"mongo_max_connecting,omitempty"`
-	SecondaryIndexes           int    `json:"secondary_indexes"`
-	ClientMode                 string `json:"client_mode"`
-	ConcurrentReaders          int    `json:"concurrent_readers,omitempty"`
-	ConcurrentReaderSweep      []int  `json:"concurrent_reader_sweep,omitempty"`
-	ConcurrentReads            int    `json:"concurrent_reads,omitempty"`
-	ConcurrentRangeReaders     int    `json:"concurrent_range_readers,omitempty"`
-	ConcurrentRangeReaderSweep []int  `json:"concurrent_range_reader_sweep,omitempty"`
-	ConcurrentRangeReads       int    `json:"concurrent_range_reads,omitempty"`
-	RawWireTCPPipelineDepth    int    `json:"raw_wire_tcp_pipeline_depth,omitempty"`
-	ConcurrentWriters          int    `json:"concurrent_writers,omitempty"`
-	ConcurrentWrites           int    `json:"concurrent_writes,omitempty"`
+	Target                     string   `json:"target"`
+	MongoURI                   string   `json:"mongo_uri,omitempty"`
+	TreeDBDir                  string   `json:"treedb_dir,omitempty"`
+	Database                   string   `json:"database"`
+	Collection                 string   `json:"collection"`
+	Documents                  int      `json:"documents"`
+	BatchSize                  int      `json:"batch_size"`
+	InsertProducers            int      `json:"insert_producers"`
+	MongoMaxPoolSize           int      `json:"mongo_max_pool_size,omitempty"`
+	MongoMinPoolSize           int      `json:"mongo_min_pool_size,omitempty"`
+	MongoMaxConnecting         int      `json:"mongo_max_connecting,omitempty"`
+	SecondaryIndexes           int      `json:"secondary_indexes"`
+	ClientMode                 string   `json:"client_mode"`
+	ConcurrentReadKinds        []string `json:"concurrent_read_kinds,omitempty"`
+	SkippedConcurrentReadKinds []string `json:"skipped_concurrent_read_kinds,omitempty"`
+	ConcurrentReaders          int      `json:"concurrent_readers,omitempty"`
+	ConcurrentReaderSweep      []int    `json:"concurrent_reader_sweep,omitempty"`
+	ConcurrentReads            int      `json:"concurrent_reads,omitempty"`
+	ConcurrentRangeReaders     int      `json:"concurrent_range_readers,omitempty"`
+	ConcurrentRangeReaderSweep []int    `json:"concurrent_range_reader_sweep,omitempty"`
+	ConcurrentRangeReads       int      `json:"concurrent_range_reads,omitempty"`
+	RawWireTCPPipelineDepth    int      `json:"raw_wire_tcp_pipeline_depth,omitempty"`
+	ConcurrentWriters          int      `json:"concurrent_writers,omitempty"`
+	ConcurrentWriterSweep      []int    `json:"concurrent_writer_sweep,omitempty"`
+	ConcurrentWrites           int      `json:"concurrent_writes,omitempty"`
 
 	// Always emit this knob in JSON so benchmark artifacts distinguish default
 	// false runs from older runs that predate indexed-field update coverage.
@@ -492,11 +503,15 @@ func parseConfig(args []string) (config, error) {
 	fs.IntVar(&cfg.ConcurrentRangeReads, "concurrent-range-reads", 0, "total age range-read operations for the concurrent range-read phase")
 	fs.IntVar(&cfg.Updates, "updates", 100, "$set updates by _id")
 	fs.IntVar(&cfg.Deletes, "deletes", 0, "deleteOne operations by _id")
+	var concurrentReadKinds string
 	var concurrentReaderSweep string
-	fs.IntVar(&cfg.ConcurrentReaders, "concurrent-readers", 0, "reader goroutines for the concurrent _id read phase; 0 disables the phase")
-	fs.StringVar(&concurrentReaderSweep, "concurrent-reader-sweep", "", "comma- or space-separated reader counts for a concurrent _id read throughput sweep; requires -concurrent-reads and cannot be combined with -concurrent-readers")
-	fs.IntVar(&cfg.ConcurrentReads, "concurrent-reads", 0, "total _id read operations for the concurrent read phase")
+	var concurrentWriterSweep string
+	fs.StringVar(&concurrentReadKinds, "concurrent-read-kinds", concurrentReadKindID, "comma- or space-separated concurrent read phase kinds: id, email, range, or all")
+	fs.IntVar(&cfg.ConcurrentReaders, "concurrent-readers", 0, "reader goroutines for the concurrent read phase; 0 disables the phase")
+	fs.StringVar(&concurrentReaderSweep, "concurrent-reader-sweep", "", "comma- or space-separated reader counts for concurrent read throughput sweep phases; requires -concurrent-reads and cannot be combined with -concurrent-readers")
+	fs.IntVar(&cfg.ConcurrentReads, "concurrent-reads", 0, "total read operations per concurrent read phase")
 	fs.IntVar(&cfg.ConcurrentWriters, "concurrent-writers", 0, "writer goroutines for the concurrent _id update phase; 0 disables the phase")
+	fs.StringVar(&concurrentWriterSweep, "concurrent-writer-sweep", "", "comma- or space-separated writer counts for concurrent _id update throughput sweep phases; requires -concurrent-writes and cannot be combined with -concurrent-writers")
 	fs.IntVar(&cfg.ConcurrentWrites, "concurrent-writes", 0, "total update operations for the concurrent write phase")
 	fs.BoolVar(&cfg.UpdateIndexedField, "update-indexed-field", false, "include the city field in update phases; requires -secondary-indexes >= 2 so the city index exists")
 	fs.BoolVar(&cfg.RangeIndex, "range-index", false, "create an age_1 secondary index for the age range-read phase")
@@ -585,6 +600,11 @@ func parseConfig(args []string) (config, error) {
 	if cfg.Reads < 0 || cfg.RangeReads < 0 || cfg.Updates < 0 || cfg.Deletes < 0 || cfg.ConcurrentReads < 0 || cfg.ConcurrentRangeReads < 0 || cfg.ConcurrentWrites < 0 {
 		return config{}, errors.New("operation counts cannot be negative")
 	}
+	concurrentReadKindsValues, err := parseConcurrentReadKinds(concurrentReadKinds)
+	if err != nil {
+		return config{}, err
+	}
+	cfg.ConcurrentReadKinds = concurrentReadKindsValues
 	if cfg.ClientMode == clientModeRawWireTCPPipeline && cfg.RawWireTCPPipelineDepth <= 0 {
 		return config{}, errors.New("raw-wire-tcp-pipeline-depth must be > 0")
 	}
@@ -601,6 +621,11 @@ func parseConfig(args []string) (config, error) {
 		return config{}, err
 	}
 	cfg.ConcurrentReaderSweep = concurrentReaderSweepValues
+	concurrentWriterSweepValues, err := parsePositiveIntList(concurrentWriterSweep, "concurrent-writer-sweep")
+	if err != nil {
+		return config{}, err
+	}
+	cfg.ConcurrentWriterSweep = concurrentWriterSweepValues
 	if cfg.ConcurrentReaders < 0 || cfg.ConcurrentRangeReaders < 0 || cfg.ConcurrentWriters < 0 {
 		return config{}, errors.New("concurrency values cannot be negative")
 	}
@@ -624,8 +649,20 @@ func parseConfig(args []string) (config, error) {
 	} else if (cfg.ConcurrentReaders == 0) != (cfg.ConcurrentReads == 0) {
 		return config{}, errors.New("concurrent-readers and concurrent-reads must both be > 0 or both be 0")
 	}
-	if (cfg.ConcurrentWriters == 0) != (cfg.ConcurrentWrites == 0) {
+	if len(cfg.ConcurrentWriterSweep) > 0 {
+		if cfg.ConcurrentWriters != 0 {
+			return config{}, errors.New("concurrent-writer-sweep cannot be combined with concurrent-writers")
+		}
+		if cfg.ConcurrentWrites == 0 {
+			return config{}, errors.New("concurrent-writer-sweep requires concurrent-writes > 0")
+		}
+	} else if (cfg.ConcurrentWriters == 0) != (cfg.ConcurrentWrites == 0) {
 		return config{}, errors.New("concurrent-writers and concurrent-writes must both be > 0 or both be 0")
+	}
+	if concurrentReadKindsIncludeRange(cfg.ConcurrentReadKinds) &&
+		len(concurrentReaderCounts(cfg)) > 0 &&
+		len(concurrentRangeReaderCounts(cfg)) > 0 {
+		return config{}, errors.New("concurrent-read-kinds range cannot be combined with concurrent-range-readers or concurrent-range-reader-sweep")
 	}
 	if cfg.Timeout < 0 {
 		return config{}, errors.New("timeout cannot be negative")
@@ -649,7 +686,7 @@ func parseConfig(args []string) (config, error) {
 	cfg.TreeDBReadState = readState
 	if cfg.Target == "treedb" && cfg.ClientMode == clientModeDirect &&
 		cfg.TreeDBReadState == treeDBReadStateUnsettled && !cfg.RangeIndex &&
-		(cfg.RangeReads > 0 || cfg.ConcurrentRangeReads > 0) {
+		(cfg.RangeReads > 0 || cfg.ConcurrentRangeReads > 0 || concurrentRangeReadKindEnabled(cfg)) {
 		return config{}, errors.New("direct scan range reads require -treedb-read-state settled; use -range-index for unsettled direct range reads")
 	}
 	if cfg.SecondaryIndexes < 0 || cfg.SecondaryIndexes > 3 {
@@ -833,12 +870,71 @@ func parsePositiveIntList(raw, name string) ([]int, error) {
 	return out, nil
 }
 
+func parseConcurrentReadKinds(raw string) ([]string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, errors.New("concurrent-read-kinds must not be empty")
+	}
+	parts := strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == ' ' || r == '\t' || r == '\n'
+	})
+	out := make([]string, 0, len(parts))
+	seen := make(map[string]struct{}, len(parts))
+	add := func(kind string) error {
+		switch kind {
+		case concurrentReadKindID, concurrentReadKindEmail, concurrentReadKindRange:
+		default:
+			return fmt.Errorf("unknown concurrent-read-kinds value %q", kind)
+		}
+		if _, ok := seen[kind]; ok {
+			return fmt.Errorf("concurrent-read-kinds contains duplicate value %q", kind)
+		}
+		seen[kind] = struct{}{}
+		out = append(out, kind)
+		return nil
+	}
+	for _, part := range parts {
+		kind := strings.ToLower(strings.TrimSpace(part))
+		if kind == "" {
+			continue
+		}
+		if kind == "all" {
+			for _, expanded := range []string{concurrentReadKindID, concurrentReadKindEmail, concurrentReadKindRange} {
+				if _, ok := seen[expanded]; ok {
+					continue
+				}
+				if err := add(expanded); err != nil {
+					return nil, err
+				}
+			}
+			continue
+		}
+		if err := add(kind); err != nil {
+			return nil, err
+		}
+	}
+	if len(out) == 0 {
+		return nil, errors.New("concurrent-read-kinds must contain at least one value")
+	}
+	return out, nil
+}
+
 func concurrentReaderCounts(cfg config) []int {
 	if len(cfg.ConcurrentReaderSweep) > 0 {
 		return cfg.ConcurrentReaderSweep
 	}
 	if cfg.ConcurrentReaders > 0 && cfg.ConcurrentReads > 0 {
 		return []int{cfg.ConcurrentReaders}
+	}
+	return nil
+}
+
+func concurrentWriterCounts(cfg config) []int {
+	if len(cfg.ConcurrentWriterSweep) > 0 {
+		return cfg.ConcurrentWriterSweep
+	}
+	if cfg.ConcurrentWriters > 0 && cfg.ConcurrentWrites > 0 {
+		return []int{cfg.ConcurrentWriters}
 	}
 	return nil
 }
@@ -1359,6 +1455,8 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 		MongoMaxConnecting:         cfg.MongoMaxConnecting,
 		SecondaryIndexes:           cfg.SecondaryIndexes,
 		ClientMode:                 cfg.ClientMode,
+		ConcurrentReadKinds:        append([]string(nil), cfg.ConcurrentReadKinds...),
+		SkippedConcurrentReadKinds: skippedConcurrentReadKindsForConfig(cfg),
 		ConcurrentReaders:          cfg.ConcurrentReaders,
 		ConcurrentReaderSweep:      append([]int(nil), cfg.ConcurrentReaderSweep...),
 		ConcurrentReads:            cfg.ConcurrentReads,
@@ -1366,6 +1464,7 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 		ConcurrentRangeReaderSweep: append([]int(nil), cfg.ConcurrentRangeReaderSweep...),
 		ConcurrentRangeReads:       cfg.ConcurrentRangeReads,
 		ConcurrentWriters:          cfg.ConcurrentWriters,
+		ConcurrentWriterSweep:      append([]int(nil), cfg.ConcurrentWriterSweep...),
 		ConcurrentWrites:           cfg.ConcurrentWrites,
 		UpdateIndexedField:         cfg.UpdateIndexedField,
 		RangeIndex:                 cfg.RangeIndex,
@@ -1534,40 +1633,39 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 	}
 	result.Phases = append(result.Phases, updatePhase)
 
-	for _, concurrentReaders := range concurrentReaderCounts(cfg) {
-		phaseName := fmt.Sprintf("concurrent_id_find_one_r%d", concurrentReaders)
-		concurrentReadPhase, err := measureTreeDBProfiledPhase(target, profiler, phaseName, cfg.ConcurrentReads, func(sample func(time.Duration)) error {
-			return runConcurrentOperations(ctx, concurrentReaders, cfg.ConcurrentReads, func(op int) error {
-				id := benchmarkID(benchmarkDocumentOrdinal(op, 17, cfg.Documents))
-				var out bson.M
-				begin := time.Now()
-				err := coll.FindOne(ctx, bson.D{{Key: "_id", Value: id}}).Decode(&out)
-				sample(time.Since(begin))
+	for _, readKind := range concurrentReadKindsForConfig(cfg) {
+		for _, concurrentReaders := range concurrentReaderCounts(cfg) {
+			if readKind == concurrentReadKindRange {
+				concurrentReadPhase, err := runConcurrentRangePhaseWithOps(ctx, cfg, target, profiler, coll, concurrentReaders, cfg.ConcurrentReads)
 				if err != nil {
-					return err
+					return nil, err
 				}
-				if out["_id"] != id {
-					return fmt.Errorf("concurrent id lookup returned _id=%v want %s", out["_id"], id)
-				}
-				return nil
+				result.Phases = append(result.Phases, concurrentReadPhase)
+				continue
+			}
+			phaseName := concurrentReadPhaseName(cfg, readKind, concurrentReaders)
+			concurrentReadPhase, err := measureTreeDBProfiledPhase(target, profiler, phaseName, cfg.ConcurrentReads, func(sample func(time.Duration)) error {
+				return runConcurrentOperations(ctx, concurrentReaders, cfg.ConcurrentReads, func(op int) error {
+					return runConcurrentReadOperation(ctx, coll, cfg, readKind, op, sample)
+				})
 			})
-		})
-		if err != nil {
-			return nil, err
+			if err != nil {
+				return nil, err
+			}
+			result.Phases = append(result.Phases, concurrentReadPhase)
 		}
-		result.Phases = append(result.Phases, concurrentReadPhase)
 	}
 
-	if cfg.ConcurrentWriters > 0 && cfg.ConcurrentWrites > 0 {
-		phaseName := fmt.Sprintf("concurrent_id_update_set_w%d", cfg.ConcurrentWriters)
+	for _, concurrentWriters := range concurrentWriterCounts(cfg) {
+		phaseName := fmt.Sprintf("concurrent_id_update_set_w%d", concurrentWriters)
 		concurrentUpdateCityValues := updatedCityValuesForUpdate()
 		concurrentWritePhase, err := measureTreeDBProfiledPhase(target, profiler, phaseName, cfg.ConcurrentWrites, func(sample func(time.Duration)) error {
-			return runConcurrentOperations(ctx, cfg.ConcurrentWriters, cfg.ConcurrentWrites, func(op int) error {
+			return runConcurrentOperations(ctx, concurrentWriters, cfg.ConcurrentWrites, func(op int) error {
 				documentOrdinal := benchmarkDocumentOrdinal(op, 37, cfg.Documents)
 				id := benchmarkID(documentOrdinal)
 				filter := bson.D{{Key: "_id", Value: id}}
 				update := benchmarkSetUpdate(benchmarkSetUpdateParams{
-					Operation:          op,
+					Operation:          concurrentUpdateOperation(op, concurrentWriters, cfg.ConcurrentWrites),
 					DocumentOrdinal:    documentOrdinal,
 					DocumentCount:      cfg.Documents,
 					ConcurrentPhase:    true,
@@ -1638,6 +1736,8 @@ func runDirectTreeDBBenchmark(ctx context.Context, cfg config, target *benchTarg
 		MongoMaxConnecting:                     cfg.MongoMaxConnecting,
 		SecondaryIndexes:                       cfg.SecondaryIndexes,
 		ClientMode:                             cfg.ClientMode,
+		ConcurrentReadKinds:                    append([]string(nil), cfg.ConcurrentReadKinds...),
+		SkippedConcurrentReadKinds:             skippedConcurrentReadKindsForConfig(cfg),
 		ConcurrentReaders:                      cfg.ConcurrentReaders,
 		ConcurrentReaderSweep:                  append([]int(nil), cfg.ConcurrentReaderSweep...),
 		ConcurrentReads:                        cfg.ConcurrentReads,
@@ -1645,6 +1745,7 @@ func runDirectTreeDBBenchmark(ctx context.Context, cfg config, target *benchTarg
 		ConcurrentRangeReaderSweep:             append([]int(nil), cfg.ConcurrentRangeReaderSweep...),
 		ConcurrentRangeReads:                   cfg.ConcurrentRangeReads,
 		ConcurrentWriters:                      cfg.ConcurrentWriters,
+		ConcurrentWriterSweep:                  append([]int(nil), cfg.ConcurrentWriterSweep...),
 		ConcurrentWrites:                       cfg.ConcurrentWrites,
 		UpdateIndexedField:                     cfg.UpdateIndexedField,
 		RangeIndex:                             cfg.RangeIndex,
@@ -1744,7 +1845,7 @@ func runDirectTreeDBBenchmark(ctx context.Context, cfg config, target *benchTarg
 		concurrentReaders = effectiveConcurrentWorkers(concurrentReaders, cfg.ConcurrentRangeReads)
 		phaseName := concurrentRangePhaseName(cfg, concurrentReaders)
 		concurrentRangePhase, err := runTreeDBProfiledPhase(target, profiler, phaseName, func() (phaseResult, error) {
-			return runDirectTreeDBConcurrentRangePhase(ctx, cfg, collection, concurrentReaders, phaseName)
+			return runDirectTreeDBConcurrentRangePhase(ctx, cfg, collection, concurrentReaders, cfg.ConcurrentRangeReads, phaseName)
 		})
 		if err != nil {
 			return nil, err
@@ -1760,21 +1861,23 @@ func runDirectTreeDBBenchmark(ctx context.Context, cfg config, target *benchTarg
 	}
 	result.Phases = append(result.Phases, updatePhase)
 
-	for _, concurrentReaders := range concurrentReaderCounts(cfg) {
-		phaseName := fmt.Sprintf("concurrent_id_find_one_r%d", concurrentReaders)
-		concurrentReadPhase, err := runTreeDBProfiledPhase(target, profiler, phaseName, func() (phaseResult, error) {
-			return runDirectTreeDBConcurrentIDFindPhase(ctx, cfg, collection, directKeys, concurrentReaders, phaseName)
-		})
-		if err != nil {
-			return nil, err
+	for _, readKind := range concurrentReadKindsForConfig(cfg) {
+		for _, concurrentReaders := range concurrentReaderCounts(cfg) {
+			phaseName := concurrentReadPhaseName(cfg, readKind, concurrentReaders)
+			concurrentReadPhase, err := runTreeDBProfiledPhase(target, profiler, phaseName, func() (phaseResult, error) {
+				return runDirectTreeDBConcurrentReadPhase(ctx, cfg, collection, directKeys, readKind, concurrentReaders, phaseName)
+			})
+			if err != nil {
+				return nil, err
+			}
+			result.Phases = append(result.Phases, concurrentReadPhase)
 		}
-		result.Phases = append(result.Phases, concurrentReadPhase)
 	}
 
-	if cfg.ConcurrentWriters > 0 && cfg.ConcurrentWrites > 0 {
-		phaseName := fmt.Sprintf("concurrent_id_update_set_w%d", cfg.ConcurrentWriters)
+	for _, concurrentWriters := range concurrentWriterCounts(cfg) {
+		phaseName := fmt.Sprintf("concurrent_id_update_set_w%d", concurrentWriters)
 		concurrentWritePhase, err := runTreeDBProfiledPhase(target, profiler, phaseName, func() (phaseResult, error) {
-			return runDirectTreeDBConcurrentUpdatePhase(ctx, cfg, collection, directKeys, phaseName, updatedCityValuesForUpdate())
+			return runDirectTreeDBConcurrentUpdatePhase(ctx, cfg, collection, directKeys, concurrentWriters, phaseName, updatedCityValuesForUpdate())
 		})
 		if err != nil {
 			return nil, err
@@ -2205,8 +2308,8 @@ func runDirectTreeDBRangePhase(ctx context.Context, cfg config, collection *coll
 	})
 }
 
-func runDirectTreeDBConcurrentRangePhase(ctx context.Context, cfg config, collection *collections.Collection, readers int, phaseName string) (phaseResult, error) {
-	readers = effectiveConcurrentWorkers(readers, cfg.ConcurrentRangeReads)
+func runDirectTreeDBConcurrentRangePhase(ctx context.Context, cfg config, collection *collections.Collection, readers, operations int, phaseName string) (phaseResult, error) {
+	readers = effectiveConcurrentWorkers(readers, operations)
 	materializers := make([]*collections.StoredDocumentJSONMaterializer, readers)
 	for i := range materializers {
 		materializer, err := directNewStoredDocumentMaterializer(collection)
@@ -2225,8 +2328,8 @@ func runDirectTreeDBConcurrentRangePhase(ctx context.Context, cfg config, collec
 			_ = materializer.Close()
 		}
 	}()
-	return measurePhase(phaseName, cfg.ConcurrentRangeReads, func(sample func(time.Duration)) error {
-		return runConcurrentOperationsByWorker(ctx, readers, cfg.ConcurrentRangeReads, func(worker, op int) error {
+	return measurePhase(phaseName, operations, func(sample func(time.Duration)) error {
+		return runConcurrentOperationsByWorker(ctx, readers, operations, func(worker, op int) error {
 			minAge := rangeReadMinAge(op, cfg.Documents)
 			begin := time.Now()
 			err := runDirectTreeDBRangeQuery(cfg, collection, materializers[worker], minAge)
@@ -2341,9 +2444,58 @@ func runDirectTreeDBConcurrentIDFindPhase(ctx context.Context, cfg config, colle
 	})
 }
 
-func runDirectTreeDBConcurrentUpdatePhase(ctx context.Context, cfg config, collection *collections.Collection, keys directBenchmarkKeySet, phaseName string, updatedCityValues []string) (phaseResult, error) {
+func runDirectTreeDBConcurrentEmailFindPhase(ctx context.Context, cfg config, collection *collections.Collection, readers int, phaseName string) (phaseResult, error) {
+	materializers := newDirectTreeDBMaterializerPool(collection)
+	defer func() { _ = materializers.close() }()
+	return measurePhase(phaseName, cfg.ConcurrentReads, func(sample func(time.Duration)) error {
+		return runConcurrentOperations(ctx, readers, cfg.ConcurrentReads, func(op int) error {
+			email := benchmarkEmail(benchmarkDocumentOrdinal(op, 17, cfg.Documents))
+			materializer, err := materializers.get()
+			if err != nil {
+				return err
+			}
+			defer materializers.put(materializer)
+			begin := time.Now()
+			ids, truncated, err := collection.FindByIndexValueLimit("email_1", email, 1)
+			var raw bson.Raw
+			if err == nil && len(ids) > 0 {
+				var stored []byte
+				stored, err = collection.Get(ids[0])
+				if err == nil {
+					raw, err = directStoredDocumentToBSON(collection, materializer, stored)
+				}
+			}
+			sample(time.Since(begin))
+			if err != nil {
+				return err
+			}
+			if truncated || len(ids) != 1 {
+				return fmt.Errorf("direct concurrent email lookup ids=%d truncated=%t want one id", len(ids), truncated)
+			}
+			if got, ok := bson.Raw(raw).Lookup("email").StringValueOK(); !ok || got != email {
+				return fmt.Errorf("direct concurrent email lookup returned email=%v ok=%t want %s", got, ok, email)
+			}
+			return nil
+		})
+	})
+}
+
+func runDirectTreeDBConcurrentReadPhase(ctx context.Context, cfg config, collection *collections.Collection, keys directBenchmarkKeySet, kind string, readers int, phaseName string) (phaseResult, error) {
+	switch kind {
+	case concurrentReadKindID:
+		return runDirectTreeDBConcurrentIDFindPhase(ctx, cfg, collection, keys, readers, phaseName)
+	case concurrentReadKindEmail:
+		return runDirectTreeDBConcurrentEmailFindPhase(ctx, cfg, collection, readers, phaseName)
+	case concurrentReadKindRange:
+		return runDirectTreeDBConcurrentRangePhase(ctx, cfg, collection, readers, cfg.ConcurrentReads, phaseName)
+	default:
+		return phaseResult{}, fmt.Errorf("unknown concurrent read kind %q", kind)
+	}
+}
+
+func runDirectTreeDBConcurrentUpdatePhase(ctx context.Context, cfg config, collection *collections.Collection, keys directBenchmarkKeySet, workers int, phaseName string, updatedCityValues []string) (phaseResult, error) {
 	return measurePhase(phaseName, cfg.ConcurrentWrites, func(sample func(time.Duration)) error {
-		return runDirectTreeDBConcurrentUpdateOperations(ctx, cfg, collection, keys, updatedCityValues, sample)
+		return runDirectTreeDBConcurrentUpdateOperations(ctx, cfg, collection, keys, updatedCityValues, sample, workers)
 	})
 }
 
@@ -2354,8 +2506,8 @@ func runDirectTreeDBConcurrentUpdateOperations(
 	keys directBenchmarkKeySet,
 	updatedCityValues []string,
 	sample func(time.Duration),
+	workers int,
 ) error {
-	workers := cfg.ConcurrentWriters
 	operations := cfg.ConcurrentWrites
 	if workers <= 0 || operations <= 0 {
 		return nil
@@ -2404,7 +2556,8 @@ func runDirectTreeDBConcurrentUpdateOperations(
 				}
 				documentOrdinal := benchmarkDocumentOrdinal(op, 37, cfg.Documents)
 				key, id := keys.at(documentOrdinal)
-				if err := runDirectTreeDBUpdateOperation(collection, materializer, cfg, key, id, op, documentOrdinal, true, updatedCityValues, sample); err != nil {
+				updateOperation := concurrentUpdateOperation(op, workers, operations)
+				if err := runDirectTreeDBUpdateOperation(collection, materializer, cfg, key, id, updateOperation, documentOrdinal, true, updatedCityValues, sample); err != nil {
 					recordErr(err)
 					return
 				}
@@ -2668,7 +2821,11 @@ func addPhaseDuration(result *phaseResult, extra time.Duration) {
 }
 
 func runEmailFindPhase(cfg config) bool {
-	return cfg.Reads > 0 && cfg.SecondaryIndexes >= 1
+	return cfg.Reads > 0 && hasEmailIndex(cfg)
+}
+
+func hasEmailIndex(cfg config) bool {
+	return cfg.SecondaryIndexes >= 1
 }
 
 func rangePhaseName(cfg config) string {
@@ -2676,6 +2833,124 @@ func rangePhaseName(cfg config) string {
 		return "age_range_indexed_limit_10"
 	}
 	return "age_range_scan_limit_10"
+}
+
+func concurrentReadKindsForConfig(cfg config) []string {
+	kinds := cfg.ConcurrentReadKinds
+	if len(kinds) == 0 {
+		kinds = []string{concurrentReadKindID}
+	}
+	out := make([]string, 0, len(kinds))
+	for _, kind := range kinds {
+		switch kind {
+		case concurrentReadKindEmail:
+			if hasEmailIndex(cfg) {
+				out = append(out, kind)
+			}
+		case concurrentReadKindID, concurrentReadKindRange:
+			out = append(out, kind)
+		}
+	}
+	return out
+}
+
+func concurrentReadKindsIncludeRange(kinds []string) bool {
+	for _, kind := range kinds {
+		if kind == concurrentReadKindRange {
+			return true
+		}
+	}
+	return false
+}
+
+func concurrentRangeReadKindEnabled(cfg config) bool {
+	return concurrentReadKindsIncludeRange(cfg.ConcurrentReadKinds) && len(concurrentReaderCounts(cfg)) > 0
+}
+
+func skippedConcurrentReadKindsForConfig(cfg config) []string {
+	kinds := cfg.ConcurrentReadKinds
+	if len(kinds) == 0 {
+		kinds = []string{concurrentReadKindID}
+	}
+	var out []string
+	for _, kind := range kinds {
+		switch kind {
+		case concurrentReadKindEmail:
+			if !hasEmailIndex(cfg) {
+				out = append(out, "email requires secondary-indexes >= 1")
+			}
+		}
+	}
+	return out
+}
+
+func concurrentReadPhaseName(cfg config, kind string, readers int) string {
+	switch kind {
+	case concurrentReadKindID:
+		return fmt.Sprintf("concurrent_id_find_one_r%d", readers)
+	case concurrentReadKindEmail:
+		return fmt.Sprintf("concurrent_email_find_one_r%d", readers)
+	case concurrentReadKindRange:
+		return fmt.Sprintf("concurrent_%s_r%d", rangePhaseName(cfg), readers)
+	default:
+		return fmt.Sprintf("concurrent_%s_read_r%d", kind, readers)
+	}
+}
+
+func runConcurrentReadOperation(ctx context.Context, coll *mongo.Collection, cfg config, kind string, op int, sample func(time.Duration)) error {
+	switch kind {
+	case concurrentReadKindID:
+		id := benchmarkID(benchmarkDocumentOrdinal(op, 17, cfg.Documents))
+		var out bson.M
+		begin := time.Now()
+		err := coll.FindOne(ctx, bson.D{{Key: "_id", Value: id}}).Decode(&out)
+		sample(time.Since(begin))
+		if err != nil {
+			return err
+		}
+		if out["_id"] != id {
+			return fmt.Errorf("concurrent id lookup returned _id=%v want %s", out["_id"], id)
+		}
+		return nil
+	case concurrentReadKindEmail:
+		email := benchmarkEmail(benchmarkDocumentOrdinal(op, 17, cfg.Documents))
+		var out bson.M
+		begin := time.Now()
+		err := coll.FindOne(ctx, bson.D{{Key: "email", Value: email}}).Decode(&out)
+		sample(time.Since(begin))
+		if err != nil {
+			return err
+		}
+		if out["email"] != email {
+			return fmt.Errorf("concurrent email lookup returned email=%v want %s", out["email"], email)
+		}
+		return nil
+	case concurrentReadKindRange:
+		minAge := rangeReadMinAge(op, cfg.Documents)
+		begin := time.Now()
+		cursor, err := coll.Find(ctx,
+			bson.D{{Key: "age", Value: bson.D{{Key: "$gte", Value: minAge}}}},
+			options.Find().SetLimit(10))
+		if err != nil {
+			sample(time.Since(begin))
+			return err
+		}
+		var docs []bson.M
+		if err := cursor.All(ctx, &docs); err != nil {
+			sample(time.Since(begin))
+			return err
+		}
+		sample(time.Since(begin))
+		for _, doc := range docs {
+			age, ok := int64Value(doc["age"])
+			if !ok || age < minAge {
+				return fmt.Errorf("concurrent range returned age=%v below %d", doc["age"], minAge)
+			}
+		}
+		return nil
+	default:
+		return fmt.Errorf("unknown concurrent read kind %q", kind)
+	}
 }
 
 func concurrentRangePhaseName(cfg config, readers int) string {
@@ -3497,7 +3772,11 @@ func watchRawWireTCPPipelineClients(ctx context.Context, clients ...*rawWireTCPP
 }
 
 func runConcurrentRangePhase(ctx context.Context, cfg config, target *benchTarget, profiler *profileRecorder, coll *mongo.Collection, readers int) (phaseResult, error) {
-	readers = effectiveConcurrentWorkers(readers, cfg.ConcurrentRangeReads)
+	return runConcurrentRangePhaseWithOps(ctx, cfg, target, profiler, coll, readers, cfg.ConcurrentRangeReads)
+}
+
+func runConcurrentRangePhaseWithOps(ctx context.Context, cfg config, target *benchTarget, profiler *profileRecorder, coll *mongo.Collection, readers, operations int) (phaseResult, error) {
+	readers = effectiveConcurrentWorkers(readers, operations)
 	phaseName := concurrentRangePhaseName(cfg, readers)
 	if cfg.Target == "treedb" && cfg.ClientMode == clientModeRawWire {
 		if target == nil || target.server == nil {
@@ -3505,8 +3784,8 @@ func runConcurrentRangePhase(ctx context.Context, cfg config, target *benchTarge
 		}
 		var requestID atomic.Int32
 		scratches := make([]rawWireInProcessScratch, readers)
-		return measureTreeDBProfiledPhase(target, profiler, phaseName, cfg.ConcurrentRangeReads, func(sample func(time.Duration)) error {
-			return runConcurrentOperationsByWorker(ctx, readers, cfg.ConcurrentRangeReads, func(worker, op int) error {
+		return measureTreeDBProfiledPhase(target, profiler, phaseName, operations, func(sample func(time.Duration)) error {
+			return runConcurrentOperationsByWorker(ctx, readers, operations, func(worker, op int) error {
 				return runTreeDBRawWireRangeOperation(ctx, cfg, target, &requestID, int64(worker+1), rangeReadMinAge(op, cfg.Documents), sample, &scratches[worker])
 			})
 		})
@@ -3534,8 +3813,8 @@ func runConcurrentRangePhase(ctx context.Context, cfg config, target *benchTarge
 				_ = client.Close()
 			}
 		}()
-		return measureTreeDBProfiledPhase(target, profiler, phaseName, cfg.ConcurrentRangeReads, func(sample func(time.Duration)) error {
-			return runConcurrentOperationsByWorker(ctx, readers, cfg.ConcurrentRangeReads, func(worker, op int) error {
+		return measureTreeDBProfiledPhase(target, profiler, phaseName, operations, func(sample func(time.Duration)) error {
+			return runConcurrentOperationsByWorker(ctx, readers, operations, func(worker, op int) error {
 				var err error
 				commandBufs[worker], err = runTreeDBRawWireTCPRangeOperation(ctx, cfg, clients[worker], rangeReadMinAge(op, cfg.Documents), sample, commandBufs[worker])
 				return err
@@ -3564,7 +3843,7 @@ func runConcurrentRangePhase(ctx context.Context, cfg config, target *benchTarge
 				_ = client.Close()
 			}
 		}()
-		return measureTreeDBProfiledPhase(target, profiler, phaseName, cfg.ConcurrentRangeReads, func(sample func(time.Duration)) error {
+		return measureTreeDBProfiledPhase(target, profiler, phaseName, operations, func(sample func(time.Duration)) error {
 			runCtx, cancel := context.WithCancel(ctx)
 			defer cancel()
 			stopCancelWatch := watchRawWireTCPPipelineClients(runCtx, clients...)
@@ -3588,7 +3867,7 @@ func runConcurrentRangePhase(ctx context.Context, cfg config, target *benchTarge
 					defer wg.Done()
 					minAges := make([]int64, cfg.RawWireTCPPipelineDepth)
 					responseTo := make([]int32, cfg.RawWireTCPPipelineDepth)
-					if err := runRawWireTCPPipelineRangeStridedBatches(runCtx, cfg, clients[worker], worker, readers, cfg.ConcurrentRangeReads, minAges, responseTo, sample); err != nil {
+					if err := runRawWireTCPPipelineRangeStridedBatches(runCtx, cfg, clients[worker], worker, readers, operations, minAges, responseTo, sample); err != nil {
 						recordErr(err)
 					}
 				}(worker)
@@ -3605,21 +3884,21 @@ func runConcurrentRangePhase(ctx context.Context, cfg config, target *benchTarge
 			return phaseResult{}, errors.New("driver-command-raw range phase requires a Mongo driver client")
 		}
 		db := target.client.Database(cfg.Database)
-		return measureTreeDBProfiledPhase(target, profiler, phaseName, cfg.ConcurrentRangeReads, func(sample func(time.Duration)) error {
-			return runConcurrentOperations(ctx, readers, cfg.ConcurrentRangeReads, func(op int) error {
+		return measureTreeDBProfiledPhase(target, profiler, phaseName, operations, func(sample func(time.Duration)) error {
+			return runConcurrentOperations(ctx, readers, operations, func(op int) error {
 				return runDriverCommandRawRangeOperation(ctx, cfg, db, rangeReadMinAge(op, cfg.Documents), sample)
 			})
 		})
 	}
 	if cfg.ClientMode == clientModeDriverFindRaw {
-		return measureTreeDBProfiledPhase(target, profiler, phaseName, cfg.ConcurrentRangeReads, func(sample func(time.Duration)) error {
-			return runConcurrentOperations(ctx, readers, cfg.ConcurrentRangeReads, func(op int) error {
+		return measureTreeDBProfiledPhase(target, profiler, phaseName, operations, func(sample func(time.Duration)) error {
+			return runConcurrentOperations(ctx, readers, operations, func(op int) error {
 				return runDriverFindRawRangeOperation(ctx, coll, rangeReadMinAge(op, cfg.Documents), sample)
 			})
 		})
 	}
-	return measureTreeDBProfiledPhase(target, profiler, phaseName, cfg.ConcurrentRangeReads, func(sample func(time.Duration)) error {
-		return runConcurrentOperations(ctx, readers, cfg.ConcurrentRangeReads, func(op int) error {
+	return measureTreeDBProfiledPhase(target, profiler, phaseName, operations, func(sample func(time.Duration)) error {
+		return runConcurrentOperations(ctx, readers, operations, func(op int) error {
 			return runDriverDecodedRangeOperation(ctx, coll, rangeReadMinAge(op, cfg.Documents), sample)
 		})
 	})
@@ -5130,6 +5409,13 @@ func benchmarkSetUpdate(params benchmarkSetUpdateParams) bson.D {
 	return bson.D{{Key: "$set", Value: set}}
 }
 
+func concurrentUpdateOperation(operation, workers, operations int) int {
+	if workers <= 0 || operations <= 0 {
+		return operation
+	}
+	return operation + workers*operations
+}
+
 func benchmarkDocumentOrdinal(operation int, stride uint64, documentCount int) int {
 	if documentCount <= 0 {
 		return 0
@@ -5591,12 +5877,12 @@ func writeResult(out io.Writer, format string, result *benchmarkResult) error {
 		encoder.SetIndent("", "  ")
 		return encoder.Encode(result)
 	case "text":
-		fmt.Fprintf(out, "target=%s client_mode=%s database=%s collection=%s documents=%d batch_size=%d insert_producers=%d mongo_max_pool_size=%d mongo_min_pool_size=%d mongo_max_connecting=%d secondary_indexes=%d concurrent_readers=%d concurrent_reader_sweep=%v concurrent_reads=%d concurrent_range_readers=%d concurrent_range_reader_sweep=%v concurrent_range_reads=%d concurrent_writers=%d concurrent_writes=%d treedb_read_state=%s\n",
+		fmt.Fprintf(out, "target=%s client_mode=%s database=%s collection=%s documents=%d batch_size=%d insert_producers=%d mongo_max_pool_size=%d mongo_min_pool_size=%d mongo_max_connecting=%d secondary_indexes=%d concurrent_read_kinds=%v concurrent_readers=%d concurrent_reader_sweep=%v concurrent_reads=%d concurrent_range_readers=%d concurrent_range_reader_sweep=%v concurrent_range_reads=%d concurrent_writers=%d concurrent_writer_sweep=%v concurrent_writes=%d treedb_read_state=%s\n",
 			result.Target, result.ClientMode, result.Database, result.Collection, result.Documents, result.BatchSize,
 			result.InsertProducers, result.MongoMaxPoolSize, result.MongoMinPoolSize, result.MongoMaxConnecting, result.SecondaryIndexes,
-			result.ConcurrentReaders, result.ConcurrentReaderSweep, result.ConcurrentReads,
+			result.ConcurrentReadKinds, result.ConcurrentReaders, result.ConcurrentReaderSweep, result.ConcurrentReads,
 			result.ConcurrentRangeReaders, result.ConcurrentRangeReaderSweep, result.ConcurrentRangeReads,
-			result.ConcurrentWriters, result.ConcurrentWrites, result.TreeDBReadState)
+			result.ConcurrentWriters, result.ConcurrentWriterSweep, result.ConcurrentWrites, result.TreeDBReadState)
 		fmt.Fprintf(out, "update_indexed_field=%t\n", result.UpdateIndexedField)
 		fmt.Fprintf(out, "range_index=%t\n", result.RangeIndex)
 		if result.TreeDBDir != "" {

@@ -192,6 +192,75 @@ func TestGoTestArgsIncludeSQLiteTagsOnlyForSQLiteCell(t *testing.T) {
 	}
 }
 
+func TestGoTestProfileArgsWritePprofArtifacts(t *testing.T) {
+	cfg, err := parseFlags([]string{
+		"-out-dir", t.TempDir(),
+		"-benchtime", "10x",
+		"-profile-cells",
+		"-profile-benchtime", "3x",
+		"-profile-count", "2",
+	})
+	if err != nil {
+		t.Fatalf("parse flags: %v", err)
+	}
+	cell := matrixCell{
+		BenchmarkPattern: "BenchmarkCollectionShapeInsertBatch",
+		ProfileDir:       filepath.Join(t.TempDir(), "profiles"),
+	}
+	args := strings.Join(goTestProfileArgs(cell, cfg), " ")
+	for _, want := range []string{
+		"-benchtime 3x",
+		"-count 2",
+		"-cpuprofile " + filepath.Join(cell.ProfileDir, "cpu.pprof"),
+		"-memprofile " + filepath.Join(cell.ProfileDir, "allocs.pprof"),
+		"-blockprofile " + filepath.Join(cell.ProfileDir, "block.pprof"),
+		"-mutexprofile " + filepath.Join(cell.ProfileDir, "mutex.pprof"),
+	} {
+		if !strings.Contains(args, want) {
+			t.Fatalf("profile args missing %q: %s", want, args)
+		}
+	}
+}
+
+func TestProfileCellEnvDisablesMaintenanceArtifacts(t *testing.T) {
+	env := profileCellEnv([]string{
+		"TREEDB_COLLECTION_REPORT_VLOG_REWRITE=true",
+		"TREEDB_COLLECTION_REPORT_SQLITE_VACUUM=true",
+	})
+	for _, want := range []string{
+		"TREEDB_COLLECTION_REPORT_DISK_USAGE=false",
+		"TREEDB_COLLECTION_REPORT_VLOG_REWRITE=false",
+		"TREEDB_COLLECTION_REPORT_LEAFGEN_PACK_GC=false",
+		"TREEDB_COLLECTION_REPORT_POST_MAINTENANCE_INDEX_VACUUM=false",
+		"TREEDB_COLLECTION_REPORT_SQLITE_VACUUM=false",
+	} {
+		if !containsEnv(env, want) {
+			t.Fatalf("profile env missing %q: %#v", want, env)
+		}
+	}
+	for _, unwanted := range []string{
+		"TREEDB_COLLECTION_REPORT_VLOG_REWRITE=true",
+		"TREEDB_COLLECTION_REPORT_SQLITE_VACUUM=true",
+	} {
+		if containsEnv(env, unwanted) {
+			t.Fatalf("profile env retained overridden value %q: %#v", unwanted, env)
+		}
+	}
+}
+
+func TestEnvWithOverridesRemovesParentValues(t *testing.T) {
+	env := envWithOverrides([]string{
+		"TREEDB_COLLECTION_REPORT_VLOG_REWRITE=true",
+		"KEEP=this",
+	}, "TREEDB_COLLECTION_REPORT_VLOG_REWRITE=false")
+	if containsEnv(env, "TREEDB_COLLECTION_REPORT_VLOG_REWRITE=true") {
+		t.Fatalf("env retained parent value: %#v", env)
+	}
+	if !containsEnv(env, "TREEDB_COLLECTION_REPORT_VLOG_REWRITE=false") || !containsEnv(env, "KEEP=this") {
+		t.Fatalf("env missing override or unrelated value: %#v", env)
+	}
+}
+
 func TestSQLiteBenchmarkListHasSQLite(t *testing.T) {
 	if !sqliteBenchmarkListHasSQLite([]byte("BenchmarkSQLiteShapeInsertBatchJSON/indexes_0\nok package\n")) {
 		t.Fatal("sqliteBenchmarkListHasSQLite=false want true")
