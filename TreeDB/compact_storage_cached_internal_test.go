@@ -14,6 +14,7 @@ import (
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 func TestCompactStorageCachedAdvancesWritersPastBackendSegments(t *testing.T) {
@@ -58,6 +59,134 @@ func TestCompactStorageCachedAdvancesWritersPastBackendSegments(t *testing.T) {
 	nextPath := filepath.Join(valueLogDir, "value-l0-000002.log")
 	if got := testFileSize(t, nextPath); got == 0 {
 		t.Fatalf("next cached value-log segment was not written: %s", nextPath)
+	}
+}
+
+func TestCompactStorageDefaultPathReclaimsDeadTopSegment(t *testing.T) {
+	dir := t.TempDir()
+	opts := cachedRewriteReclaimTestOptions(dir)
+	opts.IndexOuterLeavesInValueLog = false
+
+	openBackend := func() (*backenddb.DB, func() error, error) {
+		db, cleanup, err := OpenBackend(opts)
+		if err != nil {
+			return nil, nil, err
+		}
+		var closeOnce bool
+		closeBackend := func() error {
+			if closeOnce {
+				return nil
+			}
+			closeOnce = true
+			if db != nil {
+				if err := db.Close(); err != nil {
+					return err
+				}
+			}
+			if cleanup != nil {
+				return cleanup()
+			}
+			return nil
+		}
+		return db, closeBackend, nil
+	}
+
+	backend, cleanupBackend, err := openBackend()
+	if err != nil {
+		t.Fatalf("open backend (for write pointers): %v", err)
+	}
+
+	valueLogDir := backenddb.ValueLogDirPath(dir)
+	segment1 := filepath.Join(valueLogDir, "value-l0-000001.log")
+	segment2 := filepath.Join(valueLogDir, "value-l0-000002.log")
+
+	deadPtr := writeTestValueLogSegmentWithPointer(t, segment1, 0, 1, bytes.Repeat([]byte("dead"), 512))
+	livePtr := writeTestValueLogSegmentWithPointer(t, segment2, 0, 2, bytes.Repeat([]byte("live"), 1024))
+
+	backendBatch := backend.NewBatch()
+	firstBatch, ok := backendBatch.(interface {
+		SetPointer(key []byte, ptr page.ValuePtr) error
+		Write() error
+		Close() error
+	})
+	if !ok {
+		t.Fatalf("missing pointer batch on backend %T", backendBatch)
+	}
+	if err := firstBatch.SetPointer([]byte("dead"), deadPtr); err != nil {
+		t.Fatalf("set dead pointer: %v", err)
+	}
+	if err := firstBatch.Write(); err != nil {
+		t.Fatalf("batch write (dead pointer): %v", err)
+	}
+	if err := firstBatch.Close(); err != nil {
+		t.Fatalf("batch close (dead pointer): %v", err)
+	}
+
+	backendBatch = backend.NewBatch()
+	secondBatch, ok := backendBatch.(interface {
+		SetPointer(key []byte, ptr page.ValuePtr) error
+		Write() error
+		Close() error
+	})
+	if !ok {
+		t.Fatalf("missing pointer batch for live pointer %T", backendBatch)
+	}
+	if err := secondBatch.SetPointer([]byte("dead"), livePtr); err != nil {
+		t.Fatalf("set updated dead pointer: %v", err)
+	}
+	if err := secondBatch.SetPointer([]byte("live"), livePtr); err != nil {
+		t.Fatalf("set live pointer: %v", err)
+	}
+	if err := secondBatch.Write(); err != nil {
+		t.Fatalf("batch write (live pointer): %v", err)
+	}
+	if err := secondBatch.Close(); err != nil {
+		t.Fatalf("batch close (live pointer): %v", err)
+	}
+	if err := cleanupBackend(); err != nil {
+		t.Fatalf("close backend (write pointers): %v", err)
+	}
+
+	db, err := Open(opts)
+	if err != nil {
+		t.Fatalf("open cached: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("close cached db: %v", err)
+		}
+	})
+	if _, err := db.Get([]byte("live")); err != nil {
+		t.Fatalf("expected live key present before compact: %v", err)
+	}
+
+	if _, err := os.Stat(segment1); err != nil {
+		t.Fatalf("expected initial dead segment to exist: %v", err)
+	}
+	if _, err := os.Stat(segment2); err != nil {
+		t.Fatalf("expected initial live segment to exist: %v", err)
+	}
+
+	stats, err := db.CompactStorage(context.Background(), CompactStorageOptions{})
+	if err != nil {
+		t.Fatalf("CompactStorage: %v", err)
+	}
+
+	if _, err := os.Stat(segment1); !os.IsNotExist(err) {
+		t.Fatalf("compact did not remove dead top segment %s (err=%v), stats=%+v", segment1, err, stats)
+	}
+	if _, err := os.Stat(segment2); err != nil {
+		t.Fatalf("expected live segment retained: %v", err)
+	}
+	if got, err := db.Get([]byte("live")); err != nil {
+		t.Fatalf("live key missing after compact: %v", err)
+	} else if !bytes.Equal(got, bytes.Repeat([]byte("live"), 1024)) {
+		t.Fatalf("live key value changed after compact")
+	}
+	if got, err := db.Get([]byte("dead")); err != nil {
+		t.Fatalf("dead key missing after compact: %v", err)
+	} else if !bytes.Equal(got, bytes.Repeat([]byte("live"), 1024)) {
+		t.Fatalf("dead key value changed after compact")
 	}
 }
 
@@ -349,6 +478,30 @@ func writeTestValueLogSegment(t *testing.T, path string, lane, seq uint32, value
 	if err := w.Close(); err != nil {
 		t.Fatalf("Close writer: %v", err)
 	}
+}
+
+func writeTestValueLogSegmentWithPointer(t *testing.T, path string, lane, seq uint32, value []byte) page.ValuePtr {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir value-log dir: %v", err)
+	}
+	fileID, err := valuelog.EncodeFileID(lane, seq)
+	if err != nil {
+		t.Fatalf("EncodeFileID: %v", err)
+	}
+	writer, err := valuelog.NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	ptr, err := writer.Append(0, nil, uint64(seq), value)
+	if err != nil {
+		_ = writer.Close()
+		t.Fatalf("Append: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("Close writer: %v", err)
+	}
+	return ptr
 }
 
 func testFileSize(t *testing.T, path string) int64 {
