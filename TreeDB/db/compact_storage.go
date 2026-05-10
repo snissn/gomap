@@ -900,13 +900,16 @@ func (db *DB) currentValueLogProtectedRefs() ([]string, []uint32) {
 	if db == nil {
 		return nil, nil
 	}
+	var fileIDs []uint32
+	if db.valueLogManager != nil {
+		fileIDs = append(fileIDs, db.valueLogManager.CurrentWritableFileIDs()...)
+	}
 	appender := db.currentValueLogAppender()
 	if appender == nil {
-		return nil, nil
+		return nil, fileIDs
 	}
 	path, fileID, ok := appender.CurrentValueLogSegment()
 	var paths []string
-	var fileIDs []uint32
 	if ok && path != "" {
 		paths = []string{path}
 	}

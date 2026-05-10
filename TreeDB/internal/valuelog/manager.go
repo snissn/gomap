@@ -1478,6 +1478,31 @@ func (m *Manager) PromoteCurrentWritable(fileID uint32) error {
 	return nil
 }
 
+// CurrentWritableFileIDs returns the registered current writable value-log
+// segment IDs. These files may still be held open or mapped and must not be
+// physically removed by maintenance cleanup.
+func (m *Manager) CurrentWritableFileIDs() []uint32 {
+	if m == nil {
+		return nil
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if len(m.currentWritableByLane) == 0 {
+		return nil
+	}
+	ids := make([]uint32, 0, len(m.currentWritableByLane))
+	for _, id := range m.currentWritableByLane {
+		if id == 0 {
+			continue
+		}
+		if f := m.files[id]; f != nil && !f.IsZombie.Load() && f.currentWritable.Load() {
+			ids = append(ids, id)
+		}
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	return ids
+}
+
 // RewriteLaneHint returns a best-effort lane/start-seq hint for creating new
 // rewrite segments without scanning the filesystem.
 //

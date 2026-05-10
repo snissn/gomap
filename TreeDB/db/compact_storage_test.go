@@ -491,6 +491,52 @@ func TestZeroByteValueLogCleanupProtectsByFileID(t *testing.T) {
 	}
 }
 
+func TestCompactStorageKeepsCurrentWritableZeroByteValueLogFiles(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	valueLogDir := ValueLogDirPath(dir)
+	if err := os.MkdirAll(valueLogDir, 0755); err != nil {
+		t.Fatalf("mkdir value_vlog: %v", err)
+	}
+	path := filepath.Join(valueLogDir, "value-l0-000002.log")
+	if err := os.WriteFile(path, nil, 0644); err != nil {
+		t.Fatalf("write zero-byte value log: %v", err)
+	}
+	fileID, err := valuelog.EncodeFileID(0, 2)
+	if err != nil {
+		t.Fatalf("encode file ID: %v", err)
+	}
+	if err := d.valueLogManager.RegisterSegment(path, fileID); err != nil {
+		t.Fatalf("register segment: %v", err)
+	}
+	if err := d.valueLogManager.PromoteCurrentWritable(fileID); err != nil {
+		t.Fatalf("promote current writable: %v", err)
+	}
+
+	plan, err := d.CompactStoragePlan(context.Background(), CompactStorageOptions{})
+	if err != nil {
+		t.Fatalf("CompactStoragePlan: %v", err)
+	}
+	if got := plan.RemainingDebt.ZeroByteValueLogFiles; got != 0 {
+		t.Fatalf("current writable zero-byte debt=%d want 0", got)
+	}
+	stats, err := d.CompactStorage(context.Background(), CompactStorageOptions{})
+	if err != nil {
+		t.Fatalf("CompactStorage: %v", err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("current writable zero-byte file was removed: %v", err)
+	}
+	if stats.ZeroByteValueLogFilesDeleted != 0 {
+		t.Fatalf("deleted current writable zero-byte files=%d want 0", stats.ZeroByteValueLogFilesDeleted)
+	}
+}
+
 func TestCompactStoragePlanReadOnlyDoesNotDeleteZeroByteValueLogFiles(t *testing.T) {
 	dir := t.TempDir()
 	d, err := Open(Options{Dir: dir})
