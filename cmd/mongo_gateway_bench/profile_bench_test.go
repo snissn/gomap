@@ -589,6 +589,22 @@ func BenchmarkDirectCollectionLoadBSONIndexes2(b *testing.B) {
 	reportDocsPerSecond(b, b.N, timedElapsed)
 }
 
+func BenchmarkDirectCollectionConcurrentUpdateBSONIndexes0(b *testing.B) {
+	benchmarkDirectCollectionConcurrentUpdateBSON(b, nil, false)
+}
+
+func BenchmarkDirectCollectionConcurrentUpdateBSONIndexes1(b *testing.B) {
+	benchmarkDirectCollectionConcurrentUpdateBSON(b, []collections.IndexDefinition{
+		{
+			Name:          "email_1",
+			Field:         "email",
+			ValueType:     collections.IndexValueString,
+			Unique:        true,
+			StoragePolicy: collections.RootStorageCompressed,
+		},
+	}, false)
+}
+
 func BenchmarkDirectCollectionConcurrentUpdateBSONIndexes2(b *testing.B) {
 	benchmarkDirectCollectionConcurrentUpdateBSON(b, []collections.IndexDefinition{
 		{

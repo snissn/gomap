@@ -8621,6 +8621,18 @@ func updateBatchBSONSetItemIndex(items []updateBatchItem) int {
 	return -1
 }
 
+func updateBatchItemsAllBSONSet(items []updateBatchItem) bool {
+	if len(items) == 0 {
+		return false
+	}
+	for _, item := range items {
+		if !item.hasBSONSet {
+			return false
+		}
+	}
+	return true
+}
+
 func updateBatchItemError(index int, err error) error {
 	if err == nil {
 		return nil
@@ -10499,11 +10511,17 @@ func (c *Collection) validateUpdateBatchPlanRootDescriptors(plan *updateBatchPla
 	return c.validateRootDescriptorSystemDeltaForMeta(plan.meta, plan.baseCommitSeq, plan.baseSystemRoot, plan.rootNames, plan.baseRootIDs)
 }
 
-func (c *Collection) shouldUseDirectBufferedUpdatePlan(meta CollectionMeta, opts collectionOptions, canBuffer bool, mode updateBatchMode, runtimes []indexRuntime, changed []preparedBatchUpdate) bool {
-	if c == nil || c.writeDomain == nil {
+func (c *Collection) shouldUseDirectBufferedUpdatePlan(meta CollectionMeta, opts collectionOptions, canBuffer bool, mode updateBatchMode, runtimes []indexRuntime, changed []preparedBatchUpdate, allItemsBSONSet bool) bool {
+	if c == nil || c.writeDomain == nil || len(changed) == 0 {
 		return false
 	}
-	if !meta.Options.BufferedIndexedWrites || len(meta.Indexes) == 0 {
+	if persistIndexStateForOptions(opts) {
+		return false
+	}
+	if len(meta.Indexes) == 0 {
+		return allItemsBSONSet && mode == updateBatchModeNoSecondaryUniqueIndexChanges && normalizedDocumentFormat(opts.documentFormat) == DocumentFormatBSON
+	}
+	if !meta.Options.BufferedIndexedWrites {
 		return false
 	}
 	if mode == updateBatchModeAny && collectionMetaHasSecondaryUniqueIndex(meta) {
@@ -10515,7 +10533,7 @@ func (c *Collection) shouldUseDirectBufferedUpdatePlan(meta CollectionMeta, opts
 	if !canBuffer {
 		return false
 	}
-	return !persistIndexStateForOptions(opts)
+	return true
 }
 
 func (c *Collection) updateBatchOnce(items []updateBatchItem, mode updateBatchMode) ([]UpdateBatchResult, error) {
@@ -10766,7 +10784,10 @@ func updateBatchCanReadBufferedDomainLocked(domain *collectionWriteDomain, meta 
 	if collectionName == "" || !hasPendingIndexedRootRunsForRootLocked(domain, collectionPrimaryRootName(collectionName)) {
 		return false
 	}
-	return meta.Options.BufferedIndexedWrites && len(meta.Indexes) > 0
+	if len(meta.Indexes) == 0 {
+		return normalizedDocumentFormat(meta.Options.DocumentFormat) == DocumentFormatBSON
+	}
+	return meta.Options.BufferedIndexedWrites
 }
 
 func readUpdateBatchCurrentDocument(primaryReader *backenddb.SnapshotRootReader, primaryReaderOK bool, itemIndex int, documentID []byte, buffered updateBatchBufferedRead, dst []byte) (updateBatchCurrentDocument, error) {
@@ -11031,6 +11052,7 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 		_ = snap.Close()
 		return nil, err
 	}
+	allItemsBSONSet := updateBatchItemsAllBSONSet(items)
 	if itemIndex := updateBatchBSONSetItemIndex(items); itemIndex >= 0 && normalizedDocumentFormat(plannerOptions.documentFormat) != DocumentFormatBSON {
 		_ = snap.Close()
 		return nil, updateBatchItemError(itemIndex, errBSONSetRequiresBSONFormat)
@@ -11344,7 +11366,7 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 	stats.UniqueIndexPreflight += updateBatchStatsSince(detailedStats, phaseStart)
 
 	success := false
-	canBufferDirectUpdateBatch := c.shouldUseDirectBufferedUpdatePlan(meta, plannerOptions, canBufferIndexedUpdateBatch, mode, runtimes, changed)
+	canBufferDirectUpdateBatch := c.shouldUseDirectBufferedUpdatePlan(meta, plannerOptions, canBufferIndexedUpdateBatch, mode, runtimes, changed, allItemsBSONSet)
 	if canBufferDirectUpdateBatch {
 		phaseStart = updateBatchStatsNow(detailedStats)
 		var templateEntries []directBufferedRootEntry
@@ -11683,6 +11705,16 @@ func (c *Collection) publishUpdateBatchPlanLocked(plan *updateBatchPlan) ([]Upda
 	return plan.results, nil
 }
 
+func directBufferedUpdatePlanCanUseWriteDomain(plan *updateBatchPlan) bool {
+	if plan == nil || !plan.canBufferDirectUpdateBatch {
+		return false
+	}
+	if len(plan.meta.Indexes) == 0 {
+		return normalizedDocumentFormat(plan.meta.Options.DocumentFormat) == DocumentFormatBSON
+	}
+	return plan.meta.Options.BufferedIndexedWrites
+}
+
 func updateBatchPlanUniqueSecondaryIndex(plan *updateBatchPlan, rootOffset int) (IndexDefinition, bool) {
 	if plan == nil || rootOffset < 0 || rootOffset >= len(plan.uniqueSecondaryIndexByRoot) {
 		return IndexDefinition{}, false
@@ -11709,7 +11741,7 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 	defer func() {
 		plan.stats.BufferStage += updateBatchStatsSince(detailedStats, bufferStart)
 	}()
-	if c.writeDomain == nil || !plan.canBufferDirectUpdateBatch || !plan.meta.Options.BufferedIndexedWrites || len(plan.meta.Indexes) == 0 {
+	if c.writeDomain == nil || !directBufferedUpdatePlanCanUseWriteDomain(plan) {
 		plan.stats.BufferStagePrecheck += updateBatchStatsSince(detailedStats, precheckStart)
 		return false, nil
 	}

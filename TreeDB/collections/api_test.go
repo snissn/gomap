@@ -10894,6 +10894,106 @@ func TestCollectionUpdateBSONSetBatchDuplicateIDMatchesUpdateBatchErrorShape(t *
 	}
 }
 
+func TestCollectionUpdateBSONSetBatchBuffersNoIndexPrimaryOnly(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	mgr.SetUpdateBatchDetailedStatsEnabled(true)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "users",
+		Options: CollectionOptions{DocumentFormat: DocumentFormatBSON},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{
+			mustBSONCollectionDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "city", Value: "hnl"}}),
+			mustBSONCollectionDocument(t, bson.D{{Key: "_id", Value: "u2"}, {Key: "city", Value: "hnl"}}),
+		},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush insert buffer: %v", err)
+	}
+	beforeCommit := d.State().CommitSeq
+
+	results, batched, err := col.UpdateBSONSetBatchIfNoSecondaryUniqueIndexChanges([]BSONSetUpdateBatchItem{
+		{DocumentID: []byte("u1"), Fields: []BSONSetField{{Key: "city", Value: mustBSONRawValue(t, "sea")}}},
+		{DocumentID: []byte("u2"), Fields: []BSONSetField{{Key: "city", Value: mustBSONRawValue(t, "sfo")}}},
+	})
+	if err != nil {
+		t.Fatalf("UpdateBSONSetBatchIfNoSecondaryUniqueIndexChanges: %v", err)
+	}
+	if !batched {
+		t.Fatal("batched=false want true")
+	}
+	if len(results) != 2 || !results[0].Matched || !results[0].Modified || !results[1].Matched || !results[1].Modified {
+		t.Fatalf("results=%+v want two matched/modified results", results)
+	}
+	if afterCommit := d.State().CommitSeq; afterCommit != beforeCommit {
+		t.Fatalf("commit seq advanced from %d to %d; want buffered primary-only update", beforeCommit, afterCommit)
+	}
+	stats := col.LastUpdateStats()
+	if stats.Indexes != 0 || stats.BufferedBatches != 1 || stats.Publish != 0 || stats.Runs != 1 {
+		t.Fatalf("stats indexes=%d buffered=%d publish=%s runs=%d want 0/1/0/1", stats.Indexes, stats.BufferedBatches, stats.Publish, stats.Runs)
+	}
+	if got, want := stats.StructuredUpdateApplications, 2; got != want {
+		t.Fatalf("structured update applications=%d want %d", got, want)
+	}
+	managerStats := mgr.StatsSnapshot()
+	if managerStats.PendingDocuments != 2 || managerStats.PendingRootRuns == 0 {
+		t.Fatalf("pending docs=%d rootRuns=%d want two pending primary-root entries", managerStats.PendingDocuments, managerStats.PendingRootRuns)
+	}
+
+	matched, modified, err := col.UpdateBSONSet([]byte("u1"), []BSONSetField{{
+		Key:   "city",
+		Value: mustBSONRawValue(t, "lax"),
+	}})
+	if err != nil {
+		t.Fatalf("UpdateBSONSet second buffered read: %v", err)
+	}
+	if !matched || !modified {
+		t.Fatalf("second update matched=%v modified=%v want true/true", matched, modified)
+	}
+	if afterCommit := d.State().CommitSeq; afterCommit != beforeCommit {
+		t.Fatalf("commit seq advanced after second update from %d to %d", beforeCommit, afterCommit)
+	}
+	got, found, err := col.GetInto([]byte("u1"), nil)
+	if err != nil {
+		t.Fatalf("get buffered u1: %v", err)
+	}
+	if !found {
+		t.Fatal("buffered u1 not found")
+	}
+	if gotCity := bson.Raw(got).Lookup("city").StringValue(); gotCity != "lax" {
+		t.Fatalf("buffered city=%q want lax", gotCity)
+	}
+
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush buffered BSON set updates: %v", err)
+	}
+	if afterFlush := d.State().CommitSeq; afterFlush <= beforeCommit {
+		t.Fatalf("commit seq after flush=%d want > %d", afterFlush, beforeCommit)
+	}
+	got, found, err = col.GetInto([]byte("u1"), nil)
+	if err != nil {
+		t.Fatalf("get flushed u1: %v", err)
+	}
+	if !found || bson.Raw(got).Lookup("city").StringValue() != "lax" {
+		t.Fatalf("flushed u1 found=%v doc=%v want city lax", found, got)
+	}
+}
+
 func TestBuildUpdateBatchPlanBSONSetRejectsInvalidCurrentBSON(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

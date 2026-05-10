@@ -931,6 +931,96 @@ func TestRunMongoUpdateBatchResultsDeclineReturnsZeroResults(t *testing.T) {
 	}
 }
 
+func TestRunMongoUpdateBatchBuffersNoIndexBSONSet(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	mgr := collections.NewCollectionManager(db)
+	mgr.SetUpdateBatchDetailedStatsEnabled(true)
+	if _, err := mgr.CreateCollection(&collections.CollectionMeta{
+		Name: "app.users",
+		Options: collections.CollectionOptions{
+			DocumentFormat: collections.DocumentFormatBSON,
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("app.users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	id1, err := encodePrimaryKey(mustRawValue(t, "u1"))
+	if err != nil {
+		t.Fatalf("encode u1: %v", err)
+	}
+	id2, err := encodePrimaryKey(mustRawValue(t, "u2"))
+	if err != nil {
+		t.Fatalf("encode u2: %v", err)
+	}
+	doc1 := mustDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "city", Value: "hnl"}})
+	doc2 := mustDocument(t, bson.D{{Key: "_id", Value: "u2"}, {Key: "city", Value: "hnl"}})
+	if _, err := col.InsertBatchValidatedBSON([][]byte{id1, id2}, [][]byte{doc1, doc2}); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush insert buffer: %v", err)
+	}
+	before := db.State()
+	buildUpdateItem := func(index int, id string, update bson.D) mongoUpdateItem {
+		t.Helper()
+		item, err := parseMongoUpdateItem(index, mustDocument(t, bson.D{
+			{Key: "q", Value: bson.D{{Key: "_id", Value: id}}},
+			{Key: "u", Value: update},
+		}))
+		if err != nil {
+			t.Fatalf("parse update item: %v", err)
+		}
+		return item
+	}
+
+	matched, modified, batched, err := runMongoUpdateBatch(col, []mongoUpdateItem{
+		buildUpdateItem(0, "u1", bson.D{{Key: "$set", Value: bson.D{{Key: "city", Value: "sea"}}}}),
+		buildUpdateItem(1, "u2", bson.D{{Key: "$set", Value: bson.D{{Key: "city", Value: "sfo"}}}}),
+	})
+	if err != nil {
+		t.Fatalf("runMongoUpdateBatch: %v", err)
+	}
+	if !batched || matched != 2 || modified != 2 {
+		t.Fatalf("matched=%d modified=%d batched=%v want 2,2,true", matched, modified, batched)
+	}
+	stats := col.LastUpdateStats()
+	if stats.Indexes != 0 || stats.BufferedBatches != 1 || stats.Publish != 0 {
+		t.Fatalf("stats indexes=%d buffered=%d publish=%s want 0/1/0", stats.Indexes, stats.BufferedBatches, stats.Publish)
+	}
+	if got, want := stats.StructuredUpdateApplications, 2; got != want {
+		t.Fatalf("structured update applications=%d want %d", got, want)
+	}
+	if stats.Callback != 0 {
+		t.Fatalf("callback duration=%s want zero for BSON set gateway batch", stats.Callback)
+	}
+	after := db.State()
+	if after.CommitSeq != before.CommitSeq {
+		t.Fatalf("buffered no-index batch advanced commit seq by %d, want 0", after.CommitSeq-before.CommitSeq)
+	}
+	got, found, err := col.GetInto(id1, nil)
+	if err != nil {
+		t.Fatalf("get buffered id1: %v", err)
+	}
+	if !found || bson.Raw(got).Lookup("city").StringValue() != "sea" {
+		t.Fatalf("buffered id1 found=%v doc=%v want city sea", found, got)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush buffered no-index mongo update batch: %v", err)
+	}
+	flushed := db.State()
+	if flushed.CommitSeq <= before.CommitSeq {
+		t.Fatalf("flushed commit seq=%d want > %d", flushed.CommitSeq, before.CommitSeq)
+	}
+}
+
 func TestRunMongoUpdateBatchBatchesNonUniqueFieldWithSecondaryUniqueIndex(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
