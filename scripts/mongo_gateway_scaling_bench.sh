@@ -484,14 +484,14 @@ stop_mongo_container() {
     return
   fi
   docker rm -f "$container" >/dev/null 2>&1 || true
-  local keep=()
+  local next_containers=()
   local active
   for active in "${ACTIVE_CONTAINERS[@]:-}"; do
     if [[ "$active" != "$container" ]]; then
-      keep+=("$active")
+      next_containers+=("$active")
     fi
   done
-  ACTIVE_CONTAINERS=("${keep[@]}")
+  ACTIVE_CONTAINERS=("${next_containers[@]}")
 }
 
 wait_for_mongo() {
