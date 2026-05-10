@@ -1,0 +1,3 @@
+# Pinned to shard 0 because this caching race test dominated the previous
+# line-count race shard.
+TestCheckpoint_KickSkipsWhenMaintenancePhaseNonSteady
