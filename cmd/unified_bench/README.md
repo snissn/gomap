@@ -148,7 +148,7 @@ Use `./bin/unified-bench -h` for the full grouped TreeDB advanced flag list.
 - `-vacuum-between-tests` vacuum supported DBs between tests (implies `-checkpoint-between-tests`; TreeDB uses `VacuumIndexOnline`)
 - `-treedb-vlog-rewrite-after-run` run the full TreeDB `CompactStorage` path after the run and report before/after disk usage + the data directory path; the flag name is kept for compatibility
 - `-treedb-vacuum-after-vlog-rewrite-run` optionally run offline TreeDB index vacuum after `-treedb-vlog-rewrite-after-run` before final reporting; disabled by default
-- `-checkpoint-every-ops` force a best-effort durability checkpoint every N ops during write-heavy tests (DBs that support `Checkpoint()`) 
+- `-checkpoint-every-ops` force a best-effort durability checkpoint every N ops during write-heavy tests (DBs that support `Checkpoint()`)
 - `-checkpoint-every-bytes` force a best-effort durability checkpoint every N approx bytes during write-heavy tests (DBs that support `Checkpoint()`)
 - `-suite` named suite:
   - `readme` — generates the README graphs + sweep tables
