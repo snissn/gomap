@@ -135,7 +135,7 @@ func (db *DB) applyCachedCompactStorageOptions(opts *CompactStorageOptions, chec
 	if checkpoint && len(explicitProtectedPaths) == 0 && userProtectedPathsFunc == nil {
 		opts.UnsafeValueLogReclaimFencedUnreferenced = true
 		if opts.ValueLogFencedProtectedPathsFunc == nil {
-			opts.ValueLogFencedProtectedPathsFunc = db.cached.ValueLogProtectedPaths
+			opts.ValueLogFencedProtectedPathsFunc = db.cached.ValueLogInUsePaths
 		}
 	}
 	return nil
