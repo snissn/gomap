@@ -1635,6 +1635,14 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 
 	for _, readKind := range concurrentReadKindsForConfig(cfg) {
 		for _, concurrentReaders := range concurrentReaderCounts(cfg) {
+			if readKind == concurrentReadKindRange {
+				concurrentReadPhase, err := runConcurrentRangePhaseWithOps(ctx, cfg, target, profiler, coll, concurrentReaders, cfg.ConcurrentReads)
+				if err != nil {
+					return nil, err
+				}
+				result.Phases = append(result.Phases, concurrentReadPhase)
+				continue
+			}
 			phaseName := concurrentReadPhaseName(cfg, readKind, concurrentReaders)
 			concurrentReadPhase, err := measureTreeDBProfiledPhase(target, profiler, phaseName, cfg.ConcurrentReads, func(sample func(time.Duration)) error {
 				return runConcurrentOperations(ctx, concurrentReaders, cfg.ConcurrentReads, func(op int) error {
@@ -3764,7 +3772,11 @@ func watchRawWireTCPPipelineClients(ctx context.Context, clients ...*rawWireTCPP
 }
 
 func runConcurrentRangePhase(ctx context.Context, cfg config, target *benchTarget, profiler *profileRecorder, coll *mongo.Collection, readers int) (phaseResult, error) {
-	readers = effectiveConcurrentWorkers(readers, cfg.ConcurrentRangeReads)
+	return runConcurrentRangePhaseWithOps(ctx, cfg, target, profiler, coll, readers, cfg.ConcurrentRangeReads)
+}
+
+func runConcurrentRangePhaseWithOps(ctx context.Context, cfg config, target *benchTarget, profiler *profileRecorder, coll *mongo.Collection, readers, operations int) (phaseResult, error) {
+	readers = effectiveConcurrentWorkers(readers, operations)
 	phaseName := concurrentRangePhaseName(cfg, readers)
 	if cfg.Target == "treedb" && cfg.ClientMode == clientModeRawWire {
 		if target == nil || target.server == nil {
@@ -3772,8 +3784,8 @@ func runConcurrentRangePhase(ctx context.Context, cfg config, target *benchTarge
 		}
 		var requestID atomic.Int32
 		scratches := make([]rawWireInProcessScratch, readers)
-		return measureTreeDBProfiledPhase(target, profiler, phaseName, cfg.ConcurrentRangeReads, func(sample func(time.Duration)) error {
-			return runConcurrentOperationsByWorker(ctx, readers, cfg.ConcurrentRangeReads, func(worker, op int) error {
+		return measureTreeDBProfiledPhase(target, profiler, phaseName, operations, func(sample func(time.Duration)) error {
+			return runConcurrentOperationsByWorker(ctx, readers, operations, func(worker, op int) error {
 				return runTreeDBRawWireRangeOperation(ctx, cfg, target, &requestID, int64(worker+1), rangeReadMinAge(op, cfg.Documents), sample, &scratches[worker])
 			})
 		})
@@ -3801,8 +3813,8 @@ func runConcurrentRangePhase(ctx context.Context, cfg config, target *benchTarge
 				_ = client.Close()
 			}
 		}()
-		return measureTreeDBProfiledPhase(target, profiler, phaseName, cfg.ConcurrentRangeReads, func(sample func(time.Duration)) error {
-			return runConcurrentOperationsByWorker(ctx, readers, cfg.ConcurrentRangeReads, func(worker, op int) error {
+		return measureTreeDBProfiledPhase(target, profiler, phaseName, operations, func(sample func(time.Duration)) error {
+			return runConcurrentOperationsByWorker(ctx, readers, operations, func(worker, op int) error {
 				var err error
 				commandBufs[worker], err = runTreeDBRawWireTCPRangeOperation(ctx, cfg, clients[worker], rangeReadMinAge(op, cfg.Documents), sample, commandBufs[worker])
 				return err
@@ -3831,7 +3843,7 @@ func runConcurrentRangePhase(ctx context.Context, cfg config, target *benchTarge
 				_ = client.Close()
 			}
 		}()
-		return measureTreeDBProfiledPhase(target, profiler, phaseName, cfg.ConcurrentRangeReads, func(sample func(time.Duration)) error {
+		return measureTreeDBProfiledPhase(target, profiler, phaseName, operations, func(sample func(time.Duration)) error {
 			runCtx, cancel := context.WithCancel(ctx)
 			defer cancel()
 			stopCancelWatch := watchRawWireTCPPipelineClients(runCtx, clients...)
@@ -3855,7 +3867,7 @@ func runConcurrentRangePhase(ctx context.Context, cfg config, target *benchTarge
 					defer wg.Done()
 					minAges := make([]int64, cfg.RawWireTCPPipelineDepth)
 					responseTo := make([]int32, cfg.RawWireTCPPipelineDepth)
-					if err := runRawWireTCPPipelineRangeStridedBatches(runCtx, cfg, clients[worker], worker, readers, cfg.ConcurrentRangeReads, minAges, responseTo, sample); err != nil {
+					if err := runRawWireTCPPipelineRangeStridedBatches(runCtx, cfg, clients[worker], worker, readers, operations, minAges, responseTo, sample); err != nil {
 						recordErr(err)
 					}
 				}(worker)
@@ -3872,21 +3884,21 @@ func runConcurrentRangePhase(ctx context.Context, cfg config, target *benchTarge
 			return phaseResult{}, errors.New("driver-command-raw range phase requires a Mongo driver client")
 		}
 		db := target.client.Database(cfg.Database)
-		return measureTreeDBProfiledPhase(target, profiler, phaseName, cfg.ConcurrentRangeReads, func(sample func(time.Duration)) error {
-			return runConcurrentOperations(ctx, readers, cfg.ConcurrentRangeReads, func(op int) error {
+		return measureTreeDBProfiledPhase(target, profiler, phaseName, operations, func(sample func(time.Duration)) error {
+			return runConcurrentOperations(ctx, readers, operations, func(op int) error {
 				return runDriverCommandRawRangeOperation(ctx, cfg, db, rangeReadMinAge(op, cfg.Documents), sample)
 			})
 		})
 	}
 	if cfg.ClientMode == clientModeDriverFindRaw {
-		return measureTreeDBProfiledPhase(target, profiler, phaseName, cfg.ConcurrentRangeReads, func(sample func(time.Duration)) error {
-			return runConcurrentOperations(ctx, readers, cfg.ConcurrentRangeReads, func(op int) error {
+		return measureTreeDBProfiledPhase(target, profiler, phaseName, operations, func(sample func(time.Duration)) error {
+			return runConcurrentOperations(ctx, readers, operations, func(op int) error {
 				return runDriverFindRawRangeOperation(ctx, coll, rangeReadMinAge(op, cfg.Documents), sample)
 			})
 		})
 	}
-	return measureTreeDBProfiledPhase(target, profiler, phaseName, cfg.ConcurrentRangeReads, func(sample func(time.Duration)) error {
-		return runConcurrentOperations(ctx, readers, cfg.ConcurrentRangeReads, func(op int) error {
+	return measureTreeDBProfiledPhase(target, profiler, phaseName, operations, func(sample func(time.Duration)) error {
+		return runConcurrentOperations(ctx, readers, operations, func(op int) error {
 			return runDriverDecodedRangeOperation(ctx, coll, rangeReadMinAge(op, cfg.Documents), sample)
 		})
 	})

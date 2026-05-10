@@ -248,6 +248,19 @@ func TestProfileCellEnvDisablesMaintenanceArtifacts(t *testing.T) {
 	}
 }
 
+func TestEnvWithOverridesRemovesParentValues(t *testing.T) {
+	env := envWithOverrides([]string{
+		"TREEDB_COLLECTION_REPORT_VLOG_REWRITE=true",
+		"KEEP=this",
+	}, "TREEDB_COLLECTION_REPORT_VLOG_REWRITE=false")
+	if containsEnv(env, "TREEDB_COLLECTION_REPORT_VLOG_REWRITE=true") {
+		t.Fatalf("env retained parent value: %#v", env)
+	}
+	if !containsEnv(env, "TREEDB_COLLECTION_REPORT_VLOG_REWRITE=false") || !containsEnv(env, "KEEP=this") {
+		t.Fatalf("env missing override or unrelated value: %#v", env)
+	}
+}
+
 func TestSQLiteBenchmarkListHasSQLite(t *testing.T) {
 	if !sqliteBenchmarkListHasSQLite([]byte("BenchmarkSQLiteShapeInsertBatchJSON/indexes_0\nok package\n")) {
 		t.Fatal("sqliteBenchmarkListHasSQLite=false want true")

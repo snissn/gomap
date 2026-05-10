@@ -526,7 +526,7 @@ func runBenchmarkCell(cfg config, cell matrixCell) error {
 
 	cmd := exec.Command(cfg.goBinary, args...)
 	cmd.Dir = cfg.repoRoot
-	cmd.Env = append(os.Environ(), cell.Env...)
+	cmd.Env = envWithOverrides(os.Environ(), cell.Env...)
 	cmd.Stdout = out
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
@@ -576,7 +576,7 @@ func runProfileCell(cfg config, cell matrixCell) error {
 	fmt.Printf("profiling %s: %s %s\n", cell.Name, cfg.goBinary, strings.Join(args, " "))
 	cmd := exec.Command(cfg.goBinary, args...)
 	cmd.Dir = cfg.repoRoot
-	cmd.Env = append(os.Environ(), profileCellEnv(cell.Env)...)
+	cmd.Env = envWithOverrides(os.Environ(), profileCellEnv(cell.Env)...)
 	cmd.Stdout = out
 	cmd.Stderr = io.MultiWriter(os.Stderr, out)
 	start := time.Now()
