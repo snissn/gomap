@@ -281,6 +281,9 @@ func benchmarkReportSQLiteDiskUsage(b *testing.B, db *sql.DB, docs int) {
 	if docs <= 0 {
 		return
 	}
+	if !benchmarkBoolEnv(b, "TREEDB_COLLECTION_REPORT_DISK_USAGE", true) {
+		return
+	}
 	checkpointSQLiteWAL(b, db)
 	totalBytes := benchmarkSQLiteMainDiskBytes(b, db)
 	benchmarkReportDiskUsage(b, docs, totalBytes)

@@ -584,6 +584,7 @@ func TestParseConfigValidation(t *testing.T) {
 		"-mongo-max-connecting", "16",
 		"-secondary-indexes", "2",
 		"-format", "json",
+		"-concurrent-read-kinds", "id,email",
 		"-concurrent-readers", "4",
 		"-concurrent-reads", "20",
 		"-concurrent-range-readers", "3",
@@ -601,6 +602,7 @@ func TestParseConfigValidation(t *testing.T) {
 		cfg.ClientMode != clientModeDriver ||
 		cfg.BatchSize != 5 || cfg.InsertProducers != 4 ||
 		cfg.MongoMaxPoolSize != 32 || cfg.MongoMinPoolSize != 8 || cfg.MongoMaxConnecting != 16 ||
+		!reflect.DeepEqual(cfg.ConcurrentReadKinds, []string{concurrentReadKindID, concurrentReadKindEmail}) ||
 		cfg.ConcurrentReaders != 4 || cfg.ConcurrentReads != 20 ||
 		cfg.ConcurrentRangeReaders != 3 || cfg.ConcurrentRangeReads != 18 ||
 		cfg.ConcurrentWriters != 2 || cfg.ConcurrentWrites != 10 ||
@@ -617,6 +619,27 @@ func TestParseConfigValidation(t *testing.T) {
 	if !reflect.DeepEqual(sweepCfg.ConcurrentReaderSweep, []int{1, 2, 4}) || sweepCfg.ConcurrentReads != 30 {
 		t.Fatalf("unexpected concurrent reader sweep config: %+v", sweepCfg)
 	}
+	readKindsCfg, err := parseConfig([]string{
+		"-concurrent-read-kinds", "all",
+		"-concurrent-reader-sweep", "1,2",
+		"-concurrent-reads", "30",
+	})
+	if err != nil {
+		t.Fatalf("parse concurrent read kinds config: %v", err)
+	}
+	if !reflect.DeepEqual(readKindsCfg.ConcurrentReadKinds, []string{concurrentReadKindID, concurrentReadKindEmail, concurrentReadKindRange}) {
+		t.Fatalf("unexpected concurrent read kinds: %+v", readKindsCfg.ConcurrentReadKinds)
+	}
+	writerSweepCfg, err := parseConfig([]string{
+		"-concurrent-writer-sweep", "1,2 4",
+		"-concurrent-writes", "30",
+	})
+	if err != nil {
+		t.Fatalf("parse concurrent writer sweep config: %v", err)
+	}
+	if !reflect.DeepEqual(writerSweepCfg.ConcurrentWriterSweep, []int{1, 2, 4}) || writerSweepCfg.ConcurrentWrites != 30 {
+		t.Fatalf("unexpected concurrent writer sweep config: %+v", writerSweepCfg)
+	}
 	rangeSweepCfg, err := parseConfig([]string{
 		"-concurrent-range-reader-sweep", "1,2 4",
 		"-concurrent-range-reads", "30",
@@ -626,6 +649,15 @@ func TestParseConfigValidation(t *testing.T) {
 	}
 	if !reflect.DeepEqual(rangeSweepCfg.ConcurrentRangeReaderSweep, []int{1, 2, 4}) || rangeSweepCfg.ConcurrentRangeReads != 30 {
 		t.Fatalf("unexpected concurrent range reader sweep config: %+v", rangeSweepCfg)
+	}
+	if _, err := parseConfig([]string{
+		"-concurrent-read-kinds", "range",
+		"-concurrent-reader-sweep", "1,2",
+		"-concurrent-reads", "30",
+		"-concurrent-range-reader-sweep", "1,2",
+		"-concurrent-range-reads", "30",
+	}); err == nil || !strings.Contains(err.Error(), "concurrent-read-kinds range cannot be combined") {
+		t.Fatalf("duplicate range concurrency config error = %v", err)
 	}
 	rawWireCfg, err := parseConfig([]string{"-target", "treedb", "-client-mode", "raw-wire"})
 	if err != nil {
@@ -760,6 +792,24 @@ func TestParseConfigValidation(t *testing.T) {
 	if _, err := parseConfig([]string{"-concurrent-reader-sweep", "1,1", "-concurrent-reads", "10"}); err == nil {
 		t.Fatal("duplicate concurrent-reader-sweep value accepted")
 	}
+	if _, err := parseConfig([]string{"-concurrent-read-kinds", "bad"}); err == nil {
+		t.Fatal("bad concurrent-read-kinds accepted")
+	}
+	if _, err := parseConfig([]string{"-concurrent-read-kinds", "id,id"}); err == nil {
+		t.Fatal("duplicate concurrent-read-kinds value accepted")
+	}
+	if _, err := parseConfig([]string{"-concurrent-writer-sweep", "1,2"}); err == nil {
+		t.Fatal("concurrent-writer-sweep without concurrent-writes accepted")
+	}
+	if _, err := parseConfig([]string{"-concurrent-writer-sweep", "1,2", "-concurrent-writes", "10", "-concurrent-writers", "2"}); err == nil {
+		t.Fatal("concurrent-writer-sweep combined with concurrent-writers accepted")
+	}
+	if _, err := parseConfig([]string{"-concurrent-writer-sweep", "1,0", "-concurrent-writes", "10"}); err == nil {
+		t.Fatal("invalid concurrent-writer-sweep accepted")
+	}
+	if _, err := parseConfig([]string{"-concurrent-writer-sweep", "1,1", "-concurrent-writes", "10"}); err == nil {
+		t.Fatal("duplicate concurrent-writer-sweep value accepted")
+	}
 	if _, err := parseConfig([]string{"-concurrent-range-readers", "-1"}); err == nil {
 		t.Fatal("negative concurrent-range-readers accepted")
 	}
@@ -786,6 +836,17 @@ func TestParseConfigValidation(t *testing.T) {
 	}
 	if _, err := parseConfig([]string{"-target", "treedb", "-client-mode", "direct", "-treedb-read-state", "unsettled", "-range-reads", "1"}); err == nil {
 		t.Fatal("direct unsettled scan range reads accepted")
+	}
+	if _, err := parseConfig([]string{
+		"-target", "treedb",
+		"-client-mode", "direct",
+		"-treedb-read-state", "unsettled",
+		"-range-reads", "0",
+		"-concurrent-read-kinds", "range",
+		"-concurrent-readers", "1",
+		"-concurrent-reads", "1",
+	}); err == nil {
+		t.Fatal("direct unsettled generic range read-kind accepted")
 	}
 	legacyFlushedCfg, err := parseConfig([]string{"-treedb-read-state", "flushed"})
 	if err != nil {
@@ -823,6 +884,18 @@ func TestParseConfigValidation(t *testing.T) {
 	}
 	if _, err := parseConfig([]string{"-treedb-buffered-indexed-write-max-root-runs", "-1"}); err == nil {
 		t.Fatal("negative treedb buffered indexed max root runs accepted")
+	}
+}
+
+func TestConcurrentUpdateOperationVariesByWriterSweepCell(t *testing.T) {
+	if got, want := concurrentUpdateOperation(7, 1, 100), 107; got != want {
+		t.Fatalf("w1 update operation = %d, want %d", got, want)
+	}
+	if got, want := concurrentUpdateOperation(7, 4, 100), 407; got != want {
+		t.Fatalf("w4 update operation = %d, want %d", got, want)
+	}
+	if got := concurrentUpdateOperation(7, 0, 100); got != 7 {
+		t.Fatalf("zero-worker update operation = %d, want original", got)
 	}
 }
 
@@ -1575,6 +1648,7 @@ func TestTreeDBDirectBenchmarkSmoke(t *testing.T) {
 				"-deletes", "2",
 				"-secondary-indexes", "2",
 				"-range-index",
+				"-concurrent-read-kinds", "id,email",
 				"-concurrent-reader-sweep", "1,2",
 				"-concurrent-reads", "12",
 				"-concurrent-range-reader-sweep", "1,2",
@@ -1625,6 +1699,8 @@ func TestTreeDBDirectBenchmarkSmoke(t *testing.T) {
 				"id_update_set",
 				"concurrent_id_find_one_r1",
 				"concurrent_id_find_one_r2",
+				"concurrent_email_find_one_r1",
+				"concurrent_email_find_one_r2",
 				"concurrent_id_update_set_w2",
 				"id_delete_one",
 			} {

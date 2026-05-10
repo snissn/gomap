@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"html"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -42,6 +43,11 @@ type config struct {
 	reportLeafGenPackGC    bool
 	reportPostMaintVacuum  bool
 	reportSQLiteVacuum     bool
+	profileCells           bool
+	profileBenchtime       string
+	profileCount           int
+	profileBlockRate       int
+	profileMutexFraction   int
 	availableBenchmarks    bool
 	skipSQLite             bool
 	dryRun                 bool
@@ -69,6 +75,37 @@ type matrixCell struct {
 	ReportMarkdownPath     string
 	ReportJSONPath         string
 	RawJSONPath            string
+	ProfileDir             string
+	ProfileManifestPath    string
+}
+
+type collectionProfileManifest struct {
+	SchemaVersion    string                      `json:"schema_version"`
+	CreatedAt        string                      `json:"created_at"`
+	Cell             string                      `json:"cell"`
+	ProfileDir       string                      `json:"profile_dir"`
+	ExecutionPath    string                      `json:"execution_path"`
+	Engine           string                      `json:"engine"`
+	DocumentFormat   string                      `json:"document_format"`
+	StoragePolicy    string                      `json:"storage_policy"`
+	BenchmarkPattern string                      `json:"benchmark_pattern"`
+	Benchtime        string                      `json:"benchtime"`
+	Count            int                         `json:"count"`
+	Command          []string                    `json:"command"`
+	Env              []string                    `json:"env,omitempty"`
+	DurationMillis   float64                     `json:"duration_ms"`
+	RunError         string                      `json:"run_error,omitempty"`
+	Artifacts        []collectionProfileArtifact `json:"artifacts"`
+}
+
+type collectionProfileArtifact struct {
+	Phase         string `json:"phase"`
+	CPUProfile    string `json:"cpu_profile,omitempty"`
+	AllocsProfile string `json:"allocs_profile,omitempty"`
+	BlockProfile  string `json:"block_profile,omitempty"`
+	MutexProfile  string `json:"mutex_profile,omitempty"`
+	Output        string `json:"output,omitempty"`
+	Error         string `json:"error,omitempty"`
 }
 
 func main() {
@@ -110,6 +147,9 @@ func parseFlags(args []string) (config, error) {
 		reportLeafGenPackGC:    true,
 		reportPostMaintVacuum:  true,
 		reportSQLiteVacuum:     true,
+		profileCount:           1,
+		profileBlockRate:       1,
+		profileMutexFraction:   1,
 		availableBenchmarks:    true,
 	}
 
@@ -135,6 +175,11 @@ func parseFlags(args []string) (config, error) {
 	fs.BoolVar(&cfg.reportLeafGenPackGC, "report-leafgen-pack-gc", cfg.reportLeafGenPackGC, "Run TreeDB leaf_vlog generation pack/GC measurement after insert-shape benchmarks")
 	fs.BoolVar(&cfg.reportPostMaintVacuum, "report-post-maintenance-index-vacuum", cfg.reportPostMaintVacuum, "Run TreeDB index vacuum after post-rewrite/pack size measurements and report compacted bytes")
 	fs.BoolVar(&cfg.reportSQLiteVacuum, "report-sqlite-vacuum", cfg.reportSQLiteVacuum, "Run SQLite VACUUM measurement after insert-shape benchmarks")
+	fs.BoolVar(&cfg.profileCells, "profile-cells", cfg.profileCells, "Run a separate pprof capture pass for each matrix cell after timed benchmarks")
+	fs.StringVar(&cfg.profileBenchtime, "profile-benchtime", cfg.profileBenchtime, "go test -benchtime for profile pass; defaults to -benchtime")
+	fs.IntVar(&cfg.profileCount, "profile-count", cfg.profileCount, "go test -count for profile pass")
+	fs.IntVar(&cfg.profileBlockRate, "profile-block-rate", cfg.profileBlockRate, "go test -blockprofilerate for profile pass")
+	fs.IntVar(&cfg.profileMutexFraction, "profile-mutex-fraction", cfg.profileMutexFraction, "go test -mutexprofilefraction for profile pass")
 	fs.BoolVar(&cfg.availableBenchmarks, "available-benchmarks", cfg.availableBenchmarks, "Summarize all benchmark rows present in each report")
 	fs.BoolVar(&cfg.skipSQLite, "skip-sqlite", false, "Skip SQLite comparison cell")
 	fs.BoolVar(&cfg.dryRun, "dry-run", false, "Print planned commands without executing benchmarks")
@@ -173,6 +218,18 @@ func parseFlags(args []string) (config, error) {
 	}
 	if strings.TrimSpace(cfg.goBinary) == "" {
 		return config{}, fmt.Errorf("-go is required")
+	}
+	if cfg.profileCount <= 0 {
+		return config{}, fmt.Errorf("-profile-count must be positive")
+	}
+	if cfg.profileBlockRate < 0 {
+		return config{}, fmt.Errorf("-profile-block-rate must be >= 0")
+	}
+	if cfg.profileMutexFraction < 0 {
+		return config{}, fmt.Errorf("-profile-mutex-fraction must be >= 0")
+	}
+	if strings.TrimSpace(cfg.profileBenchtime) == "" {
+		cfg.profileBenchtime = cfg.benchtime
 	}
 	return cfg, nil
 }
@@ -238,6 +295,10 @@ func run(cfg config, commandLine []string) error {
 		cell.RawJSONPath = filepath.Join(cellDir, "go_test.json")
 		cell.ReportMarkdownPath = filepath.Join(cellDir, "collections_report.md")
 		cell.ReportJSONPath = filepath.Join(cellDir, "collections_report.json")
+		if cfg.profileCells {
+			cell.ProfileDir = filepath.Join(cellDir, "profiles")
+			cell.ProfileManifestPath = filepath.Join(cell.ProfileDir, "collection_profile_manifest.json")
+		}
 		if err := runBenchmarkCell(cfg, *cell); err != nil {
 			return err
 		}
@@ -255,6 +316,11 @@ func run(cfg config, commandLine []string) error {
 	if err := runMatrixSummary(cfg, matrixIndexPath); err != nil {
 		return err
 	}
+	if cfg.profileCells {
+		for _, err := range runProfileCells(cfg, cells) {
+			fmt.Fprintf(os.Stderr, "collection_bench_matrix: profile warning: %v\n", err)
+		}
+	}
 	if err := writeRunREADME(cfg, commandLine, cells, matrixIndexPath, branch, commit); err != nil {
 		return err
 	}
@@ -264,6 +330,16 @@ func run(cfg config, commandLine []string) error {
 	fmt.Printf("summary markdown: %s\n", filepath.Join(cfg.outDir, "collections_matrix_summary.md"))
 	fmt.Printf("summary html:     %s\n", filepath.Join(cfg.outDir, "collections_matrix_summary.html"))
 	return nil
+}
+
+func runProfileCells(cfg config, cells []matrixCell) []error {
+	var errs []error
+	for _, cell := range cells {
+		if err := runProfileCell(cfg, cell); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errs
 }
 
 func defaultOutputDir(now time.Time) string {
@@ -450,7 +526,7 @@ func runBenchmarkCell(cfg config, cell matrixCell) error {
 
 	cmd := exec.Command(cfg.goBinary, args...)
 	cmd.Dir = cfg.repoRoot
-	cmd.Env = append(os.Environ(), cell.Env...)
+	cmd.Env = envWithOverrides(os.Environ(), cell.Env...)
 	cmd.Stdout = out
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
@@ -473,6 +549,129 @@ func goTestArgs(cell matrixCell, cfg config) []string {
 		"-count", strconv.Itoa(cfg.count),
 		"-benchtime", cfg.benchtime,
 		"-json",
+	)
+	return args
+}
+
+func runProfileCell(cfg config, cell matrixCell) error {
+	if strings.TrimSpace(cell.ProfileDir) == "" {
+		return fmt.Errorf("profile dir is empty for %s", cell.Name)
+	}
+	if cfg.dryRun {
+		fmt.Printf("profiling %s: %s %s\n", cell.Name, cfg.goBinary, strings.Join(goTestProfileArgs(cell, cfg), " "))
+		return nil
+	}
+	if err := os.MkdirAll(cell.ProfileDir, 0o755); err != nil {
+		return fmt.Errorf("create profile dir for %s: %w", cell.Name, err)
+	}
+	args := goTestProfileArgs(cell, cfg)
+	outputName := "profile_go_test.txt"
+	outputPath := filepath.Join(cell.ProfileDir, outputName)
+	out, err := os.Create(outputPath)
+	if err != nil {
+		return fmt.Errorf("create profile output for %s: %w", cell.Name, err)
+	}
+	defer out.Close()
+
+	fmt.Printf("profiling %s: %s %s\n", cell.Name, cfg.goBinary, strings.Join(args, " "))
+	cmd := exec.Command(cfg.goBinary, args...)
+	cmd.Dir = cfg.repoRoot
+	cmd.Env = envWithOverrides(os.Environ(), profileCellEnv(cell.Env)...)
+	cmd.Stdout = out
+	cmd.Stderr = io.MultiWriter(os.Stderr, out)
+	start := time.Now()
+	runErr := cmd.Run()
+	duration := time.Since(start)
+	errText := ""
+	if runErr != nil {
+		errText = runErr.Error()
+	}
+	manifest := collectionProfileManifest{
+		SchemaVersion:    "collection-profile-manifest/v1",
+		CreatedAt:        time.Now().UTC().Format(time.RFC3339),
+		Cell:             cell.Name,
+		ProfileDir:       cell.ProfileDir,
+		ExecutionPath:    cell.ExecutionPath,
+		Engine:           cell.Engine,
+		DocumentFormat:   cell.DocumentFormat,
+		StoragePolicy:    cell.StoragePolicy,
+		BenchmarkPattern: cell.BenchmarkPattern,
+		Benchtime:        cfg.profileBenchtime,
+		Count:            cfg.profileCount,
+		Command:          append([]string{cfg.goBinary}, args...),
+		Env:              profileCellEnv(cell.Env),
+		DurationMillis:   float64(duration) / float64(time.Millisecond),
+		RunError:         errText,
+		Artifacts: []collectionProfileArtifact{{
+			Phase:         "benchmark_cell",
+			CPUProfile:    "cpu.pprof",
+			AllocsProfile: "allocs.pprof",
+			BlockProfile:  "block.pprof",
+			MutexProfile:  "mutex.pprof",
+			Output:        outputName,
+			Error:         errText,
+		}},
+	}
+	if err := writeJSONFile(cell.ProfileManifestPath, manifest); err != nil {
+		return fmt.Errorf("write profile manifest for %s: %w", cell.Name, err)
+	}
+	if runErr != nil {
+		return fmt.Errorf("profile benchmark cell %s: %w", cell.Name, runErr)
+	}
+	return nil
+}
+
+func profileCellEnv(env []string) []string {
+	return envWithOverrides(env,
+		"TREEDB_COLLECTION_REPORT_DISK_USAGE=false",
+		"TREEDB_COLLECTION_REPORT_VLOG_REWRITE=false",
+		"TREEDB_COLLECTION_REPORT_LEAFGEN_PACK_GC=false",
+		"TREEDB_COLLECTION_REPORT_POST_MAINTENANCE_INDEX_VACUUM=false",
+		"TREEDB_COLLECTION_REPORT_SQLITE_VACUUM=false",
+	)
+}
+
+func envWithOverrides(env []string, overrides ...string) []string {
+	keys := make(map[string]struct{}, len(overrides))
+	for _, item := range overrides {
+		key, _, ok := strings.Cut(item, "=")
+		if ok {
+			keys[key] = struct{}{}
+		}
+	}
+	out := make([]string, 0, len(env)+len(overrides))
+	for _, item := range env {
+		key, _, ok := strings.Cut(item, "=")
+		if ok {
+			if _, replace := keys[key]; replace {
+				continue
+			}
+		}
+		out = append(out, item)
+	}
+	out = append(out, overrides...)
+	return out
+}
+
+func goTestProfileArgs(cell matrixCell, cfg config) []string {
+	args := []string{"test"}
+	if len(cell.Tags) > 0 {
+		args = append(args, "-tags", strings.Join(cell.Tags, ","))
+	}
+	args = append(args,
+		"./TreeDB/collections",
+		"-run", "^$",
+		"-bench", cell.BenchmarkPattern,
+		"-benchmem",
+		"-timeout", cfg.goTestTimeout,
+		"-count", strconv.Itoa(cfg.profileCount),
+		"-benchtime", cfg.profileBenchtime,
+		"-cpuprofile", filepath.Join(cell.ProfileDir, "cpu.pprof"),
+		"-memprofile", filepath.Join(cell.ProfileDir, "allocs.pprof"),
+		"-blockprofile", filepath.Join(cell.ProfileDir, "block.pprof"),
+		"-mutexprofile", filepath.Join(cell.ProfileDir, "mutex.pprof"),
+		"-blockprofilerate", strconv.Itoa(cfg.profileBlockRate),
+		"-mutexprofilefraction", strconv.Itoa(cfg.profileMutexFraction),
 	)
 	return args
 }
@@ -549,6 +748,7 @@ func writeMatrixIndex(path string, cells []matrixCell) error {
 		"pager_sync_concurrency",
 		"report_md",
 		"report_json",
+		"profile_manifest",
 	}); err != nil {
 		return err
 	}
@@ -561,6 +761,14 @@ func writeMatrixIndex(path string, cells []matrixCell) error {
 		if err != nil {
 			return fmt.Errorf("matrix index %s report_json: %w", cell.Name, err)
 		}
+		profileManifestPath := ""
+		if cell.ProfileManifestPath != "" {
+			rel, err := relativeArtifactPath(filepath.Dir(path), cell.ProfileManifestPath)
+			if err != nil {
+				return fmt.Errorf("matrix index %s profile_manifest: %w", cell.Name, err)
+			}
+			profileManifestPath = filepath.ToSlash(rel)
+		}
 		if err := writer.Write([]string{
 			cell.Name,
 			cell.Engine,
@@ -571,6 +779,7 @@ func writeMatrixIndex(path string, cells []matrixCell) error {
 			cell.PagerSyncConcurrency,
 			filepath.ToSlash(reportMarkdownPath),
 			filepath.ToSlash(reportJSONPath),
+			profileManifestPath,
 		}); err != nil {
 			return err
 		}
@@ -583,6 +792,18 @@ func writeMatrixIndex(path string, cells []matrixCell) error {
 		return fmt.Errorf("write matrix index: %w", err)
 	}
 	return nil
+}
+
+func writeJSONFile(path string, value any) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	raw, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return err
+	}
+	raw = append(raw, '\n')
+	return os.WriteFile(path, raw, 0o644)
 }
 
 func runMatrixSummary(cfg config, matrixIndexPath string) error {
@@ -626,6 +847,11 @@ func writeRunREADME(cfg config, commandLine []string, cells []matrixCell, matrix
 	writeMarkdownCodeLine(&sb, "benchtime", cfg.benchtime)
 	writeMarkdownCodeLine(&sb, "count", strconv.Itoa(cfg.count))
 	writeMarkdownCodeLine(&sb, "collection batch size", strconv.Itoa(cfg.batchSize))
+	if cfg.profileCells {
+		writeMarkdownCodeLine(&sb, "profile cells", "true")
+		writeMarkdownCodeLine(&sb, "profile benchtime", cfg.profileBenchtime)
+		writeMarkdownCodeLine(&sb, "profile count", strconv.Itoa(cfg.profileCount))
+	}
 	sb.WriteByte('\n')
 
 	sb.WriteString("## Primary Artifacts\n\n")
@@ -640,8 +866,8 @@ func writeRunREADME(cfg config, commandLine []string, cells []matrixCell, matrix
 	sb.WriteString("`\n\n")
 
 	sb.WriteString("## Cells\n\n")
-	sb.WriteString("| Cell | Engine | Format | Data vlog | Index vlog | Bench pattern | Raw JSON | Report |\n")
-	sb.WriteString("| --- | --- | --- | ---: | ---: | --- | --- | --- |\n")
+	sb.WriteString("| Cell | Engine | Format | Data vlog | Index vlog | Bench pattern | Raw JSON | Report | Profiles |\n")
+	sb.WriteString("| --- | --- | --- | ---: | ---: | --- | --- | --- | --- |\n")
 	for _, cell := range cells {
 		rawRel, err := relativeArtifactPath(cfg.outDir, cell.RawJSONPath)
 		if err != nil {
@@ -667,7 +893,19 @@ func writeRunREADME(cfg config, commandLine []string, cells []matrixCell, matrix
 		sb.WriteString(filepath.ToSlash(rawRel))
 		sb.WriteString("` | [report](")
 		sb.WriteString(filepath.ToSlash(reportRel))
-		sb.WriteString(") |\n")
+		sb.WriteString(") | ")
+		if cell.ProfileManifestPath != "" {
+			profileRel, err := relativeArtifactPath(cfg.outDir, cell.ProfileManifestPath)
+			if err != nil {
+				return fmt.Errorf("README profile artifact path for %s: %w", cell.Name, err)
+			}
+			sb.WriteString("[manifest](")
+			sb.WriteString(filepath.ToSlash(profileRel))
+			sb.WriteString(")")
+		} else {
+			sb.WriteString("-")
+		}
+		sb.WriteString(" |\n")
 	}
 	readmePath := filepath.Join(cfg.outDir, "README.md")
 	if err := os.WriteFile(readmePath, []byte(sb.String()), 0o644); err != nil {

@@ -25,6 +25,7 @@ DELETES="${DELETES:-0}"
 RANGE_READS_DIVISOR="${RANGE_READS_DIVISOR:-10}"
 UPDATES_DIVISOR="${UPDATES_DIVISOR:-10}"
 CONCURRENT_READERS="${CONCURRENT_READERS:-0}"
+CONCURRENT_READ_KINDS="${CONCURRENT_READ_KINDS:-id}"
 CONCURRENT_READER_SWEEP="${CONCURRENT_READER_SWEEP:-}"
 CONCURRENT_READS="${CONCURRENT_READS:-}"
 CONCURRENT_READS_DIVISOR="${CONCURRENT_READS_DIVISOR:-10}"
@@ -33,6 +34,7 @@ CONCURRENT_RANGE_READER_SWEEP="${CONCURRENT_RANGE_READER_SWEEP:-}"
 CONCURRENT_RANGE_READS="${CONCURRENT_RANGE_READS:-}"
 CONCURRENT_RANGE_READS_DIVISOR="${CONCURRENT_RANGE_READS_DIVISOR:-10}"
 CONCURRENT_WRITERS="${CONCURRENT_WRITERS:-0}"
+CONCURRENT_WRITER_SWEEP="${CONCURRENT_WRITER_SWEEP:-}"
 CONCURRENT_WRITES="${CONCURRENT_WRITES:-}"
 CONCURRENT_WRITES_DIVISOR="${CONCURRENT_WRITES_DIVISOR:-10}"
 MONGO_MODE="${MONGO_MODE:-docker}"
@@ -81,10 +83,13 @@ Options:
   --range-index         Create age_1 for the range-read phase.
   --profile-treedb      Capture per-phase TreeDB pprof artifacts in profiles/.
   --concurrent-readers N
-                        Reader goroutines for the concurrent _id read phase.
+                        Reader goroutines for concurrent read phases.
+  --concurrent-read-kinds LIST
+                        Concurrent read kinds: id, email, range, or all.
+                        Default: id.
   --concurrent-reader-sweep LIST
                         Space- or comma-separated reader counts for concurrent
-                        _id read throughput sweep phases. Uses
+                        read throughput sweep phases. Uses
                         --concurrent-reads when set, otherwise derives from
                         documents / CONCURRENT_READS_DIVISOR. Cannot be
                         combined with --concurrent-readers.
@@ -102,6 +107,12 @@ Options:
                         Concurrent age range reads per target/cell.
   --concurrent-writers N
                         Writer goroutines for the concurrent update phase.
+  --concurrent-writer-sweep LIST
+                        Space- or comma-separated writer counts for concurrent
+                        update throughput sweep phases. Uses
+                        --concurrent-writes when set, otherwise derives from
+                        documents / CONCURRENT_WRITES_DIVISOR. Cannot be
+                        combined with --concurrent-writers.
   --concurrent-writes COUNT
                         Concurrent updates per target/cell.
   --mongo-mode MODE     docker or external. Default: docker.
@@ -136,11 +147,11 @@ Environment overrides:
   RANGE_INDEX, PROFILE_TREEDB,
   READS, READS_DIVISOR,
   RANGE_READS, UPDATES, DELETES, RANGE_READS_DIVISOR, UPDATES_DIVISOR,
-  CONCURRENT_READERS, CONCURRENT_READS, CONCURRENT_READS_DIVISOR,
+  CONCURRENT_READERS, CONCURRENT_READ_KINDS, CONCURRENT_READS, CONCURRENT_READS_DIVISOR,
   CONCURRENT_READER_SWEEP,
   CONCURRENT_RANGE_READERS, CONCURRENT_RANGE_READS, CONCURRENT_RANGE_READS_DIVISOR,
   CONCURRENT_RANGE_READER_SWEEP,
-  CONCURRENT_WRITERS, CONCURRENT_WRITES, CONCURRENT_WRITES_DIVISOR,
+  CONCURRENT_WRITERS, CONCURRENT_WRITER_SWEEP, CONCURRENT_WRITES, CONCURRENT_WRITES_DIVISOR,
   MONGO_MODE, MONGO_URI, MONGO_IMAGE, DATABASE_PREFIX, COLLECTION, TIMEOUT,
   MONGO_CLIENT_MODE, MONGO_CLIENT_MODES,
   TREEDB_PROFILE, TREEDB_DOCUMENT_FORMAT, TREEDB_DOCUMENT_FORMATS,
@@ -212,6 +223,10 @@ while [[ $# -gt 0 ]]; do
       CONCURRENT_READERS="$2"
       shift 2
       ;;
+    --concurrent-read-kinds)
+      CONCURRENT_READ_KINDS="$2"
+      shift 2
+      ;;
     --concurrent-reader-sweep)
       CONCURRENT_READER_SWEEP="$2"
       shift 2
@@ -234,6 +249,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --concurrent-writers)
       CONCURRENT_WRITERS="$2"
+      shift 2
+      ;;
+    --concurrent-writer-sweep)
+      CONCURRENT_WRITER_SWEEP="$2"
       shift 2
       ;;
     --concurrent-writes)
@@ -474,6 +493,18 @@ list_word_count() {
   echo "$count"
 }
 
+concurrent_read_kinds_include_range() {
+  local kind
+  for kind in ${CONCURRENT_READ_KINDS//,/ }; do
+    case "$(lower_word "$kind")" in
+      range|all)
+        return 0
+        ;;
+    esac
+  done
+  return 1
+}
+
 mongo_config_name() {
   local client_mode
   client_mode=$(lower_word "$1")
@@ -601,6 +632,7 @@ run_target() {
     -range-reads "$range_reads" \
     -updates "$updates" \
     -deletes "$deletes" \
+    -concurrent-read-kinds "$CONCURRENT_READ_KINDS" \
     -concurrent-readers "$concurrent_readers" \
     -concurrent-reader-sweep "$CONCURRENT_READER_SWEEP" \
     -concurrent-reads "$concurrent_reads" \
@@ -608,6 +640,7 @@ run_target() {
     -concurrent-range-reader-sweep "$CONCURRENT_RANGE_READER_SWEEP" \
     -concurrent-range-reads "$concurrent_range_reads" \
     -concurrent-writers "$concurrent_writers" \
+    -concurrent-writer-sweep "$CONCURRENT_WRITER_SWEEP" \
     -concurrent-writes "$concurrent_writes" \
     -secondary-indexes "$indexes" \
     -timeout "$TIMEOUT" \
@@ -721,6 +754,7 @@ elif [[ "$CONCURRENT_READERS" -eq 0 && -n "$CONCURRENT_READS" && "$CONCURRENT_RE
   echo "CONCURRENT_READERS or CONCURRENT_READER_SWEEP must be set when CONCURRENT_READS is set" >&2
   exit 2
 fi
+
 raw_concurrent_range_reader_sweep=$CONCURRENT_RANGE_READER_SWEEP
 CONCURRENT_RANGE_READER_SWEEP=$(trim_spaces "$CONCURRENT_RANGE_READER_SWEEP")
 if [[ -n "$raw_concurrent_range_reader_sweep" && -z "$CONCURRENT_RANGE_READER_SWEEP" ]]; then
@@ -775,8 +809,65 @@ elif [[ "$CONCURRENT_RANGE_READERS" -eq 0 && -n "$CONCURRENT_RANGE_READS" && "$C
   echo "CONCURRENT_RANGE_READERS or CONCURRENT_RANGE_READER_SWEEP must be set when CONCURRENT_RANGE_READS is set" >&2
   exit 2
 fi
-if [[ "$CONCURRENT_WRITERS" -eq 0 && -n "$CONCURRENT_WRITES" && "$CONCURRENT_WRITES" != "0" ]]; then
-  echo "CONCURRENT_WRITERS must be > 0 when CONCURRENT_WRITES is set" >&2
+if concurrent_read_kinds_include_range &&
+  [[ "$CONCURRENT_READERS" -gt 0 || -n "$CONCURRENT_READER_SWEEP" ]] &&
+  [[ "$CONCURRENT_RANGE_READERS" -gt 0 || -n "$CONCURRENT_RANGE_READER_SWEEP" ]]; then
+  echo "CONCURRENT_READ_KINDS=range/all cannot be combined with CONCURRENT_RANGE_READERS or CONCURRENT_RANGE_READER_SWEEP when concurrent readers are enabled" >&2
+  exit 2
+fi
+
+raw_concurrent_writer_sweep=$CONCURRENT_WRITER_SWEEP
+CONCURRENT_WRITER_SWEEP=$(trim_spaces "$CONCURRENT_WRITER_SWEEP")
+if [[ -n "$raw_concurrent_writer_sweep" && -z "$CONCURRENT_WRITER_SWEEP" ]]; then
+  echo "CONCURRENT_WRITER_SWEEP must contain at least one positive integer" >&2
+  exit 2
+fi
+if [[ -n "$CONCURRENT_WRITER_SWEEP" && "$CONCURRENT_WRITERS" -gt 0 ]]; then
+  echo "CONCURRENT_WRITER_SWEEP cannot be combined with CONCURRENT_WRITERS" >&2
+  exit 2
+fi
+if [[ -n "$CONCURRENT_WRITER_SWEEP" ]]; then
+  seen_writer_counts=""
+  normalized_writer_sweep=""
+  validated_writer_counts=0
+  for writer_count in ${CONCURRENT_WRITER_SWEEP//,/ }; do
+    if ! is_positive_decimal_string "$writer_count"; then
+      echo "invalid CONCURRENT_WRITER_SWEEP value: $writer_count" >&2
+      exit 2
+    fi
+    normalized_writer_count=$writer_count
+    while [[ "$normalized_writer_count" == 0* && ${#normalized_writer_count} -gt 1 ]]; do
+      normalized_writer_count=${normalized_writer_count#0}
+    done
+    if [[ " $seen_writer_counts " == *" $normalized_writer_count "* ]]; then
+      echo "duplicate CONCURRENT_WRITER_SWEEP value: $writer_count" >&2
+      exit 2
+    fi
+    seen_writer_counts="$seen_writer_counts $normalized_writer_count"
+    if [[ -z "$normalized_writer_sweep" ]]; then
+      normalized_writer_sweep=$normalized_writer_count
+    else
+      normalized_writer_sweep="$normalized_writer_sweep,$normalized_writer_count"
+    fi
+    validated_writer_counts=$((validated_writer_counts + 1))
+  done
+  if [[ "$validated_writer_counts" -eq 0 ]]; then
+    echo "CONCURRENT_WRITER_SWEEP must contain at least one positive integer" >&2
+    exit 2
+  fi
+  if [[ -n "$CONCURRENT_WRITES" && "$CONCURRENT_WRITES" == "0" ]]; then
+    echo "CONCURRENT_WRITER_SWEEP requires CONCURRENT_WRITES > 0 when CONCURRENT_WRITES is set" >&2
+    exit 2
+  fi
+  if [[ -n "$CONCURRENT_WRITES" ]]; then
+    if ! is_nonnegative_int "$CONCURRENT_WRITES"; then
+      echo "invalid CONCURRENT_WRITES=$CONCURRENT_WRITES (want non-negative integer)" >&2
+      exit 2
+    fi
+  fi
+  CONCURRENT_WRITER_SWEEP=$normalized_writer_sweep
+elif [[ "$CONCURRENT_WRITERS" -eq 0 && -n "$CONCURRENT_WRITES" && "$CONCURRENT_WRITES" != "0" ]]; then
+  echo "CONCURRENT_WRITERS or CONCURRENT_WRITER_SWEEP must be set when CONCURRENT_WRITES is set" >&2
   exit 2
 fi
 
@@ -794,6 +885,7 @@ fi
   echo "range reads: ${RANGE_READS:-documents / $RANGE_READS_DIVISOR}"
   echo "updates: ${UPDATES:-documents / $UPDATES_DIVISOR}"
   echo "deletes: $DELETES"
+  echo "concurrent read kinds: $CONCURRENT_READ_KINDS"
   echo "concurrent readers: $CONCURRENT_READERS"
   echo "concurrent reader sweep: ${CONCURRENT_READER_SWEEP:-none}"
   echo "concurrent reads: ${CONCURRENT_READS:-documents / $CONCURRENT_READS_DIVISOR when readers or reader sweep is set}"
@@ -801,7 +893,8 @@ fi
   echo "concurrent range reader sweep: ${CONCURRENT_RANGE_READER_SWEEP:-none}"
   echo "concurrent range reads: ${CONCURRENT_RANGE_READS:-documents / $CONCURRENT_RANGE_READS_DIVISOR when range readers or range reader sweep is set}"
   echo "concurrent writers: $CONCURRENT_WRITERS"
-  echo "concurrent writes: ${CONCURRENT_WRITES:-documents / $CONCURRENT_WRITES_DIVISOR when writers > 0}"
+  echo "concurrent writer sweep: ${CONCURRENT_WRITER_SWEEP:-none}"
+  echo "concurrent writes: ${CONCURRENT_WRITES:-documents / $CONCURRENT_WRITES_DIVISOR when writers or writer sweep is set}"
   echo "mongo mode: $MONGO_MODE"
   echo "mongo client modes: $MONGO_CLIENT_MODES"
   echo "treedb profile: $TREEDB_PROFILE"
@@ -848,10 +941,10 @@ for docs in $DOCS_LIST; do
     fi
   fi
   concurrent_writes=0
-  if [[ "$CONCURRENT_WRITERS" -gt 0 ]]; then
+  if [[ "$CONCURRENT_WRITERS" -gt 0 || -n "$CONCURRENT_WRITER_SWEEP" ]]; then
     concurrent_writes=$(derived_count "$docs" "$CONCURRENT_WRITES" "$CONCURRENT_WRITES_DIVISOR")
     if [[ "$concurrent_writes" -eq 0 ]]; then
-      echo "concurrent writes must be > 0 when CONCURRENT_WRITERS is > 0" >&2
+      echo "concurrent writes must be > 0 when concurrent writers or writer sweep is set" >&2
       exit 2
     fi
   fi
@@ -966,6 +1059,7 @@ cat >"$README" <<EOF
 - range reads: \`${RANGE_READS:-documents / $RANGE_READS_DIVISOR}\`
 - updates: \`${UPDATES:-documents / $UPDATES_DIVISOR}\`
 - deletes: \`$DELETES\`
+- concurrent read kinds: \`$CONCURRENT_READ_KINDS\`
 - concurrent readers: \`$CONCURRENT_READERS\`
 - concurrent reader sweep: \`${CONCURRENT_READER_SWEEP:-none}\`
 - concurrent reads: \`${CONCURRENT_READS:-documents / $CONCURRENT_READS_DIVISOR when readers or reader sweep is set}\`
@@ -973,7 +1067,8 @@ cat >"$README" <<EOF
 - concurrent range reader sweep: \`${CONCURRENT_RANGE_READER_SWEEP:-none}\`
 - concurrent range reads: \`${CONCURRENT_RANGE_READS:-documents / $CONCURRENT_RANGE_READS_DIVISOR when range readers or range reader sweep is set}\`
 - concurrent writers: \`$CONCURRENT_WRITERS\`
-- concurrent writes: \`${CONCURRENT_WRITES:-documents / $CONCURRENT_WRITES_DIVISOR when writers > 0}\`
+- concurrent writer sweep: \`${CONCURRENT_WRITER_SWEEP:-none}\`
+- concurrent writes: \`${CONCURRENT_WRITES:-documents / $CONCURRENT_WRITES_DIVISOR when writers or writer sweep is set}\`
 - MongoDB mode: \`$MONGO_MODE\`
 - MongoDB image: \`$MONGO_IMAGE\`
 - MongoDB client modes: \`$MONGO_CLIENT_MODES\`
