@@ -10503,7 +10503,11 @@ func (c *Collection) shouldUseDirectBufferedUpdatePlan(meta CollectionMeta, opts
 	if c == nil || c.writeDomain == nil {
 		return false
 	}
-	if !meta.Options.BufferedIndexedWrites || len(meta.Indexes) == 0 {
+	if len(meta.Indexes) == 0 {
+		return mode == updateBatchModeNoSecondaryUniqueIndexChanges &&
+			normalizedDocumentFormat(opts.documentFormat) == DocumentFormatBSON
+	}
+	if !meta.Options.BufferedIndexedWrites {
 		return false
 	}
 	if mode == updateBatchModeAny && collectionMetaHasSecondaryUniqueIndex(meta) {
@@ -10765,6 +10769,9 @@ func updateBatchCanReadBufferedDomainLocked(domain *collectionWriteDomain, meta 
 	collectionName := bufferedDomainCollectionName(domain, meta.Name)
 	if collectionName == "" || !hasPendingIndexedRootRunsForRootLocked(domain, collectionPrimaryRootName(collectionName)) {
 		return false
+	}
+	if len(meta.Indexes) == 0 {
+		return true
 	}
 	return meta.Options.BufferedIndexedWrites && len(meta.Indexes) > 0
 }
@@ -11709,7 +11716,8 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 	defer func() {
 		plan.stats.BufferStage += updateBatchStatsSince(detailedStats, bufferStart)
 	}()
-	if c.writeDomain == nil || !plan.canBufferDirectUpdateBatch || !plan.meta.Options.BufferedIndexedWrites || len(plan.meta.Indexes) == 0 {
+	primaryOnlyDirectUpdate := len(plan.meta.Indexes) == 0
+	if c.writeDomain == nil || !plan.canBufferDirectUpdateBatch || (!primaryOnlyDirectUpdate && !plan.meta.Options.BufferedIndexedWrites) {
 		plan.stats.BufferStagePrecheck += updateBatchStatsSince(detailedStats, precheckStart)
 		return false, nil
 	}

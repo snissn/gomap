@@ -1239,8 +1239,28 @@ func TestServerUpdateCoalescesConcurrentDistinctIDs(t *testing.T) {
 		assertInt32(t, response.doc, "nModified", 1)
 	}
 	after := db.State()
-	if after.CommitSeq != before.CommitSeq+1 {
-		t.Fatalf("coalesced updates advanced commit seq by %d, want 1", after.CommitSeq-before.CommitSeq)
+	if after.CommitSeq != before.CommitSeq {
+		t.Fatalf("coalesced BSON set updates advanced commit seq by %d before flush, want buffered", after.CommitSeq-before.CommitSeq)
+	}
+	for i, id := range []string{"u1", "u2"} {
+		findResponse := serveCommand(t, server, int32(2270+i), bson.D{
+			{Key: "find", Value: "users"},
+			{Key: "filter", Value: bson.D{{Key: "_id", Value: id}}},
+			{Key: "$db", Value: "app"},
+		})
+		firstBatch := cursorFirstBatch(t, findResponse)
+		if len(firstBatch) != 1 {
+			t.Fatalf("%s firstBatch len=%d want 1", id, len(firstBatch))
+		}
+		if score := firstBatch[0].Lookup("score").Int32(); score != int32(10+i) {
+			t.Fatalf("%s buffered score=%d want %d", id, score, 10+i)
+		}
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush coalesced updates: %v", err)
+	}
+	if flushed := db.State(); flushed.CommitSeq != before.CommitSeq+1 {
+		t.Fatalf("coalesced update flush advanced commit seq to %d from %d, want one publish", flushed.CommitSeq, before.CommitSeq)
 	}
 }
 
