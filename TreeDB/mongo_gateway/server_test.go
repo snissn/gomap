@@ -440,29 +440,23 @@ func TestRunMongoUpdateOneUsesBSONSetFastPath(t *testing.T) {
 		t.Fatalf("flush: %v", err)
 	}
 
-	var stats collections.CollectionUpdateStats
-	for i := 0; i < 64; i++ {
-		update, err := parseMongoUpdateItem(i, mustDocument(t, bson.D{
-			{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}},
-			{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "city", Value: fmt.Sprintf("city-%d", i)}}}}},
-		}))
-		if err != nil {
-			t.Fatalf("parse update %d: %v", i, err)
-		}
-		matched, modified, err := runMongoUpdateOne(col, update)
-		if err != nil {
-			t.Fatalf("run update %d: %v", i, err)
-		}
-		if !matched || !modified {
-			t.Fatalf("update %d matched=%v modified=%v want true/true", i, matched, modified)
-		}
-		stats = col.LastUpdateStats()
-		if stats.StructuredUpdateApply > 0 {
-			break
-		}
+	update, err := parseMongoUpdateItem(0, mustDocument(t, bson.D{
+		{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}},
+		{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "city", Value: "sea"}}}}},
+	}))
+	if err != nil {
+		t.Fatalf("parse update: %v", err)
 	}
-	if stats.StructuredUpdateApply <= 0 {
-		t.Fatalf("structured apply duration remained %s", stats.StructuredUpdateApply)
+	matched, modified, err := runMongoUpdateOne(col, update)
+	if err != nil {
+		t.Fatalf("run update: %v", err)
+	}
+	if !matched || !modified {
+		t.Fatalf("matched=%v modified=%v want true/true", matched, modified)
+	}
+	stats := col.LastUpdateStats()
+	if got, want := stats.StructuredUpdateApplications, 1; got != want {
+		t.Fatalf("structured update applications=%d want %d", got, want)
 	}
 	if stats.Callback != 0 {
 		t.Fatalf("callback duration=%s want zero for BSON set gateway update", stats.Callback)
@@ -1002,8 +996,8 @@ func TestRunMongoUpdateBatchBatchesNonUniqueFieldWithSecondaryUniqueIndex(t *tes
 		t.Fatalf("matched=%d modified=%d batched=%v want 2,2,true", matched, modified, batched)
 	}
 	stats := col.LastUpdateStats()
-	if stats.StructuredUpdateApply <= 0 {
-		t.Fatalf("structured apply duration=%s want positive for BSON set gateway batch", stats.StructuredUpdateApply)
+	if got, want := stats.StructuredUpdateApplications, 2; got != want {
+		t.Fatalf("structured update applications=%d want %d", got, want)
 	}
 	if stats.Callback != 0 {
 		t.Fatalf("callback duration=%s want zero for BSON set gateway batch", stats.Callback)

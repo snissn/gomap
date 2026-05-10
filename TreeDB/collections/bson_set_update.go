@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"hash/maphash"
 	"strings"
 	"unsafe"
 
@@ -39,6 +40,8 @@ const (
 	bsonSetFieldIndexMapThreshold = 8
 	bsonSetReplacementSlackBytes  = 64
 )
+
+var bsonSetBatchDocumentIDHashSeed = maphash.MakeSeed()
 
 // UpdateBSONSet applies a structured top-level BSON $set update to one
 // document. The collection must use DocumentFormatBSON. Missing documents
@@ -124,7 +127,7 @@ func (c *Collection) updateBSONSetBatch(items []BSONSetUpdateBatchItem, mode upd
 	}
 	if len(items) == 0 {
 		c.setLastUpdateStats(CollectionUpdateStats{})
-		return nil, true, nil
+		return []UpdateBatchResult{}, true, nil
 	}
 	ownedItems, err := prepareBSONSetUpdateBatchItems(items)
 	if err != nil {
@@ -135,16 +138,26 @@ func (c *Collection) updateBSONSetBatch(items []BSONSetUpdateBatchItem, mode upd
 
 func prepareBSONSetUpdateBatchItems(items []BSONSetUpdateBatchItem) ([]updateBatchItem, error) {
 	out := make([]updateBatchItem, len(items))
-	seen := make(map[string]struct{}, len(items))
+	seen := make(map[uint64]int, len(items))
+	collisions := make(map[uint64][]int)
 	for i, item := range items {
 		if len(item.DocumentID) == 0 {
 			return nil, fmt.Errorf("collections: document id cannot be empty at index %d", i)
 		}
-		key := string(item.DocumentID)
-		if _, ok := seen[key]; ok {
-			return nil, fmt.Errorf("%w at index %d", ErrDuplicateDocumentID, i)
+		hash := maphash.Bytes(bsonSetBatchDocumentIDHashSeed, item.DocumentID)
+		if first, ok := seen[hash]; ok {
+			if bytes.Equal(items[first].DocumentID, item.DocumentID) {
+				return nil, updateBatchItemError(i, ErrDuplicateDocumentID)
+			}
+			for _, prev := range collisions[hash] {
+				if bytes.Equal(items[prev].DocumentID, item.DocumentID) {
+					return nil, updateBatchItemError(i, ErrDuplicateDocumentID)
+				}
+			}
+			collisions[hash] = append(collisions[hash], i)
+		} else {
+			seen[hash] = i
 		}
-		seen[key] = struct{}{}
 		spec, err := newBSONSetUpdate(item.Fields)
 		if err != nil {
 			return nil, updateBatchItemError(i, err)

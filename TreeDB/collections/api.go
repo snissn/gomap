@@ -416,8 +416,9 @@ type CollectionUpdateStats struct {
 	Callback        time.Duration
 	// StructuredUpdateApply measures built-in structured update application,
 	// such as BSON $set, separately from user callback time.
-	StructuredUpdateApply time.Duration
-	PrepareDocuments      time.Duration
+	StructuredUpdateApply        time.Duration
+	StructuredUpdateApplications int
+	PrepareDocuments             time.Duration
 	// IndexStateExtraction includes both OldIndexStateExtract and
 	// NewIndexStateExtract; do not add all three together.
 	IndexStateExtraction time.Duration
@@ -9696,6 +9697,7 @@ func (c *Collection) updateDocumentOnceApply(documentID []byte, update func(curr
 	var changed bool
 	if hasBSONSet {
 		document, changed, err = callBSONSetUpdateApply(bsonSet, currentValue)
+		stats.StructuredUpdateApplications++
 		stats.StructuredUpdateApply += updateBatchStatsSince(detailedStats, phaseStart)
 	} else {
 		document, changed, err = callCollectionUpdateCallback(update, currentValue)
@@ -11172,6 +11174,7 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 		if item.hasBSONSet {
 			phaseStart = updateBatchStatsNow(detailedStats)
 			scratch.bsonSetDocumentScratch, document, changedOne, err = callBSONSetUpdateAppendReplacement(item.bsonSet, scratch.bsonSetDocumentScratch[:0], current.value)
+			stats.StructuredUpdateApplications++
 			stats.StructuredUpdateApply += updateBatchStatsSince(detailedStats, phaseStart)
 			// When changedOne is true, document aliases bsonSetDocumentScratch
 			// until it is copied into the plan document arena below. No-op
