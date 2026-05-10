@@ -69,7 +69,28 @@ func (db *DB) CompactStorage(ctx context.Context, opts CompactStorageOptions) (C
 	if err := db.applyCachedCompactStorageOptions(&opts, true); err != nil {
 		return out, err
 	}
+	finishValueLogFence := func() {}
+	if db.cached != nil && opts.ValueLogReclaimFencedUnreferenced {
+		var err error
+		finishValueLogFence, err = db.cached.BeginValueLogMaintenanceFence(ctx)
+		if err != nil {
+			return out, err
+		}
+		db.cached.PruneRetainedValueLogsForMaintenance()
+		if err := db.backend.RefreshValueLogSet(); err != nil {
+			finishValueLogFence()
+			return out, err
+		}
+	}
+	fenceActive := true
+	defer func() {
+		if fenceActive {
+			finishValueLogFence()
+		}
+	}()
 	stats, err := db.backend.CompactStorage(ctx, treedbdb.CompactStorageOptions(opts))
+	finishValueLogFence()
+	fenceActive = false
 	if err = db.reconcileCachedBackendMaintenance(err); err != nil {
 		return out, err
 	}
@@ -92,10 +113,10 @@ func (db *DB) applyCachedCompactStorageOptions(opts *CompactStorageOptions, chec
 		}
 	}
 	explicitProtectedPaths := append([]string(nil), opts.ValueLogProtectedPaths...)
-	if checkpoint && len(explicitProtectedPaths) == 0 {
+	userProtectedPathsFunc := opts.ValueLogProtectedPathsFunc
+	if checkpoint && len(explicitProtectedPaths) == 0 && userProtectedPathsFunc == nil {
 		db.cached.PruneRetainedValueLogsForMaintenance()
 	}
-	userProtectedPathsFunc := opts.ValueLogProtectedPathsFunc
 	opts.ValueLogProtectedPathsFunc = func() []string {
 		var out []string
 		if userProtectedPathsFunc != nil {
@@ -114,8 +135,11 @@ func (db *DB) applyCachedCompactStorageOptions(opts *CompactStorageOptions, chec
 	if opts.ReserveRIDs == nil {
 		opts.ReserveRIDs = db.cached.ReserveValueLogRIDs
 	}
-	if checkpoint && len(explicitProtectedPaths) == 0 {
+	if checkpoint && len(explicitProtectedPaths) == 0 && userProtectedPathsFunc == nil {
 		opts.ValueLogReclaimFencedUnreferenced = true
+		if opts.ValueLogFencedProtectedPathsFunc == nil {
+			opts.ValueLogFencedProtectedPathsFunc = func() []string { return nil }
+		}
 	}
 	return nil
 }

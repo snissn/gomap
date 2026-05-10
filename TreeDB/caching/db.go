@@ -4383,6 +4383,61 @@ func (db *DB) ReclaimObservedValueLogSources(ctx context.Context, ids []uint32) 
 	return nil
 }
 
+// BeginValueLogMaintenanceFence blocks cached writers and rotates current
+// value-log writers so backend maintenance can reclaim formerly active
+// unreachable segments without racing mutable cached state.
+func (db *DB) BeginValueLogMaintenanceFence(ctx context.Context) (func(), error) {
+	if db == nil {
+		return func() {}, nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	db.writeMu.Lock()
+	unlock := func() {
+		db.writeMu.Unlock()
+	}
+	if !db.splitValueLogEnabled() {
+		return unlock, nil
+	}
+	for i := range db.lanes {
+		if err := ctx.Err(); err != nil {
+			unlock()
+			return nil, err
+		}
+		l := &db.lanes[i]
+		l.vlogMu.Lock()
+		if l.vlogPath != "" {
+			err := db.rotateValueLogMuHeld(l)
+			l.vlogMu.Unlock()
+			if err != nil {
+				unlock()
+				return nil, err
+			}
+			continue
+		}
+		l.vlogMu.Unlock()
+	}
+	if db.indexOuterLeavesInValueLog {
+		l := &db.leafLog
+		l.vlogMu.Lock()
+		if l.vlogPath != "" {
+			err := db.rotateValueLogMuHeld(l)
+			l.vlogMu.Unlock()
+			if err != nil {
+				unlock()
+				return nil, err
+			}
+		} else {
+			l.vlogMu.Unlock()
+		}
+	}
+	return unlock, nil
+}
+
 func (db *DB) rotateObservedValueLogSources(ctx context.Context, ids map[uint32]struct{}) error {
 	if db == nil || len(ids) == 0 || !db.splitValueLogEnabled() {
 		return nil

@@ -45,6 +45,11 @@ type CompactStorageOptions struct {
 	// this so foreground writer rotations that happen during a multi-phase
 	// compaction cannot leave newly queued value-log segments unprotected.
 	ValueLogProtectedPathsFunc func() []string
+	// ValueLogFencedProtectedPathsFunc refreshes paths that remain unsafe for
+	// fenced observed-only reclaim after the caller has performed its write
+	// fence. Cached callers use this to protect in-use writer paths without
+	// preserving retained paths that are independently proven unreachable.
+	ValueLogFencedProtectedPathsFunc func() []string
 
 	// Leaf-generation pack knobs. Defaults are intentionally bounded to keep a
 	// single compaction request finite while still draining ordinary debt.
@@ -325,7 +330,7 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (C
 		})
 	} else {
 		if err := db.runCompactStoragePhase(&stats, "prune-empty-value-log-files", func() error {
-			deleted, err := db.pruneZeroByteValueLogFiles(compactStorageValueLogProtectedPaths(opts))
+			deleted, err := db.pruneZeroByteValueLogFiles(compactStorageCleanupValueLogProtectedPaths(opts))
 			stats.ZeroByteValueLogFilesDeleted = deleted
 			return err
 		}); err != nil {
@@ -385,14 +390,15 @@ func (db *DB) settleCompactStorageGC(ctx context.Context, opts CompactStorageOpt
 			phaseName := fmt.Sprintf("settle-fenced-value-log-gc-%d", pass+1)
 			if err := db.runCompactStoragePhase(stats, phaseName, func() error {
 				// Fenced IDs are independently proven unreachable by a fresh
-				// root scan below. ReclaimActive is intentional here: these
-				// are the active-per-lane files that make CompactStorage look
-				// clean only until close/reopen unless reclaimed before the
-				// compaction boundary returns.
+				// root scan below. Cached callers rotate and block writers
+				// before enabling this path, so ReclaimActive can collect the
+				// formerly-active files that would otherwise reappear as debt
+				// after close/reopen.
 				gc, err := db.valueLogGC(ctx, ValueLogGCOptions{
 					ObservedSourceFileIDs:            fencedIDs,
 					ObservedSourceAssumeUnreferenced: true,
 					ObservedSourceReclaimActive:      true,
+					ProtectedPaths:                   compactStorageFencedValueLogProtectedPaths(opts),
 				}, lockMaintenance)
 				stats.ValueLogGC = gc
 				return err
@@ -491,7 +497,7 @@ func compactStorageRewritePlanOptions(protectedPaths []string) ValueLogRewriteOn
 
 func (db *DB) populateCompactStorageAudit(ctx context.Context, opts CompactStorageOptions, stats *CompactStorageStats, lockMaintenance bool) (CompactStorageDebt, error) {
 	var debt CompactStorageDebt
-	protectedPaths := compactStorageValueLogProtectedPaths(opts)
+	protectedPaths := compactStorageFencedValueLogProtectedPaths(opts)
 	rewritePlan, err := db.ValueLogRewritePlan(ctx, compactStorageRewritePlanOptions(protectedPaths))
 	if err != nil {
 		return debt, err
@@ -580,6 +586,14 @@ func (db *DB) compactStorageFencedUnreferencedValueLogIDs(ctx context.Context, o
 	defer func() { _ = db.valueLogManager.Release(set) }()
 
 	files := db.valueOnlyValueLogFiles(set.Files)
+	protectedPaths := compactStorageFencedValueLogProtectedPaths(opts)
+	protected := make(map[string]struct{}, len(protectedPaths))
+	for _, path := range protectedPaths {
+		if path == "" {
+			continue
+		}
+		protected[path] = struct{}{}
+	}
 	ids := make([]uint32, 0, len(files))
 	var bytes int64
 	for id, f := range files {
@@ -587,6 +601,9 @@ func (db *DB) compactStorageFencedUnreferencedValueLogIDs(ctx context.Context, o
 			continue
 		}
 		if f == nil {
+			continue
+		}
+		if _, ok := protected[f.Path]; ok {
 			continue
 		}
 		size := fileSize(f)
@@ -749,6 +766,24 @@ func compactStorageValueLogProtectedPaths(opts CompactStorageOptions) []string {
 		out = append(out, path)
 	}
 	return out
+}
+
+func compactStorageFencedValueLogProtectedPaths(opts CompactStorageOptions) []string {
+	if opts.ValueLogFencedProtectedPathsFunc == nil {
+		return compactStorageValueLogProtectedPaths(opts)
+	}
+	dynamic := opts.ValueLogFencedProtectedPathsFunc()
+	if len(dynamic) == 0 {
+		return nil
+	}
+	return dynamic
+}
+
+func compactStorageCleanupValueLogProtectedPaths(opts CompactStorageOptions) []string {
+	if opts.ValueLogReclaimFencedUnreferenced {
+		return compactStorageFencedValueLogProtectedPaths(opts)
+	}
+	return compactStorageValueLogProtectedPaths(opts)
 }
 
 func (db *DB) pruneZeroByteValueLogFiles(protectedPaths []string) (int, error) {
