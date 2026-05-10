@@ -2,6 +2,7 @@ HASHDB_DIR := HashDB
 TREEDB_DIR := TreeDB
 UNIFIED_BENCH_DIR := cmd/unified_bench
 BENCHPROF_DIR := cmd/benchprof
+DEEP_BENCHMARK_DIR := cmd/benchmark_run_report
 COLLECTION_LOAD_FIXTURE_DIR := cmd/collection_load_fixture
 COLLECTION_BENCH_MATRIX_DIR := cmd/collection_bench_matrix
 COLLECTION_CANONICAL_BENCH_DIR := cmd/collection_canonical_bench
@@ -19,6 +20,9 @@ BENCH_OUTDIR ?= docs/images
 help:
 	@echo "Common targets:"
 	@echo "  make fmt            - gofmt all tracked .go files"
+# actual 'canonical benchmark'
+	@echo "  make deep-benchmark - run TreeDB Canonical Benchmark Report"
+# actual 'canonical benchmark'
 	@echo "  make test           - run go test in root + key dirs"
 	@echo "  make hooks          - install local git hooks (gofmt on commit)"
 	@echo "  make vet            - run go vet in root + key dirs"
@@ -33,14 +37,20 @@ help:
 	@echo "  make benchprof      - build profile analyzer binary"
 	@echo "  make collection-load-fixture - build kept TreeDB collection load fixture"
 	@echo "  make collection-bench-matrix - build collection benchmark matrix runner"
+# incorrectly named 'canonical benchmark'
 	@echo "  make collection-canonical-bench-bin - build canonical collection benchmark runner"
 	@echo "  make bench-collections-canonical - run canonical TreeDB collections vs SQLite benchmark"
+# incorrectly named 'canonical benchmark'
 	@echo "  make bench-out-of-core-smoke - run CI-sized TreeDB out-of-core guardrail smoke"
 	@echo "  make clean          - remove ./$(BIN_DIR) and temp dirs"
 
 .PHONY: fmt
 fmt:
 	gofmt -w $$(git ls-files '*.go')
+
+.PHONY: deep-benchmark
+deep-benchmark:
+	bash ./scripts/treedb_benchmark_run_report.sh
 
 .PHONY: hooks
 hooks:
