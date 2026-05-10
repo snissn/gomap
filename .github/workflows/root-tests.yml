@@ -8,11 +8,30 @@ permissions:
 
 jobs:
   test:
-    name: ${{ matrix.os }}
+    name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        include:
+          - name: ubuntu-latest-1
+            os: ubuntu-latest
+            run_docs_check: true
+            run_vet: true
+            test_shard_index: 0
+            test_shard_count: 2
+          - name: ubuntu-latest-2
+            os: ubuntu-latest
+            run_docs_check: false
+            run_vet: false
+            test_shard_index: 1
+            test_shard_count: 2
+          - name: macos-latest
+            os: macos-latest
+            run_docs_check: true
+            run_vet: true
+            test_shard_index: 0
+            test_shard_count: 1
     timeout-minutes: 15
     steps:
       - name: Checkout
@@ -27,10 +46,31 @@ jobs:
             go.sum
 
       - name: Docs check
+        if: ${{ matrix.run_docs_check }}
         run: make docs-check
 
       - name: Vet
+        if: ${{ matrix.run_vet }}
         run: go vet ./...
 
       - name: Test
-        run: GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -p 1 ./...
+        shell: bash
+        run: |
+          set -euo pipefail
+          shard_index="${{ matrix.test_shard_index }}"
+          shard_count="${{ matrix.test_shard_count }}"
+          package_file="$(mktemp)"
+          db_test_file="$(mktemp)"
+          go list ./... | grep -v '^github.com/snissn/gomap/TreeDB/db$' | awk -v idx="$shard_index" -v n="$shard_count" 'BEGIN { c = 0 } { if ((c % n) == idx) print; c++ }' > "$package_file"
+          go test ./TreeDB/db -list 'Test.*' | grep '^Test' | awk -v idx="$shard_index" -v n="$shard_count" 'BEGIN { c = 0 } { if ((c % n) == idx) print; c++ }' > "$db_test_file"
+          if [ -s "$package_file" ]; then
+            echo "root package shard=${shard_index}/${shard_count}"
+            cat "$package_file"
+            GOMEMLIMIT=4GiB GOMAXPROCS=2 xargs go test -p 1 < "$package_file"
+          fi
+          if [ -s "$db_test_file" ]; then
+            db_regex="^($(paste -sd'|' "$db_test_file"))$"
+            echo "TreeDB/db test shard=${shard_index}/${shard_count} regex=${db_regex}"
+            GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -p 1 ./TreeDB/db -run "$db_regex"
+          fi
+          rm -f "$package_file" "$db_test_file"

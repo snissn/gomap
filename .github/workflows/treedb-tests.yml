@@ -22,14 +22,30 @@ jobs:
             os: macos-latest
             timeout: 15
             shard_kind: all
-          - name: windows-core
+          - name: windows-core-1
             os: windows-latest
             timeout: 25
             shard_kind: windows-core
-          - name: windows-caching-heavy
+            package_shard_index: 0
+            package_shard_count: 2
+          - name: windows-core-2
+            os: windows-latest
+            timeout: 25
+            shard_kind: windows-core
+            package_shard_index: 1
+            package_shard_count: 2
+          - name: windows-caching-heavy-1
             os: windows-latest
             timeout: 25
             shard_kind: windows-caching-heavy
+            heavy_shard_index: 0
+            heavy_shard_count: 2
+          - name: windows-caching-heavy-2
+            os: windows-latest
+            timeout: 25
+            shard_kind: windows-caching-heavy
+            heavy_shard_index: 1
+            heavy_shard_count: 2
           - name: windows-caching-rest-1
             os: windows-latest
             timeout: 25
@@ -79,16 +95,50 @@ jobs:
               go test -json -timeout 30m -p 1 ./... | tee treedb-test.jsonl
               ;;
             windows-core)
-              packages=$(go list ./... | grep -v '^github.com/snissn/gomap/TreeDB/caching$')
-              go test -json -timeout 30m -p 1 $packages | tee treedb-test.jsonl
+              package_shard_index="${{ matrix.package_shard_index }}"
+              package_shard_count="${{ matrix.package_shard_count }}"
+              if [ -z "$package_shard_index" ]; then
+                package_shard_index=0
+              fi
+              if [ -z "$package_shard_count" ] || [ "$package_shard_count" -lt 1 ]; then
+                package_shard_count=1
+              fi
+              package_file="$(mktemp)"
+              db_test_file="$(mktemp)"
+              go list ./... | grep -v '^github.com/snissn/gomap/TreeDB/caching$' | grep -v '^github.com/snissn/gomap/TreeDB/db$' | awk -v idx="$package_shard_index" -v n="$package_shard_count" 'BEGIN { c = 0 } { if ((c % n) == idx) print; c++ }' > "$package_file"
+              go test ./db -list 'Test.*' | tr -d '\r' | grep '^Test' | awk -v idx="$package_shard_index" -v n="$package_shard_count" 'BEGIN { c = 0 } { if ((c % n) == idx) print; c++ }' > "$db_test_file"
+              echo "TreeDB windows-core package shard=${package_shard_index}/${package_shard_count}"
+              xargs go test -json -timeout 30m -p 1 < "$package_file" | tee treedb-test.jsonl
+              if [ -s "$db_test_file" ]; then
+                db_regex="^($(paste -sd'|' "$db_test_file"))$"
+                echo "TreeDB/db test shard=${package_shard_index}/${package_shard_count} regex=${db_regex}"
+                go test -json -timeout 30m -p 1 ./db -run "$db_regex" | tee -a treedb-test.jsonl
+              fi
+              rm -f "$package_file" "$db_test_file"
               ;;
             windows-caching-heavy)
               heavy_file="$(mktemp)"
+              heavy_shard_file="$(mktemp)"
               tr -d '\r' < ../.github/ci/treedb_windows_caching_heavy_tests.txt | grep -v '^#' | sed '/^$/d' > "$heavy_file"
-              regex="^($(paste -sd'|' "$heavy_file"))$"
-              echo "TreeDB/caching heavy regex=${regex}"
+              heavy_shard_index="${{ matrix.heavy_shard_index }}"
+              heavy_shard_count="${{ matrix.heavy_shard_count }}"
+              if [ -z "$heavy_shard_index" ]; then
+                heavy_shard_index=0
+              fi
+              if [ -z "$heavy_shard_count" ] || [ "$heavy_shard_count" -lt 1 ]; then
+                heavy_shard_count=1
+              fi
+              awk -v idx="$heavy_shard_index" -v n="$heavy_shard_count" 'BEGIN { c = 0 } { if ((c % n) == idx) print; c++ }' "$heavy_file" > "$heavy_shard_file"
+              if ! [ -s "$heavy_shard_file" ]; then
+                echo "no heavy caching tests found for shard ${heavy_shard_index}/${heavy_shard_count}; skipping"
+                printf '{"Time":"%s","Action":"skip","Package":"github.com/snissn/gomap/TreeDB/caching"}\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > treedb-test.jsonl
+                rm -f "$heavy_file" "$heavy_shard_file"
+                exit 0
+              fi
+              regex="^($(paste -sd'|' "$heavy_shard_file"))$"
+              echo "TreeDB/caching heavy shard=${heavy_shard_index}/${heavy_shard_count} regex=${regex}"
               go test -json -timeout 30m -p 1 ./caching -run "$regex" | tee treedb-test.jsonl
-              rm -f "$heavy_file"
+              rm -f "$heavy_file" "$heavy_shard_file"
               ;;
             windows-caching-rest)
               heavy_file="$(mktemp)"
@@ -144,8 +194,18 @@ jobs:
             TreeDB/treedb-test.jsonl.summary.md
 
   race:
-    name: race-check (linux)
+    name: race-check (linux)-${{ matrix.shard }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shard: 1
+            shard_index: 0
+            shard_count: 2
+          - shard: 2
+            shard_index: 1
+            shard_count: 2
     timeout-minutes: 20
     steps:
       - name: Checkout
@@ -164,7 +224,27 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -json -race -p 1 ./... | tee treedb-race.jsonl
+          shard_index="${{ matrix.shard_index }}"
+          shard_count="${{ matrix.shard_count }}"
+          package_file="$(mktemp)"
+          db_test_file="$(mktemp)"
+          go list ./... | grep -v '^github.com/snissn/gomap/TreeDB/db$' | awk -v idx="$shard_index" -v n="$shard_count" 'BEGIN { c = 0 } { if ((c % n) == idx) print; c++ }' > "$package_file"
+          go test ./db -list 'Test.*' | grep '^Test' | awk -v idx="$shard_index" -v n="$shard_count" 'BEGIN { c = 0 } { if ((c % n) == idx) print; c++ }' > "$db_test_file"
+          if ! [ -s "$package_file" ]; then
+            echo "no packages found for race shard ${shard_index}/${shard_count}; skipping"
+            printf '{"Time":"%s","Action":"skip","Package":"github.com/snissn/gomap/TreeDB"}\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > treedb-race.jsonl
+            rm -f "$package_file" "$db_test_file"
+            exit 0
+          fi
+          echo "TreeDB race package shard=${shard_index}/${shard_count}"
+          cat "$package_file"
+          GOMEMLIMIT=4GiB GOMAXPROCS=2 xargs go test -json -race -p 1 < "$package_file" | tee treedb-race.jsonl
+          if [ -s "$db_test_file" ]; then
+            db_regex="^($(paste -sd'|' "$db_test_file"))$"
+            echo "TreeDB/db race test shard=${shard_index}/${shard_count} regex=${db_regex}"
+            GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -json -race -p 1 ./db -run "$db_regex" | tee -a treedb-race.jsonl
+          fi
+          rm -f "$package_file" "$db_test_file"
 
       - name: Summarize race timing
         if: always()
@@ -182,7 +262,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: treedb-race-json-linux
+          name: treedb-race-json-linux-${{ matrix.shard }}
           path: |
             TreeDB/treedb-race.jsonl
             TreeDB/treedb-race.jsonl.summary.md
