@@ -10896,6 +10896,168 @@ func TestCollectionUpdateBSONSetNoIndexFlushesPendingInsertTableBeforeBuffering(
 	}
 }
 
+func TestCollectionUpdateBSONSetNoIndexFlushesBeforePendingInsertTable(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), Durability: backenddb.DurabilityWALOffRelaxed})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatBSON,
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatchValidatedBSON(
+		[][]byte{[]byte("u1")},
+		[][]byte{mustBSONCollectionDocument(t, bson.D{
+			{Key: "_id", Value: "u1"},
+			{Key: "score", Value: int32(0)},
+		})},
+	); err != nil {
+		t.Fatalf("insert initial: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush initial insert: %v", err)
+	}
+
+	beforeUpdate := d.State()
+	matched, modified, err := col.UpdateBSONSet([]byte("u1"), []BSONSetField{{
+		Key:   "score",
+		Value: mustBSONRawValue(t, int32(11)),
+	}})
+	if err != nil {
+		t.Fatalf("UpdateBSONSet: %v", err)
+	}
+	if !matched || !modified {
+		t.Fatalf("matched=%v modified=%v want true/true", matched, modified)
+	}
+	afterUpdate := d.State()
+	if afterUpdate.CommitSeq != beforeUpdate.CommitSeq {
+		t.Fatalf("UpdateBSONSet advanced commit seq by %d before flush, want buffered", afterUpdate.CommitSeq-beforeUpdate.CommitSeq)
+	}
+	if _, err := col.InsertBatchValidatedBSON(
+		[][]byte{[]byte("u2")},
+		[][]byte{mustBSONCollectionDocument(t, bson.D{
+			{Key: "_id", Value: "u2"},
+			{Key: "score", Value: int32(2)},
+		})},
+	); err != nil {
+		t.Fatalf("insert after buffered update: %v", err)
+	}
+	afterInsert := d.State()
+	if afterInsert.CommitSeq != beforeUpdate.CommitSeq+1 {
+		t.Fatalf("insert commit seq=%d before=%d want buffered update flushed once", afterInsert.CommitSeq, beforeUpdate.CommitSeq)
+	}
+	col.writeDomain.mu.RLock()
+	pendingTableRows := 0
+	if col.writeDomain.table != nil {
+		pendingTableRows = col.writeDomain.table.Len()
+	}
+	rootRunCount := col.writeDomain.rootRunCount
+	col.writeDomain.mu.RUnlock()
+	if pendingTableRows != 1 || rootRunCount != 0 {
+		t.Fatalf("post-insert pending table/root runs=%d/%d want 1/0", pendingTableRows, rootRunCount)
+	}
+	got, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get flushed update: %v", err)
+	}
+	if score := bson.Raw(got).Lookup("score").Int32(); score != 11 {
+		t.Fatalf("updated score=%d want 11", score)
+	}
+	got, err = col.Get([]byte("u2"))
+	if err != nil {
+		t.Fatalf("get buffered insert: %v", err)
+	}
+	if score := bson.Raw(got).Lookup("score").Int32(); score != 2 {
+		t.Fatalf("inserted score=%d want 2", score)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush buffered insert: %v", err)
+	}
+	got, err = col.Get([]byte("u2"))
+	if err != nil {
+		t.Fatalf("get flushed insert: %v", err)
+	}
+	if score := bson.Raw(got).Lookup("score").Int32(); score != 2 {
+		t.Fatalf("flushed inserted score=%d want 2", score)
+	}
+}
+
+func TestCollectionUpdateNoIndexBSONCallbackPublishesSynchronously(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatBSON,
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{mustBSONCollectionDocument(t, bson.D{
+			{Key: "_id", Value: "u1"},
+			{Key: "score", Value: int32(0)},
+		})},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush insert: %v", err)
+	}
+
+	beforeUpdate := d.State()
+	matched, modified, err := col.Update([]byte("u1"), func(current []byte) ([]byte, bool, error) {
+		return mustBSONCollectionDocument(t, bson.D{
+			{Key: "_id", Value: "u1"},
+			{Key: "score", Value: int32(5)},
+		}), true, nil
+	})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if !matched || !modified {
+		t.Fatalf("matched=%v modified=%v want true/true", matched, modified)
+	}
+	afterUpdate := d.State()
+	if afterUpdate.CommitSeq != beforeUpdate.CommitSeq+1 {
+		t.Fatalf("Update commit seq=%d before=%d want synchronous publish", afterUpdate.CommitSeq, beforeUpdate.CommitSeq)
+	}
+	col.writeDomain.mu.RLock()
+	rootRunCount := col.writeDomain.rootRunCount
+	col.writeDomain.mu.RUnlock()
+	if rootRunCount != 0 {
+		t.Fatalf("callback Update buffered root runs=%d want 0", rootRunCount)
+	}
+	got, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get updated document: %v", err)
+	}
+	if score := bson.Raw(got).Lookup("score").Int32(); score != 5 {
+		t.Fatalf("updated score=%d want 5", score)
+	}
+}
+
 func TestCollectionUpdateBSONSetDirectFallbackReportsStructuredApply(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
