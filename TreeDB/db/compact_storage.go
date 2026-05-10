@@ -384,6 +384,11 @@ func (db *DB) settleCompactStorageGC(ctx context.Context, opts CompactStorageOpt
 		if len(fencedIDs) > 0 {
 			phaseName := fmt.Sprintf("settle-fenced-value-log-gc-%d", pass+1)
 			if err := db.runCompactStoragePhase(stats, phaseName, func() error {
+				// Fenced IDs are independently proven unreachable by a fresh
+				// root scan below. ReclaimActive is intentional here: these
+				// are the active-per-lane files that make CompactStorage look
+				// clean only until close/reopen unless reclaimed before the
+				// compaction boundary returns.
 				gc, err := db.valueLogGC(ctx, ValueLogGCOptions{
 					ObservedSourceFileIDs:            fencedIDs,
 					ObservedSourceAssumeUnreferenced: true,
@@ -567,6 +572,9 @@ func (db *DB) compactStorageFencedUnreferencedValueLogIDs(ctx context.Context, o
 		set = db.valueLogManager.CurrentSetNoRefresh()
 	}
 	if set == nil || len(set.Files) == 0 {
+		if set != nil {
+			_ = db.valueLogManager.Release(set)
+		}
 		return nil, 0, nil
 	}
 	defer func() { _ = db.valueLogManager.Release(set) }()

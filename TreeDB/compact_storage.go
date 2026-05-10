@@ -114,7 +114,7 @@ func (db *DB) applyCachedCompactStorageOptions(opts *CompactStorageOptions, chec
 	if opts.ReserveRIDs == nil {
 		opts.ReserveRIDs = db.cached.ReserveValueLogRIDs
 	}
-	if len(explicitProtectedPaths) == 0 {
+	if checkpoint && len(explicitProtectedPaths) == 0 {
 		opts.ValueLogReclaimFencedUnreferenced = true
 	}
 	return nil
