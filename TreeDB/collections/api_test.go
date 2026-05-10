@@ -10720,6 +10720,9 @@ func TestCollectionUpdateBSONSetReusesUnchangedIndexState(t *testing.T) {
 		t.Fatalf("matched=%v modified=%v want true/true", matched, modified)
 	}
 	stats := col.LastUpdateStats()
+	if got, want := stats.StructuredUpdateApplications, 1; got != want {
+		t.Fatalf("structured update applications=%d want %d", got, want)
+	}
 	if stats.IndexValueChanges != 1 || stats.IndexValueUnchanged != 2 || stats.UniqueIndexCheckSkips != 1 {
 		t.Fatalf("index stats changes=%d unchanged=%d unique skips=%d want 1/2/1", stats.IndexValueChanges, stats.IndexValueUnchanged, stats.UniqueIndexCheckSkips)
 	}
@@ -10789,40 +10792,26 @@ func TestCollectionUpdateBSONSetDirectFallbackReportsStructuredApply(t *testing.
 		t.Fatalf("flush insert buffer: %v", err)
 	}
 
-	var stats CollectionUpdateStats
-	sawStructuredApply := false
-	lastEmail := ""
-	const updateAttempts = 64
-	for i := 0; i < updateAttempts; i++ {
-		email := fmt.Sprintf("b%03d@example.com", i)
-		lastEmail = email
-		matched, modified, err := col.UpdateBSONSet([]byte("u1"), []BSONSetField{{
-			Key:   "email",
-			Value: mustBSONRawValue(t, email),
-		}})
-		if err != nil {
-			t.Fatalf("UpdateBSONSet %d: %v", i, err)
-		}
-		if !matched || !modified {
-			t.Fatalf("update %d matched=%v modified=%v want true/true", i, matched, modified)
-		}
-		stats = col.LastUpdateStats()
-		if stats.StructuredUpdateApply > 0 {
-			sawStructuredApply = true
-			break
-		}
+	lastEmail := "b@example.com"
+	matched, modified, err := col.UpdateBSONSet([]byte("u1"), []BSONSetField{{
+		Key:   "email",
+		Value: mustBSONRawValue(t, lastEmail),
+	}})
+	if err != nil {
+		t.Fatalf("UpdateBSONSet: %v", err)
 	}
-	if stats.StructuredUpdateApply <= 0 {
-		t.Fatalf("structured apply duration remained %s after %d direct fallback updates", stats.StructuredUpdateApply, updateAttempts)
+	if !matched || !modified {
+		t.Fatalf("matched=%v modified=%v want true/true", matched, modified)
+	}
+	stats := col.LastUpdateStats()
+	if got, want := stats.StructuredUpdateApplications, 1; got != want {
+		t.Fatalf("structured update applications=%d want %d", got, want)
 	}
 	if stats.Callback != 0 {
 		t.Fatalf("callback duration=%s want zero for BSON set direct fallback", stats.Callback)
 	}
 	if got, want := stats.UniqueIndexChecks, 1; got != want {
 		t.Fatalf("unique checks=%d want %d", got, want)
-	}
-	if !sawStructuredApply {
-		t.Fatal("structured apply timing was not observed")
 	}
 	ids, err := col.FindByIndex("email", lastEmail)
 	if err != nil {
@@ -10857,6 +10846,51 @@ func TestCollectionUpdateBSONSetRequiresBSONFormat(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "requires BSON document format") {
 		t.Fatalf("UpdateBSONSet err=%q want BSON format error", err)
+	}
+}
+
+func TestCollectionUpdateBSONSetBatchEmptyMatchesUpdateBatchResultShape(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "users",
+		Options: CollectionOptions{DocumentFormat: DocumentFormatBSON},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+
+	results, batched, err := col.UpdateBSONSetBatchIfNoSecondaryUniqueIndexChanges(nil)
+	if err != nil {
+		t.Fatalf("UpdateBSONSetBatchIfNoSecondaryUniqueIndexChanges: %v", err)
+	}
+	if !batched {
+		t.Fatal("batched=false want true")
+	}
+	if results != nil {
+		t.Fatalf("results=%v want nil empty-batch result", results)
+	}
+}
+
+func TestCollectionUpdateBSONSetBatchDuplicateIDMatchesUpdateBatchErrorShape(t *testing.T) {
+	_, err := prepareBSONSetUpdateBatchItems([]BSONSetUpdateBatchItem{
+		{DocumentID: []byte("u1")},
+		{DocumentID: []byte("u1")},
+	})
+	if !errors.Is(err, ErrDuplicateDocumentID) {
+		t.Fatalf("duplicate err=%v want ErrDuplicateDocumentID", err)
+	}
+	var itemErr *UpdateBatchItemError
+	if errors.As(err, &itemErr) {
+		t.Fatalf("duplicate err=%T want plain duplicate validation error", err)
 	}
 }
 

@@ -405,6 +405,64 @@ func TestServerUpdateAndDeleteByID(t *testing.T) {
 	}
 }
 
+func TestRunMongoUpdateOneUsesBSONSetFastPath(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	mgr := collections.NewCollectionManager(db)
+	mgr.SetUpdateBatchDetailedStatsEnabled(true)
+	if _, err := mgr.CreateCollection(&collections.CollectionMeta{
+		Name: "app.users",
+		Options: collections.CollectionOptions{
+			DocumentFormat: collections.DocumentFormatBSON,
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("app.users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	key, stored, err := prepareInsertDocument(mustDocument(t, bson.D{
+		{Key: "_id", Value: "u1"},
+		{Key: "city", Value: "hnl"},
+	}), collections.DocumentFormatBSON)
+	if err != nil {
+		t.Fatalf("prepare insert: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{key}, [][]byte{stored}); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+
+	update, err := parseMongoUpdateItem(0, mustDocument(t, bson.D{
+		{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}},
+		{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "city", Value: "sea"}}}}},
+	}))
+	if err != nil {
+		t.Fatalf("parse update: %v", err)
+	}
+	matched, modified, err := runMongoUpdateOne(col, update)
+	if err != nil {
+		t.Fatalf("run update: %v", err)
+	}
+	if !matched || !modified {
+		t.Fatalf("matched=%v modified=%v want true/true", matched, modified)
+	}
+	stats := col.LastUpdateStats()
+	if got, want := stats.StructuredUpdateApplications, 1; got != want {
+		t.Fatalf("structured update applications=%d want %d", got, want)
+	}
+	if stats.Callback != 0 {
+		t.Fatalf("callback duration=%s want zero for BSON set gateway update", stats.Callback)
+	}
+}
+
 func TestServerUpdateTemplateV1DefaultAddsFields(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -828,10 +886,21 @@ func TestRunMongoUpdateBatchDeclinesFreshSecondaryUniqueIndex(t *testing.T) {
 	if _, err := fresh.CreateIndex(collections.IndexDefinition{Name: "email_1", Field: "email", ValueType: collections.IndexValueString, Unique: true}); err != nil {
 		t.Fatalf("create index: %v", err)
 	}
+	buildUpdateItem := func(index int, id string, update bson.D) mongoUpdateItem {
+		t.Helper()
+		item, err := parseMongoUpdateItem(index, mustDocument(t, bson.D{
+			{Key: "q", Value: bson.D{{Key: "_id", Value: id}}},
+			{Key: "u", Value: update},
+		}))
+		if err != nil {
+			t.Fatalf("parse update item: %v", err)
+		}
+		return item
+	}
 
 	matched, modified, batched, err := runMongoUpdateBatch(stale, []mongoUpdateItem{
-		{index: 0, key: id1, updateDoc: mustDocument(t, bson.D{{Key: "$set", Value: bson.D{{Key: "email", Value: "c@example.com"}}}})},
-		{index: 1, key: id2, updateDoc: mustDocument(t, bson.D{{Key: "$set", Value: bson.D{{Key: "email", Value: "a@example.com"}}}})},
+		buildUpdateItem(0, "u1", bson.D{{Key: "$set", Value: bson.D{{Key: "email", Value: "c@example.com"}}}}),
+		buildUpdateItem(1, "u2", bson.D{{Key: "$set", Value: bson.D{{Key: "email", Value: "a@example.com"}}}}),
 	})
 	if err != nil {
 		t.Fatalf("runMongoUpdateBatch: %v", err)
@@ -870,6 +939,7 @@ func TestRunMongoUpdateBatchBatchesNonUniqueFieldWithSecondaryUniqueIndex(t *tes
 	defer func() { _ = db.Close() }()
 
 	mgr := collections.NewCollectionManager(db)
+	mgr.SetUpdateBatchDetailedStatsEnabled(true)
 	if _, err := mgr.CreateCollection(&collections.CollectionMeta{
 		Name: "app.users",
 		Options: collections.CollectionOptions{
@@ -924,6 +994,13 @@ func TestRunMongoUpdateBatchBatchesNonUniqueFieldWithSecondaryUniqueIndex(t *tes
 	}
 	if !batched || matched != 2 || modified != 2 {
 		t.Fatalf("matched=%d modified=%d batched=%v want 2,2,true", matched, modified, batched)
+	}
+	stats := col.LastUpdateStats()
+	if got, want := stats.StructuredUpdateApplications, 2; got != want {
+		t.Fatalf("structured update applications=%d want %d", got, want)
+	}
+	if stats.Callback != 0 {
+		t.Fatalf("callback duration=%s want zero for BSON set gateway batch", stats.Callback)
 	}
 	after := db.State()
 	if after.CommitSeq != before.CommitSeq {
