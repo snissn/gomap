@@ -551,7 +551,7 @@ func (db *DB) populateCompactStorageAudit(ctx context.Context, opts CompactStora
 		return debt, err
 	}
 	if !opts.DisableZeroByteValueLogCleanup {
-		zeroBytes, err := zeroByteValueLogFilesFromUsage(usage, protectedPaths)
+		zeroBytes, err := zeroByteValueLogFilesFromUsage(usage, mergeUniqueNonEmptyPaths(protectedPaths, db.currentValueLogProtectedPaths()))
 		if err != nil {
 			return debt, err
 		}
@@ -796,7 +796,7 @@ func (db *DB) pruneZeroByteValueLogFiles(protectedPaths []string) (int, error) {
 		}
 		return 0, err
 	}
-	protected := compactStorageProtectedPathSet(protectedPaths)
+	protected := compactStorageProtectedPathSet(mergeUniqueNonEmptyPaths(protectedPaths, db.currentValueLogProtectedPaths()))
 	deleted := 0
 	for _, entry := range entries {
 		if entry.IsDir() {
@@ -858,6 +858,21 @@ func (db *DB) pruneZeroByteValueLogFiles(protectedPaths []string) (int, error) {
 		}
 	}
 	return deleted, nil
+}
+
+func (db *DB) currentValueLogProtectedPaths() []string {
+	if db == nil {
+		return nil
+	}
+	appender := db.currentValueLogAppender()
+	if appender == nil {
+		return nil
+	}
+	path, _, ok := appender.CurrentValueLogSegment()
+	if !ok || path == "" {
+		return nil
+	}
+	return []string{path}
 }
 
 func zeroByteValueLogSegmentFiles(dir string, protectedPaths []string) (int, error) {
