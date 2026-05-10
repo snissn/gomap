@@ -10826,6 +10826,76 @@ func TestCollectionUpdateBSONSetNoIndexBuffersPrimaryRoot(t *testing.T) {
 	}
 }
 
+func TestCollectionUpdateBSONSetNoIndexFlushesPendingInsertTableBeforeBuffering(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), Durability: backenddb.DurabilityWALOffRelaxed})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatBSON,
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatchValidatedBSON(
+		[][]byte{[]byte("u1")},
+		[][]byte{mustBSONCollectionDocument(t, bson.D{
+			{Key: "_id", Value: "u1"},
+			{Key: "score", Value: int32(0)},
+		})},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	if col.writeDomain == nil || col.writeDomain.count != 1 || col.writeDomain.table == nil || col.writeDomain.table.Len() != 1 {
+		t.Fatalf("pending insert state count/table=%v/%v want one table row", col.writeDomain.count, col.writeDomain.table)
+	}
+	beforeUpdate := d.State()
+	matched, modified, err := col.UpdateBSONSet([]byte("u1"), []BSONSetField{{
+		Key:   "score",
+		Value: mustBSONRawValue(t, int32(9)),
+	}})
+	if err != nil {
+		t.Fatalf("UpdateBSONSet after pending insert: %v", err)
+	}
+	if !matched || !modified {
+		t.Fatalf("matched=%v modified=%v want true/true", matched, modified)
+	}
+	afterUpdate := d.State()
+	if afterUpdate.CommitSeq != beforeUpdate.CommitSeq+1 {
+		t.Fatalf("update commit seq=%d before=%d want one insert-table flush", afterUpdate.CommitSeq, beforeUpdate.CommitSeq)
+	}
+	col.writeDomain.mu.RLock()
+	pendingTableRows := 0
+	if col.writeDomain.table != nil {
+		pendingTableRows = col.writeDomain.table.Len()
+	}
+	rootRunCount := col.writeDomain.rootRunCount
+	primaryRuns := len(col.writeDomain.rootRuns[collectionPrimaryRootName("users")])
+	col.writeDomain.mu.RUnlock()
+	if pendingTableRows != 0 || rootRunCount != 1 || primaryRuns != 1 {
+		t.Fatalf("post-update pending table/root runs=%d/%d/%d want 0/1/1", pendingTableRows, rootRunCount, primaryRuns)
+	}
+	got, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get buffered update: %v", err)
+	}
+	if score := bson.Raw(got).Lookup("score").Int32(); score != 9 {
+		t.Fatalf("buffered score=%d want 9", score)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush buffered update: %v", err)
+	}
+}
+
 func TestCollectionUpdateBSONSetDirectFallbackReportsStructuredApply(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
