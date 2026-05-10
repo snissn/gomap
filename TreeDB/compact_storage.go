@@ -89,11 +89,11 @@ func (db *DB) CompactStorage(ctx context.Context, opts CompactStorageOptions) (C
 		}
 	}()
 	stats, err := db.backend.CompactStorage(ctx, treedbdb.CompactStorageOptions(opts))
-	finishValueLogFence()
-	fenceActive = false
 	if err = db.reconcileCachedBackendMaintenance(err); err != nil {
 		return out, err
 	}
+	finishValueLogFence()
+	fenceActive = false
 	if db.cached != nil && len(stats.ValueLogRewrite.SourceFileIDsUnreferenced) > 0 {
 		if err := db.cached.ReclaimObservedValueLogSources(ctx, stats.ValueLogRewrite.SourceFileIDsUnreferenced); err != nil {
 			return out, err

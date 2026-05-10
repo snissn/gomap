@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -448,6 +449,19 @@ func TestCompactStorageDefaultProtectedPathsActivatesActiveProtection(t *testing
 	paths := compactStorageValueLogProtectedPaths(CompactStorageOptions{})
 	if len(paths) != 1 || paths[0] != "" {
 		t.Fatalf("default protected paths=%q want sentinel", paths)
+	}
+}
+
+func TestCompactStorageFencedProtectedPathsIncludeExplicitPaths(t *testing.T) {
+	paths := compactStorageFencedValueLogProtectedPaths(CompactStorageOptions{
+		ValueLogProtectedPaths: []string{"explicit-a", "shared"},
+		ValueLogFencedProtectedPathsFunc: func() []string {
+			return []string{"dynamic-a", "shared"}
+		},
+	})
+	want := []string{"explicit-a", "shared", "dynamic-a"}
+	if !reflect.DeepEqual(paths, want) {
+		t.Fatalf("fenced protected paths=%q want %q", paths, want)
 	}
 }
 

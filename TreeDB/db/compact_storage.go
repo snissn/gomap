@@ -774,10 +774,36 @@ func compactStorageFencedValueLogProtectedPaths(opts CompactStorageOptions) []st
 		return compactStorageValueLogProtectedPaths(opts)
 	}
 	dynamic := opts.ValueLogFencedProtectedPathsFunc()
+	if len(opts.ValueLogProtectedPaths) > 0 {
+		if len(dynamic) == 0 {
+			return opts.ValueLogProtectedPaths
+		}
+		return compactStorageMergeProtectedPaths(opts.ValueLogProtectedPaths, dynamic)
+	}
 	if len(dynamic) == 0 {
 		return []string{""}
 	}
 	return dynamic
+}
+
+func compactStorageMergeProtectedPaths(static, dynamic []string) []string {
+	seen := make(map[string]struct{}, len(static)+len(dynamic))
+	out := make([]string, 0, len(static)+len(dynamic))
+	for _, path := range static {
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		seen[path] = struct{}{}
+		out = append(out, path)
+	}
+	for _, path := range dynamic {
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		seen[path] = struct{}{}
+		out = append(out, path)
+	}
+	return out
 }
 
 func compactStorageCleanupValueLogProtectedPaths(opts CompactStorageOptions) []string {
