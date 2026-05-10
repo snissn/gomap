@@ -4340,6 +4340,14 @@ func (db *DB) ValueLogProtectedPaths() []string {
 	return db.valueLogProtectedPaths()
 }
 
+// ValueLogInUsePaths returns value-log segment paths currently backing cached
+// mutable/queued writer state. It excludes retained lifecycle paths so callers
+// that already hold a writer fence can still reclaim independently proven
+// unreachable retained sources.
+func (db *DB) ValueLogInUsePaths() []string {
+	return db.valueOnlyLogPaths(db.valueLogInUsePaths())
+}
+
 // ReclaimObservedValueLogSources rotates cached writers past rewrite-selected
 // source segments and reclaims storage classes that backend rewrite already
 // proved obsolete.
