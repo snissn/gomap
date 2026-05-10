@@ -91,7 +91,7 @@ jobs:
           GOMEMLIMIT: 4GiB
           GOMAXPROCS: 2
         run: |
-          set -o pipefail
+          set -e -o pipefail
           case "${{ matrix.shard_kind }}" in
             all)
               go test -json -timeout 30m -p 1 ./... | tee treedb-test.jsonl
@@ -267,7 +267,7 @@ jobs:
         working-directory: TreeDB
         shell: bash
         run: |
-          set -o pipefail
+          set -e -o pipefail
           shard_index="${{ matrix.shard_index }}"
           shard_count="${{ matrix.shard_count }}"
           package_file="$(mktemp)"
