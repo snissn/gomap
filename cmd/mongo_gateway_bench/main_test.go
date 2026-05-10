@@ -593,6 +593,7 @@ func TestParseConfigValidation(t *testing.T) {
 		"-concurrent-writes", "10",
 		"-update-indexed-field",
 		"-range-index",
+		"-mongo-compact",
 		"-treedb-read-state", "unsettled",
 	})
 	if err != nil {
@@ -608,6 +609,9 @@ func TestParseConfigValidation(t *testing.T) {
 		cfg.ConcurrentWriters != 2 || cfg.ConcurrentWrites != 10 ||
 		!cfg.UpdateIndexedField || !cfg.RangeIndex || cfg.TreeDBReadState != treeDBReadStateUnsettled {
 		t.Fatalf("unexpected config: %+v", cfg)
+	}
+	if !cfg.MongoCompact {
+		t.Fatalf("expected -mongo-compact to be enabled: %+v", cfg)
 	}
 	sweepCfg, err := parseConfig([]string{
 		"-concurrent-reader-sweep", "1,2 4",
@@ -2394,6 +2398,7 @@ func TestWriteResultIncludesRedactedMongoURI(t *testing.T) {
 	result := &benchmarkResult{
 		Target:           "mongo",
 		MongoURI:         "mongodb://user@127.0.0.1:27017",
+		MongoCompact:     true,
 		Database:         "bench",
 		Collection:       "docs",
 		Documents:        1,
@@ -2405,6 +2410,9 @@ func TestWriteResultIncludesRedactedMongoURI(t *testing.T) {
 	}
 	if !bytes.Contains(out.Bytes(), []byte("mongo_uri=mongodb://user@127.0.0.1:27017")) {
 		t.Fatalf("text output missing mongo_uri: %q", out.String())
+	}
+	if !bytes.Contains(out.Bytes(), []byte("mongo_compact=true")) {
+		t.Fatalf("text output missing mongo_compact: %q", out.String())
 	}
 }
 
