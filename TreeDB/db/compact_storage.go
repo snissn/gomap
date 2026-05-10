@@ -552,7 +552,7 @@ func (db *DB) compactStorageFencedUnreferencedValueLogIDs(ctx context.Context, o
 	if db == nil || !opts.ValueLogReclaimFencedUnreferenced || db.valueLogManager == nil {
 		return nil, 0, nil
 	}
-	referenced, err := db.referencedValueLogSegments(ctx)
+	referenced, err := db.compactStorageScannedValueLogRefs(ctx)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -592,6 +592,27 @@ func (db *DB) compactStorageFencedUnreferencedValueLogIDs(ctx context.Context, o
 		return ids[i] < ids[j]
 	})
 	return ids, bytes, nil
+}
+
+func (db *DB) compactStorageScannedValueLogRefs(ctx context.Context) (map[uint32]struct{}, error) {
+	counts, _, err := db.scanValueLogRefCounts(ctx)
+	if err != nil && errors.Is(err, valuelog.ErrFileNotFound) {
+		if refreshErr := db.RefreshValueLogSet(); refreshErr != nil {
+			return nil, refreshErr
+		}
+		counts, _, err = db.scanValueLogRefCounts(ctx)
+	}
+	if err != nil {
+		return nil, err
+	}
+	refs := make(map[uint32]struct{}, len(counts))
+	for fileID, n := range counts {
+		if n == 0 {
+			continue
+		}
+		refs[fileID] = struct{}{}
+	}
+	return refs, nil
 }
 
 func (db *DB) runCompactStoragePhase(stats *CompactStorageStats, name string, fn func() error) error {
