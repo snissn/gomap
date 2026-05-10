@@ -1942,7 +1942,7 @@ func TestValueLogRewriteOnline_ProtectedPathsDoNotKeepHistoricalRewriteLanes(t *
 	}
 }
 
-func TestValueLogRewriteOnline_DefaultProtectedPathsDoNotProtectExistedBeforeActiveSegments(t *testing.T) {
+func TestValueLogRewriteOnline_ExplicitSourceDoesNotDeleteActiveSegment(t *testing.T) {
 	dir := t.TempDir()
 
 	db, err := Open(Options{
@@ -1992,8 +1992,8 @@ func TestValueLogRewriteOnline_DefaultProtectedPathsDoNotProtectExistedBeforeAct
 		t.Fatalf("source segment unreferenced=%d want 1", stats.SourceSegmentsUnreferenced)
 	}
 
-	if _, err := os.Stat(targetPath); !os.IsNotExist(err) {
-		t.Fatalf("expected %s to be removed, err=%v", filepath.Base(targetPath), err)
+	if _, err := os.Stat(targetPath); err != nil {
+		t.Fatalf("expected active segment %s to remain, stat=%v", filepath.Base(targetPath), err)
 	}
 }
 
