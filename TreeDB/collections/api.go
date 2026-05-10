@@ -3113,6 +3113,10 @@ func (c *Collection) bufferNoIndexInsertBatch(
 	if indexed || currentCatalog == nil || !sameCollectionMeta(currentCatalog.meta, catalog.meta) {
 		return nil, false, nil
 	}
+	if hasBufferedIndexedRootRuns(domain) {
+		// Keep no-index buffering on the table lane; avoid mixed staging.
+		return nil, false, nil
+	}
 	switch normalizedDocumentFormat(currentOptions.documentFormat) {
 	case DocumentFormatJSON, DocumentFormatBSON:
 	default:
@@ -10940,6 +10944,25 @@ func snapshotUpdateBatchBufferedPrimaryEntriesFromIndex(index *bufferedPrimaryRu
 	return entries, buffer, nil
 }
 
+func snapshotUpdateBatchBufferedPrimaryEntriesFromTable(table memtable.Table, items []updateBatchItem) ([]updateBatchBufferedEntry, *updateBatchBufferedEntryBuffer, error) {
+	entries, buffer := getUpdateBatchBufferedEntries(len(items))
+	if table == nil || len(items) == 0 {
+		return entries, buffer, nil
+	}
+	for i, item := range items {
+		value, _, flags, found := table.GetEntry(item.DocumentID)
+		if !found {
+			continue
+		}
+		entries[i] = updateBatchBufferedEntry{
+			value: buffer.copyValue(value),
+			flags: flags,
+			found: true,
+		}
+	}
+	return entries, buffer, nil
+}
+
 func snapshotUpdateBatchBufferedRead(domain *collectionWriteDomain, meta CollectionMeta, baseCommitSeq uint64, baseSystemRoot uint64, items []updateBatchItem, documentFormat DocumentFormat) (updateBatchBufferedRead, []memtable.Table, bool, bool, error) {
 	if domain == nil {
 		return updateBatchBufferedRead{}, nil, false, false, nil
@@ -10970,6 +10993,18 @@ func snapshotUpdateBatchBufferedRead(domain *collectionWriteDomain, meta Collect
 
 func snapshotUpdateBatchBufferedReadLocked(domain *collectionWriteDomain, meta CollectionMeta, baseCommitSeq uint64, baseSystemRoot uint64, items []updateBatchItem, documentFormat DocumentFormat, allowPrimaryRunIndexBuild bool) (updateBatchBufferedRead, []memtable.Table, bool, bool, bool, error) {
 	if updateBatchCanReadBufferedDomainLocked(domain, meta, baseSystemRoot) {
+		if len(meta.Indexes) == 0 {
+			primaryEntries, primaryBuffer, err := snapshotUpdateBatchBufferedPrimaryEntriesFromTable(domain.table, items)
+			if err != nil {
+				return updateBatchBufferedRead{}, nil, false, false, false, err
+			}
+			return updateBatchBufferedRead{
+				enabled:         true,
+				primaryEntries:  primaryEntries,
+				primaryBuffer:   primaryBuffer,
+				writeGeneration: domain.writeGeneration,
+			}, nil, false, false, false, nil
+		}
 		bufferedCollectionName := bufferedDomainCollectionName(domain, meta.Name)
 		if allowPrimaryRunIndexBuild && domain.primaryRunIndex == nil && hasBufferedPrimaryRootRuns(domain, bufferedCollectionName) {
 			return updateBatchBufferedRead{}, nil, false, false, true, nil
@@ -11828,6 +11863,47 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 	phaseStart = updateBatchStatsNow(detailedStats)
 	if domain.count == 0 && plan.catalog != nil {
 		c.initializeWriteDomainFromCatalogLocked(domain, plan.catalog, plan.baseCommitSeq, plan.baseSystemRoot)
+	}
+	if len(plan.meta.Indexes) == 0 {
+		if hasBufferedIndexedRootRuns(domain) {
+			plan.stats.BufferStageDomainPrepare += updateBatchStatsSince(detailedStats, phaseStart)
+			return false, ErrConcurrentMutation
+		}
+		if domain.table == nil {
+			domain.table = newCollectionRunTable(0)
+		}
+		primaryPolicy := backenddb.OrderedRootStorageDefault
+		for i := range plan.rootNames {
+			if plan.rootNames[i] == direct.primaryRootName {
+				primaryPolicy = plan.policies[i]
+				break
+			}
+		}
+		primaryAppendStart := updateBatchStatsNow(detailedStats)
+		for _, entry := range direct.primaryEntries {
+			if entry.flags&node.FlagTombstone != 0 {
+				domain.table.DeleteSteal(bytes.Clone(entry.key))
+				continue
+			}
+			domain.table.SetEntry(bytes.Clone(entry.key), bytes.Clone(entry.value), page.ValuePtr{}, node.FlagInline)
+		}
+		plan.stats.BufferStagePrimaryAppend += updateBatchStatsSince(detailedStats, primaryAppendStart)
+		plan.stats.BufferStageDomainPrepare += updateBatchStatsSince(detailedStats, phaseStart)
+		domain.loaded = true
+		domain.meta = plan.meta
+		domain.catalog = plan.catalog
+		domain.baseCommitSeq = plan.baseCommitSeq
+		domain.baseSystemRoot = plan.baseSystemRoot
+		if plan.catalog != nil {
+			domain.primaryRoot = plan.catalog.rootID(collectionPrimaryRootName(plan.meta.Name))
+		}
+		domain.storagePolicy = primaryPolicy
+		domain.count += modifiedCount
+		domain.mutableCount = saturatingAddNonNegativeInt(domain.mutableCount, modifiedCount)
+		domain.writeGeneration++
+		c.meta = plan.meta
+		plan.stats.BufferedBatches = 1
+		return true, nil
 	}
 	if domain.rootPolicies == nil {
 		domain.rootPolicies = make(map[string]backenddb.OrderedRootStoragePolicy, len(plan.rootNames))
