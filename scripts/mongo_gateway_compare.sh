@@ -82,7 +82,7 @@ Options:
                         MongoDB Go driver maxConnecting. Default: 0, use driver default.
  --mongo-compact       Compact the MongoDB collection before final stats collection.
                         Set to true/false, default: true.
-                        Provide as -mongo-compact=<true|false>.
+                        Provide as --mongo-compact=<true|false>.
   --prebuild-documents  Prebuild documents before timed load phases.
   --range-index         Create age_1 for the range-read phase.
   --profile-treedb      Capture per-phase TreeDB pprof artifacts in profiles/.
@@ -274,6 +274,10 @@ while [[ $# -gt 0 ]]; do
     --mongo-image)
       MONGO_IMAGE="$2"
       shift 2
+      ;;
+    --mongo-compact=* )
+      MONGO_COMPACT="${1#*=}"
+      shift
       ;;
     --mongo-compact)
       MONGO_COMPACT="$2"

@@ -153,6 +153,10 @@ while [[ $# -gt 0 ]]; do
       MONGO_IMAGE="$2"
       shift 2
       ;;
+    --mongo-compact=*)
+      MONGO_COMPACT="${1#*=}"
+      shift
+      ;;
     --mongo-compact)
       require_value "$1" "${2-}"
       MONGO_COMPACT="$2"
