@@ -1942,6 +1942,61 @@ func TestValueLogRewriteOnline_ProtectedPathsDoNotKeepHistoricalRewriteLanes(t *
 	}
 }
 
+func TestValueLogRewriteOnline_DefaultProtectedPathsDoNotProtectExistedBeforeActiveSegments(t *testing.T) {
+	dir := t.TempDir()
+
+	db, err := Open(Options{
+		Dir: dir,
+		ValueLog: ValueLogOptions{
+			PointerThreshold: 1,
+			ForcePointers:    true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	ptrs := appendPointersInNewSegment(t, dir, 0, 1, 200_000, 1, func(_ int) []byte {
+		return bytes.Repeat([]byte("active-protected|"), 64)
+	})
+	targetPath := filepath.Join(dir, "value_vlog", "value-l0-000001.log")
+
+	b := db.NewBatch()
+	ptrBatch, ok := b.(interface {
+		SetPointer(key []byte, ptr page.ValuePtr) error
+	})
+	if !ok {
+		t.Fatalf("missing SetPointer on batch")
+	}
+	if err := ptrBatch.SetPointer([]byte("k"), ptrs[0]); err != nil {
+		t.Fatalf("set pointer: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("write pointer key: %v", err)
+	}
+	closeNoErr(t, b)
+
+	if err := db.Delete([]byte("k")); err != nil {
+		t.Fatalf("delete pointer key: %v", err)
+	}
+
+	stats, err := db.ValueLogRewriteOnline(context.Background(), ValueLogRewriteOnlineOptions{
+		SourceFileIDs: []uint32{ptrs[0].FileID},
+		BatchSize:     1,
+	})
+	if err != nil {
+		t.Fatalf("ValueLogRewriteOnline: %v", err)
+	}
+	if stats.SourceSegmentsUnreferenced != 1 {
+		t.Fatalf("source segment unreferenced=%d want 1", stats.SourceSegmentsUnreferenced)
+	}
+
+	if _, err := os.Stat(targetPath); !os.IsNotExist(err) {
+		t.Fatalf("expected %s to be removed, err=%v", filepath.Base(targetPath), err)
+	}
+}
+
 func TestValueLogRewriteOnline_UsesBlockCompressionWhenEnabled(t *testing.T) {
 	dir := t.TempDir()
 

@@ -736,14 +736,14 @@ func zeroByteValueLogFilesFromUsage(usage []CompactStorageUsage, protectedPaths 
 func compactStorageValueLogProtectedPaths(opts CompactStorageOptions) []string {
 	if opts.ValueLogProtectedPathsFunc == nil {
 		if len(opts.ValueLogProtectedPaths) == 0 {
-			return []string{""}
+			return nil
 		}
 		return opts.ValueLogProtectedPaths
 	}
 	dynamic := opts.ValueLogProtectedPathsFunc()
 	if len(opts.ValueLogProtectedPaths) == 0 {
 		if len(dynamic) == 0 {
-			return []string{""}
+			return nil
 		}
 		return dynamic
 	}
@@ -781,7 +781,7 @@ func compactStorageFencedValueLogProtectedPaths(opts CompactStorageOptions) []st
 		return compactStorageMergeProtectedPaths(opts.ValueLogProtectedPaths, dynamic)
 	}
 	if len(dynamic) == 0 {
-		return []string{""}
+		return nil
 	}
 	return dynamic
 }
