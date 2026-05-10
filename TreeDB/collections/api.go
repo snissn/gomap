@@ -3045,7 +3045,7 @@ func (c *Collection) canBufferDirectUpdateAck() bool {
 	if c == nil || c.db == nil || c.writeDomain == nil {
 		return false
 	}
-	return c.db.DurabilityMode() != backenddb.DurabilityWALOnRelaxed
+	return c.db.DurabilityMode() == backenddb.DurabilityWALOffRelaxed
 }
 
 func (c *Collection) bufferNoIndexInsertBatch(
@@ -11851,9 +11851,12 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 		domain.rootRuns = make(map[string][]memtable.Table, len(plan.rootNames))
 	}
 	addedRootRuns := estimateAccumulatedRootRunsForNamesLocked(domain, plan.rootNames)
-	shouldAutoFlushAfterAdding := shouldFlushBufferedIndexedWritesAfterAdding(domain, plan.meta.Options, modifiedCount, direct.stagedBytes, addedRootRuns)
+	shouldAutoFlushAfterAdding := false
+	if !primaryOnlyDirectUpdate {
+		shouldAutoFlushAfterAdding = shouldFlushBufferedIndexedWritesAfterAdding(domain, plan.meta.Options, modifiedCount, direct.stagedBytes, addedRootRuns)
+	}
 	requiresPreAppendFreeze := false
-	if collectionMetaHasSecondaryUniqueIndex(plan.meta) && bufferedIndexedAutoFlushEnabled(plan.meta.Options) {
+	if !primaryOnlyDirectUpdate && collectionMetaHasSecondaryUniqueIndex(plan.meta) && bufferedIndexedAutoFlushEnabled(plan.meta.Options) {
 		for i := range plan.rootNames {
 			if _, ok := updateBatchPlanUniqueSecondaryIndex(plan, i); ok {
 				requiresPreAppendFreeze = true
@@ -11991,15 +11994,19 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 	}
 	domain.observeIndexedStage(modifiedCount, direct.stagedBytes, actualRootRuns)
 	c.meta = plan.meta
-	compactedObsolete, err := maybeCompactBufferedIndexedMutableRunsLocked(domain, plan.meta.Options)
-	if err != nil {
-		if rollbackOnError {
-			rollbackBufferedIndexedDomain(domain, checkpoint)
-			c.meta = collectionMetaCheckpoint
+	var compactedObsolete []memtable.Table
+	if !primaryOnlyDirectUpdate {
+		var err error
+		compactedObsolete, err = maybeCompactBufferedIndexedMutableRunsLocked(domain, plan.meta.Options)
+		if err != nil {
+			if rollbackOnError {
+				rollbackBufferedIndexedDomain(domain, checkpoint)
+				c.meta = collectionMetaCheckpoint
+			}
+			return false, err
 		}
-		return false, err
 	}
-	if shouldFlushBufferedIndexedWrites(domain, plan.meta.Options) {
+	if !primaryOnlyDirectUpdate && shouldFlushBufferedIndexedWrites(domain, plan.meta.Options) {
 		freezePreAppendTables()
 		flushDuration, lockReleased, relockWait, err := c.flushBufferedIndexedAfterThresholdLocked(domain, plan.meta.Options)
 		if lockReleased > 0 {

@@ -10346,7 +10346,7 @@ func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesAppendsToBufferedUp
 }
 
 func TestCollectionUpdateBatchDirectBufferedBSONAccumulatesRootRuns(t *testing.T) {
-	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), Durability: backenddb.DurabilityWALOffRelaxed})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
@@ -10445,7 +10445,7 @@ func TestCollectionUpdateBatchDirectBufferedBSONAccumulatesRootRuns(t *testing.T
 }
 
 func TestCollectionUpdateBatchBuffersWhenSecondaryUniqueUnchanged(t *testing.T) {
-	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), Durability: backenddb.DurabilityWALOffRelaxed})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
@@ -10669,7 +10669,7 @@ func TestCollectionUpdateBatchWithPendingIndexedRunsCallsCallbackOnce(t *testing
 }
 
 func TestCollectionUpdateBSONSetReusesUnchangedIndexState(t *testing.T) {
-	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), Durability: backenddb.DurabilityWALOffRelaxed})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
@@ -10826,6 +10826,66 @@ func TestCollectionUpdateBSONSetNoIndexBuffersPrimaryRoot(t *testing.T) {
 	}
 }
 
+func TestCollectionUpdateBSONSetNoIndexIgnoresIndexedThresholds(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), Durability: backenddb.DurabilityWALOffRelaxed})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat:                   DocumentFormatBSON,
+			BufferedIndexedWriteMaxDocuments: 1,
+			BufferedIndexedWriteMaxBytes:     1,
+			BufferedIndexedWriteMaxRootRuns:  1,
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{mustBSONCollectionDocument(t, bson.D{
+			{Key: "_id", Value: "u1"},
+			{Key: "score", Value: int32(0)},
+		})},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush insert buffer: %v", err)
+	}
+
+	beforeState := d.State()
+	matched, modified, err := col.UpdateBSONSet([]byte("u1"), []BSONSetField{{
+		Key:   "score",
+		Value: mustBSONRawValue(t, int32(7)),
+	}})
+	if err != nil {
+		t.Fatalf("UpdateBSONSet: %v", err)
+	}
+	if !matched || !modified {
+		t.Fatalf("matched=%v modified=%v want true/true", matched, modified)
+	}
+	afterUpdateState := d.State()
+	if afterUpdateState.CommitSeq != beforeState.CommitSeq {
+		t.Fatalf("UpdateBSONSet advanced commit seq by %d before flush, want buffered despite indexed thresholds", afterUpdateState.CommitSeq-beforeState.CommitSeq)
+	}
+	col.writeDomain.mu.RLock()
+	rootRunCount := col.writeDomain.rootRunCount
+	primaryRuns := len(col.writeDomain.rootRuns[collectionPrimaryRootName("users")])
+	col.writeDomain.mu.RUnlock()
+	if rootRunCount != 1 || primaryRuns != 1 {
+		t.Fatalf("buffered root runs root=%d primary=%d want 1/1", rootRunCount, primaryRuns)
+	}
+}
+
 func TestCollectionUpdateBSONSetNoIndexWALOnFlushesBeforeAck(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), Durability: backenddb.DurabilityWALOnRelaxed})
 	if err != nil {
@@ -10890,6 +10950,62 @@ func TestCollectionUpdateBSONSetNoIndexWALOnFlushesBeforeAck(t *testing.T) {
 	}
 	if score := bson.Raw(got).Lookup("score").Int32(); score != 7 {
 		t.Fatalf("score=%d want 7", score)
+	}
+}
+
+func TestCollectionUpdateBSONSetNoIndexDurableFlushesBeforeAck(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), Durability: backenddb.DurabilityDurable})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatBSON,
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{mustBSONCollectionDocument(t, bson.D{
+			{Key: "_id", Value: "u1"},
+			{Key: "score", Value: int32(0)},
+		})},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush insert buffer: %v", err)
+	}
+
+	beforeState := d.State()
+	matched, modified, err := col.UpdateBSONSet([]byte("u1"), []BSONSetField{{
+		Key:   "score",
+		Value: mustBSONRawValue(t, int32(7)),
+	}})
+	if err != nil {
+		t.Fatalf("UpdateBSONSet: %v", err)
+	}
+	if !matched || !modified {
+		t.Fatalf("matched=%v modified=%v want true/true", matched, modified)
+	}
+	afterUpdateState := d.State()
+	if afterUpdateState.CommitSeq != beforeState.CommitSeq+1 {
+		t.Fatalf("UpdateBSONSet commit seq=%d before=%d want durable publish before ack", afterUpdateState.CommitSeq, beforeState.CommitSeq)
+	}
+	col.writeDomain.mu.RLock()
+	rootRunCount := col.writeDomain.rootRunCount
+	col.writeDomain.mu.RUnlock()
+	if rootRunCount != 0 {
+		t.Fatalf("buffered root runs=%d want drained before durable ack", rootRunCount)
 	}
 }
 
@@ -11646,7 +11762,7 @@ func TestCollectionUpdateBSONSetValidatesCollectionBeforeFields(t *testing.T) {
 }
 
 func TestCollectionUpdateBatchDirectBufferedBSONDoesNotReserveUnchangedUnique(t *testing.T) {
-	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), Durability: backenddb.DurabilityWALOffRelaxed})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
@@ -11800,7 +11916,7 @@ func TestCollectionUpdateBatchDirectBufferedBSONDoesNotReserveUnchangedUnique(t 
 }
 
 func TestCollectionUpdateBatchDirectBufferedTemplateV1AccumulatesRootRuns(t *testing.T) {
-	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), Durability: backenddb.DurabilityWALOffRelaxed})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
@@ -11908,7 +12024,7 @@ func TestCollectionUpdateBatchDirectBufferedTemplateV1AccumulatesRootRuns(t *tes
 }
 
 func TestCollectionUpdateBatchDirectBufferedTemplateV1TemplateOnlySkipsSecondaryRoots(t *testing.T) {
-	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), Durability: backenddb.DurabilityWALOffRelaxed})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
@@ -12015,7 +12131,7 @@ func TestCollectionUpdateBatchDirectBufferedTemplateV1TemplateOnlySkipsSecondary
 }
 
 func TestCollectionUpdateBatchDirectBufferedTemplateV1DoesNotReserveUnchangedUnique(t *testing.T) {
-	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), Durability: backenddb.DurabilityWALOffRelaxed})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}

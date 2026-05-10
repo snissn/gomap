@@ -932,7 +932,7 @@ func TestRunMongoUpdateBatchResultsDeclineReturnsZeroResults(t *testing.T) {
 }
 
 func TestRunMongoUpdateBatchBatchesNonUniqueFieldWithSecondaryUniqueIndex(t *testing.T) {
-	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), Durability: backenddb.DurabilityWALOffRelaxed})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}

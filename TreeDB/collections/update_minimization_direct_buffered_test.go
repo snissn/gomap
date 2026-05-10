@@ -10,7 +10,7 @@ import (
 )
 
 func TestCollectionUpdateBatchDirectBufferedBSONSkipsUnchangedSecondaryRoots(t *testing.T) {
-	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), Durability: backenddb.DurabilityWALOffRelaxed})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
@@ -193,7 +193,7 @@ func TestCollectionUpdateBatchDirectBufferedBSONRejectsIDMutationBeforeStaging(t
 }
 
 func TestCollectionUpdateBatchDirectBufferedTemplateV1SeparatesTemplateAndSecondaryRoots(t *testing.T) {
-	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), Durability: backenddb.DurabilityWALOffRelaxed})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
