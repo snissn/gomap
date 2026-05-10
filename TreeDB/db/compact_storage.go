@@ -590,13 +590,8 @@ func (db *DB) compactStorageFencedUnreferencedValueLogIDs(ctx context.Context, o
 
 	files := db.valueOnlyValueLogFiles(set.Files)
 	protectedPaths := compactStorageFencedValueLogProtectedPaths(opts)
-	protected := make(map[string]struct{}, len(protectedPaths))
-	for _, path := range protectedPaths {
-		if path == "" {
-			continue
-		}
-		protected[path] = struct{}{}
-	}
+	protected := compactStorageProtectedPathSet(protectedPaths)
+	protectedFileIDs := compactStorageProtectedFileIDSet(protectedPaths, nil)
 	ids := make([]uint32, 0, len(files))
 	var bytes int64
 	for id, f := range files {
@@ -606,7 +601,10 @@ func (db *DB) compactStorageFencedUnreferencedValueLogIDs(ctx context.Context, o
 		if f == nil {
 			continue
 		}
-		if _, ok := protected[f.Path]; ok {
+		if _, ok := protected[filepath.Clean(f.Path)]; ok {
+			continue
+		}
+		if _, ok := protectedFileIDs[id]; ok {
 			continue
 		}
 		size := fileSize(f)
@@ -881,10 +879,13 @@ func (db *DB) pruneZeroByteValueLogFiles(protectedPaths []string) (int, error) {
 			}
 		}
 		if err := os.Remove(path); err != nil {
-			if !os.IsNotExist(err) {
-				return deleted, err
+			if os.IsNotExist(err) {
+				continue
 			}
-			continue
+			if compactStorageIsBusyRemoveError(err) {
+				continue
+			}
+			return deleted, err
 		}
 		deleted++
 	}
@@ -914,7 +915,7 @@ func (db *DB) currentValueLogProtectedRefs() ([]string, []uint32) {
 		paths = []string{path}
 	}
 	if ok && fileID != 0 {
-		fileIDs = []uint32{fileID}
+		fileIDs = append(fileIDs, fileID)
 	}
 	return paths, fileIDs
 }

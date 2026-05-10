@@ -4435,6 +4435,7 @@ func (db *DB) BeginValueLogMaintenanceFence(ctx context.Context) (func(), error)
 		l := &db.lanes[i]
 		l.vlogMu.Lock()
 		if l.vlogPath != "" {
+			db.markValueLogRetain(l.vlogPath)
 			err := db.rotateValueLogMuHeld(l)
 			l.vlogMu.Unlock()
 			if err != nil {
@@ -4449,6 +4450,7 @@ func (db *DB) BeginValueLogMaintenanceFence(ctx context.Context) (func(), error)
 		l := &db.leafLog
 		l.vlogMu.Lock()
 		if l.vlogPath != "" {
+			db.markValueLogRetain(l.vlogPath)
 			err := db.rotateValueLogMuHeld(l)
 			l.vlogMu.Unlock()
 			if err != nil {

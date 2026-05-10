@@ -465,6 +465,44 @@ func TestCompactStorageFencedProtectedPathsIncludeExplicitPaths(t *testing.T) {
 	}
 }
 
+func TestCompactStorageFencedReclaimProtectsByFileID(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	valueLogDir := ValueLogDirPath(dir)
+	if err := os.MkdirAll(valueLogDir, 0755); err != nil {
+		t.Fatalf("mkdir value_vlog: %v", err)
+	}
+	path := filepath.Join(valueLogDir, "value-l0-000002.log")
+	if err := os.WriteFile(path, []byte("value-log-bytes"), 0644); err != nil {
+		t.Fatalf("write value log: %v", err)
+	}
+	fileID, err := valuelog.EncodeFileID(0, 2)
+	if err != nil {
+		t.Fatalf("encode file ID: %v", err)
+	}
+	if err := d.valueLogManager.RegisterSegment(path, fileID); err != nil {
+		t.Fatalf("register segment: %v", err)
+	}
+
+	ids, _, err := d.compactStorageFencedUnreferencedValueLogIDs(context.Background(), CompactStorageOptions{
+		UnsafeValueLogReclaimFencedUnreferenced: true,
+		ValueLogFencedProtectedPathsFunc: func() []string {
+			return []string{filepath.Join(t.TempDir(), "value-l0-000002.log")}
+		},
+	})
+	if err != nil {
+		t.Fatalf("compactStorageFencedUnreferencedValueLogIDs: %v", err)
+	}
+	if len(ids) != 0 {
+		t.Fatalf("fenced reclaim IDs=%v want none", ids)
+	}
+}
+
 func TestZeroByteValueLogCleanupProtectsByFileID(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "value-l0-000002.log")
