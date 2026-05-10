@@ -19,6 +19,13 @@ type BSONSetField struct {
 	Value bson.RawValue
 }
 
+// BSONSetUpdateBatchItem describes one structured top-level BSON $set update
+// in a batch. DocumentID must be non-empty and unique within the batch.
+type BSONSetUpdateBatchItem struct {
+	DocumentID []byte
+	Fields     []BSONSetField
+}
+
 type bsonSetUpdate struct {
 	fields       []BSONSetField
 	fieldIndexes map[string]int
@@ -92,6 +99,59 @@ func (c *Collection) updateBSONSetDirect(documentID []byte, spec bsonSetUpdate) 
 		return false, false, fmt.Errorf("collections: BSON $set result count %d for single update", len(results))
 	}
 	return results[0].Matched, results[0].Modified, nil
+}
+
+// UpdateBSONSetBatchIfNoSecondaryUniqueIndexChanges applies a batch of
+// structured top-level BSON $set updates only when no secondary unique index
+// value changes in the planning snapshot. This is the BSON-set equivalent of
+// UpdateBatchIfNoSecondaryUniqueIndexChanges.
+func (c *Collection) UpdateBSONSetBatchIfNoSecondaryUniqueIndexChanges(items []BSONSetUpdateBatchItem) ([]UpdateBatchResult, bool, error) {
+	return c.updateBSONSetBatch(items, updateBatchModeNoSecondaryUniqueIndexChanges)
+}
+
+func (c *Collection) updateBSONSetBatch(items []BSONSetUpdateBatchItem, mode updateBatchMode) ([]UpdateBatchResult, bool, error) {
+	if c == nil {
+		return nil, false, errCollectionNil
+	}
+	if c.db == nil {
+		return nil, false, errCollectionDBNil
+	}
+	if err := c.ensureWriteDomainOpen(); err != nil {
+		return nil, false, err
+	}
+	if err := c.validateBSONSetDocumentFormat(); err != nil {
+		return nil, false, err
+	}
+	if len(items) == 0 {
+		c.setLastUpdateStats(CollectionUpdateStats{})
+		return nil, true, nil
+	}
+	ownedItems, err := prepareBSONSetUpdateBatchItems(items)
+	if err != nil {
+		return nil, false, err
+	}
+	return c.updateBatchOwnedItems(ownedItems, mode)
+}
+
+func prepareBSONSetUpdateBatchItems(items []BSONSetUpdateBatchItem) ([]updateBatchItem, error) {
+	out := make([]updateBatchItem, len(items))
+	seen := make(map[string]struct{}, len(items))
+	for i, item := range items {
+		if len(item.DocumentID) == 0 {
+			return nil, fmt.Errorf("collections: document id cannot be empty at index %d", i)
+		}
+		key := string(item.DocumentID)
+		if _, ok := seen[key]; ok {
+			return nil, fmt.Errorf("%w at index %d", ErrDuplicateDocumentID, i)
+		}
+		seen[key] = struct{}{}
+		spec, err := newBSONSetUpdate(item.Fields)
+		if err != nil {
+			return nil, updateBatchItemError(i, err)
+		}
+		out[i] = newBSONSetUpdateBatchItem(item.DocumentID, spec)
+	}
+	return out, nil
 }
 
 func newBSONSetUpdate(fields []BSONSetField) (bsonSetUpdate, error) {

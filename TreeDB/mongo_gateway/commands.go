@@ -447,11 +447,12 @@ func (s *Server) updateResponse(command wire.Document, sequences []wire.Document
 }
 
 type mongoUpdateItem struct {
-	index       int
-	key         []byte
-	updateDoc   wire.Document
-	setFields   map[string]struct{}
-	setFieldsOK bool
+	index         int
+	key           []byte
+	updateDoc     wire.Document
+	setFields     map[string]struct{}
+	bsonSetFields []collections.BSONSetField
+	setFieldsOK   bool
 }
 
 type mongoUpdateParseError struct {
@@ -491,8 +492,8 @@ func parseMongoUpdateItem(index int, update wire.Document) (mongoUpdateItem, err
 	if err != nil {
 		return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: fmt.Sprintf("updates[%d]: %v", index, err)}
 	}
-	setFields, setFieldsOK := mongoSetUpdateFields(updateDoc)
-	return mongoUpdateItem{index: index, key: key, updateDoc: updateDoc, setFields: setFields, setFieldsOK: setFieldsOK}, nil
+	setFields, bsonSetFields, setFieldsOK := mongoSetUpdateFields(updateDoc)
+	return mongoUpdateItem{index: index, key: key, updateDoc: updateDoc, setFields: setFields, bsonSetFields: bsonSetFields, setFieldsOK: setFieldsOK}, nil
 }
 
 func mongoUpdateParseCommandError(err error) (wire.Document, error) {
@@ -541,6 +542,10 @@ func mongoUpdateErrorWithIndex(index int, err error) error {
 }
 
 func runMongoUpdateOne(col *collections.Collection, update mongoUpdateItem) (bool, bool, error) {
+	if mongoUpdateCanUseBSONSet(col, update) {
+		matched, modified, err := col.UpdateBSONSet(update.key, update.bsonSetFields)
+		return matched, modified, mongoUpdateErrorWithIndex(update.index, err)
+	}
 	materializer, err := storedDocumentMaterializerForCollection(col)
 	if err != nil {
 		return false, false, fmt.Errorf("updates[%d]: %w", update.index, err)
@@ -574,6 +579,16 @@ func runMongoUpdateBatch(col *collections.Collection, updates []mongoUpdateItem)
 func runMongoUpdateBatchResults(col *collections.Collection, updates []mongoUpdateItem) ([]collections.UpdateBatchResult, bool, error) {
 	if !mongoUpdateItemsCanUseBatch(col, updates) {
 		return make([]collections.UpdateBatchResult, len(updates)), false, nil
+	}
+	if mongoUpdateItemsCanUseBSONSet(col, updates) {
+		items := make([]collections.BSONSetUpdateBatchItem, len(updates))
+		for i, update := range updates {
+			items[i] = collections.BSONSetUpdateBatchItem{
+				DocumentID: update.key,
+				Fields:     update.bsonSetFields,
+			}
+		}
+		return col.UpdateBSONSetBatchIfNoSecondaryUniqueIndexChanges(items)
 	}
 	materializer, err := storedDocumentMaterializerForCollection(col)
 	if err != nil {
@@ -1075,6 +1090,33 @@ func mongoUpdateCanUseBatch(col *collections.Collection, update mongoUpdateItem)
 	return mongoUpdateCanUseBatchMeta(col.Meta(), update)
 }
 
+func mongoUpdateItemsCanUseBSONSet(col *collections.Collection, updates []mongoUpdateItem) bool {
+	if col == nil || normalizedMongoUpdateDocumentFormat(col) != collections.DocumentFormatBSON {
+		return false
+	}
+	for _, update := range updates {
+		if !update.setFieldsOK {
+			return false
+		}
+	}
+	return true
+}
+
+func mongoUpdateCanUseBSONSet(col *collections.Collection, update mongoUpdateItem) bool {
+	return col != nil && normalizedMongoUpdateDocumentFormat(col) == collections.DocumentFormatBSON && update.setFieldsOK
+}
+
+func normalizedMongoUpdateDocumentFormat(col *collections.Collection) collections.DocumentFormat {
+	if col == nil {
+		return collections.DocumentFormatDefault
+	}
+	format := col.Meta().Options.DocumentFormat
+	if format == collections.DocumentFormatDefault {
+		return collections.DocumentFormatJSON
+	}
+	return format
+}
+
 func mongoUpdateCanUseBatchMeta(meta collections.CollectionMeta, update mongoUpdateItem) bool {
 	if !update.setFieldsOK {
 		return false
@@ -1097,28 +1139,33 @@ func mongoUpdateSetFieldsTouchSecondaryUniqueIndexMeta(meta collections.Collecti
 	return false
 }
 
-func mongoSetUpdateFields(updateDoc wire.Document) (map[string]struct{}, bool) {
+func mongoSetUpdateFields(updateDoc wire.Document) (map[string]struct{}, []collections.BSONSetField, bool) {
 	updateElements, err := bson.Raw(updateDoc).Elements()
 	if err != nil || len(updateElements) != 1 {
-		return nil, false
+		return nil, nil, false
 	}
 	operator, err := updateElements[0].KeyErr()
 	if err != nil || operator != "$set" {
-		return nil, false
+		return nil, nil, false
 	}
 	setDoc, ok := updateElements[0].Value().DocumentOK()
 	if !ok {
-		return nil, false
+		return nil, nil, false
 	}
-	order, err := parseSetFieldNames(setDoc)
+	sets, order, err := parseSetDocument(setDoc)
 	if err != nil {
-		return nil, false
+		return nil, nil, false
 	}
 	out := make(map[string]struct{}, len(order))
+	fields := make([]collections.BSONSetField, 0, len(order))
 	for _, field := range order {
 		out[field] = struct{}{}
+		fields = append(fields, collections.BSONSetField{
+			Key:   field,
+			Value: sets[field],
+		})
 	}
-	return out, true
+	return out, fields, true
 }
 
 func (s *Server) deleteResponse(command wire.Document, sequences []wire.DocumentSequence) (wire.Document, error) {
