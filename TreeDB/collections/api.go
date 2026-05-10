@@ -3041,11 +3041,11 @@ func (c *Collection) canBufferNoIndexInsertBatchAck() bool {
 		c.db.DurabilityMode() == backenddb.DurabilityWALOffRelaxed
 }
 
-func (c *Collection) canBufferNoIndexUpdateAck() bool {
-	return c != nil &&
-		c.db != nil &&
-		c.writeDomain != nil &&
-		c.db.DurabilityMode() == backenddb.DurabilityWALOffRelaxed
+func (c *Collection) canBufferDirectUpdateAck() bool {
+	if c == nil || c.db == nil || c.writeDomain == nil {
+		return false
+	}
+	return c.db.DurabilityMode() != backenddb.DurabilityWALOnRelaxed
 }
 
 func (c *Collection) bufferNoIndexInsertBatch(
@@ -10637,7 +10637,7 @@ func (c *Collection) updateBatchOnce(items []updateBatchItem, mode updateBatchMo
 				}
 				if buffered {
 					c.meta = plan.meta
-					if plan.directBufferedUpdate != nil && len(plan.meta.Indexes) == 0 && !c.canBufferNoIndexUpdateAck() {
+					if plan.directBufferedUpdate != nil && !c.canBufferDirectUpdateAck() {
 						if err := c.flushBufferedWrites(); err != nil {
 							return err
 						}
@@ -10726,7 +10726,7 @@ func (c *Collection) updateBatchOnce(items []updateBatchItem, mode updateBatchMo
 			return bufferErr
 		}
 		if buffered {
-			if plan.directBufferedUpdate != nil && len(plan.meta.Indexes) == 0 && !c.canBufferNoIndexUpdateAck() {
+			if plan.directBufferedUpdate != nil && !c.canBufferDirectUpdateAck() {
 				if err := c.flushBufferedWrites(); err != nil {
 					return err
 				}

@@ -10893,6 +10893,85 @@ func TestCollectionUpdateBSONSetNoIndexWALOnFlushesBeforeAck(t *testing.T) {
 	}
 }
 
+func TestCollectionUpdateBSONSetIndexedWALOnFlushesBeforeAck(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), Durability: backenddb.DurabilityWALOnRelaxed})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatBSON,
+		},
+		Indexes: []IndexDefinition{{
+			Name:      "email_1",
+			Field:     "email",
+			ValueType: IndexValueString,
+			Unique:    true,
+		}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{
+			mustBSONCollectionDocument(t, bson.D{
+				{Key: "_id", Value: "u1"},
+				{Key: "email", Value: "u1@example.test"},
+				{Key: "score", Value: int32(0)},
+			}),
+			mustBSONCollectionDocument(t, bson.D{
+				{Key: "_id", Value: "u2"},
+				{Key: "email", Value: "u2@example.test"},
+				{Key: "score", Value: int32(0)},
+			}),
+		},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush insert buffer: %v", err)
+	}
+
+	beforeState := d.State()
+	results, batched, err := col.UpdateBSONSetBatchIfNoSecondaryUniqueIndexChanges([]BSONSetUpdateBatchItem{
+		{DocumentID: []byte("u1"), Fields: []BSONSetField{{Key: "score", Value: mustBSONRawValue(t, int32(7))}}},
+		{DocumentID: []byte("u2"), Fields: []BSONSetField{{Key: "score", Value: mustBSONRawValue(t, int32(8))}}},
+	})
+	if err != nil {
+		t.Fatalf("UpdateBSONSetBatchIfNoSecondaryUniqueIndexChanges: %v", err)
+	}
+	if !batched {
+		t.Fatal("batched=false want true")
+	}
+	for i, result := range results {
+		if !result.Matched || !result.Modified {
+			t.Fatalf("results[%d]=%+v want matched/modified", i, result)
+		}
+	}
+	afterUpdateState := d.State()
+	if afterUpdateState.CommitSeq != beforeState.CommitSeq+1 {
+		t.Fatalf("UpdateBSONSetBatch commit seq=%d before=%d want publish before ack", afterUpdateState.CommitSeq, beforeState.CommitSeq)
+	}
+	stats := col.LastUpdateStats()
+	if got, want := stats.BufferedBatches, 1; got != want {
+		t.Fatalf("buffered batches=%d want %d", got, want)
+	}
+	col.writeDomain.mu.RLock()
+	rootRunCount := col.writeDomain.rootRunCount
+	col.writeDomain.mu.RUnlock()
+	if rootRunCount != 0 {
+		t.Fatalf("buffered root runs=%d want drained before WAL-on ack", rootRunCount)
+	}
+}
+
 func TestCollectionUpdateBSONSetNoIndexFlushesPendingInsertTableBeforeBuffering(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), Durability: backenddb.DurabilityWALOffRelaxed})
 	if err != nil {

@@ -27,7 +27,7 @@ const (
 	defaultCursorBatchSize         = 101
 	defaultCursorIdleTimeout       = 10 * time.Minute
 	defaultCursorReapInterval      = time.Second
-	defaultUpdateCoalescingDelay   = 0
+	defaultUpdateCoalescingDelay   = 50 * time.Microsecond
 	defaultUpdateCoalescingBatch   = 256
 	maxUpdateCoalescingBatch       = 4096
 	defaultUpdateCoalescingIdleTTL = 30 * time.Second

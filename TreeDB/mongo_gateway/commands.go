@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -1042,8 +1043,15 @@ func mongoUpdateCoalescerUsesSingleCollection(batch []mongoUpdateCoalescerReques
 	if col == nil {
 		return false
 	}
+	baseMeta := col.Meta()
 	for _, req := range batch[1:] {
-		if !col.SameCachedCatalog(req.col) {
+		if req.col == nil {
+			return false
+		}
+		if col.SameCachedCatalog(req.col) {
+			continue
+		}
+		if !reflect.DeepEqual(baseMeta, req.col.Meta()) {
 			return false
 		}
 	}
