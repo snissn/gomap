@@ -775,7 +775,7 @@ func compactStorageFencedValueLogProtectedPaths(opts CompactStorageOptions) []st
 	}
 	dynamic := opts.ValueLogFencedProtectedPathsFunc()
 	if len(dynamic) == 0 {
-		return nil
+		return []string{""}
 	}
 	return dynamic
 }

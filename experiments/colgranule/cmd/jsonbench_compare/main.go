@@ -485,8 +485,8 @@ func validateRawJSONTreeDB(files []string, rows int, dbDir string) error {
 	if err != nil {
 		return fmt.Errorf("open raw TreeDB for validation: %w", err)
 	}
-	defer func() { _ = db.Close() }()
 	var checked int
+	var scanErr error
 	for _, file := range files {
 		if checked >= rows {
 			break
@@ -505,11 +505,22 @@ func validateRawJSONTreeDB(files []string, rows int, dbDir string) error {
 			}
 			return nil
 		}); err != nil {
-			return fmt.Errorf("validate raw JSON %s: %w", file, err)
+			scanErr = fmt.Errorf("validate raw JSON %s: %w", file, err)
+			break
 		}
 	}
-	if checked != rows {
-		return fmt.Errorf("validated %d raw JSON rows, want %d", checked, rows)
+	if scanErr == nil && checked != rows {
+		scanErr = fmt.Errorf("validated %d raw JSON rows, want %d", checked, rows)
+	}
+	closeErr := db.Close()
+	if scanErr != nil {
+		if closeErr != nil {
+			return errors.Join(scanErr, fmt.Errorf("close raw TreeDB validation DB: %w", closeErr))
+		}
+		return scanErr
+	}
+	if closeErr != nil {
+		return fmt.Errorf("close raw TreeDB validation DB: %w", closeErr)
 	}
 	return nil
 }

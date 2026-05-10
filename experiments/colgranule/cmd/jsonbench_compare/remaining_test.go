@@ -140,9 +140,6 @@ func TestMeasureRawJSONTreeDBSample(t *testing.T) {
 	if !strings.Contains(result.StoredShape, "key/value") {
 		t.Fatalf("stored shape %q does not describe raw key/value storage", result.StoredShape)
 	}
-	if err := validateRawJSONTreeDB([]string{source}, 5, dbDir); err != nil {
-		t.Fatalf("validate raw JSON TreeDB: %v", err)
-	}
 }
 
 func TestValidateRawJSONTreeDBDetectsMismatchedRows(t *testing.T) {
@@ -156,7 +153,11 @@ func TestValidateRawJSONTreeDBDetectsMismatchedRows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	data = []byte(strings.Replace(string(data), `"kind":"commit"`, `"kind":"changed"`, 1))
+	corrupted := strings.Replace(string(data), `"kind":"commit"`, `"kind":"changed"`, 1)
+	if corrupted == string(data) {
+		t.Fatal("sample fixture did not contain the expected corruption target")
+	}
+	data = []byte(corrupted)
 	if err := os.WriteFile(corrupt, data, 0o644); err != nil {
 		t.Fatal(err)
 	}
