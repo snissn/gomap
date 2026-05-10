@@ -73,6 +73,8 @@ Environment overrides use the uppercase variable names in the script, including
 RUN_ROOT, TIER, INDEXES_LIST, RAW_KEYS, COLLECTION_DOCS,
 COLLECTION_PROFILES, COLLECTION_PROFILE_BENCHTIME, COLLECTION_PROFILE_COUNT, MONGO_DOCS,
 MONGO_MODE, MONGO_URI, MONGO_READERS, MONGO_WRITERS, TIMEOUT, and TITLE.
+The load-only client-mode matrix uses MONGO_WRITERS as its load writer-client
+sweep by passing those counts to INSERT_PRODUCER_SWEEP.
 EOF
 }
 
@@ -419,6 +421,7 @@ run_mongo_load_modes() {
     MONGO_CLIENT_MODES="driver driver-command driver-command-raw driver-unack" \
     BATCH_SIZE="$MONGO_BATCH_SIZE" \
     INSERT_PRODUCERS="$INSERT_PRODUCERS" \
+    INSERT_PRODUCER_SWEEP="$MONGO_WRITERS" \
     MONGO_MAX_POOL_SIZE="$MONGO_MAX_POOL_SIZE" \
     MONGO_MAX_CONNECTING="$MONGO_MAX_CONNECTING" \
     PREBUILD_DOCUMENTS=true \

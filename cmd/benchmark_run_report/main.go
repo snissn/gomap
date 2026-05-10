@@ -106,19 +106,22 @@ type matrixRow struct {
 	Config           string
 	Documents        int
 	SecondaryIndexes int
+	InsertProducers  int
 	RawJSON          string
 	PhysicalBytes    int64
 }
 
 type benchmarkResult struct {
-	Target           string        `json:"target"`
-	Documents        int           `json:"documents"`
-	SecondaryIndexes int           `json:"secondary_indexes"`
-	RangeIndex       bool          `json:"range_index"`
-	ClientMode       string        `json:"client_mode,omitempty"`
-	TreeDBProfile    string        `json:"treedb_profile,omitempty"`
-	DocumentFormat   string        `json:"treedb_document_format,omitempty"`
-	Phases           []phaseResult `json:"phases"`
+	Target            string         `json:"target"`
+	Documents         int            `json:"documents"`
+	InsertProducers   int            `json:"insert_producers,omitempty"`
+	SecondaryIndexes  int            `json:"secondary_indexes"`
+	RangeIndex        bool           `json:"range_index"`
+	ClientMode        string         `json:"client_mode,omitempty"`
+	TreeDBProfile     string         `json:"treedb_profile,omitempty"`
+	DocumentFormat    string         `json:"treedb_document_format,omitempty"`
+	Phases            []phaseResult  `json:"phases"`
+	MongoDBStatsFinal map[string]any `json:"mongodb_stats_final,omitempty"`
 }
 
 type phaseResult struct {
@@ -140,10 +143,12 @@ type latencySummary struct {
 
 type loadModeRow struct {
 	Indexes       int
+	Writers       int
 	Target        string
 	Config        string
 	OpsPerSec     float64
 	PhysicalBytes int64
+	StorageBasis  string
 	RawJSON       string
 }
 
@@ -750,18 +755,34 @@ func loadMongoLoadModes(dir string) ([]loadModeRow, []string, error) {
 		if phase.Name == "" {
 			continue
 		}
+		writers := result.InsertProducers
+		if writers <= 0 {
+			writers = row.InsertProducers
+		}
+		if writers <= 0 {
+			writers = 1
+		}
+		physicalBytes, storageBasis := loadModeStorageBytes(row, result)
 		out = append(out, loadModeRow{
 			Indexes:       row.SecondaryIndexes,
+			Writers:       writers,
 			Target:        row.Target,
 			Config:        row.Config,
 			OpsPerSec:     phase.OpsPerSecond,
-			PhysicalBytes: row.PhysicalBytes,
+			PhysicalBytes: physicalBytes,
+			StorageBasis:  storageBasis,
 			RawJSON:       row.RawJSON,
 		})
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Indexes != out[j].Indexes {
 			return out[i].Indexes < out[j].Indexes
+		}
+		if out[i].Config != out[j].Config {
+			return out[i].Config < out[j].Config
+		}
+		if out[i].Writers != out[j].Writers {
+			return out[i].Writers < out[j].Writers
 		}
 		if out[i].Target != out[j].Target {
 			return out[i].Target < out[j].Target
@@ -1107,6 +1128,7 @@ func readMatrix(path string) ([]matrixRow, error) {
 		setErr(err)
 		physicalBytes, err := parseInt64Column(path, line, "physical_bytes", get("physical_bytes"))
 		setErr(err)
+		insertProducers := optionalIntColumn(path, header, rec, line, "insert_producers", &parseErr)
 		target := get("target")
 		config := get("config")
 		rawJSON := get("raw_json")
@@ -1118,11 +1140,28 @@ func readMatrix(path string) ([]matrixRow, error) {
 			Config:           config,
 			Documents:        documents,
 			SecondaryIndexes: secondaryIndexes,
+			InsertProducers:  insertProducers,
 			RawJSON:          rawJSON,
 			PhysicalBytes:    physicalBytes,
 		})
 	}
 	return rows, nil
+}
+
+func optionalIntColumn(path string, header map[string]int, rec []string, line int, name string, parseErr *error) int {
+	idx, ok := header[name]
+	if !ok || idx >= len(rec) {
+		return 0
+	}
+	raw := strings.TrimSpace(rec[idx])
+	if raw == "" {
+		return 0
+	}
+	value, err := parseIntColumn(path, line, name, raw)
+	if err != nil && parseErr != nil && *parseErr == nil {
+		*parseErr = err
+	}
+	return value
 }
 
 func readBenchmarkResult(path string) (benchmarkResult, error) {
@@ -1135,6 +1174,61 @@ func readBenchmarkResult(path string) (benchmarkResult, error) {
 		return benchmarkResult{}, fmt.Errorf("%s: %w", path, err)
 	}
 	return result, nil
+}
+
+func loadModeStorageBytes(row matrixRow, result benchmarkResult) (int64, string) {
+	if row.PhysicalBytes > 0 {
+		return row.PhysicalBytes, "matrix physical_bytes"
+	}
+	if row.Target == "mongo" {
+		if bytes, ok := mongoDBStatsTotalBytes(result); ok {
+			return bytes, "mongodb dbStats.totalSize"
+		}
+	}
+	return 0, "unavailable"
+}
+
+func mongoDBStatsTotalBytes(result benchmarkResult) (int64, bool) {
+	if result.MongoDBStatsFinal == nil {
+		return 0, false
+	}
+	if value, ok := numberField(result.MongoDBStatsFinal, "totalSize"); ok {
+		return int64(math.Round(value)), true
+	}
+	storage, hasStorage := numberField(result.MongoDBStatsFinal, "storageSize")
+	index, hasIndex := numberField(result.MongoDBStatsFinal, "indexSize")
+	if hasStorage || hasIndex {
+		return int64(math.Round(storage + index)), true
+	}
+	return 0, false
+}
+
+func numberField(values map[string]any, name string) (float64, bool) {
+	value, ok := values[name]
+	if !ok {
+		return 0, false
+	}
+	switch v := value.(type) {
+	case json.Number:
+		f, err := v.Float64()
+		return f, err == nil
+	case float64:
+		return v, true
+	case float32:
+		return float64(v), true
+	case int:
+		return float64(v), true
+	case int64:
+		return float64(v), true
+	case int32:
+		return float64(v), true
+	case uint64:
+		return float64(v), true
+	case uint32:
+		return float64(v), true
+	default:
+		return 0, false
+	}
 }
 
 func findPhase(phases []phaseResult, name string) phaseResult {
@@ -2368,11 +2462,20 @@ func renderMongoLoadModes(b *strings.Builder, rows []loadModeRow) {
 	b.WriteString("<p class=\"subtle\"><strong>Load-mode storage basis:</strong> " + esc(loadModeStorageBasisText(rows)) + "</p>")
 	b.WriteString("<div class=\"chart-grid\">")
 	for _, idx := range sortedLoadModeIndexes(rows) {
-		cats, tree, mongo := loadModeChartRows(rows, idx)
-		if len(cats) == 0 {
-			continue
+		b.WriteString("<div class=\"chart-group wide\"><h3>Load Throughput By Client Mode, " + esc(indexCountTitleLabel(idx)) + "</h3>")
+		b.WriteString("<p class=\"subtle\">Each client-mode chart sweeps load writer clients. Points are the load_insert_many throughput for that client path and index count.</p>")
+		b.WriteString("<div class=\"chart-grid\">")
+		for _, mode := range sortedLoadModeLabels(rows, idx) {
+			writerCounts, tree, mongo := loadModeThroughputSweepRows(rows, idx, mode)
+			if len(writerCounts) == 0 {
+				continue
+			}
+			b.WriteString(lineChart(loadModeDisplayLabel(mode)+": load throughput vs writer clients", countLabels(writerCounts), "writer clients", "docs/sec", []chartSeries{
+				{Name: "TreeDB", Values: tree, Color: "#2867c7"},
+				{Name: "MongoDB", Values: mongo, Color: "#1f8a5b"},
+			}, "docs/sec"))
 		}
-		b.WriteString(loadModeBarChart(fmt.Sprintf("Load throughput by client mode, %d indexes", idx), cats, tree, mongo, "docs/sec", "Docs/Sec"))
+		b.WriteString("</div></div>")
 		diskCats, treeDisk, mongoDisk := loadModeDiskChartRows(rows, idx)
 		if len(diskCats) > 0 {
 			b.WriteString(loadModeBarChart(fmt.Sprintf("Physical storage by client mode, %d indexes", idx), diskCats, treeDisk, mongoDisk, "bytes", "Physical Bytes"))
@@ -2382,10 +2485,10 @@ func renderMongoLoadModes(b *strings.Builder, rows []loadModeRow) {
 	b.WriteString("<p class=\"subtle\"><strong>* TreeDB-only modes:</strong> <code>direct</code> calls the collection API directly in the selected TreeDB document format. <code>raw-wire-tcp</code> still sends Mongo OP_MSG bytes over loopback TCP to the TreeDB gateway while bypassing the MongoDB Go driver. <code>raw-wire</code> removes the socket too and drives the same raw command/gateway path in process. These modes are TreeDB-only ceiling probes, so each renders as one centered TreeDB bar instead of a paired MongoDB bar.</p>")
 	var body [][]string
 	for _, row := range rows {
-		body = append(body, []string{strconv.Itoa(row.Indexes), row.Target, row.Config, fmtOps(row.OpsPerSec), loadModePhysicalBytesCell(row), row.RawJSON})
+		body = append(body, []string{strconv.Itoa(row.Indexes), strconv.Itoa(loadModeWriterCount(row)), row.Target, row.Config, fmtOps(row.OpsPerSec), loadModePhysicalBytesCell(row), loadModeStorageBasisCell(row), row.RawJSON})
 	}
 	b.WriteString("<details><summary>Raw load-mode rows</summary>")
-	writeTable(b, []string{"indexes", "target", "config", "load docs/sec", "physical bytes", "raw JSON"}, body, numericColumns(0, 3, 4))
+	writeTable(b, []string{"indexes", "writer clients", "target", "config", "load docs/sec", "storage bytes", "storage source", "raw JSON"}, body, numericColumns(0, 1, 4, 5))
 	b.WriteString("</details>")
 	b.WriteString("</section>\n")
 }
@@ -3052,17 +3155,35 @@ func loadModeChartRows(rows []loadModeRow, idx int) ([]string, []float64, []floa
 }
 
 func loadModeDiskChartRows(rows []loadModeRow, idx int) ([]string, []float64, []float64) {
-	return loadModeValueRows(rows, idx, func(row loadModeRow) float64 { return float64(row.PhysicalBytes) })
+	return loadModeAverageValueRows(rows, idx, func(row loadModeRow) (float64, bool) {
+		if row.PhysicalBytes <= 0 {
+			return 0, false
+		}
+		return float64(row.PhysicalBytes), true
+	})
 }
 
 func loadModeStorageBasisText(rows []loadModeRow) string {
-	if loadModeHasUnavailableMongoPhysicalBytes(rows) {
-		return "TreeDB physical_bytes from matrix.tsv; MongoDB physical_bytes unavailable in this matrix and omitted from storage bars."
+	bases := make(map[string]bool)
+	for _, row := range rows {
+		if row.PhysicalBytes <= 0 {
+			continue
+		}
+		basis := strings.TrimSpace(row.StorageBasis)
+		if basis == "" {
+			basis = "matrix physical_bytes"
+		}
+		bases[row.Target+" "+basis] = true
 	}
-	if loadModeHasMongoPhysicalBytes(rows) {
-		return "TreeDB and MongoDB physical_bytes from matrix.tsv."
+	if len(bases) == 0 {
+		return "Storage bars have no measured storage values in this load-mode matrix."
 	}
-	return "TreeDB physical_bytes from matrix.tsv; no MongoDB physical storage row is available in this matrix."
+	var parts []string
+	for basis := range bases {
+		parts = append(parts, basis)
+	}
+	sort.Strings(parts)
+	return "Storage bars average bytes across writer-client runs. Sources in this generation: " + strings.Join(parts, "; ") + "."
 }
 
 func loadModeHasMongoPhysicalBytes(rows []loadModeRow) bool {
@@ -3088,6 +3209,16 @@ func loadModePhysicalBytesCell(row loadModeRow) string {
 		return "unavailable"
 	}
 	return fmtBytes(float64(row.PhysicalBytes))
+}
+
+func loadModeStorageBasisCell(row loadModeRow) string {
+	if row.PhysicalBytes <= 0 {
+		return "unavailable"
+	}
+	if strings.TrimSpace(row.StorageBasis) == "" {
+		return "matrix physical_bytes"
+	}
+	return row.StorageBasis
 }
 
 func loadModeValueRows(rows []loadModeRow, idx int, value func(loadModeRow) float64) ([]string, []float64, []float64) {
@@ -3127,6 +3258,143 @@ func loadModeValueRows(rows []loadModeRow, idx int, value func(loadModeRow) floa
 	return labels, tree, mongo
 }
 
+func loadModeAverageValueRows(rows []loadModeRow, idx int, value func(loadModeRow) (float64, bool)) ([]string, []float64, []float64) {
+	type accum struct {
+		Sum   float64
+		Count int
+	}
+	type pair struct {
+		TreeDB accum
+		Mongo  accum
+	}
+	pairs := make(map[string]pair)
+	for _, row := range rows {
+		if row.Indexes != idx {
+			continue
+		}
+		v, ok := value(row)
+		if !ok {
+			continue
+		}
+		mode := loadModeLabel(row)
+		pair := pairs[mode]
+		switch row.Target {
+		case "treedb":
+			pair.TreeDB.Sum += v
+			pair.TreeDB.Count++
+		case "mongo":
+			pair.Mongo.Sum += v
+			pair.Mongo.Count++
+		}
+		pairs[mode] = pair
+	}
+	labels := sortedLoadModePairLabels(pairs)
+	tree := make([]float64, 0, len(labels))
+	mongo := make([]float64, 0, len(labels))
+	for _, mode := range labels {
+		pair := pairs[mode]
+		tree = append(tree, averageAccum(pair.TreeDB))
+		mongo = append(mongo, averageAccum(pair.Mongo))
+	}
+	return labels, tree, mongo
+}
+
+func sortedLoadModePairLabels[T any](pairs map[string]T) []string {
+	labels := make([]string, 0, len(pairs))
+	for mode := range pairs {
+		labels = append(labels, mode)
+	}
+	sort.Slice(labels, func(i, j int) bool {
+		return loadModeOrder(labels[i]) < loadModeOrder(labels[j])
+	})
+	return labels
+}
+
+func averageAccum(acc struct {
+	Sum   float64
+	Count int
+}) float64 {
+	if acc.Count == 0 {
+		return 0
+	}
+	return acc.Sum / float64(acc.Count)
+}
+
+func sortedLoadModeLabels(rows []loadModeRow, idx int) []string {
+	seen := make(map[string]bool)
+	for _, row := range rows {
+		if row.Indexes == idx {
+			seen[loadModeLabel(row)] = true
+		}
+	}
+	labels := make([]string, 0, len(seen))
+	for mode := range seen {
+		labels = append(labels, mode)
+	}
+	sort.Slice(labels, func(i, j int) bool {
+		return loadModeOrder(labels[i]) < loadModeOrder(labels[j])
+	})
+	return labels
+}
+
+func loadModeThroughputSweepRows(rows []loadModeRow, idx int, mode string) ([]int, []float64, []float64) {
+	type accum struct {
+		Sum   float64
+		Count int
+	}
+	type pair struct {
+		TreeDB accum
+		Mongo  accum
+	}
+	byWriters := make(map[int]pair)
+	for _, row := range rows {
+		if row.Indexes != idx || loadModeLabel(row) != mode {
+			continue
+		}
+		writers := loadModeWriterCount(row)
+		pair := byWriters[writers]
+		switch row.Target {
+		case "treedb":
+			pair.TreeDB.Sum += row.OpsPerSec
+			pair.TreeDB.Count++
+		case "mongo":
+			pair.Mongo.Sum += row.OpsPerSec
+			pair.Mongo.Count++
+		}
+		byWriters[writers] = pair
+	}
+	counts := make([]int, 0, len(byWriters))
+	for writers := range byWriters {
+		counts = append(counts, writers)
+	}
+	sort.Ints(counts)
+	tree := make([]float64, 0, len(counts))
+	mongo := make([]float64, 0, len(counts))
+	for _, writers := range counts {
+		pair := byWriters[writers]
+		tree = append(tree, averageAccumOrNaN(pair.TreeDB))
+		mongo = append(mongo, averageAccumOrNaN(pair.Mongo))
+	}
+	return counts, tree, mongo
+}
+
+func averageAccumOrNaN(acc struct {
+	Sum   float64
+	Count int
+}) float64 {
+	if acc.Count == 0 {
+		return math.NaN()
+	}
+	return acc.Sum / float64(acc.Count)
+}
+
+func loadModeWriterCount(row loadModeRow) int {
+	if row.Writers > 0 {
+		return row.Writers
+	}
+	return 1
+}
+
 func isTreeDBOnlyLoadMode(mode string) bool {
 	return loadModeKind(mode) != ""
 }
@@ -3143,9 +3411,23 @@ func loadModeLabel(row loadModeRow) string {
 	if config == row.Target {
 		config = row.Target + "_driver"
 	}
+	config = stripLoadModeWriterSuffix(config)
 	config = strings.TrimPrefix(config, row.Target+"_")
 	config = strings.TrimPrefix(config, "bson_")
 	return "BSON " + config
+}
+
+func stripLoadModeWriterSuffix(config string) string {
+	idx := strings.LastIndex(config, "_w")
+	if idx < 0 || idx+2 >= len(config) {
+		return config
+	}
+	for _, r := range config[idx+2:] {
+		if r < '0' || r > '9' {
+			return config
+		}
+	}
+	return config[:idx]
 }
 
 func loadModeOrder(mode string) string {

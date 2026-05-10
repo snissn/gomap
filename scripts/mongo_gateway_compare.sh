@@ -11,6 +11,7 @@ DOCS_LIST="${DOCS_LIST:-1000 10000}"
 INDEXES_LIST="${INDEXES_LIST:-0 2}"
 BATCH_SIZE="${BATCH_SIZE:-500}"
 INSERT_PRODUCERS="${INSERT_PRODUCERS:-1}"
+INSERT_PRODUCER_SWEEP="${INSERT_PRODUCER_SWEEP:-}"
 MONGO_MAX_POOL_SIZE="${MONGO_MAX_POOL_SIZE:-0}"
 MONGO_MIN_POOL_SIZE="${MONGO_MIN_POOL_SIZE:-0}"
 MONGO_MAX_CONNECTING="${MONGO_MAX_CONNECTING:-0}"
@@ -142,7 +143,7 @@ Options:
   --help                Show this help.
 
 Environment overrides:
-  OUT_DIR, DOCS_LIST, INDEXES_LIST, BATCH_SIZE, INSERT_PRODUCERS,
+  OUT_DIR, DOCS_LIST, INDEXES_LIST, BATCH_SIZE, INSERT_PRODUCERS, INSERT_PRODUCER_SWEEP,
   MONGO_MAX_POOL_SIZE, MONGO_MIN_POOL_SIZE, MONGO_MAX_CONNECTING, PREBUILD_DOCUMENTS,
   RANGE_INDEX, PROFILE_TREEDB,
   READS, READS_DIVISOR,
@@ -669,6 +670,29 @@ if ! is_positive_int "$INSERT_PRODUCERS"; then
   echo "invalid INSERT_PRODUCERS=$INSERT_PRODUCERS (want positive integer)" >&2
   exit 2
 fi
+raw_insert_producer_sweep=$INSERT_PRODUCER_SWEEP
+INSERT_PRODUCER_SWEEP=$(trim_spaces "$INSERT_PRODUCER_SWEEP")
+if [[ -n "$raw_insert_producer_sweep" && -z "$INSERT_PRODUCER_SWEEP" ]]; then
+  echo "INSERT_PRODUCER_SWEEP must contain at least one positive integer" >&2
+  exit 2
+fi
+insert_producer_values=("$INSERT_PRODUCERS")
+if [[ -n "$INSERT_PRODUCER_SWEEP" ]]; then
+  insert_producer_values=()
+  declare -A seen_insert_producers=()
+  for producer_count in ${INSERT_PRODUCER_SWEEP//,/ }; do
+    if ! is_positive_int "$producer_count"; then
+      echo "invalid INSERT_PRODUCER_SWEEP value: $producer_count" >&2
+      exit 2
+    fi
+    if [[ -n "${seen_insert_producers[$producer_count]:-}" ]]; then
+      echo "duplicate INSERT_PRODUCER_SWEEP value: $producer_count" >&2
+      exit 2
+    fi
+    seen_insert_producers[$producer_count]=1
+    insert_producer_values+=("$producer_count")
+  done
+fi
 for value_name in DELETES CONCURRENT_READERS CONCURRENT_RANGE_READERS CONCURRENT_WRITERS MONGO_MAX_POOL_SIZE MONGO_MIN_POOL_SIZE MONGO_MAX_CONNECTING; do
   value=${!value_name}
   if ! is_nonnegative_int "$value"; then
@@ -877,6 +901,7 @@ fi
   echo "secondary-index list: $INDEXES_LIST"
   echo "batch size: $BATCH_SIZE"
   echo "insert producers: $INSERT_PRODUCERS"
+  echo "insert producer sweep: ${INSERT_PRODUCER_SWEEP:-none}"
   echo "mongo pool options: maxPoolSize=$MONGO_MAX_POOL_SIZE minPoolSize=$MONGO_MIN_POOL_SIZE maxConnecting=$MONGO_MAX_CONNECTING"
   echo "prebuild documents: $PREBUILD_DOCUMENTS"
   echo "range index: $RANGE_INDEX"
@@ -914,7 +939,7 @@ fi
 GOWORK=off go build -o "$BENCH_BIN" ./cmd/mongo_gateway_bench
 GOWORK=off go build -o "$REPORT_BIN" ./cmd/mongo_gateway_compare_report
 
-printf "target\tconfig\tdocuments\tsecondary_indexes\traw_json\tphysical_bytes\n" >"$MATRIX"
+printf "target\tconfig\tdocuments\tsecondary_indexes\tinsert_producers\traw_json\tphysical_bytes\n" >"$MATRIX"
 
 for docs in $DOCS_LIST; do
   if ! is_positive_int "$docs"; then
@@ -957,11 +982,17 @@ for docs in $DOCS_LIST; do
     database="${DATABASE_PREFIX}_${cell}"
     mongo_data="$MONGO_DIR/$cell"
 
+    for insert_producers in "${insert_producer_values[@]}"; do
+      producer_label=""
+      if [[ -n "$INSERT_PRODUCER_SWEEP" ]]; then
+        producer_label="_w${insert_producers}"
+      fi
+
     for tree_format in $TREEDB_DOCUMENT_FORMATS; do
       for tree_client_mode in $TREEDB_CLIENT_MODES; do
         format_label=$(normalized_label "$tree_format")
         client_label=$(normalized_label "$tree_client_mode")
-        tree_config="treedb_${format_label}_${client_label}"
+        tree_config="treedb_${format_label}_${client_label}${producer_label}"
         if [[ "$RANGE_INDEX" == "true" ]]; then
           tree_config="${tree_config}_range_index"
         fi
@@ -984,6 +1015,7 @@ for docs in $DOCS_LIST; do
           -keep-treedb-dir \
           -treedb-profile "$TREEDB_PROFILE" \
           -treedb-document-format "$tree_format" \
+          -insert-producers "$insert_producers" \
           -client-mode "$tree_client_mode" \
           -treedb-data-root-storage "$TREEDB_DATA_ROOT_STORAGE" \
           -treedb-index-state-root-storage "$TREEDB_INDEX_STATE_ROOT_STORAGE" \
@@ -992,22 +1024,22 @@ for docs in $DOCS_LIST; do
           -treedb-read-state "$TREEDB_READ_STATE" \
           "${tree_profile_args[@]}"
         tree_physical=$(du_bytes "$tree_data")
-        printf "treedb\t%s\t%s\t%s\t%s\t%s\n" "$tree_config" "$docs" "$indexes" "$tree_raw_rel" "$tree_physical" >>"$MATRIX"
+        printf "treedb\t%s\t%s\t%s\t%s\t%s\t%s\n" "$tree_config" "$docs" "$indexes" "$insert_producers" "$tree_raw_rel" "$tree_physical" >>"$MATRIX"
       done
     done
 
     for mongo_client_mode in $MONGO_CLIENT_MODES; do
       mongo_client_label=$(normalized_label "$mongo_client_mode")
-      mongo_config=$(mongo_config_name "$mongo_client_mode" "$mongo_client_label")
+      mongo_config="$(mongo_config_name "$mongo_client_mode" "$mongo_client_label")${producer_label}"
       mongo_raw_rel="raw/${mongo_config}_${cell}.json"
       mongo_raw="$OUT_DIR/$mongo_raw_rel"
-      mongo_cell_data="$mongo_data/$mongo_client_label"
+      mongo_cell_data="$mongo_data/${mongo_client_label}${producer_label}"
 
       echo "==> $cell MongoDB (client=$mongo_client_mode)"
       mongo_uri="$MONGO_URI"
       mongo_container=""
       if [[ "$MONGO_MODE" == "docker" ]]; then
-        start_mongo_container "${cell}_${mongo_client_label}" "$mongo_cell_data"
+        start_mongo_container "${cell}_${mongo_client_label}${producer_label}" "$mongo_cell_data"
         mongo_uri="$STARTED_MONGO_URI"
         mongo_container="$STARTED_MONGO_CONTAINER"
         if ! wait_for_mongo "$mongo_uri" "$database"; then
@@ -1018,6 +1050,7 @@ for docs in $DOCS_LIST; do
       run_target mongo "$docs" "$indexes" "$mongo_raw" "$database" "$reads" "$range_reads" "$updates" "$DELETES" \
         "$CONCURRENT_READERS" "$concurrent_reads" "$CONCURRENT_RANGE_READERS" "$concurrent_range_reads" "$CONCURRENT_WRITERS" "$concurrent_writes" \
         -mongo-uri "$mongo_uri" \
+        -insert-producers "$insert_producers" \
         -client-mode "$mongo_client_mode"
       if [[ "$MONGO_MODE" == "docker" ]]; then
         stop_mongo_container "$mongo_container"
@@ -1025,7 +1058,8 @@ for docs in $DOCS_LIST; do
       else
         mongo_physical=0
       fi
-      printf "mongo\t%s\t%s\t%s\t%s\t%s\n" "$mongo_config" "$docs" "$indexes" "$mongo_raw_rel" "$mongo_physical" >>"$MATRIX"
+      printf "mongo\t%s\t%s\t%s\t%s\t%s\t%s\n" "$mongo_config" "$docs" "$indexes" "$insert_producers" "$mongo_raw_rel" "$mongo_physical" >>"$MATRIX"
+    done
     done
   done
 done
@@ -1050,6 +1084,7 @@ cat >"$README" <<EOF
 - secondary-index list: \`$INDEXES_LIST\`
 - batch size: \`$BATCH_SIZE\`
 - insert producers: \`$INSERT_PRODUCERS\`
+- insert producer sweep: \`${INSERT_PRODUCER_SWEEP:-none}\`
 - MongoDB Go driver pool options: \`maxPoolSize=$MONGO_MAX_POOL_SIZE minPoolSize=$MONGO_MIN_POOL_SIZE maxConnecting=$MONGO_MAX_CONNECTING\`
 - prebuild documents: \`$PREBUILD_DOCUMENTS\`
 - range index: \`$RANGE_INDEX\`

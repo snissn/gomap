@@ -431,7 +431,7 @@ func TestMongoLoadModeStorageMarksUnavailableMongoPhysicalBytes(t *testing.T) {
 		},
 	})
 	for _, want := range []string{
-		"MongoDB physical_bytes unavailable in this matrix",
+		"Storage bars average bytes across writer-client runs",
 		"unavailable",
 	} {
 		if !strings.Contains(html, want) {
