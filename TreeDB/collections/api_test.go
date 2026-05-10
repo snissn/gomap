@@ -10898,7 +10898,10 @@ func TestCollectionUpdateBSONSetBatchDuplicateIDMatchesUpdateBatchErrorShape(t *
 }
 
 func TestCollectionUpdateBSONSetBatchNoIndexPrimaryOnly(t *testing.T) {
-	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	d, err := backenddb.Open(backenddb.Options{
+		Dir:        t.TempDir(),
+		Durability: backenddb.DurabilityWALOffRelaxed,
+	})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}

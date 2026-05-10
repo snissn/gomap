@@ -3041,18 +3041,19 @@ func (c *Collection) insertOneNoIndexBuffered(id, document []byte) ([]byte, erro
 	return resultID, nil
 }
 
-func (c *Collection) canBufferNoIndexInsertBatchAck() bool {
+func (c *Collection) canBufferNoIndexBufferedAck() bool {
 	return c != nil &&
 		c.db != nil &&
 		c.writeDomain != nil &&
 		c.db.DurabilityMode() == backenddb.DurabilityWALOffRelaxed
 }
 
+func (c *Collection) canBufferNoIndexInsertBatchAck() bool {
+	return c.canBufferNoIndexBufferedAck()
+}
+
 func (c *Collection) canBufferNoIndexBSONSetBatchAck() bool {
-	return c != nil &&
-		c.db != nil &&
-		c.writeDomain != nil &&
-		c.db.DurabilityMode() == backenddb.DurabilityWALOffRelaxed
+	return c.canBufferNoIndexBufferedAck()
 }
 
 func (c *Collection) bufferNoIndexInsertBatch(
@@ -10529,7 +10530,7 @@ func (c *Collection) validateUpdateBatchPlanRootDescriptors(plan *updateBatchPla
 	return c.validateRootDescriptorSystemDeltaForMeta(plan.meta, plan.baseCommitSeq, plan.baseSystemRoot, plan.rootNames, plan.baseRootIDs)
 }
 
-func (c *Collection) shouldUseDirectBufferedUpdatePlan(meta CollectionMeta, opts collectionOptions, canBuffer bool, mode updateBatchMode, runtimes []indexRuntime, changed []preparedBatchUpdate, allItemsBSONSet bool) bool {
+func (c *Collection) shouldUseDirectBufferedUpdatePlan(meta CollectionMeta, opts collectionOptions, canBuffer bool, mode updateBatchMode, runtimes []indexRuntime, changed []preparedBatchUpdate, allItemsEligibleForNoIndexBSONSetBuffer bool) bool {
 	if c == nil || c.writeDomain == nil || len(changed) == 0 {
 		return false
 	}
@@ -10537,7 +10538,7 @@ func (c *Collection) shouldUseDirectBufferedUpdatePlan(meta CollectionMeta, opts
 		return false
 	}
 	if len(meta.Indexes) == 0 {
-		return allItemsBSONSet &&
+		return allItemsEligibleForNoIndexBSONSetBuffer &&
 			mode == updateBatchModeNoSecondaryUniqueIndexChanges &&
 			normalizedDocumentFormat(opts.documentFormat) == DocumentFormatBSON &&
 			c.canBufferNoIndexBSONSetBatchAck()
@@ -11104,7 +11105,7 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 		_ = snap.Close()
 		return nil, err
 	}
-	itemIndex, allItemsBSONSet := scanUpdateBatchBSONSet(items)
+	itemIndex, allItemsEligibleForNoIndexBSONSetBuffer := scanUpdateBatchBSONSet(items)
 	if itemIndex >= 0 && normalizedDocumentFormat(plannerOptions.documentFormat) != DocumentFormatBSON {
 		_ = snap.Close()
 		return nil, updateBatchItemError(itemIndex, errBSONSetRequiresBSONFormat)
@@ -11418,7 +11419,7 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 	stats.UniqueIndexPreflight += updateBatchStatsSince(detailedStats, phaseStart)
 
 	success := false
-	canBufferDirectUpdateBatch := c.shouldUseDirectBufferedUpdatePlan(meta, plannerOptions, canBufferIndexedUpdateBatch, mode, runtimes, changed, allItemsBSONSet)
+	canBufferDirectUpdateBatch := c.shouldUseDirectBufferedUpdatePlan(meta, plannerOptions, canBufferIndexedUpdateBatch, mode, runtimes, changed, allItemsEligibleForNoIndexBSONSetBuffer)
 	if canBufferDirectUpdateBatch {
 		phaseStart = updateBatchStatsNow(detailedStats)
 		var templateEntries []directBufferedRootEntry
