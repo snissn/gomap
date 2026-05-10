@@ -11062,6 +11062,86 @@ func TestCollectionUpdateBSONSetBatchNoIndexMixedWithBufferedInsertFlushesBoth(t
 	}
 }
 
+func TestCollectionUpdateBSONSetBatchNoIndexBufferedReplanSeesPendingTableWrites(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{
+		Dir:        t.TempDir(),
+		Durability: backenddb.DurabilityWALOffRelaxed,
+	})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "users",
+		Options: CollectionOptions{DocumentFormat: DocumentFormatBSON},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{mustBSONCollectionDocument(t, bson.D{
+			{Key: "_id", Value: "u1"},
+			{Key: "city", Value: "hnl"},
+			{Key: "status", Value: "cold"},
+		})},
+	); err != nil {
+		t.Fatalf("insert seed: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush seed: %v", err)
+	}
+
+	first, firstBatched, err := col.UpdateBSONSetBatchIfNoSecondaryUniqueIndexChanges([]BSONSetUpdateBatchItem{
+		{
+			DocumentID: []byte("u1"),
+			Fields:     []BSONSetField{{Key: "city", Value: mustBSONRawValue(t, "sea")}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("first update batch: %v", err)
+	}
+	if !firstBatched || len(first) != 1 || !first[0].Modified {
+		t.Fatalf("first results=%+v batched=%v", first, firstBatched)
+	}
+
+	second, secondBatched, err := col.UpdateBSONSetBatchIfNoSecondaryUniqueIndexChanges([]BSONSetUpdateBatchItem{
+		{
+			DocumentID: []byte("u1"),
+			Fields:     []BSONSetField{{Key: "status", Value: mustBSONRawValue(t, "hot")}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("second update batch: %v", err)
+	}
+	if !secondBatched || len(second) != 1 || !second[0].Modified {
+		t.Fatalf("second results=%+v batched=%v", second, secondBatched)
+	}
+
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush buffered updates: %v", err)
+	}
+	got, found, err := col.GetInto([]byte("u1"), nil)
+	if err != nil {
+		t.Fatalf("get flushed u1: %v", err)
+	}
+	if !found {
+		t.Fatal("flushed u1 not found")
+	}
+	raw := bson.Raw(got)
+	if city := raw.Lookup("city").StringValue(); city != "sea" {
+		t.Fatalf("city=%q want sea", city)
+	}
+	if status := raw.Lookup("status").StringValue(); status != "hot" {
+		t.Fatalf("status=%q want hot", status)
+	}
+}
+
 func TestBuildUpdateBatchPlanBSONSetRejectsInvalidCurrentBSON(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

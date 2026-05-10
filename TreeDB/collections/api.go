@@ -10786,11 +10786,20 @@ func (c *Collection) shouldPlanUpdateBatchWithBufferedWrites(mode updateBatchMod
 	domain := c.writeDomain
 	domain.mu.RLock()
 	defer domain.mu.RUnlock()
-	return domain.count > 0 && hasBufferedIndexedRootRuns(domain)
+	if domain.count == 0 {
+		return false
+	}
+	if hasBufferedIndexedRootRuns(domain) {
+		return true
+	}
+	if domain.table == nil || !domain.loaded || len(domain.meta.Indexes) != 0 {
+		return false
+	}
+	return normalizedDocumentFormat(domain.meta.Options.DocumentFormat) == DocumentFormatBSON
 }
 
 func updateBatchCanReadBufferedDomainLocked(domain *collectionWriteDomain, meta CollectionMeta, baseSystemRoot uint64) bool {
-	if domain == nil || domain.count == 0 || !hasBufferedIndexedRootRuns(domain) {
+	if domain == nil || domain.count == 0 {
 		return false
 	}
 	if !domain.loaded || domain.catalog == nil {
@@ -10802,12 +10811,18 @@ func updateBatchCanReadBufferedDomainLocked(domain *collectionWriteDomain, meta 
 	if !sameCollectionMeta(domain.meta, meta) {
 		return false
 	}
+	if len(meta.Indexes) == 0 {
+		if normalizedDocumentFormat(meta.Options.DocumentFormat) != DocumentFormatBSON {
+			return false
+		}
+		return domain.table != nil
+	}
+	if !hasBufferedIndexedRootRuns(domain) {
+		return false
+	}
 	collectionName := bufferedDomainCollectionName(domain, meta.Name)
 	if collectionName == "" || !hasPendingIndexedRootRunsForRootLocked(domain, collectionPrimaryRootName(collectionName)) {
 		return false
-	}
-	if len(meta.Indexes) == 0 {
-		return normalizedDocumentFormat(meta.Options.DocumentFormat) == DocumentFormatBSON
 	}
 	return meta.Options.BufferedIndexedWrites
 }
