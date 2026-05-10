@@ -303,9 +303,7 @@ write_metadata() {
     echo
     printf '```sh\n'
     printf '%q' "scripts/treedb_benchmark_run_report.sh"
-    for arg in "${ORIGINAL_ARGS[@]}"; do
-      printf ' %q' "$arg"
-    done
+    [[ ${#ORIGINAL_ARGS[@]} -gt 0 ]] && printf ' %q' "${ORIGINAL_ARGS[@]}"
     printf '\n```\n'
     echo
     echo "## One Command"
