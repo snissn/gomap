@@ -728,12 +728,7 @@ func (f *File) readViaMmapView(ptr page.ValuePtr, verifyCRC bool) ([]byte, error
 			return out, nil, true
 		}
 
-		cacheableRaw := false
-		f.cacheMu.Lock()
-		if f.groupedFrameCacheEntries > 0 && (f.groupedFrameCacheMaxRaw <= 0 || int(rawLen) <= f.groupedFrameCacheMaxRaw) {
-			cacheableRaw = true
-		}
-		f.cacheMu.Unlock()
+		cacheableRaw := f.groupedFrameCacheAllowsRaw(int(rawLen))
 
 		retainRaw := cacheableRaw || readViaMmapViewPrefixCacheEnabled
 		pooledRaw := !retainRaw
@@ -1014,10 +1009,7 @@ func (f *File) readViaMmapViewTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 	}
 	valLen := int(valEnd - valStart)
 	copyValueToDst := dst != nil && cap(dst) >= valLen && cap(dst) < int(rawLen)
-	cacheableRaw := false
-	f.cacheMu.Lock()
-	cacheableRaw = f.groupedFrameCacheEntries > 0 && (f.groupedFrameCacheMaxRaw <= 0 || int(rawLen) <= f.groupedFrameCacheMaxRaw)
-	f.cacheMu.Unlock()
+	cacheableRaw := f.groupedFrameCacheAllowsRaw(int(rawLen))
 
 	// When raw payload may be cached, decode into pooled scratch so the grouped
 	// cache can retain ownership and return buffers to the pool on eviction.
@@ -1068,6 +1060,21 @@ func (f *File) readViaMmapViewTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 			f.releaseDecodeScratch(raw)
 		}
 		return out, true, nil, true
+	}
+	if rawPooled {
+		// If grouped-cache store was skipped (or disabled) and we decoded into
+		// pooled scratch, do not return a view that aliases pooled memory.
+		// Copy the selected value out and return scratch to the pool.
+		if dst != nil && cap(dst) >= valLen {
+			out := dst[:valLen]
+			copy(out, val)
+			f.releaseDecodeScratch(raw)
+			return out, true, nil, true
+		}
+		out := make([]byte, valLen)
+		copy(out, val)
+		f.releaseDecodeScratch(raw)
+		return out, false, nil, true
 	}
 	// dst is used iff it was provided with enough capacity to hold rawLen.
 	return val, dst != nil && cap(dst) >= int(rawLen), nil, true
@@ -1336,14 +1343,9 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 		}
 		return dst, nil, true
 	}
-	cacheableRaw := false
-	f.cacheMu.Lock()
 	// One-shot reads (dst=nil) are typically point gets. Avoid caching decoded
 	// grouped frames there to limit memory overhead in random-read-heavy paths.
-	if dst != nil && f.groupedFrameCacheEntries > 0 && (f.groupedFrameCacheMaxRaw <= 0 || int(rawLen) <= f.groupedFrameCacheMaxRaw) {
-		cacheableRaw = true
-	}
-	f.cacheMu.Unlock()
+	cacheableRaw := dst != nil && f.groupedFrameCacheAllowsRaw(int(rawLen))
 
 	// Decode into pooled scratch even when we plan to cache decoded raw bytes.
 	// When cached, ownership transfers to groupedFrameCacheStore(..., pooled=true)

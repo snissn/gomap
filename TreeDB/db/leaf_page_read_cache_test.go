@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -414,6 +415,45 @@ func TestValueReaderLeafLogPageUnsafeToOneOffReadMissDoesNotEvictStoredLeaf(t *t
 	}
 	if stats := cache.stats(); stats.Hits != 1 || stats.Stores != 1 || stats.Evictions != 0 {
 		t.Fatalf("stats=%+v, want hot cache entry retained", stats)
+	}
+}
+
+func TestLeafPageReadCacheStoreReadMissSkipsWhenSlotLockContended(t *testing.T) {
+	cache := newLeafPageReadCache(1)
+	ptr := page.LeafLogPtr{FileID: 9, Offset: 512, RecordLengthHint: 4096}
+	leaf := bytes.Repeat([]byte{0x66}, page.PageSize)
+	key := newLeafPageReadCacheKey(ptr)
+	slot := &cache.slots[cache.slotIndex(key)]
+
+	// First read miss only arms the admission fingerprint and should skip.
+	cache.storeReadMiss(ptr, leaf)
+	if stats := cache.stats(); stats.ReadMissAdmissionSkips != 1 || stats.ReadMissAdmissionStores != 0 {
+		t.Fatalf("stats after first miss=%+v, want one admission skip and no stores", stats)
+	}
+
+	// Contend slot lock before second miss; with TryLock-based admission this
+	// should return quickly and record another skip instead of blocking.
+	slot.mu.Lock()
+	defer slot.mu.Unlock()
+
+	done := make(chan struct{})
+	go func() {
+		cache.storeReadMiss(ptr, leaf)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatalf("storeReadMiss blocked on contended slot lock; expected non-blocking skip")
+	}
+
+	stats := cache.stats()
+	if stats.ReadMissAdmissionSkips < 2 {
+		t.Fatalf("expected additional skip on lock contention, stats=%+v", stats)
+	}
+	if stats.ReadMissAdmissionStores != 0 {
+		t.Fatalf("unexpected admission store under lock contention, stats=%+v", stats)
 	}
 }
 
