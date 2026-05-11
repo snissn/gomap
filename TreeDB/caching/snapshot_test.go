@@ -1,11 +1,13 @@
 package caching
 
 import (
+	"errors"
 	"os"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/tree"
 )
 
 func TestAcquireSnapshot_NotifyErrorOnRotateFailure(t *testing.T) {
@@ -248,5 +250,47 @@ func TestSnapshotClose_Idempotent(t *testing.T) {
 	}
 	if err := next.Close(); err != nil {
 		t.Fatalf("close second snapshot: %v", err)
+	}
+}
+
+func TestSnapshotGetAppend_PublishedLookupWithoutAppendSupport(t *testing.T) {
+	snap := &Snapshot{
+		rootPointShards: []rootDomainSnapshot{
+			{
+				published: newRootDomainTestTable(t,
+					rootDomainTestOp{key: "k1", value: "published-v1"},
+					rootDomainTestOp{key: "k2", tombstone: true},
+				),
+			},
+		},
+	}
+
+	got, err := snap.GetAppend([]byte("k1"), []byte("prefix:"))
+	if err != nil {
+		t.Fatalf("GetAppend(k1): %v", err)
+	}
+	if want := "prefix:published-v1"; string(got) != want {
+		t.Fatalf("GetAppend(k1)=%q want %q", string(got), want)
+	}
+
+	_, err = snap.GetAppend([]byte("k2"), nil)
+	if !errors.Is(err, tree.ErrKeyNotFound) {
+		t.Fatalf("GetAppend(k2) err=%v want ErrKeyNotFound", err)
+	}
+}
+
+func TestSnapshotClose_ClearsBackendFallbackFields(t *testing.T) {
+	snap := &Snapshot{
+		backendRootID:   123,
+		backendFallback: backendSnapshotLookup{rootID: 123},
+	}
+	if err := snap.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if snap.backendRootID != 0 {
+		t.Fatalf("backendRootID=%d want 0", snap.backendRootID)
+	}
+	if snap.backendFallback != (backendSnapshotLookup{}) {
+		t.Fatalf("backendFallback=%+v want zero value", snap.backendFallback)
 	}
 }
