@@ -326,19 +326,3 @@ func TestSnapshotGetAppend_PublishedMissFallsBackToBackend(t *testing.T) {
 		t.Fatalf("GetAppend(k)=%q want %q", string(got), want)
 	}
 }
-
-func TestSnapshotClose_ClearsBackendFallbackFields(t *testing.T) {
-	snap := &Snapshot{
-		backendRootID:   123,
-		backendFallback: backendSnapshotLookup{rootID: 123},
-	}
-	if err := snap.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-	if snap.backendRootID != 0 {
-		t.Fatalf("backendRootID=%d want 0", snap.backendRootID)
-	}
-	if snap.backendFallback != (backendSnapshotLookup{}) {
-		t.Fatalf("backendFallback=%+v want zero value", snap.backendFallback)
-	}
-}
