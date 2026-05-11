@@ -3041,6 +3041,27 @@ func (c *Collection) canBufferNoIndexInsertBatchAck() bool {
 		c.db.DurabilityMode() == backenddb.DurabilityWALOffRelaxed
 }
 
+func (c *Collection) canBufferDirectUpdateAck() bool {
+	if c == nil || c.db == nil || c.writeDomain == nil {
+		return false
+	}
+	return c.db.DurabilityMode() == backenddb.DurabilityWALOffRelaxed
+}
+
+func (c *Collection) hasBufferedNoIndexBSONRootRuns() bool {
+	if c == nil || c.writeDomain == nil {
+		return false
+	}
+	domain := c.writeDomain
+	domain.mu.RLock()
+	defer domain.mu.RUnlock()
+	if domain.count == 0 || !hasBufferedIndexedRootRuns(domain) || len(domain.meta.Indexes) != 0 {
+		return false
+	}
+	documentFormat, err := normalizeDocumentFormat(domain.meta.Options.DocumentFormat)
+	return err == nil && documentFormat == DocumentFormatBSON
+}
+
 func (c *Collection) bufferNoIndexInsertBatch(
 	domain *collectionWriteDomain,
 	catalog *collectionCatalog,
@@ -7223,6 +7244,11 @@ func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON b
 			return nil, err
 		}
 	}
+	if c.hasBufferedNoIndexBSONRootRuns() {
+		if err := c.flushBufferedWrites(); err != nil {
+			return nil, err
+		}
+	}
 	if c.hasBufferedIndexedDeletesOnly() {
 		if err := c.flushBufferedWrites(); err != nil {
 			return nil, err
@@ -8375,13 +8401,11 @@ func (c *Collection) Replace(documentID, document []byte) (bool, error) {
 // secondary unique index values may be staged in the write domain and become
 // durable at Flush/Close or auto-flush.
 //
-// For no-secondary-index collections, single-document Update deliberately
-// preserves the current synchronous publish contract: pending collection-local
-// writes are flushed first, then a modified document is published to the
-// primary root before Update returns. No-index updates may coalesce only
-// opportunistically when callers already reach the existing combiner as a
-// multi-request UpdateBatch-backed batch; they are not staged in the no-index
-// insert buffer or indexed flush queues.
+// For no-secondary-index collections, single-document BSON $set updates may be
+// staged via the direct buffered update path when the request is in BSON-only
+// mode and durability allows staging. Generic callback-based Update operations
+// remain synchronous by design in durable write modes and are still flushed to
+// the primary root before returning.
 //
 // Callback panics are recovered and returned as errors in both direct and
 // combined execution. When the collection write domain combines concurrent
@@ -8619,6 +8643,18 @@ func updateBatchBSONSetItemIndex(items []updateBatchItem) int {
 		}
 	}
 	return -1
+}
+
+func updateBatchItemsAllHaveBSONSet(items []updateBatchItem) bool {
+	if len(items) == 0 {
+		return false
+	}
+	for _, item := range items {
+		if !item.hasBSONSet {
+			return false
+		}
+	}
+	return true
 }
 
 func updateBatchItemError(index int, err error) error {
@@ -10499,11 +10535,16 @@ func (c *Collection) validateUpdateBatchPlanRootDescriptors(plan *updateBatchPla
 	return c.validateRootDescriptorSystemDeltaForMeta(plan.meta, plan.baseCommitSeq, plan.baseSystemRoot, plan.rootNames, plan.baseRootIDs)
 }
 
-func (c *Collection) shouldUseDirectBufferedUpdatePlan(meta CollectionMeta, opts collectionOptions, canBuffer bool, mode updateBatchMode, runtimes []indexRuntime, changed []preparedBatchUpdate) bool {
+func (c *Collection) shouldUseDirectBufferedUpdatePlan(meta CollectionMeta, opts collectionOptions, canBuffer bool, mode updateBatchMode, runtimes []indexRuntime, changed []preparedBatchUpdate, structuredBSONSetBatch bool) bool {
 	if c == nil || c.writeDomain == nil {
 		return false
 	}
-	if !meta.Options.BufferedIndexedWrites || len(meta.Indexes) == 0 {
+	if len(meta.Indexes) == 0 {
+		return mode == updateBatchModeNoSecondaryUniqueIndexChanges &&
+			normalizedDocumentFormat(opts.documentFormat) == DocumentFormatBSON &&
+			structuredBSONSetBatch
+	}
+	if !meta.Options.BufferedIndexedWrites {
 		return false
 	}
 	if mode == updateBatchModeAny && collectionMetaHasSecondaryUniqueIndex(meta) {
@@ -10598,8 +10639,10 @@ func (c *Collection) updateBatchOnce(items []updateBatchItem, mode updateBatchMo
 					return nil
 				}
 				if plan.directBufferedUpdate != nil {
-					if err := c.flushBufferedWrites(); err != nil {
-						return err
+					if !c.canBufferDirectUpdateAck() {
+						if err := c.flushBufferedWrites(); err != nil {
+							return err
+						}
 					}
 					useBufferedRead = false
 					replan = true
@@ -10682,8 +10725,10 @@ func (c *Collection) updateBatchOnce(items []updateBatchItem, mode updateBatchMo
 			return nil
 		}
 		if plan.directBufferedUpdate != nil {
-			if err := c.flushBufferedWrites(); err != nil {
-				return err
+			if !c.canBufferDirectUpdateAck() {
+				if err := c.flushBufferedWrites(); err != nil {
+					return err
+				}
 			}
 			return ErrConcurrentMutation
 		}
@@ -10765,6 +10810,9 @@ func updateBatchCanReadBufferedDomainLocked(domain *collectionWriteDomain, meta 
 	collectionName := bufferedDomainCollectionName(domain, meta.Name)
 	if collectionName == "" || !hasPendingIndexedRootRunsForRootLocked(domain, collectionPrimaryRootName(collectionName)) {
 		return false
+	}
+	if len(meta.Indexes) == 0 {
+		return true
 	}
 	return meta.Options.BufferedIndexedWrites && len(meta.Indexes) > 0
 }
@@ -11344,7 +11392,7 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 	stats.UniqueIndexPreflight += updateBatchStatsSince(detailedStats, phaseStart)
 
 	success := false
-	canBufferDirectUpdateBatch := c.shouldUseDirectBufferedUpdatePlan(meta, plannerOptions, canBufferIndexedUpdateBatch, mode, runtimes, changed)
+	canBufferDirectUpdateBatch := c.shouldUseDirectBufferedUpdatePlan(meta, plannerOptions, canBufferIndexedUpdateBatch, mode, runtimes, changed, updateBatchItemsAllHaveBSONSet(items))
 	if canBufferDirectUpdateBatch {
 		phaseStart = updateBatchStatsNow(detailedStats)
 		var templateEntries []directBufferedRootEntry
@@ -11709,7 +11757,8 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 	defer func() {
 		plan.stats.BufferStage += updateBatchStatsSince(detailedStats, bufferStart)
 	}()
-	if c.writeDomain == nil || !plan.canBufferDirectUpdateBatch || !plan.meta.Options.BufferedIndexedWrites || len(plan.meta.Indexes) == 0 {
+	primaryOnlyDirectUpdate := len(plan.meta.Indexes) == 0
+	if c.writeDomain == nil || !plan.canBufferDirectUpdateBatch || (!primaryOnlyDirectUpdate && !plan.meta.Options.BufferedIndexedWrites) {
 		plan.stats.BufferStagePrecheck += updateBatchStatsSince(detailedStats, precheckStart)
 		return false, nil
 	}
@@ -11744,7 +11793,7 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 	}()
 
 	phaseStart := updateBatchStatsNow(detailedStats)
-	if domain.count != 0 {
+	if domain.count != 0 && !primaryOnlyDirectUpdate {
 		if !plan.bufferedBase || !updateBatchCanReadBufferedDomainLocked(domain, plan.meta, plan.baseSystemRoot) {
 			plan.stats.BufferStageValidation += updateBatchStatsSince(detailedStats, phaseStart)
 			return false, ErrConcurrentMutation
@@ -11753,6 +11802,10 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 			plan.stats.BufferStageValidation += updateBatchStatsSince(detailedStats, phaseStart)
 			return false, ErrConcurrentMutation
 		}
+	}
+	if primaryOnlyDirectUpdate && domain.count != 0 && !hasBufferedIndexedRootRuns(domain) {
+		plan.stats.BufferStageValidation += updateBatchStatsSince(detailedStats, phaseStart)
+		return false, nil
 	}
 	if err := c.validateUpdateBatchPlanRootDescriptors(plan); err != nil {
 		plan.stats.BufferStageValidation += updateBatchStatsSince(detailedStats, phaseStart)
@@ -11790,9 +11843,12 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 		domain.rootRuns = make(map[string][]memtable.Table, len(plan.rootNames))
 	}
 	addedRootRuns := estimateAccumulatedRootRunsForNamesLocked(domain, plan.rootNames)
-	shouldAutoFlushAfterAdding := shouldFlushBufferedIndexedWritesAfterAdding(domain, plan.meta.Options, modifiedCount, direct.stagedBytes, addedRootRuns)
+	shouldAutoFlushAfterAdding := false
+	if !primaryOnlyDirectUpdate {
+		shouldAutoFlushAfterAdding = shouldFlushBufferedIndexedWritesAfterAdding(domain, plan.meta.Options, modifiedCount, direct.stagedBytes, addedRootRuns)
+	}
 	requiresPreAppendFreeze := false
-	if collectionMetaHasSecondaryUniqueIndex(plan.meta) && bufferedIndexedAutoFlushEnabled(plan.meta.Options) {
+	if !primaryOnlyDirectUpdate && collectionMetaHasSecondaryUniqueIndex(plan.meta) && bufferedIndexedAutoFlushEnabled(plan.meta.Options) {
 		for i := range plan.rootNames {
 			if _, ok := updateBatchPlanUniqueSecondaryIndex(plan, i); ok {
 				requiresPreAppendFreeze = true
@@ -11930,15 +11986,19 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 	}
 	domain.observeIndexedStage(modifiedCount, direct.stagedBytes, actualRootRuns)
 	c.meta = plan.meta
-	compactedObsolete, err := maybeCompactBufferedIndexedMutableRunsLocked(domain, plan.meta.Options)
-	if err != nil {
-		if rollbackOnError {
-			rollbackBufferedIndexedDomain(domain, checkpoint)
-			c.meta = collectionMetaCheckpoint
+	var compactedObsolete []memtable.Table
+	if !primaryOnlyDirectUpdate {
+		var err error
+		compactedObsolete, err = maybeCompactBufferedIndexedMutableRunsLocked(domain, plan.meta.Options)
+		if err != nil {
+			if rollbackOnError {
+				rollbackBufferedIndexedDomain(domain, checkpoint)
+				c.meta = collectionMetaCheckpoint
+			}
+			return false, err
 		}
-		return false, err
 	}
-	if shouldFlushBufferedIndexedWrites(domain, plan.meta.Options) {
+	if !primaryOnlyDirectUpdate && shouldFlushBufferedIndexedWrites(domain, plan.meta.Options) {
 		freezePreAppendTables()
 		flushDuration, lockReleased, relockWait, err := c.flushBufferedIndexedAfterThresholdLocked(domain, plan.meta.Options)
 		if lockReleased > 0 {
