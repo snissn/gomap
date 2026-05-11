@@ -452,6 +452,13 @@ func TestCompactStorageDefaultProtectedPathsAreEmpty(t *testing.T) {
 	}
 }
 
+func TestCompactStorageOnlineRewriteProtectedPaths_DefaultSentinel(t *testing.T) {
+	paths := compactStorageOnlineRewriteProtectedPaths(CompactStorageOptions{})
+	if !reflect.DeepEqual(paths, []string{""}) {
+		t.Fatalf("online rewrite protected paths=%q want sentinel [\"\"]", paths)
+	}
+}
+
 func TestCompactStorageFencedProtectedPathsIncludeExplicitPaths(t *testing.T) {
 	paths := compactStorageFencedValueLogProtectedPaths(CompactStorageOptions{
 		ValueLogProtectedPaths: []string{"explicit-a", "shared"},
