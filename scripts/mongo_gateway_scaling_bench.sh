@@ -499,7 +499,7 @@ stop_mongo_container() {
       next_containers+=("$active")
     fi
   done
-  ACTIVE_CONTAINERS=("${next_containers[@]}")
+  ACTIVE_CONTAINERS=("${next_containers[@]:-}")
 }
 
 wait_for_mongo() {
