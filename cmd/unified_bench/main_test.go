@@ -943,7 +943,42 @@ func TestRunBenchmark_CapturesTreeDBStatsAfterClose(t *testing.T) {
 	}
 }
 
-func TestRunBenchmark_TreeDBVlogRewriteAfterRunSkipsOfflineVacuumByDefault(t *testing.T) {
+func TestRunBenchmark_TreeDBVlogRewriteAfterRunRunsOfflineVacuumByDefault(t *testing.T) {
+	oldVacuumFlag := *treedbVacuumAfterVlogRewriteRun
+	t.Cleanup(func() {
+		*treedbVacuumAfterVlogRewriteRun = oldVacuumFlag
+	})
+	if !*treedbVacuumAfterVlogRewriteRun {
+		t.Fatalf("expected offline vacuum default to be enabled")
+	}
+
+	report, err := runBenchmark(BenchConfig{
+		Keys:         2_000,
+		ValueSize:    16,
+		BatchSize:    100,
+		RangeQueries: 0,
+		RangeSpan:    0,
+		DBsArg:       "treedb",
+		TestsArg:     "sequential_write",
+		KeepDir:      false,
+		Progress:     false,
+		SeedUsed:     1,
+
+		TreeDBVlogRewriteAfterRun: true,
+	})
+	if err != nil {
+		t.Fatalf("runBenchmark: %v", err)
+	}
+	rep, ok := report.TreeDBVlogRewrite["TreeDB"]
+	if !ok {
+		t.Fatalf("expected TreeDB rewrite report in run result")
+	}
+	if !rep.VacuumRan {
+		t.Fatalf("expected offline vacuum to run by default")
+	}
+}
+
+func TestRunBenchmark_TreeDBVlogRewriteAfterRunSkipsOfflineVacuumWhenDisabled(t *testing.T) {
 	oldVacuumFlag := *treedbVacuumAfterVlogRewriteRun
 	t.Cleanup(func() {
 		*treedbVacuumAfterVlogRewriteRun = oldVacuumFlag
@@ -972,43 +1007,10 @@ func TestRunBenchmark_TreeDBVlogRewriteAfterRunSkipsOfflineVacuumByDefault(t *te
 		t.Fatalf("expected TreeDB rewrite report in run result")
 	}
 	if rep.VacuumRan {
-		t.Fatalf("expected offline vacuum not to run by default, got vacuum path enabled")
+		t.Fatalf("expected offline vacuum to be skipped when disabled")
 	}
 	if rep.AfterVacuum.TotalBytes != 0 || rep.AfterVacuum.TotalFiles != 0 {
 		t.Fatalf("expected no post-vacuum usage report when vacuum is disabled, got=%#v", rep.AfterVacuum)
-	}
-}
-
-func TestRunBenchmark_TreeDBVlogRewriteAfterRunRunsOfflineVacuumWhenEnabled(t *testing.T) {
-	oldVacuumFlag := *treedbVacuumAfterVlogRewriteRun
-	t.Cleanup(func() {
-		*treedbVacuumAfterVlogRewriteRun = oldVacuumFlag
-	})
-	*treedbVacuumAfterVlogRewriteRun = true
-
-	report, err := runBenchmark(BenchConfig{
-		Keys:         2_000,
-		ValueSize:    16,
-		BatchSize:    100,
-		RangeQueries: 0,
-		RangeSpan:    0,
-		DBsArg:       "treedb",
-		TestsArg:     "sequential_write",
-		KeepDir:      false,
-		Progress:     false,
-		SeedUsed:     1,
-
-		TreeDBVlogRewriteAfterRun: true,
-	})
-	if err != nil {
-		t.Fatalf("runBenchmark: %v", err)
-	}
-	rep, ok := report.TreeDBVlogRewrite["TreeDB"]
-	if !ok {
-		t.Fatalf("expected TreeDB rewrite report in run result")
-	}
-	if !rep.VacuumRan {
-		t.Fatalf("expected offline vacuum to run when enabled")
 	}
 }
 

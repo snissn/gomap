@@ -96,7 +96,7 @@ var (
 	treedbCacheStatsBeforeReads     = flag.Bool("treedb-cache-stats-before-reads", false, "Print select treedb.cache.* stats before read/scan tests (treedb only)")
 	treedbCacheStatsAfterTests      = flag.Bool("treedb-cache-stats-after-tests", false, "Print select treedb.cache.* stats after each benchmark test (treedb only)")
 	treedbVlogRewriteAfterRun       = flag.Bool("treedb-vlog-rewrite-after-run", false, "Run full TreeDB CompactStorage after the benchmark run and report before/after disk usage (treedb only; flag name kept for compatibility)")
-	treedbVacuumAfterVlogRewriteRun = flag.Bool("treedb-vacuum-after-vlog-rewrite-run", false, "Run offline TreeDB index vacuum after -treedb-vlog-rewrite-after-run before reporting final compacted disk usage")
+	treedbVacuumAfterVlogRewriteRun = flag.Bool("treedb-vacuum-after-vlog-rewrite-run", true, "Run offline TreeDB index vacuum after -treedb-vlog-rewrite-after-run before reporting final compacted disk usage")
 )
 
 var explicitFlags = map[string]bool{}
