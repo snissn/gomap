@@ -10822,6 +10822,276 @@ func TestCollectionUpdateBSONSetDirectFallbackReportsStructuredApply(t *testing.
 	}
 }
 
+func TestCollectionUpdateBSONSetNoIndexBuffersPrimaryRoot(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{
+		Dir:        t.TempDir(),
+		Durability: backenddb.DurabilityWALOffRelaxed,
+	})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatBSON,
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{mustBSONCollectionDocument(t, bson.D{
+			{Key: "_id", Value: "u1"},
+			{Key: "city", Value: "hnl"},
+		})},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush insert: %v", err)
+	}
+	before := d.State()
+	matched, modified, err := col.UpdateBSONSet([]byte("u1"), []BSONSetField{{
+		Key:   "city",
+		Value: mustBSONRawValue(t, "sea"),
+	}})
+	if err != nil {
+		t.Fatalf("UpdateBSONSet: %v", err)
+	}
+	if !matched || !modified {
+		t.Fatalf("matched=%v modified=%v want true/true", matched, modified)
+	}
+	afterUpdate := d.State()
+	if afterUpdate.CommitSeq != before.CommitSeq {
+		t.Fatalf("UpdateBSONSet advanced commit seq by %d before flush, want buffered", afterUpdate.CommitSeq-before.CommitSeq)
+	}
+	stats := col.LastUpdateStats()
+	if got, want := stats.BufferedBatches, 1; got != want {
+		t.Fatalf("buffered batches=%d want %d", got, want)
+	}
+	col.writeDomain.mu.RLock()
+	rootRunCount := col.writeDomain.rootRunCount
+	primaryRuns := len(col.writeDomain.rootRuns[collectionPrimaryRootName("users")])
+	col.writeDomain.mu.RUnlock()
+	if rootRunCount != 1 || primaryRuns != 1 {
+		t.Fatalf("root runs=%d primary=%d want 1/1", rootRunCount, primaryRuns)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush buffered update: %v", err)
+	}
+	afterFlush := d.State()
+	if afterFlush.CommitSeq != before.CommitSeq+1 {
+		t.Fatalf("flush advanced commit seq to %d from %d, want one publish", afterFlush.CommitSeq, before.CommitSeq)
+	}
+	doc, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get after flush: %v", err)
+	}
+	if got := bson.Raw(doc).Lookup("city").StringValue(); got != "sea" {
+		t.Fatalf("city=%q want sea", got)
+	}
+}
+
+func TestCollectionUpdateBSONSetNoIndexIgnoresIndexedThresholds(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{
+		Dir:        t.TempDir(),
+		Durability: backenddb.DurabilityWALOffRelaxed,
+	})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat:                   DocumentFormatBSON,
+			BufferedIndexedWriteMaxDocuments: 1,
+			BufferedIndexedWriteMaxBytes:     1,
+			BufferedIndexedWriteMaxRootRuns:  1,
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{mustBSONCollectionDocument(t, bson.D{
+			{Key: "_id", Value: "u1"},
+			{Key: "city", Value: "hnl"},
+		})},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush insert: %v", err)
+	}
+
+	before := d.State()
+	matched, modified, err := col.UpdateBSONSet([]byte("u1"), []BSONSetField{{
+		Key:   "city",
+		Value: mustBSONRawValue(t, "sea"),
+	}})
+	if err != nil {
+		t.Fatalf("UpdateBSONSet: %v", err)
+	}
+	if !matched || !modified {
+		t.Fatalf("matched=%v modified=%v want true/true", matched, modified)
+	}
+	afterUpdate := d.State()
+	if afterUpdate.CommitSeq != before.CommitSeq {
+		t.Fatalf("UpdateBSONSet advanced commit seq by %d before flush, want buffered", afterUpdate.CommitSeq-before.CommitSeq)
+	}
+	col.writeDomain.mu.RLock()
+	rootRunCount := col.writeDomain.rootRunCount
+	primaryRuns := len(col.writeDomain.rootRuns[collectionPrimaryRootName("users")])
+	col.writeDomain.mu.RUnlock()
+	if rootRunCount != 1 || primaryRuns != 1 {
+		t.Fatalf("root runs=%d primary=%d want 1/1", rootRunCount, primaryRuns)
+	}
+}
+
+func TestCollectionUpdateBSONSetNoIndexWALOnBuffersBeforeAck(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{
+		Dir:        t.TempDir(),
+		Durability: backenddb.DurabilityWALOnRelaxed,
+	})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatBSON,
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{mustBSONCollectionDocument(t, bson.D{
+			{Key: "_id", Value: "u1"},
+			{Key: "city", Value: "hnl"},
+		})},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush insert: %v", err)
+	}
+
+	before := d.State()
+	matched, modified, err := col.UpdateBSONSet([]byte("u1"), []BSONSetField{{
+		Key:   "city",
+		Value: mustBSONRawValue(t, "sea"),
+	}})
+	if err != nil {
+		t.Fatalf("UpdateBSONSet: %v", err)
+	}
+	if !matched || !modified {
+		t.Fatalf("matched=%v modified=%v want true/true", matched, modified)
+	}
+	afterUpdate := d.State()
+	if afterUpdate.CommitSeq != before.CommitSeq {
+		t.Fatalf("UpdateBSONSet commit seq=%d before=%d want buffered", afterUpdate.CommitSeq, before.CommitSeq)
+	}
+	col.writeDomain.mu.RLock()
+	rootRunCount := col.writeDomain.rootRunCount
+	col.writeDomain.mu.RUnlock()
+	if rootRunCount != 1 {
+		t.Fatalf("root runs=%d want 1", rootRunCount)
+	}
+	doc, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get updated document: %v", err)
+	}
+	if got := bson.Raw(doc).Lookup("city").StringValue(); got != "sea" {
+		t.Fatalf("city=%q want sea", got)
+	}
+}
+
+func TestCollectionUpdateNoIndexBSONCallbackPublishesSynchronously(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatBSON,
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{mustBSONCollectionDocument(t, bson.D{
+			{Key: "_id", Value: "u1"},
+			{Key: "city", Value: "hnl"},
+		})},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush insert: %v", err)
+	}
+	before := d.State()
+	matched, modified, err := col.Update([]byte("u1"), func(current []byte) ([]byte, bool, error) {
+		return mustBSONCollectionDocument(t, bson.D{
+			{Key: "_id", Value: "u1"},
+			{Key: "city", Value: "sea"},
+		}), true, nil
+	})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if !matched || !modified {
+		t.Fatalf("matched=%v modified=%v want true/true", matched, modified)
+	}
+	after := d.State()
+	if after.CommitSeq != before.CommitSeq+1 {
+		t.Fatalf("Update commit seq=%d before=%d want synchronous publish", after.CommitSeq, before.CommitSeq)
+	}
+	doc, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get updated document: %v", err)
+	}
+	if got := bson.Raw(doc).Lookup("city").StringValue(); got != "sea" {
+		t.Fatalf("city=%q want sea", got)
+	}
+	col.writeDomain.mu.RLock()
+	rootRunCount := col.writeDomain.rootRunCount
+	col.writeDomain.mu.RUnlock()
+	if rootRunCount != 0 {
+		t.Fatalf("callback update root runs=%d want 0", rootRunCount)
+	}
+}
+
 func TestCollectionUpdateBSONSetRequiresBSONFormat(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
