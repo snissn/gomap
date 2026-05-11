@@ -1015,14 +1015,15 @@ func (f *File) readViaMmapViewTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 	valLen := int(valEnd - valStart)
 	copyValueToDst := dst != nil && cap(dst) >= valLen && cap(dst) < int(rawLen)
 	cacheableRaw := false
-	if copyValueToDst {
-		f.cacheMu.Lock()
-		cacheableRaw = f.groupedFrameCacheEntries > 0 && (f.groupedFrameCacheMaxRaw <= 0 || int(rawLen) <= f.groupedFrameCacheMaxRaw)
-		f.cacheMu.Unlock()
-	}
+	f.cacheMu.Lock()
+	cacheableRaw = f.groupedFrameCacheEntries > 0 && (f.groupedFrameCacheMaxRaw <= 0 || int(rawLen) <= f.groupedFrameCacheMaxRaw)
+	f.cacheMu.Unlock()
+
+	// When raw payload may be cached, decode into pooled scratch so the grouped
+	// cache can retain ownership and return buffers to the pool on eviction.
 	decodeDst := dst
 	rawPooled := false
-	if copyValueToDst {
+	if copyValueToDst || cacheableRaw {
 		decodeDst = f.takeDecodeScratch(int(rawLen))
 		rawPooled = true
 	}
