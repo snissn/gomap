@@ -69,6 +69,8 @@ type File struct {
 	compactLeafPayloadAllowedSet bool
 
 	cacheMu    sync.RWMutex
+	groupedMu  sync.RWMutex
+	scratchMu  sync.Mutex
 	cacheStart atomic.Int64
 	cacheK     int
 	cacheFlags byte
@@ -211,13 +213,13 @@ func currentScanSegmentPaths() func(string) ([]segmentInfo, error) {
 
 func (f *File) setCacheRawLocked(raw []byte, pooled bool) {
 	if f.cacheRawPooled && cap(f.cacheRaw) > 0 {
-		f.stashDecodeScratchLocked(f.cacheRaw)
+		f.stashDecodeScratch(f.cacheRaw)
 	}
 	f.cacheRaw = raw
 	f.cacheRawPooled = pooled
 }
 
-func (f *File) stashDecodeScratchLocked(buf []byte) {
+func (f *File) stashDecodeScratch(buf []byte) {
 	if cap(buf) == 0 {
 		return
 	}
@@ -225,6 +227,8 @@ func (f *File) stashDecodeScratchLocked(buf []byte) {
 		putDecodeScratch(buf)
 		return
 	}
+	f.scratchMu.Lock()
+	defer f.scratchMu.Unlock()
 	buf = buf[:0]
 	if cap(f.decodeScratch) == 0 {
 		f.decodeScratch = buf
@@ -243,10 +247,10 @@ func (f *File) takeDecodeScratch(minCap int) []byte {
 	if minCap <= 0 {
 		return nil
 	}
-	f.cacheMu.Lock()
+	f.scratchMu.Lock()
 	scratch := f.decodeScratch
 	f.decodeScratch = nil
-	f.cacheMu.Unlock()
+	f.scratchMu.Unlock()
 	if cap(scratch) >= minCap {
 		return scratch[:0]
 	}
@@ -265,27 +269,27 @@ func (f *File) releaseDecodeScratch(buf []byte) {
 		return
 	}
 	buf = buf[:0]
-	f.cacheMu.Lock()
+	f.scratchMu.Lock()
 	if cap(f.decodeScratch) == 0 {
 		f.decodeScratch = buf
-		f.cacheMu.Unlock()
+		f.scratchMu.Unlock()
 		return
 	}
 	if cap(buf) > cap(f.decodeScratch) {
 		old := f.decodeScratch
 		f.decodeScratch = buf
-		f.cacheMu.Unlock()
+		f.scratchMu.Unlock()
 		putDecodeScratch(old)
 		return
 	}
-	f.cacheMu.Unlock()
+	f.scratchMu.Unlock()
 	putDecodeScratch(buf)
 }
 
-func (f *File) clearGroupedFrameCacheLocked() {
+func (f *File) clearGroupedFrameCacheLocked() (pooled [][]byte) {
 	for i := range f.groupedFrameCache {
 		if f.groupedFrameCache[i].rawPooled {
-			f.stashDecodeScratchLocked(f.groupedFrameCache[i].raw)
+			pooled = append(pooled, f.groupedFrameCache[i].raw)
 		}
 		f.groupedFrameCache[i].raw = nil
 		f.groupedFrameCache[i].k = 0
@@ -293,32 +297,37 @@ func (f *File) clearGroupedFrameCacheLocked() {
 	}
 	f.groupedFrameCache = nil
 	f.groupedFrameCacheClock = 0
+	return pooled
 }
 
 func (f *File) setGroupedFrameCacheEntries(entries int) {
 	if entries < 0 {
 		entries = 0
 	}
-	f.cacheMu.Lock()
-	defer f.cacheMu.Unlock()
+	f.groupedMu.Lock()
 	if f.groupedFrameCacheEntries == entries {
+		f.groupedMu.Unlock()
 		return
 	}
-	f.clearGroupedFrameCacheLocked()
+	pooled := f.clearGroupedFrameCacheLocked()
 	f.groupedFrameCacheEntries = entries
 	f.groupedFrameCacheHits.Store(0)
 	f.groupedFrameCacheMisses.Store(0)
+	f.groupedMu.Unlock()
+	for _, raw := range pooled {
+		f.releaseDecodeScratch(raw)
+	}
 }
 
 func (f *File) groupedFrameCacheReadTo(start int64, verifyCRC bool, subIndex int, dst []byte) (out []byte, usedDst bool, err error, hit bool) {
-	f.cacheMu.RLock()
+	f.groupedMu.RLock()
 	if f.groupedFrameCacheEntries <= 0 {
-		f.cacheMu.RUnlock()
+		f.groupedMu.RUnlock()
 		return nil, false, nil, false
 	}
 	if len(f.groupedFrameCache) == 0 {
-		f.cacheMu.RUnlock()
 		f.groupedFrameCacheMisses.Add(1)
+		f.groupedMu.RUnlock()
 		return nil, false, nil, false
 	}
 	for i := range f.groupedFrameCache {
@@ -337,8 +346,8 @@ func (f *File) groupedFrameCacheReadTo(start int64, verifyCRC bool, subIndex int
 			// Copy payload while holding cacheMu so callers do not race with cache
 			// entry eviction/reuse after unlock.
 			encoded := append([]byte(nil), val...)
-			f.cacheMu.RUnlock()
 			f.groupedFrameCacheHits.Add(1)
+			f.groupedMu.RUnlock()
 			decoded, decErr := templ.DecodePayloadAppend(nil, encoded, func(id uint64) (templ.TemplateDef, error) {
 				return resolveTemplateDef(id, f.templateLookup, f.templateDefCache)
 			}, f.templateDecodeOpts)
@@ -350,18 +359,18 @@ func (f *File) groupedFrameCacheReadTo(start int64, verifyCRC bool, subIndex int
 		if dst != nil && cap(dst) >= len(val) {
 			out := dst[:len(val)]
 			copy(out, val)
-			f.cacheMu.RUnlock()
 			f.groupedFrameCacheHits.Add(1)
+			f.groupedMu.RUnlock()
 			return out, true, nil, true
 		}
 		out := make([]byte, len(val))
 		copy(out, val)
-		f.cacheMu.RUnlock()
 		f.groupedFrameCacheHits.Add(1)
+		f.groupedMu.RUnlock()
 		return out, false, nil, true
 	}
-	f.cacheMu.RUnlock()
 	f.groupedFrameCacheMisses.Add(1)
+	f.groupedMu.RUnlock()
 	return nil, false, nil, false
 }
 
@@ -369,12 +378,21 @@ func (f *File) groupedFrameCacheStore(start int64, verifyCRC bool, k int, offset
 	if k <= 0 || len(raw) == 0 {
 		return false
 	}
-	f.cacheMu.Lock()
-	defer f.cacheMu.Unlock()
+	// Opportunistic hot-path policy: under heavy read parallelism, avoid
+	// queuing behind grouped-cache metadata lock just to populate cache.
+	// Skipping a store here may reduce hit rate slightly, but prevents large
+	// lock convoy effects in random-read miss bursts.
+	if !f.groupedMu.TryLock() {
+		return false
+	}
+	var oldPooledRaw []byte
+	stored := false
 	if f.groupedFrameCacheEntries <= 0 {
+		f.groupedMu.Unlock()
 		return false
 	}
 	if f.groupedFrameCacheMaxRaw > 0 && len(raw) > f.groupedFrameCacheMaxRaw {
+		f.groupedMu.Unlock()
 		return false
 	}
 
@@ -385,50 +403,58 @@ func (f *File) groupedFrameCacheStore(start int64, verifyCRC bool, k int, offset
 		e := &f.groupedFrameCache[i]
 		if e.k > 0 && e.start == start && e.verifyCRC == verifyCRC {
 			if e.rawPooled {
-				f.stashDecodeScratchLocked(e.raw)
+				oldPooledRaw = e.raw
 			}
 			e.k = k
 			e.offsets = offsets
 			e.raw = raw
 			e.rawPooled = pooled
 			e.used = used
-			return true
+			stored = true
+			break
 		}
 	}
-
-	idx := -1
-	if len(f.groupedFrameCache) < f.groupedFrameCacheEntries {
-		f.groupedFrameCache = append(f.groupedFrameCache, groupedFrameCacheEntry{})
-		idx = len(f.groupedFrameCache) - 1
-	} else {
-		oldest := f.groupedFrameCache[0].used
-		idx = 0
-		for i := 1; i < len(f.groupedFrameCache); i++ {
-			if f.groupedFrameCache[i].used < oldest {
-				oldest = f.groupedFrameCache[i].used
-				idx = i
+	if !stored {
+		idx := -1
+		if len(f.groupedFrameCache) < f.groupedFrameCacheEntries {
+			f.groupedFrameCache = append(f.groupedFrameCache, groupedFrameCacheEntry{})
+			idx = len(f.groupedFrameCache) - 1
+		} else {
+			oldest := f.groupedFrameCache[0].used
+			idx = 0
+			for i := 1; i < len(f.groupedFrameCache); i++ {
+				if f.groupedFrameCache[i].used < oldest {
+					oldest = f.groupedFrameCache[i].used
+					idx = i
+				}
 			}
 		}
-	}
 
-	if idx >= 0 && idx < len(f.groupedFrameCache) && f.groupedFrameCache[idx].rawPooled {
-		f.stashDecodeScratchLocked(f.groupedFrameCache[idx].raw)
+		if idx >= 0 && idx < len(f.groupedFrameCache) && f.groupedFrameCache[idx].rawPooled {
+			oldPooledRaw = f.groupedFrameCache[idx].raw
+		}
+		f.groupedFrameCache[idx] = groupedFrameCacheEntry{
+			start:     start,
+			verifyCRC: verifyCRC,
+			k:         k,
+			offsets:   offsets,
+			raw:       raw,
+			rawPooled: pooled,
+			used:      used,
+		}
+		stored = true
 	}
-	f.groupedFrameCache[idx] = groupedFrameCacheEntry{
-		start:     start,
-		verifyCRC: verifyCRC,
-		k:         k,
-		offsets:   offsets,
-		raw:       raw,
-		rawPooled: pooled,
-		used:      used,
+	f.groupedMu.Unlock()
+	if oldPooledRaw != nil {
+		// Avoid doing scratch handoff while holding cacheMu on the hot path.
+		f.releaseDecodeScratch(oldPooledRaw)
 	}
-	return true
+	return stored
 }
 
 func (f *File) groupedFrameCacheStats() (hits, misses uint64, entries, capacity int) {
-	f.cacheMu.RLock()
-	defer f.cacheMu.RUnlock()
+	f.groupedMu.RLock()
+	defer f.groupedMu.RUnlock()
 	return f.groupedFrameCacheHits.Load(), f.groupedFrameCacheMisses.Load(), len(f.groupedFrameCache), f.groupedFrameCacheEntries
 }
 
@@ -436,15 +462,28 @@ func (f *File) setGroupedFrameCacheMaxRawBytes(maxRaw int) {
 	if maxRaw < 0 {
 		maxRaw = 0
 	}
-	f.cacheMu.Lock()
-	defer f.cacheMu.Unlock()
+	f.groupedMu.Lock()
 	if f.groupedFrameCacheMaxRaw == maxRaw {
+		f.groupedMu.Unlock()
 		return
 	}
-	f.clearGroupedFrameCacheLocked()
+	pooled := f.clearGroupedFrameCacheLocked()
 	f.groupedFrameCacheMaxRaw = maxRaw
 	f.groupedFrameCacheHits.Store(0)
 	f.groupedFrameCacheMisses.Store(0)
+	f.groupedMu.Unlock()
+	for _, raw := range pooled {
+		f.releaseDecodeScratch(raw)
+	}
+}
+
+func (f *File) groupedFrameCacheAllowsRaw(rawLen int) bool {
+	f.groupedMu.RLock()
+	defer f.groupedMu.RUnlock()
+	if f.groupedFrameCacheEntries <= 0 {
+		return false
+	}
+	return f.groupedFrameCacheMaxRaw <= 0 || rawLen <= f.groupedFrameCacheMaxRaw
 }
 
 func (f *File) Close() error {
@@ -462,9 +501,14 @@ func (f *File) Close() error {
 	f.setCacheRawLocked(nil, false)
 	scratch = f.decodeScratch
 	f.decodeScratch = nil
-	f.clearGroupedFrameCacheLocked()
 	f.cacheStart.Store(0)
 	f.cacheMu.Unlock()
+	f.groupedMu.Lock()
+	pooled := f.clearGroupedFrameCacheLocked()
+	f.groupedMu.Unlock()
+	for _, raw := range pooled {
+		f.releaseDecodeScratch(raw)
+	}
 	if scratch != nil {
 		putDecodeScratch(scratch)
 	}

@@ -33,6 +33,8 @@ type Snapshot struct {
 	db              *DB
 	view            *memtableView
 	backend         *backenddb.Snapshot
+	backendRootID   uint64
+	backendFallback rootDomainLookup
 	rootVersion     uint64
 	rootPointShards []rootDomainSnapshot // snapshot point roots; mutable runs are intentionally excluded
 	rootSystem      rootDomainSnapshot
@@ -162,10 +164,16 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 		return nil
 	}
 
+	var backendRootID uint64
+	if state := backendSnap.State(); state != nil {
+		backendRootID = state.RootPageID
+	}
 	snap := &Snapshot{
-		db:      db,
-		view:    view,
-		backend: backendSnap,
+		db:              db,
+		view:            view,
+		backend:         backendSnap,
+		backendRootID:   backendRootID,
+		backendFallback: &backendSnapshotLookup{db: db, snapshot: backendSnap, rootID: backendRootID},
 	}
 	snap.rootVersion = viewRootVersion
 	snap.rootPointShards = viewRootPointShards
@@ -495,6 +503,12 @@ func (s *Snapshot) GetAppend(key, dst []byte) ([]byte, error) {
 		// tombstones remain not-found.
 		if !errors.Is(err, tree.ErrKeyNotFound) {
 			return dst, err
+		}
+		// Hot miss path: when this snapshot has no in-memory root-domain state,
+		// a published not-found cannot be shadowed by queued tombstones.
+		// Avoid an extra GetEntry probe that re-materializes leaf pages.
+		if !rootDomainSnapshotHasInMemoryState(snap) {
+			return dst, tree.ErrKeyNotFound
 		}
 		checkedPublishedEntry = true
 		if shouldShortCircuitPublishedAppendMiss(true, publishedRoots, snap) {
