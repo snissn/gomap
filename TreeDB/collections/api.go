@@ -11985,6 +11985,9 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 		rollbackGeneration = domain.writeGeneration
 	}
 	domain.observeIndexedStage(modifiedCount, direct.stagedBytes, actualRootRuns)
+	if primaryOnlyDirectUpdate {
+		domain.observePrimaryOnlyUpdateBatch(plan.stats.Items, plan.stats.Matched, plan.stats.Modified, false, collectionRootDeltaPlanStats{})
+	}
 	c.meta = plan.meta
 	var compactedObsolete []memtable.Table
 	if !primaryOnlyDirectUpdate {
