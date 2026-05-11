@@ -2105,7 +2105,10 @@ func (db *DB) valueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		protectedIDs map[uint32]struct{}
 		activeIDs    map[uint32]struct{}
 	)
-	allowActiveSkip := len(opts.ProtectedPaths) > 0 || len(opts.SourceFileIDs) > 0 || len(opts.SourceChunks) > 0
+	// Online rewrite cleanup must never zombie currently-active pre-existing
+	// segments: concurrent writers can append records whose pointers are not yet
+	// visible in the index scan used by this rewrite pass.
+	allowActiveSkip := true
 	{
 		currentSet := db.valueLogManager.CurrentSetNoRefresh()
 		if currentSet != nil {
