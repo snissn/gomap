@@ -661,7 +661,7 @@ fi
   -report "$REPORT" \
   -summary "$SUMMARY" \
   -title "$TITLE" \
-  "${report_extra[@]}"
+  "${report_extra[@]:-}"
 
 if [[ -n "$PYTHON3_BIN" ]]; then
   "$PYTHON3_BIN" "$ROOT/scripts/mongo_gateway_writer_metrics.py" "$OUT_DIR" "$MATRIX" "$WRITER_METRICS"

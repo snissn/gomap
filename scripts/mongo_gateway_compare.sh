@@ -1058,7 +1058,7 @@ for docs in $DOCS_LIST; do
           -treedb-index-root-storage "$TREEDB_INDEX_ROOT_STORAGE" \
           -treedb-maintenance "$TREEDB_MAINTENANCE" \
           -treedb-read-state "$TREEDB_READ_STATE" \
-          "${tree_profile_args[@]}"
+          "${tree_profile_args[@]:-}"
         tree_physical=$(du_bytes "$tree_data")
         printf "treedb\t%s\t%s\t%s\t%s\t%s\n" "$tree_config" "$docs" "$indexes" "$tree_raw_rel" "$tree_physical" >>"$MATRIX"
       done

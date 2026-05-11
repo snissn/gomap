@@ -426,7 +426,7 @@ run_collections() {
       -formats template-v1,bson,json \
       -benchtime "${COLLECTION_BENCHTIME:-${COLLECTION_DOCS}x}" \
       -count "${COLLECTION_COUNT:-1}" \
-      "${profile_args[@]}"
+      "${profile_args[@]:-}"
   done
 }
 
