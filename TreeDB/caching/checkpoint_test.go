@@ -328,14 +328,16 @@ func TestCachingDB_AutoCheckpoint_SizeTrigger_TrimsWAL(t *testing.T) {
 			t.Fatalf("ReadDir(wal): %v", err)
 		}
 		walFiles := countCommitLogFiles(ents)
-		if walFiles < len(db.lanes) {
-			t.Fatalf("timed out waiting for size checkpoint WAL trim (files=%d)", walFiles)
-		}
-		if walFiles <= len(db.lanes)+1 {
+		if walFiles >= len(db.lanes) && walFiles <= len(db.lanes)+1 {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for size checkpoint to trim WAL (files=%d)", walFiles)
+			t.Fatalf(
+				"timed out waiting for size checkpoint to trim WAL (files=%d expected=%d..%d)",
+				walFiles,
+				len(db.lanes),
+				len(db.lanes)+1,
+			)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}

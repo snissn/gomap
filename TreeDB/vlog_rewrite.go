@@ -77,6 +77,9 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		}
 		if len(backendOpts.ProtectedPaths) == 0 {
 			backendOpts.ProtectedPaths = db.cached.ValueLogProtectedPaths()
+			if len(backendOpts.ProtectedPaths) == 0 {
+				backendOpts.ProtectedPaths = []string{""}
+			}
 		}
 		if backendOpts.ReserveRIDs == nil {
 			backendOpts.ReserveRIDs = db.cached.ReserveValueLogRIDs

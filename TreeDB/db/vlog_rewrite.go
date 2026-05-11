@@ -2105,13 +2105,16 @@ func (db *DB) valueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		protectedIDs map[uint32]struct{}
 		activeIDs    map[uint32]struct{}
 	)
+	allowActiveSkip := len(opts.ProtectedPaths) > 0 || len(opts.SourceFileIDs) > 0 || len(opts.SourceChunks) > 0
 	{
 		currentSet := db.valueLogManager.CurrentSetNoRefresh()
 		if currentSet != nil {
 			if len(protectedPaths) > 0 {
-				activeIDs = recentValueLogIDsForProtectedPaths(currentSet, valueLogKeepRecentSegmentsPerLane, opts.ProtectedPaths)
-				if len(activeIDs) == 0 {
-					activeIDs = currentValueLogIDs(currentSet)
+				if allowActiveSkip {
+					activeIDs = recentValueLogIDsForProtectedPaths(currentSet, valueLogKeepRecentSegmentsPerLane, opts.ProtectedPaths)
+					if len(activeIDs) == 0 {
+						activeIDs = currentValueLogIDs(currentSet)
+					}
 				}
 				protectedIDs = make(map[uint32]struct{})
 				for id, f := range currentSet.Files {
@@ -2122,7 +2125,7 @@ func (db *DB) valueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 						protectedIDs[id] = struct{}{}
 					}
 				}
-			} else {
+			} else if allowActiveSkip {
 				activeIDs = currentValueLogIDs(currentSet)
 			}
 			_ = db.valueLogManager.Release(currentSet)
@@ -2138,7 +2141,7 @@ func (db *DB) valueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		// Never mark currently-active pre-existing segments zombie.
 		// Concurrent writers may still be appending records whose pointers are
 		// not yet visible in the backend index.
-		if existedBefore {
+		if existedBefore && allowActiveSkip {
 			if _, ok := activeIDs[id]; ok {
 				return nil
 			}
