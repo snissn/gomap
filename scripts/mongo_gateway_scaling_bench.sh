@@ -35,8 +35,8 @@ PREBUILD_DOCUMENTS="${PREBUILD_DOCUMENTS:-true}"
 INCLUDE_MONGO="${INCLUDE_MONGO:-0}"
 MONGO_MODE="${MONGO_MODE:-docker}"
 MONGO_URI="${MONGO_URI:-mongodb://127.0.0.1:27017}"
-MONGO_IMAGE="${MONGO_IMAGE:-mongo}"
-MONGO_COMPACT="${MONGO_COMPACT:-true}"
+MONGO_IMAGE="${MONGO_IMAGE:-mongo:8}"
+MONGO_COMPACT="${MONGO_COMPACT:-}"
 DATABASE_PREFIX="${DATABASE_PREFIX:-}"
 COLLECTION="${COLLECTION:-docs}"
 TIMEOUT="${TIMEOUT:-60m}"
@@ -61,13 +61,13 @@ Options:
   --no-reader-sweep      Run writer-scaling cells only.
   --concurrent-writes N  Total updates per writer-scaling cell. Default: 80000.
   --concurrent-reads N   Total reads per reader-scaling cell. Default: 80000.
-  --include-mongo        Also run each cell against an external MongoDB URI.
-  --mongo-uri URI        MongoDB URI for --include-mongo. Default: mongodb://127.0.0.1:27017.
+  --include-mongo        Also run each cell against MongoDB (docker or external based on --mongo-mode).
+  --mongo-uri URI        MongoDB URI for --mongo-mode external. Default: mongodb://127.0.0.1:27017.
   --mongo-mode MODE      MongoDB mode for mongo runs: docker or external. Default: docker.
-  --mongo-image IMAGE    Docker image for --mongo-mode docker. Default: mongo.
+  --mongo-image IMAGE    Docker image for --mongo-mode docker. Default: mongo:8.
   --mongo-compact       Compact the MongoDB collection before final stats collection.
-                        Set to true/false, default: true.
-                        Provide as --mongo-compact=<true|false>.
+                        Set to true/false, 1/0, or yes/no.
+                        Default: true for docker mode; false for external mode unless explicitly set.
   --database-prefix NAME MongoDB database prefix. Default: mongo_gateway_scaling_<run_id>.
   --treedb-format NAME   TreeDB document format. Default: bson.
   --client-mode NAME     TreeDB client mode. Default: driver-command-raw.
@@ -331,13 +331,21 @@ esac
 UPDATE_INDEXED_FIELD_TEXT=$(bool_01_text "$UPDATE_INDEXED_FIELD")
 INCLUDE_MONGO=$(normalize_bool_01 INCLUDE_MONGO "$INCLUDE_MONGO")
 RUN_READER_SWEEP=$(normalize_bool_01 RUN_READER_SWEEP "$RUN_READER_SWEEP")
-MONGO_COMPACT=$(normalize_bool_01 MONGO_COMPACT "$MONGO_COMPACT")
+if [[ -z "$MONGO_COMPACT" ]]; then
+  if [[ "$MONGO_MODE" == "external" ]]; then
+    MONGO_COMPACT=0
+  else
+    MONGO_COMPACT=1
+  fi
+else
+  MONGO_COMPACT=$(normalize_bool_01 MONGO_COMPACT "$MONGO_COMPACT")
+fi
 MONGO_COMPACT_TEXT=$(bool_01_text "$MONGO_COMPACT")
 if [[ "$MONGO_MODE" != "docker" && "$MONGO_MODE" != "external" ]]; then
   echo "unknown MONGO_MODE=$MONGO_MODE (want docker or external)" >&2
   exit 2
 fi
-if [[ "$MONGO_MODE" == "docker" ]] && ! command -v docker >/dev/null 2>&1; then
+if [[ "$INCLUDE_MONGO" == "1" && "$MONGO_MODE" == "docker" ]] && ! command -v docker >/dev/null 2>&1; then
   echo "MONGO_MODE=docker requires docker; use --mongo-mode external --mongo-uri URI to use an existing server" >&2
   exit 2
 fi
