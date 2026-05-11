@@ -97,6 +97,7 @@ func TestVacuumIndexOffline_OuterLeavesInValueLog_PreservesLeafRefs(t *testing.T
 	if err := baseLeafLog.ensureWriter(); err != nil {
 		t.Fatalf("ensure leaf writer: %v", err)
 	}
+	defer func() { _ = baseLeafLog.Close() }()
 	d.SetLeafPageLog(baseLeafLog)
 
 	val := bytes.Repeat([]byte("v"), 64)
