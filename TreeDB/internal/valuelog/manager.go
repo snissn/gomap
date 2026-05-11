@@ -376,13 +376,7 @@ func (f *File) groupedFrameCacheStore(start int64, verifyCRC bool, k int, offset
 	if k <= 0 || len(raw) == 0 {
 		return false
 	}
-	// Opportunistic hot-path policy: under heavy read parallelism, avoid
-	// queuing behind grouped-cache metadata lock just to populate cache.
-	// Skipping a store here may reduce hit rate slightly, but prevents large
-	// lock convoy effects in random-read miss bursts.
-	if !f.groupedMu.TryLock() {
-		return false
-	}
+	f.groupedMu.Lock()
 	var oldPooledRaw []byte
 	stored := false
 	if f.groupedFrameCacheEntries <= 0 {

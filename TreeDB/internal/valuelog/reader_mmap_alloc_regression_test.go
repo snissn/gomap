@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/page"
@@ -170,8 +171,8 @@ func TestFileReadViaMmapViewTo_CachesGroupedFrameWithNilDst(t *testing.T) {
 	if hits1 != hits0 {
 		t.Fatalf("unexpected grouped-frame hit on first read: before=%d after=%d", hits0, hits1)
 	}
-	if entries1 == 0 {
-		t.Fatalf("expected grouped-frame cache entry after first read")
+	if entries1 != 0 {
+		t.Fatalf("expected no grouped-frame cache entry for nil dst read, got entries=%d", entries1)
 	}
 
 	got2, usedDst2, err, ok := f.readViaMmapViewTo(ptrs[1], false, nil)
@@ -186,11 +187,92 @@ func TestFileReadViaMmapViewTo_CachesGroupedFrameWithNilDst(t *testing.T) {
 	}
 
 	hits2, misses2, _, _ := f.groupedFrameCacheStats()
-	if hits2 <= hits1 {
-		t.Fatalf("expected grouped-frame cache hit on second read: before=%d after=%d", hits1, hits2)
+	if hits2 != hits1 {
+		t.Fatalf("unexpected grouped-frame cache hit on second nil-dst read: before=%d after=%d", hits1, hits2)
 	}
-	if misses2 != misses1 {
-		t.Fatalf("unexpected grouped-frame miss increase on second read: before=%d after=%d", misses1, misses2)
+	if misses2 <= misses1 {
+		t.Fatalf("expected grouped-frame miss increase on second nil-dst read: before=%d after=%d", misses1, misses2)
+	}
+}
+
+func TestValueLogGroupedReadParallelThenAppend_NoCorruption(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("mmap not supported on windows")
+	}
+
+	dir := t.TempDir()
+	fileID, err := EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatalf("encode file id: %v", err)
+	}
+	path := filepath.Join(dir, "value-l0-000001.log")
+	writer, err := NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+	writer.SetBlockCompression(BlockCodecSnappy, true)
+
+	const frames = 256
+	const perFrame = 4
+	ptrs := make([]page.ValuePtr, 0, frames*perFrame)
+	want := make([][]byte, 0, frames*perFrame)
+	for i := 0; i < frames; i++ {
+		fp, fv := appendCompressedFrameForCacheTestsTB(t, writer, i, perFrame)
+		ptrs = append(ptrs, fp...)
+		want = append(want, fv...)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close writer: %v", err)
+	}
+
+	m, err := NewManager(dir)
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+	defer func() { _ = m.Close() }()
+	m.SetDisableReadChecksum(true)
+	m.SetGroupedFrameCacheEntries(64)
+	f := m.files[fileID]
+	f.remapToFileSize()
+
+	const workers = 16
+	var wg sync.WaitGroup
+	errCh := make(chan error, workers)
+	for w := 0; w < workers; w++ {
+		w := w
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := w; i < len(ptrs); i += workers {
+				got, _, readErr := f.ReadUnsafeTo(ptrs[i], false, nil)
+				if readErr != nil {
+					errCh <- fmt.Errorf("unsafe read[%d]: %w", i, readErr)
+					return
+				}
+				if !bytes.Equal(got, want[i]) {
+					errCh <- fmt.Errorf("unsafe read[%d]: payload mismatch", i)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	close(errCh)
+	for readErr := range errCh {
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+	}
+
+	var dst []byte
+	for i := range ptrs {
+		dst, err = m.ReadAppend(ptrs[i], dst[:0])
+		if err != nil {
+			t.Fatalf("append read[%d]: %v", i, err)
+		}
+		if !bytes.Equal(dst, want[i]) {
+			t.Fatalf("append read[%d]: payload mismatch", i)
+		}
 	}
 }
 

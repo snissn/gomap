@@ -1009,7 +1009,10 @@ func (f *File) readViaMmapViewTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 	}
 	valLen := int(valEnd - valStart)
 	copyValueToDst := dst != nil && cap(dst) >= valLen && cap(dst) < int(rawLen)
-	cacheableRaw := f.groupedFrameCacheAllowsRaw(int(rawLen))
+	// One-off read paths (dst=nil) should avoid grouped-cache writeback; this
+	// path is dominated by high-concurrency point reads where cache-store lock
+	// traffic can outweigh reuse.
+	cacheableRaw := copyValueToDst && f.groupedFrameCacheAllowsRaw(int(rawLen))
 
 	// When raw payload may be cached, decode into pooled scratch so the grouped
 	// cache can retain ownership and return buffers to the pool on eviction.
