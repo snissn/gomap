@@ -948,7 +948,7 @@ func rootDomainApplyBackendFallback(s *Snapshot, snap *rootDomainSnapshot) {
 	if rootID != 0 {
 		snap.publishedRootID = rootID
 	}
-	if s.backendFallback != nil && rootID == s.backendRootID {
+	if s.backendFallback.snapshot != nil && rootID == s.backendRootID {
 		snap.published = s.backendFallback
 		return
 	}
