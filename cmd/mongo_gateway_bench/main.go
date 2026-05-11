@@ -4874,10 +4874,14 @@ func compactMongoCollection(ctx context.Context, db *mongo.Database, collection 
 		{Key: "force", Value: true},
 	}
 	var out bson.M
-	if err := db.RunCommand(ctx, command).Decode(&out); err != nil {
+	if err := runMongoCommandDecode(ctx, db, command, &out); err != nil {
 		return fmt.Errorf("compact %q: %w", collection, err)
 	}
 	return nil
+}
+
+var runMongoCommandDecode = func(ctx context.Context, db *mongo.Database, command bson.D, out any) error {
+	return db.RunCommand(ctx, command).Decode(out)
 }
 
 func runTreeDBMaintenanceStack(ctx context.Context, target *benchTarget, result *benchmarkResult) error {
