@@ -73,12 +73,11 @@ func newLeafPageReadCacheKey(ptr page.LeafLogPtr) leafPageReadCacheKey {
 }
 
 type leafPageReadCacheSlot struct {
-	mu                     sync.RWMutex
-	key                    leafPageReadCacheKey
-	data                   []byte
-	valid                  bool
-	readMissCandidate      leafPageReadCacheKey
-	readMissCandidateValid bool
+	mu                  sync.RWMutex
+	key                 leafPageReadCacheKey
+	data                []byte
+	valid               bool
+	readMissCandidateFP atomic.Uint64
 }
 
 type leafPageReadCache struct {
@@ -135,16 +134,26 @@ func (c *leafPageReadCache) storeReadMiss(ptr page.LeafLogPtr, leafPage []byte) 
 	}
 	key := newLeafPageReadCacheKey(ptr)
 	slot := &c.slots[c.slotIndex(key)]
+
+	fp := leafPageReadMissFingerprint(key)
+	if slot.readMissCandidateFP.Swap(fp) != fp {
+		c.readMissAdmissionSkips.Add(1)
+		return
+	}
+
+	// Parallel read misses can race: another goroutine may populate this exact
+	// slot/key before we reach admission. Fast-path that case with only a read
+	// lock to avoid unnecessary writer lock traffic in the miss hot path.
+	slot.mu.RLock()
+	if slot.valid && slot.key == key {
+		slot.mu.RUnlock()
+		return
+	}
+	slot.mu.RUnlock()
+
 	slot.mu.Lock()
 	if slot.valid && slot.key == key {
 		slot.mu.Unlock()
-		return
-	}
-	if !slot.readMissCandidateValid || slot.readMissCandidate != key {
-		slot.readMissCandidate = key
-		slot.readMissCandidateValid = true
-		slot.mu.Unlock()
-		c.readMissAdmissionSkips.Add(1)
 		return
 	}
 	result := slot.storeLocked(key, leafPage)
@@ -170,7 +179,7 @@ func (s *leafPageReadCacheSlot) storeLocked(key leafPageReadCacheKey, leafPage [
 	copy(s.data, leafPage)
 	s.key = key
 	s.valid = true
-	s.readMissCandidateValid = false
+	s.readMissCandidateFP.Store(0)
 	return result
 }
 
@@ -250,6 +259,17 @@ func (c *leafPageReadCache) slotIndex(key leafPageReadCacheKey) int {
 	h ^= key.offset + 0x9e3779b97f4a7c15 + (h << 6) + (h >> 2)
 	h ^= uint64(key.subIndex) + 0x9e3779b97f4a7c15 + (h << 6) + (h >> 2)
 	return int(h % uint64(len(c.slots)))
+}
+
+func leafPageReadMissFingerprint(key leafPageReadCacheKey) uint64 {
+	// Keep this intentionally cheap and stable: collisions are acceptable because
+	// they only cause occasional extra lock/store attempts, never wrong results.
+	h := uint64(key.fileID)*0x9e3779b97f4a7c15 ^ key.offset
+	h ^= uint64(key.subIndex) * 0xc2b2ae3d27d4eb4f
+	if h == 0 {
+		return 1
+	}
+	return h
 }
 
 type cachedLeafPageReader struct {
