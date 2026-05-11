@@ -1359,6 +1359,22 @@ func printTreeDBCacheStats(w io.Writer, inst *DBInstance, prefix string) {
 		"treedb.cache.vlog_mmap.read.miss_dead_mapping_cap",
 		"treedb.cache.vlog_mmap.read.fallback_readat",
 		"treedb.cache.vlog_mmap.read.hit_ratio",
+		"treedb.vlog.grouped_frame_cache.hits",
+		"treedb.vlog.grouped_frame_cache.misses",
+		"treedb.vlog.grouped_frame_cache.entries",
+		"treedb.vlog.grouped_frame_cache.capacity",
+		"treedb.vlog.grouped_frame_cache.hit_ratio",
+		"treedb.process.read_path.outer_leaf.cache.hits",
+		"treedb.process.read_path.outer_leaf.cache.misses",
+		"treedb.process.read_path.outer_leaf.cache.stores",
+		"treedb.process.read_path.outer_leaf.cache.evictions",
+		"treedb.process.read_path.outer_leaf.cache.entries",
+		"treedb.process.read_path.outer_leaf.cache.capacity",
+		"treedb.process.read_path.outer_leaf.cache.read_miss_admission_skips",
+		"treedb.process.read_path.outer_leaf.cache.read_miss_admission_stores",
+		"treedb.vlog.decode_buffer_grow.calls_total",
+		"treedb.vlog.decode_buffer_grow.realloc_calls_total",
+		"treedb.vlog.decode_buffer_grow.realloc_rate",
 		"treedb.cache.vlog_generation.enabled",
 		"treedb.cache.vlog_generation.policy",
 		"treedb.cache.vlog_generation.scheduler_state",
@@ -3886,6 +3902,14 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					vacuumIndexBytes[testName] = bytesMap
 				}
 			}
+
+			// For read tests we want the post-checkpoint state to reflect settled
+			// persisted-tree reads rather than transient queued memtables.
+			if isSettleBeforeScanTest(testName) {
+				if err := waitForTreeDBQueueDrain(instances, 2*time.Second); err != nil {
+					return BenchRun{}, err
+				}
+			}
 		}
 
 		if err := liveTbl.Render(results); err != nil {
@@ -5910,6 +5934,53 @@ func settleBenchInstances(instances []*DBInstance) error {
 		inst.Wrapper = newWrapper
 	}
 	return nil
+}
+
+func waitForTreeDBQueueDrain(instances []*DBInstance, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		pending := false
+		for _, inst := range instances {
+			if inst == nil || inst.Wrapper == nil || !isTreeDBInstance(inst) {
+				continue
+			}
+			sp, ok := inst.Wrapper.(kvstore.StatsProvider)
+			if !ok {
+				continue
+			}
+			stats := sp.Stats()
+			if len(stats) == 0 {
+				continue
+			}
+			if parseStatInt(stats, "treedb.cache.queue_len") > 0 {
+				pending = true
+				break
+			}
+			if parseStatInt(stats, "treedb.cache.queue_backlog_bytes") > 0 {
+				pending = true
+				break
+			}
+		}
+		if !pending {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("checkpoint settle timeout: treedb cache queue did not drain within %s", timeout)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func parseStatInt(stats map[string]string, key string) int64 {
+	raw, ok := stats[key]
+	if !ok {
+		return 0
+	}
+	v, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return 0
+	}
+	return v
 }
 
 func containsAny(list []string, items ...string) bool {

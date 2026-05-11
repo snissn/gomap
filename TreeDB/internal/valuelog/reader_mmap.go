@@ -1344,14 +1344,12 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 	}
 	f.cacheMu.Unlock()
 
-	var raw []byte
-	pooledRaw := false
-	if cacheableRaw {
-		raw = make([]byte, 0, int(rawLen))
-	} else {
-		raw = f.takeDecodeScratch(int(rawLen))
-		pooledRaw = true
-	}
+	// Decode into pooled scratch even when we plan to cache decoded raw bytes.
+	// When cached, ownership transfers to groupedFrameCacheStore(..., pooled=true)
+	// and is returned to scratch pool on eviction; this avoids per-read heap
+	// allocations in random-read parallel miss paths.
+	raw := f.takeDecodeScratch(int(rawLen))
+	pooledRaw := true
 	raw, err := decodeFramePayloadTo(frame, payload[prefixLen:], f.dictLookup, rawLen, raw)
 	if err != nil {
 		if pooledRaw {
@@ -1366,7 +1364,8 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 		return nil, ErrCorrupt, true
 	}
 	if cacheableRaw {
-		f.groupedFrameCacheStore(start, verifyCRC, k, offsets, raw, false)
+		f.groupedFrameCacheStore(start, verifyCRC, k, offsets, raw, true)
+		pooledRaw = false
 	}
 
 	oldLen := len(dst)
@@ -1377,7 +1376,7 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 	f.cacheLen = prefixLen
 	f.cacheOffs = offsets
 	if cacheableRaw {
-		f.setCacheRawLocked(raw, false)
+		f.setCacheRawLocked(raw, true)
 	} else {
 		f.setCacheRawLocked(nil, false)
 	}
