@@ -1026,9 +1026,11 @@ func TestRunBenchmark_TreeDBVlogRewriteAfterRun_OfflineVacuumNoCatastrophicIndex
 	*treedbVacuumAfterVlogRewriteRun = true
 
 	report, err := runBenchmark(BenchConfig{
-		Keys:         5_000_000,
+		// Keep this e2e guard large enough to exercise multi-level trees while
+		// staying practical for standard CI runs.
+		Keys:         500_000,
 		ValueSize:    128,
-		BatchSize:    8_000,
+		BatchSize:    4_000,
 		RangeQueries: 0,
 		RangeSpan:    0,
 		DBsArg:       "treedb",

@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
+	"github.com/snissn/gomap/TreeDB/node"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 func TestVacuumIndexOffline_PreservesDataAndShrinksFile(t *testing.T) {
@@ -178,6 +180,75 @@ func TestVacuumIndexOffline_OuterLeavesInValueLog_PreservesLeafRefs(t *testing.T
 			if got[0] != byte(version) {
 				t.Fatalf("value content mismatch version=%d key=%d: got[0]=%d want=%d", version, idx, got[0], byte(version))
 			}
+		}
+	}
+}
+
+func TestVacuumIndexOffline_OuterLeavesInValueLog_MixedUserRootFallsBackToClone(t *testing.T) {
+	dir := t.TempDir()
+	baseOpts := Options{
+		Dir:               dir,
+		KeepRecent:        1,
+		Durability:        DurabilityWALOffRelaxed,
+		PreferAppendAlloc: true,
+	}
+
+	d, err := Open(baseOpts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	value := bytes.Repeat([]byte("m"), 64)
+	for i := 0; i < 4000; i++ {
+		key := []byte(fmt.Sprintf("mixed/%08d", i))
+		value[0] = byte(i % 251)
+		if err := d.SetSync(key, value); err != nil {
+			t.Fatalf("set key=%d: %v", i, err)
+		}
+	}
+
+	stateBefore := d.State()
+	if stateBefore == nil {
+		t.Fatalf("missing state before vacuum")
+	}
+	rootBefore := stateBefore.RootPageID
+	if rootBefore == 0 {
+		t.Fatalf("expected non-zero root before vacuum")
+	}
+	rootPage, err := d.Pager().Get(rootBefore)
+	if err != nil {
+		t.Fatalf("get root page: %v", err)
+	}
+	if node.NewNode(rootPage).Type() != page.PageTypeInternal {
+		t.Fatalf("expected internal user root before vacuum setup")
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close before vacuum: %v", err)
+	}
+
+	vacuumOpts := baseOpts
+	vacuumOpts.IndexOuterLeavesInValueLog = true
+	if err := VacuumIndexOffline(vacuumOpts); err != nil {
+		t.Fatalf("vacuum offline with mixed root: %v", err)
+	}
+
+	reopen, err := Open(vacuumOpts)
+	if err != nil {
+		t.Fatalf("reopen after vacuum: %v", err)
+	}
+	defer func() { _ = reopen.Close() }()
+
+	for _, idx := range []int{0, 1999, 3999} {
+		key := []byte(fmt.Sprintf("mixed/%08d", idx))
+		got, err := reopen.Get(key)
+		if err != nil {
+			t.Fatalf("get key=%d after vacuum: %v", idx, err)
+		}
+		if len(got) != len(value) {
+			t.Fatalf("value length mismatch key=%d: got=%d want=%d", idx, len(got), len(value))
+		}
+		if got[0] != byte(idx%251) {
+			t.Fatalf("value mismatch key=%d got[0]=%d want=%d", idx, got[0], byte(idx%251))
 		}
 	}
 }

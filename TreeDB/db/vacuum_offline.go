@@ -145,13 +145,17 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) error {
 				return err
 			}
 		} else {
-			leafChildren, err := vacuumCollectLeafRefChildren(d.Pager(), state.RootPageID)
+			leafChildren, allLeafRefs, err := vacuumCollectLeafRefChildrenIfComplete(d.Pager(), state.RootPageID)
 			if err != nil {
 				_ = newPager.Close()
 				_ = d.Close()
 				return err
 			}
-			userRoot, err = vacuumBuildInternalTreeFromChildren(newPager, alloc, leafChildren, opts.IndexInternalBaseDelta)
+			if allLeafRefs {
+				userRoot, err = vacuumBuildInternalTreeFromChildren(newPager, alloc, leafChildren, opts.IndexInternalBaseDelta)
+			} else {
+				userRoot, err = vacuumClonePagerTreeWithLeafRefs(d.Pager(), state.RootPageID, alloc, newPager)
+			}
 			if err != nil {
 				_ = newPager.Close()
 				_ = d.Close()

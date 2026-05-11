@@ -2138,9 +2138,10 @@ func (db *DB) valueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		if _, ok := protectedIDs[id]; ok {
 			return nil
 		}
-		// Never mark currently-active pre-existing segments zombie.
-		// Concurrent writers may still be appending records whose pointers are
-		// not yet visible in the backend index.
+		// When active-segment skipping is enabled, avoid marking currently
+		// active pre-existing segments zombie. Concurrent writers may still be
+		// appending records whose pointers are not yet visible in the backend
+		// index.
 		if existedBefore && allowActiveSkip {
 			if _, ok := activeIDs[id]; ok {
 				return nil

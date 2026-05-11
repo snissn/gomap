@@ -78,6 +78,8 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		if len(backendOpts.ProtectedPaths) == 0 {
 			backendOpts.ProtectedPaths = db.cached.ValueLogProtectedPaths()
 			if len(backendOpts.ProtectedPaths) == 0 {
+				// Sentinel keeps backend active-segment protection enabled even
+				// before cached mode has concrete protected paths to forward.
 				backendOpts.ProtectedPaths = []string{""}
 			}
 		}
