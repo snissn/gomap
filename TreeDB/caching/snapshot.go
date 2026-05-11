@@ -412,6 +412,7 @@ func (s *Snapshot) GetAppend(key, dst []byte) ([]byte, error) {
 	snap := rootDomainSnapshotFromCachedSnapshot(s, key)
 	oldLen := len(dst)
 	out, ok, err := rootDomainPublishedGetAppend(snap, key, dst)
+	checkedPublishedEntry := false
 	if ok {
 		if err == nil {
 			recordSnapshotRootDomainRead(rootDomainEntrySourcePublished, true, len(out)-oldLen)
@@ -423,6 +424,7 @@ func (s *Snapshot) GetAppend(key, dst []byte) ([]byte, error) {
 		if !errors.Is(err, tree.ErrKeyNotFound) {
 			return dst, err
 		}
+		checkedPublishedEntry = true
 		if val, ptr, flags, found, source := snap.getEntryWithSource(key); found {
 			if flags&node.FlagTombstone != 0 {
 				return dst, tree.ErrKeyNotFound
@@ -446,27 +448,29 @@ func (s *Snapshot) GetAppend(key, dst []byte) ([]byte, error) {
 			return append(dst, val...), nil
 		}
 	}
-	if val, ptr, flags, found, source := snap.getEntryWithSource(key); found {
-		if flags&node.FlagTombstone != 0 {
-			return dst, tree.ErrKeyNotFound
-		}
-		if flags&node.FlagPointer != 0 {
-			if s.db == nil {
-				return dst, errors.New("caching snapshot: value-log reader unavailable")
+	if !checkedPublishedEntry {
+		if val, ptr, flags, found, source := snap.getEntryWithSource(key); found {
+			if flags&node.FlagTombstone != 0 {
+				return dst, tree.ErrKeyNotFound
 			}
-			out, err := s.db.readValueLogAppend(key, ptr, dst)
-			if err != nil {
-				return dst, err
+			if flags&node.FlagPointer != 0 {
+				if s.db == nil {
+					return dst, errors.New("caching snapshot: value-log reader unavailable")
+				}
+				out, err := s.db.readValueLogAppend(key, ptr, dst)
+				if err != nil {
+					return dst, err
+				}
+				recordSnapshotRootDomainRead(source, true, len(out)-oldLen)
+				return out, nil
 			}
-			recordSnapshotRootDomainRead(source, true, len(out)-oldLen)
-			return out, nil
+			if val == nil {
+				recordSnapshotRootDomainRead(source, false, 0)
+				return dst, nil
+			}
+			recordSnapshotRootDomainRead(source, false, len(val))
+			return append(dst, val...), nil
 		}
-		if val == nil {
-			recordSnapshotRootDomainRead(source, false, 0)
-			return dst, nil
-		}
-		recordSnapshotRootDomainRead(source, false, len(val))
-		return append(dst, val...), nil
 	}
 
 	if s == nil || s.backend == nil || s.db == nil {
@@ -527,10 +531,11 @@ func (s *Snapshot) Get(key []byte) ([]byte, error) {
 			maybeRecordSnapshotGetCallerSample(len(out))
 			return ownedReadResult(out, scratch), nil
 		}
-		recordSnapshotRootDomainRead(source, false, len(val))
-		if len(val) == 0 {
+		if val == nil {
+			recordSnapshotRootDomainRead(source, false, len(val))
 			return nil, nil
 		}
+		recordSnapshotRootDomainRead(source, false, len(val))
 		maybeRecordSnapshotGetCallerSample(len(val))
 		owned := make([]byte, len(val))
 		copy(owned, val)
