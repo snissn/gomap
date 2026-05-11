@@ -78,6 +78,109 @@ func TestVacuumIndexOffline_PreservesDataAndShrinksFile(t *testing.T) {
 	}
 }
 
+func TestVacuumIndexOffline_OuterLeavesInValueLog_PreservesLeafRefs(t *testing.T) {
+	dir := t.TempDir()
+	opts := Options{
+		Dir:                        dir,
+		KeepRecent:                 1,
+		Durability:                 DurabilityWALOffRelaxed,
+		IndexOuterLeavesInValueLog: true,
+		PreferAppendAlloc:          true,
+	}
+
+	d, err := Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	baseLeafLog := &registeredLeafPageLog{db: d, dir: dir}
+	if err := baseLeafLog.ensureWriter(); err != nil {
+		t.Fatalf("ensure leaf writer: %v", err)
+	}
+	d.SetLeafPageLog(baseLeafLog)
+
+	val := bytes.Repeat([]byte("v"), 64)
+	for version := 1; version <= 24; version++ {
+		b := d.NewBatch()
+		for i := 0; i < 256; i++ {
+			key := []byte(fmt.Sprintf("s/k:store/n/%08d/%08d", version, i))
+			val[0] = byte(version)
+			if err := b.Set(key, val); err != nil {
+				t.Fatalf("set version=%d key=%d: %v", version, i, err)
+			}
+		}
+		if err := b.WriteSync(); err != nil {
+			t.Fatalf("writesync version=%d: %v", version, err)
+		}
+		_ = b.Close()
+	}
+
+	stateBefore := d.State()
+	if stateBefore == nil {
+		t.Fatalf("missing state before vacuum")
+	}
+	leafRefsBefore := collectLeafRefIDsFromRoot(t, d, stateBefore.RootPageID)
+	if len(leafRefsBefore) == 0 {
+		t.Fatalf("expected outer-leaf refs before offline vacuum")
+	}
+
+	indexPath := filepath.Join(dir, indexFileName)
+	infoBefore, err := os.Stat(indexPath)
+	if err != nil {
+		t.Fatalf("stat before: %v", err)
+	}
+
+	if err := d.Close(); err != nil {
+		t.Fatalf("close before vacuum: %v", err)
+	}
+
+	if err := VacuumIndexOffline(opts); err != nil {
+		t.Fatalf("vacuum offline: %v", err)
+	}
+
+	infoAfter, err := os.Stat(indexPath)
+	if err != nil {
+		t.Fatalf("stat after: %v", err)
+	}
+	if infoAfter.Size() > infoBefore.Size()*4 {
+		t.Fatalf("offline vacuum index inflation too large: before=%d after=%d", infoBefore.Size(), infoAfter.Size())
+	}
+
+	reopen, err := Open(opts)
+	if err != nil {
+		t.Fatalf("reopen after vacuum: %v", err)
+	}
+	defer func() { _ = reopen.Close() }()
+
+	stateAfter := reopen.State()
+	if stateAfter == nil {
+		t.Fatalf("missing state after vacuum")
+	}
+	leafRefsAfter := collectLeafRefIDsFromRoot(t, reopen, stateAfter.RootPageID)
+	if len(leafRefsAfter) == 0 {
+		t.Fatalf("expected outer-leaf refs after offline vacuum")
+	}
+	if len(leafRefsAfter) != len(leafRefsBefore) {
+		t.Fatalf("leaf-ref count changed across offline vacuum: before=%d after=%d", len(leafRefsBefore), len(leafRefsAfter))
+	}
+
+	for _, version := range []int{1, 12, 24} {
+		for _, idx := range []int{0, 127, 255} {
+			key := []byte(fmt.Sprintf("s/k:store/n/%08d/%08d", version, idx))
+			got, err := reopen.Get(key)
+			if err != nil {
+				t.Fatalf("get version=%d key=%d after vacuum: %v", version, idx, err)
+			}
+			if len(got) != len(val) {
+				t.Fatalf("value length mismatch version=%d key=%d: got=%d want=%d", version, idx, len(got), len(val))
+			}
+			if got[0] != byte(version) {
+				t.Fatalf("value content mismatch version=%d key=%d: got[0]=%d want=%d", version, idx, got[0], byte(version))
+			}
+		}
+	}
+}
+
 func TestVacuumIndexOffline_CrashPointsRecoverOnOpen(t *testing.T) {
 	failpoints := []vacuumFailpoint{
 		vacuumFailAfterNewSync,

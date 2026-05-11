@@ -185,9 +185,9 @@ type ValueLogRewriteOnlineOptions struct {
 	// ProtectedPaths are value-log segment paths that must not be marked zombie
 	// during rewrite cleanup.
 	//
-	// When non-empty, cleanup also avoids zombifying currently-active pre-existing
-	// segments (cached-mode maintenance), since concurrent writers may still be
-	// appending records whose pointers are not yet visible in the backend index.
+	// Cleanup also avoids zombifying currently-active pre-existing segments
+	// because concurrent writers may still be appending records whose pointers
+	// are not yet visible in the backend index.
 	ProtectedPaths []string
 	// MaxSourceSegments bounds the number of source segments selected by sparse
 	// segment selection. Applies only when SourceFileIDs is empty.
@@ -2092,8 +2092,7 @@ func (db *DB) valueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		}
 	}
 	var protectedPaths map[string]struct{}
-	allowActiveSkip := len(opts.ProtectedPaths) > 0
-	if allowActiveSkip {
+	if len(opts.ProtectedPaths) > 0 {
 		protectedPaths = make(map[string]struct{}, len(opts.ProtectedPaths))
 		for _, path := range opts.ProtectedPaths {
 			if path == "" {
@@ -2106,16 +2105,17 @@ func (db *DB) valueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		protectedIDs map[uint32]struct{}
 		activeIDs    map[uint32]struct{}
 	)
-	if allowActiveSkip || len(protectedPaths) > 0 {
+	allowActiveSkip := len(opts.ProtectedPaths) > 0 || len(opts.SourceFileIDs) > 0 || len(opts.SourceChunks) > 0
+	{
 		currentSet := db.valueLogManager.CurrentSetNoRefresh()
 		if currentSet != nil {
-			if allowActiveSkip {
-				activeIDs = recentValueLogIDsForProtectedPaths(currentSet, valueLogKeepRecentSegmentsPerLane, opts.ProtectedPaths)
-				if len(activeIDs) == 0 {
-					activeIDs = currentValueLogIDs(currentSet)
-				}
-			}
 			if len(protectedPaths) > 0 {
+				if allowActiveSkip {
+					activeIDs = recentValueLogIDsForProtectedPaths(currentSet, valueLogKeepRecentSegmentsPerLane, opts.ProtectedPaths)
+					if len(activeIDs) == 0 {
+						activeIDs = currentValueLogIDs(currentSet)
+					}
+				}
 				protectedIDs = make(map[uint32]struct{})
 				for id, f := range currentSet.Files {
 					if f == nil || f.Path == "" {
@@ -2125,6 +2125,8 @@ func (db *DB) valueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 						protectedIDs[id] = struct{}{}
 					}
 				}
+			} else if allowActiveSkip {
+				activeIDs = currentValueLogIDs(currentSet)
 			}
 			_ = db.valueLogManager.Release(currentSet)
 		}
@@ -2136,11 +2138,10 @@ func (db *DB) valueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		if _, ok := protectedIDs[id]; ok {
 			return nil
 		}
-		// Never mark currently-active pre-existing segments zombie when callers
-		// provide ProtectedPaths (cached-mode maintenance). Concurrent writers may
-		// still be appending records whose pointers are not yet visible in the
-		// backend index.
-		if allowActiveSkip && existedBefore {
+		// Never mark currently-active pre-existing segments zombie.
+		// Concurrent writers may still be appending records whose pointers are
+		// not yet visible in the backend index.
+		if existedBefore && allowActiveSkip {
 			if _, ok := activeIDs[id]; ok {
 				return nil
 			}
