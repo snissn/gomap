@@ -33,8 +33,6 @@ type Snapshot struct {
 	db              *DB
 	view            *memtableView
 	backend         *backenddb.Snapshot
-	backendRootID   uint64
-	backendFallback backendSnapshotLookup
 	rootVersion     uint64
 	rootPointShards []rootDomainSnapshot // snapshot point roots; mutable runs are intentionally excluded
 	rootSystem      rootDomainSnapshot
@@ -164,20 +162,10 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 		return nil
 	}
 
-	var backendRootID uint64
-	if state := backendSnap.State(); state != nil {
-		backendRootID = state.RootPageID
-	}
 	snap := &Snapshot{
-		db:            db,
-		view:          view,
-		backend:       backendSnap,
-		backendRootID: backendRootID,
-		backendFallback: backendSnapshotLookup{
-			db:       db,
-			snapshot: backendSnap,
-			rootID:   backendRootID,
-		},
+		db:      db,
+		view:    view,
+		backend: backendSnap,
 	}
 	snap.rootVersion = viewRootVersion
 	snap.rootPointShards = viewRootPointShards
@@ -225,8 +213,6 @@ func (s *Snapshot) Close() error {
 	s.rootSystem = rootDomainSnapshot{}
 	s.rootIterator = rootDomainSnapshot{}
 	s.publishedRoots = nil
-	s.backendRootID = 0
-	s.backendFallback = backendSnapshotLookup{}
 	s.rootVersion = 0
 	s.db = nil
 	return err
