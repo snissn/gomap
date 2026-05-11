@@ -11,6 +11,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
+	"github.com/snissn/gomap/TreeDB/pager"
 )
 
 func TestVacuumIndexOffline_PreservesDataAndShrinksFile(t *testing.T) {
@@ -188,6 +189,7 @@ func TestVacuumIndexOffline_OuterLeavesInValueLog_MixedUserRootFallsBackToClone(
 	dir := t.TempDir()
 	baseOpts := Options{
 		Dir:               dir,
+		ChunkSize:         64 * 1024,
 		KeepRecent:        1,
 		Durability:        DurabilityWALOffRelaxed,
 		PreferAppendAlloc: true,
@@ -199,13 +201,18 @@ func TestVacuumIndexOffline_OuterLeavesInValueLog_MixedUserRootFallsBackToClone(
 	}
 
 	value := bytes.Repeat([]byte("m"), 64)
-	for i := 0; i < 4000; i++ {
+	batch := d.NewBatch()
+	for i := 0; i < 12000; i++ {
 		key := []byte(fmt.Sprintf("mixed/%08d", i))
 		value[0] = byte(i % 251)
-		if err := d.SetSync(key, value); err != nil {
+		if err := batch.Set(key, value); err != nil {
 			t.Fatalf("set key=%d: %v", i, err)
 		}
 	}
+	if err := batch.WriteSync(); err != nil {
+		t.Fatalf("write mixed batch: %v", err)
+	}
+	_ = batch.Close()
 
 	stateBefore := d.State()
 	if stateBefore == nil {
@@ -222,6 +229,24 @@ func TestVacuumIndexOffline_OuterLeavesInValueLog_MixedUserRootFallsBackToClone(
 	if node.NewNode(rootPage).Type() != page.PageTypeInternal {
 		t.Fatalf("expected internal user root before vacuum setup")
 	}
+
+	clonePath := filepath.Join(t.TempDir(), "index-clone.db")
+	clonePager, err := pager.Open(clonePath, baseOpts.ChunkSize)
+	if err != nil {
+		t.Fatalf("open clone pager: %v", err)
+	}
+	defer func() { _ = clonePager.Close() }()
+	if _, err := clonePager.Alloc(2); err != nil {
+		t.Fatalf("alloc clone meta pages: %v", err)
+	}
+	cloneRoot, err := vacuumClonePagerTreeWithLeafRefs(d.Pager(), rootBefore, &pagerAllocator{p: clonePager}, clonePager, true)
+	if err != nil {
+		t.Fatalf("clone pager tree with base-delta option: %v", err)
+	}
+	if !vacuumTestPagerTreeHasInternalBaseDelta(t, clonePager, cloneRoot) {
+		t.Fatalf("expected clone fallback helper to preserve IndexInternalBaseDelta encoding in cloned internal pages")
+	}
+
 	if err := d.Close(); err != nil {
 		t.Fatalf("close before vacuum: %v", err)
 	}
@@ -238,7 +263,20 @@ func TestVacuumIndexOffline_OuterLeavesInValueLog_MixedUserRootFallsBackToClone(
 	}
 	defer func() { _ = reopen.Close() }()
 
-	for _, idx := range []int{0, 1999, 3999} {
+	stateAfter := reopen.State()
+	if stateAfter == nil {
+		t.Fatalf("missing state after vacuum")
+	}
+	rootAfter, err := reopen.Pager().Get(stateAfter.RootPageID)
+	if err != nil {
+		t.Fatalf("get root after vacuum: %v", err)
+	}
+	rootNodeAfter := node.NewNode(rootAfter)
+	if rootNodeAfter.Type() != page.PageTypeInternal {
+		t.Fatalf("expected internal user root after vacuum, got %v", rootNodeAfter.Type())
+	}
+
+	for _, idx := range []int{0, 5999, 11999} {
 		key := []byte(fmt.Sprintf("mixed/%08d", idx))
 		got, err := reopen.Get(key)
 		if err != nil {
@@ -251,6 +289,43 @@ func TestVacuumIndexOffline_OuterLeavesInValueLog_MixedUserRootFallsBackToClone(
 			t.Fatalf("value mismatch key=%d got[0]=%d want=%d", idx, got[0], byte(idx%251))
 		}
 	}
+}
+
+func vacuumTestPagerTreeHasInternalBaseDelta(t *testing.T, p *pager.Pager, rootID uint64) bool {
+	t.Helper()
+	seen := make(map[uint64]struct{})
+	var walk func(uint64) bool
+	walk = func(id uint64) bool {
+		if id == 0 {
+			return false
+		}
+		if _, ok := seen[id]; ok {
+			return false
+		}
+		seen[id] = struct{}{}
+		data, err := p.Get(id)
+		if err != nil {
+			t.Fatalf("get page %d: %v", id, err)
+		}
+		n := node.NewNode(data)
+		if n.Type() != page.PageTypeInternal {
+			return false
+		}
+		if n.InternalBaseDeltaEnabled() {
+			return true
+		}
+		for i := uint16(0); i < n.Count(); i++ {
+			childRef, err := n.GetInternalChildRef(i)
+			if err != nil {
+				t.Fatalf("get child ref page=%d index=%d: %v", id, i, err)
+			}
+			if childRef.Kind == page.ChildRefPage && walk(childRef.Page) {
+				return true
+			}
+		}
+		return false
+	}
+	return walk(rootID)
 }
 
 func TestVacuumIndexOffline_CrashPointsRecoverOnOpen(t *testing.T) {

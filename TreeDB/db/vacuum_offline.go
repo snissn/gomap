@@ -138,7 +138,7 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) error {
 		}
 		rootNode := node.NewNode(rootData)
 		if rootNode.Type() == page.PageTypeLeaf {
-			userRoot, err = vacuumClonePagerTreeWithLeafRefs(d.Pager(), state.RootPageID, alloc, newPager)
+			userRoot, err = vacuumClonePagerTreeWithLeafRefs(d.Pager(), state.RootPageID, alloc, newPager, opts.IndexInternalBaseDelta)
 			if err != nil {
 				_ = newPager.Close()
 				_ = d.Close()
@@ -154,7 +154,7 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) error {
 			if allLeafRefs {
 				userRoot, err = vacuumBuildInternalTreeFromChildren(newPager, alloc, leafChildren, opts.IndexInternalBaseDelta)
 			} else {
-				userRoot, err = vacuumClonePagerTreeWithLeafRefs(d.Pager(), state.RootPageID, alloc, newPager)
+				userRoot, err = vacuumClonePagerTreeWithLeafRefs(d.Pager(), state.RootPageID, alloc, newPager, opts.IndexInternalBaseDelta)
 			}
 			if err != nil {
 				_ = newPager.Close()
