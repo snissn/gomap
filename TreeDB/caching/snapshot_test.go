@@ -504,6 +504,19 @@ func TestShouldShortCircuitPublishedAppendMiss_BackendLookupOnly(t *testing.T) {
 	}
 }
 
+func TestSnapshotGetAppend_NilReceiverMissReturnsNotFound(t *testing.T) {
+	var snap *Snapshot
+
+	dst := []byte("prefix:")
+	got, err := snap.GetAppend([]byte("missing"), dst)
+	if !errors.Is(err, tree.ErrKeyNotFound) {
+		t.Fatalf("GetAppend(missing) err=%v want ErrKeyNotFound", err)
+	}
+	if string(got) != "prefix:" {
+		t.Fatalf("GetAppend(missing) dst=%q want %q", string(got), "prefix:")
+	}
+}
+
 func TestSnapshotGet_PublishedEmptyInlineValueReturnsNil(t *testing.T) {
 	published := newRootDomainTestTable(t, rootDomainTestOp{key: "k", value: ""})
 	snap := &Snapshot{

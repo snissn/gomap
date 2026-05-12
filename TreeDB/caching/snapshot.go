@@ -487,7 +487,11 @@ func (s *Snapshot) GetAppend(key, dst []byte) ([]byte, error) {
 			return out, err
 		}
 	}
-	if shouldShortCircuitPublishedAppendMiss(checkedPublishedEntry, s.publishedRoots, snap) {
+	var publishedRoots *publishedRootSet
+	if s != nil {
+		publishedRoots = s.publishedRoots
+	}
+	if shouldShortCircuitPublishedAppendMiss(checkedPublishedEntry, publishedRoots, snap) {
 		// rootDomainSnapshotFromCachedSnapshot() installs backendSnapshotLookup as
 		// the published lookup when no published root set is pinned. A not-found
 		// from that lookup already queried the backend snapshot, so avoid an extra
