@@ -311,17 +311,6 @@ func (f *File) setGroupedFrameCacheEntries(entries int) {
 }
 
 func (f *File) groupedFrameCacheReadTo(start int64, verifyCRC bool, subIndex int, dst []byte) (out []byte, usedDst bool, err error, hit bool) {
-	countHit := false
-	countMiss := false
-	defer func() {
-		if countHit {
-			f.groupedFrameCacheHits.Add(1)
-		}
-		if countMiss {
-			f.groupedFrameCacheMisses.Add(1)
-		}
-	}()
-
 	f.cacheMu.RLock()
 	if f.groupedFrameCacheEntries <= 0 {
 		f.cacheMu.RUnlock()
@@ -329,7 +318,7 @@ func (f *File) groupedFrameCacheReadTo(start int64, verifyCRC bool, subIndex int
 	}
 	if len(f.groupedFrameCache) == 0 {
 		f.cacheMu.RUnlock()
-		countMiss = true
+		f.groupedFrameCacheMisses.Add(1)
 		return nil, false, nil, false
 	}
 	for i := range f.groupedFrameCache {
@@ -350,7 +339,7 @@ func (f *File) groupedFrameCacheReadTo(start int64, verifyCRC bool, subIndex int
 			encoded := append([]byte(nil), val...)
 			f.cacheMu.RUnlock()
 			f.groupedFrameCacheTouch(start, verifyCRC, i)
-			countHit = true
+			f.groupedFrameCacheHits.Add(1)
 			decoded, decErr := templ.DecodePayloadAppend(nil, encoded, func(id uint64) (templ.TemplateDef, error) {
 				return resolveTemplateDef(id, f.templateLookup, f.templateDefCache)
 			}, f.templateDecodeOpts)
@@ -364,18 +353,18 @@ func (f *File) groupedFrameCacheReadTo(start int64, verifyCRC bool, subIndex int
 			copy(out, val)
 			f.cacheMu.RUnlock()
 			f.groupedFrameCacheTouch(start, verifyCRC, i)
-			countHit = true
+			f.groupedFrameCacheHits.Add(1)
 			return out, true, nil, true
 		}
 		out := make([]byte, len(val))
 		copy(out, val)
 		f.cacheMu.RUnlock()
 		f.groupedFrameCacheTouch(start, verifyCRC, i)
-		countHit = true
+		f.groupedFrameCacheHits.Add(1)
 		return out, false, nil, true
 	}
 	f.cacheMu.RUnlock()
-	countMiss = true
+	f.groupedFrameCacheMisses.Add(1)
 	return nil, false, nil, false
 }
 

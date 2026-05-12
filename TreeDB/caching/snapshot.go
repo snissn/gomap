@@ -321,11 +321,11 @@ func rootDomainPublishedUsesBackendLookup(snap rootDomainSnapshot) bool {
 	return ok
 }
 
-func shouldShortCircuitPublishedAppendMiss(checkedPublishedEntry bool, publishedRoots *publishedRootSet, snap rootDomainSnapshot) bool {
-	if !checkedPublishedEntry || !rootDomainPublishedUsesBackendLookup(snap) {
+func shouldShortCircuitPublishedAppendMiss(checkedPublishedEntry bool, publishedRoots *publishedRootSet, domainSnap rootDomainSnapshot) bool {
+	if !checkedPublishedEntry || !rootDomainPublishedUsesBackendLookup(domainSnap) {
 		return false
 	}
-	if snap.publishedRootID != 0 {
+	if domainSnap.publishedRootID != 0 {
 		return true
 	}
 	return publishedRoots == nil
