@@ -8448,9 +8448,12 @@ func (c *Collection) Replace(documentID, document []byte) (bool, error) {
 // testing.T.Fatal.
 //
 // Under the collection WAL target contract, WAL-on success is process-crash
-// recoverable. Retry after timeout or commit-ambiguous failure is safe only when
-// the update function is idempotent or protected by an application-level guard
-// or durable idempotency key.
+// recoverable for update operations that publish before returning. Direct-
+// buffered BSON $set updates in WAL-on relaxed mode defer that recoverability
+// boundary until Flush/Close publishes the staged root runs. Retry after timeout
+// or commit-ambiguous failure is safe only when the update function is
+// idempotent or protected by an application-level guard or durable idempotency
+// key.
 func (c *Collection) Update(documentID []byte, update func(current []byte) (replacement []byte, changed bool, err error)) (bool, bool, error) {
 	if err := validateCollectionUpdateInput(c, documentID, update); err != nil {
 		return false, false, err

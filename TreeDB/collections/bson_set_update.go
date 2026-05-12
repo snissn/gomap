@@ -48,6 +48,10 @@ var bsonSetBatchDocumentIDHashSeed = maphash.MakeSeed()
 // return matched=false. If all assigned values already match the stored
 // document, modified=false. Callers must not mutate fields or RawValue byte
 // slices until UpdateBSONSet returns.
+//
+// For no-index collections, this path may stage buffered root runs in WAL-off
+// relaxed and WAL-on relaxed modes; when staged, crash-recoverability is
+// deferred until Flush/Close publishes the buffered runs.
 func (c *Collection) UpdateBSONSet(documentID []byte, fields []BSONSetField) (bool, bool, error) {
 	if err := validateCollectionUpdateDocumentInput(c, documentID); err != nil {
 		return false, false, err
