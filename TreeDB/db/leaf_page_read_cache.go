@@ -195,28 +195,44 @@ func (s *leafPageReadCacheSlot) storeLocked(key leafPageReadCacheKey, leafPage [
 }
 
 func (s *leafPageReadCacheSlot) observeReadMissCandidate(fp uint64) (epoch uint64, repeated bool) {
-	epoch = s.readMissEpoch.Load()
 	for {
+		epoch = s.readMissEpoch.Load()
+		if epoch&1 != 0 {
+			// Writer is resetting this slot's admission candidate.
+			continue
+		}
 		candidate := s.readMissCandidateFP.Load()
 		if candidate == fp {
-			return epoch, true
+			if s.readMissEpoch.Load() == epoch {
+				return epoch, true
+			}
+			continue
 		}
 		if s.readMissCandidateFP.CompareAndSwap(candidate, fp) {
-			return epoch, false
+			if s.readMissEpoch.Load() == epoch {
+				return epoch, false
+			}
 		}
-		epoch = s.readMissEpoch.Load()
 	}
 }
 
 func (s *leafPageReadCacheSlot) readMissCandidateStillCurrent(fp, epoch uint64) bool {
+	if epoch&1 != 0 {
+		return false
+	}
 	return s.readMissEpoch.Load() == epoch && s.readMissCandidateFP.Load() == fp
 }
 
 func (s *leafPageReadCacheSlot) resetReadMissCandidateLocked() {
+	// Mark reset in-progress, clear candidate, then publish the next stable epoch.
+	// observeReadMissCandidate() only accepts even (stable) epochs.
+	start := s.readMissEpoch.Load()
+	if start&1 != 0 {
+		start++
+	}
+	s.readMissEpoch.Store(start + 1)
 	s.readMissCandidateFP.Store(0)
-	// Publish a fresh epoch only after clearing the prior fingerprint so new
-	// misses cannot observe (new epoch, stale fingerprint) as a false repeat.
-	s.readMissEpoch.Add(1)
+	s.readMissEpoch.Store(start + 2)
 }
 
 func (c *leafPageReadCache) recordStore(result leafPageReadCacheStoreResult, key leafPageReadCacheKey) {
