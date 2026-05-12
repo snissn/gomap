@@ -2840,9 +2840,12 @@ func (c *Collection) Insert(id, document []byte) ([]byte, error) {
 	}
 	if len(c.meta.Indexes) == 0 {
 		if c.hasBufferedNoIndexBSONRootRuns() {
+			unlockMutation := c.lockMutation()
 			if err := c.flushBufferedWrites(); err != nil {
+				unlockMutation.Unlock()
 				return nil, err
 			}
+			unlockMutation.Unlock()
 		}
 		return c.insertOneNoIndexBuffered(id, document)
 	}
