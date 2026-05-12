@@ -343,8 +343,8 @@ func (f *File) groupedFrameCacheReadTo(start int64, verifyCRC bool, subIndex int
 		}
 		val := e.raw[valStart:valEnd]
 		if f.templateLookup != nil && templ.IsEncodedPayload(val) {
-			// Copy payload while holding cacheMu so callers do not race with cache
-			// entry eviction/reuse after unlock.
+			// Copy payload while holding groupedMu so callers do not race with
+			// cache entry eviction/reuse after unlock.
 			encoded := append([]byte(nil), val...)
 			f.groupedFrameCacheHits.Add(1)
 			f.groupedMu.RUnlock()
@@ -440,7 +440,7 @@ func (f *File) groupedFrameCacheStore(start int64, verifyCRC bool, k int, offset
 	}
 	f.groupedMu.Unlock()
 	if oldPooledRaw != nil {
-		// Avoid doing scratch handoff while holding cacheMu on the hot path.
+		// Avoid doing scratch handoff while holding groupedMu on the hot path.
 		f.releaseDecodeScratch(oldPooledRaw)
 	}
 	return stored
