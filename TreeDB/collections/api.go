@@ -8414,11 +8414,12 @@ func (c *Collection) Replace(documentID, document []byte) (bool, error) {
 // secondary unique index values may be staged in the write domain and become
 // durable at Flush/Close or auto-flush.
 //
-// For no-secondary-index collections, single-document BSON $set updates may be
-// staged via the direct buffered update path when the request is in BSON-only
-// mode and durability allows staging. Generic callback-based Update operations
-// remain synchronous by design in durable write modes and are still flushed to
-// the primary root before returning.
+// For no-secondary-index collections, generic callback-based Update operations
+// preserve synchronous publish semantics in every durability mode: pending
+// writes are flushed before planning, and modified documents publish to the
+// primary root before Update returns. Single-document BSON $set updates use a
+// separate direct buffered path and may stage only when WAL-off relaxed
+// durability explicitly allows deferred flush/publish behavior.
 //
 // Callback panics are recovered and returned as errors in both direct and
 // combined execution. When the collection write domain combines concurrent
