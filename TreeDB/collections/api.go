@@ -10540,7 +10540,8 @@ func (c *Collection) shouldUseDirectBufferedUpdatePlan(meta CollectionMeta, opts
 		return false
 	}
 	if len(meta.Indexes) == 0 {
-		return mode == updateBatchModeNoSecondaryUniqueIndexChanges &&
+		return c.canBufferDirectUpdateAck() &&
+			mode == updateBatchModeNoSecondaryUniqueIndexChanges &&
 			normalizedDocumentFormat(opts.documentFormat) == DocumentFormatBSON &&
 			structuredBSONSetBatch
 	}
@@ -11793,12 +11794,12 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 	}()
 
 	phaseStart := updateBatchStatsNow(detailedStats)
-	if domain.count != 0 && !primaryOnlyDirectUpdate {
-		if !plan.bufferedBase || !updateBatchCanReadBufferedDomainLocked(domain, plan.meta, plan.baseSystemRoot) {
+	if domain.count != 0 {
+		if !primaryOnlyDirectUpdate && (!plan.bufferedBase || !updateBatchCanReadBufferedDomainLocked(domain, plan.meta, plan.baseSystemRoot)) {
 			plan.stats.BufferStageValidation += updateBatchStatsSince(detailedStats, phaseStart)
 			return false, ErrConcurrentMutation
 		}
-		if plan.bufferedReadGeneration != domain.writeGeneration {
+		if plan.bufferedBase && plan.bufferedReadGeneration != domain.writeGeneration {
 			plan.stats.BufferStageValidation += updateBatchStatsSince(detailedStats, phaseStart)
 			return false, ErrConcurrentMutation
 		}

@@ -10962,7 +10962,7 @@ func TestCollectionUpdateBSONSetNoIndexIgnoresIndexedThresholds(t *testing.T) {
 	}
 }
 
-func TestCollectionUpdateBSONSetNoIndexWALOnBuffersBeforeAck(t *testing.T) {
+func TestCollectionUpdateBSONSetNoIndexWALOnPublishesBeforeAck(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{
 		Dir:        t.TempDir(),
 		Durability: backenddb.DurabilityWALOnRelaxed,
@@ -11010,14 +11010,14 @@ func TestCollectionUpdateBSONSetNoIndexWALOnBuffersBeforeAck(t *testing.T) {
 		t.Fatalf("matched=%v modified=%v want true/true", matched, modified)
 	}
 	afterUpdate := d.State()
-	if afterUpdate.CommitSeq != before.CommitSeq {
-		t.Fatalf("UpdateBSONSet commit seq=%d before=%d want buffered", afterUpdate.CommitSeq, before.CommitSeq)
+	if afterUpdate.CommitSeq != before.CommitSeq+1 {
+		t.Fatalf("UpdateBSONSet commit seq=%d before=%d want synchronous publish", afterUpdate.CommitSeq, before.CommitSeq)
 	}
 	col.writeDomain.mu.RLock()
 	rootRunCount := col.writeDomain.rootRunCount
 	col.writeDomain.mu.RUnlock()
-	if rootRunCount != 1 {
-		t.Fatalf("root runs=%d want 1", rootRunCount)
+	if rootRunCount != 0 {
+		t.Fatalf("root runs=%d want 0 after publish", rootRunCount)
 	}
 	doc, err := col.Get([]byte("u1"))
 	if err != nil {
