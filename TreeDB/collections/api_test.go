@@ -10962,6 +10962,138 @@ func TestCollectionUpdateBSONSetNoIndexIgnoresIndexedThresholds(t *testing.T) {
 	}
 }
 
+func TestCollectionInsertNoIndexBSONFlushesPendingRootRunsBeforeSingleInsert(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{
+		Dir:        t.TempDir(),
+		Durability: backenddb.DurabilityWALOffRelaxed,
+	})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatBSON,
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{mustBSONCollectionDocument(t, bson.D{
+			{Key: "_id", Value: "u1"},
+			{Key: "city", Value: "hnl"},
+		})},
+	); err != nil {
+		t.Fatalf("insert batch seed: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush seed insert: %v", err)
+	}
+	matched, modified, err := col.UpdateBSONSet([]byte("u1"), []BSONSetField{{
+		Key:   "city",
+		Value: mustBSONRawValue(t, "sea"),
+	}})
+	if err != nil {
+		t.Fatalf("UpdateBSONSet: %v", err)
+	}
+	if !matched || !modified {
+		t.Fatalf("UpdateBSONSet matched=%v modified=%v want true/true", matched, modified)
+	}
+	if _, err := col.Insert([]byte("u2"), mustBSONCollectionDocument(t, bson.D{
+		{Key: "_id", Value: "u2"},
+		{Key: "city", Value: "sfo"},
+	})); err != nil {
+		t.Fatalf("single insert: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush mixed buffered writes: %v", err)
+	}
+	doc1, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get u1: %v", err)
+	}
+	if got := bson.Raw(doc1).Lookup("city").StringValue(); got != "sea" {
+		t.Fatalf("u1 city=%q want sea", got)
+	}
+	doc2, err := col.Get([]byte("u2"))
+	if err != nil {
+		t.Fatalf("get u2: %v", err)
+	}
+	if got := bson.Raw(doc2).Lookup("city").StringValue(); got != "sfo" {
+		t.Fatalf("u2 city=%q want sfo", got)
+	}
+}
+
+func TestCollectionUpdateBSONSetNoIndexNoopSkipsDirectBufferedRetryLoop(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{
+		Dir:        t.TempDir(),
+		Durability: backenddb.DurabilityWALOffRelaxed,
+	})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatBSON,
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{mustBSONCollectionDocument(t, bson.D{
+			{Key: "_id", Value: "u1"},
+			{Key: "city", Value: "hnl"},
+		})},
+	); err != nil {
+		t.Fatalf("insert seed: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush seed: %v", err)
+	}
+	before := d.State()
+	matched, modified, err := col.UpdateBSONSet([]byte("u1"), []BSONSetField{{
+		Key:   "city",
+		Value: mustBSONRawValue(t, "hnl"),
+	}})
+	if err != nil {
+		t.Fatalf("noop UpdateBSONSet existing doc: %v", err)
+	}
+	if !matched || modified {
+		t.Fatalf("noop existing doc matched=%v modified=%v want true/false", matched, modified)
+	}
+	matched, modified, err = col.UpdateBSONSet([]byte("missing"), []BSONSetField{{
+		Key:   "city",
+		Value: mustBSONRawValue(t, "sea"),
+	}})
+	if err != nil {
+		t.Fatalf("noop UpdateBSONSet missing doc: %v", err)
+	}
+	if matched || modified {
+		t.Fatalf("noop missing doc matched=%v modified=%v want false/false", matched, modified)
+	}
+	after := d.State()
+	if after.CommitSeq != before.CommitSeq {
+		t.Fatalf("noop BSON updates advanced commit seq by %d, want 0", after.CommitSeq-before.CommitSeq)
+	}
+}
+
 func TestCollectionUpdateBSONSetNoIndexWALOnPublishesBeforeAck(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{
 		Dir:        t.TempDir(),

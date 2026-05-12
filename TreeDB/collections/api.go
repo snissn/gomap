@@ -2839,6 +2839,11 @@ func (c *Collection) Insert(id, document []byte) ([]byte, error) {
 		return nil, errCollectionDBNil
 	}
 	if len(c.meta.Indexes) == 0 {
+		if c.hasBufferedNoIndexBSONRootRuns() {
+			if err := c.flushBufferedWrites(); err != nil {
+				return nil, err
+			}
+		}
 		return c.insertOneNoIndexBuffered(id, document)
 	}
 	ids, err := c.InsertBatch([][]byte{id}, [][]byte{document})
@@ -10545,6 +10550,9 @@ func (c *Collection) validateUpdateBatchPlanRootDescriptors(plan *updateBatchPla
 
 func (c *Collection) shouldUseDirectBufferedUpdatePlan(meta CollectionMeta, opts collectionOptions, canBuffer bool, mode updateBatchMode, runtimes []indexRuntime, changed []preparedBatchUpdate, structuredBSONSetBatch bool) bool {
 	if c == nil || c.writeDomain == nil {
+		return false
+	}
+	if len(changed) == 0 {
 		return false
 	}
 	if len(meta.Indexes) == 0 {
