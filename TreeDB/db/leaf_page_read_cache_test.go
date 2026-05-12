@@ -472,6 +472,8 @@ func TestLeafPageReadCacheReadMissCandidateOddEpochSpinBound(t *testing.T) {
 		done <- result{epoch: epoch, repeated: repeated}
 	}()
 
+	timer := time.NewTimer(2 * time.Second)
+	defer timer.Stop()
 	select {
 	case got := <-done:
 		if got.repeated {
@@ -480,7 +482,7 @@ func TestLeafPageReadCacheReadMissCandidateOddEpochSpinBound(t *testing.T) {
 		if got.epoch&1 == 0 {
 			t.Fatalf("observeReadMissCandidate epoch=%d, want odd epoch while reset is in progress", got.epoch)
 		}
-	case <-time.After(2 * time.Second):
+	case <-timer.C:
 		t.Fatal("observeReadMissCandidate did not return under sustained odd-epoch contention")
 	}
 }

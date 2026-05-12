@@ -206,6 +206,8 @@ func (s *leafPageReadCacheSlot) storeLocked(key leafPageReadCacheKey, leafPage [
 func (s *leafPageReadCacheSlot) observeReadMissCandidate(fp uint64) (epoch uint64, repeated bool) {
 	oddEpochSpins := 0
 	stableEpochSpins := 0
+	lastStableEpoch := uint64(0)
+	observedEpochAdvance := false
 	for {
 		epoch = s.readMissEpoch.Load()
 		if epoch&1 != 0 {
@@ -218,10 +220,22 @@ func (s *leafPageReadCacheSlot) observeReadMissCandidate(fp uint64) (epoch uint6
 			continue
 		}
 		oddEpochSpins = 0
+		if lastStableEpoch == 0 {
+			lastStableEpoch = epoch
+		} else if epoch != lastStableEpoch {
+			// Crossing into a new stable epoch means this observer raced a reset.
+			// Treat subsequent matches as first-miss observations in the new epoch.
+			lastStableEpoch = epoch
+			stableEpochSpins = 0
+			observedEpochAdvance = true
+		}
 		candidateToken := readMissCandidateToken(fp, epoch)
 		candidate := s.readMissCandidateFP.Load()
 		if candidate == candidateToken {
 			if s.readMissEpoch.Load() == epoch {
+				if observedEpochAdvance {
+					return epoch, false
+				}
 				return epoch, true
 			}
 		} else if s.readMissEpoch.Load() == epoch {
