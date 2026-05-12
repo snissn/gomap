@@ -3048,6 +3048,11 @@ func (c *Collection) canBufferDirectUpdateAck() bool {
 	return c.db.DurabilityMode() == backenddb.DurabilityWALOffRelaxed
 }
 
+func isBSONDocumentFormat(format DocumentFormat) bool {
+	normalized, err := normalizeDocumentFormat(format)
+	return err == nil && normalized == DocumentFormatBSON
+}
+
 func (c *Collection) hasBufferedNoIndexBSONRootRuns() bool {
 	if c == nil || c.writeDomain == nil {
 		return false
@@ -3055,11 +3060,14 @@ func (c *Collection) hasBufferedNoIndexBSONRootRuns() bool {
 	domain := c.writeDomain
 	domain.mu.RLock()
 	defer domain.mu.RUnlock()
-	if domain.count == 0 || !hasBufferedIndexedRootRuns(domain) || len(domain.meta.Indexes) != 0 {
+	if domain.count == 0 || len(domain.meta.Indexes) != 0 {
 		return false
 	}
-	documentFormat, err := normalizeDocumentFormat(domain.meta.Options.DocumentFormat)
-	return err == nil && documentFormat == DocumentFormatBSON
+	collectionName := bufferedDomainCollectionName(domain, c.meta.Name)
+	if collectionName == "" || !hasPendingIndexedRootRunsForRootLocked(domain, collectionPrimaryRootName(collectionName)) {
+		return false
+	}
+	return isBSONDocumentFormat(domain.meta.Options.DocumentFormat)
 }
 
 func (c *Collection) bufferNoIndexInsertBatch(
@@ -7235,7 +7243,7 @@ func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON b
 	}
 	skipInitialNoIndexFlush := false
 	if trustedValidBSON && c.canBufferNoIndexInsertBatchAck() && len(c.meta.Indexes) == 0 {
-		if documentFormat, err := normalizeDocumentFormat(c.meta.Options.DocumentFormat); err == nil && documentFormat == DocumentFormatBSON {
+		if isBSONDocumentFormat(c.meta.Options.DocumentFormat) {
 			skipInitialNoIndexFlush = true
 		}
 	}
@@ -10542,7 +10550,7 @@ func (c *Collection) shouldUseDirectBufferedUpdatePlan(meta CollectionMeta, opts
 	if len(meta.Indexes) == 0 {
 		return c.canBufferDirectUpdateAck() &&
 			mode == updateBatchModeNoSecondaryUniqueIndexChanges &&
-			normalizedDocumentFormat(opts.documentFormat) == DocumentFormatBSON &&
+			isBSONDocumentFormat(opts.documentFormat) &&
 			structuredBSONSetBatch
 	}
 	if !meta.Options.BufferedIndexedWrites {

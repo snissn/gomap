@@ -24,7 +24,10 @@ func benchmarkCollectionUpdateCallbackVsUpdateBatch(b *testing.B, secondaryIndex
 		b.Fatalf("unsupported secondaryIndexes=%d", secondaryIndexes)
 	}
 
-	const docCount = 10000
+	const (
+		docCount         = 10000
+		preloadBatchSize = 1000
+	)
 	indexes := []collections.IndexDefinition{}
 	if secondaryIndexes == 1 {
 		indexes = append(indexes, collections.IndexDefinition{
@@ -71,8 +74,8 @@ func benchmarkCollectionUpdateCallbackVsUpdateBatch(b *testing.B, secondaryIndex
 			ids[i] = []byte("doc-" + strconv.Itoa(i))
 			docs[i] = []byte(`{"_id":"` + string(ids[i]) + `","pad":"static","count":0}`)
 		}
-		for i := 0; i < docCount; i += 16000 {
-			end := i + 16000
+		for i := 0; i < docCount; i += preloadBatchSize {
+			end := i + preloadBatchSize
 			if end > docCount {
 				end = docCount
 			}
