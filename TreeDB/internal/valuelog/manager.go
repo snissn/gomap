@@ -68,7 +68,7 @@ type File struct {
 	compactLeafPayloadAllowed    bool
 	compactLeafPayloadAllowedSet bool
 
-	cacheMu    sync.Mutex
+	cacheMu    sync.RWMutex
 	cacheStart atomic.Int64
 	cacheK     int
 	cacheFlags byte
@@ -86,8 +86,8 @@ type File struct {
 	groupedFrameCacheMaxRaw  int
 	groupedFrameCacheClock   uint64
 	groupedFrameCache        []groupedFrameCacheEntry
-	groupedFrameCacheHits    uint64
-	groupedFrameCacheMisses  uint64
+	groupedFrameCacheHits    atomic.Uint64
+	groupedFrameCacheMisses  atomic.Uint64
 
 	closed atomic.Bool
 
@@ -306,19 +306,19 @@ func (f *File) setGroupedFrameCacheEntries(entries int) {
 	}
 	f.clearGroupedFrameCacheLocked()
 	f.groupedFrameCacheEntries = entries
-	f.groupedFrameCacheHits = 0
-	f.groupedFrameCacheMisses = 0
+	f.groupedFrameCacheHits.Store(0)
+	f.groupedFrameCacheMisses.Store(0)
 }
 
 func (f *File) groupedFrameCacheReadTo(start int64, verifyCRC bool, subIndex int, dst []byte) (out []byte, usedDst bool, err error, hit bool) {
-	f.cacheMu.Lock()
+	f.cacheMu.RLock()
 	if f.groupedFrameCacheEntries <= 0 {
-		f.cacheMu.Unlock()
+		f.cacheMu.RUnlock()
 		return nil, false, nil, false
 	}
 	if len(f.groupedFrameCache) == 0 {
-		f.groupedFrameCacheMisses++
-		f.cacheMu.Unlock()
+		f.cacheMu.RUnlock()
+		f.groupedFrameCacheMisses.Add(1)
 		return nil, false, nil, false
 	}
 	for i := range f.groupedFrameCache {
@@ -332,15 +332,13 @@ func (f *File) groupedFrameCacheReadTo(start int64, verifyCRC bool, subIndex int
 		if valEnd < valStart || valEnd > rawLen || uint32(len(e.raw)) != rawLen {
 			continue
 		}
-		f.groupedFrameCacheClock++
-		e.used = f.groupedFrameCacheClock
-		f.groupedFrameCacheHits++
 		val := e.raw[valStart:valEnd]
 		if f.templateLookup != nil && templ.IsEncodedPayload(val) {
 			// Copy payload while holding cacheMu so callers do not race with cache
 			// entry eviction/reuse after unlock.
 			encoded := append([]byte(nil), val...)
-			f.cacheMu.Unlock()
+			f.cacheMu.RUnlock()
+			f.groupedFrameCacheHits.Add(1)
 			decoded, decErr := templ.DecodePayloadAppend(nil, encoded, func(id uint64) (templ.TemplateDef, error) {
 				return resolveTemplateDef(id, f.templateLookup, f.templateDefCache)
 			}, f.templateDecodeOpts)
@@ -352,16 +350,18 @@ func (f *File) groupedFrameCacheReadTo(start int64, verifyCRC bool, subIndex int
 		if dst != nil && cap(dst) >= len(val) {
 			out := dst[:len(val)]
 			copy(out, val)
-			f.cacheMu.Unlock()
+			f.cacheMu.RUnlock()
+			f.groupedFrameCacheHits.Add(1)
 			return out, true, nil, true
 		}
 		out := make([]byte, len(val))
 		copy(out, val)
-		f.cacheMu.Unlock()
+		f.cacheMu.RUnlock()
+		f.groupedFrameCacheHits.Add(1)
 		return out, false, nil, true
 	}
-	f.groupedFrameCacheMisses++
-	f.cacheMu.Unlock()
+	f.cacheMu.RUnlock()
+	f.groupedFrameCacheMisses.Add(1)
 	return nil, false, nil, false
 }
 
@@ -427,9 +427,9 @@ func (f *File) groupedFrameCacheStore(start int64, verifyCRC bool, k int, offset
 }
 
 func (f *File) groupedFrameCacheStats() (hits, misses uint64, entries, capacity int) {
-	f.cacheMu.Lock()
-	defer f.cacheMu.Unlock()
-	return f.groupedFrameCacheHits, f.groupedFrameCacheMisses, len(f.groupedFrameCache), f.groupedFrameCacheEntries
+	f.cacheMu.RLock()
+	defer f.cacheMu.RUnlock()
+	return f.groupedFrameCacheHits.Load(), f.groupedFrameCacheMisses.Load(), len(f.groupedFrameCache), f.groupedFrameCacheEntries
 }
 
 func (f *File) setGroupedFrameCacheMaxRawBytes(maxRaw int) {
@@ -443,8 +443,8 @@ func (f *File) setGroupedFrameCacheMaxRawBytes(maxRaw int) {
 	}
 	f.clearGroupedFrameCacheLocked()
 	f.groupedFrameCacheMaxRaw = maxRaw
-	f.groupedFrameCacheHits = 0
-	f.groupedFrameCacheMisses = 0
+	f.groupedFrameCacheHits.Store(0)
+	f.groupedFrameCacheMisses.Store(0)
 }
 
 func (f *File) Close() error {
@@ -884,14 +884,14 @@ func (f *File) ReadAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte
 
 		// Cache hit?
 		if f.cacheStart.Load() == start {
-			f.cacheMu.Lock()
+			f.cacheMu.RLock()
 			hit := f.cacheStart.Load() == start && f.cacheK > 0 && f.cacheLen > 0 && subIndex < f.cacheK && f.cacheFlags&FrameFlagCompressed == 0
 			if hit {
 				prefixLen := f.cacheLen
 				valStart := f.cacheOffs[subIndex]
 				valEnd := f.cacheOffs[subIndex+1]
 				rawLen := f.cacheOffs[f.cacheK]
-				f.cacheMu.Unlock()
+				f.cacheMu.RUnlock()
 
 				if valEnd < valStart || valEnd > rawLen {
 					return nil, ErrCorrupt
@@ -902,7 +902,7 @@ func (f *File) ReadAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte
 
 				return f.appendPayloadFromFile(dst, frameOff+int64(prefixLen)+int64(valStart), int(valEnd-valStart))
 			}
-			f.cacheMu.Unlock()
+			f.cacheMu.RUnlock()
 		}
 
 		// Cache miss: read frame header to get k/flags, then read full prefix.
