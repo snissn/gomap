@@ -208,10 +208,17 @@ func (s *leafPageReadCacheSlot) observeReadMissCandidate(fp uint64) (epoch uint6
 			}
 			continue
 		}
+		if s.readMissEpoch.Load() != epoch {
+			continue
+		}
 		if s.readMissCandidateFP.CompareAndSwap(candidate, fp) {
-			if s.readMissEpoch.Load() == epoch {
+			currentEpoch := s.readMissEpoch.Load()
+			if currentEpoch == epoch {
 				return epoch, false
 			}
+			// If the epoch moved while this CAS raced, best-effort restore the
+			// prior candidate so a stale CAS cannot publish fp into the newer epoch.
+			s.readMissCandidateFP.CompareAndSwap(fp, candidate)
 		}
 	}
 }
