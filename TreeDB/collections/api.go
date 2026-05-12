@@ -2839,6 +2839,9 @@ func (c *Collection) Insert(id, document []byte) ([]byte, error) {
 		return nil, errCollectionDBNil
 	}
 	if len(c.meta.Indexes) == 0 {
+		if c.canBufferNoIndexInsertBatchAck() && isBSONDocumentFormat(c.meta.Options.DocumentFormat) {
+			return c.insertOneNoIndexBSONBuffered(id, document)
+		}
 		if c.hasBufferedNoIndexBSONRootRuns() {
 			if err := c.withMutationLock(func() error {
 				return c.flushBufferedWrites()
@@ -7172,6 +7175,26 @@ func (c *Collection) insertOneViaBatch(id, document []byte) ([]byte, error) {
 	return ids[0], nil
 }
 
+func (c *Collection) insertOneNoIndexBSONBuffered(id, document []byte) ([]byte, error) {
+	unlockMutation := c.lockMutation()
+	mutationLocked := true
+	ids, err := c.insertBatchOnceWithLockState(
+		[][]byte{id},
+		[][]byte{document},
+		false,
+		nil,
+		&unlockMutation,
+		&mutationLocked,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if len(ids) != 1 {
+		return nil, errors.New("collections: insert returned no document id")
+	}
+	return ids[0], nil
+}
+
 // InsertBatch adds a batch of documents and returns the stored document IDs.
 //
 // Under the collection WAL target contract, WAL-on success makes the whole
@@ -7233,10 +7256,20 @@ func retryInsertBatchMutation(run func() ([][]byte, error)) ([][]byte, error) {
 func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON bool, templateEncoder *TemplateV1Encoder) ([][]byte, error) {
 	unlockMutation := c.lockMutation()
 	mutationLocked := true
+	return c.insertBatchOnceWithLockState(ids, documents, trustedValidBSON, templateEncoder, &unlockMutation, &mutationLocked)
+}
+
+func (c *Collection) insertBatchOnceWithLockState(
+	ids, documents [][]byte,
+	trustedValidBSON bool,
+	templateEncoder *TemplateV1Encoder,
+	unlockMutation *collectionMutationUnlock,
+	mutationLocked *bool,
+) ([][]byte, error) {
 	unlockIfLocked := func() {
-		if mutationLocked {
+		if mutationLocked != nil && *mutationLocked && unlockMutation != nil {
 			unlockMutation.Unlock()
-			mutationLocked = false
+			*mutationLocked = false
 		}
 	}
 	defer unlockIfLocked()
@@ -7464,7 +7497,7 @@ func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON b
 			resetCollectionRunTables(plan.runs)
 			return nil, err
 		}
-		pin, currentCatalog, pinCommitSeq, pinSystemRoot, err := c.lockAndValidateInsertBatchPlan(&mutationLocked, &unlockMutation, snap, catalog, meta, rootNames, baseRootIDs, plan)
+		pin, currentCatalog, pinCommitSeq, pinSystemRoot, err := c.lockAndValidateInsertBatchPlan(mutationLocked, unlockMutation, snap, catalog, meta, rootNames, baseRootIDs, plan)
 		if err != nil {
 			resetCollectionRunTables(plan.runs)
 			return nil, err
@@ -7486,7 +7519,7 @@ func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON b
 		return nil, err
 	}
 
-	pin, currentCatalog, pinCommitSeq, pinSystemRoot, err := c.lockAndValidateInsertBatchPlan(&mutationLocked, &unlockMutation, snap, catalog, meta, rootNames, baseRootIDs, plan)
+	pin, currentCatalog, pinCommitSeq, pinSystemRoot, err := c.lockAndValidateInsertBatchPlan(mutationLocked, unlockMutation, snap, catalog, meta, rootNames, baseRootIDs, plan)
 	if err != nil {
 		resetCollectionRunTables(plan.runs)
 		return nil, err
