@@ -468,6 +468,7 @@ func (s *Snapshot) GetAppend(key, dst []byte) ([]byte, error) {
 	if s == nil {
 		return dst, tree.ErrKeyNotFound
 	}
+	publishedRoots := s.publishedRoots
 
 	snap := rootDomainSnapshotFromCachedSnapshot(s, key)
 	origDst := dst
@@ -494,7 +495,7 @@ func (s *Snapshot) GetAppend(key, dst []byte) ([]byte, error) {
 			return dst, err
 		}
 		checkedPublishedEntry = true
-		if shouldShortCircuitPublishedAppendMiss(true, s.publishedRoots, snap) {
+		if shouldShortCircuitPublishedAppendMiss(true, publishedRoots, snap) {
 			// Published backend append miss already probed the relevant root.
 			return dst, tree.ErrKeyNotFound
 		}
@@ -507,7 +508,7 @@ func (s *Snapshot) GetAppend(key, dst []byte) ([]byte, error) {
 			return out, err
 		}
 	}
-	if shouldShortCircuitPublishedAppendMiss(checkedPublishedEntry, s.publishedRoots, snap) {
+	if shouldShortCircuitPublishedAppendMiss(checkedPublishedEntry, publishedRoots, snap) {
 		// Backend-published append misses already queried the target root:
 		// - root-bound lookups (publishedRootID != 0) must not fall back to
 		//   default-root GetAppend, which can cross root domains.

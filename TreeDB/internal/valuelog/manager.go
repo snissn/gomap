@@ -349,6 +349,7 @@ func (f *File) groupedFrameCacheReadTo(start int64, verifyCRC bool, subIndex int
 			// entry eviction/reuse after unlock.
 			encoded := append([]byte(nil), val...)
 			f.cacheMu.RUnlock()
+			f.groupedFrameCacheTouch(start, verifyCRC, i)
 			countHit = true
 			decoded, decErr := templ.DecodePayloadAppend(nil, encoded, func(id uint64) (templ.TemplateDef, error) {
 				return resolveTemplateDef(id, f.templateLookup, f.templateDefCache)
@@ -362,18 +363,34 @@ func (f *File) groupedFrameCacheReadTo(start int64, verifyCRC bool, subIndex int
 			out := dst[:len(val)]
 			copy(out, val)
 			f.cacheMu.RUnlock()
+			f.groupedFrameCacheTouch(start, verifyCRC, i)
 			countHit = true
 			return out, true, nil, true
 		}
 		out := make([]byte, len(val))
 		copy(out, val)
 		f.cacheMu.RUnlock()
+		f.groupedFrameCacheTouch(start, verifyCRC, i)
 		countHit = true
 		return out, false, nil, true
 	}
 	f.cacheMu.RUnlock()
 	countMiss = true
 	return nil, false, nil, false
+}
+
+func (f *File) groupedFrameCacheTouch(start int64, verifyCRC bool, idx int) {
+	f.cacheMu.Lock()
+	defer f.cacheMu.Unlock()
+	if idx < 0 || idx >= len(f.groupedFrameCache) {
+		return
+	}
+	e := &f.groupedFrameCache[idx]
+	if e.k <= 0 || e.start != start || e.verifyCRC != verifyCRC {
+		return
+	}
+	f.groupedFrameCacheClock++
+	e.used = f.groupedFrameCacheClock
 }
 
 func (f *File) groupedFrameCacheStore(start int64, verifyCRC bool, k int, offsets [MaxFrameK + 1]uint32, raw []byte, pooled bool) bool {
