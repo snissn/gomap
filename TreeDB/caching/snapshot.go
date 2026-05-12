@@ -330,10 +330,14 @@ func (s *Snapshot) getAppendFromEntryWithSource(snap rootDomainSnapshot, key, ds
 		return dst, true, tree.ErrKeyNotFound
 	}
 	if flags&node.FlagPointer != 0 {
-		if s.db == nil {
+		var valueLogDB *DB
+		if s != nil {
+			valueLogDB = s.db
+		}
+		if valueLogDB == nil {
 			return dst, true, errors.New("caching snapshot: value-log reader unavailable")
 		}
-		out, err := s.db.readValueLogAppend(key, ptr, dst)
+		out, err := valueLogDB.readValueLogAppend(key, ptr, dst)
 		if err != nil {
 			return dst, true, err
 		}
@@ -481,6 +485,10 @@ func (s *Snapshot) GetAppend(key, dst []byte) ([]byte, error) {
 			return dst, err
 		}
 		checkedPublishedEntry = true
+		if shouldShortCircuitPublishedAppendMiss(true, s.publishedRoots, snap) {
+			// Published backend append miss already probed the relevant root.
+			return dst, tree.ErrKeyNotFound
+		}
 		if out, found, err := s.getAppendFromEntryWithSource(snap, key, dst, oldLen); found {
 			return out, err
 		}
