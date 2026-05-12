@@ -7176,16 +7176,18 @@ func (c *Collection) insertOneViaBatch(id, document []byte) ([]byte, error) {
 }
 
 func (c *Collection) insertOneNoIndexBSONBuffered(id, document []byte) ([]byte, error) {
-	unlockMutation := c.lockMutation()
-	mutationLocked := true
-	ids, err := c.insertBatchOnceWithLockState(
-		[][]byte{id},
-		[][]byte{document},
-		false,
-		nil,
-		&unlockMutation,
-		&mutationLocked,
-	)
+	ids, err := retryInsertBatchMutation(func() ([][]byte, error) {
+		unlockMutation := c.lockMutation()
+		mutationLocked := true
+		return c.insertBatchOnceWithLockState(
+			[][]byte{id},
+			[][]byte{document},
+			false,
+			nil,
+			&unlockMutation,
+			&mutationLocked,
+		)
+	})
 	if err != nil {
 		return nil, err
 	}
