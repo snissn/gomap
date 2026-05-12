@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -373,6 +374,116 @@ func TestValueReaderLeafLogPageUnsafeToAdmitsRepeatedReadMiss(t *testing.T) {
 	}
 	if stats := cache.stats(); stats.Hits != 1 || stats.Misses != 2 || stats.Stores != 1 {
 		t.Fatalf("stats=%+v, want two misses, one admitted store, one hit", stats)
+	}
+}
+
+func TestLeafPageReadCacheReadMissCandidateEpochPreventsStaleAdmission(t *testing.T) {
+	cache := newLeafPageReadCache(1)
+	slot := &cache.slots[0]
+	keyA := newLeafPageReadCacheKey(page.LeafLogPtr{FileID: 7, Offset: 128, RecordLengthHint: 4096})
+	keyB := newLeafPageReadCacheKey(page.LeafLogPtr{FileID: 9, Offset: 512, RecordLengthHint: 4096})
+	fpA := leafPageReadMissFingerprint(keyA)
+
+	slot.readMissCandidateFP.Store(readMissCandidateToken(fpA, slot.readMissEpoch.Load()))
+	epochBefore, repeated := slot.observeReadMissCandidate(fpA)
+	if !repeated {
+		t.Fatal("expected matching candidate to be treated as repeated miss")
+	}
+
+	slot.mu.Lock()
+	_ = slot.storeLocked(keyB, bytes.Repeat([]byte{0x61}, page.PageSize))
+	slot.mu.Unlock()
+
+	epochAfterReset, repeated := slot.observeReadMissCandidate(fpA)
+	if repeated {
+		t.Fatal("expected first post-reset miss to be non-repeated")
+	}
+	if epochAfterReset == epochBefore {
+		t.Fatalf("read miss epoch did not advance after reset: before=%d after=%d", epochBefore, epochAfterReset)
+	}
+	if slot.readMissCandidateStillCurrent(fpA, epochBefore) {
+		t.Fatal("stale pre-reset candidate unexpectedly considered current")
+	}
+	if !slot.readMissCandidateStillCurrent(fpA, epochAfterReset) {
+		t.Fatal("fresh post-reset candidate should be current")
+	}
+}
+
+func TestLeafPageReadCacheReadMissCandidateEpochTokenRejectsStaleCAS(t *testing.T) {
+	cache := newLeafPageReadCache(1)
+	slot := &cache.slots[0]
+	keyA := newLeafPageReadCacheKey(page.LeafLogPtr{FileID: 11, Offset: 64, RecordLengthHint: 4096})
+	keyB := newLeafPageReadCacheKey(page.LeafLogPtr{FileID: 12, Offset: 96, RecordLengthHint: 4096})
+	fpA := leafPageReadMissFingerprint(keyA)
+	fpB := leafPageReadMissFingerprint(keyB)
+	oldEpoch := slot.readMissEpoch.Load()
+	oldTokenA := readMissCandidateToken(fpA, oldEpoch)
+	oldTokenB := readMissCandidateToken(fpB, oldEpoch)
+
+	slot.readMissCandidateFP.Store(oldTokenA)
+
+	slot.mu.Lock()
+	slot.resetReadMissCandidateLocked()
+	slot.mu.Unlock()
+
+	newEpoch := slot.readMissEpoch.Load()
+	if newEpoch == oldEpoch {
+		t.Fatalf("epoch did not advance across reset: old=%d new=%d", oldEpoch, newEpoch)
+	}
+	newTokenA := readMissCandidateToken(fpA, newEpoch)
+	if newTokenA == oldTokenA {
+		t.Fatalf("candidate token unexpectedly reused across epochs: epoch=%d token=%d", newEpoch, newTokenA)
+	}
+
+	observedEpoch, repeated := slot.observeReadMissCandidate(fpA)
+	if repeated {
+		t.Fatal("expected first post-reset miss for key A to be non-repeated")
+	}
+	if observedEpoch != newEpoch {
+		t.Fatalf("observeReadMissCandidate epoch=%d, want %d", observedEpoch, newEpoch)
+	}
+	if got := slot.readMissCandidateFP.Load(); got != newTokenA {
+		t.Fatalf("post-reset candidate token=%d, want %d", got, newTokenA)
+	}
+
+	// Simulate a stale observer from oldEpoch trying to publish into newEpoch.
+	if slot.readMissCandidateFP.CompareAndSwap(oldTokenA, oldTokenB) {
+		t.Fatal("stale epoch compare-and-swap unexpectedly succeeded")
+	}
+	if got := slot.readMissCandidateFP.Load(); got != newTokenA {
+		t.Fatalf("candidate token changed after stale CAS: got=%d want=%d", got, newTokenA)
+	}
+}
+
+func TestLeafPageReadCacheReadMissCandidateOddEpochSpinBound(t *testing.T) {
+	cache := newLeafPageReadCache(1)
+	slot := &cache.slots[0]
+	key := newLeafPageReadCacheKey(page.LeafLogPtr{FileID: 13, Offset: 4096, RecordLengthHint: 4096})
+	fp := leafPageReadMissFingerprint(key)
+	slot.readMissEpoch.Store(1) // odd epoch simulates reset in progress
+
+	type result struct {
+		epoch    uint64
+		repeated bool
+	}
+	done := make(chan result, 1)
+	go func() {
+		epoch, repeated := slot.observeReadMissCandidate(fp)
+		done <- result{epoch: epoch, repeated: repeated}
+	}()
+
+	timer := time.NewTimer(2 * time.Second)
+	defer timer.Stop()
+	select {
+	case got := <-done:
+		if got.repeated {
+			t.Fatal("odd-epoch spin bound should return non-repeated miss")
+		}
+		if got.epoch&1 == 0 {
+			t.Fatalf("observeReadMissCandidate epoch=%d, want odd epoch while reset is in progress", got.epoch)
+		}
+	case <-timer.C:
+		t.Fatal("observeReadMissCandidate did not return under sustained odd-epoch contention")
 	}
 }
 
