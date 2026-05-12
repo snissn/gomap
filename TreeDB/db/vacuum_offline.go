@@ -115,11 +115,13 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) error {
 		return err
 	}
 
+	effectiveInternalBaseDelta := opts.IndexInternalBaseDelta && !opts.IndexOuterLeavesInValueLog
+
 	buildOpts := bulk.BuildOptions{
 		LeafPrefixCompression: opts.LeafPrefixCompression,
 		LeafColumnar:          opts.IndexColumnarLeaves,
 		PackedValuePtr:        opts.IndexPackedValuePtr,
-		InternalBaseDelta:     opts.IndexInternalBaseDelta,
+		InternalBaseDelta:     effectiveInternalBaseDelta,
 	}
 	sysRoot, err := vacuumBuildSystemRoot(d.Pager(), reader, state.SystemRootPageID, alloc, newPager, buildOpts, collectionRootReplacements)
 	if err != nil {
@@ -128,14 +130,50 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) error {
 		return err
 	}
 
-	userIter := tree.New(d.Pager(), reader, state.RootPageID).
-		IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
-	userRoot, err := bulk.BuildWithOptions(userIter, alloc, newPager, buildOpts)
-	_ = userIter.Close()
-	if err != nil {
-		_ = newPager.Close()
-		_ = d.Close()
-		return err
+	var userRoot uint64
+	if opts.IndexOuterLeavesInValueLog {
+		rootData, err := d.Pager().Get(state.RootPageID)
+		if err != nil {
+			_ = newPager.Close()
+			_ = d.Close()
+			return err
+		}
+		rootNode := node.NewNode(rootData)
+		if rootNode.Type() == page.PageTypeLeaf {
+			userRoot, err = vacuumClonePagerTreeWithLeafRefs(d.Pager(), state.RootPageID, alloc, newPager, effectiveInternalBaseDelta)
+			if err != nil {
+				_ = newPager.Close()
+				_ = d.Close()
+				return err
+			}
+		} else {
+			leafChildren, allLeafRefs, err := vacuumCollectLeafRefChildrenIfComplete(d.Pager(), state.RootPageID)
+			if err != nil {
+				_ = newPager.Close()
+				_ = d.Close()
+				return err
+			}
+			if allLeafRefs {
+				userRoot, err = vacuumBuildInternalTreeFromChildren(newPager, alloc, leafChildren, effectiveInternalBaseDelta)
+			} else {
+				userRoot, err = vacuumClonePagerTreeWithLeafRefs(d.Pager(), state.RootPageID, alloc, newPager, effectiveInternalBaseDelta)
+			}
+			if err != nil {
+				_ = newPager.Close()
+				_ = d.Close()
+				return err
+			}
+		}
+	} else {
+		userIter := tree.New(d.Pager(), reader, state.RootPageID).
+			IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
+		userRoot, err = bulk.BuildWithOptions(userIter, alloc, newPager, buildOpts)
+		_ = userIter.Close()
+		if err != nil {
+			_ = newPager.Close()
+			_ = d.Close()
+			return err
+		}
 	}
 
 	meta := d.meta

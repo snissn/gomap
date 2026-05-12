@@ -197,10 +197,12 @@ func TestVacuumIndexOffline_LeafPagesInValueLog_ReopenParity(t *testing.T) {
 	if err := treedb.VacuumIndexOffline(treedb.Options{Dir: dir, KeepRecent: 1}); err != nil {
 		t.Fatalf("VacuumIndexOffline: %v", err)
 	}
-	for _, path := range leafPathsBefore {
-		if _, err := os.Stat(path); !os.IsNotExist(err) {
-			t.Fatalf("stale leaf_vlog file %s still exists or stat failed: %v", path, err)
-		}
+	leafPathsAfter, err := filepath.Glob(filepath.Join(mainDir, "leaf_vlog", "value-l*.log"))
+	if err != nil {
+		t.Fatalf("glob leaf_vlog after vacuum: %v", err)
+	}
+	if len(leafPathsAfter) == 0 {
+		t.Fatalf("expected leaf_vlog files after vacuum")
 	}
 
 	reopen, err := treedb.Open(opts)
