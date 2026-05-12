@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -451,6 +452,36 @@ func TestLeafPageReadCacheReadMissCandidateEpochTokenRejectsStaleCAS(t *testing.
 	}
 	if got := slot.readMissCandidateFP.Load(); got != newTokenA {
 		t.Fatalf("candidate token changed after stale CAS: got=%d want=%d", got, newTokenA)
+	}
+}
+
+func TestLeafPageReadCacheReadMissCandidateOddEpochSpinBound(t *testing.T) {
+	cache := newLeafPageReadCache(1)
+	slot := &cache.slots[0]
+	key := newLeafPageReadCacheKey(page.LeafLogPtr{FileID: 13, Offset: 4096, RecordLengthHint: 4096})
+	fp := leafPageReadMissFingerprint(key)
+	slot.readMissEpoch.Store(1) // odd epoch simulates reset in progress
+
+	type result struct {
+		epoch    uint64
+		repeated bool
+	}
+	done := make(chan result, 1)
+	go func() {
+		epoch, repeated := slot.observeReadMissCandidate(fp)
+		done <- result{epoch: epoch, repeated: repeated}
+	}()
+
+	select {
+	case got := <-done:
+		if got.repeated {
+			t.Fatal("odd-epoch spin bound should return non-repeated miss")
+		}
+		if got.epoch&1 == 0 {
+			t.Fatalf("observeReadMissCandidate epoch=%d, want odd epoch while reset is in progress", got.epoch)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("observeReadMissCandidate did not return under sustained odd-epoch contention")
 	}
 }
 

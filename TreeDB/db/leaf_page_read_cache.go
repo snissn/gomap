@@ -17,7 +17,11 @@ const (
 	leafPageReadCacheEntriesEnvKey  = "TREEDB_LEAF_PAGE_CACHE_ENTRIES"
 	defaultLeafPageReadCacheEntries = 4096
 	maxLeafPageReadCacheEntries     = 1 << 18
-	maxReadMissOddEpochSpins        = 64
+	// Bound miss-admission observer retries so high contention yields a skipped
+	// admission instead of unbounded reader spinning. 64 odd-epoch yields cover
+	// transient reset windows; 256 stable-epoch retries bound CAS churn.
+	maxReadMissOddEpochSpins    = 64
+	maxReadMissStableEpochSpins = 256
 )
 
 var LeafPageReadCacheEntries = defaultLeafPageReadCacheEntries
@@ -201,6 +205,7 @@ func (s *leafPageReadCacheSlot) storeLocked(key leafPageReadCacheKey, leafPage [
 
 func (s *leafPageReadCacheSlot) observeReadMissCandidate(fp uint64) (epoch uint64, repeated bool) {
 	oddEpochSpins := 0
+	stableEpochSpins := 0
 	for {
 		epoch = s.readMissEpoch.Load()
 		if epoch&1 != 0 {
@@ -219,18 +224,22 @@ func (s *leafPageReadCacheSlot) observeReadMissCandidate(fp uint64) (epoch uint6
 			if s.readMissEpoch.Load() == epoch {
 				return epoch, true
 			}
-			continue
-		}
-		if s.readMissEpoch.Load() != epoch {
-			continue
-		}
-		if s.readMissCandidateFP.CompareAndSwap(candidate, candidateToken) {
-			if s.readMissEpoch.Load() == epoch {
-				return epoch, false
+		} else if s.readMissEpoch.Load() == epoch {
+			if s.readMissCandidateFP.CompareAndSwap(candidate, candidateToken) {
+				if s.readMissEpoch.Load() == epoch {
+					return epoch, false
+				}
+				// Epoch-scoped tokens fence stale publishes: even if this CAS raced
+				// with reset and landed in a newer epoch, token mismatch prevents
+				// first-miss admission in the newer epoch.
 			}
-			// Epoch-scoped tokens fence stale publishes: even if this CAS raced with
-			// reset and landed in a newer epoch, token mismatch prevents first-miss
-			// admission in the newer epoch.
+		}
+		stableEpochSpins++
+		if stableEpochSpins >= maxReadMissStableEpochSpins {
+			return epoch, false
+		}
+		if stableEpochSpins&15 == 0 {
+			runtime.Gosched()
 		}
 	}
 }
