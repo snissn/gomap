@@ -82,32 +82,25 @@ func (p *publishedBackendLookupMissCounter) GetValueUnsafe(_ []byte) ([]byte, er
 
 func newSnapshotGetAppendBackendFixture(t *testing.T, seedKey, seedValue []byte) (*DB, *db.Snapshot, func()) {
 	t.Helper()
-	dir, err := os.MkdirTemp("", "treedb-snapshot-getappend-fixture-")
-	if err != nil {
-		t.Fatal(err)
-	}
+	dir := t.TempDir()
 	backend, err := db.Open(db.Options{Dir: dir})
 	if err != nil {
-		_ = os.RemoveAll(dir)
 		t.Fatal(err)
 	}
 	cached, err := Open(dir, backend, Options{FlushThreshold: 1024 * 1024})
 	if err != nil {
 		_ = backend.Close()
-		_ = os.RemoveAll(dir)
 		t.Fatal(err)
 	}
 	if seedKey != nil {
 		if err := cached.SetSync(seedKey, seedValue); err != nil {
 			_ = cached.Close()
 			_ = backend.Close()
-			_ = os.RemoveAll(dir)
 			t.Fatalf("SetSync: %v", err)
 		}
 		if err := cached.Checkpoint(); err != nil {
 			_ = cached.Close()
 			_ = backend.Close()
-			_ = os.RemoveAll(dir)
 			t.Fatalf("Checkpoint: %v", err)
 		}
 	}
@@ -115,14 +108,13 @@ func newSnapshotGetAppendBackendFixture(t *testing.T, seedKey, seedValue []byte)
 	if backendSnap == nil {
 		_ = cached.Close()
 		_ = backend.Close()
-		_ = os.RemoveAll(dir)
 		t.Fatal("AcquireSnapshot=nil")
 	}
 	cleanup := func() {
+		// backendSnap ownership stays with this fixture cleanup.
 		_ = backendSnap.Close()
 		_ = cached.Close()
 		_ = backend.Close()
-		_ = os.RemoveAll(dir)
 	}
 	return cached, backendSnap, cleanup
 }
@@ -431,8 +423,6 @@ func TestSnapshotGetAppend_PublishedMissFallsBackToBackend(t *testing.T) {
 			pointShards: []publishedRootRef{{lookup: published, rootID: 1}},
 		},
 	}
-	defer func() { _ = snap.Close() }()
-
 	got, err := snap.GetAppend([]byte("k"), nil)
 	if err != nil {
 		t.Fatalf("GetAppend(k): %v", err)
@@ -457,8 +447,6 @@ func TestSnapshotGetAppend_PublishedMissFallbackTruncatesDst(t *testing.T) {
 			pointShards: []publishedRootRef{{lookup: published, rootID: 1}},
 		},
 	}
-	defer func() { _ = snap.Close() }()
-
 	got, err := snap.GetAppend([]byte("k"), []byte("prefix:"))
 	if err != nil {
 		t.Fatalf("GetAppend(k): %v", err)
@@ -483,8 +471,6 @@ func TestSnapshotGetAppend_PublishedMissFallbackHandlesShortErrorOutput(t *testi
 			pointShards: []publishedRootRef{{lookup: published, rootID: 1}},
 		},
 	}
-	defer func() { _ = snap.Close() }()
-
 	got, err := snap.GetAppend([]byte("k"), []byte("prefix:"))
 	if err != nil {
 		t.Fatalf("GetAppend(k): %v", err)
@@ -502,8 +488,6 @@ func TestSnapshotGetAppend_BackendLookupMissWithoutPublishedRootsReturnsNotFound
 		db:      cached,
 		backend: backendSnap,
 	}
-	defer func() { _ = snap.Close() }()
-
 	_, err := snap.GetAppend([]byte("missing"), []byte("prefix:"))
 	if !errors.Is(err, tree.ErrKeyNotFound) {
 		t.Fatalf("GetAppend(missing) err=%v want ErrKeyNotFound", err)
@@ -579,11 +563,7 @@ func TestSnapshotGet_PublishedEmptyInlineValueReturnsNil(t *testing.T) {
 }
 
 func TestSnapshotGetAppend_RootBoundPublishedMissDoesNotFallbackToDefaultRoot(t *testing.T) {
-	dir, err := os.MkdirTemp("", "treedb-snapshot-getappend-root-bound-miss-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(dir)
+	dir := t.TempDir()
 
 	backend, err := db.Open(db.Options{Dir: dir})
 	if err != nil {
