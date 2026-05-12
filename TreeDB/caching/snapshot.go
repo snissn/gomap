@@ -460,8 +460,9 @@ func (s *Snapshot) GetAppend(key, dst []byte) ([]byte, error) {
 		return append(dst, val...), nil
 	}
 	snap := rootDomainSnapshotFromCachedSnapshot(s, key)
-	// backendSnapshotLookup (used when no published root set is pinned) flushes
-	// value-log state before serving backend snapshot reads.
+	// backendSnapshotLookup (used when a published ref falls back to backend
+	// snapshot lookup) flushes value-log state before backend snapshot reads.
+	publishedRoots := s.publishedRoots
 	origDst := dst
 	oldLen := len(dst)
 	out, ok, err := rootDomainPublishedGetAppend(snap, key, dst)
@@ -486,7 +487,7 @@ func (s *Snapshot) GetAppend(key, dst []byte) ([]byte, error) {
 			return dst, err
 		}
 		checkedPublishedEntry = true
-		if shouldShortCircuitPublishedAppendMiss(true, s.publishedRoots, snap) {
+		if shouldShortCircuitPublishedAppendMiss(true, publishedRoots, snap) {
 			// Published backend append miss already probed the relevant root.
 			return dst, tree.ErrKeyNotFound
 		}
@@ -499,10 +500,6 @@ func (s *Snapshot) GetAppend(key, dst []byte) ([]byte, error) {
 			return out, err
 		}
 	}
-	var publishedRoots *publishedRootSet
-	if s != nil {
-		publishedRoots = s.publishedRoots
-	}
 	if shouldShortCircuitPublishedAppendMiss(checkedPublishedEntry, publishedRoots, snap) {
 		// rootDomainSnapshotFromCachedSnapshot() installs backendSnapshotLookup as
 		// the published lookup when no published root set is pinned. A not-found
@@ -512,7 +509,7 @@ func (s *Snapshot) GetAppend(key, dst []byte) ([]byte, error) {
 		return dst, tree.ErrKeyNotFound
 	}
 
-	if s == nil || s.backend == nil || s.db == nil {
+	if s.backend == nil || s.db == nil {
 		return dst, tree.ErrKeyNotFound
 	}
 	if err := s.db.flushValueLogForBackendRead(); err != nil {
