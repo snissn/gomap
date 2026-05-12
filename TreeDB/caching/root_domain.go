@@ -692,6 +692,8 @@ type backendSnapshotLookup struct {
 	rootID   uint64
 }
 
+func (backendSnapshotLookup) rootDomainPublishedBackendLookupMarker() {}
+
 func (l backendSnapshotLookup) GetEntry(key []byte) (val []byte, ptr page.ValuePtr, flags byte, found bool) {
 	if l.snapshot == nil {
 		return nil, page.ValuePtr{}, 0, false

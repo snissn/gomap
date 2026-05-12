@@ -280,6 +280,10 @@ type rootDomainPublishedValueLookup interface {
 	GetValueUnsafe(key []byte) ([]byte, error)
 }
 
+type rootDomainPublishedBackendLookupMarker interface {
+	rootDomainPublishedBackendLookupMarker()
+}
+
 func rootDomainPublishedGetAppend(snap rootDomainSnapshot, key, dst []byte) ([]byte, bool, error) {
 	if snap.published == nil {
 		return dst, false, nil
@@ -302,6 +306,19 @@ func rootDomainPublishedGetUnsafe(snap rootDomainSnapshot, key []byte) ([]byte, 
 	}
 	out, err := lookup.GetValueUnsafe(key)
 	return out, true, err
+}
+
+func rootDomainPublishedUsesBackendLookup(snap rootDomainSnapshot) bool {
+	lookup, ok := snap.published.(rootDomainPublishedValueLookup)
+	if !ok {
+		return false
+	}
+	_, ok = lookup.(rootDomainPublishedBackendLookupMarker)
+	return ok
+}
+
+func shouldShortCircuitPublishedAppendMiss(checkedPublishedEntry bool, publishedRoots *publishedRootSet, snap rootDomainSnapshot) bool {
+	return checkedPublishedEntry && publishedRoots == nil && rootDomainPublishedUsesBackendLookup(snap)
 }
 
 func (s *Snapshot) getAppendFromEntryWithSource(snap rootDomainSnapshot, key, dst []byte, oldLen int) ([]byte, bool, error) {
@@ -470,7 +487,7 @@ func (s *Snapshot) GetAppend(key, dst []byte) ([]byte, error) {
 			return out, err
 		}
 	}
-	if checkedPublishedEntry && s.publishedRoots == nil {
+	if shouldShortCircuitPublishedAppendMiss(checkedPublishedEntry, s.publishedRoots, snap) {
 		// rootDomainSnapshotFromCachedSnapshot() installs backendSnapshotLookup as
 		// the published lookup when no published root set is pinned. A not-found
 		// from that lookup already queried the backend snapshot, so avoid an extra
