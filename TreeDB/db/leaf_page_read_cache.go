@@ -201,8 +201,9 @@ func (s *leafPageReadCacheSlot) observeReadMissCandidate(fp uint64) (epoch uint6
 			// Writer is resetting this slot's admission candidate.
 			continue
 		}
+		candidateToken := readMissCandidateToken(fp, epoch)
 		candidate := s.readMissCandidateFP.Load()
-		if candidate == fp {
+		if candidate == candidateToken {
 			if s.readMissEpoch.Load() == epoch {
 				return epoch, true
 			}
@@ -211,14 +212,13 @@ func (s *leafPageReadCacheSlot) observeReadMissCandidate(fp uint64) (epoch uint6
 		if s.readMissEpoch.Load() != epoch {
 			continue
 		}
-		if s.readMissCandidateFP.CompareAndSwap(candidate, fp) {
-			currentEpoch := s.readMissEpoch.Load()
-			if currentEpoch == epoch {
+		if s.readMissCandidateFP.CompareAndSwap(candidate, candidateToken) {
+			if s.readMissEpoch.Load() == epoch {
 				return epoch, false
 			}
-			// If the epoch moved while this CAS raced, best-effort restore the
-			// prior candidate so a stale CAS cannot publish fp into the newer epoch.
-			s.readMissCandidateFP.CompareAndSwap(fp, candidate)
+			// Epoch-scoped tokens fence stale publishes: even if this CAS raced with
+			// reset and landed in a newer epoch, token mismatch prevents first-miss
+			// admission in the newer epoch.
 		}
 	}
 }
@@ -227,7 +227,7 @@ func (s *leafPageReadCacheSlot) readMissCandidateStillCurrent(fp, epoch uint64) 
 	if epoch&1 != 0 {
 		return false
 	}
-	return s.readMissEpoch.Load() == epoch && s.readMissCandidateFP.Load() == fp
+	return s.readMissEpoch.Load() == epoch && s.readMissCandidateFP.Load() == readMissCandidateToken(fp, epoch)
 }
 
 func (s *leafPageReadCacheSlot) resetReadMissCandidateLocked() {
@@ -335,6 +335,15 @@ func leafPageReadMissFingerprint(key leafPageReadCacheKey) uint64 {
 		return 1
 	}
 	return h
+}
+
+func readMissCandidateToken(fp, epoch uint64) uint64 {
+	token := fp ^ (epoch * 0x9e3779b97f4a7c15)
+	if token == 0 {
+		// Keep zero reserved for "no candidate recorded".
+		return 1
+	}
+	return token
 }
 
 type cachedLeafPageReader struct {

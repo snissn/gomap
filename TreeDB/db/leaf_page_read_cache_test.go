@@ -383,7 +383,7 @@ func TestLeafPageReadCacheReadMissCandidateEpochPreventsStaleAdmission(t *testin
 	keyB := newLeafPageReadCacheKey(page.LeafLogPtr{FileID: 9, Offset: 512, RecordLengthHint: 4096})
 	fpA := leafPageReadMissFingerprint(keyA)
 
-	slot.readMissCandidateFP.Store(fpA)
+	slot.readMissCandidateFP.Store(readMissCandidateToken(fpA, slot.readMissEpoch.Load()))
 	epochBefore, repeated := slot.observeReadMissCandidate(fpA)
 	if !repeated {
 		t.Fatal("expected matching candidate to be treated as repeated miss")
@@ -405,6 +405,52 @@ func TestLeafPageReadCacheReadMissCandidateEpochPreventsStaleAdmission(t *testin
 	}
 	if !slot.readMissCandidateStillCurrent(fpA, epochAfterReset) {
 		t.Fatal("fresh post-reset candidate should be current")
+	}
+}
+
+func TestLeafPageReadCacheReadMissCandidateEpochTokenRejectsStaleCAS(t *testing.T) {
+	cache := newLeafPageReadCache(1)
+	slot := &cache.slots[0]
+	keyA := newLeafPageReadCacheKey(page.LeafLogPtr{FileID: 11, Offset: 64, RecordLengthHint: 4096})
+	keyB := newLeafPageReadCacheKey(page.LeafLogPtr{FileID: 12, Offset: 96, RecordLengthHint: 4096})
+	fpA := leafPageReadMissFingerprint(keyA)
+	fpB := leafPageReadMissFingerprint(keyB)
+	oldEpoch := slot.readMissEpoch.Load()
+	oldTokenA := readMissCandidateToken(fpA, oldEpoch)
+	oldTokenB := readMissCandidateToken(fpB, oldEpoch)
+
+	slot.readMissCandidateFP.Store(oldTokenA)
+
+	slot.mu.Lock()
+	slot.resetReadMissCandidateLocked()
+	slot.mu.Unlock()
+
+	newEpoch := slot.readMissEpoch.Load()
+	if newEpoch == oldEpoch {
+		t.Fatalf("epoch did not advance across reset: old=%d new=%d", oldEpoch, newEpoch)
+	}
+	newTokenA := readMissCandidateToken(fpA, newEpoch)
+	if newTokenA == oldTokenA {
+		t.Fatalf("candidate token unexpectedly reused across epochs: epoch=%d token=%d", newEpoch, newTokenA)
+	}
+
+	observedEpoch, repeated := slot.observeReadMissCandidate(fpA)
+	if repeated {
+		t.Fatal("expected first post-reset miss for key A to be non-repeated")
+	}
+	if observedEpoch != newEpoch {
+		t.Fatalf("observeReadMissCandidate epoch=%d, want %d", observedEpoch, newEpoch)
+	}
+	if got := slot.readMissCandidateFP.Load(); got != newTokenA {
+		t.Fatalf("post-reset candidate token=%d, want %d", got, newTokenA)
+	}
+
+	// Simulate a stale observer from oldEpoch trying to publish into newEpoch.
+	if slot.readMissCandidateFP.CompareAndSwap(oldTokenA, oldTokenB) {
+		t.Fatal("stale epoch compare-and-swap unexpectedly succeeded")
+	}
+	if got := slot.readMissCandidateFP.Load(); got != newTokenA {
+		t.Fatalf("candidate token changed after stale CAS: got=%d want=%d", got, newTokenA)
 	}
 }
 
