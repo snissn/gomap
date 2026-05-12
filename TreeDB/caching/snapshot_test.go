@@ -350,3 +350,65 @@ func TestSnapshotGet_PublishedEmptyInlineValueReturnsNil(t *testing.T) {
 		t.Fatalf("Get(k)=%v want nil for empty value", got)
 	}
 }
+
+func TestSnapshotGetAppend_RootBoundPublishedMissDoesNotFallbackToDefaultRoot(t *testing.T) {
+	dir, err := os.MkdirTemp("", "treedb-snapshot-getappend-root-bound-miss-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+
+	backend, err := db.Open(db.Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer backend.Close()
+
+	cached, err := Open(dir, backend, Options{FlushThreshold: 1024 * 1024})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cached.Close()
+
+	if err := cached.SetSync([]byte("other"), []byte("v1")); err != nil {
+		t.Fatalf("SetSync(other): %v", err)
+	}
+	if err := cached.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint(other): %v", err)
+	}
+	rootMiss := backend.State().RootPageID
+	if rootMiss == 0 {
+		t.Fatal("rootMiss=0")
+	}
+	if err := cached.SetSync([]byte("k"), []byte("backend-v")); err != nil {
+		t.Fatalf("SetSync(k): %v", err)
+	}
+	if err := cached.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint(k): %v", err)
+	}
+	if backend.State().RootPageID == rootMiss {
+		t.Fatal("expected new default root after checkpoint")
+	}
+
+	backendSnap := backend.AcquireSnapshot()
+	if backendSnap == nil {
+		t.Fatal("AcquireSnapshot=nil")
+	}
+	publishedLookup := backendSnapshotLookup{db: cached, snapshot: backendSnap, rootID: rootMiss}
+	snap := &Snapshot{
+		db:      cached,
+		backend: backendSnap,
+		rootPointShards: []rootDomainSnapshot{
+			{publishedRootID: rootMiss, published: publishedLookup},
+		},
+		publishedRoots: &publishedRootSet{
+			pointShards: []publishedRootRef{{lookup: publishedLookup, rootID: rootMiss}},
+		},
+	}
+	defer func() { _ = snap.Close() }()
+
+	_, err = snap.GetAppend([]byte("k"), nil)
+	if !errors.Is(err, tree.ErrKeyNotFound) {
+		t.Fatalf("GetAppend(k) err=%v want ErrKeyNotFound", err)
+	}
+}

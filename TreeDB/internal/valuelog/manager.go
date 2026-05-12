@@ -332,6 +332,8 @@ func (f *File) groupedFrameCacheReadTo(start int64, verifyCRC bool, subIndex int
 		if valEnd < valStart || valEnd > rawLen || uint32(len(e.raw)) != rawLen {
 			continue
 		}
+		// Intentionally avoid touching cache recency on read hits: updating
+		// groupedFrameCacheClock under cacheMu adds write contention on this hot path.
 		f.groupedFrameCacheHits.Add(1)
 		val := e.raw[valStart:valEnd]
 		if f.templateLookup != nil && templ.IsEncodedPayload(val) {
