@@ -11806,7 +11806,7 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 	}
 	if primaryOnlyDirectUpdate && domain.count != 0 && !hasBufferedIndexedRootRuns(domain) {
 		plan.stats.BufferStageValidation += updateBatchStatsSince(detailedStats, phaseStart)
-		return false, nil
+		return false, ErrConcurrentMutation
 	}
 	if err := c.validateUpdateBatchPlanRootDescriptors(plan); err != nil {
 		plan.stats.BufferStageValidation += updateBatchStatsSince(detailedStats, phaseStart)
