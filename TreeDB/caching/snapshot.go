@@ -414,6 +414,12 @@ func (s *Snapshot) GetAppend(key, dst []byte) ([]byte, error) {
 	out, ok, err := rootDomainPublishedGetAppend(snap, key, dst)
 	checkedPublishedEntry := false
 	if ok {
+		if err != nil {
+			// Published append lookups should not leak partial dst appends across
+			// fallback paths when they report misses/errors.
+			out = out[:oldLen]
+			dst = out
+		}
 		if err == nil {
 			recordSnapshotRootDomainRead(rootDomainEntrySourcePublished, true, len(out)-oldLen)
 			return out, nil
