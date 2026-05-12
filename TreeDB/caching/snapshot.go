@@ -481,10 +481,19 @@ func (s *Snapshot) GetAppend(key, dst []byte) ([]byte, error) {
 		}
 	}
 	if checkedPublishedEntry {
-		if _, ok := snap.published.(backendSnapshotLookup); ok && snap.publishedRootID != 0 {
-			// The published lookup already queried this specific root via GetAppendAtRoot.
-			// Falling back to snapshot default-root GetAppend can cross root domains.
-			return dst, tree.ErrKeyNotFound
+		if _, ok := snap.published.(backendSnapshotLookup); ok {
+			if snap.publishedRootID != 0 {
+				// The published lookup already queried this specific root via GetAppendAtRoot.
+				// Falling back to snapshot default-root GetAppend can cross root domains.
+				return dst, tree.ErrKeyNotFound
+			}
+			if s.publishedRoots == nil {
+				// rootDomainSnapshotFromCachedSnapshot() installs backendSnapshotLookup as
+				// the published lookup when no published root set is pinned. A not-found
+				// from that lookup already queried the backend snapshot, so avoid an extra
+				// backend GetAppend miss probe here.
+				return dst, tree.ErrKeyNotFound
+			}
 		}
 	}
 
