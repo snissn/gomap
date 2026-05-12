@@ -78,6 +78,7 @@ type leafPageReadCacheSlot struct {
 	data                []byte
 	valid               bool
 	readMissCandidateFP atomic.Uint64
+	readMissEpoch       atomic.Uint64
 }
 
 type leafPageReadCache struct {
@@ -136,7 +137,8 @@ func (c *leafPageReadCache) storeReadMiss(ptr page.LeafLogPtr, leafPage []byte) 
 	slot := &c.slots[c.slotIndex(key)]
 
 	fp := leafPageReadMissFingerprint(key)
-	if slot.readMissCandidateFP.Swap(fp) != fp {
+	epoch, repeated := slot.observeReadMissCandidate(fp)
+	if !repeated {
 		c.readMissAdmissionSkips.Add(1)
 		return
 	}
@@ -156,10 +158,11 @@ func (c *leafPageReadCache) storeReadMiss(ptr page.LeafLogPtr, leafPage []byte) 
 		slot.mu.Unlock()
 		return
 	}
-	if slot.readMissCandidateFP.Load() != fp {
+	if !slot.readMissCandidateStillCurrent(fp, epoch) {
 		// A writer/read admission race can repurpose this slot and reset the
-		// candidate between Swap(fp) and lock acquisition. Avoid admitting a stale
-		// read miss into the now-replaced slot.
+		// candidate between miss observation and lock acquisition. Track epoch
+		// resets so a same-key first miss after reset cannot resurrect stale
+		// admission.
 		slot.mu.Unlock()
 		c.readMissAdmissionSkips.Add(1)
 		return
@@ -187,8 +190,31 @@ func (s *leafPageReadCacheSlot) storeLocked(key leafPageReadCacheKey, leafPage [
 	copy(s.data, leafPage)
 	s.key = key
 	s.valid = true
-	s.readMissCandidateFP.Store(0)
+	s.resetReadMissCandidateLocked()
 	return result
+}
+
+func (s *leafPageReadCacheSlot) observeReadMissCandidate(fp uint64) (epoch uint64, repeated bool) {
+	epoch = s.readMissEpoch.Load()
+	for {
+		candidate := s.readMissCandidateFP.Load()
+		if candidate == fp {
+			return epoch, true
+		}
+		if s.readMissCandidateFP.CompareAndSwap(candidate, fp) {
+			return epoch, false
+		}
+		epoch = s.readMissEpoch.Load()
+	}
+}
+
+func (s *leafPageReadCacheSlot) readMissCandidateStillCurrent(fp, epoch uint64) bool {
+	return s.readMissEpoch.Load() == epoch && s.readMissCandidateFP.Load() == fp
+}
+
+func (s *leafPageReadCacheSlot) resetReadMissCandidateLocked() {
+	s.readMissEpoch.Add(1)
+	s.readMissCandidateFP.Store(0)
 }
 
 func (c *leafPageReadCache) recordStore(result leafPageReadCacheStoreResult, key leafPageReadCacheKey) {
@@ -271,8 +297,8 @@ func (c *leafPageReadCache) slotIndex(key leafPageReadCacheKey) int {
 
 func leafPageReadMissFingerprint(key leafPageReadCacheKey) uint64 {
 	// Admission is intentionally probabilistic under collisions, so keep this
-	// hash stable but well-mixed to reduce accidental first-miss admissions when
-	// unrelated keys map to the same slot.
+	// hash stable but well-mixed (SplitMix64-style finalizer constants) to reduce
+	// accidental first-miss admissions when unrelated keys map to the same slot.
 	h := uint64(key.fileID)*0x9e3779b97f4a7c15 + key.offset*0xbf58476d1ce4e5b9
 	h ^= uint64(key.subIndex) * 0x94d049bb133111eb
 	h ^= h >> 30

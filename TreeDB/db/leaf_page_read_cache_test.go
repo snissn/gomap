@@ -376,6 +376,38 @@ func TestValueReaderLeafLogPageUnsafeToAdmitsRepeatedReadMiss(t *testing.T) {
 	}
 }
 
+func TestLeafPageReadCacheReadMissCandidateEpochPreventsStaleAdmission(t *testing.T) {
+	cache := newLeafPageReadCache(1)
+	slot := &cache.slots[0]
+	keyA := newLeafPageReadCacheKey(page.LeafLogPtr{FileID: 7, Offset: 128, RecordLengthHint: 4096})
+	keyB := newLeafPageReadCacheKey(page.LeafLogPtr{FileID: 9, Offset: 512, RecordLengthHint: 4096})
+	fpA := leafPageReadMissFingerprint(keyA)
+
+	slot.readMissCandidateFP.Store(fpA)
+	epochBefore, repeated := slot.observeReadMissCandidate(fpA)
+	if !repeated {
+		t.Fatal("expected matching candidate to be treated as repeated miss")
+	}
+
+	slot.mu.Lock()
+	_ = slot.storeLocked(keyB, bytes.Repeat([]byte{0x61}, page.PageSize))
+	slot.mu.Unlock()
+
+	epochAfterReset, repeated := slot.observeReadMissCandidate(fpA)
+	if repeated {
+		t.Fatal("expected first post-reset miss to be non-repeated")
+	}
+	if epochAfterReset == epochBefore {
+		t.Fatalf("read miss epoch did not advance after reset: before=%d after=%d", epochBefore, epochAfterReset)
+	}
+	if slot.readMissCandidateStillCurrent(fpA, epochBefore) {
+		t.Fatal("stale pre-reset candidate unexpectedly considered current")
+	}
+	if !slot.readMissCandidateStillCurrent(fpA, epochAfterReset) {
+		t.Fatal("fresh post-reset candidate should be current")
+	}
+}
+
 func TestValueReaderLeafLogPageUnsafeToOneOffReadMissDoesNotEvictStoredLeaf(t *testing.T) {
 	cache := newLeafPageReadCache(1)
 	hotPtr := page.LeafLogPtr{FileID: 7, Offset: 128, RecordLengthHint: 4096}
