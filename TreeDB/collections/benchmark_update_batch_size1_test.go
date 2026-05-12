@@ -10,11 +10,11 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
-func BenchmarkCollectionUpdate_CallbackVsUpdateBatch_NoIndex_Size1(b *testing.B) {
+func BenchmarkCollectionUpdate_CallbackVsUpdateBatchJSON_NoIndex_Size1(b *testing.B) {
 	benchmarkCollectionUpdateCallbackVsUpdateBatch(b, 0)
 }
 
-func BenchmarkCollectionUpdate_CallbackVsUpdateBatch_OneIndex_Size1(b *testing.B) {
+func BenchmarkCollectionUpdate_CallbackVsUpdateBatchJSON_OneIndex_Size1(b *testing.B) {
 	benchmarkCollectionUpdateCallbackVsUpdateBatch(b, 1)
 }
 

@@ -2840,12 +2840,11 @@ func (c *Collection) Insert(id, document []byte) ([]byte, error) {
 	}
 	if len(c.meta.Indexes) == 0 {
 		if c.hasBufferedNoIndexBSONRootRuns() {
-			unlockMutation := c.lockMutation()
-			if err := c.flushBufferedWrites(); err != nil {
-				unlockMutation.Unlock()
+			if err := c.withMutationLock(func() error {
+				return c.flushBufferedWrites()
+			}); err != nil {
 				return nil, err
 			}
-			unlockMutation.Unlock()
 		}
 		return c.insertOneNoIndexBuffered(id, document)
 	}
@@ -3072,7 +3071,7 @@ func (c *Collection) hasBufferedNoIndexBSONRootRuns() bool {
 		return false
 	}
 	collectionName := bufferedDomainCollectionName(domain, c.meta.Name)
-	if collectionName == "" || !hasPendingIndexedRootRunsForRootLocked(domain, collectionPrimaryRootName(collectionName)) {
+	if collectionName == "" || !hasPendingRootRunsForRootLocked(domain, collectionPrimaryRootName(collectionName)) {
 		return false
 	}
 	return isBSONDocumentFormat(domain.meta.Options.DocumentFormat)
@@ -4673,7 +4672,7 @@ func pendingIndexedRootRunsLocked(domain *collectionWriteDomain, rootName string
 	return out
 }
 
-func hasPendingIndexedRootRunsForRootLocked(domain *collectionWriteDomain, rootName string) bool {
+func hasPendingRootRunsForRootLocked(domain *collectionWriteDomain, rootName string) bool {
 	if domain == nil || rootName == "" {
 		return false
 	}
@@ -10829,7 +10828,7 @@ func updateBatchCanReadBufferedDomainLocked(domain *collectionWriteDomain, meta 
 		return false
 	}
 	collectionName := bufferedDomainCollectionName(domain, meta.Name)
-	if collectionName == "" || !hasPendingIndexedRootRunsForRootLocked(domain, collectionPrimaryRootName(collectionName)) {
+	if collectionName == "" || !hasPendingRootRunsForRootLocked(domain, collectionPrimaryRootName(collectionName)) {
 		return false
 	}
 	if len(meta.Indexes) == 0 {
@@ -11837,7 +11836,7 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 			plan.stats.BufferStageRootScan += updateBatchStatsSince(detailedStats, phaseStart)
 			return false, fmt.Errorf("collections: UpdateBatch collection %q direct plan missing base root for %q", plan.meta.Name, rootName)
 		}
-		if hasPendingIndexedRootRunsForRootLocked(domain, rootName) {
+		if hasPendingRootRunsForRootLocked(domain, rootName) {
 			if pendingBaseRoot, ok := pendingIndexedRootBaseIDLocked(domain, rootName); ok && pendingBaseRoot != baseRoot {
 				plan.stats.BufferStageRootScan += updateBatchStatsSince(detailedStats, phaseStart)
 				return false, errBufferedRootBaseMismatch(plan.meta.Name, rootName)
@@ -12137,7 +12136,7 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 		if table == nil || table.Len() == 0 {
 			continue
 		}
-		if hasPendingIndexedRootRunsForRootLocked(domain, rootName) {
+		if hasPendingRootRunsForRootLocked(domain, rootName) {
 			if pendingBaseRoot, ok := pendingIndexedRootBaseIDLocked(domain, rootName); ok && pendingBaseRoot != baseRoot {
 				plan.stats.BufferStageRootScan += updateBatchStatsSince(detailedStats, phaseStart)
 				return false, errBufferedRootBaseMismatch(plan.meta.Name, rootName)
@@ -13855,7 +13854,7 @@ func hasBufferedPrimaryRootRuns(domain *collectionWriteDomain, fallbackCollectio
 	if collectionName == "" {
 		return false
 	}
-	return hasPendingIndexedRootRunsForRootLocked(domain, collectionPrimaryRootName(collectionName))
+	return hasPendingRootRunsForRootLocked(domain, collectionPrimaryRootName(collectionName))
 }
 
 func (c *Collection) getBufferedDocumentIntoLocked(domain *collectionWriteDomain, documentID []byte, dst []byte) ([]byte, bool, bool) {
