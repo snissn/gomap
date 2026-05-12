@@ -2842,9 +2842,6 @@ func (c *Collection) Insert(id, document []byte) ([]byte, error) {
 		return nil, err
 	}
 	if len(c.meta.Indexes) == 0 {
-		if c.canBufferNoIndexInsertBatchAck() && isBSONDocumentFormat(c.meta.Options.DocumentFormat) {
-			return c.insertOneNoIndexBSONBuffered(id, document)
-		}
 		if c.hasBufferedNoIndexBSONRootRuns() {
 			if err := c.withMutationLock(func() error {
 				return c.flushBufferedWrites()
@@ -3058,7 +3055,12 @@ func (c *Collection) canBufferDirectUpdateAck() bool {
 	if c == nil || c.db == nil || c.writeDomain == nil {
 		return false
 	}
-	return c.db.DurabilityMode() == backenddb.DurabilityWALOffRelaxed
+	switch c.db.DurabilityMode() {
+	case backenddb.DurabilityWALOffRelaxed, backenddb.DurabilityWALOnRelaxed:
+		return true
+	default:
+		return false
+	}
 }
 
 func isBSONDocumentFormat(format DocumentFormat) bool {
@@ -7178,28 +7180,6 @@ func (c *Collection) insertOneViaBatch(id, document []byte) ([]byte, error) {
 	return ids[0], nil
 }
 
-func (c *Collection) insertOneNoIndexBSONBuffered(id, document []byte) ([]byte, error) {
-	ids, err := retryInsertBatchMutation(func() ([][]byte, error) {
-		unlockMutation := c.lockMutation()
-		mutationLocked := true
-		return c.insertBatchOnceWithLockState(
-			[][]byte{id},
-			[][]byte{document},
-			false,
-			nil,
-			&unlockMutation,
-			&mutationLocked,
-		)
-	})
-	if err != nil {
-		return nil, err
-	}
-	if len(ids) != 1 {
-		return nil, errors.New("collections: insert returned no document id")
-	}
-	return ids[0], nil
-}
-
 // InsertBatch adds a batch of documents and returns the stored document IDs.
 //
 // Under the collection WAL target contract, WAL-on success makes the whole
@@ -8458,8 +8438,8 @@ func (c *Collection) Replace(documentID, document []byte) (bool, error) {
 // preserve synchronous publish semantics in every durability mode: pending
 // writes are flushed before planning, and modified documents publish to the
 // primary root before Update returns. Single-document BSON $set updates use a
-// separate direct buffered path and may stage only when WAL-off relaxed
-// durability explicitly allows deferred flush/publish behavior.
+// separate direct buffered path and may stage when durability mode allows
+// deferred flush/publish behavior (WAL-off relaxed and WAL-on relaxed).
 //
 // Callback panics are recovered and returned as errors in both direct and
 // combined execution. When the collection write domain combines concurrent
@@ -10597,7 +10577,8 @@ func (c *Collection) shouldUseDirectBufferedUpdatePlan(meta CollectionMeta, opts
 		return false
 	}
 	if len(meta.Indexes) == 0 {
-		return mode == updateBatchModeNoSecondaryUniqueIndexChanges &&
+		return c.canBufferDirectUpdateAck() &&
+			mode == updateBatchModeNoSecondaryUniqueIndexChanges &&
 			isBSONDocumentFormat(opts.documentFormat) &&
 			structuredBSONSetBatch
 	}
