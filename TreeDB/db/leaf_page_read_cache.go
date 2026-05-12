@@ -257,6 +257,9 @@ func (s *leafPageReadCacheSlot) observeReadMissCandidate(fp uint64) (epoch uint6
 				return epoch, true
 			}
 		} else if s.readMissEpoch.Load() == epoch {
+			if observedEpochAdvance {
+				return epoch, false
+			}
 			if s.readMissCandidateFP.CompareAndSwap(candidate, candidateToken) {
 				if s.readMissEpoch.Load() == epoch {
 					return epoch, false
