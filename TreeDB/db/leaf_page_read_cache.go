@@ -128,10 +128,12 @@ func (c *leafPageReadCache) store(ptr page.LeafLogPtr, leafPage []byte) {
 	c.recordStore(result, key)
 }
 
-// storeReadMiss admits read-miss pages only after a repeated miss to the same
-// direct-mapped slot/key. Write-side stores remain immediate; this keeps
-// one-off sparse reads from copying 4KiB pages into the cache and evicting
-// recently-written leaves that are likely to be reused during publish/apply.
+// storeReadMiss admits read-miss pages only after a repeated miss in the same
+// direct-mapped slot with a matching fingerprint token in the same admission
+// epoch (probabilistic under collisions). Write-side stores remain immediate;
+// this keeps one-off sparse reads from copying 4KiB pages into the cache and
+// evicting recently-written leaves that are likely to be reused during
+// publish/apply.
 func (c *leafPageReadCache) storeReadMiss(ptr page.LeafLogPtr, leafPage []byte) {
 	if c == nil || len(c.slots) == 0 || len(leafPage) != page.PageSize {
 		return
