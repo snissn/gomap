@@ -280,6 +280,10 @@ type rootDomainPublishedValueLookup interface {
 	GetValueUnsafe(key []byte) ([]byte, error)
 }
 
+type rootDomainPublishedBackendLookupMarker interface {
+	rootDomainPublishedBackendLookupMarker()
+}
+
 var ErrSnapshotValueLogReaderUnavailable = errors.New("caching snapshot: value-log reader unavailable")
 
 func rootDomainPublishedGetAppend(snap rootDomainSnapshot, key, dst []byte) ([]byte, bool, error) {
@@ -307,12 +311,8 @@ func rootDomainPublishedGetUnsafe(snap rootDomainSnapshot, key []byte) ([]byte, 
 }
 
 func rootDomainPublishedUsesBackendLookup(published any) bool {
-	switch published.(type) {
-	case backendSnapshotLookup, *backendSnapshotLookup:
-		return true
-	default:
-		return false
-	}
+	_, ok := published.(rootDomainPublishedBackendLookupMarker)
+	return ok
 }
 
 func (s *Snapshot) getAppendFromEntryWithSource(snap rootDomainSnapshot, key, dst []byte, oldLen int) ([]byte, bool, error) {
