@@ -330,6 +330,7 @@ func shouldShortCircuitPublishedAppendMiss(checkedPublishedEntry bool, published
 	}
 	return publishedRoots == nil
 }
+
 func (s *Snapshot) getAppendFromEntryWithSource(snap rootDomainSnapshot, key, dst []byte, oldLen int) ([]byte, bool, error) {
 	val, ptr, flags, found, source := snap.getEntryWithSource(key)
 	if !found {
@@ -437,6 +438,9 @@ func (s *Snapshot) ReverseIterator(start, end []byte) (merging.Iterator, error) 
 }
 
 func (s *Snapshot) GetAppend(key, dst []byte) ([]byte, error) {
+	if s == nil {
+		return dst, tree.ErrKeyNotFound
+	}
 	// Critical fast path for parallel point reads:
 	// consult only mutable/immutable memtables first, then query published/backend
 	// directly via append APIs. This avoids a published GetEntry pre-read that can
@@ -465,11 +469,7 @@ func (s *Snapshot) GetAppend(key, dst []byte) ([]byte, error) {
 		recordSnapshotRootDomainRead(rootDomainEntrySourceCached, false, len(val))
 		return append(dst, val...), nil
 	}
-	if s == nil {
-		return dst, tree.ErrKeyNotFound
-	}
 	publishedRoots := s.publishedRoots
-
 	snap := rootDomainSnapshotFromCachedSnapshot(s, key)
 	origDst := dst
 	oldLen := len(dst)
@@ -513,11 +513,13 @@ func (s *Snapshot) GetAppend(key, dst []byte) ([]byte, error) {
 		// - root-bound lookups (publishedRootID != 0) must not fall back to
 		//   default-root GetAppend, which can cross root domains.
 		// - when no published root set is pinned, backend fallback lookup already
-		//   queried the default root, so avoid a duplicate backend miss probe.
+		//   queried the default root (after flushValueLogForBackendRead inside
+		//   backendSnapshotLookup.GetValueAppend), so avoid a duplicate backend miss
+		//   probe.
 		return dst, tree.ErrKeyNotFound
 	}
 
-	if s == nil || s.backend == nil || s.db == nil {
+	if s.backend == nil || s.db == nil {
 		return dst, tree.ErrKeyNotFound
 	}
 	if err := s.db.flushValueLogForBackendRead(); err != nil {
