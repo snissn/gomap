@@ -80,7 +80,7 @@ func (p *publishedBackendLookupMissCounter) GetValueUnsafe(_ []byte) ([]byte, er
 	return nil, tree.ErrKeyNotFound
 }
 
-func newSnapshotGetAppendBackendFixture(t *testing.T, seedKey, seedValue []byte) (*DB, *db.Snapshot, func()) {
+func newSnapshotGetAppendBackendFixture(t *testing.T, seedKey, seedValue []byte) (*Snapshot, func()) {
 	t.Helper()
 	dir := t.TempDir()
 	backend, err := db.Open(db.Options{Dir: dir})
@@ -110,13 +110,16 @@ func newSnapshotGetAppendBackendFixture(t *testing.T, seedKey, seedValue []byte)
 		_ = backend.Close()
 		t.Fatal("AcquireSnapshot=nil")
 	}
+	snap := &Snapshot{
+		db:      cached,
+		backend: backendSnap,
+	}
 	cleanup := func() {
-		// backendSnap ownership stays with this fixture cleanup.
-		_ = backendSnap.Close()
+		_ = snap.Close()
 		_ = cached.Close()
 		_ = backend.Close()
 	}
-	return cached, backendSnap, cleanup
+	return snap, cleanup
 }
 
 func TestAcquireSnapshot_NotifyErrorOnRotateFailure(t *testing.T) {
@@ -409,19 +412,15 @@ func TestSnapshotGetAppend_PublishedAppendHitReturnsWithoutFallback(t *testing.T
 }
 
 func TestSnapshotGetAppend_PublishedMissFallsBackToBackend(t *testing.T) {
-	cached, backendSnap, cleanup := newSnapshotGetAppendBackendFixture(t, []byte("k"), []byte("backend-v"))
+	snap, cleanup := newSnapshotGetAppendBackendFixture(t, []byte("k"), []byte("backend-v"))
 	defer cleanup()
 	published := newRootDomainTestTable(t, rootDomainTestOp{key: "other", value: "v"})
 
-	snap := &Snapshot{
-		db:      cached,
-		backend: backendSnap,
-		rootPointShards: []rootDomainSnapshot{
-			{publishedRootID: 1, published: published},
-		},
-		publishedRoots: &publishedRootSet{
-			pointShards: []publishedRootRef{{lookup: published, rootID: 1}},
-		},
+	snap.rootPointShards = []rootDomainSnapshot{
+		{publishedRootID: 1, published: published},
+	}
+	snap.publishedRoots = &publishedRootSet{
+		pointShards: []publishedRootRef{{lookup: published, rootID: 1}},
 	}
 	got, err := snap.GetAppend([]byte("k"), nil)
 	if err != nil {
@@ -433,19 +432,15 @@ func TestSnapshotGetAppend_PublishedMissFallsBackToBackend(t *testing.T) {
 }
 
 func TestSnapshotGetAppend_PublishedMissFallbackTruncatesDst(t *testing.T) {
-	cached, backendSnap, cleanup := newSnapshotGetAppendBackendFixture(t, []byte("k"), []byte("backend-v"))
+	snap, cleanup := newSnapshotGetAppendBackendFixture(t, []byte("k"), []byte("backend-v"))
 	defer cleanup()
 	published := publishedAppendMissWithPrefix{prefix: []byte("bad:")}
 
-	snap := &Snapshot{
-		db:      cached,
-		backend: backendSnap,
-		rootPointShards: []rootDomainSnapshot{
-			{publishedRootID: 1, published: published},
-		},
-		publishedRoots: &publishedRootSet{
-			pointShards: []publishedRootRef{{lookup: published, rootID: 1}},
-		},
+	snap.rootPointShards = []rootDomainSnapshot{
+		{publishedRootID: 1, published: published},
+	}
+	snap.publishedRoots = &publishedRootSet{
+		pointShards: []publishedRootRef{{lookup: published, rootID: 1}},
 	}
 	got, err := snap.GetAppend([]byte("k"), []byte("prefix:"))
 	if err != nil {
@@ -457,19 +452,15 @@ func TestSnapshotGetAppend_PublishedMissFallbackTruncatesDst(t *testing.T) {
 }
 
 func TestSnapshotGetAppend_PublishedMissFallbackHandlesShortErrorOutput(t *testing.T) {
-	cached, backendSnap, cleanup := newSnapshotGetAppendBackendFixture(t, []byte("k"), []byte("backend-v"))
+	snap, cleanup := newSnapshotGetAppendBackendFixture(t, []byte("k"), []byte("backend-v"))
 	defer cleanup()
 	published := publishedAppendMissNilOutput{}
 
-	snap := &Snapshot{
-		db:      cached,
-		backend: backendSnap,
-		rootPointShards: []rootDomainSnapshot{
-			{publishedRootID: 1, published: published},
-		},
-		publishedRoots: &publishedRootSet{
-			pointShards: []publishedRootRef{{lookup: published, rootID: 1}},
-		},
+	snap.rootPointShards = []rootDomainSnapshot{
+		{publishedRootID: 1, published: published},
+	}
+	snap.publishedRoots = &publishedRootSet{
+		pointShards: []publishedRootRef{{lookup: published, rootID: 1}},
 	}
 	got, err := snap.GetAppend([]byte("k"), []byte("prefix:"))
 	if err != nil {
@@ -481,13 +472,8 @@ func TestSnapshotGetAppend_PublishedMissFallbackHandlesShortErrorOutput(t *testi
 }
 
 func TestSnapshotGetAppend_BackendLookupMissWithoutPublishedRootsReturnsNotFound(t *testing.T) {
-	cached, backendSnap, cleanup := newSnapshotGetAppendBackendFixture(t, []byte("present"), []byte("value"))
+	snap, cleanup := newSnapshotGetAppendBackendFixture(t, []byte("present"), []byte("value"))
 	defer cleanup()
-
-	snap := &Snapshot{
-		db:      cached,
-		backend: backendSnap,
-	}
 	_, err := snap.GetAppend([]byte("missing"), []byte("prefix:"))
 	if !errors.Is(err, tree.ErrKeyNotFound) {
 		t.Fatalf("GetAppend(missing) err=%v want ErrKeyNotFound", err)

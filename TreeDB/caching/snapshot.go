@@ -460,6 +460,8 @@ func (s *Snapshot) GetAppend(key, dst []byte) ([]byte, error) {
 		return append(dst, val...), nil
 	}
 	snap := rootDomainSnapshotFromCachedSnapshot(s, key)
+	// backendSnapshotLookup (used when no published root set is pinned) flushes
+	// value-log state before serving backend snapshot reads.
 	origDst := dst
 	oldLen := len(dst)
 	out, ok, err := rootDomainPublishedGetAppend(snap, key, dst)
