@@ -4629,6 +4629,45 @@ func TestCollectionIndexedInsertAccumulatorThresholds(t *testing.T) {
 	}
 }
 
+func TestCollectionInsertNoIndexBSONRejectsClosedWriteDomain(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{
+		Dir:        t.TempDir(),
+		Durability: backenddb.DurabilityWALOffRelaxed,
+	})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatBSON,
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if col.writeDomain == nil {
+		t.Fatal("missing write domain")
+	}
+	col.writeDomain.closingWrites.Store(true)
+	_, err = col.Insert(
+		[]byte("u1"),
+		mustBSONCollectionDocument(t, bson.D{
+			{Key: "_id", Value: "u1"},
+			{Key: "score", Value: int32(1)},
+		}),
+	)
+	if !errors.Is(err, backenddb.ErrClosed) {
+		t.Fatalf("insert err=%v want %v", err, backenddb.ErrClosed)
+	}
+}
+
 func TestCollectionInsertRetryRetriesWrappedConcurrentMutation(t *testing.T) {
 	attempts := 0
 	result, err := retryInsertBatchMutation(func() ([][]byte, error) {

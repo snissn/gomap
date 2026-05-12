@@ -2838,6 +2838,9 @@ func (c *Collection) Insert(id, document []byte) ([]byte, error) {
 	if c.db == nil {
 		return nil, errCollectionDBNil
 	}
+	if err := c.ensureWriteDomainOpen(); err != nil {
+		return nil, err
+	}
 	if len(c.meta.Indexes) == 0 {
 		if c.canBufferNoIndexInsertBatchAck() && isBSONDocumentFormat(c.meta.Options.DocumentFormat) {
 			return c.insertOneNoIndexBSONBuffered(id, document)
