@@ -280,6 +280,8 @@ type rootDomainPublishedValueLookup interface {
 	GetValueUnsafe(key []byte) ([]byte, error)
 }
 
+var errSnapshotValueLogReaderUnavailable = errors.New("caching snapshot: value-log reader unavailable")
+
 func rootDomainPublishedGetAppend(snap rootDomainSnapshot, key, dst []byte) ([]byte, bool, error) {
 	if snap.published == nil {
 		return dst, false, nil
@@ -391,7 +393,7 @@ func (s *Snapshot) GetAppend(key, dst []byte) ([]byte, error) {
 		}
 		if flags&node.FlagPointer != 0 {
 			if s.db == nil {
-				return dst, errors.New("caching snapshot: value-log reader unavailable")
+				return dst, errSnapshotValueLogReaderUnavailable
 			}
 			oldLen := len(dst)
 			out, err := s.db.readValueLogAppend(key, ptr, dst)
@@ -414,6 +416,12 @@ func (s *Snapshot) GetAppend(key, dst []byte) ([]byte, error) {
 	out, ok, err := rootDomainPublishedGetAppend(snap, key, dst)
 	checkedPublishedEntry := false
 	if ok {
+		if err != nil {
+			// Published append lookups should not leak partial dst appends across
+			// fallback paths when they report misses/errors.
+			out = out[:oldLen]
+			dst = out
+		}
 		if err == nil {
 			recordSnapshotRootDomainRead(rootDomainEntrySourcePublished, true, len(out)-oldLen)
 			return out, nil
@@ -431,7 +439,7 @@ func (s *Snapshot) GetAppend(key, dst []byte) ([]byte, error) {
 			}
 			if flags&node.FlagPointer != 0 {
 				if s.db == nil {
-					return dst, errors.New("caching snapshot: value-log reader unavailable")
+					return dst, errSnapshotValueLogReaderUnavailable
 				}
 				out, err := s.db.readValueLogAppend(key, ptr, dst)
 				if err != nil {
@@ -455,7 +463,7 @@ func (s *Snapshot) GetAppend(key, dst []byte) ([]byte, error) {
 			}
 			if flags&node.FlagPointer != 0 {
 				if s.db == nil {
-					return dst, errors.New("caching snapshot: value-log reader unavailable")
+					return dst, errSnapshotValueLogReaderUnavailable
 				}
 				out, err := s.db.readValueLogAppend(key, ptr, dst)
 				if err != nil {
@@ -470,6 +478,13 @@ func (s *Snapshot) GetAppend(key, dst []byte) ([]byte, error) {
 			}
 			recordSnapshotRootDomainRead(source, false, len(val))
 			return append(dst, val...), nil
+		}
+	}
+	if checkedPublishedEntry {
+		if _, ok := snap.published.(backendSnapshotLookup); ok && snap.publishedRootID != 0 {
+			// The published lookup already queried this specific root via GetAppendAtRoot.
+			// Falling back to snapshot default-root GetAppend can cross root domains.
+			return dst, tree.ErrKeyNotFound
 		}
 	}
 
@@ -515,7 +530,7 @@ func (s *Snapshot) Get(key []byte) ([]byte, error) {
 				}
 			}
 			if s.db == nil {
-				return nil, errors.New("caching snapshot: value-log reader unavailable")
+				return nil, errSnapshotValueLogReaderUnavailable
 			}
 			scratch := getOwnedReadScratch()
 			defer putOwnedReadScratch(scratch)
@@ -531,7 +546,7 @@ func (s *Snapshot) Get(key []byte) ([]byte, error) {
 			maybeRecordSnapshotGetCallerSample(len(out))
 			return ownedReadResult(out, scratch), nil
 		}
-		if val == nil {
+		if len(val) == 0 {
 			recordSnapshotRootDomainRead(source, false, len(val))
 			return nil, nil
 		}
@@ -575,7 +590,7 @@ func (s *Snapshot) GetUnsafe(key []byte) ([]byte, error) {
 				}
 			}
 			if s.db == nil {
-				return nil, errors.New("caching snapshot: value-log reader unavailable")
+				return nil, errSnapshotValueLogReaderUnavailable
 			}
 			return s.db.readValueLog(key, ptr)
 		}
