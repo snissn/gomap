@@ -41,6 +41,71 @@ func (publishedAppendMissNilOutput) GetValueUnsafe(_ []byte) ([]byte, error) {
 	return nil, tree.ErrKeyNotFound
 }
 
+type publishedAppendHit struct {
+	value       []byte
+	appendCalls int
+}
+
+func (p *publishedAppendHit) GetEntry(_ []byte) (val []byte, ptr page.ValuePtr, flags byte, found bool) {
+	return nil, page.ValuePtr{}, 0, false
+}
+
+func (p *publishedAppendHit) GetValueAppend(_ []byte, dst []byte) ([]byte, error) {
+	p.appendCalls++
+	return append(dst, p.value...), nil
+}
+
+func (p *publishedAppendHit) GetValueUnsafe(_ []byte) ([]byte, error) {
+	return append([]byte(nil), p.value...), nil
+}
+
+func newSnapshotGetAppendBackendFixture(t *testing.T, seedKey, seedValue []byte) (*DB, *db.Snapshot, func()) {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "treedb-snapshot-getappend-fixture-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend, err := db.Open(db.Options{Dir: dir})
+	if err != nil {
+		_ = os.RemoveAll(dir)
+		t.Fatal(err)
+	}
+	cached, err := Open(dir, backend, Options{FlushThreshold: 1024 * 1024})
+	if err != nil {
+		_ = backend.Close()
+		_ = os.RemoveAll(dir)
+		t.Fatal(err)
+	}
+	if seedKey != nil {
+		if err := cached.SetSync(seedKey, seedValue); err != nil {
+			_ = cached.Close()
+			_ = backend.Close()
+			_ = os.RemoveAll(dir)
+			t.Fatalf("SetSync: %v", err)
+		}
+		if err := cached.Checkpoint(); err != nil {
+			_ = cached.Close()
+			_ = backend.Close()
+			_ = os.RemoveAll(dir)
+			t.Fatalf("Checkpoint: %v", err)
+		}
+	}
+	backendSnap := backend.AcquireSnapshot()
+	if backendSnap == nil {
+		_ = cached.Close()
+		_ = backend.Close()
+		_ = os.RemoveAll(dir)
+		t.Fatal("AcquireSnapshot=nil")
+	}
+	cleanup := func() {
+		_ = backendSnap.Close()
+		_ = cached.Close()
+		_ = backend.Close()
+		_ = os.RemoveAll(dir)
+	}
+	return cached, backendSnap, cleanup
+}
+
 func TestAcquireSnapshot_NotifyErrorOnRotateFailure(t *testing.T) {
 	dir, err := os.MkdirTemp("", "treedb-snapshot-rotate-fail-")
 	if err != nil {
@@ -310,35 +375,29 @@ func TestSnapshotGetAppend_PublishedLookupWithoutAppendSupport(t *testing.T) {
 	}
 }
 
+func TestSnapshotGetAppend_PublishedAppendHitReturnsWithoutFallback(t *testing.T) {
+	published := &publishedAppendHit{value: []byte("published-v")}
+	snap := &Snapshot{
+		rootPointShards: []rootDomainSnapshot{
+			{published: published},
+		},
+	}
+
+	got, err := snap.GetAppend([]byte("k"), []byte("prefix:"))
+	if err != nil {
+		t.Fatalf("GetAppend(k): %v", err)
+	}
+	if want := "prefix:published-v"; string(got) != want {
+		t.Fatalf("GetAppend(k)=%q want %q", string(got), want)
+	}
+	if got, want := published.appendCalls, 1; got != want {
+		t.Fatalf("published append calls=%d want %d", got, want)
+	}
+}
+
 func TestSnapshotGetAppend_PublishedMissFallsBackToBackend(t *testing.T) {
-	dir, err := os.MkdirTemp("", "treedb-snapshot-getappend-published-miss-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(dir)
-
-	backend, err := db.Open(db.Options{Dir: dir})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer backend.Close()
-
-	cached, err := Open(dir, backend, Options{FlushThreshold: 1024 * 1024})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cached.Close()
-
-	if err := cached.SetSync([]byte("k"), []byte("backend-v")); err != nil {
-		t.Fatalf("SetSync: %v", err)
-	}
-	if err := cached.Checkpoint(); err != nil {
-		t.Fatalf("Checkpoint: %v", err)
-	}
-	backendSnap := backend.AcquireSnapshot()
-	if backendSnap == nil {
-		t.Fatal("AcquireSnapshot=nil")
-	}
+	cached, backendSnap, cleanup := newSnapshotGetAppendBackendFixture(t, []byte("k"), []byte("backend-v"))
+	defer cleanup()
 	published := newRootDomainTestTable(t, rootDomainTestOp{key: "other", value: "v"})
 
 	snap := &Snapshot{
@@ -363,34 +422,8 @@ func TestSnapshotGetAppend_PublishedMissFallsBackToBackend(t *testing.T) {
 }
 
 func TestSnapshotGetAppend_PublishedMissFallbackTruncatesDst(t *testing.T) {
-	dir, err := os.MkdirTemp("", "treedb-snapshot-getappend-published-miss-dst-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(dir)
-
-	backend, err := db.Open(db.Options{Dir: dir})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer backend.Close()
-
-	cached, err := Open(dir, backend, Options{FlushThreshold: 1024 * 1024})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cached.Close()
-
-	if err := cached.SetSync([]byte("k"), []byte("backend-v")); err != nil {
-		t.Fatalf("SetSync: %v", err)
-	}
-	if err := cached.Checkpoint(); err != nil {
-		t.Fatalf("Checkpoint: %v", err)
-	}
-	backendSnap := backend.AcquireSnapshot()
-	if backendSnap == nil {
-		t.Fatal("AcquireSnapshot=nil")
-	}
+	cached, backendSnap, cleanup := newSnapshotGetAppendBackendFixture(t, []byte("k"), []byte("backend-v"))
+	defer cleanup()
 	published := publishedAppendMissWithPrefix{prefix: []byte("bad:")}
 
 	snap := &Snapshot{
@@ -415,34 +448,8 @@ func TestSnapshotGetAppend_PublishedMissFallbackTruncatesDst(t *testing.T) {
 }
 
 func TestSnapshotGetAppend_PublishedMissFallbackHandlesShortErrorOutput(t *testing.T) {
-	dir, err := os.MkdirTemp("", "treedb-snapshot-getappend-published-miss-short-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(dir)
-
-	backend, err := db.Open(db.Options{Dir: dir})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer backend.Close()
-
-	cached, err := Open(dir, backend, Options{FlushThreshold: 1024 * 1024})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cached.Close()
-
-	if err := cached.SetSync([]byte("k"), []byte("backend-v")); err != nil {
-		t.Fatalf("SetSync: %v", err)
-	}
-	if err := cached.Checkpoint(); err != nil {
-		t.Fatalf("Checkpoint: %v", err)
-	}
-	backendSnap := backend.AcquireSnapshot()
-	if backendSnap == nil {
-		t.Fatal("AcquireSnapshot=nil")
-	}
+	cached, backendSnap, cleanup := newSnapshotGetAppendBackendFixture(t, []byte("k"), []byte("backend-v"))
+	defer cleanup()
 	published := publishedAppendMissNilOutput{}
 
 	snap := &Snapshot{
@@ -463,6 +470,22 @@ func TestSnapshotGetAppend_PublishedMissFallbackHandlesShortErrorOutput(t *testi
 	}
 	if want := "prefix:backend-v"; string(got) != want {
 		t.Fatalf("GetAppend(k)=%q want %q", string(got), want)
+	}
+}
+
+func TestSnapshotGetAppend_BackendLookupMissWithoutPublishedRootsReturnsNotFound(t *testing.T) {
+	cached, backendSnap, cleanup := newSnapshotGetAppendBackendFixture(t, []byte("present"), []byte("value"))
+	defer cleanup()
+
+	snap := &Snapshot{
+		db:      cached,
+		backend: backendSnap,
+	}
+	defer func() { _ = snap.Close() }()
+
+	_, err := snap.GetAppend([]byte("missing"), []byte("prefix:"))
+	if !errors.Is(err, tree.ErrKeyNotFound) {
+		t.Fatalf("GetAppend(missing) err=%v want ErrKeyNotFound", err)
 	}
 }
 
