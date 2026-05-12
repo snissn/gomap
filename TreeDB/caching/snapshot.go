@@ -284,6 +284,8 @@ type rootDomainPublishedBackendLookupMarker interface {
 	rootDomainPublishedBackendLookupMarker()
 }
 
+// ErrSnapshotValueLogReaderUnavailable reports that a snapshot value-log
+// pointer read could not proceed because the snapshot has no value-log reader.
 var ErrSnapshotValueLogReaderUnavailable = errors.New("caching snapshot: value-log reader unavailable")
 
 func rootDomainPublishedGetAppend(snap rootDomainSnapshot, key, dst []byte) ([]byte, bool, error) {
@@ -310,7 +312,7 @@ func rootDomainPublishedGetUnsafe(snap rootDomainSnapshot, key []byte) ([]byte, 
 	return out, true, err
 }
 
-func rootDomainPublishedUsesBackendLookup(published any) bool {
+func rootDomainPublishedUsesBackendLookup(published rootDomainPublishedValueLookup) bool {
 	_, ok := published.(rootDomainPublishedBackendLookupMarker)
 	return ok
 }
@@ -482,7 +484,7 @@ func (s *Snapshot) GetAppend(key, dst []byte) ([]byte, error) {
 		}
 	}
 	if checkedPublishedEntry {
-		if rootDomainPublishedUsesBackendLookup(snap.published) {
+		if lookup, ok := snap.published.(rootDomainPublishedValueLookup); ok && rootDomainPublishedUsesBackendLookup(lookup) {
 			if snap.publishedRootID != 0 {
 				// The published lookup already queried this specific root via GetAppendAtRoot.
 				// Falling back to snapshot default-root GetAppend can cross root domains.
