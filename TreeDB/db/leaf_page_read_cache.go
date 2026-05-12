@@ -207,6 +207,7 @@ func (s *leafPageReadCacheSlot) observeReadMissCandidate(fp uint64) (epoch uint6
 	oddEpochSpins := 0
 	stableEpochSpins := 0
 	lastStableEpoch := uint64(0)
+	haveStableEpoch := false
 	observedEpochAdvance := false
 	for {
 		epoch = s.readMissEpoch.Load()
@@ -220,8 +221,9 @@ func (s *leafPageReadCacheSlot) observeReadMissCandidate(fp uint64) (epoch uint6
 			continue
 		}
 		oddEpochSpins = 0
-		if lastStableEpoch == 0 {
+		if !haveStableEpoch {
 			lastStableEpoch = epoch
+			haveStableEpoch = true
 		} else if epoch != lastStableEpoch {
 			// Crossing into a new stable epoch means this observer raced a reset.
 			// Treat subsequent matches as first-miss observations in the new epoch.
