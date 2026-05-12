@@ -452,6 +452,9 @@ func (s *Snapshot) GetAppend(key, dst []byte) ([]byte, error) {
 		recordSnapshotRootDomainRead(rootDomainEntrySourceCached, false, len(val))
 		return append(dst, val...), nil
 	}
+	if s == nil {
+		return dst, tree.ErrKeyNotFound
+	}
 
 	snap := rootDomainSnapshotFromCachedSnapshot(s, key)
 	origDst := dst
