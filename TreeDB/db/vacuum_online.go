@@ -238,9 +238,10 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) error
 			cleanupNewPager()
 			return err
 		}
+		effectiveInternalBaseDelta := db.indexInternalBaseDelta && !db.indexOuterLeavesInValueLog
 		rootNode := node.NewNode(rootData)
 		if rootNode.Type() == page.PageTypeLeaf {
-			newRoot, err = vacuumClonePagerTreeWithLeafRefs(basePager, baseState.RootPageID, newAlloc, newPager, db.indexInternalBaseDelta)
+			newRoot, err = vacuumClonePagerTreeWithLeafRefs(basePager, baseState.RootPageID, newAlloc, newPager, effectiveInternalBaseDelta)
 			if err != nil {
 				_ = baseSnap.Close()
 				cleanupNewPager()
@@ -253,7 +254,7 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) error
 				cleanupNewPager()
 				return err
 			}
-			newRoot, err = vacuumBuildInternalTreeFromChildren(newPager, newAlloc, leafChildren, db.indexInternalBaseDelta)
+			newRoot, err = vacuumBuildInternalTreeFromChildren(newPager, newAlloc, leafChildren, effectiveInternalBaseDelta)
 			if err != nil {
 				_ = baseSnap.Close()
 				cleanupNewPager()
@@ -405,14 +406,15 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) error
 		}
 
 		var newSysRoot uint64
+		effectiveInternalBaseDelta := db.indexInternalBaseDelta && !db.indexOuterLeavesInValueLog
 		if db.indexOuterLeavesInValueLog && len(collectionRootReplacements) == 0 {
-			newSysRoot, err = vacuumClonePagerTreeWithLeafRefs(oldGen.pager, state.SystemRootPageID, newAlloc, newPager, db.indexInternalBaseDelta)
+			newSysRoot, err = vacuumClonePagerTreeWithLeafRefs(oldGen.pager, state.SystemRootPageID, newAlloc, newPager, effectiveInternalBaseDelta)
 		} else {
 			newSysRoot, err = vacuumBuildSystemRoot(oldGen.pager, reader, state.SystemRootPageID, newAlloc, newPager, bulk.BuildOptions{
 				LeafPrefixCompression: db.leafPrefixCompression,
 				LeafColumnar:          db.indexColumnarLeaves,
 				PackedValuePtr:        db.indexPackedValuePtr,
-				InternalBaseDelta:     db.indexInternalBaseDelta,
+				InternalBaseDelta:     effectiveInternalBaseDelta,
 			}, collectionRootReplacements)
 		}
 		if err != nil {
