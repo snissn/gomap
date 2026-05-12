@@ -156,6 +156,14 @@ func (c *leafPageReadCache) storeReadMiss(ptr page.LeafLogPtr, leafPage []byte) 
 		slot.mu.Unlock()
 		return
 	}
+	if slot.readMissCandidateFP.Load() != fp {
+		// A writer/read admission race can repurpose this slot and reset the
+		// candidate between Swap(fp) and lock acquisition. Avoid admitting a stale
+		// read miss into the now-replaced slot.
+		slot.mu.Unlock()
+		c.readMissAdmissionSkips.Add(1)
+		return
+	}
 	result := slot.storeLocked(key, leafPage)
 	slot.mu.Unlock()
 	c.readMissAdmissionStores.Add(1)
