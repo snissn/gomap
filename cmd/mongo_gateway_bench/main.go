@@ -55,6 +55,7 @@ const (
 type config struct {
 	Target                                        string
 	MongoURI                                      string
+	MongoCompact                                  bool
 	TreeDBDir                                     string
 	KeepTreeDBDir                                 bool
 	DropBeforeRun                                 bool
@@ -111,6 +112,7 @@ type config struct {
 type benchmarkResult struct {
 	Target                     string   `json:"target"`
 	MongoURI                   string   `json:"mongo_uri,omitempty"`
+	MongoCompact               bool     `json:"mongo_compact,omitempty"`
 	TreeDBDir                  string   `json:"treedb_dir,omitempty"`
 	Database                   string   `json:"database"`
 	Collection                 string   `json:"collection"`
@@ -484,6 +486,7 @@ func parseConfig(args []string) (config, error) {
 	fs.SetOutput(&flagOutput)
 	fs.StringVar(&cfg.Target, "target", "treedb", "benchmark target: treedb or mongo")
 	fs.StringVar(&cfg.MongoURI, "mongo-uri", "mongodb://127.0.0.1:27017", "MongoDB URI for -target mongo")
+	fs.BoolVar(&cfg.MongoCompact, "mongo-compact", false, "compact the MongoDB collection before final stats collection")
 	fs.StringVar(&cfg.TreeDBDir, "treedb-dir", "", "TreeDB directory for -target treedb; empty uses a temp dir")
 	fs.BoolVar(&cfg.KeepTreeDBDir, "keep-treedb-dir", false, "keep an auto-created TreeDB temp dir after the run")
 	fs.BoolVar(&cfg.DropBeforeRun, "drop-before-run", true, "drop the MongoDB database before running -target mongo")
@@ -1491,6 +1494,7 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 		result.TreeDBReadState = cfg.TreeDBReadState
 	} else {
 		result.MongoURI = redactMongoURI(cfg.MongoURI)
+		result.MongoCompact = cfg.MongoCompact
 	}
 	if err := createIndexes(ctx, db, coll, cfg.SecondaryIndexes, cfg.RangeIndex, cfg.Target == "treedb"); err != nil {
 		return nil, err
@@ -4851,12 +4855,33 @@ func collectFinalStats(ctx context.Context, cfg config, target *benchTarget, res
 		}
 		return nil
 	}
+	if cfg.MongoCompact {
+		if err := compactMongoCollection(ctx, target.client.Database(cfg.Database), cfg.Collection); err != nil {
+			return err
+		}
+	}
 	stats, err := mongoDBStats(ctx, target.client.Database(cfg.Database))
 	if err != nil {
 		return err
 	}
 	result.MongoDBStatsFinal = stats
 	return nil
+}
+
+func compactMongoCollection(ctx context.Context, db *mongo.Database, collection string) error {
+	command := bson.D{
+		{Key: "compact", Value: collection},
+		{Key: "force", Value: true},
+	}
+	var out bson.M
+	if err := runMongoCommandDecode(ctx, db, command, &out); err != nil {
+		return fmt.Errorf("compact %q: %w", collection, err)
+	}
+	return nil
+}
+
+var runMongoCommandDecode = func(ctx context.Context, db *mongo.Database, command bson.D, out any) error {
+	return db.RunCommand(ctx, command).Decode(out)
 }
 
 func runTreeDBMaintenanceStack(ctx context.Context, target *benchTarget, result *benchmarkResult) error {
@@ -5898,6 +5923,9 @@ func writeResult(out io.Writer, format string, result *benchmarkResult) error {
 		}
 		if result.MongoURI != "" {
 			fmt.Fprintf(out, "mongo_uri=%s\n", result.MongoURI)
+		}
+		if result.Target == "mongo" {
+			fmt.Fprintf(out, "mongo_compact=%t\n", result.MongoCompact)
 		}
 		if result.ProfileDir != "" {
 			fmt.Fprintf(out, "profile_dir=%s profile_manifest=%s profile_result=%s\n",
