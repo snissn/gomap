@@ -317,8 +317,8 @@ func rootDomainPublishedUsesBackendLookup(snap rootDomainSnapshot) bool {
 	return ok
 }
 
-func shouldShortCircuitPublishedAppendMiss(checkedPublishedEntry bool, publishedRoots *publishedRootSet, snap rootDomainSnapshot) bool {
-	return checkedPublishedEntry && publishedRoots == nil && rootDomainPublishedUsesBackendLookup(snap)
+func shouldShortCircuitPublishedAppendMiss(checkedPublishedEntry bool, publishedRoots *publishedRootSet, domainSnap rootDomainSnapshot) bool {
+	return checkedPublishedEntry && publishedRoots == nil && rootDomainPublishedUsesBackendLookup(domainSnap)
 }
 
 func (s *Snapshot) getAppendFromEntryWithSource(snap rootDomainSnapshot, key, dst []byte, oldLen int) ([]byte, bool, error) {
