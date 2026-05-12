@@ -7,8 +7,25 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/tree"
 )
+
+type publishedAppendMissWithPrefix struct {
+	prefix []byte
+}
+
+func (p publishedAppendMissWithPrefix) GetEntry(_ []byte) (val []byte, ptr page.ValuePtr, flags byte, found bool) {
+	return nil, page.ValuePtr{}, 0, false
+}
+
+func (p publishedAppendMissWithPrefix) GetValueAppend(_ []byte, dst []byte) ([]byte, error) {
+	return append(dst, p.prefix...), tree.ErrKeyNotFound
+}
+
+func (p publishedAppendMissWithPrefix) GetValueUnsafe(_ []byte) ([]byte, error) {
+	return nil, tree.ErrKeyNotFound
+}
 
 func TestAcquireSnapshot_NotifyErrorOnRotateFailure(t *testing.T) {
 	dir, err := os.MkdirTemp("", "treedb-snapshot-rotate-fail-")
@@ -327,6 +344,58 @@ func TestSnapshotGetAppend_PublishedMissFallsBackToBackend(t *testing.T) {
 		t.Fatalf("GetAppend(k): %v", err)
 	}
 	if want := "backend-v"; string(got) != want {
+		t.Fatalf("GetAppend(k)=%q want %q", string(got), want)
+	}
+}
+
+func TestSnapshotGetAppend_PublishedMissFallbackTruncatesDst(t *testing.T) {
+	dir, err := os.MkdirTemp("", "treedb-snapshot-getappend-published-miss-dst-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+
+	backend, err := db.Open(db.Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer backend.Close()
+
+	cached, err := Open(dir, backend, Options{FlushThreshold: 1024 * 1024})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cached.Close()
+
+	if err := cached.SetSync([]byte("k"), []byte("backend-v")); err != nil {
+		t.Fatalf("SetSync: %v", err)
+	}
+	if err := cached.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	backendSnap := backend.AcquireSnapshot()
+	if backendSnap == nil {
+		t.Fatal("AcquireSnapshot=nil")
+	}
+	published := publishedAppendMissWithPrefix{prefix: []byte("bad:")}
+
+	snap := &Snapshot{
+		db:      cached,
+		backend: backendSnap,
+		rootPointShards: []rootDomainSnapshot{
+			{publishedRootID: 1, published: published},
+		},
+		publishedRoots: &publishedRootSet{
+			pointShards: []publishedRootRef{{lookup: published, rootID: 1}},
+		},
+	}
+	defer func() { _ = snap.Close() }()
+
+	got, err := snap.GetAppend([]byte("k"), []byte("prefix:"))
+	if err != nil {
+		t.Fatalf("GetAppend(k): %v", err)
+	}
+	if want := "prefix:backend-v"; string(got) != want {
 		t.Fatalf("GetAppend(k)=%q want %q", string(got), want)
 	}
 }
