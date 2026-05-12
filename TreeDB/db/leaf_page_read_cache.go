@@ -213,8 +213,10 @@ func (s *leafPageReadCacheSlot) readMissCandidateStillCurrent(fp, epoch uint64) 
 }
 
 func (s *leafPageReadCacheSlot) resetReadMissCandidateLocked() {
-	s.readMissEpoch.Add(1)
 	s.readMissCandidateFP.Store(0)
+	// Publish a fresh epoch only after clearing the prior fingerprint so new
+	// misses cannot observe (new epoch, stale fingerprint) as a false repeat.
+	s.readMissEpoch.Add(1)
 }
 
 func (c *leafPageReadCache) recordStore(result leafPageReadCacheStoreResult, key leafPageReadCacheKey) {
