@@ -317,8 +317,8 @@ func (f *File) groupedFrameCacheReadTo(start int64, verifyCRC bool, subIndex int
 		return nil, false, nil, false
 	}
 	if len(f.groupedFrameCache) == 0 {
-		f.groupedFrameCacheMisses.Add(1)
 		f.cacheMu.RUnlock()
+		f.groupedFrameCacheMisses.Add(1)
 		return nil, false, nil, false
 	}
 	for i := range f.groupedFrameCache {
@@ -332,15 +332,13 @@ func (f *File) groupedFrameCacheReadTo(start int64, verifyCRC bool, subIndex int
 		if valEnd < valStart || valEnd > rawLen || uint32(len(e.raw)) != rawLen {
 			continue
 		}
-		// Intentionally avoid touching cache recency on read hits: updating
-		// groupedFrameCacheClock under cacheMu adds write contention on this hot path.
-		f.groupedFrameCacheHits.Add(1)
 		val := e.raw[valStart:valEnd]
 		if f.templateLookup != nil && templ.IsEncodedPayload(val) {
 			// Copy payload while holding cacheMu so callers do not race with cache
 			// entry eviction/reuse after unlock.
 			encoded := append([]byte(nil), val...)
 			f.cacheMu.RUnlock()
+			f.groupedFrameCacheHits.Add(1)
 			decoded, decErr := templ.DecodePayloadAppend(nil, encoded, func(id uint64) (templ.TemplateDef, error) {
 				return resolveTemplateDef(id, f.templateLookup, f.templateDefCache)
 			}, f.templateDecodeOpts)
@@ -353,15 +351,17 @@ func (f *File) groupedFrameCacheReadTo(start int64, verifyCRC bool, subIndex int
 			out := dst[:len(val)]
 			copy(out, val)
 			f.cacheMu.RUnlock()
+			f.groupedFrameCacheHits.Add(1)
 			return out, true, nil, true
 		}
 		out := make([]byte, len(val))
 		copy(out, val)
 		f.cacheMu.RUnlock()
+		f.groupedFrameCacheHits.Add(1)
 		return out, false, nil, true
 	}
-	f.groupedFrameCacheMisses.Add(1)
 	f.cacheMu.RUnlock()
+	f.groupedFrameCacheMisses.Add(1)
 	return nil, false, nil, false
 }
 
