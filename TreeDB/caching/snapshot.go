@@ -478,6 +478,13 @@ func (s *Snapshot) GetAppend(key, dst []byte) ([]byte, error) {
 			return append(dst, val...), nil
 		}
 	}
+	if checkedPublishedEntry && s.publishedRoots == nil {
+		// rootDomainSnapshotFromCachedSnapshot() installs backendSnapshotLookup as
+		// the published lookup when no published root set is pinned. A not-found
+		// from that lookup already queried the backend snapshot, so avoid an extra
+		// backend GetAppend miss probe here.
+		return dst, tree.ErrKeyNotFound
+	}
 
 	if s == nil || s.backend == nil || s.db == nil {
 		return dst, tree.ErrKeyNotFound
