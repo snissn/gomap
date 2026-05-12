@@ -3,6 +3,7 @@ package db
 import (
 	"fmt"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -91,6 +92,7 @@ type leafPageReadCache struct {
 	entries   atomic.Uint64
 
 	readMissAdmissionSkips  atomic.Uint64
+	readMissAdmissionStale  atomic.Uint64
 	readMissAdmissionStores atomic.Uint64
 }
 
@@ -103,6 +105,7 @@ type leafPageReadCacheStats struct {
 	Capacity                uint64
 	Bytes                   uint64
 	ReadMissAdmissionSkips  uint64
+	ReadMissAdmissionStale  uint64
 	ReadMissAdmissionStores uint64
 }
 
@@ -164,7 +167,7 @@ func (c *leafPageReadCache) storeReadMiss(ptr page.LeafLogPtr, leafPage []byte) 
 		// resets so a same-key first miss after reset cannot resurrect stale
 		// admission.
 		slot.mu.Unlock()
-		c.readMissAdmissionSkips.Add(1)
+		c.readMissAdmissionStale.Add(1)
 		return
 	}
 	result := slot.storeLocked(key, leafPage)
@@ -199,6 +202,7 @@ func (s *leafPageReadCacheSlot) observeReadMissCandidate(fp uint64) (epoch uint6
 		epoch = s.readMissEpoch.Load()
 		if epoch&1 != 0 {
 			// Writer is resetting this slot's admission candidate.
+			runtime.Gosched()
 			continue
 		}
 		candidateToken := readMissCandidateToken(fp, epoch)
@@ -309,6 +313,7 @@ func (c *leafPageReadCache) stats() leafPageReadCacheStats {
 		Capacity:                uint64(len(c.slots)),
 		Bytes:                   entries * page.PageSize,
 		ReadMissAdmissionSkips:  c.readMissAdmissionSkips.Load(),
+		ReadMissAdmissionStale:  c.readMissAdmissionStale.Load(),
 		ReadMissAdmissionStores: c.readMissAdmissionStores.Load(),
 	}
 }
