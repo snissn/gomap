@@ -162,7 +162,11 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 		return nil
 	}
 
-	snap := &Snapshot{db: db, view: view, backend: backendSnap}
+	snap := &Snapshot{
+		db:      db,
+		view:    view,
+		backend: backendSnap,
+	}
 	snap.rootVersion = viewRootVersion
 	snap.rootPointShards = viewRootPointShards
 	snap.rootSystem = viewRootSystem
@@ -276,6 +280,10 @@ type rootDomainPublishedValueLookup interface {
 	GetValueUnsafe(key []byte) ([]byte, error)
 }
 
+type rootDomainPublishedBackendLookupMarker interface {
+	rootDomainPublishedBackendLookupMarker()
+}
+
 func rootDomainPublishedGetAppend(snap rootDomainSnapshot, key, dst []byte) ([]byte, bool, error) {
 	if snap.published == nil {
 		return dst, false, nil
@@ -298,6 +306,50 @@ func rootDomainPublishedGetUnsafe(snap rootDomainSnapshot, key []byte) ([]byte, 
 	}
 	out, err := lookup.GetValueUnsafe(key)
 	return out, true, err
+}
+
+func rootDomainPublishedUsesBackendLookup(snap rootDomainSnapshot) bool {
+	lookup, ok := snap.published.(rootDomainPublishedValueLookup)
+	if !ok {
+		return false
+	}
+	_, ok = lookup.(rootDomainPublishedBackendLookupMarker)
+	return ok
+}
+
+func shouldShortCircuitPublishedAppendMiss(checkedPublishedEntry bool, publishedRoots *publishedRootSet, domainSnap rootDomainSnapshot) bool {
+	return checkedPublishedEntry && publishedRoots == nil && rootDomainPublishedUsesBackendLookup(domainSnap)
+}
+
+func (s *Snapshot) getAppendFromEntryWithSource(snap rootDomainSnapshot, key, dst []byte, oldLen int) ([]byte, bool, error) {
+	val, ptr, flags, found, source := snap.getEntryWithSource(key)
+	if !found {
+		return dst, false, nil
+	}
+	if flags&node.FlagTombstone != 0 {
+		return dst, true, tree.ErrKeyNotFound
+	}
+	if flags&node.FlagPointer != 0 {
+		var valueLogDB *DB
+		if s != nil {
+			valueLogDB = s.db
+		}
+		if valueLogDB == nil {
+			return dst, true, errors.New("caching snapshot: value-log reader unavailable")
+		}
+		out, err := valueLogDB.readValueLogAppend(key, ptr, dst)
+		if err != nil {
+			return dst, true, err
+		}
+		recordSnapshotRootDomainRead(source, true, len(out)-oldLen)
+		return out, true, nil
+	}
+	if val == nil {
+		recordSnapshotRootDomainRead(source, false, 0)
+		return dst, true, nil
+	}
+	recordSnapshotRootDomainRead(source, false, len(val))
+	return append(dst, val...), true, nil
 }
 
 func (s *Snapshot) iteratorSources(start, end []byte, reverse bool) ([]merging.IteratorSource, error) {
@@ -376,23 +428,19 @@ func (s *Snapshot) ReverseIterator(start, end []byte) (merging.Iterator, error) 
 }
 
 func (s *Snapshot) GetAppend(key, dst []byte) ([]byte, error) {
-	snap, val, ptr, flags, found, source := s.lookupRootDomainSnapshotEntry(key)
+	if s == nil {
+		return dst, tree.ErrKeyNotFound
+	}
+	// Critical fast path for parallel point reads:
+	// consult only mutable/immutable memtables first, then query published/backend
+	// directly via append APIs. This avoids a published GetEntry pre-read that can
+	// materialize leaf-log pages before the actual GetAppend pointer read.
+	val, ptr, flags, found := s.lookupCachedRootDomainEntry(key)
 	if found {
 		if flags&node.FlagTombstone != 0 {
 			return dst, tree.ErrKeyNotFound
 		}
 		if flags&node.FlagPointer != 0 {
-			if source == rootDomainEntrySourcePublished {
-				oldLen := len(dst)
-				out, ok, err := rootDomainPublishedGetAppend(snap, key, dst)
-				if ok {
-					if err != nil {
-						return dst, err
-					}
-					recordSnapshotRootDomainRead(source, true, len(out)-oldLen)
-					return out, nil
-				}
-			}
 			if s.db == nil {
 				return dst, errors.New("caching snapshot: value-log reader unavailable")
 			}
@@ -401,25 +449,73 @@ func (s *Snapshot) GetAppend(key, dst []byte) ([]byte, error) {
 			if err != nil {
 				return dst, err
 			}
-			recordSnapshotRootDomainRead(source, true, len(out)-oldLen)
+			recordSnapshotRootDomainRead(rootDomainEntrySourceCached, true, len(out)-oldLen)
 			return out, nil
 		}
 		if val == nil {
-			recordSnapshotRootDomainRead(source, false, 0)
+			recordSnapshotRootDomainRead(rootDomainEntrySourceCached, false, 0)
 			return dst, nil
 		}
-		recordSnapshotRootDomainRead(source, false, len(val))
+		recordSnapshotRootDomainRead(rootDomainEntrySourceCached, false, len(val))
 		return append(dst, val...), nil
 	}
+	snap := rootDomainSnapshotFromCachedSnapshot(s, key)
+	// backendSnapshotLookup (used when a published ref falls back to backend
+	// snapshot lookup) flushes value-log state before backend snapshot reads.
+	publishedRoots := s.publishedRoots
+	origDst := dst
+	oldLen := len(dst)
+	out, ok, err := rootDomainPublishedGetAppend(snap, key, dst)
+	checkedPublishedEntry := false
+	if ok {
+		if err != nil {
+			// Published append lookups should not leak partial dst appends across
+			// fallback paths when they report misses/errors.
+			dst = origDst[:oldLen]
+			if len(out) >= oldLen {
+				dst = out[:oldLen]
+			}
+		}
+		if err == nil {
+			recordSnapshotRootDomainRead(rootDomainEntrySourcePublished, true, len(out)-oldLen)
+			return out, nil
+		}
+		// Preserve historical miss semantics: published append misses should still
+		// fall through to backend lookup when the key is absent, while true
+		// tombstones remain not-found.
+		if !errors.Is(err, tree.ErrKeyNotFound) {
+			return dst, err
+		}
+		checkedPublishedEntry = true
+		if shouldShortCircuitPublishedAppendMiss(true, publishedRoots, snap) {
+			// Published backend append miss already probed the relevant root.
+			return dst, tree.ErrKeyNotFound
+		}
+		if out, found, err := s.getAppendFromEntryWithSource(snap, key, dst, oldLen); found {
+			return out, err
+		}
+	}
+	if !checkedPublishedEntry {
+		if out, found, err := s.getAppendFromEntryWithSource(snap, key, dst, oldLen); found {
+			return out, err
+		}
+	}
+	if shouldShortCircuitPublishedAppendMiss(checkedPublishedEntry, publishedRoots, snap) {
+		// rootDomainSnapshotFromCachedSnapshot() installs backendSnapshotLookup as
+		// the published lookup when no published root set is pinned. A not-found
+		// from that lookup already queried the backend snapshot (after
+		// flushValueLogForBackendRead inside backendSnapshotLookup.GetValueAppend), so
+		// avoid an extra backend GetAppend miss probe here.
+		return dst, tree.ErrKeyNotFound
+	}
 
-	if s == nil || s.backend == nil || s.db == nil {
+	if s.backend == nil || s.db == nil {
 		return dst, tree.ErrKeyNotFound
 	}
 	if err := s.db.flushValueLogForBackendRead(); err != nil {
 		return dst, err
 	}
-	oldLen := len(dst)
-	out, err := s.backend.GetAppend(key, dst)
+	out, err = s.backend.GetAppend(key, dst)
 	if err != nil {
 		return dst, err
 	}
@@ -471,10 +567,11 @@ func (s *Snapshot) Get(key []byte) ([]byte, error) {
 			maybeRecordSnapshotGetCallerSample(len(out))
 			return ownedReadResult(out, scratch), nil
 		}
-		recordSnapshotRootDomainRead(source, false, len(val))
 		if len(val) == 0 {
+			recordSnapshotRootDomainRead(source, false, len(val))
 			return nil, nil
 		}
+		recordSnapshotRootDomainRead(source, false, len(val))
 		maybeRecordSnapshotGetCallerSample(len(val))
 		owned := make([]byte, len(val))
 		copy(owned, val)
