@@ -59,6 +59,27 @@ func (p *publishedAppendHit) GetValueUnsafe(_ []byte) ([]byte, error) {
 	return append([]byte(nil), p.value...), nil
 }
 
+type publishedBackendLookupMissCounter struct {
+	appendCalls int
+	entryCalls  int
+}
+
+func (publishedBackendLookupMissCounter) rootDomainPublishedBackendLookupMarker() {}
+
+func (p *publishedBackendLookupMissCounter) GetEntry(_ []byte) (val []byte, ptr page.ValuePtr, flags byte, found bool) {
+	p.entryCalls++
+	return nil, page.ValuePtr{}, 0, false
+}
+
+func (p *publishedBackendLookupMissCounter) GetValueAppend(_ []byte, dst []byte) ([]byte, error) {
+	p.appendCalls++
+	return dst, tree.ErrKeyNotFound
+}
+
+func (p *publishedBackendLookupMissCounter) GetValueUnsafe(_ []byte) ([]byte, error) {
+	return nil, tree.ErrKeyNotFound
+}
+
 func newSnapshotGetAppendBackendFixture(t *testing.T, seedKey, seedValue []byte) (*DB, *db.Snapshot, func()) {
 	t.Helper()
 	dir, err := os.MkdirTemp("", "treedb-snapshot-getappend-fixture-")
@@ -501,6 +522,26 @@ func TestShouldShortCircuitPublishedAppendMiss_BackendLookupOnly(t *testing.T) {
 	}
 	if shouldShortCircuitPublishedAppendMiss(false, nil, rootDomainSnapshot{published: backendSnapshotLookup{}}) {
 		t.Fatal("unchecked published misses should not short-circuit")
+	}
+}
+
+func TestSnapshotGetAppend_BackendPublishedMissSkipsEntryProbe(t *testing.T) {
+	lookup := &publishedBackendLookupMissCounter{}
+	snap := &Snapshot{
+		rootPointShards: []rootDomainSnapshot{
+			{published: lookup},
+		},
+	}
+
+	_, err := snap.GetAppend([]byte("missing"), []byte("prefix:"))
+	if !errors.Is(err, tree.ErrKeyNotFound) {
+		t.Fatalf("GetAppend(missing) err=%v want ErrKeyNotFound", err)
+	}
+	if got, want := lookup.appendCalls, 1; got != want {
+		t.Fatalf("published GetValueAppend calls=%d want %d", got, want)
+	}
+	if got := lookup.entryCalls; got != 0 {
+		t.Fatalf("published GetEntry calls=%d want 0", got)
 	}
 }
 
