@@ -2838,7 +2838,17 @@ func (c *Collection) Insert(id, document []byte) ([]byte, error) {
 	if c.db == nil {
 		return nil, errCollectionDBNil
 	}
+	if err := c.ensureWriteDomainOpen(); err != nil {
+		return nil, err
+	}
 	if len(c.meta.Indexes) == 0 {
+		if c.hasBufferedNoIndexBSONRootRuns() {
+			if err := c.withMutationLock(func() error {
+				return c.flushBufferedWrites()
+			}); err != nil {
+				return nil, err
+			}
+		}
 		return c.insertOneNoIndexBuffered(id, document)
 	}
 	ids, err := c.InsertBatch([][]byte{id}, [][]byte{document})
@@ -3039,6 +3049,40 @@ func (c *Collection) canBufferNoIndexInsertBatchAck() bool {
 		c.db != nil &&
 		c.writeDomain != nil &&
 		c.db.DurabilityMode() == backenddb.DurabilityWALOffRelaxed
+}
+
+func (c *Collection) canBufferDirectUpdateAck() bool {
+	if c == nil || c.db == nil || c.writeDomain == nil {
+		return false
+	}
+	switch c.db.DurabilityMode() {
+	case backenddb.DurabilityWALOffRelaxed, backenddb.DurabilityWALOnRelaxed:
+		return true
+	default:
+		return false
+	}
+}
+
+func isBSONDocumentFormat(format DocumentFormat) bool {
+	normalized, err := normalizeDocumentFormat(format)
+	return err == nil && normalized == DocumentFormatBSON
+}
+
+func (c *Collection) hasBufferedNoIndexBSONRootRuns() bool {
+	if c == nil || c.writeDomain == nil {
+		return false
+	}
+	domain := c.writeDomain
+	domain.mu.RLock()
+	defer domain.mu.RUnlock()
+	if domain.count == 0 || len(domain.meta.Indexes) != 0 {
+		return false
+	}
+	collectionName := bufferedDomainCollectionName(domain, c.meta.Name)
+	if collectionName == "" || !hasPendingRootRunsForRootLocked(domain, collectionPrimaryRootName(collectionName)) {
+		return false
+	}
+	return isBSONDocumentFormat(domain.meta.Options.DocumentFormat)
 }
 
 func (c *Collection) bufferNoIndexInsertBatch(
@@ -4636,7 +4680,7 @@ func pendingIndexedRootRunsLocked(domain *collectionWriteDomain, rootName string
 	return out
 }
 
-func hasPendingIndexedRootRunsForRootLocked(domain *collectionWriteDomain, rootName string) bool {
+func hasPendingRootRunsForRootLocked(domain *collectionWriteDomain, rootName string) bool {
 	if domain == nil || rootName == "" {
 		return false
 	}
@@ -7197,10 +7241,20 @@ func retryInsertBatchMutation(run func() ([][]byte, error)) ([][]byte, error) {
 func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON bool, templateEncoder *TemplateV1Encoder) ([][]byte, error) {
 	unlockMutation := c.lockMutation()
 	mutationLocked := true
+	return c.insertBatchOnceWithLockState(ids, documents, trustedValidBSON, templateEncoder, &unlockMutation, &mutationLocked)
+}
+
+func (c *Collection) insertBatchOnceWithLockState(
+	ids, documents [][]byte,
+	trustedValidBSON bool,
+	templateEncoder *TemplateV1Encoder,
+	unlockMutation *collectionMutationUnlock,
+	mutationLocked *bool,
+) ([][]byte, error) {
 	unlockIfLocked := func() {
-		if mutationLocked {
+		if mutationLocked != nil && *mutationLocked && unlockMutation != nil {
 			unlockMutation.Unlock()
-			mutationLocked = false
+			*mutationLocked = false
 		}
 	}
 	defer unlockIfLocked()
@@ -7214,12 +7268,17 @@ func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON b
 	}
 	skipInitialNoIndexFlush := false
 	if trustedValidBSON && c.canBufferNoIndexInsertBatchAck() && len(c.meta.Indexes) == 0 {
-		if documentFormat, err := normalizeDocumentFormat(c.meta.Options.DocumentFormat); err == nil && documentFormat == DocumentFormatBSON {
+		if isBSONDocumentFormat(c.meta.Options.DocumentFormat) {
 			skipInitialNoIndexFlush = true
 		}
 	}
 	if !skipInitialNoIndexFlush {
 		if err := c.flushBufferedNoIndex(); err != nil {
+			return nil, err
+		}
+	}
+	if c.hasBufferedNoIndexBSONRootRuns() {
+		if err := c.flushBufferedWrites(); err != nil {
 			return nil, err
 		}
 	}
@@ -7423,7 +7482,7 @@ func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON b
 			resetCollectionRunTables(plan.runs)
 			return nil, err
 		}
-		pin, currentCatalog, pinCommitSeq, pinSystemRoot, err := c.lockAndValidateInsertBatchPlan(&mutationLocked, &unlockMutation, snap, catalog, meta, rootNames, baseRootIDs, plan)
+		pin, currentCatalog, pinCommitSeq, pinSystemRoot, err := c.lockAndValidateInsertBatchPlan(mutationLocked, unlockMutation, snap, catalog, meta, rootNames, baseRootIDs, plan)
 		if err != nil {
 			resetCollectionRunTables(plan.runs)
 			return nil, err
@@ -7445,7 +7504,7 @@ func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON b
 		return nil, err
 	}
 
-	pin, currentCatalog, pinCommitSeq, pinSystemRoot, err := c.lockAndValidateInsertBatchPlan(&mutationLocked, &unlockMutation, snap, catalog, meta, rootNames, baseRootIDs, plan)
+	pin, currentCatalog, pinCommitSeq, pinSystemRoot, err := c.lockAndValidateInsertBatchPlan(mutationLocked, unlockMutation, snap, catalog, meta, rootNames, baseRootIDs, plan)
 	if err != nil {
 		resetCollectionRunTables(plan.runs)
 		return nil, err
@@ -8375,13 +8434,12 @@ func (c *Collection) Replace(documentID, document []byte) (bool, error) {
 // secondary unique index values may be staged in the write domain and become
 // durable at Flush/Close or auto-flush.
 //
-// For no-secondary-index collections, single-document Update deliberately
-// preserves the current synchronous publish contract: pending collection-local
-// writes are flushed first, then a modified document is published to the
-// primary root before Update returns. No-index updates may coalesce only
-// opportunistically when callers already reach the existing combiner as a
-// multi-request UpdateBatch-backed batch; they are not staged in the no-index
-// insert buffer or indexed flush queues.
+// For no-secondary-index collections, generic callback-based Update operations
+// preserve synchronous publish semantics in every durability mode: pending
+// writes are flushed before planning, and modified documents publish to the
+// primary root before Update returns. Single-document BSON $set updates use a
+// separate direct buffered path and may stage when durability mode allows
+// deferred flush/publish behavior (WAL-off relaxed and WAL-on relaxed).
 //
 // Callback panics are recovered and returned as errors in both direct and
 // combined execution. When the collection write domain combines concurrent
@@ -8390,9 +8448,12 @@ func (c *Collection) Replace(documentID, document []byte) (bool, error) {
 // testing.T.Fatal.
 //
 // Under the collection WAL target contract, WAL-on success is process-crash
-// recoverable. Retry after timeout or commit-ambiguous failure is safe only when
-// the update function is idempotent or protected by an application-level guard
-// or durable idempotency key.
+// recoverable for update operations that publish before returning. Direct-
+// buffered BSON $set updates in WAL-on relaxed mode defer that recoverability
+// boundary until Flush/Close publishes the staged root runs. Retry after timeout
+// or commit-ambiguous failure is safe only when the update function is
+// idempotent or protected by an application-level guard or durable idempotency
+// key.
 func (c *Collection) Update(documentID []byte, update func(current []byte) (replacement []byte, changed bool, err error)) (bool, bool, error) {
 	if err := validateCollectionUpdateInput(c, documentID, update); err != nil {
 		return false, false, err
@@ -8619,6 +8680,18 @@ func updateBatchBSONSetItemIndex(items []updateBatchItem) int {
 		}
 	}
 	return -1
+}
+
+func updateBatchItemsAllHaveBSONSet(items []updateBatchItem) bool {
+	if len(items) == 0 {
+		return false
+	}
+	for _, item := range items {
+		if !item.hasBSONSet {
+			return false
+		}
+	}
+	return true
 }
 
 func updateBatchItemError(index int, err error) error {
@@ -10499,11 +10572,20 @@ func (c *Collection) validateUpdateBatchPlanRootDescriptors(plan *updateBatchPla
 	return c.validateRootDescriptorSystemDeltaForMeta(plan.meta, plan.baseCommitSeq, plan.baseSystemRoot, plan.rootNames, plan.baseRootIDs)
 }
 
-func (c *Collection) shouldUseDirectBufferedUpdatePlan(meta CollectionMeta, opts collectionOptions, canBuffer bool, mode updateBatchMode, runtimes []indexRuntime, changed []preparedBatchUpdate) bool {
+func (c *Collection) shouldUseDirectBufferedUpdatePlan(meta CollectionMeta, opts collectionOptions, canBuffer bool, mode updateBatchMode, runtimes []indexRuntime, changed []preparedBatchUpdate, structuredBSONSetBatch bool) bool {
 	if c == nil || c.writeDomain == nil {
 		return false
 	}
-	if !meta.Options.BufferedIndexedWrites || len(meta.Indexes) == 0 {
+	if len(changed) == 0 {
+		return false
+	}
+	if len(meta.Indexes) == 0 {
+		return c.canBufferDirectUpdateAck() &&
+			mode == updateBatchModeNoSecondaryUniqueIndexChanges &&
+			isBSONDocumentFormat(opts.documentFormat) &&
+			structuredBSONSetBatch
+	}
+	if !meta.Options.BufferedIndexedWrites {
 		return false
 	}
 	if mode == updateBatchModeAny && collectionMetaHasSecondaryUniqueIndex(meta) {
@@ -10598,8 +10680,10 @@ func (c *Collection) updateBatchOnce(items []updateBatchItem, mode updateBatchMo
 					return nil
 				}
 				if plan.directBufferedUpdate != nil {
-					if err := c.flushBufferedWrites(); err != nil {
-						return err
+					if !c.canBufferDirectUpdateAck() {
+						if err := c.flushBufferedWrites(); err != nil {
+							return err
+						}
 					}
 					useBufferedRead = false
 					replan = true
@@ -10682,8 +10766,10 @@ func (c *Collection) updateBatchOnce(items []updateBatchItem, mode updateBatchMo
 			return nil
 		}
 		if plan.directBufferedUpdate != nil {
-			if err := c.flushBufferedWrites(); err != nil {
-				return err
+			if !c.canBufferDirectUpdateAck() {
+				if err := c.flushBufferedWrites(); err != nil {
+					return err
+				}
 			}
 			return ErrConcurrentMutation
 		}
@@ -10763,8 +10849,11 @@ func updateBatchCanReadBufferedDomainLocked(domain *collectionWriteDomain, meta 
 		return false
 	}
 	collectionName := bufferedDomainCollectionName(domain, meta.Name)
-	if collectionName == "" || !hasPendingIndexedRootRunsForRootLocked(domain, collectionPrimaryRootName(collectionName)) {
+	if collectionName == "" || !hasPendingRootRunsForRootLocked(domain, collectionPrimaryRootName(collectionName)) {
 		return false
+	}
+	if len(meta.Indexes) == 0 {
+		return true
 	}
 	return meta.Options.BufferedIndexedWrites && len(meta.Indexes) > 0
 }
@@ -11344,7 +11433,7 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 	stats.UniqueIndexPreflight += updateBatchStatsSince(detailedStats, phaseStart)
 
 	success := false
-	canBufferDirectUpdateBatch := c.shouldUseDirectBufferedUpdatePlan(meta, plannerOptions, canBufferIndexedUpdateBatch, mode, runtimes, changed)
+	canBufferDirectUpdateBatch := c.shouldUseDirectBufferedUpdatePlan(meta, plannerOptions, canBufferIndexedUpdateBatch, mode, runtimes, changed, updateBatchItemsAllHaveBSONSet(items))
 	if canBufferDirectUpdateBatch {
 		phaseStart = updateBatchStatsNow(detailedStats)
 		var templateEntries []directBufferedRootEntry
@@ -11709,7 +11798,8 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 	defer func() {
 		plan.stats.BufferStage += updateBatchStatsSince(detailedStats, bufferStart)
 	}()
-	if c.writeDomain == nil || !plan.canBufferDirectUpdateBatch || !plan.meta.Options.BufferedIndexedWrites || len(plan.meta.Indexes) == 0 {
+	primaryOnlyDirectUpdate := len(plan.meta.Indexes) == 0
+	if c.writeDomain == nil || !plan.canBufferDirectUpdateBatch || (!primaryOnlyDirectUpdate && !plan.meta.Options.BufferedIndexedWrites) {
 		plan.stats.BufferStagePrecheck += updateBatchStatsSince(detailedStats, precheckStart)
 		return false, nil
 	}
@@ -11767,7 +11857,7 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 			plan.stats.BufferStageRootScan += updateBatchStatsSince(detailedStats, phaseStart)
 			return false, fmt.Errorf("collections: UpdateBatch collection %q direct plan missing base root for %q", plan.meta.Name, rootName)
 		}
-		if hasPendingIndexedRootRunsForRootLocked(domain, rootName) {
+		if hasPendingRootRunsForRootLocked(domain, rootName) {
 			if pendingBaseRoot, ok := pendingIndexedRootBaseIDLocked(domain, rootName); ok && pendingBaseRoot != baseRoot {
 				plan.stats.BufferStageRootScan += updateBatchStatsSince(detailedStats, phaseStart)
 				return false, errBufferedRootBaseMismatch(plan.meta.Name, rootName)
@@ -11790,9 +11880,12 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 		domain.rootRuns = make(map[string][]memtable.Table, len(plan.rootNames))
 	}
 	addedRootRuns := estimateAccumulatedRootRunsForNamesLocked(domain, plan.rootNames)
-	shouldAutoFlushAfterAdding := shouldFlushBufferedIndexedWritesAfterAdding(domain, plan.meta.Options, modifiedCount, direct.stagedBytes, addedRootRuns)
+	shouldAutoFlushAfterAdding := false
+	if !primaryOnlyDirectUpdate {
+		shouldAutoFlushAfterAdding = shouldFlushBufferedIndexedWritesAfterAdding(domain, plan.meta.Options, modifiedCount, direct.stagedBytes, addedRootRuns)
+	}
 	requiresPreAppendFreeze := false
-	if collectionMetaHasSecondaryUniqueIndex(plan.meta) && bufferedIndexedAutoFlushEnabled(plan.meta.Options) {
+	if !primaryOnlyDirectUpdate && collectionMetaHasSecondaryUniqueIndex(plan.meta) && bufferedIndexedAutoFlushEnabled(plan.meta.Options) {
 		for i := range plan.rootNames {
 			if _, ok := updateBatchPlanUniqueSecondaryIndex(plan, i); ok {
 				requiresPreAppendFreeze = true
@@ -11929,16 +12022,23 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 		rollbackGeneration = domain.writeGeneration
 	}
 	domain.observeIndexedStage(modifiedCount, direct.stagedBytes, actualRootRuns)
-	c.meta = plan.meta
-	compactedObsolete, err := maybeCompactBufferedIndexedMutableRunsLocked(domain, plan.meta.Options)
-	if err != nil {
-		if rollbackOnError {
-			rollbackBufferedIndexedDomain(domain, checkpoint)
-			c.meta = collectionMetaCheckpoint
-		}
-		return false, err
+	if primaryOnlyDirectUpdate {
+		domain.observePrimaryOnlyUpdateBatch(plan.stats.Items, plan.stats.Matched, plan.stats.Modified, false, collectionRootDeltaPlanStats{})
 	}
-	if shouldFlushBufferedIndexedWrites(domain, plan.meta.Options) {
+	c.meta = plan.meta
+	var compactedObsolete []memtable.Table
+	if !primaryOnlyDirectUpdate {
+		var err error
+		compactedObsolete, err = maybeCompactBufferedIndexedMutableRunsLocked(domain, plan.meta.Options)
+		if err != nil {
+			if rollbackOnError {
+				rollbackBufferedIndexedDomain(domain, checkpoint)
+				c.meta = collectionMetaCheckpoint
+			}
+			return false, err
+		}
+	}
+	if !primaryOnlyDirectUpdate && shouldFlushBufferedIndexedWrites(domain, plan.meta.Options) {
 		freezePreAppendTables()
 		flushDuration, lockReleased, relockWait, err := c.flushBufferedIndexedAfterThresholdLocked(domain, plan.meta.Options)
 		if lockReleased > 0 {
@@ -12057,7 +12157,7 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 		if table == nil || table.Len() == 0 {
 			continue
 		}
-		if hasPendingIndexedRootRunsForRootLocked(domain, rootName) {
+		if hasPendingRootRunsForRootLocked(domain, rootName) {
 			if pendingBaseRoot, ok := pendingIndexedRootBaseIDLocked(domain, rootName); ok && pendingBaseRoot != baseRoot {
 				plan.stats.BufferStageRootScan += updateBatchStatsSince(detailedStats, phaseStart)
 				return false, errBufferedRootBaseMismatch(plan.meta.Name, rootName)
@@ -13775,7 +13875,7 @@ func hasBufferedPrimaryRootRuns(domain *collectionWriteDomain, fallbackCollectio
 	if collectionName == "" {
 		return false
 	}
-	return hasPendingIndexedRootRunsForRootLocked(domain, collectionPrimaryRootName(collectionName))
+	return hasPendingRootRunsForRootLocked(domain, collectionPrimaryRootName(collectionName))
 }
 
 func (c *Collection) getBufferedDocumentIntoLocked(domain *collectionWriteDomain, documentID []byte, dst []byte) ([]byte, bool, bool) {
