@@ -19,9 +19,11 @@ const (
 	maxLeafPageReadCacheEntries     = 1 << 18
 	// Bound miss-admission observer retries so high contention yields a skipped
 	// admission instead of unbounded reader spinning. 64 odd-epoch yields cover
-	// transient reset windows; 256 stable-epoch retries bound CAS churn.
+	// transient reset windows; 256 stable-epoch retries bound CAS churn; and a
+	// hard total-iteration cap guarantees termination under sustained churn.
 	maxReadMissOddEpochSpins    = 64
 	maxReadMissStableEpochSpins = 256
+	maxReadMissTotalSpins       = 1024
 )
 
 var LeafPageReadCacheEntries = defaultLeafPageReadCacheEntries
@@ -203,13 +205,27 @@ func (s *leafPageReadCacheSlot) storeLocked(key leafPageReadCacheKey, leafPage [
 	return result
 }
 
+// observeReadMissCandidate implements the read-miss admission state machine for
+// one cache slot:
+//   - odd readMissEpoch values mean writer reset in progress (slot unstable),
+//   - even values mean stable epoch (candidate token can be observed/published),
+//   - repeated=true is only returned when the token matches in a stable epoch
+//     without crossing into a newer stable epoch mid-observation.
+//
+// The multiple epoch reads fence reset races; bounded retry counters ensure this
+// path eventually gives up and reports non-repeated under heavy contention.
 func (s *leafPageReadCacheSlot) observeReadMissCandidate(fp uint64) (epoch uint64, repeated bool) {
+	totalSpins := 0
 	oddEpochSpins := 0
 	stableEpochSpins := 0
 	lastStableEpoch := uint64(0)
 	haveStableEpoch := false
 	observedEpochAdvance := false
 	for {
+		totalSpins++
+		if totalSpins >= maxReadMissTotalSpins {
+			return epoch, false
+		}
 		epoch = s.readMissEpoch.Load()
 		if epoch&1 != 0 {
 			// Writer is resetting this slot's admission candidate.
