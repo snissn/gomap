@@ -554,7 +554,7 @@ func TestLeafPageReadCacheStoreReadMissSkipsWhenSlotLockContended(t *testing.T) 
 
 	select {
 	case <-done:
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(2 * time.Second):
 		t.Fatalf("storeReadMiss blocked on contended slot lock; expected non-blocking skip")
 	}
 

@@ -503,7 +503,7 @@ func (f *File) Close() error {
 	pooled := f.clearGroupedFrameCacheLocked()
 	f.groupedMu.Unlock()
 	for _, raw := range pooled {
-		f.releaseDecodeScratch(raw)
+		putDecodeScratch(raw)
 	}
 	if scratch != nil {
 		putDecodeScratch(scratch)
