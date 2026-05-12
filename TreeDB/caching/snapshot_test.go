@@ -308,12 +308,16 @@ func TestSnapshotGetAppend_PublishedMissFallsBackToBackend(t *testing.T) {
 	if backendSnap == nil {
 		t.Fatal("AcquireSnapshot=nil")
 	}
+	published := newRootDomainTestTable(t, rootDomainTestOp{key: "other", value: "v"})
 
 	snap := &Snapshot{
 		db:      cached,
 		backend: backendSnap,
 		rootPointShards: []rootDomainSnapshot{
-			{published: newRootDomainTestTable(t, rootDomainTestOp{key: "other", value: "v"})},
+			{publishedRootID: 1, published: published},
+		},
+		publishedRoots: &publishedRootSet{
+			pointShards: []publishedRootRef{{lookup: published, rootID: 1}},
 		},
 	}
 	defer func() { _ = snap.Close() }()
@@ -324,5 +328,25 @@ func TestSnapshotGetAppend_PublishedMissFallsBackToBackend(t *testing.T) {
 	}
 	if want := "backend-v"; string(got) != want {
 		t.Fatalf("GetAppend(k)=%q want %q", string(got), want)
+	}
+}
+
+func TestSnapshotGet_PublishedEmptyInlineValueReturnsNil(t *testing.T) {
+	published := newRootDomainTestTable(t, rootDomainTestOp{key: "k", value: ""})
+	snap := &Snapshot{
+		rootPointShards: []rootDomainSnapshot{
+			{publishedRootID: 1, published: published},
+		},
+		publishedRoots: &publishedRootSet{
+			pointShards: []publishedRootRef{{lookup: published, rootID: 1}},
+		},
+	}
+
+	got, err := snap.Get([]byte("k"))
+	if err != nil {
+		t.Fatalf("Get(k): %v", err)
+	}
+	if got != nil {
+		t.Fatalf("Get(k)=%v want nil for empty value", got)
 	}
 }
