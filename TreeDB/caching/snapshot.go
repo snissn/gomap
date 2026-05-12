@@ -531,7 +531,7 @@ func (s *Snapshot) Get(key []byte) ([]byte, error) {
 			maybeRecordSnapshotGetCallerSample(len(out))
 			return ownedReadResult(out, scratch), nil
 		}
-		if val == nil {
+		if len(val) == 0 {
 			recordSnapshotRootDomainRead(source, false, len(val))
 			return nil, nil
 		}
