@@ -11795,18 +11795,14 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 
 	phaseStart := updateBatchStatsNow(detailedStats)
 	if domain.count != 0 {
-		if !primaryOnlyDirectUpdate && (!plan.bufferedBase || !updateBatchCanReadBufferedDomainLocked(domain, plan.meta, plan.baseSystemRoot)) {
+		if !plan.bufferedBase || !updateBatchCanReadBufferedDomainLocked(domain, plan.meta, plan.baseSystemRoot) {
 			plan.stats.BufferStageValidation += updateBatchStatsSince(detailedStats, phaseStart)
 			return false, ErrConcurrentMutation
 		}
-		if plan.bufferedBase && plan.bufferedReadGeneration != domain.writeGeneration {
+		if plan.bufferedReadGeneration != domain.writeGeneration {
 			plan.stats.BufferStageValidation += updateBatchStatsSince(detailedStats, phaseStart)
 			return false, ErrConcurrentMutation
 		}
-	}
-	if primaryOnlyDirectUpdate && domain.count != 0 && !hasBufferedIndexedRootRuns(domain) {
-		plan.stats.BufferStageValidation += updateBatchStatsSince(detailedStats, phaseStart)
-		return false, ErrConcurrentMutation
 	}
 	if err := c.validateUpdateBatchPlanRootDescriptors(plan); err != nil {
 		plan.stats.BufferStageValidation += updateBatchStatsSince(detailedStats, phaseStart)

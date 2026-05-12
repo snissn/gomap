@@ -12120,6 +12120,88 @@ func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesRejectsStaleBuffere
 	}
 }
 
+func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesRejectsStalePrimaryOnlyDirectPlan(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{
+		Dir:        t.TempDir(),
+		Durability: backenddb.DurabilityWALOffRelaxed,
+	})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatBSON,
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{mustBSONCollectionDocument(t, bson.D{
+			{Key: "_id", Value: "u1"},
+			{Key: "city", Value: "hnl"},
+		})},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush insert buffer: %v", err)
+	}
+
+	spec, err := newBSONSetUpdate([]BSONSetField{{
+		Key:   "city",
+		Value: mustBSONRawValue(t, "sfo"),
+	}})
+	if err != nil {
+		t.Fatalf("prepare stale primary-only bson set spec: %v", err)
+	}
+	plan, err := col.buildUpdateBatchPlan([]updateBatchItem{
+		newBSONSetUpdateBatchItem([]byte("u1"), spec),
+	}, updateBatchModeNoSecondaryUniqueIndexChanges, true)
+	if err != nil {
+		t.Fatalf("build stale primary-only plan: %v", err)
+	}
+	defer plan.close()
+	if plan.bufferedBase {
+		t.Fatalf("plan bufferedBase=%v want false when domain was empty", plan.bufferedBase)
+	}
+	if !plan.canBufferDirectUpdateBatch || plan.directBufferedUpdate == nil || len(plan.directBufferedUpdate.primaryEntries) == 0 {
+		t.Fatalf("plan direct buffered path unavailable: canBuffer=%v directPlan=%v primaryEntries=%d", plan.canBufferDirectUpdateBatch, plan.directBufferedUpdate != nil, len(plan.directBufferedUpdate.primaryEntries))
+	}
+
+	if _, _, err := col.UpdateBSONSet([]byte("u1"), []BSONSetField{{
+		Key:   "city",
+		Value: mustBSONRawValue(t, "sea"),
+	}}); err != nil {
+		t.Fatalf("UpdateBSONSet: %v", err)
+	}
+	col.writeDomain.mu.RLock()
+	bufferedCount := col.writeDomain.count
+	col.writeDomain.mu.RUnlock()
+	if bufferedCount == 0 {
+		t.Fatalf("expected buffered no-index update to stage pending state")
+	}
+
+	err = col.withMutationLock(func() error {
+		buffered, err := col.bufferUpdateBatchPlanLocked(plan)
+		if buffered {
+			t.Fatalf("stale primary-only plan buffered successfully")
+		}
+		return err
+	})
+	if !errors.Is(err, ErrConcurrentMutation) {
+		t.Fatalf("buffer stale primary-only plan err=%v want ErrConcurrentMutation", err)
+	}
+}
+
 func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesRejectsStaleZeroDeltaPlan(t *testing.T) {
 	_, col := newBufferedUsersUpdateCollection(t)
 	if _, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{
