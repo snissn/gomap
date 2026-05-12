@@ -27,6 +27,20 @@ func (p publishedAppendMissWithPrefix) GetValueUnsafe(_ []byte) ([]byte, error) 
 	return nil, tree.ErrKeyNotFound
 }
 
+type publishedAppendMissNilOutput struct{}
+
+func (publishedAppendMissNilOutput) GetEntry(_ []byte) (val []byte, ptr page.ValuePtr, flags byte, found bool) {
+	return nil, page.ValuePtr{}, 0, false
+}
+
+func (publishedAppendMissNilOutput) GetValueAppend(_ []byte, _ []byte) ([]byte, error) {
+	return nil, tree.ErrKeyNotFound
+}
+
+func (publishedAppendMissNilOutput) GetValueUnsafe(_ []byte) ([]byte, error) {
+	return nil, tree.ErrKeyNotFound
+}
+
 func TestAcquireSnapshot_NotifyErrorOnRotateFailure(t *testing.T) {
 	dir, err := os.MkdirTemp("", "treedb-snapshot-rotate-fail-")
 	if err != nil {
@@ -378,6 +392,58 @@ func TestSnapshotGetAppend_PublishedMissFallbackTruncatesDst(t *testing.T) {
 		t.Fatal("AcquireSnapshot=nil")
 	}
 	published := publishedAppendMissWithPrefix{prefix: []byte("bad:")}
+
+	snap := &Snapshot{
+		db:      cached,
+		backend: backendSnap,
+		rootPointShards: []rootDomainSnapshot{
+			{publishedRootID: 1, published: published},
+		},
+		publishedRoots: &publishedRootSet{
+			pointShards: []publishedRootRef{{lookup: published, rootID: 1}},
+		},
+	}
+	defer func() { _ = snap.Close() }()
+
+	got, err := snap.GetAppend([]byte("k"), []byte("prefix:"))
+	if err != nil {
+		t.Fatalf("GetAppend(k): %v", err)
+	}
+	if want := "prefix:backend-v"; string(got) != want {
+		t.Fatalf("GetAppend(k)=%q want %q", string(got), want)
+	}
+}
+
+func TestSnapshotGetAppend_PublishedMissFallbackHandlesShortErrorOutput(t *testing.T) {
+	dir, err := os.MkdirTemp("", "treedb-snapshot-getappend-published-miss-short-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+
+	backend, err := db.Open(db.Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer backend.Close()
+
+	cached, err := Open(dir, backend, Options{FlushThreshold: 1024 * 1024})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cached.Close()
+
+	if err := cached.SetSync([]byte("k"), []byte("backend-v")); err != nil {
+		t.Fatalf("SetSync: %v", err)
+	}
+	if err := cached.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	backendSnap := backend.AcquireSnapshot()
+	if backendSnap == nil {
+		t.Fatal("AcquireSnapshot=nil")
+	}
+	published := publishedAppendMissNilOutput{}
 
 	snap := &Snapshot{
 		db:      cached,
