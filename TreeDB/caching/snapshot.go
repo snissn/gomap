@@ -428,6 +428,9 @@ func (s *Snapshot) ReverseIterator(start, end []byte) (merging.Iterator, error) 
 }
 
 func (s *Snapshot) GetAppend(key, dst []byte) ([]byte, error) {
+	if s == nil {
+		return dst, tree.ErrKeyNotFound
+	}
 	// Critical fast path for parallel point reads:
 	// consult only mutable/immutable memtables first, then query published/backend
 	// directly via append APIs. This avoids a published GetEntry pre-read that can
@@ -456,10 +459,6 @@ func (s *Snapshot) GetAppend(key, dst []byte) ([]byte, error) {
 		recordSnapshotRootDomainRead(rootDomainEntrySourceCached, false, len(val))
 		return append(dst, val...), nil
 	}
-	if s == nil {
-		return dst, tree.ErrKeyNotFound
-	}
-
 	snap := rootDomainSnapshotFromCachedSnapshot(s, key)
 	origDst := dst
 	oldLen := len(dst)
@@ -505,8 +504,9 @@ func (s *Snapshot) GetAppend(key, dst []byte) ([]byte, error) {
 	if shouldShortCircuitPublishedAppendMiss(checkedPublishedEntry, publishedRoots, snap) {
 		// rootDomainSnapshotFromCachedSnapshot() installs backendSnapshotLookup as
 		// the published lookup when no published root set is pinned. A not-found
-		// from that lookup already queried the backend snapshot, so avoid an extra
-		// backend GetAppend miss probe here.
+		// from that lookup already queried the backend snapshot (after
+		// flushValueLogForBackendRead inside backendSnapshotLookup.GetValueAppend), so
+		// avoid an extra backend GetAppend miss probe here.
 		return dst, tree.ErrKeyNotFound
 	}
 
