@@ -493,10 +493,12 @@ func (f *File) Close() error {
 	f.cacheFlags = 0
 	f.cacheLen = 0
 	f.setCacheRawLocked(nil, false)
-	scratch = f.decodeScratch
-	f.decodeScratch = nil
 	f.cacheStart.Store(0)
 	f.cacheMu.Unlock()
+	f.scratchMu.Lock()
+	scratch = f.decodeScratch
+	f.decodeScratch = nil
+	f.scratchMu.Unlock()
 	f.groupedMu.Lock()
 	pooled := f.clearGroupedFrameCacheLocked()
 	f.groupedMu.Unlock()
