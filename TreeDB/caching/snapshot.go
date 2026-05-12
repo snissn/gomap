@@ -471,8 +471,9 @@ func (s *Snapshot) GetAppend(key, dst []byte) ([]byte, error) {
 	}
 	publishedRoots := s.publishedRoots
 	snap := rootDomainSnapshotFromCachedSnapshot(s, key)
-	// backendSnapshotLookup (used when no published root set is pinned) flushes
-	// value-log state before serving backend snapshot reads.
+	// backendSnapshotLookup (used when a published ref falls back to backend
+	// snapshot lookup) flushes value-log state before backend snapshot reads.
+	publishedRoots := s.publishedRoots
 	origDst := dst
 	oldLen := len(dst)
 	out, ok, err := rootDomainPublishedGetAppend(snap, key, dst)
