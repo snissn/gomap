@@ -270,10 +270,16 @@ func (c *leafPageReadCache) slotIndex(key leafPageReadCacheKey) int {
 }
 
 func leafPageReadMissFingerprint(key leafPageReadCacheKey) uint64 {
-	// Keep this intentionally cheap and stable: collisions are acceptable because
-	// they only cause occasional extra lock/store attempts, never wrong results.
-	h := uint64(key.fileID)*0x9e3779b97f4a7c15 ^ key.offset
-	h ^= uint64(key.subIndex) * 0xc2b2ae3d27d4eb4f
+	// Admission is intentionally probabilistic under collisions, so keep this
+	// hash stable but well-mixed to reduce accidental first-miss admissions when
+	// unrelated keys map to the same slot.
+	h := uint64(key.fileID)*0x9e3779b97f4a7c15 + key.offset*0xbf58476d1ce4e5b9
+	h ^= uint64(key.subIndex) * 0x94d049bb133111eb
+	h ^= h >> 30
+	h *= 0xbf58476d1ce4e5b9
+	h ^= h >> 27
+	h *= 0x94d049bb133111eb
+	h ^= h >> 31
 	if h == 0 {
 		return 1
 	}
