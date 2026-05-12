@@ -312,11 +312,24 @@ func rootDomainPublishedGetUnsafe(snap rootDomainSnapshot, key []byte) ([]byte, 
 	return out, true, err
 }
 
-func rootDomainPublishedUsesBackendLookup(published rootDomainPublishedValueLookup) bool {
-	_, ok := published.(rootDomainPublishedBackendLookupMarker)
+func rootDomainPublishedUsesBackendLookup(snap rootDomainSnapshot) bool {
+	lookup, ok := snap.published.(rootDomainPublishedValueLookup)
+	if !ok {
+		return false
+	}
+	_, ok = lookup.(rootDomainPublishedBackendLookupMarker)
 	return ok
 }
 
+func shouldShortCircuitPublishedAppendMiss(checkedPublishedEntry bool, publishedRoots *publishedRootSet, snap rootDomainSnapshot) bool {
+	if !checkedPublishedEntry || !rootDomainPublishedUsesBackendLookup(snap) {
+		return false
+	}
+	if snap.publishedRootID != 0 {
+		return true
+	}
+	return publishedRoots == nil
+}
 func (s *Snapshot) getAppendFromEntryWithSource(snap rootDomainSnapshot, key, dst []byte, oldLen int) ([]byte, bool, error) {
 	val, ptr, flags, found, source := snap.getEntryWithSource(key)
 	if !found {
@@ -483,21 +496,13 @@ func (s *Snapshot) GetAppend(key, dst []byte) ([]byte, error) {
 			return out, err
 		}
 	}
-	if checkedPublishedEntry {
-		if lookup, ok := snap.published.(rootDomainPublishedValueLookup); ok && rootDomainPublishedUsesBackendLookup(lookup) {
-			if snap.publishedRootID != 0 {
-				// The published lookup already queried this specific root via GetAppendAtRoot.
-				// Falling back to snapshot default-root GetAppend can cross root domains.
-				return dst, tree.ErrKeyNotFound
-			}
-			if s.publishedRoots == nil {
-				// rootDomainSnapshotFromCachedSnapshot() installs backendSnapshotLookup as
-				// the published lookup when no published root set is pinned. A not-found
-				// from that lookup already queried the backend snapshot, so avoid an extra
-				// backend GetAppend miss probe here.
-				return dst, tree.ErrKeyNotFound
-			}
-		}
+	if shouldShortCircuitPublishedAppendMiss(checkedPublishedEntry, s.publishedRoots, snap) {
+		// Backend-published append misses already queried the target root:
+		// - root-bound lookups (publishedRootID != 0) must not fall back to
+		//   default-root GetAppend, which can cross root domains.
+		// - when no published root set is pinned, backend fallback lookup already
+		//   queried the default root, so avoid a duplicate backend miss probe.
+		return dst, tree.ErrKeyNotFound
 	}
 
 	if s == nil || s.backend == nil || s.db == nil {

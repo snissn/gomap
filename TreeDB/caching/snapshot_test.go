@@ -489,6 +489,21 @@ func TestSnapshotGetAppend_BackendLookupMissWithoutPublishedRootsReturnsNotFound
 	}
 }
 
+func TestShouldShortCircuitPublishedAppendMiss_BackendLookupOnly(t *testing.T) {
+	if !shouldShortCircuitPublishedAppendMiss(true, nil, rootDomainSnapshot{published: backendSnapshotLookup{}}) {
+		t.Fatal("backend lookup miss should short-circuit duplicate backend probes")
+	}
+	if shouldShortCircuitPublishedAppendMiss(true, nil, rootDomainSnapshot{published: publishedAppendMissWithPrefix{prefix: []byte("bad:")}}) {
+		t.Fatal("non-backend published lookup should not short-circuit backend fallback")
+	}
+	if shouldShortCircuitPublishedAppendMiss(true, &publishedRootSet{}, rootDomainSnapshot{published: backendSnapshotLookup{}}) {
+		t.Fatal("pinned published roots should not use nil-root short-circuit")
+	}
+	if shouldShortCircuitPublishedAppendMiss(false, nil, rootDomainSnapshot{published: backendSnapshotLookup{}}) {
+		t.Fatal("unchecked published misses should not short-circuit")
+	}
+}
+
 func TestSnapshotGet_PublishedEmptyInlineValueReturnsNil(t *testing.T) {
 	published := newRootDomainTestTable(t, rootDomainTestOp{key: "k", value: ""})
 	snap := &Snapshot{
