@@ -469,7 +469,6 @@ func (s *Snapshot) GetAppend(key, dst []byte) ([]byte, error) {
 		recordSnapshotRootDomainRead(rootDomainEntrySourceCached, false, len(val))
 		return append(dst, val...), nil
 	}
-	publishedRoots := s.publishedRoots
 	snap := rootDomainSnapshotFromCachedSnapshot(s, key)
 	// backendSnapshotLookup (used when a published ref falls back to backend
 	// snapshot lookup) flushes value-log state before backend snapshot reads.
