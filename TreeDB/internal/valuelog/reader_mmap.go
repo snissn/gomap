@@ -1064,21 +1064,6 @@ func (f *File) readViaMmapViewTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 		}
 		return out, true, nil, true
 	}
-	if rawPooled {
-		// If grouped-cache store was skipped (or disabled) and we decoded into
-		// pooled scratch, do not return a view that aliases pooled memory.
-		// Copy the selected value out and return scratch to the pool.
-		if dst != nil && cap(dst) >= valLen {
-			out := dst[:valLen]
-			copy(out, val)
-			f.releaseDecodeScratch(raw)
-			return out, true, nil, true
-		}
-		out := make([]byte, valLen)
-		copy(out, val)
-		f.releaseDecodeScratch(raw)
-		return out, false, nil, true
-	}
 	// dst is used iff it was provided with enough capacity to hold rawLen.
 	return val, dst != nil && cap(dst) >= int(rawLen), nil, true
 }

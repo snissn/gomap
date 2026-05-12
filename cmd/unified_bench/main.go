@@ -5952,11 +5952,11 @@ func waitForTreeDBQueueDrain(instances []*DBInstance, timeout time.Duration) err
 			if len(stats) == 0 {
 				continue
 			}
-			if parseStatInt(stats, "treedb.cache.queue_len") > 0 {
+			if queueLen, ok := parseStatInt64(stats, "treedb.cache.queue_len"); ok && queueLen > 0 {
 				pending = true
 				break
 			}
-			if parseStatInt(stats, "treedb.cache.queue_backlog_bytes") > 0 {
+			if backlogBytes, ok := parseStatInt64(stats, "treedb.cache.queue_backlog_bytes"); ok && backlogBytes > 0 {
 				pending = true
 				break
 			}
@@ -5969,18 +5969,6 @@ func waitForTreeDBQueueDrain(instances []*DBInstance, timeout time.Duration) err
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-}
-
-func parseStatInt(stats map[string]string, key string) int64 {
-	raw, ok := stats[key]
-	if !ok {
-		return 0
-	}
-	v, err := strconv.ParseInt(raw, 10, 64)
-	if err != nil {
-		return 0
-	}
-	return v
 }
 
 func containsAny(list []string, items ...string) bool {

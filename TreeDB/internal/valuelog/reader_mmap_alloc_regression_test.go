@@ -119,7 +119,7 @@ func TestBenchmarkValueLogRandomReadGroupedFrame_ReadUnsafeTo_AllocsBudget(t *te
 	}
 }
 
-func TestFileReadViaMmapViewTo_CachesGroupedFrameWithNilDst(t *testing.T) {
+func TestFileReadViaMmapViewTo_DoesNotCacheGroupedFrameWithNilDst(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("mmap not supported on windows")
 	}
