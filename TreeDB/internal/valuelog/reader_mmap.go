@@ -1042,15 +1042,15 @@ func (f *File) readViaMmapViewTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 		}
 		return nil, false, err, true
 	}
-	if cacheableRaw {
-		cachedRaw := f.groupedFrameCacheStore(start, verifyCRC, k, offsets, raw, rawPooled)
-		if rawPooled && cachedRaw {
+	publishRaw := func() {
+		if cacheableRaw && f.groupedFrameCacheStore(start, verifyCRC, k, offsets, raw, rawPooled) && rawPooled {
 			rawPooled = false
 		}
 	}
 	// Template decoding allocates new bytes; the returned slice is no longer
 	// backed by dst even if we decoded into it.
 	if decoded {
+		publishRaw()
 		if rawPooled {
 			f.releaseDecodeScratch(raw)
 		}
@@ -1059,6 +1059,9 @@ func (f *File) readViaMmapViewTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 	if copyValueToDst {
 		out := dst[:valLen]
 		copy(out, val)
+		// Publish after copying the selected value. Once grouped cache accepts a
+		// pooled raw buffer, another reader may evict and recycle it.
+		publishRaw()
 		if rawPooled {
 			f.releaseDecodeScratch(raw)
 		}
