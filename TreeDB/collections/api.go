@@ -10594,8 +10594,7 @@ func (c *Collection) shouldUseDirectBufferedUpdatePlan(meta CollectionMeta, opts
 		return false
 	}
 	if len(meta.Indexes) == 0 {
-		return c.canBufferDirectUpdateAck() &&
-			mode == updateBatchModeNoSecondaryUniqueIndexChanges &&
+		return mode == updateBatchModeNoSecondaryUniqueIndexChanges &&
 			isBSONDocumentFormat(opts.documentFormat) &&
 			structuredBSONSetBatch
 	}
