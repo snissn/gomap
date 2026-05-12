@@ -1369,8 +1369,11 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 		}
 		return nil, ErrCorrupt, true
 	}
+	groupedStored := false
 	if cacheableRaw {
-		f.groupedFrameCacheStore(start, verifyCRC, k, offsets, raw, true)
+		groupedStored = f.groupedFrameCacheStore(start, verifyCRC, k, offsets, raw, true)
+	}
+	if groupedStored {
 		pooledRaw = false
 	}
 
@@ -1381,11 +1384,7 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 	f.cacheFlags = fFlags
 	f.cacheLen = prefixLen
 	f.cacheOffs = offsets
-	if cacheableRaw {
-		f.setCacheRawLocked(raw, true)
-	} else {
-		f.setCacheRawLocked(nil, false)
-	}
+	f.setCacheRawLocked(nil, false)
 	f.cacheStart.Store(start)
 	f.cacheMu.Unlock()
 

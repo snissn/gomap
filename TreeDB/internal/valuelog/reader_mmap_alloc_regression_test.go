@@ -276,6 +276,69 @@ func TestValueLogGroupedReadParallelThenAppend_NoCorruption(t *testing.T) {
 	}
 }
 
+func TestValueLogReadAppendDoesNotDoubleOwnGroupedCacheScratch(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("mmap not supported on windows")
+	}
+
+	dir := t.TempDir()
+	fileID, err := EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatalf("encode file id: %v", err)
+	}
+	path := filepath.Join(dir, "value-l0-000001.log")
+	writer, err := NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+	writer.SetBlockCompression(BlockCodecSnappy, true)
+
+	ptrs1, want1 := appendCompressedFrameForCacheTestsTB(t, writer, 1, 4)
+	ptrs2, want2 := appendCompressedFrameForCacheTestsTB(t, writer, 2, 4)
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close writer: %v", err)
+	}
+
+	m, err := NewManager(dir)
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+	defer func() { _ = m.Close() }()
+	m.SetDisableReadChecksum(true)
+	m.SetGroupedFrameCacheEntries(8)
+
+	f := m.files[fileID]
+	f.remapToFileSize()
+
+	dst := make([]byte, 0, 512)
+	dst, err = m.ReadAppend(ptrs1[0], dst[:0])
+	if err != nil {
+		t.Fatalf("first append read: %v", err)
+	}
+	if !bytes.Equal(dst, want1[0]) {
+		t.Fatalf("first append read mismatch")
+	}
+
+	dst, err = m.ReadAppend(ptrs2[0], dst[:0])
+	if err != nil {
+		t.Fatalf("second append read: %v", err)
+	}
+	if !bytes.Equal(dst, want2[0]) {
+		t.Fatalf("second append read mismatch")
+	}
+
+	got, usedDst, readErr := f.ReadUnsafeTo(ptrs1[1], false, dst[:0])
+	if readErr != nil {
+		t.Fatalf("grouped cache read: %v", readErr)
+	}
+	if !usedDst {
+		t.Fatalf("expected grouped cache read to reuse dst")
+	}
+	if !bytes.Equal(got, want1[1]) {
+		t.Fatalf("grouped cache read mismatch after second append read")
+	}
+}
+
 func TestValueLogManager_RandomReadGroupedFrameAllocBudget(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("mmap not supported on windows")
