@@ -80,7 +80,7 @@ Options:
                         MongoDB Go driver minPoolSize. Default: 0, use driver default.
   --mongo-max-connecting N
                         MongoDB Go driver maxConnecting. Default: 0, use driver default.
- --mongo-compact       Compact the MongoDB collection before final stats collection.
+  --mongo-compact BOOL  Compact the MongoDB collection before final stats collection.
                         Set to true/false, 1/0, or yes/no.
                         Default: true for docker mode; false for external mode unless explicitly set.
   --prebuild-documents  Prebuild documents before timed load phases.
@@ -178,34 +178,42 @@ require_option_value() {
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --out)
+      require_option_value "$1" "${2-}"
       OUT_DIR="$2"
       shift 2
       ;;
     --docs)
+      require_option_value "$1" "${2-}"
       DOCS_LIST="$2"
       shift 2
       ;;
     --indexes)
+      require_option_value "$1" "${2-}"
       INDEXES_LIST="$2"
       shift 2
       ;;
     --reads)
+      require_option_value "$1" "${2-}"
       READS="$2"
       shift 2
       ;;
     --range-reads)
+      require_option_value "$1" "${2-}"
       RANGE_READS="$2"
       shift 2
       ;;
     --updates)
+      require_option_value "$1" "${2-}"
       UPDATES="$2"
       shift 2
       ;;
     --deletes)
+      require_option_value "$1" "${2-}"
       DELETES="$2"
       shift 2
       ;;
     --insert-producers)
+      require_option_value "$1" "${2-}"
       INSERT_PRODUCERS="$2"
       shift 2
       ;;
@@ -237,18 +245,22 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --concurrent-readers)
+      require_option_value "$1" "${2-}"
       CONCURRENT_READERS="$2"
       shift 2
       ;;
     --concurrent-read-kinds)
+      require_option_value "$1" "${2-}"
       CONCURRENT_READ_KINDS="$2"
       shift 2
       ;;
     --concurrent-reader-sweep)
+      require_option_value "$1" "${2-}"
       CONCURRENT_READER_SWEEP="$2"
       shift 2
       ;;
     --concurrent-reads)
+      require_option_value "$1" "${2-}"
       CONCURRENT_READS="$2"
       shift 2
       ;;

@@ -78,7 +78,7 @@ Options:
 Environment overrides use the uppercase variable names in the script, including
 RUN_ROOT, TIER, INDEXES_LIST, RAW_KEYS, COLLECTION_DOCS,
 COLLECTION_PROFILES, COLLECTION_PROFILE_BENCHTIME, COLLECTION_PROFILE_COUNT, MONGO_DOCS,
-MONGO_MODE, MONGO_URI, MONGO_IMAGE, MONGO_COMPACT, MONGO_READERS, MONGO_WRITERS, TIMEOUT, and TITLE.
+MONGO_MODE, MONGO_URI, MONGO_IMAGE (default: mongo:8), MONGO_COMPACT, MONGO_READERS, MONGO_WRITERS, TIMEOUT, and TITLE.
 EOF
 }
 
@@ -254,28 +254,36 @@ case "$TIER" in
     exit 2
     ;;
 esac
-case "$MONGO_MODE" in
-  docker|external) ;;
-  *)
-    echo "invalid --mongo-mode $MONGO_MODE (want docker or external)" >&2
-    exit 2
-    ;;
-esac
-if [[ -z "$MONGO_COMPACT" ]]; then
-  if [[ "$MONGO_MODE" == "external" ]]; then
-    MONGO_COMPACT=false
-  else
-    MONGO_COMPACT=true
-  fi
-else
-  MONGO_COMPACT=$(normalize_bool_text "$MONGO_COMPACT") || {
-    echo "invalid MONGO_COMPACT=$MONGO_COMPACT (want true/false, 1/0, or yes/no)" >&2
-    exit 2
-  }
-fi
-if [[ "$SKIP_MONGO" != "true" && "$MONGO_MODE" == "docker" ]] && ! command -v docker >/dev/null 2>&1; then
-  echo "MONGO_MODE=docker requires docker; use --mongo-mode external --mongo-uri URI" >&2
+raw_skip_mongo=$SKIP_MONGO
+SKIP_MONGO=$(normalize_bool_text "$SKIP_MONGO") || {
+  echo "invalid SKIP_MONGO=$raw_skip_mongo (want true/false, 1/0, or yes/no)" >&2
   exit 2
+}
+if ! bool_true "$SKIP_MONGO"; then
+  case "$MONGO_MODE" in
+    docker|external) ;;
+    *)
+      echo "invalid --mongo-mode $MONGO_MODE (want docker or external)" >&2
+      exit 2
+      ;;
+  esac
+  if [[ -z "$MONGO_COMPACT" ]]; then
+    if [[ "$MONGO_MODE" == "external" ]]; then
+      MONGO_COMPACT=false
+    else
+      MONGO_COMPACT=true
+    fi
+  else
+    raw_mongo_compact=$MONGO_COMPACT
+    MONGO_COMPACT=$(normalize_bool_text "$MONGO_COMPACT") || {
+      echo "invalid MONGO_COMPACT=$raw_mongo_compact (want true/false, 1/0, or yes/no)" >&2
+      exit 2
+    }
+  fi
+  if [[ "$MONGO_MODE" == "docker" ]] && ! command -v docker >/dev/null 2>&1; then
+    echo "MONGO_MODE=docker requires docker; use --mongo-mode external --mongo-uri URI" >&2
+    exit 2
+  fi
 fi
 
 INDEXES_LIST=$(normalize_list "$INDEXES_LIST")

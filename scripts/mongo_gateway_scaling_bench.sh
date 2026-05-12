@@ -65,7 +65,7 @@ Options:
   --mongo-uri URI        MongoDB URI for --mongo-mode external. Default: mongodb://127.0.0.1:27017.
   --mongo-mode MODE      MongoDB mode for mongo runs: docker or external. Default: docker.
   --mongo-image IMAGE    Docker image for --mongo-mode docker. Default: mongo:8.
-  --mongo-compact       Compact the MongoDB collection before final stats collection.
+  --mongo-compact BOOL  Compact the MongoDB collection before final stats collection.
                         Set to true/false, 1/0, or yes/no.
                         Default: true for docker mode; false for external mode unless explicitly set.
   --database-prefix NAME MongoDB database prefix. Default: mongo_gateway_scaling_<run_id>.
