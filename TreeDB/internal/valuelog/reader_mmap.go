@@ -1354,14 +1354,6 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 		}
 		return nil, ErrCorrupt, true
 	}
-	groupedStored := false
-	if cacheableRaw {
-		groupedStored = f.groupedFrameCacheStore(start, verifyCRC, k, offsets, raw, true)
-	}
-	if groupedStored {
-		pooledRaw = false
-	}
-
 	oldLen := len(dst)
 
 	f.cacheMu.Lock()
@@ -1374,18 +1366,34 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 	f.cacheMu.Unlock()
 
 	dst, err = appendDecodedTemplatePayload(dst, raw[valStart:valEnd], f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
-	if pooledRaw {
-		f.releaseDecodeScratch(raw)
-	}
 	if err != nil {
+		if pooledRaw {
+			f.releaseDecodeScratch(raw)
+		}
 		return nil, err, true
 	}
 	if len(dst) < oldLen {
+		if pooledRaw {
+			f.releaseDecodeScratch(raw)
+		}
 		return nil, ErrCorrupt, true
 	}
 	dst, err = f.appendMaybeDecodeLeafLogPayload(dst[:oldLen], dst[oldLen:])
 	if err != nil {
+		if pooledRaw {
+			f.releaseDecodeScratch(raw)
+		}
 		return nil, err, true
+	}
+	if cacheableRaw {
+		// Publish after copying the selected value. Once grouped cache accepts a
+		// pooled raw buffer, another reader may evict and recycle it.
+		if f.groupedFrameCacheStore(start, verifyCRC, k, offsets, raw, true) {
+			pooledRaw = false
+		}
+	}
+	if pooledRaw {
+		f.releaseDecodeScratch(raw)
 	}
 	return dst, nil, true
 }
