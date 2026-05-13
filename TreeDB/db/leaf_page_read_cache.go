@@ -15,7 +15,7 @@ import (
 
 const (
 	leafPageReadCacheEntriesEnvKey  = "TREEDB_LEAF_PAGE_CACHE_ENTRIES"
-	defaultLeafPageReadCacheEntries = 4096
+	defaultLeafPageReadCacheEntries = 32768
 	maxLeafPageReadCacheEntries     = 1 << 18
 	// Bound miss-admission observer retries so high contention yields a skipped
 	// admission instead of unbounded reader spinning. 64 odd-epoch yields cover

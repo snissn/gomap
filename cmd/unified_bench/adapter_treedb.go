@@ -20,7 +20,7 @@ import (
 
 const (
 	defaultTreeDBChunkSizeBytes           int64 = 256 * 1024
-	defaultTreeDBLeafPageReadCacheEntries       = 4096
+	defaultTreeDBLeafPageReadCacheEntries       = 32768
 	treeDBLeafPageReadCacheEntriesEnvKey        = "TREEDB_LEAF_PAGE_CACHE_ENTRIES"
 )
 
