@@ -486,7 +486,20 @@ func mongoCompatibilityMatrixRows() []mongoCompatibilityMatrixRow {
 			category: "transaction gap",
 			feature:  "transactions",
 			status:   "not implemented",
-			probe:    expectCommandNotFound(bson.D{{Key: "commitTransaction", Value: int32(1)}, {Key: "$db", Value: "admin"}}),
+			probe: func(t *testing.T, server *Server) {
+				resp := serveCommand(t, server, 27, bson.D{
+					{Key: "insert", Value: "tx_users"},
+					{Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "tx1"}}}},
+					{Key: "lsid", Value: bson.D{{Key: "id", Value: bson.Binary{Subtype: 4, Data: make([]byte, 16)}}}},
+					{Key: "txnNumber", Value: int64(1)},
+					{Key: "startTransaction", Value: true},
+					{Key: "autocommit", Value: false},
+					{Key: "$db", Value: "app"},
+				})
+				assertCommandError(t, resp, "BadValue")
+				resp = serveCommand(t, server, 28, bson.D{{Key: "commitTransaction", Value: int32(1)}, {Key: "$db", Value: "admin"}})
+				assertCommandError(t, resp, "CommandNotFound")
+			},
 		},
 	}
 }

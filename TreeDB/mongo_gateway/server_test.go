@@ -2237,6 +2237,70 @@ func TestServerCreateCollectionCommand(t *testing.T) {
 	assertCommandError(t, validatorResponse, "BadValue")
 }
 
+func TestServerRejectsTransactionalMutations(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	assertOK(t, serveCommand(t, server, 2318, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}, {Key: "name", Value: "ada"}}}},
+		{Key: "$db", Value: "app"},
+	}))
+	transactionFields := bson.D{
+		{Key: "lsid", Value: bson.D{{Key: "id", Value: bson.Binary{Subtype: 4, Data: make([]byte, 16)}}}},
+		{Key: "txnNumber", Value: int64(1)},
+		{Key: "startTransaction", Value: true},
+		{Key: "autocommit", Value: false},
+	}
+
+	transactionalInsert := append(bson.D{
+		{Key: "insert", Value: "tx_insert"},
+		{Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u2"}}}},
+	}, transactionFields...)
+	transactionalInsert = append(transactionalInsert, bson.E{Key: "$db", Value: "app"})
+	assertCommandError(t, serveCommand(t, server, 2319, transactionalInsert), "BadValue")
+	if _, err := server.Collections.OpenCollection("app.tx_insert"); !errors.Is(err, collections.ErrCollectionNotFound) {
+		t.Fatalf("transactional insert collection err=%v, want collection not found", err)
+	}
+
+	transactionalUpdate := append(bson.D{
+		{Key: "update", Value: "users"},
+		{Key: "updates", Value: bson.A{bson.D{
+			{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}},
+			{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "name", Value: "changed"}}}}},
+		}}},
+	}, transactionFields...)
+	transactionalUpdate = append(transactionalUpdate, bson.E{Key: "$db", Value: "app"})
+	assertCommandError(t, serveCommand(t, server, 2320, transactionalUpdate), "BadValue")
+	found := serveCommand(t, server, 2321, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}},
+		{Key: "$db", Value: "app"},
+	})
+	batch := cursorFirstBatch(t, found)
+	if got, ok := batch[0].Lookup("name").StringValueOK(); !ok || got != "ada" {
+		t.Fatalf("name after rejected transactional update=%q ok=%v want ada", got, ok)
+	}
+
+	transactionalDelete := append(bson.D{
+		{Key: "delete", Value: "users"},
+		{Key: "deletes", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "limit", Value: int32(1)}}}},
+	}, transactionFields...)
+	transactionalDelete = append(transactionalDelete, bson.E{Key: "$db", Value: "app"})
+	assertCommandError(t, serveCommand(t, server, 2322, transactionalDelete), "BadValue")
+	found = serveCommand(t, server, 2323, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertBatchIDs(t, cursorFirstBatch(t, found), []string{"u1"})
+}
+
 func TestServerCreateIndexesAutoCreateDedupesIdenticalDefinitions(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

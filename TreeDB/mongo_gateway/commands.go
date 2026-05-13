@@ -34,6 +34,9 @@ func (s *Server) insertResponse(command wire.Document, sequences []wire.Document
 	if s.Collections == nil {
 		return commandError(commandCodeBadValue, "BadValue", "Mongo gateway collection manager is not configured")
 	}
+	if doc, rejected, err := rejectTransactionalCommand(command, "insert"); rejected {
+		return doc, err
+	}
 	collection, err := commandString(command, "insert")
 	if err != nil {
 		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
@@ -376,6 +379,9 @@ func (s *Server) findResponsePayload(command wire.Document, cursorOwner int64) (
 func (s *Server) updateResponse(command wire.Document, sequences []wire.DocumentSequence) (wire.Document, error) {
 	if s.Collections == nil {
 		return commandError(commandCodeBadValue, "BadValue", "Mongo gateway collection manager is not configured")
+	}
+	if doc, rejected, err := rejectTransactionalCommand(command, "update"); rejected {
+		return doc, err
 	}
 	collection, err := commandString(command, "update")
 	if err != nil {
@@ -1172,6 +1178,9 @@ func (s *Server) deleteResponse(command wire.Document, sequences []wire.Document
 	if s.Collections == nil {
 		return commandError(commandCodeBadValue, "BadValue", "Mongo gateway collection manager is not configured")
 	}
+	if doc, rejected, err := rejectTransactionalCommand(command, "delete"); rejected {
+		return doc, err
+	}
 	collection, err := commandString(command, "delete")
 	if err != nil {
 		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
@@ -1274,6 +1283,9 @@ func (s *Server) createCollectionResponse(command wire.Document) (wire.Document,
 	if s.Collections == nil {
 		return commandError(commandCodeBadValue, "BadValue", "Mongo gateway collection manager is not configured")
 	}
+	if doc, rejected, err := rejectTransactionalCommand(command, "create"); rejected {
+		return doc, err
+	}
 	collection, err := commandString(command, "create")
 	if err != nil {
 		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
@@ -1327,6 +1339,19 @@ func validateCreateCollectionCommand(command wire.Document) error {
 		}
 	}
 	return nil
+}
+
+func rejectTransactionalCommand(command wire.Document, commandName string) (wire.Document, bool, error) {
+	raw := bson.Raw(command)
+	if raw.Lookup("startTransaction").IsZero() && raw.Lookup("autocommit").IsZero() {
+		return nil, false, nil
+	}
+	doc, err := commandError(
+		commandCodeBadValue,
+		"BadValue",
+		"Mongo gateway "+commandName+" does not support transactions",
+	)
+	return doc, true, err
 }
 
 func (s *Server) createIndexesResponse(command wire.Document) (wire.Document, error) {
