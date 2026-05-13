@@ -9737,6 +9737,184 @@ func TestCollectionUpdateCombinerDuplicateIDsPreserveOrder(t *testing.T) {
 	}
 }
 
+func TestCollectionUpdateCombinerDefersDuplicateIDsAndBatchesDistinctPeers(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{[]byte(`{"score":0}`), []byte(`{"score":0}`)},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+
+	setScore := func(score int32) func([]byte) ([]byte, bool, error) {
+		return func([]byte) ([]byte, bool, error) {
+			return []byte(fmt.Sprintf(`{"score":%d}`, score)), true, nil
+		}
+	}
+	first := collectionUpdateCombineRequest{
+		collection: col,
+		documentID: []byte("u1"),
+		update:     setScore(1),
+		done:       make(chan collectionUpdateCombineResult, 1),
+	}
+	duplicate := collectionUpdateCombineRequest{
+		collection: col,
+		documentID: []byte("u1"),
+		update:     setScore(2),
+		done:       make(chan collectionUpdateCombineResult, 1),
+	}
+	peer := collectionUpdateCombineRequest{
+		collection: col,
+		documentID: []byte("u2"),
+		update:     setScore(3),
+		done:       make(chan collectionUpdateCombineResult, 1),
+	}
+	combiner := &collectionUpdateCombiner{
+		maxBatch: 8,
+		domain:   col.writeDomain,
+		requests: make(chan collectionUpdateCombineRequest, 2),
+	}
+	combiner.requests <- duplicate
+	combiner.requests <- peer
+	beforeState := d.State()
+	beforeStats := mgr.StatsSnapshot()
+
+	combiner.runBatchStartingWith(first)
+	for name, done := range map[string]chan collectionUpdateCombineResult{
+		"first": first.done,
+		"peer":  peer.done,
+	} {
+		result := <-done
+		if result.err != nil || !result.matched || !result.modified {
+			t.Fatalf("%s result=%+v want matched modified nil err", name, result)
+		}
+	}
+	select {
+	case result := <-duplicate.done:
+		t.Fatalf("duplicate completed in same batch: %+v", result)
+	default:
+	}
+	if got := len(combiner.deferred); got != 1 {
+		t.Fatalf("deferred duplicate count=%d want 1", got)
+	}
+	midState := d.State()
+	if midState.CommitSeq != beforeState.CommitSeq+1 {
+		t.Fatalf("first combined batch advanced commit seq by %d, want 1", midState.CommitSeq-beforeState.CommitSeq)
+	}
+	midStats := mgr.StatsSnapshot()
+	if got := midStats.UpdateCombineFallbackRequests - beforeStats.UpdateCombineFallbackRequests; got != 0 {
+		t.Fatalf("fallback requests after distinct-peer batch=%d want 0", got)
+	}
+
+	deferred, ok := combiner.popDeferredRequest()
+	if !ok {
+		t.Fatal("missing deferred duplicate")
+	}
+	combiner.runBatchStartingWith(deferred)
+	result := <-duplicate.done
+	if result.err != nil || !result.matched || !result.modified {
+		t.Fatalf("duplicate result=%+v want matched modified nil err", result)
+	}
+	afterState := d.State()
+	if afterState.CommitSeq != beforeState.CommitSeq+2 {
+		t.Fatalf("two serialized batches advanced commit seq by %d, want 2", afterState.CommitSeq-beforeState.CommitSeq)
+	}
+	got, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get u1: %v", err)
+	}
+	if !bytes.Contains(got, []byte(`"score":2`)) {
+		t.Fatalf("u1 document=%s want final score 2", got)
+	}
+	got, err = col.Get([]byte("u2"))
+	if err != nil {
+		t.Fatalf("get u2: %v", err)
+	}
+	if !bytes.Contains(got, []byte(`"score":3`)) {
+		t.Fatalf("u2 document=%s want score 3", got)
+	}
+}
+
+func TestCollectionUpdateCombinerShardedIngressPublishesDistinctIDsOnce(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{[]byte(`{"score":0}`), []byte(`{"score":0}`)},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+
+	setScore := func(score int32) func([]byte) ([]byte, bool, error) {
+		return func([]byte) ([]byte, bool, error) {
+			return []byte(fmt.Sprintf(`{"score":%d}`, score)), true, nil
+		}
+	}
+	combiner := &collectionUpdateCombiner{
+		maxBatch:        8,
+		domain:          col.writeDomain,
+		shardedRequests: make([]chan collectionUpdateCombineRequest, 4),
+		readyShards:     make(chan int, 16),
+		done:            make(chan struct{}),
+	}
+	for i := range combiner.shardedRequests {
+		combiner.shardedRequests[i] = make(chan collectionUpdateCombineRequest, 8)
+	}
+	firstDone := make(chan collectionUpdateCombineResult, 1)
+	secondDone := make(chan collectionUpdateCombineResult, 1)
+	if !combiner.enqueue(newCollectionUpdateCombineRequest(col, []byte("u1"), setScore(1), bsonSetUpdate{}, false, firstDone)) {
+		t.Fatal("enqueue first sharded update")
+	}
+	if !combiner.enqueue(newCollectionUpdateCombineRequest(col, []byte("u2"), setScore(2), bsonSetUpdate{}, false, secondDone)) {
+		t.Fatal("enqueue second sharded update")
+	}
+	before := d.State()
+	go combiner.run()
+	defer combiner.stop()
+	for name, done := range map[string]chan collectionUpdateCombineResult{
+		"first":  firstDone,
+		"second": secondDone,
+	} {
+		select {
+		case result := <-done:
+			if result.err != nil || !result.matched || !result.modified {
+				t.Fatalf("%s result=%+v want matched modified nil err", name, result)
+			}
+		case <-time.After(collectionTestTimeout(t, time.Second)):
+			t.Fatalf("%s update did not complete", name)
+		}
+	}
+	after := d.State()
+	if after.CommitSeq != before.CommitSeq+1 {
+		t.Fatalf("sharded ingress batch advanced commit seq by %d, want 1", after.CommitSeq-before.CommitSeq)
+	}
+}
+
 func TestCollectionUpdateCombinerMixedCollectionsFallbackDirect(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
