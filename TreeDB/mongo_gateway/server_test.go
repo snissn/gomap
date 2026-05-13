@@ -2304,6 +2304,29 @@ func TestServerRejectsTransactionalMutations(t *testing.T) {
 	assertIndexName(t, indexes[0], "_id_")
 	assertIndexName(t, indexes[1], "email_1")
 
+	transactionalFind := append(bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}},
+	}, transactionFields...)
+	transactionalFind = append(transactionalFind, bson.E{Key: "$db", Value: "app"})
+	assertCommandError(t, serveCommand(t, server, 2330, transactionalFind), "BadValue")
+	retryableFind := append(bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}},
+	}, retryableWriteFields...)
+	retryableFind = append(retryableFind, bson.E{Key: "$db", Value: "app"})
+	assertCommandError(t, serveCommand(t, server, 2331, retryableFind), "BadValue")
+	transactionalListCollections := append(bson.D{
+		{Key: "listCollections", Value: int32(1)},
+	}, transactionFields...)
+	transactionalListCollections = append(transactionalListCollections, bson.E{Key: "$db", Value: "app"})
+	assertCommandError(t, serveCommand(t, server, 2332, transactionalListCollections), "BadValue")
+	transactionalListIndexes := append(bson.D{
+		{Key: "listIndexes", Value: "users"},
+	}, transactionFields...)
+	transactionalListIndexes = append(transactionalListIndexes, bson.E{Key: "$db", Value: "app"})
+	assertCommandError(t, serveCommand(t, server, 2333, transactionalListIndexes), "BadValue")
+
 	transactionalInsert := append(bson.D{
 		{Key: "insert", Value: "tx_insert"},
 		{Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u2"}}}},

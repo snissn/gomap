@@ -231,6 +231,9 @@ func (s *Server) findMsgResponseInto(dst []byte, command wire.Document, requestI
 }
 
 func (s *Server) findResponsePayload(command wire.Document, cursorOwner int64) (findResponsePayload, error) {
+	if doc, rejected, err := rejectTransactionalCommand(command, "find"); rejected {
+		return findResponsePayload{document: doc}, err
+	}
 	if s.Collections == nil {
 		doc, err := commandError(commandCodeBadValue, "BadValue", "Mongo gateway collection manager is not configured")
 		return findResponsePayload{document: doc}, err

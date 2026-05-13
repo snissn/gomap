@@ -506,6 +506,16 @@ func mongoCompatibilityMatrixRows() []mongoCompatibilityMatrixRow {
 					{Key: "$db", Value: "app"},
 				})
 				assertCommandError(t, resp, "BadValue")
+				resp = serveCommand(t, server, 30, bson.D{
+					{Key: "find", Value: "users"},
+					{Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}},
+					{Key: "lsid", Value: bson.D{{Key: "id", Value: bson.Binary{Subtype: 4, Data: make([]byte, 16)}}}},
+					{Key: "txnNumber", Value: int64(3)},
+					{Key: "startTransaction", Value: true},
+					{Key: "autocommit", Value: false},
+					{Key: "$db", Value: "app"},
+				})
+				assertCommandError(t, resp, "BadValue")
 				resp = serveCommand(t, server, 28, bson.D{{Key: "commitTransaction", Value: int32(1)}, {Key: "$db", Value: "admin"}})
 				assertCommandError(t, resp, "CommandNotFound")
 			},

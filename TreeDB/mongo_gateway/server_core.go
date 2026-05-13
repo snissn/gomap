@@ -623,6 +623,11 @@ func (s *Server) handleMsgInto(dst []byte, h wire.Header, body []byte, cursorOwn
 }
 
 func (s *Server) commandResponse(name string, command wire.Document, sequences []wire.DocumentSequence, cursorOwner int64) (wire.Document, error) {
+	if commandRejectsTransactionMarkers(name) {
+		if doc, rejected, err := rejectTransactionalCommand(command, name); rejected {
+			return doc, err
+		}
+	}
 	switch name {
 	case "hello", "isMaster", "ismaster":
 		return marshalDocument(helloResponse(s.maxMessageLength()))
@@ -660,6 +665,15 @@ func (s *Server) commandResponse(name string, command wire.Document, sequences [
 		return s.dropIndexesResponse(command)
 	default:
 		return commandError(59, "CommandNotFound", "unsupported MongoDB gateway command: "+name)
+	}
+}
+
+func commandRejectsTransactionMarkers(name string) bool {
+	switch name {
+	case "create", "createIndexes", "delete", "dropIndexes", "find", "getMore", "insert", "killCursors", "listCollections", "listIndexes", "update":
+		return true
+	default:
+		return false
 	}
 }
 
