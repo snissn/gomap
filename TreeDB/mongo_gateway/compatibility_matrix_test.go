@@ -12,13 +12,30 @@ import (
 
 type mongoCompatibilityProbe func(*testing.T, *Server)
 
+type mongoCompatibilityMatrixRow struct {
+	category string
+	feature  string
+	status   string
+	probe    mongoCompatibilityProbe
+}
+
 func TestMongoCompatibilityMatrix(t *testing.T) {
-	rows := []struct {
-		category string
-		feature  string
-		status   string
-		probe    mongoCompatibilityProbe
-	}{
+	for i, row := range mongoCompatibilityMatrixRows() {
+		row := row
+		t.Run(fmt.Sprintf("%02d_%s_%s", i, compatibilityTestSlug(row.category), compatibilityTestSlug(row.feature)), func(t *testing.T) {
+			if row.category == "" || row.feature == "" || row.status == "" {
+				t.Fatalf("incomplete compatibility row: %+v", row)
+			}
+			if row.probe == nil {
+				t.Fatalf("%s/%s has no probe", row.category, row.feature)
+			}
+			row.probe(t, newMongoCompatibilityMatrixServer(t))
+		})
+	}
+}
+
+func mongoCompatibilityMatrixRows() []mongoCompatibilityMatrixRow {
+	return []mongoCompatibilityMatrixRow{
 		{
 			category: "wire",
 			feature:  "hello command",
@@ -372,19 +389,6 @@ func TestMongoCompatibilityMatrix(t *testing.T) {
 			status:   "not implemented",
 			probe:    expectCommandNotFound(bson.D{{Key: "startSession", Value: int32(1)}, {Key: "$db", Value: "admin"}}),
 		},
-	}
-
-	for i, row := range rows {
-		row := row
-		t.Run(fmt.Sprintf("%02d_%s_%s", i, compatibilityTestSlug(row.category), compatibilityTestSlug(row.feature)), func(t *testing.T) {
-			if row.category == "" || row.feature == "" || row.status == "" {
-				t.Fatalf("incomplete compatibility row: %+v", row)
-			}
-			if row.probe == nil {
-				t.Fatalf("%s/%s has no probe", row.category, row.feature)
-			}
-			row.probe(t, newMongoCompatibilityMatrixServer(t))
-		})
 	}
 }
 

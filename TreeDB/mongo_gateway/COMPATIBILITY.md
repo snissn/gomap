@@ -28,6 +28,48 @@ The matrix is a gap finder, not a conformance certification. A row marked
 `supported subset` means the named shape works, but MongoDB's full semantics for
 that command or operator are intentionally out of scope.
 
+## Test-Backed Matrix
+
+This table is generated from `TestMongoCompatibilityMatrix`. Do not edit the
+generated block by hand; update the test rows and regenerate with:
+
+```sh
+GOWORK=off go test ./TreeDB/mongo_gateway -run TestMongoCompatibilityMatrixDocumentationUpToDate -update-mongo-compatibility-docs
+```
+
+`TestMongoCompatibilityMatrixDocumentationUpToDate` fails if this generated
+block drifts from the executable matrix rows.
+
+<!-- mongo-compatibility-matrix:begin -->
+| Category | Feature | Status |
+|---|---|---|
+| wire | hello command | supported |
+| wire | ping command | supported |
+| wire | connectionStatus command (#1473) | supported subset |
+| crud | insert explicit _id | supported |
+| crud | find by _id equality | supported |
+| query | indexed equality and range predicates | supported subset |
+| query | $in on indexed scalar fields | supported subset |
+| query | projection, sort, skip, and limit | supported subset |
+| cursor | getMore and killCursors | supported |
+| crud | updateOne $set by _id | supported subset |
+| crud | delete by _id | supported subset |
+| metadata | listCollections | supported subset |
+| metadata | createIndexes, listIndexes, and dropIndexes | supported subset |
+| document | native BSON storage mode | supported subset |
+| query gap | $or | rejected |
+| query gap | dotted projection | rejected |
+| update gap | upsert | rejected |
+| update gap | multi update | rejected |
+| update gap | $inc | rejected |
+| index gap | compound index | rejected |
+| index gap | index without treedbValueType | rejected |
+| command gap | aggregate | not implemented |
+| command gap | count | not implemented |
+| command gap | findAndModify | not implemented |
+| transaction gap | sessions and transactions | not implemented |
+<!-- mongo-compatibility-matrix:end -->
+
 For a naive TreeDB-vs-MongoDB throughput smoke that connects to both targets and
 fails on unsupported gateway operations:
 
