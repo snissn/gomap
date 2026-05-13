@@ -6458,9 +6458,10 @@ type memtableViewLifecycleTelemetry struct {
 	oldestDeferredUnixNano atomic.Int64
 }
 
-type deferredRetiredMemtables struct {
-	mems  []memtable.Table
-	views map[*memtableView]struct{}
+type deferredRetiredMemtablesHold struct {
+	mems          []memtable.Table
+	views         map[*memtableView]struct{}
+	sinceUnixNano int64
 }
 
 type DB struct {
@@ -6543,7 +6544,7 @@ type DB struct {
 	pendingRetiredMems               []memtable.Table
 	retiredMemtablesMu               sync.Mutex
 	retainedMemtableViews            map[*memtableView]int
-	deferredRetiredMemtables         []deferredRetiredMemtables
+	deferredRetiredMemtables         []deferredRetiredMemtablesHold
 	memtableViewReaders              atomic.Int64
 	// closingEmptyMemsMu guards closingEmptyByView. The map holds per-view
 	// lists of mutable memtables that should be released once the last reader
@@ -7744,9 +7745,10 @@ func (db *DB) deferRetiredMemtables(mems []memtable.Table) {
 	if len(views) == 0 {
 		reclaim = append(reclaim, mems...)
 	} else {
-		db.deferredRetiredMemtables = append(db.deferredRetiredMemtables, deferredRetiredMemtables{
-			mems:  mems,
-			views: views,
+		db.deferredRetiredMemtables = append(db.deferredRetiredMemtables, deferredRetiredMemtablesHold{
+			mems:          mems,
+			views:         views,
+			sinceUnixNano: time.Now().UnixNano(),
 		})
 	}
 	db.retiredMemtablesMu.Unlock()
@@ -7812,10 +7814,27 @@ func (db *DB) releaseDeferredRetiredMemtablesForViewLocked(view *memtableView) [
 		dst = append(dst, held)
 	}
 	for i := len(dst); i < len(db.deferredRetiredMemtables); i++ {
-		db.deferredRetiredMemtables[i] = deferredRetiredMemtables{}
+		db.deferredRetiredMemtables[i] = deferredRetiredMemtablesHold{}
 	}
 	db.deferredRetiredMemtables = dst
 	return reclaim
+}
+
+func (db *DB) deferredRetiredMemtableHoldStats() (groups int64, memtables int64, bytes int64, oldestUnixNano int64) {
+	if db == nil {
+		return 0, 0, 0, 0
+	}
+	db.retiredMemtablesMu.Lock()
+	defer db.retiredMemtablesMu.Unlock()
+	for _, held := range db.deferredRetiredMemtables {
+		groups++
+		memtables += int64(len(held.mems))
+		bytes += memtableBytesTotal(held.mems)
+		if held.sinceUnixNano > 0 && (oldestUnixNano == 0 || held.sinceUnixNano < oldestUnixNano) {
+			oldestUnixNano = held.sinceUnixNano
+		}
+	}
+	return groups, memtables, bytes, oldestUnixNano
 }
 
 func (db *DB) releaseClosingEmptyMemtables() {
@@ -24232,10 +24251,17 @@ func (db *DB) Stats() map[string]string {
 	memViewDeferredBytesMax := db.memtableViewTelemetry.deferredBytesMax.Load()
 	memViewDeferredBytesTotal := db.memtableViewTelemetry.deferredBytesTotal.Load()
 	memViewOldestDeferredUnixNano := db.memtableViewTelemetry.oldestDeferredUnixNano.Load()
+	retiredHoldGroupsCurrent, retiredHoldMemtablesCurrent, retiredHoldBytesCurrent, retiredHoldOldestUnixNano := db.deferredRetiredMemtableHoldStats()
 	memViewOldestDeferredAgeMS := 0.0
 	if memViewOldestDeferredUnixNano > 0 {
 		if ageNS := time.Now().UnixNano() - memViewOldestDeferredUnixNano; ageNS > 0 {
 			memViewOldestDeferredAgeMS = float64(ageNS) / float64(time.Millisecond)
+		}
+	}
+	retiredHoldOldestAgeMS := 0.0
+	if retiredHoldOldestUnixNano > 0 {
+		if ageNS := time.Now().UnixNano() - retiredHoldOldestUnixNano; ageNS > 0 {
+			retiredHoldOldestAgeMS = float64(ageNS) / float64(time.Millisecond)
 		}
 	}
 	stats["treedb.cache.memtable_stats.writes"] = fmt.Sprintf("%d", memWrites)
@@ -24280,6 +24306,10 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.memtable_view.deferred_bytes_max"] = fmt.Sprintf("%d", memViewDeferredBytesMax)
 	stats["treedb.cache.memtable_view.deferred_bytes_total"] = fmt.Sprintf("%d", memViewDeferredBytesTotal)
 	stats["treedb.cache.memtable_view.deferred_oldest_age_ms"] = fmt.Sprintf("%.3f", memViewOldestDeferredAgeMS)
+	stats["treedb.cache.retired_memtable_hold.groups_current"] = fmt.Sprintf("%d", retiredHoldGroupsCurrent)
+	stats["treedb.cache.retired_memtable_hold.memtables_current"] = fmt.Sprintf("%d", retiredHoldMemtablesCurrent)
+	stats["treedb.cache.retired_memtable_hold.bytes_current"] = fmt.Sprintf("%d", retiredHoldBytesCurrent)
+	stats["treedb.cache.retired_memtable_hold.oldest_age_ms"] = fmt.Sprintf("%.3f", retiredHoldOldestAgeMS)
 	stats["treedb.cache.memtable_warmup_active"] = fmt.Sprintf("%t", memtableWarmupActive)
 	stats["treedb.cache.max_queued_memtables"] = fmt.Sprintf("%d", maxQueued)
 	poolPressure := currentPoolPressureSnapshot()

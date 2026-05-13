@@ -103,6 +103,15 @@ func TestIterator_QueuedViewLeaseHeldUntilClose(t *testing.T) {
 	if deferredBytesCurrent := mustIteratorLeaseStatInt64(t, baselineStats, "treedb.cache.memtable_view.deferred_bytes_current"); deferredBytesCurrent != 0 {
 		t.Fatalf("deferred bytes before iterator=%d want=0", deferredBytesCurrent)
 	}
+	if got := mustIteratorLeaseStatInt64(t, baselineStats, "treedb.cache.retired_memtable_hold.groups_current"); got != 0 {
+		t.Fatalf("retired hold groups before iterator=%d want=0", got)
+	}
+	if got := mustIteratorLeaseStatInt64(t, baselineStats, "treedb.cache.retired_memtable_hold.memtables_current"); got != 0 {
+		t.Fatalf("retired hold memtables before iterator=%d want=0", got)
+	}
+	if got := mustIteratorLeaseStatInt64(t, baselineStats, "treedb.cache.retired_memtable_hold.bytes_current"); got != 0 {
+		t.Fatalf("retired hold bytes before iterator=%d want=0", got)
+	}
 
 	it, err := db.Iterator(nil, nil)
 	if err != nil {
@@ -175,6 +184,18 @@ func TestIterator_QueuedViewLeaseHeldUntilClose(t *testing.T) {
 	if got := mustIteratorLeaseStatFloat64(t, deferredStats, "treedb.cache.memtable_view.deferred_oldest_age_ms"); got != 0 {
 		t.Fatalf("deferred_oldest_age_ms after publish=%f want=0 with global retired hold", got)
 	}
+	if got := mustIteratorLeaseStatInt64(t, deferredStats, "treedb.cache.retired_memtable_hold.groups_current"); got != 1 {
+		t.Fatalf("retired hold groups after publish=%d want=1", got)
+	}
+	if got := mustIteratorLeaseStatInt64(t, deferredStats, "treedb.cache.retired_memtable_hold.memtables_current"); got != 1 {
+		t.Fatalf("retired hold memtables after publish=%d want=1", got)
+	}
+	if got := mustIteratorLeaseStatInt64(t, deferredStats, "treedb.cache.retired_memtable_hold.bytes_current"); got <= 0 {
+		t.Fatalf("retired hold bytes after publish=%d want >0", got)
+	}
+	if got := mustIteratorLeaseStatFloat64(t, deferredStats, "treedb.cache.retired_memtable_hold.oldest_age_ms"); got < 0 {
+		t.Fatalf("retired hold oldest age after publish=%f want >=0", got)
+	}
 
 	seen := map[string]string{}
 	for it.Valid() {
@@ -221,6 +242,18 @@ func TestIterator_QueuedViewLeaseHeldUntilClose(t *testing.T) {
 	}
 	if got := mustIteratorLeaseStatFloat64(t, closedStats, "treedb.cache.memtable_view.deferred_oldest_age_ms"); got != 0 {
 		t.Fatalf("deferred_oldest_age_ms after iterator close=%f want=0", got)
+	}
+	if got := mustIteratorLeaseStatInt64(t, closedStats, "treedb.cache.retired_memtable_hold.groups_current"); got != 0 {
+		t.Fatalf("retired hold groups after iterator close=%d want=0", got)
+	}
+	if got := mustIteratorLeaseStatInt64(t, closedStats, "treedb.cache.retired_memtable_hold.memtables_current"); got != 0 {
+		t.Fatalf("retired hold memtables after iterator close=%d want=0", got)
+	}
+	if got := mustIteratorLeaseStatInt64(t, closedStats, "treedb.cache.retired_memtable_hold.bytes_current"); got != 0 {
+		t.Fatalf("retired hold bytes after iterator close=%d want=0", got)
+	}
+	if got := mustIteratorLeaseStatFloat64(t, closedStats, "treedb.cache.retired_memtable_hold.oldest_age_ms"); got != 0 {
+		t.Fatalf("retired hold oldest age after iterator close=%f want=0", got)
 	}
 
 	if err := it.Close(); err != nil {
