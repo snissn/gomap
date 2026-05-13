@@ -1893,10 +1893,10 @@ func (domain *collectionWriteDomain) setCountLocked(count int) {
 	if domain == nil {
 		return
 	}
-	domain.count = count
 	if count < 0 {
 		count = 0
 	}
+	domain.count = count
 	domain.pendingCount.Store(int64(count))
 }
 

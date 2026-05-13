@@ -223,6 +223,12 @@ func (r rawCursorDocumentsResponse) marshalMsgInto(dst []byte, requestID, respon
 		return msg[:base], err
 	}
 	messageLength := len(msg) - base
+	if messageLength != need {
+		return msg[:base], fmt.Errorf("mongo gateway raw cursor response length mismatch: got=%d want=%d", messageLength, need)
+	}
+	if int64(messageLength) > maxWireMessageLengthInt32Limit {
+		return msg[:base], fmt.Errorf("%w: length=%d", wire.ErrMessageTooLarge, messageLength)
+	}
 	if messageLength > maxMessageLength {
 		return msg[:base], fmt.Errorf("%w: length=%d max=%d", wire.ErrMessageTooLarge, messageLength, maxMessageLength)
 	}

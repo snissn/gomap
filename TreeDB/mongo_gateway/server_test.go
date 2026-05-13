@@ -2962,6 +2962,23 @@ func TestServerFindRawBSONOPMsgResponseHonorsMaxMessageLength(t *testing.T) {
 	if !errors.Is(err, wire.ErrMessageTooLarge) {
 		t.Fatalf("marshal small max err=%v want ErrMessageTooLarge", err)
 	}
+
+	rawSingle := rawCursorDocumentsResponse{ns: "app.users", cursorID: 0, batchKey: "firstBatch", single: rawDoc}
+	msg, err := rawSingle.marshalMsgInto(nil, 1, 250, wire.DefaultMaxMessageLength)
+	if err != nil {
+		t.Fatalf("marshal raw single default max response: %v", err)
+	}
+	h, _, err := wire.ReadMessage(bytes.NewReader(msg), 0)
+	if err != nil {
+		t.Fatalf("read raw single response: %v", err)
+	}
+	if h.MessageLength != int32(len(msg)) {
+		t.Fatalf("raw single message length=%d want %d", h.MessageLength, len(msg))
+	}
+	_, err = rawSingle.marshalMsgInto(nil, 1, 250, 128)
+	if !errors.Is(err, wire.ErrMessageTooLarge) {
+		t.Fatalf("marshal raw single small max err=%v want ErrMessageTooLarge", err)
+	}
 }
 
 func TestFindResponsePayloadOPMsgHonorsMaxMessageLength(t *testing.T) {

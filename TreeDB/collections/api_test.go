@@ -7812,6 +7812,19 @@ func TestFlushBufferedNoIndexPendingMutationSynchronizesWithWriteDomainLock(t *t
 	}
 }
 
+func TestCollectionWriteDomainSetCountLockedClampsNegative(t *testing.T) {
+	domain := &collectionWriteDomain{}
+	domain.mu.Lock()
+	domain.setCountLocked(-1)
+	domain.mu.Unlock()
+	if domain.count != 0 {
+		t.Fatalf("domain.count=%d want 0", domain.count)
+	}
+	if pending := domain.pendingCount.Load(); pending != 0 {
+		t.Fatalf("pendingCount=%d want 0", pending)
+	}
+}
+
 func TestCollectionSingleInsertBufferedNoIndexRejectsBufferedDuplicate(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
