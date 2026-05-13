@@ -6536,6 +6536,9 @@ type DB struct {
 	appendOnlyDirectArenaLeaseMu     sync.Mutex
 	appendOnlyDirectArenaLeasesByMem map[memtable.Table]*appendOnlyDirectArenaLease
 	pendingRetiredMems               []memtable.Table
+	retiredMemtablesMu               sync.Mutex
+	deferredRetiredMemtables         []memtable.Table
+	memtableViewReaders              atomic.Int64
 	// closingEmptyMemsMu guards closingEmptyByView. The map holds per-view
 	// lists of mutable memtables that should be released once the last reader
 	// drops the view, registered by releaseClosingEmptyMemtables at DB close.
@@ -7591,6 +7594,7 @@ func (db *DB) retainMemtableView() *memtableView {
 		// Fast path: published views keep a baseline ref, so this is usually one
 		// atomic add and return.
 		if n := view.refs.Add(1); n > 1 {
+			db.memtableViewReaders.Add(1)
 			db.noteMemtableViewRetain()
 			return view
 		}
@@ -7601,6 +7605,7 @@ func (db *DB) retainMemtableView() *memtableView {
 			continue
 		}
 		if view.refs.CompareAndSwap(0, 2) {
+			db.memtableViewReaders.Add(1)
 			db.noteMemtableViewRetain()
 			return view
 		}
@@ -7617,6 +7622,7 @@ func (db *DB) retainMemtableViewUntracked() *memtableView {
 			return nil
 		}
 		if n := view.refs.Add(1); n > 1 {
+			db.memtableViewReaders.Add(1)
 			return view
 		}
 		view.refs.Add(-1)
@@ -7624,25 +7630,35 @@ func (db *DB) retainMemtableViewUntracked() *memtableView {
 			continue
 		}
 		if view.refs.CompareAndSwap(0, 2) {
+			db.memtableViewReaders.Add(1)
 			return view
 		}
 	}
 }
 
 func (db *DB) releaseMemtableView(view *memtableView) {
-	db.releaseMemtableViewRef(view, true)
+	db.releaseMemtableViewRef(view, true, true)
 }
 
 func (db *DB) releasePublishedMemtableView(view *memtableView) {
-	db.releaseMemtableViewRef(view, false)
+	db.releaseMemtableViewRef(view, false, false)
 }
 
-func (db *DB) releaseMemtableViewRef(view *memtableView, leaseRelease bool) {
+func (db *DB) releaseUntrackedMemtableView(view *memtableView) {
+	db.releaseMemtableViewRef(view, false, true)
+}
+
+func (db *DB) releaseMemtableViewRef(view *memtableView, leaseRelease bool, readerRelease bool) {
 	if db == nil || view == nil {
 		return
 	}
 	if leaseRelease {
 		db.noteMemtableViewRelease()
+	}
+	if readerRelease {
+		if readers := db.memtableViewReaders.Add(-1); readers == 0 {
+			defer db.drainDeferredRetiredMemtables()
+		}
 	}
 	if refs := view.refs.Add(-1); refs != 0 {
 		if refs > 0 && view.deferredRetiredMemtables.Load() > 0 {
@@ -7662,6 +7678,34 @@ func (db *DB) releaseMemtableViewRef(view *memtableView, leaseRelease bool) {
 	}
 	db.recycleMemtables(view.retiredMems)
 	view.retiredMems = nil
+}
+
+func (db *DB) deferRetiredMemtables(mems []memtable.Table) {
+	if db == nil || len(mems) == 0 {
+		return
+	}
+	db.retiredMemtablesMu.Lock()
+	db.deferredRetiredMemtables = append(db.deferredRetiredMemtables, mems...)
+	shouldDrain := db.memtableViewReaders.Load() == 0
+	db.retiredMemtablesMu.Unlock()
+	if shouldDrain {
+		db.drainDeferredRetiredMemtables()
+	}
+}
+
+func (db *DB) drainDeferredRetiredMemtables() {
+	if db == nil || db.memtableViewReaders.Load() != 0 {
+		return
+	}
+	db.retiredMemtablesMu.Lock()
+	if db.memtableViewReaders.Load() != 0 || len(db.deferredRetiredMemtables) == 0 {
+		db.retiredMemtablesMu.Unlock()
+		return
+	}
+	mems := db.deferredRetiredMemtables
+	db.deferredRetiredMemtables = nil
+	db.retiredMemtablesMu.Unlock()
+	db.recycleMemtables(mems)
 }
 
 func (db *DB) releaseClosingEmptyMemtables() {
@@ -8199,14 +8243,27 @@ func (db *DB) publishMemtablesLocked() {
 	old := db.memtables.Swap(view)
 	if old != nil {
 		if len(retired) > 0 {
-			old.retiredMems = append(old.retiredMems, retired...)
-			old.deferredRetiredMemtables.Store(int64(len(old.retiredMems)))
-			old.deferredRetiredBytes.Add(memtableBytesTotal(retired))
+			// A retained snapshot can reference queued memtables through an older
+			// view than the one being unpublished here. If any external view is in
+			// flight, hold retired memtables at DB scope until all views drain;
+			// otherwise a later flush can recycle a table still visible to that
+			// older snapshot.
+			if db.memtableViewReaders.Load() > 0 || old.refs.Load() > 1 {
+				db.deferRetiredMemtables(retired)
+			} else {
+				old.retiredMems = append(old.retiredMems, retired...)
+				old.deferredRetiredMemtables.Store(int64(len(old.retiredMems)))
+				old.deferredRetiredBytes.Add(memtableBytesTotal(retired))
+			}
 		}
 		db.releasePublishedMemtableView(old)
 		return
 	}
-	db.recycleMemtables(retired)
+	if db.memtableViewReaders.Load() > 0 {
+		db.deferRetiredMemtables(retired)
+	} else {
+		db.recycleMemtables(retired)
+	}
 }
 
 // ensureQueueLaneIDsLocked keeps queueLaneIDs aligned with queue length.
@@ -23853,7 +23910,7 @@ func (db *DB) Stats() map[string]string {
 	if view := db.retainMemtableViewUntracked(); view != nil {
 		mutableTables = append(mutableTables, view.mutables...)
 		queueTables = append(queueTables, view.queue...)
-		db.releaseMemtableViewRef(view, false)
+		db.releaseUntrackedMemtableView(view)
 	} else {
 		db.mu.RLock()
 		if len(db.mutableShards) > 0 {
