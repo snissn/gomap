@@ -538,14 +538,35 @@ func TestStandaloneServerGoRunHelp(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping go run smoke test in short mode")
 	}
-	cmd := exec.Command("go", "run", "./server.go", "-help")
-	cmd.Env = append(os.Environ(), "GOWORK=off")
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("go run ./server.go -help: %v\n%s", err, out)
+
+	cases := []struct {
+		name string
+		dir  string
+		args []string
+	}{
+		{
+			name: "package dir",
+			args: []string{"run", "./server.go", "-help"},
+		},
+		{
+			name: "repo root documented path",
+			dir:  "../..",
+			args: []string{"run", "./TreeDB/mongo_gateway/server.go", "-help"},
+		},
 	}
-	if !bytes.Contains(out, []byte("TreeDB root directory")) || !bytes.Contains(out, []byte("-document-format")) {
-		t.Fatalf("help output missing expected flags:\n%s", out)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd := exec.Command("go", tc.args...)
+			cmd.Dir = tc.dir
+			cmd.Env = append(os.Environ(), "GOWORK=off")
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("go %s: %v\n%s", strings.Join(tc.args, " "), err, out)
+			}
+			if !bytes.Contains(out, []byte("TreeDB root directory")) || !bytes.Contains(out, []byte("-document-format")) {
+				t.Fatalf("help output missing expected flags:\n%s", out)
+			}
+		})
 	}
 }
 
