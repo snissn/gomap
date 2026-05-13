@@ -1,6 +1,7 @@
 package caching
 
 import (
+	"fmt"
 	"sync"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -14,6 +15,7 @@ type cachingLeafPageLog struct {
 }
 
 var _ backenddb.LeafPageLog = (*cachingLeafPageLog)(nil)
+var _ backenddb.LeafPageBatchLog = (*cachingLeafPageLog)(nil)
 
 var compactLeafLogPayloadScratchPool sync.Pool
 
@@ -58,6 +60,65 @@ func (l *cachingLeafPageLog) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, e
 	}
 	l.db.noteLeafGenerationRecordLength(ptr)
 	return leafPtr, nil
+}
+
+func (l *cachingLeafPageLog) AppendLeafPages(leafPages [][]byte) ([]page.LeafLogPtr, error) {
+	if l == nil || l.db == nil || l.lane == nil {
+		return nil, errWALUnavailable
+	}
+	if len(leafPages) == 0 {
+		return nil, nil
+	}
+	if len(leafPages) == 1 {
+		ptr, err := l.AppendLeafPage(leafPages[0])
+		if err != nil {
+			return nil, err
+		}
+		return []page.LeafLogPtr{ptr}, nil
+	}
+
+	scratch := getCompactLeafLogPayloadScratch()
+	defer putCompactLeafLogPayloadScratch(scratch)
+
+	records := getValueLogRecordsCap(len(leafPages))
+	defer putValueLogRecordsNoClear(records)
+
+	var arena []byte
+	startRID := l.db.nextRID.Add(uint64(len(leafPages))) - uint64(len(leafPages)) + 1
+	for i, leafPage := range leafPages {
+		encodedLeafPage, compacted, err := valuelog.MaybeCompactLeafLogPayloadTo(scratch.buf[:0], leafPage)
+		if err != nil {
+			return nil, err
+		}
+		if compacted {
+			start := len(arena)
+			arena = append(arena, encodedLeafPage...)
+			encodedLeafPage = arena[start:len(arena):len(arena)]
+		}
+		records = append(records, valuelog.Record{
+			RID:   startRID + uint64(i),
+			Value: encodedLeafPage,
+		})
+	}
+
+	ptrs, err := l.db.appendValueLogForRecords(l.lane, records, journalDurabilityNone)
+	if err != nil {
+		return nil, err
+	}
+	defer putValueLogPtrsNoClear(ptrs)
+	if len(ptrs) != len(leafPages) {
+		return nil, fmt.Errorf("cachingdb: leaf page batch wrote %d ptrs for %d pages", len(ptrs), len(leafPages))
+	}
+	leafPtrs := make([]page.LeafLogPtr, len(ptrs))
+	for i, ptr := range ptrs {
+		leafPtr, convErr := page.LeafLogPtrFromValuePtr(ptr)
+		if convErr != nil {
+			return nil, convErr
+		}
+		leafPtrs[i] = leafPtr
+		l.db.noteLeafGenerationRecordLength(ptr)
+	}
+	return leafPtrs, nil
 }
 
 func getCompactLeafLogPayloadScratch() *compactLeafLogPayloadScratch {
