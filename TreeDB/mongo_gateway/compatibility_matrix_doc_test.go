@@ -95,7 +95,7 @@ func dominantDocumentNewline(doc string) string {
 	return "\n"
 }
 
-func TestMarkerLineNewline(t *testing.T) {
+func TestMarkerLineNewlineDetectsCRLF(t *testing.T) {
 	mixed := strings.Join([]string{
 		"# title\n",
 		compatibilityMatrixBegin + "\r\n",

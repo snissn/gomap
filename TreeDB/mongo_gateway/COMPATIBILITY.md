@@ -122,7 +122,7 @@ throughput check.
 | Command | `update` / `updateOne` helper path | `supported subset` | `TestMongoCompatibilityMatrix`, update tests | Only `_id`-targeted updateOne with accepted update shapes. |
 | Command | `delete` / `deleteOne` helper path | `supported subset` | `TestMongoCompatibilityMatrix`, CRUD tests | Only `_id`-targeted deletes. |
 | Command | `listCollections` | `supported subset` | `TestMongoCompatibilityMatrix`, metadata tests | Minimal filtering and response fields. |
-| Command | `create` | `supported subset` | `TestMongoCompatibilityMatrix`, `TestServerCreateCollectionCommand` | Creates a plain TreeDB collection catalog entry; existing collections are treated as no-op success; capped collections and other MongoDB collection options are rejected. |
+| Command | `create` | `supported subset` | `TestMongoCompatibilityMatrix`, `TestServerCreateCollectionCommand` | Creates a plain TreeDB collection catalog entry; existing collections are treated as idempotent no-op success with a response note instead of MongoDB `NamespaceExists`; capped collections and other MongoDB collection options are rejected. |
 | Command | `createIndexes` | `supported subset` | `TestMongoCompatibilityMatrix`, metadata tests | Single-field ascending indexes only, with `treedbValueType`. |
 | Command | `listIndexes` | `supported subset` | `TestMongoCompatibilityMatrix`, metadata tests | Emits TreeDB-specific `treedbValueType`. |
 | Command | `dropIndexes` | `supported subset` | `TestMongoCompatibilityMatrix`, metadata tests | No broad collection/database DDL surface. |
@@ -153,8 +153,10 @@ and build metadata and keeps it covered in the matrix.
 
 The client path then exposed `unsupported MongoDB gateway command: create`.
 The gateway now handles plain collection creation as a TreeDB collection catalog
-entry, treats existing collections as no-op success, and rejects unsupported
-MongoDB collection options such as capped collections.
+entry, treats existing collections as idempotent no-op success, and rejects
+unsupported MongoDB collection options such as capped collections. That duplicate
+`create` behavior is an intentional GUI-compatibility deviation from MongoDB's
+`NamespaceExists` error.
 
 The client path then exposed a driver-side
 `Current topology does not support sessions` error. The gateway now advertises

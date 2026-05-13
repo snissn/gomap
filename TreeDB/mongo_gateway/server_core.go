@@ -14,7 +14,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	"github.com/snissn/gomap/TreeDB/mongo_gateway/wire"
@@ -634,7 +633,7 @@ func (s *Server) commandResponse(name string, command wire.Document, sequences [
 	case "create":
 		return s.createCollectionResponse(command)
 	case "endSessions":
-		return marshalDocument(bson.D{{Key: "ok", Value: 1.0}})
+		return endSessionsResponse(command)
 	case "hostInfo":
 		return marshalDocument(hostInfoResponse())
 	case "ping":
@@ -731,7 +730,7 @@ func hostInfoResponse() bson.D {
 }
 
 func runtimePointerSizeBits() int32 {
-	return int32(unsafe.Sizeof(uintptr(0)) * 8)
+	return int32(32 << (^uint(0) >> 63))
 }
 
 func marshalDocument(doc bson.D) (wire.Document, error) {

@@ -29,6 +29,7 @@ func TestMongoCompatibilityMatrix(t *testing.T) {
 		}
 		seen[name] = struct{}{}
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			if row.category == "" || row.feature == "" || row.status == "" {
 				t.Fatalf("incomplete compatibility row: %+v", row)
 			}

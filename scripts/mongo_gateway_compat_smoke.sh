@@ -5,7 +5,6 @@ ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 
 TMP_BASE="${TMPDIR:-/tmp}"
 TMP_BASE="${TMP_BASE%/}"
-OUT_DIR="${OUT_DIR:-$(mktemp -d "$TMP_BASE/gomap_mongo_gateway_compat_smoke_XXXXXX")}"
 DOCS="${DOCS:-1000}"
 INDEXES="${INDEXES:-0}"
 READS="${READS:-$DOCS}"
@@ -24,8 +23,29 @@ TIMEOUT="${TIMEOUT:-10m}"
 # to cmd/mongo_gateway_bench.
 export BATCH_SIZE
 
+for arg in "$@"; do
+  case "$arg" in
+    -h|--help)
+      exec "$ROOT/scripts/mongo_gateway_compare.sh" "$@"
+      ;;
+  esac
+done
+
+out_args=()
+has_out_arg=false
+for arg in "$@"; do
+  if [[ "$arg" == "--out" ]]; then
+    has_out_arg=true
+    break
+  fi
+done
+if [[ "$has_out_arg" == false ]]; then
+  OUT_DIR="${OUT_DIR:-$(mktemp -d "$TMP_BASE/gomap_mongo_gateway_compat_smoke_XXXXXX")}"
+  out_args=(--out "$OUT_DIR")
+fi
+
 exec "$ROOT/scripts/mongo_gateway_compare.sh" \
-  --out "$OUT_DIR" \
+  "${out_args[@]}" \
   --docs "$DOCS" \
   --indexes "$INDEXES" \
   --reads "$READS" \

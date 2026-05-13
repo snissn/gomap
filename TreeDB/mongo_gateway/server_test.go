@@ -241,6 +241,15 @@ func TestServerHandlesEndSessions(t *testing.T) {
 	}
 
 	assertOK(t, readMsgResponse(t, rw.w.Bytes(), 204))
+
+	badType := serveCommand(t, NewServer(), 205, bson.D{{Key: "endSessions", Value: "not-array"}, {Key: "$db", Value: "admin"}})
+	assertCommandError(t, badType, "FailedToParse")
+
+	badID := serveCommand(t, NewServer(), 206, bson.D{
+		{Key: "endSessions", Value: bson.A{bson.D{{Key: "id", Value: bson.Binary{Subtype: 0, Data: []byte{1, 2, 3}}}}}},
+		{Key: "$db", Value: "admin"},
+	})
+	assertCommandError(t, badID, "FailedToParse")
 }
 
 func TestServerRetainsReadBufferForSafeCommands(t *testing.T) {
@@ -2214,6 +2223,9 @@ func TestServerCreateCollectionCommand(t *testing.T) {
 		{Key: "$db", Value: "app"},
 	})
 	assertOK(t, duplicateResponse)
+	if note, ok := duplicateResponse.Lookup("note").StringValueOK(); !ok || !strings.Contains(note, "idempotent") {
+		t.Fatalf("duplicate create note=%q ok=%v want idempotent note", note, ok)
+	}
 
 	cappedFalseResponse := serveCommand(t, server, 2315, bson.D{
 		{Key: "create", Value: "plain"},

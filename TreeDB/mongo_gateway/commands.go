@@ -1302,7 +1302,10 @@ func (s *Server) createCollectionResponse(command wire.Document) (wire.Document,
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
 	if _, err := s.Collections.OpenCollection(name); err == nil {
-		return marshalDocument(bson.D{{Key: "ok", Value: 1.0}})
+		return marshalDocument(bson.D{
+			{Key: "ok", Value: 1.0},
+			{Key: "note", Value: "TreeDB Mongo gateway treats duplicate create as idempotent success"},
+		})
 	} else if !errors.Is(err, collections.ErrCollectionNotFound) {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
@@ -1336,6 +1339,34 @@ func validateCreateCollectionCommand(command wire.Document) error {
 			// MongoDB-compatible comment/write-concern semantics to apply here.
 		default:
 			return fmt.Errorf("Mongo gateway create does not support option %q", key)
+		}
+	}
+	return nil
+}
+
+func endSessionsResponse(command wire.Document) (wire.Document, error) {
+	if err := validateEndSessionsCommand(command); err != nil {
+		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
+	}
+	return marshalDocument(bson.D{{Key: "ok", Value: 1.0}})
+}
+
+func validateEndSessionsCommand(command wire.Document) error {
+	sessions, err := commandDocumentArray(command, "endSessions")
+	if err != nil {
+		return err
+	}
+	for i, session := range sessions {
+		id := bson.Raw(session).Lookup("id")
+		if id.IsZero() {
+			return fmt.Errorf("Mongo command field \"endSessions[%d].id\" is required", i)
+		}
+		subtype, data, ok := id.BinaryOK()
+		if !ok {
+			return fmt.Errorf("Mongo command field \"endSessions[%d].id\" must be binary UUID subtype 4", i)
+		}
+		if subtype != 4 || len(data) != 16 {
+			return fmt.Errorf("Mongo command field \"endSessions[%d].id\" must be binary UUID subtype 4 with 16 bytes", i)
 		}
 	}
 	return nil
