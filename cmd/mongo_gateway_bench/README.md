@@ -198,6 +198,13 @@ unique secondary indexes. That stale-plan flag is intentionally profiling-only:
 it validates throughput headroom before the production conflict protocol is
 implemented.
 
+These lane-worker and unsafe-ack modes are comparison-branch instrumentation,
+not production behavior and not a merge-to-main contract. They exist to preserve
+a measured upper bound for future safe implementations. Production work should
+replace them with explicit conflict handling, read visibility, backpressure, and
+durability semantics before any similar behavior is enabled outside profiling
+runs.
+
 For unsafe foreground-admission ceiling runs, also set
 `MONGO_GATEWAY_PROFILE_BENCH_UPDATE_COMBINE_UNSAFE_ASYNC_ACK=true`. This
 profiling-only mode acknowledges after request admission into the sharded

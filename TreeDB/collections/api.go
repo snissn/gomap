@@ -1534,9 +1534,9 @@ func (m *CollectionManager) SetUpdateCombineShardsForProfiling(shards int) {
 
 // SetUpdateCombineLaneWorkersForProfiling switches sharded update-combiner
 // ingress between the production global-combiner path and a profiling-only
-// lane-worker path. Lane workers are intended for throughput experiments that
-// validate sharded document-id execution before the correctness protocol is
-// finalized.
+// lane-worker path. Lane workers are comparison-branch instrumentation for
+// throughput experiments that validate sharded document-id execution before the
+// correctness protocol is finalized; they are not a production merge contract.
 func (m *CollectionManager) SetUpdateCombineLaneWorkersForProfiling(enabled bool) {
 	if m == nil {
 		return
@@ -1557,8 +1557,9 @@ func (m *CollectionManager) SetUpdateCombineLaneWorkersForProfiling(enabled bool
 // SetUpdateCombineUnsafeStaleDirectPlansForProfiling allows lane-worker
 // profiling runs to stage non-overlapping direct buffered update plans that were
 // built before another lane advanced the buffered generation. This is not a
-// production correctness contract; callers must restrict it to benchmark shapes
-// with non-overlapping document IDs and unchanged unique secondary indexes.
+// production correctness contract or merge-to-main behavior; callers must
+// restrict it to benchmark shapes with non-overlapping document IDs and
+// unchanged unique secondary indexes.
 func (m *CollectionManager) SetUpdateCombineUnsafeStaleDirectPlansForProfiling(enabled bool) {
 	if m == nil {
 		return
@@ -1580,7 +1581,8 @@ func (m *CollectionManager) SetUpdateCombineUnsafeStaleDirectPlansForProfiling(e
 // runs acknowledge after request admission instead of waiting for the lane
 // worker and prepared-batch merger to stage the update. This intentionally does
 // not define a production durability or visibility contract; it exists only to
-// measure the foreground admission ceiling against a separately timed drain.
+// measure the foreground admission ceiling against a separately timed drain on
+// comparison branches.
 func (m *CollectionManager) SetUpdateCombineUnsafeAsyncAckForProfiling(enabled bool) {
 	if m == nil {
 		return
