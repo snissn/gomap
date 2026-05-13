@@ -350,9 +350,6 @@ func (u bsonSetUpdate) appendReplacement(dst, current []byte) (returned []byte, 
 		if !elemOK {
 			return resetDst(), nil, false, bsoncore.NewInsufficientBytesError(current, rem)
 		}
-		if err := elem.Validate(); err != nil {
-			return resetDst(), nil, false, err
-		}
 		replacementFieldIndex := u.fieldIndexBytes(elem.KeyBytes())
 		if replacementFieldIndex < 0 {
 			if changed {
