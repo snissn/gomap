@@ -7591,10 +7591,14 @@ func (db *DB) retainMemtableView() *memtableView {
 		if view == nil {
 			return nil
 		}
+		// Register the external reader before making the view ref visible. The
+		// retire path uses this counter to decide whether queued memtables can be
+		// recycled globally, so refs must not briefly exceed the published baseline
+		// while the reader counter is still zero.
+		db.memtableViewReaders.Add(1)
 		// Fast path: published views keep a baseline ref, so this is usually one
 		// atomic add and return.
 		if n := view.refs.Add(1); n > 1 {
-			db.memtableViewReaders.Add(1)
 			db.noteMemtableViewRetain()
 			return view
 		}
@@ -7602,13 +7606,14 @@ func (db *DB) retainMemtableView() *memtableView {
 		// published view, in which case self-heal by restoring baseline+caller refs.
 		view.refs.Add(-1)
 		if db.memtables.Load() != view {
+			db.releaseAbandonedMemtableViewReader()
 			continue
 		}
 		if view.refs.CompareAndSwap(0, 2) {
-			db.memtableViewReaders.Add(1)
 			db.noteMemtableViewRetain()
 			return view
 		}
+		db.releaseAbandonedMemtableViewReader()
 	}
 }
 
@@ -7621,18 +7626,19 @@ func (db *DB) retainMemtableViewUntracked() *memtableView {
 		if view == nil {
 			return nil
 		}
+		db.memtableViewReaders.Add(1)
 		if n := view.refs.Add(1); n > 1 {
-			db.memtableViewReaders.Add(1)
 			return view
 		}
 		view.refs.Add(-1)
 		if db.memtables.Load() != view {
+			db.releaseAbandonedMemtableViewReader()
 			continue
 		}
 		if view.refs.CompareAndSwap(0, 2) {
-			db.memtableViewReaders.Add(1)
 			return view
 		}
+		db.releaseAbandonedMemtableViewReader()
 	}
 }
 
@@ -7678,6 +7684,15 @@ func (db *DB) releaseMemtableViewRef(view *memtableView, leaseRelease bool, read
 	}
 	db.recycleMemtables(view.retiredMems)
 	view.retiredMems = nil
+}
+
+func (db *DB) releaseAbandonedMemtableViewReader() {
+	if db == nil {
+		return
+	}
+	if readers := db.memtableViewReaders.Add(-1); readers == 0 {
+		db.drainDeferredRetiredMemtables()
+	}
 }
 
 func (db *DB) deferRetiredMemtables(mems []memtable.Table) {
