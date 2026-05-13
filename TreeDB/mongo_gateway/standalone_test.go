@@ -725,6 +725,24 @@ func TestStandaloneServerGoRunRejectsNegativeIntegerLimit(t *testing.T) {
 	}
 }
 
+func TestStandaloneServerGoRunUnknownFlagErrorPrintedOnce(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping go run smoke test in short mode")
+	}
+	cmd := exec.Command("go", "run", "./server.go", "-unknown")
+	cmd.Env = append(os.Environ(), "GOWORK=off")
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("go run ./server.go -unknown succeeded unexpectedly:\n%s", out)
+	}
+	if got := bytes.Count(out, []byte("flag provided but not defined: -unknown")); got != 1 {
+		t.Fatalf("unknown flag output has %d parse errors, want 1:\n%s", got, out)
+	}
+	if got := bytes.Count(out, []byte("mongo gateway server:")); got != 1 {
+		t.Fatalf("unknown flag output has %d top-level prefixes, want 1:\n%s", got, out)
+	}
+}
+
 func TestStandaloneServerServeNilReturnsClosed(t *testing.T) {
 	var standalone *StandaloneServer
 	if err := standalone.Serve(context.Background(), nil); !errors.Is(err, errServerClosed) {

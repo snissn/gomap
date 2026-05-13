@@ -99,7 +99,7 @@ func parseFlags(args []string, stderr io.Writer) (cliConfig, error) {
 		updateCoalescingIdleTTL: 30 * time.Second,
 	}
 	fs := flag.NewFlagSet("treedb-mongo-gateway", flag.ContinueOnError)
-	fs.SetOutput(stderr)
+	fs.SetOutput(flagSetOutput(args, stderr))
 	fs.StringVar(&cfg.addr, "addr", cfg.addr, "TCP listen address for MongoDB clients")
 	fs.StringVar(&cfg.dir, "dir", cfg.dir, "TreeDB root directory")
 	fs.StringVar(&cfg.profile, "profile", cfg.profile, "TreeDB profile: durable, fast, wal_on_fast, or bench")
@@ -137,6 +137,15 @@ func parseFlags(args []string, stderr io.Writer) (cliConfig, error) {
 		return cfg, errors.New("-update-coalescing-batch must be >= 0")
 	}
 	return cfg, nil
+}
+
+func flagSetOutput(args []string, stderr io.Writer) io.Writer {
+	for _, arg := range args {
+		if arg == "-h" || arg == "-help" || arg == "--help" {
+			return stderr
+		}
+	}
+	return io.Discard
 }
 
 func standaloneOptions(cfg cliConfig) mongogateway.StandaloneOptions {
