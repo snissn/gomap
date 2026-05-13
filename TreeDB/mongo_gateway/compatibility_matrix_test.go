@@ -100,6 +100,24 @@ func mongoCompatibilityMatrixRows() []mongoCompatibilityMatrixRow {
 			},
 		},
 		{
+			category: "wire",
+			feature:  "buildInfo command (#1473)",
+			status:   "supported subset",
+			probe: func(t *testing.T, server *Server) {
+				resp := serveCommand(t, server, 26, bson.D{{Key: "buildInfo", Value: int32(1)}, {Key: "$db", Value: "admin"}})
+				assertOK(t, resp)
+				if _, ok := resp.Lookup("version").StringValueOK(); !ok {
+					t.Fatalf("version missing or non-string in %s", resp)
+				}
+				if _, ok := resp.Lookup("versionArray").ArrayOK(); !ok {
+					t.Fatalf("versionArray missing or non-array in %s", resp)
+				}
+				if _, ok := resp.Lookup("bits").Int32OK(); !ok {
+					t.Fatalf("bits missing or non-int32 in %s", resp)
+				}
+			},
+		},
+		{
 			category: "crud",
 			feature:  "insert explicit _id",
 			status:   "supported",

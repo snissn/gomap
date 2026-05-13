@@ -458,7 +458,7 @@ func bufferedMessageCanRetainRequestBody(h wire.Header, body []byte) bool {
 		return false
 	}
 	switch name {
-	case "connectionStatus", "find", "getMore", "hello", "hostInfo", "isMaster", "ismaster", "killCursors", "listCollections", "listIndexes", "ping":
+	case "buildInfo", "connectionStatus", "find", "getMore", "hello", "hostInfo", "isMaster", "ismaster", "killCursors", "listCollections", "listIndexes", "ping":
 		return true
 	default:
 		return false
@@ -626,6 +626,8 @@ func (s *Server) commandResponse(name string, command wire.Document, sequences [
 	switch name {
 	case "hello", "isMaster", "ismaster":
 		return marshalDocument(helloResponse(s.maxMessageLength()))
+	case "buildInfo":
+		return marshalDocument(buildInfoResponse())
 	case "connectionStatus":
 		return marshalDocument(connectionStatusResponse())
 	case "hostInfo":
@@ -670,6 +672,23 @@ func helloResponse(maxMessageLength int32) bson.D {
 		{Key: "maxMessageSizeBytes", Value: maxMessageLength},
 		{Key: "maxWriteBatchSize", Value: int32(defaultMaxWriteBatchSize)},
 		{Key: "localTime", Value: time.Now().UTC()},
+	}
+}
+
+func buildInfoResponse() bson.D {
+	return bson.D{
+		{Key: "version", Value: "0.0.0-treedb-mongo-gateway"},
+		{Key: "gitVersion", Value: "unknown"},
+		{Key: "modules", Value: bson.A{}},
+		{Key: "allocator", Value: "go"},
+		{Key: "javascriptEngine", Value: ""},
+		{Key: "sysInfo", Value: runtime.GOOS + "/" + runtime.GOARCH},
+		{Key: "versionArray", Value: bson.A{int32(0), int32(0), int32(0), int32(0)}},
+		{Key: "bits", Value: int32(strconv.IntSize)},
+		{Key: "debug", Value: false},
+		{Key: "maxBsonObjectSize", Value: int32(defaultMaxBSONObjectSize)},
+		{Key: "storageEngines", Value: bson.A{"treedb"}},
+		{Key: "ok", Value: 1.0},
 	}
 }
 

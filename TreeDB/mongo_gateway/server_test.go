@@ -190,6 +190,40 @@ func TestServerHandlesHostInfo(t *testing.T) {
 	}
 }
 
+func TestServerHandlesBuildInfo(t *testing.T) {
+	commandDoc := mustDocument(t, bson.D{
+		{Key: "buildInfo", Value: int32(1)},
+		{Key: "$db", Value: "admin"},
+	})
+	req, err := wire.AppendMsgMessage(nil, 203, 0, 0, commandDoc)
+	if err != nil {
+		t.Fatalf("AppendMsgMessage: %v", err)
+	}
+	rw := &readWriter{r: bytes.NewReader(req)}
+
+	if err := NewServer().ServeOne(rw); err != nil {
+		t.Fatalf("ServeOne: %v", err)
+	}
+
+	resp := readMsgResponse(t, rw.w.Bytes(), 203)
+	assertOK(t, resp)
+	if _, ok := resp.Lookup("version").StringValueOK(); !ok {
+		t.Fatalf("version missing or non-string in %s", resp)
+	}
+	if _, ok := resp.Lookup("versionArray").ArrayOK(); !ok {
+		t.Fatalf("versionArray missing or non-array in %s", resp)
+	}
+	if _, ok := resp.Lookup("bits").Int32OK(); !ok {
+		t.Fatalf("bits missing or non-int32 in %s", resp)
+	}
+	if _, ok := resp.Lookup("maxBsonObjectSize").Int32OK(); !ok {
+		t.Fatalf("maxBsonObjectSize missing or non-int32 in %s", resp)
+	}
+	if _, ok := resp.Lookup("storageEngines").ArrayOK(); !ok {
+		t.Fatalf("storageEngines missing or non-array in %s", resp)
+	}
+}
+
 func TestServerRetainsReadBufferForSafeCommands(t *testing.T) {
 	commandDoc := mustDocument(t, bson.D{
 		{Key: "ping", Value: int32(1)},
@@ -251,6 +285,7 @@ func TestBufferedMessageCanRetainRequestBody(t *testing.T) {
 		want bool
 	}{
 		{name: "ping", doc: bson.D{{Key: "ping", Value: int32(1)}, {Key: "$db", Value: "admin"}}, want: true},
+		{name: "buildInfo", doc: bson.D{{Key: "buildInfo", Value: int32(1)}, {Key: "$db", Value: "admin"}}, want: true},
 		{name: "connectionStatus", doc: bson.D{{Key: "connectionStatus", Value: int32(1)}, {Key: "$db", Value: "admin"}}, want: true},
 		{name: "hostInfo", doc: bson.D{{Key: "hostInfo", Value: int32(1)}, {Key: "$db", Value: "admin"}}, want: true},
 		{name: "find", doc: bson.D{{Key: "find", Value: "users"}, {Key: "$db", Value: "app"}}, want: true},

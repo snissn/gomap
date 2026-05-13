@@ -1,7 +1,7 @@
 # Mongo Gateway Compatibility Matrix
 
 Status: current compatibility inventory and gap harness for issue #1493,
-including the MongoDB desktop-client `connectionStatus` gap from issue #1473.
+including MongoDB desktop-client metadata gaps from issue #1473.
 
 TreeDB's Mongo gateway is a deliberately small MongoDB-compatible subset. It is
 intended to let common MongoDB drivers exercise TreeDB collection workloads and
@@ -47,6 +47,7 @@ block drifts from the executable matrix rows.
 | wire | ping command | supported |
 | wire | connectionStatus command (#1473) | supported subset |
 | wire | hostInfo command (#1473) | supported subset |
+| wire | buildInfo command (#1473) | supported subset |
 | crud | insert explicit _id | supported |
 | crud | find by _id equality | supported |
 | query | indexed equality and range predicates | supported subset |
@@ -111,6 +112,7 @@ throughput check.
 | Command | `hello` / `isMaster` | `supported subset` | `TestMongoCompatibilityMatrix`, official-driver tests | Minimal server metadata only. |
 | Command | `connectionStatus` | `supported subset` | `TestMongoCompatibilityMatrix`, `TestServerHandlesConnectionStatus` | Returns unauthenticated `authInfo` users, roles, and privileges; no auth or authorization support. |
 | Command | `hostInfo` | `supported subset` | `TestMongoCompatibilityMatrix`, `TestServerHandlesHostInfo` | Returns minimal local runtime and OS metadata only. |
+| Command | `buildInfo` | `supported subset` | `TestMongoCompatibilityMatrix`, `TestServerHandlesBuildInfo` | Returns minimal TreeDB gateway version/build metadata only. |
 | Command | `ping` | `supported` | `TestMongoCompatibilityMatrix` | None for MVP. |
 | Command | `insert` / `insertMany` helper path | `supported subset` | `TestMongoCompatibilityMatrix`, `TestServerOfficialGoDriverBasicCRUD` | Write concern is not Mongo-compatible durability semantics yet. |
 | Command | `find` | `supported subset` | `TestMongoCompatibilityMatrix`, find planner tests | Query language is intentionally limited. |
@@ -141,10 +143,14 @@ The same desktop-client path later exposed
 command with minimal local runtime and OS metadata and keeps it covered in the
 matrix.
 
+The client path then exposed `unsupported MongoDB gateway command: buildInfo`.
+The gateway now handles that command with minimal version and build metadata
+and keeps it covered in the matrix.
+
 This does not yet certify a full desktop GUI connection flow. If a client gets
-past `connectionStatus` / `hostInfo` and then asks for other metadata commands
-such as `buildInfo`, `listDatabases`, or `serverStatus`, add those commands as explicit
-matrix rows before deciding whether to implement or reject them.
+past `connectionStatus` / `hostInfo` / `buildInfo` and then asks for other
+metadata commands such as `listDatabases` or `serverStatus`, add those commands
+as explicit matrix rows before deciding whether to implement or reject them.
 
 ## Query Matrix
 
