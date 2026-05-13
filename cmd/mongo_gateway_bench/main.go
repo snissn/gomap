@@ -3278,13 +3278,15 @@ func runDriverRawValidatedRangePhase(ctx context.Context, cfg config, target *be
 func runFindOneRawString(ctx context.Context, coll *mongo.Collection, filter any, field, want string, sample func(time.Duration), label string) error {
 	begin := time.Now()
 	raw, err := coll.FindOne(ctx, filter).Raw()
-	sample(time.Since(begin))
 	if err != nil {
+		sample(time.Since(begin))
 		return err
 	}
 	if got, ok := directBSONStringField(raw, field); !ok || got != want {
+		sample(time.Since(begin))
 		return fmt.Errorf("%s returned %s=%v ok=%t want %s", label, field, got, ok, want)
 	}
+	sample(time.Since(begin))
 	return nil
 }
 

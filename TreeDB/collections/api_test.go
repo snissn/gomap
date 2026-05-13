@@ -7774,9 +7774,9 @@ func TestFlushBufferedNoIndexCleanDomainSkipsWriteDomainLock(t *testing.T) {
 func TestFlushBufferedNoIndexPendingMutationSynchronizesWithWriteDomainLock(t *testing.T) {
 	domain := &collectionWriteDomain{}
 	col := &Collection{writeDomain: domain}
-	domain.markPendingMutationLocked(1)
 
 	domain.mu.Lock()
+	domain.markPendingMutationLocked(1)
 	unlocked := false
 	unlock := func() {
 		if !unlocked {
