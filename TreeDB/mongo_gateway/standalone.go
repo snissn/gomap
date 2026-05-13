@@ -37,8 +37,11 @@ type StandaloneOptions struct {
 	MaxOpenCursors           int
 	CursorIdleTimeout        time.Duration
 	UpdateCoalescingMaxDelay time.Duration
-	UpdateCoalescingMaxBatch int
-	UpdateCoalescingIdleTTL  time.Duration
+	// UpdateCoalescingMaxBatchSet distinguishes an unset zero value from an
+	// explicit zero, which disables update coalescing.
+	UpdateCoalescingMaxBatchSet bool
+	UpdateCoalescingMaxBatch    int
+	UpdateCoalescingIdleTTL     time.Duration
 }
 
 // StandaloneServer owns the TreeDB backend, collection manager, and MongoDB
@@ -140,7 +143,9 @@ func OpenStandaloneServer(opts StandaloneOptions) (*StandaloneServer, error) {
 	server.MaxOpenCursors = normalized.MaxOpenCursors
 	server.CursorIdleTimeout = normalized.CursorIdleTimeout
 	server.UpdateCoalescingMaxDelay = normalized.UpdateCoalescingMaxDelay
-	server.UpdateCoalescingMaxBatch = normalized.UpdateCoalescingMaxBatch
+	if normalized.UpdateCoalescingMaxBatchSet || normalized.UpdateCoalescingMaxBatch > 0 {
+		server.UpdateCoalescingMaxBatch = normalized.UpdateCoalescingMaxBatch
+	}
 	server.UpdateCoalescingIdleTTL = normalized.UpdateCoalescingIdleTTL
 
 	return &StandaloneServer{

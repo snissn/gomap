@@ -606,10 +606,23 @@ func TestStandaloneServerCloseIsIdempotent(t *testing.T) {
 	}
 }
 
-func TestOpenStandaloneServerAppliesZeroUpdateCoalescingBatch(t *testing.T) {
+func TestOpenStandaloneServerPreservesDefaultUpdateCoalescingBatch(t *testing.T) {
+	standalone, err := OpenStandaloneServer(StandaloneOptions{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("OpenStandaloneServer: %v", err)
+	}
+	defer func() { _ = standalone.Close() }()
+
+	if standalone.Server.UpdateCoalescingMaxBatch != defaultUpdateCoalescingBatch {
+		t.Fatalf("UpdateCoalescingMaxBatch=%d want default %d", standalone.Server.UpdateCoalescingMaxBatch, defaultUpdateCoalescingBatch)
+	}
+}
+
+func TestOpenStandaloneServerAppliesExplicitZeroUpdateCoalescingBatch(t *testing.T) {
 	standalone, err := OpenStandaloneServer(StandaloneOptions{
-		Dir:                      t.TempDir(),
-		UpdateCoalescingMaxBatch: 0,
+		Dir:                         t.TempDir(),
+		UpdateCoalescingMaxBatchSet: true,
+		UpdateCoalescingMaxBatch:    0,
 	})
 	if err != nil {
 		t.Fatalf("OpenStandaloneServer: %v", err)
