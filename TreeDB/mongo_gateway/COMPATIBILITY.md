@@ -58,6 +58,7 @@ block drifts from the executable matrix rows.
 | crud | delete by _id | supported subset |
 | metadata | listCollections | supported subset |
 | metadata | create collection | supported subset |
+| session | logical session handshake and endSessions | supported subset |
 | metadata | createIndexes, listIndexes, and dropIndexes | supported subset |
 | document | native BSON storage mode | supported subset |
 | query gap | $or | rejected |
@@ -70,7 +71,7 @@ block drifts from the executable matrix rows.
 | command gap | aggregate | not implemented |
 | command gap | count | not implemented |
 | command gap | findAndModify | not implemented |
-| transaction gap | sessions and transactions | not implemented |
+| transaction gap | transactions | not implemented |
 <!-- mongo-compatibility-matrix:end -->
 
 For a naive TreeDB-vs-MongoDB throughput smoke that connects to both targets and
@@ -130,7 +131,8 @@ throughput check.
 | Command | `distinct` | `not implemented` | Command falls through to `CommandNotFound` | No distinct scan/index planner. |
 | Command | `findAndModify` | `not implemented` | `TestMongoCompatibilityMatrix` | No atomic find/update command surface. |
 | Command | collection/database drop | `not implemented` | Command falls through to `CommandNotFound` | Collection lifecycle beyond create and index metadata is not exposed. |
-| Command | sessions / transactions | `not implemented` | `TestMongoCompatibilityMatrix` covers `startSession` absence | Depends on local transaction/WAL roadmap. |
+| Command | logical sessions / `endSessions` | `supported subset` | `TestMongoCompatibilityMatrix`, `TestServerOfficialGoDriverLogicalSession` | Advertises `logicalSessionTimeoutMinutes` and accepts `endSessions`; session IDs are accepted for driver compatibility only. |
+| Command | transactions | `not implemented` | `TestMongoCompatibilityMatrix` covers `commitTransaction` absence | Depends on local transaction/WAL roadmap. |
 | Command | auth / authorization | `not implemented` | Command falls through to `CommandNotFound` | Out of MVP scope. |
 
 ## Desktop Client Check
@@ -154,11 +156,17 @@ The gateway now handles plain collection creation as a TreeDB collection catalog
 entry and rejects unsupported MongoDB collection options such as capped
 collections.
 
+The client path then exposed a driver-side
+`Current topology does not support sessions` error. The gateway now advertises
+logical session timeout metadata in `hello` and accepts `endSessions`; this
+unblocks ordinary session-bearing driver commands without adding transaction
+semantics.
+
 This does not yet certify a full desktop GUI connection flow. If a client gets
-past `connectionStatus` / `hostInfo` / `buildInfo` / `create` and then asks for
-other metadata or DDL commands such as `listDatabases` or `serverStatus`, add
-those commands as explicit matrix rows before deciding whether to implement or
-reject them.
+past `connectionStatus` / `hostInfo` / `buildInfo` / `create` / logical
+sessions and then asks for other metadata or DDL commands such as
+`listDatabases` or `serverStatus`, add those commands as explicit matrix rows
+before deciding whether to implement or reject them.
 
 ## Query Matrix
 
@@ -220,7 +228,7 @@ reject them.
 |---|---|---|
 | Mongo `writeConcern` | `not implemented` as Mongo semantics | Gateway success currently follows the underlying TreeDB collection API and durability profile. |
 | Mongo `readConcern` | `not implemented` | No read concern parser or server-side snapshot API mapping. |
-| Sessions | `not implemented` | `startSession` is not handled. |
+| Logical sessions | `supported subset` | Advertised for driver compatibility; `lsid` is accepted but does not add causal consistency, retryable-write, or transaction semantics. |
 | Multi-document transactions | `not implemented` | Blocked on TreeDB collection transaction and collection WAL work. |
 | Retryable writes / idempotency | `not implemented` | Needs explicit idempotency metadata and error contract. |
 
@@ -243,5 +251,5 @@ reject them.
    unsupported values or maps them to documented TreeDB durability boundaries.
 4. Add count/distinct only after the desired TreeDB collection count/index
    semantics are clear.
-5. Keep sessions and multi-document transactions blocked until the local
-   collection transaction and collection WAL tracks are implemented.
+5. Keep multi-document transactions blocked until the local collection
+   transaction and collection WAL tracks are implemented.

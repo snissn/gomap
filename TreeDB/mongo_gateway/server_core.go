@@ -30,6 +30,7 @@ const (
 	defaultCursorBatchSize         = 101
 	defaultCursorIdleTimeout       = 10 * time.Minute
 	defaultCursorReapInterval      = time.Second
+	defaultLogicalSessionTimeout   = 30
 	defaultUpdateCoalescingDelay   = 0
 	defaultUpdateCoalescingBatch   = 256
 	maxUpdateCoalescingBatch       = 4096
@@ -458,7 +459,7 @@ func bufferedMessageCanRetainRequestBody(h wire.Header, body []byte) bool {
 		return false
 	}
 	switch name {
-	case "buildInfo", "connectionStatus", "create", "find", "getMore", "hello", "hostInfo", "isMaster", "ismaster", "killCursors", "listCollections", "listIndexes", "ping":
+	case "buildInfo", "connectionStatus", "create", "endSessions", "find", "getMore", "hello", "hostInfo", "isMaster", "ismaster", "killCursors", "listCollections", "listIndexes", "ping":
 		return true
 	default:
 		return false
@@ -632,6 +633,8 @@ func (s *Server) commandResponse(name string, command wire.Document, sequences [
 		return marshalDocument(connectionStatusResponse())
 	case "create":
 		return s.createCollectionResponse(command)
+	case "endSessions":
+		return marshalDocument(bson.D{{Key: "ok", Value: 1.0}})
 	case "hostInfo":
 		return marshalDocument(hostInfoResponse())
 	case "ping":
@@ -673,6 +676,7 @@ func helloResponse(maxMessageLength int32) bson.D {
 		{Key: "maxBsonObjectSize", Value: int32(defaultMaxBSONObjectSize)},
 		{Key: "maxMessageSizeBytes", Value: maxMessageLength},
 		{Key: "maxWriteBatchSize", Value: int32(defaultMaxWriteBatchSize)},
+		{Key: "logicalSessionTimeoutMinutes", Value: int32(defaultLogicalSessionTimeout)},
 		{Key: "localTime", Value: time.Now().UTC()},
 	}
 }

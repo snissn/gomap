@@ -1319,7 +1319,7 @@ func validateCreateCollectionCommand(command wire.Document) error {
 			return err
 		}
 		switch key {
-		case "create", "$db", "capped":
+		case "create", "$db", "capped", "lsid":
 		case "comment", "writeConcern":
 			// Accepted for client compatibility; TreeDB currently has no
 			// MongoDB-compatible comment/write-concern semantics to apply here.

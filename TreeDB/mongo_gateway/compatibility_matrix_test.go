@@ -50,6 +50,7 @@ func mongoCompatibilityMatrixRows() []mongoCompatibilityMatrixRow {
 				resp := serveCommand(t, server, 1, bson.D{{Key: "hello", Value: int32(1)}, {Key: "$db", Value: "admin"}})
 				assertOK(t, resp)
 				assertBool(t, resp, "helloOk", true)
+				assertInt32(t, resp, "logicalSessionTimeoutMinutes", defaultLogicalSessionTimeout)
 			},
 		},
 		{
@@ -306,6 +307,21 @@ func mongoCompatibilityMatrixRows() []mongoCompatibilityMatrixRow {
 			},
 		},
 		{
+			category: "session",
+			feature:  "logical session handshake and endSessions",
+			status:   "supported subset",
+			probe: func(t *testing.T, server *Server) {
+				hello := serveCommand(t, server, 133, bson.D{{Key: "hello", Value: int32(1)}, {Key: "$db", Value: "admin"}})
+				assertOK(t, hello)
+				assertInt32(t, hello, "logicalSessionTimeoutMinutes", defaultLogicalSessionTimeout)
+				end := serveCommand(t, server, 134, bson.D{
+					{Key: "endSessions", Value: bson.A{bson.D{{Key: "id", Value: bson.Binary{Subtype: 4, Data: make([]byte, 16)}}}}},
+					{Key: "$db", Value: "admin"},
+				})
+				assertOK(t, end)
+			},
+		},
+		{
 			category: "metadata",
 			feature:  "createIndexes, listIndexes, and dropIndexes",
 			status:   "supported subset",
@@ -468,9 +484,9 @@ func mongoCompatibilityMatrixRows() []mongoCompatibilityMatrixRow {
 		},
 		{
 			category: "transaction gap",
-			feature:  "sessions and transactions",
+			feature:  "transactions",
 			status:   "not implemented",
-			probe:    expectCommandNotFound(bson.D{{Key: "startSession", Value: int32(1)}, {Key: "$db", Value: "admin"}}),
+			probe:    expectCommandNotFound(bson.D{{Key: "commitTransaction", Value: int32(1)}, {Key: "$db", Value: "admin"}}),
 		},
 	}
 }

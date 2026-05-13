@@ -91,6 +91,7 @@ func TestServerHandlesQueryHello(t *testing.T) {
 	assertBool(t, reply.Documents[0], "helloOk", true)
 	assertBool(t, reply.Documents[0], "ismaster", true)
 	assertBool(t, reply.Documents[0], "secondary", false)
+	assertInt32(t, reply.Documents[0], "logicalSessionTimeoutMinutes", defaultLogicalSessionTimeout)
 }
 
 func TestServerHandlesMsgPing(t *testing.T) {
@@ -224,6 +225,24 @@ func TestServerHandlesBuildInfo(t *testing.T) {
 	}
 }
 
+func TestServerHandlesEndSessions(t *testing.T) {
+	commandDoc := mustDocument(t, bson.D{
+		{Key: "endSessions", Value: bson.A{bson.D{{Key: "id", Value: bson.Binary{Subtype: 4, Data: make([]byte, 16)}}}}},
+		{Key: "$db", Value: "admin"},
+	})
+	req, err := wire.AppendMsgMessage(nil, 204, 0, 0, commandDoc)
+	if err != nil {
+		t.Fatalf("AppendMsgMessage: %v", err)
+	}
+	rw := &readWriter{r: bytes.NewReader(req)}
+
+	if err := NewServer().ServeOne(rw); err != nil {
+		t.Fatalf("ServeOne: %v", err)
+	}
+
+	assertOK(t, readMsgResponse(t, rw.w.Bytes(), 204))
+}
+
 func TestServerRetainsReadBufferForSafeCommands(t *testing.T) {
 	commandDoc := mustDocument(t, bson.D{
 		{Key: "ping", Value: int32(1)},
@@ -288,6 +307,7 @@ func TestBufferedMessageCanRetainRequestBody(t *testing.T) {
 		{name: "buildInfo", doc: bson.D{{Key: "buildInfo", Value: int32(1)}, {Key: "$db", Value: "admin"}}, want: true},
 		{name: "connectionStatus", doc: bson.D{{Key: "connectionStatus", Value: int32(1)}, {Key: "$db", Value: "admin"}}, want: true},
 		{name: "create", doc: bson.D{{Key: "create", Value: "users"}, {Key: "$db", Value: "app"}}, want: true},
+		{name: "endSessions", doc: bson.D{{Key: "endSessions", Value: bson.A{}}, {Key: "$db", Value: "admin"}}, want: true},
 		{name: "hostInfo", doc: bson.D{{Key: "hostInfo", Value: int32(1)}, {Key: "$db", Value: "admin"}}, want: true},
 		{name: "find", doc: bson.D{{Key: "find", Value: "users"}, {Key: "$db", Value: "app"}}, want: true},
 		{name: "update", doc: bson.D{{Key: "update", Value: "users"}, {Key: "updates", Value: bson.A{}}, {Key: "$db", Value: "app"}}, want: false},
@@ -2152,6 +2172,7 @@ func TestServerCreateCollectionCommand(t *testing.T) {
 
 	createResponse := serveCommand(t, server, 2311, bson.D{
 		{Key: "create", Value: "created"},
+		{Key: "lsid", Value: bson.D{{Key: "id", Value: bson.Binary{Subtype: 4, Data: make([]byte, 16)}}}},
 		{Key: "$db", Value: "app"},
 	})
 	assertOK(t, createResponse)
