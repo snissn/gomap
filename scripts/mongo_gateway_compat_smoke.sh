@@ -26,7 +26,7 @@ export BATCH_SIZE
 for arg in "$@"; do
   case "$arg" in
     -h|--help)
-      exec "$ROOT/scripts/mongo_gateway_compare.sh" "$@"
+      exec "$ROOT/scripts/mongo_gateway_compare.sh" "$arg"
       ;;
   esac
 done

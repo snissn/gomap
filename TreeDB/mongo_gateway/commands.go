@@ -1340,8 +1340,6 @@ func validateCreateCollectionCommand(command wire.Document) error {
 		}
 		switch key {
 		case "capped":
-		case "size", "max", "validator", "validationLevel", "validationAction", "viewOn", "pipeline", "expireAfterSeconds", "timeseries", "clusteredIndex", "changeStreamPreAndPostImages", "collation", "storageEngine", "indexOptionDefaults":
-			return fmt.Errorf("Mongo gateway create does not support option %q", key)
 		default:
 			return fmt.Errorf("Mongo gateway create does not support option %q", key)
 		}

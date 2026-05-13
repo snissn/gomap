@@ -2,6 +2,7 @@ package mongogateway
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -20,14 +21,21 @@ type mongoCompatibilityMatrixRow struct {
 }
 
 func TestMongoCompatibilityMatrix(t *testing.T) {
-	seen := make(map[string]struct{})
+	seenRows := make(map[string]struct{})
+	seenNames := make(map[string]int)
 	for _, row := range mongoCompatibilityMatrixRows() {
 		row := row
-		name := compatibilityTestSlug(row.category) + "_" + compatibilityTestSlug(row.feature)
-		if _, ok := seen[name]; ok {
-			t.Fatalf("duplicate compatibility subtest name %q", name)
+		rowKey := row.category + "\x00" + row.feature
+		if _, ok := seenRows[rowKey]; ok {
+			t.Fatalf("duplicate compatibility row %q/%q", row.category, row.feature)
 		}
-		seen[name] = struct{}{}
+		seenRows[rowKey] = struct{}{}
+		baseName := compatibilityTestSlug(row.category) + "_" + compatibilityTestSlug(row.feature)
+		seenNames[baseName]++
+		name := baseName
+		if seenNames[baseName] > 1 {
+			name = fmt.Sprintf("%s_%d", baseName, seenNames[baseName])
+		}
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			if row.category == "" || row.feature == "" || row.status == "" {
