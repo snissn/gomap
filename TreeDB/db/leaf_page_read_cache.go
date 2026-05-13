@@ -14,7 +14,10 @@ import (
 )
 
 const (
-	leafPageReadCacheEntriesEnvKey  = "TREEDB_LEAF_PAGE_CACHE_ENTRIES"
+	// LeafPageReadCacheEntriesEnvKey names the environment variable that
+	// overrides the process default when Options.LeafPageReadCacheEntries is 0.
+	LeafPageReadCacheEntriesEnvKey  = "TREEDB_LEAF_PAGE_CACHE_ENTRIES"
+	leafPageReadCacheEntriesEnvKey  = LeafPageReadCacheEntriesEnvKey
 	defaultLeafPageReadCacheEntries = 32768
 	maxLeafPageReadCacheEntries     = 1 << 18
 	// Bound miss-admission observer retries so high contention yields a skipped
@@ -27,6 +30,12 @@ const (
 )
 
 var LeafPageReadCacheEntries = defaultLeafPageReadCacheEntries
+
+// ResolveLeafPageReadCacheEntries returns the effective cache size for an
+// Options.LeafPageReadCacheEntries value after applying process/env defaults.
+func ResolveLeafPageReadCacheEntries(optionEntries int) (int, error) {
+	return resolveLeafPageReadCacheEntries(optionEntries)
+}
 
 func configuredLeafPageReadCacheEntries(optionEntries int) int {
 	entries, err := resolveLeafPageReadCacheEntries(optionEntries)

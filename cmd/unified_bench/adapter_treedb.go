@@ -7,21 +7,19 @@ import (
 	"os"
 	"reflect"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	treedbcaching "github.com/snissn/gomap/TreeDB/caching"
+	treedbdb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/kvstore"
 	treedbadapter "github.com/snissn/gomap/kvstore/adapters/treedb"
 )
 
 const (
-	defaultTreeDBChunkSizeBytes           int64 = 256 * 1024
-	defaultTreeDBLeafPageReadCacheEntries       = 32768
-	treeDBLeafPageReadCacheEntriesEnvKey        = "TREEDB_LEAF_PAGE_CACHE_ENTRIES"
+	defaultTreeDBChunkSizeBytes int64 = 256 * 1024
 )
 
 var (
@@ -456,18 +454,11 @@ func formatTreeDBLeafPageReadCacheEntries(entries int) string {
 }
 
 func effectiveTreeDBLeafPageReadCacheEntries(entries int) int {
-	if entries < 0 {
+	effective, err := treedbdb.ResolveLeafPageReadCacheEntries(entries)
+	if err != nil {
 		return 0
 	}
-	if entries > 0 {
-		return entries
-	}
-	if raw := strings.TrimSpace(os.Getenv(treeDBLeafPageReadCacheEntriesEnvKey)); raw != "" {
-		if v, err := strconv.Atoi(raw); err == nil && v >= 0 {
-			return v
-		}
-	}
-	return defaultTreeDBLeafPageReadCacheEntries
+	return effective
 }
 
 func formatTreeDBVlogCompression(mode treedb.ValueLogCompressionMode) string {

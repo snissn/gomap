@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	treedb "github.com/snissn/gomap/TreeDB"
+	treedbdb "github.com/snissn/gomap/TreeDB/db"
 )
 
 func TestTreeDBIndexOuterLeavesInVlogFlag_DefaultIsTrue(t *testing.T) {
@@ -59,7 +60,7 @@ func TestBuildTreeDBOptions_LeafPageReadCacheEntries(t *testing.T) {
 func TestBuildTreeDBOptions_LeafPageReadCacheEntriesDefaultReportsEffective(t *testing.T) {
 	saved := saveTreeDBFlagState()
 	defer restoreTreeDBFlagState(saved)
-	t.Setenv(treeDBLeafPageReadCacheEntriesEnvKey, "")
+	t.Setenv(treedbdb.LeafPageReadCacheEntriesEnvKey, "")
 
 	resetTreeDBIndexFlagsForTest()
 
