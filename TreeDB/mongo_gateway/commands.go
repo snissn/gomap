@@ -1389,6 +1389,9 @@ func (s *Server) createIndexesResponse(command wire.Document) (wire.Document, er
 	if s.Collections == nil {
 		return commandError(commandCodeBadValue, "BadValue", "Mongo gateway collection manager is not configured")
 	}
+	if doc, rejected, err := rejectTransactionalCommand(command, "createIndexes"); rejected {
+		return doc, err
+	}
 	collection, err := commandString(command, "createIndexes")
 	if err != nil {
 		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
@@ -1496,6 +1499,9 @@ func (s *Server) listIndexesResponse(command wire.Document) (wire.Document, erro
 func (s *Server) dropIndexesResponse(command wire.Document) (wire.Document, error) {
 	if s.Collections == nil {
 		return commandError(commandCodeBadValue, "BadValue", "Mongo gateway collection manager is not configured")
+	}
+	if doc, rejected, err := rejectTransactionalCommand(command, "dropIndexes"); rejected {
+		return doc, err
 	}
 	collection, err := commandString(command, "dropIndexes")
 	if err != nil {

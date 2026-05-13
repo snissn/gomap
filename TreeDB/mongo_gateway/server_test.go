@@ -2270,12 +2270,42 @@ func TestServerRejectsTransactionalMutations(t *testing.T) {
 		{Key: "autocommit", Value: false},
 	}
 
+	assertOK(t, serveCommand(t, server, 2319, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{bson.D{{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}}, {Key: "name", Value: "email_1"}, {Key: "treedbValueType", Value: "string"}}}},
+		{Key: "$db", Value: "app"},
+	}))
+	transactionalCreateIndexes := append(bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{bson.D{{Key: "key", Value: bson.D{{Key: "age", Value: int32(1)}}}, {Key: "name", Value: "age_1"}, {Key: "treedbValueType", Value: "int64"}}}},
+	}, transactionFields...)
+	transactionalCreateIndexes = append(transactionalCreateIndexes, bson.E{Key: "$db", Value: "app"})
+	assertCommandError(t, serveCommand(t, server, 2320, transactionalCreateIndexes), "BadValue")
+	indexes := cursorFirstBatch(t, serveCommand(t, server, 2321, bson.D{{Key: "listIndexes", Value: "users"}, {Key: "$db", Value: "app"}}))
+	if len(indexes) != 2 {
+		t.Fatalf("indexes after rejected transactional createIndexes len=%d want 2", len(indexes))
+	}
+	assertIndexName(t, indexes[0], "_id_")
+	assertIndexName(t, indexes[1], "email_1")
+	transactionalDropIndexes := append(bson.D{
+		{Key: "dropIndexes", Value: "users"},
+		{Key: "index", Value: "email_1"},
+	}, transactionFields...)
+	transactionalDropIndexes = append(transactionalDropIndexes, bson.E{Key: "$db", Value: "app"})
+	assertCommandError(t, serveCommand(t, server, 2322, transactionalDropIndexes), "BadValue")
+	indexes = cursorFirstBatch(t, serveCommand(t, server, 2323, bson.D{{Key: "listIndexes", Value: "users"}, {Key: "$db", Value: "app"}}))
+	if len(indexes) != 2 {
+		t.Fatalf("indexes after rejected transactional dropIndexes len=%d want 2", len(indexes))
+	}
+	assertIndexName(t, indexes[0], "_id_")
+	assertIndexName(t, indexes[1], "email_1")
+
 	transactionalInsert := append(bson.D{
 		{Key: "insert", Value: "tx_insert"},
 		{Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u2"}}}},
 	}, transactionFields...)
 	transactionalInsert = append(transactionalInsert, bson.E{Key: "$db", Value: "app"})
-	assertCommandError(t, serveCommand(t, server, 2319, transactionalInsert), "BadValue")
+	assertCommandError(t, serveCommand(t, server, 2324, transactionalInsert), "BadValue")
 	if _, err := server.Collections.OpenCollection("app.tx_insert"); !errors.Is(err, collections.ErrCollectionNotFound) {
 		t.Fatalf("transactional insert collection err=%v, want collection not found", err)
 	}
@@ -2288,8 +2318,8 @@ func TestServerRejectsTransactionalMutations(t *testing.T) {
 		}}},
 	}, transactionFields...)
 	transactionalUpdate = append(transactionalUpdate, bson.E{Key: "$db", Value: "app"})
-	assertCommandError(t, serveCommand(t, server, 2320, transactionalUpdate), "BadValue")
-	found := serveCommand(t, server, 2321, bson.D{
+	assertCommandError(t, serveCommand(t, server, 2325, transactionalUpdate), "BadValue")
+	found := serveCommand(t, server, 2326, bson.D{
 		{Key: "find", Value: "users"},
 		{Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}},
 		{Key: "$db", Value: "app"},
@@ -2304,8 +2334,8 @@ func TestServerRejectsTransactionalMutations(t *testing.T) {
 		{Key: "deletes", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "limit", Value: int32(1)}}}},
 	}, transactionFields...)
 	transactionalDelete = append(transactionalDelete, bson.E{Key: "$db", Value: "app"})
-	assertCommandError(t, serveCommand(t, server, 2322, transactionalDelete), "BadValue")
-	found = serveCommand(t, server, 2323, bson.D{
+	assertCommandError(t, serveCommand(t, server, 2327, transactionalDelete), "BadValue")
+	found = serveCommand(t, server, 2328, bson.D{
 		{Key: "find", Value: "users"},
 		{Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}},
 		{Key: "$db", Value: "app"},
