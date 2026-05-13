@@ -1,7 +1,7 @@
 package mongogateway
 
 import (
-	"fmt"
+	"bytes"
 	"strings"
 	"testing"
 
@@ -20,9 +20,15 @@ type mongoCompatibilityMatrixRow struct {
 }
 
 func TestMongoCompatibilityMatrix(t *testing.T) {
-	for i, row := range mongoCompatibilityMatrixRows() {
+	seen := make(map[string]struct{})
+	for _, row := range mongoCompatibilityMatrixRows() {
 		row := row
-		t.Run(fmt.Sprintf("%02d_%s_%s", i, compatibilityTestSlug(row.category), compatibilityTestSlug(row.feature)), func(t *testing.T) {
+		name := compatibilityTestSlug(row.category) + "_" + compatibilityTestSlug(row.feature)
+		if _, ok := seen[name]; ok {
+			t.Fatalf("duplicate compatibility subtest name %q", name)
+		}
+		seen[name] = struct{}{}
+		t.Run(name, func(t *testing.T) {
 			if row.category == "" || row.feature == "" || row.status == "" {
 				t.Fatalf("incomplete compatibility row: %+v", row)
 			}
@@ -112,8 +118,8 @@ func mongoCompatibilityMatrixRows() []mongoCompatibilityMatrixRow {
 				if _, ok := resp.Lookup("versionArray").ArrayOK(); !ok {
 					t.Fatalf("versionArray missing or non-array in %s", resp)
 				}
-				if _, ok := resp.Lookup("bits").Int32OK(); !ok {
-					t.Fatalf("bits missing or non-int32 in %s", resp)
+				if bits, ok := resp.Lookup("bits").Int32OK(); !ok || bits != runtimePointerSizeBits() {
+					t.Fatalf("bits=%d ok=%v want %d", bits, ok, runtimePointerSizeBits())
 				}
 			},
 		},
@@ -276,13 +282,36 @@ func mongoCompatibilityMatrixRows() []mongoCompatibilityMatrixRow {
 		},
 		{
 			category: "metadata",
+			feature:  "create collection",
+			status:   "supported subset",
+			probe: func(t *testing.T, server *Server) {
+				create := serveCommand(t, server, 131, bson.D{
+					{Key: "create", Value: "matrix_created"},
+					{Key: "$db", Value: "app"},
+				})
+				assertOK(t, create)
+				list := serveCommand(t, server, 132, bson.D{
+					{Key: "listCollections", Value: int32(1)},
+					{Key: "filter", Value: bson.D{{Key: "name", Value: "matrix_created"}}},
+					{Key: "nameOnly", Value: true},
+					{Key: "$db", Value: "app"},
+				})
+				batch := cursorFirstBatch(t, list)
+				if len(batch) != 1 {
+					t.Fatalf("created collection batch len=%d want 1", len(batch))
+				}
+				if got, ok := batch[0].Lookup("name").StringValueOK(); !ok || got != "matrix_created" {
+					t.Fatalf("created collection name=%q ok=%v want matrix_created", got, ok)
+				}
+			},
+		},
+		{
+			category: "metadata",
 			feature:  "createIndexes, listIndexes, and dropIndexes",
 			status:   "supported subset",
 			probe: func(t *testing.T, server *Server) {
 				list := serveCommand(t, server, 14, bson.D{{Key: "listIndexes", Value: "users"}, {Key: "$db", Value: "app"}})
-				if batch := cursorFirstBatch(t, list); len(batch) != 4 {
-					t.Fatalf("index batch len=%d want 4", len(batch))
-				}
+				assertIndexNameSet(t, cursorFirstBatch(t, list), []string{"_id_", "city_1", "age_1", "score_1"})
 				drop := serveCommand(t, server, 15, bson.D{{Key: "dropIndexes", Value: "users"}, {Key: "index", Value: "score_1"}, {Key: "$db", Value: "app"}})
 				assertOK(t, drop)
 			},
@@ -298,6 +327,19 @@ func mongoCompatibilityMatrixRows() []mongoCompatibilityMatrixRow {
 					{Key: "$db", Value: "app"},
 				})
 				assertOK(t, resp)
+				find := serveCommand(t, server, 161, bson.D{
+					{Key: "find", Value: "users"},
+					{Key: "filter", Value: bson.D{{Key: "_id", Value: "binary"}}},
+					{Key: "$db", Value: "app"},
+				})
+				batch := cursorFirstBatch(t, find)
+				if len(batch) != 1 {
+					t.Fatalf("native BSON batch len=%d want 1", len(batch))
+				}
+				subtype, payload := batch[0].Lookup("payload").Binary()
+				if subtype != 0 || !bytes.Equal(payload, []byte{1, 2, 3}) {
+					t.Fatalf("payload subtype/data=%#x/%v want 0/[1 2 3]", subtype, payload)
+				}
 			},
 		},
 		{
@@ -471,6 +513,26 @@ func expectCommandNotFound(command bson.D) mongoCompatibilityProbe {
 	return func(t *testing.T, server *Server) {
 		resp := serveCommand(t, server, 2000, command)
 		assertCommandError(t, resp, "CommandNotFound")
+	}
+}
+
+func assertIndexNameSet(tb testing.TB, batch []bson.Raw, want []string) {
+	tb.Helper()
+	if len(batch) != len(want) {
+		tb.Fatalf("index batch len=%d want %d", len(batch), len(want))
+	}
+	got := make(map[string]struct{}, len(batch))
+	for i, doc := range batch {
+		name, ok := doc.Lookup("name").StringValueOK()
+		if !ok {
+			tb.Fatalf("index batch[%d] missing string name: %s", i, doc)
+		}
+		got[name] = struct{}{}
+	}
+	for _, name := range want {
+		if _, ok := got[name]; !ok {
+			tb.Fatalf("index batch missing %q; got %v", name, got)
+		}
 	}
 }
 

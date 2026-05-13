@@ -1,7 +1,7 @@
 # Mongo Gateway Compatibility Matrix
 
 Status: current compatibility inventory and gap harness for issue #1493,
-including MongoDB desktop-client metadata gaps from issue #1473.
+including MongoDB desktop-client metadata and DDL gaps from issue #1473.
 
 TreeDB's Mongo gateway is a deliberately small MongoDB-compatible subset. It is
 intended to let common MongoDB drivers exercise TreeDB collection workloads and
@@ -57,6 +57,7 @@ block drifts from the executable matrix rows.
 | crud | updateOne $set by _id | supported subset |
 | crud | delete by _id | supported subset |
 | metadata | listCollections | supported subset |
+| metadata | create collection | supported subset |
 | metadata | createIndexes, listIndexes, and dropIndexes | supported subset |
 | document | native BSON storage mode | supported subset |
 | query gap | $or | rejected |
@@ -120,6 +121,7 @@ throughput check.
 | Command | `update` / `updateOne` helper path | `supported subset` | `TestMongoCompatibilityMatrix`, update tests | Only `_id`-targeted updateOne with accepted update shapes. |
 | Command | `delete` / `deleteOne` helper path | `supported subset` | `TestMongoCompatibilityMatrix`, CRUD tests | Only `_id`-targeted deletes. |
 | Command | `listCollections` | `supported subset` | `TestMongoCompatibilityMatrix`, metadata tests | Minimal filtering and response fields. |
+| Command | `create` | `supported subset` | `TestMongoCompatibilityMatrix`, `TestServerCreateCollectionCommand` | Creates a plain TreeDB collection catalog entry; capped collections and other MongoDB collection options are rejected. |
 | Command | `createIndexes` | `supported subset` | `TestMongoCompatibilityMatrix`, metadata tests | Single-field ascending indexes only, with `treedbValueType`. |
 | Command | `listIndexes` | `supported subset` | `TestMongoCompatibilityMatrix`, metadata tests | Emits TreeDB-specific `treedbValueType`. |
 | Command | `dropIndexes` | `supported subset` | `TestMongoCompatibilityMatrix`, metadata tests | No broad collection/database DDL surface. |
@@ -127,7 +129,7 @@ throughput check.
 | Command | `count`, `countDocuments`, `estimatedDocumentCount` | `not implemented` | `TestMongoCompatibilityMatrix` covers `count` command absence | Future fast count work should be explicit. |
 | Command | `distinct` | `not implemented` | Command falls through to `CommandNotFound` | No distinct scan/index planner. |
 | Command | `findAndModify` | `not implemented` | `TestMongoCompatibilityMatrix` | No atomic find/update command surface. |
-| Command | collection/database drop | `not implemented` | Command falls through to `CommandNotFound` | Collection lifecycle beyond create/index metadata is not exposed. |
+| Command | collection/database drop | `not implemented` | Command falls through to `CommandNotFound` | Collection lifecycle beyond create and index metadata is not exposed. |
 | Command | sessions / transactions | `not implemented` | `TestMongoCompatibilityMatrix` covers `startSession` absence | Depends on local transaction/WAL roadmap. |
 | Command | auth / authorization | `not implemented` | Command falls through to `CommandNotFound` | Out of MVP scope. |
 
@@ -147,10 +149,16 @@ The client path then exposed `unsupported MongoDB gateway command: buildInfo`.
 The gateway now handles that command with minimal MongoDB-compatible version
 and build metadata and keeps it covered in the matrix.
 
+The client path then exposed `unsupported MongoDB gateway command: create`.
+The gateway now handles plain collection creation as a TreeDB collection catalog
+entry and rejects unsupported MongoDB collection options such as capped
+collections.
+
 This does not yet certify a full desktop GUI connection flow. If a client gets
-past `connectionStatus` / `hostInfo` / `buildInfo` and then asks for other
-metadata commands such as `listDatabases` or `serverStatus`, add those commands
-as explicit matrix rows before deciding whether to implement or reject them.
+past `connectionStatus` / `hostInfo` / `buildInfo` / `create` and then asks for
+other metadata or DDL commands such as `listDatabases` or `serverStatus`, add
+those commands as explicit matrix rows before deciding whether to implement or
+reject them.
 
 ## Query Matrix
 

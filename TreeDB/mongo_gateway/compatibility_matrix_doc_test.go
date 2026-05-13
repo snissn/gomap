@@ -51,7 +51,7 @@ func replaceGeneratedCompatibilityMatrix(doc string, rows []mongoCompatibilityMa
 		return "", fmt.Errorf("missing end marker %q", compatibilityMatrixEnd)
 	}
 	end := start + endRel + len(compatibilityMatrixEnd)
-	return doc[:start] + generatedCompatibilityMatrix(rows, documentNewline(doc)) + doc[end:], nil
+	return doc[:start] + generatedCompatibilityMatrix(rows, markerLineNewline(doc, start)) + doc[end:], nil
 }
 
 func generatedCompatibilityMatrix(rows []mongoCompatibilityMatrixRow, newline string) string {
@@ -73,11 +73,38 @@ func generatedCompatibilityMatrix(rows []mongoCompatibilityMatrixRow, newline st
 	return b.String()
 }
 
-func documentNewline(doc string) string {
-	if strings.Contains(doc, "\r\n") {
+func markerLineNewline(doc string, markerStart int) string {
+	if markerStart >= 0 && markerStart < len(doc) {
+		if rel := strings.IndexByte(doc[markerStart:], '\n'); rel >= 0 {
+			lineEnd := markerStart + rel
+			if lineEnd > 0 && doc[lineEnd-1] == '\r' {
+				return "\r\n"
+			}
+			return "\n"
+		}
+	}
+	return dominantDocumentNewline(doc)
+}
+
+func dominantDocumentNewline(doc string) string {
+	crlf := strings.Count(doc, "\r\n")
+	lf := strings.Count(strings.ReplaceAll(doc, "\r\n", ""), "\n")
+	if crlf > lf {
 		return "\r\n"
 	}
 	return "\n"
+}
+
+func TestMarkerLineNewline(t *testing.T) {
+	mixed := strings.Join([]string{
+		"# title\n",
+		compatibilityMatrixBegin + "\r\n",
+		"old\r\n",
+		compatibilityMatrixEnd + "\r\n",
+	}, "")
+	if got := markerLineNewline(mixed, strings.Index(mixed, compatibilityMatrixBegin)); got != "\r\n" {
+		t.Fatalf("markerLineNewline=%q want CRLF", got)
+	}
 }
 
 func markdownTableCell(s string) string {

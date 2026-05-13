@@ -20,6 +20,8 @@ TREEDB_CLIENT_MODES="${TREEDB_CLIENT_MODES:-driver}"
 TREEDB_DOCUMENT_FORMATS="${TREEDB_DOCUMENT_FORMATS:-bson}"
 TITLE="${TITLE:-Mongo Gateway Compatibility Smoke}"
 TIMEOUT="${TIMEOUT:-10m}"
+# mongo_gateway_compare.sh reads BATCH_SIZE from the environment and passes it
+# to cmd/mongo_gateway_bench.
 export BATCH_SIZE
 
 exec "$ROOT/scripts/mongo_gateway_compare.sh" \

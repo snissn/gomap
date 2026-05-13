@@ -213,8 +213,8 @@ func TestServerHandlesBuildInfo(t *testing.T) {
 	if _, ok := resp.Lookup("versionArray").ArrayOK(); !ok {
 		t.Fatalf("versionArray missing or non-array in %s", resp)
 	}
-	if _, ok := resp.Lookup("bits").Int32OK(); !ok {
-		t.Fatalf("bits missing or non-int32 in %s", resp)
+	if bits, ok := resp.Lookup("bits").Int32OK(); !ok || bits != runtimePointerSizeBits() {
+		t.Fatalf("bits=%d ok=%v want %d", bits, ok, runtimePointerSizeBits())
 	}
 	if _, ok := resp.Lookup("maxBsonObjectSize").Int32OK(); !ok {
 		t.Fatalf("maxBsonObjectSize missing or non-int32 in %s", resp)
@@ -287,6 +287,7 @@ func TestBufferedMessageCanRetainRequestBody(t *testing.T) {
 		{name: "ping", doc: bson.D{{Key: "ping", Value: int32(1)}, {Key: "$db", Value: "admin"}}, want: true},
 		{name: "buildInfo", doc: bson.D{{Key: "buildInfo", Value: int32(1)}, {Key: "$db", Value: "admin"}}, want: true},
 		{name: "connectionStatus", doc: bson.D{{Key: "connectionStatus", Value: int32(1)}, {Key: "$db", Value: "admin"}}, want: true},
+		{name: "create", doc: bson.D{{Key: "create", Value: "users"}, {Key: "$db", Value: "app"}}, want: true},
 		{name: "hostInfo", doc: bson.D{{Key: "hostInfo", Value: int32(1)}, {Key: "$db", Value: "admin"}}, want: true},
 		{name: "find", doc: bson.D{{Key: "find", Value: "users"}, {Key: "$db", Value: "app"}}, want: true},
 		{name: "update", doc: bson.D{{Key: "update", Value: "users"}, {Key: "updates", Value: bson.A{}}, {Key: "$db", Value: "app"}}, want: false},
@@ -2134,6 +2135,85 @@ func TestServerIndexMetadataCommands(t *testing.T) {
 		t.Fatalf("index batch after drop len=%d want %d", got, want)
 	}
 	assertIndexName(t, indexBatch[0], "_id_")
+}
+
+func TestServerCreateCollectionCommand(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	server.DefaultCollectionOptions = collections.CollectionOptions{
+		DocumentFormat: collections.DocumentFormatBSON,
+	}
+
+	createResponse := serveCommand(t, server, 2311, bson.D{
+		{Key: "create", Value: "created"},
+		{Key: "$db", Value: "app"},
+	})
+	assertOK(t, createResponse)
+
+	col, err := server.Collections.OpenCollection("app.created")
+	if err != nil {
+		t.Fatalf("open created collection: %v", err)
+	}
+	if col.Meta().Options.DocumentFormat != collections.DocumentFormatBSON {
+		t.Fatalf("document format=%q want bson", col.Meta().Options.DocumentFormat)
+	}
+
+	collectionsResponse := serveCommand(t, server, 2312, bson.D{
+		{Key: "listCollections", Value: int32(1)},
+		{Key: "filter", Value: bson.D{{Key: "name", Value: "created"}}},
+		{Key: "nameOnly", Value: true},
+		{Key: "$db", Value: "app"},
+	})
+	collectionBatch := cursorFirstBatch(t, collectionsResponse)
+	if len(collectionBatch) != 1 {
+		t.Fatalf("collection batch len=%d want 1", len(collectionBatch))
+	}
+	if got, ok := collectionBatch[0].Lookup("name").StringValueOK(); !ok || got != "created" {
+		t.Fatalf("collection name=%q ok=%v want created", got, ok)
+	}
+
+	indexesResponse := serveCommand(t, server, 2313, bson.D{
+		{Key: "listIndexes", Value: "created"},
+		{Key: "$db", Value: "app"},
+	})
+	indexBatch := cursorFirstBatch(t, indexesResponse)
+	if got, want := len(indexBatch), 1; got != want {
+		t.Fatalf("index batch len=%d want %d", got, want)
+	}
+	assertIndexName(t, indexBatch[0], "_id_")
+
+	duplicateResponse := serveCommand(t, server, 2314, bson.D{
+		{Key: "create", Value: "created"},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, duplicateResponse, "NamespaceExists")
+
+	cappedFalseResponse := serveCommand(t, server, 2315, bson.D{
+		{Key: "create", Value: "plain"},
+		{Key: "capped", Value: false},
+		{Key: "$db", Value: "app"},
+	})
+	assertOK(t, cappedFalseResponse)
+
+	cappedTrueResponse := serveCommand(t, server, 2316, bson.D{
+		{Key: "create", Value: "capped"},
+		{Key: "capped", Value: true},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, cappedTrueResponse, "BadValue")
+
+	validatorResponse := serveCommand(t, server, 2317, bson.D{
+		{Key: "create", Value: "validated"},
+		{Key: "validator", Value: bson.D{}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, validatorResponse, "BadValue")
 }
 
 func TestServerCreateIndexesAutoCreateDedupesIdenticalDefinitions(t *testing.T) {

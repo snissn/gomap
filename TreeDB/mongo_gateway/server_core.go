@@ -11,10 +11,10 @@ import (
 	"net"
 	"os"
 	"runtime"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
+	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	"github.com/snissn/gomap/TreeDB/mongo_gateway/wire"
@@ -458,7 +458,7 @@ func bufferedMessageCanRetainRequestBody(h wire.Header, body []byte) bool {
 		return false
 	}
 	switch name {
-	case "buildInfo", "connectionStatus", "find", "getMore", "hello", "hostInfo", "isMaster", "ismaster", "killCursors", "listCollections", "listIndexes", "ping":
+	case "buildInfo", "connectionStatus", "create", "find", "getMore", "hello", "hostInfo", "isMaster", "ismaster", "killCursors", "listCollections", "listIndexes", "ping":
 		return true
 	default:
 		return false
@@ -630,6 +630,8 @@ func (s *Server) commandResponse(name string, command wire.Document, sequences [
 		return marshalDocument(buildInfoResponse())
 	case "connectionStatus":
 		return marshalDocument(connectionStatusResponse())
+	case "create":
+		return s.createCollectionResponse(command)
 	case "hostInfo":
 		return marshalDocument(hostInfoResponse())
 	case "ping":
@@ -684,7 +686,7 @@ func buildInfoResponse() bson.D {
 		{Key: "javascriptEngine", Value: ""},
 		{Key: "sysInfo", Value: runtime.GOOS + "/" + runtime.GOARCH},
 		{Key: "versionArray", Value: bson.A{int32(7), int32(0), int32(0), int32(0)}},
-		{Key: "bits", Value: int32(strconv.IntSize)},
+		{Key: "bits", Value: runtimePointerSizeBits()},
 		{Key: "debug", Value: false},
 		{Key: "maxBsonObjectSize", Value: int32(defaultMaxBSONObjectSize)},
 		{Key: "storageEngines", Value: bson.A{"treedb"}},
@@ -712,7 +714,7 @@ func hostInfoResponse() bson.D {
 		{Key: "system", Value: bson.D{
 			{Key: "currentTime", Value: time.Now().UTC()},
 			{Key: "hostname", Value: hostname},
-			{Key: "cpuAddrSize", Value: int32(strconv.IntSize)},
+			{Key: "cpuAddrSize", Value: runtimePointerSizeBits()},
 			{Key: "numCores", Value: int32(runtime.NumCPU())},
 			{Key: "cpuArch", Value: runtime.GOARCH},
 		}},
@@ -722,6 +724,10 @@ func hostInfoResponse() bson.D {
 		}},
 		{Key: "ok", Value: 1.0},
 	}
+}
+
+func runtimePointerSizeBits() int32 {
+	return int32(unsafe.Sizeof(uintptr(0)) * 8)
 }
 
 func marshalDocument(doc bson.D) (wire.Document, error) {

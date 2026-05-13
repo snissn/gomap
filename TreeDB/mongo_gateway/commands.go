@@ -22,6 +22,7 @@ const (
 	commandCodeNamespaceNotFound   int32 = 26
 	commandCodeIndexNotFound       int32 = 27
 	commandCodeCursorNotFound      int32 = 43
+	commandCodeNamespaceExists     int32 = 48
 	commandCodeDuplicateKey        int32 = 11000
 	maxWireMessageLengthInt32Limit       = int64(1<<31 - 1)
 )
@@ -1268,6 +1269,65 @@ func (s *Server) listCollectionsResponse(command wire.Document) (wire.Document, 
 		firstBatch = append(firstBatch, mongoCollectionDocument(collectionName, nameOnly))
 	}
 	return marshalCursorResponse(db, "$cmd.listCollections", firstBatch)
+}
+
+func (s *Server) createCollectionResponse(command wire.Document) (wire.Document, error) {
+	if s.Collections == nil {
+		return commandError(commandCodeBadValue, "BadValue", "Mongo gateway collection manager is not configured")
+	}
+	collection, err := commandString(command, "create")
+	if err != nil {
+		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
+	}
+	db, err := commandString(command, "$db")
+	if err != nil {
+		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
+	}
+	name, err := gatewayCollectionName(db, collection)
+	if err != nil {
+		return commandError(commandCodeBadValue, "BadValue", err.Error())
+	}
+	if err := validateCreateCollectionCommand(command); err != nil {
+		return commandError(commandCodeBadValue, "BadValue", err.Error())
+	}
+	if _, err := s.Collections.OpenCollection(name); err == nil {
+		return commandError(commandCodeNamespaceExists, "NamespaceExists", "collection already exists: "+db+"."+collection)
+	} else if !errors.Is(err, collections.ErrCollectionNotFound) {
+		return commandError(commandCodeBadValue, "BadValue", err.Error())
+	}
+	if _, err := s.Collections.CreateCollection(s.defaultCollectionMeta(name)); err != nil {
+		return commandError(commandCodeBadValue, "BadValue", err.Error())
+	}
+	return marshalDocument(bson.D{{Key: "ok", Value: 1.0}})
+}
+
+func validateCreateCollectionCommand(command wire.Document) error {
+	capped, err := optionalBoolField(command, "capped")
+	if err != nil {
+		return err
+	}
+	if capped {
+		return errors.New("Mongo gateway create does not support capped collections")
+	}
+	elements, err := bson.Raw(command).Elements()
+	if err != nil {
+		return err
+	}
+	for _, elem := range elements {
+		key, err := elem.KeyErr()
+		if err != nil {
+			return err
+		}
+		switch key {
+		case "create", "$db", "capped":
+		case "comment", "writeConcern":
+			// Accepted for client compatibility; TreeDB currently has no
+			// MongoDB-compatible comment/write-concern semantics to apply here.
+		default:
+			return fmt.Errorf("Mongo gateway create does not support option %q", key)
+		}
+	}
+	return nil
 }
 
 func (s *Server) createIndexesResponse(command wire.Document) (wire.Document, error) {
