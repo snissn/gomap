@@ -3274,7 +3274,13 @@ func clientModeLabel(target, config string) string {
 	}
 	config = strings.TrimPrefix(config, target+"_")
 	config = strings.TrimPrefix(config, "bson_")
-	config = strings.TrimSuffix(config, "_range_index")
+	withoutRangeIndex := strings.TrimSuffix(config, "_range_index")
+	if withoutRangeIndex != "" {
+		config = withoutRangeIndex
+	}
+	if config == "range_index" {
+		config = "driver"
+	}
 	return "BSON " + config
 }
 

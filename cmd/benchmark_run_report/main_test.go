@@ -295,6 +295,12 @@ func TestLoadModeLabelNormalizesSingleMongoConfig(t *testing.T) {
 	if got, want := loadModeLabel(loadModeRow{Target: "mongo", Config: "mongo"}), "BSON driver"; got != want {
 		t.Fatalf("label = %q, want %q", got, want)
 	}
+	if got, want := loadModeLabel(loadModeRow{Target: "mongo", Config: "mongo_range_index"}), "BSON driver"; got != want {
+		t.Fatalf("legacy range-index label = %q, want %q", got, want)
+	}
+	if got, want := readModeLabel(readModeRow{Target: "treedb", Config: "treedb_bson_raw_wire_range_index"}), "BSON raw_wire"; got != want {
+		t.Fatalf("range-index mode label = %q, want %q", got, want)
+	}
 }
 
 func TestTreeDBOnlyLoadModeIncludesNonBSONDirectFormats(t *testing.T) {
