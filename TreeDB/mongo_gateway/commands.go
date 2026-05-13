@@ -17,13 +17,14 @@ import (
 )
 
 const (
-	commandCodeBadValue            int32 = 2
-	commandCodeFailedToParse       int32 = 9
-	commandCodeNamespaceNotFound   int32 = 26
-	commandCodeIndexNotFound       int32 = 27
-	commandCodeCursorNotFound      int32 = 43
-	commandCodeDuplicateKey        int32 = 11000
-	maxWireMessageLengthInt32Limit       = int64(1<<31 - 1)
+	commandCodeBadValue                        int32 = 2
+	commandCodeFailedToParse                   int32 = 9
+	commandCodeNamespaceNotFound               int32 = 26
+	commandCodeIndexNotFound                   int32 = 27
+	commandCodeCursorNotFound                  int32 = 43
+	commandCodeDuplicateKey                    int32 = 11000
+	maxWireMessageLengthInt32Limit                   = int64(1<<31 - 1)
+	mongoGatewayCollectionManagerNotConfigured       = "Mongo gateway collection manager is not configured"
 )
 
 const primaryKeyPrefixBSONValue byte = 1
@@ -32,7 +33,7 @@ var maxInt = int(^uint(0) >> 1)
 
 func (s *Server) insertResponse(command wire.Document, sequences []wire.DocumentSequence) (wire.Document, error) {
 	if s.Collections == nil {
-		return commandError(commandCodeBadValue, "BadValue", "Mongo gateway collection manager is not configured")
+		return commandError(commandCodeBadValue, "BadValue", mongoGatewayCollectionManagerNotConfigured)
 	}
 	collection, err := commandString(command, "insert")
 	if err != nil {
@@ -53,7 +54,7 @@ func (s *Server) insertResponse(command wire.Document, sequences []wire.Document
 
 	var col *collections.Collection
 	format := s.DefaultCollectionOptions.DocumentFormat
-	if existing, err := s.Collections.OpenCollection(name); err == nil {
+	if existing, err := s.openCollection(name); err == nil {
 		col = existing
 		format = existing.Meta().Options.DocumentFormat
 	} else if !errors.Is(err, collections.ErrCollectionNotFound) {
@@ -113,6 +114,7 @@ type rawCursorDocumentsResponse struct {
 	cursorID int64
 	batchKey string
 	batch    []wire.Document
+	single   wire.Document
 }
 
 type findResponsePayloadKind uint8
@@ -133,7 +135,7 @@ type findResponsePayload struct {
 func (p findResponsePayload) marshalDocument() (wire.Document, error) {
 	switch p.kind {
 	case findResponsePayloadRaw:
-		return marshalCursorDocumentsResponseWithID(p.raw.ns, p.raw.cursorID, p.raw.batchKey, p.raw.batch)
+		return p.raw.marshalDocument()
 	case findResponsePayloadIndexedRange:
 		return p.indexedRange.marshalDocument()
 	default:
@@ -152,7 +154,7 @@ func (p findResponsePayload) marshalMsgInto(dst []byte, requestID, responseTo in
 func (p findResponsePayload) marshalMsgIntoWithMaxLength(dst []byte, requestID, responseTo int32, maxMessageLength int) ([]byte, error) {
 	switch p.kind {
 	case findResponsePayloadRaw:
-		return marshalCursorDocumentsMsgResponseWithIDInto(dst, requestID, responseTo, p.raw.ns, p.raw.cursorID, p.raw.batchKey, p.raw.batch, maxMessageLength)
+		return p.raw.marshalMsgInto(dst, requestID, responseTo, maxMessageLength)
 	case findResponsePayloadIndexedRange:
 		return p.indexedRange.marshalMsgIntoWithMaxLength(dst, requestID, responseTo, maxMessageLength)
 	default:
@@ -173,6 +175,65 @@ func (p findResponsePayload) marshalMsgIntoWithMaxLength(dst []byte, requestID, 
 		}
 		return msg, nil
 	}
+}
+
+func (r rawCursorDocumentsResponse) marshalDocument() (wire.Document, error) {
+	if r.single == nil {
+		return marshalCursorDocumentsResponseWithID(r.ns, r.cursorID, r.batchKey, r.batch)
+	}
+	builder := newRawCursorDocumentBuilder(make([]byte, 0, cursorDocumentsMsgResponseLength(r.ns, r.batchKey, findBatchOverheadBytes+findBatchDocumentBytes(r.single, 0))), r.ns, r.batchKey, maxInt)
+	if _, err := builder.appendDocument(r.single); err != nil {
+		return nil, err
+	}
+	builder.setCursorID(r.cursorID)
+	msg, err := builder.finish()
+	return wire.Document(msg), err
+}
+
+func (r rawCursorDocumentsResponse) marshalMsgInto(dst []byte, requestID, responseTo int32, maxMessageLength int) ([]byte, error) {
+	if r.single == nil {
+		return marshalCursorDocumentsMsgResponseWithIDInto(dst, requestID, responseTo, r.ns, r.cursorID, r.batchKey, r.batch, maxMessageLength)
+	}
+	if maxMessageLength <= 0 || maxMessageLength > wire.DefaultMaxMessageLength {
+		maxMessageLength = wire.DefaultMaxMessageLength
+	}
+	batchBytes := findBatchOverheadBytes + findBatchDocumentBytes(r.single, 0)
+	need := cursorDocumentsMsgResponseLength(r.ns, r.batchKey, batchBytes)
+	if int64(need) > maxWireMessageLengthInt32Limit {
+		return nil, fmt.Errorf("%w: length=%d", wire.ErrMessageTooLarge, need)
+	}
+	if need > maxMessageLength {
+		return nil, fmt.Errorf("%w: length=%d max=%d", wire.ErrMessageTooLarge, need, maxMessageLength)
+	}
+	dst = ensureWireAppendCapacity(dst, need)
+	base := len(dst)
+	msg := appendWireInt32(dst, 0)
+	msg = appendWireInt32(msg, requestID)
+	msg = appendWireInt32(msg, responseTo)
+	msg = appendWireInt32(msg, int32(wire.OpMsg))
+	msg = appendWireInt32(msg, 0)
+	msg = append(msg, wire.MsgSectionBody)
+	builder := newRawCursorDocumentBuilder(msg, r.ns, r.batchKey, maxMessageLength)
+	if _, err := builder.appendDocument(r.single); err != nil {
+		return msg[:base], err
+	}
+	builder.setCursorID(r.cursorID)
+	msg, err := builder.finish()
+	if err != nil {
+		return msg[:base], err
+	}
+	messageLength := len(msg) - base
+	if messageLength != need {
+		return msg[:base], fmt.Errorf("mongo gateway raw cursor response length mismatch: got=%d want=%d", messageLength, need)
+	}
+	if int64(messageLength) > maxWireMessageLengthInt32Limit {
+		return msg[:base], fmt.Errorf("%w: length=%d", wire.ErrMessageTooLarge, messageLength)
+	}
+	if messageLength > maxMessageLength {
+		return msg[:base], fmt.Errorf("%w: length=%d max=%d", wire.ErrMessageTooLarge, messageLength, maxMessageLength)
+	}
+	binary.LittleEndian.PutUint32(msg[base:base+4], uint32(messageLength))
+	return msg, nil
 }
 
 func (p findResponsePayload) documentPayload() (wire.Document, error) {
@@ -217,7 +278,7 @@ func (s *Server) findMsgResponseInto(dst []byte, command wire.Document, requestI
 	}
 	base := len(dst)
 	msg, err := payload.marshalMsgIntoWithMaxLength(dst, requestID, responseTo, int(s.maxMessageLength()))
-	if err != nil && payload.kind == findResponsePayloadIndexedRange {
+	if err != nil {
 		doc, docErr := commandError(commandCodeBadValue, "BadValue", err.Error())
 		if docErr != nil {
 			return nil, docErr
@@ -229,7 +290,7 @@ func (s *Server) findMsgResponseInto(dst []byte, command wire.Document, requestI
 
 func (s *Server) findResponsePayload(command wire.Document, cursorOwner int64) (findResponsePayload, error) {
 	if s.Collections == nil {
-		doc, err := commandError(commandCodeBadValue, "BadValue", "Mongo gateway collection manager is not configured")
+		doc, err := commandError(commandCodeBadValue, "BadValue", mongoGatewayCollectionManagerNotConfigured)
 		return findResponsePayload{document: doc}, err
 	}
 	collection, err := commandString(command, "find")
@@ -257,7 +318,7 @@ func (s *Server) findResponsePayload(command wire.Document, cursorOwner int64) (
 		doc, err := commandError(commandCodeBadValue, "BadValue", err.Error())
 		return findResponsePayload{document: doc}, err
 	}
-	col, err := s.Collections.OpenCollection(name)
+	col, err := s.openCollection(name)
 	if errors.Is(err, collections.ErrCollectionNotFound) {
 		doc, err := marshalCursorResponse(db, collection, bson.A{})
 		return findResponsePayload{document: doc}, err
@@ -277,6 +338,34 @@ func (s *Server) findResponsePayload(command wire.Document, cursorOwner int64) (
 		return findResponsePayload{document: doc}, err
 	}
 	ns := db + "." + collection
+	normalizedBatchSize, err := normalizeBatchSize(int(batchSize), batchSizeSet, defaultCursorBatchSize)
+	if err != nil {
+		doc, err := commandError(commandCodeBadValue, "BadValue", err.Error())
+		return findResponsePayload{document: doc}, err
+	}
+	if normalizedBatchSize > 0 && !plan.projection.present {
+		if idValue, ok := singlePrimaryIDPredicateValue(plan); ok {
+			doc, found, err := singlePrimaryIDDocument(col, idValue)
+			if err != nil {
+				doc, err := commandError(commandCodeBadValue, "BadValue", err.Error())
+				return findResponsePayload{document: doc}, err
+			}
+			if !found {
+				return findResponsePayload{
+					kind: findResponsePayloadRaw,
+					raw:  rawCursorDocumentsResponse{ns: ns, cursorID: 0, batchKey: "firstBatch"},
+				}, nil
+			}
+			if err := ensureSingleFindBatchDocumentFits(doc, s.maxFindBatchBytes()); err != nil {
+				doc, err := commandError(commandCodeBadValue, "BadValue", err.Error())
+				return findResponsePayload{document: doc}, err
+			}
+			return findResponsePayload{
+				kind: findResponsePayloadRaw,
+				raw:  rawCursorDocumentsResponse{ns: ns, cursorID: 0, batchKey: "firstBatch", single: doc},
+			}, nil
+		}
+	}
 	if !plan.projection.present {
 		idx, opts, limit, ok, empty, err := pureIndexedRangeLimitPlan(col.Meta(), plan, s.maxFindScanDocuments())
 		if err != nil {
@@ -284,11 +373,6 @@ func (s *Server) findResponsePayload(command wire.Document, cursorOwner int64) (
 			return findResponsePayload{document: doc}, err
 		}
 		if ok {
-			normalizedBatchSize, err := normalizeBatchSize(int(batchSize), batchSizeSet, defaultCursorBatchSize)
-			if err != nil {
-				doc, err := commandError(commandCodeBadValue, "BadValue", err.Error())
-				return findResponsePayload{document: doc}, err
-			}
 			if empty {
 				return findResponsePayload{
 					kind: findResponsePayloadRaw,
@@ -320,11 +404,6 @@ func (s *Server) findResponsePayload(command wire.Document, cursorOwner int64) (
 		return findResponsePayload{document: doc}, err
 	}
 	if singleBatch {
-		normalizedBatchSize, err := normalizeBatchSize(int(batchSize), batchSizeSet, defaultCursorBatchSize)
-		if err != nil {
-			doc, err := commandError(commandCodeBadValue, "BadValue", err.Error())
-			return findResponsePayload{document: doc}, err
-		}
 		if !results.projection.present {
 			consumed, err := rawDocumentsBatchLimit(results.docs, normalizedBatchSize, s.maxFindBatchBytes())
 			if err != nil {
@@ -345,11 +424,6 @@ func (s *Server) findResponsePayload(command wire.Document, cursorOwner int64) (
 		return findResponsePayload{document: doc}, err
 	}
 	if !results.projection.present {
-		normalizedBatchSize, err := normalizeBatchSize(int(batchSize), batchSizeSet, defaultCursorBatchSize)
-		if err != nil {
-			doc, err := commandError(commandCodeBadValue, "BadValue", err.Error())
-			return findResponsePayload{document: doc}, err
-		}
 		if normalizedBatchSize >= len(results.docs) {
 			consumed, err := rawDocumentsBatchLimit(results.docs, normalizedBatchSize, s.maxFindBatchBytes())
 			if err != nil {
@@ -375,7 +449,7 @@ func (s *Server) findResponsePayload(command wire.Document, cursorOwner int64) (
 
 func (s *Server) updateResponse(command wire.Document, sequences []wire.DocumentSequence) (wire.Document, error) {
 	if s.Collections == nil {
-		return commandError(commandCodeBadValue, "BadValue", "Mongo gateway collection manager is not configured")
+		return commandError(commandCodeBadValue, "BadValue", mongoGatewayCollectionManagerNotConfigured)
 	}
 	collection, err := commandString(command, "update")
 	if err != nil {
@@ -394,7 +468,7 @@ func (s *Server) updateResponse(command wire.Document, sequences []wire.Document
 		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
 	}
 
-	col, err := s.Collections.OpenCollection(name)
+	col, err := s.openCollection(name)
 	if err != nil {
 		if errors.Is(err, collections.ErrCollectionNotFound) {
 			return marshalUpdateResponse(0, 0)
@@ -1170,7 +1244,7 @@ func mongoSetUpdateFields(updateDoc wire.Document) (map[string]struct{}, []colle
 
 func (s *Server) deleteResponse(command wire.Document, sequences []wire.DocumentSequence) (wire.Document, error) {
 	if s.Collections == nil {
-		return commandError(commandCodeBadValue, "BadValue", "Mongo gateway collection manager is not configured")
+		return commandError(commandCodeBadValue, "BadValue", mongoGatewayCollectionManagerNotConfigured)
 	}
 	collection, err := commandString(command, "delete")
 	if err != nil {
@@ -1189,7 +1263,7 @@ func (s *Server) deleteResponse(command wire.Document, sequences []wire.Document
 		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
 	}
 
-	col, err := s.Collections.OpenCollection(name)
+	col, err := s.openCollection(name)
 	if err != nil {
 		if errors.Is(err, collections.ErrCollectionNotFound) {
 			return marshalDeleteResponse(0)
@@ -1229,7 +1303,7 @@ func (s *Server) deleteResponse(command wire.Document, sequences []wire.Document
 
 func (s *Server) listCollectionsResponse(command wire.Document) (wire.Document, error) {
 	if s.Collections == nil {
-		return commandError(commandCodeBadValue, "BadValue", "Mongo gateway collection manager is not configured")
+		return commandError(commandCodeBadValue, "BadValue", mongoGatewayCollectionManagerNotConfigured)
 	}
 	db, err := commandString(command, "$db")
 	if err != nil {
@@ -1272,7 +1346,7 @@ func (s *Server) listCollectionsResponse(command wire.Document) (wire.Document, 
 
 func (s *Server) createIndexesResponse(command wire.Document) (wire.Document, error) {
 	if s.Collections == nil {
-		return commandError(commandCodeBadValue, "BadValue", "Mongo gateway collection manager is not configured")
+		return commandError(commandCodeBadValue, "BadValue", mongoGatewayCollectionManagerNotConfigured)
 	}
 	collection, err := commandString(command, "createIndexes")
 	if err != nil {
@@ -1303,7 +1377,7 @@ func (s *Server) createIndexesResponse(command wire.Document) (wire.Document, er
 	}
 
 	createdAutomatically := false
-	col, err := s.Collections.OpenCollection(name)
+	col, err := s.openCollection(name)
 	if err != nil {
 		if !errors.Is(err, collections.ErrCollectionNotFound) {
 			return commandError(commandCodeBadValue, "BadValue", err.Error())
@@ -1315,7 +1389,7 @@ func (s *Server) createIndexesResponse(command wire.Document) (wire.Document, er
 			// If another request created the collection after our miss, fall
 			// through to the idempotent add-index path below.
 			createErr := err
-			col, err = s.Collections.OpenCollection(name)
+			col, err = s.openCollection(name)
 			if err != nil {
 				return commandError(commandCodeBadValue, "BadValue", createErr.Error())
 			}
@@ -1354,7 +1428,7 @@ func (s *Server) createIndexesResponse(command wire.Document) (wire.Document, er
 
 func (s *Server) listIndexesResponse(command wire.Document) (wire.Document, error) {
 	if s.Collections == nil {
-		return commandError(commandCodeBadValue, "BadValue", "Mongo gateway collection manager is not configured")
+		return commandError(commandCodeBadValue, "BadValue", mongoGatewayCollectionManagerNotConfigured)
 	}
 	collection, err := commandString(command, "listIndexes")
 	if err != nil {
@@ -1368,7 +1442,7 @@ func (s *Server) listIndexesResponse(command wire.Document) (wire.Document, erro
 	if err != nil {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
-	col, err := s.Collections.OpenCollection(name)
+	col, err := s.openCollection(name)
 	if err != nil {
 		if errors.Is(err, collections.ErrCollectionNotFound) {
 			return commandError(commandCodeNamespaceNotFound, "NamespaceNotFound", "collection not found: "+db+"."+collection)
@@ -1380,7 +1454,7 @@ func (s *Server) listIndexesResponse(command wire.Document) (wire.Document, erro
 
 func (s *Server) dropIndexesResponse(command wire.Document) (wire.Document, error) {
 	if s.Collections == nil {
-		return commandError(commandCodeBadValue, "BadValue", "Mongo gateway collection manager is not configured")
+		return commandError(commandCodeBadValue, "BadValue", mongoGatewayCollectionManagerNotConfigured)
 	}
 	collection, err := commandString(command, "dropIndexes")
 	if err != nil {
@@ -1394,7 +1468,7 @@ func (s *Server) dropIndexesResponse(command wire.Document) (wire.Document, erro
 	if err != nil {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
-	col, err := s.Collections.OpenCollection(name)
+	col, err := s.openCollection(name)
 	if err != nil {
 		if errors.Is(err, collections.ErrCollectionNotFound) {
 			return commandError(commandCodeNamespaceNotFound, "NamespaceNotFound", "collection not found: "+db+"."+collection)
@@ -2178,14 +2252,14 @@ func rawDocumentsBatchLimit(docs []wire.Document, maxDocs int, maxBytes int) (in
 }
 
 func (s *Server) openOrCreateCollection(name string) (*collections.Collection, error) {
-	col, err := s.Collections.OpenCollection(name)
+	col, err := s.openCollection(name)
 	if err == nil {
 		return col, nil
 	}
 	if _, createErr := s.Collections.CreateCollection(s.defaultCollectionMeta(name)); createErr != nil {
 		return nil, createErr
 	}
-	return s.Collections.OpenCollection(name)
+	return s.openCollection(name)
 }
 
 func (s *Server) defaultCollectionMeta(name string) *collections.CollectionMeta {
@@ -2495,6 +2569,45 @@ func storedDocumentMaterializerForCollection(col *collections.Collection) (*coll
 	default:
 		return col.NewStoredDocumentJSONMaterializer()
 	}
+}
+
+func singlePrimaryIDDocument(col *collections.Collection, value bson.RawValue) (wire.Document, bool, error) {
+	if col == nil {
+		return nil, false, errors.New("mongo gateway: collection handle is nil")
+	}
+	key, err := encodePrimaryKey(value)
+	if err != nil {
+		return nil, false, err
+	}
+	stored, found, err := col.GetInto(key, nil)
+	if err != nil {
+		return nil, false, err
+	}
+	if !found {
+		return nil, false, nil
+	}
+	if col.Meta().Options.DocumentFormat == collections.DocumentFormatBSON {
+		if err := validateStoredBSONFrame(stored); err != nil {
+			return nil, false, err
+		}
+		return wire.Document(stored), true, nil
+	}
+	materializer, err := storedDocumentMaterializerForCollection(col)
+	if err != nil {
+		return nil, false, err
+	}
+	if materializer != nil {
+		defer func() { _ = materializer.Close() }()
+	}
+	doc, err := storedDocumentToBSON(col, materializer, stored)
+	return doc, err == nil, err
+}
+
+func ensureSingleFindBatchDocumentFits(doc wire.Document, maxBatchBytes int) error {
+	if findBatchOverheadBytes+findBatchDocumentBytes(doc, 0) > maxBatchBytes {
+		return fmt.Errorf("mongo gateway cursor document exceeds max batch bytes: docBytes=%d maxBatchBytes=%d", findBatchDocumentBytes(doc, 0), maxBatchBytes)
+	}
+	return nil
 }
 
 func borrowedStoredDocumentToBSON(materializer *collections.StoredDocumentJSONMaterializer, stored []byte) (wire.Document, error) {

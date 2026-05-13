@@ -711,6 +711,17 @@ func primaryCandidatePredicate(predicates []findPredicate) (findPredicate, bool)
 	return findPredicate{}, false
 }
 
+func singlePrimaryIDPredicateValue(plan findPlan) (bson.RawValue, bool) {
+	if plan.projection.present || plan.sort.field != "" || plan.skip != 0 || len(plan.predicates) != 1 {
+		return bson.RawValue{}, false
+	}
+	pred := plan.predicates[0]
+	if pred.field != "_id" || pred.op != findPredicateEq || len(pred.values) != 1 {
+		return bson.RawValue{}, false
+	}
+	return pred.values[0], true
+}
+
 func documentsForPrimaryPredicate(col *collections.Collection, materializer *collections.StoredDocumentJSONMaterializer, pred findPredicate, maxDocuments int) ([]wire.Document, error) {
 	out := make([]wire.Document, 0, len(pred.values))
 	seen := make(map[string]struct{}, len(pred.values))

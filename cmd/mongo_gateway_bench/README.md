@@ -46,11 +46,10 @@ checkout, the temp directory itself, a home directory, or an immediate child of
 a home directory are rejected.
 
 The default `-client-mode driver` uses the official MongoDB Go driver
-`Collection.InsertMany` path for the load phase and app-style decoded read
-phases. `-client-mode driver-find-raw` still uses official-driver
-`Collection.Find` for range reads, but iterates `cursor.Current` as raw BSON
-instead of decoding documents into `bson.M`; use it to isolate official-driver
-find/cursor overhead from application decode overhead. `-client-mode
+`Collection.InsertMany` path for the load phase and validates read phases with
+raw BSON field lookups instead of `bson.M` materialization. `-client-mode
+driver-find-raw` keeps the same official-driver `Collection.Find` range-read
+behavior and remains available as an explicit raw range-read mode. `-client-mode
 driver-command` still uses the official driver but sends the load
 phase as a raw `insert` command through `Database.RunCommand`, avoiding the
 driver's `InsertMany` `_id` discovery and `InsertedIDs` bookkeeping. It is useful
@@ -61,8 +60,8 @@ when `-prebuild-documents` is enabled; its age range-read phase also uses a raw
 `find` command and parses `cursor.firstBatch` as raw BSON instead of decoding
 documents into `bson.M`. `-client-mode driver-unack` uses official-driver
 `InsertMany` with unacknowledged write concern; its sampled load metric is
-client enqueue cost, while the phase waits for the final inserted `_id` to
-become visible before reporting wall ops/sec. `-client-mode raw-wire` is
+client enqueue cost, while the phase waits for inserted `_id` values to become
+visible with raw BSON validation before reporting wall ops/sec. `-client-mode raw-wire` is
 TreeDB-only and calls the in-process gateway directly with raw OP_MSG document
 sequences. `-client-mode raw-wire-tcp` sends the same raw OP_MSG traffic over
 the gateway's loopback listener, isolating TreeDB gateway network/wire-server
@@ -444,7 +443,7 @@ is normalized by document count over the whole phase loop; `sampled_ops_sec` and
 sampled values when investigating gateway/client overhead with prebuilt
 fixtures, and wall `ops_sec` when measuring the full benchmark loop. Insert
 latency percentiles are per batch call. Range-query samples include cursor
-materialization with `cursor.All`.
+iteration and raw age-field validation, not `bson.M` decoding.
 
 `mongo_pool_stats_after_load` is reset immediately before the insert load phase,
 so its checkout counters describe the measured insert phase rather than setup or
@@ -668,8 +667,8 @@ The benchmark-only helpers accept these optional environment variables:
 focused indexed async-flush experiments.
 
 Use the official-driver row for user-visible Mongo compatibility throughput,
-`driver-find-raw` to remove range-read `bson.M` decode while keeping
-official-driver `Find`/cursor behavior, the driver-command rows to quantify the
+`driver-find-raw` when you want an explicit official-driver raw range-read row,
+the driver-command rows to quantify the
 driver's CRUD-helper overhead, the raw-wire rows to estimate the gateway/server
 ceiling, `raw-wire-tcp-pipeline` to measure how much single-connection TCP
 latency can be hidden by request pipelining, and the direct collection row to

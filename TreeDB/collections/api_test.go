@@ -92,6 +92,53 @@ func TestCollectionManagerOpenCollectionCacheRejectsClosedDB(t *testing.T) {
 	}
 }
 
+func TestCollectionCachedCatalogIsCurrent(t *testing.T) {
+	var nilCol *Collection
+	if nilCol.CachedCatalogIsCurrent() {
+		t.Fatal("nil collection reported current catalog")
+	}
+	if (&Collection{}).CachedCatalogIsCurrent() {
+		t.Fatal("collection with nil DB reported current catalog")
+	}
+
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create users: %v", err)
+	}
+	stale, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open stale users handle: %v", err)
+	}
+	if !stale.CachedCatalogIsCurrent() {
+		t.Fatal("freshly opened users handle reported stale catalog")
+	}
+
+	mutator, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open mutator users handle: %v", err)
+	}
+	if _, err := mutator.CreateIndex(IndexDefinition{Name: "email", Field: "email", ValueType: IndexValueString}); err != nil {
+		t.Fatalf("create email index: %v", err)
+	}
+	if stale.CachedCatalogIsCurrent() {
+		t.Fatal("pre-schema-change users handle reported current catalog")
+	}
+
+	current, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open current users handle: %v", err)
+	}
+	if !current.CachedCatalogIsCurrent() {
+		t.Fatal("post-schema-change users handle reported stale catalog")
+	}
+}
+
 func TestCollectionMetaReturnsDefensiveIndexCopyAcrossHandles(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -4932,7 +4979,7 @@ func TestCollectionIndexedWriteMemtablesFindSkipsBufferedSecondaryTombstone(t *t
 	table.Freeze()
 	domain := col.writeDomain
 	domain.mu.Lock()
-	domain.count = 1
+	domain.setCountLocked(1)
 	domain.meta = col.Meta()
 	domain.rootRuns = map[string][]memtable.Table{
 		collectionSecondaryRootName("users", "city"): {table},
@@ -5005,7 +5052,7 @@ func TestCollectionIndexedWriteMemtablesFindLimitFiltersOnlyBufferedTombstone(t 
 	table.Freeze()
 	domain := col.writeDomain
 	domain.mu.Lock()
-	domain.count = 1
+	domain.setCountLocked(1)
 	domain.meta = col.Meta()
 	domain.rootRuns = map[string][]memtable.Table{
 		collectionSecondaryRootName("users", "city"): {table},
@@ -7436,7 +7483,7 @@ func TestRollbackBufferedIndexedDomainRestoresMetadata(t *testing.T) {
 	domain.baseCommitSeq = 100
 	domain.baseSystemRoot = 200
 	domain.primaryRoot = 300
-	domain.count = 400
+	domain.setCountLocked(400)
 	domain.bufferedBytes = 500
 	domain.mutableCount = 501
 	domain.mutableBytes = 502
@@ -7500,7 +7547,7 @@ func TestRollbackBufferedIndexedDomainRestoresPreRotationRuns(t *testing.T) {
 
 	domain.rootRuns[primaryName] = append(domain.rootRuns[primaryName], newTable)
 	domain.rootRunCount = 2
-	domain.count = 2
+	domain.setCountLocked(2)
 	if !rotateIndexedMutableToFlushUnitLocked(domain) {
 		t.Fatal("rotate indexed mutable state returned false")
 	}
@@ -7699,6 +7746,82 @@ func TestCollectionSingleInsertBufferedNoIndexCloseFlushes(t *testing.T) {
 	}
 	if want := []byte(`{"name":"ada"}`); !bytes.Equal(got, want) {
 		t.Fatalf("reopened close-flushed doc=%q want %q", got, want)
+	}
+}
+
+func TestFlushBufferedNoIndexCleanDomainSkipsWriteDomainLock(t *testing.T) {
+	domain := &collectionWriteDomain{}
+	col := &Collection{writeDomain: domain}
+
+	domain.mu.Lock()
+	defer domain.mu.Unlock()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- col.flushBufferedNoIndex()
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("flush clean domain: %v", err)
+		}
+	case <-time.After(collectionTestTimeout(t, time.Second)):
+		t.Fatal("flushBufferedNoIndex blocked on a clean write domain")
+	}
+}
+
+func TestFlushBufferedNoIndexPendingMutationSynchronizesWithWriteDomainLock(t *testing.T) {
+	domain := &collectionWriteDomain{}
+	col := &Collection{writeDomain: domain}
+
+	domain.mu.Lock()
+	domain.markPendingMutationLocked(1)
+	unlocked := false
+	unlock := func() {
+		if !unlocked {
+			domain.mu.Unlock()
+			unlocked = true
+		}
+	}
+	defer unlock()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- col.flushBufferedNoIndex()
+	}()
+
+	select {
+	case err := <-done:
+		unlock()
+		if err != nil {
+			t.Fatalf("flush pending mutation: %v", err)
+		}
+		t.Fatal("flushBufferedNoIndex returned while a pending mutation held the write domain")
+	case <-time.After(collectionTestTimeout(t, 50*time.Millisecond)):
+	}
+
+	unlock()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("flush pending mutation after unlock: %v", err)
+		}
+	case <-time.After(collectionTestTimeout(t, time.Second)):
+		t.Fatal("flushBufferedNoIndex did not complete after pending mutation lock released")
+	}
+}
+
+func TestCollectionWriteDomainSetCountLockedClampsNegative(t *testing.T) {
+	domain := &collectionWriteDomain{}
+	domain.mu.Lock()
+	domain.setCountLocked(-1)
+	domain.mu.Unlock()
+	if domain.count != 0 {
+		t.Fatalf("domain.count=%d want 0", domain.count)
+	}
+	if pending := domain.pendingCount.Load(); pending != 0 {
+		t.Fatalf("pendingCount=%d want 0", pending)
 	}
 }
 
@@ -15612,7 +15735,7 @@ func TestCollectionFindDocumentsByIndexRangeUniqueExactBufferedTombstone(t *test
 
 	domain := col.writeDomain
 	domain.mu.Lock()
-	domain.count = 1
+	domain.setCountLocked(1)
 	domain.meta = col.Meta()
 	domain.rootRuns = map[string][]memtable.Table{
 		collectionPrimaryRootName("users"):            {primaryTable},
@@ -15699,7 +15822,7 @@ func TestCollectionFindDocumentsByIndexRangeExactBufferedTombstoneAfterLimit(t *
 
 	domain := col.writeDomain
 	domain.mu.Lock()
-	domain.count = 1
+	domain.setCountLocked(1)
 	domain.meta = col.Meta()
 	domain.rootRuns = map[string][]memtable.Table{
 		collectionPrimaryRootName("users"):            {primaryTable},
@@ -16007,7 +16130,7 @@ func TestCollectionFindByIndexRangeSkipsBufferedTombstone(t *testing.T) {
 	table.Freeze()
 	domain := col.writeDomain
 	domain.mu.Lock()
-	domain.count = 1
+	domain.setCountLocked(1)
 	domain.meta = col.Meta()
 	domain.rootRuns = map[string][]memtable.Table{
 		collectionSecondaryRootName("users", "score"): {table},

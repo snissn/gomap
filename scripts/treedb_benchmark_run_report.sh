@@ -32,6 +32,7 @@ SKIP_RAW="${SKIP_RAW:-false}"
 SKIP_COLLECTIONS="${SKIP_COLLECTIONS:-false}"
 SKIP_MONGO="${SKIP_MONGO:-false}"
 SKIP_LOAD_MODES="${SKIP_LOAD_MODES:-false}"
+SKIP_READ_MODES="${SKIP_READ_MODES:-false}"
 SKIP_SCALING="${SKIP_SCALING:-false}"
 ORIGINAL_ARGS=("$@")
 FAILURES=0
@@ -47,6 +48,7 @@ The output layout intentionally matches cmd/benchmark_run_report:
   <run-root>/collections_sqlite_canonical_1m/
   <run-root>/mongo_gateway_full_sweep_1m_expanded/
   <run-root>/mongo_client_mode_load_matrix_1m/
+  <run-root>/mongo_client_mode_read_matrix_1m/
   <run-root>/mongo_gateway_reader_writer_scaling_1m/
   <run-root>/deep_report.html
 
@@ -72,13 +74,14 @@ Options:
                           Skip pprof capture for TreeDB collections vs SQLite.
   --skip-mongo           Skip all Mongo-compatible sections.
   --skip-load-modes      Skip Mongo client-mode load matrix.
+  --skip-read-modes      Skip Mongo client-mode read matrix.
   --skip-scaling         Skip Mongo reader/writer scaling.
   --help                 Show this help.
 
 Environment overrides use the uppercase variable names in the script, including
 RUN_ROOT, TIER, INDEXES_LIST, RAW_KEYS, COLLECTION_DOCS,
 COLLECTION_PROFILES, COLLECTION_PROFILE_BENCHTIME, COLLECTION_PROFILE_COUNT, MONGO_DOCS,
-MONGO_MODE, MONGO_URI, MONGO_IMAGE (default: mongo:8), MONGO_COMPACT, MONGO_READERS, MONGO_WRITERS, TIMEOUT, and TITLE.
+MONGO_MODE, MONGO_URI, MONGO_IMAGE (default: mongo:8), MONGO_COMPACT, MONGO_READERS, MONGO_WRITERS, TIMEOUT, SKIP_READ_MODES, and TITLE.
 EOF
 }
 
@@ -200,6 +203,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --skip-load-modes)
       SKIP_LOAD_MODES=true
+      shift
+      ;;
+    --skip-read-modes)
+      SKIP_READ_MODES=true
       shift
       ;;
     --skip-scaling)
@@ -356,6 +363,7 @@ write_metadata() {
     echo "- skip_collections: $SKIP_COLLECTIONS"
     echo "- skip_mongo: $SKIP_MONGO"
     echo "- skip_load_modes: $SKIP_LOAD_MODES"
+    echo "- skip_read_modes: $SKIP_READ_MODES"
     echo "- skip_scaling: $SKIP_SCALING"
     echo "- go: $(go version)"
     echo "- uname: $(uname -a)"
@@ -512,6 +520,47 @@ run_mongo_load_modes() {
       --title "Mongo API Client-Mode Load Matrix"
 }
 
+run_mongo_read_modes() {
+  bool_true "$SKIP_MONGO" && return 0
+  bool_true "$SKIP_READ_MODES" && return 0
+  local root="$RUN_ROOT/mongo_client_mode_read_matrix_1m"
+  run_logged mongo_read_modes env \
+    TREEDB_DOCUMENT_FORMATS=bson \
+    TREEDB_CLIENT_MODES="driver-command-raw direct raw-wire-tcp raw-wire-tcp-pipeline raw-wire" \
+    MONGO_CLIENT_MODES="driver-command-raw" \
+    BATCH_SIZE="$MONGO_BATCH_SIZE" \
+    INSERT_PRODUCERS="$INSERT_PRODUCERS" \
+    MONGO_MAX_POOL_SIZE="$MONGO_MAX_POOL_SIZE" \
+    MONGO_MAX_CONNECTING="$MONGO_MAX_CONNECTING" \
+    PREBUILD_DOCUMENTS=true \
+    READS=0 \
+    RANGE_READS=0 \
+    UPDATES=0 \
+    DELETES=0 \
+    CONCURRENT_READ_KINDS=id,range \
+    CONCURRENT_READERS=0 \
+    CONCURRENT_READER_SWEEP="$MONGO_READERS" \
+    CONCURRENT_READS="$MONGO_CONCURRENT_READS" \
+    CONCURRENT_RANGE_READERS=0 \
+    CONCURRENT_RANGE_READER_SWEEP= \
+    CONCURRENT_RANGE_READS=0 \
+    CONCURRENT_WRITERS=0 \
+    CONCURRENT_WRITER_SWEEP= \
+    CONCURRENT_WRITES=0 \
+    PROFILE_TREEDB=true \
+    ./scripts/mongo_gateway_compare.sh \
+      --out "$root" \
+      --docs "$MONGO_DOCS" \
+      --indexes "$INDEXES_LIST" \
+      --range-index \
+      --mongo-mode "$MONGO_MODE" \
+      --mongo-image "$MONGO_IMAGE" \
+      --mongo-compact "$MONGO_COMPACT" \
+      --mongo-uri "$MONGO_URI" \
+      --timeout "$TIMEOUT" \
+      --title "Mongo API Client-Mode Read Matrix"
+}
+
 run_mongo_scaling() {
   bool_true "$SKIP_MONGO" && return 0
   bool_true "$SKIP_SCALING" && return 0
@@ -554,6 +603,7 @@ run_raw_engine
 run_collections
 run_mongo_full_sweep
 run_mongo_load_modes
+run_mongo_read_modes
 run_mongo_scaling
 render_report
 

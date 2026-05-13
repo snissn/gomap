@@ -1572,6 +1572,62 @@ func TestMongoUpdateCoalescerUsesSingleCollection(t *testing.T) {
 	}
 }
 
+func TestServerOpenCollectionCacheInvalidatesOnCatalogChange(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	manager := collections.NewCollectionManager(db)
+	if _, err := manager.CreateCollection(&collections.CollectionMeta{Name: "app.users"}); err != nil {
+		t.Fatalf("create users: %v", err)
+	}
+	server := NewServer()
+	server.Collections = manager
+
+	first, err := server.openCollection("app.users")
+	if err != nil {
+		t.Fatalf("open first users handle: %v", err)
+	}
+	second, err := server.openCollection("app.users")
+	if err != nil {
+		t.Fatalf("open cached users handle: %v", err)
+	}
+	if second != first {
+		t.Fatal("server did not reuse current cached collection handle")
+	}
+
+	mutator, err := manager.OpenCollection("app.users")
+	if err != nil {
+		t.Fatalf("open mutator users handle: %v", err)
+	}
+	if _, err := mutator.CreateIndex(collections.IndexDefinition{Name: "email", Field: "email", ValueType: collections.IndexValueString}); err != nil {
+		t.Fatalf("create email index: %v", err)
+	}
+	if first.CachedCatalogIsCurrent() {
+		t.Fatal("server cached handle stayed current after external schema change")
+	}
+
+	afterSchemaChange, err := server.openCollection("app.users")
+	if err != nil {
+		t.Fatalf("open users after schema change: %v", err)
+	}
+	if afterSchemaChange == first {
+		t.Fatal("server reused stale collection handle after schema change")
+	}
+	if !afterSchemaChange.CachedCatalogIsCurrent() {
+		t.Fatal("server cached replacement handle is not current")
+	}
+	again, err := server.openCollection("app.users")
+	if err != nil {
+		t.Fatalf("open cached replacement users handle: %v", err)
+	}
+	if again != afterSchemaChange {
+		t.Fatal("server did not reuse replacement cached collection handle")
+	}
+}
+
 func TestServerCloseStopsUpdateCoalescers(t *testing.T) {
 	server := NewServer()
 	coalescer := server.mongoUpdateCoalescer("app.users")
@@ -2862,6 +2918,41 @@ func TestServerFindRawBSONOPMsgResponse(t *testing.T) {
 	}
 }
 
+func TestSinglePrimaryIDDocumentDoesNotTreatPresentEmptyStoredDocumentAsMissing(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	mgr := collections.NewCollectionManager(db)
+	if _, err := mgr.CreateCollection(&collections.CollectionMeta{Name: "app.users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("app.users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+
+	id := bson.Raw(mustDocument(t, bson.D{{Key: "_id", Value: "empty"}})).Lookup("_id")
+	key, err := encodePrimaryKey(id)
+	if err != nil {
+		t.Fatalf("encode id: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{key}, [][]byte{[]byte{}}); err != nil {
+		t.Fatalf("insert present empty stored document: %v", err)
+	}
+
+	if _, found, err := singlePrimaryIDDocument(col, id); err == nil || found {
+		t.Fatalf("singlePrimaryIDDocument empty stored doc found=%v err=%v, want conversion error", found, err)
+	}
+
+	missing := bson.Raw(mustDocument(t, bson.D{{Key: "_id", Value: "missing"}})).Lookup("_id")
+	if doc, found, err := singlePrimaryIDDocument(col, missing); err != nil || found || doc != nil {
+		t.Fatalf("singlePrimaryIDDocument missing doc=%v found=%v err=%v, want nil false nil", doc, found, err)
+	}
+}
+
 func TestServerFindRawBSONOPMsgResponseHonorsMaxMessageLength(t *testing.T) {
 	rawDoc := mustDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "payload", Value: strings.Repeat("x", 256)}})
 	if _, err := marshalCursorDocumentsMsgResponseWithIDInto(nil, 1, 250, "app.users", 0, "firstBatch", []wire.Document{rawDoc}, wire.DefaultMaxMessageLength); err != nil {
@@ -2870,6 +2961,23 @@ func TestServerFindRawBSONOPMsgResponseHonorsMaxMessageLength(t *testing.T) {
 	_, err := marshalCursorDocumentsMsgResponseWithIDInto(nil, 1, 250, "app.users", 0, "firstBatch", []wire.Document{rawDoc}, 128)
 	if !errors.Is(err, wire.ErrMessageTooLarge) {
 		t.Fatalf("marshal small max err=%v want ErrMessageTooLarge", err)
+	}
+
+	rawSingle := rawCursorDocumentsResponse{ns: "app.users", cursorID: 0, batchKey: "firstBatch", single: rawDoc}
+	msg, err := rawSingle.marshalMsgInto(nil, 1, 250, wire.DefaultMaxMessageLength)
+	if err != nil {
+		t.Fatalf("marshal raw single default max response: %v", err)
+	}
+	h, _, err := wire.ReadMessage(bytes.NewReader(msg), 0)
+	if err != nil {
+		t.Fatalf("read raw single response: %v", err)
+	}
+	if h.MessageLength != int32(len(msg)) {
+		t.Fatalf("raw single message length=%d want %d", h.MessageLength, len(msg))
+	}
+	_, err = rawSingle.marshalMsgInto(nil, 1, 250, 128)
+	if !errors.Is(err, wire.ErrMessageTooLarge) {
+		t.Fatalf("marshal raw single small max err=%v want ErrMessageTooLarge", err)
 	}
 }
 
