@@ -70,6 +70,8 @@ type Server struct {
 	lastCursorReap   time.Time
 	updateMu         sync.Mutex
 	updateCoalescers map[string]*mongoUpdateCoalescer
+	collectionMu     sync.RWMutex
+	collections      map[string]*collections.Collection
 	closed           atomic.Bool
 }
 
@@ -93,6 +95,48 @@ func NewServer() *Server {
 	return s
 }
 
+func (s *Server) openCollection(name string) (*collections.Collection, error) {
+	if s == nil || s.Collections == nil {
+		return nil, errors.New("mongo gateway collection manager is not configured")
+	}
+	s.collectionMu.RLock()
+	cached := s.collections[name]
+	s.collectionMu.RUnlock()
+	if cached != nil && cached.CachedCatalogIsCurrent() {
+		return cached, nil
+	}
+	col, err := s.Collections.OpenCollection(name)
+	if err != nil {
+		if errors.Is(err, collections.ErrCollectionNotFound) {
+			s.forgetCollection(name)
+		}
+		return nil, err
+	}
+	s.rememberCollection(name, col)
+	return col, nil
+}
+
+func (s *Server) rememberCollection(name string, col *collections.Collection) {
+	if s == nil || name == "" || col == nil {
+		return
+	}
+	s.collectionMu.Lock()
+	if s.collections == nil {
+		s.collections = make(map[string]*collections.Collection)
+	}
+	s.collections[name] = col
+	s.collectionMu.Unlock()
+}
+
+func (s *Server) forgetCollection(name string) {
+	if s == nil || name == "" {
+		return
+	}
+	s.collectionMu.Lock()
+	delete(s.collections, name)
+	s.collectionMu.Unlock()
+}
+
 func (s *Server) Close() error {
 	if s == nil {
 		return nil
@@ -100,6 +144,9 @@ func (s *Server) Close() error {
 	s.closed.Store(true)
 	s.closeActiveConns()
 	s.closeUpdateCoalescers()
+	s.collectionMu.Lock()
+	s.collections = nil
+	s.collectionMu.Unlock()
 	s.cursorMu.Lock()
 	s.cursors = nil
 	s.cursorCount.Store(0)

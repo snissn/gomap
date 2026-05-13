@@ -673,8 +673,8 @@ func renderReport(cfg config, cells []cellComparison, generatedAt time.Time) str
 	b.WriteString("- TreeDB disk bytes prefer `treedb_disk_after_maintenance.total_bytes`, then fall back to `treedb_disk_after_checkpoint.total_bytes` and `treedb_disk_after_load.total_bytes` for older runs.\n")
 	b.WriteString("- TreeDB physical bytes come from the matrix runner's `du` measurement of the isolated TreeDB directory.\n")
 	b.WriteString("- MongoDB `dbStats.dataSize` is uncompressed logical document size, not disk usage.\n")
-	b.WriteString("- MongoDB `dbStats.totalSize` is reported separately because it can diverge sharply from the isolated data-directory `du` measurement on small WiredTiger workloads.\n")
-	b.WriteString("- MongoDB physical bytes are the preferred local disk comparison when the matrix runner has an isolated data directory, such as Docker mode.\n")
+	b.WriteString("- MongoDB `dbStats.totalSize` is the storage-footprint comparison basis for MongoDB in this report.\n")
+	b.WriteString("- MongoDB physical bytes are retained only as a diagnostic data-directory `du` measurement when the matrix runner has an isolated data directory, such as Docker mode.\n")
 	b.WriteString("- Wall ops/sec values include the full benchmark phase loop. Sampled ops/sec values isolate the timed driver/gateway call inside each phase and are useful when prebuilt fixtures are enabled.\n")
 	b.WriteString("- `concurrent_id_find_one_rN` phases are an `_id` read throughput sweep over `N` concurrent readers, and are grouped in the Concurrent Read Sweep section when present.\n")
 	b.WriteString("- `concurrent_email_find_one_rN` phases are an email read throughput sweep over `N` concurrent readers, and are also grouped in the Concurrent Read Sweep section when present.\n")
@@ -923,9 +923,7 @@ func cellDiskScore(cell cellComparison) int64 {
 		}
 	}
 	if cell.Mongo != nil {
-		if cell.Mongo.Row.PhysicalBytes > 0 {
-			score += cell.Mongo.Row.PhysicalBytes
-		} else if mongoTotal, ok := mongoDBStatsTotalBytes(cell.Mongo.Result); ok {
+		if mongoTotal, ok := mongoDBStatsTotalBytes(cell.Mongo.Result); ok {
 			score += mongoTotal
 		}
 	}

@@ -1547,15 +1547,8 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 	idPhase, err := measureTreeDBProfiledPhase(target, profiler, "id_find_one", cfg.Reads, func(sample func(time.Duration)) error {
 		for i := 0; i < cfg.Reads; i++ {
 			id := benchmarkID(i % cfg.Documents)
-			var out bson.M
-			begin := time.Now()
-			err := coll.FindOne(ctx, bson.D{{Key: "_id", Value: id}}).Decode(&out)
-			sample(time.Since(begin))
-			if err != nil {
+			if err := runFindOneRawString(ctx, coll, bson.D{{Key: "_id", Value: id}}, "_id", id, sample, "id lookup"); err != nil {
 				return err
-			}
-			if out["_id"] != id {
-				return fmt.Errorf("id lookup returned _id=%v want %s", out["_id"], id)
 			}
 		}
 		return nil
@@ -1569,15 +1562,8 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 		emailPhase, err := measureTreeDBProfiledPhase(target, profiler, "email_find_one", cfg.Reads, func(sample func(time.Duration)) error {
 			for i := 0; i < cfg.Reads; i++ {
 				email := benchmarkEmail((i * 17) % cfg.Documents)
-				var out bson.M
-				begin := time.Now()
-				err := coll.FindOne(ctx, bson.D{{Key: "email", Value: email}}).Decode(&out)
-				sample(time.Since(begin))
-				if err != nil {
+				if err := runFindOneRawString(ctx, coll, bson.D{{Key: "email", Value: email}}, "email", email, sample, "email lookup"); err != nil {
 					return err
-				}
-				if out["email"] != email {
-					return fmt.Errorf("email lookup returned email=%v want %s", out["email"], email)
 				}
 			}
 			return nil
@@ -2666,6 +2652,10 @@ func directBSONInt64Field(raw []byte, key string) (int64, bool) {
 	return 0, false
 }
 
+func directBSONStringField(raw []byte, key string) (string, bool) {
+	return bson.Raw(raw).Lookup(key).StringValueOK()
+}
+
 func applyDirectBSONSetUpdate(doc bson.Raw, update bson.Raw) (bson.Raw, bool, error) {
 	updateElements, err := update.Elements()
 	if err != nil {
@@ -2905,53 +2895,12 @@ func runConcurrentReadOperation(ctx context.Context, coll *mongo.Collection, cfg
 	switch kind {
 	case concurrentReadKindID:
 		id := benchmarkID(benchmarkDocumentOrdinal(op, 17, cfg.Documents))
-		var out bson.M
-		begin := time.Now()
-		err := coll.FindOne(ctx, bson.D{{Key: "_id", Value: id}}).Decode(&out)
-		sample(time.Since(begin))
-		if err != nil {
-			return err
-		}
-		if out["_id"] != id {
-			return fmt.Errorf("concurrent id lookup returned _id=%v want %s", out["_id"], id)
-		}
-		return nil
+		return runFindOneRawString(ctx, coll, bson.D{{Key: "_id", Value: id}}, "_id", id, sample, "concurrent id lookup")
 	case concurrentReadKindEmail:
 		email := benchmarkEmail(benchmarkDocumentOrdinal(op, 17, cfg.Documents))
-		var out bson.M
-		begin := time.Now()
-		err := coll.FindOne(ctx, bson.D{{Key: "email", Value: email}}).Decode(&out)
-		sample(time.Since(begin))
-		if err != nil {
-			return err
-		}
-		if out["email"] != email {
-			return fmt.Errorf("concurrent email lookup returned email=%v want %s", out["email"], email)
-		}
-		return nil
+		return runFindOneRawString(ctx, coll, bson.D{{Key: "email", Value: email}}, "email", email, sample, "concurrent email lookup")
 	case concurrentReadKindRange:
-		minAge := rangeReadMinAge(op, cfg.Documents)
-		begin := time.Now()
-		cursor, err := coll.Find(ctx,
-			bson.D{{Key: "age", Value: bson.D{{Key: "$gte", Value: minAge}}}},
-			options.Find().SetLimit(10))
-		if err != nil {
-			sample(time.Since(begin))
-			return err
-		}
-		var docs []bson.M
-		if err := cursor.All(ctx, &docs); err != nil {
-			sample(time.Since(begin))
-			return err
-		}
-		sample(time.Since(begin))
-		for _, doc := range docs {
-			age, ok := int64Value(doc["age"])
-			if !ok || age < minAge {
-				return fmt.Errorf("concurrent range returned age=%v below %d", doc["age"], minAge)
-			}
-		}
-		return nil
+		return runDriverRawValidatedRangeOperation(ctx, coll, rangeReadMinAge(op, cfg.Documents), sample)
 	default:
 		return fmt.Errorf("unknown concurrent read kind %q", kind)
 	}
@@ -3259,11 +3208,10 @@ func waitForLoadVisible(ctx context.Context, cfg config, coll *mongo.Collection)
 			}
 			checked++
 			id := ids[i]
-			var out bson.M
-			err := coll.FindOne(waitCtx, bson.D{{Key: "_id", Value: id}}).Decode(&out)
+			raw, err := coll.FindOne(waitCtx, bson.D{{Key: "_id", Value: id}}).Raw()
 			if err == nil {
-				if out["_id"] != id {
-					return fmt.Errorf("post-unack visibility lookup returned _id=%v want %s", out["_id"], id)
+				if got, ok := directBSONStringField(raw, "_id"); !ok || got != id {
+					return fmt.Errorf("post-unack visibility lookup returned _id=%v ok=%t want %s", got, ok, id)
 				}
 				visible[i] = true
 				remaining--
@@ -3313,13 +3261,13 @@ func runRangePhase(ctx context.Context, cfg config, target *benchTarget, profile
 	if cfg.ClientMode == clientModeDriverFindRaw {
 		return runDriverFindRawRangePhase(ctx, cfg, target, profiler, coll)
 	}
-	return runDriverDecodedRangePhase(ctx, cfg, target, profiler, coll)
+	return runDriverRawValidatedRangePhase(ctx, cfg, target, profiler, coll)
 }
 
-func runDriverDecodedRangePhase(ctx context.Context, cfg config, target *benchTarget, profiler *profileRecorder, coll *mongo.Collection) (phaseResult, error) {
+func runDriverRawValidatedRangePhase(ctx context.Context, cfg config, target *benchTarget, profiler *profileRecorder, coll *mongo.Collection) (phaseResult, error) {
 	return measureTreeDBProfiledPhase(target, profiler, rangePhaseName(cfg), cfg.RangeReads, func(sample func(time.Duration)) error {
 		for i := 0; i < cfg.RangeReads; i++ {
-			if err := runDriverDecodedRangeOperation(ctx, coll, rangeReadMinAge(i, cfg.Documents), sample); err != nil {
+			if err := runDriverRawValidatedRangeOperation(ctx, coll, rangeReadMinAge(i, cfg.Documents), sample); err != nil {
 				return err
 			}
 		}
@@ -3327,32 +3275,16 @@ func runDriverDecodedRangePhase(ctx context.Context, cfg config, target *benchTa
 	})
 }
 
-func runDriverDecodedRangeOperation(ctx context.Context, coll *mongo.Collection, minAge int64, sample func(time.Duration)) error {
+func runFindOneRawString(ctx context.Context, coll *mongo.Collection, filter any, field, want string, sample func(time.Duration), label string) error {
 	begin := time.Now()
-	cursor, err := coll.Find(ctx,
-		bson.D{{Key: "age", Value: bson.D{{Key: "$gte", Value: minAge}}}},
-		options.Find().SetLimit(10))
-	if err != nil {
-		sample(time.Since(begin))
-		return err
-	}
-	var docs []bson.M
-	if err := cursor.All(ctx, &docs); err != nil {
-		sample(time.Since(begin))
-		return err
-	}
-	if len(docs) == 0 {
-		sample(time.Since(begin))
-		return errors.New("range returned no documents")
-	}
-	for _, doc := range docs {
-		age, ok := int64Value(doc["age"])
-		if !ok || age < minAge {
-			sample(time.Since(begin))
-			return fmt.Errorf("range returned age=%v below %d", doc["age"], minAge)
-		}
-	}
+	raw, err := coll.FindOne(ctx, filter).Raw()
 	sample(time.Since(begin))
+	if err != nil {
+		return err
+	}
+	if got, ok := directBSONStringField(raw, field); !ok || got != want {
+		return fmt.Errorf("%s returned %s=%v ok=%t want %s", label, field, got, ok, want)
+	}
 	return nil
 }
 
@@ -3371,6 +3303,10 @@ func runDriverFindRawRangePhase(ctx context.Context, cfg config, target *benchTa
 }
 
 func runDriverFindRawRangeOperation(ctx context.Context, coll *mongo.Collection, minAge int64, sample func(time.Duration)) error {
+	return runDriverRawValidatedRangeOperation(ctx, coll, minAge, sample)
+}
+
+func runDriverRawValidatedRangeOperation(ctx context.Context, coll *mongo.Collection, minAge int64, sample func(time.Duration)) error {
 	begin := time.Now()
 	cursor, err := coll.Find(ctx,
 		bson.D{{Key: "age", Value: bson.D{{Key: "$gte", Value: minAge}}}},
@@ -3438,11 +3374,7 @@ func runDriverCommandRawRangeOperation(ctx context.Context, cfg config, db *mong
 	if err != nil {
 		return err
 	}
-	batch, err := parseFindFirstBatch(raw)
-	if err != nil {
-		return err
-	}
-	return validateRawAgeBatch(batch, minAge)
+	return validateFindFirstBatchAge(raw, minAge)
 }
 
 func runTreeDBRawWireRangePhase(ctx context.Context, cfg config, target *benchTarget, profiler *profileRecorder) (phaseResult, error) {
@@ -3903,7 +3835,7 @@ func runConcurrentRangePhaseWithOps(ctx context.Context, cfg config, target *ben
 	}
 	return measureTreeDBProfiledPhase(target, profiler, phaseName, operations, func(sample func(time.Duration)) error {
 		return runConcurrentOperations(ctx, readers, operations, func(op int) error {
-			return runDriverDecodedRangeOperation(ctx, coll, rangeReadMinAge(op, cfg.Documents), sample)
+			return runDriverRawValidatedRangeOperation(ctx, coll, rangeReadMinAge(op, cfg.Documents), sample)
 		})
 	})
 }
@@ -4067,6 +3999,58 @@ func rawDocumentsFromArrayInto(batch bson.RawArray, dst []bson.Raw) ([]bson.Raw,
 		rem = next
 	}
 	return docs, nil
+}
+
+func validateFindFirstBatchAge(raw bson.Raw, minAge int64) error {
+	if !rawCommandOK(raw) {
+		return fmt.Errorf("find failed: %s", rawCommandErrorMessage(raw))
+	}
+	cursor, ok := raw.Lookup("cursor").DocumentOK()
+	if !ok {
+		return errors.New("find response missing cursor")
+	}
+	batch, ok := cursor.Lookup("firstBatch").ArrayOK()
+	if !ok {
+		return errors.New("find response missing cursor.firstBatch")
+	}
+	return validateRawAgeArray(batch, minAge)
+}
+
+func validateRawAgeArray(batch bson.RawArray, minAge int64) error {
+	length, rem, ok := bsoncore.ReadLength(bsoncore.Array(batch))
+	if !ok || length < 5 || int(length) > len(batch) {
+		return errors.New("malformed find cursor.firstBatch")
+	}
+	rem = rem[:int(length)-4]
+	if len(rem) == 0 || rem[len(rem)-1] != 0x00 {
+		return errors.New("malformed find cursor.firstBatch")
+	}
+	rem = rem[:len(rem)-1]
+
+	seen := false
+	for len(rem) > 0 {
+		elem, next, ok := bsoncore.ReadElement(rem)
+		if !ok {
+			return errors.New("malformed find cursor.firstBatch")
+		}
+		value, err := elem.ValueErr()
+		if err != nil {
+			return err
+		}
+		doc, ok := value.DocumentOK()
+		if !ok {
+			return errors.New("find firstBatch entry is not a document")
+		}
+		if err := validateRawAgeDocument(bson.Raw(doc), minAge); err != nil {
+			return err
+		}
+		seen = true
+		rem = next
+	}
+	if !seen {
+		return errors.New("raw range returned no documents")
+	}
+	return nil
 }
 
 func rawArrayDocumentCapacityHint(payloadBytes int) int {

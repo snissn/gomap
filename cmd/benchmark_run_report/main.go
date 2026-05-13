@@ -147,6 +147,17 @@ type loadModeRow struct {
 	RawJSON       string
 }
 
+type readModeRow struct {
+	Indexes          int
+	Target           string
+	Config           string
+	Phase            string
+	OpsPerSec        float64
+	SampledOpsPerSec float64
+	P95US            float64
+	RawJSON          string
+}
+
 type gitIdentity struct {
 	Label string
 	Hash  string
@@ -161,6 +172,7 @@ type reportData struct {
 	CollectionComparisons []collectionComparison
 	MongoFullSweep        []mongoSummaryRow
 	MongoLoadModes        []loadModeRow
+	MongoReadModes        []readModeRow
 	MongoScaling          map[int][]mongoSummaryRow
 	Profiles              profileReportData
 	Warnings              []string
@@ -334,6 +346,12 @@ func loadReportData(cfg config) (reportData, error) {
 	}
 	if rows, warnings, err := loadMongoLoadModes(filepath.Join(cfg.RunRoot, "mongo_client_mode_load_matrix_1m")); err == nil {
 		data.MongoLoadModes = rows
+		data.Warnings = append(data.Warnings, warnings...)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		data.Warnings = append(data.Warnings, err.Error())
+	}
+	if rows, warnings, err := loadMongoReadModes(filepath.Join(cfg.RunRoot, "mongo_client_mode_read_matrix_1m")); err == nil {
+		data.MongoReadModes = rows
 		data.Warnings = append(data.Warnings, warnings...)
 	} else if !errors.Is(err, os.ErrNotExist) {
 		data.Warnings = append(data.Warnings, err.Error())
@@ -771,6 +789,59 @@ func loadMongoLoadModes(dir string) ([]loadModeRow, []string, error) {
 	return out, warnings, nil
 }
 
+func loadMongoReadModes(dir string) ([]readModeRow, []string, error) {
+	matrixPath := filepath.Join(dir, "matrix.tsv")
+	rows, err := readMatrix(matrixPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	var out []readModeRow
+	var warnings []string
+	for _, row := range rows {
+		rawPath, err := resolveRunArtifactPath(dir, row.RawJSON)
+		if err != nil {
+			warnings = append(warnings, err.Error())
+			continue
+		}
+		result, err := readBenchmarkResult(rawPath)
+		if err != nil {
+			warnings = append(warnings, fmt.Sprintf("%s: %v", rawPath, err))
+			continue
+		}
+		for _, phase := range result.Phases {
+			if !isReadModePhase(phase.Name) {
+				continue
+			}
+			if readModeIsRawWire(row) && readModePhaseKind(phase.Name) == "id" {
+				continue
+			}
+			out = append(out, readModeRow{
+				Indexes:          row.SecondaryIndexes,
+				Target:           row.Target,
+				Config:           row.Config,
+				Phase:            phase.Name,
+				OpsPerSec:        phase.OpsPerSecond,
+				SampledOpsPerSec: phase.SampledOpsPerSecond,
+				P95US:            phase.LatencyMicros.P95,
+				RawJSON:          row.RawJSON,
+			})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Indexes != out[j].Indexes {
+			return out[i].Indexes < out[j].Indexes
+		}
+		if readModePhaseOrder(out[i].Phase) != readModePhaseOrder(out[j].Phase) {
+			return readModePhaseOrder(out[i].Phase) < readModePhaseOrder(out[j].Phase)
+		}
+		if out[i].Target != out[j].Target {
+			return out[i].Target < out[j].Target
+		}
+		return out[i].Config < out[j].Config
+	})
+	return out, warnings, nil
+}
+
 func resolveRunArtifactPath(baseDir, relPath string) (string, error) {
 	if strings.TrimSpace(relPath) == "" {
 		return "", fmt.Errorf("empty artifact path under %s", baseDir)
@@ -858,6 +929,7 @@ func loadProfiles(runRoot string) (profileReportData, []string) {
 	for _, root := range []string{
 		filepath.Join(runRoot, "mongo_gateway_full_sweep_1m_expanded", "profiles"),
 		filepath.Join(runRoot, "mongo_client_mode_load_matrix_1m", "profiles"),
+		filepath.Join(runRoot, "mongo_client_mode_read_matrix_1m", "profiles"),
 	} {
 		for _, path := range walkProfileFiles(root, "profile_manifest.json", &warnings) {
 			item, err := readMongoProfileSummary(runRoot, path)
@@ -1173,6 +1245,7 @@ func renderHTML(data reportData) string {
 	}
 	renderMongoFullSweep(&b, data.MongoFullSweep)
 	renderMongoLoadModes(&b, data.MongoLoadModes)
+	renderMongoReadModes(&b, data.MongoReadModes)
 	renderMongoScaling(&b, data.MongoScaling)
 	renderCollections(&b, data.Collections, data.CollectionComparisons)
 	renderRawEngine(&b, data.RawEngine)
@@ -1192,6 +1265,9 @@ func reportNav(data reportData) string {
 	}
 	if len(data.MongoLoadModes) > 0 {
 		items = append(items, navItem{Href: "#mongo-load", Label: "Load modes"})
+	}
+	if len(data.MongoReadModes) > 0 {
+		items = append(items, navItem{Href: "#mongo-read-modes", Label: "Read modes"})
 	}
 	if len(data.MongoScaling) > 0 {
 		items = append(items, navItem{Href: "#scaling", Label: "Scaling"})
@@ -2296,7 +2372,7 @@ func renderMongoFullSweep(b *strings.Builder, rows []mongoSummaryRow) {
 	b.WriteString("<section id=\"mongo-full\"><h2>Mongo API Full Sweep</h2>")
 	b.WriteString("<p class=\"subtle\">Full BSON `driver-command-raw` TreeDB-vs-MongoDB phase comparison. Headline charts and summaries are shown first; raw `summary.tsv` rows are collapsed below.</p>")
 	b.WriteString("<div class=\"chart-group\"><h3>Index-count overview</h3>")
-	b.WriteString("<p class=\"subtle\">These two charts show the headline insert throughput and physical disk footprint as secondary indexes are added.</p>")
+	b.WriteString("<p class=\"subtle\">These two charts show the headline insert throughput and storage footprint as secondary indexes are added.</p>")
 	b.WriteString(fullSweepLoadNote(rows))
 	b.WriteString("<div class=\"chart-grid\">")
 	indexes := sortedMongoIndexes(rows)
@@ -2307,7 +2383,7 @@ func renderMongoFullSweep(b *strings.Builder, rows []mongoSummaryRow) {
 			{Name: "TreeDB", Values: mongoRowOps(loadRows, "tree"), Color: "#2867c7"},
 			{Name: "MongoDB", Values: mongoRowOps(loadRows, "mongo"), Color: "#1f8a5b"},
 		}, "docs/sec"))
-		b.WriteString(lineChart("Storage footprint vs secondary indexes", indexLabels, "secondary indexes", "storage bytes", []chartSeries{
+		b.WriteString(lineChart("Storage footprint vs secondary indexes (Mongo dbStats.totalSize)", indexLabels, "secondary indexes", "storage bytes", []chartSeries{
 			{Name: "TreeDB", Values: mongoRowDisk(loadRows, "tree"), Color: "#2867c7"},
 			{Name: "MongoDB", Values: mongoRowDisk(loadRows, "mongo"), Color: "#1f8a5b"},
 		}, "bytes"))
@@ -2379,13 +2455,51 @@ func renderMongoLoadModes(b *strings.Builder, rows []loadModeRow) {
 		}
 	}
 	b.WriteString("</div>")
-	b.WriteString("<p class=\"subtle\"><strong>* TreeDB-only modes:</strong> <code>direct</code> calls the collection API directly in the selected TreeDB document format. <code>raw-wire-tcp</code> still sends Mongo OP_MSG bytes over loopback TCP to the TreeDB gateway while bypassing the MongoDB Go driver. <code>raw-wire</code> removes the socket too and drives the same raw command/gateway path in process. These modes are TreeDB-only ceiling probes, so each renders as one centered TreeDB bar instead of a paired MongoDB bar.</p>")
+	b.WriteString("<p class=\"subtle\"><strong>* TreeDB-only modes:</strong> <code>direct</code> calls the collection API directly in the selected TreeDB document format. <code>raw-wire-tcp</code> still sends Mongo OP_MSG bytes over loopback TCP to the TreeDB gateway while bypassing the MongoDB Go driver. <code>raw-wire-tcp-pipeline</code> pipelines those raw TCP requests. <code>raw-wire</code> removes the socket too and drives the same raw command/gateway path in process. These modes are TreeDB-only ceiling probes, so each renders as one centered TreeDB bar instead of a paired MongoDB bar.</p>")
 	var body [][]string
 	for _, row := range rows {
 		body = append(body, []string{strconv.Itoa(row.Indexes), row.Target, row.Config, fmtOps(row.OpsPerSec), loadModePhysicalBytesCell(row), row.RawJSON})
 	}
 	b.WriteString("<details><summary>Raw load-mode rows</summary>")
 	writeTable(b, []string{"indexes", "target", "config", "load docs/sec", "physical bytes", "raw JSON"}, body, numericColumns(0, 3, 4))
+	b.WriteString("</details>")
+	b.WriteString("</section>\n")
+}
+
+func renderMongoReadModes(b *strings.Builder, rows []readModeRow) {
+	if len(rows) == 0 {
+		return
+	}
+	b.WriteString("<section id=\"mongo-read-modes\"><h2>Read Client-Mode Ceiling Matrix</h2>")
+	b.WriteString("<p class=\"subtle\">Concurrent read matrix using raw validation paths. Mongo-compatible client modes render as paired TreeDB/MongoDB bars; TreeDB-only direct/raw-wire modes are marked with <strong>*</strong> and show storage/gateway ceilings beside the compatible panels.</p>")
+	b.WriteString("<p class=\"subtle\">Raw-wire modes are rendered for range phases only. Point lookup rows for those modes are intentionally omitted because the current harness would otherwise use the normal driver lookup path while only the range phase exercises raw OP_MSG bytes.</p>")
+	b.WriteString("<div class=\"chart-grid\">")
+	for _, idx := range sortedReadModeIndexes(rows) {
+		for _, phase := range sortedReadModePhasesForIndex(rows, idx) {
+			cats, tree, mongo := readModeChartRows(rows, idx, phase)
+			if len(cats) == 0 {
+				continue
+			}
+			b.WriteString(loadModeBarChart(readModeChartTitle(phase, idx), cats, tree, mongo, "ops/sec", "Ops/Sec"))
+		}
+	}
+	b.WriteString("</div>")
+	var body [][]string
+	for _, row := range rows {
+		body = append(body, []string{
+			strconv.Itoa(row.Indexes),
+			row.Phase,
+			readModeReaderCountCell(row.Phase),
+			row.Target,
+			row.Config,
+			fmtOps(row.OpsPerSec),
+			fmtOps(row.SampledOpsPerSec),
+			fmtFloat(row.P95US, 1),
+			row.RawJSON,
+		})
+	}
+	b.WriteString("<details><summary>Raw read-mode rows</summary>")
+	writeTable(b, []string{"indexes", "phase", "readers", "target", "config", "ops/sec", "sampled ops/sec", "p95 us", "raw JSON"}, body, numericColumns(0, 2, 5, 6, 7))
 	b.WriteString("</details>")
 	b.WriteString("</section>\n")
 }
@@ -2752,11 +2866,7 @@ func mongoRowDisk(rows []mongoSummaryRow, side string) []float64 {
 	out := make([]float64, 0, len(rows))
 	for _, row := range rows {
 		if side == "mongo" {
-			if row.MongoPhysicalBytes > 0 {
-				out = append(out, row.MongoPhysicalBytes)
-			} else {
-				out = append(out, row.MongoDBStatsTotalSize)
-			}
+			out = append(out, row.MongoDBStatsTotalSize)
 		} else {
 			out = append(out, row.TreeDBPhysicalBytes)
 		}
@@ -2783,25 +2893,7 @@ func mongoStorageBasisText(rows []mongoSummaryRow) string {
 			}
 		}
 	}
-	mongoPhysical := 0
-	mongoDBStats := 0
-	for _, row := range rows {
-		if row.MongoPhysicalBytes > 0 {
-			mongoPhysical++
-		} else if row.MongoDBStatsTotalSize > 0 {
-			mongoDBStats++
-		}
-	}
-	mongoBasis := "MongoDB storage bytes from summary.tsv"
-	switch {
-	case mongoPhysical > 0 && mongoDBStats == 0:
-		mongoBasis = "MongoDB measured data-directory bytes"
-	case mongoPhysical == 0 && mongoDBStats > 0:
-		mongoBasis = "MongoDB dbStats.totalSize from this run"
-	case mongoPhysical > 0 && mongoDBStats > 0:
-		mongoBasis = "MongoDB mixed measured data-directory bytes and dbStats.totalSize; see raw rows"
-	}
-	return treeBasis + "; " + mongoBasis + "."
+	return treeBasis + "; MongoDB dbStats.totalSize from this run."
 }
 
 func mongoRow(rows []mongoSummaryRow, idx int, phase string) (mongoSummaryRow, bool) {
@@ -3047,6 +3139,36 @@ func sortedLoadModeIndexes(rows []loadModeRow) []int {
 	return out
 }
 
+func sortedReadModeIndexes(rows []readModeRow) []int {
+	seen := make(map[int]bool)
+	for _, row := range rows {
+		seen[row.Indexes] = true
+	}
+	var out []int
+	for idx := range seen {
+		out = append(out, idx)
+	}
+	sort.Ints(out)
+	return out
+}
+
+func sortedReadModePhasesForIndex(rows []readModeRow, idx int) []string {
+	seen := make(map[string]bool)
+	for _, row := range rows {
+		if row.Indexes == idx {
+			seen[row.Phase] = true
+		}
+	}
+	var out []string
+	for phase := range seen {
+		out = append(out, phase)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return readModePhaseOrder(out[i]) < readModePhaseOrder(out[j])
+	})
+	return out
+}
+
 func loadModeChartRows(rows []loadModeRow, idx int) ([]string, []float64, []float64) {
 	return loadModeValueRows(rows, idx, func(row loadModeRow) float64 { return row.OpsPerSec })
 }
@@ -3139,24 +3261,33 @@ func loadModeDisplayLabel(mode string) string {
 }
 
 func loadModeLabel(row loadModeRow) string {
-	config := row.Config
-	if config == row.Target {
-		config = row.Target + "_driver"
+	return clientModeLabel(row.Target, row.Config)
+}
+
+func readModeLabel(row readModeRow) string {
+	return clientModeLabel(row.Target, row.Config)
+}
+
+func clientModeLabel(target, config string) string {
+	if config == target {
+		config = target + "_driver"
 	}
-	config = strings.TrimPrefix(config, row.Target+"_")
+	config = strings.TrimPrefix(config, target+"_")
 	config = strings.TrimPrefix(config, "bson_")
+	config = strings.TrimSuffix(config, "_range_index")
 	return "BSON " + config
 }
 
 func loadModeOrder(mode string) string {
 	order := map[string]int{
-		"BSON driver":             0,
-		"BSON driver_command":     1,
-		"BSON driver_command_raw": 2,
-		"BSON driver_unack":       3,
-		"BSON direct":             4,
-		"BSON raw_wire_tcp":       5,
-		"BSON raw_wire":           6,
+		"BSON driver":                0,
+		"BSON driver_command":        1,
+		"BSON driver_command_raw":    2,
+		"BSON driver_unack":          3,
+		"BSON direct":                4,
+		"BSON raw_wire_tcp":          5,
+		"BSON raw_wire_tcp_pipeline": 6,
+		"BSON raw_wire":              7,
 	}
 	if idx, ok := order[mode]; ok {
 		return fmt.Sprintf("%02d_%s", idx, mode)
@@ -3166,8 +3297,10 @@ func loadModeOrder(mode string) string {
 		return "04_" + mode
 	case "raw_wire_tcp":
 		return "05_" + mode
-	case "raw_wire":
+	case "raw_wire_tcp_pipeline":
 		return "06_" + mode
+	case "raw_wire":
+		return "07_" + mode
 	}
 	return "99_" + mode
 }
@@ -3180,11 +3313,127 @@ func loadModeKind(mode string) string {
 		return "direct"
 	case normalized == "raw_wire_tcp" || strings.HasSuffix(normalized, "_raw_wire_tcp"):
 		return "raw_wire_tcp"
+	case normalized == "raw_wire_tcp_pipeline" || strings.HasSuffix(normalized, "_raw_wire_tcp_pipeline"):
+		return "raw_wire_tcp_pipeline"
 	case normalized == "raw_wire" || strings.HasSuffix(normalized, "_raw_wire"):
 		return "raw_wire"
 	default:
 		return ""
 	}
+}
+
+func readModeChartRows(rows []readModeRow, idx int, phase string) ([]string, []float64, []float64) {
+	type pair struct {
+		TreeDB float64
+		Mongo  float64
+	}
+	pairs := make(map[string]pair)
+	for _, row := range rows {
+		if row.Indexes != idx || row.Phase != phase {
+			continue
+		}
+		mode := readModeLabel(row)
+		pair := pairs[mode]
+		switch row.Target {
+		case "treedb":
+			pair.TreeDB = row.OpsPerSec
+		case "mongo":
+			pair.Mongo = row.OpsPerSec
+		}
+		pairs[mode] = pair
+	}
+	var labels []string
+	for mode := range pairs {
+		labels = append(labels, mode)
+	}
+	sort.Slice(labels, func(i, j int) bool {
+		return loadModeOrder(labels[i]) < loadModeOrder(labels[j])
+	})
+	tree := make([]float64, 0, len(labels))
+	mongo := make([]float64, 0, len(labels))
+	for _, mode := range labels {
+		pair := pairs[mode]
+		tree = append(tree, pair.TreeDB)
+		mongo = append(mongo, pair.Mongo)
+	}
+	return labels, tree, mongo
+}
+
+func isReadModePhase(phase string) bool {
+	return strings.HasPrefix(phase, "concurrent_id_find_one_r") ||
+		strings.HasPrefix(phase, "concurrent_age_range_indexed_limit_10_r") ||
+		strings.HasPrefix(phase, "concurrent_age_range_scan_limit_10_r")
+}
+
+func readModePhaseKind(phase string) string {
+	switch {
+	case strings.HasPrefix(phase, "concurrent_id_find_one_r"):
+		return "id"
+	case strings.HasPrefix(phase, "concurrent_age_range_indexed_limit_10_r"),
+		strings.HasPrefix(phase, "concurrent_age_range_scan_limit_10_r"):
+		return "range"
+	default:
+		return ""
+	}
+}
+
+func readModePhaseOrder(phase string) string {
+	return fmt.Sprintf("%02d_%04d_%s", readModeKindOrder(readModePhaseKind(phase)), readModeReaderCount(phase), phase)
+}
+
+func readModeKindOrder(kind string) int {
+	switch kind {
+	case "id":
+		return 0
+	case "range":
+		return 1
+	default:
+		return 9
+	}
+}
+
+func readModeReaderCountCell(phase string) string {
+	count := readModeReaderCount(phase)
+	if count == 0 {
+		return "-"
+	}
+	return strconv.Itoa(count)
+}
+
+func readModeReaderCount(phase string) int {
+	idx := strings.LastIndex(phase, "_r")
+	if idx < 0 || idx+2 >= len(phase) {
+		return 0
+	}
+	count, _ := strconv.Atoi(phase[idx+2:])
+	return count
+}
+
+func readModeChartTitle(phase string, idx int) string {
+	label := phase
+	switch {
+	case strings.HasPrefix(phase, "concurrent_id_find_one_r"):
+		label = "ID find one"
+	case strings.HasPrefix(phase, "concurrent_age_range_indexed_limit_10_r"):
+		label = "Age range indexed limit 10"
+	case strings.HasPrefix(phase, "concurrent_age_range_scan_limit_10_r"):
+		label = "Age range scan limit 10"
+	}
+	if readers := readModeReaderCount(phase); readers > 0 {
+		unit := "readers"
+		if readers == 1 {
+			unit = "reader"
+		}
+		label += fmt.Sprintf(", %d %s", readers, unit)
+	}
+	return fmt.Sprintf("%s by client mode, %d indexes", label, idx)
+}
+
+func readModeIsRawWire(row matrixRow) bool {
+	mode := clientModeLabel(row.Target, row.Config)
+	return loadModeKind(mode) == "raw_wire" ||
+		loadModeKind(mode) == "raw_wire_tcp" ||
+		loadModeKind(mode) == "raw_wire_tcp_pipeline"
 }
 
 func indexCountLabel(indexes int) string {

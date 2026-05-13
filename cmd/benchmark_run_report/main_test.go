@@ -117,6 +117,15 @@ func TestDeepReportFromRunRoot(t *testing.T) {
 	writeFile(t, filepath.Join(root, "mongo_client_mode_load_matrix_1m", "raw", "treedb_raw_wire_tcp.json"), `{"target":"treedb","documents":100,"secondary_indexes":0,"phases":[{"name":"load_insert_many","ops_per_sec":1500}]}`)
 	writeFile(t, filepath.Join(root, "mongo_client_mode_load_matrix_1m", "raw", "treedb_raw_wire.json"), `{"target":"treedb","documents":100,"secondary_indexes":0,"phases":[{"name":"load_insert_many","ops_per_sec":1800}]}`)
 	writeFile(t, filepath.Join(root, "mongo_client_mode_load_matrix_1m", "raw", "mongo.json"), `{"target":"mongo","documents":100,"secondary_indexes":0,"phases":[{"name":"load_insert_many","ops_per_sec":500}]}`)
+	writeFile(t, filepath.Join(root, "mongo_client_mode_read_matrix_1m", "matrix.tsv"), "target\tconfig\tdocuments\tsecondary_indexes\traw_json\tphysical_bytes\n"+
+		"treedb\ttreedb_bson_driver_command_raw\t100\t0\traw/treedb_driver_command_raw.json\t2800\n"+
+		"treedb\ttreedb_bson_direct\t100\t0\traw/treedb_direct.json\t2800\n"+
+		"treedb\ttreedb_bson_raw_wire\t100\t0\traw/treedb_raw_wire.json\t2800\n"+
+		"mongo\tmongo_driver_command_raw\t100\t0\traw/mongo_driver_command_raw.json\t5000\n")
+	writeFile(t, filepath.Join(root, "mongo_client_mode_read_matrix_1m", "raw", "treedb_driver_command_raw.json"), `{"target":"treedb","documents":100,"secondary_indexes":0,"phases":[{"name":"concurrent_id_find_one_r8","ops_per_sec":2000,"sampled_ops_per_sec":2100,"latency_micros":{"p95":12}},{"name":"concurrent_age_range_indexed_limit_10_r8","ops_per_sec":1000,"latency_micros":{"p95":24}}]}`)
+	writeFile(t, filepath.Join(root, "mongo_client_mode_read_matrix_1m", "raw", "treedb_direct.json"), `{"target":"treedb","documents":100,"secondary_indexes":0,"client_mode":"direct","phases":[{"name":"concurrent_id_find_one_r8","ops_per_sec":3000,"latency_micros":{"p95":8}},{"name":"concurrent_age_range_indexed_limit_10_r8","ops_per_sec":1800,"latency_micros":{"p95":18}}]}`)
+	writeFile(t, filepath.Join(root, "mongo_client_mode_read_matrix_1m", "raw", "treedb_raw_wire.json"), `{"target":"treedb","documents":100,"secondary_indexes":0,"client_mode":"raw-wire","phases":[{"name":"concurrent_id_find_one_r8","ops_per_sec":9999},{"name":"concurrent_age_range_indexed_limit_10_r8","ops_per_sec":2200,"latency_micros":{"p95":11}}]}`)
+	writeFile(t, filepath.Join(root, "mongo_client_mode_read_matrix_1m", "raw", "mongo_driver_command_raw.json"), `{"target":"mongo","documents":100,"secondary_indexes":0,"phases":[{"name":"concurrent_id_find_one_r8","ops_per_sec":1200,"latency_micros":{"p95":16}},{"name":"concurrent_age_range_indexed_limit_10_r8","ops_per_sec":900,"latency_micros":{"p95":30}}]}`)
 
 	out := filepath.Join(root, "deep_report.html")
 	if err := run([]string{"-run-root", root, "-out", out, "-title", "test report"}); err != nil {
@@ -129,6 +138,7 @@ func TestDeepReportFromRunRoot(t *testing.T) {
 		"origin/main=999888777666",
 		"Mongo API Full Sweep",
 		"Load-Only Client-Mode Matrix",
+		"Read Client-Mode Ceiling Matrix",
 		"Mongo API Reader/Writer Scaling",
 		"Collections vs SQLite",
 		"Raw TreeDB Engine",
@@ -181,6 +191,9 @@ func TestDeepReportFromRunRoot(t *testing.T) {
 		"same raw command/gateway path in process",
 		"one centered TreeDB bar",
 		"Physical Storage By Client Mode",
+		"Raw read-mode rows",
+		"ID Find One, 8 Readers By Client Mode",
+		"Age Range Indexed Limit 10",
 	} {
 		if !strings.Contains(html, want) {
 			t.Fatalf("report missing %q\n%s", want, html)
@@ -291,6 +304,8 @@ func TestTreeDBOnlyLoadModeIncludesNonBSONDirectFormats(t *testing.T) {
 		"BSON template_v1_direct",
 		"BSON raw_wire_tcp",
 		"BSON json_raw_wire_tcp",
+		"BSON raw_wire_tcp_pipeline",
+		"BSON json_raw_wire_tcp_pipeline",
 		"BSON raw_wire",
 		"BSON json_raw_wire",
 	} {
@@ -328,14 +343,14 @@ func TestRawEngineChartOmitsMissingVariants(t *testing.T) {
 	}
 }
 
-func TestMongoRowDiskFallsBackToDBStatsTotalSize(t *testing.T) {
+func TestMongoRowDiskUsesDBStatsTotalSize(t *testing.T) {
 	rows := []mongoSummaryRow{
 		{TreeDBPhysicalBytes: 2048, MongoPhysicalBytes: 0, MongoDBStatsTotalSize: 4096},
 		{TreeDBPhysicalBytes: 3072, MongoPhysicalBytes: 8192, MongoDBStatsTotalSize: 16384},
 	}
 
-	if got, want := mongoRowDisk(rows, "mongo"), []float64{4096, 8192}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("mongoRowDisk fallback = %v, want %v", got, want)
+	if got, want := mongoRowDisk(rows, "mongo"), []float64{4096, 16384}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("mongoRowDisk = %v, want %v", got, want)
 	}
 }
 
@@ -725,6 +740,31 @@ func TestLoadMongoLoadModesBestEffort(t *testing.T) {
 	}
 	if !strings.Contains(warnings[0], "raw/missing.json") {
 		t.Fatalf("warning %q does not name missing raw JSON", warnings[0])
+	}
+}
+
+func TestLoadMongoReadModesFiltersRawWireIDRows(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "matrix.tsv"), "target\tconfig\tdocuments\tsecondary_indexes\traw_json\tphysical_bytes\n"+
+		"treedb\ttreedb_bson_raw_wire_range_index\t100\t0\traw/raw_wire.json\t2000\n"+
+		"treedb\ttreedb_bson_direct\t100\t0\traw/direct.json\t2000\n")
+	writeFile(t, filepath.Join(root, "raw", "raw_wire.json"), `{"target":"treedb","documents":100,"secondary_indexes":0,"phases":[{"name":"concurrent_id_find_one_r8","ops_per_sec":9999},{"name":"concurrent_age_range_indexed_limit_10_r8","ops_per_sec":1234}]}`)
+	writeFile(t, filepath.Join(root, "raw", "direct.json"), `{"target":"treedb","documents":100,"secondary_indexes":0,"phases":[{"name":"concurrent_id_find_one_r8","ops_per_sec":4321},{"name":"concurrent_age_range_indexed_limit_10_r8","ops_per_sec":2345}]}`)
+
+	rows, warnings, err := loadMongoReadModes(root)
+	if err != nil {
+		t.Fatalf("loadMongoReadModes failed: %v", err)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("warnings = %v, want none", warnings)
+	}
+	if got, want := len(rows), 3; got != want {
+		t.Fatalf("rows = %d, want %d: %#v", got, want, rows)
+	}
+	for _, row := range rows {
+		if row.Config == "treedb_bson_raw_wire_range_index" && readModePhaseKind(row.Phase) == "id" {
+			t.Fatalf("raw-wire id row should be filtered: %#v", row)
+		}
 	}
 }
 

@@ -4932,7 +4932,7 @@ func TestCollectionIndexedWriteMemtablesFindSkipsBufferedSecondaryTombstone(t *t
 	table.Freeze()
 	domain := col.writeDomain
 	domain.mu.Lock()
-	domain.count = 1
+	domain.setCountLocked(1)
 	domain.meta = col.Meta()
 	domain.rootRuns = map[string][]memtable.Table{
 		collectionSecondaryRootName("users", "city"): {table},
@@ -5005,7 +5005,7 @@ func TestCollectionIndexedWriteMemtablesFindLimitFiltersOnlyBufferedTombstone(t 
 	table.Freeze()
 	domain := col.writeDomain
 	domain.mu.Lock()
-	domain.count = 1
+	domain.setCountLocked(1)
 	domain.meta = col.Meta()
 	domain.rootRuns = map[string][]memtable.Table{
 		collectionSecondaryRootName("users", "city"): {table},
@@ -7436,7 +7436,7 @@ func TestRollbackBufferedIndexedDomainRestoresMetadata(t *testing.T) {
 	domain.baseCommitSeq = 100
 	domain.baseSystemRoot = 200
 	domain.primaryRoot = 300
-	domain.count = 400
+	domain.setCountLocked(400)
 	domain.bufferedBytes = 500
 	domain.mutableCount = 501
 	domain.mutableBytes = 502
@@ -7500,7 +7500,7 @@ func TestRollbackBufferedIndexedDomainRestoresPreRotationRuns(t *testing.T) {
 
 	domain.rootRuns[primaryName] = append(domain.rootRuns[primaryName], newTable)
 	domain.rootRunCount = 2
-	domain.count = 2
+	domain.setCountLocked(2)
 	if !rotateIndexedMutableToFlushUnitLocked(domain) {
 		t.Fatal("rotate indexed mutable state returned false")
 	}
@@ -7699,6 +7699,28 @@ func TestCollectionSingleInsertBufferedNoIndexCloseFlushes(t *testing.T) {
 	}
 	if want := []byte(`{"name":"ada"}`); !bytes.Equal(got, want) {
 		t.Fatalf("reopened close-flushed doc=%q want %q", got, want)
+	}
+}
+
+func TestFlushBufferedNoIndexCleanDomainSkipsWriteDomainLock(t *testing.T) {
+	domain := &collectionWriteDomain{}
+	col := &Collection{writeDomain: domain}
+
+	domain.mu.Lock()
+	defer domain.mu.Unlock()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- col.flushBufferedNoIndex()
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("flush clean domain: %v", err)
+		}
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("flushBufferedNoIndex blocked on a clean write domain")
 	}
 }
 
@@ -15612,7 +15634,7 @@ func TestCollectionFindDocumentsByIndexRangeUniqueExactBufferedTombstone(t *test
 
 	domain := col.writeDomain
 	domain.mu.Lock()
-	domain.count = 1
+	domain.setCountLocked(1)
 	domain.meta = col.Meta()
 	domain.rootRuns = map[string][]memtable.Table{
 		collectionPrimaryRootName("users"):            {primaryTable},
@@ -15699,7 +15721,7 @@ func TestCollectionFindDocumentsByIndexRangeExactBufferedTombstoneAfterLimit(t *
 
 	domain := col.writeDomain
 	domain.mu.Lock()
-	domain.count = 1
+	domain.setCountLocked(1)
 	domain.meta = col.Meta()
 	domain.rootRuns = map[string][]memtable.Table{
 		collectionPrimaryRootName("users"):            {primaryTable},
@@ -16007,7 +16029,7 @@ func TestCollectionFindByIndexRangeSkipsBufferedTombstone(t *testing.T) {
 	table.Freeze()
 	domain := col.writeDomain
 	domain.mu.Lock()
-	domain.count = 1
+	domain.setCountLocked(1)
 	domain.meta = col.Meta()
 	domain.rootRuns = map[string][]memtable.Table{
 		collectionSecondaryRootName("users", "score"): {table},
