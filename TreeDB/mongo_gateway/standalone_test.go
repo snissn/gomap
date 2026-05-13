@@ -34,6 +34,23 @@ func TestNormalizeStandaloneOptionsDefaultsAndValidation(t *testing.T) {
 		t.Fatalf("data root storage=%q want default", opts.DefaultCollectionOptions.DataRootStoragePolicy)
 	}
 
+	normalized, err := NormalizeStandaloneOptions(StandaloneOptions{
+		Dir:     t.TempDir(),
+		Profile: treedb.Profile(" WAL_ON_FAST "),
+		DefaultCollectionOptions: collections.CollectionOptions{
+			DocumentFormat: collections.DocumentFormat(" BSON "),
+		},
+	})
+	if err != nil {
+		t.Fatalf("NormalizeStandaloneOptions normalized strings: %v", err)
+	}
+	if normalized.Profile != treedb.ProfileWALOnFast {
+		t.Fatalf("normalized profile=%q want %q", normalized.Profile, treedb.ProfileWALOnFast)
+	}
+	if normalized.DefaultCollectionOptions.DocumentFormat != collections.DocumentFormatBSON {
+		t.Fatalf("normalized document format=%q want bson", normalized.DefaultCollectionOptions.DocumentFormat)
+	}
+
 	cases := []struct {
 		name string
 		opts StandaloneOptions

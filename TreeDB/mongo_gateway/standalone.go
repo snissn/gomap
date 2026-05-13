@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -156,7 +157,6 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 		ctx = context.Background()
 	}
 	serveCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
 
 	listenerClosed := make(chan struct{})
 	go func() {
@@ -244,7 +244,8 @@ func (s *StandaloneServer) Close() error {
 }
 
 func normalizeStandaloneProfile(profile treedb.Profile) (treedb.Profile, error) {
-	switch profile {
+	normalized := treedb.Profile(strings.ToLower(strings.TrimSpace(string(profile))))
+	switch normalized {
 	case "", treedb.ProfileDurable:
 		return treedb.ProfileDurable, nil
 	case treedb.ProfileFast:
@@ -259,7 +260,8 @@ func normalizeStandaloneProfile(profile treedb.Profile) (treedb.Profile, error) 
 }
 
 func normalizeStandaloneDocumentFormat(format collections.DocumentFormat) (collections.DocumentFormat, error) {
-	switch format {
+	normalized := collections.DocumentFormat(strings.ToLower(strings.TrimSpace(string(format))))
+	switch normalized {
 	case collections.DocumentFormatDefault, collections.DocumentFormatBSON:
 		return collections.DocumentFormatBSON, nil
 	case collections.DocumentFormatJSON:
