@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -165,6 +166,41 @@ func TestServerServeContextCancelDoesNotCloseOtherServeConnections(t *testing.T)
 		t.Fatal("Serve 2 did not stop after context cancellation")
 	}
 }
+
+func TestServerServeClosesListenerOnAcceptError(t *testing.T) {
+	wantErr := errors.New("accept failed")
+	ln := &acceptErrorListener{err: wantErr}
+
+	if err := NewServer().Serve(context.Background(), ln); !errors.Is(err, wantErr) {
+		t.Fatalf("Serve err=%v want %v", err, wantErr)
+	}
+	if !ln.closed.Load() {
+		t.Fatal("Serve did not close listener after accept error")
+	}
+}
+
+type acceptErrorListener struct {
+	err    error
+	closed atomic.Bool
+}
+
+func (l *acceptErrorListener) Accept() (net.Conn, error) {
+	return nil, l.err
+}
+
+func (l *acceptErrorListener) Close() error {
+	l.closed.Store(true)
+	return nil
+}
+
+func (l *acceptErrorListener) Addr() net.Addr {
+	return dummyAddr("accept-error-listener")
+}
+
+type dummyAddr string
+
+func (a dummyAddr) Network() string { return string(a) }
+func (a dummyAddr) String() string  { return string(a) }
 
 func readOneMessageBytes(tb testing.TB, conn net.Conn) []byte {
 	tb.Helper()
