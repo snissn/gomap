@@ -158,14 +158,24 @@ func (c *leafPageReadCache) storeReadMiss(ptr page.LeafLogPtr, leafPage []byte) 
 	// Parallel read misses can race: another goroutine may populate this exact
 	// slot/key before we reach admission. Fast-path that case with only a read
 	// lock to avoid unnecessary writer lock traffic in the miss hot path.
-	slot.mu.RLock()
-	if slot.valid && slot.key == key {
+	if slot.mu.TryRLock() {
+		if slot.valid && slot.key == key {
+			slot.mu.RUnlock()
+			return
+		}
 		slot.mu.RUnlock()
+	} else {
+		c.readMissAdmissionSkips.Add(1)
 		return
 	}
-	slot.mu.RUnlock()
 
-	slot.mu.Lock()
+	// Read-miss cache admission is best effort. If this slot is currently under
+	// heavy contention, skip admission rather than queuing behind a writer lock
+	// in the random-read miss hot path.
+	if !slot.mu.TryLock() {
+		c.readMissAdmissionSkips.Add(1)
+		return
+	}
 	if slot.valid && slot.key == key {
 		slot.mu.Unlock()
 		return
