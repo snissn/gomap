@@ -122,6 +122,38 @@ func TestServerHandlesMsgPing(t *testing.T) {
 	assertOK(t, msg.Body)
 }
 
+func TestServerHandlesConnectionStatus(t *testing.T) {
+	commandDoc := mustDocument(t, bson.D{
+		{Key: "connectionStatus", Value: int32(1)},
+		{Key: "$db", Value: "admin"},
+	})
+	req, err := wire.AppendMsgMessage(nil, 201, 0, 0, commandDoc)
+	if err != nil {
+		t.Fatalf("AppendMsgMessage: %v", err)
+	}
+	rw := &readWriter{r: bytes.NewReader(req)}
+
+	if err := NewServer().ServeOne(rw); err != nil {
+		t.Fatalf("ServeOne: %v", err)
+	}
+
+	resp := readMsgResponse(t, rw.w.Bytes(), 201)
+	assertOK(t, resp)
+	authInfo, ok := resp.Lookup("authInfo").DocumentOK()
+	if !ok {
+		t.Fatalf("authInfo missing or non-document in %s", resp)
+	}
+	if _, ok := authInfo.Lookup("authenticatedUsers").ArrayOK(); !ok {
+		t.Fatalf("authenticatedUsers missing or non-array in %s", authInfo)
+	}
+	if _, ok := authInfo.Lookup("authenticatedUserRoles").ArrayOK(); !ok {
+		t.Fatalf("authenticatedUserRoles missing or non-array in %s", authInfo)
+	}
+	if _, ok := authInfo.Lookup("authenticatedUserPrivileges").ArrayOK(); !ok {
+		t.Fatalf("authenticatedUserPrivileges missing or non-array in %s", authInfo)
+	}
+}
+
 func TestServerRetainsReadBufferForSafeCommands(t *testing.T) {
 	commandDoc := mustDocument(t, bson.D{
 		{Key: "ping", Value: int32(1)},
@@ -183,6 +215,7 @@ func TestBufferedMessageCanRetainRequestBody(t *testing.T) {
 		want bool
 	}{
 		{name: "ping", doc: bson.D{{Key: "ping", Value: int32(1)}, {Key: "$db", Value: "admin"}}, want: true},
+		{name: "connectionStatus", doc: bson.D{{Key: "connectionStatus", Value: int32(1)}, {Key: "$db", Value: "admin"}}, want: true},
 		{name: "find", doc: bson.D{{Key: "find", Value: "users"}, {Key: "$db", Value: "app"}}, want: true},
 		{name: "update", doc: bson.D{{Key: "update", Value: "users"}, {Key: "updates", Value: bson.A{}}, {Key: "$db", Value: "app"}}, want: false},
 		{name: "insert", doc: bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}}}}, {Key: "$db", Value: "app"}}, want: false},

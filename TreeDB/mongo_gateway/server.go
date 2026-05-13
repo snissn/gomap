@@ -411,7 +411,7 @@ func bufferedMessageCanRetainRequestBody(h wire.Header, body []byte) bool {
 		return false
 	}
 	switch name {
-	case "find", "getMore", "hello", "isMaster", "ismaster", "killCursors", "listCollections", "listIndexes", "ping":
+	case "connectionStatus", "find", "getMore", "hello", "isMaster", "ismaster", "killCursors", "listCollections", "listIndexes", "ping":
 		return true
 	default:
 		return false
@@ -579,6 +579,8 @@ func (s *Server) commandResponse(name string, command wire.Document, sequences [
 	switch name {
 	case "hello", "isMaster", "ismaster":
 		return marshalDocument(helloResponse(s.maxMessageLength()))
+	case "connectionStatus":
+		return marshalDocument(connectionStatusResponse())
 	case "ping":
 		return marshalDocument(bson.D{{Key: "ok", Value: 1.0}})
 	case "insert":
@@ -619,6 +621,17 @@ func helloResponse(maxMessageLength int32) bson.D {
 		{Key: "maxMessageSizeBytes", Value: maxMessageLength},
 		{Key: "maxWriteBatchSize", Value: int32(defaultMaxWriteBatchSize)},
 		{Key: "localTime", Value: time.Now().UTC()},
+	}
+}
+
+func connectionStatusResponse() bson.D {
+	return bson.D{
+		{Key: "authInfo", Value: bson.D{
+			{Key: "authenticatedUsers", Value: bson.A{}},
+			{Key: "authenticatedUserRoles", Value: bson.A{}},
+			{Key: "authenticatedUserPrivileges", Value: bson.A{}},
+		}},
+		{Key: "ok", Value: 1.0},
 	}
 }
 
