@@ -52,6 +52,9 @@ type StandaloneServer struct {
 	cleanup   func() error
 	closeOnce sync.Once
 	closeErr  error
+	serveMu   sync.Mutex
+	serveWG   sync.WaitGroup
+	closing   bool
 }
 
 // NormalizeStandaloneOptions applies standalone defaults and validates options.
@@ -207,8 +210,22 @@ func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
 // Serve accepts MongoDB clients for a standalone TreeDB gateway.
 func (s *StandaloneServer) Serve(ctx context.Context, ln net.Listener) error {
 	if s == nil || s.Server == nil {
+		if ln != nil {
+			_ = ln.Close()
+		}
 		return errServerClosed
 	}
+	s.serveMu.Lock()
+	if s.closing {
+		s.serveMu.Unlock()
+		if ln != nil {
+			_ = ln.Close()
+		}
+		return errServerClosed
+	}
+	s.serveWG.Add(1)
+	s.serveMu.Unlock()
+	defer s.serveWG.Done()
 	return s.Server.Serve(ctx, ln)
 }
 
@@ -218,7 +235,15 @@ func (s *StandaloneServer) ListenAndServe(ctx context.Context, addr string) erro
 	if s == nil || s.Server == nil {
 		return errServerClosed
 	}
-	return s.Server.ListenAndServe(ctx, addr)
+	if addr == "" {
+		addr = DefaultStandaloneAddr
+	}
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = ln.Close() }()
+	return s.Serve(ctx, ln)
 }
 
 // Close stops active MongoDB connections and closes the TreeDB backend. It is
@@ -229,9 +254,13 @@ func (s *StandaloneServer) Close() error {
 	}
 	s.closeOnce.Do(func() {
 		var errs []error
+		s.serveMu.Lock()
+		s.closing = true
+		s.serveMu.Unlock()
 		if s.Server != nil {
 			errs = append(errs, s.Server.Close())
 		}
+		s.serveWG.Wait()
 		if s.Collections != nil {
 			errs = append(errs, s.Collections.FlushAll())
 		}

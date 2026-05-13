@@ -202,6 +202,55 @@ func TestServerListenAndServeRejectsInvalidAddress(t *testing.T) {
 	}
 }
 
+func TestStandaloneServerCloseWaitsForServe(t *testing.T) {
+	standalone, err := OpenStandaloneServer(StandaloneOptions{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("OpenStandaloneServer: %v", err)
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		_ = standalone.Close()
+		t.Fatalf("listen: %v", err)
+	}
+	serveErr := make(chan error, 1)
+	go func() {
+		serveErr <- standalone.Serve(context.Background(), ln)
+	}()
+
+	conn, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		_ = standalone.Close()
+		t.Fatalf("dial: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+	ping := mustDocument(t, bson.D{{Key: "ping", Value: int32(1)}, {Key: "$db", Value: "admin"}})
+	req, err := wire.AppendMsgMessage(nil, 7103, 0, 0, ping)
+	if err != nil {
+		_ = standalone.Close()
+		t.Fatalf("AppendMsgMessage: %v", err)
+	}
+	if _, err := conn.Write(req); err != nil {
+		_ = standalone.Close()
+		t.Fatalf("write ping: %v", err)
+	}
+	if _, _, err := wire.ReadMessage(conn, 0); err != nil {
+		_ = standalone.Close()
+		t.Fatalf("read ping response: %v", err)
+	}
+
+	if err := standalone.Close(); err != nil {
+		t.Fatalf("standalone close: %v", err)
+	}
+	select {
+	case err := <-serveErr:
+		if err != nil {
+			t.Fatalf("Serve returned error after Close: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("StandaloneServer.Close returned before Serve finished")
+	}
+}
+
 func TestStandaloneServerOfficialDriverCRUDAndReopen(t *testing.T) {
 	dir := t.TempDir()
 	standalone, err := OpenStandaloneServer(StandaloneOptions{Dir: dir})
