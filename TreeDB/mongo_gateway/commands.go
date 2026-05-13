@@ -1351,7 +1351,7 @@ func validateCreateCollectionCommand(command wire.Document) error {
 
 func isCreateCommandEnvelopeField(key string) bool {
 	switch key {
-	case "create", "$db", "lsid", "comment", "writeConcern", "readConcern", "readPreference", "apiVersion", "apiStrict", "apiDeprecationErrors":
+	case "create", "$db", "lsid", "comment", "writeConcern", "readConcern", "readPreference", "maxTimeMS", "apiVersion", "apiStrict", "apiDeprecationErrors":
 		return true
 	default:
 		return strings.HasPrefix(key, "$")

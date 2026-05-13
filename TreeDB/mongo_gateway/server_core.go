@@ -464,7 +464,7 @@ func bufferedMessageCanRetainRequestBody(h wire.Header, body []byte) bool {
 		return false
 	}
 	switch name {
-	case "buildInfo", "connectionStatus", "create", "endSessions", "find", "getMore", "hello", "hostInfo", "isMaster", "ismaster", "killCursors", "listCollections", "listIndexes", "ping":
+	case "buildInfo", "connectionStatus", "endSessions", "find", "getMore", "hello", "hostInfo", "isMaster", "ismaster", "killCursors", "listCollections", "listIndexes", "ping":
 		return true
 	default:
 		return false

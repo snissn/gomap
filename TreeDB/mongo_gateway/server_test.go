@@ -315,7 +315,7 @@ func TestBufferedMessageCanRetainRequestBody(t *testing.T) {
 		{name: "ping", doc: bson.D{{Key: "ping", Value: int32(1)}, {Key: "$db", Value: "admin"}}, want: true},
 		{name: "buildInfo", doc: bson.D{{Key: "buildInfo", Value: int32(1)}, {Key: "$db", Value: "admin"}}, want: true},
 		{name: "connectionStatus", doc: bson.D{{Key: "connectionStatus", Value: int32(1)}, {Key: "$db", Value: "admin"}}, want: true},
-		{name: "create", doc: bson.D{{Key: "create", Value: "users"}, {Key: "$db", Value: "app"}}, want: true},
+		{name: "create", doc: bson.D{{Key: "create", Value: "users"}, {Key: "$db", Value: "app"}}, want: false},
 		{name: "endSessions", doc: bson.D{{Key: "endSessions", Value: bson.A{}}, {Key: "$db", Value: "admin"}}, want: true},
 		{name: "hostInfo", doc: bson.D{{Key: "hostInfo", Value: int32(1)}, {Key: "$db", Value: "admin"}}, want: true},
 		{name: "find", doc: bson.D{{Key: "find", Value: "users"}, {Key: "$db", Value: "app"}}, want: true},
@@ -2185,6 +2185,7 @@ func TestServerCreateCollectionCommand(t *testing.T) {
 		{Key: "$clusterTime", Value: bson.D{}},
 		{Key: "$readPreference", Value: bson.D{{Key: "mode", Value: "primaryPreferred"}}},
 		{Key: "apiVersion", Value: "1"},
+		{Key: "maxTimeMS", Value: int64(1000)},
 		{Key: "readConcern", Value: bson.D{{Key: "level", Value: "local"}}},
 		{Key: "$db", Value: "app"},
 	})
