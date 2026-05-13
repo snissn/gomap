@@ -2269,6 +2269,10 @@ func TestServerRejectsTransactionalMutations(t *testing.T) {
 		{Key: "startTransaction", Value: true},
 		{Key: "autocommit", Value: false},
 	}
+	retryableWriteFields := bson.D{
+		{Key: "lsid", Value: bson.D{{Key: "id", Value: bson.Binary{Subtype: 4, Data: make([]byte, 16)}}}},
+		{Key: "txnNumber", Value: int64(2)},
+	}
 
 	assertOK(t, serveCommand(t, server, 2319, bson.D{
 		{Key: "createIndexes", Value: "users"},
@@ -2308,6 +2312,16 @@ func TestServerRejectsTransactionalMutations(t *testing.T) {
 	assertCommandError(t, serveCommand(t, server, 2324, transactionalInsert), "BadValue")
 	if _, err := server.Collections.OpenCollection("app.tx_insert"); !errors.Is(err, collections.ErrCollectionNotFound) {
 		t.Fatalf("transactional insert collection err=%v, want collection not found", err)
+	}
+
+	retryableInsert := append(bson.D{
+		{Key: "insert", Value: "retryable_insert"},
+		{Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u3"}}}},
+	}, retryableWriteFields...)
+	retryableInsert = append(retryableInsert, bson.E{Key: "$db", Value: "app"})
+	assertCommandError(t, serveCommand(t, server, 2329, retryableInsert), "BadValue")
+	if _, err := server.Collections.OpenCollection("app.retryable_insert"); !errors.Is(err, collections.ErrCollectionNotFound) {
+		t.Fatalf("retryable insert collection err=%v, want collection not found", err)
 	}
 
 	transactionalUpdate := append(bson.D{

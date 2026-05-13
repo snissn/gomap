@@ -485,7 +485,7 @@ func mongoCompatibilityMatrixRows() []mongoCompatibilityMatrixRow {
 		},
 		{
 			category: "transaction gap",
-			feature:  "transactions",
+			feature:  "transactions and retryable writes",
 			status:   "not implemented",
 			probe: func(t *testing.T, server *Server) {
 				resp := serveCommand(t, server, 27, bson.D{
@@ -495,6 +495,14 @@ func mongoCompatibilityMatrixRows() []mongoCompatibilityMatrixRow {
 					{Key: "txnNumber", Value: int64(1)},
 					{Key: "startTransaction", Value: true},
 					{Key: "autocommit", Value: false},
+					{Key: "$db", Value: "app"},
+				})
+				assertCommandError(t, resp, "BadValue")
+				resp = serveCommand(t, server, 29, bson.D{
+					{Key: "insert", Value: "retry_users"},
+					{Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "retry1"}}}},
+					{Key: "lsid", Value: bson.D{{Key: "id", Value: bson.Binary{Subtype: 4, Data: make([]byte, 16)}}}},
+					{Key: "txnNumber", Value: int64(2)},
 					{Key: "$db", Value: "app"},
 				})
 				assertCommandError(t, resp, "BadValue")

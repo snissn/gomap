@@ -71,7 +71,7 @@ block drifts from the executable matrix rows.
 | command gap | aggregate | not implemented |
 | command gap | count | not implemented |
 | command gap | findAndModify | not implemented |
-| transaction gap | transactions | not implemented |
+| transaction gap | transactions and retryable writes | not implemented |
 <!-- mongo-compatibility-matrix:end -->
 
 For a naive TreeDB-vs-MongoDB throughput smoke that connects to both targets and
@@ -132,7 +132,7 @@ throughput check.
 | Command | `findAndModify` | `not implemented` | `TestMongoCompatibilityMatrix` | No atomic find/update command surface. |
 | Command | collection/database drop | `not implemented` | Command falls through to `CommandNotFound` | Collection lifecycle beyond create and index metadata is not exposed. |
 | Command | logical sessions / `endSessions` | `supported subset` | `TestMongoCompatibilityMatrix`, `TestServerOfficialGoDriverLogicalSession` | Advertises `logicalSessionTimeoutMinutes` and accepts `endSessions`; session IDs are accepted for driver compatibility only. |
-| Command | transactions | `not implemented` | `TestMongoCompatibilityMatrix` rejects transactional writes and covers `commitTransaction` absence | Depends on local transaction/WAL roadmap. |
+| Command | transactions / retryable writes | `not implemented` | `TestMongoCompatibilityMatrix` rejects transactional and retryable-write markers and covers `commitTransaction` absence | Depends on local transaction/WAL/idempotency roadmap. |
 | Command | auth / authorization | `not implemented` | Command falls through to `CommandNotFound` | Out of MVP scope. |
 
 ## Desktop Client Check
@@ -232,7 +232,7 @@ before deciding whether to implement or reject them.
 | Mongo `readConcern` | `not implemented` | No read concern parser or server-side snapshot API mapping. |
 | Logical sessions | `supported subset` | Advertised for driver compatibility; `lsid` is accepted but does not add causal consistency, retryable-write, or transaction semantics. |
 | Multi-document transactions | `not implemented` | Transactional write markers are rejected before mutation; full support is blocked on TreeDB collection transaction and collection WAL work. |
-| Retryable writes / idempotency | `not implemented` | Needs explicit idempotency metadata and error contract. |
+| Retryable writes / idempotency | `not implemented` | `txnNumber` write markers are rejected before mutation; support needs explicit idempotency metadata and error contract. |
 
 ## Benchmark-Only Surfaces
 

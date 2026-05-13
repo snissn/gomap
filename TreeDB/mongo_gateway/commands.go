@@ -1374,13 +1374,13 @@ func validateEndSessionsCommand(command wire.Document) error {
 
 func rejectTransactionalCommand(command wire.Document, commandName string) (wire.Document, bool, error) {
 	raw := bson.Raw(command)
-	if raw.Lookup("startTransaction").IsZero() && raw.Lookup("autocommit").IsZero() {
+	if raw.Lookup("startTransaction").IsZero() && raw.Lookup("autocommit").IsZero() && raw.Lookup("txnNumber").IsZero() {
 		return nil, false, nil
 	}
 	doc, err := commandError(
 		commandCodeBadValue,
 		"BadValue",
-		"Mongo gateway "+commandName+" does not support transactions",
+		"Mongo gateway "+commandName+" does not support transactions or retryable writes",
 	)
 	return doc, true, err
 }
