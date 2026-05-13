@@ -198,6 +198,15 @@ unique secondary indexes. That stale-plan flag is intentionally profiling-only:
 it validates throughput headroom before the production conflict protocol is
 implemented.
 
+For unsafe foreground-admission ceiling runs, also set
+`MONGO_GATEWAY_PROFILE_BENCH_UPDATE_COMBINE_UNSAFE_ASYNC_ACK=true`. This
+profiling-only mode acknowledges after request admission into the sharded
+combiner queue, then drains lane workers and `FlushAll()` inside the timed
+window. Rows report foreground metrics such as
+`update_combine_unsafe_async_ack_docs/sec` and final drain metrics such as
+`update_combine_unsafe_async_final_drain_ns/doc`; this mode is not a durability
+or visibility contract.
+
 ## MongoDB Target
 
 ```sh

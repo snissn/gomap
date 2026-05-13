@@ -69,17 +69,18 @@ const (
 	// background indexed flush work. When the queue reaches this many immutable
 	// flush units, the triggering writer publishes synchronously to cap memory
 	// and visibility lag.
-	DefaultIndexedWriteMemtableAsyncFlushMaxQueuedUnits = 4
-	defaultCollectionUpdateCombineMaxBatch              = 256
-	defaultCollectionUpdateCombineShards                = 1
-	defaultCollectionUpdateCombineDrainYields           = 1
-	defaultCollectionUpdateCombineLaneDrainYields       = 4
-	collectionUpdateCombineIdleTTL                      = 30 * time.Second
-	collectionUpdateCombineInlineQuietPeriod            = time.Millisecond
-	collectionPprofComponentKey                         = "gomap_component"
-	collectionPprofOperationKey                         = "gomap_operation"
-	collectionPprofIndexedAsyncFlush                    = "collections_indexed_async_flush"
-	collectionPprofIndexedAsyncFlushRun                 = "publish_buffered_indexed_flush"
+	DefaultIndexedWriteMemtableAsyncFlushMaxQueuedUnits  = 4
+	defaultCollectionUpdateCombineMaxBatch               = 256
+	defaultCollectionUpdateCombineShards                 = 1
+	defaultCollectionUpdateCombineDrainYields            = 1
+	defaultCollectionUpdateCombineLaneDrainYields        = 4
+	defaultCollectionUpdateCombineUnsafeAsyncAckQueueCap = 65536
+	collectionUpdateCombineIdleTTL                       = 30 * time.Second
+	collectionUpdateCombineInlineQuietPeriod             = time.Millisecond
+	collectionPprofComponentKey                          = "gomap_component"
+	collectionPprofOperationKey                          = "gomap_operation"
+	collectionPprofIndexedAsyncFlush                     = "collections_indexed_async_flush"
+	collectionPprofIndexedAsyncFlushRun                  = "publish_buffered_indexed_flush"
 )
 
 var (
@@ -603,6 +604,7 @@ type CollectionManagerStats struct {
 	UpdateCombineFallbackRequests  uint64
 	UpdateCombineQueueDepthMax     uint64
 	UpdateCombineInlineRequests    uint64
+	UpdateCombineUnsafeAsyncAcks   uint64
 	UpdateCombineEnqueue           time.Duration
 	UpdateCombineWait              time.Duration
 	UpdateCombineQueueWait         time.Duration
@@ -929,6 +931,7 @@ type collectionWriteDomain struct {
 	updateCombineShards                 int
 	updateCombineLaneWorkers            bool
 	updateCombineUnsafeStaleDirectPlans atomic.Bool
+	updateCombineUnsafeAsyncAck         atomic.Bool
 	closingWrites                       atomic.Bool
 	loaded                              bool
 	meta                                CollectionMeta
@@ -1010,6 +1013,7 @@ type collectionWriteDomain struct {
 	updateCombineFallbackRequests      atomic.Uint64
 	updateCombineQueueDepthMax         atomic.Uint64
 	updateCombineInlineRequests        atomic.Uint64
+	updateCombineUnsafeAsyncAcks       atomic.Uint64
 	updateInlineInFlight               atomic.Uint64
 	updateCombineLastRequestUnixNano   atomic.Int64
 	updateInlineDocumentID             [collectionUpdateCombineInlineDocumentIDMax]byte
@@ -1306,6 +1310,7 @@ func (m *CollectionManager) Stats() map[string]string {
 	out["treedb.collections.write_domain.update_combine.fallback_requests_total"] = fmt.Sprintf("%d", stats.UpdateCombineFallbackRequests)
 	out["treedb.collections.write_domain.update_combine.queue_depth_max"] = fmt.Sprintf("%d", stats.UpdateCombineQueueDepthMax)
 	out["treedb.collections.write_domain.update_combine.inline_requests_total"] = fmt.Sprintf("%d", stats.UpdateCombineInlineRequests)
+	out["treedb.collections.write_domain.update_combine.unsafe_async_acks_total"] = fmt.Sprintf("%d", stats.UpdateCombineUnsafeAsyncAcks)
 	out["treedb.collections.write_domain.update_combine.enqueue_ns_total"] = fmt.Sprintf("%d", stats.UpdateCombineEnqueue.Nanoseconds())
 	out["treedb.collections.write_domain.update_combine.wait_ns_total"] = fmt.Sprintf("%d", stats.UpdateCombineWait.Nanoseconds())
 	out["treedb.collections.write_domain.update_combine.queue_wait_ns_total"] = fmt.Sprintf("%d", stats.UpdateCombineQueueWait.Nanoseconds())
@@ -1494,6 +1499,15 @@ func (m *CollectionManager) ResetUpdateCombinersForProfiling() {
 	}
 }
 
+// DrainUpdateCombinersForProfiling stops and drains active update combiners
+// without flushing the collection write domains. It is intended for benchmark
+// windows that intentionally acknowledge before background combine/stage work
+// has completed, so the benchmark can time foreground admission separately from
+// the background drain.
+func (m *CollectionManager) DrainUpdateCombinersForProfiling() {
+	m.ResetUpdateCombinersForProfiling()
+}
+
 // SetUpdateCombineShardsForProfiling sets the update-combiner ingress shard
 // count for already-opened collection write domains managed by m. It is intended
 // for benchmark/profiling experiments and resets active combiners so subsequent
@@ -1562,6 +1576,28 @@ func (m *CollectionManager) SetUpdateCombineUnsafeStaleDirectPlansForProfiling(e
 	}
 }
 
+// SetUpdateCombineUnsafeAsyncAckForProfiling makes update-combiner profiling
+// runs acknowledge after request admission instead of waiting for the lane
+// worker and prepared-batch merger to stage the update. This intentionally does
+// not define a production durability or visibility contract; it exists only to
+// measure the foreground admission ceiling against a separately timed drain.
+func (m *CollectionManager) SetUpdateCombineUnsafeAsyncAckForProfiling(enabled bool) {
+	if m == nil {
+		return
+	}
+	m.domainMu.RLock()
+	domains := make([]*collectionWriteDomain, 0, len(m.domains))
+	for _, domain := range m.domains {
+		if domain != nil {
+			domains = append(domains, domain)
+		}
+	}
+	m.domainMu.RUnlock()
+	for _, domain := range domains {
+		domain.setUpdateCombineUnsafeAsyncAckForProfiling(enabled)
+	}
+}
+
 func (s *CollectionManagerStats) add(other CollectionManagerStats) {
 	if s == nil {
 		return
@@ -1627,6 +1663,7 @@ func (s *CollectionManagerStats) add(other CollectionManagerStats) {
 		s.UpdateCombineQueueDepthMax = other.UpdateCombineQueueDepthMax
 	}
 	s.UpdateCombineInlineRequests += other.UpdateCombineInlineRequests
+	s.UpdateCombineUnsafeAsyncAcks += other.UpdateCombineUnsafeAsyncAcks
 	s.UpdateCombineEnqueue += other.UpdateCombineEnqueue
 	s.UpdateCombineWait += other.UpdateCombineWait
 	s.UpdateCombineQueueWait += other.UpdateCombineQueueWait
@@ -1764,6 +1801,7 @@ func (domain *collectionWriteDomain) statsSnapshot() CollectionManagerStats {
 	stats.UpdateCombineFallbackRequests = domain.updateCombineFallbackRequests.Load()
 	stats.UpdateCombineQueueDepthMax = domain.updateCombineQueueDepthMax.Load()
 	stats.UpdateCombineInlineRequests = domain.updateCombineInlineRequests.Load()
+	stats.UpdateCombineUnsafeAsyncAcks = domain.updateCombineUnsafeAsyncAcks.Load()
 	stats.UpdateCombineEnqueue = durationFromAtomicNs(domain.updateCombineEnqueueNs.Load())
 	stats.UpdateCombineWait = durationFromAtomicNs(domain.updateCombineWaitNs.Load())
 	stats.UpdateCombineQueueWait = durationFromAtomicNs(domain.updateCombineQueueWaitNs.Load())
@@ -2315,6 +2353,13 @@ func (domain *collectionWriteDomain) observeUpdateCombineInline() {
 	domain.updateCombineInlineRequests.Add(1)
 }
 
+func (domain *collectionWriteDomain) observeUpdateCombineUnsafeAsyncAck() {
+	if domain == nil {
+		return
+	}
+	domain.updateCombineUnsafeAsyncAcks.Add(1)
+}
+
 func (domain *collectionWriteDomain) observeUpdateCombineEnqueue(d time.Duration) {
 	if domain == nil || d <= 0 {
 		return
@@ -2431,6 +2476,17 @@ func (domain *collectionWriteDomain) setUpdateCombineUnsafeStaleDirectPlansForPr
 		return
 	}
 	domain.updateCombineUnsafeStaleDirectPlans.Store(enabled)
+}
+
+func (domain *collectionWriteDomain) setUpdateCombineUnsafeAsyncAckForProfiling(enabled bool) {
+	if domain == nil {
+		return
+	}
+	if domain.updateCombineUnsafeAsyncAck.Load() == enabled {
+		return
+	}
+	domain.updateCombineUnsafeAsyncAck.Store(enabled)
+	domain.resetUpdateCombinerForProfiling()
 }
 
 func (domain *collectionWriteDomain) allowUnsafeStaleDirectUpdatePlanForProfiling(plan *updateBatchPlan) bool {
@@ -8907,15 +8963,16 @@ func updateBatchItemError(index int, err error) error {
 }
 
 type collectionUpdateCombiner struct {
-	maxBatch     int
-	idleTTL      time.Duration
-	requests     chan collectionUpdateCombineRequest
-	done         chan struct{}
-	domain       *collectionWriteDomain
-	running      atomic.Bool
-	runningCount atomic.Int64
-	mu           sync.RWMutex
-	stopped      bool
+	maxBatch       int
+	idleTTL        time.Duration
+	requests       chan collectionUpdateCombineRequest
+	done           chan struct{}
+	domain         *collectionWriteDomain
+	unsafeAsyncAck bool
+	running        atomic.Bool
+	runningCount   atomic.Int64
+	mu             sync.RWMutex
+	stopped        bool
 
 	shardedRequests []chan collectionUpdateCombineRequest
 	readyShards     chan int
@@ -8985,6 +9042,9 @@ func (c *Collection) updateFastPathWithoutCreatingCombiner() (*collectionUpdateC
 		} else if combiner.hasQueuedOrRunning() {
 			return combiner, nil
 		}
+	}
+	if domain.updateCombineUnsafeAsyncAck.Load() {
+		return nil, nil
 	}
 	if !domain.updateInlineQuietAfterCombinerActivity() {
 		return nil, nil
@@ -9136,19 +9196,25 @@ func (c *Collection) updateCombiner() *collectionUpdateCombiner {
 
 func (domain *collectionWriteDomain) newUpdateCombinerLocked() *collectionUpdateCombiner {
 	shards := domain.updateCombineShardCountLocked()
+	unsafeAsyncAck := domain.updateCombineUnsafeAsyncAck.Load()
+	queueCap := defaultCollectionUpdateCombineMaxBatch * 4
+	if unsafeAsyncAck {
+		queueCap = defaultCollectionUpdateCombineUnsafeAsyncAckQueueCap
+	}
 	combiner := &collectionUpdateCombiner{
-		maxBatch: defaultCollectionUpdateCombineMaxBatch,
-		idleTTL:  domain.updateCombineIdleTTL(),
-		done:     make(chan struct{}),
-		domain:   domain,
+		maxBatch:       defaultCollectionUpdateCombineMaxBatch,
+		idleTTL:        domain.updateCombineIdleTTL(),
+		done:           make(chan struct{}),
+		domain:         domain,
+		unsafeAsyncAck: unsafeAsyncAck,
 	}
 	if shards <= 1 {
-		combiner.requests = make(chan collectionUpdateCombineRequest, defaultCollectionUpdateCombineMaxBatch*4)
+		combiner.requests = make(chan collectionUpdateCombineRequest, queueCap)
 		return combiner
 	}
 	combiner.shardedRequests = make([]chan collectionUpdateCombineRequest, shards)
 	for i := range combiner.shardedRequests {
-		combiner.shardedRequests[i] = make(chan collectionUpdateCombineRequest, defaultCollectionUpdateCombineMaxBatch*4)
+		combiner.shardedRequests[i] = make(chan collectionUpdateCombineRequest, queueCap)
 	}
 	combiner.readyShards = make(chan int, shards*4)
 	combiner.laneWorkers = domain.updateCombineLaneWorkers
@@ -9222,6 +9288,40 @@ func (domain *collectionWriteDomain) drainUpdateCombiner(mode updateCombinerDrai
 
 func (combiner *collectionUpdateCombiner) update(c *Collection, documentID []byte, update func(current []byte) (replacement []byte, changed bool, err error), bsonSet bsonSetUpdate, hasBSONSet bool) (bool, bool, error) {
 	if combiner == nil || combiner.maxBatch <= 1 {
+		if err := c.ensureWriteDomainOpen(); err != nil {
+			return false, false, err
+		}
+		if hasBSONSet {
+			return c.updateBSONSetDirect(documentID, bsonSet)
+		}
+		return c.updateDirect(documentID, update)
+	}
+	if combiner.unsafeAsyncAck {
+		req := newCollectionUpdateCombineRequest(c, documentID, update, bsonSet, hasBSONSet, nil)
+		detailedStats := combiner.domain != nil && combiner.domain.updateBatchDetailedStats.Load()
+		var enqueueStart time.Time
+		if detailedStats {
+			enqueueStart = time.Now()
+			req.queuedAt = enqueueStart
+		}
+		if combiner.enqueue(req) {
+			if detailedStats {
+				combiner.domain.observeUpdateCombineEnqueue(time.Since(enqueueStart))
+			}
+			if combiner.domain != nil {
+				combiner.domain.observeUpdateCombineUnsafeAsyncAck()
+			}
+			return true, true, nil
+		}
+		if detailedStats {
+			combiner.domain.observeUpdateCombineEnqueue(time.Since(enqueueStart))
+		}
+		// This profiling-only mode is best-effort. If the foreground admission
+		// queue saturates, fall back to the existing safe direct path so the
+		// caller gets a real result instead of dropping the update.
+		if combiner.isStopped() {
+			combiner.waitDone()
+		}
 		if err := c.ensureWriteDomainOpen(); err != nil {
 			return false, false, err
 		}
@@ -9398,7 +9498,11 @@ func (combiner *collectionUpdateCombiner) enqueue(req collectionUpdateCombineReq
 	if validateCollectionUpdateCombineRequest(req) != nil {
 		return false
 	}
-	if req.done == nil || cap(req.done) == 0 || len(req.done) > 0 {
+	if req.done == nil {
+		if !combiner.unsafeAsyncAck {
+			return false
+		}
+	} else if cap(req.done) == 0 || len(req.done) > 0 {
 		return false
 	}
 	combiner.mu.RLock()
