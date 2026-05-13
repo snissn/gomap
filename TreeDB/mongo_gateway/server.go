@@ -119,22 +119,22 @@ func parseFlags(args []string, stderr io.Writer) (cliConfig, error) {
 		return cfg, err
 	}
 	if cfg.dir == "" {
-		return cfg, errors.New("mongo gateway server: TreeDB root directory -dir is required")
+		return cfg, errors.New("TreeDB root directory -dir is required")
 	}
 	if cfg.maxFindScanDocuments < 0 {
-		return cfg, errors.New("mongo gateway server: -max-find-scan-documents must be >= 0")
+		return cfg, errors.New("-max-find-scan-documents must be >= 0")
 	}
 	if cfg.maxMessageBytes < 0 {
-		return cfg, errors.New("mongo gateway server: -max-message-bytes must be >= 0")
+		return cfg, errors.New("-max-message-bytes must be >= 0")
 	}
 	if cfg.maxCursorRetainedBytes < 0 {
-		return cfg, errors.New("mongo gateway server: -max-cursor-retained-bytes must be >= 0")
+		return cfg, errors.New("-max-cursor-retained-bytes must be >= 0")
 	}
 	if cfg.maxOpenCursors < 0 {
-		return cfg, errors.New("mongo gateway server: -max-open-cursors must be >= 0")
+		return cfg, errors.New("-max-open-cursors must be >= 0")
 	}
 	if cfg.updateCoalescingBatch < 0 {
-		return cfg, errors.New("mongo gateway server: -update-coalescing-batch must be >= 0")
+		return cfg, errors.New("-update-coalescing-batch must be >= 0")
 	}
 	return cfg, nil
 }

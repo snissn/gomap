@@ -140,9 +140,7 @@ func OpenStandaloneServer(opts StandaloneOptions) (*StandaloneServer, error) {
 	server.MaxOpenCursors = normalized.MaxOpenCursors
 	server.CursorIdleTimeout = normalized.CursorIdleTimeout
 	server.UpdateCoalescingMaxDelay = normalized.UpdateCoalescingMaxDelay
-	if normalized.UpdateCoalescingMaxBatch != 0 {
-		server.UpdateCoalescingMaxBatch = normalized.UpdateCoalescingMaxBatch
-	}
+	server.UpdateCoalescingMaxBatch = normalized.UpdateCoalescingMaxBatch
 	server.UpdateCoalescingIdleTTL = normalized.UpdateCoalescingIdleTTL
 
 	return &StandaloneServer{

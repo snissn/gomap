@@ -606,6 +606,21 @@ func TestStandaloneServerCloseIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestOpenStandaloneServerAppliesZeroUpdateCoalescingBatch(t *testing.T) {
+	standalone, err := OpenStandaloneServer(StandaloneOptions{
+		Dir:                      t.TempDir(),
+		UpdateCoalescingMaxBatch: 0,
+	})
+	if err != nil {
+		t.Fatalf("OpenStandaloneServer: %v", err)
+	}
+	defer func() { _ = standalone.Close() }()
+
+	if standalone.Server.UpdateCoalescingMaxBatch != 0 {
+		t.Fatalf("UpdateCoalescingMaxBatch=%d want explicit zero", standalone.Server.UpdateCoalescingMaxBatch)
+	}
+}
+
 func TestStandaloneServerGoRunHelp(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping go run smoke test in short mode")
@@ -674,6 +689,9 @@ func TestStandaloneServerGoRunMissingDirError(t *testing.T) {
 	if !bytes.Contains(out, []byte("TreeDB root directory -dir is required")) {
 		t.Fatalf("missing-dir output missing context:\n%s", out)
 	}
+	if got := bytes.Count(out, []byte("mongo gateway server:")); got != 1 {
+		t.Fatalf("missing-dir output has %d top-level prefixes, want 1:\n%s", got, out)
+	}
 }
 
 func TestStandaloneServerGoRunRejectsNegativeIntegerLimit(t *testing.T) {
@@ -688,6 +706,9 @@ func TestStandaloneServerGoRunRejectsNegativeIntegerLimit(t *testing.T) {
 	}
 	if !bytes.Contains(out, []byte("-max-open-cursors must be >= 0")) {
 		t.Fatalf("negative limit output missing context:\n%s", out)
+	}
+	if got := bytes.Count(out, []byte("mongo gateway server:")); got != 1 {
+		t.Fatalf("negative limit output has %d top-level prefixes, want 1:\n%s", got, out)
 	}
 }
 
