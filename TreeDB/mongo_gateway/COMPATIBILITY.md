@@ -46,6 +46,7 @@ block drifts from the executable matrix rows.
 | wire | hello command | supported |
 | wire | ping command | supported |
 | wire | connectionStatus command (#1473) | supported subset |
+| wire | hostInfo command (#1473) | supported subset |
 | crud | insert explicit _id | supported |
 | crud | find by _id equality | supported |
 | query | indexed equality and range predicates | supported subset |
@@ -109,6 +110,7 @@ throughput check.
 | Wire | `OP_COMPRESSED` | `rejected` | `TestServerRejectsCompressedMessages` | Compression negotiation is not implemented. |
 | Command | `hello` / `isMaster` | `supported subset` | `TestMongoCompatibilityMatrix`, official-driver tests | Minimal server metadata only. |
 | Command | `connectionStatus` | `supported subset` | `TestMongoCompatibilityMatrix`, `TestServerHandlesConnectionStatus` | Returns unauthenticated `authInfo` users, roles, and privileges; no auth or authorization support. |
+| Command | `hostInfo` | `supported subset` | `TestMongoCompatibilityMatrix`, `TestServerHandlesHostInfo` | Returns minimal local runtime and OS metadata only. |
 | Command | `ping` | `supported` | `TestMongoCompatibilityMatrix` | None for MVP. |
 | Command | `insert` / `insertMany` helper path | `supported subset` | `TestMongoCompatibilityMatrix`, `TestServerOfficialGoDriverBasicCRUD` | Write concern is not Mongo-compatible durability semantics yet. |
 | Command | `find` | `supported subset` | `TestMongoCompatibilityMatrix`, find planner tests | Query language is intentionally limited. |
@@ -134,9 +136,14 @@ Issue #1473 identified a MongoDB desktop-client connection failure on:
 that command with a minimal unauthenticated `authInfo` response and the
 compatibility matrix keeps it covered.
 
+The same desktop-client path later exposed
+`unsupported MongoDB gateway command: hostInfo`. The gateway now handles that
+command with minimal local runtime and OS metadata and keeps it covered in the
+matrix.
+
 This does not yet certify a full desktop GUI connection flow. If a client gets
-past `connectionStatus` and then asks for other metadata commands such as
-`buildInfo`, `listDatabases`, or `serverStatus`, add those commands as explicit
+past `connectionStatus` / `hostInfo` and then asks for other metadata commands
+such as `buildInfo`, `listDatabases`, or `serverStatus`, add those commands as explicit
 matrix rows before deciding whether to implement or reject them.
 
 ## Query Matrix

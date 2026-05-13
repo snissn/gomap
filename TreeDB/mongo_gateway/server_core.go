@@ -9,6 +9,9 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
+	"runtime"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -455,7 +458,7 @@ func bufferedMessageCanRetainRequestBody(h wire.Header, body []byte) bool {
 		return false
 	}
 	switch name {
-	case "connectionStatus", "find", "getMore", "hello", "isMaster", "ismaster", "killCursors", "listCollections", "listIndexes", "ping":
+	case "connectionStatus", "find", "getMore", "hello", "hostInfo", "isMaster", "ismaster", "killCursors", "listCollections", "listIndexes", "ping":
 		return true
 	default:
 		return false
@@ -625,6 +628,8 @@ func (s *Server) commandResponse(name string, command wire.Document, sequences [
 		return marshalDocument(helloResponse(s.maxMessageLength()))
 	case "connectionStatus":
 		return marshalDocument(connectionStatusResponse())
+	case "hostInfo":
+		return marshalDocument(hostInfoResponse())
 	case "ping":
 		return marshalDocument(bson.D{{Key: "ok", Value: 1.0}})
 	case "insert":
@@ -674,6 +679,27 @@ func connectionStatusResponse() bson.D {
 			{Key: "authenticatedUsers", Value: bson.A{}},
 			{Key: "authenticatedUserRoles", Value: bson.A{}},
 			{Key: "authenticatedUserPrivileges", Value: bson.A{}},
+		}},
+		{Key: "ok", Value: 1.0},
+	}
+}
+
+func hostInfoResponse() bson.D {
+	hostname, err := os.Hostname()
+	if err != nil {
+		hostname = ""
+	}
+	return bson.D{
+		{Key: "system", Value: bson.D{
+			{Key: "currentTime", Value: time.Now().UTC()},
+			{Key: "hostname", Value: hostname},
+			{Key: "cpuAddrSize", Value: int32(strconv.IntSize)},
+			{Key: "numCores", Value: int32(runtime.NumCPU())},
+			{Key: "cpuArch", Value: runtime.GOARCH},
+		}},
+		{Key: "os", Value: bson.D{
+			{Key: "type", Value: runtime.GOOS},
+			{Key: "name", Value: runtime.GOOS},
 		}},
 		{Key: "ok", Value: 1.0},
 	}

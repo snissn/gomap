@@ -154,6 +154,42 @@ func TestServerHandlesConnectionStatus(t *testing.T) {
 	}
 }
 
+func TestServerHandlesHostInfo(t *testing.T) {
+	commandDoc := mustDocument(t, bson.D{
+		{Key: "hostInfo", Value: int32(1)},
+		{Key: "$db", Value: "admin"},
+	})
+	req, err := wire.AppendMsgMessage(nil, 202, 0, 0, commandDoc)
+	if err != nil {
+		t.Fatalf("AppendMsgMessage: %v", err)
+	}
+	rw := &readWriter{r: bytes.NewReader(req)}
+
+	if err := NewServer().ServeOne(rw); err != nil {
+		t.Fatalf("ServeOne: %v", err)
+	}
+
+	resp := readMsgResponse(t, rw.w.Bytes(), 202)
+	assertOK(t, resp)
+	system, ok := resp.Lookup("system").DocumentOK()
+	if !ok {
+		t.Fatalf("system missing or non-document in %s", resp)
+	}
+	if _, ok := system.Lookup("hostname").StringValueOK(); !ok {
+		t.Fatalf("hostname missing or non-string in %s", system)
+	}
+	if _, ok := system.Lookup("numCores").Int32OK(); !ok {
+		t.Fatalf("numCores missing or non-int32 in %s", system)
+	}
+	osInfo, ok := resp.Lookup("os").DocumentOK()
+	if !ok {
+		t.Fatalf("os missing or non-document in %s", resp)
+	}
+	if _, ok := osInfo.Lookup("type").StringValueOK(); !ok {
+		t.Fatalf("os.type missing or non-string in %s", osInfo)
+	}
+}
+
 func TestServerRetainsReadBufferForSafeCommands(t *testing.T) {
 	commandDoc := mustDocument(t, bson.D{
 		{Key: "ping", Value: int32(1)},
@@ -216,6 +252,7 @@ func TestBufferedMessageCanRetainRequestBody(t *testing.T) {
 	}{
 		{name: "ping", doc: bson.D{{Key: "ping", Value: int32(1)}, {Key: "$db", Value: "admin"}}, want: true},
 		{name: "connectionStatus", doc: bson.D{{Key: "connectionStatus", Value: int32(1)}, {Key: "$db", Value: "admin"}}, want: true},
+		{name: "hostInfo", doc: bson.D{{Key: "hostInfo", Value: int32(1)}, {Key: "$db", Value: "admin"}}, want: true},
 		{name: "find", doc: bson.D{{Key: "find", Value: "users"}, {Key: "$db", Value: "app"}}, want: true},
 		{name: "update", doc: bson.D{{Key: "update", Value: "users"}, {Key: "updates", Value: bson.A{}}, {Key: "$db", Value: "app"}}, want: false},
 		{name: "insert", doc: bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}}}}, {Key: "$db", Value: "app"}}, want: false},

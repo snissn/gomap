@@ -77,6 +77,29 @@ func mongoCompatibilityMatrixRows() []mongoCompatibilityMatrixRow {
 			},
 		},
 		{
+			category: "wire",
+			feature:  "hostInfo command (#1473)",
+			status:   "supported subset",
+			probe: func(t *testing.T, server *Server) {
+				resp := serveCommand(t, server, 25, bson.D{{Key: "hostInfo", Value: int32(1)}, {Key: "$db", Value: "admin"}})
+				assertOK(t, resp)
+				system, ok := resp.Lookup("system").DocumentOK()
+				if !ok {
+					t.Fatalf("system missing or non-document in %s", resp)
+				}
+				if _, ok := system.Lookup("hostname").StringValueOK(); !ok {
+					t.Fatalf("hostname missing or non-string in %s", system)
+				}
+				osInfo, ok := resp.Lookup("os").DocumentOK()
+				if !ok {
+					t.Fatalf("os missing or non-document in %s", resp)
+				}
+				if _, ok := osInfo.Lookup("type").StringValueOK(); !ok {
+					t.Fatalf("os.type missing or non-string in %s", osInfo)
+				}
+			},
+		},
+		{
 			category: "crud",
 			feature:  "insert explicit _id",
 			status:   "supported",

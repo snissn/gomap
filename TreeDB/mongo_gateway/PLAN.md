@@ -287,8 +287,8 @@ Priority workloads:
   `TestMongoCompatibilityMatrix`, a compact issue-1493 matrix that probes
   representative supported and rejected Mongo gateway paths.
 - Current desktop-client compatibility slice handles the issue-1473
-  `connectionStatus` failure with a minimal unauthenticated response and keeps
-  it covered in the matrix.
+  `connectionStatus` and `hostInfo` failures with minimal metadata responses
+  and keeps them covered in the matrix.
 - Current smoke slice adds `scripts/mongo_gateway_compat_smoke.sh`, a small
   TreeDB-vs-MongoDB driver workload wrapper around the comparison harness that
   reports naive throughput and exits nonzero if the supported path breaks.
