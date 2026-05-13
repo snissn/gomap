@@ -69,6 +69,9 @@ func TestRunBenchmark_ReadSnapshotAppendOnlyGuardrail(t *testing.T) {
 }
 
 func TestRunBenchmark_ProfileFastReadRequireHitBeforeCheckpoint(t *testing.T) {
+	if testing.Short() {
+		t.Skip("profile-fast read-require-hit regression guardrail is intentionally heavy")
+	}
 	withTreeDBFastReadRequireHitFlags(t)
 
 	for attempt := 1; attempt <= 3; attempt++ {
