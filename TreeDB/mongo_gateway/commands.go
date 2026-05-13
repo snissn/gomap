@@ -401,6 +401,24 @@ func (s *Server) updateResponse(command wire.Document, sequences []wire.Document
 		}
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
+	if len(updates) == 1 {
+		item, err := parseMongoUpdateItem(0, updates[0])
+		if err != nil {
+			return mongoUpdateParseCommandError(err)
+		}
+		matchedOne, modifiedOne, err := s.runMongoUpdateCoalesced(name, col, item)
+		if err != nil {
+			return mongoUpdateWriteCommandError(err)
+		}
+		var matched, modified int32
+		if matchedOne {
+			matched = 1
+		}
+		if modifiedOne {
+			modified = 1
+		}
+		return marshalUpdateResponse(matched, modified)
+	}
 	parsed := make([]mongoUpdateItem, 0, len(updates))
 	seenKeys := make(map[string]struct{}, len(updates))
 	hasDuplicateKey := false
@@ -450,7 +468,7 @@ type mongoUpdateItem struct {
 	index         int
 	key           []byte
 	updateDoc     wire.Document
-	setFields     map[string]struct{}
+	setFieldNames []string
 	bsonSetFields []collections.BSONSetField
 	setFieldsOK   bool
 }
@@ -492,8 +510,8 @@ func parseMongoUpdateItem(index int, update wire.Document) (mongoUpdateItem, err
 	if err != nil {
 		return mongoUpdateItem{}, mongoUpdateParseError{code: commandCodeFailedToParse, codeName: "FailedToParse", message: fmt.Sprintf("updates[%d]: %v", index, err)}
 	}
-	setFields, bsonSetFields, setFieldsOK := mongoSetUpdateFields(updateDoc)
-	return mongoUpdateItem{index: index, key: key, updateDoc: updateDoc, setFields: setFields, bsonSetFields: bsonSetFields, setFieldsOK: setFieldsOK}, nil
+	setFieldNames, bsonSetFields, setFieldsOK := mongoSetUpdateFields(updateDoc)
+	return mongoUpdateItem{index: index, key: key, updateDoc: updateDoc, setFieldNames: setFieldNames, bsonSetFields: bsonSetFields, setFieldsOK: setFieldsOK}, nil
 }
 
 func mongoUpdateParseCommandError(err error) (wire.Document, error) {
@@ -581,7 +599,8 @@ func runMongoUpdateBatchResults(col *collections.Collection, updates []mongoUpda
 		return make([]collections.UpdateBatchResult, len(updates)), false, nil
 	}
 	if mongoUpdateItemsCanUseBSONSet(col, updates) {
-		items := make([]collections.BSONSetUpdateBatchItem, len(updates))
+		items := getMongoBSONSetUpdateBatchItems(len(updates))
+		defer putMongoBSONSetUpdateBatchItems(items)
 		for i, update := range updates {
 			items[i] = collections.BSONSetUpdateBatchItem{
 				DocumentID: update.key,
@@ -656,6 +675,16 @@ type mongoUpdateCoalescer struct {
 	enqueueMu sync.Mutex
 }
 
+var mongoUpdateResultChanPool = sync.Pool{
+	New: func() any {
+		return make(chan mongoUpdateCoalescerResult, 1)
+	},
+}
+
+var mongoBSONSetUpdateBatchItemPool sync.Pool
+
+const mongoBSONSetUpdateBatchItemPoolMaxCap = maxUpdateCoalescingBatch
+
 type mongoUpdateCoalescerRequest struct {
 	col  *collections.Collection
 	item mongoUpdateItem
@@ -676,12 +705,59 @@ func (s *Server) runMongoUpdateCoalesced(name string, col *collections.Collectio
 	if coalescer == nil {
 		return runMongoUpdateOne(col, update)
 	}
-	done := make(chan mongoUpdateCoalescerResult, 1)
+	done := getMongoUpdateResultChan()
+	defer putMongoUpdateResultChan(done)
 	if !coalescer.enqueue(mongoUpdateCoalescerRequest{col: col, item: update, done: done}) {
 		return runMongoUpdateOne(col, update)
 	}
 	result := coalescer.waitForUpdateResult(done)
 	return result.matched, result.modified, result.err
+}
+
+func getMongoUpdateResultChan() chan mongoUpdateCoalescerResult {
+	ch, _ := mongoUpdateResultChanPool.Get().(chan mongoUpdateCoalescerResult)
+	if ch == nil {
+		return make(chan mongoUpdateCoalescerResult, 1)
+	}
+	for {
+		select {
+		case <-ch:
+			continue
+		default:
+			return ch
+		}
+	}
+}
+
+func putMongoUpdateResultChan(ch chan mongoUpdateCoalescerResult) {
+	if ch == nil || cap(ch) != 1 {
+		return
+	}
+	select {
+	case <-ch:
+	default:
+	}
+	mongoUpdateResultChanPool.Put(ch)
+}
+
+func getMongoBSONSetUpdateBatchItems(count int) []collections.BSONSetUpdateBatchItem {
+	if count <= 0 {
+		return nil
+	}
+	if v := mongoBSONSetUpdateBatchItemPool.Get(); v != nil {
+		if items, ok := v.([]collections.BSONSetUpdateBatchItem); ok && cap(items) >= count {
+			return items[:count]
+		}
+	}
+	return make([]collections.BSONSetUpdateBatchItem, count)
+}
+
+func putMongoBSONSetUpdateBatchItems(items []collections.BSONSetUpdateBatchItem) {
+	if cap(items) == 0 || cap(items) > mongoBSONSetUpdateBatchItemPoolMaxCap {
+		return
+	}
+	clear(items)
+	mongoBSONSetUpdateBatchItemPool.Put(items[:0])
 }
 
 func (c *mongoUpdateCoalescer) waitForUpdateResult(done chan mongoUpdateCoalescerResult) mongoUpdateCoalescerResult {
@@ -1132,14 +1208,16 @@ func mongoUpdateSetFieldsTouchSecondaryUniqueIndexMeta(meta collections.Collecti
 		if !idx.Unique {
 			continue
 		}
-		if _, ok := update.setFields[idx.Field]; ok {
-			return true
+		for _, field := range update.setFieldNames {
+			if field == idx.Field {
+				return true
+			}
 		}
 	}
 	return false
 }
 
-func mongoSetUpdateFields(updateDoc wire.Document) (map[string]struct{}, []collections.BSONSetField, bool) {
+func mongoSetUpdateFields(updateDoc wire.Document) ([]string, []collections.BSONSetField, bool) {
 	updateElements, err := bson.Raw(updateDoc).Elements()
 	if err != nil || len(updateElements) != 1 {
 		return nil, nil, false
@@ -1152,20 +1230,11 @@ func mongoSetUpdateFields(updateDoc wire.Document) (map[string]struct{}, []colle
 	if !ok {
 		return nil, nil, false
 	}
-	sets, order, err := parseSetDocument(setDoc)
+	order, fields, err := parseBSONSetUpdateFields(setDoc)
 	if err != nil {
 		return nil, nil, false
 	}
-	out := make(map[string]struct{}, len(order))
-	fields := make([]collections.BSONSetField, 0, len(order))
-	for _, field := range order {
-		out[field] = struct{}{}
-		fields = append(fields, collections.BSONSetField{
-			Key:   field,
-			Value: sets[field],
-		})
-	}
-	return out, fields, true
+	return order, fields, true
 }
 
 func (s *Server) deleteResponse(command wire.Document, sequences []wire.DocumentSequence) (wire.Document, error) {
@@ -2840,6 +2909,44 @@ func parseSetDocument(doc bson.Raw) (map[string]bson.RawValue, []string, error) 
 		sets[key] = value
 	}
 	return sets, order, nil
+}
+
+func parseBSONSetUpdateFields(doc bson.Raw) ([]string, []collections.BSONSetField, error) {
+	elements, err := doc.Elements()
+	if err != nil {
+		return nil, nil, err
+	}
+	order := make([]string, 0, len(elements))
+	fields := make([]collections.BSONSetField, 0, len(elements))
+	for _, elem := range elements {
+		key, err := elem.KeyErr()
+		if err != nil {
+			return nil, nil, err
+		}
+		if err := validateSetFieldName(key); err != nil {
+			return nil, nil, err
+		}
+		value := elem.Value()
+		if err := validateSupportedValue(key, value); err != nil {
+			return nil, nil, err
+		}
+		if idx := bsonSetUpdateFieldIndex(fields, key); idx >= 0 {
+			fields[idx].Value = value
+			continue
+		}
+		order = append(order, key)
+		fields = append(fields, collections.BSONSetField{Key: key, Value: value})
+	}
+	return order, fields, nil
+}
+
+func bsonSetUpdateFieldIndex(fields []collections.BSONSetField, key string) int {
+	for i := range fields {
+		if fields[i].Key == key {
+			return i
+		}
+	}
+	return -1
 }
 
 func parseSetFieldNames(doc bson.Raw) ([]string, error) {
