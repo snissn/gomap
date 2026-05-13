@@ -188,6 +188,16 @@ the single-queue combiner. Values above `1` shard request ingress by document ID
 while preserving one global merged publish batch, and benchmark rows report
 `update_combine_shards` so shard-count runs are not mixed accidentally.
 
+For sharded-combiner proof-of-concept runs, add
+`MONGO_GATEWAY_PROFILE_BENCH_UPDATE_COMBINE_LANE_WORKERS=true` to let each
+document-ID shard prepare direct buffered update plans concurrently, then merge
+prepared plans back into one global buffer/publish path. Add
+`MONGO_GATEWAY_PROFILE_BENCH_UPDATE_COMBINE_UNSAFE_STALE_DIRECT_PLANS=true` only
+for controlled benchmark shapes with non-overlapping document IDs and unchanged
+unique secondary indexes. That stale-plan flag is intentionally profiling-only:
+it validates throughput headroom before the production conflict protocol is
+implemented.
+
 ## MongoDB Target
 
 ```sh
