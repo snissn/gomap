@@ -1907,6 +1907,20 @@ func (domain *collectionWriteDomain) addCountLocked(delta int) {
 	domain.setCountLocked(domain.count + delta)
 }
 
+func (domain *collectionWriteDomain) markPendingMutationLocked(delta int) {
+	if domain == nil {
+		return
+	}
+	pending := domain.count
+	if delta > pending {
+		pending = delta
+	}
+	if pending <= 0 {
+		pending = 1
+	}
+	domain.pendingCount.Store(int64(pending))
+}
+
 func (domain *collectionWriteDomain) observeIndexedStage(docs int, bytes int64, rootRuns int) {
 	if domain == nil {
 		return
@@ -3071,6 +3085,7 @@ func (c *Collection) insertOneNoIndexBuffered(id, document []byte) ([]byte, erro
 		}
 	}
 	domain.storagePolicy = plannerOptions.dataStoragePolicy
+	domain.markPendingMutationLocked(1)
 	domain.table.SetEntry(id, document, page.ValuePtr{}, node.FlagInline)
 	domain.addCountLocked(1)
 	resultID := bytes.Clone(id)
@@ -3205,6 +3220,7 @@ func (c *Collection) bufferNoIndexInsertBatch(
 		}
 	}
 	domain.storagePolicy = currentOptions.dataStoragePolicy
+	domain.markPendingMutationLocked(len(entries))
 	for _, entry := range entries {
 		domain.table.SetEntry(entry.id, entry.document, page.ValuePtr{}, node.FlagInline)
 	}

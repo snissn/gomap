@@ -7771,6 +7771,47 @@ func TestFlushBufferedNoIndexCleanDomainSkipsWriteDomainLock(t *testing.T) {
 	}
 }
 
+func TestFlushBufferedNoIndexPendingMutationSynchronizesWithWriteDomainLock(t *testing.T) {
+	domain := &collectionWriteDomain{}
+	col := &Collection{writeDomain: domain}
+	domain.markPendingMutationLocked(1)
+
+	domain.mu.Lock()
+	unlocked := false
+	unlock := func() {
+		if !unlocked {
+			domain.mu.Unlock()
+			unlocked = true
+		}
+	}
+	defer unlock()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- col.flushBufferedNoIndex()
+	}()
+
+	select {
+	case err := <-done:
+		unlock()
+		if err != nil {
+			t.Fatalf("flush pending mutation: %v", err)
+		}
+		t.Fatal("flushBufferedNoIndex returned while a pending mutation held the write domain")
+	case <-time.After(collectionTestTimeout(t, 50*time.Millisecond)):
+	}
+
+	unlock()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("flush pending mutation after unlock: %v", err)
+		}
+	case <-time.After(collectionTestTimeout(t, time.Second)):
+		t.Fatal("flushBufferedNoIndex did not complete after pending mutation lock released")
+	}
+}
+
 func TestCollectionSingleInsertBufferedNoIndexRejectsBufferedDuplicate(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
