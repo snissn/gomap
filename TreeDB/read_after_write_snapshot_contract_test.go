@@ -26,6 +26,9 @@ type queuedSnapshotContractAppendGetter interface {
 
 func openQueuedSnapshotContractDB(t *testing.T, profile Profile, keys int) *DB {
 	t.Helper()
+	if testing.Short() {
+		t.Skip("queued snapshot read-after-write regression matrix is intentionally heavy")
+	}
 
 	opts := OptionsFor(profile, t.TempDir())
 	opts.FlushThreshold = 1 << 30
