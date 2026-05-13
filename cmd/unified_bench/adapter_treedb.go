@@ -447,18 +447,14 @@ func formatTreeDBLeafPageReadCacheEntries(entries int) string {
 	case entries < 0:
 		return "disabled"
 	case entries == 0:
-		return fmt.Sprintf("default/env (effective=%d)", effectiveTreeDBLeafPageReadCacheEntries(entries))
+		effective, err := treedbdb.ResolveLeafPageReadCacheEntries(entries)
+		if err != nil {
+			return fmt.Sprintf("default/env (invalid: %v)", err)
+		}
+		return fmt.Sprintf("default/env (effective=%d)", effective)
 	default:
 		return fmt.Sprintf("%d", entries)
 	}
-}
-
-func effectiveTreeDBLeafPageReadCacheEntries(entries int) int {
-	effective, err := treedbdb.ResolveLeafPageReadCacheEntries(entries)
-	if err != nil {
-		return 0
-	}
-	return effective
 }
 
 func formatTreeDBVlogCompression(mode treedb.ValueLogCompressionMode) string {
@@ -815,6 +811,9 @@ func buildTreeDBOptions(dir string) (treedb.Options, treeDBOptionsReport, error)
 	}
 	if opts.ValueLog.ForcePointers && opts.ValueLog.PointerThreshold > 0 {
 		notes = append(notes, "vlog.force_pointers=true: pointer_threshold does not affect pointer eligibility")
+	}
+	if _, err := treedbdb.ResolveLeafPageReadCacheEntries(opts.LeafPageReadCacheEntries); err != nil {
+		return treedb.Options{}, treeDBOptionsReport{}, err
 	}
 
 	rep := treeDBOptionsReport{opts: opts, maintenanceMode: maintenanceMode, notes: notes, warnings: warnings}

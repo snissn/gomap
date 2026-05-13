@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -70,6 +71,34 @@ func TestBuildTreeDBOptions_LeafPageReadCacheEntriesDefaultReportsEffective(t *t
 	}
 	if got := rep.formatText(""); !strings.Contains(got, "outer_leaf_read_cache_entries=default/env (effective=32768)") {
 		t.Fatalf("resolved options missing effective default cache entries: %q", got)
+	}
+}
+
+func TestBuildTreeDBOptions_LeafPageReadCacheEntriesDefaultRejectsInvalidEnv(t *testing.T) {
+	saved := saveTreeDBFlagState()
+	defer restoreTreeDBFlagState(saved)
+	t.Setenv(treedbdb.LeafPageReadCacheEntriesEnvKey, strconv.Itoa(1<<30))
+
+	resetTreeDBIndexFlagsForTest()
+
+	_, _, err := buildTreeDBOptions("")
+	if err == nil {
+		t.Fatal("buildTreeDBOptions unexpectedly accepted invalid leaf page read cache env")
+	}
+	if !strings.Contains(err.Error(), "leaf page read cache entries") {
+		t.Fatalf("buildTreeDBOptions error=%q, want leaf page read cache context", err)
+	}
+}
+
+func TestFormatTreeDBLeafPageReadCacheEntriesDefaultReportsInvalidEnv(t *testing.T) {
+	t.Setenv(treedbdb.LeafPageReadCacheEntriesEnvKey, strconv.Itoa(1<<30))
+
+	got := formatTreeDBLeafPageReadCacheEntries(0)
+	if strings.Contains(got, "effective=0") {
+		t.Fatalf("formatTreeDBLeafPageReadCacheEntries()=%q, must not mask invalid env as effective=0", got)
+	}
+	if !strings.Contains(got, "default/env (invalid:") {
+		t.Fatalf("formatTreeDBLeafPageReadCacheEntries()=%q, want invalid default/env state", got)
 	}
 }
 

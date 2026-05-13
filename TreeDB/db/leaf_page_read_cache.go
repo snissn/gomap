@@ -17,7 +17,6 @@ const (
 	// LeafPageReadCacheEntriesEnvKey names the environment variable that
 	// overrides the process default when Options.LeafPageReadCacheEntries is 0.
 	LeafPageReadCacheEntriesEnvKey  = "TREEDB_LEAF_PAGE_CACHE_ENTRIES"
-	leafPageReadCacheEntriesEnvKey  = LeafPageReadCacheEntriesEnvKey
 	defaultLeafPageReadCacheEntries = 32768
 	maxLeafPageReadCacheEntries     = 1 << 18
 	// Bound miss-admission observer retries so high contention yields a skipped
@@ -52,7 +51,7 @@ func resolveLeafPageReadCacheEntries(optionEntries int) (int, error) {
 	if optionEntries > 0 {
 		return validateLeafPageReadCacheEntries(optionEntries)
 	}
-	if raw := strings.TrimSpace(os.Getenv(leafPageReadCacheEntriesEnvKey)); raw != "" {
+	if raw := strings.TrimSpace(os.Getenv(LeafPageReadCacheEntriesEnvKey)); raw != "" {
 		if v, err := strconv.Atoi(raw); err == nil && v >= 0 {
 			return validateLeafPageReadCacheEntries(v)
 		}
