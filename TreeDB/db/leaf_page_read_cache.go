@@ -32,6 +32,8 @@ var LeafPageReadCacheEntries = defaultLeafPageReadCacheEntries
 
 // ResolveLeafPageReadCacheEntries returns the effective cache size for an
 // Options.LeafPageReadCacheEntries value after applying process/env defaults.
+// It returns an error when the explicit option, environment override, or process
+// default resolves outside the supported cache-size range.
 func ResolveLeafPageReadCacheEntries(optionEntries int) (int, error) {
 	return resolveLeafPageReadCacheEntries(optionEntries)
 }
