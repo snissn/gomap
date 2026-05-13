@@ -6,12 +6,15 @@ collections to MongoDB clients.
 The standalone server can be run directly from this directory-level entrypoint:
 
 ```sh
-go run ./TreeDB/mongo_gateway/server.go \
+GOWORK=off go run ./TreeDB/mongo_gateway/server.go \
   -addr 127.0.0.1:27017 \
   -dir /tmp/treedb-mongo-gateway \
   -profile durable \
   -document-format bson
 ```
+
+`GOWORK=off` keeps `go run` from resolving the gateway library through a parent
+workspace that replaces `github.com/snissn/gomap` with another checkout.
 
 Equivalent Makefile targets from the repository root:
 

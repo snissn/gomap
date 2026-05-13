@@ -20,6 +20,7 @@ MONGO_GATEWAY_ADDR ?= 127.0.0.1:27017
 MONGO_GATEWAY_DIR ?= /tmp/treedb-mongo-gateway
 MONGO_GATEWAY_PROFILE ?= durable
 MONGO_GATEWAY_DOCUMENT_FORMAT ?= bson
+MONGO_GATEWAY_GO_ENV ?= GOWORK=off
 
 .PHONY: help
 help:
@@ -130,7 +131,7 @@ build-treedb:
 
 build-mongo-gateway:
 	mkdir -p $(BIN_DIR)
-	go build -o $(BIN_DIR)/treedb-mongo-gateway ./$(MONGO_GATEWAY_SERVER)
+	$(MONGO_GATEWAY_GO_ENV) go build -o $(BIN_DIR)/treedb-mongo-gateway ./$(MONGO_GATEWAY_SERVER)
 
 treemap:
 	go build -o treemap ./TreeDB/cmd/treemap
@@ -192,7 +193,7 @@ benchmark-quick: build-hashdb
 .PHONY: run-mongo-gateway run-hashdb run-badger
 
 run-mongo-gateway:
-	go run ./$(MONGO_GATEWAY_SERVER) -addr "$(MONGO_GATEWAY_ADDR)" -dir "$(MONGO_GATEWAY_DIR)" -profile "$(MONGO_GATEWAY_PROFILE)" -document-format "$(MONGO_GATEWAY_DOCUMENT_FORMAT)"
+	$(MONGO_GATEWAY_GO_ENV) go run ./$(MONGO_GATEWAY_SERVER) -addr "$(MONGO_GATEWAY_ADDR)" -dir "$(MONGO_GATEWAY_DIR)" -profile "$(MONGO_GATEWAY_PROFILE)" -document-format "$(MONGO_GATEWAY_DOCUMENT_FORMAT)"
 
 run-hashdb:
 	cd $(HASHDB_DIR) && go run ./redisserver/main.go hashdb /tmp/hashdb-benchmark
