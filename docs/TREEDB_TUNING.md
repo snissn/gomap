@@ -237,7 +237,7 @@ update, and maintenance work.
   DB. `0` uses the process default/env override, `<0` disables the cache, and
   `>0` sets an explicit slot count.
 - `TREEDB_LEAF_PAGE_CACHE_ENTRIES` sets the process default slot count when the
-  option is left at `0`. The default is 4096 entries, or about 16 MiB of
+  option is left at `0`. The default is 32768 entries, or about 128 MiB of
   leaf-page payloads. Set the env var to `0` to disable the cache for DBs that
   do not set `Options.LeafPageReadCacheEntries`.
 - Explicit and env-derived cache sizes are capped at 262144 entries to fail

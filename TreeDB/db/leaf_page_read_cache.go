@@ -14,8 +14,10 @@ import (
 )
 
 const (
-	leafPageReadCacheEntriesEnvKey  = "TREEDB_LEAF_PAGE_CACHE_ENTRIES"
-	defaultLeafPageReadCacheEntries = 4096
+	// LeafPageReadCacheEntriesEnvKey names the environment variable that
+	// overrides the process default when Options.LeafPageReadCacheEntries is 0.
+	LeafPageReadCacheEntriesEnvKey  = "TREEDB_LEAF_PAGE_CACHE_ENTRIES"
+	defaultLeafPageReadCacheEntries = 32768
 	maxLeafPageReadCacheEntries     = 1 << 18
 	// Bound miss-admission observer retries so high contention yields a skipped
 	// admission instead of unbounded reader spinning. 64 odd-epoch yields cover
@@ -27,6 +29,14 @@ const (
 )
 
 var LeafPageReadCacheEntries = defaultLeafPageReadCacheEntries
+
+// ResolveLeafPageReadCacheEntries returns the effective cache size for an
+// Options.LeafPageReadCacheEntries value after applying process/env defaults.
+// It returns an error when the explicit option, environment override, or process
+// default resolves outside the supported cache-size range.
+func ResolveLeafPageReadCacheEntries(optionEntries int) (int, error) {
+	return resolveLeafPageReadCacheEntries(optionEntries)
+}
 
 func configuredLeafPageReadCacheEntries(optionEntries int) int {
 	entries, err := resolveLeafPageReadCacheEntries(optionEntries)
@@ -43,7 +53,7 @@ func resolveLeafPageReadCacheEntries(optionEntries int) (int, error) {
 	if optionEntries > 0 {
 		return validateLeafPageReadCacheEntries(optionEntries)
 	}
-	if raw := strings.TrimSpace(os.Getenv(leafPageReadCacheEntriesEnvKey)); raw != "" {
+	if raw := strings.TrimSpace(os.Getenv(LeafPageReadCacheEntriesEnvKey)); raw != "" {
 		if v, err := strconv.Atoi(raw); err == nil && v >= 0 {
 			return validateLeafPageReadCacheEntries(v)
 		}
