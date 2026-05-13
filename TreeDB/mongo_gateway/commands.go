@@ -17,13 +17,14 @@ import (
 )
 
 const (
-	commandCodeBadValue            int32 = 2
-	commandCodeFailedToParse       int32 = 9
-	commandCodeNamespaceNotFound   int32 = 26
-	commandCodeIndexNotFound       int32 = 27
-	commandCodeCursorNotFound      int32 = 43
-	commandCodeDuplicateKey        int32 = 11000
-	maxWireMessageLengthInt32Limit       = int64(1<<31 - 1)
+	commandCodeBadValue                        int32 = 2
+	commandCodeFailedToParse                   int32 = 9
+	commandCodeNamespaceNotFound               int32 = 26
+	commandCodeIndexNotFound                   int32 = 27
+	commandCodeCursorNotFound                  int32 = 43
+	commandCodeDuplicateKey                    int32 = 11000
+	maxWireMessageLengthInt32Limit                   = int64(1<<31 - 1)
+	mongoGatewayCollectionManagerNotConfigured       = "Mongo gateway collection manager is not configured"
 )
 
 const primaryKeyPrefixBSONValue byte = 1
@@ -32,7 +33,7 @@ var maxInt = int(^uint(0) >> 1)
 
 func (s *Server) insertResponse(command wire.Document, sequences []wire.DocumentSequence) (wire.Document, error) {
 	if s.Collections == nil {
-		return commandError(commandCodeBadValue, "BadValue", "Mongo gateway collection manager is not configured")
+		return commandError(commandCodeBadValue, "BadValue", mongoGatewayCollectionManagerNotConfigured)
 	}
 	collection, err := commandString(command, "insert")
 	if err != nil {
@@ -283,7 +284,7 @@ func (s *Server) findMsgResponseInto(dst []byte, command wire.Document, requestI
 
 func (s *Server) findResponsePayload(command wire.Document, cursorOwner int64) (findResponsePayload, error) {
 	if s.Collections == nil {
-		doc, err := commandError(commandCodeBadValue, "BadValue", "Mongo gateway collection manager is not configured")
+		doc, err := commandError(commandCodeBadValue, "BadValue", mongoGatewayCollectionManagerNotConfigured)
 		return findResponsePayload{document: doc}, err
 	}
 	collection, err := commandString(command, "find")
@@ -442,7 +443,7 @@ func (s *Server) findResponsePayload(command wire.Document, cursorOwner int64) (
 
 func (s *Server) updateResponse(command wire.Document, sequences []wire.DocumentSequence) (wire.Document, error) {
 	if s.Collections == nil {
-		return commandError(commandCodeBadValue, "BadValue", "Mongo gateway collection manager is not configured")
+		return commandError(commandCodeBadValue, "BadValue", mongoGatewayCollectionManagerNotConfigured)
 	}
 	collection, err := commandString(command, "update")
 	if err != nil {
@@ -1237,7 +1238,7 @@ func mongoSetUpdateFields(updateDoc wire.Document) (map[string]struct{}, []colle
 
 func (s *Server) deleteResponse(command wire.Document, sequences []wire.DocumentSequence) (wire.Document, error) {
 	if s.Collections == nil {
-		return commandError(commandCodeBadValue, "BadValue", "Mongo gateway collection manager is not configured")
+		return commandError(commandCodeBadValue, "BadValue", mongoGatewayCollectionManagerNotConfigured)
 	}
 	collection, err := commandString(command, "delete")
 	if err != nil {
@@ -1296,7 +1297,7 @@ func (s *Server) deleteResponse(command wire.Document, sequences []wire.Document
 
 func (s *Server) listCollectionsResponse(command wire.Document) (wire.Document, error) {
 	if s.Collections == nil {
-		return commandError(commandCodeBadValue, "BadValue", "Mongo gateway collection manager is not configured")
+		return commandError(commandCodeBadValue, "BadValue", mongoGatewayCollectionManagerNotConfigured)
 	}
 	db, err := commandString(command, "$db")
 	if err != nil {
@@ -1339,7 +1340,7 @@ func (s *Server) listCollectionsResponse(command wire.Document) (wire.Document, 
 
 func (s *Server) createIndexesResponse(command wire.Document) (wire.Document, error) {
 	if s.Collections == nil {
-		return commandError(commandCodeBadValue, "BadValue", "Mongo gateway collection manager is not configured")
+		return commandError(commandCodeBadValue, "BadValue", mongoGatewayCollectionManagerNotConfigured)
 	}
 	collection, err := commandString(command, "createIndexes")
 	if err != nil {
@@ -1421,7 +1422,7 @@ func (s *Server) createIndexesResponse(command wire.Document) (wire.Document, er
 
 func (s *Server) listIndexesResponse(command wire.Document) (wire.Document, error) {
 	if s.Collections == nil {
-		return commandError(commandCodeBadValue, "BadValue", "Mongo gateway collection manager is not configured")
+		return commandError(commandCodeBadValue, "BadValue", mongoGatewayCollectionManagerNotConfigured)
 	}
 	collection, err := commandString(command, "listIndexes")
 	if err != nil {
@@ -1447,7 +1448,7 @@ func (s *Server) listIndexesResponse(command wire.Document) (wire.Document, erro
 
 func (s *Server) dropIndexesResponse(command wire.Document) (wire.Document, error) {
 	if s.Collections == nil {
-		return commandError(commandCodeBadValue, "BadValue", "Mongo gateway collection manager is not configured")
+		return commandError(commandCodeBadValue, "BadValue", mongoGatewayCollectionManagerNotConfigured)
 	}
 	collection, err := commandString(command, "dropIndexes")
 	if err != nil {

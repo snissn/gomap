@@ -92,6 +92,53 @@ func TestCollectionManagerOpenCollectionCacheRejectsClosedDB(t *testing.T) {
 	}
 }
 
+func TestCollectionCachedCatalogIsCurrent(t *testing.T) {
+	var nilCol *Collection
+	if nilCol.CachedCatalogIsCurrent() {
+		t.Fatal("nil collection reported current catalog")
+	}
+	if (&Collection{}).CachedCatalogIsCurrent() {
+		t.Fatal("collection with nil DB reported current catalog")
+	}
+
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create users: %v", err)
+	}
+	stale, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open stale users handle: %v", err)
+	}
+	if !stale.CachedCatalogIsCurrent() {
+		t.Fatal("freshly opened users handle reported stale catalog")
+	}
+
+	mutator, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open mutator users handle: %v", err)
+	}
+	if _, err := mutator.CreateIndex(IndexDefinition{Name: "email", Field: "email", ValueType: IndexValueString}); err != nil {
+		t.Fatalf("create email index: %v", err)
+	}
+	if stale.CachedCatalogIsCurrent() {
+		t.Fatal("pre-schema-change users handle reported current catalog")
+	}
+
+	current, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open current users handle: %v", err)
+	}
+	if !current.CachedCatalogIsCurrent() {
+		t.Fatal("post-schema-change users handle reported stale catalog")
+	}
+}
+
 func TestCollectionMetaReturnsDefensiveIndexCopyAcrossHandles(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

@@ -97,7 +97,7 @@ func NewServer() *Server {
 
 func (s *Server) openCollection(name string) (*collections.Collection, error) {
 	if s == nil || s.Collections == nil {
-		return nil, errors.New("mongo gateway collection manager is not configured")
+		return nil, errors.New(mongoGatewayCollectionManagerNotConfigured)
 	}
 	s.collectionMu.RLock()
 	cached := s.collections[name]
