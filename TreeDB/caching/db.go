@@ -7657,7 +7657,7 @@ func (db *DB) releasePublishedMemtableView(view *memtableView) {
 }
 
 func (db *DB) releaseUntrackedMemtableView(view *memtableView) {
-	db.releaseMemtableViewRef(view, false, true)
+	db.releaseMemtableViewRef(view, false, false)
 }
 
 func (db *DB) releaseMemtableViewRef(view *memtableView, leaseRelease bool, readerRelease bool) {
