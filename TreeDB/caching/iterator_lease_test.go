@@ -160,41 +160,41 @@ func TestIterator_QueuedViewLeaseHeldUntilClose(t *testing.T) {
 	db.retiredMemtablesMu.Lock()
 	deferredRetired := len(db.deferredRetiredMemtables)
 	db.retiredMemtablesMu.Unlock()
-	if deferredRetired != 1 {
-		t.Fatalf("global deferred retired memtables after publish=%d want=1", deferredRetired)
+	if deferredRetired != 0 {
+		t.Fatalf("global deferred retired memtables after publish=%d want=0 for immediate old view hold", deferredRetired)
 	}
-	if got := mustIteratorLeaseStatInt64(t, deferredStats, "treedb.cache.memtable_view.deferred_views_current"); got != 0 {
-		t.Fatalf("deferred_views_current after publish=%d want=0 with global retired hold", got)
+	if got := mustIteratorLeaseStatInt64(t, deferredStats, "treedb.cache.memtable_view.deferred_views_current"); got != 1 {
+		t.Fatalf("deferred_views_current after publish=%d want=1 for immediate old view hold", got)
 	}
-	if got := mustIteratorLeaseStatInt64(t, deferredStats, "treedb.cache.memtable_view.deferred_views_total"); got != deferredViewsTotalBefore {
-		t.Fatalf("deferred_views_total after publish=%d want=%d", got, deferredViewsTotalBefore)
+	if got := mustIteratorLeaseStatInt64(t, deferredStats, "treedb.cache.memtable_view.deferred_views_total"); got != deferredViewsTotalBefore+1 {
+		t.Fatalf("deferred_views_total after publish=%d want=%d", got, deferredViewsTotalBefore+1)
 	}
-	if got := mustIteratorLeaseStatInt64(t, deferredStats, "treedb.cache.memtable_view.deferred_memtables_current"); got != 0 {
-		t.Fatalf("deferred_memtables_current after publish=%d want=0 with global retired hold", got)
+	if got := mustIteratorLeaseStatInt64(t, deferredStats, "treedb.cache.memtable_view.deferred_memtables_current"); got != 1 {
+		t.Fatalf("deferred_memtables_current after publish=%d want=1 for immediate old view hold", got)
 	}
-	if got := mustIteratorLeaseStatInt64(t, deferredStats, "treedb.cache.memtable_view.deferred_memtables_total"); got != deferredMemtablesTotalBefore {
-		t.Fatalf("deferred_memtables_total after publish=%d want=%d", got, deferredMemtablesTotalBefore)
+	if got := mustIteratorLeaseStatInt64(t, deferredStats, "treedb.cache.memtable_view.deferred_memtables_total"); got != deferredMemtablesTotalBefore+1 {
+		t.Fatalf("deferred_memtables_total after publish=%d want=%d", got, deferredMemtablesTotalBefore+1)
 	}
-	if got := mustIteratorLeaseStatInt64(t, deferredStats, "treedb.cache.memtable_view.deferred_bytes_current"); got != 0 {
-		t.Fatalf("deferred_bytes_current after publish=%d want=0 with global retired hold", got)
+	if got := mustIteratorLeaseStatInt64(t, deferredStats, "treedb.cache.memtable_view.deferred_bytes_current"); got <= 0 {
+		t.Fatalf("deferred_bytes_current after publish=%d want >0 for immediate old view hold", got)
 	}
-	if got := mustIteratorLeaseStatInt64(t, deferredStats, "treedb.cache.memtable_view.deferred_bytes_total"); got != deferredBytesTotalBefore {
-		t.Fatalf("deferred_bytes_total after publish=%d want=%d", got, deferredBytesTotalBefore)
+	if got := mustIteratorLeaseStatInt64(t, deferredStats, "treedb.cache.memtable_view.deferred_bytes_total"); got <= deferredBytesTotalBefore {
+		t.Fatalf("deferred_bytes_total after publish=%d want >%d", got, deferredBytesTotalBefore)
 	}
-	if got := mustIteratorLeaseStatFloat64(t, deferredStats, "treedb.cache.memtable_view.deferred_oldest_age_ms"); got != 0 {
-		t.Fatalf("deferred_oldest_age_ms after publish=%f want=0 with global retired hold", got)
+	if got := mustIteratorLeaseStatFloat64(t, deferredStats, "treedb.cache.memtable_view.deferred_oldest_age_ms"); got < 0 {
+		t.Fatalf("deferred_oldest_age_ms after publish=%f want >=0", got)
 	}
-	if got := mustIteratorLeaseStatInt64(t, deferredStats, "treedb.cache.retired_memtable_hold.groups_current"); got != 1 {
-		t.Fatalf("retired hold groups after publish=%d want=1", got)
+	if got := mustIteratorLeaseStatInt64(t, deferredStats, "treedb.cache.retired_memtable_hold.groups_current"); got != 0 {
+		t.Fatalf("retired hold groups after publish=%d want=0 for immediate old view hold", got)
 	}
-	if got := mustIteratorLeaseStatInt64(t, deferredStats, "treedb.cache.retired_memtable_hold.memtables_current"); got != 1 {
-		t.Fatalf("retired hold memtables after publish=%d want=1", got)
+	if got := mustIteratorLeaseStatInt64(t, deferredStats, "treedb.cache.retired_memtable_hold.memtables_current"); got != 0 {
+		t.Fatalf("retired hold memtables after publish=%d want=0 for immediate old view hold", got)
 	}
-	if got := mustIteratorLeaseStatInt64(t, deferredStats, "treedb.cache.retired_memtable_hold.bytes_current"); got <= 0 {
-		t.Fatalf("retired hold bytes after publish=%d want >0", got)
+	if got := mustIteratorLeaseStatInt64(t, deferredStats, "treedb.cache.retired_memtable_hold.bytes_current"); got != 0 {
+		t.Fatalf("retired hold bytes after publish=%d want=0 for immediate old view hold", got)
 	}
-	if got := mustIteratorLeaseStatFloat64(t, deferredStats, "treedb.cache.retired_memtable_hold.oldest_age_ms"); got < 0 {
-		t.Fatalf("retired hold oldest age after publish=%f want >=0", got)
+	if got := mustIteratorLeaseStatFloat64(t, deferredStats, "treedb.cache.retired_memtable_hold.oldest_age_ms"); got != 0 {
+		t.Fatalf("retired hold oldest age after publish=%f want=0 for immediate old view hold", got)
 	}
 
 	seen := map[string]string{}
@@ -265,6 +265,140 @@ func TestIterator_QueuedViewLeaseHeldUntilClose(t *testing.T) {
 	secondCloseStats := db.Stats()
 	if got := mustIteratorLeaseStatInt64(t, secondCloseStats, "treedb.cache.memtable_view.release_total"); got != releaseBefore+1 {
 		t.Fatalf("release_total after second close=%d want=%d", got, releaseBefore+1)
+	}
+}
+
+func TestUntrackedMemtableViewRetainDoesNotCreateGlobalRetiredHold(t *testing.T) {
+	backend := NewMockBackend()
+	db, err := Open(t.TempDir(), backend, Options{
+		DisableWAL:     true,
+		AllowUnsafe:    true,
+		FlushThreshold: 1 << 30,
+		MemtableMode:   "append_only",
+		MemtableShards: 1,
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	if err := db.Set([]byte("k1"), []byte("v1")); err != nil {
+		t.Fatalf("set k1: %v", err)
+	}
+	if err := db.Set([]byte("k2"), []byte("v2")); err != nil {
+		t.Fatalf("set k2: %v", err)
+	}
+
+	db.mu.Lock()
+	if err := db.rotateMemtableLocked(false); err != nil {
+		db.mu.Unlock()
+		t.Fatalf("rotate: %v", err)
+	}
+	db.mu.Unlock()
+
+	view := db.memtables.Load()
+	if view == nil || len(view.queue) != 1 {
+		t.Fatalf("expected one queued memtable view, got=%v", view)
+	}
+	queued, ok := view.queue[0].(*memtable.AppendOnly)
+	if !ok {
+		t.Fatalf("queued memtable type=%T want *memtable.AppendOnly", view.queue[0])
+	}
+
+	untracked := db.retainMemtableViewUntracked()
+	if untracked != view {
+		t.Fatalf("retainMemtableViewUntracked()=%p want current view %p", untracked, view)
+	}
+	if readers := db.memtableViewReaders.Load(); readers != 0 {
+		t.Fatalf("untracked retain registered memtable readers=%d want=0", readers)
+	}
+
+	db.mu.Lock()
+	db.queueRetiredMemtableLocked(queued)
+	clearQueueLockedForIteratorLeaseTest(db)
+	db.publishMemtablesLocked()
+	db.mu.Unlock()
+
+	db.retiredMemtablesMu.Lock()
+	deferredRetired := len(db.deferredRetiredMemtables)
+	db.retiredMemtablesMu.Unlock()
+	if deferredRetired != 0 {
+		t.Fatalf("global deferred retired memtables after untracked retain publish=%d want=0", deferredRetired)
+	}
+	if got := queued.Len(); got != 2 {
+		t.Fatalf("queued memtable reset while untracked retain open len=%d want=2", got)
+	}
+
+	db.releaseUntrackedMemtableView(untracked)
+	if got := queued.Len(); got != 0 {
+		t.Fatalf("queued memtable len after untracked release=%d want=0", got)
+	}
+}
+
+func TestDeferRetiredMemtablesCopiesHeldSlice(t *testing.T) {
+	backend := NewMockBackend()
+	db, err := Open(t.TempDir(), backend, Options{
+		DisableWAL:     true,
+		AllowUnsafe:    true,
+		FlushThreshold: 1 << 30,
+		MemtableMode:   "append_only",
+		MemtableShards: 1,
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	if err := db.Set([]byte("k1"), []byte("v1")); err != nil {
+		t.Fatalf("set k1: %v", err)
+	}
+	if err := db.Set([]byte("k2"), []byte("v2")); err != nil {
+		t.Fatalf("set k2: %v", err)
+	}
+
+	db.mu.Lock()
+	if err := db.rotateMemtableLocked(false); err != nil {
+		db.mu.Unlock()
+		t.Fatalf("rotate: %v", err)
+	}
+	db.mu.Unlock()
+
+	view := db.memtables.Load()
+	if view == nil || len(view.queue) != 1 {
+		t.Fatalf("expected one queued memtable view, got=%v", view)
+	}
+	queued, ok := view.queue[0].(*memtable.AppendOnly)
+	if !ok {
+		t.Fatalf("queued memtable type=%T want *memtable.AppendOnly", view.queue[0])
+	}
+
+	db.registerMemtableViewReader(view)
+	retired := []memtable.Table{queued}
+	if !db.deferRetiredMemtables(retired) {
+		t.Fatal("deferRetiredMemtables did not hold retained view memtable")
+	}
+	retired[0] = nil
+
+	db.retiredMemtablesMu.Lock()
+	if len(db.deferredRetiredMemtables) != 1 {
+		db.retiredMemtablesMu.Unlock()
+		t.Fatalf("deferred retired holds=%d want=1", len(db.deferredRetiredMemtables))
+	}
+	held := db.deferredRetiredMemtables[0]
+	db.retiredMemtablesMu.Unlock()
+	if len(held.mems) != 1 || held.mems[0] != queued {
+		t.Fatalf("held memtables mutated with caller slice: %+v", held.mems)
+	}
+	if held.memtables != 1 {
+		t.Fatalf("held memtable count=%d want=1", held.memtables)
+	}
+	if held.bytes <= 0 {
+		t.Fatalf("held bytes=%d want >0", held.bytes)
+	}
+
+	db.unregisterMemtableViewReader(view)
+	if got := queued.Len(); got != 0 {
+		t.Fatalf("queued memtable len after retained view release=%d want=0", got)
 	}
 }
 

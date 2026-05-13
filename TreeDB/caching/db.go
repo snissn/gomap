@@ -6461,6 +6461,8 @@ type memtableViewLifecycleTelemetry struct {
 type deferredRetiredMemtablesHold struct {
 	mems          []memtable.Table
 	views         map[*memtableView]struct{}
+	memtables     int64
+	bytes         int64
 	sinceUnixNano int64
 }
 
@@ -7633,19 +7635,16 @@ func (db *DB) retainMemtableViewUntracked() *memtableView {
 		if view == nil {
 			return nil
 		}
-		db.registerMemtableViewReader(view)
 		if n := view.refs.Add(1); n > 1 {
 			return view
 		}
 		view.refs.Add(-1)
 		if db.memtables.Load() != view {
-			db.releaseAbandonedMemtableViewReader(view)
 			continue
 		}
 		if view.refs.CompareAndSwap(0, 2) {
 			return view
 		}
-		db.releaseAbandonedMemtableViewReader(view)
 	}
 }
 
@@ -7735,24 +7734,26 @@ func (db *DB) unregisterMemtableViewReader(view *memtableView) {
 	db.recycleMemtables(reclaim)
 }
 
-func (db *DB) deferRetiredMemtables(mems []memtable.Table) {
+func (db *DB) deferRetiredMemtables(mems []memtable.Table) bool {
 	if db == nil || len(mems) == 0 {
-		return
+		return false
 	}
-	var reclaim []memtable.Table
+	held := false
 	db.retiredMemtablesMu.Lock()
 	views := db.retainedViewsReferencingMemtablesLocked(mems)
-	if len(views) == 0 {
-		reclaim = append(reclaim, mems...)
-	} else {
+	if len(views) > 0 {
+		heldMems := append([]memtable.Table(nil), mems...)
 		db.deferredRetiredMemtables = append(db.deferredRetiredMemtables, deferredRetiredMemtablesHold{
-			mems:          mems,
+			mems:          heldMems,
 			views:         views,
+			memtables:     int64(len(heldMems)),
+			bytes:         memtableBytesTotal(heldMems),
 			sinceUnixNano: time.Now().UnixNano(),
 		})
+		held = true
 	}
 	db.retiredMemtablesMu.Unlock()
-	db.recycleMemtables(reclaim)
+	return held
 }
 
 func (db *DB) retainedViewsReferencingMemtablesLocked(mems []memtable.Table) map[*memtableView]struct{} {
@@ -7828,8 +7829,8 @@ func (db *DB) deferredRetiredMemtableHoldStats() (groups int64, memtables int64,
 	defer db.retiredMemtablesMu.Unlock()
 	for _, held := range db.deferredRetiredMemtables {
 		groups++
-		memtables += int64(len(held.mems))
-		bytes += memtableBytesTotal(held.mems)
+		memtables += held.memtables
+		bytes += held.bytes
 		if held.sinceUnixNano > 0 && (oldestUnixNano == 0 || held.sinceUnixNano < oldestUnixNano) {
 			oldestUnixNano = held.sinceUnixNano
 		}
@@ -8374,12 +8375,11 @@ func (db *DB) publishMemtablesLocked() {
 		if len(retired) > 0 {
 			// A retained snapshot can reference queued memtables through an older
 			// view than the one being unpublished here. If any external view is in
-			// flight, hold retired memtables at DB scope until all views drain;
-			// otherwise a later flush can recycle a table still visible to that
-			// older snapshot.
-			if db.memtableViewReaders.Load() > 0 || old.refs.Load() > 1 {
-				db.deferRetiredMemtables(retired)
-			} else {
+			// flight, first try to hold retired memtables at DB scope until all
+			// referencing views drain. If the only retain is the immediate old view
+			// itself, attach the retired tables to that view so short-lived
+			// internal/untracked retains do not create DB-scope retired holds.
+			if db.memtableViewReaders.Load() == 0 || !db.deferRetiredMemtables(retired) {
 				old.retiredMems = append(old.retiredMems, retired...)
 				old.deferredRetiredMemtables.Store(int64(len(old.retiredMems)))
 				old.deferredRetiredBytes.Add(memtableBytesTotal(retired))
@@ -8389,7 +8389,9 @@ func (db *DB) publishMemtablesLocked() {
 		return
 	}
 	if db.memtableViewReaders.Load() > 0 {
-		db.deferRetiredMemtables(retired)
+		if !db.deferRetiredMemtables(retired) {
+			db.recycleMemtables(retired)
+		}
 	} else {
 		db.recycleMemtables(retired)
 	}
