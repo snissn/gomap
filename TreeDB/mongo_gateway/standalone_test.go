@@ -649,6 +649,10 @@ func TestStandaloneServerGoRunHelp(t *testing.T) {
 			args: []string{"run", "./server.go", "-help"},
 		},
 		{
+			name: "short help",
+			args: []string{"run", "./server.go", "-h"},
+		},
+		{
 			name: "repo root documented path",
 			dir:  "../..",
 			args: []string{"run", "./TreeDB/mongo_gateway/server.go", "-help"},
