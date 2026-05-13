@@ -1383,15 +1383,34 @@ func TestUpdateBatchStatsSinceClampsSubResolutionDurations(t *testing.T) {
 
 func TestCollectionUpdateCombineTimingStatsSnapshotAndAdd(t *testing.T) {
 	domain := &collectionWriteDomain{}
+	domain.updateBatchDetailedStats.Store(true)
+	domain.observeUpdateCombineRequest(1)
+	domain.observeUpdateCombineRequest(9)
 	domain.observeUpdateCombineInline()
+	domain.observeUpdateCombineBatch(2, false)
+	domain.observeUpdateCombineBatch(300, true)
 	domain.observeUpdateCombineEnqueue(3 * time.Nanosecond)
 	domain.observeUpdateCombineWait(5 * time.Nanosecond)
+	domain.observeUpdateCombineQueueWait(13 * time.Nanosecond)
 	domain.observeUpdateCombineDrain(7 * time.Nanosecond)
 	domain.observeUpdateCombineRun(11 * time.Nanosecond)
+	domain.observeUpdateCombineResultDelivery(17 * time.Nanosecond)
 	snapshot := domain.statsSnapshot()
 	var merged CollectionManagerStats
 	merged.add(snapshot)
 	exported := (&CollectionManager{domains: map[string]*collectionWriteDomain{"test": domain}}).Stats()
+	if snapshot.UpdateCombineRequests != 2 {
+		t.Fatalf("snapshot requests=%d want 2", snapshot.UpdateCombineRequests)
+	}
+	if snapshot.UpdateCombineBatches != 2 {
+		t.Fatalf("snapshot batches=%d want 2", snapshot.UpdateCombineBatches)
+	}
+	if snapshot.UpdateCombineBatchedRequests != 302 {
+		t.Fatalf("snapshot batched requests=%d want 302", snapshot.UpdateCombineBatchedRequests)
+	}
+	if snapshot.UpdateCombineFallbackRequests != 300 {
+		t.Fatalf("snapshot fallback requests=%d want 300", snapshot.UpdateCombineFallbackRequests)
+	}
 	if snapshot.UpdateCombineInlineRequests != 1 {
 		t.Fatalf("snapshot inline requests=%d want 1", snapshot.UpdateCombineInlineRequests)
 	}
@@ -1409,8 +1428,10 @@ func TestCollectionUpdateCombineTimingStatsSnapshotAndAdd(t *testing.T) {
 	}{
 		{"enqueue", "treedb.collections.write_domain.update_combine.enqueue_ns_total", 3 * time.Nanosecond, func(s CollectionManagerStats) time.Duration { return s.UpdateCombineEnqueue }},
 		{"wait", "treedb.collections.write_domain.update_combine.wait_ns_total", 5 * time.Nanosecond, func(s CollectionManagerStats) time.Duration { return s.UpdateCombineWait }},
+		{"queue wait", "treedb.collections.write_domain.update_combine.queue_wait_ns_total", 13 * time.Nanosecond, func(s CollectionManagerStats) time.Duration { return s.UpdateCombineQueueWait }},
 		{"drain", "treedb.collections.write_domain.update_combine.drain_ns_total", 7 * time.Nanosecond, func(s CollectionManagerStats) time.Duration { return s.UpdateCombineDrain }},
 		{"run", "treedb.collections.write_domain.update_combine.run_ns_total", 11 * time.Nanosecond, func(s CollectionManagerStats) time.Duration { return s.UpdateCombineRun }},
+		{"result delivery", "treedb.collections.write_domain.update_combine.result_delivery_ns_total", 17 * time.Nanosecond, func(s CollectionManagerStats) time.Duration { return s.UpdateCombineResultDelivery }},
 	}
 	for _, tc := range cases {
 		if got := tc.get(snapshot); got != tc.want {
@@ -1422,6 +1443,28 @@ func TestCollectionUpdateCombineTimingStatsSnapshotAndAdd(t *testing.T) {
 		if got, want := exported[tc.key], fmt.Sprintf("%d", tc.want.Nanoseconds()); got != want {
 			t.Fatalf("exported %s=%q want %q", tc.key, got, want)
 		}
+	}
+	queueDepthLe1 := collectionUpdateCombineBucketIndex(1)
+	queueDepthLe16 := collectionUpdateCombineBucketIndex(9)
+	batchSizeLe2 := collectionUpdateCombineBucketIndex(2)
+	batchSizeGt256 := collectionUpdateCombineBucketIndex(300)
+	if got := snapshot.UpdateCombineQueueDepthBuckets[queueDepthLe1]; got != 1 {
+		t.Fatalf("snapshot queue-depth le_1 bucket=%d want 1", got)
+	}
+	if got := merged.UpdateCombineQueueDepthBuckets[queueDepthLe16]; got != 1 {
+		t.Fatalf("merged queue-depth le_16 bucket=%d want 1", got)
+	}
+	if got := snapshot.UpdateCombineBatchSizeBuckets[batchSizeLe2]; got != 1 {
+		t.Fatalf("snapshot batch-size le_2 bucket=%d want 1", got)
+	}
+	if got := merged.UpdateCombineBatchSizeBuckets[batchSizeGt256]; got != 1 {
+		t.Fatalf("merged batch-size gt_256 bucket=%d want 1", got)
+	}
+	if got, want := exported["treedb.collections.write_domain.update_combine.queue_depth_bucket_le_1_total"], "1"; got != want {
+		t.Fatalf("exported queue-depth le_1 bucket=%q want %q", got, want)
+	}
+	if got, want := exported["treedb.collections.write_domain.update_combine.batch_size_bucket_gt_256_total"], "1"; got != want {
+		t.Fatalf("exported batch-size gt_256 bucket=%q want %q", got, want)
 	}
 }
 

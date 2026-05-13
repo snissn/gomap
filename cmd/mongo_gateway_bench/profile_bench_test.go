@@ -1192,8 +1192,10 @@ func deltaCollectionManagerUpdateStats(after, before collections.CollectionManag
 		UpdateCombineInlineRequests:      after.UpdateCombineInlineRequests - before.UpdateCombineInlineRequests,
 		UpdateCombineEnqueue:             after.UpdateCombineEnqueue - before.UpdateCombineEnqueue,
 		UpdateCombineWait:                after.UpdateCombineWait - before.UpdateCombineWait,
+		UpdateCombineQueueWait:           after.UpdateCombineQueueWait - before.UpdateCombineQueueWait,
 		UpdateCombineDrain:               after.UpdateCombineDrain - before.UpdateCombineDrain,
 		UpdateCombineRun:                 after.UpdateCombineRun - before.UpdateCombineRun,
+		UpdateCombineResultDelivery:      after.UpdateCombineResultDelivery - before.UpdateCombineResultDelivery,
 		IndexedFlushCalls:                after.IndexedFlushCalls - before.IndexedFlushCalls,
 		IndexedFlushErrors:               after.IndexedFlushErrors - before.IndexedFlushErrors,
 		IndexedFlushForcedDrains:         after.IndexedFlushForcedDrains - before.IndexedFlushForcedDrains,
@@ -1230,6 +1232,10 @@ func deltaCollectionManagerUpdateStats(after, before collections.CollectionManag
 	delta.OverlayVisibleDepth = after.OverlayVisibleDepth
 	if after.UpdateCombineQueueDepthMax > before.UpdateCombineQueueDepthMax {
 		delta.UpdateCombineQueueDepthMax = after.UpdateCombineQueueDepthMax
+	}
+	for i := range delta.UpdateCombineQueueDepthBuckets {
+		delta.UpdateCombineQueueDepthBuckets[i] = after.UpdateCombineQueueDepthBuckets[i] - before.UpdateCombineQueueDepthBuckets[i]
+		delta.UpdateCombineBatchSizeBuckets[i] = after.UpdateCombineBatchSizeBuckets[i] - before.UpdateCombineBatchSizeBuckets[i]
 	}
 	for i := 0; i < after.UpdateBatchIndexStatsCount && i < len(after.UpdateBatchIndexStats); i++ {
 		next := after.UpdateBatchIndexStats[i]
@@ -1285,8 +1291,10 @@ func TestDeltaCollectionManagerUpdateStatsIncludesCombinerStats(t *testing.T) {
 		UpdateCombineInlineRequests:      4,
 		UpdateCombineEnqueue:             100 * time.Nanosecond,
 		UpdateCombineWait:                200 * time.Nanosecond,
+		UpdateCombineQueueWait:           250 * time.Nanosecond,
 		UpdateCombineDrain:               300 * time.Nanosecond,
 		UpdateCombineRun:                 400 * time.Nanosecond,
+		UpdateCombineResultDelivery:      500 * time.Nanosecond,
 		UpdateBatchStructuredApply:       50 * time.Nanosecond,
 		UpdateBatchIndexStateExtract:     70 * time.Nanosecond,
 		UpdateBatchOldIndexStateExtract:  30 * time.Nanosecond,
@@ -1344,8 +1352,10 @@ func TestDeltaCollectionManagerUpdateStatsIncludesCombinerStats(t *testing.T) {
 		UpdateCombineInlineRequests:      15,
 		UpdateCombineEnqueue:             700 * time.Nanosecond,
 		UpdateCombineWait:                1400 * time.Nanosecond,
+		UpdateCombineQueueWait:           1750 * time.Nanosecond,
 		UpdateCombineDrain:               2100 * time.Nanosecond,
 		UpdateCombineRun:                 2800 * time.Nanosecond,
+		UpdateCombineResultDelivery:      3500 * time.Nanosecond,
 		UpdateBatchStructuredApply:       500 * time.Nanosecond,
 		UpdateBatchIndexStateExtract:     700 * time.Nanosecond,
 		UpdateBatchOldIndexStateExtract:  300 * time.Nanosecond,
@@ -1394,6 +1404,14 @@ func TestDeltaCollectionManagerUpdateStatsIncludesCombinerStats(t *testing.T) {
 			{CollectionName: "users", IndexName: "city", IndexOrdinal: 1, Changed: 17, SecondaryRuns: 17, SecondaryDeletes: 17, SecondarySets: 17, SecondaryKeyBytes: 1700},
 		},
 	}
+	before.UpdateCombineQueueDepthBuckets[0] = 1
+	before.UpdateCombineQueueDepthBuckets[3] = 2
+	before.UpdateCombineBatchSizeBuckets[1] = 3
+	before.UpdateCombineBatchSizeBuckets[4] = 4
+	after.UpdateCombineQueueDepthBuckets[0] = 3
+	after.UpdateCombineQueueDepthBuckets[3] = 7
+	after.UpdateCombineBatchSizeBuckets[1] = 11
+	after.UpdateCombineBatchSizeBuckets[4] = 13
 	got := deltaCollectionManagerUpdateStats(after, before)
 	if got.UpdateCombineRequests != 7 {
 		t.Fatalf("UpdateCombineRequests=%d want 7", got.UpdateCombineRequests)
@@ -1413,13 +1431,21 @@ func TestDeltaCollectionManagerUpdateStatsIncludesCombinerStats(t *testing.T) {
 	if got.UpdateCombineInlineRequests != 11 {
 		t.Fatalf("UpdateCombineInlineRequests=%d want 11", got.UpdateCombineInlineRequests)
 	}
-	if got.UpdateCombineEnqueue != 600*time.Nanosecond || got.UpdateCombineWait != 1200*time.Nanosecond || got.UpdateCombineDrain != 1800*time.Nanosecond || got.UpdateCombineRun != 2400*time.Nanosecond {
-		t.Fatalf("update combine timing delta enqueue/wait/drain/run=%s/%s/%s/%s want 600ns/1200ns/1800ns/2400ns",
+	if got.UpdateCombineEnqueue != 600*time.Nanosecond || got.UpdateCombineWait != 1200*time.Nanosecond || got.UpdateCombineQueueWait != 1500*time.Nanosecond || got.UpdateCombineDrain != 1800*time.Nanosecond || got.UpdateCombineRun != 2400*time.Nanosecond || got.UpdateCombineResultDelivery != 3000*time.Nanosecond {
+		t.Fatalf("update combine timing delta enqueue/wait/queue-wait/drain/run/result-delivery=%s/%s/%s/%s/%s/%s want 600ns/1200ns/1500ns/1800ns/2400ns/3000ns",
 			got.UpdateCombineEnqueue,
 			got.UpdateCombineWait,
+			got.UpdateCombineQueueWait,
 			got.UpdateCombineDrain,
 			got.UpdateCombineRun,
+			got.UpdateCombineResultDelivery,
 		)
+	}
+	if got.UpdateCombineQueueDepthBuckets[0] != 2 || got.UpdateCombineQueueDepthBuckets[3] != 5 {
+		t.Fatalf("update combine queue-depth bucket deltas=%v want index 0=2 index 3=5", got.UpdateCombineQueueDepthBuckets)
+	}
+	if got.UpdateCombineBatchSizeBuckets[1] != 8 || got.UpdateCombineBatchSizeBuckets[4] != 9 {
+		t.Fatalf("update combine batch-size bucket deltas=%v want index 1=8 index 4=9", got.UpdateCombineBatchSizeBuckets)
 	}
 	if got.UpdateBatchStructuredApply != 450*time.Nanosecond {
 		t.Fatalf("UpdateBatchStructuredApply=%s want 450ns", got.UpdateBatchStructuredApply)
@@ -1629,28 +1655,44 @@ func TestReportCollectionManagerUpdateStatsIncludesCombinerQueueDepth(t *testing
 		UpdateCombineInlineRequests:   300,
 		UpdateCombineEnqueue:          600 * time.Nanosecond,
 		UpdateCombineWait:             1200 * time.Nanosecond,
+		UpdateCombineQueueWait:        3000 * time.Nanosecond,
 		UpdateCombineDrain:            1800 * time.Nanosecond,
 		UpdateCombineRun:              2400 * time.Nanosecond,
+		UpdateCombineResultDelivery:   3600 * time.Nanosecond,
 	}
+	stats.UpdateCombineQueueDepthBuckets[0] = 60
+	stats.UpdateCombineQueueDepthBuckets[4] = 540
+	stats.UpdateCombineBatchSizeBuckets[2] = 6
+	stats.UpdateCombineBatchSizeBuckets[5] = 24
 	result := testing.Benchmark(func(b *testing.B) {
 		reportCollectionManagerUpdateStats(b, stats, 600)
 	})
 	want := map[string]float64{
-		"update_combine_requests":              600,
-		"update_combine_requests/doc":          1,
-		"update_combine_batches":               30,
-		"update_combine_items/batch":           20,
-		"update_combine_batched_requests":      600,
-		"update_combine_batched_requests/doc":  1,
-		"update_combine_fallback_requests":     6,
-		"update_combine_fallback_requests/doc": 0.01,
-		"update_combine_queue_depth_max":       31,
-		"update_combine_inline_requests":       300,
-		"update_combine_inline_requests/doc":   0.5,
-		"update_combine_enqueue_ns/doc":        1,
-		"update_combine_wait_ns/doc":           2,
-		"update_combine_drain_ns/doc":          3,
-		"update_combine_run_ns/doc":            4,
+		"update_combine_requests":                         600,
+		"update_combine_requests/doc":                     1,
+		"update_combine_batches":                          30,
+		"update_combine_items/batch":                      20,
+		"update_combine_batched_requests":                 600,
+		"update_combine_batched_requests/doc":             1,
+		"update_combine_fallback_requests":                6,
+		"update_combine_fallback_requests/doc":            0.01,
+		"update_combine_queue_depth_max":                  31,
+		"update_combine_queue_depth_bucket_le_1":          60,
+		"update_combine_queue_depth_bucket_le_1/request":  0.1,
+		"update_combine_queue_depth_bucket_le_16":         540,
+		"update_combine_queue_depth_bucket_le_16/request": 0.9,
+		"update_combine_batch_size_bucket_le_4":           6,
+		"update_combine_batch_size_bucket_le_4/batch":     0.2,
+		"update_combine_batch_size_bucket_le_32":          24,
+		"update_combine_batch_size_bucket_le_32/batch":    0.8,
+		"update_combine_inline_requests":                  300,
+		"update_combine_inline_requests/doc":              0.5,
+		"update_combine_enqueue_ns/doc":                   1,
+		"update_combine_wait_ns/doc":                      2,
+		"update_combine_queue_wait_ns/doc":                5,
+		"update_combine_drain_ns/doc":                     3,
+		"update_combine_run_ns/doc":                       4,
+		"update_combine_result_delivery_ns/doc":           6,
 	}
 	for metric, wantValue := range want {
 		gotValue, ok := result.Extra[metric]
@@ -1821,6 +1863,30 @@ func reportCollectionManagerUpdateStats(b *testing.B, stats collections.Collecti
 	if stats.UpdateCombineQueueDepthMax > 0 {
 		b.ReportMetric(float64(stats.UpdateCombineQueueDepthMax), "update_combine_queue_depth_max")
 	}
+	for i, count := range stats.UpdateCombineQueueDepthBuckets {
+		if count == 0 || stats.UpdateCombineRequests == 0 {
+			continue
+		}
+		label := collections.CollectionUpdateCombineBucketLabel(i)
+		if label == "" {
+			continue
+		}
+		name := "update_combine_queue_depth_bucket_" + label
+		b.ReportMetric(float64(count), name)
+		b.ReportMetric(float64(count)/float64(stats.UpdateCombineRequests), name+"/request")
+	}
+	for i, count := range stats.UpdateCombineBatchSizeBuckets {
+		if count == 0 || stats.UpdateCombineBatches == 0 {
+			continue
+		}
+		label := collections.CollectionUpdateCombineBucketLabel(i)
+		if label == "" {
+			continue
+		}
+		name := "update_combine_batch_size_bucket_" + label
+		b.ReportMetric(float64(count), name)
+		b.ReportMetric(float64(count)/float64(stats.UpdateCombineBatches), name+"/batch")
+	}
 	if stats.UpdateCombineInlineRequests > 0 {
 		b.ReportMetric(float64(stats.UpdateCombineInlineRequests), "update_combine_inline_requests")
 		b.ReportMetric(float64(stats.UpdateCombineInlineRequests)/float64(docs), "update_combine_inline_requests/doc")
@@ -1832,8 +1898,10 @@ func reportCollectionManagerUpdateStats(b *testing.B, stats collections.Collecti
 	}
 	reportDuration("update_combine_enqueue_ns/doc", stats.UpdateCombineEnqueue)
 	reportDuration("update_combine_wait_ns/doc", stats.UpdateCombineWait)
+	reportDuration("update_combine_queue_wait_ns/doc", stats.UpdateCombineQueueWait)
 	reportDuration("update_combine_drain_ns/doc", stats.UpdateCombineDrain)
 	reportDuration("update_combine_run_ns/doc", stats.UpdateCombineRun)
+	reportDuration("update_combine_result_delivery_ns/doc", stats.UpdateCombineResultDelivery)
 	if stats.UpdateBatchSecondaryDeletes > 0 {
 		b.ReportMetric(float64(stats.UpdateBatchSecondaryDeletes)/float64(docs), "update_secondary_deletes/doc")
 	}
