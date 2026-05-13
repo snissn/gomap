@@ -69,15 +69,18 @@ const (
 	// background indexed flush work. When the queue reaches this many immutable
 	// flush units, the triggering writer publishes synchronously to cap memory
 	// and visibility lag.
-	DefaultIndexedWriteMemtableAsyncFlushMaxQueuedUnits = 4
-	defaultCollectionUpdateCombineMaxBatch              = 256
-	defaultCollectionUpdateCombineDrainYields           = 1
-	collectionUpdateCombineIdleTTL                      = 30 * time.Second
-	collectionUpdateCombineInlineQuietPeriod            = time.Millisecond
-	collectionPprofComponentKey                         = "gomap_component"
-	collectionPprofOperationKey                         = "gomap_operation"
-	collectionPprofIndexedAsyncFlush                    = "collections_indexed_async_flush"
-	collectionPprofIndexedAsyncFlushRun                 = "publish_buffered_indexed_flush"
+	DefaultIndexedWriteMemtableAsyncFlushMaxQueuedUnits  = 4
+	defaultCollectionUpdateCombineMaxBatch               = 256
+	defaultCollectionUpdateCombineShards                 = 1
+	defaultCollectionUpdateCombineDrainYields            = 1
+	defaultCollectionUpdateCombineLaneDrainYields        = 4
+	defaultCollectionUpdateCombineUnsafeAsyncAckQueueCap = 65536
+	collectionUpdateCombineIdleTTL                       = 30 * time.Second
+	collectionUpdateCombineInlineQuietPeriod             = time.Millisecond
+	collectionPprofComponentKey                          = "gomap_component"
+	collectionPprofOperationKey                          = "gomap_operation"
+	collectionPprofIndexedAsyncFlush                     = "collections_indexed_async_flush"
+	collectionPprofIndexedAsyncFlushRun                  = "publish_buffered_indexed_flush"
 )
 
 var (
@@ -601,6 +604,7 @@ type CollectionManagerStats struct {
 	UpdateCombineFallbackRequests  uint64
 	UpdateCombineQueueDepthMax     uint64
 	UpdateCombineInlineRequests    uint64
+	UpdateCombineUnsafeAsyncAcks   uint64
 	UpdateCombineEnqueue           time.Duration
 	UpdateCombineWait              time.Duration
 	UpdateCombineQueueWait         time.Duration
@@ -911,36 +915,40 @@ type collectionWriteDomain struct {
 	// mutationMu serializes root descriptor publishes for handles opened
 	// through the same manager so optimistic retries do not starve under
 	// sustained collection write contention.
-	mutationMu             sync.Mutex
-	mu                     sync.RWMutex
-	indexedAsyncMu         sync.Mutex
-	indexedAsyncCond       *sync.Cond
-	indexedAsyncRun        bool
-	indexedAsyncErr        error
-	indexedPrepareCond     *sync.Cond
-	indexedPrepareFreezes  int
-	updateCombineMu        sync.Mutex
-	updateCombiner         *collectionUpdateCombiner
-	updateDraining         *collectionUpdateCombiner
-	updateCombineDone      bool
-	updateCombineTTL       time.Duration
-	closingWrites          atomic.Bool
-	loaded                 bool
-	meta                   CollectionMeta
-	catalog                *collectionCatalog
-	baseCommitSeq          uint64
-	baseSystemRoot         uint64
-	primaryRoot            uint64
-	storagePolicy          backenddb.OrderedRootStoragePolicy
-	table                  memtable.Table
-	indexedPublishingUnits []indexedFlushUnit
-	indexedFlushUnits      []indexedFlushUnit
-	rootRuns               map[string][]memtable.Table
-	rootMutableRuns        map[string]memtable.Table
-	rootPolicies           map[string]backenddb.OrderedRootStoragePolicy
-	rootBaseIDs            map[string]uint64
-	rootValueArenas        [][]byte
-	primaryIDIndex         *bufferedUniqueValueIndex
+	mutationMu                          sync.Mutex
+	mu                                  sync.RWMutex
+	indexedAsyncMu                      sync.Mutex
+	indexedAsyncCond                    *sync.Cond
+	indexedAsyncRun                     bool
+	indexedAsyncErr                     error
+	indexedPrepareCond                  *sync.Cond
+	indexedPrepareFreezes               int
+	updateCombineMu                     sync.Mutex
+	updateCombiner                      *collectionUpdateCombiner
+	updateDraining                      *collectionUpdateCombiner
+	updateCombineDone                   bool
+	updateCombineTTL                    time.Duration
+	updateCombineShards                 int
+	updateCombineLaneWorkers            bool
+	updateCombineUnsafeStaleDirectPlans atomic.Bool
+	updateCombineUnsafeAsyncAck         atomic.Bool
+	closingWrites                       atomic.Bool
+	loaded                              bool
+	meta                                CollectionMeta
+	catalog                             *collectionCatalog
+	baseCommitSeq                       uint64
+	baseSystemRoot                      uint64
+	primaryRoot                         uint64
+	storagePolicy                       backenddb.OrderedRootStoragePolicy
+	table                               memtable.Table
+	indexedPublishingUnits              []indexedFlushUnit
+	indexedFlushUnits                   []indexedFlushUnit
+	rootRuns                            map[string][]memtable.Table
+	rootMutableRuns                     map[string]memtable.Table
+	rootPolicies                        map[string]backenddb.OrderedRootStoragePolicy
+	rootBaseIDs                         map[string]uint64
+	rootValueArenas                     [][]byte
+	primaryIDIndex                      *bufferedUniqueValueIndex
 	// Built lazily by readers so write-only indexed buffering does not pay for
 	// an auxiliary lookup structure it never uses.
 	primaryRunIndex        *bufferedPrimaryRunIndex
@@ -1005,6 +1013,7 @@ type collectionWriteDomain struct {
 	updateCombineFallbackRequests      atomic.Uint64
 	updateCombineQueueDepthMax         atomic.Uint64
 	updateCombineInlineRequests        atomic.Uint64
+	updateCombineUnsafeAsyncAcks       atomic.Uint64
 	updateInlineInFlight               atomic.Uint64
 	updateCombineLastRequestUnixNano   atomic.Int64
 	updateInlineDocumentID             [collectionUpdateCombineInlineDocumentIDMax]byte
@@ -1301,6 +1310,7 @@ func (m *CollectionManager) Stats() map[string]string {
 	out["treedb.collections.write_domain.update_combine.fallback_requests_total"] = fmt.Sprintf("%d", stats.UpdateCombineFallbackRequests)
 	out["treedb.collections.write_domain.update_combine.queue_depth_max"] = fmt.Sprintf("%d", stats.UpdateCombineQueueDepthMax)
 	out["treedb.collections.write_domain.update_combine.inline_requests_total"] = fmt.Sprintf("%d", stats.UpdateCombineInlineRequests)
+	out["treedb.collections.write_domain.update_combine.unsafe_async_acks_total"] = fmt.Sprintf("%d", stats.UpdateCombineUnsafeAsyncAcks)
 	out["treedb.collections.write_domain.update_combine.enqueue_ns_total"] = fmt.Sprintf("%d", stats.UpdateCombineEnqueue.Nanoseconds())
 	out["treedb.collections.write_domain.update_combine.wait_ns_total"] = fmt.Sprintf("%d", stats.UpdateCombineWait.Nanoseconds())
 	out["treedb.collections.write_domain.update_combine.queue_wait_ns_total"] = fmt.Sprintf("%d", stats.UpdateCombineQueueWait.Nanoseconds())
@@ -1489,6 +1499,107 @@ func (m *CollectionManager) ResetUpdateCombinersForProfiling() {
 	}
 }
 
+// DrainUpdateCombinersForProfiling stops and drains active update combiners
+// without flushing the collection write domains. It is intended for benchmark
+// windows that intentionally acknowledge before background combine/stage work
+// has completed, so the benchmark can time foreground admission separately from
+// the background drain.
+func (m *CollectionManager) DrainUpdateCombinersForProfiling() {
+	m.ResetUpdateCombinersForProfiling()
+}
+
+// SetUpdateCombineShardsForProfiling sets the update-combiner ingress shard
+// count for already-opened collection write domains managed by m. It is intended
+// for benchmark/profiling experiments and resets active combiners so subsequent
+// updates use the new lane count.
+func (m *CollectionManager) SetUpdateCombineShardsForProfiling(shards int) {
+	if m == nil {
+		return
+	}
+	if shards < 1 {
+		shards = defaultCollectionUpdateCombineShards
+	}
+	m.domainMu.RLock()
+	domains := make([]*collectionWriteDomain, 0, len(m.domains))
+	for _, domain := range m.domains {
+		if domain != nil {
+			domains = append(domains, domain)
+		}
+	}
+	m.domainMu.RUnlock()
+	for _, domain := range domains {
+		domain.setUpdateCombineShardsForProfiling(shards)
+	}
+}
+
+// SetUpdateCombineLaneWorkersForProfiling switches sharded update-combiner
+// ingress between the production global-combiner path and a profiling-only
+// lane-worker path. Lane workers are comparison-branch instrumentation for
+// throughput experiments that validate sharded document-id execution before the
+// correctness protocol is finalized; they are not a production merge contract.
+func (m *CollectionManager) SetUpdateCombineLaneWorkersForProfiling(enabled bool) {
+	if m == nil {
+		return
+	}
+	m.domainMu.RLock()
+	domains := make([]*collectionWriteDomain, 0, len(m.domains))
+	for _, domain := range m.domains {
+		if domain != nil {
+			domains = append(domains, domain)
+		}
+	}
+	m.domainMu.RUnlock()
+	for _, domain := range domains {
+		domain.setUpdateCombineLaneWorkersForProfiling(enabled)
+	}
+}
+
+// SetUpdateCombineUnsafeStaleDirectPlansForProfiling allows lane-worker
+// profiling runs to stage non-overlapping direct buffered update plans that were
+// built before another lane advanced the buffered generation. This is not a
+// production correctness contract or merge-to-main behavior; callers must
+// restrict it to benchmark shapes with non-overlapping document IDs and
+// unchanged unique secondary indexes.
+func (m *CollectionManager) SetUpdateCombineUnsafeStaleDirectPlansForProfiling(enabled bool) {
+	if m == nil {
+		return
+	}
+	m.domainMu.RLock()
+	domains := make([]*collectionWriteDomain, 0, len(m.domains))
+	for _, domain := range m.domains {
+		if domain != nil {
+			domains = append(domains, domain)
+		}
+	}
+	m.domainMu.RUnlock()
+	for _, domain := range domains {
+		domain.setUpdateCombineUnsafeStaleDirectPlansForProfiling(enabled)
+	}
+}
+
+// SetUpdateCombineUnsafeAsyncAckForProfiling makes update-combiner profiling
+// runs acknowledge after request admission instead of waiting for the lane
+// worker and prepared-batch merger to stage the update. This intentionally does
+// not define a production durability or visibility contract; it exists only to
+// measure the foreground admission ceiling against a separately timed drain on
+// comparison branches.
+func (m *CollectionManager) SetUpdateCombineUnsafeAsyncAckForProfiling(enabled bool) {
+	if m == nil {
+		return
+	}
+	m.domainMu.RLock()
+	domains := make([]*collectionWriteDomain, 0, len(m.domains))
+	for _, domain := range m.domains {
+		if domain != nil {
+			domains = append(domains, domain)
+		}
+	}
+	m.domainMu.RUnlock()
+	for _, domain := range domains {
+		domain.setUpdateCombineUnsafeAsyncAckForProfiling(enabled)
+	}
+}
+
 func (s *CollectionManagerStats) add(other CollectionManagerStats) {
 	if s == nil {
 		return
@@ -1554,6 +1665,7 @@ func (s *CollectionManagerStats) add(other CollectionManagerStats) {
 		s.UpdateCombineQueueDepthMax = other.UpdateCombineQueueDepthMax
 	}
 	s.UpdateCombineInlineRequests += other.UpdateCombineInlineRequests
+	s.UpdateCombineUnsafeAsyncAcks += other.UpdateCombineUnsafeAsyncAcks
 	s.UpdateCombineEnqueue += other.UpdateCombineEnqueue
 	s.UpdateCombineWait += other.UpdateCombineWait
 	s.UpdateCombineQueueWait += other.UpdateCombineQueueWait
@@ -1691,6 +1803,7 @@ func (domain *collectionWriteDomain) statsSnapshot() CollectionManagerStats {
 	stats.UpdateCombineFallbackRequests = domain.updateCombineFallbackRequests.Load()
 	stats.UpdateCombineQueueDepthMax = domain.updateCombineQueueDepthMax.Load()
 	stats.UpdateCombineInlineRequests = domain.updateCombineInlineRequests.Load()
+	stats.UpdateCombineUnsafeAsyncAcks = domain.updateCombineUnsafeAsyncAcks.Load()
 	stats.UpdateCombineEnqueue = durationFromAtomicNs(domain.updateCombineEnqueueNs.Load())
 	stats.UpdateCombineWait = durationFromAtomicNs(domain.updateCombineWaitNs.Load())
 	stats.UpdateCombineQueueWait = durationFromAtomicNs(domain.updateCombineQueueWaitNs.Load())
@@ -2242,6 +2355,13 @@ func (domain *collectionWriteDomain) observeUpdateCombineInline() {
 	domain.updateCombineInlineRequests.Add(1)
 }
 
+func (domain *collectionWriteDomain) observeUpdateCombineUnsafeAsyncAck() {
+	if domain == nil {
+		return
+	}
+	domain.updateCombineUnsafeAsyncAcks.Add(1)
+}
+
 func (domain *collectionWriteDomain) observeUpdateCombineEnqueue(d time.Duration) {
 	if domain == nil || d <= 0 {
 		return
@@ -2316,10 +2436,67 @@ func (m *CollectionManager) writeDomainForCollection(name string) *collectionWri
 	if domain := m.domains[name]; domain != nil {
 		return domain
 	}
-	domain := &collectionWriteDomain{}
+	domain := &collectionWriteDomain{updateCombineShards: defaultCollectionUpdateCombineShards}
 	domain.updateBatchDetailedStats.Store(m.updateBatchDetailedStats.Load())
 	m.domains[name] = domain
 	return domain
+}
+
+func (domain *collectionWriteDomain) setUpdateCombineShardsForProfiling(shards int) {
+	if domain == nil {
+		return
+	}
+	if shards < 1 {
+		shards = defaultCollectionUpdateCombineShards
+	}
+	domain.updateCombineMu.Lock()
+	if domain.updateCombineShards == shards {
+		domain.updateCombineMu.Unlock()
+		return
+	}
+	domain.updateCombineShards = shards
+	domain.updateCombineMu.Unlock()
+	domain.resetUpdateCombinerForProfiling()
+}
+
+func (domain *collectionWriteDomain) setUpdateCombineLaneWorkersForProfiling(enabled bool) {
+	if domain == nil {
+		return
+	}
+	domain.updateCombineMu.Lock()
+	if domain.updateCombineLaneWorkers == enabled {
+		domain.updateCombineMu.Unlock()
+		return
+	}
+	domain.updateCombineLaneWorkers = enabled
+	domain.updateCombineMu.Unlock()
+	domain.resetUpdateCombinerForProfiling()
+}
+
+func (domain *collectionWriteDomain) setUpdateCombineUnsafeStaleDirectPlansForProfiling(enabled bool) {
+	if domain == nil {
+		return
+	}
+	domain.updateCombineUnsafeStaleDirectPlans.Store(enabled)
+}
+
+func (domain *collectionWriteDomain) setUpdateCombineUnsafeAsyncAckForProfiling(enabled bool) {
+	if domain == nil {
+		return
+	}
+	if domain.updateCombineUnsafeAsyncAck.Load() == enabled {
+		return
+	}
+	domain.updateCombineUnsafeAsyncAck.Store(enabled)
+	domain.resetUpdateCombinerForProfiling()
+}
+
+func (domain *collectionWriteDomain) allowUnsafeStaleDirectUpdatePlanForProfiling(plan *updateBatchPlan) bool {
+	return domain != nil &&
+		domain.updateCombineUnsafeStaleDirectPlans.Load() &&
+		plan != nil &&
+		plan.directBufferedUpdate != nil &&
+		plan.canBufferDirectUpdateBatch
 }
 
 func (m *CollectionManager) existingWriteDomainForCollection(name string) *collectionWriteDomain {
@@ -8788,14 +8965,24 @@ func updateBatchItemError(index int, err error) error {
 }
 
 type collectionUpdateCombiner struct {
-	maxBatch int
-	idleTTL  time.Duration
-	requests chan collectionUpdateCombineRequest
-	done     chan struct{}
-	domain   *collectionWriteDomain
-	running  atomic.Bool
-	mu       sync.RWMutex
-	stopped  bool
+	maxBatch       int
+	idleTTL        time.Duration
+	requests       chan collectionUpdateCombineRequest
+	done           chan struct{}
+	domain         *collectionWriteDomain
+	unsafeAsyncAck bool
+	running        atomic.Bool
+	runningCount   atomic.Int64
+	mu             sync.RWMutex
+	stopped        bool
+
+	shardedRequests []chan collectionUpdateCombineRequest
+	readyShards     chan int
+	preparedBatches chan collectionUpdateCombinePreparedBatch
+	laneWorkers     bool
+	nextShard       int
+	deferred        []collectionUpdateCombineRequest
+	deferredCount   atomic.Int64
 
 	batchScratch []collectionUpdateCombineRequest
 	itemsScratch []updateBatchItem
@@ -8824,6 +9011,13 @@ type collectionUpdateCombineResult struct {
 	err      error
 }
 
+type collectionUpdateCombinePreparedBatch struct {
+	batch          []collectionUpdateCombineRequest
+	plan           *updateBatchPlan
+	err            error
+	fallbackDirect bool
+}
+
 type collectionUpdateCombineWaiter struct {
 	ch chan collectionUpdateCombineResult
 }
@@ -8847,9 +9041,12 @@ func (c *Collection) updateFastPathWithoutCreatingCombiner() (*collectionUpdateC
 			if domain.updateCombiner == combiner {
 				domain.updateCombiner = nil
 			}
-		} else if combiner.running.Load() || len(combiner.requests) > 0 {
+		} else if combiner.hasQueuedOrRunning() {
 			return combiner, nil
 		}
+	}
+	if domain.updateCombineUnsafeAsyncAck.Load() {
+		return nil, nil
 	}
 	if !domain.updateInlineQuietAfterCombinerActivity() {
 		return nil, nil
@@ -8991,18 +9188,49 @@ func (c *Collection) updateCombiner() *collectionUpdateCombiner {
 			domain.updateCombineMu.Unlock()
 			continue
 		}
-		combiner := &collectionUpdateCombiner{
-			maxBatch: defaultCollectionUpdateCombineMaxBatch,
-			idleTTL:  domain.updateCombineIdleTTL(),
-			requests: make(chan collectionUpdateCombineRequest, defaultCollectionUpdateCombineMaxBatch*4),
-			done:     make(chan struct{}),
-			domain:   domain,
-		}
+		combiner := domain.newUpdateCombinerLocked()
 		domain.updateCombiner = combiner
 		domain.updateCombineMu.Unlock()
-		go combiner.run()
+		combiner.start()
 		return combiner
 	}
+}
+
+func (domain *collectionWriteDomain) newUpdateCombinerLocked() *collectionUpdateCombiner {
+	shards := domain.updateCombineShardCountLocked()
+	unsafeAsyncAck := domain.updateCombineUnsafeAsyncAck.Load()
+	queueCap := defaultCollectionUpdateCombineMaxBatch * 4
+	if unsafeAsyncAck {
+		queueCap = defaultCollectionUpdateCombineUnsafeAsyncAckQueueCap
+	}
+	combiner := &collectionUpdateCombiner{
+		maxBatch:       defaultCollectionUpdateCombineMaxBatch,
+		idleTTL:        domain.updateCombineIdleTTL(),
+		done:           make(chan struct{}),
+		domain:         domain,
+		unsafeAsyncAck: unsafeAsyncAck,
+	}
+	if shards <= 1 {
+		combiner.requests = make(chan collectionUpdateCombineRequest, queueCap)
+		return combiner
+	}
+	combiner.shardedRequests = make([]chan collectionUpdateCombineRequest, shards)
+	for i := range combiner.shardedRequests {
+		combiner.shardedRequests[i] = make(chan collectionUpdateCombineRequest, queueCap)
+	}
+	combiner.readyShards = make(chan int, shards*4)
+	combiner.laneWorkers = domain.updateCombineLaneWorkers
+	if combiner.laneWorkers {
+		combiner.preparedBatches = make(chan collectionUpdateCombinePreparedBatch, shards*4)
+	}
+	return combiner
+}
+
+func (domain *collectionWriteDomain) updateCombineShardCountLocked() int {
+	if domain == nil || domain.updateCombineShards < 1 {
+		return defaultCollectionUpdateCombineShards
+	}
+	return domain.updateCombineShards
 }
 
 func (domain *collectionWriteDomain) stopUpdateCombiner() {
@@ -9070,6 +9298,40 @@ func (combiner *collectionUpdateCombiner) update(c *Collection, documentID []byt
 		}
 		return c.updateDirect(documentID, update)
 	}
+	if combiner.unsafeAsyncAck {
+		req := newCollectionUpdateCombineRequest(c, documentID, update, bsonSet, hasBSONSet, nil)
+		detailedStats := combiner.domain != nil && combiner.domain.updateBatchDetailedStats.Load()
+		var enqueueStart time.Time
+		if detailedStats {
+			enqueueStart = time.Now()
+			req.queuedAt = enqueueStart
+		}
+		if combiner.enqueue(req) {
+			if detailedStats {
+				combiner.domain.observeUpdateCombineEnqueue(time.Since(enqueueStart))
+			}
+			if combiner.domain != nil {
+				combiner.domain.observeUpdateCombineUnsafeAsyncAck()
+			}
+			return true, true, nil
+		}
+		if detailedStats {
+			combiner.domain.observeUpdateCombineEnqueue(time.Since(enqueueStart))
+		}
+		// This profiling-only mode is best-effort. If the foreground admission
+		// queue saturates, fall back to the existing safe direct path so the
+		// caller gets a real result instead of dropping the update.
+		if combiner.isStopped() {
+			combiner.waitDone()
+		}
+		if err := c.ensureWriteDomainOpen(); err != nil {
+			return false, false, err
+		}
+		if hasBSONSet {
+			return c.updateBSONSetDirect(documentID, bsonSet)
+		}
+		return c.updateDirect(documentID, update)
+	}
 	waiter := combiner.getWaiter()
 	req := newCollectionUpdateCombineRequest(c, documentID, update, bsonSet, hasBSONSet, waiter.ch)
 	detailedStats := combiner.domain != nil && combiner.domain.updateBatchDetailedStats.Load()
@@ -9113,6 +9375,49 @@ func (combiner *collectionUpdateCombiner) update(c *Collection, documentID []byt
 	return result.matched, result.modified, result.err
 }
 
+func hashCollectionUpdateDocumentID(documentID []byte) uint64 {
+	return xxhash.Sum64(documentID)
+}
+
+func (combiner *collectionUpdateCombiner) hasShardedIngress() bool {
+	return combiner != nil && len(combiner.shardedRequests) > 0
+}
+
+func (combiner *collectionUpdateCombiner) hasShardWorkers() bool {
+	return combiner != nil && combiner.laneWorkers && len(combiner.shardedRequests) > 0
+}
+
+func (combiner *collectionUpdateCombiner) hasQueuedOrRunning() bool {
+	if combiner == nil {
+		return false
+	}
+	if combiner.hasShardWorkers() && !combiner.isStopped() {
+		return true
+	}
+	if combiner.running.Load() || combiner.deferredCount.Load() > 0 {
+		return true
+	}
+	if combiner.hasShardedIngress() {
+		for _, requests := range combiner.shardedRequests {
+			if len(requests) > 0 {
+				return true
+			}
+		}
+		return false
+	}
+	return len(combiner.requests) > 0
+}
+
+func (combiner *collectionUpdateCombiner) start() {
+	if combiner != nil {
+		if combiner.hasShardWorkers() {
+			go combiner.runShardWorkers()
+			return
+		}
+		go combiner.run()
+	}
+}
+
 func newCollectionUpdateCombineRequest(c *Collection, documentID []byte, update func(current []byte) (replacement []byte, changed bool, err error), bsonSet bsonSetUpdate, hasBSONSet bool, done chan collectionUpdateCombineResult) collectionUpdateCombineRequest {
 	req := collectionUpdateCombineRequest{
 		collection: c,
@@ -9124,11 +9429,11 @@ func newCollectionUpdateCombineRequest(c *Collection, documentID []byte, update 
 	if len(documentID) <= collectionUpdateCombineInlineDocumentIDMax {
 		req.documentIDInlineLen = len(documentID)
 		copy(req.documentIDInline[:], documentID)
-		req.documentHash = xxhash.Sum64(req.documentIDInline[:req.documentIDInlineLen])
+		req.documentHash = hashCollectionUpdateDocumentID(req.documentIDInline[:req.documentIDInlineLen])
 		return req
 	}
 	req.documentID = bytes.Clone(documentID)
-	req.documentHash = xxhash.Sum64(req.documentID)
+	req.documentHash = hashCollectionUpdateDocumentID(req.documentID)
 	return req
 }
 
@@ -9195,13 +9500,34 @@ func (combiner *collectionUpdateCombiner) enqueue(req collectionUpdateCombineReq
 	if validateCollectionUpdateCombineRequest(req) != nil {
 		return false
 	}
-	if req.done == nil || cap(req.done) == 0 || len(req.done) > 0 {
+	if req.done == nil {
+		if !combiner.unsafeAsyncAck {
+			return false
+		}
+	} else if cap(req.done) == 0 || len(req.done) > 0 {
 		return false
 	}
 	combiner.mu.RLock()
 	defer combiner.mu.RUnlock()
 	if combiner.stopped {
 		return false
+	}
+	if combiner.hasShardedIngress() {
+		shard := int(req.documentHash % uint64(len(combiner.shardedRequests)))
+		requests := combiner.shardedRequests[shard]
+		select {
+		case requests <- req:
+			select {
+			case combiner.readyShards <- shard:
+			default:
+			}
+			if combiner.domain != nil {
+				combiner.domain.observeUpdateCombineRequest(len(requests))
+			}
+			return true
+		default:
+			return false
+		}
 	}
 	select {
 	case combiner.requests <- req:
@@ -9236,6 +9562,15 @@ func (combiner *collectionUpdateCombiner) closeRequests() bool {
 		return false
 	}
 	combiner.stopped = true
+	if combiner.hasShardedIngress() {
+		for _, requests := range combiner.shardedRequests {
+			close(requests)
+		}
+		if combiner.readyShards != nil {
+			close(combiner.readyShards)
+		}
+		return true
+	}
 	if combiner.requests != nil {
 		close(combiner.requests)
 	}
@@ -9255,15 +9590,28 @@ func (combiner *collectionUpdateCombiner) run() {
 			close(combiner.done)
 		}
 	}()
+	if combiner.hasShardedIngress() {
+		combiner.runSharded()
+		return
+	}
 	if combiner.idleTTL <= 0 {
-		for first := range combiner.requests {
+		for {
+			first, ok := combiner.waitForNextRequest()
+			if !ok {
+				return
+			}
 			combiner.runBatchStartingWith(first)
 		}
-		return
 	}
 	idle := time.NewTimer(combiner.idleTTL)
 	defer idle.Stop()
 	for {
+		if first, ok := combiner.popDeferredRequest(); ok {
+			stopAndDrainTimer(idle)
+			combiner.runBatchStartingWith(first)
+			idle.Reset(combiner.idleTTL)
+			continue
+		}
 		select {
 		case first, ok := <-combiner.requests:
 			if !ok {
@@ -9281,6 +9629,482 @@ func (combiner *collectionUpdateCombiner) run() {
 	}
 }
 
+func (combiner *collectionUpdateCombiner) runSharded() {
+	if combiner.idleTTL <= 0 {
+		for {
+			first, ok := combiner.waitForNextRequest()
+			if !ok {
+				return
+			}
+			combiner.runBatchStartingWith(first)
+		}
+	}
+	idle := time.NewTimer(combiner.idleTTL)
+	defer idle.Stop()
+	for {
+		if first, ok := combiner.popDeferredRequest(); ok {
+			stopAndDrainTimer(idle)
+			combiner.runBatchStartingWith(first)
+			idle.Reset(combiner.idleTTL)
+			continue
+		}
+		select {
+		case _, ok := <-combiner.readyShards:
+			if !ok {
+				return
+			}
+			first, got, closed := combiner.tryDequeueShardedRequest()
+			if !got {
+				if closed {
+					return
+				}
+				continue
+			}
+			stopAndDrainTimer(idle)
+			combiner.runBatchStartingWith(first)
+			idle.Reset(combiner.idleTTL)
+		case <-idle.C:
+			if combiner.retireIdle() {
+				return
+			}
+			idle.Reset(combiner.idleTTL)
+		}
+	}
+}
+
+func (combiner *collectionUpdateCombiner) runShardWorkers() {
+	defer func() {
+		_ = combiner.closeRequests()
+		if combiner.done != nil {
+			close(combiner.done)
+		}
+	}()
+	var wg sync.WaitGroup
+	for shard := range combiner.shardedRequests {
+		wg.Add(1)
+		go func(shard int) {
+			defer wg.Done()
+			combiner.runShardWorker(shard)
+		}(shard)
+	}
+	workersDone := make(chan struct{})
+	go func() {
+		wg.Wait()
+		if combiner.preparedBatches != nil {
+			close(combiner.preparedBatches)
+		}
+		close(workersDone)
+	}()
+	combiner.runPreparedBatchMerger()
+	<-workersDone
+}
+
+func (combiner *collectionUpdateCombiner) runShardWorker(shard int) {
+	if combiner == nil || shard < 0 || shard >= len(combiner.shardedRequests) {
+		return
+	}
+	requests := combiner.shardedRequests[shard]
+	batchCap := combiner.maxBatch
+	if batchCap < 1 {
+		batchCap = 1
+	}
+	batch := make([]collectionUpdateCombineRequest, 0, batchCap)
+	itemsScratch := make([]updateBatchItem, 0, batchCap)
+	detailedStats := combiner.domain != nil && combiner.domain.updateBatchDetailedStats.Load()
+	for first := range requests {
+		batch = append(batch[:0], first)
+		combiner.observeUpdateCombineDequeued(first, detailedStats)
+		drainYields := 0
+		var drainStart time.Time
+		if detailedStats {
+			drainStart = time.Now()
+		}
+		closed := false
+		for len(batch) < batchCap {
+			select {
+			case req, ok := <-requests:
+				if !ok {
+					closed = true
+					goto flush
+				}
+				combiner.observeUpdateCombineDequeued(req, detailedStats)
+				req.queuedAt = time.Time{}
+				if collectionUpdateCombineBatchHasID(batch, req) {
+					completeUpdateCombineRequest(req, runUpdateCombineDirect(req))
+					continue
+				}
+				batch = append(batch, req)
+			default:
+				if drainYields < defaultCollectionUpdateCombineLaneDrainYields {
+					drainYields++
+					runtime.Gosched()
+					continue
+				}
+				goto flush
+			}
+		}
+	flush:
+		if detailedStats {
+			combiner.domain.observeUpdateCombineDrain(time.Since(drainStart))
+		}
+		prepared := combiner.prepareBatchWithScratch(batch, &itemsScratch)
+		if combiner.preparedBatches == nil {
+			combiner.completePreparedBatch(prepared)
+		} else {
+			combiner.preparedBatches <- prepared
+		}
+		clear(batch)
+		batch = batch[:0]
+		if closed {
+			return
+		}
+	}
+}
+
+func (combiner *collectionUpdateCombiner) prepareBatchWithScratch(batch []collectionUpdateCombineRequest, itemsScratch *[]updateBatchItem) collectionUpdateCombinePreparedBatch {
+	ownedBatch := make([]collectionUpdateCombineRequest, len(batch))
+	copy(ownedBatch, batch)
+	prepared := collectionUpdateCombinePreparedBatch{batch: ownedBatch}
+	combiner.beginUpdateCombineRun()
+	defer combiner.endUpdateCombineRun()
+	detailedStats := combiner.domain != nil && combiner.domain.updateBatchDetailedStats.Load()
+	var runStart time.Time
+	if detailedStats {
+		runStart = time.Now()
+	}
+	defer func() {
+		if detailedStats {
+			combiner.domain.observeUpdateCombineRun(time.Since(runStart))
+		}
+	}()
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			prepared.err = collectionUpdatePanicError("combiner_prepare", recovered)
+		}
+	}()
+	if combiner.domain == nil ||
+		combiner.domain.closingWrites.Load() ||
+		collectionUpdateCombineHasDuplicateIDs(ownedBatch) ||
+		!collectionUpdateCombineSameCollection(ownedBatch) {
+		prepared.fallbackDirect = true
+		return prepared
+	}
+	if itemsScratch == nil {
+		localScratch := make([]updateBatchItem, 0, len(ownedBatch))
+		itemsScratch = &localScratch
+	}
+	if cap(*itemsScratch) < len(ownedBatch) {
+		*itemsScratch = make([]updateBatchItem, len(ownedBatch))
+	}
+	clear(*itemsScratch)
+	items := (*itemsScratch)[:len(ownedBatch)]
+	for i := range ownedBatch {
+		req := &ownedBatch[i]
+		items[i] = updateBatchItem{
+			UpdateBatchItem: UpdateBatchItem{
+				DocumentID: req.documentIDBytes(),
+				Update:     req.update,
+			},
+			bsonSet:    req.bsonSet,
+			hasBSONSet: req.hasBSONSet,
+		}
+	}
+	plan, err := ownedBatch[0].collection.buildUpdateBatchPlan(items, updateBatchModeNoSecondaryUniqueIndexChanges, false)
+	clear(items)
+	*itemsScratch = items[:0]
+	if errors.Is(err, errUpdateBatchHasSecondaryUniqueIndex) ||
+		errors.Is(err, errUpdateBatchChangesSecondaryUniqueIndex) {
+		prepared.fallbackDirect = true
+		return prepared
+	}
+	if err != nil {
+		prepared.err = err
+		return prepared
+	}
+	if plan == nil || plan.directBufferedUpdate == nil {
+		prepared.plan = plan
+		return prepared
+	}
+	prepared.plan = plan
+	return prepared
+}
+
+func (combiner *collectionUpdateCombiner) runPreparedBatchMerger() {
+	if combiner == nil || combiner.preparedBatches == nil {
+		return
+	}
+	batchCap := combiner.maxBatch
+	if batchCap < 1 {
+		batchCap = 1
+	}
+	pending := make([]collectionUpdateCombinePreparedBatch, 0, batchCap)
+	for first := range combiner.preparedBatches {
+		pending = append(pending[:0], first)
+		pendingRequests := len(first.batch)
+		drainYields := 0
+		for pendingRequests < batchCap {
+			select {
+			case prepared, ok := <-combiner.preparedBatches:
+				if !ok {
+					combiner.stagePreparedBatches(pending)
+					return
+				}
+				pending = append(pending, prepared)
+				pendingRequests += len(prepared.batch)
+			default:
+				if drainYields < defaultCollectionUpdateCombineLaneDrainYields {
+					drainYields++
+					runtime.Gosched()
+					continue
+				}
+				goto stage
+			}
+		}
+	stage:
+		combiner.stagePreparedBatches(pending)
+		for i := range pending {
+			pending[i] = collectionUpdateCombinePreparedBatch{}
+		}
+	}
+}
+
+func (combiner *collectionUpdateCombiner) stagePreparedBatches(prepared []collectionUpdateCombinePreparedBatch) {
+	if len(prepared) == 0 {
+		return
+	}
+	direct := make([]collectionUpdateCombinePreparedBatch, 0, len(prepared))
+	for _, p := range prepared {
+		if p.err != nil || p.fallbackDirect || p.plan == nil || p.plan.directBufferedUpdate == nil {
+			combiner.completePreparedBatch(p)
+			continue
+		}
+		direct = append(direct, p)
+	}
+	if len(direct) == 0 {
+		return
+	}
+	merged, collection, err := mergeDirectBufferedPreparedBatches(direct)
+	if err == nil {
+		err = collection.withMutationLock(func() error {
+			buffered, bufferErr := collection.bufferDirectUpdateBatchPlanLocked(merged)
+			if bufferErr != nil {
+				return bufferErr
+			}
+			if !buffered {
+				return ErrConcurrentMutation
+			}
+			if collection.writeDomain != nil {
+				collection.writeDomain.mu.Lock()
+				for _, p := range direct {
+					retainDirectBufferedDocumentArenaLocked(collection.writeDomain, p.plan)
+				}
+				collection.writeDomain.mu.Unlock()
+			}
+			collection.setLastUpdateStats(merged.stats)
+			return nil
+		})
+	}
+	if err != nil {
+		for _, p := range direct {
+			combiner.completePreparedBatchWithError(p, err)
+		}
+		return
+	}
+	for _, p := range direct {
+		combiner.completePreparedBatch(p)
+	}
+}
+
+func (combiner *collectionUpdateCombiner) completePreparedBatch(prepared collectionUpdateCombinePreparedBatch) {
+	defer func() {
+		if prepared.plan != nil {
+			prepared.plan.close()
+		}
+	}()
+	if prepared.err != nil {
+		if completeUpdateCombineBatchWithItemFallback(prepared.batch, prepared.err) {
+			if combiner.domain != nil {
+				combiner.domain.observeUpdateCombineBatch(len(prepared.batch), true)
+			}
+			return
+		}
+		if combiner.domain != nil {
+			combiner.domain.observeUpdateCombineBatch(len(prepared.batch), false)
+		}
+		completeUpdateCombineBatchWithError(prepared.batch, prepared.err)
+		return
+	}
+	if prepared.fallbackDirect {
+		if combiner.domain != nil {
+			combiner.domain.observeUpdateCombineBatch(len(prepared.batch), true)
+		}
+		for _, req := range prepared.batch {
+			completeUpdateCombineRequest(req, runUpdateCombineDirect(req))
+		}
+		return
+	}
+	if prepared.plan == nil {
+		completeUpdateCombineBatchWithError(prepared.batch, errors.New("collections: update combiner prepared nil plan"))
+		return
+	}
+	results := prepared.plan.results
+	if len(results) != len(prepared.batch) {
+		completeUpdateCombineBatchWithError(prepared.batch, fmt.Errorf("collections: update combiner result count %d for prepared batch size %d", len(results), len(prepared.batch)))
+		return
+	}
+	if combiner.domain != nil {
+		combiner.domain.observeUpdateCombineBatch(len(prepared.batch), false)
+	}
+	for i, req := range prepared.batch {
+		result := results[i]
+		completeUpdateCombineRequest(req, collectionUpdateCombineResult{matched: result.Matched, modified: result.Modified})
+	}
+}
+
+func (combiner *collectionUpdateCombiner) completePreparedBatchWithError(prepared collectionUpdateCombinePreparedBatch, err error) {
+	defer func() {
+		if prepared.plan != nil {
+			prepared.plan.close()
+		}
+	}()
+	if completeUpdateCombineBatchWithItemFallback(prepared.batch, err) {
+		if combiner.domain != nil {
+			combiner.domain.observeUpdateCombineBatch(len(prepared.batch), true)
+		}
+		return
+	}
+	if combiner.domain != nil {
+		combiner.domain.observeUpdateCombineBatch(len(prepared.batch), false)
+	}
+	completeUpdateCombineBatchWithError(prepared.batch, err)
+}
+
+func mergeDirectBufferedPreparedBatches(prepared []collectionUpdateCombinePreparedBatch) (*updateBatchPlan, *Collection, error) {
+	if len(prepared) == 0 {
+		return nil, nil, errors.New("collections: no prepared update batches to merge")
+	}
+	firstPlan := prepared[0].plan
+	if firstPlan == nil || firstPlan.directBufferedUpdate == nil || len(prepared[0].batch) == 0 || prepared[0].batch[0].collection == nil {
+		return nil, nil, errors.New("collections: invalid prepared direct update batch")
+	}
+	collection := prepared[0].batch[0].collection
+	merged := &updateBatchPlan{
+		meta:                        firstPlan.meta,
+		catalog:                     firstPlan.catalog,
+		baseUserRoot:                firstPlan.baseUserRoot,
+		baseSystemRoot:              firstPlan.baseSystemRoot,
+		baseCommitSeq:               firstPlan.baseCommitSeq,
+		baseRootIDs:                 make(map[string]uint64, len(firstPlan.baseRootIDs)),
+		canBufferIndexedUpdateBatch: firstPlan.canBufferIndexedUpdateBatch,
+		canBufferDirectUpdateBatch:  true,
+		directBufferedUpdate: &directBufferedUpdatePlan{
+			templateRootName: firstPlan.directBufferedUpdate.templateRootName,
+			primaryRootName:  firstPlan.directBufferedUpdate.primaryRootName,
+		},
+	}
+	rootIndex := make(map[string]int, len(firstPlan.rootNames))
+	addRoot := func(plan *updateBatchPlan, idx int) error {
+		if idx < 0 || idx >= len(plan.rootNames) || idx >= len(plan.policies) || idx >= len(plan.uniqueSecondaryIndexByRoot) {
+			return errors.New("collections: invalid direct update root metadata")
+		}
+		rootName := plan.rootNames[idx]
+		baseRoot, ok := plan.baseRootIDs[rootName]
+		if !ok {
+			return fmt.Errorf("collections: direct update plan missing base root for %q", rootName)
+		}
+		if existingIdx, ok := rootIndex[rootName]; ok {
+			if merged.baseRootIDs[rootName] != baseRoot ||
+				merged.uniqueSecondaryIndexByRoot[existingIdx] != plan.uniqueSecondaryIndexByRoot[idx] {
+				return fmt.Errorf("collections: incompatible direct update root %q", rootName)
+			}
+			return nil
+		}
+		rootIndex[rootName] = len(merged.rootNames)
+		merged.rootNames = append(merged.rootNames, rootName)
+		merged.baseRootIDs[rootName] = baseRoot
+		merged.policies = append(merged.policies, plan.policies[idx])
+		merged.uniqueSecondaryIndexByRoot = append(merged.uniqueSecondaryIndexByRoot, plan.uniqueSecondaryIndexByRoot[idx])
+		return nil
+	}
+	for _, p := range prepared {
+		plan := p.plan
+		if plan == nil || plan.directBufferedUpdate == nil {
+			return nil, nil, errors.New("collections: cannot merge non-direct update plan")
+		}
+		if len(p.batch) == 0 || p.batch[0].collection != collection {
+			return nil, nil, errors.New("collections: cannot merge update plans across collections")
+		}
+		for i := range plan.rootNames {
+			if err := addRoot(plan, i); err != nil {
+				return nil, nil, err
+			}
+		}
+		merged.results = append(merged.results, plan.results...)
+		addCollectionUpdateStatsForMerge(&merged.stats, plan.stats)
+		merged.directBufferedUpdate.templateEntries = append(merged.directBufferedUpdate.templateEntries, plan.directBufferedUpdate.templateEntries...)
+		merged.directBufferedUpdate.primaryEntries = append(merged.directBufferedUpdate.primaryEntries, plan.directBufferedUpdate.primaryEntries...)
+		merged.directBufferedUpdate.secondaryRootPlans = append(merged.directBufferedUpdate.secondaryRootPlans, plan.directBufferedUpdate.secondaryRootPlans...)
+		merged.directBufferedUpdate.stagedBytes += plan.directBufferedUpdate.stagedBytes
+	}
+	return merged, collection, nil
+}
+
+func addCollectionUpdateStatsForMerge(dst *CollectionUpdateStats, src CollectionUpdateStats) {
+	if dst == nil {
+		return
+	}
+	if dst.Indexes == 0 {
+		dst.Indexes = src.Indexes
+	}
+	dst.Items += src.Items
+	dst.Matched += src.Matched
+	dst.Modified += src.Modified
+	dst.Runs += src.Runs
+	dst.BufferedBatches += src.BufferedBatches
+	dst.CurrentRead += src.CurrentRead
+	dst.Callback += src.Callback
+	dst.StructuredUpdateApply += src.StructuredUpdateApply
+	dst.StructuredUpdateApplications += src.StructuredUpdateApplications
+	dst.PrepareDocuments += src.PrepareDocuments
+	dst.IndexStateExtraction += src.IndexStateExtraction
+	dst.OldIndexStateExtract += src.OldIndexStateExtract
+	dst.NewIndexStateExtract += src.NewIndexStateExtract
+	dst.UniqueIndexPreflight += src.UniqueIndexPreflight
+	dst.TemplateRunBuild += src.TemplateRunBuild
+	dst.PrimaryRunBuild += src.PrimaryRunBuild
+	dst.IndexStateRunBuild += src.IndexStateRunBuild
+	dst.SecondaryRunBuild += src.SecondaryRunBuild
+	dst.SecondaryDeleteEntries += src.SecondaryDeleteEntries
+	dst.SecondarySetEntries += src.SecondarySetEntries
+	dst.SecondaryKeyBytes += src.SecondaryKeyBytes
+	dst.IndexValueChanges += src.IndexValueChanges
+	dst.IndexValueUnchanged += src.IndexValueUnchanged
+	dst.MaskFallbacks += src.MaskFallbacks
+	dst.UniqueIndexChecks += src.UniqueIndexChecks
+	dst.UniqueIndexCheckSkips += src.UniqueIndexCheckSkips
+	for _, secondaryRun := range src.SecondaryRuns {
+		mergeCollectionUpdateSecondaryRunStatsForMerge(&dst.SecondaryRuns, secondaryRun)
+	}
+	for i := 0; i < src.IndexStatsCount && i < len(src.IndexStats); i++ {
+		mergeCollectionUpdateIndexStat(&dst.IndexStats, &dst.IndexStatsCount, src.IndexStats[i])
+	}
+}
+
+func mergeCollectionUpdateSecondaryRunStatsForMerge(dst *[]CollectionUpdateSecondaryRunStats, src CollectionUpdateSecondaryRunStats) {
+	if dst == nil || src.IndexName == "" {
+		return
+	}
+	for i := range *dst {
+		if (*dst)[i].IndexName == src.IndexName {
+			(*dst)[i].Deletes = saturatingAddNonNegativeInt((*dst)[i].Deletes, src.Deletes)
+			(*dst)[i].Sets = saturatingAddNonNegativeInt((*dst)[i].Sets, src.Sets)
+			(*dst)[i].KeyBytes = saturatingAddNonNegativeInt((*dst)[i].KeyBytes, src.KeyBytes)
+			return
+		}
+	}
+	*dst = append(*dst, src)
+}
+
 func stopAndDrainTimer(timer *time.Timer) {
 	if !timer.Stop() {
 		select {
@@ -9288,6 +10112,87 @@ func stopAndDrainTimer(timer *time.Timer) {
 		default:
 		}
 	}
+}
+
+func (combiner *collectionUpdateCombiner) waitForNextRequest() (collectionUpdateCombineRequest, bool) {
+	if combiner == nil {
+		return collectionUpdateCombineRequest{}, false
+	}
+	if req, ok := combiner.popDeferredRequest(); ok {
+		return req, true
+	}
+	if combiner.hasShardedIngress() {
+		return combiner.waitForShardedRequest()
+	}
+	req, ok := <-combiner.requests
+	return req, ok
+}
+
+func (combiner *collectionUpdateCombiner) popDeferredRequest() (collectionUpdateCombineRequest, bool) {
+	if combiner == nil || len(combiner.deferred) == 0 {
+		return collectionUpdateCombineRequest{}, false
+	}
+	req := combiner.deferred[0]
+	copy(combiner.deferred, combiner.deferred[1:])
+	combiner.deferred[len(combiner.deferred)-1] = collectionUpdateCombineRequest{}
+	combiner.deferred = combiner.deferred[:len(combiner.deferred)-1]
+	combiner.deferredCount.Add(-1)
+	return req, true
+}
+
+func (combiner *collectionUpdateCombiner) deferUpdateCombineRequest(req collectionUpdateCombineRequest) {
+	if combiner == nil {
+		return
+	}
+	combiner.deferred = append(combiner.deferred, req)
+	combiner.deferredCount.Add(1)
+}
+
+func (combiner *collectionUpdateCombiner) waitForShardedRequest() (collectionUpdateCombineRequest, bool) {
+	for {
+		if req, ok, closed := combiner.tryDequeueShardedRequest(); ok || closed {
+			return req, ok
+		}
+		_, ok := <-combiner.readyShards
+		if !ok {
+			if req, got, _ := combiner.tryDequeueShardedRequest(); got {
+				return req, true
+			}
+			return collectionUpdateCombineRequest{}, false
+		}
+	}
+}
+
+func (combiner *collectionUpdateCombiner) tryDequeueRequest() (collectionUpdateCombineRequest, bool, bool) {
+	if combiner.hasShardedIngress() {
+		return combiner.tryDequeueShardedRequest()
+	}
+	select {
+	case req, ok := <-combiner.requests:
+		return req, ok, !ok
+	default:
+		return collectionUpdateCombineRequest{}, false, false
+	}
+}
+
+func (combiner *collectionUpdateCombiner) tryDequeueShardedRequest() (collectionUpdateCombineRequest, bool, bool) {
+	if combiner == nil || len(combiner.shardedRequests) == 0 {
+		return collectionUpdateCombineRequest{}, false, true
+	}
+	allClosed := true
+	for offset := 0; offset < len(combiner.shardedRequests); offset++ {
+		idx := (combiner.nextShard + offset) % len(combiner.shardedRequests)
+		select {
+		case req, ok := <-combiner.shardedRequests[idx]:
+			if ok {
+				combiner.nextShard = (idx + 1) % len(combiner.shardedRequests)
+				return req, true, false
+			}
+		default:
+			allClosed = false
+		}
+	}
+	return collectionUpdateCombineRequest{}, false, allClosed
 }
 
 func (combiner *collectionUpdateCombiner) retireIdle() bool {
@@ -9311,9 +10216,7 @@ func (combiner *collectionUpdateCombiner) retireIdle() bool {
 	if !stopped {
 		return false
 	}
-	for req := range combiner.requests {
-		completeUpdateCombineRequest(req, runUpdateCombineDirect(req))
-	}
+	combiner.drainClosedRequestsDirect()
 	if combiner.domain != nil {
 		combiner.domain.updateCombineMu.Lock()
 		if combiner.domain.updateDraining == combiner {
@@ -9322,6 +10225,35 @@ func (combiner *collectionUpdateCombiner) retireIdle() bool {
 		combiner.domain.updateCombineMu.Unlock()
 	}
 	return true
+}
+
+func (combiner *collectionUpdateCombiner) drainClosedRequestsDirect() {
+	if combiner == nil {
+		return
+	}
+	for {
+		req, ok := combiner.popDeferredRequest()
+		if !ok {
+			break
+		}
+		completeUpdateCombineRequest(req, runUpdateCombineDirect(req))
+	}
+	if combiner.hasShardedIngress() {
+		for {
+			req, ok, closed := combiner.tryDequeueShardedRequest()
+			if ok {
+				completeUpdateCombineRequest(req, runUpdateCombineDirect(req))
+				continue
+			}
+			if closed {
+				return
+			}
+			return
+		}
+	}
+	for req := range combiner.requests {
+		completeUpdateCombineRequest(req, runUpdateCombineDirect(req))
+	}
 }
 
 func (combiner *collectionUpdateCombiner) runBatchStartingWith(first collectionUpdateCombineRequest) {
@@ -9338,6 +10270,14 @@ func (combiner *collectionUpdateCombiner) runBatchStartingWith(first collectionU
 	drainYields := 0
 	detailedStats := combiner.domain != nil && combiner.domain.updateBatchDetailedStats.Load()
 	combiner.observeUpdateCombineDequeued(first, detailedStats)
+	deferredCount := len(combiner.deferred)
+	for i := 0; i < deferredCount && len(batch) < batchCap; i++ {
+		req, ok := combiner.popDeferredRequest()
+		if !ok {
+			break
+		}
+		batch = combiner.appendUpdateCombineRequestToBatch(batch, req)
+	}
 	var drainStart time.Time
 	if detailedStats {
 		drainStart = time.Now()
@@ -9348,18 +10288,21 @@ func (combiner *collectionUpdateCombiner) runBatchStartingWith(first collectionU
 		}
 	}
 	for len(batch) < batchCap {
-		select {
-		case req, ok := <-combiner.requests:
-			if !ok {
-				finishDrain()
-				combiner.runBatch(batch)
-				clear(batch)
-				combiner.batchScratch = batch[:0]
-				return
-			}
-			batch = append(batch, req)
+		req, ok, closed := combiner.tryDequeueRequest()
+		if ok {
 			combiner.observeUpdateCombineDequeued(req, detailedStats)
-		default:
+			req.queuedAt = time.Time{}
+			batch = combiner.appendUpdateCombineRequestToBatch(batch, req)
+			continue
+		}
+		if closed {
+			finishDrain()
+			combiner.runBatch(batch)
+			clear(batch)
+			combiner.batchScratch = batch[:0]
+			return
+		}
+		{
 			if drainYields < defaultCollectionUpdateCombineDrainYields {
 				drainYields++
 				if combiner.drainYield != nil {
@@ -9382,6 +10325,34 @@ func (combiner *collectionUpdateCombiner) runBatchStartingWith(first collectionU
 	combiner.batchScratch = batch[:0]
 }
 
+func (combiner *collectionUpdateCombiner) appendUpdateCombineRequestToBatch(batch []collectionUpdateCombineRequest, req collectionUpdateCombineRequest) []collectionUpdateCombineRequest {
+	if collectionUpdateCombineBatchHasID(batch, req) {
+		combiner.deferUpdateCombineRequest(req)
+		return batch
+	}
+	return append(batch, req)
+}
+
+func collectionUpdateCombineBatchHasID(batch []collectionUpdateCombineRequest, req collectionUpdateCombineRequest) bool {
+	reqDocumentID := (&req).documentIDBytes()
+	hash := req.documentHash
+	if hash == 0 && len(reqDocumentID) > 0 {
+		hash = hashCollectionUpdateDocumentID(reqDocumentID)
+	}
+	for i := range batch {
+		prev := &batch[i]
+		prevDocumentID := prev.documentIDBytes()
+		prevHash := prev.documentHash
+		if prevHash == 0 && len(prevDocumentID) > 0 {
+			prevHash = hashCollectionUpdateDocumentID(prevDocumentID)
+		}
+		if prevHash == hash && bytes.Equal(prevDocumentID, reqDocumentID) {
+			return true
+		}
+	}
+	return false
+}
+
 func (combiner *collectionUpdateCombiner) observeUpdateCombineDequeued(req collectionUpdateCombineRequest, detailedStats bool) {
 	if !detailedStats || combiner == nil || combiner.domain == nil || req.queuedAt.IsZero() {
 		return
@@ -9389,9 +10360,31 @@ func (combiner *collectionUpdateCombiner) observeUpdateCombineDequeued(req colle
 	combiner.domain.observeUpdateCombineQueueWait(time.Since(req.queuedAt))
 }
 
+func (combiner *collectionUpdateCombiner) beginUpdateCombineRun() {
+	if combiner == nil {
+		return
+	}
+	if combiner.runningCount.Add(1) == 1 {
+		combiner.running.Store(true)
+	}
+}
+
+func (combiner *collectionUpdateCombiner) endUpdateCombineRun() {
+	if combiner == nil {
+		return
+	}
+	if combiner.runningCount.Add(-1) == 0 {
+		combiner.running.Store(false)
+	}
+}
+
 func (combiner *collectionUpdateCombiner) runBatch(batch []collectionUpdateCombineRequest) {
-	combiner.running.Store(true)
-	defer combiner.running.Store(false)
+	combiner.runBatchWithScratch(batch, &combiner.itemsScratch)
+}
+
+func (combiner *collectionUpdateCombiner) runBatchWithScratch(batch []collectionUpdateCombineRequest, itemsScratch *[]updateBatchItem) {
+	combiner.beginUpdateCombineRun()
+	defer combiner.endUpdateCombineRun()
 	detailedStats := combiner.domain != nil && combiner.domain.updateBatchDetailedStats.Load()
 	var runStart time.Time
 	if detailedStats {
@@ -9422,11 +10415,15 @@ func (combiner *collectionUpdateCombiner) runBatch(batch []collectionUpdateCombi
 		}
 		return
 	}
-	if cap(combiner.itemsScratch) < len(batch) {
-		combiner.itemsScratch = make([]updateBatchItem, len(batch))
+	if itemsScratch == nil {
+		localScratch := make([]updateBatchItem, 0, len(batch))
+		itemsScratch = &localScratch
 	}
-	clear(combiner.itemsScratch)
-	items := combiner.itemsScratch[:len(batch)]
+	if cap(*itemsScratch) < len(batch) {
+		*itemsScratch = make([]updateBatchItem, len(batch))
+	}
+	clear(*itemsScratch)
+	items := (*itemsScratch)[:len(batch)]
 	for i := range batch {
 		req := &batch[i]
 		items[i] = updateBatchItem{
@@ -9440,7 +10437,7 @@ func (combiner *collectionUpdateCombiner) runBatch(batch []collectionUpdateCombi
 	}
 	results, batched, err := batch[0].collection.updateBatchOwnedItems(items, updateBatchModeNoSecondaryUniqueIndexChanges)
 	clear(items)
-	combiner.itemsScratch = items[:0]
+	*itemsScratch = items[:0]
 	if !batched && err == nil {
 		if combiner.domain != nil {
 			combiner.domain.observeUpdateCombineBatch(len(batch), true)
@@ -11946,7 +12943,8 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 	}()
 
 	phaseStart := updateBatchStatsNow(detailedStats)
-	if domain.count != 0 {
+	allowUnsafeStaleDirectPlan := domain.allowUnsafeStaleDirectUpdatePlanForProfiling(plan)
+	if domain.count != 0 && !allowUnsafeStaleDirectPlan {
 		if !plan.bufferedBase || !updateBatchCanReadBufferedDomainLocked(domain, plan.meta, plan.baseSystemRoot) {
 			plan.stats.BufferStageValidation += updateBatchStatsSince(detailedStats, phaseStart)
 			return false, ErrConcurrentMutation

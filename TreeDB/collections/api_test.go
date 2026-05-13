@@ -1548,6 +1548,88 @@ func TestCollectionUpdateIndexStatsSnapshotAndExport(t *testing.T) {
 	}
 }
 
+func TestCollectionUpdateStatsForMergeKeepsPerIndexBreakdown(t *testing.T) {
+	left := CollectionUpdateStats{
+		Items:           3,
+		Matched:         3,
+		Modified:        3,
+		SecondaryRuns:   []CollectionUpdateSecondaryRunStats{{IndexName: "city", Deletes: 1, Sets: 2, KeyBytes: 64}},
+		IndexStatsCount: 2,
+		IndexStats: [maxCollectionUpdateInlineIndexStats]CollectionUpdateIndexStats{
+			{
+				CollectionName:   "users",
+				IndexName:        "email",
+				IndexOrdinal:     0,
+				Unique:           true,
+				Unchanged:        3,
+				UniqueCheckSkips: 3,
+			},
+			{
+				CollectionName:    "users",
+				IndexName:         "city",
+				IndexOrdinal:      1,
+				Changed:           3,
+				SecondaryRuns:     1,
+				SecondaryDeletes:  1,
+				SecondarySets:     2,
+				SecondaryKeyBytes: 64,
+			},
+		},
+	}
+	right := CollectionUpdateStats{
+		Items:           4,
+		Matched:         4,
+		Modified:        4,
+		SecondaryRuns:   []CollectionUpdateSecondaryRunStats{{IndexName: "city", Deletes: 3, Sets: 4, KeyBytes: 96}},
+		IndexStatsCount: 2,
+		IndexStats: [maxCollectionUpdateInlineIndexStats]CollectionUpdateIndexStats{
+			{
+				CollectionName:   "users",
+				IndexName:        "email",
+				IndexOrdinal:     0,
+				Unique:           true,
+				Unchanged:        4,
+				UniqueCheckSkips: 4,
+			},
+			{
+				CollectionName:    "users",
+				IndexName:         "city",
+				IndexOrdinal:      1,
+				Changed:           4,
+				SecondaryRuns:     1,
+				SecondaryDeletes:  3,
+				SecondarySets:     4,
+				SecondaryKeyBytes: 96,
+			},
+		},
+	}
+
+	var merged CollectionUpdateStats
+	addCollectionUpdateStatsForMerge(&merged, left)
+	addCollectionUpdateStatsForMerge(&merged, right)
+
+	if got, want := merged.Items, 7; got != want {
+		t.Fatalf("merged items=%d want %d", got, want)
+	}
+	if got, want := len(merged.SecondaryRuns), 1; got != want {
+		t.Fatalf("secondary runs=%d want %d: %+v", got, want, merged.SecondaryRuns)
+	}
+	if city := merged.SecondaryRuns[0]; city.IndexName != "city" || city.Deletes != 4 || city.Sets != 6 || city.KeyBytes != 160 {
+		t.Fatalf("merged secondary city=%+v want deletes/sets/key bytes 4/6/160", city)
+	}
+	if got, want := merged.IndexStatsCount, 2; got != want {
+		t.Fatalf("index stats count=%d want %d", got, want)
+	}
+	email := merged.IndexStats[0]
+	if email.IndexName != "email" || !email.Unique || email.Unchanged != 7 || email.UniqueCheckSkips != 7 {
+		t.Fatalf("merged email=%+v want unchanged/skips 7", email)
+	}
+	city := merged.IndexStats[1]
+	if city.IndexName != "city" || city.Changed != 7 || city.SecondaryRuns != 2 || city.SecondaryDeletes != 4 || city.SecondarySets != 6 || city.SecondaryKeyBytes != 160 {
+		t.Fatalf("merged city index=%+v want changed/runs/deletes/sets/key bytes 7/2/4/6/160", city)
+	}
+}
+
 func TestCollectionUpdateIndexStatsDoNotMergeOverlappingIndexNames(t *testing.T) {
 	newDomain := func(collection string, changed int) *collectionWriteDomain {
 		domain := &collectionWriteDomain{
@@ -9734,6 +9816,184 @@ func TestCollectionUpdateCombinerDuplicateIDsPreserveOrder(t *testing.T) {
 	}
 	if !bytes.Contains(got, []byte(`"score":2`)) {
 		t.Fatalf("u1 document=%s want final score 2", got)
+	}
+}
+
+func TestCollectionUpdateCombinerDefersDuplicateIDsAndBatchesDistinctPeers(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{[]byte(`{"score":0}`), []byte(`{"score":0}`)},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+
+	setScore := func(score int32) func([]byte) ([]byte, bool, error) {
+		return func([]byte) ([]byte, bool, error) {
+			return []byte(fmt.Sprintf(`{"score":%d}`, score)), true, nil
+		}
+	}
+	first := collectionUpdateCombineRequest{
+		collection: col,
+		documentID: []byte("u1"),
+		update:     setScore(1),
+		done:       make(chan collectionUpdateCombineResult, 1),
+	}
+	duplicate := collectionUpdateCombineRequest{
+		collection: col,
+		documentID: []byte("u1"),
+		update:     setScore(2),
+		done:       make(chan collectionUpdateCombineResult, 1),
+	}
+	peer := collectionUpdateCombineRequest{
+		collection: col,
+		documentID: []byte("u2"),
+		update:     setScore(3),
+		done:       make(chan collectionUpdateCombineResult, 1),
+	}
+	combiner := &collectionUpdateCombiner{
+		maxBatch: 8,
+		domain:   col.writeDomain,
+		requests: make(chan collectionUpdateCombineRequest, 2),
+	}
+	combiner.requests <- duplicate
+	combiner.requests <- peer
+	beforeState := d.State()
+	beforeStats := mgr.StatsSnapshot()
+
+	combiner.runBatchStartingWith(first)
+	for name, done := range map[string]chan collectionUpdateCombineResult{
+		"first": first.done,
+		"peer":  peer.done,
+	} {
+		result := <-done
+		if result.err != nil || !result.matched || !result.modified {
+			t.Fatalf("%s result=%+v want matched modified nil err", name, result)
+		}
+	}
+	select {
+	case result := <-duplicate.done:
+		t.Fatalf("duplicate completed in same batch: %+v", result)
+	default:
+	}
+	if got := len(combiner.deferred); got != 1 {
+		t.Fatalf("deferred duplicate count=%d want 1", got)
+	}
+	midState := d.State()
+	if midState.CommitSeq != beforeState.CommitSeq+1 {
+		t.Fatalf("first combined batch advanced commit seq by %d, want 1", midState.CommitSeq-beforeState.CommitSeq)
+	}
+	midStats := mgr.StatsSnapshot()
+	if got := midStats.UpdateCombineFallbackRequests - beforeStats.UpdateCombineFallbackRequests; got != 0 {
+		t.Fatalf("fallback requests after distinct-peer batch=%d want 0", got)
+	}
+
+	deferred, ok := combiner.popDeferredRequest()
+	if !ok {
+		t.Fatal("missing deferred duplicate")
+	}
+	combiner.runBatchStartingWith(deferred)
+	result := <-duplicate.done
+	if result.err != nil || !result.matched || !result.modified {
+		t.Fatalf("duplicate result=%+v want matched modified nil err", result)
+	}
+	afterState := d.State()
+	if afterState.CommitSeq != beforeState.CommitSeq+2 {
+		t.Fatalf("two serialized batches advanced commit seq by %d, want 2", afterState.CommitSeq-beforeState.CommitSeq)
+	}
+	got, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get u1: %v", err)
+	}
+	if !bytes.Contains(got, []byte(`"score":2`)) {
+		t.Fatalf("u1 document=%s want final score 2", got)
+	}
+	got, err = col.Get([]byte("u2"))
+	if err != nil {
+		t.Fatalf("get u2: %v", err)
+	}
+	if !bytes.Contains(got, []byte(`"score":3`)) {
+		t.Fatalf("u2 document=%s want score 3", got)
+	}
+}
+
+func TestCollectionUpdateCombinerShardedIngressPublishesDistinctIDsOnce(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{[]byte(`{"score":0}`), []byte(`{"score":0}`)},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+
+	setScore := func(score int32) func([]byte) ([]byte, bool, error) {
+		return func([]byte) ([]byte, bool, error) {
+			return []byte(fmt.Sprintf(`{"score":%d}`, score)), true, nil
+		}
+	}
+	combiner := &collectionUpdateCombiner{
+		maxBatch:        8,
+		domain:          col.writeDomain,
+		shardedRequests: make([]chan collectionUpdateCombineRequest, 4),
+		readyShards:     make(chan int, 16),
+		done:            make(chan struct{}),
+	}
+	for i := range combiner.shardedRequests {
+		combiner.shardedRequests[i] = make(chan collectionUpdateCombineRequest, 8)
+	}
+	firstDone := make(chan collectionUpdateCombineResult, 1)
+	secondDone := make(chan collectionUpdateCombineResult, 1)
+	if !combiner.enqueue(newCollectionUpdateCombineRequest(col, []byte("u1"), setScore(1), bsonSetUpdate{}, false, firstDone)) {
+		t.Fatal("enqueue first sharded update")
+	}
+	if !combiner.enqueue(newCollectionUpdateCombineRequest(col, []byte("u2"), setScore(2), bsonSetUpdate{}, false, secondDone)) {
+		t.Fatal("enqueue second sharded update")
+	}
+	before := d.State()
+	go combiner.run()
+	defer combiner.stop()
+	for name, done := range map[string]chan collectionUpdateCombineResult{
+		"first":  firstDone,
+		"second": secondDone,
+	} {
+		select {
+		case result := <-done:
+			if result.err != nil || !result.matched || !result.modified {
+				t.Fatalf("%s result=%+v want matched modified nil err", name, result)
+			}
+		case <-time.After(collectionTestTimeout(t, time.Second)):
+			t.Fatalf("%s update did not complete", name)
+		}
+	}
+	after := d.State()
+	if after.CommitSeq != before.CommitSeq+1 {
+		t.Fatalf("sharded ingress batch advanced commit seq by %d, want 1", after.CommitSeq-before.CommitSeq)
 	}
 }
 

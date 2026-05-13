@@ -97,6 +97,10 @@ func TestProfileBenchBufferedIndexedAsyncFlushEnv(t *testing.T) {
 	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_WRITE_MAX_DOCUMENTS", "")
 	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_WRITE_MAX_BYTES", "")
 	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_WRITE_MAX_ROOT_RUNS", "")
+	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_UPDATE_COMBINE_SHARDS", "")
+	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_UPDATE_COMBINE_LANE_WORKERS", "")
+	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_UPDATE_COMBINE_UNSAFE_STALE_DIRECT_PLANS", "")
+	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_UPDATE_COMBINE_UNSAFE_ASYNC_ACK", "")
 	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_OVERLAY_ROOTS", "")
 	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_COMPACT_OVERLAY_ROOTS_AFTER_FLUSH", "")
 	if profileBenchBufferedIndexedAsyncFlush(t) {
@@ -123,6 +127,18 @@ func TestProfileBenchBufferedIndexedAsyncFlushEnv(t *testing.T) {
 	if got := profileBenchBufferedIndexedWriteMaxRootRuns(t); got != 0 {
 		t.Fatalf("buffered max root runs default=%d want 0", got)
 	}
+	if got := profileBenchUpdateCombineShards(t); got != 1 {
+		t.Fatalf("update combine shards default=%d want 1", got)
+	}
+	if profileBenchUpdateCombineLaneWorkers(t) {
+		t.Fatal("update combine lane workers default=true want false")
+	}
+	if profileBenchUpdateCombineUnsafeStaleDirectPlans(t) {
+		t.Fatal("update combine unsafe stale direct plans default=true want false")
+	}
+	if profileBenchUpdateCombineUnsafeAsyncAck(t) {
+		t.Fatal("update combine unsafe async ack default=true want false")
+	}
 	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_ASYNC_FLUSH", "true")
 	if !profileBenchBufferedIndexedAsyncFlush(t) {
 		t.Fatal("async flush env=true want true")
@@ -147,6 +163,22 @@ func TestProfileBenchBufferedIndexedAsyncFlushEnv(t *testing.T) {
 	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_WRITE_MAX_ROOT_RUNS", "789")
 	if got := profileBenchBufferedIndexedWriteMaxRootRuns(t); got != 789 {
 		t.Fatalf("buffered max root runs=%d want 789", got)
+	}
+	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_UPDATE_COMBINE_SHARDS", "4")
+	if got := profileBenchUpdateCombineShards(t); got != 4 {
+		t.Fatalf("update combine shards=%d want 4", got)
+	}
+	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_UPDATE_COMBINE_LANE_WORKERS", "true")
+	if !profileBenchUpdateCombineLaneWorkers(t) {
+		t.Fatal("update combine lane workers env=true want true")
+	}
+	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_UPDATE_COMBINE_UNSAFE_STALE_DIRECT_PLANS", "true")
+	if !profileBenchUpdateCombineUnsafeStaleDirectPlans(t) {
+		t.Fatal("update combine unsafe stale direct plans env=true want true")
+	}
+	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_UPDATE_COMBINE_UNSAFE_ASYNC_ACK", "true")
+	if !profileBenchUpdateCombineUnsafeAsyncAck(t) {
+		t.Fatal("update combine unsafe async ack env=true want true")
 	}
 	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_OVERLAY_ROOTS", "true")
 	if !profileBenchBufferedIndexedOverlayRoots(t) {
@@ -748,19 +780,40 @@ func benchmarkDirectCollectionConcurrentUpdateBSON(b *testing.B, indexes []colle
 
 	b.ReportAllocs()
 	manager.SetUpdateBatchDetailedStatsEnabled(true)
+	updateCombineShards := profileBenchUpdateCombineShards(b)
+	manager.SetUpdateCombineShardsForProfiling(updateCombineShards)
+	updateCombineLaneWorkers := profileBenchUpdateCombineLaneWorkers(b)
+	manager.SetUpdateCombineLaneWorkersForProfiling(updateCombineLaneWorkers)
+	updateCombineUnsafeStaleDirectPlans := profileBenchUpdateCombineUnsafeStaleDirectPlans(b)
+	manager.SetUpdateCombineUnsafeStaleDirectPlansForProfiling(updateCombineUnsafeStaleDirectPlans)
+	updateCombineUnsafeAsyncAck := profileBenchUpdateCombineUnsafeAsyncAck(b)
+	manager.SetUpdateCombineUnsafeAsyncAckForProfiling(updateCombineUnsafeAsyncAck)
 	manager.ResetUpdateCombinersForProfiling()
 	manager.ResetUpdateCombineQueueDepthMax()
 	statsBefore := manager.StatsSnapshot()
 	backendStatsBefore := backend.Stats()
 	b.ResetTimer()
 	started := time.Now()
+	var foregroundElapsed time.Duration
+	var combinerDrainElapsed time.Duration
+	var flushElapsed time.Duration
 	err = runProfileBenchTimedUpdatePhase(context.Background(), func(ctx context.Context) error {
+		foregroundStart := time.Now()
 		if err := runProfileBenchDirectCollectionConcurrentUpdates(ctx, writers, b.N, documentCount, idStride, ids, updateDocs, collection); err != nil {
 			return err
 		}
+		foregroundElapsed = time.Since(foregroundStart)
+		if updateCombineUnsafeAsyncAck {
+			combinerDrainStart := time.Now()
+			manager.DrainUpdateCombinersForProfiling()
+			combinerDrainElapsed = time.Since(combinerDrainStart)
+		}
 		// Keep async indexed-flush rows comparable with synchronous rows: the
 		// timed update phase includes the final drain of deferred publish work.
-		return manager.FlushAll()
+		flushStart := time.Now()
+		err := manager.FlushAll()
+		flushElapsed = time.Since(flushStart)
+		return err
 	})
 	timedElapsed := time.Since(started)
 	b.StopTimer()
@@ -768,6 +821,17 @@ func benchmarkDirectCollectionConcurrentUpdateBSON(b *testing.B, indexes []colle
 		b.Fatalf("run concurrent updates: %v", err)
 	}
 	b.ReportMetric(float64(writers), "writers")
+	b.ReportMetric(float64(updateCombineShards), "update_combine_shards")
+	if updateCombineLaneWorkers {
+		b.ReportMetric(1, "update_combine_lane_workers")
+	}
+	if updateCombineUnsafeStaleDirectPlans {
+		b.ReportMetric(1, "update_combine_unsafe_stale_direct_plans")
+	}
+	if updateCombineUnsafeAsyncAck {
+		b.ReportMetric(1, "update_combine_unsafe_async_ack")
+		reportProfileBenchUnsafeAsyncAckTimings(b, b.N, foregroundElapsed, combinerDrainElapsed, flushElapsed)
+	}
 	reportProfileBenchBufferedIndexedWriteOptions(b, collection.Meta().Options)
 	reportProfileBenchOverlayCompactionStats(b, "preload", preloadCompactStats)
 	reportProfileBenchOverlayCompactionStats(b, "warmup", warmupCompactStats)
@@ -988,6 +1052,25 @@ func reportProfileBenchBackendVlogMmapStats(b *testing.B, after, before map[stri
 	b.ReportMetric(float64(profileBenchUintStat(after, "treedb.process.read_path.outer_leaf.sample_mod")), "backend_outer_leaf_sample_mod")
 }
 
+func reportProfileBenchUnsafeAsyncAckTimings(b *testing.B, docs int, foreground, combinerDrain, flush time.Duration) {
+	b.Helper()
+	if docs <= 0 {
+		return
+	}
+	reportDuration := func(name string, d time.Duration) {
+		if d > 0 {
+			b.ReportMetric(float64(d.Nanoseconds())/float64(docs), name)
+		}
+	}
+	reportDuration("update_combine_unsafe_async_ack_ns/doc", foreground)
+	reportDuration("update_combine_unsafe_async_combiner_drain_ns/doc", combinerDrain)
+	reportDuration("update_combine_unsafe_async_flush_ns/doc", flush)
+	reportDuration("update_combine_unsafe_async_final_drain_ns/doc", combinerDrain+flush)
+	if foreground > 0 {
+		b.ReportMetric(float64(docs)/foreground.Seconds(), "update_combine_unsafe_async_ack_docs/sec")
+	}
+}
+
 func reportProfileBenchBackendReadPathRatios(b *testing.B, after, before map[string]string) {
 	b.Helper()
 	reportPerHit := func(metric, bytesKey, hitsKey string) {
@@ -1190,6 +1273,7 @@ func deltaCollectionManagerUpdateStats(after, before collections.CollectionManag
 		UpdateCombineBatchedRequests:     after.UpdateCombineBatchedRequests - before.UpdateCombineBatchedRequests,
 		UpdateCombineFallbackRequests:    after.UpdateCombineFallbackRequests - before.UpdateCombineFallbackRequests,
 		UpdateCombineInlineRequests:      after.UpdateCombineInlineRequests - before.UpdateCombineInlineRequests,
+		UpdateCombineUnsafeAsyncAcks:     after.UpdateCombineUnsafeAsyncAcks - before.UpdateCombineUnsafeAsyncAcks,
 		UpdateCombineEnqueue:             after.UpdateCombineEnqueue - before.UpdateCombineEnqueue,
 		UpdateCombineWait:                after.UpdateCombineWait - before.UpdateCombineWait,
 		UpdateCombineQueueWait:           after.UpdateCombineQueueWait - before.UpdateCombineQueueWait,
@@ -1289,6 +1373,7 @@ func TestDeltaCollectionManagerUpdateStatsIncludesCombinerStats(t *testing.T) {
 		UpdateCombineFallbackRequests:    1,
 		UpdateCombineQueueDepthMax:       12,
 		UpdateCombineInlineRequests:      4,
+		UpdateCombineUnsafeAsyncAcks:     5,
 		UpdateCombineEnqueue:             100 * time.Nanosecond,
 		UpdateCombineWait:                200 * time.Nanosecond,
 		UpdateCombineQueueWait:           250 * time.Nanosecond,
@@ -1350,6 +1435,7 @@ func TestDeltaCollectionManagerUpdateStatsIncludesCombinerStats(t *testing.T) {
 		UpdateCombineFallbackRequests:    2,
 		UpdateCombineQueueDepthMax:       31,
 		UpdateCombineInlineRequests:      15,
+		UpdateCombineUnsafeAsyncAcks:     19,
 		UpdateCombineEnqueue:             700 * time.Nanosecond,
 		UpdateCombineWait:                1400 * time.Nanosecond,
 		UpdateCombineQueueWait:           1750 * time.Nanosecond,
@@ -1430,6 +1516,9 @@ func TestDeltaCollectionManagerUpdateStatsIncludesCombinerStats(t *testing.T) {
 	}
 	if got.UpdateCombineInlineRequests != 11 {
 		t.Fatalf("UpdateCombineInlineRequests=%d want 11", got.UpdateCombineInlineRequests)
+	}
+	if got.UpdateCombineUnsafeAsyncAcks != 14 {
+		t.Fatalf("UpdateCombineUnsafeAsyncAcks=%d want 14", got.UpdateCombineUnsafeAsyncAcks)
 	}
 	if got.UpdateCombineEnqueue != 600*time.Nanosecond || got.UpdateCombineWait != 1200*time.Nanosecond || got.UpdateCombineQueueWait != 1500*time.Nanosecond || got.UpdateCombineDrain != 1800*time.Nanosecond || got.UpdateCombineRun != 2400*time.Nanosecond || got.UpdateCombineResultDelivery != 3000*time.Nanosecond {
 		t.Fatalf("update combine timing delta enqueue/wait/queue-wait/drain/run/result-delivery=%s/%s/%s/%s/%s/%s want 600ns/1200ns/1500ns/1800ns/2400ns/3000ns",
@@ -1653,6 +1742,7 @@ func TestReportCollectionManagerUpdateStatsIncludesCombinerQueueDepth(t *testing
 		UpdateCombineFallbackRequests: 6,
 		UpdateCombineQueueDepthMax:    31,
 		UpdateCombineInlineRequests:   300,
+		UpdateCombineUnsafeAsyncAcks:  240,
 		UpdateCombineEnqueue:          600 * time.Nanosecond,
 		UpdateCombineWait:             1200 * time.Nanosecond,
 		UpdateCombineQueueWait:        3000 * time.Nanosecond,
@@ -1687,6 +1777,8 @@ func TestReportCollectionManagerUpdateStatsIncludesCombinerQueueDepth(t *testing
 		"update_combine_batch_size_bucket_le_32/batch":    0.8,
 		"update_combine_inline_requests":                  300,
 		"update_combine_inline_requests/doc":              0.5,
+		"update_combine_unsafe_async_acks":                240,
+		"update_combine_unsafe_async_acks/doc":            0.4,
 		"update_combine_enqueue_ns/doc":                   1,
 		"update_combine_wait_ns/doc":                      2,
 		"update_combine_queue_wait_ns/doc":                5,
@@ -1890,6 +1982,10 @@ func reportCollectionManagerUpdateStats(b *testing.B, stats collections.Collecti
 	if stats.UpdateCombineInlineRequests > 0 {
 		b.ReportMetric(float64(stats.UpdateCombineInlineRequests), "update_combine_inline_requests")
 		b.ReportMetric(float64(stats.UpdateCombineInlineRequests)/float64(docs), "update_combine_inline_requests/doc")
+	}
+	if stats.UpdateCombineUnsafeAsyncAcks > 0 {
+		b.ReportMetric(float64(stats.UpdateCombineUnsafeAsyncAcks), "update_combine_unsafe_async_acks")
+		b.ReportMetric(float64(stats.UpdateCombineUnsafeAsyncAcks)/float64(docs), "update_combine_unsafe_async_acks/doc")
 	}
 	reportDuration := func(name string, d time.Duration) {
 		if d > 0 {
@@ -2632,6 +2728,22 @@ func profileBenchUpdateDocumentCount(tb testing.TB) int {
 
 func profileBenchConcurrentWriters(tb testing.TB) int {
 	return profileBenchPositiveEnvInt(tb, "MONGO_GATEWAY_PROFILE_BENCH_WRITERS", 8)
+}
+
+func profileBenchUpdateCombineShards(tb testing.TB) int {
+	return profileBenchPositiveEnvInt(tb, "MONGO_GATEWAY_PROFILE_BENCH_UPDATE_COMBINE_SHARDS", 1)
+}
+
+func profileBenchUpdateCombineLaneWorkers(tb testing.TB) bool {
+	return profileBenchBoolEnv(tb, "MONGO_GATEWAY_PROFILE_BENCH_UPDATE_COMBINE_LANE_WORKERS", false)
+}
+
+func profileBenchUpdateCombineUnsafeStaleDirectPlans(tb testing.TB) bool {
+	return profileBenchBoolEnv(tb, "MONGO_GATEWAY_PROFILE_BENCH_UPDATE_COMBINE_UNSAFE_STALE_DIRECT_PLANS", false)
+}
+
+func profileBenchUpdateCombineUnsafeAsyncAck(tb testing.TB) bool {
+	return profileBenchBoolEnv(tb, "MONGO_GATEWAY_PROFILE_BENCH_UPDATE_COMBINE_UNSAFE_ASYNC_ACK", false)
 }
 
 func profileBenchBufferedIndexedAsyncFlush(tb testing.TB) bool {

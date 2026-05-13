@@ -182,6 +182,38 @@ synchronous-threshold rows by accident. The concurrent update profile benchmark
 times a final `FlushAll()` drain before reporting docs/sec, so async rows include
 deferred indexed publish work rather than enqueue latency alone.
 
+For update-combiner ingress experiments, set
+`MONGO_GATEWAY_PROFILE_BENCH_UPDATE_COMBINE_SHARDS=N`. The default `1` preserves
+the single-queue combiner. Values above `1` shard request ingress by document ID
+while preserving one global merged publish batch, and benchmark rows report
+`update_combine_shards` so shard-count runs are not mixed accidentally.
+
+For sharded-combiner proof-of-concept runs, add
+`MONGO_GATEWAY_PROFILE_BENCH_UPDATE_COMBINE_LANE_WORKERS=true` to let each
+document-ID shard prepare direct buffered update plans concurrently, then merge
+prepared plans back into one global buffer/publish path. Add
+`MONGO_GATEWAY_PROFILE_BENCH_UPDATE_COMBINE_UNSAFE_STALE_DIRECT_PLANS=true` only
+for controlled benchmark shapes with non-overlapping document IDs and unchanged
+unique secondary indexes. That stale-plan flag is intentionally profiling-only:
+it validates throughput headroom before the production conflict protocol is
+implemented.
+
+These lane-worker and unsafe-ack modes are comparison-branch instrumentation,
+not production behavior and not a merge-to-main contract. They exist to preserve
+a measured upper bound for future safe implementations. Production work should
+replace them with explicit conflict handling, read visibility, backpressure, and
+durability semantics before any similar behavior is enabled outside profiling
+runs.
+
+For unsafe foreground-admission ceiling runs, also set
+`MONGO_GATEWAY_PROFILE_BENCH_UPDATE_COMBINE_UNSAFE_ASYNC_ACK=true`. This
+profiling-only mode acknowledges after request admission into the sharded
+combiner queue, then drains lane workers and `FlushAll()` inside the timed
+window. Rows report foreground metrics such as
+`update_combine_unsafe_async_ack_docs/sec` and final drain metrics such as
+`update_combine_unsafe_async_final_drain_ns/doc`; this mode is not a durability
+or visibility contract.
+
 ## MongoDB Target
 
 ```sh
