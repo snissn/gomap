@@ -56,7 +56,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	standalone, err := mongogateway.OpenStandaloneServer(standaloneOptions(cfg))
 	if err != nil {
-		fmt.Fprintf(stderr, "mongo gateway server: open TreeDB: %v\n", err)
+		fmt.Fprintf(stderr, "mongo gateway server: configure standalone: %v\n", err)
 		return 1
 	}
 	defer func() {
