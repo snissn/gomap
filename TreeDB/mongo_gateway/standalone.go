@@ -157,6 +157,7 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 		return errServerClosed
 	}
 	defer s.unregisterListener(ln)
+	defer func() { _ = ln.Close() }()
 	if ctx == nil {
 		ctx = context.Background()
 	}
