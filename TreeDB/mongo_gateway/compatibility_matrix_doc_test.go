@@ -51,23 +51,33 @@ func replaceGeneratedCompatibilityMatrix(doc string, rows []mongoCompatibilityMa
 		return "", fmt.Errorf("missing end marker %q", compatibilityMatrixEnd)
 	}
 	end := start + endRel + len(compatibilityMatrixEnd)
-	return doc[:start] + generatedCompatibilityMatrix(rows) + doc[end:], nil
+	return doc[:start] + generatedCompatibilityMatrix(rows, documentNewline(doc)) + doc[end:], nil
 }
 
-func generatedCompatibilityMatrix(rows []mongoCompatibilityMatrixRow) string {
+func generatedCompatibilityMatrix(rows []mongoCompatibilityMatrixRow, newline string) string {
 	var b strings.Builder
 	b.WriteString(compatibilityMatrixBegin)
-	b.WriteByte('\n')
-	b.WriteString("| Category | Feature | Status |\n")
-	b.WriteString("|---|---|---|\n")
+	b.WriteString(newline)
+	b.WriteString("| Category | Feature | Status |")
+	b.WriteString(newline)
+	b.WriteString("|---|---|---|")
+	b.WriteString(newline)
 	for _, row := range rows {
-		fmt.Fprintf(&b, "| %s | %s | %s |\n",
+		fmt.Fprintf(&b, "| %s | %s | %s |%s",
 			markdownTableCell(row.category),
 			markdownTableCell(row.feature),
-			markdownTableCell(row.status))
+			markdownTableCell(row.status),
+			newline)
 	}
 	b.WriteString(compatibilityMatrixEnd)
 	return b.String()
+}
+
+func documentNewline(doc string) string {
+	if strings.Contains(doc, "\r\n") {
+		return "\r\n"
+	}
+	return "\n"
 }
 
 func markdownTableCell(s string) string {
