@@ -219,6 +219,9 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 
 // ListenAndServe listens on addr and serves MongoDB wire-protocol clients.
 func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
+	if s == nil || s.isClosed() {
+		return errServerClosed
+	}
 	if addr == "" {
 		addr = DefaultStandaloneAddr
 	}
@@ -256,6 +259,12 @@ func (s *StandaloneServer) Serve(ctx context.Context, ln net.Listener) error {
 // TreeDB gateway.
 func (s *StandaloneServer) ListenAndServe(ctx context.Context, addr string) error {
 	if s == nil || s.Server == nil {
+		return errServerClosed
+	}
+	s.serveMu.Lock()
+	closing := s.closing
+	s.serveMu.Unlock()
+	if closing || s.Server.isClosed() {
 		return errServerClosed
 	}
 	if addr == "" {

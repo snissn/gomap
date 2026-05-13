@@ -339,6 +339,51 @@ func TestServerListenAndServeRejectsInvalidAddress(t *testing.T) {
 	}
 }
 
+func TestServerListenAndServeClosedDoesNotBind(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+
+	var nilServer *Server
+	if err := nilServer.ListenAndServe(context.Background(), ln.Addr().String()); !errors.Is(err, errServerClosed) {
+		t.Fatalf("nil ListenAndServe err=%v want errServerClosed", err)
+	}
+
+	server := NewServer()
+	if err := server.Close(); err != nil {
+		t.Fatalf("server close: %v", err)
+	}
+	if err := server.ListenAndServe(context.Background(), ln.Addr().String()); !errors.Is(err, errServerClosed) {
+		t.Fatalf("closed ListenAndServe err=%v want errServerClosed", err)
+	}
+}
+
+func TestStandaloneServerListenAndServeClosedDoesNotBind(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+
+	var nilStandalone *StandaloneServer
+	if err := nilStandalone.ListenAndServe(context.Background(), ln.Addr().String()); !errors.Is(err, errServerClosed) {
+		t.Fatalf("nil ListenAndServe err=%v want errServerClosed", err)
+	}
+
+	standalone, err := OpenStandaloneServer(StandaloneOptions{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("OpenStandaloneServer: %v", err)
+	}
+	if err := standalone.Close(); err != nil {
+		t.Fatalf("standalone close: %v", err)
+	}
+	if err := standalone.ListenAndServe(context.Background(), ln.Addr().String()); !errors.Is(err, errServerClosed) {
+		t.Fatalf("closed ListenAndServe err=%v want errServerClosed", err)
+	}
+}
+
 func TestStandaloneServerCloseWaitsForServe(t *testing.T) {
 	standalone, err := OpenStandaloneServer(StandaloneOptions{Dir: t.TempDir()})
 	if err != nil {
