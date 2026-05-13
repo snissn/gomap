@@ -106,8 +106,8 @@ func mongoCompatibilityMatrixRows() []mongoCompatibilityMatrixRow {
 			probe: func(t *testing.T, server *Server) {
 				resp := serveCommand(t, server, 26, bson.D{{Key: "buildInfo", Value: int32(1)}, {Key: "$db", Value: "admin"}})
 				assertOK(t, resp)
-				if _, ok := resp.Lookup("version").StringValueOK(); !ok {
-					t.Fatalf("version missing or non-string in %s", resp)
+				if version, ok := resp.Lookup("version").StringValueOK(); !ok || version != "7.0.0" {
+					t.Fatalf("version=%q ok=%v want 7.0.0", version, ok)
 				}
 				if _, ok := resp.Lookup("versionArray").ArrayOK(); !ok {
 					t.Fatalf("versionArray missing or non-array in %s", resp)

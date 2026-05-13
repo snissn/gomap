@@ -112,7 +112,7 @@ throughput check.
 | Command | `hello` / `isMaster` | `supported subset` | `TestMongoCompatibilityMatrix`, official-driver tests | Minimal server metadata only. |
 | Command | `connectionStatus` | `supported subset` | `TestMongoCompatibilityMatrix`, `TestServerHandlesConnectionStatus` | Returns unauthenticated `authInfo` users, roles, and privileges; no auth or authorization support. |
 | Command | `hostInfo` | `supported subset` | `TestMongoCompatibilityMatrix`, `TestServerHandlesHostInfo` | Returns minimal local runtime and OS metadata only. |
-| Command | `buildInfo` | `supported subset` | `TestMongoCompatibilityMatrix`, `TestServerHandlesBuildInfo` | Returns minimal TreeDB gateway version/build metadata only. |
+| Command | `buildInfo` | `supported subset` | `TestMongoCompatibilityMatrix`, `TestServerHandlesBuildInfo` | Returns minimal MongoDB-compatible gateway version/build metadata only. |
 | Command | `ping` | `supported` | `TestMongoCompatibilityMatrix` | None for MVP. |
 | Command | `insert` / `insertMany` helper path | `supported subset` | `TestMongoCompatibilityMatrix`, `TestServerOfficialGoDriverBasicCRUD` | Write concern is not Mongo-compatible durability semantics yet. |
 | Command | `find` | `supported subset` | `TestMongoCompatibilityMatrix`, find planner tests | Query language is intentionally limited. |
@@ -144,8 +144,8 @@ command with minimal local runtime and OS metadata and keeps it covered in the
 matrix.
 
 The client path then exposed `unsupported MongoDB gateway command: buildInfo`.
-The gateway now handles that command with minimal version and build metadata
-and keeps it covered in the matrix.
+The gateway now handles that command with minimal MongoDB-compatible version
+and build metadata and keeps it covered in the matrix.
 
 This does not yet certify a full desktop GUI connection flow. If a client gets
 past `connectionStatus` / `hostInfo` / `buildInfo` and then asks for other

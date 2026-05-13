@@ -677,13 +677,13 @@ func helloResponse(maxMessageLength int32) bson.D {
 
 func buildInfoResponse() bson.D {
 	return bson.D{
-		{Key: "version", Value: "0.0.0-treedb-mongo-gateway"},
-		{Key: "gitVersion", Value: "unknown"},
+		{Key: "version", Value: "7.0.0"},
+		{Key: "gitVersion", Value: "treedb-mongo-gateway"},
 		{Key: "modules", Value: bson.A{}},
 		{Key: "allocator", Value: "go"},
 		{Key: "javascriptEngine", Value: ""},
 		{Key: "sysInfo", Value: runtime.GOOS + "/" + runtime.GOARCH},
-		{Key: "versionArray", Value: bson.A{int32(0), int32(0), int32(0), int32(0)}},
+		{Key: "versionArray", Value: bson.A{int32(7), int32(0), int32(0), int32(0)}},
 		{Key: "bits", Value: int32(strconv.IntSize)},
 		{Key: "debug", Value: false},
 		{Key: "maxBsonObjectSize", Value: int32(defaultMaxBSONObjectSize)},

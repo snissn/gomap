@@ -207,8 +207,8 @@ func TestServerHandlesBuildInfo(t *testing.T) {
 
 	resp := readMsgResponse(t, rw.w.Bytes(), 203)
 	assertOK(t, resp)
-	if _, ok := resp.Lookup("version").StringValueOK(); !ok {
-		t.Fatalf("version missing or non-string in %s", resp)
+	if version, ok := resp.Lookup("version").StringValueOK(); !ok || version != "7.0.0" {
+		t.Fatalf("version=%q ok=%v want 7.0.0", version, ok)
 	}
 	if _, ok := resp.Lookup("versionArray").ArrayOK(); !ok {
 		t.Fatalf("versionArray missing or non-array in %s", resp)
