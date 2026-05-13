@@ -23,21 +23,22 @@ import (
 const defaultDataDir = "/tmp/treedb-mongo-gateway"
 
 type cliConfig struct {
-	addr                    string
-	dir                     string
-	profile                 string
-	documentFormat          string
-	dataRootStorage         string
-	indexStateStorage       string
-	indexRootStorage        string
-	maxFindScanDocuments    int
-	maxMessageBytes         int
-	maxCursorRetainedBytes  int
-	maxOpenCursors          int
-	cursorIdleTimeout       time.Duration
-	updateCoalescingDelay   time.Duration
-	updateCoalescingBatch   int
-	updateCoalescingIdleTTL time.Duration
+	addr                     string
+	dir                      string
+	profile                  string
+	documentFormat           string
+	dataRootStorage          string
+	indexStateStorage        string
+	indexRootStorage         string
+	maxFindScanDocuments     int
+	maxMessageBytes          int
+	maxCursorRetainedBytes   int
+	maxOpenCursors           int
+	cursorIdleTimeout        time.Duration
+	updateCoalescingDelay    time.Duration
+	updateCoalescingBatch    int
+	updateCoalescingBatchSet bool
+	updateCoalescingIdleTTL  time.Duration
 }
 
 func main() {
@@ -118,6 +119,11 @@ func parseFlags(args []string, stderr io.Writer) (cliConfig, error) {
 	if err := fs.Parse(args); err != nil {
 		return cfg, err
 	}
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "update-coalescing-batch" {
+			cfg.updateCoalescingBatchSet = true
+		}
+	})
 	if cfg.dir == "" {
 		return cfg, errors.New("TreeDB root directory -dir is required")
 	}
@@ -164,7 +170,7 @@ func standaloneOptions(cfg cliConfig) mongogateway.StandaloneOptions {
 		MaxOpenCursors:              cfg.maxOpenCursors,
 		CursorIdleTimeout:           cfg.cursorIdleTimeout,
 		UpdateCoalescingMaxDelay:    cfg.updateCoalescingDelay,
-		UpdateCoalescingMaxBatchSet: true,
+		UpdateCoalescingMaxBatchSet: cfg.updateCoalescingBatchSet,
 		UpdateCoalescingMaxBatch:    cfg.updateCoalescingBatch,
 		UpdateCoalescingIdleTTL:     cfg.updateCoalescingIdleTTL,
 	}
