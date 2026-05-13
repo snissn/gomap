@@ -50,6 +50,9 @@ func TestNormalizeStandaloneOptionsDefaultsAndValidation(t *testing.T) {
 	if normalized.DefaultCollectionOptions.DocumentFormat != collections.DocumentFormatBSON {
 		t.Fatalf("normalized document format=%q want bson", normalized.DefaultCollectionOptions.DocumentFormat)
 	}
+	if got, err := normalizeStandaloneRootStoragePolicy(collections.RootStoragePolicy(" FAST ")); err != nil || got != collections.RootStorageFast {
+		t.Fatalf("normalized root storage=%q err=%v want fast", got, err)
+	}
 
 	cases := []struct {
 		name string
@@ -89,6 +92,104 @@ func TestNormalizeStandaloneOptionsDefaultsAndValidation(t *testing.T) {
 				t.Fatalf("err=%v want containing %q", err, tc.want)
 			}
 		})
+	}
+}
+
+func TestServerServeContextCancelDoesNotCloseOtherServeConnections(t *testing.T) {
+	server := NewServer()
+	ctx1, cancel1 := context.WithCancel(context.Background())
+	defer cancel1()
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	defer cancel2()
+	ln1, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen 1: %v", err)
+	}
+	ln2, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		_ = ln1.Close()
+		t.Fatalf("listen 2: %v", err)
+	}
+	serveErr1 := make(chan error, 1)
+	serveErr2 := make(chan error, 1)
+	go func() {
+		serveErr1 <- server.Serve(ctx1, ln1)
+	}()
+	go func() {
+		serveErr2 <- server.Serve(ctx2, ln2)
+	}()
+
+	conn1, err := net.Dial("tcp", ln1.Addr().String())
+	if err != nil {
+		t.Fatalf("dial 1: %v", err)
+	}
+	defer func() { _ = conn1.Close() }()
+	conn2, err := net.Dial("tcp", ln2.Addr().String())
+	if err != nil {
+		t.Fatalf("dial 2: %v", err)
+	}
+	defer func() { _ = conn2.Close() }()
+	servePing := func(conn net.Conn, requestID int32) {
+		t.Helper()
+		ping := mustDocument(t, bson.D{{Key: "ping", Value: int32(1)}, {Key: "$db", Value: "admin"}})
+		req, err := wire.AppendMsgMessage(nil, requestID, 0, 0, ping)
+		if err != nil {
+			t.Fatalf("AppendMsgMessage: %v", err)
+		}
+		if _, err := conn.Write(req); err != nil {
+			t.Fatalf("write ping: %v", err)
+		}
+		assertOK(t, readMsgResponse(t, readOneMessageBytes(t, conn), requestID))
+	}
+	servePing(conn1, 7201)
+	servePing(conn2, 7202)
+
+	cancel1()
+	select {
+	case err := <-serveErr1:
+		if err != nil {
+			t.Fatalf("Serve 1 returned error after cancel: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Serve 1 did not stop after context cancellation")
+	}
+	servePing(conn2, 7203)
+
+	cancel2()
+	select {
+	case err := <-serveErr2:
+		if err != nil {
+			t.Fatalf("Serve 2 returned error after cancel: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Serve 2 did not stop after context cancellation")
+	}
+}
+
+func readOneMessageBytes(tb testing.TB, conn net.Conn) []byte {
+	tb.Helper()
+	h, body, err := wire.ReadMessage(conn, 0)
+	if err != nil {
+		tb.Fatalf("ReadMessage: %v", err)
+	}
+	msg, err := wire.AppendMessage(nil, h.RequestID, h.ResponseTo, h.OpCode, body)
+	if err != nil {
+		tb.Fatalf("AppendMessage: %v", err)
+	}
+	return msg
+}
+
+func TestStandaloneServerServeNilClosesListener(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	var standalone *StandaloneServer
+	if err := standalone.Serve(context.Background(), ln); !errors.Is(err, errServerClosed) {
+		t.Fatalf("Serve err=%v want errServerClosed", err)
+	}
+	if err := ln.Close(); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("listener was not closed by nil StandaloneServer.Serve; second close err=%v", err)
 	}
 }
 

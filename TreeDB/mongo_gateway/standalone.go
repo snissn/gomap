@@ -140,7 +140,8 @@ func OpenStandaloneServer(opts StandaloneOptions) (*StandaloneServer, error) {
 }
 
 // Serve accepts MongoDB wire-protocol connections on ln until ctx is canceled,
-// ln is closed, or the gateway returns an accept error.
+// ln is closed, or the gateway returns an accept error. Serve owns ln and closes
+// it before returning.
 func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 	if s == nil {
 		if ln != nil {
@@ -172,9 +173,22 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 	defer close(listenerClosed)
 
 	var wg sync.WaitGroup
+	var serveConnMu sync.Mutex
+	serveConns := make(map[net.Conn]struct{})
+	closeServeConns := func() {
+		serveConnMu.Lock()
+		conns := make([]net.Conn, 0, len(serveConns))
+		for conn := range serveConns {
+			conns = append(conns, conn)
+		}
+		serveConnMu.Unlock()
+		for _, conn := range conns {
+			_ = conn.Close()
+		}
+	}
 	defer func() {
 		cancel()
-		s.closeActiveConns()
+		closeServeConns()
 		wg.Wait()
 	}()
 
@@ -186,9 +200,17 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 			}
 			return err
 		}
+		serveConnMu.Lock()
+		serveConns[conn] = struct{}{}
+		serveConnMu.Unlock()
 		wg.Add(1)
 		go func(conn net.Conn) {
 			defer wg.Done()
+			defer func() {
+				serveConnMu.Lock()
+				delete(serveConns, conn)
+				serveConnMu.Unlock()
+			}()
 			_ = s.ServeConn(serveCtx, conn)
 		}(conn)
 	}
@@ -303,7 +325,8 @@ func normalizeStandaloneDocumentFormat(format collections.DocumentFormat) (colle
 }
 
 func normalizeStandaloneRootStoragePolicy(policy collections.RootStoragePolicy) (collections.RootStoragePolicy, error) {
-	switch policy {
+	normalized := collections.RootStoragePolicy(strings.ToLower(strings.TrimSpace(string(policy))))
+	switch normalized {
 	case collections.RootStorageDefault:
 		return collections.RootStorageDefault, nil
 	case collections.RootStorageFast:
