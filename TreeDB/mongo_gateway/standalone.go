@@ -91,6 +91,21 @@ func NormalizeStandaloneOptions(opts StandaloneOptions) (StandaloneOptions, erro
 		return opts, fmt.Errorf("mongo gateway standalone: index root storage policy: %w", err)
 	}
 	opts.DefaultIndexStoragePolicy = indexRoot
+	if opts.MaxMessageLength < 0 {
+		return opts, errors.New("mongo gateway standalone: MaxMessageLength must be >= 0")
+	}
+	if opts.MaxFindScanDocuments < 0 {
+		return opts, errors.New("mongo gateway standalone: MaxFindScanDocuments must be >= 0")
+	}
+	if opts.MaxCursorRetainedBytes < 0 {
+		return opts, errors.New("mongo gateway standalone: MaxCursorRetainedBytes must be >= 0")
+	}
+	if opts.MaxOpenCursors < 0 {
+		return opts, errors.New("mongo gateway standalone: MaxOpenCursors must be >= 0")
+	}
+	if opts.UpdateCoalescingMaxBatch < 0 {
+		return opts, errors.New("mongo gateway standalone: UpdateCoalescingMaxBatch must be >= 0")
+	}
 
 	return opts, nil
 }

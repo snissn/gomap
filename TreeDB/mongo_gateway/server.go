@@ -75,8 +75,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	defer stop()
 
 	fmt.Fprintf(stdout, "TreeDB Mongo gateway listening on mongodb://%s\n", ln.Addr().String())
-	fmt.Fprintf(stdout, "TreeDB dir: %s\n", cfg.dir)
-	fmt.Fprintf(stdout, "TreeDB profile: %s, collection document format: %s\n", cfg.profile, cfg.documentFormat)
+	fmt.Fprintf(stdout, "TreeDB dir: %s\n", standalone.Options.Dir)
+	fmt.Fprintf(stdout, "TreeDB profile: %s, collection document format: %s\n",
+		standalone.Options.Profile, standalone.Options.DefaultCollectionOptions.DocumentFormat)
 
 	if err := standalone.Serve(ctx, ln); err != nil {
 		fmt.Fprintf(stderr, "mongo gateway server: serve: %v\n", err)
@@ -119,6 +120,21 @@ func parseFlags(args []string, stderr io.Writer) (cliConfig, error) {
 	}
 	if cfg.dir == "" {
 		return cfg, errors.New("mongo gateway server: TreeDB root directory -dir is required")
+	}
+	if cfg.maxFindScanDocuments < 0 {
+		return cfg, errors.New("mongo gateway server: -max-find-scan-documents must be >= 0")
+	}
+	if cfg.maxMessageBytes < 0 {
+		return cfg, errors.New("mongo gateway server: -max-message-bytes must be >= 0")
+	}
+	if cfg.maxCursorRetainedBytes < 0 {
+		return cfg, errors.New("mongo gateway server: -max-cursor-retained-bytes must be >= 0")
+	}
+	if cfg.maxOpenCursors < 0 {
+		return cfg, errors.New("mongo gateway server: -max-open-cursors must be >= 0")
+	}
+	if cfg.updateCoalescingBatch < 0 {
+		return cfg, errors.New("mongo gateway server: -update-coalescing-batch must be >= 0")
 	}
 	return cfg, nil
 }

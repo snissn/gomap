@@ -87,6 +87,31 @@ func TestNormalizeStandaloneOptionsDefaultsAndValidation(t *testing.T) {
 			opts: StandaloneOptions{Dir: t.TempDir(), DefaultIndexStoragePolicy: collections.RootStoragePolicy("archive")},
 			want: "index root storage policy",
 		},
+		{
+			name: "bad max message length",
+			opts: StandaloneOptions{Dir: t.TempDir(), MaxMessageLength: -1},
+			want: "MaxMessageLength must be >= 0",
+		},
+		{
+			name: "bad max find scan documents",
+			opts: StandaloneOptions{Dir: t.TempDir(), MaxFindScanDocuments: -1},
+			want: "MaxFindScanDocuments must be >= 0",
+		},
+		{
+			name: "bad max cursor retained bytes",
+			opts: StandaloneOptions{Dir: t.TempDir(), MaxCursorRetainedBytes: -1},
+			want: "MaxCursorRetainedBytes must be >= 0",
+		},
+		{
+			name: "bad max open cursors",
+			opts: StandaloneOptions{Dir: t.TempDir(), MaxOpenCursors: -1},
+			want: "MaxOpenCursors must be >= 0",
+		},
+		{
+			name: "bad update coalescing max batch",
+			opts: StandaloneOptions{Dir: t.TempDir(), UpdateCoalescingMaxBatch: -1},
+			want: "UpdateCoalescingMaxBatch must be >= 0",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -648,6 +673,21 @@ func TestStandaloneServerGoRunMissingDirError(t *testing.T) {
 	}
 	if !bytes.Contains(out, []byte("TreeDB root directory -dir is required")) {
 		t.Fatalf("missing-dir output missing context:\n%s", out)
+	}
+}
+
+func TestStandaloneServerGoRunRejectsNegativeIntegerLimit(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping go run smoke test in short mode")
+	}
+	cmd := exec.Command("go", "run", "./server.go", "-max-open-cursors", "-1")
+	cmd.Env = append(os.Environ(), "GOWORK=off")
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("go run ./server.go -max-open-cursors -1 succeeded unexpectedly:\n%s", out)
+	}
+	if !bytes.Contains(out, []byte("-max-open-cursors must be >= 0")) {
+		t.Fatalf("negative limit output missing context:\n%s", out)
 	}
 }
 
