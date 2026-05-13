@@ -7,21 +7,19 @@ import (
 	"os"
 	"reflect"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	treedbcaching "github.com/snissn/gomap/TreeDB/caching"
+	treedbdb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/kvstore"
 	treedbadapter "github.com/snissn/gomap/kvstore/adapters/treedb"
 )
 
 const (
-	defaultTreeDBChunkSizeBytes           int64 = 256 * 1024
-	defaultTreeDBLeafPageReadCacheEntries       = 4096
-	treeDBLeafPageReadCacheEntriesEnvKey        = "TREEDB_LEAF_PAGE_CACHE_ENTRIES"
+	defaultTreeDBChunkSizeBytes int64 = 256 * 1024
 )
 
 var (
@@ -449,25 +447,14 @@ func formatTreeDBLeafPageReadCacheEntries(entries int) string {
 	case entries < 0:
 		return "disabled"
 	case entries == 0:
-		return fmt.Sprintf("default/env (effective=%d)", effectiveTreeDBLeafPageReadCacheEntries(entries))
+		effective, err := treedbdb.ResolveLeafPageReadCacheEntries(entries)
+		if err != nil {
+			return fmt.Sprintf("default/env (invalid: %v)", err)
+		}
+		return fmt.Sprintf("default/env (effective=%d)", effective)
 	default:
 		return fmt.Sprintf("%d", entries)
 	}
-}
-
-func effectiveTreeDBLeafPageReadCacheEntries(entries int) int {
-	if entries < 0 {
-		return 0
-	}
-	if entries > 0 {
-		return entries
-	}
-	if raw := strings.TrimSpace(os.Getenv(treeDBLeafPageReadCacheEntriesEnvKey)); raw != "" {
-		if v, err := strconv.Atoi(raw); err == nil && v >= 0 {
-			return v
-		}
-	}
-	return defaultTreeDBLeafPageReadCacheEntries
 }
 
 func formatTreeDBVlogCompression(mode treedb.ValueLogCompressionMode) string {
@@ -824,6 +811,9 @@ func buildTreeDBOptions(dir string) (treedb.Options, treeDBOptionsReport, error)
 	}
 	if opts.ValueLog.ForcePointers && opts.ValueLog.PointerThreshold > 0 {
 		notes = append(notes, "vlog.force_pointers=true: pointer_threshold does not affect pointer eligibility")
+	}
+	if _, err := treedbdb.ResolveLeafPageReadCacheEntries(opts.LeafPageReadCacheEntries); err != nil {
+		return treedb.Options{}, treeDBOptionsReport{}, err
 	}
 
 	rep := treeDBOptionsReport{opts: opts, maintenanceMode: maintenanceMode, notes: notes, warnings: warnings}

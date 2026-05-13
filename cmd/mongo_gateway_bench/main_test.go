@@ -25,6 +25,7 @@ import (
 	mongogateway "github.com/snissn/gomap/TreeDB/mongo_gateway"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/event"
+	"go.mongodb.org/mongo-driver/v2/mongo"
 )
 
 func TestSummarizeLatencyNearestRank(t *testing.T) {
@@ -593,6 +594,7 @@ func TestParseConfigValidation(t *testing.T) {
 		"-concurrent-writes", "10",
 		"-update-indexed-field",
 		"-range-index",
+		"-mongo-compact",
 		"-treedb-read-state", "unsettled",
 	})
 	if err != nil {
@@ -608,6 +610,9 @@ func TestParseConfigValidation(t *testing.T) {
 		cfg.ConcurrentWriters != 2 || cfg.ConcurrentWrites != 10 ||
 		!cfg.UpdateIndexedField || !cfg.RangeIndex || cfg.TreeDBReadState != treeDBReadStateUnsettled {
 		t.Fatalf("unexpected config: %+v", cfg)
+	}
+	if !cfg.MongoCompact {
+		t.Fatalf("expected -mongo-compact to be enabled: %+v", cfg)
 	}
 	sweepCfg, err := parseConfig([]string{
 		"-concurrent-reader-sweep", "1,2 4",
@@ -2394,6 +2399,7 @@ func TestWriteResultIncludesRedactedMongoURI(t *testing.T) {
 	result := &benchmarkResult{
 		Target:           "mongo",
 		MongoURI:         "mongodb://user@127.0.0.1:27017",
+		MongoCompact:     true,
 		Database:         "bench",
 		Collection:       "docs",
 		Documents:        1,
@@ -2405,6 +2411,53 @@ func TestWriteResultIncludesRedactedMongoURI(t *testing.T) {
 	}
 	if !bytes.Contains(out.Bytes(), []byte("mongo_uri=mongodb://user@127.0.0.1:27017")) {
 		t.Fatalf("text output missing mongo_uri: %q", out.String())
+	}
+	if !bytes.Contains(out.Bytes(), []byte("mongo_compact=true")) {
+		t.Fatalf("text output missing mongo_compact: %q", out.String())
+	}
+}
+
+func TestCompactMongoCollectionRunsCompactCommand(t *testing.T) {
+	orig := runMongoCommandDecode
+	t.Cleanup(func() { runMongoCommandDecode = orig })
+
+	called := false
+	runMongoCommandDecode = func(_ context.Context, _ *mongo.Database, command bson.D, out any) error {
+		called = true
+		if len(command) != 2 {
+			t.Fatalf("command len=%d want 2", len(command))
+		}
+		if command[0].Key != "compact" || command[0].Value != "docs" {
+			t.Fatalf("compact command=%v", command)
+		}
+		if command[1].Key != "force" || command[1].Value != true {
+			t.Fatalf("force command=%v", command)
+		}
+		if _, ok := out.(*bson.M); !ok {
+			t.Fatalf("out type %T want *bson.M", out)
+		}
+		return nil
+	}
+
+	if err := compactMongoCollection(context.Background(), nil, "docs"); err != nil {
+		t.Fatalf("compactMongoCollection: %v", err)
+	}
+	if !called {
+		t.Fatal("expected command runner to be called")
+	}
+}
+
+func TestCompactMongoCollectionWrapsRunnerError(t *testing.T) {
+	orig := runMongoCommandDecode
+	t.Cleanup(func() { runMongoCommandDecode = orig })
+
+	runMongoCommandDecode = func(_ context.Context, _ *mongo.Database, _ bson.D, _ any) error {
+		return errors.New("boom")
+	}
+
+	err := compactMongoCollection(context.Background(), nil, "docs")
+	if err == nil || !strings.Contains(err.Error(), `compact "docs": boom`) {
+		t.Fatalf("compactMongoCollection err=%v", err)
 	}
 }
 

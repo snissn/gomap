@@ -33,7 +33,10 @@ MONGO_MIN_POOL_SIZE="${MONGO_MIN_POOL_SIZE:-0}"
 MONGO_MAX_CONNECTING="${MONGO_MAX_CONNECTING:-16}"
 PREBUILD_DOCUMENTS="${PREBUILD_DOCUMENTS:-true}"
 INCLUDE_MONGO="${INCLUDE_MONGO:-0}"
+MONGO_MODE="${MONGO_MODE:-docker}"
 MONGO_URI="${MONGO_URI:-mongodb://127.0.0.1:27017}"
+MONGO_IMAGE="${MONGO_IMAGE:-mongo:8}"
+MONGO_COMPACT="${MONGO_COMPACT:-}"
 DATABASE_PREFIX="${DATABASE_PREFIX:-}"
 COLLECTION="${COLLECTION:-docs}"
 TIMEOUT="${TIMEOUT:-60m}"
@@ -58,8 +61,13 @@ Options:
   --no-reader-sweep      Run writer-scaling cells only.
   --concurrent-writes N  Total updates per writer-scaling cell. Default: 80000.
   --concurrent-reads N   Total reads per reader-scaling cell. Default: 80000.
-  --include-mongo        Also run each cell against an external MongoDB URI.
-  --mongo-uri URI        MongoDB URI for --include-mongo. Default: mongodb://127.0.0.1:27017.
+  --include-mongo        Also run each cell against MongoDB (docker or external based on --mongo-mode).
+  --mongo-uri URI        MongoDB URI for --mongo-mode external. Default: mongodb://127.0.0.1:27017.
+  --mongo-mode MODE      MongoDB mode for mongo runs: docker or external. Default: docker.
+  --mongo-image IMAGE    Docker image for --mongo-mode docker. Default: mongo:8.
+  --mongo-compact BOOL  Compact the MongoDB collection before final stats collection.
+                        Set to true/false, 1/0, or yes/no.
+                        Default: true for docker mode; false for external mode unless explicitly set.
   --database-prefix NAME MongoDB database prefix. Default: mongo_gateway_scaling_<run_id>.
   --treedb-format NAME   TreeDB document format. Default: bson.
   --client-mode NAME     TreeDB client mode. Default: driver-command-raw.
@@ -73,7 +81,7 @@ Options:
 
 Environment overrides use the uppercase variable names shown in the script:
 OUT_DIR, DOCS, INDEXES, BATCH_SIZE, INSERT_PRODUCERS, WRITERS_LIST,
-READERS_LIST, CONCURRENT_WRITES, CONCURRENT_READS, INCLUDE_MONGO (0/1, true/false, or yes/no), MONGO_URI, DATABASE_PREFIX,
+READERS_LIST, CONCURRENT_WRITES, CONCURRENT_READS, INCLUDE_MONGO (0/1, true/false, or yes/no), MONGO_MODE, MONGO_URI, MONGO_IMAGE, MONGO_COMPACT, DATABASE_PREFIX,
 TREEDB_DOCUMENT_FORMAT, TREEDB_CLIENT_MODE, TREEDB_PROFILE,
 TREEDB_MAINTENANCE, UPDATE_INDEXED_FIELD (0/1, true/false, or yes/no), RUN_READER_SWEEP (0/1, true/false, or yes/no), GOWORK, TIMEOUT, TITLE,
 and related storage/pool settings.
@@ -194,6 +202,25 @@ while [[ $# -gt 0 ]]; do
       MONGO_URI="$2"
       shift 2
       ;;
+    --mongo-mode)
+      require_option_value "$1" "${2-}"
+      MONGO_MODE="$2"
+      shift 2
+      ;;
+    --mongo-image)
+      require_option_value "$1" "${2-}"
+      MONGO_IMAGE="$2"
+      shift 2
+      ;;
+    --mongo-compact=*)
+      MONGO_COMPACT="${1#*=}"
+      shift
+      ;;
+    --mongo-compact)
+      require_option_value "$1" "${2-}"
+      MONGO_COMPACT="$2"
+      shift 2
+      ;;
     --database-prefix)
       require_option_value "$1" "${2-}"
       DATABASE_PREFIX="$2"
@@ -299,11 +326,29 @@ case "$UPDATE_INDEXED_FIELD" in
     fi
     ;;
   0)
-    ;;
+  ;;
 esac
 UPDATE_INDEXED_FIELD_TEXT=$(bool_01_text "$UPDATE_INDEXED_FIELD")
 INCLUDE_MONGO=$(normalize_bool_01 INCLUDE_MONGO "$INCLUDE_MONGO")
 RUN_READER_SWEEP=$(normalize_bool_01 RUN_READER_SWEEP "$RUN_READER_SWEEP")
+if [[ -z "$MONGO_COMPACT" ]]; then
+  if [[ "$MONGO_MODE" == "external" ]]; then
+    MONGO_COMPACT=0
+  else
+    MONGO_COMPACT=1
+  fi
+else
+  MONGO_COMPACT=$(normalize_bool_01 MONGO_COMPACT "$MONGO_COMPACT")
+fi
+MONGO_COMPACT_TEXT=$(bool_01_text "$MONGO_COMPACT")
+if [[ "$MONGO_MODE" != "docker" && "$MONGO_MODE" != "external" ]]; then
+  echo "unknown MONGO_MODE=$MONGO_MODE (want docker or external)" >&2
+  exit 2
+fi
+if [[ "$INCLUDE_MONGO" == "1" && "$MONGO_MODE" == "docker" ]] && ! command -v docker >/dev/null 2>&1; then
+  echo "MONGO_MODE=docker requires docker; use --mongo-mode external --mongo-uri URI to use an existing server" >&2
+  exit 2
+fi
 
 mkdir -p "$OUT_DIR"
 OUT_DIR=$(cd "$OUT_DIR" && pwd -P)
@@ -324,6 +369,7 @@ REPORT="$OUT_DIR/report.md"
 SUMMARY="$OUT_DIR/summary.tsv"
 README="$OUT_DIR/README.md"
 TREE_METADATA="$OUT_DIR/treedb-location.txt"
+MONGO_DIR="$OUT_DIR/mongodb_data"
 
 path_is_within() {
   local child=${1%/}
@@ -356,9 +402,26 @@ report_treedb_location_on_exit() {
   fi
 }
 
-trap 'report_treedb_location_on_exit "$?"' EXIT
+ACTIVE_CONTAINERS=()
+STARTED_MONGO_CONTAINER=""
+STARTED_MONGO_URI=""
 
-mkdir -p "$RAW_DIR" "$TREE_DIR" "$BIN_DIR"
+cleanup() {
+  local container
+  for container in "${ACTIVE_CONTAINERS[@]:-}"; do
+    docker rm -f "$container" >/dev/null 2>&1 || true
+  done
+}
+
+cleanup_all() {
+  local status=$1
+  cleanup
+  report_treedb_location_on_exit "$status"
+}
+
+trap 'cleanup_all "$?"' EXIT
+
+mkdir -p "$RAW_DIR" "$TREE_DIR" "$BIN_DIR" "$MONGO_DIR"
 
 PYTHON3_BIN=""
 if command -v python3 >/dev/null 2>&1; then
@@ -378,6 +441,89 @@ du_bytes() {
   local kib
   kib=$(du -sk "$dir" | awk '{print $1}')
   echo $((kib * 1024))
+}
+
+docker_du_bytes() {
+  local dir=$1
+  local kib
+  kib=$(docker run --rm -v "$dir:/data/db:ro" "$MONGO_IMAGE" sh -c 'du -sk /data/db' | awk '{print $1}')
+  echo $((kib * 1024))
+}
+
+reset_mongo_data_dir() {
+  local dir=$1
+  mkdir -p "$dir"
+  docker run --rm -v "$dir:/data/db" "$MONGO_IMAGE" sh -c 'find /data/db -mindepth 1 -maxdepth 1 -exec rm -rf {} +' >/dev/null
+}
+
+start_mongo_container() {
+  local cell=$1
+  local data_dir=$2
+  local container="gomap-mongo-scaling-$(safe_label "$cell")-$$"
+  STARTED_MONGO_CONTAINER=""
+  STARTED_MONGO_URI=""
+  reset_mongo_data_dir "$data_dir"
+  echo "starting MongoDB container $container with data dir $data_dir" >&2
+  docker run -d --rm \
+    --name "$container" \
+    -p 127.0.0.1::27017 \
+    -v "$data_dir:/data/db" \
+    "$MONGO_IMAGE" --quiet >/dev/null
+  ACTIVE_CONTAINERS+=("$container")
+  local port=""
+  for _ in $(seq 1 60); do
+    port=$(docker port "$container" 27017/tcp 2>/dev/null | awk -F: 'END {print $NF}')
+    if [[ -n "$port" ]]; then
+      break
+    fi
+    sleep 1
+  done
+  if [[ -z "$port" ]]; then
+    echo "MongoDB container did not expose a port" >&2
+    exit 1
+  fi
+  STARTED_MONGO_CONTAINER="$container"
+  STARTED_MONGO_URI="mongodb://127.0.0.1:$port"
+}
+
+stop_mongo_container() {
+  local container=$1
+  if [[ -z "$container" ]]; then
+    return
+  fi
+  docker rm -f "$container" >/dev/null 2>&1 || true
+  local next_containers=()
+  local active
+  for active in "${ACTIVE_CONTAINERS[@]:-}"; do
+    if [[ "$active" != "$container" ]]; then
+      next_containers+=("$active")
+    fi
+  done
+  ACTIVE_CONTAINERS=("${next_containers[@]:-}")
+}
+
+wait_for_mongo() {
+  local uri=$1
+  local database=$2
+  for _ in $(seq 1 90); do
+    if "$BENCH_BIN" \
+      -target mongo \
+      -mongo-uri "$uri" \
+      -database "$database" \
+      -collection "$COLLECTION" \
+      -documents 1 \
+      -reads 0 \
+      -range-reads 0 \
+      -updates 0 \
+      -deletes 0 \
+      -secondary-indexes 0 \
+      -timeout 20s \
+      -format json >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
 }
 
 run_bench() {
@@ -426,6 +572,13 @@ printf "target\tconfig\tdocuments\tsecondary_indexes\traw_json\tphysical_bytes\n
 echo "running Mongo gateway scaling matrix into: $OUT_DIR"
 echo "docs=$DOCS indexes=$INDEXES batch_size=$BATCH_SIZE insert_producers=$INSERT_PRODUCERS"
 echo "writers=$WRITERS_LIST readers=$READERS_LIST run_reader_sweep=$RUN_READER_SWEEP include_mongo=$INCLUDE_MONGO update_indexed_field=$UPDATE_INDEXED_FIELD_TEXT"
+echo "mongo mode: $MONGO_MODE"
+if [[ "$MONGO_MODE" == "docker" ]]; then
+  echo "mongo image: $MONGO_IMAGE"
+else
+  echo "mongo uri: $MONGO_URI"
+fi
+echo "mongo compact before final stats: $MONGO_COMPACT_TEXT"
 
 run_cell() {
   local scenario=$1
@@ -462,10 +615,29 @@ run_cell() {
     local mongo_config="mongo_${config_suffix}"
     local mongo_raw_rel="raw/${mongo_config}.json"
     local mongo_raw="$OUT_DIR/$mongo_raw_rel"
+    local mongo_data="$MONGO_DIR/$config_suffix"
+    local mongo_uri="$MONGO_URI"
+    local mongo_container=""
+    local mongo_physical=0
+
+    if [[ "$MONGO_MODE" == "docker" ]]; then
+      start_mongo_container "$config_suffix" "$mongo_data"
+      mongo_uri="$STARTED_MONGO_URI"
+      mongo_container="$STARTED_MONGO_CONTAINER"
+      if ! wait_for_mongo "$mongo_uri" "$database"; then
+        echo "MongoDB container did not become ready for $scenario readers=$readers writers=$writers" >&2
+        exit 1
+      fi
+    fi
     echo "==> MongoDB $scenario readers=$readers writers=$writers"
     run_bench mongo "$mongo_raw" "$database" "$readers" "$reads" "$writers" "$writes" \
-      -mongo-uri "$MONGO_URI"
-    printf "mongo\t%s\t%s\t%s\t%s\t0\n" "$mongo_config" "$DOCS" "$INDEXES" "$mongo_raw_rel" >>"$MATRIX"
+      -mongo-uri "$mongo_uri" \
+      -mongo-compact="$MONGO_COMPACT_TEXT"
+    if [[ "$MONGO_MODE" == "docker" ]]; then
+      stop_mongo_container "$mongo_container"
+      mongo_physical=$(docker_du_bytes "$mongo_data")
+    fi
+    printf "mongo\t%s\t%s\t%s\t%s\t%s\n" "$mongo_config" "$DOCS" "$INDEXES" "$mongo_raw_rel" "$mongo_physical" >>"$MATRIX"
   fi
 }
 
@@ -489,7 +661,7 @@ fi
   -report "$REPORT" \
   -summary "$SUMMARY" \
   -title "$TITLE" \
-  "${report_extra[@]}"
+  "${report_extra[@]:-}"
 
 if [[ -n "$PYTHON3_BIN" ]]; then
   "$PYTHON3_BIN" "$ROOT/scripts/mongo_gateway_writer_metrics.py" "$OUT_DIR" "$MATRIX" "$WRITER_METRICS"
@@ -531,7 +703,10 @@ cat >"$README" <<EOF
 - TreeDB maintenance: \`$TREEDB_MAINTENANCE\`
 - update indexed field: \`$UPDATE_INDEXED_FIELD_TEXT\`
 - include MongoDB: \`$INCLUDE_MONGO\`
+- MongoDB mode: \`$MONGO_MODE\`
 - MongoDB URI: \`$MONGO_URI\`
+- MongoDB image: \`$MONGO_IMAGE\`
+- MongoDB compact before final stats: \`$MONGO_COMPACT_TEXT\`
 - MongoDB database prefix: \`$DATABASE_PREFIX\`
 - GOWORK: \`$GO_WORK_MODE\`
 - timeout: \`$TIMEOUT\`

@@ -18,8 +18,10 @@ COLLECTION_PROFILE_BENCHTIME="${COLLECTION_PROFILE_BENCHTIME:-}"
 COLLECTION_PROFILE_COUNT="${COLLECTION_PROFILE_COUNT:-1}"
 MONGO_BATCH_SIZE="${MONGO_BATCH_SIZE:-10000}"
 INSERT_PRODUCERS="${INSERT_PRODUCERS:-8}"
-MONGO_MODE="${MONGO_MODE:-external}"
+MONGO_MODE="${MONGO_MODE:-docker}"
 MONGO_URI="${MONGO_URI:-mongodb://127.0.0.1:27017}"
+MONGO_IMAGE="${MONGO_IMAGE:-mongo:8}"
+MONGO_COMPACT="${MONGO_COMPACT:-}"
 MONGO_MAX_POOL_SIZE="${MONGO_MAX_POOL_SIZE:-128}"
 MONGO_MAX_CONNECTING="${MONGO_MAX_CONNECTING:-32}"
 MONGO_READERS="${MONGO_READERS:-1,2,4,8,16,32}"
@@ -56,8 +58,12 @@ Options:
   --raw-keys N           Override raw engine key count.
   --collection-docs N    Override collection/SQLite document count.
   --mongo-docs N         Override Mongo-compatible document count.
-  --mongo-mode MODE      Mongo mode for full/load comparison: external or docker. Default: external.
+  --mongo-mode MODE      Mongo mode for full/load comparison: docker or external. Default: docker.
   --mongo-uri URI        MongoDB URI for external/scaling runs. Default: mongodb://127.0.0.1:27017.
+  --mongo-image IMAGE    Docker image for --mongo-mode docker. Default: mongo:8.
+  --mongo-compact BOOL   Compact the MongoDB collection before final stats collection.
+                         Set to true/false, 1/0, or yes/no.
+                         Default: true for docker mode; false for external mode unless explicitly set.
   --timeout DURATION     Per-cell timeout for Mongo gateway commands. Default: 120m.
   --title TITLE          HTML report title.
   --skip-raw             Skip raw TreeDB engine profile matrix.
@@ -72,7 +78,7 @@ Options:
 Environment overrides use the uppercase variable names in the script, including
 RUN_ROOT, TIER, INDEXES_LIST, RAW_KEYS, COLLECTION_DOCS,
 COLLECTION_PROFILES, COLLECTION_PROFILE_BENCHTIME, COLLECTION_PROFILE_COUNT, MONGO_DOCS,
-MONGO_MODE, MONGO_URI, MONGO_READERS, MONGO_WRITERS, TIMEOUT, and TITLE.
+MONGO_MODE, MONGO_URI, MONGO_IMAGE (default: mongo:8), MONGO_COMPACT, MONGO_READERS, MONGO_WRITERS, TIMEOUT, and TITLE.
 EOF
 }
 
@@ -93,6 +99,14 @@ normalize_list() {
 bool_true() {
   case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
     1|true|yes) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+normalize_bool_text() {
+  case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
+    1|true|yes) printf 'true' ;;
+    0|false|no) printf 'false' ;;
     *) return 1 ;;
   esac
 }
@@ -142,6 +156,20 @@ while [[ $# -gt 0 ]]; do
     --mongo-uri)
       require_value "$1" "${2-}"
       MONGO_URI="$2"
+      shift 2
+      ;;
+    --mongo-image)
+      require_value "$1" "${2-}"
+      MONGO_IMAGE="$2"
+      shift 2
+      ;;
+    --mongo-compact=*)
+      MONGO_COMPACT="${1#*=}"
+      shift
+      ;;
+    --mongo-compact)
+      require_value "$1" "${2-}"
+      MONGO_COMPACT="$2"
       shift 2
       ;;
     --timeout)
@@ -226,6 +254,37 @@ case "$TIER" in
     exit 2
     ;;
 esac
+raw_skip_mongo=$SKIP_MONGO
+SKIP_MONGO=$(normalize_bool_text "$SKIP_MONGO") || {
+  echo "invalid SKIP_MONGO=$raw_skip_mongo (want true/false, 1/0, or yes/no)" >&2
+  exit 2
+}
+if ! bool_true "$SKIP_MONGO"; then
+  case "$MONGO_MODE" in
+    docker|external) ;;
+    *)
+      echo "invalid --mongo-mode $MONGO_MODE (want docker or external)" >&2
+      exit 2
+      ;;
+  esac
+  if [[ -z "$MONGO_COMPACT" ]]; then
+    if [[ "$MONGO_MODE" == "external" ]]; then
+      MONGO_COMPACT=false
+    else
+      MONGO_COMPACT=true
+    fi
+  else
+    raw_mongo_compact=$MONGO_COMPACT
+    MONGO_COMPACT=$(normalize_bool_text "$MONGO_COMPACT") || {
+      echo "invalid MONGO_COMPACT=$raw_mongo_compact (want true/false, 1/0, or yes/no)" >&2
+      exit 2
+    }
+  fi
+  if [[ "$MONGO_MODE" == "docker" ]] && ! command -v docker >/dev/null 2>&1; then
+    echo "MONGO_MODE=docker requires docker; use --mongo-mode external --mongo-uri URI" >&2
+    exit 2
+  fi
+fi
 
 INDEXES_LIST=$(normalize_list "$INDEXES_LIST")
 MONGO_READERS=$(normalize_list "$MONGO_READERS")
@@ -285,6 +344,8 @@ write_metadata() {
     echo "- collection_profile_count: $COLLECTION_PROFILE_COUNT"
     echo "- mongo_docs: $MONGO_DOCS"
     echo "- mongo_mode: $MONGO_MODE"
+    echo "- mongo_image: $MONGO_IMAGE"
+    echo "- mongo_compact: $MONGO_COMPACT"
     echo "- mongo_uri: $MONGO_URI"
     echo "- timeout: $TIMEOUT"
     echo "- mongo_readers: $MONGO_READERS"
@@ -314,6 +375,8 @@ write_metadata() {
     printf ' --tier %q' "$TIER"
     printf ' --indexes %q' "$INDEXES_LIST"
     printf ' --mongo-mode %q' "$MONGO_MODE"
+    printf ' --mongo-image %q' "$MONGO_IMAGE"
+    printf ' --mongo-compact %q' "$MONGO_COMPACT"
     printf ' --mongo-uri %q' "$MONGO_URI"
     printf '\n```\n'
   } > "$RUN_ROOT/RUNBOOK.md"
@@ -371,7 +434,7 @@ run_collections() {
       -formats template-v1,bson,json \
       -benchtime "${COLLECTION_BENCHTIME:-${COLLECTION_DOCS}x}" \
       -count "${COLLECTION_COUNT:-1}" \
-      "${profile_args[@]}"
+      "${profile_args[@]:-}"
   done
 }
 
@@ -402,6 +465,8 @@ run_mongo_full_sweep() {
       --concurrent-writer-sweep "$MONGO_WRITERS" \
       --concurrent-writes "$MONGO_CONCURRENT_WRITES" \
       --mongo-mode "$MONGO_MODE" \
+      --mongo-image "$MONGO_IMAGE" \
+      --mongo-compact "$MONGO_COMPACT" \
       --mongo-uri "$MONGO_URI" \
       --timeout "$TIMEOUT" \
       --title "Mongo API Full Sweep"
@@ -440,6 +505,8 @@ run_mongo_load_modes() {
       --docs "$MONGO_DOCS" \
       --indexes "$INDEXES_LIST" \
       --mongo-mode "$MONGO_MODE" \
+      --mongo-image "$MONGO_IMAGE" \
+      --mongo-compact "$MONGO_COMPACT" \
       --mongo-uri "$MONGO_URI" \
       --timeout "$TIMEOUT" \
       --title "Mongo API Client-Mode Load Matrix"
@@ -465,6 +532,9 @@ run_mongo_scaling() {
       --concurrent-writes "$MONGO_CONCURRENT_WRITES" \
       --concurrent-reads "$MONGO_CONCURRENT_READS" \
       --include-mongo \
+      --mongo-mode "$MONGO_MODE" \
+      --mongo-image "$MONGO_IMAGE" \
+      --mongo-compact "$MONGO_COMPACT" \
       --mongo-uri "$MONGO_URI" \
       --timeout "$TIMEOUT" \
       --title "Mongo API Reader/Writer Scaling, ${indexes} indexes"

@@ -2,10 +2,12 @@ package main
 
 import (
 	"flag"
+	"strconv"
 	"strings"
 	"testing"
 
 	treedb "github.com/snissn/gomap/TreeDB"
+	treedbdb "github.com/snissn/gomap/TreeDB/db"
 )
 
 func TestTreeDBIndexOuterLeavesInVlogFlag_DefaultIsTrue(t *testing.T) {
@@ -59,7 +61,7 @@ func TestBuildTreeDBOptions_LeafPageReadCacheEntries(t *testing.T) {
 func TestBuildTreeDBOptions_LeafPageReadCacheEntriesDefaultReportsEffective(t *testing.T) {
 	saved := saveTreeDBFlagState()
 	defer restoreTreeDBFlagState(saved)
-	t.Setenv(treeDBLeafPageReadCacheEntriesEnvKey, "")
+	t.Setenv(treedbdb.LeafPageReadCacheEntriesEnvKey, "")
 
 	resetTreeDBIndexFlagsForTest()
 
@@ -67,8 +69,36 @@ func TestBuildTreeDBOptions_LeafPageReadCacheEntriesDefaultReportsEffective(t *t
 	if err != nil {
 		t.Fatalf("buildTreeDBOptions default leaf page read cache entries: %v", err)
 	}
-	if got := rep.formatText(""); !strings.Contains(got, "outer_leaf_read_cache_entries=default/env (effective=4096)") {
+	if got := rep.formatText(""); !strings.Contains(got, "outer_leaf_read_cache_entries=default/env (effective=32768)") {
 		t.Fatalf("resolved options missing effective default cache entries: %q", got)
+	}
+}
+
+func TestBuildTreeDBOptions_LeafPageReadCacheEntriesDefaultRejectsOutOfRangeEnv(t *testing.T) {
+	saved := saveTreeDBFlagState()
+	defer restoreTreeDBFlagState(saved)
+	t.Setenv(treedbdb.LeafPageReadCacheEntriesEnvKey, strconv.Itoa(1<<30))
+
+	resetTreeDBIndexFlagsForTest()
+
+	_, _, err := buildTreeDBOptions("")
+	if err == nil {
+		t.Fatal("buildTreeDBOptions unexpectedly accepted out-of-range leaf page read cache env")
+	}
+	if !strings.Contains(err.Error(), "leaf page read cache entries") {
+		t.Fatalf("buildTreeDBOptions error=%q, want leaf page read cache context", err)
+	}
+}
+
+func TestFormatTreeDBLeafPageReadCacheEntriesDefaultReportsOutOfRangeEnv(t *testing.T) {
+	t.Setenv(treedbdb.LeafPageReadCacheEntriesEnvKey, strconv.Itoa(1<<30))
+
+	got := formatTreeDBLeafPageReadCacheEntries(0)
+	if strings.Contains(got, "effective=0") {
+		t.Fatalf("formatTreeDBLeafPageReadCacheEntries()=%q, must not mask out-of-range env as effective=0", got)
+	}
+	if !strings.Contains(got, "default/env (invalid:") {
+		t.Fatalf("formatTreeDBLeafPageReadCacheEntries()=%q, want invalid default/env state for out-of-range env", got)
 	}
 }
 

@@ -728,12 +728,7 @@ func (f *File) readViaMmapView(ptr page.ValuePtr, verifyCRC bool) ([]byte, error
 			return out, nil, true
 		}
 
-		cacheableRaw := false
-		f.cacheMu.Lock()
-		if f.groupedFrameCacheEntries > 0 && (f.groupedFrameCacheMaxRaw <= 0 || int(rawLen) <= f.groupedFrameCacheMaxRaw) {
-			cacheableRaw = true
-		}
-		f.cacheMu.Unlock()
+		cacheableRaw := f.groupedFrameCacheAllowsRaw(int(rawLen))
 
 		retainRaw := cacheableRaw || readViaMmapViewPrefixCacheEnabled
 		pooledRaw := !retainRaw
@@ -1014,15 +1009,16 @@ func (f *File) readViaMmapViewTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 	}
 	valLen := int(valEnd - valStart)
 	copyValueToDst := dst != nil && cap(dst) >= valLen && cap(dst) < int(rawLen)
-	cacheableRaw := false
-	if copyValueToDst {
-		f.cacheMu.Lock()
-		cacheableRaw = f.groupedFrameCacheEntries > 0 && (f.groupedFrameCacheMaxRaw <= 0 || int(rawLen) <= f.groupedFrameCacheMaxRaw)
-		f.cacheMu.Unlock()
-	}
+	// One-off read paths (dst=nil) should avoid grouped-cache writeback; this
+	// path is dominated by high-concurrency point reads where cache-store lock
+	// traffic can outweigh reuse.
+	cacheableRaw := copyValueToDst && f.groupedFrameCacheAllowsRaw(int(rawLen))
+
+	// When raw payload may be cached, decode into pooled scratch so the grouped
+	// cache can retain ownership and return buffers to the pool on eviction.
 	decodeDst := dst
 	rawPooled := false
-	if copyValueToDst {
+	if copyValueToDst || cacheableRaw {
 		decodeDst = f.takeDecodeScratch(int(rawLen))
 		rawPooled = true
 	}
@@ -1046,15 +1042,15 @@ func (f *File) readViaMmapViewTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 		}
 		return nil, false, err, true
 	}
-	if cacheableRaw {
-		cachedRaw := f.groupedFrameCacheStore(start, verifyCRC, k, offsets, raw, rawPooled)
-		if rawPooled && cachedRaw {
+	publishRaw := func() {
+		if cacheableRaw && f.groupedFrameCacheStore(start, verifyCRC, k, offsets, raw, rawPooled) && rawPooled {
 			rawPooled = false
 		}
 	}
 	// Template decoding allocates new bytes; the returned slice is no longer
 	// backed by dst even if we decoded into it.
 	if decoded {
+		publishRaw()
 		if rawPooled {
 			f.releaseDecodeScratch(raw)
 		}
@@ -1063,6 +1059,9 @@ func (f *File) readViaMmapViewTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 	if copyValueToDst {
 		out := dst[:valLen]
 		copy(out, val)
+		// Publish after copying the selected value. Once grouped cache accepts a
+		// pooled raw buffer, another reader may evict and recycle it.
+		publishRaw()
 		if rawPooled {
 			f.releaseDecodeScratch(raw)
 		}
@@ -1335,23 +1334,16 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 		}
 		return dst, nil, true
 	}
-	cacheableRaw := false
-	f.cacheMu.Lock()
 	// One-shot reads (dst=nil) are typically point gets. Avoid caching decoded
 	// grouped frames there to limit memory overhead in random-read-heavy paths.
-	if dst != nil && f.groupedFrameCacheEntries > 0 && (f.groupedFrameCacheMaxRaw <= 0 || int(rawLen) <= f.groupedFrameCacheMaxRaw) {
-		cacheableRaw = true
-	}
-	f.cacheMu.Unlock()
+	cacheableRaw := dst != nil && f.groupedFrameCacheAllowsRaw(int(rawLen))
 
-	var raw []byte
-	pooledRaw := false
-	if cacheableRaw {
-		raw = make([]byte, 0, int(rawLen))
-	} else {
-		raw = f.takeDecodeScratch(int(rawLen))
-		pooledRaw = true
-	}
+	// Decode into pooled scratch even when we plan to cache decoded raw bytes.
+	// When cached, ownership transfers to groupedFrameCacheStore(..., pooled=true)
+	// and is returned to scratch pool on eviction; this avoids per-read heap
+	// allocations in random-read parallel miss paths.
+	raw := f.takeDecodeScratch(int(rawLen))
+	pooledRaw := true
 	raw, err := decodeFramePayloadTo(frame, payload[prefixLen:], f.dictLookup, rawLen, raw)
 	if err != nil {
 		if pooledRaw {
@@ -1365,10 +1357,6 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 		}
 		return nil, ErrCorrupt, true
 	}
-	if cacheableRaw {
-		f.groupedFrameCacheStore(start, verifyCRC, k, offsets, raw, false)
-	}
-
 	oldLen := len(dst)
 
 	f.cacheMu.Lock()
@@ -1376,27 +1364,39 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 	f.cacheFlags = fFlags
 	f.cacheLen = prefixLen
 	f.cacheOffs = offsets
-	if cacheableRaw {
-		f.setCacheRawLocked(raw, false)
-	} else {
-		f.setCacheRawLocked(nil, false)
-	}
+	f.setCacheRawLocked(nil, false)
 	f.cacheStart.Store(start)
 	f.cacheMu.Unlock()
 
 	dst, err = appendDecodedTemplatePayload(dst, raw[valStart:valEnd], f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
-	if pooledRaw {
-		f.releaseDecodeScratch(raw)
-	}
 	if err != nil {
+		if pooledRaw {
+			f.releaseDecodeScratch(raw)
+		}
 		return nil, err, true
 	}
 	if len(dst) < oldLen {
+		if pooledRaw {
+			f.releaseDecodeScratch(raw)
+		}
 		return nil, ErrCorrupt, true
 	}
 	dst, err = f.appendMaybeDecodeLeafLogPayload(dst[:oldLen], dst[oldLen:])
 	if err != nil {
+		if pooledRaw {
+			f.releaseDecodeScratch(raw)
+		}
 		return nil, err, true
+	}
+	if cacheableRaw {
+		// Publish after copying the selected value. Once grouped cache accepts a
+		// pooled raw buffer, another reader may evict and recycle it.
+		if f.groupedFrameCacheStore(start, verifyCRC, k, offsets, raw, true) {
+			pooledRaw = false
+		}
+	}
+	if pooledRaw {
+		f.releaseDecodeScratch(raw)
 	}
 	return dst, nil, true
 }

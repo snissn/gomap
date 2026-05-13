@@ -206,8 +206,9 @@ GOWORK=off go run ./cmd/mongo_gateway_bench \
 ```
 
 For `-target mongo`, the command connects to the supplied URI, drops the
-benchmark database by default, and reports `dbStats` fields after load and at
-the end of the run.
+benchmark database by default, can compact the collection before final stats
+collection with `-mongo-compact`, and reports `dbStats` fields after load and
+at the end of the run.
 
 ## Reusable Comparison Harness
 

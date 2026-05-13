@@ -214,7 +214,7 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (C
 	}
 	defer cleanupLeafLog()
 	if err := db.runCompactStoragePhase(&stats, "value-log-rewrite", func() error {
-		protectedPaths := compactStorageValueLogProtectedPaths(opts)
+		protectedPaths := compactStorageOnlineRewriteProtectedPaths(opts)
 		rewriteOpts := compactStorageRewritePlanOptions(protectedPaths)
 		rewriteOpts.BatchSize = opts.ValueLogRewriteBatchSize
 		rewriteOpts.SyncEachBatch = opts.SyncEachPhase
@@ -736,14 +736,14 @@ func zeroByteValueLogFilesFromUsage(usage []CompactStorageUsage, protectedPaths 
 func compactStorageValueLogProtectedPaths(opts CompactStorageOptions) []string {
 	if opts.ValueLogProtectedPathsFunc == nil {
 		if len(opts.ValueLogProtectedPaths) == 0 {
-			return []string{""}
+			return nil
 		}
 		return opts.ValueLogProtectedPaths
 	}
 	dynamic := opts.ValueLogProtectedPathsFunc()
 	if len(opts.ValueLogProtectedPaths) == 0 {
 		if len(dynamic) == 0 {
-			return []string{""}
+			return nil
 		}
 		return dynamic
 	}
@@ -769,6 +769,16 @@ func compactStorageValueLogProtectedPaths(opts CompactStorageOptions) []string {
 	return out
 }
 
+func compactStorageOnlineRewriteProtectedPaths(opts CompactStorageOptions) []string {
+	protectedPaths := compactStorageValueLogProtectedPaths(opts)
+	if len(protectedPaths) == 0 {
+		// Sentinel keeps active-segment protection enabled for live online
+		// rewrite even when no concrete protected paths are currently known.
+		return []string{""}
+	}
+	return protectedPaths
+}
+
 func compactStorageFencedValueLogProtectedPaths(opts CompactStorageOptions) []string {
 	if opts.ValueLogFencedProtectedPathsFunc == nil {
 		return compactStorageValueLogProtectedPaths(opts)
@@ -781,7 +791,7 @@ func compactStorageFencedValueLogProtectedPaths(opts CompactStorageOptions) []st
 		return compactStorageMergeProtectedPaths(opts.ValueLogProtectedPaths, dynamic)
 	}
 	if len(dynamic) == 0 {
-		return []string{""}
+		return nil
 	}
 	return dynamic
 }

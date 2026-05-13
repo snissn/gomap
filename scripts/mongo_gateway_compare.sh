@@ -15,6 +15,7 @@ MONGO_MAX_POOL_SIZE="${MONGO_MAX_POOL_SIZE:-0}"
 MONGO_MIN_POOL_SIZE="${MONGO_MIN_POOL_SIZE:-0}"
 MONGO_MAX_CONNECTING="${MONGO_MAX_CONNECTING:-0}"
 PREBUILD_DOCUMENTS="${PREBUILD_DOCUMENTS:-false}"
+MONGO_COMPACT="${MONGO_COMPACT:-}"
 RANGE_INDEX="${RANGE_INDEX:-false}"
 PROFILE_TREEDB="${PROFILE_TREEDB:-false}"
 READS="${READS:-}"
@@ -39,7 +40,7 @@ CONCURRENT_WRITES="${CONCURRENT_WRITES:-}"
 CONCURRENT_WRITES_DIVISOR="${CONCURRENT_WRITES_DIVISOR:-10}"
 MONGO_MODE="${MONGO_MODE:-docker}"
 MONGO_URI="${MONGO_URI:-mongodb://127.0.0.1:27017}"
-MONGO_IMAGE="${MONGO_IMAGE:-mongo:7}"
+MONGO_IMAGE="${MONGO_IMAGE:-mongo:8}"
 MONGO_CLIENT_MODE="${MONGO_CLIENT_MODE:-driver}"
 MONGO_CLIENT_MODES="${MONGO_CLIENT_MODES:-$MONGO_CLIENT_MODE}"
 DATABASE_PREFIX="${DATABASE_PREFIX:-mongo_gateway_compare}"
@@ -79,6 +80,9 @@ Options:
                         MongoDB Go driver minPoolSize. Default: 0, use driver default.
   --mongo-max-connecting N
                         MongoDB Go driver maxConnecting. Default: 0, use driver default.
+  --mongo-compact BOOL  Compact the MongoDB collection before final stats collection.
+                        Set to true/false, 1/0, or yes/no.
+                        Default: true for docker mode; false for external mode unless explicitly set.
   --prebuild-documents  Prebuild documents before timed load phases.
   --range-index         Create age_1 for the range-read phase.
   --profile-treedb      Capture per-phase TreeDB pprof artifacts in profiles/.
@@ -117,7 +121,7 @@ Options:
                         Concurrent updates per target/cell.
   --mongo-mode MODE     docker or external. Default: docker.
   --mongo-uri URI       MongoDB URI for --mongo-mode external.
-  --mongo-image IMAGE   Docker image for --mongo-mode docker. Default: mongo:7.
+  --mongo-image IMAGE   Docker image for --mongo-mode docker. Default: mongo:8.
   --mongo-client-mode MODE
                         Single MongoDB client mode: driver, driver-find-raw,
                         driver-command, driver-command-raw, or driver-unack.
@@ -152,7 +156,7 @@ Environment overrides:
   CONCURRENT_RANGE_READERS, CONCURRENT_RANGE_READS, CONCURRENT_RANGE_READS_DIVISOR,
   CONCURRENT_RANGE_READER_SWEEP,
   CONCURRENT_WRITERS, CONCURRENT_WRITER_SWEEP, CONCURRENT_WRITES, CONCURRENT_WRITES_DIVISOR,
-  MONGO_MODE, MONGO_URI, MONGO_IMAGE, DATABASE_PREFIX, COLLECTION, TIMEOUT,
+  MONGO_MODE, MONGO_URI, MONGO_IMAGE, MONGO_COMPACT, DATABASE_PREFIX, COLLECTION, TIMEOUT,
   MONGO_CLIENT_MODE, MONGO_CLIENT_MODES,
   TREEDB_PROFILE, TREEDB_DOCUMENT_FORMAT, TREEDB_DOCUMENT_FORMATS,
   TREEDB_CLIENT_MODE, TREEDB_CLIENT_MODES,
@@ -161,49 +165,70 @@ Environment overrides:
 EOF
 }
 
+require_option_value() {
+  local opt=$1
+  local value=${2-}
+  if [[ -z "$value" || "$value" == --* ]]; then
+    echo "missing value for $opt" >&2
+    usage >&2
+    exit 2
+  fi
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --out)
+      require_option_value "$1" "${2-}"
       OUT_DIR="$2"
       shift 2
       ;;
     --docs)
+      require_option_value "$1" "${2-}"
       DOCS_LIST="$2"
       shift 2
       ;;
     --indexes)
+      require_option_value "$1" "${2-}"
       INDEXES_LIST="$2"
       shift 2
       ;;
     --reads)
+      require_option_value "$1" "${2-}"
       READS="$2"
       shift 2
       ;;
     --range-reads)
+      require_option_value "$1" "${2-}"
       RANGE_READS="$2"
       shift 2
       ;;
     --updates)
+      require_option_value "$1" "${2-}"
       UPDATES="$2"
       shift 2
       ;;
     --deletes)
+      require_option_value "$1" "${2-}"
       DELETES="$2"
       shift 2
       ;;
     --insert-producers)
+      require_option_value "$1" "${2-}"
       INSERT_PRODUCERS="$2"
       shift 2
       ;;
     --mongo-max-pool-size)
+      require_option_value "$1" "${2-}"
       MONGO_MAX_POOL_SIZE="$2"
       shift 2
       ;;
     --mongo-min-pool-size)
+      require_option_value "$1" "${2-}"
       MONGO_MIN_POOL_SIZE="$2"
       shift 2
       ;;
     --mongo-max-connecting)
+      require_option_value "$1" "${2-}"
       MONGO_MAX_CONNECTING="$2"
       shift 2
       ;;
@@ -220,101 +245,134 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --concurrent-readers)
+      require_option_value "$1" "${2-}"
       CONCURRENT_READERS="$2"
       shift 2
       ;;
     --concurrent-read-kinds)
+      require_option_value "$1" "${2-}"
       CONCURRENT_READ_KINDS="$2"
       shift 2
       ;;
     --concurrent-reader-sweep)
+      require_option_value "$1" "${2-}"
       CONCURRENT_READER_SWEEP="$2"
       shift 2
       ;;
     --concurrent-reads)
+      require_option_value "$1" "${2-}"
       CONCURRENT_READS="$2"
       shift 2
       ;;
     --concurrent-range-readers)
+      require_option_value "$1" "${2-}"
       CONCURRENT_RANGE_READERS="$2"
       shift 2
       ;;
     --concurrent-range-reader-sweep)
+      require_option_value "$1" "${2-}"
       CONCURRENT_RANGE_READER_SWEEP="$2"
       shift 2
       ;;
     --concurrent-range-reads)
+      require_option_value "$1" "${2-}"
       CONCURRENT_RANGE_READS="$2"
       shift 2
       ;;
     --concurrent-writers)
+      require_option_value "$1" "${2-}"
       CONCURRENT_WRITERS="$2"
       shift 2
       ;;
     --concurrent-writer-sweep)
+      require_option_value "$1" "${2-}"
       CONCURRENT_WRITER_SWEEP="$2"
       shift 2
       ;;
     --concurrent-writes)
+      require_option_value "$1" "${2-}"
       CONCURRENT_WRITES="$2"
       shift 2
       ;;
     --mongo-mode)
+      require_option_value "$1" "${2-}"
       MONGO_MODE="$2"
       shift 2
       ;;
     --mongo-uri)
+      require_option_value "$1" "${2-}"
       MONGO_URI="$2"
       shift 2
       ;;
     --mongo-image)
+      require_option_value "$1" "${2-}"
       MONGO_IMAGE="$2"
       shift 2
       ;;
+    --mongo-compact=* )
+      MONGO_COMPACT="${1#*=}"
+      shift
+      ;;
+    --mongo-compact)
+      require_option_value "$1" "${2-}"
+      MONGO_COMPACT="$2"
+      shift 2
+      ;;
     --mongo-client-mode)
+      require_option_value "$1" "${2-}"
       MONGO_CLIENT_MODE="$2"
       MONGO_CLIENT_MODES="$2"
       shift 2
       ;;
     --mongo-client-modes)
+      require_option_value "$1" "${2-}"
       MONGO_CLIENT_MODES="$2"
       shift 2
       ;;
     --timeout)
+      require_option_value "$1" "${2-}"
       TIMEOUT="$2"
       shift 2
       ;;
     --treedb-profile)
+      require_option_value "$1" "${2-}"
       TREEDB_PROFILE="$2"
       shift 2
       ;;
     --treedb-document-format)
+      require_option_value "$1" "${2-}"
       TREEDB_DOCUMENT_FORMAT="$2"
       TREEDB_DOCUMENT_FORMATS="$2"
       shift 2
       ;;
     --treedb-document-formats)
+      require_option_value "$1" "${2-}"
       TREEDB_DOCUMENT_FORMATS="$2"
       shift 2
       ;;
     --treedb-client-mode)
+      require_option_value "$1" "${2-}"
       TREEDB_CLIENT_MODE="$2"
       TREEDB_CLIENT_MODES="$2"
       shift 2
       ;;
     --treedb-client-modes)
+      require_option_value "$1" "${2-}"
       TREEDB_CLIENT_MODES="$2"
       shift 2
       ;;
     --treedb-maintenance)
+      require_option_value "$1" "${2-}"
       TREEDB_MAINTENANCE="$2"
       shift 2
       ;;
     --treedb-read-state)
+      require_option_value "$1" "${2-}"
       TREEDB_READ_STATE="$2"
       shift 2
       ;;
     --title)
+      require_option_value "$1" "${2-}"
       TITLE="$2"
       shift 2
       ;;
@@ -557,14 +615,14 @@ stop_mongo_container() {
     return
   fi
   docker rm -f "$container" >/dev/null 2>&1 || true
-  local keep=()
+  local next_containers=()
   local active
   for active in "${ACTIVE_CONTAINERS[@]:-}"; do
     if [[ "$active" != "$container" ]]; then
-      keep+=("$active")
+      next_containers+=("$active")
     fi
   done
-  ACTIVE_CONTAINERS=("${keep[@]}")
+  ACTIVE_CONTAINERS=("${next_containers[@]:-}")
 }
 
 wait_for_mongo() {
@@ -609,13 +667,13 @@ run_target() {
   local concurrent_writes=${15}
   shift 15
 
-  local prebuild_args=()
+  local prebuild_arg=""
   if [[ "$PREBUILD_DOCUMENTS" == "true" ]]; then
-    prebuild_args=(-prebuild-documents)
+    prebuild_arg="-prebuild-documents"
   fi
-  local range_index_args=()
+  local range_index_arg=""
   if [[ "$RANGE_INDEX" == "true" ]]; then
-    range_index_args=(-range-index)
+    range_index_arg="-range-index"
   fi
 
   "$BENCH_BIN" \
@@ -645,8 +703,8 @@ run_target() {
     -secondary-indexes "$indexes" \
     -timeout "$TIMEOUT" \
     -format json \
-    "${prebuild_args[@]}" \
-    "${range_index_args[@]}" \
+    ${prebuild_arg:+"$prebuild_arg"} \
+    ${range_index_arg:+"$range_index_arg"} \
     "$@" >"$raw_json"
 }
 
@@ -664,6 +722,13 @@ fi
 if [[ "$MONGO_MODE" == "docker" ]] && ! command -v docker >/dev/null 2>&1; then
   echo "MONGO_MODE=docker requires docker; use --mongo-mode external --mongo-uri URI to use an existing server" >&2
   exit 2
+fi
+if [[ -z "$MONGO_COMPACT" ]]; then
+  if [[ "$MONGO_MODE" == "external" ]]; then
+    MONGO_COMPACT=false
+  else
+    MONGO_COMPACT=true
+  fi
 fi
 if ! is_positive_int "$INSERT_PRODUCERS"; then
   echo "invalid INSERT_PRODUCERS=$INSERT_PRODUCERS (want positive integer)" >&2
@@ -696,6 +761,20 @@ if [[ "$PROFILE_TREEDB" != "true" && "$PROFILE_TREEDB" != "false" ]]; then
   echo "invalid PROFILE_TREEDB=$PROFILE_TREEDB (want true or false)" >&2
   exit 2
 fi
+case "$MONGO_COMPACT" in
+  true|false)
+    ;;
+  1|yes|YES|Yes|TRUE|True)
+    MONGO_COMPACT=true
+    ;;
+  0|no|NO|No|FALSE|False)
+    MONGO_COMPACT=false
+    ;;
+  *)
+    echo "invalid MONGO_COMPACT=$MONGO_COMPACT (want true/false, 1/0, or yes/no)" >&2
+    exit 2
+    ;;
+esac
 MONGO_CLIENT_MODES=$(normalize_unique_word_list MONGO_CLIENT_MODES "$MONGO_CLIENT_MODES")
 validate_mongo_client_modes "$MONGO_CLIENT_MODES"
 TREEDB_CLIENT_MODES=$(normalize_unique_word_list TREEDB_CLIENT_MODES "$TREEDB_CLIENT_MODES")
@@ -879,6 +958,7 @@ fi
   echo "insert producers: $INSERT_PRODUCERS"
   echo "mongo pool options: maxPoolSize=$MONGO_MAX_POOL_SIZE minPoolSize=$MONGO_MIN_POOL_SIZE maxConnecting=$MONGO_MAX_CONNECTING"
   echo "prebuild documents: $PREBUILD_DOCUMENTS"
+  echo "mongo compact before final stats: $MONGO_COMPACT"
   echo "range index: $RANGE_INDEX"
   echo "profile TreeDB: $PROFILE_TREEDB"
   echo "reads: ${READS:-documents / $READS_DIVISOR}"
@@ -990,7 +1070,7 @@ for docs in $DOCS_LIST; do
           -treedb-index-root-storage "$TREEDB_INDEX_ROOT_STORAGE" \
           -treedb-maintenance "$TREEDB_MAINTENANCE" \
           -treedb-read-state "$TREEDB_READ_STATE" \
-          "${tree_profile_args[@]}"
+          "${tree_profile_args[@]:-}"
         tree_physical=$(du_bytes "$tree_data")
         printf "treedb\t%s\t%s\t%s\t%s\t%s\n" "$tree_config" "$docs" "$indexes" "$tree_raw_rel" "$tree_physical" >>"$MATRIX"
       done
@@ -1015,10 +1095,11 @@ for docs in $DOCS_LIST; do
           exit 1
         fi
       fi
-      run_target mongo "$docs" "$indexes" "$mongo_raw" "$database" "$reads" "$range_reads" "$updates" "$DELETES" \
+    run_target mongo "$docs" "$indexes" "$mongo_raw" "$database" "$reads" "$range_reads" "$updates" "$DELETES" \
         "$CONCURRENT_READERS" "$concurrent_reads" "$CONCURRENT_RANGE_READERS" "$concurrent_range_reads" "$CONCURRENT_WRITERS" "$concurrent_writes" \
         -mongo-uri "$mongo_uri" \
-        -client-mode "$mongo_client_mode"
+        -mongo-compact="$MONGO_COMPACT" \
+      -client-mode "$mongo_client_mode"
       if [[ "$MONGO_MODE" == "docker" ]]; then
         stop_mongo_container "$mongo_container"
         mongo_physical=$(docker_du_bytes "$mongo_cell_data")
@@ -1070,6 +1151,7 @@ cat >"$README" <<EOF
 - concurrent writer sweep: \`${CONCURRENT_WRITER_SWEEP:-none}\`
 - concurrent writes: \`${CONCURRENT_WRITES:-documents / $CONCURRENT_WRITES_DIVISOR when writers or writer sweep is set}\`
 - MongoDB mode: \`$MONGO_MODE\`
+- MongoDB compact before final stats: \`$MONGO_COMPACT\`
 - MongoDB image: \`$MONGO_IMAGE\`
 - MongoDB client modes: \`$MONGO_CLIENT_MODES\`
 - benchmark timeout: \`$TIMEOUT\`

@@ -48,7 +48,14 @@ func TestRetainMemtableViewSelfHealsZeroRefPublishedView(t *testing.T) {
 
 func TestPublishMemtablesDefersRetiredMemtableRecycleUntilFinalRelease(t *testing.T) {
 	db := &DB{}
-	published := &memtableView{}
+	retired := memtable.NewAppendOnlyWithCapacity(0)
+	retired.Set([]byte("k"), []byte("v"))
+	retired.Freeze()
+	if got := retired.Len(); got != 1 {
+		t.Fatalf("retired memtable len=%d want=1 before publish", got)
+	}
+
+	published := &memtableView{queue: []memtable.Table{retired}}
 	published.refs.Store(1)
 	db.memtables.Store(published)
 
@@ -58,13 +65,6 @@ func TestPublishMemtablesDefersRetiredMemtableRecycleUntilFinalRelease(t *testin
 	}
 	if refs := published.refs.Load(); refs != 2 {
 		t.Fatalf("published refs after retain=%d want=2", refs)
-	}
-
-	retired := memtable.NewAppendOnlyWithCapacity(0)
-	retired.Set([]byte("k"), []byte("v"))
-	retired.Freeze()
-	if got := retired.Len(); got != 1 {
-		t.Fatalf("retired memtable len=%d want=1 before publish", got)
 	}
 
 	db.mu.Lock()
@@ -79,8 +79,14 @@ func TestPublishMemtablesDefersRetiredMemtableRecycleUntilFinalRelease(t *testin
 	if refs := published.refs.Load(); refs != 1 {
 		t.Fatalf("retained old view refs=%d want=1", refs)
 	}
-	if got := len(published.retiredMems); got != 1 || published.retiredMems[0] != retired {
-		t.Fatalf("old view retired memtables=%v want [%p]", published.retiredMems, retired)
+	if got := len(published.retiredMems); got != 0 {
+		t.Fatalf("old view retired memtables=%d want=0 while global reader hold is active", got)
+	}
+	db.retiredMemtablesMu.Lock()
+	deferredBefore := len(db.deferredRetiredMemtables)
+	db.retiredMemtablesMu.Unlock()
+	if deferredBefore != 1 {
+		t.Fatalf("global deferred retired memtables=%d want=1", deferredBefore)
 	}
 	if got := retired.Len(); got != 1 {
 		t.Fatalf("retired memtable reset too early len=%d want=1", got)
@@ -103,6 +109,12 @@ func TestPublishMemtablesDefersRetiredMemtableRecycleUntilFinalRelease(t *testin
 	if got := len(published.retiredMems); got != 0 {
 		t.Fatalf("old view retired memtables not cleared len=%d", got)
 	}
+	db.retiredMemtablesMu.Lock()
+	deferredAfter := len(db.deferredRetiredMemtables)
+	db.retiredMemtablesMu.Unlock()
+	if deferredAfter != 0 {
+		t.Fatalf("global deferred retired memtables after final release=%d want=0", deferredAfter)
+	}
 	db.appendOnlyMemLeaseMu.Lock()
 	leasesAfter := len(db.appendOnlyMemLeases)
 	var leased *memtable.AppendOnly
@@ -115,6 +127,102 @@ func TestPublishMemtablesDefersRetiredMemtableRecycleUntilFinalRelease(t *testin
 	}
 	if leased != retired {
 		t.Fatalf("leased memtable=%p want retired=%p", leased, retired)
+	}
+}
+
+func TestRetiredMemtableRecycleWaitsForOlderRetainedViewAcrossPublishes(t *testing.T) {
+	db := &DB{}
+	retiredA := memtable.NewAppendOnlyWithCapacity(0)
+	retiredA.Set([]byte("a"), []byte("value-a"))
+	retiredA.Freeze()
+	retiredB := memtable.NewAppendOnlyWithCapacity(0)
+	retiredB.Set([]byte("b"), []byte("value-b"))
+	retiredB.Freeze()
+
+	initial := &memtableView{queue: []memtable.Table{retiredA, retiredB}}
+	initial.refs.Store(1)
+	db.memtables.Store(initial)
+
+	held := db.retainMemtableView()
+	if held != initial {
+		t.Fatalf("retainMemtableView returned %p want %p", held, initial)
+	}
+
+	db.mu.Lock()
+	db.queueRetiredMemtableLocked(retiredA)
+	db.publishMemtablesLocked()
+	db.queueRetiredMemtableLocked(retiredB)
+	db.publishMemtablesLocked()
+	db.mu.Unlock()
+
+	if got := retiredA.Len(); got != 1 {
+		t.Fatalf("first retired memtable reset before older view release len=%d want=1", got)
+	}
+	if got := retiredB.Len(); got != 1 {
+		t.Fatalf("second retired memtable reset before older view release len=%d want=1", got)
+	}
+	db.retiredMemtablesMu.Lock()
+	deferredBefore := len(db.deferredRetiredMemtables)
+	db.retiredMemtablesMu.Unlock()
+	if deferredBefore != 2 {
+		t.Fatalf("global deferred retired memtables=%d want=2", deferredBefore)
+	}
+
+	db.releaseMemtableView(held)
+
+	if got := retiredA.Len(); got != 0 {
+		t.Fatalf("first retired memtable len after older view release=%d want=0", got)
+	}
+	if got := retiredB.Len(); got != 0 {
+		t.Fatalf("second retired memtable len after older view release=%d want=0", got)
+	}
+	db.retiredMemtablesMu.Lock()
+	deferredAfter := len(db.deferredRetiredMemtables)
+	db.retiredMemtablesMu.Unlock()
+	if deferredAfter != 0 {
+		t.Fatalf("global deferred retired memtables after release=%d want=0", deferredAfter)
+	}
+}
+
+func TestRetiredMemtableRecycleDoesNotWaitForUnrelatedNewerView(t *testing.T) {
+	db := &DB{}
+	retired := memtable.NewAppendOnlyWithCapacity(0)
+	retired.Set([]byte("old"), []byte("value"))
+	retired.Freeze()
+
+	oldView := &memtableView{queue: []memtable.Table{retired}}
+	oldView.refs.Store(1)
+	db.memtables.Store(oldView)
+
+	heldOld := db.retainMemtableView()
+	if heldOld != oldView {
+		t.Fatalf("old retained view=%p want %p", heldOld, oldView)
+	}
+
+	db.mu.Lock()
+	db.queueRetiredMemtableLocked(retired)
+	db.publishMemtablesLocked()
+	db.mu.Unlock()
+
+	heldNew := db.retainMemtableView()
+	if heldNew == nil || heldNew == oldView {
+		t.Fatalf("new retained view=%p old=%p", heldNew, oldView)
+	}
+	defer db.releaseMemtableView(heldNew)
+
+	if got := retired.Len(); got != 1 {
+		t.Fatalf("retired memtable reset before old view release len=%d want=1", got)
+	}
+	db.releaseMemtableView(heldOld)
+
+	if got := retired.Len(); got != 0 {
+		t.Fatalf("retired memtable len after old view release with newer reader active=%d want=0", got)
+	}
+	db.retiredMemtablesMu.Lock()
+	deferredAfter := len(db.deferredRetiredMemtables)
+	db.retiredMemtablesMu.Unlock()
+	if deferredAfter != 0 {
+		t.Fatalf("deferred retired memtables after old view release=%d want=0", deferredAfter)
 	}
 }
 

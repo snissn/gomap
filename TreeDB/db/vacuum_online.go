@@ -238,9 +238,10 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) error
 			cleanupNewPager()
 			return err
 		}
+		effectiveInternalBaseDelta := db.indexInternalBaseDelta && !db.indexOuterLeavesInValueLog
 		rootNode := node.NewNode(rootData)
 		if rootNode.Type() == page.PageTypeLeaf {
-			newRoot, err = vacuumClonePagerTreeWithLeafRefs(basePager, baseState.RootPageID, newAlloc, newPager)
+			newRoot, err = vacuumClonePagerTreeWithLeafRefs(basePager, baseState.RootPageID, newAlloc, newPager, effectiveInternalBaseDelta)
 			if err != nil {
 				_ = baseSnap.Close()
 				cleanupNewPager()
@@ -253,7 +254,7 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) error
 				cleanupNewPager()
 				return err
 			}
-			newRoot, err = vacuumBuildInternalTreeFromChildren(newPager, newAlloc, leafChildren, db.indexInternalBaseDelta)
+			newRoot, err = vacuumBuildInternalTreeFromChildren(newPager, newAlloc, leafChildren, effectiveInternalBaseDelta)
 			if err != nil {
 				_ = baseSnap.Close()
 				cleanupNewPager()
@@ -405,14 +406,15 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) error
 		}
 
 		var newSysRoot uint64
+		effectiveInternalBaseDelta := db.indexInternalBaseDelta && !db.indexOuterLeavesInValueLog
 		if db.indexOuterLeavesInValueLog && len(collectionRootReplacements) == 0 {
-			newSysRoot, err = vacuumClonePagerTreeWithLeafRefs(oldGen.pager, state.SystemRootPageID, newAlloc, newPager)
+			newSysRoot, err = vacuumClonePagerTreeWithLeafRefs(oldGen.pager, state.SystemRootPageID, newAlloc, newPager, effectiveInternalBaseDelta)
 		} else {
 			newSysRoot, err = vacuumBuildSystemRoot(oldGen.pager, reader, state.SystemRootPageID, newAlloc, newPager, bulk.BuildOptions{
 				LeafPrefixCompression: db.leafPrefixCompression,
 				LeafColumnar:          db.indexColumnarLeaves,
 				PackedValuePtr:        db.indexPackedValuePtr,
-				InternalBaseDelta:     db.indexInternalBaseDelta,
+				InternalBaseDelta:     effectiveInternalBaseDelta,
 			}, collectionRootReplacements)
 		}
 		if err != nil {
@@ -616,9 +618,10 @@ func (db *DB) applyVacuumDelta(root uint64, opsMap map[string]batch.Entry, z *zi
 }
 
 type vacuumCloneCtx struct {
-	oldPager *pager.Pager
-	newPager *pager.Pager
-	alloc    interface {
+	oldPager          *pager.Pager
+	newPager          *pager.Pager
+	internalBaseDelta bool
+	alloc             interface {
 		Alloc(hint uint64) (uint64, error)
 	}
 	remap map[uint64]uint64
@@ -849,7 +852,7 @@ func vacuumBuildInternalTreeFromChildren(p *pager.Pager, alloc interface {
 
 func vacuumClonePagerTreeWithLeafRefs(oldPager *pager.Pager, rootID uint64, alloc interface {
 	Alloc(hint uint64) (uint64, error)
-}, newPager *pager.Pager) (uint64, error) {
+}, newPager *pager.Pager, internalBaseDelta bool) (uint64, error) {
 	if oldPager == nil {
 		return 0, errors.New("vacuum: missing source pager")
 	}
@@ -857,10 +860,11 @@ func vacuumClonePagerTreeWithLeafRefs(oldPager *pager.Pager, rootID uint64, allo
 		return 0, errors.New("vacuum: missing destination pager")
 	}
 	c := &vacuumCloneCtx{
-		oldPager: oldPager,
-		newPager: newPager,
-		alloc:    alloc,
-		remap:    make(map[uint64]uint64, 1024),
+		oldPager:          oldPager,
+		newPager:          newPager,
+		internalBaseDelta: internalBaseDelta,
+		alloc:             alloc,
+		remap:             make(map[uint64]uint64, 1024),
 	}
 	return c.cloneNode(rootID)
 }
@@ -888,7 +892,9 @@ func (c *vacuumCloneCtx) cloneNode(oldID uint64) (uint64, error) {
 		c.remap[oldID] = newID
 
 		buf := make([]byte, page.PageSize)
-		b := node.NewBuilder(buf, page.PageTypeInternal)
+		b := node.NewBuilderWithOptions(buf, page.PageTypeInternal, node.BuilderOptions{
+			InternalBaseDelta: c.internalBaseDelta || n.InternalBaseDeltaEnabled(),
+		})
 		b.SetPageID(newID)
 		if low, high, ok, err := n.InternalFenceBounds(); err != nil {
 			return 0, err
