@@ -22,7 +22,6 @@ const (
 	commandCodeNamespaceNotFound   int32 = 26
 	commandCodeIndexNotFound       int32 = 27
 	commandCodeCursorNotFound      int32 = 43
-	commandCodeNamespaceExists     int32 = 48
 	commandCodeDuplicateKey        int32 = 11000
 	maxWireMessageLengthInt32Limit       = int64(1<<31 - 1)
 )
@@ -1291,7 +1290,7 @@ func (s *Server) createCollectionResponse(command wire.Document) (wire.Document,
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
 	if _, err := s.Collections.OpenCollection(name); err == nil {
-		return commandError(commandCodeNamespaceExists, "NamespaceExists", "collection already exists: "+db+"."+collection)
+		return marshalDocument(bson.D{{Key: "ok", Value: 1.0}})
 	} else if !errors.Is(err, collections.ErrCollectionNotFound) {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}

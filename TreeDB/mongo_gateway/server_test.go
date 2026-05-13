@@ -2213,7 +2213,7 @@ func TestServerCreateCollectionCommand(t *testing.T) {
 		{Key: "create", Value: "created"},
 		{Key: "$db", Value: "app"},
 	})
-	assertCommandError(t, duplicateResponse, "NamespaceExists")
+	assertOK(t, duplicateResponse)
 
 	cappedFalseResponse := serveCommand(t, server, 2315, bson.D{
 		{Key: "create", Value: "plain"},
