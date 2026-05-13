@@ -31,21 +31,30 @@ for arg in "$@"; do
   esac
 done
 
-out_args=()
+compare_args=("$ROOT/scripts/mongo_gateway_compare.sh")
+forward_args=()
 has_out_arg=false
 for arg in "$@"; do
-  if [[ "$arg" == "--out" ]]; then
-    has_out_arg=true
-    break
-  fi
+  case "$arg" in
+    --out)
+      has_out_arg=true
+      forward_args+=("$arg")
+      ;;
+    --out=*)
+      has_out_arg=true
+      forward_args+=(--out "${arg#--out=}")
+      ;;
+    *)
+      forward_args+=("$arg")
+      ;;
+  esac
 done
 if [[ "$has_out_arg" == false ]]; then
   OUT_DIR="${OUT_DIR:-$(mktemp -d "$TMP_BASE/gomap_mongo_gateway_compat_smoke_XXXXXX")}"
-  out_args=(--out "$OUT_DIR")
+  compare_args+=(--out "$OUT_DIR")
 fi
 
-exec "$ROOT/scripts/mongo_gateway_compare.sh" \
-  "${out_args[@]}" \
+exec_args=("${compare_args[@]}" \
   --docs "$DOCS" \
   --indexes "$INDEXES" \
   --reads "$READS" \
@@ -58,5 +67,8 @@ exec "$ROOT/scripts/mongo_gateway_compare.sh" \
   --treedb-client-modes "$TREEDB_CLIENT_MODES" \
   --treedb-document-formats "$TREEDB_DOCUMENT_FORMATS" \
   --title "$TITLE" \
-  --timeout "$TIMEOUT" \
-  "$@"
+  --timeout "$TIMEOUT")
+if ((${#forward_args[@]})); then
+  exec_args+=("${forward_args[@]}")
+fi
+exec "${exec_args[@]}"

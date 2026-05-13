@@ -83,15 +83,6 @@ func markerLineNewline(doc string, markerStart int) string {
 			return "\n"
 		}
 	}
-	return dominantDocumentNewline(doc)
-}
-
-func dominantDocumentNewline(doc string) string {
-	crlf := strings.Count(doc, "\r\n")
-	lf := strings.Count(strings.ReplaceAll(doc, "\r\n", ""), "\n")
-	if crlf > lf {
-		return "\r\n"
-	}
 	return "\n"
 }
 

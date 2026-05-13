@@ -2182,6 +2182,10 @@ func TestServerCreateCollectionCommand(t *testing.T) {
 	createResponse := serveCommand(t, server, 2311, bson.D{
 		{Key: "create", Value: "created"},
 		{Key: "lsid", Value: bson.D{{Key: "id", Value: bson.Binary{Subtype: 4, Data: make([]byte, 16)}}}},
+		{Key: "$clusterTime", Value: bson.D{}},
+		{Key: "$readPreference", Value: bson.D{{Key: "mode", Value: "primaryPreferred"}}},
+		{Key: "apiVersion", Value: "1"},
+		{Key: "readConcern", Value: bson.D{{Key: "level", Value: "local"}}},
 		{Key: "$db", Value: "app"},
 	})
 	assertOK(t, createResponse)

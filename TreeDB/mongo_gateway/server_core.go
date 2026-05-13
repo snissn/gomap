@@ -30,6 +30,12 @@ const (
 	defaultCursorIdleTimeout       = 10 * time.Minute
 	defaultCursorReapInterval      = time.Second
 	defaultLogicalSessionTimeout   = 30
+	advertisedMongoVersion         = "7.0.0"
+	advertisedMongoVersionMajor    = 7
+	advertisedMongoVersionMinor    = 0
+	advertisedMongoVersionPatch    = 0
+	advertisedMongoVersionExtra    = 0
+	advertisedMongoMaxWireVersion  = 21
 	defaultUpdateCoalescingDelay   = 0
 	defaultUpdateCoalescingBatch   = 256
 	maxUpdateCoalescingBatch       = 4096
@@ -685,7 +691,7 @@ func helloResponse(maxMessageLength int32) bson.D {
 		{Key: "secondary", Value: false},
 		{Key: "helloOk", Value: true},
 		{Key: "minWireVersion", Value: int32(0)},
-		{Key: "maxWireVersion", Value: int32(21)},
+		{Key: "maxWireVersion", Value: int32(advertisedMongoMaxWireVersion)},
 		{Key: "maxBsonObjectSize", Value: int32(defaultMaxBSONObjectSize)},
 		{Key: "maxMessageSizeBytes", Value: maxMessageLength},
 		{Key: "maxWriteBatchSize", Value: int32(defaultMaxWriteBatchSize)},
@@ -696,13 +702,18 @@ func helloResponse(maxMessageLength int32) bson.D {
 
 func buildInfoResponse() bson.D {
 	return bson.D{
-		{Key: "version", Value: "7.0.0"},
+		{Key: "version", Value: advertisedMongoVersion},
 		{Key: "gitVersion", Value: "treedb-mongo-gateway"},
 		{Key: "modules", Value: bson.A{}},
 		{Key: "allocator", Value: "go"},
 		{Key: "javascriptEngine", Value: ""},
 		{Key: "sysInfo", Value: runtime.GOOS + "/" + runtime.GOARCH},
-		{Key: "versionArray", Value: bson.A{int32(7), int32(0), int32(0), int32(0)}},
+		{Key: "versionArray", Value: bson.A{
+			int32(advertisedMongoVersionMajor),
+			int32(advertisedMongoVersionMinor),
+			int32(advertisedMongoVersionPatch),
+			int32(advertisedMongoVersionExtra),
+		}},
 		{Key: "bits", Value: runtimePointerSizeBits()},
 		{Key: "debug", Value: false},
 		{Key: "maxBsonObjectSize", Value: int32(defaultMaxBSONObjectSize)},

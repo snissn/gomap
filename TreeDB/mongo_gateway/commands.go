@@ -1335,16 +1335,27 @@ func validateCreateCollectionCommand(command wire.Document) error {
 		if err != nil {
 			return err
 		}
+		if isCreateCommandEnvelopeField(key) {
+			continue
+		}
 		switch key {
-		case "create", "$db", "capped", "lsid":
-		case "comment", "writeConcern":
-			// Accepted for client compatibility; TreeDB currently has no
-			// MongoDB-compatible comment/write-concern semantics to apply here.
+		case "capped":
+		case "size", "max", "validator", "validationLevel", "validationAction", "viewOn", "pipeline", "expireAfterSeconds", "timeseries", "clusteredIndex", "changeStreamPreAndPostImages", "collation", "storageEngine", "indexOptionDefaults":
+			return fmt.Errorf("Mongo gateway create does not support option %q", key)
 		default:
 			return fmt.Errorf("Mongo gateway create does not support option %q", key)
 		}
 	}
 	return nil
+}
+
+func isCreateCommandEnvelopeField(key string) bool {
+	switch key {
+	case "create", "$db", "lsid", "comment", "writeConcern", "readConcern", "readPreference", "apiVersion", "apiStrict", "apiDeprecationErrors":
+		return true
+	default:
+		return strings.HasPrefix(key, "$")
+	}
 }
 
 func endSessionsResponse(command wire.Document) (wire.Document, error) {
@@ -1377,9 +1388,14 @@ func validateEndSessionsCommand(command wire.Document) error {
 
 func rejectTransactionalCommand(command wire.Document, commandName string) (wire.Document, bool, error) {
 	raw := bson.Raw(command)
-	if raw.Lookup("startTransaction").IsZero() && raw.Lookup("autocommit").IsZero() && raw.Lookup("txnNumber").IsZero() {
+	hasTransactionMarker := !raw.Lookup("startTransaction").IsZero() || !raw.Lookup("autocommit").IsZero()
+	hasRetryableWriteMarker := !raw.Lookup("txnNumber").IsZero()
+	if !hasTransactionMarker && !hasRetryableWriteMarker {
 		return nil, false, nil
 	}
+	// The gateway advertises logical sessions for driver compatibility but not a
+	// replica-set setName. If a client forces retryable-write txnNumber anyway,
+	// reject it rather than pretending idempotency bookkeeping exists.
 	doc, err := commandError(
 		commandCodeBadValue,
 		"BadValue",

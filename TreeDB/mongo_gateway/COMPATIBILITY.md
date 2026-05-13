@@ -230,9 +230,9 @@ before deciding whether to implement or reject them.
 |---|---|---|
 | Mongo `writeConcern` | `not implemented` as Mongo semantics | Gateway success currently follows the underlying TreeDB collection API and durability profile. |
 | Mongo `readConcern` | `not implemented` | No read concern parser or server-side snapshot API mapping. |
-| Logical sessions | `supported subset` | Advertised for driver compatibility; `lsid` is accepted but does not add causal consistency, retryable-write, or transaction semantics. |
+| Logical sessions | `supported subset` | Advertised for driver compatibility; `lsid` is accepted but does not add causal consistency, retryable-write, or transaction semantics. The gateway presents as standalone and does not advertise a replica-set `setName`. |
 | Multi-document transactions | `not implemented` | Transaction markers are rejected on supported read/write/metadata commands; full support is blocked on TreeDB collection transaction and collection WAL work. |
-| Retryable writes / idempotency | `not implemented` | `txnNumber` command markers are rejected before read/write/metadata execution; support needs explicit idempotency metadata and error contract. |
+| Retryable writes / idempotency | `not implemented` | Forced `txnNumber` command markers are rejected before read/write/metadata execution rather than silently pretending idempotency bookkeeping exists; support needs explicit idempotency metadata and error contract. |
 
 ## Benchmark-Only Surfaces
 
