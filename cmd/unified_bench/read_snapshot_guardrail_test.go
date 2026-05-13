@@ -5,6 +5,8 @@ import (
 	"math"
 	"testing"
 	"time"
+
+	treedb "github.com/snissn/gomap/TreeDB"
 )
 
 func TestRunBenchmark_ReadSnapshotAppendOnlyGuardrail(t *testing.T) {
@@ -147,20 +149,10 @@ func withTreeDBFastReadRequireHitFlags(t *testing.T) {
 		*treedbValueLogThreshold = prevValueLogThreshold
 	})
 
+	applyTreeDBProfileIfUnset(treedb.ProfileFast, map[string]bool{})
+
 	*readWorkers = 8
 	*treedbAllowUnsafe = true
-	*treedbDisableWAL = true
-	*treedbRelaxedSync = true
-	*treedbDisableReadChecksum = true
-	*treedbIndexOptimizations = true
-	*treedbIndexOuterLeavesInVlog = true
-	*treedbPreferAppendAlloc = false
-	*treedbVlogCompression = "default"
-	*treedbVlogBlockCodec = "snappy"
-	*treedbVlogAutoPolicy = "balanced"
-	*treedbVlogCompressionAutotune = "medium"
-	*treedbVlogDictIncompressibleHoldBytes = 64 << 20
-	*treedbVlogDictProbeIntervalBytes = 8 << 20
 	*treedbVlogGenerationPolicy = "default"
 	*treedbFlushThreshold = 64 << 20
 	*treedbMaxQueuedMems = 0
