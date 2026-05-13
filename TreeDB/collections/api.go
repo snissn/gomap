@@ -8745,15 +8745,15 @@ func updateBatchItemError(index int, err error) error {
 }
 
 type collectionUpdateCombiner struct {
-	maxBatch int
-	idleTTL  time.Duration
-	requests chan collectionUpdateCombineRequest
-	done     chan struct{}
-	domain   *collectionWriteDomain
-	shards   []*collectionUpdateCombiner
-	running  atomic.Bool
-	mu       sync.RWMutex
-	stopped  bool
+	maxBatch   int
+	idleTTL    time.Duration
+	requests   chan collectionUpdateCombineRequest
+	done       chan struct{}
+	domain     *collectionWriteDomain
+	shards     []*collectionUpdateCombiner
+	running    atomic.Bool
+	mu         sync.RWMutex
+	stopped    bool
 	doneClosed bool
 
 	batchScratch []collectionUpdateCombineRequest
@@ -8805,10 +8805,10 @@ func (c *Collection) updateFastPathWithoutCreatingCombiner() (*collectionUpdateC
 			if domain.updateCombiner == combiner {
 				domain.updateCombiner = nil
 			}
-			} else if combiner.hasQueuedOrRunning() {
-				return combiner, nil
-			}
+		} else if combiner.hasQueuedOrRunning() {
+			return combiner, nil
 		}
+	}
 	if !domain.updateInlineQuietAfterCombinerActivity() {
 		return nil, nil
 	}
