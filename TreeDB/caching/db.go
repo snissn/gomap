@@ -7686,8 +7686,10 @@ func (db *DB) releaseMemtableViewRef(view *memtableView, leaseRelease bool, read
 	for _, mt := range closingMems {
 		db.releaseClosingEmptyMemtable(mt)
 	}
-	db.recycleMemtables(view.retiredMems)
+	reclaim := view.retiredMems
 	view.retiredMems = nil
+	reclaim = append(reclaim, db.releaseDeferredRetiredMemtablesForReleasedView(view)...)
+	db.recycleMemtables(reclaim)
 }
 
 func (db *DB) releaseAbandonedMemtableViewReader(view *memtableView) {
@@ -7803,6 +7805,9 @@ func (db *DB) releaseDeferredRetiredMemtablesForViewLocked(view *memtableView) [
 	if db == nil || view == nil || len(db.deferredRetiredMemtables) == 0 {
 		return nil
 	}
+	if view.refs.Load() > 0 {
+		return nil
+	}
 	var reclaim []memtable.Table
 	dst := db.deferredRetiredMemtables[:0]
 	for i := range db.deferredRetiredMemtables {
@@ -7818,6 +7823,16 @@ func (db *DB) releaseDeferredRetiredMemtablesForViewLocked(view *memtableView) [
 		db.deferredRetiredMemtables[i] = deferredRetiredMemtablesHold{}
 	}
 	db.deferredRetiredMemtables = dst
+	return reclaim
+}
+
+func (db *DB) releaseDeferredRetiredMemtablesForReleasedView(view *memtableView) []memtable.Table {
+	if db == nil || view == nil {
+		return nil
+	}
+	db.retiredMemtablesMu.Lock()
+	reclaim := db.releaseDeferredRetiredMemtablesForViewLocked(view)
+	db.retiredMemtablesMu.Unlock()
 	return reclaim
 }
 

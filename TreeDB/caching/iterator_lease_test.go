@@ -335,6 +335,105 @@ func TestUntrackedMemtableViewRetainDoesNotCreateGlobalRetiredHold(t *testing.T)
 	}
 }
 
+func TestRetiredMemtableHoldWaitsForUntrackedRetainAfterTrackedRelease(t *testing.T) {
+	backend := NewMockBackend()
+	db, err := Open(t.TempDir(), backend, Options{
+		DisableWAL:     true,
+		AllowUnsafe:    true,
+		FlushThreshold: 1 << 30,
+		MemtableMode:   "append_only",
+		MemtableShards: 1,
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	if err := db.Set([]byte("k1"), []byte("v1")); err != nil {
+		t.Fatalf("set k1: %v", err)
+	}
+	if err := db.Set([]byte("k2"), []byte("v2")); err != nil {
+		t.Fatalf("set k2: %v", err)
+	}
+
+	db.mu.Lock()
+	if err := db.rotateMemtableLocked(false); err != nil {
+		db.mu.Unlock()
+		t.Fatalf("rotate: %v", err)
+	}
+	db.mu.Unlock()
+
+	view := db.memtables.Load()
+	if view == nil || len(view.queue) != 1 {
+		t.Fatalf("expected one queued memtable view, got=%v", view)
+	}
+	queued, ok := view.queue[0].(*memtable.AppendOnly)
+	if !ok {
+		t.Fatalf("queued memtable type=%T want *memtable.AppendOnly", view.queue[0])
+	}
+
+	tracked := db.retainMemtableView()
+	if tracked != view {
+		t.Fatalf("retainMemtableView()=%p want current view %p", tracked, view)
+	}
+	untracked := db.retainMemtableViewUntracked()
+	if untracked != view {
+		t.Fatalf("retainMemtableViewUntracked()=%p want current view %p", untracked, view)
+	}
+
+	db.mu.Lock()
+	db.queueRetiredMemtableLocked(queued)
+	clearQueueLockedForIteratorLeaseTest(db)
+	db.publishMemtablesLocked()
+	db.mu.Unlock()
+
+	if refs := view.refs.Load(); refs != 2 {
+		t.Fatalf("view refs after publish with tracked+untracked retains=%d want=2", refs)
+	}
+	if got := queued.Len(); got != 2 {
+		t.Fatalf("queued memtable reset before releases len=%d want=2", got)
+	}
+	db.retiredMemtablesMu.Lock()
+	deferredRetired := len(db.deferredRetiredMemtables)
+	db.retiredMemtablesMu.Unlock()
+	if deferredRetired != 1 {
+		t.Fatalf("global deferred retired memtables after publish=%d want=1", deferredRetired)
+	}
+
+	db.releaseMemtableView(tracked)
+
+	if refs := view.refs.Load(); refs != 1 {
+		t.Fatalf("view refs after tracked release=%d want=1", refs)
+	}
+	if readers := db.memtableViewReaders.Load(); readers != 0 {
+		t.Fatalf("external reader count after tracked release=%d want=0", readers)
+	}
+	if got := queued.Len(); got != 2 {
+		t.Fatalf("queued memtable reset while untracked retain remains len=%d want=2", got)
+	}
+	db.retiredMemtablesMu.Lock()
+	deferredRetired = len(db.deferredRetiredMemtables)
+	db.retiredMemtablesMu.Unlock()
+	if deferredRetired != 1 {
+		t.Fatalf("global deferred retired memtables after tracked release=%d want=1", deferredRetired)
+	}
+
+	db.releaseUntrackedMemtableView(untracked)
+
+	if refs := view.refs.Load(); refs != 0 {
+		t.Fatalf("view refs after untracked release=%d want=0", refs)
+	}
+	if got := queued.Len(); got != 0 {
+		t.Fatalf("queued memtable len after untracked release=%d want=0", got)
+	}
+	db.retiredMemtablesMu.Lock()
+	deferredRetired = len(db.deferredRetiredMemtables)
+	db.retiredMemtablesMu.Unlock()
+	if deferredRetired != 0 {
+		t.Fatalf("global deferred retired memtables after untracked release=%d want=0", deferredRetired)
+	}
+}
+
 func TestUntrackedMemtableViewReleaseDoesNotUnregisterExternalReader(t *testing.T) {
 	backend := NewMockBackend()
 	db, err := Open(t.TempDir(), backend, Options{
@@ -426,7 +525,10 @@ func TestDeferRetiredMemtablesCopiesHeldSlice(t *testing.T) {
 		t.Fatalf("queued memtable type=%T want *memtable.AppendOnly", view.queue[0])
 	}
 
-	db.registerMemtableViewReader(view)
+	tracked := db.retainMemtableView()
+	if tracked != view {
+		t.Fatalf("retainMemtableView()=%p want current view %p", tracked, view)
+	}
 	retired := []memtable.Table{queued}
 	if !db.deferRetiredMemtables(retired) {
 		t.Fatal("deferRetiredMemtables did not hold retained view memtable")
@@ -450,7 +552,8 @@ func TestDeferRetiredMemtablesCopiesHeldSlice(t *testing.T) {
 		t.Fatalf("held bytes=%d want >0", held.bytes)
 	}
 
-	db.unregisterMemtableViewReader(view)
+	db.releasePublishedMemtableView(view)
+	db.releaseMemtableView(tracked)
 	if got := queued.Len(); got != 0 {
 		t.Fatalf("queued memtable len after retained view release=%d want=0", got)
 	}
