@@ -11338,14 +11338,31 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 			continue
 		}
 		results[i].Matched = true
-		currentID, err := captureBSONIDSnapshot(current.value, plannerOptions)
-		if err != nil {
-			_ = snap.Close()
-			return nil, updateBatchItemError(i, err)
-		}
 		prepared := preparedBatchUpdate{
 			itemIndex:  i,
 			documentID: item.DocumentID,
+		}
+		var currentID bsonIDSnapshot
+		var document []byte
+		var changedOne bool
+		if item.hasBSONSet {
+			phaseStart = updateBatchStatsNow(detailedStats)
+			scratch.bsonSetDocumentScratch, document, changedOne, err = callBSONSetUpdateAppendReplacement(item.bsonSet, scratch.bsonSetDocumentScratch[:0], current.value)
+			stats.StructuredUpdateApplications++
+			stats.StructuredUpdateApply += updateBatchStatsSince(detailedStats, phaseStart)
+			// When changedOne is true, document aliases bsonSetDocumentScratch
+			// until it is copied into the plan document arena below. No-op
+			// updates may return current.value and are discarded before staging.
+			if err != nil {
+				_ = snap.Close()
+				return nil, updateBatchItemError(i, fmt.Errorf("collections: current BSON document: %w", err))
+			}
+		} else {
+			currentID, err = captureBSONIDSnapshot(current.value, plannerOptions)
+			if err != nil {
+				_ = snap.Close()
+				return nil, updateBatchItemError(i, err)
+			}
 		}
 		if len(runtimes) > 0 {
 			if item.hasBSONSet {
@@ -11365,21 +11382,7 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 				return nil, updateBatchItemError(i, err)
 			}
 		}
-		var document []byte
-		var changedOne bool
-		if item.hasBSONSet {
-			phaseStart = updateBatchStatsNow(detailedStats)
-			scratch.bsonSetDocumentScratch, document, changedOne, err = callBSONSetUpdateAppendReplacement(item.bsonSet, scratch.bsonSetDocumentScratch[:0], current.value)
-			stats.StructuredUpdateApplications++
-			stats.StructuredUpdateApply += updateBatchStatsSince(detailedStats, phaseStart)
-			// When changedOne is true, document aliases bsonSetDocumentScratch
-			// until it is copied into the plan document arena below. No-op
-			// updates may return current.value and are discarded before staging.
-			if err != nil {
-				_ = snap.Close()
-				return nil, updateBatchItemError(i, err)
-			}
-		} else {
+		if !item.hasBSONSet {
 			phaseStart = updateBatchStatsNow(detailedStats)
 			document, changedOne, err = callCollectionUpdateCallback(item.Update, current.value)
 			stats.Callback += updateBatchStatsSince(detailedStats, phaseStart)
@@ -11398,10 +11401,12 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 			_ = snap.Close()
 			return nil, updateBatchItemError(i, errors.New("changed replacement document cannot be empty"))
 		}
-		err = validateBSONReplacementPreservesIDSnapshot(currentID, document, plannerOptions)
-		if err != nil {
-			_ = snap.Close()
-			return nil, updateBatchItemError(i, err)
+		if !item.hasBSONSet {
+			err = validateBSONReplacementPreservesIDSnapshot(currentID, document, plannerOptions)
+			if err != nil {
+				_ = snap.Close()
+				return nil, updateBatchItemError(i, err)
+			}
 		}
 		changed = append(changed, prepared)
 		changedDocuments = append(changedDocuments, appendUpdateBatchPlanScratchDocument(scratch, document))
