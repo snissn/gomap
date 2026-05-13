@@ -7,6 +7,7 @@ COLLECTION_LOAD_FIXTURE_DIR := cmd/collection_load_fixture
 COLLECTION_BENCH_MATRIX_DIR := cmd/collection_bench_matrix
 COLLECTION_CANONICAL_BENCH_DIR := cmd/collection_canonical_bench
 TREEDB_OUT_OF_CORE_SMOKE_DIR := cmd/treedb_out_of_core_smoke
+MONGO_GATEWAY_SERVER := TreeDB/mongo_gateway/server.go
 BIN_DIR := bin
 
 BENCH_KEYCOUNTS ?= 1,10,100,1000,10000,100000,1000000
@@ -15,6 +16,10 @@ BENCH_BATCHSIZE ?= 1000
 BENCH_RANGE_QUERIES ?= 200
 BENCH_RANGE_SPAN ?= 100
 BENCH_OUTDIR ?= docs/images
+MONGO_GATEWAY_ADDR ?= 127.0.0.1:27017
+MONGO_GATEWAY_DIR ?= /tmp/treedb-mongo-gateway
+MONGO_GATEWAY_PROFILE ?= durable
+MONGO_GATEWAY_DOCUMENT_FORMAT ?= bson
 
 .PHONY: help
 help:
@@ -30,6 +35,8 @@ help:
 	@echo "  make deps           - download deps (repo root)"
 	@echo "  make docs-check     - validate docs invariants"
 	@echo "  make build          - build useful binaries into ./$(BIN_DIR)"
+	@echo "  make build-mongo-gateway - build TreeDB MongoDB gateway server"
+	@echo "  make run-mongo-gateway - run TreeDB MongoDB gateway server"
 	@echo "  make bench          - run unified bench"
 	@echo "  make bench-readme   - regenerate README benchmark snapshot"
 	@echo "  make benchmark-all  - run HashDB redis-benchmark suite (legacy)"
@@ -103,8 +110,8 @@ deps:
 docs-check:
 	bash ./scripts/docs_check.sh
 
-.PHONY: build build-hashdb build-treedb treemap treemap-bin unified-bench benchprof collection-load-fixture collection-bench-matrix collection-canonical-bench-bin collection-canonical-bench treedb-out-of-core-smoke-bin treedb-out-of-core-smoke
-build: build-hashdb build-treedb unified-bench benchprof collection-load-fixture collection-bench-matrix collection-canonical-bench-bin treedb-out-of-core-smoke-bin
+.PHONY: build build-hashdb build-treedb build-mongo-gateway treemap treemap-bin unified-bench benchprof collection-load-fixture collection-bench-matrix collection-canonical-bench-bin collection-canonical-bench treedb-out-of-core-smoke-bin treedb-out-of-core-smoke
+build: build-hashdb build-treedb build-mongo-gateway unified-bench benchprof collection-load-fixture collection-bench-matrix collection-canonical-bench-bin treedb-out-of-core-smoke-bin
 
 build-hashdb:
 	mkdir -p $(BIN_DIR)
@@ -119,6 +126,11 @@ build-treedb:
 	cd $(TREEDB_DIR) && go build -o ../$(BIN_DIR)/treedb-stress ./cmd/stress
 	cd $(TREEDB_DIR) && go build -o ../$(BIN_DIR)/treedb-verify ./cmd/verify
 	cd $(TREEDB_DIR) && go build -o ../$(BIN_DIR)/treemap ./cmd/treemap
+
+
+build-mongo-gateway:
+	mkdir -p $(BIN_DIR)
+	go build -o $(BIN_DIR)/treedb-mongo-gateway ./$(MONGO_GATEWAY_SERVER)
 
 treemap:
 	go build -o treemap ./TreeDB/cmd/treemap
@@ -177,7 +189,11 @@ benchmark-all: build-hashdb
 benchmark-quick: build-hashdb
 	cd $(HASHDB_DIR) && ../$(BIN_DIR)/hashdb-benchmark --engines=hashdb,badger --keycounts=1000,10000 --csv=benchmark/results_quick.csv
 
-.PHONY: run-hashdb run-badger
+.PHONY: run-mongo-gateway run-hashdb run-badger
+
+run-mongo-gateway:
+	go run ./$(MONGO_GATEWAY_SERVER) -addr "$(MONGO_GATEWAY_ADDR)" -dir "$(MONGO_GATEWAY_DIR)" -profile "$(MONGO_GATEWAY_PROFILE)" -document-format "$(MONGO_GATEWAY_DOCUMENT_FORMAT)"
+
 run-hashdb:
 	cd $(HASHDB_DIR) && go run ./redisserver/main.go hashdb /tmp/hashdb-benchmark
 
