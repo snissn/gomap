@@ -2918,6 +2918,41 @@ func TestServerFindRawBSONOPMsgResponse(t *testing.T) {
 	}
 }
 
+func TestSinglePrimaryIDDocumentDoesNotTreatPresentEmptyStoredDocumentAsMissing(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	mgr := collections.NewCollectionManager(db)
+	if _, err := mgr.CreateCollection(&collections.CollectionMeta{Name: "app.users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("app.users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+
+	id := bson.Raw(mustDocument(t, bson.D{{Key: "_id", Value: "empty"}})).Lookup("_id")
+	key, err := encodePrimaryKey(id)
+	if err != nil {
+		t.Fatalf("encode id: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{key}, [][]byte{[]byte{}}); err != nil {
+		t.Fatalf("insert present empty stored document: %v", err)
+	}
+
+	if _, found, err := singlePrimaryIDDocument(col, id); err == nil || found {
+		t.Fatalf("singlePrimaryIDDocument empty stored doc found=%v err=%v, want conversion error", found, err)
+	}
+
+	missing := bson.Raw(mustDocument(t, bson.D{{Key: "_id", Value: "missing"}})).Lookup("_id")
+	if doc, found, err := singlePrimaryIDDocument(col, missing); err != nil || found || doc != nil {
+		t.Fatalf("singlePrimaryIDDocument missing doc=%v found=%v err=%v, want nil false nil", doc, found, err)
+	}
+}
+
 func TestServerFindRawBSONOPMsgResponseHonorsMaxMessageLength(t *testing.T) {
 	rawDoc := mustDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "payload", Value: strings.Repeat("x", 256)}})
 	if _, err := marshalCursorDocumentsMsgResponseWithIDInto(nil, 1, 250, "app.users", 0, "firstBatch", []wire.Document{rawDoc}, wire.DefaultMaxMessageLength); err != nil {

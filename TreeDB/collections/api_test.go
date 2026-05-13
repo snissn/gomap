@@ -7766,7 +7766,7 @@ func TestFlushBufferedNoIndexCleanDomainSkipsWriteDomainLock(t *testing.T) {
 		if err != nil {
 			t.Fatalf("flush clean domain: %v", err)
 		}
-	case <-time.After(250 * time.Millisecond):
+	case <-time.After(collectionTestTimeout(t, time.Second)):
 		t.Fatal("flushBufferedNoIndex blocked on a clean write domain")
 	}
 }

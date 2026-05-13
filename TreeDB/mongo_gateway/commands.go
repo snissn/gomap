@@ -2573,11 +2573,11 @@ func singlePrimaryIDDocument(col *collections.Collection, value bson.RawValue) (
 	if err != nil {
 		return nil, false, err
 	}
-	stored, err := col.Get(key)
+	stored, found, err := col.GetInto(key, nil)
 	if err != nil {
 		return nil, false, err
 	}
-	if len(stored) == 0 {
+	if !found {
 		return nil, false, nil
 	}
 	if col.Meta().Options.DocumentFormat == collections.DocumentFormatBSON {
