@@ -73,6 +73,7 @@ const (
 	defaultCollectionUpdateCombineMaxBatch              = 256
 	defaultCollectionUpdateCombineShards                = 1
 	defaultCollectionUpdateCombineDrainYields           = 1
+	defaultCollectionUpdateCombineLaneDrainYields       = 4
 	collectionUpdateCombineIdleTTL                      = 30 * time.Second
 	collectionUpdateCombineInlineQuietPeriod            = time.Millisecond
 	collectionPprofComponentKey                         = "gomap_component"
@@ -9628,7 +9629,7 @@ func (combiner *collectionUpdateCombiner) runShardWorker(shard int) {
 				}
 				batch = append(batch, req)
 			default:
-				if drainYields < defaultCollectionUpdateCombineDrainYields {
+				if drainYields < defaultCollectionUpdateCombineLaneDrainYields {
 					drainYields++
 					runtime.Gosched()
 					continue
@@ -9745,7 +9746,7 @@ func (combiner *collectionUpdateCombiner) runPreparedBatchMerger() {
 				pending = append(pending, prepared)
 				pendingRequests += len(prepared.batch)
 			default:
-				if drainYields < defaultCollectionUpdateCombineDrainYields {
+				if drainYields < defaultCollectionUpdateCombineLaneDrainYields {
 					drainYields++
 					runtime.Gosched()
 					continue
