@@ -1548,6 +1548,88 @@ func TestCollectionUpdateIndexStatsSnapshotAndExport(t *testing.T) {
 	}
 }
 
+func TestCollectionUpdateStatsForMergeKeepsPerIndexBreakdown(t *testing.T) {
+	left := CollectionUpdateStats{
+		Items:           3,
+		Matched:         3,
+		Modified:        3,
+		SecondaryRuns:   []CollectionUpdateSecondaryRunStats{{IndexName: "city", Deletes: 1, Sets: 2, KeyBytes: 64}},
+		IndexStatsCount: 2,
+		IndexStats: [maxCollectionUpdateInlineIndexStats]CollectionUpdateIndexStats{
+			{
+				CollectionName:   "users",
+				IndexName:        "email",
+				IndexOrdinal:     0,
+				Unique:           true,
+				Unchanged:        3,
+				UniqueCheckSkips: 3,
+			},
+			{
+				CollectionName:    "users",
+				IndexName:         "city",
+				IndexOrdinal:      1,
+				Changed:           3,
+				SecondaryRuns:     1,
+				SecondaryDeletes:  1,
+				SecondarySets:     2,
+				SecondaryKeyBytes: 64,
+			},
+		},
+	}
+	right := CollectionUpdateStats{
+		Items:           4,
+		Matched:         4,
+		Modified:        4,
+		SecondaryRuns:   []CollectionUpdateSecondaryRunStats{{IndexName: "city", Deletes: 3, Sets: 4, KeyBytes: 96}},
+		IndexStatsCount: 2,
+		IndexStats: [maxCollectionUpdateInlineIndexStats]CollectionUpdateIndexStats{
+			{
+				CollectionName:   "users",
+				IndexName:        "email",
+				IndexOrdinal:     0,
+				Unique:           true,
+				Unchanged:        4,
+				UniqueCheckSkips: 4,
+			},
+			{
+				CollectionName:    "users",
+				IndexName:         "city",
+				IndexOrdinal:      1,
+				Changed:           4,
+				SecondaryRuns:     1,
+				SecondaryDeletes:  3,
+				SecondarySets:     4,
+				SecondaryKeyBytes: 96,
+			},
+		},
+	}
+
+	var merged CollectionUpdateStats
+	addCollectionUpdateStatsForMerge(&merged, left)
+	addCollectionUpdateStatsForMerge(&merged, right)
+
+	if got, want := merged.Items, 7; got != want {
+		t.Fatalf("merged items=%d want %d", got, want)
+	}
+	if got, want := len(merged.SecondaryRuns), 1; got != want {
+		t.Fatalf("secondary runs=%d want %d: %+v", got, want, merged.SecondaryRuns)
+	}
+	if city := merged.SecondaryRuns[0]; city.IndexName != "city" || city.Deletes != 4 || city.Sets != 6 || city.KeyBytes != 160 {
+		t.Fatalf("merged secondary city=%+v want deletes/sets/key bytes 4/6/160", city)
+	}
+	if got, want := merged.IndexStatsCount, 2; got != want {
+		t.Fatalf("index stats count=%d want %d", got, want)
+	}
+	email := merged.IndexStats[0]
+	if email.IndexName != "email" || !email.Unique || email.Unchanged != 7 || email.UniqueCheckSkips != 7 {
+		t.Fatalf("merged email=%+v want unchanged/skips 7", email)
+	}
+	city := merged.IndexStats[1]
+	if city.IndexName != "city" || city.Changed != 7 || city.SecondaryRuns != 2 || city.SecondaryDeletes != 4 || city.SecondarySets != 6 || city.SecondaryKeyBytes != 160 {
+		t.Fatalf("merged city index=%+v want changed/runs/deletes/sets/key bytes 7/2/4/6/160", city)
+	}
+}
+
 func TestCollectionUpdateIndexStatsDoNotMergeOverlappingIndexNames(t *testing.T) {
 	newDomain := func(collection string, changed int) *collectionWriteDomain {
 		domain := &collectionWriteDomain{
