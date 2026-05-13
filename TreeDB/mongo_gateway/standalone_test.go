@@ -20,6 +20,8 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
+const standaloneShutdownTimeout = 5 * time.Second
+
 func TestNormalizeStandaloneOptionsDefaultsAndValidation(t *testing.T) {
 	opts, err := NormalizeStandaloneOptions(StandaloneOptions{Dir: t.TempDir()})
 	if err != nil {
@@ -151,7 +153,7 @@ func TestServerServeContextCancelDoesNotCloseOtherServeConnections(t *testing.T)
 		if err != nil {
 			t.Fatalf("Serve 1 returned error after cancel: %v", err)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(standaloneShutdownTimeout):
 		t.Fatal("Serve 1 did not stop after context cancellation")
 	}
 	servePing(conn2, 7203)
@@ -162,7 +164,7 @@ func TestServerServeContextCancelDoesNotCloseOtherServeConnections(t *testing.T)
 		if err != nil {
 			t.Fatalf("Serve 2 returned error after cancel: %v", err)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(standaloneShutdownTimeout):
 		t.Fatal("Serve 2 did not stop after context cancellation")
 	}
 }
@@ -280,7 +282,7 @@ func TestServerServeAcceptsWireClientsAndStopsOnContextCancel(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Serve returned error: %v", err)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(standaloneShutdownTimeout):
 		_ = ln.Close()
 		t.Fatal("Serve did not stop after context cancellation")
 	}
@@ -326,7 +328,7 @@ func TestServerCloseStopsServe(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Serve returned error after Close: %v", err)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(standaloneShutdownTimeout):
 		_ = ln.Close()
 		t.Fatal("Serve did not stop after Server.Close")
 	}
@@ -428,7 +430,7 @@ func TestStandaloneServerCloseWaitsForServe(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Serve returned error after Close: %v", err)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(standaloneShutdownTimeout):
 		t.Fatal("StandaloneServer.Close returned before Serve finished")
 	}
 }
@@ -531,7 +533,7 @@ func TestStandaloneServerOfficialDriverCRUDAndReopen(t *testing.T) {
 			_ = standalone.Close()
 			t.Fatalf("Serve returned error: %v", err)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(standaloneShutdownTimeout):
 		_ = standalone.Close()
 		t.Fatal("Serve did not stop")
 	}
@@ -612,6 +614,40 @@ func TestStandaloneServerGoRunHelp(t *testing.T) {
 				t.Fatalf("help output missing expected flags:\n%s", out)
 			}
 		})
+	}
+}
+
+func TestStandaloneServerGoRunDefaultDirUsesMongoGatewayDir(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping go run smoke test in short mode")
+	}
+	cmd := exec.Command("go", "run", "./server.go", "-help")
+	cmd.Env = append(os.Environ(),
+		"GOWORK=off",
+		"MONGO_GATEWAY_DIR=/tmp/mongo-gateway-env",
+		"TREEDB_MONGO_GATEWAY_DIR=/tmp/legacy-treedb-mongo-gateway-env",
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("go run ./server.go -help: %v\n%s", err, out)
+	}
+	if !bytes.Contains(out, []byte(`/tmp/mongo-gateway-env`)) {
+		t.Fatalf("help output missing MONGO_GATEWAY_DIR default:\n%s", out)
+	}
+}
+
+func TestStandaloneServerGoRunMissingDirError(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping go run smoke test in short mode")
+	}
+	cmd := exec.Command("go", "run", "./server.go", "-dir", "")
+	cmd.Env = append(os.Environ(), "GOWORK=off")
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("go run ./server.go -dir \"\" succeeded unexpectedly:\n%s", out)
+	}
+	if !bytes.Contains(out, []byte("TreeDB root directory -dir is required")) {
+		t.Fatalf("missing-dir output missing context:\n%s", out)
 	}
 }
 

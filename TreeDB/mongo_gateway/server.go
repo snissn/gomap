@@ -118,7 +118,7 @@ func parseFlags(args []string, stderr io.Writer) (cliConfig, error) {
 		return cfg, err
 	}
 	if cfg.dir == "" {
-		return cfg, errors.New("-dir is required")
+		return cfg, errors.New("mongo gateway server: TreeDB root directory -dir is required")
 	}
 	return cfg, nil
 }
@@ -176,6 +176,9 @@ func nonNegativeInt32(n int) int32 {
 }
 
 func defaultDirFromEnv() string {
+	if dir := os.Getenv("MONGO_GATEWAY_DIR"); dir != "" {
+		return dir
+	}
 	if dir := os.Getenv("TREEDB_MONGO_GATEWAY_DIR"); dir != "" {
 		return dir
 	}

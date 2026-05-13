@@ -229,7 +229,6 @@ func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = ln.Close() }()
 	return s.Serve(ctx, ln)
 }
 
@@ -274,7 +273,6 @@ func (s *StandaloneServer) ListenAndServe(ctx context.Context, addr string) erro
 	if err != nil {
 		return err
 	}
-	defer func() { _ = ln.Close() }()
 	return s.Serve(ctx, ln)
 }
 
