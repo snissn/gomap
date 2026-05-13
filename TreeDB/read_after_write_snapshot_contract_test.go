@@ -35,6 +35,9 @@ func openQueuedSnapshotContractDB(t *testing.T, profile Profile, keys int) *DB {
 	opts.MemtableMode = "adaptive"
 	opts.MemtableShards = 16
 	opts.ValueLog.Generational.Policy = ValueLogGenerationOff
+	opts.BackgroundCheckpointInterval = -1
+	opts.BackgroundCheckpointIdleDuration = -1
+	opts.MaxWALBytes = -1
 	opts.BackgroundIndexVacuumInterval = -1
 	opts.DisableBackgroundPrune = true
 
