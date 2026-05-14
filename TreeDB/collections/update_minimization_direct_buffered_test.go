@@ -72,11 +72,15 @@ func TestCollectionUpdateBatchDirectBufferedBSONSkipsUnchangedSecondaryRoots(t *
 		collectionSecondaryRootName("users", "email"),
 		collectionSecondaryRootName("users", "city"),
 	)
-	if got, want := rootRunCount, 1; got != want {
-		t.Fatalf("rootRunCount=%d want %d primary-only buffered update", got, want)
+	overlayCount := bufferedPrimaryOverlayCountForTest(t, col)
+	if got, want := rootRunCount, 0; got != want {
+		t.Fatalf("rootRunCount=%d want %d before flush for primary-only overlay update", got, want)
 	}
-	if got, want := rootCounts[collectionPrimaryRootName("users")], 1; got != want {
-		t.Fatalf("primary runs=%d want %d", got, want)
+	if got, want := rootCounts[collectionPrimaryRootName("users")], 0; got != want {
+		t.Fatalf("primary runs=%d want %d before flush for primary-only overlay update", got, want)
+	}
+	if got, want := overlayCount, 1; got != want {
+		t.Fatalf("primary overlay entries=%d want %d", got, want)
 	}
 	for _, rootName := range []string{
 		collectionSecondaryRootName("users", "email"),
@@ -103,6 +107,54 @@ func TestCollectionUpdateBatchDirectBufferedBSONSkipsUnchangedSecondaryRoots(t *
 	}
 	if gotScore := doc["score"]; gotScore != int32(2) {
 		t.Fatalf("buffered BSON score=%v want int32(2)", gotScore)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush primary-only overlay update: %v", err)
+	}
+	if got, want := bufferedPrimaryCacheCountForTest(t, col), 1; got != want {
+		t.Fatalf("primary cache entries after flush=%d want %d", got, want)
+	}
+	got, err = col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get flushed BSON document: %v", err)
+	}
+	if gotScore := bson.Raw(got).Lookup("score").Int32(); gotScore != int32(2) {
+		t.Fatalf("flushed BSON score=%v want int32(2)", gotScore)
+	}
+	results, batched, err = col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{
+		{DocumentID: []byte("u1"), Update: setBSONField("score", int32(3))},
+	})
+	if err != nil {
+		t.Fatalf("UpdateBatchIfNoSecondaryUniqueIndexChanges after cache-retained flush: %v", err)
+	}
+	if !batched {
+		t.Fatal("cached BSON update was declined")
+	}
+	if len(results) != 1 || !results[0].Matched || !results[0].Modified {
+		t.Fatalf("cached update results=%+v want one matched modified row", results)
+	}
+	got, err = col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get second buffered BSON document: %v", err)
+	}
+	if gotScore := bson.Raw(got).Lookup("score").Int32(); gotScore != int32(3) {
+		t.Fatalf("second buffered BSON score=%v want int32(3)", gotScore)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush second primary-only overlay update: %v", err)
+	}
+	if got, want := bufferedPrimaryCacheCountForTest(t, col), 1; got != want {
+		t.Fatalf("primary cache entries after second flush=%d want %d", got, want)
+	}
+	deleted, err := col.DeleteDocument([]byte("u1"))
+	if err != nil {
+		t.Fatalf("delete document: %v", err)
+	}
+	if !deleted {
+		t.Fatal("delete document deleted=false want true")
+	}
+	if got := bufferedPrimaryCacheCountForTest(t, col); got != 0 {
+		t.Fatalf("primary cache entries after delete=%d want 0", got)
 	}
 }
 
@@ -294,4 +346,24 @@ func bufferedRootRunCountsForTest(t *testing.T, col *Collection, rootNames ...st
 		out[rootName] = len(col.writeDomain.rootRuns[rootName])
 	}
 	return out, col.writeDomain.rootRunCount
+}
+
+func bufferedPrimaryOverlayCountForTest(t *testing.T, col *Collection) int {
+	t.Helper()
+	col.writeDomain.mu.RLock()
+	defer col.writeDomain.mu.RUnlock()
+	if col.writeDomain.primaryOverlay == nil {
+		return 0
+	}
+	return col.writeDomain.primaryOverlay.len()
+}
+
+func bufferedPrimaryCacheCountForTest(t *testing.T, col *Collection) int {
+	t.Helper()
+	col.writeDomain.mu.RLock()
+	defer col.writeDomain.mu.RUnlock()
+	if col.writeDomain.primaryCache == nil {
+		return 0
+	}
+	return col.writeDomain.primaryCache.len()
 }
