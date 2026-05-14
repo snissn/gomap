@@ -99,7 +99,6 @@ func TestProfileBenchBufferedIndexedAsyncFlushEnv(t *testing.T) {
 	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_WRITE_MAX_ROOT_RUNS", "")
 	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_UPDATE_COMBINE_SHARDS", "")
 	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_UPDATE_COMBINE_LANE_WORKERS", "")
-	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_UPDATE_COMBINE_UNSAFE_STALE_DIRECT_PLANS", "")
 	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_OVERLAY_ROOTS", "")
 	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_COMPACT_OVERLAY_ROOTS_AFTER_FLUSH", "")
 	if profileBenchBufferedIndexedAsyncFlush(t) {
@@ -131,9 +130,6 @@ func TestProfileBenchBufferedIndexedAsyncFlushEnv(t *testing.T) {
 	}
 	if profileBenchUpdateCombineLaneWorkers(t) {
 		t.Fatal("update combine lane workers default=true want false")
-	}
-	if profileBenchUpdateCombineUnsafeStaleDirectPlans(t) {
-		t.Fatal("update combine unsafe stale direct plans default=true want false")
 	}
 	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_ASYNC_FLUSH", "true")
 	if !profileBenchBufferedIndexedAsyncFlush(t) {
@@ -167,10 +163,6 @@ func TestProfileBenchBufferedIndexedAsyncFlushEnv(t *testing.T) {
 	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_UPDATE_COMBINE_LANE_WORKERS", "true")
 	if !profileBenchUpdateCombineLaneWorkers(t) {
 		t.Fatal("update combine lane workers env=true want true")
-	}
-	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_UPDATE_COMBINE_UNSAFE_STALE_DIRECT_PLANS", "true")
-	if !profileBenchUpdateCombineUnsafeStaleDirectPlans(t) {
-		t.Fatal("update combine unsafe stale direct plans env=true want true")
 	}
 	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_OVERLAY_ROOTS", "true")
 	if !profileBenchBufferedIndexedOverlayRoots(t) {
@@ -776,8 +768,6 @@ func benchmarkDirectCollectionConcurrentUpdateBSON(b *testing.B, indexes []colle
 	manager.SetUpdateCombineShardsForProfiling(updateCombineShards)
 	updateCombineLaneWorkers := profileBenchUpdateCombineLaneWorkers(b)
 	manager.SetUpdateCombineLaneWorkersForProfiling(updateCombineLaneWorkers)
-	updateCombineUnsafeStaleDirectPlans := profileBenchUpdateCombineUnsafeStaleDirectPlans(b)
-	manager.SetUpdateCombineUnsafeStaleDirectPlansForProfiling(updateCombineUnsafeStaleDirectPlans)
 	manager.ResetUpdateCombinersForProfiling()
 	manager.ResetUpdateCombineQueueDepthMax()
 	statsBefore := manager.StatsSnapshot()
@@ -801,9 +791,6 @@ func benchmarkDirectCollectionConcurrentUpdateBSON(b *testing.B, indexes []colle
 	b.ReportMetric(float64(updateCombineShards), "update_combine_shards")
 	if updateCombineLaneWorkers {
 		b.ReportMetric(1, "update_combine_lane_workers")
-	}
-	if updateCombineUnsafeStaleDirectPlans {
-		b.ReportMetric(1, "update_combine_unsafe_stale_direct_plans")
 	}
 	reportProfileBenchBufferedIndexedWriteOptions(b, collection.Meta().Options)
 	reportProfileBenchOverlayCompactionStats(b, "preload", preloadCompactStats)
@@ -2677,10 +2664,6 @@ func profileBenchUpdateCombineShards(tb testing.TB) int {
 
 func profileBenchUpdateCombineLaneWorkers(tb testing.TB) bool {
 	return profileBenchBoolEnv(tb, "MONGO_GATEWAY_PROFILE_BENCH_UPDATE_COMBINE_LANE_WORKERS", false)
-}
-
-func profileBenchUpdateCombineUnsafeStaleDirectPlans(tb testing.TB) bool {
-	return profileBenchBoolEnv(tb, "MONGO_GATEWAY_PROFILE_BENCH_UPDATE_COMBINE_UNSAFE_STALE_DIRECT_PLANS", false)
 }
 
 func profileBenchBufferedIndexedAsyncFlush(tb testing.TB) bool {
