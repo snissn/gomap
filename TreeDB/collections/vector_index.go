@@ -476,15 +476,17 @@ func (idx *VectorIndex) InsertDocuments(documentIDs [][]byte) error {
 		return err
 	}
 	defer func() { _ = materializer.Close() }()
+	var errs []error
 	for _, documentID := range documentIDs {
 		if len(documentID) == 0 {
-			return errors.New("collections: document id cannot be empty")
+			errs = append(errs, errors.New("collections: document id cannot be empty"))
+			continue
 		}
 		if err := idx.insertDocumentWithMaterializer(materializer, documentID); err != nil {
-			return err
+			errs = append(errs, err)
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 func (idx *VectorIndex) insertDocumentWithMaterializer(materializer *StoredDocumentJSONMaterializer, documentID []byte) error {

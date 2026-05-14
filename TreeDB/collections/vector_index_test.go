@@ -74,8 +74,11 @@ func TestCollectionVectorIndexTrackedMutationErrorStats(t *testing.T) {
 		t.Fatalf("build vector index: %v", err)
 	}
 	if _, err := col.InsertBatch(
-		[][]byte{[]byte("bad")},
-		[][]byte{[]byte(`{"embedding":[1,0,0]}`)},
+		[][]byte{[]byte("bad"), []byte("good")},
+		[][]byte{
+			[]byte(`{"embedding":[1,0,0]}`),
+			[]byte(`{"embedding":[0.9,0.1]}`),
+		},
 	); err != nil {
 		t.Fatalf("insert mismatched vector should still commit collection row: %v", err)
 	}
@@ -86,8 +89,8 @@ func TestCollectionVectorIndexTrackedMutationErrorStats(t *testing.T) {
 	if !strings.Contains(stats.LastMutationError, "has dimension 3, want 2") {
 		t.Fatalf("unexpected last mutation error: %q", stats.LastMutationError)
 	}
-	if stats.LiveDocs != 1 {
-		t.Fatalf("failed vector mutation changed indexed docs: %+v", stats)
+	if stats.LiveDocs != 2 {
+		t.Fatalf("failed vector mutation skipped trailing valid docs: %+v", stats)
 	}
 	if _, err := index.SaveSnapshot(); err == nil || !strings.Contains(err.Error(), "tracked mutation errors") {
 		t.Fatalf("save snapshot with tracked mutation error err=%v", err)
