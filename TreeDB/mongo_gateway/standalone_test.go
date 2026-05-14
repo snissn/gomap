@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -726,6 +727,31 @@ func TestStandaloneServerGoRunRejectsNegativeIntegerLimit(t *testing.T) {
 	}
 	if got := bytes.Count(out, []byte("mongo gateway server:")); got != 1 {
 		t.Fatalf("negative limit output has %d top-level prefixes, want 1:\n%s", got, out)
+	}
+}
+
+func TestStandaloneServerGoRunListenErrorDoesNotCreateDir(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping go run smoke test in short mode")
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+
+	dir := filepath.Join(t.TempDir(), "db")
+	cmd := exec.Command("go", "run", "./server.go", "-addr", ln.Addr().String(), "-dir", dir)
+	cmd.Env = append(os.Environ(), "GOWORK=off")
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("go run ./server.go with occupied addr succeeded unexpectedly:\n%s", out)
+	}
+	if !bytes.Contains(out, []byte("mongo gateway server: listen on")) {
+		t.Fatalf("listen failure output missing context:\n%s", out)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("TreeDB dir stat err=%v want not-exist", err)
 	}
 }
 
