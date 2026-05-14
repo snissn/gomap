@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"math"
 	"slices"
-	"sort"
 	"sync"
 	"time"
 
@@ -583,19 +582,50 @@ func (idx *VectorIndex) linkLayerLocked(fromNodeID, toNodeID, layer int) {
 	neighbors = append(neighbors, toNodeID)
 	limit := idx.maxNeighborsForLayer(layer)
 	if len(neighbors) > limit {
-		sort.Slice(neighbors, func(i, j int) bool {
-			left := idx.nodes[neighbors[i]]
-			right := idx.nodes[neighbors[j]]
-			leftDistance := idx.distanceBetweenNodesLocked(fromNodeID, neighbors[i])
-			rightDistance := idx.distanceBetweenNodesLocked(fromNodeID, neighbors[j])
-			if leftDistance != rightDistance {
-				return leftDistance < rightDistance
-			}
-			return bytes.Compare(left.documentID, right.documentID) < 0
-		})
-		neighbors = neighbors[:limit]
+		neighbors = idx.pruneLayerNeighborsLocked(fromNodeID, neighbors, limit)
 	}
 	idx.nodes[fromNodeID].neighbors[layer] = neighbors
+}
+
+func (idx *VectorIndex) pruneLayerNeighborsLocked(fromNodeID int, neighbors []int, limit int) []int {
+	if limit <= 0 || len(neighbors) == 0 {
+		return nil
+	}
+	if len(neighbors) <= limit {
+		return neighbors
+	}
+	var stack [128]vectorIndexCandidate
+	scored := stack[:0]
+	if len(neighbors) > len(stack) {
+		scored = make([]vectorIndexCandidate, 0, len(neighbors))
+	}
+	for _, neighborID := range neighbors {
+		if neighborID < 0 || neighborID >= len(idx.nodes) {
+			continue
+		}
+		distance := idx.distanceBetweenNodesLocked(fromNodeID, neighborID)
+		if math.IsInf(float64(distance), 1) {
+			continue
+		}
+		scored = append(scored, vectorIndexCandidate{nodeID: neighborID, distance: distance})
+	}
+	slices.SortFunc(scored, func(left, right vectorIndexCandidate) int {
+		if left.distance < right.distance {
+			return -1
+		}
+		if left.distance > right.distance {
+			return 1
+		}
+		return bytes.Compare(idx.nodes[left.nodeID].documentID, idx.nodes[right.nodeID].documentID)
+	})
+	if len(scored) > limit {
+		scored = scored[:limit]
+	}
+	out := neighbors[:0]
+	for _, candidate := range scored {
+		out = append(out, candidate.nodeID)
+	}
+	return out
 }
 
 // Search returns ANN candidates from the in-memory graph and exact-reranks the

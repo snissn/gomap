@@ -49,6 +49,28 @@ func TestCollectionVectorIndexSearchReranksCanonicalRows(t *testing.T) {
 	}
 }
 
+func TestVectorIndexPruneLayerNeighborsUsesDistanceThenDocumentID(t *testing.T) {
+	index, err := newVectorIndex(nil, VectorIndexOptions{
+		Name:   "embedding",
+		Field:  "embedding",
+		Metric: VectorMetricCosine,
+	})
+	if err != nil {
+		t.Fatalf("new vector index: %v", err)
+	}
+	index.nodes = []vectorIndexNode{
+		{documentID: []byte("from"), vector: []float32{1, 0}},
+		{documentID: []byte("b"), vector: []float32{0.8, 0.2}},
+		{documentID: []byte("a"), vector: []float32{0.8, 0.2}},
+		{documentID: []byte("far"), vector: []float32{0, 1}},
+	}
+
+	got := index.pruneLayerNeighborsLocked(0, []int{3, 1, 2}, 2)
+	if len(got) != 2 || got[0] != 2 || got[1] != 1 {
+		t.Fatalf("pruned neighbors=%v want [2 1]", got)
+	}
+}
+
 func TestCollectionVectorIndexInt8EncodingReranksCanonicalRows(t *testing.T) {
 	const (
 		docs = 24
