@@ -1052,6 +1052,9 @@ func vectorDistanceToStoredNodeWithQueryNorm(query []float32, queryNormSquared f
 	}
 	switch metric {
 	case VectorMetricCosine:
+		if len(node.vector) > 0 {
+			return vectorDistanceToFloat32NodeCosine(query, queryNormSquared, node)
+		}
 		var dot float64
 		for i, left := range query {
 			right := node.vectorValueAt(i)
@@ -1092,6 +1095,9 @@ func vectorDistanceBetweenStoredNodes(left, right *vectorIndexNode, metric Vecto
 	}
 	switch metric {
 	case VectorMetricCosine:
+		if len(left.vector) > 0 && len(right.vector) > 0 {
+			return vectorDistanceBetweenFloat32NodesCosine(left, right)
+		}
 		var dot float64
 		for i := 0; i < dims; i++ {
 			leftValue := left.vectorValueAt(i)
@@ -1120,6 +1126,41 @@ func vectorDistanceBetweenStoredNodes(left, right *vectorIndexNode, metric Vecto
 	default:
 		return 0, fmt.Errorf("collections: unsupported vector metric %d", metric)
 	}
+}
+
+func vectorDistanceToFloat32NodeCosine(query []float32, queryNormSquared float64, node *vectorIndexNode) (float32, error) {
+	if len(query) != len(node.vector) {
+		return 0, fmt.Errorf("collections: vector dimensions differ: %d vs %d", len(query), len(node.vector))
+	}
+	var dot float64
+	for i, left := range query {
+		dot += float64(left * node.vector[i])
+	}
+	leftNorm := queryNormSquared
+	if leftNorm < 0 {
+		leftNorm = vectorNormSquared(query)
+	}
+	rightNorm := node.cachedNormSquared()
+	if leftNorm == 0 || rightNorm == 0 {
+		return 0, errors.New("collections: cosine vector cannot have zero magnitude")
+	}
+	return float32(1 - dot/(math.Sqrt(leftNorm)*math.Sqrt(rightNorm))), nil
+}
+
+func vectorDistanceBetweenFloat32NodesCosine(left, right *vectorIndexNode) (float32, error) {
+	if len(left.vector) != len(right.vector) {
+		return 0, fmt.Errorf("collections: vector dimensions differ: %d vs %d", len(left.vector), len(right.vector))
+	}
+	var dot float64
+	for i, leftValue := range left.vector {
+		dot += float64(leftValue * right.vector[i])
+	}
+	leftNorm := left.cachedNormSquared()
+	rightNorm := right.cachedNormSquared()
+	if leftNorm == 0 || rightNorm == 0 {
+		return 0, errors.New("collections: cosine vector cannot have zero magnitude")
+	}
+	return float32(1 - dot/(math.Sqrt(leftNorm)*math.Sqrt(rightNorm))), nil
 }
 
 func (node *vectorIndexNode) vectorDimensions() int {

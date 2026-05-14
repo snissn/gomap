@@ -2,6 +2,7 @@ package collections
 
 import (
 	"fmt"
+	"math"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -107,6 +108,39 @@ func TestVectorIndexInsertCachesInt8StoredNorm(t *testing.T) {
 	}
 	if got, want := node.normSquared, node.storedNormSquared(); got != want {
 		t.Fatalf("node cached norm=%v want dequantized norm %v", got, want)
+	}
+}
+
+func TestVectorIndexFloat32CosineSpecializationMatchesExactDistance(t *testing.T) {
+	query := []float32{0.25, -0.5, 1.25, 2}
+	node := vectorIndexNode{documentID: []byte("right"), vector: []float32{1.5, -0.25, 0.75, 3}}
+	node.normSquared = node.storedNormSquared()
+	queryNorm := vectorNormSquared(query)
+
+	gotQuery, err := vectorDistanceToFloat32NodeCosine(query, queryNorm, &node)
+	if err != nil {
+		t.Fatalf("specialized query distance: %v", err)
+	}
+	wantQuery, err := exactVectorDistance(query, node.vector, VectorMetricCosine)
+	if err != nil {
+		t.Fatalf("exact query distance: %v", err)
+	}
+	if math.Abs(float64(gotQuery-wantQuery)) > 1e-6 {
+		t.Fatalf("specialized query distance=%v want %v", gotQuery, wantQuery)
+	}
+
+	left := vectorIndexNode{documentID: []byte("left"), vector: query}
+	left.normSquared = left.storedNormSquared()
+	gotBetween, err := vectorDistanceBetweenFloat32NodesCosine(&left, &node)
+	if err != nil {
+		t.Fatalf("specialized node distance: %v", err)
+	}
+	wantBetween, err := exactVectorDistance(left.vector, node.vector, VectorMetricCosine)
+	if err != nil {
+		t.Fatalf("exact node distance: %v", err)
+	}
+	if math.Abs(float64(gotBetween-wantBetween)) > 1e-6 {
+		t.Fatalf("specialized node distance=%v want %v", gotBetween, wantBetween)
 	}
 }
 
