@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/cespare/xxhash/v2"
+	kshardvector "github.com/kshard/vector"
 )
 
 const (
@@ -1196,6 +1197,8 @@ type preparedFloat32CosineQuery struct {
 	invNorm float32
 }
 
+var vectorIndexKshardCosine = kshardvector.Cosine()
+
 func prepareFloat32CosineQuery(query []float32, queryNormSquared float64) (preparedFloat32CosineQuery, error) {
 	leftNorm := queryNormSquared
 	if leftNorm < 0 {
@@ -1229,6 +1232,13 @@ func vectorDistanceToFloat32NodeCosinePrepared(query preparedFloat32CosineQuery,
 }
 
 func vectorDistanceToFloat32NodeCosineUnchecked(query preparedFloat32CosineQuery, node *vectorIndexNode) float32 {
+	if len(query.vector)%4 == 0 {
+		return 2 * vectorIndexKshardCosine.Distance(query.vector, node.vector)
+	}
+	return vectorDistanceToFloat32NodeCosineUncheckedNative(query, node)
+}
+
+func vectorDistanceToFloat32NodeCosineUncheckedNative(query preparedFloat32CosineQuery, node *vectorIndexNode) float32 {
 	q := query.vector
 	v := node.vector
 	var s0, s1, s2, s3 float32
