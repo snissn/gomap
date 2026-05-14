@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import argparse
+import json
+from pathlib import Path
+
 import torch
 import torch.nn.functional as F
 from huggingface_hub.utils import logging as hf_hub_logging
@@ -88,11 +92,38 @@ def print_top_pairs(similarities: torch.Tensor, documents: list[str], limit: int
         print(f"        D{right + 1:02d}: {documents[right]}")
 
 
+def write_jsonl(path: Path, embeddings: torch.Tensor, documents: list[str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as f:
+        for i, (document, embedding) in enumerate(zip(documents, embeddings), start=1):
+            record = {
+                "id": f"D{i:02d}",
+                "text": document,
+                "model": MODEL_NAME,
+                "pooling": "mean",
+                "normalized": True,
+                "embedding": [float(value) for value in embedding.tolist()],
+            }
+            f.write(json.dumps(record, separators=(",", ":")))
+            f.write("\n")
+
+
 def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--output-jsonl",
+        type=Path,
+        help="write TreeDB benchmark fixture records with text and embeddings",
+    )
+    args = parser.parse_args()
+
     embeddings = embed_documents(DOCUMENTS)
     similarities = embeddings @ embeddings.T
 
     print(f"Generated {len(DOCUMENTS)} embeddings with dimension {embeddings.shape[1]}.")
+    if args.output_jsonl is not None:
+        write_jsonl(args.output_jsonl, embeddings, DOCUMENTS)
+        print(f"Wrote JSONL embeddings to {args.output_jsonl}.")
     print_similarity_matrix(similarities)
     print_top_pairs(similarities, DOCUMENTS)
 

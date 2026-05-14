@@ -308,6 +308,8 @@ type Collection struct {
 	lastInsertStats   CollectionInsertStats
 	updateStatsMu     sync.RWMutex
 	lastUpdateStats   CollectionUpdateStats
+	vectorIndexesMu   sync.RWMutex
+	vectorIndexes     map[string]*VectorIndex
 }
 
 type CollectionRootOverlayCompactionStats struct {
@@ -8053,7 +8055,11 @@ func (c *Collection) insertOneViaBatch(id, document []byte) ([]byte, error) {
 // batch recoverable as one mutation boundary. Ordinary pre-commit errors expose
 // no partial batch. Post-commit failures must be reported as commit-ambiguous.
 func (c *Collection) InsertBatch(ids, documents [][]byte) ([][]byte, error) {
-	return c.insertBatch(ids, documents, false, nil)
+	resultIDs, err := c.insertBatch(ids, documents, false, nil)
+	if err == nil {
+		c.notifyVectorIndexesUpsert(resultIDs)
+	}
+	return resultIDs, err
 }
 
 // InsertBatchWithTemplateV1Encoder inserts template-v1 documents and teaches
@@ -8064,7 +8070,11 @@ func (c *Collection) InsertBatchWithTemplateV1Encoder(ids, documents [][]byte, e
 	if encoder == nil {
 		return nil, errors.New("collections: template-v1 encoder cannot be nil")
 	}
-	return c.insertBatch(ids, documents, false, encoder)
+	resultIDs, err := c.insertBatch(ids, documents, false, encoder)
+	if err == nil {
+		c.notifyVectorIndexesUpsert(resultIDs)
+	}
+	return resultIDs, err
 }
 
 // InsertBatchValidatedBSON inserts native BSON documents that the caller has
@@ -8072,7 +8082,11 @@ func (c *Collection) InsertBatchWithTemplateV1Encoder(ids, documents [][]byte, e
 // BSON while parsing the request and need to avoid a duplicate full-document
 // validation pass on the insert hot path.
 func (c *Collection) InsertBatchValidatedBSON(ids, documents [][]byte) ([][]byte, error) {
-	return c.insertBatch(ids, documents, true, nil)
+	resultIDs, err := c.insertBatch(ids, documents, true, nil)
+	if err == nil {
+		c.notifyVectorIndexesUpsert(resultIDs)
+	}
+	return resultIDs, err
 }
 
 func (c *Collection) insertBatch(ids, documents [][]byte, trustedValidBSON bool, templateEncoder *TemplateV1Encoder) ([][]byte, error) {
@@ -8952,6 +8966,9 @@ func (c *Collection) DeleteBatch(documentIDs [][]byte) (int, error) {
 			waitBeforeCollectionMutationRetry(attempt)
 			continue
 		}
+		if err == nil && deleted > 0 {
+			c.notifyVectorIndexesDelete(ids)
+		}
 		return deleted, err
 	}
 	return 0, collectionMutationRetryExhausted(lastErr)
@@ -9327,17 +9344,23 @@ func (c *Collection) Update(documentID []byte, update func(current []byte) (repl
 	if err := validateCollectionUpdateInput(c, documentID, update); err != nil {
 		return false, false, err
 	}
+	var matched, modified bool
+	var err error
 	if combiner, domain := c.updateFastPathWithoutCreatingCombiner(); combiner != nil {
-		return combiner.update(c, documentID, update, bsonSetUpdate{}, false)
+		matched, modified, err = combiner.update(c, documentID, update, bsonSetUpdate{}, false)
 	} else if domain != nil {
 		defer domain.finishInlineUpdateWithoutCombiner()
 		domain.observeUpdateCombineInline()
-		return c.updateSingleInlineWithoutCombiner(domain, documentID, update, bsonSetUpdate{}, false)
+		matched, modified, err = c.updateSingleInlineWithoutCombiner(domain, documentID, update, bsonSetUpdate{}, false)
+	} else if combiner := c.updateCombiner(); combiner != nil {
+		matched, modified, err = combiner.update(c, documentID, update, bsonSetUpdate{}, false)
+	} else {
+		matched, modified, err = c.updateDirect(documentID, update)
 	}
-	if combiner := c.updateCombiner(); combiner != nil {
-		return combiner.update(c, documentID, update, bsonSetUpdate{}, false)
+	if err == nil && modified {
+		c.notifyVectorIndexesUpsert([][]byte{documentID})
 	}
-	return c.updateDirect(documentID, update)
+	return matched, modified, err
 }
 
 func validateCollectionUpdateInput(c *Collection, documentID []byte, update func(current []byte) (replacement []byte, changed bool, err error)) error {
@@ -9420,6 +9443,9 @@ func (c *Collection) updateDirectBSONSet(documentID []byte, spec bsonSetUpdate) 
 // batch. Post-commit failures must be commit-ambiguous for the whole batch.
 func (c *Collection) UpdateBatch(items []UpdateBatchItem) ([]UpdateBatchResult, error) {
 	results, _, err := c.updateBatch(items, updateBatchModeAny)
+	if err == nil {
+		c.notifyVectorIndexesUpdateBatch(items, results)
+	}
 	return results, err
 }
 
@@ -9429,7 +9455,11 @@ func (c *Collection) UpdateBatch(items []UpdateBatchItem) ([]UpdateBatchResult, 
 // present so callers can preserve ordered per-document update semantics. When
 // batched=false and err=nil, the returned results are zero-valued with len(items).
 func (c *Collection) UpdateBatchIfNoSecondaryUniqueIndexes(items []UpdateBatchItem) ([]UpdateBatchResult, bool, error) {
-	return c.updateBatch(items, updateBatchModeNoSecondaryUniqueIndexes)
+	results, batched, err := c.updateBatch(items, updateBatchModeNoSecondaryUniqueIndexes)
+	if err == nil && batched {
+		c.notifyVectorIndexesUpdateBatch(items, results)
+	}
+	return results, batched, err
 }
 
 // UpdateBatchIfNoSecondaryUniqueIndexChanges applies UpdateBatch only when no
@@ -9439,7 +9469,11 @@ func (c *Collection) UpdateBatchIfNoSecondaryUniqueIndexes(items []UpdateBatchIt
 // for unique value mutations. When batched=false and err=nil, the returned
 // results are zero-valued with len(items).
 func (c *Collection) UpdateBatchIfNoSecondaryUniqueIndexChanges(items []UpdateBatchItem) ([]UpdateBatchResult, bool, error) {
-	return c.updateBatch(items, updateBatchModeNoSecondaryUniqueIndexChanges)
+	results, batched, err := c.updateBatch(items, updateBatchModeNoSecondaryUniqueIndexChanges)
+	if err == nil && batched {
+		c.notifyVectorIndexesUpdateBatch(items, results)
+	}
+	return results, batched, err
 }
 
 func (c *Collection) updateBatch(items []UpdateBatchItem, mode updateBatchMode) ([]UpdateBatchResult, bool, error) {
