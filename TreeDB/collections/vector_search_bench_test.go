@@ -18,6 +18,56 @@ const (
 	vectorBenchmarkTopK        = 10
 )
 
+var vectorDistanceBenchmarkSink float32
+
+func BenchmarkVectorDistanceToFloat32NodeCosinePrepared(b *testing.B) {
+	docs := minInt(vectorBenchmarkDocs(b), 4096)
+	dims := vectorBenchmarkDims(b)
+	query := vectorBenchmarkEmbedding(docs/3, dims)
+	queryNorm := vectorNormSquared(query)
+	candidates := make([]vectorIndexNode, docs)
+	for i := range candidates {
+		candidates[i] = vectorIndexNode{
+			documentID: []byte(fmt.Sprintf("doc-%06d", i)),
+			vector:     vectorBenchmarkEmbedding(i, dims),
+		}
+		candidates[i].cacheVectorNorms()
+	}
+	prepared, err := prepareFloat32CosineQuery(query, queryNorm)
+	if err != nil {
+		b.Fatalf("prepare query: %v", err)
+	}
+
+	b.ReportMetric(float64(docs), "candidates")
+	b.ReportMetric(float64(dims), "dims")
+	b.Run("wrapper", func(b *testing.B) {
+		var sum float32
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			for j := range candidates {
+				distance, err := vectorDistanceToFloat32NodeCosine(query, queryNorm, &candidates[j])
+				if err != nil {
+					b.Fatalf("distance: %v", err)
+				}
+				sum += distance
+			}
+		}
+		vectorDistanceBenchmarkSink = sum
+	})
+	b.Run("prepared_unchecked", func(b *testing.B) {
+		var sum float32
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			for j := range candidates {
+				sum += vectorDistanceToFloat32NodeCosineUnchecked(prepared, &candidates[j])
+			}
+		}
+		vectorDistanceBenchmarkSink = sum
+	})
+}
+
 func BenchmarkCollectionVectorSearchExact(b *testing.B) {
 	docs := vectorBenchmarkDocs(b)
 	dims := vectorBenchmarkDims(b)

@@ -140,14 +140,15 @@ type VectorIndex struct {
 }
 
 type vectorIndexNode struct {
-	documentID  []byte
-	vector      []float32
-	quantized   []int8
-	quantScale  float32
-	normSquared float64
-	level       int
-	neighbors   [][]int
-	deleted     bool
+	documentID    []byte
+	vector        []float32
+	quantized     []int8
+	quantScale    float32
+	normSquared   float64
+	cachedInvNorm float32
+	level         int
+	neighbors     [][]int
+	deleted       bool
 }
 
 // BuildVectorIndex builds an in-memory vector secondary index from the current
@@ -417,6 +418,14 @@ func (idx *VectorIndex) insertVectorLocked(documentID []byte, vector []float32) 
 			return errors.New("collections: cosine vector cannot have zero magnitude")
 		}
 	}
+	var prepared *preparedFloat32CosineQuery
+	if idx.metric == VectorMetricCosine {
+		preparedQuery, err := prepareFloat32CosineQuery(vector, vectorNorm)
+		if err != nil {
+			return err
+		}
+		prepared = &preparedQuery
+	}
 	if idx.dimensions == 0 {
 		idx.dimensions = len(vector)
 	} else if len(vector) != idx.dimensions {
@@ -437,11 +446,11 @@ func (idx *VectorIndex) insertVectorLocked(documentID []byte, vector []float32) 
 	}
 	entryPoint := idx.entry
 	for layer := idx.maxLevel; layer > level; layer-- {
-		entryPoint = idx.greedyNearestAtLayerLocked(vector, vectorNorm, entryPoint, layer)
+		entryPoint = idx.greedyNearestAtLayerLocked(vector, vectorNorm, prepared, entryPoint, layer)
 	}
 	for layer := minInt(level, idx.maxLevel); layer >= 0; layer-- {
-		candidates := idx.searchLayerWithScratchLocked(vector, vectorNorm, entryPoint, idx.efConstruction, layer, &idx.insertScratch)
-		neighbors := idx.selectLayerNeighborsLocked(vector, vectorNorm, candidates, layer, idx.maxNeighborsForLayer(layer), nodeID)
+		candidates := idx.searchLayerWithScratchLocked(vector, vectorNorm, prepared, entryPoint, idx.efConstruction, layer, &idx.insertScratch)
+		neighbors := idx.selectLayerNeighborsLocked(vector, vectorNorm, prepared, candidates, layer, idx.maxNeighborsForLayer(layer), nodeID)
 		for _, neighborID := range neighbors {
 			idx.linkLayerLocked(nodeID, neighborID, layer)
 			idx.linkLayerLocked(neighborID, nodeID, layer)
@@ -469,7 +478,7 @@ func (idx *VectorIndex) newVectorIndexNode(documentID []byte, vector []float32, 
 	default:
 		node.vector = append([]float32(nil), vector...)
 	}
-	node.normSquared = node.storedNormSquared()
+	node.cacheVectorNorms()
 	return node
 }
 
@@ -660,6 +669,14 @@ func (idx *VectorIndex) Search(query []float32, opts VectorIndexSearchOptions) (
 			return nil, trace, errors.New("collections: cosine vector query cannot have zero magnitude")
 		}
 	}
+	var prepared *preparedFloat32CosineQuery
+	if idx.metric == VectorMetricCosine {
+		preparedQuery, err := prepareFloat32CosineQuery(query, queryNorm)
+		if err != nil {
+			return nil, trace, err
+		}
+		prepared = &preparedQuery
+	}
 	idx.mu.RLock()
 	if idx.dimensions != 0 && len(query) != idx.dimensions {
 		dims := idx.dimensions
@@ -729,7 +746,7 @@ func (idx *VectorIndex) Search(query []float32, opts VectorIndexSearchOptions) (
 	}
 	idx.mu.RLock()
 	scratch := idx.getSearchScratch()
-	candidates := idx.searchCandidatesLocked(query, queryNorm, candidateLimit, scratch)
+	candidates := idx.searchCandidatesLocked(query, queryNorm, prepared, candidateLimit, scratch)
 	trace.CandidatesExamined = len(candidates)
 	candidateIDs := make([][]byte, 0, len(candidates))
 	for _, candidate := range candidates {
@@ -806,6 +823,14 @@ func (idx *VectorIndex) searchGraphOnly(query []float32, topK, efSearch int) ([]
 			return nil, errors.New("collections: cosine vector query cannot have zero magnitude")
 		}
 	}
+	var prepared *preparedFloat32CosineQuery
+	if idx.metric == VectorMetricCosine {
+		preparedQuery, err := prepareFloat32CosineQuery(query, queryNorm)
+		if err != nil {
+			return nil, err
+		}
+		prepared = &preparedQuery
+	}
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
 	if idx.dimensions != 0 && len(query) != idx.dimensions {
@@ -819,7 +844,7 @@ func (idx *VectorIndex) searchGraphOnly(query []float32, topK, efSearch int) ([]
 		limit = topK
 	}
 	scratch := idx.getSearchScratch()
-	candidates := idx.searchCandidatesLocked(query, queryNorm, limit, scratch)
+	candidates := idx.searchCandidatesLocked(query, queryNorm, prepared, limit, scratch)
 	results := make([]VectorSearchResult, 0, minInt(topK, len(candidates)))
 	for _, candidate := range candidates {
 		if len(results) >= topK {
@@ -905,28 +930,28 @@ func (idx *VectorIndex) rerankCandidates(query []float32, candidateIDs [][]byte,
 	return results, nil
 }
 
-func (idx *VectorIndex) searchCandidatesLocked(query []float32, queryNormSquared float64, limit int, scratch *vectorIndexSearchScratch) []vectorIndexCandidate {
+func (idx *VectorIndex) searchCandidatesLocked(query []float32, queryNormSquared float64, prepared *preparedFloat32CosineQuery, limit int, scratch *vectorIndexSearchScratch) []vectorIndexCandidate {
 	if idx.entry < 0 || len(idx.nodes) == 0 || limit <= 0 {
 		return nil
 	}
 	entryPoint := idx.entry
 	for layer := idx.maxLevel; layer > 0; layer-- {
-		entryPoint = idx.greedyNearestAtLayerLocked(query, queryNormSquared, entryPoint, layer)
+		entryPoint = idx.greedyNearestAtLayerLocked(query, queryNormSquared, prepared, entryPoint, layer)
 	}
-	return idx.searchLayerWithScratchLocked(query, queryNormSquared, entryPoint, limit, 0, scratch)
+	return idx.searchLayerWithScratchLocked(query, queryNormSquared, prepared, entryPoint, limit, 0, scratch)
 }
 
-func (idx *VectorIndex) greedyNearestAtLayerLocked(query []float32, queryNormSquared float64, entryPoint int, layer int) int {
+func (idx *VectorIndex) greedyNearestAtLayerLocked(query []float32, queryNormSquared float64, prepared *preparedFloat32CosineQuery, entryPoint int, layer int) int {
 	if entryPoint < 0 {
 		return entryPoint
 	}
 	best := entryPoint
-	bestDistance := idx.distanceToNodeWithQueryNormLocked(query, queryNormSquared, best)
+	bestDistance := idx.distanceToNodeWithPreparedQueryLocked(query, queryNormSquared, prepared, best)
 	changed := true
 	for changed {
 		changed = false
 		for _, neighborID := range idx.layerNeighborsLocked(best, layer) {
-			distance := idx.distanceToNodeWithQueryNormLocked(query, queryNormSquared, neighborID)
+			distance := idx.distanceToNodeWithPreparedQueryLocked(query, queryNormSquared, prepared, neighborID)
 			if distance < bestDistance {
 				best = neighborID
 				bestDistance = distance
@@ -938,7 +963,7 @@ func (idx *VectorIndex) greedyNearestAtLayerLocked(query []float32, queryNormSqu
 }
 
 func (idx *VectorIndex) searchLayerLocked(query []float32, queryNormSquared float64, entryPoint int, limit int, layer int) []vectorIndexCandidate {
-	return idx.searchLayerWithScratchLocked(query, queryNormSquared, entryPoint, limit, layer, nil)
+	return idx.searchLayerWithScratchLocked(query, queryNormSquared, nil, entryPoint, limit, layer, nil)
 }
 
 func (idx *VectorIndex) getSearchScratch() *vectorIndexSearchScratch {
@@ -955,11 +980,11 @@ func (idx *VectorIndex) putSearchScratch(scratch *vectorIndexSearchScratch) {
 	idx.searchScratch.Put(scratch)
 }
 
-func (idx *VectorIndex) searchLayerWithScratchLocked(query []float32, queryNormSquared float64, entryPoint int, limit int, layer int, scratch *vectorIndexSearchScratch) []vectorIndexCandidate {
+func (idx *VectorIndex) searchLayerWithScratchLocked(query []float32, queryNormSquared float64, prepared *preparedFloat32CosineQuery, entryPoint int, limit int, layer int, scratch *vectorIndexSearchScratch) []vectorIndexCandidate {
 	if entryPoint < 0 || entryPoint >= len(idx.nodes) || limit <= 0 {
 		return nil
 	}
-	entryDistance := idx.distanceToNodeWithQueryNormLocked(query, queryNormSquared, entryPoint)
+	entryDistance := idx.distanceToNodeWithPreparedQueryLocked(query, queryNormSquared, prepared, entryPoint)
 	if math.IsInf(float64(entryDistance), 1) {
 		return nil
 	}
@@ -986,7 +1011,7 @@ func (idx *VectorIndex) searchLayerWithScratchLocked(query []float32, queryNormS
 				continue
 			}
 			visited[neighborID] = mark
-			distance := idx.distanceToNodeWithQueryNormLocked(query, queryNormSquared, neighborID)
+			distance := idx.distanceToNodeWithPreparedQueryLocked(query, queryNormSquared, prepared, neighborID)
 			if math.IsInf(float64(distance), 1) {
 				continue
 			}
@@ -1016,7 +1041,7 @@ func (idx *VectorIndex) layerNeighborsLocked(nodeID int, layer int) []int {
 	return node.neighbors[layer]
 }
 
-func (idx *VectorIndex) selectLayerNeighborsLocked(vector []float32, vectorNormSquared float64, candidates []vectorIndexCandidate, layer, limit, excludeNodeID int) []int {
+func (idx *VectorIndex) selectLayerNeighborsLocked(vector []float32, vectorNormSquared float64, prepared *preparedFloat32CosineQuery, candidates []vectorIndexCandidate, layer, limit, excludeNodeID int) []int {
 	if limit <= 0 {
 		return nil
 	}
@@ -1028,7 +1053,7 @@ func (idx *VectorIndex) selectLayerNeighborsLocked(vector []float32, vectorNormS
 		if idx.nodes[candidate.nodeID].level < layer {
 			continue
 		}
-		distance := idx.distanceToNodeWithQueryNormLocked(vector, vectorNormSquared, candidate.nodeID)
+		distance := idx.distanceToNodeWithPreparedQueryLocked(vector, vectorNormSquared, prepared, candidate.nodeID)
 		if math.IsInf(float64(distance), 1) {
 			continue
 		}
@@ -1050,10 +1075,18 @@ func (idx *VectorIndex) distanceToNodeLocked(query []float32, nodeID int) float3
 }
 
 func (idx *VectorIndex) distanceToNodeWithQueryNormLocked(query []float32, queryNormSquared float64, nodeID int) float32 {
+	return idx.distanceToNodeWithPreparedQueryLocked(query, queryNormSquared, nil, nodeID)
+}
+
+func (idx *VectorIndex) distanceToNodeWithPreparedQueryLocked(query []float32, queryNormSquared float64, prepared *preparedFloat32CosineQuery, nodeID int) float32 {
 	if nodeID < 0 || nodeID >= len(idx.nodes) {
 		return float32(math.Inf(1))
 	}
-	distance, err := vectorDistanceToStoredNodeWithQueryNorm(query, queryNormSquared, &idx.nodes[nodeID], idx.metric)
+	node := &idx.nodes[nodeID]
+	if prepared != nil && idx.metric == VectorMetricCosine && len(node.vector) > 0 {
+		return vectorDistanceToFloat32NodeCosineUnchecked(*prepared, node)
+	}
+	distance, err := vectorDistanceToStoredNodeWithQueryNorm(query, queryNormSquared, node, idx.metric)
 	if err != nil {
 		return float32(math.Inf(1))
 	}
@@ -1158,39 +1191,83 @@ func vectorDistanceBetweenStoredNodes(left, right *vectorIndexNode, metric Vecto
 	}
 }
 
-func vectorDistanceToFloat32NodeCosine(query []float32, queryNormSquared float64, node *vectorIndexNode) (float32, error) {
-	if len(query) != len(node.vector) {
-		return 0, fmt.Errorf("collections: vector dimensions differ: %d vs %d", len(query), len(node.vector))
-	}
-	var dot float64
-	for i, left := range query {
-		dot += float64(left * node.vector[i])
-	}
+type preparedFloat32CosineQuery struct {
+	vector  []float32
+	invNorm float32
+}
+
+func prepareFloat32CosineQuery(query []float32, queryNormSquared float64) (preparedFloat32CosineQuery, error) {
 	leftNorm := queryNormSquared
 	if leftNorm < 0 {
 		leftNorm = vectorNormSquared(query)
 	}
-	rightNorm := node.cachedNormSquared()
-	if leftNorm == 0 || rightNorm == 0 {
+	if leftNorm == 0 {
+		return preparedFloat32CosineQuery{}, errors.New("collections: cosine vector cannot have zero magnitude")
+	}
+	return preparedFloat32CosineQuery{
+		vector:  query,
+		invNorm: float32(1 / math.Sqrt(leftNorm)),
+	}, nil
+}
+
+func vectorDistanceToFloat32NodeCosine(query []float32, queryNormSquared float64, node *vectorIndexNode) (float32, error) {
+	prepared, err := prepareFloat32CosineQuery(query, queryNormSquared)
+	if err != nil {
+		return 0, err
+	}
+	return vectorDistanceToFloat32NodeCosinePrepared(prepared, node)
+}
+
+func vectorDistanceToFloat32NodeCosinePrepared(query preparedFloat32CosineQuery, node *vectorIndexNode) (float32, error) {
+	if len(query.vector) != len(node.vector) {
+		return 0, fmt.Errorf("collections: vector dimensions differ: %d vs %d", len(query.vector), len(node.vector))
+	}
+	if node.cachedInvNorm == 0 {
 		return 0, errors.New("collections: cosine vector cannot have zero magnitude")
 	}
-	return float32(1 - dot/(math.Sqrt(leftNorm)*math.Sqrt(rightNorm))), nil
+	return vectorDistanceToFloat32NodeCosineUnchecked(query, node), nil
+}
+
+func vectorDistanceToFloat32NodeCosineUnchecked(query preparedFloat32CosineQuery, node *vectorIndexNode) float32 {
+	q := query.vector
+	v := node.vector
+	var s0, s1, s2, s3 float32
+	i := 0
+	n := len(q)
+	for ; i+4 <= n; i += 4 {
+		s0 += q[i] * v[i]
+		s1 += q[i+1] * v[i+1]
+		s2 += q[i+2] * v[i+2]
+		s3 += q[i+3] * v[i+3]
+	}
+	dot := s0 + s1 + s2 + s3
+	for ; i < n; i++ {
+		dot += q[i] * v[i]
+	}
+	return 1 - dot*query.invNorm*node.cachedInvNorm
 }
 
 func vectorDistanceBetweenFloat32NodesCosine(left, right *vectorIndexNode) (float32, error) {
 	if len(left.vector) != len(right.vector) {
 		return 0, fmt.Errorf("collections: vector dimensions differ: %d vs %d", len(left.vector), len(right.vector))
 	}
-	var dot float64
-	for i, leftValue := range left.vector {
-		dot += float64(leftValue * right.vector[i])
-	}
-	leftNorm := left.cachedNormSquared()
-	rightNorm := right.cachedNormSquared()
-	if leftNorm == 0 || rightNorm == 0 {
+	if left.cachedInvNorm == 0 || right.cachedInvNorm == 0 {
 		return 0, errors.New("collections: cosine vector cannot have zero magnitude")
 	}
-	return float32(1 - dot/(math.Sqrt(leftNorm)*math.Sqrt(rightNorm))), nil
+	var s0, s1, s2, s3 float32
+	i := 0
+	n := len(left.vector)
+	for ; i+4 <= n; i += 4 {
+		s0 += left.vector[i] * right.vector[i]
+		s1 += left.vector[i+1] * right.vector[i+1]
+		s2 += left.vector[i+2] * right.vector[i+2]
+		s3 += left.vector[i+3] * right.vector[i+3]
+	}
+	dot := s0 + s1 + s2 + s3
+	for ; i < n; i++ {
+		dot += left.vector[i] * right.vector[i]
+	}
+	return 1 - dot*left.cachedInvNorm*right.cachedInvNorm, nil
 }
 
 func (node *vectorIndexNode) vectorDimensions() int {
@@ -1212,6 +1289,15 @@ func (node *vectorIndexNode) cachedNormSquared() float64 {
 		return node.normSquared
 	}
 	return node.storedNormSquared()
+}
+
+func (node *vectorIndexNode) cacheVectorNorms() {
+	node.normSquared = node.storedNormSquared()
+	if node.normSquared > 0 {
+		node.cachedInvNorm = float32(1 / math.Sqrt(node.normSquared))
+	} else {
+		node.cachedInvNorm = 0
+	}
 }
 
 func (node *vectorIndexNode) storedNormSquared() float64 {
@@ -1536,14 +1622,15 @@ func cloneVectorIndexNodes(in []vectorIndexNode) []vectorIndexNode {
 	out := make([]vectorIndexNode, len(in))
 	for i := range in {
 		out[i] = vectorIndexNode{
-			documentID:  bytes.Clone(in[i].documentID),
-			vector:      append([]float32(nil), in[i].vector...),
-			quantized:   append([]int8(nil), in[i].quantized...),
-			quantScale:  in[i].quantScale,
-			normSquared: in[i].normSquared,
-			level:       in[i].level,
-			deleted:     in[i].deleted,
-			neighbors:   make([][]int, len(in[i].neighbors)),
+			documentID:    bytes.Clone(in[i].documentID),
+			vector:        append([]float32(nil), in[i].vector...),
+			quantized:     append([]int8(nil), in[i].quantized...),
+			quantScale:    in[i].quantScale,
+			normSquared:   in[i].normSquared,
+			cachedInvNorm: in[i].cachedInvNorm,
+			level:         in[i].level,
+			deleted:       in[i].deleted,
+			neighbors:     make([][]int, len(in[i].neighbors)),
 		}
 		for layer := range in[i].neighbors {
 			out[i].neighbors[layer] = append([]int(nil), in[i].neighbors[layer]...)

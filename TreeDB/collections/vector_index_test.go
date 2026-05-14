@@ -65,6 +65,9 @@ func TestVectorIndexPruneLayerNeighborsUsesDistanceThenDocumentID(t *testing.T) 
 		{documentID: []byte("a"), vector: []float32{0.8, 0.2}},
 		{documentID: []byte("far"), vector: []float32{0, 1}},
 	}
+	for i := range index.nodes {
+		index.nodes[i].cacheVectorNorms()
+	}
 
 	got := index.pruneLayerNeighborsLocked(0, []int{3, 1, 2}, 2)
 	if len(got) != 2 || got[0] != 2 || got[1] != 1 {
@@ -86,6 +89,9 @@ func TestVectorIndexInsertCachesStoredNorm(t *testing.T) {
 	}
 	if got, want := index.nodes[0].normSquared, float64(25); got != want {
 		t.Fatalf("node cached norm=%v want %v", got, want)
+	}
+	if got, want := index.nodes[0].cachedInvNorm, float32(0.2); got != want {
+		t.Fatalf("node cached inverse norm=%v want %v", got, want)
 	}
 }
 
@@ -114,8 +120,12 @@ func TestVectorIndexInsertCachesInt8StoredNorm(t *testing.T) {
 func TestVectorIndexFloat32CosineSpecializationMatchesExactDistance(t *testing.T) {
 	query := []float32{0.25, -0.5, 1.25, 2}
 	node := vectorIndexNode{documentID: []byte("right"), vector: []float32{1.5, -0.25, 0.75, 3}}
-	node.normSquared = node.storedNormSquared()
+	node.cacheVectorNorms()
 	queryNorm := vectorNormSquared(query)
+	prepared, err := prepareFloat32CosineQuery(query, queryNorm)
+	if err != nil {
+		t.Fatalf("prepare query: %v", err)
+	}
 
 	gotQuery, err := vectorDistanceToFloat32NodeCosine(query, queryNorm, &node)
 	if err != nil {
@@ -128,9 +138,20 @@ func TestVectorIndexFloat32CosineSpecializationMatchesExactDistance(t *testing.T
 	if math.Abs(float64(gotQuery-wantQuery)) > 1e-6 {
 		t.Fatalf("specialized query distance=%v want %v", gotQuery, wantQuery)
 	}
+	gotPrepared, err := vectorDistanceToFloat32NodeCosinePrepared(prepared, &node)
+	if err != nil {
+		t.Fatalf("prepared query distance: %v", err)
+	}
+	if math.Abs(float64(gotPrepared-wantQuery)) > 1e-6 {
+		t.Fatalf("prepared query distance=%v want %v", gotPrepared, wantQuery)
+	}
+	gotUnchecked := vectorDistanceToFloat32NodeCosineUnchecked(prepared, &node)
+	if math.Abs(float64(gotUnchecked-wantQuery)) > 1e-6 {
+		t.Fatalf("unchecked query distance=%v want %v", gotUnchecked, wantQuery)
+	}
 
 	left := vectorIndexNode{documentID: []byte("left"), vector: query}
-	left.normSquared = left.storedNormSquared()
+	left.cacheVectorNorms()
 	gotBetween, err := vectorDistanceBetweenFloat32NodesCosine(&left, &node)
 	if err != nil {
 		t.Fatalf("specialized node distance: %v", err)
@@ -141,6 +162,23 @@ func TestVectorIndexFloat32CosineSpecializationMatchesExactDistance(t *testing.T
 	}
 	if math.Abs(float64(gotBetween-wantBetween)) > 1e-6 {
 		t.Fatalf("specialized node distance=%v want %v", gotBetween, wantBetween)
+	}
+}
+
+func TestPrepareFloat32CosineQueryCachesInverseNorm(t *testing.T) {
+	query := []float32{3, 4}
+	prepared, err := prepareFloat32CosineQuery(query, -1)
+	if err != nil {
+		t.Fatalf("prepare query: %v", err)
+	}
+	if &prepared.vector[0] != &query[0] {
+		t.Fatal("prepared query copied vector")
+	}
+	if got, want := prepared.invNorm, float32(0.2); got != want {
+		t.Fatalf("prepared inverse norm=%v want %v", got, want)
+	}
+	if _, err := prepareFloat32CosineQuery([]float32{0, 0}, -1); err == nil {
+		t.Fatal("prepare zero cosine query succeeded")
 	}
 }
 
@@ -159,13 +197,17 @@ func TestVectorIndexSearchLayerScratchReusesBuffers(t *testing.T) {
 		{documentID: []byte("c"), vector: []float32{0, 1}, neighbors: [][]int{{0, 1}}},
 	}
 	for i := range index.nodes {
-		index.nodes[i].normSquared = index.nodes[i].storedNormSquared()
+		index.nodes[i].cacheVectorNorms()
 	}
 	var scratch vectorIndexSearchScratch
 	query := []float32{1, 0}
 	queryNorm := vectorNormSquared(query)
+	prepared, err := prepareFloat32CosineQuery(query, queryNorm)
+	if err != nil {
+		t.Fatalf("prepare query: %v", err)
+	}
 
-	first := index.searchLayerWithScratchLocked(query, queryNorm, 0, 3, 0, &scratch)
+	first := index.searchLayerWithScratchLocked(query, queryNorm, &prepared, 0, 3, 0, &scratch)
 	if len(first) != 3 || first[0].nodeID != 0 || first[1].nodeID != 1 || first[2].nodeID != 2 {
 		t.Fatalf("first candidates=%v want node IDs [0 1 2]", first)
 	}
@@ -177,7 +219,7 @@ func TestVectorIndexSearchLayerScratchReusesBuffers(t *testing.T) {
 	bestCap := cap(scratch.best)
 	outCap := cap(scratch.out)
 
-	second := index.searchLayerWithScratchLocked(query, queryNorm, 0, 3, 0, &scratch)
+	second := index.searchLayerWithScratchLocked(query, queryNorm, &prepared, 0, 3, 0, &scratch)
 	if len(second) != len(first) {
 		t.Fatalf("second candidates=%v want len %d", second, len(first))
 	}

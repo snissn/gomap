@@ -697,7 +697,7 @@ func (idx *VectorIndex) loadPersistSnapshot(snapshot vectorIndexPersistSnapshot)
 			neighbors:  make([][]int, node.Level+1),
 			deleted:    node.Deleted,
 		}
-		nodes[i].normSquared = nodes[i].storedNormSquared()
+		nodes[i].cacheVectorNorms()
 	}
 	for _, edge := range snapshot.Edges {
 		if edge.NodeID < 0 || edge.NodeID >= len(nodes) {
