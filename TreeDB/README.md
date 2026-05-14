@@ -151,7 +151,10 @@ The initial API lives in `TreeDB/collections`:
   snapshot size while preserving full-precision canonical rows for exact rerank.
 - `VectorIndex.SaveSnapshot` and `Collection.LoadVectorIndexSnapshot` persist
   immutable index epochs under `vector_indexes/<collection>/<index>/` with a
-  manifest plus checksum-verified node, edge, tombstone, and docmap files.
+  manifest plus checksum-verified JSON node, edge, tombstone, and docmap files.
+  Snapshot document IDs are hex-encoded so binary collection primary keys remain
+  lossless; the JSON epoch format is a readable pre-alpha persistence format, not
+  a compact binary snapshot ABI.
 - `VectorIndexRangeFilter` restricts exact or ANN searches with an existing
   scalar secondary-index range. Selective filters use an `exact_filtered`
   strategy; broader filters use `ann_postfilter` and can fall back to exact

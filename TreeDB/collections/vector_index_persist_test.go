@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -174,6 +175,63 @@ func TestCollectionVectorIndexSnapshotInt8Encoding(t *testing.T) {
 	}
 	if mismatched != nil || mismatchStatus.Loaded || mismatchStatus.ExactFallbackReason != "manifest_encoding_mismatch" {
 		t.Fatalf("expected encoding mismatch fallback loaded=%v status=%+v", mismatched != nil, mismatchStatus)
+	}
+}
+
+func TestCollectionVectorIndexSnapshotPreservesBinaryDocumentIDs(t *testing.T) {
+	dir := t.TempDir()
+	d, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	col := openVectorIndexTestCollection(t, d)
+	binaryID := []byte{0xff, 0x00, 'a'}
+	if _, err := col.InsertBatch(
+		[][]byte{binaryID, []byte("b")},
+		[][]byte{
+			[]byte(`{"embedding":[1,0]}`),
+			[]byte(`{"embedding":[0,1]}`),
+		},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	index, err := col.BuildVectorIndex(VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, M: 4})
+	if err != nil {
+		t.Fatalf("build vector index: %v", err)
+	}
+	saveStatus, err := index.SaveSnapshot()
+	if err != nil {
+		t.Fatalf("save snapshot: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	reopened, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection after reopen: %v", err)
+	}
+	loaded, status, err := reopenedCol.LoadVectorIndexSnapshot(VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine})
+	if err != nil {
+		t.Fatalf("load vector index snapshot: %v", err)
+	}
+	if loaded == nil || !status.Loaded || status.Epoch != saveStatus.Epoch {
+		t.Fatalf("unexpected load status loaded=%v status=%+v", loaded != nil, status)
+	}
+	results, _, err := loaded.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 1, DisableExactFallback: true})
+	if err != nil {
+		t.Fatalf("search loaded index: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("result count=%d want 1", len(results))
+	}
+	if !bytes.Equal(results[0].DocumentID, binaryID) {
+		t.Fatalf("result id=%x want %x", results[0].DocumentID, binaryID)
 	}
 }
 

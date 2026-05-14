@@ -10,6 +10,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -44,8 +45,9 @@ type VectorIndexPruneStatus struct {
 	RemovedBytes  int64
 }
 
-// SaveSnapshot persists the current in-memory vector index as an immutable
-// epoch and atomically publishes a manifest that points at it.
+// SaveSnapshot persists the current in-memory vector index as an immutable JSON
+// epoch and atomically publishes a manifest that points at it. Document IDs are
+// hex-encoded so arbitrary collection primary keys round-trip losslessly.
 func (idx *VectorIndex) SaveSnapshot() (VectorIndexLoadStatus, error) {
 	status := VectorIndexLoadStatus{}
 	if idx == nil {
@@ -283,7 +285,7 @@ func (idx *VectorIndex) PruneOldSnapshots(keep int) (VectorIndexPruneStatus, err
 			continue
 		}
 		path := filepath.Join(indexDir, epoch)
-		bytes, err := dirSize(path)
+		size, err := dirSize(path)
 		if err != nil {
 			return status, err
 		}
@@ -291,7 +293,7 @@ func (idx *VectorIndex) PruneOldSnapshots(keep int) (VectorIndexPruneStatus, err
 			return status, err
 		}
 		status.RemovedEpochs++
-		status.RemovedBytes += bytes
+		status.RemovedBytes += size
 	}
 	if status.RemovedEpochs > 0 {
 		if err := fsyncDir(indexDir); err != nil {
@@ -465,7 +467,7 @@ func (idx *VectorIndex) persistSnapshot() (vectorIndexPersistSnapshot, uint64) {
 	}
 	for i, node := range idx.nodes {
 		snapshot.Nodes[i] = vectorIndexPersistNode{
-			DocumentID: string(node.documentID),
+			DocumentID: encodeVectorIndexDocumentID(node.documentID),
 			Vector:     append([]float32(nil), node.vector...),
 			Quantized:  append([]int8(nil), node.quantized...),
 			QuantScale: node.quantScale,
@@ -484,10 +486,22 @@ func (idx *VectorIndex) persistSnapshot() (vectorIndexPersistSnapshot, uint64) {
 		}
 	}
 	for docID, nodeID := range idx.currentNode {
-		snapshot.DocMap.Current[docID] = nodeID
+		snapshot.DocMap.Current[encodeVectorIndexDocumentID([]byte(docID))] = nodeID
 	}
 	sort.Ints(snapshot.Tombstones.NodeIDs)
 	return snapshot, seq
+}
+
+func encodeVectorIndexDocumentID(documentID []byte) string {
+	return hex.EncodeToString(documentID)
+}
+
+func decodeVectorIndexDocumentID(encoded string) ([]byte, bool) {
+	documentID, err := hex.DecodeString(encoded)
+	if err != nil {
+		return nil, false
+	}
+	return documentID, true
 }
 
 func vectorIndexSnapshotBytes(manifestData []byte, entries []vectorIndexManifestFileEntry) int64 {
@@ -681,6 +695,10 @@ func (idx *VectorIndex) loadPersistSnapshot(snapshot vectorIndexPersistSnapshot)
 		if reason := validateVectorIndexPersistNode(node, snapshot.Meta); reason != "" {
 			return reason
 		}
+		documentID, ok := decodeVectorIndexDocumentID(node.DocumentID)
+		if !ok || len(documentID) == 0 {
+			return "invalid_document_id"
+		}
 		_, deletedByTombstone := tombstoned[i]
 		if node.Deleted != deletedByTombstone {
 			return "tombstone_mismatch"
@@ -689,7 +707,7 @@ func (idx *VectorIndex) loadPersistSnapshot(snapshot vectorIndexPersistSnapshot)
 			return "invalid_node_level"
 		}
 		nodes[i] = vectorIndexNode{
-			documentID: []byte(node.DocumentID),
+			documentID: documentID,
 			vector:     append([]float32(nil), node.Vector...),
 			quantized:  append([]int8(nil), node.Quantized...),
 			quantScale: node.QuantScale,
@@ -716,17 +734,21 @@ func (idx *VectorIndex) loadPersistSnapshot(snapshot vectorIndexPersistSnapshot)
 		nodes[edge.NodeID].neighbors[edge.Layer] = append([]int(nil), edge.Neighbor...)
 	}
 	current := make(map[string]int, len(snapshot.DocMap.Current))
-	for docID, nodeID := range snapshot.DocMap.Current {
+	for encodedDocID, nodeID := range snapshot.DocMap.Current {
 		if nodeID < 0 || nodeID >= len(nodes) {
 			return "invalid_docmap_node"
 		}
 		if nodes[nodeID].deleted {
 			return "docmap_points_to_deleted_node"
 		}
-		if !bytes.Equal(nodes[nodeID].documentID, []byte(docID)) {
+		documentID, ok := decodeVectorIndexDocumentID(encodedDocID)
+		if !ok || len(documentID) == 0 {
+			return "invalid_docmap_document_id"
+		}
+		if !bytes.Equal(nodes[nodeID].documentID, documentID) {
 			return "docmap_document_mismatch"
 		}
-		current[docID] = nodeID
+		current[string(documentID)] = nodeID
 	}
 	entry := snapshot.Meta.Entry
 	if entry < 0 || entry >= len(nodes) || nodes[entry].deleted {
@@ -760,7 +782,7 @@ func (idx *VectorIndex) loadPersistSnapshot(snapshot vectorIndexPersistSnapshot)
 }
 
 func fsyncFile(path string) error {
-	f, err := os.Open(path)
+	f, err := os.OpenFile(path, os.O_RDWR, 0)
 	if err != nil {
 		return err
 	}
@@ -769,6 +791,9 @@ func fsyncFile(path string) error {
 }
 
 func fsyncDir(path string) error {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return err

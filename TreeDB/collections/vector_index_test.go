@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 func TestCollectionVectorIndexSearchReranksCanonicalRows(t *testing.T) {
@@ -413,6 +414,79 @@ func TestCollectionVectorIndexUpdateDocumentReplacesCurrentNode(t *testing.T) {
 	}
 }
 
+func TestCollectionVectorIndexTracksBSONSetUpdates(t *testing.T) {
+	t.Run("single", func(t *testing.T) {
+		d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+		if err != nil {
+			t.Fatalf("open db: %v", err)
+		}
+		defer func() { _ = d.Close() }()
+		col := openVectorIndexTestBSONCollection(t, d)
+		if _, err := col.InsertBatchValidatedBSON(
+			[][]byte{[]byte("a"), []byte("b")},
+			[][]byte{
+				mustBSONCollectionDocument(t, bson.D{{Key: "embedding", Value: bson.A{0.8, 0.2}}}),
+				mustBSONCollectionDocument(t, bson.D{{Key: "embedding", Value: bson.A{0.0, 1.0}}}),
+			},
+		); err != nil {
+			t.Fatalf("insert BSON docs: %v", err)
+		}
+		index, err := col.BuildVectorIndex(VectorIndexOptions{Field: "embedding", Metric: VectorMetricCosine, M: 4})
+		if err != nil {
+			t.Fatalf("build vector index: %v", err)
+		}
+		matched, modified, err := col.UpdateBSONSet([]byte("b"), []BSONSetField{{
+			Key:   "embedding",
+			Value: mustBSONRawValue(t, bson.A{1.0, 0.0}),
+		}})
+		if err != nil || !matched || !modified {
+			t.Fatalf("UpdateBSONSet matched=%v modified=%v err=%v", matched, modified, err)
+		}
+		results, _, err := index.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 1, DisableExactFallback: true})
+		if err != nil {
+			t.Fatalf("search after BSON set: %v", err)
+		}
+		requireVectorResultIDs(t, results, "b")
+	})
+
+	t.Run("batch", func(t *testing.T) {
+		d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+		if err != nil {
+			t.Fatalf("open db: %v", err)
+		}
+		defer func() { _ = d.Close() }()
+		col := openVectorIndexTestBSONCollection(t, d)
+		if _, err := col.InsertBatchValidatedBSON(
+			[][]byte{[]byte("a"), []byte("b")},
+			[][]byte{
+				mustBSONCollectionDocument(t, bson.D{{Key: "embedding", Value: bson.A{0.8, 0.2}}}),
+				mustBSONCollectionDocument(t, bson.D{{Key: "embedding", Value: bson.A{0.0, 1.0}}}),
+			},
+		); err != nil {
+			t.Fatalf("insert BSON docs: %v", err)
+		}
+		index, err := col.BuildVectorIndex(VectorIndexOptions{Field: "embedding", Metric: VectorMetricCosine, M: 4})
+		if err != nil {
+			t.Fatalf("build vector index: %v", err)
+		}
+		results, batched, err := col.UpdateBSONSetBatchIfNoSecondaryUniqueIndexChanges([]BSONSetUpdateBatchItem{{
+			DocumentID: []byte("b"),
+			Fields: []BSONSetField{{
+				Key:   "embedding",
+				Value: mustBSONRawValue(t, bson.A{1.0, 0.0}),
+			}},
+		}})
+		if err != nil || !batched || len(results) != 1 || !results[0].Matched || !results[0].Modified {
+			t.Fatalf("UpdateBSONSetBatch results=%+v batched=%v err=%v", results, batched, err)
+		}
+		searchResults, _, err := index.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 1, DisableExactFallback: true})
+		if err != nil {
+			t.Fatalf("search after BSON set batch: %v", err)
+		}
+		requireVectorResultIDs(t, searchResults, "b")
+	})
+}
+
 func TestCollectionVectorIndexUnderfillFallsBackToExact(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -531,6 +605,24 @@ func openVectorIndexTestCollectionWithIndexes(tb testing.TB, d *backenddb.DB, in
 	col, err := mgr.OpenCollection("docs")
 	if err != nil {
 		tb.Fatalf("open collection: %v", err)
+	}
+	return col
+}
+
+func openVectorIndexTestBSONCollection(tb testing.TB, d *backenddb.DB) *Collection {
+	tb.Helper()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "docs",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatBSON,
+		},
+	}); err != nil {
+		tb.Fatalf("create BSON collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		tb.Fatalf("open BSON collection: %v", err)
 	}
 	return col
 }

@@ -155,9 +155,6 @@ func (c *Collection) SearchVectorsExact(query []float32, opts VectorSearchOption
 				return nil, err
 			}
 		}
-		if matches == nil {
-			return []VectorSearchResult{}, nil
-		}
 		return matches, nil
 	}
 
@@ -169,9 +166,6 @@ func (c *Collection) SearchVectorsExact(query []float32, opts VectorSearchOption
 	})
 	if err != nil {
 		return nil, err
-	}
-	if matches == nil {
-		return []VectorSearchResult{}, nil
 	}
 	return matches, nil
 }
@@ -242,20 +236,12 @@ func vectorFromJSONField(document []byte, fieldPath []string) ([]float32, bool, 
 			parseErr = err
 			return
 		}
-		if dataType != jsonparser.Number {
-			parseErr = fmt.Errorf("element %d is not numeric", len(out))
-			return
-		}
-		n, err := strconv.ParseFloat(string(value), 32)
+		n, err := parseVectorJSONFloat32(value, dataType, len(out))
 		if err != nil {
-			parseErr = fmt.Errorf("element %d is not numeric", len(out))
+			parseErr = err
 			return
 		}
-		if math.IsNaN(n) || math.IsInf(n, 0) || n > math.MaxFloat32 || n < -math.MaxFloat32 {
-			parseErr = fmt.Errorf("element %d is not a finite float32", len(out))
-			return
-		}
-		out = append(out, float32(n))
+		out = append(out, n)
 	}, fieldPath...)
 	if err != nil {
 		return nil, false, err
@@ -267,6 +253,65 @@ func vectorFromJSONField(document []byte, fieldPath []string) ([]float32, bool, 
 		return nil, false, errors.New("empty vector")
 	}
 	return out, true, nil
+}
+
+func parseVectorJSONFloat32(value []byte, dataType jsonparser.ValueType, index int) (float32, error) {
+	raw := string(value)
+	switch dataType {
+	case jsonparser.Number:
+	case jsonparser.Object:
+		extended, ok, err := vectorExtendedJSONNumberString(value)
+		if err != nil {
+			return 0, err
+		}
+		if !ok {
+			return 0, fmt.Errorf("element %d is not numeric", index)
+		}
+		raw = extended
+	default:
+		return 0, fmt.Errorf("element %d is not numeric", index)
+	}
+	n, err := strconv.ParseFloat(raw, 32)
+	if err != nil {
+		return 0, fmt.Errorf("element %d is not numeric", index)
+	}
+	if math.IsNaN(n) || math.IsInf(n, 0) || n > math.MaxFloat32 || n < -math.MaxFloat32 {
+		return 0, fmt.Errorf("element %d is not a finite float32", index)
+	}
+	return float32(n), nil
+}
+
+func vectorExtendedJSONNumberString(raw []byte) (string, bool, error) {
+	count := 0
+	var field string
+	var value []byte
+	var valueType jsonparser.ValueType
+	err := jsonparser.ObjectEach(raw, func(key, rawValue []byte, dataType jsonparser.ValueType, _ int) error {
+		count++
+		if count == 1 {
+			field = string(key)
+			value = rawValue
+			valueType = dataType
+		}
+		return nil
+	})
+	if err != nil {
+		return "", false, err
+	}
+	if count != 1 || !isExtendedJSONNumberField(field) {
+		return "", false, nil
+	}
+	if valueType != jsonparser.String {
+		return "", true, fmt.Errorf("extended JSON numeric wrapper %s must contain a string", field)
+	}
+	if bytes.IndexByte(value, '\\') >= 0 {
+		unescaped, err := jsonparser.Unescape(value, nil)
+		if err != nil {
+			return "", true, err
+		}
+		return string(unescaped), true, nil
+	}
+	return string(value), true, nil
 }
 
 func exactVectorDistance(left, right []float32, metric VectorMetric) (float32, error) {

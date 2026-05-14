@@ -154,6 +154,20 @@ func (c *Collection) BuildVectorIndex(opts VectorIndexOptions) (*VectorIndex, er
 	if c == nil {
 		return nil, errCollectionNil
 	}
+	c.vectorIndexesMu.Lock()
+	defer c.vectorIndexesMu.Unlock()
+	index, err := c.buildVectorIndexLocked(opts)
+	if err != nil {
+		return nil, err
+	}
+	c.registerVectorIndexLocked(index)
+	return index, nil
+}
+
+func (c *Collection) buildVectorIndexLocked(opts VectorIndexOptions) (*VectorIndex, error) {
+	if c == nil {
+		return nil, errCollectionNil
+	}
 	if c.db == nil {
 		return nil, errCollectionDBNil
 	}
@@ -178,7 +192,10 @@ func (c *Collection) BuildVectorIndex(opts VectorIndexOptions) (*VectorIndex, er
 		if !ok {
 			return true, nil
 		}
-		if err := index.insertVectorLocked(record.ID, vector); err != nil {
+		index.mu.Lock()
+		err = index.insertVectorLocked(record.ID, vector)
+		index.mu.Unlock()
+		if err != nil {
 			return false, err
 		}
 		return true, nil
@@ -186,7 +203,6 @@ func (c *Collection) BuildVectorIndex(opts VectorIndexOptions) (*VectorIndex, er
 	if err != nil {
 		return nil, err
 	}
-	c.RegisterVectorIndex(index)
 	return index, nil
 }
 
@@ -266,6 +282,13 @@ func (c *Collection) RegisterVectorIndex(index *VectorIndex) {
 	}
 	c.vectorIndexesMu.Lock()
 	defer c.vectorIndexesMu.Unlock()
+	c.registerVectorIndexLocked(index)
+}
+
+func (c *Collection) registerVectorIndexLocked(index *VectorIndex) {
+	if c == nil || index == nil {
+		return
+	}
 	if c.vectorIndexes == nil {
 		c.vectorIndexes = make(map[string]*VectorIndex)
 	}
@@ -333,6 +356,22 @@ func (c *Collection) notifyVectorIndexesDelete(documentIDs [][]byte) {
 }
 
 func (c *Collection) notifyVectorIndexesUpdateBatch(items []UpdateBatchItem, results []UpdateBatchResult) {
+	if len(items) == 0 || len(results) == 0 {
+		return
+	}
+	var updated [][]byte
+	for i := range items {
+		if i >= len(results) {
+			break
+		}
+		if results[i].Modified {
+			updated = append(updated, items[i].DocumentID)
+		}
+	}
+	c.notifyVectorIndexesUpsert(updated)
+}
+
+func (c *Collection) notifyVectorIndexesBSONSetUpdateBatch(items []BSONSetUpdateBatchItem, results []UpdateBatchResult) {
 	if len(items) == 0 || len(results) == 0 {
 		return
 	}
@@ -1317,8 +1356,14 @@ func (idx *VectorIndex) Rebuild() error {
 	if idx == nil {
 		return errors.New("collections: vector index is nil")
 	}
+	if idx.collection == nil {
+		return errCollectionNil
+	}
 	start := time.Now()
-	rebuilt, err := idx.collection.BuildVectorIndex(VectorIndexOptions{
+	idx.collection.vectorIndexesMu.Lock()
+	defer idx.collection.vectorIndexesMu.Unlock()
+
+	rebuilt, err := idx.collection.buildVectorIndexLocked(VectorIndexOptions{
 		Name:                idx.name,
 		Field:               idx.field,
 		Metric:              idx.metric,
@@ -1340,16 +1385,20 @@ func (idx *VectorIndex) Rebuild() error {
 	dimensions := rebuilt.dimensions
 	rebuilt.mu.RUnlock()
 
+	duration := time.Since(start)
+	if duration <= 0 {
+		duration = time.Nanosecond
+	}
 	idx.mu.Lock()
 	idx.nodes = nodes
 	idx.currentNode = currentNode
 	idx.entry = entry
 	idx.maxLevel = maxLevel
 	idx.dimensions = dimensions
-	idx.lastRebuildDuration = time.Since(start)
+	idx.lastRebuildDuration = duration
 	idx.markGraphChangedLocked()
 	idx.mu.Unlock()
-	idx.collection.RegisterVectorIndex(idx)
+	idx.collection.registerVectorIndexLocked(idx)
 	return nil
 }
 
