@@ -34,6 +34,9 @@ func (s *Server) insertResponse(command wire.Document, sequences []wire.Document
 	if s.Collections == nil {
 		return commandError(commandCodeBadValue, "BadValue", "Mongo gateway collection manager is not configured")
 	}
+	if doc, rejected, err := rejectTransactionalCommand(command, "insert"); rejected {
+		return doc, err
+	}
 	collection, err := commandString(command, "insert")
 	if err != nil {
 		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
@@ -228,6 +231,9 @@ func (s *Server) findMsgResponseInto(dst []byte, command wire.Document, requestI
 }
 
 func (s *Server) findResponsePayload(command wire.Document, cursorOwner int64) (findResponsePayload, error) {
+	if doc, rejected, err := rejectTransactionalCommand(command, "find"); rejected {
+		return findResponsePayload{document: doc}, err
+	}
 	if s.Collections == nil {
 		doc, err := commandError(commandCodeBadValue, "BadValue", "Mongo gateway collection manager is not configured")
 		return findResponsePayload{document: doc}, err
@@ -376,6 +382,9 @@ func (s *Server) findResponsePayload(command wire.Document, cursorOwner int64) (
 func (s *Server) updateResponse(command wire.Document, sequences []wire.DocumentSequence) (wire.Document, error) {
 	if s.Collections == nil {
 		return commandError(commandCodeBadValue, "BadValue", "Mongo gateway collection manager is not configured")
+	}
+	if doc, rejected, err := rejectTransactionalCommand(command, "update"); rejected {
+		return doc, err
 	}
 	collection, err := commandString(command, "update")
 	if err != nil {
@@ -1172,6 +1181,9 @@ func (s *Server) deleteResponse(command wire.Document, sequences []wire.Document
 	if s.Collections == nil {
 		return commandError(commandCodeBadValue, "BadValue", "Mongo gateway collection manager is not configured")
 	}
+	if doc, rejected, err := rejectTransactionalCommand(command, "delete"); rejected {
+		return doc, err
+	}
 	collection, err := commandString(command, "delete")
 	if err != nil {
 		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
@@ -1270,9 +1282,132 @@ func (s *Server) listCollectionsResponse(command wire.Document) (wire.Document, 
 	return marshalCursorResponse(db, "$cmd.listCollections", firstBatch)
 }
 
+func (s *Server) createCollectionResponse(command wire.Document) (wire.Document, error) {
+	if s.Collections == nil {
+		return commandError(commandCodeBadValue, "BadValue", "Mongo gateway collection manager is not configured")
+	}
+	if doc, rejected, err := rejectTransactionalCommand(command, "create"); rejected {
+		return doc, err
+	}
+	collection, err := commandString(command, "create")
+	if err != nil {
+		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
+	}
+	db, err := commandString(command, "$db")
+	if err != nil {
+		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
+	}
+	name, err := gatewayCollectionName(db, collection)
+	if err != nil {
+		return commandError(commandCodeBadValue, "BadValue", err.Error())
+	}
+	if err := validateCreateCollectionCommand(command); err != nil {
+		return commandError(commandCodeBadValue, "BadValue", err.Error())
+	}
+	if _, err := s.Collections.OpenCollection(name); err == nil {
+		return marshalDocument(bson.D{
+			{Key: "ok", Value: 1.0},
+			{Key: "note", Value: "TreeDB Mongo gateway treats duplicate create as idempotent success"},
+		})
+	} else if !errors.Is(err, collections.ErrCollectionNotFound) {
+		return commandError(commandCodeBadValue, "BadValue", err.Error())
+	}
+	if _, err := s.Collections.CreateCollection(s.defaultCollectionMeta(name)); err != nil {
+		return commandError(commandCodeBadValue, "BadValue", err.Error())
+	}
+	return marshalDocument(bson.D{{Key: "ok", Value: 1.0}})
+}
+
+func validateCreateCollectionCommand(command wire.Document) error {
+	capped, err := optionalBoolField(command, "capped")
+	if err != nil {
+		return err
+	}
+	if capped {
+		return errors.New("Mongo gateway create does not support capped collections")
+	}
+	elements, err := bson.Raw(command).Elements()
+	if err != nil {
+		return err
+	}
+	for _, elem := range elements {
+		key, err := elem.KeyErr()
+		if err != nil {
+			return err
+		}
+		if isCreateCommandEnvelopeField(key) {
+			continue
+		}
+		switch key {
+		case "capped":
+		default:
+			return fmt.Errorf("Mongo gateway create does not support option %q", key)
+		}
+	}
+	return nil
+}
+
+func isCreateCommandEnvelopeField(key string) bool {
+	switch key {
+	case "create", "$db", "lsid", "comment", "writeConcern", "readConcern", "readPreference", "maxTimeMS", "apiVersion", "apiStrict", "apiDeprecationErrors":
+		return true
+	default:
+		return strings.HasPrefix(key, "$")
+	}
+}
+
+func endSessionsResponse(command wire.Document) (wire.Document, error) {
+	if err := validateEndSessionsCommand(command); err != nil {
+		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
+	}
+	return marshalDocument(bson.D{{Key: "ok", Value: 1.0}})
+}
+
+func validateEndSessionsCommand(command wire.Document) error {
+	sessions, err := commandDocumentArray(command, "endSessions")
+	if err != nil {
+		return err
+	}
+	for i, session := range sessions {
+		id := bson.Raw(session).Lookup("id")
+		if id.IsZero() {
+			return fmt.Errorf("Mongo command field \"endSessions[%d].id\" is required", i)
+		}
+		subtype, data, ok := id.BinaryOK()
+		if !ok {
+			return fmt.Errorf("Mongo command field \"endSessions[%d].id\" must be binary UUID subtype 4", i)
+		}
+		if subtype != 4 || len(data) != 16 {
+			return fmt.Errorf("Mongo command field \"endSessions[%d].id\" must be binary UUID subtype 4 with 16 bytes", i)
+		}
+	}
+	return nil
+}
+
+func rejectTransactionalCommand(command wire.Document, commandName string) (wire.Document, bool, error) {
+	raw := bson.Raw(command)
+	hasTransactionMarker := !raw.Lookup("startTransaction").IsZero() || !raw.Lookup("autocommit").IsZero()
+	hasRetryableWriteMarker := !raw.Lookup("txnNumber").IsZero()
+	if !hasTransactionMarker && !hasRetryableWriteMarker {
+		return nil, false, nil
+	}
+	// The gateway advertises logical sessions for driver compatibility but not a
+	// replica-set setName. If a client forces retryable-write txnNumber anyway,
+	// reject it rather than pretending idempotency bookkeeping exists.
+	doc, err := commandError(
+		commandCodeBadValue,
+		"BadValue",
+		"Mongo gateway "+commandName+" does not support transactions or retryable writes",
+	)
+	return doc, true, err
+}
+
 func (s *Server) createIndexesResponse(command wire.Document) (wire.Document, error) {
 	if s.Collections == nil {
 		return commandError(commandCodeBadValue, "BadValue", "Mongo gateway collection manager is not configured")
+	}
+	if doc, rejected, err := rejectTransactionalCommand(command, "createIndexes"); rejected {
+		return doc, err
 	}
 	collection, err := commandString(command, "createIndexes")
 	if err != nil {
@@ -1381,6 +1516,9 @@ func (s *Server) listIndexesResponse(command wire.Document) (wire.Document, erro
 func (s *Server) dropIndexesResponse(command wire.Document) (wire.Document, error) {
 	if s.Collections == nil {
 		return commandError(commandCodeBadValue, "BadValue", "Mongo gateway collection manager is not configured")
+	}
+	if doc, rejected, err := rejectTransactionalCommand(command, "dropIndexes"); rejected {
+		return doc, err
 	}
 	collection, err := commandString(command, "dropIndexes")
 	if err != nil {

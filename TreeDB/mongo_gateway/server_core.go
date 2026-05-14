@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -27,6 +29,13 @@ const (
 	defaultCursorBatchSize         = 101
 	defaultCursorIdleTimeout       = 10 * time.Minute
 	defaultCursorReapInterval      = time.Second
+	defaultLogicalSessionTimeout   = 30
+	advertisedMongoVersion         = "7.0.0"
+	advertisedMongoVersionMajor    = 7
+	advertisedMongoVersionMinor    = 0
+	advertisedMongoVersionPatch    = 0
+	advertisedMongoVersionExtra    = 0
+	advertisedMongoMaxWireVersion  = 21
 	defaultUpdateCoalescingDelay   = 0
 	defaultUpdateCoalescingBatch   = 256
 	maxUpdateCoalescingBatch       = 4096
@@ -455,7 +464,7 @@ func bufferedMessageCanRetainRequestBody(h wire.Header, body []byte) bool {
 		return false
 	}
 	switch name {
-	case "find", "getMore", "hello", "isMaster", "ismaster", "killCursors", "listCollections", "listIndexes", "ping":
+	case "buildInfo", "connectionStatus", "endSessions", "find", "getMore", "hello", "hostInfo", "isMaster", "ismaster", "killCursors", "listCollections", "listIndexes", "ping":
 		return true
 	default:
 		return false
@@ -620,9 +629,24 @@ func (s *Server) handleMsgInto(dst []byte, h wire.Header, body []byte, cursorOwn
 }
 
 func (s *Server) commandResponse(name string, command wire.Document, sequences []wire.DocumentSequence, cursorOwner int64) (wire.Document, error) {
+	if commandRejectsTransactionMarkers(name) {
+		if doc, rejected, err := rejectTransactionalCommand(command, name); rejected {
+			return doc, err
+		}
+	}
 	switch name {
 	case "hello", "isMaster", "ismaster":
 		return marshalDocument(helloResponse(s.maxMessageLength()))
+	case "buildInfo":
+		return marshalDocument(buildInfoResponse())
+	case "connectionStatus":
+		return marshalDocument(connectionStatusResponse())
+	case "create":
+		return s.createCollectionResponse(command)
+	case "endSessions":
+		return endSessionsResponse(command)
+	case "hostInfo":
+		return marshalDocument(hostInfoResponse())
 	case "ping":
 		return marshalDocument(bson.D{{Key: "ok", Value: 1.0}})
 	case "insert":
@@ -650,6 +674,15 @@ func (s *Server) commandResponse(name string, command wire.Document, sequences [
 	}
 }
 
+func commandRejectsTransactionMarkers(name string) bool {
+	switch name {
+	case "create", "createIndexes", "delete", "dropIndexes", "find", "getMore", "insert", "killCursors", "listCollections", "listIndexes", "update":
+		return true
+	default:
+		return false
+	}
+}
+
 func helloResponse(maxMessageLength int32) bson.D {
 	return bson.D{
 		{Key: "ok", Value: 1.0},
@@ -658,12 +691,71 @@ func helloResponse(maxMessageLength int32) bson.D {
 		{Key: "secondary", Value: false},
 		{Key: "helloOk", Value: true},
 		{Key: "minWireVersion", Value: int32(0)},
-		{Key: "maxWireVersion", Value: int32(21)},
+		{Key: "maxWireVersion", Value: int32(advertisedMongoMaxWireVersion)},
 		{Key: "maxBsonObjectSize", Value: int32(defaultMaxBSONObjectSize)},
 		{Key: "maxMessageSizeBytes", Value: maxMessageLength},
 		{Key: "maxWriteBatchSize", Value: int32(defaultMaxWriteBatchSize)},
+		{Key: "logicalSessionTimeoutMinutes", Value: int32(defaultLogicalSessionTimeout)},
 		{Key: "localTime", Value: time.Now().UTC()},
 	}
+}
+
+func buildInfoResponse() bson.D {
+	return bson.D{
+		{Key: "version", Value: advertisedMongoVersion},
+		{Key: "gitVersion", Value: "treedb-mongo-gateway"},
+		{Key: "modules", Value: bson.A{}},
+		{Key: "allocator", Value: "go"},
+		{Key: "javascriptEngine", Value: ""},
+		{Key: "sysInfo", Value: runtime.GOOS + "/" + runtime.GOARCH},
+		{Key: "versionArray", Value: bson.A{
+			int32(advertisedMongoVersionMajor),
+			int32(advertisedMongoVersionMinor),
+			int32(advertisedMongoVersionPatch),
+			int32(advertisedMongoVersionExtra),
+		}},
+		{Key: "bits", Value: runtimePointerSizeBits()},
+		{Key: "debug", Value: false},
+		{Key: "maxBsonObjectSize", Value: int32(defaultMaxBSONObjectSize)},
+		{Key: "storageEngines", Value: bson.A{"treedb"}},
+		{Key: "ok", Value: 1.0},
+	}
+}
+
+func connectionStatusResponse() bson.D {
+	return bson.D{
+		{Key: "authInfo", Value: bson.D{
+			{Key: "authenticatedUsers", Value: bson.A{}},
+			{Key: "authenticatedUserRoles", Value: bson.A{}},
+			{Key: "authenticatedUserPrivileges", Value: bson.A{}},
+		}},
+		{Key: "ok", Value: 1.0},
+	}
+}
+
+func hostInfoResponse() bson.D {
+	hostname, err := os.Hostname()
+	if err != nil {
+		hostname = ""
+	}
+	return bson.D{
+		{Key: "system", Value: bson.D{
+			{Key: "currentTime", Value: time.Now().UTC()},
+			{Key: "hostname", Value: hostname},
+			{Key: "cpuAddrSize", Value: runtimePointerSizeBits()},
+			{Key: "numCores", Value: int32(runtime.NumCPU())},
+			{Key: "cpuArch", Value: runtime.GOARCH},
+		}},
+		{Key: "os", Value: bson.D{
+			{Key: "type", Value: runtime.GOOS},
+			{Key: "name", Value: runtime.GOOS},
+		}},
+		{Key: "ok", Value: 1.0},
+	}
+}
+
+func runtimePointerSizeBits() int32 {
+	return int32(32 << (^uint(0) >> 63))
 }
 
 func marshalDocument(doc bson.D) (wire.Document, error) {

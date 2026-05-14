@@ -91,6 +91,7 @@ func TestServerHandlesQueryHello(t *testing.T) {
 	assertBool(t, reply.Documents[0], "helloOk", true)
 	assertBool(t, reply.Documents[0], "ismaster", true)
 	assertBool(t, reply.Documents[0], "secondary", false)
+	assertInt32(t, reply.Documents[0], "logicalSessionTimeoutMinutes", defaultLogicalSessionTimeout)
 }
 
 func TestServerHandlesMsgPing(t *testing.T) {
@@ -120,6 +121,135 @@ func TestServerHandlesMsgPing(t *testing.T) {
 		t.Fatalf("ParseMsg: %v", err)
 	}
 	assertOK(t, msg.Body)
+}
+
+func TestServerHandlesConnectionStatus(t *testing.T) {
+	commandDoc := mustDocument(t, bson.D{
+		{Key: "connectionStatus", Value: int32(1)},
+		{Key: "$db", Value: "admin"},
+	})
+	req, err := wire.AppendMsgMessage(nil, 201, 0, 0, commandDoc)
+	if err != nil {
+		t.Fatalf("AppendMsgMessage: %v", err)
+	}
+	rw := &readWriter{r: bytes.NewReader(req)}
+
+	if err := NewServer().ServeOne(rw); err != nil {
+		t.Fatalf("ServeOne: %v", err)
+	}
+
+	resp := readMsgResponse(t, rw.w.Bytes(), 201)
+	assertOK(t, resp)
+	authInfo, ok := resp.Lookup("authInfo").DocumentOK()
+	if !ok {
+		t.Fatalf("authInfo missing or non-document in %s", resp)
+	}
+	if _, ok := authInfo.Lookup("authenticatedUsers").ArrayOK(); !ok {
+		t.Fatalf("authenticatedUsers missing or non-array in %s", authInfo)
+	}
+	if _, ok := authInfo.Lookup("authenticatedUserRoles").ArrayOK(); !ok {
+		t.Fatalf("authenticatedUserRoles missing or non-array in %s", authInfo)
+	}
+	if _, ok := authInfo.Lookup("authenticatedUserPrivileges").ArrayOK(); !ok {
+		t.Fatalf("authenticatedUserPrivileges missing or non-array in %s", authInfo)
+	}
+}
+
+func TestServerHandlesHostInfo(t *testing.T) {
+	commandDoc := mustDocument(t, bson.D{
+		{Key: "hostInfo", Value: int32(1)},
+		{Key: "$db", Value: "admin"},
+	})
+	req, err := wire.AppendMsgMessage(nil, 202, 0, 0, commandDoc)
+	if err != nil {
+		t.Fatalf("AppendMsgMessage: %v", err)
+	}
+	rw := &readWriter{r: bytes.NewReader(req)}
+
+	if err := NewServer().ServeOne(rw); err != nil {
+		t.Fatalf("ServeOne: %v", err)
+	}
+
+	resp := readMsgResponse(t, rw.w.Bytes(), 202)
+	assertOK(t, resp)
+	system, ok := resp.Lookup("system").DocumentOK()
+	if !ok {
+		t.Fatalf("system missing or non-document in %s", resp)
+	}
+	if _, ok := system.Lookup("hostname").StringValueOK(); !ok {
+		t.Fatalf("hostname missing or non-string in %s", system)
+	}
+	if _, ok := system.Lookup("numCores").Int32OK(); !ok {
+		t.Fatalf("numCores missing or non-int32 in %s", system)
+	}
+	osInfo, ok := resp.Lookup("os").DocumentOK()
+	if !ok {
+		t.Fatalf("os missing or non-document in %s", resp)
+	}
+	if _, ok := osInfo.Lookup("type").StringValueOK(); !ok {
+		t.Fatalf("os.type missing or non-string in %s", osInfo)
+	}
+}
+
+func TestServerHandlesBuildInfo(t *testing.T) {
+	commandDoc := mustDocument(t, bson.D{
+		{Key: "buildInfo", Value: int32(1)},
+		{Key: "$db", Value: "admin"},
+	})
+	req, err := wire.AppendMsgMessage(nil, 203, 0, 0, commandDoc)
+	if err != nil {
+		t.Fatalf("AppendMsgMessage: %v", err)
+	}
+	rw := &readWriter{r: bytes.NewReader(req)}
+
+	if err := NewServer().ServeOne(rw); err != nil {
+		t.Fatalf("ServeOne: %v", err)
+	}
+
+	resp := readMsgResponse(t, rw.w.Bytes(), 203)
+	assertOK(t, resp)
+	if version, ok := resp.Lookup("version").StringValueOK(); !ok || version != "7.0.0" {
+		t.Fatalf("version=%q ok=%v want 7.0.0", version, ok)
+	}
+	if _, ok := resp.Lookup("versionArray").ArrayOK(); !ok {
+		t.Fatalf("versionArray missing or non-array in %s", resp)
+	}
+	if bits, ok := resp.Lookup("bits").Int32OK(); !ok || bits != runtimePointerSizeBits() {
+		t.Fatalf("bits=%d ok=%v want %d", bits, ok, runtimePointerSizeBits())
+	}
+	if _, ok := resp.Lookup("maxBsonObjectSize").Int32OK(); !ok {
+		t.Fatalf("maxBsonObjectSize missing or non-int32 in %s", resp)
+	}
+	if _, ok := resp.Lookup("storageEngines").ArrayOK(); !ok {
+		t.Fatalf("storageEngines missing or non-array in %s", resp)
+	}
+}
+
+func TestServerHandlesEndSessions(t *testing.T) {
+	commandDoc := mustDocument(t, bson.D{
+		{Key: "endSessions", Value: bson.A{bson.D{{Key: "id", Value: bson.Binary{Subtype: 4, Data: make([]byte, 16)}}}}},
+		{Key: "$db", Value: "admin"},
+	})
+	req, err := wire.AppendMsgMessage(nil, 204, 0, 0, commandDoc)
+	if err != nil {
+		t.Fatalf("AppendMsgMessage: %v", err)
+	}
+	rw := &readWriter{r: bytes.NewReader(req)}
+
+	if err := NewServer().ServeOne(rw); err != nil {
+		t.Fatalf("ServeOne: %v", err)
+	}
+
+	assertOK(t, readMsgResponse(t, rw.w.Bytes(), 204))
+
+	badType := serveCommand(t, NewServer(), 205, bson.D{{Key: "endSessions", Value: "not-array"}, {Key: "$db", Value: "admin"}})
+	assertCommandError(t, badType, "FailedToParse")
+
+	badID := serveCommand(t, NewServer(), 206, bson.D{
+		{Key: "endSessions", Value: bson.A{bson.D{{Key: "id", Value: bson.Binary{Subtype: 0, Data: []byte{1, 2, 3}}}}}},
+		{Key: "$db", Value: "admin"},
+	})
+	assertCommandError(t, badID, "FailedToParse")
 }
 
 func TestServerRetainsReadBufferForSafeCommands(t *testing.T) {
@@ -183,6 +313,11 @@ func TestBufferedMessageCanRetainRequestBody(t *testing.T) {
 		want bool
 	}{
 		{name: "ping", doc: bson.D{{Key: "ping", Value: int32(1)}, {Key: "$db", Value: "admin"}}, want: true},
+		{name: "buildInfo", doc: bson.D{{Key: "buildInfo", Value: int32(1)}, {Key: "$db", Value: "admin"}}, want: true},
+		{name: "connectionStatus", doc: bson.D{{Key: "connectionStatus", Value: int32(1)}, {Key: "$db", Value: "admin"}}, want: true},
+		{name: "create", doc: bson.D{{Key: "create", Value: "users"}, {Key: "$db", Value: "app"}}, want: false},
+		{name: "endSessions", doc: bson.D{{Key: "endSessions", Value: bson.A{}}, {Key: "$db", Value: "admin"}}, want: true},
+		{name: "hostInfo", doc: bson.D{{Key: "hostInfo", Value: int32(1)}, {Key: "$db", Value: "admin"}}, want: true},
 		{name: "find", doc: bson.D{{Key: "find", Value: "users"}, {Key: "$db", Value: "app"}}, want: true},
 		{name: "update", doc: bson.D{{Key: "update", Value: "users"}, {Key: "updates", Value: bson.A{}}, {Key: "$db", Value: "app"}}, want: false},
 		{name: "insert", doc: bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}}}}, {Key: "$db", Value: "app"}}, want: false},
@@ -2029,6 +2164,225 @@ func TestServerIndexMetadataCommands(t *testing.T) {
 		t.Fatalf("index batch after drop len=%d want %d", got, want)
 	}
 	assertIndexName(t, indexBatch[0], "_id_")
+}
+
+func TestServerCreateCollectionCommand(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	server.DefaultCollectionOptions = collections.CollectionOptions{
+		DocumentFormat: collections.DocumentFormatBSON,
+	}
+
+	createResponse := serveCommand(t, server, 2311, bson.D{
+		{Key: "create", Value: "created"},
+		{Key: "lsid", Value: bson.D{{Key: "id", Value: bson.Binary{Subtype: 4, Data: make([]byte, 16)}}}},
+		{Key: "$clusterTime", Value: bson.D{}},
+		{Key: "$readPreference", Value: bson.D{{Key: "mode", Value: "primaryPreferred"}}},
+		{Key: "apiVersion", Value: "1"},
+		{Key: "maxTimeMS", Value: int64(1000)},
+		{Key: "readConcern", Value: bson.D{{Key: "level", Value: "local"}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertOK(t, createResponse)
+
+	col, err := server.Collections.OpenCollection("app.created")
+	if err != nil {
+		t.Fatalf("open created collection: %v", err)
+	}
+	if col.Meta().Options.DocumentFormat != collections.DocumentFormatBSON {
+		t.Fatalf("document format=%q want bson", col.Meta().Options.DocumentFormat)
+	}
+
+	collectionsResponse := serveCommand(t, server, 2312, bson.D{
+		{Key: "listCollections", Value: int32(1)},
+		{Key: "filter", Value: bson.D{{Key: "name", Value: "created"}}},
+		{Key: "nameOnly", Value: true},
+		{Key: "$db", Value: "app"},
+	})
+	collectionBatch := cursorFirstBatch(t, collectionsResponse)
+	if len(collectionBatch) != 1 {
+		t.Fatalf("collection batch len=%d want 1", len(collectionBatch))
+	}
+	if got, ok := collectionBatch[0].Lookup("name").StringValueOK(); !ok || got != "created" {
+		t.Fatalf("collection name=%q ok=%v want created", got, ok)
+	}
+
+	indexesResponse := serveCommand(t, server, 2313, bson.D{
+		{Key: "listIndexes", Value: "created"},
+		{Key: "$db", Value: "app"},
+	})
+	indexBatch := cursorFirstBatch(t, indexesResponse)
+	if got, want := len(indexBatch), 1; got != want {
+		t.Fatalf("index batch len=%d want %d", got, want)
+	}
+	assertIndexName(t, indexBatch[0], "_id_")
+
+	duplicateResponse := serveCommand(t, server, 2314, bson.D{
+		{Key: "create", Value: "created"},
+		{Key: "$db", Value: "app"},
+	})
+	assertOK(t, duplicateResponse)
+	if note, ok := duplicateResponse.Lookup("note").StringValueOK(); !ok || !strings.Contains(note, "idempotent") {
+		t.Fatalf("duplicate create note=%q ok=%v want idempotent note", note, ok)
+	}
+
+	cappedFalseResponse := serveCommand(t, server, 2315, bson.D{
+		{Key: "create", Value: "plain"},
+		{Key: "capped", Value: false},
+		{Key: "$db", Value: "app"},
+	})
+	assertOK(t, cappedFalseResponse)
+
+	cappedTrueResponse := serveCommand(t, server, 2316, bson.D{
+		{Key: "create", Value: "capped"},
+		{Key: "capped", Value: true},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, cappedTrueResponse, "BadValue")
+
+	validatorResponse := serveCommand(t, server, 2317, bson.D{
+		{Key: "create", Value: "validated"},
+		{Key: "validator", Value: bson.D{}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, validatorResponse, "BadValue")
+}
+
+func TestServerRejectsTransactionalMutations(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	assertOK(t, serveCommand(t, server, 2318, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}, {Key: "name", Value: "ada"}}}},
+		{Key: "$db", Value: "app"},
+	}))
+	transactionFields := bson.D{
+		{Key: "lsid", Value: bson.D{{Key: "id", Value: bson.Binary{Subtype: 4, Data: make([]byte, 16)}}}},
+		{Key: "txnNumber", Value: int64(1)},
+		{Key: "startTransaction", Value: true},
+		{Key: "autocommit", Value: false},
+	}
+	retryableWriteFields := bson.D{
+		{Key: "lsid", Value: bson.D{{Key: "id", Value: bson.Binary{Subtype: 4, Data: make([]byte, 16)}}}},
+		{Key: "txnNumber", Value: int64(2)},
+	}
+
+	assertOK(t, serveCommand(t, server, 2319, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{bson.D{{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}}, {Key: "name", Value: "email_1"}, {Key: "treedbValueType", Value: "string"}}}},
+		{Key: "$db", Value: "app"},
+	}))
+	transactionalCreateIndexes := append(bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{bson.D{{Key: "key", Value: bson.D{{Key: "age", Value: int32(1)}}}, {Key: "name", Value: "age_1"}, {Key: "treedbValueType", Value: "int64"}}}},
+	}, transactionFields...)
+	transactionalCreateIndexes = append(transactionalCreateIndexes, bson.E{Key: "$db", Value: "app"})
+	assertCommandError(t, serveCommand(t, server, 2320, transactionalCreateIndexes), "BadValue")
+	indexes := cursorFirstBatch(t, serveCommand(t, server, 2321, bson.D{{Key: "listIndexes", Value: "users"}, {Key: "$db", Value: "app"}}))
+	if len(indexes) != 2 {
+		t.Fatalf("indexes after rejected transactional createIndexes len=%d want 2", len(indexes))
+	}
+	assertIndexName(t, indexes[0], "_id_")
+	assertIndexName(t, indexes[1], "email_1")
+	transactionalDropIndexes := append(bson.D{
+		{Key: "dropIndexes", Value: "users"},
+		{Key: "index", Value: "email_1"},
+	}, transactionFields...)
+	transactionalDropIndexes = append(transactionalDropIndexes, bson.E{Key: "$db", Value: "app"})
+	assertCommandError(t, serveCommand(t, server, 2322, transactionalDropIndexes), "BadValue")
+	indexes = cursorFirstBatch(t, serveCommand(t, server, 2323, bson.D{{Key: "listIndexes", Value: "users"}, {Key: "$db", Value: "app"}}))
+	if len(indexes) != 2 {
+		t.Fatalf("indexes after rejected transactional dropIndexes len=%d want 2", len(indexes))
+	}
+	assertIndexName(t, indexes[0], "_id_")
+	assertIndexName(t, indexes[1], "email_1")
+
+	transactionalFind := append(bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}},
+	}, transactionFields...)
+	transactionalFind = append(transactionalFind, bson.E{Key: "$db", Value: "app"})
+	assertCommandError(t, serveCommand(t, server, 2330, transactionalFind), "BadValue")
+	retryableFind := append(bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}},
+	}, retryableWriteFields...)
+	retryableFind = append(retryableFind, bson.E{Key: "$db", Value: "app"})
+	assertCommandError(t, serveCommand(t, server, 2331, retryableFind), "BadValue")
+	transactionalListCollections := append(bson.D{
+		{Key: "listCollections", Value: int32(1)},
+	}, transactionFields...)
+	transactionalListCollections = append(transactionalListCollections, bson.E{Key: "$db", Value: "app"})
+	assertCommandError(t, serveCommand(t, server, 2332, transactionalListCollections), "BadValue")
+	transactionalListIndexes := append(bson.D{
+		{Key: "listIndexes", Value: "users"},
+	}, transactionFields...)
+	transactionalListIndexes = append(transactionalListIndexes, bson.E{Key: "$db", Value: "app"})
+	assertCommandError(t, serveCommand(t, server, 2333, transactionalListIndexes), "BadValue")
+
+	transactionalInsert := append(bson.D{
+		{Key: "insert", Value: "tx_insert"},
+		{Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u2"}}}},
+	}, transactionFields...)
+	transactionalInsert = append(transactionalInsert, bson.E{Key: "$db", Value: "app"})
+	assertCommandError(t, serveCommand(t, server, 2324, transactionalInsert), "BadValue")
+	if _, err := server.Collections.OpenCollection("app.tx_insert"); !errors.Is(err, collections.ErrCollectionNotFound) {
+		t.Fatalf("transactional insert collection err=%v, want collection not found", err)
+	}
+
+	retryableInsert := append(bson.D{
+		{Key: "insert", Value: "retryable_insert"},
+		{Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u3"}}}},
+	}, retryableWriteFields...)
+	retryableInsert = append(retryableInsert, bson.E{Key: "$db", Value: "app"})
+	assertCommandError(t, serveCommand(t, server, 2329, retryableInsert), "BadValue")
+	if _, err := server.Collections.OpenCollection("app.retryable_insert"); !errors.Is(err, collections.ErrCollectionNotFound) {
+		t.Fatalf("retryable insert collection err=%v, want collection not found", err)
+	}
+
+	transactionalUpdate := append(bson.D{
+		{Key: "update", Value: "users"},
+		{Key: "updates", Value: bson.A{bson.D{
+			{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}},
+			{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "name", Value: "changed"}}}}},
+		}}},
+	}, transactionFields...)
+	transactionalUpdate = append(transactionalUpdate, bson.E{Key: "$db", Value: "app"})
+	assertCommandError(t, serveCommand(t, server, 2325, transactionalUpdate), "BadValue")
+	found := serveCommand(t, server, 2326, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}},
+		{Key: "$db", Value: "app"},
+	})
+	batch := cursorFirstBatch(t, found)
+	if got, ok := batch[0].Lookup("name").StringValueOK(); !ok || got != "ada" {
+		t.Fatalf("name after rejected transactional update=%q ok=%v want ada", got, ok)
+	}
+
+	transactionalDelete := append(bson.D{
+		{Key: "delete", Value: "users"},
+		{Key: "deletes", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "limit", Value: int32(1)}}}},
+	}, transactionFields...)
+	transactionalDelete = append(transactionalDelete, bson.E{Key: "$db", Value: "app"})
+	assertCommandError(t, serveCommand(t, server, 2327, transactionalDelete), "BadValue")
+	found = serveCommand(t, server, 2328, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertBatchIDs(t, cursorFirstBatch(t, found), []string{"u1"})
 }
 
 func TestServerCreateIndexesAutoCreateDedupesIdenticalDefinitions(t *testing.T) {
