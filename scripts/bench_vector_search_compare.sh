@@ -7,6 +7,7 @@ cd "$ROOT"
 USEARCH_VERSION="${USEARCH_VERSION:-2.25.2}"
 USEARCH_ARCH="${USEARCH_ARCH:-}"
 USEARCH_ROOT="${USEARCH_ROOT:-}"
+USEARCH_MANAGED_CACHE=false
 RUN_DIR="${RUN_DIR:-/tmp/gomap_vector_search_compare_$(date +%Y%m%d_%H%M%S)}"
 COUNT="${COUNT:-3}"
 BENCHTIME="${BENCHTIME:-1x}"
@@ -28,13 +29,18 @@ esac
 if [[ -z "$USEARCH_ROOT" ]]; then
 	USEARCH_CACHE="/tmp/usearch_${USEARCH_VERSION}_${USEARCH_ARCH}"
 	USEARCH_ROOT="$USEARCH_CACHE/root/usr/local"
+	USEARCH_MANAGED_CACHE=true
 else
-	USEARCH_CACHE=$(dirname "$(dirname "$USEARCH_ROOT")")
+	USEARCH_CACHE=""
 fi
 
 ensure_usearch() {
 	if [[ -f "$USEARCH_ROOT/include/usearch.h" && -f "$USEARCH_ROOT/lib/libusearch_c.so" ]]; then
 		return
+	fi
+	if [[ "$USEARCH_MANAGED_CACHE" != "true" ]]; then
+		echo "USEARCH_ROOT is missing include/usearch.h or lib/libusearch_c.so: $USEARCH_ROOT" >&2
+		return 1
 	fi
 	local deb="usearch_linux_${USEARCH_ARCH}_${USEARCH_VERSION}.deb"
 	local url="https://github.com/unum-cloud/usearch/releases/download/v${USEARCH_VERSION}/${deb}"
