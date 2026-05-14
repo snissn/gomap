@@ -29,6 +29,7 @@ type AppendResult struct {
 type Appender struct {
 	mu           sync.Mutex
 	file         *os.File
+	dbDir        string
 	path         string
 	lane         uint32
 	segmentSeq   uint64
@@ -81,6 +82,7 @@ func CreateSegmentAppender(dbDir string, opts AppenderOptions) (*Appender, error
 	ok = true
 	return &Appender{
 		file:         file,
+		dbDir:        dbDir,
 		path:         path,
 		lane:         opts.Lane,
 		segmentSeq:   opts.SegmentSeq,
@@ -100,6 +102,36 @@ func OpenOrCreateSegmentAppender(dbDir string, opts AppenderOptions) (*Appender,
 		return OpenSegmentAppender(dbDir, opts)
 	}
 	return nil, err
+}
+
+func OpenOrCreateTailSegmentAppender(dbDir string, opts AppenderOptions) (*Appender, error) {
+	if dbDir == "" {
+		return nil, fmt.Errorf("%w: empty db dir", ErrCollectionWALUnsafePath)
+	}
+	opts = normalizeAppenderOptions(opts)
+	if err := validateAppenderOptions(opts); err != nil {
+		return nil, err
+	}
+	infos, err := dirtySegmentInfos(dbDir)
+	if err != nil {
+		return nil, err
+	}
+	var tail *segmentFileInfo
+	for i := range infos {
+		if infos[i].lane == opts.Lane {
+			tail = &infos[i]
+		}
+	}
+	if tail == nil {
+		return OpenOrCreateSegmentAppender(dbDir, opts)
+	}
+	header, err := readSegmentHeader(tail.path)
+	if err != nil {
+		return nil, err
+	}
+	opts.SegmentSeq = tail.seq
+	opts.FirstWALLSN = header.FirstWALLSN
+	return OpenSegmentAppender(dbDir, opts)
 }
 
 func OpenSegmentAppender(dbDir string, opts AppenderOptions) (*Appender, error) {
@@ -175,6 +207,7 @@ func OpenSegmentAppender(dbDir string, opts AppenderOptions) (*Appender, error) 
 	ok = true
 	return &Appender{
 		file:         file,
+		dbDir:        dbDir,
 		path:         path,
 		lane:         opts.Lane,
 		segmentSeq:   opts.SegmentSeq,
@@ -183,6 +216,19 @@ func OpenSegmentAppender(dbDir string, opts AppenderOptions) (*Appender, error) 
 		syncOnAppend: opts.SyncOnAppend,
 		offset:       offset,
 	}, nil
+}
+
+func readSegmentHeader(path string) (SegmentHeader, error) {
+	var buf [SegmentHeaderLen]byte
+	file, err := os.Open(path)
+	if err != nil {
+		return SegmentHeader{}, err
+	}
+	defer func() { _ = file.Close() }()
+	if _, err := io.ReadFull(file, buf[:]); err != nil {
+		return SegmentHeader{}, err
+	}
+	return DecodeSegmentHeader(buf[:])
 }
 
 func normalizeAppenderOptions(opts AppenderOptions) AppenderOptions {
@@ -231,8 +277,13 @@ func (a *Appender) AppendTransaction(txn Transaction, syncAppend bool) (AppendRe
 	if err != nil {
 		return result, err
 	}
-	if int64(len(frame)) > a.segmentBytes-a.offset {
-		return result, fmt.Errorf("%w: frame bytes %d exceed remaining segment bytes %d", ErrCollectionWALResourceLimit, len(frame), a.segmentBytes-a.offset)
+	if int64(len(frame)) > a.segmentBytes-SegmentHeaderLen {
+		return result, fmt.Errorf("%w: frame bytes %d exceed usable segment bytes %d", ErrCollectionWALResourceLimit, len(frame), a.segmentBytes-SegmentHeaderLen)
+	}
+	for int64(len(frame)) > a.segmentBytes-a.offset {
+		if err := a.rolloverLocked(); err != nil {
+			return result, err
+		}
 	}
 	offset := a.offset
 	if err := writeFull(a.file, frame); err != nil {
@@ -252,6 +303,43 @@ func (a *Appender) AppendTransaction(txn Transaction, syncAppend bool) (AppendRe
 		WALLSN:        txn.WALLSN,
 		CollectionSeq: txn.CollectionSeq,
 	}, nil
+}
+
+func (a *Appender) rolloverLocked() error {
+	if a == nil || a.closed || a.file == nil {
+		return errors.New("collectionwal: appender closed")
+	}
+	if a.dbDir == "" {
+		return fmt.Errorf("%w: empty db dir", ErrCollectionWALUnsafePath)
+	}
+	if a.segmentSeq == ^uint64(0) {
+		return fmt.Errorf("%w: segment sequence overflow", ErrCollectionWALResourceLimit)
+	}
+	next, err := OpenOrCreateSegmentAppender(a.dbDir, AppenderOptions{
+		Lane:         a.lane,
+		SegmentSeq:   a.segmentSeq + 1,
+		FirstWALLSN:  a.nextWALLSN,
+		SegmentBytes: a.segmentBytes,
+		SyncOnAppend: a.syncOnAppend,
+	})
+	if err != nil {
+		return err
+	}
+	oldFile := a.file
+	a.file = next.file
+	a.path = next.path
+	a.lane = next.lane
+	a.segmentSeq = next.segmentSeq
+	a.segmentBytes = next.segmentBytes
+	a.nextWALLSN = next.nextWALLSN
+	a.syncOnAppend = next.syncOnAppend
+	a.offset = next.offset
+	next.file = nil
+	next.closed = true
+	if oldFile != nil {
+		return oldFile.Close()
+	}
+	return nil
 }
 
 func (a *Appender) Close() error {

@@ -81,6 +81,76 @@ func TestAppenderRejectsSegmentOverflow(t *testing.T) {
 	}
 }
 
+func TestAppenderRollsToNextSegmentWhenTailIsFull(t *testing.T) {
+	dir := t.TempDir()
+	frame, err := EncodeTransactionFrame(testTransaction(1, 1))
+	if err != nil {
+		t.Fatalf("EncodeTransactionFrame: %v", err)
+	}
+	app, err := OpenOrCreateTailSegmentAppender(dir, AppenderOptions{SegmentBytes: SegmentHeaderLen + int64(len(frame))})
+	if err != nil {
+		t.Fatalf("OpenOrCreateTailSegmentAppender: %v", err)
+	}
+	defer func() { _ = app.Close() }()
+
+	first, err := app.AppendTransaction(testTransaction(0, 1), true)
+	if err != nil {
+		t.Fatalf("first append: %v", err)
+	}
+	second, err := app.AppendTransaction(testTransaction(0, 2), true)
+	if err != nil {
+		t.Fatalf("second append: %v", err)
+	}
+	if first.Path != SegmentPath(dir, 0, 1) || first.Offset != SegmentHeaderLen {
+		t.Fatalf("first append result=%+v", first)
+	}
+	if second.Path != SegmentPath(dir, 0, 2) || second.Offset != SegmentHeaderLen || second.WALLSN != 2 {
+		t.Fatalf("second append result=%+v", second)
+	}
+	assertSegmentWALLSNs(t, SegmentPath(dir, 0, 1), 1)
+	assertSegmentWALLSNs(t, SegmentPath(dir, 0, 2), 2)
+}
+
+func TestOpenOrCreateTailSegmentAppenderContinuesLatestSegment(t *testing.T) {
+	dir := t.TempDir()
+	frame, err := EncodeTransactionFrame(testTransaction(1, 1))
+	if err != nil {
+		t.Fatalf("EncodeTransactionFrame: %v", err)
+	}
+	segmentBytes := SegmentHeaderLen + 2*int64(len(frame))
+	app, err := OpenOrCreateTailSegmentAppender(dir, AppenderOptions{SegmentBytes: segmentBytes})
+	if err != nil {
+		t.Fatalf("OpenOrCreateTailSegmentAppender(first): %v", err)
+	}
+	if _, err := app.AppendTransaction(testTransaction(0, 1), true); err != nil {
+		t.Fatalf("first append: %v", err)
+	}
+	if _, err := app.AppendTransaction(testTransaction(0, 2), true); err != nil {
+		t.Fatalf("second append: %v", err)
+	}
+	if _, err := app.AppendTransaction(testTransaction(0, 3), true); err != nil {
+		t.Fatalf("third append: %v", err)
+	}
+	if err := app.Close(); err != nil {
+		t.Fatalf("close first appender: %v", err)
+	}
+
+	app, err = OpenOrCreateTailSegmentAppender(dir, AppenderOptions{SegmentBytes: segmentBytes})
+	if err != nil {
+		t.Fatalf("OpenOrCreateTailSegmentAppender(second): %v", err)
+	}
+	defer func() { _ = app.Close() }()
+	fourth, err := app.AppendTransaction(testTransaction(0, 4), true)
+	if err != nil {
+		t.Fatalf("fourth append: %v", err)
+	}
+	if fourth.Path != SegmentPath(dir, 0, 2) || fourth.WALLSN != 4 {
+		t.Fatalf("fourth append result=%+v", fourth)
+	}
+	assertSegmentWALLSNs(t, SegmentPath(dir, 0, 1), 1, 2)
+	assertSegmentWALLSNs(t, SegmentPath(dir, 0, 2), 3, 4)
+}
+
 func TestAppenderDoesNotOverwriteExistingSegment(t *testing.T) {
 	dir := t.TempDir()
 	app, err := CreateSegmentAppender(dir, AppenderOptions{SegmentBytes: 4096})
@@ -207,6 +277,26 @@ func TestOpenSegmentAppenderTruncatesTerminalIncompleteTail(t *testing.T) {
 		want := uint64(i + 1)
 		if frame.Outcome != OutcomeCompleteValid || frame.Transaction.WALLSN != want || frame.Transaction.CollectionSeq != want {
 			t.Fatalf("frame %d=%+v want complete WALLSN/CollectionSeq %d", i, frame, want)
+		}
+	}
+}
+
+func assertSegmentWALLSNs(t *testing.T, path string, want ...uint64) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", path, err)
+	}
+	_, frames, err := ScanSegment(data, true)
+	if err != nil {
+		t.Fatalf("ScanSegment(%s): %v", path, err)
+	}
+	if len(frames) != len(want) {
+		t.Fatalf("%s frames=%d want %d", path, len(frames), len(want))
+	}
+	for i, frame := range frames {
+		if frame.Outcome != OutcomeCompleteValid || frame.Transaction.WALLSN != want[i] {
+			t.Fatalf("%s frame %d=%+v want complete WALLSN %d", path, i, frame, want[i])
 		}
 	}
 }

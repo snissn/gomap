@@ -61,6 +61,14 @@ func ParseSegmentName(name string) (lane uint32, seq uint64, ok bool) {
 // does not consult cleanup metadata yet; until that reader exists, every
 // collection WAL segment is treated as requiring read-write recovery.
 func DirtySegments(dbDir string) ([]string, error) {
+	infos, err := dirtySegmentInfos(dbDir)
+	if err != nil {
+		return segmentInfoPaths(infos), err
+	}
+	return segmentInfoPaths(infos), nil
+}
+
+func dirtySegmentInfos(dbDir string) ([]segmentFileInfo, error) {
 	walDir := filepath.Join(dbDir, "wal")
 	entries, err := os.ReadDir(walDir)
 	if err != nil {
@@ -94,11 +102,10 @@ func DirtySegments(dbDir string) ([]string, error) {
 		}
 		return infos[i].name < infos[j].name
 	})
-	dirty := segmentInfoPaths(infos)
 	if err := validateSegmentSequenceContinuity(infos); err != nil {
-		return dirty, err
+		return infos, err
 	}
-	return dirty, nil
+	return infos, nil
 }
 
 func segmentInfoPaths(infos []segmentFileInfo) []string {

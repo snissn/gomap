@@ -219,7 +219,7 @@ func (db *DB) AppendCollectionWALTransaction(txn collectionwal.Transaction, sync
 	db.collectionWALMu.Lock()
 	defer db.collectionWALMu.Unlock()
 	if db.collectionWALAppender == nil {
-		appender, err := collectionwal.OpenOrCreateSegmentAppender(db.dir, collectionwal.AppenderOptions{
+		appender, err := collectionwal.OpenOrCreateTailSegmentAppender(db.dir, collectionwal.AppenderOptions{
 			Lane:         0,
 			SegmentSeq:   1,
 			FirstWALLSN:  1,
