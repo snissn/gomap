@@ -10076,9 +10076,11 @@ func (combiner *collectionUpdateCombiner) enqueue(req collectionUpdateCombineReq
 		requests := combiner.shardedRequests[shard]
 		select {
 		case requests <- req:
-			select {
-			case combiner.readyShards <- shard:
-			default:
+			if !combiner.hasShardWorkers() {
+				select {
+				case combiner.readyShards <- shard:
+				default:
+				}
 			}
 			if combiner.domain != nil {
 				combiner.domain.observeUpdateCombineRequest(len(requests))
