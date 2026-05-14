@@ -177,14 +177,28 @@ ingested from JSON/BSON/template-v1:
 
 ```go
 type ColumnStoreOptions struct {
-    SchemaVersion uint32
-    SchemaMode    ColumnSchemaMode
-    Columns       []ColumnDefinition
-    PrimaryOrder  []string
-    PartPolicy    ColumnPartPolicy
-    Compression   ColumnCompressionPolicy
-    UpdatePolicy  ColumnUpdatePolicy
-    FastFilters   []FastFilterDefinition
+    SchemaVersion     uint32
+    SchemaMode        ColumnSchemaMode
+    Columns           []ColumnDefinition
+    LogicalPrimaryKey []string
+    SortKey           []SortKeyColumn
+    PartPolicy        ColumnPartPolicy
+    Compression       ColumnCompressionPolicy
+    UpdatePolicy      ColumnUpdatePolicy
+    FastFilters       []FastFilterDefinition
+}
+
+type SortKeyDirection string
+
+const (
+    SortKeyAsc  SortKeyDirection = "asc"
+    SortKeyDesc SortKeyDirection = "desc"
+)
+
+type SortKeyColumn struct {
+    Column    string
+    Direction SortKeyDirection
+    NullsLast bool
 }
 
 type ColumnDefinition struct {
@@ -230,6 +244,24 @@ up front with a stable column id, type, nullability, default, compression
 binding, and index hints. Row ingestion may ignore undeclared fields or reject
 them according to collection options, but it must not create new physical
 columns lazily.
+
+`SortKeyColumn.Column` may name a declared column or a reserved primary-id
+pseudo-column used only for deterministic tie-breaking.
+
+`LogicalPrimaryKey` is the row/document identity contract. It is used for point
+lookup, update, delete, uniqueness, and the primary `id -> row_locator` root.
+For current TreeDB collections this is normally the existing collection id, even
+when that id is not stored as a user-visible column.
+
+`SortKey` is a separate physical clustering contract for column-store parts. It
+controls row order inside immutable parts, mark layout, compression locality,
+and scan pruning. A deployment may set `SortKey` equal to the logical primary
+key for a simple KV-like collection, but analytical collections should be able
+to choose a query-relevant order such as
+`(kind, commit.operation, commit.collection, did, time_us, primary_id)`.
+The primary id should normally appear as the last tie-breaker so part ordering
+is deterministic and update visibility can still resolve duplicate logical rows
+across old and replacement parts.
 
 `Compression.Mode` defaults to `auto`. Auto mode lets the column-store codec
 selector choose per-column and per-block pipelines from the collection/profile
@@ -338,11 +370,12 @@ collections, with additional roots:
 ```text
 <collection>/primary            existing primary root, id -> row_locator
 <collection>/columns/parts      immutable part descriptors
-<collection>/columns/granules   optional part/granule range marks
+<collection>/columns/granules   optional sparse sort-key/part/granule marks
 <collection>/columns/locator    optional auxiliary primary-id locator map
 <collection>/columns/deletes    tombstones and delete bitmap descriptors
 <collection>/columns/schema     schema evolution descriptors
 <collection>/columns/counts     exact count and visibility metadata
+<collection>/columns/aggs/<name> optional exact aggregate metadata
 <collection>/columns/filters/<name> optional persistent fast-filter roots
 <collection>/templates          existing template-v1 root when needed
 <collection>/index-state        existing row-index-state root when needed
@@ -385,16 +418,19 @@ authority. It stores coarse mark entries such as:
 ```text
 column_granule_mark_key :=
     collection name prefix
-    id_lower
+    encoded sort-key lower bound or prefix lower bound
     part_id u64 big-endian
     granule_ordinal u32 big-endian
 
 column_granule_mark_value :=
-    id_upper_exclusive
+    sort_key_upper_exclusive
+    primary_id_lower
+    primary_id_upper_exclusive
     first_row
     row_count
     created_commit_seq
     visible_row_count
+    sort_key_prefix_summaries
 ```
 
 Because update-delta parts can overlap base-part key ranges, scan plans that use
@@ -403,7 +439,59 @@ commit-sequence rules before returning rows. PR1 may start with primary-root
 range scans grouped by `(part_id, granule_ordinal)` for correctness, then add
 `columns/granules` when dense scans need fewer primary-root reads.
 
-### 6.1.1 Secondary Index Contract
+### 6.1.1 Logical Primary Key, Sort Key, and Sparse Mark Index
+
+TreeDB should keep logical row identity separate from column-store physical
+clustering. The logical primary key is authoritative for uniqueness, point
+lookup, update, delete, snapshots, and visibility. The column-store sort key is
+authoritative for the physical order of rows inside a part and for sparse mark
+pruning before any projected column is decompressed.
+
+This distinction avoids importing ClickHouse's overloaded term "primary index"
+into TreeDB APIs. In ClickHouse, the primary index is a sparse index over the
+physical sort order, not a uniqueness constraint. In TreeDB naming, prefer
+`SortKey`, `ClusterKey`, `MarkIndex`, or `GranuleMarks`. When comparing with
+ClickHouse documentation, "sparse primary index" means TreeDB's sparse
+sort-key mark index.
+
+For each column-store collection:
+
+- `LogicalPrimaryKey` names row identity, or the existing collection id when
+  primary ids are supplied out-of-band;
+- `SortKey` names the physical clustering order for base and compacted parts;
+- `SortKey` may equal the logical primary key, but it must be an explicit
+  configuration choice rather than an accidental default;
+- when `SortKey` differs from the logical primary key, the primary root remains
+  `id -> row_locator` and resolves point reads/updates through the current
+  visible locator;
+- the final sort-key component should normally be the primary id, giving stable
+  ordering and deterministic compaction even when earlier sort-key columns tie.
+
+Every base or compacted part with a non-empty `SortKey` must persist sparse
+mark metadata per granule. A mark is one entry per granule, not one entry per
+row. It should be small enough to cache broadly while still allowing a scan
+planner to reject granules before reading compressed column bytes.
+
+Required mark metadata:
+
+- part id, granule ordinal, first row, row count, and visible row count;
+- logical primary id lower and upper bounds for visibility/range reconciliation;
+- full sort-key lower and upper bounds for the granule;
+- prefix summaries for `(k1)`, `(k1, k2)`, ..., `(k1, ..., kn)` when the sort
+  key is composite;
+- per-column or per-substream offsets needed to seek directly to projected
+  blocks;
+- min/max or filter references when those summaries are not embedded directly
+  in the part descriptor.
+
+The ClickHouse JSONBench shape makes this non-optional for analytical
+comparisons: sorting by `(kind, commit.operation, commit.collection, did,
+time_us)` lets predicates on `kind`, operation, collection, user, and time skip
+large ranges of granules. TreeDB's JSONBench column-store lane should therefore
+report sort-key mark pruning separately from min/max, fast-filter, and
+secondary-index pruning.
+
+### 6.1.2 Secondary Index Contract
 
 Secondary indexes must work for column-store collections from the first indexed
 milestone. The implementation should keep the existing secondary B-tree root
@@ -439,6 +527,16 @@ cardinality secondary indexes can grow compressed posting-list or bitmap
 payloads, but that is an optimization of the secondary root value, not a new
 logical index model.
 
+Skip-scan support should be treated as a shared query-planning primitive, not a
+column-store-only trick. The follow-up tracked in
+`https://github.com/snissn/gomap/issues/1486` should cover both existing
+B-tree secondary roots and column-store sort-key marks. Composite keys will not
+always be queried from the leftmost prefix; a query may constrain
+`commit.collection` or `did` while leaving `kind` or `operation` broad. The scan
+planner should be able to enumerate distinct leading-prefix ranges, jump between
+candidate mark spans, and then apply the same row-visibility and predicate
+verification rules used for ordinary secondary-index scans.
+
 ### 6.2 Part Descriptors
 
 Column data is immutable. A write publishes one or more parts and installs
@@ -465,6 +563,9 @@ ColumnPartDescriptor {
     ManifestRef      optional ColumnFileRef
     SideRefDigest    bytes optional
     CodecRegistryVersion uint32 optional
+    SortKey          []SortKeyColumnDescriptor
+    SortKeyLower     []byte
+    SortKeyUpperExclusive []byte
     RowCount         uint32
     VisibleRowCount  uint32
     DeletedRowCount  uint32
@@ -490,9 +591,20 @@ GranuleDescriptor {
     DeletedRows   uint32
     IDLower       []byte
     IDUpper       []byte
+    SortKeyLower  []byte
+    SortKeyUpper  []byte
+    SortKeyPrefixStats []SortKeyPrefixStats
     MarkOrdinal   uint32
 }
 ```
+
+`SortKeyColumnDescriptor` records the stable column id, direction, null
+ordering, encoded comparison kind, and schema version for each sort-key
+component. Encoded sort-key bounds in descriptors and marks must use that
+descriptor, not ad-hoc user field names, so old parts remain comparable after
+schema renames. `SortKeyPrefixStats` may start as encoded lower/upper bounds per
+prefix and later grow exact prefix counts or posting metadata only when the
+aggregate metadata design proves it can keep snapshot semantics correct.
 
 Column descriptors contain file references to compressed streams:
 
@@ -689,7 +801,8 @@ Borrow these ClickHouse defaults unless benchmark evidence changes them:
 - maximum compression block target: 1 MiB raw;
 - compact/write-small parts may group several columns into one packed `TCS1`
   file, but mature parts should favor independent column/substream files;
-- marks record row range plus compressed offset and decoded offset.
+- marks record row range, sort-key bounds, sort-key prefix summaries, compressed
+  offset, and decoded offset.
 
 Chunking has four separate units:
 
@@ -704,9 +817,19 @@ block to contain several tiny granules for narrow booleans.
 
 Logical granules are part-wide and row-aligned across all columns. For granule
 ordinal `g` in a part, every column and substream refers to the same
-`FirstRow`, `RowCount`, `IDLower`, and `IDUpper` from the part descriptor. This
-lets one row mask, delete bitmap, secondary-index result, or fast-filter result
-apply across all projected columns.
+`FirstRow`, `RowCount`, `IDLower`, `IDUpper`, `SortKeyLower`, and
+`SortKeyUpper` from the part descriptor. This lets one row mask, delete bitmap,
+secondary-index result, sort-key mark result, or fast-filter result apply
+across all projected columns.
+
+Sort-key marks are sparse. They must allow the scan planner to decide that a
+granule cannot satisfy a predicate on a sort-key prefix without decoding any
+projected column block. For a composite sort key `(k1, k2, ..., kn)`, the mark
+metadata should support pruning on left prefixes and should preserve enough
+boundary information for skip-scan planning on later components once the
+shared skip-scan work lands. A base part may keep these marks embedded in the
+part descriptor while small, or move them to a mark stream/root when descriptor
+values would become too large; the logical mark contract is the same either way.
 
 Codec blocks are different: they are per-column-substream physical decode
 units. `MinCodecBlockRawBytes` and `MaxCodecBlockRawBytes` are targets for one
@@ -737,6 +860,7 @@ type ColumnPartPolicy struct {
     UpdateDeltaMaxCodecBlockRawBytes int
     UpdateDeltaMaxRows              int
     UpdateDeltaMaxBytes             int64
+    UpdateDeltaMaxFilesPerBatch     int
 }
 ```
 
@@ -757,6 +881,8 @@ is advisory and may be ignored for tiny deltas. Initial experimental defaults:
 - `UpdateDeltaMaxCodecBlockRawBytes = 128 KiB`;
 - `UpdateDeltaMaxRows = 4096`;
 - `UpdateDeltaMaxBytes = 8 MiB`.
+- `UpdateDeltaMaxFilesPerBatch` should be benchmark-defined and should fail
+  tests if default bulk updates create one durable file per changed row.
 
 Compaction should trigger on delta age, total bytes, part fan-in for an id
 range, or update-followed-by-read regression, not only on raw size.
@@ -838,6 +964,22 @@ format. They must use offsets plus chars, or dictionary keys plus dictionary
 values, so projected scans can skip char bytes when evaluating null/default or
 dictionary predicates.
 
+Low-cardinality dictionaries are part-local in `TCS1`. Fields such as `kind`,
+`commit.operation`, and `commit.collection` should encode to compact keys and a
+dictionary substream inside each part. Compaction is responsible for merging or
+rewriting source dictionaries into the destination part dictionary and remapping
+keys. A global or collection-wide dictionary is out of scope for PR1 unless a
+benchmark proves that the smaller key stream outweighs the coordination,
+recovery, and schema-evolution costs.
+
+Dictionary metadata must be visible in descriptors and benchmark output:
+
+- cardinality per part and per column;
+- key width before and after compaction;
+- dictionary byte size and compressed byte size;
+- remap cost during compaction;
+- whether a query used dictionary-key predicates without reading char bytes.
+
 ### 6.7 Mutable Writes, Updates, and Deletes
 
 Column parts are immutable: do not patch compressed blocks in place. But an
@@ -857,7 +999,8 @@ primary ids:
   values did not change;
 - use the same fixed schema, substreams, codecs, checksums, granules, block
   directory, and part descriptor shape as insert/base parts;
-- sort rows by primary id inside the part;
+- sort rows by the configured `SortKey`, using primary id as the deterministic
+  tie-breaker;
 - update the primary root so each changed id points directly to the replacement
   row locator;
 - hide old locators for changed rows with tombstones/delete bitmaps;
@@ -887,7 +1030,7 @@ Update model:
    - delete bitmap/tombstone entries that hide old row locators for changed ids;
    - secondary index deletes for old indexed values from changed rows;
    - secondary index inserts for new indexed values from changed rows;
-   - count/visibility metadata deltas when present;
+   - count/visibility and exact aggregate metadata deltas when present;
    - the applied collection watermark update in the backend publish commit.
 6. Reads see the newest primary locator for each id and treat tombstoned
    locators as invisible.
@@ -962,7 +1105,9 @@ must benchmark this choice against granule rewrite on:
 - projected scan after 1 percent, 10 percent, and 30 percent churn;
 - secondary-index update cost;
 - compaction catch-up time and reclaimed bytes;
-- delta-part count and maximum visible part fan-in per id range.
+- delta-part count and maximum visible part fan-in per id range;
+- durable file count per update batch, files per 1K changed rows, and orphan
+  prepare/final cleanup after interrupted update publishes.
 
 If update-delta parts make read amplification unacceptable before compaction,
 the implementation should switch to the hybrid policy rather than hard-coding
@@ -1243,9 +1388,11 @@ is not enough if `Get` becomes too slow for collection users.
 Column scan:
 
 1. Snapshot collection catalog.
-2. Enumerate visible parts by id range and predicate metadata.
-3. Use min/max, null count, default count, and optional bloom/zone maps to skip
-   granules.
+2. Enumerate visible parts by primary id range, sort-key mark metadata, and
+   predicate metadata.
+3. Use sort-key marks first when predicates constrain a configured sort-key
+   prefix. Then use min/max, null count, default count, and optional bloom/zone
+   maps to skip granules.
 4. Build the row-visibility mask for surviving granules from delete bitmaps,
    update-delta tombstones, primary id bounds, and row-id filters produced by
    secondary indexes or fast filters.
@@ -1260,6 +1407,13 @@ Update-delta parts are normal column parts for reads. They may be smaller and
 more numerous than compacted base parts, but they use the same marks,
 substreams, codecs, and visibility rules.
 
+Scan diagnostics should attribute pruning by source: sort-key marks, primary id
+range, secondary index, min/max, set/bloom/token/ngram/text filter, and delete
+or update-delta visibility. JSONBench and canonical benchmarks should report
+granules considered, granules read, and granules skipped for each source so
+ClickHouse-style sparse mark wins are visible instead of being mixed into a
+generic "predicate pushdown" number.
+
 A vector batch should expose:
 
 - typed value slices for fixed-width types;
@@ -1273,6 +1427,7 @@ A vector batch should expose:
 Initial pushdown:
 
 - primary id range;
+- sort-key prefix range through sparse granule marks;
 - equality/range on secondary index through existing index roots;
 - min/max per granule for typed columns;
 - null-only/non-null checks;
@@ -1407,11 +1562,47 @@ using an exact posting/bitmap index.
 Persisted count and visibility aggregates are root/system deltas. Inserts,
 deletes, update-delta publishes, compaction, and recompression must publish
 count/visibility changes in the same collection WAL transaction and backend root
-group as primary locators, part descriptors, delete bitmaps, filters, and
-secondary-index changes.
+group as primary locators, part descriptors, delete bitmaps, filters, aggregate
+metadata, and secondary-index changes.
 
 This is analogous to ClickHouse's ability to answer trivial counts from part
 metadata, but it must respect TreeDB snapshots and delete bitmaps.
+
+### 8.6 Aggregate Kernels and Exact Aggregate Metadata
+
+The scan API should be shaped for projection plus common aggregate kernels, not
+only callbacks over decoded vectors. JSONBench `q1` through `q3` are dominated
+by grouped counts, exact distinct counts, and time bucketing; forcing every
+caller to rebuild those primitives on materialized rows would hide the benefit
+of columnar layout.
+
+PR1 can expose borrowed vector batches first, but the API should leave room for
+storage-aware kernels such as:
+
+- `count` and filtered `count`;
+- grouped `count` over low-cardinality dictionary keys;
+- `min` and `max` over numeric/time columns;
+- exact distinct over dictionary keys or primary ids;
+- time-bucketed grouped counts when the bucket expression is deterministic and
+  uses one declared time column.
+
+Exact aggregate metadata is a later hook, not a general cube engine. The
+initial safe scope is per-part or per-granule metadata for declared
+low-cardinality columns where snapshot visibility is provable:
+
+- exact row counts by dictionary key for a single column;
+- exact counts by a small configured tuple such as
+  `(kind, commit.operation, commit.collection)`;
+- optional exact distinct primary-id counts only when the metadata can prove it
+  is visibility-correct for the reader snapshot;
+- per-granule min/max for time columns already needed by mark pruning.
+
+Any aggregate metadata under `columns/aggs/<name>` must be published in the
+same WAL transaction and root group as the part descriptors, delete bitmaps,
+visibility metadata, and compaction descriptors it summarizes. If delete roots,
+update-delta tombstones, or old snapshots can change visibility, aggregate
+metadata is an acceleration candidate only after applying those visibility
+deltas, not an exact answer by itself.
 
 ## 9. Write Path
 
@@ -1459,15 +1650,17 @@ is durable, the changed row bytes live in the column-store format.
 
 Part builder steps:
 
-1. Sort rows by primary id unless input is declared sorted and verified.
+1. Sort rows by the configured `SortKey` unless input is declared sorted and
+   verified; append primary id as the deterministic tie-breaker when it is not
+   already part of the sort key.
 2. Choose part row count from `ColumnPartPolicy`.
 3. Split into granules.
-4. Build per-column substreams.
+4. Build sort-key mark metadata and per-column substreams.
 5. Choose codec pipeline per substream.
 6. Encode blocks, applying compression admission.
 7. Write column files or packed update-delta containers under
    `Dir/maindb/columns/`.
-8. Build part descriptor and primary locator run.
+8. Build part descriptor, mark refs, and primary locator run.
 9. Return ordered root publish inputs.
 
 ### 9.4 Parallelism
@@ -1513,19 +1706,19 @@ follow the same durable-pointer rules as value-log pointers.
 
 WAL-on write ordering:
 
-1. Build column parts, filters, marks, and descriptors.
+1. Build column parts, filters, marks, aggregate metadata, and descriptors.
 2. Write `TCS1` payloads, filter files, delete bitmap files, and dictionary
    files through the collection WAL side-ref prepare protocol.
 3. Fsync files, atomically rename temp files to final paths, and fsync parent
    directories before the collection WAL commit marker may reference them.
 4. Validate that the declared side-ref set matches the complete canonical
    transitive closure embedded in part descriptors, manifests, filter
-   descriptors, delete bitmap refs, dictionary refs, compression metadata refs,
-   granule roots, and root-delta values.
+   descriptors, delete bitmap refs, dictionary refs, aggregate metadata refs,
+   compression metadata refs, granule roots, and root-delta values.
 5. Append the collection WAL transaction that describes root mutations, primary
    locator changes, granule/mark changes, secondary index changes,
-   delete/tombstone changes, count/visibility metadata, part descriptor
-   additions, and every required external side ref.
+   delete/tombstone changes, count/visibility metadata, aggregate metadata,
+   part descriptor additions, and every required external side ref.
 6. Publish the root group only after the column bytes are readable at the
    required durability boundary.
 7. On recovery, replay either the complete root group or none of it.
@@ -1618,6 +1811,12 @@ ClickHouse practice to copy:
 - seekable readers need compressed offset plus offset inside decoded block;
 - raw/NONE blocks can alias payload bytes and avoid copies when safe.
 
+Benchmarks and JSONBench reports must label cache state explicitly. At minimum,
+report whether the run is cold or warm for the mark cache, decoded block cache,
+dictionary cache, and descriptor cache. Warm-cache comparisons should be
+separate from cold-cache comparisons so imported ClickHouse results and local
+TreeDB results are interpretable.
+
 ## 11. Maintenance
 
 Column-store maintenance has three jobs:
@@ -1634,6 +1833,9 @@ compact_column_parts(snapshot, source_parts, target_policy):
     acquire snapshot pins for source column files
     build merge iterator over base parts, delta parts, and delete bitmaps
     emit new row-aligned ColumnBatch chunks
+    sort chunks by configured SortKey with primary id tie-breaker
+    merge/remap part-local dictionaries into destination dictionaries
+    rebuild sparse sort-key marks and aggregate metadata
     encode chunks into new parts using target codec policy
     publish new descriptors, primary locators, delete metadata, and system root
     remove/supersede source part descriptors and obsolete delete/mark metadata
@@ -1646,8 +1848,8 @@ Column compaction, delete-bitmap compaction, and recompression that create new
 external column files must publish through collection WAL. The transaction must
 include new side refs, new descriptors, active descriptor supersession or
 deletion of source descriptors, obsolete delete/mark/filter metadata removal,
-count/visibility metadata preservation, and unchanged logical secondary-index
-state in one atomic root group.
+count/visibility and aggregate metadata preservation, and unchanged logical
+secondary-index state in one atomic root group.
 
 The compaction publish must make the active descriptor roots a replacement
 manifest for the affected key ranges, not an append-only list of all historical
@@ -1728,6 +1930,7 @@ Required output:
 - docs/sec;
 - ns/doc;
 - scan rows/sec by projection;
+- aggregate rows/sec for grouped count, min/max, and exact distinct kernels;
 - point reads/sec, cold and warm;
 - update ops/sec;
 - update-followed-by-read ops/sec;
@@ -1740,13 +1943,18 @@ Required output:
 - decode MB/sec;
 - allocations/op;
 - part count and granule count;
+- sort key, mark index bytes, granules considered, granules read, and granules
+  skipped by sort-key marks;
 - update-delta part count and maximum visible fan-in;
+- update-delta file count per batch and per 1K changed rows;
 - column WAL bytes/row and side-ref metadata bytes/row;
 - side-ref closure validation refs/sec;
 - recovery rows/sec and file refs/sec for 1K, 100K, and 1M row fixtures;
 - orphan prepare/final cleanup time and files/sec;
 - GC protected-byte debt by payload, filter, delete bitmap, dictionary,
   manifest, and compression metadata class;
+- part-local dictionary cardinality, key width, bytes, and compaction remap
+  cost;
 - read-only recovery-required scan latency without full column payload parsing;
 - maintenance rewrite stats.
 
@@ -1765,6 +1973,8 @@ with new rows:
 - `treedb_columnstore_direct_vectors`
 - `treedb_columnstore_update_then_get`
 - `treedb_columnstore_count_star`
+- `treedb_columnstore_group_count_low_cardinality`
+- `treedb_columnstore_sortkey_mark_pruning`
 
 ### 12.5 JSONBench Integration
 
@@ -1796,10 +2006,11 @@ Required harness changes:
   optionally `1000m` scales;
 - run full-document row-store/template-v1 baselines and the column-store
   fixed-schema mode from the same harness;
-- label the column-store schema, primary/sort order, secondary indexes, codec
-  profile, granule settings, durability profile, and query-cache policy in the
-  result JSON;
-- disable query result caching and document any block/mark cache warmup policy;
+- label the column-store schema, logical primary key, sort key, secondary
+  indexes, codec profile, granule settings, durability profile, and query-cache
+  policy in the result JSON;
+- disable query result caching and document cold/warm state for descriptor,
+  mark, decoded block, and dictionary caches;
 - write one `result.json` per TreeDB cell and a machine-readable `report.json`
   that can import local DuckDB and ClickHouse result directories.
 
@@ -1819,8 +2030,16 @@ Required result fields:
 - query attempts, best seconds, median seconds, rows scanned, result row count,
   and deterministic result hash;
 - total bytes, data bytes, index bytes, bytes per row, file count, part count,
-  granule count, and retained JSON structure flag;
+  granule count, mark index bytes, sort key, retained JSON structure flag, and
+  cache-state labels;
+- declared-column bytes, residual/original JSON or reconstructable payload
+  bytes, dictionary/template bytes, filter bytes, mark bytes, index bytes, and
+  delete/tombstone bytes;
+- granules considered, granules skipped by sort-key marks, granules skipped by
+  min/max or fast filters, and granules decoded;
 - codec choices and compression stats for every declared column;
+- part-local dictionary cardinality and key width for low-cardinality declared
+  columns;
 - load time, checkpoint time, optional compaction time, and maintenance stats;
 - imported DuckDB and ClickHouse rows in the aggregate report when local result
   directories are supplied.
@@ -1844,8 +2063,11 @@ Performance gates:
 - projected column-store queries that only need declared paths should beat the
   TreeDB full-document row-store baseline on `1m` and `10m`;
 - storage reporting must distinguish retained JSON bytes from declared-column
-  bytes so projection-only results are not mistaken for a full JSON storage
-  comparison.
+  bytes, residual/original JSON bytes, dictionary/template bytes, filters,
+  marks, and indexes so projection-only results are not mistaken for a full JSON
+  storage comparison;
+- `q1` through `q3` must report whether they used vector-batch aggregation,
+  aggregate metadata, or ordinary row materialization.
 
 ### 12.6 Completeness Audit
 
@@ -1875,11 +2097,13 @@ Traceability matrix:
 | Design area | RFC sections | Milestones | Required evidence |
 |---|---|---|---|
 | Fixed schema and APIs | 5.1, 6.8 | M1, M3 | schema golden tests, row/direct ingestion parity |
+| Sort key and sparse mark index | 5.1, 6.1.1, 6.4, 9.3 | M1, M5, M8 | mark golden tests, pruning diagnostics, JSONBench granule-read stats |
 | Physical layout and chunking | 6.2-6.6 | M1, M2, M3 | descriptor golden tests, chunk-size benchmarks |
 | Compression registry and chooser | 7.1-7.5 | M2, M4, M8 | codec tests, chooser stats, ratio/throughput gates |
-| Point reads and scans | 8.1-8.3 | M5 | point-read, scan, allocation, cache gates |
+| Point reads and scans | 8.1-8.3 | M5 | point-read, scan, allocation, cache, and pruning gates |
 | Fast filters and haystack search | 8.4 | M5 | false-negative tests, adapter parity, search benchmarks |
 | Fast counts | 8.5 | M5, M6 | exact count tests and count latency gates |
+| Aggregate kernels and metadata | 8.6 | M5, M8 | grouped-count/min/max/distinct parity and metadata visibility tests |
 | Collection durability | 2, 9.5 | M0.5, M1, M6 | row/column recovery tests, pointer-safety tests |
 | Writes, updates, WAL | 6.7, 9.1-9.5 | M0.5, M6 | recovery tests, update/read churn benchmarks |
 | Maintenance and GC | 11 | M6, M8 | snapshot compaction tests, reclaimed-byte gates |
@@ -1902,6 +2126,8 @@ Deliverables:
 - inventory the external JSONBench `treedb/` harness and define the
   column-store result fields needed to compare with local ClickHouse/DuckDB
   JSONBench runs;
+- add result fields for sort key, mark bytes, granules read/skipped, retained
+  JSON byte classes, and cache-state labels;
 - add machine-readable result schema and guardrail checks.
 
 Tests:
@@ -1983,9 +2209,10 @@ Deliverables:
 - `TCS1` envelope and part descriptor structs;
 - `Dir/maindb/columns/` file class with manifest-driven part layout;
 - fixed schema metadata with explicit rejection of lazy column creation;
+- explicit logical primary key versus sort-key metadata;
 - raw `NONE` fixed-width scalar columns;
 - primary `id -> row_locator` root with row-ordinal to granule mapping;
-- part descriptor root and optional granule-mark root contract;
+- part descriptor root and sparse sort-key granule-mark root contract;
 - reopen support.
 
 Tests:
@@ -1994,6 +2221,8 @@ Tests:
 - fixed-schema validation tests;
 - scalar round trips for bool/int64/float64/string-id placeholders;
 - locator-to-granule mapping tests across projected columns;
+- sort-key descriptor and mark golden tests, including primary-key-equals-sort
+  and primary-key-differs-from-sort configurations;
 - reopen parity;
 - column file GC reachable-part protection.
 
@@ -2049,6 +2278,7 @@ Deliverables:
 - bool bitpack/RLE;
 - string offsets/chars substreams;
 - low-cardinality string dictionary blocks;
+- part-local low-cardinality dictionary lifecycle and compaction remap;
 - sparse/default encoding with a threshold starting at 0.9375;
 - JSON/BSON/template-v1 row ingestion into typed vectors.
 
@@ -2057,6 +2287,7 @@ Tests:
 - null/default parity;
 - string offset corruption fuzzing;
 - low-cardinality dictionary round trip;
+- dictionary compaction remap parity and byte-accounting tests;
 - sparse threshold selection;
 - row ingestion parity against current collection APIs.
 
@@ -2110,14 +2341,19 @@ Gates:
 Deliverables:
 
 - `ScanColumnBatches`;
+- sort-key mark pruning and diagnostics;
 - min/max granule pruning;
 - null/default pruning;
 - secondary-index-to-column-batch scan path;
+- shared skip-scan planner integration for B-tree indexes and column sort-key
+  marks, linked to `https://github.com/snissn/gomap/issues/1486`;
 - shared fast-filter interfaces for typed vectors and byte haystacks;
 - set and exact bloom filters;
 - token and ngram bloom filters for byte-haystack predicates;
 - compiled single-needle and multi-needle byte searchers;
 - exact fast `count(*)` from snapshot/part metadata;
+- vector-batch aggregate kernels for grouped count, min/max, and exact distinct
+  over dictionary keys or primary ids;
 - decoded block cache;
 - mark cache.
 
@@ -2125,8 +2361,11 @@ Tests:
 
 - projected scan parity;
 - range predicate parity;
+- sort-key mark pruning parity and diagnostics tests;
 - secondary index scan parity for row ingestion and direct vector ingestion;
 - secondary-index-to-column projection parity;
+- skip-scan planner tests for composite secondary indexes and composite
+  column-store sort keys;
 - fast-filter false-negative tests;
 - filter adapter parity across column-store, row-store, template-v1, and BSON
   fixtures where the same logical fields exist;
@@ -2138,6 +2377,8 @@ Tests:
 - exact count tests across insert, update, delete, compaction, reopen, and
   active snapshots, including uncompacted delete roots and update-delta
   tombstones.
+- grouped aggregate kernel parity for low-cardinality strings, min/max time
+  columns, and exact distinct primary ids.
 
 Gates:
 
@@ -2145,6 +2386,12 @@ Gates:
 - three-column full scan >= 2.0x row-document scan rows/sec;
 - range predicate with 90 percent granule pruning >= 5.0x unpruned scan
   rows/sec;
+- sort-key prefix predicate with 90 percent mark pruning reports granules
+  read/skipped and reaches >= 5.0x unpruned scan rows/sec on the deterministic
+  fixture;
+- grouped count over dictionary-coded low-cardinality columns avoids reading
+  string char bytes and beats materializing rows by >= 3.0x on the deterministic
+  fixture;
 - negative exact-membership bloom probes prune >= 90 percent of eligible
   granules at the configured false-positive target on the deterministic
   fixture;
@@ -2164,6 +2411,7 @@ Deliverables:
 - update-delta column parts;
 - experimental granule-rewrite and hybrid update benchmarks, even if not
   productized;
+- update-delta file-count limits and packed-delta cleanup accounting;
 - delete bitmap handling;
 - compaction from base parts, delta parts, and delete bitmaps into new base
   parts;
@@ -2186,6 +2434,7 @@ Tests:
 - crash/reopen around recompression publish;
 - missing/corrupt side-ref closure member fails recovery before publishing roots;
 - column file GC/rewrite after compaction;
+- orphan prepare/final cleanup after interrupted update-delta publishes;
 - unique secondary correctness after updates;
 - crash/reopen around update-delta publish with secondary index changes.
 
@@ -2195,6 +2444,8 @@ Gates:
   70 percent of current row-store update path for the same indexed shape;
 - update-delta part count is bounded by the configured micro-batch policy and
   does not grow one durable part per row under the default bulk-update path;
+- update-delta durable file count per 1K changed rows is bounded by the packed
+  delta policy and reported in benchmark output;
 - point read immediately after update is no worse than 2.0x clean-dataset point
   read p50 and p95 on the deterministic churn fixture;
 - projected scan after 10 percent churn is no worse than 1.5x clean-dataset
@@ -2237,6 +2488,8 @@ Deliverables:
 - canonical benchmark integration;
 - JSONBench TreeDB column-store lane in the external JSONBench `treedb/`
   harness;
+- JSONBench retained-JSON byte accounting, sort-key mark diagnostics, and
+  cold/warm cache labels;
 - operational docs.
 
 Tests:
@@ -2248,6 +2501,8 @@ Tests:
 - JSONBench `q1` through `q5` result-hash parity against existing TreeDB
   row-store/template-v1 query implementations;
 - JSONBench local report import for DuckDB and ClickHouse result directories.
+- JSONBench report guardrails for declared-column bytes, retained/residual JSON
+  bytes, dictionary/template bytes, filter bytes, mark bytes, and index bytes.
 
 Gates:
 
@@ -2262,6 +2517,8 @@ Gates:
 - JSONBench `1m` column-store run completes for `q1` through `q5`, writes
   machine-readable `result.json` and `report.json`, and reports row-store and
   column-store timings from the same run;
+- JSONBench reports granules considered/read/skipped, sort-key mark bytes, and
+  cache-state labels for every query;
 - JSONBench projected column-store queries that only need declared paths beat
   the TreeDB full-document row-store baseline on `1m` and `10m`.
 
@@ -2269,39 +2526,48 @@ Gates:
 
 1. Use granules and marks as first-class storage objects.
 2. Store enough mark metadata to seek without scanning prior compressed blocks.
-3. Separate logical columns into physical substreams.
-4. Strip specialized codecs from structural substreams.
-5. Persist codec descriptions, not just method bytes.
-6. Validate codec pipelines before writing data.
-7. Use fast defaults for hot data and stronger compression during maintenance.
-8. Keep block sizes bounded: small enough for selective reads, large enough for
+3. Treat physical sort order as a separate `SortKey`/mark-index contract from
+   logical primary-key identity.
+4. Store sort-key prefix bounds so sparse marks can prune before projected
+   column decode.
+5. Separate logical columns into physical substreams.
+6. Strip specialized codecs from structural substreams.
+7. Persist codec descriptions, not just method bytes.
+8. Validate codec pipelines before writing data.
+9. Use fast defaults for hot data and stronger compression during maintenance.
+10. Keep block sizes bounded: small enough for selective reads, large enough for
    compression ratio.
-9. Cache marks and optionally cache decoded blocks.
-10. Decode directly into caller buffers when the caller consumes a whole block.
-11. Avoid copies for raw/NONE blocks when lifetime makes aliasing safe.
-12. Parallelize compression but preserve deterministic write order.
-13. Treat sparse/default-heavy columns as a storage kind, not merely a codec.
-14. Recompress through maintenance instead of making foreground writes choose
+11. Cache marks and optionally cache decoded blocks.
+12. Decode directly into caller buffers when the caller consumes a whole block.
+13. Avoid copies for raw/NONE blocks when lifetime makes aliasing safe.
+14. Parallelize compression but preserve deterministic write order.
+15. Treat sparse/default-heavy columns as a storage kind, not merely a codec.
+16. Recompress through maintenance instead of making foreground writes choose
     cold-storage codecs.
-15. Keep operational stats for raw bytes, compressed bytes, codec choices,
+17. Keep operational stats for raw bytes, compressed bytes, codec choices,
     skipped granules, and cache hit rates.
-16. Keep skip indexes and byte-haystack searchers as reusable algorithms with
-    storage-layout adapters.
-17. Use set, bloom, token bloom, ngram bloom, and text/posting-list filters as
+18. Keep skip-scan, skip indexes, and byte-haystack searchers as reusable
+    algorithms with storage-layout adapters.
+19. Use set, bloom, token bloom, ngram bloom, and text/posting-list filters as
     staged pruning layers before decoding full column blocks.
-18. Reuse and improve TreeDB's canonical compression machinery rather than
+20. Reuse and improve TreeDB's canonical compression machinery rather than
     building an isolated column-store codec stack.
-19. Keep exact row-count metadata in descriptors so trivial counts avoid data
+21. Keep exact row-count metadata in descriptors so trivial counts avoid data
     scans.
-20. Treat WAL/recovery ordering as part of the storage format, not an
+22. Add storage-aware aggregate kernels for common grouped count, min/max, and
+    exact distinct workloads before optimizing raw scan speed alone.
+23. Treat WAL/recovery ordering as part of the storage format, not an
     integration afterthought.
 
 ## 15. Risks and Mitigations
 
 | Risk | Mitigation |
 |---|---|
+| Logical primary key and column-store sort key are conflated. | Define `LogicalPrimaryKey` for identity and `SortKey` for physical clustering; test both primary-key-equals-sort and primary-key-differs-from-sort layouts. |
+| Sort-key marks are too weak to reproduce ClickHouse-style pruning. | Persist per-granule sort-key bounds and prefix summaries, report granules read/skipped, and gate sort-key prefix pruning in Milestone 5 and JSONBench. |
 | Point lookup becomes slower because a whole block is decoded for one row. | Primary locator root, decoded block cache, optional inline hot-row cache, and explicit point-read gates. |
 | Random updates cause write amplification or read amplification. | Write changed rows into bounded update-delta column parts, batch scattered point updates where allowed, benchmark against granule rewrite/hybrid strategies, and compact asynchronously. |
+| Update-delta parts create pathological file counts or leave orphan side files. | Pack small delta parts, gate durable files per update batch and per 1K changed rows, and test prepare/final cleanup after interrupted publishes. |
 | Compression burns CPU on incompressible data. | No-expansion admission, high-entropy probes, PAUSED/probe autotune, and per-column stats. |
 | Column-store compression diverges from existing TreeDB compression. | Start with wrappers around TreeDB's snappy/lz4/zstd/zstd-dict routines and migrate toward one canonical compression registry. |
 | WAL integration is underspecified. | Block persistent column writes on side-ref closure, prepare/finalize, allocator recovery, read-only recovery-required behavior, root-group publish ordering, and recovery tests. |
@@ -2313,6 +2579,8 @@ Gates:
 | Fast filters produce wrong answers. | Treat filters as pruning only, use tri-state `MayMatch`, forbid false negatives in property tests, and always verify matches on decoded rows or exact secondary entries. |
 | Haystack search semantics become confusing for non-string types. | Require explicit byte-haystack adapters; use typed filters for numeric equality/range and reserve encoded-byte substring search for explicit predicates. |
 | Fast count metadata becomes stale. | Publish count deltas in the same root group as inserts/deletes and verify across update, compaction, reopen, and snapshots. |
+| Aggregate metadata returns stale grouped counts. | Treat aggregate metadata as exact only after applying the same snapshot visibility, delete, update-delta, and compaction state as a scan; otherwise use it only as an acceleration candidate. |
+| JSONBench storage numbers look good because retained JSON was silently dropped. | Require declared-column, residual/original JSON, dictionary/template, filter, mark, index, and delete/tombstone byte accounting plus a retained-structure flag. |
 | Column file GC deletes live column parts. | Descriptors and locators are normal roots; GC reachability must scan column file references, with tests. |
 | Borrowed vector API is unsafe for general users. | Provide safe materializing APIs and document borrowed lifetime like existing borrowed APIs. |
 | ClickHouse codecs are overfit for analytical time series. | Stage codecs and keep generic compression as the baseline; require dataset-specific gates before enabling selectors. |
@@ -2324,12 +2592,14 @@ Gates:
    small inline materialized row for hot point reads?
 2. Should part descriptors live entirely in a B-tree value, or should large
    mark arrays be stored in the value log with descriptor pointers?
-3. Should column parts be sorted by primary id only, or allow alternate sort
-   keys per collection?
+3. Which workload profiles should default to `SortKey = LogicalPrimaryKey`, and
+   which should require an explicit analytical sort key before enabling the
+   column-store profile?
 4. Should secondary index values stay id-only forever, or should a later format
    add optional row-locator payloads as a point-read cache?
-5. Should compaction preserve part-level physical clustering by primary id,
-   insertion order, or a configured sort key?
+5. Which composite sort-key shapes should get skip-scan planning first, and how
+   should that share code with B-tree secondary-index skip scan from
+   `https://github.com/snissn/gomap/issues/1486`?
 6. Which ZSTD implementation should be used for generic column blocks:
    existing `snissn/compress/zstd`, `klauspost/compress/zstd`, or both behind
    a small interface?
@@ -2346,6 +2616,9 @@ Gates:
     shared package consumed by both?
 12. What churn threshold should switch updates from delta parts to granule
     rewrite or hybrid rewrite?
+13. Which exact aggregate metadata shapes are worth persisting beyond
+    `count(*)`: single-column low-cardinality counts, configured tuples,
+    time-bucketed counts, or none until JSONBench proves a need?
 
 ## 17. Adversarial Review and Applied Fixes
 
@@ -2446,6 +2719,37 @@ snapshot aggregate, visibility-adjusted part/granule metadata, or verifies
 rows. Raw immutable part totals are not exact when delete or update-delta
 visibility can hide rows.
 
+Finding: Treating TreeDB's primary id order as the only column-store order would
+miss the main ClickHouse JSONBench lesson: declared paths are useful, but
+physical clustering plus sparse marks are what let prefix predicates skip most
+granules.
+Fix: The RFC now separates `LogicalPrimaryKey` from `SortKey`, requires
+per-granule sort-key bounds and prefix summaries, and reports sort-key mark
+pruning separately from other pushdown.
+
+Finding: Composite column-store sort keys and secondary B-tree indexes will not
+always be queried from the leftmost prefix.
+Fix: The RFC links column-store planning to the skip-scan work in
+`https://github.com/snissn/gomap/issues/1486` and treats skip scan as a shared
+primitive for B-tree indexes and column part marks.
+
+Finding: JSONBench storage comparisons could look good by storing declared
+paths while quietly dropping the rest of the JSON document.
+Fix: The RFC now requires a retained JSON lane or reconstructable equivalent
+and separate byte accounting for declared columns, residual/original JSON,
+dictionaries/templates, filters, marks, indexes, and delete/tombstone data.
+
+Finding: A vector-batch scan API alone does not cover aggregate-heavy
+analytical queries such as grouped counts, exact distinct counts, and min/max.
+Fix: The RFC now adds aggregate kernels and a narrow exact aggregate metadata
+hook for low-cardinality declared columns without making PR1 a general cube
+engine.
+
+Finding: Small update-delta parts can avoid read amplification but recreate a
+file-lifecycle problem if every changed row becomes its own durable side file.
+Fix: The RFC now adds update-delta file-count limits, packed-delta accounting,
+and interrupted publish cleanup gates.
+
 ## 18. Completion Criteria for the Proposal
 
 This RFC is complete when a reviewer can answer:
@@ -2455,12 +2759,19 @@ This RFC is complete when a reviewer can answer:
 - where column bytes are stored;
 - how compression is represented and selected;
 - how fixed schemas, auto compression, and pinned per-column compression work;
+- how logical primary keys differ from column-store sort keys, and when they
+  may intentionally be the same;
+- how sparse sort-key marks and prefix summaries prune granules before
+  projected column decode;
 - how ClickHouse practices are mapped into TreeDB;
 - how secondary indexes work with column-store inserts, scans, updates,
   deletes, and compaction;
+- how skip-scan planning applies to composite secondary indexes and composite
+  column-store sort keys;
 - how reusable fast filters and byte-haystack searchers apply to column-store
   and other collection layouts;
 - how fast counts are maintained without scanning data;
+- how aggregate kernels and exact aggregate metadata remain snapshot-correct;
 - how the column-store plan is tested through the JSONBench Bluesky workload and
   compared with local ClickHouse/DuckDB JSONBench result files;
 - how WAL/recovery ordering protects column-part pointers;
