@@ -155,6 +155,13 @@ func flagSetOutput(args []string, stderr io.Writer) io.Writer {
 }
 
 func standaloneOptions(cfg cliConfig) mongogateway.StandaloneOptions {
+	// Only populate UpdateCoalescingMaxBatch when the flag was explicitly
+	// provided so that OpenStandaloneServer preserves the server default when
+	// the caller did not supply the flag.
+	coalescingBatch := 0
+	if cfg.updateCoalescingBatchSet {
+		coalescingBatch = cfg.updateCoalescingBatch
+	}
 	return mongogateway.StandaloneOptions{
 		Dir:     cfg.dir,
 		Profile: treedb.Profile(cfg.profile),
@@ -171,7 +178,7 @@ func standaloneOptions(cfg cliConfig) mongogateway.StandaloneOptions {
 		CursorIdleTimeout:           cfg.cursorIdleTimeout,
 		UpdateCoalescingMaxDelay:    cfg.updateCoalescingDelay,
 		UpdateCoalescingMaxBatchSet: cfg.updateCoalescingBatchSet,
-		UpdateCoalescingMaxBatch:    cfg.updateCoalescingBatch,
+		UpdateCoalescingMaxBatch:    coalescingBatch,
 		UpdateCoalescingIdleTTL:     cfg.updateCoalescingIdleTTL,
 	}
 }
