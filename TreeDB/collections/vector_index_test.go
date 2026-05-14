@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -97,6 +98,82 @@ func TestCollectionVectorIndexTrackedMutationErrorStats(t *testing.T) {
 	}
 	if err := index.Rebuild(); err == nil {
 		t.Fatal("rebuild unexpectedly succeeded with mismatched vector row")
+	}
+}
+
+func TestCollectionInsertOneNoIndexBSONFallbackDoesNotReenterVectorMutationLock(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	meta, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "users",
+		Options: CollectionOptions{DocumentFormat: DocumentFormatBSON},
+	})
+	if err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col := &Collection{db: d, meta: *meta}
+
+	col.vectorMutationMu.RLock()
+	vectorLockHeld := true
+	defer func() {
+		if vectorLockHeld {
+			col.vectorMutationMu.RUnlock()
+		}
+	}()
+
+	barrierStarted := make(chan struct{})
+	barrierDone := make(chan struct{})
+	go func() {
+		close(barrierStarted)
+		col.vectorMutationMu.Lock()
+		col.vectorMutationMu.Unlock()
+		close(barrierDone)
+	}()
+	<-barrierStarted
+
+	deadline := time.Now().Add(time.Second)
+	writerPending := false
+	for time.Now().Before(deadline) {
+		if !col.vectorMutationMu.TryRLock() {
+			writerPending = true
+			break
+		}
+		col.vectorMutationMu.RUnlock()
+		time.Sleep(time.Millisecond)
+	}
+	if !writerPending {
+		t.Fatal("vector mutation barrier did not block behind held read lock")
+	}
+
+	document := mustBSONCollectionDocument(t, bson.D{
+		{Key: "_id", Value: "u1"},
+		{Key: "score", Value: int32(1)},
+	})
+	insertDone := make(chan error, 1)
+	go func() {
+		_, err := col.insertOneNoIndex([]byte("u1"), document)
+		insertDone <- err
+	}()
+	select {
+	case err := <-insertDone:
+		if err != nil {
+			t.Fatalf("insert fallback: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("insert fallback blocked behind pending vector mutation barrier")
+	}
+
+	col.vectorMutationMu.RUnlock()
+	vectorLockHeld = false
+	select {
+	case <-barrierDone:
+	case <-time.After(time.Second):
+		t.Fatal("vector mutation barrier did not finish after read lock release")
 	}
 }
 

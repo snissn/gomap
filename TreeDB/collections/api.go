@@ -7989,7 +7989,7 @@ func (c *Collection) insertOneNoIndex(id, document []byte) ([]byte, error) {
 	c.meta = catalog.meta
 	if len(c.meta.Indexes) > 0 {
 		_ = snap.Close()
-		return c.insertOneViaBatch(id, document)
+		return c.insertOneViaBatchNoVectorLock(id, document)
 	}
 	plannerOptions, err := collectionPlannerOptionsForDB(c.db, c.meta)
 	if err != nil {
@@ -7998,7 +7998,7 @@ func (c *Collection) insertOneNoIndex(id, document []byte) ([]byte, error) {
 	}
 	if plannerOptions.documentFormat != DocumentFormatJSON {
 		_ = snap.Close()
-		return c.insertOneViaBatch(id, document)
+		return c.insertOneViaBatchNoVectorLock(id, document)
 	}
 	plannerOptions = collectionOptionsWithTemplateV1Resolver(plannerOptions, snap, catalog)
 	baseSystemRoot := snapshotSystemRoot(snap)
@@ -8056,6 +8056,17 @@ func (c *Collection) insertOneNoIndex(id, document []byte) ([]byte, error) {
 
 func (c *Collection) insertOneViaBatch(id, document []byte) ([]byte, error) {
 	ids, err := c.InsertBatch([][]byte{id}, [][]byte{document})
+	if err != nil {
+		return nil, err
+	}
+	if len(ids) != 1 {
+		return nil, errors.New("collections: insert returned no document id")
+	}
+	return ids[0], nil
+}
+
+func (c *Collection) insertOneViaBatchNoVectorLock(id, document []byte) ([]byte, error) {
+	ids, err := c.insertBatch([][]byte{id}, [][]byte{document}, false, nil)
 	if err != nil {
 		return nil, err
 	}
