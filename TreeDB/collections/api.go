@@ -3047,7 +3047,11 @@ func (c *Collection) Insert(id, document []byte) ([]byte, error) {
 				return nil, err
 			}
 		}
-		return c.insertOneNoIndexBuffered(id, document)
+		resultID, err := c.insertOneNoIndexBuffered(id, document)
+		if err == nil {
+			c.notifyVectorIndexesUpsert([][]byte{resultID})
+		}
+		return resultID, err
 	}
 	ids, err := c.InsertBatch([][]byte{id}, [][]byte{document})
 	if err != nil {
@@ -8904,6 +8908,9 @@ func (c *Collection) DeleteDocument(documentID []byte) (bool, error) {
 			}
 			waitBeforeCollectionMutationRetry(attempt)
 			continue
+		}
+		if err == nil && deleted {
+			c.notifyVectorIndexesDelete([][]byte{documentID})
 		}
 		return deleted, err
 	}

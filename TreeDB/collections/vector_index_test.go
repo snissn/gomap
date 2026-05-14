@@ -285,10 +285,7 @@ func TestCollectionVectorIndexTracksRegisteredMutations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build vector index: %v", err)
 	}
-	if _, err := col.InsertBatch(
-		[][]byte{[]byte("c")},
-		[][]byte{[]byte(`{"embedding":[0.9,0.1]}`)},
-	); err != nil {
+	if _, err := col.Insert([]byte("c"), []byte(`{"embedding":[0.9,0.1]}`)); err != nil {
 		t.Fatalf("insert tracked c: %v", err)
 	}
 	results, _, err := index.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 2, DisableExactFallback: true})
@@ -307,9 +304,9 @@ func TestCollectionVectorIndexTracksRegisteredMutations(t *testing.T) {
 	}
 	requireVectorResultIDs(t, results, "a", "b", "c")
 
-	deleted, err := col.DeleteBatch([][]byte{[]byte("a")})
-	if err != nil || deleted != 1 {
-		t.Fatalf("delete a deleted=%d err=%v", deleted, err)
+	deleted, err := col.DeleteDocument([]byte("a"))
+	if err != nil || !deleted {
+		t.Fatalf("delete a deleted=%v err=%v", deleted, err)
 	}
 	results, _, err = index.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 2, DisableExactFallback: true})
 	if err != nil {
