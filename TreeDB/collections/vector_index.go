@@ -124,11 +124,13 @@ type VectorIndex struct {
 	efSearch            int
 	rebuildDeletedRatio float64
 
-	mu          sync.RWMutex
-	nodes       []vectorIndexNode
-	currentNode map[string]int
-	entry       int
-	maxLevel    int
+	mu            sync.RWMutex
+	nodes         []vectorIndexNode
+	currentNode   map[string]int
+	entry         int
+	maxLevel      int
+	insertScratch vectorIndexSearchScratch
+	searchScratch sync.Pool
 
 	mutationSeq            uint64
 	persistedEpoch         uint64
@@ -438,7 +440,7 @@ func (idx *VectorIndex) insertVectorLocked(documentID []byte, vector []float32) 
 		entryPoint = idx.greedyNearestAtLayerLocked(vector, vectorNorm, entryPoint, layer)
 	}
 	for layer := minInt(level, idx.maxLevel); layer >= 0; layer-- {
-		candidates := idx.searchLayerLocked(vector, vectorNorm, entryPoint, idx.efConstruction, layer)
+		candidates := idx.searchLayerWithScratchLocked(vector, vectorNorm, entryPoint, idx.efConstruction, layer, &idx.insertScratch)
 		neighbors := idx.selectLayerNeighborsLocked(vector, vectorNorm, candidates, layer, idx.maxNeighborsForLayer(layer), nodeID)
 		for _, neighborID := range neighbors {
 			idx.linkLayerLocked(nodeID, neighborID, layer)
@@ -726,7 +728,8 @@ func (idx *VectorIndex) Search(query []float32, opts VectorIndexSearchOptions) (
 		trace.Strategy = "ann_postfilter"
 	}
 	idx.mu.RLock()
-	candidates := idx.searchCandidatesLocked(query, queryNorm, candidateLimit)
+	scratch := idx.getSearchScratch()
+	candidates := idx.searchCandidatesLocked(query, queryNorm, candidateLimit, scratch)
 	trace.CandidatesExamined = len(candidates)
 	candidateIDs := make([][]byte, 0, len(candidates))
 	for _, candidate := range candidates {
@@ -743,6 +746,7 @@ func (idx *VectorIndex) Search(query []float32, opts VectorIndexSearchOptions) (
 		}
 		candidateIDs = append(candidateIDs, bytes.Clone(node.documentID))
 	}
+	idx.putSearchScratch(scratch)
 	idx.mu.RUnlock()
 	trace.CandidatesAfterTombstone = len(candidateIDs)
 
@@ -814,7 +818,8 @@ func (idx *VectorIndex) searchGraphOnly(query []float32, topK, efSearch int) ([]
 	if limit < topK {
 		limit = topK
 	}
-	candidates := idx.searchCandidatesLocked(query, queryNorm, limit)
+	scratch := idx.getSearchScratch()
+	candidates := idx.searchCandidatesLocked(query, queryNorm, limit, scratch)
 	results := make([]VectorSearchResult, 0, minInt(topK, len(candidates)))
 	for _, candidate := range candidates {
 		if len(results) >= topK {
@@ -836,6 +841,7 @@ func (idx *VectorIndex) searchGraphOnly(query []float32, topK, efSearch int) ([]
 			Distance:   candidate.distance,
 		})
 	}
+	idx.putSearchScratch(scratch)
 	return results, nil
 }
 
@@ -899,7 +905,7 @@ func (idx *VectorIndex) rerankCandidates(query []float32, candidateIDs [][]byte,
 	return results, nil
 }
 
-func (idx *VectorIndex) searchCandidatesLocked(query []float32, queryNormSquared float64, limit int) []vectorIndexCandidate {
+func (idx *VectorIndex) searchCandidatesLocked(query []float32, queryNormSquared float64, limit int, scratch *vectorIndexSearchScratch) []vectorIndexCandidate {
 	if idx.entry < 0 || len(idx.nodes) == 0 || limit <= 0 {
 		return nil
 	}
@@ -907,7 +913,7 @@ func (idx *VectorIndex) searchCandidatesLocked(query []float32, queryNormSquared
 	for layer := idx.maxLevel; layer > 0; layer-- {
 		entryPoint = idx.greedyNearestAtLayerLocked(query, queryNormSquared, entryPoint, layer)
 	}
-	return idx.searchLayerLocked(query, queryNormSquared, entryPoint, limit, 0)
+	return idx.searchLayerWithScratchLocked(query, queryNormSquared, entryPoint, limit, 0, scratch)
 }
 
 func (idx *VectorIndex) greedyNearestAtLayerLocked(query []float32, queryNormSquared float64, entryPoint int, layer int) int {
@@ -932,6 +938,24 @@ func (idx *VectorIndex) greedyNearestAtLayerLocked(query []float32, queryNormSqu
 }
 
 func (idx *VectorIndex) searchLayerLocked(query []float32, queryNormSquared float64, entryPoint int, limit int, layer int) []vectorIndexCandidate {
+	return idx.searchLayerWithScratchLocked(query, queryNormSquared, entryPoint, limit, layer, nil)
+}
+
+func (idx *VectorIndex) getSearchScratch() *vectorIndexSearchScratch {
+	if scratch, ok := idx.searchScratch.Get().(*vectorIndexSearchScratch); ok {
+		return scratch
+	}
+	return &vectorIndexSearchScratch{}
+}
+
+func (idx *VectorIndex) putSearchScratch(scratch *vectorIndexSearchScratch) {
+	if scratch == nil {
+		return
+	}
+	idx.searchScratch.Put(scratch)
+}
+
+func (idx *VectorIndex) searchLayerWithScratchLocked(query []float32, queryNormSquared float64, entryPoint int, limit int, layer int, scratch *vectorIndexSearchScratch) []vectorIndexCandidate {
 	if entryPoint < 0 || entryPoint >= len(idx.nodes) || limit <= 0 {
 		return nil
 	}
@@ -939,12 +963,15 @@ func (idx *VectorIndex) searchLayerLocked(query []float32, queryNormSquared floa
 	if math.IsInf(float64(entryDistance), 1) {
 		return nil
 	}
-	visited := make([]bool, len(idx.nodes))
-	visited[entryPoint] = true
+	if scratch == nil {
+		scratch = &vectorIndexSearchScratch{}
+	}
+	visited, mark := scratch.nextVisitedEpoch(len(idx.nodes))
+	visited[entryPoint] = mark
 	entry := vectorIndexCandidate{nodeID: entryPoint, distance: entryDistance}
-	queue := make(vectorIndexMinCandidateHeap, 0, minInt(limit, 64))
+	queue := scratch.queue[:0]
 	queue.push(entry)
-	best := make(vectorIndexMaxCandidateHeap, 0, limit)
+	best := scratch.best[:0]
 	best.pushBounded(entry, limit)
 	for len(queue) > 0 {
 		current := queue.pop()
@@ -955,10 +982,10 @@ func (idx *VectorIndex) searchLayerLocked(query []float32, queryNormSquared floa
 			continue
 		}
 		for _, neighborID := range idx.layerNeighborsLocked(current.nodeID, layer) {
-			if neighborID < 0 || neighborID >= len(idx.nodes) || visited[neighborID] {
+			if neighborID < 0 || neighborID >= len(idx.nodes) || visited[neighborID] == mark {
 				continue
 			}
-			visited[neighborID] = true
+			visited[neighborID] = mark
 			distance := idx.distanceToNodeWithQueryNormLocked(query, queryNormSquared, neighborID)
 			if math.IsInf(float64(distance), 1) {
 				continue
@@ -970,7 +997,10 @@ func (idx *VectorIndex) searchLayerLocked(query []float32, queryNormSquared floa
 			}
 		}
 	}
-	out := append([]vectorIndexCandidate(nil), best...)
+	scratch.queue = queue[:0]
+	scratch.best = best[:0]
+	out := append(scratch.out[:0], best...)
+	scratch.out = out
 	sortVectorIndexCandidates(out)
 	return out
 }
@@ -1204,6 +1234,39 @@ func (node *vectorIndexNode) vectorBytes() int {
 type vectorIndexCandidate struct {
 	nodeID   int
 	distance float32
+}
+
+type vectorIndexSearchScratch struct {
+	visitedEpochs []uint32
+	visitedEpoch  uint32
+	queue         vectorIndexMinCandidateHeap
+	best          vectorIndexMaxCandidateHeap
+	out           []vectorIndexCandidate
+}
+
+func (scratch *vectorIndexSearchScratch) nextVisitedEpoch(nodes int) ([]uint32, uint32) {
+	if cap(scratch.visitedEpochs) < nodes {
+		scratch.visitedEpochs = make([]uint32, nodes, growVectorIndexScratchCapacity(cap(scratch.visitedEpochs), nodes))
+	} else {
+		scratch.visitedEpochs = scratch.visitedEpochs[:nodes]
+	}
+	scratch.visitedEpoch++
+	if scratch.visitedEpoch == 0 {
+		clear(scratch.visitedEpochs)
+		scratch.visitedEpoch = 1
+	}
+	return scratch.visitedEpochs, scratch.visitedEpoch
+}
+
+func growVectorIndexScratchCapacity(current int, required int) int {
+	next := current
+	if next < 64 {
+		next = 64
+	}
+	for next < required {
+		next *= 2
+	}
+	return next
 }
 
 func sortVectorIndexCandidates(candidates []vectorIndexCandidate) {

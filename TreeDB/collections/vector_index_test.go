@@ -144,6 +144,68 @@ func TestVectorIndexFloat32CosineSpecializationMatchesExactDistance(t *testing.T
 	}
 }
 
+func TestVectorIndexSearchLayerScratchReusesBuffers(t *testing.T) {
+	index, err := newVectorIndex(nil, VectorIndexOptions{
+		Name:   "embedding",
+		Field:  "embedding",
+		Metric: VectorMetricCosine,
+	})
+	if err != nil {
+		t.Fatalf("new vector index: %v", err)
+	}
+	index.nodes = []vectorIndexNode{
+		{documentID: []byte("a"), vector: []float32{1, 0}, neighbors: [][]int{{1, 2}}},
+		{documentID: []byte("b"), vector: []float32{0.9, 0.1}, neighbors: [][]int{{0, 2}}},
+		{documentID: []byte("c"), vector: []float32{0, 1}, neighbors: [][]int{{0, 1}}},
+	}
+	for i := range index.nodes {
+		index.nodes[i].normSquared = index.nodes[i].storedNormSquared()
+	}
+	var scratch vectorIndexSearchScratch
+	query := []float32{1, 0}
+	queryNorm := vectorNormSquared(query)
+
+	first := index.searchLayerWithScratchLocked(query, queryNorm, 0, 3, 0, &scratch)
+	if len(first) != 3 || first[0].nodeID != 0 || first[1].nodeID != 1 || first[2].nodeID != 2 {
+		t.Fatalf("first candidates=%v want node IDs [0 1 2]", first)
+	}
+	if len(scratch.visitedEpochs) != len(index.nodes) || cap(scratch.queue) == 0 || cap(scratch.best) == 0 || cap(scratch.out) == 0 {
+		t.Fatalf("scratch was not populated: visited=%d queue_cap=%d best_cap=%d out_cap=%d", len(scratch.visitedEpochs), cap(scratch.queue), cap(scratch.best), cap(scratch.out))
+	}
+	visited := &scratch.visitedEpochs[0]
+	queueCap := cap(scratch.queue)
+	bestCap := cap(scratch.best)
+	outCap := cap(scratch.out)
+
+	second := index.searchLayerWithScratchLocked(query, queryNorm, 0, 3, 0, &scratch)
+	if len(second) != len(first) {
+		t.Fatalf("second candidates=%v want len %d", second, len(first))
+	}
+	if &scratch.visitedEpochs[0] != visited || cap(scratch.queue) != queueCap || cap(scratch.best) != bestCap || cap(scratch.out) != outCap {
+		t.Fatal("scratch buffers were not reused")
+	}
+}
+
+func TestVectorIndexSearchScratchVisitedEpochsGrowGeometrically(t *testing.T) {
+	var scratch vectorIndexSearchScratch
+
+	scratch.nextVisitedEpoch(64)
+	if cap(scratch.visitedEpochs) != 64 {
+		t.Fatalf("initial visited cap=%d want 64", cap(scratch.visitedEpochs))
+	}
+	scratch.nextVisitedEpoch(65)
+	if cap(scratch.visitedEpochs) != 128 {
+		t.Fatalf("visited cap after one-node growth=%d want 128", cap(scratch.visitedEpochs))
+	}
+	visited := &scratch.visitedEpochs[0]
+	for nodes := 66; nodes <= 128; nodes++ {
+		scratch.nextVisitedEpoch(nodes)
+		if &scratch.visitedEpochs[0] != visited {
+			t.Fatalf("visited epochs reallocated at nodes=%d before capacity was exhausted", nodes)
+		}
+	}
+}
+
 func TestCollectionVectorIndexInt8EncodingReranksCanonicalRows(t *testing.T) {
 	const (
 		docs = 24
