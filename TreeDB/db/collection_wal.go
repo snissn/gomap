@@ -108,24 +108,24 @@ func (db *DB) MarkCollectionWALRecoveryRequired() {
 	}
 }
 
-func (db *DB) writeCollectionWALStats(stats map[string]string) {
+func (db *DB) writeCollectionWALStats(stats map[string]string, view *Snapshot) {
 	if stats == nil {
 		return
 	}
-	snap := db.CollectionWALStatsSnapshot()
+	walStats := db.CollectionWALStatsSnapshot()
 	put := func(key string, value uint64) {
 		stats["treedb.collection_wal."+key] = fmt.Sprintf("%d", value)
 	}
-	put("append.txns_total", snap.AppendTxnsTotal)
-	put("append.docs_total", snap.AppendDocsTotal)
-	put("append.bytes_total", snap.AppendBytesTotal)
-	put("append.side_refs_total", snap.AppendSideRefsTotal)
-	put("append.latency_ns_total", snap.AppendLatencyNSTotal)
-	put("append.flush_ns_total", snap.AppendFlushNSTotal)
-	put("append.sync_ns_total", snap.AppendSyncNSTotal)
-	put("append.failures_total", snap.AppendFailuresTotal)
+	put("append.txns_total", walStats.AppendTxnsTotal)
+	put("append.docs_total", walStats.AppendDocsTotal)
+	put("append.bytes_total", walStats.AppendBytesTotal)
+	put("append.side_refs_total", walStats.AppendSideRefsTotal)
+	put("append.latency_ns_total", walStats.AppendLatencyNSTotal)
+	put("append.flush_ns_total", walStats.AppendFlushNSTotal)
+	put("append.sync_ns_total", walStats.AppendSyncNSTotal)
+	put("append.failures_total", walStats.AppendFailuresTotal)
 	for _, category := range collectionwal.AllErrorCategories() {
-		put("append.failures."+string(category)+"_total", snap.AppendFailuresByCategory[category])
+		put("append.failures."+string(category)+"_total", walStats.AppendFailuresByCategory[category])
 	}
 	put("pending.txns_current", 0)
 	put("pending.docs_current", 0)
@@ -135,10 +135,10 @@ func (db *DB) writeCollectionWALStats(stats map[string]string) {
 	put("pending.side_ref_logical_bytes_current", 0)
 	put("pending.unpublished_root_delta_entries_current", 0)
 	put("pending.oldest_age_ms", 0)
-	put("segment.open_current", snap.RetainedSegments)
-	put("segment.bytes_current", snap.RetainedBytes)
+	put("segment.open_current", walStats.RetainedSegments)
+	put("segment.bytes_current", walStats.RetainedBytes)
 	put("segment.cleanable_current", 0)
-	put("segment.blocked_current", snap.RetainedSegments)
+	put("segment.blocked_current", walStats.RetainedSegments)
 	put("side_ref.protected.count_current", 0)
 	put("side_ref.protected.bytes_current", 0)
 	put("side_ref.protected.logical_bytes_current", 0)
@@ -146,36 +146,36 @@ func (db *DB) writeCollectionWALStats(stats map[string]string) {
 	put("side_ref.protected.oldest_age_ms", 0)
 	put("applied_watermark.lag_txns_current", 0)
 	put("applied_watermark.lag_bytes_current", 0)
-	put("cleanup.debt.bytes_current", snap.RetainedBytes)
-	put("cleanup.debt.segments_current", snap.RetainedSegments)
+	put("cleanup.debt.bytes_current", walStats.RetainedBytes)
+	put("cleanup.debt.segments_current", walStats.RetainedSegments)
 	put("cleanup.lag_txns_current", 0)
 	put("cleanup.lag_bytes_current", 0)
-	put("cleanup.failures_total", snap.CleanupFailure)
-	for _, watermark := range db.collectionWALWatermarkArtifacts() {
+	put("cleanup.failures_total", walStats.CleanupFailure)
+	for _, watermark := range collectionWALWatermarkArtifactsForSnapshot(view) {
 		if watermark.Malformed || watermark.CollectionUIDHash == "" {
 			continue
 		}
 		put("by_collection."+watermark.CollectionUIDHash+".applied_seq_current", watermark.AppliedSeq)
 	}
-	put("recovery.opens_total", snap.RecoveryOpensTotal)
-	put("recovery.duration_last_ms", snap.RecoveryDurationLastMS)
-	put("recovery.duration_ns_total", snap.RecoveryDurationNSTotal)
-	put("recovery.replayed_txns_total", snap.RecoveryReplay)
-	put("recovery.skipped_tail_txns_total", snap.RecoveryTailSkip)
-	put("recovery.skipped_watermark_txns_total", snap.RecoveryWatermarkSkip)
-	put("recovery.blocked_txns_total", snap.RecoveryBlockedTotal)
-	put("recovery.failures_total", snap.RecoveryHardFailure)
-	put("recovery.failures.total", snap.RecoveryHardFailure)
+	put("recovery.opens_total", walStats.RecoveryOpensTotal)
+	put("recovery.duration_last_ms", walStats.RecoveryDurationLastMS)
+	put("recovery.duration_ns_total", walStats.RecoveryDurationNSTotal)
+	put("recovery.replayed_txns_total", walStats.RecoveryReplay)
+	put("recovery.skipped_tail_txns_total", walStats.RecoveryTailSkip)
+	put("recovery.skipped_watermark_txns_total", walStats.RecoveryWatermarkSkip)
+	put("recovery.blocked_txns_total", walStats.RecoveryBlockedTotal)
+	put("recovery.failures_total", walStats.RecoveryHardFailure)
+	put("recovery.failures.total", walStats.RecoveryHardFailure)
 	for _, category := range collectionwal.AllErrorCategories() {
-		put("recovery.failures."+string(category)+"_total", snap.RecoveryFailuresByCategory[category])
+		put("recovery.failures."+string(category)+"_total", walStats.RecoveryFailuresByCategory[category])
 	}
-	stats["treedb.collection_wal.recovery.last_failure_category"] = string(snap.RecoveryLastFailureCategory)
-	put("recovery.last_failure_wallsn", snap.RecoveryLastFailureWALLSN)
-	put("recovery.last_failure_collection_seq", snap.RecoveryLastFailureSeq)
-	put("recovery.artifacts_written_total", snap.RecoveryArtifactsWritten)
-	put("recovery.artifact_write_failures_total", snap.RecoveryArtifactWriteFailure)
-	put("value_log_gc.blocked_bytes_current", snap.ValueLogGCBlockerBytes)
-	put("value_log_gc.blocked_segments_current", snap.ValueLogGCBlockerSegments)
+	stats["treedb.collection_wal.recovery.last_failure_category"] = string(walStats.RecoveryLastFailureCategory)
+	put("recovery.last_failure_wallsn", walStats.RecoveryLastFailureWALLSN)
+	put("recovery.last_failure_collection_seq", walStats.RecoveryLastFailureSeq)
+	put("recovery.artifacts_written_total", walStats.RecoveryArtifactsWritten)
+	put("recovery.artifact_write_failures_total", walStats.RecoveryArtifactWriteFailure)
+	put("value_log_gc.blocked_bytes_current", walStats.ValueLogGCBlockerBytes)
+	put("value_log_gc.blocked_segments_current", walStats.ValueLogGCBlockerSegments)
 	put("value_log_gc.blocked_side_refs_current", 0)
 	put("value_log_gc.blocked_by_pending_txns_current", 0)
 	put("value_log_gc.blocked_bytes_total", 0)

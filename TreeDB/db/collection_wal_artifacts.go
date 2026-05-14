@@ -158,6 +158,20 @@ func (db *DB) collectionWALWatermarkArtifacts() []collectionWALWatermarkArtifact
 	return watermarks
 }
 
+func collectionWALWatermarkArtifactsForSnapshot(snap *Snapshot) []collectionWALWatermarkArtifact {
+	watermarks, _ := collectionWALWatermarkArtifactDataForSnapshot(snap)
+	return watermarks
+}
+
+func collectionWALWatermarkArtifactDataForSnapshot(snap *Snapshot) ([]collectionWALWatermarkArtifact, string) {
+	if snap == nil || snap.idx == nil || snap.idx.pager == nil || snap.state == nil || snap.state.SystemRootPageID == 0 {
+		return nil, ""
+	}
+	prefix := []byte(systemCollectionWALAppliedPrefix)
+	tr := tree.New(snap.idx.pager, &snap.reader, snap.state.SystemRootPageID)
+	return collectionWALWatermarkArtifactDataFromTree(tr, prefix)
+}
+
 func (db *DB) collectionWALWatermarkArtifactData() ([]collectionWALWatermarkArtifact, string) {
 	if db == nil {
 		return nil, collectionWALArtifactErrorType(ErrClosed)
@@ -168,6 +182,10 @@ func (db *DB) collectionWALWatermarkArtifactData() ([]collectionWALWatermarkArti
 	}
 	prefix := []byte(systemCollectionWALAppliedPrefix)
 	tr := tree.New(idx.pager, db.collectionWALSystemRootReader(), db.meta.SystemRootPageID)
+	return collectionWALWatermarkArtifactDataFromTree(tr, prefix)
+}
+
+func collectionWALWatermarkArtifactDataFromTree(tr *tree.Tree, prefix []byte) ([]collectionWALWatermarkArtifact, string) {
 	it := tr.IteratorWithOptions(prefix, collectionWALPrefixEnd(prefix), tree.IteratorOptions{})
 	defer func() { _ = it.Close() }()
 	var watermarks []collectionWALWatermarkArtifact
