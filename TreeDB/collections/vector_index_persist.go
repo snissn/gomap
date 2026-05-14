@@ -237,6 +237,8 @@ func (c *Collection) LoadVectorIndexSnapshot(opts VectorIndexOptions) (*VectorIn
 		status.ExactFallbackReason = reason
 		return nil, status, nil
 	}
+	unlockVectorMutation := c.lockVectorIndexMutationBarrier()
+	defer unlockVectorMutation()
 	marker, err := c.vectorIndexCollectionMarker()
 	if err != nil {
 		return nil, status, err
@@ -266,7 +268,9 @@ func (c *Collection) LoadVectorIndexSnapshot(opts VectorIndexOptions) (*VectorIn
 	status.Epoch = manifest.Epoch
 	status.BytesDisk = vectorIndexSnapshotBytes(manifestData, manifest.Files)
 	index.recordLoadedSnapshot(status.Epoch, status.BytesDisk)
-	c.RegisterVectorIndex(index)
+	c.vectorIndexesMu.Lock()
+	c.registerVectorIndexLocked(index)
+	c.vectorIndexesMu.Unlock()
 	return index, status, nil
 }
 

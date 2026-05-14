@@ -309,7 +309,7 @@ type Collection struct {
 	updateStatsMu     sync.RWMutex
 	lastUpdateStats   CollectionUpdateStats
 	vectorIndexesMu   sync.RWMutex
-	vectorMutationMu  sync.Mutex
+	vectorMutationMu  sync.RWMutex
 	vectorIndexes     map[string]*VectorIndex
 }
 

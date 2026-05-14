@@ -161,6 +161,8 @@ func (c *Collection) BuildVectorIndex(opts VectorIndexOptions) (*VectorIndex, er
 	if c == nil {
 		return nil, errCollectionNil
 	}
+	unlockVectorMutation := c.lockVectorIndexMutationBarrier()
+	defer unlockVectorMutation()
 	c.vectorIndexesMu.Lock()
 	defer c.vectorIndexesMu.Unlock()
 	index, err := c.buildVectorIndexLocked(opts)
@@ -290,6 +292,8 @@ func (c *Collection) RegisterVectorIndex(index *VectorIndex) {
 	if c == nil || index == nil {
 		return
 	}
+	unlockVectorMutation := c.lockVectorIndexMutationBarrier()
+	defer unlockVectorMutation()
 	c.vectorIndexesMu.Lock()
 	defer c.vectorIndexesMu.Unlock()
 	c.registerVectorIndexLocked(index)
@@ -332,20 +336,12 @@ func (c *Collection) registeredVectorIndexes() []*VectorIndex {
 	return out
 }
 
-func (c *Collection) hasRegisteredVectorIndexes() bool {
-	if c == nil {
-		return false
-	}
-	c.vectorIndexesMu.RLock()
-	defer c.vectorIndexesMu.RUnlock()
-	return len(c.vectorIndexes) != 0
-}
-
 func (c *Collection) lockVectorIndexMutation() func() {
-	if !c.hasRegisteredVectorIndexes() {
+	if c == nil {
 		return func() {}
 	}
-	return c.lockVectorIndexMutationBarrier()
+	c.vectorMutationMu.RLock()
+	return c.vectorMutationMu.RUnlock
 }
 
 func (c *Collection) lockVectorIndexMutationBarrier() func() {
@@ -1434,6 +1430,8 @@ func (idx *VectorIndex) Rebuild() error {
 		return errCollectionNil
 	}
 	start := time.Now()
+	unlockVectorMutation := idx.collection.lockVectorIndexMutationBarrier()
+	defer unlockVectorMutation()
 	idx.collection.vectorIndexesMu.Lock()
 	defer idx.collection.vectorIndexesMu.Unlock()
 
