@@ -505,6 +505,36 @@ type CollectionUpdateIndexStats struct {
 	SecondaryKeyBytes int
 }
 
+// CollectionUpdateCombineBucketCount is the number of power-of-two buckets used
+// for update-combiner queue-depth and batch-size observations.
+const CollectionUpdateCombineBucketCount = 10
+
+var collectionUpdateCombineBucketUpperBounds = [CollectionUpdateCombineBucketCount]int{
+	1, 2, 4, 8, 16, 32, 64, 128, 256, 0,
+}
+
+// CollectionUpdateCombineBucketLabel returns the stable metric suffix for an
+// update-combiner bucket. The final bucket is an overflow bucket.
+func CollectionUpdateCombineBucketLabel(index int) string {
+	if index < 0 || index >= CollectionUpdateCombineBucketCount {
+		return ""
+	}
+	upper := collectionUpdateCombineBucketUpperBounds[index]
+	if upper > 0 {
+		return fmt.Sprintf("le_%d", upper)
+	}
+	return fmt.Sprintf("gt_%d", collectionUpdateCombineBucketUpperBounds[index-1])
+}
+
+func collectionUpdateCombineBucketIndex(value int) int {
+	for i, upper := range collectionUpdateCombineBucketUpperBounds {
+		if upper == 0 || value <= upper {
+			return i
+		}
+	}
+	return CollectionUpdateCombineBucketCount - 1
+}
+
 // CollectionManagerStats captures aggregate write-domain counters for a
 // CollectionManager. The counters are process-local observability; they are
 // not persisted with collection metadata.
@@ -573,8 +603,12 @@ type CollectionManagerStats struct {
 	UpdateCombineInlineRequests    uint64
 	UpdateCombineEnqueue           time.Duration
 	UpdateCombineWait              time.Duration
+	UpdateCombineQueueWait         time.Duration
 	UpdateCombineDrain             time.Duration
 	UpdateCombineRun               time.Duration
+	UpdateCombineResultDelivery    time.Duration
+	UpdateCombineQueueDepthBuckets [CollectionUpdateCombineBucketCount]uint64
+	UpdateCombineBatchSizeBuckets  [CollectionUpdateCombineBucketCount]uint64
 	UpdateBatchCalls               uint64
 	UpdateBatchItems               uint64
 	UpdateBatchMatched             uint64
@@ -978,8 +1012,12 @@ type collectionWriteDomain struct {
 	updateInlineItems                  [1]updateBatchItem
 	updateCombineEnqueueNs             atomic.Uint64
 	updateCombineWaitNs                atomic.Uint64
+	updateCombineQueueWaitNs           atomic.Uint64
 	updateCombineDrainNs               atomic.Uint64
 	updateCombineRunNs                 atomic.Uint64
+	updateCombineResultDeliveryNs      atomic.Uint64
+	updateCombineQueueDepthBuckets     [CollectionUpdateCombineBucketCount]atomic.Uint64
+	updateCombineBatchSizeBuckets      [CollectionUpdateCombineBucketCount]atomic.Uint64
 	updateBatchCalls                   atomic.Uint64
 	updateBatchItems                   atomic.Uint64
 	updateBatchMatched                 atomic.Uint64
@@ -1265,8 +1303,24 @@ func (m *CollectionManager) Stats() map[string]string {
 	out["treedb.collections.write_domain.update_combine.inline_requests_total"] = fmt.Sprintf("%d", stats.UpdateCombineInlineRequests)
 	out["treedb.collections.write_domain.update_combine.enqueue_ns_total"] = fmt.Sprintf("%d", stats.UpdateCombineEnqueue.Nanoseconds())
 	out["treedb.collections.write_domain.update_combine.wait_ns_total"] = fmt.Sprintf("%d", stats.UpdateCombineWait.Nanoseconds())
+	out["treedb.collections.write_domain.update_combine.queue_wait_ns_total"] = fmt.Sprintf("%d", stats.UpdateCombineQueueWait.Nanoseconds())
 	out["treedb.collections.write_domain.update_combine.drain_ns_total"] = fmt.Sprintf("%d", stats.UpdateCombineDrain.Nanoseconds())
 	out["treedb.collections.write_domain.update_combine.run_ns_total"] = fmt.Sprintf("%d", stats.UpdateCombineRun.Nanoseconds())
+	out["treedb.collections.write_domain.update_combine.result_delivery_ns_total"] = fmt.Sprintf("%d", stats.UpdateCombineResultDelivery.Nanoseconds())
+	for i, count := range stats.UpdateCombineQueueDepthBuckets {
+		label := CollectionUpdateCombineBucketLabel(i)
+		if label == "" {
+			continue
+		}
+		out["treedb.collections.write_domain.update_combine.queue_depth_bucket_"+label+"_total"] = fmt.Sprintf("%d", count)
+	}
+	for i, count := range stats.UpdateCombineBatchSizeBuckets {
+		label := CollectionUpdateCombineBucketLabel(i)
+		if label == "" {
+			continue
+		}
+		out["treedb.collections.write_domain.update_combine.batch_size_bucket_"+label+"_total"] = fmt.Sprintf("%d", count)
+	}
 	out["treedb.collections.write_domain.update_batch.calls_total"] = fmt.Sprintf("%d", stats.UpdateBatchCalls)
 	out["treedb.collections.write_domain.update_batch.items_total"] = fmt.Sprintf("%d", stats.UpdateBatchItems)
 	out["treedb.collections.write_domain.update_batch.matched_total"] = fmt.Sprintf("%d", stats.UpdateBatchMatched)
@@ -1502,8 +1556,14 @@ func (s *CollectionManagerStats) add(other CollectionManagerStats) {
 	s.UpdateCombineInlineRequests += other.UpdateCombineInlineRequests
 	s.UpdateCombineEnqueue += other.UpdateCombineEnqueue
 	s.UpdateCombineWait += other.UpdateCombineWait
+	s.UpdateCombineQueueWait += other.UpdateCombineQueueWait
 	s.UpdateCombineDrain += other.UpdateCombineDrain
 	s.UpdateCombineRun += other.UpdateCombineRun
+	s.UpdateCombineResultDelivery += other.UpdateCombineResultDelivery
+	for i := range s.UpdateCombineQueueDepthBuckets {
+		s.UpdateCombineQueueDepthBuckets[i] += other.UpdateCombineQueueDepthBuckets[i]
+		s.UpdateCombineBatchSizeBuckets[i] += other.UpdateCombineBatchSizeBuckets[i]
+	}
 	s.UpdateBatchCalls += other.UpdateBatchCalls
 	s.UpdateBatchItems += other.UpdateBatchItems
 	s.UpdateBatchMatched += other.UpdateBatchMatched
@@ -1633,8 +1693,14 @@ func (domain *collectionWriteDomain) statsSnapshot() CollectionManagerStats {
 	stats.UpdateCombineInlineRequests = domain.updateCombineInlineRequests.Load()
 	stats.UpdateCombineEnqueue = durationFromAtomicNs(domain.updateCombineEnqueueNs.Load())
 	stats.UpdateCombineWait = durationFromAtomicNs(domain.updateCombineWaitNs.Load())
+	stats.UpdateCombineQueueWait = durationFromAtomicNs(domain.updateCombineQueueWaitNs.Load())
 	stats.UpdateCombineDrain = durationFromAtomicNs(domain.updateCombineDrainNs.Load())
 	stats.UpdateCombineRun = durationFromAtomicNs(domain.updateCombineRunNs.Load())
+	stats.UpdateCombineResultDelivery = durationFromAtomicNs(domain.updateCombineResultDeliveryNs.Load())
+	for i := range stats.UpdateCombineQueueDepthBuckets {
+		stats.UpdateCombineQueueDepthBuckets[i] = domain.updateCombineQueueDepthBuckets[i].Load()
+		stats.UpdateCombineBatchSizeBuckets[i] = domain.updateCombineBatchSizeBuckets[i].Load()
+	}
 	stats.UpdateBatchCalls = domain.updateBatchCalls.Load()
 	stats.UpdateBatchItems = domain.updateBatchItems.Load()
 	stats.UpdateBatchMatched = domain.updateBatchMatched.Load()
@@ -2163,6 +2229,9 @@ func (domain *collectionWriteDomain) observeUpdateCombineRequest(queueDepth int)
 	domain.updateCombineLastRequestUnixNano.Store(time.Now().UnixNano())
 	if queueDepth > 0 {
 		atomicMaxUint64(&domain.updateCombineQueueDepthMax, uint64(queueDepth))
+		if domain.updateBatchDetailedStats.Load() {
+			domain.updateCombineQueueDepthBuckets[collectionUpdateCombineBucketIndex(queueDepth)].Add(1)
+		}
 	}
 }
 
@@ -2187,6 +2256,13 @@ func (domain *collectionWriteDomain) observeUpdateCombineWait(d time.Duration) {
 	domain.updateCombineWaitNs.Add(durationToAtomicNs(d))
 }
 
+func (domain *collectionWriteDomain) observeUpdateCombineQueueWait(d time.Duration) {
+	if domain == nil || d <= 0 {
+		return
+	}
+	domain.updateCombineQueueWaitNs.Add(durationToAtomicNs(d))
+}
+
 func (domain *collectionWriteDomain) observeUpdateCombineDrain(d time.Duration) {
 	if domain == nil || d <= 0 {
 		return
@@ -2201,12 +2277,22 @@ func (domain *collectionWriteDomain) observeUpdateCombineRun(d time.Duration) {
 	domain.updateCombineRunNs.Add(durationToAtomicNs(d))
 }
 
+func (domain *collectionWriteDomain) observeUpdateCombineResultDelivery(d time.Duration) {
+	if domain == nil || d <= 0 {
+		return
+	}
+	domain.updateCombineResultDeliveryNs.Add(durationToAtomicNs(d))
+}
+
 func (domain *collectionWriteDomain) observeUpdateCombineBatch(requests int, fallback bool) {
 	if domain == nil || requests <= 0 {
 		return
 	}
 	domain.updateCombineBatches.Add(1)
 	domain.updateCombineBatchedRequests.Add(uint64(requests))
+	if domain.updateBatchDetailedStats.Load() {
+		domain.updateCombineBatchSizeBuckets[collectionUpdateCombineBucketIndex(requests)].Add(1)
+	}
 	if fallback {
 		domain.updateCombineFallbackRequests.Add(uint64(requests))
 	}
@@ -8728,6 +8814,7 @@ type collectionUpdateCombineRequest struct {
 	update              func(current []byte) (replacement []byte, changed bool, err error)
 	bsonSet             bsonSetUpdate
 	hasBSONSet          bool
+	queuedAt            time.Time
 	done                chan collectionUpdateCombineResult
 }
 
@@ -8989,6 +9076,7 @@ func (combiner *collectionUpdateCombiner) update(c *Collection, documentID []byt
 	var enqueueStart time.Time
 	if detailedStats {
 		enqueueStart = time.Now()
+		req.queuedAt = enqueueStart
 	}
 	if !combiner.enqueue(req) {
 		if detailedStats {
@@ -9249,6 +9337,7 @@ func (combiner *collectionUpdateCombiner) runBatchStartingWith(first collectionU
 	batch = append(batch, first)
 	drainYields := 0
 	detailedStats := combiner.domain != nil && combiner.domain.updateBatchDetailedStats.Load()
+	combiner.observeUpdateCombineDequeued(first, detailedStats)
 	var drainStart time.Time
 	if detailedStats {
 		drainStart = time.Now()
@@ -9269,6 +9358,7 @@ func (combiner *collectionUpdateCombiner) runBatchStartingWith(first collectionU
 				return
 			}
 			batch = append(batch, req)
+			combiner.observeUpdateCombineDequeued(req, detailedStats)
 		default:
 			if drainYields < defaultCollectionUpdateCombineDrainYields {
 				drainYields++
@@ -9290,6 +9380,13 @@ func (combiner *collectionUpdateCombiner) runBatchStartingWith(first collectionU
 	combiner.runBatch(batch)
 	clear(batch)
 	combiner.batchScratch = batch[:0]
+}
+
+func (combiner *collectionUpdateCombiner) observeUpdateCombineDequeued(req collectionUpdateCombineRequest, detailedStats bool) {
+	if !detailedStats || combiner == nil || combiner.domain == nil || req.queuedAt.IsZero() {
+		return
+	}
+	combiner.domain.observeUpdateCombineQueueWait(time.Since(req.queuedAt))
 }
 
 func (combiner *collectionUpdateCombiner) runBatch(batch []collectionUpdateCombineRequest) {
@@ -9493,7 +9590,17 @@ func completeUpdateCombineRequest(req collectionUpdateCombineRequest, result col
 	if req.done == nil {
 		return
 	}
+	domain := (*collectionWriteDomain)(nil)
+	if req.collection != nil {
+		domain = req.collection.writeDomain
+	}
+	if domain == nil || !domain.updateBatchDetailedStats.Load() {
+		req.done <- result
+		return
+	}
+	start := time.Now()
 	req.done <- result
+	domain.observeUpdateCombineResultDelivery(time.Since(start))
 }
 
 func collectionUpdateCombineHasDuplicateIDs(batch []collectionUpdateCombineRequest) bool {
