@@ -1,6 +1,6 @@
 module github.com/snissn/gomap
 
-go 1.23.0
+go 1.25.3
 
 require (
 	github.com/akrylysov/pogreb v0.10.2
@@ -63,6 +63,7 @@ require (
 	github.com/klauspost/cpuid/v2 v2.0.9 // indirect
 	github.com/kr/pretty v0.3.1 // indirect
 	github.com/kr/text v0.2.0 // indirect
+	github.com/ldaidone/goembedx v0.3.0 // indirect
 	github.com/matttproud/golang_protobuf_extensions v1.0.4 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/cespare/xxhash/v2"
+	goembedxvector "github.com/ldaidone/goembedx/vector"
 )
 
 const (
@@ -1229,21 +1230,7 @@ func vectorDistanceToFloat32NodeCosinePrepared(query preparedFloat32CosineQuery,
 }
 
 func vectorDistanceToFloat32NodeCosineUnchecked(query preparedFloat32CosineQuery, node *vectorIndexNode) float32 {
-	q := query.vector
-	v := node.vector
-	var s0, s1, s2, s3 float32
-	i := 0
-	n := len(q)
-	for ; i+4 <= n; i += 4 {
-		s0 += q[i] * v[i]
-		s1 += q[i+1] * v[i+1]
-		s2 += q[i+2] * v[i+2]
-		s3 += q[i+3] * v[i+3]
-	}
-	dot := s0 + s1 + s2 + s3
-	for ; i < n; i++ {
-		dot += q[i] * v[i]
-	}
+	dot := goembedxvector.Dot(query.vector, node.vector)
 	return 1 - dot*query.invNorm*node.cachedInvNorm
 }
 
