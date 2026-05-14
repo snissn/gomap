@@ -10271,17 +10271,34 @@ func (combiner *collectionUpdateCombiner) runShardWorker(shard int) {
 	}
 	batch := make([]collectionUpdateCombineRequest, 0, batchCap)
 	deferred := make([]collectionUpdateCombineRequest, 0)
+	deferredHead := 0
 	itemsScratch := make([]updateBatchItem, 0, batchCap)
 	detailedStats := combiner.domain != nil && combiner.domain.updateBatchDetailedStats.Load()
 	requestsClosed := false
+	hasDeferred := func() bool {
+		return deferredHead < len(deferred)
+	}
 	popDeferred := func() (collectionUpdateCombineRequest, bool) {
-		if len(deferred) == 0 {
+		if !hasDeferred() {
+			if len(deferred) > 0 {
+				clear(deferred)
+				deferred = deferred[:0]
+				deferredHead = 0
+			}
 			return collectionUpdateCombineRequest{}, false
 		}
-		req := deferred[0]
-		copy(deferred, deferred[1:])
-		deferred[len(deferred)-1] = collectionUpdateCombineRequest{}
-		deferred = deferred[:len(deferred)-1]
+		req := deferred[deferredHead]
+		deferred[deferredHead] = collectionUpdateCombineRequest{}
+		deferredHead++
+		if deferredHead == len(deferred) {
+			deferred = deferred[:0]
+			deferredHead = 0
+		} else if deferredHead >= 32 && deferredHead*2 >= len(deferred) {
+			remaining := copy(deferred, deferred[deferredHead:])
+			clear(deferred[remaining:])
+			deferred = deferred[:remaining]
+			deferredHead = 0
+		}
 		return req, true
 	}
 	for {
@@ -10344,7 +10361,7 @@ func (combiner *collectionUpdateCombiner) runShardWorker(shard int) {
 		}
 		clear(batch)
 		batch = batch[:0]
-		if requestsClosed && len(deferred) == 0 {
+		if requestsClosed && !hasDeferred() {
 			return
 		}
 	}
