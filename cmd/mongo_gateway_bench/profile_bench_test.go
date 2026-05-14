@@ -97,6 +97,8 @@ func TestProfileBenchBufferedIndexedAsyncFlushEnv(t *testing.T) {
 	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_WRITE_MAX_DOCUMENTS", "")
 	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_WRITE_MAX_BYTES", "")
 	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_WRITE_MAX_ROOT_RUNS", "")
+	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_UPDATE_COMBINE_SHARDS", "")
+	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_UPDATE_COMBINE_LANE_WORKERS", "")
 	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_OVERLAY_ROOTS", "")
 	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_COMPACT_OVERLAY_ROOTS_AFTER_FLUSH", "")
 	if profileBenchBufferedIndexedAsyncFlush(t) {
@@ -123,6 +125,12 @@ func TestProfileBenchBufferedIndexedAsyncFlushEnv(t *testing.T) {
 	if got := profileBenchBufferedIndexedWriteMaxRootRuns(t); got != 0 {
 		t.Fatalf("buffered max root runs default=%d want 0", got)
 	}
+	if got := profileBenchUpdateCombineShards(t); got != 1 {
+		t.Fatalf("update combine shards default=%d want 1", got)
+	}
+	if profileBenchUpdateCombineLaneWorkers(t) {
+		t.Fatal("update combine lane workers default=true want false")
+	}
 	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_ASYNC_FLUSH", "true")
 	if !profileBenchBufferedIndexedAsyncFlush(t) {
 		t.Fatal("async flush env=true want true")
@@ -147,6 +155,14 @@ func TestProfileBenchBufferedIndexedAsyncFlushEnv(t *testing.T) {
 	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_WRITE_MAX_ROOT_RUNS", "789")
 	if got := profileBenchBufferedIndexedWriteMaxRootRuns(t); got != 789 {
 		t.Fatalf("buffered max root runs=%d want 789", got)
+	}
+	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_UPDATE_COMBINE_SHARDS", "4")
+	if got := profileBenchUpdateCombineShards(t); got != 4 {
+		t.Fatalf("update combine shards=%d want 4", got)
+	}
+	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_UPDATE_COMBINE_LANE_WORKERS", "true")
+	if !profileBenchUpdateCombineLaneWorkers(t) {
+		t.Fatal("update combine lane workers env=true want true")
 	}
 	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_OVERLAY_ROOTS", "true")
 	if !profileBenchBufferedIndexedOverlayRoots(t) {
@@ -748,19 +764,30 @@ func benchmarkDirectCollectionConcurrentUpdateBSON(b *testing.B, indexes []colle
 
 	b.ReportAllocs()
 	manager.SetUpdateBatchDetailedStatsEnabled(true)
+	updateCombineShards := profileBenchUpdateCombineShards(b)
+	manager.SetUpdateCombineShardsForProfiling(updateCombineShards)
+	updateCombineLaneWorkers := profileBenchUpdateCombineLaneWorkers(b)
+	manager.SetUpdateCombineLaneWorkersForProfiling(updateCombineLaneWorkers)
 	manager.ResetUpdateCombinersForProfiling()
 	manager.ResetUpdateCombineQueueDepthMax()
 	statsBefore := manager.StatsSnapshot()
 	backendStatsBefore := backend.Stats()
 	b.ResetTimer()
 	started := time.Now()
+	var logicalUpdateElapsed time.Duration
+	var finalFlushElapsed time.Duration
 	err = runProfileBenchTimedUpdatePhase(context.Background(), func(ctx context.Context) error {
+		updateStarted := time.Now()
 		if err := runProfileBenchDirectCollectionConcurrentUpdates(ctx, writers, b.N, documentCount, idStride, ids, updateDocs, collection); err != nil {
 			return err
 		}
+		logicalUpdateElapsed = time.Since(updateStarted)
 		// Keep async indexed-flush rows comparable with synchronous rows: the
 		// timed update phase includes the final drain of deferred publish work.
-		return manager.FlushAll()
+		flushStarted := time.Now()
+		err := manager.FlushAll()
+		finalFlushElapsed = time.Since(flushStarted)
+		return err
 	})
 	timedElapsed := time.Since(started)
 	b.StopTimer()
@@ -768,6 +795,10 @@ func benchmarkDirectCollectionConcurrentUpdateBSON(b *testing.B, indexes []colle
 		b.Fatalf("run concurrent updates: %v", err)
 	}
 	b.ReportMetric(float64(writers), "writers")
+	b.ReportMetric(float64(updateCombineShards), "update_combine_shards")
+	if updateCombineLaneWorkers {
+		b.ReportMetric(1, "update_combine_lane_workers")
+	}
 	reportProfileBenchBufferedIndexedWriteOptions(b, collection.Meta().Options)
 	reportProfileBenchOverlayCompactionStats(b, "preload", preloadCompactStats)
 	reportProfileBenchOverlayCompactionStats(b, "warmup", warmupCompactStats)
@@ -776,6 +807,12 @@ func benchmarkDirectCollectionConcurrentUpdateBSON(b *testing.B, indexes []colle
 	reportProfileBenchOrderedRootPublishStats(b, backendStatsAfter, backendStatsBefore, b.N)
 	reportProfileBenchBackendVlogMmapStats(b, backendStatsAfter, backendStatsBefore, b.N)
 	reportDocsPerSecond(b, b.N, timedElapsed)
+	if logicalUpdateElapsed > 0 {
+		b.ReportMetric(float64(b.N)/logicalUpdateElapsed.Seconds(), "logical_update_docs/sec")
+	}
+	if finalFlushElapsed > 0 {
+		b.ReportMetric(float64(finalFlushElapsed.Nanoseconds())/float64(b.N), "final_flush_ns/doc")
+	}
 }
 
 func runProfileBenchTimedUpdatePhase(ctx context.Context, run func(context.Context) error) error {
@@ -2632,6 +2669,14 @@ func profileBenchUpdateDocumentCount(tb testing.TB) int {
 
 func profileBenchConcurrentWriters(tb testing.TB) int {
 	return profileBenchPositiveEnvInt(tb, "MONGO_GATEWAY_PROFILE_BENCH_WRITERS", 8)
+}
+
+func profileBenchUpdateCombineShards(tb testing.TB) int {
+	return profileBenchPositiveEnvInt(tb, "MONGO_GATEWAY_PROFILE_BENCH_UPDATE_COMBINE_SHARDS", 1)
+}
+
+func profileBenchUpdateCombineLaneWorkers(tb testing.TB) bool {
+	return profileBenchBoolEnv(tb, "MONGO_GATEWAY_PROFILE_BENCH_UPDATE_COMBINE_LANE_WORKERS", false)
 }
 
 func profileBenchBufferedIndexedAsyncFlush(tb testing.TB) bool {
