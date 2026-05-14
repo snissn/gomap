@@ -645,6 +645,70 @@ func TestCollectionVectorIndexPruneOldSnapshots(t *testing.T) {
 	}
 }
 
+func TestCollectionVectorIndexPruneSerializesWithSnapshotSave(t *testing.T) {
+	dir := t.TempDir()
+	d, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	col := openVectorIndexTestCollection(t, d)
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("a"), []byte("b")},
+		[][]byte{
+			[]byte(`{"embedding":[1,0]}`),
+			[]byte(`{"embedding":[0,1]}`),
+		},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	index, err := col.BuildVectorIndex(VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, M: 4})
+	if err != nil {
+		t.Fatalf("build vector index: %v", err)
+	}
+	if _, err := index.SaveSnapshot(); err != nil {
+		t.Fatalf("save first snapshot: %v", err)
+	}
+
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	var saveStatus VectorIndexLoadStatus
+	var pruneStatus VectorIndexPruneStatus
+	var saveErr, pruneErr error
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		<-start
+		saveStatus, saveErr = index.SaveSnapshot()
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		pruneStatus, pruneErr = index.PruneOldSnapshots(1)
+	}()
+	close(start)
+	wg.Wait()
+	if saveErr != nil {
+		t.Fatalf("concurrent save: %v", saveErr)
+	}
+	if pruneErr != nil {
+		t.Fatalf("concurrent prune: %v", pruneErr)
+	}
+	if !saveStatus.Loaded || saveStatus.Epoch == 0 {
+		t.Fatalf("unexpected save status: %+v", saveStatus)
+	}
+	if pruneStatus.ActiveEpoch == "" {
+		t.Fatalf("unexpected prune status: %+v", pruneStatus)
+	}
+	loaded, loadStatus, err := col.LoadVectorIndexSnapshot(VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine})
+	if err != nil {
+		t.Fatalf("load after concurrent prune/save: %v", err)
+	}
+	if loaded == nil || !loadStatus.Loaded || loadStatus.ExactFallbackReason != "" {
+		t.Fatalf("load after concurrent prune/save loaded=%v status=%+v", loaded != nil, loadStatus)
+	}
+}
+
 func corruptVectorIndexSnapshotFile(tb testing.TB, manifestPath, fileName string) {
 	tb.Helper()
 	path := vectorIndexSnapshotFilePath(tb, manifestPath, fileName)

@@ -297,6 +297,8 @@ func (idx *VectorIndex) PruneOldSnapshots(keep int) (VectorIndexPruneStatus, err
 		return status, err
 	}
 	status.IndexDir = indexDir
+	unlockVectorMutation := idx.collection.lockVectorIndexMutationBarrier()
+	defer unlockVectorMutation()
 	manifestPath := filepath.Join(indexDir, vectorIndexManifestFile)
 	manifestData, err := os.ReadFile(manifestPath)
 	if err != nil {
