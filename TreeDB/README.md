@@ -143,9 +143,9 @@ The initial API lives in `TreeDB/collections`:
 - `BenchmarkCollectionVectorIndexGraphOnlySearch` is a benchmark-only engine
   comparison path that times TreeDB graph search without collection row fetches,
   JSON vector extraction, metadata filtering, or exact rerank.
-- `BenchmarkCollectionVectorIndexBuild` and
-  `BenchmarkCollectionVectorUSearchBuild` isolate index build cost from query
-  latency for TreeDB and the optional USearch comparator.
+- `BenchmarkCollectionVectorIndexBuild` isolates TreeDB index build cost from
+  query latency; the optional nested USearch module includes a matching
+  `BenchmarkCollectionVectorUSearchBuild` comparator.
 - `VectorIndexOptions.Encoding` can be set to `VectorIndexEncodingInt8` to keep
   an ANN-side scalar-quantized vector copy. This reduces index vector memory and
   snapshot size while preserving full-precision canonical rows for exact rerank.
@@ -154,7 +154,9 @@ The initial API lives in `TreeDB/collections`:
   manifest plus checksum-verified JSON node, edge, tombstone, and docmap files.
   Snapshot document IDs are hex-encoded so binary collection primary keys remain
   lossless; the JSON epoch format is a readable pre-alpha persistence format, not
-  a compact binary snapshot ABI.
+  a compact binary snapshot ABI. It is intended for development, benchmarking,
+  and rebuild acceleration rather than large-index operational rollout until a
+  binary format lands.
 - `VectorIndexRangeFilter` restricts exact or ANN searches with an existing
   scalar secondary-index range. Selective filters use an `exact_filtered`
   strategy; broader filters use `ann_postfilter` and can fall back to exact
@@ -179,8 +181,10 @@ External comparison benchmark with local USearch bootstrap:
 scripts/bench_vector_search_compare.sh
 ```
 
-The script downloads and extracts the USearch Linux release package into `/tmp`,
-sets `CGO_CFLAGS`, `CGO_LDFLAGS`, and `LD_LIBRARY_PATH`, and writes results under
+The script runs TreeDB benchmarks from the root module and USearch benchmarks
+from the nested optional module at `TreeDB/collections/usearchbench`, downloads
+and extracts the USearch Linux release package into `/tmp`, sets `CGO_CFLAGS`,
+`CGO_LDFLAGS`, and `LD_LIBRARY_PATH`, and writes results under
 `/tmp/gomap_vector_search_compare_*`. Override `USEARCH_VERSION`,
 `TREEDB_VECTOR_BENCH_DOCS`, `TREEDB_VECTOR_BENCH_DIMS`, `BENCHTIME`, and `COUNT`
 to change the comparison shape. The USearch filtered Go binding currently trips
@@ -193,15 +197,17 @@ with `--output-jsonl` and set `TREEDB_VECTOR_BENCH_JSONL` to run
 `BenchmarkCollectionVectorTinyBERTFixture`.
 
 Optional external engine baseline: build with `-tags usearch_bench` after
-installing the USearch C library and headers for the host. This runs the same
-synthetic vectors against USearch's Go bindings with cosine/f32 HNSW and matching
-`M`, `efConstruction`, and `efSearch` knobs:
+installing the USearch C library and headers for the host. The dependency lives
+in `TreeDB/collections/usearchbench` so the root module graph stays free of the
+optional cgo benchmark binding. This runs the same synthetic vectors against
+USearch's Go bindings with cosine/f32 HNSW and matching `M`,
+`efConstruction`, and `efSearch` knobs:
 
 ```sh
 TREEDB_VECTOR_BENCH_DOCS=1000 TREEDB_VECTOR_BENCH_DIMS=32 \
-  go test -tags usearch_bench ./TreeDB/collections -run '^$' \
-  -bench 'BenchmarkCollectionVector(USearch|SearchExact|Index(Search|SearchInt8|FilteredSearch))' \
-  -benchtime=1x -count=1
+  bash -c 'cd TreeDB/collections/usearchbench && \
+    go test -tags usearch_bench . -run "^$" \
+      -bench "BenchmarkCollectionVectorUSearch" -benchtime=1x -count=1'
 ```
 
 ## Durability & Safety Notes

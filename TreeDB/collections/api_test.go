@@ -12750,6 +12750,125 @@ func TestCollectionUpdateBatchDirectBufferedTemplateV1AccumulatesRootRuns(t *tes
 	}
 }
 
+func TestCollectionDirectBufferedTemplateV1StaleNewShapePlanDoesNotStage(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat:        DocumentFormatTemplateV1,
+			BufferedIndexedWrites: true,
+		},
+		Indexes: []IndexDefinition{
+			{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true},
+			{Name: "city", Field: "city", ValueType: IndexValueString},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{
+			mustTemplateV1Document(t, []string{"email", "city"}, []any{"a@example.com", "hnl"}),
+			mustTemplateV1Document(t, []string{"email", "city"}, []any{"b@example.com", "hnl"}),
+		},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush insert buffer: %v", err)
+	}
+
+	planFor := func(id, raw string) *updateBatchPlan {
+		t.Helper()
+		items, err := prepareUpdateBatchItems([]UpdateBatchItem{
+			{DocumentID: []byte(id), Update: setTemplateV1JSON(t, raw)},
+		})
+		if err != nil {
+			t.Fatalf("prepare stale plan items: %v", err)
+		}
+		plan, err := col.buildUpdateBatchPlan(items, updateBatchModeNoSecondaryUniqueIndexChanges, true)
+		if err != nil {
+			t.Fatalf("build stale plan: %v", err)
+		}
+		if plan.directBufferedUpdate == nil || len(plan.directBufferedUpdate.templateEntries) == 0 {
+			t.Fatalf("plan missing direct buffered template entries: %+v", plan)
+		}
+		return plan
+	}
+	plan1 := planFor("u1", `{"email":"a@example.com","city":"sea","score_a":1}`)
+	defer plan1.close()
+	plan2 := planFor("u2", `{"email":"b@example.com","city":"sfo","score_b":2}`)
+	defer plan2.close()
+
+	_, _, err = mergeDirectBufferedPreparedBatches([]collectionUpdateCombinePreparedBatch{
+		{batch: []collectionUpdateCombineRequest{{collection: col}}, plan: plan1},
+		{batch: []collectionUpdateCombineRequest{{collection: col}}, plan: plan2},
+	})
+	if !errors.Is(err, ErrConcurrentMutation) {
+		t.Fatalf("merge stale template plans err=%v, want ErrConcurrentMutation", err)
+	}
+
+	var buffered bool
+	if err := col.withMutationLock(func() error {
+		var bufferErr error
+		buffered, bufferErr = col.bufferDirectUpdateBatchPlanLocked(plan1)
+		return bufferErr
+	}); err != nil {
+		t.Fatalf("stage first stale plan: %v", err)
+	}
+	if !buffered {
+		t.Fatal("first stale plan was not buffered")
+	}
+	if err := col.withMutationLock(func() error {
+		var bufferErr error
+		buffered, bufferErr = col.bufferDirectUpdateBatchPlanLocked(plan2)
+		if !errors.Is(bufferErr, ErrConcurrentMutation) {
+			t.Fatalf("second stale plan err=%v, want ErrConcurrentMutation", bufferErr)
+		}
+		if buffered {
+			t.Fatal("second stale plan buffered despite stale template ids")
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("check second stale plan: %v", err)
+	}
+
+	if _, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{
+		{DocumentID: []byte("u2"), Update: setTemplateV1JSON(t, `{"email":"b@example.com","city":"sfo","score_b":2}`)},
+	}); err != nil {
+		t.Fatalf("replanned second update: %v", err)
+	} else if !batched {
+		t.Fatal("replanned second update was declined")
+	}
+	assertTemplateV1BufferedDocumentContains(t, col, "u1", `"score_a":1`)
+	assertTemplateV1BufferedDocumentContains(t, col, "u2", `"score_b":2`)
+}
+
+func assertTemplateV1BufferedDocumentContains(t *testing.T, col *Collection, id string, want string) {
+	t.Helper()
+	got, err := col.Get([]byte(id))
+	if err != nil {
+		t.Fatalf("get %s: %v", id, err)
+	}
+	gotJSON, err := col.StoredDocumentJSON(got)
+	if err != nil {
+		t.Fatalf("materialize %s: %v", id, err)
+	}
+	if !bytes.Contains(gotJSON, []byte(want)) {
+		t.Fatalf("document %s=%s missing %s", id, gotJSON, want)
+	}
+}
+
 func TestCollectionUpdateBatchDirectBufferedTemplateV1TemplateOnlySkipsSecondaryRoots(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

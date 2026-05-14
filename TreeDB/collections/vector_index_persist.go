@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -47,7 +48,10 @@ type VectorIndexPruneStatus struct {
 
 // SaveSnapshot persists the current in-memory vector index as an immutable JSON
 // epoch and atomically publishes a manifest that points at it. Document IDs are
-// hex-encoded so arbitrary collection primary keys round-trip losslessly.
+// hex-encoded so arbitrary collection primary keys round-trip losslessly. The
+// JSON format is a pre-alpha/debuggable persistence format; large operational
+// indexes should treat it as a rebuild accelerator until a compact binary
+// snapshot format lands.
 func (idx *VectorIndex) SaveSnapshot() (VectorIndexLoadStatus, error) {
 	status := VectorIndexLoadStatus{}
 	if idx == nil {
@@ -64,8 +68,10 @@ func (idx *VectorIndex) SaveSnapshot() (VectorIndexLoadStatus, error) {
 	if err := os.MkdirAll(indexDir, 0o755); err != nil {
 		return status, err
 	}
-	epoch := uint64(time.Now().UnixNano())
-	epochName := fmt.Sprintf("epoch-%020d", epoch)
+	epoch, epochName, err := nextVectorIndexSnapshotEpoch(indexDir)
+	if err != nil {
+		return status, err
+	}
 	epochDir := filepath.Join(indexDir, epochName)
 	tmpDir := filepath.Join(indexDir, ".tmp-"+epochName)
 	if err := os.RemoveAll(tmpDir); err != nil {
@@ -320,6 +326,74 @@ func vectorIndexEpochDirs(indexDir string) ([]string, error) {
 	}
 	sort.Strings(epochs)
 	return epochs, nil
+}
+
+func nextVectorIndexSnapshotEpoch(indexDir string) (uint64, string, error) {
+	now := time.Now().UnixNano()
+	var epoch uint64
+	if now > 0 {
+		epoch = uint64(now)
+	}
+	advanceAfter := func(previous uint64) error {
+		if previous < epoch {
+			return nil
+		}
+		if previous == ^uint64(0) {
+			return errors.New("collections: vector index snapshot epoch overflow")
+		}
+		epoch = previous + 1
+		return nil
+	}
+
+	manifestData, err := os.ReadFile(filepath.Join(indexDir, vectorIndexManifestFile))
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return 0, "", err
+	}
+	if err == nil {
+		var manifest vectorIndexManifest
+		if json.Unmarshal(manifestData, &manifest) == nil {
+			if err := advanceAfter(manifest.Epoch); err != nil {
+				return 0, "", err
+			}
+		}
+	}
+	epochs, err := vectorIndexEpochDirs(indexDir)
+	if err != nil {
+		return 0, "", err
+	}
+	for _, name := range epochs {
+		previous, ok := parseVectorIndexEpochDir(name)
+		if !ok {
+			continue
+		}
+		if err := advanceAfter(previous); err != nil {
+			return 0, "", err
+		}
+	}
+	for {
+		epochName := fmt.Sprintf("epoch-%020d", epoch)
+		_, err := os.Stat(filepath.Join(indexDir, epochName))
+		if errors.Is(err, os.ErrNotExist) {
+			return epoch, epochName, nil
+		}
+		if err != nil {
+			return 0, "", err
+		}
+		if err := advanceAfter(epoch); err != nil {
+			return 0, "", err
+		}
+	}
+}
+
+func parseVectorIndexEpochDir(name string) (uint64, bool) {
+	if !strings.HasPrefix(name, "epoch-") {
+		return 0, false
+	}
+	epoch, err := strconv.ParseUint(strings.TrimPrefix(name, "epoch-"), 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return epoch, true
 }
 
 func dirSize(path string) (int64, error) {
@@ -677,11 +751,35 @@ func (idx *VectorIndex) loadPersistSnapshot(snapshot vectorIndexPersistSnapshot)
 	if idx.dimensions != 0 && snapshot.Meta.Dimensions != idx.dimensions {
 		return "meta_dimension_mismatch"
 	}
-	if snapshot.Meta.Dimensions <= 0 {
+	if snapshot.Meta.Dimensions < 0 {
 		return "invalid_dimensions"
 	}
 	if len(snapshot.Nodes) == 0 {
-		return "empty_index"
+		if snapshot.Meta.Entry >= 0 || snapshot.Meta.MaxLevel >= 0 || len(snapshot.Edges) != 0 || len(snapshot.Tombstones.NodeIDs) != 0 || len(snapshot.DocMap.Current) != 0 {
+			return "invalid_empty_index"
+		}
+		idx.mu.Lock()
+		defer idx.mu.Unlock()
+		idx.name = snapshot.Meta.Name
+		idx.encoding = encoding
+		idx.dimensions = snapshot.Meta.Dimensions
+		idx.m = snapshot.Meta.M
+		idx.efConstruction = snapshot.Meta.EfConstruction
+		idx.efSearch = snapshot.Meta.EfSearch
+		idx.rebuildDeletedRatio = snapshot.Meta.RebuildDeletedRatio
+		idx.nodes = nil
+		idx.currentNode = make(map[string]int)
+		idx.entry = -1
+		idx.maxLevel = -1
+		idx.persistedEpoch = 0
+		idx.persistedBytesDisk = 0
+		idx.persistedSnapshotDirty = false
+		idx.lastRebuildDuration = 0
+		idx.mutationSeq = 0
+		return ""
+	}
+	if snapshot.Meta.Dimensions <= 0 {
+		return "invalid_dimensions"
 	}
 	tombstoned := make(map[int]struct{}, len(snapshot.Tombstones.NodeIDs))
 	for _, nodeID := range snapshot.Tombstones.NodeIDs {

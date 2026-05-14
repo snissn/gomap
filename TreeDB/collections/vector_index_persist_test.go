@@ -235,6 +235,92 @@ func TestCollectionVectorIndexSnapshotPreservesBinaryDocumentIDs(t *testing.T) {
 	}
 }
 
+func TestCollectionVectorIndexSnapshotEmptyIndexLoadsAndTracksMutations(t *testing.T) {
+	dir := t.TempDir()
+	d, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	col := openVectorIndexTestCollection(t, d)
+	index, err := col.BuildVectorIndex(VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, M: 4})
+	if err != nil {
+		t.Fatalf("build empty vector index: %v", err)
+	}
+	saveStatus, err := index.SaveSnapshot()
+	if err != nil {
+		t.Fatalf("save empty snapshot: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	reopened, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection after reopen: %v", err)
+	}
+	loaded, status, err := reopenedCol.LoadVectorIndexSnapshot(VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine})
+	if err != nil {
+		t.Fatalf("load empty vector index snapshot: %v", err)
+	}
+	if loaded == nil || !status.Loaded || status.ExactFallbackReason != "" || status.Epoch != saveStatus.Epoch {
+		t.Fatalf("unexpected empty load status loaded=%v status=%+v", loaded != nil, status)
+	}
+	if stats := loaded.Stats(); stats.LiveDocs != 0 || stats.Dimensions != 0 || stats.SnapshotDirty {
+		t.Fatalf("unexpected loaded empty stats: %+v", stats)
+	}
+	if _, err := reopenedCol.Insert([]byte("after"), []byte(`{"embedding":[1,0]}`)); err != nil {
+		t.Fatalf("insert after empty snapshot load: %v", err)
+	}
+	results, _, err := loaded.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 1, DisableExactFallback: true})
+	if err != nil {
+		t.Fatalf("search after empty snapshot mutation: %v", err)
+	}
+	requireVectorResultIDs(t, results, "after")
+	if stats := loaded.Stats(); stats.LiveDocs != 1 || !stats.SnapshotDirty {
+		t.Fatalf("mutation after empty load did not update stats: %+v", stats)
+	}
+}
+
+func TestCollectionVectorIndexSnapshotEpochAdvancesPastPublishedManifest(t *testing.T) {
+	dir := t.TempDir()
+	d, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	col := openVectorIndexTestCollection(t, d)
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("a")},
+		[][]byte{[]byte(`{"embedding":[1,0]}`)},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	index, err := col.BuildVectorIndex(VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine})
+	if err != nil {
+		t.Fatalf("build vector index: %v", err)
+	}
+	first, err := index.SaveSnapshot()
+	if err != nil {
+		t.Fatalf("save first snapshot: %v", err)
+	}
+	publishedEpoch := first.Epoch + 1000
+	rewriteVectorIndexManifest(t, first.ManifestPath, func(manifest *vectorIndexManifest) {
+		manifest.Epoch = publishedEpoch
+	})
+	second, err := index.SaveSnapshot()
+	if err != nil {
+		t.Fatalf("save second snapshot: %v", err)
+	}
+	if second.Epoch <= publishedEpoch {
+		t.Fatalf("second epoch=%d did not advance past published epoch=%d", second.Epoch, publishedEpoch)
+	}
+}
+
 func TestCollectionVectorIndexSnapshotMissingManifestFallsBack(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

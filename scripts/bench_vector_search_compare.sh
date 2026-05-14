@@ -11,8 +11,10 @@ RUN_DIR="${RUN_DIR:-/tmp/gomap_vector_search_compare_$(date +%Y%m%d_%H%M%S)}"
 COUNT="${COUNT:-3}"
 BENCHTIME="${BENCHTIME:-1x}"
 RUN_UNSAFE_USEARCH_FILTERED="${RUN_UNSAFE_USEARCH_FILTERED:-false}"
-BENCH_REGEX="${BENCH_REGEX:-BenchmarkCollectionVector(SearchExact|IndexSearch(Int8)?|IndexGraphOnlySearch(Int8)?|IndexFilteredSearch|USearchBaseline)$}"
-BUILD_BENCH_REGEX="${BUILD_BENCH_REGEX:-BenchmarkCollectionVector(IndexBuild(Int8)?|USearchBuild)$}"
+BENCH_REGEX="${BENCH_REGEX:-BenchmarkCollectionVector(SearchExact|IndexSearch(Int8)?|IndexGraphOnlySearch(Int8)?|IndexFilteredSearch)$}"
+USEARCH_BENCH_REGEX="${USEARCH_BENCH_REGEX:-BenchmarkCollectionVectorUSearchBaseline$}"
+BUILD_BENCH_REGEX="${BUILD_BENCH_REGEX:-BenchmarkCollectionVectorIndexBuild(Int8)?$}"
+USEARCH_BUILD_BENCH_REGEX="${USEARCH_BUILD_BENCH_REGEX:-BenchmarkCollectionVectorUSearchBuild$}"
 RUN_BUILD_BENCH="${RUN_BUILD_BENCH:-false}"
 TREEDB_VECTOR_BENCH_DOCS="${TREEDB_VECTOR_BENCH_DOCS:-1000}"
 TREEDB_VECTOR_BENCH_DIMS="${TREEDB_VECTOR_BENCH_DIMS:-32}"
@@ -63,8 +65,10 @@ cat >"$RUN_DIR/README.md" <<EOF
 - dims: \`$TREEDB_VECTOR_BENCH_DIMS\`
 - benchtime: \`$BENCHTIME\`
 - count: \`$COUNT\`
-- benchmark regex: \`$BENCH_REGEX\`
-- build benchmark regex: \`$BUILD_BENCH_REGEX\`
+- TreeDB benchmark regex: \`$BENCH_REGEX\`
+- USearch benchmark regex: \`$USEARCH_BENCH_REGEX\`
+- TreeDB build benchmark regex: \`$BUILD_BENCH_REGEX\`
+- USearch build benchmark regex: \`$USEARCH_BUILD_BENCH_REGEX\`
 - run build benchmarks: \`$RUN_BUILD_BENCH\`
 - unsafe USearch filtered benchmark: \`$RUN_UNSAFE_USEARCH_FILTERED\`
 
@@ -75,17 +79,29 @@ EOF
 echo "USearch root: $USEARCH_ROOT"
 echo "run dir: $RUN_DIR"
 (
+	export TREEDB_VECTOR_BENCH_DOCS
+	export TREEDB_VECTOR_BENCH_DIMS
+	go test ./TreeDB/collections -run '^$' -bench "$BENCH_REGEX" -benchtime="$BENCHTIME" -count="$COUNT"
+	if [[ "$RUN_BUILD_BENCH" == "true" ]]; then
+		go test ./TreeDB/collections -run '^$' -bench "$BUILD_BENCH_REGEX" -benchtime="$BENCHTIME" -count="$COUNT"
+	fi
+
+	usearch_bench_regex="$USEARCH_BENCH_REGEX"
 	if [[ "$RUN_UNSAFE_USEARCH_FILTERED" == "true" ]]; then
-		export BENCH_REGEX="BenchmarkCollectionVector(SearchExact|IndexSearch(Int8)?|IndexGraphOnlySearch(Int8)?|IndexFilteredSearch|USearchBaseline|USearchFilteredBaseline)$"
+		usearch_bench_regex="BenchmarkCollectionVectorUSearch(Filtered)?Baseline$"
 		export GODEBUG="cgocheck=0${GODEBUG:+,$GODEBUG}"
 	fi
 	export CGO_CFLAGS="-I$USEARCH_ROOT/include ${CGO_CFLAGS:-}"
 	export CGO_LDFLAGS="-L$USEARCH_ROOT/lib ${CGO_LDFLAGS:-}"
 	export LD_LIBRARY_PATH="$USEARCH_ROOT/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-	export TREEDB_VECTOR_BENCH_DOCS
-	export TREEDB_VECTOR_BENCH_DIMS
-	go test -tags usearch_bench ./TreeDB/collections -run '^$' -bench "$BENCH_REGEX" -benchtime="$BENCHTIME" -count="$COUNT"
+	(
+		cd TreeDB/collections/usearchbench
+		go test -tags usearch_bench . -run '^$' -bench "$usearch_bench_regex" -benchtime="$BENCHTIME" -count="$COUNT"
+	)
 	if [[ "$RUN_BUILD_BENCH" == "true" ]]; then
-		go test -tags usearch_bench ./TreeDB/collections -run '^$' -bench "$BUILD_BENCH_REGEX" -benchtime="$BENCHTIME" -count="$COUNT"
+		(
+			cd TreeDB/collections/usearchbench
+			go test -tags usearch_bench . -run '^$' -bench "$USEARCH_BUILD_BENCH_REGEX" -benchtime="$BENCHTIME" -count="$COUNT"
+		)
 	fi
 ) 2>&1 | tee "$RUN_DIR/bench.txt"

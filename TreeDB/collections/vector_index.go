@@ -330,13 +330,17 @@ func (c *Collection) notifyVectorIndexesUpsert(documentIDs [][]byte) {
 	if len(indexes) == 0 {
 		return
 	}
-	for _, index := range indexes {
-		for _, documentID := range documentIDs {
-			if len(documentID) == 0 {
-				continue
-			}
-			_ = index.InsertDocument(documentID)
+	filtered := make([][]byte, 0, len(documentIDs))
+	for _, documentID := range documentIDs {
+		if len(documentID) != 0 {
+			filtered = append(filtered, documentID)
 		}
+	}
+	if len(filtered) == 0 {
+		return
+	}
+	for _, index := range indexes {
+		_ = index.InsertDocuments(filtered)
 	}
 }
 
@@ -391,12 +395,38 @@ func (c *Collection) notifyVectorIndexesBSONSetUpdateBatch(items []BSONSetUpdate
 // in-memory index. Missing or null vector fields leave the document unindexed
 // and tombstone any previous indexed version.
 func (idx *VectorIndex) InsertDocument(documentID []byte) error {
+	return idx.InsertDocuments([][]byte{documentID})
+}
+
+// InsertDocuments adds or replaces committed collection documents in the
+// in-memory index while sharing one JSON materializer across the batch.
+func (idx *VectorIndex) InsertDocuments(documentIDs [][]byte) error {
 	if idx == nil {
 		return errors.New("collections: vector index is nil")
 	}
-	if len(documentID) == 0 {
-		return errors.New("collections: document id cannot be empty")
+	if idx.collection == nil {
+		return errCollectionNil
 	}
+	if len(documentIDs) == 0 {
+		return nil
+	}
+	materializer, err := idx.collection.NewStoredDocumentJSONMaterializer()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = materializer.Close() }()
+	for _, documentID := range documentIDs {
+		if len(documentID) == 0 {
+			return errors.New("collections: document id cannot be empty")
+		}
+		if err := idx.insertDocumentWithMaterializer(materializer, documentID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (idx *VectorIndex) insertDocumentWithMaterializer(materializer *StoredDocumentJSONMaterializer, documentID []byte) error {
 	document, err := idx.collection.Get(documentID)
 	if err != nil {
 		return err
@@ -405,11 +435,6 @@ func (idx *VectorIndex) InsertDocument(documentID []byte) error {
 		idx.TombstoneDocumentID(documentID)
 		return nil
 	}
-	materializer, err := idx.collection.NewStoredDocumentJSONMaterializer()
-	if err != nil {
-		return err
-	}
-	defer func() { _ = materializer.Close() }()
 	vector, ok, err := vectorFromStoredDocument(materializer, document, idx.fieldPath)
 	if err != nil {
 		return fmt.Errorf("collections: vector field %q in document %q: %w", idx.field, documentID, err)
@@ -985,7 +1010,7 @@ func (idx *VectorIndex) selectLayerNeighborsLocked(vector []float32, candidates 
 	if limit <= 0 {
 		return nil
 	}
-	scored := candidates[:0]
+	scored := make([]vectorIndexCandidate, 0, len(candidates))
 	for _, candidate := range candidates {
 		if candidate.nodeID == excludeNodeID || candidate.nodeID < 0 || candidate.nodeID >= len(idx.nodes) {
 			continue

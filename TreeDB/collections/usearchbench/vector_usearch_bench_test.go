@@ -1,13 +1,24 @@
 //go:build usearch_bench && cgo
 
-package collections
+package usearchbench
 
 import (
+	"bufio"
+	"encoding/json"
+	"fmt"
+	"math"
 	"os"
 	"runtime"
+	"strconv"
 	"testing"
 
 	usearch "github.com/unum-cloud/usearch/golang"
+)
+
+const (
+	defaultVectorBenchmarkDocs = 10000
+	defaultVectorBenchmarkDims = 64
+	vectorBenchmarkTopK        = 10
 )
 
 func BenchmarkCollectionVectorUSearchBuild(b *testing.B) {
@@ -202,4 +213,108 @@ func newVectorUSearchIndex(tb testing.TB, dims, docs, m, efConstruction, efSearc
 	_ = index.ChangeThreadsAdd(uint(runtime.NumCPU()))
 	_ = index.ChangeThreadsSearch(1)
 	return index
+}
+
+func vectorBenchmarkDocs(tb testing.TB) int {
+	return vectorBenchmarkPositiveEnvInt(tb, "TREEDB_VECTOR_BENCH_DOCS", defaultVectorBenchmarkDocs)
+}
+
+func vectorBenchmarkDims(tb testing.TB) int {
+	return vectorBenchmarkPositiveEnvInt(tb, "TREEDB_VECTOR_BENCH_DIMS", defaultVectorBenchmarkDims)
+}
+
+func vectorBenchmarkPositiveEnvInt(tb testing.TB, name string, fallback int) int {
+	tb.Helper()
+	raw := os.Getenv(name)
+	if raw == "" {
+		return fallback
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value <= 0 {
+		tb.Fatalf("%s=%q must be a positive integer", name, raw)
+	}
+	return value
+}
+
+type vectorBenchmarkFixtureRecord struct {
+	ID         string    `json:"id"`
+	Text       string    `json:"text"`
+	Model      string    `json:"model"`
+	Pooling    string    `json:"pooling"`
+	Normalized bool      `json:"normalized"`
+	Embedding  []float32 `json:"embedding"`
+}
+
+func loadVectorBenchmarkFixture(tb testing.TB, path string) []vectorBenchmarkFixtureRecord {
+	tb.Helper()
+	f, err := os.Open(path)
+	if err != nil {
+		tb.Fatalf("open vector benchmark fixture: %v", err)
+	}
+	defer func() {
+		if err := f.Close(); err != nil {
+			tb.Fatalf("close vector benchmark fixture: %v", err)
+		}
+	}()
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	var out []vectorBenchmarkFixtureRecord
+	line := 0
+	for scanner.Scan() {
+		line++
+		raw := scanner.Bytes()
+		if len(raw) == 0 {
+			continue
+		}
+		var record vectorBenchmarkFixtureRecord
+		if err := json.Unmarshal(raw, &record); err != nil {
+			tb.Fatalf("decode vector benchmark fixture line %d: %v", line, err)
+		}
+		if record.ID == "" {
+			tb.Fatalf("vector benchmark fixture line %d missing id", line)
+		}
+		if len(record.Embedding) == 0 {
+			tb.Fatalf("vector benchmark fixture line %d missing embedding", line)
+		}
+		validateFloat32Vector(tb, record.Embedding, fmt.Sprintf("vector benchmark fixture line %d", line))
+		out = append(out, record)
+	}
+	if err := scanner.Err(); err != nil {
+		tb.Fatalf("scan vector benchmark fixture: %v", err)
+	}
+	return out
+}
+
+func vectorBenchmarkEmbedding(id, dims int) []float32 {
+	out := make([]float32, dims)
+	var norm float64
+	x := float64(id + 1)
+	for i := range out {
+		d := float64(i + 1)
+		value := math.Sin(x*d*0.013) + math.Cos((x+17)*d*0.007) + math.Sin(float64((id%31)+1)*d*0.019)
+		out[i] = float32(value)
+		norm += value * value
+	}
+	scale := 1 / math.Sqrt(norm)
+	for i := range out {
+		out[i] = float32(float64(out[i]) * scale)
+	}
+	return out
+}
+
+func validateFloat32Vector(tb testing.TB, vector []float32, label string) {
+	tb.Helper()
+	for i, value := range vector {
+		f := float64(value)
+		if math.IsNaN(f) || math.IsInf(f, 0) {
+			tb.Fatalf("%s invalid embedding element %d", label, i)
+		}
+	}
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }

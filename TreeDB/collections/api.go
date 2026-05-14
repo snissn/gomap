@@ -10696,6 +10696,7 @@ func mergeDirectBufferedPreparedBatches(prepared []collectionUpdateCombinePrepar
 	commonBufferedBase := firstPlan.bufferedBase
 	commonBufferedReadGeneration := firstPlan.bufferedReadGeneration
 	sameBufferedRead := true
+	templateEntryPlans := 0
 	totalResults := 0
 	totalTemplateEntries := 0
 	totalPrimaryEntries := 0
@@ -10720,10 +10721,16 @@ func mergeDirectBufferedPreparedBatches(prepared []collectionUpdateCombinePrepar
 		if plan.bufferedBase != commonBufferedBase || plan.bufferedReadGeneration != commonBufferedReadGeneration {
 			sameBufferedRead = false
 		}
+		if len(plan.directBufferedUpdate.templateEntries) > 0 {
+			templateEntryPlans++
+		}
 		totalResults += len(plan.results)
 		totalTemplateEntries += len(plan.directBufferedUpdate.templateEntries)
 		totalPrimaryEntries += len(plan.directBufferedUpdate.primaryEntries)
 		totalSecondaryRootPlans += len(plan.directBufferedUpdate.secondaryRootPlans)
+	}
+	if templateEntryPlans > 1 {
+		return nil, nil, fmt.Errorf("%w: cannot merge direct template-v1 update plans with independent template ids", ErrConcurrentMutation)
 	}
 	merged := &updateBatchPlan{
 		meta:                        firstPlan.meta,
@@ -14031,17 +14038,22 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 	}()
 
 	phaseStart := updateBatchStatsNow(detailedStats)
+	currentBufferedPlan := false
 	if domain.count != 0 {
 		canReadBuffered := updateBatchCanReadBufferedDomainLocked(domain, plan.meta, plan.baseSystemRoot)
 		if !canReadBuffered {
 			plan.stats.BufferStageValidation += updateBatchStatsSince(detailedStats, phaseStart)
 			return false, ErrConcurrentMutation
 		}
-		currentBufferedPlan := plan.bufferedBase && plan.bufferedReadGeneration == domain.writeGeneration
+		currentBufferedPlan = plan.bufferedBase && plan.bufferedReadGeneration == domain.writeGeneration
 		if !currentBufferedPlan && domain.directUpdatePlanHasPrimaryWriteConflictLocked(plan) {
 			plan.stats.BufferStageValidation += updateBatchStatsSince(detailedStats, phaseStart)
 			return false, ErrConcurrentMutation
 		}
+	}
+	if len(direct.templateEntries) > 0 && domain.count != 0 && !currentBufferedPlan {
+		plan.stats.BufferStageValidation += updateBatchStatsSince(detailedStats, phaseStart)
+		return false, ErrConcurrentMutation
 	}
 	if err := c.validateUpdateBatchPlanRootDescriptors(plan); err != nil {
 		plan.stats.BufferStageValidation += updateBatchStatsSince(detailedStats, phaseStart)

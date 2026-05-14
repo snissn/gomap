@@ -103,10 +103,22 @@ func (c *Collection) SearchVectorsExact(query []float32, opts VectorSearchOption
 			Distance:   distance,
 			Document:   bytes.Clone(record.Document),
 		}
-		matches = append(matches, result)
+		if len(matches) < opts.TopK {
+			matches = append(matches, result)
+			if len(matches) == opts.TopK {
+				sortVectorSearchResults(matches)
+			}
+			return
+		}
+		if compareVectorSearchResult(result, matches[len(matches)-1]) >= 0 {
+			return
+		}
+		matches[len(matches)-1] = result
 		sortVectorSearchResults(matches)
-		if len(matches) > opts.TopK {
-			matches = matches[:opts.TopK]
+	}
+	finishMatches := func() {
+		if len(matches) > 1 {
+			sortVectorSearchResults(matches)
 		}
 	}
 	processRecord := func(record DocumentRecord) error {
@@ -155,6 +167,7 @@ func (c *Collection) SearchVectorsExact(query []float32, opts VectorSearchOption
 				return nil, err
 			}
 		}
+		finishMatches()
 		return matches, nil
 	}
 
@@ -167,6 +180,7 @@ func (c *Collection) SearchVectorsExact(query []float32, opts VectorSearchOption
 	if err != nil {
 		return nil, err
 	}
+	finishMatches()
 	return matches, nil
 }
 
@@ -216,7 +230,7 @@ func parseVectorFieldPath(field string) ([]string, error) {
 }
 
 func vectorFromJSONField(document []byte, fieldPath []string) ([]float32, bool, error) {
-	_, dataType, _, err := jsonparser.Get(document, fieldPath...)
+	raw, dataType, _, err := jsonparser.Get(document, fieldPath...)
 	if err == jsonparser.KeyPathNotFoundError || dataType == jsonparser.Null {
 		return nil, false, nil
 	}
@@ -228,7 +242,7 @@ func vectorFromJSONField(document []byte, fieldPath []string) ([]float32, bool, 
 	}
 	out := make([]float32, 0, 64)
 	var parseErr error
-	_, err = jsonparser.ArrayEach(document, func(value []byte, dataType jsonparser.ValueType, _ int, err error) {
+	_, err = jsonparser.ArrayEach(raw, func(value []byte, dataType jsonparser.ValueType, _ int, err error) {
 		if parseErr != nil {
 			return
 		}
@@ -242,7 +256,7 @@ func vectorFromJSONField(document []byte, fieldPath []string) ([]float32, bool, 
 			return
 		}
 		out = append(out, n)
-	}, fieldPath...)
+	})
 	if err != nil {
 		return nil, false, err
 	}
@@ -371,12 +385,16 @@ func validateFloat32Vector(vector []float32) error {
 
 func sortVectorSearchResults(results []VectorSearchResult) {
 	slices.SortFunc(results, func(left, right VectorSearchResult) int {
-		if left.Distance < right.Distance {
-			return -1
-		}
-		if left.Distance > right.Distance {
-			return 1
-		}
-		return bytes.Compare(left.DocumentID, right.DocumentID)
+		return compareVectorSearchResult(left, right)
 	})
+}
+
+func compareVectorSearchResult(left, right VectorSearchResult) int {
+	if left.Distance < right.Distance {
+		return -1
+	}
+	if left.Distance > right.Distance {
+		return 1
+	}
+	return bytes.Compare(left.DocumentID, right.DocumentID)
 }
