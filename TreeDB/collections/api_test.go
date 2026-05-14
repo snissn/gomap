@@ -9985,7 +9985,7 @@ func TestCollectionUpdateCombinerShardedIngressPublishesDistinctIDsOnce(t *testi
 		select {
 		case result := <-done:
 			if result.err != nil || !result.matched || !result.modified {
-				t.Fatalf("%s result=%+v want matched modified nil err", name, result)
+				t.Fatalf("%s result matched=%v modified=%v err=%v want matched modified nil err", name, result.matched, result.modified, result.err)
 			}
 		case <-time.After(collectionTestTimeout(t, time.Second)):
 			t.Fatalf("%s update did not complete", name)
@@ -10117,6 +10117,97 @@ func TestCollectionUpdateCombinerLaneWorkersReadOwnBufferedWrites(t *testing.T) 
 		t.Fatalf("flush lane-worker updates: %v", err)
 	}
 	assertCity("sfo")
+}
+
+func TestCollectionUpdateCombinerLaneWorkersDeferDuplicateDocumentUntilAfterStage(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{
+		Dir:        t.TempDir(),
+		Durability: backenddb.DurabilityWALOffRelaxed,
+	})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatBSON,
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{mustBSONCollectionDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "city", Value: "hnl"}})},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush insert buffer: %v", err)
+	}
+
+	setCity := func(city string) bsonSetUpdate {
+		t.Helper()
+		spec, err := newBSONSetUpdate([]BSONSetField{{
+			Key:   "city",
+			Value: mustBSONRawValue(t, city),
+		}})
+		if err != nil {
+			t.Fatalf("prepare BSON set %q: %v", city, err)
+		}
+		return spec
+	}
+	done1 := make(chan collectionUpdateCombineResult, 1)
+	done2 := make(chan collectionUpdateCombineResult, 1)
+	req1 := newCollectionUpdateCombineRequest(col, []byte("u1"), nil, setCity("sea"), true, done1)
+	req2 := newCollectionUpdateCombineRequest(col, []byte("u1"), nil, setCity("sfo"), true, done2)
+
+	combiner := &collectionUpdateCombiner{
+		maxBatch:        8,
+		domain:          col.writeDomain,
+		laneWorkers:     true,
+		shardedRequests: []chan collectionUpdateCombineRequest{make(chan collectionUpdateCombineRequest, 8)},
+		preparedBatches: make(chan collectionUpdateCombinePreparedBatch, 8),
+	}
+	mergerDone := make(chan struct{})
+	go func() {
+		combiner.runPreparedBatchMerger()
+		close(mergerDone)
+	}()
+	combiner.shardedRequests[0] <- req1
+	combiner.shardedRequests[0] <- req2
+	close(combiner.shardedRequests[0])
+	combiner.runShardWorker(0)
+	close(combiner.preparedBatches)
+	select {
+	case <-mergerDone:
+	case <-time.After(collectionTestTimeout(t, time.Second)):
+		t.Fatal("prepared batch merger did not exit")
+	}
+
+	for name, done := range map[string]chan collectionUpdateCombineResult{"first": done1, "second": done2} {
+		select {
+		case result := <-done:
+			if result.err != nil || !result.matched || !result.modified {
+				t.Fatalf("%s result=%+v want matched modified nil err", name, result)
+			}
+		case <-time.After(collectionTestTimeout(t, time.Second)):
+			t.Fatalf("%s update did not complete", name)
+		}
+	}
+	doc, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get u1: %v", err)
+	}
+	if got := bson.Raw(doc).Lookup("city").StringValue(); got != "sfo" {
+		t.Fatalf("city=%q want sfo", got)
+	}
 }
 
 func TestCollectionUpdateCombinerSinglePreparedLanePlanStagesBuffered(t *testing.T) {
@@ -10293,11 +10384,19 @@ func TestCollectionUpdateCombinerMergedLanePlansPreserveBufferedReadGeneration(t
 	beforeState := d.State()
 	beforeStats := mgr.StatsSnapshot()
 	first := prepareSetScore("u1", 1)
+	secondOtherDoc := prepareSetScore("u2", 10)
 	combiner.stagePreparedBatches([]collectionUpdateCombinePreparedBatch{first})
 	requireResult(first, "first")
 
-	secondOtherDoc := prepareSetScore("u2", 10)
 	secondSameDoc := prepareSetScore("u1", 2)
+	merged, _, err := mergeDirectBufferedPreparedBatches([]collectionUpdateCombinePreparedBatch{secondOtherDoc, secondSameDoc})
+	if err != nil {
+		t.Fatalf("merge mixed-generation plans: %v", err)
+	}
+	if merged.directBufferedUpdate == nil || len(merged.directBufferedUpdate.primaryEntryReadGenerations) == 0 {
+		t.Fatalf("merged mixed-generation plan missing per-entry read generations: %+v", merged.directBufferedUpdate)
+	}
+	merged.close()
 	combiner.stagePreparedBatches([]collectionUpdateCombinePreparedBatch{secondOtherDoc, secondSameDoc})
 	requireResult(secondOtherDoc, "second other doc")
 	requireResult(secondSameDoc, "second same doc")
@@ -10312,6 +10411,125 @@ func TestCollectionUpdateCombinerMergedLanePlansPreserveBufferedReadGeneration(t
 	}
 	assertScore("u1", 2)
 	assertScore("u2", 10)
+}
+
+func TestMergeDirectBufferedPreparedBatchesRejectsSchemaMismatch(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{
+		Dir:        t.TempDir(),
+		Durability: backenddb.DurabilityWALOffRelaxed,
+	})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat:                   DocumentFormatBSON,
+			BufferedIndexedWrites:            true,
+			BufferedIndexedWriteMaxDocuments: 1 << 20,
+			BufferedIndexedWriteMaxRootRuns:  1 << 20,
+		},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city", ValueType: IndexValueString}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{
+			mustBSONCollectionDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "city", Value: "hnl"}, {Key: "score", Value: int32(0)}}),
+			mustBSONCollectionDocument(t, bson.D{{Key: "_id", Value: "u2"}, {Key: "city", Value: "hnl"}, {Key: "score", Value: int32(0)}}),
+		},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush insert buffer: %v", err)
+	}
+
+	combiner := &collectionUpdateCombiner{
+		maxBatch:        8,
+		domain:          col.writeDomain,
+		laneWorkers:     true,
+		shardedRequests: make([]chan collectionUpdateCombineRequest, 4),
+	}
+	for i := range combiner.shardedRequests {
+		combiner.shardedRequests[i] = make(chan collectionUpdateCombineRequest, 8)
+	}
+	prepareSetScore := func(id string, score int32) collectionUpdateCombinePreparedBatch {
+		t.Helper()
+		spec, err := newBSONSetUpdate([]BSONSetField{{
+			Key:   "score",
+			Value: mustBSONRawValue(t, score),
+		}})
+		if err != nil {
+			t.Fatalf("prepare BSON set score=%d: %v", score, err)
+		}
+		req := newCollectionUpdateCombineRequest(col, []byte(id), nil, spec, true, make(chan collectionUpdateCombineResult, 1))
+		prepared := combiner.prepareBatchWithScratch([]collectionUpdateCombineRequest{req}, nil)
+		if prepared.err != nil {
+			t.Fatalf("prepare %s score=%d: %v", id, score, prepared.err)
+		}
+		if prepared.fallbackDirect || prepared.plan == nil || prepared.plan.directBufferedUpdate == nil {
+			t.Fatalf("prepare %s score=%d produced fallback/non-direct plan: %+v", id, score, prepared)
+		}
+		return prepared
+	}
+
+	first := prepareSetScore("u1", 1)
+	defer first.plan.close()
+	second := prepareSetScore("u2", 2)
+	defer second.plan.close()
+	second.plan.meta.Indexes = append(second.plan.meta.Indexes, IndexDefinition{Name: "status", Field: "status", ValueType: IndexValueString})
+	if _, _, err := mergeDirectBufferedPreparedBatches([]collectionUpdateCombinePreparedBatch{first, second}); !errors.Is(err, ErrConcurrentMutation) {
+		t.Fatalf("merge schema mismatch err=%v want ErrConcurrentMutation", err)
+	}
+}
+
+func TestGetBufferedDocumentPrefersCurrentRootRunOverDetachedOverlay(t *testing.T) {
+	meta := CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatBSON,
+		},
+	}
+	col := &Collection{meta: meta}
+	primaryRoot := collectionPrimaryRootName("users")
+
+	detachedOverlay := newBufferedPrimaryOverlay(1)
+	detachedOverlay.addEntries([]directBufferedRootEntry{{
+		key:   []byte("u1"),
+		value: mustBSONCollectionDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "city", Value: "old"}}),
+		flags: node.FlagInline,
+	}})
+	currentPrimary := newCollectionRunTable(1)
+	setCollectionRunValue(currentPrimary, []byte("u1"), mustBSONCollectionDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "city", Value: "new"}}))
+	defer resetCollectionRunTable(currentPrimary)
+
+	domain := &collectionWriteDomain{
+		count:  2,
+		loaded: true,
+		meta:   meta,
+		indexedFlushUnits: []indexedFlushUnit{{
+			primaryOverlay: detachedOverlay,
+		}},
+		rootRuns: map[string][]memtable.Table{
+			primaryRoot: {currentPrimary},
+		},
+	}
+	doc, buffered, found := col.getBufferedDocumentIntoLocked(domain, []byte("u1"), nil)
+	if !buffered || !found {
+		t.Fatalf("buffered=%v found=%v want true,true", buffered, found)
+	}
+	if got := bson.Raw(doc).Lookup("city").StringValue(); got != "new" {
+		t.Fatalf("city=%q want new", got)
+	}
 }
 
 func TestCollectionUpdateCombinerMixedCollectionsFallbackDirect(t *testing.T) {

@@ -174,6 +174,25 @@ func TestProfileBenchBufferedIndexedAsyncFlushEnv(t *testing.T) {
 	}
 }
 
+func TestProfileBenchEffectiveUpdateCombineLaneWorkers(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		shards      int
+		laneWorkers bool
+		want        bool
+	}{
+		{name: "disabled", shards: 4, laneWorkers: false, want: false},
+		{name: "single shard", shards: 1, laneWorkers: true, want: false},
+		{name: "sharded", shards: 4, laneWorkers: true, want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := profileBenchEffectiveUpdateCombineLaneWorkers(tc.shards, tc.laneWorkers); got != tc.want {
+				t.Fatalf("effective lane workers=%v want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestProfileBenchTimedUpdatePhaseLabels(t *testing.T) {
 	called := false
 	err := runProfileBenchTimedUpdatePhase(context.Background(), func(ctx context.Context) error {
@@ -796,7 +815,7 @@ func benchmarkDirectCollectionConcurrentUpdateBSON(b *testing.B, indexes []colle
 	}
 	b.ReportMetric(float64(writers), "writers")
 	b.ReportMetric(float64(updateCombineShards), "update_combine_shards")
-	if updateCombineLaneWorkers {
+	if profileBenchEffectiveUpdateCombineLaneWorkers(updateCombineShards, updateCombineLaneWorkers) {
 		b.ReportMetric(1, "update_combine_lane_workers")
 	}
 	reportProfileBenchBufferedIndexedWriteOptions(b, collection.Meta().Options)
@@ -2677,6 +2696,10 @@ func profileBenchUpdateCombineShards(tb testing.TB) int {
 
 func profileBenchUpdateCombineLaneWorkers(tb testing.TB) bool {
 	return profileBenchBoolEnv(tb, "MONGO_GATEWAY_PROFILE_BENCH_UPDATE_COMBINE_LANE_WORKERS", false)
+}
+
+func profileBenchEffectiveUpdateCombineLaneWorkers(shards int, laneWorkers bool) bool {
+	return laneWorkers && shards > 1
 }
 
 func profileBenchBufferedIndexedAsyncFlush(tb testing.TB) bool {
