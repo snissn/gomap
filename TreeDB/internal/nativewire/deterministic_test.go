@@ -1051,6 +1051,16 @@ func TestDecodeDeterministicEntryRejectsCollectionMetaApplyDecoderConstraints(t 
 	}
 }
 
+func TestDecodeDeterministicEntryAcceptsDisabledCollectionWALCapabilityAlias(t *testing.T) {
+	meta := deterministicCollectionMetaPayloadWithOptions("users", deterministicCollectionMetaOptions{
+		collectionWALDurableAckCapability: "disabled",
+	})
+	raw := deterministicMetadataEntryRaw(CommandCreateCollection, SectionCollectionMeta, meta)
+	if _, err := DecodeDeterministicEntry(raw, Limits{}); err != nil {
+		t.Fatalf("DecodeDeterministicEntry disabled collection WAL capability alias: %v", err)
+	}
+}
+
 func TestDeterministicCollectionMetaRejectsUnknownScalarEnums(t *testing.T) {
 	registry := MustV1Registry()
 	for _, tc := range []struct {

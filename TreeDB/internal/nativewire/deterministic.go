@@ -1111,7 +1111,7 @@ func validateDeterministicIndexValueTypeEnum(value uint64) error {
 
 func validateDeterministicCollectionWALDurableAckCapability(value string) error {
 	switch value {
-	case "", "NoIndexRowInsertOnly":
+	case "", "disabled", "NoIndexRowInsertOnly":
 		return nil
 	default:
 		return protocolError(ErrInvalidCommand, "unsupported collection WAL durable-ack capability %q", value)

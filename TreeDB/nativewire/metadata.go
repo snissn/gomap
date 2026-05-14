@@ -915,7 +915,7 @@ func ensureKnownRootStoragePolicy(policy collections.RootStoragePolicy) error {
 
 func ensureKnownCollectionWALDurableAckCapability(capability string) error {
 	switch capability {
-	case collections.CollectionWALDurableAckDisabled, collections.CollectionWALDurableAckNoIndexRowInsertOnly:
+	case collections.CollectionWALDurableAckDisabled, "disabled", collections.CollectionWALDurableAckNoIndexRowInsertOnly:
 		return nil
 	default:
 		return invalidMetadata("unsupported collection WAL durable-ack capability %q", capability)

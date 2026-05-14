@@ -575,6 +575,35 @@ func TestDecodeCollectionMetaV1DefaultsCollectionWALDurableAckCapabilityOff(t *t
 	}
 }
 
+func TestCollectionMetaAcceptsDisabledCollectionWALDurableAckCapabilityAlias(t *testing.T) {
+	decoded, err := decodeCollectionMeta(testCollectionMetaV2PayloadWithCapability("disabled", 0))
+	if err != nil {
+		t.Fatalf("decodeCollectionMeta disabled alias: %v", err)
+	}
+	if decoded.Options.CollectionWALDurableAckCapability != "disabled" {
+		t.Fatalf("decoded collection WAL durable-ack capability=%q want disabled alias", decoded.Options.CollectionWALDurableAckCapability)
+	}
+
+	client, _, _ := serveCollectionPipe(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	created, err := client.CreateCollection(ctx, collections.CollectionMeta{
+		Name: "users",
+		Options: collections.CollectionOptions{
+			CollectionWALDurableAckCapability: "disabled",
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateCollection disabled alias: %v", err)
+	}
+	if created.Options.CollectionWALDurableAckCapability != collections.CollectionWALDurableAckDisabled {
+		t.Fatalf("created collection WAL durable-ack capability=%q want disabled", created.Options.CollectionWALDurableAckCapability)
+	}
+}
+
 func TestDecodeCollectionMetaRejectsUnknownCollectionWALDurableAckCapability(t *testing.T) {
 	payload := testCollectionMetaV2PayloadWithCapability("UnknownCapability", 0)
 	if _, err := decodeCollectionMeta(payload); nativeCodeOf(err) != iwire.ErrInvalidCommand {
