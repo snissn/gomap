@@ -251,6 +251,7 @@ func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
 }
 
 // Serve accepts MongoDB clients for a standalone TreeDB gateway.
+// Serve owns ln and closes it before returning, matching Server.Serve.
 func (s *StandaloneServer) Serve(ctx context.Context, ln net.Listener) error {
 	if s == nil || s.Server == nil {
 		if ln != nil {
