@@ -12670,7 +12670,7 @@ func TestDirectBufferedRootEntriesOwnKeysAndRetainDocumentArena(t *testing.T) {
 	primaryEntries := buildDirectBufferedPrimaryRootEntries([]preparedBatchUpdate{{
 		documentID: documentID,
 		document:   document,
-	}})
+	}}, scratch)
 	if len(primaryEntries) != 1 {
 		t.Fatalf("primary entries=%d want 1", len(primaryEntries))
 	}
@@ -12691,12 +12691,13 @@ func TestDirectBufferedRootEntriesOwnKeysAndRetainDocumentArena(t *testing.T) {
 	plan.directBufferedUpdate = &directBufferedUpdatePlan{primaryEntries: primaryEntries}
 	var domain collectionWriteDomain
 	retainDirectBufferedDocumentArenaLocked(&domain, plan)
-	if got := len(domain.rootValueArenas); got != 1 {
-		t.Fatalf("retained document arenas=%d want 1", got)
+	if got := len(domain.rootValueArenas); got != 2 {
+		t.Fatalf("retained key/document arenas=%d want 2", got)
 	}
 	plan.close()
 	reused := getUpdateBatchPlanScratch(1, 0)
 	_ = appendUpdateBatchPlanScratchDocument(reused, []byte(`{"city":"koa"}`))
+	_ = appendUpdateBatchPlanScratchKey(reused, []byte("u9"))
 	putUpdateBatchPlanScratch(reused)
 	got, deleted, ok := table.Get([]byte("u1"))
 	if !ok || deleted || !bytes.Equal(got, []byte(`{"city":"hnl"}`)) {

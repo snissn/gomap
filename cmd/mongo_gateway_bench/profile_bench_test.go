@@ -774,13 +774,20 @@ func benchmarkDirectCollectionConcurrentUpdateBSON(b *testing.B, indexes []colle
 	backendStatsBefore := backend.Stats()
 	b.ResetTimer()
 	started := time.Now()
+	var logicalUpdateElapsed time.Duration
+	var finalFlushElapsed time.Duration
 	err = runProfileBenchTimedUpdatePhase(context.Background(), func(ctx context.Context) error {
+		updateStarted := time.Now()
 		if err := runProfileBenchDirectCollectionConcurrentUpdates(ctx, writers, b.N, documentCount, idStride, ids, updateDocs, collection); err != nil {
 			return err
 		}
+		logicalUpdateElapsed = time.Since(updateStarted)
 		// Keep async indexed-flush rows comparable with synchronous rows: the
 		// timed update phase includes the final drain of deferred publish work.
-		return manager.FlushAll()
+		flushStarted := time.Now()
+		err := manager.FlushAll()
+		finalFlushElapsed = time.Since(flushStarted)
+		return err
 	})
 	timedElapsed := time.Since(started)
 	b.StopTimer()
@@ -800,6 +807,12 @@ func benchmarkDirectCollectionConcurrentUpdateBSON(b *testing.B, indexes []colle
 	reportProfileBenchOrderedRootPublishStats(b, backendStatsAfter, backendStatsBefore, b.N)
 	reportProfileBenchBackendVlogMmapStats(b, backendStatsAfter, backendStatsBefore, b.N)
 	reportDocsPerSecond(b, b.N, timedElapsed)
+	if logicalUpdateElapsed > 0 {
+		b.ReportMetric(float64(b.N)/logicalUpdateElapsed.Seconds(), "logical_update_docs/sec")
+	}
+	if finalFlushElapsed > 0 {
+		b.ReportMetric(float64(finalFlushElapsed.Nanoseconds())/float64(b.N), "final_flush_ns/doc")
+	}
 }
 
 func runProfileBenchTimedUpdatePhase(ctx context.Context, run func(context.Context) error) error {

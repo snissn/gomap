@@ -74,6 +74,7 @@ const (
 	defaultCollectionUpdateCombineShards                = 1
 	defaultCollectionUpdateCombineDrainYields           = 1
 	defaultCollectionUpdateCombineLaneDrainYields       = 4
+	defaultCollectionUpdateCombinePreparedDrainYields   = 128
 	collectionUpdateCombineIdleTTL                      = 30 * time.Second
 	collectionUpdateCombineInlineQuietPeriod            = time.Millisecond
 	collectionPprofComponentKey                         = "gomap_component"
@@ -10193,7 +10194,7 @@ func (combiner *collectionUpdateCombiner) runPreparedBatchMerger() {
 				pending = append(pending, prepared)
 				pendingRequests += len(prepared.batch)
 			default:
-				if drainYields < defaultCollectionUpdateCombineLaneDrainYields {
+				if drainYields < defaultCollectionUpdateCombinePreparedDrainYields {
 					drainYields++
 					runtime.Gosched()
 					continue
@@ -11649,14 +11650,14 @@ func buildDirectBufferedTemplateRootEntries(records []templateV1Record) []direct
 	return entries
 }
 
-func buildDirectBufferedPrimaryRootEntries(changed []preparedBatchUpdate) []directBufferedRootEntry {
+func buildDirectBufferedPrimaryRootEntries(changed []preparedBatchUpdate, scratch *updateBatchPlanScratch) []directBufferedRootEntry {
 	if len(changed) == 0 {
 		return nil
 	}
 	entries := make([]directBufferedRootEntry, len(changed))
 	for i := range changed {
 		entries[i] = directBufferedRootEntry{
-			key:   bytes.Clone(changed[i].documentID),
+			key:   appendUpdateBatchPlanScratchKey(scratch, changed[i].documentID),
 			value: changed[i].document,
 			flags: node.FlagInline,
 		}
@@ -11673,15 +11674,27 @@ func detachUpdateBatchPlanDocumentArena(scratch *updateBatchPlanScratch) []byte 
 	return arena
 }
 
+func detachUpdateBatchPlanKeyArena(scratch *updateBatchPlanScratch) []byte {
+	if scratch == nil || len(scratch.keyArena) == 0 {
+		return nil
+	}
+	arena := scratch.keyArena
+	scratch.keyArena = nil
+	return arena
+}
+
 func retainDirectBufferedDocumentArenaLocked(domain *collectionWriteDomain, plan *updateBatchPlan) {
 	if domain == nil || plan == nil || plan.directBufferedUpdate == nil {
 		return
 	}
 	arena := detachUpdateBatchPlanDocumentArena(plan.scratch)
-	if len(arena) == 0 {
-		return
+	if len(arena) > 0 {
+		domain.rootValueArenas = append(domain.rootValueArenas, arena)
 	}
-	domain.rootValueArenas = append(domain.rootValueArenas, arena)
+	keyArena := detachUpdateBatchPlanKeyArena(plan.scratch)
+	if len(keyArena) > 0 {
+		domain.rootValueArenas = append(domain.rootValueArenas, keyArena)
+	}
 }
 
 func applyDirectBufferedRootEntries(table memtable.Table, entries []directBufferedRootEntry) error {
@@ -11789,6 +11802,7 @@ type updateBatchPlanScratch struct {
 	changed                []preparedBatchUpdate
 	changedDocuments       [][]byte
 	documentArena          []byte
+	keyArena               []byte
 	bsonSetDocumentScratch []byte
 	stateArena             indexEncodeArena
 	rootNames              []string
@@ -11847,6 +11861,11 @@ func getUpdateBatchPlanScratch(itemCount, runtimeCount int) *updateBatchPlanScra
 		scratch.documentArena = make([]byte, 0, documentArenaBytes)
 	} else {
 		scratch.documentArena = scratch.documentArena[:0]
+	}
+	if cap(scratch.keyArena) < itemCount*collectionUpdateCombineInlineDocumentIDMax {
+		scratch.keyArena = make([]byte, 0, itemCount*collectionUpdateCombineInlineDocumentIDMax)
+	} else {
+		scratch.keyArena = scratch.keyArena[:0]
 	}
 	scratch.bsonSetDocumentScratch = scratch.bsonSetDocumentScratch[:0]
 	arenaBytes := estimateIndexEncodeArenaBytesForCount(itemCount*2, runtimeCount)
@@ -11917,6 +11936,11 @@ func putUpdateBatchPlanScratch(scratch *updateBatchPlanScratch) {
 	} else {
 		scratch.documentArena = scratch.documentArena[:0]
 	}
+	if cap(scratch.keyArena) > updateBatchPlanScratchMaxDocumentArena {
+		scratch.keyArena = nil
+	} else {
+		scratch.keyArena = scratch.keyArena[:0]
+	}
 	if cap(scratch.bsonSetDocumentScratch) > updateBatchPlanScratchMaxBSONSetDocumentBytes {
 		scratch.bsonSetDocumentScratch = nil
 	} else {
@@ -11962,6 +11986,18 @@ func appendUpdateBatchPlanScratchDocument(scratch *updateBatchPlanScratch, docum
 	start := len(scratch.documentArena)
 	scratch.documentArena = append(scratch.documentArena, document...)
 	return scratch.documentArena[start:len(scratch.documentArena):len(scratch.documentArena)]
+}
+
+func appendUpdateBatchPlanScratchKey(scratch *updateBatchPlanScratch, key []byte) []byte {
+	if len(key) == 0 {
+		return nil
+	}
+	if scratch == nil {
+		return bytes.Clone(key)
+	}
+	start := len(scratch.keyArena)
+	scratch.keyArena = append(scratch.keyArena, key...)
+	return scratch.keyArena[start:len(scratch.keyArena):len(scratch.keyArena)]
 }
 
 type updateBatchBufferedRead struct {
@@ -12943,18 +12979,20 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 			if item.hasBSONSet {
 				prepared.affectedIndexRuntimeMask, prepared.knownAffectedIndexes = item.bsonSet.affectedIndexMask(runtimes, plannerOptions)
 			}
-			phaseStart = updateBatchStatsNow(detailedStats)
-			if prepared.knownAffectedIndexes {
-				prepared.oldState, err = orderedIndexStateForKnownValidDocumentRuntimeMask(current.value, runtimes, prepared.affectedIndexRuntimeMask, plannerOptions, stateArena)
-			} else {
-				prepared.oldState, err = orderedIndexStateForDocumentWithArena(current.value, runtimes, plannerOptions, stateArena)
-			}
-			phaseDuration := updateBatchStatsSince(detailedStats, phaseStart)
-			stats.IndexStateExtraction += phaseDuration
-			stats.OldIndexStateExtract += phaseDuration
-			if err != nil {
-				_ = snap.Close()
-				return nil, updateBatchItemError(i, err)
+			if !prepared.knownAffectedIndexes || prepared.affectedIndexRuntimeMask != 0 {
+				phaseStart = updateBatchStatsNow(detailedStats)
+				if prepared.knownAffectedIndexes {
+					prepared.oldState, err = orderedIndexStateForKnownValidDocumentRuntimeMask(current.value, runtimes, prepared.affectedIndexRuntimeMask, plannerOptions, stateArena)
+				} else {
+					prepared.oldState, err = orderedIndexStateForDocumentWithArena(current.value, runtimes, plannerOptions, stateArena)
+				}
+				phaseDuration := updateBatchStatsSince(detailedStats, phaseStart)
+				stats.IndexStateExtraction += phaseDuration
+				stats.OldIndexStateExtract += phaseDuration
+				if err != nil {
+					_ = snap.Close()
+					return nil, updateBatchItemError(i, err)
+				}
 			}
 		}
 		if !item.hasBSONSet {
@@ -13047,6 +13085,10 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 	for i := range changed {
 		changed[i].document = preparedDocuments[i]
 		if len(runtimes) > 0 {
+			if changed[i].knownAffectedIndexes && changed[i].affectedIndexRuntimeMask == 0 {
+				recordKnownUnaffectedIndexStats(runtimes, &stats)
+				continue
+			}
 			phaseStart = updateBatchStatsNow(detailedStats)
 			if changed[i].knownAffectedIndexes {
 				changed[i].newState, err = orderedIndexStateForKnownValidDocumentRuntimeMask(changed[i].document, runtimes, changed[i].affectedIndexRuntimeMask, plannerOptions, stateArena)
@@ -13149,7 +13191,7 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 		stats.TemplateRunBuild += updateBatchStatsSince(detailedStats, phaseStart)
 
 		phaseStart = updateBatchStatsNow(detailedStats)
-		primaryEntries := buildDirectBufferedPrimaryRootEntries(changed)
+		primaryEntries := buildDirectBufferedPrimaryRootEntries(changed, scratch)
 		rootNames = append(rootNames, primaryRootName)
 		uniqueSecondary = append(uniqueSecondary, -1)
 		baseRootIDs[primaryRootName] = primaryRoot
@@ -14213,6 +14255,24 @@ func documentIndexRuntimeChanged(oldState, newState documentIndexState, runtime 
 
 func orderedDocumentIndexRuntimeChanged(oldState, newState orderedDocumentIndexState, runtimeIdx int) bool {
 	return !normalizedEncodedIndexValuesEqual(oldState.valuesAt(runtimeIdx), newState.valuesAt(runtimeIdx))
+}
+
+func recordKnownUnaffectedIndexStats(runtimes []indexRuntime, stats *CollectionUpdateStats) {
+	if stats == nil {
+		return
+	}
+	for runtimeIdx, runtime := range runtimes {
+		stats.IndexValueUnchanged++
+		if runtime.def.unique {
+			stats.UniqueIndexCheckSkips++
+		}
+		if runtimeIdx < stats.IndexStatsCount {
+			stats.IndexStats[runtimeIdx].Unchanged++
+			if runtime.def.unique {
+				stats.IndexStats[runtimeIdx].UniqueCheckSkips++
+			}
+		}
+	}
 }
 
 func updateIndexChangedMaskBit(runtimeIdx int) (uint64, bool) {

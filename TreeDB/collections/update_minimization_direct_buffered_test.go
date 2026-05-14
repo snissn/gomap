@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"errors"
 	"testing"
+	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/x/bsonx/bsoncore"
 )
 
 func TestCollectionUpdateBatchDirectBufferedBSONSkipsUnchangedSecondaryRoots(t *testing.T) {
@@ -155,6 +157,103 @@ func TestCollectionUpdateBatchDirectBufferedBSONSkipsUnchangedSecondaryRoots(t *
 	}
 	if got := bufferedPrimaryCacheCountForTest(t, col); got != 0 {
 		t.Fatalf("primary cache entries after delete=%d want 0", got)
+	}
+}
+
+func TestCollectionUpdateBSONSetDirectBufferedUnaffectedIndexesSkipStateExtractionAndRetainKeys(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	mgr.SetUpdateBatchDetailedStatsEnabled(true)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat:        DocumentFormatBSON,
+			BufferedIndexedWrites: true,
+		},
+		Indexes: []IndexDefinition{
+			{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true},
+			{Name: "city", Field: "city", ValueType: IndexValueString},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	ids := [][]byte{[]byte("u1"), []byte("u2"), []byte("u3"), []byte("u4")}
+	docs := make([][]byte, len(ids))
+	for i, id := range ids {
+		docs[i] = mustBSONCollectionDocument(t, bson.D{
+			{Key: "_id", Value: string(id)},
+			{Key: "email", Value: string(id) + "@example.com"},
+			{Key: "city", Value: "hnl"},
+			{Key: "score", Value: int32(i)},
+		})
+	}
+	if _, err := col.InsertBatch(ids, docs); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush insert buffer: %v", err)
+	}
+
+	updateScore := func(docID string, score int32) BSONSetUpdateBatchItem {
+		return BSONSetUpdateBatchItem{
+			DocumentID: []byte(docID),
+			Fields: []BSONSetField{{
+				Key:   "score",
+				Value: bson.RawValue{Type: bson.TypeInt32, Value: bsoncore.AppendInt32(nil, score)},
+			}},
+		}
+	}
+	if results, batched, err := col.UpdateBSONSetBatchIfNoSecondaryUniqueIndexChanges([]BSONSetUpdateBatchItem{
+		updateScore("u1", 11),
+		updateScore("u2", 12),
+	}); err != nil {
+		t.Fatalf("first UpdateBSONSetBatchIfNoSecondaryUniqueIndexChanges: %v", err)
+	} else if !batched || len(results) != 2 || !results[0].Matched || !results[0].Modified || !results[1].Matched || !results[1].Modified {
+		t.Fatalf("first results=%+v batched=%v want two matched modified rows", results, batched)
+	}
+	if results, batched, err := col.UpdateBSONSetBatchIfNoSecondaryUniqueIndexChanges([]BSONSetUpdateBatchItem{
+		updateScore("u3", 13),
+		updateScore("u4", 14),
+	}); err != nil {
+		t.Fatalf("second UpdateBSONSetBatchIfNoSecondaryUniqueIndexChanges: %v", err)
+	} else if !batched || len(results) != 2 || !results[0].Matched || !results[0].Modified || !results[1].Matched || !results[1].Modified {
+		t.Fatalf("second results=%+v batched=%v want two matched modified rows", results, batched)
+	}
+	stats := col.LastUpdateStats()
+	if got, want := stats.IndexStateExtraction, time.Duration(0); got != want {
+		t.Fatalf("index state extraction=%s want %s for BSON $set fields disjoint from indexes", got, want)
+	}
+	if got, want := stats.IndexValueUnchanged, 4; got != want {
+		t.Fatalf("index unchanged=%d want %d", got, want)
+	}
+	if got, want := stats.UniqueIndexCheckSkips, 2; got != want {
+		t.Fatalf("unique skips=%d want %d", got, want)
+	}
+	for _, tc := range []struct {
+		id    string
+		score int32
+	}{
+		{id: "u1", score: 11},
+		{id: "u2", score: 12},
+		{id: "u3", score: 13},
+		{id: "u4", score: 14},
+	} {
+		got, err := col.Get([]byte(tc.id))
+		if err != nil {
+			t.Fatalf("get %s after buffered BSON updates: %v", tc.id, err)
+		}
+		if gotScore := bson.Raw(got).Lookup("score").Int32(); gotScore != tc.score {
+			t.Fatalf("%s score=%d want %d", tc.id, gotScore, tc.score)
+		}
 	}
 }
 
