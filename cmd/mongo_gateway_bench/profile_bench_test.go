@@ -99,6 +99,7 @@ func TestProfileBenchBufferedIndexedAsyncFlushEnv(t *testing.T) {
 	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_WRITE_MAX_ROOT_RUNS", "")
 	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_OVERLAY_ROOTS", "")
 	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_COMPACT_OVERLAY_ROOTS_AFTER_FLUSH", "")
+	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_UPDATE_COMBINE_SHARDS", "")
 	if profileBenchBufferedIndexedAsyncFlush(t) {
 		t.Fatal("async flush default=true want false")
 	}
@@ -122,6 +123,9 @@ func TestProfileBenchBufferedIndexedAsyncFlushEnv(t *testing.T) {
 	}
 	if got := profileBenchBufferedIndexedWriteMaxRootRuns(t); got != 0 {
 		t.Fatalf("buffered max root runs default=%d want 0", got)
+	}
+	if got := profileBenchUpdateCombineShards(t); got != 1 {
+		t.Fatalf("update combine shards default=%d want 1", got)
 	}
 	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_BUFFERED_INDEXED_ASYNC_FLUSH", "true")
 	if !profileBenchBufferedIndexedAsyncFlush(t) {
@@ -155,6 +159,10 @@ func TestProfileBenchBufferedIndexedAsyncFlushEnv(t *testing.T) {
 	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_COMPACT_OVERLAY_ROOTS_AFTER_FLUSH", "true")
 	if !profileBenchCompactOverlayRootsAfterFlush(t) {
 		t.Fatal("compact overlay roots after flush env=true want true")
+	}
+	t.Setenv("MONGO_GATEWAY_PROFILE_BENCH_UPDATE_COMBINE_SHARDS", "6")
+	if got := profileBenchUpdateCombineShards(t); got != 6 {
+		t.Fatalf("update combine shards=%d want 6", got)
 	}
 }
 
@@ -729,6 +737,8 @@ func benchmarkDirectCollectionConcurrentUpdateBSON(b *testing.B, indexes []colle
 		ids[i] = []byte(benchmarkID(i))
 	}
 	idStride := profileBenchUpdateIDStride(documentCount)
+	updateCombineShards := profileBenchUpdateCombineShards(b)
+	manager.SetUpdateCombineShardsForProfiling(updateCombineShards)
 
 	writers := profileBenchConcurrentWriters(b)
 	warmupOps := documentCount
@@ -768,6 +778,7 @@ func benchmarkDirectCollectionConcurrentUpdateBSON(b *testing.B, indexes []colle
 		b.Fatalf("run concurrent updates: %v", err)
 	}
 	b.ReportMetric(float64(writers), "writers")
+	b.ReportMetric(float64(updateCombineShards), "update_combine_shards")
 	reportProfileBenchBufferedIndexedWriteOptions(b, collection.Meta().Options)
 	reportProfileBenchOverlayCompactionStats(b, "preload", preloadCompactStats)
 	reportProfileBenchOverlayCompactionStats(b, "warmup", warmupCompactStats)
@@ -2564,6 +2575,10 @@ func profileBenchUpdateDocumentCount(tb testing.TB) int {
 
 func profileBenchConcurrentWriters(tb testing.TB) int {
 	return profileBenchPositiveEnvInt(tb, "MONGO_GATEWAY_PROFILE_BENCH_WRITERS", 8)
+}
+
+func profileBenchUpdateCombineShards(tb testing.TB) int {
+	return profileBenchPositiveEnvInt(tb, "MONGO_GATEWAY_PROFILE_BENCH_UPDATE_COMBINE_SHARDS", 1)
 }
 
 func profileBenchBufferedIndexedAsyncFlush(tb testing.TB) bool {
