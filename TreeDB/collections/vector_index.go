@@ -384,8 +384,27 @@ func (c *Collection) notifyVectorIndexesDelete(documentIDs [][]byte) {
 	if len(indexes) == 0 {
 		return
 	}
+	deleted := make([][]byte, 0, len(documentIDs))
+	for _, documentID := range documentIDs {
+		if len(documentID) == 0 {
+			continue
+		}
+		document, err := c.Get(documentID)
+		if err != nil {
+			for _, index := range indexes {
+				index.recordTrackedMutationError(err)
+			}
+			continue
+		}
+		if document == nil {
+			deleted = append(deleted, documentID)
+		}
+	}
+	if len(deleted) == 0 {
+		return
+	}
 	for _, index := range indexes {
-		for _, documentID := range documentIDs {
+		for _, documentID := range deleted {
 			index.TombstoneDocumentID(documentID)
 		}
 	}

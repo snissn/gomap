@@ -97,6 +97,41 @@ func TestCollectionVectorIndexTrackedMutationErrorStats(t *testing.T) {
 	}
 }
 
+func TestCollectionVectorIndexStaleDeleteNotificationDoesNotTombstoneReinsert(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	col := openVectorIndexTestCollection(t, d)
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("a")},
+		[][]byte{[]byte(`{"embedding":[1,0]}`)},
+	); err != nil {
+		t.Fatalf("insert seed: %v", err)
+	}
+	index, err := col.BuildVectorIndex(VectorIndexOptions{
+		Name:   "embedding",
+		Field:  "embedding",
+		Metric: VectorMetricCosine,
+		M:      4,
+	})
+	if err != nil {
+		t.Fatalf("build vector index: %v", err)
+	}
+	col.notifyVectorIndexesDelete([][]byte{[]byte("a")})
+	if stats := index.Stats(); stats.LiveDocs != 1 || stats.DeletedDocs != 0 {
+		t.Fatalf("stale delete notification changed live index: %+v", stats)
+	}
+	deleted, err := col.DeleteDocument([]byte("a"))
+	if err != nil || !deleted {
+		t.Fatalf("delete deleted=%v err=%v", deleted, err)
+	}
+	if stats := index.Stats(); stats.LiveDocs != 0 || stats.DeletedDocs == 0 {
+		t.Fatalf("delete notification did not tombstone index: %+v", stats)
+	}
+}
+
 func TestCollectionVectorIndexInt8EncodingReranksCanonicalRows(t *testing.T) {
 	const (
 		docs = 24
