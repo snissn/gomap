@@ -160,6 +160,122 @@ func TestCollectionUpdateBatchDirectBufferedBSONSkipsUnchangedSecondaryRoots(t *
 	}
 }
 
+func TestCollectionUpdateBatchDirectBufferedBSONReadsDetachedAsyncPrimaryOverlay(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat:            DocumentFormatBSON,
+			BufferedIndexedWrites:     true,
+			BufferedIndexedAsyncFlush: true,
+		},
+		Indexes: []IndexDefinition{
+			{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true},
+			{Name: "city", Field: "city", ValueType: IndexValueString},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{mustBSONCollectionDocument(t, bson.D{
+			{Key: "_id", Value: "u1"},
+			{Key: "email", Value: "a@example.com"},
+			{Key: "city", Value: "hnl"},
+			{Key: "score", Value: int32(1)},
+		})},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush insert buffer: %v", err)
+	}
+	updateSet := func(field string, value bson.RawValue) BSONSetUpdateBatchItem {
+		return BSONSetUpdateBatchItem{
+			DocumentID: []byte("u1"),
+			Fields: []BSONSetField{{
+				Key:   field,
+				Value: value,
+			}},
+		}
+	}
+	if results, batched, err := col.UpdateBSONSetBatchIfNoSecondaryUniqueIndexChanges([]BSONSetUpdateBatchItem{
+		updateSet("score", bson.RawValue{Type: bson.TypeInt32, Value: bsoncore.AppendInt32(nil, 2)}),
+	}); err != nil {
+		t.Fatalf("first UpdateBSONSetBatchIfNoSecondaryUniqueIndexChanges: %v", err)
+	} else if !batched || len(results) != 1 || !results[0].Matched || !results[0].Modified {
+		t.Fatalf("first results=%+v batched=%v want one matched modified row", results, batched)
+	}
+
+	col.writeDomain.mu.Lock()
+	if !rotateIndexedMutableToFlushUnitForAsyncLocked(col.writeDomain) {
+		col.writeDomain.mu.Unlock()
+		t.Fatal("rotate async flush unit returned false")
+	}
+	if col.writeDomain.primaryOverlay != nil {
+		col.writeDomain.mu.Unlock()
+		t.Fatal("primary overlay remained mutable after async rotation")
+	}
+	if got := len(col.writeDomain.indexedFlushUnits); got != 1 {
+		col.writeDomain.mu.Unlock()
+		t.Fatalf("indexed flush units=%d want 1", got)
+	}
+	if got := col.writeDomain.indexedFlushUnits[0].primaryOverlay.len(); got != 1 {
+		col.writeDomain.mu.Unlock()
+		t.Fatalf("detached primary overlay entries=%d want 1", got)
+	}
+	col.writeDomain.mu.Unlock()
+
+	got, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get detached overlay BSON document: %v", err)
+	}
+	if gotScore := bson.Raw(got).Lookup("score").Int32(); gotScore != int32(2) {
+		t.Fatalf("detached overlay score=%d want 2", gotScore)
+	}
+
+	if results, batched, err := col.UpdateBSONSetBatchIfNoSecondaryUniqueIndexChanges([]BSONSetUpdateBatchItem{
+		updateSet("rank", bson.RawValue{Type: bson.TypeInt32, Value: bsoncore.AppendInt32(nil, 7)}),
+	}); err != nil {
+		t.Fatalf("second UpdateBSONSetBatchIfNoSecondaryUniqueIndexChanges: %v", err)
+	} else if !batched || len(results) != 1 || !results[0].Matched || !results[0].Modified {
+		t.Fatalf("second results=%+v batched=%v want one matched modified row", results, batched)
+	}
+	got, err = col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get merged detached/current overlay BSON document: %v", err)
+	}
+	if gotScore := bson.Raw(got).Lookup("score").Int32(); gotScore != int32(2) {
+		t.Fatalf("merged buffered score=%d want 2", gotScore)
+	}
+	if gotRank := bson.Raw(got).Lookup("rank").Int32(); gotRank != int32(7) {
+		t.Fatalf("merged buffered rank=%d want 7", gotRank)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush detached overlay update: %v", err)
+	}
+	got, err = col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get flushed detached overlay BSON document: %v", err)
+	}
+	if gotScore := bson.Raw(got).Lookup("score").Int32(); gotScore != int32(2) {
+		t.Fatalf("flushed score=%d want 2", gotScore)
+	}
+	if gotRank := bson.Raw(got).Lookup("rank").Int32(); gotRank != int32(7) {
+		t.Fatalf("flushed rank=%d want 7", gotRank)
+	}
+}
+
 func TestCollectionUpdateBSONSetDirectBufferedUnaffectedIndexesSkipStateExtractionAndRetainKeys(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
