@@ -10270,28 +10270,71 @@ func (combiner *collectionUpdateCombiner) runShardWorker(shard int) {
 		batchCap = 1
 	}
 	batch := make([]collectionUpdateCombineRequest, 0, batchCap)
+	deferred := make([]collectionUpdateCombineRequest, 0)
+	deferredHead := 0
 	itemsScratch := make([]updateBatchItem, 0, batchCap)
 	detailedStats := combiner.domain != nil && combiner.domain.updateBatchDetailedStats.Load()
-	for first := range requests {
+	requestsClosed := false
+	hasDeferred := func() bool {
+		return deferredHead < len(deferred)
+	}
+	popDeferred := func() (collectionUpdateCombineRequest, bool) {
+		if !hasDeferred() {
+			if len(deferred) > 0 {
+				clear(deferred)
+				deferred = deferred[:0]
+				deferredHead = 0
+			}
+			return collectionUpdateCombineRequest{}, false
+		}
+		req := deferred[deferredHead]
+		deferred[deferredHead] = collectionUpdateCombineRequest{}
+		deferredHead++
+		if deferredHead == len(deferred) {
+			deferred = deferred[:0]
+			deferredHead = 0
+		} else if deferredHead >= 32 && deferredHead*2 >= len(deferred) {
+			remaining := copy(deferred, deferred[deferredHead:])
+			clear(deferred[remaining:])
+			deferred = deferred[:remaining]
+			deferredHead = 0
+		}
+		return req, true
+	}
+	for {
+		first, fromDeferred := popDeferred()
+		if !fromDeferred {
+			if requestsClosed {
+				return
+			}
+			var ok bool
+			first, ok = <-requests
+			if !ok {
+				return
+			}
+			combiner.observeUpdateCombineDequeued(first, detailedStats)
+			first.queuedAt = time.Time{}
+		}
 		batch = append(batch[:0], first)
-		combiner.observeUpdateCombineDequeued(first, detailedStats)
 		drainYields := 0
 		var drainStart time.Time
 		if detailedStats {
 			drainStart = time.Now()
 		}
-		closed := false
 		for len(batch) < batchCap {
+			if requestsClosed {
+				goto flush
+			}
 			select {
 			case req, ok := <-requests:
 				if !ok {
-					closed = true
+					requestsClosed = true
 					goto flush
 				}
 				combiner.observeUpdateCombineDequeued(req, detailedStats)
 				req.queuedAt = time.Time{}
 				if collectionUpdateCombineBatchHasID(batch, req) {
-					completeUpdateCombineRequest(req, runUpdateCombineDirect(req))
+					deferred = append(deferred, req)
 					continue
 				}
 				batch = append(batch, req)
@@ -10318,7 +10361,7 @@ func (combiner *collectionUpdateCombiner) runShardWorker(shard int) {
 		}
 		clear(batch)
 		batch = batch[:0]
-		if closed {
+		if requestsClosed && !hasDeferred() {
 			return
 		}
 	}
@@ -10623,6 +10666,15 @@ func mergeDirectBufferedPreparedBatches(prepared []collectionUpdateCombinePrepar
 		}
 		if len(p.batch) == 0 || p.batch[0].collection != collection {
 			return nil, nil, errors.New("collections: cannot merge update plans across collections")
+		}
+		if !sameCollectionMeta(plan.meta, firstPlan.meta) {
+			return nil, nil, fmt.Errorf("%w: cannot merge update plans across collection schemas", ErrConcurrentMutation)
+		}
+		if (plan.catalog == nil) != (firstPlan.catalog == nil) {
+			return nil, nil, fmt.Errorf("%w: cannot merge update plans across collection catalogs", ErrConcurrentMutation)
+		}
+		if plan.catalog != nil && !sameCollectionMeta(plan.catalog.meta, firstPlan.catalog.meta) {
+			return nil, nil, fmt.Errorf("%w: cannot merge update plans across collection catalog schemas", ErrConcurrentMutation)
 		}
 		if plan.bufferedBase != commonBufferedBase || plan.bufferedReadGeneration != commonBufferedReadGeneration {
 			sameBufferedRead = false
@@ -12891,12 +12943,22 @@ func snapshotUpdateBatchBufferedPrimaryEntriesLocked(domain *collectionWriteDoma
 	if missing <= 0 {
 		return entries, buffer, nil
 	}
+	primaryRuns := domain.rootRuns[collectionPrimaryRootName(collectionName)]
 	for i, item := range items {
 		if entries[i].found {
 			continue
 		}
 		ref, ok := lookupPendingPrimaryOverlayLocked(domain, item.DocumentID)
 		if !ok {
+			continue
+		}
+		if value, _, flags, found := getBufferedRunEntry(primaryRuns, item.DocumentID); found {
+			entries[i] = updateBatchBufferedEntry{
+				value: buffer.copyValue(value),
+				flags: flags,
+				found: true,
+			}
+			missing--
 			continue
 		}
 		entries[i] = updateBatchBufferedEntry{
@@ -16053,6 +16115,12 @@ func (c *Collection) getBufferedDocumentIntoLocked(domain *collectionWriteDomain
 		return append(dst[:0], ref.value...), true, true
 	}
 	if ref, ok := lookupPendingPrimaryOverlayLocked(domain, documentID); ok {
+		if value, flags, found := c.getCurrentPrimaryRootRunEntryLocked(domain, documentID); found {
+			if flags&node.FlagTombstone != 0 {
+				return dst[:0], true, false
+			}
+			return append(dst[:0], value...), true, true
+		}
 		if ref.flags&node.FlagTombstone != 0 {
 			return dst[:0], true, false
 		}
@@ -16092,6 +16160,18 @@ func (c *Collection) getBufferedDocumentIntoLocked(domain *collectionWriteDomain
 		return dst[:0], true, false
 	}
 	return append(dst[:0], value...), true, true
+}
+
+func (c *Collection) getCurrentPrimaryRootRunEntryLocked(domain *collectionWriteDomain, documentID []byte) ([]byte, byte, bool) {
+	if c == nil || domain == nil {
+		return nil, 0, false
+	}
+	name := collectionPrimaryRootName(c.meta.Name)
+	if domain.meta.Name != "" {
+		name = collectionPrimaryRootName(domain.meta.Name)
+	}
+	value, _, flags, found := getBufferedRunEntry(domain.rootRuns[name], documentID)
+	return value, flags, found
 }
 
 func (c *Collection) FindByIndex(indexName, value string) ([][]byte, error) {
