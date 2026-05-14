@@ -75,6 +75,43 @@ func TestVectorIndexPruneLayerNeighborsUsesDistanceThenDocumentID(t *testing.T) 
 	}
 }
 
+func TestVectorIndexSelectLayerNeighborsReusesCandidateDistances(t *testing.T) {
+	index, err := newVectorIndex(nil, VectorIndexOptions{
+		Name:   "embedding",
+		Field:  "embedding",
+		Metric: VectorMetricCosine,
+	})
+	if err != nil {
+		t.Fatalf("new vector index: %v", err)
+	}
+	index.nodes = []vectorIndexNode{
+		{documentID: []byte("query"), vector: []float32{1, 0}, level: 0},
+		{documentID: []byte("slow"), vector: []float32{1, 0}, level: 0},
+		{documentID: []byte("fast"), vector: []float32{0, 1}, level: 0},
+		{documentID: []byte("middle"), vector: []float32{0.5, 0.5}, level: 0},
+	}
+	for i := range index.nodes {
+		index.nodes[i].cacheVectorNorms()
+	}
+
+	got := index.selectLayerNeighborsLocked(
+		[]float32{1, 0},
+		1,
+		nil,
+		[]vectorIndexCandidate{
+			{nodeID: 1, distance: 0.9},
+			{nodeID: 2, distance: 0.1},
+			{nodeID: 3, distance: 0.2},
+		},
+		0,
+		2,
+		0,
+	)
+	if len(got) != 2 || got[0] != 2 || got[1] != 3 {
+		t.Fatalf("selected neighbors=%v want [2 3]", got)
+	}
+}
+
 func TestVectorIndexInsertCachesStoredNorm(t *testing.T) {
 	index, err := newVectorIndex(nil, VectorIndexOptions{
 		Name:   "embedding",

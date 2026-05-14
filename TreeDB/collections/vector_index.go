@@ -1054,11 +1054,10 @@ func (idx *VectorIndex) selectLayerNeighborsLocked(vector []float32, vectorNormS
 		if idx.nodes[candidate.nodeID].level < layer {
 			continue
 		}
-		distance := idx.distanceToNodeWithPreparedQueryLocked(vector, vectorNormSquared, prepared, candidate.nodeID)
-		if math.IsInf(float64(distance), 1) {
+		if math.IsInf(float64(candidate.distance), 1) {
 			continue
 		}
-		scored = append(scored, vectorIndexCandidate{nodeID: candidate.nodeID, distance: distance})
+		scored = append(scored, candidate)
 	}
 	sortVectorIndexCandidates(scored)
 	if len(scored) > limit {
