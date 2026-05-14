@@ -10104,8 +10104,7 @@ func (combiner *collectionUpdateCombiner) runShardWorker(shard int) {
 }
 
 func (combiner *collectionUpdateCombiner) prepareBatchWithScratch(batch []collectionUpdateCombineRequest, itemsScratch *[]updateBatchItem) collectionUpdateCombinePreparedBatch {
-	ownedBatch := make([]collectionUpdateCombineRequest, len(batch))
-	copy(ownedBatch, batch)
+	ownedBatch := batch
 	prepared := collectionUpdateCombinePreparedBatch{batch: ownedBatch}
 	combiner.beginUpdateCombineRun()
 	defer combiner.endUpdateCombineRun()
@@ -10357,6 +10356,29 @@ func mergeDirectBufferedPreparedBatches(prepared []collectionUpdateCombinePrepar
 		return nil, nil, errors.New("collections: invalid prepared direct update batch")
 	}
 	collection := prepared[0].batch[0].collection
+	commonBufferedBase := firstPlan.bufferedBase
+	commonBufferedReadGeneration := firstPlan.bufferedReadGeneration
+	sameBufferedRead := true
+	totalResults := 0
+	totalTemplateEntries := 0
+	totalPrimaryEntries := 0
+	totalSecondaryRootPlans := 0
+	for _, p := range prepared {
+		plan := p.plan
+		if plan == nil || plan.directBufferedUpdate == nil {
+			return nil, nil, errors.New("collections: cannot merge non-direct update plan")
+		}
+		if len(p.batch) == 0 || p.batch[0].collection != collection {
+			return nil, nil, errors.New("collections: cannot merge update plans across collections")
+		}
+		if plan.bufferedBase != commonBufferedBase || plan.bufferedReadGeneration != commonBufferedReadGeneration {
+			sameBufferedRead = false
+		}
+		totalResults += len(plan.results)
+		totalTemplateEntries += len(plan.directBufferedUpdate.templateEntries)
+		totalPrimaryEntries += len(plan.directBufferedUpdate.primaryEntries)
+		totalSecondaryRootPlans += len(plan.directBufferedUpdate.secondaryRootPlans)
+	}
 	merged := &updateBatchPlan{
 		meta:                        firstPlan.meta,
 		catalog:                     firstPlan.catalog,
@@ -10370,6 +10392,21 @@ func mergeDirectBufferedPreparedBatches(prepared []collectionUpdateCombinePrepar
 			templateRootName: firstPlan.directBufferedUpdate.templateRootName,
 			primaryRootName:  firstPlan.directBufferedUpdate.primaryRootName,
 		},
+	}
+	if totalResults > 0 {
+		merged.results = make([]UpdateBatchResult, 0, totalResults)
+	}
+	if totalTemplateEntries > 0 {
+		merged.directBufferedUpdate.templateEntries = make([]directBufferedRootEntry, 0, totalTemplateEntries)
+	}
+	if totalPrimaryEntries > 0 {
+		merged.directBufferedUpdate.primaryEntries = make([]directBufferedRootEntry, 0, totalPrimaryEntries)
+		if !sameBufferedRead {
+			merged.directBufferedUpdate.primaryEntryReadGenerations = make([]uint64, 0, totalPrimaryEntries)
+		}
+	}
+	if totalSecondaryRootPlans > 0 {
+		merged.directBufferedUpdate.secondaryRootPlans = make([]directBufferedSecondaryRootPlan, 0, totalSecondaryRootPlans)
 	}
 	rootIndex := make(map[string]int, len(firstPlan.rootNames))
 	addRoot := func(plan *updateBatchPlan, idx int) error {
@@ -10395,20 +10432,8 @@ func mergeDirectBufferedPreparedBatches(prepared []collectionUpdateCombinePrepar
 		merged.uniqueSecondaryIndexByRoot = append(merged.uniqueSecondaryIndexByRoot, plan.uniqueSecondaryIndexByRoot[idx])
 		return nil
 	}
-	commonBufferedBase := firstPlan.bufferedBase
-	commonBufferedReadGeneration := firstPlan.bufferedReadGeneration
-	sameBufferedRead := true
 	for _, p := range prepared {
 		plan := p.plan
-		if plan == nil || plan.directBufferedUpdate == nil {
-			return nil, nil, errors.New("collections: cannot merge non-direct update plan")
-		}
-		if len(p.batch) == 0 || p.batch[0].collection != collection {
-			return nil, nil, errors.New("collections: cannot merge update plans across collections")
-		}
-		if plan.bufferedBase != commonBufferedBase || plan.bufferedReadGeneration != commonBufferedReadGeneration {
-			sameBufferedRead = false
-		}
 		for i := range plan.rootNames {
 			if err := addRoot(plan, i); err != nil {
 				return nil, nil, err
@@ -10422,8 +10447,10 @@ func mergeDirectBufferedPreparedBatches(prepared []collectionUpdateCombinePrepar
 		if plan.bufferedBase {
 			readGeneration = plan.bufferedReadGeneration
 		}
-		for range plan.directBufferedUpdate.primaryEntries {
-			merged.directBufferedUpdate.primaryEntryReadGenerations = append(merged.directBufferedUpdate.primaryEntryReadGenerations, readGeneration)
+		if !sameBufferedRead {
+			for range plan.directBufferedUpdate.primaryEntries {
+				merged.directBufferedUpdate.primaryEntryReadGenerations = append(merged.directBufferedUpdate.primaryEntryReadGenerations, readGeneration)
+			}
 		}
 		merged.directBufferedUpdate.secondaryRootPlans = append(merged.directBufferedUpdate.secondaryRootPlans, plan.directBufferedUpdate.secondaryRootPlans...)
 		merged.directBufferedUpdate.stagedBytes += plan.directBufferedUpdate.stagedBytes
