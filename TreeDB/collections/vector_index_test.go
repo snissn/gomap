@@ -71,6 +71,45 @@ func TestVectorIndexPruneLayerNeighborsUsesDistanceThenDocumentID(t *testing.T) 
 	}
 }
 
+func TestVectorIndexInsertCachesStoredNorm(t *testing.T) {
+	index, err := newVectorIndex(nil, VectorIndexOptions{
+		Name:   "embedding",
+		Field:  "embedding",
+		Metric: VectorMetricCosine,
+	})
+	if err != nil {
+		t.Fatalf("new vector index: %v", err)
+	}
+	if err := index.insertVectorLocked([]byte("a"), []float32{3, 4}); err != nil {
+		t.Fatalf("insert vector: %v", err)
+	}
+	if got, want := index.nodes[0].normSquared, float64(25); got != want {
+		t.Fatalf("node cached norm=%v want %v", got, want)
+	}
+}
+
+func TestVectorIndexInsertCachesInt8StoredNorm(t *testing.T) {
+	index, err := newVectorIndex(nil, VectorIndexOptions{
+		Name:     "embedding",
+		Field:    "embedding",
+		Metric:   VectorMetricCosine,
+		Encoding: VectorIndexEncodingInt8,
+	})
+	if err != nil {
+		t.Fatalf("new vector index: %v", err)
+	}
+	if err := index.insertVectorLocked([]byte("a"), []float32{3, 4}); err != nil {
+		t.Fatalf("insert vector: %v", err)
+	}
+	node := index.nodes[0]
+	if node.normSquared == 0 {
+		t.Fatal("node cached norm is zero")
+	}
+	if got, want := node.normSquared, node.storedNormSquared(); got != want {
+		t.Fatalf("node cached norm=%v want dequantized norm %v", got, want)
+	}
+}
+
 func TestCollectionVectorIndexInt8EncodingReranksCanonicalRows(t *testing.T) {
 	const (
 		docs = 24
