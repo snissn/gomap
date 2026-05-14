@@ -9997,6 +9997,38 @@ func TestCollectionUpdateCombinerShardedIngressPublishesDistinctIDsOnce(t *testi
 	}
 }
 
+func TestCollectionUpdateCombinerLaneWorkerEnqueueSkipsReadyShardSignal(t *testing.T) {
+	col := &Collection{db: &backenddb.DB{}}
+	newCombiner := func(laneWorkers bool) *collectionUpdateCombiner {
+		combiner := &collectionUpdateCombiner{
+			laneWorkers:     laneWorkers,
+			shardedRequests: make([]chan collectionUpdateCombineRequest, 4),
+			readyShards:     make(chan int, 4),
+		}
+		for i := range combiner.shardedRequests {
+			combiner.shardedRequests[i] = make(chan collectionUpdateCombineRequest, 1)
+		}
+		return combiner
+	}
+	update := func([]byte) ([]byte, bool, error) { return nil, false, nil }
+
+	laneCombiner := newCombiner(true)
+	if !laneCombiner.enqueue(newCollectionUpdateCombineRequest(col, []byte("u1"), update, bsonSetUpdate{}, false, make(chan collectionUpdateCombineResult, 1))) {
+		t.Fatal("enqueue lane-worker request")
+	}
+	if got := len(laneCombiner.readyShards); got != 0 {
+		t.Fatalf("lane-worker ready shard signals=%d want 0", got)
+	}
+
+	mergerCombiner := newCombiner(false)
+	if !mergerCombiner.enqueue(newCollectionUpdateCombineRequest(col, []byte("u1"), update, bsonSetUpdate{}, false, make(chan collectionUpdateCombineResult, 1))) {
+		t.Fatal("enqueue sharded-merger request")
+	}
+	if got := len(mergerCombiner.readyShards); got != 1 {
+		t.Fatalf("sharded-merger ready shard signals=%d want 1", got)
+	}
+}
+
 func TestCollectionUpdateCombinerLaneWorkersReadOwnBufferedWrites(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{
 		Dir:        t.TempDir(),
