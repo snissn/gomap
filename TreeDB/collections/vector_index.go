@@ -1046,8 +1046,9 @@ func vectorDistanceToStoredNode(query []float32, node *vectorIndexNode, metric V
 }
 
 func vectorDistanceToStoredNodeWithQueryNorm(query []float32, queryNormSquared float64, node *vectorIndexNode, metric VectorMetric) (float32, error) {
-	if len(query) != node.vectorDimensions() {
-		return 0, fmt.Errorf("collections: vector dimensions differ: %d vs %d", len(query), node.vectorDimensions())
+	dims := node.vectorDimensions()
+	if len(query) != dims {
+		return 0, fmt.Errorf("collections: vector dimensions differ: %d vs %d", len(query), dims)
 	}
 	switch metric {
 	case VectorMetricCosine:
@@ -1084,13 +1085,15 @@ func vectorDistanceToStoredNodeWithQueryNorm(query []float32, queryNormSquared f
 }
 
 func vectorDistanceBetweenStoredNodes(left, right *vectorIndexNode, metric VectorMetric) (float32, error) {
-	if left.vectorDimensions() != right.vectorDimensions() {
-		return 0, fmt.Errorf("collections: vector dimensions differ: %d vs %d", left.vectorDimensions(), right.vectorDimensions())
+	dims := left.vectorDimensions()
+	rightDims := right.vectorDimensions()
+	if dims != rightDims {
+		return 0, fmt.Errorf("collections: vector dimensions differ: %d vs %d", dims, rightDims)
 	}
 	switch metric {
 	case VectorMetricCosine:
 		var dot float64
-		for i := 0; i < left.vectorDimensions(); i++ {
+		for i := 0; i < dims; i++ {
 			leftValue := left.vectorValueAt(i)
 			rightValue := right.vectorValueAt(i)
 			dot += float64(leftValue * rightValue)
@@ -1103,14 +1106,14 @@ func vectorDistanceBetweenStoredNodes(left, right *vectorIndexNode, metric Vecto
 		return float32(1 - dot/(math.Sqrt(leftNorm)*math.Sqrt(rightNorm))), nil
 	case VectorMetricL2:
 		var sum float64
-		for i := 0; i < left.vectorDimensions(); i++ {
+		for i := 0; i < dims; i++ {
 			diff := float64(left.vectorValueAt(i) - right.vectorValueAt(i))
 			sum += diff * diff
 		}
 		return float32(math.Sqrt(sum)), nil
 	case VectorMetricInnerProduct:
 		var dot float64
-		for i := 0; i < left.vectorDimensions(); i++ {
+		for i := 0; i < dims; i++ {
 			dot += float64(left.vectorValueAt(i) * right.vectorValueAt(i))
 		}
 		return float32(-dot), nil
@@ -1119,37 +1122,38 @@ func vectorDistanceBetweenStoredNodes(left, right *vectorIndexNode, metric Vecto
 	}
 }
 
-func (node vectorIndexNode) vectorDimensions() int {
+func (node *vectorIndexNode) vectorDimensions() int {
 	if len(node.vector) > 0 {
 		return len(node.vector)
 	}
 	return len(node.quantized)
 }
 
-func (node vectorIndexNode) vectorValueAt(i int) float32 {
+func (node *vectorIndexNode) vectorValueAt(i int) float32 {
 	if len(node.vector) > 0 {
 		return node.vector[i]
 	}
 	return float32(node.quantized[i]) * node.quantScale
 }
 
-func (node vectorIndexNode) cachedNormSquared() float64 {
+func (node *vectorIndexNode) cachedNormSquared() float64 {
 	if node.normSquared > 0 {
 		return node.normSquared
 	}
 	return node.storedNormSquared()
 }
 
-func (node vectorIndexNode) storedNormSquared() float64 {
+func (node *vectorIndexNode) storedNormSquared() float64 {
 	var norm float64
-	for i := 0; i < node.vectorDimensions(); i++ {
+	dims := node.vectorDimensions()
+	for i := 0; i < dims; i++ {
 		value := node.vectorValueAt(i)
 		norm += float64(value * value)
 	}
 	return norm
 }
 
-func (node vectorIndexNode) vectorBytes() int {
+func (node *vectorIndexNode) vectorBytes() int {
 	if len(node.quantized) > 0 {
 		return len(node.quantized) + 4
 	}
