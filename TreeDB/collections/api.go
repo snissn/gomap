@@ -308,9 +308,14 @@ type Collection struct {
 	lastInsertStats   CollectionInsertStats
 	updateStatsMu     sync.RWMutex
 	lastUpdateStats   CollectionUpdateStats
-	vectorIndexesMu   sync.RWMutex
-	vectorMutationMu  sync.RWMutex
-	vectorIndexes     map[string]*VectorIndex
+	vectorStateOnce   sync.Once
+	vectorState       *collectionVectorIndexState
+}
+
+type collectionVectorIndexState struct {
+	indexesMu  sync.RWMutex
+	mutationMu sync.RWMutex
+	indexes    map[string]*VectorIndex
 }
 
 type CollectionRootOverlayCompactionStats struct {
@@ -991,6 +996,7 @@ type collectionWriteDomain struct {
 	writeGeneration        uint64
 	primaryWriteIndex      *bufferedPrimaryWriteIndex
 	indexedDeletesOnly     bool
+	vectorState            collectionVectorIndexState
 
 	mutationLockCalls                  atomic.Uint64
 	mutationLockWaitTotalNs            atomic.Uint64

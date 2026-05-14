@@ -164,8 +164,9 @@ func (c *Collection) BuildVectorIndex(opts VectorIndexOptions) (*VectorIndex, er
 	}
 	unlockVectorMutation := c.lockVectorIndexMutationBarrier()
 	defer unlockVectorMutation()
-	c.vectorIndexesMu.Lock()
-	defer c.vectorIndexesMu.Unlock()
+	state := c.vectorIndexState()
+	state.indexesMu.Lock()
+	defer state.indexesMu.Unlock()
 	index, err := c.buildVectorIndexLocked(opts)
 	if err != nil {
 		return nil, err
@@ -295,8 +296,9 @@ func (c *Collection) RegisterVectorIndex(index *VectorIndex) {
 	}
 	unlockVectorMutation := c.lockVectorIndexMutationBarrier()
 	defer unlockVectorMutation()
-	c.vectorIndexesMu.Lock()
-	defer c.vectorIndexesMu.Unlock()
+	state := c.vectorIndexState()
+	state.indexesMu.Lock()
+	defer state.indexesMu.Unlock()
 	c.registerVectorIndexLocked(index)
 }
 
@@ -304,11 +306,15 @@ func (c *Collection) registerVectorIndexLocked(index *VectorIndex) {
 	if c == nil || index == nil {
 		return
 	}
-	if c.vectorIndexes == nil {
-		c.vectorIndexes = make(map[string]*VectorIndex)
+	state := c.vectorIndexState()
+	if state == nil {
+		return
+	}
+	if state.indexes == nil {
+		state.indexes = make(map[string]*VectorIndex)
 	}
 	index.collection = c
-	c.vectorIndexes[index.name] = index
+	state.indexes[index.name] = index
 }
 
 // UnregisterVectorIndex detaches a registered in-memory vector index.
@@ -316,41 +322,64 @@ func (c *Collection) UnregisterVectorIndex(name string) {
 	if c == nil {
 		return
 	}
-	c.vectorIndexesMu.Lock()
-	defer c.vectorIndexesMu.Unlock()
-	delete(c.vectorIndexes, name)
+	state := c.vectorIndexState()
+	if state == nil {
+		return
+	}
+	state.indexesMu.Lock()
+	defer state.indexesMu.Unlock()
+	delete(state.indexes, name)
 }
 
 func (c *Collection) registeredVectorIndexes() []*VectorIndex {
 	if c == nil {
 		return nil
 	}
-	c.vectorIndexesMu.RLock()
-	defer c.vectorIndexesMu.RUnlock()
-	if len(c.vectorIndexes) == 0 {
+	state := c.vectorIndexState()
+	if state == nil {
 		return nil
 	}
-	out := make([]*VectorIndex, 0, len(c.vectorIndexes))
-	for _, index := range c.vectorIndexes {
+	state.indexesMu.RLock()
+	defer state.indexesMu.RUnlock()
+	if len(state.indexes) == 0 {
+		return nil
+	}
+	out := make([]*VectorIndex, 0, len(state.indexes))
+	for _, index := range state.indexes {
 		out = append(out, index)
 	}
 	return out
 }
 
-func (c *Collection) lockVectorIndexMutation() func() {
+func (c *Collection) vectorIndexState() *collectionVectorIndexState {
 	if c == nil {
+		return nil
+	}
+	if c.writeDomain != nil {
+		return &c.writeDomain.vectorState
+	}
+	c.vectorStateOnce.Do(func() {
+		c.vectorState = &collectionVectorIndexState{}
+	})
+	return c.vectorState
+}
+
+func (c *Collection) lockVectorIndexMutation() func() {
+	state := c.vectorIndexState()
+	if state == nil {
 		return func() {}
 	}
-	c.vectorMutationMu.RLock()
-	return c.vectorMutationMu.RUnlock
+	state.mutationMu.RLock()
+	return state.mutationMu.RUnlock
 }
 
 func (c *Collection) lockVectorIndexMutationBarrier() func() {
-	if c == nil {
+	state := c.vectorIndexState()
+	if state == nil {
 		return func() {}
 	}
-	c.vectorMutationMu.Lock()
-	return c.vectorMutationMu.Unlock
+	state.mutationMu.Lock()
+	return state.mutationMu.Unlock
 }
 
 func (c *Collection) notifyVectorIndexesUpsert(documentIDs [][]byte) {
@@ -1473,8 +1502,9 @@ func (idx *VectorIndex) Rebuild() error {
 	start := time.Now()
 	unlockVectorMutation := idx.collection.lockVectorIndexMutationBarrier()
 	defer unlockVectorMutation()
-	idx.collection.vectorIndexesMu.Lock()
-	defer idx.collection.vectorIndexesMu.Unlock()
+	state := idx.collection.vectorIndexState()
+	state.indexesMu.Lock()
+	defer state.indexesMu.Unlock()
 
 	rebuilt, err := idx.collection.buildVectorIndexLocked(VectorIndexOptions{
 		Name:                idx.name,

@@ -276,9 +276,10 @@ func (c *Collection) LoadVectorIndexSnapshot(opts VectorIndexOptions) (*VectorIn
 	status.Epoch = manifest.Epoch
 	status.BytesDisk = vectorIndexSnapshotBytes(manifestData, manifest.Files)
 	index.recordLoadedSnapshot(status.Epoch, status.BytesDisk)
-	c.vectorIndexesMu.Lock()
+	state := c.vectorIndexState()
+	state.indexesMu.Lock()
 	c.registerVectorIndexLocked(index)
-	c.vectorIndexesMu.Unlock()
+	state.indexesMu.Unlock()
 	return index, status, nil
 }
 

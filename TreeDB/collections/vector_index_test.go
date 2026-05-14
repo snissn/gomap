@@ -101,6 +101,59 @@ func TestCollectionVectorIndexTrackedMutationErrorStats(t *testing.T) {
 	}
 }
 
+func TestCollectionVectorIndexSharedAcrossCollectionHandles(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	first, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open first collection handle: %v", err)
+	}
+	second, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open second collection handle: %v", err)
+	}
+	if first.vectorIndexState() != second.vectorIndexState() {
+		t.Fatal("collection handles do not share vector index state")
+	}
+	if _, err := first.InsertBatch(
+		[][]byte{[]byte("a")},
+		[][]byte{[]byte(`{"embedding":[1,0]}`)},
+	); err != nil {
+		t.Fatalf("insert seed: %v", err)
+	}
+	index, err := first.BuildVectorIndex(VectorIndexOptions{
+		Name:   "embedding",
+		Field:  "embedding",
+		Metric: VectorMetricCosine,
+		M:      4,
+	})
+	if err != nil {
+		t.Fatalf("build vector index: %v", err)
+	}
+	if _, err := second.InsertBatch(
+		[][]byte{[]byte("b")},
+		[][]byte{[]byte(`{"embedding":[0.9,0.1]}`)},
+	); err != nil {
+		t.Fatalf("insert through second handle: %v", err)
+	}
+	if stats := index.Stats(); stats.LiveDocs != 2 {
+		t.Fatalf("second handle write did not update shared vector index: %+v", stats)
+	}
+	results, _, err := index.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 2, DisableExactFallback: true})
+	if err != nil {
+		t.Fatalf("search shared index: %v", err)
+	}
+	requireVectorResultIDs(t, results, "a", "b")
+}
+
 func TestCollectionInsertOneNoIndexBSONFallbackDoesNotReenterVectorMutationLock(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -117,12 +170,13 @@ func TestCollectionInsertOneNoIndexBSONFallbackDoesNotReenterVectorMutationLock(
 		t.Fatalf("create collection: %v", err)
 	}
 	col := &Collection{db: d, meta: *meta}
+	state := col.vectorIndexState()
 
-	col.vectorMutationMu.RLock()
+	state.mutationMu.RLock()
 	vectorLockHeld := true
 	defer func() {
 		if vectorLockHeld {
-			col.vectorMutationMu.RUnlock()
+			state.mutationMu.RUnlock()
 		}
 	}()
 
@@ -130,8 +184,8 @@ func TestCollectionInsertOneNoIndexBSONFallbackDoesNotReenterVectorMutationLock(
 	barrierDone := make(chan struct{})
 	go func() {
 		close(barrierStarted)
-		col.vectorMutationMu.Lock()
-		col.vectorMutationMu.Unlock()
+		state.mutationMu.Lock()
+		state.mutationMu.Unlock()
 		close(barrierDone)
 	}()
 	<-barrierStarted
@@ -139,11 +193,11 @@ func TestCollectionInsertOneNoIndexBSONFallbackDoesNotReenterVectorMutationLock(
 	deadline := time.Now().Add(time.Second)
 	writerPending := false
 	for time.Now().Before(deadline) {
-		if !col.vectorMutationMu.TryRLock() {
+		if !state.mutationMu.TryRLock() {
 			writerPending = true
 			break
 		}
-		col.vectorMutationMu.RUnlock()
+		state.mutationMu.RUnlock()
 		time.Sleep(time.Millisecond)
 	}
 	if !writerPending {
@@ -168,7 +222,7 @@ func TestCollectionInsertOneNoIndexBSONFallbackDoesNotReenterVectorMutationLock(
 		t.Fatal("insert fallback blocked behind pending vector mutation barrier")
 	}
 
-	col.vectorMutationMu.RUnlock()
+	state.mutationMu.RUnlock()
 	vectorLockHeld = false
 	select {
 	case <-barrierDone:
