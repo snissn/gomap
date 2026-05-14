@@ -274,6 +274,46 @@ func BenchmarkCollectionVectorIndexGraphOnlySearch(b *testing.B) {
 	}
 }
 
+func BenchmarkCollectionVectorIndexGraphOnlySearchParallel(b *testing.B) {
+	docs := vectorBenchmarkDocs(b)
+	dims := vectorBenchmarkDims(b)
+	d, col := openVectorBenchmarkCollection(b, docs, dims)
+	defer func() { _ = d.Close() }()
+	index, err := col.BuildVectorIndex(VectorIndexOptions{
+		Name:   "embedding_graph_only_parallel",
+		Field:  "embedding",
+		Metric: VectorMetricCosine,
+		M:      16,
+	})
+	if err != nil {
+		b.Fatalf("build vector index: %v", err)
+	}
+	query := vectorBenchmarkEmbedding(docs/3, dims)
+	warm, err := index.searchGraphOnly(query, vectorBenchmarkTopK, 128)
+	if err != nil {
+		b.Fatalf("warm graph-only search: %v", err)
+	}
+	if len(warm) == 0 {
+		b.Fatal("warm graph-only search returned no results")
+	}
+
+	b.ReportMetric(float64(docs), "docs/index")
+	b.ReportMetric(float64(dims), "dims")
+	b.ReportMetric(float64(index.Stats().BytesMemory), "index_bytes")
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			results, err := index.searchGraphOnly(query, vectorBenchmarkTopK, 128)
+			if err != nil {
+				b.Fatalf("graph-only vector search: %v", err)
+			}
+			if len(results) == 0 {
+				b.Fatal("graph-only vector search returned no results")
+			}
+		}
+	})
+}
+
 func BenchmarkCollectionVectorIndexSearchInt8(b *testing.B) {
 	docs := vectorBenchmarkDocs(b)
 	dims := vectorBenchmarkDims(b)
