@@ -10434,7 +10434,7 @@ func (combiner *collectionUpdateCombiner) stagePreparedBatches(prepared []collec
 	if len(prepared) == 0 {
 		return
 	}
-	direct := make([]collectionUpdateCombinePreparedBatch, 0, len(prepared))
+	direct := prepared[:0]
 	for _, p := range prepared {
 		if p.err != nil || p.fallbackDirect || p.plan == nil || p.plan.directBufferedUpdate == nil {
 			combiner.completePreparedBatch(p)
@@ -10443,6 +10443,10 @@ func (combiner *collectionUpdateCombiner) stagePreparedBatches(prepared []collec
 		direct = append(direct, p)
 	}
 	if len(direct) == 0 {
+		return
+	}
+	if len(direct) == 1 {
+		combiner.stageSingleDirectPreparedBatch(direct[0])
 		return
 	}
 	merged, collection, err := mergeDirectBufferedPreparedBatches(direct)
@@ -10479,6 +10483,34 @@ func (combiner *collectionUpdateCombiner) stagePreparedBatches(prepared []collec
 	for _, p := range direct {
 		combiner.completePreparedBatch(p)
 	}
+}
+
+func (combiner *collectionUpdateCombiner) stageSingleDirectPreparedBatch(prepared collectionUpdateCombinePreparedBatch) {
+	if prepared.plan == nil || prepared.plan.directBufferedUpdate == nil || len(prepared.batch) == 0 || prepared.batch[0].collection == nil {
+		combiner.completePreparedBatchWithError(prepared, errors.New("collections: invalid prepared direct update batch"))
+		return
+	}
+	collection := prepared.batch[0].collection
+	err := collection.withMutationLock(func() error {
+		buffered, bufferErr := collection.bufferDirectUpdateBatchPlanLocked(prepared.plan)
+		if bufferErr != nil {
+			return bufferErr
+		}
+		if !buffered {
+			return ErrConcurrentMutation
+		}
+		collection.setLastUpdateStats(prepared.plan.stats)
+		return nil
+	})
+	if err != nil {
+		if errors.Is(err, ErrConcurrentMutation) {
+			combiner.completePreparedBatchWithDirectFallback(prepared)
+			return
+		}
+		combiner.completePreparedBatchWithError(prepared, err)
+		return
+	}
+	combiner.completePreparedBatch(prepared)
 }
 
 func (combiner *collectionUpdateCombiner) completePreparedBatch(prepared collectionUpdateCombinePreparedBatch) {
