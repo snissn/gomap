@@ -156,7 +156,8 @@ type vectorIndexNode struct {
 // live collection rows and registers it on the collection. Registered vector
 // indexes are maintained synchronously on successful collection writes, so
 // insert/update/delete latency includes per-index document materialization and
-// index mutation work.
+// index mutation work. Building drains pending writes and blocks collection
+// writes while the collection scan and index registration complete.
 func (c *Collection) BuildVectorIndex(opts VectorIndexOptions) (*VectorIndex, error) {
 	if c == nil {
 		return nil, errCollectionNil
@@ -385,6 +386,7 @@ func (c *Collection) notifyVectorIndexesDelete(documentIDs [][]byte) {
 		return
 	}
 	deleted := make([][]byte, 0, len(documentIDs))
+	present := make([][]byte, 0, len(documentIDs))
 	for _, documentID := range documentIDs {
 		if len(documentID) == 0 {
 			continue
@@ -398,14 +400,22 @@ func (c *Collection) notifyVectorIndexesDelete(documentIDs [][]byte) {
 		}
 		if document == nil {
 			deleted = append(deleted, documentID)
+		} else {
+			present = append(present, documentID)
 		}
 	}
-	if len(deleted) == 0 {
-		return
+	if len(deleted) != 0 {
+		for _, index := range indexes {
+			for _, documentID := range deleted {
+				index.TombstoneDocumentID(documentID)
+			}
+		}
 	}
-	for _, index := range indexes {
-		for _, documentID := range deleted {
-			index.TombstoneDocumentID(documentID)
+	if len(present) != 0 {
+		for _, index := range indexes {
+			if err := index.InsertDocuments(present); err != nil {
+				index.recordTrackedMutationError(err)
+			}
 		}
 	}
 }
@@ -535,7 +545,10 @@ func (idx *VectorIndex) insertVectorLocked(documentID []byte, vector []float32) 
 
 	nodeID := len(idx.nodes)
 	level := idx.levelForDocumentID(documentID)
-	node := idx.newVectorIndexNode(documentID, vector, level)
+	node, err := idx.newVectorIndexNode(documentID, vector, level)
+	if err != nil {
+		return err
+	}
 	idx.nodes = append(idx.nodes, node)
 	idx.markGraphChangedLocked()
 	idx.currentNode[string(documentID)] = nodeID
@@ -566,7 +579,7 @@ func (idx *VectorIndex) insertVectorLocked(documentID []byte, vector []float32) 
 	return nil
 }
 
-func (idx *VectorIndex) newVectorIndexNode(documentID []byte, vector []float32, level int) vectorIndexNode {
+func (idx *VectorIndex) newVectorIndexNode(documentID []byte, vector []float32, level int) (vectorIndexNode, error) {
 	node := vectorIndexNode{
 		documentID: bytes.Clone(documentID),
 		level:      level,
@@ -574,14 +587,21 @@ func (idx *VectorIndex) newVectorIndexNode(documentID []byte, vector []float32, 
 	}
 	switch idx.encoding {
 	case VectorIndexEncodingInt8:
-		node.quantized, node.quantScale = quantizeVectorIndexInt8(vector)
+		var err error
+		node.quantized, node.quantScale, err = quantizeVectorIndexInt8(vector)
+		if err != nil {
+			return vectorIndexNode{}, err
+		}
 	default:
 		node.vector = append([]float32(nil), vector...)
 	}
-	return node
+	return node, nil
 }
 
-func quantizeVectorIndexInt8(vector []float32) ([]int8, float32) {
+func quantizeVectorIndexInt8(vector []float32) ([]int8, float32, error) {
+	if err := validateFloat32Vector(vector); err != nil {
+		return nil, 0, err
+	}
 	var maxAbs float32
 	for _, value := range vector {
 		abs := value
@@ -606,7 +626,7 @@ func quantizeVectorIndexInt8(vector []float32) ([]int8, float32) {
 		}
 		out[i] = int8(q)
 	}
-	return out, scale
+	return out, scale, nil
 }
 
 func (idx *VectorIndex) tombstoneDocumentIDLocked(documentID []byte) {
@@ -620,9 +640,9 @@ func (idx *VectorIndex) tombstoneDocumentIDLocked(documentID []byte) {
 	delete(idx.currentNode, string(documentID))
 	idx.markGraphChangedLocked()
 	if idx.entry == nodeID {
-		idx.entry = idx.firstLiveNodeLocked()
 		idx.maxLevel = idx.maxLiveLevelLocked()
-		if idx.entry >= 0 {
+		idx.entry = -1
+		if idx.maxLevel >= 0 {
 			idx.entry = idx.firstLiveNodeAtLevelLocked(idx.maxLevel)
 		}
 	}

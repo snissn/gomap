@@ -16,6 +16,8 @@ import (
 )
 
 const (
+	// Keep these defaults aligned with ../vector_search_bench_test.go so USearch
+	// and native benchmark comparisons use the same synthetic corpus.
 	defaultVectorBenchmarkDocs = 10000
 	defaultVectorBenchmarkDims = 64
 	vectorBenchmarkTopK        = 10

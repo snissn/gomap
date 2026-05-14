@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -29,6 +30,8 @@ const (
 	vectorIndexTombstonesFile = "tombstones.json"
 	vectorIndexDocMapFile     = "docmap.json"
 )
+
+var vectorIndexSnapshotFileMu sync.Mutex
 
 // VectorIndexLoadStatus reports whether a persisted vector index loaded or why
 // callers should use exact search as the safe fallback.
@@ -67,6 +70,8 @@ func (idx *VectorIndex) SaveSnapshot() (VectorIndexLoadStatus, error) {
 		return status, err
 	}
 	status.ManifestPath = filepath.Join(indexDir, vectorIndexManifestFile)
+	vectorIndexSnapshotFileMu.Lock()
+	defer vectorIndexSnapshotFileMu.Unlock()
 	unlockVectorMutation := idx.collection.lockVectorIndexMutationBarrier()
 	defer unlockVectorMutation()
 	if err := os.MkdirAll(indexDir, 0o755); err != nil {
@@ -193,6 +198,9 @@ func (idx *VectorIndex) SaveSnapshot() (VectorIndexLoadStatus, error) {
 	status.Epoch = epoch
 	status.BytesDisk = bytesDisk
 	idx.recordPersistedSnapshot(epoch, bytesDisk, snapshotSeq)
+	if _, err := pruneVectorIndexSnapshotsLocked(indexDir, 2); err != nil {
+		return status, err
+	}
 	return status, nil
 }
 
@@ -297,8 +305,15 @@ func (idx *VectorIndex) PruneOldSnapshots(keep int) (VectorIndexPruneStatus, err
 		return status, err
 	}
 	status.IndexDir = indexDir
+	vectorIndexSnapshotFileMu.Lock()
+	defer vectorIndexSnapshotFileMu.Unlock()
 	unlockVectorMutation := idx.collection.lockVectorIndexMutationBarrier()
 	defer unlockVectorMutation()
+	return pruneVectorIndexSnapshotsLocked(indexDir, keep)
+}
+
+func pruneVectorIndexSnapshotsLocked(indexDir string, keep int) (VectorIndexPruneStatus, error) {
+	status := VectorIndexPruneStatus{IndexDir: indexDir}
 	manifestPath := filepath.Join(indexDir, vectorIndexManifestFile)
 	manifestData, err := os.ReadFile(manifestPath)
 	if err != nil {

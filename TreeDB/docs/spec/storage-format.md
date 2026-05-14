@@ -197,8 +197,9 @@ Snapshot publication is epoch-then-manifest:
 6. rename `.manifest.tmp` to `manifest.json`;
 7. fsync the vector index directory again.
 
-The manifest points to the active epoch. Older epoch directories are retained
-until `PruneOldSnapshots` removes them. Pruning MUST preserve the manifest's
+The manifest points to the active epoch. `SaveSnapshot` may self-prune older
+epochs beyond its built-in retention window, and callers may use
+`PruneOldSnapshots` for explicit cleanup. Pruning MUST preserve the manifest's
 active epoch and any requested newest retained epochs, must ignore temporary
 directories, and must fsync the vector index directory after deleting epochs.
 

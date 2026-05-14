@@ -120,7 +120,7 @@ func TestCollectionVectorIndexStaleDeleteNotificationDoesNotTombstoneReinsert(t 
 		t.Fatalf("build vector index: %v", err)
 	}
 	col.notifyVectorIndexesDelete([][]byte{[]byte("a")})
-	if stats := index.Stats(); stats.LiveDocs != 1 || stats.DeletedDocs != 0 {
+	if stats := index.Stats(); stats.LiveDocs != 1 {
 		t.Fatalf("stale delete notification changed live index: %+v", stats)
 	}
 	deleted, err := col.DeleteDocument([]byte("a"))
