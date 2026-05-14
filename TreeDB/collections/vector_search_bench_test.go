@@ -98,6 +98,52 @@ func BenchmarkCollectionVectorIndexBuildInt8(b *testing.B) {
 	}
 }
 
+func BenchmarkCollectionVectorIndexRegisteredInsertBatch(b *testing.B) {
+	dims := vectorBenchmarkDims(b)
+	const batchSize = 100
+	for _, registered := range []bool{false, true} {
+		name := "unregistered"
+		if registered {
+			name = "registered"
+		}
+		b.Run(name, func(b *testing.B) {
+			d, col := openVectorBenchmarkCollection(b, 0, dims)
+			defer func() { _ = d.Close() }()
+			if registered {
+				index, err := col.BuildVectorIndex(VectorIndexOptions{
+					Name:       "embedding",
+					Field:      "embedding",
+					Metric:     VectorMetricCosine,
+					Dimensions: dims,
+					M:          8,
+				})
+				if err != nil {
+					b.Fatalf("build empty vector index: %v", err)
+				}
+				if stats := index.Stats(); stats.LiveDocs != 0 || stats.Dimensions != dims {
+					b.Fatalf("unexpected empty index stats: %+v", stats)
+				}
+			}
+			b.ReportMetric(float64(batchSize), "docs/op")
+			b.ReportMetric(float64(dims), "dims")
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				ids := make([][]byte, 0, batchSize)
+				documents := make([][]byte, 0, batchSize)
+				base := i * batchSize
+				for j := 0; j < batchSize; j++ {
+					id := base + j
+					ids = append(ids, []byte(fmt.Sprintf("doc-%09d", id)))
+					documents = append(documents, vectorBenchmarkDocument(id, dims))
+				}
+				if _, err := col.InsertBatch(ids, documents); err != nil {
+					b.Fatalf("insert benchmark batch %d: %v", i, err)
+				}
+			}
+		})
+	}
+}
+
 func BenchmarkCollectionVectorIndexSearch(b *testing.B) {
 	docs := vectorBenchmarkDocs(b)
 	dims := vectorBenchmarkDims(b)

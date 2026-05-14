@@ -139,7 +139,10 @@ The initial API lives in `TreeDB/collections`:
 - `Collection.SearchVectorsExact` scans live rows and returns exact top-k
   results for cosine, squared L2, or inner-product distance.
 - `Collection.BuildVectorIndex` builds an in-memory HNSW-style secondary index
-  that returns candidates and exact-reranks final results.
+  that returns candidates and exact-reranks final results. Registered vector
+  indexes are maintained synchronously on collection writes, so insert/update
+  and delete latency includes per-index document materialization and graph
+  mutation work.
 - `BenchmarkCollectionVectorIndexGraphOnlySearch` is a benchmark-only engine
   comparison path that times TreeDB graph search without collection row fetches,
   JSON vector extraction, metadata filtering, or exact rerank.
@@ -153,18 +156,20 @@ The initial API lives in `TreeDB/collections`:
   immutable index epochs under `vector_indexes/<collection>/<index>/` with a
   manifest plus checksum-verified JSON node, edge, tombstone, and docmap files.
   Snapshot document IDs are hex-encoded so binary collection primary keys remain
-  lossless; the JSON epoch format is a readable pre-alpha persistence format, not
-  a compact binary snapshot ABI. It is intended for development, benchmarking,
-  and rebuild acceleration rather than large-index operational rollout until a
-  binary format lands.
+  lossless. Snapshot manifests include a collection commit/root freshness marker;
+  load refuses stale epochs and reports exact fallback if collection contents
+  changed after the snapshot was saved. The JSON epoch format is a readable
+  pre-alpha persistence format, not a compact binary snapshot ABI. It is
+  intended for development, benchmarking, and rebuild acceleration rather than
+  large-index operational rollout until a binary format lands.
 - `VectorIndexRangeFilter` restricts exact or ANN searches with an existing
   scalar secondary-index range. Selective filters use an `exact_filtered`
   strategy; broader filters use `ann_postfilter` and can fall back to exact
   filtered search if ANN underfills.
 - `VectorIndex.Stats`, `VectorIndex.Search` traces, and `VectorIndex.CheckRecall`
   expose live/deleted counts, memory and disk bytes, persisted epoch state,
-  snapshot dirtiness, candidate counts, selected strategy, exact fallback
-  reason, rebuild duration, and recall-at-k.
+  snapshot dirtiness, tracked mutation errors, candidate counts, selected
+  strategy, exact fallback reason, rebuild duration, and recall-at-k.
 
 Smoke benchmark:
 

@@ -2,6 +2,7 @@ package collections
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -47,6 +48,49 @@ func TestCollectionVectorIndexSearchReranksCanonicalRows(t *testing.T) {
 	stats := index.Stats()
 	if stats.LiveDocs != 4 || stats.DeletedDocs != 0 || stats.Dimensions != 2 || stats.AvgDegree == 0 {
 		t.Fatalf("unexpected stats: %+v", stats)
+	}
+}
+
+func TestCollectionVectorIndexTrackedMutationErrorStats(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	col := openVectorIndexTestCollection(t, d)
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("a")},
+		[][]byte{[]byte(`{"embedding":[1,0]}`)},
+	); err != nil {
+		t.Fatalf("insert seed: %v", err)
+	}
+	index, err := col.BuildVectorIndex(VectorIndexOptions{
+		Name:   "embedding",
+		Field:  "embedding",
+		Metric: VectorMetricCosine,
+		M:      4,
+	})
+	if err != nil {
+		t.Fatalf("build vector index: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("bad")},
+		[][]byte{[]byte(`{"embedding":[1,0,0]}`)},
+	); err != nil {
+		t.Fatalf("insert mismatched vector should still commit collection row: %v", err)
+	}
+	stats := index.Stats()
+	if stats.TrackedMutationErrors != 1 || !stats.RebuildNeeded {
+		t.Fatalf("mutation error stats not surfaced: %+v", stats)
+	}
+	if !strings.Contains(stats.LastMutationError, "has dimension 3, want 2") {
+		t.Fatalf("unexpected last mutation error: %q", stats.LastMutationError)
+	}
+	if stats.LiveDocs != 1 {
+		t.Fatalf("failed vector mutation changed indexed docs: %+v", stats)
+	}
+	if err := index.Rebuild(); err == nil {
+		t.Fatal("rebuild unexpectedly succeeded with mismatched vector row")
 	}
 }
 

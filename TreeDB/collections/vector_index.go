@@ -75,26 +75,28 @@ type VectorIndexTrace struct {
 
 // VectorIndexStats reports process-local in-memory vector index state.
 type VectorIndexStats struct {
-	Name                string
-	Field               string
-	Metric              VectorMetric
-	Encoding            VectorIndexEncoding
-	Dimensions          int
-	M                   int
-	EfConstruction      int
-	EfSearch            int
-	Nodes               int
-	LiveDocs            int
-	DeletedDocs         int
-	DeletedRatio        float64
-	BytesMemory         int64
-	BytesDisk           int64
-	AvgDegree           float64
-	MaxLevel            int
-	Epoch               uint64
-	SnapshotDirty       bool
-	LastRebuildDuration time.Duration
-	RebuildNeeded       bool
+	Name                  string
+	Field                 string
+	Metric                VectorMetric
+	Encoding              VectorIndexEncoding
+	Dimensions            int
+	M                     int
+	EfConstruction        int
+	EfSearch              int
+	Nodes                 int
+	LiveDocs              int
+	DeletedDocs           int
+	DeletedRatio          float64
+	BytesMemory           int64
+	BytesDisk             int64
+	AvgDegree             float64
+	MaxLevel              int
+	Epoch                 uint64
+	SnapshotDirty         bool
+	TrackedMutationErrors uint64
+	LastMutationError     string
+	LastRebuildDuration   time.Duration
+	RebuildNeeded         bool
 }
 
 // VectorIndexRecall reports ANN overlap with exact search for sampled queries.
@@ -135,6 +137,8 @@ type VectorIndex struct {
 	persistedEpoch         uint64
 	persistedBytesDisk     int64
 	persistedSnapshotDirty bool
+	trackedMutationErrors  uint64
+	lastMutationError      string
 	lastRebuildDuration    time.Duration
 }
 
@@ -149,7 +153,10 @@ type vectorIndexNode struct {
 }
 
 // BuildVectorIndex builds an in-memory vector secondary index from the current
-// live collection rows.
+// live collection rows and registers it on the collection. Registered vector
+// indexes are maintained synchronously on successful collection writes, so
+// insert/update/delete latency includes per-index document materialization and
+// index mutation work.
 func (c *Collection) BuildVectorIndex(opts VectorIndexOptions) (*VectorIndex, error) {
 	if c == nil {
 		return nil, errCollectionNil
@@ -276,6 +283,9 @@ func normalizeVectorIndexEncoding(encoding VectorIndexEncoding) (VectorIndexEnco
 
 // RegisterVectorIndex attaches an in-memory vector index to this collection so
 // successful collection inserts, updates, and deletes keep the index in sync.
+// The maintenance path is synchronous on the collection write hot path: upserts
+// materialize each changed document once per registered vector index and then
+// update that index before returning to the caller.
 func (c *Collection) RegisterVectorIndex(index *VectorIndex) {
 	if c == nil || index == nil {
 		return
@@ -340,7 +350,9 @@ func (c *Collection) notifyVectorIndexesUpsert(documentIDs [][]byte) {
 		return
 	}
 	for _, index := range indexes {
-		_ = index.InsertDocuments(filtered)
+		if err := index.InsertDocuments(filtered); err != nil {
+			index.recordTrackedMutationError(err)
+		}
 	}
 }
 
@@ -622,6 +634,17 @@ func (idx *VectorIndex) markGraphChangedLocked() {
 	if idx.persistedEpoch != 0 {
 		idx.persistedSnapshotDirty = true
 	}
+}
+
+func (idx *VectorIndex) recordTrackedMutationError(err error) {
+	if idx == nil || err == nil {
+		return
+	}
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+	idx.trackedMutationErrors++
+	idx.lastMutationError = err.Error()
+	idx.markGraphChangedLocked()
 }
 
 func (idx *VectorIndex) maxNeighborsForLayer(layer int) int {
@@ -1281,21 +1304,23 @@ func (idx *VectorIndex) Stats() VectorIndexStats {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
 	stats := VectorIndexStats{
-		Name:                idx.name,
-		Field:               idx.field,
-		Metric:              idx.metric,
-		Encoding:            idx.encoding,
-		Dimensions:          idx.dimensions,
-		M:                   idx.m,
-		EfConstruction:      idx.efConstruction,
-		EfSearch:            idx.efSearch,
-		Nodes:               len(idx.nodes),
-		LiveDocs:            len(idx.currentNode),
-		MaxLevel:            idx.maxLevel,
-		Epoch:               idx.persistedEpoch,
-		BytesDisk:           idx.persistedBytesDisk,
-		SnapshotDirty:       idx.persistedSnapshotDirty,
-		LastRebuildDuration: idx.lastRebuildDuration,
+		Name:                  idx.name,
+		Field:                 idx.field,
+		Metric:                idx.metric,
+		Encoding:              idx.encoding,
+		Dimensions:            idx.dimensions,
+		M:                     idx.m,
+		EfConstruction:        idx.efConstruction,
+		EfSearch:              idx.efSearch,
+		Nodes:                 len(idx.nodes),
+		LiveDocs:              len(idx.currentNode),
+		MaxLevel:              idx.maxLevel,
+		Epoch:                 idx.persistedEpoch,
+		BytesDisk:             idx.persistedBytesDisk,
+		SnapshotDirty:         idx.persistedSnapshotDirty,
+		TrackedMutationErrors: idx.trackedMutationErrors,
+		LastMutationError:     idx.lastMutationError,
+		LastRebuildDuration:   idx.lastRebuildDuration,
 	}
 	var edges int
 	var vectorBytes int64
@@ -1315,7 +1340,7 @@ func (idx *VectorIndex) Stats() VectorIndexStats {
 		stats.AvgDegree = float64(edges) / float64(stats.Nodes)
 	}
 	stats.BytesMemory = vectorBytes + int64(edges*8) + int64(stats.Nodes*32)
-	stats.RebuildNeeded = stats.DeletedRatio >= idx.rebuildDeletedRatio && stats.DeletedDocs > 0
+	stats.RebuildNeeded = stats.TrackedMutationErrors > 0 || (stats.DeletedRatio >= idx.rebuildDeletedRatio && stats.DeletedDocs > 0)
 	return stats
 }
 
@@ -1420,6 +1445,8 @@ func (idx *VectorIndex) Rebuild() error {
 	idx.entry = entry
 	idx.maxLevel = maxLevel
 	idx.dimensions = dimensions
+	idx.trackedMutationErrors = 0
+	idx.lastMutationError = ""
 	idx.lastRebuildDuration = duration
 	idx.markGraphChangedLocked()
 	idx.mu.Unlock()

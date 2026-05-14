@@ -15,6 +15,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
 const (
@@ -87,7 +89,18 @@ func (idx *VectorIndex) SaveSnapshot() (VectorIndexLoadStatus, error) {
 		}
 	}()
 
+	marker, err := idx.collection.vectorIndexCollectionMarker()
+	if err != nil {
+		return status, err
+	}
 	snapshot, snapshotSeq := idx.persistSnapshot()
+	afterMarker, err := idx.collection.vectorIndexCollectionMarker()
+	if err != nil {
+		return status, err
+	}
+	if afterMarker != marker {
+		return status, errors.New("collections: collection changed while saving vector index snapshot")
+	}
 	files := map[string]any{
 		vectorIndexMetaFile:       snapshot.Meta,
 		vectorIndexNodesFile:      snapshot.Nodes,
@@ -131,23 +144,26 @@ func (idx *VectorIndex) SaveSnapshot() (VectorIndexLoadStatus, error) {
 	}
 
 	manifest := vectorIndexManifest{
-		FormatVersion:  vectorIndexFormatVersion,
-		Collection:     idx.collection.meta.Name,
-		IndexName:      idx.name,
-		Epoch:          epoch,
-		EpochDir:       epochName,
-		Dims:           snapshot.Meta.Dimensions,
-		Metric:         idx.metric,
-		Encoding:       snapshot.Meta.Encoding,
-		M:              idx.m,
-		EfConstruction: idx.efConstruction,
-		EfSearch:       idx.efSearch,
-		MaxLevel:       snapshot.Meta.MaxLevel,
-		NodeCount:      len(snapshot.Nodes),
-		LiveDocCount:   len(snapshot.DocMap.Current),
-		DeletedCount:   len(snapshot.Tombstones.NodeIDs),
-		CreatedAtUnix:  time.Now().Unix(),
-		Files:          fileEntries,
+		FormatVersion:         vectorIndexFormatVersion,
+		Collection:            idx.collection.meta.Name,
+		IndexName:             idx.name,
+		Epoch:                 epoch,
+		EpochDir:              epochName,
+		Dims:                  snapshot.Meta.Dimensions,
+		Metric:                idx.metric,
+		Encoding:              snapshot.Meta.Encoding,
+		M:                     idx.m,
+		EfConstruction:        idx.efConstruction,
+		EfSearch:              idx.efSearch,
+		MaxLevel:              snapshot.Meta.MaxLevel,
+		NodeCount:             len(snapshot.Nodes),
+		LiveDocCount:          len(snapshot.DocMap.Current),
+		DeletedCount:          len(snapshot.Tombstones.NodeIDs),
+		CreatedAtUnix:         time.Now().Unix(),
+		CollectionCommitSeq:   marker.CommitSeq,
+		CollectionSystemRoot:  marker.SystemRoot,
+		CollectionPrimaryRoot: marker.PrimaryRoot,
+		Files:                 fileEntries,
 	}
 	manifestData, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
@@ -213,6 +229,14 @@ func (c *Collection) LoadVectorIndexSnapshot(opts VectorIndexOptions) (*VectorIn
 		return nil, status, nil
 	}
 	if reason := validateVectorIndexManifest(manifest, c.meta.Name, index.name, index.metric, index.encoding, index.dimensions); reason != "" {
+		status.ExactFallbackReason = reason
+		return nil, status, nil
+	}
+	marker, err := c.vectorIndexCollectionMarker()
+	if err != nil {
+		return nil, status, err
+	}
+	if reason := validateVectorIndexManifestFreshness(manifest, marker); reason != "" {
 		status.ExactFallbackReason = reason
 		return nil, status, nil
 	}
@@ -446,23 +470,32 @@ func vectorIndexSafePathComponent(s string) (string, error) {
 }
 
 type vectorIndexManifest struct {
-	FormatVersion  int                            `json:"format_version"`
-	Collection     string                         `json:"collection"`
-	IndexName      string                         `json:"index_name"`
-	Epoch          uint64                         `json:"epoch"`
-	EpochDir       string                         `json:"epoch_dir"`
-	Dims           int                            `json:"dims"`
-	Metric         VectorMetric                   `json:"metric"`
-	Encoding       VectorIndexEncoding            `json:"encoding"`
-	M              int                            `json:"m"`
-	EfConstruction int                            `json:"ef_construction"`
-	EfSearch       int                            `json:"ef_search"`
-	MaxLevel       int                            `json:"max_level"`
-	NodeCount      int                            `json:"node_count"`
-	LiveDocCount   int                            `json:"live_doc_count"`
-	DeletedCount   int                            `json:"deleted_doc_count"`
-	CreatedAtUnix  int64                          `json:"created_at_unix"`
-	Files          []vectorIndexManifestFileEntry `json:"files"`
+	FormatVersion         int                            `json:"format_version"`
+	Collection            string                         `json:"collection"`
+	IndexName             string                         `json:"index_name"`
+	Epoch                 uint64                         `json:"epoch"`
+	EpochDir              string                         `json:"epoch_dir"`
+	Dims                  int                            `json:"dims"`
+	Metric                VectorMetric                   `json:"metric"`
+	Encoding              VectorIndexEncoding            `json:"encoding"`
+	M                     int                            `json:"m"`
+	EfConstruction        int                            `json:"ef_construction"`
+	EfSearch              int                            `json:"ef_search"`
+	MaxLevel              int                            `json:"max_level"`
+	NodeCount             int                            `json:"node_count"`
+	LiveDocCount          int                            `json:"live_doc_count"`
+	DeletedCount          int                            `json:"deleted_doc_count"`
+	CreatedAtUnix         int64                          `json:"created_at_unix"`
+	CollectionCommitSeq   uint64                         `json:"collection_commit_seq"`
+	CollectionSystemRoot  uint64                         `json:"collection_system_root"`
+	CollectionPrimaryRoot uint64                         `json:"collection_primary_root"`
+	Files                 []vectorIndexManifestFileEntry `json:"files"`
+}
+
+type vectorIndexCollectionMarker struct {
+	CommitSeq   uint64
+	SystemRoot  uint64
+	PrimaryRoot uint64
 }
 
 type vectorIndexManifestFileEntry struct {
@@ -603,6 +636,35 @@ func (idx *VectorIndex) recordLoadedSnapshot(epoch uint64, bytesDisk int64) {
 	idx.mutationSeq = 0
 }
 
+func (c *Collection) vectorIndexCollectionMarker() (vectorIndexCollectionMarker, error) {
+	var marker vectorIndexCollectionMarker
+	if c == nil {
+		return marker, errCollectionNil
+	}
+	if c.db == nil {
+		return marker, errCollectionDBNil
+	}
+	if err := c.flushBufferedWrites(); err != nil {
+		return marker, err
+	}
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return marker, backenddb.ErrClosed
+	}
+	defer func() { _ = snap.Close() }()
+	catalog, err := c.catalogForSnapshot(snap)
+	if err != nil {
+		return marker, err
+	}
+	if catalog == nil {
+		return marker, errCollectionNotFound
+	}
+	marker.CommitSeq = snapshotCommitSeq(snap)
+	marker.SystemRoot = snapshotSystemRoot(snap)
+	marker.PrimaryRoot = catalog.rootID(collectionPrimaryRootName(catalog.meta.Name))
+	return marker, nil
+}
+
 func validateVectorIndexManifest(manifest vectorIndexManifest, collection, indexName string, metric VectorMetric, encoding VectorIndexEncoding, dimensions int) string {
 	if manifest.FormatVersion != vectorIndexFormatVersion {
 		return "unsupported_format_version"
@@ -630,6 +692,18 @@ func validateVectorIndexManifest(manifest vectorIndexManifest, collection, index
 	}
 	if len(manifest.Files) == 0 {
 		return "manifest_missing_files"
+	}
+	return ""
+}
+
+func validateVectorIndexManifestFreshness(manifest vectorIndexManifest, marker vectorIndexCollectionMarker) string {
+	if manifest.CollectionCommitSeq == 0 || manifest.CollectionSystemRoot == 0 {
+		return "missing_collection_freshness"
+	}
+	if manifest.CollectionCommitSeq != marker.CommitSeq ||
+		manifest.CollectionSystemRoot != marker.SystemRoot ||
+		manifest.CollectionPrimaryRoot != marker.PrimaryRoot {
+		return "stale_collection_snapshot"
 	}
 	return ""
 }

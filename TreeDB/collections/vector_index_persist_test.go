@@ -45,15 +45,6 @@ func TestCollectionVectorIndexSnapshotReopenSearch(t *testing.T) {
 	if saveStats.Epoch != saveStatus.Epoch || saveStats.BytesDisk != saveStatus.BytesDisk || saveStats.SnapshotDirty {
 		t.Fatalf("unexpected saved stats: %+v status=%+v", saveStats, saveStatus)
 	}
-	if _, err := col.InsertBatch(
-		[][]byte{[]byte("d")},
-		[][]byte{[]byte(`{"embedding":[0.7,0.3]}`)},
-	); err != nil {
-		t.Fatalf("insert after snapshot: %v", err)
-	}
-	if dirtyStats := index.Stats(); dirtyStats.Epoch != saveStatus.Epoch || !dirtyStats.SnapshotDirty {
-		t.Fatalf("snapshot mutation did not mark stats dirty: %+v", dirtyStats)
-	}
 	if err := d.Checkpoint(); err != nil {
 		t.Fatalf("checkpoint: %v", err)
 	}
@@ -94,6 +85,67 @@ func TestCollectionVectorIndexSnapshotReopenSearch(t *testing.T) {
 	}
 	if got, want := loaded.Stats().MaxLevel, index.Stats().MaxLevel; got != want {
 		t.Fatalf("loaded max level=%d want %d", got, want)
+	}
+}
+
+func TestCollectionVectorIndexSnapshotStaleAfterPostSaveMutationFallsBack(t *testing.T) {
+	dir := t.TempDir()
+	d, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	col := openVectorIndexTestCollection(t, d)
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("a"), []byte("b")},
+		[][]byte{
+			[]byte(`{"embedding":[1,0]}`),
+			[]byte(`{"embedding":[0,1]}`),
+		},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	index, err := col.BuildVectorIndex(VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, M: 4})
+	if err != nil {
+		t.Fatalf("build vector index: %v", err)
+	}
+	saveStatus, err := index.SaveSnapshot()
+	if err != nil {
+		t.Fatalf("save snapshot: %v", err)
+	}
+	if !saveStatus.Loaded {
+		t.Fatalf("snapshot was not saved: %+v", saveStatus)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("c")},
+		[][]byte{[]byte(`{"embedding":[0.95,0.05]}`)},
+	); err != nil {
+		t.Fatalf("insert after snapshot: %v", err)
+	}
+	if dirtyStats := index.Stats(); dirtyStats.Epoch != saveStatus.Epoch || !dirtyStats.SnapshotDirty {
+		t.Fatalf("snapshot mutation did not mark stats dirty: %+v", dirtyStats)
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	reopened, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection after reopen: %v", err)
+	}
+	loaded, loadStatus, err := reopenedCol.LoadVectorIndexSnapshot(VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine})
+	if err != nil {
+		t.Fatalf("load vector index snapshot: %v", err)
+	}
+	if loaded != nil || loadStatus.Loaded || loadStatus.ExactFallbackReason != "stale_collection_snapshot" {
+		t.Fatalf("stale snapshot loaded=%v status=%+v", loaded != nil, loadStatus)
 	}
 }
 
