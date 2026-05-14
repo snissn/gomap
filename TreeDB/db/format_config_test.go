@@ -85,6 +85,58 @@ func TestFormatConfig_SaveLoadApply_RoundTrip(t *testing.T) {
 	}
 }
 
+func TestFormatConfig_RequiredFeaturesUseDowngradeGate(t *testing.T) {
+	dir := t.TempDir()
+
+	cfg := formatConfigFromOptions(Options{})
+	cfg.AddRequiredFeature(FormatFeatureCollectionWALV1)
+	if err := SaveFormatConfig(dir, cfg); err != nil {
+		t.Fatalf("SaveFormatConfig: %v", err)
+	}
+
+	loaded, ok, err := LoadFormatConfig(dir)
+	if err != nil {
+		t.Fatalf("LoadFormatConfig: %v", err)
+	}
+	if !ok {
+		t.Fatalf("expected format config to exist")
+	}
+	if loaded.Version != formatConfigVersionRequiredFeatures {
+		t.Fatalf("loaded version=%d, want %d", loaded.Version, formatConfigVersionRequiredFeatures)
+	}
+	if !loaded.HasRequiredFeature(FormatFeatureCollectionWALV1) {
+		t.Fatalf("missing required feature %q in %+v", FormatFeatureCollectionWALV1, loaded.RequiredFeatures)
+	}
+}
+
+func TestLoadFormatConfig_RejectsUnsupportedRequiredFeature(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, formatConfigFileName), []byte(`{"version":3,"required_features":["future_feature"]}`), 0o600); err != nil {
+		t.Fatalf("write format.json: %v", err)
+	}
+	_, ok, err := LoadFormatConfig(dir)
+	if err == nil {
+		t.Fatalf("expected LoadFormatConfig error")
+	}
+	if ok {
+		t.Fatalf("expected ok=false for unsupported required feature")
+	}
+}
+
+func TestLoadFormatConfig_RejectsRequiredFeaturesInVersion2(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, formatConfigFileName), []byte(`{"version":2,"required_features":["collection_wal_v1"]}`), 0o600); err != nil {
+		t.Fatalf("write format.json: %v", err)
+	}
+	_, ok, err := LoadFormatConfig(dir)
+	if err == nil {
+		t.Fatalf("expected LoadFormatConfig error")
+	}
+	if ok {
+		t.Fatalf("expected ok=false for version 2 required_features")
+	}
+}
+
 func TestLoadFormatConfig_MissingFile(t *testing.T) {
 	dir := t.TempDir()
 	_, ok, err := LoadFormatConfig(dir)

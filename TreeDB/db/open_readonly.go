@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 
 	"github.com/snissn/gomap/TreeDB/freelist"
-	"github.com/snissn/gomap/TreeDB/internal/collectionwal"
 	"github.com/snissn/gomap/TreeDB/internal/lockfile"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/pager"
@@ -25,10 +24,6 @@ func openReadOnly(opts Options) (*DB, error) {
 	if l, err := lockfile.AcquireShared(lockPath); err == nil {
 		lock = l
 	} else if !(errors.Is(err, os.ErrNotExist) || errors.Is(err, lockfile.ErrUnsupported)) {
-		return nil, err
-	}
-	if err := collectionwal.RequireCleanForReadOnlyOpen(opts.Dir); err != nil {
-		_ = lock.Close()
 		return nil, err
 	}
 
@@ -128,6 +123,14 @@ func openReadOnly(opts Options) (*DB, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	if err := db.validateCollectionWALRequiredFeatureGates(); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := db.requireNoUnappliedCollectionWAL("read-only open"); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	if opts.IndexOuterLeavesInValueLog {
 		manifest, err := loadOrCreateLeafGenerationManifest(layout.leafVLogDir, db.meta.CommitSeq, true)
 		if err != nil {
@@ -156,10 +159,13 @@ func openReadOnlyNoLock(opts Options) (*DB, error) {
 	if _, err := resolveLeafPageReadCacheEntries(opts.LeafPageReadCacheEntries); err != nil {
 		return nil, err
 	}
-	if err := ensureNoLegacyMixedWALValueSegments(opts.Dir); err != nil {
+	if _, _, err := LoadFormatConfig(opts.Dir); err != nil {
 		return nil, err
 	}
-	if err := collectionwal.RequireCleanForReadOnlyOpen(opts.Dir); err != nil {
+	if opts.ChunkSize == 0 {
+		opts.ChunkSize = defaultChunkSize
+	}
+	if err := ensureNoLegacyMixedWALValueSegments(opts.Dir); err != nil {
 		return nil, err
 	}
 	idxPath := filepath.Join(opts.Dir, indexFileName)
@@ -250,6 +256,14 @@ func openReadOnlyNoLock(opts Options) (*DB, error) {
 	gen.zipper.SetMaintenanceOpsPerCoalesce(opts.MaintenanceOpsPerCoalesce)
 
 	if err := db.recover(); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := db.validateCollectionWALRequiredFeatureGates(); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := db.requireNoUnappliedCollectionWAL("read-only open"); err != nil {
 		_ = db.Close()
 		return nil, err
 	}

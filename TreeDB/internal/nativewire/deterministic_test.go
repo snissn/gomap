@@ -1034,6 +1034,13 @@ func TestDecodeDeterministicEntryRejectsCollectionMetaApplyDecoderConstraints(t 
 			}),
 			code: ErrResourceExhausted,
 		},
+		{
+			name: "unsupported_collection_wal_capability",
+			meta: deterministicCollectionMetaPayloadWithOptions("users", deterministicCollectionMetaOptions{
+				collectionWALDurableAckCapability: "UnknownCapability",
+			}),
+			code: ErrInvalidCommand,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			raw := deterministicMetadataEntryRaw(CommandCreateCollection, SectionCollectionMeta, tc.meta)
@@ -1757,7 +1764,7 @@ const (
 	deterministicFixtureCatalogVersion        = 7
 	deterministicInsertBatchIdempotency       = "id1"
 	deterministicReplacementModeExistingOnly  = 1
-	deterministicCollectionMetaVersion        = 1
+	deterministicCollectionMetaVersion        = 2
 	deterministicIndexDefinitionVersion       = 1
 	deterministicCollectionDefaultRootPolicy  = 0
 	deterministicCollectionDefaultIndexPolicy = 0
@@ -1781,14 +1788,15 @@ func deterministicFixtureSections(commandID CommandID, idempotency string, secti
 }
 
 type deterministicCollectionMetaOptions struct {
-	documentFormat   uint64
-	dataRootStorage  uint64
-	indexRootStorage uint64
-	maxDocuments     int64
-	maxBytes         int64
-	maxRootRuns      int64
-	maxQueuedUnits   int64
-	indexCount       uint64
+	documentFormat                    uint64
+	dataRootStorage                   uint64
+	indexRootStorage                  uint64
+	maxDocuments                      int64
+	maxBytes                          int64
+	maxRootRuns                       int64
+	maxQueuedUnits                    int64
+	collectionWALDurableAckCapability string
+	indexCount                        uint64
 }
 
 func deterministicCollectionMetaPayload(name string) []byte {
@@ -1817,22 +1825,24 @@ func deterministicCollectionMetaPayloadWithOptions(name string, opts determinist
 	// data_root_storage_policy, index_state_storage_policy,
 	// allow_array_values_in_index, disable_indexed_write_memtables,
 	// buffered_indexed_writes, max_documents, max_bytes, max_root_runs,
-	// async_flush, overlay_roots, max_queued_units, and index_count.
-	dst := deterministicUvarintPayload(deterministicCollectionMetaVersion) // version
-	dst = appendDeterministicString(dst, name)                             // name
-	dst = appendUvarint(dst, opts.documentFormat)                          // document_format
-	dst = appendUvarint(dst, opts.dataRootStorage)                         // data_root_storage_policy
-	dst = appendUvarint(dst, opts.indexRootStorage)                        // index_state_storage_policy
-	dst = appendDeterministicBool(dst, false)                              // allow_array_values_in_index
-	dst = appendDeterministicBool(dst, false)                              // disable_indexed_write_memtables
-	dst = appendDeterministicBool(dst, false)                              // buffered_indexed_writes
-	dst = binary.AppendVarint(dst, opts.maxDocuments)                      // buffered_indexed_write_max_documents
-	dst = binary.AppendVarint(dst, opts.maxBytes)                          // buffered_indexed_write_max_bytes
-	dst = binary.AppendVarint(dst, opts.maxRootRuns)                       // buffered_indexed_write_max_root_runs
-	dst = appendDeterministicBool(dst, false)                              // buffered_indexed_async_flush
-	dst = appendDeterministicBool(dst, false)                              // buffered_indexed_overlay_roots
-	dst = binary.AppendVarint(dst, opts.maxQueuedUnits)                    // buffered_indexed_async_flush_max_queued_units
-	dst = appendUvarint(dst, opts.indexCount)                              // index_count
+	// async_flush, overlay_roots, max_queued_units,
+	// collection_wal_durable_ack_capability, and index_count.
+	dst := deterministicUvarintPayload(deterministicCollectionMetaVersion)       // version
+	dst = appendDeterministicString(dst, name)                                   // name
+	dst = appendUvarint(dst, opts.documentFormat)                                // document_format
+	dst = appendUvarint(dst, opts.dataRootStorage)                               // data_root_storage_policy
+	dst = appendUvarint(dst, opts.indexRootStorage)                              // index_state_storage_policy
+	dst = appendDeterministicBool(dst, false)                                    // allow_array_values_in_index
+	dst = appendDeterministicBool(dst, false)                                    // disable_indexed_write_memtables
+	dst = appendDeterministicBool(dst, false)                                    // buffered_indexed_writes
+	dst = binary.AppendVarint(dst, opts.maxDocuments)                            // buffered_indexed_write_max_documents
+	dst = binary.AppendVarint(dst, opts.maxBytes)                                // buffered_indexed_write_max_bytes
+	dst = binary.AppendVarint(dst, opts.maxRootRuns)                             // buffered_indexed_write_max_root_runs
+	dst = appendDeterministicBool(dst, false)                                    // buffered_indexed_async_flush
+	dst = appendDeterministicBool(dst, false)                                    // buffered_indexed_overlay_roots
+	dst = binary.AppendVarint(dst, opts.maxQueuedUnits)                          // buffered_indexed_async_flush_max_queued_units
+	dst = appendDeterministicString(dst, opts.collectionWALDurableAckCapability) // collection_wal_durable_ack_capability
+	dst = appendUvarint(dst, opts.indexCount)                                    // index_count
 	return dst
 }
 

@@ -204,6 +204,9 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (C
 	}); err != nil {
 		return stats, err
 	}
+	if err := db.requireNoCollectionWALCleanupDebt("compact storage"); err != nil {
+		return stats, err
+	}
 	if err := db.prepareCompactStorageRIDAllocator(&opts); err != nil {
 		return stats, err
 	}

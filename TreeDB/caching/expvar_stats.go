@@ -133,6 +133,7 @@ func selectTreeDBExpvarStats(stats map[string]string) map[string]any {
 		// compression, vlog zombie accounting, and live maintenance tracking.
 		if isProcessWideExpvarKey(k) ||
 			strings.HasPrefix(k, "treedb.process.identity.") ||
+			strings.HasPrefix(k, "treedb.collection_wal.") ||
 			strings.HasPrefix(k, "treedb.vlog.mmap") ||
 			strings.HasPrefix(k, "treedb.cache.vlog_mmap.") ||
 			strings.HasPrefix(k, "treedb.cache.vlog_decode_buffer_grow.") ||

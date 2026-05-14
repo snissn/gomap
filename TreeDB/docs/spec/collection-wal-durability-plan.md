@@ -1123,9 +1123,14 @@ before variable-field parsing, decompression, side-ref validation, or root
 publication. `limits.MaxRecordSize <= 0` and negative max-segment options must
 not disable this cap for collection WAL recovery.
 
-Root kinds are explicit, versioned values. PR1-min row-store root kinds include
-`primary`, `template`, `index_state`, `secondary`, `overlay`,
-`overlay_descriptor`, `delete`, and `metadata`.
+Root kinds are explicit, versioned values. PR1-min no-index row insert uses
+`RootKindPrimary = 1`; its primary `RootUID` is derived deterministically from
+`CollectionUID`. Its base root descriptor guard uses
+`BaseRootGeneration = 1`, `BaseRootDescriptorEpoch = DependsOnCollectionSeq`,
+and a deterministic base descriptor digest over `CollectionUID`, primary
+`RootUID`, `RootKindPrimary`, generation, descriptor epoch, and `BaseRootID`.
+Full row-store root kinds include `primary`, `template`, `index_state`,
+`secondary`, `overlay`, `overlay_descriptor`, `delete`, and `metadata`.
 
 Column-store root kinds are part of the production gate and include at least:
 
@@ -1267,8 +1272,7 @@ segment.
 The system root stores applied progress by `CollectionUID`:
 
 ```text
-treedb/collection-wal/global-contiguous-cleanup-wallsn -> uint64 optional
-treedb/collection-wal/collection/<collection-id>/applied-collection-seq -> uint64
+collections/wal-applied/<collection-uid-hex> -> uint64 big-endian applied CollectionSeq
 ```
 
 `WALLSN` is the globally monotonic append position. It is useful for segment
@@ -1278,12 +1282,15 @@ key. Recovery may skip a transaction only when
 the transaction's `CollectionUID`/`SchemaEpoch` guard matches the catalog
 history covered by that watermark.
 
-A global contiguous `WALLSN` cleanup marker may be used only as a cleanup-scan
+The applied watermark is published in the same system-root delta as the root
+descriptor updates that make the transaction visible. PR1-min defines no global
+contiguous cleanup key because segment cleanup deletion is disabled. A future
+global contiguous `WALLSN` cleanup marker may be used only as a cleanup-scan
 optimization when every lower `WALLSN` is known applied or intentionally absent.
 It must never cause recovery to skip an unapplied lower `CollectionSeq` for any
-collection. PR1-min does not delete collection WAL segments; the full cleanup
-contract must verify every transaction in a segment against the relevant
-per-collection applied watermark before deleting the segment.
+collection. The full cleanup contract must verify every transaction in a segment
+against the relevant per-collection applied watermark before deleting the
+segment.
 
 Watermarks advance only in the same backend commit that updates collection root
 descriptors for the root group. A watermark value means every collection
@@ -4496,18 +4503,36 @@ Deferred full-contract work that does not weaken PR1-min correctness:
 9. Native-wire/Raft ack exposure.
 10. Benchmark pass/fail thresholds for default enablement.
 
-Open questions that block PR1-min coding:
+Resolved PR1-min implementation choices:
 
-1. What is the exact feature flag/API spelling and guarantee text?
-2. What is the exact inline encoded-size cap?
-3. Are value-log pointers fully rejected in PR1-min, or is `ValueLogRecord`
-   side-ref support included?
-4. Are no-index update/delete rejected under the durable capability, or is the
-   capability explicitly insert-only?
-5. What is the exact transaction v1 binary layout and digest scope?
-6. What error names distinguish unsupported mode, recovery-required read-only
-   open, corruption, capacity, and commit-ambiguous failure?
-7. Where are applied watermarks stored in the system root?
+1. The collection metadata option is
+   `collection_wal_durable_ack_capability`. The enabled PR1-min value is
+   `NoIndexRowInsertOnly`; empty or `disabled` leaves the existing
+   flush-boundary behavior unchanged.
+2. The v1 encoded transaction and outer frame payload cap is 16 MiB. The inline
+   root-delta cap is 4 MiB per transaction and 1 MiB per root; inline delta
+   values are capped at 1 MiB; decoded root-delta entries are capped at
+   262,144; the default segment size is 64 MiB and the absolute segment cap is
+   1 GiB. Section 9 of `storage-format.md` defines the full v1 bounds table.
+3. PR1-min rejects value-log pointers, leaf-log pointers, root-delta side
+   payloads, and non-empty side-ref sets before visibility. Side-ref classes are
+   deferred full-contract work.
+4. The durable capability is insert-only: no-index `Insert` and `InsertBatch`
+   are supported; no-index update/delete and schema/index mutations reject
+   before mutation; indexed schemas are unsupported under the capability.
+5. The v1 binary layout and replay digest scope live in Section 9 of
+   `storage-format.md`, with exact-byte fixtures under
+   `TreeDB/internal/collectionwal/testdata/v1/`. The replay digest covers
+   replay-critical identity and section data and excludes stats.
+6. Error sentinels/categories are defined by the `collectionwal` package, plus
+   collection `ErrCommitAmbiguous` and backend `ErrRecoveryRequired`.
+   Unsupported modes use `ErrCollectionWALUnsupportedMode`; read-only or
+   offline unapplied dirty state uses recovery-required; corruption, identity,
+   checksum, capacity, and side-ref failures use their package sentinel and
+   category.
+7. Applied watermarks are system-root entries at
+   `collections/wal-applied/<collection-uid-hex>` with an 8-byte big-endian
+   `CollectionSeq`, published atomically with root descriptor updates.
 
 Future questions that do not weaken PR1-min correctness:
 

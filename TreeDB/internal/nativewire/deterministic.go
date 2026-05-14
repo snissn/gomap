@@ -1109,13 +1109,22 @@ func validateDeterministicIndexValueTypeEnum(value uint64) error {
 	}
 }
 
+func validateDeterministicCollectionWALDurableAckCapability(value string) error {
+	switch value {
+	case "", "NoIndexRowInsertOnly":
+		return nil
+	default:
+		return protocolError(ErrInvalidCommand, "unsupported collection WAL durable-ack capability %q", value)
+	}
+}
+
 func validateDeterministicCollectionMeta(raw []byte, limits Limits) error {
 	off := 0
 	version, err := readDeterministicUvarintField(raw, &off, "collection_meta.version")
 	if err != nil {
 		return err
 	}
-	if version != 1 {
+	if version != 1 && version != 2 {
 		return protocolError(ErrUnsupportedVersion, "collection_meta version %d", version)
 	}
 	if err := readDeterministicNameField(raw, &off, "collection name", limits); err != nil {
@@ -1179,6 +1188,15 @@ func validateDeterministicCollectionMeta(raw []byte, limits Limits) error {
 	}
 	if err := validateDeterministicNonNegativeIntCapacity("buffered_indexed_async_flush_max_queued_units", maxQueued); err != nil {
 		return err
+	}
+	if version >= 2 {
+		capability, err := readDeterministicStringField(raw, &off, "collection_wal_durable_ack_capability")
+		if err != nil {
+			return err
+		}
+		if err := validateDeterministicCollectionWALDurableAckCapability(capability); err != nil {
+			return err
+		}
 	}
 	indexCount, err := readDeterministicUvarintField(raw, &off, "index_count")
 	if err != nil {

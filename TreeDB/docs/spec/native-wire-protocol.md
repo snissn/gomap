@@ -511,6 +511,7 @@ allow_array_values_in_index
 data_root_storage_policy
 index_state_storage_policy
 buffered_indexed_write_policy
+collection_wal_durable_ack_capability
 index_name
 index_field
 index_value_type

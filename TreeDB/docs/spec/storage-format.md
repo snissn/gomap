@@ -23,14 +23,14 @@ A TreeDB deployment uses:
   when `IndexOuterLeavesInValueLog` is enabled,
 - optional side-store DBs (`dictdb`, `templatedb`) using their own `index.db` files.
 
-Collection WAL is a target storage class, not yet a current committed on-disk
-byte format. This document owns the reserved file class name
-`wal/collection-l<lane>-<seq>.log` plus the target local frame format once the
-M1 gate in `collection-wal-durability-plan.md` lands. Until then, the WAL plan
-owns the target logical transaction semantics. When M1 lands, exact frame
-bytes, checksums, commit markers, segment metadata, cleanup records, and golden
-encodings must be maintained here and mapped to tests in
-`TreeDB/docs/spec/verification.md`.
+Collection WAL v1 is a guarded local storage class. The PR1-min
+`NoIndexRowInsertOnly` capability writes the segment and frame bytes defined in
+Section 9 when `collection_wal_v1` is enabled. The broader side-ref, cleanup,
+segment-metadata, and column-store gates remain governed by
+`collection-wal-durability-plan.md`. Exact frame bytes, checksums, commit
+markers, and golden encodings must be maintained here and mapped to tests in
+`TreeDB/docs/spec/verification.md`; cleanup records and full segment metadata
+remain future-gated until their milestones land.
 
 Collection WAL records use per-collection `CollectionSeq` dependency ordering,
 global `WALLSN` append positions only for scan/cleanup accounting, side-ref
@@ -430,11 +430,11 @@ Validation rules:
 
 ## 9. Collection WAL v1 Segment and Frame Format
 
-This is the target local frame format for the M1 collection WAL gate. It is not
-current runtime behavior until `collection_wal_v1` is accepted and advertised.
-Collection WAL is a separate file class from the key/value commit log. It must
-not be decoded with the commit-log `Record` schema, and cached commit-log RID
-skip behavior must not apply to complete collection WAL transactions.
+This is the local frame format for the M1 collection WAL gate and the guarded
+PR1-min `NoIndexRowInsertOnly` implementation. Collection WAL is a separate file
+class from the key/value commit log. It must not be decoded with the commit-log
+`Record` schema, and cached commit-log RID skip behavior must not apply to
+complete collection WAL transactions.
 
 All multi-byte integers in collection WAL are little-endian. Decoders must
 reject nonzero reserved fields. Length caps are checked before allocation.
@@ -611,6 +611,15 @@ carry stable `RootRef` identity before any root-local entry payload:
 operation kind, `EntryOrdinal`, key length, value length, and either inline
 value bytes, stable `ValuePtr` bytes, or a `RootDeltaPayload` side-ref index.
 Tombstones are first-class operations.
+
+The PR1-min no-index row-insert subset supports only the primary root. It uses
+`RootKindPrimary = 1` and derives the primary `RootUID` deterministically from
+`CollectionUID`, so replay can validate root identity before accepting
+diagnostic root names or root-local payload bytes. PR1-min also records
+`BaseRootGeneration = 1`, `BaseRootDescriptorEpoch = DependsOnCollectionSeq`,
+and `BaseRootDescriptorDigest =
+PR1MinPrimaryRootDescriptorDigest(CollectionUID, BaseRootID,
+DependsOnCollectionSeq)` in both the root-delta and system-template root guard.
 
 Side refs encode `RefClass`, `ClassVersion`, `Critical`, `FileID`, `Offset`,
 `Length`, `ChecksumKind`, `Checksum`, and optional advisory `RelativePath`.

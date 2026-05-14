@@ -533,6 +533,55 @@ func TestDecodeCollectionMetaRejectsUnknownEnums(t *testing.T) {
 	}
 }
 
+func TestCollectionMetaPreservesCollectionWALDurableAckCapability(t *testing.T) {
+	meta := collections.CollectionMeta{
+		Name: "users",
+		Options: collections.CollectionOptions{
+			DocumentFormat:                    collections.DocumentFormatJSON,
+			CollectionWALDurableAckCapability: collections.CollectionWALDurableAckNoIndexRowInsertOnly,
+		},
+	}
+	raw := encodeCollectionMeta(meta)
+	version, _, err := readUvarint(raw)
+	if err != nil {
+		t.Fatalf("read encoded collection_meta version: %v", err)
+	}
+	if version != collectionMetaVersionV2 {
+		t.Fatalf("encoded collection_meta version=%d want %d", version, collectionMetaVersionV2)
+	}
+	decoded, err := decodeCollectionMeta(raw)
+	if err != nil {
+		t.Fatalf("decodeCollectionMeta: %v", err)
+	}
+	if decoded.Options.CollectionWALDurableAckCapability != collections.CollectionWALDurableAckNoIndexRowInsertOnly {
+		t.Fatalf("decoded collection WAL durable-ack capability=%q want %q", decoded.Options.CollectionWALDurableAckCapability, collections.CollectionWALDurableAckNoIndexRowInsertOnly)
+	}
+	normalized, err := normalizeClientCollectionMeta(meta)
+	if err != nil {
+		t.Fatalf("normalizeClientCollectionMeta: %v", err)
+	}
+	if normalized.Options.CollectionWALDurableAckCapability != collections.CollectionWALDurableAckNoIndexRowInsertOnly {
+		t.Fatalf("normalized collection WAL durable-ack capability=%q want %q", normalized.Options.CollectionWALDurableAckCapability, collections.CollectionWALDurableAckNoIndexRowInsertOnly)
+	}
+}
+
+func TestDecodeCollectionMetaV1DefaultsCollectionWALDurableAckCapabilityOff(t *testing.T) {
+	decoded, err := decodeCollectionMeta(testCollectionMetaPayload(0, 0, 0, 0))
+	if err != nil {
+		t.Fatalf("decodeCollectionMeta v1: %v", err)
+	}
+	if decoded.Options.CollectionWALDurableAckCapability != collections.CollectionWALDurableAckDisabled {
+		t.Fatalf("decoded v1 collection WAL durable-ack capability=%q want disabled", decoded.Options.CollectionWALDurableAckCapability)
+	}
+}
+
+func TestDecodeCollectionMetaRejectsUnknownCollectionWALDurableAckCapability(t *testing.T) {
+	payload := testCollectionMetaV2PayloadWithCapability("UnknownCapability", 0)
+	if _, err := decodeCollectionMeta(payload); nativeCodeOf(err) != iwire.ErrInvalidCommand {
+		t.Fatalf("decodeCollectionMeta err=%v code=%d want invalid command", err, nativeCodeOf(err))
+	}
+}
+
 func TestReadEnumRejectsInvalidOffset(t *testing.T) {
 	off := -1
 	if _, err := readEnum([]byte{1}, &off); nativeCodeOf(err) != iwire.ErrMalformedFrame {
@@ -633,6 +682,25 @@ func TestNormalizeClientCollectionMetaRejectsInvalidOptions(t *testing.T) {
 			},
 		},
 		{
+			name: "collection_wal_capability",
+			meta: collections.CollectionMeta{
+				Name: "users",
+				Options: collections.CollectionOptions{
+					CollectionWALDurableAckCapability: "UnknownCapability",
+				},
+			},
+		},
+		{
+			name: "collection_wal_capability_with_index",
+			meta: collections.CollectionMeta{
+				Name: "users",
+				Options: collections.CollectionOptions{
+					CollectionWALDurableAckCapability: collections.CollectionWALDurableAckNoIndexRowInsertOnly,
+				},
+				Indexes: []collections.IndexDefinition{{Name: "email", Field: "email", ValueType: collections.IndexValueString}},
+			},
+		},
+		{
 			name: "index_field",
 			meta: collections.CollectionMeta{
 				Name:    "users",
@@ -705,6 +773,25 @@ func testCollectionMetaPayloadWithCounters(docFormat, dataPolicy, indexStatePoli
 	dst = appendBool(dst, false)
 	dst = appendBool(dst, false)
 	dst = binary.AppendVarint(dst, maxQueued)
+	return binary.AppendUvarint(dst, indexCount)
+}
+
+func testCollectionMetaV2PayloadWithCapability(capability string, indexCount uint64) []byte {
+	dst := binary.AppendUvarint(nil, collectionMetaVersionV2)
+	dst = appendString(dst, "users")
+	dst = binary.AppendUvarint(dst, 0)
+	dst = binary.AppendUvarint(dst, 0)
+	dst = binary.AppendUvarint(dst, 0)
+	dst = appendBool(dst, false)
+	dst = appendBool(dst, false)
+	dst = appendBool(dst, false)
+	dst = binary.AppendVarint(dst, 0)
+	dst = binary.AppendVarint(dst, 0)
+	dst = binary.AppendVarint(dst, 0)
+	dst = appendBool(dst, false)
+	dst = appendBool(dst, false)
+	dst = binary.AppendVarint(dst, 0)
+	dst = appendString(dst, capability)
 	return binary.AppendUvarint(dst, indexCount)
 }
 

@@ -31,6 +31,8 @@ func TestSelectTreeDBExpvarStatsFiltersAndCoerces(t *testing.T) {
 		"treedb.cache.vlog_generation.rewrite.reclaimed_bytes":          "1234",
 		"treedb.cache.vlog_retained_prune.runs":                         "3",
 		"treedb.cache.vlog_zombie.pinned_bytes":                         "4096",
+		"treedb.collection_wal.append.txns_total":                       "2",
+		"treedb.collection_wal.cleanup.debt.bytes_current":              "8192",
 		"treedb.process.memory.heap_inuse_bytes":                        "4096",
 		"treedb.process.memory.pool_pressure_level":                     "critical",
 		"treedb.cache.batch_arena.pool_bytes_estimate":                  "65536",
@@ -92,6 +94,12 @@ func TestSelectTreeDBExpvarStatsFiltersAndCoerces(t *testing.T) {
 	if v, ok := got["treedb.cache.vlog_zombie.pinned_bytes"].(int64); !ok || v != 4096 {
 		t.Fatalf("vlog_zombie.pinned_bytes=%T(%v) want int64(4096)", got["treedb.cache.vlog_zombie.pinned_bytes"], got["treedb.cache.vlog_zombie.pinned_bytes"])
 	}
+	if v, ok := got["treedb.collection_wal.append.txns_total"].(int64); !ok || v != 2 {
+		t.Fatalf("collection_wal.append.txns_total=%T(%v) want int64(2)", got["treedb.collection_wal.append.txns_total"], got["treedb.collection_wal.append.txns_total"])
+	}
+	if v, ok := got["treedb.collection_wal.cleanup.debt.bytes_current"].(int64); !ok || v != 8192 {
+		t.Fatalf("collection_wal.cleanup.debt.bytes_current=%T(%v) want int64(8192)", got["treedb.collection_wal.cleanup.debt.bytes_current"], got["treedb.collection_wal.cleanup.debt.bytes_current"])
+	}
 	if v, ok := got["treedb.process.memory.heap_inuse_bytes"].(int64); !ok || v != 4096 {
 		t.Fatalf("heap_inuse_bytes=%T(%v) want int64(4096)", got["treedb.process.memory.heap_inuse_bytes"], got["treedb.process.memory.heap_inuse_bytes"])
 	}
@@ -124,6 +132,23 @@ func TestSelectTreeDBExpvarStatsFiltersAndCoerces(t *testing.T) {
 	}
 	if _, ok := got["treedb.cache.backpressure_mode"]; ok {
 		t.Fatalf("unexpected backpressure_mode key in expvar selection")
+	}
+}
+
+func TestCollectionWALStatsExpvarWhitelist(t *testing.T) {
+	got := selectTreeDBExpvarStats(map[string]string{
+		"treedb.collection_wal.append.txns_total":                          "1",
+		"treedb.collection_wal.cleanup.debt.bytes_current":                 "4096",
+		"treedb.collection_wal.by_collection.deadbeef.applied_seq_current": "7",
+	})
+	for key, want := range map[string]int64{
+		"treedb.collection_wal.append.txns_total":                          1,
+		"treedb.collection_wal.cleanup.debt.bytes_current":                 4096,
+		"treedb.collection_wal.by_collection.deadbeef.applied_seq_current": 7,
+	} {
+		if got[key] != want {
+			t.Fatalf("%s=%T(%v) want int64(%d)", key, got[key], got[key], want)
+		}
 	}
 }
 

@@ -14,6 +14,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/freelist"
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
 	"github.com/snissn/gomap/TreeDB/internal/bulk"
+	"github.com/snissn/gomap/TreeDB/internal/collectionwal"
 	"github.com/snissn/gomap/TreeDB/internal/compression"
 	"github.com/snissn/gomap/TreeDB/internal/keyupdate"
 	"github.com/snissn/gomap/TreeDB/internal/lockfile"
@@ -135,6 +136,14 @@ type DB struct {
 	vacuum           vacuumRecorder
 	meta             page.MetaPageBody
 	metaPageID       uint64
+	// collectionWALPublisherMu is the PR1-min global collection WAL publisher
+	// gate: WAL-backed collection mutations serialize append, root publish, and
+	// applied-watermark publish so at most one transaction is unwatermarked.
+	collectionWALPublisherMu      sync.Mutex
+	collectionWALMu               sync.Mutex
+	collectionWALAppender         *collectionwal.Appender
+	collectionWALStats            collectionwal.Stats
+	collectionWALRecoveryRequired atomic.Bool
 
 	state atomic.Pointer[DBState]
 
@@ -1097,12 +1106,10 @@ func Open(opts Options) (*DB, error) {
 	if opts.Dir == "" {
 		return nil, errors.New("db dir required")
 	}
-	if !opts.IgnoreFormatConfig {
-		if cfg, ok, err := LoadFormatConfig(opts.Dir); err != nil {
-			return nil, err
-		} else if ok {
-			cfg.ApplyIndexFormatToOptions(&opts)
-		}
+	if cfg, ok, err := LoadFormatConfig(opts.Dir); err != nil {
+		return nil, err
+	} else if ok && !opts.IgnoreFormatConfig {
+		cfg.ApplyIndexFormatToOptions(&opts)
 	}
 	if opts.ChunkSize == 0 {
 		opts.ChunkSize = defaultChunkSize
@@ -1474,6 +1481,14 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	}
 	db.state.Store(initialState)
 	db.publishSnapshotView(gen, initialState, vm)
+	if err := db.validateCollectionWALRequiredFeatureGates(); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := db.recoverCollectionWAL(); err != nil {
+		db.Close()
+		return nil, err
+	}
 	if err := db.initValueLogRefTracker(); err != nil {
 		db.Close()
 		return nil, err
@@ -1490,7 +1505,13 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	// Best-effort: persist the format knobs used for this DB directory so
 	// offline maintenance tooling (treemap, offline vacuum/rewrite) can preserve
 	// the intended on-disk layout without requiring callers to re-specify flags.
-	if err := SaveFormatConfig(opts.Dir, formatConfigFromOptions(opts)); err != nil && opts.NotifyError != nil {
+	cfg := formatConfigFromOptions(opts)
+	if existing, ok, err := LoadFormatConfig(opts.Dir); err == nil && ok {
+		cfg.RequiredFeatures = append([]string(nil), existing.RequiredFeatures...)
+	} else if err != nil && opts.NotifyError != nil {
+		opts.NotifyError(err)
+	}
+	if err := SaveFormatConfig(opts.Dir, cfg); err != nil && opts.NotifyError != nil {
 		opts.NotifyError(err)
 	}
 
@@ -1559,7 +1580,9 @@ func (db *DB) Close() error {
 	if err := db.RunCloseHooks(); err != nil {
 		errs = append(errs, err)
 	}
+	db.collectionWALPublisherMu.Lock()
 	db.closing.Store(true)
+	db.collectionWALPublisherMu.Unlock()
 	db.stopCommitCombiner()
 	db.pruner.Stop()
 	if db.ghostManager != nil {
@@ -1573,6 +1596,11 @@ func (db *DB) Close() error {
 	lock := db.lock
 	db.lock = nil
 	db.mu.Unlock()
+
+	db.collectionWALMu.Lock()
+	collectionWALAppender := db.collectionWALAppender
+	db.collectionWALAppender = nil
+	db.collectionWALMu.Unlock()
 
 	drainDeadline := time.Now().Add(closeSnapshotDrainTimeout)
 	for db.snapshotAcquireInFlight() > 0 {
@@ -1589,6 +1617,11 @@ func (db *DB) Close() error {
 	}
 	if vm != nil {
 		if err := vm.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if collectionWALAppender != nil {
+		if err := collectionWALAppender.Close(); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -2222,6 +2255,15 @@ func (db *DB) Checkpoint() error {
 	}
 	if db.readOnly {
 		return ErrReadOnly
+	}
+
+	db.collectionWALPublisherMu.Lock()
+	defer db.collectionWALPublisherMu.Unlock()
+	if db.closing.Load() {
+		return ErrClosed
+	}
+	if db.collectionWALRecoveryRequired.Load() {
+		return ErrRecoveryRequired
 	}
 
 	db.writeMu.Lock()

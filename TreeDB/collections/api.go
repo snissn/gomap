@@ -3,7 +3,10 @@ package collections
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,6 +22,7 @@ import (
 	"github.com/cespare/xxhash/v2"
 	"github.com/snissn/gomap/TreeDB/batch"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/collectionwal"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/node"
@@ -28,7 +32,7 @@ import (
 )
 
 const (
-	collectionMetaVersion        = 2
+	collectionMetaVersion        = 3
 	maxCollectionMutationRetries = 64
 	// Bound stale buffered-read replans so a writer under constant buffered
 	// pressure eventually falls back to a publish boundary or outer retry.
@@ -217,6 +221,13 @@ const (
 	systemCollectionMetaPrefix        = "collections/meta/"
 	systemCollectionRootPrefix        = "collections/root/"
 	systemCollectionRootOverlayPrefix = "collections/root-overlay/"
+	systemCollectionWALAppliedPrefix  = "collections/wal-applied/"
+)
+
+const (
+	collectionWALMutationClassNoIndexRowInsert = 1
+	collectionWALDescriptorOpRootUpdate        = 1
+	collectionWALDescriptorOpAppliedWatermark  = 2
 )
 
 func backendRootStoragePolicy(policy RootStoragePolicy) (backenddb.OrderedRootStoragePolicy, error) {
@@ -305,6 +316,14 @@ type Collection struct {
 	lastInsertStats   CollectionInsertStats
 	updateStatsMu     sync.RWMutex
 	lastUpdateStats   CollectionUpdateStats
+
+	// Test hook for PR1-min private planning serialization under the global publisher.
+	testCollectionWALPrivatePlanHook func()
+
+	// Test hooks for post-WAL-commit error handling. Any non-test production
+	// error after the collection WAL append must follow the same ambiguous path.
+	testCollectionWALPostAppendHook func()
+	testCollectionWALPostAppendErr  error
 }
 
 type CollectionRootOverlayCompactionStats struct {
@@ -677,6 +696,11 @@ const (
 	IndexValueDouble IndexValueType = "double"
 )
 
+const (
+	CollectionWALDurableAckDisabled             = ""
+	CollectionWALDurableAckNoIndexRowInsertOnly = "NoIndexRowInsertOnly"
+)
+
 type CollectionOptions struct {
 	AllowArrayValuesInIndex bool           `json:"allow_array_values_in_index,omitempty"`
 	DocumentFormat          DocumentFormat `json:"document_format,omitempty"`
@@ -732,6 +756,10 @@ type CollectionOptions struct {
 	// units queued for the background publisher. Zero uses the native default
 	// when async flush is enabled on an indexed schema.
 	BufferedIndexedAsyncFlushMaxQueuedUnits int `json:"buffered_indexed_async_flush_max_queued_units,omitempty"`
+	// CollectionWALDurableAckCapability gates experimental collection-WAL
+	// durable-at-ack paths. The only PR1-min value is "NoIndexRowInsertOnly";
+	// the empty value leaves existing flush-boundary behavior unchanged.
+	CollectionWALDurableAckCapability string `json:"collection_wal_durable_ack_capability,omitempty"`
 }
 
 type IndexDefinition struct {
@@ -744,16 +772,24 @@ type IndexDefinition struct {
 }
 
 type CollectionMeta struct {
-	Name    string            `json:"name"`
-	Options CollectionOptions `json:"options,omitempty"`
-	Indexes []IndexDefinition `json:"indexes,omitempty"`
+	Name                 string            `json:"name"`
+	CollectionUID        string            `json:"collection_uid,omitempty"`
+	CollectionGeneration uint64            `json:"collection_generation,omitempty"`
+	CatalogEpoch         uint64            `json:"catalog_epoch,omitempty"`
+	SchemaEpoch          uint64            `json:"schema_epoch,omitempty"`
+	Options              CollectionOptions `json:"options,omitempty"`
+	Indexes              []IndexDefinition `json:"indexes,omitempty"`
 }
 
 type collectionMetaDisk struct {
-	Version int               `json:"version"`
-	Name    string            `json:"name"`
-	Options CollectionOptions `json:"options,omitempty"`
-	Indexes []IndexDefinition `json:"indexes,omitempty"`
+	Version              int               `json:"version"`
+	Name                 string            `json:"name"`
+	CollectionUID        string            `json:"collection_uid,omitempty"`
+	CollectionGeneration uint64            `json:"collection_generation,omitempty"`
+	CatalogEpoch         uint64            `json:"catalog_epoch,omitempty"`
+	SchemaEpoch          uint64            `json:"schema_epoch,omitempty"`
+	Options              CollectionOptions `json:"options,omitempty"`
+	Indexes              []IndexDefinition `json:"indexes,omitempty"`
 }
 
 type collectionCatalog struct {
@@ -2401,10 +2437,14 @@ func (m *CollectionManager) CreateCollection(meta *CollectionMeta) (*CollectionM
 		return nil, err
 	}
 	if existing != nil {
-		if !sameCollectionMeta(existing.meta, normalized) {
+		if !sameCollectionMetaForCreate(existing.meta, normalized) {
 			return nil, fmt.Errorf("collections: existing schema for %q is incompatible", normalized.Name)
 		}
 		return existing.meta.copy(), nil
+	}
+	normalized, err = initializeNewCollectionIdentity(normalized)
+	if err != nil {
+		return nil, err
 	}
 
 	encoded, err := encodeCollectionMeta(normalized)
@@ -2617,6 +2657,9 @@ func (c *Collection) CreateIndex(def IndexDefinition) (*CollectionMeta, error) {
 	if c.db == nil {
 		return nil, errCollectionDBNil
 	}
+	if err := c.requireCollectionWALNoIndexInsertOnlyMutation("CreateIndex"); err != nil {
+		return nil, err
+	}
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()
 	if err := c.flushBufferedWrites(); err != nil {
@@ -2742,6 +2785,9 @@ func (c *Collection) dropIndexes(names map[string]struct{}, all bool) (*Collecti
 	if c.db == nil {
 		return nil, errCollectionDBNil
 	}
+	if err := c.requireCollectionWALNoIndexInsertOnlyMutation("DropIndex"); err != nil {
+		return nil, err
+	}
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()
 	if err := c.flushBufferedWrites(); err != nil {
@@ -2796,9 +2842,13 @@ func (c *Collection) dropIndexes(names map[string]struct{}, all bool) (*Collecti
 	}
 
 	newMeta, err := normalizeCollectionMeta(CollectionMeta{
-		Name:    baseMeta.Name,
-		Options: baseMeta.Options,
-		Indexes: nextIndexes,
+		Name:                 baseMeta.Name,
+		CollectionUID:        baseMeta.CollectionUID,
+		CollectionGeneration: baseMeta.CollectionGeneration,
+		CatalogEpoch:         baseMeta.CatalogEpoch,
+		SchemaEpoch:          baseMeta.SchemaEpoch + 1,
+		Options:              baseMeta.Options,
+		Indexes:              nextIndexes,
 	})
 	if err != nil {
 		return nil, err
@@ -2848,6 +2898,14 @@ func (c *Collection) Insert(id, document []byte) ([]byte, error) {
 			}); err != nil {
 				return nil, err
 			}
+		}
+		if c.collectionWALNoIndexInsertEnabled() {
+			if err := c.withMutationLock(func() error {
+				return c.flushBufferedWrites()
+			}); err != nil {
+				return nil, err
+			}
+			return c.insertOneViaBatch(id, document)
 		}
 		return c.insertOneNoIndexBuffered(id, document)
 	}
@@ -7427,14 +7485,55 @@ func (c *Collection) insertBatchOnceWithLockState(
 			}
 		}
 	}
-	baseSystemRoot := snapshotSystemRoot(snap)
-	baseCommitSeq := snapshotCommitSeq(snap)
 	if len(meta.Indexes) == 0 {
+		if c.collectionWALNoIndexInsertEnabled() {
+			if plannerOptions.documentFormat != DocumentFormatJSON {
+				closePlanningSnapshot()
+				return nil, fmt.Errorf("%w: %s collection WAL durable-ack capability supports JSON no-index inserts only in PR1-min", collectionwal.ErrCollectionWALUnsupportedMode, CollectionWALDurableAckNoIndexRowInsertOnly)
+			}
+			if err := c.db.EnsureCollectionWALRequiredFeature(); err != nil {
+				closePlanningSnapshot()
+				return nil, err
+			}
+			var result [][]byte
+			err := c.db.RunCollectionWALPublisher(func() error {
+				var runErr error
+				catalog, meta, plannerOptions, runErr = c.reloadInsertBatchPlanningSnapshot(&snap, trustedValidBSON, nil)
+				if runErr != nil {
+					return runErr
+				}
+				if len(meta.Indexes) != 0 {
+					closePlanningSnapshot()
+					return fmt.Errorf("%w: %s collection WAL durable-ack capability does not support indexed schemas", collectionwal.ErrCollectionWALUnsupportedMode, CollectionWALDurableAckNoIndexRowInsertOnly)
+				}
+				if plannerOptions.documentFormat != DocumentFormatJSON {
+					closePlanningSnapshot()
+					return fmt.Errorf("%w: %s collection WAL durable-ack capability supports JSON no-index inserts only in PR1-min", collectionwal.ErrCollectionWALUnsupportedMode, CollectionWALDurableAckNoIndexRowInsertOnly)
+				}
+				if c.testCollectionWALPrivatePlanHook != nil {
+					c.testCollectionWALPrivatePlanHook()
+				}
+				baseSystemRoot := snapshotSystemRoot(snap)
+				baseCommitSeq := snapshotCommitSeq(snap)
+				insertSnap := snap
+				snap = nil
+				result, runErr = c.insertBatchNoIndex(catalog, insertSnap, baseCommitSeq, baseSystemRoot, plannerOptions, ids, documents)
+				return runErr
+			})
+			if err != nil {
+				closePlanningSnapshot()
+			}
+			return result, err
+		}
 		if plannerOptions.documentFormat == DocumentFormatJSON {
+			baseSystemRoot := snapshotSystemRoot(snap)
+			baseCommitSeq := snapshotCommitSeq(snap)
 			return c.insertBatchNoIndex(catalog, snap, baseCommitSeq, baseSystemRoot, plannerOptions, ids, documents)
 		}
 	}
 
+	baseSystemRoot := snapshotSystemRoot(snap)
+	baseCommitSeq := snapshotCommitSeq(snap)
 	directBufferedInsertAccumulators := bufferIndexedInserts && shouldUseDirectBufferedInsertAccumulators(len(documents))
 	keepDirectBufferedInsertPlanningLocked := directBufferedInsertAccumulators && shouldPlanDirectBufferedInsertAccumulatorsWithMutationLocked(len(documents))
 	unlockForPlanning := shouldUnlockInsertPlanning(plannerOptions, indexedMemtablesEnabled, bufferIndexedInserts, keepDirectBufferedInsertPlanningLocked)
@@ -7935,6 +8034,17 @@ func (c *Collection) insertBatchNoIndex(
 	// base roots before stale-root validation rejects concurrent modifications.
 	defer func() { _ = snap.Close() }()
 
+	collectionWALEnabled := c.collectionWALNoIndexInsertEnabled()
+	collectionWALCommitted := false
+	var baseCatalogDigest [32]byte
+	var dependsOnCollectionSeq uint64
+	if collectionWALEnabled {
+		if err := validateCollectionWALNoIndexInsertSupported(c.db, plannerOptions, entries); err != nil {
+			return nil, err
+		}
+		baseCatalogDigest = collectionCatalogDigest(catalog.meta, catalog.roots)
+	}
+
 	phaseStart = time.Now()
 	table := newCollectionRunTable(len(entries))
 	for i := range entries {
@@ -7956,27 +8066,72 @@ func (c *Collection) insertBatchNoIndex(
 	}()
 
 	baseRootIDs := map[string]uint64{rootName: baseRoot}
-	publishStart := time.Now()
-	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder([]backenddb.OrderedRootDeltaPublishInput{{
-		BaseRoot:      baseRoot,
-		Iter:          iter,
-		StoragePolicy: plannerOptions.dataStoragePolicy,
-	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
-		return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, []string{rootName}, baseRootIDs, rootIDs)
-	})
-	stats.Publish = time.Since(publishStart)
-	if err != nil {
-		return nil, err
+	publishNoIndex := func() ([][]byte, error) {
+		publishStart := time.Now()
+		buildSystemDelta := func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+			return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, []string{rootName}, baseRootIDs, rootIDs)
+		}
+		if collectionWALEnabled {
+			var err error
+			dependsOnCollectionSeq, err = loadCollectionWALAppliedSeq(snap, c.meta.CollectionUID)
+			if err != nil {
+				return nil, err
+			}
+			buildSystemDelta = func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+				collectionSeq := dependsOnCollectionSeq + 1
+				systemIter, err := c.buildCollectionWALCoveredSystemDeltaIteratorForMeta(c.meta, baseCommitSeq, baseSystemRoot, []string{rootName}, baseRootIDs, rootIDs, dependsOnCollectionSeq, collectionSeq)
+				if err != nil {
+					return nil, err
+				}
+				txn, err := c.buildNoIndexInsertCollectionWALTransaction(catalog, rootName, baseRootIDs, rootIDs, baseCommitSeq, baseSystemRoot, baseCatalogDigest, dependsOnCollectionSeq, collectionSeq, entries, stats)
+				if err != nil {
+					_ = systemIter.Close()
+					return nil, err
+				}
+				if _, err := c.db.AppendCollectionWALTransaction(txn, c.db.DurabilityMode() == backenddb.DurabilityDurable); err != nil {
+					_ = systemIter.Close()
+					return nil, err
+				}
+				collectionWALCommitted = true
+				if c.testCollectionWALPostAppendHook != nil {
+					c.testCollectionWALPostAppendHook()
+				}
+				if c.testCollectionWALPostAppendErr != nil {
+					_ = systemIter.Close()
+					return nil, c.testCollectionWALPostAppendErr
+				}
+				return systemIter, nil
+			}
+		}
+		newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder([]backenddb.OrderedRootDeltaPublishInput{{
+			BaseRoot:      baseRoot,
+			Iter:          iter,
+			StoragePolicy: plannerOptions.dataStoragePolicy,
+		}}, buildSystemDelta)
+		stats.Publish = time.Since(publishStart)
+		if err != nil {
+			if collectionWALEnabled && collectionWALCommitted {
+				c.db.MarkCollectionWALRecoveryRequired()
+				return nil, &CommitAmbiguousError{Operation: "InsertBatch", Err: err}
+			}
+			return nil, err
+		}
+		if len(rootIDs) != 1 {
+			err := unexpectedOrderedRootCountError(c.meta.Name, 1, len(rootIDs))
+			if collectionWALEnabled && collectionWALCommitted {
+				c.db.MarkCollectionWALRecoveryRequired()
+				return nil, &CommitAmbiguousError{Operation: "InsertBatch", Err: err}
+			}
+			return nil, err
+		}
+		stats.Runs = 1
+		nextCatalog := cloneCatalogWithRootUpdates(catalog, c.meta, []string{rootName}, rootIDs)
+		c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
+		c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
+		c.setLastInsertStats(stats)
+		return resultIDs, nil
 	}
-	if len(rootIDs) != 1 {
-		return nil, unexpectedOrderedRootCountError(c.meta.Name, 1, len(rootIDs))
-	}
-	stats.Runs = 1
-	nextCatalog := cloneCatalogWithRootUpdates(catalog, c.meta, []string{rootName}, rootIDs)
-	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
-	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
-	c.setLastInsertStats(stats)
-	return resultIDs, nil
+	return publishNoIndex()
 }
 
 // Delete removes one document. See DeleteDocument for the matched/deleted
@@ -8004,6 +8159,9 @@ func (c *Collection) DeleteDocument(documentID []byte) (bool, error) {
 	}
 	if len(documentID) == 0 {
 		return false, errors.New("collections: document id cannot be empty")
+	}
+	if err := c.requireCollectionWALNoIndexInsertOnlyMutation("Delete"); err != nil {
+		return false, err
 	}
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()
@@ -8066,6 +8224,9 @@ func (c *Collection) DeleteBatch(documentIDs [][]byte) (int, error) {
 	}
 	if len(ids) == 0 {
 		return 0, nil
+	}
+	if err := c.requireCollectionWALNoIndexInsertOnlyMutation("DeleteBatch"); err != nil {
+		return 0, err
 	}
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()
@@ -8458,6 +8619,9 @@ func (c *Collection) Update(documentID []byte, update func(current []byte) (repl
 	if err := validateCollectionUpdateInput(c, documentID, update); err != nil {
 		return false, false, err
 	}
+	if err := c.requireCollectionWALNoIndexInsertOnlyMutation("Update"); err != nil {
+		return false, false, err
+	}
 	if combiner, domain := c.updateFastPathWithoutCreatingCombiner(); combiner != nil {
 		return combiner.update(c, documentID, update, bsonSetUpdate{}, false)
 	} else if domain != nil {
@@ -8586,6 +8750,9 @@ func (c *Collection) updateBatch(items []UpdateBatchItem, mode updateBatchMode) 
 	if len(items) == 0 {
 		c.setLastUpdateStats(CollectionUpdateStats{})
 		return nil, true, nil
+	}
+	if err := c.requireCollectionWALNoIndexInsertOnlyMutation("UpdateBatch"); err != nil {
+		return nil, false, err
 	}
 	ownedItems, err := prepareUpdateBatchItems(items)
 	if err != nil {
@@ -13290,6 +13457,151 @@ func (c *Collection) buildRootDescriptorSystemDeltaIteratorForMeta(meta Collecti
 	return buildSystemDeltaIterator(updates)
 }
 
+func (c *Collection) buildCollectionWALCoveredSystemDeltaIteratorForMeta(meta CollectionMeta, expectedCommitSeq, expectedSystemRoot uint64, rootNames []string, baseRootIDs map[string]uint64, rootIDs []uint64, dependsOnCollectionSeq, collectionSeq uint64) (iterator.UnsafeIterator, error) {
+	if c == nil || c.db == nil {
+		return nil, backenddb.ErrClosed
+	}
+	if len(rootIDs) != len(rootNames) {
+		return nil, unexpectedOrderedRootCountError(meta.Name, len(rootNames), len(rootIDs))
+	}
+	if err := c.validateRootDescriptorSystemDeltaForMeta(meta, expectedCommitSeq, expectedSystemRoot, rootNames, baseRootIDs); err != nil {
+		return nil, err
+	}
+	current := c.db.AcquireSnapshot()
+	if current == nil {
+		return nil, backenddb.ErrClosed
+	}
+	defer func() { _ = current.Close() }()
+	appliedSeq, err := loadCollectionWALAppliedSeq(current, meta.CollectionUID)
+	if err != nil {
+		return nil, err
+	}
+	if appliedSeq != dependsOnCollectionSeq {
+		return nil, fmt.Errorf("%w: collection %q applied seq=%d expected=%d", collectionwal.ErrCollectionWALSequenceGap, meta.Name, appliedSeq, dependsOnCollectionSeq)
+	}
+	updates := make(map[string][]byte, len(rootNames)+1)
+	for i, rootName := range rootNames {
+		updates[systemCollectionRootKey(rootName)] = encodeRootID(rootIDs[i])
+	}
+	updates[systemCollectionWALAppliedSeqKey(meta.CollectionUID)] = encodeCollectionWALAppliedSeq(collectionSeq)
+	return buildSystemDeltaIterator(updates)
+}
+
+func (c *Collection) collectionWALNoIndexInsertEnabled() bool {
+	if c == nil || c.db == nil {
+		return false
+	}
+	if !c.collectionWALNoIndexInsertCapabilityConfigured() {
+		return false
+	}
+	switch c.db.DurabilityMode() {
+	case backenddb.DurabilityDurable, backenddb.DurabilityWALOnRelaxed:
+		return true
+	default:
+		return false
+	}
+}
+
+func (c *Collection) collectionWALNoIndexInsertCapabilityConfigured() bool {
+	return c != nil && c.meta.Options.CollectionWALDurableAckCapability == CollectionWALDurableAckNoIndexRowInsertOnly
+}
+
+func (c *Collection) requireCollectionWALNoIndexInsertOnlyMutation(operation string) error {
+	if !c.collectionWALNoIndexInsertCapabilityConfigured() {
+		return nil
+	}
+	return fmt.Errorf("%w: %s is unsupported by %s collection WAL durable-ack capability", collectionwal.ErrCollectionWALUnsupportedMode, operation, CollectionWALDurableAckNoIndexRowInsertOnly)
+}
+
+func validateCollectionWALNoIndexInsertSupported(db *backenddb.DB, opts collectionOptions, entries []noIndexBatchEntry) error {
+	if opts.dataStoragePolicy == backenddb.OrderedRootStorageValueLogLeaves {
+		return fmt.Errorf("%w: collection WAL PR1-min requires inline pager leaves", collectionwal.ErrCollectionWALUnsupportedMode)
+	}
+	if len(entries) > collectionwal.MaxDecodedRootDeltaEntriesPerTxn {
+		return fmt.Errorf("%w: root delta entries %d exceeds %d", collectionwal.ErrCollectionWALResourceLimit, len(entries), collectionwal.MaxDecodedRootDeltaEntriesPerTxn)
+	}
+	for _, entry := range entries {
+		if len(entry.id) > collectionwal.MaxDocumentIDBytes {
+			return fmt.Errorf("%w: document id bytes %d exceeds %d", collectionwal.ErrCollectionWALResourceLimit, len(entry.id), collectionwal.MaxDocumentIDBytes)
+		}
+		if len(entry.document) > collectionwal.MaxInlineDeltaValueBytes {
+			return fmt.Errorf("%w: document bytes %d exceeds inline cap %d", collectionwal.ErrCollectionWALResourceLimit, len(entry.document), collectionwal.MaxInlineDeltaValueBytes)
+		}
+		if db != nil && db.HasValueLogAppender() && len(entry.document) > db.InlineThresholdForKey(entry.id) {
+			return fmt.Errorf("%w: value-log record side refs are deferred out of collection WAL PR1-min", collectionwal.ErrCollectionWALUnsupportedMode)
+		}
+	}
+	return nil
+}
+
+func (c *Collection) buildNoIndexInsertCollectionWALTransaction(
+	catalog *collectionCatalog,
+	rootName string,
+	baseRootIDs map[string]uint64,
+	rootIDs []uint64,
+	baseCommitSeq uint64,
+	baseSystemRoot uint64,
+	baseCatalogDigest [32]byte,
+	dependsOnCollectionSeq uint64,
+	collectionSeq uint64,
+	entries []noIndexBatchEntry,
+	stats CollectionInsertStats,
+) (collectionwal.Transaction, error) {
+	if c == nil || catalog == nil {
+		return collectionwal.Transaction{}, backenddb.ErrClosed
+	}
+	if len(rootIDs) != 1 {
+		return collectionwal.Transaction{}, unexpectedOrderedRootCountError(c.meta.Name, 1, len(rootIDs))
+	}
+	uid, err := parseCollectionUID(c.meta.CollectionUID)
+	if err != nil {
+		return collectionwal.Transaction{}, err
+	}
+	rootNames := []string{rootName}
+	nextCatalog := cloneCatalogWithRootUpdates(catalog, c.meta, rootNames, rootIDs)
+	catalogDigest := collectionCatalogDigest(nextCatalog.meta, nextCatalog.roots)
+	rootDelta, err := encodeCollectionWALNoIndexRootDeltaSection(uid, rootName, baseRootIDs[rootName], rootIDs[0], dependsOnCollectionSeq, entries)
+	if err != nil {
+		return collectionwal.Transaction{}, err
+	}
+	systemDelta, err := encodeCollectionWALSystemDeltaTemplateSection(c.meta, rootNames, baseRootIDs, rootIDs, baseCommitSeq, baseSystemRoot, dependsOnCollectionSeq, collectionSeq)
+	if err != nil {
+		return collectionwal.Transaction{}, err
+	}
+	descriptorOps, err := encodeCollectionWALDescriptorOpsSection(c.meta, rootNames, rootIDs, collectionSeq)
+	if err != nil {
+		return collectionwal.Transaction{}, err
+	}
+	statsSection := encodeCollectionWALStatsSection(stats, len(entries), len(rootDelta))
+	criticalReplay := uint32(collectionwal.SectionFlagCritical | collectionwal.SectionFlagReplayCritical)
+	return collectionwal.Transaction{
+		CollectionUID:            uid,
+		CollectionGeneration:     c.meta.CollectionGeneration,
+		CollectionSeq:            collectionSeq,
+		DependsOnCollectionSeq:   dependsOnCollectionSeq,
+		CatalogEpoch:             c.meta.CatalogEpoch,
+		SchemaEpoch:              c.meta.SchemaEpoch,
+		SchemaVersion:            uint64(collectionMetaVersion),
+		BaseCommitSeq:            baseCommitSeq,
+		BaseSystemRootID:         baseSystemRoot,
+		BaseCatalogDigest:        baseCatalogDigest,
+		CatalogDigest:            catalogDigest,
+		LogicalCatalogDigest:     catalogDigest,
+		LocalReplayCatalogDigest: catalogDigest,
+		MutationClass:            collectionWALMutationClassNoIndexRowInsert,
+		RootDeltaCount:           1,
+		SideRefCount:             0,
+		DescriptorOpCount:        uint32(len(rootNames) + 1),
+		Sections: []collectionwal.Section{
+			{Type: collectionwal.SectionTypeRootDeltaTable, Version: collectionwal.SectionTableVersionV1, Flags: criticalReplay, Data: rootDelta},
+			{Type: collectionwal.SectionTypeSideRefTable, Version: collectionwal.SectionTableVersionV1, Flags: criticalReplay, Data: encodeCollectionWALSideRefSection()},
+			{Type: collectionwal.SectionTypeSystemDeltaTemplate, Version: collectionwal.SectionTableVersionV1, Flags: criticalReplay, Data: systemDelta},
+			{Type: collectionwal.SectionTypeDescriptorOps, Version: collectionwal.SectionTableVersionV1, Flags: criticalReplay, Data: descriptorOps},
+			{Type: collectionwal.SectionTypeStats, Version: collectionwal.SectionTableVersionV1, Data: statsSection},
+		},
+	}, nil
+}
+
 func (c *Collection) buildRootOverlayDescriptorSystemDeltaIteratorForMeta(meta CollectionMeta, expectedCommitSeq, expectedSystemRoot uint64, rootNames []string, baseRootIDs map[string]uint64, expectedOverlays map[string][]uint64, rootIDs []uint64) (iterator.UnsafeIterator, error) {
 	if c == nil || c.db == nil {
 		return nil, backenddb.ErrClosed
@@ -15370,10 +15682,14 @@ func encodeCollectionMeta(meta CollectionMeta) ([]byte, error) {
 		return nil, err
 	}
 	return json.Marshal(collectionMetaDisk{
-		Version: collectionMetaVersion,
-		Name:    normalized.Name,
-		Options: normalized.Options,
-		Indexes: normalized.Indexes,
+		Version:              collectionMetaVersion,
+		Name:                 normalized.Name,
+		CollectionUID:        normalized.CollectionUID,
+		CollectionGeneration: normalized.CollectionGeneration,
+		CatalogEpoch:         normalized.CatalogEpoch,
+		SchemaEpoch:          normalized.SchemaEpoch,
+		Options:              normalized.Options,
+		Indexes:              normalized.Indexes,
 	})
 }
 
@@ -15386,15 +15702,33 @@ func decodeCollectionMeta(raw []byte) (CollectionMeta, error) {
 		return CollectionMeta{}, fmt.Errorf("collections: unsupported collection metadata version %d", disk.Version)
 	}
 	return normalizeCollectionMeta(CollectionMeta{
-		Name:    disk.Name,
-		Options: disk.Options,
-		Indexes: disk.Indexes,
+		Name:                 disk.Name,
+		CollectionUID:        disk.CollectionUID,
+		CollectionGeneration: disk.CollectionGeneration,
+		CatalogEpoch:         disk.CatalogEpoch,
+		SchemaEpoch:          disk.SchemaEpoch,
+		Options:              disk.Options,
+		Indexes:              disk.Indexes,
 	})
 }
 
 func normalizeCollectionMeta(meta CollectionMeta) (CollectionMeta, error) {
 	if err := ValidateCollectionName(meta.Name); err != nil {
 		return CollectionMeta{}, err
+	}
+	if meta.CollectionUID != "" {
+		if _, err := parseCollectionUID(meta.CollectionUID); err != nil {
+			return CollectionMeta{}, err
+		}
+		if meta.CollectionGeneration == 0 {
+			meta.CollectionGeneration = 1
+		}
+		if meta.CatalogEpoch == 0 {
+			meta.CatalogEpoch = 1
+		}
+		if meta.SchemaEpoch == 0 {
+			meta.SchemaEpoch = 1
+		}
 	}
 	if _, err := backendRootStoragePolicy(meta.Options.DataRootStoragePolicy); err != nil {
 		return CollectionMeta{}, err
@@ -15420,6 +15754,11 @@ func normalizeCollectionMeta(meta CollectionMeta) (CollectionMeta, error) {
 	if meta.Options.DisableBufferedIndexedAsyncFlush && meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits != 0 {
 		return CollectionMeta{}, errors.New("collections: buffered indexed async flush max queued units cannot be set when async flush is disabled")
 	}
+	capability, err := normalizeCollectionWALDurableAckCapability(meta.Options.CollectionWALDurableAckCapability)
+	if err != nil {
+		return CollectionMeta{}, err
+	}
+	meta.Options.CollectionWALDurableAckCapability = capability
 	documentFormat, err := normalizeDocumentFormat(meta.Options.DocumentFormat)
 	if err != nil {
 		return CollectionMeta{}, err
@@ -15495,7 +15834,60 @@ func normalizeCollectionMeta(meta CollectionMeta) (CollectionMeta, error) {
 		meta.Options.BufferedIndexedAsyncFlush = false
 		meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits = 0
 	}
+	if meta.Options.CollectionWALDurableAckCapability == CollectionWALDurableAckNoIndexRowInsertOnly && len(meta.Indexes) != 0 {
+		return CollectionMeta{}, fmt.Errorf("collections: %s collection WAL durable-ack capability does not support indexed schemas", CollectionWALDurableAckNoIndexRowInsertOnly)
+	}
 	return meta, nil
+}
+
+func normalizeCollectionWALDurableAckCapability(raw string) (string, error) {
+	switch strings.TrimSpace(raw) {
+	case "", "disabled":
+		return CollectionWALDurableAckDisabled, nil
+	case CollectionWALDurableAckNoIndexRowInsertOnly:
+		return CollectionWALDurableAckNoIndexRowInsertOnly, nil
+	default:
+		return "", fmt.Errorf("collections: unsupported collection WAL durable-ack capability %q", raw)
+	}
+}
+
+func initializeNewCollectionIdentity(meta CollectionMeta) (CollectionMeta, error) {
+	if meta.CollectionUID == "" {
+		var uid [collectionwal.CollectionUIDBytes]byte
+		if _, err := rand.Read(uid[:]); err != nil {
+			return CollectionMeta{}, err
+		}
+		meta.CollectionUID = hex.EncodeToString(uid[:])
+	}
+	if _, err := parseCollectionUID(meta.CollectionUID); err != nil {
+		return CollectionMeta{}, err
+	}
+	if meta.CollectionGeneration == 0 {
+		meta.CollectionGeneration = 1
+	}
+	if meta.CatalogEpoch == 0 {
+		meta.CatalogEpoch = 1
+	}
+	if meta.SchemaEpoch == 0 {
+		meta.SchemaEpoch = 1
+	}
+	return normalizeCollectionMeta(meta)
+}
+
+func parseCollectionUID(raw string) ([collectionwal.CollectionUIDBytes]byte, error) {
+	var uid [collectionwal.CollectionUIDBytes]byte
+	if len(raw) != collectionwal.CollectionUIDBytes*2 {
+		return uid, fmt.Errorf("collections: collection_uid must be %d hex bytes", collectionwal.CollectionUIDBytes)
+	}
+	decoded, err := hex.DecodeString(raw)
+	if err != nil {
+		return uid, fmt.Errorf("collections: invalid collection_uid: %w", err)
+	}
+	copy(uid[:], decoded)
+	if uid == ([collectionwal.CollectionUIDBytes]byte{}) {
+		return uid, errors.New("collections: collection_uid cannot be zero")
+	}
+	return uid, nil
 }
 
 func normalizeIndexValueType(valueType IndexValueType) (IndexValueType, error) {
@@ -15511,9 +15903,13 @@ func normalizeIndexValueType(valueType IndexValueType) (IndexValueType, error) {
 
 func (m CollectionMeta) copy() *CollectionMeta {
 	return &CollectionMeta{
-		Name:    m.Name,
-		Options: m.Options,
-		Indexes: append([]IndexDefinition(nil), m.Indexes...),
+		Name:                 m.Name,
+		CollectionUID:        m.CollectionUID,
+		CollectionGeneration: m.CollectionGeneration,
+		CatalogEpoch:         m.CatalogEpoch,
+		SchemaEpoch:          m.SchemaEpoch,
+		Options:              m.Options,
+		Indexes:              append([]IndexDefinition(nil), m.Indexes...),
 	}
 }
 
@@ -15522,6 +15918,39 @@ func copyCollectionMeta(meta CollectionMeta) CollectionMeta {
 		return *copied
 	}
 	return meta
+}
+
+func collectionCatalogDigest(meta CollectionMeta, roots map[string]uint64) [32]byte {
+	h := sha256.New()
+	h.Write([]byte(meta.Name))
+	h.Write([]byte{0})
+	h.Write([]byte(meta.CollectionUID))
+	h.Write([]byte{0})
+	var num [8]byte
+	binary.LittleEndian.PutUint64(num[:], meta.CollectionGeneration)
+	h.Write(num[:])
+	binary.LittleEndian.PutUint64(num[:], meta.CatalogEpoch)
+	h.Write(num[:])
+	binary.LittleEndian.PutUint64(num[:], meta.SchemaEpoch)
+	h.Write(num[:])
+	encoded, err := encodeCollectionMeta(meta)
+	if err == nil {
+		h.Write(encoded)
+	}
+	rootNames := make([]string, 0, len(roots))
+	for name := range roots {
+		rootNames = append(rootNames, name)
+	}
+	sort.Strings(rootNames)
+	for _, name := range rootNames {
+		h.Write([]byte(name))
+		h.Write([]byte{0})
+		binary.LittleEndian.PutUint64(num[:], roots[name])
+		h.Write(num[:])
+	}
+	var digest [32]byte
+	copy(digest[:], h.Sum(nil))
+	return digest
 }
 
 func sameCollectionMeta(a, b CollectionMeta) bool {
@@ -15539,8 +15968,24 @@ func sameCollectionMeta(a, b CollectionMeta) bool {
 	return collectionMetaValuesEqual(na, nb)
 }
 
+func sameCollectionMetaForCreate(existing, requested CollectionMeta) bool {
+	if requested.CollectionUID == "" {
+		requested.CollectionUID = existing.CollectionUID
+		requested.CollectionGeneration = existing.CollectionGeneration
+		requested.CatalogEpoch = existing.CatalogEpoch
+		requested.SchemaEpoch = existing.SchemaEpoch
+	}
+	return sameCollectionMeta(existing, requested)
+}
+
 func collectionMetaValuesEqual(a, b CollectionMeta) bool {
-	if a.Name != b.Name || a.Options != b.Options || len(a.Indexes) != len(b.Indexes) {
+	if a.Name != b.Name ||
+		a.CollectionUID != b.CollectionUID ||
+		a.CollectionGeneration != b.CollectionGeneration ||
+		a.CatalogEpoch != b.CatalogEpoch ||
+		a.SchemaEpoch != b.SchemaEpoch ||
+		a.Options != b.Options ||
+		len(a.Indexes) != len(b.Indexes) {
 		return false
 	}
 	for i := range a.Indexes {
@@ -15565,9 +16010,13 @@ func addIndexToCollectionMeta(meta CollectionMeta, def IndexDefinition) (Collect
 		return CollectionMeta{}, IndexDefinition{}, fmt.Errorf("collections: duplicate index %q", def.Name)
 	}
 	candidate := CollectionMeta{
-		Name:    meta.Name,
-		Options: meta.Options,
-		Indexes: append(append([]IndexDefinition(nil), meta.Indexes...), def),
+		Name:                 meta.Name,
+		CollectionUID:        meta.CollectionUID,
+		CollectionGeneration: meta.CollectionGeneration,
+		CatalogEpoch:         meta.CatalogEpoch,
+		SchemaEpoch:          meta.SchemaEpoch + 1,
+		Options:              meta.Options,
+		Indexes:              append(append([]IndexDefinition(nil), meta.Indexes...), def),
 	}
 	normalized, err := normalizeCollectionMeta(candidate)
 	if err != nil {
@@ -15695,6 +16144,10 @@ func systemCollectionRootOverlayKey(rootName string) string {
 	return systemCollectionRootOverlayPrefix + rootName
 }
 
+func systemCollectionWALAppliedSeqKey(collectionUID string) string {
+	return systemCollectionWALAppliedPrefix + collectionUID
+}
+
 func encodeRootID(rootID uint64) []byte {
 	out := make([]byte, 8)
 	binary.BigEndian.PutUint64(out, rootID)
@@ -15731,6 +16184,206 @@ func decodeRootIDList(raw []byte) ([]uint64, error) {
 		out[i] = binary.BigEndian.Uint64(raw[i*8 : (i+1)*8])
 	}
 	return out, nil
+}
+
+func encodeCollectionWALAppliedSeq(seq uint64) []byte {
+	out := make([]byte, 8)
+	binary.BigEndian.PutUint64(out, seq)
+	return out
+}
+
+func decodeCollectionWALAppliedSeq(raw []byte) (uint64, error) {
+	if len(raw) != 8 {
+		return 0, errors.New("malformed collection WAL applied seq")
+	}
+	return binary.BigEndian.Uint64(raw), nil
+}
+
+func loadCollectionWALAppliedSeq(snap *backenddb.Snapshot, collectionUID string) (uint64, error) {
+	if _, err := parseCollectionUID(collectionUID); err != nil {
+		return 0, err
+	}
+	raw, ok, err := getSystemValue(snap, systemCollectionWALAppliedSeqKey(collectionUID))
+	if err != nil || !ok {
+		return 0, err
+	}
+	seq, err := decodeCollectionWALAppliedSeq(raw)
+	if err != nil {
+		return 0, fmt.Errorf("collections: collection WAL applied seq for %s: %w", collectionUID, err)
+	}
+	return seq, nil
+}
+
+func encodeCollectionWALNoIndexRootDeltaSection(uid [collectionwal.CollectionUIDBytes]byte, rootName string, baseRootID, newRootID, dependsOnCollectionSeq uint64, entries []noIndexBatchEntry) ([]byte, error) {
+	if len(rootName) > collectionwal.MaxRootNameBytes {
+		return nil, fmt.Errorf("%w: root name bytes %d exceeds %d", collectionwal.ErrCollectionWALResourceLimit, len(rootName), collectionwal.MaxRootNameBytes)
+	}
+	if len(entries) > collectionwal.MaxDecodedRootDeltaEntriesPerTxn {
+		return nil, fmt.Errorf("%w: root delta entries %d exceeds %d", collectionwal.ErrCollectionWALResourceLimit, len(entries), collectionwal.MaxDecodedRootDeltaEntriesPerTxn)
+	}
+	out := make([]byte, 0, 64)
+	out = append(out, 'T', 'D', 'B', 'C', 'W', 'R', 'D', 0x01)
+	out = append(out, uid[:]...)
+	out = appendCollectionWALUint32(out, 1) // one root in PR1-min
+	var err error
+	out, err = appendCollectionWALString(out, rootName, collectionwal.MaxRootNameBytes, "root name")
+	if err != nil {
+		return nil, err
+	}
+	rootUID := collectionwal.PR1MinPrimaryRootUID(uid)
+	out = append(out, rootUID[:]...)
+	out = appendCollectionWALUint16(out, collectionwal.RootKindPrimary)
+	out = appendCollectionWALUint64(out, baseRootID)
+	out = appendCollectionWALUint64(out, collectionwal.RootGenerationPrimary)
+	out = appendCollectionWALUint64(out, dependsOnCollectionSeq)
+	baseDescriptorDigest := collectionwal.PR1MinPrimaryRootDescriptorDigest(uid, baseRootID, dependsOnCollectionSeq)
+	out = append(out, baseDescriptorDigest[:]...)
+	out = appendCollectionWALUint64(out, newRootID)
+	out = appendCollectionWALUint64(out, uint64(len(entries)))
+	for i, entry := range entries {
+		if len(entry.id) > collectionwal.MaxDocumentIDBytes {
+			return nil, fmt.Errorf("%w: document id bytes %d exceeds %d", collectionwal.ErrCollectionWALResourceLimit, len(entry.id), collectionwal.MaxDocumentIDBytes)
+		}
+		if len(entry.document) > collectionwal.MaxInlineDeltaValueBytes {
+			return nil, fmt.Errorf("%w: document bytes %d exceeds inline cap %d", collectionwal.ErrCollectionWALResourceLimit, len(entry.document), collectionwal.MaxInlineDeltaValueBytes)
+		}
+		out = appendCollectionWALUint64(out, uint64(i))
+		out = appendCollectionWALUint16(out, 1) // put inline value
+		out, err = appendCollectionWALBytes(out, entry.id, collectionwal.MaxDocumentIDBytes, "document id")
+		if err != nil {
+			return nil, err
+		}
+		out, err = appendCollectionWALBytes(out, entry.document, collectionwal.MaxInlineDeltaValueBytes, "document")
+		if err != nil {
+			return nil, err
+		}
+		if uint64(len(out)) > collectionwal.MaxInlineRootDeltaBytesPerRoot {
+			return nil, fmt.Errorf("%w: root delta section bytes %d exceeds per-root inline cap %d", collectionwal.ErrCollectionWALResourceLimit, len(out), collectionwal.MaxInlineRootDeltaBytesPerRoot)
+		}
+	}
+	return out, nil
+}
+
+func encodeCollectionWALSideRefSection() []byte {
+	out := make([]byte, 0, 12)
+	out = append(out, 'T', 'D', 'B', 'C', 'W', 'S', 'R', 0x01)
+	out = appendCollectionWALUint32(out, 0)
+	return out
+}
+
+func encodeCollectionWALSystemDeltaTemplateSection(meta CollectionMeta, rootNames []string, baseRootIDs map[string]uint64, rootIDs []uint64, baseCommitSeq, baseSystemRoot, dependsOnCollectionSeq, collectionSeq uint64) ([]byte, error) {
+	uid, err := parseCollectionUID(meta.CollectionUID)
+	if err != nil {
+		return nil, err
+	}
+	if len(rootNames) != len(rootIDs) {
+		return nil, unexpectedOrderedRootCountError(meta.Name, len(rootNames), len(rootIDs))
+	}
+	out := make([]byte, 0, 128)
+	out = append(out, 'T', 'D', 'B', 'C', 'W', 'S', 'T', 0x01)
+	out = append(out, uid[:]...)
+	out, err = appendCollectionWALString(out, meta.Name, collectionwal.MaxLogicalNameBytes, "collection name")
+	if err != nil {
+		return nil, err
+	}
+	out = appendCollectionWALUint64(out, meta.CollectionGeneration)
+	out = appendCollectionWALUint64(out, meta.CatalogEpoch)
+	out = appendCollectionWALUint64(out, meta.SchemaEpoch)
+	out = appendCollectionWALUint64(out, baseCommitSeq)
+	out = appendCollectionWALUint64(out, baseSystemRoot)
+	out = appendCollectionWALUint64(out, dependsOnCollectionSeq)
+	out = appendCollectionWALUint64(out, collectionSeq)
+	out = appendCollectionWALUint32(out, uint32(len(rootNames)))
+	for i, rootName := range rootNames {
+		out, err = appendCollectionWALString(out, rootName, collectionwal.MaxRootNameBytes, "root name")
+		if err != nil {
+			return nil, err
+		}
+		rootUID := collectionwal.PR1MinPrimaryRootUID(uid)
+		out = append(out, rootUID[:]...)
+		out = appendCollectionWALUint16(out, collectionwal.RootKindPrimary)
+		out = appendCollectionWALUint64(out, baseRootIDs[rootName])
+		out = appendCollectionWALUint64(out, collectionwal.RootGenerationPrimary)
+		out = appendCollectionWALUint64(out, dependsOnCollectionSeq)
+		baseDescriptorDigest := collectionwal.PR1MinPrimaryRootDescriptorDigest(uid, baseRootIDs[rootName], dependsOnCollectionSeq)
+		out = append(out, baseDescriptorDigest[:]...)
+		out = appendCollectionWALUint64(out, rootIDs[i])
+	}
+	out = appendCollectionWALUint32(out, uint32(len(rootNames)+1))
+	return appendCollectionWALDescriptorOps(out, meta, rootNames, rootIDs, collectionSeq)
+}
+
+func encodeCollectionWALDescriptorOpsSection(meta CollectionMeta, rootNames []string, rootIDs []uint64, collectionSeq uint64) ([]byte, error) {
+	if len(rootNames) != len(rootIDs) {
+		return nil, unexpectedOrderedRootCountError(meta.Name, len(rootNames), len(rootIDs))
+	}
+	out := make([]byte, 0, 128)
+	out = append(out, 'T', 'D', 'B', 'C', 'W', 'D', 'O', 0x01)
+	out = appendCollectionWALUint32(out, uint32(len(rootNames)+1))
+	return appendCollectionWALDescriptorOps(out, meta, rootNames, rootIDs, collectionSeq)
+}
+
+func appendCollectionWALDescriptorOps(out []byte, meta CollectionMeta, rootNames []string, rootIDs []uint64, collectionSeq uint64) ([]byte, error) {
+	for i, rootName := range rootNames {
+		var err error
+		out = appendCollectionWALUint16(out, collectionWALDescriptorOpRootUpdate)
+		out, err = appendCollectionWALString(out, systemCollectionRootKey(rootName), collectionwal.MaxRootNameBytes+len(systemCollectionRootPrefix), "descriptor key")
+		if err != nil {
+			return nil, err
+		}
+		out, err = appendCollectionWALBytes(out, encodeRootID(rootIDs[i]), 8, "descriptor value")
+		if err != nil {
+			return nil, err
+		}
+	}
+	out = appendCollectionWALUint16(out, collectionWALDescriptorOpAppliedWatermark)
+	var err error
+	out, err = appendCollectionWALString(out, systemCollectionWALAppliedSeqKey(meta.CollectionUID), collectionwal.MaxRootNameBytes+len(systemCollectionWALAppliedPrefix), "watermark key")
+	if err != nil {
+		return nil, err
+	}
+	return appendCollectionWALBytes(out, encodeCollectionWALAppliedSeq(collectionSeq), 8, "watermark value")
+}
+
+func encodeCollectionWALStatsSection(stats CollectionInsertStats, entries int, rootDeltaBytes int) []byte {
+	out := make([]byte, 0, 48)
+	out = append(out, 'T', 'D', 'B', 'C', 'W', 'S', 'S', 0x01)
+	out = appendCollectionWALUint64(out, uint64(stats.Documents))
+	out = appendCollectionWALUint64(out, uint64(stats.Indexes))
+	out = appendCollectionWALUint64(out, uint64(entries))
+	out = appendCollectionWALUint64(out, uint64(rootDeltaBytes))
+	return out
+}
+
+func appendCollectionWALString(out []byte, s string, max int, field string) ([]byte, error) {
+	return appendCollectionWALBytes(out, []byte(s), max, field)
+}
+
+func appendCollectionWALBytes(out []byte, b []byte, max int, field string) ([]byte, error) {
+	if len(b) > max {
+		return nil, fmt.Errorf("%w: %s bytes %d exceeds %d", collectionwal.ErrCollectionWALResourceLimit, field, len(b), max)
+	}
+	out = appendCollectionWALUint32(out, uint32(len(b)))
+	out = append(out, b...)
+	return out, nil
+}
+
+func appendCollectionWALUint16(out []byte, v uint16) []byte {
+	var buf [2]byte
+	binary.LittleEndian.PutUint16(buf[:], v)
+	return append(out, buf[:]...)
+}
+
+func appendCollectionWALUint32(out []byte, v uint32) []byte {
+	var buf [4]byte
+	binary.LittleEndian.PutUint32(buf[:], v)
+	return append(out, buf[:]...)
+}
+
+func appendCollectionWALUint64(out []byte, v uint64) []byte {
+	var buf [8]byte
+	binary.LittleEndian.PutUint64(buf[:], v)
+	return append(out, buf[:]...)
 }
 
 func buildCollectionRootOverlayFilters(rootNames []string, rootRuns map[string][]memtable.Table, rootOverlays map[string][]uint64, existingFilters map[string]map[uint64]collectionRootOverlayFilter) (map[string]collectionRootOverlayFilter, error) {

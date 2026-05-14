@@ -20,7 +20,6 @@ import (
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
 	"github.com/snissn/gomap/TreeDB/internal/bulk"
-	"github.com/snissn/gomap/TreeDB/internal/collectionwal"
 	"github.com/snissn/gomap/TreeDB/internal/compression"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/leafrefscan"
@@ -2907,9 +2906,6 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 	defer func() { _ = lock.Close() }()
 
 	if err := recoverIndexSwap(opts.Dir); err != nil {
-		return stats, err
-	}
-	if err := collectionwal.RequireCleanForOfflineMaintenance(opts.Dir); err != nil {
 		return stats, err
 	}
 

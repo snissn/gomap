@@ -17,6 +17,8 @@ const (
 	minEncodedIndexDefinitionLen      = 6
 	collectionRefTagName              = 1
 	collectionRefTagHandle            = 2
+	collectionMetaVersionV1           = 1
+	collectionMetaVersionV2           = 2
 )
 
 type metadataIdempotencyEntry struct {
@@ -48,7 +50,7 @@ func appendCollectionHandleRefPayload(dst []byte, handle CollectionHandle) []byt
 }
 
 func encodeCollectionMeta(meta collections.CollectionMeta) []byte {
-	dst := binary.AppendUvarint(nil, 1)
+	dst := binary.AppendUvarint(nil, collectionMetaVersionV2)
 	dst = appendString(dst, meta.Name)
 	dst = binary.AppendUvarint(dst, uint64(encodeDocumentFormat(meta.Options.DocumentFormat)))
 	dst = binary.AppendUvarint(dst, uint64(encodeRootStorage(meta.Options.DataRootStoragePolicy)))
@@ -62,6 +64,7 @@ func encodeCollectionMeta(meta collections.CollectionMeta) []byte {
 	dst = appendBool(dst, meta.Options.BufferedIndexedAsyncFlush)
 	dst = appendBool(dst, meta.Options.BufferedIndexedOverlayRoots)
 	dst = binary.AppendVarint(dst, int64(meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits))
+	dst = appendString(dst, meta.Options.CollectionWALDurableAckCapability)
 	dst = binary.AppendUvarint(dst, uint64(len(meta.Indexes)))
 	for _, def := range meta.Indexes {
 		dst = appendIndexDefinition(dst, def, false)
@@ -74,7 +77,7 @@ func decodeCollectionMeta(src []byte) (collections.CollectionMeta, error) {
 	if err != nil {
 		return collections.CollectionMeta{}, err
 	}
-	if version != 1 {
+	if version != collectionMetaVersionV1 && version != collectionMetaVersionV2 {
 		return collections.CollectionMeta{}, protocolError(iwire.ErrUnsupportedVersion, "collection_meta version %d", version)
 	}
 	name, err := readString(src, &off)
@@ -141,6 +144,16 @@ func decodeCollectionMeta(src []byte) (collections.CollectionMeta, error) {
 	if err := ensureNonNegativeIntCapacity("buffered_indexed_async_flush_max_queued_units", maxQueued); err != nil {
 		return collections.CollectionMeta{}, err
 	}
+	collectionWALDurableAckCapability := ""
+	if version >= collectionMetaVersionV2 {
+		collectionWALDurableAckCapability, err = readString(src, &off)
+		if err != nil {
+			return collections.CollectionMeta{}, err
+		}
+		if err := ensureKnownCollectionWALDurableAckCapability(collectionWALDurableAckCapability); err != nil {
+			return collections.CollectionMeta{}, err
+		}
+	}
 	indexCount, err := readUvarintField(src, &off, "index_count")
 	if err != nil {
 		return collections.CollectionMeta{}, err
@@ -181,6 +194,7 @@ func decodeCollectionMeta(src []byte) (collections.CollectionMeta, error) {
 			BufferedIndexedAsyncFlush:               asyncFlush,
 			BufferedIndexedOverlayRoots:             overlayRoots,
 			BufferedIndexedAsyncFlushMaxQueuedUnits: int(maxQueued),
+			CollectionWALDurableAckCapability:       collectionWALDurableAckCapability,
 		},
 		Indexes: make([]collections.IndexDefinition, 0, int(indexCount)),
 	}
@@ -899,6 +913,15 @@ func ensureKnownRootStoragePolicy(policy collections.RootStoragePolicy) error {
 	}
 }
 
+func ensureKnownCollectionWALDurableAckCapability(capability string) error {
+	switch capability {
+	case collections.CollectionWALDurableAckDisabled, collections.CollectionWALDurableAckNoIndexRowInsertOnly:
+		return nil
+	default:
+		return invalidMetadata("unsupported collection WAL durable-ack capability %q", capability)
+	}
+}
+
 func ensureKnownIndexValueType(valueType collections.IndexValueType) error {
 	switch valueType {
 	case collections.IndexValueString, collections.IndexValueBool, collections.IndexValueInt64, collections.IndexValueDouble:
@@ -945,6 +968,12 @@ func normalizeClientCollectionMeta(meta collections.CollectionMeta) (collections
 	}
 	if err := ensureNonNegativeIntCapacity("buffered_indexed_async_flush_max_queued_units", int64(meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits)); err != nil {
 		return collections.CollectionMeta{}, err
+	}
+	if err := ensureKnownCollectionWALDurableAckCapability(meta.Options.CollectionWALDurableAckCapability); err != nil {
+		return collections.CollectionMeta{}, err
+	}
+	if meta.Options.CollectionWALDurableAckCapability == collections.CollectionWALDurableAckNoIndexRowInsertOnly && len(meta.Indexes) != 0 {
+		return collections.CollectionMeta{}, invalidMetadata("%s collection WAL durable-ack capability does not support indexes", collections.CollectionWALDurableAckNoIndexRowInsertOnly)
 	}
 	for _, def := range meta.Indexes {
 		if err := normalizeClientIndexDefinition(def); err != nil {

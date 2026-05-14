@@ -6,12 +6,16 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
 const formatConfigFileName = "format.json"
 
 const formatConfigVersion = 2
+const formatConfigVersionRequiredFeatures = 3
+
+const FormatFeatureCollectionWALV1 = "collection_wal_v1"
 
 // FormatConfig captures the format-affecting knobs that maintenance tooling
 // should preserve when rewriting index/value-log state.
@@ -34,6 +38,8 @@ type FormatConfig struct {
 	ValueLogCompression string `json:"vlog_compression"`
 	ValueLogBlockCodec  string `json:"vlog_block_codec"`
 	ValueLogAutoPolicy  string `json:"vlog_auto_policy"`
+
+	RequiredFeatures []string `json:"required_features,omitempty"`
 }
 
 func formatConfigPath(dir string) string {
@@ -72,6 +78,47 @@ func formatConfigFromOptions(opts Options) FormatConfig {
 	}
 
 	return cfg
+}
+
+func formatConfigFromDB(db *DB) FormatConfig {
+	if db == nil {
+		return FormatConfig{Version: formatConfigVersion}
+	}
+	cfg := FormatConfig{
+		Version: formatConfigVersion,
+
+		IndexOuterLeavesInValueLog: db.indexOuterLeavesInValueLog,
+
+		LeafPrefixCompression:     db.leafPrefixCompression,
+		IndexColumnarLeaves:       db.indexColumnarLeaves,
+		IndexPackedValuePtr:       db.indexPackedValuePtr,
+		IndexInternalBaseDelta:    db.indexInternalBaseDelta,
+		IndexAdaptiveLeafEncoding: db.indexAdaptiveLeafEncoding,
+
+		ValueLogCompression: normalizeFormatConfigMode(formatValueLogCompressionMode(db.valueLogCompression)),
+		ValueLogBlockCodec:  normalizeFormatConfigMode(formatValueLogBlockCodec(db.valueLogBlockCodec)),
+		ValueLogAutoPolicy:  normalizeFormatConfigMode(formatValueLogAutoPolicy(db.valueLogAutoPolicy)),
+	}
+	if cfg.IndexOuterLeavesInValueLog && cfg.IndexInternalBaseDelta {
+		cfg.IndexInternalBaseDelta = false
+	}
+	return cfg
+}
+
+func (cfg FormatConfig) HasRequiredFeature(feature string) bool {
+	for _, existing := range cfg.RequiredFeatures {
+		if existing == feature {
+			return true
+		}
+	}
+	return false
+}
+
+func (cfg *FormatConfig) AddRequiredFeature(feature string) {
+	if cfg == nil || feature == "" || cfg.HasRequiredFeature(feature) {
+		return
+	}
+	cfg.RequiredFeatures = append(cfg.RequiredFeatures, feature)
 }
 
 // ApplyToOptions overwrites format-affecting knobs in opts from cfg.
@@ -142,7 +189,18 @@ func LoadFormatConfig(dir string) (FormatConfig, bool, error) {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return FormatConfig{}, false, fmt.Errorf("treedb: decode %s: %w", filepath.Base(path), err)
 	}
-	if cfg.Version != formatConfigVersion {
+	switch cfg.Version {
+	case formatConfigVersion:
+		if len(cfg.RequiredFeatures) != 0 {
+			return FormatConfig{}, false, fmt.Errorf("treedb: %s version %d cannot declare required_features", filepath.Base(path), cfg.Version)
+		}
+	case formatConfigVersionRequiredFeatures:
+		required, err := normalizeFormatRequiredFeatures(cfg.RequiredFeatures)
+		if err != nil {
+			return FormatConfig{}, false, fmt.Errorf("treedb: %s: %w", filepath.Base(path), err)
+		}
+		cfg.RequiredFeatures = required
+	default:
 		return FormatConfig{}, false, fmt.Errorf("treedb: unsupported %s version %d", filepath.Base(path), cfg.Version)
 	}
 	return cfg, true, nil
@@ -157,11 +215,52 @@ func SaveFormatConfig(dir string, cfg FormatConfig) error {
 	if cfg.Version == 0 {
 		cfg.Version = formatConfigVersion
 	}
+	required, err := normalizeFormatRequiredFeatures(cfg.RequiredFeatures)
+	if err != nil {
+		return err
+	}
+	cfg.RequiredFeatures = required
+	if len(cfg.RequiredFeatures) != 0 && cfg.Version < formatConfigVersionRequiredFeatures {
+		cfg.Version = formatConfigVersionRequiredFeatures
+	}
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return err
 	}
 	return writeFileAtomic(path, data, 0o600)
+}
+
+func normalizeFormatRequiredFeatures(features []string) ([]string, error) {
+	if len(features) == 0 {
+		return nil, nil
+	}
+	seen := make(map[string]struct{}, len(features))
+	out := make([]string, 0, len(features))
+	for _, feature := range features {
+		feature = normalizeFormatConfigMode(feature)
+		if feature == "" {
+			return nil, errors.New("empty required format feature")
+		}
+		if !supportedFormatRequiredFeature(feature) {
+			return nil, fmt.Errorf("unsupported required format feature %q", feature)
+		}
+		if _, ok := seen[feature]; ok {
+			continue
+		}
+		seen[feature] = struct{}{}
+		out = append(out, feature)
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+func supportedFormatRequiredFeature(feature string) bool {
+	switch feature {
+	case FormatFeatureCollectionWALV1:
+		return true
+	default:
+		return false
+	}
 }
 
 func formatValueLogCompressionMode(mode ValueLogCompressionMode) string {
@@ -247,7 +346,8 @@ func applyFormatConfigForMaintenance(opts *Options) error {
 		return nil
 	}
 	if opts.IgnoreFormatConfig {
-		return nil
+		_, _, err := LoadFormatConfig(opts.Dir)
+		return err
 	}
 	cfg, ok, err := LoadFormatConfig(opts.Dir)
 	if err != nil {

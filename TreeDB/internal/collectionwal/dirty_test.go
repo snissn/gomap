@@ -36,6 +36,16 @@ func TestIsSegmentName(t *testing.T) {
 	}
 }
 
+func TestParseSegmentName(t *testing.T) {
+	lane, seq, ok := ParseSegmentName("collection-l7-000042.log")
+	if !ok || lane != 7 || seq != 42 {
+		t.Fatalf("ParseSegmentName valid got lane=%d seq=%d ok=%v, want 7/42/true", lane, seq, ok)
+	}
+	if _, _, ok := ParseSegmentName("collection-l4294967296-1.log"); ok {
+		t.Fatalf("ParseSegmentName accepted lane overflow")
+	}
+}
+
 func TestRequireCleanRejectsCollectionWALSegment(t *testing.T) {
 	dir := t.TempDir()
 	walDir := filepath.Join(dir, "wal")
@@ -59,5 +69,49 @@ func TestRequireCleanRejectsCollectionWALSegment(t *testing.T) {
 	err = RequireCleanForOfflineMaintenance(dir)
 	if !errors.Is(err, ErrCollectionWALRecoveryRequired) {
 		t.Fatalf("RequireCleanForOfflineMaintenance error=%v, want ErrCollectionWALRecoveryRequired", err)
+	}
+}
+
+func TestDirtySegmentsRejectsMissingSegmentGapWithoutCleanup(t *testing.T) {
+	dir := t.TempDir()
+	walDir := filepath.Join(dir, "wal")
+	if err := os.MkdirAll(walDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll(wal): %v", err)
+	}
+	segmentPath := filepath.Join(walDir, "collection-l0-000002.log")
+	if err := os.WriteFile(segmentPath, []byte("collection"), 0o600); err != nil {
+		t.Fatalf("write collection segment: %v", err)
+	}
+
+	dirty, err := DirtySegments(dir)
+	if !errors.Is(err, ErrCollectionWALCorruptMiddle) {
+		t.Fatalf("DirtySegments error=%v, want ErrCollectionWALCorruptMiddle", err)
+	}
+	if got := CategoryOf(err); got != ErrorCategorySegmentGapWithoutCleanup {
+		t.Fatalf("DirtySegments category=%q want %q", got, ErrorCategorySegmentGapWithoutCleanup)
+	}
+	if len(dirty) != 1 || dirty[0] != segmentPath {
+		t.Fatalf("DirtySegments dirty=%v want [%s]", dirty, segmentPath)
+	}
+}
+
+func TestDirtySegmentsRejectsDuplicateSegmentSequence(t *testing.T) {
+	dir := t.TempDir()
+	walDir := filepath.Join(dir, "wal")
+	if err := os.MkdirAll(walDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll(wal): %v", err)
+	}
+	for _, name := range []string{"collection-l0-1.log", "collection-l0-000001.log"} {
+		if err := os.WriteFile(filepath.Join(walDir, name), []byte("collection"), 0o600); err != nil {
+			t.Fatalf("write collection segment %s: %v", name, err)
+		}
+	}
+
+	dirty, err := DirtySegments(dir)
+	if !errors.Is(err, ErrCollectionWALCorruptMiddle) {
+		t.Fatalf("DirtySegments error=%v, want ErrCollectionWALCorruptMiddle", err)
+	}
+	if len(dirty) != 2 {
+		t.Fatalf("DirtySegments dirty len=%d want 2: %v", len(dirty), dirty)
 	}
 }

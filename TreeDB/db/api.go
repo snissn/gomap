@@ -582,6 +582,7 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.freelist_region_pages"] = fmt.Sprintf("%d", db.freelistRegionPages)
 	stats["treedb.freelist_region_radius"] = fmt.Sprintf("%d", db.freelistRegionRadius)
 
+	db.writeCollectionWALStats(stats)
 	writeLeafGenerationMetrics(stats, db.collectLeafGenerationMetrics(state.ValueLogSet, snap.leafGenerationPinnedIDs))
 
 	stats["treedb.pages.total"] = fmt.Sprintf("%d", idx.pager.PageCount())

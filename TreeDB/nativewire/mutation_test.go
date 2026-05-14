@@ -151,6 +151,63 @@ func TestMutationCommandsRoundTrip(t *testing.T) {
 	}
 }
 
+func TestCollectionWALStatsNativeWire(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{
+		Dir:        t.TempDir(),
+		Durability: backenddb.DurabilityWALOnRelaxed,
+	})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	mgr := collections.NewCollectionManager(db)
+	server := NewServer(ServerOptions{Collections: mgr, Backend: db})
+	client, _ := servePipe(t, server)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	created, err := client.CreateCollection(ctx, collections.CollectionMeta{
+		Name: "users",
+		Options: collections.CollectionOptions{
+			DocumentFormat:                    collections.DocumentFormatJSON,
+			CollectionWALDurableAckCapability: collections.CollectionWALDurableAckNoIndexRowInsertOnly,
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	if created.Options.CollectionWALDurableAckCapability != collections.CollectionWALDurableAckNoIndexRowInsertOnly {
+		t.Fatalf("created collection WAL durable-ack capability=%q want %q", created.Options.CollectionWALDurableAckCapability, collections.CollectionWALDurableAckNoIndexRowInsertOnly)
+	}
+	if _, err := client.InsertBatch(ctx, "users", collections.DocumentFormatJSON,
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"name":"ada"}`)},
+		AckVisible,
+	); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+
+	stats, err := client.Stats(ctx)
+	if err != nil {
+		t.Fatalf("Stats: %v", err)
+	}
+	if got := stats["treedb.collection_wal.append.txns_total"]; got != "1" {
+		t.Fatalf("native-wire collection WAL append.txns_total=%q want 1", got)
+	}
+	if got := stats["treedb.collection_wal.append.docs_total"]; got != "1" {
+		t.Fatalf("native-wire collection WAL append.docs_total=%q want 1", got)
+	}
+	if got := stats["treedb.collection_wal.append.bytes_total"]; got == "" || got == "0" {
+		t.Fatalf("native-wire collection WAL append.bytes_total=%q want non-zero", got)
+	}
+	if got := stats["treedb.collection_wal.cleanup.debt.segments_current"]; got != "1" {
+		t.Fatalf("native-wire collection WAL cleanup debt segments=%q want 1", got)
+	}
+}
+
 func TestMutationInsertResponseShapingFlags(t *testing.T) {
 	client, _, _ := serveCollectionPipe(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
