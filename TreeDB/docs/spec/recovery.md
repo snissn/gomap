@@ -25,6 +25,15 @@ advances per-collection applied watermarks atomically with root descriptors, and
 refuses read-only open when committed unapplied collection WAL would be required
 for a correct view.
 
+Collection vector-index snapshots are auxiliary files loaded explicitly through
+collection APIs after ordinary backend recovery has selected current roots. DB
+open does not replay or validate `vector_indexes/**` as a required recovery
+input. `LoadVectorIndexSnapshot` validates the manifest, epoch payload file
+checksums, decoded graph/docmap structure, and collection freshness marker
+against the recovered collection roots. Missing, incomplete, corrupt,
+unsupported, or stale vector snapshots return an exact-fallback status instead
+of failing DB open or collection open.
+
 Read-only opens do not run mutating recovery. If collection WAL segments
 contain committed unapplied transactions, read-only open must fail with a
 recovery-required error unless the caller explicitly requests a stale read-only

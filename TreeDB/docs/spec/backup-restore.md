@@ -18,6 +18,11 @@ A complete restorable root-layout backup includes:
   side-ref protection metadata;
 - `maindb/leaf_vlog/value-l<lane>-<seq>.log` and leaf-generation
   manifests/indexes when outer leaves are enabled;
+- `maindb/vector_indexes/**` vector-index snapshot manifests and active epoch
+  directories when the backup is expected to preserve persisted vector-index
+  acceleration. These files are derived from collection primary storage; a
+  restore may intentionally omit them only when it accepts exact-search or
+  rebuild fallback for vector search.
 - all collection WAL side-payload files, root-delta payloads, prepared/final
   side refs, and future column files referenced by roots or non-cleaned
   collection WAL;

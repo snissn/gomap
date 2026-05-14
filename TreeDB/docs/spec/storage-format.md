@@ -21,6 +21,8 @@ A TreeDB deployment uses:
 - value-log segments under `value_vlog/value-l*.log`,
 - optional split outer-leaf value-log segments under `leaf_vlog/value-l*.log`
   when `IndexOuterLeavesInValueLog` is enabled,
+- optional collection vector-index snapshot files under
+  `vector_indexes/<collection>/<index>/`,
 - optional side-store DBs (`dictdb`, `templatedb`) using their own `index.db` files.
 
 Collection WAL is a target storage class, not yet a current committed on-disk
@@ -99,6 +101,106 @@ Collection document payload encodings are defined separately in
 `TreeDB/docs/spec/collections-document-formats.md`. In particular,
 template-v1 collections store compact `TD1D` primary documents and persist the
 template ID map in the collection-local `<collection>/templates` ordered root.
+
+## 3.2 Collection Vector-Index Snapshot Files
+
+Collection vector indexes are derived indexes. Canonical documents and
+embeddings remain in collection primary storage; vector-index snapshot files are
+persistent rebuild accelerators and search accelerators, not the source of
+truth for collection rows. A missing, incomplete, corrupt, unsupported, or stale
+vector-index snapshot MUST NOT make the collection unreadable. Callers loading
+the index MUST fall back to exact collection search or rebuild the index.
+
+Current vector-index snapshots are JSON files under:
+
+```text
+<dbDir>/vector_indexes/<collection>/<index>/
+  manifest.json
+  epoch-00000000000000000000/
+    meta.json
+    nodes.json
+    edges.json
+    tombstones.json
+    docmap.json
+```
+
+`<collection>` and `<index>` are path components validated before use. They
+must be non-empty, must not be `.` or `..`, and must not contain `/` or `\`.
+Epoch directory names are `epoch-%020d`. Temporary save directories use the
+`.tmp-epoch-...` prefix and must not be treated as published snapshots.
+
+The current manifest format version is `1`. `manifest.json` contains:
+
+| Field | Meaning |
+|---|---|
+| `format_version` | required vector snapshot manifest version, currently `1` |
+| `collection` | collection name scope |
+| `index_name` | vector index name scope |
+| `epoch` | monotonic snapshot epoch; normally a nanosecond timestamp advanced past existing epochs |
+| `epoch_dir` | relative epoch directory containing the payload files |
+| `dims` | vector dimensionality, or zero for an empty index |
+| `metric` | distance metric requested by the index |
+| `encoding` | vector payload encoding, currently float32 or int8 quantized |
+| `m`, `ef_construction`, `ef_search` | HNSW-style index parameters |
+| `max_level` | maximum graph level stored in the snapshot |
+| `node_count`, `live_doc_count`, `deleted_doc_count` | manifest counts checked against epoch payload files |
+| `created_at_unix` | manifest creation time |
+| `collection_commit_seq` | backend commit sequence captured at save time |
+| `collection_system_root` | system-root page id captured at save time |
+| `collection_primary_root` | collection primary-root id captured at save time |
+| `files` | file manifest entries for the epoch payload files |
+
+Each `files` entry contains `name`, `size`, and `sha256`. File names must be
+plain file names with no path separators. Loaders MUST verify every listed
+file's size and SHA-256 digest before decoding it.
+
+Epoch payload files are JSON:
+
+- `meta.json`: index name, field, metric, encoding, dimensions, HNSW
+  parameters, rebuild policy, entry node, and max level.
+- `nodes.json`: node records. Document IDs are lowercase hex-encoded
+  collection primary keys so arbitrary binary IDs round-trip losslessly. Float32
+  snapshots store `vector`; int8 snapshots store `quantized` plus
+  `quant_scale`.
+- `edges.json`: graph adjacency records keyed by node id and layer.
+- `tombstones.json`: deleted node ids.
+- `docmap.json`: map from hex document id to current live node id.
+
+Loaders MUST validate manifest scope and index options before trusting the
+epoch. Required checks include format version, collection name, index name,
+metric, encoding, dimensions when the caller requested a fixed dimension,
+positive HNSW parameters, non-negative counts, a safe epoch directory, and a
+non-empty file list.
+
+After ordinary TreeDB recovery has selected the current backend roots, a vector
+snapshot load MUST refresh the collection root state and compare the manifest
+freshness marker with the current collection marker. A manifest with missing
+freshness fields (`collection_commit_seq == 0` or `collection_system_root ==
+0`) is rejected with exact fallback. A manifest whose commit sequence, system
+root, or primary root differs from the current marker is rejected as stale.
+
+After payload decode, loaders MUST validate manifest counts against decoded
+payloads, reject tombstones outside the node range, require each node's
+`deleted` flag to agree with the tombstone file, validate vector dimensions and
+finite/usable vector values, validate document-id hex, and reject edges that
+reference invalid node ids or layers. Any validation failure returns a
+non-loaded status with an exact-fallback reason instead of installing the
+snapshot.
+
+Snapshot publication is epoch-then-manifest:
+
+1. write all payload files under a temporary epoch directory;
+2. fsync each payload file and the temporary epoch directory;
+3. rename the temporary epoch directory to its final `epoch-%020d` name;
+4. fsync the vector index directory;
+5. write and fsync `.manifest.tmp`;
+6. rename `.manifest.tmp` to `manifest.json`;
+7. fsync the vector index directory again.
+
+The manifest points to the active epoch. Older epoch directories are retained
+until `PruneOldSnapshots` removes them. Pruning MUST preserve the manifest's
+active epoch and any requested newest retained epochs, must ignore temporary
+directories, and must fsync the vector index directory after deleting epochs.
 
 ## 4. Value Pointer Encoding (`page.ValuePtr`)
 
@@ -806,12 +908,18 @@ Root layout:
 - commit WAL: `<root>/maindb/wal/commit-l<lane>-<seq>.log`
 - value log: `<root>/maindb/value_vlog/value-l<lane>-<seq>.log`
 - leaf log: `<root>/maindb/leaf_vlog/value-l<lane>-<seq>.log`
+- collection vector-index snapshots:
+  `<root>/maindb/vector_indexes/<collection>/<index>/manifest.json` plus
+  active epoch directories
 - side stores: `<root>/dictdb`, `<root>/templatedb`
 
 Flat layout:
 
 - main DB: `<dir>`
 - collection WAL: `<dir>/wal/collection-l<lane>-<seq>.log`
+- collection vector-index snapshots:
+  `<dir>/vector_indexes/<collection>/<index>/manifest.json` plus active epoch
+  directories
 - side stores disabled unless explicitly migrated to root layout
 
 `dictdb` and `templatedb` must not contain collection WAL files. Legacy `wal-*`

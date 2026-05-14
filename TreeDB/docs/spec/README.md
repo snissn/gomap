@@ -62,7 +62,9 @@ Given pre-alpha status, this is a living spec that tracks implementation.
 - `TreeDB/docs/spec/concurrency-paradigms.md`
   - complete concurrency mechanism inventory, lock/worker topology, and option/flag matrix for perf/refactor audits.
 - `TreeDB/docs/spec/storage-format.md`
-  - on-disk encodings for pages, node layouts, pointers, value-log records/frames, commit-log segments.
+  - on-disk encodings for pages, node layouts, pointers, value-log
+    records/frames, commit-log segments, and collection vector-index
+    snapshots.
 - `TreeDB/docs/spec/collections-document-formats.md`
   - collection document-format encodings, including JSON and template-v1
     template-root storage.
@@ -141,6 +143,7 @@ Given pre-alpha status, this is a living spec that tracks implementation.
 | Target collection durable-at-ack WAL contract | `collection-wal-durability-plan.md` | `write-path-and-durability.md`, `recovery.md`, `verification.md`. |
 | Current recovery algorithm | `recovery.md` | `storage-format.md`, `verification.md`. |
 | Durable bytes and file names | `storage-format.md` | `recovery.md`, `architecture.md`, `backup-restore.md`. |
+| Collection vector-index snapshot files | `storage-format.md` | `recovery.md`, `backup-restore.md`, `verification.md`. |
 | Value-log and split leaf-log lifecycle | `value-log-lifecycle.md` | `storage-format.md`, `collection-wal-durability-plan.md`. |
 | Generic collection WAL side refs and side files | `collection-wal-durability-plan.md` | `value-log-lifecycle.md`, future column-store docs. |
 | Public API semantics | `contracts.md` | `write-path-and-durability.md`, `collections-write-domain.md`. |

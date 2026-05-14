@@ -192,6 +192,34 @@ matrix:
 - `data_outer=false,index_outer=false` (fast/control),
 - `data_outer=false,index_outer=true` (low-priority compatibility cell).
 
+## 11.1 Collection Vector-Index Snapshots
+
+Invariant:
+- Persisted collection vector-index snapshots are versioned, checksum-verified
+  derived indexes under `vector_indexes/<collection>/<index>/`.
+- Loading a snapshot never makes stale or corrupt ANN state authoritative over
+  collection primary storage; unsupported, incomplete, corrupt, or stale
+  snapshots return an exact-fallback status.
+- Snapshot save/load barriers must not race collection writes or register a
+  partially stale index.
+
+Coverage:
+- `TreeDB/collections/vector_index_persist_test.go`:
+  - `TestCollectionVectorIndexSnapshotReopenSearch`
+  - `TestCollectionVectorIndexSnapshotStaleAfterPostSaveMutationFallsBack`
+  - `TestCollectionVectorIndexSnapshotInt8Encoding`
+  - `TestCollectionVectorIndexSnapshotPreservesBinaryDocumentIDs`
+  - `TestCollectionVectorIndexSnapshotEmptyIndexLoadsAndTracksMutations`
+  - `TestCollectionVectorIndexSnapshotEpochAdvancesPastPublishedManifest`
+  - `TestCollectionVectorIndexSnapshotMissingManifestFallsBack`
+  - `TestCollectionVectorIndexSnapshotChecksumMismatchFallsBackToExact`
+  - `TestCollectionVectorIndexSnapshotIncompleteEpochFallsBack`
+  - `TestCollectionVectorIndexSnapshotManifestCountMismatchFallsBack`
+  - `TestCollectionVectorIndexPruneOldSnapshots`
+- `TreeDB/collections/vector_index_test.go`:
+  - `TestCollectionVectorIndexRegisteredInsertBatchUpdatesIndex`
+  - `TestCollectionVectorIndexTrackedMutationErrorPreventsSnapshotSave`
+
 ## 11.5 Planned Collection WAL Durability Gate
 
 This section owns the canonical names of collection WAL acceptance tests. Design
