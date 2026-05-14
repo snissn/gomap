@@ -98,6 +98,43 @@ func BenchmarkCollectionVectorIndexBuildInt8(b *testing.B) {
 	}
 }
 
+func BenchmarkCollectionVectorIndexIncrementalWrite(b *testing.B) {
+	docs := vectorBenchmarkDocs(b)
+	dims := vectorBenchmarkDims(b)
+	ids, documents := vectorBenchmarkWriteBatch(docs, dims)
+
+	b.ReportMetric(float64(docs), "docs/write")
+	b.ReportMetric(float64(dims), "dims")
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		b.StopTimer()
+		d, col := openEmptyVectorBenchmarkCollection(b)
+		index, err := newVectorIndex(col, VectorIndexOptions{
+			Name:   "embedding_write",
+			Field:  "embedding",
+			Metric: VectorMetricCosine,
+			M:      16,
+		})
+		if err != nil {
+			_ = d.Close()
+			b.Fatalf("new vector index: %v", err)
+		}
+		col.RegisterVectorIndex(index)
+		b.StartTimer()
+		vectorBenchmarkInsertBatches(b, col, ids, documents, 512)
+		b.StopTimer()
+		stats := index.Stats()
+		if stats.LiveDocs != docs {
+			_ = d.Close()
+			b.Fatalf("incremental index live docs=%d want %d", stats.LiveDocs, docs)
+		}
+		b.ReportMetric(float64(stats.BytesMemory), "index_bytes")
+		if err := d.Close(); err != nil {
+			b.Fatalf("close db: %v", err)
+		}
+	}
+}
+
 func BenchmarkCollectionVectorIndexSearch(b *testing.B) {
 	docs := vectorBenchmarkDocs(b)
 	dims := vectorBenchmarkDims(b)
@@ -421,14 +458,14 @@ func openVectorBenchmarkCollection(tb testing.TB, docs, dims int) (*backenddb.DB
 	return openVectorBenchmarkCollectionWithIndexes(tb, docs, dims)
 }
 
-func openVectorBenchmarkCollectionWithIndexes(tb testing.TB, docs, dims int, indexes ...IndexDefinition) (*backenddb.DB, *Collection) {
+func openEmptyVectorBenchmarkCollection(tb testing.TB) (*backenddb.DB, *Collection) {
 	tb.Helper()
 	d, err := backenddb.Open(backenddb.Options{Dir: tb.TempDir()})
 	if err != nil {
 		tb.Fatalf("open db: %v", err)
 	}
 	mgr := NewCollectionManager(d)
-	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", Indexes: indexes}); err != nil {
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs"}); err != nil {
 		_ = d.Close()
 		tb.Fatalf("create collection: %v", err)
 	}
@@ -437,28 +474,62 @@ func openVectorBenchmarkCollectionWithIndexes(tb testing.TB, docs, dims int, ind
 		_ = d.Close()
 		tb.Fatalf("open collection: %v", err)
 	}
-	const batchSize = 512
-	for start := 0; start < docs; start += batchSize {
-		end := start + batchSize
-		if end > docs {
-			end = docs
+	return d, col
+}
+
+func openVectorBenchmarkCollectionWithIndexes(tb testing.TB, docs, dims int, indexes ...IndexDefinition) (*backenddb.DB, *Collection) {
+	tb.Helper()
+	var d *backenddb.DB
+	var col *Collection
+	if len(indexes) == 0 {
+		d, col = openEmptyVectorBenchmarkCollection(tb)
+	} else {
+		var err error
+		d, err = backenddb.Open(backenddb.Options{Dir: tb.TempDir()})
+		if err != nil {
+			tb.Fatalf("open db: %v", err)
 		}
-		ids := make([][]byte, 0, end-start)
-		documents := make([][]byte, 0, end-start)
-		for i := start; i < end; i++ {
-			ids = append(ids, []byte(fmt.Sprintf("doc-%06d", i)))
-			documents = append(documents, vectorBenchmarkDocument(i, dims))
-		}
-		if _, err := col.InsertBatch(ids, documents); err != nil {
+		mgr := NewCollectionManager(d)
+		if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", Indexes: indexes}); err != nil {
 			_ = d.Close()
-			tb.Fatalf("insert benchmark batch %d-%d: %v", start, end, err)
+			tb.Fatalf("create collection: %v", err)
+		}
+		col, err = mgr.OpenCollection("docs")
+		if err != nil {
+			_ = d.Close()
+			tb.Fatalf("open collection: %v", err)
 		}
 	}
+	ids, documents := vectorBenchmarkWriteBatch(docs, dims)
+	vectorBenchmarkInsertBatches(tb, col, ids, documents, 512)
 	if err := col.Flush(); err != nil {
 		_ = d.Close()
 		tb.Fatalf("flush benchmark collection: %v", err)
 	}
 	return d, col
+}
+
+func vectorBenchmarkWriteBatch(docs, dims int) ([][]byte, [][]byte) {
+	ids := make([][]byte, docs)
+	documents := make([][]byte, docs)
+	for i := 0; i < docs; i++ {
+		ids[i] = []byte(fmt.Sprintf("doc-%06d", i))
+		documents[i] = vectorBenchmarkDocument(i, dims)
+	}
+	return ids, documents
+}
+
+func vectorBenchmarkInsertBatches(tb testing.TB, col *Collection, ids, documents [][]byte, batchSize int) {
+	tb.Helper()
+	for start := 0; start < len(ids); start += batchSize {
+		end := start + batchSize
+		if end > len(ids) {
+			end = len(ids)
+		}
+		if _, err := col.InsertBatch(ids[start:end], documents[start:end]); err != nil {
+			tb.Fatalf("insert benchmark batch %d-%d: %v", start, end, err)
+		}
+	}
 }
 
 type vectorBenchmarkFixtureRecord struct {

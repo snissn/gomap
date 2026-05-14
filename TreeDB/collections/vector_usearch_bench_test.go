@@ -37,6 +37,36 @@ func BenchmarkCollectionVectorUSearchBuild(b *testing.B) {
 	}
 }
 
+func BenchmarkCollectionVectorUSearchIncrementalWrite(b *testing.B) {
+	docs := vectorBenchmarkDocs(b)
+	dims := vectorBenchmarkDims(b)
+	vectors := make([][]float32, docs)
+	for i := 0; i < docs; i++ {
+		vectors[i] = vectorBenchmarkEmbedding(i, dims)
+	}
+
+	b.ReportMetric(float64(docs), "docs/write")
+	b.ReportMetric(float64(dims), "dims")
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		b.StopTimer()
+		index := newVectorUSearchIndex(b, dims, docs, 16, 128, 128)
+		b.StartTimer()
+		for j, vector := range vectors {
+			if err := index.Add(usearch.Key(j), vector); err != nil {
+				_ = index.Destroy()
+				b.Fatalf("add usearch vector %d: %v", j, err)
+			}
+		}
+		b.StopTimer()
+		memory, _ := index.MemoryUsage()
+		b.ReportMetric(float64(memory), "index_bytes")
+		if err := index.Destroy(); err != nil {
+			b.Fatalf("destroy usearch index: %v", err)
+		}
+	}
+}
+
 func BenchmarkCollectionVectorUSearchBaseline(b *testing.B) {
 	docs := vectorBenchmarkDocs(b)
 	dims := vectorBenchmarkDims(b)

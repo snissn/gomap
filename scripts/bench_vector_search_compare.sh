@@ -13,7 +13,9 @@ BENCHTIME="${BENCHTIME:-1x}"
 RUN_UNSAFE_USEARCH_FILTERED="${RUN_UNSAFE_USEARCH_FILTERED:-false}"
 BENCH_REGEX="${BENCH_REGEX:-BenchmarkCollectionVector(SearchExact|IndexSearch(Int8)?|IndexGraphOnlySearch(Int8)?|IndexFilteredSearch|USearchBaseline)$}"
 BUILD_BENCH_REGEX="${BUILD_BENCH_REGEX:-BenchmarkCollectionVector(IndexBuild(Int8)?|USearchBuild)$}"
+WRITE_BENCH_REGEX="${WRITE_BENCH_REGEX:-BenchmarkCollectionVector(IndexIncrementalWrite|USearchIncrementalWrite)$}"
 RUN_BUILD_BENCH="${RUN_BUILD_BENCH:-false}"
+RUN_WRITE_BENCH="${RUN_WRITE_BENCH:-false}"
 TREEDB_VECTOR_BENCH_DOCS="${TREEDB_VECTOR_BENCH_DOCS:-1000}"
 TREEDB_VECTOR_BENCH_DIMS="${TREEDB_VECTOR_BENCH_DIMS:-32}"
 
@@ -65,11 +67,19 @@ cat >"$RUN_DIR/README.md" <<EOF
 - count: \`$COUNT\`
 - benchmark regex: \`$BENCH_REGEX\`
 - build benchmark regex: \`$BUILD_BENCH_REGEX\`
+- write benchmark regex: \`$WRITE_BENCH_REGEX\`
 - run build benchmarks: \`$RUN_BUILD_BENCH\`
+- run write benchmarks: \`$RUN_WRITE_BENCH\`
 - unsafe USearch filtered benchmark: \`$RUN_UNSAFE_USEARCH_FILTERED\`
 
 The harness compares TreeDB exact scan, TreeDB in-memory ANN, TreeDB int8 ANN,
 and USearch cosine/f32 HNSW using the same synthetic vector generator.
+
+With \`RUN_WRITE_BENCH=true\`, it also compares TreeDB incremental
+\`InsertBatch\` with a registered in-memory vector index against USearch
+incremental \`Add\` on the same synthetic vector stream. The TreeDB benchmark
+includes collection document writes and vector-index update notifications; the
+USearch benchmark is in-memory index insertion only.
 EOF
 
 echo "USearch root: $USEARCH_ROOT"
@@ -87,5 +97,8 @@ echo "run dir: $RUN_DIR"
 	go test -tags usearch_bench ./TreeDB/collections -run '^$' -bench "$BENCH_REGEX" -benchtime="$BENCHTIME" -count="$COUNT"
 	if [[ "$RUN_BUILD_BENCH" == "true" ]]; then
 		go test -tags usearch_bench ./TreeDB/collections -run '^$' -bench "$BUILD_BENCH_REGEX" -benchtime="$BENCHTIME" -count="$COUNT"
+	fi
+	if [[ "$RUN_WRITE_BENCH" == "true" ]]; then
+		go test -tags usearch_bench ./TreeDB/collections -run '^$' -bench "$WRITE_BENCH_REGEX" -benchtime="$BENCHTIME" -count="$COUNT"
 	fi
 ) 2>&1 | tee "$RUN_DIR/bench.txt"
