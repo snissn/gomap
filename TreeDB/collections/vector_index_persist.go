@@ -108,7 +108,7 @@ func (idx *VectorIndex) SaveSnapshot() (VectorIndexLoadStatus, error) {
 	if err != nil {
 		return status, err
 	}
-	if afterMarker != marker {
+	if afterMarker.PrimaryRoot != marker.PrimaryRoot {
 		return status, errors.New("collections: collection changed while saving vector index snapshot")
 	}
 	files := map[string]any{
@@ -732,12 +732,7 @@ func validateVectorIndexManifest(manifest vectorIndexManifest, collection, index
 }
 
 func validateVectorIndexManifestFreshness(manifest vectorIndexManifest, marker vectorIndexCollectionMarker) string {
-	if manifest.CollectionCommitSeq == 0 || manifest.CollectionSystemRoot == 0 {
-		return "missing_collection_freshness"
-	}
-	if manifest.CollectionCommitSeq != marker.CommitSeq ||
-		manifest.CollectionSystemRoot != marker.SystemRoot ||
-		manifest.CollectionPrimaryRoot != marker.PrimaryRoot {
+	if manifest.CollectionPrimaryRoot != marker.PrimaryRoot {
 		return "stale_collection_snapshot"
 	}
 	return ""

@@ -150,6 +150,73 @@ func TestCollectionVectorIndexSnapshotStaleAfterPostSaveMutationFallsBack(t *tes
 	}
 }
 
+func TestCollectionVectorIndexSnapshotIgnoresUnrelatedCollectionCommit(t *testing.T) {
+	dir := t.TempDir()
+	d, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	col := openVectorIndexTestCollection(t, d)
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("a"), []byte("b")},
+		[][]byte{
+			[]byte(`{"embedding":[1,0]}`),
+			[]byte(`{"embedding":[0,1]}`),
+		},
+	); err != nil {
+		t.Fatalf("insert docs: %v", err)
+	}
+	index, err := col.BuildVectorIndex(VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, M: 4})
+	if err != nil {
+		t.Fatalf("build vector index: %v", err)
+	}
+	saveStatus, err := index.SaveSnapshot()
+	if err != nil {
+		t.Fatalf("save snapshot: %v", err)
+	}
+	if !saveStatus.Loaded {
+		t.Fatalf("snapshot was not saved: %+v", saveStatus)
+	}
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "other"}); err != nil {
+		t.Fatalf("create unrelated collection: %v", err)
+	}
+	other, err := mgr.OpenCollection("other")
+	if err != nil {
+		t.Fatalf("open unrelated collection: %v", err)
+	}
+	if _, err := other.InsertBatch(
+		[][]byte{[]byte("x")},
+		[][]byte{[]byte(`{"value":1}`)},
+	); err != nil {
+		t.Fatalf("insert unrelated row: %v", err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	reopened, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection after reopen: %v", err)
+	}
+	loaded, loadStatus, err := reopenedCol.LoadVectorIndexSnapshot(VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine})
+	if err != nil {
+		t.Fatalf("load vector index snapshot: %v", err)
+	}
+	if loaded == nil || !loadStatus.Loaded || loadStatus.ExactFallbackReason != "" || loadStatus.Epoch != saveStatus.Epoch {
+		t.Fatalf("unrelated commit invalidated snapshot loaded=%v status=%+v", loaded != nil, loadStatus)
+	}
+}
+
 func TestCollectionVectorIndexSnapshotInt8Encoding(t *testing.T) {
 	dir := t.TempDir()
 	d, err := backenddb.Open(backenddb.Options{Dir: dir})

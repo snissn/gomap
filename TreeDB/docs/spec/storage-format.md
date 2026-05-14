@@ -145,9 +145,9 @@ The current manifest format version is `1`. `manifest.json` contains:
 | `max_level` | maximum graph level stored in the snapshot |
 | `node_count`, `live_doc_count`, `deleted_doc_count` | manifest counts checked against epoch payload files |
 | `created_at_unix` | manifest creation time |
-| `collection_commit_seq` | backend commit sequence captured at save time |
-| `collection_system_root` | system-root page id captured at save time |
-| `collection_primary_root` | collection primary-root id captured at save time |
+| `collection_commit_seq` | diagnostic backend commit sequence captured at save time |
+| `collection_system_root` | diagnostic system-root page id captured at save time |
+| `collection_primary_root` | collection primary-root id captured at save time and used for freshness |
 | `files` | file manifest entries for the epoch payload files |
 
 Each `files` entry contains `name`, `size`, and `sha256`. File names must be
@@ -174,10 +174,13 @@ non-empty file list.
 
 After ordinary TreeDB recovery has selected the current backend roots, a vector
 snapshot load MUST refresh the collection root state and compare the manifest
-freshness marker with the current collection marker. A manifest with missing
-freshness fields (`collection_commit_seq == 0` or `collection_system_root ==
-0`) is rejected with exact fallback. A manifest whose commit sequence, system
-root, or primary root differs from the current marker is rejected as stale.
+freshness marker with the current collection marker. Freshness is based on the
+collection primary root that defines visible document contents for vector
+materialization. The diagnostic commit sequence and system root MUST NOT make a
+snapshot stale by themselves because unrelated collection writes can advance
+database-wide metadata without changing this collection's vector rows. A
+manifest whose primary root differs from the current collection marker is
+rejected as stale.
 
 After payload decode, loaders MUST validate manifest counts against decoded
 payloads, reject tombstones outside the node range, require each node's
