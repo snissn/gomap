@@ -96,7 +96,10 @@ func TestBSONSetUpdateAppendReplacementErrorPreservesGrownDestination(t *testing
 	if !ok {
 		t.Fatal("read first BSON element")
 	}
-	malformed := doc[:4+len(elem)]
+	malformed := append([]byte(nil), doc[:4+len(elem)]...)
+	malformed = append(malformed, 0x02, 'x', 0x00)
+	malformed = append(malformed, 0x00)
+	bsoncore.UpdateLength(malformed, 0, int32(len(malformed)))
 	update, err := newBSONSetUpdate([]BSONSetField{{
 		Key:   "city",
 		Value: mustBSONRawValue(t, "sea"),
@@ -124,6 +127,31 @@ func TestBSONSetUpdateAppendReplacementErrorPreservesGrownDestination(t *testing
 	}
 	if cap(out) <= cap(arena) {
 		t.Fatalf("out cap=%d want preserved grown capacity > %d", cap(out), cap(arena))
+	}
+}
+
+func TestBSONSetUpdateAppendReplacementRejectsInvalidCurrentBSON(t *testing.T) {
+	update, err := newBSONSetUpdate([]BSONSetField{{
+		Key:   "city",
+		Value: mustBSONRawValue(t, "sea"),
+	}})
+	if err != nil {
+		t.Fatalf("new BSON set update: %v", err)
+	}
+	arena := []byte("prefix")
+	arena = arena[:len(arena):len(arena)]
+	out, replacement, changed, err := update.appendReplacement(arena, []byte{0x05, 0x00, 0x00, 0x00})
+	if err == nil {
+		t.Fatal("append replacement err=nil want invalid current BSON")
+	}
+	if changed {
+		t.Fatal("changed=true want false on invalid current BSON")
+	}
+	if replacement != nil {
+		t.Fatalf("replacement=%x want nil", replacement)
+	}
+	if !bytes.Equal(out, arena) {
+		t.Fatalf("out=%q want restored arena %q", out, arena)
 	}
 }
 

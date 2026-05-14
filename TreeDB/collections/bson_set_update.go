@@ -314,6 +314,12 @@ func (u bsonSetUpdate) appendReplacement(dst, current []byte) (returned []byte, 
 	if !ok {
 		return resetDst(), nil, false, bsoncore.NewInsufficientBytesError(current, rem)
 	}
+	if int(length) > len(current) {
+		return resetDst(), nil, false, bsoncore.NewDocumentLengthError(int(length), len(current))
+	}
+	if length < 5 || current[length-1] != 0x00 {
+		return resetDst(), nil, false, bsoncore.ErrMissingNull
+	}
 	length -= 4
 	var usedInline [8]bool
 	used := usedInline[:]
@@ -381,6 +387,9 @@ func (u bsonSetUpdate) appendReplacement(dst, current []byte) (returned []byte, 
 			Type: bsoncore.Type(value.Type),
 			Data: value.Value,
 		})
+	}
+	if len(rem) < 1 || rem[0] != 0x00 {
+		return resetDst(), nil, false, bsoncore.ErrMissingNull
 	}
 	if !changed {
 		return dst[:start], current, false, nil
