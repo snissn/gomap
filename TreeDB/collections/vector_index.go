@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/cespare/xxhash/v2"
+	"gonum.org/v1/gonum/blas/blas32"
 )
 
 const (
@@ -1229,21 +1230,10 @@ func vectorDistanceToFloat32NodeCosinePrepared(query preparedFloat32CosineQuery,
 }
 
 func vectorDistanceToFloat32NodeCosineUnchecked(query preparedFloat32CosineQuery, node *vectorIndexNode) float32 {
-	q := query.vector
-	v := node.vector
-	var s0, s1, s2, s3 float32
-	i := 0
-	n := len(q)
-	for ; i+4 <= n; i += 4 {
-		s0 += q[i] * v[i]
-		s1 += q[i+1] * v[i+1]
-		s2 += q[i+2] * v[i+2]
-		s3 += q[i+3] * v[i+3]
-	}
-	dot := s0 + s1 + s2 + s3
-	for ; i < n; i++ {
-		dot += q[i] * v[i]
-	}
+	dot := blas32.Dot(
+		blas32.Vector{N: len(query.vector), Inc: 1, Data: query.vector},
+		blas32.Vector{N: len(node.vector), Inc: 1, Data: node.vector},
+	)
 	return 1 - dot*query.invNorm*node.cachedInvNorm
 }
 
@@ -1254,19 +1244,10 @@ func vectorDistanceBetweenFloat32NodesCosine(left, right *vectorIndexNode) (floa
 	if left.cachedInvNorm == 0 || right.cachedInvNorm == 0 {
 		return 0, errors.New("collections: cosine vector cannot have zero magnitude")
 	}
-	var s0, s1, s2, s3 float32
-	i := 0
-	n := len(left.vector)
-	for ; i+4 <= n; i += 4 {
-		s0 += left.vector[i] * right.vector[i]
-		s1 += left.vector[i+1] * right.vector[i+1]
-		s2 += left.vector[i+2] * right.vector[i+2]
-		s3 += left.vector[i+3] * right.vector[i+3]
-	}
-	dot := s0 + s1 + s2 + s3
-	for ; i < n; i++ {
-		dot += left.vector[i] * right.vector[i]
-	}
+	dot := blas32.Dot(
+		blas32.Vector{N: len(left.vector), Inc: 1, Data: left.vector},
+		blas32.Vector{N: len(right.vector), Inc: 1, Data: right.vector},
+	)
 	return 1 - dot*left.cachedInvNorm*right.cachedInvNorm, nil
 }
 
