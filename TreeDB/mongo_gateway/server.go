@@ -55,20 +55,18 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
-	standalone, err := mongogateway.OpenStandaloneServer(standaloneOptions(cfg))
-	if err != nil {
-		fmt.Fprintf(stderr, "mongo gateway server: configure standalone: %v\n", err)
-		return 1
-	}
-	defer func() {
-		if err := standalone.Close(); err != nil {
-			fmt.Fprintf(stderr, "mongo gateway server: close: %v\n", err)
-		}
-	}()
-
 	ln, err := net.Listen("tcp", cfg.addr)
 	if err != nil {
 		fmt.Fprintf(stderr, "mongo gateway server: listen on %s: %v\n", cfg.addr, err)
+		return 1
+	}
+
+	standalone, err := mongogateway.OpenStandaloneServer(standaloneOptions(cfg))
+	if err != nil {
+		fmt.Fprintf(stderr, "mongo gateway server: configure standalone: %v\n", err)
+		if closeErr := ln.Close(); closeErr != nil {
+			fmt.Fprintf(stderr, "mongo gateway server: close listener: %v\n", closeErr)
+		}
 		return 1
 	}
 
@@ -80,8 +78,17 @@ func run(args []string, stdout, stderr io.Writer) int {
 	fmt.Fprintf(stdout, "TreeDB profile: %s, collection document format: %s\n",
 		standalone.Options.Profile, standalone.Options.DefaultCollectionOptions.DocumentFormat)
 
-	if err := standalone.Serve(ctx, ln); err != nil {
-		fmt.Fprintf(stderr, "mongo gateway server: serve: %v\n", err)
+	serveErr := standalone.Serve(ctx, ln)
+	closeErr := standalone.Close()
+	if serveErr != nil {
+		fmt.Fprintf(stderr, "mongo gateway server: serve: %v\n", serveErr)
+		if closeErr != nil {
+			fmt.Fprintf(stderr, "mongo gateway server: close: %v\n", closeErr)
+		}
+		return 1
+	}
+	if closeErr != nil {
+		fmt.Fprintf(stderr, "mongo gateway server: close: %v\n", closeErr)
 		return 1
 	}
 	return 0
