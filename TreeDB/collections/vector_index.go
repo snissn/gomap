@@ -148,8 +148,13 @@ type vectorIndexNode struct {
 	normSquared   float64
 	cachedInvNorm float32
 	level         int
-	neighbors     [][]int
+	neighbors     [][]vectorIndexNeighbor
 	deleted       bool
+}
+
+type vectorIndexNeighbor struct {
+	nodeID   int
+	distance float32
 }
 
 // BuildVectorIndex builds an in-memory vector secondary index from the current
@@ -471,7 +476,7 @@ func (idx *VectorIndex) newVectorIndexNode(documentID []byte, vector []float32, 
 	node := vectorIndexNode{
 		documentID: bytes.Clone(documentID),
 		level:      level,
-		neighbors:  make([][]int, level+1),
+		neighbors:  make([][]vectorIndexNeighbor, level+1),
 	}
 	switch idx.encoding {
 	case VectorIndexEncodingInt8:
@@ -593,11 +598,15 @@ func (idx *VectorIndex) linkLayerLocked(fromNodeID, toNodeID, layer int) {
 	}
 	neighbors := idx.nodes[fromNodeID].neighbors[layer]
 	for _, existing := range neighbors {
-		if existing == toNodeID {
+		if existing.nodeID == toNodeID {
 			return
 		}
 	}
-	neighbors = append(neighbors, toNodeID)
+	distance := idx.distanceBetweenNodesLocked(fromNodeID, toNodeID)
+	if math.IsInf(float64(distance), 1) {
+		return
+	}
+	neighbors = append(neighbors, vectorIndexNeighbor{nodeID: toNodeID, distance: distance})
 	limit := idx.maxNeighborsForLayer(layer)
 	if len(neighbors) > limit {
 		neighbors = idx.pruneLayerNeighborsLocked(fromNodeID, neighbors, limit)
@@ -605,7 +614,7 @@ func (idx *VectorIndex) linkLayerLocked(fromNodeID, toNodeID, layer int) {
 	idx.nodes[fromNodeID].neighbors[layer] = neighbors
 }
 
-func (idx *VectorIndex) pruneLayerNeighborsLocked(fromNodeID int, neighbors []int, limit int) []int {
+func (idx *VectorIndex) pruneLayerNeighborsLocked(fromNodeID int, neighbors []vectorIndexNeighbor, limit int) []vectorIndexNeighbor {
 	if limit <= 0 || len(neighbors) == 0 {
 		return nil
 	}
@@ -617,15 +626,15 @@ func (idx *VectorIndex) pruneLayerNeighborsLocked(fromNodeID int, neighbors []in
 	if len(neighbors) > len(stack) {
 		scored = make([]vectorIndexCandidate, 0, len(neighbors))
 	}
-	for _, neighborID := range neighbors {
+	for _, neighbor := range neighbors {
+		neighborID := neighbor.nodeID
 		if neighborID < 0 || neighborID >= len(idx.nodes) {
 			continue
 		}
-		distance := idx.distanceBetweenNodesLocked(fromNodeID, neighborID)
-		if math.IsInf(float64(distance), 1) {
+		if math.IsInf(float64(neighbor.distance), 1) {
 			continue
 		}
-		scored = append(scored, vectorIndexCandidate{nodeID: neighborID, distance: distance})
+		scored = append(scored, vectorIndexCandidate{nodeID: neighborID, distance: neighbor.distance})
 	}
 	slices.SortFunc(scored, func(left, right vectorIndexCandidate) int {
 		if left.distance < right.distance {
@@ -641,7 +650,7 @@ func (idx *VectorIndex) pruneLayerNeighborsLocked(fromNodeID int, neighbors []in
 	}
 	out := neighbors[:0]
 	for _, candidate := range scored {
-		out = append(out, candidate.nodeID)
+		out = append(out, vectorIndexNeighbor{nodeID: candidate.nodeID, distance: candidate.distance})
 	}
 	return out
 }
@@ -951,7 +960,8 @@ func (idx *VectorIndex) greedyNearestAtLayerLocked(query []float32, queryNormSqu
 	changed := true
 	for changed {
 		changed = false
-		for _, neighborID := range idx.layerNeighborsLocked(best, layer) {
+		for _, neighbor := range idx.layerNeighborsLocked(best, layer) {
+			neighborID := neighbor.nodeID
 			distance := idx.distanceToNodeWithPreparedQueryLocked(query, queryNormSquared, prepared, neighborID)
 			if distance < bestDistance {
 				best = neighborID
@@ -1007,7 +1017,8 @@ func (idx *VectorIndex) searchLayerWithScratchLocked(query []float32, queryNormS
 		if current.nodeID < 0 || current.nodeID >= len(idx.nodes) {
 			continue
 		}
-		for _, neighborID := range idx.layerNeighborsLocked(current.nodeID, layer) {
+		for _, neighbor := range idx.layerNeighborsLocked(current.nodeID, layer) {
+			neighborID := neighbor.nodeID
 			if neighborID < 0 || neighborID >= len(idx.nodes) || visited[neighborID] == mark {
 				continue
 			}
@@ -1031,7 +1042,7 @@ func (idx *VectorIndex) searchLayerWithScratchLocked(query []float32, queryNormS
 	return out
 }
 
-func (idx *VectorIndex) layerNeighborsLocked(nodeID int, layer int) []int {
+func (idx *VectorIndex) layerNeighborsLocked(nodeID int, layer int) []vectorIndexNeighbor {
 	if nodeID < 0 || nodeID >= len(idx.nodes) {
 		return nil
 	}
@@ -1495,7 +1506,7 @@ func (idx *VectorIndex) Stats() VectorIndexStats {
 		stats.DeletedRatio = float64(stats.DeletedDocs) / float64(stats.Nodes)
 		stats.AvgDegree = float64(edges) / float64(stats.Nodes)
 	}
-	stats.BytesMemory = vectorBytes + int64(edges*8) + int64(stats.Nodes*32)
+	stats.BytesMemory = vectorBytes + int64(edges*16) + int64(stats.Nodes*32)
 	stats.RebuildNeeded = stats.DeletedRatio >= idx.rebuildDeletedRatio && stats.DeletedDocs > 0
 	return stats
 }
@@ -1610,10 +1621,10 @@ func cloneVectorIndexNodes(in []vectorIndexNode) []vectorIndexNode {
 			cachedInvNorm: in[i].cachedInvNorm,
 			level:         in[i].level,
 			deleted:       in[i].deleted,
-			neighbors:     make([][]int, len(in[i].neighbors)),
+			neighbors:     make([][]vectorIndexNeighbor, len(in[i].neighbors)),
 		}
 		for layer := range in[i].neighbors {
-			out[i].neighbors[layer] = append([]int(nil), in[i].neighbors[layer]...)
+			out[i].neighbors[layer] = append([]vectorIndexNeighbor(nil), in[i].neighbors[layer]...)
 		}
 	}
 	return out

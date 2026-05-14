@@ -427,9 +427,10 @@ type vectorIndexPersistNode struct {
 }
 
 type vectorIndexPersistEdges struct {
-	NodeID   int   `json:"node_id"`
-	Layer    int   `json:"layer"`
-	Neighbor []int `json:"neighbors"`
+	NodeID   int       `json:"node_id"`
+	Layer    int       `json:"layer"`
+	Neighbor []int     `json:"neighbors"`
+	Distance []float32 `json:"distances,omitempty"`
 }
 
 type vectorIndexPersistTombstones struct {
@@ -473,10 +474,17 @@ func (idx *VectorIndex) persistSnapshot() (vectorIndexPersistSnapshot, uint64) {
 			Deleted:    node.deleted,
 		}
 		for layer, neighbors := range node.neighbors {
+			neighborIDs := make([]int, len(neighbors))
+			distances := make([]float32, len(neighbors))
+			for j, neighbor := range neighbors {
+				neighborIDs[j] = neighbor.nodeID
+				distances[j] = neighbor.distance
+			}
 			snapshot.Edges = append(snapshot.Edges, vectorIndexPersistEdges{
 				NodeID:   i,
 				Layer:    layer,
-				Neighbor: append([]int(nil), neighbors...),
+				Neighbor: neighborIDs,
+				Distance: distances,
 			})
 		}
 		if node.deleted {
@@ -694,7 +702,7 @@ func (idx *VectorIndex) loadPersistSnapshot(snapshot vectorIndexPersistSnapshot)
 			quantized:  append([]int8(nil), node.Quantized...),
 			quantScale: node.QuantScale,
 			level:      node.Level,
-			neighbors:  make([][]int, node.Level+1),
+			neighbors:  make([][]vectorIndexNeighbor, node.Level+1),
 			deleted:    node.Deleted,
 		}
 		nodes[i].cacheVectorNorms()
@@ -714,7 +722,22 @@ func (idx *VectorIndex) loadPersistSnapshot(snapshot vectorIndexPersistSnapshot)
 				return "edge_neighbor_missing_layer"
 			}
 		}
-		nodes[edge.NodeID].neighbors[edge.Layer] = append([]int(nil), edge.Neighbor...)
+		neighbors := make([]vectorIndexNeighbor, len(edge.Neighbor))
+		for i, neighbor := range edge.Neighbor {
+			distance := float32(math.Inf(1))
+			if i < len(edge.Distance) {
+				distance = edge.Distance[i]
+			}
+			if math.IsInf(float64(distance), 1) {
+				var err error
+				distance, err = vectorDistanceBetweenStoredNodes(&nodes[edge.NodeID], &nodes[neighbor], snapshot.Meta.Metric)
+				if err != nil {
+					return "invalid_edge_distance"
+				}
+			}
+			neighbors[i] = vectorIndexNeighbor{nodeID: neighbor, distance: distance}
+		}
+		nodes[edge.NodeID].neighbors[edge.Layer] = neighbors
 	}
 	current := make(map[string]int, len(snapshot.DocMap.Current))
 	for docID, nodeID := range snapshot.DocMap.Current {

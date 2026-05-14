@@ -69,8 +69,12 @@ func TestVectorIndexPruneLayerNeighborsUsesDistanceThenDocumentID(t *testing.T) 
 		index.nodes[i].cacheVectorNorms()
 	}
 
-	got := index.pruneLayerNeighborsLocked(0, []int{3, 1, 2}, 2)
-	if len(got) != 2 || got[0] != 2 || got[1] != 1 {
+	got := index.pruneLayerNeighborsLocked(0, []vectorIndexNeighbor{
+		{nodeID: 3, distance: 1},
+		{nodeID: 1, distance: 0.03},
+		{nodeID: 2, distance: 0.03},
+	}, 2)
+	if len(got) != 2 || got[0].nodeID != 2 || got[1].nodeID != 1 {
 		t.Fatalf("pruned neighbors=%v want [2 1]", got)
 	}
 }
@@ -229,9 +233,9 @@ func TestVectorIndexSearchLayerScratchReusesBuffers(t *testing.T) {
 		t.Fatalf("new vector index: %v", err)
 	}
 	index.nodes = []vectorIndexNode{
-		{documentID: []byte("a"), vector: []float32{1, 0}, neighbors: [][]int{{1, 2}}},
-		{documentID: []byte("b"), vector: []float32{0.9, 0.1}, neighbors: [][]int{{0, 2}}},
-		{documentID: []byte("c"), vector: []float32{0, 1}, neighbors: [][]int{{0, 1}}},
+		{documentID: []byte("a"), vector: []float32{1, 0}, neighbors: [][]vectorIndexNeighbor{{{nodeID: 1}, {nodeID: 2}}}},
+		{documentID: []byte("b"), vector: []float32{0.9, 0.1}, neighbors: [][]vectorIndexNeighbor{{{nodeID: 0}, {nodeID: 2}}}},
+		{documentID: []byte("c"), vector: []float32{0, 1}, neighbors: [][]vectorIndexNeighbor{{{nodeID: 0}, {nodeID: 1}}}},
 	}
 	for i := range index.nodes {
 		index.nodes[i].cacheVectorNorms()
