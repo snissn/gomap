@@ -89,6 +89,9 @@ func TestCollectionVectorIndexTrackedMutationErrorStats(t *testing.T) {
 	if stats.LiveDocs != 1 {
 		t.Fatalf("failed vector mutation changed indexed docs: %+v", stats)
 	}
+	if _, err := index.SaveSnapshot(); err == nil || !strings.Contains(err.Error(), "tracked mutation errors") {
+		t.Fatalf("save snapshot with tracked mutation error err=%v", err)
+	}
 	if err := index.Rebuild(); err == nil {
 		t.Fatal("rebuild unexpectedly succeeded with mismatched vector row")
 	}

@@ -309,6 +309,7 @@ type Collection struct {
 	updateStatsMu     sync.RWMutex
 	lastUpdateStats   CollectionUpdateStats
 	vectorIndexesMu   sync.RWMutex
+	vectorMutationMu  sync.Mutex
 	vectorIndexes     map[string]*VectorIndex
 }
 
@@ -3047,11 +3048,7 @@ func (c *Collection) Insert(id, document []byte) ([]byte, error) {
 				return nil, err
 			}
 		}
-		resultID, err := c.insertOneNoIndexBuffered(id, document)
-		if err == nil {
-			c.notifyVectorIndexesUpsert([][]byte{resultID})
-		}
-		return resultID, err
+		return c.insertOneNoIndexBuffered(id, document)
 	}
 	ids, err := c.InsertBatch([][]byte{id}, [][]byte{document})
 	if err != nil {
@@ -3200,9 +3197,22 @@ func (c *Collection) insertOneNoIndexBuffered(id, document []byte) ([]byte, erro
 	if len(id) == 0 {
 		return nil, errors.New("collections: document id cannot be empty")
 	}
+	unlockVectorMutation := c.lockVectorIndexMutation()
+	vectorLocked := true
+	unlockVector := func() {
+		if vectorLocked {
+			unlockVectorMutation()
+			vectorLocked = false
+		}
+	}
+	defer unlockVector()
 	domain := c.writeDomain
 	if domain == nil {
-		return c.insertOneNoIndex(id, document)
+		resultID, err := c.insertOneNoIndex(id, document)
+		if err == nil {
+			c.notifyVectorIndexesUpsert([][]byte{resultID})
+		}
+		return resultID, err
 	}
 
 	domain.mu.Lock()
@@ -3213,6 +3223,7 @@ func (c *Collection) insertOneNoIndexBuffered(id, document []byte) ([]byte, erro
 	}
 	if indexed || plannerOptions.documentFormat != DocumentFormatJSON {
 		domain.mu.Unlock()
+		unlockVector()
 		return c.insertOneViaBatch(id, document)
 	}
 	if catalog == nil {
@@ -3243,6 +3254,7 @@ func (c *Collection) insertOneNoIndexBuffered(id, document []byte) ([]byte, erro
 	domain.count++
 	resultID := bytes.Clone(id)
 	domain.mu.Unlock()
+	c.notifyVectorIndexesUpsert([][]byte{resultID})
 	return resultID, nil
 }
 
@@ -8059,6 +8071,8 @@ func (c *Collection) insertOneViaBatch(id, document []byte) ([]byte, error) {
 // batch recoverable as one mutation boundary. Ordinary pre-commit errors expose
 // no partial batch. Post-commit failures must be reported as commit-ambiguous.
 func (c *Collection) InsertBatch(ids, documents [][]byte) ([][]byte, error) {
+	unlockVectorMutation := c.lockVectorIndexMutation()
+	defer unlockVectorMutation()
 	resultIDs, err := c.insertBatch(ids, documents, false, nil)
 	if err == nil {
 		c.notifyVectorIndexesUpsert(resultIDs)
@@ -8074,6 +8088,8 @@ func (c *Collection) InsertBatchWithTemplateV1Encoder(ids, documents [][]byte, e
 	if encoder == nil {
 		return nil, errors.New("collections: template-v1 encoder cannot be nil")
 	}
+	unlockVectorMutation := c.lockVectorIndexMutation()
+	defer unlockVectorMutation()
 	resultIDs, err := c.insertBatch(ids, documents, false, encoder)
 	if err == nil {
 		c.notifyVectorIndexesUpsert(resultIDs)
@@ -8086,6 +8102,8 @@ func (c *Collection) InsertBatchWithTemplateV1Encoder(ids, documents [][]byte, e
 // BSON while parsing the request and need to avoid a duplicate full-document
 // validation pass on the insert hot path.
 func (c *Collection) InsertBatchValidatedBSON(ids, documents [][]byte) ([][]byte, error) {
+	unlockVectorMutation := c.lockVectorIndexMutation()
+	defer unlockVectorMutation()
 	resultIDs, err := c.insertBatch(ids, documents, true, nil)
 	if err == nil {
 		c.notifyVectorIndexesUpsert(resultIDs)
@@ -8890,6 +8908,8 @@ func (c *Collection) DeleteDocument(documentID []byte) (bool, error) {
 	if len(documentID) == 0 {
 		return false, errors.New("collections: document id cannot be empty")
 	}
+	unlockVectorMutation := c.lockVectorIndexMutation()
+	defer unlockVectorMutation()
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()
 	if c.shouldFlushBeforeIndexedDelete(c.meta) {
@@ -8955,6 +8975,8 @@ func (c *Collection) DeleteBatch(documentIDs [][]byte) (int, error) {
 	if len(ids) == 0 {
 		return 0, nil
 	}
+	unlockVectorMutation := c.lockVectorIndexMutation()
+	defer unlockVectorMutation()
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()
 	if c.shouldFlushBeforeIndexedDelete(c.meta) {
@@ -9351,6 +9373,8 @@ func (c *Collection) Update(documentID []byte, update func(current []byte) (repl
 	if err := validateCollectionUpdateInput(c, documentID, update); err != nil {
 		return false, false, err
 	}
+	unlockVectorMutation := c.lockVectorIndexMutation()
+	defer unlockVectorMutation()
 	var matched, modified bool
 	var err error
 	if combiner, domain := c.updateFastPathWithoutCreatingCombiner(); combiner != nil {
@@ -9449,6 +9473,8 @@ func (c *Collection) updateDirectBSONSet(documentID []byte, spec bsonSetUpdate) 
 // pre-commit unless explicitly documented otherwise and must expose no partial
 // batch. Post-commit failures must be commit-ambiguous for the whole batch.
 func (c *Collection) UpdateBatch(items []UpdateBatchItem) ([]UpdateBatchResult, error) {
+	unlockVectorMutation := c.lockVectorIndexMutation()
+	defer unlockVectorMutation()
 	results, _, err := c.updateBatch(items, updateBatchModeAny)
 	if err == nil {
 		c.notifyVectorIndexesUpdateBatch(items, results)
@@ -9462,6 +9488,8 @@ func (c *Collection) UpdateBatch(items []UpdateBatchItem) ([]UpdateBatchResult, 
 // present so callers can preserve ordered per-document update semantics. When
 // batched=false and err=nil, the returned results are zero-valued with len(items).
 func (c *Collection) UpdateBatchIfNoSecondaryUniqueIndexes(items []UpdateBatchItem) ([]UpdateBatchResult, bool, error) {
+	unlockVectorMutation := c.lockVectorIndexMutation()
+	defer unlockVectorMutation()
 	results, batched, err := c.updateBatch(items, updateBatchModeNoSecondaryUniqueIndexes)
 	if err == nil && batched {
 		c.notifyVectorIndexesUpdateBatch(items, results)
@@ -9476,6 +9504,8 @@ func (c *Collection) UpdateBatchIfNoSecondaryUniqueIndexes(items []UpdateBatchIt
 // for unique value mutations. When batched=false and err=nil, the returned
 // results are zero-valued with len(items).
 func (c *Collection) UpdateBatchIfNoSecondaryUniqueIndexChanges(items []UpdateBatchItem) ([]UpdateBatchResult, bool, error) {
+	unlockVectorMutation := c.lockVectorIndexMutation()
+	defer unlockVectorMutation()
 	results, batched, err := c.updateBatch(items, updateBatchModeNoSecondaryUniqueIndexChanges)
 	if err == nil && batched {
 		c.notifyVectorIndexesUpdateBatch(items, results)

@@ -89,6 +89,11 @@ func (idx *VectorIndex) SaveSnapshot() (VectorIndexLoadStatus, error) {
 		}
 	}()
 
+	unlockVectorMutation := idx.collection.lockVectorIndexMutationBarrier()
+	defer unlockVectorMutation()
+	if err := idx.ensureSnapshotSaveable(); err != nil {
+		return status, err
+	}
 	marker, err := idx.collection.vectorIndexCollectionMarker()
 	if err != nil {
 		return status, err
@@ -634,6 +639,15 @@ func (idx *VectorIndex) recordLoadedSnapshot(epoch uint64, bytesDisk int64) {
 	idx.persistedBytesDisk = bytesDisk
 	idx.persistedSnapshotDirty = false
 	idx.mutationSeq = 0
+}
+
+func (idx *VectorIndex) ensureSnapshotSaveable() error {
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+	if idx.trackedMutationErrors > 0 {
+		return fmt.Errorf("collections: vector index %q has %d tracked mutation errors; rebuild before saving snapshot", idx.name, idx.trackedMutationErrors)
+	}
+	return nil
 }
 
 func (c *Collection) vectorIndexCollectionMarker() (vectorIndexCollectionMarker, error) {

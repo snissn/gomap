@@ -63,6 +63,8 @@ func (c *Collection) UpdateBSONSet(documentID []byte, fields []BSONSetField) (bo
 	if err != nil {
 		return false, false, err
 	}
+	unlockVectorMutation := c.lockVectorIndexMutation()
+	defer unlockVectorMutation()
 	var matched, modified bool
 	if combiner, domain := c.updateFastPathWithoutCreatingCombiner(); combiner != nil {
 		matched, modified, err = combiner.update(c, documentID, nil, spec, true)
@@ -118,6 +120,8 @@ func (c *Collection) updateBSONSetDirect(documentID []byte, spec bsonSetUpdate) 
 // value changes in the planning snapshot. This is the BSON-set equivalent of
 // UpdateBatchIfNoSecondaryUniqueIndexChanges.
 func (c *Collection) UpdateBSONSetBatchIfNoSecondaryUniqueIndexChanges(items []BSONSetUpdateBatchItem) ([]UpdateBatchResult, bool, error) {
+	unlockVectorMutation := c.lockVectorIndexMutation()
+	defer unlockVectorMutation()
 	results, batched, err := c.updateBSONSetBatch(items, updateBatchModeNoSecondaryUniqueIndexChanges)
 	if err == nil && batched {
 		c.notifyVectorIndexesBSONSetUpdateBatch(items, results)

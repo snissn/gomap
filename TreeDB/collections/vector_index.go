@@ -332,6 +332,30 @@ func (c *Collection) registeredVectorIndexes() []*VectorIndex {
 	return out
 }
 
+func (c *Collection) hasRegisteredVectorIndexes() bool {
+	if c == nil {
+		return false
+	}
+	c.vectorIndexesMu.RLock()
+	defer c.vectorIndexesMu.RUnlock()
+	return len(c.vectorIndexes) != 0
+}
+
+func (c *Collection) lockVectorIndexMutation() func() {
+	if !c.hasRegisteredVectorIndexes() {
+		return func() {}
+	}
+	return c.lockVectorIndexMutationBarrier()
+}
+
+func (c *Collection) lockVectorIndexMutationBarrier() func() {
+	if c == nil {
+		return func() {}
+	}
+	c.vectorMutationMu.Lock()
+	return c.vectorMutationMu.Unlock
+}
+
 func (c *Collection) notifyVectorIndexesUpsert(documentIDs [][]byte) {
 	if len(documentIDs) == 0 {
 		return
