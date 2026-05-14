@@ -67,6 +67,8 @@ func (idx *VectorIndex) SaveSnapshot() (VectorIndexLoadStatus, error) {
 		return status, err
 	}
 	status.ManifestPath = filepath.Join(indexDir, vectorIndexManifestFile)
+	unlockVectorMutation := idx.collection.lockVectorIndexMutationBarrier()
+	defer unlockVectorMutation()
 	if err := os.MkdirAll(indexDir, 0o755); err != nil {
 		return status, err
 	}
@@ -89,8 +91,6 @@ func (idx *VectorIndex) SaveSnapshot() (VectorIndexLoadStatus, error) {
 		}
 	}()
 
-	unlockVectorMutation := idx.collection.lockVectorIndexMutationBarrier()
-	defer unlockVectorMutation()
 	if err := idx.ensureSnapshotSaveable(); err != nil {
 		return status, err
 	}

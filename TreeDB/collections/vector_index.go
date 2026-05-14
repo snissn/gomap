@@ -1123,7 +1123,7 @@ func vectorDistanceToStoredNode(query []float32, node *vectorIndexNode, metric V
 			diff := float64(left - node.vectorValueAt(i))
 			sum += diff * diff
 		}
-		return float32(math.Sqrt(sum)), nil
+		return float32(sum), nil
 	case VectorMetricInnerProduct:
 		var dot float64
 		for i, left := range query {
@@ -1159,7 +1159,7 @@ func vectorDistanceBetweenStoredNodes(left, right *vectorIndexNode, metric Vecto
 			diff := float64(left.vectorValueAt(i) - right.vectorValueAt(i))
 			sum += diff * diff
 		}
-		return float32(math.Sqrt(sum)), nil
+		return float32(sum), nil
 	case VectorMetricInnerProduct:
 		var dot float64
 		for i := 0; i < left.vectorDimensions(); i++ {

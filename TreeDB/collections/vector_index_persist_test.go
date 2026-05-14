@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -370,6 +371,67 @@ func TestCollectionVectorIndexSnapshotEpochAdvancesPastPublishedManifest(t *test
 	}
 	if second.Epoch <= publishedEpoch {
 		t.Fatalf("second epoch=%d did not advance past published epoch=%d", second.Epoch, publishedEpoch)
+	}
+}
+
+func TestCollectionVectorIndexSnapshotConcurrentSaveEpochsDoNotCollide(t *testing.T) {
+	dir := t.TempDir()
+	d, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	col := openVectorIndexTestCollection(t, d)
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("a"), []byte("b"), []byte("c")},
+		[][]byte{
+			[]byte(`{"embedding":[1,0]}`),
+			[]byte(`{"embedding":[0,1]}`),
+			[]byte(`{"embedding":[0.8,0.2]}`),
+		},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	index, err := col.BuildVectorIndex(VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, M: 4})
+	if err != nil {
+		t.Fatalf("build vector index: %v", err)
+	}
+	first, err := index.SaveSnapshot()
+	if err != nil {
+		t.Fatalf("save first snapshot: %v", err)
+	}
+	rewriteVectorIndexManifest(t, first.ManifestPath, func(manifest *vectorIndexManifest) {
+		manifest.Epoch = ^uint64(0) - 100
+	})
+
+	const saves = 4
+	start := make(chan struct{})
+	statuses := make([]VectorIndexLoadStatus, saves)
+	errs := make([]error, saves)
+	var wg sync.WaitGroup
+	wg.Add(saves)
+	for i := 0; i < saves; i++ {
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			statuses[i], errs[i] = index.SaveSnapshot()
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	seen := make(map[uint64]struct{}, saves)
+	for i := 0; i < saves; i++ {
+		if errs[i] != nil {
+			t.Fatalf("save %d: %v", i, errs[i])
+		}
+		if !statuses[i].Loaded || statuses[i].Epoch == 0 {
+			t.Fatalf("save %d returned status %+v", i, statuses[i])
+		}
+		if _, ok := seen[statuses[i].Epoch]; ok {
+			t.Fatalf("duplicate snapshot epoch %d across statuses %+v", statuses[i].Epoch, statuses)
+		}
+		seen[statuses[i].Epoch] = struct{}{}
 	}
 }
 
