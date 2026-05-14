@@ -839,6 +839,7 @@ type indexedFlushUnit struct {
 	rootBaseIDs     map[string]uint64
 	uniqueValueRuns map[string][]memtable.Table
 	arenaRefs       [][]byte
+	primaryOverlay  *bufferedPrimaryOverlay
 	docCount        int
 	byteCount       int64
 	rootRunCount    int
@@ -4137,12 +4138,15 @@ func shouldFlushBufferedIndexedWrites(domain *collectionWriteDomain, opts Collec
 	bytes := domain.bufferedBytes
 	rootRuns := bufferedIndexedRootRunCount(domain)
 	if opts.BufferedIndexedAsyncFlush {
-		if len(domain.rootRuns) == 0 {
+		if len(domain.rootRuns) == 0 && !hasBufferedPrimaryOverlay(domain) {
 			return false
 		}
 		count = domain.mutableCount
 		bytes = domain.mutableBytes
 		rootRuns = domain.rootRunCount
+		if hasBufferedPrimaryOverlay(domain) {
+			rootRuns = saturatingAddNonNegativeInt(rootRuns, 1)
+		}
 	}
 	if opts.BufferedIndexedWriteMaxDocuments > 0 && count >= opts.BufferedIndexedWriteMaxDocuments {
 		return true
@@ -4167,6 +4171,9 @@ func shouldFlushBufferedIndexedWritesAfterAdding(domain *collectionWriteDomain, 
 		baseCount = domain.mutableCount
 		baseBytes = domain.mutableBytes
 		baseRootRuns = domain.rootRunCount
+		if hasBufferedPrimaryOverlay(domain) {
+			baseRootRuns = saturatingAddNonNegativeInt(baseRootRuns, 1)
+		}
 	}
 	nextCount := saturatingAddNonNegativeInt(baseCount, addedCount)
 	if opts.BufferedIndexedWriteMaxDocuments > 0 && nextCount >= opts.BufferedIndexedWriteMaxDocuments {
@@ -4580,6 +4587,48 @@ func materializePrimaryOverlayLocked(domain *collectionWriteDomain) bool {
 	return created
 }
 
+func materializeIndexedFlushUnitPrimaryOverlays(meta CollectionMeta, flushUnit *indexedFlushUnit, units []indexedFlushUnit) ([]memtable.Table, error) {
+	if flushUnit == nil || !hasIndexedFlushUnitPrimaryOverlay(units) {
+		return nil, nil
+	}
+	rootName := collectionPrimaryRootName(meta.Name)
+	if rootName == "" {
+		return nil, nil
+	}
+	var table memtable.Table
+	var materialized []memtable.Table
+	orderedRootRuns := make(map[string][]memtable.Table, len(flushUnit.rootRuns)+1)
+	scratch := make([]directBufferedRootEntry, 0)
+	for i := range units {
+		appendTableRunMap(orderedRootRuns, units[i].rootRuns)
+		overlay := units[i].primaryOverlay
+		if overlay == nil || overlay.len() == 0 {
+			continue
+		}
+		table = newCollectionRootAccumulatorRunTable()
+		scratch = overlay.appendEntries(scratch[:0])
+		if err := applyDirectBufferedRootEntries(table, scratch); err != nil {
+			resetCollectionRunTable(table)
+			resetCollectionTables(materialized)
+			return nil, err
+		}
+		if table.Len() == 0 {
+			resetCollectionRunTable(table)
+			table = nil
+			continue
+		}
+		table.Freeze()
+		orderedRootRuns[rootName] = append(orderedRootRuns[rootName], table)
+		materialized = append(materialized, table)
+		table = nil
+	}
+	if len(materialized) == 0 {
+		return nil, nil
+	}
+	flushUnit.rootRuns = orderedRootRuns
+	return materialized, nil
+}
+
 func mutableUniqueValueRunLocked(domain *collectionWriteDomain, indexName string) (memtable.Table, bool) {
 	if domain == nil || indexName == "" {
 		return nil, false
@@ -4831,13 +4880,13 @@ func (c *Collection) flushBufferedIndexedAfterThresholdLocked(domain *collection
 	var prepareWait time.Duration
 	if domain.indexedPrepareFreezes > 0 {
 		prepareWait = domain.waitIndexedPrepareFreezeLocked()
-		if domain.count == 0 || !hasBufferedIndexedRootRuns(domain) {
+		if domain.count == 0 || !hasBufferedIndexedPendingWrites(domain) {
 			return 0, prepareWait, 0, nil
 		}
 	}
 	domain.indexedAutoFlushes.Add(1)
 	if opts.BufferedIndexedAsyncFlush {
-		rotateIndexedMutableToFlushUnitLocked(domain)
+		rotateIndexedMutableToFlushUnitForAsyncLocked(domain)
 		if opts.BufferedIndexedAsyncFlushMaxQueuedUnits > 0 && len(domain.indexedFlushUnits) >= opts.BufferedIndexedAsyncFlushMaxQueuedUnits {
 			if len(domain.indexedPublishingUnits) == 0 {
 				domain.indexedAsyncFlushBackpressure.Add(1)
@@ -4861,7 +4910,7 @@ func (c *Collection) flushBufferedIndexedAfterThresholdLocked(domain *collection
 				if err := domain.consumeIndexedAsyncFlushError(); err != nil {
 					return 0, lockReleased, relockWait, err
 				}
-				if domain.count == 0 || len(domain.indexedFlushUnits) == 0 || !hasBufferedIndexedRootRuns(domain) {
+				if domain.count == 0 || len(domain.indexedFlushUnits) == 0 || !hasBufferedIndexedPendingWrites(domain) {
 					return 0, lockReleased, relockWait, nil
 				}
 				if len(domain.indexedPublishingUnits) == 0 {
@@ -4938,6 +4987,12 @@ func hasPendingRootRunsForRootLocked(domain *collectionWriteDomain, rootName str
 	}
 	for _, unit := range domain.indexedFlushUnits {
 		if len(unit.rootRuns[rootName]) > 0 {
+			return true
+		}
+	}
+	if collectionName := bufferedDomainCollectionName(domain, ""); collectionName != "" {
+		if rootName == collectionPrimaryRootName(collectionName) &&
+			(hasBufferedPrimaryOverlay(domain) || hasPendingIndexedPrimaryOverlay(domain)) {
 			return true
 		}
 	}
@@ -5183,6 +5238,7 @@ func cloneIndexedFlushUnits(in []indexedFlushUnit) []indexedFlushUnit {
 			rootBaseIDs:     cloneUint64Map(unit.rootBaseIDs),
 			uniqueValueRuns: cloneTableRunMap(unit.uniqueValueRuns),
 			arenaRefs:       cloneArenaRefs(unit.arenaRefs),
+			primaryOverlay:  cloneBufferedPrimaryOverlay(unit.primaryOverlay),
 			docCount:        unit.docCount,
 			byteCount:       unit.byteCount,
 			rootRunCount:    unit.rootRunCount,
@@ -5299,6 +5355,15 @@ func rebuildBufferedPendingIndexesLocked(domain *collectionWriteDomain, collecti
 		domain.primaryWriteIndex = rebuildBufferedPrimaryWriteIndex(collectionName, pendingRuns, domain.writeGeneration)
 		if domain.primaryWriteIndex == nil && hasBufferedPrimaryOverlay(domain) {
 			domain.primaryWriteIndex = newBufferedPrimaryWriteIndex(domain.primaryOverlay.len())
+		}
+		if domain.primaryWriteIndex == nil && hasPendingIndexedPrimaryOverlay(domain) {
+			domain.primaryWriteIndex = newBufferedPrimaryWriteIndex(0)
+		}
+		for i := range domain.indexedPublishingUnits {
+			domain.primaryWriteIndex.addOverlay(domain.indexedPublishingUnits[i].primaryOverlay, domain.writeGeneration)
+		}
+		for i := range domain.indexedFlushUnits {
+			domain.primaryWriteIndex.addOverlay(domain.indexedFlushUnits[i].primaryOverlay, domain.writeGeneration)
 		}
 		domain.primaryWriteIndex.addOverlay(domain.primaryOverlay, domain.writeGeneration)
 	}
@@ -5810,6 +5875,32 @@ func (overlay *bufferedPrimaryOverlay) appendEntries(dst []directBufferedRootEnt
 	return dst
 }
 
+func lookupIndexedFlushUnitPrimaryOverlay(units []indexedFlushUnit, key []byte) (bufferedPrimaryOverlayRef, bool) {
+	for i := len(units) - 1; i >= 0; i-- {
+		overlay := units[i].primaryOverlay
+		if overlay == nil || overlay.len() == 0 {
+			continue
+		}
+		if ref, ok := overlay.lookupRef(key); ok {
+			return ref, true
+		}
+	}
+	return bufferedPrimaryOverlayRef{}, false
+}
+
+func lookupPendingPrimaryOverlayLocked(domain *collectionWriteDomain, key []byte) (bufferedPrimaryOverlayRef, bool) {
+	if domain == nil {
+		return bufferedPrimaryOverlayRef{}, false
+	}
+	if ref, ok := lookupIndexedFlushUnitPrimaryOverlay(domain.indexedFlushUnits, key); ok {
+		return ref, true
+	}
+	if ref, ok := lookupIndexedFlushUnitPrimaryOverlay(domain.indexedPublishingUnits, key); ok {
+		return ref, true
+	}
+	return bufferedPrimaryOverlayRef{}, false
+}
+
 func cloneBufferedPrimaryOverlay(in *bufferedPrimaryOverlay) *bufferedPrimaryOverlay {
 	if in == nil || in.count == 0 {
 		return nil
@@ -5931,8 +6022,23 @@ func hasBufferedPrimaryOverlay(domain *collectionWriteDomain) bool {
 	return domain != nil && domain.primaryOverlay != nil && domain.primaryOverlay.len() > 0
 }
 
+func hasIndexedFlushUnitPrimaryOverlay(units []indexedFlushUnit) bool {
+	for i := range units {
+		if units[i].primaryOverlay != nil && units[i].primaryOverlay.len() > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func hasPendingIndexedPrimaryOverlay(domain *collectionWriteDomain) bool {
+	return domain != nil &&
+		(hasIndexedFlushUnitPrimaryOverlay(domain.indexedFlushUnits) ||
+			hasIndexedFlushUnitPrimaryOverlay(domain.indexedPublishingUnits))
+}
+
 func hasBufferedIndexedPendingWrites(domain *collectionWriteDomain) bool {
-	return hasBufferedIndexedRootRuns(domain) || hasBufferedPrimaryOverlay(domain)
+	return hasBufferedIndexedRootRuns(domain) || hasBufferedPrimaryOverlay(domain) || hasPendingIndexedPrimaryOverlay(domain)
 }
 
 func (index *bufferedPrimaryWriteIndex) addOverlay(overlay *bufferedPrimaryOverlay, generation uint64) {
@@ -6812,11 +6918,10 @@ func (c *Collection) prepareIndexedAsyncPublishLocked(domain *collectionWriteDom
 		return nil, nil
 	}
 	domain.waitIndexedPrepareFreezeLocked()
-	materializePrimaryOverlayLocked(domain)
-	if domain.count == 0 || !hasBufferedIndexedRootRuns(domain) {
+	if domain.count == 0 || !hasBufferedIndexedPendingWrites(domain) {
 		return nil, nil
 	}
-	if len(domain.indexedFlushUnits) == 0 && len(domain.rootRuns) == 0 {
+	if len(domain.indexedFlushUnits) == 0 && len(domain.rootRuns) == 0 && !hasBufferedPrimaryOverlay(domain) {
 		return nil, nil
 	}
 	if domain.catalog == nil {
@@ -6866,10 +6971,13 @@ func (c *Collection) prepareIndexedAsyncPublishLocked(domain *collectionWriteDom
 		return nil, err
 	}
 
-	rotateIndexedMutableToFlushUnitLocked(domain)
+	rotateIndexedMutableToFlushUnitForAsyncLocked(domain)
 	units := domain.indexedFlushUnits
 	flushUnit := mergedIndexedFlushUnits(units)
 	rootNames := orderedBufferedRootNames(meta, flushUnit.rootRuns)
+	if hasIndexedFlushUnitPrimaryOverlay(units) {
+		rootNames = appendOrderedRootName(rootNames, collectionPrimaryRootName(meta.Name))
+	}
 	if len(rootNames) == 0 {
 		_ = pin.Close()
 		work.pin = nil
@@ -6924,26 +7032,38 @@ func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) 
 			work.pin = nil
 		}
 	}()
+	overlayMaterializeStart := time.Now()
+	materializedPrimaryRuns, err := materializeIndexedFlushUnitPrimaryOverlays(work.meta, &work.flushUnit, work.units)
+	overlayMaterializeElapsed := time.Duration(0)
+	if len(materializedPrimaryRuns) > 0 || err != nil {
+		overlayMaterializeElapsed = collectionObservedElapsedSince(overlayMaterializeStart)
+	}
+	if len(materializedPrimaryRuns) > 0 {
+		defer resetCollectionTables(materializedPrimaryRuns)
+	}
+	if err != nil {
+		return c.completePreparedIndexedFlush(work, 0, nil, err, overlayMaterializeElapsed, overlayMaterializeElapsed, 0)
+	}
 	publishRootRuns, cleanupPointerizedRuns, err := pointerizeCollectionDataRootRunMapValues(c.db, work.meta, work.flushUnit.rootRuns)
 	if err != nil {
-		return c.completePreparedIndexedFlush(work, 0, nil, err, 0, 0, 0)
+		return c.completePreparedIndexedFlush(work, 0, nil, err, overlayMaterializeElapsed, overlayMaterializeElapsed, 0)
 	}
 	defer cleanupPointerizedRuns()
 	if collectionMetaUsesIndexedOverlayRoots(work.meta) {
 		materializeStart := time.Now()
 		rootOverlayFilters, err := buildCollectionRootOverlayFilters(work.rootNames, work.flushUnit.rootRuns, work.rootOverlays, work.catalog.rootOverlayFilters)
 		if err != nil {
-			materializeElapsed := collectionObservedElapsedSince(materializeStart)
+			materializeElapsed := overlayMaterializeElapsed + collectionObservedElapsedSince(materializeStart)
 			return c.completePreparedIndexedFlush(work, 0, nil, err, materializeElapsed, materializeElapsed, 0)
 		}
 		work.rootOverlayFilters = rootOverlayFilters
 		ordered, cleanupDeltas, err := buildBufferedRootOverlayDeltaBatchPublishInputs(work.rootNames, publishRootRuns, work.flushUnit.rootPolicies, work.rootOverlays)
 		if err != nil {
-			materializeElapsed := collectionObservedElapsedSince(materializeStart)
+			materializeElapsed := overlayMaterializeElapsed + collectionObservedElapsedSince(materializeStart)
 			return c.completePreparedIndexedFlush(work, 0, nil, err, materializeElapsed, materializeElapsed, 0)
 		}
 		work.rootDeltaStats = collectionRootDeltaPlanStatsFromOrdered(work.meta.Name, work.rootNames, ordered)
-		materializeElapsed := collectionObservedElapsedSince(materializeStart)
+		materializeElapsed := overlayMaterializeElapsed + collectionObservedElapsedSince(materializeStart)
 		publishStart := time.Now()
 		newSystemRoot, rootIDs, publishErr := c.db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 			return c.buildRootOverlayDescriptorSystemDeltaIteratorForMeta(work.meta, work.baseCommitSeq, work.baseSystemRoot, work.rootNames, work.rootBaseIDs, work.rootOverlays, rootIDs)
@@ -6962,11 +7082,11 @@ func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) 
 	materializeStart := time.Now()
 	ordered, cleanupDeltas, err := buildBufferedRootDeltaBatchPublishInputs(work.rootNames, publishRootRuns, work.rootBaseIDs, work.flushUnit.rootPolicies)
 	if err != nil {
-		materializeElapsed := collectionObservedElapsedSince(materializeStart)
+		materializeElapsed := overlayMaterializeElapsed + collectionObservedElapsedSince(materializeStart)
 		return c.completePreparedIndexedFlush(work, 0, nil, err, materializeElapsed, materializeElapsed, 0)
 	}
 	work.rootDeltaStats = collectionRootDeltaPlanStatsFromOrdered(work.meta.Name, work.rootNames, ordered)
-	materializeElapsed := collectionObservedElapsedSince(materializeStart)
+	materializeElapsed := overlayMaterializeElapsed + collectionObservedElapsedSince(materializeStart)
 	publishStart := time.Now()
 	newSystemRoot, rootIDs, publishErr := c.db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 		return c.buildRootDescriptorSystemDeltaIteratorForMeta(work.meta, work.baseCommitSeq, work.baseSystemRoot, work.rootNames, work.rootBaseIDs, rootIDs)
@@ -7345,7 +7465,13 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (
 	}
 
 	rotateIndexedMutableToFlushUnitLocked(domain)
-	flushUnit := mergedIndexedFlushUnitLocked(domain)
+	flushUnit, materializedPrimaryRuns, err := mergedIndexedFlushUnitForSyncLocked(meta, domain)
+	if err != nil {
+		return err
+	}
+	if len(materializedPrimaryRuns) > 0 {
+		defer resetCollectionTables(materializedPrimaryRuns)
+	}
 	rootNames := orderedBufferedRootNames(meta, flushUnit.rootRuns)
 	if len(rootNames) == 0 {
 		domain.indexedFlushUnits = nil
@@ -7514,6 +7640,41 @@ func rotateIndexedMutableToFlushUnitLocked(domain *collectionWriteDomain) bool {
 	return true
 }
 
+func rotateIndexedMutableToFlushUnitForAsyncLocked(domain *collectionWriteDomain) bool {
+	if domain == nil || (len(domain.rootRuns) == 0 && !hasBufferedPrimaryOverlay(domain)) {
+		return false
+	}
+	freezeMutableIndexedRunMapsLocked(domain)
+	rootRunCount := domain.rootRunCount
+	if hasBufferedPrimaryOverlay(domain) {
+		rootRunCount = saturatingAddNonNegativeInt(rootRunCount, 1)
+	}
+	unit := indexedFlushUnit{
+		rootRuns:        domain.rootRuns,
+		rootPolicies:    domain.rootPolicies,
+		rootBaseIDs:     domain.rootBaseIDs,
+		uniqueValueRuns: domain.uniqueValueRuns,
+		arenaRefs:       domain.rootValueArenas,
+		primaryOverlay:  domain.primaryOverlay,
+		docCount:        domain.mutableCount,
+		byteCount:       domain.mutableBytes,
+		rootRunCount:    rootRunCount,
+	}
+	domain.indexedFlushUnits = append(domain.indexedFlushUnits, unit)
+	domain.rootRuns = nil
+	domain.rootMutableRuns = nil
+	domain.rootPolicies = nil
+	domain.rootBaseIDs = nil
+	domain.uniqueValueRuns = nil
+	domain.uniqueValueMutableRuns = nil
+	domain.rootValueArenas = nil
+	domain.primaryOverlay = nil
+	domain.rootRunCount = 0
+	domain.mutableCount = 0
+	domain.mutableBytes = 0
+	return true
+}
+
 func removeIndexedPublishingUnitsLocked(domain *collectionWriteDomain, n int) []indexedFlushUnit {
 	if domain == nil || n <= 0 || len(domain.indexedPublishingUnits) == 0 {
 		return nil
@@ -7547,7 +7708,9 @@ func removeIndexedPublishingWorkUnitsLocked(domain *collectionWriteDomain, units
 }
 
 func sameIndexedFlushUnitTables(a, b indexedFlushUnit) bool {
-	return sameTableRunMap(a.rootRuns, b.rootRuns) && sameTableRunMap(a.uniqueValueRuns, b.uniqueValueRuns)
+	return sameTableRunMap(a.rootRuns, b.rootRuns) &&
+		sameTableRunMap(a.uniqueValueRuns, b.uniqueValueRuns) &&
+		a.primaryOverlay == b.primaryOverlay
 }
 
 func sameTableRunMap(a, b map[string][]memtable.Table) bool {
@@ -7662,6 +7825,49 @@ func mergedIndexedFlushUnitLocked(domain *collectionWriteDomain) indexedFlushUni
 	return unit
 }
 
+func mergedIndexedFlushUnitForSyncLocked(meta CollectionMeta, domain *collectionWriteDomain) (indexedFlushUnit, []memtable.Table, error) {
+	if domain == nil {
+		return indexedFlushUnit{}, nil, nil
+	}
+	if !hasIndexedFlushUnitPrimaryOverlay(domain.indexedFlushUnits) {
+		return mergedIndexedFlushUnitLocked(domain), nil, nil
+	}
+	unit := indexedFlushUnit{
+		rootRuns:        make(map[string][]memtable.Table, len(domain.rootRuns)+len(domain.indexedFlushUnits)),
+		rootPolicies:    make(map[string]backenddb.OrderedRootStoragePolicy, len(domain.rootPolicies)+len(domain.indexedFlushUnits)),
+		rootBaseIDs:     make(map[string]uint64, len(domain.rootBaseIDs)+len(domain.indexedFlushUnits)),
+		uniqueValueRuns: make(map[string][]memtable.Table, len(domain.uniqueValueRuns)+len(domain.indexedFlushUnits)),
+	}
+	for _, pending := range domain.indexedFlushUnits {
+		mergeIndexedFlushUnit(&unit, pending)
+	}
+	materializedPrimaryRuns, err := materializeIndexedFlushUnitPrimaryOverlays(meta, &unit, domain.indexedFlushUnits)
+	if err != nil {
+		return indexedFlushUnit{}, nil, err
+	}
+	mergeIndexedFlushUnit(&unit, indexedFlushUnit{
+		rootRuns:        domain.rootRuns,
+		rootPolicies:    domain.rootPolicies,
+		rootBaseIDs:     domain.rootBaseIDs,
+		uniqueValueRuns: domain.uniqueValueRuns,
+		arenaRefs:       domain.rootValueArenas,
+		rootRunCount:    domain.rootRunCount,
+	})
+	if len(unit.rootRuns) == 0 {
+		unit.rootRuns = nil
+	}
+	if len(unit.rootPolicies) == 0 {
+		unit.rootPolicies = nil
+	}
+	if len(unit.rootBaseIDs) == 0 {
+		unit.rootBaseIDs = nil
+	}
+	if len(unit.uniqueValueRuns) == 0 {
+		unit.uniqueValueRuns = nil
+	}
+	return unit, materializedPrimaryRuns, nil
+}
+
 func mergeIndexedFlushUnit(dst *indexedFlushUnit, src indexedFlushUnit) {
 	if dst == nil {
 		return
@@ -7727,6 +7933,18 @@ func orderedBufferedRootNames(meta CollectionMeta, runs map[string][]memtable.Ta
 	sort.Strings(extra)
 	out = append(out, extra...)
 	return out
+}
+
+func appendOrderedRootName(rootNames []string, rootName string) []string {
+	if rootName == "" {
+		return rootNames
+	}
+	for _, existing := range rootNames {
+		if existing == rootName {
+			return rootNames
+		}
+	}
+	return append(rootNames, rootName)
 }
 
 func (c *Collection) insertOneNoIndex(id, document []byte) ([]byte, error) {
@@ -10422,7 +10640,7 @@ func mergeDirectBufferedPreparedBatches(prepared []collectionUpdateCombinePrepar
 		if existingIdx, ok := rootIndex[rootName]; ok {
 			if merged.baseRootIDs[rootName] != baseRoot ||
 				merged.uniqueSecondaryIndexByRoot[existingIdx] != plan.uniqueSecondaryIndexByRoot[idx] {
-				return fmt.Errorf("collections: incompatible direct update root %q", rootName)
+				return fmt.Errorf("%w: incompatible direct update root %q", ErrConcurrentMutation, rootName)
 			}
 			return nil
 		}
@@ -12451,7 +12669,16 @@ func (domain *collectionWriteDomain) directUpdatePlanHasPrimaryWriteConflictLock
 		if index == nil && hasBufferedPrimaryOverlay(domain) {
 			index = newBufferedPrimaryWriteIndex(domain.primaryOverlay.len())
 		}
+		if index == nil && hasPendingIndexedPrimaryOverlay(domain) {
+			index = newBufferedPrimaryWriteIndex(0)
+		}
 		index.addOverlay(domain.primaryOverlay, domain.writeGeneration)
+		for i := range domain.indexedPublishingUnits {
+			index.addOverlay(domain.indexedPublishingUnits[i].primaryOverlay, domain.writeGeneration)
+		}
+		for i := range domain.indexedFlushUnits {
+			index.addOverlay(domain.indexedFlushUnits[i].primaryOverlay, domain.writeGeneration)
+		}
 		domain.primaryWriteIndex = index
 	}
 	if index == nil || index.len() == 0 {
@@ -12626,6 +12853,24 @@ func snapshotUpdateBatchBufferedPrimaryEntriesLocked(domain *collectionWriteDoma
 			}
 			missing--
 		}
+	}
+	if missing <= 0 {
+		return entries, buffer, nil
+	}
+	for i, item := range items {
+		if entries[i].found {
+			continue
+		}
+		ref, ok := lookupPendingPrimaryOverlayLocked(domain, item.DocumentID)
+		if !ok {
+			continue
+		}
+		entries[i] = updateBatchBufferedEntry{
+			value: buffer.copyValue(ref.value),
+			flags: ref.flags,
+			found: true,
+		}
+		missing--
 	}
 	if missing <= 0 {
 		return entries, buffer, nil
@@ -15759,12 +16004,21 @@ func hasBufferedPrimaryWritesLocked(domain *collectionWriteDomain, fallbackColle
 	if hasBufferedPrimaryOverlay(domain) {
 		return true
 	}
+	if hasPendingIndexedPrimaryOverlay(domain) {
+		return true
+	}
 	return hasBufferedPrimaryRootRuns(domain, fallbackCollectionName)
 }
 
 func (c *Collection) getBufferedDocumentIntoLocked(domain *collectionWriteDomain, documentID []byte, dst []byte) ([]byte, bool, bool) {
 	table := domain.table
 	if ref, ok := domain.primaryOverlay.lookupRef(documentID); ok {
+		if ref.flags&node.FlagTombstone != 0 {
+			return dst[:0], true, false
+		}
+		return append(dst[:0], ref.value...), true, true
+	}
+	if ref, ok := lookupPendingPrimaryOverlayLocked(domain, documentID); ok {
 		if ref.flags&node.FlagTombstone != 0 {
 			return dst[:0], true, false
 		}
