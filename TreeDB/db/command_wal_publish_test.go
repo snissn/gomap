@@ -348,6 +348,21 @@ func TestCommandWALLegacyReplayFilterPreservesNonCommandOrderAroundCoveredFrame(
 	}
 }
 
+func TestCommandWALLegacyReplayFilterRejectsDuplicateCoveredLSNAcrossSegments(t *testing.T) {
+	dir := t.TempDir()
+	writeCommandWALFrame(t, dir, 1, 1)
+	writeCommandWALFrame(t, dir, 2, 1)
+	segments, err := listWALSegments(dir)
+	if err != nil {
+		t.Fatalf("listWALSegments: %v", err)
+	}
+
+	_, err = filterCommandWALSegmentsForLegacyReplay(segments, 1, 0)
+	if !errors.Is(err, commitlog.ErrCommandWALDuplicateLSN) {
+		t.Fatalf("filterCommandWALSegmentsForLegacyReplay error=%v, want ErrCommandWALDuplicateLSN", err)
+	}
+}
+
 func TestCommandWALWriteOpenRejectsUnappliedFramesUntilDispatcher(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(Options{Dir: dir})
@@ -508,6 +523,32 @@ func TestCommandWALOpenFailsClosedOnCorruptCRCEvenWhenCovered(t *testing.T) {
 	_, err = Open(Options{Dir: dir})
 	if !errors.Is(err, commitlog.ErrCorrupt) {
 		t.Fatalf("Open read-write error=%v, want ErrCorrupt", err)
+	}
+}
+
+func TestCommandWALOpenFailsClosedOnDuplicateLSNAcrossCoveredSegments(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	state := db.State()
+	if err := db.publishCommandWALRoots(state.RootPageID, state.SystemRootPageID, 9, []CommandWALLSNRange{{First: 1, Last: 9}}, true); err != nil {
+		t.Fatalf("publishCommandWALRoots: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	writeCommandWALFrame(t, dir, 1, 9)
+	writeCommandWALFrame(t, dir, 2, 9)
+
+	_, err = Open(Options{Dir: dir, ReadOnly: true})
+	if !errors.Is(err, commitlog.ErrCommandWALDuplicateLSN) {
+		t.Fatalf("Open read-only error=%v, want ErrCommandWALDuplicateLSN", err)
+	}
+	_, err = Open(Options{Dir: dir})
+	if !errors.Is(err, commitlog.ErrCommandWALDuplicateLSN) {
+		t.Fatalf("Open read-write error=%v, want ErrCommandWALDuplicateLSN", err)
 	}
 }
 
@@ -752,6 +793,28 @@ func TestCommandWALCheckpointCleanupReturnsScanErrors(t *testing.T) {
 	}
 }
 
+func TestCommandWALCheckpointCleanupRejectsDuplicateCoveredLSNAcrossSegmentsBeforeRemove(t *testing.T) {
+	dir := t.TempDir()
+	writeCommandWALFrame(t, dir, 1, 1)
+	writeCommandWALFrame(t, dir, 2, 1)
+
+	decisions, err := cleanupCommandWALSegmentsCoveredByAppliedLSN(dir, 1, 0)
+	if !errors.Is(err, commitlog.ErrCommandWALDuplicateLSN) {
+		t.Fatalf("cleanupCommandWALSegmentsCoveredByAppliedLSN error=%v, want ErrCommandWALDuplicateLSN", err)
+	}
+	if len(decisions) != 2 {
+		t.Fatalf("len(decisions)=%d, want 2", len(decisions))
+	}
+	for _, decision := range decisions {
+		if decision.Removed {
+			t.Fatalf("cleanup removed segment despite scan error: %+v", decision)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(WALDirPath(dir), "commit-l0-000001.log")); err != nil {
+		t.Fatalf("covered segment stat=%v, want retained on scan error", err)
+	}
+}
+
 func TestCommandWALSegmentMaxLSNStreamsFrames(t *testing.T) {
 	dir := t.TempDir()
 	writeCommandWALSegmentFrames(t, dir, 1, 1, 2, 3)
@@ -861,6 +924,8 @@ type commandWALBackupManifest struct {
 	CleanedWALRanges  []commandWALBackupWALRange `json:"cleaned_wal_ranges,omitempty"`
 }
 
+// commandWALBackupWALRange is PR2/PR3 scaffolding for the backup integration
+// manifest; fields are kept in sync with the future production backup type.
 type commandWALBackupWALRange struct {
 	Lane     int    `json:"lane"`
 	Segment  uint64 `json:"segment"`

@@ -158,6 +158,7 @@ func hasUnappliedCommandWALFrames(dir string, appliedLSN uint64, maxSegmentBytes
 		return false, err
 	}
 	activeByLane := commandWALActiveSeqByLane(segments)
+	seenLSNs := make(map[uint64]struct{})
 	for _, seg := range segments {
 		if seg.valueLog || seg.size == 0 {
 			continue
@@ -165,7 +166,7 @@ func hasUnappliedCommandWALFrames(dir string, appliedLSN uint64, maxSegmentBytes
 		if !isCommandWALLaneSegment(seg) {
 			continue
 		}
-		scan, err := scanCommandWALSegment(seg.path, maxSegmentBytes, seg.seq == activeByLane[seg.lane])
+		scan, err := scanCommandWALSegmentWithSeen(seg.path, maxSegmentBytes, seg.seq == activeByLane[seg.lane], seenLSNs)
 		if err != nil {
 			return false, err
 		}
@@ -202,6 +203,10 @@ func commandWALSegmentMaxLSN(path string, maxSegmentBytes int64, allowTerminalTa
 }
 
 func scanCommandWALSegment(path string, maxSegmentBytes int64, allowTerminalTail bool) (commandWALSegmentScanResult, error) {
+	return scanCommandWALSegmentWithSeen(path, maxSegmentBytes, allowTerminalTail, nil)
+}
+
+func scanCommandWALSegmentWithSeen(path string, maxSegmentBytes int64, allowTerminalTail bool, seenLSNs map[uint64]struct{}) (commandWALSegmentScanResult, error) {
 	// PR2 has no durable per-segment max-LSN catalog yet, so open/cleanup paths
 	// derive classification by streaming the segment without retaining payloads.
 	// A later cleanup manifest can cache this once command replay lands.
@@ -235,6 +240,13 @@ func scanCommandWALSegment(path string, maxSegmentBytes int64, allowTerminalTail
 			scan.typed = true
 			return scan, commitlog.ErrCommandWALDuplicateLSN
 		}
+		if seenLSNs != nil {
+			if _, ok := seenLSNs[frame.LSN]; ok {
+				scan.typed = true
+				return scan, commitlog.ErrCommandWALDuplicateLSN
+			}
+			seenLSNs[frame.LSN] = struct{}{}
+		}
 		lastLSN = frame.LSN
 		scan.typed = true
 		if scan.minLSN == 0 || frame.LSN < scan.minLSN {
@@ -250,6 +262,7 @@ func filterCommandWALSegmentsForLegacyReplay(segments []logSegment, appliedLSN u
 	var filtered []logSegment
 	skipped := false
 	activeByLane := commandWALActiveSeqByLane(segments)
+	seenLSNs := make(map[uint64]struct{})
 	for i, seg := range segments {
 		if seg.valueLog || seg.size == 0 {
 			if skipped {
@@ -264,7 +277,7 @@ func filterCommandWALSegmentsForLegacyReplay(segments []logSegment, appliedLSN u
 			continue
 		}
 		active := seg.seq == activeByLane[seg.lane]
-		scan, err := scanCommandWALSegment(seg.path, maxSegmentBytes, active)
+		scan, err := scanCommandWALSegmentWithSeen(seg.path, maxSegmentBytes, active, seenLSNs)
 		if err != nil {
 			return nil, err
 		}
@@ -311,6 +324,7 @@ func cleanupCommandWALSegmentsCoveredByAppliedLSN(dir string, appliedLSN uint64,
 	activeByLane := commandWALActiveSeqByLane(segments)
 	decisions := make([]commandWALSegmentCleanupDecision, 0, len(segments))
 	var scanErr error
+	seenLSNs := make(map[uint64]struct{})
 	for _, seg := range segments {
 		if seg.valueLog || seg.size == 0 {
 			continue
@@ -319,7 +333,7 @@ func cleanupCommandWALSegmentsCoveredByAppliedLSN(dir string, appliedLSN uint64,
 			continue
 		}
 		active := seg.seq == activeByLane[seg.lane]
-		scan, err := scanCommandWALSegment(seg.path, maxSegmentBytes, active)
+		scan, err := scanCommandWALSegmentWithSeen(seg.path, maxSegmentBytes, active, seenLSNs)
 		if err != nil {
 			decisions = append(decisions, commandWALSegmentCleanupDecision{
 				Path:   seg.path,
@@ -338,13 +352,19 @@ func cleanupCommandWALSegmentsCoveredByAppliedLSN(dir string, appliedLSN uint64,
 			Active:  active,
 			Covered: scan.maxLSN <= appliedLSN,
 		}
+		decisions = append(decisions, decision)
+	}
+	if scanErr != nil {
+		return decisions, scanErr
+	}
+	for i := range decisions {
+		decision := &decisions[i]
 		if decision.Covered && !decision.Active {
-			if err := os.Remove(seg.path); err != nil && !os.IsNotExist(err) {
+			if err := os.Remove(decision.Path); err != nil && !os.IsNotExist(err) {
 				return decisions, err
 			}
 			decision.Removed = true
 		}
-		decisions = append(decisions, decision)
 	}
-	return decisions, scanErr
+	return decisions, nil
 }

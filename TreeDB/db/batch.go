@@ -260,9 +260,14 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent) (bool,
 		return false, err
 	}
 	post, err := b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, commandWALFinalizeOptions(intent))
-	b.db.commitMu.Unlock()
+	// Poison while still holding commitMu so that no concurrent writer can
+	// slip past the poison check in appendRawKVCommandWALIntent and publish a
+	// root that covers the unapplied frame's LSN.
 	if err != nil {
 		b.db.poisonCommandWALAfterPostAppendFailure(intent)
+	}
+	b.db.commitMu.Unlock()
+	if err != nil {
 		b.db.writeMu.RUnlock()
 		return false, err
 	}
