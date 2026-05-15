@@ -1474,6 +1474,22 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 			_ = db.Close()
 			return nil, err
 		}
+		// Persist the required feature gate before running typed recovery so that
+		// if recovery mutates WAL segments (cleanup pass) and then the open fails,
+		// the next open uses typed recovery rather than the legacy path.
+		cfg, _, err := formatConfigFromOptionsPreservingRequiredFeatures(opts)
+		if err != nil {
+			_ = db.Close()
+			return nil, err
+		}
+		// Use the raw writer here because ValidateCommandWALActivationClean was
+		// already called above. Re-checking after recovery would make first
+		// activation depend on the transient post-recovery WAL directory shape
+		// instead of the explicit activation boundary.
+		if err := writeFormatConfig(opts.Dir, cfg); err != nil {
+			_ = db.Close()
+			return nil, err
+		}
 	}
 	if opts.CommandWAL {
 		if err := replayCommandWALIntoBackend(db, segments, opts.WALMaxSegmentBytes, opts.ValueLog.DictLookup); err != nil {
@@ -1507,26 +1523,6 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		for _, seq := range activeSeqByLane {
 			if seq > commandSegmentSeq {
 				commandSegmentSeq = seq
-			}
-		}
-		if needsCommandWALFormat {
-			cfg, _, err := formatConfigFromOptionsPreservingRequiredFeatures(opts)
-			if err != nil {
-				_ = db.Close()
-				return nil, err
-			}
-			// Persist the required feature before returning a mutable DB. If the
-			// journal open below fails, no command frames have been acknowledged;
-			// retrying Open will re-enter command-WAL recovery from the same roots.
-			//
-			// Use the raw writer here because the clean-activation precondition
-			// was validated before command-WAL recovery above. Re-running that
-			// check after recovery would make first activation depend on the
-			// transient post-recovery WAL directory shape instead of the explicit
-			// activation boundary.
-			if err := writeFormatConfig(opts.Dir, cfg); err != nil {
-				_ = db.Close()
-				return nil, err
 			}
 		}
 		journal, err := commitlog.OpenCommandJournal(WALDirPath(opts.Dir), commitlog.CommandJournalOptions{
