@@ -17,6 +17,8 @@ func TestExecuteSmokeCompactsReopensValidatesAndBenchmarks(t *testing.T) {
 		docs:                  128,
 		dimensions:            16,
 		queries:               8,
+		readOps:               16,
+		readConcurrency:       []int{2},
 		validateQueries:       4,
 		validateDocs:          4,
 		topK:                  5,
@@ -41,6 +43,9 @@ func TestExecuteSmokeCompactsReopensValidatesAndBenchmarks(t *testing.T) {
 	}
 	if res.Search.Queries != 8 || res.Search.AvgNanos <= 0 || res.Search.ExactFallbacks != 0 {
 		t.Fatalf("unexpected search benchmark result: %+v", res.Search)
+	}
+	if len(res.ReadBenchmarks) != 2 || res.ReadBenchmarks[0].Concurrency != 1 || res.ReadBenchmarks[1].Concurrency != 2 {
+		t.Fatalf("unexpected read benchmarks: %+v", res.ReadBenchmarks)
 	}
 	if res.Profile != "bench" {
 		t.Fatalf("profile=%q want bench", res.Profile)
@@ -84,6 +89,7 @@ func TestRunJSONOutput(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	err := run([]string{
+		"-matrix=false",
 		"-dir", t.TempDir(),
 		"-keep-dir",
 		"-docs", "64",
@@ -126,6 +132,8 @@ func TestExecuteRequireLeafVLogBytesPassesWithDefaultBenchProfile(t *testing.T) 
 		docs:                  64,
 		dimensions:            8,
 		queries:               2,
+		readOps:               8,
+		readConcurrency:       []int{2},
 		validateQueries:       1,
 		validateDocs:          1,
 		topK:                  3,
@@ -167,6 +175,8 @@ func TestExecuteRejectsMainDBDir(t *testing.T) {
 		docs:                  64,
 		dimensions:            8,
 		queries:               2,
+		readOps:               8,
+		readConcurrency:       []int{2},
 		validateQueries:       1,
 		validateDocs:          1,
 		topK:                  3,
@@ -227,10 +237,62 @@ func TestParseConfigLeafGenerationSegmentTarget(t *testing.T) {
 	}
 }
 
+func TestRunMatrixJSONOutput(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	err := run([]string{
+		"-dir", t.TempDir(),
+		"-keep-dir",
+		"-docs", "48",
+		"-dims", "8",
+		"-queries", "2",
+		"-read-ops", "12",
+		"-read-concurrency", "2,4",
+		"-validate-queries", "1",
+		"-validate-docs", "1",
+		"-top-k", "3",
+		"-m", "4",
+		"-ef-construction", "32",
+		"-ef-search", "32",
+		"-min-recall", "0.5",
+		"-json",
+	}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("run matrix: %v stderr=%s", err, stderr.String())
+	}
+	var res matrixResult
+	if err := json.Unmarshal(stdout.Bytes(), &res); err != nil {
+		t.Fatalf("decode matrix JSON output: %v\n%s", err, stdout.String())
+	}
+	if len(res.Cases) != 3 {
+		t.Fatalf("matrix cases=%d want 3", len(res.Cases))
+	}
+	wantNames := []string{"index_db_outer_leaves", "leaf_vlog_before_compact", "leaf_vlog_after_compact"}
+	for i, want := range wantNames {
+		if res.Cases[i].Name != want {
+			t.Fatalf("case %d name=%q want %q", i, res.Cases[i].Name, want)
+		}
+		reads := res.Cases[i].Result.ReadBenchmarks
+		if len(reads) != 3 || reads[0].Concurrency != 1 || reads[1].Concurrency != 2 || reads[2].Concurrency != 4 {
+			t.Fatalf("case %s read benchmarks=%+v", want, reads)
+		}
+	}
+	if res.Cases[0].Result.FormatConfig == nil || res.Cases[0].Result.FormatConfig.IndexOuterLeavesInValueLog {
+		t.Fatalf("index_db_outer_leaves format=%+v, want outer leaves in index.db", res.Cases[0].Result.FormatConfig)
+	}
+	if res.Cases[1].Result.FormatConfig == nil || !res.Cases[1].Result.FormatConfig.IndexOuterLeavesInValueLog {
+		t.Fatalf("leaf_vlog_before_compact format=%+v, want outer leaves in leaf_vlog", res.Cases[1].Result.FormatConfig)
+	}
+	if res.Cases[2].Result.CompactStorage == nil || !res.Cases[2].Result.CompactStorage.FullyCompacted {
+		t.Fatalf("leaf_vlog_after_compact compact stats=%+v", res.Cases[2].Result.CompactStorage)
+	}
+}
+
 func TestRunTextOutput(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	err := run([]string{
+		"-matrix=false",
 		"-dir", t.TempDir(),
 		"-keep-dir",
 		"-docs", "64",

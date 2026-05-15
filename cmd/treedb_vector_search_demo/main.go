@@ -13,7 +13,10 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	treedb "github.com/snissn/gomap/TreeDB"
@@ -25,6 +28,8 @@ const (
 	defaultDocs                  = 10000
 	defaultDimensions            = 64
 	defaultQueries               = 1000
+	defaultReadOps               = 10000
+	defaultReadConcurrency       = "2,4,8,16,32,64,128"
 	defaultTopK                  = 10
 	defaultBatchSize             = 512
 	defaultM                     = 16
@@ -37,10 +42,13 @@ const (
 type config struct {
 	dir                   string
 	keepDir               bool
+	matrix                bool
 	profile               treedb.Profile
 	docs                  int
 	dimensions            int
 	queries               int
+	readOps               int
+	readConcurrency       []int
 	validateQueries       int
 	validateDocs          int
 	topK                  int
@@ -57,6 +65,8 @@ type config struct {
 	requireValueLogBytes  bool
 	requireLeafVLogBytes  bool
 	jsonOut               bool
+
+	indexOuterLeavesInValueLog *bool
 }
 
 type result struct {
@@ -66,6 +76,8 @@ type result struct {
 	Docs                  int                            `json:"docs"`
 	Dimensions            int                            `json:"dimensions"`
 	Queries               int                            `json:"queries"`
+	ReadOps               int                            `json:"read_ops"`
+	ReadConcurrency       []int                          `json:"read_concurrency"`
 	ValidateQueries       int                            `json:"validate_queries"`
 	ValidateDocs          int                            `json:"validate_docs"`
 	TopK                  int                            `json:"top_k"`
@@ -81,6 +93,7 @@ type result struct {
 	ReopenLoad            phaseResult                    `json:"reopen_load"`
 	Validation            validationResult               `json:"validation"`
 	Search                searchBenchmarkResult          `json:"search"`
+	ReadBenchmarks        []documentReadBenchmarkResult  `json:"read_benchmarks"`
 	StorageBeforeCompact  storageReport                  `json:"storage_before_compact"`
 	StorageAfterCompact   storageReport                  `json:"storage_after_compact"`
 	IndexStatsBefore      collections.VectorIndexStats   `json:"index_stats_before_compact"`
@@ -90,6 +103,25 @@ type result struct {
 	FormatConfig          *backenddb.FormatConfig        `json:"format_config,omitempty"`
 	StorageExpectation    storageExpectationReport       `json:"storage_expectation"`
 	Memory                memoryReport                   `json:"memory"`
+}
+
+type matrixResult struct {
+	Dir             string             `json:"dir"`
+	KeptDir         bool               `json:"kept_dir"`
+	Profile         string             `json:"profile"`
+	Docs            int                `json:"docs"`
+	Dimensions      int                `json:"dimensions"`
+	Queries         int                `json:"queries"`
+	ReadOps         int                `json:"read_ops"`
+	ReadConcurrency []int              `json:"read_concurrency"`
+	TopK            int                `json:"top_k"`
+	Cases           []matrixCaseResult `json:"cases"`
+}
+
+type matrixCaseResult struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Result      result `json:"result"`
 }
 
 type phaseResult struct {
@@ -120,6 +152,18 @@ type searchBenchmarkResult struct {
 	AvgRerank            float64 `json:"avg_rerank"`
 	ExactFallbacks       int     `json:"exact_fallbacks"`
 	DisableExactFallback bool    `json:"disable_exact_fallback"`
+}
+
+type documentReadBenchmarkResult struct {
+	Concurrency        int     `json:"concurrency"`
+	Operations         int     `json:"operations"`
+	TotalDurationNanos int64   `json:"total_duration_nanos"`
+	AvgNanos           float64 `json:"avg_nanos"`
+	AvgMicros          float64 `json:"avg_micros"`
+	OpsPerSecond       float64 `json:"ops_per_second"`
+	P50Nanos           int64   `json:"p50_nanos"`
+	P95Nanos           int64   `json:"p95_nanos"`
+	P99Nanos           int64   `json:"p99_nanos"`
 }
 
 type storageReport struct {
@@ -156,6 +200,22 @@ func run(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	if cfg.matrix {
+		res, err := executeMatrix(context.Background(), cfg)
+		if err != nil {
+			return err
+		}
+		if cfg.jsonOut {
+			enc := json.NewEncoder(stdout)
+			enc.SetIndent("", "  ")
+			return enc.Encode(res)
+		}
+		printMatrixText(stdout, res)
+		if !cfg.keepDir {
+			fmt.Fprintf(stderr, "temporary db removed; rerun with -keep-dir to inspect files\n")
+		}
+		return nil
+	}
 	res, err := execute(context.Background(), cfg)
 	if err != nil {
 		return err
@@ -177,6 +237,7 @@ func parseConfig(args []string) (config, error) {
 		docs:                  defaultDocs,
 		dimensions:            defaultDimensions,
 		queries:               defaultQueries,
+		readOps:               defaultReadOps,
 		validateQueries:       32,
 		validateDocs:          16,
 		topK:                  defaultTopK,
@@ -187,18 +248,23 @@ func parseConfig(args []string) (config, error) {
 		valuePointerThreshold: defaultValuePointerThreshold,
 		leafGenerationTarget:  defaultLeafGenerationTarget,
 		minRecall:             0.95,
+		matrix:                true,
 		compact:               true,
 		disableExactFallback:  true,
 		profile:               treedb.ProfileBench,
 	}
 	profileRaw := string(cfg.profile)
+	readConcurrencyRaw := defaultReadConcurrency
 	fs := flag.NewFlagSet("treedb_vector_search_demo", flag.ContinueOnError)
 	fs.StringVar(&cfg.dir, "dir", "", "TreeDB directory to create; empty uses a temporary directory")
 	fs.BoolVar(&cfg.keepDir, "keep-dir", false, "Keep the DB directory after the run")
+	fs.BoolVar(&cfg.matrix, "matrix", cfg.matrix, "Run the storage/read benchmark matrix instead of a single storage case")
 	fs.StringVar(&profileRaw, "profile", profileRaw, "TreeDB profile: durable, fast, wal_on_fast, or bench")
 	fs.IntVar(&cfg.docs, "docs", cfg.docs, "Number of synthetic documents to load")
 	fs.IntVar(&cfg.dimensions, "dims", cfg.dimensions, "Vector dimensions per document")
 	fs.IntVar(&cfg.queries, "queries", cfg.queries, "Number of ANN search queries to benchmark")
+	fs.IntVar(&cfg.readOps, "read-ops", cfg.readOps, "Document reads per serial/concurrent read benchmark")
+	fs.StringVar(&readConcurrencyRaw, "read-concurrency", readConcurrencyRaw, "Comma-separated parallel document-read concurrency levels; serial concurrency=1 is always included")
 	fs.IntVar(&cfg.validateQueries, "validate-queries", cfg.validateQueries, "Number of queries to validate against exact search")
 	fs.IntVar(&cfg.validateDocs, "validate-docs", cfg.validateDocs, "Number of documents to read and byte-validate after compaction/reopen")
 	fs.IntVar(&cfg.topK, "top-k", cfg.topK, "Nearest-neighbor result count")
@@ -218,6 +284,11 @@ func parseConfig(args []string) (config, error) {
 	if err := fs.Parse(args); err != nil {
 		return config{}, err
 	}
+	readConcurrency, err := parseReadConcurrency(readConcurrencyRaw)
+	if err != nil {
+		return config{}, err
+	}
+	cfg.readConcurrency = readConcurrency
 	profile, err := parseProfile(profileRaw)
 	if err != nil {
 		return config{}, err
@@ -231,6 +302,9 @@ func parseConfig(args []string) (config, error) {
 	}
 	if cfg.queries <= 0 {
 		return config{}, errors.New("-queries must be positive")
+	}
+	if cfg.readOps <= 0 {
+		return config{}, errors.New("-read-ops must be positive")
 	}
 	if cfg.topK <= 0 {
 		return config{}, errors.New("-top-k must be positive")
@@ -289,6 +363,52 @@ func parseProfile(raw string) (treedb.Profile, error) {
 	}
 }
 
+func parseReadConcurrency(raw string) ([]int, error) {
+	parts := strings.Split(raw, ",")
+	out := make([]int, 0, len(parts))
+	seen := make(map[int]struct{}, len(parts)+1)
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		value, err := strconv.Atoi(part)
+		if err != nil {
+			return nil, fmt.Errorf("invalid -read-concurrency value %q", part)
+		}
+		if value <= 1 {
+			return nil, fmt.Errorf("-read-concurrency values must be greater than 1: %d", value)
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	sort.Ints(out)
+	if len(out) == 0 {
+		return nil, errors.New("-read-concurrency must include at least one value greater than 1")
+	}
+	return out, nil
+}
+
+func applyReadBenchmarkDefaults(cfg *config) error {
+	if cfg.readOps == 0 {
+		cfg.readOps = defaultReadOps
+	}
+	if cfg.readOps < 0 {
+		return errors.New("-read-ops cannot be negative")
+	}
+	if len(cfg.readConcurrency) == 0 {
+		concurrency, err := parseReadConcurrency(defaultReadConcurrency)
+		if err != nil {
+			return err
+		}
+		cfg.readConcurrency = concurrency
+	}
+	return nil
+}
+
 func defaultProfile(profile treedb.Profile) treedb.Profile {
 	if profile == "" {
 		return treedb.ProfileBench
@@ -307,16 +427,20 @@ func normalizeDemoDir(dir string) (string, error) {
 	return clean, nil
 }
 
-func openDemoBackend(profile treedb.Profile, dir string, valuePointerThreshold int, leafGenerationTarget int64) (*backenddb.DB, func() error, error) {
-	opts := treedb.OptionsFor(defaultProfile(profile), dir)
-	if valuePointerThreshold > 0 {
-		opts.ValueLog.PointerThreshold = valuePointerThreshold
+func openDemoBackend(cfg config, dir string) (*backenddb.DB, func() error, error) {
+	opts := treedb.OptionsFor(defaultProfile(cfg.profile), dir)
+	if cfg.indexOuterLeavesInValueLog != nil {
+		opts.IndexOuterLeavesInValueLog = *cfg.indexOuterLeavesInValueLog
+		opts.IndexInternalBaseDelta = !*cfg.indexOuterLeavesInValueLog
 	}
-	if leafGenerationTarget > 0 {
+	if cfg.valuePointerThreshold > 0 {
+		opts.ValueLog.PointerThreshold = cfg.valuePointerThreshold
+	}
+	if cfg.leafGenerationTarget > 0 {
 		if opts.ValueLog.Generational.Policy == treedb.ValueLogGenerationDefault {
 			opts.ValueLog.Generational.Policy = treedb.ValueLogGenerationHotWarmCold
 		}
-		opts.ValueLog.Generational.LeafSegmentTargetBytes = leafGenerationTarget
+		opts.ValueLog.Generational.LeafSegmentTargetBytes = cfg.leafGenerationTarget
 	}
 	if opts.IndexOuterLeavesInValueLog {
 		return treedb.OpenBackendWithCachedLeafLog(opts)
@@ -326,6 +450,9 @@ func openDemoBackend(profile treedb.Profile, dir string, valuePointerThreshold i
 
 func execute(ctx context.Context, cfg config) (result, error) {
 	cfg.profile = defaultProfile(cfg.profile)
+	if err := applyReadBenchmarkDefaults(&cfg); err != nil {
+		return result{}, err
+	}
 	dir, err := normalizeDemoDir(cfg.dir)
 	if err != nil {
 		return result{}, err
@@ -368,6 +495,8 @@ func execute(ctx context.Context, cfg config) (result, error) {
 		Docs:                  cfg.docs,
 		Dimensions:            cfg.dimensions,
 		Queries:               cfg.queries,
+		ReadOps:               cfg.readOps,
+		ReadConcurrency:       append([]int(nil), cfg.readConcurrency...),
 		ValidateQueries:       cfg.validateQueries,
 		ValidateDocs:          cfg.validateDocs,
 		TopK:                  cfg.topK,
@@ -379,7 +508,7 @@ func execute(ctx context.Context, cfg config) (result, error) {
 		Compact:               cfg.compact,
 	}
 
-	d, cleanupBackend, err := openDemoBackend(cfg.profile, dir, cfg.valuePointerThreshold, cfg.leafGenerationTarget)
+	d, cleanupBackend, err := openDemoBackend(cfg, dir)
 	if err != nil {
 		return result{}, err
 	}
@@ -483,7 +612,7 @@ func execute(ctx context.Context, cfg config) (result, error) {
 	runtime.GC()
 	runtime.ReadMemStats(&beforeLoad)
 	reopenStart := time.Now()
-	d, cleanupBackend, err = openDemoBackend(cfg.profile, dir, cfg.valuePointerThreshold, cfg.leafGenerationTarget)
+	d, cleanupBackend, err = openDemoBackend(cfg, dir)
 	if err != nil {
 		return result{}, err
 	}
@@ -521,7 +650,105 @@ func execute(ctx context.Context, cfg config) (result, error) {
 		return result{}, err
 	}
 	res.Search = search
+	readBenchmarks, err := benchmarkDocumentReadMatrix(col, cfg)
+	if err != nil {
+		return result{}, err
+	}
+	res.ReadBenchmarks = readBenchmarks
 	return res, nil
+}
+
+func executeMatrix(ctx context.Context, cfg config) (matrixResult, error) {
+	cfg.profile = defaultProfile(cfg.profile)
+	if err := applyReadBenchmarkDefaults(&cfg); err != nil {
+		return matrixResult{}, err
+	}
+	root, err := normalizeDemoDir(cfg.dir)
+	if err != nil {
+		return matrixResult{}, err
+	}
+	cleanup := func() {}
+	if root == "" {
+		tmp, err := os.MkdirTemp("", "treedb-vector-search-matrix-*")
+		if err != nil {
+			return matrixResult{}, err
+		}
+		root = tmp
+		if !cfg.keepDir {
+			cleanup = func() { _ = os.RemoveAll(tmp) }
+		}
+	} else {
+		if err := os.RemoveAll(root); err != nil {
+			return matrixResult{}, err
+		}
+		if err := os.MkdirAll(root, 0o755); err != nil {
+			return matrixResult{}, err
+		}
+	}
+	if !cfg.keepDir {
+		defer cleanup()
+	}
+
+	inlineLeaves := false
+	leafVLog := true
+	cases := []struct {
+		name        string
+		description string
+		compact     bool
+		outerLeaves *bool
+	}{
+		{
+			name:        "index_db_outer_leaves",
+			description: "1558-style layout: outer B-tree leaves stay in index.db",
+			compact:     true,
+			outerLeaves: &inlineLeaves,
+		},
+		{
+			name:        "leaf_vlog_before_compact",
+			description: "1560 layout: outer B-tree leaves in leaf_vlog before CompactStorageFull",
+			compact:     false,
+			outerLeaves: &leafVLog,
+		},
+		{
+			name:        "leaf_vlog_after_compact",
+			description: "1560 layout: outer B-tree leaves in leaf_vlog after CompactStorageFull",
+			compact:     true,
+			outerLeaves: &leafVLog,
+		},
+	}
+	out := matrixResult{
+		Dir:             root,
+		KeptDir:         cfg.keepDir,
+		Profile:         string(cfg.profile),
+		Docs:            cfg.docs,
+		Dimensions:      cfg.dimensions,
+		Queries:         cfg.queries,
+		ReadOps:         cfg.readOps,
+		ReadConcurrency: append([]int(nil), cfg.readConcurrency...),
+		TopK:            cfg.topK,
+		Cases:           make([]matrixCaseResult, 0, len(cases)),
+	}
+	for _, testCase := range cases {
+		caseCfg := cfg
+		caseCfg.matrix = false
+		caseCfg.keepDir = true
+		caseCfg.compact = testCase.compact
+		caseCfg.dir = filepath.Join(root, testCase.name)
+		caseCfg.indexOuterLeavesInValueLog = testCase.outerLeaves
+		if testCase.name == "index_db_outer_leaves" {
+			caseCfg.requireLeafVLogBytes = false
+		}
+		res, err := execute(ctx, caseCfg)
+		if err != nil {
+			return matrixResult{}, fmt.Errorf("%s: %w", testCase.name, err)
+		}
+		out.Cases = append(out.Cases, matrixCaseResult{
+			Name:        testCase.name,
+			Description: testCase.description,
+			Result:      res,
+		})
+	}
+	return out, nil
 }
 
 func insertDocuments(col *collections.Collection, docs, dims, batchSize int) error {
@@ -626,6 +853,112 @@ func benchmarkSearch(idx *collections.VectorIndex, cfg config) (searchBenchmarkR
 		AvgRerank:            float64(rerankTotal) / float64(len(queries)),
 		ExactFallbacks:       exactFallbacks,
 		DisableExactFallback: cfg.disableExactFallback,
+	}, nil
+}
+
+func benchmarkDocumentReadMatrix(col *collections.Collection, cfg config) ([]documentReadBenchmarkResult, error) {
+	inputs := documentReadInputs(cfg.readOps, cfg.docs, cfg.dimensions)
+	levels := make([]int, 0, len(cfg.readConcurrency)+1)
+	levels = append(levels, 1)
+	levels = append(levels, cfg.readConcurrency...)
+	out := make([]documentReadBenchmarkResult, 0, len(levels))
+	for _, concurrency := range levels {
+		bench, err := benchmarkDocumentReads(col, inputs, concurrency)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, bench)
+	}
+	return out, nil
+}
+
+type documentReadInput struct {
+	id   []byte
+	want []byte
+}
+
+func documentReadInputs(operations, docs, dims int) []documentReadInput {
+	inputs := make([]documentReadInput, operations)
+	for i := range inputs {
+		docIndex := validationDocIndex(i, docs)
+		inputs[i] = documentReadInput{
+			id:   documentID(docIndex),
+			want: documentJSON(docIndex, dims),
+		}
+	}
+	return inputs
+}
+
+func benchmarkDocumentReads(col *collections.Collection, inputs []documentReadInput, concurrency int) (documentReadBenchmarkResult, error) {
+	if concurrency <= 0 {
+		return documentReadBenchmarkResult{}, errors.New("document read concurrency must be positive")
+	}
+	latencies := make([]int64, len(inputs))
+	var next atomic.Int64
+	var errMu sync.Mutex
+	var firstErr error
+	setErr := func(err error) {
+		errMu.Lock()
+		defer errMu.Unlock()
+		if firstErr == nil {
+			firstErr = err
+		}
+	}
+	worker := func() {
+		for {
+			i := int(next.Add(1) - 1)
+			if i >= len(inputs) {
+				return
+			}
+			input := inputs[i]
+			start := time.Now()
+			got, err := col.Get(input.id)
+			latencies[i] = time.Since(start).Nanoseconds()
+			if err != nil {
+				setErr(err)
+				return
+			}
+			if !bytes.Equal(got, input.want) {
+				setErr(fmt.Errorf("document read mismatch for %s", input.id))
+				return
+			}
+		}
+	}
+
+	startAll := time.Now()
+	if concurrency == 1 {
+		worker()
+	} else {
+		var wg sync.WaitGroup
+		wg.Add(concurrency)
+		for i := 0; i < concurrency; i++ {
+			go func() {
+				defer wg.Done()
+				worker()
+			}()
+		}
+		wg.Wait()
+	}
+	total := time.Since(startAll)
+	if firstErr != nil {
+		return documentReadBenchmarkResult{}, firstErr
+	}
+	var latencyTotal int64
+	for _, latency := range latencies {
+		latencyTotal += latency
+	}
+	sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
+	avg := float64(latencyTotal) / float64(len(inputs))
+	return documentReadBenchmarkResult{
+		Concurrency:        concurrency,
+		Operations:         len(inputs),
+		TotalDurationNanos: total.Nanoseconds(),
+		AvgNanos:           avg,
+		AvgMicros:          avg / 1000,
+		OpsPerSecond:       float64(len(inputs)) / total.Seconds(),
+		P50Nanos:           percentile(latencies, 0.50),
+		P95Nanos:           percentile(latencies, 0.95),
+		P99Nanos:           percentile(latencies, 0.99),
 	}, nil
 }
 
@@ -782,8 +1115,8 @@ func percentile(sorted []int64, p float64) int64 {
 
 func printText(w io.Writer, res result) {
 	fmt.Fprintf(w, "TreeDB vector search demo\n")
-	fmt.Fprintf(w, "dir=%s kept=%t profile=%s docs=%d dims=%d queries=%d top_k=%d m=%d ef_construction=%d ef_search=%d value_pointer_threshold=%d leaf_generation_segment_target=%d\n",
-		res.Dir, res.KeptDir, res.Profile, res.Docs, res.Dimensions, res.Queries, res.TopK, res.M, res.EfConstruction, res.EfSearch, res.ValuePointerThreshold, res.LeafGenerationTarget)
+	fmt.Fprintf(w, "dir=%s kept=%t profile=%s docs=%d dims=%d queries=%d read_ops=%d top_k=%d m=%d ef_construction=%d ef_search=%d value_pointer_threshold=%d leaf_generation_segment_target=%d\n",
+		res.Dir, res.KeptDir, res.Profile, res.Docs, res.Dimensions, res.Queries, res.ReadOps, res.TopK, res.M, res.EfConstruction, res.EfSearch, res.ValuePointerThreshold, res.LeafGenerationTarget)
 	fmt.Fprintf(w, "\nPhases\n")
 	fmt.Fprintf(w, "insert: %.3fs\n", res.Insert.Seconds)
 	fmt.Fprintf(w, "rebuild_native_vector_index: %.3fs native_root_bytes=%d\n", res.Rebuild.Seconds, res.NativeRootBytes)
@@ -807,6 +1140,8 @@ func printText(w io.Writer, res result) {
 		res.Search.OpsPerSecond,
 		res.Search.ExactFallbacks)
 	fmt.Fprintf(w, "avg_candidates=%.1f avg_rerank=%.1f\n", res.Search.AvgCandidates, res.Search.AvgRerank)
+	fmt.Fprintf(w, "\nDocument Read Benchmark\n")
+	printReadBenchmarks(w, res.ReadBenchmarks)
 	fmt.Fprintf(w, "\nStorage\n")
 	fmt.Fprintf(w, "before_compact_total=%d bytes (%.1f/doc)\n", res.StorageBeforeCompact.TotalBytes, res.StorageBeforeCompact.BytesPerDoc)
 	fmt.Fprintf(w, "after_compact_total=%d bytes (%.1f/doc)\n", res.StorageAfterCompact.TotalBytes, res.StorageAfterCompact.BytesPerDoc)
@@ -824,6 +1159,56 @@ func printText(w io.Writer, res result) {
 	fmt.Fprintf(w, "\nMemory\n")
 	fmt.Fprintf(w, "index_bytes_memory=%d load_alloc_delta=%d alloc_after_load=%d\n",
 		res.Memory.IndexBytesMemory, res.Memory.LoadAllocDeltaBytes, res.Memory.AllocAfterLoadBytes)
+}
+
+func printMatrixText(w io.Writer, res matrixResult) {
+	fmt.Fprintf(w, "TreeDB vector search matrix\n")
+	fmt.Fprintf(w, "dir=%s kept=%t profile=%s docs=%d dims=%d queries=%d read_ops=%d top_k=%d read_concurrency=%s\n",
+		res.Dir, res.KeptDir, res.Profile, res.Docs, res.Dimensions, res.Queries, res.ReadOps, res.TopK, joinInts(res.ReadConcurrency))
+	for _, testCase := range res.Cases {
+		fmt.Fprintf(w, "\nCase %s\n", testCase.Name)
+		fmt.Fprintf(w, "%s\n", testCase.Description)
+		fmt.Fprintf(w, "storage_after_compact_total=%d bytes (%.1f/doc)\n",
+			testCase.Result.StorageAfterCompact.TotalBytes,
+			testCase.Result.StorageAfterCompact.BytesPerDoc)
+		fmt.Fprintf(w, "storage_domains index_db=%d value_vlog=%d leaf_vlog=%d\n",
+			testCase.Result.StorageExpectation.IndexBytes,
+			testCase.Result.StorageExpectation.ValueLogBytes,
+			testCase.Result.StorageExpectation.LeafVLogBytes)
+		if testCase.Result.FormatConfig != nil {
+			fmt.Fprintf(w, "format index_outer_leaves_in_vlog=%t leaf_prefix_compression=%t vlog_compression=%s\n",
+				testCase.Result.FormatConfig.IndexOuterLeavesInValueLog,
+				testCase.Result.FormatConfig.LeafPrefixCompression,
+				testCase.Result.FormatConfig.ValueLogCompression)
+		}
+		fmt.Fprintf(w, "vector_search avg=%.2fus p95=%.2fus recall_at_%d=%.4f\n",
+			testCase.Result.Search.AvgMicros,
+			float64(testCase.Result.Search.P95Nanos)/1000,
+			testCase.Result.TopK,
+			testCase.Result.Validation.Recall)
+		printReadBenchmarks(w, testCase.Result.ReadBenchmarks)
+	}
+}
+
+func printReadBenchmarks(w io.Writer, benchmarks []documentReadBenchmarkResult) {
+	for _, bench := range benchmarks {
+		fmt.Fprintf(w, "read concurrency=%d ops=%d avg=%.2fus p50=%.2fus p95=%.2fus p99=%.2fus ops/sec=%.1f\n",
+			bench.Concurrency,
+			bench.Operations,
+			bench.AvgMicros,
+			float64(bench.P50Nanos)/1000,
+			float64(bench.P95Nanos)/1000,
+			float64(bench.P99Nanos)/1000,
+			bench.OpsPerSecond)
+	}
+}
+
+func joinInts(values []int) string {
+	parts := make([]string, len(values))
+	for i, value := range values {
+		parts[i] = strconv.Itoa(value)
+	}
+	return strings.Join(parts, ",")
 }
 
 func printDomains(w io.Writer, label string, domains map[string]int64) {
