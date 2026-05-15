@@ -144,12 +144,19 @@ func OpenCommandJournal(walDir string, opts CommandJournalOptions) (*CommandJour
 		opts.SegmentSeq = 1
 	}
 	path := filepath.Join(walDir, CommandSegmentName(opts.Lane, opts.SegmentSeq))
-	initialLSN, err := commandJournalInitialLSN(walDir, path, opts)
+	owner, err := AcquireJournalOwnerWithOptions(walDir, JournalOwnerOptions{InitialLSN: opts.InitialLSN})
 	if err != nil {
 		return nil, err
 	}
-	owner, err := AcquireJournalOwnerWithOptions(walDir, JournalOwnerOptions{InitialLSN: initialLSN})
+	// The owner lock covers scan/truncate/seed so another writer cannot append
+	// between max-LSN discovery and this journal's first reservation.
+	initialLSN, err := commandJournalInitialLSN(walDir, path, opts)
 	if err != nil {
+		_ = owner.Close()
+		return nil, err
+	}
+	if err := owner.seedInitialLSN(initialLSN); err != nil {
+		_ = owner.Close()
 		return nil, err
 	}
 	writer, err := NewWriterWithOptions(path, Options{MaxSegmentSize: opts.MaxSegmentSize, Compress: opts.Compress})
@@ -191,6 +198,20 @@ func commandJournalInitialLSN(walDir, activePath string, opts CommandJournalOpti
 		}
 	}
 	return initialLSN, nil
+}
+
+func (o *JournalOwner) seedInitialLSN(initialLSN uint64) error {
+	if o == nil || o.lock == nil {
+		return errors.New("commitlog: journal owner is closed")
+	}
+	if initialLSN == ^uint64(0) {
+		return errors.New("commitlog: journal owner lsn space exhausted")
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.nextLSN = initialLSN + 1
+	o.exhausted = false
+	return nil
 }
 
 type commandJournalSegment struct {
