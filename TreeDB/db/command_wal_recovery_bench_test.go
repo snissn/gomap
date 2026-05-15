@@ -95,7 +95,7 @@ func BenchmarkCommandWALReplayFrameClassification(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		needsValueLog, err := commandWALReplayFramesNeedLogSupport(nil, frames)
+		needsValueLog, err := commandWALReplayFramesNeedLogSupport(nil, frames, 0)
 		if err != nil {
 			b.Fatalf("commandWALReplayFramesNeedLogSupport: %v", err)
 		}
