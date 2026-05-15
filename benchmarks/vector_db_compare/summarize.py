@@ -67,6 +67,20 @@ def backend_name(result: dict[str, Any]) -> str:
     return "TreeDB native HNSW"
 
 
+def index_memory(result: dict[str, Any]) -> str:
+    memory = result.get("memory", {})
+    if "index_bytes_memory" in memory:
+        return bytes_human(float(memory["index_bytes_memory"]))
+    return "n/a"
+
+
+def process_rss(result: dict[str, Any]) -> str:
+    memory = result.get("memory", {})
+    if "max_rss_bytes" in memory:
+        return bytes_human(float(memory["max_rss_bytes"]))
+    return "n/a"
+
+
 def render(treedb: dict[str, Any], vectorlite: dict[str, Any]) -> str:
     results = [treedb, vectorlite]
     lines: list[str] = []
@@ -76,18 +90,11 @@ def render(treedb: dict[str, Any], vectorlite: dict[str, Any]) -> str:
     lines.append("")
     lines.append("## Build, Recall, Storage")
     lines.append("")
-    lines.append("| Backend | Insert | Index build | Reopen/load | Recall@K | Storage | Storage/doc | Memory |")
-    lines.append("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
+    lines.append("| Backend | Insert | Index build | Reopen/load | Recall@K | Storage | Storage/doc | TreeDB index memory | Python process max RSS |")
+    lines.append("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
     for result in results:
-        memory = result.get("memory", {})
-        if "index_bytes_memory" in memory:
-            mem = bytes_human(float(memory["index_bytes_memory"]))
-        elif "max_rss_bytes" in memory:
-            mem = bytes_human(float(memory["max_rss_bytes"]))
-        else:
-            mem = "n/a"
         lines.append(
-            "| {backend} | {insert:.3f}s | {build:.3f}s | {reopen:.3f}s | {recall:.4f} | {storage} | {per_doc:.1f}B | {memory} |".format(
+            "| {backend} | {insert:.3f}s | {build:.3f}s | {reopen:.3f}s | {recall:.4f} | {storage} | {per_doc:.1f}B | {index_memory} | {process_rss} |".format(
                 backend=backend_name(result),
                 insert=insert_seconds(result),
                 build=build_seconds(result),
@@ -95,7 +102,8 @@ def render(treedb: dict[str, Any], vectorlite: dict[str, Any]) -> str:
                 recall=recall(result),
                 storage=bytes_human(storage_bytes(result)),
                 per_doc=bytes_per_doc(result),
-                memory=mem,
+                index_memory=index_memory(result),
+                process_rss=process_rss(result),
             )
         )
     lines.append("")
@@ -122,6 +130,7 @@ def render(treedb: dict[str, Any], vectorlite: dict[str, Any]) -> str:
     lines.append("- sqlite-vec is intentionally not used here because upstream sqlite-vec is brute-force today; ANN support is tracked as future work.")
     lines.append("- SQLite+Vectorlite stores the SQLite table and its HNSW index file under the benchmark DB directory; storage includes both.")
     lines.append("- TreeDB storage is the reopened benchmark datastore reported by `treedb_vector_search_demo`.")
+    lines.append("- Memory columns are intentionally separated: TreeDB reports native vector-index memory, while SQLite+Vectorlite reports whole Python benchmark process max RSS.")
     lines.append("")
     return "\n".join(lines)
 
