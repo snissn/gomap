@@ -683,6 +683,37 @@ No milestone is complete until the same evidence is reflected in
 the implementation PR exists. Planned names are acceptable only in this planning
 PR.
 
+### 14.4 Existing Test Migration Gate
+
+The compatibility-breaking command WAL rewrite must preserve existing WAL and
+recovery invariants even when old raw payload readers are removed. Existing
+tests should be migrated by invariant, not by implementation file.
+
+No existing WAL, recovery, checkpoint, value-log fence, corruption, or
+read-only-open test may be deleted unless the implementation PR records one of:
+
+- a direct command-WAL equivalent test;
+- a renamed test that asserts the same invariant under typed command frames;
+- a documented reason the old test applied only to unsupported legacy raw
+  payload compatibility after `command_wal_v1` activation.
+
+PR 1 must include a test inventory that maps legacy WAL tests to command-WAL
+coverage buckets. PRs 2 and 3 must keep that inventory current as publish,
+checkpoint, cleanup, and raw KV replay move to `AppliedCommandLSN`.
+
+Required migration buckets:
+
+| Existing coverage | Command-WAL replacement |
+|---|---|
+| Legacy raw frame encoding/decoding | typed command frame golden fixtures and decoder hardening tests |
+| Raw KV WAL replay | `RawKVBatch` command replay through the normal executor |
+| RID/value-log fence behavior | command external-ref or equivalent payload fence tests |
+| Checkpoint cleanup | `AppliedCommandLSN` cleanup proof and crash-before-cleanup tests |
+| Truncated tail and corruption handling | typed frame decoder outcome tests |
+| Read-only open/recovery-required behavior | unapplied command frame read-only-open rejection |
+| Collection flush-boundary durability | current behavior tests plus command-WAL variants only when the command kind becomes `WAL-supported` |
+| `internal/collectionwal` tests | historical/deprecated tests only, or removal when no active code depends on them |
+
 ## 15. PR Milestones
 
 ### PR 0: Spec, issue, and deprecation cleanup

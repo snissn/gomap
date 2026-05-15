@@ -243,7 +243,9 @@ PR 1: typed commit-log frames and feature gate:
 - `TestCommandWALFeatureGateRejectsLegacyRawPayload`;
 - `TestCommandWALFeatureGateRequiresCleanLegacyWALBeforeActivation`;
 - `TestCommandWALNoCollectionSegmentFamilyCreated`;
-- `TestCommandWALSingleJournalOwnerRejectsSecondMutableWriter`.
+- `TestCommandWALSingleJournalOwnerRejectsSecondMutableWriter`;
+- `TestCommandWALExistingCoverageInventoryMapsLegacyWALTests`;
+- `TestCommandWALLegacyRawEncodingTestsHaveTypedFrameEquivalents`.
 
 PR 2: shared journal ownership and `AppliedCommandLSN` plumbing:
 
@@ -255,7 +257,8 @@ PR 2: shared journal ownership and `AppliedCommandLSN` plumbing:
 - `TestCommandWALCheckpointCleansOnlyCoveredSegments`;
 - `TestCommandWALCheckpointCrashBeforeCleanupReplaysIdempotently`;
 - `TestCommandWALCleanupManifestMissingBlocksSegmentDeletion`;
-- `TestCommandWALReadOnlyOpenWithUnappliedFrameFailsRecoveryRequired`.
+- `TestCommandWALReadOnlyOpenWithUnappliedFrameFailsRecoveryRequired`;
+- `TestCommandWALExistingCheckpointCleanupTestsMappedToAppliedLSN`.
 
 PR 3: recovery dispatcher and raw KV command conversion:
 
@@ -266,7 +269,9 @@ PR 3: recovery dispatcher and raw KV command conversion:
 - `TestCommandWALCrashAfterRootAppliedLSNBeforeCleanupSkipsFrame`;
 - `TestCommandWALRecoveryCrashDuringReplayResumesFromAppliedLSN`;
 - `TestCommandWALStrictCommandEffectWithoutAppliedLSNFailsClosed`;
-- `TestCommandWALIdempotentSkipRequiresDigestProof`.
+- `TestCommandWALIdempotentSkipRequiresDigestProof`;
+- `TestCommandWALExistingRawReplayTestsMappedToRawKVBatch`;
+- `TestCommandWALExistingRIDFenceTestsMappedToExternalRefFence`.
 
 PR 4: collection insert/delete by explicit ID:
 
