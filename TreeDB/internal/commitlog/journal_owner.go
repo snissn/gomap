@@ -166,6 +166,13 @@ func CommandSegmentName(lane int, seq uint64) string {
 	return fmt.Sprintf("commit-l%d-%06d.log", lane, seq)
 }
 
+// IsCommandSegmentName reports whether name matches the command WAL segment
+// naming grammar used by CommandSegmentName.
+func IsCommandSegmentName(name string) bool {
+	_, _, ok := parseCommandSegmentName(name)
+	return ok
+}
+
 func OpenCommandJournal(walDir string, opts CommandJournalOptions) (*CommandJournal, error) {
 	if walDir == "" {
 		return nil, errors.New("commitlog: command journal dir required")
@@ -404,10 +411,11 @@ func truncateCommandJournalTail(path string, size int64) error {
 }
 
 // AppendCommand validates a complete command frame, assigns the next journal
-// LSN, and appends it while holding the journal mutex. The owner mutex still
-// protects direct JournalOwner users, but CommandJournal requires tail-only
-// rollback: no other owner reservation may occur between this reserve and a
-// failed append rollback.
+// LSN, and appends it through this lane's single writer while holding the
+// journal mutex. This intentionally optimizes for deterministic frame order and
+// tail-only rollback, not parallel appends within one lane. The owner mutex
+// still protects direct JournalOwner users, but CommandJournal requires no other
+// owner reservation between this reserve and a failed append rollback.
 func (j *CommandJournal) AppendCommand(env CommandEnvelope) (uint64, error) {
 	if j == nil {
 		return 0, errors.New("commitlog: command journal is closed")

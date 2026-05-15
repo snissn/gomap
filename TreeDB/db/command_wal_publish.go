@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
@@ -120,7 +119,11 @@ func validateContiguousAppliedCommandLSN(current, next uint64, covered []Command
 		if r.Last == ^uint64(0) {
 			return fmt.Errorf("%w: lsn range exhausted", ErrCommandWALAppliedLSNNonContig)
 		}
-		cursor = r.Last + 1
+		nextCursor := r.Last + 1
+		if nextCursor <= r.Last {
+			return fmt.Errorf("%w: lsn range exhausted", ErrCommandWALAppliedLSNNonContig)
+		}
+		cursor = nextCursor
 	}
 	return fmt.Errorf("%w: gap before %d", ErrCommandWALAppliedLSNNonContig, cursor)
 }
@@ -171,7 +174,7 @@ func hasUnappliedCommandWALFrames(dir string, appliedLSN uint64, maxSegmentBytes
 			return false, err
 		}
 		if scan.typed && scan.maxLSN > appliedLSN {
-			return true, nil
+			return false, fmt.Errorf("%w: command WAL segment %s max LSN %d exceeds applied LSN %d", ErrRecoveryRequired, filepath.Base(seg.path), scan.maxLSN, appliedLSN)
 		}
 	}
 	return false, nil
@@ -194,7 +197,7 @@ func commandWALActiveSeqByLane(segments []logSegment) map[int]uint64 {
 }
 
 func isCommandWALLaneSegment(seg logSegment) bool {
-	return strings.HasPrefix(filepath.Base(seg.path), "commit-l")
+	return commitlog.IsCommandSegmentName(filepath.Base(seg.path))
 }
 
 func commandWALSegmentMaxLSN(path string, maxSegmentBytes int64, allowTerminalTail bool) (maxLSN uint64, typed bool, err error) {
@@ -207,9 +210,11 @@ func scanCommandWALSegment(path string, maxSegmentBytes int64, allowTerminalTail
 }
 
 func scanCommandWALSegmentWithSeen(path string, maxSegmentBytes int64, allowTerminalTail bool, seenLSNs map[uint64]struct{}) (commandWALSegmentScanResult, error) {
-	// PR2 has no durable per-segment max-LSN catalog yet, so open/cleanup paths
-	// derive classification by streaming the segment without retaining payloads.
-	// A later cleanup manifest can cache this once command replay lands.
+	// PR2 has no durable per-segment max-LSN catalog yet, so open/cleanup
+	// paths derive classification by streaming the segment without retaining
+	// payloads. TODO(command-wal): cache validated per-segment min/max LSN
+	// summaries once the cleanup manifest/catalog is introduced so restart
+	// does not rescan old covered typed bytes.
 	r, err := commitlog.NewReaderWithOptions(path, commitlog.Options{MaxSegmentSize: maxSegmentBytes})
 	if err != nil {
 		return commandWALSegmentScanResult{}, err
@@ -289,9 +294,9 @@ func filterCommandWALSegmentsForLegacyReplay(segments []logSegment, appliedLSN u
 		}
 		// Covered typed segments are skipped by the maxLSN check below. This
 		// branch is only the crossing case where part of the segment is already
-		// published and part would still need command replay.
-		// Invariant: scan.typed == true (checked above); minLSN > 0 for any
-		// typed segment, so the minLSN <= appliedLSN check is meaningful here.
+		// published and part would still need command replay. With appliedLSN=0
+		// no command frame can be partly covered, so the first typed frame falls
+		// through to the fully-unapplied branch below.
 		if scan.maxLSN > appliedLSN && scan.minLSN <= appliedLSN {
 			return nil, fmt.Errorf("%w: command WAL segment %s partially applied range [%d,%d] over applied LSN %d", ErrRecoveryRequired, filepath.Base(seg.path), scan.minLSN, scan.maxLSN, appliedLSN)
 		}
