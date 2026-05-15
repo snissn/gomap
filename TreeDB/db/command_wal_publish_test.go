@@ -369,6 +369,20 @@ func TestCommandWALLegacyReplayFilterToleratesCoveredDuplicateLSNAcrossSegments(
 	_ = filtered
 }
 
+func TestCommandWALLegacyReplayFilterRejectsPartiallyAppliedSegment(t *testing.T) {
+	dir := t.TempDir()
+	writeCommandWALSegmentFrames(t, dir, 1, 1, 2)
+	segments, err := listWALSegments(dir)
+	if err != nil {
+		t.Fatalf("listWALSegments: %v", err)
+	}
+
+	_, err = filterCommandWALSegmentsForLegacyReplay(segments, 1, 0)
+	if !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("filterCommandWALSegmentsForLegacyReplay error=%v, want ErrRecoveryRequired", err)
+	}
+}
+
 func TestCommandWALWriteOpenRejectsUnappliedFramesUntilDispatcher(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(Options{Dir: dir})
@@ -791,6 +805,27 @@ func TestCommandWALCheckpointCleanupRetainsActiveCoveredTypedSegment(t *testing.
 	}
 	if _, err := os.Stat(filepath.Join(WALDirPath(dir), "commit-l0-000001.log")); err != nil {
 		t.Fatalf("active covered typed segment stat=%v, want retained", err)
+	}
+}
+
+func TestCommandWALCheckpointCleanupShortCircuitsFullyUnappliedSegment(t *testing.T) {
+	dir := t.TempDir()
+	writeCommandWALFrame(t, dir, 1, 1)
+	writeCommandWALSegmentFrames(t, dir, 2, 3, 2)
+
+	decisions, err := cleanupCommandWALSegmentsCoveredByAppliedLSN(dir, 1, 0)
+	if err != nil {
+		t.Fatalf("cleanupCommandWALSegmentsCoveredByAppliedLSN: %v", err)
+	}
+	decisionByName := map[string]commandWALSegmentCleanupDecision{}
+	for _, decision := range decisions {
+		decisionByName[filepath.Base(decision.Path)] = decision
+	}
+	if got := decisionByName["commit-l0-000001.log"]; !got.Covered || got.Active || !got.Removed {
+		t.Fatalf("covered segment decision=%+v, want removed", got)
+	}
+	if got := decisionByName["commit-l0-000002.log"]; got.Covered || !got.Active || got.Removed || got.MaxLSN != 3 {
+		t.Fatalf("unapplied segment decision=%+v, want active uncovered retained after first-frame scan", got)
 	}
 }
 
