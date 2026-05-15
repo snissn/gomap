@@ -3,7 +3,7 @@
   "milestone": "PR1 typed commit-log frames and feature gate",
   "branch": "codex/user-command-wal-pr1",
   "base_commit": "6e32961e2a0a472e3be03e1caa91c15c739d9ba9",
-  "head_commit": "local-uncommitted",
+  "head_commit": "d86283ae8331666714b8b42c80dca74ada139667",
   "go_version": "go1.25.7 linux/amd64",
   "platform": "linux/amd64",
   "durability_mode": "format-gated command WAL bytes only; production raw KV WAL remains legacy until PR3",
@@ -67,7 +67,9 @@
   "oldest_unapplied_lsn": null,
   "external_ref_retained_byte_summaries": "external-ref frame encoding is round-trip tested; retention accounting starts in later PRs",
   "local_validation_commands": [
-    "GOWORK=off go test ./TreeDB/internal/commitlog ./TreeDB/docs ./TreeDB/db -run 'TestCommandWAL|TestLoadFormatConfigRejectsUnknownRequiredFeature'"
+    "GOWORK=off go test ./TreeDB ./TreeDB/internal/commitlog ./TreeDB/docs",
+    "GOWORK=off go test ./TreeDB/db -run 'TestFormatConfig|TestCommandWAL|TestLoadFormatConfig'",
+    "git diff --check"
   ],
   "known_gaps": [
     "production raw KV writes are not converted until PR3",
