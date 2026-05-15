@@ -183,6 +183,9 @@ func commandJournalInitialLSN(walDir, activePath string, opts CommandJournalOpti
 		}
 		maxLSN, typed, completeEnd, err := scanCommandFrameMaxLSNAndEnd(seg.path, Options{MaxSegmentSize: opts.MaxSegmentSize})
 		if err != nil {
+			if errors.Is(err, ErrCommandWALLegacyPayload) && !typed {
+				continue
+			}
 			return 0, err
 		}
 		if completeEnd < seg.size {
