@@ -1097,10 +1097,13 @@ func Open(opts Options) (*DB, error) {
 	if opts.Dir == "" {
 		return nil, errors.New("db dir required")
 	}
-	if !opts.IgnoreFormatConfig {
-		if cfg, ok, err := LoadFormatConfig(opts.Dir); err != nil {
-			return nil, err
-		} else if ok {
+	if cfg, ok, err := LoadFormatConfig(opts.Dir); err != nil {
+		return nil, err
+	} else if ok {
+		if cfg.RequiresCommandWALV1() {
+			return nil, ErrCommandWALUnsupported
+		}
+		if !opts.IgnoreFormatConfig {
 			cfg.ApplyIndexFormatToOptions(&opts)
 		}
 	}

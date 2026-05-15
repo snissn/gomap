@@ -1,0 +1,77 @@
+{
+  "tracker": "https://github.com/snissn/gomap/issues/1529",
+  "milestone": "PR1 typed commit-log frames and feature gate",
+  "branch": "codex/user-command-wal-pr1",
+  "base_commit": "6e32961e2a0a472e3be03e1caa91c15c739d9ba9",
+  "head_commit": "local-uncommitted",
+  "go_version": "go1.25.7 linux/amd64",
+  "platform": "linux/amd64",
+  "durability_mode": "format-gated command WAL bytes only; production raw KV WAL remains legacy until PR3",
+  "sync_policy": "existing commit-log segment header, CRC, compression, flush, and sync paths reused",
+  "command_support_matrix_version": "TreeDB/docs/spec/user-command-wal.md PR1 matrix update",
+  "command_kinds_touched": [
+    "RawKVBatch",
+    "CollectionInsertBatchByID placeholder",
+    "CatalogMutationPlaceholder"
+  ],
+  "matrix_status_changes": [
+    "Raw KV set/delete/batch: PR1 frame-supported, production WAL-supported after PR3",
+    "CollectionInsertBatchByID: placeholder fixture only",
+    "CatalogMutation: placeholder fixture only"
+  ],
+  "passed_tests": [
+    "TestCommandWALFormatGoldenV1EmptySegment",
+    "TestCommandWALFormatGoldenV1RawKVBatch",
+    "TestCommandWALFormatGoldenV1CollectionInsertBatchByID",
+    "TestCommandWALFormatGoldenV1CatalogMutationPlaceholder",
+    "TestCommandWALFormatRejectsUnsupportedRequiredVersion",
+    "TestCommandWALFormatRejectsUnknownRequiredKind",
+    "TestCommandWALFormatRejectsUnknownCriticalFlag",
+    "TestCommandWALFormatSkipsUnknownNonCriticalExtensionOnlyWhenAllowed",
+    "TestCommandWALFormatRoundTripExternalRefs",
+    "TestCommandWALFormatRejectsMalformedLengthBeforeAllocation",
+    "TestCommandWALFormatRejectsHeaderPayloadDigestAndTrailerMismatch",
+    "TestCommandWALFeatureGateRejectsLegacyRawPayload",
+    "TestCommandWALFeatureGateRequiresCleanLegacyWALBeforeActivation",
+    "TestCommandWALRequiredFeatureFailsClosedUntilExecutionEnabled",
+    "TestCommandWALNoCollectionSegmentFamilyCreated",
+    "TestCommandWALSingleJournalOwnerRejectsSecondMutableWriter",
+    "TestCommandWALTerminalShortHeaderIgnored",
+    "TestCommandWALDuplicateLSNFailsClosed",
+    "TestCommandWALRawKVBatchOneLSNAtomic",
+    "TestCommandWALExistingCoverageInventoryMapsLegacyWALTests",
+    "TestCommandWALLegacyRawEncodingTestsHaveTypedFrameEquivalents"
+  ],
+  "fuzz_targets": [
+    "FuzzCommandWALDecodeFrame"
+  ],
+  "race_tests": [],
+  "crash_scenarios": [
+    "terminal short header classified as ErrCommandWALTerminalTail",
+    "corrupt complete physical segment CRC fails closed",
+    "payload digest mismatch fails closed",
+    "duplicate LSN fails closed during scan"
+  ],
+  "golden_fixture_digests": {
+    "TreeDB/internal/commitlog/testdata/command_wal_v1_raw_kv_batch.hex": "39be9d61152b42a65ec7b79be562dd1ab4a8e04cfc7fa98b0ede97ec08bb8cf9",
+    "TreeDB/internal/commitlog/testdata/command_wal_v1_collection_insert_placeholder.hex": "78b322757c095555310d0fb9537757c9c8fad4bae4397273a9d369504595eb29",
+    "TreeDB/internal/commitlog/testdata/command_wal_v1_catalog_placeholder.hex": "45c24490f6f5f7186cacb020a182394d2774da80ad3a15760599ad5cc234a8ba"
+  },
+  "benchmark_commands": [],
+  "metrics_names": [],
+  "unsupported_commands": [
+    "production command_wal_v1 DB open returns ErrCommandWALUnsupported until execution/recovery lands",
+    "legacy raw commitlog payloads are rejected by command-frame reader"
+  ],
+  "cleanup_debt": "not introduced in PR1; cleanup proof starts in PR2",
+  "oldest_unapplied_lsn": null,
+  "external_ref_retained_byte_summaries": "external-ref frame encoding is round-trip tested; retention accounting starts in later PRs",
+  "local_validation_commands": [
+    "GOWORK=off go test ./TreeDB/internal/commitlog ./TreeDB/docs ./TreeDB/db -run 'TestCommandWAL|TestLoadFormatConfigRejectsUnknownRequiredFeature'"
+  ],
+  "known_gaps": [
+    "production raw KV writes are not converted until PR3",
+    "AppliedCommandLSN publish/checkpoint plumbing starts in PR2",
+    "collection and catalog placeholders are durable-byte fixtures only"
+  ]
+}

@@ -64,3 +64,33 @@ func FuzzCommitLogReader(f *testing.F) {
 		}
 	})
 }
+
+func FuzzCommandWALDecodeFrame(f *testing.F) {
+	if payload, err := EncodeRawKVBatchPayload([]RawKVOperation{
+		{Op: RawKVOpSet, Key: []byte("k1"), Value: []byte("v1")},
+		{Op: RawKVOpDelete, Key: []byte("k2")},
+	}); err == nil {
+		if frame, err := EncodeCommandFrame(CommandEnvelope{
+			LSN:           1,
+			Kind:          CommandKindRawKVBatch,
+			Scope:         CommandScopeRawKV,
+			PayloadFormat: PayloadFormatRawKVBatchV1,
+			Payload:       payload,
+		}); err == nil {
+			f.Add(frame)
+		}
+	}
+	f.Add([]byte{})
+	f.Fuzz(func(t *testing.T, data []byte) {
+		if len(data) > commitlogFuzzMaxSegment {
+			return
+		}
+		env, err := DecodeCommandFrame(data)
+		if err != nil {
+			return
+		}
+		if env.Kind == CommandKindRawKVBatch {
+			_, _ = DecodeRawKVBatchPayload(env.Payload)
+		}
+	})
+}

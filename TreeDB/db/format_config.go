@@ -12,6 +12,9 @@ import (
 const formatConfigFileName = "format.json"
 
 const formatConfigVersion = 2
+const formatConfigRequiredFeaturesVersion = 3
+
+const RequiredFeatureCommandWALV1 = "command_wal_v1"
 
 // FormatConfig captures the format-affecting knobs that maintenance tooling
 // should preserve when rewriting index/value-log state.
@@ -22,6 +25,8 @@ const formatConfigVersion = 2
 // bumped so older binaries do not accidentally apply zero-values.
 type FormatConfig struct {
 	Version int `json:"version"`
+
+	RequiredFeatures []string `json:"required_features,omitempty"`
 
 	IndexOuterLeavesInValueLog bool `json:"index_outer_leaves_in_vlog"`
 
@@ -34,6 +39,15 @@ type FormatConfig struct {
 	ValueLogCompression string `json:"vlog_compression"`
 	ValueLogBlockCodec  string `json:"vlog_block_codec"`
 	ValueLogAutoPolicy  string `json:"vlog_auto_policy"`
+}
+
+func (cfg FormatConfig) RequiresCommandWALV1() bool {
+	for _, feature := range cfg.RequiredFeatures {
+		if normalizeFormatConfigMode(feature) == RequiredFeatureCommandWALV1 {
+			return true
+		}
+	}
+	return false
 }
 
 func formatConfigPath(dir string) string {
@@ -142,8 +156,17 @@ func LoadFormatConfig(dir string) (FormatConfig, bool, error) {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return FormatConfig{}, false, fmt.Errorf("treedb: decode %s: %w", filepath.Base(path), err)
 	}
-	if cfg.Version != formatConfigVersion {
+	switch cfg.Version {
+	case formatConfigVersion:
+		if len(cfg.RequiredFeatures) != 0 {
+			return FormatConfig{}, false, fmt.Errorf("treedb: decode %s: required_features require format version %d", filepath.Base(path), formatConfigRequiredFeaturesVersion)
+		}
+	case formatConfigRequiredFeaturesVersion:
+	default:
 		return FormatConfig{}, false, fmt.Errorf("treedb: unsupported %s version %d", filepath.Base(path), cfg.Version)
+	}
+	if err := validateRequiredFormatFeatures(cfg.RequiredFeatures); err != nil {
+		return FormatConfig{}, false, fmt.Errorf("treedb: decode %s: %w", filepath.Base(path), err)
 	}
 	return cfg, true, nil
 }
@@ -156,6 +179,9 @@ func SaveFormatConfig(dir string, cfg FormatConfig) error {
 	}
 	if cfg.Version == 0 {
 		cfg.Version = formatConfigVersion
+		if len(cfg.RequiredFeatures) != 0 {
+			cfg.Version = formatConfigRequiredFeaturesVersion
+		}
 	}
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
@@ -257,5 +283,27 @@ func applyFormatConfigForMaintenance(opts *Options) error {
 		return nil
 	}
 	cfg.ApplyToOptions(opts)
+	return nil
+}
+
+func validateRequiredFormatFeatures(features []string) error {
+	seen := make(map[string]struct{}, len(features))
+	for _, raw := range features {
+		feature := normalizeFormatConfigMode(raw)
+		if feature == "" {
+			return fmt.Errorf("%w: empty feature", ErrUnsupportedRequiredFeature)
+		}
+		if _, dup := seen[feature]; dup {
+			continue
+		}
+		seen[feature] = struct{}{}
+		switch feature {
+		case RequiredFeatureCommandWALV1:
+			// Known by this binary, but DB open still fails closed until the
+			// execution/recovery path is enabled by later command-WAL PRs.
+		default:
+			return fmt.Errorf("%w: %s", ErrUnsupportedRequiredFeature, raw)
+		}
+	}
 	return nil
 }

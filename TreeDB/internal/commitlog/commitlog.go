@@ -20,9 +20,17 @@ const (
 )
 
 var (
-	ErrCorrupt        = errors.New("commitlog: corrupt record")
-	ErrRecordTooLarge = errors.New("commitlog: record too large")
-	ErrMixedBatchSeq  = errors.New("commitlog: mixed batch sequence")
+	ErrCorrupt                           = errors.New("commitlog: corrupt record")
+	ErrRecordTooLarge                    = errors.New("commitlog: record too large")
+	ErrMixedBatchSeq                     = errors.New("commitlog: mixed batch sequence")
+	ErrCommandWALTerminalTail            = errors.New("commitlog: command wal terminal incomplete tail")
+	ErrCommandWALLegacyPayload           = errors.New("commitlog: legacy raw payload in command wal")
+	ErrCommandWALUnsupportedVersion      = errors.New("commitlog: command wal unsupported version")
+	ErrCommandWALUnsupportedKind         = errors.New("commitlog: command wal unsupported kind")
+	ErrCommandWALUnsupportedCriticalFlag = errors.New("commitlog: command wal unsupported critical flag")
+	ErrCommandWALPayloadDigestMismatch   = errors.New("commitlog: command wal payload digest mismatch")
+	ErrCommandWALDuplicateLSN            = errors.New("commitlog: command wal duplicate lsn")
+	ErrJournalOwnerExists                = errors.New("commitlog: journal owner already exists")
 )
 
 type Record struct {

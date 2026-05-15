@@ -298,6 +298,20 @@ func (w *Writer) AppendBatch(records []Record) error {
 	return w.writeSegment(buf)
 }
 
+func (w *Writer) AppendCommand(env CommandEnvelope) error {
+	payload, err := EncodeCommandFrame(env)
+	if err != nil {
+		return err
+	}
+	if w.maxSegmentSize > 0 && int64(len(payload)) > w.maxSegmentSize {
+		return ErrRecordTooLarge
+	}
+	if len(payload) > int(segmentLenMask) {
+		return ErrRecordTooLarge
+	}
+	return w.writeSegment(payload)
+}
+
 func (w *Writer) writeSegment(payload []byte) error {
 	stored := payload
 	length := uint32(len(payload))

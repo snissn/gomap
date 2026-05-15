@@ -413,10 +413,13 @@ func Open(opts Options) (*DB, error) {
 	// (like value-log compression) remain controlled by opts/env unless the
 	// caller opts out via IgnoreFormatConfig.
 	var persistedFormat *db.FormatConfig
-	if !opts.IgnoreFormatConfig {
-		if cfg, ok, err := db.LoadFormatConfig(maindbDir); err != nil {
-			return nil, err
-		} else if ok {
+	if cfg, ok, err := db.LoadFormatConfig(maindbDir); err != nil {
+		return nil, err
+	} else if ok {
+		if cfg.RequiresCommandWALV1() {
+			return nil, db.ErrCommandWALUnsupported
+		}
+		if !opts.IgnoreFormatConfig {
 			cfg.ApplyIndexFormatToOptions(&opts)
 			persistedFormat = &cfg
 		}

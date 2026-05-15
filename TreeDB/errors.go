@@ -17,6 +17,9 @@ var (
 	// ErrRecoveryRequired indicates the DB must be opened read-write for recovery
 	// before the requested read-only or offline-maintenance operation can run.
 	ErrRecoveryRequired = db.ErrRecoveryRequired
+	// ErrCommandWALUnsupported indicates a directory advertises command_wal_v1
+	// before this binary has enabled command WAL execution/recovery.
+	ErrCommandWALUnsupported = db.ErrCommandWALUnsupported
 
 	// ErrKeyNotFound indicates the key does not exist.
 	ErrKeyNotFound = tree.ErrKeyNotFound
