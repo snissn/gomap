@@ -714,31 +714,44 @@ func ScanCommandFrames(path string, opts Options) ([]CommandEnvelope, error) {
 }
 
 func scanCommandFrameMaxLSN(path string, opts Options) (maxLSN uint64, typed bool, err error) {
+	maxLSN, typed, _, err = scanCommandFrameMaxLSNAndEnd(path, opts)
+	return maxLSN, typed, err
+}
+
+func scanCommandFrameMaxLSNAndEnd(path string, opts Options) (maxLSN uint64, typed bool, completeEnd int64, err error) {
 	r, err := NewReaderWithOptions(path, opts)
 	if err != nil {
-		return 0, false, err
+		return 0, false, 0, err
 	}
 	defer r.Close()
 
 	var lastLSN uint64
 	for {
+		start, seekErr := r.f.Seek(0, io.SeekCurrent)
+		if seekErr != nil {
+			return 0, typed, completeEnd, seekErr
+		}
 		env, err := r.ReadCommandFrame()
 		if err != nil {
 			if errorsIsEOFOrTail(err) {
-				return maxLSN, typed, nil
+				return maxLSN, typed, start, nil
 			}
 			if err == ErrCommandWALLegacyPayload && !typed {
-				return 0, false, nil
+				return 0, false, completeEnd, err
 			}
-			return 0, typed, err
+			return 0, typed, completeEnd, err
 		}
 		if lastLSN != 0 && env.LSN <= lastLSN {
-			return 0, true, ErrCommandWALDuplicateLSN
+			return 0, true, completeEnd, ErrCommandWALDuplicateLSN
 		}
 		lastLSN = env.LSN
 		typed = true
 		if env.LSN > maxLSN {
 			maxLSN = env.LSN
+		}
+		completeEnd, err = r.f.Seek(0, io.SeekCurrent)
+		if err != nil {
+			return 0, typed, completeEnd, err
 		}
 	}
 }

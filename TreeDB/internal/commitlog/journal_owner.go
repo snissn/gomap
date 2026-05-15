@@ -173,17 +173,41 @@ func commandJournalInitialLSN(path string, opts CommandJournalOptions) (uint64, 
 	if info.Size() == 0 {
 		return initialLSN, nil
 	}
-	maxLSN, typed, err := scanCommandFrameMaxLSN(path, Options{MaxSegmentSize: opts.MaxSegmentSize})
+	maxLSN, typed, completeEnd, err := scanCommandFrameMaxLSNAndEnd(path, Options{MaxSegmentSize: opts.MaxSegmentSize})
 	if err != nil {
 		return 0, err
 	}
+	if completeEnd < info.Size() {
+		if err := truncateCommandJournalTail(path, completeEnd); err != nil {
+			return 0, err
+		}
+	}
 	if !typed {
-		return 0, ErrCommandWALLegacyPayload
+		return initialLSN, nil
 	}
 	if maxLSN > initialLSN {
 		initialLSN = maxLSN
 	}
 	return initialLSN, nil
+}
+
+func truncateCommandJournalTail(path string, size int64) error {
+	f, err := os.OpenFile(path, os.O_WRONLY, 0)
+	if err != nil {
+		return err
+	}
+	if err := f.Truncate(size); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	return syncDirFn(path)
 }
 
 // AppendCommand validates a complete command frame, assigns the next journal

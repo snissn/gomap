@@ -17,6 +17,7 @@
   "passed_tests": [
     "TestCommandJournalAllocatesContiguousLSNs",
     "TestCommandJournalSeedsLSNFromExistingFrames",
+    "TestCommandJournalTruncatesTerminalTailBeforeAppend",
     "TestCommandJournalConcurrentAppendsSerializeFrameOrder",
     "TestCommandJournalRejectsIndependentMutableOwner",
     "TestJournalOwnerRollbackMaxLSNClearsExhausted",

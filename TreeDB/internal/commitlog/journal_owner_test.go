@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -99,6 +100,63 @@ func TestCommandJournalSeedsLSNFromExistingFrames(t *testing.T) {
 	}
 	if lsn != 2 {
 		t.Fatalf("reopened LSN=%d, want 2", lsn)
+	}
+}
+
+func TestCommandJournalTruncatesTerminalTailBeforeAppend(t *testing.T) {
+	dir := t.TempDir()
+	j, err := OpenCommandJournal(dir, CommandJournalOptions{})
+	if err != nil {
+		t.Fatalf("OpenCommandJournal first: %v", err)
+	}
+	if _, err := j.AppendCommand(CommandEnvelope{
+		Kind:          CommandKindRawKVBatch,
+		Scope:         CommandScopeRawKV,
+		PayloadFormat: PayloadFormatRawKVBatchV1,
+	}); err != nil {
+		t.Fatalf("AppendCommand first: %v", err)
+	}
+	if err := j.Close(); err != nil {
+		t.Fatalf("Close first: %v", err)
+	}
+	path := filepath.Join(dir, CommandSegmentName(0, 1))
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
+	if err != nil {
+		t.Fatalf("OpenFile append tail: %v", err)
+	}
+	if _, err := f.Write([]byte{0x01, 0x02, 0x03}); err != nil {
+		_ = f.Close()
+		t.Fatalf("Write torn tail: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("Close torn tail: %v", err)
+	}
+
+	reopen, err := OpenCommandJournal(dir, CommandJournalOptions{})
+	if err != nil {
+		t.Fatalf("OpenCommandJournal reopen: %v", err)
+	}
+	defer reopen.Close()
+	lsn, err := reopen.AppendCommand(CommandEnvelope{
+		Kind:          CommandKindRawKVBatch,
+		Scope:         CommandScopeRawKV,
+		PayloadFormat: PayloadFormatRawKVBatchV1,
+	})
+	if err != nil {
+		t.Fatalf("AppendCommand after terminal tail: %v", err)
+	}
+	if lsn != 2 {
+		t.Fatalf("LSN after terminal tail=%d, want 2", lsn)
+	}
+	if err := reopen.Flush(); err != nil {
+		t.Fatalf("Flush reopen: %v", err)
+	}
+	frames, err := ScanCommandFrames(path, Options{})
+	if err != nil {
+		t.Fatalf("ScanCommandFrames: %v", err)
+	}
+	if len(frames) != 2 {
+		t.Fatalf("len(frames)=%d, want 2", len(frames))
 	}
 }
 
