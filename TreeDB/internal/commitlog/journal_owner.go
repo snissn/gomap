@@ -154,8 +154,12 @@ func (j *CommandJournal) AppendCommand(env CommandEnvelope) (uint64, error) {
 	if err := validateCommandEnvelopeForEncode(probe); err != nil {
 		return 0, err
 	}
-	if _, err := commandFrameEncodedSize(probe); err != nil {
+	size, err := commandFrameEncodedSize(probe)
+	if err != nil {
 		return 0, err
+	}
+	if j.writer.maxSegmentSize > 0 && int64(size) > j.writer.maxSegmentSize {
+		return 0, ErrRecordTooLarge
 	}
 	lsn, err := j.owner.ReserveLSN()
 	if err != nil {

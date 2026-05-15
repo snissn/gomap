@@ -1,6 +1,7 @@
 package commitlog
 
 import (
+	"bytes"
 	"errors"
 	"path/filepath"
 	"testing"
@@ -154,5 +155,55 @@ func TestCommandJournalValidationFailureDoesNotConsumeLSN(t *testing.T) {
 	}
 	if got != 1 {
 		t.Fatalf("LSN after validation failure=%d, want 1", got)
+	}
+}
+
+func TestCommandJournalOversizedFrameDoesNotConsumeLSN(t *testing.T) {
+	emptyPayload, err := EncodeRawKVBatchPayload(nil)
+	if err != nil {
+		t.Fatalf("EncodeRawKVBatchPayload empty: %v", err)
+	}
+	emptyFrameSize, err := commandFrameEncodedSize(CommandEnvelope{
+		LSN:           1,
+		Kind:          CommandKindRawKVBatch,
+		Scope:         CommandScopeRawKV,
+		PayloadFormat: PayloadFormatRawKVBatchV1,
+		Payload:       emptyPayload,
+	})
+	if err != nil {
+		t.Fatalf("commandFrameEncodedSize empty: %v", err)
+	}
+	oversizedPayload, err := EncodeRawKVBatchPayload([]RawKVOperation{
+		{Op: RawKVOpSet, Key: []byte("k"), Value: bytes.Repeat([]byte("v"), 32)},
+	})
+	if err != nil {
+		t.Fatalf("EncodeRawKVBatchPayload oversized: %v", err)
+	}
+
+	j, err := OpenCommandJournal(t.TempDir(), CommandJournalOptions{MaxSegmentSize: int64(emptyFrameSize)})
+	if err != nil {
+		t.Fatalf("OpenCommandJournal: %v", err)
+	}
+	defer j.Close()
+
+	_, err = j.AppendCommand(CommandEnvelope{
+		Kind:          CommandKindRawKVBatch,
+		Scope:         CommandScopeRawKV,
+		PayloadFormat: PayloadFormatRawKVBatchV1,
+		Payload:       oversizedPayload,
+	})
+	if !errors.Is(err, ErrRecordTooLarge) {
+		t.Fatalf("oversized AppendCommand error=%v, want ErrRecordTooLarge", err)
+	}
+	got, err := j.AppendCommand(CommandEnvelope{
+		Kind:          CommandKindRawKVBatch,
+		Scope:         CommandScopeRawKV,
+		PayloadFormat: PayloadFormatRawKVBatchV1,
+	})
+	if err != nil {
+		t.Fatalf("valid AppendCommand after oversized frame: %v", err)
+	}
+	if got != 1 {
+		t.Fatalf("LSN after oversized frame=%d, want 1", got)
 	}
 }
