@@ -170,6 +170,33 @@ func TestRunJSONBenchPartQ4EarlyStopUsesTimePrefix(t *testing.T) {
 	}
 }
 
+func TestTouchedBitsetResetClearsOnlyTouchedWords(t *testing.T) {
+	var bitset touchedBitset
+	words := bitset.reset(4)
+	if bitsetTestAndSetTouched(words, &bitset.touched, 3) {
+		t.Fatal("first code was already set")
+	}
+	if bitsetTestAndSetTouched(words, &bitset.touched, 3) == false {
+		t.Fatal("second code was not reported as already set")
+	}
+	bitsetTestAndSetTouched(words, &bitset.touched, 135)
+	if len(bitset.touched) != 2 {
+		t.Fatalf("touched words=%v want 2 unique words", bitset.touched)
+	}
+	words = bitset.reset(4)
+	for i, word := range words {
+		if word != 0 {
+			t.Fatalf("word %d=%d after reset, want 0", i, word)
+		}
+	}
+	if len(bitset.touched) != 0 {
+		t.Fatalf("touched after reset=%v want empty", bitset.touched)
+	}
+	if bitsetTestAndSetTouched(words, &bitset.touched, 3) {
+		t.Fatal("code remained set after reset")
+	}
+}
+
 func TestLoadJSONBenchColumnsLocal1MIfPresent(t *testing.T) {
 	path := os.Getenv("JSONBENCH_DATA")
 	if path == "" {
