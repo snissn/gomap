@@ -154,6 +154,10 @@ func (db *DB) appendRawKVCommandWALIntent(intent *commandWALBatchIntent, sync bo
 	if err != nil {
 		return 0, err
 	}
+	// testFailCommandWALFlush fires AFTER AppendCommand, simulating a successful
+	// write followed by a flush/sync failure. The frame is durable; on the next
+	// reopen it will be replayed (fail-forward). This is the intended test
+	// scenario: the caller observes an error but the mutation is not lost.
 	if db.testFailCommandWALFlush.Load() {
 		err = errTestCommandWALFlushFailpoint
 	} else if sync {
@@ -174,9 +178,13 @@ func commandWALFinalizeOptions(intent *commandWALBatchIntent) finalizeCommitOpti
 	if intent == nil || intent.lsn == 0 {
 		return finalizeCommitOptions{}
 	}
-	appliedRanges := intent.coveredRange[:]
+	// Return a copy rather than a slice aliasing the array embedded in intent so
+	// that downstream consumers cannot mutate coveredRange[0] through the slice.
+	var appliedRanges []CommandWALLSNRange
 	if intent.coveredRange[0].First == 0 {
 		appliedRanges = []CommandWALLSNRange{{First: intent.lsn, Last: intent.lsn}}
+	} else {
+		appliedRanges = []CommandWALLSNRange{intent.coveredRange[0]}
 	}
 	return finalizeCommitOptions{
 		commandWALPublish: true,
@@ -192,11 +200,15 @@ func applyRawKVCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map
 	if env.Kind != commitlog.CommandKindRawKVBatch || env.Scope != commitlog.CommandScopeRawKV || env.PayloadFormat != commitlog.PayloadFormatRawKVBatchV1 {
 		return commitlog.ErrCommandWALUnsupportedKind
 	}
-	b := db.NewBatch()
+	// db.NewBatch always returns *Batch in this package. Assert early so the rest
+	// of the function can use *Batch methods (Set, SetPointer, writeWithCommandWALIntent)
+	// directly without an interface dance.
+	rawBatch, ok := db.NewBatch().(*Batch)
+	if !ok {
+		return fmt.Errorf("treedb: internal error: unexpected batch type")
+	}
+	b := rawBatch
 	defer func() { _ = b.Close() }()
-	ptrBatch, hasPtrBatch := b.(interface {
-		SetPointer(key []byte, ptr page.ValuePtr) error
-	})
 	ops, err := commitlog.DecodeRawKVBatchPayload(env.Payload)
 	if err != nil {
 		return err
@@ -207,10 +219,10 @@ func applyRawKVCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map
 		case commitlog.RawKVOpSet:
 			if err := b.Set(entry.Key, entry.Value); err != nil {
 				if !errors.Is(err, batchpkg.ErrValueTooLarge) {
+					// Non-ErrValueTooLarge errors abort frame replay entirely.
+					// The caller will propagate the error; recovery will retry
+					// the full frame on next reopen (at-least-once semantics).
 					return err
-				}
-				if !hasPtrBatch {
-					return fmt.Errorf("treedb: command wal raw kv pointer batch unavailable")
 				}
 				if inlineAppender == nil {
 					return fmt.Errorf("treedb: command wal missing replay value-log appender")
@@ -219,7 +231,7 @@ func applyRawKVCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map
 				if err != nil {
 					return err
 				}
-				if err := ptrBatch.SetPointer(entry.Key, ptr); err != nil {
+				if err := b.SetPointer(entry.Key, ptr); err != nil {
 					return err
 				}
 			}
@@ -228,14 +240,11 @@ func applyRawKVCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map
 				return err
 			}
 		case commitlog.RawKVOpSetRID:
-			if !hasPtrBatch {
-				return fmt.Errorf("treedb: command wal raw kv pointer batch unavailable")
-			}
 			ptr, ok := ridMap[entry.RID]
 			if !ok {
 				return fmt.Errorf("treedb: command wal missing value-log rid %d", entry.RID)
 			}
-			if err := ptrBatch.SetPointer(entry.Key, ptr); err != nil {
+			if err := b.SetPointer(entry.Key, ptr); err != nil {
 				return err
 			}
 		default:
@@ -254,11 +263,8 @@ func applyRawKVCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map
 			return err
 		}
 	}
-	if raw, ok := b.(*Batch); ok {
-		return raw.writeWithCommandWALIntent(true, &commandWALBatchIntent{
-			lsn:          env.LSN,
-			coveredRange: [1]CommandWALLSNRange{{First: env.LSN, Last: env.LSN}},
-		})
-	}
-	return errors.New("treedb: command wal recovery batch type mismatch")
+	return b.writeWithCommandWALIntent(true, &commandWALBatchIntent{
+		lsn:          env.LSN,
+		coveredRange: [1]CommandWALLSNRange{{First: env.LSN, Last: env.LSN}},
+	})
 }

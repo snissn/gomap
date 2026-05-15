@@ -311,14 +311,17 @@ func saveOpenFormatConfig(opts Options) error {
 	if opts.CommandWAL && opts.ReadOnly {
 		return nil
 	}
-	cfg, requiresCommandWAL, err := formatConfigFromOptionsPreservingRequiredFeatures(opts)
+	cfg, _, err := formatConfigFromOptionsPreservingRequiredFeatures(opts)
 	if err != nil {
 		return err
 	}
 	if opts.CommandWAL {
-		if requiresCommandWAL {
-			return writeFormatConfig(opts.Dir, cfg)
-		}
+		// By the time saveOpenFormatConfig is called at the end of openWithLock,
+		// the command journal is already open. Skip ValidateCommandWALActivationClean
+		// (which asserts the WAL directory is clean) because it only applies to
+		// fresh activations; those are handled by the needsCommandWALFormat path
+		// in openWithLock before the journal is opened.
+		return writeFormatConfig(opts.Dir, cfg)
 	}
 	return SaveFormatConfig(opts.Dir, cfg)
 }

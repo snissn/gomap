@@ -17,9 +17,15 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
-// testCommandWALRecoveryFailAfterLSNByDir lets crash-recovery tests inject a
-// one-shot per-DB recovery failure without exposing unrelated DB opens to a
-// process-global failpoint.
+// testCommandWALRecoveryFailAfterLSNByDir is a process-global sync.Map that acts
+// as a transfer mechanism: tests store a per-directory LSN here before calling
+// Open, and openWithLock immediately moves it to the per-DB atomic field
+// (db.testCommandWALRecoveryFailAfterLSN) via takeTestCommandWALRecoveryFailAfterLSN.
+// The map entry is consumed (LoadAndDelete) on the first Open of that directory,
+// so concurrent opens of different directories are isolated by construction.
+// Tests that set a failpoint must register a t.Cleanup that calls
+// setTestCommandWALRecoveryFailAfterLSN(dir, 0) to remove the entry if the
+// Open fails before the transfer.
 var testCommandWALRecoveryFailAfterLSNByDir sync.Map
 
 func testCommandWALRecoveryFailpointKey(dir string) string {
