@@ -121,6 +121,36 @@ func TestExecuteConsumesDatasetDir(t *testing.T) {
 	}
 }
 
+func TestExecuteDatasetDirClampsValidateQueries(t *testing.T) {
+	datasetDir := writeDemoDataset(t, 64, 8, 2, 3)
+	res, err := execute(context.Background(), config{
+		dir:                   t.TempDir(),
+		datasetDir:            datasetDir,
+		keepDir:               true,
+		docs:                  64,
+		dimensions:            8,
+		queries:               2,
+		searchConcurrency:     []int{2},
+		validateQueries:       64,
+		validateDocs:          1,
+		topK:                  3,
+		batchSize:             16,
+		m:                     4,
+		efConstruction:        32,
+		efSearch:              32,
+		valuePointerThreshold: defaultValuePointerThreshold,
+		leafGenerationTarget:  defaultLeafGenerationTarget,
+		minRecall:             0.5,
+		disableExactFallback:  true,
+	})
+	if err != nil {
+		t.Fatalf("execute with dataset: %v", err)
+	}
+	if res.ValidateQueries != 2 || res.Validation.QueriesChecked != 2 {
+		t.Fatalf("validate queries result=%d validation=%+v, want clamped to 2", res.ValidateQueries, res.Validation)
+	}
+}
+
 func TestRunJSONOutput(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer

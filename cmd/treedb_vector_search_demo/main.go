@@ -460,7 +460,7 @@ func execute(ctx context.Context, cfg config) (result, error) {
 	if err := applySearchBenchmarkDefaults(&cfg); err != nil {
 		return result{}, err
 	}
-	work, err := loadWorkload(cfg)
+	work, err := loadWorkload(&cfg)
 	if err != nil {
 		return result{}, err
 	}
@@ -760,7 +760,7 @@ func executeMatrix(ctx context.Context, cfg config) (matrixResult, error) {
 	return out, nil
 }
 
-func loadWorkload(cfg config) (workload, error) {
+func loadWorkload(cfg *config) (workload, error) {
 	if cfg.datasetDir == "" {
 		return workload{}, nil
 	}
@@ -779,6 +779,9 @@ func loadWorkload(cfg config) (workload, error) {
 	}
 	if cfg.queries > m.Queries {
 		return workload{}, fmt.Errorf("dataset queries=%d is less than -queries=%d", m.Queries, cfg.queries)
+	}
+	if cfg.validateQueries > m.Queries {
+		cfg.validateQueries = m.Queries
 	}
 	if m.Metric != "" && m.Metric != "cosine" {
 		return workload{}, fmt.Errorf("dataset metric=%q, want cosine", m.Metric)
