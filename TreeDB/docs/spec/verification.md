@@ -250,10 +250,11 @@ PR 1: typed commit-log frames and feature gate:
 - `TestCommandWALFeatureGateRequiresCleanLegacyWALBeforeActivation`;
 - `TestCommandWALRequiredFeatureFailsClosedUntilExecutionEnabled`;
 - `TestCommandWALNoCollectionSegmentFamilyCreated`;
-- `TestCommandWALSingleJournalOwnerRejectsSecondMutableWriter`;
 - `TestCommandWALTerminalShortHeaderIgnored`;
 - `TestCommandWALDuplicateLSNFailsClosed`;
+- `TestCommandWALDuplicateLSNAcrossSegmentsFailsClosed`;
 - `TestCommandWALRawKVBatchOneLSNAtomic`;
+- `TestCommandWALRawKVBatchPreservesEmptySetValue`;
 - `TestCommandWALExistingCoverageInventoryMapsLegacyWALTests`;
 - `TestCommandWALLegacyRawEncodingTestsHaveTypedFrameEquivalents`.
 

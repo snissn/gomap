@@ -52,6 +52,11 @@ func TestCommandWALExistingCoverageInventoryMapsLegacyWALTests(t *testing.T) {
 		"TestCommitLogAppendBatchRejectsMixedSequence",
 		"TestCommitLogTruncatedPayload",
 		"FuzzCommitLogReader",
+		"TestCrashRecovery_WALReplayIsCoherent",
+		"TestRecovery_RIDJoinReplaysValueLog",
+		"TestRecovery_PartialCommitBatchIgnored",
+		"TestReadOnlyDoesNotReplayOrRemoveCommitLog",
+		"TestCachingDB_Checkpoint_TrimsWAL",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("migration inventory missing %s", want)
@@ -65,18 +70,42 @@ func TestCommandWALLegacyRawEncodingTestsHaveTypedFrameEquivalents(t *testing.T)
 	if err != nil {
 		t.Fatalf("read test migration inventory: %v", err)
 	}
-	text := string(content)
+	rows := migrationInventoryRows(string(content))
 	pairs := map[string]string{
 		"TestCommitLogWriteReadBatch":                  "TestCommandWALFormatGoldenV1RawKVBatch",
 		"TestCommitLogCorruptCRC":                      "TestCommandWALFormatRejectsHeaderPayloadDigestAndTrailerMismatch",
 		"TestCommitLogAppendBatchRejectsMixedSequence": "TestCommandWALDuplicateLSNFailsClosed",
 		"TestCommitLogTruncatedPayload":                "TestCommandWALTerminalShortHeaderIgnored",
 		"FuzzCommitLogReader":                          "FuzzCommandWALDecodeFrame",
+		"TestCrashRecovery_WALReplayIsCoherent":        "TestCommandWALRawSetDeleteBatchReplaysThroughNormalExecutor",
+		"TestRecovery_RIDJoinReplaysValueLog":          "TestCommandWALRIDFencePreservedForRawKVBatch",
+		"TestRecovery_PartialCommitBatchIgnored":       "TestCommandWALOpenAllowsActivePartialFirstFrameTail",
+		"TestReadOnlyDoesNotReplayOrRemoveCommitLog":   "TestCommandWALReadOnlyOpenWithUnappliedFrameFailsRecoveryRequired",
+		"TestCachingDB_Checkpoint_TrimsWAL":            "TestCommandWALCheckpointCleansOnlyCoveredSegments",
 	}
 	for legacy, typed := range pairs {
-		row := legacy + " |"
-		if !strings.Contains(text, row) || !strings.Contains(text, typed) {
+		row, ok := rows[legacy]
+		if !ok || !strings.Contains(row, typed) {
 			t.Fatalf("migration inventory missing mapping %s -> %s", legacy, typed)
 		}
 	}
+}
+
+func migrationInventoryRows(text string) map[string]string {
+	rows := make(map[string]string)
+	for _, line := range strings.Split(text, "\n") {
+		if !strings.HasPrefix(line, "| ") || strings.HasPrefix(line, "|---") {
+			continue
+		}
+		cells := strings.Split(line, "|")
+		if len(cells) < 3 {
+			continue
+		}
+		name := strings.TrimSpace(cells[1])
+		if name == "" || name == "Existing test" {
+			continue
+		}
+		rows[name] = line
+	}
+	return rows
 }

@@ -4,9 +4,9 @@ pkg: github.com/snissn/gomap/TreeDB/db
 cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
                                │ artifacts/command-wal/pr2/publish-microbench.txt │
                                │                      sec/op                      │
-CommandWALPublishAppliedLSN-12                                        913.2n ± 9%
-FinalizeCommitSameRoots-12                                            867.4n ± 8%
-geomean                                                               890.0n
+CommandWALPublishAppliedLSN-12                                        899.7n ± 1%
+FinalizeCommitSameRoots-12                                            861.6n ± 1%
+geomean                                                               880.4n
 
                                │ artifacts/command-wal/pr2/publish-microbench.txt │
                                │                       B/op                       │
