@@ -113,7 +113,7 @@ vi/{collectionID}/{indexID}/epoch/{epoch}/node/{nodeID}
 vi/{collectionID}/{indexID}/epoch/{epoch}/edge/{nodeID}/{layer}
 vi/{collectionID}/{indexID}/epoch/{epoch}/doc/{documentID}
 vi/{collectionID}/{indexID}/epoch/{epoch}/tomb/{nodeID}
-vi/{collectionID}/{indexID}/delta/{collectionSeq}
+vi/{collectionID}/{indexID}/delta/{collectionSeq}/{deltaOrdinal}
 vi/{collectionID}/{indexID}/rebuild/{runID}/...
 ```
 
@@ -129,11 +129,11 @@ new epoch is the atomic visibility boundary; old epochs are retained until activ
 readers drain and then reclaimed.
 
 Numeric path segments use fixed-width big-endian bytes in native key encoding:
-`epoch` and `nodeID` are `u64`, `layer` is `u16`, and `collectionSeq` is `u64`.
-This preserves ordered iteration for prefix scans such as all edge records for a
-node or all deltas after an applied collection sequence. Human-readable paths in
-this document are illustrative; the native codec MUST use the canonical byte
-ordering.
+`epoch` and `nodeID` are `u64`, `layer` is `u16`, `collectionSeq` is `u64`, and
+`deltaOrdinal` is `u32`. This preserves ordered iteration for prefix scans such
+as all edge records for a node or all deltas after an applied collection
+sequence. Human-readable paths in this document are illustrative; the native
+codec MUST use the canonical byte ordering.
 
 ## 6. Record Model
 
@@ -251,6 +251,7 @@ index can be served, must catch up, or must rebuild.
 
 ```text
 collection_seq: u64
+delta_ordinal: u32
 document_id: bytes
 op: enum { insert, update, delete }
 new_node: node payload optional
@@ -259,13 +260,17 @@ vector_present: bool
 checksum: optional
 ```
 
-Buffered mode appends one delta record per acknowledged collection mutation that
-has not yet been applied to the durable graph epoch. Delta records are ordered by
-`collection_seq` and are replayed strictly in that order during catch-up or crash
+Buffered mode appends one delta record per document-level vector mutation that
+has not yet been applied to the durable graph epoch. Batched collection writes
+can share one `collection_seq`, so each emitted delta in that mutation boundary
+MUST get a deterministic zero-based `delta_ordinal` to make the durable key
+unique and replayable. Delta records are ordered by `(collection_seq,
+delta_ordinal)` and are replayed strictly in that order during catch-up or crash
 recovery. Once `applied_collection_seq` in the state record reaches or exceeds a
-delta's sequence and the publishing epoch is durable, that delta is eligible for
-cleanup. If a delta is missing, corrupt, or not replayable, recovery marks the
-index `needs_rebuild` instead of serving graph search as current.
+delta's sequence and the publishing epoch is durable, all deltas for that
+sequence are eligible for cleanup. If a delta is missing, corrupt, or not
+replayable, recovery marks the index `needs_rebuild` instead of serving graph
+search as current.
 
 ## 7. Runtime Representation
 
