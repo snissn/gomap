@@ -20,9 +20,13 @@ func (commandJournalFailWriter) Write([]byte) (int, error) {
 }
 
 func (j *CommandJournal) installBufferedWriterForTest(w io.Writer, size int) func() {
+	j.mu.Lock()
+	defer j.mu.Unlock()
 	old := j.writer.bw
 	j.writer.bw = bufio.NewWriterSize(w, size)
 	return func() {
+		j.mu.Lock()
+		defer j.mu.Unlock()
 		j.writer.bw = old
 	}
 }

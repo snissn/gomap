@@ -1412,19 +1412,19 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	gen.zipper.SetMaintenanceOpsPerCoalesce(opts.MaintenanceOpsPerCoalesce)
 
 	if err := db.recover(); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, err
 	}
 
 	if err := requireNoUnappliedCommandWAL(opts.Dir, db.meta.AppliedCommandLSN, opts.WALMaxSegmentBytes); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, err
 	}
 
 	if opts.Durability != DurabilityWALOffRelaxed {
 		segments, err := listRecoverySegments(opts.Dir)
 		if err != nil {
-			db.Close()
+			_ = db.Close()
 			return nil, err
 		}
 		if err := replayWALIntoBackend(db, segments, opts.WALMaxSegmentBytes, opts.ValueLog.DictLookup); err != nil {

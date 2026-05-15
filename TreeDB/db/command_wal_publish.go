@@ -85,13 +85,24 @@ func validateContiguousAppliedCommandLSN(current, next uint64, covered []Command
 	if len(covered) == 0 {
 		return fmt.Errorf("%w: missing coverage for [%d,%d]", ErrCommandWALAppliedLSNNonContig, current+1, next)
 	}
-	ranges := append([]CommandWALLSNRange(nil), covered...)
-	sort.Slice(ranges, func(i, j int) bool {
-		if ranges[i].First != ranges[j].First {
-			return ranges[i].First < ranges[j].First
+	ranges := covered
+	sorted := true
+	for i := 1; i < len(ranges); i++ {
+		prev, cur := ranges[i-1], ranges[i]
+		if prev.First > cur.First || (prev.First == cur.First && prev.Last > cur.Last) {
+			sorted = false
+			break
 		}
-		return ranges[i].Last < ranges[j].Last
-	})
+	}
+	if !sorted {
+		ranges = append([]CommandWALLSNRange(nil), covered...)
+		sort.Slice(ranges, func(i, j int) bool {
+			if ranges[i].First != ranges[j].First {
+				return ranges[i].First < ranges[j].First
+			}
+			return ranges[i].Last < ranges[j].Last
+		})
+	}
 	cursor := current + 1
 	for _, r := range ranges {
 		if r.First == 0 || r.Last < r.First {
@@ -115,11 +126,12 @@ func validateContiguousAppliedCommandLSN(current, next uint64, covered []Command
 }
 
 type commandWALSegmentCleanupDecision struct {
-	Path    string `json:"path"`
-	MaxLSN  uint64 `json:"max_lsn,omitempty"`
-	Active  bool   `json:"active,omitempty"`
-	Covered bool   `json:"covered,omitempty"`
-	Removed bool   `json:"removed,omitempty"`
+	Path    string
+	MaxLSN  uint64
+	Active  bool
+	Covered bool
+	Removed bool
+	Error   string
 }
 
 type commandWALSegmentScanResult struct {
@@ -337,7 +349,12 @@ func cleanupCommandWALSegmentsCoveredByAppliedLSN(dir string, appliedLSN uint64,
 		active := seg.seq == activeByLane[seg.lane]
 		scan, err := scanCommandWALSegment(seg.path, maxSegmentBytes, active)
 		if err != nil {
-			return decisions, err
+			decisions = append(decisions, commandWALSegmentCleanupDecision{
+				Path:   seg.path,
+				Active: active,
+				Error:  err.Error(),
+			})
+			continue
 		}
 		if !scan.typed {
 			continue
