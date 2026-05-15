@@ -1416,6 +1416,10 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		return nil, err
 	}
 
+	// PR2 has only the applied-LSN publish guard. Until PR3 installs command
+	// dispatch/replay, write-open must fail if any complete command frame is
+	// newer than the published root; frames already covered by AppliedCommandLSN
+	// are filtered before legacy replay below.
 	if err := requireNoUnappliedCommandWAL(opts.Dir, db.meta.AppliedCommandLSN, opts.WALMaxSegmentBytes); err != nil {
 		_ = db.Close()
 		return nil, err

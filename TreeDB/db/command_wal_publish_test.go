@@ -319,6 +319,35 @@ func TestCommandWALWriteOpenSkipsCoveredFramesBeforeLegacyReplay(t *testing.T) {
 	}
 }
 
+func TestCommandWALLegacyReplayFilterPreservesNonCommandOrderAroundCoveredFrame(t *testing.T) {
+	dir := t.TempDir()
+	writeCommandWALFrame(t, dir, 1, 1)
+	coveredPath := filepath.Join(WALDirPath(dir), commitlog.CommandSegmentName(0, 1))
+	info, err := os.Stat(coveredPath)
+	if err != nil {
+		t.Fatalf("Stat covered command segment: %v", err)
+	}
+
+	segments := []logSegment{
+		{lane: 0, seq: 0, path: "/tmp/value-before.log", size: 123, valueLog: true},
+		{lane: 0, seq: 1, path: coveredPath, size: info.Size()},
+		{lane: 0, seq: 2, path: "/tmp/value-after.log", size: 456, valueLog: true},
+		{lane: 0, seq: 3, path: "/tmp/commit-000003.log", size: 789},
+	}
+	filtered, err := filterCommandWALSegmentsForLegacyReplay(segments, 1, 0)
+	if err != nil {
+		t.Fatalf("filterCommandWALSegmentsForLegacyReplay: %v", err)
+	}
+	got := make([]string, 0, len(filtered))
+	for _, seg := range filtered {
+		got = append(got, filepath.Base(seg.path))
+	}
+	want := []string{"value-before.log", "value-after.log", "commit-000003.log"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("filtered order=%v, want %v", got, want)
+	}
+}
+
 func TestCommandWALWriteOpenRejectsUnappliedFramesUntilDispatcher(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(Options{Dir: dir})
@@ -605,6 +634,19 @@ func TestCommandWALCheckpointCleanupRetainsActiveCoveredSegment(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(WALDirPath(dir), "commit-l0-000999.log")); err != nil {
 		t.Fatalf("legacy raw WAL segment stat=%v, want retained", err)
+	}
+}
+
+func TestCommandWALCheckpointCleanupReturnsScanErrors(t *testing.T) {
+	dir := t.TempDir()
+	writeCommandWALSegmentFrames(t, dir, 1, 2, 1)
+
+	decisions, err := cleanupCommandWALSegmentsCoveredByAppliedLSN(dir, 2, 0)
+	if !errors.Is(err, commitlog.ErrCommandWALDuplicateLSN) {
+		t.Fatalf("cleanupCommandWALSegmentsCoveredByAppliedLSN error=%v, want duplicate LSN", err)
+	}
+	if len(decisions) != 1 || decisions[0].Error == "" {
+		t.Fatalf("cleanup decisions=%+v, want recorded scan error", decisions)
 	}
 }
 

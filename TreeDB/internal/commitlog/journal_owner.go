@@ -51,6 +51,11 @@ func AcquireJournalOwnerWithOptions(dir string, opts JournalOwnerOptions) (*Jour
 	return &JournalOwner{lock: lock, nextLSN: opts.InitialLSN + 1}, nil
 }
 
+// ReserveLSN reserves one LSN from this owner.
+//
+// Do not mix direct reservations with a CommandJournal using the same owner:
+// CommandJournal relies on holding its mutex across reserve+append+rollback so
+// failed appends can safely roll back only the tail reservation.
 func (o *JournalOwner) ReserveLSN() (uint64, error) {
 	first, _, err := o.ReserveLSNRange(1)
 	return first, err
@@ -80,6 +85,9 @@ func (o *JournalOwner) rollbackReservedLSN(lsn uint64) error {
 	return nil
 }
 
+// ReserveLSNRange reserves a contiguous LSN range from this owner. As with
+// ReserveLSN, callers must not interleave direct reservations with a
+// CommandJournal that depends on tail-only rollback for failed appends.
 func (o *JournalOwner) ReserveLSNRange(count uint64) (first uint64, last uint64, err error) {
 	if o == nil || o.lock == nil {
 		return 0, 0, errors.New("commitlog: journal owner is closed")
@@ -120,6 +128,8 @@ type CommandJournalOptions struct {
 	// SegmentSeq selects the segment sequence to append to. Zero means append to
 	// the latest existing segment for Lane, or segment 1 when the lane is empty.
 	// Callers that want rotation must choose the next sequence explicitly.
+	// Explicit sequences behind the current lane tail are rejected because they
+	// would place newer LSNs before older segments in segment-ordered replay.
 	SegmentSeq uint64
 	// MaxSegmentSize caps individual command frame payloads; zero uses the
 	// commitlog default.
@@ -160,6 +170,16 @@ func OpenCommandJournal(walDir string, opts CommandJournalOptions) (*CommandJour
 			return nil, err
 		}
 		opts.SegmentSeq = seq
+	} else {
+		latestSeq, err := commandJournalLatestSegmentSeq(walDir, opts.Lane)
+		if err != nil {
+			_ = owner.Close()
+			return nil, err
+		}
+		if opts.SegmentSeq < latestSeq {
+			_ = owner.Close()
+			return nil, fmt.Errorf("%w: lane %d segment %d is behind latest segment %d", ErrCommandWALStaleSegment, opts.Lane, opts.SegmentSeq, latestSeq)
+		}
 	}
 	path := filepath.Join(walDir, CommandSegmentName(opts.Lane, opts.SegmentSeq))
 	// The owner lock covers scan/truncate/seed so another writer cannot append
