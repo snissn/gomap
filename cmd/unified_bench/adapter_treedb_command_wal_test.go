@@ -93,6 +93,23 @@ func TestTreeDBBackendPreservesOuterLeavesFlag(t *testing.T) {
 	}
 }
 
+func TestTreeDBBackendCommandWALForcesWALOnWhenProfileDisablesWAL(t *testing.T) {
+	saved := saveTreeDBFlagState()
+	defer restoreTreeDBFlagState(saved)
+	resetTreeDBIndexFlagsForTest()
+	*treedbAllowUnsafe = true
+	*treedbDisableWAL = true
+
+	db, err := NewTreeDBBackendCommandWAL(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewTreeDBBackendCommandWAL with disabled WAL flag: %v", err)
+	}
+	defer db.Close()
+	if err := db.Set([]byte("k"), []byte("v")); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+}
+
 func TestTreeDBCommandWALAliasResolvesToBackendVariant(t *testing.T) {
 	factory, err := GetDBFactory("treedb_command_wal")
 	if err != nil {

@@ -31,12 +31,13 @@ func writeCommandWALStats(stats map[string]string, db *DB) {
 		stats["treedb.command_wal.bytes"] = "0"
 		return
 	}
+	stats["treedb.command_wal.required_feature"] = "false"
 	if required, err := CommandWALRequiredFeatureEnabled(db.dir); err == nil {
 		stats["treedb.command_wal.required_feature"] = fmt.Sprintf("%t", required)
 	} else {
 		stats["treedb.command_wal.required_feature_error"] = err.Error()
 	}
-	if summary, err := summarizeCommandWALStats(db.dir, db.walMaxSegmentBytes); err == nil {
+	if summary, err := db.cachedCommandWALStatsSummary(); err == nil {
 		stats["treedb.command_wal.segment_files"] = fmt.Sprintf("%d", summary.SegmentFiles)
 		stats["treedb.command_wal.typed_segments"] = fmt.Sprintf("%d", summary.TypedSegments)
 		stats["treedb.command_wal.active_segments"] = fmt.Sprintf("%d", summary.ActiveSegments)
@@ -46,6 +47,32 @@ func writeCommandWALStats(stats map[string]string, db *DB) {
 	} else {
 		stats["treedb.command_wal.stats_error"] = err.Error()
 	}
+}
+
+func (db *DB) cachedCommandWALStatsSummary() (commandWALStatsSummary, error) {
+	state := db.state.Load()
+	appliedLSN := uint64(0)
+	if state != nil {
+		appliedLSN = state.AppliedCommandLSN
+	}
+	db.commandWALStatsMu.Lock()
+	if db.commandWALStatsOK && db.commandWALStatsAppliedLSN == appliedLSN {
+		summary := db.commandWALStatsSummary
+		db.commandWALStatsMu.Unlock()
+		return summary, nil
+	}
+	db.commandWALStatsMu.Unlock()
+
+	summary, err := summarizeCommandWALStats(db.dir, db.walMaxSegmentBytes)
+	if err != nil {
+		return commandWALStatsSummary{}, err
+	}
+	db.commandWALStatsMu.Lock()
+	db.commandWALStatsAppliedLSN = appliedLSN
+	db.commandWALStatsSummary = summary
+	db.commandWALStatsOK = true
+	db.commandWALStatsMu.Unlock()
+	return summary, nil
 }
 
 func summarizeCommandWALStats(dir string, maxSegmentBytes int64) (commandWALStatsSummary, error) {

@@ -1,5 +1,7 @@
 package db
 
+const standaloneLeafPageLogMaxSegmentBytes int64 = 1<<32 - 5
+
 // LeafPageLogCloser is a standalone leaf-page log that should be closed by the
 // owner after the DB is closed.
 type LeafPageLogCloser interface {
@@ -23,13 +25,15 @@ func NewStandaloneLeafPageLog(dir string, opts StandaloneLeafPageLogOptions) (Le
 	if err := ensureStorageLayoutDirs(dir); err != nil {
 		return nil, err
 	}
-	segments, err := listValueLogSegments(dir)
+	segments, err := listSegmentsInDir(LeafLogDirPath(dir))
 	if err != nil {
 		return nil, err
 	}
 	maxSegmentBytes := opts.MaxSegmentBytes
 	if maxSegmentBytes == 0 {
-		maxSegmentBytes = int64(^uint32(0)) - 4
+		// Leaf pointers store offsets in uint32 space; keep each leaf segment
+		// inside that addressable range after the value-log CRC prefix.
+		maxSegmentBytes = standaloneLeafPageLogMaxSegmentBytes
 	}
 	compression := opts.Compression
 	if compression == 0 {
