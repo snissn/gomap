@@ -235,7 +235,7 @@ func TestVectorIndexLoadPersistSnapshotRecomputesNonFiniteEdgeDistances(t *testi
 	snapshot, _ := index.persistSnapshot()
 	for i := range snapshot.Edges {
 		if len(snapshot.Edges[i].Distances) > 0 {
-			snapshot.Edges[i].Distances[0] = float32(math.Inf(-1))
+			snapshot.Edges[i].Distances[0] = float32(math.Inf(1))
 			break
 		}
 	}
