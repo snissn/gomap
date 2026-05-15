@@ -37,7 +37,8 @@
     "TestTreeDBCommandWALAliasResolvesToBackendVariant"
   ],
   "benchmark_commands": [
-    "GOWORK=off go test ./TreeDB/db -run '^$' -bench 'BenchmarkCommandWAL(RawKVDirectWrite|RawKVPointerDirectWrite|ReplayFrameClassification|ReadReplayFrames|CoveredSegmentCleanupProof)' -benchmem -benchtime=200ms -count=6",
+    "GOWORK=off go test ./TreeDB/db -run '^$' -bench 'BenchmarkCommandWAL(RawKVDirectWrite|RawKVPointerDirectWrite|ReplayFrameClassification|ReadReplayFrames)$' -benchmem -benchtime=200ms -count=6",
+    "GOWORK=off go test ./TreeDB/db -run '^$' -bench 'BenchmarkCommandWALCoveredSegmentCleanupProof$' -benchmem -benchtime=10x -count=6",
     "GOWORK=off go test ./TreeDB/internal/commitlog ./TreeDB/internal/valuelog -run '^$' -bench 'Benchmark(WriterAppendCommandRawKVBatch|CommandJournalAllocateAndAppendRawKVBatch|CommandWALRawKVBatchPayload(Encode|Scan)|ReaderReadNextMeta)' -benchmem -benchtime=200ms -count=6",
     "GOWORK=off go run ./cmd/unified_bench -dbs treedb_backend,treedb_backend_command_wal -test batch_write,batch_delete -keys 1000 -batchsize 100 -valsize 64 -profile durable -progress=false -format markdown -checkpoint-between-tests",
     "GOWORK=off go run ./cmd/unified_bench -dbs treedb_backend,treedb_backend_command_wal -test batch_write -keys 2000 -batchsize 1000 -valsize 64 -profile durable -progress=false -format markdown -checkpoint-between-tests",
@@ -58,10 +59,11 @@
     "small_batch_delete_ops_per_sec": "outer-leaf legacy backend 1.350M/s, command_wal_v1 1.282M/s",
     "large_batch_write_ops_per_sec": "outer-leaf legacy backend 120.003k/s, command_wal_v1 88.714k/s",
     "checkpoint_heavy_write_ops_per_sec": "outer-leaf legacy backend 4.727k/s, command_wal_v1 6.638k/s",
-    "direct_write_microbench": "legacy 3.823 us/op, command_wal_v1 5.058 us/op, +3 alloc/op",
-    "pointer_write_microbench": "legacy pointer 3.855 us/op, command_wal_v1 pointer 7.193 us/op after RID-cache polish, +6 alloc/op",
+    "direct_write_microbench": "legacy 3.824 us/op, command_wal_v1 4.837 us/op, +3 alloc/op",
+    "pointer_write_microbench": "legacy pointer 3.796 us/op, command_wal_v1 pointer 429.8 us/op with durable external-ref fence, +11 alloc/op",
     "warmed_append_gate": "WriterAppendCommandRawKVBatch and CommandJournalAllocateAndAppendRawKVBatch remain 0 B/op and 0 allocs/op",
-    "warmed_classification_gate": "RawKVBatch payload scan, replay frame classification, and ValueLog ReadNextMeta remain 0 B/op and 0 allocs/op"
+    "warmed_classification_gate": "RawKVBatch payload scan, replay frame classification, and ValueLog ReadNextMeta remain 0 B/op and 0 allocs/op",
+    "covered_cleanup_microbench": "covered cleanup proof 85.85 us/op, 52 alloc/op; benchmark asserts covered=2 removed=1 active segment retained"
   },
   "mode_proof": {
     "unified_bench_variant": "treedb_backend_command_wal",
@@ -77,8 +79,8 @@
   "known_gaps": [
     "direct backend kvstore.Set cannot express value-log SetPointer, so value-pointer comparison is covered by DB microbench rather than unified-bench until a pointer-capable benchmark adapter/API exists",
     "large-batch command_wal_v1 throughput remains materially slower than the outer-leaf legacy backend (120.003k/s legacy vs 88.714k/s command WAL in the refreshed PR3.5 artifact) and should block PR9 default cutover unless optimized or explicitly accepted",
-    "pointer command_wal_v1 still has +6 alloc/op after RID-cache polish; remaining allocations are tracked as future optimization debt before default cutover",
-    "outer-leaf direct backend throughput is much lower than earlier inline-leaf artifacts; the refreshed numbers are the correct benchmark mode because the requested outer-leaf flag is no longer silently ignored"
+    "outer-leaf direct backend throughput is much lower than earlier inline-leaf artifacts; the refreshed numbers are the correct benchmark mode because the requested outer-leaf flag is no longer silently ignored",
+    "pointer command_wal_v1 external-ref writes are correctness-fenced and currently much slower than legacy pointer writes (429.8 us/op vs 3.796 us/op in the refreshed DB microbench); this is explicit optimization debt before default cutover"
   ],
-  "evidence_generated_from_commit": "ad4d0633488390ee1cfa16865cc7c0d218c2841b"
+  "evidence_generated_from_commit": "764eaf675a760194ec6319213e84a6758fed6b37"
 }
