@@ -283,7 +283,7 @@ func commandJournalLatestSegmentSeq(walDir string, lane int) (uint64, error) {
 }
 
 func (o *JournalOwner) seedInitialLSN(initialLSN uint64) error {
-	if o == nil || o.lock == nil {
+	if o == nil {
 		return errors.New("commitlog: journal owner is closed")
 	}
 	if initialLSN == ^uint64(0) {
@@ -291,6 +291,9 @@ func (o *JournalOwner) seedInitialLSN(initialLSN uint64) error {
 	}
 	o.mu.Lock()
 	defer o.mu.Unlock()
+	if o.lock == nil {
+		return errors.New("commitlog: journal owner is closed")
+	}
 	o.nextLSN = initialLSN + 1
 	o.exhausted = false
 	return nil
@@ -372,7 +375,7 @@ func parseCommandSegmentName(name string) (lane int, seq uint64, ok bool) {
 		return 0, 0, false
 	}
 	seq, err = strconv.ParseUint(parts[1], 10, 64)
-	if err != nil {
+	if err != nil || seq == 0 {
 		return 0, 0, false
 	}
 	return lane, seq, true
