@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -446,6 +447,39 @@ func TestCommandWALOpenAllowsActiveTypedTailWithHigherLegacyRawSegment(t *testin
 	}
 }
 
+func TestCommandWALOpenAllowsActiveTypedTailWithHigherPartialLegacyAliasSegment(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	state := db.State()
+	if err := db.publishCommandWALRoots(state.RootPageID, state.SystemRootPageID, 1, []CommandWALLSNRange{{First: 1, Last: 1}}, true); err != nil {
+		t.Fatalf("publishCommandWALRoots: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	writeCommandWALFrame(t, dir, 1, 1)
+	appendCommandWALTail(t, dir, 1, []byte{0xde, 0xad, 0xbe})
+	writePartialLegacyAliasWALSegmentTail(t, dir, 999, []byte{0xca, 0xfe})
+
+	ro, err := Open(Options{Dir: dir, ReadOnly: true})
+	if err != nil {
+		t.Fatalf("Open read-only with active typed tail and higher partial legacy alias segment: %v", err)
+	}
+	if err := ro.Close(); err != nil {
+		t.Fatalf("Close read-only: %v", err)
+	}
+	reopen, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("Open read-write with active typed tail and higher partial legacy alias segment: %v", err)
+	}
+	if err := reopen.Close(); err != nil {
+		t.Fatalf("Close reopen: %v", err)
+	}
+}
+
 func TestCommandWALOpenAllowsActivePartialFirstFrameTail(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(Options{Dir: dir})
@@ -737,6 +771,18 @@ func writePartialCommandWALSegmentTail(t *testing.T, dir string, segmentSeq uint
 	path := filepath.Join(walDir, commitlog.CommandSegmentName(0, segmentSeq))
 	if err := os.WriteFile(path, tail, 0o600); err != nil {
 		t.Fatalf("WriteFile partial command WAL tail: %v", err)
+	}
+}
+
+func writePartialLegacyAliasWALSegmentTail(t *testing.T, dir string, segmentSeq uint64, tail []byte) {
+	t.Helper()
+	walDir := WALDirPath(dir)
+	if err := os.MkdirAll(walDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll wal: %v", err)
+	}
+	path := filepath.Join(walDir, fmt.Sprintf("commit-%06d.log", segmentSeq))
+	if err := os.WriteFile(path, tail, 0o600); err != nil {
+		t.Fatalf("WriteFile partial legacy WAL alias tail: %v", err)
 	}
 }
 

@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
@@ -159,6 +161,9 @@ func hasUnappliedCommandWALFrames(dir string, appliedLSN uint64, maxSegmentBytes
 		if seg.valueLog || seg.size == 0 {
 			continue
 		}
+		if !isCommandWALLaneSegment(seg) {
+			continue
+		}
 		scan, err := scanCommandWALSegment(seg.path, maxSegmentBytes, seg.seq == activeByLane[seg.lane])
 		if err != nil {
 			return false, err
@@ -176,6 +181,9 @@ func commandWALActiveSeqByLane(segments []logSegment, maxSegmentBytes int64) (ma
 		if seg.valueLog || seg.size == 0 {
 			continue
 		}
+		if !isCommandWALLaneSegment(seg) {
+			continue
+		}
 		scan, err := scanCommandWALSegment(seg.path, maxSegmentBytes, true)
 		if err != nil {
 			return nil, err
@@ -188,6 +196,10 @@ func commandWALActiveSeqByLane(segments []logSegment, maxSegmentBytes int64) (ma
 		}
 	}
 	return activeByLane, nil
+}
+
+func isCommandWALLaneSegment(seg logSegment) bool {
+	return strings.HasPrefix(filepath.Base(seg.path), "commit-l")
 }
 
 func commandWALSegmentMaxLSN(path string, maxSegmentBytes int64, allowTerminalTail bool) (maxLSN uint64, typed bool, err error) {
@@ -251,6 +263,12 @@ func filterCommandWALSegmentsForLegacyReplay(segments []logSegment, appliedLSN u
 			}
 			continue
 		}
+		if !isCommandWALLaneSegment(seg) {
+			if skipped {
+				filtered = append(filtered, seg)
+			}
+			continue
+		}
 		active := seg.seq == activeByLane[seg.lane]
 		scan, err := scanCommandWALSegment(seg.path, maxSegmentBytes, active)
 		if err != nil {
@@ -298,6 +316,9 @@ func cleanupCommandWALSegmentsCoveredByAppliedLSN(dir string, appliedLSN uint64,
 	decisions := make([]commandWALSegmentCleanupDecision, 0, len(segments))
 	for _, seg := range segments {
 		if seg.valueLog || seg.size == 0 {
+			continue
+		}
+		if !isCommandWALLaneSegment(seg) {
 			continue
 		}
 		active := seg.seq == activeByLane[seg.lane]
