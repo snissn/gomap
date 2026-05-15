@@ -73,9 +73,13 @@ func BenchmarkJSONBenchEncodedPartQueries(b *testing.B) {
 				b.Fatal(err)
 			}
 			benchSink += int64(rows) + int64(digest)
-			valueBytes := ds.Rows * len(diagnostics.ColumnsProjected) * 8
+			rowsScanned := diagnostics.RowsScanned
+			if rowsScanned == 0 {
+				rowsScanned = ds.Rows
+			}
+			valueBytes := rowsScanned * len(diagnostics.ColumnsProjected) * 8
 			if valueBytes == 0 {
-				valueBytes = ds.Rows * 8
+				valueBytes = rowsScanned * 8
 			}
 			b.SetBytes(int64(valueBytes))
 			b.ResetTimer()
@@ -86,7 +90,11 @@ func BenchmarkJSONBenchEncodedPartQueries(b *testing.B) {
 				}
 				benchSink += int64(rows) + int64(digest)
 			}
-			reportGranuleBenchMetrics(b, ds.Rows, valueBytes, diagnostics.BytesDecoded)
+			rowsScanned = diagnostics.RowsScanned
+			if rowsScanned == 0 {
+				rowsScanned = ds.Rows
+			}
+			reportGranuleBenchMetrics(b, rowsScanned, valueBytes, diagnostics.BytesDecoded)
 		})
 	}
 }
