@@ -264,8 +264,14 @@ func commandWALRequiredFeatureGate(dir string) (bool, error) {
 // SaveFormatConfig writes cfg to dir/format.json atomically.
 func SaveFormatConfig(dir string, cfg FormatConfig) error {
 	if cfg.RequiresCommandWALV1() {
-		if err := ValidateCommandWALActivationClean(dir); err != nil {
+		existing, ok, err := LoadFormatConfig(dir)
+		if err != nil {
 			return err
+		}
+		if !ok || !existing.RequiresCommandWALV1() {
+			if err := ValidateCommandWALActivationClean(dir); err != nil {
+				return err
+			}
 		}
 	}
 	return writeFormatConfig(dir, cfg)

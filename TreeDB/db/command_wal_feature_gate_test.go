@@ -79,6 +79,17 @@ func TestSaveFormatConfigCommandWALRequiresCleanActivation(t *testing.T) {
 	}
 }
 
+func TestSaveFormatConfigCommandWALResaveExistingFeatureAllowsCommandSegments(t *testing.T) {
+	dir := t.TempDir()
+	if err := SaveFormatConfig(dir, FormatConfig{RequiredFeatures: []string{RequiredFeatureCommandWALV1}}); err != nil {
+		t.Fatalf("SaveFormatConfig initial: %v", err)
+	}
+	writeCommandWALSegmentFrames(t, dir, 1, 1)
+	if err := SaveFormatConfig(dir, FormatConfig{RequiredFeatures: []string{RequiredFeatureCommandWALV1}}); err != nil {
+		t.Fatalf("SaveFormatConfig resave existing command WAL feature: %v", err)
+	}
+}
+
 func TestSaveOpenFormatConfigPreservesActiveCommandWALFeature(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {

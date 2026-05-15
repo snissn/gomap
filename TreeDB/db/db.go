@@ -1333,6 +1333,9 @@ func resolveInlineThresholdAndAdaptive(opts Options) (*adaptive.Controller, int)
 }
 
 func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
+	if opts.ReadOnly {
+		return nil, errors.New("treedb: openWithLock cannot be used for read-only opens")
+	}
 	if err := recoverIndexSwap(opts.Dir); err != nil {
 		return nil, err
 	}

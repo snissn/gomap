@@ -13,10 +13,11 @@ import (
 )
 
 type commandWALBatchIntent struct {
-	payload      []byte
-	externalRefs bool
-	lsn          uint64
-	coveredRange [1]CommandWALLSNRange
+	payload            []byte
+	externalRefs       bool
+	externalRefFileIDs []uint32
+	lsn                uint64
+	coveredRange       [1]CommandWALLSNRange
 }
 
 func (db *DB) prepareRawKVCommandWALIntent(b *Batch) (*commandWALBatchIntent, error) {
@@ -69,7 +70,28 @@ func (db *DB) prepareRawKVCommandWALIntent(b *Batch) (*commandWALBatchIntent, er
 	if err != nil {
 		return nil, err
 	}
-	return &commandWALBatchIntent{payload: payload, externalRefs: externalRefs}, nil
+	return &commandWALBatchIntent{payload: payload, externalRefs: externalRefs, externalRefFileIDs: rawKVCommandWALExternalRefFileIDs(entries)}, nil
+}
+
+func rawKVCommandWALExternalRefFileIDs(entries []batchpkg.Entry) []uint32 {
+	var ids []uint32
+	for i := range entries {
+		entry := entries[i]
+		if entry.Type != batchpkg.OpPut || !entry.IsPtr || entry.ValuePtr.FileID == 0 {
+			continue
+		}
+		seen := false
+		for _, id := range ids {
+			if id == entry.ValuePtr.FileID {
+				seen = true
+				break
+			}
+		}
+		if !seen {
+			ids = append(ids, entry.ValuePtr.FileID)
+		}
+	}
+	return ids
 }
 
 func (db *DB) lookupCommandWALValueLogRID(ptr page.ValuePtr, ridCache map[uint32]map[page.ValuePtr]uint64) (uint64, error) {
@@ -86,15 +108,14 @@ func (db *DB) lookupCommandWALValueLogRID(ptr page.ValuePtr, ridCache map[uint32
 	if byPtr == nil {
 		byPtr = make(map[page.ValuePtr]uint64)
 		ridCache[ptr.FileID] = byPtr
-	} else {
-		if rid, ok := byPtr[ptr]; ok {
-			return rid, nil
-		}
+	}
+	if rid, ok := byPtr[ptr]; ok {
+		return rid, nil
 	}
 	path := db.valueLogManager.SegmentPath(ptr.FileID)
 	rid, err := readCommandWALValueLogRIDAt(path, ptr)
 	if isCommandWALRIDLookupVisibilityError(err) {
-		if flushErr := db.flushCommandWALExternalRefs(false); flushErr != nil {
+		if flushErr := db.flushCommandWALExternalRefs(false, nil); flushErr != nil {
 			return 0, flushErr
 		}
 		rid, err = readCommandWALValueLogRIDAt(path, ptr)
@@ -119,15 +140,42 @@ func isCommandWALRIDLookupVisibilityError(err error) bool {
 	return errors.Is(err, os.ErrNotExist) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
 }
 
-func (db *DB) flushCommandWALExternalRefs(sync bool) error {
+func (db *DB) flushCommandWALExternalRefs(sync bool, fileIDs []uint32) error {
 	appender := db.currentValueLogAppender()
-	if appender == nil {
+	if appender == nil && len(fileIDs) == 0 {
+		return ErrValueLogAppenderUnavailable
+	}
+	if appender != nil {
+		if sync {
+			if err := appender.Sync(); err != nil {
+				return err
+			}
+		} else if err := appender.Flush(); err != nil {
+			return err
+		}
+	}
+	if !sync {
 		return nil
 	}
-	if sync {
-		return appender.Sync()
+	for _, fileID := range fileIDs {
+		if err := db.syncCommandWALExternalRefSegment(fileID); err != nil {
+			return err
+		}
 	}
-	return appender.Flush()
+	return nil
+}
+
+func (db *DB) syncCommandWALExternalRefSegment(fileID uint32) error {
+	if db == nil || db.valueLogManager == nil || fileID == 0 {
+		return ErrValueLogAppenderUnavailable
+	}
+	path := db.valueLogManager.SegmentPath(fileID)
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = f.Close() }()
+	return f.Sync()
 }
 
 func (db *DB) appendRawKVCommandWALIntent(intent *commandWALBatchIntent, sync bool) (uint64, error) {
@@ -149,7 +197,7 @@ func (db *DB) appendRawKVCommandWALIntent(intent *commandWALBatchIntent, sync bo
 		// written, otherwise a power loss could leave the command frame
 		// referencing a non-durable RID and cause a hard recovery failure
 		// ("missing value-log RID"). Always sync, even for non-sync writes.
-		if err := db.flushCommandWALExternalRefs(true); err != nil {
+		if err := db.flushCommandWALExternalRefs(true, intent.externalRefFileIDs); err != nil {
 			return 0, err
 		}
 	}
@@ -245,6 +293,8 @@ func applyRawKVCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map
 						return fmt.Errorf("treedb: command wal replay log support unavailable")
 					}
 					var err error
+					// ensureReplayLogSupport owns the replay appender lifecycle;
+					// these assignments only cache the frame-local handles.
 					ridMap, inlineAppender, err = ensureReplayLogSupport()
 					if err != nil {
 						return err
@@ -271,6 +321,8 @@ func applyRawKVCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map
 					return fmt.Errorf("treedb: command wal replay log support unavailable")
 				}
 				var err error
+				// ensureReplayLogSupport owns the replay appender lifecycle;
+				// these assignments only cache the frame-local handles.
 				ridMap, inlineAppender, err = ensureReplayLogSupport()
 				if err != nil {
 					return err

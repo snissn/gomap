@@ -518,6 +518,7 @@ func Open(opts Options) (*DB, error) {
 	if !opts.DisableSideStores {
 		dictOpts := opts
 		dictOpts.Dir = dictdbDir
+		dictOpts.CommandWAL = false
 		// Side stores are opened via the backend (no caching layer). They must
 		// not inherit outer-leaf-in-value-log from the main DB, since that mode
 		// requires a leaf-page log wired by the cached layer.
@@ -567,6 +568,7 @@ func Open(opts Options) (*DB, error) {
 	if !opts.DisableSideStores && opts.ValueLog.TemplateMode != template.TemplateOff {
 		templateOpts := opts
 		templateOpts.Dir = templatedbDir
+		templateOpts.CommandWAL = false
 		templateOpts.DisableSideStores = true
 		templateOpts.DisableBackgroundPrune = true
 		// Like dictdb, templatedb is an internal side store; avoid inheriting the

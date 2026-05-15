@@ -500,6 +500,13 @@ func TestCommandWALMissingRIDFenceFailsRecovery(t *testing.T) {
 	}
 }
 
+func TestCommandWALExternalRefFlushRequiresAppender(t *testing.T) {
+	db := &DB{}
+	if err := db.flushCommandWALExternalRefs(true, nil); !errors.Is(err, ErrValueLogAppenderUnavailable) {
+		t.Fatalf("flushCommandWALExternalRefs error=%v, want ErrValueLogAppenderUnavailable", err)
+	}
+}
+
 func TestCommandWALIdempotentSkipRequiresDigestProof(t *testing.T) {
 	dir := t.TempDir()
 	enableCommandWALFormat(t, dir)

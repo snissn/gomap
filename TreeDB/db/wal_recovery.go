@@ -344,12 +344,12 @@ func readCommandWALReplayFrames(segments []logSegment, appliedLSN uint64, maxSeg
 		for {
 			env, err := reader.ReadCommandFrame()
 			if err == nil {
-				if _, ok := seen[env.LSN]; ok {
-					_ = reader.Close()
-					return nil, commitlog.ErrCommandWALDuplicateLSN
-				}
-				seen[env.LSN] = struct{}{}
 				if env.LSN > appliedLSN {
+					if _, ok := seen[env.LSN]; ok {
+						_ = reader.Close()
+						return nil, commitlog.ErrCommandWALDuplicateLSN
+					}
+					seen[env.LSN] = struct{}{}
 					frames = append(frames, commandWALReplayFrame{env: env})
 				}
 				continue
