@@ -4,7 +4,7 @@ This document owns value-log and split leaf-log lifecycle. The active target for
 future WAL-protected external refs is the user-command WAL in
 `user-command-wal.md`. The deprecated collection root-delta WAL plan in
 `collection-wal-durability-plan.md` remains useful historical context for
-side-ref preparation, protection, cleanup, and column-file closure risks.
+external-ref preparation, protection, cleanup, and column-file closure risks.
 
 ## 1. Persistent Pointer Model
 

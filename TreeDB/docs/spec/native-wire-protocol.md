@@ -790,16 +790,17 @@ Local policies are ordered only within the local family:
 must not be treated as a numeric extension of local durability ordering unless a
 future cluster spec explicitly defines the implied local durability level.
 
-If validation succeeds but command-WAL append, required external-ref
-preparation/protection, or root publication plus `AppliedLSN` advancement fails
-before the local commit boundary, the server returns `durability_unavailable`,
-`retryable=true`, `commit_state=not_committed`, and the mutation must not be
-visible.
+If validation succeeds but required external-ref preparation/protection or
+command-WAL append fails before a complete command frame becomes recoverable, the
+server returns `durability_unavailable`, `retryable=true`,
+`commit_state=not_committed`, and the mutation must not be visible.
 
-If the commit marker reached the required local boundary but visible install,
-flush, publication, checkpoint, or response construction fails, the server
-returns `commit_ambiguous`, `retryable=false` unless a durable idempotency record
-makes replay safe, and `commit_state=committed_or_unknown_after_commit`.
+If a complete command frame reached the required local boundary but root
+publication, `AppliedLSN` advancement, visible install, flush, checkpoint, or
+response construction fails, the server returns `commit_ambiguous`,
+`retryable=false` unless a durable idempotency record makes replay safe, and
+`commit_state=committed_or_unknown_after_commit`. The server must not report
+`not_committed` after a complete command frame may be recovered and replayed.
 
 If a command requested `ack_policy=flushed` or `ack_policy=synced` and the
 logical mutation committed but the requested barrier failed, the error must

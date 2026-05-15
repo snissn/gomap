@@ -78,7 +78,7 @@ Procedure:
    abort/classify.
 4. Rotate/seal WAL, value-log, leaf-log, and side-payload files needed by the
    cut, or record exact byte ranges plus checksums for active tails.
-5. Fsync every manifest-listed WAL segment/range and side ref to the selected
+5. Fsync every manifest-listed WAL segment/range and external ref to the selected
    durability boundary.
 6. Write and fsync the backup manifest.
 7. Release writers after the filesystem snapshot is taken, or keep manifest
@@ -87,9 +87,9 @@ Procedure:
    manifest.
 
 The WAL-snapshot manifest includes root layout, file classes, exact
-paths/ranges/sizes/checksums, `AppliedLSN`, cleaned commit-log ranges, command WAL debt, side-store
-checkpoints, and backup token generation. The
-manifest itself is a retention root until the barrier token is released.
+paths/ranges/sizes/checksums, `AppliedLSN`, cleaned commit-log ranges, command
+WAL debt, side-store checkpoints, and backup token generation. The manifest
+itself is a retention root until the barrier token is released.
 
 ## 3. Restore Validation
 
@@ -111,7 +111,7 @@ Restore/open validation before serving reads:
    - compare declared external refs to command-derived refs where applicable;
    - verify every required external ref exists, has expected size/checksum/class,
      and has dictionary/template/column dependency closure;
-7. stop open before serving reads on any missing or corrupt required side ref;
+7. stop open before serving reads on any missing or corrupt required external ref;
 8. replay unapplied commands and publish recovered roots plus `AppliedLSN`
    atomically;
 9. classify uncommitted prepared/final side files;

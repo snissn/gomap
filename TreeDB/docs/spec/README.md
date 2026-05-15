@@ -99,11 +99,8 @@ Given pre-alpha status, this is a living spec that tracks implementation.
     WAL/root-group durability.
   - Do not expand this plan feature-by-feature; use
     `user-command-wal.md` for new WAL implementation work.
-  - Until its acceptance milestones pass, current collection writes remain
-    governed by `collections-write-domain.md` and are flush-boundary durable,
-    not durable-at-ack.
-  - Downstream specs may cite this document for historical side-ref and recovery
-    risk analysis, but new durable-at-ack planning should cite
+  - Downstream specs may cite this document for historical external-ref and
+    recovery risk analysis, but new durable-at-ack planning should cite
     `user-command-wal.md`.
 
 ## Design Proposals (Non-Normative)
@@ -150,14 +147,14 @@ Given pre-alpha status, this is a living spec that tracks implementation.
 | Durability mode matrix | `write-path-and-durability.md` | `contracts.md`, public README and supporting docs summarize only. |
 | Current collection flush-boundary durability | `collections-write-domain.md` | `contracts.md`, `verification.md`. |
 | Target user-command WAL contract | `user-command-wal.md` | `write-path-and-durability.md`, `recovery.md`, `verification.md`. |
-| Deprecated collection root-delta WAL target | `collection-wal-durability-plan.md` | Historical side-ref and recovery risk analysis only. |
+| Deprecated collection root-delta WAL target | `collection-wal-durability-plan.md` | Historical external-ref and recovery risk analysis only. |
 | Current recovery algorithm | `recovery.md` | `storage-format.md`, `verification.md`. |
 | Durable bytes and file names | `storage-format.md` | `recovery.md`, `architecture.md`, `backup-restore.md`. |
-| Value-log and split leaf-log lifecycle | `value-log-lifecycle.md` | `storage-format.md`, `user-command-wal.md`, `collection-wal-durability-plan.md` for historical side-ref context. |
+| Value-log and split leaf-log lifecycle | `value-log-lifecycle.md` | `storage-format.md`, `user-command-wal.md`, `collection-wal-durability-plan.md` for historical external-ref context. |
 | Command-WAL external refs and side files | `user-command-wal.md` | `value-log-lifecycle.md`, future column-store docs. |
 | Public API semantics | `contracts.md` | `write-path-and-durability.md`, `collections-write-domain.md`. |
-| Native-wire ack policies | `native-wire-protocol.md` | `collection-wal-durability-plan.md`, `native-query-raft-roadmap.md`. |
-| Raft/local apply layering | `native-query-raft-roadmap.md` | `native-wire-protocol.md`, `collection-wal-durability-plan.md`. |
+| Native-wire ack policies | `native-wire-protocol.md` | `user-command-wal.md`, `native-query-raft-roadmap.md`. |
+| Raft/local apply layering | `native-query-raft-roadmap.md` | `native-wire-protocol.md`, `user-command-wal.md`. |
 | Verification mapping | `verification.md` | all normative specs. |
 
 ## Terminology Ownership
