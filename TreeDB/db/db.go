@@ -100,8 +100,10 @@ type DB struct {
 	readOnly             bool
 	durability           DurabilityMode
 	commandWAL           bool
+	walMaxSegmentBytes   int64
 	commandWALRIDCacheMu sync.Mutex
 	commandWALRIDCache   map[uint32]map[page.ValuePtr]uint64
+	commandWALRIDCacheN  int
 
 	keepRecent                     uint64
 	policy                         WritePolicy
@@ -1410,6 +1412,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		freelistRegionRadius:           opts.FreelistRegionRadius,
 		durability:                     opts.Durability,
 		commandWAL:                     opts.CommandWAL,
+		walMaxSegmentBytes:             opts.WALMaxSegmentBytes,
 		policy: WritePolicy{
 			InlineThreshold: inlineThreshold,
 			FlushThreshold:  opts.FlushThreshold,

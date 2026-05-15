@@ -17,6 +17,37 @@ type commandWALStatsSummary struct {
 	Bytes          int64
 }
 
+func writeCommandWALStats(stats map[string]string, db *DB) {
+	if stats == nil || db == nil {
+		return
+	}
+	if !db.commandWAL {
+		stats["treedb.command_wal.required_feature"] = "false"
+		stats["treedb.command_wal.segment_files"] = "0"
+		stats["treedb.command_wal.typed_segments"] = "0"
+		stats["treedb.command_wal.active_segments"] = "0"
+		stats["treedb.command_wal.frames"] = "0"
+		stats["treedb.command_wal.max_lsn"] = "0"
+		stats["treedb.command_wal.bytes"] = "0"
+		return
+	}
+	if required, err := CommandWALRequiredFeatureEnabled(db.dir); err == nil {
+		stats["treedb.command_wal.required_feature"] = fmt.Sprintf("%t", required)
+	} else {
+		stats["treedb.command_wal.required_feature_error"] = err.Error()
+	}
+	if summary, err := summarizeCommandWALStats(db.dir, db.walMaxSegmentBytes); err == nil {
+		stats["treedb.command_wal.segment_files"] = fmt.Sprintf("%d", summary.SegmentFiles)
+		stats["treedb.command_wal.typed_segments"] = fmt.Sprintf("%d", summary.TypedSegments)
+		stats["treedb.command_wal.active_segments"] = fmt.Sprintf("%d", summary.ActiveSegments)
+		stats["treedb.command_wal.frames"] = fmt.Sprintf("%d", summary.Frames)
+		stats["treedb.command_wal.max_lsn"] = fmt.Sprintf("%d", summary.MaxLSN)
+		stats["treedb.command_wal.bytes"] = fmt.Sprintf("%d", summary.Bytes)
+	} else {
+		stats["treedb.command_wal.stats_error"] = err.Error()
+	}
+}
+
 func summarizeCommandWALStats(dir string, maxSegmentBytes int64) (commandWALStatsSummary, error) {
 	segments, err := listWALSegments(dir)
 	if err != nil {

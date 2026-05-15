@@ -1,9 +1,15 @@
 package db
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/snissn/gomap/TreeDB/page"
+)
 
 func TestCommandWALStatsProveModeAndFrames(t *testing.T) {
-	db, err := Open(Options{Dir: t.TempDir(), CommandWAL: true, DisableBackgroundPrune: true})
+	db, err := Open(Options{Dir: t.TempDir(), CommandWAL: true, DisableBackgroundPrune: true, WALMaxSegmentBytes: 1024})
 	if err != nil {
 		t.Fatalf("Open command WAL: %v", err)
 	}
@@ -34,7 +40,44 @@ func TestCommandWALStatsProveModeAndFrames(t *testing.T) {
 	if got := stats["treedb.command_wal.typed_segments"]; got != "1" {
 		t.Fatalf("command WAL typed segment stat=%q, want 1 (stats=%#v)", got, stats)
 	}
+	if got := stats["treedb.command_wal.stats_error"]; got != "" {
+		t.Fatalf("unexpected command WAL stats error %q (stats=%#v)", got, stats)
+	}
 	if err := db.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
+	}
+}
+
+func TestCommandWALStatsDisabledDoesNotScanWAL(t *testing.T) {
+	dir := t.TempDir()
+	walDir := WALDirPath(dir)
+	if err := os.MkdirAll(walDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll WAL dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(walDir, "commit-l0-000001.log"), []byte{0x01, 0x02, 0x03}, 0o600); err != nil {
+		t.Fatalf("WriteFile bogus WAL: %v", err)
+	}
+	stats := make(map[string]string)
+	writeCommandWALStats(stats, &DB{dir: dir})
+	if got := stats["treedb.command_wal.stats_error"]; got != "" {
+		t.Fatalf("disabled command WAL stats scanned WAL and errored: %q", got)
+	}
+	if got := stats["treedb.command_wal.frames"]; got != "0" {
+		t.Fatalf("frames=%q, want 0 for disabled command WAL", got)
+	}
+}
+
+func TestCommandWALRIDCacheBounded(t *testing.T) {
+	db := &DB{}
+	for i := 0; i < commandWALRIDCacheMaxEntries+17; i++ {
+		ptr := page.ValuePtr{FileID: 1, Offset: uint64(i), Length: 1}
+		db.storeCachedCommandWALValueLogRID(ptr, uint64(i+1))
+	}
+	if db.commandWALRIDCacheN > commandWALRIDCacheMaxEntries {
+		t.Fatalf("command WAL RID cache size=%d, want <= %d", db.commandWALRIDCacheN, commandWALRIDCacheMaxEntries)
+	}
+	latest := page.ValuePtr{FileID: 1, Offset: uint64(commandWALRIDCacheMaxEntries + 16), Length: 1}
+	if rid, ok := db.lookupCachedCommandWALValueLogRID(latest); !ok || rid != uint64(commandWALRIDCacheMaxEntries+17) {
+		t.Fatalf("latest cached RID=(%d,%t), want (%d,true)", rid, ok, commandWALRIDCacheMaxEntries+17)
 	}
 }

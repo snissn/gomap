@@ -12,6 +12,8 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
+const commandWALRIDCacheMaxEntries = 4096
+
 type commandWALBatchIntent struct {
 	payload      []byte
 	externalRefs bool
@@ -139,6 +141,15 @@ func (db *DB) storeCachedCommandWALValueLogRID(ptr page.ValuePtr, rid uint64) {
 	if byPtr == nil {
 		byPtr = make(map[page.ValuePtr]uint64)
 		db.commandWALRIDCache[ptr.FileID] = byPtr
+	}
+	if _, exists := byPtr[ptr]; !exists {
+		if db.commandWALRIDCacheN >= commandWALRIDCacheMaxEntries {
+			clear(db.commandWALRIDCache)
+			db.commandWALRIDCacheN = 0
+			byPtr = make(map[page.ValuePtr]uint64)
+			db.commandWALRIDCache[ptr.FileID] = byPtr
+		}
+		db.commandWALRIDCacheN++
 	}
 	byPtr[ptr] = rid
 }

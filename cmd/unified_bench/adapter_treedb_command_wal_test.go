@@ -54,6 +54,32 @@ func TestTreeDBBackendCommandWALVariantPersistsFeatureAndAppendsTypedFrames(t *t
 	}
 }
 
+func TestTreeDBBackendPreservesOuterLeavesFlag(t *testing.T) {
+	saved := saveTreeDBFlagState()
+	defer restoreTreeDBFlagState(saved)
+	resetTreeDBIndexFlagsForTest()
+	*treedbIndexOuterLeavesInVlog = true
+
+	dir := t.TempDir()
+	db, err := NewTreeDBBackend(dir)
+	if err != nil {
+		t.Fatalf("NewTreeDBBackend: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close backend: %v", err)
+	}
+	cfg, ok, err := treedbdb.LoadFormatConfig(dir)
+	if err != nil {
+		t.Fatalf("LoadFormatConfig: %v", err)
+	}
+	if !ok {
+		t.Fatal("format config missing")
+	}
+	if !cfg.IndexOuterLeavesInValueLog {
+		t.Fatalf("legacy backend disabled IndexOuterLeavesInValueLog")
+	}
+}
+
 func TestTreeDBCommandWALAliasResolvesToBackendVariant(t *testing.T) {
 	factory, err := GetDBFactory("treedb_command_wal")
 	if err != nil {

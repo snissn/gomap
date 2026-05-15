@@ -38,7 +38,9 @@ func newTreeDBBackend(dir string, commandWAL bool, name string) (kvstore.DB, err
 		return nil, err
 	}
 	opts.CommandWAL = commandWAL
-	opts.IndexOuterLeavesInValueLog = false
+	if commandWAL {
+		opts.IndexOuterLeavesInValueLog = false
+	}
 	if opts.ValueLog.PointerThreshold <= 0 {
 		opts.ValueLog.PointerThreshold = page.DefaultInlineThreshold
 	}
