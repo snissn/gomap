@@ -237,6 +237,35 @@ func TestCommandWALRawEmptyBatchAdvancesAppliedLSNAsNoop(t *testing.T) {
 	}
 }
 
+func TestCommandWALFlushFailurePoisonsOpenHandle(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	defer db.Close()
+
+	db.testFailCommandWALFlush.Store(true)
+	b := db.NewBatch()
+	if err := b.Set([]byte("k"), []byte("v")); err != nil {
+		t.Fatalf("Set first: %v", err)
+	}
+	err := b.Write()
+	if !errors.Is(err, errTestCommandWALFlushFailpoint) {
+		t.Fatalf("Write first error=%v, want command WAL flush failpoint", err)
+	}
+	_ = b.Close()
+	db.testFailCommandWALFlush.Store(false)
+
+	retry := db.NewBatch()
+	if err := retry.Set([]byte("later"), []byte("value")); err != nil {
+		t.Fatalf("Set retry: %v", err)
+	}
+	err = retry.Write()
+	if !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("Write retry error=%v, want ErrRecoveryRequired after poisoned command WAL flush", err)
+	}
+	_ = retry.Close()
+}
+
 func TestCommandWALRecoveryCrashDuringReplayResumesFromAppliedLSN(t *testing.T) {
 	dir := t.TempDir()
 	enableCommandWALFormat(t, dir)

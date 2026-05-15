@@ -31,6 +31,7 @@
     "TestCommandWALInlineReplayDoesNotScanValueLogRIDMap",
     "TestCommandWALRawSetReplayRePointersWhenThresholdDrops",
     "TestCommandWALRawEmptyBatchAdvancesAppliedLSNAsNoop",
+    "TestCommandWALFlushFailurePoisonsOpenHandle",
     "TestCommandWALRecoveryCrashDuringReplayResumesFromAppliedLSN",
     "TestCommandWALIdempotentSkipRequiresDigestProof",
     "TestCommandWALExistingRawReplayTestsMappedToRawKVBatch",
@@ -50,7 +51,7 @@
     "FuzzCommandWALDecodeFrame - fuzztime=5s, 1110162 execs"
   ],
   "race_tests": [
-    "GOWORK=off go test -race ./TreeDB/db -run 'TestCommandWAL(RawSetDeleteBatchReplaysThroughNormalExecutor|RawSetReplayRePointersWhenThresholdDrops|RawEmptyBatchAdvancesAppliedLSNAsNoop|RejectsWALOffDurability|PointerBatchReplaysThroughRIDFence|RecoveryCrashDuringReplayResumesFromAppliedLSN|RIDFencePreservedForRawKVBatch|CleanReopenCleansCoveredNonActiveSegmentWithNoReplayFrames|InlineReplayDoesNotScanValueLogRIDMap)|TestSaveOpenFormatConfigRefreshesActiveCommandWALKnobs'"
+    "GOWORK=off go test -race ./TreeDB/db -run 'TestCommandWAL(FlushFailurePoisonsOpenHandle|RawSetDeleteBatchReplaysThroughNormalExecutor|RawSetReplayRePointersWhenThresholdDrops|RawEmptyBatchAdvancesAppliedLSNAsNoop|RejectsWALOffDurability|PointerBatchReplaysThroughRIDFence|RecoveryCrashDuringReplayResumesFromAppliedLSN|RIDFencePreservedForRawKVBatch|CleanReopenCleansCoveredNonActiveSegmentWithNoReplayFrames|InlineReplayDoesNotScanValueLogRIDMap)|TestSaveOpenFormatConfigRefreshesActiveCommandWALKnobs'"
   ],
   "crash_scenarios": [
     "frame synced before root publish, finalize failpoint, read-write reopen replays command",
@@ -72,7 +73,8 @@
     "raw Set replay that exceeds the current inline threshold is re-pointerized through the legacy replay value-log appender and synced before root plus AppliedCommandLSN publication",
     "empty RawKVBatch frames are explicit no-op commands that advance AppliedCommandLSN without changing roots",
     "CommandWAL plus WAL-off durability fails closed both on explicit opt-in and persisted command_wal_v1 open",
-    "pointer-backed raw KV command frames read the source RID directly from value-log pointer metadata instead of scanning whole segments"
+    "pointer-backed raw KV command frames read the source RID directly from value-log pointer metadata instead of scanning whole segments",
+    "command journal flush/sync failure poisons the open handle so later writes cannot create a durable command LSN gap before reopen recovery"
   ],
   "unsupported_modes_and_errors": [
     "treedb.Open public cached write path with CommandWAL or command_wal_v1 returns ErrCommandWALUnsupported",
@@ -100,7 +102,7 @@
     "GOWORK=off go test ./TreeDB/internal/commitlog ./TreeDB/page ./TreeDB/docs",
     "GOWORK=off go test ./TreeDB/db -run 'Test(CommandWAL|ValidateFormatRequiredFeatureGate|SaveFormatConfig|LoadFormatConfig|Recovery|ReadOnly)'",
     "GOWORK=off go test ./TreeDB -run 'Test(CommandWAL|OpenBackend|Recovery|ReadOnly)'",
-    "GOWORK=off go test -race ./TreeDB/db -run 'TestCommandWAL(RawSetDeleteBatchReplaysThroughNormalExecutor|RawSetReplayRePointersWhenThresholdDrops|RawEmptyBatchAdvancesAppliedLSNAsNoop|RejectsWALOffDurability|PointerBatchReplaysThroughRIDFence|RecoveryCrashDuringReplayResumesFromAppliedLSN|RIDFencePreservedForRawKVBatch|CleanReopenCleansCoveredNonActiveSegmentWithNoReplayFrames|InlineReplayDoesNotScanValueLogRIDMap)|TestSaveOpenFormatConfigRefreshesActiveCommandWALKnobs'",
+    "GOWORK=off go test -race ./TreeDB/db -run 'TestCommandWAL(FlushFailurePoisonsOpenHandle|RawSetDeleteBatchReplaysThroughNormalExecutor|RawSetReplayRePointersWhenThresholdDrops|RawEmptyBatchAdvancesAppliedLSNAsNoop|RejectsWALOffDurability|PointerBatchReplaysThroughRIDFence|RecoveryCrashDuringReplayResumesFromAppliedLSN|RIDFencePreservedForRawKVBatch|CleanReopenCleansCoveredNonActiveSegmentWithNoReplayFrames|InlineReplayDoesNotScanValueLogRIDMap)|TestSaveOpenFormatConfigRefreshesActiveCommandWALKnobs'",
     "GOWORK=off go test ./TreeDB/internal/commitlog -run '^$' -fuzz=FuzzCommandWALRawKVBatchPayload -fuzztime=5s",
     "GOWORK=off go test ./TreeDB/internal/commitlog -run '^$' -fuzz=FuzzCommandWALDecodeFrame -fuzztime=5s",
     "GOWORK=off go test ./TreeDB/db -run '^$' -bench 'BenchmarkCommandWALRawKVDirectWrite' -benchmem -benchtime=100x -count=6",

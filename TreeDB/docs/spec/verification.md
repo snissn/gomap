@@ -353,6 +353,8 @@ PR3 implementation evidence:
 - Command WAL with WAL-off durability fails closed, including after
   `command_wal_v1` is persisted, because PR3 requires a recoverable command
   frame before root visibility.
+- Command journal flush/sync failures poison the open handle so no later write
+  can create a durable LSN gap before reopen recovery.
 - Public cached-mode command WAL writes remain fail-closed until the cached
   writer is converted to the shared typed command journal. This prevents mixed
   legacy raw records in `command_wal_v1` directories.

@@ -133,6 +133,9 @@ func (db *DB) appendRawKVCommandWALIntent(intent *commandWALBatchIntent, sync bo
 	if db == nil || db.commandJournal == nil {
 		return 0, fmt.Errorf("treedb: command wal journal unavailable")
 	}
+	if db.commandWALFlushPoisoned.Load() {
+		return 0, fmt.Errorf("%w: command wal journal flush failed; reopen required", ErrRecoveryRequired)
+	}
 	if intent.externalRefs {
 		if err := db.flushCommandWALExternalRefs(sync); err != nil {
 			return 0, err
@@ -151,12 +154,15 @@ func (db *DB) appendRawKVCommandWALIntent(intent *commandWALBatchIntent, sync bo
 	if err != nil {
 		return 0, err
 	}
-	if sync {
+	if db.testFailCommandWALFlush.Load() {
+		err = errTestCommandWALFlushFailpoint
+	} else if sync {
 		err = db.commandJournal.Sync()
 	} else {
 		err = db.commandJournal.Flush()
 	}
 	if err != nil {
+		db.commandWALFlushPoisoned.Store(true)
 		return 0, err
 	}
 	intent.lsn = lsn

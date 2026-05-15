@@ -250,8 +250,10 @@ type DB struct {
 	testSystemRootWarmMaxDeltaOps int
 	// testFailWriteMeta forces writeMeta to fail before mutating the target meta
 	// page so tests can exercise pre-publish cleanup paths.
-	testFailWriteMeta atomic.Bool
-	closing           atomic.Bool
+	testFailWriteMeta       atomic.Bool
+	testFailCommandWALFlush atomic.Bool
+	commandWALFlushPoisoned atomic.Bool
+	closing                 atomic.Bool
 }
 
 type valueLogRewriteLiveBytesKey struct {
@@ -289,6 +291,7 @@ const (
 const snapshotShardHintUnset = -1
 
 var errTestFinalizeCommitFailpoint = errors.New("treedb: finalize commit failpoint")
+var errTestCommandWALFlushFailpoint = errors.New("treedb: command wal flush failpoint")
 var errTestWriteMetaFailpoint = errors.New("treedb: write meta failpoint")
 
 type finalizeCommitError struct {
