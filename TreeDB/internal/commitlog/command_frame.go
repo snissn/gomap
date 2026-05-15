@@ -416,6 +416,9 @@ func DecodeRawKVBatchPayload(payload []byte) ([]RawKVOperation, error) {
 		entry.Key = cloneBytesPreserveEmpty(payload[off : off+int(keyLen)])
 		off += int(keyLen)
 		if op == RawKVOpSetRID {
+			if valueLen != 8 {
+				return nil, ErrCorrupt
+			}
 			entry.RID = binary.LittleEndian.Uint64(payload[off : off+8])
 			if entry.RID == 0 {
 				return nil, ErrCorrupt
