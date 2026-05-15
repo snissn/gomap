@@ -39,13 +39,16 @@ func BenchmarkFinalizeCommitSameRoots(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		db.writeMu.Lock()
-		if err := db.finalizeCommit(root, sysRoot, nil, false, adaptiveMetricsZero(), nil, false, nil, nil, nil); err != nil {
-			db.writeMu.Unlock()
+		if err := benchmarkFinalizeCommitLocked(db, root, sysRoot); err != nil {
 			b.Fatalf("finalizeCommit: %v", err)
 		}
-		db.writeMu.Unlock()
 	}
+}
+
+func benchmarkFinalizeCommitLocked(db *DB, root, sysRoot uint64) error {
+	db.writeMu.Lock()
+	defer db.writeMu.Unlock()
+	return db.finalizeCommit(root, sysRoot, nil, false, adaptiveMetricsZero(), nil, false, nil, nil, nil)
 }
 
 func adaptiveMetricsZero() adaptive.Metrics {

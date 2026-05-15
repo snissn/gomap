@@ -134,7 +134,9 @@ func (o *JournalOwner) Close() error {
 }
 
 type CommandJournalOptions struct {
-	// Lane selects the command WAL lane and must be non-negative.
+	// Lane selects the command WAL lane and must be non-negative. Lanes are
+	// encoded in decimal segment names, so callers should keep lane IDs within
+	// their configured small lane set rather than treating this as unbounded.
 	Lane int
 	// SegmentSeq selects the segment sequence to append to. Zero means append to
 	// the latest existing segment for Lane, or segment 1 when the lane is empty.
@@ -147,8 +149,9 @@ type CommandJournalOptions struct {
 	MaxSegmentSize int64
 	// Compress enables commitlog frame compression.
 	Compress bool
-	// InitialLSN is the highest already-applied/durable command LSN. The first
-	// reserved LSN is InitialLSN+1, subject to existing WAL frames.
+	// InitialLSN is the highest already-applied/durable command LSN. CommandJournal
+	// scans existing frames while holding the owner lock and advances reservation
+	// to max(InitialLSN, observed frame LSN)+1.
 	InitialLSN uint64
 }
 
@@ -283,7 +286,7 @@ func commandJournalLatestSegmentSeq(walDir string, lane int) (uint64, error) {
 }
 
 func (o *JournalOwner) seedInitialLSN(initialLSN uint64) error {
-	if o == nil || o.lock == nil {
+	if o == nil {
 		return errors.New("commitlog: journal owner is closed")
 	}
 	if initialLSN == ^uint64(0) {
@@ -291,6 +294,9 @@ func (o *JournalOwner) seedInitialLSN(initialLSN uint64) error {
 	}
 	o.mu.Lock()
 	defer o.mu.Unlock()
+	if o.lock == nil {
+		return errors.New("commitlog: journal owner is closed")
+	}
 	o.nextLSN = initialLSN + 1
 	o.exhausted = false
 	return nil
@@ -372,7 +378,7 @@ func parseCommandSegmentName(name string) (lane int, seq uint64, ok bool) {
 		return 0, 0, false
 	}
 	seq, err = strconv.ParseUint(parts[1], 10, 64)
-	if err != nil {
+	if err != nil || seq == 0 {
 		return 0, 0, false
 	}
 	return lane, seq, true
