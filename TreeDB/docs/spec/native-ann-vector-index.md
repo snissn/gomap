@@ -250,6 +250,7 @@ rebuild planning, GC, and stats cheaper.
 ```text
 index_epoch
 applied_collection_seq
+applied_mutation_ordinal
 dirty_reason
 last_rebuild_duration
 last_rebuild_seq_range
@@ -258,7 +259,10 @@ deleted_ratio
 ```
 
 This record is the recovery decision point. It determines whether the runtime
-index can be served, must catch up, or must rebuild.
+index can be served, must catch up, or must rebuild. The applied watermark is
+the pair `(applied_collection_seq, applied_mutation_ordinal)`, not the
+collection sequence alone, because buffered writes can acknowledge multiple
+mutation boundaries before the collection root sequence advances.
 
 ### 6.7 Delta Log Record
 
@@ -282,11 +286,13 @@ can also acknowledge multiple mutation boundaries before the collection root
 sequence advances, so each acknowledged boundary under the same `collection_seq`
 MUST get a durable `mutation_ordinal` before acknowledgment. Delta records are
 ordered by `(collection_seq, mutation_ordinal, delta_ordinal)` and are replayed
-strictly in that order during catch-up or crash recovery. Once
-`applied_collection_seq` in the state record reaches or exceeds a delta's
-sequence and the publishing epoch is durable, all deltas for that sequence are
-eligible for cleanup. If a delta is missing, corrupt, or not replayable, recovery
-marks the index `needs_rebuild` instead of serving graph search as current.
+strictly in that order during catch-up or crash recovery. Once the state
+watermark is at or beyond a delta's `(collection_seq, mutation_ordinal)` and the
+publishing epoch is durable, deltas for that mutation boundary are eligible for
+cleanup. Cleanup MUST NOT delete all deltas for a collection sequence unless
+every mutation boundary in that sequence is proven applied. If a delta is
+missing, corrupt, or not replayable, recovery marks the index `needs_rebuild`
+instead of serving graph search as current.
 
 ### 6.8 Delta Batch Boundary Record
 
