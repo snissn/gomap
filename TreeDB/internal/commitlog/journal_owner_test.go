@@ -246,6 +246,32 @@ func TestCommandJournalSeedsLSNFromExistingLanes(t *testing.T) {
 	}
 }
 
+func TestCommandJournalRejectsDuplicateLSNAcrossLanes(t *testing.T) {
+	dir := t.TempDir()
+	for _, lane := range []int{0, 1} {
+		w, err := NewWriter(filepath.Join(dir, CommandSegmentName(lane, 1)))
+		if err != nil {
+			t.Fatalf("NewWriter lane %d: %v", lane, err)
+		}
+		if err := w.AppendCommand(CommandEnvelope{
+			LSN:           1,
+			Kind:          CommandKindRawKVBatch,
+			Scope:         CommandScopeRawKV,
+			PayloadFormat: PayloadFormatRawKVBatchV1,
+		}); err != nil {
+			_ = w.Close()
+			t.Fatalf("AppendCommand lane %d: %v", lane, err)
+		}
+		if err := w.Close(); err != nil {
+			t.Fatalf("Close lane %d: %v", lane, err)
+		}
+	}
+	_, err := OpenCommandJournal(dir, CommandJournalOptions{})
+	if !errors.Is(err, ErrCommandWALDuplicateLSN) {
+		t.Fatalf("OpenCommandJournal duplicate LSN error=%v, want ErrCommandWALDuplicateLSN", err)
+	}
+}
+
 func TestCommandJournalInitialLSNIgnoresLegacyRawSegments(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, CommandSegmentName(0, 1))

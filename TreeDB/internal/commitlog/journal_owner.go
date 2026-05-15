@@ -191,11 +191,18 @@ func commandJournalInitialLSN(walDir, activePath string, opts CommandJournalOpti
 	if err != nil {
 		return 0, err
 	}
+	seenLSNs := make(map[uint64]struct{})
 	for _, seg := range segments {
 		if seg.size == 0 {
 			continue
 		}
-		maxLSN, typed, completeEnd, err := scanCommandFrameMaxLSNAndEnd(seg.path, Options{MaxSegmentSize: opts.MaxSegmentSize})
+		maxLSN, typed, completeEnd, err := scanCommandFrameMaxLSNAndEndWithLSN(seg.path, Options{MaxSegmentSize: opts.MaxSegmentSize}, func(lsn uint64) error {
+			if _, exists := seenLSNs[lsn]; exists {
+				return ErrCommandWALDuplicateLSN
+			}
+			seenLSNs[lsn] = struct{}{}
+			return nil
+		})
 		if err != nil {
 			if errors.Is(err, ErrCommandWALLegacyPayload) && !typed {
 				if seg.active {

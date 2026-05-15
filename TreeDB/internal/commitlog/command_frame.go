@@ -780,6 +780,10 @@ func scanCommandFrameMaxLSN(path string, opts Options) (maxLSN uint64, typed boo
 }
 
 func scanCommandFrameMaxLSNAndEnd(path string, opts Options) (maxLSN uint64, typed bool, completeEnd int64, err error) {
+	return scanCommandFrameMaxLSNAndEndWithLSN(path, opts, nil)
+}
+
+func scanCommandFrameMaxLSNAndEndWithLSN(path string, opts Options, onLSN func(uint64) error) (maxLSN uint64, typed bool, completeEnd int64, err error) {
 	r, err := NewReaderWithOptions(path, opts)
 	if err != nil {
 		return 0, false, 0, err
@@ -807,6 +811,11 @@ func scanCommandFrameMaxLSNAndEnd(path string, opts Options) (maxLSN uint64, typ
 		}
 		lastLSN = env.LSN
 		typed = true
+		if onLSN != nil {
+			if err := onLSN(env.LSN); err != nil {
+				return 0, typed, completeEnd, err
+			}
+		}
 		if env.LSN > maxLSN {
 			maxLSN = env.LSN
 		}
