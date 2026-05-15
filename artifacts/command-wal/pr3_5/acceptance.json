@@ -74,5 +74,5 @@
     "pointer command_wal_v1 still has +6 alloc/op after RID-cache polish; remaining allocations are tracked as future optimization debt before default cutover",
     "outer-leaf direct backend throughput is much lower than earlier inline-leaf artifacts; the refreshed numbers are the correct benchmark mode because the requested outer-leaf flag is no longer silently ignored"
   ],
-  "evidence_generated_from_commit": "efc11b198dceb39d57e7f1cab91e66363121dee6"
+  "evidence_generated_from_commit": "8508c8155ffb4f0500a992e8a2fe1a47f87d7dcf"
 }
