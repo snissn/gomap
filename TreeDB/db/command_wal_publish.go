@@ -174,7 +174,7 @@ func hasUnappliedCommandWALFrames(dir string, appliedLSN uint64, maxSegmentBytes
 			return false, err
 		}
 		if scan.typed && scan.maxLSN > appliedLSN {
-			return false, fmt.Errorf("%w: command WAL segment %s max LSN %d exceeds applied LSN %d", ErrRecoveryRequired, filepath.Base(seg.path), scan.maxLSN, appliedLSN)
+			return true, fmt.Errorf("%w: command WAL segment %s max LSN %d exceeds applied LSN %d", ErrRecoveryRequired, filepath.Base(seg.path), scan.maxLSN, appliedLSN)
 		}
 	}
 	return false, nil
