@@ -89,14 +89,14 @@ func TestCommandWALLegacyMetaDecodeIgnoresReservedAppliedLSNBytes(t *testing.T) 
 		t.Fatalf("Close: %v", err)
 	}
 
-	writeMetaAppliedCommandLSNBytes(t, dir, activeMetaPage, 12345)
+	writeLegacyMetaReservedBytes(t, dir, activeMetaPage, 12345)
 	reopen, err := Open(Options{Dir: dir})
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
 	defer reopen.Close()
 	if got := reopen.State().AppliedCommandLSN; got != 0 {
-		t.Fatalf("AppliedCommandLSN=%d, want 0 without command WAL V1 meta marker", got)
+		t.Fatalf("AppliedCommandLSN=%d, want 0 without command WAL V1 in-page marker", got)
 	}
 }
 
@@ -460,7 +460,7 @@ func corruptIndexPageByte(t *testing.T, dir string, pageID uint64) {
 	}
 }
 
-func writeMetaAppliedCommandLSNBytes(t *testing.T, dir string, pageID uint64, lsn uint64) {
+func writeLegacyMetaReservedBytes(t *testing.T, dir string, pageID uint64, reserved uint64) {
 	t.Helper()
 	f, err := os.OpenFile(filepath.Join(dir, indexFileName), os.O_RDWR, 0)
 	if err != nil {
@@ -472,7 +472,7 @@ func writeMetaAppliedCommandLSNBytes(t *testing.T, dir string, pageID uint64, ls
 	if _, err := f.ReadAt(buf, off); err != nil {
 		t.Fatalf("ReadAt meta page: %v", err)
 	}
-	binary.LittleEndian.PutUint64(buf[page.PageHeaderSize+60:page.PageHeaderSize+68], lsn)
+	binary.LittleEndian.PutUint64(buf[page.PageHeaderSize+60:page.PageHeaderSize+68], reserved)
 	node.NewNode(buf).UpdateChecksum()
 	if _, err := f.WriteAt(buf, off); err != nil {
 		t.Fatalf("WriteAt meta page: %v", err)

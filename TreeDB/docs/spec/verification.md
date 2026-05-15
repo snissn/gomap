@@ -208,7 +208,7 @@ requirements that the ticket and implementation PRs must satisfy.
 
 In this matrix, `AppliedLSN` names the logical command stream boundary.
 `AppliedCommandLSN` is used only when the test or statement specifically refers
-to the V1 gated meta-page storage field.
+to the V1 in-page-marked meta-page storage field.
 
 | Normative statement | Owner section | Required test/evidence | Status |
 |---|---|---|---|
@@ -274,9 +274,11 @@ PR 2: shared journal ownership and `AppliedCommandLSN` plumbing:
 - `TestCommandJournalAppendFailureRollsBackLSN`;
 - `TestCommandJournalOversizedFrameDoesNotConsumeLSN`;
 - `TestMetaPageBodyAppliedCommandLSNRoundTrip`;
+- `TestMetaPageBodyFullLegacyDecodeIgnoresReservedAppliedCommandLSNBytes`;
 - `TestMetaPageBodyLegacyDecodeDefaultsAppliedCommandLSN`;
 - `TestCommandWALAppliedCommandLSNMetaFieldRoundTrip`;
 - `TestCommandWALAppliedCommandLSNAlternatingMetaPages`;
+- `TestCommandWALLegacyMetaDecodeIgnoresReservedAppliedLSNBytes`;
 - `TestCommandWALRootsAndAppliedCommandLSNPublishAtomically`;
 - `TestCommandWALPublishHelperRejectsRootsWithoutAppliedLSN`;
 - `TestCommandWALAppliedLSNContiguousPrefixOnly`;

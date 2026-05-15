@@ -52,7 +52,7 @@
   ],
   "crash_scenarios": [
     "corrupt active meta page after root plus AppliedCommandLSN publish selects previous durable tuple",
-    "legacy meta pages with stale reserved bytes decode AppliedCommandLSN as zero unless the command WAL V1 meta marker is present",
+    "legacy meta pages with stale reserved bytes decode AppliedCommandLSN as zero unless the command WAL V1 in-page marker is present",
     "opening a later or different-lane command segment seeds the next LSN from the global command segment family to avoid duplicate LSNs after restart",
     "journal-owner lock covers command segment scan, tail truncation, and LSN seed before first append",
     "active command WAL terminal tails are truncated before append, while non-active segment tails fail closed",

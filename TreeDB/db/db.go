@@ -136,7 +136,6 @@ type DB struct {
 	vacuum           vacuumRecorder
 	meta             page.MetaPageBody
 	metaPageID       uint64
-	commandWALMetaV1 bool
 
 	state atomic.Pointer[DBState]
 
@@ -637,9 +636,8 @@ type Options struct {
 	// maintenance). Only read operations are supported. Under the collection WAL
 	// target contract, read-only open must fail with a recovery-required error if
 	// committed unapplied collection WAL needs mutating recovery.
-	ReadOnly         bool
-	ChunkSize        int64 // Default 256KiB
-	commandWALMetaV1 bool
+	ReadOnly  bool
+	ChunkSize int64 // Default 256KiB
 	// DictDBChunkSize controls the mmap chunk size used for the `dictdb/` side
 	// store when TreeDB is opened via the public `treedb.Open` wrapper.
 	//
@@ -1111,7 +1109,6 @@ func Open(opts Options) (*DB, error) {
 			if err := cfg.ValidateRuntimeSupported(); err != nil {
 				return nil, err
 			}
-			opts.commandWALMetaV1 = cfg.UsesCommandWALMetaV1()
 			cfg.ApplyIndexFormatToOptions(&opts)
 		}
 	}
@@ -1387,7 +1384,6 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		freelistRegionPages:            opts.FreelistRegionPages,
 		freelistRegionRadius:           opts.FreelistRegionRadius,
 		durability:                     opts.Durability,
-		commandWALMetaV1:               opts.commandWALMetaV1,
 		policy: WritePolicy{
 			InlineThreshold: inlineThreshold,
 			FlushThreshold:  opts.FlushThreshold,
@@ -1848,10 +1844,7 @@ func (db *DB) readMeta(pageID uint64) (page.MetaPageBody, bool) {
 		return page.MetaPageBody{}, false
 	}
 	body := data[page.PageHeaderSize:]
-	if db.commandWALMetaV1 {
-		return page.DecodeMetaBodyCommandWALV1(body), true
-	}
-	return page.DecodeMetaBody(body), true
+	return page.DecodeMetaBodyCommandWALV1(body), true
 }
 
 func (db *DB) writeMeta(pageID uint64, meta page.MetaPageBody) error {

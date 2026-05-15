@@ -108,7 +108,6 @@ func openReadOnly(opts Options) (*DB, error) {
 		preferAppendAlloc:              opts.PreferAppendAlloc,
 		freelistRegionPages:            opts.FreelistRegionPages,
 		freelistRegionRadius:           opts.FreelistRegionRadius,
-		commandWALMetaV1:               opts.commandWALMetaV1,
 		policy: WritePolicy{
 			InlineThreshold: inlineThreshold,
 			FlushThreshold:  opts.FlushThreshold,
@@ -242,7 +241,6 @@ func openReadOnlyNoLock(opts Options) (*DB, error) {
 		preferAppendAlloc:              opts.PreferAppendAlloc,
 		freelistRegionPages:            opts.FreelistRegionPages,
 		freelistRegionRadius:           opts.FreelistRegionRadius,
-		commandWALMetaV1:               opts.commandWALMetaV1,
 		policy: WritePolicy{
 			InlineThreshold: inlineThreshold,
 			FlushThreshold:  opts.FlushThreshold,
