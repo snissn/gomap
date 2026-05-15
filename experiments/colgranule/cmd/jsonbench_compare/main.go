@@ -109,6 +109,11 @@ type bestColumnStorage struct {
 	ActualCompressionMix map[colgranule.Compression]int `json:"actual_compression_mix"`
 }
 
+type retainedPayloadOption struct {
+	Label  string
+	Result remainingTreeDBResult
+}
+
 type remainingShape string
 
 const (
@@ -124,9 +129,13 @@ func main() {
 	clickHouseLocalPath := flag.String("clickhouse-local", "", "optional local ClickHouse JSONBench result")
 	remainingDBDir := flag.String("remaining-db-dir", "artifacts/colgranule_remaining_treedb", "temporary TreeDB directory prefix for remaining payload measurement")
 	measureRemaining := flag.Bool("measure-remaining-treedb", true, "load remaining JSON shapes into JSON, BSON, and Template-v1 TreeDB collections, compact them, and include disk usage")
+	retainedPayloadFromJSON := flag.String("retained-payload-from-json", "", "optional jsonbench_compare raw JSON file whose retained-payload measurements should be reused when -measure-remaining-treedb=false")
 	outJSON := flag.String("out-json", "artifacts/colgranule/JSONBENCH_COMPARISON_RAW.json", "raw JSON output")
 	outMarkdown := flag.String("out-md", "artifacts/colgranule/JSONBENCH_COMPARISON_REPORT.md", "Markdown report output")
 	flag.Parse()
+	if *measureRemaining && *retainedPayloadFromJSON != "" {
+		must(errors.New("-retained-payload-from-json requires -measure-remaining-treedb=false"))
+	}
 
 	start := time.Now()
 	ds, err := colgranule.LoadJSONBenchColumns(*data, *limit)
@@ -167,6 +176,15 @@ func main() {
 		must(err)
 		rawTreeDBJSON, err = measureRawJSONTreeDB(context.Background(), ds.Files, ds.Rows, *remainingDBDir+"-raw-json")
 		must(err)
+	} else if *retainedPayloadFromJSON != "" {
+		retainedRaw := readComparisonRaw(*retainedPayloadFromJSON)
+		remaining = retainedRaw.RemainingTreeDB
+		remainingJSON = retainedRaw.RemainingTreeDBJSON
+		remainingTpl = retainedRaw.RemainingTreeDBTpl
+		conservativeBSON = retainedRaw.ConservativeBSON
+		conservativeJSON = retainedRaw.ConservativeJSON
+		conservativeTpl = retainedRaw.ConservativeTpl
+		rawTreeDBJSON = retainedRaw.RawTreeDBJSON
 	}
 
 	raw := comparisonRaw{
@@ -206,6 +224,14 @@ func readClickHouseResult(path string) clickHouseResult {
 	data, err := os.ReadFile(path)
 	must(err)
 	var result clickHouseResult
+	must(json.Unmarshal(data, &result))
+	return result
+}
+
+func readComparisonRaw(path string) comparisonRaw {
+	data, err := os.ReadFile(path)
+	must(err)
+	var result comparisonRaw
 	must(json.Unmarshal(data, &result))
 	return result
 }
@@ -993,6 +1019,33 @@ func writeMarkdown(path string, raw comparisonRaw) {
 				accounting.LocatorBytes,
 				accounting.RetainedJSONPayload)
 		}
+		retainedPayloads := retainedPayloadOptions(raw)
+		if len(retainedPayloads) > 0 {
+			fmt.Fprintf(&b, "\nFull-dataset retained-payload estimates add the current M1C encoded part total to a measured TreeDB payload collection containing the original JSON row with ClickHouse typed paths removed. This is the closest M1C-era comparison to ClickHouse `total_size`: the column part is still in memory, while the retained payload is an actual compacted TreeDB directory measurement.\n\n")
+			fmt.Fprintf(&b, "| Layout | Retained payload | Part bytes | Payload bytes | Total bytes | MiB | B/row | TreeDB / ClickHouse | Delta vs ClickHouse | Granules | Codec blocks | Part files | Payload files |\n")
+			fmt.Fprintf(&b, "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n")
+			for _, report := range raw.EncodedPartBuildReports {
+				for _, payload := range retainedPayloads {
+					total := int64(report.Accounting.TotalStoredBytes) + payload.Result.AfterCompactBytes
+					fmt.Fprintf(&b, "| `%s` | `%s` | %d | %d | %d | %.2f | %.3f | %s | %s | %d | %d | %d | %d |\n",
+						report.Layout,
+						payload.Label,
+						report.Accounting.TotalStoredBytes,
+						payload.Result.AfterCompactBytes,
+						total,
+						mib(total),
+						ratio(float64(total), float64(report.Accounting.Rows)),
+						formatMultiplier(float64(total), float64(raw.ClickHouseLocal.TotalSize)),
+						formatSignedMiB(total-raw.ClickHouseLocal.TotalSize),
+						report.Accounting.Granules,
+						report.Accounting.CodecBlocks,
+						report.Accounting.PhysicalFiles,
+						payload.Result.AfterCompactFiles)
+				}
+			}
+		} else {
+			fmt.Fprintf(&b, "\nFull-dataset retained-payload estimate: not measured in this run. Re-run with `-measure-remaining-treedb=true`, or reuse a prior retained-payload run with `-measure-remaining-treedb=false -retained-payload-from-json <raw-json>`.\n")
+		}
 		fmt.Fprintf(&b, "\nCompression/admission by column/substream:\n\n")
 		fmt.Fprintf(&b, "| Layout | Column | Substream | Encoding | Requested | Actual | Blocks | Raw bytes | Stored bytes | Stored/raw | Attempts | Kept | Rejected | Fallback |\n")
 		fmt.Fprintf(&b, "|---|---|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---|\n")
@@ -1044,6 +1097,12 @@ func writeMarkdown(path string, raw comparisonRaw) {
 	fmt.Fprintf(&b, "| ClickHouse local index | %d | %.2f | `index_size` from local ClickHouse JSONBench result. |\n", raw.ClickHouseLocal.IndexSize, mib(raw.ClickHouseLocal.IndexSize))
 	for _, report := range raw.EncodedPartBuildReports {
 		fmt.Fprintf(&b, "| Encoded column part `%s` total | %d | %.2f | M1C actual part estimate including declared columns, loader dictionaries, marks, descriptors, locators, and admitted aggregate metadata; retained JSON is `%s`. |\n", report.Layout, report.Accounting.TotalStoredBytes, mib(int64(report.Accounting.TotalStoredBytes)), report.Accounting.RetainedJSONPayload)
+	}
+	for _, report := range raw.EncodedPartBuildReports {
+		for _, payload := range retainedPayloadOptions(raw) {
+			total := int64(report.Accounting.TotalStoredBytes) + payload.Result.AfterCompactBytes
+			fmt.Fprintf(&b, "| M1C encoded part `%s` + `%s` retained payload | %d | %.2f | Full-dataset estimate: %.2f%% of ClickHouse local total, delta %s; part files `%d`, payload files `%d`, granules `%d`. |\n", report.Layout, payload.Label, total, mib(total), ratio(float64(total)*100, float64(raw.ClickHouseLocal.TotalSize)), formatSignedMiB(total-raw.ClickHouseLocal.TotalSize), report.Accounting.PhysicalFiles, payload.Result.AfterCompactFiles, report.Accounting.Granules)
+		}
 	}
 	fmt.Fprintf(&b, "| Granule best-codec all derived columns | %d | %.2f | %.2f%% of ClickHouse local total. |\n", allBest, mib(int64(allBest)), ratio(float64(allBest)*100, float64(raw.ClickHouseLocal.TotalSize)))
 	fmt.Fprintf(&b, "| Granule best-codec query/index paths | %d | %.2f | %.2f%% of ClickHouse local total. |\n", queryBest, mib(int64(queryBest)), ratio(float64(queryBest)*100, float64(raw.ClickHouseLocal.TotalSize)))
@@ -1228,6 +1287,20 @@ func bestTotal(cols []bestColumnStorage, include map[string]bool) int {
 	return total
 }
 
+func retainedPayloadOptions(raw comparisonRaw) []retainedPayloadOption {
+	options := make([]retainedPayloadOption, 0, 3)
+	if raw.RemainingTreeDB.Enabled {
+		options = append(options, retainedPayloadOption{Label: "BSON remaining", Result: raw.RemainingTreeDB})
+	}
+	if raw.RemainingTreeDBJSON.Enabled {
+		options = append(options, retainedPayloadOption{Label: "JSON remaining", Result: raw.RemainingTreeDBJSON})
+	}
+	if raw.RemainingTreeDBTpl.Enabled {
+		options = append(options, retainedPayloadOption{Label: "Template-v1 remaining", Result: raw.RemainingTreeDBTpl})
+	}
+	return options
+}
+
 func ratio(numerator, denominator float64) float64 {
 	if denominator == 0 {
 		return 0
@@ -1249,6 +1322,13 @@ func formatRatio(numerator, denominator float64) string {
 	return fmt.Sprintf("%.2fx", ratio(numerator, denominator))
 }
 
+func formatMultiplier(numerator, denominator float64) string {
+	if denominator == 0 {
+		return "n/a"
+	}
+	return fmt.Sprintf("%.3fx", ratio(numerator, denominator))
+}
+
 func formatSpeedup(numerator, denominator float64) string {
 	if numerator == 0 || denominator == 0 {
 		return "n/a"
@@ -1261,6 +1341,15 @@ func formatPercent(numerator, denominator float64) string {
 		return "n/a"
 	}
 	return fmt.Sprintf("%.2f%%", ratio(numerator*100, denominator))
+}
+
+func formatSignedMiB(bytes int64) string {
+	sign := "+"
+	if bytes < 0 {
+		sign = "-"
+		bytes = -bytes
+	}
+	return fmt.Sprintf("%s%.2f MiB", sign, mib(bytes))
 }
 
 func formatBreakEvenQueries(buildSeconds, baselineSeconds, metadataSeconds float64) string {

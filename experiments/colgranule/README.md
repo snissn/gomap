@@ -79,3 +79,22 @@ removed, and a ClickHouse-aligned shape with the typed JSON paths removed:
 this part with `-measure-remaining-treedb=false`. The command also records a raw
 TreeDB key/value shape that stores `documentID(row) -> original JSON line bytes`
 without collection document encoding.
+
+To iterate on encoded-part build and query kernels without reloading the retained
+payload collections, reuse a previous raw comparison file:
+
+```sh
+go run ./experiments/colgranule/cmd/jsonbench_compare \
+  -data $JSONBENCH_DATA \
+  -limit 1000000 \
+  -rows-per-granule 8192 \
+  -attempts 5 \
+  -measure-remaining-treedb=false \
+  -retained-payload-from-json experiments/colgranule/JSONBENCH_COMPARISON_RAW.json
+```
+
+When retained-payload measurements are available, the Markdown report includes a
+full-dataset estimate that adds the current encoded column part to the measured
+TreeDB payload bytes. This is the M1C-era comparison point for ClickHouse
+`total_size`; the encoded part is still in memory, while the retained payload is
+measured from compacted TreeDB files.
