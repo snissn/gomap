@@ -302,6 +302,108 @@ func BenchmarkPredicatePruningInt64Granules(b *testing.B) {
 	})
 }
 
+func BenchmarkAggregateGroupedCountCodes(b *testing.B) {
+	const granulesN = 100
+	const cardinality = 16
+	codeGranules, err := buildAggregateCodeGranules(granulesN, DefaultRowsPerGranule, cardinality)
+	if err != nil {
+		b.Fatal(err)
+	}
+	totalRows := granulesN * DefaultRowsPerGranule
+	b.Run("encoded_kernel", func(b *testing.B) {
+		b.ReportAllocs()
+		b.SetBytes(int64(totalRows * 4))
+		var arena AggregateArena
+		counts, err := arena.GroupedCountCodes(codeGranules, cardinality)
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchSink += int64(counts[0])
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			counts, err = arena.GroupedCountCodes(codeGranules, cardinality)
+			if err != nil {
+				b.Fatal(err)
+			}
+			benchSink += int64(counts[0])
+		}
+		reportGranuleBenchMetrics(b, totalRows, totalRows*4, totalStoredBytes(codeGranules))
+	})
+	b.Run("materialized_decode_loop", func(b *testing.B) {
+		b.ReportAllocs()
+		b.SetBytes(int64(totalRows * 4))
+		var reader GranuleReader
+		counts := make([]uint64, cardinality)
+		if err := countCodesMaterialized(&reader, codeGranules, counts); err != nil {
+			b.Fatal(err)
+		}
+		benchSink += int64(counts[0])
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			if err := countCodesMaterialized(&reader, codeGranules, counts); err != nil {
+				b.Fatal(err)
+			}
+			benchSink += int64(counts[0])
+		}
+		reportGranuleBenchMetrics(b, totalRows, totalRows*4, totalStoredBytes(codeGranules))
+	})
+}
+
+func BenchmarkAggregateFilteredGroupedCountCodes(b *testing.B) {
+	const granulesN = 100
+	const cardinality = 16
+	codeGranules, timeGranules, err := buildAggregateCodeTimeGranules(granulesN, DefaultRowsPerGranule, cardinality)
+	if err != nil {
+		b.Fatal(err)
+	}
+	totalRows := granulesN * DefaultRowsPerGranule
+	filter := Int64RangePredicate{Column: "time_us", Low: int64(totalRows * 9 / 10), High: int64(totalRows - 1)}
+	b.ReportAllocs()
+	b.SetBytes(int64(totalRows * 12))
+	var arena AggregateArena
+	counts, diagnostics, err := arena.FilteredGroupedCountCodes(codeGranules, timeGranules, filter, cardinality)
+	if err != nil {
+		b.Fatal(err)
+	}
+	benchSink += int64(counts[0] + uint64(diagnostics.SkippedByMinMax))
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		counts, diagnostics, err = arena.FilteredGroupedCountCodes(codeGranules, timeGranules, filter, cardinality)
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchSink += int64(counts[0] + uint64(diagnostics.SkippedByMinMax))
+	}
+	reportGranuleBenchMetrics(b, totalRows, totalRows*12, totalStoredBytes(codeGranules)+totalStoredBytes(timeGranules))
+}
+
+func BenchmarkAggregateExactDistinctInt64(b *testing.B) {
+	const granulesN = 16
+	const rowsPerGranule = DefaultRowsPerGranule
+	idGranules, err := buildDistinctIDGranules(granulesN, rowsPerGranule)
+	if err != nil {
+		b.Fatal(err)
+	}
+	totalRows := granulesN * rowsPerGranule
+	b.ReportAllocs()
+	b.SetBytes(int64(totalRows * 8))
+	var arena AggregateArena
+	distinct, err := arena.ExactDistinctInt64(idGranules)
+	if err != nil {
+		b.Fatal(err)
+	}
+	benchSink += int64(distinct)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		distinct, err = arena.ExactDistinctInt64(idGranules)
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchSink += int64(distinct)
+	}
+	reportGranuleBenchMetrics(b, totalRows, totalRows*8, totalStoredBytes(idGranules))
+}
+
 func TestCompressionRatios(t *testing.T) {
 	for _, fx := range benchmarkFixtures() {
 		t.Logf("fixture=%s rows=%d raw_values_bytes=%d", fx.name, len(fx.values), len(fx.values)*8)
@@ -451,4 +553,86 @@ func totalStoredBytes(granules []EncodedGranule) int {
 		total += g.StoredBytes
 	}
 	return total
+}
+
+func buildAggregateCodeGranules(granulesN int, rowsPerGranule int, cardinality uint32) ([]EncodedGranule, error) {
+	builder := NewGranuleBuilder(Config{Compression: CompressionLZ4})
+	granules := make([]EncodedGranule, 0, granulesN)
+	for granuleIndex := 0; granuleIndex < granulesN; granuleIndex++ {
+		codes := makeUint32Codes(rowsPerGranule, cardinality)
+		for i := range codes {
+			codes[i] = (codes[i] + uint32(granuleIndex)) % cardinality
+		}
+		g, err := builder.BuildUint32Codes(codes, cardinality)
+		if err != nil {
+			return nil, err
+		}
+		owned := g
+		owned.Payload = append([]byte(nil), g.Payload...)
+		granules = append(granules, owned)
+	}
+	return granules, nil
+}
+
+func buildAggregateCodeTimeGranules(granulesN int, rowsPerGranule int, cardinality uint32) ([]EncodedGranule, []EncodedGranule, error) {
+	codeBuilder := NewGranuleBuilder(Config{Compression: CompressionLZ4})
+	timeBuilder := NewGranuleBuilder(Config{Encoding: EncodingDoubleDeltaVarint, Compression: CompressionLZ4})
+	codeGranules := make([]EncodedGranule, 0, granulesN)
+	timeGranules := make([]EncodedGranule, 0, granulesN)
+	for granuleIndex := 0; granuleIndex < granulesN; granuleIndex++ {
+		codes := makeUint32Codes(rowsPerGranule, cardinality)
+		times := make([]int64, rowsPerGranule)
+		for i := range times {
+			codes[i] = (codes[i] + uint32(granuleIndex)) % cardinality
+			times[i] = int64(granuleIndex*rowsPerGranule + i)
+		}
+		codeGranule, err := codeBuilder.BuildUint32Codes(codes, cardinality)
+		if err != nil {
+			return nil, nil, err
+		}
+		timeGranule, err := timeBuilder.BuildInt64(times)
+		if err != nil {
+			return nil, nil, err
+		}
+		codeOwned := codeGranule
+		timeOwned := timeGranule
+		codeOwned.Payload = append([]byte(nil), codeGranule.Payload...)
+		timeOwned.Payload = append([]byte(nil), timeGranule.Payload...)
+		codeGranules = append(codeGranules, codeOwned)
+		timeGranules = append(timeGranules, timeOwned)
+	}
+	return codeGranules, timeGranules, nil
+}
+
+func buildDistinctIDGranules(granulesN int, rowsPerGranule int) ([]EncodedGranule, error) {
+	builder := NewGranuleBuilder(Config{Encoding: EncodingDeltaVarint, Compression: CompressionLZ4})
+	granules := make([]EncodedGranule, 0, granulesN)
+	for granuleIndex := 0; granuleIndex < granulesN; granuleIndex++ {
+		values := make([]int64, rowsPerGranule)
+		for i := range values {
+			values[i] = int64(granuleIndex*rowsPerGranule + i)
+		}
+		g, err := builder.BuildInt64(values)
+		if err != nil {
+			return nil, err
+		}
+		owned := g
+		owned.Payload = append([]byte(nil), g.Payload...)
+		granules = append(granules, owned)
+	}
+	return granules, nil
+}
+
+func countCodesMaterialized(reader *GranuleReader, granules []EncodedGranule, counts []uint64) error {
+	clear(counts)
+	for _, g := range granules {
+		codes, err := reader.DecodeUint32Codes(g)
+		if err != nil {
+			return err
+		}
+		for _, code := range codes {
+			counts[code]++
+		}
+	}
+	return nil
 }
