@@ -460,14 +460,20 @@ func testColumnPartImageBytes(t *testing.T, part *ColumnPart, sections []ColumnP
 	sections = append([]ColumnPartImageSection(nil), sections...)
 	manifestBytes := 0
 	for attempt := 0; attempt < 8; attempt++ {
-		manifest := encodeColumnPartImageManifest(part, sections, manifestBytes)
+		manifest, err := encodeColumnPartImageManifest(part, sections, manifestBytes)
+		if err != nil {
+			t.Fatal(err)
+		}
 		offset := len(manifest)
 		for i := range sections {
 			sections[i].Offset = offset
 			sections[i].Length = len(payloads[i])
 			offset += len(payloads[i])
 		}
-		finalManifest := encodeColumnPartImageManifest(part, sections, len(manifest))
+		finalManifest, err := encodeColumnPartImageManifest(part, sections, len(manifest))
+		if err != nil {
+			t.Fatal(err)
+		}
 		if len(finalManifest) == len(manifest) {
 			out := append([]byte(nil), finalManifest...)
 			for _, payload := range payloads {

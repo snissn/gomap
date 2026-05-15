@@ -206,9 +206,11 @@ func (b *columnPartImageBuilder) layoutManifestAndSections() ([]ColumnPartImageS
 		sections[i] = b.sections[i].section
 	}
 	manifestBytes := 0
-	var manifest []byte
 	for attempt := 0; attempt < 8; attempt++ {
-		manifest = encodeColumnPartImageManifest(b.part, sections, manifestBytes)
+		manifest, err := encodeColumnPartImageManifest(b.part, sections, manifestBytes)
+		if err != nil {
+			return nil, nil, err
+		}
 		offset := len(manifest)
 		for i := range b.sections {
 			b.sections[i].section.Offset = offset
@@ -216,7 +218,10 @@ func (b *columnPartImageBuilder) layoutManifestAndSections() ([]ColumnPartImageS
 			sections[i] = b.sections[i].section
 			offset += len(b.sections[i].data)
 		}
-		finalManifest := encodeColumnPartImageManifest(b.part, sections, len(manifest))
+		finalManifest, err := encodeColumnPartImageManifest(b.part, sections, len(manifest))
+		if err != nil {
+			return nil, nil, err
+		}
 		if len(finalManifest) == len(manifest) {
 			return sections, finalManifest, nil
 		}
@@ -517,7 +522,7 @@ func (e *columnPartImageEncoder) stringSlice(values []string) {
 	}
 }
 
-func encodeColumnPartImageManifest(part *ColumnPart, sections []ColumnPartImageSection, manifestBytes int) []byte {
+func encodeColumnPartImageManifest(part *ColumnPart, sections []ColumnPartImageSection, manifestBytes int) ([]byte, error) {
 	var enc columnPartImageEncoder
 	enc.u32(columnPartImageMagic)
 	enc.u16(columnPartImageVersion)
@@ -527,8 +532,16 @@ func encodeColumnPartImageManifest(part *ColumnPart, sections []ColumnPartImageS
 	enc.u32(uint32(manifestBytes))
 	enc.u32(uint32(len(sections)))
 	for _, section := range sections {
-		enc.u16(uint16(columnPartImageSectionKindCode(section.Kind)))
-		enc.u16(uint16(columnPartImageSectionCategoryCode(section.Category)))
+		kindCode, err := columnPartImageSectionKindCode(section.Kind)
+		if err != nil {
+			return nil, err
+		}
+		categoryCode, err := columnPartImageSectionCategoryCode(section.Category)
+		if err != nil {
+			return nil, err
+		}
+		enc.u16(kindCode)
+		enc.u16(categoryCode)
 		enc.u64(uint64(section.Offset))
 		enc.u64(uint64(section.Length))
 		enc.i64(int64(section.Rows))
@@ -539,7 +552,7 @@ func encodeColumnPartImageManifest(part *ColumnPart, sections []ColumnPartImageS
 		enc.str(section.Name)
 		enc.str(section.Column)
 	}
-	return enc.bytes()
+	return enc.bytes(), nil
 }
 
 func encodeSortKeyBound(enc *columnPartImageEncoder, bound SortKeyBound) {
@@ -622,48 +635,56 @@ func columnTypeCode(t ColumnType) uint16 {
 	}
 }
 
-func columnPartImageSectionKindCode(kind ColumnPartImageSectionKind) uint16 {
-	switch kind {
-	case ColumnPartImageSectionManifest:
-		return 8
-	case ColumnPartImageSectionDescriptor:
-		return 1
-	case ColumnPartImageSectionSortKeyMetadata:
-		return 2
-	case ColumnPartImageSectionSortKeyMarks:
-		return 3
-	case ColumnPartImageSectionRowLocators:
-		return 4
-	case ColumnPartImageSectionAggregateMetadata:
-		return 5
-	case ColumnPartImageSectionDictionaries:
-		return 6
-	case ColumnPartImageSectionColumnData:
-		return 7
-	default:
-		return 0
-	}
+type columnPartImageSectionCode struct {
+	kind         ColumnPartImageSectionKind
+	kindCode     uint16
+	category     ColumnPartImageSectionCategory
+	categoryCode uint16
 }
 
-func columnPartImageSectionCategoryCode(category ColumnPartImageSectionCategory) uint16 {
-	switch category {
-	case ColumnPartImageCategoryManifest:
-		return 8
-	case ColumnPartImageCategoryDescriptor:
-		return 1
-	case ColumnPartImageCategorySortKeyMetadata:
-		return 2
-	case ColumnPartImageCategoryMarks:
-		return 3
-	case ColumnPartImageCategoryLocators:
-		return 4
-	case ColumnPartImageCategoryAggregateMetadata:
-		return 5
-	case ColumnPartImageCategoryDictionaries:
-		return 6
-	case ColumnPartImageCategoryDeclaredColumns:
-		return 7
-	default:
-		return 0
+var columnPartImageSectionCodes = []columnPartImageSectionCode{
+	{kind: ColumnPartImageSectionDescriptor, kindCode: 1, category: ColumnPartImageCategoryDescriptor, categoryCode: 1},
+	{kind: ColumnPartImageSectionSortKeyMetadata, kindCode: 2, category: ColumnPartImageCategorySortKeyMetadata, categoryCode: 2},
+	{kind: ColumnPartImageSectionSortKeyMarks, kindCode: 3, category: ColumnPartImageCategoryMarks, categoryCode: 3},
+	{kind: ColumnPartImageSectionRowLocators, kindCode: 4, category: ColumnPartImageCategoryLocators, categoryCode: 4},
+	{kind: ColumnPartImageSectionAggregateMetadata, kindCode: 5, category: ColumnPartImageCategoryAggregateMetadata, categoryCode: 5},
+	{kind: ColumnPartImageSectionDictionaries, kindCode: 6, category: ColumnPartImageCategoryDictionaries, categoryCode: 6},
+	{kind: ColumnPartImageSectionColumnData, kindCode: 7, category: ColumnPartImageCategoryDeclaredColumns, categoryCode: 7},
+	{kind: ColumnPartImageSectionManifest, kindCode: 8, category: ColumnPartImageCategoryManifest, categoryCode: 8},
+}
+
+func columnPartImageSectionKindCode(kind ColumnPartImageSectionKind) (uint16, error) {
+	for _, code := range columnPartImageSectionCodes {
+		if code.kind == kind {
+			return code.kindCode, nil
+		}
 	}
+	return 0, fmt.Errorf("colgranule: unknown image section kind %s", kind)
+}
+
+func columnPartImageSectionKindFromCode(code uint16) (ColumnPartImageSectionKind, error) {
+	for _, entry := range columnPartImageSectionCodes {
+		if entry.kindCode == code {
+			return entry.kind, nil
+		}
+	}
+	return "", fmt.Errorf("colgranule: unknown image section kind code %d", code)
+}
+
+func columnPartImageSectionCategoryCode(category ColumnPartImageSectionCategory) (uint16, error) {
+	for _, code := range columnPartImageSectionCodes {
+		if code.category == category {
+			return code.categoryCode, nil
+		}
+	}
+	return 0, fmt.Errorf("colgranule: unknown image section category %s", category)
+}
+
+func columnPartImageSectionCategoryFromCode(code uint16) (ColumnPartImageSectionCategory, error) {
+	for _, entry := range columnPartImageSectionCodes {
+		if entry.categoryCode == code {
+			return entry.category, nil
+		}
+	}
+	return "", fmt.Errorf("colgranule: unknown image section category code %d", code)
 }
