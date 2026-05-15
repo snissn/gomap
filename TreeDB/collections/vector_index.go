@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -1768,17 +1769,27 @@ func (idx *VectorIndex) CheckRecall(queries [][]float32, opts VectorIndexSearchO
 	if opts.TopK <= 0 {
 		return recall, errors.New("collections: vector search TopK must be positive")
 	}
+	exactBatch, usedBatch, err := idx.checkRecallExactBatch(queries, opts)
+	if err != nil {
+		return recall, err
+	}
 	recall.SearchTraces = make([]VectorIndexTrace, 0, len(queries))
-	for _, query := range queries {
-		exact, err := idx.collection.SearchVectorsExact(query, VectorSearchOptions{
-			Field:            idx.field,
-			Metric:           idx.metric,
-			TopK:             opts.TopK,
-			Filter:           opts.Filter,
-			IndexRangeFilter: opts.IndexRangeFilter,
-		})
-		if err != nil {
-			return recall, err
+	for i, query := range queries {
+		var exact []VectorSearchResult
+		if usedBatch {
+			exact = exactBatch[i]
+		} else {
+			var err error
+			exact, err = idx.collection.SearchVectorsExact(query, VectorSearchOptions{
+				Field:            idx.field,
+				Metric:           idx.metric,
+				TopK:             opts.TopK,
+				Filter:           opts.Filter,
+				IndexRangeFilter: opts.IndexRangeFilter,
+			})
+			if err != nil {
+				return recall, err
+			}
 		}
 		searchOpts := opts
 		searchOpts.DisableExactFallback = true
@@ -1803,6 +1814,96 @@ func (idx *VectorIndex) CheckRecall(queries [][]float32, opts VectorIndexSearchO
 		recall.Recall = float64(recall.Overlap) / float64(recall.ExactTotal)
 	}
 	return recall, nil
+}
+
+func (idx *VectorIndex) checkRecallExactBatch(queries [][]float32, opts VectorIndexSearchOptions) ([][]VectorSearchResult, bool, error) {
+	if len(queries) < 2 || opts.Filter != nil || opts.IndexRangeFilter != nil || idx.metric != VectorMetricCosine {
+		return nil, false, nil
+	}
+	queryDims := len(queries[0])
+	if queryDims == 0 {
+		return nil, true, errors.New("collections: vector query cannot be empty")
+	}
+	if idx.dimensions != 0 && queryDims != idx.dimensions {
+		return nil, true, fmt.Errorf("collections: vector query has dimension %d, want %d", queryDims, idx.dimensions)
+	}
+	queryMatrix := make([]float32, 0, len(queries)*queryDims)
+	for _, query := range queries {
+		if len(query) != queryDims {
+			return nil, true, fmt.Errorf("collections: vector query has dimension %d, want %d", len(query), queryDims)
+		}
+		if err := validateFloat32Vector(query); err != nil {
+			return nil, true, fmt.Errorf("collections: vector query: %w", err)
+		}
+		if vectorNormSquared(query) == 0 {
+			return nil, true, errors.New("collections: cosine vector query cannot have zero magnitude")
+		}
+		queryMatrix = append(queryMatrix, query...)
+	}
+	if err := idx.collection.flushBufferedWrites(); err != nil {
+		return nil, true, err
+	}
+
+	materializer, err := idx.collection.NewStoredDocumentJSONMaterializer()
+	if err != nil {
+		return nil, true, err
+	}
+	defer func() { _ = materializer.Close() }()
+
+	documentIDs := make([][]byte, 0, opts.TopK)
+	vectorMatrix := make([]float32, 0, opts.TopK*queryDims)
+	_, err = idx.collection.ScanDocumentsFunc(maxCollectionInt, func(record DocumentRecord) (bool, error) {
+		vector, ok, err := vectorFromStoredDocument(materializer, record.Document, idx.fieldPath)
+		if err != nil {
+			return false, fmt.Errorf("collections: vector field %q in document %q: %w", idx.field, record.ID, err)
+		}
+		if !ok {
+			return true, nil
+		}
+		if len(vector) != queryDims {
+			return false, fmt.Errorf("collections: vector field %q in document %q has dimension %d, want %d", idx.field, record.ID, len(vector), queryDims)
+		}
+		if vectorNormSquared(vector) == 0 {
+			return false, fmt.Errorf("collections: vector field %q in document %q: cosine vectors cannot have zero magnitude", idx.field, record.ID)
+		}
+		documentIDs = append(documentIDs, bytes.Clone(record.ID))
+		vectorMatrix = append(vectorMatrix, vector...)
+		return true, nil
+	})
+	if err != nil {
+		return nil, true, err
+	}
+
+	exact := make([][]VectorSearchResult, len(queries))
+	if len(documentIDs) == 0 {
+		for i := range exact {
+			exact[i] = []VectorSearchResult{}
+		}
+		return exact, true, nil
+	}
+
+	packedDocs := nk.NewPackedMatrixF32(vectorMatrix, len(documentIDs), queryDims)
+	distances := make([]float64, len(queries)*len(documentIDs))
+	workerCount := minInt(len(queries), runtime.GOMAXPROCS(0))
+	pool := nk.NewWorkerPool(workerCount)
+	defer pool.Close()
+	packedDocs.AngularsF32WithPool(queryMatrix, distances, len(queries), pool)
+
+	for queryIndex := range queries {
+		row := distances[queryIndex*len(documentIDs) : (queryIndex+1)*len(documentIDs)]
+		matches := make([]VectorSearchResult, 0, opts.TopK)
+		for docIndex, distance := range row {
+			matches = appendBoundedVectorSearchResult(matches, VectorSearchResult{
+				DocumentID: bytes.Clone(documentIDs[docIndex]),
+				Distance:   float32(distance),
+			}, opts.TopK)
+		}
+		if matches == nil {
+			matches = []VectorSearchResult{}
+		}
+		exact[queryIndex] = matches
+	}
+	return exact, true, nil
 }
 
 func vectorFromStoredDocument(materializer *StoredDocumentJSONMaterializer, document []byte, fieldPath []string) ([]float32, bool, error) {

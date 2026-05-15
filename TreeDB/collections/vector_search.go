@@ -146,16 +146,11 @@ func (c *Collection) SearchVectorsExact(query []float32, opts VectorSearchOption
 
 	matches := make([]VectorSearchResult, 0, opts.TopK)
 	addMatch := func(record DocumentRecord, distance float32) {
-		result := VectorSearchResult{
+		matches = appendBoundedVectorSearchResult(matches, VectorSearchResult{
 			DocumentID: bytes.Clone(record.ID),
 			Distance:   distance,
 			Document:   bytes.Clone(record.Document),
-		}
-		matches = append(matches, result)
-		sortVectorSearchResults(matches)
-		if len(matches) > opts.TopK {
-			matches = matches[:opts.TopK]
-		}
+		}, opts.TopK)
 	}
 	processRecord := func(record DocumentRecord) error {
 		if opts.Filter != nil {
@@ -416,13 +411,32 @@ func validateFloat32Vector(vector []float32) error {
 }
 
 func sortVectorSearchResults(results []VectorSearchResult) {
-	slices.SortFunc(results, func(left, right VectorSearchResult) int {
-		if left.Distance < right.Distance {
-			return -1
-		}
-		if left.Distance > right.Distance {
-			return 1
-		}
-		return bytes.Compare(left.DocumentID, right.DocumentID)
-	})
+	slices.SortFunc(results, compareVectorSearchResults)
+}
+
+func compareVectorSearchResults(left, right VectorSearchResult) int {
+	if left.Distance < right.Distance {
+		return -1
+	}
+	if left.Distance > right.Distance {
+		return 1
+	}
+	return bytes.Compare(left.DocumentID, right.DocumentID)
+}
+
+func appendBoundedVectorSearchResult(matches []VectorSearchResult, result VectorSearchResult, limit int) []VectorSearchResult {
+	if limit <= 0 {
+		return matches
+	}
+	if len(matches) == limit && compareVectorSearchResults(result, matches[len(matches)-1]) >= 0 {
+		return matches
+	}
+	matches = append(matches, result)
+	for i := len(matches) - 1; i > 0 && compareVectorSearchResults(matches[i], matches[i-1]) < 0; i-- {
+		matches[i], matches[i-1] = matches[i-1], matches[i]
+	}
+	if len(matches) > limit {
+		matches = matches[:limit]
+	}
+	return matches
 }

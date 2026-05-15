@@ -137,6 +137,8 @@ type validationResult struct {
 	Overlap          int     `json:"overlap"`
 	Recall           float64 `json:"recall"`
 	MinRecall        float64 `json:"min_recall"`
+	DurationNanos    int64   `json:"duration_nanos"`
+	Seconds          float64 `json:"seconds"`
 }
 
 type searchBenchmarkResult struct {
@@ -773,6 +775,7 @@ func insertDocuments(col *collections.Collection, docs, dims, batchSize int) err
 }
 
 func validateCompactedData(col *collections.Collection, idx *collections.VectorIndex, cfg config) (validationResult, error) {
+	start := time.Now()
 	out := validationResult{
 		DocumentsChecked: cfg.validateDocs,
 		QueriesChecked:   cfg.validateQueries,
@@ -791,6 +794,9 @@ func validateCompactedData(col *collections.Collection, idx *collections.VectorI
 	}
 	if cfg.validateQueries == 0 {
 		out.Recall = 1
+		elapsed := phaseSince(start)
+		out.DurationNanos = elapsed.DurationNanos
+		out.Seconds = elapsed.Seconds
 		return out, nil
 	}
 	recall, err := idx.CheckRecall(validationQueries(cfg.validateQueries, cfg.docs, cfg.dimensions), collections.VectorIndexSearchOptions{
@@ -808,6 +814,9 @@ func validateCompactedData(col *collections.Collection, idx *collections.VectorI
 	if out.Recall < cfg.minRecall {
 		return out, fmt.Errorf("recall %.4f below minimum %.4f", out.Recall, cfg.minRecall)
 	}
+	elapsed := phaseSince(start)
+	out.DurationNanos = elapsed.DurationNanos
+	out.Seconds = elapsed.Seconds
 	return out, nil
 }
 
