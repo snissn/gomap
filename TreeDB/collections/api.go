@@ -782,17 +782,33 @@ type IndexDefinition struct {
 	StoragePolicy RootStoragePolicy `json:"storage_policy,omitempty"`
 }
 
+// VectorIndexDefinition declares a document vector field as an ANN-capable
+// collection index. PRs after the metadata/API step persist and maintain the
+// HNSW graph through collection index roots.
+type VectorIndexDefinition struct {
+	Name           string              `json:"name"`
+	Field          string              `json:"field"`
+	Metric         VectorMetric        `json:"metric"`
+	Dimensions     int                 `json:"dimensions"`
+	M              int                 `json:"m,omitempty"`
+	EfConstruction int                 `json:"ef_construction,omitempty"`
+	EfSearch       int                 `json:"ef_search,omitempty"`
+	Encoding       VectorIndexEncoding `json:"encoding,omitempty"`
+}
+
 type CollectionMeta struct {
-	Name    string            `json:"name"`
-	Options CollectionOptions `json:"options,omitempty"`
-	Indexes []IndexDefinition `json:"indexes,omitempty"`
+	Name          string                  `json:"name"`
+	Options       CollectionOptions       `json:"options,omitempty"`
+	Indexes       []IndexDefinition       `json:"indexes,omitempty"`
+	VectorIndexes []VectorIndexDefinition `json:"vector_indexes,omitempty"`
 }
 
 type collectionMetaDisk struct {
-	Version int               `json:"version"`
-	Name    string            `json:"name"`
-	Options CollectionOptions `json:"options,omitempty"`
-	Indexes []IndexDefinition `json:"indexes,omitempty"`
+	Version       int                     `json:"version"`
+	Name          string                  `json:"name"`
+	Options       CollectionOptions       `json:"options,omitempty"`
+	Indexes       []IndexDefinition       `json:"indexes,omitempty"`
+	VectorIndexes []VectorIndexDefinition `json:"vector_indexes,omitempty"`
 }
 
 type collectionCatalog struct {
@@ -2908,6 +2924,141 @@ func (c *Collection) CreateIndex(def IndexDefinition) (*CollectionMeta, error) {
 	return newMeta.copy(), nil
 }
 
+// CreateVectorIndex adds vector index metadata to the collection schema.
+//
+// This metadata-only API makes vector fields declarable as document-store
+// indexes. Follow-on PRs persist and maintain the native HNSW graph under the
+// declared index.
+func (c *Collection) CreateVectorIndex(def VectorIndexDefinition) (*CollectionMeta, error) {
+	if c == nil {
+		return nil, errCollectionNil
+	}
+	if c.db == nil {
+		return nil, errCollectionDBNil
+	}
+	unlockMutation := c.lockMutation()
+	defer unlockMutation.Unlock()
+	if err := c.flushBufferedWrites(); err != nil {
+		return nil, err
+	}
+
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return nil, backenddb.ErrClosed
+	}
+	catalog, err := loadCollectionCatalog(snap, c.meta.Name)
+	if err != nil {
+		_ = snap.Close()
+		return nil, err
+	}
+	if catalog == nil {
+		_ = snap.Close()
+		return nil, errCollectionNotFound
+	}
+	if err := rejectCatalogRootOverlaysForWrite(catalog); err != nil {
+		_ = snap.Close()
+		return nil, err
+	}
+	baseMeta := catalog.meta
+	c.meta = baseMeta
+	_ = snap.Close()
+
+	newMeta, _, err := addVectorIndexToCollectionMeta(baseMeta, def)
+	if err != nil {
+		return nil, err
+	}
+	encodedMeta, err := encodeCollectionMeta(newMeta)
+	if err != nil {
+		return nil, err
+	}
+	newSystemRoot, _, err := c.db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder(nil, func([]uint64) (iterator.UnsafeIterator, error) {
+		return c.buildSchemaOnlySystemDeltaIterator(baseMeta, encodedMeta, nil)
+	})
+	if err != nil {
+		return nil, err
+	}
+	c.meta = newMeta
+	nextCatalog := cloneCatalogWithRootUpdates(catalog, newMeta, nil, nil)
+	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
+	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
+	return newMeta.copy(), nil
+}
+
+func (c *Collection) DropVectorIndex(name string) (*CollectionMeta, error) {
+	if err := ValidateIndexName(name); err != nil {
+		return nil, err
+	}
+	if c == nil {
+		return nil, errCollectionNil
+	}
+	if c.db == nil {
+		return nil, errCollectionDBNil
+	}
+	unlockMutation := c.lockMutation()
+	defer unlockMutation.Unlock()
+	if err := c.flushBufferedWrites(); err != nil {
+		return nil, err
+	}
+
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return nil, backenddb.ErrClosed
+	}
+	catalog, err := loadCollectionCatalog(snap, c.meta.Name)
+	if err != nil {
+		_ = snap.Close()
+		return nil, err
+	}
+	if catalog == nil {
+		_ = snap.Close()
+		return nil, errCollectionNotFound
+	}
+	if err := rejectCatalogRootOverlaysForWrite(catalog); err != nil {
+		_ = snap.Close()
+		return nil, err
+	}
+	baseMeta := catalog.meta
+	c.meta = baseMeta
+	_ = snap.Close()
+
+	nextIndexes := make([]VectorIndexDefinition, 0, len(baseMeta.VectorIndexes))
+	dropped := false
+	for _, idx := range baseMeta.VectorIndexes {
+		if idx.Name == name {
+			dropped = true
+			continue
+		}
+		nextIndexes = append(nextIndexes, idx)
+	}
+	if !dropped {
+		return nil, ErrIndexNotFound
+	}
+	newMeta, err := normalizeCollectionMeta(CollectionMeta{
+		Name:          baseMeta.Name,
+		Options:       baseMeta.Options,
+		Indexes:       baseMeta.Indexes,
+		VectorIndexes: nextIndexes,
+	})
+	if err != nil {
+		return nil, err
+	}
+	encodedMeta, err := encodeCollectionMeta(newMeta)
+	if err != nil {
+		return nil, err
+	}
+	newSystemRoot, _, err := c.db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder(nil, func([]uint64) (iterator.UnsafeIterator, error) {
+		return c.buildSchemaOnlySystemDeltaIterator(baseMeta, encodedMeta, nil)
+	})
+	if err != nil {
+		return nil, err
+	}
+	c.meta = newMeta
+	nextCatalog := cloneCatalogWithRootUpdates(catalog, newMeta, nil, nil)
+	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
+	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
+	return newMeta.copy(), nil
+}
+
 func (c *Collection) DropIndex(name string) (*CollectionMeta, error) {
 	if err := ValidateIndexName(name); err != nil {
 		return nil, err
@@ -2994,9 +3145,10 @@ func (c *Collection) dropIndexes(names map[string]struct{}, all bool) (*Collecti
 	}
 
 	newMeta, err := normalizeCollectionMeta(CollectionMeta{
-		Name:    baseMeta.Name,
-		Options: baseMeta.Options,
-		Indexes: nextIndexes,
+		Name:          baseMeta.Name,
+		Options:       baseMeta.Options,
+		Indexes:       nextIndexes,
+		VectorIndexes: baseMeta.VectorIndexes,
 	})
 	if err != nil {
 		return nil, err
@@ -17668,10 +17820,11 @@ func encodeCollectionMeta(meta CollectionMeta) ([]byte, error) {
 		return nil, err
 	}
 	return json.Marshal(collectionMetaDisk{
-		Version: collectionMetaVersion,
-		Name:    normalized.Name,
-		Options: normalized.Options,
-		Indexes: normalized.Indexes,
+		Version:       collectionMetaVersion,
+		Name:          normalized.Name,
+		Options:       normalized.Options,
+		Indexes:       normalized.Indexes,
+		VectorIndexes: normalized.VectorIndexes,
 	})
 }
 
@@ -17684,9 +17837,10 @@ func decodeCollectionMeta(raw []byte) (CollectionMeta, error) {
 		return CollectionMeta{}, fmt.Errorf("collections: unsupported collection metadata version %d", disk.Version)
 	}
 	return normalizeCollectionMeta(CollectionMeta{
-		Name:    disk.Name,
-		Options: disk.Options,
-		Indexes: disk.Indexes,
+		Name:          disk.Name,
+		Options:       disk.Options,
+		Indexes:       disk.Indexes,
+		VectorIndexes: disk.VectorIndexes,
 	})
 }
 
@@ -17753,13 +17907,35 @@ func normalizeCollectionMeta(meta CollectionMeta) (CollectionMeta, error) {
 		seen[indexes[i].Name] = struct{}{}
 	}
 	meta.Indexes = indexes
+	vectorIndexes := append([]VectorIndexDefinition(nil), meta.VectorIndexes...)
+	for i := range vectorIndexes {
+		normalized, err := normalizeVectorIndexDefinition(vectorIndexes[i])
+		if err != nil {
+			name := vectorIndexes[i].Name
+			if name == "" {
+				name = vectorIndexDefaultName(vectorIndexes[i].Field)
+			}
+			return CollectionMeta{}, fmt.Errorf("collections: invalid vector index %q: %w", name, err)
+		}
+		vectorIndexes[i] = normalized
+	}
+	sort.SliceStable(vectorIndexes, func(i, j int) bool {
+		return vectorIndexes[i].Name < vectorIndexes[j].Name
+	})
+	for i := range vectorIndexes {
+		if _, ok := seen[vectorIndexes[i].Name]; ok {
+			return CollectionMeta{}, fmt.Errorf("collections: duplicate index %q", vectorIndexes[i].Name)
+		}
+		seen[vectorIndexes[i].Name] = struct{}{}
+	}
+	meta.VectorIndexes = vectorIndexes
 	if meta.Options.DisableIndexedWriteMemtables {
 		meta.Options.BufferedIndexedWrites = false
 		meta.Options.BufferedIndexedWriteMaxDocuments = 0
 		meta.Options.BufferedIndexedWriteMaxBytes = 0
 		meta.Options.BufferedIndexedWriteMaxRootRuns = 0
 		meta.Options.BufferedIndexedOverlayRoots = false
-	} else if len(meta.Indexes) == 0 {
+	} else if len(meta.Indexes) == 0 && len(meta.VectorIndexes) == 0 {
 		meta.Options.BufferedIndexedWrites = false
 	} else {
 		meta.Options.BufferedIndexedWrites = true
@@ -17807,11 +17983,53 @@ func normalizeIndexValueType(valueType IndexValueType) (IndexValueType, error) {
 	}
 }
 
+func normalizeVectorIndexDefinition(def VectorIndexDefinition) (VectorIndexDefinition, error) {
+	if def.Name == "" {
+		def.Name = vectorIndexDefaultName(def.Field)
+	}
+	if err := ValidateIndexName(def.Name); err != nil {
+		return VectorIndexDefinition{}, err
+	}
+	if err := ValidateIndexPath(def.Field); err != nil {
+		return VectorIndexDefinition{}, fmt.Errorf("field: %w", err)
+	}
+	if _, err := parseVectorFieldPath(def.Field); err != nil {
+		return VectorIndexDefinition{}, err
+	}
+	if def.Dimensions <= 0 {
+		return VectorIndexDefinition{}, errors.New("dimensions must be positive")
+	}
+	metric, err := normalizeVectorMetric(def.Metric)
+	if err != nil {
+		return VectorIndexDefinition{}, err
+	}
+	encoding, err := normalizeVectorIndexEncoding(def.Encoding)
+	if err != nil {
+		return VectorIndexDefinition{}, err
+	}
+	def.Metric = metric
+	def.Encoding = encoding
+	if def.M <= 0 {
+		def.M = defaultVectorIndexM
+	}
+	if def.EfConstruction <= 0 {
+		def.EfConstruction = defaultVectorIndexEfConstruction
+	}
+	if def.EfConstruction < def.M {
+		def.EfConstruction = def.M
+	}
+	if def.EfSearch <= 0 {
+		def.EfSearch = defaultVectorIndexEfSearch
+	}
+	return def, nil
+}
+
 func (m CollectionMeta) copy() *CollectionMeta {
 	return &CollectionMeta{
-		Name:    m.Name,
-		Options: m.Options,
-		Indexes: append([]IndexDefinition(nil), m.Indexes...),
+		Name:          m.Name,
+		Options:       m.Options,
+		Indexes:       append([]IndexDefinition(nil), m.Indexes...),
+		VectorIndexes: append([]VectorIndexDefinition(nil), m.VectorIndexes...),
 	}
 }
 
@@ -17838,11 +18056,16 @@ func sameCollectionMeta(a, b CollectionMeta) bool {
 }
 
 func collectionMetaValuesEqual(a, b CollectionMeta) bool {
-	if a.Name != b.Name || a.Options != b.Options || len(a.Indexes) != len(b.Indexes) {
+	if a.Name != b.Name || a.Options != b.Options || len(a.Indexes) != len(b.Indexes) || len(a.VectorIndexes) != len(b.VectorIndexes) {
 		return false
 	}
 	for i := range a.Indexes {
 		if a.Indexes[i] != b.Indexes[i] {
+			return false
+		}
+	}
+	for i := range a.VectorIndexes {
+		if a.VectorIndexes[i] != b.VectorIndexes[i] {
 			return false
 		}
 	}
@@ -17858,14 +18081,45 @@ func collectionMetaHasSecondaryUniqueIndex(meta CollectionMeta) bool {
 	return false
 }
 
+func addVectorIndexToCollectionMeta(meta CollectionMeta, def VectorIndexDefinition) (CollectionMeta, VectorIndexDefinition, error) {
+	if _, ok := findIndex(meta.Indexes, def.Name); ok {
+		return CollectionMeta{}, VectorIndexDefinition{}, fmt.Errorf("collections: duplicate index %q", def.Name)
+	}
+	if _, ok := findVectorIndex(meta.VectorIndexes, def.Name); ok {
+		return CollectionMeta{}, VectorIndexDefinition{}, fmt.Errorf("collections: duplicate index %q", def.Name)
+	}
+	candidate := CollectionMeta{
+		Name:          meta.Name,
+		Options:       meta.Options,
+		Indexes:       append([]IndexDefinition(nil), meta.Indexes...),
+		VectorIndexes: append(append([]VectorIndexDefinition(nil), meta.VectorIndexes...), def),
+	}
+	normalized, err := normalizeCollectionMeta(candidate)
+	if err != nil {
+		return CollectionMeta{}, VectorIndexDefinition{}, err
+	}
+	normalizedDef, ok := findVectorIndex(normalized.VectorIndexes, def.Name)
+	if !ok && def.Name == "" {
+		normalizedDef, ok = findVectorIndex(normalized.VectorIndexes, vectorIndexDefaultName(def.Field))
+	}
+	if !ok {
+		return CollectionMeta{}, VectorIndexDefinition{}, fmt.Errorf("collections: normalized vector index %q not found", def.Name)
+	}
+	return normalized, normalizedDef, nil
+}
+
 func addIndexToCollectionMeta(meta CollectionMeta, def IndexDefinition) (CollectionMeta, IndexDefinition, error) {
 	if _, ok := findIndex(meta.Indexes, def.Name); ok {
 		return CollectionMeta{}, IndexDefinition{}, fmt.Errorf("collections: duplicate index %q", def.Name)
 	}
+	if _, ok := findVectorIndex(meta.VectorIndexes, def.Name); ok {
+		return CollectionMeta{}, IndexDefinition{}, fmt.Errorf("collections: duplicate index %q", def.Name)
+	}
 	candidate := CollectionMeta{
-		Name:    meta.Name,
-		Options: meta.Options,
-		Indexes: append(append([]IndexDefinition(nil), meta.Indexes...), def),
+		Name:          meta.Name,
+		Options:       meta.Options,
+		Indexes:       append(append([]IndexDefinition(nil), meta.Indexes...), def),
+		VectorIndexes: append([]VectorIndexDefinition(nil), meta.VectorIndexes...),
 	}
 	normalized, err := normalizeCollectionMeta(candidate)
 	if err != nil {
@@ -17949,6 +18203,15 @@ func findIndex(indexes []IndexDefinition, name string) (IndexDefinition, bool) {
 		}
 	}
 	return IndexDefinition{}, false
+}
+
+func findVectorIndex(indexes []VectorIndexDefinition, name string) (VectorIndexDefinition, bool) {
+	for _, idx := range indexes {
+		if idx.Name == name {
+			return idx, true
+		}
+	}
+	return VectorIndexDefinition{}, false
 }
 
 func collectionRootNames(meta CollectionMeta) []string {

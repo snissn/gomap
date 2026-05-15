@@ -15772,6 +15772,206 @@ func TestCollectionCreateIndexBackfill_BuildsSecondaryAndIndexState(t *testing.T
 	}
 }
 
+func TestCollectionVectorIndexMetadataCreateDropReopen(t *testing.T) {
+	dir := t.TempDir()
+	d, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+
+	meta, err := col.CreateVectorIndex(VectorIndexDefinition{
+		Name:       "embedding",
+		Field:      "embedding",
+		Metric:     VectorMetricCosine,
+		Dimensions: 64,
+	})
+	if err != nil {
+		t.Fatalf("create vector index: %v", err)
+	}
+	created, ok := findVectorIndex(meta.VectorIndexes, "embedding")
+	if !ok {
+		t.Fatalf("created meta missing vector index: %+v", meta.VectorIndexes)
+	}
+	if created.M != defaultVectorIndexM || created.EfConstruction != defaultVectorIndexEfConstruction || created.EfSearch != defaultVectorIndexEfSearch {
+		t.Fatalf("vector defaults=%+v", created)
+	}
+	if _, ok := findVectorIndex(col.Meta().VectorIndexes, "embedding"); !ok {
+		t.Fatalf("collection meta missing vector index: %+v", col.Meta().VectorIndexes)
+	}
+	if len(col.Meta().Indexes) != 0 {
+		t.Fatalf("vector create added scalar indexes: %+v", col.Meta().Indexes)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+
+	reopened, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open reopened collection: %v", err)
+	}
+	if _, ok := findVectorIndex(reopenedCol.Meta().VectorIndexes, "embedding"); !ok {
+		t.Fatalf("reopened meta missing vector index: %+v", reopenedCol.Meta().VectorIndexes)
+	}
+
+	meta, err = reopenedCol.DropVectorIndex("embedding")
+	if err != nil {
+		t.Fatalf("drop vector index: %v", err)
+	}
+	if _, ok := findVectorIndex(meta.VectorIndexes, "embedding"); ok {
+		t.Fatalf("dropped meta still has vector index: %+v", meta.VectorIndexes)
+	}
+	if _, err := reopenedCol.DropVectorIndex("embedding"); !errors.Is(err, ErrIndexNotFound) {
+		t.Fatalf("drop missing vector index err=%v want ErrIndexNotFound", err)
+	}
+}
+
+func TestCollectionVectorIndexMetadataValidation(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	_, err = mgr.CreateCollection(&CollectionMeta{
+		Name: "docs",
+		VectorIndexes: []VectorIndexDefinition{{
+			Name:       "embedding",
+			Field:      "embedding",
+			Dimensions: 0,
+		}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "dimensions must be positive") {
+		t.Fatalf("zero dimensions err=%v want dimensions error", err)
+	}
+	_, err = mgr.CreateCollection(&CollectionMeta{
+		Name: "docs",
+		Indexes: []IndexDefinition{{
+			Name:      "embedding",
+			Field:     "city",
+			ValueType: IndexValueString,
+		}},
+		VectorIndexes: []VectorIndexDefinition{{
+			Name:       "embedding",
+			Field:      "embedding",
+			Dimensions: 64,
+		}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "duplicate index") {
+		t.Fatalf("duplicate scalar/vector err=%v want duplicate index", err)
+	}
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs"}); err != nil {
+		t.Fatalf("create docs: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open docs: %v", err)
+	}
+	if _, err := col.CreateVectorIndex(VectorIndexDefinition{Field: "embedding", Dimensions: 64}); err != nil {
+		t.Fatalf("create default-named vector index: %v", err)
+	}
+	if _, err := col.CreateIndex(IndexDefinition{Name: "embedding", Field: "city", ValueType: IndexValueString}); err == nil || !strings.Contains(err.Error(), "duplicate index") {
+		t.Fatalf("duplicate scalar create err=%v want duplicate index", err)
+	}
+	if _, err := col.CreateVectorIndex(VectorIndexDefinition{Name: "other", Field: "embedding", Dimensions: -1}); err == nil || !strings.Contains(err.Error(), "dimensions must be positive") {
+		t.Fatalf("negative dimensions err=%v want dimensions error", err)
+	}
+	if _, err := col.CreateVectorIndex(VectorIndexDefinition{Name: "bad", Field: ".embedding", Dimensions: 64}); err == nil || !strings.Contains(err.Error(), "field") {
+		t.Fatalf("bad field err=%v want field error", err)
+	}
+}
+
+func TestCollectionDropScalarIndexPreservesVectorMetadata(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "docs",
+		Indexes: []IndexDefinition{{
+			Name:      "city",
+			Field:     "city",
+			ValueType: IndexValueString,
+		}},
+		VectorIndexes: []VectorIndexDefinition{{
+			Name:       "embedding",
+			Field:      "embedding",
+			Dimensions: 64,
+		}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	meta, err := col.DropIndex("city")
+	if err != nil {
+		t.Fatalf("drop scalar index: %v", err)
+	}
+	if _, ok := findIndex(meta.Indexes, "city"); ok {
+		t.Fatalf("dropped scalar index still present: %+v", meta.Indexes)
+	}
+	if _, ok := findVectorIndex(meta.VectorIndexes, "embedding"); !ok {
+		t.Fatalf("drop scalar index lost vector metadata: %+v", meta.VectorIndexes)
+	}
+}
+
+func TestCollectionDropVectorIndexPreservesScalarMetadata(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "docs",
+		Indexes: []IndexDefinition{{
+			Name:      "city",
+			Field:     "city",
+			ValueType: IndexValueString,
+		}},
+		VectorIndexes: []VectorIndexDefinition{{
+			Name:       "embedding",
+			Field:      "embedding",
+			Dimensions: 64,
+		}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	meta, err := col.DropVectorIndex("embedding")
+	if err != nil {
+		t.Fatalf("drop vector index: %v", err)
+	}
+	if _, ok := findVectorIndex(meta.VectorIndexes, "embedding"); ok {
+		t.Fatalf("dropped vector index still present: %+v", meta.VectorIndexes)
+	}
+	if _, ok := findIndex(meta.Indexes, "city"); !ok {
+		t.Fatalf("drop vector index lost scalar metadata: %+v", meta.Indexes)
+	}
+}
+
 func TestCollectionDropIndexUpdatesSchema(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
