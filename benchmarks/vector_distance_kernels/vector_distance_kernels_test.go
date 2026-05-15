@@ -182,6 +182,263 @@ func BenchmarkCosineDistanceCandidateBatch128(b *testing.B) {
 	})
 }
 
+func BenchmarkTreeDBRerankKernelCandidateBatch128(b *testing.B) {
+	query, queryInvNorm := benchVector(17, benchDims)
+	candidateVectors, candidateInvNorms := benchCandidateMatrix(benchCandidates, benchDims)
+
+	b.ReportMetric(benchCandidates, "candidates/op")
+	b.ReportMetric(benchDims, "dims")
+
+	b.Run("current_numkong_pack_each_query_make_dots", func(b *testing.B) {
+		b.ReportAllocs()
+		var lastDots []float64
+		var lastDistances []float32
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			packedCandidates := nk.NewPackedMatrixF32(candidateVectors, benchCandidates, benchDims)
+			dots := make([]float64, benchCandidates)
+			distances := make([]float32, benchCandidates)
+			nk.DotsPackedF32(query, packedCandidates, dots, 1)
+			scaleDotRow(dots, queryInvNorm, candidateInvNorms, distances)
+			lastDots = dots
+			lastDistances = distances
+		}
+		sinkDotBuf = lastDots
+		sinkDistanceBuf = lastDistances
+	})
+
+	b.Run("numkong_pack_each_query_reuse_outputs", func(b *testing.B) {
+		dots := make([]float64, benchCandidates)
+		distances := make([]float32, benchCandidates)
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			packedCandidates := nk.NewPackedMatrixF32(candidateVectors, benchCandidates, benchDims)
+			nk.DotsPackedF32(query, packedCandidates, dots, 1)
+			scaleDotRow(dots, queryInvNorm, candidateInvNorms, distances)
+		}
+		sinkDotBuf = dots
+		sinkDistanceBuf = distances
+	})
+
+	b.Run("numkong_pack_each_query_reuse_outputs_configured_thread", func(b *testing.B) {
+		dots := make([]float64, benchCandidates)
+		distances := make([]float32, benchCandidates)
+		unlock := nk.ConfigureThread()
+		defer unlock()
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			packedCandidates := nk.NewPackedMatrixF32(candidateVectors, benchCandidates, benchDims)
+			nk.DotsPackedF32(query, packedCandidates, dots, 1)
+			scaleDotRow(dots, queryInvNorm, candidateInvNorms, distances)
+		}
+		sinkDotBuf = dots
+		sinkDistanceBuf = distances
+	})
+
+	b.Run("numkong_prepacked_reused", func(b *testing.B) {
+		packedCandidates := nk.NewPackedMatrixF32(candidateVectors, benchCandidates, benchDims)
+		dots := make([]float64, benchCandidates)
+		distances := make([]float32, benchCandidates)
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			nk.DotsPackedF32(query, packedCandidates, dots, 1)
+			scaleDotRow(dots, queryInvNorm, candidateInvNorms, distances)
+		}
+		sinkDotBuf = dots
+		sinkDistanceBuf = distances
+	})
+
+	b.Run("numkong_prepacked_reused_configured_thread", func(b *testing.B) {
+		packedCandidates := nk.NewPackedMatrixF32(candidateVectors, benchCandidates, benchDims)
+		dots := make([]float64, benchCandidates)
+		distances := make([]float32, benchCandidates)
+		unlock := nk.ConfigureThread()
+		defer unlock()
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			nk.DotsPackedF32(query, packedCandidates, dots, 1)
+			scaleDotRow(dots, queryInvNorm, candidateInvNorms, distances)
+		}
+		sinkDotBuf = dots
+		sinkDistanceBuf = distances
+	})
+
+	b.Run("numkong_prepacked_reused_worker_pool_1", func(b *testing.B) {
+		packedCandidates := nk.NewPackedMatrixF32(candidateVectors, benchCandidates, benchDims)
+		dots := make([]float64, benchCandidates)
+		distances := make([]float32, benchCandidates)
+		pool := nk.NewWorkerPool(1)
+		defer pool.Close()
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			packedCandidates.DotsF32WithPool(query, dots, 1, pool)
+			scaleDotRow(dots, queryInvNorm, candidateInvNorms, distances)
+		}
+		sinkDotBuf = dots
+		sinkDistanceBuf = distances
+	})
+
+	b.Run("numkong_angulars_pack_each_query_reuse_output", func(b *testing.B) {
+		angularDistances := make([]float64, benchCandidates)
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			packedCandidates := nk.NewPackedMatrixF32(candidateVectors, benchCandidates, benchDims)
+			nk.AngularsPackedF32(query, packedCandidates, angularDistances, 1)
+		}
+		sinkDotBuf = angularDistances
+	})
+
+	b.Run("numkong_angulars_prepacked_reused", func(b *testing.B) {
+		packedCandidates := nk.NewPackedMatrixF32(candidateVectors, benchCandidates, benchDims)
+		angularDistances := make([]float64, benchCandidates)
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			nk.AngularsPackedF32(query, packedCandidates, angularDistances, 1)
+		}
+		sinkDotBuf = angularDistances
+	})
+
+	b.Run("axiomhq_dot_product_f32_loop_reuse_output", func(b *testing.B) {
+		distances := make([]float32, benchCandidates)
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			for j := 0; j < benchCandidates; j++ {
+				candidate := candidateVectors[j*benchDims : (j+1)*benchDims]
+				dot := axiomsimd.DotProductFloat32(query, candidate)
+				distances[j] = 1 - dot*queryInvNorm*candidateInvNorms[j]
+			}
+		}
+		sinkDistanceBuf = distances
+	})
+
+	b.Run("axiomhq_dot_product_f32_loop_make_output", func(b *testing.B) {
+		b.ReportAllocs()
+		var lastDistances []float32
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			distances := make([]float32, benchCandidates)
+			for j := 0; j < benchCandidates; j++ {
+				candidate := candidateVectors[j*benchDims : (j+1)*benchDims]
+				dot := axiomsimd.DotProductFloat32(query, candidate)
+				distances[j] = 1 - dot*queryInvNorm*candidateInvNorms[j]
+			}
+			lastDistances = distances
+		}
+		sinkDistanceBuf = lastDistances
+	})
+
+	b.Run("numkong_dot_f32_scalar_loop_reuse_output", func(b *testing.B) {
+		distances := make([]float32, benchCandidates)
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			for j := 0; j < benchCandidates; j++ {
+				candidate := candidateVectors[j*benchDims : (j+1)*benchDims]
+				dot := nk.DotF32(query, candidate)
+				distances[j] = float32(1 - dot*float64(queryInvNorm)*float64(candidateInvNorms[j]))
+			}
+		}
+		sinkDistanceBuf = distances
+	})
+}
+
+func BenchmarkTreeDBRerankGatherAndScoreCandidateBatch128(b *testing.B) {
+	query, queryInvNorm := benchVector(17, benchDims)
+	nodes, nodeInvNorms := benchCandidateNodes(benchCandidates, benchDims)
+
+	b.ReportMetric(benchCandidates, "candidates/op")
+	b.ReportMetric(benchDims, "dims")
+
+	b.Run("current_like_gather_alloc_numkong_pack_each_query", func(b *testing.B) {
+		b.ReportAllocs()
+		var lastDots []float64
+		var lastDistances []float32
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			candidateVectors := make([]float32, 0, benchCandidates*benchDims)
+			candidateInvNorms := make([]float32, 0, benchCandidates)
+			for j := range nodes {
+				candidateVectors = append(candidateVectors, nodes[j]...)
+				candidateInvNorms = append(candidateInvNorms, nodeInvNorms[j])
+			}
+			packedCandidates := nk.NewPackedMatrixF32(candidateVectors, benchCandidates, benchDims)
+			dots := make([]float64, benchCandidates)
+			distances := make([]float32, benchCandidates)
+			nk.DotsPackedF32(query, packedCandidates, dots, 1)
+			scaleDotRow(dots, queryInvNorm, candidateInvNorms, distances)
+			lastDots = dots
+			lastDistances = distances
+		}
+		sinkDotBuf = lastDots
+		sinkDistanceBuf = lastDistances
+	})
+
+	b.Run("gather_reuse_buffers_numkong_pack_each_query", func(b *testing.B) {
+		candidateVectors := make([]float32, 0, benchCandidates*benchDims)
+		candidateInvNorms := make([]float32, 0, benchCandidates)
+		dots := make([]float64, benchCandidates)
+		distances := make([]float32, benchCandidates)
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			candidateVectors = candidateVectors[:0]
+			candidateInvNorms = candidateInvNorms[:0]
+			for j := range nodes {
+				candidateVectors = append(candidateVectors, nodes[j]...)
+				candidateInvNorms = append(candidateInvNorms, nodeInvNorms[j])
+			}
+			packedCandidates := nk.NewPackedMatrixF32(candidateVectors, benchCandidates, benchDims)
+			nk.DotsPackedF32(query, packedCandidates, dots, 1)
+			scaleDotRow(dots, queryInvNorm, candidateInvNorms, distances)
+		}
+		sinkDotBuf = dots
+		sinkDistanceBuf = distances
+	})
+
+	b.Run("direct_node_vectors_axiomhq_dot_product_f32", func(b *testing.B) {
+		distances := make([]float32, benchCandidates)
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			for j := range nodes {
+				dot := axiomsimd.DotProductFloat32(query, nodes[j])
+				distances[j] = 1 - dot*queryInvNorm*nodeInvNorms[j]
+			}
+		}
+		sinkDistanceBuf = distances
+	})
+
+	b.Run("gather_reuse_buffers_axiomhq_dot_product_f32", func(b *testing.B) {
+		candidateVectors := make([]float32, 0, benchCandidates*benchDims)
+		candidateInvNorms := make([]float32, 0, benchCandidates)
+		distances := make([]float32, benchCandidates)
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			candidateVectors = candidateVectors[:0]
+			candidateInvNorms = candidateInvNorms[:0]
+			for j := range nodes {
+				candidateVectors = append(candidateVectors, nodes[j]...)
+				candidateInvNorms = append(candidateInvNorms, nodeInvNorms[j])
+			}
+			for j := 0; j < benchCandidates; j++ {
+				candidate := candidateVectors[j*benchDims : (j+1)*benchDims]
+				dot := axiomsimd.DotProductFloat32(query, candidate)
+				distances[j] = 1 - dot*queryInvNorm*candidateInvNorms[j]
+			}
+		}
+		sinkDistanceBuf = distances
+	})
+}
+
 func BenchmarkCosineDistanceQueryBatch32x128(b *testing.B) {
 	queries, queryInvNorms := benchQueryMatrix(benchQueries, benchDims)
 	candidates, candidateInvNorms := benchCandidateMatrix(benchCandidates, benchDims)
@@ -323,6 +580,13 @@ func scaleDotRows(dots []float64, queryInvNorms, candidateInvNorms []float32, di
 	}
 }
 
+func scaleDotRow(dots []float64, queryInvNorm float32, candidateInvNorms []float32, distances []float32) {
+	queryInvNorm64 := float64(queryInvNorm)
+	for j, candidateInvNorm := range candidateInvNorms {
+		distances[j] = float32(1 - dots[j]*queryInvNorm64*float64(candidateInvNorm))
+	}
+}
+
 func benchQueryMatrix(count, dims int) ([]float32, []float32) {
 	out := make([]float32, count*dims)
 	invNorms := make([]float32, count)
@@ -343,6 +607,15 @@ func benchCandidateMatrix(count, dims int) ([]float32, []float32) {
 		invNorms[i] = invNorm
 	}
 	return out, invNorms
+}
+
+func benchCandidateNodes(count, dims int) ([][]float32, []float32) {
+	nodes := make([][]float32, count)
+	invNorms := make([]float32, count)
+	for i := 0; i < count; i++ {
+		nodes[i], invNorms[i] = benchVector(i+1009, dims)
+	}
+	return nodes, invNorms
 }
 
 func candidateAt(candidates []float32, index, dims int) []float32 {
