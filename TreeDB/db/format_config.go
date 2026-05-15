@@ -259,18 +259,15 @@ func SaveFormatConfig(dir string, cfg FormatConfig) error {
 	return writeFileAtomic(path, data, 0o600)
 }
 
-func ensureOpenCommandWALFormat(opts Options) error {
+func commandWALFormatNeedsActivation(opts Options) (bool, error) {
 	if !opts.CommandWAL || opts.ReadOnly {
-		return nil
+		return false, nil
 	}
 	requiresCommandWAL, err := CommandWALRequiredFeatureEnabled(opts.Dir)
 	if err != nil {
-		return err
+		return false, err
 	}
-	if requiresCommandWAL {
-		return nil
-	}
-	return SaveFormatConfig(opts.Dir, formatConfigFromOptions(opts))
+	return !requiresCommandWAL, nil
 }
 
 func saveOpenFormatConfig(opts Options) error {

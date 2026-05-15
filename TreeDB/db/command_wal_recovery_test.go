@@ -10,6 +10,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 func TestCommandWALRawSetDeleteBatchReplaysThroughNormalExecutor(t *testing.T) {
@@ -184,6 +185,39 @@ func TestCommandWALRIDFencePreservedForRawKVBatch(t *testing.T) {
 	}
 }
 
+func TestCommandWALPointerBatchReplaysThroughRIDFence(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close bootstrap db: %v", err)
+	}
+	largeValue := strings.Repeat("large-value-", 1024)
+	ptr := writeValueLogRID(t, dir, 17, []byte(largeValue))
+
+	db = openCommandWALDB(t, dir)
+	db.testFailFinalizeCommit.Store(true)
+	b := db.NewBatch().(*Batch)
+	if err := b.SetPointer([]byte("k"), ptr); err != nil {
+		t.Fatalf("SetPointer: %v", err)
+	}
+	err := b.WriteSync()
+	if !errors.Is(err, errTestFinalizeCommitFailpoint) {
+		t.Fatalf("WriteSync error=%v, want failpoint", err)
+	}
+	_ = b.Close()
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close crashed db: %v", err)
+	}
+
+	reopen := openCommandWALDB(t, dir)
+	defer reopen.Close()
+	assertDBValue(t, reopen, "k", largeValue)
+	if got := reopen.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("AppliedCommandLSN=%d, want 1", got)
+	}
+}
+
 func TestCommandWALMissingRIDFenceFailsRecovery(t *testing.T) {
 	dir := t.TempDir()
 	enableCommandWALFormat(t, dir)
@@ -315,7 +349,7 @@ func writeCommandWALRawKVFrame(t *testing.T, dir string, segmentSeq uint64, lsn 
 	}
 }
 
-func writeValueLogRID(t *testing.T, dir string, rid uint64, value []byte) {
+func writeValueLogRID(t *testing.T, dir string, rid uint64, value []byte) page.ValuePtr {
 	t.Helper()
 	valueLogDir := resolveStorageLayout(dir).valueVLogDir
 	if err := os.MkdirAll(valueLogDir, 0o755); err != nil {
@@ -330,11 +364,13 @@ func writeValueLogRID(t *testing.T, dir string, rid uint64, value []byte) {
 	if err != nil {
 		t.Fatalf("New value writer: %v", err)
 	}
-	if _, err := w.Append(0, nil, rid, value); err != nil {
+	ptr, err := w.Append(0, nil, rid, value)
+	if err != nil {
 		_ = w.Close()
 		t.Fatalf("Append value log: %v", err)
 	}
 	if err := w.Close(); err != nil {
 		t.Fatalf("Close value writer: %v", err)
 	}
+	return ptr
 }

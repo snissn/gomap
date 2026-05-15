@@ -2,17 +2,17 @@ goos: linux
 goarch: amd64
 pkg: github.com/snissn/gomap/TreeDB/db
 cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
-BenchmarkCommandWALRawKVDirectWrite/backend_no_command_wal-12         	     100	     10148 ns/op	   5.22 MB/s	    6635 B/op	      17 allocs/op
-BenchmarkCommandWALRawKVDirectWrite/backend_no_command_wal-12         	     100	      9369 ns/op	   5.66 MB/s	    6636 B/op	      17 allocs/op
-BenchmarkCommandWALRawKVDirectWrite/backend_no_command_wal-12         	     100	      8727 ns/op	   6.07 MB/s	    6634 B/op	      17 allocs/op
-BenchmarkCommandWALRawKVDirectWrite/backend_no_command_wal-12         	     100	      8083 ns/op	   6.56 MB/s	    6651 B/op	      17 allocs/op
-BenchmarkCommandWALRawKVDirectWrite/backend_no_command_wal-12         	     100	      6997 ns/op	   7.57 MB/s	    6647 B/op	      17 allocs/op
-BenchmarkCommandWALRawKVDirectWrite/backend_no_command_wal-12         	     100	      7208 ns/op	   7.35 MB/s	    6649 B/op	      17 allocs/op
-BenchmarkCommandWALRawKVDirectWrite/command_wal_raw_kv-12             	     100	      7960 ns/op	   6.66 MB/s	    6695 B/op	      19 allocs/op
-BenchmarkCommandWALRawKVDirectWrite/command_wal_raw_kv-12             	     100	      6921 ns/op	   7.66 MB/s	    6681 B/op	      19 allocs/op
-BenchmarkCommandWALRawKVDirectWrite/command_wal_raw_kv-12             	     100	      7717 ns/op	   6.87 MB/s	    6700 B/op	      19 allocs/op
-BenchmarkCommandWALRawKVDirectWrite/command_wal_raw_kv-12             	     100	      8908 ns/op	   5.95 MB/s	    6696 B/op	      19 allocs/op
-BenchmarkCommandWALRawKVDirectWrite/command_wal_raw_kv-12             	     100	      7252 ns/op	   7.31 MB/s	    6691 B/op	      19 allocs/op
-BenchmarkCommandWALRawKVDirectWrite/command_wal_raw_kv-12             	     100	      7827 ns/op	   6.77 MB/s	    6677 B/op	      19 allocs/op
+BenchmarkCommandWALRawKVDirectWrite/backend_no_command_wal-12         	     100	     10548 ns/op	   5.02 MB/s	    6688 B/op	      17 allocs/op
+BenchmarkCommandWALRawKVDirectWrite/backend_no_command_wal-12         	     100	      8597 ns/op	   6.16 MB/s	    6629 B/op	      17 allocs/op
+BenchmarkCommandWALRawKVDirectWrite/backend_no_command_wal-12         	     100	      8257 ns/op	   6.42 MB/s	    6700 B/op	      17 allocs/op
+BenchmarkCommandWALRawKVDirectWrite/backend_no_command_wal-12         	     100	      7876 ns/op	   6.73 MB/s	    6665 B/op	      17 allocs/op
+BenchmarkCommandWALRawKVDirectWrite/backend_no_command_wal-12         	     100	      8416 ns/op	   6.30 MB/s	    6645 B/op	      17 allocs/op
+BenchmarkCommandWALRawKVDirectWrite/backend_no_command_wal-12         	     100	      8402 ns/op	   6.31 MB/s	    6633 B/op	      17 allocs/op
+BenchmarkCommandWALRawKVDirectWrite/command_wal_raw_kv-12             	     100	      7644 ns/op	   6.93 MB/s	    6700 B/op	      19 allocs/op
+BenchmarkCommandWALRawKVDirectWrite/command_wal_raw_kv-12             	     100	      8069 ns/op	   6.57 MB/s	    6717 B/op	      19 allocs/op
+BenchmarkCommandWALRawKVDirectWrite/command_wal_raw_kv-12             	     100	      9278 ns/op	   5.71 MB/s	    6714 B/op	      19 allocs/op
+BenchmarkCommandWALRawKVDirectWrite/command_wal_raw_kv-12             	     100	      7614 ns/op	   6.96 MB/s	    6713 B/op	      19 allocs/op
+BenchmarkCommandWALRawKVDirectWrite/command_wal_raw_kv-12             	     100	      8235 ns/op	   6.44 MB/s	    6716 B/op	      19 allocs/op
+BenchmarkCommandWALRawKVDirectWrite/command_wal_raw_kv-12             	     100	      8361 ns/op	   6.34 MB/s	    6715 B/op	      19 allocs/op
 PASS
-ok  	github.com/snissn/gomap/TreeDB/db	0.171s
+ok  	github.com/snissn/gomap/TreeDB/db	0.192s

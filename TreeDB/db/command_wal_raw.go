@@ -4,14 +4,17 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
 type commandWALBatchIntent struct {
 	payload      []byte
+	externalRefs bool
 	lsn          uint64
 	coveredRange [1]CommandWALLSNRange
 }
@@ -27,6 +30,8 @@ func (db *DB) prepareRawKVCommandWALIntent(b *Batch) (*commandWALBatchIntent, er
 	if len(entries) == 0 {
 		return nil, nil
 	}
+	externalRefs := false
+	flushedExternalRefsForLookup := false
 	var smallOps [16]commitlog.RawKVOperation
 	ops := smallOps[:0]
 	if len(entries) > len(smallOps) {
@@ -38,17 +43,22 @@ func (db *DB) prepareRawKVCommandWALIntent(b *Batch) (*commandWALBatchIntent, er
 		case batchpkg.OpDelete:
 			ops = append(ops, commitlog.RawKVOperation{Op: commitlog.RawKVOpDelete, Key: entry.Key})
 		case batchpkg.OpPut:
-			value := entry.Value
-			if entry.IsPtr && value == nil {
-				if db.valueLogManager == nil {
-					return nil, fmt.Errorf("treedb: command wal raw kv pointer value reader unavailable")
+			if entry.IsPtr {
+				externalRefs = true
+				if !flushedExternalRefsForLookup {
+					if err := db.flushCommandWALExternalRefs(false); err != nil {
+						return nil, err
+					}
+					flushedExternalRefsForLookup = true
 				}
-				read, err := db.valueLogManager.Read(entry.ValuePtr)
+				rid, err := db.lookupCommandWALValueLogRID(entry.ValuePtr)
 				if err != nil {
 					return nil, err
 				}
-				value = read
+				ops = append(ops, commitlog.RawKVOperation{Op: commitlog.RawKVOpSetRID, Key: entry.Key, RID: rid})
+				continue
 			}
+			value := entry.Value
 			ops = append(ops, commitlog.RawKVOperation{Op: commitlog.RawKVOpSet, Key: entry.Key, Value: value})
 		default:
 			return nil, fmt.Errorf("treedb: command wal unknown raw kv batch op %d", entry.Type)
@@ -58,7 +68,49 @@ func (db *DB) prepareRawKVCommandWALIntent(b *Batch) (*commandWALBatchIntent, er
 	if err != nil {
 		return nil, err
 	}
-	return &commandWALBatchIntent{payload: payload}, nil
+	return &commandWALBatchIntent{payload: payload, externalRefs: externalRefs}, nil
+}
+
+func (db *DB) lookupCommandWALValueLogRID(ptr page.ValuePtr) (uint64, error) {
+	if db == nil || db.valueLogManager == nil {
+		return 0, fmt.Errorf("treedb: command wal raw kv pointer rid reader unavailable")
+	}
+	if ptr.FileID == 0 || ptr.Length == 0 {
+		return 0, fmt.Errorf("treedb: command wal raw kv invalid value-log pointer")
+	}
+	path := db.valueLogManager.SegmentPath(ptr.FileID)
+	r, err := valuelog.NewReader(path, ptr.FileID)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = r.Close() }()
+	for {
+		rid, gotPtr, err := r.ReadNextMeta()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return 0, err
+		}
+		if gotPtr == ptr {
+			if rid == 0 {
+				return 0, fmt.Errorf("treedb: command wal raw kv zero value-log rid")
+			}
+			return rid, nil
+		}
+	}
+	return 0, fmt.Errorf("treedb: command wal raw kv missing value-log rid for file=%d offset=%d length=%d", ptr.FileID, ptr.Offset, ptr.Length)
+}
+
+func (db *DB) flushCommandWALExternalRefs(sync bool) error {
+	appender := db.currentValueLogAppender()
+	if appender == nil {
+		return nil
+	}
+	if sync {
+		return appender.Sync()
+	}
+	return appender.Flush()
 }
 
 func (db *DB) appendRawKVCommandWALIntent(intent *commandWALBatchIntent, sync bool) (uint64, error) {
@@ -70,6 +122,11 @@ func (db *DB) appendRawKVCommandWALIntent(intent *commandWALBatchIntent, sync bo
 	}
 	if db == nil || db.commandJournal == nil {
 		return 0, fmt.Errorf("treedb: command wal journal unavailable")
+	}
+	if intent.externalRefs {
+		if err := db.flushCommandWALExternalRefs(sync); err != nil {
+			return 0, err
+		}
 	}
 	db.mu.RLock()
 	baseAppliedLSN := db.meta.AppliedCommandLSN

@@ -1432,8 +1432,13 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		db.Close()
 		return nil, err
 	}
-	if opts.CommandWAL && !opts.ReadOnly {
-		if err := ensureOpenCommandWALFormat(opts); err != nil {
+	needsCommandWALFormat, err := commandWALFormatNeedsActivation(opts)
+	if err != nil {
+		db.Close()
+		return nil, err
+	}
+	if needsCommandWALFormat {
+		if err := ValidateCommandWALActivationClean(opts.Dir); err != nil {
 			db.Close()
 			return nil, err
 		}
@@ -1456,6 +1461,12 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		}
 	}
 	if opts.CommandWAL && !opts.ReadOnly {
+		if needsCommandWALFormat {
+			if err := SaveFormatConfig(opts.Dir, formatConfigFromOptions(opts)); err != nil {
+				db.Close()
+				return nil, err
+			}
+		}
 		journal, err := commitlog.OpenCommandJournal(WALDirPath(opts.Dir), commitlog.CommandJournalOptions{
 			MaxSegmentSize: opts.WALMaxSegmentBytes,
 			Compress:       opts.JournalCompression,

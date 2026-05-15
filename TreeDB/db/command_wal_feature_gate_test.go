@@ -145,6 +145,9 @@ func TestCommandWALOptionRejectsDirtyLegacyWALActivation(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "clean legacy WAL") {
 		t.Fatalf("Open CommandWAL dirty legacy WAL error=%v, want clean legacy WAL failure", err)
 	}
+	if _, statErr := os.Stat(formatConfigPath(dir)); !os.IsNotExist(statErr) {
+		t.Fatalf("format.json stat error=%v, want not exist after rejected activation", statErr)
+	}
 }
 
 func TestCommandWALRequiredFeatureEnablesBackendCommandWAL(t *testing.T) {

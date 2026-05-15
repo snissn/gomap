@@ -22,6 +22,7 @@
   "passed_tests": [
     "TestCommandWALRawSetDeleteBatchReplaysThroughNormalExecutor",
     "TestCommandWALRIDFencePreservedForRawKVBatch",
+    "TestCommandWALPointerBatchReplaysThroughRIDFence",
     "TestCommandWALMissingRIDFenceFailsRecovery",
     "TestCommandWALCrashAfterFrameBeforeRootPublishRecovers",
     "TestCommandWALCrashDuringRootPublishSelectsOldTupleOrNewTuple",
@@ -37,11 +38,11 @@
     "TestCommandWALRawKVBatchSetRIDRoundTrip"
   ],
   "fuzz_targets": [
-    "FuzzCommandWALRawKVBatchPayload - fuzztime=5s, 613851 execs",
-    "FuzzCommandWALDecodeFrame - fuzztime=5s, 543734 execs"
+    "FuzzCommandWALRawKVBatchPayload - fuzztime=5s, 1039306 execs",
+    "FuzzCommandWALDecodeFrame - fuzztime=5s, 1093402 execs"
   ],
   "race_tests": [
-    "GOWORK=off go test -race ./TreeDB/db -run 'TestCommandWAL(RawSetDeleteBatchReplaysThroughNormalExecutor|RecoveryCrashDuringReplayResumesFromAppliedLSN|RIDFencePreservedForRawKVBatch)'"
+    "GOWORK=off go test -race ./TreeDB/db -run 'TestCommandWAL(RawSetDeleteBatchReplaysThroughNormalExecutor|PointerBatchReplaysThroughRIDFence|RecoveryCrashDuringReplayResumesFromAppliedLSN|RIDFencePreservedForRawKVBatch)'"
   ],
   "crash_scenarios": [
     "frame synced before root publish, finalize failpoint, read-write reopen replays command",
@@ -55,7 +56,9 @@
     "command WAL root publication uses validateCommandWALPublishLocked contiguous prefix checks",
     "read-write command recovery rejects legacy raw payloads in command_wal_v1 directories",
     "read-write command recovery rejects duplicate LSNs and unsupported command kinds before serving reads",
-    "RawKVBatch SetRID replay requires the value-log RID map to contain every referenced RID"
+    "RawKVBatch SetRID replay requires the value-log RID map to contain every referenced RID",
+    "pointer-backed raw KV writes log SetRID and flush/sync external refs before the command frame becomes recoverable",
+    "first-time CommandWAL activation validates clean legacy WAL before writing command_wal_v1 and opens the command journal only after the required feature is persisted"
   ],
   "unsupported_modes_and_errors": [
     "treedb.Open public cached write path with CommandWAL or command_wal_v1 returns ErrCommandWALUnsupported",
@@ -70,8 +73,8 @@
     "artifacts/command-wal/pr3/raw-kv-direct-write-benchstat.txt"
   ],
   "benchmark_summary": {
-    "backend_no_command_wal": "8.405 us/op +/- 21%, 6.486 KiB/op +/- 0%, 17 allocs/op",
-    "command_wal_raw_kv": "7.772 us/op +/- 15%, 6.536 KiB/op +/- 0%, 19 allocs/op",
+    "backend_no_command_wal": "8.409 us/op +/- 25%, 6.499 KiB/op +/- 1%, 17 allocs/op",
+    "command_wal_raw_kv": "8.152 us/op +/- 14%, 6.557 KiB/op +/- 0%, 19 allocs/op",
     "interpretation": "single-key direct backend command-WAL write is throughput-neutral in this smoke benchmark; command-WAL mode adds two allocations for payload/frame bookkeeping on top of current backend batch cost"
   },
   "cleanup_debt": "covered typed command WAL segments are cleaned through cleanupCommandWALSegmentsCoveredByAppliedLSN after recovery; active covered segment retention remains intentional",
@@ -82,7 +85,7 @@
     "GOWORK=off go test ./TreeDB/internal/commitlog ./TreeDB/page ./TreeDB/docs",
     "GOWORK=off go test ./TreeDB/db -run 'Test(CommandWAL|ValidateFormatRequiredFeatureGate|SaveFormatConfig|LoadFormatConfig|Recovery|ReadOnly)'",
     "GOWORK=off go test ./TreeDB -run 'Test(CommandWAL|OpenBackend|Recovery|ReadOnly)'",
-    "GOWORK=off go test -race ./TreeDB/db -run 'TestCommandWAL(RawSetDeleteBatchReplaysThroughNormalExecutor|RecoveryCrashDuringReplayResumesFromAppliedLSN|RIDFencePreservedForRawKVBatch)'",
+    "GOWORK=off go test -race ./TreeDB/db -run 'TestCommandWAL(RawSetDeleteBatchReplaysThroughNormalExecutor|PointerBatchReplaysThroughRIDFence|RecoveryCrashDuringReplayResumesFromAppliedLSN|RIDFencePreservedForRawKVBatch)'",
     "GOWORK=off go test ./TreeDB/internal/commitlog -run '^$' -fuzz=FuzzCommandWALRawKVBatchPayload -fuzztime=5s",
     "GOWORK=off go test ./TreeDB/internal/commitlog -run '^$' -fuzz=FuzzCommandWALDecodeFrame -fuzztime=5s",
     "GOWORK=off go test ./TreeDB/db -run '^$' -bench 'BenchmarkCommandWALRawKVDirectWrite' -benchmem -benchtime=100x -count=6",
