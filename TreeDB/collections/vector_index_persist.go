@@ -40,6 +40,8 @@ const (
 	vectorIndexNativeKeyEdgeLayerWidth = 3
 )
 
+var errVectorIndexNotDeclared = errors.New("collections: vector index is not declared in collection metadata")
+
 // VectorIndexLoadStatus reports whether a persisted vector index loaded or why
 // callers should use exact search as the safe fallback.
 type VectorIndexLoadStatus struct {
@@ -64,8 +66,9 @@ type VectorIndexPruneStatus struct {
 // vector indexes use a native TreeDB collection root; ad hoc in-memory indexes
 // keep using the legacy sidecar snapshot path.
 func (idx *VectorIndex) SaveSnapshot() (VectorIndexLoadStatus, error) {
-	if idx.usesNativeSnapshotRoot() {
-		return idx.SaveNativeSnapshot()
+	status, err := idx.SaveNativeSnapshot()
+	if err == nil || !errors.Is(err, errVectorIndexNotDeclared) {
+		return status, err
 	}
 	return idx.saveLegacySnapshot()
 }
@@ -105,7 +108,7 @@ func (idx *VectorIndex) SaveNativeSnapshot() (VectorIndexLoadStatus, error) {
 	}
 	def, ok := findVectorIndex(catalog.meta.VectorIndexes, idx.name)
 	if !ok {
-		return status, fmt.Errorf("collections: vector index %q is not declared in collection metadata", idx.name)
+		return status, fmt.Errorf("%w: %q", errVectorIndexNotDeclared, idx.name)
 	}
 	if reason := idx.validateNativeSnapshotDefinition(def); reason != "" {
 		return status, fmt.Errorf("collections: vector index %q does not match collection metadata: %s", idx.name, reason)
@@ -137,7 +140,9 @@ func (idx *VectorIndex) SaveNativeSnapshot() (VectorIndexLoadStatus, error) {
 	}
 	iter := publishTable.NewIterator(nil, nil)
 	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder([]backenddb.OrderedRootDeltaPublishInput{{
-		BaseRoot:      baseRoot,
+		// Native vector snapshots are full graph images. Publish a replacement
+		// root so keys removed by rebuild/shrink do not survive from prior roots.
+		BaseRoot:      0,
 		Iter:          iter,
 		StoragePolicy: policy,
 	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
@@ -288,8 +293,12 @@ func (idx *VectorIndex) saveLegacySnapshot() (VectorIndexLoadStatus, error) {
 // with ExactFallbackReason set and no error, so callers can safely use exact
 // search as the correctness fallback.
 func (c *Collection) LoadVectorIndexSnapshot(opts VectorIndexOptions) (*VectorIndex, VectorIndexLoadStatus, error) {
-	if c != nil && collectionMetaHasVectorIndex(c.meta, vectorIndexOptionName(opts)) {
-		return c.LoadNativeVectorIndexSnapshot(opts)
+	index, status, err := c.LoadNativeVectorIndexSnapshot(opts)
+	if err != nil {
+		return nil, status, err
+	}
+	if index != nil || status.Loaded || status.ExactFallbackReason != "missing_vector_index_metadata" {
+		return index, status, nil
 	}
 	return c.loadLegacyVectorIndexSnapshot(opts)
 }
@@ -771,15 +780,14 @@ func readVectorIndexNativeSnapshot(snap *backenddb.Snapshot, catalog *collection
 		if err := it.Error(); err != nil {
 			return snapshot, bytesDisk, "", err
 		}
-		keyString := string(key)
-		if keyString == vectorIndexNativeKeyMeta {
+		if bytes.Equal(key, []byte(vectorIndexNativeKeyMeta)) {
 			it.Next()
 			continue
 		}
 		bytesDisk += int64(len(value))
 		switch {
-		case strings.HasPrefix(keyString, vectorIndexNativeKeyPrefixNode):
-			nodeID, ok := parseVectorIndexNativeOrdinal(keyString[len(vectorIndexNativeKeyPrefixNode):])
+		case bytes.HasPrefix(key, []byte(vectorIndexNativeKeyPrefixNode)):
+			nodeID, ok := parseVectorIndexNativeOrdinal(string(key[len(vectorIndexNativeKeyPrefixNode):]))
 			if !ok {
 				return snapshot, bytesDisk, "invalid_graph_root_key", nil
 			}
@@ -791,19 +799,19 @@ func readVectorIndexNativeSnapshot(snap *backenddb.Snapshot, catalog *collection
 			if nodeID > maxNodeID {
 				maxNodeID = nodeID
 			}
-		case strings.HasPrefix(keyString, vectorIndexNativeKeyPrefixEdge):
+		case bytes.HasPrefix(key, []byte(vectorIndexNativeKeyPrefixEdge)):
 			var edge vectorIndexPersistEdges
 			if err := json.Unmarshal(value, &edge); err != nil {
 				return snapshot, bytesDisk, "invalid_graph_root_entry", nil
 			}
 			snapshot.Edges = append(snapshot.Edges, edge)
-		case strings.HasPrefix(keyString, vectorIndexNativeKeyPrefixTomb):
-			nodeID, ok := parseVectorIndexNativeOrdinal(keyString[len(vectorIndexNativeKeyPrefixTomb):])
+		case bytes.HasPrefix(key, []byte(vectorIndexNativeKeyPrefixTomb)):
+			nodeID, ok := parseVectorIndexNativeOrdinal(string(key[len(vectorIndexNativeKeyPrefixTomb):]))
 			if !ok {
 				return snapshot, bytesDisk, "invalid_graph_root_key", nil
 			}
 			snapshot.Tombstones.NodeIDs = append(snapshot.Tombstones.NodeIDs, nodeID)
-		case strings.HasPrefix(keyString, vectorIndexNativeKeyPrefixDoc):
+		case bytes.HasPrefix(key, []byte(vectorIndexNativeKeyPrefixDoc)):
 			var nodeID int
 			if err := json.Unmarshal(value, &nodeID); err != nil {
 				return snapshot, bytesDisk, "invalid_graph_root_entry", nil
@@ -868,21 +876,6 @@ func parseVectorIndexNativeOrdinal(value string) (int, bool) {
 		return 0, false
 	}
 	return parsed, true
-}
-
-func (idx *VectorIndex) usesNativeSnapshotRoot() bool {
-	if idx == nil || idx.collection == nil {
-		return false
-	}
-	return collectionMetaHasVectorIndex(idx.collection.meta, idx.name)
-}
-
-func collectionMetaHasVectorIndex(meta CollectionMeta, name string) bool {
-	if name == "" {
-		return false
-	}
-	_, ok := findVectorIndex(meta.VectorIndexes, name)
-	return ok
 }
 
 func vectorIndexOptionName(opts VectorIndexOptions) string {
