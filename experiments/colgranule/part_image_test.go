@@ -702,6 +702,43 @@ func TestColumnPartFromImageRejectsInvalidRowLocatorReferences(t *testing.T) {
 	}
 }
 
+func TestColumnPartFromImageRejectsIncompleteRowLocators(t *testing.T) {
+	part, _ := testColumnPartImageFixture(t, false)
+	corruptPart := *part
+	corruptPart.Locators = make(map[int64]RowLocator, len(part.Locators)-1)
+	skipped := false
+	for primaryID, locator := range part.Locators {
+		if !skipped {
+			skipped = true
+			continue
+		}
+		corruptPart.Locators[primaryID] = locator
+	}
+	image, err := BuildColumnPartImage(&corruptPart, ColumnPartImageOptions{})
+	if err != nil {
+		t.Fatalf("BuildColumnPartImage: %v", err)
+	}
+	if _, err := ColumnPartFromImage(image); err == nil {
+		t.Fatal("ColumnPartFromImage accepted incomplete row locators")
+	}
+}
+
+func TestColumnPartFromImageRejectsDuplicateRowLocatorPartRows(t *testing.T) {
+	_, image := testColumnPartImageFixture(t, false)
+	first, second := firstTwoRowLocatorFieldOffsets(t, image)
+	corrupt := append([]byte(nil), image.Bytes...)
+	binary.LittleEndian.PutUint32(corrupt[second.partRow:], binary.LittleEndian.Uint32(corrupt[first.partRow:]))
+	binary.LittleEndian.PutUint32(corrupt[second.granuleOrdinal:], binary.LittleEndian.Uint32(corrupt[first.granuleOrdinal:]))
+	binary.LittleEndian.PutUint32(corrupt[second.rowInGranule:], binary.LittleEndian.Uint32(corrupt[first.rowInGranule:]))
+	parsed, err := ParseColumnPartImage(corrupt)
+	if err != nil {
+		t.Fatalf("ParseColumnPartImage: %v", err)
+	}
+	if _, err := ColumnPartFromImage(parsed); err == nil {
+		t.Fatal("ColumnPartFromImage accepted duplicate row locator part rows")
+	}
+}
+
 func TestColumnPartFromImageRejectsDuplicateColumnDataSections(t *testing.T) {
 	part, image := testColumnPartImageFixture(t, false)
 	columnData := firstImageSectionOfKind(t, image, ColumnPartImageSectionColumnData)
@@ -1074,6 +1111,18 @@ type rowLocatorOffsets struct {
 
 func firstRowLocatorOffsets(t *testing.T, image ColumnPartImage) rowLocatorOffsets {
 	t.Helper()
+	offsets := firstNRowLocatorOffsets(t, image, 1)
+	return offsets[0]
+}
+
+func firstTwoRowLocatorFieldOffsets(t *testing.T, image ColumnPartImage) (rowLocatorOffsets, rowLocatorOffsets) {
+	t.Helper()
+	offsets := firstNRowLocatorOffsets(t, image, 2)
+	return offsets[0], offsets[1]
+}
+
+func firstNRowLocatorOffsets(t *testing.T, image ColumnPartImage, n int) []rowLocatorOffsets {
+	t.Helper()
 	locators, err := image.singleSection(ColumnPartImageSectionRowLocators)
 	if err != nil {
 		t.Fatalf("row locators section: %v", err)
@@ -1083,17 +1132,32 @@ func firstRowLocatorOffsets(t *testing.T, image ColumnPartImage) rowLocatorOffse
 	if err != nil {
 		t.Fatal(err)
 	}
-	if count == 0 {
-		t.Fatal("row locator count=0")
+	if int(count) < n {
+		t.Fatalf("row locator count=%d want at least %d", count, n)
 	}
-	primaryID := locators.Offset + dec.offset
-	return rowLocatorOffsets{
-		primaryID:      primaryID,
-		partID:         primaryID + 8,
-		partRow:        primaryID + 16,
-		granuleOrdinal: primaryID + 20,
-		rowInGranule:   primaryID + 24,
+	out := make([]rowLocatorOffsets, 0, n)
+	for i := 0; i < n; i++ {
+		primaryID := locators.Offset + dec.offset
+		out = append(out, rowLocatorOffsets{
+			primaryID:      primaryID,
+			partID:         primaryID + 8,
+			partRow:        primaryID + 16,
+			granuleOrdinal: primaryID + 20,
+			rowInGranule:   primaryID + 24,
+		})
+		if _, err := dec.i64(); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := dec.u64(); err != nil {
+			t.Fatal(err)
+		}
+		for j := 0; j < 4; j++ {
+			if _, err := dec.u32(); err != nil {
+				t.Fatal(err)
+			}
+		}
 	}
+	return out
 }
 
 func descriptorPartIDOffset(t *testing.T, image ColumnPartImage) int {

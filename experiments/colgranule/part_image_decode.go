@@ -878,6 +878,10 @@ func decodeRowLocatorsSection(image ColumnPartImage) (map[int64]RowLocator, erro
 }
 
 func validateDecodedRowLocators(desc ColumnPartDescriptor, partID uint64, locators map[int64]RowLocator) error {
+	if len(locators) != desc.RowCount {
+		return fmt.Errorf("colgranule: row locator count=%d want part rows=%d", len(locators), desc.RowCount)
+	}
+	seenRows := make([]bool, desc.RowCount)
 	for primaryID, locator := range locators {
 		if locator.PrimaryID != primaryID {
 			return fmt.Errorf("colgranule: row locator key %d has primary id %d", primaryID, locator.PrimaryID)
@@ -899,6 +903,10 @@ func validateDecodedRowLocators(desc ColumnPartDescriptor, partID uint64, locato
 		if locator.PartRow != partRow {
 			return fmt.Errorf("colgranule: row locator primary id %d part row=%d want %d from granule %d", primaryID, locator.PartRow, partRow, locator.GranuleOrdinal)
 		}
+		if seenRows[locator.PartRow] {
+			return fmt.Errorf("colgranule: duplicate row locator part row %d", locator.PartRow)
+		}
+		seenRows[locator.PartRow] = true
 	}
 	return nil
 }
