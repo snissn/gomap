@@ -234,6 +234,8 @@ type commandWALReplayFrame struct {
 	env commitlog.CommandEnvelope
 }
 
+type commandWALReplayLogSupportFunc func() (map[uint64]page.ValuePtr, *replayInlineAppender, error)
+
 func replayCommandWALIntoBackend(db *DB, segments []logSegment, maxSegmentBytes int64, dictLookup valuelog.DictLookup) error {
 	if db == nil {
 		return fmt.Errorf("treedb: command wal recovery missing db")
@@ -251,24 +253,44 @@ func replayCommandWALIntoBackend(db *DB, segments []logSegment, maxSegmentBytes 
 	}
 	var ridMap map[uint64]page.ValuePtr
 	var inlineAppender *replayInlineAppender
-	needsValueLogSupport, err := commandWALReplayFramesNeedValueLogSupport(db, frames)
-	if err != nil {
-		return err
-	}
-	if needsValueLogSupport {
-		ridMap, err = scanValueLogSegments(segments, dictLookup)
-		if err != nil {
-			return err
+	previousLeafPageLog := db.leafPageLog
+	leafPageLogInstalled := false
+	ensureReplayLogSupport := func() (map[uint64]page.ValuePtr, *replayInlineAppender, error) {
+		if inlineAppender != nil {
+			return ridMap, inlineAppender, nil
+		}
+		var err error
+		if ridMap == nil {
+			ridMap, err = scanValueLogSegments(segments, dictLookup)
+			if err != nil {
+				return nil, nil, err
+			}
 		}
 		inlineAppender, err = newReplayInlineAppender(db, segments, ridMap)
 		if err != nil {
-			return err
+			return nil, nil, err
 		}
-		defer func() { _ = inlineAppender.close() }()
 		if db.indexOuterLeavesInValueLog {
-			previousLeafPageLog := db.leafPageLog
 			db.SetLeafPageLog(inlineAppender)
-			defer db.SetLeafPageLog(previousLeafPageLog)
+			leafPageLogInstalled = true
+		}
+		return ridMap, inlineAppender, nil
+	}
+	defer func() {
+		if inlineAppender != nil {
+			_ = inlineAppender.close()
+		}
+		if leafPageLogInstalled {
+			db.SetLeafPageLog(previousLeafPageLog)
+		}
+	}()
+	needsLogSupport, err := commandWALReplayFramesNeedLogSupport(db, frames)
+	if err != nil {
+		return err
+	}
+	if needsLogSupport {
+		if _, _, err := ensureReplayLogSupport(); err != nil {
+			return err
 		}
 	}
 	for _, frame := range frames {
@@ -278,7 +300,7 @@ func replayCommandWALIntoBackend(db *DB, segments []logSegment, maxSegmentBytes 
 		if frame.env.LSN != applied+1 {
 			return fmt.Errorf("%w: current=%d next=%d", ErrCommandWALAppliedLSNNonContig, applied, frame.env.LSN)
 		}
-		if err := applyCommandWALFrame(db, frame.env, ridMap, inlineAppender); err != nil {
+		if err := applyCommandWALFrame(db, frame.env, ridMap, inlineAppender, ensureReplayLogSupport); err != nil {
 			return err
 		}
 		applied = frame.env.LSN
@@ -294,6 +316,7 @@ func replayCommandWALIntoBackend(db *DB, segments []logSegment, maxSegmentBytes 
 		if err := inlineAppender.close(); err != nil {
 			return err
 		}
+		inlineAppender = nil
 	}
 	_, err = cleanupCommandWALSegmentsCoveredByAppliedLSN(db.dir, applied, maxSegmentBytes)
 	return err
@@ -350,10 +373,7 @@ func readCommandWALReplayFrames(segments []logSegment, appliedLSN uint64, maxSeg
 	return frames, nil
 }
 
-func commandWALReplayFramesNeedValueLogSupport(db *DB, frames []commandWALReplayFrame) (bool, error) {
-	if db != nil && db.indexOuterLeavesInValueLog {
-		return true, nil
-	}
+func commandWALReplayFramesNeedLogSupport(db *DB, frames []commandWALReplayFrame) (bool, error) {
 	for _, frame := range frames {
 		if frame.env.Kind != commitlog.CommandKindRawKVBatch {
 			continue
@@ -375,6 +395,11 @@ func commandWALReplayFramesNeedValueLogSupport(db *DB, frames []commandWALReplay
 			return true, nil
 		}
 	}
+	if db != nil && db.indexOuterLeavesInValueLog {
+		// Outer-leaf mode needs a replay leaf-page log for any replayed write,
+		// even when the raw KV payload values themselves remain inline.
+		return true, nil
+	}
 	return false, nil
 }
 
@@ -388,10 +413,10 @@ func commandWALRawSetNeedsReplayValueLog(db *DB, key, value []byte) bool {
 	return len(value) > resolveBatchInlineThresholdForKey(threshold, key, domains)
 }
 
-func applyCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map[uint64]page.ValuePtr, inlineAppender *replayInlineAppender) error {
+func applyCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map[uint64]page.ValuePtr, inlineAppender *replayInlineAppender, ensureReplayLogSupport commandWALReplayLogSupportFunc) error {
 	switch env.Kind {
 	case commitlog.CommandKindRawKVBatch:
-		return applyRawKVCommandWALFrame(db, env, ridMap, inlineAppender)
+		return applyRawKVCommandWALFrame(db, env, ridMap, inlineAppender, ensureReplayLogSupport)
 	default:
 		return commitlog.ErrCommandWALUnsupportedKind
 	}

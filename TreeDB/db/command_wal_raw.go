@@ -60,8 +60,7 @@ func (db *DB) prepareRawKVCommandWALIntent(b *Batch) (*commandWALBatchIntent, er
 				ops = append(ops, commitlog.RawKVOperation{Op: commitlog.RawKVOpSetRID, Key: entry.Key, RID: rid})
 				continue
 			}
-			value := entry.Value
-			ops = append(ops, commitlog.RawKVOperation{Op: commitlog.RawKVOpSet, Key: entry.Key, Value: value})
+			ops = append(ops, commitlog.RawKVOperation{Op: commitlog.RawKVOpSet, Key: entry.Key, Value: entry.Value})
 		default:
 			return nil, fmt.Errorf("treedb: command wal unknown raw kv batch op %d", entry.Type)
 		}
@@ -86,7 +85,7 @@ func (db *DB) lookupCommandWALValueLogRID(ptr page.ValuePtr, ridCache map[uint32
 		}
 	}
 	if ridCache == nil {
-		ridCache = make(map[uint32]map[page.ValuePtr]uint64)
+		return 0, fmt.Errorf("treedb: command wal raw kv rid cache unavailable")
 	}
 	byPtr := ridCache[ptr.FileID]
 	if byPtr == nil {
@@ -252,7 +251,7 @@ func (db *DB) poisonCommandWALAfterPostAppendFailure(intent *commandWALBatchInte
 	db.commandWALFlushPoisoned.Store(true)
 }
 
-func applyRawKVCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map[uint64]page.ValuePtr, inlineAppender *replayInlineAppender) error {
+func applyRawKVCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map[uint64]page.ValuePtr, inlineAppender *replayInlineAppender, ensureReplayLogSupport commandWALReplayLogSupportFunc) error {
 	if db == nil {
 		return fmt.Errorf("treedb: command wal recovery missing db")
 	}
@@ -279,6 +278,16 @@ func applyRawKVCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map
 					return err
 				}
 				if inlineAppender == nil {
+					if ensureReplayLogSupport == nil {
+						return fmt.Errorf("treedb: command wal replay log support unavailable")
+					}
+					var err error
+					ridMap, inlineAppender, err = ensureReplayLogSupport()
+					if err != nil {
+						return err
+					}
+				}
+				if inlineAppender == nil {
 					return fmt.Errorf("treedb: command wal missing replay value-log appender")
 				}
 				ptr, err := inlineAppender.append(entry.Value)
@@ -294,6 +303,16 @@ func applyRawKVCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map
 				return err
 			}
 		case commitlog.RawKVOpSetRID:
+			if ridMap == nil {
+				if ensureReplayLogSupport == nil {
+					return fmt.Errorf("treedb: command wal replay log support unavailable")
+				}
+				var err error
+				ridMap, inlineAppender, err = ensureReplayLogSupport()
+				if err != nil {
+					return err
+				}
+			}
 			ptr, ok := ridMap[entry.RID]
 			if !ok {
 				return fmt.Errorf("treedb: command wal missing value-log rid %d", entry.RID)
