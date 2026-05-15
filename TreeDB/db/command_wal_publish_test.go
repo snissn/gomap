@@ -257,6 +257,23 @@ func TestCommandWALWriteOpenRejectsUnappliedFramesUntilDispatcher(t *testing.T) 
 	}
 }
 
+func TestCommandWALWriteOpenRejectsFirstUnappliedFrameUntilDispatcher(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	writeCommandWALFrame(t, dir, 1, 1)
+
+	_, err = Open(Options{Dir: dir})
+	if !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("Open read-write with first unapplied command WAL error=%v, want ErrRecoveryRequired", err)
+	}
+}
+
 func TestCommandWALCheckpointCleanupDeletesOnlyCoveredSegments(t *testing.T) {
 	dir := t.TempDir()
 	writeCommandWALFrame(t, dir, 1, 1)

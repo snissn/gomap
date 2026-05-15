@@ -31,6 +31,7 @@
     "TestCommandWALReadOnlyOpenAllowsFramesCoveredByAppliedLSN",
     "TestCommandWALWriteOpenSkipsCoveredFramesBeforeLegacyReplay",
     "TestCommandWALWriteOpenRejectsUnappliedFramesUntilDispatcher",
+    "TestCommandWALWriteOpenRejectsFirstUnappliedFrameUntilDispatcher",
     "TestCommandWALCheckpointCleanupDeletesOnlyCoveredSegments",
     "TestCommandWALBackupManifestShapeIncludesAppliedLSNAndRanges"
   ],
@@ -39,6 +40,7 @@
     "read-only open with complete LSN greater than AppliedCommandLSN returns ErrRecoveryRequired",
     "read-write open skips complete typed frames whose max LSN is already covered by durable AppliedCommandLSN before legacy raw WAL replay",
     "read-write open fails recovery-required on complete typed frames above durable AppliedCommandLSN until the PR3 dispatcher exists",
+    "read-write open fails recovery-required for the first typed command frame when durable AppliedCommandLSN is still zero",
     "cleanup after AppliedCommandLSN only removes covered non-active typed command WAL segments"
   ],
   "benchmark_commands": [
