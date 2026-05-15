@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/snissn/gomap/TreeDB/internal/lockfile"
@@ -141,7 +144,7 @@ func OpenCommandJournal(walDir string, opts CommandJournalOptions) (*CommandJour
 		opts.SegmentSeq = 1
 	}
 	path := filepath.Join(walDir, CommandSegmentName(opts.Lane, opts.SegmentSeq))
-	initialLSN, err := commandJournalInitialLSN(path, opts)
+	initialLSN, err := commandJournalInitialLSN(walDir, path, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -161,34 +164,99 @@ func OpenCommandJournal(walDir string, opts CommandJournalOptions) (*CommandJour
 	}, nil
 }
 
-func commandJournalInitialLSN(path string, opts CommandJournalOptions) (uint64, error) {
+func commandJournalInitialLSN(walDir, activePath string, opts CommandJournalOptions) (uint64, error) {
 	initialLSN := opts.InitialLSN
-	info, err := os.Stat(path)
+	segments, err := commandJournalLaneSegments(walDir, opts.Lane, activePath)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return initialLSN, nil
+		return 0, err
+	}
+	for _, seg := range segments {
+		if seg.size == 0 {
+			continue
 		}
-		return 0, err
-	}
-	if info.Size() == 0 {
-		return initialLSN, nil
-	}
-	maxLSN, typed, completeEnd, err := scanCommandFrameMaxLSNAndEnd(path, Options{MaxSegmentSize: opts.MaxSegmentSize})
-	if err != nil {
-		return 0, err
-	}
-	if completeEnd < info.Size() {
-		if err := truncateCommandJournalTail(path, completeEnd); err != nil {
+		maxLSN, typed, completeEnd, err := scanCommandFrameMaxLSNAndEnd(seg.path, Options{MaxSegmentSize: opts.MaxSegmentSize})
+		if err != nil {
 			return 0, err
 		}
-	}
-	if !typed {
-		return initialLSN, nil
-	}
-	if maxLSN > initialLSN {
-		initialLSN = maxLSN
+		if completeEnd < seg.size {
+			if !seg.active {
+				return 0, fmt.Errorf("commitlog: non-active command journal segment %s has incomplete tail", filepath.Base(seg.path))
+			}
+			if err := truncateCommandJournalTail(seg.path, completeEnd); err != nil {
+				return 0, err
+			}
+		}
+		if typed && maxLSN > initialLSN {
+			initialLSN = maxLSN
+		}
 	}
 	return initialLSN, nil
+}
+
+type commandJournalSegment struct {
+	path   string
+	seq    uint64
+	size   int64
+	active bool
+}
+
+func commandJournalLaneSegments(walDir string, lane int, activePath string) ([]commandJournalSegment, error) {
+	entries, err := os.ReadDir(walDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	cleanActive := filepath.Clean(activePath)
+	segments := make([]commandJournalSegment, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		entryLane, seq, ok := parseCommandSegmentName(entry.Name())
+		if !ok || entryLane != lane {
+			continue
+		}
+		path := filepath.Join(walDir, entry.Name())
+		info, err := entry.Info()
+		if err != nil {
+			return nil, err
+		}
+		segments = append(segments, commandJournalSegment{
+			path:   path,
+			seq:    seq,
+			size:   info.Size(),
+			active: filepath.Clean(path) == cleanActive,
+		})
+	}
+	sort.Slice(segments, func(i, j int) bool {
+		if segments[i].seq != segments[j].seq {
+			return segments[i].seq < segments[j].seq
+		}
+		return segments[i].path < segments[j].path
+	})
+	return segments, nil
+}
+
+func parseCommandSegmentName(name string) (lane int, seq uint64, ok bool) {
+	if !strings.HasPrefix(name, "commit-l") || !strings.HasSuffix(name, ".log") {
+		return 0, 0, false
+	}
+	rest := strings.TrimSuffix(strings.TrimPrefix(name, "commit-l"), ".log")
+	parts := strings.SplitN(rest, "-", 2)
+	if len(parts) != 2 {
+		return 0, 0, false
+	}
+	lane, err := strconv.Atoi(parts[0])
+	if err != nil || lane < 0 {
+		return 0, 0, false
+	}
+	seq, err = strconv.ParseUint(parts[1], 10, 64)
+	if err != nil {
+		return 0, 0, false
+	}
+	return lane, seq, true
 }
 
 func truncateCommandJournalTail(path string, size int64) error {

@@ -17,7 +17,9 @@
   "passed_tests": [
     "TestCommandJournalAllocatesContiguousLSNs",
     "TestCommandJournalSeedsLSNFromExistingFrames",
+    "TestCommandJournalSeedsLSNFromExistingSegmentFamily",
     "TestCommandJournalTruncatesTerminalTailBeforeAppend",
+    "TestCommandJournalRejectsNonActiveTerminalTail",
     "TestCommandJournalConcurrentAppendsSerializeFrameOrder",
     "TestCommandJournalRejectsIndependentMutableOwner",
     "TestJournalOwnerRollbackMaxLSNClearsExhausted",
@@ -47,6 +49,8 @@
   ],
   "crash_scenarios": [
     "corrupt active meta page after root plus AppliedCommandLSN publish selects previous durable tuple",
+    "opening a later command segment seeds the next LSN from the same-lane segment family to avoid duplicate LSNs after restart",
+    "active command WAL terminal tails are truncated before append, while non-active segment tails fail closed",
     "read-only open with complete LSN greater than AppliedCommandLSN returns ErrRecoveryRequired",
     "read-write open skips complete typed frames whose max LSN is already covered by durable AppliedCommandLSN before legacy raw WAL replay",
     "read-write open fails recovery-required on complete typed frames above durable AppliedCommandLSN until the PR3 dispatcher exists",
@@ -78,6 +82,7 @@
     "GOWORK=off go test ./TreeDB/page ./TreeDB/internal/commitlog ./TreeDB/db -run 'Test(MetaPageBody|CommandJournal|CommandWAL|ValidateFormatRequiredFeatureGate|SaveFormatConfig|LoadFormatConfig|ReadOnly)'",
     "GOWORK=off go test ./TreeDB/caching -run 'TestCheckpoint|TestUnified|TestCommit|TestReadOnly|TestValueLog'",
     "GOWORK=off go test ./TreeDB ./TreeDB/internal/commitlog ./TreeDB/page ./TreeDB/docs -run 'TestReadOnlyDoesNotReplayOrRemoveCommitLog|TestOpenBackend_WALOffReopen_AllowsOfflineValueLogMaintenance|TestCommandWAL|TestMetaPageBody|TestCommandJournal|TestDocs'",
+    "GOWORK=off go test ./TreeDB/internal/commitlog -run 'TestCommandJournal(SeedsLSNFromExistingSegmentFamily|RejectsNonActiveTerminalTail|TruncatesTerminalTailBeforeAppend|SeedsLSNFromExistingFrames)' -count=1",
     "GOWORK=off go test ./TreeDB/internal/commitlog -run '^$' -bench 'Benchmark(CommandJournalAllocateAndAppendRawKVBatch|WriterAppendCommandRawKVBatch)' -benchmem -benchtime=200ms -count=6",
     "GOWORK=off go test ./TreeDB/db -run '^$' -bench 'Benchmark(CommandWALPublishAppliedLSN|FinalizeCommitSameRoots)' -benchmem -benchtime=200ms -count=6",
     "git diff --check"

@@ -103,6 +103,78 @@ func TestCommandJournalSeedsLSNFromExistingFrames(t *testing.T) {
 	}
 }
 
+func TestCommandJournalSeedsLSNFromExistingSegmentFamily(t *testing.T) {
+	dir := t.TempDir()
+	j, err := OpenCommandJournal(dir, CommandJournalOptions{SegmentSeq: 1})
+	if err != nil {
+		t.Fatalf("OpenCommandJournal first: %v", err)
+	}
+	for i := 0; i < 2; i++ {
+		if _, err := j.AppendCommand(CommandEnvelope{
+			Kind:          CommandKindRawKVBatch,
+			Scope:         CommandScopeRawKV,
+			PayloadFormat: PayloadFormatRawKVBatchV1,
+		}); err != nil {
+			t.Fatalf("AppendCommand first segment %d: %v", i, err)
+		}
+	}
+	if err := j.Close(); err != nil {
+		t.Fatalf("Close first: %v", err)
+	}
+
+	reopen, err := OpenCommandJournal(dir, CommandJournalOptions{SegmentSeq: 2})
+	if err != nil {
+		t.Fatalf("OpenCommandJournal second segment: %v", err)
+	}
+	defer reopen.Close()
+	lsn, err := reopen.AppendCommand(CommandEnvelope{
+		Kind:          CommandKindRawKVBatch,
+		Scope:         CommandScopeRawKV,
+		PayloadFormat: PayloadFormatRawKVBatchV1,
+	})
+	if err != nil {
+		t.Fatalf("AppendCommand second segment: %v", err)
+	}
+	if lsn != 3 {
+		t.Fatalf("second segment LSN=%d, want 3", lsn)
+	}
+}
+
+func TestCommandJournalRejectsNonActiveTerminalTail(t *testing.T) {
+	dir := t.TempDir()
+	j, err := OpenCommandJournal(dir, CommandJournalOptions{SegmentSeq: 1})
+	if err != nil {
+		t.Fatalf("OpenCommandJournal first: %v", err)
+	}
+	if _, err := j.AppendCommand(CommandEnvelope{
+		Kind:          CommandKindRawKVBatch,
+		Scope:         CommandScopeRawKV,
+		PayloadFormat: PayloadFormatRawKVBatchV1,
+	}); err != nil {
+		t.Fatalf("AppendCommand first: %v", err)
+	}
+	if err := j.Close(); err != nil {
+		t.Fatalf("Close first: %v", err)
+	}
+	path := filepath.Join(dir, CommandSegmentName(0, 1))
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
+	if err != nil {
+		t.Fatalf("OpenFile append tail: %v", err)
+	}
+	if _, err := f.Write([]byte{0x01, 0x02, 0x03}); err != nil {
+		_ = f.Close()
+		t.Fatalf("Write torn tail: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("Close torn tail: %v", err)
+	}
+
+	_, err = OpenCommandJournal(dir, CommandJournalOptions{SegmentSeq: 2})
+	if err == nil {
+		t.Fatalf("OpenCommandJournal with non-active tail unexpectedly succeeded")
+	}
+}
+
 func TestCommandJournalTruncatesTerminalTailBeforeAppend(t *testing.T) {
 	dir := t.TempDir()
 	j, err := OpenCommandJournal(dir, CommandJournalOptions{})
