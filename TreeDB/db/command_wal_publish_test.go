@@ -386,6 +386,33 @@ func TestCommandWALOpenFailsClosedOnCorruptTypedSegmentEvenWhenCovered(t *testin
 	}
 }
 
+func TestCommandWALOpenFailsClosedOnNonActiveTerminalTailEvenWhenCovered(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	state := db.State()
+	if err := db.publishCommandWALRoots(state.RootPageID, state.SystemRootPageID, 2, []CommandWALLSNRange{{First: 1, Last: 2}}, true); err != nil {
+		t.Fatalf("publishCommandWALRoots: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	writeCommandWALFrame(t, dir, 1, 1)
+	appendCommandWALTail(t, dir, 1, []byte{0xde, 0xad, 0xbe})
+	writeCommandWALFrame(t, dir, 2, 2)
+
+	_, err = Open(Options{Dir: dir, ReadOnly: true})
+	if !errors.Is(err, commitlog.ErrCommandWALTerminalTail) {
+		t.Fatalf("Open read-only error=%v, want ErrCommandWALTerminalTail", err)
+	}
+	_, err = Open(Options{Dir: dir})
+	if !errors.Is(err, commitlog.ErrCommandWALTerminalTail) {
+		t.Fatalf("Open read-write error=%v, want ErrCommandWALTerminalTail", err)
+	}
+}
+
 func TestCommandWALCheckpointCleanupDeletesOnlyCoveredSegments(t *testing.T) {
 	dir := t.TempDir()
 	writeCommandWALFrame(t, dir, 1, 1)
@@ -451,7 +478,7 @@ func TestCommandWALSegmentMaxLSNStreamsFrames(t *testing.T) {
 	writeCommandWALSegmentFrames(t, dir, 1, 1, 2, 3)
 
 	path := filepath.Join(WALDirPath(dir), "commit-l0-000001.log")
-	maxLSN, typed, err := commandWALSegmentMaxLSN(path, 0)
+	maxLSN, typed, err := commandWALSegmentMaxLSN(path, 0, true)
 	if err != nil {
 		t.Fatalf("commandWALSegmentMaxLSN: %v", err)
 	}
@@ -504,7 +531,7 @@ func TestCommandWALSegmentMaxLSNFailsClosedOnNonIncreasingLSN(t *testing.T) {
 	writeCommandWALSegmentFrames(t, dir, 1, 1, 1)
 
 	path := filepath.Join(WALDirPath(dir), "commit-l0-000001.log")
-	_, typed, err := commandWALSegmentMaxLSN(path, 0)
+	_, typed, err := commandWALSegmentMaxLSN(path, 0, true)
 	if !errors.Is(err, commitlog.ErrCommandWALDuplicateLSN) {
 		t.Fatalf("commandWALSegmentMaxLSN error=%v, want ErrCommandWALDuplicateLSN", err)
 	}
@@ -578,6 +605,22 @@ func writeCommandWALSegmentFrames(t *testing.T, dir string, segmentSeq uint64, l
 	}
 	if err := w.Close(); err != nil {
 		t.Fatalf("Close writer: %v", err)
+	}
+}
+
+func appendCommandWALTail(t *testing.T, dir string, segmentSeq uint64, tail []byte) {
+	t.Helper()
+	path := filepath.Join(WALDirPath(dir), commitlog.CommandSegmentName(0, segmentSeq))
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
+	if err != nil {
+		t.Fatalf("OpenFile append command WAL tail: %v", err)
+	}
+	if _, err := f.Write(tail); err != nil {
+		_ = f.Close()
+		t.Fatalf("Write command WAL tail: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("Close command WAL tail: %v", err)
 	}
 }
 

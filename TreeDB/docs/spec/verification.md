@@ -292,6 +292,7 @@ PR 2: shared journal ownership and `AppliedCommandLSN` plumbing:
 - `TestCommandWALSegmentMaxLSNStreamsFrames`;
 - `TestCommandWALSegmentMaxLSNFailsClosedOnNonIncreasingLSN`;
 - `TestCommandWALOpenFailsClosedOnCorruptTypedSegmentEvenWhenCovered`;
+- `TestCommandWALOpenFailsClosedOnNonActiveTerminalTailEvenWhenCovered`;
 - `TestCommandWALReadOnlyOpenWithUnappliedFrameFailsRecoveryRequired`;
 - `TestCommandWALReadOnlyOpenAllowsFramesCoveredByAppliedLSN`;
 - `TestCommandWALWriteOpenSkipsCoveredFramesBeforeLegacyReplay`;
