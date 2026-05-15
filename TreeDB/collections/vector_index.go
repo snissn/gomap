@@ -15,6 +15,7 @@ import (
 	"unsafe"
 
 	nk "github.com/ashvardanian/NumKong/golang"
+	axiomsimd "github.com/axiomhq/simd-go"
 	"github.com/cespare/xxhash/v2"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
@@ -29,8 +30,8 @@ const (
 )
 
 // VectorIndexEncoding selects the process-local ANN vector copy format. The
-// collection row remains canonical and exact reranking always reads the full
-// precision vector from TreeDB.
+// collection row remains canonical; float32 indexes can rerank directly from the
+// indexed vector copy, while compressed indexes rerank from canonical rows.
 type VectorIndexEncoding uint8
 
 const (
@@ -84,8 +85,8 @@ func (e *VectorIndexEncoding) UnmarshalJSON(raw []byte) error {
 
 // VectorIndexOptions configures an in-memory vector secondary index built from
 // collection rows. The index stores stable collection document IDs and vector
-// copies for graph search; TreeDB collection rows remain canonical for final
-// exact reranking.
+// copies for graph search; TreeDB collection rows remain canonical for returned
+// document payloads and filtered reranking.
 type VectorIndexOptions struct {
 	Name                string
 	Field               string
@@ -897,9 +898,11 @@ func (idx *VectorIndex) pruneLayerNeighborsLocked(_ int, neighbors []vectorIndex
 	return out
 }
 
-// Search returns ANN candidates from the in-memory graph and exact-reranks the
-// final result set from canonical collection rows. If graph search underfills
-// and DisableExactFallback is false, it falls back to the exact scan API.
+// Search returns ANN candidates from the in-memory graph and reranks the final
+// result set. Unfiltered float32 cosine indexes rerank from resident vectors;
+// filtered or compressed searches rerank from canonical collection rows. If
+// graph search underfills and DisableExactFallback is false, it falls back to
+// the exact scan API.
 func (idx *VectorIndex) Search(query []float32, opts VectorIndexSearchOptions) ([]VectorSearchResult, VectorIndexTrace, error) {
 	trace := VectorIndexTrace{Strategy: "ann_graph"}
 	if idx == nil {
@@ -1000,7 +1003,14 @@ func (idx *VectorIndex) Search(query []float32, opts VectorIndexSearchOptions) (
 	scratch := idx.getSearchScratch()
 	candidates := idx.searchCandidatesLocked(query, queryNorm, prepared, candidateLimit, scratch)
 	trace.CandidatesExamined = len(candidates)
+	filter := opts.Filter
+	if rangeFilter != nil {
+		filter = rangeFilter
+	}
+	fastRerank := filter == nil && idx.metric == VectorMetricCosine && idx.encoding == VectorIndexEncodingFloat32
 	candidateIDs := make([][]byte, 0, len(candidates))
+	fastCandidateVectors := make([]float32, 0, len(candidates)*len(query))
+	fastCandidateInvNorms := make([]float32, 0, len(candidates))
 	for _, candidate := range candidates {
 		if candidate.nodeID < 0 || candidate.nodeID >= len(idx.nodes) {
 			continue
@@ -1014,16 +1024,26 @@ func (idx *VectorIndex) Search(query []float32, opts VectorIndexSearchOptions) (
 			continue
 		}
 		candidateIDs = append(candidateIDs, bytes.Clone(node.documentID))
+		if fastRerank {
+			if len(node.vector) != len(query) || node.cachedInvNorm == 0 {
+				fastRerank = false
+				continue
+			}
+			fastCandidateVectors = append(fastCandidateVectors, node.vector...)
+			fastCandidateInvNorms = append(fastCandidateInvNorms, node.cachedInvNorm)
+		}
 	}
 	idx.putSearchScratch(scratch)
 	idx.mu.RUnlock()
 	trace.CandidatesAfterTombstone = len(candidateIDs)
 
-	filter := opts.Filter
-	if rangeFilter != nil {
-		filter = rangeFilter
+	var results []VectorSearchResult
+	var err error
+	if fastRerank {
+		results, err = idx.rerankFloat32CosineCandidatesFromIndex(query, prepared.invNorm, candidateIDs, fastCandidateVectors, fastCandidateInvNorms, opts.TopK, &trace)
+	} else {
+		results, err = idx.rerankCandidates(query, candidateIDs, filter, &trace)
 	}
-	results, err := idx.rerankCandidates(query, candidateIDs, filter, &trace)
 	if err != nil {
 		return nil, trace, err
 	}
@@ -1128,6 +1148,52 @@ func vectorDocumentIDSet(ids [][]byte) map[string]struct{} {
 		out[string(id)] = struct{}{}
 	}
 	return out
+}
+
+func (idx *VectorIndex) rerankFloat32CosineCandidatesFromIndex(query []float32, queryInvNorm float32, candidateIDs [][]byte, candidateVectors []float32, candidateInvNorms []float32, topK int, trace *VectorIndexTrace) ([]VectorSearchResult, error) {
+	if len(candidateIDs) == 0 {
+		return []VectorSearchResult{}, nil
+	}
+	dims := len(query)
+	if dims == 0 || len(candidateVectors) != len(candidateIDs)*dims || len(candidateInvNorms) != len(candidateIDs) {
+		return nil, errors.New("collections: invalid vector rerank candidate matrix")
+	}
+	if trace != nil {
+		trace.CandidatesAfterFilter += len(candidateIDs)
+		trace.RerankCount += len(candidateIDs)
+	}
+	packedCandidates := nk.NewPackedMatrixF32(candidateVectors, len(candidateIDs), dims)
+	dots := make([]float64, len(candidateIDs))
+	nk.DotsPackedF32(query, packedCandidates, dots, 1)
+
+	ranked := make([]VectorSearchResult, 0, len(candidateIDs))
+	for i, dot := range dots {
+		distance := float32(1 - dot*float64(queryInvNorm)*float64(candidateInvNorms[i]))
+		ranked = appendBoundedVectorSearchResult(ranked, VectorSearchResult{
+			DocumentID: bytes.Clone(candidateIDs[i]),
+			Distance:   distance,
+		}, len(candidateIDs))
+	}
+
+	results := make([]VectorSearchResult, 0, minInt(topK, len(ranked)))
+	for _, result := range ranked {
+		document, err := idx.collection.Get(result.DocumentID)
+		if err != nil {
+			return nil, err
+		}
+		if document == nil {
+			continue
+		}
+		result.Document = bytes.Clone(document)
+		results = append(results, result)
+		if len(results) >= topK {
+			break
+		}
+	}
+	if results == nil {
+		return []VectorSearchResult{}, nil
+	}
+	return results, nil
 }
 
 func (idx *VectorIndex) rerankCandidates(query []float32, candidateIDs [][]byte, filter func(DocumentRecord) (bool, error), trace *VectorIndexTrace) ([]VectorSearchResult, error) {
@@ -1486,11 +1552,11 @@ func vectorDistanceToFloat32NodeCosineUnchecked(query preparedFloat32CosineQuery
 	if n != len(node.vector) {
 		panic(fmt.Sprintf("collections: vector dimensions differ: %d vs %d", n, len(node.vector)))
 	}
-	dot := nk.DotF32(
+	dot := axiomsimd.DotProductFloat32(
 		query.vector,
 		node.vector,
 	)
-	return float32(1 - dot*float64(query.invNorm)*float64(node.cachedInvNorm))
+	return 1 - dot*query.invNorm*node.cachedInvNorm
 }
 
 func vectorDistanceBetweenFloat32NodesCosine(left, right *vectorIndexNode) (float32, error) {
@@ -1500,11 +1566,11 @@ func vectorDistanceBetweenFloat32NodesCosine(left, right *vectorIndexNode) (floa
 	if left.cachedInvNorm == 0 || right.cachedInvNorm == 0 {
 		return 0, errors.New("collections: cosine vector cannot have zero magnitude")
 	}
-	dot := nk.DotF32(
+	dot := axiomsimd.DotProductFloat32(
 		left.vector,
 		right.vector,
 	)
-	return float32(1 - dot*float64(left.cachedInvNorm)*float64(right.cachedInvNorm)), nil
+	return 1 - dot*left.cachedInvNorm*right.cachedInvNorm, nil
 }
 
 func (node *vectorIndexNode) vectorDimensions() int {
