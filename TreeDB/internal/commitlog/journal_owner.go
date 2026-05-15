@@ -30,6 +30,8 @@ type JournalOwnerOptions struct {
 	InitialLSN uint64
 }
 
+const MaxCommandJournalLane = 1023
+
 func AcquireJournalOwnerWithOptions(dir string, opts JournalOwnerOptions) (*JournalOwner, error) {
 	if dir == "" {
 		return nil, errors.New("commitlog: journal owner dir required")
@@ -51,13 +53,10 @@ func AcquireJournalOwnerWithOptions(dir string, opts JournalOwnerOptions) (*Jour
 	return &JournalOwner{lock: lock, nextLSN: opts.InitialLSN + 1}, nil
 }
 
-// ReserveLSN reserves one LSN from this owner.
-//
-// Do not mix direct reservations with a CommandJournal using the same owner:
-// CommandJournal relies on holding its mutex across reserve+append+rollback so
-// failed appends can safely roll back only the tail reservation.
-func (o *JournalOwner) ReserveLSN() (uint64, error) {
-	first, _, err := o.ReserveLSNRange(1)
+// reserveLSN reserves one LSN from this owner. Only CommandJournal should call
+// this directly because failed appends rely on tail-only rollback.
+func (o *JournalOwner) reserveLSN() (uint64, error) {
+	first, _, err := o.reserveLSNRange(1)
 	return first, err
 }
 
@@ -88,10 +87,10 @@ func (o *JournalOwner) rollbackReservedLSN(lsn uint64) error {
 	return nil
 }
 
-// ReserveLSNRange reserves a contiguous LSN range from this owner. As with
-// ReserveLSN, callers must not interleave direct reservations with a
+// reserveLSNRange reserves a contiguous LSN range from this owner. As with
+// reserveLSN, callers must not interleave direct reservations with a
 // CommandJournal that depends on tail-only rollback for failed appends.
-func (o *JournalOwner) ReserveLSNRange(count uint64) (first uint64, last uint64, err error) {
+func (o *JournalOwner) reserveLSNRange(count uint64) (first uint64, last uint64, err error) {
 	if o == nil {
 		return 0, 0, errors.New("commitlog: journal owner is closed")
 	}
@@ -134,9 +133,9 @@ func (o *JournalOwner) Close() error {
 }
 
 type CommandJournalOptions struct {
-	// Lane selects the command WAL lane and must be non-negative. Lanes are
-	// encoded in decimal segment names, so callers should keep lane IDs within
-	// their configured small lane set rather than treating this as unbounded.
+	// Lane selects the command WAL lane and must be in [0, MaxCommandJournalLane].
+	// Lanes are encoded in decimal segment names, but command WAL is designed
+	// around a small configured lane set rather than unbounded dynamic lanes.
 	Lane int
 	// SegmentSeq selects the segment sequence to append to. Zero means append to
 	// the latest existing segment for Lane, or segment 1 when the lane is empty.
@@ -177,7 +176,7 @@ func OpenCommandJournal(walDir string, opts CommandJournalOptions) (*CommandJour
 	if walDir == "" {
 		return nil, errors.New("commitlog: command journal dir required")
 	}
-	if opts.Lane < 0 {
+	if opts.Lane < 0 || opts.Lane > MaxCommandJournalLane {
 		return nil, fmt.Errorf("commitlog: invalid command journal lane %d", opts.Lane)
 	}
 	owner, err := AcquireJournalOwnerWithOptions(walDir, JournalOwnerOptions{InitialLSN: opts.InitialLSN})
@@ -456,7 +455,7 @@ func (j *CommandJournal) AppendCommand(env CommandEnvelope) (uint64, error) {
 	if size > int(segmentLenMask) {
 		return 0, ErrRecordTooLarge
 	}
-	lsn, err := j.owner.ReserveLSN()
+	lsn, err := j.owner.reserveLSN()
 	if err != nil {
 		return 0, err
 	}
