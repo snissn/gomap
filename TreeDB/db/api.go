@@ -578,6 +578,22 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.root_page"] = fmt.Sprintf("%d", state.RootPageID)
 	stats["treedb.system_root_page"] = fmt.Sprintf("%d", state.SystemRootPageID)
 	stats["treedb.applied_command_lsn"] = fmt.Sprintf("%d", state.AppliedCommandLSN)
+	stats["treedb.command_wal.enabled"] = fmt.Sprintf("%t", db.commandWAL)
+	if required, err := CommandWALRequiredFeatureEnabled(db.dir); err == nil {
+		stats["treedb.command_wal.required_feature"] = fmt.Sprintf("%t", required)
+	} else {
+		stats["treedb.command_wal.required_feature_error"] = err.Error()
+	}
+	if summary, err := summarizeCommandWALStats(db.dir, 0); err == nil {
+		stats["treedb.command_wal.segment_files"] = fmt.Sprintf("%d", summary.SegmentFiles)
+		stats["treedb.command_wal.typed_segments"] = fmt.Sprintf("%d", summary.TypedSegments)
+		stats["treedb.command_wal.active_segments"] = fmt.Sprintf("%d", summary.ActiveSegments)
+		stats["treedb.command_wal.frames"] = fmt.Sprintf("%d", summary.Frames)
+		stats["treedb.command_wal.max_lsn"] = fmt.Sprintf("%d", summary.MaxLSN)
+		stats["treedb.command_wal.bytes"] = fmt.Sprintf("%d", summary.Bytes)
+	} else {
+		stats["treedb.command_wal.stats_error"] = err.Error()
+	}
 	stats["treedb.keep_recent"] = fmt.Sprintf("%d", db.keepRecent)
 	stats["treedb.prefer_append_alloc"] = fmt.Sprintf("%t", db.preferAppendAlloc)
 	stats["treedb.freelist_region_pages"] = fmt.Sprintf("%d", db.freelistRegionPages)

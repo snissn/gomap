@@ -1,0 +1,90 @@
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/internal/commitlog
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+                                                       │ artifacts/command-wal/pr3_5/commitlog-valuelog-microbench.txt │
+                                                       │                            sec/op                             │
+CommandWALRawKVBatchPayloadEncode/ops_1_value_64-12                                                        33.23n ± 4%
+CommandWALRawKVBatchPayloadEncode/ops_16_value_64-12                                                       282.6n ± 3%
+CommandWALRawKVBatchPayloadEncode/ops_128_value_64-12                                                      2.114µ ± 4%
+CommandWALRawKVBatchPayloadEncode/ops_16_value_1024-12                                                     1.622µ ± 3%
+CommandWALRawKVBatchPayloadScan/ops_1_value_64-12                                                          7.690n ± 1%
+CommandWALRawKVBatchPayloadScan/ops_16_value_64-12                                                         82.94n ± 3%
+CommandWALRawKVBatchPayloadScan/ops_128_value_64-12                                                        661.6n ± 2%
+CommandWALRawKVBatchPayloadScan/ops_16_value_1024-12                                                       83.76n ± 2%
+WriterAppendCommandRawKVBatch/ops_1_value_64-12                                                            273.1n ± 2%
+WriterAppendCommandRawKVBatch/ops_16_value_64-12                                                           1.507µ ± 2%
+WriterAppendCommandRawKVBatch/ops_128_value_64-12                                                          11.21µ ± 2%
+WriterAppendCommandRawKVBatch/ops_16_value_1024-12                                                         16.21µ ± 2%
+CommandJournalAllocateAndAppendRawKVBatch-12                                                               272.2n ± 5%
+geomean                                                                                                    440.0n
+
+                                                       │ artifacts/command-wal/pr3_5/commitlog-valuelog-microbench.txt │
+                                                       │                              B/s                              │
+CommandWALRawKVBatchPayloadEncode/ops_1_value_64-12                                                       2.494Gi ± 4%
+CommandWALRawKVBatchPayloadEncode/ops_16_value_64-12                                                      4.397Gi ± 2%
+CommandWALRawKVBatchPayloadEncode/ops_128_value_64-12                                                     4.685Gi ± 4%
+CommandWALRawKVBatchPayloadEncode/ops_16_value_1024-12                                                    9.588Gi ± 3%
+WriterAppendCommandRawKVBatch/ops_1_value_64-12                                                           673.9Mi ± 3%
+WriterAppendCommandRawKVBatch/ops_16_value_64-12                                                          910.1Mi ± 2%
+WriterAppendCommandRawKVBatch/ops_128_value_64-12                                                         912.9Mi ± 2%
+WriterAppendCommandRawKVBatch/ops_16_value_1024-12                                                        988.1Mi ± 2%
+CommandJournalAllocateAndAppendRawKVBatch-12                                                              122.6Mi ± 4%
+geomean                                                                                                   1.458Gi
+
+                                                       │ artifacts/command-wal/pr3_5/commitlog-valuelog-microbench.txt │
+                                                       │                             B/op                              │
+CommandWALRawKVBatchPayloadEncode/ops_1_value_64-12                                                       96.00 ± 0%
+CommandWALRawKVBatchPayloadEncode/ops_16_value_64-12                                                    1.375Ki ± 0%
+CommandWALRawKVBatchPayloadEncode/ops_128_value_64-12                                                   10.62Ki ± 0%
+CommandWALRawKVBatchPayloadEncode/ops_16_value_1024-12                                                  18.00Ki ± 0%
+CommandWALRawKVBatchPayloadScan/ops_1_value_64-12                                                         0.000 ± 0%
+CommandWALRawKVBatchPayloadScan/ops_16_value_64-12                                                        0.000 ± 0%
+CommandWALRawKVBatchPayloadScan/ops_128_value_64-12                                                       0.000 ± 0%
+CommandWALRawKVBatchPayloadScan/ops_16_value_1024-12                                                      0.000 ± 0%
+WriterAppendCommandRawKVBatch/ops_1_value_64-12                                                           0.000 ± 0%
+WriterAppendCommandRawKVBatch/ops_16_value_64-12                                                          0.000 ± 0%
+WriterAppendCommandRawKVBatch/ops_128_value_64-12                                                         0.000 ± 0%
+WriterAppendCommandRawKVBatch/ops_16_value_1024-12                                                        0.000 ± 0%
+CommandJournalAllocateAndAppendRawKVBatch-12                                                              0.000 ± 0%
+geomean                                                                                                              ¹
+¹ summaries must be >0 to compute geomean
+
+                                                       │ artifacts/command-wal/pr3_5/commitlog-valuelog-microbench.txt │
+                                                       │                           allocs/op                           │
+CommandWALRawKVBatchPayloadEncode/ops_1_value_64-12                                                       1.000 ± 0%
+CommandWALRawKVBatchPayloadEncode/ops_16_value_64-12                                                      1.000 ± 0%
+CommandWALRawKVBatchPayloadEncode/ops_128_value_64-12                                                     1.000 ± 0%
+CommandWALRawKVBatchPayloadEncode/ops_16_value_1024-12                                                    1.000 ± 0%
+CommandWALRawKVBatchPayloadScan/ops_1_value_64-12                                                         0.000 ± 0%
+CommandWALRawKVBatchPayloadScan/ops_16_value_64-12                                                        0.000 ± 0%
+CommandWALRawKVBatchPayloadScan/ops_128_value_64-12                                                       0.000 ± 0%
+CommandWALRawKVBatchPayloadScan/ops_16_value_1024-12                                                      0.000 ± 0%
+WriterAppendCommandRawKVBatch/ops_1_value_64-12                                                           0.000 ± 0%
+WriterAppendCommandRawKVBatch/ops_16_value_64-12                                                          0.000 ± 0%
+WriterAppendCommandRawKVBatch/ops_128_value_64-12                                                         0.000 ± 0%
+WriterAppendCommandRawKVBatch/ops_16_value_1024-12                                                        0.000 ± 0%
+CommandJournalAllocateAndAppendRawKVBatch-12                                                              0.000 ± 0%
+geomean                                                                                                              ¹
+¹ summaries must be >0 to compute geomean
+
+pkg: github.com/snissn/gomap/TreeDB/internal/valuelog
+                                                 │ artifacts/command-wal/pr3_5/commitlog-valuelog-microbench.txt │
+                                                 │                            sec/op                             │
+ReaderReadNextMeta_DiscardWithChecksum-12                                                            11.50µ ± 2%
+ReaderReadNextMeta_GroupedDiscardWithChecksum-12                                                     9.525µ ± 1%
+geomean                                                                                              10.47µ
+
+                                                 │ artifacts/command-wal/pr3_5/commitlog-valuelog-microbench.txt │
+                                                 │                             B/op                              │
+ReaderReadNextMeta_DiscardWithChecksum-12                                                           0.000 ± 0%
+ReaderReadNextMeta_GroupedDiscardWithChecksum-12                                                    0.000 ± 0%
+geomean                                                                                                        ¹
+¹ summaries must be >0 to compute geomean
+
+                                                 │ artifacts/command-wal/pr3_5/commitlog-valuelog-microbench.txt │
+                                                 │                           allocs/op                           │
+ReaderReadNextMeta_DiscardWithChecksum-12                                                           0.000 ± 0%
+ReaderReadNextMeta_GroupedDiscardWithChecksum-12                                                    0.000 ± 0%
+geomean                                                                                                        ¹
+¹ summaries must be >0 to compute geomean

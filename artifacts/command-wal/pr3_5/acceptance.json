@@ -1,0 +1,66 @@
+{
+  "tracker": "https://github.com/snissn/gomap/issues/1529",
+  "milestone": "PR3.5 raw KV command-WAL performance visibility and polish",
+  "branch": "codex/user-command-wal-pr3_5",
+  "base_branch": "codex/user-command-wal-pr3",
+  "base_commit": "9b54268807d5698332553d12de04b73889bdcf7d",
+  "go_version": "go1.25.7 linux/amd64",
+  "platform": "linux/amd64",
+  "command_support_matrix_version": "TreeDB/docs/spec/verification.md and issue #1529 PR3.5 evidence update",
+  "features": [
+    "hidden unified-bench DB variant treedb_backend_command_wal plus alias treedb_command_wal",
+    "TreeDB backend adapter snapshots final stats before close so unified-bench artifacts include command-WAL proof fields",
+    "TreeDB stats expose command_wal enabled, required_feature, segment/frame/max_lsn counters, and AppliedCommandLSN",
+    "DB-local ValuePtr to RID cache avoids repeated value-log metadata scans for repeated pointer-backed command-WAL intents"
+  ],
+  "passed_tests": [
+    "TestCommandWALStatsProveModeAndFrames",
+    "TestCommandWALPointerBatchReplaysThroughRIDFence",
+    "TestCommandWALMissingRIDFenceFailsRecovery",
+    "TestTreeDBBackendCommandWALVariantPersistsFeatureAndAppendsTypedFrames",
+    "TestTreeDBCommandWALAliasResolvesToBackendVariant",
+    "TestSelectedKeepsSharedTreeDBStats",
+    "TestRenderMarkdownSingle_IncludesTreeDBPerfAndStatsSections"
+  ],
+  "benchmark_commands": [
+    "GOWORK=off go test ./TreeDB/db -run '^$' -bench 'BenchmarkCommandWAL(RawKVDirectWrite|RawKVPointerDirectWrite|ReplayFrameClassification|ReadReplayFrames|CoveredSegmentCleanupProof)' -benchmem -benchtime=200ms -count=6",
+    "GOWORK=off go test ./TreeDB/internal/commitlog ./TreeDB/internal/valuelog -run '^$' -bench 'Benchmark(WriterAppendCommandRawKVBatch|CommandJournalAllocateAndAppendRawKVBatch|CommandWALRawKVBatchPayload(Encode|Scan)|ReaderReadNextMeta)' -benchmem -benchtime=200ms -count=6",
+    "GOWORK=off go run ./cmd/unified_bench -dbs treedb_backend,treedb_backend_command_wal -test batch_write,batch_delete -keys 1000 -batchsize 100 -valsize 64 -profile durable -progress=false -format markdown -checkpoint-between-tests",
+    "GOWORK=off go run ./cmd/unified_bench -dbs treedb_backend,treedb_backend_command_wal -test batch_write -keys 2000 -batchsize 1000 -valsize 64 -profile durable -progress=false -format markdown -checkpoint-between-tests",
+    "GOWORK=off go run ./cmd/unified_bench -dbs treedb_backend,treedb_backend_command_wal -test batch_write -keys 1000 -batchsize 100 -valsize 64 -profile durable -progress=false -format markdown -checkpoint-every-ops=100"
+  ],
+  "benchmark_artifacts": [
+    "artifacts/command-wal/pr3_5/db-microbench.txt",
+    "artifacts/command-wal/pr3_5/db-microbench-benchstat.txt",
+    "artifacts/command-wal/pr3_5/commitlog-valuelog-microbench.txt",
+    "artifacts/command-wal/pr3_5/commitlog-valuelog-microbench-benchstat.txt",
+    "artifacts/command-wal/pr3_5/unified-bench-small-batch.md",
+    "artifacts/command-wal/pr3_5/unified-bench-large-batch.md",
+    "artifacts/command-wal/pr3_5/unified-bench-checkpoint-heavy.md"
+  ],
+  "performance_summary": {
+    "small_batch_write_ops_per_sec": "legacy backend 2.563M/s, command_wal_v1 2.029M/s",
+    "small_batch_delete_ops_per_sec": "legacy backend 1.650M/s, command_wal_v1 1.621M/s",
+    "large_batch_write_ops_per_sec": "legacy backend 5.002M/s, command_wal_v1 2.788M/s",
+    "checkpoint_heavy_write_ops_per_sec": "legacy backend 10.771k/s, command_wal_v1 10.749k/s",
+    "direct_write_microbench": "legacy 3.896 us/op, command_wal_v1 4.889 us/op, +3 alloc/op",
+    "pointer_write_microbench": "legacy pointer 3.789 us/op, command_wal_v1 pointer 6.177 us/op after RID-cache polish, +6 alloc/op",
+    "warmed_append_gate": "WriterAppendCommandRawKVBatch and CommandJournalAllocateAndAppendRawKVBatch remain 0 B/op and 0 allocs/op",
+    "warmed_classification_gate": "RawKVBatch payload scan, replay frame classification, and ValueLog ReadNextMeta remain 0 B/op and 0 allocs/op"
+  },
+  "mode_proof": {
+    "unified_bench_variant": "treedb_backend_command_wal",
+    "stats_fields": [
+      "treedb.command_wal.enabled=true",
+      "treedb.command_wal.required_feature=true",
+      "treedb.command_wal.frames>0",
+      "treedb.command_wal.typed_segments>0",
+      "treedb.applied_command_lsn>0"
+    ]
+  },
+  "known_gaps": [
+    "direct backend kvstore.Set cannot express value-log SetPointer, so value-pointer comparison is covered by DB microbench rather than unified-bench until a pointer-capable benchmark adapter/API exists",
+    "large-batch command_wal_v1 throughput remains materially slower than legacy backend and should block PR9 default cutover unless optimized or explicitly accepted",
+    "pointer command_wal_v1 still has +6 alloc/op after RID-cache polish; remaining allocations are tracked as future optimization debt before default cutover"
+  ]
+}

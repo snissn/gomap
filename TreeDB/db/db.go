@@ -97,9 +97,11 @@ type DB struct {
 	freelistRegionPages  uint64
 	freelistRegionRadius int
 
-	readOnly   bool
-	durability DurabilityMode
-	commandWAL bool
+	readOnly             bool
+	durability           DurabilityMode
+	commandWAL           bool
+	commandWALRIDCacheMu sync.Mutex
+	commandWALRIDCache   map[uint32]map[page.ValuePtr]uint64
 
 	keepRecent                     uint64
 	policy                         WritePolicy

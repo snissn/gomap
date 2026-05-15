@@ -118,6 +118,8 @@ func init() {
 	RegisterDB("treedb", NewTreeDB)
 	RegisterAlias("treedbcached", "treedb")
 	RegisterHiddenDB("treedb_backend", NewTreeDBBackend)
+	RegisterHiddenDB("treedb_backend_command_wal", NewTreeDBBackendCommandWAL)
+	RegisterAlias("treedb_command_wal", "treedb_backend_command_wal")
 	RegisterHiddenDB("treedb_vlog_off", NewTreeDBVlogOff)
 	RegisterHiddenDB("treedb_vlog_dict", NewTreeDBVlogDict)
 	RegisterHiddenDB("treedb_vlog_block_snappy", NewTreeDBVlogBlockSnappy)
