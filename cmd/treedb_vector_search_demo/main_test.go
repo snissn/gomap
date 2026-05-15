@@ -17,8 +17,7 @@ func TestExecuteSmokeCompactsReopensValidatesAndBenchmarks(t *testing.T) {
 		docs:                  128,
 		dimensions:            16,
 		queries:               8,
-		readOps:               16,
-		readConcurrency:       []int{2},
+		searchConcurrency:     []int{2},
 		validateQueries:       4,
 		validateDocs:          4,
 		topK:                  5,
@@ -44,8 +43,8 @@ func TestExecuteSmokeCompactsReopensValidatesAndBenchmarks(t *testing.T) {
 	if res.Search.Queries != 8 || res.Search.AvgNanos <= 0 || res.Search.ExactFallbacks != 0 {
 		t.Fatalf("unexpected search benchmark result: %+v", res.Search)
 	}
-	if len(res.ReadBenchmarks) != 2 || res.ReadBenchmarks[0].Concurrency != 1 || res.ReadBenchmarks[1].Concurrency != 2 {
-		t.Fatalf("unexpected read benchmarks: %+v", res.ReadBenchmarks)
+	if len(res.SearchBenchmarks) != 2 || res.SearchBenchmarks[0].Concurrency != 1 || res.SearchBenchmarks[1].Concurrency != 2 {
+		t.Fatalf("unexpected search benchmarks: %+v", res.SearchBenchmarks)
 	}
 	if res.Profile != "bench" {
 		t.Fatalf("profile=%q want bench", res.Profile)
@@ -132,8 +131,7 @@ func TestExecuteRequireLeafVLogBytesPassesWithDefaultBenchProfile(t *testing.T) 
 		docs:                  64,
 		dimensions:            8,
 		queries:               2,
-		readOps:               8,
-		readConcurrency:       []int{2},
+		searchConcurrency:     []int{2},
 		validateQueries:       1,
 		validateDocs:          1,
 		topK:                  3,
@@ -175,8 +173,7 @@ func TestExecuteRejectsMainDBDir(t *testing.T) {
 		docs:                  64,
 		dimensions:            8,
 		queries:               2,
-		readOps:               8,
-		readConcurrency:       []int{2},
+		searchConcurrency:     []int{2},
 		validateQueries:       1,
 		validateDocs:          1,
 		topK:                  3,
@@ -246,8 +243,7 @@ func TestRunMatrixJSONOutput(t *testing.T) {
 		"-docs", "48",
 		"-dims", "8",
 		"-queries", "2",
-		"-read-ops", "12",
-		"-read-concurrency", "2,4",
+		"-search-concurrency", "2,4",
 		"-validate-queries", "1",
 		"-validate-docs", "1",
 		"-top-k", "3",
@@ -272,9 +268,9 @@ func TestRunMatrixJSONOutput(t *testing.T) {
 		if res.Cases[i].Name != want {
 			t.Fatalf("case %d name=%q want %q", i, res.Cases[i].Name, want)
 		}
-		reads := res.Cases[i].Result.ReadBenchmarks
-		if len(reads) != 3 || reads[0].Concurrency != 1 || reads[1].Concurrency != 2 || reads[2].Concurrency != 4 {
-			t.Fatalf("case %s read benchmarks=%+v", want, reads)
+		searches := res.Cases[i].Result.SearchBenchmarks
+		if len(searches) != 3 || searches[0].Concurrency != 1 || searches[1].Concurrency != 2 || searches[2].Concurrency != 4 {
+			t.Fatalf("case %s search benchmarks=%+v", want, searches)
 		}
 	}
 	if res.Cases[0].Result.FormatConfig == nil || res.Cases[0].Result.FormatConfig.IndexOuterLeavesInValueLog {
@@ -293,8 +289,7 @@ func TestExecuteMatrixReportsNestedKeptDirFromRoot(t *testing.T) {
 		docs:                  24,
 		dimensions:            8,
 		queries:               1,
-		readOps:               4,
-		readConcurrency:       []int{2},
+		searchConcurrency:     []int{2},
 		validateQueries:       1,
 		validateDocs:          1,
 		topK:                  3,
@@ -351,12 +346,12 @@ func TestRunTextOutput(t *testing.T) {
 		"profile=bench",
 		"value_pointer_threshold=1024",
 		"leaf_generation_segment_target=4194304",
-		"compact_storage_full:",
 		"Storage",
 		"format index_outer_leaves_in_vlog=",
 		"storage_domains index_db=",
 		"Memory",
 		"avg=",
+		"Parallel Search Benchmark",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("text output missing %q:\n%s", want, out)
