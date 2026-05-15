@@ -13997,6 +13997,12 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 			return false, ErrConcurrentMutation
 		}
 		currentBufferedPlan := plan.bufferedBase && plan.bufferedReadGeneration == domain.writeGeneration
+		if len(direct.templateEntries) > 0 && !currentBufferedPlan {
+			// Template-v1 IDs are collection-global; stale direct plans can reuse
+			// an ID even when their primary document writes do not conflict.
+			plan.stats.BufferStageValidation += updateBatchStatsSince(detailedStats, phaseStart)
+			return false, ErrConcurrentMutation
+		}
 		if !currentBufferedPlan && domain.directUpdatePlanHasPrimaryWriteConflictLocked(plan) {
 			plan.stats.BufferStageValidation += updateBatchStatsSince(detailedStats, phaseStart)
 			return false, ErrConcurrentMutation
