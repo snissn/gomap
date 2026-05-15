@@ -745,7 +745,9 @@ Deliverables:
 - versioned command frame encoder/decoder for `RawKVBatch`, collection command,
   and catalog command payload families;
 - `CommandEnvelope` types and golden fixtures;
-- raw KV encoded only as `RawKVBatch` command frames;
+- `RawKVBatch` command payload encoding and fixtures, while production raw KV
+  writes remain on the legacy raw payload path until PR3 adds recovery
+  dispatch, `AppliedCommandLSN`, and cleanup plumbing;
 - fail-closed rejection of legacy raw `commitlog.Record` payloads once the
   command WAL feature is present;
 - feature gate / required storage feature;
@@ -756,7 +758,9 @@ Acceptance:
 
 - no new `collection-l*.log` segment family or active `internal/collectionwal`
   appender is introduced;
-- raw WAL tests are migrated to `RawKVBatch` command frames;
+- legacy raw frame tests are inventoried and mapped to typed-frame replacements;
+  production raw replay tests remain active until PR3 converts raw KV writes to
+  `RawKVBatch`;
 - malformed or unsupported command WAL fails closed;
 - truncated terminal tail handling is tested;
 - command payload fixtures state whether they reuse native-wire deterministic

@@ -88,7 +88,35 @@ Notes:
   `page.MetaPageBody.ActiveSlabTail` for binary compatibility.
 - Current TreeDB value storage uses persistent value-log segments and `ValuePtr` references.
 
-## 3.1 Collection Document Payloads
+### 3.1 Command WAL Meta Extension
+
+When `format.json` advertises the required `command_wal_v1` storage feature,
+the meta page body extends the 60-byte body above with:
+
+```text
+body offset 60 / page offset 76:
+u64 AppliedCommandLSN
+```
+
+The `command_wal_v1` meta body size is 68 bytes. Bytes after offset 68 are
+reserved and must be written as zero until assigned by a later required feature.
+`AppliedCommandLSN` is the physical on-disk field for the logical `AppliedLSN`
+command stream boundary. Alternating meta-page selection must choose roots and
+`AppliedCommandLSN` from the same meta page candidate.
+
+Rules:
+
+- New `command_wal_v1` directories start with `AppliedCommandLSN=0`.
+- Updating `AppliedCommandLSN` without selecting the roots that contain those
+  command effects is invalid.
+- Selecting roots that contain command effects without the matching
+  `AppliedCommandLSN` is invalid for durable root publish/checkpoint state.
+- Required feature validation must fail closed if a `command_wal_v1` directory is
+  opened by code that decodes only the 60-byte pre-command-WAL meta body.
+- PR2 must add golden meta-page fixtures covering both alternating meta pages,
+  old/new tuple selection, and checksum validation over the extended body.
+
+## 3.2 Collection Document Payloads
 
 Collection document payload encodings are defined separately in
 `TreeDB/docs/spec/collections-document-formats.md`. In particular,
