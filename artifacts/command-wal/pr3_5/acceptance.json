@@ -3,7 +3,7 @@
   "milestone": "PR3.5 raw KV command-WAL performance visibility and polish",
   "branch": "codex/user-command-wal-pr3_5",
   "base_branch": "codex/user-command-wal-pr3",
-  "base_commit": "293f9b7b11dba69367b2cca5bc8aa5d433d8523a",
+  "base_commit": "69e541399260c21b7b3e3de1d2a10f5e0f903e97",
   "go_version": "go1.25.7 linux/amd64",
   "platform": "linux/amd64",
   "command_support_matrix_version": "TreeDB/docs/spec/verification.md and issue #1529 PR3.5 evidence update",
@@ -17,18 +17,21 @@
     "unified-bench direct backend variants preserve requested IndexOuterLeavesInValueLog and install a standalone leaf-page log instead of silently forcing inline leaves"
   ],
   "passed_tests": [
-    "TestStandaloneLeafPageLogEnablesDirectOuterLeafWrites",
-    "TestCommandWALStatsProveModeAndFrames",
-    "TestCommandWALStatsDisabledDoesNotScanWAL",
-    "TestCommandWALRIDCacheBounded",
-    "TestCommandWALPointerBatchReplaysThroughRIDFence",
     "TestCommandWALMissingRIDFenceFailsRecovery",
+    "TestCommandWALPointerBatchReplaysThroughRIDFence",
+    "TestCommandWALRIDCacheBounded",
     "TestCommandWALRawSetReplayLazilyCreatesAppenderIfPlacementDrifts",
+    "TestCommandWALStatsDefaultDoesNotScanWAL",
+    "TestCommandWALStatsDisabledDoesNotScanWAL",
+    "TestCommandWALStatsProveModeAndFrames",
+    "TestRenderMarkdownSingle_IncludesTreeDBPerfAndStatsSections",
+    "TestSelectedKeepsSharedTreeDBStats",
+    "TestStandaloneLeafPageLogEnablesDirectOuterLeafWrites",
+    "TestStandaloneLeafPageLogRejectsInvalidMaxSegmentBytes",
+    "TestTreeDBBackendCommandWALForcesWALOnWhenProfileDisablesWAL",
     "TestTreeDBBackendCommandWALVariantPersistsFeatureAndAppendsTypedFrames",
     "TestTreeDBBackendPreservesOuterLeavesFlag",
-    "TestTreeDBCommandWALAliasResolvesToBackendVariant",
-    "TestSelectedKeepsSharedTreeDBStats",
-    "TestRenderMarkdownSingle_IncludesTreeDBPerfAndStatsSections"
+    "TestTreeDBCommandWALAliasResolvesToBackendVariant"
   ],
   "benchmark_commands": [
     "GOWORK=off go test ./TreeDB/db -run '^$' -bench 'BenchmarkCommandWAL(RawKVDirectWrite|RawKVPointerDirectWrite|ReplayFrameClassification|ReadReplayFrames|CoveredSegmentCleanupProof)' -benchmem -benchtime=200ms -count=6",
@@ -74,5 +77,5 @@
     "pointer command_wal_v1 still has +6 alloc/op after RID-cache polish; remaining allocations are tracked as future optimization debt before default cutover",
     "outer-leaf direct backend throughput is much lower than earlier inline-leaf artifacts; the refreshed numbers are the correct benchmark mode because the requested outer-leaf flag is no longer silently ignored"
   ],
-  "evidence_generated_from_commit": "61ba191bb98a17692554a18be08d1553ae1dcda6"
+  "evidence_generated_from_commit": "5bca4b27072a9a6d4cd3c9b107ad8abb1bbe832d"
 }
