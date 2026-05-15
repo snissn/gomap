@@ -66,7 +66,6 @@ func runJSONBenchPartBuildReport(ds JSONBenchDataset, rowsPerGranule int, attemp
 	report.RowsPerGranule = rowsPerGranule
 	report.Columns = len(ds.Columns)
 	report.RawJSONBytes = JSONBenchRawDocumentBytes(ds)
-	report.DictionaryBytes = EstimateJSONBenchDictionaryBytes(ds)
 	for i := 0; i < attempts; i++ {
 		part, attempt, accounting, err := measureJSONBenchPartBuild(ds, rowsPerGranule, layout)
 		if err != nil {
@@ -81,6 +80,7 @@ func runJSONBenchPartBuildReport(ds JSONBenchDataset, rowsPerGranule int, attemp
 			report.Accounting = accounting
 		}
 	}
+	report.DictionaryBytes = report.Accounting.DictionaryBytes
 	report.fillDerivedMetrics()
 	return report, nil
 }
@@ -96,9 +96,11 @@ func measureJSONBenchPartBuild(ds JSONBenchDataset, rowsPerGranule int, layout J
 	if err != nil {
 		return nil, JSONBenchPartBuildAttempt{}, ColumnPartByteAccounting{}, err
 	}
-	accounting := part.ByteAccounting()
-	accounting.DictionaryBytes = EstimateJSONBenchDictionaryBytes(ds)
-	accounting.RecomputeTotals()
+	image, err := BuildColumnPartImage(part, ColumnPartImageOptions{Dictionaries: ds.Dictionaries})
+	if err != nil {
+		return nil, JSONBenchPartBuildAttempt{}, ColumnPartByteAccounting{}, err
+	}
+	accounting := part.ByteAccountingFromImage(image)
 	allocated := after.TotalAlloc - before.TotalAlloc
 	temporary := uint64(0)
 	if allocated > uint64(accounting.TotalStoredBytes) {

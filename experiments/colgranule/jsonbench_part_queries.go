@@ -113,6 +113,14 @@ func BuildJSONBenchColumnPartWithAggregateMetadataForLayout(ds JSONBenchDataset,
 	return BuildColumnPart(1, opts, ColumnBatch{Rows: ds.Rows, Columns: ds.Columns})
 }
 
+func imageBackedJSONBenchPart(part *ColumnPart) (*ColumnPart, error) {
+	image, err := BuildColumnPartImage(part, ColumnPartImageOptions{})
+	if err != nil {
+		return nil, err
+	}
+	return part.WithImagePayloads(image)
+}
+
 func JSONBenchColumnPartOptions(ds JSONBenchDataset, rowsPerGranule int) (ColumnStoreOptions, error) {
 	return JSONBenchColumnPartOptionsForLayout(ds, rowsPerGranule, JSONBenchColumnPartLayoutTimeUS)
 }
@@ -235,6 +243,10 @@ func RunJSONBenchPartQueries(ds JSONBenchDataset, rowsPerGranule int, attempts i
 	if err != nil {
 		return nil, err
 	}
+	part, err = imageBackedJSONBenchPart(part)
+	if err != nil {
+		return nil, err
+	}
 	codes, err := jsonBenchQueryCodes(ds)
 	if err != nil {
 		return nil, err
@@ -307,7 +319,15 @@ func RunJSONBenchPartQ4FairnessQueries(ds JSONBenchDataset, rowsPerGranule int, 
 	if err != nil {
 		return nil, err
 	}
+	timePart, err = imageBackedJSONBenchPart(timePart)
+	if err != nil {
+		return nil, err
+	}
 	clickHouseOrderPart, err := BuildJSONBenchColumnPartForLayout(ds, rowsPerGranule, JSONBenchColumnPartLayoutClickHouseFilterUserTime)
+	if err != nil {
+		return nil, err
+	}
+	clickHouseOrderPart, err = imageBackedJSONBenchPart(clickHouseOrderPart)
 	if err != nil {
 		return nil, err
 	}
@@ -378,7 +398,15 @@ func RunJSONBenchPartAggregateMetadataQueries(ds JSONBenchDataset, rowsPerGranul
 	if err != nil {
 		return nil, err
 	}
+	timePart, err = imageBackedJSONBenchPart(timePart)
+	if err != nil {
+		return nil, err
+	}
 	clickHouseOrderPart, err := BuildJSONBenchColumnPartWithAggregateMetadataForLayout(ds, rowsPerGranule, JSONBenchColumnPartLayoutClickHouseFilterUserTime)
+	if err != nil {
+		return nil, err
+	}
+	clickHouseOrderPart, err = imageBackedJSONBenchPart(clickHouseOrderPart)
 	if err != nil {
 		return nil, err
 	}

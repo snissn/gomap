@@ -1,0 +1,647 @@
+package colgranule
+
+import (
+	"encoding/binary"
+	"fmt"
+	"sort"
+	"time"
+)
+
+const columnPartImageVersion uint16 = 1
+
+const columnPartImageMagic uint32 = 0x4d494354 // "TCIM", little-endian on disk.
+
+type ColumnPartImageSectionKind string
+
+const (
+	ColumnPartImageSectionDescriptor        ColumnPartImageSectionKind = "descriptor"
+	ColumnPartImageSectionSortKeyMetadata   ColumnPartImageSectionKind = "sort_key_metadata"
+	ColumnPartImageSectionSortKeyMarks      ColumnPartImageSectionKind = "sort_key_marks"
+	ColumnPartImageSectionRowLocators       ColumnPartImageSectionKind = "row_locators"
+	ColumnPartImageSectionAggregateMetadata ColumnPartImageSectionKind = "aggregate_metadata"
+	ColumnPartImageSectionDictionaries      ColumnPartImageSectionKind = "dictionaries"
+	ColumnPartImageSectionColumnData        ColumnPartImageSectionKind = "column_data"
+)
+
+type ColumnPartImageSectionCategory string
+
+const (
+	ColumnPartImageCategoryDescriptor        ColumnPartImageSectionCategory = "descriptor"
+	ColumnPartImageCategorySortKeyMetadata   ColumnPartImageSectionCategory = "sort_key_metadata"
+	ColumnPartImageCategoryMarks             ColumnPartImageSectionCategory = "marks"
+	ColumnPartImageCategoryLocators          ColumnPartImageSectionCategory = "locators"
+	ColumnPartImageCategoryAggregateMetadata ColumnPartImageSectionCategory = "aggregate_metadata"
+	ColumnPartImageCategoryDictionaries      ColumnPartImageSectionCategory = "dictionaries"
+	ColumnPartImageCategoryDeclaredColumns   ColumnPartImageSectionCategory = "declared_columns"
+)
+
+type ColumnPartImageOptions struct {
+	Dictionaries map[string]map[string]int64
+}
+
+type ColumnPartImage struct {
+	Version       uint16                   `json:"version"`
+	PartID        uint64                   `json:"part_id"`
+	Rows          int                      `json:"rows"`
+	ManifestBytes int                      `json:"manifest_bytes"`
+	Sections      []ColumnPartImageSection `json:"sections"`
+	Bytes         []byte                   `json:"-"`
+}
+
+type ColumnPartImageSection struct {
+	Kind        ColumnPartImageSectionKind     `json:"kind"`
+	Category    ColumnPartImageSectionCategory `json:"category"`
+	Name        string                         `json:"name,omitempty"`
+	Column      string                         `json:"column,omitempty"`
+	Offset      int                            `json:"offset"`
+	Length      int                            `json:"length"`
+	Rows        int                            `json:"rows,omitempty"`
+	Granules    int                            `json:"granules,omitempty"`
+	Blocks      int                            `json:"blocks,omitempty"`
+	Encoding    Encoding                       `json:"encoding,omitempty"`
+	Compression Compression                    `json:"compression,omitempty"`
+}
+
+type ColumnPartImageSectionByteAccounting struct {
+	Kind     ColumnPartImageSectionKind     `json:"kind"`
+	Category ColumnPartImageSectionCategory `json:"category"`
+	Name     string                         `json:"name,omitempty"`
+	Column   string                         `json:"column,omitempty"`
+	Bytes    int                            `json:"bytes"`
+}
+
+func BuildColumnPartImage(part *ColumnPart, opts ColumnPartImageOptions) (ColumnPartImage, error) {
+	if part == nil {
+		return ColumnPartImage{}, fmt.Errorf("colgranule: nil part")
+	}
+	builder := columnPartImageBuilder{part: part, opts: opts}
+	return builder.build()
+}
+
+func (p *ColumnPart) WithImagePayloads(image ColumnPartImage) (*ColumnPart, error) {
+	if p == nil {
+		return nil, fmt.Errorf("colgranule: nil part")
+	}
+	if image.TotalBytes() == 0 {
+		return nil, fmt.Errorf("colgranule: empty part image")
+	}
+	out := *p
+	out.Columns = make(map[string]ColumnPartColumn, len(p.Columns))
+	for name, column := range p.Columns {
+		outColumn := column
+		outColumn.Blocks = append([]ColumnBlock(nil), column.Blocks...)
+		section, ok := image.columnDataSection(name)
+		if !ok {
+			return nil, fmt.Errorf("colgranule: image missing column data section %s", name)
+		}
+		offset := section.Offset
+		sectionEnd := section.Offset + section.Length
+		for i := range outColumn.Blocks {
+			block := &outColumn.Blocks[i]
+			length := block.Descriptor.StoredBytes
+			if length < 0 || offset+length > sectionEnd {
+				return nil, fmt.Errorf("colgranule: image column %s block %d length=%d outside section", name, i, length)
+			}
+			block.Granule.Payload = image.Bytes[offset : offset+length]
+			block.Granule.PayloadRef = PayloadRef{
+				Kind:   PayloadRefInline,
+				Offset: int64(offset),
+				Length: length,
+			}
+			offset += length
+		}
+		if offset != sectionEnd {
+			return nil, fmt.Errorf("colgranule: image column %s consumed=%d section=%d", name, offset-section.Offset, section.Length)
+		}
+		out.Columns[name] = outColumn
+	}
+	return &out, nil
+}
+
+func (i ColumnPartImage) TotalBytes() int {
+	return len(i.Bytes)
+}
+
+func (i ColumnPartImage) CategoryBytes(category ColumnPartImageSectionCategory) int {
+	total := 0
+	if category == ColumnPartImageCategoryDescriptor {
+		total += i.ManifestBytes
+	}
+	for _, section := range i.Sections {
+		if section.Category == category {
+			total += section.Length
+		}
+	}
+	return total
+}
+
+func (i ColumnPartImage) SectionByteAccounting() []ColumnPartImageSectionByteAccounting {
+	out := make([]ColumnPartImageSectionByteAccounting, 0, len(i.Sections)+1)
+	if i.ManifestBytes > 0 {
+		out = append(out, ColumnPartImageSectionByteAccounting{
+			Kind:     "manifest",
+			Category: ColumnPartImageCategoryDescriptor,
+			Bytes:    i.ManifestBytes,
+		})
+	}
+	for _, section := range i.Sections {
+		out = append(out, ColumnPartImageSectionByteAccounting{
+			Kind:     section.Kind,
+			Category: section.Category,
+			Name:     section.Name,
+			Column:   section.Column,
+			Bytes:    section.Length,
+		})
+	}
+	return out
+}
+
+func (i ColumnPartImage) columnDataSection(column string) (ColumnPartImageSection, bool) {
+	for _, section := range i.Sections {
+		if section.Kind == ColumnPartImageSectionColumnData && section.Column == column {
+			return section, true
+		}
+	}
+	return ColumnPartImageSection{}, false
+}
+
+type columnPartImageBuilder struct {
+	part     *ColumnPart
+	opts     ColumnPartImageOptions
+	sections []columnPartImageSectionData
+}
+
+type columnPartImageSectionData struct {
+	section ColumnPartImageSection
+	data    []byte
+}
+
+func (b *columnPartImageBuilder) build() (ColumnPartImage, error) {
+	if err := b.addDescriptorSection(); err != nil {
+		return ColumnPartImage{}, err
+	}
+	if err := b.addSortKeyMetadataSection(); err != nil {
+		return ColumnPartImage{}, err
+	}
+	if err := b.addSortKeyMarksSection(); err != nil {
+		return ColumnPartImage{}, err
+	}
+	if err := b.addRowLocatorsSection(); err != nil {
+		return ColumnPartImage{}, err
+	}
+	if err := b.addAggregateMetadataSections(); err != nil {
+		return ColumnPartImage{}, err
+	}
+	if err := b.addDictionarySection(); err != nil {
+		return ColumnPartImage{}, err
+	}
+	if err := b.addColumnDataSections(); err != nil {
+		return ColumnPartImage{}, err
+	}
+
+	sections := make([]ColumnPartImageSection, len(b.sections))
+	for i := range b.sections {
+		sections[i] = b.sections[i].section
+	}
+	manifest := encodeColumnPartImageManifest(b.part, sections, 0)
+	offset := len(manifest)
+	for i := range b.sections {
+		b.sections[i].section.Offset = offset
+		b.sections[i].section.Length = len(b.sections[i].data)
+		sections[i] = b.sections[i].section
+		offset += len(b.sections[i].data)
+	}
+	manifest = encodeColumnPartImageManifest(b.part, sections, len(manifest))
+	out := make([]byte, 0, len(manifest)+sumImageSectionDataBytes(b.sections))
+	out = append(out, manifest...)
+	for _, section := range b.sections {
+		out = append(out, section.data...)
+	}
+	return ColumnPartImage{
+		Version:       columnPartImageVersion,
+		PartID:        b.part.Descriptor.PartID,
+		Rows:          b.part.Descriptor.RowCount,
+		ManifestBytes: len(manifest),
+		Sections:      sections,
+		Bytes:         out,
+	}, nil
+}
+
+func (b *columnPartImageBuilder) addDescriptorSection() error {
+	var enc columnPartImageEncoder
+	desc := b.part.Descriptor
+	enc.u16(uint16(desc.Version))
+	enc.u64(desc.PartID)
+	enc.u32(desc.SchemaVersion)
+	enc.i64(int64(desc.RowCount))
+	enc.i64(int64(desc.VisibleRowCount))
+	enc.stringSlice(desc.LogicalPrimaryKey)
+	enc.u32(uint32(len(desc.Granules)))
+	for _, granule := range desc.Granules {
+		enc.i64(int64(granule.Ordinal))
+		enc.i64(int64(granule.FirstRow))
+		enc.i64(int64(granule.RowCount))
+		enc.i64(int64(granule.VisibleRows))
+		enc.i64(int64(granule.DeletedRows))
+		enc.i64(granule.IDLower)
+		enc.i64(granule.IDUpperExclusive)
+		enc.i64(int64(granule.MarkOrdinal))
+	}
+	enc.u32(uint32(len(desc.Columns)))
+	for _, column := range desc.Columns {
+		enc.str(column.Name)
+		enc.u16(uint16(columnTypeCode(column.Type)))
+		enc.u32(uint32(len(column.Blocks)))
+		for _, block := range column.Blocks {
+			enc.i64(int64(block.FirstRow))
+			enc.i64(int64(block.RowCount))
+			enc.i64(int64(block.FirstGranule))
+			enc.i64(int64(block.LastGranule))
+			enc.u16(uint16(block.Encoding))
+			enc.u16(uint16(block.Compression))
+			enc.i64(int64(block.RawBytes))
+			enc.i64(int64(block.StoredBytes))
+			enc.i64(int64(block.CodecBlockOrdinal))
+		}
+	}
+	b.appendSection(ColumnPartImageSection{
+		Kind:     ColumnPartImageSectionDescriptor,
+		Category: ColumnPartImageCategoryDescriptor,
+		Name:     "part_descriptor",
+		Rows:     desc.RowCount,
+		Granules: len(desc.Granules),
+		Blocks:   countColumnBlocks(desc),
+	}, enc.bytes())
+	return nil
+}
+
+func (b *columnPartImageBuilder) addSortKeyMetadataSection() error {
+	var enc columnPartImageEncoder
+	enc.u32(uint32(len(b.part.Descriptor.SortKey)))
+	for _, column := range b.part.Descriptor.SortKey {
+		enc.str(column.Column)
+		enc.str(string(column.Direction))
+		enc.str(string(column.Nulls))
+	}
+	b.appendSection(ColumnPartImageSection{
+		Kind:     ColumnPartImageSectionSortKeyMetadata,
+		Category: ColumnPartImageCategorySortKeyMetadata,
+		Name:     "sort_key",
+	}, enc.bytes())
+	return nil
+}
+
+func (b *columnPartImageBuilder) addSortKeyMarksSection() error {
+	var enc columnPartImageEncoder
+	enc.u32(uint32(len(b.part.Marks)))
+	for _, mark := range b.part.Marks {
+		enc.i64(int64(mark.Rows))
+		enc.stringSlice(mark.Columns)
+		enc.u32(uint32(len(mark.Prefixes)))
+		for _, prefix := range mark.Prefixes {
+			enc.stringSlice(prefix.Columns)
+			encodeSortKeyBound(&enc, prefix.Lower)
+			encodeSortKeyBound(&enc, prefix.UpperExclusive)
+		}
+	}
+	b.appendSection(ColumnPartImageSection{
+		Kind:     ColumnPartImageSectionSortKeyMarks,
+		Category: ColumnPartImageCategoryMarks,
+		Name:     "sort_key_marks",
+		Rows:     b.part.Descriptor.RowCount,
+		Granules: len(b.part.Marks),
+	}, enc.bytes())
+	return nil
+}
+
+func (b *columnPartImageBuilder) addRowLocatorsSection() error {
+	var enc columnPartImageEncoder
+	primaryIDs := make([]int64, 0, len(b.part.Locators))
+	for primaryID := range b.part.Locators {
+		primaryIDs = append(primaryIDs, primaryID)
+	}
+	sort.Slice(primaryIDs, func(i, j int) bool { return primaryIDs[i] < primaryIDs[j] })
+	enc.u32(uint32(len(primaryIDs)))
+	for _, primaryID := range primaryIDs {
+		locator := b.part.Locators[primaryID]
+		enc.i64(locator.PrimaryID)
+		enc.u64(locator.PartID)
+		enc.u32(uint32(locator.PartRow))
+		enc.u32(uint32(locator.GranuleOrdinal))
+		enc.u32(uint32(locator.RowInGranule))
+		enc.u32(0)
+	}
+	b.appendSection(ColumnPartImageSection{
+		Kind:     ColumnPartImageSectionRowLocators,
+		Category: ColumnPartImageCategoryLocators,
+		Name:     "primary_id_locators",
+		Rows:     len(primaryIDs),
+	}, enc.bytes())
+	return nil
+}
+
+func (b *columnPartImageBuilder) addAggregateMetadataSections() error {
+	if len(b.part.AggregateMetadata) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(b.part.AggregateMetadata))
+	for name := range b.part.AggregateMetadata {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		metadata := b.part.AggregateMetadata[name]
+		var enc columnPartImageEncoder
+		encodeAggregateMetadataDefinition(&enc, metadata.Definition)
+		encodeAggregateMetadataStats(&enc, metadata.Stats)
+		enc.u32(uint32(len(metadata.Granules)))
+		for _, granule := range metadata.Granules {
+			enc.i64(int64(granule.GranuleOrdinal))
+			enc.i64(int64(granule.FirstRow))
+			enc.i64(int64(granule.RowCount))
+			enc.i64(int64(granule.MatchedRows))
+			enc.u32(uint32(len(granule.Entries)))
+			for _, entry := range granule.Entries {
+				enc.u32(entry.Group)
+				enc.u32(entry.Count)
+				enc.i64(entry.Min)
+				enc.i64(entry.Max)
+			}
+		}
+		b.appendSection(ColumnPartImageSection{
+			Kind:     ColumnPartImageSectionAggregateMetadata,
+			Category: ColumnPartImageCategoryAggregateMetadata,
+			Name:     name,
+			Rows:     metadata.Stats.RowsMatched,
+			Granules: metadata.Stats.Granules,
+			Blocks:   metadata.Stats.Entries,
+		}, enc.bytes())
+	}
+	return nil
+}
+
+func (b *columnPartImageBuilder) addDictionarySection() error {
+	if len(b.opts.Dictionaries) == 0 {
+		return nil
+	}
+	var enc columnPartImageEncoder
+	names := make([]string, 0, len(b.opts.Dictionaries))
+	for name := range b.opts.Dictionaries {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	enc.u32(uint32(len(names)))
+	for _, name := range names {
+		values := b.opts.Dictionaries[name]
+		entries := make([]dictionaryImageEntry, 0, len(values))
+		for value, code := range values {
+			entries = append(entries, dictionaryImageEntry{Value: value, Code: code})
+		}
+		sort.Slice(entries, func(i, j int) bool {
+			if entries[i].Code != entries[j].Code {
+				return entries[i].Code < entries[j].Code
+			}
+			return entries[i].Value < entries[j].Value
+		})
+		enc.str(name)
+		enc.u32(uint32(len(entries)))
+		for _, entry := range entries {
+			enc.i64(entry.Code)
+			enc.str(entry.Value)
+		}
+	}
+	b.appendSection(ColumnPartImageSection{
+		Kind:     ColumnPartImageSectionDictionaries,
+		Category: ColumnPartImageCategoryDictionaries,
+		Name:     "part_dictionaries",
+	}, enc.bytes())
+	return nil
+}
+
+func (b *columnPartImageBuilder) addColumnDataSections() error {
+	for _, columnDescriptor := range b.part.Descriptor.Columns {
+		column, ok := b.part.Columns[columnDescriptor.Name]
+		if !ok {
+			return fmt.Errorf("colgranule: missing column %s", columnDescriptor.Name)
+		}
+		var data []byte
+		for _, block := range column.Blocks {
+			data = append(data, block.Granule.Payload...)
+		}
+		b.appendSection(ColumnPartImageSection{
+			Kind:        ColumnPartImageSectionColumnData,
+			Category:    ColumnPartImageCategoryDeclaredColumns,
+			Column:      columnDescriptor.Name,
+			Rows:        b.part.Descriptor.RowCount,
+			Granules:    len(b.part.Descriptor.Granules),
+			Blocks:      len(column.Blocks),
+			Encoding:    column.Definition.Encoding,
+			Compression: column.Definition.Compression,
+		}, data)
+	}
+	return nil
+}
+
+func (b *columnPartImageBuilder) appendSection(section ColumnPartImageSection, data []byte) {
+	section.Length = len(data)
+	b.sections = append(b.sections, columnPartImageSectionData{
+		section: section,
+		data:    data,
+	})
+}
+
+type dictionaryImageEntry struct {
+	Value string
+	Code  int64
+}
+
+type columnPartImageEncoder struct {
+	buf []byte
+}
+
+func (e *columnPartImageEncoder) bytes() []byte {
+	return e.buf
+}
+
+func (e *columnPartImageEncoder) u16(v uint16) {
+	e.buf = binary.LittleEndian.AppendUint16(e.buf, v)
+}
+
+func (e *columnPartImageEncoder) u32(v uint32) {
+	e.buf = binary.LittleEndian.AppendUint32(e.buf, v)
+}
+
+func (e *columnPartImageEncoder) u64(v uint64) {
+	e.buf = binary.LittleEndian.AppendUint64(e.buf, v)
+}
+
+func (e *columnPartImageEncoder) i64(v int64) {
+	e.u64(uint64(v))
+}
+
+func (e *columnPartImageEncoder) boolean(v bool) {
+	if v {
+		e.u16(1)
+		return
+	}
+	e.u16(0)
+}
+
+func (e *columnPartImageEncoder) str(v string) {
+	e.u32(uint32(len(v)))
+	e.buf = append(e.buf, v...)
+}
+
+func (e *columnPartImageEncoder) stringSlice(values []string) {
+	e.u32(uint32(len(values)))
+	for _, value := range values {
+		e.str(value)
+	}
+}
+
+func encodeColumnPartImageManifest(part *ColumnPart, sections []ColumnPartImageSection, manifestBytes int) []byte {
+	var enc columnPartImageEncoder
+	enc.u32(columnPartImageMagic)
+	enc.u16(columnPartImageVersion)
+	enc.u16(0)
+	enc.u64(part.Descriptor.PartID)
+	enc.i64(int64(part.Descriptor.RowCount))
+	enc.u32(uint32(manifestBytes))
+	enc.u32(uint32(len(sections)))
+	for _, section := range sections {
+		enc.u16(uint16(columnPartImageSectionKindCode(section.Kind)))
+		enc.u16(uint16(columnPartImageSectionCategoryCode(section.Category)))
+		enc.u64(uint64(section.Offset))
+		enc.u64(uint64(section.Length))
+		enc.i64(int64(section.Rows))
+		enc.i64(int64(section.Granules))
+		enc.i64(int64(section.Blocks))
+		enc.u16(uint16(section.Encoding))
+		enc.u16(uint16(section.Compression))
+		enc.str(section.Name)
+		enc.str(section.Column)
+	}
+	return enc.bytes()
+}
+
+func encodeSortKeyBound(enc *columnPartImageEncoder, bound SortKeyBound) {
+	enc.boolean(bound.Exclusive)
+	enc.boolean(bound.Unbounded)
+	enc.u32(uint32(len(bound.Values)))
+	for _, value := range bound.Values {
+		enc.i64(value)
+	}
+}
+
+func encodeAggregateMetadataDefinition(enc *columnPartImageEncoder, def AggregateMetadataDefinition) {
+	enc.str(def.Name)
+	enc.u16(def.Version)
+	enc.str(string(def.Kind))
+	enc.str(string(def.Scope))
+	enc.stringSlice(def.GroupKeys)
+	enc.u32(uint32(len(def.Measures)))
+	for _, measure := range def.Measures {
+		enc.str(string(measure.Op))
+		enc.str(measure.Column)
+	}
+	enc.u32(uint32(len(def.Predicates)))
+	for _, predicate := range def.Predicates {
+		enc.str(predicate.Column)
+		enc.str(string(predicate.Op))
+		enc.i64(predicate.Value)
+	}
+	enc.i64(int64(def.MaxBytesPerRow * 1_000_000))
+}
+
+func encodeAggregateMetadataStats(enc *columnPartImageEncoder, stats AggregateMetadataStats) {
+	enc.boolean(stats.Admitted)
+	enc.str(stats.RejectedReason)
+	enc.i64(durationNanos(stats.BuildDuration))
+	enc.i64(int64(stats.Granules))
+	enc.i64(int64(stats.GranulesWithRows))
+	enc.i64(int64(stats.RowsMatched))
+	enc.i64(int64(stats.Entries))
+	enc.i64(int64(stats.ValueBytes))
+	enc.i64(int64(stats.DescriptorBytes))
+	enc.i64(int64(stats.TotalBytes))
+	enc.i64(int64(stats.BytesPerPartRow * 1_000_000))
+	enc.i64(int64(stats.BytesPerMatchedRow * 1_000_000))
+	enc.str(stats.Compression)
+	enc.i64(int64(stats.AdmissionMaxBytes * 1_000_000))
+	enc.str(stats.AdmissionMeasuredBy)
+}
+
+func countColumnBlocks(desc ColumnPartDescriptor) int {
+	total := 0
+	for _, column := range desc.Columns {
+		total += len(column.Blocks)
+	}
+	return total
+}
+
+func sumImageSectionDataBytes(sections []columnPartImageSectionData) int {
+	total := 0
+	for _, section := range sections {
+		total += len(section.data)
+	}
+	return total
+}
+
+func durationNanos(d time.Duration) int64 {
+	return int64(d)
+}
+
+func columnTypeCode(t ColumnType) uint16 {
+	switch t {
+	case ColumnTypeInt64:
+		return 1
+	case ColumnTypeLowCardinalityCode:
+		return 2
+	case ColumnTypeBool:
+		return 3
+	default:
+		return 0
+	}
+}
+
+func columnPartImageSectionKindCode(kind ColumnPartImageSectionKind) uint16 {
+	switch kind {
+	case ColumnPartImageSectionDescriptor:
+		return 1
+	case ColumnPartImageSectionSortKeyMetadata:
+		return 2
+	case ColumnPartImageSectionSortKeyMarks:
+		return 3
+	case ColumnPartImageSectionRowLocators:
+		return 4
+	case ColumnPartImageSectionAggregateMetadata:
+		return 5
+	case ColumnPartImageSectionDictionaries:
+		return 6
+	case ColumnPartImageSectionColumnData:
+		return 7
+	default:
+		return 0
+	}
+}
+
+func columnPartImageSectionCategoryCode(category ColumnPartImageSectionCategory) uint16 {
+	switch category {
+	case ColumnPartImageCategoryDescriptor:
+		return 1
+	case ColumnPartImageCategorySortKeyMetadata:
+		return 2
+	case ColumnPartImageCategoryMarks:
+		return 3
+	case ColumnPartImageCategoryLocators:
+		return 4
+	case ColumnPartImageCategoryAggregateMetadata:
+		return 5
+	case ColumnPartImageCategoryDictionaries:
+		return 6
+	case ColumnPartImageCategoryDeclaredColumns:
+		return 7
+	default:
+		return 0
+	}
+}

@@ -17,6 +17,9 @@ It currently covers:
 - aggregate kernels over encoded granules;
 - non-durable in-memory column parts made from row-aligned granules and
   independently split column codec blocks;
+- exact serialized in-memory column part images with a manifest, section
+  directory, descriptor bytes, marks, locators, dictionaries, aggregate
+  metadata, and column payload sections;
 - JSONBench Bluesky fixture loading into int64-derived columns.
 
 ## Local JSONBench Data
@@ -94,7 +97,26 @@ go run ./experiments/colgranule/cmd/jsonbench_compare \
 ```
 
 When retained-payload measurements are available, the Markdown report includes a
-full-dataset estimate that adds the current encoded column part to the measured
-TreeDB payload bytes. This is the M1C-era comparison point for ClickHouse
-`total_size`; the encoded part is still in memory, while the retained payload is
-measured from compacted TreeDB files.
+full-dataset estimate that adds the current serialized in-memory column part to
+the measured TreeDB payload bytes. This is the pre-M2 comparison point for
+ClickHouse `total_size`; the encoded part is serialized but still in memory,
+while the retained payload is measured from compacted TreeDB files.
+
+## M1D Gates Before File-Backed M2
+
+Before moving this experiment into durable files, the in-memory representation
+must stay aligned with the future file format:
+
+- byte accounting must reconcile to the serialized image byte length, not struct
+  estimates;
+- the report must show section bytes for manifest/descriptors, declared columns,
+  dictionaries, marks, sort-key metadata, aggregate metadata, and row locators;
+- JSONBench query runners must read column payloads through slices attached to
+  the serialized image;
+- retained JSON must remain separate from declared column image bytes in the
+  full-dataset comparison;
+- local 1M JSONBench reports must include granule count, codec block count, part
+  file count, retained-payload file count, build throughput, allocations, and
+  TreeDB/ClickHouse size ratios;
+- M2 should add persistence, checksums, file/container layout, recovery, and
+  lifecycle behavior without changing the logical section model.
