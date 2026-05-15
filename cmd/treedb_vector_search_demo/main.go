@@ -296,13 +296,26 @@ func defaultProfile(profile treedb.Profile) treedb.Profile {
 	return profile
 }
 
+func normalizeDemoDir(dir string) string {
+	if dir == "" {
+		return ""
+	}
+	clean := filepath.Clean(dir)
+	if filepath.Base(clean) == "maindb" {
+		return filepath.Dir(clean)
+	}
+	return clean
+}
+
 func openDemoBackend(profile treedb.Profile, dir string, valuePointerThreshold int, leafGenerationTarget int64) (*backenddb.DB, func() error, error) {
 	opts := treedb.OptionsFor(defaultProfile(profile), dir)
 	if valuePointerThreshold > 0 {
 		opts.ValueLog.PointerThreshold = valuePointerThreshold
 	}
 	if leafGenerationTarget > 0 {
-		opts.ValueLog.Generational.Policy = treedb.ValueLogGenerationHotWarmCold
+		if opts.ValueLog.Generational.Policy == treedb.ValueLogGenerationDefault {
+			opts.ValueLog.Generational.Policy = treedb.ValueLogGenerationHotWarmCold
+		}
 		opts.ValueLog.Generational.LeafSegmentTargetBytes = leafGenerationTarget
 	}
 	if opts.IndexOuterLeavesInValueLog {
@@ -313,7 +326,7 @@ func openDemoBackend(profile treedb.Profile, dir string, valuePointerThreshold i
 
 func execute(ctx context.Context, cfg config) (result, error) {
 	cfg.profile = defaultProfile(cfg.profile)
-	dir := cfg.dir
+	dir := normalizeDemoDir(cfg.dir)
 	cleanup := func() {}
 	if dir == "" {
 		tmp, err := os.MkdirTemp("", "treedb-vector-search-demo-*")

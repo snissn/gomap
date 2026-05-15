@@ -2,13 +2,16 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
 
 func TestExecuteSmokeCompactsReopensValidatesAndBenchmarks(t *testing.T) {
-	res, err := execute(t.Context(), config{
+	res, err := execute(context.Background(), config{
 		dir:                   t.TempDir(),
 		keepDir:               true,
 		docs:                  128,
@@ -117,7 +120,7 @@ func TestRunJSONOutput(t *testing.T) {
 }
 
 func TestExecuteRequireLeafVLogBytesPassesWithDefaultBenchProfile(t *testing.T) {
-	res, err := execute(t.Context(), config{
+	res, err := execute(context.Background(), config{
 		dir:                   t.TempDir(),
 		keepDir:               true,
 		docs:                  64,
@@ -145,6 +148,49 @@ func TestExecuteRequireLeafVLogBytesPassesWithDefaultBenchProfile(t *testing.T) 
 	}
 	if res.StorageExpectation.LeafVLogBytes <= 0 {
 		t.Fatalf("missing leaf value-log bytes: %+v", res.StorageExpectation)
+	}
+}
+
+func TestExecuteNormalizesMainDBDirToRoot(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "demo-root")
+	maindb := filepath.Join(root, "maindb")
+	if err := os.MkdirAll(filepath.Join(root, "dictdb"), 0o755); err != nil {
+		t.Fatalf("mkdir stale dictdb: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "dictdb", "stale"), []byte("stale"), 0o644); err != nil {
+		t.Fatalf("write stale side-store file: %v", err)
+	}
+
+	res, err := execute(context.Background(), config{
+		dir:                   maindb,
+		keepDir:               true,
+		docs:                  64,
+		dimensions:            8,
+		queries:               2,
+		validateQueries:       1,
+		validateDocs:          1,
+		topK:                  3,
+		batchSize:             32,
+		m:                     4,
+		efConstruction:        32,
+		efSearch:              32,
+		valuePointerThreshold: defaultValuePointerThreshold,
+		leafGenerationTarget:  defaultLeafGenerationTarget,
+		minRecall:             0.5,
+		compact:               true,
+		disableExactFallback:  true,
+	})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if res.Dir != root {
+		t.Fatalf("dir=%q want normalized root %q", res.Dir, root)
+	}
+	if _, err := os.Stat(filepath.Join(root, "dictdb", "stale")); !os.IsNotExist(err) {
+		t.Fatalf("stale side-store file err=%v, want removed with normalized root cleanup", err)
+	}
+	if res.StorageAfterCompact.Domains["index.db"] <= 0 {
+		t.Fatalf("storage after compact did not include normalized root maindb index: %+v", res.StorageAfterCompact)
 	}
 }
 
