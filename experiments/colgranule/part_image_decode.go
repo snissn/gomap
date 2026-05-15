@@ -791,6 +791,9 @@ func decodeRowLocatorsSection(image ColumnPartImage) (map[int64]RowLocator, erro
 }
 
 func attachColumnPayloadsFromImage(image ColumnPartImage, columns map[string]ColumnPartColumn) error {
+	if err := validateColumnDataSectionsForColumns(image, columns); err != nil {
+		return err
+	}
 	for name, column := range columns {
 		section, ok := image.columnDataSection(name)
 		if !ok {
@@ -812,6 +815,36 @@ func attachColumnPayloadsFromImage(image ColumnPartImage, columns map[string]Col
 			return fmt.Errorf("colgranule: image column %s consumed=%d section=%d", name, offset-section.Offset, section.Length)
 		}
 		columns[name] = column
+	}
+	return nil
+}
+
+func validateColumnDataSectionsForColumns(image ColumnPartImage, columns map[string]ColumnPartColumn) error {
+	required := make(map[string]struct{}, len(columns))
+	for name := range columns {
+		required[name] = struct{}{}
+	}
+	seen := make(map[string]ColumnPartImageSection, len(columns))
+	for _, section := range image.Sections {
+		if section.Kind != ColumnPartImageSectionColumnData {
+			continue
+		}
+		if section.Column == "" {
+			return fmt.Errorf("colgranule: image column data section at offset=%d has empty column", section.Offset)
+		}
+		if _, ok := required[section.Column]; !ok {
+			return fmt.Errorf("colgranule: image has column data section for unknown column %s at offset=%d", section.Column, section.Offset)
+		}
+		previous, exists := seen[section.Column]
+		if exists {
+			return fmt.Errorf("colgranule: duplicate column data section %s at offset=%d previous_offset=%d", section.Column, section.Offset, previous.Offset)
+		}
+		seen[section.Column] = section
+	}
+	for name := range required {
+		if _, ok := seen[name]; !ok {
+			return fmt.Errorf("colgranule: image missing column data section %s", name)
+		}
 	}
 	return nil
 }
@@ -982,6 +1015,9 @@ func decodeAggregateMetadataSections(image ColumnPartImage) (map[string]Aggregat
 		if err := dec.finish(); err != nil {
 			return nil, err
 		}
+		if _, exists := out[metadata.Definition.Name]; exists {
+			return nil, fmt.Errorf("colgranule: duplicate aggregate metadata %s at section %s offset=%d", metadata.Definition.Name, section.Name, section.Offset)
+		}
 		out[metadata.Definition.Name] = metadata
 	}
 	return out, nil
@@ -1056,6 +1092,10 @@ func decodeAggregateMetadataDefinition(dec *columnPartImageDecoder) (AggregateMe
 	if err != nil {
 		return AggregateMetadataDefinition{}, err
 	}
+	maxBytesPerRowFloat, err := nonNegativeScaledInt64ToFloat64(maxBytesPerRow, "aggregate metadata max bytes per row")
+	if err != nil {
+		return AggregateMetadataDefinition{}, err
+	}
 	return AggregateMetadataDefinition{
 		Name:           name,
 		Version:        version,
@@ -1064,7 +1104,7 @@ func decodeAggregateMetadataDefinition(dec *columnPartImageDecoder) (AggregateMe
 		GroupKeys:      groupKeys,
 		Measures:       measures,
 		Predicates:     predicates,
-		MaxBytesPerRow: float64(maxBytesPerRow) / 1_000_000,
+		MaxBytesPerRow: maxBytesPerRowFloat,
 	}, nil
 }
 
@@ -1160,6 +1200,18 @@ func decodeAggregateMetadataStats(dec *columnPartImageDecoder) (AggregateMetadat
 	if err != nil {
 		return AggregateMetadataStats{}, err
 	}
+	bytesPerPartRowFloat, err := nonNegativeScaledInt64ToFloat64(bytesPerPartRow, "aggregate metadata bytes per part row")
+	if err != nil {
+		return AggregateMetadataStats{}, err
+	}
+	bytesPerMatchedRowFloat, err := nonNegativeScaledInt64ToFloat64(bytesPerMatchedRow, "aggregate metadata bytes per matched row")
+	if err != nil {
+		return AggregateMetadataStats{}, err
+	}
+	admissionMaxBytesFloat, err := nonNegativeScaledInt64ToFloat64(admissionMaxBytes, "aggregate metadata admission max bytes")
+	if err != nil {
+		return AggregateMetadataStats{}, err
+	}
 	return AggregateMetadataStats{
 		Admitted:            admitted,
 		RejectedReason:      rejectedReason,
@@ -1171,12 +1223,19 @@ func decodeAggregateMetadataStats(dec *columnPartImageDecoder) (AggregateMetadat
 		ValueBytes:          valueBytesInt,
 		DescriptorBytes:     descriptorBytesInt,
 		TotalBytes:          totalBytesInt,
-		BytesPerPartRow:     float64(bytesPerPartRow) / 1_000_000,
-		BytesPerMatchedRow:  float64(bytesPerMatchedRow) / 1_000_000,
+		BytesPerPartRow:     bytesPerPartRowFloat,
+		BytesPerMatchedRow:  bytesPerMatchedRowFloat,
 		Compression:         compression,
-		AdmissionMaxBytes:   float64(admissionMaxBytes) / 1_000_000,
+		AdmissionMaxBytes:   admissionMaxBytesFloat,
 		AdmissionMeasuredBy: admissionMeasuredBy,
 	}, nil
+}
+
+func nonNegativeScaledInt64ToFloat64(v int64, field string) (float64, error) {
+	if v < 0 {
+		return 0, fmt.Errorf("colgranule: negative %s %d", field, v)
+	}
+	return float64(v) / 1_000_000, nil
 }
 
 func (i ColumnPartImage) singleSection(kind ColumnPartImageSectionKind) (ColumnPartImageSection, error) {

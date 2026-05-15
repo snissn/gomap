@@ -524,6 +524,231 @@ func TestColumnPartFromImageRejectsDuplicateRowLocators(t *testing.T) {
 	}
 }
 
+func TestColumnPartFromImageRejectsDuplicateColumnDataSections(t *testing.T) {
+	part, image := testColumnPartImageFixture(t, false)
+	columnData := firstImageSectionOfKind(t, image, ColumnPartImageSectionColumnData)
+	imageBytes := testColumnPartImageBytesWithAppendedSection(t, part, image, columnData, image.sectionBytes(columnData))
+	parsed, err := ParseColumnPartImage(imageBytes)
+	if err != nil {
+		t.Fatalf("ParseColumnPartImage: %v", err)
+	}
+	if _, err := ColumnPartFromImage(parsed); err == nil {
+		t.Fatal("ColumnPartFromImage accepted duplicate column data sections")
+	}
+	if _, err := part.WithImagePayloads(parsed); err == nil {
+		t.Fatal("WithImagePayloads accepted duplicate column data sections")
+	}
+}
+
+func TestColumnPartFromImageRejectsUnknownColumnDataSections(t *testing.T) {
+	part, image := testColumnPartImageFixture(t, false)
+	columnData := firstImageSectionOfKind(t, image, ColumnPartImageSectionColumnData)
+	unknownColumnData := columnData
+	unknownColumnData.Column = "unknown_column"
+	imageBytes := testColumnPartImageBytesWithAppendedSection(t, part, image, unknownColumnData, image.sectionBytes(columnData))
+	parsed, err := ParseColumnPartImage(imageBytes)
+	if err != nil {
+		t.Fatalf("ParseColumnPartImage: %v", err)
+	}
+	if _, err := ColumnPartFromImage(parsed); err == nil {
+		t.Fatal("ColumnPartFromImage accepted unknown column data sections")
+	}
+	if _, err := part.WithImagePayloads(parsed); err == nil {
+		t.Fatal("WithImagePayloads accepted unknown column data sections")
+	}
+}
+
+func TestColumnPartFromImageRejectsDuplicateAggregateMetadataNames(t *testing.T) {
+	part, image := testColumnPartImageFixture(t, true)
+	aggregate := firstImageSectionOfKind(t, image, ColumnPartImageSectionAggregateMetadata)
+	imageBytes := testColumnPartImageBytesWithAppendedSection(t, part, image, aggregate, image.sectionBytes(aggregate))
+	parsed, err := ParseColumnPartImage(imageBytes)
+	if err != nil {
+		t.Fatalf("ParseColumnPartImage: %v", err)
+	}
+	if _, err := ColumnPartFromImage(parsed); err == nil {
+		t.Fatal("ColumnPartFromImage accepted duplicate aggregate metadata names")
+	}
+}
+
+func TestColumnPartFromImageRejectsNegativeAggregateMetadataScaledFields(t *testing.T) {
+	_, image := testColumnPartImageFixture(t, true)
+	tests := []struct {
+		name   string
+		offset func(*testing.T, ColumnPartImage) int
+	}{
+		{name: "max bytes per row", offset: aggregateMetadataMaxBytesPerRowOffset},
+		{name: "bytes per part row", offset: func(t *testing.T, image ColumnPartImage) int {
+			return aggregateMetadataStatsScaledFieldOffset(t, image, "bytesPerPartRow")
+		}},
+		{name: "bytes per matched row", offset: func(t *testing.T, image ColumnPartImage) int {
+			return aggregateMetadataStatsScaledFieldOffset(t, image, "bytesPerMatchedRow")
+		}},
+		{name: "admission max bytes", offset: func(t *testing.T, image ColumnPartImage) int {
+			return aggregateMetadataStatsScaledFieldOffset(t, image, "admissionMaxBytes")
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			corrupt := append([]byte(nil), image.Bytes...)
+			binary.LittleEndian.PutUint64(corrupt[tt.offset(t, image):], ^uint64(0))
+			parsed, err := ParseColumnPartImage(corrupt)
+			if err != nil {
+				t.Fatalf("ParseColumnPartImage: %v", err)
+			}
+			if _, err := ColumnPartFromImage(parsed); err == nil {
+				t.Fatalf("ColumnPartFromImage accepted negative aggregate metadata %s", tt.name)
+			}
+		})
+	}
+}
+
+func testColumnPartImageFixture(t *testing.T, withAggregateMetadata bool) (*ColumnPart, ColumnPartImage) {
+	t.Helper()
+	opts := partTestOptions([]SortKeyColumn{{Column: "id"}})
+	if withAggregateMetadata {
+		opts.AggregateMetadata = []AggregateMetadataDefinition{aggregateMetadataTestDefinition()}
+	}
+	part, err := BuildColumnPart(7, opts, ColumnBatch{Columns: map[string][]int64{
+		"id":        {3, 1, 2, 5, 4},
+		"time_us":   {30, 10, 20, 50, 40},
+		"value":     {300, 100, 200, 500, 400},
+		"kind_code": {1, 0, 1, 2, 0},
+		"has_reply": {1, 0, 1, 0, 1},
+	}})
+	if err != nil {
+		t.Fatalf("BuildColumnPart: %v", err)
+	}
+	image, err := BuildColumnPartImage(part, ColumnPartImageOptions{})
+	if err != nil {
+		t.Fatalf("BuildColumnPartImage: %v", err)
+	}
+	return part, image
+}
+
+func firstImageSectionOfKind(t *testing.T, image ColumnPartImage, kind ColumnPartImageSectionKind) ColumnPartImageSection {
+	t.Helper()
+	sections := image.sectionsByKind(kind)
+	if len(sections) == 0 {
+		t.Fatalf("image has no %s section", kind)
+	}
+	return sections[0]
+}
+
+func testColumnPartImageBytesWithAppendedSection(t *testing.T, part *ColumnPart, image ColumnPartImage, section ColumnPartImageSection, payload []byte) []byte {
+	t.Helper()
+	sections := append([]ColumnPartImageSection(nil), image.Sections...)
+	payloads := make([][]byte, 0, len(image.Sections)+1)
+	for _, existing := range image.Sections {
+		payloads = append(payloads, image.sectionBytes(existing))
+	}
+	sections = append(sections, section)
+	payloads = append(payloads, payload)
+	return testColumnPartImageBytes(t, part, sections, payloads)
+}
+
+func aggregateMetadataMaxBytesPerRowOffset(t *testing.T, image ColumnPartImage) int {
+	t.Helper()
+	aggregate := firstImageSectionOfKind(t, image, ColumnPartImageSectionAggregateMetadata)
+	dec := columnPartImageDecoder{data: image.sectionBytes(aggregate)}
+	skipAggregateMetadataDefinitionBeforeMaxBytesPerRow(t, &dec)
+	return aggregate.Offset + dec.offset
+}
+
+func aggregateMetadataStatsScaledFieldOffset(t *testing.T, image ColumnPartImage, field string) int {
+	t.Helper()
+	aggregate := firstImageSectionOfKind(t, image, ColumnPartImageSectionAggregateMetadata)
+	dec := columnPartImageDecoder{data: image.sectionBytes(aggregate)}
+	skipAggregateMetadataDefinition(t, &dec)
+	if _, err := dec.boolean(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dec.str(); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{
+		"buildNanos",
+		"granules",
+		"granulesWithRows",
+		"rowsMatched",
+		"entries",
+		"valueBytes",
+		"descriptorBytes",
+		"totalBytes",
+		"bytesPerPartRow",
+		"bytesPerMatchedRow",
+	} {
+		if name == field {
+			return aggregate.Offset + dec.offset
+		}
+		if _, err := dec.i64(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := dec.str(); err != nil {
+		t.Fatal(err)
+	}
+	if field == "admissionMaxBytes" {
+		return aggregate.Offset + dec.offset
+	}
+	t.Fatalf("unknown aggregate metadata stats field %s", field)
+	return 0
+}
+
+func skipAggregateMetadataDefinition(t *testing.T, dec *columnPartImageDecoder) {
+	t.Helper()
+	skipAggregateMetadataDefinitionBeforeMaxBytesPerRow(t, dec)
+	if _, err := dec.i64(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func skipAggregateMetadataDefinitionBeforeMaxBytesPerRow(t *testing.T, dec *columnPartImageDecoder) {
+	t.Helper()
+	if _, err := dec.str(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dec.u16(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dec.str(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dec.str(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dec.stringSlice(); err != nil {
+		t.Fatal(err)
+	}
+	measureCount, err := dec.u32()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := uint32(0); i < measureCount; i++ {
+		if _, err := dec.str(); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := dec.str(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	predicateCount, err := dec.u32()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := uint32(0); i < predicateCount; i++ {
+		if _, err := dec.str(); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := dec.str(); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := dec.i64(); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 func descriptorGranuleCountOffset(t *testing.T, image ColumnPartImage) int {
 	t.Helper()
 	descriptor, err := image.singleSection(ColumnPartImageSectionDescriptor)
