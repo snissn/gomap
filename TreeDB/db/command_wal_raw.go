@@ -204,7 +204,8 @@ func (db *DB) appendRawKVCommandWALIntent(intent *commandWALBatchIntent, sync bo
 		// value-log data MUST be durable before the command frame is
 		// written, otherwise a power loss could leave the command frame
 		// referencing a non-durable RID and cause a hard recovery failure
-		// ("missing value-log RID"). Always sync, even for non-sync writes.
+		// ("missing value-log RID"). For external-ref batches only, always
+		// sync regardless of the caller's sync flag.
 		if err := db.flushCommandWALExternalRefs(true, intent.externalRefFileIDs); err != nil {
 			return 0, err
 		}
@@ -265,6 +266,10 @@ func commandWALFinalizeOptions(intent *commandWALBatchIntent) finalizeCommitOpti
 
 func (db *DB) poisonCommandWALAfterPostAppendFailure(intent *commandWALBatchIntent) {
 	if db == nil || intent == nil || intent.lsn == 0 {
+		// intent.lsn == 0 means the frame was never durably appended
+		// (appendRawKVCommandWALIntent sets lsn only on success). No need
+		// to poison; appendRawKVCommandWALIntent already poisons its own
+		// flush/sync failures.
 		return
 	}
 	// appendRawKVCommandWALIntent poisons its own flush/sync failures. This
@@ -280,12 +285,23 @@ func applyRawKVCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map
 	if env.Kind != commitlog.CommandKindRawKVBatch || env.Scope != commitlog.CommandScopeRawKV || env.PayloadFormat != commitlog.PayloadFormatRawKVBatchV1 {
 		return commitlog.ErrCommandWALUnsupportedKind
 	}
-	b := db.NewBatch().(*Batch)
-	defer func() { _ = b.Close() }()
 	ops, err := commitlog.DecodeRawKVBatchPayload(env.Payload)
 	if err != nil {
 		return err
 	}
+	if len(ops) == 0 {
+		// Production empty writes currently return before appending a frame.
+		// Empty RawKVBatch frames are still part of the replay contract so
+		// fixtures/future command kinds can explicitly advance AppliedCommandLSN
+		// without changing roots.
+		db.mu.RLock()
+		rootID := db.meta.UserRootPageID
+		sysRootID := db.meta.SystemRootPageID
+		db.mu.RUnlock()
+		return db.publishCommandWALRoots(rootID, sysRootID, env.LSN, []CommandWALLSNRange{{First: env.LSN, Last: env.LSN}}, true)
+	}
+	b := db.NewBatch().(*Batch)
+	defer func() { _ = b.Close() }()
 	for i := range ops {
 		entry := ops[i]
 		switch entry.Op {
@@ -349,17 +365,6 @@ func applyRawKVCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map
 		default:
 			return commitlog.ErrCorrupt
 		}
-	}
-	if len(ops) == 0 {
-		// Production empty writes currently return before appending a frame.
-		// Empty RawKVBatch frames are still part of the replay contract so
-		// fixtures/future command kinds can explicitly advance AppliedCommandLSN
-		// without changing roots.
-		db.mu.RLock()
-		rootID := db.meta.UserRootPageID
-		sysRootID := db.meta.SystemRootPageID
-		db.mu.RUnlock()
-		return db.publishCommandWALRoots(rootID, sysRootID, env.LSN, []CommandWALLSNRange{{First: env.LSN, Last: env.LSN}}, true)
 	}
 	if inlineAppender != nil {
 		if err := inlineAppender.syncIfDirty(); err != nil {

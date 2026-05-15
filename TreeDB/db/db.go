@@ -652,6 +652,11 @@ type Options struct {
 	// CommandWAL enables the compatibility-breaking command-WAL mode for direct
 	// backend raw KV writes. It is also enabled automatically when format.json
 	// advertises the command_wal_v1 required feature.
+	//
+	// The public cached writer (treedb.Open) remains fail-closed for writes when
+	// CommandWAL is true; it returns ErrCommandWALUnsupported for any write open
+	// until cached writes are converted to typed command frames. Use OpenBackend
+	// for read-write opens in command-WAL mode.
 	CommandWAL bool
 	// CommandWALStatsScan enables expensive diagnostic Stats() counters that scan
 	// command-WAL segment files for frame counts and max LSN. Keep this disabled
@@ -1477,7 +1482,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		// Persist the required feature gate before running typed recovery so that
 		// if recovery mutates WAL segments (cleanup pass) and then the open fails,
 		// the next open uses typed recovery rather than the legacy path.
-		cfg, _, err := formatConfigFromOptionsPreservingRequiredFeatures(opts)
+		cfg, err := formatConfigFromOptionsPreservingRequiredFeatures(opts)
 		if err != nil {
 			_ = db.Close()
 			return nil, err
@@ -1518,11 +1523,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 			_ = db.Close()
 			return nil, err
 		}
-		activeSeqByLane, err := commandWALActiveSeqByLane(journalSegments, opts.WALMaxSegmentBytes)
-		if err != nil {
-			_ = db.Close()
-			return nil, err
-		}
+		activeSeqByLane := commandWALActiveSeqByLane(journalSegments)
 		for _, seq := range activeSeqByLane {
 			if seq > commandSegmentSeq {
 				commandSegmentSeq = seq

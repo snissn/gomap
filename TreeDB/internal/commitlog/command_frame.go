@@ -67,6 +67,13 @@ const (
 	RawKVOpSetRID
 )
 
+// RawKVOperation represents a single operation in a RawKVBatch command frame.
+//
+// Field constraints by op type:
+//   - RawKVOpSet: Key and Value are the raw bytes; RID must be zero.
+//   - RawKVOpDelete: Key is set; Value must be empty; RID must be zero.
+//   - RawKVOpSetRID: Key is set; Value MUST be empty (the RID is encoded
+//     separately as an 8-byte payload); RID must be non-zero.
 type RawKVOperation struct {
 	Op    RawKVOp
 	Key   []byte
@@ -772,15 +779,6 @@ func scanCommandFrames(path string, opts Options, seen map[uint64]struct{}, allo
 		seen[env.LSN] = struct{}{}
 		frames = append(frames, env)
 	}
-}
-
-func scanCommandFrameMaxLSN(path string, opts Options) (maxLSN uint64, typed bool, err error) {
-	maxLSN, typed, _, err = scanCommandFrameMaxLSNAndEnd(path, opts)
-	return maxLSN, typed, err
-}
-
-func scanCommandFrameMaxLSNAndEnd(path string, opts Options) (maxLSN uint64, typed bool, completeEnd int64, err error) {
-	return scanCommandFrameMaxLSNAndEndWithLSN(path, opts, nil)
 }
 
 func scanCommandFrameMaxLSNAndEndWithLSN(path string, opts Options, onLSN func(uint64) error) (maxLSN uint64, typed bool, completeEnd int64, err error) {
