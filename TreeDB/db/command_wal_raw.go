@@ -184,7 +184,7 @@ func commandWALFinalizeOptions(intent *commandWALBatchIntent) finalizeCommitOpti
 	}
 }
 
-func applyRawKVCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map[uint64]page.ValuePtr) error {
+func applyRawKVCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map[uint64]page.ValuePtr, inlineAppender *replayInlineAppender) error {
 	if db == nil {
 		return fmt.Errorf("treedb: command wal recovery missing db")
 	}
@@ -205,7 +205,22 @@ func applyRawKVCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map
 		switch entry.Op {
 		case commitlog.RawKVOpSet:
 			if err := b.Set(entry.Key, entry.Value); err != nil {
-				return err
+				if !errors.Is(err, batchpkg.ErrValueTooLarge) {
+					return err
+				}
+				if !hasPtrBatch {
+					return fmt.Errorf("treedb: command wal raw kv pointer batch unavailable")
+				}
+				if inlineAppender == nil {
+					return fmt.Errorf("treedb: command wal missing replay value-log appender")
+				}
+				ptr, err := inlineAppender.append(entry.Value)
+				if err != nil {
+					return err
+				}
+				if err := ptrBatch.SetPointer(entry.Key, ptr); err != nil {
+					return err
+				}
 			}
 		case commitlog.RawKVOpDelete:
 			if err := b.Delete(entry.Key); err != nil {
@@ -232,6 +247,9 @@ func applyRawKVCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map
 		sysRootID := db.meta.SystemRootPageID
 		db.mu.RUnlock()
 		return db.publishCommandWALRoots(rootID, sysRootID, env.LSN, []CommandWALLSNRange{{First: env.LSN, Last: env.LSN}}, true)
+	}
+	if err := inlineAppender.syncIfDirty(); err != nil {
+		return err
 	}
 	if raw, ok := b.(*Batch); ok {
 		return raw.writeWithCommandWALIntent(true, &commandWALBatchIntent{

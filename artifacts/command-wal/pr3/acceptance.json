@@ -29,6 +29,7 @@
     "TestCommandWALCrashAfterRootAppliedLSNBeforeCleanupSkipsFrame",
     "TestCommandWALCleanReopenCleansCoveredNonActiveSegmentWithNoReplayFrames",
     "TestCommandWALInlineReplayDoesNotScanValueLogRIDMap",
+    "TestCommandWALRawSetReplayRePointersWhenThresholdDrops",
     "TestCommandWALRecoveryCrashDuringReplayResumesFromAppliedLSN",
     "TestCommandWALIdempotentSkipRequiresDigestProof",
     "TestCommandWALExistingRawReplayTestsMappedToRawKVBatch",
@@ -41,11 +42,11 @@
     "TestCommandWALRawKVBatchSetRIDRejectsValuePayload"
   ],
   "fuzz_targets": [
-    "FuzzCommandWALRawKVBatchPayload - fuzztime=5s, 614041 execs",
-    "FuzzCommandWALDecodeFrame - fuzztime=5s, 616345 execs"
+    "FuzzCommandWALRawKVBatchPayload - fuzztime=5s, 1227035 execs",
+    "FuzzCommandWALDecodeFrame - fuzztime=5s, 1149028 execs"
   ],
   "race_tests": [
-    "GOWORK=off go test -race ./TreeDB/db -run 'TestCommandWAL(RawSetDeleteBatchReplaysThroughNormalExecutor|PointerBatchReplaysThroughRIDFence|RecoveryCrashDuringReplayResumesFromAppliedLSN|RIDFencePreservedForRawKVBatch|CleanReopenCleansCoveredNonActiveSegmentWithNoReplayFrames|InlineReplayDoesNotScanValueLogRIDMap)'"
+    "GOWORK=off go test -race ./TreeDB/db -run 'TestCommandWAL(RawSetDeleteBatchReplaysThroughNormalExecutor|RawSetReplayRePointersWhenThresholdDrops|PointerBatchReplaysThroughRIDFence|RecoveryCrashDuringReplayResumesFromAppliedLSN|RIDFencePreservedForRawKVBatch|CleanReopenCleansCoveredNonActiveSegmentWithNoReplayFrames|InlineReplayDoesNotScanValueLogRIDMap)'"
   ],
   "crash_scenarios": [
     "frame synced before root publish, finalize failpoint, read-write reopen replays command",
@@ -63,7 +64,8 @@
     "pointer-backed raw KV writes log SetRID and flush/sync external refs before the command frame becomes recoverable",
     "first-time CommandWAL activation validates clean legacy WAL before writing command_wal_v1 and opens the command journal only after the required feature is persisted",
     "covered non-active typed WAL segments are cleaned even when a clean reopen has no frames above AppliedCommandLSN",
-    "inline-only replay does not scan value-log RID metadata; RID maps are built only when a frame contains SetRID"
+    "inline-only replay does not scan value-log RID metadata; value-log RID maps and replay appenders are built only when SetRID, current value placement, or value-log-backed leaf pages require them",
+    "raw Set replay that exceeds the current inline threshold is re-pointerized through the legacy replay value-log appender and synced before root plus AppliedCommandLSN publication"
   ],
   "unsupported_modes_and_errors": [
     "treedb.Open public cached write path with CommandWAL or command_wal_v1 returns ErrCommandWALUnsupported",
@@ -78,8 +80,8 @@
     "artifacts/command-wal/pr3/raw-kv-direct-write-benchstat.txt"
   ],
   "benchmark_summary": {
-    "backend_no_command_wal": "8.662 us/op +/- 15%, 6.461 KiB/op +/- 10%, 17 allocs/op",
-    "command_wal_raw_kv": "8.215 us/op +/- 11%, 6.561 KiB/op +/- 0%, 19 allocs/op",
+    "backend_no_command_wal": "7.529 us/op +/- 31%, 6.479 KiB/op +/- 10%, 17 allocs/op",
+    "command_wal_raw_kv": "7.994 us/op +/- 8%, 6.550 KiB/op +/- 0%, 19 allocs/op",
     "interpretation": "single-key direct backend command-WAL write is throughput-neutral in this smoke benchmark; command-WAL mode adds two allocations for payload/frame bookkeeping on top of current backend batch cost"
   },
   "cleanup_debt": "covered typed command WAL segments are cleaned through cleanupCommandWALSegmentsCoveredByAppliedLSN after recovery; active covered segment retention remains intentional",
@@ -90,7 +92,7 @@
     "GOWORK=off go test ./TreeDB/internal/commitlog ./TreeDB/page ./TreeDB/docs",
     "GOWORK=off go test ./TreeDB/db -run 'Test(CommandWAL|ValidateFormatRequiredFeatureGate|SaveFormatConfig|LoadFormatConfig|Recovery|ReadOnly)'",
     "GOWORK=off go test ./TreeDB -run 'Test(CommandWAL|OpenBackend|Recovery|ReadOnly)'",
-    "GOWORK=off go test -race ./TreeDB/db -run 'TestCommandWAL(RawSetDeleteBatchReplaysThroughNormalExecutor|PointerBatchReplaysThroughRIDFence|RecoveryCrashDuringReplayResumesFromAppliedLSN|RIDFencePreservedForRawKVBatch|CleanReopenCleansCoveredNonActiveSegmentWithNoReplayFrames|InlineReplayDoesNotScanValueLogRIDMap)'",
+    "GOWORK=off go test -race ./TreeDB/db -run 'TestCommandWAL(RawSetDeleteBatchReplaysThroughNormalExecutor|RawSetReplayRePointersWhenThresholdDrops|PointerBatchReplaysThroughRIDFence|RecoveryCrashDuringReplayResumesFromAppliedLSN|RIDFencePreservedForRawKVBatch|CleanReopenCleansCoveredNonActiveSegmentWithNoReplayFrames|InlineReplayDoesNotScanValueLogRIDMap)'",
     "GOWORK=off go test ./TreeDB/internal/commitlog -run '^$' -fuzz=FuzzCommandWALRawKVBatchPayload -fuzztime=5s",
     "GOWORK=off go test ./TreeDB/internal/commitlog -run '^$' -fuzz=FuzzCommandWALDecodeFrame -fuzztime=5s",
     "GOWORK=off go test ./TreeDB/db -run '^$' -bench 'BenchmarkCommandWALRawKVDirectWrite' -benchmem -benchtime=100x -count=6",

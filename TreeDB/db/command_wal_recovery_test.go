@@ -190,6 +190,32 @@ func TestCommandWALInlineReplayDoesNotScanValueLogRIDMap(t *testing.T) {
 	assertDBValue(t, reopen, "inline", "v")
 }
 
+func TestCommandWALRawSetReplayRePointersWhenThresholdDrops(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close bootstrap db: %v", err)
+	}
+	value := strings.Repeat("threshold-drop-", 64)
+	writeCommandWALRawKVFrame(t, dir, 1, 1, []commitlog.RawKVOperation{{Op: commitlog.RawKVOpSet, Key: []byte("k"), Value: []byte(value)}})
+
+	reopen, err := Open(Options{
+		Dir: dir,
+		ValueLog: ValueLogOptions{
+			PointerThreshold: 1,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Open with lower pointer threshold: %v", err)
+	}
+	defer reopen.Close()
+	assertDBValue(t, reopen, "k", value)
+	if got := reopen.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("AppliedCommandLSN=%d, want 1", got)
+	}
+}
+
 func TestCommandWALRecoveryCrashDuringReplayResumesFromAppliedLSN(t *testing.T) {
 	dir := t.TempDir()
 	enableCommandWALFormat(t, dir)

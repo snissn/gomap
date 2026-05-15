@@ -251,14 +251,23 @@ func replayCommandWALIntoBackend(db *DB, segments []logSegment, maxSegmentBytes 
 		return err
 	}
 	var ridMap map[uint64]page.ValuePtr
-	needsRIDMap, err := commandWALReplayFramesNeedRIDMap(frames)
+	var inlineAppender *replayInlineAppender
+	needsValueLogSupport, err := commandWALReplayFramesNeedValueLogSupport(db, frames)
 	if err != nil {
 		return err
 	}
-	if needsRIDMap {
+	if needsValueLogSupport {
 		ridMap, err = scanValueLogSegments(segments, dictLookup)
 		if err != nil {
 			return err
+		}
+		inlineAppender, err = newReplayInlineAppender(db, segments, ridMap)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = inlineAppender.close() }()
+		if db.indexOuterLeavesInValueLog {
+			db.SetLeafPageLog(inlineAppender)
 		}
 	}
 	db.mu.RLock()
@@ -271,7 +280,7 @@ func replayCommandWALIntoBackend(db *DB, segments []logSegment, maxSegmentBytes 
 		if frame.env.LSN != applied+1 {
 			return fmt.Errorf("%w: current=%d next=%d", ErrCommandWALAppliedLSNNonContig, applied, frame.env.LSN)
 		}
-		if err := applyCommandWALFrame(db, frame.env, ridMap); err != nil {
+		if err := applyCommandWALFrame(db, frame.env, ridMap, inlineAppender); err != nil {
 			return err
 		}
 		applied = frame.env.LSN
@@ -279,6 +288,12 @@ func replayCommandWALIntoBackend(db *DB, segments []logSegment, maxSegmentBytes 
 			testCommandWALRecoveryFailAfterLSN.Store(0)
 			return errTestFinalizeCommitFailpoint
 		}
+	}
+	if err := inlineAppender.syncIfDirty(); err != nil {
+		return err
+	}
+	if err := inlineAppender.close(); err != nil {
+		return err
 	}
 	_, err = cleanupCommandWALSegmentsCoveredByAppliedLSN(db.dir, db.meta.AppliedCommandLSN, maxSegmentBytes)
 	return err
@@ -340,32 +355,49 @@ func readCommandWALReplayFrames(segments []logSegment, appliedLSN uint64, maxSeg
 	return frames, nil
 }
 
-func commandWALReplayFramesNeedRIDMap(frames []commandWALReplayFrame) (bool, error) {
+func commandWALReplayFramesNeedValueLogSupport(db *DB, frames []commandWALReplayFrame) (bool, error) {
+	if db != nil && db.indexOuterLeavesInValueLog {
+		return true, nil
+	}
 	for _, frame := range frames {
 		if frame.env.Kind != commitlog.CommandKindRawKVBatch {
 			continue
 		}
-		needsRID := false
-		err := commitlog.ScanRawKVBatchPayload(frame.env.Payload, func(op commitlog.RawKVOp, _, _ []byte) error {
+		needsValueLogSupport := false
+		err := commitlog.ScanRawKVBatchPayload(frame.env.Payload, func(op commitlog.RawKVOp, key, value []byte) error {
 			if op == commitlog.RawKVOpSetRID {
-				needsRID = true
+				needsValueLogSupport = true
+			}
+			if op == commitlog.RawKVOpSet && commandWALRawSetNeedsReplayValueLog(db, key, value) {
+				needsValueLogSupport = true
 			}
 			return nil
 		})
 		if err != nil {
 			return false, err
 		}
-		if needsRID {
+		if needsValueLogSupport {
 			return true, nil
 		}
 	}
 	return false, nil
 }
 
-func applyCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map[uint64]page.ValuePtr) error {
+func commandWALRawSetNeedsReplayValueLog(db *DB, key, value []byte) bool {
+	threshold := page.DefaultInlineThreshold
+	if db != nil {
+		threshold = db.InlineThreshold()
+		if threshold > 0 {
+			threshold = ResolveInlineThresholdForKey(threshold, key, db.valueLogDomainThresholds)
+		}
+	}
+	return len(value) > threshold
+}
+
+func applyCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map[uint64]page.ValuePtr, inlineAppender *replayInlineAppender) error {
 	switch env.Kind {
 	case commitlog.CommandKindRawKVBatch:
-		return applyRawKVCommandWALFrame(db, env, ridMap)
+		return applyRawKVCommandWALFrame(db, env, ridMap, inlineAppender)
 	default:
 		return commitlog.ErrCommandWALUnsupportedKind
 	}

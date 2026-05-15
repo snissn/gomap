@@ -312,6 +312,7 @@ PR 3: recovery dispatcher and raw KV command conversion:
 - `TestCommandWALCrashAfterFrameBeforeRootPublishRecovers`;
 - `TestCommandWALCrashDuringRootPublishSelectsOldTupleOrNewTuple`;
 - `TestCommandWALCrashAfterRootAppliedLSNBeforeCleanupSkipsFrame`;
+- `TestCommandWALRawSetReplayRePointersWhenThresholdDrops`;
 - `TestCommandWALRecoveryCrashDuringReplayResumesFromAppliedLSN`;
 - `TestCommandWALStrictCommandEffectWithoutAppliedLSNFailsClosed`;
 - `TestCommandWALIdempotentSkipRequiresDigestProof`;
@@ -335,8 +336,15 @@ PR3 implementation evidence:
 - Raw KV `SetRID` command entries preserve the existing value-log RID fence by
   requiring the referenced RID to be present in scanned value-log segments
   before recovery can publish the command.
-- Inline-only raw KV replay does not depend on value-log RID scanning; recovery
-  builds the RID map only when a pending frame contains `SetRID`.
+- Inline-only raw KV replay does not depend on value-log RID scanning. Recovery
+  builds the RID map and replay value-log appender only when a pending frame
+  contains `SetRID`, the current value-placement policy requires
+  re-pointerizing a logged `set`, or value-log-backed leaf pages require a
+  replay appender.
+- Raw KV `set` replay that exceeds the current inline threshold is
+  re-pointerized through the existing replay value-log appender, and the
+  appended value-log bytes are synced before roots plus `AppliedCommandLSN` are
+  published.
 - Public cached-mode command WAL writes remain fail-closed until the cached
   writer is converted to the shared typed command journal. This prevents mixed
   legacy raw records in `command_wal_v1` directories.
