@@ -856,6 +856,11 @@ type Options struct {
 	// This is intended for internal side-store usage (e.g. templatedb itself).
 	DisableSideStores bool
 
+	// testCommandWALRecoveryFailAfterLSN injects a one-shot recovery failure
+	// after the given LSN is published. It is package-private test plumbing so
+	// crash-recovery tests can avoid process-global failpoints.
+	testCommandWALRecoveryFailAfterLSN uint64
+
 	// DisablePiggybackCompaction disables opportunistic defragmentation during writes.
 	// When false (default), nodes are rewritten if their siblings are physically
 	// distant, keeping the tree clustered. Set to true to maximize write speed.
@@ -1420,8 +1425,8 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	}
 	db.ghostManager.start()
 	db.idx.Store(gen)
-	if target := takeTestCommandWALRecoveryFailAfterLSN(opts.Dir); target != 0 {
-		db.testCommandWALRecoveryFailAfterLSN.Store(target)
+	if opts.testCommandWALRecoveryFailAfterLSN != 0 {
+		db.testCommandWALRecoveryFailAfterLSN.Store(opts.testCommandWALRecoveryFailAfterLSN)
 	}
 
 	gen.zipper.SetFillTargets(opts.LeafFillTargetPPM, opts.InternalFillTargetPPM)

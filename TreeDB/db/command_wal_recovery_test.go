@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -216,6 +217,49 @@ func TestCommandWALRawSetReplayRePointersWhenThresholdDrops(t *testing.T) {
 	}
 }
 
+func TestCommandWALRawSetNeedsReplayValueLogMatchesBatchSet(t *testing.T) {
+	db, err := Open(Options{
+		Dir: t.TempDir(),
+		ValueLog: ValueLogOptions{
+			PointerThreshold: 256,
+			DomainInlineThresholds: []ValueLogDomainThreshold{
+				{Prefix: []byte("hot/"), InlineThreshold: 16},
+				{Prefix: []byte("cold/"), InlineThreshold: 1024},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	cases := []struct {
+		key      string
+		valueLen int
+	}{
+		{key: "hot/key", valueLen: 64},
+		{key: "cold/key", valueLen: 64},
+		{key: "other/small", valueLen: 64},
+		{key: "other/large", valueLen: 300},
+	}
+	for _, tc := range cases {
+		value := bytes.Repeat([]byte("v"), tc.valueLen)
+		b := db.NewBatch().(*Batch)
+		err := b.Set([]byte(tc.key), value)
+		if closeErr := b.Close(); closeErr != nil {
+			t.Fatalf("Close batch %s: %v", tc.key, closeErr)
+		}
+		batchNeedsPointer := errors.Is(err, batchpkg.ErrValueTooLarge)
+		if err != nil && !batchNeedsPointer {
+			t.Fatalf("Batch.Set(%s, len=%d) error: %v", tc.key, tc.valueLen, err)
+		}
+		recoveryNeedsAppender := commandWALRawSetNeedsReplayValueLog(db, []byte(tc.key), value)
+		if recoveryNeedsAppender != batchNeedsPointer {
+			t.Fatalf("commandWALRawSetNeedsReplayValueLog(%s, len=%d)=%v, Batch.Set pointer need=%v", tc.key, tc.valueLen, recoveryNeedsAppender, batchNeedsPointer)
+		}
+	}
+}
+
 func TestCommandWALRawEmptyBatchAdvancesAppliedLSNAsNoop(t *testing.T) {
 	dir := t.TempDir()
 	enableCommandWALFormat(t, dir)
@@ -276,9 +320,7 @@ func TestCommandWALRecoveryCrashDuringReplayResumesFromAppliedLSN(t *testing.T) 
 	writeCommandWALRawKVFrame(t, dir, 1, 1, []commitlog.RawKVOperation{{Op: commitlog.RawKVOpSet, Key: []byte("a"), Value: []byte("1")}})
 	writeCommandWALRawKVFrame(t, dir, 1, 2, []commitlog.RawKVOperation{{Op: commitlog.RawKVOpSet, Key: []byte("b"), Value: []byte("2")}})
 
-	setTestCommandWALRecoveryFailAfterLSN(dir, 1)
-	t.Cleanup(func() { setTestCommandWALRecoveryFailAfterLSN(dir, 0) })
-	_, err := Open(Options{Dir: dir})
+	_, err := Open(Options{Dir: dir, testCommandWALRecoveryFailAfterLSN: 1})
 	if !errors.Is(err, errTestFinalizeCommitFailpoint) {
 		t.Fatalf("Open with recovery failpoint error=%v, want failpoint", err)
 	}

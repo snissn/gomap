@@ -355,6 +355,9 @@ PR3 implementation evidence:
   frame before root visibility.
 - Command journal flush/sync failures poison the open handle so no later write
   can create a durable LSN gap before reopen recovery.
+- Once a command frame has been appended, later flush/sync failures are
+  commit-ambiguous rather than definitely-not-committed: recovery may replay
+  the frame after close and read-write reopen.
 - Operators and callers must treat a poisoned command-WAL handle as
   recovery-required: close the handle and reopen read-write before issuing more
   writes. The poisoned state is intentionally not cleared by an in-process

@@ -9,50 +9,12 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 )
-
-// testCommandWALRecoveryFailAfterLSNByDir is a process-global sync.Map that acts
-// as a transfer mechanism: tests store a per-directory LSN here before calling
-// Open, and openWithLock immediately moves it to the per-DB atomic field
-// (db.testCommandWALRecoveryFailAfterLSN) via takeTestCommandWALRecoveryFailAfterLSN.
-// The map entry is consumed (LoadAndDelete) on the first Open of that directory,
-// so concurrent opens of different directories are isolated by construction.
-// Tests that set a failpoint must register a t.Cleanup that calls
-// setTestCommandWALRecoveryFailAfterLSN(dir, 0) to remove the entry if the
-// Open fails before the transfer.
-var testCommandWALRecoveryFailAfterLSNByDir sync.Map
-
-func testCommandWALRecoveryFailpointKey(dir string) string {
-	if abs, err := filepath.Abs(dir); err == nil {
-		return abs
-	}
-	return filepath.Clean(dir)
-}
-
-func setTestCommandWALRecoveryFailAfterLSN(dir string, lsn uint64) {
-	key := testCommandWALRecoveryFailpointKey(dir)
-	if lsn == 0 {
-		testCommandWALRecoveryFailAfterLSNByDir.Delete(key)
-		return
-	}
-	testCommandWALRecoveryFailAfterLSNByDir.Store(key, lsn)
-}
-
-func takeTestCommandWALRecoveryFailAfterLSN(dir string) uint64 {
-	key := testCommandWALRecoveryFailpointKey(dir)
-	value, ok := testCommandWALRecoveryFailAfterLSNByDir.LoadAndDelete(key)
-	if !ok {
-		return 0
-	}
-	lsn, _ := value.(uint64)
-	return lsn
-}
 
 type logSegment struct {
 	seq      uint64
@@ -424,16 +386,12 @@ func commandWALReplayFramesNeedValueLogSupport(db *DB, frames []commandWALReplay
 
 func commandWALRawSetNeedsReplayValueLog(db *DB, key, value []byte) bool {
 	threshold := page.DefaultInlineThreshold
+	var domains []ValueLogDomainThreshold
 	if db != nil {
 		threshold = db.InlineThreshold()
-		if threshold > 0 {
-			// Keep this in lockstep with newBatchWithReserveHint's resolver setup
-			// so recovery pre-builds the replay appender whenever Batch.Set would
-			// require pointer placement.
-			threshold = ResolveInlineThresholdForKey(threshold, key, db.valueLogDomainThresholds)
-		}
+		domains = db.valueLogDomainThresholds
 	}
-	return len(value) > threshold
+	return len(value) > resolveBatchInlineThresholdForKey(threshold, key, domains)
 }
 
 func applyCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map[uint64]page.ValuePtr, inlineAppender *replayInlineAppender) error {
@@ -761,6 +719,9 @@ func applyCommitBatch(db *DB, records []commitlog.Record, ridMap map[uint64]page
 		case commitlog.OpSetInline:
 			if err := batch.Set(rec.Key, rec.Value); err != nil {
 				if !errors.Is(err, batchpkg.ErrValueTooLarge) {
+					// Abort this replay attempt on non-placement errors. The
+					// commit batch remains unapplied and the next open retries
+					// from the last published root.
 					return err
 				}
 				if !hasPtrBatch {

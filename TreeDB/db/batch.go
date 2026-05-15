@@ -85,7 +85,7 @@ func (db *DB) newBatchWithReserveHint(reserveHint int) batch.Interface {
 	internal := batch.New(db.valueLogManager, threshold)
 	if threshold > 0 {
 		internal.SetInlineThresholdResolver(func(key []byte) int {
-			return ResolveInlineThresholdForKey(threshold, key, domains)
+			return resolveBatchInlineThresholdForKey(threshold, key, domains)
 		})
 	}
 	internal.Reserve(reserveHint)
@@ -93,6 +93,13 @@ func (db *DB) newBatchWithReserveHint(reserveHint int) batch.Interface {
 		db:    db,
 		batch: internal,
 	}
+}
+
+func resolveBatchInlineThresholdForKey(threshold int, key []byte, domains []ValueLogDomainThreshold) int {
+	if threshold > 0 {
+		return ResolveInlineThresholdForKey(threshold, key, domains)
+	}
+	return threshold
 }
 
 func (b *Batch) Set(key, value []byte) error {

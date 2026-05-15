@@ -166,6 +166,10 @@ func (db *DB) appendRawKVCommandWALIntent(intent *commandWALBatchIntent, sync bo
 		err = db.commandJournal.Flush()
 	}
 	if err != nil {
+		// AppendCommand already assigned a durable logical LSN. A later
+		// flush/sync failure is commit-ambiguous: reopen recovery may apply the
+		// frame, so this handle must fail closed instead of allowing a retry to
+		// create an LSN gap.
 		db.commandWALFlushPoisoned.Store(true)
 		return 0, err
 	}
@@ -180,16 +184,14 @@ func commandWALFinalizeOptions(intent *commandWALBatchIntent) finalizeCommitOpti
 	}
 	// Return a copy rather than a slice aliasing the array embedded in intent so
 	// that downstream consumers cannot mutate coveredRange[0] through the slice.
-	var appliedRanges []CommandWALLSNRange
-	if intent.coveredRange[0].First == 0 {
-		appliedRanges = []CommandWALLSNRange{{First: intent.lsn, Last: intent.lsn}}
-	} else {
-		appliedRanges = []CommandWALLSNRange{intent.coveredRange[0]}
+	appliedRange := intent.coveredRange[0]
+	if appliedRange.First == 0 {
+		appliedRange = CommandWALLSNRange{First: intent.lsn, Last: intent.lsn}
 	}
 	return finalizeCommitOptions{
 		commandWALPublish: true,
 		appliedCommandLSN: intent.lsn,
-		appliedRanges:     appliedRanges,
+		appliedRanges:     []CommandWALLSNRange{appliedRange},
 	}
 }
 
@@ -200,14 +202,7 @@ func applyRawKVCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map
 	if env.Kind != commitlog.CommandKindRawKVBatch || env.Scope != commitlog.CommandScopeRawKV || env.PayloadFormat != commitlog.PayloadFormatRawKVBatchV1 {
 		return commitlog.ErrCommandWALUnsupportedKind
 	}
-	// db.NewBatch always returns *Batch in this package. Assert early so the rest
-	// of the function can use *Batch methods (Set, SetPointer, writeWithCommandWALIntent)
-	// directly without an interface dance.
-	rawBatch, ok := db.NewBatch().(*Batch)
-	if !ok {
-		return fmt.Errorf("treedb: internal error: unexpected batch type")
-	}
-	b := rawBatch
+	b := db.NewBatch().(*Batch)
 	defer func() { _ = b.Close() }()
 	ops, err := commitlog.DecodeRawKVBatchPayload(env.Payload)
 	if err != nil {
