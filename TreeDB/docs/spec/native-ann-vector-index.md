@@ -422,14 +422,23 @@ means incremental replay is insufficient or unavailable.
 Rebuild creates a new index epoch from canonical rows:
 
 ```text
+pin collection snapshot and record rebuild_cut_seq
 scan canonical collection rows
   -> extract vectors
   -> build runtime graph
   -> write durable node/edge/docmap records to staging root/epoch
   -> verify counts/checksums/recall smoke
-  -> atomically publish metadata entry and state=ready
+  -> replay or merge vector deltas after rebuild_cut_seq
+  -> atomically publish metadata entry and state=ready once caught up
   -> retire old epoch after readers drain
 ```
+
+A background rebuild or compaction MUST pin a collection snapshot cut before it
+scans canonical rows. Writes acknowledged after `rebuild_cut_seq` must either be
+blocked until publish, replayed from the durable delta log into the staging
+epoch before publishing `ready`, or leave the published state as `catching_up`
+until those deltas are applied. A rebuilt epoch must not replace a current graph
+with a scan that silently missed acknowledged writes.
 
 GC compacts tombstoned nodes:
 
