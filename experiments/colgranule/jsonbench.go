@@ -16,6 +16,8 @@ import (
 const DefaultJSONBenchPath = "experiments/colgranule/testdata/jsonbench_sample.jsonl"
 const DefaultJSONBenchDir = "experiments/colgranule/testdata"
 
+const jsonBenchHoursPerDay = 24
+
 type JSONBenchDataset struct {
 	Rows         int
 	Files        []string
@@ -34,6 +36,7 @@ func LoadJSONBenchColumns(path string, limit int) (JSONBenchDataset, error) {
 	ds := JSONBenchDataset{Columns: map[string][]int64{
 		"row_index":                   nil,
 		"time_us":                     nil,
+		"hour_of_day":                 nil,
 		"line_bytes":                  nil,
 		"did_code":                    nil,
 		"did_bytes":                   nil,
@@ -207,6 +210,7 @@ func appendJSONBenchRow(ds *JSONBenchDataset, dicts map[string]*stringDictionary
 	}
 	ds.Columns["row_index"] = append(ds.Columns["row_index"], row)
 	ds.Columns["time_us"] = append(ds.Columns["time_us"], ev.TimeUS)
+	ds.Columns["hour_of_day"] = append(ds.Columns["hour_of_day"], unixMicroHour(ev.TimeUS))
 	ds.Columns["line_bytes"] = append(ds.Columns["line_bytes"], int64(len(line)))
 	ds.Columns["did_code"] = append(ds.Columns["did_code"], dicts["did_code"].code(ev.Did))
 	ds.Columns["did_bytes"] = append(ds.Columns["did_bytes"], int64(len(ev.Did)))

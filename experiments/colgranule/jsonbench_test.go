@@ -13,10 +13,13 @@ func TestLoadJSONBenchColumnsSample(t *testing.T) {
 	if ds.Rows != 5 {
 		t.Fatalf("rows=%d want 5", ds.Rows)
 	}
-	for _, name := range []string{"time_us", "line_bytes", "did_code", "commit_collection_code", "record_created_at_unix_ms", "record_text_bytes"} {
+	for _, name := range []string{"time_us", "hour_of_day", "line_bytes", "did_code", "commit_collection_code", "record_created_at_unix_ms", "record_text_bytes"} {
 		if got := len(ds.Columns[name]); got != ds.Rows {
 			t.Fatalf("column %s len=%d want %d", name, got, ds.Rows)
 		}
+	}
+	if got, want := ds.Columns["hour_of_day"][0], unixMicroHour(ds.Columns["time_us"][0]); got != want {
+		t.Fatalf("hour_of_day[0]=%d want %d", got, want)
 	}
 	if got := ds.Columns["record_has_reply"][0]; got != 1 {
 		t.Fatalf("record_has_reply[0]=%d want 1", got)
@@ -82,6 +85,14 @@ func TestRunJSONBenchPartQueriesSampleMatchesRawReference(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunJSONBenchPartQueries: %v", err)
 	}
+	part, err := BuildJSONBenchColumnPart(ds, 2)
+	if err != nil {
+		t.Fatalf("BuildJSONBenchColumnPart: %v", err)
+	}
+	hourColumn := part.Columns["hour_of_day"]
+	if hourColumn.Definition.Type != ColumnTypeLowCardinalityCode || hourColumn.Definition.Cardinality != jsonBenchHoursPerDay {
+		t.Fatalf("hour_of_day definition=%+v want low-cardinality/%d", hourColumn.Definition, jsonBenchHoursPerDay)
+	}
 	if len(partTimings) != len(rawTimings) {
 		t.Fatalf("part timings=%d raw timings=%d", len(partTimings), len(rawTimings))
 	}
@@ -119,6 +130,8 @@ func TestRunJSONBenchPartQueriesSampleMatchesRawReference(t *testing.T) {
 			if timing.Diagnostics.AggregateKernel != "fused_dense_group_count_hour_codes" {
 				t.Fatalf("Q3 kernel=%q want fused dense hour count", timing.Diagnostics.AggregateKernel)
 			}
+			assertContainsString(t, timing.Diagnostics.ColumnsProjected, "hour_of_day")
+			assertNotContainsString(t, timing.Diagnostics.ColumnsProjected, "time_us")
 		case "Q4":
 			if timing.Diagnostics.AggregateKernel != "sort_key_early_stop_min_by_user" {
 				t.Fatalf("Q4 kernel=%q want sort-key early stop", timing.Diagnostics.AggregateKernel)
@@ -152,6 +165,9 @@ func TestLoadJSONBenchColumnsLocal1MIfPresent(t *testing.T) {
 	}
 	if got := len(ds.Columns["time_us"]); got != 1000 {
 		t.Fatalf("time_us len=%d want 1000", got)
+	}
+	if got := len(ds.Columns["hour_of_day"]); got != 1000 {
+		t.Fatalf("hour_of_day len=%d want 1000", got)
 	}
 }
 
@@ -236,5 +252,24 @@ func assertJSONBenchPartDiagnostics(t *testing.T, query string, diagnostics JSON
 	}
 	if len(diagnostics.ColumnsProjected) == 0 {
 		t.Fatalf("%s diagnostics missing columns projected: %+v", query, diagnostics)
+	}
+}
+
+func assertContainsString(t *testing.T, values []string, want string) {
+	t.Helper()
+	for _, value := range values {
+		if value == want {
+			return
+		}
+	}
+	t.Fatalf("%q not found in %v", want, values)
+}
+
+func assertNotContainsString(t *testing.T, values []string, unwanted string) {
+	t.Helper()
+	for _, value := range values {
+		if value == unwanted {
+			t.Fatalf("%q unexpectedly found in %v", unwanted, values)
+		}
 	}
 }

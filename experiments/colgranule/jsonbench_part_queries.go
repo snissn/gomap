@@ -66,7 +66,7 @@ type jsonBenchPartQueryRunner func(*ColumnPart, queryCodeSet, *jsonBenchPartQuer
 
 var (
 	jsonBenchPartQ2Columns = []string{"kind_code", "commit_operation_code", "commit_collection_code", "did_code"}
-	jsonBenchPartQ3Columns = []string{"kind_code", "commit_operation_code", "commit_collection_code", "time_us"}
+	jsonBenchPartQ3Columns = []string{"kind_code", "commit_operation_code", "commit_collection_code", "hour_of_day"}
 	jsonBenchPartQ4Columns = []string{"kind_code", "commit_operation_code", "commit_collection_code", "did_code", "time_us"}
 	jsonBenchPartQ5Columns = []string{"kind_code", "commit_operation_code", "commit_collection_code", "did_code", "time_us"}
 )
@@ -328,11 +328,11 @@ func runJSONBenchPartQ3(part *ColumnPart, codes queryCodeSet, scratch *jsonBench
 	if err != nil {
 		return 0, 0, JSONBenchPartQueryDiagnostics{}, err
 	}
-	timeBlocks, err := int64Blocks(part, "time_us")
+	hourBlocks, err := lowCardinalityBlocks(part, "hour_of_day")
 	if err != nil {
 		return 0, 0, JSONBenchPartQueryDiagnostics{}, err
 	}
-	if err := validateAlignedBlocks(kindBlocks, operationBlocks, collectionBlocks, timeBlocks); err != nil {
+	if err := validateAlignedBlocks(kindBlocks, operationBlocks, collectionBlocks, hourBlocks); err != nil {
 		return 0, 0, JSONBenchPartQueryDiagnostics{}, err
 	}
 	collectionCardinality, err := partCodeCardinality(part, "commit_collection_code")
@@ -356,14 +356,11 @@ func runJSONBenchPartQ3(part *ColumnPart, codes queryCodeSet, scratch *jsonBench
 		if err != nil {
 			return 0, 0, JSONBenchPartQueryDiagnostics{}, err
 		}
-		timeValues, err := scratch.timeReader.DecodeInt64(timeBlocks[blockIndex].Granule)
+		hourHeader, err := scratch.codeHeader(3, hourBlocks[blockIndex])
 		if err != nil {
 			return 0, 0, JSONBenchPartQueryDiagnostics{}, err
 		}
 		rows := kindBlocks[blockIndex].Descriptor.RowCount
-		if len(timeValues) != rows {
-			return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: q3 time/code row mismatch time=%d codes=%d", len(timeValues), rows)
-		}
 		for row := 0; row < rows; row++ {
 			kind := readUint32Code(kindHeader.data, kindHeader.width, row)
 			if kind >= kindHeader.cardinality {
@@ -386,8 +383,11 @@ func runJSONBenchPartQ3(part *ColumnPart, codes queryCodeSet, scratch *jsonBench
 			if int64(event) != codes.collectionPost && int64(event) != codes.collectionRepost && int64(event) != codes.collectionLike {
 				continue
 			}
-			hour := unixMicroHour(timeValues[row])
-			counts[int(event)*24+int(hour)]++
+			hour := readUint32Code(hourHeader.data, hourHeader.width, row)
+			if hour >= hourHeader.cardinality || hour >= jsonBenchHoursPerDay {
+				return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: hour_of_day code %d outside cardinality %d", hour, hourHeader.cardinality)
+			}
+			counts[int(event)*jsonBenchHoursPerDay+int(hour)]++
 		}
 	}
 	rows, digest := digestDenseQ3(counts)
@@ -775,7 +775,7 @@ func (s *jsonBenchPartQueryScratch) resetQ3Dense(eventCardinality uint32) ([]uin
 	if eventCardinality == 0 {
 		return nil, errors.New("colgranule: invalid q3 event cardinality 0")
 	}
-	cells := int(eventCardinality) * 24
+	cells := int(eventCardinality) * jsonBenchHoursPerDay
 	if cells <= 0 || cells > maxAggregateCells {
 		return nil, fmt.Errorf("colgranule: q3 aggregate cells=%d exceeds cap %d", cells, maxAggregateCells)
 	}
@@ -905,8 +905,8 @@ func digestDenseQ3(counts []uint64) (int, uint64) {
 			continue
 		}
 		rows++
-		event := cell / 24
-		hour := cell % 24
+		event := cell / jsonBenchHoursPerDay
+		hour := cell % jsonBenchHoursPerDay
 		digest = digestMix(digest, uint64(event*100+hour), count)
 	}
 	return rows, digest
@@ -1031,6 +1031,9 @@ func partCodeCardinality(part *ColumnPart, column string) (uint32, error) {
 }
 
 func jsonBenchCodeCardinality(ds JSONBenchDataset, column string) (uint32, bool) {
+	if column == "hour_of_day" {
+		return jsonBenchHoursPerDay, true
+	}
 	dict := ds.Dictionaries[column]
 	if dict == nil {
 		return 0, false
