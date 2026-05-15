@@ -294,7 +294,7 @@ PR 2: shared journal ownership and `AppliedCommandLSN` plumbing:
 - `TestCommandWALSegmentMaxLSNFailsClosedOnNonIncreasingLSN`;
 - `TestCommandWALOpenFailsClosedOnCorruptTypedSegmentEvenWhenCovered`;
 - `TestCommandWALOpenFailsClosedOnNonActiveTerminalTailEvenWhenCovered`;
-- `TestCommandWALOpenAllowsActiveTypedTailWithHigherLegacyRawSegment`;
+- `TestCommandWALOpenFailsClosedOnTypedTailWithHigherLegacyRawSegment`;
 - `TestCommandWALOpenAllowsActiveTypedTailWithHigherPartialLegacyAliasSegment`;
 - `TestCommandWALOpenAllowsActivePartialFirstFrameTail`;
 - `TestCommandWALOpenFailsClosedOnNonActivePartialFirstFrameTail`;

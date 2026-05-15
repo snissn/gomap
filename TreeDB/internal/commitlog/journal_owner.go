@@ -226,11 +226,11 @@ func commandJournalInitialLSN(walDir, activePath string, opts CommandJournalOpti
 		if err != nil {
 			if errors.Is(err, ErrCommandWALLegacyPayload) && !typed {
 				if seg.active {
-					return 0, ErrCommandWALLegacyPayload
+					return 0, fmt.Errorf("commitlog: scan command journal segment %s: %w", filepath.Base(seg.path), ErrCommandWALLegacyPayload)
 				}
 				continue
 			}
-			return 0, err
+			return 0, fmt.Errorf("commitlog: scan command journal segment %s: %w", filepath.Base(seg.path), err)
 		}
 		if completeEnd < seg.size {
 			if !seg.active {

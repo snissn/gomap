@@ -733,15 +733,6 @@ func scanCommandFrames(path string, opts Options, seen map[uint64]struct{}, allo
 	}
 }
 
-func scanCommandFrameMaxLSN(path string, opts Options) (maxLSN uint64, typed bool, err error) {
-	maxLSN, typed, _, err = scanCommandFrameMaxLSNAndEnd(path, opts)
-	return maxLSN, typed, err
-}
-
-func scanCommandFrameMaxLSNAndEnd(path string, opts Options) (maxLSN uint64, typed bool, completeEnd int64, err error) {
-	return scanCommandFrameMaxLSNAndEndWithLSN(path, opts, nil)
-}
-
 func scanCommandFrameMaxLSNAndEndWithLSN(path string, opts Options, onLSN func(uint64) error) (maxLSN uint64, typed bool, completeEnd int64, err error) {
 	r, err := NewReaderWithOptions(path, opts)
 	if err != nil {
