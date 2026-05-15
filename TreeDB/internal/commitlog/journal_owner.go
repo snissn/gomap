@@ -52,6 +52,22 @@ func (o *JournalOwner) ReserveLSN() (uint64, error) {
 	return first, err
 }
 
+func (o *JournalOwner) rollbackReservedLSN(lsn uint64) error {
+	if o == nil || o.lock == nil {
+		return errors.New("commitlog: journal owner is closed")
+	}
+	if lsn == 0 {
+		return errors.New("commitlog: cannot rollback zero lsn")
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.nextLSN != lsn+1 {
+		return fmt.Errorf("commitlog: cannot rollback non-tail lsn %d", lsn)
+	}
+	o.nextLSN = lsn
+	return nil
+}
+
 func (o *JournalOwner) ReserveLSNRange(count uint64) (first uint64, last uint64, err error) {
 	if o == nil || o.lock == nil {
 		return 0, 0, errors.New("commitlog: journal owner is closed")
@@ -161,12 +177,18 @@ func (j *CommandJournal) AppendCommand(env CommandEnvelope) (uint64, error) {
 	if j.writer.maxSegmentSize > 0 && int64(size) > j.writer.maxSegmentSize {
 		return 0, ErrRecordTooLarge
 	}
+	if size > int(segmentLenMask) {
+		return 0, ErrRecordTooLarge
+	}
 	lsn, err := j.owner.ReserveLSN()
 	if err != nil {
 		return 0, err
 	}
 	env.LSN = lsn
 	if err := j.writer.AppendCommand(env); err != nil {
+		if rollbackErr := j.owner.rollbackReservedLSN(lsn); rollbackErr != nil {
+			return 0, errors.Join(err, rollbackErr)
+		}
 		return 0, err
 	}
 	return lsn, nil

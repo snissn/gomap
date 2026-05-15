@@ -22,6 +22,7 @@
     "TestCommandJournalRejectsCallerAssignedLSN",
     "TestCommandJournalValidationFailureDoesNotConsumeLSN",
     "TestCommandJournalUnsupportedVersionDoesNotConsumeLSN",
+    "TestCommandJournalAppendFailureRollsBackLSN",
     "TestCommandJournalOversizedFrameDoesNotConsumeLSN",
     "TestMetaPageBodyAppliedCommandLSNRoundTrip",
     "TestMetaPageBodyLegacyDecodeDefaultsAppliedCommandLSN",

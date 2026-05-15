@@ -1,11 +1,20 @@
 package commitlog
 
 import (
+	"bufio"
 	"bytes"
 	"errors"
 	"path/filepath"
 	"testing"
 )
+
+var errCommandJournalInjectedWrite = errors.New("injected command journal write failure")
+
+type commandJournalFailWriter struct{}
+
+func (commandJournalFailWriter) Write([]byte) (int, error) {
+	return 0, errCommandJournalInjectedWrite
+}
 
 func TestCommandJournalAllocatesContiguousLSNs(t *testing.T) {
 	j, err := OpenCommandJournal(t.TempDir(), CommandJournalOptions{InitialLSN: 40})
@@ -184,6 +193,37 @@ func TestCommandJournalUnsupportedVersionDoesNotConsumeLSN(t *testing.T) {
 	}
 	if got != 1 {
 		t.Fatalf("LSN after unsupported version=%d, want 1", got)
+	}
+}
+
+func TestCommandJournalAppendFailureRollsBackLSN(t *testing.T) {
+	j, err := OpenCommandJournal(t.TempDir(), CommandJournalOptions{})
+	if err != nil {
+		t.Fatalf("OpenCommandJournal: %v", err)
+	}
+	defer j.Close()
+
+	j.writer.bw = bufio.NewWriterSize(commandJournalFailWriter{}, 1)
+	_, err = j.AppendCommand(CommandEnvelope{
+		Kind:          CommandKindRawKVBatch,
+		Scope:         CommandScopeRawKV,
+		PayloadFormat: PayloadFormatRawKVBatchV1,
+	})
+	if !errors.Is(err, errCommandJournalInjectedWrite) {
+		t.Fatalf("failed AppendCommand error=%v, want injected write failure", err)
+	}
+
+	j.writer.bw.Reset(j.writer.f)
+	got, err := j.AppendCommand(CommandEnvelope{
+		Kind:          CommandKindRawKVBatch,
+		Scope:         CommandScopeRawKV,
+		PayloadFormat: PayloadFormatRawKVBatchV1,
+	})
+	if err != nil {
+		t.Fatalf("valid AppendCommand after write failure: %v", err)
+	}
+	if got != 1 {
+		t.Fatalf("LSN after write failure=%d, want 1", got)
 	}
 }
 

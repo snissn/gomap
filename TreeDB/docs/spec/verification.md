@@ -265,6 +265,7 @@ PR 2: shared journal ownership and `AppliedCommandLSN` plumbing:
 - `TestCommandJournalUsesCommitSegmentFamily`;
 - `TestCommandJournalValidationFailureDoesNotConsumeLSN`;
 - `TestCommandJournalUnsupportedVersionDoesNotConsumeLSN`;
+- `TestCommandJournalAppendFailureRollsBackLSN`;
 - `TestCommandJournalOversizedFrameDoesNotConsumeLSN`;
 - `TestMetaPageBodyAppliedCommandLSNRoundTrip`;
 - `TestMetaPageBodyLegacyDecodeDefaultsAppliedCommandLSN`;
