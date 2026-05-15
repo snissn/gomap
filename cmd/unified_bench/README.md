@@ -63,7 +63,8 @@ GOWORK=off GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -json -p 1 . \
   - `durable` (strict durability)
   - `fast` (max throughput; TreeDB mirrors `treedb.ProfileFast`, including Celestia-aligned auto/snappy/balanced value-log compression; unsafe)
   - `wal_on_fast` (TreeDB mirrors `treedb.ProfileWALOnFast`, including the same compression defaults with WAL on; unsafe)
-- `-dbs` (`all` or CSV): `hashdb,btree,treedb,badger,leveldb`
+- `-dbs` (`all` or CSV): `hashdb,btree,treedb,badger,leveldb,tidesdb`
+  - `tidesdb` requires building with `-tags tidesdb` and linking `github.com/tidesdb/tidesdb-go`.
 - `-test` (`all` or CSV): see list above
 - `-keys` number of keys (default 100000)
 - `-keycounts` comma-separated key counts to sweep over (overrides `-keys`)
