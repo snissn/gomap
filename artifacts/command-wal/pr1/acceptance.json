@@ -32,6 +32,8 @@
     "TestCommandWALFormatRejectsHeaderPayloadDigestAndTrailerMismatch",
     "TestCommandWALFeatureGateRejectsLegacyRawPayload",
     "TestCommandWALFeatureGateRequiresCleanLegacyWALBeforeActivation",
+    "TestCommandWALFeatureGateRequiresCleanLegacyValueWALBeforeActivation",
+    "TestSaveFormatConfigCommandWALRequiresCleanActivation",
     "TestCommandWALRequiredFeatureFailsClosedUntilExecutionEnabled",
     "TestCommandWALNoCollectionSegmentFamilyCreated",
     "TestCommandWALSingleJournalOwnerRejectsSecondMutableWriter",
@@ -39,6 +41,8 @@
     "TestCommandWALDuplicateLSNFailsClosed",
     "TestCommandWALRawKVBatchOneLSNAtomic",
     "TestCommandWALRawKVBatchScanUsesPayloadBackedViews",
+    "TestCommandWALAppendCommandRejectsMaxSegmentBeforeEncode",
+    "TestValidateFormatRequiredFeatureGateRejectsMalformedRequiredFeatureFile",
     "TestCommandWALExistingCoverageInventoryMapsLegacyWALTests",
     "TestCommandWALLegacyRawEncodingTestsHaveTypedFrameEquivalents"
   ],
@@ -78,8 +82,10 @@
   "external_ref_retained_byte_summaries": "external-ref frame encoding is round-trip tested; retention accounting starts in later PRs",
   "local_validation_commands": [
     "GOWORK=off go test ./TreeDB ./TreeDB/internal/commitlog ./TreeDB/docs",
-    "GOWORK=off go test ./TreeDB/db -run 'TestFormatConfig|TestCommandWAL|TestLoadFormatConfig'",
+    "GOWORK=off go test ./TreeDB/db -run 'TestCommandWAL|TestValidateFormatRequiredFeatureGate|TestSaveFormatConfig|TestLoadFormatConfig'",
+    "GOWORK=off go test ./TreeDB/internal/commitlog -run 'TestCommandWAL|TestWriterAppendCommand'",
     "GOWORK=off go test ./TreeDB/internal/commitlog -run '^$' -fuzz=FuzzCommandWALDecodeFrame -fuzztime=5s",
+    "GOWORK=off go test ./TreeDB/internal/commitlog -run '^$' -bench 'Benchmark(CommandWALRawKVBatchPayload(Encode|Decode|Scan)|CommandWALFrame(Encode|Decode)|WriterAppend(CommandRawKVBatch|BatchLegacyRawKV))' -benchmem -benchtime=200ms -count=6",
     "git diff --check"
   ],
   "known_gaps": [
@@ -87,14 +93,14 @@
     "AppliedCommandLSN publish/checkpoint plumbing starts in PR2",
     "collection and catalog placeholders are durable-byte fixtures only"
   ],
-  "implementation_commit": "d86283ae8331666714b8b42c80dca74ada139667",
+  "implementation_commit": "PR head",
   "benchmark_artifacts": [
     "artifacts/command-wal/pr1/microbench.txt",
     "artifacts/command-wal/pr1/microbench-benchstat.txt"
   ],
   "benchmark_summary": {
     "append_command_allocs_per_op": "0 across all measured batch shapes",
-    "append_command_throughput": "716 MiB/s for 1x64B, 891-975 MiB/s for larger measured batches",
+    "append_command_throughput": "700 MiB/s for 1x64B, 935 MiB/s for 16x64B, 957 MiB/s for 128x64B, 1021 MiB/s for 16x1024B",
     "payload_scan_allocs_per_op": "0 across all measured batch shapes",
     "frame_encode_decode_allocs_per_op": "1 allocation for returned frame/payload ownership",
     "owning_payload_decode_allocs_per_op": "copies keys/values by design; use ScanRawKVBatchPayload for replay-style zero-copy application"

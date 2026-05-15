@@ -20,6 +20,9 @@ var (
 	// ErrCommandWALUnsupported indicates a directory advertises command_wal_v1
 	// before this binary has enabled command WAL execution/recovery.
 	ErrCommandWALUnsupported = db.ErrCommandWALUnsupported
+	// ErrUnsupportedRequiredFeature indicates format.json requires a storage
+	// feature this binary does not understand.
+	ErrUnsupportedRequiredFeature = db.ErrUnsupportedRequiredFeature
 
 	// ErrKeyNotFound indicates the key does not exist.
 	ErrKeyNotFound = tree.ErrKeyNotFound

@@ -20,7 +20,7 @@ func ValidateCommandWALActivationClean(dir string) error {
 		return err
 	}
 	for _, seg := range segments {
-		if seg.valueLog || seg.size == 0 {
+		if seg.size == 0 {
 			continue
 		}
 		return fmt.Errorf("treedb: command_wal_v1 requires clean legacy WAL before activation; found %s", filepath.Base(seg.path))

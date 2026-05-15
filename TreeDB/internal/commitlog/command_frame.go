@@ -16,6 +16,9 @@ const (
 	commandFrameHeaderSize = 4 + 2 + 2 + 2 + 2 + 8 + 8 + 8 + 8 + 8 + 2 + 2 + 4 + 4 + 4 + 4 + sha256.Size
 	rawKVBatchHeaderSize   = 2 + 4
 	rawKVOpHeaderSize      = 1 + 4 + 4
+
+	externalRefEncodedFixedSize      = 2 + 2 + 4 + 8 + 8 + 8 + sha256.Size
+	commandExtensionEncodedFixedSize = 2 + 2 + 4
 )
 
 var commandFrameMagic = [4]byte{'T', 'C', 'W', '1'}
@@ -112,6 +115,54 @@ func EncodeCommandFrame(env CommandEnvelope) ([]byte, error) {
 	return encodeCommandFrameTo(nil, env)
 }
 
+func commandFrameEncodedSize(env CommandEnvelope) (int, error) {
+	payloadLen := len(env.Payload)
+	if env.Kind == CommandKindRawKVBatch && env.Payload == nil {
+		payloadLen = rawKVBatchHeaderSize
+	}
+	extRefsLen, err := externalRefsEncodedLen(env.ExternalRefs)
+	if err != nil {
+		return 0, err
+	}
+	preconditionsLen, err := commandExtensionsEncodedLen(env.Preconditions)
+	if err != nil {
+		return 0, err
+	}
+	assertionsLen, err := commandExtensionsEncodedLen(env.ResultAssertions)
+	if err != nil {
+		return 0, err
+	}
+	return commandFrameEncodedSizeFromLengths(payloadLen, extRefsLen, preconditionsLen, assertionsLen)
+}
+
+func commandFrameEncodedSizeFromLengths(payloadLen, extRefsLen, preconditionsLen, assertionsLen int) (int, error) {
+	total := commandFrameHeaderSize
+	var err error
+	if total, err = addCommandFrameEncodedSectionLen(total, payloadLen); err != nil {
+		return 0, err
+	}
+	if total, err = addCommandFrameEncodedSectionLen(total, extRefsLen); err != nil {
+		return 0, err
+	}
+	if total, err = addCommandFrameEncodedSectionLen(total, preconditionsLen); err != nil {
+		return 0, err
+	}
+	if total, err = addCommandFrameEncodedSectionLen(total, assertionsLen); err != nil {
+		return 0, err
+	}
+	return total, nil
+}
+
+func addCommandFrameEncodedSectionLen(total, n int) (int, error) {
+	if n < 0 || n > int(^uint32(0)) {
+		return 0, ErrRecordTooLarge
+	}
+	if total > int(^uint(0)>>1)-n {
+		return 0, ErrRecordTooLarge
+	}
+	return total + n, nil
+}
+
 func encodeCommandFrameTo(dst []byte, env CommandEnvelope) ([]byte, error) {
 	if env.Version == 0 {
 		env.Version = CommandFrameVersion
@@ -138,10 +189,10 @@ func encodeCommandFrameTo(dst []byte, env CommandEnvelope) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(env.Payload) > int(^uint32(0)) || len(extRefs) > int(^uint32(0)) || len(preconditions) > int(^uint32(0)) || len(assertions) > int(^uint32(0)) {
-		return nil, ErrRecordTooLarge
+	total, err := commandFrameEncodedSizeFromLengths(len(env.Payload), len(extRefs), len(preconditions), len(assertions))
+	if err != nil {
+		return nil, err
 	}
-	total := commandFrameHeaderSize + len(env.Payload) + len(extRefs) + len(preconditions) + len(assertions)
 	if cap(dst) < total {
 		dst = make([]byte, total)
 	} else {
@@ -439,15 +490,9 @@ func encodeExternalRefs(refs []ExternalRef) ([]byte, error) {
 	if len(refs) == 0 {
 		return nil, nil
 	}
-	if len(refs) > int(^uint32(0)) {
-		return nil, ErrRecordTooLarge
-	}
-	total := 4
-	for i := range refs {
-		if len(refs[i].Path) > int(^uint32(0)) {
-			return nil, ErrRecordTooLarge
-		}
-		total += 2 + 2 + 4 + 8 + 8 + 8 + sha256.Size + len(refs[i].Path)
+	total, err := externalRefsEncodedLen(refs)
+	if err != nil {
+		return nil, err
 	}
 	out := make([]byte, total)
 	binary.LittleEndian.PutUint32(out[0:4], uint32(len(refs)))
@@ -468,6 +513,35 @@ func encodeExternalRefs(refs []ExternalRef) ([]byte, error) {
 	return out, nil
 }
 
+func externalRefsEncodedLen(refs []ExternalRef) (int, error) {
+	if len(refs) == 0 {
+		return 0, nil
+	}
+	if len(refs) > int(^uint32(0)) {
+		return 0, ErrRecordTooLarge
+	}
+	total := 4
+	maxInt := int(^uint(0) >> 1)
+	for i := range refs {
+		pathLen := len(refs[i].Path)
+		if pathLen > int(^uint32(0)) {
+			return 0, ErrRecordTooLarge
+		}
+		if pathLen > maxInt-externalRefEncodedFixedSize {
+			return 0, ErrRecordTooLarge
+		}
+		n := externalRefEncodedFixedSize + pathLen
+		if total > maxInt-n {
+			return 0, ErrRecordTooLarge
+		}
+		total += n
+	}
+	if total > int(^uint32(0)) {
+		return 0, ErrRecordTooLarge
+	}
+	return total, nil
+}
+
 func decodeExternalRefs(data []byte) ([]ExternalRef, error) {
 	if len(data) == 0 {
 		return nil, nil
@@ -475,15 +549,14 @@ func decodeExternalRefs(data []byte) ([]ExternalRef, error) {
 	if len(data) < 4 {
 		return nil, ErrCorrupt
 	}
-	const fixed = 2 + 2 + 4 + 8 + 8 + 8 + sha256.Size
 	count := binary.LittleEndian.Uint32(data[0:4])
-	if count > uint32((len(data)-4)/fixed) {
+	if count > uint32((len(data)-4)/externalRefEncodedFixedSize) {
 		return nil, ErrCorrupt
 	}
 	refs := make([]ExternalRef, 0, count)
 	off := 4
 	for i := uint32(0); i < count; i++ {
-		if off+fixed > len(data) {
+		if off+externalRefEncodedFixedSize > len(data) {
 			return nil, ErrCorrupt
 		}
 		ref := ExternalRef{}
@@ -494,7 +567,7 @@ func decodeExternalRefs(data []byte) ([]ExternalRef, error) {
 		ref.Offset = binary.LittleEndian.Uint64(data[off+16 : off+24])
 		ref.Length = binary.LittleEndian.Uint64(data[off+24 : off+32])
 		copy(ref.Digest[:], data[off+32:off+32+sha256.Size])
-		off += fixed
+		off += externalRefEncodedFixedSize
 		if uint64(pathLen) > uint64(len(data)-off) || uint64(pathLen) > uint64(^uint(0)>>1) {
 			return nil, ErrCorrupt
 		}
@@ -512,15 +585,9 @@ func encodeCommandExtensions(exts []CommandExtension) ([]byte, error) {
 	if len(exts) == 0 {
 		return nil, nil
 	}
-	if len(exts) > int(^uint32(0)) {
-		return nil, ErrRecordTooLarge
-	}
-	total := 4
-	for i := range exts {
-		if len(exts[i].Payload) > int(^uint32(0)) {
-			return nil, ErrRecordTooLarge
-		}
-		total += 2 + 2 + 4 + len(exts[i].Payload)
+	total, err := commandExtensionsEncodedLen(exts)
+	if err != nil {
+		return nil, err
 	}
 	out := make([]byte, total)
 	binary.LittleEndian.PutUint32(out[0:4], uint32(len(exts)))
@@ -537,6 +604,35 @@ func encodeCommandExtensions(exts []CommandExtension) ([]byte, error) {
 	return out, nil
 }
 
+func commandExtensionsEncodedLen(exts []CommandExtension) (int, error) {
+	if len(exts) == 0 {
+		return 0, nil
+	}
+	if len(exts) > int(^uint32(0)) {
+		return 0, ErrRecordTooLarge
+	}
+	total := 4
+	maxInt := int(^uint(0) >> 1)
+	for i := range exts {
+		payloadLen := len(exts[i].Payload)
+		if payloadLen > int(^uint32(0)) {
+			return 0, ErrRecordTooLarge
+		}
+		if payloadLen > maxInt-commandExtensionEncodedFixedSize {
+			return 0, ErrRecordTooLarge
+		}
+		n := commandExtensionEncodedFixedSize + payloadLen
+		if total > maxInt-n {
+			return 0, ErrRecordTooLarge
+		}
+		total += n
+	}
+	if total > int(^uint32(0)) {
+		return 0, ErrRecordTooLarge
+	}
+	return total, nil
+}
+
 func decodeCommandExtensions(data []byte) ([]CommandExtension, error) {
 	if len(data) == 0 {
 		return nil, nil
@@ -545,13 +641,13 @@ func decodeCommandExtensions(data []byte) ([]CommandExtension, error) {
 		return nil, ErrCorrupt
 	}
 	count := binary.LittleEndian.Uint32(data[0:4])
-	if count > uint32((len(data)-4)/8) {
+	if count > uint32((len(data)-4)/commandExtensionEncodedFixedSize) {
 		return nil, ErrCorrupt
 	}
 	exts := make([]CommandExtension, 0, count)
 	off := 4
 	for i := uint32(0); i < count; i++ {
-		if off+8 > len(data) {
+		if off+commandExtensionEncodedFixedSize > len(data) {
 			return nil, ErrCorrupt
 		}
 		ext := CommandExtension{Type: binary.LittleEndian.Uint16(data[off : off+2])}
@@ -559,7 +655,7 @@ func decodeCommandExtensions(data []byte) ([]CommandExtension, error) {
 			return nil, ErrCorrupt
 		}
 		payloadLen := binary.LittleEndian.Uint32(data[off+4 : off+8])
-		off += 8
+		off += commandExtensionEncodedFixedSize
 		if uint64(payloadLen) > uint64(len(data)-off) || uint64(payloadLen) > uint64(^uint(0)>>1) {
 			return nil, ErrCorrupt
 		}

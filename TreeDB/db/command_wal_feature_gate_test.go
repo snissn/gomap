@@ -47,6 +47,38 @@ func TestCommandWALFeatureGateRequiresCleanLegacyCollectionWALBeforeActivation(t
 	}
 }
 
+func TestCommandWALFeatureGateRequiresCleanLegacyValueWALBeforeActivation(t *testing.T) {
+	dir := t.TempDir()
+	walDir := filepath.Join(dir, "wal")
+	if err := os.MkdirAll(walDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(walDir, "value-l0-000001.log"), []byte("dirty value wal"), 0o600); err != nil {
+		t.Fatalf("write value wal: %v", err)
+	}
+	if err := ValidateCommandWALActivationClean(dir); err == nil || !strings.Contains(err.Error(), "value-l0-000001.log") {
+		t.Fatalf("ValidateCommandWALActivationClean error=%v, want dirty value WAL failure", err)
+	}
+}
+
+func TestSaveFormatConfigCommandWALRequiresCleanActivation(t *testing.T) {
+	dir := t.TempDir()
+	walDir := filepath.Join(dir, "wal")
+	if err := os.MkdirAll(walDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(walDir, "commit-l0-000001.log"), []byte("dirty commit wal"), 0o600); err != nil {
+		t.Fatalf("write commit wal: %v", err)
+	}
+	err := SaveFormatConfig(dir, FormatConfig{RequiredFeatures: []string{RequiredFeatureCommandWALV1}})
+	if err == nil || !strings.Contains(err.Error(), "clean legacy WAL") {
+		t.Fatalf("SaveFormatConfig error=%v, want clean legacy WAL failure", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "format.json")); !os.IsNotExist(statErr) {
+		t.Fatalf("format.json stat error=%v, want not exist after rejected activation", statErr)
+	}
+}
+
 func TestCommandWALRequiredFeatureFailsClosedUntilExecutionEnabled(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -139,6 +171,21 @@ func TestValidateFormatRequiredFeatureGateAllowsIgnoredOrdinaryFormatErrors(t *t
 				t.Fatalf("Close: %v", err)
 			}
 		})
+	}
+}
+
+func TestValidateFormatRequiredFeatureGateRejectsMalformedRequiredFeatureFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "format.json"), []byte(`{"version":3,"required_features":["command_wal_v1"`), 0o600); err != nil {
+		t.Fatalf("write format.json: %v", err)
+	}
+	err := ValidateFormatRequiredFeatureGate(dir)
+	if err == nil || !strings.Contains(err.Error(), "required-feature gate") {
+		t.Fatalf("ValidateFormatRequiredFeatureGate error=%v, want required-feature decode failure", err)
+	}
+	_, err = Open(Options{Dir: dir, IgnoreFormatConfig: true})
+	if err == nil || !strings.Contains(err.Error(), "required-feature gate") {
+		t.Fatalf("Open IgnoreFormatConfig error=%v, want required-feature decode failure", err)
 	}
 }
 

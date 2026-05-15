@@ -1,6 +1,7 @@
 package db
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -203,6 +204,9 @@ func ValidateFormatRequiredFeatureGate(dir string) error {
 		RequiredFeatures []string `json:"required_features,omitempty"`
 	}
 	if err := json.Unmarshal(data, &gate); err != nil {
+		if bytes.Contains(data, []byte("required_features")) {
+			return fmt.Errorf("treedb: decode %s required-feature gate: %w", filepath.Base(path), err)
+		}
 		return nil
 	}
 	if len(gate.RequiredFeatures) == 0 {
@@ -232,6 +236,11 @@ func SaveFormatConfig(dir string, cfg FormatConfig) error {
 		cfg.Version = formatConfigRequiredFeaturesVersion
 	} else if cfg.Version == 0 {
 		cfg.Version = formatConfigVersion
+	}
+	if cfg.RequiresCommandWALV1() {
+		if err := ValidateCommandWALActivationClean(dir); err != nil {
+			return err
+		}
 	}
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {

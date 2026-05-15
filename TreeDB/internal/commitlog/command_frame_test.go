@@ -159,6 +159,31 @@ func TestCommandWALFormatRejectsMalformedLengthBeforeAllocation(t *testing.T) {
 	}
 }
 
+func TestCommandWALAppendCommandRejectsMaxSegmentBeforeEncode(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "commit-l0-000001.log")
+	w, err := NewWriterWithOptions(path, Options{MaxSegmentSize: int64(commandFrameHeaderSize + rawKVBatchHeaderSize - 1)})
+	if err != nil {
+		t.Fatalf("NewWriterWithOptions: %v", err)
+	}
+	defer w.Close()
+
+	err = w.AppendCommand(CommandEnvelope{
+		LSN:           1,
+		Kind:          CommandKindRawKVBatch,
+		Scope:         CommandScopeRawKV,
+		PayloadFormat: PayloadFormatRawKVBatchV1,
+	})
+	if !errors.Is(err, ErrRecordTooLarge) {
+		t.Fatalf("AppendCommand error=%v, want ErrRecordTooLarge", err)
+	}
+	if len(w.scratch) != 0 {
+		t.Fatalf("scratch len=%d, want 0 after pre-encode rejection", len(w.scratch))
+	}
+	if w.size != 0 {
+		t.Fatalf("writer size=%d, want 0 after pre-encode rejection", w.size)
+	}
+}
+
 func TestCommandWALFormatRejectsMalformedSectionCountsBeforeAllocation(t *testing.T) {
 	payload, err := EncodeRawKVBatchPayload(nil)
 	if err != nil {
