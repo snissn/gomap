@@ -26,7 +26,9 @@ func AcquireJournalOwner(dir string) (*JournalOwner, error) {
 
 type JournalOwnerOptions struct {
 	// InitialLSN is the highest durable/applied LSN known by the caller. The
-	// first reserved LSN is InitialLSN+1.
+	// first reserved LSN is InitialLSN+1. InitialLSN==MaxUint64 is rejected
+	// because there is no next LSN; InitialLSN==MaxUint64-1 is valid and permits
+	// reserving the final MaxUint64 LSN exactly once.
 	InitialLSN uint64
 }
 
