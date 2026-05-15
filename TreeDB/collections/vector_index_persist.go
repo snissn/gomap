@@ -10,6 +10,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -761,7 +762,11 @@ func (idx *VectorIndex) loadPersistSnapshot(snapshot vectorIndexPersistSnapshot)
 }
 
 func fsyncFile(path string) error {
-	f, err := os.Open(path)
+	flag := os.O_RDONLY
+	if runtime.GOOS == "windows" {
+		flag = os.O_RDWR
+	}
+	f, err := os.OpenFile(path, flag, 0)
 	if err != nil {
 		return err
 	}
@@ -770,6 +775,9 @@ func fsyncFile(path string) error {
 }
 
 func fsyncDir(path string) error {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return err
