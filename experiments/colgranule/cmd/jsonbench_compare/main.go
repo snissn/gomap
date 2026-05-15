@@ -926,22 +926,25 @@ func writeMarkdown(path string, raw comparisonRaw) {
 	if len(raw.AggregateMetadataTimings) > 0 {
 		fmt.Fprintf(&b, "\n## Aggregate Metadata Prototype\n\n")
 		fmt.Fprintf(&b, "These M1B timings use exact per-granule `did_code -> min(time_us), max(time_us), count` metadata for declared post/create rows. The prototype stores metadata uncompressed in memory and reports build cost plus byte accounting so later file-backed work can decide admission and compression policies.\n\n")
-		fmt.Fprintf(&b, "| Query | Metadata best | Best cache | Baseline | Speedup | Kernel | Metadata rows | Entries | Bytes | B/part row | Build | Compression |\n")
-		fmt.Fprintf(&b, "|---|---:|---|---:|---:|---|---:|---:|---:|---:|---:|---|\n")
+		fmt.Fprintf(&b, "| Query | Metadata best | Best cache | Baseline | Speedup | Break-even | Kernel | Metadata rows | Entries | Entries/matched row | Bytes | B/part row | B/matched row | Build | Compression |\n")
+		fmt.Fprintf(&b, "|---|---:|---|---:|---:|---:|---|---:|---:|---:|---:|---:|---:|---:|---|\n")
 		for _, timing := range raw.AggregateMetadataTimings {
 			d := timing.Diagnostics
 			baseline := aggregateMetadataBaselineSeconds(raw, timing.Query)
-			fmt.Fprintf(&b, "| %s | %.6fs | %s | %s | %s | `%s` | %d | %d | %d | %.3f | %.6fs | `%s` |\n",
+			fmt.Fprintf(&b, "| %s | %.6fs | %s | %s | %s | %s | `%s` | %d | %d | %.3f | %d | %.3f | %.3f | %.6fs | `%s` |\n",
 				timing.Query,
 				timing.Best.Seconds(),
 				timing.BestCache,
 				formatSeconds(baseline),
 				formatSpeedup(timing.Best.Seconds(), baseline),
+				formatBreakEvenQueries(d.AggregateMetadataBuildDuration.Seconds(), baseline, timing.Best.Seconds()),
 				d.AggregateKernel,
 				d.AggregateMetadataRows,
 				d.AggregateMetadataEntries,
+				ratio(float64(d.AggregateMetadataEntries), float64(d.AggregateMetadataRows)),
 				d.AggregateMetadataBytes,
 				d.AggregateMetadataBytesPerRow,
+				ratio(float64(d.AggregateMetadataBytes), float64(d.AggregateMetadataRows)),
 				d.AggregateMetadataBuildDuration.Seconds(),
 				d.AggregateMetadataCompression)
 		}
@@ -1177,6 +1180,14 @@ func formatSpeedup(numerator, denominator float64) string {
 		return "n/a"
 	}
 	return fmt.Sprintf("%.2fx", ratio(denominator, numerator))
+}
+
+func formatBreakEvenQueries(buildSeconds, baselineSeconds, metadataSeconds float64) string {
+	saved := baselineSeconds - metadataSeconds
+	if buildSeconds <= 0 || saved <= 0 {
+		return "n/a"
+	}
+	return fmt.Sprintf("%.1f", buildSeconds/saved)
 }
 
 func mib(bytes int64) float64 {
