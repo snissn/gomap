@@ -12750,6 +12750,123 @@ func TestCollectionUpdateBatchDirectBufferedTemplateV1AccumulatesRootRuns(t *tes
 	}
 }
 
+func TestCollectionUpdateBatchDirectBufferedTemplateV1RejectsStaleTemplatePlan(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat:        DocumentFormatTemplateV1,
+			BufferedIndexedWrites: true,
+		},
+		Indexes: []IndexDefinition{
+			{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true},
+			{Name: "city", Field: "city", ValueType: IndexValueString},
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{
+			mustTemplateV1Document(t, []string{"email", "city"}, []any{"a@example.com", "hnl"}),
+			mustTemplateV1Document(t, []string{"email", "city"}, []any{"b@example.com", "hnl"}),
+		},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush insert buffer: %v", err)
+	}
+
+	itemsA, err := prepareUpdateBatchItems([]UpdateBatchItem{
+		{DocumentID: []byte("u1"), Update: setTemplateV1JSON(t, `{"email":"a@example.com","city":"hnl","shape_a":1}`)},
+	})
+	if err != nil {
+		t.Fatalf("prepare stale plan A items: %v", err)
+	}
+	itemsB, err := prepareUpdateBatchItems([]UpdateBatchItem{
+		{DocumentID: []byte("u2"), Update: setTemplateV1JSON(t, `{"email":"b@example.com","city":"hnl","shape_b":1}`)},
+	})
+	if err != nil {
+		t.Fatalf("prepare stale plan B items: %v", err)
+	}
+	planA, err := col.buildUpdateBatchPlan(itemsA, updateBatchModeNoSecondaryUniqueIndexChanges, true)
+	if err != nil {
+		t.Fatalf("build plan A: %v", err)
+	}
+	defer planA.close()
+	planB, err := col.buildUpdateBatchPlan(itemsB, updateBatchModeNoSecondaryUniqueIndexChanges, true)
+	if err != nil {
+		t.Fatalf("build plan B: %v", err)
+	}
+	defer planB.close()
+	if planA.directBufferedUpdate == nil || len(planA.directBufferedUpdate.templateEntries) == 0 {
+		t.Fatal("plan A did not create direct buffered template entries")
+	}
+	if planB.directBufferedUpdate == nil || len(planB.directBufferedUpdate.templateEntries) == 0 {
+		t.Fatal("plan B did not create direct buffered template entries")
+	}
+
+	if err := col.withMutationLock(func() error {
+		buffered, err := col.bufferUpdateBatchPlanLocked(planA)
+		if err != nil {
+			return err
+		}
+		if !buffered {
+			return errors.New("plan A was not buffered")
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("stage plan A: %v", err)
+	}
+	if err := col.withMutationLock(func() error {
+		buffered, err := col.bufferUpdateBatchPlanLocked(planB)
+		if !errors.Is(err, ErrConcurrentMutation) {
+			return fmt.Errorf("stale plan B buffered=%t err=%v, want ErrConcurrentMutation", buffered, err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("stage stale plan B: %v", err)
+	}
+
+	if _, batched, err := col.UpdateBatchIfNoSecondaryUniqueIndexChanges([]UpdateBatchItem{
+		{DocumentID: []byte("u2"), Update: setTemplateV1JSON(t, `{"email":"b@example.com","city":"hnl","shape_b":1}`)},
+	}); err != nil {
+		t.Fatalf("replanned public update B: %v", err)
+	} else if !batched {
+		t.Fatal("replanned public update B was declined")
+	}
+	for _, tc := range []struct {
+		id   []byte
+		want []byte
+	}{
+		{[]byte("u1"), []byte(`"shape_a":1`)},
+		{[]byte("u2"), []byte(`"shape_b":1`)},
+	} {
+		got, err := col.Get(tc.id)
+		if err != nil {
+			t.Fatalf("get %s: %v", tc.id, err)
+		}
+		gotJSON, err := col.StoredDocumentJSON(got)
+		if err != nil {
+			t.Fatalf("materialize %s: %v", tc.id, err)
+		}
+		if !bytes.Contains(gotJSON, tc.want) {
+			t.Fatalf("document %s=%s missing %s", tc.id, gotJSON, tc.want)
+		}
+	}
+}
+
 func TestCollectionUpdateBatchDirectBufferedTemplateV1TemplateOnlySkipsSecondaryRoots(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
