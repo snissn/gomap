@@ -39,25 +39,26 @@ type clickHouseResult struct {
 }
 
 type comparisonRaw struct {
-	GeneratedAt         string                            `json:"generated_at"`
-	DataPath            string                            `json:"data_path"`
-	Limit               int                               `json:"limit"`
-	Rows                int                               `json:"rows"`
-	Files               []string                          `json:"files"`
-	InputBytes          int64                             `json:"input_bytes"`
-	RowsPerGranule      int                               `json:"rows_per_granule"`
-	LoadDuration        time.Duration                     `json:"load_duration"`
-	ClickHouseLocal     clickHouseResult                  `json:"clickhouse_local"`
-	RemainingTreeDB     remainingTreeDBResult             `json:"remaining_treedb"`
-	RemainingTreeDBJSON remainingTreeDBResult             `json:"remaining_treedb_json"`
-	RemainingTreeDBTpl  remainingTreeDBResult             `json:"remaining_treedb_template_v1"`
-	ConservativeBSON    remainingTreeDBResult             `json:"conservative_remaining_treedb_bson"`
-	ConservativeJSON    remainingTreeDBResult             `json:"conservative_remaining_treedb_json"`
-	ConservativeTpl     remainingTreeDBResult             `json:"conservative_remaining_treedb_template_v1"`
-	RawTreeDBJSON       remainingTreeDBResult             `json:"raw_treedb_json"`
-	QueryTimings        []colgranule.JSONBenchQueryTiming `json:"query_timings"`
-	ColumnSummaries     []colgranule.ColumnCodecSummary   `json:"column_summaries"`
-	BestColumnStorage   []bestColumnStorage               `json:"best_column_storage"`
+	GeneratedAt             string                                `json:"generated_at"`
+	DataPath                string                                `json:"data_path"`
+	Limit                   int                                   `json:"limit"`
+	Rows                    int                                   `json:"rows"`
+	Files                   []string                              `json:"files"`
+	InputBytes              int64                                 `json:"input_bytes"`
+	RowsPerGranule          int                                   `json:"rows_per_granule"`
+	LoadDuration            time.Duration                         `json:"load_duration"`
+	ClickHouseLocal         clickHouseResult                      `json:"clickhouse_local"`
+	RemainingTreeDB         remainingTreeDBResult                 `json:"remaining_treedb"`
+	RemainingTreeDBJSON     remainingTreeDBResult                 `json:"remaining_treedb_json"`
+	RemainingTreeDBTpl      remainingTreeDBResult                 `json:"remaining_treedb_template_v1"`
+	ConservativeBSON        remainingTreeDBResult                 `json:"conservative_remaining_treedb_bson"`
+	ConservativeJSON        remainingTreeDBResult                 `json:"conservative_remaining_treedb_json"`
+	ConservativeTpl         remainingTreeDBResult                 `json:"conservative_remaining_treedb_template_v1"`
+	RawTreeDBJSON           remainingTreeDBResult                 `json:"raw_treedb_json"`
+	QueryTimings            []colgranule.JSONBenchQueryTiming     `json:"query_timings"`
+	EncodedPartQueryTimings []colgranule.JSONBenchPartQueryTiming `json:"encoded_part_query_timings"`
+	ColumnSummaries         []colgranule.ColumnCodecSummary       `json:"column_summaries"`
+	BestColumnStorage       []bestColumnStorage                   `json:"best_column_storage"`
 }
 
 type remainingTreeDBResult struct {
@@ -122,6 +123,8 @@ func main() {
 	must(err)
 	timings, err := colgranule.RunJSONBenchQueries(ds, *attempts)
 	must(err)
+	encodedPartTimings, err := colgranule.RunJSONBenchPartQueries(ds, *rowsPerGranule, *attempts)
+	must(err)
 	var remaining remainingTreeDBResult
 	var remainingJSON remainingTreeDBResult
 	var remainingTpl remainingTreeDBResult
@@ -147,25 +150,26 @@ func main() {
 	}
 
 	raw := comparisonRaw{
-		GeneratedAt:         time.Now().UTC().Format(time.RFC3339),
-		DataPath:            *data,
-		Limit:               *limit,
-		Rows:                ds.Rows,
-		Files:               ds.Files,
-		InputBytes:          inputBytes(ds.Files),
-		RowsPerGranule:      *rowsPerGranule,
-		LoadDuration:        loadDuration,
-		ClickHouseLocal:     readClickHouseResult(*clickHouseLocalPath),
-		RemainingTreeDB:     remaining,
-		RemainingTreeDBJSON: remainingJSON,
-		RemainingTreeDBTpl:  remainingTpl,
-		ConservativeBSON:    conservativeBSON,
-		ConservativeJSON:    conservativeJSON,
-		ConservativeTpl:     conservativeTpl,
-		RawTreeDBJSON:       rawTreeDBJSON,
-		QueryTimings:        timings,
-		ColumnSummaries:     summaries,
-		BestColumnStorage:   bestColumns(summaries),
+		GeneratedAt:             time.Now().UTC().Format(time.RFC3339),
+		DataPath:                *data,
+		Limit:                   *limit,
+		Rows:                    ds.Rows,
+		Files:                   ds.Files,
+		InputBytes:              inputBytes(ds.Files),
+		RowsPerGranule:          *rowsPerGranule,
+		LoadDuration:            loadDuration,
+		ClickHouseLocal:         readClickHouseResult(*clickHouseLocalPath),
+		RemainingTreeDB:         remaining,
+		RemainingTreeDBJSON:     remainingJSON,
+		RemainingTreeDBTpl:      remainingTpl,
+		ConservativeBSON:        conservativeBSON,
+		ConservativeJSON:        conservativeJSON,
+		ConservativeTpl:         conservativeTpl,
+		RawTreeDBJSON:           rawTreeDBJSON,
+		QueryTimings:            timings,
+		EncodedPartQueryTimings: encodedPartTimings,
+		ColumnSummaries:         summaries,
+		BestColumnStorage:       bestColumns(summaries),
 	}
 
 	writeJSON(*outJSON, raw)
@@ -845,6 +849,28 @@ func writeMarkdown(path string, raw comparisonRaw) {
 	for i, timing := range raw.QueryTimings {
 		local := clickHouseBest(raw.ClickHouseLocal, i)
 		fmt.Fprintf(&b, "| %s | %.6fs | %.6fs | %.2fx | %s |\n", timing.Query, timing.Best.Seconds(), local, ratio(timing.Best.Seconds(), local), timing.Description)
+	}
+	if len(raw.EncodedPartQueryTimings) > 0 {
+		fmt.Fprintf(&b, "\n## Encoded Part Query Timing\n\n")
+		fmt.Fprintf(&b, "| Query | Best | Best cache | ClickHouse local | Part / ClickHouse | Kernel | Diagnostics |\n")
+		fmt.Fprintf(&b, "|---|---:|---|---:|---:|---|---|\n")
+		for i, timing := range raw.EncodedPartQueryTimings {
+			local := clickHouseBest(raw.ClickHouseLocal, i)
+			d := timing.Diagnostics
+			fmt.Fprintf(&b, "| %s | %.6fs | %s | %.6fs | %.2fx | `%s` | rows=%d granules=%d decoded=%d blocks=%d bytes=%d columns=`%s` |\n",
+				timing.Query,
+				timing.Best.Seconds(),
+				timing.BestCache,
+				local,
+				ratio(timing.Best.Seconds(), local),
+				d.AggregateKernel,
+				d.RowsScanned,
+				d.GranulesConsidered,
+				d.GranulesDecoded,
+				d.BlocksDecoded,
+				d.BytesDecoded,
+				strings.Join(d.ColumnsProjected, ","))
+		}
 	}
 	fmt.Fprintf(&b, "\n## Storage Footprint\n\n")
 	allBest := bestTotal(raw.BestColumnStorage, nil)

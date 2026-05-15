@@ -276,6 +276,11 @@ func (s *ColumnPartScanner) ScanProjectedInto(dst map[string][]int64, columns []
 	if dst == nil {
 		dst = make(map[string][]int64, len(columns))
 	}
+	for existing := range dst {
+		if !containsString(columns, existing) {
+			delete(dst, existing)
+		}
+	}
 	out := ProjectedScanResult{
 		Rows:    s.part.Descriptor.RowCount,
 		Columns: dst,
@@ -295,6 +300,15 @@ func (s *ColumnPartScanner) ScanProjectedInto(dst map[string][]int64, columns []
 		out.Diagnostics.BytesDecoded += diagnostics.BytesDecoded
 	}
 	return out, nil
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *ColumnPartScanner) ValueAt(locator RowLocator, columnName string) (int64, error) {
