@@ -46,6 +46,12 @@ func TestColumnPartImageAccountingReconcilesToSerializedBytes(t *testing.T) {
 	if accounting.SerializedManifestBytes != image.ManifestBytes {
 		t.Fatalf("serialized manifest bytes=%d want %d", accounting.SerializedManifestBytes, image.ManifestBytes)
 	}
+	if image.CategoryBytes(ColumnPartImageCategoryManifest) != image.ManifestBytes {
+		t.Fatalf("manifest category bytes=%d want %d", image.CategoryBytes(ColumnPartImageCategoryManifest), image.ManifestBytes)
+	}
+	if image.CategoryBytes(ColumnPartImageCategoryDescriptor)+image.ManifestBytes != accounting.DescriptorBytes+accounting.SerializedManifestBytes {
+		t.Fatalf("descriptor/manifest split image=(%d,%d) accounting=(%d,%d)", image.CategoryBytes(ColumnPartImageCategoryDescriptor), image.ManifestBytes, accounting.DescriptorBytes, accounting.SerializedManifestBytes)
+	}
 	if accounting.TotalStoredBytes != image.TotalBytes() {
 		t.Fatalf("total bytes=%d image bytes=%d accounting=%+v", accounting.TotalStoredBytes, image.TotalBytes(), accounting)
 	}

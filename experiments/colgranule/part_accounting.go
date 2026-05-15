@@ -221,7 +221,8 @@ func (a *ColumnPartByteAccounting) RecomputeTotals() {
 }
 
 func (a ColumnPartByteAccounting) CategoryBytes() int {
-	return a.DeclaredColumnStoredBytes +
+	return a.SerializedManifestBytes +
+		a.DeclaredColumnStoredBytes +
 		a.DictionaryBytes +
 		a.MarkBytes +
 		a.SortKeyMetadataBytes +

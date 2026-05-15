@@ -109,7 +109,9 @@ minimal semantic changes. The image starts with a manifest containing a magic
 number, image version, part id, row count, manifest byte length, and one section
 directory entry per following byte section. Section directory entries record
 kind, category, offset, length, row/granule/block counts, encoding,
-compression, name, and column name.
+compression, name, and column name. Accounting exposes the manifest as a
+separate `manifest` pseudo-section so descriptor bytes do not hide or double
+count manifest overhead.
 
 The current canonical section kinds are:
 

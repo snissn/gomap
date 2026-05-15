@@ -91,8 +91,6 @@ func measureJSONBenchPartBuild(ds JSONBenchDataset, rowsPerGranule int, layout J
 	runtime.ReadMemStats(&before)
 	start := time.Now()
 	part, err := BuildJSONBenchColumnPartWithAggregateMetadataForLayout(ds, rowsPerGranule, layout)
-	duration := time.Since(start)
-	runtime.ReadMemStats(&after)
 	if err != nil {
 		return nil, JSONBenchPartBuildAttempt{}, ColumnPartByteAccounting{}, err
 	}
@@ -100,6 +98,8 @@ func measureJSONBenchPartBuild(ds JSONBenchDataset, rowsPerGranule int, layout J
 	if err != nil {
 		return nil, JSONBenchPartBuildAttempt{}, ColumnPartByteAccounting{}, err
 	}
+	duration := time.Since(start)
+	runtime.ReadMemStats(&after)
 	parsedImage, err := ParseColumnPartImage(image.Bytes)
 	if err != nil {
 		return nil, JSONBenchPartBuildAttempt{}, ColumnPartByteAccounting{}, err

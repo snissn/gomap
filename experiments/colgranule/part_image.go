@@ -14,6 +14,7 @@ const columnPartImageMagic uint32 = 0x4d494354 // "TCIM", little-endian on disk.
 type ColumnPartImageSectionKind string
 
 const (
+	ColumnPartImageSectionManifest          ColumnPartImageSectionKind = "manifest"
 	ColumnPartImageSectionDescriptor        ColumnPartImageSectionKind = "descriptor"
 	ColumnPartImageSectionSortKeyMetadata   ColumnPartImageSectionKind = "sort_key_metadata"
 	ColumnPartImageSectionSortKeyMarks      ColumnPartImageSectionKind = "sort_key_marks"
@@ -26,6 +27,7 @@ const (
 type ColumnPartImageSectionCategory string
 
 const (
+	ColumnPartImageCategoryManifest          ColumnPartImageSectionCategory = "manifest"
 	ColumnPartImageCategoryDescriptor        ColumnPartImageSectionCategory = "descriptor"
 	ColumnPartImageCategorySortKeyMetadata   ColumnPartImageSectionCategory = "sort_key_metadata"
 	ColumnPartImageCategoryMarks             ColumnPartImageSectionCategory = "marks"
@@ -123,10 +125,10 @@ func (i ColumnPartImage) TotalBytes() int {
 }
 
 func (i ColumnPartImage) CategoryBytes(category ColumnPartImageSectionCategory) int {
-	total := 0
-	if category == ColumnPartImageCategoryDescriptor {
-		total += i.ManifestBytes
+	if category == ColumnPartImageCategoryManifest {
+		return i.ManifestBytes
 	}
+	total := 0
 	for _, section := range i.Sections {
 		if section.Category == category {
 			total += section.Length
@@ -139,8 +141,8 @@ func (i ColumnPartImage) SectionByteAccounting() []ColumnPartImageSectionByteAcc
 	out := make([]ColumnPartImageSectionByteAccounting, 0, len(i.Sections)+1)
 	if i.ManifestBytes > 0 {
 		out = append(out, ColumnPartImageSectionByteAccounting{
-			Kind:     "manifest",
-			Category: ColumnPartImageCategoryDescriptor,
+			Kind:     ColumnPartImageSectionManifest,
+			Category: ColumnPartImageCategoryManifest,
 			Bytes:    i.ManifestBytes,
 		})
 	}
@@ -199,19 +201,10 @@ func (b *columnPartImageBuilder) build() (ColumnPartImage, error) {
 		return ColumnPartImage{}, err
 	}
 
-	sections := make([]ColumnPartImageSection, len(b.sections))
-	for i := range b.sections {
-		sections[i] = b.sections[i].section
+	sections, manifest, err := b.layoutManifestAndSections()
+	if err != nil {
+		return ColumnPartImage{}, err
 	}
-	manifest := encodeColumnPartImageManifest(b.part, sections, 0)
-	offset := len(manifest)
-	for i := range b.sections {
-		b.sections[i].section.Offset = offset
-		b.sections[i].section.Length = len(b.sections[i].data)
-		sections[i] = b.sections[i].section
-		offset += len(b.sections[i].data)
-	}
-	manifest = encodeColumnPartImageManifest(b.part, sections, len(manifest))
 	out := make([]byte, 0, len(manifest)+sumImageSectionDataBytes(b.sections))
 	out = append(out, manifest...)
 	for _, section := range b.sections {
@@ -225,6 +218,31 @@ func (b *columnPartImageBuilder) build() (ColumnPartImage, error) {
 		Sections:      sections,
 		Bytes:         out,
 	}, nil
+}
+
+func (b *columnPartImageBuilder) layoutManifestAndSections() ([]ColumnPartImageSection, []byte, error) {
+	sections := make([]ColumnPartImageSection, len(b.sections))
+	for i := range b.sections {
+		sections[i] = b.sections[i].section
+	}
+	manifestBytes := 0
+	var manifest []byte
+	for attempt := 0; attempt < 8; attempt++ {
+		manifest = encodeColumnPartImageManifest(b.part, sections, manifestBytes)
+		offset := len(manifest)
+		for i := range b.sections {
+			b.sections[i].section.Offset = offset
+			b.sections[i].section.Length = len(b.sections[i].data)
+			sections[i] = b.sections[i].section
+			offset += len(b.sections[i].data)
+		}
+		finalManifest := encodeColumnPartImageManifest(b.part, sections, len(manifest))
+		if len(finalManifest) == len(manifest) {
+			return sections, finalManifest, nil
+		}
+		manifestBytes = len(finalManifest)
+	}
+	return nil, nil, fmt.Errorf("colgranule: part image manifest length did not stabilize")
 }
 
 func (b *columnPartImageBuilder) addDescriptorSection() error {
@@ -437,7 +455,14 @@ func (b *columnPartImageBuilder) addColumnDataSections() error {
 		if !ok {
 			return fmt.Errorf("colgranule: missing column %s", columnDescriptor.Name)
 		}
-		var data []byte
+		totalPayloadBytes := 0
+		for i, block := range column.Blocks {
+			if len(block.Granule.Payload) != block.Descriptor.StoredBytes {
+				return fmt.Errorf("colgranule: column %s block %d payload bytes=%d descriptor stored bytes=%d", columnDescriptor.Name, i, len(block.Granule.Payload), block.Descriptor.StoredBytes)
+			}
+			totalPayloadBytes += block.Descriptor.StoredBytes
+		}
+		data := make([]byte, 0, totalPayloadBytes)
 		for _, block := range column.Blocks {
 			data = append(data, block.Granule.Payload...)
 		}
@@ -619,6 +644,8 @@ func columnTypeCode(t ColumnType) uint16 {
 
 func columnPartImageSectionKindCode(kind ColumnPartImageSectionKind) uint16 {
 	switch kind {
+	case ColumnPartImageSectionManifest:
+		return 8
 	case ColumnPartImageSectionDescriptor:
 		return 1
 	case ColumnPartImageSectionSortKeyMetadata:
@@ -640,6 +667,8 @@ func columnPartImageSectionKindCode(kind ColumnPartImageSectionKind) uint16 {
 
 func columnPartImageSectionCategoryCode(category ColumnPartImageSectionCategory) uint16 {
 	switch category {
+	case ColumnPartImageCategoryManifest:
+		return 8
 	case ColumnPartImageCategoryDescriptor:
 		return 1
 	case ColumnPartImageCategorySortKeyMetadata:

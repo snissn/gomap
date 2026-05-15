@@ -1038,6 +1038,8 @@ func columnTypeFromCode(code uint16) (ColumnType, error) {
 
 func columnPartImageSectionKindFromCode(code uint16) (ColumnPartImageSectionKind, error) {
 	switch code {
+	case 8:
+		return ColumnPartImageSectionManifest, nil
 	case 1:
 		return ColumnPartImageSectionDescriptor, nil
 	case 2:
@@ -1059,6 +1061,8 @@ func columnPartImageSectionKindFromCode(code uint16) (ColumnPartImageSectionKind
 
 func columnPartImageSectionCategoryFromCode(code uint16) (ColumnPartImageSectionCategory, error) {
 	switch code {
+	case 8:
+		return ColumnPartImageCategoryManifest, nil
 	case 1:
 		return ColumnPartImageCategoryDescriptor, nil
 	case 2:
