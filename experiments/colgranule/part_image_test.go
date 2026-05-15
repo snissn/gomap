@@ -473,6 +473,19 @@ func TestColumnPartFromImageRejectsBlockRowsOutsidePart(t *testing.T) {
 	}
 }
 
+func TestColumnPartFromImageRejectsOversizedBlockRawBytes(t *testing.T) {
+	part, image := testColumnPartImageFixture(t, false)
+	corrupt := append([]byte(nil), image.Bytes...)
+	binary.LittleEndian.PutUint64(corrupt[descriptorFirstColumnFirstBlockRawBytesOffset(t, image):], uint64(math.MaxInt64))
+	parsed, err := ParseColumnPartImage(corrupt)
+	if err != nil {
+		t.Fatalf("ParseColumnPartImage: %v", err)
+	}
+	if _, err := ColumnPartFromImage(parsed); err == nil {
+		t.Fatalf("ColumnPartFromImage accepted oversized raw bytes for part %d", part.Descriptor.PartID)
+	}
+}
+
 func TestColumnPartFromImageRejectsNonContiguousColumnBlockRows(t *testing.T) {
 	part, err := BuildColumnPart(7, partTestOptions([]SortKeyColumn{{Column: "id"}}), ColumnBatch{Columns: map[string][]int64{
 		"id":        {3, 1, 2, 5, 4},
@@ -496,6 +509,20 @@ func TestColumnPartFromImageRejectsNonContiguousColumnBlockRows(t *testing.T) {
 	}
 	if _, err := ColumnPartFromImage(parsed); err == nil {
 		t.Fatal("ColumnPartFromImage accepted non-contiguous column block rows")
+	}
+}
+
+func TestColumnPartFromImageRejectsDuplicateDescriptorColumns(t *testing.T) {
+	part, _ := testColumnPartImageFixture(t, false)
+	corruptPart := *part
+	corruptPart.Descriptor.Columns = append([]ColumnPartColumnDescriptor(nil), part.Descriptor.Columns...)
+	corruptPart.Descriptor.Columns = append(corruptPart.Descriptor.Columns, part.Descriptor.Columns[0])
+	image, err := BuildColumnPartImage(&corruptPart, ColumnPartImageOptions{})
+	if err != nil {
+		t.Fatalf("BuildColumnPartImage: %v", err)
+	}
+	if _, err := ColumnPartFromImage(image); err == nil {
+		t.Fatal("ColumnPartFromImage accepted duplicate descriptor columns")
 	}
 }
 
@@ -1091,6 +1118,77 @@ func descriptorFirstColumnFirstBlockRowCountOffset(t *testing.T, image ColumnPar
 		t.Fatal("first descriptor column has no blocks")
 	}
 	if _, err := dec.i64(); err != nil {
+		t.Fatal(err)
+	}
+	return descriptor.Offset + dec.offset
+}
+
+func descriptorFirstColumnFirstBlockRawBytesOffset(t *testing.T, image ColumnPartImage) int {
+	t.Helper()
+	descriptor, err := image.singleSection(ColumnPartImageSectionDescriptor)
+	if err != nil {
+		t.Fatalf("descriptor section: %v", err)
+	}
+	dec := columnPartImageDecoder{data: image.sectionBytes(descriptor)}
+	if _, err := dec.u16(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dec.u64(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dec.u32(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dec.i64(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dec.i64(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dec.stringSlice(); err != nil {
+		t.Fatal(err)
+	}
+	granuleCount, err := dec.u32()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := uint32(0); i < granuleCount; i++ {
+		if _, err := decodeGranuleDescriptor(&dec); err != nil {
+			t.Fatal(err)
+		}
+	}
+	columnCount, err := dec.u32()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if columnCount == 0 {
+		t.Fatal("descriptor has no columns")
+	}
+	if _, err := dec.str(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dec.u16(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dec.u32(); err != nil {
+		t.Fatal(err)
+	}
+	blockCount, err := dec.u32()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if blockCount == 0 {
+		t.Fatal("first descriptor column has no blocks")
+	}
+	for i := 0; i < 4; i++ {
+		if _, err := dec.i64(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := dec.u16(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dec.u16(); err != nil {
 		t.Fatal(err)
 	}
 	return descriptor.Offset + dec.offset

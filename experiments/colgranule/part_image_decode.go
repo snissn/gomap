@@ -335,6 +335,9 @@ func decodeColumnPartDescriptorSection(data []byte) (ColumnPartDescriptor, map[s
 		if err != nil {
 			return ColumnPartDescriptor{}, nil, err
 		}
+		if _, exists := columns[name]; exists {
+			return ColumnPartDescriptor{}, nil, fmt.Errorf("colgranule: duplicate descriptor column %s", name)
+		}
 		columnTypeCode, err := dec.u16()
 		if err != nil {
 			return ColumnPartDescriptor{}, nil, err
@@ -377,7 +380,7 @@ func decodeColumnPartDescriptorSection(data []byte) (ColumnPartDescriptor, map[s
 			if err != nil {
 				return ColumnPartDescriptor{}, nil, err
 			}
-			if err := validateDecodedColumnBlockDescriptor(desc, name, j, blockDesc); err != nil {
+			if err := validateDecodedColumnBlockDescriptor(desc, name, columnType, cardinality, j, blockDesc); err != nil {
 				return ColumnPartDescriptor{}, nil, err
 			}
 			if blockDesc.FirstRow != expectedFirstRow {
@@ -403,7 +406,10 @@ func decodeColumnPartDescriptorSection(data []byte) (ColumnPartDescriptor, map[s
 	return desc, columns, nil
 }
 
-func validateDecodedColumnBlockDescriptor(desc ColumnPartDescriptor, column string, blockIndex int, block ColumnBlockDescriptor) error {
+func validateDecodedColumnBlockDescriptor(desc ColumnPartDescriptor, column string, columnType ColumnType, cardinality uint32, blockIndex int, block ColumnBlockDescriptor) error {
+	if block.RowCount <= 0 {
+		return fmt.Errorf("colgranule: descriptor column %s block %d has invalid row count %d", column, blockIndex, block.RowCount)
+	}
 	if block.FirstRow > desc.RowCount || block.RowCount > desc.RowCount-block.FirstRow {
 		return fmt.Errorf("colgranule: descriptor column %s block %d first row=%d row count=%d outside part rows=%d", column, blockIndex, block.FirstRow, block.RowCount, desc.RowCount)
 	}
@@ -413,7 +419,77 @@ func validateDecodedColumnBlockDescriptor(desc ColumnPartDescriptor, column stri
 	if len(desc.Granules) > 0 && block.LastGranule >= len(desc.Granules) {
 		return fmt.Errorf("colgranule: descriptor column %s block %d last granule=%d outside granules=%d", column, blockIndex, block.LastGranule, len(desc.Granules))
 	}
+	maxRawBytes, err := maxDecodedBlockRawBytes(columnType, cardinality, block.Encoding, block.RowCount)
+	if err != nil {
+		return fmt.Errorf("colgranule: descriptor column %s block %d: %w", column, blockIndex, err)
+	}
+	if block.RawBytes > maxRawBytes {
+		return fmt.Errorf("colgranule: descriptor column %s block %d raw bytes=%d exceed max=%d for %d rows", column, blockIndex, block.RawBytes, maxRawBytes, block.RowCount)
+	}
+	if block.Compression == CompressionNone && block.StoredBytes != block.RawBytes {
+		return fmt.Errorf("colgranule: descriptor column %s block %d uncompressed stored bytes=%d raw bytes=%d", column, blockIndex, block.StoredBytes, block.RawBytes)
+	}
+	if block.Compression != CompressionNone && block.StoredBytes > block.RawBytes {
+		return fmt.Errorf("colgranule: descriptor column %s block %d compressed stored bytes=%d exceed raw bytes=%d", column, blockIndex, block.StoredBytes, block.RawBytes)
+	}
 	return nil
+}
+
+func maxDecodedBlockRawBytes(columnType ColumnType, cardinality uint32, encoding Encoding, rows int) (int, error) {
+	switch columnType {
+	case ColumnTypeInt64:
+		switch encoding {
+		case EncodingRawInt64:
+			return checkedMulInt(rows, 8, "raw int64 bytes")
+		case EncodingDeltaVarint, EncodingDoubleDeltaVarint:
+			return checkedMulInt(rows, binary.MaxVarintLen64, "varint bytes")
+		default:
+			return 0, fmt.Errorf("unsupported int64 encoding %d", encoding)
+		}
+	case ColumnTypeLowCardinalityCode:
+		if encoding != EncodingLowCardinalityUint32 {
+			return 0, fmt.Errorf("unsupported low-cardinality encoding %d", encoding)
+		}
+		if cardinality == 0 || cardinality > maxCodeCardinality {
+			return 0, fmt.Errorf("invalid low-cardinality cardinality %d", cardinality)
+		}
+		codeBytes, err := checkedMulInt(rows, 4, "low-cardinality code bytes")
+		if err != nil {
+			return 0, err
+		}
+		return checkedAddInt(1+binary.MaxVarintLen64, codeBytes, "low-cardinality raw bytes")
+	case ColumnTypeBool:
+		if encoding != EncodingBoolBitpackRLE {
+			return 0, fmt.Errorf("unsupported bool encoding %d", encoding)
+		}
+		rleBytes, err := checkedMulInt(rows, binary.MaxVarintLen64, "bool rle bytes")
+		if err != nil {
+			return 0, err
+		}
+		return checkedAddInt(2, rleBytes, "bool raw bytes")
+	default:
+		return 0, fmt.Errorf("unsupported column type %s", columnType)
+	}
+}
+
+func checkedMulInt(a int, b int, field string) (int, error) {
+	if a < 0 || b < 0 {
+		return 0, fmt.Errorf("%s has negative operand %d*%d", field, a, b)
+	}
+	if b != 0 && a > int(^uint(0)>>1)/b {
+		return 0, fmt.Errorf("%s overflow %d*%d", field, a, b)
+	}
+	return a * b, nil
+}
+
+func checkedAddInt(a int, b int, field string) (int, error) {
+	if a < 0 || b < 0 {
+		return 0, fmt.Errorf("%s has negative operand %d+%d", field, a, b)
+	}
+	if a > int(^uint(0)>>1)-b {
+		return 0, fmt.Errorf("%s overflow %d+%d", field, a, b)
+	}
+	return a + b, nil
 }
 
 func decodeGranuleDescriptor(dec *columnPartImageDecoder) (GranuleDescriptor, error) {
