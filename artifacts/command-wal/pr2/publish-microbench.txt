@@ -1,0 +1,18 @@
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/db
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkCommandWALPublishAppliedLSN-12    	  243082	       926.5 ns/op	     160 B/op	       4 allocs/op
+BenchmarkCommandWALPublishAppliedLSN-12    	  265682	       948.9 ns/op	     160 B/op	       4 allocs/op
+BenchmarkCommandWALPublishAppliedLSN-12    	  263440	       995.0 ns/op	     160 B/op	       4 allocs/op
+BenchmarkCommandWALPublishAppliedLSN-12    	  264061	       900.0 ns/op	     160 B/op	       4 allocs/op
+BenchmarkCommandWALPublishAppliedLSN-12    	  283206	       884.6 ns/op	     160 B/op	       4 allocs/op
+BenchmarkCommandWALPublishAppliedLSN-12    	  277647	       893.0 ns/op	     160 B/op	       4 allocs/op
+BenchmarkFinalizeCommitSameRoots-12        	  274440	       937.5 ns/op	     160 B/op	       4 allocs/op
+BenchmarkFinalizeCommitSameRoots-12        	  281803	       861.8 ns/op	     160 B/op	       4 allocs/op
+BenchmarkFinalizeCommitSameRoots-12        	  284403	       868.4 ns/op	     160 B/op	       4 allocs/op
+BenchmarkFinalizeCommitSameRoots-12        	  283026	       866.4 ns/op	     160 B/op	       4 allocs/op
+BenchmarkFinalizeCommitSameRoots-12        	  288510	       872.6 ns/op	     160 B/op	       4 allocs/op
+BenchmarkFinalizeCommitSameRoots-12        	  248852	       861.8 ns/op	     160 B/op	       4 allocs/op
+PASS
+ok  	github.com/snissn/gomap/TreeDB/db	3.189s

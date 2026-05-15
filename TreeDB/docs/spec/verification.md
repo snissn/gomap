@@ -259,16 +259,21 @@ PR 1: typed commit-log frames and feature gate:
 
 PR 2: shared journal ownership and `AppliedCommandLSN` plumbing:
 
+- `TestCommandJournalAllocatesContiguousLSNs`;
+- `TestCommandJournalRejectsIndependentMutableOwner`;
+- `TestCommandJournalUsesCommitSegmentFamily`;
+- `TestCommandJournalValidationFailureDoesNotConsumeLSN`;
+- `TestMetaPageBodyAppliedCommandLSNRoundTrip`;
+- `TestMetaPageBodyLegacyDecodeDefaultsAppliedCommandLSN`;
 - `TestCommandWALAppliedCommandLSNMetaFieldRoundTrip`;
-- `TestCommandWALMetaGateRejectsOldBinaryServingCommandWALDir`;
+- `TestCommandWALAppliedCommandLSNAlternatingMetaPages`;
 - `TestCommandWALRootsAndAppliedCommandLSNPublishAtomically`;
 - `TestCommandWALPublishHelperRejectsRootsWithoutAppliedLSN`;
 - `TestCommandWALAppliedLSNContiguousPrefixOnly`;
-- `TestCommandWALCheckpointCleansOnlyCoveredSegments`;
-- `TestCommandWALCheckpointCrashBeforeCleanupReplaysIdempotently`;
-- `TestCommandWALCleanupManifestMissingBlocksSegmentDeletion`;
+- `TestCommandWALCheckpointCleanupDeletesOnlyCoveredSegments`;
 - `TestCommandWALReadOnlyOpenWithUnappliedFrameFailsRecoveryRequired`;
-- `TestCommandWALExistingCheckpointCleanupTestsMappedToAppliedLSN`.
+- `TestCommandWALReadOnlyOpenAllowsFramesCoveredByAppliedLSN`;
+- `TestCommandWALBackupManifestShapeIncludesAppliedLSNAndRanges`.
 
 PR 3: recovery dispatcher and raw KV command conversion:
 

@@ -540,6 +540,7 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) error
 			CommitSeq:                  nextMeta.CommitSeq,
 			RootPageID:                 nextMeta.UserRootPageID,
 			SystemRootPageID:           nextMeta.SystemRootPageID,
+			AppliedCommandLSN:          nextMeta.AppliedCommandLSN,
 			ValueLogSet:                valueLogSet,
 			LeafGenerations:            oldState.LeafGenerations,
 			LeafGenerationStateVersion: oldState.LeafGenerationStateVersion,

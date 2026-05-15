@@ -17,6 +17,9 @@ func openReadOnly(opts Options) (*DB, error) {
 	if _, err := resolveLeafPageReadCacheEntries(opts.LeafPageReadCacheEntries); err != nil {
 		return nil, err
 	}
+	if opts.ChunkSize == 0 {
+		opts.ChunkSize = defaultChunkSize
+	}
 	if err := ensureNoLegacyMixedWALValueSegments(opts.Dir); err != nil {
 		return nil, err
 	}
@@ -128,6 +131,10 @@ func openReadOnly(opts Options) (*DB, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	if err := requireNoUnappliedCommandWALForReadOnly(opts.Dir, db.meta.AppliedCommandLSN, opts.WALMaxSegmentBytes); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	if opts.IndexOuterLeavesInValueLog {
 		manifest, err := loadOrCreateLeafGenerationManifest(layout.leafVLogDir, db.meta.CommitSeq, true)
 		if err != nil {
@@ -141,6 +148,7 @@ func openReadOnly(opts Options) (*DB, error) {
 		CommitSeq:                  db.meta.CommitSeq,
 		RootPageID:                 db.meta.UserRootPageID,
 		SystemRootPageID:           db.meta.SystemRootPageID,
+		AppliedCommandLSN:          db.meta.AppliedCommandLSN,
 		ValueLogSet:                vm.CurrentSet(),
 		LeafGenerations:            db.currentLeafGenerationView(),
 		LeafGenerationStateVersion: db.leafGenerationStateVersion,
@@ -155,6 +163,9 @@ func openReadOnly(opts Options) (*DB, error) {
 func openReadOnlyNoLock(opts Options) (*DB, error) {
 	if _, err := resolveLeafPageReadCacheEntries(opts.LeafPageReadCacheEntries); err != nil {
 		return nil, err
+	}
+	if opts.ChunkSize == 0 {
+		opts.ChunkSize = defaultChunkSize
 	}
 	if err := ensureNoLegacyMixedWALValueSegments(opts.Dir); err != nil {
 		return nil, err
@@ -253,6 +264,10 @@ func openReadOnlyNoLock(opts Options) (*DB, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	if err := requireNoUnappliedCommandWALForReadOnly(opts.Dir, db.meta.AppliedCommandLSN, opts.WALMaxSegmentBytes); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	if opts.IndexOuterLeavesInValueLog {
 		manifest, err := loadOrCreateLeafGenerationManifest(layout.leafVLogDir, db.meta.CommitSeq, true)
 		if err != nil {
@@ -266,6 +281,7 @@ func openReadOnlyNoLock(opts Options) (*DB, error) {
 		CommitSeq:                  db.meta.CommitSeq,
 		RootPageID:                 db.meta.UserRootPageID,
 		SystemRootPageID:           db.meta.SystemRootPageID,
+		AppliedCommandLSN:          db.meta.AppliedCommandLSN,
 		ValueLogSet:                vm.CurrentSet(),
 		LeafGenerations:            db.currentLeafGenerationView(),
 		LeafGenerationStateVersion: db.leafGenerationStateVersion,

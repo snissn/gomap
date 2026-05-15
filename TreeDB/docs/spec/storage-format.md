@@ -115,8 +115,9 @@ Rules:
 - `format.json` must use version 3 or newer when `required_features` contains
   `command_wal_v1`; putting required features in version 2 is invalid because
   older binaries would ignore unknown JSON fields and fail open.
-- PR2 must add golden meta-page fixtures covering both alternating meta pages,
-  old/new tuple selection, and checksum validation over the extended body.
+- PR2 must add meta-page tests covering `AppliedCommandLSN` encode/decode,
+  alternating meta pages, old/new tuple selection, and checksum validation over
+  the extended body.
 
 ## 3.2 Collection Document Payloads
 

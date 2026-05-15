@@ -794,6 +794,20 @@ Acceptance:
 - typed command frames with `LSN <= AppliedLSN` are skipped during recovery;
 - read-only open fails when mutating recovery would be required.
 
+Implementation evidence expected for this milestone:
+
+- the cached write path and command journal service acquire the same mutable
+  journal-owner lock before opening commit-log writers;
+- the command journal service assigns contiguous LSNs before typed frame append;
+- `AppliedCommandLSN` is stored in the alternating meta page body and published
+  with roots through a dedicated command-WAL publish helper;
+- read-only opens scan typed command frames and return `ErrRecoveryRequired`
+  when any complete frame has `LSN > AppliedCommandLSN`;
+- cleanup removes only non-active typed command WAL segments whose max complete
+  LSN is covered by durable `AppliedCommandLSN`;
+- benchmark evidence records shared journal allocation/append overhead and
+  root/meta publication overhead with `AppliedCommandLSN`.
+
 ### PR 3: Recovery dispatcher and raw KV command conversion
 
 Deliverables:

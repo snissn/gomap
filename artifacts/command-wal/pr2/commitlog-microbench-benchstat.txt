@@ -1,0 +1,41 @@
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/internal/commitlog
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+                                                   │ artifacts/command-wal/pr2/commitlog-microbench.txt │
+                                                   │                       sec/op                       │
+WriterAppendCommandRawKVBatch/ops_1_value_64-12                                            272.3n ±  5%
+WriterAppendCommandRawKVBatch/ops_16_value_64-12                                           1.533µ ±  7%
+WriterAppendCommandRawKVBatch/ops_128_value_64-12                                          11.78µ ±  4%
+WriterAppendCommandRawKVBatch/ops_16_value_1024-12                                         17.51µ ± 15%
+CommandJournalAllocateAndAppendRawKVBatch-12                                               260.8n ± 11%
+geomean                                                                                    1.863µ
+
+                                                   │ artifacts/command-wal/pr2/commitlog-microbench.txt │
+                                                   │                        B/s                         │
+WriterAppendCommandRawKVBatch/ops_1_value_64-12                                           675.9Mi ±  5%
+WriterAppendCommandRawKVBatch/ops_16_value_64-12                                          894.9Mi ±  7%
+WriterAppendCommandRawKVBatch/ops_128_value_64-12                                         868.7Mi ±  4%
+WriterAppendCommandRawKVBatch/ops_16_value_1024-12                                        915.4Mi ± 13%
+CommandJournalAllocateAndAppendRawKVBatch-12                                              128.1Mi ± 10%
+geomean                                                                                   572.7Mi
+
+                                                   │ artifacts/command-wal/pr2/commitlog-microbench.txt │
+                                                   │                        B/op                        │
+WriterAppendCommandRawKVBatch/ops_1_value_64-12                                            0.000 ± 0%
+WriterAppendCommandRawKVBatch/ops_16_value_64-12                                           0.000 ± 0%
+WriterAppendCommandRawKVBatch/ops_128_value_64-12                                          0.000 ± 0%
+WriterAppendCommandRawKVBatch/ops_16_value_1024-12                                         0.000 ± 0%
+CommandJournalAllocateAndAppendRawKVBatch-12                                               0.000 ± 0%
+geomean                                                                                               ¹
+¹ summaries must be >0 to compute geomean
+
+                                                   │ artifacts/command-wal/pr2/commitlog-microbench.txt │
+                                                   │                     allocs/op                      │
+WriterAppendCommandRawKVBatch/ops_1_value_64-12                                            0.000 ± 0%
+WriterAppendCommandRawKVBatch/ops_16_value_64-12                                           0.000 ± 0%
+WriterAppendCommandRawKVBatch/ops_128_value_64-12                                          0.000 ± 0%
+WriterAppendCommandRawKVBatch/ops_16_value_1024-12                                         0.000 ± 0%
+CommandJournalAllocateAndAppendRawKVBatch-12                                               0.000 ± 0%
+geomean                                                                                               ¹
+¹ summaries must be >0 to compute geomean

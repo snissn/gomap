@@ -6476,6 +6476,7 @@ type DB struct {
 	bpCond      *sync.Cond
 
 	// Commit workers removed; backend commits are synchronous.
+	journalOwner *commitlog.JournalOwner
 
 	checkpointMu      sync.Mutex
 	checkpointCond    *sync.Cond
@@ -9569,6 +9570,15 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	// never receive values. Value-log appends allocate the current lane segment
 	// on first write instead.
 	if !db.disableJournal {
+		owner, err := commitlog.AcquireJournalOwner(walDir)
+		if err != nil {
+			if db.valueLogReader != nil {
+				_ = db.valueLogReader.Close()
+				db.valueLogReader = nil
+			}
+			return nil, err
+		}
+		db.journalOwner = owner
 		for i := range db.lanes {
 			if err := db.rotateWALLocked(&db.lanes[i]); err != nil {
 				if db.valueLogReader != nil {
@@ -9578,6 +9588,8 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 				for j := 0; j <= i && j < len(db.lanes); j++ {
 					db.cleanupLaneWALWriters(&db.lanes[j])
 				}
+				_ = db.journalOwner.Close()
+				db.journalOwner = nil
 				return nil, err
 			}
 		}
@@ -19872,6 +19884,12 @@ func (db *DB) Close() error {
 	}
 	if removed {
 		db.syncDirBestEffort(db.dir)
+	}
+	if db.journalOwner != nil {
+		if err := db.journalOwner.Close(); err != nil {
+			errs = append(errs, err)
+		}
+		db.journalOwner = nil
 	}
 
 	db.waitForRetainedValueLogPrune()
