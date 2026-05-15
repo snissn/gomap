@@ -713,6 +713,36 @@ func ScanCommandFrames(path string, opts Options) ([]CommandEnvelope, error) {
 	}
 }
 
+func scanCommandFrameMaxLSN(path string, opts Options) (maxLSN uint64, typed bool, err error) {
+	r, err := NewReaderWithOptions(path, opts)
+	if err != nil {
+		return 0, false, err
+	}
+	defer r.Close()
+
+	var lastLSN uint64
+	for {
+		env, err := r.ReadCommandFrame()
+		if err != nil {
+			if errorsIsEOFOrTail(err) {
+				return maxLSN, typed, nil
+			}
+			if err == ErrCommandWALLegacyPayload && !typed {
+				return 0, false, nil
+			}
+			return 0, typed, err
+		}
+		if lastLSN != 0 && env.LSN <= lastLSN {
+			return 0, true, ErrCommandWALDuplicateLSN
+		}
+		lastLSN = env.LSN
+		typed = true
+		if env.LSN > maxLSN {
+			maxLSN = env.LSN
+		}
+	}
+}
+
 func errorsIsEOFOrTail(err error) bool {
 	return err == io.EOF || err == ErrCommandWALTerminalTail
 }

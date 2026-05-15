@@ -161,6 +161,9 @@ func hasUnappliedCommandWALFrames(dir string, appliedLSN uint64, maxSegmentBytes
 }
 
 func commandWALSegmentMaxLSN(path string, maxSegmentBytes int64) (maxLSN uint64, typed bool, err error) {
+	// PR2 has no durable per-segment max-LSN catalog yet, so open/cleanup paths
+	// derive classification by streaming the segment without retaining payloads.
+	// A later cleanup manifest can cache this once command replay lands.
 	r, err := commitlog.NewReaderWithOptions(path, commitlog.Options{MaxSegmentSize: maxSegmentBytes})
 	if err != nil {
 		return 0, false, err
@@ -171,7 +174,7 @@ func commandWALSegmentMaxLSN(path string, maxSegmentBytes int64) (maxLSN uint64,
 	for {
 		frame, err := r.ReadCommandFrame()
 		if err != nil {
-			if err == io.EOF || errors.Is(err, commitlog.ErrCommandWALTerminalTail) {
+			if errors.Is(err, io.EOF) || errors.Is(err, commitlog.ErrCommandWALTerminalTail) {
 				return maxLSN, typed, nil
 			}
 			if errors.Is(err, commitlog.ErrCommandWALLegacyPayload) && !typed {
@@ -275,6 +278,9 @@ type commandWALBackupManifest struct {
 	CleanedWALRanges  []commandWALBackupWALRange `json:"cleaned_wal_ranges,omitempty"`
 }
 
+// commandWALBackupWALRange is PR2 scaffolding for the PR3/backup integration
+// manifest; PR2 keeps the JSON shape tested so later code does not drift from
+// the documented applied-LSN and WAL-range contract.
 type commandWALBackupWALRange struct {
 	Lane     int    `json:"lane"`
 	Segment  uint64 `json:"segment"`

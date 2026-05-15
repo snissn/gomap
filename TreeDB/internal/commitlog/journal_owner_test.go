@@ -54,6 +54,45 @@ func TestCommandJournalAllocatesContiguousLSNs(t *testing.T) {
 	}
 }
 
+func TestCommandJournalSeedsLSNFromExistingFrames(t *testing.T) {
+	dir := t.TempDir()
+	j, err := OpenCommandJournal(dir, CommandJournalOptions{})
+	if err != nil {
+		t.Fatalf("OpenCommandJournal first: %v", err)
+	}
+	lsn, err := j.AppendCommand(CommandEnvelope{
+		Kind:          CommandKindRawKVBatch,
+		Scope:         CommandScopeRawKV,
+		PayloadFormat: PayloadFormatRawKVBatchV1,
+	})
+	if err != nil {
+		t.Fatalf("AppendCommand first: %v", err)
+	}
+	if lsn != 1 {
+		t.Fatalf("first LSN=%d, want 1", lsn)
+	}
+	if err := j.Close(); err != nil {
+		t.Fatalf("Close first: %v", err)
+	}
+
+	reopen, err := OpenCommandJournal(dir, CommandJournalOptions{})
+	if err != nil {
+		t.Fatalf("OpenCommandJournal reopen: %v", err)
+	}
+	defer reopen.Close()
+	lsn, err = reopen.AppendCommand(CommandEnvelope{
+		Kind:          CommandKindRawKVBatch,
+		Scope:         CommandScopeRawKV,
+		PayloadFormat: PayloadFormatRawKVBatchV1,
+	})
+	if err != nil {
+		t.Fatalf("AppendCommand after reopen: %v", err)
+	}
+	if lsn != 2 {
+		t.Fatalf("reopened LSN=%d, want 2", lsn)
+	}
+}
+
 func TestCommandJournalConcurrentAppendsSerializeFrameOrder(t *testing.T) {
 	j, err := OpenCommandJournal(t.TempDir(), CommandJournalOptions{})
 	if err != nil {
@@ -110,6 +149,35 @@ func TestCommandJournalRejectsIndependentMutableOwner(t *testing.T) {
 	_, err = OpenCommandJournal(dir, CommandJournalOptions{})
 	if !errors.Is(err, ErrJournalOwnerExists) {
 		t.Fatalf("OpenCommandJournal second error=%v, want ErrJournalOwnerExists", err)
+	}
+}
+
+func TestJournalOwnerRollbackMaxLSNClearsExhausted(t *testing.T) {
+	owner, err := AcquireJournalOwnerWithOptions(t.TempDir(), JournalOwnerOptions{InitialLSN: ^uint64(0) - 1})
+	if err != nil {
+		t.Fatalf("AcquireJournalOwnerWithOptions: %v", err)
+	}
+	defer owner.Close()
+
+	lsn, err := owner.ReserveLSN()
+	if err != nil {
+		t.Fatalf("ReserveLSN max: %v", err)
+	}
+	if lsn != ^uint64(0) {
+		t.Fatalf("LSN=%d, want max uint64", lsn)
+	}
+	if _, err := owner.ReserveLSN(); err == nil {
+		t.Fatalf("ReserveLSN after exhaustion unexpectedly succeeded")
+	}
+	if err := owner.rollbackReservedLSN(lsn); err != nil {
+		t.Fatalf("rollbackReservedLSN max: %v", err)
+	}
+	lsn, err = owner.ReserveLSN()
+	if err != nil {
+		t.Fatalf("ReserveLSN after rollback: %v", err)
+	}
+	if lsn != ^uint64(0) {
+		t.Fatalf("LSN after rollback=%d, want max uint64", lsn)
 	}
 }
 

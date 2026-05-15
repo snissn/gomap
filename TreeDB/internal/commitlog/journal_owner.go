@@ -11,9 +11,10 @@ import (
 )
 
 type JournalOwner struct {
-	lock    *lockfile.Lock
-	mu      sync.Mutex
-	nextLSN uint64
+	lock      *lockfile.Lock
+	mu        sync.Mutex
+	nextLSN   uint64
+	exhausted bool
 }
 
 func AcquireJournalOwner(dir string) (*JournalOwner, error) {
@@ -61,7 +62,15 @@ func (o *JournalOwner) rollbackReservedLSN(lsn uint64) error {
 	}
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	if o.nextLSN != lsn+1 {
+	if lsn == ^uint64(0) {
+		if !o.exhausted {
+			return fmt.Errorf("commitlog: cannot rollback non-tail lsn %d", lsn)
+		}
+		o.exhausted = false
+		o.nextLSN = lsn
+		return nil
+	}
+	if o.exhausted || o.nextLSN != lsn+1 {
 		return fmt.Errorf("commitlog: cannot rollback non-tail lsn %d", lsn)
 	}
 	o.nextLSN = lsn
@@ -77,13 +86,16 @@ func (o *JournalOwner) ReserveLSNRange(count uint64) (first uint64, last uint64,
 	}
 	o.mu.Lock()
 	defer o.mu.Unlock()
+	if o.exhausted {
+		return 0, 0, errors.New("commitlog: journal owner lsn space exhausted")
+	}
 	first = o.nextLSN
 	if first == 0 || count-1 > ^uint64(0)-first {
 		return 0, 0, errors.New("commitlog: journal owner lsn space exhausted")
 	}
 	last = first + count - 1
 	if last == ^uint64(0) {
-		o.nextLSN = 0
+		o.exhausted = true
 	} else {
 		o.nextLSN = last + 1
 	}
@@ -128,11 +140,15 @@ func OpenCommandJournal(walDir string, opts CommandJournalOptions) (*CommandJour
 	if opts.SegmentSeq == 0 {
 		opts.SegmentSeq = 1
 	}
-	owner, err := AcquireJournalOwnerWithOptions(walDir, JournalOwnerOptions{InitialLSN: opts.InitialLSN})
+	path := filepath.Join(walDir, CommandSegmentName(opts.Lane, opts.SegmentSeq))
+	initialLSN, err := commandJournalInitialLSN(path, opts)
 	if err != nil {
 		return nil, err
 	}
-	path := filepath.Join(walDir, CommandSegmentName(opts.Lane, opts.SegmentSeq))
+	owner, err := AcquireJournalOwnerWithOptions(walDir, JournalOwnerOptions{InitialLSN: initialLSN})
+	if err != nil {
+		return nil, err
+	}
 	writer, err := NewWriterWithOptions(path, Options{MaxSegmentSize: opts.MaxSegmentSize, Compress: opts.Compress})
 	if err != nil {
 		_ = owner.Close()
@@ -145,6 +161,36 @@ func OpenCommandJournal(walDir string, opts CommandJournalOptions) (*CommandJour
 	}, nil
 }
 
+func commandJournalInitialLSN(path string, opts CommandJournalOptions) (uint64, error) {
+	initialLSN := opts.InitialLSN
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return initialLSN, nil
+		}
+		return 0, err
+	}
+	if info.Size() == 0 {
+		return initialLSN, nil
+	}
+	maxLSN, typed, err := scanCommandFrameMaxLSN(path, Options{MaxSegmentSize: opts.MaxSegmentSize})
+	if err != nil {
+		return 0, err
+	}
+	if !typed {
+		return 0, ErrCommandWALLegacyPayload
+	}
+	if maxLSN > initialLSN {
+		initialLSN = maxLSN
+	}
+	return initialLSN, nil
+}
+
+// AppendCommand validates a complete command frame, assigns the next journal
+// LSN, and appends it while holding the journal mutex. The owner mutex still
+// protects direct JournalOwner users, but CommandJournal requires tail-only
+// rollback: no other owner reservation may occur between this reserve and a
+// failed append rollback.
 func (j *CommandJournal) AppendCommand(env CommandEnvelope) (uint64, error) {
 	if j == nil {
 		return 0, errors.New("commitlog: command journal is closed")
@@ -160,6 +206,8 @@ func (j *CommandJournal) AppendCommand(env CommandEnvelope) (uint64, error) {
 	probe := env
 	probe.LSN = 1
 	if probe.Kind == CommandKindRawKVBatch && probe.Payload == nil {
+		// Nil RawKVBatch payloads are accepted as an explicit empty batch so
+		// callers can append a no-op frame without constructing payload bytes.
 		payload, err := EncodeRawKVBatchPayload(nil)
 		if err != nil {
 			return 0, err
@@ -174,6 +222,9 @@ func (j *CommandJournal) AppendCommand(env CommandEnvelope) (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
+	// maxSegmentSize is the per-frame safety cap used by Writer.AppendCommand;
+	// segment-file rotation is caller-owned and not based on remaining bytes in
+	// the current file.
 	if j.writer.maxSegmentSize > 0 && int64(size) > j.writer.maxSegmentSize {
 		return 0, ErrRecordTooLarge
 	}

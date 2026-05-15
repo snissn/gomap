@@ -173,7 +173,7 @@ func TestCommandWALReadOnlyOpenWithUnappliedFrameFailsRecoveryRequired(t *testin
 	if !errors.Is(err, ErrRecoveryRequired) {
 		t.Fatalf("Open read-only error=%v, want ErrRecoveryRequired", err)
 	}
-	_, err = openReadOnlyNoLock(Options{Dir: dir, ReadOnly: true, ChunkSize: defaultChunkSize})
+	_, err = openReadOnlyNoLock(Options{Dir: dir, ReadOnly: true})
 	if !errors.Is(err, ErrRecoveryRequired) {
 		t.Fatalf("openReadOnlyNoLock error=%v, want ErrRecoveryRequired", err)
 	}

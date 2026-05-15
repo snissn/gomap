@@ -16,8 +16,10 @@
   ],
   "passed_tests": [
     "TestCommandJournalAllocatesContiguousLSNs",
+    "TestCommandJournalSeedsLSNFromExistingFrames",
     "TestCommandJournalConcurrentAppendsSerializeFrameOrder",
     "TestCommandJournalRejectsIndependentMutableOwner",
+    "TestJournalOwnerRollbackMaxLSNClearsExhausted",
     "TestCommandJournalUsesCommitSegmentFamily",
     "TestCommandJournalRejectsCallerAssignedLSN",
     "TestCommandJournalValidationFailureDoesNotConsumeLSN",
