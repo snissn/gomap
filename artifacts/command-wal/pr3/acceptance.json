@@ -3,7 +3,7 @@
   "milestone": "PR3 recovery dispatcher and raw KV command conversion",
   "branch": "codex/user-command-wal-pr3",
   "base_branch": "codex/user-command-wal-pr2",
-  "base_commit": "6d52f96c530a06c1abd9a84ebfd913deb1404636",
+  "base_commit": "f54957ef9ad603a9bfae341f6e6d7d1f691c9596",
   "implementation_commit": "PR head",
   "go_version": "go1.25.7 linux/amd64",
   "platform": "linux/amd64",
@@ -89,9 +89,9 @@
     "artifacts/command-wal/pr3/raw-kv-direct-write-benchstat.txt"
   ],
   "benchmark_summary": {
-    "backend_no_command_wal": "8.371 us/op +/- 13%, 6.489 KiB/op +/- 10%, 17 allocs/op",
-    "command_wal_raw_kv": "7.920 us/op +/- 9%, 6.556 KiB/op +/- 0%, 19 allocs/op",
-    "interpretation": "single-key direct backend command-WAL write is throughput-neutral in this smoke benchmark; command-WAL mode adds two allocations for payload/frame bookkeeping on top of current backend batch cost"
+    "backend_no_command_wal": "6.585 us/op +/- 22%, 6.398 KiB/op +/- 10%, 18 allocs/op",
+    "command_wal_raw_kv": "6.581 us/op +/- 9%, 6.488 KiB/op +/- 0%, 21 allocs/op",
+    "interpretation": "single-key direct backend command-WAL write is throughput-neutral in this smoke benchmark with background prune disabled; command-WAL mode adds three allocations for payload/frame bookkeeping and command publish coverage on top of current backend batch cost"
   },
   "cleanup_debt": "covered typed command WAL segments are cleaned through cleanupCommandWALSegmentsCoveredByAppliedLSN after recovery; active covered segment retention remains intentional",
   "oldest_unapplied_lsn": null,

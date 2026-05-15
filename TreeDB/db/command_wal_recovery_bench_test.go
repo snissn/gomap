@@ -12,7 +12,7 @@ func BenchmarkCommandWALRawKVDirectWrite(b *testing.B) {
 	} {
 		b.Run(tc.name, func(b *testing.B) {
 			dir := b.TempDir()
-			db, err := Open(Options{Dir: dir, CommandWAL: tc.commandWAL})
+			db, err := Open(Options{Dir: dir, CommandWAL: tc.commandWAL, DisableBackgroundPrune: true})
 			if err != nil {
 				b.Fatalf("Open: %v", err)
 			}

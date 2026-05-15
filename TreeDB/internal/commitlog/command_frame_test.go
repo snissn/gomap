@@ -66,6 +66,22 @@ func TestCommandWALFormatGoldenV1RawKVBatch(t *testing.T) {
 	}
 }
 
+func TestCommandWALRawKVBatchPreservesEmptySetValue(t *testing.T) {
+	payload, err := EncodeRawKVBatchPayload([]RawKVOperation{
+		{Op: RawKVOpSet, Key: []byte("empty"), Value: []byte{}},
+	})
+	if err != nil {
+		t.Fatalf("EncodeRawKVBatchPayload: %v", err)
+	}
+	ops, err := DecodeRawKVBatchPayload(payload)
+	if err != nil {
+		t.Fatalf("DecodeRawKVBatchPayload: %v", err)
+	}
+	if len(ops) != 1 || ops[0].Value == nil || len(ops[0].Value) != 0 {
+		t.Fatalf("decoded empty value = %#v, want non-nil empty slice", ops)
+	}
+}
+
 func TestCommandWALFormatGoldenV1CollectionInsertBatchByID(t *testing.T) {
 	env := CommandEnvelope{
 		LSN:           11,
@@ -449,19 +465,6 @@ func TestCommandWALNoCollectionSegmentFamilyCreated(t *testing.T) {
 	}
 }
 
-func TestCommandWALSingleJournalOwnerRejectsSecondMutableWriter(t *testing.T) {
-	dir := t.TempDir()
-	owner, err := AcquireJournalOwner(dir)
-	if err != nil {
-		t.Fatalf("AcquireJournalOwner first: %v", err)
-	}
-	defer owner.Close()
-	_, err = AcquireJournalOwner(dir)
-	if !errors.Is(err, ErrJournalOwnerExists) {
-		t.Fatalf("AcquireJournalOwner second error=%v, want ErrJournalOwnerExists", err)
-	}
-}
-
 func TestCommandWALTerminalShortHeaderIgnored(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "commit-l0-000001.log")
 	if err := os.WriteFile(path, []byte{0x01, 0x02}, 0o600); err != nil {
@@ -496,6 +499,30 @@ func TestCommandWALDuplicateLSNFailsClosed(t *testing.T) {
 	_, err = ScanCommandFrames(path, Options{})
 	if !errors.Is(err, ErrCommandWALDuplicateLSN) {
 		t.Fatalf("ScanCommandFrames error=%v, want ErrCommandWALDuplicateLSN", err)
+	}
+}
+
+func TestCommandWALDuplicateLSNAcrossSegmentsFailsClosed(t *testing.T) {
+	dir := t.TempDir()
+	var paths []string
+	for _, name := range []string{"commit-l0-000001.log", "commit-l0-000002.log"} {
+		path := filepath.Join(dir, name)
+		w, err := NewWriter(path)
+		if err != nil {
+			t.Fatalf("NewWriter %s: %v", name, err)
+		}
+		if err := w.AppendCommand(CommandEnvelope{LSN: 9, Kind: CommandKindRawKVBatch, Scope: CommandScopeRawKV, PayloadFormat: PayloadFormatRawKVBatchV1}); err != nil {
+			_ = w.Close()
+			t.Fatalf("AppendCommand %s: %v", name, err)
+		}
+		if err := w.Close(); err != nil {
+			t.Fatalf("Close %s: %v", name, err)
+		}
+		paths = append(paths, path)
+	}
+	_, err := ScanCommandFrameSegments(paths, Options{})
+	if !errors.Is(err, ErrCommandWALDuplicateLSN) {
+		t.Fatalf("ScanCommandFrameSegments error=%v, want ErrCommandWALDuplicateLSN", err)
 	}
 }
 

@@ -3,7 +3,7 @@
   "milestone": "PR2 shared journal ownership and AppliedCommandLSN plumbing",
   "branch": "codex/user-command-wal-pr2",
   "base_branch": "codex/user-command-wal-pr1",
-  "base_commit": "4a86c25b26d6b5887c2f67c28b85001e46ca9cb7",
+  "base_commit": "59501840819bcae05de865d29dd100caf28508db",
   "go_version": "go1.25.7 linux/amd64",
   "platform": "linux/amd64",
   "durability_mode": "command WAL execution remains format-gated; PR2 adds shared journal ownership, AppliedCommandLSN meta publication, read-only debt detection, and cleanup proof helpers",
@@ -95,7 +95,7 @@
     "journal_owner_append_allocs_per_op": "0 allocs/op for shared journal LSN allocation plus RawKVBatch append",
     "command_frame_writer_allocs_per_op": "0 allocs/op across measured RawKVBatch shapes",
     "applied_lsn_publish_allocs_per_op": "same 4 allocs/op and 160 B/op as baseline finalizeCommitSameRoots when caller supplies reusable coverage storage",
-    "applied_lsn_publish_latency": "913 ns/op median-ish benchstat center versus 867 ns/op for baseline finalizeCommitSameRoots in this smoke run",
+    "applied_lsn_publish_latency": "899.7 ns/op benchstat center versus 861.6 ns/op for baseline finalizeCommitSameRoots in this smoke run",
     "normal_write_path_scans": "publish helper does not scan WAL, value-log, or root inventory; cleanup proof is a separate helper"
   },
   "local_validation_commands": [

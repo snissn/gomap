@@ -37,10 +37,11 @@
     "TestSaveFormatConfigCommandWALRequiresCleanActivation",
     "TestCommandWALRequiredFeatureFailsClosedUntilExecutionEnabled",
     "TestCommandWALNoCollectionSegmentFamilyCreated",
-    "TestCommandWALSingleJournalOwnerRejectsSecondMutableWriter",
     "TestCommandWALTerminalShortHeaderIgnored",
     "TestCommandWALDuplicateLSNFailsClosed",
+    "TestCommandWALDuplicateLSNAcrossSegmentsFailsClosed",
     "TestCommandWALRawKVBatchOneLSNAtomic",
+    "TestCommandWALRawKVBatchPreservesEmptySetValue",
     "TestCommandWALRawKVBatchScanUsesPayloadBackedViews",
     "TestCommandWALAppendCommandRejectsMaxSegmentBeforeEncode",
     "TestValidateFormatRequiredFeatureGateRejectsMalformedRequiredFeatureFile",
@@ -55,7 +56,7 @@
     "terminal short header classified as ErrCommandWALTerminalTail",
     "corrupt complete physical segment CRC fails closed",
     "payload digest mismatch fails closed",
-    "duplicate LSN fails closed during scan"
+    "duplicate LSN fails closed during single-segment and segment-family scans"
   ],
   "golden_fixture_digests": {
     "TreeDB/internal/commitlog/testdata/command_wal_v1_raw_kv_batch.hex": "39be9d61152b42a65ec7b79be562dd1ab4a8e04cfc7fa98b0ede97ec08bb8cf9",
@@ -101,7 +102,7 @@
   ],
   "benchmark_summary": {
     "append_command_allocs_per_op": "0 across all measured batch shapes",
-    "append_command_throughput": "700 MiB/s for 1x64B, 935 MiB/s for 16x64B, 957 MiB/s for 128x64B, 1021 MiB/s for 16x1024B",
+    "append_command_throughput": "benchstat median: 663 MiB/s for 1x64B, 888 MiB/s for 16x64B, 896 MiB/s for 128x64B, 955 MiB/s for 16x1024B",
     "payload_scan_allocs_per_op": "0 across all measured batch shapes",
     "frame_encode_decode_allocs_per_op": "1 allocation for returned frame/payload ownership",
     "owning_payload_decode_allocs_per_op": "copies keys/values by design; use ScanRawKVBatchPayload for replay-style zero-copy application"

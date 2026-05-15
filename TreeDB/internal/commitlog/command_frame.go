@@ -420,7 +420,7 @@ func DecodeRawKVBatchPayload(payload []byte) ([]RawKVOperation, error) {
 				return nil, ErrCorrupt
 			}
 		} else {
-			entry.Value = append([]byte(nil), payload[off:off+int(valueLen)]...)
+			entry.Value = cloneBytesPreserveEmpty(payload[off : off+int(valueLen)])
 		}
 		off += int(valueLen)
 		ops = append(ops, entry)
@@ -728,12 +728,31 @@ func (r *Reader) ReadCommandFrame() (CommandEnvelope, error) {
 }
 
 func ScanCommandFrames(path string, opts Options) ([]CommandEnvelope, error) {
+	return scanCommandFrames(path, opts, nil)
+}
+
+func ScanCommandFrameSegments(paths []string, opts Options) ([]CommandEnvelope, error) {
+	seen := make(map[uint64]struct{})
+	var frames []CommandEnvelope
+	for _, path := range paths {
+		segmentFrames, err := scanCommandFrames(path, opts, seen)
+		if err != nil {
+			return frames, err
+		}
+		frames = append(frames, segmentFrames...)
+	}
+	return frames, nil
+}
+
+func scanCommandFrames(path string, opts Options, seen map[uint64]struct{}) ([]CommandEnvelope, error) {
 	r, err := NewReaderWithOptions(path, opts)
 	if err != nil {
 		return nil, err
 	}
 	defer r.Close()
-	seen := make(map[uint64]struct{})
+	if seen == nil {
+		seen = make(map[uint64]struct{})
+	}
 	var frames []CommandEnvelope
 	for {
 		env, err := r.ReadCommandFrame()
