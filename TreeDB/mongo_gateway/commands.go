@@ -3024,8 +3024,8 @@ func optionalPositiveIntFieldWithPresence(doc wire.Document, key string) (int, b
 	if out <= 0 {
 		return 0, true, fmt.Errorf("Mongo command field %q must be positive", key)
 	}
-	if out > int64(maxInt) {
-		return 0, true, fmt.Errorf("Mongo command field %q is out of int range", key)
+	if out > int64(^uint32(0)>>1) {
+		return 0, true, fmt.Errorf("Mongo command field %q is out of int32 range", key)
 	}
 	return int(out), true, nil
 }

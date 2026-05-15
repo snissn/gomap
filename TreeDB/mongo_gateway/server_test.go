@@ -2689,6 +2689,26 @@ func TestServerIndexMetadataRejectsInvalidCommands(t *testing.T) {
 		}
 	}
 
+	oversizedVectorOption := serveCommand(t, server, 23324, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{bson.D{
+			{Key: "key", Value: bson.D{{Key: "embedding", Value: "vector"}}},
+			{Key: "name", Value: "embedding_vector"},
+			{Key: "treedbIndexType", Value: "vector"},
+			{Key: "treedbVector", Value: bson.D{
+				{Key: "dimensions", Value: int64(1) << 40},
+			}},
+		}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, oversizedVectorOption, "BadValue")
+	errmsg, ok = bson.Raw(oversizedVectorOption).Lookup("errmsg").StringValueOK()
+	for _, want := range []string{"dimensions", "int32"} {
+		if !ok || !strings.Contains(errmsg, want) {
+			t.Fatalf("oversized vector option errmsg=%q ok=%v want %q", errmsg, ok, want)
+		}
+	}
+
 	conflictingDuplicate := serveCommand(t, server, 2333, bson.D{
 		{Key: "createIndexes", Value: "conflicting_dup"},
 		{Key: "indexes", Value: bson.A{
