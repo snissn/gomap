@@ -17,6 +17,8 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
+// testCommandWALRecoveryFailAfterLSN is process-global by design. Tests that
+// set it must not run in parallel with command-WAL recovery tests.
 var testCommandWALRecoveryFailAfterLSN atomic.Uint64
 
 type logSegment struct {
@@ -267,7 +269,9 @@ func replayCommandWALIntoBackend(db *DB, segments []logSegment, maxSegmentBytes 
 		}
 		defer func() { _ = inlineAppender.close() }()
 		if db.indexOuterLeavesInValueLog {
+			previousLeafPageLog := db.leafPageLog
 			db.SetLeafPageLog(inlineAppender)
+			defer db.SetLeafPageLog(previousLeafPageLog)
 		}
 	}
 	db.mu.RLock()
@@ -388,6 +392,9 @@ func commandWALRawSetNeedsReplayValueLog(db *DB, key, value []byte) bool {
 	if db != nil {
 		threshold = db.InlineThreshold()
 		if threshold > 0 {
+			// Keep this in lockstep with newBatchWithReserveHint's resolver setup
+			// so recovery pre-builds the replay appender whenever Batch.Set would
+			// require pointer placement.
 			threshold = ResolveInlineThresholdForKey(threshold, key, db.valueLogDomainThresholds)
 		}
 	}

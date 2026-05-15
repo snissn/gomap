@@ -28,6 +28,8 @@ func (db *DB) prepareRawKVCommandWALIntent(b *Batch) (*commandWALBatchIntent, er
 	if b == nil || b.batch == nil {
 		return nil, nil
 	}
+	// SortedEntries is idempotent after the first sort/compaction; later write
+	// paths reuse the sorted+compacted batch-owned slice without resorting.
 	entries := b.batch.SortedEntries()
 	if len(entries) == 0 {
 		return nil, nil

@@ -1486,6 +1486,9 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 				db.Close()
 				return nil, err
 			}
+			// Persist the required feature before returning a mutable DB. If the
+			// journal open below fails, no command frames have been acknowledged;
+			// retrying Open will re-enter command-WAL recovery from the same roots.
 			if err := SaveFormatConfig(opts.Dir, cfg); err != nil {
 				db.Close()
 				return nil, err

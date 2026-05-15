@@ -294,6 +294,11 @@ func TestValueLogReaderReadNextMeta(t *testing.T) {
 			t.Fatalf("ReadRIDAt(%+v)=%d, want %d", tc.ptr, gotRID, tc.rid)
 		}
 	}
+	badPtr := ptr3
+	badPtr.Offset = 3
+	if _, err := ReadRIDAt(f, badPtr); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("ReadRIDAt short offset error=%v, want ErrCorrupt", err)
+	}
 }
 
 func TestValueLogManager_MmapReadAppend(t *testing.T) {

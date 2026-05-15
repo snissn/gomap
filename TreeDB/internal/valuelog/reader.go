@@ -594,6 +594,8 @@ func ReadRIDAt(f *os.File, ptr page.ValuePtr) (uint64, error) {
 	if f == nil || ptr.Offset < 4 {
 		return 0, ErrCorrupt
 	}
+	// ValuePtr.Offset is stored immediately after the CRC prefix, so the first
+	// valid value-log record has Offset == 4 and starts at file position 0.
 	start := int64(ptr.Offset) - 4
 	var header [HeaderSize]byte
 	if _, err := f.ReadAt(header[:], start); err != nil {
@@ -630,6 +632,8 @@ func ReadRIDAt(f *os.File, ptr page.ValuePtr) (uint64, error) {
 	if k <= 0 || k > MaxFrameK {
 		return 0, ErrCorrupt
 	}
+	// k is bounded by MaxFrameK above, keeping this prefix length calculation
+	// small and safe on all supported platforms.
 	prefixLen := FrameHeaderSize + k*8 + (k+1)*4
 	if int(valueLen) < prefixLen {
 		return 0, ErrCorrupt

@@ -166,6 +166,10 @@ func (b *Batch) write(sync bool) error {
 }
 
 func (b *Batch) writeWithCommandWALIntent(sync bool, intent *commandWALBatchIntent) error {
+	// If a command frame is appended but root publication later returns an
+	// error, the durable frame is intentionally left for reopen recovery. Reuse
+	// the same intent across optimistic/serialized attempts so one user batch
+	// keeps one command LSN.
 	for attempt := 0; attempt < optimisticWriteMaxAttempts; attempt++ {
 		committed, err := b.writeOptimistic(sync, intent)
 		if err != nil {

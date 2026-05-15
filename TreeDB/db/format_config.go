@@ -310,19 +310,16 @@ func saveOpenFormatConfig(opts Options) error {
 	if err != nil {
 		return err
 	}
+	if opts.CommandWAL && opts.ReadOnly {
+		return nil
+	}
 	if opts.CommandWAL {
 		requiresCommandWAL, err := CommandWALRequiredFeatureEnabled(opts.Dir)
 		if err != nil {
 			return err
 		}
 		if requiresCommandWAL {
-			if opts.ReadOnly {
-				return nil
-			}
 			return writeFormatConfig(opts.Dir, cfg)
-		}
-		if opts.ReadOnly {
-			return nil
 		}
 	}
 	return SaveFormatConfig(opts.Dir, cfg)
