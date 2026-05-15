@@ -723,6 +723,9 @@ func (idx *VectorIndex) loadPersistSnapshot(snapshot vectorIndexPersistSnapshot)
 				return "edge_neighbor_missing_layer"
 			}
 		}
+		if len(edge.Distances) > len(edge.Neighbor) {
+			return "invalid_edge_distance_count"
+		}
 		neighbors := make([]vectorIndexNeighbor, len(edge.Neighbor))
 		for i, neighbor := range edge.Neighbor {
 			if neighbor < 0 || neighbor >= len(nodes) {
