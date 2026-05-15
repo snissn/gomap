@@ -169,6 +169,13 @@ func TestCommandWALCleanReopenCleansCoveredNonActiveSegmentWithNoReplayFrames(t 
 	if _, err := os.Stat(coveredPath); !os.IsNotExist(err) {
 		t.Fatalf("covered segment stat error=%v, want removed on clean reopen", err)
 	}
+	// The active covered segment (seq=2, highest seq among covered segments)
+	// must be retained so that the next open can compute commandSegmentSeq
+	// correctly and does not collide with a surviving segment.
+	activeCoveredPath := filepath.Join(WALDirPath(dir), commitlog.CommandSegmentName(0, 2))
+	if _, err := os.Stat(activeCoveredPath); err != nil {
+		t.Fatalf("active covered segment stat error=%v, want retained on clean reopen", err)
+	}
 }
 
 func TestCommandWALInlineReplayDoesNotScanValueLogRIDMap(t *testing.T) {

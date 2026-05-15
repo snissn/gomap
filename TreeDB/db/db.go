@@ -1501,6 +1501,11 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 			_ = db.Close()
 			return nil, err
 		}
+		// Re-list segments after replay: replayCommandWALIntoBackend may call
+		// cleanupCommandWALSegmentsCoveredByAppliedLSN, which deletes covered
+		// non-active segments. The refreshed list reflects surviving segments so
+		// commandSegmentSeq never collides with any retained segment, and
+		// OpenCommandJournal appends to a new segment with a strictly higher seq.
 		commandSegmentSeq := uint64(0)
 		journalSegments, err := listRecoverySegments(opts.Dir)
 		if err != nil {

@@ -191,6 +191,13 @@ func (db *DB) appendRawKVCommandWALIntent(intent *commandWALBatchIntent, sync bo
 		return 0, nil
 	}
 	if intent.lsn != 0 {
+		// The frame was already durably appended. Fail closed if poison was set
+		// after the append (e.g. by finalizeCommitLockedWithOptions failing on a
+		// subsequent attempt in the same retry loop) so we don't re-enter finalize
+		// with a stale LSN on a poisoned handle.
+		if db != nil && db.commandWALFlushPoisoned.Load() {
+			return 0, fmt.Errorf("%w: command wal post-append failure; reopen required", ErrRecoveryRequired)
+		}
 		return intent.lsn, nil
 	}
 	if db == nil || db.commandJournal == nil {
@@ -293,7 +300,8 @@ func applyRawKVCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map
 		// Production empty writes currently return before appending a frame.
 		// Empty RawKVBatch frames are still part of the replay contract so
 		// fixtures/future command kinds can explicitly advance AppliedCommandLSN
-		// without changing roots.
+		// without changing roots. This path is only reached during recovery
+		// replay; there are no concurrent writers at that point.
 		db.mu.RLock()
 		rootID := db.meta.UserRootPageID
 		sysRootID := db.meta.SystemRootPageID

@@ -165,7 +165,7 @@ func requireNoUnappliedCommandWALFrames(dir string, appliedLSN uint64, maxSegmen
 		if !isCommandWALLaneSegment(seg) {
 			continue
 		}
-		scan, err := scanCommandWALSegmentWithSeen(seg.path, maxSegmentBytes, seg.seq == activeByLane[seg.lane], seenLSNs)
+		scan, err := scanCommandWALSegmentWithSeen(seg.path, maxSegmentBytes, seg.seq == activeByLane[seg.lane], seenLSNs, appliedLSN)
 		if err != nil {
 			return err
 		}
@@ -202,10 +202,10 @@ func commandWALSegmentMaxLSN(path string, maxSegmentBytes int64, allowTerminalTa
 }
 
 func scanCommandWALSegment(path string, maxSegmentBytes int64, allowTerminalTail bool) (commandWALSegmentScanResult, error) {
-	return scanCommandWALSegmentWithSeen(path, maxSegmentBytes, allowTerminalTail, nil)
+	return scanCommandWALSegmentWithSeen(path, maxSegmentBytes, allowTerminalTail, nil, 0)
 }
 
-func scanCommandWALSegmentWithSeen(path string, maxSegmentBytes int64, allowTerminalTail bool, seenLSNs map[uint64]struct{}) (commandWALSegmentScanResult, error) {
+func scanCommandWALSegmentWithSeen(path string, maxSegmentBytes int64, allowTerminalTail bool, seenLSNs map[uint64]struct{}, appliedLSN uint64) (commandWALSegmentScanResult, error) {
 	// PR2 has no durable per-segment max-LSN catalog yet, so open/cleanup
 	// paths derive classification by streaming the segment without retaining
 	// payloads. TODO(command-wal): cache validated per-segment min/max LSN
@@ -241,7 +241,7 @@ func scanCommandWALSegmentWithSeen(path string, maxSegmentBytes int64, allowTerm
 			scan.typed = true
 			return scan, commitlog.ErrCommandWALDuplicateLSN
 		}
-		if seenLSNs != nil {
+		if seenLSNs != nil && (appliedLSN == 0 || frame.LSN > appliedLSN) {
 			if _, ok := seenLSNs[frame.LSN]; ok {
 				scan.typed = true
 				return scan, commitlog.ErrCommandWALDuplicateLSN
@@ -278,7 +278,7 @@ func filterCommandWALSegmentsForLegacyReplay(segments []logSegment, appliedLSN u
 			continue
 		}
 		active := seg.seq == activeByLane[seg.lane]
-		scan, err := scanCommandWALSegmentWithSeen(seg.path, maxSegmentBytes, active, seenLSNs)
+		scan, err := scanCommandWALSegmentWithSeen(seg.path, maxSegmentBytes, active, seenLSNs, appliedLSN)
 		if err != nil {
 			return nil, err
 		}
@@ -334,7 +334,7 @@ func cleanupCommandWALSegmentsCoveredByAppliedLSN(dir string, appliedLSN uint64,
 			continue
 		}
 		active := seg.seq == activeByLane[seg.lane]
-		scan, err := scanCommandWALSegmentWithSeen(seg.path, maxSegmentBytes, active, seenLSNs)
+		scan, err := scanCommandWALSegmentForCleanup(seg.path, maxSegmentBytes, active, seenLSNs, appliedLSN)
 		if err != nil {
 			decisions = append(decisions, commandWALSegmentCleanupDecision{
 				Path:   seg.path,
@@ -368,4 +368,59 @@ func cleanupCommandWALSegmentsCoveredByAppliedLSN(dir string, appliedLSN uint64,
 		}
 	}
 	return decisions, nil
+}
+
+func scanCommandWALSegmentForCleanup(path string, maxSegmentBytes int64, allowTerminalTail bool, seenLSNs map[uint64]struct{}, appliedLSN uint64) (commandWALSegmentScanResult, error) {
+	r, err := commitlog.NewReaderWithOptions(path, commitlog.Options{MaxSegmentSize: maxSegmentBytes})
+	if err != nil {
+		return commandWALSegmentScanResult{}, err
+	}
+	defer r.Close()
+
+	var lastLSN uint64
+	var scan commandWALSegmentScanResult
+	for {
+		frame, err := r.ReadCommandFrame()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return scan, nil
+			}
+			if errors.Is(err, commitlog.ErrCommandWALTerminalTail) {
+				scan.terminalTail = true
+				if allowTerminalTail {
+					return scan, nil
+				}
+				return scan, err
+			}
+			if errors.Is(err, commitlog.ErrCommandWALLegacyPayload) && !scan.typed {
+				return commandWALSegmentScanResult{}, nil
+			}
+			return scan, err
+		}
+		if lastLSN != 0 && frame.LSN <= lastLSN {
+			scan.typed = true
+			return scan, commitlog.ErrCommandWALDuplicateLSN
+		}
+		if seenLSNs != nil {
+			if _, ok := seenLSNs[frame.LSN]; ok {
+				scan.typed = true
+				return scan, commitlog.ErrCommandWALDuplicateLSN
+			}
+			seenLSNs[frame.LSN] = struct{}{}
+		}
+		lastLSN = frame.LSN
+		scan.typed = true
+		if scan.minLSN == 0 || frame.LSN < scan.minLSN {
+			scan.minLSN = frame.LSN
+		}
+		if frame.LSN > scan.maxLSN {
+			scan.maxLSN = frame.LSN
+		}
+		// Cleanup only needs to know whether a segment is covered. If the first
+		// command LSN is already beyond appliedLSN, this segment cannot be removed
+		// by this cleanup pass; open/recovery paths still fully scan for corruption.
+		if scan.minLSN > appliedLSN {
+			return scan, nil
+		}
+	}
 }
