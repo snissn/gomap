@@ -1071,16 +1071,15 @@ func readVectorIndexNativeSnapshot(snap *backenddb.Snapshot, catalog *collection
 	if err := it.Error(); err != nil {
 		return snapshot, bytesDisk, "", err
 	}
-	if maxNodeID < 0 {
-		return snapshot, bytesDisk, "empty_index", nil
-	}
-	snapshot.Nodes = make([]vectorIndexPersistNode, maxNodeID+1)
-	for nodeID := 0; nodeID <= maxNodeID; nodeID++ {
-		node, ok := nodes[nodeID]
-		if !ok {
-			return snapshot, bytesDisk, "missing_graph_root_entry", nil
+	if maxNodeID >= 0 {
+		snapshot.Nodes = make([]vectorIndexPersistNode, maxNodeID+1)
+		for nodeID := 0; nodeID <= maxNodeID; nodeID++ {
+			node, ok := nodes[nodeID]
+			if !ok {
+				return snapshot, bytesDisk, "missing_graph_root_entry", nil
+			}
+			snapshot.Nodes[nodeID] = node
 		}
-		snapshot.Nodes[nodeID] = node
 	}
 	sort.Ints(snapshot.Tombstones.NodeIDs)
 	return snapshot, bytesDisk, "", nil
@@ -1352,7 +1351,37 @@ func (idx *VectorIndex) loadPersistSnapshot(snapshot vectorIndexPersistSnapshot)
 		return "invalid_dimensions"
 	}
 	if len(snapshot.Nodes) == 0 {
-		return "empty_index"
+		if len(snapshot.Edges) != 0 {
+			return "invalid_edge_node"
+		}
+		if len(snapshot.Tombstones.NodeIDs) != 0 {
+			return "invalid_tombstone"
+		}
+		if len(snapshot.DocMap.Current) != 0 {
+			return "invalid_docmap_node"
+		}
+		if snapshot.Meta.Entry >= 0 {
+			return "invalid_entry"
+		}
+		idx.mu.Lock()
+		defer idx.mu.Unlock()
+		idx.name = snapshot.Meta.Name
+		idx.encoding = encoding
+		idx.dimensions = snapshot.Meta.Dimensions
+		idx.m = snapshot.Meta.M
+		idx.efConstruction = snapshot.Meta.EfConstruction
+		idx.efSearch = snapshot.Meta.EfSearch
+		idx.rebuildDeletedRatio = snapshot.Meta.RebuildDeletedRatio
+		idx.nodes = nil
+		idx.currentNode = make(map[string]int)
+		idx.entry = -1
+		idx.maxLevel = -1
+		idx.persistedEpoch = 0
+		idx.persistedBytesDisk = 0
+		idx.persistedSnapshotDirty = false
+		idx.lastRebuildDuration = 0
+		idx.mutationSeq = 0
+		return ""
 	}
 	tombstoned := make(map[int]struct{}, len(snapshot.Tombstones.NodeIDs))
 	for _, nodeID := range snapshot.Tombstones.NodeIDs {

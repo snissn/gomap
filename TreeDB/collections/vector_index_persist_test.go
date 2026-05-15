@@ -1181,6 +1181,61 @@ func TestCollectionVectorIndexNativeRootStatusReportsMissingRoot(t *testing.T) {
 	}
 }
 
+func TestCollectionVectorIndexNativeRootRebuildAPIAcceptsEmptyGraph(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	def := VectorIndexDefinition{
+		Name:       "embedding",
+		Field:      "embedding",
+		Metric:     VectorMetricCosine,
+		Dimensions: 2,
+		M:          4,
+	}
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+
+	rebuild, err := col.RebuildVectorIndex("embedding")
+	if err != nil {
+		t.Fatalf("rebuild empty vector index: %v", err)
+	}
+	if !rebuild.NativeRootLoaded || rebuild.ExactFallbackReason != "" || rebuild.RebuildNeeded {
+		t.Fatalf("empty rebuild status=%+v want clean loaded root", rebuild)
+	}
+	if rebuild.RootID == 0 || rebuild.Stats.LiveDocs != 0 || rebuild.Stats.Nodes != 0 {
+		t.Fatalf("empty rebuild stats/root mismatch: %+v", rebuild)
+	}
+	status, err := col.VectorIndexStatus("embedding")
+	if err != nil {
+		t.Fatalf("empty vector index status: %v", err)
+	}
+	if !status.NativeRootLoaded || status.ExactFallbackReason != "" || status.RebuildNeeded {
+		t.Fatalf("empty persisted status=%+v want clean loaded root", status)
+	}
+	loaded, loadStatus, err := col.LoadVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		t.Fatalf("load empty vector index: %v", err)
+	}
+	if loaded == nil || !loadStatus.Loaded || loadStatus.ExactFallbackReason != "" || loadStatus.RootID != rebuild.RootID {
+		t.Fatalf("empty load loaded=%v status=%+v rebuild=%+v", loaded != nil, loadStatus, rebuild)
+	}
+	results, trace, err := loaded.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 2, DisableExactFallback: true})
+	if err != nil {
+		t.Fatalf("search empty vector index: %v", err)
+	}
+	if len(results) != 0 || trace.ReturnedCount != 0 {
+		t.Fatalf("empty search results=%+v trace=%+v", results, trace)
+	}
+}
+
 func TestCollectionVectorIndexNativeRootRebuildAPIPersistsCleanGraph(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
