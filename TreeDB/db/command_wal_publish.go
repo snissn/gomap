@@ -277,6 +277,8 @@ func filterCommandWALSegmentsForLegacyReplay(segments []logSegment, appliedLSN u
 		// Covered typed segments are skipped by the maxLSN check below. This
 		// branch is only the crossing case where part of the segment is already
 		// published and part would still need command replay.
+		// Invariant: scan.typed == true (checked above); minLSN > 0 for any
+		// typed segment, so the minLSN <= appliedLSN check is meaningful here.
 		if scan.maxLSN > appliedLSN && scan.minLSN <= appliedLSN {
 			return nil, fmt.Errorf("%w: command WAL segment %s partially applied range [%d,%d] over applied LSN %d", ErrRecoveryRequired, filepath.Base(seg.path), scan.minLSN, scan.maxLSN, appliedLSN)
 		}
@@ -288,6 +290,8 @@ func filterCommandWALSegmentsForLegacyReplay(segments []logSegment, appliedLSN u
 			skipped = true
 			continue
 		}
+		// scan.typed && scan.maxLSN > appliedLSN: the entire segment is
+		// unapplied (partial-application and covered cases handled above).
 		return nil, fmt.Errorf("%w: command WAL frame LSN %d exceeds applied LSN %d", ErrRecoveryRequired, scan.maxLSN, appliedLSN)
 	}
 	if !skipped {
