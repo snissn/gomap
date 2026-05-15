@@ -135,6 +135,19 @@ func NewNodeView(data []byte) Node {
 	return n
 }
 
+// InitNodeView resets n to wrap the given page data without allocating.
+func InitNodeView(n *Node, data []byte) {
+	if n == nil {
+		return
+	}
+	*n = Node{data: data}
+	if len(data) >= NodeHeaderSize {
+		flags := getUint16At(data, 12)
+		n.ptype = page.PageType(flags & pageTypeMask)
+		n.count = getUint16At(data, 14)
+	}
+}
+
 // SetKeyScratch installs caller-owned key scratch for prefix key reconstruction.
 // The slice must not be mutated concurrently while the node is in use.
 func (n *Node) SetKeyScratch(buf []byte) {

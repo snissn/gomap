@@ -318,6 +318,46 @@ func TestValueReaderLeafLogPageUnsafeToSmallDstBypassesCache(t *testing.T) {
 	}
 }
 
+func TestValueReaderLeafLogPageUnsafeViewLocksUntilRelease(t *testing.T) {
+	cache := newLeafPageReadCache(1)
+	ptrA := page.LeafLogPtr{FileID: 7, Offset: 128, RecordLengthHint: 4096}
+	ptrB := page.LeafLogPtr{FileID: 9, Offset: 256, RecordLengthHint: 4096}
+	leafA := bytes.Repeat([]byte{0x33}, page.PageSize)
+	leafB := bytes.Repeat([]byte{0x55}, page.PageSize)
+	cache.store(ptrA, leafA)
+
+	reader := valueReader{
+		vlogs:         &leafPageCacheTestFallback{err: errors.New("fallback should not be used")},
+		leafPageCache: cache,
+	}
+	view, lease, ok, err := reader.ReadLeafLogPageUnsafeView(ptrA)
+	if err != nil {
+		t.Fatalf("ReadLeafLogPageUnsafeView: %v", err)
+	}
+	if !ok || lease == nil || !bytes.Equal(view, leafA) {
+		t.Fatalf("cache view mismatch ok=%v leaseNil=%v", ok, lease == nil)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		cache.store(ptrB, leafB)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		t.Fatal("cache store completed while view lease was held")
+	case <-time.After(10 * time.Millisecond):
+	}
+	lease.ReleaseLeafLogPageView()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("cache store did not complete after view release")
+	}
+}
+
 func TestValueReaderLeafLogPageUnsafeToAdmitsRepeatedReadMiss(t *testing.T) {
 	cache := newLeafPageReadCache(8)
 	ptr := page.LeafLogPtr{FileID: 7, Offset: 128, RecordLengthHint: 4096}
