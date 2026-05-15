@@ -250,10 +250,11 @@ PR 1: typed commit-log frames and feature gate:
 - `TestCommandWALFeatureGateRequiresCleanLegacyWALBeforeActivation`;
 - `TestCommandWALRequiredFeatureFailsClosedUntilExecutionEnabled`;
 - `TestCommandWALNoCollectionSegmentFamilyCreated`;
-- `TestCommandWALSingleJournalOwnerRejectsSecondMutableWriter`;
 - `TestCommandWALTerminalShortHeaderIgnored`;
 - `TestCommandWALDuplicateLSNFailsClosed`;
+- `TestCommandWALDuplicateLSNAcrossSegmentsFailsClosed`;
 - `TestCommandWALRawKVBatchOneLSNAtomic`;
+- `TestCommandWALRawKVBatchPreservesEmptySetValue`;
 - `TestCommandWALExistingCoverageInventoryMapsLegacyWALTests`;
 - `TestCommandWALLegacyRawEncodingTestsHaveTypedFrameEquivalents`.
 
@@ -264,6 +265,7 @@ PR 2: shared journal ownership and `AppliedCommandLSN` plumbing:
 - `TestCommandWALRootsAndAppliedCommandLSNPublishAtomically`;
 - `TestCommandWALPublishHelperRejectsRootsWithoutAppliedLSN`;
 - `TestCommandWALAppliedLSNContiguousPrefixOnly`;
+- `TestCommandWALSingleJournalOwnerRejectsSecondMutableWriter`;
 - `TestCommandWALCheckpointCleansOnlyCoveredSegments`;
 - `TestCommandWALCheckpointCrashBeforeCleanupReplaysIdempotently`;
 - `TestCommandWALCleanupManifestMissingBlocksSegmentDeletion`;
