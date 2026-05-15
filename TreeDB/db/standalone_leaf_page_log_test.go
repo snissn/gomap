@@ -81,7 +81,6 @@ func TestStandaloneLeafPageLogReopenAdvancesLeafLaneSequence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStandaloneLeafPageLog second: %v", err)
 	}
-	defer second.Close()
 	ptr, err := second.AppendLeafPage([]byte("leaf-2"))
 	if err != nil {
 		t.Fatalf("AppendLeafPage second: %v", err)
@@ -89,5 +88,19 @@ func TestStandaloneLeafPageLogReopenAdvancesLeafLaneSequence(t *testing.T) {
 	lane, seq := valuelog.DecodeFileID(ptr.ValuePtr().FileID)
 	if lane != rewriteLeafLogLaneID || seq != 2 {
 		t.Fatalf("second leaf ptr lane=%d seq=%d, want lane=%d seq=2", lane, seq, rewriteLeafLogLaneID)
+	}
+	if err := second.Close(); err != nil {
+		t.Fatalf("Close second: %v", err)
+	}
+	segments, err := listValueLogSegments(dir)
+	if err != nil {
+		t.Fatalf("listValueLogSegments: %v", err)
+	}
+	ridMap, err := scanValueLogSegments(segments, nil)
+	if err != nil {
+		t.Fatalf("scanValueLogSegments: %v", err)
+	}
+	if len(ridMap) != 2 {
+		t.Fatalf("RID map size=%d, want 2", len(ridMap))
 	}
 }

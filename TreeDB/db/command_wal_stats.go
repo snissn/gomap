@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path/filepath"
 
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 )
@@ -67,22 +68,19 @@ func (db *DB) cachedCommandWALStatsSummary() (commandWALStatsSummary, error) {
 		appliedLSN = state.AppliedCommandLSN
 	}
 	db.commandWALStatsMu.Lock()
+	defer db.commandWALStatsMu.Unlock()
 	if db.commandWALStatsOK && db.commandWALStatsAppliedLSN == appliedLSN {
 		summary := db.commandWALStatsSummary
-		db.commandWALStatsMu.Unlock()
 		return summary, nil
 	}
-	db.commandWALStatsMu.Unlock()
 
 	summary, err := summarizeCommandWALStats(db.dir, db.walMaxSegmentBytes)
 	if err != nil {
 		return commandWALStatsSummary{}, err
 	}
-	db.commandWALStatsMu.Lock()
 	db.commandWALStatsAppliedLSN = appliedLSN
 	db.commandWALStatsSummary = summary
 	db.commandWALStatsOK = true
-	db.commandWALStatsMu.Unlock()
 	return summary, nil
 }
 
@@ -151,6 +149,6 @@ func summarizeCommandWALSegment(path string, maxSegmentBytes int64, allowTermina
 		if errors.Is(readErr, commitlog.ErrCommandWALLegacyPayload) && !typed {
 			return false, 0, 0, nil
 		}
-		return typed, frames, maxLSN, fmt.Errorf("treedb: summarize command wal segment %s: %w", path, readErr)
+		return typed, frames, maxLSN, fmt.Errorf("treedb: summarize command wal segment %s: %w", filepath.Base(path), readErr)
 	}
 }

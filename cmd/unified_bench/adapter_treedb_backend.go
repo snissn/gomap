@@ -26,7 +26,7 @@ func NewTreeDBBackendCommandWAL(dir string) (kvstore.DB, error) {
 
 func cloneStringMap(in map[string]string) map[string]string {
 	if len(in) == 0 {
-		return nil
+		return map[string]string{}
 	}
 	out := make(map[string]string, len(in))
 	for k, v := range in {
@@ -105,7 +105,7 @@ func (d *treeDBBackendAdapter) SetSync(key, value []byte) error { return d.db.Se
 func (d *treeDBBackendAdapter) DeleteSync(key []byte) error     { return d.db.DeleteSync(key) }
 func (d *treeDBBackendAdapter) Stats() map[string]string {
 	if d == nil {
-		return nil
+		return map[string]string{}
 	}
 	if d.db == nil {
 		return cloneStringMap(d.finalStats)

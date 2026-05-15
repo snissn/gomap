@@ -29,7 +29,11 @@ func NewStandaloneLeafPageLog(dir string, opts StandaloneLeafPageLogOptions) (Le
 	if err := ensureStorageLayoutDirs(dir); err != nil {
 		return nil, err
 	}
-	segments, err := listSegmentsInDir(LeafLogDirPath(dir))
+	segments, err := listValueLogSegments(dir)
+	if err != nil {
+		return nil, err
+	}
+	nextRID, err := rewriteRIDStartScanner(segments)
 	if err != nil {
 		return nil, err
 	}
@@ -45,6 +49,7 @@ func NewStandaloneLeafPageLog(dir string, opts StandaloneLeafPageLogOptions) (Le
 	}
 	writer := newRewriteWriter(ValueLogDirPath(dir), 0, 0, maxSegmentBytes)
 	writer.ConfigureLeafLog(LeafLogDirPath(dir), rewriteLeafLogLaneID, maxRewriteLaneSeq(segments, rewriteLeafLogLaneID))
+	writer.nextRID = nextRID
 	writer.blockCompression = compression != ValueLogCompressionOff
 	writer.blockCodec = valuelogBlockCodecFromDB(opts.BlockCodec)
 	writer.leafBlockCodec = leafPageBlockCodecFromOptions(compression, opts.AutoPolicy, opts.BlockCodec, true)
