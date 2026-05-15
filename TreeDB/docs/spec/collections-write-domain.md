@@ -5,9 +5,10 @@ Status:
 - Current implementation: flush-boundary durable for pending collection-local
   write-domain state.
 - Target durable-at-ack behavior: user-command WAL frames in the shared
-  commit-log WAL make accepted deterministic collection commands recoverable
-  before visibility. Indexed write-domain durable-at-ack remains a later
-  implementation gate; WAL-off remains flush-boundary.
+  commit-log WAL plus root publication and `AppliedLSN` advancement make
+  accepted deterministic collection commands durable before visibility. Indexed
+  write-domain durable-at-ack remains a later implementation gate; WAL-off
+  remains flush-boundary.
 
 This document specifies collection-local write-domain behavior for indexed
 collections. It distinguishes the current shipped contract from the later
@@ -99,13 +100,13 @@ If TreeDB later needs durable-at-ack async collection writes, it MUST add
 user-command WAL support for the relevant command category before advertising
 that stronger contract.
 
-In the full WAL-on contract, write-domain mutable/queued/publishing state is a
-visibility and publication-amortization layer over already committed typed
-command WAL frames. It is not the first durable record. No read, unique check,
-update/delete planner, schema/index barrier, queued unit, publishing unit, or
-pending-state merge may observe a mutation until its command WAL frame is
-committed and recoverable. Durable-at-ack requested for a collection command
-whose command kind is not `WAL-supported` must fail before staging.
+In the V1 WAL-on contract, write-domain mutable/queued/publishing state is not a
+durable pending overlay and is not a public visibility boundary. A
+WAL-supported collection command may return success or become owner-visible only
+after the normal executor has published the affected roots and the same durable
+publish boundary has advanced `AppliedLSN` over the command. Durable-at-ack
+requested for a collection command whose command kind is not `WAL-supported`
+must fail before staging.
 
 In WAL-off relaxed mode, write-domain state is not backed by command WAL.
 Acknowledged pending writes are process-local until published. `Flush`,
@@ -114,11 +115,13 @@ Acknowledged pending writes are process-local until published. `Flush`,
 During private planning, canonical command payloads, external refs, uniqueness
 reservations, publish inputs, and schema/index barrier state are not reachable
 from any read, scan, uniqueness check, update/delete planner, queued unit,
-publishing unit, or pending-state merge. After required external refs are
-prepared and protected, the writer appends the typed command WAL frame through
-the shared commit-log journal. Only then may it make mutable/queued/publishing
-state visible to reads and unique-index helpers. Async flush remains a
-publication optimization over already-logged commands.
+publishing unit, or pending-state merge. The writer prepares and protects
+required external refs, appends and syncs the typed command WAL frame through the
+shared commit-log journal, applies through the normal executor, and publishes
+roots plus `AppliedLSN` in one backend durability boundary. Only after that
+boundary may the mutation become visible or return success in V1 WAL-on modes.
+Async flush over already-logged but not-yet-published commands is a future
+durable pending-overlay feature, not part of V1.
 
 In WAL-on modes for enabled command WAL capabilities, visibility implies
 recoverability. If command WAL append/commit fails, the mutation must leave no
