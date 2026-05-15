@@ -76,6 +76,9 @@ func validateContiguousAppliedCommandLSN(current, next uint64, covered []Command
 		return fmt.Errorf("%w: current=%d next=%d", ErrCommandWALAppliedLSNRegression, current, next)
 	}
 	if next == current {
+		if len(covered) != 0 {
+			return fmt.Errorf("%w: no-op publish with stale coverage ranges", ErrCommandWALAppliedLSNNonContig)
+		}
 		return nil
 	}
 	if current == ^uint64(0) {
@@ -145,20 +148,13 @@ type commandWALSegmentScanResult struct {
 }
 
 func requireNoUnappliedCommandWAL(dir string, appliedLSN uint64, maxSegmentBytes int64) error {
-	dirty, err := hasUnappliedCommandWALFrames(dir, appliedLSN, maxSegmentBytes)
-	if err != nil {
-		return err
-	}
-	if dirty {
-		return ErrRecoveryRequired
-	}
-	return nil
+	return requireNoUnappliedCommandWALFrames(dir, appliedLSN, maxSegmentBytes)
 }
 
-func hasUnappliedCommandWALFrames(dir string, appliedLSN uint64, maxSegmentBytes int64) (bool, error) {
+func requireNoUnappliedCommandWALFrames(dir string, appliedLSN uint64, maxSegmentBytes int64) error {
 	segments, err := listWALSegments(dir)
 	if err != nil {
-		return false, err
+		return err
 	}
 	activeByLane := commandWALActiveSeqByLane(segments)
 	seenLSNs := make(map[uint64]struct{})
@@ -171,13 +167,13 @@ func hasUnappliedCommandWALFrames(dir string, appliedLSN uint64, maxSegmentBytes
 		}
 		scan, err := scanCommandWALSegmentWithSeen(seg.path, maxSegmentBytes, seg.seq == activeByLane[seg.lane], seenLSNs, appliedLSN)
 		if err != nil {
-			return false, err
+			return err
 		}
 		if scan.typed && scan.maxLSN > appliedLSN {
-			return true, fmt.Errorf("%w: command WAL segment %s max LSN %d exceeds applied LSN %d", ErrRecoveryRequired, filepath.Base(seg.path), scan.maxLSN, appliedLSN)
+			return fmt.Errorf("%w: command WAL segment %s max LSN %d exceeds applied LSN %d", ErrRecoveryRequired, filepath.Base(seg.path), scan.maxLSN, appliedLSN)
 		}
 	}
-	return false, nil
+	return nil
 }
 
 func commandWALActiveSeqByLane(segments []logSegment) map[int]uint64 {
