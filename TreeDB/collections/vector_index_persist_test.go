@@ -253,6 +253,43 @@ func TestVectorIndexLoadPersistSnapshotRecomputesNonFiniteEdgeDistances(t *testi
 	requireVectorResultIDs(t, results, "a", "b")
 }
 
+func TestVectorIndexLoadPersistSnapshotRejectsExtraEdgeDistances(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	col := openVectorIndexTestCollection(t, d)
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("a"), []byte("b"), []byte("c")},
+		[][]byte{
+			[]byte(`{"embedding":[1,0]}`),
+			[]byte(`{"embedding":[0.8,0.2]}`),
+			[]byte(`{"embedding":[0,1]}`),
+		},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	index, err := col.BuildVectorIndex(VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, M: 4})
+	if err != nil {
+		t.Fatalf("build vector index: %v", err)
+	}
+	snapshot, _ := index.persistSnapshot()
+	for i := range snapshot.Edges {
+		if len(snapshot.Edges[i].Neighbor) > 0 {
+			snapshot.Edges[i].Distances = append(snapshot.Edges[i].Distances, 0)
+			break
+		}
+	}
+	loaded, err := newVectorIndex(col, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine})
+	if err != nil {
+		t.Fatalf("new vector index: %v", err)
+	}
+	if reason := loaded.loadPersistSnapshot(snapshot); reason != "invalid_edge_distance_count" {
+		t.Fatalf("load snapshot reason=%q want invalid_edge_distance_count", reason)
+	}
+}
+
 func TestCollectionVectorIndexSnapshotInt8Encoding(t *testing.T) {
 	dir := t.TempDir()
 	d, err := backenddb.Open(backenddb.Options{Dir: dir})
