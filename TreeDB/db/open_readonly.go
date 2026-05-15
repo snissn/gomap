@@ -102,6 +102,9 @@ func openReadOnly(opts Options) (*DB, error) {
 		maintenanceOpsPerCoalesce:      opts.MaintenanceOpsPerCoalesce,
 		dir:                            opts.Dir,
 		chunkSize:                      opts.ChunkSize,
+		walMaxSegmentBytes:             opts.WALMaxSegmentBytes,
+		commandWAL:                     opts.CommandWAL,
+		commandWALStatsScan:            opts.CommandWALStatsScan,
 		preferAppendAlloc:              opts.PreferAppendAlloc,
 		freelistRegionPages:            opts.FreelistRegionPages,
 		freelistRegionRadius:           opts.FreelistRegionRadius,
@@ -131,6 +134,9 @@ func openReadOnly(opts Options) (*DB, error) {
 	if err := requireNoUnappliedCommandWAL(opts.Dir, db.meta.AppliedCommandLSN, opts.WALMaxSegmentBytes); err != nil {
 		_ = db.Close()
 		return nil, err
+	}
+	if db.commandWAL {
+		db.cacheCommandWALRequiredFeatureStats()
 	}
 	if opts.IndexOuterLeavesInValueLog {
 		manifest, err := loadOrCreateLeafGenerationManifest(layout.leafVLogDir, db.meta.CommitSeq, true)
@@ -232,6 +238,9 @@ func openReadOnlyNoLock(opts Options) (*DB, error) {
 		maintenanceOpsPerCoalesce:      opts.MaintenanceOpsPerCoalesce,
 		dir:                            opts.Dir,
 		chunkSize:                      opts.ChunkSize,
+		walMaxSegmentBytes:             opts.WALMaxSegmentBytes,
+		commandWAL:                     opts.CommandWAL,
+		commandWALStatsScan:            opts.CommandWALStatsScan,
 		preferAppendAlloc:              opts.PreferAppendAlloc,
 		freelistRegionPages:            opts.FreelistRegionPages,
 		freelistRegionRadius:           opts.FreelistRegionRadius,
@@ -261,6 +270,9 @@ func openReadOnlyNoLock(opts Options) (*DB, error) {
 	if err := requireNoUnappliedCommandWAL(opts.Dir, db.meta.AppliedCommandLSN, opts.WALMaxSegmentBytes); err != nil {
 		_ = db.Close()
 		return nil, err
+	}
+	if db.commandWAL {
+		db.cacheCommandWALRequiredFeatureStats()
 	}
 	if opts.IndexOuterLeavesInValueLog {
 		manifest, err := loadOrCreateLeafGenerationManifest(layout.leafVLogDir, db.meta.CommitSeq, true)

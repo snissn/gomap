@@ -34,6 +34,7 @@
     "TestCommandWALStatsDefaultDoesNotScanWAL",
     "TestCommandWALStatsDisabledDoesNotScanWAL",
     "TestCommandWALStatsProveModeAndFrames",
+    "TestCommandWALStatsReadOnlyReportsPersistedMode",
     "TestCommandWALStatsScanUsesDefaultWALMaxSegmentBytes",
     "TestJournalOwnerReserveAfterCloseFails",
     "TestRenderMarkdownSingle_IncludesTreeDBPerfAndStatsSections",
@@ -42,6 +43,7 @@
     "TestStandaloneLeafPageLogRejectsInvalidMaxSegmentBytes",
     "TestTreeDBBackendCommandWALForcesWALOnWhenProfileDisablesWAL",
     "TestTreeDBBackendCommandWALVariantPersistsFeatureAndAppendsTypedFrames",
+    "TestTreeDBBackendDoesNotInstallLeafLogWhenPersistedInlineFormatOverridesFlag",
     "TestTreeDBBackendInstallsLeafLogForPersistedOuterLeavesFormat",
     "TestTreeDBBackendPreservesOuterLeavesFlag",
     "TestTreeDBCommandWALAliasResolvesToBackendVariant"
@@ -92,5 +94,5 @@
     "outer-leaf direct backend throughput is much lower than earlier inline-leaf artifacts; the refreshed numbers are the correct benchmark mode because the requested outer-leaf flag is no longer silently ignored",
     "pointer command_wal_v1 external-ref writes are correctness-fenced and currently much slower than legacy pointer writes (429.8 us/op vs 3.796 us/op in the refreshed DB microbench); this is explicit optimization debt before default cutover"
   ],
-  "evidence_generated_from_commit": "14b6dfa830dc314f2550b04184e0506fed816605"
+  "evidence_generated_from_commit": "264564a275276c5543bdef01d4888e103ea02979"
 }

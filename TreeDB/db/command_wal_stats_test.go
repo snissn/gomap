@@ -97,6 +97,43 @@ func TestCommandWALStatsDefaultDoesNotScanWAL(t *testing.T) {
 	dbClosed = true
 }
 
+func TestCommandWALStatsReadOnlyReportsPersistedMode(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir, CommandWAL: true, CommandWALStatsScan: true, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+	b := db.NewBatch()
+	if err := b.Set([]byte("k"), []byte("v")); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if err := b.WriteSync(); err != nil {
+		t.Fatalf("WriteSync: %v", err)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatalf("Close batch: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	ro, err := Open(Options{Dir: dir, ReadOnly: true, CommandWALStatsScan: true})
+	if err != nil {
+		t.Fatalf("Open read-only command WAL: %v", err)
+	}
+	defer ro.Close()
+	stats := ro.Stats()
+	if got := stats["treedb.command_wal.enabled"]; got != "true" {
+		t.Fatalf("read-only command WAL enabled=%q, want true (stats=%#v)", got, stats)
+	}
+	if got := stats["treedb.command_wal.required_feature"]; got != "true" {
+		t.Fatalf("read-only required_feature=%q, want true (stats=%#v)", got, stats)
+	}
+	if got := stats["treedb.command_wal.frames"]; got != "1" {
+		t.Fatalf("read-only frames=%q, want 1 (stats=%#v)", got, stats)
+	}
+}
+
 func TestCommandWALStatsScanUsesDefaultWALMaxSegmentBytes(t *testing.T) {
 	db, err := Open(Options{Dir: t.TempDir(), CommandWAL: true, CommandWALStatsScan: true, DisableBackgroundPrune: true})
 	if err != nil {

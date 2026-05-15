@@ -166,12 +166,45 @@ func TestTreeDBBackendInstallsLeafLogForPersistedOuterLeavesFormat(t *testing.T)
 	if err != nil {
 		t.Fatalf("NewTreeDBBackend: %v", err)
 	}
+	adapter, ok := db.(*treeDBBackendAdapter)
+	if !ok {
+		_ = db.Close()
+		t.Fatalf("backend type=%T, want *treeDBBackendAdapter", db)
+	}
+	if adapter.leafLog == nil {
+		_ = db.Close()
+		t.Fatalf("backend did not install standalone leaf page log for persisted outer leaves format")
+	}
 	if err := db.Set([]byte("k"), []byte("v")); err != nil {
 		_ = db.Close()
 		t.Fatalf("Set with persisted outer leaves format: %v", err)
 	}
 	if err := db.Close(); err != nil {
 		t.Fatalf("Close backend: %v", err)
+	}
+}
+
+func TestTreeDBBackendDoesNotInstallLeafLogWhenPersistedInlineFormatOverridesFlag(t *testing.T) {
+	saved := saveTreeDBFlagState()
+	defer restoreTreeDBFlagState(saved)
+	resetTreeDBIndexFlagsForTest()
+	*treedbIndexOuterLeavesInVlog = true
+
+	dir := t.TempDir()
+	if err := treedbdb.SaveFormatConfig(dir, treedbdb.FormatConfig{IndexOuterLeavesInValueLog: false}); err != nil {
+		t.Fatalf("SaveFormatConfig: %v", err)
+	}
+	db, err := NewTreeDBBackend(dir)
+	if err != nil {
+		t.Fatalf("NewTreeDBBackend: %v", err)
+	}
+	defer db.Close()
+	adapter, ok := db.(*treeDBBackendAdapter)
+	if !ok {
+		t.Fatalf("backend type=%T, want *treeDBBackendAdapter", db)
+	}
+	if adapter.leafLog != nil {
+		t.Fatalf("backend installed standalone leaf page log despite persisted inline-leaf format")
 	}
 }
 
