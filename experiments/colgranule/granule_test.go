@@ -7,7 +7,7 @@ import (
 
 func TestEncodeDecodeInt64Granule(t *testing.T) {
 	values := []int64{-10, -9, -4, 0, 1, 99, 100, 101}
-	for _, encoding := range []Encoding{EncodingRawInt64, EncodingDeltaVarint} {
+	for _, encoding := range []Encoding{EncodingRawInt64, EncodingDeltaVarint, EncodingDoubleDeltaVarint} {
 		for _, compression := range []Compression{CompressionNone, CompressionSnappy, CompressionLZ4} {
 			g, err := EncodeInt64(nil, values, Config{Encoding: encoding, Compression: compression})
 			if err != nil {
@@ -23,6 +23,9 @@ func TestEncodeDecodeInt64Granule(t *testing.T) {
 			if g.Min != -10 || g.Max != 101 {
 				t.Fatalf("min/max=(%d,%d) want (-10,101)", g.Min, g.Max)
 			}
+			if !g.HasMinMax {
+				t.Fatalf("HasMinMax=false want true")
+			}
 			if g.Rows != len(values) || g.NullCount != 0 || g.DefaultCount != 0 {
 				t.Fatalf("metadata rows/null/default=(%d,%d,%d) want (%d,0,0)", g.Rows, g.NullCount, g.DefaultCount, len(values))
 			}
@@ -31,6 +34,9 @@ func TestEncodeDecodeInt64Granule(t *testing.T) {
 			}
 			if g.PayloadRef.Kind != PayloadRefInline || g.PayloadRef.Length != len(g.Payload) {
 				t.Fatalf("payload ref=(%s,%d) want (inline,%d)", g.PayloadRef.Kind, g.PayloadRef.Length, len(g.Payload))
+			}
+			if g.CodecReport.Encoding != encoding || g.CodecReport.ActualCompression != g.Compression || g.CodecReport.StoredBytes != g.StoredBytes {
+				t.Fatalf("codec report=%+v granule compression=%s stored=%d", g.CodecReport, g.Compression, g.StoredBytes)
 			}
 		}
 	}
@@ -62,6 +68,7 @@ func TestGranuleBuilderMinMaxMetadata(t *testing.T) {
 			for _, cfg := range []Config{
 				{Encoding: EncodingRawInt64, Compression: CompressionNone},
 				{Encoding: EncodingDeltaVarint, Compression: CompressionSnappy},
+				{Encoding: EncodingDoubleDeltaVarint, Compression: CompressionSnappy},
 				{Encoding: EncodingDeltaVarint, Compression: CompressionLZ4},
 			} {
 				builder := NewGranuleBuilder(cfg)
@@ -80,6 +87,156 @@ func TestGranuleBuilderMinMaxMetadata(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestBoolGranuleRoundTripAndCount(t *testing.T) {
+	runValues := make([]bool, 192)
+	for i := 64; i < 128; i++ {
+		runValues[i] = true
+	}
+	allTrue := make([]bool, 128)
+	for i := range allTrue {
+		allTrue[i] = true
+	}
+	tests := []struct {
+		name       string
+		values     []bool
+		wantMode   byte
+		wantTrues  int
+		wantMinMax [2]int64
+	}{
+		{name: "alternating", values: []bool{true, false, true, false, true, false, true, false, true}, wantMode: boolPayloadBitpack, wantTrues: 5, wantMinMax: [2]int64{0, 1}},
+		{name: "runs", values: runValues, wantMode: boolPayloadRLE, wantTrues: 64, wantMinMax: [2]int64{0, 1}},
+		{name: "all_true", values: allTrue, wantMode: boolPayloadRLE, wantTrues: len(allTrue), wantMinMax: [2]int64{1, 1}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			builder := NewGranuleBuilder(Config{Compression: CompressionNone})
+			g, err := builder.BuildBool(tt.values)
+			if err != nil {
+				t.Fatalf("BuildBool: %v", err)
+			}
+			if g.Encoding != EncodingBoolBitpackRLE || g.Payload[0] != tt.wantMode {
+				t.Fatalf("encoding/mode=(%s,%d) want (%s,%d)", g.Encoding, g.Payload[0], EncodingBoolBitpackRLE, tt.wantMode)
+			}
+			if g.Min != tt.wantMinMax[0] || g.Max != tt.wantMinMax[1] {
+				t.Fatalf("min/max=(%d,%d) want %v", g.Min, g.Max, tt.wantMinMax)
+			}
+			var reader GranuleReader
+			got, err := reader.DecodeBool(g)
+			if err != nil {
+				t.Fatalf("DecodeBool: %v", err)
+			}
+			if !slices.Equal(got, tt.values) {
+				t.Fatalf("DecodeBool=%v want %v", got, tt.values)
+			}
+			count, err := reader.CountTrueBool(g)
+			if err != nil {
+				t.Fatalf("CountTrueBool: %v", err)
+			}
+			if count != tt.wantTrues {
+				t.Fatalf("CountTrueBool=%d want %d", count, tt.wantTrues)
+			}
+		})
+	}
+}
+
+func TestNullableInt64GranuleRoundTrip(t *testing.T) {
+	values := []int64{10, 20, 30, 40, 50, 60, 70}
+	nulls := []bool{false, true, false, false, false, true, false}
+	defaults := []bool{false, false, true, false, true, false, false}
+	defaultValue := int64(99)
+	builder := NewGranuleBuilder(Config{Encoding: EncodingDoubleDeltaVarint, Compression: CompressionSnappy})
+	g, err := builder.BuildNullableInt64(values, nulls, defaults, defaultValue)
+	if err != nil {
+		t.Fatalf("BuildNullableInt64: %v", err)
+	}
+	if g.Encoding != EncodingNullableInt64 || g.NullCount != 2 || g.DefaultCount != 2 {
+		t.Fatalf("encoding/null/default=(%s,%d,%d) want (%s,2,2)", g.Encoding, g.NullCount, g.DefaultCount, EncodingNullableInt64)
+	}
+	if !g.HasMinMax || g.Min != 10 || g.Max != 99 {
+		t.Fatalf("has/min/max=(%v,%d,%d) want (true,10,99)", g.HasMinMax, g.Min, g.Max)
+	}
+	var reader GranuleReader
+	gotValues, gotNulls, gotDefaults, err := reader.DecodeNullableInt64(g)
+	if err != nil {
+		t.Fatalf("DecodeNullableInt64: %v", err)
+	}
+	wantValues := []int64{10, 0, 99, 40, 99, 0, 70}
+	if !slices.Equal(gotValues, wantValues) {
+		t.Fatalf("values=%v want %v", gotValues, wantValues)
+	}
+	if !slices.Equal(gotNulls, nulls) {
+		t.Fatalf("nulls=%v want %v", gotNulls, nulls)
+	}
+	if !slices.Equal(gotDefaults, defaults) {
+		t.Fatalf("defaults=%v want %v", gotDefaults, defaults)
+	}
+}
+
+func TestLowCardinalityUint32RoundTripAndCounts(t *testing.T) {
+	codes := []uint32{0, 2, 1, 2, 2, 4, 4, 0, 3, 2}
+	builder := NewGranuleBuilder(Config{Compression: CompressionLZ4})
+	g, err := builder.BuildUint32Codes(codes, 5)
+	if err != nil {
+		t.Fatalf("BuildUint32Codes: %v", err)
+	}
+	if g.Encoding != EncodingLowCardinalityUint32 || g.Min != 0 || g.Max != 4 {
+		t.Fatalf("encoding/min/max=(%s,%d,%d) want (%s,0,4)", g.Encoding, g.Min, g.Max, EncodingLowCardinalityUint32)
+	}
+	var reader GranuleReader
+	got, err := reader.DecodeUint32Codes(g)
+	if err != nil {
+		t.Fatalf("DecodeUint32Codes: %v", err)
+	}
+	if !slices.Equal(got, codes) {
+		t.Fatalf("DecodeUint32Codes=%v want %v", got, codes)
+	}
+	counts, err := reader.CountUint32Codes(g, nil)
+	if err != nil {
+		t.Fatalf("CountUint32Codes: %v", err)
+	}
+	wantCounts := []int{2, 1, 4, 1, 2}
+	if !slices.Equal(counts, wantCounts) {
+		t.Fatalf("CountUint32Codes=%v want %v", counts, wantCounts)
+	}
+}
+
+func TestCompressionAdmissionReportsFallback(t *testing.T) {
+	values := makeRandom(8192)
+	g, err := EncodeInt64(nil, values, Config{Encoding: EncodingRawInt64, Compression: CompressionSnappy})
+	if err != nil {
+		t.Fatalf("EncodeInt64: %v", err)
+	}
+	if g.CodecReport.RequestedCompression != CompressionSnappy || !g.CodecReport.CompressionAttempted {
+		t.Fatalf("codec report did not record snappy attempt: %+v", g.CodecReport)
+	}
+	if g.StoredBytes > g.RawBytes {
+		t.Fatalf("stored bytes expanded silently: stored=%d raw=%d report=%+v", g.StoredBytes, g.RawBytes, g.CodecReport)
+	}
+	if g.Compression == CompressionNone && g.CodecReport.CompressionFallbackReason == "" {
+		t.Fatalf("fallback did not report reason: %+v", g.CodecReport)
+	}
+}
+
+func TestUnsupportedCodecIDsFailClosed(t *testing.T) {
+	g, err := EncodeInt64(nil, []int64{1, 2, 3}, Config{Encoding: EncodingRawInt64, Compression: CompressionNone})
+	if err != nil {
+		t.Fatalf("EncodeInt64: %v", err)
+	}
+	badEncoding := g
+	badEncoding.Encoding = Encoding(255)
+	if _, err := DecodeInt64(nil, badEncoding); err == nil {
+		t.Fatal("DecodeInt64 with bad encoding succeeded, want error")
+	}
+	badCompression := g
+	badCompression.Compression = Compression(255)
+	if _, err := DecodeInt64(nil, badCompression); err == nil {
+		t.Fatal("DecodeInt64 with bad compression succeeded, want error")
+	}
+	if _, err := EncodeInt64(nil, []int64{1, 2, 3}, Config{Encoding: EncodingRawInt64, Compression: CompressionZSTD}); err == nil {
+		t.Fatal("EncodeInt64 with unsupported zstd succeeded, want error")
 	}
 }
 
@@ -114,6 +271,51 @@ func TestGranuleReaderReusesBuffersWithoutStaleValues(t *testing.T) {
 	if !slices.Equal(got, shortValues) {
 		t.Fatalf("DecodeInt64Into(short)=%v want %v", got, shortValues)
 	}
+}
+
+func FuzzDecodeTypedGranuleCorruptPayloads(f *testing.F) {
+	boolGranule, err := NewGranuleBuilder(Config{Compression: CompressionNone}).BuildBool([]bool{true, false, true, true, false})
+	if err != nil {
+		f.Fatalf("BuildBool: %v", err)
+	}
+	nullableGranule, err := NewGranuleBuilder(Config{Encoding: EncodingDeltaVarint, Compression: CompressionNone}).BuildNullableInt64(
+		[]int64{1, 2, 3, 4},
+		[]bool{false, true, false, false},
+		[]bool{false, false, true, false},
+		7,
+	)
+	if err != nil {
+		f.Fatalf("BuildNullableInt64: %v", err)
+	}
+	codeGranule, err := NewGranuleBuilder(Config{Compression: CompressionNone}).BuildUint32Codes([]uint32{0, 1, 1, 2}, 3)
+	if err != nil {
+		f.Fatalf("BuildUint32Codes: %v", err)
+	}
+	f.Add(byte(EncodingBoolBitpackRLE), boolGranule.Payload)
+	f.Add(byte(EncodingNullableInt64), nullableGranule.Payload)
+	f.Add(byte(EncodingLowCardinalityUint32), codeGranule.Payload)
+	f.Fuzz(func(t *testing.T, encoding byte, payload []byte) {
+		g := EncodedGranule{
+			Rows:        4,
+			Encoding:    Encoding(encoding),
+			Compression: CompressionNone,
+			RawBytes:    len(payload),
+			StoredBytes: len(payload),
+			PayloadRef:  PayloadRef{Kind: PayloadRefInline, Length: len(payload)},
+			Payload:     payload,
+		}
+		var reader GranuleReader
+		switch Encoding(encoding) {
+		case EncodingBoolBitpackRLE:
+			_, _ = reader.DecodeBool(g)
+			_, _ = reader.CountTrueBool(g)
+		case EncodingNullableInt64:
+			_, _, _, _ = reader.DecodeNullableInt64(g)
+		case EncodingLowCardinalityUint32:
+			_, _ = reader.DecodeUint32Codes(g)
+			_, _ = reader.CountUint32Codes(g, nil)
+		}
+	})
 }
 
 func TestCorruptPayloadsFailClosed(t *testing.T) {

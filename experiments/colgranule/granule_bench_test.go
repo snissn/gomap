@@ -25,7 +25,7 @@ func benchmarkFixtures() []fixture {
 
 func benchmarkConfigs() []Config {
 	var configs []Config
-	for _, encoding := range []Encoding{EncodingRawInt64, EncodingDeltaVarint} {
+	for _, encoding := range []Encoding{EncodingRawInt64, EncodingDeltaVarint, EncodingDoubleDeltaVarint} {
 		for _, compression := range []Compression{CompressionNone, CompressionSnappy, CompressionLZ4} {
 			configs = append(configs, Config{Encoding: encoding, Compression: compression})
 		}
@@ -134,6 +134,118 @@ func BenchmarkRangeScanInt64Granule(b *testing.B) {
 	}
 }
 
+func BenchmarkDecodeNullableInt64Granule(b *testing.B) {
+	values := makeTimestampJitter(DefaultRowsPerGranule)
+	nulls := makeEveryNthBool(DefaultRowsPerGranule, 17)
+	defaults := makeEveryNthBool(DefaultRowsPerGranule, 29)
+	for i := range defaults {
+		if nulls[i] {
+			defaults[i] = false
+		}
+	}
+	for _, cfg := range []Config{
+		{Encoding: EncodingRawInt64, Compression: CompressionNone},
+		{Encoding: EncodingDeltaVarint, Compression: CompressionSnappy},
+		{Encoding: EncodingDoubleDeltaVarint, Compression: CompressionLZ4},
+	} {
+		builder := NewGranuleBuilder(cfg)
+		g, err := builder.BuildNullableInt64(values, nulls, defaults, 1_700_000_000_000_000)
+		if err != nil {
+			b.Fatal(err)
+		}
+		name := fmt.Sprintf("%s/requested_%s/actual_%s/nulls_%d/defaults_%d/stored_%dB/raw_%dB", cfg.Encoding, cfg.Compression, g.Compression, g.NullCount, g.DefaultCount, g.StoredBytes, g.RawBytes)
+		b.Run(name, func(b *testing.B) {
+			b.ReportAllocs()
+			b.SetBytes(int64(len(values) * 8))
+			var reader GranuleReader
+			decoded, _, _, err := reader.DecodeNullableInt64(g)
+			if err != nil {
+				b.Fatal(err)
+			}
+			benchSink += decoded[len(decoded)-1]
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				decoded, _, _, err := reader.DecodeNullableInt64(g)
+				if err != nil {
+					b.Fatal(err)
+				}
+				benchSink += decoded[len(decoded)-1]
+			}
+			reportGranuleBenchMetrics(b, len(values), len(values)*8, g.StoredBytes)
+		})
+	}
+}
+
+func BenchmarkCountBoolGranule(b *testing.B) {
+	fixtures := []struct {
+		name   string
+		values []bool
+	}{
+		{name: "alternating", values: makeAlternatingBool(DefaultRowsPerGranule)},
+		{name: "runs", values: makeBoolRuns(DefaultRowsPerGranule)},
+	}
+	for _, fx := range fixtures {
+		for _, compression := range []Compression{CompressionNone, CompressionSnappy, CompressionLZ4} {
+			builder := NewGranuleBuilder(Config{Compression: compression})
+			g, err := builder.BuildBool(fx.values)
+			if err != nil {
+				b.Fatal(err)
+			}
+			name := fmt.Sprintf("%s/requested_%s/actual_%s/stored_%dB/raw_%dB", fx.name, compression, g.Compression, g.StoredBytes, g.RawBytes)
+			b.Run(name, func(b *testing.B) {
+				b.ReportAllocs()
+				b.SetBytes(int64(len(fx.values)))
+				var reader GranuleReader
+				count, err := reader.CountTrueBool(g)
+				if err != nil {
+					b.Fatal(err)
+				}
+				benchSink += int64(count)
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					count, err := reader.CountTrueBool(g)
+					if err != nil {
+						b.Fatal(err)
+					}
+					benchSink += int64(count)
+				}
+				reportGranuleBenchMetrics(b, len(fx.values), len(fx.values), g.StoredBytes)
+			})
+		}
+	}
+}
+
+func BenchmarkCountUint32CodesGranule(b *testing.B) {
+	codes := makeUint32Codes(DefaultRowsPerGranule, 16)
+	for _, compression := range []Compression{CompressionNone, CompressionSnappy, CompressionLZ4} {
+		builder := NewGranuleBuilder(Config{Compression: compression})
+		g, err := builder.BuildUint32Codes(codes, 16)
+		if err != nil {
+			b.Fatal(err)
+		}
+		name := fmt.Sprintf("cardinality_16/requested_%s/actual_%s/stored_%dB/raw_%dB", compression, g.Compression, g.StoredBytes, g.RawBytes)
+		b.Run(name, func(b *testing.B) {
+			b.ReportAllocs()
+			b.SetBytes(int64(len(codes) * 4))
+			var reader GranuleReader
+			counts, err := reader.CountUint32Codes(g, nil)
+			if err != nil {
+				b.Fatal(err)
+			}
+			benchSink += int64(counts[0])
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				counts, err = reader.CountUint32Codes(g, counts)
+				if err != nil {
+					b.Fatal(err)
+				}
+				benchSink += int64(counts[0])
+			}
+			reportGranuleBenchMetrics(b, len(codes), len(codes)*4, g.StoredBytes)
+		})
+	}
+}
+
 func TestCompressionRatios(t *testing.T) {
 	for _, fx := range benchmarkFixtures() {
 		t.Logf("fixture=%s rows=%d raw_values_bytes=%d", fx.name, len(fx.values), len(fx.values)*8)
@@ -200,6 +312,38 @@ func makeRandom(n int) []int64 {
 	values := make([]int64, n)
 	for i := range values {
 		values[i] = r.Int63()
+	}
+	return values
+}
+
+func makeEveryNthBool(n int, step int) []bool {
+	values := make([]bool, n)
+	for i := range values {
+		values[i] = i%step == 0
+	}
+	return values
+}
+
+func makeAlternatingBool(n int) []bool {
+	values := make([]bool, n)
+	for i := range values {
+		values[i] = i%2 == 0
+	}
+	return values
+}
+
+func makeBoolRuns(n int) []bool {
+	values := make([]bool, n)
+	for i := range values {
+		values[i] = (i/256)%2 == 1
+	}
+	return values
+}
+
+func makeUint32Codes(n int, cardinality uint32) []uint32 {
+	values := make([]uint32, n)
+	for i := range values {
+		values[i] = uint32((i / 32) % int(cardinality))
 	}
 	return values
 }
