@@ -216,6 +216,27 @@ func TestCommandWALRawSetReplayRePointersWhenThresholdDrops(t *testing.T) {
 	}
 }
 
+func TestCommandWALRawEmptyBatchAdvancesAppliedLSNAsNoop(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	before := db.State()
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close bootstrap db: %v", err)
+	}
+	writeCommandWALRawKVFrame(t, dir, 1, 1, nil)
+
+	reopen := openCommandWALDB(t, dir)
+	defer reopen.Close()
+	after := reopen.State()
+	if after.RootPageID != before.RootPageID || after.SystemRootPageID != before.SystemRootPageID {
+		t.Fatalf("empty RawKVBatch roots changed: before=%+v after=%+v", before, after)
+	}
+	if after.AppliedCommandLSN != 1 {
+		t.Fatalf("AppliedCommandLSN=%d, want 1", after.AppliedCommandLSN)
+	}
+}
+
 func TestCommandWALRecoveryCrashDuringReplayResumesFromAppliedLSN(t *testing.T) {
 	dir := t.TempDir()
 	enableCommandWALFormat(t, dir)

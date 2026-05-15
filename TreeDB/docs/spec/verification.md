@@ -313,6 +313,7 @@ PR 3: recovery dispatcher and raw KV command conversion:
 - `TestCommandWALCrashDuringRootPublishSelectsOldTupleOrNewTuple`;
 - `TestCommandWALCrashAfterRootAppliedLSNBeforeCleanupSkipsFrame`;
 - `TestCommandWALRawSetReplayRePointersWhenThresholdDrops`;
+- `TestCommandWALRawEmptyBatchAdvancesAppliedLSNAsNoop`;
 - `TestCommandWALRecoveryCrashDuringReplayResumesFromAppliedLSN`;
 - `TestCommandWALStrictCommandEffectWithoutAppliedLSNFailsClosed`;
 - `TestCommandWALIdempotentSkipRequiresDigestProof`;
@@ -345,6 +346,11 @@ PR3 implementation evidence:
   re-pointerized through the existing replay value-log appender, and the
   appended value-log bytes are synced before roots plus `AppliedCommandLSN` are
   published.
+- Empty `RawKVBatch` frames are explicit no-op command frames: they publish the
+  current roots with the frame LSN so command-stream contiguity remains exact.
+- Command WAL with WAL-off durability fails closed, including after
+  `command_wal_v1` is persisted, because PR3 requires a recoverable command
+  frame before root visibility.
 - Public cached-mode command WAL writes remain fail-closed until the cached
   writer is converted to the shared typed command journal. This prevents mixed
   legacy raw records in `command_wal_v1` directories.

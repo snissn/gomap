@@ -252,6 +252,15 @@ func commandWALRequiredFeatureGate(dir string) (bool, error) {
 
 // SaveFormatConfig writes cfg to dir/format.json atomically.
 func SaveFormatConfig(dir string, cfg FormatConfig) error {
+	if cfg.RequiresCommandWALV1() {
+		if err := ValidateCommandWALActivationClean(dir); err != nil {
+			return err
+		}
+	}
+	return writeFormatConfig(dir, cfg)
+}
+
+func writeFormatConfig(dir string, cfg FormatConfig) error {
 	path := formatConfigPath(dir)
 	if path == "" {
 		return errors.New("missing db dir")
@@ -260,11 +269,6 @@ func SaveFormatConfig(dir string, cfg FormatConfig) error {
 		cfg.Version = formatConfigRequiredFeaturesVersion
 	} else if cfg.Version == 0 {
 		cfg.Version = formatConfigVersion
-	}
-	if cfg.RequiresCommandWALV1() {
-		if err := ValidateCommandWALActivationClean(dir); err != nil {
-			return err
-		}
 	}
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
@@ -291,7 +295,10 @@ func saveOpenFormatConfig(opts Options) error {
 			return err
 		}
 		if requiresCommandWAL {
-			return nil
+			if opts.ReadOnly {
+				return nil
+			}
+			return writeFormatConfig(opts.Dir, formatConfigFromOptions(opts))
 		}
 		if opts.ReadOnly {
 			return nil

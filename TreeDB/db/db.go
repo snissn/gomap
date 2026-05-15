@@ -1215,6 +1215,9 @@ func validateOptions(opts Options) error {
 	default:
 		return fmt.Errorf("treedb: invalid durability mode %d", opts.Durability)
 	}
+	if opts.CommandWAL && opts.Durability == DurabilityWALOffRelaxed {
+		return fmt.Errorf("%w: WAL-off durability is incompatible with command WAL", ErrCommandWALUnsupported)
+	}
 	switch opts.ValueLog.ReadIntegrity {
 	case IntegrityVerify, IntegritySkipChecksums:
 	default:

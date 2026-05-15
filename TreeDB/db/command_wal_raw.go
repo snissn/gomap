@@ -19,8 +19,11 @@ type commandWALBatchIntent struct {
 }
 
 func (db *DB) prepareRawKVCommandWALIntent(b *Batch) (*commandWALBatchIntent, error) {
-	if db == nil || !db.commandWAL || db.durability == DurabilityWALOffRelaxed {
+	if db == nil || !db.commandWAL {
 		return nil, nil
+	}
+	if db.durability == DurabilityWALOffRelaxed {
+		return nil, fmt.Errorf("%w: WAL-off durability is incompatible with command WAL", ErrCommandWALUnsupported)
 	}
 	if b == nil || b.batch == nil {
 		return nil, nil

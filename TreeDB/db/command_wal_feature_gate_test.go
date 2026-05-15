@@ -95,12 +95,74 @@ func TestSaveOpenFormatConfigPreservesActiveCommandWALFeature(t *testing.T) {
 	}
 }
 
+func TestSaveOpenFormatConfigRefreshesActiveCommandWALKnobs(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := SaveFormatConfig(dir, FormatConfig{RequiredFeatures: []string{RequiredFeatureCommandWALV1}}); err != nil {
+		t.Fatalf("SaveFormatConfig: %v", err)
+	}
+	writeCommandWALRawKVFrame(t, dir, 1, 1, []commitlog.RawKVOperation{
+		{Op: commitlog.RawKVOpSet, Key: []byte("k"), Value: []byte("v")},
+	})
+	if err := saveOpenFormatConfig(Options{
+		Dir:                   dir,
+		CommandWAL:            true,
+		LeafPrefixCompression: true,
+		ValueLog: ValueLogOptions{
+			Compression: ValueLogCompressionOff,
+		},
+	}); err != nil {
+		t.Fatalf("saveOpenFormatConfig: %v", err)
+	}
+	cfg, ok, err := LoadFormatConfig(dir)
+	if err != nil {
+		t.Fatalf("LoadFormatConfig: %v", err)
+	}
+	if !ok || !cfg.RequiresCommandWALV1() {
+		t.Fatalf("format config command_wal_v1 missing: ok=%v cfg=%+v", ok, cfg)
+	}
+	if !cfg.LeafPrefixCompression {
+		t.Fatalf("LeafPrefixCompression=false, want refreshed true")
+	}
+	if cfg.ValueLogCompression != "off" {
+		t.Fatalf("ValueLogCompression=%q, want off", cfg.ValueLogCompression)
+	}
+}
+
+func TestCommandWALRejectsWALOffDurability(t *testing.T) {
+	dir := t.TempDir()
+	_, err := Open(Options{Dir: dir, CommandWAL: true, Durability: DurabilityWALOffRelaxed})
+	if !errors.Is(err, ErrCommandWALUnsupported) {
+		t.Fatalf("Open CommandWAL WAL-off error=%v, want ErrCommandWALUnsupported", err)
+	}
+
+	persistedDir := t.TempDir()
+	if err := os.MkdirAll(persistedDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll persistedDir: %v", err)
+	}
+	if err := SaveFormatConfig(persistedDir, FormatConfig{RequiredFeatures: []string{RequiredFeatureCommandWALV1}}); err != nil {
+		t.Fatalf("SaveFormatConfig persistedDir: %v", err)
+	}
+	_, err = Open(Options{Dir: persistedDir, Durability: DurabilityWALOffRelaxed})
+	if !errors.Is(err, ErrCommandWALUnsupported) {
+		t.Fatalf("Open persisted CommandWAL WAL-off error=%v, want ErrCommandWALUnsupported", err)
+	}
+}
+
 func TestCommandWALOptionPersistsFeatureBeforeJournalActivation(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(Options{Dir: dir, CommandWAL: true})
 	if err != nil {
 		t.Fatalf("Open CommandWAL: %v", err)
 	}
+	dbClosed := false
+	t.Cleanup(func() {
+		if !dbClosed {
+			_ = db.Close()
+		}
+	})
 	requiresCommandWAL, err := CommandWALRequiredFeatureEnabled(dir)
 	if err != nil {
 		t.Fatalf("CommandWALRequiredFeatureEnabled: %v", err)
@@ -116,8 +178,10 @@ func TestCommandWALOptionPersistsFeatureBeforeJournalActivation(t *testing.T) {
 		t.Fatalf("WriteSync: %v", err)
 	}
 	if err := db.Close(); err != nil {
+		dbClosed = true
 		t.Fatalf("Close: %v", err)
 	}
+	dbClosed = true
 
 	reopened, err := Open(Options{Dir: dir})
 	if err != nil {
