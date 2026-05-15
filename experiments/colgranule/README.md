@@ -148,5 +148,9 @@ must stay aligned with the future file format:
 - local 1M JSONBench reports must include granule count, codec block count, part
   file count, retained-payload file count, build throughput, allocations, and
   TreeDB/ClickHouse size ratios;
+- `BenchmarkJSONBenchPartImageM1D` and the optional 1M
+  `BenchmarkJSONBenchLocalPartImageM1D` benchmark must keep measuring
+  serialization of an existing part, parse/reconstruct from image bytes, and the
+  full build/serialize/parse/reconstruct path;
 - M2 should add persistence, checksums, file/container layout, recovery, and
   lifecycle behavior without changing the logical section model.
