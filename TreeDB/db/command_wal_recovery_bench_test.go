@@ -95,9 +95,9 @@ func BenchmarkCommandWALReplayFrameClassification(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		needsValueLog, err := commandWALReplayFramesNeedValueLogSupport(nil, frames)
+		needsValueLog, err := commandWALReplayFramesNeedLogSupport(nil, frames)
 		if err != nil {
-			b.Fatalf("commandWALReplayFramesNeedValueLogSupport: %v", err)
+			b.Fatalf("commandWALReplayFramesNeedLogSupport: %v", err)
 		}
 		if needsValueLog {
 			b.Fatal("inline RawKVBatch frames unexpectedly need value-log support")

@@ -16,7 +16,7 @@
 ```text
        Test  TreeDB (backend)  TreeDB (backend command_wal_v1)
 -----------  ----------------  -------------------------------
-Batch Write            10,771                           10,749
+Batch Write            10,481                           10,530
 ```
 
 ## Disk Usage (End of Run)

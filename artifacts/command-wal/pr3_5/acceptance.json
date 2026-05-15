@@ -3,7 +3,7 @@
   "milestone": "PR3.5 raw KV command-WAL performance visibility and polish",
   "branch": "codex/user-command-wal-pr3_5",
   "base_branch": "codex/user-command-wal-pr3",
-  "base_commit": "9b54268807d5698332553d12de04b73889bdcf7d",
+  "base_commit": "b0f51fc784fdcc1f79ff7160588fe97c4996254e",
   "go_version": "go1.25.7 linux/amd64",
   "platform": "linux/amd64",
   "command_support_matrix_version": "TreeDB/docs/spec/verification.md and issue #1529 PR3.5 evidence update",
@@ -11,7 +11,8 @@
     "hidden unified-bench DB variant treedb_backend_command_wal plus alias treedb_command_wal",
     "TreeDB backend adapter snapshots final stats before close so unified-bench artifacts include command-WAL proof fields",
     "TreeDB stats expose command_wal enabled, required_feature, segment/frame/max_lsn counters, and AppliedCommandLSN",
-    "DB-local ValuePtr to RID cache avoids repeated value-log metadata scans for repeated pointer-backed command-WAL intents"
+    "DB-local ValuePtr to RID cache avoids repeated value-log metadata scans for repeated pointer-backed command-WAL intents",
+    "command-WAL raw replay lazily creates replay-log support if placement heuristics ever drift from Batch.Set"
   ],
   "passed_tests": [
     "TestCommandWALStatsProveModeAndFrames",
@@ -20,7 +21,8 @@
     "TestTreeDBBackendCommandWALVariantPersistsFeatureAndAppendsTypedFrames",
     "TestTreeDBCommandWALAliasResolvesToBackendVariant",
     "TestSelectedKeepsSharedTreeDBStats",
-    "TestRenderMarkdownSingle_IncludesTreeDBPerfAndStatsSections"
+    "TestRenderMarkdownSingle_IncludesTreeDBPerfAndStatsSections",
+    "TestCommandWALRawSetReplayLazilyCreatesAppenderIfPlacementDrifts"
   ],
   "benchmark_commands": [
     "GOWORK=off go test ./TreeDB/db -run '^$' -bench 'BenchmarkCommandWAL(RawKVDirectWrite|RawKVPointerDirectWrite|ReplayFrameClassification|ReadReplayFrames|CoveredSegmentCleanupProof)' -benchmem -benchtime=200ms -count=6",
@@ -39,12 +41,12 @@
     "artifacts/command-wal/pr3_5/unified-bench-checkpoint-heavy.md"
   ],
   "performance_summary": {
-    "small_batch_write_ops_per_sec": "legacy backend 2.563M/s, command_wal_v1 2.029M/s",
-    "small_batch_delete_ops_per_sec": "legacy backend 1.650M/s, command_wal_v1 1.621M/s",
-    "large_batch_write_ops_per_sec": "legacy backend 5.002M/s, command_wal_v1 2.788M/s",
-    "checkpoint_heavy_write_ops_per_sec": "legacy backend 10.771k/s, command_wal_v1 10.749k/s",
-    "direct_write_microbench": "legacy 3.896 us/op, command_wal_v1 4.889 us/op, +3 alloc/op",
-    "pointer_write_microbench": "legacy pointer 3.789 us/op, command_wal_v1 pointer 6.177 us/op after RID-cache polish, +6 alloc/op",
+    "small_batch_write_ops_per_sec": "legacy backend 2.719M/s, command_wal_v1 1.797M/s",
+    "small_batch_delete_ops_per_sec": "legacy backend 1.609M/s, command_wal_v1 1.227M/s",
+    "large_batch_write_ops_per_sec": "legacy backend 4.815M/s, command_wal_v1 2.798M/s",
+    "checkpoint_heavy_write_ops_per_sec": "legacy backend 10.481k/s, command_wal_v1 10.530k/s",
+    "direct_write_microbench": "legacy 3.666 us/op, command_wal_v1 4.921 us/op, +3 alloc/op",
+    "pointer_write_microbench": "legacy pointer 3.760 us/op, command_wal_v1 pointer 6.424 us/op after RID-cache polish, +6 alloc/op",
     "warmed_append_gate": "WriterAppendCommandRawKVBatch and CommandJournalAllocateAndAppendRawKVBatch remain 0 B/op and 0 allocs/op",
     "warmed_classification_gate": "RawKVBatch payload scan, replay frame classification, and ValueLog ReadNextMeta remain 0 B/op and 0 allocs/op"
   },
@@ -60,7 +62,8 @@
   },
   "known_gaps": [
     "direct backend kvstore.Set cannot express value-log SetPointer, so value-pointer comparison is covered by DB microbench rather than unified-bench until a pointer-capable benchmark adapter/API exists",
-    "large-batch command_wal_v1 throughput remains materially slower than legacy backend and should block PR9 default cutover unless optimized or explicitly accepted",
+    "large-batch command_wal_v1 throughput remains materially slower than legacy backend (4.815M/s legacy vs 2.798M/s command WAL in the refreshed PR3.5 artifact) and should block PR9 default cutover unless optimized or explicitly accepted",
     "pointer command_wal_v1 still has +6 alloc/op after RID-cache polish; remaining allocations are tracked as future optimization debt before default cutover"
-  ]
+  ],
+  "evidence_generated_from_commit": "d6b56c80c0c29808f72c7978b247cb9a774d4aa5"
 }

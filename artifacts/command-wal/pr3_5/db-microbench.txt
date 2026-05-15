@@ -2,47 +2,47 @@ goos: linux
 goarch: amd64
 pkg: github.com/snissn/gomap/TreeDB/db
 cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
-BenchmarkCommandWALRawKVDirectWrite/backend_no_command_wal-12         	   65811	      3636 ns/op	  14.58 MB/s	    5805 B/op	      19 allocs/op
-BenchmarkCommandWALRawKVDirectWrite/backend_no_command_wal-12         	   65359	      3941 ns/op	  13.45 MB/s	    5805 B/op	      19 allocs/op
-BenchmarkCommandWALRawKVDirectWrite/backend_no_command_wal-12         	   61088	      4149 ns/op	  12.78 MB/s	    5805 B/op	      19 allocs/op
-BenchmarkCommandWALRawKVDirectWrite/backend_no_command_wal-12         	   63477	      3881 ns/op	  13.66 MB/s	    5805 B/op	      19 allocs/op
-BenchmarkCommandWALRawKVDirectWrite/backend_no_command_wal-12         	   62084	      3910 ns/op	  13.56 MB/s	    5805 B/op	      19 allocs/op
-BenchmarkCommandWALRawKVDirectWrite/backend_no_command_wal-12         	   58279	      3804 ns/op	  13.93 MB/s	    5806 B/op	      19 allocs/op
-BenchmarkCommandWALRawKVDirectWrite/command_wal_raw_kv-12             	   46274	      4806 ns/op	  11.03 MB/s	    5961 B/op	      22 allocs/op
-BenchmarkCommandWALRawKVDirectWrite/command_wal_raw_kv-12             	   46494	      4836 ns/op	  10.96 MB/s	    5958 B/op	      22 allocs/op
-BenchmarkCommandWALRawKVDirectWrite/command_wal_raw_kv-12             	   45537	      4993 ns/op	  10.61 MB/s	    5958 B/op	      22 allocs/op
-BenchmarkCommandWALRawKVDirectWrite/command_wal_raw_kv-12             	   47251	      4804 ns/op	  11.03 MB/s	    5958 B/op	      22 allocs/op
-BenchmarkCommandWALRawKVDirectWrite/command_wal_raw_kv-12             	   46774	      4941 ns/op	  10.73 MB/s	    5956 B/op	      22 allocs/op
-BenchmarkCommandWALRawKVDirectWrite/command_wal_raw_kv-12             	   45592	      4979 ns/op	  10.64 MB/s	    5956 B/op	      22 allocs/op
-BenchmarkCommandWALRawKVPointerDirectWrite/backend_no_command_wal_pointer-12         	   57794	      3775 ns/op	  12.72 MB/s	    6136 B/op	      22 allocs/op
-BenchmarkCommandWALRawKVPointerDirectWrite/backend_no_command_wal_pointer-12         	   58786	      3722 ns/op	  12.89 MB/s	    6135 B/op	      22 allocs/op
-BenchmarkCommandWALRawKVPointerDirectWrite/backend_no_command_wal_pointer-12         	   60649	      3789 ns/op	  12.67 MB/s	    6135 B/op	      22 allocs/op
-BenchmarkCommandWALRawKVPointerDirectWrite/backend_no_command_wal_pointer-12         	   61426	      3807 ns/op	  12.61 MB/s	    6134 B/op	      22 allocs/op
-BenchmarkCommandWALRawKVPointerDirectWrite/backend_no_command_wal_pointer-12         	   62715	      3824 ns/op	  12.55 MB/s	    6134 B/op	      22 allocs/op
-BenchmarkCommandWALRawKVPointerDirectWrite/backend_no_command_wal_pointer-12         	   61429	      3788 ns/op	  12.67 MB/s	    6138 B/op	      22 allocs/op
-BenchmarkCommandWALRawKVPointerDirectWrite/command_wal_raw_kv_pointer-12             	   35994	      6141 ns/op	   7.82 MB/s	    6646 B/op	      28 allocs/op
-BenchmarkCommandWALRawKVPointerDirectWrite/command_wal_raw_kv_pointer-12             	   35127	      6799 ns/op	   7.06 MB/s	    6644 B/op	      28 allocs/op
-BenchmarkCommandWALRawKVPointerDirectWrite/command_wal_raw_kv_pointer-12             	   36657	      6356 ns/op	   7.55 MB/s	    6646 B/op	      28 allocs/op
-BenchmarkCommandWALRawKVPointerDirectWrite/command_wal_raw_kv_pointer-12             	   36841	      6190 ns/op	   7.75 MB/s	    6644 B/op	      28 allocs/op
-BenchmarkCommandWALRawKVPointerDirectWrite/command_wal_raw_kv_pointer-12             	   36571	      6164 ns/op	   7.79 MB/s	    6646 B/op	      28 allocs/op
-BenchmarkCommandWALRawKVPointerDirectWrite/command_wal_raw_kv_pointer-12             	   35706	      6150 ns/op	   7.81 MB/s	    6644 B/op	      28 allocs/op
-BenchmarkCommandWALReplayFrameClassification-12                                      	    7024	     33266 ns/op	10142.72 MB/s	       0 B/op	       0 allocs/op
-BenchmarkCommandWALReplayFrameClassification-12                                      	    7536	     34133 ns/op	9885.06 MB/s	       0 B/op	       0 allocs/op
-BenchmarkCommandWALReplayFrameClassification-12                                      	    7240	     33075 ns/op	10201.17 MB/s	       0 B/op	       0 allocs/op
-BenchmarkCommandWALReplayFrameClassification-12                                      	    7317	     33605 ns/op	10040.36 MB/s	       0 B/op	       0 allocs/op
-BenchmarkCommandWALReplayFrameClassification-12                                      	    7117	     33192 ns/op	10165.30 MB/s	       0 B/op	       0 allocs/op
-BenchmarkCommandWALReplayFrameClassification-12                                      	    7122	     34513 ns/op	9776.35 MB/s	       0 B/op	       0 allocs/op
-BenchmarkCommandWALReadReplayFrames-12                                               	     421	    559691 ns/op	   90096 B/op	    1045 allocs/op
-BenchmarkCommandWALReadReplayFrames-12                                               	     410	    551886 ns/op	   90096 B/op	    1045 allocs/op
-BenchmarkCommandWALReadReplayFrames-12                                               	     430	    540016 ns/op	   90096 B/op	    1045 allocs/op
-BenchmarkCommandWALReadReplayFrames-12                                               	     435	    541105 ns/op	   90096 B/op	    1045 allocs/op
-BenchmarkCommandWALReadReplayFrames-12                                               	     420	    550156 ns/op	   90096 B/op	    1045 allocs/op
-BenchmarkCommandWALReadReplayFrames-12                                               	     363	    557931 ns/op	   90096 B/op	    1045 allocs/op
-BenchmarkCommandWALCoveredSegmentCleanupProof-12                                     	     367	    645718 ns/op	  107667 B/op	    1499 allocs/op
-BenchmarkCommandWALCoveredSegmentCleanupProof-12                                     	     372	    659447 ns/op	  107730 B/op	    1499 allocs/op
-BenchmarkCommandWALCoveredSegmentCleanupProof-12                                     	     373	    634499 ns/op	  107619 B/op	    1499 allocs/op
-BenchmarkCommandWALCoveredSegmentCleanupProof-12                                     	     376	    645568 ns/op	  107667 B/op	    1499 allocs/op
-BenchmarkCommandWALCoveredSegmentCleanupProof-12                                     	     361	    642974 ns/op	  107665 B/op	    1499 allocs/op
-BenchmarkCommandWALCoveredSegmentCleanupProof-12                                     	     369	    645823 ns/op	  107660 B/op	    1499 allocs/op
+BenchmarkCommandWALRawKVDirectWrite/backend_no_command_wal-12         	   63087	      3615 ns/op	  14.66 MB/s	    5806 B/op	      19 allocs/op
+BenchmarkCommandWALRawKVDirectWrite/backend_no_command_wal-12         	   63566	      3620 ns/op	  14.64 MB/s	    5806 B/op	      19 allocs/op
+BenchmarkCommandWALRawKVDirectWrite/backend_no_command_wal-12         	   64070	      3763 ns/op	  14.09 MB/s	    5805 B/op	      19 allocs/op
+BenchmarkCommandWALRawKVDirectWrite/backend_no_command_wal-12         	   65731	      3681 ns/op	  14.40 MB/s	    5809 B/op	      19 allocs/op
+BenchmarkCommandWALRawKVDirectWrite/backend_no_command_wal-12         	   63456	      3650 ns/op	  14.52 MB/s	    5807 B/op	      19 allocs/op
+BenchmarkCommandWALRawKVDirectWrite/backend_no_command_wal-12         	   57067	      3786 ns/op	  14.00 MB/s	    5802 B/op	      19 allocs/op
+BenchmarkCommandWALRawKVDirectWrite/command_wal_raw_kv-12             	   46081	      5277 ns/op	  10.04 MB/s	    5956 B/op	      22 allocs/op
+BenchmarkCommandWALRawKVDirectWrite/command_wal_raw_kv-12             	   47598	      4971 ns/op	  10.66 MB/s	    5958 B/op	      22 allocs/op
+BenchmarkCommandWALRawKVDirectWrite/command_wal_raw_kv-12             	   46345	      4806 ns/op	  11.03 MB/s	    5958 B/op	      22 allocs/op
+BenchmarkCommandWALRawKVDirectWrite/command_wal_raw_kv-12             	   47269	      5051 ns/op	  10.49 MB/s	    5956 B/op	      22 allocs/op
+BenchmarkCommandWALRawKVDirectWrite/command_wal_raw_kv-12             	   46443	      4818 ns/op	  11.00 MB/s	    5958 B/op	      22 allocs/op
+BenchmarkCommandWALRawKVDirectWrite/command_wal_raw_kv-12             	   45774	      4871 ns/op	  10.88 MB/s	    5956 B/op	      22 allocs/op
+BenchmarkCommandWALRawKVPointerDirectWrite/backend_no_command_wal_pointer-12         	   60175	      3762 ns/op	  12.76 MB/s	    6132 B/op	      22 allocs/op
+BenchmarkCommandWALRawKVPointerDirectWrite/backend_no_command_wal_pointer-12         	   58162	      3951 ns/op	  12.15 MB/s	    6134 B/op	      22 allocs/op
+BenchmarkCommandWALRawKVPointerDirectWrite/backend_no_command_wal_pointer-12         	   60236	      3757 ns/op	  12.77 MB/s	    6136 B/op	      22 allocs/op
+BenchmarkCommandWALRawKVPointerDirectWrite/backend_no_command_wal_pointer-12         	   57459	      3731 ns/op	  12.87 MB/s	    6132 B/op	      22 allocs/op
+BenchmarkCommandWALRawKVPointerDirectWrite/backend_no_command_wal_pointer-12         	   55700	      3727 ns/op	  12.88 MB/s	    6134 B/op	      22 allocs/op
+BenchmarkCommandWALRawKVPointerDirectWrite/backend_no_command_wal_pointer-12         	   58381	      3781 ns/op	  12.69 MB/s	    6135 B/op	      22 allocs/op
+BenchmarkCommandWALRawKVPointerDirectWrite/command_wal_raw_kv_pointer-12             	   35847	      6426 ns/op	   7.47 MB/s	    6644 B/op	      28 allocs/op
+BenchmarkCommandWALRawKVPointerDirectWrite/command_wal_raw_kv_pointer-12             	   35638	      6245 ns/op	   7.69 MB/s	    6644 B/op	      28 allocs/op
+BenchmarkCommandWALRawKVPointerDirectWrite/command_wal_raw_kv_pointer-12             	   36315	      6224 ns/op	   7.71 MB/s	    6644 B/op	      28 allocs/op
+BenchmarkCommandWALRawKVPointerDirectWrite/command_wal_raw_kv_pointer-12             	   35842	      6421 ns/op	   7.47 MB/s	    6644 B/op	      28 allocs/op
+BenchmarkCommandWALRawKVPointerDirectWrite/command_wal_raw_kv_pointer-12             	   34309	      7179 ns/op	   6.69 MB/s	    6644 B/op	      28 allocs/op
+BenchmarkCommandWALRawKVPointerDirectWrite/command_wal_raw_kv_pointer-12             	   34310	      6936 ns/op	   6.92 MB/s	    6646 B/op	      28 allocs/op
+BenchmarkCommandWALReplayFrameClassification-12                                      	    6489	     34197 ns/op	9866.71 MB/s	       0 B/op	       0 allocs/op
+BenchmarkCommandWALReplayFrameClassification-12                                      	    7095	     44606 ns/op	7564.22 MB/s	       0 B/op	       0 allocs/op
+BenchmarkCommandWALReplayFrameClassification-12                                      	    7093	     33447 ns/op	10087.84 MB/s	       0 B/op	       0 allocs/op
+BenchmarkCommandWALReplayFrameClassification-12                                      	    7123	     32915 ns/op	10250.90 MB/s	       0 B/op	       0 allocs/op
+BenchmarkCommandWALReplayFrameClassification-12                                      	    7354	     33885 ns/op	9957.34 MB/s	       0 B/op	       0 allocs/op
+BenchmarkCommandWALReplayFrameClassification-12                                      	    7388	     38420 ns/op	8782.14 MB/s	       0 B/op	       0 allocs/op
+BenchmarkCommandWALReadReplayFrames-12                                               	     436	    550765 ns/op	   90096 B/op	    1045 allocs/op
+BenchmarkCommandWALReadReplayFrames-12                                               	     433	    550111 ns/op	   90096 B/op	    1045 allocs/op
+BenchmarkCommandWALReadReplayFrames-12                                               	     438	    564817 ns/op	   90097 B/op	    1045 allocs/op
+BenchmarkCommandWALReadReplayFrames-12                                               	     428	    553321 ns/op	   90096 B/op	    1045 allocs/op
+BenchmarkCommandWALReadReplayFrames-12                                               	     442	    547895 ns/op	   90096 B/op	    1045 allocs/op
+BenchmarkCommandWALReadReplayFrames-12                                               	     423	    559264 ns/op	   90096 B/op	    1045 allocs/op
+BenchmarkCommandWALCoveredSegmentCleanupProof-12                                     	     373	    635009 ns/op	  107624 B/op	    1499 allocs/op
+BenchmarkCommandWALCoveredSegmentCleanupProof-12                                     	     354	    649179 ns/op	  107628 B/op	    1499 allocs/op
+BenchmarkCommandWALCoveredSegmentCleanupProof-12                                     	     356	    631931 ns/op	  107650 B/op	    1499 allocs/op
+BenchmarkCommandWALCoveredSegmentCleanupProof-12                                     	     372	    775105 ns/op	  107669 B/op	    1499 allocs/op
+BenchmarkCommandWALCoveredSegmentCleanupProof-12                                     	     372	    636650 ns/op	  107632 B/op	    1499 allocs/op
+BenchmarkCommandWALCoveredSegmentCleanupProof-12                                     	     374	    641045 ns/op	  107729 B/op	    1499 allocs/op
 PASS
-ok  	github.com/snissn/gomap/TreeDB/db	37.416s
+ok  	github.com/snissn/gomap/TreeDB/db	37.283s

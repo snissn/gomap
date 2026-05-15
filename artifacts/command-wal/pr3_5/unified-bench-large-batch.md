@@ -16,7 +16,7 @@
 ```text
        Test  TreeDB (backend)  TreeDB (backend command_wal_v1)
 -----------  ----------------  -------------------------------
-Batch Write         5,001,701                        2,788,432
+Batch Write         4,814,532                        2,798,416
 ```
 
 ## Checkpoint Time (Between Tests + Post-run)
@@ -24,8 +24,8 @@ Batch Write         5,001,701                        2,788,432
 ```text
 Before Test  TreeDB (backend)  TreeDB (backend command_wal_v1)
 -----------  ----------------  -------------------------------
-Batch Write            9.17ms                           9.10ms
-  After Run            9.23ms                           9.31ms
+Batch Write            9.34ms                           9.55ms
+  After Run            9.80ms                           9.51ms
 ```
 
 ## Disk Usage (End of Run)

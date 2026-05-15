@@ -4,33 +4,33 @@ pkg: github.com/snissn/gomap/TreeDB/internal/commitlog
 cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
                                                        │ artifacts/command-wal/pr3_5/commitlog-valuelog-microbench.txt │
                                                        │                            sec/op                             │
-CommandWALRawKVBatchPayloadEncode/ops_1_value_64-12                                                        33.23n ± 4%
-CommandWALRawKVBatchPayloadEncode/ops_16_value_64-12                                                       282.6n ± 3%
-CommandWALRawKVBatchPayloadEncode/ops_128_value_64-12                                                      2.114µ ± 4%
-CommandWALRawKVBatchPayloadEncode/ops_16_value_1024-12                                                     1.622µ ± 3%
-CommandWALRawKVBatchPayloadScan/ops_1_value_64-12                                                          7.690n ± 1%
-CommandWALRawKVBatchPayloadScan/ops_16_value_64-12                                                         82.94n ± 3%
-CommandWALRawKVBatchPayloadScan/ops_128_value_64-12                                                        661.6n ± 2%
-CommandWALRawKVBatchPayloadScan/ops_16_value_1024-12                                                       83.76n ± 2%
-WriterAppendCommandRawKVBatch/ops_1_value_64-12                                                            273.1n ± 2%
-WriterAppendCommandRawKVBatch/ops_16_value_64-12                                                           1.507µ ± 2%
-WriterAppendCommandRawKVBatch/ops_128_value_64-12                                                          11.21µ ± 2%
-WriterAppendCommandRawKVBatch/ops_16_value_1024-12                                                         16.21µ ± 2%
-CommandJournalAllocateAndAppendRawKVBatch-12                                                               272.2n ± 5%
-geomean                                                                                                    440.0n
+CommandWALRawKVBatchPayloadEncode/ops_1_value_64-12                                                       33.30n ±  2%
+CommandWALRawKVBatchPayloadEncode/ops_16_value_64-12                                                      282.8n ±  2%
+CommandWALRawKVBatchPayloadEncode/ops_128_value_64-12                                                     2.135µ ±  2%
+CommandWALRawKVBatchPayloadEncode/ops_16_value_1024-12                                                    1.629µ ±  6%
+CommandWALRawKVBatchPayloadScan/ops_1_value_64-12                                                         7.910n ±  2%
+CommandWALRawKVBatchPayloadScan/ops_16_value_64-12                                                        85.46n ±  3%
+CommandWALRawKVBatchPayloadScan/ops_128_value_64-12                                                       662.8n ±  2%
+CommandWALRawKVBatchPayloadScan/ops_16_value_1024-12                                                      83.60n ± 10%
+WriterAppendCommandRawKVBatch/ops_1_value_64-12                                                           277.3n ±  2%
+WriterAppendCommandRawKVBatch/ops_16_value_64-12                                                          1.516µ ± 18%
+WriterAppendCommandRawKVBatch/ops_128_value_64-12                                                         11.19µ ±  7%
+WriterAppendCommandRawKVBatch/ops_16_value_1024-12                                                        16.62µ ±  7%
+CommandJournalAllocateAndAppendRawKVBatch-12                                                              273.0n ±  2%
+geomean                                                                                                   444.2n
 
                                                        │ artifacts/command-wal/pr3_5/commitlog-valuelog-microbench.txt │
                                                        │                              B/s                              │
-CommandWALRawKVBatchPayloadEncode/ops_1_value_64-12                                                       2.494Gi ± 4%
-CommandWALRawKVBatchPayloadEncode/ops_16_value_64-12                                                      4.397Gi ± 2%
-CommandWALRawKVBatchPayloadEncode/ops_128_value_64-12                                                     4.685Gi ± 4%
-CommandWALRawKVBatchPayloadEncode/ops_16_value_1024-12                                                    9.588Gi ± 3%
-WriterAppendCommandRawKVBatch/ops_1_value_64-12                                                           673.9Mi ± 3%
-WriterAppendCommandRawKVBatch/ops_16_value_64-12                                                          910.1Mi ± 2%
-WriterAppendCommandRawKVBatch/ops_128_value_64-12                                                         912.9Mi ± 2%
-WriterAppendCommandRawKVBatch/ops_16_value_1024-12                                                        988.1Mi ± 2%
-CommandJournalAllocateAndAppendRawKVBatch-12                                                              122.6Mi ± 4%
-geomean                                                                                                   1.458Gi
+CommandWALRawKVBatchPayloadEncode/ops_1_value_64-12                                                      2.489Gi ±  2%
+CommandWALRawKVBatchPayloadEncode/ops_16_value_64-12                                                     4.393Gi ±  2%
+CommandWALRawKVBatchPayloadEncode/ops_128_value_64-12                                                    4.638Gi ±  2%
+CommandWALRawKVBatchPayloadEncode/ops_16_value_1024-12                                                   9.547Gi ±  6%
+WriterAppendCommandRawKVBatch/ops_1_value_64-12                                                          663.8Mi ±  2%
+WriterAppendCommandRawKVBatch/ops_16_value_64-12                                                         904.6Mi ± 15%
+WriterAppendCommandRawKVBatch/ops_128_value_64-12                                                        914.8Mi ±  6%
+WriterAppendCommandRawKVBatch/ops_16_value_1024-12                                                       964.1Mi ±  7%
+CommandJournalAllocateAndAppendRawKVBatch-12                                                             122.3Mi ±  2%
+geomean                                                                                                  1.447Gi
 
                                                        │ artifacts/command-wal/pr3_5/commitlog-valuelog-microbench.txt │
                                                        │                             B/op                              │
@@ -71,9 +71,9 @@ geomean                                                                         
 pkg: github.com/snissn/gomap/TreeDB/internal/valuelog
                                                  │ artifacts/command-wal/pr3_5/commitlog-valuelog-microbench.txt │
                                                  │                            sec/op                             │
-ReaderReadNextMeta_DiscardWithChecksum-12                                                            11.50µ ± 2%
-ReaderReadNextMeta_GroupedDiscardWithChecksum-12                                                     9.525µ ± 1%
-geomean                                                                                              10.47µ
+ReaderReadNextMeta_DiscardWithChecksum-12                                                            11.26µ ± 2%
+ReaderReadNextMeta_GroupedDiscardWithChecksum-12                                                     9.506µ ± 1%
+geomean                                                                                              10.35µ
 
                                                  │ artifacts/command-wal/pr3_5/commitlog-valuelog-microbench.txt │
                                                  │                             B/op                              │
