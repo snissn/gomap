@@ -96,10 +96,7 @@ func summarizeCommandWALStats(dir string, maxSegmentBytes int64) (commandWALStat
 	if err != nil {
 		return commandWALStatsSummary{}, err
 	}
-	activeByLane, err := commandWALActiveSeqByLane(segments, maxSegmentBytes)
-	if err != nil {
-		return commandWALStatsSummary{}, err
-	}
+	activeByLane := commandWALActiveSeqByLane(segments)
 	var summary commandWALStatsSummary
 	for _, seg := range segments {
 		if seg.valueLog || seg.size == 0 || !isCommandWALLaneSegment(seg) {

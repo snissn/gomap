@@ -97,6 +97,40 @@ func TestCommandWALStatsDefaultDoesNotScanWAL(t *testing.T) {
 	dbClosed = true
 }
 
+func TestCommandWALStatsScanUsesDefaultWALMaxSegmentBytes(t *testing.T) {
+	db, err := Open(Options{Dir: t.TempDir(), CommandWAL: true, CommandWALStatsScan: true, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+	dbClosed := false
+	t.Cleanup(func() {
+		if !dbClosed {
+			_ = db.Close()
+		}
+	})
+	b := db.NewBatch()
+	if err := b.Set([]byte("k"), []byte("v")); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if err := b.WriteSync(); err != nil {
+		t.Fatalf("WriteSync: %v", err)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatalf("Close batch: %v", err)
+	}
+	stats := db.Stats()
+	if got := stats["treedb.command_wal.stats_error"]; got != "" {
+		t.Fatalf("unexpected stats error with default WALMaxSegmentBytes: %q (stats=%#v)", got, stats)
+	}
+	if got := stats["treedb.command_wal.frames"]; got != "1" {
+		t.Fatalf("frames=%q, want 1 with default WALMaxSegmentBytes (stats=%#v)", got, stats)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	dbClosed = true
+}
+
 func TestCommandWALStatsDisabledDoesNotScanWAL(t *testing.T) {
 	dir := t.TempDir()
 	walDir := WALDirPath(dir)
