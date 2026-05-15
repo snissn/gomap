@@ -275,14 +275,6 @@ func filterCommandWALSegmentsForLegacyReplay(segments []logSegment, appliedLSN u
 			return nil, err
 		}
 		if !scan.typed {
-			if active && scan.terminalTail {
-				if !skipped {
-					filtered = make([]logSegment, 0, len(segments)-1)
-					filtered = append(filtered, segments[:i]...)
-				}
-				skipped = true
-				continue
-			}
 			if skipped {
 				filtered = append(filtered, seg)
 			}
