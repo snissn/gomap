@@ -68,6 +68,7 @@
   "local_validation_commands": [
     "GOWORK=off go test ./TreeDB ./TreeDB/internal/commitlog ./TreeDB/docs",
     "GOWORK=off go test ./TreeDB/db -run 'TestFormatConfig|TestCommandWAL|TestLoadFormatConfig'",
+    "GOWORK=off go test ./TreeDB/internal/commitlog -run '^$' -fuzz=FuzzCommandWALDecodeFrame -fuzztime=5s",
     "git diff --check"
   ],
   "known_gaps": [
@@ -75,6 +76,5 @@
     "AppliedCommandLSN publish/checkpoint plumbing starts in PR2",
     "collection and catalog placeholders are durable-byte fixtures only"
   ],
-  "implementation_commit": "d86283ae8331666714b8b42c80dca74ada139667",
-  "acceptance_record_commit": "f224bc8347e05fb92818583a1ac94633e5e9aef0"
+  "implementation_commit": "d86283ae8331666714b8b42c80dca74ada139667"
 }
