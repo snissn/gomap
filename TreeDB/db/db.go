@@ -2013,6 +2013,9 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 	if db.readOnly {
 		return post, ErrReadOnly
 	}
+	if db.commandWALFlushPoisoned.Load() {
+		return post, fmt.Errorf("%w: command wal post-append failure; reopen required", ErrRecoveryRequired)
+	}
 	idx := db.idx.Load()
 	if idx == nil {
 		return post, errors.New("missing index")

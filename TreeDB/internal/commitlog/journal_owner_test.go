@@ -209,6 +209,27 @@ func TestCommandJournalInitialLSNIgnoresLegacyRawSegments(t *testing.T) {
 	}
 }
 
+func TestCommandJournalRejectsActiveLegacyRawSegment(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, CommandSegmentName(0, 1))
+	w, err := NewWriter(path)
+	if err != nil {
+		t.Fatalf("NewWriter legacy raw: %v", err)
+	}
+	if err := w.AppendBatch([]Record{{Op: OpSetInline, Key: []byte("legacy"), Value: []byte("raw"), Seq: 99}}); err != nil {
+		_ = w.Close()
+		t.Fatalf("AppendBatch legacy raw: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close legacy raw: %v", err)
+	}
+
+	_, err = OpenCommandJournal(dir, CommandJournalOptions{})
+	if !errors.Is(err, ErrCommandWALLegacyPayload) {
+		t.Fatalf("OpenCommandJournal active legacy error=%v, want ErrCommandWALLegacyPayload", err)
+	}
+}
+
 func TestCommandJournalRejectsNonActiveTerminalTail(t *testing.T) {
 	dir := t.TempDir()
 	j, err := OpenCommandJournal(dir, CommandJournalOptions{SegmentSeq: 1})
