@@ -260,6 +260,68 @@ func TestCommandWALRawSetNeedsReplayValueLogMatchesBatchSet(t *testing.T) {
 	}
 }
 
+func TestCommandWALRawSetReplayLazilyCreatesAppenderIfPlacementDrifts(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db, err := Open(Options{
+		Dir: dir,
+		ValueLog: ValueLogOptions{
+			PointerThreshold: 1,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	value := strings.Repeat("large-replay-value-", 64)
+	payload, err := commitlog.EncodeRawKVBatchPayload([]commitlog.RawKVOperation{{
+		Op:    commitlog.RawKVOpSet,
+		Key:   []byte("k"),
+		Value: []byte(value),
+	}})
+	if err != nil {
+		t.Fatalf("EncodeRawKVBatchPayload: %v", err)
+	}
+	var ensured bool
+	var appender *replayInlineAppender
+	ensure := func() (map[uint64]page.ValuePtr, *replayInlineAppender, error) {
+		ensured = true
+		if appender != nil {
+			return nil, appender, nil
+		}
+		var err error
+		appender, err = newReplayInlineAppender(db, nil, nil)
+		if err != nil {
+			return nil, nil, err
+		}
+		return nil, appender, nil
+	}
+	defer func() {
+		if appender != nil {
+			_ = appender.close()
+		}
+	}()
+
+	err = applyRawKVCommandWALFrame(db, commitlog.CommandEnvelope{
+		LSN:           1,
+		Kind:          commitlog.CommandKindRawKVBatch,
+		Scope:         commitlog.CommandScopeRawKV,
+		PayloadFormat: commitlog.PayloadFormatRawKVBatchV1,
+		Payload:       payload,
+	}, nil, nil, ensure)
+	if err != nil {
+		t.Fatalf("applyRawKVCommandWALFrame: %v", err)
+	}
+	if !ensured {
+		t.Fatalf("replay did not lazily create value-log appender")
+	}
+	assertDBValue(t, db, "k", value)
+	if got := db.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("AppliedCommandLSN=%d, want 1", got)
+	}
+}
+
 func TestCommandWALRawEmptyBatchAdvancesAppliedLSNAsNoop(t *testing.T) {
 	dir := t.TempDir()
 	enableCommandWALFormat(t, dir)
