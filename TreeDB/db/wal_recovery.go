@@ -250,14 +250,21 @@ func replayCommandWALIntoBackend(db *DB, segments []logSegment, maxSegmentBytes 
 		_, err := cleanupCommandWALSegmentsCoveredByAppliedLSN(db.dir, db.meta.AppliedCommandLSN, maxSegmentBytes)
 		return err
 	}
-	ridMap, err := scanValueLogSegments(segments, dictLookup)
+	var ridMap map[uint64]page.ValuePtr
+	needsRIDMap, err := commandWALReplayFramesNeedRIDMap(frames)
 	if err != nil {
 		return err
 	}
+	if needsRIDMap {
+		ridMap, err = scanValueLogSegments(segments, dictLookup)
+		if err != nil {
+			return err
+		}
+	}
+	db.mu.RLock()
+	applied := db.meta.AppliedCommandLSN
+	db.mu.RUnlock()
 	for _, frame := range frames {
-		db.mu.RLock()
-		applied := db.meta.AppliedCommandLSN
-		db.mu.RUnlock()
 		if frame.env.LSN <= applied {
 			continue
 		}
@@ -267,6 +274,7 @@ func replayCommandWALIntoBackend(db *DB, segments []logSegment, maxSegmentBytes 
 		if err := applyCommandWALFrame(db, frame.env, ridMap); err != nil {
 			return err
 		}
+		applied = frame.env.LSN
 		if target := testCommandWALRecoveryFailAfterLSN.Load(); target != 0 && frame.env.LSN == target {
 			testCommandWALRecoveryFailAfterLSN.Store(0)
 			return errTestFinalizeCommitFailpoint
@@ -330,6 +338,28 @@ func readCommandWALReplayFrames(segments []logSegment, appliedLSN uint64, maxSeg
 		return frames[i].order < frames[j].order
 	})
 	return frames, nil
+}
+
+func commandWALReplayFramesNeedRIDMap(frames []commandWALReplayFrame) (bool, error) {
+	for _, frame := range frames {
+		if frame.env.Kind != commitlog.CommandKindRawKVBatch {
+			continue
+		}
+		needsRID := false
+		err := commitlog.ScanRawKVBatchPayload(frame.env.Payload, func(op commitlog.RawKVOp, _, _ []byte) error {
+			if op == commitlog.RawKVOpSetRID {
+				needsRID = true
+			}
+			return nil
+		})
+		if err != nil {
+			return false, err
+		}
+		if needsRID {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func applyCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map[uint64]page.ValuePtr) error {

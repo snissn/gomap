@@ -4,21 +4,21 @@ pkg: github.com/snissn/gomap/TreeDB/db
 cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
                                                      │ artifacts/command-wal/pr3/raw-kv-direct-write-bench.txt │
                                                      │                         sec/op                          │
-CommandWALRawKVDirectWrite/backend_no_command_wal-12                                              8.469µ ± 14%
-CommandWALRawKVDirectWrite/command_wal_raw_kv-12                                                  7.967µ ± 12%
-geomean                                                                                           8.214µ
+CommandWALRawKVDirectWrite/backend_no_command_wal-12                                              8.662µ ± 15%
+CommandWALRawKVDirectWrite/command_wal_raw_kv-12                                                  8.215µ ± 11%
+geomean                                                                                           8.436µ
 
                                                      │ artifacts/command-wal/pr3/raw-kv-direct-write-bench.txt │
                                                      │                           B/s                           │
-CommandWALRawKVDirectWrite/backend_no_command_wal-12                                             5.970Mi ± 12%
-CommandWALRawKVDirectWrite/command_wal_raw_kv-12                                                 6.347Mi ± 10%
-geomean                                                                                          6.155Mi
+CommandWALRawKVDirectWrite/backend_no_command_wal-12                                             5.841Mi ± 17%
+CommandWALRawKVDirectWrite/command_wal_raw_kv-12                                                 6.151Mi ± 12%
+geomean                                                                                          5.994Mi
 
                                                      │ artifacts/command-wal/pr3/raw-kv-direct-write-bench.txt │
                                                      │                          B/op                           │
-CommandWALRawKVDirectWrite/backend_no_command_wal-12                                             6.510Ki ± 11%
-CommandWALRawKVDirectWrite/command_wal_raw_kv-12                                                 6.550Ki ±  0%
-geomean                                                                                          6.530Ki
+CommandWALRawKVDirectWrite/backend_no_command_wal-12                                             6.461Ki ± 10%
+CommandWALRawKVDirectWrite/command_wal_raw_kv-12                                                 6.561Ki ±  0%
+geomean                                                                                          6.511Ki
 
                                                      │ artifacts/command-wal/pr3/raw-kv-direct-write-bench.txt │
                                                      │                        allocs/op                        │

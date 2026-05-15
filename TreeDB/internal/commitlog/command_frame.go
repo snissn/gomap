@@ -488,7 +488,7 @@ func validateRawKVOperation(op *RawKVOperation) error {
 	}
 	valueLen := uint32(len(op.Value))
 	if op.Op == RawKVOpSetRID {
-		if op.RID == 0 {
+		if op.RID == 0 || len(op.Value) != 0 {
 			return ErrCorrupt
 		}
 		valueLen = 8

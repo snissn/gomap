@@ -169,6 +169,27 @@ func TestCommandWALCleanReopenCleansCoveredNonActiveSegmentWithNoReplayFrames(t 
 	}
 }
 
+func TestCommandWALInlineReplayDoesNotScanValueLogRIDMap(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close bootstrap db: %v", err)
+	}
+	valueLogDir := resolveStorageLayout(dir).valueVLogDir
+	if err := os.MkdirAll(valueLogDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll value_vlog: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(valueLogDir, "value-l0-000001.log"), []byte("corrupt value log"), 0o600); err != nil {
+		t.Fatalf("write corrupt value log: %v", err)
+	}
+	writeCommandWALRawKVFrame(t, dir, 1, 1, []commitlog.RawKVOperation{{Op: commitlog.RawKVOpSet, Key: []byte("inline"), Value: []byte("v")}})
+
+	reopen := openCommandWALDB(t, dir)
+	defer reopen.Close()
+	assertDBValue(t, reopen, "inline", "v")
+}
+
 func TestCommandWALRecoveryCrashDuringReplayResumesFromAppliedLSN(t *testing.T) {
 	dir := t.TempDir()
 	enableCommandWALFormat(t, dir)
@@ -180,6 +201,7 @@ func TestCommandWALRecoveryCrashDuringReplayResumesFromAppliedLSN(t *testing.T) 
 	writeCommandWALRawKVFrame(t, dir, 1, 2, []commitlog.RawKVOperation{{Op: commitlog.RawKVOpSet, Key: []byte("b"), Value: []byte("2")}})
 
 	testCommandWALRecoveryFailAfterLSN.Store(1)
+	t.Cleanup(func() { testCommandWALRecoveryFailAfterLSN.Store(0) })
 	_, err := Open(Options{Dir: dir})
 	if !errors.Is(err, errTestFinalizeCommitFailpoint) {
 		t.Fatalf("Open with recovery failpoint error=%v, want failpoint", err)

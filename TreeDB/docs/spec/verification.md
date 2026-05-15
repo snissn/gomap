@@ -335,6 +335,8 @@ PR3 implementation evidence:
 - Raw KV `SetRID` command entries preserve the existing value-log RID fence by
   requiring the referenced RID to be present in scanned value-log segments
   before recovery can publish the command.
+- Inline-only raw KV replay does not depend on value-log RID scanning; recovery
+  builds the RID map only when a pending frame contains `SetRID`.
 - Public cached-mode command WAL writes remain fail-closed until the cached
   writer is converted to the shared typed command journal. This prevents mixed
   legacy raw records in `command_wal_v1` directories.

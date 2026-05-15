@@ -31,6 +31,7 @@ func (db *DB) prepareRawKVCommandWALIntent(b *Batch) (*commandWALBatchIntent, er
 	}
 	externalRefs := false
 	flushedExternalRefsForLookup := false
+	var ridCache map[uint32]map[page.ValuePtr]uint64
 	var smallOps [16]commitlog.RawKVOperation
 	ops := smallOps[:0]
 	if len(entries) > len(smallOps) {
@@ -50,7 +51,10 @@ func (db *DB) prepareRawKVCommandWALIntent(b *Batch) (*commandWALBatchIntent, er
 					}
 					flushedExternalRefsForLookup = true
 				}
-				rid, err := db.lookupCommandWALValueLogRID(entry.ValuePtr)
+				if ridCache == nil {
+					ridCache = make(map[uint32]map[page.ValuePtr]uint64)
+				}
+				rid, err := db.lookupCommandWALValueLogRID(entry.ValuePtr, ridCache)
 				if err != nil {
 					return nil, err
 				}
@@ -70,12 +74,21 @@ func (db *DB) prepareRawKVCommandWALIntent(b *Batch) (*commandWALBatchIntent, er
 	return &commandWALBatchIntent{payload: payload, externalRefs: externalRefs}, nil
 }
 
-func (db *DB) lookupCommandWALValueLogRID(ptr page.ValuePtr) (uint64, error) {
+func (db *DB) lookupCommandWALValueLogRID(ptr page.ValuePtr, ridCache map[uint32]map[page.ValuePtr]uint64) (uint64, error) {
 	if db == nil || db.valueLogManager == nil {
 		return 0, fmt.Errorf("treedb: command wal raw kv pointer rid reader unavailable")
 	}
 	if ptr.FileID == 0 || ptr.Length == 0 {
 		return 0, fmt.Errorf("treedb: command wal raw kv invalid value-log pointer")
+	}
+	if ridCache == nil {
+		ridCache = make(map[uint32]map[page.ValuePtr]uint64)
+	}
+	if byPtr := ridCache[ptr.FileID]; byPtr != nil {
+		if rid, ok := byPtr[ptr]; ok {
+			return rid, nil
+		}
+		return 0, fmt.Errorf("treedb: command wal raw kv missing value-log rid for file=%d offset=%d length=%d", ptr.FileID, ptr.Offset, ptr.Length)
 	}
 	path := db.valueLogManager.SegmentPath(ptr.FileID)
 	r, err := valuelog.NewReader(path, ptr.FileID)
@@ -83,6 +96,7 @@ func (db *DB) lookupCommandWALValueLogRID(ptr page.ValuePtr) (uint64, error) {
 		return 0, err
 	}
 	defer func() { _ = r.Close() }()
+	byPtr := make(map[page.ValuePtr]uint64)
 	for {
 		rid, gotPtr, err := r.ReadNextMeta()
 		if err != nil {
@@ -91,12 +105,14 @@ func (db *DB) lookupCommandWALValueLogRID(ptr page.ValuePtr) (uint64, error) {
 			}
 			return 0, err
 		}
-		if gotPtr == ptr {
-			if rid == 0 {
-				return 0, fmt.Errorf("treedb: command wal raw kv zero value-log rid")
-			}
-			return rid, nil
+		if rid == 0 {
+			return 0, fmt.Errorf("treedb: command wal raw kv zero value-log rid")
 		}
+		byPtr[gotPtr] = rid
+	}
+	ridCache[ptr.FileID] = byPtr
+	if rid, ok := byPtr[ptr]; ok {
+		return rid, nil
 	}
 	return 0, fmt.Errorf("treedb: command wal raw kv missing value-log rid for file=%d offset=%d length=%d", ptr.FileID, ptr.Offset, ptr.Length)
 }
@@ -157,13 +173,14 @@ func commandWALFinalizeOptions(intent *commandWALBatchIntent) finalizeCommitOpti
 	if intent == nil || intent.lsn == 0 {
 		return finalizeCommitOptions{}
 	}
+	appliedRanges := intent.coveredRange[:]
 	if intent.coveredRange[0].First == 0 {
-		intent.coveredRange[0] = CommandWALLSNRange{First: intent.lsn, Last: intent.lsn}
+		appliedRanges = []CommandWALLSNRange{{First: intent.lsn, Last: intent.lsn}}
 	}
 	return finalizeCommitOptions{
 		commandWALPublish: true,
 		appliedCommandLSN: intent.lsn,
-		appliedRanges:     intent.coveredRange[:],
+		appliedRanges:     appliedRanges,
 	}
 }
 
@@ -217,7 +234,10 @@ func applyRawKVCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map
 		return db.publishCommandWALRoots(rootID, sysRootID, env.LSN, []CommandWALLSNRange{{First: env.LSN, Last: env.LSN}}, true)
 	}
 	if raw, ok := b.(*Batch); ok {
-		return raw.writeWithCommandWALIntent(true, &commandWALBatchIntent{lsn: env.LSN})
+		return raw.writeWithCommandWALIntent(true, &commandWALBatchIntent{
+			lsn:          env.LSN,
+			coveredRange: [1]CommandWALLSNRange{{First: env.LSN, Last: env.LSN}},
+		})
 	}
 	return errors.New("treedb: command wal recovery batch type mismatch")
 }

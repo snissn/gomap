@@ -392,6 +392,9 @@ func TestCommandWALRawKVBatchSetRIDRoundTrip(t *testing.T) {
 	if _, err := EncodeRawKVBatchPayload([]RawKVOperation{{Op: RawKVOpSetRID, Key: []byte("bad")}}); !errors.Is(err, ErrCorrupt) {
 		t.Fatalf("EncodeRawKVBatchPayload missing RID error=%v, want ErrCorrupt", err)
 	}
+	if _, err := EncodeRawKVBatchPayload([]RawKVOperation{{Op: RawKVOpSetRID, Key: []byte("bad"), RID: 42, Value: []byte("ambiguous")}}); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("EncodeRawKVBatchPayload SetRID value error=%v, want ErrCorrupt", err)
+	}
 }
 
 func TestCommandWALFeatureGateRejectsLegacyRawPayload(t *testing.T) {

@@ -134,7 +134,7 @@ func TestCommandWALOptionPersistsFeatureBeforeJournalActivation(t *testing.T) {
 
 func TestCommandWALOptionRejectsDirtyLegacyWALActivation(t *testing.T) {
 	dir := t.TempDir()
-	walDir := filepath.Join(dir, "wal")
+	walDir := WALDirPath(dir)
 	if err := os.MkdirAll(walDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
