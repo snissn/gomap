@@ -191,6 +191,28 @@ func (r *GranuleReader) DecodeInt64Into(dst []int64, g EncodedGranule) ([]int64,
 	return decodeInt64Payload(dst, raw, g)
 }
 
+func (r *GranuleReader) int64Cursor(g EncodedGranule) (int64Cursor, error) {
+	raw, err := r.decompressPayload(g)
+	if err != nil {
+		return int64Cursor{}, err
+	}
+	cursor := int64Cursor{
+		encoding: g.Encoding,
+		raw:      raw,
+		rows:     g.Rows,
+	}
+	switch g.Encoding {
+	case EncodingRawInt64:
+		if len(raw)%8 != 0 || len(raw)/8 != g.Rows {
+			return int64Cursor{}, fmt.Errorf("colgranule: raw int64 length=%d rows=%d", len(raw), g.Rows)
+		}
+	case EncodingDeltaVarint, EncodingDoubleDeltaVarint:
+	default:
+		return int64Cursor{}, fmt.Errorf("colgranule: unsupported encoding %d", g.Encoding)
+	}
+	return cursor, nil
+}
+
 func (r *GranuleReader) RangeScanCountInt64(g EncodedGranule, low, high int64) (int, error) {
 	if low > high || (g.HasMinMax && (high < g.Min || low > g.Max)) {
 		r.values = r.values[:0]
@@ -428,6 +450,81 @@ func decodeDoubleDeltaVarint(dst []int64, raw []byte, rows int) ([]int64, error)
 		return nil, errors.New("colgranule: trailing double-delta bytes")
 	}
 	return out, nil
+}
+
+type int64Cursor struct {
+	encoding  Encoding
+	raw       []byte
+	rows      int
+	row       int
+	offset    int
+	prev      int64
+	prevDelta int64
+}
+
+func (c *int64Cursor) Next() (int64, error) {
+	if c.row >= c.rows {
+		return 0, fmt.Errorf("colgranule: int64 cursor row=%d exceeds rows=%d", c.row, c.rows)
+	}
+	switch c.encoding {
+	case EncodingRawInt64:
+		v := int64(binary.LittleEndian.Uint64(c.raw[c.row*8:]))
+		c.row++
+		c.offset = c.row * 8
+		return v, nil
+	case EncodingDeltaVarint:
+		u, n := binary.Uvarint(c.raw[c.offset:])
+		if n <= 0 {
+			return 0, errors.New("colgranule: malformed delta varint")
+		}
+		delta := unzigzag(u)
+		v := delta
+		if c.row > 0 {
+			v = c.prev + delta
+		}
+		c.row++
+		c.offset += n
+		c.prev = v
+		return v, nil
+	case EncodingDoubleDeltaVarint:
+		u, n := binary.Uvarint(c.raw[c.offset:])
+		if n <= 0 {
+			return 0, errors.New("colgranule: malformed double-delta varint")
+		}
+		encoded := unzigzag(u)
+		var v int64
+		switch c.row {
+		case 0:
+			v = encoded
+		case 1:
+			c.prevDelta = encoded
+			v = c.prev + encoded
+		default:
+			delta := c.prevDelta + encoded
+			v = c.prev + delta
+			c.prevDelta = delta
+		}
+		c.row++
+		c.offset += n
+		c.prev = v
+		return v, nil
+	default:
+		return 0, fmt.Errorf("colgranule: unsupported encoding %d", c.encoding)
+	}
+}
+
+func (c *int64Cursor) Finish() error {
+	if c.row != c.rows {
+		return fmt.Errorf("colgranule: decoded rows=%d want=%d", c.row, c.rows)
+	}
+	if c.encoding != EncodingRawInt64 && c.offset != len(c.raw) {
+		return fmt.Errorf("colgranule: trailing %s bytes", c.encoding)
+	}
+	return nil
+}
+
+func (c *int64Cursor) RawBytesRead() int {
+	return c.offset
 }
 
 type CompressionSelection struct {

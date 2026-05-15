@@ -144,6 +144,32 @@ func TestRunJSONBenchPartQueriesSampleMatchesRawReference(t *testing.T) {
 	}
 }
 
+func TestRunJSONBenchPartQ4EarlyStopUsesTimePrefix(t *testing.T) {
+	ds := syntheticJSONBenchDataset(128)
+	part, err := BuildJSONBenchColumnPart(ds, 128)
+	if err != nil {
+		t.Fatalf("BuildJSONBenchColumnPart: %v", err)
+	}
+	codes, err := jsonBenchQueryCodes(ds)
+	if err != nil {
+		t.Fatalf("jsonBenchQueryCodes: %v", err)
+	}
+	rows, digest, diagnostics, err := runJSONBenchPartQ4(part, codes, &jsonBenchPartQueryScratch{})
+	if err != nil {
+		t.Fatalf("runJSONBenchPartQ4: %v", err)
+	}
+	if rows != 3 || digest == 0 {
+		t.Fatalf("q4 rows/digest=(%d,%d), want non-empty top 3", rows, digest)
+	}
+	if diagnostics.RowsScanned >= ds.Rows {
+		t.Fatalf("q4 rows scanned=%d want early stop before %d", diagnostics.RowsScanned, ds.Rows)
+	}
+	fullDiagnostics := partColumnDiagnostics(part, jsonBenchPartQ4Columns, "full_decode_reference")
+	if diagnostics.BytesDecoded >= fullDiagnostics.BytesDecoded {
+		t.Fatalf("q4 decoded bytes=%d want less than full=%d", diagnostics.BytesDecoded, fullDiagnostics.BytesDecoded)
+	}
+}
+
 func TestLoadJSONBenchColumnsLocal1MIfPresent(t *testing.T) {
 	path := os.Getenv("JSONBENCH_DATA")
 	if path == "" {
