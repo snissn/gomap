@@ -113,8 +113,8 @@ func BuildJSONBenchColumnPartWithAggregateMetadataForLayout(ds JSONBenchDataset,
 	return BuildColumnPart(1, opts, ColumnBatch{Rows: ds.Rows, Columns: ds.Columns})
 }
 
-func imageBackedJSONBenchPart(part *ColumnPart) (*ColumnPart, error) {
-	image, err := BuildColumnPartImage(part, ColumnPartImageOptions{})
+func imageBackedJSONBenchPart(part *ColumnPart, dictionaries map[string]map[string]int64) (*ColumnPart, error) {
+	image, err := BuildColumnPartImage(part, ColumnPartImageOptions{Dictionaries: dictionaries})
 	if err != nil {
 		return nil, err
 	}
@@ -247,7 +247,7 @@ func RunJSONBenchPartQueries(ds JSONBenchDataset, rowsPerGranule int, attempts i
 	if err != nil {
 		return nil, err
 	}
-	part, err = imageBackedJSONBenchPart(part)
+	part, err = imageBackedJSONBenchPart(part, ds.Dictionaries)
 	if err != nil {
 		return nil, err
 	}
@@ -323,7 +323,7 @@ func RunJSONBenchPartQ4FairnessQueries(ds JSONBenchDataset, rowsPerGranule int, 
 	if err != nil {
 		return nil, err
 	}
-	timePart, err = imageBackedJSONBenchPart(timePart)
+	timePart, err = imageBackedJSONBenchPart(timePart, ds.Dictionaries)
 	if err != nil {
 		return nil, err
 	}
@@ -331,7 +331,7 @@ func RunJSONBenchPartQ4FairnessQueries(ds JSONBenchDataset, rowsPerGranule int, 
 	if err != nil {
 		return nil, err
 	}
-	clickHouseOrderPart, err = imageBackedJSONBenchPart(clickHouseOrderPart)
+	clickHouseOrderPart, err = imageBackedJSONBenchPart(clickHouseOrderPart, ds.Dictionaries)
 	if err != nil {
 		return nil, err
 	}
@@ -402,7 +402,7 @@ func RunJSONBenchPartAggregateMetadataQueries(ds JSONBenchDataset, rowsPerGranul
 	if err != nil {
 		return nil, err
 	}
-	timePart, err = imageBackedJSONBenchPart(timePart)
+	timePart, err = imageBackedJSONBenchPart(timePart, ds.Dictionaries)
 	if err != nil {
 		return nil, err
 	}
@@ -410,7 +410,7 @@ func RunJSONBenchPartAggregateMetadataQueries(ds JSONBenchDataset, rowsPerGranul
 	if err != nil {
 		return nil, err
 	}
-	clickHouseOrderPart, err = imageBackedJSONBenchPart(clickHouseOrderPart)
+	clickHouseOrderPart, err = imageBackedJSONBenchPart(clickHouseOrderPart, ds.Dictionaries)
 	if err != nil {
 		return nil, err
 	}

@@ -92,30 +92,10 @@ func (p *ColumnPart) WithImagePayloads(image ColumnPartImage) (*ColumnPart, erro
 	for name, column := range p.Columns {
 		outColumn := column
 		outColumn.Blocks = append([]ColumnBlock(nil), column.Blocks...)
-		section, ok := image.columnDataSection(name)
-		if !ok {
-			return nil, fmt.Errorf("colgranule: image missing column data section %s", name)
-		}
-		offset := section.Offset
-		sectionEnd := section.Offset + section.Length
-		for i := range outColumn.Blocks {
-			block := &outColumn.Blocks[i]
-			length := block.Descriptor.StoredBytes
-			if length < 0 || offset+length > sectionEnd {
-				return nil, fmt.Errorf("colgranule: image column %s block %d length=%d outside section", name, i, length)
-			}
-			block.Granule.Payload = image.Bytes[offset : offset+length]
-			block.Granule.PayloadRef = PayloadRef{
-				Kind:   PayloadRefInline,
-				Offset: int64(offset),
-				Length: length,
-			}
-			offset += length
-		}
-		if offset != sectionEnd {
-			return nil, fmt.Errorf("colgranule: image column %s consumed=%d section=%d", name, offset-section.Offset, section.Length)
-		}
 		out.Columns[name] = outColumn
+	}
+	if err := attachColumnPayloadsFromImage(image, out.Columns); err != nil {
+		return nil, err
 	}
 	return &out, nil
 }

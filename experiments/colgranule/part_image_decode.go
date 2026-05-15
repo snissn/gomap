@@ -37,18 +37,31 @@ func ParseColumnPartImage(data []byte) (ColumnPartImage, error) {
 	if rows < 0 {
 		return ColumnPartImage{}, fmt.Errorf("colgranule: negative image row count %d", rows)
 	}
+	if int64(int(rows)) != rows {
+		return ColumnPartImage{}, fmt.Errorf("colgranule: image rows=%d exceed host int", rows)
+	}
 	manifestBytes, err := dec.u32()
 	if err != nil {
 		return ColumnPartImage{}, err
 	}
-	if int(manifestBytes) > len(data) {
+	if uint64(int(manifestBytes)) != uint64(manifestBytes) {
+		return ColumnPartImage{}, fmt.Errorf("colgranule: manifest bytes=%d exceed host int", manifestBytes)
+	}
+	manifestLength := int(manifestBytes)
+	if manifestLength > len(data) {
 		return ColumnPartImage{}, fmt.Errorf("colgranule: manifest bytes=%d exceed image bytes=%d", manifestBytes, len(data))
 	}
 	sectionCount, err := dec.u32()
 	if err != nil {
 		return ColumnPartImage{}, err
 	}
-	sections := make([]ColumnPartImageSection, 0, sectionCount)
+	if uint64(int(sectionCount)) != uint64(sectionCount) {
+		return ColumnPartImage{}, fmt.Errorf("colgranule: section count=%d exceed host int", sectionCount)
+	}
+	if err := validateImageSectionCount(sectionCount, manifestLength, dec.offset); err != nil {
+		return ColumnPartImage{}, err
+	}
+	sections := make([]ColumnPartImageSection, 0, int(sectionCount))
 	for i := 0; i < int(sectionCount); i++ {
 		kindCode, err := dec.u16()
 		if err != nil {
@@ -108,6 +121,9 @@ func ParseColumnPartImage(data []byte) (ColumnPartImage, error) {
 		if sectionRows < 0 || granules < 0 || blocks < 0 {
 			return ColumnPartImage{}, fmt.Errorf("colgranule: section %s has negative rows/granules/blocks (%d,%d,%d)", kind, sectionRows, granules, blocks)
 		}
+		if int64(int(sectionRows)) != sectionRows || int64(int(granules)) != granules || int64(int(blocks)) != blocks {
+			return ColumnPartImage{}, fmt.Errorf("colgranule: section %s rows/granules/blocks exceed host int (%d,%d,%d)", kind, sectionRows, granules, blocks)
+		}
 		if uint64(int(offset)) != offset || uint64(int(length)) != length {
 			return ColumnPartImage{}, fmt.Errorf("colgranule: section %s offset=%d length=%d exceed host int", kind, offset, length)
 		}
@@ -129,10 +145,10 @@ func ParseColumnPartImage(data []byte) (ColumnPartImage, error) {
 		}
 		sections = append(sections, section)
 	}
-	if dec.offset != int(manifestBytes) {
+	if dec.offset != manifestLength {
 		return ColumnPartImage{}, fmt.Errorf("colgranule: manifest bytes=%d decoded=%d", manifestBytes, dec.offset)
 	}
-	if err := validateImageSectionLayout(sections, int(manifestBytes), len(data)); err != nil {
+	if err := validateImageSectionLayout(sections, manifestLength, len(data)); err != nil {
 		return ColumnPartImage{}, err
 	}
 	if err := validateImageSectionMultiplicity(sections); err != nil {
@@ -181,7 +197,7 @@ func ColumnPartFromImage(image ColumnPartImage) (*ColumnPart, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := attachImageColumnPayloads(image, columns); err != nil {
+	if err := attachColumnPayloadsFromImage(image, columns); err != nil {
 		return nil, err
 	}
 	optionsColumns := make([]ColumnDefinition, 0, len(desc.Columns))
@@ -245,6 +261,9 @@ func decodeColumnPartDescriptorSection(data []byte) (ColumnPartDescriptor, map[s
 	version, err := dec.u16()
 	if err != nil {
 		return ColumnPartDescriptor{}, nil, err
+	}
+	if version != columnPartDescriptorVersion {
+		return ColumnPartDescriptor{}, nil, fmt.Errorf("colgranule: unsupported descriptor version %d", version)
 	}
 	partID, err := dec.u64()
 	if err != nil {
@@ -627,7 +646,7 @@ func decodeRowLocatorsSection(image ColumnPartImage) (map[int64]RowLocator, erro
 	return out, nil
 }
 
-func attachImageColumnPayloads(image ColumnPartImage, columns map[string]ColumnPartColumn) error {
+func attachColumnPayloadsFromImage(image ColumnPartImage, columns map[string]ColumnPartColumn) error {
 	for name, column := range columns {
 		section, ok := image.columnDataSection(name)
 		if !ok {
@@ -976,6 +995,19 @@ func validateImageSectionBounds(section ColumnPartImageSection, manifestBytes in
 	}
 	if section.Length > totalBytes || section.Offset > totalBytes-section.Length {
 		return fmt.Errorf("colgranule: section %s offset=%d length=%d exceeds image bytes=%d", section.Kind, section.Offset, section.Length, totalBytes)
+	}
+	return nil
+}
+
+func validateImageSectionCount(sectionCount uint32, manifestBytes int, decodedManifestBytes int) error {
+	const minSectionDirectoryEntryBytes = 56
+	remainingManifestBytes := manifestBytes - decodedManifestBytes
+	if remainingManifestBytes < 0 {
+		return fmt.Errorf("colgranule: decoded manifest bytes=%d exceed manifest bytes=%d", decodedManifestBytes, manifestBytes)
+	}
+	maxSections := remainingManifestBytes / minSectionDirectoryEntryBytes
+	if int(sectionCount) > maxSections {
+		return fmt.Errorf("colgranule: section count=%d exceeds manifest capacity=%d", sectionCount, maxSections)
 	}
 	return nil
 }
