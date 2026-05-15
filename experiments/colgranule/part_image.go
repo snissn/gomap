@@ -3,6 +3,7 @@ package colgranule
 import (
 	"encoding/binary"
 	"fmt"
+	"math"
 	"sort"
 	"time"
 )
@@ -378,8 +379,12 @@ func (b *columnPartImageBuilder) addAggregateMetadataSections() error {
 	for _, name := range names {
 		metadata := b.part.AggregateMetadata[name]
 		var enc columnPartImageEncoder
-		encodeAggregateMetadataDefinition(&enc, metadata.Definition)
-		encodeAggregateMetadataStats(&enc, metadata.Stats)
+		if err := encodeAggregateMetadataDefinition(&enc, metadata.Definition); err != nil {
+			return err
+		}
+		if err := encodeAggregateMetadataStats(&enc, metadata.Stats); err != nil {
+			return err
+		}
 		enc.u32(uint32(len(metadata.Granules)))
 		for _, granule := range metadata.Granules {
 			enc.i64(int64(granule.GranuleOrdinal))
@@ -574,7 +579,7 @@ func encodeSortKeyBound(enc *columnPartImageEncoder, bound SortKeyBound) {
 	}
 }
 
-func encodeAggregateMetadataDefinition(enc *columnPartImageEncoder, def AggregateMetadataDefinition) {
+func encodeAggregateMetadataDefinition(enc *columnPartImageEncoder, def AggregateMetadataDefinition) error {
 	enc.str(def.Name)
 	enc.u16(def.Version)
 	enc.str(string(def.Kind))
@@ -591,10 +596,13 @@ func encodeAggregateMetadataDefinition(enc *columnPartImageEncoder, def Aggregat
 		enc.str(string(predicate.Op))
 		enc.i64(predicate.Value)
 	}
-	enc.i64(int64(def.MaxBytesPerRow * 1_000_000))
+	if err := encodeNonNegativeScaledFloat(enc, fmt.Sprintf("aggregate metadata %s max bytes per row", def.Name), def.MaxBytesPerRow); err != nil {
+		return err
+	}
+	return nil
 }
 
-func encodeAggregateMetadataStats(enc *columnPartImageEncoder, stats AggregateMetadataStats) {
+func encodeAggregateMetadataStats(enc *columnPartImageEncoder, stats AggregateMetadataStats) error {
 	enc.boolean(stats.Admitted)
 	enc.str(stats.RejectedReason)
 	enc.i64(durationNanos(stats.BuildDuration))
@@ -605,11 +613,33 @@ func encodeAggregateMetadataStats(enc *columnPartImageEncoder, stats AggregateMe
 	enc.i64(int64(stats.ValueBytes))
 	enc.i64(int64(stats.DescriptorBytes))
 	enc.i64(int64(stats.TotalBytes))
-	enc.i64(int64(stats.BytesPerPartRow * 1_000_000))
-	enc.i64(int64(stats.BytesPerMatchedRow * 1_000_000))
+	if err := encodeNonNegativeScaledFloat(enc, "aggregate metadata bytes per part row", stats.BytesPerPartRow); err != nil {
+		return err
+	}
+	if err := encodeNonNegativeScaledFloat(enc, "aggregate metadata bytes per matched row", stats.BytesPerMatchedRow); err != nil {
+		return err
+	}
 	enc.str(stats.Compression)
-	enc.i64(int64(stats.AdmissionMaxBytes * 1_000_000))
+	if err := encodeNonNegativeScaledFloat(enc, "aggregate metadata admission max bytes", stats.AdmissionMaxBytes); err != nil {
+		return err
+	}
 	enc.str(stats.AdmissionMeasuredBy)
+	return nil
+}
+
+func encodeNonNegativeScaledFloat(enc *columnPartImageEncoder, field string, value float64) error {
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		return fmt.Errorf("colgranule: %s must be finite, got %v", field, value)
+	}
+	if value < 0 {
+		return fmt.Errorf("colgranule: %s %.6f is negative", field, value)
+	}
+	scaled := math.Round(value * 1_000_000)
+	if scaled > math.MaxInt64 {
+		return fmt.Errorf("colgranule: %s %.6f exceeds scaled int64", field, value)
+	}
+	enc.i64(int64(scaled))
+	return nil
 }
 
 func countColumnBlocks(desc ColumnPartDescriptor) int {

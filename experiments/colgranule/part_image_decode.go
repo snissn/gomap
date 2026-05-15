@@ -204,6 +204,9 @@ func ColumnPartFromImage(image ColumnPartImage) (*ColumnPart, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := validateDecodedRowLocators(desc, image.PartID, locators); err != nil {
+		return nil, err
+	}
 	if err := attachColumnPayloadsFromImage(image, columns); err != nil {
 		return nil, err
 	}
@@ -796,6 +799,32 @@ func decodeRowLocatorsSection(image ColumnPartImage) (map[int64]RowLocator, erro
 		return nil, err
 	}
 	return out, nil
+}
+
+func validateDecodedRowLocators(desc ColumnPartDescriptor, partID uint64, locators map[int64]RowLocator) error {
+	for primaryID, locator := range locators {
+		if locator.PrimaryID != primaryID {
+			return fmt.Errorf("colgranule: row locator key %d has primary id %d", primaryID, locator.PrimaryID)
+		}
+		if locator.PartID != partID {
+			return fmt.Errorf("colgranule: row locator primary id %d part id=%d want %d", primaryID, locator.PartID, partID)
+		}
+		if locator.PartRow < 0 || locator.PartRow >= desc.RowCount {
+			return fmt.Errorf("colgranule: row locator primary id %d part row=%d outside part rows=%d", primaryID, locator.PartRow, desc.RowCount)
+		}
+		if locator.GranuleOrdinal < 0 || locator.GranuleOrdinal >= len(desc.Granules) {
+			return fmt.Errorf("colgranule: row locator primary id %d granule ordinal=%d outside granules=%d", primaryID, locator.GranuleOrdinal, len(desc.Granules))
+		}
+		granule := desc.Granules[locator.GranuleOrdinal]
+		if locator.RowInGranule < 0 || locator.RowInGranule >= granule.RowCount {
+			return fmt.Errorf("colgranule: row locator primary id %d row in granule=%d outside granule rows=%d", primaryID, locator.RowInGranule, granule.RowCount)
+		}
+		partRow := granule.FirstRow + locator.RowInGranule
+		if locator.PartRow != partRow {
+			return fmt.Errorf("colgranule: row locator primary id %d part row=%d want %d from granule %d", primaryID, locator.PartRow, partRow, locator.GranuleOrdinal)
+		}
+	}
+	return nil
 }
 
 func attachColumnPayloadsFromImage(image ColumnPartImage, columns map[string]ColumnPartColumn) error {

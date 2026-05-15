@@ -2,6 +2,7 @@ package colgranule
 
 import (
 	"encoding/binary"
+	"math"
 	"testing"
 )
 
@@ -97,6 +98,52 @@ func TestColumnPartImageColumnPayloadBytesMatchBlocks(t *testing.T) {
 		if section.Length != payloadBytesByColumn[section.Column] {
 			t.Fatalf("column %s image bytes=%d want block payload bytes=%d", section.Column, section.Length, payloadBytesByColumn[section.Column])
 		}
+	}
+}
+
+func TestBuildColumnPartImageRejectsInvalidAggregateMetadataScaledFloats(t *testing.T) {
+	tests := []struct {
+		name string
+		edit func(*AggregateMetadata)
+	}{
+		{
+			name: "definition NaN",
+			edit: func(metadata *AggregateMetadata) {
+				metadata.Definition.MaxBytesPerRow = math.NaN()
+			},
+		},
+		{
+			name: "stats Inf",
+			edit: func(metadata *AggregateMetadata) {
+				metadata.Stats.BytesPerPartRow = math.Inf(1)
+			},
+		},
+		{
+			name: "stats negative",
+			edit: func(metadata *AggregateMetadata) {
+				metadata.Stats.BytesPerMatchedRow = -1
+			},
+		},
+		{
+			name: "stats too large",
+			edit: func(metadata *AggregateMetadata) {
+				metadata.Stats.AdmissionMaxBytes = math.MaxFloat64
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			part, _ := testColumnPartImageFixture(t, true)
+			metadata, ok := part.AggregateMetadata["test_kind_time"]
+			if !ok {
+				t.Fatal("missing aggregate metadata")
+			}
+			tt.edit(&metadata)
+			part.AggregateMetadata["test_kind_time"] = metadata
+			if _, err := BuildColumnPartImage(part, ColumnPartImageOptions{}); err == nil {
+				t.Fatalf("BuildColumnPartImage accepted invalid aggregate metadata scaled float: %s", tt.name)
+			}
+		})
 	}
 }
 
@@ -567,6 +614,67 @@ func TestColumnPartFromImageRejectsDuplicateRowLocators(t *testing.T) {
 	}
 }
 
+func TestColumnPartFromImageRejectsInvalidRowLocatorReferences(t *testing.T) {
+	part, image := testColumnPartImageFixture(t, false)
+	offsets := firstRowLocatorOffsets(t, image)
+	originalPartRow := binary.LittleEndian.Uint32(image.Bytes[offsets.partRow:])
+	mismatchedPartRow := originalPartRow + 1
+	if int(mismatchedPartRow) >= part.Descriptor.RowCount {
+		mismatchedPartRow = 0
+	}
+	if mismatchedPartRow == originalPartRow {
+		t.Fatalf("could not choose mismatched part row from original=%d", originalPartRow)
+	}
+	tests := []struct {
+		name string
+		edit func([]byte)
+	}{
+		{
+			name: "part id",
+			edit: func(corrupt []byte) {
+				binary.LittleEndian.PutUint64(corrupt[offsets.partID:], part.Descriptor.PartID+1)
+			},
+		},
+		{
+			name: "part row outside",
+			edit: func(corrupt []byte) {
+				binary.LittleEndian.PutUint32(corrupt[offsets.partRow:], uint32(part.Descriptor.RowCount))
+			},
+		},
+		{
+			name: "granule ordinal outside",
+			edit: func(corrupt []byte) {
+				binary.LittleEndian.PutUint32(corrupt[offsets.granuleOrdinal:], uint32(len(part.Descriptor.Granules)))
+			},
+		},
+		{
+			name: "row in granule outside",
+			edit: func(corrupt []byte) {
+				binary.LittleEndian.PutUint32(corrupt[offsets.rowInGranule:], uint32(part.Descriptor.RowCount))
+			},
+		},
+		{
+			name: "part row mismatch",
+			edit: func(corrupt []byte) {
+				binary.LittleEndian.PutUint32(corrupt[offsets.partRow:], mismatchedPartRow)
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			corrupt := append([]byte(nil), image.Bytes...)
+			tt.edit(corrupt)
+			parsed, err := ParseColumnPartImage(corrupt)
+			if err != nil {
+				t.Fatalf("ParseColumnPartImage: %v", err)
+			}
+			if _, err := ColumnPartFromImage(parsed); err == nil {
+				t.Fatalf("ColumnPartFromImage accepted invalid row locator reference: %s", tt.name)
+			}
+		})
+	}
+}
+
 func TestColumnPartFromImageRejectsDuplicateColumnDataSections(t *testing.T) {
 	part, image := testColumnPartImageFixture(t, false)
 	columnData := firstImageSectionOfKind(t, image, ColumnPartImageSectionColumnData)
@@ -859,6 +967,38 @@ func firstTwoRowLocatorPrimaryIDOffsets(t *testing.T, image ColumnPartImage) (in
 		t.Fatal(err)
 	}
 	return first, locators.Offset + dec.offset
+}
+
+type rowLocatorOffsets struct {
+	primaryID      int
+	partID         int
+	partRow        int
+	granuleOrdinal int
+	rowInGranule   int
+}
+
+func firstRowLocatorOffsets(t *testing.T, image ColumnPartImage) rowLocatorOffsets {
+	t.Helper()
+	locators, err := image.singleSection(ColumnPartImageSectionRowLocators)
+	if err != nil {
+		t.Fatalf("row locators section: %v", err)
+	}
+	dec := columnPartImageDecoder{data: image.sectionBytes(locators)}
+	count, err := dec.u32()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count == 0 {
+		t.Fatal("row locator count=0")
+	}
+	primaryID := locators.Offset + dec.offset
+	return rowLocatorOffsets{
+		primaryID:      primaryID,
+		partID:         primaryID + 8,
+		partRow:        primaryID + 16,
+		granuleOrdinal: primaryID + 20,
+		rowInGranule:   primaryID + 24,
+	}
 }
 
 func descriptorPartIDOffset(t *testing.T, image ColumnPartImage) int {
