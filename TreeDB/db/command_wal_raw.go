@@ -137,10 +137,12 @@ func (db *DB) appendRawKVCommandWALIntent(intent *commandWALBatchIntent, sync bo
 		return 0, fmt.Errorf("%w: command wal post-append failure; reopen required", ErrRecoveryRequired)
 	}
 	if intent.externalRefs {
-		// Non-sync writes flush external refs to the fresh-process recovery
-		// boundary but do not fsync them. WriteSync callers get a synced
-		// external-ref boundary before the SetRID-bearing command frame.
-		if err := db.flushCommandWALExternalRefs(sync); err != nil {
+		// SetRID frames reference value-log positions by offset. The
+		// value-log data MUST be durable before the command frame is
+		// written, otherwise a power loss could leave the command frame
+		// referencing a non-durable RID and cause a hard recovery failure
+		// ("missing value-log RID"). Always sync, even for non-sync writes.
+		if err := db.flushCommandWALExternalRefs(true); err != nil {
 			return 0, err
 		}
 	}
