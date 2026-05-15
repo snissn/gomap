@@ -191,14 +191,20 @@ func JSONBenchPostCreateDidTimeAggregateMetadataDefinition(ds JSONBenchDataset) 
 		return AggregateMetadataDefinition{}, err
 	}
 	return AggregateMetadataDefinition{
-		Name:        jsonBenchPostCreateDidTimeMetadata,
-		Kind:        AggregateMetadataGroupMinMax,
-		GroupColumn: "did_code",
-		ValueColumn: "time_us",
-		Filters: []AggregateMetadataFilter{
-			{Column: "kind_code", Equals: codes.kindCommit},
-			{Column: "commit_operation_code", Equals: codes.operationCreate},
-			{Column: "commit_collection_code", Equals: codes.collectionPost},
+		Name:      jsonBenchPostCreateDidTimeMetadata,
+		Version:   AggregateMetadataDefinitionVersion,
+		Kind:      AggregateMetadataGroupMinMax,
+		Scope:     AggregateMetadataScopeGranule,
+		GroupKeys: []string{"did_code"},
+		Measures: []AggregateMetadataMeasure{
+			{Op: AggregateMetadataMeasureCount},
+			{Op: AggregateMetadataMeasureMin, Column: "time_us"},
+			{Op: AggregateMetadataMeasureMax, Column: "time_us"},
+		},
+		Predicates: []AggregateMetadataPredicate{
+			{Column: "kind_code", Op: AggregateMetadataPredicateEq, Value: codes.kindCommit},
+			{Column: "commit_operation_code", Op: AggregateMetadataPredicateEq, Value: codes.operationCreate},
+			{Column: "commit_collection_code", Op: AggregateMetadataPredicateEq, Value: codes.collectionPost},
 		},
 		MaxBytesPerRow: 64,
 	}, nil
@@ -1385,25 +1391,55 @@ func requireJSONBenchPostCreateDidTimeMetadata(part *ColumnPart, codes queryCode
 	if !metadata.Stats.Admitted {
 		return AggregateMetadata{}, fmt.Errorf("colgranule: aggregate metadata %s rejected by admission: %s", metadata.Definition.Name, metadata.Stats.RejectedReason)
 	}
-	if metadata.Definition.Kind != AggregateMetadataGroupMinMax || metadata.Definition.GroupColumn != "did_code" || metadata.Definition.ValueColumn != "time_us" {
+	if metadata.Definition.Version != AggregateMetadataDefinitionVersion || metadata.Definition.Kind != AggregateMetadataGroupMinMax || metadata.Definition.Scope != AggregateMetadataScopeGranule {
 		return AggregateMetadata{}, fmt.Errorf("colgranule: aggregate metadata %s has incompatible definition %+v", metadata.Definition.Name, metadata.Definition)
 	}
-	if !aggregateMetadataFilterEquals(metadata.Definition.Filters, "kind_code", codes.kindCommit) {
-		return AggregateMetadata{}, fmt.Errorf("colgranule: aggregate metadata %s missing kind_code=%d filter", metadata.Definition.Name, codes.kindCommit)
+	if !aggregateMetadataSingleGroupKey(metadata.Definition, "did_code") || !aggregateMetadataHasCountMinMax(metadata.Definition, "time_us") {
+		return AggregateMetadata{}, fmt.Errorf("colgranule: aggregate metadata %s has incompatible definition %+v", metadata.Definition.Name, metadata.Definition)
 	}
-	if !aggregateMetadataFilterEquals(metadata.Definition.Filters, "commit_operation_code", codes.operationCreate) {
-		return AggregateMetadata{}, fmt.Errorf("colgranule: aggregate metadata %s missing commit_operation_code=%d filter", metadata.Definition.Name, codes.operationCreate)
+	if len(metadata.Definition.Predicates) != 3 {
+		return AggregateMetadata{}, fmt.Errorf("colgranule: aggregate metadata %s has incompatible predicates %+v", metadata.Definition.Name, metadata.Definition.Predicates)
 	}
-	if !aggregateMetadataFilterEquals(metadata.Definition.Filters, "commit_collection_code", codes.collectionPost) {
-		return AggregateMetadata{}, fmt.Errorf("colgranule: aggregate metadata %s missing commit_collection_code=%d filter", metadata.Definition.Name, codes.collectionPost)
+	if !aggregateMetadataPredicateEquals(metadata.Definition.Predicates, "kind_code", codes.kindCommit) {
+		return AggregateMetadata{}, fmt.Errorf("colgranule: aggregate metadata %s missing kind_code=%d predicate", metadata.Definition.Name, codes.kindCommit)
+	}
+	if !aggregateMetadataPredicateEquals(metadata.Definition.Predicates, "commit_operation_code", codes.operationCreate) {
+		return AggregateMetadata{}, fmt.Errorf("colgranule: aggregate metadata %s missing commit_operation_code=%d predicate", metadata.Definition.Name, codes.operationCreate)
+	}
+	if !aggregateMetadataPredicateEquals(metadata.Definition.Predicates, "commit_collection_code", codes.collectionPost) {
+		return AggregateMetadata{}, fmt.Errorf("colgranule: aggregate metadata %s missing commit_collection_code=%d predicate", metadata.Definition.Name, codes.collectionPost)
 	}
 	return metadata, nil
 }
 
-func aggregateMetadataFilterEquals(filters []AggregateMetadataFilter, column string, value int64) bool {
-	for _, filter := range filters {
-		if filter.Column == column {
-			return filter.Equals == value
+func aggregateMetadataSingleGroupKey(def AggregateMetadataDefinition, column string) bool {
+	return len(def.GroupKeys) == 1 && def.GroupKeys[0] == column
+}
+
+func aggregateMetadataHasCountMinMax(def AggregateMetadataDefinition, valueColumn string) bool {
+	if len(def.Measures) != 3 {
+		return false
+	}
+	var hasCount bool
+	var hasMin bool
+	var hasMax bool
+	for _, measure := range def.Measures {
+		switch measure.Op {
+		case AggregateMetadataMeasureCount:
+			hasCount = hasCount || measure.Column == ""
+		case AggregateMetadataMeasureMin:
+			hasMin = hasMin || measure.Column == valueColumn
+		case AggregateMetadataMeasureMax:
+			hasMax = hasMax || measure.Column == valueColumn
+		}
+	}
+	return hasCount && hasMin && hasMax
+}
+
+func aggregateMetadataPredicateEquals(predicates []AggregateMetadataPredicate, column string, value int64) bool {
+	for _, predicate := range predicates {
+		if predicate.Column == column {
+			return predicate.Op == AggregateMetadataPredicateEq && predicate.Value == value
 		}
 	}
 	return false

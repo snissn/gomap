@@ -16,18 +16,48 @@ const (
 	AggregateMetadataGroupMinMax AggregateMetadataKind = "group_min_max"
 )
 
-type AggregateMetadataFilter struct {
-	Column string `json:"column"`
-	Equals int64  `json:"equals"`
+const AggregateMetadataDefinitionVersion uint16 = 1
+
+type AggregateMetadataScope string
+
+const (
+	AggregateMetadataScopeGranule AggregateMetadataScope = "granule"
+)
+
+type AggregateMetadataMeasureOp string
+
+const (
+	AggregateMetadataMeasureCount AggregateMetadataMeasureOp = "count"
+	AggregateMetadataMeasureMin   AggregateMetadataMeasureOp = "min"
+	AggregateMetadataMeasureMax   AggregateMetadataMeasureOp = "max"
+)
+
+type AggregateMetadataPredicateOp string
+
+const (
+	AggregateMetadataPredicateEq AggregateMetadataPredicateOp = "eq"
+)
+
+type AggregateMetadataMeasure struct {
+	Op     AggregateMetadataMeasureOp `json:"op"`
+	Column string                     `json:"column,omitempty"`
+}
+
+type AggregateMetadataPredicate struct {
+	Column string                       `json:"column"`
+	Op     AggregateMetadataPredicateOp `json:"op"`
+	Value  int64                        `json:"value"`
 }
 
 type AggregateMetadataDefinition struct {
-	Name           string                    `json:"name"`
-	Kind           AggregateMetadataKind     `json:"kind"`
-	GroupColumn    string                    `json:"group_column"`
-	ValueColumn    string                    `json:"value_column"`
-	Filters        []AggregateMetadataFilter `json:"filters"`
-	MaxBytesPerRow float64                   `json:"max_bytes_per_row"`
+	Name           string                       `json:"name"`
+	Version        uint16                       `json:"version"`
+	Kind           AggregateMetadataKind        `json:"kind"`
+	Scope          AggregateMetadataScope       `json:"scope"`
+	GroupKeys      []string                     `json:"group_keys"`
+	Measures       []AggregateMetadataMeasure   `json:"measures"`
+	Predicates     []AggregateMetadataPredicate `json:"predicates,omitempty"`
+	MaxBytesPerRow float64                      `json:"max_bytes_per_row"`
 }
 
 type AggregateMetadata struct {
@@ -81,44 +111,114 @@ func normalizeAggregateMetadataDefinition(def AggregateMetadataDefinition, colum
 	if def.Name == "" {
 		return AggregateMetadataDefinition{}, errors.New("colgranule: aggregate metadata name is empty")
 	}
+	if def.Version == 0 {
+		def.Version = AggregateMetadataDefinitionVersion
+	}
+	if def.Version != AggregateMetadataDefinitionVersion {
+		return AggregateMetadataDefinition{}, fmt.Errorf("colgranule: unsupported aggregate metadata %s version %d", def.Name, def.Version)
+	}
 	if def.Kind == "" {
 		def.Kind = AggregateMetadataGroupMinMax
 	}
 	if def.Kind != AggregateMetadataGroupMinMax {
 		return AggregateMetadataDefinition{}, fmt.Errorf("colgranule: unsupported aggregate metadata kind %s", def.Kind)
 	}
-	groupDef, ok := columns[def.GroupColumn]
+	if def.Scope == "" {
+		def.Scope = AggregateMetadataScopeGranule
+	}
+	if def.Scope != AggregateMetadataScopeGranule {
+		return AggregateMetadataDefinition{}, fmt.Errorf("colgranule: unsupported aggregate metadata %s scope %s", def.Name, def.Scope)
+	}
+	if len(def.GroupKeys) != 1 {
+		return AggregateMetadataDefinition{}, fmt.Errorf("colgranule: aggregate metadata %s supports exactly one group key, got %d", def.Name, len(def.GroupKeys))
+	}
+	groupColumn := def.GroupKeys[0]
+	if groupColumn == "" {
+		return AggregateMetadataDefinition{}, fmt.Errorf("colgranule: aggregate metadata %s has empty group key", def.Name)
+	}
+	groupDef, ok := columns[groupColumn]
 	if !ok {
-		return AggregateMetadataDefinition{}, fmt.Errorf("colgranule: aggregate metadata %s group column %s is not declared", def.Name, def.GroupColumn)
+		return AggregateMetadataDefinition{}, fmt.Errorf("colgranule: aggregate metadata %s group column %s is not declared", def.Name, groupColumn)
 	}
 	if groupDef.Type != ColumnTypeLowCardinalityCode {
-		return AggregateMetadataDefinition{}, fmt.Errorf("colgranule: aggregate metadata %s group column %s type=%s want %s", def.Name, def.GroupColumn, groupDef.Type, ColumnTypeLowCardinalityCode)
+		return AggregateMetadataDefinition{}, fmt.Errorf("colgranule: aggregate metadata %s group column %s type=%s want %s", def.Name, groupColumn, groupDef.Type, ColumnTypeLowCardinalityCode)
 	}
-	valueDef, ok := columns[def.ValueColumn]
+
+	valueColumn, err := aggregateMetadataGroupMinMaxValueColumn(def)
+	if err != nil {
+		return AggregateMetadataDefinition{}, err
+	}
+	valueDef, ok := columns[valueColumn]
 	if !ok {
-		return AggregateMetadataDefinition{}, fmt.Errorf("colgranule: aggregate metadata %s value column %s is not declared", def.Name, def.ValueColumn)
+		return AggregateMetadataDefinition{}, fmt.Errorf("colgranule: aggregate metadata %s value column %s is not declared", def.Name, valueColumn)
 	}
 	if valueDef.Type != ColumnTypeInt64 {
-		return AggregateMetadataDefinition{}, fmt.Errorf("colgranule: aggregate metadata %s value column %s type=%s want %s", def.Name, def.ValueColumn, valueDef.Type, ColumnTypeInt64)
+		return AggregateMetadataDefinition{}, fmt.Errorf("colgranule: aggregate metadata %s value column %s type=%s want %s", def.Name, valueColumn, valueDef.Type, ColumnTypeInt64)
 	}
-	seenFilters := make(map[string]struct{}, len(def.Filters))
-	for i, filter := range def.Filters {
-		if filter.Column == "" {
-			return AggregateMetadataDefinition{}, fmt.Errorf("colgranule: aggregate metadata %s filter %d has empty column", def.Name, i)
+
+	seenPredicates := make(map[string]struct{}, len(def.Predicates))
+	for i, predicate := range def.Predicates {
+		if predicate.Column == "" {
+			return AggregateMetadataDefinition{}, fmt.Errorf("colgranule: aggregate metadata %s predicate %d has empty column", def.Name, i)
 		}
-		if _, ok := columns[filter.Column]; !ok {
-			return AggregateMetadataDefinition{}, fmt.Errorf("colgranule: aggregate metadata %s filter column %s is not declared", def.Name, filter.Column)
+		if predicate.Op != AggregateMetadataPredicateEq {
+			return AggregateMetadataDefinition{}, fmt.Errorf("colgranule: aggregate metadata %s predicate %d op %s is unsupported", def.Name, i, predicate.Op)
 		}
-		if _, ok := seenFilters[filter.Column]; ok {
-			return AggregateMetadataDefinition{}, fmt.Errorf("colgranule: aggregate metadata %s duplicate filter column %s", def.Name, filter.Column)
+		if _, ok := columns[predicate.Column]; !ok {
+			return AggregateMetadataDefinition{}, fmt.Errorf("colgranule: aggregate metadata %s predicate column %s is not declared", def.Name, predicate.Column)
 		}
-		seenFilters[filter.Column] = struct{}{}
+		if _, ok := seenPredicates[predicate.Column]; ok {
+			return AggregateMetadataDefinition{}, fmt.Errorf("colgranule: aggregate metadata %s duplicate predicate column %s", def.Name, predicate.Column)
+		}
+		seenPredicates[predicate.Column] = struct{}{}
 	}
 	if def.MaxBytesPerRow < 0 {
 		return AggregateMetadataDefinition{}, fmt.Errorf("colgranule: aggregate metadata %s max bytes per row %.3f is negative", def.Name, def.MaxBytesPerRow)
 	}
-	def.Filters = append([]AggregateMetadataFilter(nil), def.Filters...)
+	def.GroupKeys = append([]string(nil), def.GroupKeys...)
+	def.Measures = append([]AggregateMetadataMeasure(nil), def.Measures...)
+	def.Predicates = append([]AggregateMetadataPredicate(nil), def.Predicates...)
 	return def, nil
+}
+
+func aggregateMetadataGroupMinMaxValueColumn(def AggregateMetadataDefinition) (string, error) {
+	if len(def.Measures) != 3 {
+		return "", fmt.Errorf("colgranule: aggregate metadata %s supports exactly count/min/max measures, got %d", def.Name, len(def.Measures))
+	}
+	var hasCount bool
+	var minColumn string
+	var maxColumn string
+	for i, measure := range def.Measures {
+		switch measure.Op {
+		case AggregateMetadataMeasureCount:
+			if hasCount {
+				return "", fmt.Errorf("colgranule: aggregate metadata %s has duplicate count measure", def.Name)
+			}
+			if measure.Column != "" {
+				return "", fmt.Errorf("colgranule: aggregate metadata %s count measure must not bind column %s", def.Name, measure.Column)
+			}
+			hasCount = true
+		case AggregateMetadataMeasureMin:
+			if minColumn != "" {
+				return "", fmt.Errorf("colgranule: aggregate metadata %s has duplicate min measure", def.Name)
+			}
+			minColumn = measure.Column
+		case AggregateMetadataMeasureMax:
+			if maxColumn != "" {
+				return "", fmt.Errorf("colgranule: aggregate metadata %s has duplicate max measure", def.Name)
+			}
+			maxColumn = measure.Column
+		default:
+			return "", fmt.Errorf("colgranule: aggregate metadata %s measure %d op %s is unsupported", def.Name, i, measure.Op)
+		}
+	}
+	if !hasCount || minColumn == "" || maxColumn == "" {
+		return "", fmt.Errorf("colgranule: aggregate metadata %s requires count, min, and max measures", def.Name)
+	}
+	if minColumn != maxColumn {
+		return "", fmt.Errorf("colgranule: aggregate metadata %s min column %s differs from max column %s", def.Name, minColumn, maxColumn)
+	}
+	return minColumn, nil
 }
 
 func (b *ColumnPartBuilder) buildAggregateMetadata(part *ColumnPart, batch ColumnBatch) error {
@@ -138,23 +238,21 @@ func (b *ColumnPartBuilder) buildAggregateMetadata(part *ColumnPart, batch Colum
 
 func (b *ColumnPartBuilder) buildGroupMinMaxMetadata(part *ColumnPart, batch ColumnBatch, def AggregateMetadataDefinition) (AggregateMetadata, error) {
 	start := time.Now()
-	groupValues := batch.Columns[def.GroupColumn]
-	valueValues := batch.Columns[def.ValueColumn]
-	filterValues := make([][]int64, len(def.Filters))
-	for i, filter := range def.Filters {
-		filterValues[i] = batch.Columns[filter.Column]
+	groupColumn := def.GroupKeys[0]
+	valueColumn, err := aggregateMetadataGroupMinMaxValueColumn(def)
+	if err != nil {
+		return AggregateMetadata{}, err
+	}
+	groupValues := batch.Columns[groupColumn]
+	valueValues := batch.Columns[valueColumn]
+	predicateValues := make([][]int64, len(def.Predicates))
+	for i, predicate := range def.Predicates {
+		predicateValues[i] = batch.Columns[predicate.Column]
 	}
 
 	metadata := AggregateMetadata{
-		Definition: AggregateMetadataDefinition{
-			Name:           def.Name,
-			Kind:           def.Kind,
-			GroupColumn:    def.GroupColumn,
-			ValueColumn:    def.ValueColumn,
-			Filters:        append([]AggregateMetadataFilter(nil), def.Filters...),
-			MaxBytesPerRow: def.MaxBytesPerRow,
-		},
-		Granules: make([]AggregateMetadataGranule, 0, len(part.Descriptor.Granules)),
+		Definition: cloneAggregateMetadataDefinition(def),
+		Granules:   make([]AggregateMetadataGranule, 0, len(part.Descriptor.Granules)),
 	}
 	groupIndex := make(map[uint32]int)
 	for _, granule := range part.Descriptor.Granules {
@@ -166,7 +264,7 @@ func (b *ColumnPartBuilder) buildGroupMinMaxMetadata(part *ColumnPart, batch Col
 		}
 		for partRow := granule.FirstRow; partRow < granule.FirstRow+granule.RowCount; partRow++ {
 			sourceRow := b.order[partRow]
-			if !aggregateMetadataFiltersMatch(filterValues, def.Filters, sourceRow) {
+			if !aggregateMetadataPredicatesMatch(predicateValues, def.Predicates, sourceRow) {
 				continue
 			}
 			group64 := groupValues[sourceRow]
@@ -211,7 +309,7 @@ func (b *ColumnPartBuilder) buildGroupMinMaxMetadata(part *ColumnPart, batch Col
 	metadata.Stats.BuildDuration = time.Since(start)
 	metadata.Stats.Granules = len(part.Descriptor.Granules)
 	metadata.Stats.ValueBytes = metadata.Stats.Entries * aggregateMetadataGroupMinMaxEntryBytes
-	metadata.Stats.DescriptorBytes = len(part.Descriptor.Granules)*32 + len(def.Filters)*16 + 64
+	metadata.Stats.DescriptorBytes = len(part.Descriptor.Granules)*32 + len(def.Predicates)*24 + len(def.Measures)*16 + len(def.GroupKeys)*16 + 72
 	metadata.Stats.TotalBytes = metadata.Stats.ValueBytes + metadata.Stats.DescriptorBytes
 	metadata.Stats.Compression = "none_prototype"
 	metadata.Stats.AdmissionMaxBytes = def.MaxBytesPerRow
@@ -231,9 +329,16 @@ func (b *ColumnPartBuilder) buildGroupMinMaxMetadata(part *ColumnPart, batch Col
 	return metadata, nil
 }
 
-func aggregateMetadataFiltersMatch(filterValues [][]int64, filters []AggregateMetadataFilter, row int) bool {
-	for i, filter := range filters {
-		if filterValues[i][row] != filter.Equals {
+func cloneAggregateMetadataDefinition(def AggregateMetadataDefinition) AggregateMetadataDefinition {
+	def.GroupKeys = append([]string(nil), def.GroupKeys...)
+	def.Measures = append([]AggregateMetadataMeasure(nil), def.Measures...)
+	def.Predicates = append([]AggregateMetadataPredicate(nil), def.Predicates...)
+	return def
+}
+
+func aggregateMetadataPredicatesMatch(predicateValues [][]int64, predicates []AggregateMetadataPredicate, row int) bool {
+	for i, predicate := range predicates {
+		if predicateValues[i][row] != predicate.Value {
 			return false
 		}
 	}
