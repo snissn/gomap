@@ -19899,7 +19899,7 @@ func (db *DB) Set(key, value []byte) error {
 	}
 	db.waitForCheckpoint()
 	unlock := db.lockUpdateKey(key)
-	defer unlock()
+	defer unlock.Unlock()
 	return db.set(key, value, false)
 }
 
@@ -19912,7 +19912,7 @@ func (db *DB) SetSync(key, value []byte) error {
 	}
 	db.waitForCheckpoint()
 	unlock := db.lockUpdateKey(key)
-	defer unlock()
+	defer unlock.Unlock()
 	return db.set(key, value, true)
 }
 
@@ -19940,7 +19940,7 @@ func (db *DB) update(key []byte, fn backenddb.UpdateFunc, syncWrite bool) error 
 	for {
 		unlock := db.lockUpdateKey(key)
 		old, err := db.getForUpdate(key)
-		unlock()
+		unlock.Unlock()
 		if err != nil {
 			return err
 		}
@@ -19960,28 +19960,28 @@ func (db *DB) update(key []byte, fn backenddb.UpdateFunc, syncWrite bool) error 
 		unlock = db.lockUpdateKey(key)
 		latest, err := db.getForUpdate(key)
 		if err != nil {
-			unlock()
+			unlock.Unlock()
 			return err
 		}
 		if !sameUpdateValue(observed, latest) {
-			unlock()
+			unlock.Unlock()
 			continue
 		}
 
 		switch result.Op {
 		case backenddb.UpdateNoop:
-			unlock()
+			unlock.Unlock()
 			return nil
 		case backenddb.UpdateSet:
 			err = db.set(key, result.Value, syncWrite)
-			unlock()
+			unlock.Unlock()
 			return err
 		case backenddb.UpdateDelete:
 			err = db.delete(key, syncWrite)
-			unlock()
+			unlock.Unlock()
 			return err
 		default:
-			unlock()
+			unlock.Unlock()
 			return fmt.Errorf("treedb: unknown update op %d", result.Op)
 		}
 	}
@@ -20252,7 +20252,7 @@ func (db *DB) Delete(key []byte) error {
 	}
 	db.waitForCheckpoint()
 	unlock := db.lockUpdateKey(key)
-	defer unlock()
+	defer unlock.Unlock()
 	return db.delete(key, false)
 }
 
@@ -20866,13 +20866,13 @@ func (db *DB) DeleteSync(key []byte) error {
 	}
 	db.waitForCheckpoint()
 	unlock := db.lockUpdateKey(key)
-	defer unlock()
+	defer unlock.Unlock()
 	return db.delete(key, true)
 }
 
-func (db *DB) lockUpdateKey(key []byte) func() {
+func (db *DB) lockUpdateKey(key []byte) keyupdate.Unlocker {
 	if db == nil {
-		return func() {}
+		return keyupdate.Unlocker{}
 	}
 	return db.updateLocks.Lock(key)
 }
