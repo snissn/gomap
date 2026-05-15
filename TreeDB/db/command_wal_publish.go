@@ -166,7 +166,7 @@ func hasUnappliedCommandWALFrames(dir string, appliedLSN uint64, maxSegmentBytes
 		if !isCommandWALLaneSegment(seg) {
 			continue
 		}
-		scan, err := scanCommandWALSegmentWithSeen(seg.path, maxSegmentBytes, seg.seq == activeByLane[seg.lane], seenLSNs)
+		scan, err := scanCommandWALSegmentWithSeen(seg.path, maxSegmentBytes, seg.seq == activeByLane[seg.lane], seenLSNs, appliedLSN)
 		if err != nil {
 			return false, err
 		}
@@ -203,10 +203,10 @@ func commandWALSegmentMaxLSN(path string, maxSegmentBytes int64, allowTerminalTa
 }
 
 func scanCommandWALSegment(path string, maxSegmentBytes int64, allowTerminalTail bool) (commandWALSegmentScanResult, error) {
-	return scanCommandWALSegmentWithSeen(path, maxSegmentBytes, allowTerminalTail, nil)
+	return scanCommandWALSegmentWithSeen(path, maxSegmentBytes, allowTerminalTail, nil, 0)
 }
 
-func scanCommandWALSegmentWithSeen(path string, maxSegmentBytes int64, allowTerminalTail bool, seenLSNs map[uint64]struct{}) (commandWALSegmentScanResult, error) {
+func scanCommandWALSegmentWithSeen(path string, maxSegmentBytes int64, allowTerminalTail bool, seenLSNs map[uint64]struct{}, appliedLSN uint64) (commandWALSegmentScanResult, error) {
 	// PR2 has no durable per-segment max-LSN catalog yet, so open/cleanup paths
 	// derive classification by streaming the segment without retaining payloads.
 	// A later cleanup manifest can cache this once command replay lands.
@@ -240,7 +240,7 @@ func scanCommandWALSegmentWithSeen(path string, maxSegmentBytes int64, allowTerm
 			scan.typed = true
 			return scan, commitlog.ErrCommandWALDuplicateLSN
 		}
-		if seenLSNs != nil {
+		if seenLSNs != nil && (appliedLSN == 0 || frame.LSN > appliedLSN) {
 			if _, ok := seenLSNs[frame.LSN]; ok {
 				scan.typed = true
 				return scan, commitlog.ErrCommandWALDuplicateLSN
@@ -277,7 +277,7 @@ func filterCommandWALSegmentsForLegacyReplay(segments []logSegment, appliedLSN u
 			continue
 		}
 		active := seg.seq == activeByLane[seg.lane]
-		scan, err := scanCommandWALSegmentWithSeen(seg.path, maxSegmentBytes, active, seenLSNs)
+		scan, err := scanCommandWALSegmentWithSeen(seg.path, maxSegmentBytes, active, seenLSNs, appliedLSN)
 		if err != nil {
 			return nil, err
 		}
@@ -333,7 +333,7 @@ func cleanupCommandWALSegmentsCoveredByAppliedLSN(dir string, appliedLSN uint64,
 			continue
 		}
 		active := seg.seq == activeByLane[seg.lane]
-		scan, err := scanCommandWALSegmentWithSeen(seg.path, maxSegmentBytes, active, seenLSNs)
+		scan, err := scanCommandWALSegmentWithSeen(seg.path, maxSegmentBytes, active, seenLSNs, appliedLSN)
 		if err != nil {
 			decisions = append(decisions, commandWALSegmentCleanupDecision{
 				Path:   seg.path,

@@ -348,7 +348,9 @@ func TestCommandWALLegacyReplayFilterPreservesNonCommandOrderAroundCoveredFrame(
 	}
 }
 
-func TestCommandWALLegacyReplayFilterRejectsDuplicateCoveredLSNAcrossSegments(t *testing.T) {
+func TestCommandWALLegacyReplayFilterToleratesCoveredDuplicateLSNAcrossSegments(t *testing.T) {
+	// Covered duplicate LSNs at or below AppliedCommandLSN are tolerated while
+	// cleanup converges (see PR description Correctness Gate).
 	dir := t.TempDir()
 	writeCommandWALFrame(t, dir, 1, 1)
 	writeCommandWALFrame(t, dir, 2, 1)
@@ -357,10 +359,14 @@ func TestCommandWALLegacyReplayFilterRejectsDuplicateCoveredLSNAcrossSegments(t 
 		t.Fatalf("listWALSegments: %v", err)
 	}
 
-	_, err = filterCommandWALSegmentsForLegacyReplay(segments, 1, 0)
-	if !errors.Is(err, commitlog.ErrCommandWALDuplicateLSN) {
-		t.Fatalf("filterCommandWALSegmentsForLegacyReplay error=%v, want ErrCommandWALDuplicateLSN", err)
+	// Both segments have LSN=1 <= appliedLSN=1; both are covered. The filter
+	// must tolerate the duplicate and return the segments with both omitted
+	// (they are fully covered).
+	filtered, err := filterCommandWALSegmentsForLegacyReplay(segments, 1, 0)
+	if err != nil {
+		t.Fatalf("filterCommandWALSegmentsForLegacyReplay error=%v, want nil (covered duplicate tolerated)", err)
 	}
+	_ = filtered
 }
 
 func TestCommandWALWriteOpenRejectsUnappliedFramesUntilDispatcher(t *testing.T) {
@@ -526,7 +532,9 @@ func TestCommandWALOpenFailsClosedOnCorruptCRCEvenWhenCovered(t *testing.T) {
 	}
 }
 
-func TestCommandWALOpenFailsClosedOnDuplicateLSNAcrossCoveredSegments(t *testing.T) {
+func TestCommandWALOpenToleratesCoveredDuplicateLSNAcrossSegments(t *testing.T) {
+	// Covered duplicate LSNs at or below AppliedCommandLSN are tolerated while
+	// cleanup converges.  Both open paths (read-only and read-write) must succeed.
 	dir := t.TempDir()
 	db, err := Open(Options{Dir: dir})
 	if err != nil {
@@ -542,13 +550,19 @@ func TestCommandWALOpenFailsClosedOnDuplicateLSNAcrossCoveredSegments(t *testing
 	writeCommandWALFrame(t, dir, 1, 9)
 	writeCommandWALFrame(t, dir, 2, 9)
 
-	_, err = Open(Options{Dir: dir, ReadOnly: true})
-	if !errors.Is(err, commitlog.ErrCommandWALDuplicateLSN) {
-		t.Fatalf("Open read-only error=%v, want ErrCommandWALDuplicateLSN", err)
+	ro, err := Open(Options{Dir: dir, ReadOnly: true})
+	if err != nil {
+		t.Fatalf("Open read-only covered duplicate LSN: %v", err)
 	}
-	_, err = Open(Options{Dir: dir})
-	if !errors.Is(err, commitlog.ErrCommandWALDuplicateLSN) {
-		t.Fatalf("Open read-write error=%v, want ErrCommandWALDuplicateLSN", err)
+	if err := ro.Close(); err != nil {
+		t.Fatalf("Close read-only: %v", err)
+	}
+	rw, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("Open read-write covered duplicate LSN: %v", err)
+	}
+	if err := rw.Close(); err != nil {
+		t.Fatalf("Close read-write: %v", err)
 	}
 }
 
@@ -793,25 +807,39 @@ func TestCommandWALCheckpointCleanupReturnsScanErrors(t *testing.T) {
 	}
 }
 
-func TestCommandWALCheckpointCleanupRejectsDuplicateCoveredLSNAcrossSegmentsBeforeRemove(t *testing.T) {
+func TestCommandWALCheckpointCleanupToleratesCoveredDuplicateLSNAcrossSegments(t *testing.T) {
+	// Covered duplicate LSNs across segments are tolerated during cleanup.
+	// The non-active covered segment (lower seq) is removed; the active covered
+	// segment (higher seq) is retained.
 	dir := t.TempDir()
 	writeCommandWALFrame(t, dir, 1, 1)
 	writeCommandWALFrame(t, dir, 2, 1)
 
 	decisions, err := cleanupCommandWALSegmentsCoveredByAppliedLSN(dir, 1, 0)
-	if !errors.Is(err, commitlog.ErrCommandWALDuplicateLSN) {
-		t.Fatalf("cleanupCommandWALSegmentsCoveredByAppliedLSN error=%v, want ErrCommandWALDuplicateLSN", err)
+	if err != nil {
+		t.Fatalf("cleanupCommandWALSegmentsCoveredByAppliedLSN error=%v, want nil (covered duplicate tolerated)", err)
 	}
-	if len(decisions) != 2 {
-		t.Fatalf("len(decisions)=%d, want 2", len(decisions))
-	}
-	for _, decision := range decisions {
-		if decision.Removed {
-			t.Fatalf("cleanup removed segment despite scan error: %+v", decision)
+	var removed, retained int
+	for _, d := range decisions {
+		if d.Removed {
+			removed++
+		} else {
+			retained++
 		}
 	}
-	if _, err := os.Stat(filepath.Join(WALDirPath(dir), "commit-l0-000001.log")); err != nil {
-		t.Fatalf("covered segment stat=%v, want retained on scan error", err)
+	if removed != 1 {
+		t.Fatalf("cleanup removed=%d segments, want 1 (non-active covered)", removed)
+	}
+	if retained != 1 {
+		t.Fatalf("cleanup retained=%d segments, want 1 (active covered)", retained)
+	}
+	// Active covered segment (seq=2) must survive.
+	if _, err := os.Stat(filepath.Join(WALDirPath(dir), commitlog.CommandSegmentName(0, 2))); err != nil {
+		t.Fatalf("active covered segment stat=%v, want retained", err)
+	}
+	// Non-active covered segment (seq=1) must be removed.
+	if _, err := os.Stat(filepath.Join(WALDirPath(dir), "commit-l0-000001.log")); !os.IsNotExist(err) {
+		t.Fatalf("non-active covered segment stat=%v, want removed", err)
 	}
 }
 
