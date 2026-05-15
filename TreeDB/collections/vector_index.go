@@ -615,7 +615,7 @@ func (idx *VectorIndex) linkLayerLocked(fromNodeID, toNodeID, layer int) {
 	idx.nodes[fromNodeID].neighbors[layer] = neighbors
 }
 
-func (idx *VectorIndex) pruneLayerNeighborsLocked(fromNodeID int, neighbors []vectorIndexNeighbor, limit int) []vectorIndexNeighbor {
+func (idx *VectorIndex) pruneLayerNeighborsLocked(_ int, neighbors []vectorIndexNeighbor, limit int) []vectorIndexNeighbor {
 	if limit <= 0 || len(neighbors) == 0 {
 		return nil
 	}
