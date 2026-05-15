@@ -529,6 +529,48 @@ func TestCommandWALNonFinalSegmentTailFailsClosed(t *testing.T) {
 	}
 }
 
+func TestCommandWALActiveSegmentTailAllowedPerLane(t *testing.T) {
+	dir := t.TempDir()
+	path0 := filepath.Join(dir, "commit-l0-000001.log")
+	path1 := filepath.Join(dir, "commit-l1-000001.log")
+	for i, path := range []string{path0, path1} {
+		w, err := NewWriter(path)
+		if err != nil {
+			t.Fatalf("NewWriter %s: %v", path, err)
+		}
+		if err := w.AppendCommand(CommandEnvelope{
+			LSN:           uint64(i + 1),
+			Kind:          CommandKindRawKVBatch,
+			Scope:         CommandScopeRawKV,
+			PayloadFormat: PayloadFormatRawKVBatchV1,
+		}); err != nil {
+			_ = w.Close()
+			t.Fatalf("AppendCommand %s: %v", path, err)
+		}
+		if err := w.Close(); err != nil {
+			t.Fatalf("Close %s: %v", path, err)
+		}
+	}
+	f, err := os.OpenFile(path0, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatalf("OpenFile append tail: %v", err)
+	}
+	if _, err := f.Write([]byte{0x01, 0x02}); err != nil {
+		_ = f.Close()
+		t.Fatalf("Write tail: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("Close tail writer: %v", err)
+	}
+	frames, err := ScanCommandFrameSegments([]string{path0, path1}, Options{})
+	if err != nil {
+		t.Fatalf("ScanCommandFrameSegments per-lane active tails: %v", err)
+	}
+	if len(frames) != 2 {
+		t.Fatalf("len(frames)=%d, want 2", len(frames))
+	}
+}
+
 func mustCommandFrame(t *testing.T, env CommandEnvelope) []byte {
 	t.Helper()
 	frame, err := EncodeCommandFrame(env)
