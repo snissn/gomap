@@ -107,8 +107,9 @@ integration depends on the collection native fast-path work, but logical
 keyspaces should be stable:
 
 ```text
-vi/{collectionID}/{indexID}/meta
+vi/{collectionID}/{indexID}/config
 vi/{collectionID}/{indexID}/state
+vi/{collectionID}/{indexID}/epoch/{epoch}/meta
 vi/{collectionID}/{indexID}/epoch/{epoch}/node/{nodeID}
 vi/{collectionID}/{indexID}/epoch/{epoch}/edge/{nodeID}/{layer}
 vi/{collectionID}/{indexID}/epoch/{epoch}/doc/{documentID}
@@ -123,11 +124,14 @@ keyspace SHOULD map to a dedicated root or prefix within a single vector-index
 root. The implementation should avoid storing large graph records inside the
 collection primary document root.
 
-The `state` record publishes the currently readable epoch. Node, edge, document
-map, and tombstone records MUST be scoped by epoch so rebuilds and compaction can
-write a complete staging epoch without overwriting the active graph. Publishing a
-new epoch is the atomic visibility boundary; old epochs are retained until active
-readers drain and then reclaimed.
+The `config` record contains stable index identity and options. The `state`
+record publishes the currently readable epoch. Epoch metadata, node, edge,
+document map, and tombstone records MUST be scoped by epoch so rebuilds and
+compaction can write a complete staging epoch without overwriting the active
+graph. Publishing a new epoch in `state` is the atomic visibility boundary;
+readers load epoch-scoped metadata from the published epoch and never combine it
+with metadata from another epoch. Old epochs are retained until active readers
+drain and then reclaimed.
 
 Numeric path segments use fixed-width big-endian bytes in native key encoding:
 `epoch` and `nodeID` are `u64`, `layer` is `u16`, `collectionSeq` is `u64`, and
@@ -154,7 +158,7 @@ dimensions: u32
 m: u16
 ef_construction: u32
 ef_search: u32
-entry_node_id: u64, u64::MAX means no entry node
+entry_node_id: u64, all-ones sentinel 0xFFFFFFFFFFFFFFFF means no entry node
 max_level: u16
 next_node_id: u64
 live_count: u64
@@ -162,11 +166,12 @@ deleted_count: u64
 index_epoch: u64
 applied_collection_seq: u64
 build_id: fixed 16 bytes
-state: enum { ready, building, catching_up, dirty, needs_rebuild, disabled }
+state: enum { ready, building, catching_up, dirty, needs_rebuild, disabled, missing }
 ```
 
 The metadata record MUST be validated before serving graph search. Unknown
-required feature flags MUST fail closed.
+required feature flags MUST fail closed. `missing` is a synthetic open-time
+state used when no native ANN metadata has been published yet.
 
 ### 6.2 Node Record
 
@@ -207,7 +212,7 @@ crc_or_record_checksum: optional
 Edges SHOULD be stored by source node and layer. Within one edge record,
 neighbor IDs SHOULD be sorted for compact delta encoding if deterministic
 ordering does not regress HNSW behavior. The first neighbor ID is encoded as an
-absolute unsigned varint; each subsequent neighbor ID is encoded as a signed
+absolute unsigned varint; each subsequent neighbor ID is encoded as an unsigned
 delta from the previous sorted neighbor ID. The runtime graph may keep insertion
 or distance order separately if needed, but the durable codec uses this one
 canonical form.
@@ -281,15 +286,15 @@ delta_count: u32
 checksum: optional
 ```
 
-For a collection mutation boundary, especially `InsertBatch` and `UpdateBatch`,
-the index writer MUST persist all delta records for that `collection_seq` and
-then persist one boundary record with the exact `delta_count`. Recovery MUST NOT
-advance `applied_collection_seq` past a sequence unless the boundary record is
-present and the durable delta set contains every ordinal in
-`[0, delta_count)`. A missing boundary or truncated ordinal range means the
-durable ANN state is incomplete; recovery must keep the index catching up if the
-canonical collection log can supply the missing work, otherwise mark
-`needs_rebuild`.
+For every collection mutation boundary, including single-document writes,
+`InsertBatch`, and `UpdateBatch`, the index writer MUST persist all delta records
+for that `collection_seq` and then persist one boundary record with the exact
+`delta_count`. Recovery MUST NOT advance `applied_collection_seq` past a
+sequence unless the boundary record is present and the durable delta set contains
+every ordinal in `[0, delta_count)`. A missing boundary or truncated ordinal
+range means the durable ANN state is incomplete; recovery must keep the index
+catching up if the canonical collection log can supply the missing work,
+otherwise mark `needs_rebuild`.
 
 ## 7. Runtime Representation
 
@@ -323,7 +328,9 @@ type vectorIndexNeighbor struct {
 The runtime graph MAY use narrower types than Go `int` internally after the
 format stabilizes. For example, `uint32` node IDs are sufficient until a single
 index exceeds four billion nodes, and using them with a `float32` distance can
-cut edge memory in half.
+cut edge memory in half. The runtime representation MUST switch to a wider node
+ID representation before any durable `node_id` exceeds `math.MaxUint32`; it must
+never wrap or truncate durable `u64` node IDs.
 
 ## 8. Write Semantics
 
@@ -402,6 +409,7 @@ ready -> catching_up -> ready
 catching_up -> dirty -> needs_rebuild
 catching_up -> needs_rebuild
 ready -> dirty -> needs_rebuild -> building -> ready
+ready -> needs_rebuild -> building -> ready
 ready -> disabled
 disabled -> building
 ```
@@ -497,15 +505,16 @@ Recommended first format:
 - document IDs: prefix-compressed by ordered key layout,
 - page/block compression: reuse TreeDB page/value compression where available.
 
-Expected size for 10k docs x 64 dims, `M=16`, using an illustrative average of
-about 37 directed edges/node. This estimate includes base-layer and upper-layer
-directed edges from the current benchmark-sized graph shape and should be
-replaced with measured fanout once the native format lands:
+Expected size for 10k docs x 64 dims, `M=16`, using binary MiB
+(`1 MiB = 1024 * 1024 bytes`) and an illustrative average of about 37 directed
+edges/node. This estimate includes base-layer and upper-layer directed edges
+from the current benchmark-sized graph shape and should be replaced with
+measured fanout once the native format lands:
 
 ```text
-float32 vectors: ~2.56 MB
-edges as uint32+float32: ~2.96 MB
-node/doc metadata: ~0.5-1.0 MB before TreeDB overhead
+float32 vectors: ~2.44 MiB
+edges as uint32+float32: ~2.82 MiB
+node/doc metadata: ~0.5-1.0 MiB before TreeDB overhead
 ```
 
 With compact binary plus page compression:
@@ -547,6 +556,11 @@ func (idx *VectorIndex) Status() VectorIndexStatus
 Existing `BuildVectorIndex`, `SaveSnapshot`, and `LoadVectorIndexSnapshot` MAY
 remain as compatibility or test helpers during transition, but native index
 creation should become the production path.
+
+`OpenVectorIndex` returns `VectorIndexLoadStatus` separately so callers can
+decide whether to use exact fallback before invoking methods on a partially
+loaded, catching-up, or rebuild-required index. `idx.Status()` exposes the same
+state after open.
 
 ## 15. Observability
 
