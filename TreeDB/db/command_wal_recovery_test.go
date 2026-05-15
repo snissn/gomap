@@ -389,6 +389,10 @@ func TestCommandWALFinalizeFailurePoisonsOpenHandle(t *testing.T) {
 	_ = b.Close()
 	db.testFailFinalizeCommit.Store(false)
 
+	if err := db.Commit(db.State().RootPageID); !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("Commit after poison error=%v, want ErrRecoveryRequired", err)
+	}
+
 	retry := db.NewBatch()
 	if err := retry.Set([]byte("later"), []byte("value")); err != nil {
 		t.Fatalf("Set retry: %v", err)
