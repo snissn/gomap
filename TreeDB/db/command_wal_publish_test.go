@@ -310,6 +310,34 @@ func TestCommandWALCheckpointCleanupDeletesOnlyCoveredSegments(t *testing.T) {
 	}
 }
 
+func TestCommandWALSegmentMaxLSNStreamsFrames(t *testing.T) {
+	dir := t.TempDir()
+	writeCommandWALSegmentFrames(t, dir, 1, 1, 2, 3)
+
+	path := filepath.Join(WALDirPath(dir), "commit-l0-000001.log")
+	maxLSN, typed, err := commandWALSegmentMaxLSN(path, 0)
+	if err != nil {
+		t.Fatalf("commandWALSegmentMaxLSN: %v", err)
+	}
+	if !typed || maxLSN != 3 {
+		t.Fatalf("typed=%t maxLSN=%d, want typed maxLSN=3", typed, maxLSN)
+	}
+}
+
+func TestCommandWALSegmentMaxLSNFailsClosedOnNonIncreasingLSN(t *testing.T) {
+	dir := t.TempDir()
+	writeCommandWALSegmentFrames(t, dir, 1, 1, 1)
+
+	path := filepath.Join(WALDirPath(dir), "commit-l0-000001.log")
+	_, typed, err := commandWALSegmentMaxLSN(path, 0)
+	if !errors.Is(err, commitlog.ErrCommandWALDuplicateLSN) {
+		t.Fatalf("commandWALSegmentMaxLSN error=%v, want ErrCommandWALDuplicateLSN", err)
+	}
+	if !typed {
+		t.Fatalf("typed=false, want true for duplicate typed command segment")
+	}
+}
+
 func TestCommandWALBackupManifestShapeIncludesAppliedLSNAndRanges(t *testing.T) {
 	data, err := json.Marshal(commandWALBackupManifest{
 		AppliedCommandLSN: 7,
@@ -348,6 +376,11 @@ func TestCommandWALBackupManifestShapeIncludesAppliedLSNAndRanges(t *testing.T) 
 
 func writeCommandWALFrame(t *testing.T, dir string, segmentSeq uint64, lsn uint64) {
 	t.Helper()
+	writeCommandWALSegmentFrames(t, dir, segmentSeq, lsn)
+}
+
+func writeCommandWALSegmentFrames(t *testing.T, dir string, segmentSeq uint64, lsns ...uint64) {
+	t.Helper()
 	walDir := WALDirPath(dir)
 	if err := os.MkdirAll(walDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll wal: %v", err)
@@ -357,14 +390,16 @@ func writeCommandWALFrame(t *testing.T, dir string, segmentSeq uint64, lsn uint6
 	if err != nil {
 		t.Fatalf("NewWriter: %v", err)
 	}
-	if err := w.AppendCommand(commitlog.CommandEnvelope{
-		LSN:           lsn,
-		Kind:          commitlog.CommandKindRawKVBatch,
-		Scope:         commitlog.CommandScopeRawKV,
-		PayloadFormat: commitlog.PayloadFormatRawKVBatchV1,
-	}); err != nil {
-		_ = w.Close()
-		t.Fatalf("AppendCommand: %v", err)
+	for _, lsn := range lsns {
+		if err := w.AppendCommand(commitlog.CommandEnvelope{
+			LSN:           lsn,
+			Kind:          commitlog.CommandKindRawKVBatch,
+			Scope:         commitlog.CommandScopeRawKV,
+			PayloadFormat: commitlog.PayloadFormatRawKVBatchV1,
+		}); err != nil {
+			_ = w.Close()
+			t.Fatalf("AppendCommand: %v", err)
+		}
 	}
 	if err := w.Close(); err != nil {
 		t.Fatalf("Close writer: %v", err)

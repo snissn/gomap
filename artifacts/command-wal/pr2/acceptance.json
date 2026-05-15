@@ -37,6 +37,8 @@
     "TestCommandWALWriteOpenRejectsUnappliedFramesUntilDispatcher",
     "TestCommandWALWriteOpenRejectsFirstUnappliedFrameUntilDispatcher",
     "TestCommandWALCheckpointCleanupDeletesOnlyCoveredSegments",
+    "TestCommandWALSegmentMaxLSNStreamsFrames",
+    "TestCommandWALSegmentMaxLSNFailsClosedOnNonIncreasingLSN",
     "TestCommandWALBackupManifestShapeIncludesAppliedLSNAndRanges"
   ],
   "crash_scenarios": [

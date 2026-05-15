@@ -275,6 +275,8 @@ PR 2: shared journal ownership and `AppliedCommandLSN` plumbing:
 - `TestCommandWALPublishHelperRejectsRootsWithoutAppliedLSN`;
 - `TestCommandWALAppliedLSNContiguousPrefixOnly`;
 - `TestCommandWALCheckpointCleanupDeletesOnlyCoveredSegments`;
+- `TestCommandWALSegmentMaxLSNStreamsFrames`;
+- `TestCommandWALSegmentMaxLSNFailsClosedOnNonIncreasingLSN`;
 - `TestCommandWALReadOnlyOpenWithUnappliedFrameFailsRecoveryRequired`;
 - `TestCommandWALReadOnlyOpenAllowsFramesCoveredByAppliedLSN`;
 - `TestCommandWALWriteOpenSkipsCoveredFramesBeforeLegacyReplay`;

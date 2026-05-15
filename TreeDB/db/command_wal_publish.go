@@ -3,6 +3,7 @@ package db
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"sort"
 
@@ -160,20 +161,33 @@ func hasUnappliedCommandWALFrames(dir string, appliedLSN uint64, maxSegmentBytes
 }
 
 func commandWALSegmentMaxLSN(path string, maxSegmentBytes int64) (maxLSN uint64, typed bool, err error) {
-	frames, err := commitlog.ScanCommandFrames(path, commitlog.Options{MaxSegmentSize: maxSegmentBytes})
+	r, err := commitlog.NewReaderWithOptions(path, commitlog.Options{MaxSegmentSize: maxSegmentBytes})
 	if err != nil {
-		if errors.Is(err, commitlog.ErrCommandWALLegacyPayload) && len(frames) == 0 {
-			return 0, false, nil
-		}
-		return 0, len(frames) > 0, err
+		return 0, false, err
 	}
-	for _, frame := range frames {
+	defer r.Close()
+
+	var lastLSN uint64
+	for {
+		frame, err := r.ReadCommandFrame()
+		if err != nil {
+			if err == io.EOF || errors.Is(err, commitlog.ErrCommandWALTerminalTail) {
+				return maxLSN, typed, nil
+			}
+			if errors.Is(err, commitlog.ErrCommandWALLegacyPayload) && !typed {
+				return 0, false, nil
+			}
+			return 0, typed, err
+		}
+		if lastLSN != 0 && frame.LSN <= lastLSN {
+			return 0, true, commitlog.ErrCommandWALDuplicateLSN
+		}
+		lastLSN = frame.LSN
 		typed = true
 		if frame.LSN > maxLSN {
 			maxLSN = frame.LSN
 		}
 	}
-	return maxLSN, typed, nil
 }
 
 func filterCommandWALSegmentsForLegacyReplay(segments []logSegment, appliedLSN uint64, maxSegmentBytes int64) ([]logSegment, error) {
