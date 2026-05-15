@@ -1,6 +1,7 @@
 package db
 
 import (
+	"os"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
@@ -132,24 +133,49 @@ func BenchmarkCommandWALReadReplayFrames(b *testing.B) {
 }
 
 func BenchmarkCommandWALCoveredSegmentCleanupProof(b *testing.B) {
-	dir := b.TempDir()
-	for i := 1; i <= 64; i++ {
-		writeCommandWALRawKVFrame(b, dir, uint64(i), uint64(i), []commitlog.RawKVOperation{{
-			Op:    commitlog.RawKVOpSet,
-			Key:   []byte("bench-key"),
-			Value: []byte("bench-value"),
-		}})
-	}
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		decisions, err := cleanupCommandWALSegmentsCoveredByAppliedLSN(dir, 0, 0)
+		b.StopTimer()
+		dir, err := os.MkdirTemp("", "treedb-command-wal-cleanup-*")
 		if err != nil {
+			b.Fatalf("MkdirTemp: %v", err)
+		}
+		for seq := 1; seq <= 2; seq++ {
+			writeCommandWALRawKVFrame(b, dir, uint64(seq), uint64(seq), []commitlog.RawKVOperation{{
+				Op:    commitlog.RawKVOpSet,
+				Key:   []byte("bench-key"),
+				Value: []byte("bench-value"),
+			}})
+		}
+		b.StartTimer()
+		decisions, err := cleanupCommandWALSegmentsCoveredByAppliedLSN(dir, 2, 0)
+		b.StopTimer()
+		if err != nil {
+			_ = os.RemoveAll(dir)
 			b.Fatalf("cleanupCommandWALSegmentsCoveredByAppliedLSN: %v", err)
 		}
-		if len(decisions) != 64 {
-			b.Fatalf("len(decisions)=%d, want 64", len(decisions))
+		if len(decisions) != 2 {
+			_ = os.RemoveAll(dir)
+			b.Fatalf("len(decisions)=%d, want 2", len(decisions))
 		}
+		covered, removed := 0, 0
+		for _, decision := range decisions {
+			if decision.Covered {
+				covered++
+			}
+			if decision.Removed {
+				removed++
+			}
+		}
+		if covered != 2 || removed != 1 {
+			_ = os.RemoveAll(dir)
+			b.Fatalf("covered=%d removed=%d, want covered=2 removed=1 active segment retained", covered, removed)
+		}
+		if err := os.RemoveAll(dir); err != nil {
+			b.Fatalf("RemoveAll: %v", err)
+		}
+		b.StartTimer()
 	}
 }
 
