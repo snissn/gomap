@@ -199,6 +199,11 @@ implementation track. Design documents may list invariants, but named tests,
 fault classes, fuzz targets, benchmark artifact fields, and acceptance evidence
 are maintained here.
 
+The detailed TDD execution plan is tracked in
+https://github.com/snissn/gomap/issues/1529. That issue owns implementation
+sequencing and PR task breakdown. This section owns the durable verification
+requirements that the ticket and implementation PRs must satisfy.
+
 ### 11.5.1 Normative Coverage Matrix
 
 | Normative statement | Owner section | Required test/evidence | Status |

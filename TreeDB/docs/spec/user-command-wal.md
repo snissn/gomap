@@ -1,7 +1,8 @@
 # SPEC: User Command WAL and Applied-LSN Recovery
 
-Status: normative target contract and implementation plan; not current behavior
-until the milestone evidence below is accepted. This document supersedes the
+Status: normative target contract; not current behavior until the milestone
+evidence below is accepted. The detailed implementation plan lives in issue
+https://github.com/snissn/gomap/issues/1529. This document supersedes the
 collection-specific physical/root-delta WAL target in
 `collection-wal-durability-plan.md` for future implementation work.
 
@@ -589,7 +590,100 @@ update users where age > 30 and city = "NYC" set active = true
 must be rejected in WAL-on durable-at-ack modes or lowered by the caller into an
 explicit ID batch before WAL append.
 
-## 14. PR Milestones
+## 14. Implementation Ticket, Assertions, and Evidence Gates
+
+The detailed test-driven execution plan for this WAL track lives in issue
+https://github.com/snissn/gomap/issues/1529. This spec owns the durable
+correctness contract, command matrix, required assertion categories, and
+acceptance evidence shape. The issue may reorganize sequencing as implementation
+facts change, but it must not weaken the invariants in this spec.
+
+Implementation PRs should reference the tracker issue and the relevant milestone
+below. If the issue plan and this spec disagree on a correctness requirement,
+the stricter requirement applies until the spec is updated in the same PR as the
+implementation change.
+
+### 14.1 Required Assertion Hooks
+
+The production implementation should include explicit internal assertion hooks
+for command WAL invariants. Cheap corruption-prevention checks should run in all
+builds and return typed errors. Expensive structural checks may be guarded by a
+debug/test option, but every guard must have a unit test that demonstrates it can
+catch the intended bug.
+
+Required assertion categories:
+
+- `assertCommandWALFeatureGate`: command WAL directories cannot be served,
+  compacted, or cleaned by binaries that do not support the required feature.
+- `assertSingleJournalOwner`: one mutable journal owner per DB directory and one
+  shared LSN stream for raw, collection, catalog, and native command writes.
+- `assertNoVisibilityBeforeRecoverability`: WAL-on command state cannot become
+  visible before its complete command frame and required external refs are
+  recoverable under the selected durability mode.
+- `assertPublishTuple`: root IDs, system metadata, value-log/leaf-log
+  reachability, and `AppliedCommandLSN` are selected in one backend durability
+  boundary.
+- `assertContiguousAppliedLSN`: `AppliedCommandLSN` advances only over a
+  contiguous command LSN prefix.
+- `assertRecoveryStartsFromSelectedTuple`: recovery starts from the selected
+  root/meta tuple and never guesses through split root/LSN states.
+- `assertExternalRefClosure`: every required external ref in a complete command
+  frame is present, checksummed, class-valid, and protected until root
+  reachability or command abort takes ownership.
+- `assertCleanupProof`: WAL segment deletion requires durable proof that the
+  segment's max LSN is covered by `AppliedCommandLSN`.
+- `assertStrictReplayNoGenericSkip`: strict commands cannot skip replay on
+  generic already-exists or duplicate-key evidence.
+- `assertNoCallbackOrResolverReplay`: recovery cannot call Go callbacks, wall
+  clock, random, UUID, sequence, or external resolver functions.
+
+These hooks are implementation aids, not replacement tests. Every assertion
+must have a test that intentionally violates the invariant and observes the
+typed error or recovery failure.
+
+### 14.2 Crash Harness Requirements
+
+The command WAL implementation should introduce a deterministic fault-injection
+harness before command breadth. The harness should expose named cut points, not
+sleep-based races. Every command kind that becomes `WAL-supported` must run the
+same cut-point suite.
+
+Required harness behavior:
+
+- cut points are named stable constants and appear in test output;
+- each cut point can fail once, fail always, or fail by deterministic seed;
+- injected failure reports whether a frame was assigned, written, synced,
+  applied, published, and cleaned;
+- reopen validation compares user-visible state, system metadata,
+  `AppliedCommandLSN`, WAL segment debt, and external-ref reachability;
+- read-write recovery and read-only open are tested separately;
+- fault injection never masks ordinary Go race detector failures.
+
+The initial harness should target raw `RawKVBatch` and explicit-ID collection
+insert first. Later command kinds inherit the same crash matrix rather than
+creating bespoke recovery tests.
+
+### 14.3 Per-PR Evidence Gate
+
+Each implementation PR must include a short evidence block in the PR description
+and a machine-readable artifact under `artifacts/command-wal/<milestone>/`. The
+evidence block must list:
+
+- command kinds touched and their matrix status;
+- red tests or fixture drift tests added before implementation;
+- crash cut points exercised;
+- model/fuzz targets added or extended;
+- runtime assertions added or extended;
+- unsupported modes and their exact public errors;
+- local commands run, including race/fuzz/crash-harness duration where relevant;
+- CI status and any excluded tests with rationale.
+
+No milestone is complete until the same evidence is reflected in
+`verification.md`. Test names in the spec should be exact names from code once
+the implementation PR exists. Planned names are acceptable only in this planning
+PR.
+
+## 15. PR Milestones
 
 ### PR 0: Spec, issue, and deprecation cleanup
 
@@ -763,7 +857,7 @@ Acceptance:
 - future Raft work can reuse the command payload contract without depending on
   local WAL segment layout.
 
-## 15. Deprecation of the Collection Root-Delta WAL Target
+## 16. Deprecation of the Collection Root-Delta WAL Target
 
 The collection-specific physical/root-delta WAL target is deprecated for new
 implementation work. Its documents and PRs remain useful as a record of crash
@@ -785,7 +879,7 @@ Concepts to preserve:
 - checkpoint cleanup only after durable proof;
 - clear separation between local WAL and Raft consensus semantics.
 
-## 16. Open Questions
+## 17. Open Questions
 
 1. Should Mongo `$set` replay as structured `$set` or as final replacement bytes?
 2. What is the minimum idempotency metadata needed for retryable native-wire or
