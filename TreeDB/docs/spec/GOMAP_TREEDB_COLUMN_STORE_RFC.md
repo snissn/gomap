@@ -1984,6 +1984,14 @@ the column-store scan API can express the five Bluesky analytics queries. This
 is a comparison benchmark, not the first correctness gate, and it must follow
 JSONBench rules.
 
+Repository ownership is explicit: `snissn/JSONBench` is the canonical home for
+end-to-end JSONBench runners, local ClickHouse/DuckDB/TreeDB reproduction,
+normalized result JSON, and comparison reports. `snissn/gomap` owns TreeDB
+implementation, this RFC, and small TreeDB-local codec/prototype tests. The
+current JSONBench synchronization PR is
+`https://github.com/snissn/JSONBench/pull/1`; the `gomap` storage-comparison
+tracker is `https://github.com/snissn/gomap/issues/1462`.
+
 The comparison target is benchmark-shape compatibility with the ClickHouse JSON
 store setup in `clickhouse/ddl.sql` and `clickhouse/queries.sql`, not
 byte-for-byte ClickHouse storage compatibility. TreeDB should include a declared
@@ -1999,9 +2007,9 @@ column-store schema mode that mirrors the ClickHouse-declared JSON paths:
 
 Required harness changes:
 
-- extend `treedb/run_matrix.sh` and `treedb/cmd/jsonbench_treedb` with a
-  `columnstore` format or storage mode in addition to the existing `json` and
-  `template-v1` modes;
+- build on the external `treedb/run_matrix.sh` and `treedb/cmd/jsonbench_treedb`
+  row-store/template-v1 harness, then add a `columnstore` format or storage mode
+  once TreeDB exposes a non-production column-store scan path;
 - load the same NDJSON rows used by JSONBench at `1m`, `10m`, `100m`, and
   optionally `1000m` scales;
 - run full-document row-store/template-v1 baselines and the column-store
@@ -2123,9 +2131,9 @@ Deliverables:
   - update-followed-by-read shape;
   - count-star shape;
 - add `cmd/columnstore_bench` skeleton with row-store/template-v1 baselines;
-- inventory the external JSONBench `treedb/` harness and define the
-  column-store result fields needed to compare with local ClickHouse/DuckDB
-  JSONBench runs;
+- keep the external JSONBench `treedb/` harness as the canonical cross-database
+  benchmark home and define the column-store result fields needed to compare
+  with local ClickHouse/DuckDB JSONBench runs;
 - add result fields for sort key, mark bytes, granules read/skipped, retained
   JSON byte classes, and cache-state labels;
 - add machine-readable result schema and guardrail checks.
