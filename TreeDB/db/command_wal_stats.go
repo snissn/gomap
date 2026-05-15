@@ -76,10 +76,6 @@ func (db *DB) cachedCommandWALStatsSummary() (commandWALStatsSummary, error) {
 	}
 	db.commandWALStatsMu.Lock()
 	defer db.commandWALStatsMu.Unlock()
-	if db.commandWALStatsOK && db.commandWALStatsAppliedLSN == appliedLSN {
-		summary := db.commandWALStatsSummary
-		return summary, nil
-	}
 
 	summary, err := summarizeCommandWALStats(db.dir, db.walMaxSegmentBytes)
 	if err != nil {

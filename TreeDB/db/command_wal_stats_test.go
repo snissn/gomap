@@ -168,6 +168,25 @@ func TestCommandWALStatsScanUsesDefaultWALMaxSegmentBytes(t *testing.T) {
 	dbClosed = true
 }
 
+func TestCommandWALStatsScanRefreshesWithoutAppliedLSNChange(t *testing.T) {
+	dir := t.TempDir()
+	writeCommandWALFrame(t, dir, 1, 1)
+	db := &DB{dir: dir, commandWAL: true, commandWALStatsScan: true}
+
+	first := make(map[string]string)
+	writeCommandWALStats(first, db)
+	if got := first["treedb.command_wal.frames"]; got != "1" {
+		t.Fatalf("first frames=%q, want 1 (stats=%#v)", got, first)
+	}
+
+	writeCommandWALFrame(t, dir, 2, 2)
+	second := make(map[string]string)
+	writeCommandWALStats(second, db)
+	if got := second["treedb.command_wal.frames"]; got != "2" {
+		t.Fatalf("second frames=%q, want refreshed scan with 2 frames (stats=%#v)", got, second)
+	}
+}
+
 func TestCommandWALStatsDisabledDoesNotScanWAL(t *testing.T) {
 	dir := t.TempDir()
 	walDir := WALDirPath(dir)

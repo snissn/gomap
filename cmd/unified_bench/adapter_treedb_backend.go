@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"sync"
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	treedbdb "github.com/snissn/gomap/TreeDB/db"
@@ -10,11 +11,13 @@ import (
 )
 
 type treeDBBackendAdapter struct {
+	mu         sync.Mutex
 	db         *treedbdb.DB
 	leafLog    treedbdb.LeafPageLogCloser
 	name       string
 	finalStats map[string]string
 	closed     bool
+	closeErr   error
 }
 
 func NewTreeDBBackend(dir string) (kvstore.DB, error) {
@@ -42,9 +45,6 @@ func newTreeDBBackend(dir string, commandWAL bool, name string) (kvstore.DB, err
 		return nil, err
 	}
 	opts.CommandWAL = commandWAL
-	if commandWAL && opts.Durability == treedbdb.DurabilityWALOffRelaxed {
-		opts.Durability = treedbdb.DurabilityWALOnRelaxed
-	}
 	opts.CommandWALStatsScan = commandWAL && *treedbCommandWALStatsScan
 	if opts.ValueLog.PointerThreshold <= 0 {
 		opts.ValueLog.PointerThreshold = page.DefaultInlineThreshold
@@ -78,21 +78,40 @@ func newTreeDBBackend(dir string, commandWAL bool, name string) (kvstore.DB, err
 
 func (d *treeDBBackendAdapter) Name() string { return d.name }
 func (d *treeDBBackendAdapter) Close() error {
-	if d == nil || d.closed {
+	if d == nil {
 		return nil
 	}
-	d.finalStats = cloneStringMap(d.db.Stats())
-	d.closed = true
-	err := d.db.Close()
-	if d.leafLog != nil {
-		err = errors.Join(err, d.leafLog.Close())
-		d.leafLog = nil
+	d.mu.Lock()
+	if d.closed {
+		err := d.closeErr
+		d.mu.Unlock()
+		return err
 	}
+	db := d.db
+	leafLog := d.leafLog
+	d.finalStats = cloneStringMap(db.Stats())
+	d.closed = true
+	d.mu.Unlock()
+
+	err := db.Close()
+	if leafLog != nil {
+		err = errors.Join(err, leafLog.Close())
+	}
+
+	d.mu.Lock()
+	d.leafLog = nil
+	d.closeErr = err
+	d.mu.Unlock()
 	return err
 }
 
 func (d *treeDBBackendAdapter) openDB() (*treedbdb.DB, error) {
-	if d == nil || d.db == nil || d.closed {
+	if d == nil {
+		return nil, treedbdb.ErrClosed
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.db == nil || d.closed {
 		return nil, treedbdb.ErrClosed
 	}
 	return d.db, nil
@@ -154,10 +173,15 @@ func (d *treeDBBackendAdapter) Stats() map[string]string {
 	if d == nil {
 		return map[string]string{}
 	}
+	d.mu.Lock()
 	if d.closed {
-		return cloneStringMap(d.finalStats)
+		stats := cloneStringMap(d.finalStats)
+		d.mu.Unlock()
+		return stats
 	}
-	return d.db.Stats()
+	db := d.db
+	d.mu.Unlock()
+	return db.Stats()
 }
 func (d *treeDBBackendAdapter) Print() error {
 	db, err := d.openDB()
