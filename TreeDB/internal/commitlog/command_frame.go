@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 )
@@ -687,14 +688,14 @@ func (r *Reader) ReadCommandFrame() (CommandEnvelope, error) {
 }
 
 func ScanCommandFrames(path string, opts Options) ([]CommandEnvelope, error) {
-	return scanCommandFrames(path, opts, nil)
+	return scanCommandFrames(path, opts, nil, true)
 }
 
 func ScanCommandFrameSegments(paths []string, opts Options) ([]CommandEnvelope, error) {
 	seen := make(map[uint64]struct{})
 	var frames []CommandEnvelope
-	for _, path := range paths {
-		segmentFrames, err := scanCommandFrames(path, opts, seen)
+	for i, path := range paths {
+		segmentFrames, err := scanCommandFrames(path, opts, seen, i == len(paths)-1)
 		if err != nil {
 			return frames, err
 		}
@@ -703,7 +704,7 @@ func ScanCommandFrameSegments(paths []string, opts Options) ([]CommandEnvelope, 
 	return frames, nil
 }
 
-func scanCommandFrames(path string, opts Options, seen map[uint64]struct{}) ([]CommandEnvelope, error) {
+func scanCommandFrames(path string, opts Options, seen map[uint64]struct{}, allowTerminalTail bool) ([]CommandEnvelope, error) {
 	r, err := NewReaderWithOptions(path, opts)
 	if err != nil {
 		return nil, err
@@ -716,7 +717,7 @@ func scanCommandFrames(path string, opts Options, seen map[uint64]struct{}) ([]C
 	for {
 		env, err := r.ReadCommandFrame()
 		if err != nil {
-			if errorsIsEOFOrTail(err) {
+			if err == io.EOF || (allowTerminalTail && errors.Is(err, ErrCommandWALTerminalTail)) {
 				return frames, nil
 			}
 			return frames, err
@@ -727,8 +728,4 @@ func scanCommandFrames(path string, opts Options, seen map[uint64]struct{}) ([]C
 		seen[env.LSN] = struct{}{}
 		frames = append(frames, env)
 	}
-}
-
-func errorsIsEOFOrTail(err error) bool {
-	return err == io.EOF || err == ErrCommandWALTerminalTail
 }
