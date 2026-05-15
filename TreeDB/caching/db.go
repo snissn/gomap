@@ -9028,6 +9028,21 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	if err := ensureNoLegacyMixedWALValueSegments(walDir); err != nil {
 		return nil, err
 	}
+	disableJournal := opts.DisableWAL
+	var journalOwner *commitlog.JournalOwner
+	journalOwnerTransferred := false
+	if !disableJournal {
+		var err error
+		journalOwner, err = commitlog.AcquireJournalOwner(walDir)
+		if err != nil {
+			return nil, fmt.Errorf("cachingdb: acquire command journal owner for %s: %w", walDir, err)
+		}
+		defer func() {
+			if !journalOwnerTransferred && journalOwner != nil {
+				_ = journalOwner.Close()
+			}
+		}()
+	}
 	segments, _ := listNonEmptySplitLogSegments(walDir, valueLogDir, leafLogDir)
 	reserveLeafLogLane := opts.IndexOuterLeavesInValueLog
 	// Cached value-log RIDs remain globally unique across reopen/rewrite cycles.
@@ -9190,7 +9205,6 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	if valueLogRawWritevMinRecords <= 0 {
 		valueLogRawWritevMinRecords = 8
 	}
-	disableJournal := opts.DisableWAL
 	var retained map[string]struct{}
 	for _, seg := range segments {
 		if !seg.valueLog {
@@ -9583,12 +9597,8 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 				db.journalOwner = nil
 			}
 		}
-		owner, err := commitlog.AcquireJournalOwner(walDir)
-		if err != nil {
-			cleanupJournalOpenFailure(-1)
-			return nil, fmt.Errorf("cachingdb: acquire command journal owner for %s: %w", walDir, err)
-		}
-		db.journalOwner = owner
+		db.journalOwner = journalOwner
+		journalOwnerTransferred = true
 		for i := range db.lanes {
 			if err := db.rotateWALLocked(&db.lanes[i]); err != nil {
 				cleanupJournalOpenFailure(i)
