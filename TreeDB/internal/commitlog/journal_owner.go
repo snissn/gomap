@@ -92,6 +92,7 @@ type CommandJournalOptions struct {
 }
 
 type CommandJournal struct {
+	mu     sync.Mutex
 	owner  *JournalOwner
 	writer *Writer
 	path   string
@@ -129,7 +130,12 @@ func OpenCommandJournal(walDir string, opts CommandJournalOptions) (*CommandJour
 }
 
 func (j *CommandJournal) AppendCommand(env CommandEnvelope) (uint64, error) {
-	if j == nil || j.writer == nil || j.owner == nil {
+	if j == nil {
+		return 0, errors.New("commitlog: command journal is closed")
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.writer == nil || j.owner == nil {
 		return 0, errors.New("commitlog: command journal is closed")
 	}
 	if env.LSN != 0 {
@@ -170,14 +176,24 @@ func (j *CommandJournal) Path() string {
 }
 
 func (j *CommandJournal) Flush() error {
-	if j == nil || j.writer == nil {
+	if j == nil {
+		return nil
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.writer == nil {
 		return nil
 	}
 	return j.writer.Flush()
 }
 
 func (j *CommandJournal) Sync() error {
-	if j == nil || j.writer == nil {
+	if j == nil {
+		return nil
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.writer == nil {
 		return nil
 	}
 	return j.writer.Sync()
@@ -187,6 +203,8 @@ func (j *CommandJournal) Close() error {
 	if j == nil {
 		return nil
 	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
 	var first error
 	if j.writer != nil {
 		if err := j.writer.Close(); err != nil {

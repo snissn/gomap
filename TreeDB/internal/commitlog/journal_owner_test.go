@@ -44,6 +44,51 @@ func TestCommandJournalAllocatesContiguousLSNs(t *testing.T) {
 	}
 }
 
+func TestCommandJournalConcurrentAppendsSerializeFrameOrder(t *testing.T) {
+	j, err := OpenCommandJournal(t.TempDir(), CommandJournalOptions{})
+	if err != nil {
+		t.Fatalf("OpenCommandJournal: %v", err)
+	}
+	defer j.Close()
+
+	const count = 64
+	start := make(chan struct{})
+	errs := make(chan error, count)
+	for i := 0; i < count; i++ {
+		go func() {
+			<-start
+			_, err := j.AppendCommand(CommandEnvelope{
+				Kind:          CommandKindRawKVBatch,
+				Scope:         CommandScopeRawKV,
+				PayloadFormat: PayloadFormatRawKVBatchV1,
+			})
+			errs <- err
+		}()
+	}
+	close(start)
+	for i := 0; i < count; i++ {
+		if err := <-errs; err != nil {
+			t.Fatalf("AppendCommand concurrent error: %v", err)
+		}
+	}
+	if err := j.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+
+	frames, err := ScanCommandFrames(j.Path(), Options{})
+	if err != nil {
+		t.Fatalf("ScanCommandFrames: %v", err)
+	}
+	if len(frames) != count {
+		t.Fatalf("len(frames)=%d, want %d", len(frames), count)
+	}
+	for i, frame := range frames {
+		if want := uint64(i + 1); frame.LSN != want {
+			t.Fatalf("frame[%d].LSN=%d, want %d", i, frame.LSN, want)
+		}
+	}
+}
+
 func TestCommandJournalRejectsIndependentMutableOwner(t *testing.T) {
 	dir := t.TempDir()
 	j, err := OpenCommandJournal(dir, CommandJournalOptions{})

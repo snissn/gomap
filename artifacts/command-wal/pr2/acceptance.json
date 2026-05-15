@@ -16,6 +16,7 @@
   ],
   "passed_tests": [
     "TestCommandJournalAllocatesContiguousLSNs",
+    "TestCommandJournalConcurrentAppendsSerializeFrameOrder",
     "TestCommandJournalRejectsIndependentMutableOwner",
     "TestCommandJournalUsesCommitSegmentFamily",
     "TestCommandJournalRejectsCallerAssignedLSN",

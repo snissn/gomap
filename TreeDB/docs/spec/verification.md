@@ -260,6 +260,7 @@ PR 1: typed commit-log frames and feature gate:
 PR 2: shared journal ownership and `AppliedCommandLSN` plumbing:
 
 - `TestCommandJournalAllocatesContiguousLSNs`;
+- `TestCommandJournalConcurrentAppendsSerializeFrameOrder`;
 - `TestCommandJournalRejectsIndependentMutableOwner`;
 - `TestCommandJournalUsesCommitSegmentFamily`;
 - `TestCommandJournalValidationFailureDoesNotConsumeLSN`;
