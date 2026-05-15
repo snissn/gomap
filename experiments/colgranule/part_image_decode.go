@@ -373,6 +373,9 @@ func decodeColumnPartDescriptorSection(data []byte) (ColumnPartDescriptor, map[s
 			if err != nil {
 				return ColumnPartDescriptor{}, nil, err
 			}
+			if err := validateDecodedColumnBlockDescriptor(desc, name, j, blockDesc); err != nil {
+				return ColumnPartDescriptor{}, nil, err
+			}
 			if j == 0 {
 				column.Definition.Encoding = blockDesc.Encoding
 				column.Definition.Compression = blockDesc.Compression
@@ -387,6 +390,19 @@ func decodeColumnPartDescriptorSection(data []byte) (ColumnPartDescriptor, map[s
 		return ColumnPartDescriptor{}, nil, err
 	}
 	return desc, columns, nil
+}
+
+func validateDecodedColumnBlockDescriptor(desc ColumnPartDescriptor, column string, blockIndex int, block ColumnBlockDescriptor) error {
+	if block.FirstRow > desc.RowCount || block.RowCount > desc.RowCount-block.FirstRow {
+		return fmt.Errorf("colgranule: descriptor column %s block %d first row=%d row count=%d outside part rows=%d", column, blockIndex, block.FirstRow, block.RowCount, desc.RowCount)
+	}
+	if block.FirstGranule > block.LastGranule {
+		return fmt.Errorf("colgranule: descriptor column %s block %d granule range [%d,%d] is inverted", column, blockIndex, block.FirstGranule, block.LastGranule)
+	}
+	if len(desc.Granules) > 0 && block.LastGranule >= len(desc.Granules) {
+		return fmt.Errorf("colgranule: descriptor column %s block %d last granule=%d outside granules=%d", column, blockIndex, block.LastGranule, len(desc.Granules))
+	}
+	return nil
 }
 
 func decodeGranuleDescriptor(dec *columnPartImageDecoder) (GranuleDescriptor, error) {
