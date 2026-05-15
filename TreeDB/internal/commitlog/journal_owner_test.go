@@ -158,6 +158,35 @@ func TestCommandJournalValidationFailureDoesNotConsumeLSN(t *testing.T) {
 	}
 }
 
+func TestCommandJournalUnsupportedVersionDoesNotConsumeLSN(t *testing.T) {
+	j, err := OpenCommandJournal(t.TempDir(), CommandJournalOptions{})
+	if err != nil {
+		t.Fatalf("OpenCommandJournal: %v", err)
+	}
+	defer j.Close()
+
+	_, err = j.AppendCommand(CommandEnvelope{
+		Version:       CommandFrameVersion + 1,
+		Kind:          CommandKindRawKVBatch,
+		Scope:         CommandScopeRawKV,
+		PayloadFormat: PayloadFormatRawKVBatchV1,
+	})
+	if !errors.Is(err, ErrCommandWALUnsupportedVersion) {
+		t.Fatalf("unsupported version AppendCommand error=%v, want ErrCommandWALUnsupportedVersion", err)
+	}
+	got, err := j.AppendCommand(CommandEnvelope{
+		Kind:          CommandKindRawKVBatch,
+		Scope:         CommandScopeRawKV,
+		PayloadFormat: PayloadFormatRawKVBatchV1,
+	})
+	if err != nil {
+		t.Fatalf("valid AppendCommand after unsupported version: %v", err)
+	}
+	if got != 1 {
+		t.Fatalf("LSN after unsupported version=%d, want 1", got)
+	}
+}
+
 func TestCommandJournalOversizedFrameDoesNotConsumeLSN(t *testing.T) {
 	emptyPayload, err := EncodeRawKVBatchPayload(nil)
 	if err != nil {

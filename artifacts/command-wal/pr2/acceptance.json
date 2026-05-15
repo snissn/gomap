@@ -21,6 +21,7 @@
     "TestCommandJournalUsesCommitSegmentFamily",
     "TestCommandJournalRejectsCallerAssignedLSN",
     "TestCommandJournalValidationFailureDoesNotConsumeLSN",
+    "TestCommandJournalUnsupportedVersionDoesNotConsumeLSN",
     "TestCommandJournalOversizedFrameDoesNotConsumeLSN",
     "TestMetaPageBodyAppliedCommandLSNRoundTrip",
     "TestMetaPageBodyLegacyDecodeDefaultsAppliedCommandLSN",

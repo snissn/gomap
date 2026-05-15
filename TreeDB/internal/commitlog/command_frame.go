@@ -310,6 +310,9 @@ func DecodeCommandFrame(frame []byte) (CommandEnvelope, error) {
 }
 
 func validateCommandEnvelopeForEncode(env CommandEnvelope) error {
+	if env.Version != 0 && env.Version != CommandFrameVersion {
+		return ErrCommandWALUnsupportedVersion
+	}
 	if env.FeatureFlags&commandWALCriticalFlagsMask != 0 {
 		return ErrCommandWALUnsupportedCriticalFlag
 	}
