@@ -425,6 +425,22 @@ func (c *Collection) notifyVectorIndexesUpdateBatch(items []UpdateBatchItem, res
 	return c.notifyVectorIndexesUpsert(updated)
 }
 
+func (c *Collection) notifyVectorIndexesBSONSetUpdateBatch(items []BSONSetUpdateBatchItem, results []UpdateBatchResult) error {
+	if len(items) == 0 || len(results) == 0 {
+		return nil
+	}
+	var updated [][]byte
+	for i := range items {
+		if i >= len(results) {
+			break
+		}
+		if results[i].Modified {
+			updated = append(updated, items[i].DocumentID)
+		}
+	}
+	return c.notifyVectorIndexesUpsert(updated)
+}
+
 func (c *Collection) persistNativeVectorIndexIfDeclared(index *VectorIndex) error {
 	if c == nil || index == nil || !collectionMetaDeclaresVectorIndex(c.meta, index.name) || !index.needsNativeAutoPersist() {
 		return nil
@@ -1712,6 +1728,9 @@ func (idx *VectorIndex) CheckRecall(queries [][]float32, opts VectorIndexSearchO
 }
 
 func vectorFromStoredDocument(materializer *StoredDocumentJSONMaterializer, document []byte, fieldPath []string) ([]float32, bool, error) {
+	if materializer != nil && materializer.DocumentFormat() == DocumentFormatBSON {
+		return vectorFromBSONField(document, fieldPath)
+	}
 	jsonDoc, err := materializer.StoredDocumentJSON(document)
 	if err != nil {
 		return nil, false, err

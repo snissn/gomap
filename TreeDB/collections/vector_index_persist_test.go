@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"math"
 	"os"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 func TestCollectionVectorIndexSnapshotReopenSearch(t *testing.T) {
@@ -373,6 +375,97 @@ func TestCollectionVectorIndexNativeRootMaintainsInsertedDocuments(t *testing.T)
 	requireVectorResultIDs(t, results, "a", "c")
 }
 
+func TestCollectionVectorIndexNativeRootCreateOnExistingDocumentsDoesNotPersistPartialGraph(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	def := VectorIndexDefinition{
+		Name:       "embedding",
+		Field:      "embedding",
+		Metric:     VectorMetricCosine,
+		Dimensions: 2,
+		M:          4,
+	}
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("a")},
+		[][]byte{[]byte(`{"embedding":[1,0]}`)},
+	); err != nil {
+		t.Fatalf("insert before vector index registration: %v", err)
+	}
+	if _, err := col.CreateVectorIndex(def); err != nil {
+		t.Fatalf("create vector index: %v", err)
+	}
+	if got := len(col.registeredVectorIndexes()); got != 0 {
+		t.Fatalf("registered vector indexes=%d want 0 for non-empty collection", got)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("b")},
+		[][]byte{[]byte(`{"embedding":[0,1]}`)},
+	); err != nil {
+		t.Fatalf("insert after vector index metadata: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush collection: %v", err)
+	}
+	loaded, status, err := col.LoadVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		t.Fatalf("load vector index snapshot: %v", err)
+	}
+	if loaded != nil || status.Loaded || status.ExactFallbackReason != "missing_graph_root" {
+		t.Fatalf("unexpected partial vector index loaded=%v status=%+v", loaded != nil, status)
+	}
+}
+
+func TestCollectionVectorIndexNativeRootInsertMaintenanceErrorIsCommitAmbiguous(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	def := VectorIndexDefinition{
+		Name:       "embedding",
+		Field:      "embedding",
+		Metric:     VectorMetricCosine,
+		Dimensions: 2,
+		M:          4,
+	}
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.CreateVectorIndex(def); err != nil {
+		t.Fatalf("create vector index: %v", err)
+	}
+	_, err = col.InsertBatch(
+		[][]byte{[]byte("bad")},
+		[][]byte{[]byte(`{"embedding":[1,0,0]}`)},
+	)
+	if !errors.Is(err, ErrCommitAmbiguous) {
+		t.Fatalf("insert err=%v want ErrCommitAmbiguous", err)
+	}
+	doc, getErr := col.Get([]byte("bad"))
+	if getErr != nil {
+		t.Fatalf("get committed document: %v", getErr)
+	}
+	if len(doc) == 0 {
+		t.Fatal("post-commit vector maintenance error lost committed document")
+	}
+}
+
 func TestCollectionVectorIndexNativeRootMaintainsUpdatedDocument(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -440,6 +533,149 @@ func TestCollectionVectorIndexNativeRootMaintainsUpdatedDocument(t *testing.T) {
 		t.Fatalf("search updated vector index: %v", err)
 	}
 	requireVectorResultIDs(t, results, "a", "b")
+}
+
+func TestCollectionVectorIndexNativeRootMaintainsBSONSetUpdate(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	def := VectorIndexDefinition{
+		Name:       "embedding",
+		Field:      "embedding",
+		Metric:     VectorMetricCosine,
+		Dimensions: 2,
+		M:          4,
+	}
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "docs",
+		Options: CollectionOptions{DocumentFormat: DocumentFormatBSON},
+		VectorIndexes: []VectorIndexDefinition{
+			def,
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatchValidatedBSON(
+		[][]byte{[]byte("a"), []byte("b")},
+		[][]byte{
+			mustBSONCollectionDocument(t, bson.D{{Key: "embedding", Value: bson.A{1.0, 0.0}}, {Key: "name", Value: "a"}}),
+			mustBSONCollectionDocument(t, bson.D{{Key: "embedding", Value: bson.A{0.0, 1.0}}, {Key: "name", Value: "b"}}),
+		},
+	); err != nil {
+		t.Fatalf("insert BSON docs: %v", err)
+	}
+	index, err := col.BuildVectorIndex(vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		t.Fatalf("build vector index: %v", err)
+	}
+	if _, err := index.SaveSnapshot(); err != nil {
+		t.Fatalf("save initial vector snapshot: %v", err)
+	}
+	matched, modified, err := col.UpdateBSONSet([]byte("a"), []BSONSetField{{
+		Key:   "embedding",
+		Value: mustBSONRawValue(t, bson.A{0.0, 1.0}),
+	}})
+	if err != nil {
+		t.Fatalf("UpdateBSONSet: %v", err)
+	}
+	if !matched || !modified {
+		t.Fatalf("UpdateBSONSet matched=%v modified=%v", matched, modified)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush BSON set vector index: %v", err)
+	}
+	loaded, status, err := col.LoadVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		t.Fatalf("load BSON set vector index: %v", err)
+	}
+	if loaded == nil || !status.Loaded {
+		t.Fatalf("BSON set vector index did not load loaded=%v status=%+v", loaded != nil, status)
+	}
+	results, _, err := loaded.Search([]float32{0, 1}, VectorIndexSearchOptions{TopK: 2, DisableExactFallback: true})
+	if err != nil {
+		t.Fatalf("search BSON set vector index: %v", err)
+	}
+	requireVectorResultIDs(t, results, "a", "b")
+}
+
+func TestCollectionVectorIndexNativeRootMaintainsBSONSetBatchUpdate(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	def := VectorIndexDefinition{
+		Name:       "embedding",
+		Field:      "embedding",
+		Metric:     VectorMetricCosine,
+		Dimensions: 2,
+		M:          4,
+	}
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "docs",
+		Options: CollectionOptions{DocumentFormat: DocumentFormatBSON},
+		VectorIndexes: []VectorIndexDefinition{
+			def,
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatchValidatedBSON(
+		[][]byte{[]byte("a"), []byte("b")},
+		[][]byte{
+			mustBSONCollectionDocument(t, bson.D{{Key: "embedding", Value: bson.A{1.0, 0.0}}, {Key: "name", Value: "a"}}),
+			mustBSONCollectionDocument(t, bson.D{{Key: "embedding", Value: bson.A{0.0, 1.0}}, {Key: "name", Value: "b"}}),
+		},
+	); err != nil {
+		t.Fatalf("insert BSON docs: %v", err)
+	}
+	index, err := col.BuildVectorIndex(vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		t.Fatalf("build vector index: %v", err)
+	}
+	if _, err := index.SaveSnapshot(); err != nil {
+		t.Fatalf("save initial vector snapshot: %v", err)
+	}
+	results, batched, err := col.UpdateBSONSetBatchIfNoSecondaryUniqueIndexChanges([]BSONSetUpdateBatchItem{{
+		DocumentID: []byte("a"),
+		Fields: []BSONSetField{{
+			Key:   "embedding",
+			Value: mustBSONRawValue(t, bson.A{0.0, 1.0}),
+		}},
+	}})
+	if err != nil {
+		t.Fatalf("UpdateBSONSetBatchIfNoSecondaryUniqueIndexChanges: %v", err)
+	}
+	if !batched || len(results) != 1 || !results[0].Matched || !results[0].Modified {
+		t.Fatalf("unexpected BSON set batch result batched=%v results=%+v", batched, results)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush BSON set batch vector index: %v", err)
+	}
+	loaded, status, err := col.LoadVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		t.Fatalf("load BSON set batch vector index: %v", err)
+	}
+	if loaded == nil || !status.Loaded {
+		t.Fatalf("BSON set batch vector index did not load loaded=%v status=%+v", loaded != nil, status)
+	}
+	searchResults, _, err := loaded.Search([]float32{0, 1}, VectorIndexSearchOptions{TopK: 2, DisableExactFallback: true})
+	if err != nil {
+		t.Fatalf("search BSON set batch vector index: %v", err)
+	}
+	requireVectorResultIDs(t, searchResults, "a", "b")
 }
 
 func TestCollectionVectorIndexNativeRootMaintainsSingleDelete(t *testing.T) {

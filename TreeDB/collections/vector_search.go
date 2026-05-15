@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/buger/jsonparser"
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 // VectorMetric selects the exact distance function used by collection vector
@@ -322,6 +323,40 @@ func vectorFromJSONField(document []byte, fieldPath []string) ([]float32, bool, 
 	}
 	if parseErr != nil {
 		return nil, false, parseErr
+	}
+	if len(out) == 0 {
+		return nil, false, errors.New("empty vector")
+	}
+	return out, true, nil
+}
+
+func vectorFromBSONField(document []byte, fieldPath []string) ([]float32, bool, error) {
+	raw := bson.Raw(document)
+	if err := raw.Validate(); err != nil {
+		return nil, false, fmt.Errorf("collections: BSON stored document: %w", err)
+	}
+	value := raw.Lookup(fieldPath...)
+	if value.Type == 0 || value.Type == bson.TypeNull {
+		return nil, false, nil
+	}
+	array, ok := value.ArrayOK()
+	if !ok {
+		return nil, false, errors.New("not a numeric array")
+	}
+	values, err := array.Values()
+	if err != nil {
+		return nil, false, err
+	}
+	out := make([]float32, 0, len(values))
+	for i, item := range values {
+		n, ok := item.AsFloat64OK()
+		if !ok {
+			return nil, false, fmt.Errorf("element %d is not numeric", i)
+		}
+		if math.IsNaN(n) || math.IsInf(n, 0) || n > math.MaxFloat32 || n < -math.MaxFloat32 {
+			return nil, false, fmt.Errorf("element %d is not a finite float32", i)
+		}
+		out = append(out, float32(n))
 	}
 	if len(out) == 0 {
 		return nil, false, errors.New("empty vector")
