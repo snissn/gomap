@@ -45,6 +45,16 @@ func TestTreeDBBackendCommandWALVariantPersistsFeatureAndAppendsTypedFrames(t *t
 	if !required {
 		t.Fatal("command WAL variant did not persist command_wal_v1 required feature")
 	}
+	cfg, ok, err := treedbdb.LoadFormatConfig(dir)
+	if err != nil {
+		t.Fatalf("LoadFormatConfig: %v", err)
+	}
+	if !ok {
+		t.Fatal("format config missing")
+	}
+	if !cfg.IndexOuterLeavesInValueLog {
+		t.Fatalf("command WAL backend disabled requested IndexOuterLeavesInValueLog")
+	}
 	if err := db.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
@@ -64,6 +74,9 @@ func TestTreeDBBackendPreservesOuterLeavesFlag(t *testing.T) {
 	db, err := NewTreeDBBackend(dir)
 	if err != nil {
 		t.Fatalf("NewTreeDBBackend: %v", err)
+	}
+	if err := db.Set([]byte("k"), []byte("v")); err != nil {
+		t.Fatalf("Set with outer leaves enabled: %v", err)
 	}
 	if err := db.Close(); err != nil {
 		t.Fatalf("Close backend: %v", err)

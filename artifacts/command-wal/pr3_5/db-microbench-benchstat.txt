@@ -4,29 +4,29 @@ pkg: github.com/snissn/gomap/TreeDB/db
 cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
                                                                     │ artifacts/command-wal/pr3_5/db-microbench.txt │
                                                                     │                    sec/op                     │
-CommandWALRawKVDirectWrite/backend_no_command_wal-12                                                   3.666µ ±  3%
-CommandWALRawKVDirectWrite/command_wal_raw_kv-12                                                       4.921µ ±  7%
-CommandWALRawKVPointerDirectWrite/backend_no_command_wal_pointer-12                                    3.760µ ±  5%
-CommandWALRawKVPointerDirectWrite/command_wal_raw_kv_pointer-12                                        6.424µ ± 12%
-CommandWALReplayFrameClassification-12                                                                 34.04µ ± 31%
-CommandWALReadReplayFrames-12                                                                          552.0µ ±  2%
-CommandWALCoveredSegmentCleanupProof-12                                                                638.8µ ± 21%
-geomean                                                                                                24.45µ
+CommandWALRawKVDirectWrite/backend_no_command_wal-12                                                   3.823µ ±  2%
+CommandWALRawKVDirectWrite/command_wal_raw_kv-12                                                       5.058µ ±  5%
+CommandWALRawKVPointerDirectWrite/backend_no_command_wal_pointer-12                                    3.855µ ±  9%
+CommandWALRawKVPointerDirectWrite/command_wal_raw_kv_pointer-12                                        7.193µ ±  8%
+CommandWALReplayFrameClassification-12                                                                 34.55µ ± 18%
+CommandWALReadReplayFrames-12                                                                          543.9µ ±  1%
+CommandWALCoveredSegmentCleanupProof-12                                                                640.4µ ± 14%
+geomean                                                                                                25.20µ
 
                                                                     │ artifacts/command-wal/pr3_5/db-microbench.txt │
                                                                     │                      B/s                      │
-CommandWALRawKVDirectWrite/backend_no_command_wal-12                                                  13.79Mi ±  3%
-CommandWALRawKVDirectWrite/command_wal_raw_kv-12                                                      10.27Mi ±  7%
-CommandWALRawKVPointerDirectWrite/backend_no_command_wal_pointer-12                                   12.17Mi ±  5%
-CommandWALRawKVPointerDirectWrite/command_wal_raw_kv_pointer-12                                       7.124Mi ± 10%
-CommandWALReplayFrameClassification-12                                                                9.231Gi ± 24%
-geomean                                                                                               41.02Mi
+CommandWALRawKVDirectWrite/backend_no_command_wal-12                                                  13.22Mi ±  2%
+CommandWALRawKVDirectWrite/command_wal_raw_kv-12                                                      9.995Mi ±  5%
+CommandWALRawKVPointerDirectWrite/backend_no_command_wal_pointer-12                                   11.87Mi ±  8%
+CommandWALRawKVPointerDirectWrite/command_wal_raw_kv_pointer-12                                       6.371Mi ±  7%
+CommandWALReplayFrameClassification-12                                                                9.095Gi ± 15%
+geomean                                                                                               39.25Mi
 
                                                                     │ artifacts/command-wal/pr3_5/db-microbench.txt │
                                                                     │                     B/op                      │
 CommandWALRawKVDirectWrite/backend_no_command_wal-12                                                 5.670Ki ± 0%
 CommandWALRawKVDirectWrite/command_wal_raw_kv-12                                                     5.817Ki ± 0%
-CommandWALRawKVPointerDirectWrite/backend_no_command_wal_pointer-12                                  5.990Ki ± 0%
+CommandWALRawKVPointerDirectWrite/backend_no_command_wal_pointer-12                                  5.991Ki ± 0%
 CommandWALRawKVPointerDirectWrite/command_wal_raw_kv_pointer-12                                      6.488Ki ± 0%
 CommandWALReplayFrameClassification-12                                                                 0.000 ± 0%
 CommandWALReadReplayFrames-12                                                                        87.98Ki ± 0%

@@ -16,8 +16,8 @@
 ```text
         Test  TreeDB (backend)  TreeDB (backend command_wal_v1)
 ------------  ----------------  -------------------------------
- Batch Write         2,718,522                        1,797,349
-Batch Delete         1,609,368                        1,226,809
+ Batch Write            59,661                           51,146
+Batch Delete         1,349,655                        1,281,736
 ```
 
 ## Checkpoint Time (Between Tests + Post-run)
@@ -25,17 +25,17 @@ Batch Delete         1,609,368                        1,226,809
 ```text
  Before Test  TreeDB (backend)  TreeDB (backend command_wal_v1)
 ------------  ----------------  -------------------------------
- Batch Write            9.29ms                           9.16ms
-Batch Delete           13.38ms                          22.75ms
-   After Run           12.89ms                           3.54ms
+ Batch Write            9.26ms                          11.96ms
+Batch Delete           41.52ms                          40.08ms
+   After Run           24.80ms                          28.65ms
 ```
 
 ## Disk Usage (End of Run)
 
 ```text
-TreeDB (backend command_wal_v1): total=353 KiB files=6
+TreeDB (backend command_wal_v1): total=382 KiB files=8
 
-TreeDB (backend): total=256 KiB files=4
+TreeDB (backend): total=285 KiB files=6
 ```
 
 ## TreeDB Selected Stats (End of Run)

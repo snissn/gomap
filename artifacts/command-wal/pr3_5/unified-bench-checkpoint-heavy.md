@@ -16,15 +16,15 @@
 ```text
        Test  TreeDB (backend)  TreeDB (backend command_wal_v1)
 -----------  ----------------  -------------------------------
-Batch Write            10,481                           10,530
+Batch Write             4,727                            6,638
 ```
 
 ## Disk Usage (End of Run)
 
 ```text
-TreeDB (backend command_wal_v1): total=336 KiB files=6
+TreeDB (backend command_wal_v1): total=358 KiB files=8
 
-TreeDB (backend): total=256 KiB files=4
+TreeDB (backend): total=277 KiB files=6
 ```
 
 ## TreeDB Selected Stats (End of Run)

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"errors"
+
 	"github.com/snissn/gomap/TreeDB/batch"
 	treedbdb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -9,6 +11,7 @@ import (
 
 type treeDBBackendAdapter struct {
 	db         *treedbdb.DB
+	leafLog    treedbdb.LeafPageLogCloser
 	name       string
 	finalStats map[string]string
 }
@@ -38,9 +41,6 @@ func newTreeDBBackend(dir string, commandWAL bool, name string) (kvstore.DB, err
 		return nil, err
 	}
 	opts.CommandWAL = commandWAL
-	if commandWAL {
-		opts.IndexOuterLeavesInValueLog = false
-	}
 	if opts.ValueLog.PointerThreshold <= 0 {
 		opts.ValueLog.PointerThreshold = page.DefaultInlineThreshold
 	}
@@ -48,7 +48,21 @@ func newTreeDBBackend(dir string, commandWAL bool, name string) (kvstore.DB, err
 	if err != nil {
 		return nil, err
 	}
-	return &treeDBBackendAdapter{db: d, name: name}, nil
+	adapter := &treeDBBackendAdapter{db: d, name: name}
+	if opts.IndexOuterLeavesInValueLog {
+		leafLog, err := treedbdb.NewStandaloneLeafPageLog(dir, treedbdb.StandaloneLeafPageLogOptions{
+			Compression: opts.ValueLog.Compression,
+			AutoPolicy:  opts.ValueLog.AutoPolicy,
+			BlockCodec:  opts.ValueLog.BlockCodec,
+		})
+		if err != nil {
+			_ = d.Close()
+			return nil, err
+		}
+		d.SetLeafPageLog(leafLog)
+		adapter.leafLog = leafLog
+	}
+	return adapter, nil
 }
 
 func (d *treeDBBackendAdapter) Name() string { return d.name }
@@ -58,6 +72,10 @@ func (d *treeDBBackendAdapter) Close() error {
 	}
 	d.finalStats = cloneStringMap(d.db.Stats())
 	err := d.db.Close()
+	if d.leafLog != nil {
+		err = errors.Join(err, d.leafLog.Close())
+		d.leafLog = nil
+	}
 	d.db = nil
 	return err
 }
