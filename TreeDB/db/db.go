@@ -1510,11 +1510,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 			_ = db.Close()
 			return nil, err
 		}
-		activeSeqByLane, err := commandWALActiveSeqByLane(journalSegments, opts.WALMaxSegmentBytes)
-		if err != nil {
-			_ = db.Close()
-			return nil, err
-		}
+		activeSeqByLane := commandWALActiveSeqByLane(journalSegments)
 		for _, seq := range activeSeqByLane {
 			if seq > commandSegmentSeq {
 				commandSegmentSeq = seq

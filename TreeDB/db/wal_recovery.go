@@ -328,10 +328,7 @@ func replayCommandWALIntoBackend(db *DB, segments []logSegment, maxSegmentBytes 
 }
 
 func readCommandWALReplayFrames(segments []logSegment, appliedLSN uint64, maxSegmentBytes int64) ([]commandWALReplayFrame, error) {
-	activeByLane, err := commandWALActiveSeqByLane(segments, maxSegmentBytes)
-	if err != nil {
-		return nil, err
-	}
+	activeByLane := commandWALActiveSeqByLane(segments)
 	var frames []commandWALReplayFrame
 	seen := make(map[uint64]struct{})
 	for _, seg := range segments {
