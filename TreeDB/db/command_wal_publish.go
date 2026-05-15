@@ -33,6 +33,9 @@ func (db *DB) publishCommandWALRoots(newRootID uint64, sysRootID uint64, applied
 	db.writeMu.Lock()
 	defer db.writeMu.Unlock()
 
+	if err := db.ensureCommandWALMetaV1FormatMarker(); err != nil {
+		return err
+	}
 	post, err := db.finalizeCommitLockedWithOptions(
 		newRootID,
 		sysRootID,
@@ -54,6 +57,25 @@ func (db *DB) publishCommandWALRoots(newRootID uint64, sysRootID uint64, applied
 		return err
 	}
 	db.finalizeCommitPostWork(post)
+	return nil
+}
+
+func (db *DB) ensureCommandWALMetaV1FormatMarker() error {
+	if db.commandWALMetaV1 {
+		return nil
+	}
+	cfg, ok, err := LoadFormatConfig(db.dir)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		cfg = db.formatConfigFromRuntime()
+	}
+	cfg.MetaBody = formatMetaBodyCommandWALV1
+	if err := SaveFormatConfig(db.dir, cfg); err != nil {
+		return err
+	}
+	db.commandWALMetaV1 = true
 	return nil
 }
 

@@ -35,10 +35,12 @@ func (m *MetaPageBody) Encode(buf []byte) {
 	binary.LittleEndian.PutUint64(buf[60:68], m.AppliedCommandLSN)
 }
 
-// DecodeMetaBody decodes the MetaPageBody from the provided buffer.
+// DecodeMetaBody decodes the legacy-safe MetaPageBody fields from the provided
+// buffer. The command-WAL AppliedCommandLSN extension requires an explicit
+// format marker and is decoded by DecodeMetaBodyCommandWALV1.
 func DecodeMetaBody(buf []byte) MetaPageBody {
 	_ = buf[MetaPageBodySizeLegacy-1]
-	m := MetaPageBody{
+	return MetaPageBody{
 		CommitSeq:        binary.LittleEndian.Uint64(buf[0:8]),
 		UserRootPageID:   binary.LittleEndian.Uint64(buf[8:16]),
 		SystemRootPageID: binary.LittleEndian.Uint64(buf[16:24]),
@@ -48,8 +50,14 @@ func DecodeMetaBody(buf []byte) MetaPageBody {
 		ActiveSlabTail:   binary.LittleEndian.Uint64(buf[44:52]),
 		LastCommitHeight: binary.LittleEndian.Uint64(buf[52:60]),
 	}
-	if len(buf) >= MetaPageBodySizeCommandWALV1 {
-		m.AppliedCommandLSN = binary.LittleEndian.Uint64(buf[60:68])
-	}
+}
+
+// DecodeMetaBodyCommandWALV1 decodes the command-WAL V1 meta extension. Callers
+// must only use this when an external format marker proves the meta page was
+// written with the V1 body extension.
+func DecodeMetaBodyCommandWALV1(buf []byte) MetaPageBody {
+	_ = buf[MetaPageBodySizeCommandWALV1-1]
+	m := DecodeMetaBody(buf)
+	m.AppliedCommandLSN = binary.LittleEndian.Uint64(buf[60:68])
 	return m
 }

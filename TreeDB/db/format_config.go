@@ -16,6 +16,7 @@ const formatConfigVersion = 2
 const formatConfigRequiredFeaturesVersion = 3
 
 const RequiredFeatureCommandWALV1 = "command_wal_v1"
+const formatMetaBodyCommandWALV1 = "command_wal_v1"
 
 // FormatConfig captures the format-affecting knobs that maintenance tooling
 // should preserve when rewriting index/value-log state.
@@ -28,6 +29,8 @@ type FormatConfig struct {
 	Version int `json:"version"`
 
 	RequiredFeatures []string `json:"required_features,omitempty"`
+
+	MetaBody string `json:"meta_body,omitempty"`
 
 	IndexOuterLeavesInValueLog bool `json:"index_outer_leaves_in_vlog"`
 
@@ -49,6 +52,10 @@ func (cfg FormatConfig) RequiresCommandWALV1() bool {
 		}
 	}
 	return false
+}
+
+func (cfg FormatConfig) UsesCommandWALMetaV1() bool {
+	return normalizeFormatConfigMode(cfg.MetaBody) == formatMetaBodyCommandWALV1
 }
 
 func (cfg FormatConfig) ValidateRuntimeSupported() error {
@@ -85,6 +92,9 @@ func formatConfigFromOptions(opts Options) FormatConfig {
 		ValueLogBlockCodec:  normalizeFormatConfigMode(formatValueLogBlockCodec(opts.ValueLog.BlockCodec)),
 		ValueLogAutoPolicy:  normalizeFormatConfigMode(formatValueLogAutoPolicy(opts.ValueLog.AutoPolicy)),
 	}
+	if opts.commandWALMetaV1 {
+		cfg.MetaBody = formatMetaBodyCommandWALV1
+	}
 
 	// Leaf-log child pages use an explicit LogRecordRef layout instead of page
 	// child IDs, so keep base-delta disabled for outer-leaf-in-vlog roots until
@@ -93,6 +103,31 @@ func formatConfigFromOptions(opts Options) FormatConfig {
 		cfg.IndexInternalBaseDelta = false
 	}
 
+	return cfg
+}
+
+func (db *DB) formatConfigFromRuntime() FormatConfig {
+	if db == nil {
+		return FormatConfig{Version: formatConfigVersion}
+	}
+	cfg := FormatConfig{
+		Version: formatConfigVersion,
+
+		IndexOuterLeavesInValueLog: db.indexOuterLeavesInValueLog,
+
+		LeafPrefixCompression:     db.leafPrefixCompression,
+		IndexColumnarLeaves:       db.indexColumnarLeaves,
+		IndexPackedValuePtr:       db.indexPackedValuePtr,
+		IndexInternalBaseDelta:    db.indexInternalBaseDelta,
+		IndexAdaptiveLeafEncoding: db.indexAdaptiveLeafEncoding,
+
+		ValueLogCompression: normalizeFormatConfigMode(formatValueLogCompressionMode(db.valueLogCompression)),
+		ValueLogBlockCodec:  normalizeFormatConfigMode(formatValueLogBlockCodec(db.valueLogBlockCodec)),
+		ValueLogAutoPolicy:  normalizeFormatConfigMode(formatValueLogAutoPolicy(db.valueLogAutoPolicy)),
+	}
+	if db.commandWALMetaV1 {
+		cfg.MetaBody = formatMetaBodyCommandWALV1
+	}
 	return cfg
 }
 
@@ -344,6 +379,7 @@ func applyFormatConfigForMaintenance(opts *Options) error {
 	if err := cfg.ValidateRuntimeSupported(); err != nil {
 		return err
 	}
+	opts.commandWALMetaV1 = cfg.UsesCommandWALMetaV1()
 	cfg.ApplyToOptions(opts)
 	return nil
 }

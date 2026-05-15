@@ -1,6 +1,7 @@
 package db
 
 import (
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"os"
@@ -8,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
+	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -73,6 +75,28 @@ func TestCommandWALAppliedCommandLSNAlternatingMetaPages(t *testing.T) {
 	defer reopen.Close()
 	if got := reopen.State().AppliedCommandLSN; got != 2 {
 		t.Fatalf("reopen AppliedCommandLSN=%d, want 2", got)
+	}
+}
+
+func TestCommandWALLegacyMetaDecodeIgnoresReservedAppliedLSNBytes(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	activeMetaPage := db.metaPageID
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	writeMetaAppliedCommandLSNBytes(t, dir, activeMetaPage, 12345)
+	reopen, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer reopen.Close()
+	if got := reopen.State().AppliedCommandLSN; got != 0 {
+		t.Fatalf("AppliedCommandLSN=%d, want 0 without command WAL V1 meta marker", got)
 	}
 }
 
@@ -433,5 +457,24 @@ func corruptIndexPageByte(t *testing.T, dir string, pageID uint64) {
 	off := int64(pageID*page.PageSize + page.PageHeaderSize + 7)
 	if _, err := f.WriteAt([]byte{0xff}, off); err != nil {
 		t.Fatalf("WriteAt corrupt meta page: %v", err)
+	}
+}
+
+func writeMetaAppliedCommandLSNBytes(t *testing.T, dir string, pageID uint64, lsn uint64) {
+	t.Helper()
+	f, err := os.OpenFile(filepath.Join(dir, indexFileName), os.O_RDWR, 0)
+	if err != nil {
+		t.Fatalf("OpenFile index: %v", err)
+	}
+	defer f.Close()
+	buf := make([]byte, page.PageSize)
+	off := int64(pageID * page.PageSize)
+	if _, err := f.ReadAt(buf, off); err != nil {
+		t.Fatalf("ReadAt meta page: %v", err)
+	}
+	binary.LittleEndian.PutUint64(buf[page.PageHeaderSize+60:page.PageHeaderSize+68], lsn)
+	node.NewNode(buf).UpdateChecksum()
+	if _, err := f.WriteAt(buf, off); err != nil {
+		t.Fatalf("WriteAt meta page: %v", err)
 	}
 }

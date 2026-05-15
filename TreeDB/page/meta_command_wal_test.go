@@ -16,9 +16,22 @@ func TestMetaPageBodyAppliedCommandLSNRoundTrip(t *testing.T) {
 	}
 	buf := make([]byte, MetaPageBodySize)
 	want.Encode(buf)
-	got := DecodeMetaBody(buf)
+	got := DecodeMetaBodyCommandWALV1(buf)
 	if got != want {
 		t.Fatalf("DecodeMetaBody=%+v, want %+v", got, want)
+	}
+}
+
+func TestMetaPageBodyFullLegacyDecodeIgnoresReservedAppliedCommandLSNBytes(t *testing.T) {
+	full := make([]byte, MetaPageBodySize)
+	m := MetaPageBody{CommitSeq: 7, UserRootPageID: 8, SystemRootPageID: 9, AppliedCommandLSN: 12345}
+	m.Encode(full)
+	got := DecodeMetaBody(full)
+	if got.CommitSeq != 7 || got.UserRootPageID != 8 || got.SystemRootPageID != 9 {
+		t.Fatalf("legacy fields decoded incorrectly: %+v", got)
+	}
+	if got.AppliedCommandLSN != 0 {
+		t.Fatalf("AppliedCommandLSN=%d, want 0 without command WAL V1 marker", got.AppliedCommandLSN)
 	}
 }
 
