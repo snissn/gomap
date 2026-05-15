@@ -290,6 +290,52 @@ func TestVectorIndexLoadPersistSnapshotRejectsExtraEdgeDistances(t *testing.T) {
 	}
 }
 
+func TestVectorIndexPersistSnapshotClampsNegativeInfiniteEdgeDistances(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	col := openVectorIndexTestCollection(t, d)
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("a"), []byte("b"), []byte("c")},
+		[][]byte{
+			[]byte(`{"embedding":[1,0]}`),
+			[]byte(`{"embedding":[0.8,0.2]}`),
+			[]byte(`{"embedding":[0,1]}`),
+		},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	index, err := col.BuildVectorIndex(VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, M: 4})
+	if err != nil {
+		t.Fatalf("build vector index: %v", err)
+	}
+	index.mu.Lock()
+	for i := range index.nodes {
+		for layer := range index.nodes[i].neighbors {
+			if len(index.nodes[i].neighbors[layer]) > 0 {
+				index.nodes[i].neighbors[layer][0].distance = float32(math.Inf(-1))
+				index.mu.Unlock()
+				snapshot, _ := index.persistSnapshot()
+				for _, edge := range snapshot.Edges {
+					for _, distance := range edge.Distances {
+						if math.IsInf(float64(distance), 0) || math.IsNaN(float64(distance)) {
+							t.Fatalf("persisted non-finite edge distance: %v", distance)
+						}
+					}
+				}
+				if _, err := json.Marshal(snapshot.Edges); err != nil {
+					t.Fatalf("marshal snapshot edges: %v", err)
+				}
+				return
+			}
+		}
+	}
+	index.mu.Unlock()
+	t.Fatal("index has no edge distances to mutate")
+}
+
 func TestCollectionVectorIndexSnapshotInt8Encoding(t *testing.T) {
 	dir := t.TempDir()
 	d, err := backenddb.Open(backenddb.Options{Dir: dir})

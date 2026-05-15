@@ -479,7 +479,15 @@ func (idx *VectorIndex) persistSnapshot() (vectorIndexPersistSnapshot, uint64) {
 			distances := make([]float32, len(neighbors))
 			for j, neighbor := range neighbors {
 				neighborIDs[j] = neighbor.nodeID
-				distances[j] = neighbor.distance
+				distance, ok := normalizeVectorIndexEdgeDistance(neighbor.distance)
+				if !ok {
+					distance = idx.distanceBetweenNodesLocked(i, neighbor.nodeID)
+					distance, ok = normalizeVectorIndexEdgeDistance(distance)
+					if !ok {
+						distance = math.MaxFloat32
+					}
+				}
+				distances[j] = distance
 			}
 			snapshot.Edges = append(snapshot.Edges, vectorIndexPersistEdges{
 				NodeID:    i,
@@ -735,12 +743,19 @@ func (idx *VectorIndex) loadPersistSnapshot(snapshot vectorIndexPersistSnapshot)
 			if i < len(edge.Distances) {
 				distance = edge.Distances[i]
 			}
-			if math.IsNaN(float64(distance)) || math.IsInf(float64(distance), 1) {
+			if normalized, ok := normalizeVectorIndexEdgeDistance(distance); ok {
+				distance = normalized
+			} else {
 				var err error
 				distance, err = vectorDistanceBetweenStoredNodes(&nodes[edge.NodeID], &nodes[neighbor], snapshot.Meta.Metric)
 				if err != nil {
 					return "invalid_edge_distance"
 				}
+				normalized, ok = normalizeVectorIndexEdgeDistance(distance)
+				if !ok {
+					return "invalid_edge_distance"
+				}
+				distance = normalized
 			}
 			neighbors[i] = vectorIndexNeighbor{nodeID: neighbor, distance: distance}
 		}
