@@ -352,6 +352,7 @@ func resetTreeDBIndexFlagsForTest() {
 	*treedbVlogRewriteBudgetRecordsPerSec = 0
 	*treedbVlogRewriteMinSegmentAgeMS = 0
 	*treedbVacuumAfterVlogRewriteRun = true
+	*treedbCommandWALStatsScan = false
 	*treedbDisableWAL = false
 	*treedbRelaxedSync = false
 	*treedbDisableReadChecksum = false

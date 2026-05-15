@@ -153,6 +153,6 @@ func summarizeCommandWALSegment(path string, maxSegmentBytes int64, allowTermina
 		if errors.Is(readErr, commitlog.ErrCommandWALLegacyPayload) && !typed {
 			return false, 0, 0, nil
 		}
-		return typed, frames, maxLSN, fmt.Errorf("treedb: summarize command wal segment %s: %w", filepath.Base(path), readErr)
+		return typed, frames, maxLSN, fmt.Errorf("treedb: summarize command WAL segment %s: %w", filepath.Base(path), readErr)
 	}
 }
