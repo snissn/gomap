@@ -100,6 +100,23 @@ func formatConfigFromOptions(opts Options) FormatConfig {
 	return cfg
 }
 
+func formatConfigFromOptionsPreservingRequiredFeatures(opts Options) (FormatConfig, error) {
+	cfg := formatConfigFromOptions(opts)
+	existing, ok, err := LoadFormatConfig(opts.Dir)
+	if err != nil {
+		return FormatConfig{}, err
+	}
+	if ok {
+		for _, feature := range existing.RequiredFeatures {
+			cfg.RequiredFeatures = appendRequiredFormatFeature(cfg.RequiredFeatures, feature)
+		}
+		if len(cfg.RequiredFeatures) != 0 {
+			cfg.Version = formatConfigRequiredFeaturesVersion
+		}
+	}
+	return cfg, nil
+}
+
 func appendRequiredFormatFeature(features []string, feature string) []string {
 	normalized := normalizeFormatConfigMode(feature)
 	for _, existing := range features {
@@ -289,6 +306,10 @@ func commandWALFormatNeedsActivation(opts Options) (bool, error) {
 }
 
 func saveOpenFormatConfig(opts Options) error {
+	cfg, err := formatConfigFromOptionsPreservingRequiredFeatures(opts)
+	if err != nil {
+		return err
+	}
 	if opts.CommandWAL {
 		requiresCommandWAL, err := CommandWALRequiredFeatureEnabled(opts.Dir)
 		if err != nil {
@@ -298,13 +319,13 @@ func saveOpenFormatConfig(opts Options) error {
 			if opts.ReadOnly {
 				return nil
 			}
-			return writeFormatConfig(opts.Dir, formatConfigFromOptions(opts))
+			return writeFormatConfig(opts.Dir, cfg)
 		}
 		if opts.ReadOnly {
 			return nil
 		}
 	}
-	return SaveFormatConfig(opts.Dir, formatConfigFromOptions(opts))
+	return SaveFormatConfig(opts.Dir, cfg)
 }
 
 func formatValueLogCompressionMode(mode ValueLogCompressionMode) string {

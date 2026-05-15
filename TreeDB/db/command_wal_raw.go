@@ -84,6 +84,9 @@ func (db *DB) lookupCommandWALValueLogRID(ptr page.ValuePtr, ridCache map[uint32
 	if ptr.FileID == 0 || ptr.Length == 0 {
 		return 0, fmt.Errorf("treedb: command wal raw kv invalid value-log pointer")
 	}
+	// The cache is scoped to one command-WAL batch build: each value-log segment
+	// is opened and scanned at most once even when the batch has many pointers
+	// into the same segment.
 	if ridCache == nil {
 		ridCache = make(map[uint32]map[page.ValuePtr]uint64)
 	}

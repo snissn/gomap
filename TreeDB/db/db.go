@@ -1479,7 +1479,12 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 			commandSegmentSeq = seq
 		}
 		if needsCommandWALFormat {
-			if err := SaveFormatConfig(opts.Dir, formatConfigFromOptions(opts)); err != nil {
+			cfg, err := formatConfigFromOptionsPreservingRequiredFeatures(opts)
+			if err != nil {
+				db.Close()
+				return nil, err
+			}
+			if err := SaveFormatConfig(opts.Dir, cfg); err != nil {
 				db.Close()
 				return nil, err
 			}
