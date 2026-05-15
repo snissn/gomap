@@ -27,9 +27,8 @@ import (
 const (
 	defaultDocs                  = 10000
 	defaultDimensions            = 64
-	defaultQueries               = 1000
-	defaultReadOps               = 10000
-	defaultReadConcurrency       = "2,4,8,16,32,64,128"
+	defaultQueries               = 10000
+	defaultSearchConcurrency     = "2,4,8,16,32,64,128"
 	defaultTopK                  = 10
 	defaultBatchSize             = 512
 	defaultM                     = 16
@@ -47,8 +46,7 @@ type config struct {
 	docs                  int
 	dimensions            int
 	queries               int
-	readOps               int
-	readConcurrency       []int
+	searchConcurrency     []int
 	validateQueries       int
 	validateDocs          int
 	topK                  int
@@ -76,8 +74,7 @@ type result struct {
 	Docs                  int                            `json:"docs"`
 	Dimensions            int                            `json:"dimensions"`
 	Queries               int                            `json:"queries"`
-	ReadOps               int                            `json:"read_ops"`
-	ReadConcurrency       []int                          `json:"read_concurrency"`
+	SearchConcurrency     []int                          `json:"search_concurrency"`
 	ValidateQueries       int                            `json:"validate_queries"`
 	ValidateDocs          int                            `json:"validate_docs"`
 	TopK                  int                            `json:"top_k"`
@@ -93,7 +90,7 @@ type result struct {
 	ReopenLoad            phaseResult                    `json:"reopen_load"`
 	Validation            validationResult               `json:"validation"`
 	Search                searchBenchmarkResult          `json:"search"`
-	ReadBenchmarks        []documentReadBenchmarkResult  `json:"read_benchmarks"`
+	SearchBenchmarks      []searchBenchmarkResult        `json:"search_benchmarks"`
 	StorageBeforeCompact  storageReport                  `json:"storage_before_compact"`
 	StorageAfterCompact   storageReport                  `json:"storage_after_compact"`
 	IndexStatsBefore      collections.VectorIndexStats   `json:"index_stats_before_compact"`
@@ -106,16 +103,15 @@ type result struct {
 }
 
 type matrixResult struct {
-	Dir             string             `json:"dir"`
-	KeptDir         bool               `json:"kept_dir"`
-	Profile         string             `json:"profile"`
-	Docs            int                `json:"docs"`
-	Dimensions      int                `json:"dimensions"`
-	Queries         int                `json:"queries"`
-	ReadOps         int                `json:"read_ops"`
-	ReadConcurrency []int              `json:"read_concurrency"`
-	TopK            int                `json:"top_k"`
-	Cases           []matrixCaseResult `json:"cases"`
+	Dir               string             `json:"dir"`
+	KeptDir           bool               `json:"kept_dir"`
+	Profile           string             `json:"profile"`
+	Docs              int                `json:"docs"`
+	Dimensions        int                `json:"dimensions"`
+	Queries           int                `json:"queries"`
+	SearchConcurrency []int              `json:"search_concurrency"`
+	TopK              int                `json:"top_k"`
+	Cases             []matrixCaseResult `json:"cases"`
 }
 
 type matrixCaseResult struct {
@@ -142,6 +138,7 @@ type validationResult struct {
 }
 
 type searchBenchmarkResult struct {
+	Concurrency          int     `json:"concurrency"`
 	Queries              int     `json:"queries"`
 	TotalDurationNanos   int64   `json:"total_duration_nanos"`
 	AvgNanos             float64 `json:"avg_nanos"`
@@ -154,18 +151,6 @@ type searchBenchmarkResult struct {
 	AvgRerank            float64 `json:"avg_rerank"`
 	ExactFallbacks       int     `json:"exact_fallbacks"`
 	DisableExactFallback bool    `json:"disable_exact_fallback"`
-}
-
-type documentReadBenchmarkResult struct {
-	Concurrency        int     `json:"concurrency"`
-	Operations         int     `json:"operations"`
-	TotalDurationNanos int64   `json:"total_duration_nanos"`
-	AvgNanos           float64 `json:"avg_nanos"`
-	AvgMicros          float64 `json:"avg_micros"`
-	OpsPerSecond       float64 `json:"ops_per_second"`
-	P50Nanos           int64   `json:"p50_nanos"`
-	P95Nanos           int64   `json:"p95_nanos"`
-	P99Nanos           int64   `json:"p99_nanos"`
 }
 
 type storageReport struct {
@@ -239,7 +224,6 @@ func parseConfig(args []string) (config, error) {
 		docs:                  defaultDocs,
 		dimensions:            defaultDimensions,
 		queries:               defaultQueries,
-		readOps:               defaultReadOps,
 		validateQueries:       32,
 		validateDocs:          16,
 		topK:                  defaultTopK,
@@ -251,22 +235,21 @@ func parseConfig(args []string) (config, error) {
 		leafGenerationTarget:  defaultLeafGenerationTarget,
 		minRecall:             0.95,
 		matrix:                true,
-		compact:               true,
+		compact:               false,
 		disableExactFallback:  true,
 		profile:               treedb.ProfileBench,
 	}
 	profileRaw := string(cfg.profile)
-	readConcurrencyRaw := defaultReadConcurrency
+	searchConcurrencyRaw := defaultSearchConcurrency
 	fs := flag.NewFlagSet("treedb_vector_search_demo", flag.ContinueOnError)
 	fs.StringVar(&cfg.dir, "dir", "", "TreeDB directory to create; empty uses a temporary directory")
 	fs.BoolVar(&cfg.keepDir, "keep-dir", false, "Keep the DB directory after the run")
-	fs.BoolVar(&cfg.matrix, "matrix", cfg.matrix, "Run the storage/read benchmark matrix instead of a single storage case")
+	fs.BoolVar(&cfg.matrix, "matrix", cfg.matrix, "Run the storage/search benchmark matrix instead of a single storage case")
 	fs.StringVar(&profileRaw, "profile", profileRaw, "TreeDB profile: durable, fast, wal_on_fast, or bench")
 	fs.IntVar(&cfg.docs, "docs", cfg.docs, "Number of synthetic documents to load")
 	fs.IntVar(&cfg.dimensions, "dims", cfg.dimensions, "Vector dimensions per document")
 	fs.IntVar(&cfg.queries, "queries", cfg.queries, "Number of ANN search queries to benchmark")
-	fs.IntVar(&cfg.readOps, "read-ops", cfg.readOps, "Document reads per serial/concurrent read benchmark")
-	fs.StringVar(&readConcurrencyRaw, "read-concurrency", readConcurrencyRaw, "Comma-separated parallel document-read concurrency levels; serial concurrency=1 is always included")
+	fs.StringVar(&searchConcurrencyRaw, "search-concurrency", searchConcurrencyRaw, "Comma-separated parallel ANN search concurrency levels; serial concurrency=1 is always included")
 	fs.IntVar(&cfg.validateQueries, "validate-queries", cfg.validateQueries, "Number of queries to validate against exact search")
 	fs.IntVar(&cfg.validateDocs, "validate-docs", cfg.validateDocs, "Number of documents to read and byte-validate after compaction/reopen")
 	fs.IntVar(&cfg.topK, "top-k", cfg.topK, "Nearest-neighbor result count")
@@ -277,7 +260,7 @@ func parseConfig(args []string) (config, error) {
 	fs.IntVar(&cfg.valuePointerThreshold, "value-pointer-threshold", cfg.valuePointerThreshold, "Value-log pointer threshold for the demo DB in bytes; 0 uses the selected TreeDB profile default")
 	fs.Int64Var(&cfg.leafGenerationTarget, "leaf-generation-segment-target", cfg.leafGenerationTarget, "Leaf value-log generation segment target for the demo DB in bytes; a positive value opts the demo into leaf generation rolling, 0 uses the selected TreeDB profile default")
 	fs.Float64Var(&cfg.minRecall, "min-recall", cfg.minRecall, "Minimum validation recall@topK")
-	fs.BoolVar(&cfg.compact, "compact", cfg.compact, "Run CompactStorageFull after insert/index build and before reads")
+	fs.BoolVar(&cfg.compact, "compact", cfg.compact, "Run CompactStorageFull after insert/index build and before reopen/validation/search")
 	fs.BoolVar(&cfg.compactSyncEachPhase, "compact-sync-each-phase", false, "Ask CompactStorage to fsync each rewrite/pack phase")
 	fs.BoolVar(&cfg.disableExactFallback, "disable-exact-fallback", cfg.disableExactFallback, "Disable exact fallback during ANN benchmark queries")
 	fs.BoolVar(&cfg.requireValueLogBytes, "require-value-log-bytes", false, "Fail if compacted storage has no value-log bytes")
@@ -286,11 +269,11 @@ func parseConfig(args []string) (config, error) {
 	if err := fs.Parse(args); err != nil {
 		return config{}, err
 	}
-	readConcurrency, err := parseReadConcurrency(readConcurrencyRaw)
+	searchConcurrency, err := parseSearchConcurrency(searchConcurrencyRaw)
 	if err != nil {
 		return config{}, err
 	}
-	cfg.readConcurrency = readConcurrency
+	cfg.searchConcurrency = searchConcurrency
 	profile, err := parseProfile(profileRaw)
 	if err != nil {
 		return config{}, err
@@ -304,9 +287,6 @@ func parseConfig(args []string) (config, error) {
 	}
 	if cfg.queries <= 0 {
 		return config{}, errors.New("-queries must be positive")
-	}
-	if cfg.readOps <= 0 {
-		return config{}, errors.New("-read-ops must be positive")
 	}
 	if cfg.topK <= 0 {
 		return config{}, errors.New("-top-k must be positive")
@@ -365,7 +345,7 @@ func parseProfile(raw string) (treedb.Profile, error) {
 	}
 }
 
-func parseReadConcurrency(raw string) ([]int, error) {
+func parseSearchConcurrency(raw string) ([]int, error) {
 	parts := strings.Split(raw, ",")
 	out := make([]int, 0, len(parts))
 	seen := make(map[int]struct{}, len(parts)+1)
@@ -376,10 +356,10 @@ func parseReadConcurrency(raw string) ([]int, error) {
 		}
 		value, err := strconv.Atoi(part)
 		if err != nil {
-			return nil, fmt.Errorf("invalid -read-concurrency value %q", part)
+			return nil, fmt.Errorf("invalid -search-concurrency value %q", part)
 		}
 		if value <= 1 {
-			return nil, fmt.Errorf("-read-concurrency values must be greater than 1: %d", value)
+			return nil, fmt.Errorf("-search-concurrency values must be greater than 1: %d", value)
 		}
 		if _, ok := seen[value]; ok {
 			continue
@@ -389,24 +369,18 @@ func parseReadConcurrency(raw string) ([]int, error) {
 	}
 	sort.Ints(out)
 	if len(out) == 0 {
-		return nil, errors.New("-read-concurrency must include at least one value greater than 1")
+		return nil, errors.New("-search-concurrency must include at least one value greater than 1")
 	}
 	return out, nil
 }
 
-func applyReadBenchmarkDefaults(cfg *config) error {
-	if cfg.readOps == 0 {
-		cfg.readOps = defaultReadOps
-	}
-	if cfg.readOps < 0 {
-		return errors.New("-read-ops cannot be negative")
-	}
-	if len(cfg.readConcurrency) == 0 {
-		concurrency, err := parseReadConcurrency(defaultReadConcurrency)
+func applySearchBenchmarkDefaults(cfg *config) error {
+	if len(cfg.searchConcurrency) == 0 {
+		concurrency, err := parseSearchConcurrency(defaultSearchConcurrency)
 		if err != nil {
 			return err
 		}
-		cfg.readConcurrency = concurrency
+		cfg.searchConcurrency = concurrency
 	}
 	return nil
 }
@@ -452,7 +426,7 @@ func openDemoBackend(cfg config, dir string) (*backenddb.DB, func() error, error
 
 func execute(ctx context.Context, cfg config) (result, error) {
 	cfg.profile = defaultProfile(cfg.profile)
-	if err := applyReadBenchmarkDefaults(&cfg); err != nil {
+	if err := applySearchBenchmarkDefaults(&cfg); err != nil {
 		return result{}, err
 	}
 	dir, err := normalizeDemoDir(cfg.dir)
@@ -497,8 +471,7 @@ func execute(ctx context.Context, cfg config) (result, error) {
 		Docs:                  cfg.docs,
 		Dimensions:            cfg.dimensions,
 		Queries:               cfg.queries,
-		ReadOps:               cfg.readOps,
-		ReadConcurrency:       append([]int(nil), cfg.readConcurrency...),
+		SearchConcurrency:     append([]int(nil), cfg.searchConcurrency...),
 		ValidateQueries:       cfg.validateQueries,
 		ValidateDocs:          cfg.validateDocs,
 		TopK:                  cfg.topK,
@@ -647,22 +620,20 @@ func execute(ctx context.Context, cfg config) (result, error) {
 	}
 	res.Validation = validation
 
-	search, err := benchmarkSearch(loaded, cfg)
+	searchBenchmarks, err := benchmarkSearchMatrix(loaded, cfg)
 	if err != nil {
 		return result{}, err
 	}
-	res.Search = search
-	readBenchmarks, err := benchmarkDocumentReadMatrix(col, cfg)
-	if err != nil {
-		return result{}, err
+	res.SearchBenchmarks = searchBenchmarks
+	if len(searchBenchmarks) > 0 {
+		res.Search = searchBenchmarks[0]
 	}
-	res.ReadBenchmarks = readBenchmarks
 	return res, nil
 }
 
 func executeMatrix(ctx context.Context, cfg config) (matrixResult, error) {
 	cfg.profile = defaultProfile(cfg.profile)
-	if err := applyReadBenchmarkDefaults(&cfg); err != nil {
+	if err := applySearchBenchmarkDefaults(&cfg); err != nil {
 		return matrixResult{}, err
 	}
 	root, err := normalizeDemoDir(cfg.dir)
@@ -702,7 +673,7 @@ func executeMatrix(ctx context.Context, cfg config) (matrixResult, error) {
 		{
 			name:        "index_db_outer_leaves",
 			description: "1558-style layout: outer B-tree leaves stay in index.db",
-			compact:     true,
+			compact:     false,
 			outerLeaves: &inlineLeaves,
 		},
 		{
@@ -719,16 +690,15 @@ func executeMatrix(ctx context.Context, cfg config) (matrixResult, error) {
 		},
 	}
 	out := matrixResult{
-		Dir:             root,
-		KeptDir:         cfg.keepDir,
-		Profile:         string(cfg.profile),
-		Docs:            cfg.docs,
-		Dimensions:      cfg.dimensions,
-		Queries:         cfg.queries,
-		ReadOps:         cfg.readOps,
-		ReadConcurrency: append([]int(nil), cfg.readConcurrency...),
-		TopK:            cfg.topK,
-		Cases:           make([]matrixCaseResult, 0, len(cases)),
+		Dir:               root,
+		KeptDir:           cfg.keepDir,
+		Profile:           string(cfg.profile),
+		Docs:              cfg.docs,
+		Dimensions:        cfg.dimensions,
+		Queries:           cfg.queries,
+		SearchConcurrency: append([]int(nil), cfg.searchConcurrency...),
+		TopK:              cfg.topK,
+		Cases:             make([]matrixCaseResult, 0, len(cases)),
 	}
 	for _, testCase := range cases {
 		caseCfg := cfg
@@ -821,59 +791,16 @@ func validateCompactedData(col *collections.Collection, idx *collections.VectorI
 }
 
 func benchmarkSearch(idx *collections.VectorIndex, cfg config) (searchBenchmarkResult, error) {
-	queries := validationQueries(cfg.queries, cfg.docs, cfg.dimensions)
-	latencies := make([]int64, len(queries))
-	var candidatesTotal int64
-	var rerankTotal int64
-	var exactFallbacks int
-	startAll := time.Now()
-	for i, query := range queries {
-		start := time.Now()
-		results, trace, err := idx.Search(query, collections.VectorIndexSearchOptions{
-			TopK:                 cfg.topK,
-			EfSearch:             cfg.efSearch,
-			DisableExactFallback: cfg.disableExactFallback,
-		})
-		latencies[i] = time.Since(start).Nanoseconds()
-		if err != nil {
-			return searchBenchmarkResult{}, err
-		}
-		if len(results) == 0 {
-			return searchBenchmarkResult{}, errors.New("vector search returned no results")
-		}
-		candidatesTotal += int64(trace.CandidatesExamined)
-		rerankTotal += int64(trace.RerankCount)
-		if trace.ExactFallbackReason != "" {
-			exactFallbacks++
-		}
-	}
-	total := time.Since(startAll)
-	sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
-	avg := float64(total.Nanoseconds()) / float64(len(queries))
-	return searchBenchmarkResult{
-		Queries:              len(queries),
-		TotalDurationNanos:   total.Nanoseconds(),
-		AvgNanos:             avg,
-		AvgMicros:            avg / 1000,
-		OpsPerSecond:         float64(len(queries)) / total.Seconds(),
-		P50Nanos:             percentile(latencies, 0.50),
-		P95Nanos:             percentile(latencies, 0.95),
-		P99Nanos:             percentile(latencies, 0.99),
-		AvgCandidates:        float64(candidatesTotal) / float64(len(queries)),
-		AvgRerank:            float64(rerankTotal) / float64(len(queries)),
-		ExactFallbacks:       exactFallbacks,
-		DisableExactFallback: cfg.disableExactFallback,
-	}, nil
+	return benchmarkSearchConcurrent(idx, cfg, 1)
 }
 
-func benchmarkDocumentReadMatrix(col *collections.Collection, cfg config) ([]documentReadBenchmarkResult, error) {
-	inputs := documentReadInputs(cfg.readOps, cfg.docs, cfg.dimensions)
-	levels := make([]int, 0, len(cfg.readConcurrency)+1)
+func benchmarkSearchMatrix(idx *collections.VectorIndex, cfg config) ([]searchBenchmarkResult, error) {
+	levels := make([]int, 0, len(cfg.searchConcurrency)+1)
 	levels = append(levels, 1)
-	levels = append(levels, cfg.readConcurrency...)
-	out := make([]documentReadBenchmarkResult, 0, len(levels))
+	levels = append(levels, cfg.searchConcurrency...)
+	out := make([]searchBenchmarkResult, 0, len(levels))
 	for _, concurrency := range levels {
-		bench, err := benchmarkDocumentReads(col, inputs, concurrency)
+		bench, err := benchmarkSearchConcurrent(idx, cfg, concurrency)
 		if err != nil {
 			return nil, err
 		}
@@ -882,29 +809,16 @@ func benchmarkDocumentReadMatrix(col *collections.Collection, cfg config) ([]doc
 	return out, nil
 }
 
-type documentReadInput struct {
-	id   []byte
-	want []byte
-}
-
-func documentReadInputs(operations, docs, dims int) []documentReadInput {
-	inputs := make([]documentReadInput, operations)
-	for i := range inputs {
-		docIndex := validationDocIndex(i, docs)
-		inputs[i] = documentReadInput{
-			id:   documentID(docIndex),
-			want: documentJSON(docIndex, dims),
-		}
-	}
-	return inputs
-}
-
-func benchmarkDocumentReads(col *collections.Collection, inputs []documentReadInput, concurrency int) (documentReadBenchmarkResult, error) {
+func benchmarkSearchConcurrent(idx *collections.VectorIndex, cfg config, concurrency int) (searchBenchmarkResult, error) {
 	if concurrency <= 0 {
-		return documentReadBenchmarkResult{}, errors.New("document read concurrency must be positive")
+		return searchBenchmarkResult{}, errors.New("search concurrency must be positive")
 	}
-	latencies := make([]int64, len(inputs))
+	queries := validationQueries(cfg.queries, cfg.docs, cfg.dimensions)
+	latencies := make([]int64, len(queries))
 	var next atomic.Int64
+	var candidatesTotal int64
+	var rerankTotal int64
+	var exactFallbacks int64
 	var errMu sync.Mutex
 	var firstErr error
 	setErr := func(err error) {
@@ -917,24 +831,31 @@ func benchmarkDocumentReads(col *collections.Collection, inputs []documentReadIn
 	worker := func() {
 		for {
 			i := int(next.Add(1) - 1)
-			if i >= len(inputs) {
+			if i >= len(queries) {
 				return
 			}
-			input := inputs[i]
 			start := time.Now()
-			got, err := col.Get(input.id)
+			results, trace, err := idx.Search(queries[i], collections.VectorIndexSearchOptions{
+				TopK:                 cfg.topK,
+				EfSearch:             cfg.efSearch,
+				DisableExactFallback: cfg.disableExactFallback,
+			})
 			latencies[i] = time.Since(start).Nanoseconds()
 			if err != nil {
 				setErr(err)
 				return
 			}
-			if !bytes.Equal(got, input.want) {
-				setErr(fmt.Errorf("document read mismatch for %s", input.id))
+			if len(results) == 0 {
+				setErr(errors.New("vector search returned no results"))
 				return
+			}
+			atomic.AddInt64(&candidatesTotal, int64(trace.CandidatesExamined))
+			atomic.AddInt64(&rerankTotal, int64(trace.RerankCount))
+			if trace.ExactFallbackReason != "" {
+				atomic.AddInt64(&exactFallbacks, 1)
 			}
 		}
 	}
-
 	startAll := time.Now()
 	if concurrency == 1 {
 		worker()
@@ -951,24 +872,28 @@ func benchmarkDocumentReads(col *collections.Collection, inputs []documentReadIn
 	}
 	total := time.Since(startAll)
 	if firstErr != nil {
-		return documentReadBenchmarkResult{}, firstErr
+		return searchBenchmarkResult{}, firstErr
 	}
 	var latencyTotal int64
 	for _, latency := range latencies {
 		latencyTotal += latency
 	}
 	sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
-	avg := float64(latencyTotal) / float64(len(inputs))
-	return documentReadBenchmarkResult{
-		Concurrency:        concurrency,
-		Operations:         len(inputs),
-		TotalDurationNanos: total.Nanoseconds(),
-		AvgNanos:           avg,
-		AvgMicros:          avg / 1000,
-		OpsPerSecond:       float64(len(inputs)) / total.Seconds(),
-		P50Nanos:           percentile(latencies, 0.50),
-		P95Nanos:           percentile(latencies, 0.95),
-		P99Nanos:           percentile(latencies, 0.99),
+	avg := float64(latencyTotal) / float64(len(queries))
+	return searchBenchmarkResult{
+		Concurrency:          concurrency,
+		Queries:              len(queries),
+		TotalDurationNanos:   total.Nanoseconds(),
+		AvgNanos:             avg,
+		AvgMicros:            avg / 1000,
+		OpsPerSecond:         float64(len(queries)) / total.Seconds(),
+		P50Nanos:             percentile(latencies, 0.50),
+		P95Nanos:             percentile(latencies, 0.95),
+		P99Nanos:             percentile(latencies, 0.99),
+		AvgCandidates:        float64(candidatesTotal) / float64(len(queries)),
+		AvgRerank:            float64(rerankTotal) / float64(len(queries)),
+		ExactFallbacks:       int(exactFallbacks),
+		DisableExactFallback: cfg.disableExactFallback,
 	}, nil
 }
 
@@ -1125,8 +1050,8 @@ func percentile(sorted []int64, p float64) int64 {
 
 func printText(w io.Writer, res result) {
 	fmt.Fprintf(w, "TreeDB vector search demo\n")
-	fmt.Fprintf(w, "dir=%s kept=%t profile=%s docs=%d dims=%d queries=%d read_ops=%d top_k=%d m=%d ef_construction=%d ef_search=%d value_pointer_threshold=%d leaf_generation_segment_target=%d\n",
-		res.Dir, res.KeptDir, res.Profile, res.Docs, res.Dimensions, res.Queries, res.ReadOps, res.TopK, res.M, res.EfConstruction, res.EfSearch, res.ValuePointerThreshold, res.LeafGenerationTarget)
+	fmt.Fprintf(w, "dir=%s kept=%t profile=%s docs=%d dims=%d queries=%d top_k=%d m=%d ef_construction=%d ef_search=%d value_pointer_threshold=%d leaf_generation_segment_target=%d\n",
+		res.Dir, res.KeptDir, res.Profile, res.Docs, res.Dimensions, res.Queries, res.TopK, res.M, res.EfConstruction, res.EfSearch, res.ValuePointerThreshold, res.LeafGenerationTarget)
 	fmt.Fprintf(w, "\nPhases\n")
 	fmt.Fprintf(w, "insert: %.3fs\n", res.Insert.Seconds)
 	fmt.Fprintf(w, "rebuild_native_vector_index: %.3fs native_root_bytes=%d\n", res.Rebuild.Seconds, res.NativeRootBytes)
@@ -1150,8 +1075,8 @@ func printText(w io.Writer, res result) {
 		res.Search.OpsPerSecond,
 		res.Search.ExactFallbacks)
 	fmt.Fprintf(w, "avg_candidates=%.1f avg_rerank=%.1f\n", res.Search.AvgCandidates, res.Search.AvgRerank)
-	fmt.Fprintf(w, "\nDocument Read Benchmark\n")
-	printReadBenchmarks(w, res.ReadBenchmarks)
+	fmt.Fprintf(w, "\nParallel Search Benchmark\n")
+	printSearchBenchmarks(w, res.SearchBenchmarks)
 	fmt.Fprintf(w, "\nStorage\n")
 	fmt.Fprintf(w, "before_compact_total=%d bytes (%.1f/doc)\n", res.StorageBeforeCompact.TotalBytes, res.StorageBeforeCompact.BytesPerDoc)
 	fmt.Fprintf(w, "after_compact_total=%d bytes (%.1f/doc)\n", res.StorageAfterCompact.TotalBytes, res.StorageAfterCompact.BytesPerDoc)
@@ -1173,8 +1098,8 @@ func printText(w io.Writer, res result) {
 
 func printMatrixText(w io.Writer, res matrixResult) {
 	fmt.Fprintf(w, "TreeDB vector search matrix\n")
-	fmt.Fprintf(w, "dir=%s kept=%t profile=%s docs=%d dims=%d queries=%d read_ops=%d top_k=%d read_concurrency=%s\n",
-		res.Dir, res.KeptDir, res.Profile, res.Docs, res.Dimensions, res.Queries, res.ReadOps, res.TopK, joinInts(res.ReadConcurrency))
+	fmt.Fprintf(w, "dir=%s kept=%t profile=%s docs=%d dims=%d queries=%d top_k=%d search_concurrency=%s\n",
+		res.Dir, res.KeptDir, res.Profile, res.Docs, res.Dimensions, res.Queries, res.TopK, joinInts(res.SearchConcurrency))
 	for _, testCase := range res.Cases {
 		fmt.Fprintf(w, "\nCase %s\n", testCase.Name)
 		fmt.Fprintf(w, "%s\n", testCase.Description)
@@ -1196,20 +1121,21 @@ func printMatrixText(w io.Writer, res matrixResult) {
 			float64(testCase.Result.Search.P95Nanos)/1000,
 			testCase.Result.TopK,
 			testCase.Result.Validation.Recall)
-		printReadBenchmarks(w, testCase.Result.ReadBenchmarks)
+		printSearchBenchmarks(w, testCase.Result.SearchBenchmarks)
 	}
 }
 
-func printReadBenchmarks(w io.Writer, benchmarks []documentReadBenchmarkResult) {
+func printSearchBenchmarks(w io.Writer, benchmarks []searchBenchmarkResult) {
 	for _, bench := range benchmarks {
-		fmt.Fprintf(w, "read concurrency=%d ops=%d avg=%.2fus p50=%.2fus p95=%.2fus p99=%.2fus ops/sec=%.1f\n",
+		fmt.Fprintf(w, "search concurrency=%d queries=%d avg=%.2fus p50=%.2fus p95=%.2fus p99=%.2fus ops/sec=%.1f exact_fallbacks=%d\n",
 			bench.Concurrency,
-			bench.Operations,
+			bench.Queries,
 			bench.AvgMicros,
 			float64(bench.P50Nanos)/1000,
 			float64(bench.P95Nanos)/1000,
 			float64(bench.P99Nanos)/1000,
-			bench.OpsPerSecond)
+			bench.OpsPerSecond,
+			bench.ExactFallbacks)
 	}
 }
 
