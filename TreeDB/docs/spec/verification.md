@@ -273,6 +273,8 @@ PR 2: shared journal ownership and `AppliedCommandLSN` plumbing:
 - `TestCommandWALCheckpointCleanupDeletesOnlyCoveredSegments`;
 - `TestCommandWALReadOnlyOpenWithUnappliedFrameFailsRecoveryRequired`;
 - `TestCommandWALReadOnlyOpenAllowsFramesCoveredByAppliedLSN`;
+- `TestCommandWALWriteOpenSkipsCoveredFramesBeforeLegacyReplay`;
+- `TestCommandWALWriteOpenRejectsUnappliedFramesUntilDispatcher`;
 - `TestCommandWALBackupManifestShapeIncludesAppliedLSNAndRanges`.
 
 PR 3: recovery dispatcher and raw KV command conversion:

@@ -803,6 +803,9 @@ Implementation evidence expected for this milestone:
   with roots through a dedicated command-WAL publish helper;
 - read-only opens scan typed command frames and return `ErrRecoveryRequired`
   when any complete frame has `LSN > AppliedCommandLSN`;
+- read-write opens keep typed command frames with `LSN <= AppliedCommandLSN`
+  out of legacy raw batch replay and fail closed on higher typed LSNs until the
+  PR3 typed replay dispatcher is present;
 - cleanup removes only non-active typed command WAL segments whose max complete
   LSN is covered by durable `AppliedCommandLSN`;
 - benchmark evidence records shared journal allocation/append overhead and

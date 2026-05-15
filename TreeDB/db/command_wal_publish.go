@@ -176,6 +176,42 @@ func commandWALSegmentMaxLSN(path string, maxSegmentBytes int64) (maxLSN uint64,
 	return maxLSN, typed, nil
 }
 
+func filterCommandWALSegmentsForLegacyReplay(segments []logSegment, appliedLSN uint64, maxSegmentBytes int64) ([]logSegment, error) {
+	var filtered []logSegment
+	skipped := false
+	for i, seg := range segments {
+		if seg.valueLog || seg.size == 0 {
+			if skipped {
+				filtered = append(filtered, seg)
+			}
+			continue
+		}
+		maxLSN, typed, err := commandWALSegmentMaxLSN(seg.path, maxSegmentBytes)
+		if err != nil {
+			return nil, err
+		}
+		if !typed {
+			if skipped {
+				filtered = append(filtered, seg)
+			}
+			continue
+		}
+		if maxLSN <= appliedLSN {
+			if !skipped {
+				filtered = make([]logSegment, 0, len(segments)-1)
+				filtered = append(filtered, segments[:i]...)
+			}
+			skipped = true
+			continue
+		}
+		return nil, fmt.Errorf("%w: command WAL frame LSN %d exceeds applied LSN %d", ErrRecoveryRequired, maxLSN, appliedLSN)
+	}
+	if !skipped {
+		return segments, nil
+	}
+	return filtered, nil
+}
+
 func cleanupCommandWALSegmentsCoveredByAppliedLSN(dir string, appliedLSN uint64, maxSegmentBytes int64) ([]commandWALSegmentCleanupDecision, error) {
 	segments, err := listWALSegments(dir)
 	if err != nil {

@@ -206,6 +206,13 @@ func isTruncatedLogError(err error) bool {
 }
 
 func replayWALIntoBackend(db *DB, segments []logSegment, maxSegmentBytes int64, dictLookup valuelog.DictLookup) error {
+	if db != nil && db.meta.AppliedCommandLSN > 0 {
+		filtered, err := filterCommandWALSegmentsForLegacyReplay(segments, db.meta.AppliedCommandLSN, maxSegmentBytes)
+		if err != nil {
+			return err
+		}
+		segments = filtered
+	}
 	hasCommitSegments := false
 	for _, seg := range segments {
 		if !seg.valueLog && seg.size > 0 {

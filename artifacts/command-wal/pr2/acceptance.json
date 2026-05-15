@@ -29,12 +29,16 @@
     "TestCommandWALAppliedLSNContiguousPrefixOnly",
     "TestCommandWALReadOnlyOpenWithUnappliedFrameFailsRecoveryRequired",
     "TestCommandWALReadOnlyOpenAllowsFramesCoveredByAppliedLSN",
+    "TestCommandWALWriteOpenSkipsCoveredFramesBeforeLegacyReplay",
+    "TestCommandWALWriteOpenRejectsUnappliedFramesUntilDispatcher",
     "TestCommandWALCheckpointCleanupDeletesOnlyCoveredSegments",
     "TestCommandWALBackupManifestShapeIncludesAppliedLSNAndRanges"
   ],
   "crash_scenarios": [
     "corrupt active meta page after root plus AppliedCommandLSN publish selects previous durable tuple",
     "read-only open with complete LSN greater than AppliedCommandLSN returns ErrRecoveryRequired",
+    "read-write open skips complete typed frames whose max LSN is already covered by durable AppliedCommandLSN before legacy raw WAL replay",
+    "read-write open fails recovery-required on complete typed frames above durable AppliedCommandLSN until the PR3 dispatcher exists",
     "cleanup after AppliedCommandLSN only removes covered non-active typed command WAL segments"
   ],
   "benchmark_commands": [
@@ -58,6 +62,7 @@
     "GOWORK=off go test ./TreeDB/internal/commitlog ./TreeDB/page ./TreeDB/docs",
     "GOWORK=off go test ./TreeDB",
     "GOWORK=off go test ./TreeDB/db",
+    "GOWORK=off go test ./TreeDB/caching",
     "GOWORK=off go test ./TreeDB/page ./TreeDB/internal/commitlog ./TreeDB/db -run 'Test(MetaPageBody|CommandJournal|CommandWAL|ValidateFormatRequiredFeatureGate|SaveFormatConfig|LoadFormatConfig|ReadOnly)'",
     "GOWORK=off go test ./TreeDB/caching -run 'TestCheckpoint|TestUnified|TestCommit|TestReadOnly|TestValueLog'",
     "GOWORK=off go test ./TreeDB ./TreeDB/internal/commitlog ./TreeDB/page ./TreeDB/docs -run 'TestReadOnlyDoesNotReplayOrRemoveCommitLog|TestOpenBackend_WALOffReopen_AllowsOfflineValueLogMaintenance|TestCommandWAL|TestMetaPageBody|TestCommandJournal|TestDocs'",

@@ -206,6 +206,57 @@ func TestCommandWALReadOnlyOpenAllowsFramesCoveredByAppliedLSN(t *testing.T) {
 	}
 }
 
+func TestCommandWALWriteOpenSkipsCoveredFramesBeforeLegacyReplay(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	state := db.State()
+	if err := db.publishCommandWALRoots(state.RootPageID, state.SystemRootPageID, 1, []CommandWALLSNRange{{First: 1, Last: 1}}, true); err != nil {
+		t.Fatalf("publishCommandWALRoots: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	writeCommandWALFrame(t, dir, 1, 1)
+
+	reopen, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("Open read-write with covered command WAL: %v", err)
+	}
+	if got := reopen.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("AppliedCommandLSN=%d, want 1", got)
+	}
+	if err := reopen.Close(); err != nil {
+		t.Fatalf("Close reopen: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(WALDirPath(dir), "commit-l0-000001.log")); err != nil {
+		t.Fatalf("covered command WAL segment should be skipped, not raw-replayed or removed: %v", err)
+	}
+}
+
+func TestCommandWALWriteOpenRejectsUnappliedFramesUntilDispatcher(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	state := db.State()
+	if err := db.publishCommandWALRoots(state.RootPageID, state.SystemRootPageID, 1, []CommandWALLSNRange{{First: 1, Last: 1}}, true); err != nil {
+		t.Fatalf("publishCommandWALRoots: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	writeCommandWALFrame(t, dir, 1, 2)
+
+	_, err = Open(Options{Dir: dir})
+	if !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("Open read-write with unapplied command WAL error=%v, want ErrRecoveryRequired", err)
+	}
+}
+
 func TestCommandWALCheckpointCleanupDeletesOnlyCoveredSegments(t *testing.T) {
 	dir := t.TempDir()
 	writeCommandWALFrame(t, dir, 1, 1)
