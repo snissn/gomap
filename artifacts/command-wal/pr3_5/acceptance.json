@@ -3,7 +3,7 @@
   "milestone": "PR3.5 raw KV command-WAL performance visibility and polish",
   "branch": "codex/user-command-wal-pr3_5",
   "base_branch": "codex/user-command-wal-pr3",
-  "base_commit": "59afd3f04a0c7455ffba652ae72b76f4f08362a2",
+  "base_commit": "a1b6bc4ef0ca4852aa66dadf6f4375fa952d0f15",
   "go_version": "go1.25.7 linux/amd64",
   "platform": "linux/amd64",
   "command_support_matrix_version": "TreeDB/docs/spec/verification.md and issue #1529 PR3.5 evidence update",
@@ -98,5 +98,5 @@
     "outer-leaf direct backend throughput is much lower than earlier inline-leaf artifacts; the refreshed numbers are the correct benchmark mode because the requested outer-leaf flag is no longer silently ignored",
     "pointer command_wal_v1 external-ref writes are correctness-fenced and currently much slower than legacy pointer writes (429.8 us/op vs 3.796 us/op in the refreshed DB microbench); this is explicit optimization debt before default cutover"
   ],
-  "evidence_generated_from_commit": "9be064b986c4411edd05de14db13416911567cf2"
+  "evidence_generated_from_commit": "160b6b81cf4089661be9868dd885d29b3832673d"
 }
