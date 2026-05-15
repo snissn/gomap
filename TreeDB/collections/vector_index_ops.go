@@ -52,14 +52,15 @@ func (c *Collection) RebuildVectorIndex(name string) (VectorIndexStatus, error) 
 	if err != nil {
 		return VectorIndexStatus{}, err
 	}
-	index, err := c.BuildVectorIndex(vectorIndexOptionsFromDefinition(def))
+	index, err := c.buildVectorIndex(vectorIndexOptionsFromDefinition(def), false)
 	if err != nil {
 		return VectorIndexStatus{}, err
 	}
-	native, err := index.saveNativeSnapshotLocked()
+	native, err := index.saveNativeSnapshotPrepared()
 	if err != nil {
 		return VectorIndexStatus{}, err
 	}
+	c.RegisterVectorIndex(index)
 	duration := collectionObservedElapsedSince(start)
 	index.mu.Lock()
 	index.lastRebuildDuration = duration
@@ -158,7 +159,7 @@ func (c *Collection) vectorIndexStatus(name string, inspectNativeRoot bool) (Vec
 		return status, nil
 	}
 	if !inspectNativeRoot {
-		status.NativeRootLoaded = true
+		status.NativeRootLoaded = status.RootID != 0 || len(catalog.overlayRootIDs(rootName)) != 0
 		status.NativeRootBytes = status.Stats.BytesDisk
 		status.RebuildNeeded = status.Stats.RebuildNeeded || status.Stats.SnapshotDirty
 		return status, nil

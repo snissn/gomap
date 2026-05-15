@@ -93,10 +93,12 @@ func (idx *VectorIndex) SaveNativeSnapshot() (VectorIndexLoadStatus, error) {
 	if err := c.flushBufferedWrites(); err != nil {
 		return status, err
 	}
-	return idx.saveNativeSnapshotLocked()
+	return idx.saveNativeSnapshotPrepared()
 }
 
-func (idx *VectorIndex) saveNativeSnapshotLocked() (VectorIndexLoadStatus, error) {
+// saveNativeSnapshotPrepared publishes the current graph after the caller has
+// already acquired the collection mutation barrier and flushed buffered writes.
+func (idx *VectorIndex) saveNativeSnapshotPrepared() (VectorIndexLoadStatus, error) {
 	status := VectorIndexLoadStatus{}
 	if idx == nil {
 		return status, errors.New("collections: vector index is nil")

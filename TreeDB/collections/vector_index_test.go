@@ -504,6 +504,36 @@ func TestCollectionVectorIndexInsertAndTombstone(t *testing.T) {
 	}
 }
 
+func TestCollectionVectorIndexInsertDocumentNoopsWhenVectorUnchanged(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	col := openVectorIndexTestCollection(t, d)
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("a"), []byte("b")},
+		[][]byte{
+			[]byte(`{"embedding":[1,0]}`),
+			[]byte(`{"embedding":[0,1]}`),
+		},
+	); err != nil {
+		t.Fatalf("insert seed: %v", err)
+	}
+	index, err := col.BuildVectorIndex(VectorIndexOptions{Field: "embedding", Metric: VectorMetricCosine, M: 4})
+	if err != nil {
+		t.Fatalf("build vector index: %v", err)
+	}
+	before := index.Stats()
+	if err := index.InsertDocument([]byte("a")); err != nil {
+		t.Fatalf("insert unchanged document: %v", err)
+	}
+	after := index.Stats()
+	if after.Nodes != before.Nodes || after.DeletedDocs != before.DeletedDocs || after.LiveDocs != before.LiveDocs {
+		t.Fatalf("unchanged insert mutated graph before=%+v after=%+v", before, after)
+	}
+}
+
 func TestCollectionVectorIndexTracksRegisteredMutations(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

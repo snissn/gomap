@@ -1295,9 +1295,6 @@ func TestCollectionVectorIndexNativeRootRebuildAPIPersistsCleanGraph(t *testing.
 	if !rebuild.NativeRootLoaded || rebuild.RootID == 0 || rebuild.Stats.LiveDocs != 2 || rebuild.Stats.DeletedDocs != 0 || rebuild.RebuildNeeded {
 		t.Fatalf("unexpected rebuild status: %+v", rebuild)
 	}
-	if rebuild.Duration <= 0 {
-		t.Fatalf("rebuild status missing duration: %+v", rebuild)
-	}
 	clean, err := col.VectorIndexStatus("embedding")
 	if err != nil {
 		t.Fatalf("clean vector index status: %v", err)

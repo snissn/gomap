@@ -213,6 +213,10 @@ type vectorIndexNeighbor struct {
 // BuildVectorIndex builds an in-memory vector secondary index from the current
 // live collection rows.
 func (c *Collection) BuildVectorIndex(opts VectorIndexOptions) (*VectorIndex, error) {
+	return c.buildVectorIndex(opts, true)
+}
+
+func (c *Collection) buildVectorIndex(opts VectorIndexOptions, register bool) (*VectorIndex, error) {
 	if c == nil {
 		return nil, errCollectionNil
 	}
@@ -249,7 +253,9 @@ func (c *Collection) BuildVectorIndex(opts VectorIndexOptions) (*VectorIndex, er
 	if err != nil {
 		return nil, err
 	}
-	c.RegisterVectorIndex(index)
+	if register {
+		c.RegisterVectorIndex(index)
+	}
 	return index, nil
 }
 
@@ -587,6 +593,12 @@ func (idx *VectorIndex) insertVectorLocked(documentID []byte, vector []float32) 
 	} else if len(vector) != idx.dimensions {
 		return fmt.Errorf("collections: vector field %q in document %q has dimension %d, want %d", idx.field, documentID, len(vector), idx.dimensions)
 	}
+	if nodeID, ok := idx.currentNode[string(documentID)]; ok && nodeID >= 0 && nodeID < len(idx.nodes) {
+		node := &idx.nodes[nodeID]
+		if !node.deleted && node.matchesVector(vector, idx.encoding) {
+			return nil
+		}
+	}
 	idx.tombstoneDocumentIDLocked(documentID)
 
 	nodeID := len(idx.nodes)
@@ -624,6 +636,19 @@ func (idx *VectorIndex) insertVectorLocked(documentID []byte, vector []float32) 
 		idx.markVectorMetaDirtyLocked()
 	}
 	return nil
+}
+
+func (node *vectorIndexNode) matchesVector(vector []float32, encoding VectorIndexEncoding) bool {
+	if node == nil {
+		return false
+	}
+	switch encoding {
+	case VectorIndexEncodingInt8:
+		quantized, quantScale := quantizeVectorIndexInt8(vector)
+		return node.quantScale == quantScale && slices.Equal(node.quantized, quantized)
+	default:
+		return slices.Equal(node.vector, vector)
+	}
 }
 
 func (idx *VectorIndex) newVectorIndexNode(documentID []byte, vector []float32, level int) vectorIndexNode {
@@ -1800,7 +1825,7 @@ func (idx *VectorIndex) Rebuild() error {
 		return errors.New("collections: vector index is nil")
 	}
 	start := time.Now()
-	rebuilt, err := idx.collection.BuildVectorIndex(VectorIndexOptions{
+	rebuilt, err := idx.collection.buildVectorIndex(VectorIndexOptions{
 		Name:                idx.name,
 		Field:               idx.field,
 		Metric:              idx.metric,
@@ -1810,7 +1835,7 @@ func (idx *VectorIndex) Rebuild() error {
 		EfConstruction:      idx.efConstruction,
 		EfSearch:            idx.efSearch,
 		RebuildDeletedRatio: idx.rebuildDeletedRatio,
-	})
+	}, false)
 	if err != nil {
 		return err
 	}
