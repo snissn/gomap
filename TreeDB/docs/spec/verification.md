@@ -192,425 +192,411 @@ matrix:
 - `data_outer=false,index_outer=false` (fast/control),
 - `data_outer=false,index_outer=true` (low-priority compatibility cell).
 
-## 11.5 Planned Collection WAL Durability Gate
+## 11.5 Planned User-Command WAL Durability Gate
 
-This section owns the canonical names of collection WAL acceptance tests. Design
-documents may list fault classes and invariants, but named tests and acceptance
-evidence are maintained here.
+This section owns the canonical planned test matrix for the user-command WAL
+implementation track. Design documents may list invariants, but named tests,
+fault classes, fuzz targets, benchmark artifact fields, and acceptance evidence
+are maintained here.
 
-Normative coverage matrix:
+The detailed TDD execution plan is tracked in
+https://github.com/snissn/gomap/issues/1529. That issue owns implementation
+sequencing and PR task breakdown. This section owns the durable verification
+requirements that the ticket and implementation PRs must satisfy.
+
+### 11.5.1 Normative Coverage Matrix
+
+In this matrix, `AppliedLSN` names the logical command stream boundary.
+`AppliedCommandLSN` is used only when the test or statement specifically refers
+to the V1 gated meta-page storage field.
 
 | Normative statement | Owner section | Required test/evidence | Status |
 |---|---|---|---|
-| WAL-on visibility implies process-crash recoverability for enabled collection WAL capabilities. | `collection-wal-durability-plan.md` target durability contract | `TestCollectionWALNoIndexInsertAckBeforeFlushRecovers`, `TestCollectionWALNoIndexInsertBatchAckBeforeFlushRecovers`, full-contract indexed recovery tests | planned |
-| WAL append failure before commit marker is not visible. | `collection-wal-durability-plan.md` failure contract | `TestCollectionWALAppendFailureRejectsBeforeVisibility` | planned |
-| Post-commit failure returns commit-ambiguous/fatal, not an ordinary retryable mutation error. | `collection-wal-durability-plan.md` failure contract | `TestCollectionWALPostCommitVisibleInstallFailureCommitAmbiguous`, native-wire post-commit ack-failure tests | planned |
-| Missing required side ref for a complete WAL transaction is a recovery error. | `collection-wal-durability-plan.md` side-ref recovery | `TestCollectionWALPartialFrameAndMissingSideRefNoPhantomRoots`, `TestRecoveryMissingRequiredSideRefFailsHard` | planned |
-| Applied watermark advances only across contiguous applied collection sequence. | `collection-wal-durability-plan.md` watermark contract | `TestCollectionWALWatermarkOutOfOrderTxnDoesNotSkipLowerUnapplied` | planned |
-| Root descriptors and applied watermark publish atomically. | `collection-wal-durability-plan.md` recovery states | `TestCollectionWALDescriptorAndWatermarkPublishAtomically`, `TestCollectionWALModelDescriptorWatermarkSplitRejected` | planned |
-| Drop/recreate with the same collection name does not replay old transactions. | `collection-wal-durability-plan.md` identity guards | `TestCollectionWALCollectionUIDDropRecreateDoesNotReplayByName` | planned |
-| Root, index, and catalog replay identity use stable UIDs/generations/digests, not names. | `collection-wal-durability-plan.md` identity guards, `storage-format.md` descriptor records | `TestCollectionWALCatalogDescriptorPersistsUIDGenerationEpochDigests`, `TestCollectionWALRootRefRejectsNameOnlyIdentity`, `TestCollectionWALIndexSameNameRecreateUsesNewUID` | planned |
-| Direct publish, disabled-memtable, and large-batch paths cannot bypass WAL-on guards. | `collection-wal-durability-plan.md` write-path coverage | `TestCollectionWALDirectPublishAndDisabledMemtablePathsCannotBypassWAL` | planned |
-| Read views pin pending value-log, leaf-log, and future column side refs until released. | `collection-wal-durability-plan.md`, `value-log-lifecycle.md` | `TestCollectionWALReadViewPinsLeafAndColumnSideRefs` | planned |
-| Native-wire replicated mutations carry `CatalogGuardV1` with resolved stable identities. | `native-wire-protocol.md` catalog guard section | `TestNativeWireCatalogGuardV1CanonicalizesStableIDs`, `TestNativeWireNameDropRecreateRaceDeterministicGuardFailure` | future |
-| Raft/local recoverability is not reported before local collection WAL durability. | `collection-wal-durability-plan.md`, `native-query-raft-roadmap.md` | `TestRaftApplyDoesNotAdvanceLocalRecoverableBeforeCollectionWAL` | future |
+| WAL-supported command visibility implies process-crash recoverability. | `user-command-wal.md` normal write path | `TestCommandWALInsertAckRecoverableBeforeCheckpoint`, `TestCommandWALDeleteAckRecoverableBeforeCheckpoint`, `TestCommandWALReplaceAckRecoverableBeforeCheckpoint` | planned |
+| V1 has no durable pending overlay; process visibility requires recoverable WAL plus normal-executor install. | `collections-write-domain.md` durability boundary | `TestCommandWALFrameDurableBeforeExecutorInstallNotVisible`, `TestCommandWALVisibleAckRecoverableBeforeCheckpoint` | planned |
+| Pre-frame failures are ordinary not-committed failures and leave no visible state. | `user-command-wal.md` normal write path | `TestCommandWALPreFrameValidationFailureLeavesNoMutation`, `TestCommandWALExternalRefPrepareFailureRejectsBeforeVisibility` | planned |
+| Post-recoverable-frame failures are commit-ambiguous or recovery-required, not retryable not-committed errors. | `user-command-wal.md` replay idempotency, `native-wire-protocol.md` ack policy | `TestCommandWALPostFramePublishFailureCommitAmbiguous`, `TestNativeWireCommandWALPublishFailureCommitAmbiguous` | planned |
+| Logical `AppliedLSN` is selected atomically with roots and stored in V1 as `AppliedCommandLSN`. | `user-command-wal.md` checkpoint and cleanup, `storage-format.md` command WAL target | `TestCommandWALRootsAndAppliedCommandLSNPublishAtomically`, model split-state rejection proof | planned |
+| `AppliedLSN` advances only over a contiguous command LSN prefix. | `user-command-wal.md` publish boundary | `TestCommandWALAppliedLSNContiguousPrefixOnly`, `TestCommandWALOutOfOrderPublishRejected` | planned |
+| Complete frames with missing required external refs fail closed. | `user-command-wal.md` recovery | `TestCommandWALMissingExternalRefFailsRecovery`, `TestCommandWALCorruptExternalRefFailsRecovery` | planned |
+| Terminal incomplete tails are ignored only when no complete commit marker exists. | `recovery.md` decoder outcomes | `TestCommandWALTerminalShortHeaderIgnored`, `TestCommandWALTruncatedCompleteFrameFailsClosed` | planned |
+| Unknown required versions, command kinds, and critical flags fail closed. | `storage-format.md` command WAL target | `TestCommandWALUnknownRequiredVersionFailsClosed`, `TestCommandWALUnknownRequiredKindFailsClosed`, `TestCommandWALUnknownCriticalFlagFailsClosed` | planned |
+| Old raw `commitlog.Record` payloads are unsupported after command WAL activation. | `storage-format.md` command WAL target | `TestCommandWALFeatureGateRejectsLegacyRawPayload` | planned |
+| Batch commands are one command frame, one LSN, and all-or-nothing. | `user-command-wal.md` batch atomicity | `TestCommandWALRawKVBatchOneLSNAtomic`, `TestCommandWALCollectionInsertBatchOneLSNAtomic`, `TestCommandWALOversizedBatchRejectsBeforeLSN` | planned |
+| Callback update APIs never replay Go callback code. | `user-command-wal.md` update API categories | `TestCommandWALCallbackUpdateLogsFinalReplacement`, `TestCommandWALRecoveryDoesNotInvokeCallback` | planned |
+| Resolver helpers are resolved before WAL append. | `user-command-wal.md` update API categories | `TestCommandWALSetNowStoresResolvedLiteral`, `TestCommandWALRecoveryDoesNotInvokeResolver` | planned |
+| Catalog/schema barriers cannot race lower unapplied commands. | `collections-write-domain.md` barrier semantics | `TestCommandWALCatalogMutationDrainsLowerLSNs`, `TestCommandWALCreateIndexRejectsUntilCatalogCommandSupported` | planned |
+| Read-only open fails when mutating command replay would be required. | `recovery.md`, `contracts.md` read-only open | `TestCommandWALReadOnlyOpenWithUnappliedFrameFailsRecoveryRequired` | planned |
+| Backup/restore either includes needed WAL/external refs or has durable cleanup proof. | `backup-restore.md` restore validation | `TestCommandWALBackupManifestRestoresUnappliedCommands`, `TestCommandWALRestoreMissingRequiredFrameFailsWithoutCleanupProof` | planned |
+| Native-wire deterministic command schemas align with local command WAL payload schemas. | `native-wire-protocol.md`, `user-command-wal.md` Raft/native-wire relationship | `TestCommandWALPayloadMatchesNativeWireDeterministicFixture`, `TestNativeWireAndLocalCommandDigestStable` | planned |
+| Raft/local recoverability is not reported before local command WAL publish and `AppliedLSN`. | `native-query-raft-roadmap.md` local apply layering | `TestRaftApplyDoesNotReportRecoverableBeforeCommandWALAppliedLSN` | future |
 
-Invariant:
-- Current indexed collection writes remain flush-boundary durable until the
-  full indexed collection WAL implementation lands.
-- Under the PR1-min guarded `NoIndexRowInsertOnly` capability, WAL-on
-  no-index row insert visibility implies crash recoverability from either
-  backend roots or a committed collection WAL transaction.
-- Under the full collection WAL contract, the same visibility-implies-
-  recoverability rule extends to indexed writes, update/delete, schema/index
-  barriers, async publishing, and future column roots.
-- Under `DurabilityWALOffRelaxed`, acknowledged writes before flush are not
-  promised after process crash, and collection WAL files must not be created for
-  unflushed writes.
-- Collection WAL recovery must publish root groups and applied watermarks
-  atomically, validate declared and embedded side refs, and clean only after a
-  safe watermark plus checkpoint boundary.
+### 11.5.2 Milestone Test Slices
 
-PR1-min required coverage:
+PR 1: typed commit-log frames and feature gate:
 
-- `TestCollectionWALFormatGoldenV1EmptySegment`
-- `TestCollectionWALFormatGoldenV1NoIndexInlineRootDelta`
-- `TestCollectionWALFormatGoldenV1DescriptorOpAndWatermark`
-- `TestCollectionWALFormatRejectsUnsupportedRequiredVersion`
-- `TestCollectionWALFormatRejectsUnknownCriticalSection`
-- `TestCollectionWALFormatSkipsUnknownNonCriticalSectionOnlyWhenAllowed`
-- `TestCollectionWALFormatRejectsMalformedLengthBeforeAllocation`
-- `TestCollectionWALFormatRejectsHeaderPayloadReplayAndTrailerCRCMismatch`
-- `TestCollectionWALNoIndexInsertAckBeforeFlushRecovers`
-- `TestCollectionWALNoIndexInsertBatchAckBeforeFlushRecovers`
-- `TestCollectionWALOffRelaxedNoIndexAckBeforeFlushDoesNotClaimRecovery`
-- `TestCollectionWALAppendFailureRejectsBeforeVisibility`
-- `TestCollectionWALCrashAfterCommitBeforePublishRecovers`
-- `TestCollectionWALCrashAfterPublishBeforeResponseIsIdempotent`
-- `TestCollectionWALDescriptorAndWatermarkPublishAtomically`
-- `TestCollectionWALCatalogDescriptorPersistsUIDGenerationEpochDigests`
-- `TestCollectionWALRootRefRejectsNameOnlyIdentity`
-- `TestCollectionWALCollectionUIDDropRecreateDoesNotReplayByName`
-- `TestCollectionWALReadOnlyOpenWithPendingWALFails`
-- `TestCollectionWALInlineCapRejectsBeforeVisibility`
-- `TestCollectionWALMissingUncleanedSegmentFailsOpen`
-- `TestCollectionWALIndexedSchemaUnsupportedBeforeStaging`
-- `TestCollectionWALIndexedAsyncUnsupported`
-- `TestCollectionWALUpdateUnsupportedBeforeMutation`
-- `TestCollectionWALDeleteUnsupportedBeforeMutation`
-- `TestCollectionWALValueLogPointerizationUnsupportedBeforeVisibility`
-- `TestCollectionWALColumnRootKindUnsupported`
-- `TestCollectionWALRootDeltaPayloadUnsupported`
-- `TestCollectionWALWALOffDoesNotCreateCollectionWAL`
-- `TestCollectionWALCheckpointRetainsSegments`
-- `TestCollectionWALCloseRetainsSegments`
-- `TestCollectionWALCleanupDisabledInPR1`
-- current flush-boundary regression tests remain green with the feature off.
+- `TestCommandWALFormatGoldenV1EmptySegment`;
+- `TestCommandWALFormatGoldenV1RawKVBatch`;
+- `TestCommandWALFormatGoldenV1CollectionInsertBatchByID`;
+- `TestCommandWALFormatGoldenV1CatalogMutationPlaceholder`;
+- `TestCommandWALFormatRejectsUnsupportedRequiredVersion`;
+- `TestCommandWALFormatRejectsUnknownCriticalFlag`;
+- `TestCommandWALFormatSkipsUnknownNonCriticalExtensionOnlyWhenAllowed`;
+- `TestCommandWALFormatRejectsMalformedLengthBeforeAllocation`;
+- `TestCommandWALFormatRejectsHeaderPayloadDigestAndTrailerMismatch`;
+- `TestCommandWALFeatureGateRejectsLegacyRawPayload`;
+- `TestCommandWALFeatureGateRequiresCleanLegacyWALBeforeActivation`;
+- `TestCommandWALNoCollectionSegmentFamilyCreated`;
+- `TestCommandWALSingleJournalOwnerRejectsSecondMutableWriter`;
+- `TestCommandWALExistingCoverageInventoryMapsLegacyWALTests`;
+- `TestCommandWALLegacyRawEncodingTestsHaveTypedFrameEquivalents`.
 
-Full-contract required coverage:
+PR 2: shared journal ownership and `AppliedCommandLSN` plumbing:
 
-- `TestCollectionWALFormatGoldenV1ValueLeafAndRootDeltaSideRefs`
-- `TestCollectionWALFormatGoldenV1LargeRootDeltaSidePayload`
-- `TestCollectionWALFormatGoldenV1TombstoneDelete`
-- `TestCollectionWALFormatGoldenV1CleanupRecordAndSegmentMetadata`
-- `TestCollectionWALOnRelaxedUpdateBatchAckBeforeFlushRecovers`
-- `TestCollectionWALOnRelaxedDeleteBatchAckBeforeFlushRecovers`
-- `TestCollectionWALOnRelaxedCreateCollectionAckReopens`
-- `TestCollectionWALOnRelaxedCreateIndexBackfillAckReopens`
-- `TestCollectionWALOnRelaxedCreateIndexUniqueConflictNoSchemaAfterReopen`
-- `TestCollectionWALOffRelaxedBufferedInsertLostWithoutFlush`
-- `TestCollectionWALOffRelaxedFlushEstablishesReopenBoundary`
-- `TestCollectionWALOffRelaxedCheckpointDrainsKnownDomains`
-- `TestCollectionWALOffRelaxedCloseDrainsSuccessfulWrites`
-- `TestCollectionWALSideRefFailureRejectsWriteBeforeVisibility`
-- `TestCollectionWALPostCommitVisibleInstallFailureCommitAmbiguous`
-- `TestCollectionWALPublishFailureReportedByFlushCheckpointClose`
-- `TestInsertBatchUniqueConflictBeforeWALLeavesNoPartialItems`
-- `TestUpdateBatchItemErrorBeforeWALLeavesNoPartialItems`
-- `TestDeleteBatchWALAppendFailureLeavesAllDocuments`
-- `TestCollectionWALIndexedInsertRecoverAtomically`
-- `TestCollectionWALIndexedUpdateChangedSecondaryRecoverAtomically`
-- `TestCollectionWALIndexedUpdateUnchangedSecondarySkipsSecondaryRootsAfterRecovery`
-- `TestCollectionWALIndexedDeleteRecoverAtomically`
-- `TestCollectionWALUniqueReuseAfterDeleteRecovery`
-- `TestCollectionWALIndexSameNameRecreateUsesNewUID`
-- `TestCollectionWALSchemaChangeDrainsLowerSeqBeforeVisible`
-- `TestCollectionWALDropIndexWithPendingOldIndexUIDCannotResurrectRoot`
-- `TestCollectionWALTemplateRootGuardRequired`
-- `TestCollectionWALTemplatePrimaryAndTemplateRootRecoverAtomically`
-- `TestColumnPartDescriptorGenerationDigestGuards`
-- `TestColumnCompactionPublishesSupersessionAndTargetDescriptorsAtomically`
-- `TestCollectionWALBufferedSameBaseRootTransactionsReplayByAccumulator`
-- `TestCollectionWALPartialFrameAndMissingSideRefNoPhantomRoots`
-- `TestCollectionWALWatermarkOutOfOrderTxnDoesNotSkipLowerUnapplied`
-- `TestCollectionWALRecoveryCrashAndCleanupAreIdempotent`
-- `TestCollectionWALGCRewriteCompactionSnapshotsProtectPendingSideRefs`
-- `TestCollectionWALCheckpointChosenRule`
-- `TestCollectionWALFlushPublishesAndAdvancesWatermark`
-- `TestCollectionWALFlushAllWaitsForAsyncPublishAndReopens`
-- `TestDBCheckpointPublishesPreCutCollectionWALAndReopens`
-- `TestDBCheckpointDoesNotReturnCleanWithUnpublishedPreCutDebt`
-- `TestDBCheckpointRacingWriteCut`
-- `TestDBCloseRacingInsertUpdateDeleteIndex`
-- `TestDBCloseSafeCleanupLeak`
-- `TestCollectionWALCloseSuccessfulWritesReopenVisible`
-- `TestCollectionWALReadOnlyOpenWithPendingWAL`
-- `TestCollectionWALStatsAppendSuccess`
-- `TestCollectionWALStatsAppendFailureBeforeCommit`
-- `TestCollectionWALStatsExpvarWhitelist`
-- `TestCollectionWALStatsNativeWire`
-- `TestCollectionWALErrorCategoriesStable`
-- `TestCollectionWALRedaction`
-- `TestCollectionWALMetricMonotonicity`
-- `TestRecoveryMissingRequiredSideRefFailsHard`
-- `TestRecoveryCorruptRequiredSideRefFailsHard`
-- `TestRecoveryUnsupportedVersionFailsWithCategory`
-- `TestRecoveryCleanupFailureSafeLeak`
-- `TestCollectionWALHealthCleanGolden`
-- `TestCollectionWALHealthPendingGolden`
-- `TestCollectionWALSafeDeleteDryRunGolden`
-- `TestCollectionWALTxnLookupGolden`
-- `TestVerifyCollectionWALSideRefsGolden`
-- `TestCollectionWALValueLogGCBlockedByPendingSideRef`
-- `TestCollectionWALValueLogGCReleasedAfterWatermarkCheckpoint`
-- `TestCollectionWALArtifactRedaction`
-- `TestCollectionWALModelDescriptorWatermarkSplitRejected`
-- `TestCollectionWALModelVisibleImpliesRecoverable`
-- `TestCollectionWALModelSideRefProtectHappensBeforeGuardRelease`
-- `TestCollectionWALModelDeterministicReplayDigest`
-- `TestCollectionWALModelStateClassifierExclusive`
-- `TestCollectionWALModelSkipUsesCollectionSeqOnly`
-- `TestCollectionWALModelMaintenanceGuardBlocksRewrite`
-- `TestCollectionWALModelRaftAppliedIndexRequiresLocalRecoverability`
-- `TestCollectionWALTypedPublishWrapperRejectsFreeFormSystemDelta`
-- `TestCollectionWALCostEstimatorMatchesEncoder`
-- `TestCollectionWALRootDeltaSpillThresholds`
-- `TestCollectionWALOversizedTransactionFailsBeforeAck`
-- `TestCollectionWALPendingDebtSoftStopHardLimits`
-- `TestCollectionWALBackpressureResumeWatermark`
-- `TestCollectionWALReplayAccumulatorSoftCapChunksOrSpills`
-- `TestCollectionWALReplayAccumulatorHardCapStopsRecovery`
-- `TestCollectionWALProtectedSideRefRetainedSegmentDebt`
-- `TestCollectionWALCleanupDebtBackpressure`
-- `TestCollectionWALSegmentRotationAndCheckpointRotation`
-- `TestCollectionWALDurableSyncBatchCaps`
-- `TestColumnWALSideRefCapacityLimits`
-- `TestNativewireInsertBatchWALAppendFailureNotCommitted`
-- `TestNativewireInsertBatchAckFlushedPublishFailureCommitAmbiguous`
-- `TestNativewireInsertBatchAckSyncedCheckpointFailureCommitAmbiguous`
-- `TestNativewireAckSyncedRejectedInWALOnRelaxed`
-- `TestNativewireResponseMetaActualAckAndCommitState`
-- `TestMongoGatewayInsertDocumentsDurabilityModeDocumented`
-- `TestMongoGatewayUpdateOrderedPartialSemantics`
-- `TestMongoGatewayDeleteOrderedPartialSemantics`
-- `TestMongoGatewayCreateIndexesUniqueConflictNoPartialSchema`
+- `TestCommandWALAppliedCommandLSNMetaFieldRoundTrip`;
+- `TestCommandWALMetaGateRejectsOldBinaryServingCommandWALDir`;
+- `TestCommandWALRootsAndAppliedCommandLSNPublishAtomically`;
+- `TestCommandWALPublishHelperRejectsRootsWithoutAppliedLSN`;
+- `TestCommandWALAppliedLSNContiguousPrefixOnly`;
+- `TestCommandWALCheckpointCleansOnlyCoveredSegments`;
+- `TestCommandWALCheckpointCrashBeforeCleanupReplaysIdempotently`;
+- `TestCommandWALCleanupManifestMissingBlocksSegmentDeletion`;
+- `TestCommandWALReadOnlyOpenWithUnappliedFrameFailsRecoveryRequired`;
+- `TestCommandWALExistingCheckpointCleanupTestsMappedToAppliedLSN`.
 
-Formal invariant mapping:
+PR 3: recovery dispatcher and raw KV command conversion:
 
-| Invariant | Required evidence |
+- `TestCommandWALRawSetDeleteBatchReplaysThroughNormalExecutor`;
+- `TestCommandWALRIDFencePreservedForRawKVBatch`;
+- `TestCommandWALCrashAfterFrameBeforeRootPublishRecovers`;
+- `TestCommandWALCrashDuringRootPublishSelectsOldTupleOrNewTuple`;
+- `TestCommandWALCrashAfterRootAppliedLSNBeforeCleanupSkipsFrame`;
+- `TestCommandWALRecoveryCrashDuringReplayResumesFromAppliedLSN`;
+- `TestCommandWALStrictCommandEffectWithoutAppliedLSNFailsClosed`;
+- `TestCommandWALIdempotentSkipRequiresDigestProof`;
+- `TestCommandWALExistingRawReplayTestsMappedToRawKVBatch`;
+- `TestCommandWALExistingRIDFenceTestsMappedToExternalRefFence`.
+
+PR 4: collection insert/delete by explicit ID:
+
+- `TestCommandWALCollectionInsertAckBeforeCheckpointRecovers`;
+- `TestCommandWALCollectionInsertBatchOneLSNAtomic`;
+- `TestCommandWALCollectionDeleteAckBeforeCheckpointRecovers`;
+- `TestCommandWALCollectionDeleteBatchOneLSNAtomic`;
+- `TestCommandWALInsertUniqueConflictBeforeFrameLeavesNoPartialItems`;
+- `TestCommandWALInsertDuplicateReplayUsesConfiguredIdempotencyRule`;
+- `TestCommandWALUnsupportedIndexedInsertModeFailsBeforeStagingUntilSupported`;
+- `TestCommandWALWALOffDoesNotCreateCommandFrameForFlushBoundaryWrites`.
+
+PR 5: collection update by explicit ID:
+
+- `TestCommandWALCallbackUpdateLogsFinalReplacement`;
+- `TestCommandWALRecoveryDoesNotInvokeCallback`;
+- `TestCommandWALDeclarativeSetStoresCanonicalOps`;
+- `TestCommandWALSetNowStoresResolvedLiteral`;
+- `TestCommandWALRecoveryDoesNotInvokeResolver`;
+- `TestCommandWALUpdateChangedSecondaryRecoversAtomically`;
+- `TestCommandWALUpdateUnchangedSecondaryPreservesIndexState`;
+- `TestCommandWALUpdateBatchOneLSNAtomic`;
+- `TestCommandWALUnsupportedUpdateOperatorFailsBeforeFrame`;
+- `TestCommandWALQueryWideUpdateRejectedInWALOnMode`.
+
+PR 6: catalog mutation commands:
+
+- `TestCommandWALCreateCollectionCommandReopens`;
+- `TestCommandWALCreateCollectionIdempotentRetrySameMetadata`;
+- `TestCommandWALCreateCollectionIncompatibleRetryFailsNoMutation`;
+- `TestCommandWALCreateIndexCommandDrainsLowerLSNs`;
+- `TestCommandWALDropIndexCommandDoesNotResurrectSameNameOldUID`;
+- `TestCommandWALCatalogEpochGuardRejectsStaleReplay`;
+- `TestCommandWALSchemaEpochGuardRejectsStaleReplay`.
+
+PR 7: matrix enforcement and drift tests:
+
+- `TestCommandWALSupportMatrixCoversMutatingCollectionRegistry`;
+- `TestCommandWALSupportMatrixCoversMongoGatewayMutations`;
+- `TestCommandWALSupportMatrixCoversNativeWireMutations`;
+- `TestCommandWALDocsRejectActiveCollectionWALReferencesOutsideDeprecatedDoc`;
+- `TestCommandWALDocsRequireAppliedCommandLSNAsV1Target`;
+- `TestCommandWALDocsRequireBatchAtomicityText`;
+- `TestCommandWALUnsupportedCommandReturnsStablePublicError`.
+
+PR 8: native-wire/Raft alignment closeout:
+
+- `TestCommandWALPayloadMatchesNativeWireDeterministicFixture`;
+- `TestNativeWireAndLocalCommandDigestStable`;
+- `TestNativeWireAckVisibleRequiresRootPublishAndAppliedLSN`;
+- `TestNativeWirePostFramePublishFailureCommitAmbiguous`;
+- `TestRaftApplyDoesNotReportRecoverableBeforeCommandWALAppliedLSN`;
+- `TestRaftCommandEntryAndLocalCommandPayloadUseSharedCanonicalSchema`.
+
+### 11.5.3 Crash and Fault-Injection Matrix
+
+Every WAL-supported command kind must run through a shared fault-injection
+harness. The harness must be deterministic and must record the injected point,
+expected public error, expected reopen behavior, and expected cleanup debt.
+
+Required cut points:
+
+| Cut point | Expected result |
 |---|---|
-| `I1` gap-free sequence | `TestCollectionWALWatermarkOutOfOrderTxnDoesNotSkipLowerUnapplied`; model transition test for missing lower same-collection sequence. |
-| `I2` WAL-before-visible | `TestCollectionWALModelVisibleImpliesRecoverable`; fault injection before/after side-ref prepare, WAL marker, and visible install. |
-| `I3` side refs before WAL | `TestCollectionWALPartialFrameAndMissingSideRefNoPhantomRoots`; side-ref closure fuzz target. |
-| `I4` WAL side-ref protection | `TestCollectionWALModelSideRefProtectHappensBeforeGuardRelease`; GC/rewrite interleaving model test. |
-| `I5` descriptor/watermark atomicity | `TestCollectionWALModelDescriptorWatermarkSplitRejected`; `TestCollectionWALTypedPublishWrapperRejectsFreeFormSystemDelta`. |
-| `I6` per-collection skip | `TestCollectionWALModelSkipUsesCollectionSeqOnly`; mixed-collection segment cleanup model test. |
-| `I7` whole-transaction publish | Indexed insert/update/delete recovery tests and root-group publish fault tests. |
-| `I8` checkpoint before cleanup | `TestCollectionWALRecoveryCrashAndCleanupAreIdempotent`; cleanup manifest corruption fixtures. |
-| `I9` deterministic replay | `TestCollectionWALModelDeterministicReplayDigest`; replay accumulator property test comparing live and recovery digests. |
-| `I10` no double apply | Repeated recovery after `S4 Applied` watermark and crash-after-publish tests. |
-| `I11` maintenance serialized | `TestCollectionWALModelMaintenanceGuardBlocksRewrite`; value-log GC/rewrite blocked-by-pending-side-ref tests. |
-| `I12` Raft local metadata | `TestCollectionWALModelRaftAppliedIndexRequiresLocalRecoverability`; future Raft apply crash matrix. |
-| `I13` WAL-off exception | `TestCollectionWALOffRelaxedNoIndexAckBeforeFlushDoesNotClaimRecovery`; WAL-off model branch. |
+| before validation completes | ordinary user error; no frame, no visibility |
+| after external-ref prepare starts but before protection | no frame; orphan prepare classified after recovery |
+| after external-ref protection but before frame append | no frame; protected ref released or quarantined by recovery artifact |
+| after partial frame header | terminal tail ignored only for active tail; sealed/nonterminal segment fails |
+| after complete frame before WAL sync boundary | relaxed modes follow their advertised boundary; durable mode must not acknowledge |
+| after complete recoverable frame before command apply | read-write recovery replays; read-only open fails recovery-required |
+| during command apply before root publish | copy-on-write partial pages are unreachable; recovery replays |
+| after root publish attempt before meta selection | recovery selects old tuple or fails closed; no split state is served |
+| after roots plus logical `AppliedLSN` selected before response | command is committed; API returns commit-ambiguous if response cannot be built |
+| after roots plus logical `AppliedLSN` before WAL cleanup | recovery skips covered frames and cleanup resumes idempotently |
+| during cleanup metadata write | cleanup is retried or leaked; missing frames are never tolerated without proof |
+| during recovery replay before publish | next open resumes from previous `AppliedLSN` |
+| during recovery replay after publish before cleanup | next open skips covered frames and resumes cleanup |
 
-The invariant table is evidence only when each entry points to an executable Go
-test, model-checkable transition test, fuzz target, or generated proof artifact
-recorded in `artifacts/collection-wal/<milestone>/acceptance.json`.
+Required command/data combinations:
 
-Acceptance artifacts:
-- The collection WAL gate requires exact byte fixtures, not only round-trip
-  tests. Each fixture must include raw bytes, decoded JSON or Go struct
-  expectation, replay digest expectation, checksum expectation, and a
-  re-encode-identical assertion.
-- Required fixture families:
-  - segment header v1 empty segment;
-  - minimal no-index transaction with one inline root delta;
-  - transaction with value-log, leaf-log, and root-delta side refs;
-  - transaction with descriptor op and watermark system-delta template;
-  - large root delta using side-payload ref;
-  - transaction with tombstone/delete entry;
-  - cleanup record and segment metadata;
-  - future unknown critical section rejection;
-  - future unknown noncritical section skip;
-  - unsupported version fail-closed;
-  - malformed length, header CRC, payload CRC, replay digest, and trailer CRC.
-- Every completed milestone must write
-  `artifacts/collection-wal/<milestone>/acceptance.json`.
-- Benchmark artifacts must include the storage matrix above, baseline/new
-  `benchstat` output, required metric rows from
-  `collection-wal-durability-plan.md`, and the pass/fail decision.
-- Benchmark artifacts must include a JSON record with `durability_mode`,
-  `sync_policy`, `segment_size_bytes`, `batch_docs`, `doc_size_bytes`,
-  `side_ref_classes`, `collection_count`, `backend`, `go_version`, and
-  `commit`. Required metric names include `collection_wal_append_ns/doc`,
-  `collection_wal_bytes/doc`, `collection_wal_docs/sec`,
-  `collection_wal_side_refs/doc`, `pending_collection_wal_bytes`,
-  `applied_watermark_lag_txns`, `gc_protected_side_ref_bytes`,
-  `cleanup_ns/segment`, `recovery_docs/sec`,
-  `recovery_root_delta_entries/sec`, `recovery_peak_heap_bytes`, `allocs/doc`,
-  and `bytes_allocated/doc`.
-- Resource-budget benchmark artifacts must include the phase-isolated columns
-  from `collection-wal-durability-plan.md`: mutation class, storage cell,
-  document format, doc bytes, key/value bytes, root deltas/transaction,
-  root-delta entries/doc, root-delta payload bytes/doc, collection WAL frame and
-  metadata bytes/doc, compressed bytes/doc, root-delta side-payload bytes/doc,
-  side-ref metadata bytes/doc, side-ref payload bytes/doc, protected side-ref
-  retained segment bytes, pending WAL bytes, pending side-payload bytes,
-  cleanable WAL bytes, cleanup debt bytes, applied watermark lag, oldest
-  unapplied age, ack p50/p95/p99, encode/append/prepare/publish/checkpoint
-  phase timings, sync batch txns/bytes, fsyncs/sec, recovery scan MB/sec,
-  recovery side refs/sec, peak heap/RSS, replay spill bytes, cleanup bytes/sec,
-  blocked writes, backpressure wait p99, and error count.
-- The benchmark gate fails when required columns are missing, when
-  formula-derived bytes/doc is exceeded by more than 10 percent, or when an
-  absolute ceiling from the resource accounting section is exceeded, even when
-  relative `benchstat` regression thresholds pass.
-- Required resource benchmark commands include
-  `cmd/collection_workload_bench`, `cmd/collection_bench_matrix`, and
-  `cmd/collection_bench_report`, or an equivalent `cmd/unified_bench`
-  collection WAL suite that emits the same schema.
-- Collection WAL observability tests must prove every required metric is emitted
-  on successful append, append failure before commit marker, replay success,
-  incomplete-tail skip, missing side-ref hard failure, and cleanup failure after
-  watermark/checkpoint.
-- Production persistent column-store writes may start only after the M7
-  column-store sign-off artifact links to green M1-M6 collection WAL evidence.
+- raw set/delete/batch with inline values;
+- raw set batch with value-log RID/external-ref fence;
+- collection insert/delete single item;
+- collection insert/delete batch with duplicate/conflict/no-op items;
+- collection replacement update from callback output;
+- declarative update with resolver literals;
+- catalog create collection and create index once supported;
+- command payload external refs for oversized logical payload bytes;
+- generated external files for future column-store apply outputs.
 
-Required collection WAL hardening fuzz targets:
+### 11.5.4 Model, Property, and Fuzz Testing
 
-- `FuzzCollectionWALDecodeTransaction`;
-- `FuzzCollectionWALDecodeTransactionNoPreChecksumAlloc`;
-- `FuzzCollectionWALDecodeSideRefs`;
-- `FuzzCollectionWALDecodeRootDelta`;
-- `FuzzCollectionWALRootDeltaPayloadStreaming`;
-- `FuzzCollectionWALRecoveryOrdering`;
-- `FuzzCollectionWALUnknownFieldsAndRefClasses`;
-- `FuzzCollectionWALPathCanonicalize`;
-- `FuzzCollectionWALValuePtrSideRefs`;
-- `FuzzNativeWireCollectionCommandToWALPlan`.
+Required state-machine models:
+
+| Model | Required properties |
+|---|---|
+| command LSN prefix model | `AppliedLSN` is contiguous; no higher LSN can publish while a lower LSN is uncovered unless in the same publish boundary |
+| root/meta tuple model | selected state is old roots plus old `AppliedLSN` or new roots plus new `AppliedLSN`; split states fail closed |
+| strict replay idempotency model | strict commands never skip on generic already-exists evidence; idempotent skip requires declared proof |
+| batch atomicity model | one user batch maps to one command LSN; item-level failure before frame leaves no visible item; post-frame failure is whole-command ambiguous |
+| external-ref retention model | prepared/protected refs cannot be GCed before frame abort or root reachability handoff |
+| read-only open model | complete unapplied command frames require recovery; stale modes are explicit and rejected by maintenance/backup |
+
+Required fuzz targets:
+
+- `FuzzCommandWALDecodeFrame`;
+- `FuzzCommandWALDecodeNoPreChecksumAlloc`;
+- `FuzzCommandWALDecodeExternalRefs`;
+- `FuzzCommandWALDecodePayloadByKind`;
+- `FuzzCommandWALRecoveryOrdering`;
+- `FuzzCommandWALUnknownFieldsAndCriticalFlags`;
+- `FuzzCommandWALPathCanonicalizeExternalRefs`;
+- `FuzzCommandWALValuePtrExternalRefs`;
+- `FuzzNativeWireCommandToLocalCommandPayload`;
+- `FuzzCommandWALBatchAtomicityModel`.
 
 Required fuzz properties: no panic, bounded allocation, no root publish on
 invalid bytes, no file deletion/quarantine from invalid bytes, deterministic
-error class for identical input, and no skip of a complete corrupt transaction
-in favor of a later same-collection transaction.
+error class for identical input, no skip of complete corrupt frames, no
+advancement of `AppliedLSN` without command effects, and no command effects
+without matching `AppliedLSN`.
 
-Required collection WAL hardening fixtures and tests:
+### 11.5.5 Hardening Fixtures and Negative Tests
 
-- `TestCollectionWALMaxEncodedTxnRejectsBeforeAlloc`;
-- `TestCollectionWALFrameLengthOverflowRejects`;
-- `TestCollectionWALVarintOverflowRejects`;
-- `TestCollectionWALRootDeltaCountLimitRejects`;
-- `TestCollectionWALSideRefCountLimitRejects`;
-- `TestCollectionWALDuplicateSideRefConflictingChecksumRejects`;
-- `TestCollectionWALUnknownRequiredRefClassFatal`;
-- `TestCollectionWALUnknownOptionalRefClassCannotCleanup`;
-- `TestCollectionWALBadFrameCRCCompleteRecordFailsOpen`;
-- `TestCollectionWALBadTxnCRCCompleteRecordFailsOpen`;
-- `TestCollectionWALTruncatedActiveTailIgnoredOnlyWithoutCommitMarker`;
-- `TestCollectionWALTruncatedSealedSegmentFailsOpen`;
-- `TestCollectionWALMiddleCorruptionBlocksLaterSeq`;
-- `TestCollectionWALMissingSeqNBlocksSeqNPlusOne`;
-- `TestCollectionWALDropRecreateSameNameDifferentUIDRejectsOldTxn`;
-- `TestCollectionWALRootRefOutsideCatalogSetRejects`;
-- `TestCollectionWALRootUIDKindGenerationMismatchRejects`;
-- `TestCollectionWALSchemaEpochMismatchRejects`;
-- `TestCollectionWALIndexDefinitionDigestMismatchRejects`;
-- `TestCollectionWALPublishRequiresAllChecks`;
-- `TestCollectionWALSideRefRelativePathDotDotRejects`;
-- `TestCollectionWALSideRefRelativePathAbsoluteRejects`;
-- `TestCollectionWALSideRefRelativePathWindowsDriveRejects`;
-- `TestCollectionWALSideRefRelativePathUNCRejects`;
-- `TestCollectionWALSideRefRelativePathBackslashRejects`;
-- `TestCollectionWALSideRefRelativePathNULRejects`;
-- `TestCollectionWALSideRefRelativePathEmptyComponentRejects`;
-- `TestCollectionWALSideRefPathFileIDMismatchRejects`;
-- `TestCollectionWALCollectionNameNeverUsedAsPath`;
+Required decoder and bounds tests:
+
+- `TestCommandWALMaxEncodedFrameRejectsBeforeAlloc`;
+- `TestCommandWALFrameLengthOverflowRejects`;
+- `TestCommandWALVarintOverflowRejects`;
+- `TestCommandWALExternalRefCountLimitRejects`;
+- `TestCommandWALDuplicateExternalRefConflictingChecksumRejects`;
+- `TestCommandWALUnknownRequiredExternalRefClassFatal`;
+- `TestCommandWALUnknownOptionalExternalRefClassCannotCleanup`;
+- `TestCommandWALBadFrameCRCCompleteRecordFailsOpen`;
+- `TestCommandWALBadPayloadDigestCompleteRecordFailsOpen`;
+- `TestCommandWALTerminalShortHeaderIgnored`;
+- `TestCommandWALTruncatedActiveTailIgnoredOnlyWithoutCommitMarker`;
+- `TestCommandWALTruncatedSealedSegmentFailsOpen`;
+- `TestCommandWALMiddleCorruptionBlocksLaterLSN`;
+- `TestCommandWALMissingLSNBlocksHigherLSN`;
+- `TestCommandWALNoAllocBeforeChecksumForHugeExternalRefCount`;
+- `TestCommandWALNoAllocBeforeChecksumForHugeStringLength`;
+- `TestCommandWALCompressedRawLenBombRejectsBeforeDecode`;
+- `TestCommandWALOffsetSizeOverflowRejects`;
+- `TestCommandWALUint64ToInt64OffsetOverflowRejects`;
+- `TestCommandWALLimitsMaxRecordSizeDisabledDoesNotDisableCommandCap`.
+
+Required identity and catalog tests:
+
+- `TestCommandWALDropRecreateSameNameDifferentUIDRejectsOldCommand`;
+- `TestCommandWALRootUIDKindGenerationMismatchRejects`;
+- `TestCommandWALSchemaEpochMismatchRejects`;
+- `TestCommandWALCatalogEpochMismatchRejects`;
+- `TestCommandWALIndexDefinitionDigestMismatchRejects`;
+- `TestCommandWALCollectionNameNeverUsedAsReplayIdentity`;
 - `TestNativeWireCatalogGuardV1CanonicalizesStableIDs`;
 - `TestNativeWireNameDropRecreateRaceDeterministicGuardFailure`;
-- `TestRaftMetadataIDsDeterministicAcrossReplicas`;
-- `TestCollectionWALOpenRejectsSymlinkDBRoot`;
-- `TestCollectionWALOpenRejectsSymlinkWALDir`;
-- `TestCollectionWALOpenRejectsWorldWritableWALDir`;
-- `TestCollectionWALOpenRejectsGroupWritableClassRoot`;
-- `TestCollectionWALSideRefOpenRejectsSymlinkComponent`;
-- `TestCollectionWALSideRefOpenRejectsSymlinkFinalFile`;
-- `TestCollectionWALSideRefCleanupDoesNotFollowSymlink`;
-- `TestCollectionWALSideRefCleanupRejectsHardlink`;
-- `TestCollectionWALPreparedRenameRejectsCrossDevice`;
-- `TestCollectionWALLockfileRejectsSymlink`;
-- `TestCollectionWALNoAllocBeforeChecksumForHugeRootCount`;
-- `TestCollectionWALNoAllocBeforeChecksumForHugeSideRefCount`;
-- `TestCollectionWALNoAllocBeforeChecksumForHugeStringLength`;
-- `TestCollectionWALCompressedRawLenBombRejectsBeforeDecode`;
-- `TestCollectionWALOffsetSizeOverflowRejects`;
-- `TestCollectionWALUint64ToInt64OffsetOverflowRejects`;
-- `TestCollectionWALLimitsMaxRecordSizeDisabledDoesNotDisableWALCap`;
-- `TestCollectionWALNativeWire64MiBCommandSpillsOrRejectsBeforeSideEffects`;
-- `TestCollectionWALCorruptErrorRedactsCollectionName`;
-- `TestCollectionWALMissingSideRefErrorRedactsRelativePathUnlessAdmin`;
-- `TestCollectionWALDuplicateKeyErrorRedactsDocumentID`;
+- `TestRaftMetadataIDsDeterministicAcrossReplicas`.
+
+Required local-file safety tests for external refs and recovery artifacts:
+
+- `TestCommandWALOpenRejectsSymlinkDBRoot`;
+- `TestCommandWALOpenRejectsSymlinkWALDir`;
+- `TestCommandWALOpenRejectsWorldWritableWALDir`;
+- `TestCommandWALOpenRejectsGroupWritableClassRoot`;
+- `TestCommandWALExternalRefOpenRejectsSymlinkComponent`;
+- `TestCommandWALExternalRefOpenRejectsSymlinkFinalFile`;
+- `TestCommandWALExternalRefCleanupDoesNotFollowSymlink`;
+- `TestCommandWALExternalRefCleanupRejectsHardlink`;
+- `TestCommandWALPreparedRenameRejectsCrossDevice`;
+- `TestCommandWALLockfileRejectsSymlink`;
+- `TestCommandWALCorruptErrorRedactsCollectionName`;
+- `TestCommandWALMissingExternalRefErrorRedactsRelativePathUnlessAdmin`;
+- `TestCommandWALDuplicateKeyErrorRedactsDocumentID`;
 - `TestNativeWireErrorRedactsDocuments`;
-- `TestCollectionWALMetricsUseUIDAndHashesNotNames`;
-- `TestForensicToolRawOutputRequiresExplicitFlag`.
+- `TestCommandWALMetricsUseUIDAndHashesNotNames`;
+- `TestCommandWALForensicToolRawOutputRequiresExplicitFlag`.
 
-Required collection WAL maintenance, backup, restore, and offline precondition
-tests:
+### 11.5.6 Maintenance, Backup, Restore, and Offline Preconditions
 
-- `TestCollectionWALValueLogGCSkipsWALOnlySideRef`;
-- `TestCollectionWALValueLogRewriteSkipsProtectedWALOnlySource`;
-- `TestCollectionWALCompactStorageAbortsOnCheckpointDebt`;
-- `TestCollectionWALSideRefPrepareGuardBlocksGCWindow`;
-- `TestCollectionWALLeafGenerationGCKeepsPendingLeafRef`;
-- `TestCollectionWALVacuumOnlinePublishesOrRejectsDirtyWAL`;
-- `TestCollectionWALBackupBarrierCleanCheckpointRestoresWithoutWALDebt`;
-- `TestCollectionWALBackupBarrierWALSnapshotRestoresPendingTxn`;
-- `TestCollectionWALFilesystemBackupWithoutBarrierUnsupported`;
-- `TestCollectionWALBackupIncludesValueLeafDictTemplateAndColumnSideRefs`;
-- `TestCollectionWALRestoreFailsWhenWALTxnMissingSidePayload`;
-- `TestCollectionWALRestoreAcceptsMissingCleanedSegmentOnlyWithCleanupManifest`;
-- `TestReadOnlyOpenRejectsUnappliedCollectionWAL`;
-- `TestReadOnlyOpenAllowsCleanCollectionWAL`;
+Required tests:
+
+- `TestCommandWALValueLogGCSkipsProtectedExternalRef`;
+- `TestCommandWALValueLogRewriteSkipsProtectedExternalRef`;
+- `TestCommandWALCompactStorageAbortsOnCommandWALDebt`;
+- `TestCommandWALExternalRefPrepareGuardBlocksGCWindow`;
+- `TestCommandWALLeafGenerationGCKeepsPendingLeafRef`;
+- `TestCommandWALVacuumOnlinePublishesOrRejectsDirtyWAL`;
+- `TestCommandWALBackupBarrierCleanCheckpointRestoresWithoutWALDebt`;
+- `TestCommandWALBackupBarrierWALSnapshotRestoresUnappliedCommand`;
+- `TestCommandWALFilesystemBackupWithoutBarrierUnsupported`;
+- `TestCommandWALBackupIncludesValueLeafDictTemplateAndColumnExternalRefs`;
+- `TestCommandWALRestoreFailsWhenCommandMissingExternalPayload`;
+- `TestCommandWALRestoreAcceptsMissingCleanedSegmentOnlyWithCleanupManifest`;
+- `TestReadOnlyOpenRejectsUnappliedCommandWAL`;
+- `TestReadOnlyOpenAllowsCleanCommandWAL`;
 - `TestReadOnlyStaleModeReportsDebtAndIsRejectedByMaintenance`;
-- `TestOpenReadOnlyNoLockRejectsDirtyCollectionWALForOfflineRewrite`;
-- `TestValueLogRewriteOfflineRejectsDirtyCollectionWAL`;
-- `TestVacuumIndexOfflineRejectsDirtyCollectionWAL`;
-- `TestOfflineMaintenanceRejectsUnclassifiedPreparedSideRefs`;
-- `TestOfflineMaintenanceAllowsCleanedCollectionWALWithManifest`;
-- `TestCollectionWALCheckpointPublishesBeforeCleanup`;
-- `TestCollectionWALCleanupRequiresDurableCheckpointBoundary`;
-- `TestCollectionWALSegmentCleanupDecodesEveryFrame`;
-- `TestCollectionWALCleanupDoesNotReleaseProtectionBeforeReachabilityHandoff`;
-- `TestCollectionWALPreparedUncommittedSideFilesQuarantinedAfterRestore`;
-- `TestCollectionWALQuarantinePurgeRequiresCheckpoint`.
+- `TestOpenReadOnlyNoLockRejectsDirtyCommandWALForOfflineRewrite`;
+- `TestValueLogRewriteOfflineRejectsDirtyCommandWAL`;
+- `TestVacuumIndexOfflineRejectsDirtyCommandWAL`;
+- `TestOfflineMaintenanceRejectsUnclassifiedPreparedExternalRefs`;
+- `TestOfflineMaintenanceAllowsCleanedCommandWALWithManifest`;
+- `TestCommandWALCheckpointPublishesAppliedLSNBeforeCleanup`;
+- `TestCommandWALCleanupRequiresDurableCheckpointBoundary`;
+- `TestCommandWALSegmentCleanupDecodesEveryFrame`;
+- `TestCommandWALCleanupDoesNotReleaseProtectionBeforeReachabilityHandoff`;
+- `TestCommandWALPreparedUncommittedExternalFilesQuarantinedAfterRestore`;
+- `TestCommandWALQuarantinePurgeRequiresCheckpoint`.
 
-Required non-mutating collection WAL CLI tooling:
+### 11.5.7 Observability, Tooling, and Acceptance Artifacts
 
-- `treemap collection-wal health --dir <db> --json` reports `db_dir_hash`,
+Every completed milestone must write
+`artifacts/command-wal/<milestone>/acceptance.json`. The artifact must include:
+
+- branch, commit, Go version, platform, durability mode, sync policy, and command
+  support matrix version;
+- list of passed unit tests, fuzz targets, race tests, model tests, and crash
+  harness scenarios;
+- golden fixture digests and re-encode-identical proof;
+- benchmark commands, inputs, and pass/fail thresholds;
+- metrics schema version and emitted metric names;
+- known unsupported command kinds and their public error behavior;
+- cleanup debt, oldest unapplied LSN, and external-ref retained-byte summaries.
+
+Required golden fixture families:
+
+- empty command WAL segment;
+- `RawKVBatch` with inline set/delete;
+- `RawKVBatch` with value-log external refs;
+- `CollectionInsertBatchByID`;
+- `CollectionDeleteBatchByID`;
+- `CollectionReplaceBatchByID`;
+- `CollectionUpdateByIDOps` with resolved literals;
+- catalog mutation placeholder or explicit WAL-on rejection fixture;
+- command-payload external ref;
+- cleanup record and segment metadata;
+- unknown critical extension rejection;
+- unknown noncritical extension skip;
+- unsupported version fail-closed;
+- malformed length, frame CRC, payload digest, and commit marker corruption.
+
+Required non-mutating CLI tooling:
+
+- `treemap command-wal health --dir <db> --json` reports `db_dir_hash`,
   `format_version`, `generated_at_unix_nano`, `overall_state`,
   `safe_to_restart`, `safe_to_backup`, `safe_to_compact`,
-  `requires_recovery`, `requires_operator_action`, `metrics`, `collections`,
-  `segments`, `pending_transactions`, `protected_side_refs`, `cleanup_debt`,
-  `gc_blockers`, `last_recovery`, and `errors`.
-- `treemap collection-wal safe-delete --dir <db> --json --dry-run` classifies
-  files without mutation. Per-file fields are `file_id`, `relative_path`,
-  `path_hash`, `class`, `bytes`, `status`, `safe_to_delete`, `delete_reason`,
-  `blocking_reason`, `blocking_txn_ids`, `blocking_collection_uid_hashes`,
-  `blocking_side_ref_ids`, `blocking_snapshot_ids`, `requires_checkpoint`,
+  `requires_recovery`, `requires_operator_action`, `metrics`, `segments`,
+  `pending_commands`, `protected_external_refs`, `cleanup_debt`, `gc_blockers`,
+  `last_recovery`, and `errors`.
+- `treemap command-wal safe-delete --dir <db> --json --dry-run` classifies files
+  without mutation. Per-file fields are `file_id`, `relative_path`, `path_hash`,
+  `class`, `bytes`, `status`, `safe_to_delete`, `delete_reason`,
+  `blocking_reason`, `blocking_command_ids`, `blocking_lsn_ranges`,
+  `blocking_external_ref_ids`, `blocking_snapshot_ids`, `requires_checkpoint`,
   `requires_recovery`, and `requires_quarantine`.
-- `treemap collection-wal txn --dir <db> --txn-id <id> --json` and
-  `treemap collection-wal txn --dir <db> --wallsn <n> --json` map one
-  transaction to `txn_id`, `wallsn`, `segment_id`, `segment_offset`,
-  `collection_uid`, `collection_uid_hash`, `collection_generation`,
-  `collection_seq`, `depends_on_collection_seq`, `schema_epoch`,
-  `catalog_epoch`, `base_root_id`, `base_root_digest`, `root_name_hashes`,
-  `root_delta_count`, `side_refs`, `record_checksum_crc32c`, `replay_digest`,
-  `applied_watermark_seq`, `watermark_state`, `replay_state`, and
-  `cleanup_state`.
-- `verify --dir <db> --read-only --collection-wal --side-refs --json` verifies
-  collection WAL side-ref closure without mutation. JSON fields include
-  `collection_wal_checked`, `roots_checked`, `root_deltas_checked`,
-  `side_refs_declared`, `side_refs_canonical`, `side_refs_present`,
-  `side_refs_missing`, `side_refs_corrupt`, `side_ref_closure_errors`,
-  `watermark_errors`, `cleanup_manifest_errors`, and `result`.
-  It must detect declared/canonical side-ref mismatches, missing side-ref files,
-  checksum/digest mismatches, roots that point past the applied watermark, and
-  cleanup manifests that claim safe deletion while a root or pending WAL
-  transaction still references the side file.
-- `treemap collection-wal classify --dir <db> --json` parses collection WAL
-  segment headers, frames, decoder outcomes, error categories, side-ref
-  summaries, and redacted transaction summaries. The existing `wal_classify`
-  value-log-oriented command must either be renamed to `vlog_classify` or kept
-  explicitly documented as value-log-only to avoid operator confusion.
+- `treemap command-wal command --dir <db> --command-id <id> --json` and
+  `treemap command-wal command --dir <db> --lsn <n> --json` map one command to
+  `command_id`, `lsn`, `kind`, `scope`, `segment_id`, `segment_offset`,
+  `catalog_epoch`, `schema_epoch`, `payload_digest`, `external_refs`,
+  `result_assertions`, `applied_lsn_state`, `replay_state`, and `cleanup_state`.
+- `verify --dir <db> --read-only --command-wal --external-refs --json` verifies
+  command WAL external-ref closure without mutation. JSON fields include
+  `command_wal_checked`, `roots_checked`, `external_refs_declared`,
+  `external_refs_canonical`, `external_refs_present`, `external_refs_missing`,
+  `external_refs_corrupt`, `external_ref_closure_errors`, `applied_lsn_errors`,
+  `cleanup_manifest_errors`, and `result`.
+- `treemap command-wal classify --dir <db> --json` parses command WAL segment
+  headers, frames, decoder outcomes, error categories, external-ref summaries,
+  and redacted command summaries. The existing `wal_classify` value-log-oriented
+  command must either be renamed to `vlog_classify` or kept explicitly
+  documented as value-log-only to avoid operator confusion.
 
-Required safe-delete statuses are `safe_cleaned_segment`,
-`pending_collection_wal`, `protected_side_ref`, `orphan_prepared_side_ref`,
-`missing_required_side_ref`, `corrupt_required_side_ref`,
+Required safe-delete statuses are `safe_cleaned_segment`, `pending_command_wal`,
+`protected_external_ref`, `orphan_prepared_external_ref`,
+`missing_required_external_ref`, `corrupt_required_external_ref`,
 `cleanup_manifest_required`, `snapshot_pinned`, and `unknown_unclassified`.
 
-The collection WAL verification mode is read-only by default. Any repair,
-vacuum, cleanup, or quarantine mutation must require an explicit mutating flag
-such as `--repair`, `--vacuum-index`, or a future `--mutate`.
+The command WAL verification mode is read-only by default. Any repair, vacuum,
+cleanup, or quarantine mutation must require an explicit mutating flag such as
+`--repair`, `--vacuum-index`, or a future `--mutate`.
 
-Docs lint should enforce the observability contract once the collection WAL
+Required metric prefix: `treedb.command_wal.`. Required metrics include:
+`append_ns/doc`, `bytes/doc`, `commands/sec`, `external_refs/doc`,
+`pending_bytes`, `applied_lsn_lag`, `gc_protected_external_ref_bytes`,
+`cleanup_ns/segment`, `recovery_commands/sec`, `recovery_payload_bytes/sec`,
+`recovery_external_refs/sec`, `recovery_peak_heap_bytes`, `allocs/doc`, and
+`bytes_allocated/doc`.
+
+Resource-budget benchmark artifacts must include `durability_mode`,
+`sync_policy`, `segment_size_bytes`, `command_kind`, `batch_docs`,
+`doc_size_bytes`, `payload_format`, `external_ref_classes`, `collection_count`,
+`backend`, `go_version`, and `commit`. Phase timings must include validate,
+resolve helpers, callback execution, external-ref prepare, WAL encode, WAL
+append, WAL sync, executor apply, root publish, `AppliedLSN` publish, checkpoint,
+cleanup, and recovery replay.
+
+The benchmark gate fails when required columns are missing, when formula-derived
+bytes/doc is exceeded by more than 10 percent, or when an absolute ceiling from
+resource accounting is exceeded, even when relative `benchstat` regression
+thresholds pass. Required harnesses may use `cmd/collection_workload_bench`,
+`cmd/collection_bench_matrix`, `cmd/collection_bench_report`, or an equivalent
+`cmd/unified_bench` command WAL suite that emits the same schema.
+
+Docs lint should enforce the observability contract once command WAL
 implementation starts. Required lint checks:
 
-- `collection-wal-durability-plan.md` contains the stable
-  `treedb.collection_wal.` metric prefix table;
+- `user-command-wal.md` owns the active command support matrix;
+- active specs outside `collection-wal-durability-plan.md` do not describe
+  `wal/collection-l*.log`, `internal/collectionwal`, `CollectionSeq`, `WALLSN`,
+  or collection applied watermarks as active implementation targets;
+- `storage-format.md` names `AppliedCommandLSN` as the V1 storage target;
 - `recovery.md` contains the stable recovery error category table;
-- `verification.md` contains the required `treemap collection-wal health`,
-  `safe-delete`, `txn`, `classify`, and `verify --collection-wal` command names;
+- `verification.md` contains the required `treemap command-wal health`,
+  `safe-delete`, `command`, `classify`, and `verify --command-wal` command names;
 - the operator runbook states include `clean`, `pending`, `recovery_required`,
   `corrupt`, and `cleanup_debt`.
+
+Production persistent column-store writes may start only after this command WAL
+verification gate links to green typed-frame, `AppliedCommandLSN`, collection
+command, catalog barrier, external-ref, backup/restore, and read-only-open
+evidence.
 
 ## 12. Collections Document Formats
 

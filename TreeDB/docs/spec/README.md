@@ -73,11 +73,14 @@ Given pre-alpha status, this is a living spec that tracks implementation.
   - write pipeline and durability semantics for all durability modes.
 - `TreeDB/docs/spec/recovery.md`
   - open-time recovery pipeline, replay ordering, truncated tail behavior, failure modes.
+- `TreeDB/docs/spec/user-command-wal.md`
+  - target user-command WAL, applied-LSN checkpointing, command support policy,
+    and PR milestones for durable-at-ack mutation recovery.
 - `TreeDB/docs/spec/value-log-lifecycle.md`
   - retention, GC, rewrite, and operational lifecycle of value-log segments.
 - `TreeDB/docs/spec/backup-restore.md`
   - restorable file set, live backup barrier, restore validation, and
-    quarantine/purge requirements for collection WAL side refs.
+    quarantine/purge requirements for command-WAL external refs.
 - `TreeDB/docs/spec/native-wire-protocol.md`
   - native binary protocol v1 for code that advertises native-wire support;
     distributed/Raft behavior remains target behavior until cluster mode lands.
@@ -86,14 +89,19 @@ Given pre-alpha status, this is a living spec that tracks implementation.
 
 ## Target Gates (Normative Target, Not Current Behavior)
 
+- `TreeDB/docs/spec/user-command-wal.md`
+  - active target contract for extending WAL coverage to current deterministic
+    user commands and future command admission policy.
+  - This supersedes the collection-specific physical/root-delta WAL target for
+    future implementation work.
 - `TreeDB/docs/spec/collection-wal-durability-plan.md`
-  - normative target contract and implementation gate for collection
+  - deprecated target contract and historical design record for collection
     WAL/root-group durability.
-  - Until its acceptance milestones pass, current collection writes remain
-    governed by `collections-write-domain.md` and are flush-boundary durable,
-    not durable-at-ack.
-  - Downstream specs may cite this document as a blocker or target contract,
-    but must label referenced behavior as target behavior until the gate lands.
+  - Do not expand this plan feature-by-feature; use
+    `user-command-wal.md` for new WAL implementation work.
+  - Downstream specs may cite this document for historical external-ref and
+    recovery risk analysis, but new durable-at-ack planning should cite
+    `user-command-wal.md`.
 
 ## Design Proposals (Non-Normative)
 
@@ -138,33 +146,34 @@ Given pre-alpha status, this is a living spec that tracks implementation.
 |---|---|---|
 | Durability mode matrix | `write-path-and-durability.md` | `contracts.md`, public README and supporting docs summarize only. |
 | Current collection flush-boundary durability | `collections-write-domain.md` | `contracts.md`, `verification.md`. |
-| Target collection durable-at-ack WAL contract | `collection-wal-durability-plan.md` | `write-path-and-durability.md`, `recovery.md`, `verification.md`. |
+| Target user-command WAL contract | `user-command-wal.md` | `write-path-and-durability.md`, `recovery.md`, `verification.md`. |
+| Deprecated collection root-delta WAL target | `collection-wal-durability-plan.md` | Historical external-ref and recovery risk analysis only. |
 | Current recovery algorithm | `recovery.md` | `storage-format.md`, `verification.md`. |
 | Durable bytes and file names | `storage-format.md` | `recovery.md`, `architecture.md`, `backup-restore.md`. |
-| Value-log and split leaf-log lifecycle | `value-log-lifecycle.md` | `storage-format.md`, `collection-wal-durability-plan.md`. |
-| Generic collection WAL side refs and side files | `collection-wal-durability-plan.md` | `value-log-lifecycle.md`, future column-store docs. |
+| Value-log and split leaf-log lifecycle | `value-log-lifecycle.md` | `storage-format.md`, `user-command-wal.md`, `collection-wal-durability-plan.md` for historical external-ref context. |
+| Command-WAL external refs and side files | `user-command-wal.md` | `value-log-lifecycle.md`, future column-store docs. |
 | Public API semantics | `contracts.md` | `write-path-and-durability.md`, `collections-write-domain.md`. |
-| Native-wire ack policies | `native-wire-protocol.md` | `collection-wal-durability-plan.md`, `native-query-raft-roadmap.md`. |
-| Raft/local apply layering | `native-query-raft-roadmap.md` | `native-wire-protocol.md`, `collection-wal-durability-plan.md`. |
+| Native-wire ack policies | `native-wire-protocol.md` | `user-command-wal.md`, `native-query-raft-roadmap.md`. |
+| Raft/local apply layering | `native-query-raft-roadmap.md` | `native-wire-protocol.md`, `user-command-wal.md`. |
 | Verification mapping | `verification.md` | all normative specs. |
 
 ## Terminology Ownership
 
 TreeDB-wide storage terms (`value log`, `leaf log`, `commit log`,
 `ValuePtr`) are owned by `storage-format.md` and `value-log-lifecycle.md`.
-Collection WAL lifecycle terms (`durable-at-ack`, `flush-boundary durable`,
-`recoverable`, `published`, `checkpointed`, `cleanable`, `side ref`,
-`side file`, `root group`, `applied watermark`, `CollectionSeq`, `WALLSN`)
-are owned by `collection-wal-durability-plan.md#3-definitions` until the target
-contract lands; supporting docs must link there instead of redefining them.
+User-command WAL lifecycle terms (`CommandEnvelope`, `LSN`, `AppliedLSN`,
+`WAL-supported`, `WAL-rejected`, `WAL-off-only`) are owned by
+`user-command-wal.md`. Deprecated collection root-delta WAL terms
+(`CollectionSeq`, `WALLSN`, `root group`, `applied watermark`) remain defined in
+`collection-wal-durability-plan.md` for historical design context only.
 
 ## Open Questions Index
 
 Open questions remain in their owner documents, but this index records where
 blocking questions live:
 
-- Collection WAL durability/recovery questions:
-  `collection-wal-durability-plan.md`.
+- User-command WAL durability/recovery questions:
+  `user-command-wal.md`.
 - Native-wire protocol questions: `native-wire-protocol.md`.
 - Raft sequencing and local recoverability questions:
   `native-query-raft-roadmap.md`.

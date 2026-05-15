@@ -2,14 +2,16 @@
 
 Status: proposal, non-normative.
 
-Production persistent column-store collection writes are blocked until
-`TreeDB/docs/spec/collection-wal-durability-plan.md` M7 sign-off links to green
-M1-M6 collection WAL evidence. Before that gate, column-store work is limited
-to docs, benchmarks, pure codecs, filters/search packages, and isolated
-encode/decode tests that do not publish persistent collection roots. Persistent
-column-store APIs, column part descriptor roots, secondary indexes pointing at
-column-store rows, column-file side refs in published roots, and crash/reopen
-safety claims for column-store writes are blocked.
+Production persistent column-store collection writes are blocked until the
+user-command WAL plan has green evidence for typed command frames,
+`AppliedCommandLSN` root publication, raw replay conversion, explicit-ID
+collection batches, catalog mutation barriers, and external-ref
+prepare/recovery. Before that gate, column-store work is limited to docs,
+benchmarks, pure codecs, filters/search packages, and isolated encode/decode
+tests that do not publish persistent collection roots. Persistent column-store
+APIs, column part descriptor roots, secondary indexes pointing at column-store
+rows, column-file external refs in published roots, and crash/reopen safety
+claims for column-store writes are blocked.
 
 Target TreeDB source studied:
 `https://github.com/snissn/gomap/tree/874737704bd8cdcd1add40c5d2316f03544b1219`
@@ -349,12 +351,13 @@ collections, with additional roots:
 <collection>/index/<name>       existing secondary roots, column-store aware
 ```
 
-The column-store root-kind inventory is part of the collection WAL contract.
-Every root above is either published in the same collection WAL transaction as
-the corresponding mutation or is absent from the first implementation. PR1 uses
-the existing secondary-root naming convention, `<collection>/index/<name>`.
+The column-store root-kind inventory must be reflected in the user-command WAL
+matrix before column-store mutations can claim durable-at-ack behavior. Every
+root above is either published by a `WAL-supported` command frame plus
+`AppliedCommandLSN` boundary, or is absent from the first implementation. PR1 uses the
+existing secondary-root naming convention, `<collection>/index/<name>`.
 `<collection>/secondary/<name>` is not a second persistent naming scheme unless
-a later migration explicitly introduces it and updates the WAL root-kind mapping.
+a later migration explicitly introduces it and updates the command WAL matrix.
 
 The first implementation should keep the existing primary root as
 `id -> row-locator`. A row locator is small and B-tree-friendly:
@@ -428,8 +431,8 @@ Contract:
 - direct column scans may use a secondary index result as a row-id filter and
   decode only matching projected granules;
 - updates publish old-index-entry deletes and new-index-entry inserts in the
-  same root group as primary locator changes, column delta-part descriptors,
-  delete bitmaps, and system-root metadata;
+  same backend durability boundary as primary locator changes, column delta-part
+  descriptors, delete bitmaps, and system-root metadata;
 - compaction rewrites column parts but must not change logical secondary index
   contents unless primary ids or indexed values change.
 
@@ -460,10 +463,9 @@ ColumnPartDescriptor {
     PartID           uint64
     PartKind         uint8 // base, insert delta, update delta, compacted
     SchemaVersion    uint32
-    CreationWALLSN   uint64
-    CreationCollectionSeq uint64
+    CreatedByCommandLSN uint64 optional diagnostic
     ManifestRef      optional ColumnFileRef
-    SideRefDigest    bytes optional
+    ExternalRefDigest bytes optional
     CodecRegistryVersion uint32 optional
     RowCount         uint32
     VisibleRowCount  uint32
@@ -523,13 +525,15 @@ ColumnFileRef {
 }
 ```
 
-A `ColumnPartDescriptor` that references external bytes must be WAL-side-ref
-closed. The descriptor or its manifest must allow recovery to enumerate every
-`ColumnFileRef`, delete bitmap ref, filter ref, dictionary ref, and external
-compression metadata ref without executing user code. `SideRefDigest`, when
-present, is a digest of the canonical sorted required side-ref set for the
-descriptor graph and must match the collection WAL transaction's side-ref
-closure.
+A `ColumnPartDescriptor` that references external bytes must be external-ref
+closed at publish time. The descriptor or its manifest must allow recovery and
+GC to enumerate every `ColumnFileRef`, delete bitmap ref, filter ref,
+dictionary ref, and external compression metadata ref without executing user
+code. `ExternalRefDigest`, when present, is a digest of the canonical sorted
+external-file set for the descriptor graph and must match the publish
+reachability closure. It is not the command payload digest and it must not make
+physical column descriptors, root deltas, locators, or marks part of the
+user-command WAL payload.
 
 ### 6.3 Column File Layout
 
@@ -542,7 +546,7 @@ Column files use a staged prepare namespace before publication:
 ```text
 Dir/maindb/columns/
     .prepare/
-        txn-<wallsn>/
+        cmd-<lsn>/
             part-<part-id>/
                 manifest.tcs1
                 ...
@@ -552,10 +556,10 @@ The prepare manifest names the final relative path, size, checksum, `PartID`,
 `FileID`, schema version, compression pipeline, dictionary ids, and owning
 collection id for every file/range. Recovery owns both prepare and final
 namespaces. Files in either namespace that are not reachable from active roots,
-pending collection WAL, snapshots, or live collection read views are reclaimed or
-quarantined by the column file GC policy. `PartID` and `FileID` values observed
-in unclassified prepare/final directories remain reserved until recovery
-classifies them.
+unapplied command-payload refs, snapshots, or live collection read views are
+reclaimed or quarantined by the column file GC policy. `PartID` and `FileID`
+values observed in unclassified prepare/final directories remain reserved until
+recovery classifies them.
 
 The recommended physical layout is manifest-driven:
 
@@ -858,10 +862,12 @@ primary ids:
 - use the same fixed schema, substreams, codecs, checksums, granules, block
   directory, and part descriptor shape as insert/base parts;
 - sort rows by primary id inside the part;
-- update the primary root so each changed id points directly to the replacement
-  row locator;
-- hide old locators for changed rows with tombstones/delete bitmaps;
-- update secondary indexes for changed rows in the same root group.
+- during command apply, update the primary root so each changed id points
+  directly to the replacement row locator;
+- during command apply, hide old locators for changed rows with
+  tombstones/delete bitmaps;
+- during command apply, update secondary indexes for changed rows in the same
+  root publish boundary.
 
 Partial-column deltas can be studied later, but they are out of scope for the
 first format because they complicate row reconstruction, secondary-index
@@ -880,24 +886,29 @@ Update model:
 4. The part builder writes that batch as one or more update-delta column parts
    using the same `TCS1` substreams, codecs, checksums, marks, and statistics
    as normal parts.
-5. The write publishes, in one collection WAL transaction and one root group:
+5. The durable command-WAL record is the accepted logical update command, such
+   as replace/delete/update by explicit primary ids, plus any command-payload
+   external refs needed to replay that logical command. It is not a record of
+   primary locator deltas, mark deltas, secondary-index deltas, part descriptor
+   writes, or count metadata.
+6. Applying that command publishes, in one backend durability boundary:
    - new update-delta part descriptors;
-   - all required column side refs for those parts;
+   - external-file reachability for generated column files;
    - primary locator changes from old rows to replacement rows for changed ids;
    - delete bitmap/tombstone entries that hide old row locators for changed ids;
    - secondary index deletes for old indexed values from changed rows;
    - secondary index inserts for new indexed values from changed rows;
    - count/visibility metadata deltas when present;
-   - the applied collection watermark update in the backend publish commit.
-6. Reads see the newest primary locator for each id and treat tombstoned
+   - `AppliedCommandLSN` advancement for the command LSN.
+7. Reads see the newest primary locator for each id and treat tombstoned
    locators as invisible.
-7. Maintenance compacts base parts, insert deltas, update deltas, and delete
+8. Maintenance compacts base parts, insert deltas, update deltas, and delete
    bitmaps into new base parts.
-8. The compaction publish removes or supersedes the compacted source part
+9. The compaction publish removes or supersedes the compacted source part
    descriptors and their superseded delete/mark metadata from the new active
    descriptor roots, while old snapshot roots keep those descriptors reachable
    for existing readers.
-9. Old parts become unreachable from active roots and are reclaimed by column
+10. Old parts become unreachable from active roots and are reclaimed by column
    file GC or rewrite after snapshots release them.
 
 Small foreground updates can batch in memory briefly to amortize part-builder
@@ -1082,11 +1093,11 @@ successor, and dictionary selection should support payload classes such as
 `column/<collection>/<column_id>/<substream>` rather than only one global
 value-log class.
 
-Decode stability is part of the WAL side-ref contract. Codec ids, codec
+Decode stability is part of the command-WAL external-ref contract. Codec ids, codec
 parameters, codec registry version, dictionary ids, dictionary registry version,
 and external compression metadata refs must be persisted in the descriptor or
 manifest. Any external dictionary or compression metadata object required to
-decode a published column payload is a required collection WAL side ref and must
+decode a published column payload is a required command-WAL external ref and must
 remain protected until every dependent payload is unreachable.
 
 ### 7.3 ClickHouse Codec Application
@@ -1406,7 +1417,7 @@ using an exact posting/bitmap index.
 
 Persisted count and visibility aggregates are root/system deltas. Inserts,
 deletes, update-delta publishes, compaction, and recompression must publish
-count/visibility changes in the same collection WAL transaction and backend root
+count/visibility changes in the same command-WAL command and backend root
 group as primary locators, part descriptors, delete bitmaps, filters, and
 secondary-index changes.
 
@@ -1420,19 +1431,29 @@ metadata, but it must respect TreeDB snapshots and delete bitmaps.
 For `InsertBatch(ids, documents)`:
 
 1. Parse/validate documents through the existing format path.
-2. Extract typed schema columns into a `ColumnBatch`.
-3. Build secondary index runs using existing planner logic.
-4. Build one or more column parts.
-5. Build primary locator run.
-6. Publish roots as one ordered root group.
+2. In WAL-on V1, lower the accepted API call to one logical
+   `CollectionInsertBatchByID` command frame with explicit ids and document
+   payload bytes or command-payload external refs.
+3. Apply the command through the normal collection executor.
+4. Extract typed schema columns into a `ColumnBatch`.
+5. Build secondary index runs using existing planner logic.
+6. Build one or more column parts.
+7. Build primary locator run.
+8. Publish roots, generated external-file reachability, and
+   `AppliedCommandLSN` in one backend durability boundary.
 
 For `InsertColumnBatch`:
 
 1. Validate ids and vector lengths.
 2. Validate types and null/default bitmaps.
-3. Build secondary index state from direct vectors when the index field is
+3. In WAL-on V1, either lower to a replayable logical insert command with the
+   original document payload/reconstructable equivalent, or reject until direct
+   vector ingestion has a canonical command payload. Do not log physical column
+   parts as the command.
+4. Build secondary index state from direct vectors when the index field is
    projected; fall back to row materialization only for unsupported expressions.
-4. Publish the same roots.
+5. Publish the same roots, generated external-file reachability, and
+   `AppliedCommandLSN` in one backend durability boundary.
 
 ### 9.2 Update Write Path
 
@@ -1445,10 +1466,14 @@ For `Update` or callback-based mutation APIs:
    columns, from the current row locators.
 4. Apply the mutation and build a complete replacement `ColumnBatch` for only
    the rows that actually changed.
-5. Write the complete replacement rows as update-delta column parts.
-6. Publish primary locator updates, delete tombstones for old locators,
-   secondary index deletes, secondary index puts, and part descriptors in one
-   root group.
+5. In WAL-on V1, log the accepted logical replacement/update command, usually
+   final replacement/no-op results for callback APIs.
+6. Apply that command by writing the complete replacement rows as update-delta
+   column parts.
+7. Publish primary locator updates, delete tombstones for old locators,
+   secondary index deletes, secondary index puts, generated external-file
+   reachability, part descriptors, and `AppliedCommandLSN` in one backend
+   durability boundary.
 
 For bulk updates that touch many adjacent ids, the writer may build larger
 delta parts directly. For scattered point updates, the writer may buffer a
@@ -1486,9 +1511,10 @@ unbounded goroutine-per-column behavior.
 
 ### 9.5 WAL and Durability Integration
 
-Durability decision: the column-store buildout should make collection WAL
-semantics work for both column-store and non-column-store collections. Do not
-build a column-store-only WAL, and do not defer this until after mutable
+Durability decision: the column-store buildout should use the shared
+user-command WAL semantics for both column-store and non-column-store
+collections. Do not build a column-store-only WAL, do not revive physical
+root-delta WAL as the active plan, and do not defer this until after mutable
 column-store writes are advertised as production-ready.
 
 The current collection write-domain contract is flush-boundary durable:
@@ -1500,51 +1526,66 @@ also create external column files. A root that references missing column bytes,
 or a recovered column file with no reachable root, is worse than a simple lost
 buffered row write.
 
-The prerequisite is a shared collection commit protocol. It can be implemented
-as a replayable collection mutation log, by moving collection root-group
-publication onto the existing backend WAL/commit-log path, or by an equivalent
-manifest protocol. The protocol must cover row-store and column-store
-collections so secondary indexes, primary roots, template/index-state roots,
-delete roots, and column file references have one recovery story.
+The prerequisite is the shared command commit protocol described in
+`user-command-wal.md`. It extends the existing backend WAL/commit-log path with
+typed command frames, one local LSN sequence, root publication, external-ref
+closure, and `AppliedCommandLSN`. The protocol must cover row-store and
+column-store collections so secondary indexes, primary roots,
+template/index-state roots, delete roots, catalog barriers, and column file
+references have one recovery story.
 
 Column-store writes still follow TreeDB's lower-level durability model:
 WAL/journal and payload storage are decoupled. Column file references should
 follow the same durable-pointer rules as value-log pointers.
 
-WAL-on write ordering:
+V1 WAL-on write ordering:
 
-1. Build column parts, filters, marks, and descriptors.
-2. Write `TCS1` payloads, filter files, delete bitmap files, and dictionary
-   files through the collection WAL side-ref prepare protocol.
-3. Fsync files, atomically rename temp files to final paths, and fsync parent
-   directories before the collection WAL commit marker may reference them.
-4. Validate that the declared side-ref set matches the complete canonical
-   transitive closure embedded in part descriptors, manifests, filter
-   descriptors, delete bitmap refs, dictionary refs, compression metadata refs,
-   granule roots, and root-delta values.
-5. Append the collection WAL transaction that describes root mutations, primary
-   locator changes, granule/mark changes, secondary index changes,
-   delete/tombstone changes, count/visibility metadata, part descriptor
-   additions, and every required external side ref.
-6. Publish the root group only after the column bytes are readable at the
-   required durability boundary.
-7. On recovery, replay either the complete root group or none of it.
+1. Parse, validate, and lower the accepted API call to a replayable logical
+   command, such as insert, replace, update, or delete by explicit primary ids.
+   The command frame stores the logical ids, document/replacement/update
+   payload bytes, command preconditions, result assertions, and any
+   command-payload external refs required to replay that logical command.
+2. Append one command-WAL frame with one LSN for that logical command. The frame
+   must not encode physical primary locator deltas, granule/mark deltas,
+   secondary-index deltas, part descriptor writes, count metadata, or B-tree
+   root deltas.
+3. Apply the command through the normal collection executor. That apply step
+   builds column parts, filters, marks, dictionaries, delete bitmaps, part
+   descriptors, primary locator updates, secondary-index updates, and
+   count/visibility metadata as implementation outputs.
+4. Write generated `TCS1` payloads, filter files, delete bitmap files, and
+   dictionary files through the column external-file prepare/finalize protocol.
+   These generated files are publish outputs and root reachability inputs, not
+   command-WAL payload semantics.
+5. Validate that generated descriptors/manifests expose the complete canonical
+   external-file closure for those apply outputs, including column files,
+   filters, delete bitmaps, dictionaries, compression metadata refs, and granule
+   roots.
+6. Publish roots, generated external-file reachability, and
+   `AppliedCommandLSN` in one backend durability boundary.
+7. Return success and expose visibility only after that publish boundary covers
+   the command. The complete WAL frame alone is not a V1 visibility boundary.
+8. On recovery, replay the logical command from the command frame if its LSN is
+   not covered by `AppliedCommandLSN`; regenerated column files may receive new
+   file ids and paths as long as the visible logical result is the same.
 
-Column-store side refs use the same lifecycle as collection WAL side refs:
+Generated column-store external files use the same prepare/finalize and
+reachability lifecycle as other durable external refs, but they are tracked as
+publish outputs rather than command-frame external refs:
 
-- temp-only files with no committed WAL/root reference are orphan-prepared and
-  may be quarantined or deleted after recovery;
-- a complete WAL-on transaction that references a missing or corrupt column
-  file, filter file, delete bitmap, or dictionary is a recovery error, not a
-  skipped column-store write;
+- temp-only files with no published root reference are
+  orphan-prepared and may be quarantined or deleted after recovery;
+- a published root that references a missing or corrupt column file, filter
+  file, delete bitmap, or dictionary is a recovery error, not a skipped
+  column-store write;
 - optional/rebuildable filters may be absent, but a published filter root entry
-  that names external bytes makes those bytes required side refs. Missing
+  that names external bytes makes those bytes required external refs. Missing
   optional filters degrade to "filter absent"; they must never produce
   false-negative reads;
-- before root publication, required column side refs are retained by the
-  collection WAL protected side-ref index;
-- after root publication, WAL-only protection may be released only after the
-  applied collection watermark is durable, root descriptors are durable, and the
+- before root publication, required generated column external refs are retained
+  by the backend pending-publish external-ref tracker;
+- after root publication, pending-publish protection may be released only after
+  `AppliedCommandLSN` is durable, root descriptors are durable, and the
   column-file reachability tracker or a full reachability scan has incorporated
   the published roots;
 - cleanup must retain files referenced by unapplied WAL, published roots, old
@@ -1558,29 +1599,29 @@ guarantees.
 Minimum shared collection durability deliverables:
 
 - an explicit durable boundary for collection writes in API docs and tests;
-- a commit record or manifest entry that names every root mutation in the
-  collection root group;
-- external file references in the same commit record when column files are
-  involved;
-- validation that declared external refs match the canonical refs embedded in
-  column descriptors and root deltas;
-- recovery that replays complete committed root groups and ignores incomplete
-  ones;
+- command payloads for logical collection mutations that are sufficient to
+  replay through the normal collection executor without physical root deltas;
+- external file references in the command frame only for command payload bytes
+  that are not stored inline;
+- validation that generated column descriptors/manifests expose the canonical
+  external-file closure for apply outputs before root publication;
+- recovery that replays complete committed logical commands whose LSN is not
+  covered by `AppliedCommandLSN` and ignores incomplete terminal tails;
 - cleanup of prepared but unpublished column files, and retention of files
-  referenced by WAL, roots, snapshots, or active iterators;
+  referenced by command-payload refs, roots, snapshots, or active iterators;
 - row-store indexed insert/update/delete recovery tests with secondary indexes;
 - column-store insert/update/delete recovery tests with secondary indexes and
   column files;
-- read-only open with unapplied collection WAL must fail with a recovery-required
+- read-only open with unapplied command WAL must fail with a recovery-required
   error in production mode, rather than silently hiding acknowledged column-store
   writes.
 
-The recommended sequencing is option c from the planning discussion: make WAL
-semantics work for both column-store and non-column-store collections as part of
-this buildout. Option b creates a second durability model for collections.
-Option d leaves a known sharp edge under a feature that adds more side files.
-Option a is acceptable only if it is treated as the first column-store
-milestone, not as unrelated work.
+The recommended sequencing is option c from the planning discussion: make
+user-command WAL semantics work for both column-store and non-column-store
+collections as part of this buildout. Option b creates a second durability model
+for collections. Option d leaves a known sharp edge under a feature that adds
+more side files. Option a is acceptable only if it is treated as the first
+column-store milestone, not as unrelated work.
 
 Project-management hard gate: Milestone 0.5 blocks most column-store
 implementation. Before the shared collection durability story is resolved, the
@@ -1637,17 +1678,20 @@ compact_column_parts(snapshot, source_parts, target_policy):
     encode chunks into new parts using target codec policy
     publish new descriptors, primary locators, delete metadata, and system root
     remove/supersede source part descriptors and obsolete delete/mark metadata
-        from the new active descriptor roots in the same root group
+        from the new active descriptor roots in the same backend publish boundary
     keep source parts reachable through old snapshot roots only
     let column file GC/rewrite reclaim old files or packed containers
 ```
 
 Column compaction, delete-bitmap compaction, and recompression that create new
-external column files must publish through collection WAL. The transaction must
-include new side refs, new descriptors, active descriptor supersession or
-deletion of source descriptors, obsolete delete/mark/filter metadata removal,
-count/visibility metadata preservation, and unchanged logical secondary-index
-state in one atomic root group.
+external column files are physical maintenance, not user-command WAL payloads.
+They must publish through the same command-WAL-aware backend publish helper so
+the current `AppliedCommandLSN` is preserved and generated external-file
+reachability is installed atomically with new descriptors, active descriptor
+supersession or deletion of source descriptors, obsolete delete/mark/filter
+metadata removal, count/visibility metadata preservation, and unchanged logical
+secondary-index state. If a future maintenance command frame is added, it must
+log the logical maintenance request, not descriptor/root deltas.
 
 The compaction publish must make the active descriptor roots a replacement
 manifest for the affected key ranges, not an append-only list of all historical
@@ -1741,8 +1785,8 @@ Required output:
 - allocations/op;
 - part count and granule count;
 - update-delta part count and maximum visible fan-in;
-- column WAL bytes/row and side-ref metadata bytes/row;
-- side-ref closure validation refs/sec;
+- command WAL bytes/row and external-ref metadata bytes/row;
+- external-ref closure validation refs/sec;
 - recovery rows/sec and file refs/sec for 1K, 100K, and 1M row fixtures;
 - orphan prepare/final cleanup time and files/sec;
 - GC protected-byte debt by payload, filter, delete bitmap, dictionary,
@@ -1936,17 +1980,17 @@ Deliverables:
 - commit metadata that can include primary roots, secondary roots,
   template/index-state roots, delete roots, part descriptors, and external file
   references;
-- explicit column root-kind inventory aligned with the collection WAL spec;
-- side-ref closure validator for descriptors, manifests, filters, delete
-  bitmaps, dictionaries, compression metadata, and root-delta payloads;
-- `.prepare/txn-<wallsn>/part-<part-id>/` column file prepare/finalize
+- explicit column root-kind inventory aligned with the user-command WAL spec;
+- external-ref closure validator for generated descriptors, manifests, filters,
+  delete bitmaps, dictionaries, compression metadata, and root publish metadata;
+- `.prepare/cmd-<lsn>/part-<part-id>/` column file prepare/finalize
   protocol;
-- `PartID` and `FileID` allocator recovery from roots, pending WAL, and prepare
-  directories;
+- `PartID` and `FileID` allocator recovery from roots, unapplied command WAL,
+  and prepare directories;
 - production read-only open behavior that fails recovery-required when unapplied
-  collection WAL exists;
-- recovery path that replays complete committed collection root groups and
-  ignores incomplete ones;
+  command WAL exists;
+- recovery path that replays complete committed logical commands and regenerates
+  physical column-store outputs before root publication;
 - cleanup path for prepared but unpublished column files.
 
 Tests:
@@ -1956,14 +2000,14 @@ Tests:
 - close and reopen preserves flushed row-store collection writes with secondary
   indexes;
 - crash/reopen replays or discards a row-store indexed insert/update/delete as
-  one root group;
+  one logical command with one publish boundary;
 - crash/reopen never exposes a root that references a missing external file;
 - prepared but unpublished column files are reclaimed or quarantined after
   recovery.
-- descriptor side-ref closure mismatch fails before publish/replay;
+- descriptor external-ref closure mismatch fails before publish/replay;
 - missing or corrupt manifest, substream, filter, delete bitmap, dictionary, or
-  compression metadata side refs fail recovery for complete transactions;
-- read-only open with unapplied collection WAL returns recovery-required;
+  compression metadata external refs fail recovery for complete commands;
+- read-only open with unapplied command WAL returns recovery-required;
 - `PartID` and `FileID` allocators do not reuse ids from pending or unclassified
   prepared/orphan parts.
 
@@ -2167,7 +2211,7 @@ Deliverables:
 - delete bitmap handling;
 - compaction from base parts, delta parts, and delete bitmaps into new base
   parts;
-- collection WAL transaction classes for update-delta, delete, compaction,
+- command-WAL command kinds for update-delta, delete, compaction,
   delete-bitmap compaction, and recompression publishes;
 - active descriptor-root deletion/supersession of compacted source parts and
   obsolete delete/mark metadata;
@@ -2184,7 +2228,7 @@ Tests:
   and source parts;
 - crash/reopen around compaction publish;
 - crash/reopen around recompression publish;
-- missing/corrupt side-ref closure member fails recovery before publishing roots;
+- missing/corrupt external-ref closure member fails recovery before publishing roots;
 - column file GC/rewrite after compaction;
 - unique secondary correctness after updates;
 - crash/reopen around update-delta publish with secondary index changes.
@@ -2304,15 +2348,15 @@ Gates:
 | Random updates cause write amplification or read amplification. | Write changed rows into bounded update-delta column parts, batch scattered point updates where allowed, benchmark against granule rewrite/hybrid strategies, and compact asynchronously. |
 | Compression burns CPU on incompressible data. | No-expansion admission, high-entropy probes, PAUSED/probe autotune, and per-column stats. |
 | Column-store compression diverges from existing TreeDB compression. | Start with wrappers around TreeDB's snappy/lz4/zstd/zstd-dict routines and migrate toward one canonical compression registry. |
-| WAL integration is underspecified. | Block persistent column writes on side-ref closure, prepare/finalize, allocator recovery, read-only recovery-required behavior, root-group publish ordering, and recovery tests. |
+| WAL integration is underspecified. | Block persistent column writes on logical command payloads, generated external-file closure, prepare/finalize, allocator recovery, read-only recovery-required behavior, root publish ordering with `AppliedCommandLSN`, and recovery tests. |
 | Schema evolution makes old parts hard to read. | Version every part and use schema adapters with golden tests. |
 | Flexible schemas create unpredictable columns and compression choices. | Keep `TCS1` fixed-schema only; defer lazy/flexible schema mode to a separate design. |
 | Secondary indexes duplicate too much data. | Keep current secondary root format first; later consider optional row-locator payloads, compressed posting-list values, or bitmap payloads for low-cardinality shapes. |
-| Secondary indexes drift from column-store visibility after updates. | Publish secondary deletes/inserts, primary locator changes, part descriptors, and delete bitmaps in the same root group; test crash/reopen and active snapshots. |
-| Compaction leaves source parts active. | Publish compacted descriptors and descriptor-root deletes/supersession for all source parts through collection WAL in one root group; test post-compaction scans for duplicate/stale rows and delayed GC with active snapshots. |
+| Secondary indexes drift from column-store visibility after updates. | Publish secondary deletes/inserts, primary locator changes, part descriptors, delete bitmaps, and `AppliedCommandLSN` in one backend durability boundary; test crash/reopen and active snapshots. |
+| Compaction leaves source parts active. | Publish compacted descriptors, generated external-file reachability, and descriptor-root deletes/supersession for all source parts through one backend durability boundary; test post-compaction scans for duplicate/stale rows and delayed GC with active snapshots. |
 | Fast filters produce wrong answers. | Treat filters as pruning only, use tri-state `MayMatch`, forbid false negatives in property tests, and always verify matches on decoded rows or exact secondary entries. |
 | Haystack search semantics become confusing for non-string types. | Require explicit byte-haystack adapters; use typed filters for numeric equality/range and reserve encoded-byte substring search for explicit predicates. |
-| Fast count metadata becomes stale. | Publish count deltas in the same root group as inserts/deletes and verify across update, compaction, reopen, and snapshots. |
+| Fast count metadata becomes stale. | Publish count deltas in the same backend durability boundary as inserts/deletes and verify across update, compaction, reopen, and snapshots. |
 | Column file GC deletes live column parts. | Descriptors and locators are normal roots; GC reachability must scan column file references, with tests. |
 | Borrowed vector API is unsafe for general users. | Provide safe materializing APIs and document borrowed lifetime like existing borrowed APIs. |
 | ClickHouse codecs are overfit for analytical time series. | Stage codecs and keep generic compression as the baseline; require dataset-specific gates before enabling selectors. |
@@ -2404,8 +2448,10 @@ explicit class-level dictionary experiment proves a wall-time and bytes win.
 Finding: Secondary indexes could work for inserts but become stale after
 column-store updates.
 Fix: Updates now publish old secondary-entry deletes, new secondary-entry
-puts, primary locator changes, delta-part descriptors, and tombstones in one
-root group.
+puts, primary locator changes, delta-part descriptors, tombstones, generated
+external-file reachability, and `AppliedCommandLSN` in one backend durability
+boundary. The command WAL frame remains the logical update/replace/delete
+command, not those physical deltas.
 
 Finding: Adding ClickHouse-style fast filters only to column parts would leave
 row-store, BSON, and template-v1 collections unable to benefit.
