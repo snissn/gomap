@@ -9037,6 +9037,8 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		if err != nil {
 			return nil, fmt.Errorf("cachingdb: acquire command journal owner for %s: %w", walDir, err)
 		}
+		// Cached DB uses this owner as a lock-only handle while raw WAL writers
+		// are open. LSN assignment belongs to CommandJournal, not this path.
 		defer func() {
 			if !journalOwnerTransferred && journalOwner != nil {
 				_ = journalOwner.Close()
