@@ -93,7 +93,21 @@ func (idx *VectorIndex) SaveNativeSnapshot() (VectorIndexLoadStatus, error) {
 	if err := c.flushBufferedWrites(); err != nil {
 		return status, err
 	}
+	return idx.saveNativeSnapshotLocked()
+}
 
+func (idx *VectorIndex) saveNativeSnapshotLocked() (VectorIndexLoadStatus, error) {
+	status := VectorIndexLoadStatus{}
+	if idx == nil {
+		return status, errors.New("collections: vector index is nil")
+	}
+	c := idx.collection
+	if c == nil {
+		return status, errCollectionNil
+	}
+	if c.db == nil {
+		return status, errCollectionDBNil
+	}
 	pin := c.db.AcquireSnapshot()
 	if pin == nil {
 		return status, backenddb.ErrClosed

@@ -37,6 +37,17 @@ func (c *Collection) VectorIndexStatus(name string) (VectorIndexStatus, error) {
 // declared HNSW graph, and publishes a full native vector-index root.
 func (c *Collection) RebuildVectorIndex(name string) (VectorIndexStatus, error) {
 	start := time.Now()
+	if c == nil {
+		return VectorIndexStatus{}, errCollectionNil
+	}
+	if c.db == nil {
+		return VectorIndexStatus{}, errCollectionDBNil
+	}
+	// Rebuild publishes a full replacement graph root. Hold the same mutation
+	// barrier used by writes across the primary scan and root publish so no
+	// committed write can be skipped by the clean replacement snapshot.
+	unlockMutation := c.lockMutation()
+	defer unlockMutation.Unlock()
 	def, err := c.declaredVectorIndexDefinition(name)
 	if err != nil {
 		return VectorIndexStatus{}, err
@@ -45,7 +56,7 @@ func (c *Collection) RebuildVectorIndex(name string) (VectorIndexStatus, error) 
 	if err != nil {
 		return VectorIndexStatus{}, err
 	}
-	native, err := index.SaveNativeSnapshot()
+	native, err := index.saveNativeSnapshotLocked()
 	if err != nil {
 		return VectorIndexStatus{}, err
 	}
