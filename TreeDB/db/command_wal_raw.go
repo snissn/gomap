@@ -147,7 +147,11 @@ func (db *DB) flushCommandWALExternalRefs(sync bool, fileIDs []uint32) error {
 	if appender == nil && len(fileIDs) == 0 {
 		return ErrValueLogAppenderUnavailable
 	}
+	var activeFileID uint32
 	if appender != nil {
+		if _, fileID, ok := appender.CurrentValueLogSegment(); ok {
+			activeFileID = fileID
+		}
 		if sync {
 			if err := appender.Sync(); err != nil {
 				return err
@@ -160,6 +164,9 @@ func (db *DB) flushCommandWALExternalRefs(sync bool, fileIDs []uint32) error {
 		return nil
 	}
 	for _, fileID := range fileIDs {
+		if fileID == 0 || fileID == activeFileID {
+			continue
+		}
 		if err := db.syncCommandWALExternalRefSegment(fileID); err != nil {
 			return err
 		}
@@ -216,22 +223,22 @@ func (db *DB) appendRawKVCommandWALIntent(intent *commandWALBatchIntent, sync bo
 	if err != nil {
 		return 0, err
 	}
-	// testFailCommandWALFlush fires AFTER AppendCommand, simulating a successful
-	// write followed by a flush/sync failure. The frame is durable; on the next
-	// reopen it will be replayed (fail-forward). This is the intended test
-	// scenario: the caller observes an error but the mutation is not lost.
-	if db.testFailCommandWALFlush.Load() {
-		err = errTestCommandWALFlushFailpoint
-	} else if sync {
+	if sync {
 		err = db.commandJournal.Sync()
 	} else {
 		err = db.commandJournal.Flush()
 	}
+	// testFailCommandWALFlush fires after the real Flush/Sync succeeds. The
+	// frame is replay-visible, and sync writes are durable; the later error
+	// makes the commit result ambiguous, so the open handle must fail closed.
+	if err == nil && db.testFailCommandWALFlush.Load() {
+		err = errTestCommandWALFlushFailpoint
+	}
 	if err != nil {
-		// AppendCommand already assigned a durable logical LSN. A later
-		// flush/sync failure is commit-ambiguous: reopen recovery may apply the
-		// frame, so this handle must fail closed instead of allowing a retry to
-		// create an LSN gap.
+		// AppendCommand already assigned a logical LSN, and the frame may be
+		// replayed if the append reached disk. A later flush/sync failure is
+		// commit-ambiguous: reopen recovery may apply the frame, so this handle
+		// must fail closed instead of allowing a retry to create an LSN gap.
 		db.commandWALFlushPoisoned.Store(true)
 		return 0, err
 	}
@@ -342,6 +349,10 @@ func applyRawKVCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map
 		}
 	}
 	if len(ops) == 0 {
+		// Production empty writes currently return before appending a frame.
+		// Empty RawKVBatch frames are still part of the replay contract so
+		// fixtures/future command kinds can explicitly advance AppliedCommandLSN
+		// without changing roots.
 		db.mu.RLock()
 		rootID := db.meta.UserRootPageID
 		sysRootID := db.meta.SystemRootPageID
