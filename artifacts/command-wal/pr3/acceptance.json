@@ -21,6 +21,7 @@
   ],
   "passed_tests": [
     "TestCommandWALActivationRejectsLegacyCollectionWALDebt",
+    "TestCommandWALCheckpointCleanupRetainsActiveCoveredSegment",
     "TestCommandWALCleanReopenCleansCoveredNonActiveSegmentWithNoReplayFrames",
     "TestCommandWALCrashAfterFrameBeforeRootPublishRecovers",
     "TestCommandWALCrashAfterRootAppliedLSNBeforeCleanupSkipsFrame",
@@ -34,6 +35,7 @@
     "TestCommandWALInlineReplayDoesNotScanValueLogRIDMap",
     "TestCommandWALMissingRIDFenceFailsRecovery",
     "TestCommandWALOpenAllowsCoveredDuplicateLSNBeforeCleanupConverges",
+    "TestCommandWALOpenFailsClosedOnNonActivePartialFirstFrameTail",
     "TestCommandWALOpenFailsClosedOnUnappliedDuplicateLSN",
     "TestCommandWALOptionPersistsFeatureBeforeJournalActivation",
     "TestCommandWALOptionRejectsDirtyLegacyWALActivation",
@@ -44,6 +46,7 @@
     "TestCommandWALRawKVBatchSetRIDRoundTrip",
     "TestCommandWALRawSetDeleteBatchReplaysThroughNormalExecutor",
     "TestCommandWALRawSetReplayRePointersWhenThresholdDrops",
+    "TestCommandWALReadOnlyOpenAllowsFramesCoveredByAppliedLSN",
     "TestCommandWALRecoveryCrashDuringReplayResumesFromAppliedLSN",
     "TestCommandWALRejectsWALOffDurability",
     "TestCommandWALRequiredFeatureEnablesBackendCommandWAL",
