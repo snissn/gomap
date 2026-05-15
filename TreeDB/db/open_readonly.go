@@ -131,7 +131,7 @@ func openReadOnly(opts Options) (*DB, error) {
 		_ = db.Close()
 		return nil, err
 	}
-	if err := requireNoUnappliedCommandWALForReadOnly(opts.Dir, db.meta.AppliedCommandLSN, opts.WALMaxSegmentBytes); err != nil {
+	if err := requireNoUnappliedCommandWAL(opts.Dir, db.meta.AppliedCommandLSN, opts.WALMaxSegmentBytes); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
@@ -264,7 +264,7 @@ func openReadOnlyNoLock(opts Options) (*DB, error) {
 		_ = db.Close()
 		return nil, err
 	}
-	if err := requireNoUnappliedCommandWALForReadOnly(opts.Dir, db.meta.AppliedCommandLSN, opts.WALMaxSegmentBytes); err != nil {
+	if err := requireNoUnappliedCommandWAL(opts.Dir, db.meta.AppliedCommandLSN, opts.WALMaxSegmentBytes); err != nil {
 		_ = db.Close()
 		return nil, err
 	}

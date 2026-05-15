@@ -36,6 +36,7 @@
     "TestCommandWALWriteOpenSkipsCoveredFramesBeforeLegacyReplay",
     "TestCommandWALWriteOpenRejectsUnappliedFramesUntilDispatcher",
     "TestCommandWALWriteOpenRejectsFirstUnappliedFrameUntilDispatcher",
+    "TestCommandWALWALOffOpenRejectsUnappliedFramesUntilDispatcher",
     "TestCommandWALCheckpointCleanupDeletesOnlyCoveredSegments",
     "TestCommandWALSegmentMaxLSNStreamsFrames",
     "TestCommandWALSegmentMaxLSNFailsClosedOnNonIncreasingLSN",

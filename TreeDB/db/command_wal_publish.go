@@ -129,7 +129,7 @@ type commandWALSegmentCleanupDecision struct {
 	Removed bool   `json:"removed,omitempty"`
 }
 
-func requireNoUnappliedCommandWALForReadOnly(dir string, appliedLSN uint64, maxSegmentBytes int64) error {
+func requireNoUnappliedCommandWAL(dir string, appliedLSN uint64, maxSegmentBytes int64) error {
 	dirty, err := hasUnappliedCommandWALFrames(dir, appliedLSN, maxSegmentBytes)
 	if err != nil {
 		return err

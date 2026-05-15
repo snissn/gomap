@@ -282,6 +282,7 @@ PR 2: shared journal ownership and `AppliedCommandLSN` plumbing:
 - `TestCommandWALWriteOpenSkipsCoveredFramesBeforeLegacyReplay`;
 - `TestCommandWALWriteOpenRejectsUnappliedFramesUntilDispatcher`;
 - `TestCommandWALWriteOpenRejectsFirstUnappliedFrameUntilDispatcher`;
+- `TestCommandWALWALOffOpenRejectsUnappliedFramesUntilDispatcher`;
 - `TestCommandWALBackupManifestShapeIncludesAppliedLSNAndRanges`.
 
 PR 3: recovery dispatcher and raw KV command conversion:

@@ -1416,6 +1416,11 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		return nil, err
 	}
 
+	if err := requireNoUnappliedCommandWAL(opts.Dir, db.meta.AppliedCommandLSN, opts.WALMaxSegmentBytes); err != nil {
+		db.Close()
+		return nil, err
+	}
+
 	if opts.Durability != DurabilityWALOffRelaxed {
 		segments, err := listRecoverySegments(opts.Dir)
 		if err != nil {
