@@ -114,8 +114,8 @@ vi/{collectionID}/{indexID}/epoch/{epoch}/node/{nodeID}
 vi/{collectionID}/{indexID}/epoch/{epoch}/edge/{nodeID}/{layer}
 vi/{collectionID}/{indexID}/epoch/{epoch}/doc/{documentID}
 vi/{collectionID}/{indexID}/epoch/{epoch}/tomb/{nodeID}
-vi/{collectionID}/{indexID}/delta/{collectionSeq}/{deltaOrdinal}
-vi/{collectionID}/{indexID}/deltaBatch/{collectionSeq}
+vi/{collectionID}/{indexID}/delta/{collectionSeq}/{mutationOrdinal}/{deltaOrdinal}
+vi/{collectionID}/{indexID}/deltaBatch/{collectionSeq}/{mutationOrdinal}
 vi/{collectionID}/{indexID}/rebuild/{runID}/...
 ```
 
@@ -139,11 +139,11 @@ all mutations after an epoch's `applied_collection_seq` or `rebuild_cut_seq`
 into whichever staging epoch is being prepared.
 
 Numeric path segments use fixed-width big-endian bytes in native key encoding:
-`epoch` and `nodeID` are `u64`, `layer` is `u16`, `collectionSeq` is `u64`, and
-`deltaOrdinal` is `u32`. This preserves ordered iteration for prefix scans such
-as all edge records for a node or all deltas after an applied collection
-sequence. Human-readable paths in this document are illustrative; the native
-codec MUST use the canonical byte ordering.
+`epoch` and `nodeID` are `u64`, `layer` is `u16`, `collectionSeq` is `u64`,
+`mutationOrdinal` is `u32`, and `deltaOrdinal` is `u32`. This preserves ordered
+iteration for prefix scans such as all edge records for a node or all deltas
+after an applied collection sequence. Human-readable paths in this document are
+illustrative; the native codec MUST use the canonical byte ordering.
 
 ## 6. Record Model
 
@@ -264,6 +264,7 @@ index can be served, must catch up, or must rebuild.
 
 ```text
 collection_seq: u64
+mutation_ordinal: u32
 delta_ordinal: u32
 document_id: bytes
 op: enum { insert, update, delete }
@@ -276,32 +277,36 @@ checksum: optional
 Buffered mode appends one delta record per document-level vector mutation that
 has not yet been applied to the durable graph epoch. Batched collection writes
 can share one `collection_seq`, so each emitted delta in that mutation boundary
-MUST get a deterministic zero-based `delta_ordinal` to make the durable key
-unique and replayable. Delta records are ordered by `(collection_seq,
-delta_ordinal)` and are replayed strictly in that order during catch-up or crash
-recovery. Once `applied_collection_seq` in the state record reaches or exceeds a
-delta's sequence and the publishing epoch is durable, all deltas for that
-sequence are eligible for cleanup. If a delta is missing, corrupt, or not
-replayable, recovery marks the index `needs_rebuild` instead of serving graph
-search as current.
+MUST get a deterministic zero-based `delta_ordinal`. Buffered collection writes
+can also acknowledge multiple mutation boundaries before the collection root
+sequence advances, so each acknowledged boundary under the same `collection_seq`
+MUST get a durable `mutation_ordinal` before acknowledgment. Delta records are
+ordered by `(collection_seq, mutation_ordinal, delta_ordinal)` and are replayed
+strictly in that order during catch-up or crash recovery. Once
+`applied_collection_seq` in the state record reaches or exceeds a delta's
+sequence and the publishing epoch is durable, all deltas for that sequence are
+eligible for cleanup. If a delta is missing, corrupt, or not replayable, recovery
+marks the index `needs_rebuild` instead of serving graph search as current.
 
 ### 6.8 Delta Batch Boundary Record
 
 ```text
 collection_seq: u64
+mutation_ordinal: u32
 delta_count: u32
 checksum: optional
 ```
 
 For every collection mutation boundary, including single-document writes,
 `InsertBatch`, and `UpdateBatch`, the index writer MUST persist all delta records
-for that `collection_seq` and then persist one boundary record with the exact
-`delta_count`. Recovery MUST NOT advance `applied_collection_seq` past a
-sequence unless the boundary record is present and the durable delta set contains
-every ordinal in `[0, delta_count)`. A missing boundary or truncated ordinal
-range means the durable ANN state is incomplete; recovery must keep the index
-catching up if the canonical collection log can supply the missing work,
-otherwise mark `needs_rebuild`.
+for that `(collection_seq, mutation_ordinal)` and then persist one boundary
+record with the exact `delta_count`. Recovery MUST NOT advance
+`applied_collection_seq` past a sequence unless every mutation boundary for that
+sequence has a boundary record and each durable delta set contains every ordinal
+in `[0, delta_count)`. A missing boundary or truncated ordinal range means the
+durable ANN state is incomplete; recovery must keep the index catching up if the
+canonical collection log can supply the missing work, otherwise mark
+`needs_rebuild`.
 
 ## 7. Runtime Representation
 
