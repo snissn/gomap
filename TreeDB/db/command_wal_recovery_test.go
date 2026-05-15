@@ -310,6 +310,44 @@ func TestCommandWALFlushFailurePoisonsOpenHandle(t *testing.T) {
 	_ = retry.Close()
 }
 
+func TestCommandWALFinalizeFailurePoisonsOpenHandle(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+
+	db.testFailFinalizeCommit.Store(true)
+	b := db.NewBatch()
+	if err := b.Set([]byte("k"), []byte("v")); err != nil {
+		t.Fatalf("Set first: %v", err)
+	}
+	err := b.Write()
+	if !errors.Is(err, errTestFinalizeCommitFailpoint) {
+		t.Fatalf("Write first error=%v, want finalize commit failpoint", err)
+	}
+	_ = b.Close()
+	db.testFailFinalizeCommit.Store(false)
+
+	retry := db.NewBatch()
+	if err := retry.Set([]byte("later"), []byte("value")); err != nil {
+		t.Fatalf("Set retry: %v", err)
+	}
+	err = retry.Write()
+	if !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("Write retry error=%v, want ErrRecoveryRequired after poisoned command WAL finalize", err)
+	}
+	_ = retry.Close()
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close poisoned db: %v", err)
+	}
+
+	reopen := openCommandWALDB(t, dir)
+	defer reopen.Close()
+	assertDBValue(t, reopen, "k", "v")
+	if got, err := reopen.Get([]byte("later")); err != nil || got != nil {
+		t.Fatalf("Get(later)=%q err=%v, want missing retry mutation", got, err)
+	}
+}
+
 func TestCommandWALRecoveryCrashDuringReplayResumesFromAppliedLSN(t *testing.T) {
 	dir := t.TempDir()
 	enableCommandWALFormat(t, dir)

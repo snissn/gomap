@@ -134,7 +134,7 @@ func (db *DB) appendRawKVCommandWALIntent(intent *commandWALBatchIntent, sync bo
 		return 0, fmt.Errorf("treedb: command wal journal unavailable")
 	}
 	if db.commandWALFlushPoisoned.Load() {
-		return 0, fmt.Errorf("%w: command wal journal flush failed; reopen required", ErrRecoveryRequired)
+		return 0, fmt.Errorf("%w: command wal post-append failure; reopen required", ErrRecoveryRequired)
 	}
 	if intent.externalRefs {
 		// Non-sync writes flush external refs to the fresh-process recovery
@@ -196,6 +196,13 @@ func commandWALFinalizeOptions(intent *commandWALBatchIntent) finalizeCommitOpti
 		appliedCommandLSN: intent.lsn,
 		appliedRanges:     []CommandWALLSNRange{appliedRange},
 	}
+}
+
+func (db *DB) poisonCommandWALAfterPostAppendFailure(intent *commandWALBatchIntent) {
+	if db == nil || intent == nil || intent.lsn == 0 {
+		return
+	}
+	db.commandWALFlushPoisoned.Store(true)
 }
 
 func applyRawKVCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map[uint64]page.ValuePtr, inlineAppender *replayInlineAppender) error {

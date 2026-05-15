@@ -262,6 +262,7 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent) (bool,
 	post, err := b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, commandWALFinalizeOptions(intent))
 	b.db.commitMu.Unlock()
 	if err != nil {
+		b.db.poisonCommandWALAfterPostAppendFailure(intent)
 		b.db.writeMu.RUnlock()
 		return false, err
 	}
@@ -323,6 +324,7 @@ func (b *Batch) writeSerialized(sync bool, intent *commandWALBatchIntent) error 
 	}
 	post, err := b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, commandWALFinalizeOptions(intent))
 	if err != nil {
+		b.db.poisonCommandWALAfterPostAppendFailure(intent)
 		return err
 	}
 	vlogRefDelta = nil
