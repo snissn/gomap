@@ -3,7 +3,7 @@
   "milestone": "PR3.5 raw KV command-WAL performance visibility and polish",
   "branch": "codex/user-command-wal-pr3_5",
   "base_branch": "codex/user-command-wal-pr3",
-  "base_commit": "d401b04b2a483cf45e7cfd5fdd3700799ae6cf83",
+  "base_commit": "d7fa664d98e16c3548d350d22aafe192ed95a33f",
   "go_version": "go1.25.7 linux/amd64",
   "platform": "linux/amd64",
   "command_support_matrix_version": "TreeDB/docs/spec/verification.md and issue #1529 PR3.5 evidence update",
@@ -19,10 +19,13 @@
   "passed_tests": [
     "TestCommandJournalRejectsExplicitSegmentBehindLaneTail",
     "TestCommandWALActiveSegmentTailAllowedPerLane",
+    "TestCommandWALCheckpointCleanupRejectsDuplicateCoveredLSNAcrossSegmentsBeforeRemove",
     "TestCommandWALCheckpointCleanupRetainsActiveCoveredTypedSegment",
     "TestCommandWALCheckpointCleanupReturnsScanErrors",
     "TestCommandWALLegacyReplayFilterPreservesNonCommandOrderAroundCoveredFrame",
+    "TestCommandWALLegacyReplayFilterRejectsDuplicateCoveredLSNAcrossSegments",
     "TestCommandWALMissingRIDFenceFailsRecovery",
+    "TestCommandWALOpenFailsClosedOnDuplicateLSNAcrossCoveredSegments",
     "TestCommandWALPointerBatchReplaysThroughRIDFence",
     "TestCommandWALRIDCacheBounded",
     "TestCommandWALRawSetReplayLazilyCreatesAppenderIfPlacementDrifts",
@@ -87,5 +90,5 @@
     "outer-leaf direct backend throughput is much lower than earlier inline-leaf artifacts; the refreshed numbers are the correct benchmark mode because the requested outer-leaf flag is no longer silently ignored",
     "pointer command_wal_v1 external-ref writes are correctness-fenced and currently much slower than legacy pointer writes (429.8 us/op vs 3.796 us/op in the refreshed DB microbench); this is explicit optimization debt before default cutover"
   ],
-  "evidence_generated_from_commit": "a636e3c068c7d12623d525e2754458f1f1b6de11"
+  "evidence_generated_from_commit": "e4c6a57b3755004c6e49bd9d97bfbaaf543a15fc"
 }
