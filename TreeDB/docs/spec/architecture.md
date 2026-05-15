@@ -10,9 +10,8 @@ The runtime consists of:
 - Value log (`maindb/value_vlog/value-l*.log`) for out-of-line large values.
 - Optional split leaf log (`maindb/leaf_vlog/value-l*.log`) for outer leaf
   generations.
-- Commit log / journal (`maindb/wal/commit-l*.log`) for cached-mode replay.
-- Target collection WAL segments (`maindb/wal/collection-l*.log`) once the
-  collection WAL gate lands.
+- Commit log / journal (`maindb/wal/commit-l*.log`) for cached-mode replay;
+  future user-command WAL frames extend this same segment family.
 - Optional side stores:
   - `dictdb/` for persistent dictionary bytes,
   - `templatedb/` for template compression definitions.
@@ -38,7 +37,9 @@ TreeDB's value log is the only value storage path for values.
 ### 2.3 Commit Log (Journal/WAL)
 
 - Redo metadata stream used by cached-mode recovery.
-- Replays `set inline`, `set rid`, and `delete` operations.
+- Replays legacy raw `set inline`, `set rid`, and `delete` operations.
+- Target user-command WAL adds typed command frames to the same journal rather
+  than adding collection-specific WAL files.
 - Is independent from value-log lifetime.
 
 ### 2.4 Cached Layer
@@ -65,7 +66,6 @@ Default root layout:
   - `LOCK`
   - `wal/`
     - `commit-l<lane>-<seq>.log`
-    - `collection-l<lane>-<seq>.log` (target collection WAL)
   - `value_vlog/`
     - `value-l<lane>-<seq>.log`
   - `leaf_vlog/`

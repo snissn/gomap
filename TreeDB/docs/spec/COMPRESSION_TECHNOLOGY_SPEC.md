@@ -22,14 +22,16 @@ codecs, selection rules, read/write behavior, and adjacent compression
 mechanisms used by table storage, protocols, formats, temporary files,
 in-memory columns, and text indexes.
 
-Production persistent column-store collection writes are blocked until
-`TreeDB/docs/spec/collection-wal-durability-plan.md` M7 sign-off links to green
-M1-M6 collection WAL evidence. Before that gate, column-store work is limited
-to docs, benchmarks, pure codecs, filters/search packages, and isolated
-encode/decode tests that do not publish persistent collection roots. Persistent
-column-store APIs, column part descriptor roots, secondary indexes pointing at
-column-store rows, column-file side refs in published roots, and crash/reopen
-safety claims for column-store writes are blocked.
+Production persistent column-store collection writes are blocked until the
+user-command WAL gate links to green evidence for typed command frames,
+`AppliedCommandLSN` publication, collection command replay, catalog barriers,
+external-file reachability, backup/restore, and read-only recovery-required
+behavior. Before that gate, column-store work is limited to docs, benchmarks,
+pure codecs, filters/search packages, and isolated encode/decode tests that do
+not publish persistent collection roots. Persistent column-store APIs, column
+part descriptor roots, secondary indexes pointing at column-store rows,
+column-file external refs in published roots, and crash/reopen safety claims for
+column-store writes are blocked.
 
 External libraries such as LZ4, ZSTD, zlib, Brotli, XZ, bzip2, Snappy,
 Arrow, ORC, and Parquet are treated as delegated implementations. For those

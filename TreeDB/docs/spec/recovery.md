@@ -15,21 +15,31 @@ Current high-level order for non-collection cached WAL:
 5. expose recovered backend roots and memtables,
 6. clean obsolete commit-log segments only after replay permits it.
 
-Target collection WAL extension:
+Target user-command WAL extension:
 
-Collection WAL replay is target behavior owned by
-`collection-wal-durability-plan.md` until the implementation gate lands. In
-that target, recovery also discovers collection WAL segments and cleanup
-metadata, validates required side refs, publishes committed root groups,
-advances per-collection applied watermarks atomically with root descriptors, and
-refuses read-only open when committed unapplied collection WAL would be required
-for a correct view.
+User-command WAL replay is target behavior owned by `user-command-wal.md` until
+the implementation gate lands. In that target, recovery discovers command WAL
+segments, loads the checkpointed `AppliedLSN`, validates frames and required
+external refs, replays complete commands with `LSN > AppliedLSN` through the
+deterministic command executor, then checkpoints the recovered `AppliedLSN`
+before cleaning replayed WAL.
 
-Read-only opens do not run mutating recovery. If collection WAL segments
-contain committed unapplied transactions, read-only open must fail with a
+Command effects and `AppliedLSN` are one recovered state. Open must select a
+durable tuple equivalent to:
+
+```text
+(UserRootPageID, SystemRootPageID, AppliedLSN, CommitSeq, required value-log/leaf-log reachability)
+```
+
+If a crash leaves command effects without matching `AppliedLSN`, or
+`AppliedLSN` without the command effects it claims, recovery must select the
+previous tuple or fail closed. It must not repair the split by guessing.
+
+Read-only opens do not run mutating recovery. If command WAL segments contain
+committed unapplied commands, read-only open must fail with a
 recovery-required error unless the caller explicitly requests a stale read-only
-mode. Silent stale read-only open is incompatible with collection
-durable-at-ack semantics.
+mode. Silent stale read-only open is incompatible with durable-at-ack command
+semantics.
 
 ## 2. Backend Index Recovery
 
@@ -70,7 +80,7 @@ Commit-log segments are discovered from `<maindb>/wal` by filename parsing.
 Value-log segments are discovered from `<maindb>/value_vlog`; split leaf-log
 segments are discovered from `<maindb>/leaf_vlog`.
 
-Accepted patterns include:
+Before `command_wal_v1`, accepted patterns include:
 
 - canonical commit log: `commit-l<lane>-<seq>.log`
 - legacy accepted commit-log aliases: `commit-<seq>.log`, `wal-<seq>.log`
@@ -78,12 +88,19 @@ Accepted patterns include:
   `value-<seq>.log`, `vlog-<seq>.log`, and legacy mixed `wal/value-l*.log`
   names
 
-Discovered segments are sorted by `(lane, seq)`.
+After `command_wal_v1` activation, command WAL segments use only the shared
+`commit-l<lane>-<seq>.log` family for required command replay. Old raw batch
+payloads are unsupported in command WAL directories; activation must start from
+a clean WAL state or an explicit rebuild.
 
-Collection WAL segments use their own cleanup metadata. A missing collection WAL
-segment is acceptable only when covered by durable cleanup metadata that proves
-the segment's transaction range was safely cleaned. A missing non-cleaned
-collection WAL segment is recovery corruption.
+Discovered command segments are sorted by `(lane, seq)` and replayed by command
+LSN.
+
+Typed command WAL frames use the same commit-log segment family as raw WAL. A
+missing commit-log segment is acceptable only when covered by durable cleanup
+metadata or backup-manifest proof that the segment's LSN range was safely
+cleaned. A missing non-cleaned commit-log segment that may contain required
+command frames is recovery corruption.
 
 ## 4. Replay Algorithm
 
@@ -101,15 +118,15 @@ Otherwise:
 
 ### 4.2 Read commit-log segments
 
-- Read batches from commit-log segments.
-- Batch ordering rules:
-  - batches with non-zero `Seq` sorted by `Seq` then read order,
-  - legacy `Seq=0` batches preserve original read order.
+- Before `command_wal_v1`, read raw batches from commit-log segments.
+- After `command_wal_v1`, read typed command frames from commit-log segments.
+- Command frame ordering uses `LSN`; duplicate LSN is corruption.
+- Old raw `commitlog.Record` batches in a command WAL directory fail closed.
 - Truncated tail in commit log stops replay at partial tail safely.
 
-### 4.3 Apply batches to backend
+### 4.3 Apply batches or command frames to backend
 
-Each commit record maps to backend batch op:
+Before `command_wal_v1`, each commit record maps to backend batch op:
 
 - `OpDelete` -> `Delete(key)`
 - `OpSetInline` -> `Set(key, value)`
@@ -123,6 +140,18 @@ WAL fence mode implications:
   join is not required for those records.
 
 Each replayed batch is committed with `WriteSync`.
+
+After `command_wal_v1`, raw writes replay as `RawKVBatch` command frames through
+the deterministic command executor. Recovery must publish command effects and
+advance `AppliedLSN` in the same backend durability boundary. A restart during
+replay must observe either the old root plus old `AppliedLSN`, or the new root
+plus advanced `AppliedLSN`; it must not observe command effects without the
+matching `AppliedLSN` or `AppliedLSN` without command effects.
+
+Replay publishes must advance `AppliedLSN` only over a contiguous LSN prefix.
+If command LSN `N` is ready but a lower LSN is neither already applied nor part
+of the same publish boundary, recovery must stop or fail closed rather than
+publishing `N` out of order.
 
 ### 4.4 Cleanup
 
@@ -147,169 +176,150 @@ Recovery must fail on:
 Recovery may continue past:
 
 - truncated tail records in final value/commit segments.
-- current cached key/value commit-log batches whose sequence-numbered RID fence
-  is unsatisfied and whose replay rules explicitly skip the whole fenced batch.
+- pre-command-WAL cached key/value commit-log batches whose sequence-numbered
+  RID fence is unsatisfied and whose replay rules explicitly skip the whole
+  fenced batch.
 
-Collection WAL recovery is intentionally stricter than the current cached
-key/value RID fence. A complete WAL-on collection transaction with a missing
-required side ref is a recovery error unless it is an incomplete tail without a
-valid commit marker. Recovery must not skip that complete collection transaction
-and continue applying later transactions for the same collection.
+Typed command WAL recovery is intentionally stricter than the current cached
+key/value RID fence. A complete typed command frame with a missing required
+external ref is a recovery error unless it is an incomplete terminal tail without
+a valid commit marker. Recovery must not skip that complete command and continue
+serving a state that claimed durable-at-ack semantics.
 
-Collection WAL decoder outcomes are distinct from commit-log outcomes:
+Typed command WAL decoder outcomes are part of the existing commit-log recovery
+path, not a collection-specific recovery path:
 
 | Outcome | Recovery behavior |
 |---|---|
-| `CompleteValid` | validate side refs and replay, or skip only by collection watermark |
+| `CompleteValid` | validate external refs and replay, or skip only by durable `AppliedLSN` |
 | `CompleteCorrupt` | fail closed; a complete bad checksum/digest/closure is not a tail |
 | `TerminalIncompleteTail` | ignore only if terminal active segment and no later non-cleaned segment exists |
 | `NonTerminalShortRead` | fail closed |
 | `UnsupportedVersion` | fail closed; durable acknowledged writes may be present |
 | `UnsupportedSkippableRecord` | skip only when record feature bits and cleanup metadata permit |
 | `MissingSegment` | fail closed unless durable cleanup metadata covers the segment/range |
-| `DuplicateWALLSN` | fail closed |
-| `DuplicateCollectionSeq` | fail closed |
+| `DuplicateLSN` | fail closed |
 | `MaliciousLength` | fail closed before allocation |
 | `MixedVersionSegment` | fail closed unless an explicit migration reader supports both versions |
 
-Read-only open must scan collection WAL gates and committed frames. If complete
-unapplied collection WAL exists, read-only open fails with recovery-required
-unless a future read-only replay overlay is explicitly implemented.
+Read-only open must scan command WAL gates and committed typed frames. If
+complete unapplied command WAL exists, read-only open fails with
+recovery-required unless a future read-only replay overlay or explicitly stale
+mode is implemented.
 
-Every collection WAL recovery skip, block, or hard failure must be assigned one
+Every command WAL recovery skip, block, or hard failure must be assigned one
 stable category:
 
 | Category | Severity |
 |---|---|
 | `incomplete_tail` | safe skip only for terminal tail without durable commit marker |
-| `already_applied_watermark` | safe skip when covered by durable applied watermark |
+| `already_applied_lsn` | safe skip when covered by durable `AppliedLSN` |
 | `record_checksum_mismatch` | hard failure |
 | `unsupported_wal_version` | hard failure unless explicitly skippable |
+| `unsupported_command_kind` | hard failure unless explicitly skippable |
 | `segment_gap_without_cleanup` | hard failure |
-| `missing_required_side_ref` | hard failure |
-| `corrupt_required_side_ref` | hard failure |
-| `side_ref_closure_mismatch` | hard failure |
-| `collection_identity_mismatch` | hard failure |
-| `collection_generation_mismatch` | hard failure |
+| `missing_required_external_ref` | hard failure |
+| `corrupt_required_external_ref` | hard failure |
+| `external_ref_closure_mismatch` | hard failure |
+| `catalog_epoch_mismatch` | hard failure |
 | `schema_epoch_mismatch` | hard failure |
-| `base_root_mismatch` | hard failure unless handled by formal accumulator state |
-| `root_descriptor_epoch_mismatch` | hard failure |
-| `base_system_root_mismatch` | hard failure |
-| `watermark_inconsistency` | hard failure |
-| `duplicate_wallsn` | hard failure |
-| `duplicate_collection_seq` | hard failure |
-| `dependency_gap` | block/fail for later same-collection transactions |
-| `system_delta_precondition_failed` | hard failure |
-| `replay_publish_failure` | retryable recovery failure only before descriptor/watermark commit |
+| `precondition_failed` | hard failure unless the command kind defines an idempotent skip |
+| `result_assertion_mismatch` | hard failure |
+| `duplicate_lsn` | hard failure |
+| `replay_publish_failure` | retryable recovery failure only before `AppliedLSN` is advanced |
 | `cleanup_manifest_missing` | cleanup blocked; missing segment hard-fails open |
 | `cleanup_manifest_corrupt` | cleanup blocked or hard-fails if needed for missing segment proof |
-| `cleanup_failure` | safe leak/debt after watermark/checkpoint |
-| `orphan_prepared_side_ref` | quarantine candidate when no committed WAL/root references it |
+| `cleanup_failure` | safe leak/debt after checkpoint |
+| `orphan_prepared_external_ref` | quarantine candidate when no committed WAL/root references it |
 | `read_only_recovery_required` | read-only open failure |
 
-`missing_required_side_ref`, `corrupt_required_side_ref`,
-`side_ref_closure_mismatch`, schema/root/identity mismatches, and watermark
-inconsistency are hard recovery failures for complete committed collection WAL
-records.
+`missing_required_external_ref`, `corrupt_required_external_ref`,
+`external_ref_closure_mismatch`, catalog/schema mismatches, precondition
+failures, and result assertion mismatches are hard recovery failures for complete
+committed typed command WAL frames.
+
+For strict command kinds, finding an existing effect while durable `AppliedLSN`
+does not cover the command is also a hard failure. Idempotent skip is allowed
+only for command kinds that specify proof, such as a stable command ID, payload
+digest, document digest, matched/modified assertion, and catalog/schema guard.
 
 Implementations must expose typed errors equivalent to:
 
 ```go
-type CollectionWALErrorCategory string
+type CommandWALErrorCategory string
 
-type CollectionWALError struct {
-    Category          CollectionWALErrorCategory
-    TxnID             string
-    WALLSN            uint64
-    CollectionUID     string
-    CollectionUIDHash string
-    CollectionSeq     uint64
-    SegmentID         string
-    SegmentOffset     uint64
-    SideRef           *SideRefSummary
-    Cause             error
+type CommandWALError struct {
+    Category      CommandWALErrorCategory
+    CommandID     string
+    LSN           uint64
+    Kind          string
+    Scope         string
+    SegmentID     string
+    SegmentOffset uint64
+    ExternalRef   *ExternalRefSummary
+    Cause         error
 }
 ```
 
 The implementation must provide helpers equivalent to `IsIncompleteTail(err)`,
-`IsRecoveryRequired(err)`, and `IsCollectionWALCorruption(err)`. Error category
+`IsRecoveryRequired(err)`, and `IsCommandWALCorruption(err)`. Error category
 strings are metric suffixes and artifact fields; they must not be built from
 arbitrary error messages.
 
-Before recovery deletes, quarantines, rewrites, or marks clean any collection WAL
-segment or side-ref file, it must write and fsync a forensic artifact.
+Before recovery deletes, quarantines, rewrites, or marks clean any command WAL
+segment range or external-ref file, it must write and fsync a forensic artifact.
 
 Artifact directory:
 
 ```text
-collection_wal/recovery-artifacts/<unix_nano>-<pid>-<open_uuid>/
+command_wal/recovery-artifacts/<unix_nano>-<pid>-<open_uuid>/
 ```
 
 Required files:
 
 - `recovery-report.json`;
 - `segments.json`;
-- `transactions.json`;
-- `side-refs.json`;
-- `watermarks.json`;
+- `commands.json`;
+- `external-refs.json`;
+- `applied-lsn.json`;
 - `cleanup-decisions.json`;
 - `quarantine-manifest.json` when quarantine occurs.
 
 The artifact directory, every required file, and the parent directory entry must
 be fsynced before recovery performs the side effect that the artifact explains.
-If artifact creation fails, recovery must leave WAL and side files untouched
-unless the failure is part of an explicit operator-approved destructive repair.
+If artifact creation fails, recovery must leave WAL and external-ref files
+untouched unless the failure is part of an explicit operator-approved destructive
+repair.
 
 Artifacts must not contain document payloads, raw user keys, raw index keys, raw
 collection names, raw root names, or absolute host paths by default. They must
 include metadata, checksums, digests, redacted names, segment ids, offsets,
-lengths, watermarks, and error categories sufficient to reconstruct:
+lengths, `AppliedLSN`, and error categories sufficient to reconstruct:
 
-- which transaction failed or was skipped;
-- which side refs were required;
-- which side refs were missing, corrupt, protected, released, or quarantined;
-- current applied watermark per collection;
+- which command failed or was skipped;
+- which external refs were required;
+- which external refs were missing, corrupt, protected, released, or quarantined;
+- current `AppliedLSN`;
 - segment offset and checksum state;
 - cleanup eligibility;
 - `safe_to_restart`, `safe_to_backup`, `safe_to_compact`,
   `safe_to_delete_files`, and `requires_operator_action`.
 
-Skipped transactions must be auditable through a redacted
-`SkippedTransactionRecord` in the recovery artifact and CLI reports. Required
-skip categories are `incomplete_tail`, `already_applied_watermark`,
-`duplicate_collection_seq`, and `orphan_prepared_side_ref`. Required fields are
-`skip_id`, `skip_category`, `txn_id`, `wallsn`, `collection_uid`,
-`collection_uid_hash`, `collection_seq`, `segment_id`, `segment_offset`,
-`record_length`, `commit_marker_present`, `record_checksum_valid`,
-`side_ref_summaries`, `watermark_before`, and `watermark_after`.
+Skipped commands must be auditable through a redacted `SkippedCommandRecord` in
+the recovery artifact and CLI reports. Required skip categories are
+`incomplete_tail`, `already_applied_lsn`, and `orphan_prepared_external_ref`.
+Required fields are `skip_id`, `skip_category`, `command_id`, `lsn`, `kind`,
+`scope`, `segment_id`, `segment_offset`, `record_length`,
+`commit_marker_present`, `record_checksum_valid`, `external_ref_summaries`,
+`applied_lsn_before`, and `applied_lsn_after`.
 
-Collection WAL recovery must also validate the canonical embedded side-ref set
-decoded from root deltas and descriptors against the declared side-ref set.
-Declared refs alone are not trusted.
+Command WAL recovery uses `LSN` as the dependency and skip key. There is no
+separate collection sequence or `WALLSN` stream in the active target.
 
-Collection WAL recovery uses `CollectionSeq` as the dependency and skip key.
-`WALLSN` is only a global append position for deterministic scanning,
-diagnostics, and cleanup accounting. A higher cleaned or published `WALLSN` from
-one collection must never cause recovery to skip a lower unapplied
-`CollectionSeq` from another collection.
-
-Collection WAL recovery must enforce the abstract state machine in
-`collection-wal-durability-plan.md`. In particular:
-
-- descriptor-only and watermark-only backend commits are invalid in WAL-on
-  modes and must stop open unless a future format provides an explicit repair
-  protocol;
-- replay skip requires the same collection's applied sequence plus matching
-  guard history, never global `WALLSN` ranges;
-- side refs referenced by complete uncleaned WAL remain protected until
-  `CanCleanSideRef` is true;
-- read-only recovery detection uses `CanSkipReplay` and `CanReplay`, not raw file
-  presence alone.
-
-Read-write recovery must run collection WAL replay before collection managers,
-native-wire servers, or user collection handles can observe collection state.
-Read-only open must fail with recovery-required if unapplied committed
-collection WAL exists, unless an explicit stale read-only mode is added.
+Read-write recovery must run command WAL replay before collection managers,
+native-wire servers, or user handles can observe state derived from typed
+commands. Read-only open must fail with recovery-required if unapplied committed
+command WAL exists, unless an explicit stale read-only mode is added.
 
 ## 6. Restore and Backup-Manifest Validation
 
@@ -317,65 +327,65 @@ Restore/open validation before serving reads:
 
 1. recover index swap artifacts;
 2. load backup manifest if present;
-3. discover collection WAL segments and cleanup metadata;
-4. validate missing collection WAL segments only when covered by durable cleanup
+3. discover commit-log command WAL segments and cleanup metadata;
+4. validate missing commit-log segments only when covered by durable cleanup
    metadata or by the backup manifest's cleaned-range proof;
-5. rebuild the protected side-ref index from all committed non-cleaned
-   collection WAL;
-6. for every committed transaction not covered by applied watermark plus
+5. rebuild the protected external-ref index from all committed non-cleaned
+   command WAL frames;
+6. for every complete typed command frame not covered by `AppliedLSN` plus
    cleanup:
-   - validate frame checksum and transaction checksum;
-   - validate `CollectionUID`, generation, schema epoch, catalog digest, and
-     root epochs;
-   - decode embedded root deltas/descriptors and derive the canonical side-ref
-     set;
-   - compare canonical side refs to declared `SideRefs`;
-   - verify every side ref exists, has expected size/checksum/class, and has
-     dictionary/template/column dependency closure;
-7. stop open before serving reads on any missing or corrupt required side ref;
-8. publish descriptors and applied watermarks atomically for unapplied
-   transactions;
-9. classify uncommitted prepared/final side files;
+   - validate frame checksum and payload digest;
+   - validate command kind, scope, catalog/schema epochs, preconditions, and
+     result assertions;
+   - decode the canonical command payload;
+   - compare declared external refs to command-derived refs where applicable;
+   - verify every required external ref exists, has expected size/checksum/class,
+     and has dictionary/template/column dependency closure;
+7. stop open before serving reads on any missing or corrupt required external ref;
+8. replay unapplied commands and publish recovered roots plus `AppliedLSN`
+   atomically;
+9. classify uncommitted prepared/final external-ref files;
 10. quarantine, but do not immediately purge, files proven orphaned.
 
-Backup/restore validation must fail closed on missing side refs. A restore may
-accept a missing collection WAL segment only when durable cleanup metadata or
-the backup manifest proves the exact segment/range was safely cleaned.
+Backup/restore validation must fail closed on missing required external refs. A
+restore may accept a missing commit-log segment only when durable cleanup
+metadata or the backup manifest proves the exact segment/range was safely
+cleaned.
 
 ## 7. Read-Only Open
 
-Read-only open must not perform mutating collection WAL replay.
+Read-only open must not perform mutating command WAL replay.
 
-Before exposing state, read-only open must scan collection WAL segment metadata,
-cleanup metadata, and applied watermarks enough to determine whether any
-complete committed collection WAL transaction is not covered by the durable
-applied watermark/cleanup boundary.
+Before exposing state, read-only open must scan command WAL segment metadata,
+cleanup metadata, and `AppliedLSN` enough to determine whether any complete
+committed typed command frame is not covered by the durable
+`AppliedLSN`/cleanup boundary.
 
 Default behavior:
 
-- if dirty committed collection WAL exists, return public
-  `ErrRecoveryRequired` with a collection-WAL recovery reason.
+- if dirty committed command WAL exists, return public `ErrRecoveryRequired`
+  with a command-WAL recovery reason.
 
 Read-only stale mode:
 
 - a future explicit option may expose only checkpointed roots;
 - the option name must include `Stale`;
-- it must report collection WAL debt;
+- it must report command WAL debt;
 - it must be rejected by backup, restore validation, and offline maintenance
   tools.
 
 ## 8. Offline Maintenance Preconditions
 
 Offline value-log rewrite, offline index vacuum, and any offline compaction or
-root rewrite must prove collection WAL cleanliness before opening the DB
-read-only as a maintenance source. Clean means no committed unapplied
-collection WAL, no uncleaned committed collection WAL segment needed for
-recovery, no active/incomplete prepare group whose committed/uncommitted status
-is unclassified, and durable cleanup metadata for any missing segment.
+root rewrite must prove command WAL cleanliness before opening the DB read-only
+as a maintenance source. Clean means no committed unapplied command WAL, no
+uncleaned committed commit-log segment needed for recovery, no
+active/incomplete prepare group whose committed/uncommitted status is
+unclassified, and durable cleanup metadata for any missing segment.
 
 Offline tools may alternatively run full read-write recovery first, then reopen
-the clean directory for maintenance. They must not proceed using stale
-read-only roots.
+the clean directory for maintenance. They must not proceed using stale read-only
+roots.
 
 ## 9. Post-Recovery Expectations
 

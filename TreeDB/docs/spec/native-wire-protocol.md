@@ -77,11 +77,14 @@ Raft entries. Layer 2 MAY contain optional client/server convenience sections
 that are also excluded from deterministic entries unless explicitly marked as
 deterministic command input.
 
-Collection WAL is local physical durability state and is not a Raft log entry.
-Native-wire deterministic command entries describe logical mutations; each node
-that applies such a command must still satisfy the local collection WAL
-recoverability rule before reporting local or Raft-backed success for collection
-mutations.
+User-command WAL is local crash-recovery durability state and is not a Raft log
+entry. Native-wire deterministic command entries describe logical mutations;
+each node that applies such a command must still satisfy the local
+user-command-WAL recoverability, root-publication, and applied-LSN rule before
+reporting local or Raft-backed success for collection mutations. Local command
+WAL payloads should reuse or wrap these deterministic command-entry schemas so
+the single-node WAL and future Raft paths do not grow separate mutation
+encoders.
 
 Protocol compatibility is based on explicit version and feature negotiation, not
 best-effort decoding of unknown required fields. Unknown required frame flags,
@@ -758,13 +761,16 @@ mutation:
 ```
 
 `visible` means the mutation is visible to reads through the serving process or
-owning write domain. For WAL-on collection modes this also requires local
-collection WAL recoverability. For WAL-off relaxed mode this is process-local
+owning write domain. For V1 WAL-on collection modes this also requires local
+command-WAL recoverability: the command frame and required external refs are
+recoverable, and the normal executor has installed the mutation in the
+process-visible write domain. It does not require root publication or
+`AppliedLSN` advancement. For WAL-off relaxed mode this is process-local
 visibility only.
 
 `flushed` means all touched collection state for the command has been published
-to backend roots, and WAL-backed transactions have their applied watermark
-advanced in the same backend commit.
+to backend roots, and WAL-backed commands have `AppliedLSN` advanced in the same
+backend commit.
 
 `synced` means `flushed` plus an fsync-capable local durability boundary. A
 server running a mode that cannot provide fsync for the touched state MUST fail
@@ -787,14 +793,17 @@ Local policies are ordered only within the local family:
 must not be treated as a numeric extension of local durability ordering unless a
 future cluster spec explicitly defines the implied local durability level.
 
-If validation succeeds but collection WAL append fails before the commit marker,
-the server returns `durability_unavailable`, `retryable=true`,
+If validation succeeds but required external-ref preparation/protection or
+command-WAL append fails before a complete command frame becomes recoverable, the
+server returns `durability_unavailable`, `retryable=true`,
 `commit_state=not_committed`, and the mutation must not be visible.
 
-If the commit marker reached the required local boundary but visible install,
-flush, publication, checkpoint, or response construction fails, the server
-returns `commit_ambiguous`, `retryable=false` unless a durable idempotency record
-makes replay safe, and `commit_state=committed_or_unknown_after_commit`.
+If a complete command frame reached the required local boundary but root
+publication, `AppliedLSN` advancement, visible install, flush, checkpoint, or
+response construction fails, the server returns `commit_ambiguous`,
+`retryable=false` unless a durable idempotency record makes replay safe, and
+`commit_state=committed_or_unknown_after_commit`. The server must not report
+`not_committed` after a complete command frame may be recovered and replayed.
 
 If a command requested `ack_policy=flushed` or `ack_policy=synced` and the
 logical mutation committed but the requested barrier failed, the error must

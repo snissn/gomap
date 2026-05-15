@@ -7,10 +7,9 @@ Status:
 - Current shipped contract: sections that describe existing key/value, cached,
   read-only, and collection write-domain behavior are normative for current
   code.
-- PR1-min collection WAL target contract: section 7.1 defines the guarded
-  no-index row insert slice. The full target semantics must be satisfied before
-  broad WAL-on collection durable-at-ack can be advertised or enabled by
-  default.
+- Target durable-at-ack collection behavior is the user-command WAL contract in
+  `user-command-wal.md`. It is not current behavior until the named
+  implementation and verification gates land.
 
 ## 1. Key Model
 
@@ -103,10 +102,11 @@ When the cached layer is enabled:
 - Snapshots are point-in-time readers and MUST be closed to release retention pressure.
 - In cached mode, snapshots MUST include buffered memtable writes and MUST be snapshot-isolated (writes after snapshot acquisition are not visible through the snapshot).
 - `Snapshot.Get` / `Snapshot.GetAppend` return `ErrKeyNotFound` for missing/tombstoned keys (unlike `DB.Get`, which returns `(nil, nil)` on miss).
-- Under the planned collection WAL contract, collection scans and snapshots that
-  can read pending collection-local state use a `CollectionReadView`. The view
-  pins backend snapshot state, pending mutable/queued/publishing collection
-  units, derived index views, and reachable side refs until the read closes.
+- Under the planned user-command WAL contract, collection scans and snapshots
+  that can read pending collection-local state use a `CollectionReadView`. The
+  view pins backend snapshot state, pending mutable/queued/publishing
+  collection units, derived index views, and reachable external refs until the
+  read closes.
 
 ## 6. Concurrency and Locking
 
@@ -137,9 +137,10 @@ Detailed semantics are in `TreeDB/docs/spec/write-path-and-durability.md`.
 Collection APIs currently have a separate write-domain durability boundary:
 acknowledged writes that remain in mutable, queued, or publishing
 collection-local state are visible in-process but not durable-at-ack. That
-current behavior is owned by `collections-write-domain.md`. The target WAL-on
-durable-at-ack collection contract is owned by
-`collection-wal-durability-plan.md` until it lands, then summarized here.
+current behavior is owned by `collections-write-domain.md`. The active target
+for WAL-on durable-at-ack collection behavior is the user-command WAL contract
+in `user-command-wal.md`; the older collection root-delta WAL plan is historical
+context only.
 
 ### 7.1 Collection Write Acknowledgement Contract
 
@@ -152,58 +153,73 @@ Terms:
   write visible without relying on pre-crash memory.
 - `published`: root descriptors for the collection state have been committed to
   backend roots.
-- `checkpointed`: the backend durability boundary includes the published roots,
-  collection WAL applied watermarks, and required side-ref reachability
-  metadata.
+- `applied`: the backend durability boundary includes the published roots,
+  required value-log/leaf-log/external-ref reachability, and `AppliedLSN` for
+  the command LSN prefix.
 - `fsynced`: the selected durable-mode fsync boundary has completed. Non-sync
   collection APIs do not imply fsync.
 
-Collection data mutators:
+Current collection data mutators:
 
-The full WAL-on target contract below is not the same as the first guarded
-implementation slice. PR1-min may expose durable-at-ack only for no-index row
-`Insert` and `InsertBatch` under an explicit `NoIndexRowInsertOnly` capability.
-With that capability, indexed schemas, update/delete, schema/index changes,
-pointerizing storage policies, root-delta side payloads, column roots, and
-native-wire/Raft exposure must fail before any visible mutation. With the
-feature off, existing flush-boundary behavior remains the public contract.
+| Method | Current shipped contract |
+|---|---|
+| `Collection.Insert` / `InsertBatch` | Successful return means process-local visibility according to the path that executed it. Crash recovery is promised only after `Flush`, `FlushAll`, `Checkpoint`, `Close`, or a synchronous publish path covers the mutation. |
+| `Collection.Update` / `UpdateBatch` | Successful return is process-local visibility until a public persistence boundary. Callback code is not durable replay input. |
+| `Collection.Delete` / `DeleteBatch` | Successful return is process-local visibility until a public persistence boundary. |
 
-| Method | Full `DurabilityDurable` and `DurabilityWALOnRelaxed` target contract | `DurabilityWALOffRelaxed` contract |
+Target user-command WAL mutators:
+
+| Method family | Target WAL-on durable-at-ack contract | WAL-off relaxed contract |
 |---|---|---|
-| `Collection.Insert` | Successful return means the whole mutation has a committed collection WAL transaction and is recoverable after process crash. It may still be unpublished pending state and is not necessarily checkpointed or fsynced. | Successful return means process-local visibility according to the path that executed it. Crash recovery is promised only after `Flush`, `FlushAll`, `Checkpoint`, or `Close` covers the mutation. |
-| `Collection.InsertBatch` | Successful return means the whole batch is recoverable as one logical mutation boundary. | Successful return is process-local visibility until an explicit persistence boundary covers the batch. |
-| `Collection.Update` / `UpdateBatch` | Successful return means the resulting primary, secondary, template/index-state, and tombstone deltas are recoverable as one mutation boundary. Update callbacks must be safe for retry before commit. | Successful return is process-local visibility until a public persistence boundary. |
-| `Collection.Delete` / `DeleteBatch` | Successful return means the whole delete mutation, including secondary-index deletes and tombstones, is recoverable. | Successful return is process-local visibility until a public persistence boundary. |
+| Insert by explicit ID | `CollectionInsertBatchByID` is one command frame with one LSN and all-or-nothing replay. Success/visibility waits for recoverable WAL plus normal-executor apply; checkpoint/cleanup later publishes roots plus `AppliedLSN`. | Process-local visibility until an explicit persistence boundary covers the batch. |
+| Delete by explicit ID | `CollectionDeleteBatchByID` is one command frame with one LSN and all-or-nothing replay. Secondary-index deletes and tombstones are derived by the normal executor; checkpoint/cleanup later publishes roots plus `AppliedLSN`. | Process-local visibility until an explicit persistence boundary. |
+| Declarative update by explicit ID | `CollectionUpdateByIDOps` logs canonical operators over resolved literal values. Resolver helpers run before WAL append and are never invoked during recovery. | Process-local visibility until an explicit persistence boundary. |
+| Callback update by explicit ID | Callback identity is discarded before WAL append; the WAL logs final accepted replacements/no-ops or another stable replayable result. No Go callback is replayed. | Process-local visibility until an explicit persistence boundary. |
+| Query-wide update/delete | WAL-on durable-at-ack modes reject until a future command kind defines deterministic target ordering, preconditions, and result assertions. | May remain allowed only under durability profiles that make no durable-at-ack claim. |
 
-Batch mutators are all-or-nothing at the durable/recovery boundary. An ordinary
+A target WAL-supported command may not return success or become owner-visible
+from the WAL frame alone. V1 has no durable pending overlay: success/visibility
+requires a recoverable command frame plus normal-executor apply. Checkpoint,
+flush, close, synced ack, and recovery boundaries later publish roots, required
+reachability metadata, and `AppliedLSN` in one backend durability boundary before
+WAL cleanup. Unsupported command kinds must fail before staging, uniqueness
+reservation, visible mutation, or external ref protection that would require
+recovery.
+
+Batch mutators are all-or-nothing at the command boundary. An ordinary
 pre-commit error means no item from that batch became visible or recoverable. A
-post-commit failure must be reported as commit-ambiguous for the whole batch.
+post-recoverable-frame failure must be reported as commit-ambiguous or
+recovery-required for the whole command. Oversized WAL-on batches must be
+rejected before LSN assignment unless the caller explicitly submits smaller
+independent batches; implicit atomic splitting requires a future `CommandGroup`
+protocol.
 
 Collection metadata mutators:
 
 | Method | Contract |
 |---|---|
-| `CollectionManager.CreateCollection` | Successful return means the collection catalog entry is published and recoverable under the selected non-sync durability mode. It is not fsynced unless followed by a sync-capable barrier. Retrying creation with identical metadata is idempotent; retrying with incompatible metadata fails without changing the existing collection. |
-| `Collection.CreateIndex` and index-drop methods | These methods establish an index/schema barrier. They drain collection writes admitted before the barrier before taking the backfill/planning snapshot, or are encoded as ordered collection WAL transactions. Successful `CreateIndex` means the index definition, root descriptors, and backfilled index contents for the barrier snapshot are published atomically and recoverable. A unique-index conflict is an ordinary pre-commit error and must not expose partial schema/index state. |
+| `CollectionManager.CreateCollection` | Current behavior publishes the catalog entry under the selected non-sync durability mode. Target WAL-on behavior is a `CatalogMutation` command or explicit WAL-on rejection until that command kind lands. Retrying creation with identical metadata is idempotent; retrying with incompatible metadata fails without changing the existing collection. |
+| `Collection.CreateIndex` and index-drop methods | These methods establish an index/schema barrier. They drain collection writes admitted before the barrier before taking the backfill/planning snapshot, or target a `CatalogMutation` command frame that carries descriptor changes atomically. A unique-index conflict is an ordinary pre-commit error and must not expose partial schema/index state. |
 
 Barrier methods:
 
 | Method | Contract |
 |---|---|
-| `Collection.Flush` | Publishes all pending collection write-domain state for that collection admitted before the flush cut, waits for in-flight async indexed publishing for that collection, and advances the collection WAL applied watermark for the published transactions. It does not imply fsync unless composed with a sync/checkpoint boundary that requires fsync. |
-| `CollectionManager.FlushAll` | Applies the `Flush` contract to every collection write domain known to the manager at the flush cut. Future backend-owned collection WAL services must use a global domain registry when the contract needs to cover all collection handles, not only one manager instance. |
-| `DB.Checkpoint` | Full target: successful return is a database-wide durability/cleanup boundary for all collection writes and collection metadata admitted before the checkpoint cut. With the current `Checkpoint() error` signature, `nil` means no pre-cut committed collection WAL debt remains unpublished or required for recovery. PR1-min does not implement the full cleanup boundary; it must retain collection WAL needed for recovery and must not claim clean collection-WAL state merely because backend checkpoint completed. If publication/watermark/checkpoint coverage cannot be completed, `Checkpoint` must return an error unless a future result type explicitly exposes nonzero collection WAL debt. |
-| `DB.Close` | Establishes a close admission cut. Every collection write racing with the cut either fails before visible install with `ErrClosed` or is included in the close drain. If `Close` returns `nil`, every included successful collection mutation is visible after read-write reopen. Physical cleanup may remain a safe leak, but WAL/side refs needed for recovery must not be removed. |
+| `Collection.Flush` | Publishes all pending collection write-domain state for that collection admitted before the flush cut and waits for in-flight async indexed publishing for that collection. It does not imply fsync unless composed with a sync/checkpoint boundary that requires fsync. Under command WAL, it may also serve as a publish boundary for commands admitted before the cut only if it advances `AppliedLSN` atomically with the roots. |
+| `CollectionManager.FlushAll` | Applies the `Flush` contract to every collection write domain known to the manager at the flush cut. Future backend-owned command WAL services must use a global domain registry when the contract needs to cover all collection handles, not only one manager instance. |
+| `DB.Checkpoint` | Target command WAL cleanup boundary: successful return may report clean only when every pre-cut command frame required for recovery is covered by durable roots plus `AppliedLSN`, and when cleanup metadata for omitted WAL ranges is durable. If publication/`AppliedLSN`/checkpoint coverage cannot be completed, `Checkpoint` must return an error unless a future result type explicitly exposes nonzero command WAL debt. |
+| `DB.Close` | Establishes a close admission cut. Every collection write racing with the cut either fails before visible install with `ErrClosed` or is included in the close drain. If `Close` returns `nil`, every included successful collection mutation is visible after read-write reopen. Physical cleanup may remain a safe leak, but WAL/external refs needed for recovery must not be removed. |
 
 Public durability errors:
 
 - `ErrDurabilityUnavailable`: a requested durability boundary cannot be
-  satisfied before any logical commit.
+  satisfied before a complete command frame becomes recoverable.
 - `CommitAmbiguousError` / `ErrCommitAmbiguous`: the mutation may already be
-  committed or recoverable. Callers must not blindly retry non-idempotent
+  recoverable or committed. Callers must not blindly retry non-idempotent
   operations.
-- `ErrRecoveryRequired`: read-only open found committed collection WAL that
-  requires mutating recovery before collection APIs can be served.
+- `ErrRecoveryRequired`: read-only open found complete command WAL with
+  `LSN > AppliedLSN` that requires mutating recovery before collection APIs can
+  be served.
 
 Retry guidance:
 
@@ -211,8 +227,9 @@ Retry guidance:
   idempotency key.
 - After timeout, disconnect, or commit-ambiguous error, duplicate document ID or
   unique-index conflict can mean the prior attempt committed.
-- Updates are safe to retry only when the update function is idempotent, guarded
-  by a version/compare predicate, or protected by a durable idempotency key.
+- Updates are safe to retry only when the update operation is idempotent,
+  guarded by a version/compare predicate, or protected by a durable idempotency
+  key.
 
 Mongo gateway:
 
@@ -233,11 +250,12 @@ When opened read-only:
 - write operations must fail,
 - no mutating recovery steps run,
 - no background maintenance mutates on-disk state.
-- if committed unapplied collection WAL exists, read-only open must fail with
-  `ErrRecoveryRequired` unless an explicit stale read-only mode is selected.
+- if complete command WAL frames exist with `LSN > AppliedLSN`, read-only open
+  must fail with `ErrRecoveryRequired` unless an explicit stale read-only mode is
+  selected.
 - stale read-only mode, if added, must be explicitly named stale, must report
-  collection WAL debt, and must be rejected by backup and offline maintenance
-  entry points.
+  command WAL debt, and must be rejected by backup and offline maintenance entry
+  points.
 
 ## 9. Collections Native Fast Path
 
@@ -288,9 +306,9 @@ Operations that need persisted roots as planning input, including schema/index
 changes, must drain pending indexed write-domain state and wait for in-flight
 async publish units before taking their planning snapshot.
 
-Under the planned collection WAL contract, WAL-on collection visibility implies
-recoverability. No read, uniqueness check, update/delete planner, or pending
-merge may observe a mutation before its collection WAL transaction is
+Under the planned user-command WAL contract, WAL-on collection visibility
+implies recoverability. No read, uniqueness check, update/delete planner, or
+pending merge may observe a mutation before its typed command WAL frame is
 committed/recoverable.
 
 Detailed indexed collection write-domain semantics are in

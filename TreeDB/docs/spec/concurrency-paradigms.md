@@ -243,23 +243,25 @@ Current order constraints:
 
 Any refactor that changes this order MUST preserve deadlock freedom.
 
-Planned collection WAL lock-order constraints add a separate collection layer
+Planned user-command WAL lock-order constraints add a command admission layer
 above backend publish locks:
 
 1. DB close/checkpoint admission gate,
-2. collection manager domain registry,
-3. per-collection mutation serialization,
-4. side-ref reservation/protection,
-5. collection WAL lane/segment append lock,
-6. short per-domain state install/completion lock,
-7. backend publish/commit/checkpoint locks.
+2. collection manager domain registry when a command touches collections,
+3. per-scope mutation serialization,
+4. external-ref prepare/protection,
+5. shared commit-log command append lock,
+6. short per-domain state install/completion lock for current flush-boundary
+   write-domain state,
+7. backend publish/commit/checkpoint locks that select roots and
+   `AppliedCommandLSN`.
 
-The collection domain state lock must not be held while performing collection
-WAL I/O, waiting for async publish, registering long-running GC work, calling
-backend publish, or calling backend checkpoint. `DB.Checkpoint` must invoke
-collection drain/checkpoint hooks before taking backend locks that async
-publishers need, or use a nonblocking protocol that cannot wait on those
-publishers while holding the locks they need.
+Collection domain state locks must not be held while performing command WAL I/O,
+waiting for async publish, registering long-running GC work, calling backend
+publish, or calling backend checkpoint. `DB.Checkpoint` must invoke collection
+drain/checkpoint hooks before taking backend locks that async publishers need, or
+use a nonblocking protocol that cannot wait on those publishers while holding
+the locks they need.
 
 ### 4.3 Backend lock roles
 

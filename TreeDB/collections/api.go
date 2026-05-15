@@ -71,7 +71,10 @@ const (
 	// and visibility lag.
 	DefaultIndexedWriteMemtableAsyncFlushMaxQueuedUnits = 4
 	defaultCollectionUpdateCombineMaxBatch              = 256
+	defaultCollectionUpdateCombineShards                = 1
 	defaultCollectionUpdateCombineDrainYields           = 1
+	defaultCollectionUpdateCombineLaneDrainYields       = 4
+	defaultCollectionUpdateCombinePreparedDrainYields   = 128
 	collectionUpdateCombineIdleTTL                      = 30 * time.Second
 	collectionUpdateCombineInlineQuietPeriod            = time.Millisecond
 	collectionPprofComponentKey                         = "gomap_component"
@@ -505,6 +508,36 @@ type CollectionUpdateIndexStats struct {
 	SecondaryKeyBytes int
 }
 
+// CollectionUpdateCombineBucketCount is the number of power-of-two buckets used
+// for update-combiner queue-depth and batch-size observations.
+const CollectionUpdateCombineBucketCount = 10
+
+var collectionUpdateCombineBucketUpperBounds = [CollectionUpdateCombineBucketCount]int{
+	1, 2, 4, 8, 16, 32, 64, 128, 256, 0,
+}
+
+// CollectionUpdateCombineBucketLabel returns the stable metric suffix for an
+// update-combiner bucket. The final bucket is an overflow bucket.
+func CollectionUpdateCombineBucketLabel(index int) string {
+	if index < 0 || index >= CollectionUpdateCombineBucketCount {
+		return ""
+	}
+	upper := collectionUpdateCombineBucketUpperBounds[index]
+	if upper > 0 {
+		return fmt.Sprintf("le_%d", upper)
+	}
+	return fmt.Sprintf("gt_%d", collectionUpdateCombineBucketUpperBounds[index-1])
+}
+
+func collectionUpdateCombineBucketIndex(value int) int {
+	for i, upper := range collectionUpdateCombineBucketUpperBounds {
+		if upper == 0 || value <= upper {
+			return i
+		}
+	}
+	return CollectionUpdateCombineBucketCount - 1
+}
+
 // CollectionManagerStats captures aggregate write-domain counters for a
 // CollectionManager. The counters are process-local observability; they are
 // not persisted with collection metadata.
@@ -573,8 +606,12 @@ type CollectionManagerStats struct {
 	UpdateCombineInlineRequests    uint64
 	UpdateCombineEnqueue           time.Duration
 	UpdateCombineWait              time.Duration
+	UpdateCombineQueueWait         time.Duration
 	UpdateCombineDrain             time.Duration
 	UpdateCombineRun               time.Duration
+	UpdateCombineResultDelivery    time.Duration
+	UpdateCombineQueueDepthBuckets [CollectionUpdateCombineBucketCount]uint64
+	UpdateCombineBatchSizeBuckets  [CollectionUpdateCombineBucketCount]uint64
 	UpdateBatchCalls               uint64
 	UpdateBatchItems               uint64
 	UpdateBatchMatched             uint64
@@ -802,6 +839,7 @@ type indexedFlushUnit struct {
 	rootBaseIDs     map[string]uint64
 	uniqueValueRuns map[string][]memtable.Table
 	arenaRefs       [][]byte
+	primaryOverlay  *bufferedPrimaryOverlay
 	docCount        int
 	byteCount       int64
 	rootRunCount    int
@@ -838,11 +876,17 @@ type bufferedIndexedCheckpoint struct {
 	mutableCount           int
 	mutableBytes           int64
 	writeGeneration        uint64
+	primaryWriteIndex      *bufferedPrimaryWriteIndex
 	rootRuns               map[string][]memtable.Table
 	rootMutableRuns        map[string]memtable.Table
 	rootPolicies           map[string]backenddb.OrderedRootStoragePolicy
 	rootBaseIDs            map[string]uint64
 	rootValueArenas        [][]byte
+	primaryOverlay         *bufferedPrimaryOverlay
+	primaryCache           *bufferedPrimaryOverlay
+	primaryCacheSystemRoot uint64
+	primaryCacheCollection string
+	primaryCacheDirty      bool
 	indexedPublishingUnits []indexedFlushUnit
 	indexedFlushUnits      []indexedFlushUnit
 	primaryRunIndexActive  bool
@@ -865,6 +909,10 @@ type bufferedPrimaryRunIndex struct {
 	directEntries bool
 }
 
+type bufferedPrimaryWriteIndex struct {
+	generations map[uint64]uint64
+}
+
 type bufferedPrimaryRunRef struct {
 	key        []byte
 	table      memtable.Table
@@ -873,40 +921,59 @@ type bufferedPrimaryRunRef struct {
 	entryValid bool
 }
 
+type bufferedPrimaryOverlay struct {
+	values     map[uint64]bufferedPrimaryOverlayRef
+	collisions map[uint64][]bufferedPrimaryOverlayRef
+	count      int
+}
+
+type bufferedPrimaryOverlayRef struct {
+	key   []byte
+	value []byte
+	flags byte
+}
+
 type collectionWriteDomain struct {
 	// mutationMu serializes root descriptor publishes for handles opened
 	// through the same manager so optimistic retries do not starve under
 	// sustained collection write contention.
-	mutationMu             sync.Mutex
-	mu                     sync.RWMutex
-	indexedAsyncMu         sync.Mutex
-	indexedAsyncCond       *sync.Cond
-	indexedAsyncRun        bool
-	indexedAsyncErr        error
-	indexedPrepareCond     *sync.Cond
-	indexedPrepareFreezes  int
-	updateCombineMu        sync.Mutex
-	updateCombiner         *collectionUpdateCombiner
-	updateDraining         *collectionUpdateCombiner
-	updateCombineDone      bool
-	updateCombineTTL       time.Duration
-	closingWrites          atomic.Bool
-	loaded                 bool
-	meta                   CollectionMeta
-	catalog                *collectionCatalog
-	baseCommitSeq          uint64
-	baseSystemRoot         uint64
-	primaryRoot            uint64
-	storagePolicy          backenddb.OrderedRootStoragePolicy
-	table                  memtable.Table
-	indexedPublishingUnits []indexedFlushUnit
-	indexedFlushUnits      []indexedFlushUnit
-	rootRuns               map[string][]memtable.Table
-	rootMutableRuns        map[string]memtable.Table
-	rootPolicies           map[string]backenddb.OrderedRootStoragePolicy
-	rootBaseIDs            map[string]uint64
-	rootValueArenas        [][]byte
-	primaryIDIndex         *bufferedUniqueValueIndex
+	mutationMu               sync.Mutex
+	mu                       sync.RWMutex
+	indexedAsyncMu           sync.Mutex
+	indexedAsyncCond         *sync.Cond
+	indexedAsyncRun          bool
+	indexedAsyncErr          error
+	indexedPrepareCond       *sync.Cond
+	indexedPrepareFreezes    int
+	updateCombineMu          sync.Mutex
+	updateCombiner           *collectionUpdateCombiner
+	updateDraining           *collectionUpdateCombiner
+	updateCombineDone        bool
+	updateCombineTTL         time.Duration
+	updateCombineShards      int
+	updateCombineLaneWorkers bool
+	closingWrites            atomic.Bool
+	loaded                   bool
+	meta                     CollectionMeta
+	catalog                  *collectionCatalog
+	baseCommitSeq            uint64
+	baseSystemRoot           uint64
+	primaryRoot              uint64
+	storagePolicy            backenddb.OrderedRootStoragePolicy
+	table                    memtable.Table
+	indexedPublishingUnits   []indexedFlushUnit
+	indexedFlushUnits        []indexedFlushUnit
+	rootRuns                 map[string][]memtable.Table
+	rootMutableRuns          map[string]memtable.Table
+	rootPolicies             map[string]backenddb.OrderedRootStoragePolicy
+	rootBaseIDs              map[string]uint64
+	rootValueArenas          [][]byte
+	primaryOverlay           *bufferedPrimaryOverlay
+	primaryCache             *bufferedPrimaryOverlay
+	primaryCacheSystemRoot   uint64
+	primaryCacheCollection   string
+	primaryCacheDirty        bool
+	primaryIDIndex           *bufferedUniqueValueIndex
 	// Built lazily by readers so write-only indexed buffering does not pay for
 	// an auxiliary lookup structure it never uses.
 	primaryRunIndex        *bufferedPrimaryRunIndex
@@ -919,6 +986,7 @@ type collectionWriteDomain struct {
 	mutableBytes           int64
 	rootRunCount           int
 	writeGeneration        uint64
+	primaryWriteIndex      *bufferedPrimaryWriteIndex
 	indexedDeletesOnly     bool
 
 	mutationLockCalls                  atomic.Uint64
@@ -978,8 +1046,12 @@ type collectionWriteDomain struct {
 	updateInlineItems                  [1]updateBatchItem
 	updateCombineEnqueueNs             atomic.Uint64
 	updateCombineWaitNs                atomic.Uint64
+	updateCombineQueueWaitNs           atomic.Uint64
 	updateCombineDrainNs               atomic.Uint64
 	updateCombineRunNs                 atomic.Uint64
+	updateCombineResultDeliveryNs      atomic.Uint64
+	updateCombineQueueDepthBuckets     [CollectionUpdateCombineBucketCount]atomic.Uint64
+	updateCombineBatchSizeBuckets      [CollectionUpdateCombineBucketCount]atomic.Uint64
 	updateBatchCalls                   atomic.Uint64
 	updateBatchItems                   atomic.Uint64
 	updateBatchMatched                 atomic.Uint64
@@ -1265,8 +1337,24 @@ func (m *CollectionManager) Stats() map[string]string {
 	out["treedb.collections.write_domain.update_combine.inline_requests_total"] = fmt.Sprintf("%d", stats.UpdateCombineInlineRequests)
 	out["treedb.collections.write_domain.update_combine.enqueue_ns_total"] = fmt.Sprintf("%d", stats.UpdateCombineEnqueue.Nanoseconds())
 	out["treedb.collections.write_domain.update_combine.wait_ns_total"] = fmt.Sprintf("%d", stats.UpdateCombineWait.Nanoseconds())
+	out["treedb.collections.write_domain.update_combine.queue_wait_ns_total"] = fmt.Sprintf("%d", stats.UpdateCombineQueueWait.Nanoseconds())
 	out["treedb.collections.write_domain.update_combine.drain_ns_total"] = fmt.Sprintf("%d", stats.UpdateCombineDrain.Nanoseconds())
 	out["treedb.collections.write_domain.update_combine.run_ns_total"] = fmt.Sprintf("%d", stats.UpdateCombineRun.Nanoseconds())
+	out["treedb.collections.write_domain.update_combine.result_delivery_ns_total"] = fmt.Sprintf("%d", stats.UpdateCombineResultDelivery.Nanoseconds())
+	for i, count := range stats.UpdateCombineQueueDepthBuckets {
+		label := CollectionUpdateCombineBucketLabel(i)
+		if label == "" {
+			continue
+		}
+		out["treedb.collections.write_domain.update_combine.queue_depth_bucket_"+label+"_total"] = fmt.Sprintf("%d", count)
+	}
+	for i, count := range stats.UpdateCombineBatchSizeBuckets {
+		label := CollectionUpdateCombineBucketLabel(i)
+		if label == "" {
+			continue
+		}
+		out["treedb.collections.write_domain.update_combine.batch_size_bucket_"+label+"_total"] = fmt.Sprintf("%d", count)
+	}
 	out["treedb.collections.write_domain.update_batch.calls_total"] = fmt.Sprintf("%d", stats.UpdateBatchCalls)
 	out["treedb.collections.write_domain.update_batch.items_total"] = fmt.Sprintf("%d", stats.UpdateBatchItems)
 	out["treedb.collections.write_domain.update_batch.matched_total"] = fmt.Sprintf("%d", stats.UpdateBatchMatched)
@@ -1435,6 +1523,51 @@ func (m *CollectionManager) ResetUpdateCombinersForProfiling() {
 	}
 }
 
+// SetUpdateCombineShardsForProfiling sets the update-combiner ingress shard
+// count for already-opened collection write domains managed by m. It is intended
+// for benchmark/profiling experiments and resets active combiners so subsequent
+// updates use the new lane count.
+func (m *CollectionManager) SetUpdateCombineShardsForProfiling(shards int) {
+	if m == nil {
+		return
+	}
+	if shards < 1 {
+		shards = defaultCollectionUpdateCombineShards
+	}
+	m.domainMu.RLock()
+	domains := make([]*collectionWriteDomain, 0, len(m.domains))
+	for _, domain := range m.domains {
+		if domain != nil {
+			domains = append(domains, domain)
+		}
+	}
+	m.domainMu.RUnlock()
+	for _, domain := range domains {
+		domain.setUpdateCombineShardsForProfiling(shards)
+	}
+}
+
+// SetUpdateCombineLaneWorkersForProfiling switches sharded update-combiner
+// ingress between the global-combiner path and a lane-worker path. Lane workers
+// prepare direct buffered update plans concurrently by document-id shard, then
+// merge plans through the same buffered staging layer used by ordinary updates.
+func (m *CollectionManager) SetUpdateCombineLaneWorkersForProfiling(enabled bool) {
+	if m == nil {
+		return
+	}
+	m.domainMu.RLock()
+	domains := make([]*collectionWriteDomain, 0, len(m.domains))
+	for _, domain := range m.domains {
+		if domain != nil {
+			domains = append(domains, domain)
+		}
+	}
+	m.domainMu.RUnlock()
+	for _, domain := range domains {
+		domain.setUpdateCombineLaneWorkersForProfiling(enabled)
+	}
+}
+
 func (s *CollectionManagerStats) add(other CollectionManagerStats) {
 	if s == nil {
 		return
@@ -1502,8 +1635,14 @@ func (s *CollectionManagerStats) add(other CollectionManagerStats) {
 	s.UpdateCombineInlineRequests += other.UpdateCombineInlineRequests
 	s.UpdateCombineEnqueue += other.UpdateCombineEnqueue
 	s.UpdateCombineWait += other.UpdateCombineWait
+	s.UpdateCombineQueueWait += other.UpdateCombineQueueWait
 	s.UpdateCombineDrain += other.UpdateCombineDrain
 	s.UpdateCombineRun += other.UpdateCombineRun
+	s.UpdateCombineResultDelivery += other.UpdateCombineResultDelivery
+	for i := range s.UpdateCombineQueueDepthBuckets {
+		s.UpdateCombineQueueDepthBuckets[i] += other.UpdateCombineQueueDepthBuckets[i]
+		s.UpdateCombineBatchSizeBuckets[i] += other.UpdateCombineBatchSizeBuckets[i]
+	}
 	s.UpdateBatchCalls += other.UpdateBatchCalls
 	s.UpdateBatchItems += other.UpdateBatchItems
 	s.UpdateBatchMatched += other.UpdateBatchMatched
@@ -1633,8 +1772,14 @@ func (domain *collectionWriteDomain) statsSnapshot() CollectionManagerStats {
 	stats.UpdateCombineInlineRequests = domain.updateCombineInlineRequests.Load()
 	stats.UpdateCombineEnqueue = durationFromAtomicNs(domain.updateCombineEnqueueNs.Load())
 	stats.UpdateCombineWait = durationFromAtomicNs(domain.updateCombineWaitNs.Load())
+	stats.UpdateCombineQueueWait = durationFromAtomicNs(domain.updateCombineQueueWaitNs.Load())
 	stats.UpdateCombineDrain = durationFromAtomicNs(domain.updateCombineDrainNs.Load())
 	stats.UpdateCombineRun = durationFromAtomicNs(domain.updateCombineRunNs.Load())
+	stats.UpdateCombineResultDelivery = durationFromAtomicNs(domain.updateCombineResultDeliveryNs.Load())
+	for i := range stats.UpdateCombineQueueDepthBuckets {
+		stats.UpdateCombineQueueDepthBuckets[i] = domain.updateCombineQueueDepthBuckets[i].Load()
+		stats.UpdateCombineBatchSizeBuckets[i] = domain.updateCombineBatchSizeBuckets[i].Load()
+	}
 	stats.UpdateBatchCalls = domain.updateBatchCalls.Load()
 	stats.UpdateBatchItems = domain.updateBatchItems.Load()
 	stats.UpdateBatchMatched = domain.updateBatchMatched.Load()
@@ -2163,6 +2308,9 @@ func (domain *collectionWriteDomain) observeUpdateCombineRequest(queueDepth int)
 	domain.updateCombineLastRequestUnixNano.Store(time.Now().UnixNano())
 	if queueDepth > 0 {
 		atomicMaxUint64(&domain.updateCombineQueueDepthMax, uint64(queueDepth))
+		if domain.updateBatchDetailedStats.Load() {
+			domain.updateCombineQueueDepthBuckets[collectionUpdateCombineBucketIndex(queueDepth)].Add(1)
+		}
 	}
 }
 
@@ -2187,6 +2335,13 @@ func (domain *collectionWriteDomain) observeUpdateCombineWait(d time.Duration) {
 	domain.updateCombineWaitNs.Add(durationToAtomicNs(d))
 }
 
+func (domain *collectionWriteDomain) observeUpdateCombineQueueWait(d time.Duration) {
+	if domain == nil || d <= 0 {
+		return
+	}
+	domain.updateCombineQueueWaitNs.Add(durationToAtomicNs(d))
+}
+
 func (domain *collectionWriteDomain) observeUpdateCombineDrain(d time.Duration) {
 	if domain == nil || d <= 0 {
 		return
@@ -2201,12 +2356,22 @@ func (domain *collectionWriteDomain) observeUpdateCombineRun(d time.Duration) {
 	domain.updateCombineRunNs.Add(durationToAtomicNs(d))
 }
 
+func (domain *collectionWriteDomain) observeUpdateCombineResultDelivery(d time.Duration) {
+	if domain == nil || d <= 0 {
+		return
+	}
+	domain.updateCombineResultDeliveryNs.Add(durationToAtomicNs(d))
+}
+
 func (domain *collectionWriteDomain) observeUpdateCombineBatch(requests int, fallback bool) {
 	if domain == nil || requests <= 0 {
 		return
 	}
 	domain.updateCombineBatches.Add(1)
 	domain.updateCombineBatchedRequests.Add(uint64(requests))
+	if domain.updateBatchDetailedStats.Load() {
+		domain.updateCombineBatchSizeBuckets[collectionUpdateCombineBucketIndex(requests)].Add(1)
+	}
 	if fallback {
 		domain.updateCombineFallbackRequests.Add(uint64(requests))
 	}
@@ -2230,10 +2395,41 @@ func (m *CollectionManager) writeDomainForCollection(name string) *collectionWri
 	if domain := m.domains[name]; domain != nil {
 		return domain
 	}
-	domain := &collectionWriteDomain{}
+	domain := &collectionWriteDomain{updateCombineShards: defaultCollectionUpdateCombineShards}
 	domain.updateBatchDetailedStats.Store(m.updateBatchDetailedStats.Load())
 	m.domains[name] = domain
 	return domain
+}
+
+func (domain *collectionWriteDomain) setUpdateCombineShardsForProfiling(shards int) {
+	if domain == nil {
+		return
+	}
+	if shards < 1 {
+		shards = defaultCollectionUpdateCombineShards
+	}
+	domain.updateCombineMu.Lock()
+	if domain.updateCombineShards == shards {
+		domain.updateCombineMu.Unlock()
+		return
+	}
+	domain.updateCombineShards = shards
+	domain.updateCombineMu.Unlock()
+	domain.resetUpdateCombinerForProfiling()
+}
+
+func (domain *collectionWriteDomain) setUpdateCombineLaneWorkersForProfiling(enabled bool) {
+	if domain == nil {
+		return
+	}
+	domain.updateCombineMu.Lock()
+	if domain.updateCombineLaneWorkers == enabled {
+		domain.updateCombineMu.Unlock()
+		return
+	}
+	domain.updateCombineLaneWorkers = enabled
+	domain.updateCombineMu.Unlock()
+	domain.resetUpdateCombinerForProfiling()
 }
 
 func (m *CollectionManager) existingWriteDomainForCollection(name string) *collectionWriteDomain {
@@ -2838,7 +3034,17 @@ func (c *Collection) Insert(id, document []byte) ([]byte, error) {
 	if c.db == nil {
 		return nil, errCollectionDBNil
 	}
+	if err := c.ensureWriteDomainOpen(); err != nil {
+		return nil, err
+	}
 	if len(c.meta.Indexes) == 0 {
+		if c.hasBufferedNoIndexBSONRootRuns() {
+			if err := c.withMutationLock(func() error {
+				return c.flushBufferedWrites()
+			}); err != nil {
+				return nil, err
+			}
+		}
 		return c.insertOneNoIndexBuffered(id, document)
 	}
 	ids, err := c.InsertBatch([][]byte{id}, [][]byte{document})
@@ -3039,6 +3245,40 @@ func (c *Collection) canBufferNoIndexInsertBatchAck() bool {
 		c.db != nil &&
 		c.writeDomain != nil &&
 		c.db.DurabilityMode() == backenddb.DurabilityWALOffRelaxed
+}
+
+func (c *Collection) canBufferDirectUpdateAck() bool {
+	if c == nil || c.db == nil || c.writeDomain == nil {
+		return false
+	}
+	switch c.db.DurabilityMode() {
+	case backenddb.DurabilityWALOffRelaxed, backenddb.DurabilityWALOnRelaxed:
+		return true
+	default:
+		return false
+	}
+}
+
+func isBSONDocumentFormat(format DocumentFormat) bool {
+	normalized, err := normalizeDocumentFormat(format)
+	return err == nil && normalized == DocumentFormatBSON
+}
+
+func (c *Collection) hasBufferedNoIndexBSONRootRuns() bool {
+	if c == nil || c.writeDomain == nil {
+		return false
+	}
+	domain := c.writeDomain
+	domain.mu.RLock()
+	defer domain.mu.RUnlock()
+	if domain.count == 0 || len(domain.meta.Indexes) != 0 {
+		return false
+	}
+	collectionName := bufferedDomainCollectionName(domain, c.meta.Name)
+	if collectionName == "" || !hasPendingRootRunsForRootLocked(domain, collectionPrimaryRootName(collectionName)) {
+		return false
+	}
+	return isBSONDocumentFormat(domain.meta.Options.DocumentFormat)
 }
 
 func (c *Collection) bufferNoIndexInsertBatch(
@@ -3318,7 +3558,7 @@ func (c *Collection) flushBufferedNoIndex() error {
 	}
 	domain.mu.Lock()
 	defer domain.mu.Unlock()
-	if hasBufferedIndexedRootRuns(domain) {
+	if hasBufferedIndexedPendingWrites(domain) {
 		return nil
 	}
 	return c.flushBufferedNoIndexLocked(domain)
@@ -3349,6 +3589,7 @@ func (c *Collection) flushBufferedWritesLocked(domain *collectionWriteDomain) er
 	if domain == nil {
 		return nil
 	}
+	materializePrimaryOverlayLocked(domain)
 	if domain.count == 0 {
 		return domain.consumeIndexedAsyncFlushError()
 	}
@@ -3442,6 +3683,7 @@ func (c *Collection) flushBufferedNoIndexLocked(domain *collectionWriteDomain) e
 	domain.indexedDeletesOnly = false
 	domain.mutableCount = 0
 	domain.mutableBytes = 0
+	domain.primaryWriteIndex = nil
 	c.meta = meta
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	resetCollectionRunTable(table)
@@ -3641,6 +3883,7 @@ func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, b
 	domain.mutableBytes = saturatingAddNonNegativeInt64(domain.mutableBytes, stagedBytes)
 	domain.indexedDeletesOnly = false
 	domain.writeGeneration++
+	domain.notePrimaryWriteKeysLocked(plan.resultIDs, domain.writeGeneration)
 	domain.observeIndexedStage(len(plan.resultIDs), stagedBytes, stagedRootRuns)
 	c.meta = catalog.meta
 	compactedObsolete, err := maybeCompactBufferedIndexedMutableRunsLocked(domain, catalog.meta.Options)
@@ -3825,6 +4068,7 @@ func (c *Collection) bufferDirectIndexedInsertPlanLocked(domain *collectionWrite
 	domain.mutableCount = saturatingAddNonNegativeInt(domain.mutableCount, len(plan.resultIDs))
 	domain.mutableBytes = saturatingAddNonNegativeInt64(domain.mutableBytes, direct.stagedBytes)
 	domain.writeGeneration++
+	domain.notePrimaryWriteKeysLocked(plan.primaryKeys, domain.writeGeneration)
 	if rollbackOnError {
 		rollbackGeneration = domain.writeGeneration
 	}
@@ -3870,6 +4114,7 @@ func (c *Collection) initializeWriteDomainFromCatalogLocked(domain *collectionWr
 	domain.rootPolicies = nil
 	domain.rootBaseIDs = nil
 	domain.rootValueArenas = nil
+	domain.primaryOverlay = nil
 	domain.rootRunCount = 0
 	domain.indexedDeletesOnly = false
 	domain.mutableCount = 0
@@ -3882,6 +4127,7 @@ func (c *Collection) initializeWriteDomainFromCatalogLocked(domain *collectionWr
 	domain.bufferedBytes = 0
 	domain.mutableCount = 0
 	domain.mutableBytes = 0
+	retainPrimaryDocumentCacheForCatalogLocked(domain, catalog.meta, baseSystemRoot)
 }
 
 func shouldFlushBufferedIndexedWrites(domain *collectionWriteDomain, opts CollectionOptions) bool {
@@ -3892,12 +4138,15 @@ func shouldFlushBufferedIndexedWrites(domain *collectionWriteDomain, opts Collec
 	bytes := domain.bufferedBytes
 	rootRuns := bufferedIndexedRootRunCount(domain)
 	if opts.BufferedIndexedAsyncFlush {
-		if len(domain.rootRuns) == 0 {
+		if len(domain.rootRuns) == 0 && !hasBufferedPrimaryOverlay(domain) {
 			return false
 		}
 		count = domain.mutableCount
 		bytes = domain.mutableBytes
 		rootRuns = domain.rootRunCount
+		if hasBufferedPrimaryOverlay(domain) {
+			rootRuns = saturatingAddNonNegativeInt(rootRuns, 1)
+		}
 	}
 	if opts.BufferedIndexedWriteMaxDocuments > 0 && count >= opts.BufferedIndexedWriteMaxDocuments {
 		return true
@@ -3922,6 +4171,9 @@ func shouldFlushBufferedIndexedWritesAfterAdding(domain *collectionWriteDomain, 
 		baseCount = domain.mutableCount
 		baseBytes = domain.mutableBytes
 		baseRootRuns = domain.rootRunCount
+		if hasBufferedPrimaryOverlay(domain) {
+			baseRootRuns = saturatingAddNonNegativeInt(baseRootRuns, 1)
+		}
 	}
 	nextCount := saturatingAddNonNegativeInt(baseCount, addedCount)
 	if opts.BufferedIndexedWriteMaxDocuments > 0 && nextCount >= opts.BufferedIndexedWriteMaxDocuments {
@@ -4292,6 +4544,91 @@ func mutableRootRunLocked(domain *collectionWriteDomain, rootName string) (memta
 	return table, true
 }
 
+func materializePrimaryOverlayLocked(domain *collectionWriteDomain) bool {
+	if !hasBufferedPrimaryOverlay(domain) {
+		return false
+	}
+	collectionName := bufferedDomainCollectionName(domain, "")
+	if collectionName == "" {
+		return false
+	}
+	rootName := collectionPrimaryRootName(collectionName)
+	if domain.rootPolicies == nil {
+		domain.rootPolicies = make(map[string]backenddb.OrderedRootStoragePolicy, 1)
+	}
+	if domain.rootBaseIDs == nil {
+		domain.rootBaseIDs = make(map[string]uint64, 1)
+	}
+	if _, ok := domain.rootPolicies[rootName]; !ok {
+		domain.rootPolicies[rootName] = domain.storagePolicy
+	}
+	if _, ok := domain.rootBaseIDs[rootName]; !ok {
+		domain.rootBaseIDs[rootName] = domain.primaryRoot
+	}
+	table, created := mutableRootRunLocked(domain, rootName)
+	if table == nil {
+		return false
+	}
+	entries := domain.primaryOverlay.appendEntries(make([]directBufferedRootEntry, 0, domain.primaryOverlay.len()))
+	stagePrimaryDocumentCacheEntriesLocked(domain, domain.meta, domain.baseSystemRoot, entries)
+	keys := make([][]byte, 0, len(entries))
+	for _, entry := range entries {
+		if entry.flags&node.FlagTombstone != 0 {
+			table.DeleteSteal(entry.key)
+		} else {
+			table.SetEntrySteal(entry.key, entry.value, page.ValuePtr{}, entry.flags)
+		}
+		keys = append(keys, entry.key)
+	}
+	if domain.primaryRunIndex != nil {
+		addBufferedPrimaryRunIndexKeys(domain.primaryRunIndex, keys, table)
+	}
+	domain.primaryOverlay = nil
+	return created
+}
+
+func materializeIndexedFlushUnitPrimaryOverlays(meta CollectionMeta, flushUnit *indexedFlushUnit, units []indexedFlushUnit) ([]memtable.Table, error) {
+	if flushUnit == nil || !hasIndexedFlushUnitPrimaryOverlay(units) {
+		return nil, nil
+	}
+	rootName := collectionPrimaryRootName(meta.Name)
+	if rootName == "" {
+		return nil, nil
+	}
+	var table memtable.Table
+	var materialized []memtable.Table
+	orderedRootRuns := make(map[string][]memtable.Table, len(flushUnit.rootRuns)+1)
+	scratch := make([]directBufferedRootEntry, 0)
+	for i := range units {
+		appendTableRunMap(orderedRootRuns, units[i].rootRuns)
+		overlay := units[i].primaryOverlay
+		if overlay == nil || overlay.len() == 0 {
+			continue
+		}
+		table = newCollectionRootAccumulatorRunTable()
+		scratch = overlay.appendEntries(scratch[:0])
+		if err := applyDirectBufferedRootEntries(table, scratch); err != nil {
+			resetCollectionRunTable(table)
+			resetCollectionTables(materialized)
+			return nil, err
+		}
+		if table.Len() == 0 {
+			resetCollectionRunTable(table)
+			table = nil
+			continue
+		}
+		table.Freeze()
+		orderedRootRuns[rootName] = append(orderedRootRuns[rootName], table)
+		materialized = append(materialized, table)
+		table = nil
+	}
+	if len(materialized) == 0 {
+		return nil, nil
+	}
+	flushUnit.rootRuns = orderedRootRuns
+	return materialized, nil
+}
+
 func mutableUniqueValueRunLocked(domain *collectionWriteDomain, indexName string) (memtable.Table, bool) {
 	if domain == nil || indexName == "" {
 		return nil, false
@@ -4543,13 +4880,13 @@ func (c *Collection) flushBufferedIndexedAfterThresholdLocked(domain *collection
 	var prepareWait time.Duration
 	if domain.indexedPrepareFreezes > 0 {
 		prepareWait = domain.waitIndexedPrepareFreezeLocked()
-		if domain.count == 0 || !hasBufferedIndexedRootRuns(domain) {
+		if domain.count == 0 || !hasBufferedIndexedPendingWrites(domain) {
 			return 0, prepareWait, 0, nil
 		}
 	}
 	domain.indexedAutoFlushes.Add(1)
 	if opts.BufferedIndexedAsyncFlush {
-		rotateIndexedMutableToFlushUnitLocked(domain)
+		rotateIndexedMutableToFlushUnitForAsyncLocked(domain)
 		if opts.BufferedIndexedAsyncFlushMaxQueuedUnits > 0 && len(domain.indexedFlushUnits) >= opts.BufferedIndexedAsyncFlushMaxQueuedUnits {
 			if len(domain.indexedPublishingUnits) == 0 {
 				domain.indexedAsyncFlushBackpressure.Add(1)
@@ -4573,7 +4910,7 @@ func (c *Collection) flushBufferedIndexedAfterThresholdLocked(domain *collection
 				if err := domain.consumeIndexedAsyncFlushError(); err != nil {
 					return 0, lockReleased, relockWait, err
 				}
-				if domain.count == 0 || len(domain.indexedFlushUnits) == 0 || !hasBufferedIndexedRootRuns(domain) {
+				if domain.count == 0 || len(domain.indexedFlushUnits) == 0 || !hasBufferedIndexedPendingWrites(domain) {
 					return 0, lockReleased, relockWait, nil
 				}
 				if len(domain.indexedPublishingUnits) == 0 {
@@ -4636,7 +4973,7 @@ func pendingIndexedRootRunsLocked(domain *collectionWriteDomain, rootName string
 	return out
 }
 
-func hasPendingIndexedRootRunsForRootLocked(domain *collectionWriteDomain, rootName string) bool {
+func hasPendingRootRunsForRootLocked(domain *collectionWriteDomain, rootName string) bool {
 	if domain == nil || rootName == "" {
 		return false
 	}
@@ -4650,6 +4987,12 @@ func hasPendingIndexedRootRunsForRootLocked(domain *collectionWriteDomain, rootN
 	}
 	for _, unit := range domain.indexedFlushUnits {
 		if len(unit.rootRuns[rootName]) > 0 {
+			return true
+		}
+	}
+	if collectionName := bufferedDomainCollectionName(domain, ""); collectionName != "" {
+		if rootName == collectionPrimaryRootName(collectionName) &&
+			(hasBufferedPrimaryOverlay(domain) || hasPendingIndexedPrimaryOverlay(domain)) {
 			return true
 		}
 	}
@@ -4815,9 +5158,15 @@ func checkpointBufferedIndexedDomain(domain *collectionWriteDomain) bufferedInde
 		rootPolicies:           cloneRootPolicyMap(domain.rootPolicies),
 		rootBaseIDs:            cloneUint64Map(domain.rootBaseIDs),
 		rootValueArenas:        cloneArenaRefs(domain.rootValueArenas),
+		primaryOverlay:         cloneBufferedPrimaryOverlay(domain.primaryOverlay),
+		primaryCache:           cloneBufferedPrimaryOverlay(domain.primaryCache),
+		primaryCacheSystemRoot: domain.primaryCacheSystemRoot,
+		primaryCacheCollection: domain.primaryCacheCollection,
+		primaryCacheDirty:      domain.primaryCacheDirty,
 		indexedPublishingUnits: cloneIndexedFlushUnits(domain.indexedPublishingUnits),
 		indexedFlushUnits:      cloneIndexedFlushUnits(domain.indexedFlushUnits),
 		primaryRunIndexActive:  domain.primaryRunIndex != nil,
+		primaryWriteIndex:      cloneBufferedPrimaryWriteIndex(domain.primaryWriteIndex),
 		uniqueValueRuns:        cloneTableRunMap(domain.uniqueValueRuns),
 		uniqueValueMutableRuns: cloneMutableRunMap(domain.uniqueValueMutableRuns),
 		rootRunCount:           domain.rootRunCount,
@@ -4851,6 +5200,11 @@ func rollbackBufferedIndexedDomain(domain *collectionWriteDomain, checkpoint buf
 	domain.rootPolicies = checkpoint.rootPolicies
 	domain.rootBaseIDs = checkpoint.rootBaseIDs
 	domain.rootValueArenas = checkpoint.rootValueArenas
+	domain.primaryOverlay = checkpoint.primaryOverlay
+	domain.primaryCache = checkpoint.primaryCache
+	domain.primaryCacheSystemRoot = checkpoint.primaryCacheSystemRoot
+	domain.primaryCacheCollection = checkpoint.primaryCacheCollection
+	domain.primaryCacheDirty = checkpoint.primaryCacheDirty
 	domain.rootRunCount = checkpoint.rootRunCount
 	domain.indexedDeletesOnly = checkpoint.indexedDeletesOnly
 	pendingRuns := indexedFlushUnitPendingRootRunMap(indexedFlushUnitsWithPublishing(checkpoint.indexedPublishingUnits, checkpoint.indexedFlushUnits), checkpoint.rootRuns)
@@ -4866,6 +5220,7 @@ func rollbackBufferedIndexedDomain(domain *collectionWriteDomain, checkpoint buf
 	} else {
 		domain.primaryRunIndex = nil
 	}
+	domain.primaryWriteIndex = checkpoint.primaryWriteIndex
 	domain.uniqueValueRuns = checkpoint.uniqueValueRuns
 	domain.uniqueValueMutableRuns = checkpoint.uniqueValueMutableRuns
 	domain.uniqueValueIndex = rebuildBufferedUniqueValueIndexes(indexedFlushUnitPendingUniqueValueRunMap(indexedFlushUnitsWithPublishing(checkpoint.indexedPublishingUnits, checkpoint.indexedFlushUnits), checkpoint.uniqueValueRuns))
@@ -4883,6 +5238,7 @@ func cloneIndexedFlushUnits(in []indexedFlushUnit) []indexedFlushUnit {
 			rootBaseIDs:     cloneUint64Map(unit.rootBaseIDs),
 			uniqueValueRuns: cloneTableRunMap(unit.uniqueValueRuns),
 			arenaRefs:       cloneArenaRefs(unit.arenaRefs),
+			primaryOverlay:  cloneBufferedPrimaryOverlay(unit.primaryOverlay),
 			docCount:        unit.docCount,
 			byteCount:       unit.byteCount,
 			rootRunCount:    unit.rootRunCount,
@@ -4994,6 +5350,22 @@ func rebuildBufferedPendingIndexesLocked(domain *collectionWriteDomain, collecti
 		domain.primaryRunIndex = index
 	} else {
 		domain.primaryRunIndex = nil
+	}
+	if domain.primaryWriteIndex != nil {
+		domain.primaryWriteIndex = rebuildBufferedPrimaryWriteIndex(collectionName, pendingRuns, domain.writeGeneration)
+		if domain.primaryWriteIndex == nil && hasBufferedPrimaryOverlay(domain) {
+			domain.primaryWriteIndex = newBufferedPrimaryWriteIndex(domain.primaryOverlay.len())
+		}
+		if domain.primaryWriteIndex == nil && hasPendingIndexedPrimaryOverlay(domain) {
+			domain.primaryWriteIndex = newBufferedPrimaryWriteIndex(0)
+		}
+		for i := range domain.indexedPublishingUnits {
+			domain.primaryWriteIndex.addOverlay(domain.indexedPublishingUnits[i].primaryOverlay, domain.writeGeneration)
+		}
+		for i := range domain.indexedFlushUnits {
+			domain.primaryWriteIndex.addOverlay(domain.indexedFlushUnits[i].primaryOverlay, domain.writeGeneration)
+		}
+		domain.primaryWriteIndex.addOverlay(domain.primaryOverlay, domain.writeGeneration)
 	}
 	domain.uniqueValueIndex = rebuildBufferedUniqueValueIndexes(pendingIndexedUniqueValueRunMapLocked(domain))
 }
@@ -5315,6 +5687,423 @@ func addBufferedPrimaryIDKeys(index *bufferedUniqueValueIndex, keys [][]byte) {
 	if len(arena) > 0 {
 		index.arenas = append(index.arenas, arena)
 	}
+}
+
+func newBufferedPrimaryWriteIndex(capacity int) *bufferedPrimaryWriteIndex {
+	if capacity < 0 {
+		capacity = 0
+	}
+	return &bufferedPrimaryWriteIndex{generations: make(map[uint64]uint64, capacity)}
+}
+
+func (index *bufferedPrimaryWriteIndex) len() int {
+	if index == nil {
+		return 0
+	}
+	return len(index.generations)
+}
+
+func (index *bufferedPrimaryWriteIndex) addHash(hash uint64, generation uint64) {
+	if index == nil {
+		return
+	}
+	if index.generations == nil {
+		index.generations = make(map[uint64]uint64)
+	}
+	if existing := index.generations[hash]; generation > existing {
+		index.generations[hash] = generation
+	}
+}
+
+func (index *bufferedPrimaryWriteIndex) addKeys(keys [][]byte, generation uint64) {
+	if index == nil || len(keys) == 0 {
+		return
+	}
+	if index.generations == nil {
+		index.generations = make(map[uint64]uint64, len(keys))
+	}
+	for _, key := range keys {
+		if len(key) == 0 {
+			continue
+		}
+		index.addHash(xxhash.Sum64(key), generation)
+	}
+}
+
+func (index *bufferedPrimaryWriteIndex) addEntries(entries []directBufferedRootEntry, generation uint64) {
+	if index == nil || len(entries) == 0 {
+		return
+	}
+	if index.generations == nil {
+		index.generations = make(map[uint64]uint64, len(entries))
+	}
+	for _, entry := range entries {
+		if len(entry.key) == 0 {
+			continue
+		}
+		index.addHash(xxhash.Sum64(entry.key), generation)
+	}
+}
+
+func (index *bufferedPrimaryWriteIndex) addTable(table memtable.Table, generation uint64) error {
+	if index == nil || table == nil {
+		return nil
+	}
+	if index.generations == nil {
+		index.generations = make(map[uint64]uint64, table.Len())
+	}
+	it := table.NewIterator(nil, nil)
+	defer func() { _ = it.Close() }()
+	for it.Valid() {
+		key := it.UnsafeKey()
+		if len(key) != 0 {
+			index.addHash(xxhash.Sum64(key), generation)
+		}
+		it.Next()
+	}
+	if err := it.Error(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (index *bufferedPrimaryWriteIndex) generation(key []byte) (uint64, bool) {
+	if index == nil || len(index.generations) == 0 {
+		return 0, false
+	}
+	generation, ok := index.generations[xxhash.Sum64(key)]
+	return generation, ok
+}
+
+func cloneBufferedPrimaryWriteIndex(in *bufferedPrimaryWriteIndex) *bufferedPrimaryWriteIndex {
+	if in == nil {
+		return nil
+	}
+	out := newBufferedPrimaryWriteIndex(in.len())
+	for hash, generation := range in.generations {
+		out.generations[hash] = generation
+	}
+	if out.len() == 0 {
+		return nil
+	}
+	return out
+}
+
+func newBufferedPrimaryOverlay(capacity int) *bufferedPrimaryOverlay {
+	if capacity < 0 {
+		capacity = 0
+	}
+	return &bufferedPrimaryOverlay{values: make(map[uint64]bufferedPrimaryOverlayRef, capacity)}
+}
+
+func (overlay *bufferedPrimaryOverlay) len() int {
+	if overlay == nil {
+		return 0
+	}
+	return overlay.count
+}
+
+func (overlay *bufferedPrimaryOverlay) addEntry(entry directBufferedRootEntry) {
+	if overlay == nil || len(entry.key) == 0 {
+		return
+	}
+	if overlay.values == nil {
+		overlay.values = make(map[uint64]bufferedPrimaryOverlayRef)
+	}
+	ref := bufferedPrimaryOverlayRef{key: entry.key, value: entry.value, flags: entry.flags}
+	hash := xxhash.Sum64(entry.key)
+	if existing, ok := overlay.values[hash]; !ok {
+		overlay.values[hash] = ref
+		overlay.count++
+		return
+	} else if bytes.Equal(existing.key, entry.key) {
+		overlay.values[hash] = ref
+		return
+	}
+	if overlay.collisions == nil {
+		overlay.collisions = make(map[uint64][]bufferedPrimaryOverlayRef)
+	}
+	bucket := overlay.collisions[hash]
+	for i := len(bucket) - 1; i >= 0; i-- {
+		if bytes.Equal(bucket[i].key, entry.key) {
+			bucket[i] = ref
+			overlay.collisions[hash] = bucket
+			return
+		}
+	}
+	overlay.collisions[hash] = append(bucket, ref)
+	overlay.count++
+}
+
+func (overlay *bufferedPrimaryOverlay) addEntries(entries []directBufferedRootEntry) {
+	if overlay == nil || len(entries) == 0 {
+		return
+	}
+	for _, entry := range entries {
+		overlay.addEntry(entry)
+	}
+}
+
+func (overlay *bufferedPrimaryOverlay) lookupRef(key []byte) (bufferedPrimaryOverlayRef, bool) {
+	if overlay == nil || len(overlay.values) == 0 {
+		return bufferedPrimaryOverlayRef{}, false
+	}
+	hash := xxhash.Sum64(key)
+	if ref, ok := overlay.values[hash]; ok && bytes.Equal(ref.key, key) {
+		return ref, true
+	}
+	for _, ref := range overlay.collisions[hash] {
+		if bytes.Equal(ref.key, key) {
+			return ref, true
+		}
+	}
+	return bufferedPrimaryOverlayRef{}, false
+}
+
+func (overlay *bufferedPrimaryOverlay) appendEntries(dst []directBufferedRootEntry) []directBufferedRootEntry {
+	if overlay == nil || overlay.count == 0 {
+		return dst
+	}
+	for _, ref := range overlay.values {
+		dst = append(dst, directBufferedRootEntry{key: ref.key, value: ref.value, flags: ref.flags})
+	}
+	for _, bucket := range overlay.collisions {
+		for _, ref := range bucket {
+			dst = append(dst, directBufferedRootEntry{key: ref.key, value: ref.value, flags: ref.flags})
+		}
+	}
+	return dst
+}
+
+func lookupIndexedFlushUnitPrimaryOverlay(units []indexedFlushUnit, key []byte) (bufferedPrimaryOverlayRef, bool) {
+	for i := len(units) - 1; i >= 0; i-- {
+		overlay := units[i].primaryOverlay
+		if overlay == nil || overlay.len() == 0 {
+			continue
+		}
+		if ref, ok := overlay.lookupRef(key); ok {
+			return ref, true
+		}
+	}
+	return bufferedPrimaryOverlayRef{}, false
+}
+
+func lookupPendingPrimaryOverlayLocked(domain *collectionWriteDomain, key []byte) (bufferedPrimaryOverlayRef, bool) {
+	if domain == nil {
+		return bufferedPrimaryOverlayRef{}, false
+	}
+	if ref, ok := lookupIndexedFlushUnitPrimaryOverlay(domain.indexedFlushUnits, key); ok {
+		return ref, true
+	}
+	if ref, ok := lookupIndexedFlushUnitPrimaryOverlay(domain.indexedPublishingUnits, key); ok {
+		return ref, true
+	}
+	return bufferedPrimaryOverlayRef{}, false
+}
+
+func cloneBufferedPrimaryOverlay(in *bufferedPrimaryOverlay) *bufferedPrimaryOverlay {
+	if in == nil || in.count == 0 {
+		return nil
+	}
+	out := newBufferedPrimaryOverlay(len(in.values))
+	out.count = in.count
+	for hash, ref := range in.values {
+		out.values[hash] = ref
+	}
+	if len(in.collisions) > 0 {
+		out.collisions = make(map[uint64][]bufferedPrimaryOverlayRef, len(in.collisions))
+		for hash, bucket := range in.collisions {
+			out.collisions[hash] = append([]bufferedPrimaryOverlayRef(nil), bucket...)
+		}
+	}
+	return out
+}
+
+func clearPrimaryDocumentCacheLocked(domain *collectionWriteDomain) {
+	if domain == nil {
+		return
+	}
+	domain.primaryCache = nil
+	domain.primaryCacheSystemRoot = 0
+	domain.primaryCacheCollection = ""
+	domain.primaryCacheDirty = false
+}
+
+func (c *Collection) clearWriteDomainPrimaryDocumentCache() {
+	if c == nil || c.writeDomain == nil {
+		return
+	}
+	domain := c.writeDomain
+	domain.mu.Lock()
+	clearPrimaryDocumentCacheLocked(domain)
+	domain.mu.Unlock()
+}
+
+func retainPrimaryDocumentCacheForCatalogLocked(domain *collectionWriteDomain, meta CollectionMeta, systemRoot uint64) {
+	if domain == nil || domain.primaryCache == nil || domain.primaryCache.len() == 0 {
+		clearPrimaryDocumentCacheLocked(domain)
+		return
+	}
+	if systemRoot == 0 ||
+		domain.primaryCacheCollection != meta.Name ||
+		!collectionMetaIndexSchemasEqual(domain.meta, meta) {
+		clearPrimaryDocumentCacheLocked(domain)
+		return
+	}
+	if domain.primaryCacheDirty || domain.primaryCacheSystemRoot == systemRoot {
+		domain.primaryCacheSystemRoot = systemRoot
+		domain.primaryCacheCollection = meta.Name
+		if domain.count == 0 {
+			domain.primaryCacheDirty = false
+		}
+		return
+	}
+	clearPrimaryDocumentCacheLocked(domain)
+}
+
+func stagePrimaryDocumentCacheEntriesLocked(domain *collectionWriteDomain, meta CollectionMeta, baseSystemRoot uint64, entries []directBufferedRootEntry) {
+	if domain == nil || len(entries) == 0 || baseSystemRoot == 0 || meta.Name == "" {
+		return
+	}
+	if domain.primaryCache != nil &&
+		(domain.primaryCacheSystemRoot != baseSystemRoot || domain.primaryCacheCollection != meta.Name) {
+		clearPrimaryDocumentCacheLocked(domain)
+	}
+	if domain.primaryCache == nil {
+		domain.primaryCache = newBufferedPrimaryOverlay(len(entries))
+		domain.primaryCacheSystemRoot = baseSystemRoot
+		domain.primaryCacheCollection = meta.Name
+	}
+	domain.primaryCache.addEntries(entries)
+	domain.primaryCacheDirty = true
+}
+
+func snapshotUpdateBatchPrimaryCache(domain *collectionWriteDomain, meta CollectionMeta, baseSystemRoot uint64, items []updateBatchItem) updateBatchBufferedRead {
+	if domain == nil || baseSystemRoot == 0 || len(items) == 0 {
+		return updateBatchBufferedRead{}
+	}
+	domain.mu.RLock()
+	defer domain.mu.RUnlock()
+	cache := domain.primaryCache
+	if cache == nil || cache.len() == 0 ||
+		domain.primaryCacheSystemRoot != baseSystemRoot ||
+		domain.primaryCacheCollection != meta.Name {
+		return updateBatchBufferedRead{}
+	}
+	if domain.loaded && domain.catalog != nil && !sameCollectionMeta(domain.meta, meta) {
+		return updateBatchBufferedRead{}
+	}
+	entries, buffer := getUpdateBatchBufferedEntrySlots(len(items))
+	hits := 0
+	for i, item := range items {
+		ref, ok := cache.lookupRef(item.DocumentID)
+		if !ok {
+			continue
+		}
+		entries[i] = updateBatchBufferedEntry{
+			value: ref.value,
+			flags: ref.flags,
+			found: true,
+		}
+		hits++
+	}
+	if hits == 0 {
+		putUpdateBatchBufferedEntries(entries, buffer)
+		return updateBatchBufferedRead{}
+	}
+	return updateBatchBufferedRead{
+		enabled:        true,
+		primaryEntries: entries,
+		primaryBuffer:  buffer,
+	}
+}
+
+func hasBufferedPrimaryOverlay(domain *collectionWriteDomain) bool {
+	return domain != nil && domain.primaryOverlay != nil && domain.primaryOverlay.len() > 0
+}
+
+func hasIndexedFlushUnitPrimaryOverlay(units []indexedFlushUnit) bool {
+	for i := range units {
+		if units[i].primaryOverlay != nil && units[i].primaryOverlay.len() > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func hasPendingIndexedPrimaryOverlay(domain *collectionWriteDomain) bool {
+	return domain != nil &&
+		(hasIndexedFlushUnitPrimaryOverlay(domain.indexedFlushUnits) ||
+			hasIndexedFlushUnitPrimaryOverlay(domain.indexedPublishingUnits))
+}
+
+func hasBufferedIndexedPendingWrites(domain *collectionWriteDomain) bool {
+	return hasBufferedIndexedRootRuns(domain) || hasBufferedPrimaryOverlay(domain) || hasPendingIndexedPrimaryOverlay(domain)
+}
+
+func (index *bufferedPrimaryWriteIndex) addOverlay(overlay *bufferedPrimaryOverlay, generation uint64) {
+	if index == nil || overlay == nil || overlay.len() == 0 {
+		return
+	}
+	if index.generations == nil {
+		index.generations = make(map[uint64]uint64, overlay.len())
+	}
+	for hash := range overlay.values {
+		index.addHash(hash, generation)
+	}
+	for hash := range overlay.collisions {
+		index.addHash(hash, generation)
+	}
+}
+
+func rebuildBufferedPrimaryWriteIndex(collectionName string, runs map[string][]memtable.Table, generation uint64) *bufferedPrimaryWriteIndex {
+	if collectionName == "" || len(runs) == 0 {
+		return nil
+	}
+	tables := runs[collectionPrimaryRootName(collectionName)]
+	if len(tables) == 0 {
+		return nil
+	}
+	index := newBufferedPrimaryWriteIndex(bufferedRunLenHint(tables))
+	for _, table := range tables {
+		if err := index.addTable(table, generation); err != nil {
+			return nil
+		}
+	}
+	if index.len() == 0 {
+		return nil
+	}
+	return index
+}
+
+func (domain *collectionWriteDomain) notePrimaryWriteKeysLocked(keys [][]byte, generation uint64) {
+	if domain == nil || len(keys) == 0 {
+		return
+	}
+	if domain.primaryWriteIndex == nil {
+		domain.primaryWriteIndex = newBufferedPrimaryWriteIndex(len(keys))
+	}
+	domain.primaryWriteIndex.addKeys(keys, generation)
+}
+
+func (domain *collectionWriteDomain) notePrimaryWriteEntriesLocked(entries []directBufferedRootEntry, generation uint64) {
+	if domain == nil || len(entries) == 0 {
+		return
+	}
+	if domain.primaryWriteIndex == nil {
+		domain.primaryWriteIndex = newBufferedPrimaryWriteIndex(len(entries))
+	}
+	domain.primaryWriteIndex.addEntries(entries, generation)
+}
+
+func (domain *collectionWriteDomain) notePrimaryWriteTableLocked(table memtable.Table, generation uint64) error {
+	if domain == nil || table == nil || table.Len() == 0 {
+		return nil
+	}
+	if domain.primaryWriteIndex == nil {
+		domain.primaryWriteIndex = newBufferedPrimaryWriteIndex(table.Len())
+	}
+	return domain.primaryWriteIndex.addTable(table, generation)
 }
 
 func applyDirectBufferedUniqueValuePrefixes(table memtable.Table, prefixes [][]byte) error {
@@ -6129,10 +6918,10 @@ func (c *Collection) prepareIndexedAsyncPublishLocked(domain *collectionWriteDom
 		return nil, nil
 	}
 	domain.waitIndexedPrepareFreezeLocked()
-	if domain.count == 0 || !hasBufferedIndexedRootRuns(domain) {
+	if domain.count == 0 || !hasBufferedIndexedPendingWrites(domain) {
 		return nil, nil
 	}
-	if len(domain.indexedFlushUnits) == 0 && len(domain.rootRuns) == 0 {
+	if len(domain.indexedFlushUnits) == 0 && len(domain.rootRuns) == 0 && !hasBufferedPrimaryOverlay(domain) {
 		return nil, nil
 	}
 	if domain.catalog == nil {
@@ -6182,21 +6971,26 @@ func (c *Collection) prepareIndexedAsyncPublishLocked(domain *collectionWriteDom
 		return nil, err
 	}
 
-	rotateIndexedMutableToFlushUnitLocked(domain)
+	rotateIndexedMutableToFlushUnitForAsyncLocked(domain)
 	units := domain.indexedFlushUnits
 	flushUnit := mergedIndexedFlushUnits(units)
 	rootNames := orderedBufferedRootNames(meta, flushUnit.rootRuns)
+	if hasIndexedFlushUnitPrimaryOverlay(units) {
+		rootNames = appendOrderedRootName(rootNames, collectionPrimaryRootName(meta.Name))
+	}
 	if len(rootNames) == 0 {
 		_ = pin.Close()
 		work.pin = nil
 		domain.indexedFlushUnits = nil
 		domain.rootMutableRuns = nil
 		domain.rootValueArenas = nil
+		domain.primaryOverlay = nil
 		domain.count = 0
 		domain.indexedDeletesOnly = false
 		domain.bufferedBytes = 0
 		domain.mutableCount = 0
 		domain.mutableBytes = 0
+		domain.primaryWriteIndex = nil
 		return nil, nil
 	}
 	rootBaseIDs := make(map[string]uint64, len(rootNames))
@@ -6238,26 +7032,38 @@ func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) 
 			work.pin = nil
 		}
 	}()
+	overlayMaterializeStart := time.Now()
+	materializedPrimaryRuns, err := materializeIndexedFlushUnitPrimaryOverlays(work.meta, &work.flushUnit, work.units)
+	overlayMaterializeElapsed := time.Duration(0)
+	if len(materializedPrimaryRuns) > 0 || err != nil {
+		overlayMaterializeElapsed = collectionObservedElapsedSince(overlayMaterializeStart)
+	}
+	if len(materializedPrimaryRuns) > 0 {
+		defer resetCollectionTables(materializedPrimaryRuns)
+	}
+	if err != nil {
+		return c.completePreparedIndexedFlush(work, 0, nil, err, overlayMaterializeElapsed, overlayMaterializeElapsed, 0)
+	}
 	publishRootRuns, cleanupPointerizedRuns, err := pointerizeCollectionDataRootRunMapValues(c.db, work.meta, work.flushUnit.rootRuns)
 	if err != nil {
-		return c.completePreparedIndexedFlush(work, 0, nil, err, 0, 0, 0)
+		return c.completePreparedIndexedFlush(work, 0, nil, err, overlayMaterializeElapsed, overlayMaterializeElapsed, 0)
 	}
 	defer cleanupPointerizedRuns()
 	if collectionMetaUsesIndexedOverlayRoots(work.meta) {
 		materializeStart := time.Now()
 		rootOverlayFilters, err := buildCollectionRootOverlayFilters(work.rootNames, work.flushUnit.rootRuns, work.rootOverlays, work.catalog.rootOverlayFilters)
 		if err != nil {
-			materializeElapsed := collectionObservedElapsedSince(materializeStart)
+			materializeElapsed := overlayMaterializeElapsed + collectionObservedElapsedSince(materializeStart)
 			return c.completePreparedIndexedFlush(work, 0, nil, err, materializeElapsed, materializeElapsed, 0)
 		}
 		work.rootOverlayFilters = rootOverlayFilters
 		ordered, cleanupDeltas, err := buildBufferedRootOverlayDeltaBatchPublishInputs(work.rootNames, publishRootRuns, work.flushUnit.rootPolicies, work.rootOverlays)
 		if err != nil {
-			materializeElapsed := collectionObservedElapsedSince(materializeStart)
+			materializeElapsed := overlayMaterializeElapsed + collectionObservedElapsedSince(materializeStart)
 			return c.completePreparedIndexedFlush(work, 0, nil, err, materializeElapsed, materializeElapsed, 0)
 		}
 		work.rootDeltaStats = collectionRootDeltaPlanStatsFromOrdered(work.meta.Name, work.rootNames, ordered)
-		materializeElapsed := collectionObservedElapsedSince(materializeStart)
+		materializeElapsed := overlayMaterializeElapsed + collectionObservedElapsedSince(materializeStart)
 		publishStart := time.Now()
 		newSystemRoot, rootIDs, publishErr := c.db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 			return c.buildRootOverlayDescriptorSystemDeltaIteratorForMeta(work.meta, work.baseCommitSeq, work.baseSystemRoot, work.rootNames, work.rootBaseIDs, work.rootOverlays, rootIDs)
@@ -6276,11 +7082,11 @@ func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) 
 	materializeStart := time.Now()
 	ordered, cleanupDeltas, err := buildBufferedRootDeltaBatchPublishInputs(work.rootNames, publishRootRuns, work.rootBaseIDs, work.flushUnit.rootPolicies)
 	if err != nil {
-		materializeElapsed := collectionObservedElapsedSince(materializeStart)
+		materializeElapsed := overlayMaterializeElapsed + collectionObservedElapsedSince(materializeStart)
 		return c.completePreparedIndexedFlush(work, 0, nil, err, materializeElapsed, materializeElapsed, 0)
 	}
 	work.rootDeltaStats = collectionRootDeltaPlanStatsFromOrdered(work.meta.Name, work.rootNames, ordered)
-	materializeElapsed := collectionObservedElapsedSince(materializeStart)
+	materializeElapsed := overlayMaterializeElapsed + collectionObservedElapsedSince(materializeStart)
 	publishStart := time.Now()
 	newSystemRoot, rootIDs, publishErr := c.db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 		return c.buildRootDescriptorSystemDeltaIteratorForMeta(work.meta, work.baseCommitSeq, work.baseSystemRoot, work.rootNames, work.rootBaseIDs, rootIDs)
@@ -6596,6 +7402,7 @@ func (c *Collection) completePreparedIndexedFlush(work *indexedFlushPublishWork,
 	domain.primaryRoot = nextCatalog.rootID(collectionPrimaryRootName(work.meta.Name))
 	domain.count = subtractNonNegativeInt(domain.count, work.docCount)
 	domain.bufferedBytes = subtractNonNegativeInt64(domain.bufferedBytes, work.byteCount)
+	retainPrimaryDocumentCacheForCatalogLocked(domain, work.meta, newSystemRoot)
 	domain.clearIndexedAsyncFlushError()
 	if !overlayPublish {
 		retargetPendingIndexedRootBaseIDsLocked(domain, work.rootNames, work.rootBaseIDs, rootIDs)
@@ -6614,6 +7421,7 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (
 		return nil
 	}
 	domain.waitIndexedPrepareFreezeLocked()
+	materializePrimaryOverlayLocked(domain)
 	if domain.count == 0 || !hasBufferedIndexedRootRuns(domain) {
 		return nil
 	}
@@ -6657,12 +7465,19 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (
 	}
 
 	rotateIndexedMutableToFlushUnitLocked(domain)
-	flushUnit := mergedIndexedFlushUnitLocked(domain)
+	flushUnit, materializedPrimaryRuns, err := mergedIndexedFlushUnitForSyncLocked(meta, domain)
+	if err != nil {
+		return err
+	}
+	if len(materializedPrimaryRuns) > 0 {
+		defer resetCollectionTables(materializedPrimaryRuns)
+	}
 	rootNames := orderedBufferedRootNames(meta, flushUnit.rootRuns)
 	if len(rootNames) == 0 {
 		domain.indexedFlushUnits = nil
 		domain.rootMutableRuns = nil
 		domain.rootValueArenas = nil
+		domain.primaryOverlay = nil
 		domain.count = 0
 		domain.indexedDeletesOnly = false
 		domain.bufferedBytes = 0
@@ -6762,15 +7577,18 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (
 	domain.baseCommitSeq = c.commitSeqForSystemRoot(newSystemRoot)
 	domain.baseSystemRoot = newSystemRoot
 	domain.primaryRoot = nextCatalog.rootID(collectionPrimaryRootName(meta.Name))
+	retainPrimaryDocumentCacheForCatalogLocked(domain, meta, newSystemRoot)
 	domain.indexedFlushUnits = nil
 	domain.rootRuns = nil
 	domain.rootMutableRuns = nil
 	domain.rootPolicies = nil
 	domain.rootBaseIDs = nil
 	domain.rootValueArenas = nil
+	domain.primaryOverlay = nil
 	domain.rootRunCount = 0
 	domain.primaryIDIndex = nil
 	domain.primaryRunIndex = nil
+	domain.primaryWriteIndex = nil
 	oldUniqueValueRuns := domain.uniqueValueRuns
 	domain.uniqueValueRuns = nil
 	domain.uniqueValueMutableRuns = nil
@@ -6793,6 +7611,7 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (
 }
 
 func rotateIndexedMutableToFlushUnitLocked(domain *collectionWriteDomain) bool {
+	materializePrimaryOverlayLocked(domain)
 	if domain == nil || len(domain.rootRuns) == 0 {
 		return false
 	}
@@ -6815,6 +7634,41 @@ func rotateIndexedMutableToFlushUnitLocked(domain *collectionWriteDomain) bool {
 	domain.uniqueValueRuns = nil
 	domain.uniqueValueMutableRuns = nil
 	domain.rootValueArenas = nil
+	domain.rootRunCount = 0
+	domain.mutableCount = 0
+	domain.mutableBytes = 0
+	return true
+}
+
+func rotateIndexedMutableToFlushUnitForAsyncLocked(domain *collectionWriteDomain) bool {
+	if domain == nil || (len(domain.rootRuns) == 0 && !hasBufferedPrimaryOverlay(domain)) {
+		return false
+	}
+	freezeMutableIndexedRunMapsLocked(domain)
+	rootRunCount := domain.rootRunCount
+	if hasBufferedPrimaryOverlay(domain) {
+		rootRunCount = saturatingAddNonNegativeInt(rootRunCount, 1)
+	}
+	unit := indexedFlushUnit{
+		rootRuns:        domain.rootRuns,
+		rootPolicies:    domain.rootPolicies,
+		rootBaseIDs:     domain.rootBaseIDs,
+		uniqueValueRuns: domain.uniqueValueRuns,
+		arenaRefs:       domain.rootValueArenas,
+		primaryOverlay:  domain.primaryOverlay,
+		docCount:        domain.mutableCount,
+		byteCount:       domain.mutableBytes,
+		rootRunCount:    rootRunCount,
+	}
+	domain.indexedFlushUnits = append(domain.indexedFlushUnits, unit)
+	domain.rootRuns = nil
+	domain.rootMutableRuns = nil
+	domain.rootPolicies = nil
+	domain.rootBaseIDs = nil
+	domain.uniqueValueRuns = nil
+	domain.uniqueValueMutableRuns = nil
+	domain.rootValueArenas = nil
+	domain.primaryOverlay = nil
 	domain.rootRunCount = 0
 	domain.mutableCount = 0
 	domain.mutableBytes = 0
@@ -6854,7 +7708,9 @@ func removeIndexedPublishingWorkUnitsLocked(domain *collectionWriteDomain, units
 }
 
 func sameIndexedFlushUnitTables(a, b indexedFlushUnit) bool {
-	return sameTableRunMap(a.rootRuns, b.rootRuns) && sameTableRunMap(a.uniqueValueRuns, b.uniqueValueRuns)
+	return sameTableRunMap(a.rootRuns, b.rootRuns) &&
+		sameTableRunMap(a.uniqueValueRuns, b.uniqueValueRuns) &&
+		a.primaryOverlay == b.primaryOverlay
 }
 
 func sameTableRunMap(a, b map[string][]memtable.Table) bool {
@@ -6969,6 +7825,49 @@ func mergedIndexedFlushUnitLocked(domain *collectionWriteDomain) indexedFlushUni
 	return unit
 }
 
+func mergedIndexedFlushUnitForSyncLocked(meta CollectionMeta, domain *collectionWriteDomain) (indexedFlushUnit, []memtable.Table, error) {
+	if domain == nil {
+		return indexedFlushUnit{}, nil, nil
+	}
+	if !hasIndexedFlushUnitPrimaryOverlay(domain.indexedFlushUnits) {
+		return mergedIndexedFlushUnitLocked(domain), nil, nil
+	}
+	unit := indexedFlushUnit{
+		rootRuns:        make(map[string][]memtable.Table, len(domain.rootRuns)+len(domain.indexedFlushUnits)),
+		rootPolicies:    make(map[string]backenddb.OrderedRootStoragePolicy, len(domain.rootPolicies)+len(domain.indexedFlushUnits)),
+		rootBaseIDs:     make(map[string]uint64, len(domain.rootBaseIDs)+len(domain.indexedFlushUnits)),
+		uniqueValueRuns: make(map[string][]memtable.Table, len(domain.uniqueValueRuns)+len(domain.indexedFlushUnits)),
+	}
+	for _, pending := range domain.indexedFlushUnits {
+		mergeIndexedFlushUnit(&unit, pending)
+	}
+	materializedPrimaryRuns, err := materializeIndexedFlushUnitPrimaryOverlays(meta, &unit, domain.indexedFlushUnits)
+	if err != nil {
+		return indexedFlushUnit{}, nil, err
+	}
+	mergeIndexedFlushUnit(&unit, indexedFlushUnit{
+		rootRuns:        domain.rootRuns,
+		rootPolicies:    domain.rootPolicies,
+		rootBaseIDs:     domain.rootBaseIDs,
+		uniqueValueRuns: domain.uniqueValueRuns,
+		arenaRefs:       domain.rootValueArenas,
+		rootRunCount:    domain.rootRunCount,
+	})
+	if len(unit.rootRuns) == 0 {
+		unit.rootRuns = nil
+	}
+	if len(unit.rootPolicies) == 0 {
+		unit.rootPolicies = nil
+	}
+	if len(unit.rootBaseIDs) == 0 {
+		unit.rootBaseIDs = nil
+	}
+	if len(unit.uniqueValueRuns) == 0 {
+		unit.uniqueValueRuns = nil
+	}
+	return unit, materializedPrimaryRuns, nil
+}
+
 func mergeIndexedFlushUnit(dst *indexedFlushUnit, src indexedFlushUnit) {
 	if dst == nil {
 		return
@@ -7034,6 +7933,18 @@ func orderedBufferedRootNames(meta CollectionMeta, runs map[string][]memtable.Ta
 	sort.Strings(extra)
 	out = append(out, extra...)
 	return out
+}
+
+func appendOrderedRootName(rootNames []string, rootName string) []string {
+	if rootName == "" {
+		return rootNames
+	}
+	for _, existing := range rootNames {
+		if existing == rootName {
+			return rootNames
+		}
+	}
+	return append(rootNames, rootName)
 }
 
 func (c *Collection) insertOneNoIndex(id, document []byte) ([]byte, error) {
@@ -7197,10 +8108,20 @@ func retryInsertBatchMutation(run func() ([][]byte, error)) ([][]byte, error) {
 func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON bool, templateEncoder *TemplateV1Encoder) ([][]byte, error) {
 	unlockMutation := c.lockMutation()
 	mutationLocked := true
+	return c.insertBatchOnceWithLockState(ids, documents, trustedValidBSON, templateEncoder, &unlockMutation, &mutationLocked)
+}
+
+func (c *Collection) insertBatchOnceWithLockState(
+	ids, documents [][]byte,
+	trustedValidBSON bool,
+	templateEncoder *TemplateV1Encoder,
+	unlockMutation *collectionMutationUnlock,
+	mutationLocked *bool,
+) ([][]byte, error) {
 	unlockIfLocked := func() {
-		if mutationLocked {
+		if mutationLocked != nil && *mutationLocked && unlockMutation != nil {
 			unlockMutation.Unlock()
-			mutationLocked = false
+			*mutationLocked = false
 		}
 	}
 	defer unlockIfLocked()
@@ -7214,12 +8135,17 @@ func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON b
 	}
 	skipInitialNoIndexFlush := false
 	if trustedValidBSON && c.canBufferNoIndexInsertBatchAck() && len(c.meta.Indexes) == 0 {
-		if documentFormat, err := normalizeDocumentFormat(c.meta.Options.DocumentFormat); err == nil && documentFormat == DocumentFormatBSON {
+		if isBSONDocumentFormat(c.meta.Options.DocumentFormat) {
 			skipInitialNoIndexFlush = true
 		}
 	}
 	if !skipInitialNoIndexFlush {
 		if err := c.flushBufferedNoIndex(); err != nil {
+			return nil, err
+		}
+	}
+	if c.hasBufferedNoIndexBSONRootRuns() {
+		if err := c.flushBufferedWrites(); err != nil {
 			return nil, err
 		}
 	}
@@ -7423,7 +8349,7 @@ func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON b
 			resetCollectionRunTables(plan.runs)
 			return nil, err
 		}
-		pin, currentCatalog, pinCommitSeq, pinSystemRoot, err := c.lockAndValidateInsertBatchPlan(&mutationLocked, &unlockMutation, snap, catalog, meta, rootNames, baseRootIDs, plan)
+		pin, currentCatalog, pinCommitSeq, pinSystemRoot, err := c.lockAndValidateInsertBatchPlan(mutationLocked, unlockMutation, snap, catalog, meta, rootNames, baseRootIDs, plan)
 		if err != nil {
 			resetCollectionRunTables(plan.runs)
 			return nil, err
@@ -7445,7 +8371,7 @@ func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON b
 		return nil, err
 	}
 
-	pin, currentCatalog, pinCommitSeq, pinSystemRoot, err := c.lockAndValidateInsertBatchPlan(&mutationLocked, &unlockMutation, snap, catalog, meta, rootNames, baseRootIDs, plan)
+	pin, currentCatalog, pinCommitSeq, pinSystemRoot, err := c.lockAndValidateInsertBatchPlan(mutationLocked, unlockMutation, snap, catalog, meta, rootNames, baseRootIDs, plan)
 	if err != nil {
 		resetCollectionRunTables(plan.runs)
 		return nil, err
@@ -8201,6 +9127,7 @@ func (c *Collection) deleteBatchOnce(documentIDs [][]byte) (int, error) {
 	nextCatalog := cloneCatalogWithRootUpdates(catalog, c.meta, rootNames, rootIDs)
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
+	c.clearWriteDomainPrimaryDocumentCache()
 	if c.writeDomain != nil {
 		c.writeDomain.observeRootDeltaPlan(deltaStats)
 	}
@@ -8353,6 +9280,7 @@ func (c *Collection) deleteDocumentOnce(documentID []byte) (bool, error) {
 	nextCatalog := cloneCatalogWithRootUpdates(catalog, c.meta, rootNames, rootIDs)
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
+	c.clearWriteDomainPrimaryDocumentCache()
 	if c.writeDomain != nil {
 		c.writeDomain.observeRootDeltaPlan(deltaStats)
 	}
@@ -8375,13 +9303,12 @@ func (c *Collection) Replace(documentID, document []byte) (bool, error) {
 // secondary unique index values may be staged in the write domain and become
 // durable at Flush/Close or auto-flush.
 //
-// For no-secondary-index collections, single-document Update deliberately
-// preserves the current synchronous publish contract: pending collection-local
-// writes are flushed first, then a modified document is published to the
-// primary root before Update returns. No-index updates may coalesce only
-// opportunistically when callers already reach the existing combiner as a
-// multi-request UpdateBatch-backed batch; they are not staged in the no-index
-// insert buffer or indexed flush queues.
+// For no-secondary-index collections, generic callback-based Update operations
+// preserve synchronous publish semantics in every durability mode: pending
+// writes are flushed before planning, and modified documents publish to the
+// primary root before Update returns. Single-document BSON $set updates use a
+// separate direct buffered path and may stage when durability mode allows
+// deferred flush/publish behavior (WAL-off relaxed and WAL-on relaxed).
 //
 // Callback panics are recovered and returned as errors in both direct and
 // combined execution. When the collection write domain combines concurrent
@@ -8390,9 +9317,12 @@ func (c *Collection) Replace(documentID, document []byte) (bool, error) {
 // testing.T.Fatal.
 //
 // Under the collection WAL target contract, WAL-on success is process-crash
-// recoverable. Retry after timeout or commit-ambiguous failure is safe only when
-// the update function is idempotent or protected by an application-level guard
-// or durable idempotency key.
+// recoverable for update operations that publish before returning. Direct-
+// buffered BSON $set updates in WAL-on relaxed mode defer that recoverability
+// boundary until Flush/Close publishes the staged root runs. Retry after timeout
+// or commit-ambiguous failure is safe only when the update function is
+// idempotent or protected by an application-level guard or durable idempotency
+// key.
 func (c *Collection) Update(documentID []byte, update func(current []byte) (replacement []byte, changed bool, err error)) (bool, bool, error) {
 	if err := validateCollectionUpdateInput(c, documentID, update); err != nil {
 		return false, false, err
@@ -8621,6 +9551,18 @@ func updateBatchBSONSetItemIndex(items []updateBatchItem) int {
 	return -1
 }
 
+func updateBatchItemsAllHaveBSONSet(items []updateBatchItem) bool {
+	if len(items) == 0 {
+		return false
+	}
+	for _, item := range items {
+		if !item.hasBSONSet {
+			return false
+		}
+	}
+	return true
+}
+
 func updateBatchItemError(index int, err error) error {
 	if err == nil {
 		return nil
@@ -8629,14 +9571,23 @@ func updateBatchItemError(index int, err error) error {
 }
 
 type collectionUpdateCombiner struct {
-	maxBatch int
-	idleTTL  time.Duration
-	requests chan collectionUpdateCombineRequest
-	done     chan struct{}
-	domain   *collectionWriteDomain
-	running  atomic.Bool
-	mu       sync.RWMutex
-	stopped  bool
+	maxBatch     int
+	idleTTL      time.Duration
+	requests     chan collectionUpdateCombineRequest
+	done         chan struct{}
+	domain       *collectionWriteDomain
+	running      atomic.Bool
+	runningCount atomic.Int64
+	mu           sync.RWMutex
+	stopped      bool
+
+	shardedRequests []chan collectionUpdateCombineRequest
+	readyShards     chan int
+	preparedBatches chan collectionUpdateCombinePreparedBatch
+	laneWorkers     bool
+	nextShard       int
+	deferred        []collectionUpdateCombineRequest
+	deferredCount   atomic.Int64
 
 	batchScratch []collectionUpdateCombineRequest
 	itemsScratch []updateBatchItem
@@ -8655,6 +9606,7 @@ type collectionUpdateCombineRequest struct {
 	update              func(current []byte) (replacement []byte, changed bool, err error)
 	bsonSet             bsonSetUpdate
 	hasBSONSet          bool
+	queuedAt            time.Time
 	done                chan collectionUpdateCombineResult
 }
 
@@ -8662,6 +9614,14 @@ type collectionUpdateCombineResult struct {
 	matched  bool
 	modified bool
 	err      error
+}
+
+type collectionUpdateCombinePreparedBatch struct {
+	batch          []collectionUpdateCombineRequest
+	plan           *updateBatchPlan
+	err            error
+	fallbackDirect bool
+	staged         chan struct{}
 }
 
 type collectionUpdateCombineWaiter struct {
@@ -8687,7 +9647,7 @@ func (c *Collection) updateFastPathWithoutCreatingCombiner() (*collectionUpdateC
 			if domain.updateCombiner == combiner {
 				domain.updateCombiner = nil
 			}
-		} else if combiner.running.Load() || len(combiner.requests) > 0 {
+		} else if combiner.hasQueuedOrRunning() {
 			return combiner, nil
 		}
 	}
@@ -8831,18 +9791,43 @@ func (c *Collection) updateCombiner() *collectionUpdateCombiner {
 			domain.updateCombineMu.Unlock()
 			continue
 		}
-		combiner := &collectionUpdateCombiner{
-			maxBatch: defaultCollectionUpdateCombineMaxBatch,
-			idleTTL:  domain.updateCombineIdleTTL(),
-			requests: make(chan collectionUpdateCombineRequest, defaultCollectionUpdateCombineMaxBatch*4),
-			done:     make(chan struct{}),
-			domain:   domain,
-		}
+		combiner := domain.newUpdateCombinerLocked()
 		domain.updateCombiner = combiner
 		domain.updateCombineMu.Unlock()
-		go combiner.run()
+		combiner.start()
 		return combiner
 	}
+}
+
+func (domain *collectionWriteDomain) newUpdateCombinerLocked() *collectionUpdateCombiner {
+	shards := domain.updateCombineShardCountLocked()
+	combiner := &collectionUpdateCombiner{
+		maxBatch: defaultCollectionUpdateCombineMaxBatch,
+		idleTTL:  domain.updateCombineIdleTTL(),
+		done:     make(chan struct{}),
+		domain:   domain,
+	}
+	if shards <= 1 {
+		combiner.requests = make(chan collectionUpdateCombineRequest, defaultCollectionUpdateCombineMaxBatch*4)
+		return combiner
+	}
+	combiner.shardedRequests = make([]chan collectionUpdateCombineRequest, shards)
+	for i := range combiner.shardedRequests {
+		combiner.shardedRequests[i] = make(chan collectionUpdateCombineRequest, defaultCollectionUpdateCombineMaxBatch*4)
+	}
+	combiner.readyShards = make(chan int, shards*4)
+	combiner.laneWorkers = domain.updateCombineLaneWorkers
+	if combiner.laneWorkers {
+		combiner.preparedBatches = make(chan collectionUpdateCombinePreparedBatch, shards*4)
+	}
+	return combiner
+}
+
+func (domain *collectionWriteDomain) updateCombineShardCountLocked() int {
+	if domain == nil || domain.updateCombineShards < 1 {
+		return defaultCollectionUpdateCombineShards
+	}
+	return domain.updateCombineShards
 }
 
 func (domain *collectionWriteDomain) stopUpdateCombiner() {
@@ -8916,6 +9901,7 @@ func (combiner *collectionUpdateCombiner) update(c *Collection, documentID []byt
 	var enqueueStart time.Time
 	if detailedStats {
 		enqueueStart = time.Now()
+		req.queuedAt = enqueueStart
 	}
 	if !combiner.enqueue(req) {
 		if detailedStats {
@@ -8952,6 +9938,49 @@ func (combiner *collectionUpdateCombiner) update(c *Collection, documentID []byt
 	return result.matched, result.modified, result.err
 }
 
+func hashCollectionUpdateDocumentID(documentID []byte) uint64 {
+	return xxhash.Sum64(documentID)
+}
+
+func (combiner *collectionUpdateCombiner) hasShardedIngress() bool {
+	return combiner != nil && len(combiner.shardedRequests) > 0
+}
+
+func (combiner *collectionUpdateCombiner) hasShardWorkers() bool {
+	return combiner != nil && combiner.laneWorkers && len(combiner.shardedRequests) > 0
+}
+
+func (combiner *collectionUpdateCombiner) hasQueuedOrRunning() bool {
+	if combiner == nil {
+		return false
+	}
+	if combiner.hasShardWorkers() && !combiner.isStopped() {
+		return true
+	}
+	if combiner.running.Load() || combiner.deferredCount.Load() > 0 {
+		return true
+	}
+	if combiner.hasShardedIngress() {
+		for _, requests := range combiner.shardedRequests {
+			if len(requests) > 0 {
+				return true
+			}
+		}
+		return false
+	}
+	return len(combiner.requests) > 0
+}
+
+func (combiner *collectionUpdateCombiner) start() {
+	if combiner != nil {
+		if combiner.hasShardWorkers() {
+			go combiner.runShardWorkers()
+			return
+		}
+		go combiner.run()
+	}
+}
+
 func newCollectionUpdateCombineRequest(c *Collection, documentID []byte, update func(current []byte) (replacement []byte, changed bool, err error), bsonSet bsonSetUpdate, hasBSONSet bool, done chan collectionUpdateCombineResult) collectionUpdateCombineRequest {
 	req := collectionUpdateCombineRequest{
 		collection: c,
@@ -8963,11 +9992,11 @@ func newCollectionUpdateCombineRequest(c *Collection, documentID []byte, update 
 	if len(documentID) <= collectionUpdateCombineInlineDocumentIDMax {
 		req.documentIDInlineLen = len(documentID)
 		copy(req.documentIDInline[:], documentID)
-		req.documentHash = xxhash.Sum64(req.documentIDInline[:req.documentIDInlineLen])
+		req.documentHash = hashCollectionUpdateDocumentID(req.documentIDInline[:req.documentIDInlineLen])
 		return req
 	}
 	req.documentID = bytes.Clone(documentID)
-	req.documentHash = xxhash.Sum64(req.documentID)
+	req.documentHash = hashCollectionUpdateDocumentID(req.documentID)
 	return req
 }
 
@@ -9042,6 +10071,25 @@ func (combiner *collectionUpdateCombiner) enqueue(req collectionUpdateCombineReq
 	if combiner.stopped {
 		return false
 	}
+	if combiner.hasShardedIngress() {
+		shard := int(req.documentHash % uint64(len(combiner.shardedRequests)))
+		requests := combiner.shardedRequests[shard]
+		select {
+		case requests <- req:
+			if !combiner.hasShardWorkers() {
+				select {
+				case combiner.readyShards <- shard:
+				default:
+				}
+			}
+			if combiner.domain != nil {
+				combiner.domain.observeUpdateCombineRequest(len(requests))
+			}
+			return true
+		default:
+			return false
+		}
+	}
 	select {
 	case combiner.requests <- req:
 		if combiner.domain != nil {
@@ -9075,6 +10123,15 @@ func (combiner *collectionUpdateCombiner) closeRequests() bool {
 		return false
 	}
 	combiner.stopped = true
+	if combiner.hasShardedIngress() {
+		for _, requests := range combiner.shardedRequests {
+			close(requests)
+		}
+		if combiner.readyShards != nil {
+			close(combiner.readyShards)
+		}
+		return true
+	}
 	if combiner.requests != nil {
 		close(combiner.requests)
 	}
@@ -9094,15 +10151,28 @@ func (combiner *collectionUpdateCombiner) run() {
 			close(combiner.done)
 		}
 	}()
+	if combiner.hasShardedIngress() {
+		combiner.runSharded()
+		return
+	}
 	if combiner.idleTTL <= 0 {
-		for first := range combiner.requests {
+		for {
+			first, ok := combiner.waitForNextRequest()
+			if !ok {
+				return
+			}
 			combiner.runBatchStartingWith(first)
 		}
-		return
 	}
 	idle := time.NewTimer(combiner.idleTTL)
 	defer idle.Stop()
 	for {
+		if first, ok := combiner.popDeferredRequest(); ok {
+			stopAndDrainTimer(idle)
+			combiner.runBatchStartingWith(first)
+			idle.Reset(combiner.idleTTL)
+			continue
+		}
 		select {
 		case first, ok := <-combiner.requests:
 			if !ok {
@@ -9120,6 +10190,639 @@ func (combiner *collectionUpdateCombiner) run() {
 	}
 }
 
+func (combiner *collectionUpdateCombiner) runSharded() {
+	if combiner.idleTTL <= 0 {
+		for {
+			first, ok := combiner.waitForNextRequest()
+			if !ok {
+				return
+			}
+			combiner.runBatchStartingWith(first)
+		}
+	}
+	idle := time.NewTimer(combiner.idleTTL)
+	defer idle.Stop()
+	for {
+		if first, ok := combiner.popDeferredRequest(); ok {
+			stopAndDrainTimer(idle)
+			combiner.runBatchStartingWith(first)
+			idle.Reset(combiner.idleTTL)
+			continue
+		}
+		select {
+		case _, ok := <-combiner.readyShards:
+			if !ok {
+				return
+			}
+			first, got, closed := combiner.tryDequeueShardedRequest()
+			if !got {
+				if closed {
+					return
+				}
+				continue
+			}
+			stopAndDrainTimer(idle)
+			combiner.runBatchStartingWith(first)
+			idle.Reset(combiner.idleTTL)
+		case <-idle.C:
+			if combiner.retireIdle() {
+				return
+			}
+			idle.Reset(combiner.idleTTL)
+		}
+	}
+}
+
+func (combiner *collectionUpdateCombiner) runShardWorkers() {
+	defer func() {
+		_ = combiner.closeRequests()
+		if combiner.done != nil {
+			close(combiner.done)
+		}
+	}()
+	var wg sync.WaitGroup
+	for shard := range combiner.shardedRequests {
+		wg.Add(1)
+		go func(shard int) {
+			defer wg.Done()
+			combiner.runShardWorker(shard)
+		}(shard)
+	}
+	workersDone := make(chan struct{})
+	go func() {
+		wg.Wait()
+		if combiner.preparedBatches != nil {
+			close(combiner.preparedBatches)
+		}
+		close(workersDone)
+	}()
+	combiner.runPreparedBatchMerger()
+	<-workersDone
+}
+
+func (combiner *collectionUpdateCombiner) runShardWorker(shard int) {
+	if combiner == nil || shard < 0 || shard >= len(combiner.shardedRequests) {
+		return
+	}
+	requests := combiner.shardedRequests[shard]
+	batchCap := combiner.maxBatch
+	if batchCap < 1 {
+		batchCap = 1
+	}
+	batch := make([]collectionUpdateCombineRequest, 0, batchCap)
+	deferred := make([]collectionUpdateCombineRequest, 0)
+	deferredHead := 0
+	itemsScratch := make([]updateBatchItem, 0, batchCap)
+	detailedStats := combiner.domain != nil && combiner.domain.updateBatchDetailedStats.Load()
+	requestsClosed := false
+	hasDeferred := func() bool {
+		return deferredHead < len(deferred)
+	}
+	popDeferred := func() (collectionUpdateCombineRequest, bool) {
+		if !hasDeferred() {
+			if len(deferred) > 0 {
+				clear(deferred)
+				deferred = deferred[:0]
+				deferredHead = 0
+			}
+			return collectionUpdateCombineRequest{}, false
+		}
+		req := deferred[deferredHead]
+		deferred[deferredHead] = collectionUpdateCombineRequest{}
+		deferredHead++
+		if deferredHead == len(deferred) {
+			deferred = deferred[:0]
+			deferredHead = 0
+		} else if deferredHead >= 32 && deferredHead*2 >= len(deferred) {
+			remaining := copy(deferred, deferred[deferredHead:])
+			clear(deferred[remaining:])
+			deferred = deferred[:remaining]
+			deferredHead = 0
+		}
+		return req, true
+	}
+	for {
+		first, fromDeferred := popDeferred()
+		if !fromDeferred {
+			if requestsClosed {
+				return
+			}
+			var ok bool
+			first, ok = <-requests
+			if !ok {
+				return
+			}
+			combiner.observeUpdateCombineDequeued(first, detailedStats)
+			first.queuedAt = time.Time{}
+		}
+		batch = append(batch[:0], first)
+		drainYields := 0
+		var drainStart time.Time
+		if detailedStats {
+			drainStart = time.Now()
+		}
+		for len(batch) < batchCap {
+			if requestsClosed {
+				goto flush
+			}
+			select {
+			case req, ok := <-requests:
+				if !ok {
+					requestsClosed = true
+					goto flush
+				}
+				combiner.observeUpdateCombineDequeued(req, detailedStats)
+				req.queuedAt = time.Time{}
+				if collectionUpdateCombineBatchHasID(batch, req) {
+					deferred = append(deferred, req)
+					continue
+				}
+				batch = append(batch, req)
+			default:
+				if drainYields < defaultCollectionUpdateCombineLaneDrainYields {
+					drainYields++
+					runtime.Gosched()
+					continue
+				}
+				goto flush
+			}
+		}
+	flush:
+		if detailedStats {
+			combiner.domain.observeUpdateCombineDrain(time.Since(drainStart))
+		}
+		prepared := combiner.prepareBatchWithScratch(batch, &itemsScratch)
+		if combiner.preparedBatches == nil {
+			combiner.completePreparedBatch(prepared)
+		} else {
+			prepared.staged = make(chan struct{})
+			combiner.preparedBatches <- prepared
+			<-prepared.staged
+		}
+		clear(batch)
+		batch = batch[:0]
+		if requestsClosed && !hasDeferred() {
+			return
+		}
+	}
+}
+
+func (combiner *collectionUpdateCombiner) prepareBatchWithScratch(batch []collectionUpdateCombineRequest, itemsScratch *[]updateBatchItem) collectionUpdateCombinePreparedBatch {
+	ownedBatch := batch
+	prepared := collectionUpdateCombinePreparedBatch{batch: ownedBatch}
+	combiner.beginUpdateCombineRun()
+	defer combiner.endUpdateCombineRun()
+	detailedStats := combiner.domain != nil && combiner.domain.updateBatchDetailedStats.Load()
+	var runStart time.Time
+	if detailedStats {
+		runStart = time.Now()
+	}
+	defer func() {
+		if detailedStats {
+			combiner.domain.observeUpdateCombineRun(time.Since(runStart))
+		}
+	}()
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			prepared.err = collectionUpdatePanicError("combiner_prepare", recovered)
+		}
+	}()
+	if combiner.domain == nil ||
+		combiner.domain.closingWrites.Load() ||
+		collectionUpdateCombineHasDuplicateIDs(ownedBatch) ||
+		!collectionUpdateCombineSameCollection(ownedBatch) {
+		prepared.fallbackDirect = true
+		return prepared
+	}
+	if itemsScratch == nil {
+		localScratch := make([]updateBatchItem, 0, len(ownedBatch))
+		itemsScratch = &localScratch
+	}
+	if cap(*itemsScratch) < len(ownedBatch) {
+		*itemsScratch = make([]updateBatchItem, len(ownedBatch))
+	}
+	clear(*itemsScratch)
+	items := (*itemsScratch)[:len(ownedBatch)]
+	for i := range ownedBatch {
+		req := &ownedBatch[i]
+		items[i] = updateBatchItem{
+			UpdateBatchItem: UpdateBatchItem{
+				DocumentID: req.documentIDBytes(),
+				Update:     req.update,
+			},
+			bsonSet:    req.bsonSet,
+			hasBSONSet: req.hasBSONSet,
+		}
+	}
+	plan, err := ownedBatch[0].collection.buildUpdateBatchPlan(items, updateBatchModeNoSecondaryUniqueIndexChanges, combiner.hasShardWorkers())
+	clear(items)
+	*itemsScratch = items[:0]
+	if errors.Is(err, errUpdateBatchHasSecondaryUniqueIndex) ||
+		errors.Is(err, errUpdateBatchChangesSecondaryUniqueIndex) {
+		prepared.fallbackDirect = true
+		return prepared
+	}
+	if err != nil {
+		prepared.err = err
+		return prepared
+	}
+	if plan == nil || plan.directBufferedUpdate == nil {
+		prepared.plan = plan
+		return prepared
+	}
+	prepared.plan = plan
+	return prepared
+}
+
+func (combiner *collectionUpdateCombiner) runPreparedBatchMerger() {
+	if combiner == nil || combiner.preparedBatches == nil {
+		return
+	}
+	batchCap := combiner.maxBatch
+	if batchCap < 1 {
+		batchCap = 1
+	}
+	pending := make([]collectionUpdateCombinePreparedBatch, 0, batchCap)
+	for first := range combiner.preparedBatches {
+		pending = append(pending[:0], first)
+		pendingRequests := len(first.batch)
+		drainYields := 0
+		for pendingRequests < batchCap {
+			select {
+			case prepared, ok := <-combiner.preparedBatches:
+				if !ok {
+					combiner.stagePreparedBatches(pending)
+					return
+				}
+				pending = append(pending, prepared)
+				pendingRequests += len(prepared.batch)
+			default:
+				if drainYields < defaultCollectionUpdateCombinePreparedDrainYields {
+					drainYields++
+					runtime.Gosched()
+					continue
+				}
+				goto stage
+			}
+		}
+	stage:
+		combiner.stagePreparedBatches(pending)
+		for i := range pending {
+			pending[i] = collectionUpdateCombinePreparedBatch{}
+		}
+	}
+}
+
+func (combiner *collectionUpdateCombiner) stagePreparedBatches(prepared []collectionUpdateCombinePreparedBatch) {
+	if len(prepared) == 0 {
+		return
+	}
+	direct := prepared[:0]
+	for _, p := range prepared {
+		if p.err != nil || p.fallbackDirect || p.plan == nil || p.plan.directBufferedUpdate == nil {
+			combiner.completePreparedBatch(p)
+			continue
+		}
+		direct = append(direct, p)
+	}
+	if len(direct) == 0 {
+		return
+	}
+	if len(direct) == 1 {
+		combiner.stageSingleDirectPreparedBatch(direct[0])
+		return
+	}
+	merged, collection, err := mergeDirectBufferedPreparedBatches(direct)
+	if err == nil {
+		err = collection.withMutationLock(func() error {
+			buffered, bufferErr := collection.bufferDirectUpdateBatchPlanLocked(merged)
+			if bufferErr != nil {
+				return bufferErr
+			}
+			if !buffered {
+				return ErrConcurrentMutation
+			}
+			if collection.writeDomain != nil {
+				collection.writeDomain.mu.Lock()
+				for _, p := range direct {
+					retainDirectBufferedDocumentArenaLocked(collection.writeDomain, p.plan)
+				}
+				collection.writeDomain.mu.Unlock()
+			}
+			collection.setLastUpdateStats(merged.stats)
+			return nil
+		})
+	}
+	if err != nil {
+		for _, p := range direct {
+			if errors.Is(err, ErrConcurrentMutation) {
+				combiner.completePreparedBatchWithDirectFallback(p)
+			} else {
+				combiner.completePreparedBatchWithError(p, err)
+			}
+		}
+		return
+	}
+	for _, p := range direct {
+		combiner.completePreparedBatch(p)
+	}
+}
+
+func (combiner *collectionUpdateCombiner) stageSingleDirectPreparedBatch(prepared collectionUpdateCombinePreparedBatch) {
+	if prepared.plan == nil || prepared.plan.directBufferedUpdate == nil || len(prepared.batch) == 0 || prepared.batch[0].collection == nil {
+		combiner.completePreparedBatchWithError(prepared, errors.New("collections: invalid prepared direct update batch"))
+		return
+	}
+	collection := prepared.batch[0].collection
+	err := collection.withMutationLock(func() error {
+		buffered, bufferErr := collection.bufferDirectUpdateBatchPlanLocked(prepared.plan)
+		if bufferErr != nil {
+			return bufferErr
+		}
+		if !buffered {
+			return ErrConcurrentMutation
+		}
+		collection.setLastUpdateStats(prepared.plan.stats)
+		return nil
+	})
+	if err != nil {
+		if errors.Is(err, ErrConcurrentMutation) {
+			combiner.completePreparedBatchWithDirectFallback(prepared)
+			return
+		}
+		combiner.completePreparedBatchWithError(prepared, err)
+		return
+	}
+	combiner.completePreparedBatch(prepared)
+}
+
+func (combiner *collectionUpdateCombiner) completePreparedBatch(prepared collectionUpdateCombinePreparedBatch) {
+	defer signalPreparedBatchStaged(prepared)
+	defer func() {
+		if prepared.plan != nil {
+			prepared.plan.close()
+		}
+	}()
+	if prepared.err != nil {
+		if completeUpdateCombineBatchWithItemFallback(prepared.batch, prepared.err) {
+			if combiner.domain != nil {
+				combiner.domain.observeUpdateCombineBatch(len(prepared.batch), true)
+			}
+			return
+		}
+		if combiner.domain != nil {
+			combiner.domain.observeUpdateCombineBatch(len(prepared.batch), false)
+		}
+		completeUpdateCombineBatchWithError(prepared.batch, prepared.err)
+		return
+	}
+	if prepared.fallbackDirect {
+		if combiner.domain != nil {
+			combiner.domain.observeUpdateCombineBatch(len(prepared.batch), true)
+		}
+		for _, req := range prepared.batch {
+			completeUpdateCombineRequest(req, runUpdateCombineDirect(req))
+		}
+		return
+	}
+	if prepared.plan == nil {
+		completeUpdateCombineBatchWithError(prepared.batch, errors.New("collections: update combiner prepared nil plan"))
+		return
+	}
+	results := prepared.plan.results
+	if len(results) != len(prepared.batch) {
+		completeUpdateCombineBatchWithError(prepared.batch, fmt.Errorf("collections: update combiner result count %d for prepared batch size %d", len(results), len(prepared.batch)))
+		return
+	}
+	if combiner.domain != nil {
+		combiner.domain.observeUpdateCombineBatch(len(prepared.batch), false)
+	}
+	for i, req := range prepared.batch {
+		result := results[i]
+		completeUpdateCombineRequest(req, collectionUpdateCombineResult{matched: result.Matched, modified: result.Modified})
+	}
+}
+
+func (combiner *collectionUpdateCombiner) completePreparedBatchWithError(prepared collectionUpdateCombinePreparedBatch, err error) {
+	defer signalPreparedBatchStaged(prepared)
+	defer func() {
+		if prepared.plan != nil {
+			prepared.plan.close()
+		}
+	}()
+	if completeUpdateCombineBatchWithItemFallback(prepared.batch, err) {
+		if combiner.domain != nil {
+			combiner.domain.observeUpdateCombineBatch(len(prepared.batch), true)
+		}
+		return
+	}
+	if combiner.domain != nil {
+		combiner.domain.observeUpdateCombineBatch(len(prepared.batch), false)
+	}
+	completeUpdateCombineBatchWithError(prepared.batch, err)
+}
+
+func (combiner *collectionUpdateCombiner) completePreparedBatchWithDirectFallback(prepared collectionUpdateCombinePreparedBatch) {
+	defer signalPreparedBatchStaged(prepared)
+	defer func() {
+		if prepared.plan != nil {
+			prepared.plan.close()
+		}
+	}()
+	if combiner.domain != nil {
+		combiner.domain.observeUpdateCombineBatch(len(prepared.batch), true)
+	}
+	for _, req := range prepared.batch {
+		completeUpdateCombineRequest(req, runUpdateCombineDirect(req))
+	}
+}
+
+func signalPreparedBatchStaged(prepared collectionUpdateCombinePreparedBatch) {
+	if prepared.staged != nil {
+		close(prepared.staged)
+	}
+}
+
+func mergeDirectBufferedPreparedBatches(prepared []collectionUpdateCombinePreparedBatch) (*updateBatchPlan, *Collection, error) {
+	if len(prepared) == 0 {
+		return nil, nil, errors.New("collections: no prepared update batches to merge")
+	}
+	firstPlan := prepared[0].plan
+	if firstPlan == nil || firstPlan.directBufferedUpdate == nil || len(prepared[0].batch) == 0 || prepared[0].batch[0].collection == nil {
+		return nil, nil, errors.New("collections: invalid prepared direct update batch")
+	}
+	collection := prepared[0].batch[0].collection
+	commonBufferedBase := firstPlan.bufferedBase
+	commonBufferedReadGeneration := firstPlan.bufferedReadGeneration
+	sameBufferedRead := true
+	totalResults := 0
+	totalTemplateEntries := 0
+	totalPrimaryEntries := 0
+	totalSecondaryRootPlans := 0
+	for _, p := range prepared {
+		plan := p.plan
+		if plan == nil || plan.directBufferedUpdate == nil {
+			return nil, nil, errors.New("collections: cannot merge non-direct update plan")
+		}
+		if len(p.batch) == 0 || p.batch[0].collection != collection {
+			return nil, nil, errors.New("collections: cannot merge update plans across collections")
+		}
+		if !sameCollectionMeta(plan.meta, firstPlan.meta) {
+			return nil, nil, fmt.Errorf("%w: cannot merge update plans across collection schemas", ErrConcurrentMutation)
+		}
+		if (plan.catalog == nil) != (firstPlan.catalog == nil) {
+			return nil, nil, fmt.Errorf("%w: cannot merge update plans across collection catalogs", ErrConcurrentMutation)
+		}
+		if plan.catalog != nil && !sameCollectionMeta(plan.catalog.meta, firstPlan.catalog.meta) {
+			return nil, nil, fmt.Errorf("%w: cannot merge update plans across collection catalog schemas", ErrConcurrentMutation)
+		}
+		if plan.bufferedBase != commonBufferedBase || plan.bufferedReadGeneration != commonBufferedReadGeneration {
+			sameBufferedRead = false
+		}
+		totalResults += len(plan.results)
+		totalTemplateEntries += len(plan.directBufferedUpdate.templateEntries)
+		totalPrimaryEntries += len(plan.directBufferedUpdate.primaryEntries)
+		totalSecondaryRootPlans += len(plan.directBufferedUpdate.secondaryRootPlans)
+	}
+	merged := &updateBatchPlan{
+		meta:                        firstPlan.meta,
+		catalog:                     firstPlan.catalog,
+		baseUserRoot:                firstPlan.baseUserRoot,
+		baseSystemRoot:              firstPlan.baseSystemRoot,
+		baseCommitSeq:               firstPlan.baseCommitSeq,
+		baseRootIDs:                 make(map[string]uint64, len(firstPlan.baseRootIDs)),
+		canBufferIndexedUpdateBatch: firstPlan.canBufferIndexedUpdateBatch,
+		canBufferDirectUpdateBatch:  true,
+		directBufferedUpdate: &directBufferedUpdatePlan{
+			templateRootName: firstPlan.directBufferedUpdate.templateRootName,
+			primaryRootName:  firstPlan.directBufferedUpdate.primaryRootName,
+		},
+	}
+	if totalResults > 0 {
+		merged.results = make([]UpdateBatchResult, 0, totalResults)
+	}
+	if totalTemplateEntries > 0 {
+		merged.directBufferedUpdate.templateEntries = make([]directBufferedRootEntry, 0, totalTemplateEntries)
+	}
+	if totalPrimaryEntries > 0 {
+		merged.directBufferedUpdate.primaryEntries = make([]directBufferedRootEntry, 0, totalPrimaryEntries)
+		if !sameBufferedRead {
+			merged.directBufferedUpdate.primaryEntryReadGenerations = make([]uint64, 0, totalPrimaryEntries)
+		}
+	}
+	if totalSecondaryRootPlans > 0 {
+		merged.directBufferedUpdate.secondaryRootPlans = make([]directBufferedSecondaryRootPlan, 0, totalSecondaryRootPlans)
+	}
+	rootIndex := make(map[string]int, len(firstPlan.rootNames))
+	addRoot := func(plan *updateBatchPlan, idx int) error {
+		if idx < 0 || idx >= len(plan.rootNames) || idx >= len(plan.policies) || idx >= len(plan.uniqueSecondaryIndexByRoot) {
+			return errors.New("collections: invalid direct update root metadata")
+		}
+		rootName := plan.rootNames[idx]
+		baseRoot, ok := plan.baseRootIDs[rootName]
+		if !ok {
+			return fmt.Errorf("collections: direct update plan missing base root for %q", rootName)
+		}
+		if existingIdx, ok := rootIndex[rootName]; ok {
+			if merged.baseRootIDs[rootName] != baseRoot ||
+				merged.uniqueSecondaryIndexByRoot[existingIdx] != plan.uniqueSecondaryIndexByRoot[idx] {
+				return fmt.Errorf("%w: incompatible direct update root %q", ErrConcurrentMutation, rootName)
+			}
+			return nil
+		}
+		rootIndex[rootName] = len(merged.rootNames)
+		merged.rootNames = append(merged.rootNames, rootName)
+		merged.baseRootIDs[rootName] = baseRoot
+		merged.policies = append(merged.policies, plan.policies[idx])
+		merged.uniqueSecondaryIndexByRoot = append(merged.uniqueSecondaryIndexByRoot, plan.uniqueSecondaryIndexByRoot[idx])
+		return nil
+	}
+	for _, p := range prepared {
+		plan := p.plan
+		for i := range plan.rootNames {
+			if err := addRoot(plan, i); err != nil {
+				return nil, nil, err
+			}
+		}
+		merged.results = append(merged.results, plan.results...)
+		addCollectionUpdateStatsForMerge(&merged.stats, plan.stats)
+		merged.directBufferedUpdate.templateEntries = append(merged.directBufferedUpdate.templateEntries, plan.directBufferedUpdate.templateEntries...)
+		merged.directBufferedUpdate.primaryEntries = append(merged.directBufferedUpdate.primaryEntries, plan.directBufferedUpdate.primaryEntries...)
+		readGeneration := uint64(0)
+		if plan.bufferedBase {
+			readGeneration = plan.bufferedReadGeneration
+		}
+		if !sameBufferedRead {
+			for range plan.directBufferedUpdate.primaryEntries {
+				merged.directBufferedUpdate.primaryEntryReadGenerations = append(merged.directBufferedUpdate.primaryEntryReadGenerations, readGeneration)
+			}
+		}
+		merged.directBufferedUpdate.secondaryRootPlans = append(merged.directBufferedUpdate.secondaryRootPlans, plan.directBufferedUpdate.secondaryRootPlans...)
+		merged.directBufferedUpdate.stagedBytes += plan.directBufferedUpdate.stagedBytes
+	}
+	if sameBufferedRead {
+		merged.bufferedBase = commonBufferedBase
+		merged.bufferedReadGeneration = commonBufferedReadGeneration
+	}
+	return merged, collection, nil
+}
+
+func addCollectionUpdateStatsForMerge(dst *CollectionUpdateStats, src CollectionUpdateStats) {
+	if dst == nil {
+		return
+	}
+	if dst.Indexes == 0 {
+		dst.Indexes = src.Indexes
+	}
+	dst.Items += src.Items
+	dst.Matched += src.Matched
+	dst.Modified += src.Modified
+	dst.Runs += src.Runs
+	dst.BufferedBatches += src.BufferedBatches
+	dst.CurrentRead += src.CurrentRead
+	dst.Callback += src.Callback
+	dst.StructuredUpdateApply += src.StructuredUpdateApply
+	dst.StructuredUpdateApplications += src.StructuredUpdateApplications
+	dst.PrepareDocuments += src.PrepareDocuments
+	dst.IndexStateExtraction += src.IndexStateExtraction
+	dst.OldIndexStateExtract += src.OldIndexStateExtract
+	dst.NewIndexStateExtract += src.NewIndexStateExtract
+	dst.UniqueIndexPreflight += src.UniqueIndexPreflight
+	dst.TemplateRunBuild += src.TemplateRunBuild
+	dst.PrimaryRunBuild += src.PrimaryRunBuild
+	dst.IndexStateRunBuild += src.IndexStateRunBuild
+	dst.SecondaryRunBuild += src.SecondaryRunBuild
+	dst.SecondaryDeleteEntries += src.SecondaryDeleteEntries
+	dst.SecondarySetEntries += src.SecondarySetEntries
+	dst.SecondaryKeyBytes += src.SecondaryKeyBytes
+	dst.IndexValueChanges += src.IndexValueChanges
+	dst.IndexValueUnchanged += src.IndexValueUnchanged
+	dst.MaskFallbacks += src.MaskFallbacks
+	dst.UniqueIndexChecks += src.UniqueIndexChecks
+	dst.UniqueIndexCheckSkips += src.UniqueIndexCheckSkips
+	for _, secondaryRun := range src.SecondaryRuns {
+		mergeCollectionUpdateSecondaryRunStatsForMerge(&dst.SecondaryRuns, secondaryRun)
+	}
+	for i := 0; i < src.IndexStatsCount && i < len(src.IndexStats); i++ {
+		mergeCollectionUpdateIndexStat(&dst.IndexStats, &dst.IndexStatsCount, src.IndexStats[i])
+	}
+}
+
+func mergeCollectionUpdateSecondaryRunStatsForMerge(dst *[]CollectionUpdateSecondaryRunStats, src CollectionUpdateSecondaryRunStats) {
+	if dst == nil || src.IndexName == "" {
+		return
+	}
+	for i := range *dst {
+		if (*dst)[i].IndexName == src.IndexName {
+			(*dst)[i].Deletes = saturatingAddNonNegativeInt((*dst)[i].Deletes, src.Deletes)
+			(*dst)[i].Sets = saturatingAddNonNegativeInt((*dst)[i].Sets, src.Sets)
+			(*dst)[i].KeyBytes = saturatingAddNonNegativeInt((*dst)[i].KeyBytes, src.KeyBytes)
+			return
+		}
+	}
+	*dst = append(*dst, src)
+}
+
 func stopAndDrainTimer(timer *time.Timer) {
 	if !timer.Stop() {
 		select {
@@ -9127,6 +10830,87 @@ func stopAndDrainTimer(timer *time.Timer) {
 		default:
 		}
 	}
+}
+
+func (combiner *collectionUpdateCombiner) waitForNextRequest() (collectionUpdateCombineRequest, bool) {
+	if combiner == nil {
+		return collectionUpdateCombineRequest{}, false
+	}
+	if req, ok := combiner.popDeferredRequest(); ok {
+		return req, true
+	}
+	if combiner.hasShardedIngress() {
+		return combiner.waitForShardedRequest()
+	}
+	req, ok := <-combiner.requests
+	return req, ok
+}
+
+func (combiner *collectionUpdateCombiner) popDeferredRequest() (collectionUpdateCombineRequest, bool) {
+	if combiner == nil || len(combiner.deferred) == 0 {
+		return collectionUpdateCombineRequest{}, false
+	}
+	req := combiner.deferred[0]
+	copy(combiner.deferred, combiner.deferred[1:])
+	combiner.deferred[len(combiner.deferred)-1] = collectionUpdateCombineRequest{}
+	combiner.deferred = combiner.deferred[:len(combiner.deferred)-1]
+	combiner.deferredCount.Add(-1)
+	return req, true
+}
+
+func (combiner *collectionUpdateCombiner) deferUpdateCombineRequest(req collectionUpdateCombineRequest) {
+	if combiner == nil {
+		return
+	}
+	combiner.deferred = append(combiner.deferred, req)
+	combiner.deferredCount.Add(1)
+}
+
+func (combiner *collectionUpdateCombiner) waitForShardedRequest() (collectionUpdateCombineRequest, bool) {
+	for {
+		if req, ok, closed := combiner.tryDequeueShardedRequest(); ok || closed {
+			return req, ok
+		}
+		_, ok := <-combiner.readyShards
+		if !ok {
+			if req, got, _ := combiner.tryDequeueShardedRequest(); got {
+				return req, true
+			}
+			return collectionUpdateCombineRequest{}, false
+		}
+	}
+}
+
+func (combiner *collectionUpdateCombiner) tryDequeueRequest() (collectionUpdateCombineRequest, bool, bool) {
+	if combiner.hasShardedIngress() {
+		return combiner.tryDequeueShardedRequest()
+	}
+	select {
+	case req, ok := <-combiner.requests:
+		return req, ok, !ok
+	default:
+		return collectionUpdateCombineRequest{}, false, false
+	}
+}
+
+func (combiner *collectionUpdateCombiner) tryDequeueShardedRequest() (collectionUpdateCombineRequest, bool, bool) {
+	if combiner == nil || len(combiner.shardedRequests) == 0 {
+		return collectionUpdateCombineRequest{}, false, true
+	}
+	allClosed := true
+	for offset := 0; offset < len(combiner.shardedRequests); offset++ {
+		idx := (combiner.nextShard + offset) % len(combiner.shardedRequests)
+		select {
+		case req, ok := <-combiner.shardedRequests[idx]:
+			if ok {
+				combiner.nextShard = (idx + 1) % len(combiner.shardedRequests)
+				return req, true, false
+			}
+		default:
+			allClosed = false
+		}
+	}
+	return collectionUpdateCombineRequest{}, false, allClosed
 }
 
 func (combiner *collectionUpdateCombiner) retireIdle() bool {
@@ -9150,9 +10934,7 @@ func (combiner *collectionUpdateCombiner) retireIdle() bool {
 	if !stopped {
 		return false
 	}
-	for req := range combiner.requests {
-		completeUpdateCombineRequest(req, runUpdateCombineDirect(req))
-	}
+	combiner.drainClosedRequestsDirect()
 	if combiner.domain != nil {
 		combiner.domain.updateCombineMu.Lock()
 		if combiner.domain.updateDraining == combiner {
@@ -9161,6 +10943,35 @@ func (combiner *collectionUpdateCombiner) retireIdle() bool {
 		combiner.domain.updateCombineMu.Unlock()
 	}
 	return true
+}
+
+func (combiner *collectionUpdateCombiner) drainClosedRequestsDirect() {
+	if combiner == nil {
+		return
+	}
+	for {
+		req, ok := combiner.popDeferredRequest()
+		if !ok {
+			break
+		}
+		completeUpdateCombineRequest(req, runUpdateCombineDirect(req))
+	}
+	if combiner.hasShardedIngress() {
+		for {
+			req, ok, closed := combiner.tryDequeueShardedRequest()
+			if ok {
+				completeUpdateCombineRequest(req, runUpdateCombineDirect(req))
+				continue
+			}
+			if closed {
+				return
+			}
+			return
+		}
+	}
+	for req := range combiner.requests {
+		completeUpdateCombineRequest(req, runUpdateCombineDirect(req))
+	}
 }
 
 func (combiner *collectionUpdateCombiner) runBatchStartingWith(first collectionUpdateCombineRequest) {
@@ -9176,6 +10987,15 @@ func (combiner *collectionUpdateCombiner) runBatchStartingWith(first collectionU
 	batch = append(batch, first)
 	drainYields := 0
 	detailedStats := combiner.domain != nil && combiner.domain.updateBatchDetailedStats.Load()
+	combiner.observeUpdateCombineDequeued(first, detailedStats)
+	deferredCount := len(combiner.deferred)
+	for i := 0; i < deferredCount && len(batch) < batchCap; i++ {
+		req, ok := combiner.popDeferredRequest()
+		if !ok {
+			break
+		}
+		batch = combiner.appendUpdateCombineRequestToBatch(batch, req)
+	}
 	var drainStart time.Time
 	if detailedStats {
 		drainStart = time.Now()
@@ -9186,17 +11006,21 @@ func (combiner *collectionUpdateCombiner) runBatchStartingWith(first collectionU
 		}
 	}
 	for len(batch) < batchCap {
-		select {
-		case req, ok := <-combiner.requests:
-			if !ok {
-				finishDrain()
-				combiner.runBatch(batch)
-				clear(batch)
-				combiner.batchScratch = batch[:0]
-				return
-			}
-			batch = append(batch, req)
-		default:
+		req, ok, closed := combiner.tryDequeueRequest()
+		if ok {
+			combiner.observeUpdateCombineDequeued(req, detailedStats)
+			req.queuedAt = time.Time{}
+			batch = combiner.appendUpdateCombineRequestToBatch(batch, req)
+			continue
+		}
+		if closed {
+			finishDrain()
+			combiner.runBatch(batch)
+			clear(batch)
+			combiner.batchScratch = batch[:0]
+			return
+		}
+		{
 			if drainYields < defaultCollectionUpdateCombineDrainYields {
 				drainYields++
 				if combiner.drainYield != nil {
@@ -9219,9 +11043,66 @@ func (combiner *collectionUpdateCombiner) runBatchStartingWith(first collectionU
 	combiner.batchScratch = batch[:0]
 }
 
+func (combiner *collectionUpdateCombiner) appendUpdateCombineRequestToBatch(batch []collectionUpdateCombineRequest, req collectionUpdateCombineRequest) []collectionUpdateCombineRequest {
+	if collectionUpdateCombineBatchHasID(batch, req) {
+		combiner.deferUpdateCombineRequest(req)
+		return batch
+	}
+	return append(batch, req)
+}
+
+func collectionUpdateCombineBatchHasID(batch []collectionUpdateCombineRequest, req collectionUpdateCombineRequest) bool {
+	reqDocumentID := (&req).documentIDBytes()
+	hash := req.documentHash
+	if hash == 0 && len(reqDocumentID) > 0 {
+		hash = hashCollectionUpdateDocumentID(reqDocumentID)
+	}
+	for i := range batch {
+		prev := &batch[i]
+		prevDocumentID := prev.documentIDBytes()
+		prevHash := prev.documentHash
+		if prevHash == 0 && len(prevDocumentID) > 0 {
+			prevHash = hashCollectionUpdateDocumentID(prevDocumentID)
+		}
+		if prevHash == hash && bytes.Equal(prevDocumentID, reqDocumentID) {
+			return true
+		}
+	}
+	return false
+}
+
+func (combiner *collectionUpdateCombiner) observeUpdateCombineDequeued(req collectionUpdateCombineRequest, detailedStats bool) {
+	if !detailedStats || combiner == nil || combiner.domain == nil || req.queuedAt.IsZero() {
+		return
+	}
+	combiner.domain.observeUpdateCombineQueueWait(time.Since(req.queuedAt))
+}
+
+func (combiner *collectionUpdateCombiner) beginUpdateCombineRun() {
+	if combiner == nil {
+		return
+	}
+	if combiner.runningCount.Add(1) == 1 {
+		combiner.running.Store(true)
+	}
+}
+
+func (combiner *collectionUpdateCombiner) endUpdateCombineRun() {
+	if combiner == nil {
+		return
+	}
+	if combiner.runningCount.Add(-1) == 0 {
+		combiner.running.Store(false)
+	}
+}
+
 func (combiner *collectionUpdateCombiner) runBatch(batch []collectionUpdateCombineRequest) {
-	combiner.running.Store(true)
-	defer combiner.running.Store(false)
+	combiner.runBatchWithScratch(batch, &combiner.itemsScratch)
+}
+
+func (combiner *collectionUpdateCombiner) runBatchWithScratch(batch []collectionUpdateCombineRequest, itemsScratch *[]updateBatchItem) {
+	combiner.beginUpdateCombineRun()
+	defer combiner.endUpdateCombineRun()
 	detailedStats := combiner.domain != nil && combiner.domain.updateBatchDetailedStats.Load()
 	var runStart time.Time
 	if detailedStats {
@@ -9252,11 +11133,15 @@ func (combiner *collectionUpdateCombiner) runBatch(batch []collectionUpdateCombi
 		}
 		return
 	}
-	if cap(combiner.itemsScratch) < len(batch) {
-		combiner.itemsScratch = make([]updateBatchItem, len(batch))
+	if itemsScratch == nil {
+		localScratch := make([]updateBatchItem, 0, len(batch))
+		itemsScratch = &localScratch
 	}
-	clear(combiner.itemsScratch)
-	items := combiner.itemsScratch[:len(batch)]
+	if cap(*itemsScratch) < len(batch) {
+		*itemsScratch = make([]updateBatchItem, len(batch))
+	}
+	clear(*itemsScratch)
+	items := (*itemsScratch)[:len(batch)]
 	for i := range batch {
 		req := &batch[i]
 		items[i] = updateBatchItem{
@@ -9270,7 +11155,7 @@ func (combiner *collectionUpdateCombiner) runBatch(batch []collectionUpdateCombi
 	}
 	results, batched, err := batch[0].collection.updateBatchOwnedItems(items, updateBatchModeNoSecondaryUniqueIndexChanges)
 	clear(items)
-	combiner.itemsScratch = items[:0]
+	*itemsScratch = items[:0]
 	if !batched && err == nil {
 		if combiner.domain != nil {
 			combiner.domain.observeUpdateCombineBatch(len(batch), true)
@@ -9420,7 +11305,17 @@ func completeUpdateCombineRequest(req collectionUpdateCombineRequest, result col
 	if req.done == nil {
 		return
 	}
+	domain := (*collectionWriteDomain)(nil)
+	if req.collection != nil {
+		domain = req.collection.writeDomain
+	}
+	if domain == nil || !domain.updateBatchDetailedStats.Load() {
+		req.done <- result
+		return
+	}
+	start := time.Now()
 	req.done <- result
+	domain.observeUpdateCombineResultDelivery(time.Since(start))
 }
 
 func collectionUpdateCombineHasDuplicateIDs(batch []collectionUpdateCombineRequest) bool {
@@ -9993,12 +11888,13 @@ type updateBatchPlan struct {
 }
 
 type directBufferedUpdatePlan struct {
-	templateEntries    []directBufferedRootEntry
-	primaryEntries     []directBufferedRootEntry
-	secondaryRootPlans []directBufferedSecondaryRootPlan
-	templateRootName   string
-	primaryRootName    string
-	stagedBytes        int64
+	templateEntries             []directBufferedRootEntry
+	primaryEntries              []directBufferedRootEntry
+	primaryEntryReadGenerations []uint64
+	secondaryRootPlans          []directBufferedSecondaryRootPlan
+	templateRootName            string
+	primaryRootName             string
+	stagedBytes                 int64
 }
 
 type directBufferedRootEntry struct {
@@ -10058,14 +11954,14 @@ func buildDirectBufferedTemplateRootEntries(records []templateV1Record) []direct
 	return entries
 }
 
-func buildDirectBufferedPrimaryRootEntries(changed []preparedBatchUpdate) []directBufferedRootEntry {
+func buildDirectBufferedPrimaryRootEntries(changed []preparedBatchUpdate, scratch *updateBatchPlanScratch) []directBufferedRootEntry {
 	if len(changed) == 0 {
 		return nil
 	}
 	entries := make([]directBufferedRootEntry, len(changed))
 	for i := range changed {
 		entries[i] = directBufferedRootEntry{
-			key:   bytes.Clone(changed[i].documentID),
+			key:   appendUpdateBatchPlanScratchKey(scratch, changed[i].documentID),
 			value: changed[i].document,
 			flags: node.FlagInline,
 		}
@@ -10082,15 +11978,27 @@ func detachUpdateBatchPlanDocumentArena(scratch *updateBatchPlanScratch) []byte 
 	return arena
 }
 
+func detachUpdateBatchPlanKeyArena(scratch *updateBatchPlanScratch) []byte {
+	if scratch == nil || len(scratch.keyArena) == 0 {
+		return nil
+	}
+	arena := scratch.keyArena
+	scratch.keyArena = nil
+	return arena
+}
+
 func retainDirectBufferedDocumentArenaLocked(domain *collectionWriteDomain, plan *updateBatchPlan) {
 	if domain == nil || plan == nil || plan.directBufferedUpdate == nil {
 		return
 	}
 	arena := detachUpdateBatchPlanDocumentArena(plan.scratch)
-	if len(arena) == 0 {
-		return
+	if len(arena) > 0 {
+		domain.rootValueArenas = append(domain.rootValueArenas, arena)
 	}
-	domain.rootValueArenas = append(domain.rootValueArenas, arena)
+	keyArena := detachUpdateBatchPlanKeyArena(plan.scratch)
+	if len(keyArena) > 0 {
+		domain.rootValueArenas = append(domain.rootValueArenas, keyArena)
+	}
 }
 
 func applyDirectBufferedRootEntries(table memtable.Table, entries []directBufferedRootEntry) error {
@@ -10198,6 +12106,7 @@ type updateBatchPlanScratch struct {
 	changed                []preparedBatchUpdate
 	changedDocuments       [][]byte
 	documentArena          []byte
+	keyArena               []byte
 	bsonSetDocumentScratch []byte
 	stateArena             indexEncodeArena
 	rootNames              []string
@@ -10256,6 +12165,11 @@ func getUpdateBatchPlanScratch(itemCount, runtimeCount int) *updateBatchPlanScra
 		scratch.documentArena = make([]byte, 0, documentArenaBytes)
 	} else {
 		scratch.documentArena = scratch.documentArena[:0]
+	}
+	if cap(scratch.keyArena) < itemCount*collectionUpdateCombineInlineDocumentIDMax {
+		scratch.keyArena = make([]byte, 0, itemCount*collectionUpdateCombineInlineDocumentIDMax)
+	} else {
+		scratch.keyArena = scratch.keyArena[:0]
 	}
 	scratch.bsonSetDocumentScratch = scratch.bsonSetDocumentScratch[:0]
 	arenaBytes := estimateIndexEncodeArenaBytesForCount(itemCount*2, runtimeCount)
@@ -10326,6 +12240,11 @@ func putUpdateBatchPlanScratch(scratch *updateBatchPlanScratch) {
 	} else {
 		scratch.documentArena = scratch.documentArena[:0]
 	}
+	if cap(scratch.keyArena) > updateBatchPlanScratchMaxDocumentArena {
+		scratch.keyArena = nil
+	} else {
+		scratch.keyArena = scratch.keyArena[:0]
+	}
 	if cap(scratch.bsonSetDocumentScratch) > updateBatchPlanScratchMaxBSONSetDocumentBytes {
 		scratch.bsonSetDocumentScratch = nil
 	} else {
@@ -10373,6 +12292,18 @@ func appendUpdateBatchPlanScratchDocument(scratch *updateBatchPlanScratch, docum
 	return scratch.documentArena[start:len(scratch.documentArena):len(scratch.documentArena)]
 }
 
+func appendUpdateBatchPlanScratchKey(scratch *updateBatchPlanScratch, key []byte) []byte {
+	if len(key) == 0 {
+		return nil
+	}
+	if scratch == nil {
+		return bytes.Clone(key)
+	}
+	start := len(scratch.keyArena)
+	scratch.keyArena = append(scratch.keyArena, key...)
+	return scratch.keyArena[start:len(scratch.keyArena):len(scratch.keyArena)]
+}
+
 type updateBatchBufferedRead struct {
 	enabled         bool
 	primaryEntries  []updateBatchBufferedEntry
@@ -10417,6 +12348,30 @@ func getUpdateBatchBufferedEntries(count int) ([]updateBatchBufferedEntry, *upda
 		entries: make([]updateBatchBufferedEntry, count),
 	}
 	buffer.ensureValueArenaCapacity(estimateUpdateBatchPlanDocumentArenaBytes(count))
+	return buffer.entries, buffer
+}
+
+func getUpdateBatchBufferedEntrySlots(count int) ([]updateBatchBufferedEntry, *updateBatchBufferedEntryBuffer) {
+	if count <= 0 {
+		return nil, nil
+	}
+	if count > updateBatchBufferedEntryPoolMaxCap {
+		return make([]updateBatchBufferedEntry, count), nil
+	}
+	if v := updateBatchBufferedEntryPool.Get(); v != nil {
+		if buffer, ok := v.(*updateBatchBufferedEntryBuffer); ok && buffer != nil {
+			if cap(buffer.entries) >= count {
+				buffer.entries = buffer.entries[:count]
+				clear(buffer.entries)
+				buffer.arena = buffer.arena[:0]
+				return buffer.entries, buffer
+			}
+			putUpdateBatchBufferedEntries(buffer.entries, buffer)
+		}
+	}
+	buffer := &updateBatchBufferedEntryBuffer{
+		entries: make([]updateBatchBufferedEntry, count),
+	}
 	return buffer.entries, buffer
 }
 
@@ -10499,11 +12454,20 @@ func (c *Collection) validateUpdateBatchPlanRootDescriptors(plan *updateBatchPla
 	return c.validateRootDescriptorSystemDeltaForMeta(plan.meta, plan.baseCommitSeq, plan.baseSystemRoot, plan.rootNames, plan.baseRootIDs)
 }
 
-func (c *Collection) shouldUseDirectBufferedUpdatePlan(meta CollectionMeta, opts collectionOptions, canBuffer bool, mode updateBatchMode, runtimes []indexRuntime, changed []preparedBatchUpdate) bool {
+func (c *Collection) shouldUseDirectBufferedUpdatePlan(meta CollectionMeta, opts collectionOptions, canBuffer bool, mode updateBatchMode, runtimes []indexRuntime, changed []preparedBatchUpdate, structuredBSONSetBatch bool) bool {
 	if c == nil || c.writeDomain == nil {
 		return false
 	}
-	if !meta.Options.BufferedIndexedWrites || len(meta.Indexes) == 0 {
+	if len(changed) == 0 {
+		return false
+	}
+	if len(meta.Indexes) == 0 {
+		return c.canBufferDirectUpdateAck() &&
+			mode == updateBatchModeNoSecondaryUniqueIndexChanges &&
+			isBSONDocumentFormat(opts.documentFormat) &&
+			structuredBSONSetBatch
+	}
+	if !meta.Options.BufferedIndexedWrites {
 		return false
 	}
 	if mode == updateBatchModeAny && collectionMetaHasSecondaryUniqueIndex(meta) {
@@ -10598,8 +12562,10 @@ func (c *Collection) updateBatchOnce(items []updateBatchItem, mode updateBatchMo
 					return nil
 				}
 				if plan.directBufferedUpdate != nil {
-					if err := c.flushBufferedWrites(); err != nil {
-						return err
+					if !c.canBufferDirectUpdateAck() {
+						if err := c.flushBufferedWrites(); err != nil {
+							return err
+						}
 					}
 					useBufferedRead = false
 					replan = true
@@ -10682,8 +12648,10 @@ func (c *Collection) updateBatchOnce(items []updateBatchItem, mode updateBatchMo
 			return nil
 		}
 		if plan.directBufferedUpdate != nil {
-			if err := c.flushBufferedWrites(); err != nil {
-				return err
+			if !c.canBufferDirectUpdateAck() {
+				if err := c.flushBufferedWrites(); err != nil {
+					return err
+				}
 			}
 			return ErrConcurrentMutation
 		}
@@ -10746,11 +12714,11 @@ func (c *Collection) shouldPlanUpdateBatchWithBufferedWrites(mode updateBatchMod
 	domain := c.writeDomain
 	domain.mu.RLock()
 	defer domain.mu.RUnlock()
-	return domain.count > 0 && hasBufferedIndexedRootRuns(domain)
+	return domain.count > 0 && hasBufferedIndexedPendingWrites(domain)
 }
 
 func updateBatchCanReadBufferedDomainLocked(domain *collectionWriteDomain, meta CollectionMeta, baseSystemRoot uint64) bool {
-	if domain == nil || domain.count == 0 || !hasBufferedIndexedRootRuns(domain) {
+	if domain == nil || domain.count == 0 || !hasBufferedIndexedPendingWrites(domain) {
 		return false
 	}
 	if !domain.loaded || domain.catalog == nil {
@@ -10763,23 +12731,78 @@ func updateBatchCanReadBufferedDomainLocked(domain *collectionWriteDomain, meta 
 		return false
 	}
 	collectionName := bufferedDomainCollectionName(domain, meta.Name)
-	if collectionName == "" || !hasPendingIndexedRootRunsForRootLocked(domain, collectionPrimaryRootName(collectionName)) {
+	if collectionName == "" || !hasBufferedPrimaryWritesLocked(domain, collectionName) {
 		return false
+	}
+	if len(meta.Indexes) == 0 {
+		return true
 	}
 	return meta.Options.BufferedIndexedWrites && len(meta.Indexes) > 0
 }
 
-func readUpdateBatchCurrentDocument(primaryReader *backenddb.SnapshotRootReader, primaryReaderOK bool, itemIndex int, documentID []byte, buffered updateBatchBufferedRead, dst []byte) (updateBatchCurrentDocument, error) {
+func (domain *collectionWriteDomain) directUpdatePlanHasPrimaryWriteConflictLocked(plan *updateBatchPlan) bool {
+	if domain == nil || plan == nil || plan.directBufferedUpdate == nil {
+		return true
+	}
+	baseGeneration := uint64(0)
+	if plan.bufferedBase {
+		baseGeneration = plan.bufferedReadGeneration
+	}
+	index := domain.primaryWriteIndex
+	if index == nil && domain.count > 0 {
+		collectionName := bufferedDomainCollectionName(domain, plan.meta.Name)
+		index = rebuildBufferedPrimaryWriteIndex(collectionName, pendingIndexedRootRunMapLocked(domain), domain.writeGeneration)
+		if index == nil && hasBufferedPrimaryOverlay(domain) {
+			index = newBufferedPrimaryWriteIndex(domain.primaryOverlay.len())
+		}
+		if index == nil && hasPendingIndexedPrimaryOverlay(domain) {
+			index = newBufferedPrimaryWriteIndex(0)
+		}
+		index.addOverlay(domain.primaryOverlay, domain.writeGeneration)
+		for i := range domain.indexedPublishingUnits {
+			index.addOverlay(domain.indexedPublishingUnits[i].primaryOverlay, domain.writeGeneration)
+		}
+		for i := range domain.indexedFlushUnits {
+			index.addOverlay(domain.indexedFlushUnits[i].primaryOverlay, domain.writeGeneration)
+		}
+		domain.primaryWriteIndex = index
+	}
+	if index == nil || index.len() == 0 {
+		return false
+	}
+	for i, entry := range plan.directBufferedUpdate.primaryEntries {
+		entryBaseGeneration := baseGeneration
+		if i < len(plan.directBufferedUpdate.primaryEntryReadGenerations) {
+			entryBaseGeneration = plan.directBufferedUpdate.primaryEntryReadGenerations[i]
+		}
+		if generation, ok := index.generation(entry.key); ok && generation > entryBaseGeneration {
+			return true
+		}
+	}
+	return false
+}
+
+func readUpdateBatchCurrentDocumentFromBuffered(itemIndex int, buffered updateBatchBufferedRead) (updateBatchCurrentDocument, bool) {
 	if buffered.enabled {
 		if itemIndex >= 0 && itemIndex < len(buffered.primaryEntries) {
 			entry := buffered.primaryEntries[itemIndex]
 			if entry.found {
 				if entry.flags&node.FlagTombstone != 0 {
-					return updateBatchCurrentDocument{buffered: true}, nil
+					return updateBatchCurrentDocument{buffered: true}, true
 				}
-				return updateBatchCurrentDocument{value: entry.value, buffered: true, found: true}, nil
+				return updateBatchCurrentDocument{value: entry.value, buffered: true, found: true}, true
 			}
 		}
+	}
+	return updateBatchCurrentDocument{}, false
+}
+
+func readUpdateBatchCurrentDocument(primaryReader *backenddb.SnapshotRootReader, primaryReaderOK bool, itemIndex int, documentID []byte, buffered updateBatchBufferedRead, cached updateBatchBufferedRead, dst []byte) (updateBatchCurrentDocument, error) {
+	if current, ok := readUpdateBatchCurrentDocumentFromBuffered(itemIndex, buffered); ok {
+		return current, nil
+	}
+	if current, ok := readUpdateBatchCurrentDocumentFromBuffered(itemIndex, cached); ok {
+		return current, nil
 	}
 	if !primaryReaderOK {
 		return updateBatchCurrentDocument{}, nil
@@ -10794,20 +12817,15 @@ func readUpdateBatchCurrentDocument(primaryReader *backenddb.SnapshotRootReader,
 	return updateBatchCurrentDocument{value: value, found: true}, nil
 }
 
-func readUpdateBatchCurrentDocumentAtCatalogRoot(snap *backenddb.Snapshot, catalog *collectionCatalog, primaryRootName string, primaryReader *backenddb.SnapshotRootReader, primaryReaderOK bool, itemIndex int, documentID []byte, buffered updateBatchBufferedRead, dst []byte) (updateBatchCurrentDocument, error) {
-	if buffered.enabled {
-		if itemIndex >= 0 && itemIndex < len(buffered.primaryEntries) {
-			entry := buffered.primaryEntries[itemIndex]
-			if entry.found {
-				if entry.flags&node.FlagTombstone != 0 {
-					return updateBatchCurrentDocument{buffered: true}, nil
-				}
-				return updateBatchCurrentDocument{value: entry.value, buffered: true, found: true}, nil
-			}
-		}
+func readUpdateBatchCurrentDocumentAtCatalogRoot(snap *backenddb.Snapshot, catalog *collectionCatalog, primaryRootName string, primaryReader *backenddb.SnapshotRootReader, primaryReaderOK bool, itemIndex int, documentID []byte, buffered updateBatchBufferedRead, cached updateBatchBufferedRead, dst []byte) (updateBatchCurrentDocument, error) {
+	if current, ok := readUpdateBatchCurrentDocumentFromBuffered(itemIndex, buffered); ok {
+		return current, nil
+	}
+	if current, ok := readUpdateBatchCurrentDocumentFromBuffered(itemIndex, cached); ok {
+		return current, nil
 	}
 	if catalog == nil || len(catalog.overlayRootIDs(primaryRootName)) == 0 {
-		return readUpdateBatchCurrentDocument(primaryReader, primaryReaderOK, -1, documentID, updateBatchBufferedRead{}, dst)
+		return readUpdateBatchCurrentDocument(primaryReader, primaryReaderOK, -1, documentID, updateBatchBufferedRead{}, updateBatchBufferedRead{}, dst)
 	}
 	if catalog.rootID(primaryRootName) == 0 || catalog.anyOverlayRootMayContainKey(primaryRootName, documentID) {
 		value, overlayFound, documentFound, err := collectionGetAppendAtCatalogOverlayRoot(snap, catalog, primaryRootName, documentID, dst)
@@ -10818,7 +12836,7 @@ func readUpdateBatchCurrentDocumentAtCatalogRoot(snap *backenddb.Snapshot, catal
 			return updateBatchCurrentDocument{value: value, found: documentFound}, nil
 		}
 	}
-	return readUpdateBatchCurrentDocument(primaryReader, primaryReaderOK, -1, documentID, updateBatchBufferedRead{}, dst)
+	return readUpdateBatchCurrentDocument(primaryReader, primaryReaderOK, -1, documentID, updateBatchBufferedRead{}, updateBatchBufferedRead{}, dst)
 }
 
 const updateBatchBufferedPrimaryDirectProbeLimit = 1024
@@ -10902,6 +12920,139 @@ func snapshotUpdateBatchBufferedPrimaryEntriesFromIndex(index *bufferedPrimaryRu
 	return entries, buffer, nil
 }
 
+func snapshotUpdateBatchBufferedPrimaryEntriesLocked(domain *collectionWriteDomain, collectionName string, items []updateBatchItem) ([]updateBatchBufferedEntry, *updateBatchBufferedEntryBuffer, error) {
+	entries, buffer := getUpdateBatchBufferedEntries(len(items))
+	if domain == nil || len(items) == 0 {
+		return entries, buffer, nil
+	}
+	missing := len(items)
+	if overlay := domain.primaryOverlay; overlay != nil && overlay.len() > 0 {
+		for i, item := range items {
+			ref, ok := overlay.lookupRef(item.DocumentID)
+			if !ok {
+				continue
+			}
+			entries[i] = updateBatchBufferedEntry{
+				value: buffer.copyValue(ref.value),
+				flags: ref.flags,
+				found: true,
+			}
+			missing--
+		}
+	}
+	if missing <= 0 {
+		return entries, buffer, nil
+	}
+	primaryRuns := domain.rootRuns[collectionPrimaryRootName(collectionName)]
+	for i, item := range items {
+		if entries[i].found {
+			continue
+		}
+		ref, ok := lookupPendingPrimaryOverlayLocked(domain, item.DocumentID)
+		if !ok {
+			continue
+		}
+		if value, _, flags, found := getBufferedRunEntry(primaryRuns, item.DocumentID); found {
+			entries[i] = updateBatchBufferedEntry{
+				value: buffer.copyValue(value),
+				flags: flags,
+				found: true,
+			}
+			missing--
+			continue
+		}
+		entries[i] = updateBatchBufferedEntry{
+			value: buffer.copyValue(ref.value),
+			flags: ref.flags,
+			found: true,
+		}
+		missing--
+	}
+	if missing <= 0 {
+		return entries, buffer, nil
+	}
+	if domain.primaryRunIndex != nil {
+		for i, item := range items {
+			if entries[i].found {
+				continue
+			}
+			ref, ok := domain.primaryRunIndex.lookupRef(item.DocumentID)
+			if !ok {
+				continue
+			}
+			value, flags, found := ref.value, ref.flags, ref.entryValid
+			if !found {
+				if ref.table == nil {
+					continue
+				}
+				value, _, flags, found = ref.table.GetEntry(item.DocumentID)
+			}
+			if !found {
+				continue
+			}
+			entries[i] = updateBatchBufferedEntry{
+				value: buffer.copyValue(value),
+				flags: flags,
+				found: true,
+			}
+			missing--
+		}
+		return entries, buffer, nil
+	}
+	runs := pendingIndexedRootRunsLocked(domain, collectionPrimaryRootName(collectionName))
+	if len(runs) == 0 {
+		return entries, buffer, nil
+	}
+	if len(runs) <= 1 || len(runs)*len(items) <= updateBatchBufferedPrimaryDirectProbeLimit {
+		for i, item := range items {
+			if entries[i].found {
+				continue
+			}
+			if value, _, flags, found := getBufferedRunEntry(runs, item.DocumentID); found {
+				entries[i] = updateBatchBufferedEntry{
+					value: buffer.copyValue(value),
+					flags: flags,
+					found: true,
+				}
+			}
+		}
+		return entries, buffer, nil
+	}
+	targets := make(map[string]int, missing)
+	for i, item := range items {
+		if !entries[i].found {
+			targets[string(item.DocumentID)] = i
+		}
+	}
+	for i := len(runs) - 1; i >= 0 && len(targets) > 0; i-- {
+		run := runs[i]
+		if run == nil {
+			continue
+		}
+		it := run.NewIterator(nil, nil)
+		for it.Valid() && len(targets) > 0 {
+			key := string(it.UnsafeKey())
+			if itemIndex, ok := targets[key]; ok && !entries[itemIndex].found {
+				value, _, flags := it.UnsafeEntry()
+				entries[itemIndex] = updateBatchBufferedEntry{
+					value: buffer.copyValue(value),
+					flags: flags,
+					found: true,
+				}
+				delete(targets, key)
+			}
+			it.Next()
+		}
+		if err := it.Error(); err != nil {
+			_ = it.Close()
+			putUpdateBatchBufferedEntries(entries, buffer)
+			return nil, nil, err
+		}
+		_ = it.Close()
+	}
+	return entries, buffer, nil
+}
+
 func snapshotUpdateBatchBufferedRead(domain *collectionWriteDomain, meta CollectionMeta, baseCommitSeq uint64, baseSystemRoot uint64, items []updateBatchItem, documentFormat DocumentFormat) (updateBatchBufferedRead, []memtable.Table, bool, bool, error) {
 	if domain == nil {
 		return updateBatchBufferedRead{}, nil, false, false, nil
@@ -10939,12 +13090,7 @@ func snapshotUpdateBatchBufferedReadLocked(domain *collectionWriteDomain, meta C
 		var primaryEntries []updateBatchBufferedEntry
 		var primaryBuffer *updateBatchBufferedEntryBuffer
 		var err error
-		if domain.primaryRunIndex != nil {
-			primaryEntries, primaryBuffer, err = snapshotUpdateBatchBufferedPrimaryEntriesFromIndex(domain.primaryRunIndex, items)
-		} else {
-			primaryRuns := pendingIndexedRootRunsLocked(domain, collectionPrimaryRootName(bufferedCollectionName))
-			primaryEntries, primaryBuffer, err = snapshotUpdateBatchBufferedPrimaryEntries(primaryRuns, items)
-		}
+		primaryEntries, primaryBuffer, err = snapshotUpdateBatchBufferedPrimaryEntriesLocked(domain, bufferedCollectionName, items)
 		if err != nil {
 			return updateBatchBufferedRead{}, nil, false, false, false, err
 		}
@@ -10962,7 +13108,7 @@ func snapshotUpdateBatchBufferedReadLocked(domain *collectionWriteDomain, meta C
 			writeGeneration: domain.writeGeneration,
 		}, templateRuns, false, false, false, nil
 	}
-	if domain.count > 0 && hasBufferedIndexedRootRuns(domain) {
+	if domain.count > 0 && hasBufferedIndexedPendingWrites(domain) {
 		return updateBatchBufferedRead{}, nil, true, false, false, nil
 	}
 	if updateBatchBufferedSnapshotStaleLocked(domain, baseCommitSeq, baseSystemRoot) {
@@ -11039,6 +13185,8 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 	baseUserRoot := snapshotUserRoot(snap)
 	baseSystemRoot := snapshotSystemRoot(snap)
 	baseCommitSeq := snapshotCommitSeq(snap)
+	cachedPrimaryRead := snapshotUpdateBatchPrimaryCache(c.writeDomain, meta, baseSystemRoot, items)
+	defer putUpdateBatchBufferedEntries(cachedPrimaryRead.primaryEntries, cachedPrimaryRead.primaryBuffer)
 	var bufferedRead updateBatchBufferedRead
 	var bufferedTemplateRuns []memtable.Table
 	defer func() { resetCollectionTables(bufferedTemplateRuns) }()
@@ -11132,7 +13280,7 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 	var currentScratch []byte
 	for i, item := range items {
 		phaseStart := updateBatchStatsNow(detailedStats)
-		current, err := readUpdateBatchCurrentDocumentAtCatalogRoot(snap, catalog, primaryRootName, &primaryReader, primaryReaderOK, i, item.DocumentID, bufferedRead, currentScratch[:0])
+		current, err := readUpdateBatchCurrentDocumentAtCatalogRoot(snap, catalog, primaryRootName, &primaryReader, primaryReaderOK, i, item.DocumentID, bufferedRead, cachedPrimaryRead, currentScratch[:0])
 		stats.CurrentRead += updateBatchStatsSince(detailedStats, phaseStart)
 		if err != nil {
 			_ = snap.Close()
@@ -11142,33 +13290,11 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 			continue
 		}
 		results[i].Matched = true
-		currentID, err := captureBSONIDSnapshot(current.value, plannerOptions)
-		if err != nil {
-			_ = snap.Close()
-			return nil, updateBatchItemError(i, err)
-		}
 		prepared := preparedBatchUpdate{
 			itemIndex:  i,
 			documentID: item.DocumentID,
 		}
-		if len(runtimes) > 0 {
-			if item.hasBSONSet {
-				prepared.affectedIndexRuntimeMask, prepared.knownAffectedIndexes = item.bsonSet.affectedIndexMask(runtimes, plannerOptions)
-			}
-			phaseStart = updateBatchStatsNow(detailedStats)
-			if prepared.knownAffectedIndexes {
-				prepared.oldState, err = orderedIndexStateForKnownValidDocumentRuntimeMask(current.value, runtimes, prepared.affectedIndexRuntimeMask, plannerOptions, stateArena)
-			} else {
-				prepared.oldState, err = orderedIndexStateForDocumentWithArena(current.value, runtimes, plannerOptions, stateArena)
-			}
-			phaseDuration := updateBatchStatsSince(detailedStats, phaseStart)
-			stats.IndexStateExtraction += phaseDuration
-			stats.OldIndexStateExtract += phaseDuration
-			if err != nil {
-				_ = snap.Close()
-				return nil, updateBatchItemError(i, err)
-			}
-		}
+		var currentID bsonIDSnapshot
 		var document []byte
 		var changedOne bool
 		if item.hasBSONSet {
@@ -11181,9 +13307,36 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 			// updates may return current.value and are discarded before staging.
 			if err != nil {
 				_ = snap.Close()
-				return nil, updateBatchItemError(i, err)
+				return nil, updateBatchItemError(i, fmt.Errorf("collections: current BSON document: %w", err))
 			}
 		} else {
+			currentID, err = captureBSONIDSnapshot(current.value, plannerOptions)
+			if err != nil {
+				_ = snap.Close()
+				return nil, updateBatchItemError(i, err)
+			}
+		}
+		if len(runtimes) > 0 {
+			if item.hasBSONSet {
+				prepared.affectedIndexRuntimeMask, prepared.knownAffectedIndexes = item.bsonSet.affectedIndexMask(runtimes, plannerOptions)
+			}
+			if !prepared.knownAffectedIndexes || prepared.affectedIndexRuntimeMask != 0 {
+				phaseStart = updateBatchStatsNow(detailedStats)
+				if prepared.knownAffectedIndexes {
+					prepared.oldState, err = orderedIndexStateForKnownValidDocumentRuntimeMask(current.value, runtimes, prepared.affectedIndexRuntimeMask, plannerOptions, stateArena)
+				} else {
+					prepared.oldState, err = orderedIndexStateForDocumentWithArena(current.value, runtimes, plannerOptions, stateArena)
+				}
+				phaseDuration := updateBatchStatsSince(detailedStats, phaseStart)
+				stats.IndexStateExtraction += phaseDuration
+				stats.OldIndexStateExtract += phaseDuration
+				if err != nil {
+					_ = snap.Close()
+					return nil, updateBatchItemError(i, err)
+				}
+			}
+		}
+		if !item.hasBSONSet {
 			phaseStart = updateBatchStatsNow(detailedStats)
 			document, changedOne, err = callCollectionUpdateCallback(item.Update, current.value)
 			stats.Callback += updateBatchStatsSince(detailedStats, phaseStart)
@@ -11202,10 +13355,12 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 			_ = snap.Close()
 			return nil, updateBatchItemError(i, errors.New("changed replacement document cannot be empty"))
 		}
-		err = validateBSONReplacementPreservesIDSnapshot(currentID, document, plannerOptions)
-		if err != nil {
-			_ = snap.Close()
-			return nil, updateBatchItemError(i, err)
+		if !item.hasBSONSet {
+			err = validateBSONReplacementPreservesIDSnapshot(currentID, document, plannerOptions)
+			if err != nil {
+				_ = snap.Close()
+				return nil, updateBatchItemError(i, err)
+			}
 		}
 		changed = append(changed, prepared)
 		changedDocuments = append(changedDocuments, appendUpdateBatchPlanScratchDocument(scratch, document))
@@ -11241,17 +13396,25 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 	}
 
 	phaseStart := updateBatchStatsNow(detailedStats)
-	preparedDocuments, templateRecords, _, templateResolver, err := prepareInsertDocuments(changedDocuments, plannerOptions)
-	stats.PrepareDocuments += updateBatchStatsSince(detailedStats, phaseStart)
-	if err != nil {
-		for i, document := range changedDocuments {
-			if _, _, _, _, itemErr := prepareInsertDocuments([][]byte{document}, plannerOptions); itemErr != nil {
-				_ = snap.Close()
-				return nil, updateBatchItemError(changed[i].itemIndex, itemErr)
+	var preparedDocuments [][]byte
+	var templateRecords []templateV1Record
+	var templateResolver templateV1Resolver
+	if updateBatchItemsAllHaveBSONSet(items) && normalizedDocumentFormat(plannerOptions.documentFormat) == DocumentFormatBSON {
+		preparedDocuments = changedDocuments
+	} else {
+		var err error
+		preparedDocuments, templateRecords, _, templateResolver, err = prepareInsertDocuments(changedDocuments, plannerOptions)
+		stats.PrepareDocuments += updateBatchStatsSince(detailedStats, phaseStart)
+		if err != nil {
+			for i, document := range changedDocuments {
+				if _, _, _, _, itemErr := prepareInsertDocuments([][]byte{document}, plannerOptions); itemErr != nil {
+					_ = snap.Close()
+					return nil, updateBatchItemError(changed[i].itemIndex, itemErr)
+				}
 			}
+			_ = snap.Close()
+			return nil, fmt.Errorf("collections: update batch replacement prepare: %w", err)
 		}
-		_ = snap.Close()
-		return nil, fmt.Errorf("collections: update batch replacement prepare: %w", err)
 	}
 	if len(preparedDocuments) != len(changed) {
 		_ = snap.Close()
@@ -11263,6 +13426,10 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 	for i := range changed {
 		changed[i].document = preparedDocuments[i]
 		if len(runtimes) > 0 {
+			if changed[i].knownAffectedIndexes && changed[i].affectedIndexRuntimeMask == 0 {
+				recordKnownUnaffectedIndexStats(runtimes, &stats)
+				continue
+			}
 			phaseStart = updateBatchStatsNow(detailedStats)
 			if changed[i].knownAffectedIndexes {
 				changed[i].newState, err = orderedIndexStateForKnownValidDocumentRuntimeMask(changed[i].document, runtimes, changed[i].affectedIndexRuntimeMask, plannerOptions, stateArena)
@@ -11344,7 +13511,7 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 	stats.UniqueIndexPreflight += updateBatchStatsSince(detailedStats, phaseStart)
 
 	success := false
-	canBufferDirectUpdateBatch := c.shouldUseDirectBufferedUpdatePlan(meta, plannerOptions, canBufferIndexedUpdateBatch, mode, runtimes, changed)
+	canBufferDirectUpdateBatch := c.shouldUseDirectBufferedUpdatePlan(meta, plannerOptions, canBufferIndexedUpdateBatch, mode, runtimes, changed, updateBatchItemsAllHaveBSONSet(items))
 	if canBufferDirectUpdateBatch {
 		phaseStart = updateBatchStatsNow(detailedStats)
 		var templateEntries []directBufferedRootEntry
@@ -11365,7 +13532,7 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 		stats.TemplateRunBuild += updateBatchStatsSince(detailedStats, phaseStart)
 
 		phaseStart = updateBatchStatsNow(detailedStats)
-		primaryEntries := buildDirectBufferedPrimaryRootEntries(changed)
+		primaryEntries := buildDirectBufferedPrimaryRootEntries(changed, scratch)
 		rootNames = append(rootNames, primaryRootName)
 		uniqueSecondary = append(uniqueSecondary, -1)
 		baseRootIDs[primaryRootName] = primaryRoot
@@ -11698,6 +13865,84 @@ func updateBatchPlanUniqueSecondaryIndex(plan *updateBatchPlan, rootOffset int) 
 	return indexDef, true
 }
 
+func directUpdatePrimaryRootPolicy(plan *updateBatchPlan, primaryRootName string) (backenddb.OrderedRootStoragePolicy, bool) {
+	if plan == nil || primaryRootName == "" {
+		return 0, false
+	}
+	for i, rootName := range plan.rootNames {
+		if rootName == primaryRootName && i < len(plan.policies) {
+			return plan.policies[i], true
+		}
+	}
+	return 0, false
+}
+
+func canStageDirectPrimaryOverlay(plan *updateBatchPlan, direct *directBufferedUpdatePlan, primaryOnlyDirectUpdate bool, wouldFlush bool) bool {
+	return plan != nil &&
+		direct != nil &&
+		!primaryOnlyDirectUpdate &&
+		!wouldFlush &&
+		len(plan.meta.Indexes) > 0 &&
+		plan.meta.Options.BufferedIndexedWrites &&
+		len(direct.templateEntries) == 0 &&
+		len(direct.secondaryRootPlans) == 0 &&
+		direct.primaryRootName != "" &&
+		len(direct.primaryEntries) > 0
+}
+
+func (c *Collection) stageDirectPrimaryOverlayLocked(domain *collectionWriteDomain, plan *updateBatchPlan, modifiedCount int) (bool, error) {
+	if c == nil || domain == nil || plan == nil || plan.directBufferedUpdate == nil {
+		return false, nil
+	}
+	direct := plan.directBufferedUpdate
+	baseRoot, ok := plan.baseRootIDs[direct.primaryRootName]
+	if !ok {
+		return false, fmt.Errorf("collections: UpdateBatch collection %q direct primary overlay missing base root for %q", plan.meta.Name, direct.primaryRootName)
+	}
+	if pendingBaseRoot, ok := pendingIndexedRootBaseIDLocked(domain, direct.primaryRootName); ok && pendingBaseRoot != baseRoot {
+		return false, errBufferedRootBaseMismatch(plan.meta.Name, direct.primaryRootName)
+	}
+	policy, ok := directUpdatePrimaryRootPolicy(plan, direct.primaryRootName)
+	if !ok {
+		return false, fmt.Errorf("collections: UpdateBatch collection %q direct primary overlay missing policy for %q", plan.meta.Name, direct.primaryRootName)
+	}
+	if domain.rootPolicies == nil {
+		domain.rootPolicies = make(map[string]backenddb.OrderedRootStoragePolicy, 1)
+	}
+	if domain.rootBaseIDs == nil {
+		domain.rootBaseIDs = make(map[string]uint64, 1)
+	}
+	if _, ok := domain.rootBaseIDs[direct.primaryRootName]; !ok {
+		domain.rootBaseIDs[direct.primaryRootName] = baseRoot
+	}
+	domain.rootPolicies[direct.primaryRootName] = policy
+	if domain.primaryOverlay == nil {
+		domain.primaryOverlay = newBufferedPrimaryOverlay(len(direct.primaryEntries))
+	}
+	domain.primaryOverlay.addEntries(direct.primaryEntries)
+	retainDirectBufferedDocumentArenaLocked(domain, plan)
+
+	domain.loaded = true
+	domain.meta = plan.meta
+	domain.catalog = plan.catalog
+	domain.baseCommitSeq = plan.baseCommitSeq
+	domain.baseSystemRoot = plan.baseSystemRoot
+	if plan.catalog != nil {
+		domain.primaryRoot = plan.catalog.rootID(collectionPrimaryRootName(plan.meta.Name))
+	}
+	domain.count += modifiedCount
+	domain.bufferedBytes = saturatingAddNonNegativeInt64(domain.bufferedBytes, direct.stagedBytes)
+	domain.mutableCount = saturatingAddNonNegativeInt(domain.mutableCount, modifiedCount)
+	domain.mutableBytes = saturatingAddNonNegativeInt64(domain.mutableBytes, direct.stagedBytes)
+	domain.indexedDeletesOnly = false
+	domain.writeGeneration++
+	domain.notePrimaryWriteEntriesLocked(direct.primaryEntries, domain.writeGeneration)
+	domain.observeIndexedStage(modifiedCount, direct.stagedBytes, 0)
+	c.meta = plan.meta
+	plan.stats.BufferedBatches = 1
+	return true, nil
+}
+
 func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, error) {
 	if c == nil || plan == nil || plan.directBufferedUpdate == nil || len(plan.directBufferedUpdate.primaryEntries) == 0 {
 		return false, nil
@@ -11709,7 +13954,8 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 	defer func() {
 		plan.stats.BufferStage += updateBatchStatsSince(detailedStats, bufferStart)
 	}()
-	if c.writeDomain == nil || !plan.canBufferDirectUpdateBatch || !plan.meta.Options.BufferedIndexedWrites || len(plan.meta.Indexes) == 0 {
+	primaryOnlyDirectUpdate := len(plan.meta.Indexes) == 0
+	if c.writeDomain == nil || !plan.canBufferDirectUpdateBatch || (!primaryOnlyDirectUpdate && !plan.meta.Options.BufferedIndexedWrites) {
 		plan.stats.BufferStagePrecheck += updateBatchStatsSince(detailedStats, precheckStart)
 		return false, nil
 	}
@@ -11745,11 +13991,19 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 
 	phaseStart := updateBatchStatsNow(detailedStats)
 	if domain.count != 0 {
-		if !plan.bufferedBase || !updateBatchCanReadBufferedDomainLocked(domain, plan.meta, plan.baseSystemRoot) {
+		canReadBuffered := updateBatchCanReadBufferedDomainLocked(domain, plan.meta, plan.baseSystemRoot)
+		if !canReadBuffered {
 			plan.stats.BufferStageValidation += updateBatchStatsSince(detailedStats, phaseStart)
 			return false, ErrConcurrentMutation
 		}
-		if plan.bufferedReadGeneration != domain.writeGeneration {
+		currentBufferedPlan := plan.bufferedBase && plan.bufferedReadGeneration == domain.writeGeneration
+		if len(direct.templateEntries) > 0 && !currentBufferedPlan {
+			// Template-v1 IDs are collection-global; stale direct plans can reuse
+			// an ID even when their primary document writes do not conflict.
+			plan.stats.BufferStageValidation += updateBatchStatsSince(detailedStats, phaseStart)
+			return false, ErrConcurrentMutation
+		}
+		if !currentBufferedPlan && domain.directUpdatePlanHasPrimaryWriteConflictLocked(plan) {
 			plan.stats.BufferStageValidation += updateBatchStatsSince(detailedStats, phaseStart)
 			return false, ErrConcurrentMutation
 		}
@@ -11767,7 +14021,7 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 			plan.stats.BufferStageRootScan += updateBatchStatsSince(detailedStats, phaseStart)
 			return false, fmt.Errorf("collections: UpdateBatch collection %q direct plan missing base root for %q", plan.meta.Name, rootName)
 		}
-		if hasPendingIndexedRootRunsForRootLocked(domain, rootName) {
+		if hasPendingRootRunsForRootLocked(domain, rootName) {
 			if pendingBaseRoot, ok := pendingIndexedRootBaseIDLocked(domain, rootName); ok && pendingBaseRoot != baseRoot {
 				plan.stats.BufferStageRootScan += updateBatchStatsSince(detailedStats, phaseStart)
 				return false, errBufferedRootBaseMismatch(plan.meta.Name, rootName)
@@ -11790,9 +14044,12 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 		domain.rootRuns = make(map[string][]memtable.Table, len(plan.rootNames))
 	}
 	addedRootRuns := estimateAccumulatedRootRunsForNamesLocked(domain, plan.rootNames)
-	shouldAutoFlushAfterAdding := shouldFlushBufferedIndexedWritesAfterAdding(domain, plan.meta.Options, modifiedCount, direct.stagedBytes, addedRootRuns)
+	shouldAutoFlushAfterAdding := false
+	if !primaryOnlyDirectUpdate {
+		shouldAutoFlushAfterAdding = shouldFlushBufferedIndexedWritesAfterAdding(domain, plan.meta.Options, modifiedCount, direct.stagedBytes, addedRootRuns)
+	}
 	requiresPreAppendFreeze := false
-	if collectionMetaHasSecondaryUniqueIndex(plan.meta) && bufferedIndexedAutoFlushEnabled(plan.meta.Options) {
+	if !primaryOnlyDirectUpdate && collectionMetaHasSecondaryUniqueIndex(plan.meta) && bufferedIndexedAutoFlushEnabled(plan.meta.Options) {
 		for i := range plan.rootNames {
 			if _, ok := updateBatchPlanUniqueSecondaryIndex(plan, i); ok {
 				requiresPreAppendFreeze = true
@@ -11834,6 +14091,20 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 	}
 	defer freezePreAppendTables()
 	plan.stats.BufferStageDomainPrepare += updateBatchStatsSince(detailedStats, phaseStart)
+
+	overlayWouldFlush := false
+	if !primaryOnlyDirectUpdate {
+		overlayWouldFlush = shouldFlushBufferedIndexedWritesAfterAdding(domain, plan.meta.Options, modifiedCount, direct.stagedBytes, 0)
+	}
+	if canStageDirectPrimaryOverlay(plan, direct, primaryOnlyDirectUpdate, shouldAutoFlushAfterAdding || overlayWouldFlush) {
+		overlayAppendStart := updateBatchStatsNow(detailedStats)
+		buffered, err := c.stageDirectPrimaryOverlayLocked(domain, plan, modifiedCount)
+		overlayAppendDuration := updateBatchStatsSince(detailedStats, overlayAppendStart)
+		plan.stats.BufferStagePrimaryAppend += overlayAppendDuration
+		plan.stats.BufferStageRootAppend += overlayAppendDuration
+		return buffered, err
+	}
+	materializePrimaryOverlayLocked(domain)
 
 	phaseStart = updateBatchStatsNow(detailedStats)
 	rootTableStart := phaseStart
@@ -11910,6 +14181,7 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 	}
 	plan.stats.BufferStageRootAppend += updateBatchStatsSince(detailedStats, phaseStart)
 	retainDirectBufferedDocumentArenaLocked(domain, plan)
+	stagePrimaryDocumentCacheEntriesLocked(domain, plan.meta, plan.baseSystemRoot, direct.primaryEntries)
 
 	domain.loaded = true
 	domain.meta = plan.meta
@@ -11925,20 +14197,28 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 	domain.mutableBytes = saturatingAddNonNegativeInt64(domain.mutableBytes, direct.stagedBytes)
 	domain.indexedDeletesOnly = false
 	domain.writeGeneration++
+	domain.notePrimaryWriteEntriesLocked(direct.primaryEntries, domain.writeGeneration)
 	if rollbackOnError {
 		rollbackGeneration = domain.writeGeneration
 	}
 	domain.observeIndexedStage(modifiedCount, direct.stagedBytes, actualRootRuns)
-	c.meta = plan.meta
-	compactedObsolete, err := maybeCompactBufferedIndexedMutableRunsLocked(domain, plan.meta.Options)
-	if err != nil {
-		if rollbackOnError {
-			rollbackBufferedIndexedDomain(domain, checkpoint)
-			c.meta = collectionMetaCheckpoint
-		}
-		return false, err
+	if primaryOnlyDirectUpdate {
+		domain.observePrimaryOnlyUpdateBatch(plan.stats.Items, plan.stats.Matched, plan.stats.Modified, false, collectionRootDeltaPlanStats{})
 	}
-	if shouldFlushBufferedIndexedWrites(domain, plan.meta.Options) {
+	c.meta = plan.meta
+	var compactedObsolete []memtable.Table
+	if !primaryOnlyDirectUpdate {
+		var err error
+		compactedObsolete, err = maybeCompactBufferedIndexedMutableRunsLocked(domain, plan.meta.Options)
+		if err != nil {
+			if rollbackOnError {
+				rollbackBufferedIndexedDomain(domain, checkpoint)
+				c.meta = collectionMetaCheckpoint
+			}
+			return false, err
+		}
+	}
+	if !primaryOnlyDirectUpdate && shouldFlushBufferedIndexedWrites(domain, plan.meta.Options) {
 		freezePreAppendTables()
 		flushDuration, lockReleased, relockWait, err := c.flushBufferedIndexedAfterThresholdLocked(domain, plan.meta.Options)
 		if lockReleased > 0 {
@@ -12057,7 +14337,7 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 		if table == nil || table.Len() == 0 {
 			continue
 		}
-		if hasPendingIndexedRootRunsForRootLocked(domain, rootName) {
+		if hasPendingRootRunsForRootLocked(domain, rootName) {
 			if pendingBaseRoot, ok := pendingIndexedRootBaseIDLocked(domain, rootName); ok && pendingBaseRoot != baseRoot {
 				plan.stats.BufferStageRootScan += updateBatchStatsSince(detailedStats, phaseStart)
 				return false, errBufferedRootBaseMismatch(plan.meta.Name, rootName)
@@ -12106,6 +14386,9 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 	}
 	rollbackGeneration := checkpoint.writeGeneration
 	plan.stats.BufferStageDomainPrepare += updateBatchStatsSince(detailedStats, phaseStart)
+	materializePrimaryOverlayLocked(domain)
+	clearPrimaryDocumentCacheLocked(domain)
+	var primaryWriteTable memtable.Table
 	for i, rootName := range plan.rootNames {
 		baseRoot := plan.baseRootIDs[rootName]
 		table := plan.deltaTables[i]
@@ -12114,6 +14397,9 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 		}
 		if pendingBaseRoot, ok := pendingIndexedRootBaseIDLocked(domain, rootName); ok && pendingBaseRoot != baseRoot {
 			return false, errBufferedRootBaseMismatch(plan.meta.Name, rootName)
+		}
+		if rootName == primaryRootName {
+			primaryWriteTable = table
 		}
 		if _, ok := domain.rootBaseIDs[rootName]; !ok {
 			domain.rootBaseIDs[rootName] = baseRoot
@@ -12188,6 +14474,13 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 	domain.mutableBytes = saturatingAddNonNegativeInt64(domain.mutableBytes, stagedBytes)
 	domain.indexedDeletesOnly = false
 	domain.writeGeneration++
+	if err := domain.notePrimaryWriteTableLocked(primaryWriteTable, domain.writeGeneration); err != nil {
+		if rollbackOnError {
+			rollbackBufferedIndexedDomain(domain, checkpoint)
+			c.meta = collectionMetaCheckpoint
+		}
+		return false, err
+	}
 	if rollbackOnError {
 		rollbackGeneration = domain.writeGeneration
 	}
@@ -12309,6 +14602,24 @@ func documentIndexRuntimeChanged(oldState, newState documentIndexState, runtime 
 
 func orderedDocumentIndexRuntimeChanged(oldState, newState orderedDocumentIndexState, runtimeIdx int) bool {
 	return !normalizedEncodedIndexValuesEqual(oldState.valuesAt(runtimeIdx), newState.valuesAt(runtimeIdx))
+}
+
+func recordKnownUnaffectedIndexStats(runtimes []indexRuntime, stats *CollectionUpdateStats) {
+	if stats == nil {
+		return
+	}
+	for runtimeIdx, runtime := range runtimes {
+		stats.IndexValueUnchanged++
+		if runtime.def.unique {
+			stats.UniqueIndexCheckSkips++
+		}
+		if runtimeIdx < stats.IndexStatsCount {
+			stats.IndexStats[runtimeIdx].Unchanged++
+			if runtime.def.unique {
+				stats.IndexStats[runtimeIdx].UniqueCheckSkips++
+			}
+		}
+	}
 }
 
 func updateIndexChangedMaskBit(runtimeIdx int) (uint64, bool) {
@@ -12577,10 +14888,13 @@ func (c *Collection) noteWriteDomainCatalog(systemRoot uint64, catalog *collecti
 	domain.rootPolicies = nil
 	domain.rootBaseIDs = nil
 	domain.rootValueArenas = nil
+	domain.primaryOverlay = nil
+	retainPrimaryDocumentCacheForCatalogLocked(domain, catalog.meta, systemRoot)
 	domain.rootRunCount = 0
 	domain.indexedDeletesOnly = false
 	domain.primaryIDIndex = nil
 	domain.primaryRunIndex = nil
+	domain.primaryWriteIndex = nil
 	domain.uniqueValueRuns = nil
 	domain.uniqueValueMutableRuns = nil
 	domain.uniqueValueIndex = nil
@@ -12880,6 +15194,7 @@ func (c *Collection) bufferIndexedDeleteTablesLocked(
 	if domain.count == 0 {
 		c.initializeWriteDomainFromCatalogLocked(domain, catalog, baseCommitSeq, baseSystemRoot)
 	}
+	clearPrimaryDocumentCacheLocked(domain)
 	if domain.rootPolicies == nil {
 		domain.rootPolicies = make(map[string]backenddb.OrderedRootStoragePolicy, len(rootNames))
 	}
@@ -12893,6 +15208,8 @@ func (c *Collection) bufferIndexedDeleteTablesLocked(
 	domain.primaryRunIndex = nil
 	var stagedBytes int64
 	stagedRootRuns := 0
+	primaryRootName := collectionPrimaryRootName(meta.Name)
+	var primaryWriteTable memtable.Table
 	for i, rootName := range rootNames {
 		table := deltaTables[i]
 		if table == nil || table.Len() == 0 {
@@ -12912,6 +15229,9 @@ func (c *Collection) bufferIndexedDeleteTablesLocked(
 		baseRoot := baseRootIDs[rootName]
 		if _, ok := domain.rootBaseIDs[rootName]; !ok {
 			domain.rootBaseIDs[rootName] = baseRoot
+		}
+		if rootName == primaryRootName {
+			primaryWriteTable = table
 		}
 		domain.rootPolicies[rootName] = policies[i]
 		domain.rootRuns[rootName] = append(domain.rootRuns[rootName], table)
@@ -12936,6 +15256,10 @@ func (c *Collection) bufferIndexedDeleteTablesLocked(
 	domain.mutableBytes = saturatingAddNonNegativeInt64(domain.mutableBytes, stagedBytes)
 	domain.indexedDeletesOnly = true
 	domain.writeGeneration++
+	if err := domain.notePrimaryWriteTableLocked(primaryWriteTable, domain.writeGeneration); err != nil {
+		rollback()
+		return false, err
+	}
 	domain.observeIndexedStage(deleted, stagedBytes, stagedRootRuns)
 	c.meta = meta
 	compactedObsolete, err := maybeCompactBufferedIndexedMutableRunsLocked(domain, meta.Options)
@@ -13775,11 +16099,39 @@ func hasBufferedPrimaryRootRuns(domain *collectionWriteDomain, fallbackCollectio
 	if collectionName == "" {
 		return false
 	}
-	return hasPendingIndexedRootRunsForRootLocked(domain, collectionPrimaryRootName(collectionName))
+	return hasPendingRootRunsForRootLocked(domain, collectionPrimaryRootName(collectionName))
+}
+
+func hasBufferedPrimaryWritesLocked(domain *collectionWriteDomain, fallbackCollectionName string) bool {
+	if hasBufferedPrimaryOverlay(domain) {
+		return true
+	}
+	if hasPendingIndexedPrimaryOverlay(domain) {
+		return true
+	}
+	return hasBufferedPrimaryRootRuns(domain, fallbackCollectionName)
 }
 
 func (c *Collection) getBufferedDocumentIntoLocked(domain *collectionWriteDomain, documentID []byte, dst []byte) ([]byte, bool, bool) {
 	table := domain.table
+	if ref, ok := domain.primaryOverlay.lookupRef(documentID); ok {
+		if ref.flags&node.FlagTombstone != 0 {
+			return dst[:0], true, false
+		}
+		return append(dst[:0], ref.value...), true, true
+	}
+	if ref, ok := lookupPendingPrimaryOverlayLocked(domain, documentID); ok {
+		if value, flags, found := c.getCurrentPrimaryRootRunEntryLocked(domain, documentID); found {
+			if flags&node.FlagTombstone != 0 {
+				return dst[:0], true, false
+			}
+			return append(dst[:0], value...), true, true
+		}
+		if ref.flags&node.FlagTombstone != 0 {
+			return dst[:0], true, false
+		}
+		return append(dst[:0], ref.value...), true, true
+	}
 	if hasBufferedIndexedRootRuns(domain) {
 		name := collectionPrimaryRootName(c.meta.Name)
 		if domain.meta.Name != "" {
@@ -13814,6 +16166,18 @@ func (c *Collection) getBufferedDocumentIntoLocked(domain *collectionWriteDomain
 		return dst[:0], true, false
 	}
 	return append(dst[:0], value...), true, true
+}
+
+func (c *Collection) getCurrentPrimaryRootRunEntryLocked(domain *collectionWriteDomain, documentID []byte) ([]byte, byte, bool) {
+	if c == nil || domain == nil {
+		return nil, 0, false
+	}
+	name := collectionPrimaryRootName(c.meta.Name)
+	if domain.meta.Name != "" {
+		name = collectionPrimaryRootName(domain.meta.Name)
+	}
+	value, _, flags, found := getBufferedRunEntry(domain.rootRuns[name], documentID)
+	return value, flags, found
 }
 
 func (c *Collection) FindByIndex(indexName, value string) ([][]byte, error) {

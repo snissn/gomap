@@ -306,7 +306,7 @@ func vacuumCopyCollectionRoot(oldPager *pager.Pager, rootID uint64, alloc vacuum
 	if allLeafRefs {
 		return vacuumBuildInternalTreeFromChildren(newPager, alloc, children, false)
 	}
-	return vacuumClonePagerTreeWithLeafRefs(oldPager, rootID, alloc, newPager)
+	return vacuumClonePagerTreeWithLeafRefs(oldPager, rootID, alloc, newPager, false)
 }
 
 func vacuumCollectLeafRefChildrenIfComplete(p *pager.Pager, rootID uint64) ([]vacuumLeafChild, bool, error) {

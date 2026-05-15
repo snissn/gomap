@@ -120,12 +120,6 @@ func (db *DB) applyCachedCompactStorageOptions(opts *CompactStorageOptions, chec
 			out = appendCompactStorageProtectedPaths(out, userProtectedPathsFunc())
 		}
 		out = appendCompactStorageProtectedPaths(out, db.cached.ValueLogProtectedPaths())
-		if len(out) == 0 && len(explicitProtectedPaths) == 0 {
-			// Cached-mode callers may have concurrent writers even when there
-			// are no protected paths yet; pass a non-empty slice to activate
-			// the backend rewrite/GC active-segment protection.
-			out = append(out, "")
-		}
 		return out
 	}
 	opts.ValueLogProtectedPaths = explicitProtectedPaths

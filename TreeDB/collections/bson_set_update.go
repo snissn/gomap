@@ -48,6 +48,10 @@ var bsonSetBatchDocumentIDHashSeed = maphash.MakeSeed()
 // return matched=false. If all assigned values already match the stored
 // document, modified=false. Callers must not mutate fields or RawValue byte
 // slices until UpdateBSONSet returns.
+//
+// For no-index collections, this path may stage buffered root runs in WAL-off
+// relaxed and WAL-on relaxed modes; when staged, crash-recoverability is
+// deferred until Flush/Close publishes the buffered runs.
 func (c *Collection) UpdateBSONSet(documentID []byte, fields []BSONSetField) (bool, bool, error) {
 	if err := validateCollectionUpdateDocumentInput(c, documentID); err != nil {
 		return false, false, err
@@ -306,9 +310,18 @@ func (u bsonSetUpdate) appendReplacement(dst, current []byte) (returned []byte, 
 	if len(u.fields) == 0 {
 		return dst, current, false, nil
 	}
+	if returned, replacement, changed, ok, fastErr := u.appendSameShapeReplacement(dst, current); ok || fastErr != nil {
+		return returned, replacement, changed, fastErr
+	}
 	length, rem, ok := bsoncore.ReadLength(current)
 	if !ok {
 		return resetDst(), nil, false, bsoncore.NewInsufficientBytesError(current, rem)
+	}
+	if int(length) > len(current) {
+		return resetDst(), nil, false, bsoncore.NewDocumentLengthError(int(length), len(current))
+	}
+	if length < 5 || current[length-1] != 0x00 {
+		return resetDst(), nil, false, bsoncore.ErrMissingNull
 	}
 	length -= 4
 	var usedInline [8]bool
@@ -378,6 +391,9 @@ func (u bsonSetUpdate) appendReplacement(dst, current []byte) (returned []byte, 
 			Data: value.Value,
 		})
 	}
+	if len(rem) < 1 || rem[0] != 0x00 {
+		return resetDst(), nil, false, bsoncore.ErrMissingNull
+	}
 	if !changed {
 		return dst[:start], current, false, nil
 	}
@@ -386,6 +402,76 @@ func (u bsonSetUpdate) appendReplacement(dst, current []byte) (returned []byte, 
 		return resetDst(), nil, false, err
 	}
 	return raw, raw[start:len(raw):len(raw)], true, nil
+}
+
+func (u bsonSetUpdate) appendSameShapeReplacement(dst, current []byte) (returned []byte, replacement []byte, changed bool, ok bool, err error) {
+	start := len(dst)
+	if len(u.fields) == 0 {
+		return dst, current, false, true, nil
+	}
+	length, _, lengthOK := bsoncore.ReadLength(current)
+	if !lengthOK {
+		return dst[:start], nil, false, false, nil
+	}
+	if int(length) > len(current) {
+		return dst[:start], nil, false, false, nil
+	}
+	if length < 5 || current[length-1] != 0x00 {
+		return dst[:start], nil, false, false, nil
+	}
+	docEnd := int(length)
+	var usedInline [8]bool
+	used := usedInline[:]
+	if len(u.fields) > len(usedInline) {
+		used = make([]bool, len(u.fields))
+	} else {
+		used = used[:len(u.fields)]
+	}
+	var out []byte
+	ensureOut := func() []byte {
+		if out != nil {
+			return out
+		}
+		out = append(dst, current[:docEnd]...)
+		return out
+	}
+	remaining := current[4:docEnd]
+	for len(remaining) > 1 {
+		elemStart := docEnd - len(remaining)
+		elem, next, elemOK := bsoncore.ReadElement(remaining)
+		if !elemOK {
+			return dst[:start], nil, false, false, nil
+		}
+		remaining = next
+		fieldIdx := u.fieldIndexBytes(elem.KeyBytes())
+		if fieldIdx < 0 {
+			continue
+		}
+		used[fieldIdx] = true
+		currentValue := elem.Value()
+		field := u.fields[fieldIdx]
+		if bsonCoreValueEqualRawValue(currentValue, field.Value) {
+			continue
+		}
+		if currentValue.Type != bsoncore.Type(field.Value.Type) || len(currentValue.Data) != len(field.Value.Value) {
+			return dst[:start], nil, false, false, nil
+		}
+		valueOffset := elemStart + len(elem) - len(currentValue.Data)
+		copy(ensureOut()[start+valueOffset:start+valueOffset+len(field.Value.Value)], field.Value.Value)
+		changed = true
+	}
+	if len(remaining) != 1 || remaining[0] != 0x00 {
+		return dst[:start], nil, false, false, nil
+	}
+	for _, fieldUsed := range used {
+		if !fieldUsed {
+			return dst[:start], nil, false, false, nil
+		}
+	}
+	if !changed {
+		return dst[:start], current, false, true, nil
+	}
+	return out, out[start:len(out):len(out)], true, true, nil
 }
 
 func callBSONSetUpdateApply(update bsonSetUpdate, current []byte) (replacement []byte, changed bool, err error) {

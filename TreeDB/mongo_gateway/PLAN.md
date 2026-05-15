@@ -283,6 +283,16 @@ Priority workloads:
   runner in `scripts/mongo_gateway_compare.sh`, and
   `cmd/mongo_gateway_compare_report` for regenerating Markdown and TSV reports
   from raw TreeDB/MongoDB benchmark JSON.
+- Current compatibility slice adds `COMPATIBILITY.md` and
+  `TestMongoCompatibilityMatrix`, a compact issue-1493 matrix that probes
+  representative supported and rejected Mongo gateway paths.
+- Current desktop-client compatibility slice handles the issue-1473
+  `connectionStatus`, `hostInfo`, `buildInfo`, `create`, and logical-session
+  topology failures with minimal metadata/DDL/session responses and keeps them
+  covered in the matrix.
+- Current smoke slice adds `scripts/mongo_gateway_compat_smoke.sh`, a small
+  TreeDB-vs-MongoDB driver workload wrapper around the comparison harness that
+  reports naive throughput and exits nonzero if the supported path breaks.
 
 Metrics to record for every run:
 
@@ -318,7 +328,7 @@ Metrics to record for every run:
 
 - [x] Survey Go MongoDB wire protocol libraries and decide whether to use one or
       implement the small OP_MSG subset directly.
-- [ ] Write a short compatibility matrix for commands, query operators, update
+- [x] Write a short compatibility matrix for commands, query operators, update
       operators, and BSON types.
 - [x] Prototype the small TreeDB-owned wire layer with OP_QUERY handshake,
       OP_REPLY handshake response, and OP_MSG command request/response tests.
@@ -335,11 +345,13 @@ Metrics to record for every run:
       collection format is needed.
 - [ ] If re-encoding is material, draft `DocumentFormatBSON` alongside the
       existing JSON and template-v1 collection formats.
-- [ ] Prototype driver handshake with the official MongoDB Go driver.
+- [x] Prototype driver handshake with the official MongoDB Go driver.
 - [x] Implement `insert` and `_id` lookup against TreeDB collections.
-- [ ] Implement single-field index creation and indexed `find`.
-- [ ] Add protocol-level compatibility tests using a real MongoDB driver.
+- [x] Implement single-field index creation and indexed `find`.
+- [x] Add protocol-level compatibility tests using a real MongoDB driver.
 - [x] Add a reproducible MongoDB-vs-TreeDB benchmark harness.
+- [x] Add a sprint-friendly MongoDB-vs-TreeDB compatibility smoke that reports
+      naive throughput and fails on unsupported benchmark-path operations.
 - [x] Publish first benchmark report with disk usage and ops/sec.
 - [ ] Revisit scope after the first benchmark report and decide whether to
       expand compatibility or keep the gateway benchmark-only.

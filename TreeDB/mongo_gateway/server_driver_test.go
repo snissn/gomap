@@ -138,6 +138,81 @@ func TestServerOfficialGoDriverBasicCRUD(t *testing.T) {
 	}
 }
 
+func TestServerOfficialGoDriverLogicalSession(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+
+	serveErr := make(chan error, 1)
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				if errors.Is(err, net.ErrClosed) || ctx.Err() != nil {
+					serveErr <- nil
+					return
+				}
+				serveErr <- err
+				return
+			}
+			go func() {
+				_ = server.ServeConn(ctx, conn)
+			}()
+		}
+	}()
+
+	client, err := mongo.Connect(options.Client().
+		ApplyURI("mongodb://" + ln.Addr().String()).
+		SetDirect(true).
+		SetServerSelectionTimeout(time.Second))
+	if err != nil {
+		t.Fatalf("mongo connect: %v", err)
+	}
+	defer func() { _ = client.Disconnect(context.Background()) }()
+
+	opCtx, opCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer opCancel()
+	if err := client.Ping(opCtx, nil); err != nil {
+		t.Fatalf("driver ping: %v", err)
+	}
+
+	session, err := client.StartSession()
+	if err != nil {
+		t.Fatalf("driver start session: %v", err)
+	}
+	defer session.EndSession(context.Background())
+
+	if err := mongo.WithSession(opCtx, session, func(sessionCtx context.Context) error {
+		return client.Database("admin").RunCommand(sessionCtx, bson.D{{Key: "ping", Value: int32(1)}}).Err()
+	}); err != nil {
+		t.Fatalf("driver session ping: %v", err)
+	}
+
+	cancel()
+	_ = ln.Close()
+	select {
+	case err := <-serveErr:
+		if err != nil {
+			t.Fatalf("serve loop: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("serve loop did not stop")
+	}
+}
+
 func TestServerOfficialGoDriverUnacknowledgedInsertMany(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

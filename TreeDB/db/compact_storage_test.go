@@ -445,10 +445,17 @@ func TestCompactStorageKeepsProtectedZeroByteValueLogFiles(t *testing.T) {
 	}
 }
 
-func TestCompactStorageDefaultProtectedPathsActivatesActiveProtection(t *testing.T) {
+func TestCompactStorageDefaultProtectedPathsAreEmpty(t *testing.T) {
 	paths := compactStorageValueLogProtectedPaths(CompactStorageOptions{})
-	if len(paths) != 1 || paths[0] != "" {
-		t.Fatalf("default protected paths=%q want sentinel", paths)
+	if len(paths) != 0 {
+		t.Fatalf("default protected paths=%q want none", paths)
+	}
+}
+
+func TestCompactStorageOnlineRewriteProtectedPaths_DefaultSentinel(t *testing.T) {
+	paths := compactStorageOnlineRewriteProtectedPaths(CompactStorageOptions{})
+	if !reflect.DeepEqual(paths, []string{""}) {
+		t.Fatalf("online rewrite protected paths=%q want sentinel [\"\"]", paths)
 	}
 }
 
@@ -462,6 +469,17 @@ func TestCompactStorageFencedProtectedPathsIncludeExplicitPaths(t *testing.T) {
 	want := []string{"explicit-a", "shared", "dynamic-a"}
 	if !reflect.DeepEqual(paths, want) {
 		t.Fatalf("fenced protected paths=%q want %q", paths, want)
+	}
+}
+
+func TestCompactStorageFencedValueLogProtectedPathsDefaultWhenDynamicEmpty(t *testing.T) {
+	paths := compactStorageFencedValueLogProtectedPaths(CompactStorageOptions{
+		ValueLogFencedProtectedPathsFunc: func() []string {
+			return nil
+		},
+	})
+	if len(paths) != 0 {
+		t.Fatalf("fenced protected paths=%q want none when both static and dynamic are empty", paths)
 	}
 }
 

@@ -1,9 +1,12 @@
 package main
 
 import (
+	"fmt"
 	"math"
 	"testing"
 	"time"
+
+	treedb "github.com/snissn/gomap/TreeDB"
 )
 
 func TestRunBenchmark_ReadSnapshotAppendOnlyGuardrail(t *testing.T) {
@@ -65,4 +68,95 @@ func TestRunBenchmark_ReadSnapshotAppendOnlyGuardrail(t *testing.T) {
 	}
 	t.Logf("append-only snapshot guardrail ops/s: parallel=%.0f snapshot=%.0f ratio=%.6f",
 		parallelRead, snapshotRead, ratio)
+}
+
+func TestRunBenchmark_ProfileFastReadRequireHitBeforeCheckpoint(t *testing.T) {
+	if testing.Short() {
+		t.Skip("profile-fast read-require-hit regression guardrail is intentionally heavy")
+	}
+	withTreeDBFastReadRequireHitFlags(t)
+
+	for attempt := 1; attempt <= 3; attempt++ {
+		attempt := attempt
+		t.Run(fmt.Sprintf("attempt_%d", attempt), func(t *testing.T) {
+			_, err := runBenchmark(BenchConfig{
+				Keys:           160_000,
+				ValueSize:      128,
+				BatchSize:      8_000,
+				ReadWorkers:    8,
+				ReadRequireHit: true,
+				RangeQueries:   0,
+				RangeSpan:      0,
+				DBsArg:         "treedb",
+				TestsArg:       "sequential_write,random_read_parallel",
+				Profile:        "fast",
+				KeepDir:        false,
+				Progress:       false,
+				SeedUsed:       1,
+				MaxWall:        30 * time.Second,
+			})
+			if err != nil {
+				t.Fatalf("TreeDB read-after-write hit contract failed before checkpoint: %v", err)
+			}
+		})
+	}
+}
+
+func withTreeDBFastReadRequireHitFlags(t *testing.T) {
+	t.Helper()
+
+	prevReadWorkers := *readWorkers
+	prevAllowUnsafe := *treedbAllowUnsafe
+	prevDisableWAL := *treedbDisableWAL
+	prevRelaxedSync := *treedbRelaxedSync
+	prevDisableReadChecksum := *treedbDisableReadChecksum
+	prevIndexOptimizations := *treedbIndexOptimizations
+	prevIndexOuterLeavesInVlog := *treedbIndexOuterLeavesInVlog
+	prevPreferAppendAlloc := *treedbPreferAppendAlloc
+	prevVlogCompression := *treedbVlogCompression
+	prevVlogBlockCodec := *treedbVlogBlockCodec
+	prevVlogAutoPolicy := *treedbVlogAutoPolicy
+	prevVlogCompressionAutotune := *treedbVlogCompressionAutotune
+	prevVlogDictIncompressibleHoldBytes := *treedbVlogDictIncompressibleHoldBytes
+	prevVlogDictProbeIntervalBytes := *treedbVlogDictProbeIntervalBytes
+	prevVlogGenerationPolicy := *treedbVlogGenerationPolicy
+	prevFlushThreshold := *treedbFlushThreshold
+	prevMaxQueuedMems := *treedbMaxQueuedMems
+	prevMemtableMode := *treedbMemtableMode
+	prevForcePointers := *treedbForceValuePointers
+	prevValueLogThreshold := *treedbValueLogThreshold
+
+	t.Cleanup(func() {
+		*readWorkers = prevReadWorkers
+		*treedbAllowUnsafe = prevAllowUnsafe
+		*treedbDisableWAL = prevDisableWAL
+		*treedbRelaxedSync = prevRelaxedSync
+		*treedbDisableReadChecksum = prevDisableReadChecksum
+		*treedbIndexOptimizations = prevIndexOptimizations
+		*treedbIndexOuterLeavesInVlog = prevIndexOuterLeavesInVlog
+		*treedbPreferAppendAlloc = prevPreferAppendAlloc
+		*treedbVlogCompression = prevVlogCompression
+		*treedbVlogBlockCodec = prevVlogBlockCodec
+		*treedbVlogAutoPolicy = prevVlogAutoPolicy
+		*treedbVlogCompressionAutotune = prevVlogCompressionAutotune
+		*treedbVlogDictIncompressibleHoldBytes = prevVlogDictIncompressibleHoldBytes
+		*treedbVlogDictProbeIntervalBytes = prevVlogDictProbeIntervalBytes
+		*treedbVlogGenerationPolicy = prevVlogGenerationPolicy
+		*treedbFlushThreshold = prevFlushThreshold
+		*treedbMaxQueuedMems = prevMaxQueuedMems
+		*treedbMemtableMode = prevMemtableMode
+		*treedbForceValuePointers = prevForcePointers
+		*treedbValueLogThreshold = prevValueLogThreshold
+	})
+
+	applyTreeDBProfileIfUnset(treedb.ProfileFast, map[string]bool{})
+
+	*readWorkers = 8
+	*treedbAllowUnsafe = true
+	*treedbVlogGenerationPolicy = "default"
+	*treedbFlushThreshold = 64 << 20
+	*treedbMaxQueuedMems = 0
+	*treedbMemtableMode = ""
+	*treedbForceValuePointers = false
+	*treedbValueLogThreshold = 0
 }

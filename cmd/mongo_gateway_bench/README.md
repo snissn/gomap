@@ -182,6 +182,23 @@ synchronous-threshold rows by accident. The concurrent update profile benchmark
 times a final `FlushAll()` drain before reporting docs/sec, so async rows include
 deferred indexed publish work rather than enqueue latency alone.
 
+For update-combiner ingress experiments, set
+`MONGO_GATEWAY_PROFILE_BENCH_UPDATE_COMBINE_SHARDS=N`. The default `1` preserves
+the single-queue combiner. Values above `1` shard request ingress by document ID
+while preserving one global merged publish batch, and benchmark rows report
+`update_combine_shards` so shard-count runs are not mixed accidentally.
+
+For sharded-combiner lane-worker runs, add
+`MONGO_GATEWAY_PROFILE_BENCH_UPDATE_COMBINE_LANE_WORKERS=true` to let each
+document-ID shard prepare direct buffered update plans concurrently, then merge
+prepared plans back into one global buffered staging path. This flag is effective
+only when `MONGO_GATEWAY_PROFILE_BENCH_UPDATE_COMBINE_SHARDS` is greater than
+`1`; only effective lane-worker runs report `update_combine_lane_workers`.
+Stale prepared plans are admitted only when their target document IDs have not
+changed in the buffered layer since the plan's read generation; conflicting
+plans fall back to the ordinary per-document update path and read buffered
+writes before returning.
+
 ## MongoDB Target
 
 ```sh

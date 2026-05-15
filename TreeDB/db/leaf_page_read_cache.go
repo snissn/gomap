@@ -3,6 +3,7 @@ package db
 import (
 	"fmt"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -13,12 +14,29 @@ import (
 )
 
 const (
-	leafPageReadCacheEntriesEnvKey  = "TREEDB_LEAF_PAGE_CACHE_ENTRIES"
-	defaultLeafPageReadCacheEntries = 4096
+	// LeafPageReadCacheEntriesEnvKey names the environment variable that
+	// overrides the process default when Options.LeafPageReadCacheEntries is 0.
+	LeafPageReadCacheEntriesEnvKey  = "TREEDB_LEAF_PAGE_CACHE_ENTRIES"
+	defaultLeafPageReadCacheEntries = 32768
 	maxLeafPageReadCacheEntries     = 1 << 18
+	// Bound miss-admission observer retries so high contention yields a skipped
+	// admission instead of unbounded reader spinning. 64 odd-epoch yields cover
+	// transient reset windows; 256 stable-epoch retries bound CAS churn; and a
+	// hard total-iteration cap guarantees termination under sustained churn.
+	maxReadMissOddEpochSpins    = 64
+	maxReadMissStableEpochSpins = 256
+	maxReadMissTotalSpins       = 1024
 )
 
 var LeafPageReadCacheEntries = defaultLeafPageReadCacheEntries
+
+// ResolveLeafPageReadCacheEntries returns the effective cache size for an
+// Options.LeafPageReadCacheEntries value after applying process/env defaults.
+// It returns an error when the explicit option, environment override, or process
+// default resolves outside the supported cache-size range.
+func ResolveLeafPageReadCacheEntries(optionEntries int) (int, error) {
+	return resolveLeafPageReadCacheEntries(optionEntries)
+}
 
 func configuredLeafPageReadCacheEntries(optionEntries int) int {
 	entries, err := resolveLeafPageReadCacheEntries(optionEntries)
@@ -35,7 +53,7 @@ func resolveLeafPageReadCacheEntries(optionEntries int) (int, error) {
 	if optionEntries > 0 {
 		return validateLeafPageReadCacheEntries(optionEntries)
 	}
-	if raw := strings.TrimSpace(os.Getenv(leafPageReadCacheEntriesEnvKey)); raw != "" {
+	if raw := strings.TrimSpace(os.Getenv(LeafPageReadCacheEntriesEnvKey)); raw != "" {
 		if v, err := strconv.Atoi(raw); err == nil && v >= 0 {
 			return validateLeafPageReadCacheEntries(v)
 		}
@@ -73,12 +91,19 @@ func newLeafPageReadCacheKey(ptr page.LeafLogPtr) leafPageReadCacheKey {
 }
 
 type leafPageReadCacheSlot struct {
-	mu                     sync.RWMutex
-	key                    leafPageReadCacheKey
-	data                   []byte
-	valid                  bool
-	readMissCandidate      leafPageReadCacheKey
-	readMissCandidateValid bool
+	mu                  sync.RWMutex
+	key                 leafPageReadCacheKey
+	data                []byte
+	valid               bool
+	readMissCandidateFP atomic.Uint64
+	readMissEpoch       atomic.Uint64
+}
+
+func (s *leafPageReadCacheSlot) ReleaseLeafLogPageView() {
+	if s == nil {
+		return
+	}
+	s.mu.RUnlock()
 }
 
 type leafPageReadCache struct {
@@ -90,20 +115,22 @@ type leafPageReadCache struct {
 	evictions atomic.Uint64
 	entries   atomic.Uint64
 
-	readMissAdmissionSkips  atomic.Uint64
-	readMissAdmissionStores atomic.Uint64
+	readMissAdmissionSkips          atomic.Uint64
+	readMissAdmissionCandidateSkips atomic.Uint64
+	readMissAdmissionStores         atomic.Uint64
 }
 
 type leafPageReadCacheStats struct {
-	Hits                    uint64
-	Misses                  uint64
-	Stores                  uint64
-	Evictions               uint64
-	Entries                 uint64
-	Capacity                uint64
-	Bytes                   uint64
-	ReadMissAdmissionSkips  uint64
-	ReadMissAdmissionStores uint64
+	Hits                            uint64
+	Misses                          uint64
+	Stores                          uint64
+	Evictions                       uint64
+	Entries                         uint64
+	Capacity                        uint64
+	Bytes                           uint64
+	ReadMissAdmissionSkips          uint64
+	ReadMissAdmissionCandidateSkips uint64
+	ReadMissAdmissionStores         uint64
 }
 
 func newLeafPageReadCache(entries int) *leafPageReadCache {
@@ -125,26 +152,57 @@ func (c *leafPageReadCache) store(ptr page.LeafLogPtr, leafPage []byte) {
 	c.recordStore(result, key)
 }
 
-// storeReadMiss admits read-miss pages only after a repeated miss to the same
-// direct-mapped slot/key. Write-side stores remain immediate; this keeps
-// one-off sparse reads from copying 4KiB pages into the cache and evicting
-// recently-written leaves that are likely to be reused during publish/apply.
+// storeReadMiss admits read-miss pages only after a repeated miss in the same
+// direct-mapped slot with a matching fingerprint token in the same admission
+// epoch (probabilistic under collisions). Write-side stores remain immediate;
+// this keeps one-off sparse reads from copying 4KiB pages into the cache and
+// evicting recently-written leaves that are likely to be reused during
+// publish/apply.
 func (c *leafPageReadCache) storeReadMiss(ptr page.LeafLogPtr, leafPage []byte) {
 	if c == nil || len(c.slots) == 0 || len(leafPage) != page.PageSize {
 		return
 	}
 	key := newLeafPageReadCacheKey(ptr)
 	slot := &c.slots[c.slotIndex(key)]
-	slot.mu.Lock()
+
+	fp := leafPageReadMissFingerprint(key)
+	epoch, repeated := slot.observeReadMissCandidate(fp)
+	if !repeated {
+		c.readMissAdmissionSkips.Add(1)
+		return
+	}
+
+	// Parallel read misses can race: another goroutine may populate this exact
+	// slot/key before we reach admission. Fast-path that case with only a read
+	// lock to avoid unnecessary writer lock traffic in the miss hot path.
+	if slot.mu.TryRLock() {
+		if slot.valid && slot.key == key {
+			slot.mu.RUnlock()
+			return
+		}
+		slot.mu.RUnlock()
+	} else {
+		c.readMissAdmissionSkips.Add(1)
+		return
+	}
+
+	// Read-miss cache admission is best effort. If this slot is currently under
+	// heavy contention, skip admission rather than queuing behind a writer lock
+	// in the random-read miss hot path.
+	if !slot.mu.TryLock() {
+		c.readMissAdmissionSkips.Add(1)
+		return
+	}
 	if slot.valid && slot.key == key {
 		slot.mu.Unlock()
 		return
 	}
-	if !slot.readMissCandidateValid || slot.readMissCandidate != key {
-		slot.readMissCandidate = key
-		slot.readMissCandidateValid = true
+	if !slot.readMissCandidateStillCurrent(fp, epoch) {
+		// A writer/read race can repurpose this slot between miss observation and
+		// lock acquisition. Candidate mismatches include epoch resets and same-epoch
+		// candidate churn under concurrent misses.
 		slot.mu.Unlock()
-		c.readMissAdmissionSkips.Add(1)
+		c.readMissAdmissionCandidateSkips.Add(1)
 		return
 	}
 	result := slot.storeLocked(key, leafPage)
@@ -170,8 +228,101 @@ func (s *leafPageReadCacheSlot) storeLocked(key leafPageReadCacheKey, leafPage [
 	copy(s.data, leafPage)
 	s.key = key
 	s.valid = true
-	s.readMissCandidateValid = false
+	s.resetReadMissCandidateLocked()
 	return result
+}
+
+// observeReadMissCandidate implements the read-miss admission state machine for
+// one cache slot:
+//   - odd readMissEpoch values mean writer reset in progress (slot unstable),
+//   - even values mean stable epoch (candidate token can be observed/published),
+//   - repeated=true is only returned when the token matches in a stable epoch
+//     without crossing into a newer stable epoch mid-observation.
+//
+// The multiple epoch reads fence reset races; bounded retry counters ensure this
+// path eventually gives up and reports non-repeated under heavy contention.
+func (s *leafPageReadCacheSlot) observeReadMissCandidate(fp uint64) (epoch uint64, repeated bool) {
+	totalSpins := 0
+	oddEpochSpins := 0
+	stableEpochSpins := 0
+	lastStableEpoch := uint64(0)
+	haveStableEpoch := false
+	observedEpochAdvance := false
+	for {
+		totalSpins++
+		if totalSpins >= maxReadMissTotalSpins {
+			return epoch, false
+		}
+		epoch = s.readMissEpoch.Load()
+		if epoch&1 != 0 {
+			// Writer is resetting this slot's admission candidate.
+			oddEpochSpins++
+			if oddEpochSpins >= maxReadMissOddEpochSpins {
+				return epoch, false
+			}
+			runtime.Gosched()
+			continue
+		}
+		oddEpochSpins = 0
+		if !haveStableEpoch {
+			lastStableEpoch = epoch
+			haveStableEpoch = true
+		} else if epoch != lastStableEpoch {
+			// Crossing into a new stable epoch means this observer raced a reset.
+			// Treat subsequent matches as first-miss observations in the new epoch.
+			lastStableEpoch = epoch
+			stableEpochSpins = 0
+			observedEpochAdvance = true
+		}
+		candidateToken := readMissCandidateToken(fp, epoch)
+		candidate := s.readMissCandidateFP.Load()
+		if candidate == candidateToken {
+			if s.readMissEpoch.Load() == epoch {
+				if observedEpochAdvance {
+					return epoch, false
+				}
+				return epoch, true
+			}
+		} else if s.readMissEpoch.Load() == epoch {
+			if observedEpochAdvance {
+				return epoch, false
+			}
+			if s.readMissCandidateFP.CompareAndSwap(candidate, candidateToken) {
+				if s.readMissEpoch.Load() == epoch {
+					return epoch, false
+				}
+				// Epoch-scoped tokens fence stale publishes: even if this CAS raced
+				// with reset and landed in a newer epoch, token mismatch prevents
+				// first-miss admission in the newer epoch.
+			}
+		}
+		stableEpochSpins++
+		if stableEpochSpins >= maxReadMissStableEpochSpins {
+			return epoch, false
+		}
+		if stableEpochSpins&15 == 0 {
+			runtime.Gosched()
+		}
+	}
+}
+
+func (s *leafPageReadCacheSlot) readMissCandidateStillCurrent(fp, epoch uint64) bool {
+	if epoch&1 != 0 {
+		return false
+	}
+	return s.readMissEpoch.Load() == epoch && s.readMissCandidateFP.Load() == readMissCandidateToken(fp, epoch)
+}
+
+func (s *leafPageReadCacheSlot) resetReadMissCandidateLocked() {
+	// Mark reset in-progress, clear candidate, then publish the next stable epoch.
+	// observeReadMissCandidate() only accepts even (stable) epochs.
+	start := s.readMissEpoch.Load()
+	if start&1 != 0 {
+		start++
+	}
+	s.readMissEpoch.Store(start + 1)
+	s.readMissCandidateFP.Store(0)
+	s.readMissEpoch.Store(start + 2)
 }
 
 func (c *leafPageReadCache) recordStore(result leafPageReadCacheStoreResult, key leafPageReadCacheKey) {
@@ -227,21 +378,38 @@ func (c *leafPageReadCache) getTo(ptr page.LeafLogPtr, dst []byte) ([]byte, bool
 	return data, false, true
 }
 
+func (c *leafPageReadCache) getViewLocked(ptr page.LeafLogPtr) ([]byte, *leafPageReadCacheSlot, bool) {
+	if c == nil || len(c.slots) == 0 {
+		return nil, nil, false
+	}
+	key := newLeafPageReadCacheKey(ptr)
+	slot := &c.slots[c.slotIndex(key)]
+	slot.mu.RLock()
+	if !slot.valid || slot.key != key {
+		slot.mu.RUnlock()
+		return nil, nil, false
+	}
+	data := slot.data
+	c.hits.Add(1)
+	return data, slot, true
+}
+
 func (c *leafPageReadCache) stats() leafPageReadCacheStats {
 	if c == nil || len(c.slots) == 0 {
 		return leafPageReadCacheStats{}
 	}
 	entries := c.entries.Load()
 	return leafPageReadCacheStats{
-		Hits:                    c.hits.Load(),
-		Misses:                  c.misses.Load(),
-		Stores:                  c.stores.Load(),
-		Evictions:               c.evictions.Load(),
-		Entries:                 entries,
-		Capacity:                uint64(len(c.slots)),
-		Bytes:                   entries * page.PageSize,
-		ReadMissAdmissionSkips:  c.readMissAdmissionSkips.Load(),
-		ReadMissAdmissionStores: c.readMissAdmissionStores.Load(),
+		Hits:                            c.hits.Load(),
+		Misses:                          c.misses.Load(),
+		Stores:                          c.stores.Load(),
+		Evictions:                       c.evictions.Load(),
+		Entries:                         entries,
+		Capacity:                        uint64(len(c.slots)),
+		Bytes:                           entries * page.PageSize,
+		ReadMissAdmissionSkips:          c.readMissAdmissionSkips.Load(),
+		ReadMissAdmissionCandidateSkips: c.readMissAdmissionCandidateSkips.Load(),
+		ReadMissAdmissionStores:         c.readMissAdmissionStores.Load(),
 	}
 }
 
@@ -250,6 +418,36 @@ func (c *leafPageReadCache) slotIndex(key leafPageReadCacheKey) int {
 	h ^= key.offset + 0x9e3779b97f4a7c15 + (h << 6) + (h >> 2)
 	h ^= uint64(key.subIndex) + 0x9e3779b97f4a7c15 + (h << 6) + (h >> 2)
 	return int(h % uint64(len(c.slots)))
+}
+
+func leafPageReadMissFingerprint(key leafPageReadCacheKey) uint64 {
+	// Admission is intentionally probabilistic under collisions, so keep this
+	// hash stable but well-mixed (SplitMix64-style finalizer constants) to reduce
+	// accidental first-miss admissions when unrelated keys map to the same slot.
+	h := uint64(key.fileID)*0x9e3779b97f4a7c15 + key.offset*0xbf58476d1ce4e5b9
+	h ^= uint64(key.subIndex) * 0x94d049bb133111eb
+	h ^= h >> 30
+	h *= 0xbf58476d1ce4e5b9
+	h ^= h >> 27
+	h *= 0x94d049bb133111eb
+	h ^= h >> 31
+	if h == 0 {
+		return 1
+	}
+	return h
+}
+
+func readMissCandidateToken(fp, epoch uint64) uint64 {
+	token := fp ^ (epoch * 0x9e3779b97f4a7c15)
+	if token == 0 {
+		// Keep zero reserved for "no candidate recorded" without collapsing every
+		// zero-token case onto a single sentinel value.
+		token = (fp << 1) ^ (epoch >> 1) ^ 0x9e3779b97f4a7c15
+		if token == 0 {
+			token = 0x9e3779b97f4a7c15
+		}
+	}
+	return token
 }
 
 type cachedLeafPageReader struct {

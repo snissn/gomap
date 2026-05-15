@@ -1,12 +1,28 @@
 # SPEC: Collection WAL Durability and Root-Group Recovery
 
-Status: normative target contract and implementation gate; not current behavior
-until the milestone evidence named in Section 13 is accepted. Sections marked
-MUST/SHOULD define the target production collection durability contract.
-Sections explicitly marked current behavior describe the repository before the
-collection WAL lands. Future-work sections remain non-normative. Open questions
-in Section 15 must be resolved before any milestone that depends on them can
-pass.
+Status: deprecated target contract and historical design record. This
+collection-specific physical/root-delta WAL plan has been superseded for new
+implementation work by `TreeDB/docs/spec/user-command-wal.md`.
+
+This document remains useful for side-ref, crash-recovery, checkpoint, and
+fail-closed risk analysis. Do not expand this plan feature-by-feature as the
+active WAL implementation strategy. New durable-at-ack mutation work should use
+the user-command WAL model, command support matrix, and applied-LSN checkpoint
+policy defined in `user-command-wal.md`.
+
+The approved active direction is one WAL substrate: typed command frames extend
+the existing commit-log WAL under `wal/commit-l*.log`. New work must not add an
+active `wal/collection-l*.log` segment family, `internal/collectionwal`
+appender/decoder, or collection-only cleanup/watermark system from this
+deprecated plan.
+
+Original status before deprecation: normative target contract and implementation
+gate; not current behavior until the milestone evidence named in Section 13 is
+accepted. Sections marked MUST/SHOULD define the target production collection
+durability contract. Sections explicitly marked current behavior describe the
+repository before the collection WAL lands. Future-work sections remain
+non-normative. Open questions in Section 15 were required to be resolved before
+any milestone that depends on them could pass.
 
 This document defines the minimum implementation contract for durable-at-ack
 collection writes. Until the requirements and crash tests in this document pass,
