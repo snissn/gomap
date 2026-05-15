@@ -13,9 +13,9 @@ import (
 	"time"
 	"unsafe"
 
+	nk "github.com/ashvardanian/NumKong/golang"
 	"github.com/cespare/xxhash/v2"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
-	"gonum.org/v1/gonum/blas/blas32"
 )
 
 const (
@@ -1485,11 +1485,11 @@ func vectorDistanceToFloat32NodeCosineUnchecked(query preparedFloat32CosineQuery
 	if n != len(node.vector) {
 		panic(fmt.Sprintf("collections: vector dimensions differ: %d vs %d", n, len(node.vector)))
 	}
-	dot := blas32.Dot(
-		blas32.Vector{N: n, Inc: 1, Data: query.vector},
-		blas32.Vector{N: n, Inc: 1, Data: node.vector},
+	dot := nk.DotF32(
+		query.vector,
+		node.vector,
 	)
-	return 1 - dot*query.invNorm*node.cachedInvNorm
+	return float32(1 - dot*float64(query.invNorm)*float64(node.cachedInvNorm))
 }
 
 func vectorDistanceBetweenFloat32NodesCosine(left, right *vectorIndexNode) (float32, error) {
@@ -1499,12 +1499,11 @@ func vectorDistanceBetweenFloat32NodesCosine(left, right *vectorIndexNode) (floa
 	if left.cachedInvNorm == 0 || right.cachedInvNorm == 0 {
 		return 0, errors.New("collections: cosine vector cannot have zero magnitude")
 	}
-	n := len(left.vector)
-	dot := blas32.Dot(
-		blas32.Vector{N: n, Inc: 1, Data: left.vector},
-		blas32.Vector{N: n, Inc: 1, Data: right.vector},
+	dot := nk.DotF32(
+		left.vector,
+		right.vector,
 	)
-	return 1 - dot*left.cachedInvNorm*right.cachedInvNorm, nil
+	return float32(1 - dot*float64(left.cachedInvNorm)*float64(right.cachedInvNorm)), nil
 }
 
 func (node *vectorIndexNode) vectorDimensions() int {
