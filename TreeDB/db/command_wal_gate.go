@@ -3,6 +3,8 @@ package db
 import (
 	"fmt"
 	"path/filepath"
+
+	"github.com/snissn/gomap/TreeDB/internal/collectionwal"
 )
 
 // ValidateCommandWALActivationClean enforces the PR1 activation precondition:
@@ -10,6 +12,9 @@ import (
 // drained by checkpoint/rebuild. Later PRs will add the activator; this guard is
 // production code now so tests and tooling cannot silently enable mixed modes.
 func ValidateCommandWALActivationClean(dir string) error {
+	if err := collectionwal.RequireCleanForOfflineMaintenance(dir); err != nil {
+		return fmt.Errorf("treedb: command_wal_v1 requires clean legacy collection WAL before activation: %w", err)
+	}
 	segments, err := listWALSegments(dir)
 	if err != nil {
 		return err

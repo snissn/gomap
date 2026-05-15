@@ -171,6 +171,50 @@ func LoadFormatConfig(dir string) (FormatConfig, bool, error) {
 	return cfg, true, nil
 }
 
+// ValidateFormatRequiredFeatureGate checks only the required-feature gate in
+// format.json. It is intentionally narrower than LoadFormatConfig so
+// IgnoreFormatConfig remains an escape hatch for malformed or future ordinary
+// format configs, while still failing closed for explicitly required features.
+func ValidateFormatRequiredFeatureGate(dir string) error {
+	path := formatConfigPath(dir)
+	if path == "" {
+		return errors.New("missing db dir")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if len(data) == 0 {
+		return nil
+	}
+
+	var gate struct {
+		Version          int      `json:"version"`
+		RequiredFeatures []string `json:"required_features,omitempty"`
+	}
+	if err := json.Unmarshal(data, &gate); err != nil {
+		return nil
+	}
+	if len(gate.RequiredFeatures) == 0 {
+		return nil
+	}
+	if gate.Version < formatConfigRequiredFeaturesVersion {
+		return fmt.Errorf("treedb: decode %s: required_features require format version %d", filepath.Base(path), formatConfigRequiredFeaturesVersion)
+	}
+	if err := validateRequiredFormatFeatures(gate.RequiredFeatures); err != nil {
+		return fmt.Errorf("treedb: decode %s: %w", filepath.Base(path), err)
+	}
+	for _, feature := range gate.RequiredFeatures {
+		if normalizeFormatConfigMode(feature) == RequiredFeatureCommandWALV1 {
+			return ErrCommandWALUnsupported
+		}
+	}
+	return nil
+}
+
 // SaveFormatConfig writes cfg to dir/format.json atomically.
 func SaveFormatConfig(dir string, cfg FormatConfig) error {
 	path := formatConfigPath(dir)
