@@ -100,6 +100,7 @@ type DB struct {
 	readOnly             bool
 	durability           DurabilityMode
 	commandWAL           bool
+	commandWALStatsScan  bool
 	walMaxSegmentBytes   int64
 	commandWALRIDCacheMu sync.Mutex
 	commandWALRIDCache   map[uint32]map[page.ValuePtr]uint64
@@ -654,6 +655,10 @@ type Options struct {
 	// backend raw KV writes. It is also enabled automatically when format.json
 	// advertises the command_wal_v1 required feature.
 	CommandWAL bool
+	// CommandWALStatsScan enables expensive diagnostic Stats() counters that scan
+	// command-WAL segment files for frame counts and max LSN. Keep this disabled
+	// for normal telemetry; benchmark proof paths can opt in explicitly.
+	CommandWALStatsScan bool
 	// ReadOnly opens the database without acquiring an exclusive lock and without
 	// modifying on-disk state (no recovery truncation, no WAL replay, no background
 	// maintenance). Only read operations are supported. Under the collection WAL
@@ -1419,6 +1424,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		freelistRegionRadius:           opts.FreelistRegionRadius,
 		durability:                     opts.Durability,
 		commandWAL:                     opts.CommandWAL,
+		commandWALStatsScan:            opts.CommandWALStatsScan,
 		walMaxSegmentBytes:             opts.WALMaxSegmentBytes,
 		policy: WritePolicy{
 			InlineThreshold: inlineThreshold,

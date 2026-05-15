@@ -9,7 +9,7 @@ import (
 )
 
 func TestCommandWALStatsProveModeAndFrames(t *testing.T) {
-	db, err := Open(Options{Dir: t.TempDir(), CommandWAL: true, DisableBackgroundPrune: true, WALMaxSegmentBytes: 1024})
+	db, err := Open(Options{Dir: t.TempDir(), CommandWAL: true, CommandWALStatsScan: true, DisableBackgroundPrune: true, WALMaxSegmentBytes: 1024})
 	if err != nil {
 		t.Fatalf("Open command WAL: %v", err)
 	}
@@ -42,6 +42,34 @@ func TestCommandWALStatsProveModeAndFrames(t *testing.T) {
 	}
 	if got := stats["treedb.command_wal.stats_error"]; got != "" {
 		t.Fatalf("unexpected command WAL stats error %q (stats=%#v)", got, stats)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+}
+
+func TestCommandWALStatsDefaultDoesNotScanWAL(t *testing.T) {
+	db, err := Open(Options{Dir: t.TempDir(), CommandWAL: true, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+	b := db.NewBatch()
+	if err := b.Set([]byte("k"), []byte("v")); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if err := b.WriteSync(); err != nil {
+		t.Fatalf("WriteSync: %v", err)
+	}
+	_ = b.Close()
+	stats := db.Stats()
+	if got := stats["treedb.command_wal.required_feature"]; got != "true" {
+		t.Fatalf("required feature stat=%q, want true (stats=%#v)", got, stats)
+	}
+	if got := stats["treedb.command_wal.stats_scan"]; got != "false" {
+		t.Fatalf("stats_scan=%q, want false (stats=%#v)", got, stats)
+	}
+	if got := stats["treedb.command_wal.frames"]; got != "0" {
+		t.Fatalf("frames=%q, want 0 without diagnostic scan (stats=%#v)", got, stats)
 	}
 	if err := db.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
