@@ -349,12 +349,13 @@ collections, with additional roots:
 <collection>/index/<name>       existing secondary roots, column-store aware
 ```
 
-The column-store root-kind inventory is part of the collection WAL contract.
-Every root above is either published in the same collection WAL transaction as
-the corresponding mutation or is absent from the first implementation. PR1 uses
-the existing secondary-root naming convention, `<collection>/index/<name>`.
+The column-store root-kind inventory must be reflected in the user-command WAL
+matrix before column-store mutations can claim durable-at-ack behavior. Every
+root above is either published by a `WAL-supported` command frame plus
+`AppliedLSN` boundary, or is absent from the first implementation. PR1 uses the
+existing secondary-root naming convention, `<collection>/index/<name>`.
 `<collection>/secondary/<name>` is not a second persistent naming scheme unless
-a later migration explicitly introduces it and updates the WAL root-kind mapping.
+a later migration explicitly introduces it and updates the command WAL matrix.
 
 The first implementation should keep the existing primary root as
 `id -> row-locator`. A row locator is small and B-tree-friendly:

@@ -217,19 +217,26 @@ Normative coverage matrix:
 
 Invariant:
 - Current indexed collection writes remain flush-boundary durable until the
-  full indexed collection WAL implementation lands.
-- Under the PR1-min guarded `NoIndexRowInsertOnly` capability, WAL-on
-  no-index row insert visibility implies crash recoverability from either
-  backend roots or a committed collection WAL transaction.
-- Under the full collection WAL contract, the same visibility-implies-
-  recoverability rule extends to indexed writes, update/delete, schema/index
-  barriers, async publishing, and future column roots.
+  relevant user-command WAL command kinds land.
+- For `WAL-supported` command kinds, WAL-on visibility implies crash
+  recoverability from either backend roots covered by `AppliedLSN` or committed
+  typed command WAL frames in the shared commit-log stream.
+- The visibility-implies-recoverability rule extends only to command kinds with
+  explicit matrix support; unsupported indexed writes, update/delete,
+  schema/index barriers, async publishing, and future column roots must be
+  rejected or `WAL-off-only`.
 - Under `DurabilityWALOffRelaxed`, acknowledged writes before flush are not
-  promised after process crash, and collection WAL files must not be created for
-  unflushed writes.
-- Collection WAL recovery must publish root groups and applied watermarks
-  atomically, validate declared and embedded side refs, and clean only after a
-  safe watermark plus checkpoint boundary.
+  promised after process crash, and no separate collection WAL files may be
+  created for unflushed writes.
+- Command WAL recovery must replay deterministic command frames, publish roots
+  plus `AppliedLSN` atomically, validate required external refs, and clean only
+  after an `AppliedLSN` plus checkpoint boundary.
+- Crash tests must cover restart before root publish, during root publish, after
+  root plus `AppliedLSN` publish but before cleanup, and during recovery replay.
+- Replay idempotency tests must prove strict command kinds fail closed when an
+  effect exists without matching durable `AppliedLSN`, and that any
+  idempotent-skip command kind requires digest/assertion proof rather than a
+  generic already-exists condition.
 
 PR1-min required coverage:
 

@@ -1,10 +1,10 @@
 # Value-Log Lifecycle Specification
 
-This document owns value-log and split leaf-log lifecycle. Generic
-collection-WAL side-ref preparation, protection, cleanup, and column-file
-side-ref closure are owned by `collection-wal-durability-plan.md`; this
-document specifies how value-log and leaf-log segments participate in that
-lifecycle.
+This document owns value-log and split leaf-log lifecycle. The active target for
+future WAL-protected external refs is the user-command WAL in
+`user-command-wal.md`. The deprecated collection root-delta WAL plan in
+`collection-wal-durability-plan.md` remains useful historical context for
+side-ref preparation, protection, cleanup, and column-file closure risks.
 
 ## 1. Persistent Pointer Model
 
@@ -32,49 +32,50 @@ Reachability is defined by pointer references found in index trees.
 - system tree,
 - collection root trees referenced by system-tree descriptors under
   `collections/root/...`,
-- committed but unapplied collection WAL side refs, once collection WAL is
+- committed but unapplied command-WAL external refs, once command WAL is
   implemented.
 
 Entries with `node.FlagPointer` and `IsValueLogFileID(ptr.FileID)` mark a segment as referenced.
 
-Collection WAL side refs are retention roots before they are reachable from
-published roots. GC and rewrite must consult the protected collection-WAL
-side-ref index and the side-ref prepare guard before deleting, truncating,
-rewriting, or moving value-log bytes. PR1 rewrite must skip value-log records
-protected only by collection WAL rather than patching WAL records in place.
+Command-WAL external refs are retention roots before they are reachable from
+published roots. GC and rewrite must consult the protected command-WAL
+external-ref index and the external-ref prepare guard before deleting,
+truncating, rewriting, or moving value-log bytes. The first implementation must
+skip value-log records protected only by command WAL rather than patching WAL
+records in place.
 
 WAL-only protection may be released only after the transaction is covered by a
-durable applied collection watermark, the root descriptors containing the refs
+durable `AppliedLSN`, the root descriptors containing the refs
 are durable, and the value-log reachability tracker has incorporated those
 published roots or a full reachability scan has completed.
 
-Collection WAL protected value-log refs are also capacity charges. Admission,
+Command-WAL protected value-log refs are also capacity charges. Admission,
 GC, rewrite, checkpoint, and cleanup must charge both the logical referenced
 bytes and the incremental retained segment bytes that cannot be deleted because
 of the protected ref. A tiny protected byte range that pins an otherwise
 collectible large value-log segment is charged by the retained segment debt, not
-only by the byte range. When protected value-log debt reaches the collection WAL
+only by the byte range. When protected value-log debt reaches the command WAL
 soft threshold, maintenance is triggered; at the stop threshold, new collection
 writes block; at the hard threshold, new collection writes fail before ack.
 
 Collection read views are also retention roots. If a live `CollectionReadView`
 can reach a pending mutable, queued, or publishing unit that references a
-value-log record, GC and rewrite must retain that record even if the collection
-WAL transaction has already been applied and WAL-only protection is otherwise
+value-log record, GC and rewrite must retain that record even if the command
+WAL frame has already been applied and WAL-only protection is otherwise
 eligible for release.
 
-### 3.1 Collection WAL Maintenance Barrier
+### 3.1 Command WAL Maintenance Barrier
 
 Every physical maintenance operation that can delete, rewrite, move, truncate,
 rename, or stop protecting value-log, leaf-log, side-payload, column,
-dictionary, or template bytes must acquire the backend collection WAL
+dictionary, or template bytes must acquire the backend command WAL
 maintenance barrier before computing candidates.
 
 The barrier must:
 
-1. wait for active side-ref prepare guards to either commit/protect or
+1. wait for active external-ref prepare guards to either commit/protect or
    abort/classify;
-2. rebuild or refresh the protected side-ref index if recovery has not already
+2. rebuild or refresh the protected external-ref index if recovery has not already
    done so;
 3. return an immutable protection snapshot containing WAL-only refs, read-view
    refs, pending publish refs, unclassified prepare groups, and active backup
@@ -87,45 +88,45 @@ maintenance must fail closed. Dry-run may report debt but must not delete.
 
 Operation-specific rules:
 
-| Operation | Collection WAL precondition |
+| Operation | Command WAL precondition |
 |---|---|
-| `ValueLogGC` | Merge protected collection WAL value-log file IDs into the referenced set. A protected segment is not eligible even when no published root references it. |
-| `ValueLogRewriteOnline` | Source records protected solely by collection WAL must be skipped in PR1. Rewriting and patching collection WAL refs is forbidden until a separate crash-tested redirect protocol exists. |
-| `LeafGenerationGC` | Leaf-log generations referenced by collection WAL or collection read views are live generations. |
-| online index vacuum | Require collection WAL debt zero for the roots being rewritten, or publish/checkpoint dirty collection WAL first. A future root-remap maintenance WAL transaction may relax this only with crash tests. |
-| offline index vacuum | Reject dirty collection WAL and unclassified prepared side refs before read-only open. |
-| `CompactStorage` | The initial checkpoint must be collection-aware. If it reports collection WAL debt, compaction must abort before value-log rewrite, GC, leaf GC, index vacuum, or zero-byte cleanup. |
-| zero-byte cleanup | Check protected side-ref index and backup manifest pins before unlinking. |
+| `ValueLogGC` | Merge protected command-WAL value-log file IDs into the referenced set. A protected segment is not eligible even when no published root references it. |
+| `ValueLogRewriteOnline` | Source records protected solely by command WAL must be skipped in PR1. Rewriting and patching command WAL refs is forbidden until a separate crash-tested redirect protocol exists. |
+| `LeafGenerationGC` | Leaf-log generations referenced by command WAL or collection read views are live generations. |
+| online index vacuum | Require command WAL debt zero for the roots being rewritten, or publish/checkpoint dirty command WAL first. A future root-remap maintenance WAL transaction may relax this only with crash tests. |
+| offline index vacuum | Reject dirty command WAL and unclassified prepared external refs before read-only open. |
+| `CompactStorage` | The initial checkpoint must be command-WAL-aware. If it reports command WAL debt, compaction must abort before value-log rewrite, GC, leaf GC, index vacuum, or zero-byte cleanup. |
+| zero-byte cleanup | Check protected external-ref index and backup manifest pins before unlinking. |
 
 Maintenance lock order is: acquire backend `maintenanceMu`, acquire the
-collection WAL maintenance barrier, take the immutable protection snapshot and
+command WAL maintenance barrier, take the immutable protection snapshot and
 retention token, compute candidates, perform the destructive phase, then release
-the token. No collection WAL append lock may be held while acquiring backend
+the token. No command WAL append lock may be held while acquiring backend
 publish locks.
 
-### 3.2 Collection WAL Operator Runbook
+### 3.2 Command WAL Operator Runbook
 
-Operators must use `treemap collection-wal health --json` before manual cleanup,
+Operators must use `treemap command-wal health --json` before manual cleanup,
 backup triage, compaction triage, or restart triage for a directory that has
-`collection_wal_v1` enabled.
+`command_wal_v1` enabled.
 
 Health states:
 
 | State | Meaning | Operator rule |
 |---|---|---|
-| `clean` | no pending collection WAL, cleanup debt below threshold | restart, backup, compaction, and ordinary maintenance are safe under normal rules |
-| `pending` | committed WAL or protected side refs are required for recovery | restart and backup are safe only when the whole directory, collection WAL, and protected side refs are included; manual deletion is unsafe |
-| `recovery_required` | complete unapplied collection WAL exists | read-only open fails; take a whole-directory copy, then run read-write recovery |
-| `corrupt` | hard collection WAL or required side-ref failure | no manual deletion; preserve WAL, side refs, cleanup manifests, and artifacts; restore missing files or escalate |
+| `clean` | no pending command WAL, cleanup debt below threshold | restart, backup, compaction, and ordinary maintenance are safe under normal rules |
+| `pending` | committed WAL or protected external refs are required for recovery | restart and backup are safe only when the whole directory, command WAL, and protected external refs are included; manual deletion is unsafe |
+| `recovery_required` | complete unapplied command WAL exists | read-only open fails; take a whole-directory copy, then run read-write recovery |
+| `corrupt` | hard command WAL or required external-ref failure | no manual deletion; preserve WAL, external refs, cleanup manifests, and artifacts; restore missing files or escalate |
 | `cleanup_debt` | data is durable but obsolete files remain | run checkpoint/cleanup; delete files only when `safe-delete` reports `safe_to_delete=true` |
 
 `ValueLogGC` and value-log rewrite reports must include whether bytes are
-blocked by collection WAL side refs. Required collection WAL blocker fields are
+blocked by command-WAL external refs. Required command-WAL blocker fields are
 `gc_blocked`, `gc_blocked_bytes`, `gc_blocked_segments`,
-`gc_blocked_side_refs`, `oldest_blocking_age_ms`, `blocking_txn_ids`,
-`blocking_side_refs`, `blocking_reason`,
-`protected_side_ref_logical_bytes`, and
-`protected_side_ref_retained_segment_bytes`.
+`gc_blocked_external_refs`, `oldest_blocking_age_ms`, `blocking_txn_ids`,
+`blocking_external_refs`, `blocking_reason`,
+`protected_external_ref_logical_bytes`, and
+`protected_external_ref_retained_segment_bytes`.
 
 ### 3.3 Incremental Accounting Fast Path
 

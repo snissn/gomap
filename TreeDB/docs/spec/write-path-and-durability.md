@@ -28,10 +28,11 @@ This document defines write semantics for TreeDB cached mode and backend mode.
 This document owns the canonical durability-mode matrix. Other docs may
 summarize these modes but should not maintain independent durability matrices.
 Collection APIs currently have an additional write-domain distinction: before
-collection WAL lands, acknowledged collection writes can remain flush-boundary
-durable rather than durable-at-ack. That current behavior is owned by
-`collections-write-domain.md`; the target WAL-on collection overlay is owned by
-`collection-wal-durability-plan.md` until accepted.
+user-command WAL coverage lands, acknowledged collection writes can remain
+flush-boundary durable rather than durable-at-ack. That current behavior is
+owned by `collections-write-domain.md`. The active target for extending
+durable-at-ack coverage is the user-command WAL in `user-command-wal.md`; the
+older collection root-delta WAL plan is deprecated historical context.
 
 ## 2. Value Placement (Inline vs Pointer)
 
@@ -53,7 +54,8 @@ For each write batch, implementation conceptually performs:
 
 1. Choose lane.
 2. For eligible values, append to value log and build `ValuePtr` references.
-3. If WAL enabled, append commit-log batch (inline or RID form).
+3. If WAL enabled, append commit-log batch (inline or RID form). Under the
+   command WAL target, append a `RawKVBatch` command frame instead.
 4. Apply entries to mutable memtable.
 5. Acknowledge caller based on sync mode and durability mode.
 
@@ -74,29 +76,23 @@ sequence acts as a durable commit fence:
 This prevents replaying partial pointer commits and avoids phantom pointer
 visibility after crash recovery.
 
-This skip behavior is specific to the existing cached key/value commit log and
-its RID fence. Collection WAL transactions use stricter side-ref semantics:
-a complete WAL-on collection transaction with a missing required side ref is a
-recovery error, not a skipped batch, because later same-collection transactions
-depend on collection-local sequencing and root-group atomicity.
+This skip behavior is specific to the existing pre-command-WAL cached key/value
+commit log and its RID fence. The target user-command WAL replaces raw
+`commitlog.Record` batches with `RawKVBatch` command frames, uses command LSN
+ordering and applied-LSN checkpointing, and does not require compatibility
+replay for old raw record batches after `command_wal_v1` activation. Complete
+command frames whose dependencies or external refs are missing fail recovery
+closed unless the command kind defines a formal idempotent skip rule.
 
-WAL-on collection writes add a stronger visibility boundary: no collection read,
-scan, uniqueness check, update/delete planner, or pending-state merge may observe
-a mutation before its collection WAL transaction is committed/recoverable. The
-write path is private planning, side-ref preparation/protection, collection WAL
-commit, then visible install. The authoritative guard is `CanInstallVisible` in
-`collection-wal-durability-plan.md`; WAL-on implementations must reject any
-path that can return success or expose pending visibility without satisfying
-that predicate.
+WAL-on collection writes add a stronger visibility boundary for command kinds
+that are `WAL-supported`: no collection read, scan, uniqueness check,
+update/delete planner, or pending-state merge may observe a mutation before its
+command WAL frame is committed/recoverable. Unsupported mutation kinds must be
+classified as `WAL-rejected` or `WAL-off-only` in `user-command-wal.md`.
 
-The collection WAL is a local storage apply log, not a Raft log and not a
-native-wire deterministic command entry. Non-sync collection APIs under WAL-on
-modes provide process-crash recoverability after local collection WAL commit
-only for capabilities explicitly enabled by the collection WAL plan. The
-PR1-min capability is no-index row `Insert`/`InsertBatch` only; unsupported
-paths must retain the old flush-boundary contract or fail before visibility.
-These APIs do not imply power-loss fsync durability unless a sync/checkpoint
-boundary is requested by the configured durability mode.
+The user-command WAL is a local crash-recovery log, not a Raft log. Future Raft
+entries may share command-envelope payloads, but consensus ordering and local
+recoverability remain separate responsibilities.
 
 ## 4. Backend Commit Model
 
@@ -126,26 +122,26 @@ Collection mutators do not have separate `*Sync` Go methods. Their baseline
 acknowledgement is mode-dependent. Current shipped collection write-domain
 behavior is flush-boundary durable, as defined in
 `collections-write-domain.md`. The bullets below describe the target collection
-WAL overlay for paths that have passed the collection WAL gate:
+user-command WAL overlay for command kinds that have passed the support matrix:
 
 - `DurabilityDurable`: non-sync collection mutator success is process-crash
-  recoverable through collection WAL. It is not by itself a power-loss fsync
+  recoverable through command WAL. It is not by itself a power-loss fsync
   guarantee. `Flush`, `FlushAll`, `Checkpoint`, `Close`, or native-wire
   `ack_policy=synced` can add the configured fsync boundary when the server can
   actually satisfy that boundary.
 - `DurabilityWALOnRelaxed`: collection mutator success is process-crash
-  recoverable through collection WAL once the WAL frame and required side refs
-  are fresh-process-readable. It is not a power-loss guarantee. Native-wire
+  recoverable through command WAL once the typed frame and required external
+  refs are fresh-process-readable. It is not a power-loss guarantee. Native-wire
   `synced` must be rejected unless the server advertises a separately named
   mode-relative relaxed sync policy.
 - `DurabilityWALOffRelaxed`: collection mutator success is not durable-at-ack.
   `Flush`, `FlushAll`, `Checkpoint`, and `Close` are the public persistence
   boundaries for pending collection state.
 
-`Flush` and `FlushAll` publish roots and watermarks. `Checkpoint` is the
-database-wide durability/cleanup boundary. `Close` is a final admission-cut and
-safe-reopen boundary, not a promise that every safe-to-delete WAL file was
-physically removed.
+`Flush` and `FlushAll` publish roots and advance `AppliedLSN` when they cover
+typed command frames. `Checkpoint` is the database-wide durability/cleanup
+boundary. `Close` is a final admission-cut and safe-reopen boundary, not a
+promise that every safe-to-delete WAL file was physically removed.
 
 ## 6. Checkpoint Semantics
 
@@ -163,22 +159,29 @@ Current behavior:
 
 In backend-only mode, checkpoint is implemented as an empty sync batch write.
 
-Under the full collection WAL contract, `DB.Checkpoint()` is also a
-collection-aware boundary. That later gate must close admission for the
-checkpoint cut, wait for in-flight collection writes admitted before the cut,
-drain async publish and write domains, publish root groups, advance applied
-watermarks, create the backend durability boundary containing those watermarks,
-and only then report a clean collection WAL state or clean collection WAL
-segments. PR1-min retains collection WAL and must not report clean collection
-WAL state merely because backend checkpoint completed. A future
-checkpoint-without-publication mode must report collection WAL debt and retain
-all required WAL segments and side refs.
+Under the user-command WAL target, `DB.Checkpoint()` is also a command-WAL
+boundary. That later gate must close admission for the checkpoint cut, wait for
+in-flight commands admitted before the cut, drain async publish and write
+domains, publish roots, advance durable `AppliedLSN`, create the backend
+durability boundary containing that `AppliedLSN`, and only then report a clean
+command WAL state or clean commit-log ranges. Root publication and `AppliedLSN`
+advancement must be atomic with respect to meta/root recovery: after any crash,
+open must select either the old roots plus old `AppliedLSN` or the new roots
+plus new `AppliedLSN`, never a split state. A future
+checkpoint-without-publication mode must report command WAL debt and retain all
+required WAL segments and external refs.
 
-Under the full collection WAL target, `DB.Checkpoint()` success must cover
-collection WAL. A checkpoint that cannot
-publish or watermark pre-cut collection WAL transactions must return an error
-or expose explicit collection WAL debt through a new API; it must not return
-`nil` and call the collection WAL state clean.
+The authoritative `AppliedLSN` must be selected by the same backend meta choice
+as the roots whose effects it covers. If stored in the system root, the system
+root update carrying `AppliedLSN` and every command-affected ordered root must
+finalize in one backend commit. If stored directly in meta, the meta write must
+select the roots and `AppliedLSN` together. A post-commit sidecar, manifest, or
+stats update is not a valid source of recovery truth.
+
+Under the user-command WAL target, `DB.Checkpoint()` success must cover command
+WAL. A checkpoint that cannot publish `AppliedLSN` covering pre-cut command
+frames must return an error or expose explicit command WAL debt through a new
+API; it must not return `nil` and call the command WAL state clean.
 
 ## 7. Auto-Checkpoint Defaults (Cached Mode)
 
@@ -196,7 +199,7 @@ Profiles map high-level intent to durability/integrity bundles:
 
 - `ProfileDurable`: durable mode + checksum verification.
 - `ProfileFast`: WAL off relaxed + checksum skip + index optimization bundle + 4 MiB pager chunks with moderate pager sync parallelism + the current run_celestia value-log compression defaults (`auto` / balanced / snappy / medium autotune). Collection write success is not durable-at-ack; use `Flush`, `FlushAll`, `Checkpoint`, or `Close` for a persistence boundary.
-- `ProfileWALOnFast`: WAL on relaxed + checksum skip + the same index + pager chunk/sync + value-log compression bundle. After the collection WAL contract lands, collection write success is recoverable after process crash but not after power loss.
+- `ProfileWALOnFast`: WAL on relaxed + checksum skip + the same index + pager chunk/sync + value-log compression bundle. After user-command WAL support lands for a collection command kind, that command's success is recoverable after process crash but not after power loss.
 - `ProfileBench`: fast profile plus disabled background checkpoint/prune triggers for determinism.
 
 ## 9. Required Invariants

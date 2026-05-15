@@ -1,0 +1,739 @@
+# SPEC: User Command WAL and Applied-LSN Recovery
+
+Status: normative target contract and implementation plan; not current behavior
+until the milestone evidence below is accepted. This document supersedes the
+collection-specific physical/root-delta WAL target in
+`collection-wal-durability-plan.md` for future implementation work.
+
+Tracker: https://github.com/snissn/gomap/issues/1529
+
+TreeDB is pre-alpha. On-disk formats and public APIs may change. This freedom
+must not create fail-open recovery behavior: once a directory advertises a
+required command-WAL feature, unsupported binaries must refuse to serve, clean,
+compact, or rewrite that directory.
+
+Related specs:
+
+- `TreeDB/docs/spec/write-path-and-durability.md`
+- `TreeDB/docs/spec/recovery.md`
+- `TreeDB/docs/spec/storage-format.md`
+- `TreeDB/docs/spec/collections-write-domain.md`
+- `TreeDB/docs/spec/native-wire-protocol.md`
+- `TreeDB/docs/spec/native-query-raft-roadmap.md`
+
+## 1. Summary
+
+The active WAL direction is a user-command WAL: TreeDB records accepted,
+deterministic user-level mutation commands, then recovery replays unapplied
+commands in log sequence order until the checkpointed state catches up.
+
+The WAL should be write-once/read-rarely. In the normal case, committed state is
+covered by checkpointed roots and the WAL is deleted without ever being replayed.
+The WAL exists to recover acknowledged commands that were accepted but not yet
+covered by a durable checkpoint boundary.
+
+The core model is:
+
+```text
+accepted command stream
+  -> typed frames in the existing commit-log WAL ordered by LSN
+  -> normal command executor publishes TreeDB roots
+  -> checkpoint records AppliedLSN with durable roots
+  -> recovery replays WAL frames with LSN > AppliedLSN
+```
+
+This is intentionally closer to the existing raw commit-log model than to a
+collection-specific physical root-delta WAL. The durable record is a canonical
+command envelope plus payload, not transient collection planner state and not
+physical page/root changes.
+
+There is one WAL substrate. User-command WAL extends the existing TreeDB
+commit-log implementation; it does not introduce a second collection-specific
+WAL system. Command frames use the same `wal/commit-l*.log` segment family and reuse the
+current WAL subsystem's lifecycle concepts: append-before-visibility ordering,
+checksums, optional compression, lane ordering, recovery discovery, checkpoint
+cleanup boundaries, and value-log RID/external-reference fences. The on-disk
+command WAL format is allowed to break compatibility with the current raw
+`commitlog.Record` batch format; reducing implementation churn and keeping one
+command format is preferred over preserving old WAL payload readers.
+
+## 2. Design Goals
+
+1. Keep the WAL simple: append ordered command frames, replay only after crash.
+2. Cover the mutation commands TreeDB already exposes when they can be lowered to
+   deterministic replay input.
+3. Fail closed for commands whose replay semantics are not defined.
+4. Make checkpointed roots plus `AppliedLSN` the cleanup boundary.
+5. Align local WAL and future Raft around the same canonical command envelope
+   while keeping their storage/consensus responsibilities separate.
+6. Avoid encoding JSON/BSON/template/index internals in the WAL unless those
+   bytes are the canonical user payload for the command.
+7. Avoid a separate collection-only WAL semantics stack: no
+   `wal/collection-l*.log`, no active `internal/collectionwal` appender, and no
+   collection-only cleanup/watermark system.
+8. Support compact declarative update APIs without trusting arbitrary Go
+   callback purity: nondeterministic helper values must be resolved to literals
+   before WAL append.
+
+## 3. Non-Goals for V1
+
+The first user-command WAL does not implement:
+
+- arbitrary query-wide mutations such as `update users where age > 30`;
+- MongoDB multi-document transactions;
+- cross-collection atomic transactions;
+- Raft replication;
+- a consensus state root;
+- physical root-delta replay;
+- page-level redo/undo logging;
+- replay of arbitrary Go callbacks;
+- replay-time calls to nondeterministic helpers such as wall clock, random, UUID,
+  sequence, or process-local resolver functions.
+
+Callback-based APIs may be WAL-covered only after the callback has run and the
+accepted mutation is lowered to replayable final replacements or another stable
+command payload. The WAL must never attempt to serialize or rerun user callback
+code.
+
+Declarative update APIs may expose convenience helpers for values such as
+server time, UUIDs, or monotonic sequences, but those helpers are an admission
+path feature only. The helper must resolve to a canonical literal value before
+the WAL frame is appended; recovery and future followers replay the literal, not
+the helper call.
+
+## 4. Definitions
+
+| Term | Meaning |
+|---|---|
+| `CommandEnvelope` | Versioned durable wrapper for one replayable user mutation command. |
+| `CommandPayload` | Canonical bytes for the command kind. Payload bytes must be stable for replay and digest validation. |
+| `LSN` | Monotonic local WAL sequence number assigned by the shared command WAL journal before command visibility/durable acknowledgement. Raw KV, collection, catalog, and future native-wire commands share this one sequence stream. |
+| `AppliedLSN` | Highest contiguous command LSN covered by the durable checkpointed TreeDB state. This value is selected atomically with the roots that contain those command effects. |
+| `Checkpoint` | Durable root boundary that syncs required files and records `AppliedLSN`. |
+| `Publish boundary` | One backend commit/meta selection that makes user roots, system root metadata, value-log/leaf-log reachability, and `AppliedLSN` visible together. |
+| `State root` | The TreeDB root state selected by meta/system-root recovery. In distributed mode this is not automatically a consensus digest. |
+| `Replay executor` | The same semantic command executor used by the normal write path, constrained to deterministic replay mode. |
+| `DeclarativeUpdateOp` | Versioned update operator whose canonical payload fully defines replay, for example set field to literal, unset field, or a future `$inc`-style operator. |
+| `Resolver helper` | Admission-time helper that chooses nondeterministic values such as time, UUID, random, or sequence values before WAL append. The helper call is never part of replay identity. |
+| `Resolved literal` | The concrete value produced by a resolver helper and embedded in a canonical command payload. |
+| `WAL-supported` | Command has canonical encoding, deterministic replay rules, failure behavior, and crash/recovery tests. |
+| `WAL-rejected` | Command exists but must be rejected in WAL-on durable-at-ack modes until replay semantics are defined. |
+| `WAL-off-only` | Command may be allowed only when the selected durability profile makes no durable-at-ack claim. |
+
+## 5. Command Envelope
+
+The command envelope is the WAL payload format for all mutating surfaces. Raw
+key/value writes are represented as `RawKVBatch` commands in this envelope, not
+as a legacy `commitlog.Record` compatibility payload. Collection, catalog, and
+future native-wire command payloads use the same envelope family with their own
+versioned command payload schemas.
+
+This is a compatibility-breaking WAL format transition. TreeDB is pre-alpha, so
+the command WAL implementation may require old directories to be cleanly
+checkpointed with the previous binary or rebuilt. Once a directory advertises
+the command WAL feature, readers must fail closed on old raw batch payloads
+instead of silently replaying them.
+
+The target envelope is:
+
+```go
+type CommandEnvelope struct {
+    Version          uint16
+    LSN              uint64
+    Kind             CommandKind
+    Scope            CommandScope
+    FeatureFlags     uint64
+    CatalogEpoch     uint64
+    SchemaEpoch      uint64
+    BaseAppliedLSN   uint64
+    PayloadFormat    PayloadFormat
+    Payload          []byte
+    PayloadDigest    [32]byte
+    ExternalRefs     []ExternalRef
+    Preconditions    []Precondition
+    ResultAssertions []ResultAssertion
+}
+```
+
+`AckPolicy`, request timeout, tracing fields, and transport details are not part
+of deterministic command identity. They may influence when an API returns, but
+must not change replay bytes.
+
+### 5.1 Required Envelope Properties
+
+- `LSN` is assigned by the shared commit-log journal service before a complete
+  frame can become recoverable.
+- `Kind` selects a versioned payload schema.
+- `Scope` identifies raw KV, one collection, catalog/DDL, or a future explicit
+  multi-scope command.
+- `PayloadDigest` covers the canonical payload bytes.
+- `ExternalRefs` declare required bytes that must be readable before replay can
+  serve data depending on the command.
+- `Preconditions` make stale or incompatible replay fail closed.
+- `ResultAssertions` allow recovery to detect semantic drift, for example
+  expected matched/modified counts or optional document digests.
+- Every command kind declares whether replay is strict or has an explicit
+  idempotent-skip rule. Strict commands fail closed if replay observes evidence
+  that the command effect already exists while `AppliedLSN` does not cover it.
+
+### 5.2 Compatibility-Breaking Command WAL Format
+
+The first implementation should modify `TreeDB/internal/commitlog` into the
+command WAL format rather than layering command frames beside legacy raw batch
+payloads. Reuse implementation pieces where useful, but do not preserve
+`ReadBatch`/`AppendBatch` as a compatibility requirement for command WAL
+directories.
+
+Required integration points:
+
+- define one command WAL frame payload that can represent `RawKVBatch`,
+  collection-command, and catalog-command families;
+- replace raw WAL writes with `RawKVBatch` command frames;
+- make old raw `commitlog.Record` payloads unsupported once the command WAL
+  required feature is present;
+- require activation to start from a clean WAL state, or require the operator to
+  rebuild the DB directory;
+- keep the `wal/commit-l<lane>-<seq>.log` segment family and single journal
+  ownership model;
+- preserve the correctness properties of the current WAL implementation:
+  append-before-visibility, checksum validation, terminal truncated-tail
+  handling, rotation, flush/sync ordering, and cleanup only after durable proof;
+- fail closed on unknown required frame versions or command kinds.
+
+### 5.3 Single Journal Owner
+
+Exactly one journal owner may open mutable WAL writers for a database directory.
+The implementation should extract or reuse the existing cached WAL lane writer
+and lifecycle code as a shared journal service instead of adding a backend-only
+or collection-only writer that opens a second segment family.
+
+The shared journal service owns:
+
+- `wal/commit-l<lane>-<seq>.log` file creation;
+- WAL sequence allocation;
+- lane selection and ordering metadata;
+- segment rotation;
+- append buffering;
+- flush and sync policy;
+- checkpoint cleanup eligibility.
+
+Raw cached writes, collection commands, catalog commands, and future native-wire
+command entries must append through this shared service as typed commands. If cached raw mode and
+collections are active in the same process, they must coordinate through the
+same journal owner rather than opening independent writers into the same WAL
+directory.
+
+## 6. V1 Command Support Matrix
+
+V1 should support only commands that are already exposed and can be made
+replayable without adding query-wide mutation semantics.
+
+| Surface | Current user-facing shape | V1 WAL command | Status policy |
+|---|---|---|---|
+| Raw KV set/delete/batch | `Set`, `Delete`, `Batch.Write` | `RawKVBatch` | `WAL-supported`; this is the bridge from the current commit log. |
+| Collection insert batch | explicit IDs plus stored documents | `CollectionInsertBatchByID` | `WAL-supported` after canonical payload and recovery tests. |
+| Collection delete | explicit document ID or ID batch | `CollectionDeleteBatchByID` | `WAL-supported` after canonical payload and recovery tests. |
+| Collection declarative update | explicit document ID plus canonical update ops over resolved literal values | `CollectionUpdateByIDOps` or final replacement | `WAL-supported` after operator registry, canonical encoding, and recovery tests. |
+| Resolver-backed update helpers | helpers such as server-now, UUID, random, or sequence values used by declarative update APIs | not a replay command; lowers to resolved literals inside `CollectionUpdateByIDOps` | `WAL-supported` only when resolved before WAL append. Recovery must not invoke helper functions. |
+| Collection update callback | explicit document ID plus Go callback | `CollectionReplaceBatchByID` after callback execution | Callback itself is not replayed. WAL logs final accepted replacements/no-ops. |
+| Mongo `updateOne` | `_id` equality plus accepted `$set` subset | `CollectionUpdateByIDSet` or final replacement | `WAL-supported` only after canonical lowering and result assertions. |
+| Mongo `deleteOne` | `_id` equality | `CollectionDeleteBatchByID` | Same as native explicit-ID delete. |
+| Collection/index metadata | create collection, create/drop index | `CatalogMutation` | Add deliberately; if not implemented yet, reject in WAL-on durable-at-ack modes. |
+| Query-wide update/delete | predicate/range matched mutation | none | `WAL-rejected`; future command kind required. |
+| User-defined callback replay | arbitrary function | none | `WAL-rejected`; lower to final replacement first. |
+| Column-store file publish | external side-file refs | future command plus side-ref classes | Deferred until side-file prepare/recovery is specified. |
+
+The matrix is normative for planning: adding or broadening a mutating API also
+requires a matrix update in the same PR.
+
+### 6.1 Update API Categories
+
+Update support should be split by replay contract:
+
+| Category | API shape | WAL representation |
+|---|---|---|
+| Declarative literal update | set/unset/replace by explicit document ID using already-resolved values | canonical update operator payload or final replacement |
+| Resolver-backed declarative update | helpers such as `SetNow`, `SetUUID`, or sequence assignment | canonical update operator payload containing resolved literals, not helper calls |
+| Opaque Go callback | `Update(id, func(current []byte) ...)` or `UpdateBatch` callback item | final accepted replacement/no-op result after callback execution |
+| Predicate/query-wide update | update/delete by filter, range, or scan predicate | rejected until it lowers to ordered explicit document IDs plus per-document commands |
+
+The resolver boundary is strict: if command execution needs time, randomness,
+UUID generation, process state, or an external service, the value must be chosen
+before WAL append and embedded as data in the payload. The command WAL must not
+contain an instruction to call a resolver during recovery.
+
+This gives TreeDB three implementation choices without weakening durability:
+
+- declarative APIs remain compact and semantic when their operators are
+  versioned and canonical;
+- nondeterministic convenience APIs remain safe because they resolve to literals
+  before WAL append;
+- arbitrary callback APIs remain safe by lowering to full replacements instead
+  of claiming callback purity.
+
+## 7. Normal Write Path
+
+For a WAL-supported command, the required ordering is:
+
+```text
+1. parse and validate user request
+2. resolve nondeterministic helper inputs to canonical literal values
+3. run user callbacks if any, then discard callback identity
+4. lower the request or callback result to a canonical replayable command payload
+5. compute preconditions and result assertions
+6. assign LSN
+7. append command WAL frame
+8. flush/sync WAL according to durability mode
+9. apply the command through the normal executor
+10. publish roots, system metadata, and AppliedLSN in one publish boundary
+11. return success only after the selected durability/visibility contract is met
+```
+
+For staged collection writes, no owner-visible state may be installed before the
+WAL frame is recoverable in modes that claim durable-at-ack. WAL-off relaxed
+modes may preserve existing flush-boundary behavior, but must document that the
+write is not crash-durable until a publish/checkpoint boundary covers it.
+
+## 8. Checkpoint and Cleanup
+
+A checkpoint or command publish must record a durable state root and the highest
+contiguous `AppliedLSN` covered by that root state. `AppliedLSN` is not merely
+checkpoint metadata; every command publish that makes command effects durable
+and visible must also make the corresponding `AppliedLSN` durable and visible in
+the same publish boundary.
+
+`AppliedLSN` is metadata for the same command WAL sequence stream, not a
+separate collection watermark. It is required because commands are not always
+safely idempotent if a crash happens after root publication but before obsolete
+WAL segments are deleted. All command frames, including raw `RawKVBatch` frames,
+with `LSN <= AppliedLSN` must be skipped during recovery.
+
+Required publish/checkpoint ordering:
+
+```text
+1. stop or fence admission for commands that must be included in this checkpoint
+2. wait for admitted command apply/publish through the chosen AppliedLSN
+3. sync value-log, leaf-log, side-file, and pager bytes needed by published roots
+4. write durable root metadata plus AppliedLSN in the same meta-selected state
+5. sync the metadata boundary
+6. delete or mark clean WAL segments whose max LSN <= AppliedLSN
+```
+
+The first implementation must choose one physical storage location for
+`AppliedLSN` that is selected by the same meta-page choice as the roots:
+
+- preferred: add an explicit meta-page field such as `AppliedCommandLSN`, with a
+  command-WAL format gate;
+- acceptable: store `AppliedLSN` in the system root only if the system root
+  containing that value and every command-affected ordered root are finalized by
+  the same backend commit/meta write.
+
+A sidecar file, post-commit manifest, async stats record, or post-work callback
+must not be the authoritative `AppliedLSN` source because it would allow split
+states after crash.
+
+### 8.1 Crash-Correctness Requirements
+
+The command WAL must preserve the correctness shape TreeDB already relies on:
+copy-on-write root publication plus durable meta/root selection, with WAL cleanup
+after durable proof.
+
+Required crash cases:
+
+- Crash after WAL append but before command visibility: no root state may expose
+  the command yet; recovery sees `LSN > AppliedLSN` and replays it.
+- Crash during command apply before root/meta publication: copy-on-write pages or
+  partial root state are unreachable from the selected meta/root; recovery
+  replays the command again from WAL.
+- Crash after root publication but before `AppliedLSN` publication is forbidden
+  as a visible state. Command effects and `AppliedLSN` advancement must be in
+  the same backend durability boundary, so recovery either sees neither or sees
+  both.
+- Crash after root plus `AppliedLSN` publication but before WAL cleanup: recovery
+  selects the new root state, skips frames with `LSN <= AppliedLSN`, and cleanup
+  resumes idempotently.
+- Crash after WAL cleanup: cleanup is valid only for segments whose max LSN is
+  covered by durable `AppliedLSN`; missing cleaned segments must not be needed
+  for recovery.
+- Crash during recovery replay: each replay publish must atomically commit the
+  command effects and advance `AppliedLSN` through the replayed command or
+  command group. On restart, recovery resumes from the selected durable
+  `AppliedLSN` and must not double-apply commands above it.
+
+A command implementation must not publish user roots first and advance
+`AppliedLSN` later. It also must not advance `AppliedLSN` before the root state
+and all required value-log/leaf-log/external-ref bytes are durable enough for the
+selected durability profile.
+
+For atomic command groups, the group effects and the resulting `AppliedLSN` must
+publish in one backend commit, or the group must have explicit per-command
+idempotency/result assertions that make replay after partial progress safe.
+
+### 8.2 Publish Boundary Contract
+
+The publish boundary must be implemented as one backend finalize/meta selection,
+matching the current TreeDB correctness model where copy-on-write roots are not
+visible until a meta page selects them. For command WAL, the selected state tuple
+is:
+
+```text
+(UserRootPageID, SystemRootPageID, AppliedLSN, CommitSeq, required value-log/leaf-log reachability)
+```
+
+That tuple is indivisible for recovery. If any element is missing or stale, open
+must select the previous durable tuple or fail closed. In particular:
+
+- root descriptors must not point at command effects unless `AppliedLSN` covers
+  those effects;
+- `AppliedLSN` must not advance beyond roots that actually contain the command
+  effects;
+- `AppliedLSN` advances only over a contiguous LSN prefix;
+- publishing command LSN `N` requires every lower LSN to already be covered or
+  to be applied in the same publish boundary;
+- post-commit work such as pruning, metrics, manifest maintenance, or cleanup
+  cannot be required to reconstruct the authoritative applied state.
+
+A command WAL implementation should add a dedicated publish helper rather than
+allowing callers to compose `PublishOrderedRoot*` plus a later metadata update.
+The helper should take the command LSN range being published and reject attempts
+to publish roots without the matching `AppliedLSN` advancement.
+
+### 8.3 Replay Idempotency Contract
+
+Replay idempotency is primarily provided by the publish boundary, not by making
+every command naturally idempotent. Recovery must run commands only from a state
+whose durable `AppliedLSN` is lower than the command LSN. If recovery observes
+that a strict command's effect already exists while `AppliedLSN` does not cover
+it, that is a split-state/corruption signal and must fail closed.
+
+Command kinds may define explicit idempotent-skip rules only when they can prove
+the existing state is exactly the same command result. Examples of acceptable
+proof include stable command IDs, document digests, matched/modified assertions,
+and catalog/schema epoch guards. A generic duplicate-key or already-exists error
+is not enough to skip replay.
+
+Non-crash errors after a complete WAL frame is durable are commit-outcome
+errors, not normal user rejections. The implementation must either retry/publish
+to completion, close and require recovery, or return a public
+recovery-required/commit-unknown error. User-level validation and deterministic
+precondition failures must happen before the complete WAL frame is made
+recoverable.
+
+## 9. Recovery
+
+Recovery starts from the durable checkpointed state selected by normal TreeDB
+meta/root recovery.
+
+Recovery algorithm:
+
+```text
+1. load durable AppliedLSN
+2. discover command WAL segments
+3. decode frames in LSN order
+4. ignore or clean frames with LSN <= AppliedLSN only after cleanup proof
+5. validate every frame with LSN > AppliedLSN
+6. stop at a terminal incomplete tail only when no complete commit marker exists
+7. replay complete commands in strict LSN order through deterministic executor
+8. publish recovered roots, system metadata, and AppliedLSN in the same backend durability boundary
+9. checkpoint recovered AppliedLSN
+10. clean replayed WAL only after durable checkpoint success
+```
+
+Recovery must fail closed on:
+
+- duplicate LSN;
+- missing non-cleaned segment in a required range;
+- corrupt complete frame;
+- unsupported command version;
+- unsupported command kind;
+- failed precondition that is not explicitly classified as an idempotent skip with proof;
+- missing required external ref;
+- result assertion mismatch;
+- observed command effect without matching durable `AppliedLSN` for a strict command.
+
+## 10. Relationship to Existing Raw WAL
+
+Raw key/value writes become first-class `RawKVBatch` commands in the command
+WAL. The old raw `commitlog.Record` batch format is not a compatibility target
+for command WAL directories.
+
+The implementation must preserve current raw WAL correctness strengths:
+
+- append-before-visibility ordering;
+- checksums;
+- optional compression;
+- truncated-tail handling;
+- RID/value-log fence ideas;
+- replay-through-normal-command-executor discipline;
+- post-replay cleanup only after success.
+
+The implementation must not add `wal/collection-l*.log`,
+`internal/collectionwal` as the active appender/decoder, or a collection-only
+cleanup/watermark path. Any existing collection root-delta WAL scaffolding is
+historical unless a later ticket explicitly revives it.
+
+The implementation should remove or replace raw-record-specific writer and
+reader paths as part of the command WAL conversion. Tests should move from
+legacy raw record replay to `RawKVBatch` command replay.
+
+## 11. Relationship to Raft and Distributed State
+
+Raft and local WAL should share command semantics but not the same durability
+responsibility.
+
+```text
+Raft log: replicated consensus ordering
+Local command WAL: single-node crash recovery ordering
+Checkpoint/snapshot: compacted root state plus applied index/LSN
+```
+
+A future Raft entry should carry the same canonical command payload or a strict
+superset. A Raft node may not advertise a command as locally recoverable until
+its local apply/durability rule is satisfied. Local page IDs/root IDs are not a
+portable consensus state root; a future cluster state digest must be defined
+separately if consensus requires byte-independent state equality.
+
+## 12. Future Command Admission Policy
+
+Every PR that adds or broadens a mutating user-facing command must update the
+command WAL matrix and choose one status:
+
+- `WAL-supported`: command has canonical encoding, deterministic replay,
+  recovery tests, and result assertions where needed.
+- `WAL-rejected`: command is rejected in WAL-on durable-at-ack modes until its
+  replay contract lands.
+- `WAL-off-only`: command is allowed only under durability profiles that make no
+  durable-at-ack claim.
+
+A command may not silently inherit WAL support from a similar command. Examples:
+
+- Adding `$inc` is not covered by `$set`.
+- Adding `SetNow`, `SetUUID`, or another resolver-backed helper is not covered
+  unless the helper resolves to a literal before WAL append.
+- Adding `multi: true` is not covered by `_id` updateOne.
+- Adding range/predicate delete is not covered by explicit ID delete.
+- Adding a user callback API is not covered unless it lowers to final replayable
+  replacements before WAL append.
+
+## 13. Query-Wide Mutation Gate
+
+Query-wide mutation is deferred until the query planner/executor can prove:
+
+- deterministic predicate semantics;
+- deterministic match ordering;
+- stable collation and type comparison;
+- bounded replay work;
+- stable index/scan choice or scan-choice-independent result semantics;
+- versioned update operator semantics;
+- result assertions, at minimum expected matched/modified counts;
+- crash tests for replay after catalog/index changes.
+
+Until then, commands such as:
+
+```text
+update users where age > 30 and city = "NYC" set active = true
+```
+
+must be rejected in WAL-on durable-at-ack modes or lowered by the caller into an
+explicit ID batch before WAL append.
+
+## 14. PR Milestones
+
+### PR 0: Spec, issue, and deprecation cleanup
+
+Deliverables:
+
+- add this spec;
+- create the user-command WAL tracker issue;
+- mark the older collection root-delta WAL tracker and PR as superseded;
+- add pivot notes to transaction, update-staging, and column-store roadmaps.
+
+Acceptance:
+
+- docs describe user-command WAL as the active target;
+- old collection WAL/root-delta work is preserved as historical context only.
+
+### PR 1: Typed commit-log frames and feature gate
+
+Deliverables:
+
+- convert `TreeDB/internal/commitlog` to the compatibility-breaking command WAL
+  frame format;
+- versioned command frame encoder/decoder for `RawKVBatch`, collection command,
+  and catalog command payload families;
+- `CommandEnvelope` types and golden fixtures;
+- raw KV encoded only as `RawKVBatch` command frames;
+- fail-closed rejection of legacy raw `commitlog.Record` payloads once the
+  command WAL feature is present;
+- feature gate / required storage feature;
+- reader classification for tail, corruption, unsupported version, duplicate LSN;
+- tests independent of collection internals.
+
+Acceptance:
+
+- no new `collection-l*.log` segment family or active `internal/collectionwal`
+  appender is introduced;
+- raw WAL tests are migrated to `RawKVBatch` command frames;
+- malformed or unsupported command WAL fails closed;
+- truncated terminal tail handling is tested;
+- docs-check and drift tests cover the command matrix.
+
+### PR 2: Shared journal ownership and AppliedLSN checkpoint plumbing
+
+Deliverables:
+
+- extract or reuse the existing cached WAL lane writer/lifecycle as a shared
+  journal service for raw, collection, and catalog command frames;
+- single mutable journal owner per DB directory;
+- typed command appends use `wal/commit-l<lane>-<seq>.log`;
+- WAL sequence allocation comes from the shared journal service;
+- durable `AppliedLSN` storage in meta or system root with proof it is selected by
+  the same meta-page boundary as command roots;
+- checkpoint and publish-boundary integration;
+- segment cleanup rules;
+- read-only dirty-WAL detection;
+- backup/restore manifest updates.
+
+Acceptance:
+
+- cached raw writes and collection command writes cannot open independent WAL
+  writers for the same directory;
+- checkpointed WAL ranges are skipped/cleaned only after durable proof;
+- roots and `AppliedLSN` cannot be published as split commits;
+- typed command frames with `LSN <= AppliedLSN` are skipped during recovery;
+- read-only open fails when mutating recovery would be required.
+
+### PR 3: Recovery dispatcher and raw KV command conversion
+
+Deliverables:
+
+- extend the existing backend WAL recovery pass to dispatch typed frames;
+- represent current raw set/delete/batch writes only as `RawKVBatch` command
+  frames;
+- preserve RID/value-log fence semantics through command `ExternalRefs` or an
+  equivalent command payload fence;
+- recovery tests cover restart during replay and crash before/during/after root
+  plus `AppliedLSN` publication;
+- replay idempotency tests prove strict commands fail closed on split-state
+  evidence and idempotent-skip commands require digest/assertion proof.
+
+Acceptance:
+
+- unsupported required command kinds fail closed before serving reads;
+- command WAL tests prove `RawKVBatch` replay, contiguous `AppliedLSN`
+  advancement, root/`AppliedLSN` atomicity, and cleanup.
+
+### PR 4: Collection insert/delete by explicit ID
+
+Deliverables:
+
+- `CollectionInsertBatchByID` and `CollectionDeleteBatchByID` canonical payloads;
+- JSON/BSON/template payload policy for stored documents;
+- recovery through normal collection executor;
+- explicit unsupported-mode failures for uncovered mutation kinds.
+
+Acceptance:
+
+- crash after acknowledged insert/delete and before checkpoint recovers correctly;
+- duplicate/missing IDs replay idempotency behavior is explicit and tested.
+
+### PR 5: Collection update by explicit ID
+
+Deliverables:
+
+- `CollectionReplaceBatchByID` for callback APIs after final replacement is known;
+- `CollectionUpdateByIDOps` for declarative update operators over canonical
+  literal values;
+- resolver-backed helpers such as server-now or UUID lower to resolved literals
+  before WAL append;
+- optional `CollectionUpdateByIDSet` for Mongo `$set` if it remains a distinct,
+  compact subset of the declarative operator payload;
+- result assertions for matched/modified counts;
+- tests for indexed fields, unchanged fields, BSON `_id` preservation, and
+  unique-index conflicts.
+
+Acceptance:
+
+- no Go callback is replayed;
+- no resolver helper is invoked during recovery;
+- recovered primary and secondary index state matches normal execution;
+- unsupported update operators fail closed in WAL-on modes.
+
+### PR 6: Catalog mutation commands
+
+Deliverables:
+
+- create collection command;
+- create/drop index commands or explicit WAL-on rejection until implemented;
+- catalog/schema epoch guards;
+- recovery tests around DDL plus subsequent document mutations.
+
+Acceptance:
+
+- GUI/Mongo-compatible `create` behavior has documented durability semantics;
+- schema/index changes cannot race lower unapplied command LSNs.
+
+### PR 7: Matrix enforcement and future-command guardrails
+
+Deliverables:
+
+- machine-readable command WAL support matrix;
+- CI/doc drift test requiring matrix updates for mutating command registry changes;
+- CI/doc drift test rejecting active `collection-l*.log` or
+  `internal/collectionwal` implementation references outside deprecated docs;
+- public error types for unsupported WAL mode commands.
+
+Acceptance:
+
+- adding a new mutating command without a WAL status fails tests;
+- current unsupported query-wide mutation remains explicitly rejected.
+
+### PR 8: Raft alignment design closeout
+
+Deliverables:
+
+- define how Raft entries map to `CommandEnvelope` payloads;
+- define applied-index vs local `AppliedLSN` ordering;
+- define idempotency metadata durability ordering;
+- add non-implementation tests/fixtures if useful for deterministic bytes.
+
+Acceptance:
+
+- future Raft work can reuse the command payload contract without depending on
+  local WAL segment layout.
+
+## 15. Deprecation of the Collection Root-Delta WAL Target
+
+The collection-specific physical/root-delta WAL target is deprecated for new
+implementation work. Its documents and PRs remain useful as a record of crash
+safety risks, side-ref concerns, and recovery failure modes, but future work
+should not expand that approach feature-by-feature.
+
+Superseded concepts:
+
+- collection-only WAL record families;
+- physical root-delta as the primary durable user mutation record;
+- per-feature collection WAL support expansion by JSON/BSON/index path;
+- recovery that must understand collection planner internals.
+
+Concepts to preserve:
+
+- fail-closed recovery;
+- side-ref validation before serving reads;
+- no visibility before recoverability in durable-at-ack modes;
+- checkpoint cleanup only after durable proof;
+- clear separation between local WAL and Raft consensus semantics.
+
+## 16. Open Questions
+
+1. Should `AppliedLSN` initially be an explicit meta-page field or a reserved
+   system-root key selected by the same meta page as command roots?
+2. Should Mongo `$set` replay as structured `$set` or as final replacement bytes?
+3. What is the minimum idempotency metadata needed for retryable native-wire or
+   future Raft commands?
+4. Which catalog/DDL commands must be V1 WAL-supported versus WAL-rejected?
+5. How should large command payloads reference value-log bytes without making
+   the value log an ephemeral WAL again?
+6. What exact public error should be returned for `WAL-rejected` commands?
+7. Which resolver helpers should be first-class convenience APIs versus caller
+   responsibility to resolve before invoking declarative update ops?

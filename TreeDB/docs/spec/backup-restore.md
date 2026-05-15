@@ -1,7 +1,7 @@
 # Backup and Restore Specification
 
 This document defines the operator-visible backup and restore contract for
-TreeDB directories once collection WAL durable-at-ack is enabled.
+TreeDB directories once command WAL durable-at-ack is enabled.
 
 ## 1. Restorable Directory File Set
 
@@ -9,18 +9,17 @@ A complete restorable root-layout backup includes:
 
 - `maindb/index.db`;
 - `maindb/format.json`, when present;
-- `maindb/wal/commit-l<lane>-<seq>.log` needed for cached replay;
-- `maindb/wal/collection-l<lane>-<seq>.log` ranges not covered by durable
-  collection WAL cleanup metadata;
-- collection WAL segment metadata and cleanup manifests;
+- `maindb/wal/commit-l<lane>-<seq>.log` needed for cached replay and future
+  typed command-WAL replay;
+- command-WAL cleanup metadata or manifest proof for omitted commit-log ranges,
+  once command WAL cleanup metadata lands;
 - `maindb/value_vlog/value-l<lane>-<seq>.log` referenced by roots, cached WAL,
-  collection WAL, snapshots/read views represented in the backup manifest, or
-  side-ref protection metadata;
+  command WAL, snapshots/read views represented in the backup manifest, or
+  external-ref protection metadata;
 - `maindb/leaf_vlog/value-l<lane>-<seq>.log` and leaf-generation
   manifests/indexes when outer leaves are enabled;
-- all collection WAL side-payload files, root-delta payloads, prepared/final
-  side refs, and future column files referenced by roots or non-cleaned
-  collection WAL;
+- all external-ref payload files and future column files referenced by roots or
+  non-cleaned command WAL frames;
 - `dictdb/**` and `templatedb/**`, including each side store's `index.db`,
   `format.json`, `wal/`, `value_vlog/`, `leaf_vlog/`, and cleanup metadata,
   when those stores are enabled;
@@ -31,12 +30,12 @@ A complete restorable root-layout backup includes:
 
 `LOCK` files and transient maintenance files such as `index.db.new`,
 `index.db.bak`, and `index.db.new.ready` are not required in a clean backup. If
-present, restore must run existing index-swap recovery before collection WAL
+present, restore must run existing index-swap recovery before command WAL
 recovery.
 
 Copying only `maindb/index.db` is not a backup. Copying only `maindb` is not a
-complete root-layout backup when `dictdb`, `templatedb`, collection WAL side
-payloads, or future column side files are enabled.
+complete root-layout backup when `dictdb`, `templatedb`, command-WAL external
+refs, or future column side files are enabled.
 
 ## 2. Live Backup Support
 
@@ -46,27 +45,27 @@ is supported only while a TreeDB backup barrier token is held, or after clean
 close.
 
 The backup barrier is backend-owned and coordinates the main DB, side stores,
-collection WAL, side-ref prepare guards, protected side refs, cleanup metadata,
-and backup-retention pins.
+command WAL, external-ref prepare guards, protected external refs, cleanup
+metadata, and backup-retention pins.
 
 ### 2.1 Clean-Checkpoint Backup
 
 Procedure:
 
 1. `BeginBackupBarrier(mode=CleanCheckpoint)`.
-2. Fence new collection writers.
-3. Wait for admitted collection writes and side-ref prepares.
+2. Fence new command-WAL writers.
+3. Wait for admitted command-WAL writes and external-ref prepares.
 4. Drain async collection publish and `FlushAll`.
-5. Publish root descriptors and applied watermarks.
+5. Publish root descriptors and `AppliedLSN`.
 6. Force backend checkpoint/meta durability boundary.
-7. Write and fsync collection WAL cleanup metadata for cleanable ranges.
-8. Return a manifest with `collection_wal_debt=0`.
+7. Write and fsync command-WAL cleanup metadata for cleanable ranges, if used.
+8. Return a manifest with `command_wal_debt=0`.
 9. Copy the manifest-listed root directory files or take a filesystem snapshot.
 10. `EndBackupBarrier`.
 
-If the checkpoint cannot publish or watermark pre-cut collection WAL,
+If the checkpoint cannot publish `AppliedLSN` covering pre-cut command WAL,
 `BeginBackupBarrier(mode=CleanCheckpoint)` must fail or return a manifest that
-is not marked clean. It must not allow operators to infer that collection WAL is
+is not marked clean. It must not allow operators to infer that command WAL is
 safe to omit.
 
 ### 2.2 WAL-Snapshot Backup
@@ -74,8 +73,8 @@ safe to omit.
 Procedure:
 
 1. `BeginBackupBarrier(mode=WALSnapshot)`.
-2. Fence collection WAL admission at a cut.
-3. Wait for side-ref prepares before the cut to commit/protect or
+2. Fence command-WAL admission at a cut.
+3. Wait for external-ref prepares before the cut to commit/protect or
    abort/classify.
 4. Rotate/seal WAL, value-log, leaf-log, and side-payload files needed by the
    cut, or record exact byte ranges plus checksums for active tails.
@@ -84,12 +83,12 @@ Procedure:
 6. Write and fsync the backup manifest.
 7. Release writers after the filesystem snapshot is taken, or keep manifest
    retention pins until `EndBackupBarrier` after file copy completes.
-8. Restore validates and replays committed unapplied collection WAL from the
+8. Restore validates and replays committed unapplied command WAL frames from the
    manifest.
 
 The WAL-snapshot manifest includes root layout, file classes, exact
-paths/ranges/sizes/checksums, applied watermarks, collection WAL cleaned ranges,
-collection WAL debt, side-store checkpoints, and backup token generation. The
+paths/ranges/sizes/checksums, `AppliedLSN`, cleaned commit-log ranges, command WAL debt, side-store
+checkpoints, and backup token generation. The
 manifest itself is a retention root until the barrier token is released.
 
 ## 3. Restore Validation
@@ -98,29 +97,28 @@ Restore/open validation before serving reads:
 
 1. recover index swap artifacts;
 2. load backup manifest if present;
-3. discover collection WAL segments and cleanup metadata;
-4. treat missing collection WAL segments as valid only when covered by durable
-   cleanup metadata or by the backup manifest's cleaned-range proof;
-5. rebuild protected side-ref index from all committed non-cleaned collection
-   WAL;
-6. for every committed transaction not covered by applied watermark plus
+3. discover commit-log command WAL segments and cleanup metadata;
+4. treat missing commit-log segments as valid only when covered by durable cleanup
+   metadata or by the backup manifest's cleaned-range proof;
+5. rebuild protected external-ref index from all committed non-cleaned command
+   WAL frames;
+6. for every complete typed command frame not covered by `AppliedLSN` plus
    cleanup:
-   - validate frame checksum and transaction checksum;
-   - validate `CollectionUID`, generation, schema epoch, catalog digest, and
-     root epochs;
-   - decode embedded root deltas/descriptors and derive the canonical side-ref
-     set;
-   - compare canonical side refs to declared `SideRefs`;
-   - verify every side ref exists, has expected size/checksum/class, and has
-     dictionary/template/column dependency closure;
+   - validate frame checksum and payload digest;
+   - validate command kind, scope, catalog/schema epochs, preconditions, and
+     result assertions;
+   - decode the canonical command payload;
+   - compare declared external refs to command-derived refs where applicable;
+   - verify every required external ref exists, has expected size/checksum/class,
+     and has dictionary/template/column dependency closure;
 7. stop open before serving reads on any missing or corrupt required side ref;
-8. publish descriptors and applied watermarks atomically for unapplied
-   transactions;
+8. replay unapplied commands and publish recovered roots plus `AppliedLSN`
+   atomically;
 9. classify uncommitted prepared/final side files;
 10. quarantine, but do not immediately purge, files proven orphaned.
 
-Backup/restore validation fails closed on missing collection WAL side refs. A
-restore may accept a missing collection WAL segment only when durable cleanup
+Backup/restore validation fails closed on missing required command-WAL external
+refs. A restore may accept a missing commit-log segment only when durable cleanup
 metadata or the backup manifest proves the exact segment/range was safely
 cleaned.
 
