@@ -27,17 +27,25 @@ type JSONBenchPartQueryAttempt struct {
 }
 
 type JSONBenchPartQueryDiagnostics struct {
-	RowsScanned        int      `json:"rows_scanned"`
-	GranulesConsidered int      `json:"granules_considered"`
-	GranulesSkipped    int      `json:"granules_skipped"`
-	GranulesDecoded    int      `json:"granules_decoded"`
-	BlocksDecoded      int      `json:"blocks_decoded"`
-	BytesDecoded       int      `json:"bytes_decoded"`
-	ColumnsProjected   []string `json:"columns_projected"`
-	AggregateKernel    string   `json:"aggregate_kernel"`
-	CacheState         string   `json:"cache_state"`
-	SortKey            []string `json:"sort_key"`
-	EarlyStopAvailable bool     `json:"early_stop_available"`
+	RowsScanned                    int           `json:"rows_scanned"`
+	GranulesConsidered             int           `json:"granules_considered"`
+	GranulesSkipped                int           `json:"granules_skipped"`
+	GranulesDecoded                int           `json:"granules_decoded"`
+	BlocksDecoded                  int           `json:"blocks_decoded"`
+	BytesDecoded                   int           `json:"bytes_decoded"`
+	ColumnsProjected               []string      `json:"columns_projected"`
+	AggregateKernel                string        `json:"aggregate_kernel"`
+	CacheState                     string        `json:"cache_state"`
+	SortKey                        []string      `json:"sort_key"`
+	EarlyStopAvailable             bool          `json:"early_stop_available"`
+	AggregateMetadataUsed          bool          `json:"aggregate_metadata_used"`
+	AggregateMetadataName          string        `json:"aggregate_metadata_name,omitempty"`
+	AggregateMetadataRows          int           `json:"aggregate_metadata_rows,omitempty"`
+	AggregateMetadataEntries       int           `json:"aggregate_metadata_entries,omitempty"`
+	AggregateMetadataBytes         int           `json:"aggregate_metadata_bytes,omitempty"`
+	AggregateMetadataBuildDuration time.Duration `json:"aggregate_metadata_build_duration,omitempty"`
+	AggregateMetadataBytesPerRow   float64       `json:"aggregate_metadata_bytes_per_row,omitempty"`
+	AggregateMetadataCompression   string        `json:"aggregate_metadata_compression,omitempty"`
 }
 
 type jsonBenchPartQueryScratch struct {
@@ -83,12 +91,22 @@ var (
 	jsonBenchPartQ5Columns = []string{"kind_code", "commit_operation_code", "commit_collection_code", "did_code", "time_us"}
 )
 
+const jsonBenchPostCreateDidTimeMetadata = "jsonbench_post_create_did_time"
+
 func BuildJSONBenchColumnPart(ds JSONBenchDataset, rowsPerGranule int) (*ColumnPart, error) {
 	return BuildJSONBenchColumnPartForLayout(ds, rowsPerGranule, JSONBenchColumnPartLayoutTimeUS)
 }
 
 func BuildJSONBenchColumnPartForLayout(ds JSONBenchDataset, rowsPerGranule int, layout JSONBenchColumnPartLayout) (*ColumnPart, error) {
 	opts, err := JSONBenchColumnPartOptionsForLayout(ds, rowsPerGranule, layout)
+	if err != nil {
+		return nil, err
+	}
+	return BuildColumnPart(1, opts, ColumnBatch{Rows: ds.Rows, Columns: ds.Columns})
+}
+
+func BuildJSONBenchColumnPartWithAggregateMetadataForLayout(ds JSONBenchDataset, rowsPerGranule int, layout JSONBenchColumnPartLayout) (*ColumnPart, error) {
+	opts, err := JSONBenchColumnPartOptionsWithAggregateMetadataForLayout(ds, rowsPerGranule, layout)
 	if err != nil {
 		return nil, err
 	}
@@ -151,6 +169,38 @@ func JSONBenchColumnPartOptionsForLayout(ds JSONBenchDataset, rowsPerGranule int
 			RowsPerGranule:        rowsPerGranule,
 			DefaultCodecBlockRows: rowsPerGranule,
 		},
+	}, nil
+}
+
+func JSONBenchColumnPartOptionsWithAggregateMetadataForLayout(ds JSONBenchDataset, rowsPerGranule int, layout JSONBenchColumnPartLayout) (ColumnStoreOptions, error) {
+	opts, err := JSONBenchColumnPartOptionsForLayout(ds, rowsPerGranule, layout)
+	if err != nil {
+		return ColumnStoreOptions{}, err
+	}
+	def, err := JSONBenchPostCreateDidTimeAggregateMetadataDefinition(ds)
+	if err != nil {
+		return ColumnStoreOptions{}, err
+	}
+	opts.AggregateMetadata = append(opts.AggregateMetadata, def)
+	return opts, nil
+}
+
+func JSONBenchPostCreateDidTimeAggregateMetadataDefinition(ds JSONBenchDataset) (AggregateMetadataDefinition, error) {
+	codes, err := jsonBenchQueryCodes(ds)
+	if err != nil {
+		return AggregateMetadataDefinition{}, err
+	}
+	return AggregateMetadataDefinition{
+		Name:        jsonBenchPostCreateDidTimeMetadata,
+		Kind:        AggregateMetadataGroupMinMax,
+		GroupColumn: "did_code",
+		ValueColumn: "time_us",
+		Filters: []AggregateMetadataFilter{
+			{Column: "kind_code", Equals: codes.kindCommit},
+			{Column: "commit_operation_code", Equals: codes.operationCreate},
+			{Column: "commit_collection_code", Equals: codes.collectionPost},
+		},
+		MaxBytesPerRow: 64,
 	}, nil
 }
 
@@ -286,6 +336,77 @@ func RunJSONBenchPartQ4FairnessQueries(ds JSONBenchDataset, rowsPerGranule int, 
 			rows, digest, diagnostics, err := q.run(q.part, codes, scratch)
 			if err != nil {
 				return nil, fmt.Errorf("%s encoded part query: %w", q.name, err)
+			}
+			elapsed := time.Since(start)
+			diagnostics.CacheState = cache
+			attempt := JSONBenchPartQueryAttempt{
+				Cache:        cache,
+				Duration:     elapsed,
+				ResultRows:   rows,
+				ResultDigest: digest,
+				Diagnostics:  diagnostics,
+			}
+			timing.Attempts = append(timing.Attempts, attempt)
+			timing.ResultRows = rows
+			timing.ResultDigest = digest
+			if timing.Best == 0 || elapsed < timing.Best {
+				timing.Best = elapsed
+				timing.BestCache = cache
+				timing.Diagnostics = diagnostics
+			}
+		}
+		out = append(out, timing)
+	}
+	return out, nil
+}
+
+func RunJSONBenchPartAggregateMetadataQueries(ds JSONBenchDataset, rowsPerGranule int, attempts int) ([]JSONBenchPartQueryTiming, error) {
+	if attempts <= 0 {
+		attempts = 3
+	}
+	codes, err := jsonBenchQueryCodes(ds)
+	if err != nil {
+		return nil, err
+	}
+	timePart, err := BuildJSONBenchColumnPartWithAggregateMetadataForLayout(ds, rowsPerGranule, JSONBenchColumnPartLayoutTimeUS)
+	if err != nil {
+		return nil, err
+	}
+	clickHouseOrderPart, err := BuildJSONBenchColumnPartWithAggregateMetadataForLayout(ds, rowsPerGranule, JSONBenchColumnPartLayoutClickHouseFilterUserTime)
+	if err != nil {
+		return nil, err
+	}
+	queries := []struct {
+		name        string
+		description string
+		engine      string
+		part        *ColumnPart
+		run         jsonBenchPartQueryRunner
+	}{
+		{"Q4b-meta", "Top 3 post veterans from exact post/create did/time metadata", "encoded_column_part_aggregate_metadata_q4b", clickHouseOrderPart, runJSONBenchPartQ4ClickHouseOrderAggregateMetadata},
+		{"Q5-meta", "Longest post activity spans from exact post/create did/time metadata", "encoded_column_part_aggregate_metadata_q5", timePart, runJSONBenchPartQ5AggregateMetadata},
+	}
+	out := make([]JSONBenchPartQueryTiming, 0, len(queries))
+	for _, q := range queries {
+		timing := JSONBenchPartQueryTiming{
+			Query:       q.name,
+			Description: q.description,
+			Engine:      q.engine,
+			Attempts:    make([]JSONBenchPartQueryAttempt, 0, attempts),
+		}
+		scratch := &jsonBenchPartQueryScratch{
+			scanner:   q.part.NewScanner(),
+			projected: make(map[string][]int64, 6),
+		}
+		for i := 0; i < attempts; i++ {
+			cache := "cold"
+			if i > 0 {
+				cache = "warm"
+			}
+			start := time.Now()
+			rows, digest, diagnostics, err := q.run(q.part, codes, scratch)
+			if err != nil {
+				return nil, fmt.Errorf("%s aggregate metadata query: %w", q.name, err)
 			}
 			elapsed := time.Since(start)
 			diagnostics.CacheState = cache
@@ -774,6 +895,44 @@ func runJSONBenchPartQ4ClickHouseOrder(part *ColumnPart, codes queryCodeSet, scr
 	return len(top), digestQ4Top(top), diagnostics, nil
 }
 
+func runJSONBenchPartQ4ClickHouseOrderAggregateMetadata(part *ColumnPart, codes queryCodeSet, scratch *jsonBenchPartQueryScratch) (int, uint64, JSONBenchPartQueryDiagnostics, error) {
+	metadata, err := requireJSONBenchPostCreateDidTimeMetadata(part, codes)
+	if err != nil {
+		return 0, 0, JSONBenchPartQueryDiagnostics{}, err
+	}
+	didCardinality, err := partCodeCardinality(part, "did_code")
+	if err != nil {
+		return 0, 0, JSONBenchPartQueryDiagnostics{}, err
+	}
+	seen, minTime, users, err := scratch.resetQ4FullDense(didCardinality)
+	if err != nil {
+		return 0, 0, JSONBenchPartQueryDiagnostics{}, err
+	}
+	for _, granule := range metadata.Granules {
+		for _, entry := range granule.Entries {
+			if entry.Group >= didCardinality {
+				return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: aggregate metadata did code %d outside cardinality %d", entry.Group, didCardinality)
+			}
+			if bitsetTestAndSet(seen, entry.Group) {
+				if entry.Min < minTime[entry.Group] {
+					minTime[entry.Group] = entry.Min
+				}
+				continue
+			}
+			minTime[entry.Group] = entry.Min
+			users = append(users, entry.Group)
+		}
+	}
+	scratch.q4Users = users
+	top := scratch.q4Pairs[:0]
+	for _, user := range users {
+		top = insertQ4Top(top, jsonBenchPartTimePair{user: int64(user), t: minTime[user]})
+	}
+	scratch.q4Pairs = top
+	diagnostics := queryDiagnosticsFromAggregateMetadata(part, metadata, jsonBenchPartQ4Columns, "aggregate_metadata_min_by_user")
+	return len(top), digestQ4Top(top), diagnostics, nil
+}
+
 func runJSONBenchPartQ5(part *ColumnPart, codes queryCodeSet, scratch *jsonBenchPartQueryScratch) (int, uint64, JSONBenchPartQueryDiagnostics, error) {
 	kindBlocks, err := lowCardinalityBlocks(part, "kind_code")
 	if err != nil {
@@ -879,6 +1038,48 @@ func runJSONBenchPartQ5(part *ColumnPart, codes queryCodeSet, scratch *jsonBench
 	}
 	scratch.q5Pairs = top
 	diagnostics := partColumnDiagnostics(part, jsonBenchPartQ5Columns, "fused_dense_span_by_user")
+	return len(top), digestQ5Top(top), diagnostics, nil
+}
+
+func runJSONBenchPartQ5AggregateMetadata(part *ColumnPart, codes queryCodeSet, scratch *jsonBenchPartQueryScratch) (int, uint64, JSONBenchPartQueryDiagnostics, error) {
+	metadata, err := requireJSONBenchPostCreateDidTimeMetadata(part, codes)
+	if err != nil {
+		return 0, 0, JSONBenchPartQueryDiagnostics{}, err
+	}
+	didCardinality, err := partCodeCardinality(part, "did_code")
+	if err != nil {
+		return 0, 0, JSONBenchPartQueryDiagnostics{}, err
+	}
+	seen, minTime, maxTime, users, err := scratch.resetQ5Dense(didCardinality)
+	if err != nil {
+		return 0, 0, JSONBenchPartQueryDiagnostics{}, err
+	}
+	for _, granule := range metadata.Granules {
+		for _, entry := range granule.Entries {
+			if entry.Group >= didCardinality {
+				return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: aggregate metadata did code %d outside cardinality %d", entry.Group, didCardinality)
+			}
+			if bitsetTestAndSet(seen, entry.Group) {
+				if entry.Min < minTime[entry.Group] {
+					minTime[entry.Group] = entry.Min
+				}
+				if entry.Max > maxTime[entry.Group] {
+					maxTime[entry.Group] = entry.Max
+				}
+				continue
+			}
+			minTime[entry.Group] = entry.Min
+			maxTime[entry.Group] = entry.Max
+			users = append(users, entry.Group)
+		}
+	}
+	scratch.q5Users = users
+	top := scratch.q5Pairs[:0]
+	for _, user := range users {
+		top = insertQ5Top(top, jsonBenchPartSpanPair{user: int64(user), span: maxTime[user] - minTime[user]})
+	}
+	scratch.q5Pairs = top
+	diagnostics := queryDiagnosticsFromAggregateMetadata(part, metadata, jsonBenchPartQ5Columns, "aggregate_metadata_span_by_user")
 	return len(top), digestQ5Top(top), diagnostics, nil
 }
 
@@ -1176,6 +1377,38 @@ func q5PairLess(left jsonBenchPartSpanPair, right jsonBenchPartSpanPair) bool {
 	return left.span > right.span
 }
 
+func requireJSONBenchPostCreateDidTimeMetadata(part *ColumnPart, codes queryCodeSet) (AggregateMetadata, error) {
+	metadata, ok := part.AggregateMetadataByName(jsonBenchPostCreateDidTimeMetadata)
+	if !ok {
+		return AggregateMetadata{}, fmt.Errorf("colgranule: missing aggregate metadata %s", jsonBenchPostCreateDidTimeMetadata)
+	}
+	if !metadata.Stats.Admitted {
+		return AggregateMetadata{}, fmt.Errorf("colgranule: aggregate metadata %s rejected by admission: %s", metadata.Definition.Name, metadata.Stats.RejectedReason)
+	}
+	if metadata.Definition.Kind != AggregateMetadataGroupMinMax || metadata.Definition.GroupColumn != "did_code" || metadata.Definition.ValueColumn != "time_us" {
+		return AggregateMetadata{}, fmt.Errorf("colgranule: aggregate metadata %s has incompatible definition %+v", metadata.Definition.Name, metadata.Definition)
+	}
+	if !aggregateMetadataFilterEquals(metadata.Definition.Filters, "kind_code", codes.kindCommit) {
+		return AggregateMetadata{}, fmt.Errorf("colgranule: aggregate metadata %s missing kind_code=%d filter", metadata.Definition.Name, codes.kindCommit)
+	}
+	if !aggregateMetadataFilterEquals(metadata.Definition.Filters, "commit_operation_code", codes.operationCreate) {
+		return AggregateMetadata{}, fmt.Errorf("colgranule: aggregate metadata %s missing commit_operation_code=%d filter", metadata.Definition.Name, codes.operationCreate)
+	}
+	if !aggregateMetadataFilterEquals(metadata.Definition.Filters, "commit_collection_code", codes.collectionPost) {
+		return AggregateMetadata{}, fmt.Errorf("colgranule: aggregate metadata %s missing commit_collection_code=%d filter", metadata.Definition.Name, codes.collectionPost)
+	}
+	return metadata, nil
+}
+
+func aggregateMetadataFilterEquals(filters []AggregateMetadataFilter, column string, value int64) bool {
+	for _, filter := range filters {
+		if filter.Column == column {
+			return filter.Equals == value
+		}
+	}
+	return false
+}
+
 func digestQ4Top(top []jsonBenchPartTimePair) uint64 {
 	var digest uint64
 	for _, p := range top {
@@ -1206,6 +1439,27 @@ func queryDiagnosticsFromDecodedPrefix(part *ColumnPart, columns []string, kerne
 		ColumnsProjected:   append([]string(nil), columns...),
 		AggregateKernel:    kernel,
 		SortKey:            sortKeyColumns(part),
+	}
+}
+
+func queryDiagnosticsFromAggregateMetadata(part *ColumnPart, metadata AggregateMetadata, columns []string, kernel string) JSONBenchPartQueryDiagnostics {
+	return JSONBenchPartQueryDiagnostics{
+		RowsScanned:                    0,
+		GranulesConsidered:             metadata.Stats.Granules,
+		GranulesDecoded:                0,
+		BlocksDecoded:                  0,
+		BytesDecoded:                   0,
+		ColumnsProjected:               append([]string(nil), columns...),
+		AggregateKernel:                kernel,
+		SortKey:                        sortKeyColumns(part),
+		AggregateMetadataUsed:          true,
+		AggregateMetadataName:          metadata.Definition.Name,
+		AggregateMetadataRows:          metadata.Stats.RowsMatched,
+		AggregateMetadataEntries:       metadata.Stats.Entries,
+		AggregateMetadataBytes:         metadata.Stats.TotalBytes,
+		AggregateMetadataBuildDuration: metadata.Stats.BuildDuration,
+		AggregateMetadataBytesPerRow:   metadata.Stats.BytesPerPartRow,
+		AggregateMetadataCompression:   metadata.Stats.Compression,
 	}
 }
 

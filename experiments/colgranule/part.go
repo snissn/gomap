@@ -60,6 +60,7 @@ type ColumnStoreOptions struct {
 	SortKey           SortKey
 	PartPolicy        ColumnPartPolicy
 	Compression       ColumnCompressionPolicy
+	AggregateMetadata []AggregateMetadataDefinition
 }
 
 type ColumnPartPolicy struct {
@@ -86,11 +87,12 @@ type ColumnBatch struct {
 }
 
 type ColumnPart struct {
-	Options    ColumnStoreOptions
-	Descriptor ColumnPartDescriptor
-	Columns    map[string]ColumnPartColumn
-	Marks      []SortKeyMark
-	Locators   map[int64]RowLocator
+	Options           ColumnStoreOptions
+	Descriptor        ColumnPartDescriptor
+	Columns           map[string]ColumnPartColumn
+	Marks             []SortKeyMark
+	Locators          map[int64]RowLocator
+	AggregateMetadata map[string]AggregateMetadata
 }
 
 type ColumnPartDescriptor struct {
@@ -214,6 +216,9 @@ func (b *ColumnPartBuilder) Build(partID uint64, batch ColumnBatch) (*ColumnPart
 		}
 		part.Columns[def.Name] = column
 		part.Descriptor.Columns = append(part.Descriptor.Columns, descriptor)
+	}
+	if err := b.buildAggregateMetadata(part, batch); err != nil {
+		return nil, err
 	}
 	return part, nil
 }
@@ -430,6 +435,7 @@ func normalizeColumnStoreOptions(opts ColumnStoreOptions) (ColumnStoreOptions, e
 		return ColumnStoreOptions{}, errors.New("colgranule: no declared columns")
 	}
 	seen := make(map[string]struct{}, len(opts.Columns))
+	columnsByName := make(map[string]ColumnDefinition, len(opts.Columns))
 	for i := range opts.Columns {
 		def, err := normalizeColumnDefinition(opts.Columns[i], opts.Compression.Default)
 		if err != nil {
@@ -439,6 +445,7 @@ func normalizeColumnStoreOptions(opts ColumnStoreOptions) (ColumnStoreOptions, e
 			return ColumnStoreOptions{}, fmt.Errorf("colgranule: duplicate column %s", def.Name)
 		}
 		seen[def.Name] = struct{}{}
+		columnsByName[def.Name] = def
 		opts.Columns[i] = def
 	}
 	if _, ok := seen[opts.LogicalPrimaryKey.Columns[0]]; !ok {
@@ -464,6 +471,18 @@ func normalizeColumnStoreOptions(opts ColumnStoreOptions) (ColumnStoreOptions, e
 		if c.Nulls != SortKeyNullsDefault && c.Nulls != SortKeyNullsFirst && c.Nulls != SortKeyNullsLast {
 			return ColumnStoreOptions{}, fmt.Errorf("colgranule: unsupported null order %s", c.Nulls)
 		}
+	}
+	seenMetadata := make(map[string]struct{}, len(opts.AggregateMetadata))
+	for i := range opts.AggregateMetadata {
+		def, err := normalizeAggregateMetadataDefinition(opts.AggregateMetadata[i], columnsByName)
+		if err != nil {
+			return ColumnStoreOptions{}, err
+		}
+		if _, ok := seenMetadata[def.Name]; ok {
+			return ColumnStoreOptions{}, fmt.Errorf("colgranule: duplicate aggregate metadata %s", def.Name)
+		}
+		seenMetadata[def.Name] = struct{}{}
+		opts.AggregateMetadata[i] = def
 	}
 	return opts, nil
 }
