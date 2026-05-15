@@ -426,7 +426,7 @@ func TestCommandWALOpenFailsClosedOnNonActiveTerminalTailEvenWhenCovered(t *test
 	}
 }
 
-func TestCommandWALOpenAllowsActiveTypedTailWithHigherLegacyRawSegment(t *testing.T) {
+func TestCommandWALOpenFailsClosedOnTypedTailWithHigherLegacyRawSegment(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(Options{Dir: dir})
 	if err != nil {
@@ -443,19 +443,13 @@ func TestCommandWALOpenAllowsActiveTypedTailWithHigherLegacyRawSegment(t *testin
 	appendCommandWALTail(t, dir, 1, []byte{0xde, 0xad, 0xbe})
 	writeLegacyRawWALFrame(t, dir, 999, 999)
 
-	ro, err := Open(Options{Dir: dir, ReadOnly: true})
-	if err != nil {
-		t.Fatalf("Open read-only with active typed tail and higher legacy raw segment: %v", err)
+	_, err = Open(Options{Dir: dir, ReadOnly: true})
+	if !errors.Is(err, commitlog.ErrCommandWALTerminalTail) {
+		t.Fatalf("Open read-only error=%v, want ErrCommandWALTerminalTail", err)
 	}
-	if err := ro.Close(); err != nil {
-		t.Fatalf("Close read-only: %v", err)
-	}
-	reopen, err := Open(Options{Dir: dir})
-	if err != nil {
-		t.Fatalf("Open read-write with active typed tail and higher legacy raw segment: %v", err)
-	}
-	if err := reopen.Close(); err != nil {
-		t.Fatalf("Close reopen: %v", err)
+	_, err = Open(Options{Dir: dir})
+	if !errors.Is(err, commitlog.ErrCommandWALTerminalTail) {
+		t.Fatalf("Open read-write error=%v, want ErrCommandWALTerminalTail", err)
 	}
 }
 
@@ -603,11 +597,11 @@ func TestCommandWALCheckpointCleanupRetainsActiveCoveredSegment(t *testing.T) {
 	if got := decisionByName["commit-l0-000001.log"]; !got.Covered || got.Active || !got.Removed {
 		t.Fatalf("old covered segment decision=%+v, want covered non-active removed", got)
 	}
-	if got := decisionByName["commit-l0-000002.log"]; !got.Covered || !got.Active || got.Removed {
-		t.Fatalf("active covered segment decision=%+v, want covered active retained", got)
+	if got := decisionByName["commit-l0-000002.log"]; !got.Covered || got.Active || !got.Removed {
+		t.Fatalf("covered segment before legacy barrier decision=%+v, want covered non-active removed", got)
 	}
-	if _, err := os.Stat(filepath.Join(WALDirPath(dir), "commit-l0-000002.log")); err != nil {
-		t.Fatalf("active covered segment stat=%v, want retained", err)
+	if _, err := os.Stat(filepath.Join(WALDirPath(dir), "commit-l0-000002.log")); !os.IsNotExist(err) {
+		t.Fatalf("covered segment stat=%v, want removed", err)
 	}
 	if _, err := os.Stat(filepath.Join(WALDirPath(dir), "commit-l0-000999.log")); err != nil {
 		t.Fatalf("legacy raw WAL segment stat=%v, want retained", err)
