@@ -46,7 +46,7 @@ func NewStandaloneLeafPageLog(dir string, opts StandaloneLeafPageLogOptions) (Le
 		maxSegmentBytes = standaloneLeafPageLogMaxSegmentBytes
 	}
 	if maxSegmentBytes < 0 {
-		return nil, fmt.Errorf("treedb: standalone leaf-page log max segment bytes must be non-negative")
+		return nil, fmt.Errorf("treedb: standalone leaf-page log max segment bytes must be non-negative: %d", maxSegmentBytes)
 	}
 	if maxSegmentBytes > standaloneLeafPageLogMaxSegmentBytes {
 		return nil, fmt.Errorf("treedb: standalone leaf-page log max segment bytes %d exceeds offset cap %d", maxSegmentBytes, standaloneLeafPageLogMaxSegmentBytes)

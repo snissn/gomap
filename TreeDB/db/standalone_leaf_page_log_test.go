@@ -2,6 +2,7 @@ package db
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
@@ -110,6 +111,8 @@ func TestStandaloneLeafPageLogRejectsInvalidMaxSegmentBytes(t *testing.T) {
 		if log, err := NewStandaloneLeafPageLog(t.TempDir(), StandaloneLeafPageLogOptions{MaxSegmentBytes: maxBytes}); err == nil {
 			_ = log.Close()
 			t.Fatalf("NewStandaloneLeafPageLog MaxSegmentBytes=%d unexpectedly succeeded", maxBytes)
+		} else if !strings.Contains(err.Error(), fmt.Sprintf("%d", maxBytes)) {
+			t.Fatalf("NewStandaloneLeafPageLog MaxSegmentBytes=%d error=%q, want invalid value in message", maxBytes, err)
 		}
 	}
 }

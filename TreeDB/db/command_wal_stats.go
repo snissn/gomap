@@ -28,11 +28,9 @@ func writeCommandWALStats(stats map[string]string, db *DB) {
 		stats["treedb.command_wal.stats_scan"] = "false"
 		return
 	}
-	stats["treedb.command_wal.required_feature"] = "false"
-	if required, err := CommandWALRequiredFeatureEnabled(db.dir); err == nil {
-		stats["treedb.command_wal.required_feature"] = fmt.Sprintf("%t", required)
-	} else {
-		stats["treedb.command_wal.required_feature_error"] = err.Error()
+	stats["treedb.command_wal.required_feature"] = fmt.Sprintf("%t", db.commandWALRequiredFeature)
+	if db.commandWALRequiredErr != "" {
+		stats["treedb.command_wal.required_feature_error"] = db.commandWALRequiredErr
 	}
 	if !db.commandWALStatsScan {
 		stats["treedb.command_wal.stats_scan"] = "false"
@@ -49,6 +47,16 @@ func writeCommandWALStats(stats map[string]string, db *DB) {
 	} else {
 		stats["treedb.command_wal.stats_error"] = err.Error()
 	}
+}
+
+func (db *DB) cacheCommandWALRequiredFeatureStats() {
+	required, err := CommandWALRequiredFeatureEnabled(db.dir)
+	db.commandWALRequiredFeature = required
+	if err != nil {
+		db.commandWALRequiredErr = err.Error()
+		return
+	}
+	db.commandWALRequiredErr = ""
 }
 
 func writeCommandWALStatsZeroCounters(stats map[string]string) {

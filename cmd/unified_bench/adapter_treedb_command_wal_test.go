@@ -111,7 +111,6 @@ func TestTreeDBBackendCommandWALForcesWALOnWhenProfileDisablesWAL(t *testing.T) 
 	saved := saveTreeDBFlagState()
 	defer restoreTreeDBFlagState(saved)
 	resetTreeDBIndexFlagsForTest()
-	*treedbAllowUnsafe = true
 	*treedbDisableWAL = true
 
 	db, err := NewTreeDBBackendCommandWAL(t.TempDir())

@@ -260,6 +260,8 @@ type DB struct {
 	// unrecoverable LSN gap.
 	commandWALFlushPoisoned   atomic.Bool
 	commandWALStatsMu         sync.Mutex
+	commandWALRequiredFeature bool
+	commandWALRequiredErr     string
 	commandWALStatsAppliedLSN uint64
 	commandWALStatsSummary    commandWALStatsSummary
 	commandWALStatsOK         bool
@@ -1538,6 +1540,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 			return nil, err
 		}
 		db.commandJournal = journal
+		db.cacheCommandWALRequiredFeatureStats()
 	}
 
 	// Recovery and WAL/value-log replay may touch the manager's file set. Reapply

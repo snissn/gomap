@@ -54,7 +54,8 @@ func TestCommandWALStatsProveModeAndFrames(t *testing.T) {
 }
 
 func TestCommandWALStatsDefaultDoesNotScanWAL(t *testing.T) {
-	db, err := Open(Options{Dir: t.TempDir(), CommandWAL: true, DisableBackgroundPrune: true})
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir, CommandWAL: true, DisableBackgroundPrune: true})
 	if err != nil {
 		t.Fatalf("Open command WAL: %v", err)
 	}
@@ -71,10 +72,18 @@ func TestCommandWALStatsDefaultDoesNotScanWAL(t *testing.T) {
 	if err := b.WriteSync(); err != nil {
 		t.Fatalf("WriteSync: %v", err)
 	}
-	_ = b.Close()
+	if err := b.Close(); err != nil {
+		t.Fatalf("Close batch: %v", err)
+	}
+	if err := os.Rename(formatConfigPath(dir), formatConfigPath(dir)+".hidden"); err != nil {
+		t.Fatalf("hide format config after open: %v", err)
+	}
 	stats := db.Stats()
 	if got := stats["treedb.command_wal.required_feature"]; got != "true" {
 		t.Fatalf("required feature stat=%q, want true (stats=%#v)", got, stats)
+	}
+	if got := stats["treedb.command_wal.required_feature_error"]; got != "" {
+		t.Fatalf("required feature error=%q, want cached open-time value without stat-time I/O (stats=%#v)", got, stats)
 	}
 	if got := stats["treedb.command_wal.stats_scan"]; got != "false" {
 		t.Fatalf("stats_scan=%q, want false (stats=%#v)", got, stats)

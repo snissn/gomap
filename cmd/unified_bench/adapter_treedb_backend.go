@@ -36,7 +36,7 @@ func cloneStringMap(in map[string]string) map[string]string {
 }
 
 func newTreeDBBackend(dir string, commandWAL bool, name string) (kvstore.DB, error) {
-	opts, _, err := buildTreeDBOptions(dir)
+	opts, _, err := buildTreeDBOptionsWithConfig(dir, treeDBOptionsBuildConfig{forceWALOn: commandWAL})
 	if err != nil {
 		return nil, err
 	}
