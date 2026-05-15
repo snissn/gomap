@@ -273,6 +273,9 @@ PR 2: shared journal ownership and `AppliedCommandLSN` plumbing:
 - `TestCommandJournalUnsupportedVersionDoesNotConsumeLSN`;
 - `TestCommandJournalAppendFailureRollsBackLSN`;
 - `TestCommandJournalOversizedFrameDoesNotConsumeLSN`;
+- `TestCommandJournalDeterministicStressReopenAcrossLanesAndTails`;
+- `FuzzCommandWALDecodeFrame`;
+- `FuzzCommandWALRawKVBatchPayload`;
 - `TestMetaPageBodyAppliedCommandLSNRoundTrip`;
 - `TestMetaPageBodyFullLegacyDecodeIgnoresReservedAppliedCommandLSNBytes`;
 - `TestMetaPageBodyLegacyDecodeDefaultsAppliedCommandLSN`;
@@ -282,9 +285,12 @@ PR 2: shared journal ownership and `AppliedCommandLSN` plumbing:
 - `TestCommandWALRootsAndAppliedCommandLSNPublishAtomically`;
 - `TestCommandWALPublishHelperRejectsRootsWithoutAppliedLSN`;
 - `TestCommandWALAppliedLSNContiguousPrefixOnly`;
+- `TestCommandWALAppliedLSNContiguousPrefixMatchesModelStress`;
 - `TestCommandWALCheckpointCleanupDeletesOnlyCoveredSegments`;
+- `TestCommandWALCheckpointCleanupRetainsActiveCoveredSegment`;
 - `TestCommandWALSegmentMaxLSNStreamsFrames`;
 - `TestCommandWALSegmentMaxLSNFailsClosedOnNonIncreasingLSN`;
+- `TestCommandWALOpenFailsClosedOnCorruptTypedSegmentEvenWhenCovered`;
 - `TestCommandWALReadOnlyOpenWithUnappliedFrameFailsRecoveryRequired`;
 - `TestCommandWALReadOnlyOpenAllowsFramesCoveredByAppliedLSN`;
 - `TestCommandWALWriteOpenSkipsCoveredFramesBeforeLegacyReplay`;

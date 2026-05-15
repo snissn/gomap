@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"testing"
 )
 
@@ -516,5 +517,100 @@ func TestCommandJournalOversizedFrameDoesNotConsumeLSN(t *testing.T) {
 	}
 	if got != 1 {
 		t.Fatalf("LSN after oversized frame=%d, want 1", got)
+	}
+}
+
+func TestCommandJournalDeterministicStressReopenAcrossLanesAndTails(t *testing.T) {
+	dir := t.TempDir()
+	var wantNext uint64 = 1
+
+	for step := 0; step < 9; step++ {
+		lane := step % 3
+		seg := uint64(step/3 + 1)
+		appendCount := 1 + (step*7)%5
+		j, err := OpenCommandJournal(dir, CommandJournalOptions{Lane: lane, SegmentSeq: seg})
+		if err != nil {
+			t.Fatalf("step %d OpenCommandJournal lane=%d seg=%d: %v", step, lane, seg, err)
+		}
+		for i := 0; i < appendCount; i++ {
+			got, err := j.AppendCommand(CommandEnvelope{
+				Kind:          CommandKindRawKVBatch,
+				Scope:         CommandScopeRawKV,
+				PayloadFormat: PayloadFormatRawKVBatchV1,
+			})
+			if err != nil {
+				_ = j.Close()
+				t.Fatalf("step %d AppendCommand %d: %v", step, i, err)
+			}
+			if got != wantNext {
+				_ = j.Close()
+				t.Fatalf("step %d AppendCommand %d LSN=%d, want %d", step, i, got, wantNext)
+			}
+			wantNext++
+		}
+		if err := j.Close(); err != nil {
+			t.Fatalf("step %d Close: %v", step, err)
+		}
+
+		if step%2 == 0 {
+			path := filepath.Join(dir, CommandSegmentName(lane, seg))
+			f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
+			if err != nil {
+				t.Fatalf("step %d OpenFile tail: %v", step, err)
+			}
+			if _, err := f.Write([]byte{0xde, 0xad, 0xbe}); err != nil {
+				_ = f.Close()
+				t.Fatalf("step %d Write tail: %v", step, err)
+			}
+			if err := f.Close(); err != nil {
+				t.Fatalf("step %d Close tail: %v", step, err)
+			}
+
+			reopen, err := OpenCommandJournal(dir, CommandJournalOptions{Lane: lane, SegmentSeq: seg})
+			if err != nil {
+				t.Fatalf("step %d reopen after active tail: %v", step, err)
+			}
+			got, err := reopen.AppendCommand(CommandEnvelope{
+				Kind:          CommandKindRawKVBatch,
+				Scope:         CommandScopeRawKV,
+				PayloadFormat: PayloadFormatRawKVBatchV1,
+			})
+			if err != nil {
+				_ = reopen.Close()
+				t.Fatalf("step %d AppendCommand after active tail: %v", step, err)
+			}
+			if got != wantNext {
+				_ = reopen.Close()
+				t.Fatalf("step %d LSN after active tail=%d, want %d", step, got, wantNext)
+			}
+			wantNext++
+			if err := reopen.Close(); err != nil {
+				t.Fatalf("step %d Close reopen: %v", step, err)
+			}
+		}
+	}
+
+	segments, err := commandJournalSegments(dir, "")
+	if err != nil {
+		t.Fatalf("commandJournalSegments: %v", err)
+	}
+	var gotLSNs []uint64
+	for _, seg := range segments {
+		frames, err := ScanCommandFrames(seg.path, Options{})
+		if err != nil {
+			t.Fatalf("ScanCommandFrames %s: %v", filepath.Base(seg.path), err)
+		}
+		for _, frame := range frames {
+			gotLSNs = append(gotLSNs, frame.LSN)
+		}
+	}
+	sort.Slice(gotLSNs, func(i, j int) bool { return gotLSNs[i] < gotLSNs[j] })
+	if len(gotLSNs) != int(wantNext-1) {
+		t.Fatalf("frame count=%d, want %d; LSNs=%v", len(gotLSNs), wantNext-1, gotLSNs)
+	}
+	for i, got := range gotLSNs {
+		if want := uint64(i + 1); got != want {
+			t.Fatalf("global LSN[%d]=%d, want %d; LSNs=%v", i, got, want, gotLSNs)
+		}
 	}
 }

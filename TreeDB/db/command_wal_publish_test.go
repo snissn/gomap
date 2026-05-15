@@ -4,8 +4,10 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"math/rand"
 	"os"
 	"path/filepath"
+	"sort"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
@@ -182,6 +184,50 @@ func TestCommandWALAppliedLSNContiguousPrefixOnly(t *testing.T) {
 	}
 }
 
+func TestCommandWALAppliedLSNContiguousPrefixMatchesModelStress(t *testing.T) {
+	rng := rand.New(rand.NewSource(0x5eed))
+	for iter := 0; iter < 1000; iter++ {
+		current := uint64(rng.Intn(12))
+		next := uint64(rng.Intn(16))
+		if iter%11 == 0 {
+			next = current
+		}
+		if iter%37 == 0 {
+			current = ^uint64(0)
+			next = ^uint64(0)
+		}
+		ranges := make([]CommandWALLSNRange, rng.Intn(8))
+		for i := range ranges {
+			first := uint64(rng.Intn(18))
+			last := first + uint64(rng.Intn(5))
+			if rng.Intn(13) == 0 {
+				first = 0
+			}
+			if rng.Intn(17) == 0 {
+				last = first - 1
+			}
+			ranges[i] = CommandWALLSNRange{First: first, Last: last}
+		}
+		if rng.Intn(2) == 0 {
+			sort.Slice(ranges, func(i, j int) bool {
+				if ranges[i].First != ranges[j].First {
+					return ranges[i].First < ranges[j].First
+				}
+				return ranges[i].Last < ranges[j].Last
+			})
+		}
+
+		err := validateContiguousAppliedCommandLSN(current, next, ranges)
+		wantErr := modelValidateContiguousAppliedCommandLSN(current, next, ranges)
+		if (err == nil) != (wantErr == nil) {
+			t.Fatalf("iter %d current=%d next=%d ranges=%+v err=%v wantErr=%v", iter, current, next, ranges, err, wantErr)
+		}
+		if wantErr != nil && !errors.Is(err, wantErr) {
+			t.Fatalf("iter %d current=%d next=%d ranges=%+v err=%v wantErr=%v", iter, current, next, ranges, err, wantErr)
+		}
+	}
+}
+
 func TestCommandWALReadOnlyOpenWithUnappliedFrameFailsRecoveryRequired(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(Options{Dir: dir})
@@ -315,6 +361,31 @@ func TestCommandWALWALOffOpenRejectsUnappliedFramesUntilDispatcher(t *testing.T)
 	}
 }
 
+func TestCommandWALOpenFailsClosedOnCorruptTypedSegmentEvenWhenCovered(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	state := db.State()
+	if err := db.publishCommandWALRoots(state.RootPageID, state.SystemRootPageID, 2, []CommandWALLSNRange{{First: 1, Last: 2}}, true); err != nil {
+		t.Fatalf("publishCommandWALRoots: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	writeCommandWALSegmentFrames(t, dir, 1, 1, 1)
+
+	_, err = Open(Options{Dir: dir, ReadOnly: true})
+	if !errors.Is(err, commitlog.ErrCommandWALDuplicateLSN) {
+		t.Fatalf("Open read-only error=%v, want ErrCommandWALDuplicateLSN", err)
+	}
+	_, err = Open(Options{Dir: dir})
+	if !errors.Is(err, commitlog.ErrCommandWALDuplicateLSN) {
+		t.Fatalf("Open read-write error=%v, want ErrCommandWALDuplicateLSN", err)
+	}
+}
+
 func TestCommandWALCheckpointCleanupDeletesOnlyCoveredSegments(t *testing.T) {
 	dir := t.TempDir()
 	writeCommandWALFrame(t, dir, 1, 1)
@@ -351,6 +422,30 @@ func TestCommandWALCheckpointCleanupDeletesOnlyCoveredSegments(t *testing.T) {
 	}
 }
 
+func TestCommandWALCheckpointCleanupRetainsActiveCoveredSegment(t *testing.T) {
+	dir := t.TempDir()
+	writeCommandWALFrame(t, dir, 1, 1)
+	writeCommandWALFrame(t, dir, 2, 2)
+
+	decisions, err := cleanupCommandWALSegmentsCoveredByAppliedLSN(dir, 2, 0)
+	if err != nil {
+		t.Fatalf("cleanupCommandWALSegmentsCoveredByAppliedLSN: %v", err)
+	}
+	decisionByName := map[string]commandWALSegmentCleanupDecision{}
+	for _, decision := range decisions {
+		decisionByName[filepath.Base(decision.Path)] = decision
+	}
+	if got := decisionByName["commit-l0-000001.log"]; !got.Covered || got.Active || !got.Removed {
+		t.Fatalf("old covered segment decision=%+v, want covered non-active removed", got)
+	}
+	if got := decisionByName["commit-l0-000002.log"]; !got.Covered || !got.Active || got.Removed {
+		t.Fatalf("active covered segment decision=%+v, want covered active retained", got)
+	}
+	if _, err := os.Stat(filepath.Join(WALDirPath(dir), "commit-l0-000002.log")); err != nil {
+		t.Fatalf("active covered segment stat=%v, want retained", err)
+	}
+}
+
 func TestCommandWALSegmentMaxLSNStreamsFrames(t *testing.T) {
 	dir := t.TempDir()
 	writeCommandWALSegmentFrames(t, dir, 1, 1, 2, 3)
@@ -363,6 +458,45 @@ func TestCommandWALSegmentMaxLSNStreamsFrames(t *testing.T) {
 	if !typed || maxLSN != 3 {
 		t.Fatalf("typed=%t maxLSN=%d, want typed maxLSN=3", typed, maxLSN)
 	}
+}
+
+func modelValidateContiguousAppliedCommandLSN(current, next uint64, covered []CommandWALLSNRange) error {
+	if next < current {
+		return ErrCommandWALAppliedLSNRegression
+	}
+	if next == current {
+		return nil
+	}
+	if current == ^uint64(0) || len(covered) == 0 {
+		return ErrCommandWALAppliedLSNNonContig
+	}
+	ranges := append([]CommandWALLSNRange(nil), covered...)
+	sort.Slice(ranges, func(i, j int) bool {
+		if ranges[i].First != ranges[j].First {
+			return ranges[i].First < ranges[j].First
+		}
+		return ranges[i].Last < ranges[j].Last
+	})
+	cursor := current + 1
+	for _, r := range ranges {
+		if r.First == 0 || r.Last < r.First {
+			return ErrCommandWALAppliedLSNNonContig
+		}
+		if r.Last < cursor {
+			continue
+		}
+		if r.First > cursor {
+			return ErrCommandWALAppliedLSNNonContig
+		}
+		if r.Last >= next {
+			return nil
+		}
+		if r.Last == ^uint64(0) {
+			return ErrCommandWALAppliedLSNNonContig
+		}
+		cursor = r.Last + 1
+	}
+	return ErrCommandWALAppliedLSNNonContig
 }
 
 func TestCommandWALSegmentMaxLSNFailsClosedOnNonIncreasingLSN(t *testing.T) {
