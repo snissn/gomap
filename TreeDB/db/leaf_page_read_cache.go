@@ -99,6 +99,13 @@ type leafPageReadCacheSlot struct {
 	readMissEpoch       atomic.Uint64
 }
 
+func (s *leafPageReadCacheSlot) ReleaseLeafLogPageView() {
+	if s == nil {
+		return
+	}
+	s.mu.RUnlock()
+}
+
 type leafPageReadCache struct {
 	slots []leafPageReadCacheSlot
 
@@ -369,6 +376,22 @@ func (c *leafPageReadCache) getTo(ptr page.LeafLogPtr, dst []byte) ([]byte, bool
 	slot.mu.RUnlock()
 	c.hits.Add(1)
 	return data, false, true
+}
+
+func (c *leafPageReadCache) getViewLocked(ptr page.LeafLogPtr) ([]byte, *leafPageReadCacheSlot, bool) {
+	if c == nil || len(c.slots) == 0 {
+		return nil, nil, false
+	}
+	key := newLeafPageReadCacheKey(ptr)
+	slot := &c.slots[c.slotIndex(key)]
+	slot.mu.RLock()
+	if !slot.valid || slot.key != key {
+		slot.mu.RUnlock()
+		return nil, nil, false
+	}
+	data := slot.data
+	c.hits.Add(1)
+	return data, slot, true
 }
 
 func (c *leafPageReadCache) stats() leafPageReadCacheStats {
