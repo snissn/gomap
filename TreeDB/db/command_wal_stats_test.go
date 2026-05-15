@@ -4,8 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-
-	"github.com/snissn/gomap/TreeDB/page"
 )
 
 func TestCommandWALStatsProveModeAndFrames(t *testing.T) {
@@ -109,20 +107,5 @@ func TestCommandWALStatsDisabledDoesNotScanWAL(t *testing.T) {
 	}
 	if got := stats["treedb.command_wal.stats_scan"]; got != "false" {
 		t.Fatalf("stats_scan=%q, want false for disabled command WAL", got)
-	}
-}
-
-func TestCommandWALRIDCacheBounded(t *testing.T) {
-	db := &DB{}
-	for i := 0; i < commandWALRIDCacheMaxEntries+17; i++ {
-		ptr := page.ValuePtr{FileID: 1, Offset: uint64(i), Length: 1}
-		db.storeCachedCommandWALValueLogRID(ptr, uint64(i+1))
-	}
-	if db.commandWALRIDCacheN > commandWALRIDCacheMaxEntries {
-		t.Fatalf("command WAL RID cache size=%d, want <= %d", db.commandWALRIDCacheN, commandWALRIDCacheMaxEntries)
-	}
-	latest := page.ValuePtr{FileID: 1, Offset: uint64(commandWALRIDCacheMaxEntries + 16), Length: 1}
-	if rid, ok := db.lookupCachedCommandWALValueLogRID(latest); !ok || rid != uint64(commandWALRIDCacheMaxEntries+17) {
-		t.Fatalf("latest cached RID=(%d,%t), want (%d,true)", rid, ok, commandWALRIDCacheMaxEntries+17)
 	}
 }

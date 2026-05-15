@@ -12,8 +12,6 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
-const commandWALRIDCacheMaxEntries = 4096
-
 type commandWALBatchIntent struct {
 	payload            []byte
 	externalRefs       bool
@@ -109,9 +107,6 @@ func (db *DB) lookupCommandWALValueLogRID(ptr page.ValuePtr, ridCache map[uint32
 	if ptr.FileID == 0 || ptr.Length == 0 {
 		return 0, fmt.Errorf("treedb: command wal raw kv invalid value-log pointer")
 	}
-	if rid, ok := db.lookupCachedCommandWALValueLogRID(ptr); ok {
-		return rid, nil
-	}
 	if ridCache == nil {
 		return 0, fmt.Errorf("treedb: command wal raw kv rid cache unavailable")
 	}
@@ -135,48 +130,7 @@ func (db *DB) lookupCommandWALValueLogRID(ptr page.ValuePtr, ridCache map[uint32
 		return 0, err
 	}
 	byPtr[ptr] = rid
-	db.storeCachedCommandWALValueLogRID(ptr, rid)
 	return rid, nil
-}
-
-func (db *DB) lookupCachedCommandWALValueLogRID(ptr page.ValuePtr) (uint64, bool) {
-	if db == nil {
-		return 0, false
-	}
-	db.commandWALRIDCacheMu.Lock()
-	defer db.commandWALRIDCacheMu.Unlock()
-	byPtr := db.commandWALRIDCache[ptr.FileID]
-	if byPtr == nil {
-		return 0, false
-	}
-	rid, ok := byPtr[ptr]
-	return rid, ok
-}
-
-func (db *DB) storeCachedCommandWALValueLogRID(ptr page.ValuePtr, rid uint64) {
-	if db == nil || rid == 0 {
-		return
-	}
-	db.commandWALRIDCacheMu.Lock()
-	defer db.commandWALRIDCacheMu.Unlock()
-	if db.commandWALRIDCache == nil {
-		db.commandWALRIDCache = make(map[uint32]map[page.ValuePtr]uint64)
-	}
-	byPtr := db.commandWALRIDCache[ptr.FileID]
-	if byPtr == nil {
-		byPtr = make(map[page.ValuePtr]uint64)
-		db.commandWALRIDCache[ptr.FileID] = byPtr
-	}
-	if _, exists := byPtr[ptr]; !exists {
-		if db.commandWALRIDCacheN >= commandWALRIDCacheMaxEntries {
-			clear(db.commandWALRIDCache)
-			db.commandWALRIDCacheN = 0
-			byPtr = make(map[page.ValuePtr]uint64)
-			db.commandWALRIDCache[ptr.FileID] = byPtr
-		}
-		db.commandWALRIDCacheN++
-	}
-	byPtr[ptr] = rid
 }
 
 func readCommandWALValueLogRIDAt(path string, ptr page.ValuePtr) (uint64, error) {
