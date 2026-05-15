@@ -466,8 +466,10 @@ func ScanRawKVBatchPayload(payload []byte, visit func(op RawKVOp, key, value []b
 			return err
 		}
 		value := payload[off : off+int(valueLen)]
-		if op == RawKVOpSetRID && binary.LittleEndian.Uint64(value) == 0 {
-			return ErrCorrupt
+		if op == RawKVOpSetRID {
+			if len(value) != 8 || binary.LittleEndian.Uint64(value) == 0 {
+				return ErrCorrupt
+			}
 		}
 		if visit != nil {
 			if err := visit(op, key, value); err != nil {

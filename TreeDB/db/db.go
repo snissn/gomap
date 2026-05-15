@@ -1475,8 +1475,10 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 			db.Close()
 			return nil, err
 		}
-		if seq := activeSeqByLane[0]; seq != 0 {
-			commandSegmentSeq = seq
+		for _, seq := range activeSeqByLane {
+			if seq > commandSegmentSeq {
+				commandSegmentSeq = seq
+			}
 		}
 		if needsCommandWALFormat {
 			cfg, err := formatConfigFromOptionsPreservingRequiredFeatures(opts)

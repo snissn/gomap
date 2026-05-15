@@ -137,7 +137,7 @@ func FuzzCommandWALRawKVBatchPayload(f *testing.F) {
 			t.Fatalf("scanned len=%d decoded len=%d", len(scanned), len(decoded))
 		}
 		for i := range scanned {
-			if scanned[i].Op != decoded[i].Op || !bytes.Equal(scanned[i].Key, decoded[i].Key) || !bytes.Equal(scanned[i].Value, decoded[i].Value) {
+			if scanned[i].Op != decoded[i].Op || scanned[i].RID != decoded[i].RID || !bytes.Equal(scanned[i].Key, decoded[i].Key) || !bytes.Equal(scanned[i].Value, decoded[i].Value) {
 				t.Fatalf("op[%d] scan=%+v decode=%+v", i, scanned[i], decoded[i])
 			}
 		}

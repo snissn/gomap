@@ -337,6 +337,8 @@ PR3 implementation evidence:
 - Raw KV `SetRID` command entries preserve the existing value-log RID fence by
   requiring the referenced RID to be present in scanned value-log segments
   before recovery can publish the command.
+- Pointer-backed raw KV command writes resolve the source RID directly from
+  value-log pointer metadata instead of scanning whole value-log segments.
 - Inline-only raw KV replay does not depend on value-log RID scanning. Recovery
   builds the RID map and replay value-log appender only when a pending frame
   contains `SetRID`, the current value-placement policy requires

@@ -587,6 +587,69 @@ func (r *Reader) ReadNextMeta() (uint64, page.ValuePtr, error) {
 	return entry.rid, entry.ptr, nil
 }
 
+// ReadRIDAt reads only the RID metadata for ptr. It avoids full segment scans
+// when callers already have a trusted value-log pointer and only need the
+// append RID that owns that record.
+func ReadRIDAt(f *os.File, ptr page.ValuePtr) (uint64, error) {
+	if f == nil || ptr.Offset < 4 {
+		return 0, ErrCorrupt
+	}
+	start := int64(ptr.Offset) - 4
+	var header [HeaderSize]byte
+	if _, err := f.ReadAt(header[:], start); err != nil {
+		return 0, err
+	}
+	if header[4] != Version {
+		return 0, ErrCorrupt
+	}
+	flags := header[5]
+	rid := binary.LittleEndian.Uint64(header[8:16])
+	valueLen := binary.LittleEndian.Uint32(header[16:20])
+	if recordSizeExceedsMax(valueLen) {
+		return 0, ErrRecordTooLarge
+	}
+	recordLen := uint32(headerWithoutCRC) + valueLen
+	grouped := flags&recordFlagGrouped != 0
+	if !grouped {
+		if page.ValuePtrIsGrouped(ptr) || !page.ValuePtrRecordLengthHintMatches(ptr, recordLen) || rid == 0 {
+			return 0, ErrCorrupt
+		}
+		return rid, nil
+	}
+	if !page.ValuePtrIsGrouped(ptr) || !page.ValuePtrRecordLengthHintMatches(ptr, recordLen) || valueLen < FrameHeaderSize {
+		return 0, ErrCorrupt
+	}
+	var frameHeader [FrameHeaderSize]byte
+	if _, err := f.ReadAt(frameHeader[:], start+HeaderSize); err != nil {
+		return 0, err
+	}
+	if frameHeader[0] != FrameVersion {
+		return 0, ErrCorrupt
+	}
+	k := int(frameHeader[2])
+	if k <= 0 || k > MaxFrameK {
+		return 0, ErrCorrupt
+	}
+	prefixLen := FrameHeaderSize + k*8 + (k+1)*4
+	if int(valueLen) < prefixLen {
+		return 0, ErrCorrupt
+	}
+	subIndex := int(page.ValuePtrSubIndex(ptr))
+	if subIndex >= k {
+		return 0, ErrCorrupt
+	}
+	var ridBytes [8]byte
+	ridOffset := start + HeaderSize + FrameHeaderSize + int64(subIndex*8)
+	if _, err := f.ReadAt(ridBytes[:], ridOffset); err != nil {
+		return 0, err
+	}
+	rid = binary.LittleEndian.Uint64(ridBytes[:])
+	if rid == 0 {
+		return 0, ErrCorrupt
+	}
+	return rid, nil
+}
+
 func (r *Reader) discardN(n int) error {
 	if n <= 0 {
 		return nil

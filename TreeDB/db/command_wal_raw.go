@@ -3,7 +3,7 @@ package db
 import (
 	"errors"
 	"fmt"
-	"io"
+	"os"
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
@@ -84,43 +84,30 @@ func (db *DB) lookupCommandWALValueLogRID(ptr page.ValuePtr, ridCache map[uint32
 	if ptr.FileID == 0 || ptr.Length == 0 {
 		return 0, fmt.Errorf("treedb: command wal raw kv invalid value-log pointer")
 	}
-	// The cache is scoped to one command-WAL batch build: each value-log segment
-	// is opened and scanned at most once even when the batch has many pointers
-	// into the same segment.
 	if ridCache == nil {
 		ridCache = make(map[uint32]map[page.ValuePtr]uint64)
 	}
-	if byPtr := ridCache[ptr.FileID]; byPtr != nil {
+	byPtr := ridCache[ptr.FileID]
+	if byPtr == nil {
+		byPtr = make(map[page.ValuePtr]uint64)
+		ridCache[ptr.FileID] = byPtr
+	} else {
 		if rid, ok := byPtr[ptr]; ok {
 			return rid, nil
 		}
-		return 0, fmt.Errorf("treedb: command wal raw kv missing value-log rid for file=%d offset=%d length=%d", ptr.FileID, ptr.Offset, ptr.Length)
 	}
 	path := db.valueLogManager.SegmentPath(ptr.FileID)
-	r, err := valuelog.NewReader(path, ptr.FileID)
+	f, err := os.Open(path)
 	if err != nil {
 		return 0, err
 	}
-	defer func() { _ = r.Close() }()
-	byPtr := make(map[page.ValuePtr]uint64)
-	for {
-		rid, gotPtr, err := r.ReadNextMeta()
-		if err != nil {
-			if errors.Is(err, io.EOF) {
-				break
-			}
-			return 0, err
-		}
-		if rid == 0 {
-			return 0, fmt.Errorf("treedb: command wal raw kv zero value-log rid")
-		}
-		byPtr[gotPtr] = rid
+	defer func() { _ = f.Close() }()
+	rid, err := valuelog.ReadRIDAt(f, ptr)
+	if err != nil {
+		return 0, err
 	}
-	ridCache[ptr.FileID] = byPtr
-	if rid, ok := byPtr[ptr]; ok {
-		return rid, nil
-	}
-	return 0, fmt.Errorf("treedb: command wal raw kv missing value-log rid for file=%d offset=%d length=%d", ptr.FileID, ptr.Offset, ptr.Length)
+	byPtr[ptr] = rid
+	return rid, nil
 }
 
 func (db *DB) flushCommandWALExternalRefs(sync bool) error {
