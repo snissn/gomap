@@ -102,6 +102,32 @@ the measured TreeDB payload bytes. This is the pre-M2 comparison point for
 ClickHouse `total_size`; the encoded part is serialized but still in memory,
 while the retained payload is measured from compacted TreeDB files.
 
+## Serialized Part Image Layout
+
+`ColumnPartImage` is the pre-file representation that M2 should persist with
+minimal semantic changes. The image starts with a manifest containing a magic
+number, image version, part id, row count, manifest byte length, and one section
+directory entry per following byte section. Section directory entries record
+kind, category, offset, length, row/granule/block counts, encoding,
+compression, name, and column name.
+
+The current canonical section kinds are:
+
+| Section | Category | Purpose |
+|---|---|---|
+| `descriptor` | `descriptor` | Part-level metadata, granule descriptors, column descriptors, block descriptors, and per-block granule reader metadata such as null/default counts and min/max. |
+| `sort_key_metadata` | `sort_key_metadata` | Sort-key columns, direction, and null ordering, distinct from TreeDB logical primary key. |
+| `sort_key_marks` | `marks` | Per-granule sparse mark summaries for sort-key prefixes. |
+| `row_locators` | `locators` | `primary_id -> part row, granule, row-in-granule` lookup records. |
+| `aggregate_metadata` | `aggregate_metadata` | Admitted exact per-granule aggregate metadata definitions, stats, and entries. |
+| `dictionaries` | `dictionaries` | Part-local dictionary payloads for declared low-cardinality columns when available. |
+| `column_data` | `declared_columns` | Concatenated encoded/compressed column block payload bytes, split by column and addressed by block descriptors. |
+
+`ParseColumnPartImage` validates the manifest and section bounds.
+`ColumnPartFromImage` reconstructs a scan-capable read-only part from serialized
+bytes alone. JSONBench query timings use that parsed image-backed part so M1D
+can catch representation mistakes before M2 adds files, checksums, and recovery.
+
 ## M1D Gates Before File-Backed M2
 
 Before moving this experiment into durable files, the in-memory representation
