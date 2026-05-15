@@ -39,7 +39,7 @@ func (db *DB) prepareRawKVCommandWALIntent(b *Batch) (*commandWALBatchIntent, er
 		return nil, nil
 	}
 	externalRefs := false
-	var ridCache map[uint32]map[page.ValuePtr]uint64
+	var ridCache map[page.ValuePtr]uint64
 	var smallOps [16]commitlog.RawKVOperation
 	ops := smallOps[:0]
 	if len(entries) > len(smallOps) {
@@ -54,7 +54,7 @@ func (db *DB) prepareRawKVCommandWALIntent(b *Batch) (*commandWALBatchIntent, er
 			if entry.IsPtr {
 				externalRefs = true
 				if ridCache == nil {
-					ridCache = make(map[uint32]map[page.ValuePtr]uint64)
+					ridCache = make(map[page.ValuePtr]uint64)
 				}
 				rid, err := db.lookupCommandWALValueLogRID(entry.ValuePtr, ridCache)
 				if err != nil {
@@ -100,7 +100,7 @@ func rawKVCommandWALExternalRefFileIDs(entries []batchpkg.Entry) []uint32 {
 	return ids
 }
 
-func (db *DB) lookupCommandWALValueLogRID(ptr page.ValuePtr, ridCache map[uint32]map[page.ValuePtr]uint64) (uint64, error) {
+func (db *DB) lookupCommandWALValueLogRID(ptr page.ValuePtr, ridCache map[page.ValuePtr]uint64) (uint64, error) {
 	if db == nil || db.valueLogManager == nil {
 		return 0, fmt.Errorf("treedb: command wal raw kv pointer rid reader unavailable")
 	}
@@ -110,12 +110,7 @@ func (db *DB) lookupCommandWALValueLogRID(ptr page.ValuePtr, ridCache map[uint32
 	if ridCache == nil {
 		return 0, fmt.Errorf("treedb: command wal raw kv rid cache unavailable")
 	}
-	byPtr := ridCache[ptr.FileID]
-	if byPtr == nil {
-		byPtr = make(map[page.ValuePtr]uint64)
-		ridCache[ptr.FileID] = byPtr
-	}
-	if rid, ok := byPtr[ptr]; ok {
+	if rid, ok := ridCache[ptr]; ok {
 		return rid, nil
 	}
 	path := db.valueLogManager.SegmentPath(ptr.FileID)
@@ -129,7 +124,7 @@ func (db *DB) lookupCommandWALValueLogRID(ptr page.ValuePtr, ridCache map[uint32
 	if err != nil {
 		return 0, err
 	}
-	byPtr[ptr] = rid
+	ridCache[ptr] = rid
 	return rid, nil
 }
 

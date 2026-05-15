@@ -118,7 +118,7 @@ func appendRequiredFormatFeature(features []string, feature string) []string {
 			return features
 		}
 	}
-	return append(features, feature)
+	return append(features, normalized)
 }
 
 // ApplyToOptions overwrites format-affecting knobs in opts from cfg.
