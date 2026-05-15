@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"errors"
+	"io"
 	"path/filepath"
 	"testing"
 )
@@ -14,6 +15,14 @@ type commandJournalFailWriter struct{}
 
 func (commandJournalFailWriter) Write([]byte) (int, error) {
 	return 0, errCommandJournalInjectedWrite
+}
+
+func (j *CommandJournal) installBufferedWriterForTest(w io.Writer, size int) func() {
+	old := j.writer.bw
+	j.writer.bw = bufio.NewWriterSize(w, size)
+	return func() {
+		j.writer.bw = old
+	}
 }
 
 func TestCommandJournalAllocatesContiguousLSNs(t *testing.T) {
@@ -271,7 +280,7 @@ func TestCommandJournalAppendFailureRollsBackLSN(t *testing.T) {
 	}
 	defer j.Close()
 
-	j.writer.bw = bufio.NewWriterSize(commandJournalFailWriter{}, 1)
+	restoreWriter := j.installBufferedWriterForTest(commandJournalFailWriter{}, 1)
 	_, err = j.AppendCommand(CommandEnvelope{
 		Kind:          CommandKindRawKVBatch,
 		Scope:         CommandScopeRawKV,
@@ -281,7 +290,7 @@ func TestCommandJournalAppendFailureRollsBackLSN(t *testing.T) {
 		t.Fatalf("failed AppendCommand error=%v, want injected write failure", err)
 	}
 
-	j.writer.bw.Reset(j.writer.f)
+	restoreWriter()
 	got, err := j.AppendCommand(CommandEnvelope{
 		Kind:          CommandKindRawKVBatch,
 		Scope:         CommandScopeRawKV,
