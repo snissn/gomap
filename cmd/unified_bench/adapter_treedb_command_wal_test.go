@@ -1,9 +1,11 @@
 package main
 
 import (
+	"errors"
 	"testing"
 
 	treedbdb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/kvstore"
 )
 
 func TestTreeDBBackendCommandWALVariantPersistsFeatureAndAppendsTypedFrames(t *testing.T) {
@@ -64,17 +66,61 @@ func TestTreeDBBackendCommandWALVariantPersistsFeatureAndAppendsTypedFrames(t *t
 		t.Fatalf("closed stats command WAL frames=%q, want cached final stats (stats=%#v)", got, closedStats)
 	}
 	postClose, ok := db.(interface {
+		Get([]byte) ([]byte, error)
+		Set([]byte, []byte) error
+		Delete([]byte) error
+		SetSync([]byte, []byte) error
+		DeleteSync([]byte) error
 		Has([]byte) (bool, error)
 		Print() error
+		Checkpoint() error
+		Iterator([]byte, []byte) (kvstore.Iterator, error)
+		ReverseIterator([]byte, []byte) (kvstore.Iterator, error)
+		NewBatch() (kvstore.Batch, error)
+		NewBatchWithSize(int) (kvstore.Batch, error)
+		AcquireReadSnapshot() (kvstore.ReadSnapshot, error)
 	})
 	if !ok {
-		t.Fatalf("%T does not expose post-close Has/Print test surface", db)
+		t.Fatalf("%T does not expose post-close test surface", db)
 	}
-	if _, err := postClose.Has([]byte("k")); err != treedbdb.ErrClosed {
+	if _, err := postClose.Get([]byte("k")); !errors.Is(err, treedbdb.ErrClosed) {
+		t.Fatalf("Get after Close error=%v, want ErrClosed", err)
+	}
+	if err := postClose.Set([]byte("k"), []byte("v")); !errors.Is(err, treedbdb.ErrClosed) {
+		t.Fatalf("Set after Close error=%v, want ErrClosed", err)
+	}
+	if err := postClose.Delete([]byte("k")); !errors.Is(err, treedbdb.ErrClosed) {
+		t.Fatalf("Delete after Close error=%v, want ErrClosed", err)
+	}
+	if err := postClose.SetSync([]byte("k"), []byte("v")); !errors.Is(err, treedbdb.ErrClosed) {
+		t.Fatalf("SetSync after Close error=%v, want ErrClosed", err)
+	}
+	if err := postClose.DeleteSync([]byte("k")); !errors.Is(err, treedbdb.ErrClosed) {
+		t.Fatalf("DeleteSync after Close error=%v, want ErrClosed", err)
+	}
+	if _, err := postClose.Has([]byte("k")); !errors.Is(err, treedbdb.ErrClosed) {
 		t.Fatalf("Has after Close error=%v, want ErrClosed", err)
 	}
-	if err := postClose.Print(); err != treedbdb.ErrClosed {
+	if err := postClose.Print(); !errors.Is(err, treedbdb.ErrClosed) {
 		t.Fatalf("Print after Close error=%v, want ErrClosed", err)
+	}
+	if err := postClose.Checkpoint(); !errors.Is(err, treedbdb.ErrClosed) {
+		t.Fatalf("Checkpoint after Close error=%v, want ErrClosed", err)
+	}
+	if _, err := postClose.Iterator(nil, nil); !errors.Is(err, treedbdb.ErrClosed) {
+		t.Fatalf("Iterator after Close error=%v, want ErrClosed", err)
+	}
+	if _, err := postClose.ReverseIterator(nil, nil); !errors.Is(err, treedbdb.ErrClosed) {
+		t.Fatalf("ReverseIterator after Close error=%v, want ErrClosed", err)
+	}
+	if _, err := postClose.NewBatch(); !errors.Is(err, treedbdb.ErrClosed) {
+		t.Fatalf("NewBatch after Close error=%v, want ErrClosed", err)
+	}
+	if _, err := postClose.NewBatchWithSize(1); !errors.Is(err, treedbdb.ErrClosed) {
+		t.Fatalf("NewBatchWithSize after Close error=%v, want ErrClosed", err)
+	}
+	if _, err := postClose.AcquireReadSnapshot(); !errors.Is(err, treedbdb.ErrClosed) {
+		t.Fatalf("AcquireReadSnapshot after Close error=%v, want ErrClosed", err)
 	}
 }
 

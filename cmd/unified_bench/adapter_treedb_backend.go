@@ -14,6 +14,7 @@ type treeDBBackendAdapter struct {
 	leafLog    treedbdb.LeafPageLogCloser
 	name       string
 	finalStats map[string]string
+	closed     bool
 }
 
 func NewTreeDBBackend(dir string) (kvstore.DB, error) {
@@ -79,7 +80,7 @@ func newTreeDBBackend(dir string, commandWAL bool, name string) (kvstore.DB, err
 
 func (d *treeDBBackendAdapter) Name() string { return d.name }
 func (d *treeDBBackendAdapter) Close() error {
-	if d == nil || d.db == nil {
+	if d == nil || d.closed {
 		return nil
 	}
 	d.finalStats = cloneStringMap(d.db.Stats())
@@ -88,52 +89,98 @@ func (d *treeDBBackendAdapter) Close() error {
 		err = errors.Join(err, d.leafLog.Close())
 		d.leafLog = nil
 	}
-	d.db = nil
+	d.closed = true
 	return err
 }
 
+func (d *treeDBBackendAdapter) openDB() (*treedbdb.DB, error) {
+	if d == nil || d.db == nil || d.closed {
+		return nil, treedbdb.ErrClosed
+	}
+	return d.db, nil
+}
+
 func (d *treeDBBackendAdapter) Get(key []byte) ([]byte, error) {
-	return d.db.Get(key)
+	db, err := d.openDB()
+	if err != nil {
+		return nil, err
+	}
+	return db.Get(key)
 }
 
 func (d *treeDBBackendAdapter) AcquireReadSnapshot() (kvstore.ReadSnapshot, error) {
-	if d == nil || d.db == nil {
-		return nil, kvstore.ErrUnsupported
+	db, err := d.openDB()
+	if err != nil {
+		return nil, err
 	}
-	snap := d.db.AcquireSnapshot()
+	snap := db.AcquireSnapshot()
 	if snap == nil {
 		return nil, kvstore.ErrUnsupported
 	}
 	return snap, nil
 }
 
-func (d *treeDBBackendAdapter) Set(key, value []byte) error     { return d.db.Set(key, value) }
-func (d *treeDBBackendAdapter) Delete(key []byte) error         { return d.db.Delete(key) }
-func (d *treeDBBackendAdapter) SetSync(key, value []byte) error { return d.db.SetSync(key, value) }
-func (d *treeDBBackendAdapter) DeleteSync(key []byte) error     { return d.db.DeleteSync(key) }
+func (d *treeDBBackendAdapter) Set(key, value []byte) error {
+	db, err := d.openDB()
+	if err != nil {
+		return err
+	}
+	return db.Set(key, value)
+}
+
+func (d *treeDBBackendAdapter) Delete(key []byte) error {
+	db, err := d.openDB()
+	if err != nil {
+		return err
+	}
+	return db.Delete(key)
+}
+
+func (d *treeDBBackendAdapter) SetSync(key, value []byte) error {
+	db, err := d.openDB()
+	if err != nil {
+		return err
+	}
+	return db.SetSync(key, value)
+}
+
+func (d *treeDBBackendAdapter) DeleteSync(key []byte) error {
+	db, err := d.openDB()
+	if err != nil {
+		return err
+	}
+	return db.DeleteSync(key)
+}
+
 func (d *treeDBBackendAdapter) Stats() map[string]string {
 	if d == nil {
 		return map[string]string{}
 	}
-	if d.db == nil {
+	if d.closed {
 		return cloneStringMap(d.finalStats)
 	}
 	return d.db.Stats()
 }
 func (d *treeDBBackendAdapter) Print() error {
-	if d == nil || d.db == nil {
-		return treedbdb.ErrClosed
+	db, err := d.openDB()
+	if err != nil {
+		return err
 	}
-	return d.db.Print()
+	return db.Print()
 }
 func (d *treeDBBackendAdapter) Has(key []byte) (bool, error) {
-	if d == nil || d.db == nil {
-		return false, treedbdb.ErrClosed
+	db, err := d.openDB()
+	if err != nil {
+		return false, err
 	}
-	return d.db.Has(key)
+	return db.Has(key)
 }
 func (d *treeDBBackendAdapter) Checkpoint() error {
-	b := d.db.NewBatch()
+	db, err := d.openDB()
+	if err != nil {
+		return err
+	}
+	b := db.NewBatch()
 	if b == nil {
 		return nil
 	}
@@ -141,14 +188,26 @@ func (d *treeDBBackendAdapter) Checkpoint() error {
 	return b.WriteSync()
 }
 func (d *treeDBBackendAdapter) Iterator(start, end []byte) (kvstore.Iterator, error) {
-	return d.db.Iterator(start, end)
+	db, err := d.openDB()
+	if err != nil {
+		return nil, err
+	}
+	return db.Iterator(start, end)
 }
 func (d *treeDBBackendAdapter) ReverseIterator(start, end []byte) (kvstore.Iterator, error) {
-	return d.db.ReverseIterator(start, end)
+	db, err := d.openDB()
+	if err != nil {
+		return nil, err
+	}
+	return db.ReverseIterator(start, end)
 }
 
 func (d *treeDBBackendAdapter) NewBatch() (kvstore.Batch, error) {
-	b := d.db.NewBatch()
+	db, err := d.openDB()
+	if err != nil {
+		return nil, err
+	}
+	b := db.NewBatch()
 	if b == nil {
 		return nil, kvstore.ErrUnsupported
 	}
@@ -156,7 +215,11 @@ func (d *treeDBBackendAdapter) NewBatch() (kvstore.Batch, error) {
 }
 
 func (d *treeDBBackendAdapter) NewBatchWithSize(size int) (kvstore.Batch, error) {
-	b := d.db.NewBatchWithSize(size)
+	db, err := d.openDB()
+	if err != nil {
+		return nil, err
+	}
+	b := db.NewBatchWithSize(size)
 	if b == nil {
 		return nil, kvstore.ErrUnsupported
 	}
