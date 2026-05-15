@@ -62,6 +62,7 @@ GOWORK=off go run ./cmd/treedb_vector_dataset_export \
 echo "running TreeDB benchmark"
 GOWORK=off go run ./cmd/treedb_vector_search_demo \
 	-matrix=false \
+	-dataset-dir "$RUN_DIR/dataset" \
 	-dir "$RUN_DIR/treedb" \
 	-keep-dir \
 	-docs "$DOCS" \
