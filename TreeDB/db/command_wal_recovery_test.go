@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
@@ -491,7 +492,7 @@ func TestCommandWALPointerBatchReplaysThroughRIDFence(t *testing.T) {
 
 type commandWALExternalRefSyncTestAppender struct {
 	fileID uint32
-	syncs  int
+	syncs  atomic.Int32
 }
 
 func (a *commandWALExternalRefSyncTestAppender) AppendValues(values [][]byte) ([]page.ValuePtr, error) {
@@ -503,7 +504,7 @@ func (a *commandWALExternalRefSyncTestAppender) Flush() error {
 }
 
 func (a *commandWALExternalRefSyncTestAppender) Sync() error {
-	a.syncs++
+	a.syncs.Add(1)
 	return nil
 }
 
@@ -522,8 +523,8 @@ func TestCommandWALExternalRefFlushSkipsActiveAppenderSegment(t *testing.T) {
 	if err := db.flushCommandWALExternalRefs(true, []uint32{17}); err != nil {
 		t.Fatalf("flushCommandWALExternalRefs active segment: %v", err)
 	}
-	if appender.syncs != 1 {
-		t.Fatalf("appender syncs=%d, want 1", appender.syncs)
+	if appender.syncs.Load() != 1 {
+		t.Fatalf("appender syncs=%d, want 1", appender.syncs.Load())
 	}
 }
 

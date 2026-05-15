@@ -433,6 +433,21 @@ func TestCommandWALOpenAllowsCoveredDuplicateLSNBeforeCleanupConverges(t *testin
 	if err := rw.Close(); err != nil {
 		t.Fatalf("Close read-write: %v", err)
 	}
+	// Verify that cleanupCommandWALSegmentsCoveredByAppliedLSN converges: the
+	// non-active covered segment (seq=1) must be removed, leaving only seq=2.
+	decisions, err := cleanupCommandWALSegmentsCoveredByAppliedLSN(dir, 2, 0)
+	if err != nil {
+		t.Fatalf("cleanupCommandWALSegmentsCoveredByAppliedLSN: %v", err)
+	}
+	removed := 0
+	for _, d := range decisions {
+		if d.Removed {
+			removed++
+		}
+	}
+	if removed != 1 {
+		t.Fatalf("cleanup removed=%d segments, want 1 (non-active covered segment)", removed)
+	}
 }
 
 func TestCommandWALOpenFailsClosedOnUnappliedDuplicateLSN(t *testing.T) {

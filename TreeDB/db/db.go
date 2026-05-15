@@ -1339,7 +1339,7 @@ func resolveInlineThresholdAndAdaptive(opts Options) (*adaptive.Controller, int)
 
 func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	if opts.ReadOnly {
-		return nil, errors.New("treedb: openWithLock cannot be used for read-only opens")
+		return nil, errors.New("BUG: treedb: openWithLock called with read-only options")
 	}
 	if err := recoverIndexSwap(opts.Dir); err != nil {
 		return nil, err
@@ -1488,22 +1488,6 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 			_ = db.Close()
 			return nil, err
 		}
-	} else {
-		// If a directory requires command replay but this open is not command-WAL
-		// enabled, fail closed before legacy replay can misinterpret typed frames.
-		// Frames already covered by AppliedCommandLSN are filtered below.
-		if err := requireNoUnappliedCommandWAL(opts.Dir, db.meta.AppliedCommandLSN, opts.WALMaxSegmentBytes); err != nil {
-			_ = db.Close()
-			return nil, err
-		}
-		if opts.Durability != DurabilityWALOffRelaxed {
-			if err := replayWALIntoBackend(db, segments, opts.WALMaxSegmentBytes, opts.ValueLog.DictLookup); err != nil {
-				_ = db.Close()
-				return nil, err
-			}
-		}
-	}
-	if opts.CommandWAL {
 		commandSegmentSeq := uint64(0)
 		journalSegments, err := listRecoverySegments(opts.Dir)
 		if err != nil {
@@ -1527,6 +1511,20 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 			return nil, err
 		}
 		db.commandJournal = journal
+	} else {
+		// If a directory requires command replay but this open is not command-WAL
+		// enabled, fail closed before legacy replay can misinterpret typed frames.
+		// Frames already covered by AppliedCommandLSN are filtered below.
+		if err := requireNoUnappliedCommandWAL(opts.Dir, db.meta.AppliedCommandLSN, opts.WALMaxSegmentBytes); err != nil {
+			_ = db.Close()
+			return nil, err
+		}
+		if opts.Durability != DurabilityWALOffRelaxed {
+			if err := replayWALIntoBackend(db, segments, opts.WALMaxSegmentBytes, opts.ValueLog.DictLookup); err != nil {
+				_ = db.Close()
+				return nil, err
+			}
+		}
 	}
 
 	// Recovery and WAL/value-log replay may touch the manager's file set. Reapply
