@@ -227,7 +227,7 @@ func (db *DB) syncCommandWALExternalRefSegment(fileID uint32) error {
 		return ErrValueLogAppenderUnavailable
 	}
 	path := db.valueLogManager.SegmentPath(fileID)
-	f, err := os.Open(path)
+	f, err := os.OpenFile(path, os.O_RDWR, 0)
 	if err != nil {
 		return err
 	}
