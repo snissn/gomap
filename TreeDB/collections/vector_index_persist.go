@@ -735,7 +735,7 @@ func (idx *VectorIndex) loadPersistSnapshot(snapshot vectorIndexPersistSnapshot)
 			if i < len(edge.Distances) {
 				distance = edge.Distances[i]
 			}
-			if math.IsNaN(float64(distance)) || math.IsInf(float64(distance), 0) {
+			if math.IsNaN(float64(distance)) || math.IsInf(float64(distance), 1) {
 				var err error
 				distance, err = vectorDistanceBetweenStoredNodes(&nodes[edge.NodeID], &nodes[neighbor], snapshot.Meta.Metric)
 				if err != nil {

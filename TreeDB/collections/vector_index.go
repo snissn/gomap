@@ -604,7 +604,7 @@ func (idx *VectorIndex) linkLayerLocked(fromNodeID, toNodeID, layer int) {
 		}
 	}
 	distance := idx.distanceBetweenNodesLocked(fromNodeID, toNodeID)
-	if math.IsNaN(float64(distance)) || math.IsInf(float64(distance), 0) {
+	if math.IsNaN(float64(distance)) || math.IsInf(float64(distance), 1) {
 		return
 	}
 	neighbors = append(neighbors, vectorIndexNeighbor{nodeID: toNodeID, distance: distance})
@@ -632,7 +632,7 @@ func (idx *VectorIndex) pruneLayerNeighborsLocked(_ int, neighbors []vectorIndex
 		if neighborID < 0 || neighborID >= len(idx.nodes) {
 			continue
 		}
-		if math.IsNaN(float64(neighbor.distance)) || math.IsInf(float64(neighbor.distance), 0) {
+		if math.IsNaN(float64(neighbor.distance)) || math.IsInf(float64(neighbor.distance), 1) {
 			continue
 		}
 		scored = append(scored, vectorIndexCandidate{nodeID: neighborID, distance: neighbor.distance})
