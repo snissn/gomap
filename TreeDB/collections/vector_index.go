@@ -590,6 +590,16 @@ func (idx *VectorIndex) maxNeighborsForLayer(layer int) int {
 	return idx.m
 }
 
+func normalizeVectorIndexEdgeDistance(distance float32) (float32, bool) {
+	if math.IsNaN(float64(distance)) || math.IsInf(float64(distance), 1) {
+		return 0, false
+	}
+	if math.IsInf(float64(distance), -1) {
+		return -math.MaxFloat32, true
+	}
+	return distance, true
+}
+
 func (idx *VectorIndex) linkLayerLocked(fromNodeID, toNodeID, layer int) {
 	if fromNodeID < 0 || fromNodeID >= len(idx.nodes) {
 		return
@@ -604,7 +614,9 @@ func (idx *VectorIndex) linkLayerLocked(fromNodeID, toNodeID, layer int) {
 		}
 	}
 	distance := idx.distanceBetweenNodesLocked(fromNodeID, toNodeID)
-	if math.IsNaN(float64(distance)) || math.IsInf(float64(distance), 1) {
+	var ok bool
+	distance, ok = normalizeVectorIndexEdgeDistance(distance)
+	if !ok {
 		return
 	}
 	neighbors = append(neighbors, vectorIndexNeighbor{nodeID: toNodeID, distance: distance})
@@ -632,10 +644,11 @@ func (idx *VectorIndex) pruneLayerNeighborsLocked(_ int, neighbors []vectorIndex
 		if neighborID < 0 || neighborID >= len(idx.nodes) {
 			continue
 		}
-		if math.IsNaN(float64(neighbor.distance)) || math.IsInf(float64(neighbor.distance), 1) {
+		distance, ok := normalizeVectorIndexEdgeDistance(neighbor.distance)
+		if !ok {
 			continue
 		}
-		scored = append(scored, vectorIndexCandidate{nodeID: neighborID, distance: neighbor.distance})
+		scored = append(scored, vectorIndexCandidate{nodeID: neighborID, distance: distance})
 	}
 	slices.SortFunc(scored, func(left, right vectorIndexCandidate) int {
 		if left.distance < right.distance {
