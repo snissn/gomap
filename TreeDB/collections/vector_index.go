@@ -14,6 +14,7 @@ import (
 	"unsafe"
 
 	"github.com/cespare/xxhash/v2"
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"gonum.org/v1/gonum/blas/blas32"
 )
 
@@ -225,7 +226,7 @@ func (c *Collection) BuildVectorIndex(opts VectorIndexOptions) (*VectorIndex, er
 	if err := c.flushBufferedWrites(); err != nil {
 		return nil, err
 	}
-	index.nativePersistent = collectionMetaDeclaresVectorIndex(c.meta, index.name)
+	index.setNativePersistent(collectionMetaDeclaresVectorIndex(c.meta, index.name))
 	materializer, err := c.NewStoredDocumentJSONMaterializer()
 	if err != nil {
 		return nil, err
@@ -343,7 +344,7 @@ func (c *Collection) RegisterVectorIndex(index *VectorIndex) {
 		c.vectorIndexes = make(map[string]*VectorIndex)
 	}
 	index.collection = c
-	index.nativePersistent = collectionMetaDeclaresVectorIndex(c.meta, index.name)
+	index.setNativePersistent(collectionMetaDeclaresVectorIndex(c.meta, index.name))
 	c.vectorIndexes[index.name] = index
 }
 
@@ -443,14 +444,48 @@ func (c *Collection) notifyVectorIndexesBSONSetUpdateBatch(items []BSONSetUpdate
 }
 
 func (c *Collection) persistNativeVectorIndexIfDeclared(index *VectorIndex) error {
-	if c == nil || index == nil || !collectionMetaDeclaresVectorIndex(c.meta, index.name) || !index.needsNativeAutoPersist() {
+	if c == nil || index == nil || !index.needsNativeAutoPersist() {
 		return nil
+	}
+	if !collectionMetaDeclaresVectorIndex(c.meta, index.name) {
+		declared, err := c.refreshVectorIndexDeclaration(index.name)
+		if err != nil || !declared {
+			return err
+		}
+	}
+	if !index.isNativePersistent() {
+		_, err := index.SaveNativeSnapshot()
+		if errors.Is(err, errVectorIndexNotDeclared) {
+			return nil
+		}
+		return err
 	}
 	_, err := index.SaveNativeDeltaSnapshot()
 	if errors.Is(err, errVectorIndexNotDeclared) {
 		return nil
 	}
 	return err
+}
+
+func (c *Collection) refreshVectorIndexDeclaration(name string) (bool, error) {
+	if c == nil {
+		return false, errCollectionNil
+	}
+	if c.db == nil {
+		return false, errCollectionDBNil
+	}
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return false, backenddb.ErrClosed
+	}
+	defer func() { _ = snap.Close() }()
+	catalog, err := loadCollectionCatalog(snap, c.meta.Name)
+	if err != nil || catalog == nil {
+		return false, err
+	}
+	c.meta = catalog.meta
+	c.rememberCatalog(snap, catalog)
+	return collectionMetaDeclaresVectorIndex(catalog.meta, name), nil
 }
 
 func (c *Collection) persistDirtyNativeVectorIndexes() error {
@@ -702,6 +737,24 @@ func (idx *VectorIndex) markGraphChangedLocked() {
 	if idx.persistedEpoch != 0 {
 		idx.persistedSnapshotDirty = true
 	}
+}
+
+func (idx *VectorIndex) setNativePersistent(enabled bool) {
+	if idx == nil {
+		return
+	}
+	idx.mu.Lock()
+	idx.nativePersistent = enabled
+	idx.mu.Unlock()
+}
+
+func (idx *VectorIndex) isNativePersistent() bool {
+	if idx == nil {
+		return false
+	}
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+	return idx.nativePersistent
 }
 
 func (idx *VectorIndex) markVectorMetaDirtyLocked() {

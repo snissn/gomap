@@ -301,6 +301,8 @@ type CollectionManager struct {
 	updateBatchDetailedStats atomic.Bool
 	domainMu                 sync.RWMutex
 	domains                  map[string]*collectionWriteDomain
+	collectionsMu            sync.RWMutex
+	collections              map[*Collection]struct{}
 }
 
 type Collection struct {
@@ -2487,11 +2489,24 @@ func (m *CollectionManager) FlushAll() error {
 		}
 	}
 	m.domainMu.RUnlock()
+	m.collectionsMu.RLock()
+	collections := make([]*Collection, 0, len(m.collections))
+	for collection := range m.collections {
+		if collection != nil {
+			collections = append(collections, collection)
+		}
+	}
+	m.collectionsMu.RUnlock()
 
 	var errs []error
 	for _, domain := range domains {
 		domain.waitIndexedAsyncFlush()
 		if err := flushCollectionWriteDomain(m.db, domain); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	for _, collection := range collections {
+		if err := collection.persistDirtyNativeVectorIndexes(); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -2676,6 +2691,7 @@ func (m *CollectionManager) OpenCollection(name string) (*Collection, error) {
 		if m.db.IsClosing() {
 			return nil, backenddb.ErrClosed
 		}
+		m.registerCollectionHandle(collection)
 		return collection, nil
 	}
 	snap := m.db.AcquireSnapshot()
@@ -2702,7 +2718,20 @@ func (m *CollectionManager) OpenCollection(name string) (*Collection, error) {
 	}
 	collection.rememberCatalog(snap, catalog)
 	collection.noteWriteDomainCatalog(snapshotSystemRoot(snap), catalog)
+	m.registerCollectionHandle(collection)
 	return collection, nil
+}
+
+func (m *CollectionManager) registerCollectionHandle(collection *Collection) {
+	if m == nil || collection == nil {
+		return
+	}
+	m.collectionsMu.Lock()
+	defer m.collectionsMu.Unlock()
+	if m.collections == nil {
+		m.collections = make(map[*Collection]struct{})
+	}
+	m.collections[collection] = struct{}{}
 }
 
 func (m *CollectionManager) openCollectionFromWriteDomainCache(name string) (*Collection, bool) {
@@ -3224,6 +3253,9 @@ func (c *Collection) Insert(id, document []byte) ([]byte, error) {
 	}
 	ids, err := c.InsertBatch([][]byte{id}, [][]byte{document})
 	if err != nil {
+		if errors.Is(err, ErrCommitAmbiguous) && len(ids) == 1 {
+			return ids[0], err
+		}
 		return nil, err
 	}
 	if len(ids) != 1 {

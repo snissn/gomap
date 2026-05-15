@@ -106,6 +106,7 @@ func (idx *VectorIndex) SaveNativeSnapshot() (VectorIndexLoadStatus, error) {
 	if catalog == nil {
 		return status, errCollectionNotFound
 	}
+	c.meta = catalog.meta
 	def, ok := findVectorIndex(catalog.meta.VectorIndexes, idx.name)
 	if !ok {
 		return status, fmt.Errorf("%w: %q", errVectorIndexNotDeclared, idx.name)
@@ -160,7 +161,7 @@ func (idx *VectorIndex) SaveNativeSnapshot() (VectorIndexLoadStatus, error) {
 	status.RootID = rootIDs[0]
 	status.Epoch = rootIDs[0]
 	status.BytesDisk = bytesDisk
-	idx.nativePersistent = true
+	idx.setNativePersistent(true)
 	idx.recordPersistedSnapshot(status.Epoch, bytesDisk, snapshotSeq)
 	nextCatalog := cloneCatalogWithRootUpdates(catalog, catalog.meta, []string{rootName}, rootIDs)
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
@@ -202,6 +203,7 @@ func (idx *VectorIndex) SaveNativeDeltaSnapshot() (VectorIndexLoadStatus, error)
 	if catalog == nil {
 		return status, errCollectionNotFound
 	}
+	c.meta = catalog.meta
 	def, ok := findVectorIndex(catalog.meta.VectorIndexes, idx.name)
 	if !ok {
 		return status, fmt.Errorf("%w: %q", errVectorIndexNotDeclared, idx.name)
@@ -256,7 +258,7 @@ func (idx *VectorIndex) SaveNativeDeltaSnapshot() (VectorIndexLoadStatus, error)
 	status.RootID = rootIDs[0]
 	status.Epoch = rootIDs[0]
 	status.BytesDisk = bytesDisk
-	idx.nativePersistent = true
+	idx.setNativePersistent(true)
 	idx.recordPersistedSnapshot(status.Epoch, bytesDisk, snapshotSeq)
 	nextCatalog := cloneCatalogWithRootUpdates(catalog, catalog.meta, []string{rootName}, rootIDs)
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)

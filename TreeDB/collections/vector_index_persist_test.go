@@ -483,6 +483,59 @@ func TestCollectionVectorIndexNativeRootBuildAfterCreatePersistsExistingDocument
 	requireVectorResultIDs(t, results, "a", "b")
 }
 
+func TestCollectionVectorIndexNativeRootAdHocRuntimeBecomesDeclaredFullSnapshot(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	def := VectorIndexDefinition{
+		Name:       "embedding",
+		Field:      "embedding",
+		Metric:     VectorMetricCosine,
+		Dimensions: 2,
+		M:          4,
+	}
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("a"), []byte("b")},
+		[][]byte{
+			[]byte(`{"embedding":[1,0]}`),
+			[]byte(`{"embedding":[0,1]}`),
+		},
+	); err != nil {
+		t.Fatalf("insert before vector index metadata: %v", err)
+	}
+	if _, err := col.BuildVectorIndex(vectorIndexOptionsFromDefinition(def)); err != nil {
+		t.Fatalf("build ad hoc vector index: %v", err)
+	}
+	if _, err := col.CreateVectorIndex(def); err != nil {
+		t.Fatalf("create vector index metadata: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush declared ad hoc vector index: %v", err)
+	}
+	loaded, status, err := col.LoadVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		t.Fatalf("load declared ad hoc vector index: %v", err)
+	}
+	if loaded == nil || !status.Loaded {
+		t.Fatalf("declared ad hoc vector index did not persist loaded=%v status=%+v", loaded != nil, status)
+	}
+	results, _, err := loaded.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 2, DisableExactFallback: true})
+	if err != nil {
+		t.Fatalf("search declared ad hoc vector index: %v", err)
+	}
+	requireVectorResultIDs(t, results, "a", "b")
+}
+
 func TestCollectionVectorIndexNativeRootInsertMaintenanceErrorIsCommitAmbiguous(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -520,6 +573,46 @@ func TestCollectionVectorIndexNativeRootInsertMaintenanceErrorIsCommitAmbiguous(
 	}
 	if len(doc) == 0 {
 		t.Fatal("post-commit vector maintenance error lost committed document")
+	}
+}
+
+func TestCollectionVectorIndexNativeRootInsertReturnsIDOnCommitAmbiguousMaintenanceError(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	def := VectorIndexDefinition{
+		Name:       "embedding",
+		Field:      "embedding",
+		Metric:     VectorMetricCosine,
+		Dimensions: 2,
+		M:          4,
+	}
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.CreateVectorIndex(def); err != nil {
+		t.Fatalf("create vector index: %v", err)
+	}
+	id, err := col.Insert([]byte("bad"), []byte(`{"embedding":[1,0,0]}`))
+	if !errors.Is(err, ErrCommitAmbiguous) {
+		t.Fatalf("insert err=%v want ErrCommitAmbiguous", err)
+	}
+	if string(id) != "bad" {
+		t.Fatalf("insert id=%q want bad for committed ambiguous insert", id)
+	}
+	doc, getErr := col.Get(id)
+	if getErr != nil {
+		t.Fatalf("get committed document: %v", getErr)
+	}
+	if len(doc) == 0 {
+		t.Fatalf("committed document %x missing after ambiguous insert", id)
 	}
 }
 
@@ -975,6 +1068,87 @@ func TestCollectionVectorIndexNativeRootUsesCurrentCatalogForStaleHandles(t *tes
 	if loaded == nil || !loadStatus.Loaded || loadStatus.RootID != saveStatus.RootID {
 		t.Fatalf("stale handle did not use native root load loaded=%v status=%+v save=%+v", loaded != nil, loadStatus, saveStatus)
 	}
+	if _, err := staleCol.InsertBatch(
+		[][]byte{[]byte("c")},
+		[][]byte{[]byte(`{"embedding":[0.8,0.2]}`)},
+	); err != nil {
+		t.Fatalf("insert through stale handle after native save: %v", err)
+	}
+	if err := staleCol.Flush(); err != nil {
+		t.Fatalf("flush stale handle after native save: %v", err)
+	}
+	reloaded, reloadStatus, err := staleCol.LoadVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		t.Fatalf("reload through stale handle: %v", err)
+	}
+	if reloaded == nil || !reloadStatus.Loaded {
+		t.Fatalf("stale handle did not persist subsequent dirty graph loaded=%v status=%+v", reloaded != nil, reloadStatus)
+	}
+	results, _, err := reloaded.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 2, DisableExactFallback: true})
+	if err != nil {
+		t.Fatalf("search stale handle reloaded vector index: %v", err)
+	}
+	requireVectorResultIDs(t, results, "a", "c")
+}
+
+func TestCollectionVectorIndexNativeRootFlushAllOnClosePersistsDirtyGraph(t *testing.T) {
+	dir := t.TempDir()
+	d, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mgr := NewCollectionManager(d)
+	def := VectorIndexDefinition{
+		Name:       "embedding",
+		Field:      "embedding",
+		Metric:     VectorMetricCosine,
+		Dimensions: 2,
+		M:          4,
+	}
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.CreateVectorIndex(def); err != nil {
+		t.Fatalf("create vector index: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("a"), []byte("b")},
+		[][]byte{
+			[]byte(`{"embedding":[1,0]}`),
+			[]byte(`{"embedding":[0,1]}`),
+		},
+	); err != nil {
+		t.Fatalf("insert dirty vector documents: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+
+	reopened, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open reopened collection: %v", err)
+	}
+	loaded, status, err := reopenedCol.LoadVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		t.Fatalf("load close-flushed vector index: %v", err)
+	}
+	if loaded == nil || !status.Loaded {
+		t.Fatalf("close did not persist dirty vector index loaded=%v status=%+v", loaded != nil, status)
+	}
+	results, _, err := loaded.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 2, DisableExactFallback: true})
+	if err != nil {
+		t.Fatalf("search close-flushed vector index: %v", err)
+	}
+	requireVectorResultIDs(t, results, "a", "b")
 }
 
 func TestCollectionVectorIndexSnapshotLoadsLegacyEdgesWithoutDistances(t *testing.T) {
