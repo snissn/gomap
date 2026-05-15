@@ -110,6 +110,16 @@ func TestRunJSONBenchPartQueriesSampleMatchesRawReference(t *testing.T) {
 			assertJSONBenchPartDiagnostics(t, timing.Query, attempt.Diagnostics, ds.Rows, 3)
 		}
 		assertJSONBenchPartDiagnostics(t, timing.Query, timing.Diagnostics, ds.Rows, 3)
+		switch timing.Query {
+		case "Q2":
+			if timing.Diagnostics.AggregateKernel != "fused_dense_group_count_distinct_codes" {
+				t.Fatalf("Q2 kernel=%q want fused dense distinct", timing.Diagnostics.AggregateKernel)
+			}
+		case "Q3":
+			if timing.Diagnostics.AggregateKernel != "fused_dense_group_count_hour_codes" {
+				t.Fatalf("Q3 kernel=%q want fused dense hour count", timing.Diagnostics.AggregateKernel)
+			}
+		}
 	}
 }
 
