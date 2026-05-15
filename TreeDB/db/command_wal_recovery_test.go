@@ -485,6 +485,44 @@ func TestCommandWALPointerBatchReplaysThroughRIDFence(t *testing.T) {
 	}
 }
 
+type commandWALExternalRefSyncTestAppender struct {
+	fileID uint32
+	syncs  int
+}
+
+func (a *commandWALExternalRefSyncTestAppender) AppendValues(values [][]byte) ([]page.ValuePtr, error) {
+	return nil, ErrValueLogAppenderUnavailable
+}
+
+func (a *commandWALExternalRefSyncTestAppender) Flush() error {
+	return nil
+}
+
+func (a *commandWALExternalRefSyncTestAppender) Sync() error {
+	a.syncs++
+	return nil
+}
+
+func (a *commandWALExternalRefSyncTestAppender) CurrentValueLogSegment() (string, uint32, bool) {
+	return "", a.fileID, true
+}
+
+func TestCommandWALExternalRefFlushSkipsActiveAppenderSegment(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	defer db.Close()
+
+	appender := &commandWALExternalRefSyncTestAppender{fileID: 17}
+	db.SetValueLogAppender(appender)
+	if err := db.flushCommandWALExternalRefs(true, []uint32{17}); err != nil {
+		t.Fatalf("flushCommandWALExternalRefs active segment: %v", err)
+	}
+	if appender.syncs != 1 {
+		t.Fatalf("appender syncs=%d, want 1", appender.syncs)
+	}
+}
+
 func TestCommandWALMissingRIDFenceFailsRecovery(t *testing.T) {
 	dir := t.TempDir()
 	enableCommandWALFormat(t, dir)
