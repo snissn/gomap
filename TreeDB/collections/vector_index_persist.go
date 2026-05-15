@@ -428,10 +428,10 @@ type vectorIndexPersistNode struct {
 }
 
 type vectorIndexPersistEdges struct {
-	NodeID   int       `json:"node_id"`
-	Layer    int       `json:"layer"`
-	Neighbor []int     `json:"neighbors"`
-	Distance []float32 `json:"distances,omitempty"`
+	NodeID    int       `json:"node_id"`
+	Layer     int       `json:"layer"`
+	Neighbor  []int     `json:"neighbors"`
+	Distances []float32 `json:"distances,omitempty"`
 }
 
 type vectorIndexPersistTombstones struct {
@@ -482,10 +482,10 @@ func (idx *VectorIndex) persistSnapshot() (vectorIndexPersistSnapshot, uint64) {
 				distances[j] = neighbor.distance
 			}
 			snapshot.Edges = append(snapshot.Edges, vectorIndexPersistEdges{
-				NodeID:   i,
-				Layer:    layer,
-				Neighbor: neighborIDs,
-				Distance: distances,
+				NodeID:    i,
+				Layer:     layer,
+				Neighbor:  neighborIDs,
+				Distances: distances,
 			})
 		}
 		if node.deleted {
@@ -725,11 +725,14 @@ func (idx *VectorIndex) loadPersistSnapshot(snapshot vectorIndexPersistSnapshot)
 		}
 		neighbors := make([]vectorIndexNeighbor, len(edge.Neighbor))
 		for i, neighbor := range edge.Neighbor {
-			distance := float32(math.Inf(1))
-			if i < len(edge.Distance) {
-				distance = edge.Distance[i]
+			if neighbor < 0 || neighbor >= len(nodes) {
+				return "invalid_edge_neighbor"
 			}
-			if math.IsInf(float64(distance), 1) {
+			distance := float32(math.Inf(1))
+			if i < len(edge.Distances) {
+				distance = edge.Distances[i]
+			}
+			if math.IsNaN(float64(distance)) || math.IsInf(float64(distance), 0) {
 				var err error
 				distance, err = vectorDistanceBetweenStoredNodes(&nodes[edge.NodeID], &nodes[neighbor], snapshot.Meta.Metric)
 				if err != nil {

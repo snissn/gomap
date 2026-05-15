@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
@@ -126,7 +127,7 @@ func TestCollectionVectorIndexSnapshotLoadsLegacyEdgesWithoutDistances(t *testin
 	}
 	rewriteVectorIndexSnapshotJSONFile(t, saveStatus.ManifestPath, vectorIndexEdgesFile, func(edges []vectorIndexPersistEdges) []vectorIndexPersistEdges {
 		for i := range edges {
-			edges[i].Distance = nil
+			edges[i].Distances = nil
 		}
 		return edges
 	})
@@ -156,6 +157,97 @@ func TestCollectionVectorIndexSnapshotLoadsLegacyEdgesWithoutDistances(t *testin
 	results, _, err := loaded.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 2, DisableExactFallback: true})
 	if err != nil {
 		t.Fatalf("search legacy-loaded index: %v", err)
+	}
+	requireVectorResultIDs(t, results, "a", "b")
+}
+
+func TestCollectionVectorIndexSnapshotRecomputesShortEdgeDistances(t *testing.T) {
+	dir := t.TempDir()
+	d, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	col := openVectorIndexTestCollection(t, d)
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("a"), []byte("b"), []byte("c"), []byte("d")},
+		[][]byte{
+			[]byte(`{"embedding":[1,0]}`),
+			[]byte(`{"embedding":[0.8,0.2]}`),
+			[]byte(`{"embedding":[0,1]}`),
+			[]byte(`{"embedding":[0.2,0.8]}`),
+		},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	index, err := col.BuildVectorIndex(VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, M: 4})
+	if err != nil {
+		t.Fatalf("build vector index: %v", err)
+	}
+	saveStatus, err := index.SaveSnapshot()
+	if err != nil {
+		t.Fatalf("save snapshot: %v", err)
+	}
+	rewriteVectorIndexSnapshotJSONFile(t, saveStatus.ManifestPath, vectorIndexEdgesFile, func(edges []vectorIndexPersistEdges) []vectorIndexPersistEdges {
+		for i := range edges {
+			if len(edges[i].Distances) > 0 {
+				edges[i].Distances = edges[i].Distances[:len(edges[i].Distances)-1]
+				break
+			}
+		}
+		return edges
+	})
+	loaded, loadStatus, err := col.LoadVectorIndexSnapshot(VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine})
+	if err != nil {
+		t.Fatalf("load short-distance snapshot: %v", err)
+	}
+	if loaded == nil || !loadStatus.Loaded || loadStatus.ExactFallbackReason != "" {
+		t.Fatalf("unexpected short-distance load status loaded=%v status=%+v", loaded != nil, loadStatus)
+	}
+	results, _, err := loaded.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 2, DisableExactFallback: true})
+	if err != nil {
+		t.Fatalf("search short-distance loaded index: %v", err)
+	}
+	requireVectorResultIDs(t, results, "a", "b")
+}
+
+func TestVectorIndexLoadPersistSnapshotRecomputesNonFiniteEdgeDistances(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	col := openVectorIndexTestCollection(t, d)
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("a"), []byte("b"), []byte("c")},
+		[][]byte{
+			[]byte(`{"embedding":[1,0]}`),
+			[]byte(`{"embedding":[0.8,0.2]}`),
+			[]byte(`{"embedding":[0,1]}`),
+		},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	index, err := col.BuildVectorIndex(VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, M: 4})
+	if err != nil {
+		t.Fatalf("build vector index: %v", err)
+	}
+	snapshot, _ := index.persistSnapshot()
+	for i := range snapshot.Edges {
+		if len(snapshot.Edges[i].Distances) > 0 {
+			snapshot.Edges[i].Distances[0] = float32(math.Inf(-1))
+			break
+		}
+	}
+	loaded, err := newVectorIndex(col, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine})
+	if err != nil {
+		t.Fatalf("new vector index: %v", err)
+	}
+	if reason := loaded.loadPersistSnapshot(snapshot); reason != "" {
+		t.Fatalf("load snapshot with non-finite distance reason=%q", reason)
+	}
+	results, _, err := loaded.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 2, DisableExactFallback: true})
+	if err != nil {
+		t.Fatalf("search non-finite-distance loaded index: %v", err)
 	}
 	requireVectorResultIDs(t, results, "a", "b")
 }
