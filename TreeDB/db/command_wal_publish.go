@@ -129,6 +129,12 @@ type commandWALSegmentCleanupDecision struct {
 	Removed bool   `json:"removed,omitempty"`
 }
 
+type commandWALSegmentScanResult struct {
+	maxLSN       uint64
+	typed        bool
+	terminalTail bool
+}
+
 func requireNoUnappliedCommandWAL(dir string, appliedLSN uint64, maxSegmentBytes int64) error {
 	dirty, err := hasUnappliedCommandWALFrames(dir, appliedLSN, maxSegmentBytes)
 	if err != nil {
@@ -153,11 +159,11 @@ func hasUnappliedCommandWALFrames(dir string, appliedLSN uint64, maxSegmentBytes
 		if seg.valueLog || seg.size == 0 {
 			continue
 		}
-		maxLSN, typed, err := commandWALSegmentMaxLSN(seg.path, maxSegmentBytes, seg.seq == activeByLane[seg.lane])
+		scan, err := scanCommandWALSegment(seg.path, maxSegmentBytes, seg.seq == activeByLane[seg.lane])
 		if err != nil {
 			return false, err
 		}
-		if typed && maxLSN > appliedLSN {
+		if scan.typed && scan.maxLSN > appliedLSN {
 			return true, nil
 		}
 	}
@@ -170,11 +176,11 @@ func commandWALActiveSeqByLane(segments []logSegment, maxSegmentBytes int64) (ma
 		if seg.valueLog || seg.size == 0 {
 			continue
 		}
-		_, typed, err := commandWALSegmentMaxLSN(seg.path, maxSegmentBytes, true)
+		scan, err := scanCommandWALSegment(seg.path, maxSegmentBytes, true)
 		if err != nil {
 			return nil, err
 		}
-		if !typed {
+		if !scan.typed && !scan.terminalTail {
 			continue
 		}
 		if seg.seq > activeByLane[seg.lane] {
@@ -185,40 +191,48 @@ func commandWALActiveSeqByLane(segments []logSegment, maxSegmentBytes int64) (ma
 }
 
 func commandWALSegmentMaxLSN(path string, maxSegmentBytes int64, allowTerminalTail bool) (maxLSN uint64, typed bool, err error) {
+	scan, err := scanCommandWALSegment(path, maxSegmentBytes, allowTerminalTail)
+	return scan.maxLSN, scan.typed, err
+}
+
+func scanCommandWALSegment(path string, maxSegmentBytes int64, allowTerminalTail bool) (commandWALSegmentScanResult, error) {
 	// PR2 has no durable per-segment max-LSN catalog yet, so open/cleanup paths
 	// derive classification by streaming the segment without retaining payloads.
 	// A later cleanup manifest can cache this once command replay lands.
 	r, err := commitlog.NewReaderWithOptions(path, commitlog.Options{MaxSegmentSize: maxSegmentBytes})
 	if err != nil {
-		return 0, false, err
+		return commandWALSegmentScanResult{}, err
 	}
 	defer r.Close()
 
 	var lastLSN uint64
+	var scan commandWALSegmentScanResult
 	for {
 		frame, err := r.ReadCommandFrame()
 		if err != nil {
 			if errors.Is(err, io.EOF) {
-				return maxLSN, typed, nil
+				return scan, nil
 			}
 			if errors.Is(err, commitlog.ErrCommandWALTerminalTail) {
+				scan.terminalTail = true
 				if allowTerminalTail {
-					return maxLSN, typed, nil
+					return scan, nil
 				}
-				return 0, typed, err
+				return scan, err
 			}
-			if errors.Is(err, commitlog.ErrCommandWALLegacyPayload) && !typed {
-				return 0, false, nil
+			if errors.Is(err, commitlog.ErrCommandWALLegacyPayload) && !scan.typed {
+				return commandWALSegmentScanResult{}, nil
 			}
-			return 0, typed, err
+			return scan, err
 		}
 		if lastLSN != 0 && frame.LSN <= lastLSN {
-			return 0, true, commitlog.ErrCommandWALDuplicateLSN
+			scan.typed = true
+			return scan, commitlog.ErrCommandWALDuplicateLSN
 		}
 		lastLSN = frame.LSN
-		typed = true
-		if frame.LSN > maxLSN {
-			maxLSN = frame.LSN
+		scan.typed = true
+		if frame.LSN > scan.maxLSN {
+			scan.maxLSN = frame.LSN
 		}
 	}
 }
@@ -237,17 +251,26 @@ func filterCommandWALSegmentsForLegacyReplay(segments []logSegment, appliedLSN u
 			}
 			continue
 		}
-		maxLSN, typed, err := commandWALSegmentMaxLSN(seg.path, maxSegmentBytes, seg.seq == activeByLane[seg.lane])
+		active := seg.seq == activeByLane[seg.lane]
+		scan, err := scanCommandWALSegment(seg.path, maxSegmentBytes, active)
 		if err != nil {
 			return nil, err
 		}
-		if !typed {
+		if !scan.typed {
+			if active && scan.terminalTail {
+				if !skipped {
+					filtered = make([]logSegment, 0, len(segments)-1)
+					filtered = append(filtered, segments[:i]...)
+				}
+				skipped = true
+				continue
+			}
 			if skipped {
 				filtered = append(filtered, seg)
 			}
 			continue
 		}
-		if maxLSN <= appliedLSN {
+		if scan.maxLSN <= appliedLSN {
 			if !skipped {
 				filtered = make([]logSegment, 0, len(segments)-1)
 				filtered = append(filtered, segments[:i]...)
@@ -255,7 +278,7 @@ func filterCommandWALSegmentsForLegacyReplay(segments []logSegment, appliedLSN u
 			skipped = true
 			continue
 		}
-		return nil, fmt.Errorf("%w: command WAL frame LSN %d exceeds applied LSN %d", ErrRecoveryRequired, maxLSN, appliedLSN)
+		return nil, fmt.Errorf("%w: command WAL frame LSN %d exceeds applied LSN %d", ErrRecoveryRequired, scan.maxLSN, appliedLSN)
 	}
 	if !skipped {
 		return segments, nil
@@ -278,18 +301,18 @@ func cleanupCommandWALSegmentsCoveredByAppliedLSN(dir string, appliedLSN uint64,
 			continue
 		}
 		active := seg.seq == activeByLane[seg.lane]
-		maxLSN, typed, err := commandWALSegmentMaxLSN(seg.path, maxSegmentBytes, active)
+		scan, err := scanCommandWALSegment(seg.path, maxSegmentBytes, active)
 		if err != nil {
 			return decisions, err
 		}
-		if !typed {
+		if !scan.typed {
 			continue
 		}
 		decision := commandWALSegmentCleanupDecision{
 			Path:    seg.path,
-			MaxLSN:  maxLSN,
+			MaxLSN:  scan.maxLSN,
 			Active:  active,
-			Covered: maxLSN <= appliedLSN,
+			Covered: scan.maxLSN <= appliedLSN,
 		}
 		if decision.Covered && !decision.Active {
 			if err := os.Remove(seg.path); err != nil && !os.IsNotExist(err) {
