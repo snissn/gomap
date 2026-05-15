@@ -9125,7 +9125,6 @@ func (c *Collection) DeleteDocument(documentID []byte) (bool, error) {
 			continue
 		}
 		if err == nil && deleted {
-			unlockIfLocked()
 			err = commitAmbiguousError("DeleteDocument vector index maintenance", c.notifyVectorIndexesDelete([][]byte{documentID}))
 		}
 		return deleted, err
@@ -9197,7 +9196,6 @@ func (c *Collection) DeleteBatch(documentIDs [][]byte) (int, error) {
 			continue
 		}
 		if err == nil && deleted > 0 {
-			unlockIfLocked()
 			err = commitAmbiguousError("DeleteBatch vector index maintenance", c.notifyVectorIndexesDelete(ids))
 		}
 		return deleted, err
