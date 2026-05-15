@@ -90,6 +90,12 @@ func (p *ColumnPart) WithImagePayloads(image ColumnPartImage) (*ColumnPart, erro
 	if err := image.validateForRead(); err != nil {
 		return nil, err
 	}
+	if image.PartID != p.Descriptor.PartID {
+		return nil, fmt.Errorf("colgranule: image part id=%d does not match part id=%d", image.PartID, p.Descriptor.PartID)
+	}
+	if image.Rows != p.Descriptor.RowCount {
+		return nil, fmt.Errorf("colgranule: image rows=%d does not match part rows=%d", image.Rows, p.Descriptor.RowCount)
+	}
 	out := *p
 	out.Columns = make(map[string]ColumnPartColumn, len(p.Columns))
 	for name, column := range p.Columns {

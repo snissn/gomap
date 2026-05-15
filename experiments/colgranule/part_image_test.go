@@ -141,6 +141,23 @@ func TestColumnPartWithImagePayloadsScansFromImageBytes(t *testing.T) {
 	assertInt64s(t, "has_reply", scan.Columns["has_reply"], []int64{0, 1, 1, 1, 0})
 }
 
+func TestColumnPartWithImagePayloadsRejectsMismatchedImage(t *testing.T) {
+	part, image := testColumnPartImageFixture(t, false)
+	otherPart, otherImage := testColumnPartImageFixtureWithPartID(t, part.Descriptor.PartID+1, false)
+	if otherPart.Descriptor.RowCount != part.Descriptor.RowCount {
+		t.Fatalf("fixture row counts differ: %d/%d", otherPart.Descriptor.RowCount, part.Descriptor.RowCount)
+	}
+	if _, err := part.WithImagePayloads(otherImage); err == nil {
+		t.Fatal("WithImagePayloads accepted an image from another part")
+	}
+
+	mismatchedRows := image
+	mismatchedRows.Rows = part.Descriptor.RowCount + 1
+	if _, err := part.WithImagePayloads(mismatchedRows); err == nil {
+		t.Fatal("WithImagePayloads accepted mismatched image row count")
+	}
+}
+
 func TestColumnPartFromParsedImageScansWithoutOriginalPart(t *testing.T) {
 	opts := partTestOptions([]SortKeyColumn{{Column: "time_us"}})
 	opts.AggregateMetadata = []AggregateMetadataDefinition{aggregateMetadataTestDefinition()}
@@ -605,11 +622,16 @@ func TestColumnPartFromImageRejectsNegativeAggregateMetadataScaledFields(t *test
 
 func testColumnPartImageFixture(t *testing.T, withAggregateMetadata bool) (*ColumnPart, ColumnPartImage) {
 	t.Helper()
+	return testColumnPartImageFixtureWithPartID(t, 7, withAggregateMetadata)
+}
+
+func testColumnPartImageFixtureWithPartID(t *testing.T, partID uint64, withAggregateMetadata bool) (*ColumnPart, ColumnPartImage) {
+	t.Helper()
 	opts := partTestOptions([]SortKeyColumn{{Column: "id"}})
 	if withAggregateMetadata {
 		opts.AggregateMetadata = []AggregateMetadataDefinition{aggregateMetadataTestDefinition()}
 	}
-	part, err := BuildColumnPart(7, opts, ColumnBatch{Columns: map[string][]int64{
+	part, err := BuildColumnPart(partID, opts, ColumnBatch{Columns: map[string][]int64{
 		"id":        {3, 1, 2, 5, 4},
 		"time_us":   {30, 10, 20, 50, 40},
 		"value":     {300, 100, 200, 500, 400},
