@@ -1,0 +1,174 @@
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/internal/commitlog
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkCommandWALRawKVBatchPayloadEncode/ops_1_value_64-12         	 7688029	        30.85 ns/op	2885.15 MB/s	      96 B/op	       1 allocs/op
+BenchmarkCommandWALRawKVBatchPayloadEncode/ops_1_value_64-12         	 7652761	        31.31 ns/op	2842.52 MB/s	      96 B/op	       1 allocs/op
+BenchmarkCommandWALRawKVBatchPayloadEncode/ops_1_value_64-12         	 7314979	        31.51 ns/op	2824.66 MB/s	      96 B/op	       1 allocs/op
+BenchmarkCommandWALRawKVBatchPayloadEncode/ops_1_value_64-12         	 7679928	        31.74 ns/op	2803.66 MB/s	      96 B/op	       1 allocs/op
+BenchmarkCommandWALRawKVBatchPayloadEncode/ops_1_value_64-12         	 7318280	        31.31 ns/op	2842.85 MB/s	      96 B/op	       1 allocs/op
+BenchmarkCommandWALRawKVBatchPayloadEncode/ops_1_value_64-12         	 7515978	        31.02 ns/op	2869.12 MB/s	      96 B/op	       1 allocs/op
+BenchmarkCommandWALRawKVBatchPayloadEncode/ops_16_value_64-12        	  950072	       250.7 ns/op	5322.00 MB/s	    1408 B/op	       1 allocs/op
+BenchmarkCommandWALRawKVBatchPayloadEncode/ops_16_value_64-12        	  948649	       298.2 ns/op	4473.18 MB/s	    1408 B/op	       1 allocs/op
+BenchmarkCommandWALRawKVBatchPayloadEncode/ops_16_value_64-12        	  852987	       253.8 ns/op	5256.89 MB/s	    1408 B/op	       1 allocs/op
+BenchmarkCommandWALRawKVBatchPayloadEncode/ops_16_value_64-12        	  946813	       255.2 ns/op	5227.82 MB/s	    1408 B/op	       1 allocs/op
+BenchmarkCommandWALRawKVBatchPayloadEncode/ops_16_value_64-12        	  945240	       255.5 ns/op	5221.47 MB/s	    1408 B/op	       1 allocs/op
+BenchmarkCommandWALRawKVBatchPayloadEncode/ops_16_value_64-12        	  956144	       251.7 ns/op	5299.05 MB/s	    1408 B/op	       1 allocs/op
+BenchmarkCommandWALRawKVBatchPayloadEncode/ops_128_value_64-12       	  126981	      1884 ns/op	5640.78 MB/s	   10880 B/op	       1 allocs/op
+BenchmarkCommandWALRawKVBatchPayloadEncode/ops_128_value_64-12       	  124966	      1893 ns/op	5615.65 MB/s	   10880 B/op	       1 allocs/op
+BenchmarkCommandWALRawKVBatchPayloadEncode/ops_128_value_64-12       	  125352	      1882 ns/op	5647.63 MB/s	   10880 B/op	       1 allocs/op
+BenchmarkCommandWALRawKVBatchPayloadEncode/ops_128_value_64-12       	  120663	      1884 ns/op	5640.96 MB/s	   10880 B/op	       1 allocs/op
+BenchmarkCommandWALRawKVBatchPayloadEncode/ops_128_value_64-12       	  122875	      1886 ns/op	5637.50 MB/s	   10880 B/op	       1 allocs/op
+BenchmarkCommandWALRawKVBatchPayloadEncode/ops_128_value_64-12       	  122743	      1925 ns/op	5522.54 MB/s	   10880 B/op	       1 allocs/op
+BenchmarkCommandWALRawKVBatchPayloadEncode/ops_16_value_1024-12      	  143516	      1587 ns/op	10522.40 MB/s	   18432 B/op	       1 allocs/op
+BenchmarkCommandWALRawKVBatchPayloadEncode/ops_16_value_1024-12      	  151845	      1579 ns/op	10571.41 MB/s	   18432 B/op	       1 allocs/op
+BenchmarkCommandWALRawKVBatchPayloadEncode/ops_16_value_1024-12      	  132710	      1585 ns/op	10532.57 MB/s	   18432 B/op	       1 allocs/op
+BenchmarkCommandWALRawKVBatchPayloadEncode/ops_16_value_1024-12      	  146137	      1592 ns/op	10488.42 MB/s	   18432 B/op	       1 allocs/op
+BenchmarkCommandWALRawKVBatchPayloadEncode/ops_16_value_1024-12      	  151911	      1594 ns/op	10475.48 MB/s	   18432 B/op	       1 allocs/op
+BenchmarkCommandWALRawKVBatchPayloadEncode/ops_16_value_1024-12      	  151942	      1595 ns/op	10469.13 MB/s	   18432 B/op	       1 allocs/op
+BenchmarkCommandWALRawKVBatchPayloadDecode/ops_1_value_64-12         	 3065344	        76.85 ns/op	1158.12 MB/s	     144 B/op	       3 allocs/op
+BenchmarkCommandWALRawKVBatchPayloadDecode/ops_1_value_64-12         	 3086418	        84.27 ns/op	1056.18 MB/s	     144 B/op	       3 allocs/op
+BenchmarkCommandWALRawKVBatchPayloadDecode/ops_1_value_64-12         	 2856958	        76.72 ns/op	1160.00 MB/s	     144 B/op	       3 allocs/op
+BenchmarkCommandWALRawKVBatchPayloadDecode/ops_1_value_64-12         	 3096566	        76.51 ns/op	1163.21 MB/s	     144 B/op	       3 allocs/op
+BenchmarkCommandWALRawKVBatchPayloadDecode/ops_1_value_64-12         	 3167050	        81.13 ns/op	1096.99 MB/s	     144 B/op	       3 allocs/op
+BenchmarkCommandWALRawKVBatchPayloadDecode/ops_1_value_64-12         	 3180853	        76.47 ns/op	1163.89 MB/s	     144 B/op	       3 allocs/op
+BenchmarkCommandWALRawKVBatchPayloadDecode/ops_16_value_64-12        	  243195	       924.2 ns/op	1443.36 MB/s	    2304 B/op	      33 allocs/op
+BenchmarkCommandWALRawKVBatchPayloadDecode/ops_16_value_64-12        	  244412	       925.3 ns/op	1441.74 MB/s	    2304 B/op	      33 allocs/op
+BenchmarkCommandWALRawKVBatchPayloadDecode/ops_16_value_64-12        	  240775	       953.4 ns/op	1399.17 MB/s	    2304 B/op	      33 allocs/op
+BenchmarkCommandWALRawKVBatchPayloadDecode/ops_16_value_64-12        	  257228	       912.0 ns/op	1462.74 MB/s	    2304 B/op	      33 allocs/op
+BenchmarkCommandWALRawKVBatchPayloadDecode/ops_16_value_64-12        	  247033	       916.1 ns/op	1456.24 MB/s	    2304 B/op	      33 allocs/op
+BenchmarkCommandWALRawKVBatchPayloadDecode/ops_16_value_64-12        	  251496	       911.1 ns/op	1464.09 MB/s	    2304 B/op	      33 allocs/op
+BenchmarkCommandWALRawKVBatchPayloadDecode/ops_128_value_64-12       	   32624	      7418 ns/op	1432.97 MB/s	   18432 B/op	     257 allocs/op
+BenchmarkCommandWALRawKVBatchPayloadDecode/ops_128_value_64-12       	   32302	      7285 ns/op	1459.10 MB/s	   18432 B/op	     257 allocs/op
+BenchmarkCommandWALRawKVBatchPayloadDecode/ops_128_value_64-12       	   32173	      7170 ns/op	1482.67 MB/s	   18432 B/op	     257 allocs/op
+BenchmarkCommandWALRawKVBatchPayloadDecode/ops_128_value_64-12       	   32966	      7443 ns/op	1428.24 MB/s	   18432 B/op	     257 allocs/op
+BenchmarkCommandWALRawKVBatchPayloadDecode/ops_128_value_64-12       	   33021	      7597 ns/op	1399.26 MB/s	   18432 B/op	     257 allocs/op
+BenchmarkCommandWALRawKVBatchPayloadDecode/ops_128_value_64-12       	   33375	      7159 ns/op	1484.75 MB/s	   18432 B/op	     257 allocs/op
+BenchmarkCommandWALRawKVBatchPayloadDecode/ops_16_value_1024-12      	   99176	      2487 ns/op	6713.59 MB/s	   17664 B/op	      33 allocs/op
+BenchmarkCommandWALRawKVBatchPayloadDecode/ops_16_value_1024-12      	   90244	      2461 ns/op	6782.68 MB/s	   17664 B/op	      33 allocs/op
+BenchmarkCommandWALRawKVBatchPayloadDecode/ops_16_value_1024-12      	   97022	      2478 ns/op	6736.28 MB/s	   17664 B/op	      33 allocs/op
+BenchmarkCommandWALRawKVBatchPayloadDecode/ops_16_value_1024-12      	   93885	      2486 ns/op	6714.62 MB/s	   17664 B/op	      33 allocs/op
+BenchmarkCommandWALRawKVBatchPayloadDecode/ops_16_value_1024-12      	   98930	      2495 ns/op	6690.59 MB/s	   17664 B/op	      33 allocs/op
+BenchmarkCommandWALRawKVBatchPayloadDecode/ops_16_value_1024-12      	   94975	      2482 ns/op	6726.38 MB/s	   17664 B/op	      33 allocs/op
+BenchmarkCommandWALRawKVBatchPayloadScan/ops_1_value_64-12           	30974175	         7.604 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCommandWALRawKVBatchPayloadScan/ops_1_value_64-12           	31256820	         7.654 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCommandWALRawKVBatchPayloadScan/ops_1_value_64-12           	29520774	         7.759 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCommandWALRawKVBatchPayloadScan/ops_1_value_64-12           	31375000	         7.690 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCommandWALRawKVBatchPayloadScan/ops_1_value_64-12           	31297503	         7.680 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCommandWALRawKVBatchPayloadScan/ops_1_value_64-12           	31380798	         7.938 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCommandWALRawKVBatchPayloadScan/ops_16_value_64-12          	 3005158	        81.67 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCommandWALRawKVBatchPayloadScan/ops_16_value_64-12          	 3050834	        78.65 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCommandWALRawKVBatchPayloadScan/ops_16_value_64-12          	 2954277	        80.31 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCommandWALRawKVBatchPayloadScan/ops_16_value_64-12          	 2979186	        81.07 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCommandWALRawKVBatchPayloadScan/ops_16_value_64-12          	 3044799	        82.81 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCommandWALRawKVBatchPayloadScan/ops_16_value_64-12          	 2931865	        80.40 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCommandWALRawKVBatchPayloadScan/ops_128_value_64-12         	  381002	       640.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCommandWALRawKVBatchPayloadScan/ops_128_value_64-12         	  334323	       631.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCommandWALRawKVBatchPayloadScan/ops_128_value_64-12         	  370382	       639.6 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCommandWALRawKVBatchPayloadScan/ops_128_value_64-12         	  373416	       630.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCommandWALRawKVBatchPayloadScan/ops_128_value_64-12         	  385500	       633.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCommandWALRawKVBatchPayloadScan/ops_128_value_64-12         	  378049	       638.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCommandWALRawKVBatchPayloadScan/ops_16_value_1024-12        	 3038517	        80.46 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCommandWALRawKVBatchPayloadScan/ops_16_value_1024-12        	 3047581	        79.59 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCommandWALRawKVBatchPayloadScan/ops_16_value_1024-12        	 2945107	        82.24 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCommandWALRawKVBatchPayloadScan/ops_16_value_1024-12        	 3044002	        79.21 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCommandWALRawKVBatchPayloadScan/ops_16_value_1024-12        	 2963974	        81.61 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCommandWALRawKVBatchPayloadScan/ops_16_value_1024-12        	 2823811	        78.83 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCommandWALFrameEncode/ops_1_value_64-12                     	 1254632	       188.7 ns/op	1023.06 MB/s	     208 B/op	       1 allocs/op
+BenchmarkCommandWALFrameEncode/ops_1_value_64-12                     	 1253366	       192.4 ns/op	1003.02 MB/s	     208 B/op	       1 allocs/op
+BenchmarkCommandWALFrameEncode/ops_1_value_64-12                     	 1263187	       189.5 ns/op	1018.68 MB/s	     208 B/op	       1 allocs/op
+BenchmarkCommandWALFrameEncode/ops_1_value_64-12                     	 1279284	       191.0 ns/op	1010.26 MB/s	     208 B/op	       1 allocs/op
+BenchmarkCommandWALFrameEncode/ops_1_value_64-12                     	 1268203	       190.8 ns/op	1011.61 MB/s	     208 B/op	       1 allocs/op
+BenchmarkCommandWALFrameEncode/ops_1_value_64-12                     	 1274959	       189.1 ns/op	1020.58 MB/s	     208 B/op	       1 allocs/op
+BenchmarkCommandWALFrameEncode/ops_16_value_64-12                    	  206103	      1081 ns/op	1330.24 MB/s	    1536 B/op	       1 allocs/op
+BenchmarkCommandWALFrameEncode/ops_16_value_64-12                    	  206698	      1082 ns/op	1328.65 MB/s	    1536 B/op	       1 allocs/op
+BenchmarkCommandWALFrameEncode/ops_16_value_64-12                    	  209068	      1076 ns/op	1336.70 MB/s	    1536 B/op	       1 allocs/op
+BenchmarkCommandWALFrameEncode/ops_16_value_64-12                    	  207061	      1071 ns/op	1342.65 MB/s	    1536 B/op	       1 allocs/op
+BenchmarkCommandWALFrameEncode/ops_16_value_64-12                    	  209382	      1075 ns/op	1337.31 MB/s	    1536 B/op	       1 allocs/op
+BenchmarkCommandWALFrameEncode/ops_16_value_64-12                    	  206836	      1071 ns/op	1342.60 MB/s	    1536 B/op	       1 allocs/op
+BenchmarkCommandWALFrameEncode/ops_128_value_64-12                   	   30050	      7750 ns/op	1385.05 MB/s	   10880 B/op	       1 allocs/op
+BenchmarkCommandWALFrameEncode/ops_128_value_64-12                   	   30775	      7754 ns/op	1384.37 MB/s	   10880 B/op	       1 allocs/op
+BenchmarkCommandWALFrameEncode/ops_128_value_64-12                   	   30816	      7732 ns/op	1388.29 MB/s	   10880 B/op	       1 allocs/op
+BenchmarkCommandWALFrameEncode/ops_128_value_64-12                   	   30720	      7759 ns/op	1383.43 MB/s	   10880 B/op	       1 allocs/op
+BenchmarkCommandWALFrameEncode/ops_128_value_64-12                   	   30459	      7726 ns/op	1389.29 MB/s	   10880 B/op	       1 allocs/op
+BenchmarkCommandWALFrameEncode/ops_128_value_64-12                   	   30759	      7719 ns/op	1390.60 MB/s	   10880 B/op	       1 allocs/op
+BenchmarkCommandWALFrameEncode/ops_16_value_1024-12                  	   21210	     11151 ns/op	1506.44 MB/s	   18432 B/op	       1 allocs/op
+BenchmarkCommandWALFrameEncode/ops_16_value_1024-12                  	   21544	     11143 ns/op	1507.53 MB/s	   18432 B/op	       1 allocs/op
+BenchmarkCommandWALFrameEncode/ops_16_value_1024-12                  	   21362	     11222 ns/op	1496.83 MB/s	   18432 B/op	       1 allocs/op
+BenchmarkCommandWALFrameEncode/ops_16_value_1024-12                  	   21252	     11298 ns/op	1486.77 MB/s	   18432 B/op	       1 allocs/op
+BenchmarkCommandWALFrameEncode/ops_16_value_1024-12                  	   21502	     11109 ns/op	1512.04 MB/s	   18432 B/op	       1 allocs/op
+BenchmarkCommandWALFrameEncode/ops_16_value_1024-12                  	   21372	     11110 ns/op	1512.03 MB/s	   18432 B/op	       1 allocs/op
+BenchmarkCommandWALFrameDecode/ops_1_value_64-12                     	 1201210	       202.7 ns/op	 952.27 MB/s	      96 B/op	       1 allocs/op
+BenchmarkCommandWALFrameDecode/ops_1_value_64-12                     	 1217976	       197.4 ns/op	 977.74 MB/s	      96 B/op	       1 allocs/op
+BenchmarkCommandWALFrameDecode/ops_1_value_64-12                     	 1223434	       197.3 ns/op	 978.19 MB/s	      96 B/op	       1 allocs/op
+BenchmarkCommandWALFrameDecode/ops_1_value_64-12                     	 1233328	       201.1 ns/op	 959.74 MB/s	      96 B/op	       1 allocs/op
+BenchmarkCommandWALFrameDecode/ops_1_value_64-12                     	 1227104	       209.6 ns/op	 920.92 MB/s	      96 B/op	       1 allocs/op
+BenchmarkCommandWALFrameDecode/ops_1_value_64-12                     	 1222909	       193.9 ns/op	 995.34 MB/s	      96 B/op	       1 allocs/op
+BenchmarkCommandWALFrameDecode/ops_16_value_64-12                    	  207034	      1077 ns/op	1334.87 MB/s	    1408 B/op	       1 allocs/op
+BenchmarkCommandWALFrameDecode/ops_16_value_64-12                    	  209265	      1078 ns/op	1334.53 MB/s	    1408 B/op	       1 allocs/op
+BenchmarkCommandWALFrameDecode/ops_16_value_64-12                    	  203755	      1078 ns/op	1333.50 MB/s	    1408 B/op	       1 allocs/op
+BenchmarkCommandWALFrameDecode/ops_16_value_64-12                    	  208174	      1082 ns/op	1328.72 MB/s	    1408 B/op	       1 allocs/op
+BenchmarkCommandWALFrameDecode/ops_16_value_64-12                    	  210145	      1083 ns/op	1327.31 MB/s	    1408 B/op	       1 allocs/op
+BenchmarkCommandWALFrameDecode/ops_16_value_64-12                    	  205666	      1088 ns/op	1321.54 MB/s	    1408 B/op	       1 allocs/op
+BenchmarkCommandWALFrameDecode/ops_128_value_64-12                   	   31119	      7635 ns/op	1405.91 MB/s	   10880 B/op	       1 allocs/op
+BenchmarkCommandWALFrameDecode/ops_128_value_64-12                   	   31459	      7641 ns/op	1404.82 MB/s	   10880 B/op	       1 allocs/op
+BenchmarkCommandWALFrameDecode/ops_128_value_64-12                   	   31138	      7638 ns/op	1405.42 MB/s	   10880 B/op	       1 allocs/op
+BenchmarkCommandWALFrameDecode/ops_128_value_64-12                   	   30723	      7635 ns/op	1405.93 MB/s	   10880 B/op	       1 allocs/op
+BenchmarkCommandWALFrameDecode/ops_128_value_64-12                   	   31155	      7682 ns/op	1397.22 MB/s	   10880 B/op	       1 allocs/op
+BenchmarkCommandWALFrameDecode/ops_128_value_64-12                   	   30892	      7645 ns/op	1404.07 MB/s	   10880 B/op	       1 allocs/op
+BenchmarkCommandWALFrameDecode/ops_16_value_1024-12                  	   21618	     12371 ns/op	1357.86 MB/s	   18432 B/op	       1 allocs/op
+BenchmarkCommandWALFrameDecode/ops_16_value_1024-12                  	   21878	     10992 ns/op	1528.18 MB/s	   18432 B/op	       1 allocs/op
+BenchmarkCommandWALFrameDecode/ops_16_value_1024-12                  	   21380	     10947 ns/op	1534.54 MB/s	   18432 B/op	       1 allocs/op
+BenchmarkCommandWALFrameDecode/ops_16_value_1024-12                  	   21385	     12177 ns/op	1379.53 MB/s	   18432 B/op	       1 allocs/op
+BenchmarkCommandWALFrameDecode/ops_16_value_1024-12                  	   21981	     10917 ns/op	1538.68 MB/s	   18432 B/op	       1 allocs/op
+BenchmarkCommandWALFrameDecode/ops_16_value_1024-12                  	   21753	     10979 ns/op	1530.06 MB/s	   18432 B/op	       1 allocs/op
+BenchmarkWriterAppendCommandRawKVBatch/ops_1_value_64-12             	 1000000	       256.9 ns/op	 751.18 MB/s	       0 B/op	       0 allocs/op
+BenchmarkWriterAppendCommandRawKVBatch/ops_1_value_64-12             	 1000000	       251.7 ns/op	 766.81 MB/s	       0 B/op	       0 allocs/op
+BenchmarkWriterAppendCommandRawKVBatch/ops_1_value_64-12             	 1000000	       257.2 ns/op	 750.34 MB/s	       0 B/op	       0 allocs/op
+BenchmarkWriterAppendCommandRawKVBatch/ops_1_value_64-12             	 1000000	       252.5 ns/op	 764.47 MB/s	       0 B/op	       0 allocs/op
+BenchmarkWriterAppendCommandRawKVBatch/ops_1_value_64-12             	 1000000	       284.1 ns/op	 679.32 MB/s	       0 B/op	       0 allocs/op
+BenchmarkWriterAppendCommandRawKVBatch/ops_1_value_64-12             	 1000000	       260.7 ns/op	 740.44 MB/s	       0 B/op	       0 allocs/op
+BenchmarkWriterAppendCommandRawKVBatch/ops_16_value_64-12            	  165022	      1553 ns/op	 926.06 MB/s	       0 B/op	       0 allocs/op
+BenchmarkWriterAppendCommandRawKVBatch/ops_16_value_64-12            	  154540	      1824 ns/op	 788.42 MB/s	       0 B/op	       0 allocs/op
+BenchmarkWriterAppendCommandRawKVBatch/ops_16_value_64-12            	  166099	      1525 ns/op	 943.24 MB/s	       0 B/op	       0 allocs/op
+BenchmarkWriterAppendCommandRawKVBatch/ops_16_value_64-12            	  143624	      1575 ns/op	 912.94 MB/s	       0 B/op	       0 allocs/op
+BenchmarkWriterAppendCommandRawKVBatch/ops_16_value_64-12            	  159388	      1470 ns/op	 977.97 MB/s	       0 B/op	       0 allocs/op
+BenchmarkWriterAppendCommandRawKVBatch/ops_16_value_64-12            	  164252	      1526 ns/op	 942.10 MB/s	       0 B/op	       0 allocs/op
+BenchmarkWriterAppendCommandRawKVBatch/ops_128_value_64-12           	   20324	     11458 ns/op	 936.80 MB/s	       0 B/op	       0 allocs/op
+BenchmarkWriterAppendCommandRawKVBatch/ops_128_value_64-12           	   20805	     11493 ns/op	 933.99 MB/s	       0 B/op	       0 allocs/op
+BenchmarkWriterAppendCommandRawKVBatch/ops_128_value_64-12           	   19182	     11675 ns/op	 919.38 MB/s	       0 B/op	       0 allocs/op
+BenchmarkWriterAppendCommandRawKVBatch/ops_128_value_64-12           	   22362	     10737 ns/op	 999.76 MB/s	       0 B/op	       0 allocs/op
+BenchmarkWriterAppendCommandRawKVBatch/ops_128_value_64-12           	   22106	     11267 ns/op	 952.73 MB/s	       0 B/op	       0 allocs/op
+BenchmarkWriterAppendCommandRawKVBatch/ops_128_value_64-12           	   22047	     10847 ns/op	 989.59 MB/s	       0 B/op	       0 allocs/op
+BenchmarkWriterAppendCommandRawKVBatch/ops_16_value_1024-12          	   15036	     16819 ns/op	 998.76 MB/s	       0 B/op	       0 allocs/op
+BenchmarkWriterAppendCommandRawKVBatch/ops_16_value_1024-12          	   14690	     16311 ns/op	1029.83 MB/s	       0 B/op	       0 allocs/op
+BenchmarkWriterAppendCommandRawKVBatch/ops_16_value_1024-12          	   14961	     16274 ns/op	1032.19 MB/s	       0 B/op	       0 allocs/op
+BenchmarkWriterAppendCommandRawKVBatch/ops_16_value_1024-12          	   14590	     16560 ns/op	1014.37 MB/s	       0 B/op	       0 allocs/op
+BenchmarkWriterAppendCommandRawKVBatch/ops_16_value_1024-12          	   14865	     16662 ns/op	1008.14 MB/s	       0 B/op	       0 allocs/op
+BenchmarkWriterAppendCommandRawKVBatch/ops_16_value_1024-12          	   14971	     16074 ns/op	1045.07 MB/s	       0 B/op	       0 allocs/op
+BenchmarkWriterAppendBatchLegacyRawKV/ops_1_value_64-12              	 3534559	        67.99 ns/op	1500.17 MB/s	       0 B/op	       0 allocs/op
+BenchmarkWriterAppendBatchLegacyRawKV/ops_1_value_64-12              	 3689853	        66.63 ns/op	1530.73 MB/s	       0 B/op	       0 allocs/op
+BenchmarkWriterAppendBatchLegacyRawKV/ops_1_value_64-12              	 3633400	        66.66 ns/op	1530.17 MB/s	       0 B/op	       0 allocs/op
+BenchmarkWriterAppendBatchLegacyRawKV/ops_1_value_64-12              	 3602080	        68.06 ns/op	1498.62 MB/s	       0 B/op	       0 allocs/op
+BenchmarkWriterAppendBatchLegacyRawKV/ops_1_value_64-12              	 3605497	        65.14 ns/op	1565.91 MB/s	       0 B/op	       0 allocs/op
+BenchmarkWriterAppendBatchLegacyRawKV/ops_1_value_64-12              	 3697082	        68.75 ns/op	1483.62 MB/s	       0 B/op	       0 allocs/op
+BenchmarkWriterAppendBatchLegacyRawKV/ops_16_value_64-12             	  282998	       739.9 ns/op	2104.29 MB/s	       0 B/op	       0 allocs/op
+BenchmarkWriterAppendBatchLegacyRawKV/ops_16_value_64-12             	  355207	       727.0 ns/op	2141.60 MB/s	       0 B/op	       0 allocs/op
+BenchmarkWriterAppendBatchLegacyRawKV/ops_16_value_64-12             	  360750	       727.4 ns/op	2140.55 MB/s	       0 B/op	       0 allocs/op
+BenchmarkWriterAppendBatchLegacyRawKV/ops_16_value_64-12             	  344214	       731.5 ns/op	2128.56 MB/s	       0 B/op	       0 allocs/op
+BenchmarkWriterAppendBatchLegacyRawKV/ops_16_value_64-12             	  341868	       731.7 ns/op	2128.03 MB/s	       0 B/op	       0 allocs/op
+BenchmarkWriterAppendBatchLegacyRawKV/ops_16_value_64-12             	  367448	       725.2 ns/op	2147.13 MB/s	       0 B/op	       0 allocs/op
+BenchmarkWriterAppendBatchLegacyRawKV/ops_128_value_64-12            	   39004	      5930 ns/op	2094.56 MB/s	       0 B/op	       0 allocs/op
+BenchmarkWriterAppendBatchLegacyRawKV/ops_128_value_64-12            	   42636	      6110 ns/op	2032.89 MB/s	       0 B/op	       0 allocs/op
+BenchmarkWriterAppendBatchLegacyRawKV/ops_128_value_64-12            	   41973	      6338 ns/op	1959.79 MB/s	       0 B/op	       0 allocs/op
+BenchmarkWriterAppendBatchLegacyRawKV/ops_128_value_64-12            	   41589	      5914 ns/op	2100.33 MB/s	       0 B/op	       0 allocs/op
+BenchmarkWriterAppendBatchLegacyRawKV/ops_128_value_64-12            	   39976	      6083 ns/op	2041.86 MB/s	       0 B/op	       0 allocs/op
+BenchmarkWriterAppendBatchLegacyRawKV/ops_128_value_64-12            	   40243	      5930 ns/op	2094.74 MB/s	       0 B/op	       0 allocs/op
+BenchmarkWriterAppendBatchLegacyRawKV/ops_16_value_1024-12           	   38482	      6302 ns/op	2684.29 MB/s	       0 B/op	       0 allocs/op
+BenchmarkWriterAppendBatchLegacyRawKV/ops_16_value_1024-12           	   34696	      6232 ns/op	2714.74 MB/s	       0 B/op	       0 allocs/op
+BenchmarkWriterAppendBatchLegacyRawKV/ops_16_value_1024-12           	   38601	      6269 ns/op	2698.34 MB/s	       0 B/op	       0 allocs/op
+BenchmarkWriterAppendBatchLegacyRawKV/ops_16_value_1024-12           	   37231	      6098 ns/op	2774.13 MB/s	       0 B/op	       0 allocs/op
+BenchmarkWriterAppendBatchLegacyRawKV/ops_16_value_1024-12           	   39985	      6330 ns/op	2672.64 MB/s	       0 B/op	       0 allocs/op
+BenchmarkWriterAppendBatchLegacyRawKV/ops_16_value_1024-12           	   36160	      6930 ns/op	2441.17 MB/s	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/snissn/gomap/TreeDB/internal/commitlog	56.786s

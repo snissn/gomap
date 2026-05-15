@@ -278,6 +278,31 @@ func TestCommandWALRawKVBatchAllowsEmptyKeysButRejectsNilKeys(t *testing.T) {
 	}
 }
 
+func TestCommandWALRawKVBatchScanUsesPayloadBackedViews(t *testing.T) {
+	payload, err := EncodeRawKVBatchPayload([]RawKVOperation{
+		{Op: RawKVOpSet, Key: []byte("alpha"), Value: []byte("one")},
+		{Op: RawKVOpDelete, Key: []byte("beta")},
+	})
+	if err != nil {
+		t.Fatalf("EncodeRawKVBatchPayload: %v", err)
+	}
+	var got []RawKVOperation
+	err = ScanRawKVBatchPayload(payload, func(op RawKVOp, key, value []byte) error {
+		got = append(got, RawKVOperation{Op: op, Key: key, Value: value})
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("ScanRawKVBatchPayload: %v", err)
+	}
+	if len(got) != 2 || got[0].Op != RawKVOpSet || string(got[0].Key) != "alpha" || string(got[0].Value) != "one" || got[1].Op != RawKVOpDelete || string(got[1].Key) != "beta" || len(got[1].Value) != 0 {
+		t.Fatalf("scanned ops mismatch: %+v", got)
+	}
+	payload[rawKVBatchHeaderSize+rawKVOpHeaderSize] = 'A'
+	if string(got[0].Key) != "Alpha" {
+		t.Fatalf("scan should return payload-backed key view, got %q", string(got[0].Key))
+	}
+}
+
 func TestCommandWALRawKVBatchOneLSNAtomic(t *testing.T) {
 	payload, err := EncodeRawKVBatchPayload([]RawKVOperation{
 		{Op: RawKVOpSet, Key: []byte("a"), Value: []byte("1")},

@@ -299,10 +299,11 @@ func (w *Writer) AppendBatch(records []Record) error {
 }
 
 func (w *Writer) AppendCommand(env CommandEnvelope) error {
-	payload, err := EncodeCommandFrame(env)
+	payload, err := encodeCommandFrameTo(w.scratch[:0], env)
 	if err != nil {
 		return err
 	}
+	w.scratch = payload
 	if w.maxSegmentSize > 0 && int64(len(payload)) > w.maxSegmentSize {
 		return ErrRecordTooLarge
 	}

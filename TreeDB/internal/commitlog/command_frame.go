@@ -109,6 +109,10 @@ type CommandEnvelope struct {
 }
 
 func EncodeCommandFrame(env CommandEnvelope) ([]byte, error) {
+	return encodeCommandFrameTo(nil, env)
+}
+
+func encodeCommandFrameTo(dst []byte, env CommandEnvelope) ([]byte, error) {
 	if env.Version == 0 {
 		env.Version = CommandFrameVersion
 	}
@@ -138,7 +142,12 @@ func EncodeCommandFrame(env CommandEnvelope) ([]byte, error) {
 		return nil, ErrRecordTooLarge
 	}
 	total := commandFrameHeaderSize + len(env.Payload) + len(extRefs) + len(preconditions) + len(assertions)
-	frame := make([]byte, total)
+	if cap(dst) < total {
+		dst = make([]byte, total)
+	} else {
+		dst = dst[:total]
+	}
+	frame := dst
 	copy(frame[0:4], commandFrameMagic[:])
 	binary.LittleEndian.PutUint16(frame[4:6], env.Version)
 	binary.LittleEndian.PutUint16(frame[6:8], CommandFrameVersion)
@@ -282,8 +291,7 @@ func validateCommandEnvelopeIdentity(env CommandEnvelope) error {
 func validateCommandEnvelopePayload(env CommandEnvelope) error {
 	switch env.Kind {
 	case CommandKindRawKVBatch:
-		_, err := DecodeRawKVBatchPayload(env.Payload)
-		return err
+		return validateRawKVBatchPayload(env.Payload)
 	default:
 		return nil
 	}
@@ -323,21 +331,48 @@ func EncodeRawKVBatchPayload(ops []RawKVOperation) ([]byte, error) {
 }
 
 func DecodeRawKVBatchPayload(payload []byte) ([]RawKVOperation, error) {
+	if err := validateRawKVBatchPayload(payload); err != nil {
+		return nil, err
+	}
+	count := binary.LittleEndian.Uint32(payload[2:6])
+	ops := make([]RawKVOperation, 0, count)
+	off := rawKVBatchHeaderSize
+	for i := uint32(0); i < count; i++ {
+		op := RawKVOp(payload[off])
+		keyLen := binary.LittleEndian.Uint32(payload[off+1 : off+5])
+		valueLen := binary.LittleEndian.Uint32(payload[off+5 : off+9])
+		off += rawKVOpHeaderSize
+		entry := RawKVOperation{Op: op}
+		entry.Key = cloneBytesPreserveEmpty(payload[off : off+int(keyLen)])
+		off += int(keyLen)
+		entry.Value = append([]byte(nil), payload[off:off+int(valueLen)]...)
+		off += int(valueLen)
+		ops = append(ops, entry)
+	}
+	return ops, nil
+}
+
+func validateRawKVBatchPayload(payload []byte) error {
+	return ScanRawKVBatchPayload(payload, nil)
+}
+
+// ScanRawKVBatchPayload validates payload and visits each op with slices that
+// reference payload. Use DecodeRawKVBatchPayload when callers need owned copies.
+func ScanRawKVBatchPayload(payload []byte, visit func(op RawKVOp, key, value []byte) error) error {
 	if len(payload) < rawKVBatchHeaderSize {
-		return nil, ErrCorrupt
+		return ErrCorrupt
 	}
 	if binary.LittleEndian.Uint16(payload[0:2]) != 1 {
-		return nil, ErrCommandWALUnsupportedVersion
+		return ErrCommandWALUnsupportedVersion
 	}
 	count := binary.LittleEndian.Uint32(payload[2:6])
 	if count > uint32((len(payload)-rawKVBatchHeaderSize)/rawKVOpHeaderSize) {
-		return nil, ErrCorrupt
+		return ErrCorrupt
 	}
-	var ops []RawKVOperation
 	off := rawKVBatchHeaderSize
 	for i := uint32(0); i < count; i++ {
 		if off+rawKVOpHeaderSize > len(payload) {
-			return nil, ErrCorrupt
+			return ErrCorrupt
 		}
 		op := RawKVOp(payload[off])
 		keyLen := binary.LittleEndian.Uint32(payload[off+1 : off+5])
@@ -345,33 +380,43 @@ func DecodeRawKVBatchPayload(payload []byte) ([]RawKVOperation, error) {
 		off += rawKVOpHeaderSize
 		need := uint64(keyLen) + uint64(valueLen)
 		if need > uint64(len(payload)-off) || need > uint64(^uint(0)>>1) {
-			return nil, ErrCorrupt
+			return ErrCorrupt
 		}
-		entry := RawKVOperation{Op: op}
-		entry.Key = cloneBytesPreserveEmpty(payload[off : off+int(keyLen)])
+		key := payload[off : off+int(keyLen)]
 		off += int(keyLen)
-		entry.Value = append([]byte(nil), payload[off:off+int(valueLen)]...)
-		off += int(valueLen)
-		if err := validateRawKVOperation(&entry); err != nil {
-			return nil, err
+		if err := validateRawKVOperationShape(op, key, valueLen); err != nil {
+			return err
 		}
-		ops = append(ops, entry)
+		value := payload[off : off+int(valueLen)]
+		if visit != nil {
+			if err := visit(op, key, value); err != nil {
+				return err
+			}
+		}
+		off += int(valueLen)
 	}
 	if off != len(payload) {
-		return nil, ErrCorrupt
+		return ErrCorrupt
 	}
-	return ops, nil
+	return nil
 }
 
 func validateRawKVOperation(op *RawKVOperation) error {
 	if op == nil || op.Key == nil {
 		return ErrCorrupt
 	}
-	switch op.Op {
+	return validateRawKVOperationShape(op.Op, op.Key, uint32(len(op.Value)))
+}
+
+func validateRawKVOperationShape(op RawKVOp, key []byte, valueLen uint32) error {
+	if key == nil {
+		return ErrCorrupt
+	}
+	switch op {
 	case RawKVOpSet:
 		return nil
 	case RawKVOpDelete:
-		if len(op.Value) != 0 {
+		if valueLen != 0 {
 			return ErrCorrupt
 		}
 		return nil

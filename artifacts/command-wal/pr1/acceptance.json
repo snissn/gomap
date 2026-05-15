@@ -38,6 +38,7 @@
     "TestCommandWALTerminalShortHeaderIgnored",
     "TestCommandWALDuplicateLSNFailsClosed",
     "TestCommandWALRawKVBatchOneLSNAtomic",
+    "TestCommandWALRawKVBatchScanUsesPayloadBackedViews",
     "TestCommandWALExistingCoverageInventoryMapsLegacyWALTests",
     "TestCommandWALLegacyRawEncodingTestsHaveTypedFrameEquivalents"
   ],
@@ -56,8 +57,18 @@
     "TreeDB/internal/commitlog/testdata/command_wal_v1_collection_insert_placeholder.hex": "78b322757c095555310d0fb9537757c9c8fad4bae4397273a9d369504595eb29",
     "TreeDB/internal/commitlog/testdata/command_wal_v1_catalog_placeholder.hex": "45c24490f6f5f7186cacb020a182394d2774da80ad3a15760599ad5cc234a8ba"
   },
-  "benchmark_commands": [],
-  "metrics_names": [],
+  "benchmark_commands": [
+    "GOWORK=off go test ./TreeDB/internal/commitlog -run '^$' -bench 'Benchmark(CommandWALRawKVBatchPayload(Encode|Decode|Scan)|CommandWALFrame(Encode|Decode)|WriterAppend(CommandRawKVBatch|BatchLegacyRawKV))' -benchmem -benchtime=200ms -count=6"
+  ],
+  "metrics_names": [
+    "CommandWALRawKVBatchPayloadEncode ns/op B/op allocs/op MB/s",
+    "CommandWALRawKVBatchPayloadDecode ns/op B/op allocs/op MB/s",
+    "CommandWALRawKVBatchPayloadScan ns/op B/op allocs/op",
+    "CommandWALFrameEncode ns/op B/op allocs/op MB/s",
+    "CommandWALFrameDecode ns/op B/op allocs/op MB/s",
+    "WriterAppendCommandRawKVBatch ns/op B/op allocs/op MB/s",
+    "WriterAppendBatchLegacyRawKV ns/op B/op allocs/op MB/s"
+  ],
   "unsupported_commands": [
     "production command_wal_v1 DB open returns ErrCommandWALUnsupported until execution/recovery lands",
     "legacy raw commitlog payloads are rejected by command-frame reader"
@@ -76,5 +87,16 @@
     "AppliedCommandLSN publish/checkpoint plumbing starts in PR2",
     "collection and catalog placeholders are durable-byte fixtures only"
   ],
-  "implementation_commit": "d86283ae8331666714b8b42c80dca74ada139667"
+  "implementation_commit": "d86283ae8331666714b8b42c80dca74ada139667",
+  "benchmark_artifacts": [
+    "artifacts/command-wal/pr1/microbench.txt",
+    "artifacts/command-wal/pr1/microbench-benchstat.txt"
+  ],
+  "benchmark_summary": {
+    "append_command_allocs_per_op": "0 across all measured batch shapes",
+    "append_command_throughput": "716 MiB/s for 1x64B, 891-975 MiB/s for larger measured batches",
+    "payload_scan_allocs_per_op": "0 across all measured batch shapes",
+    "frame_encode_decode_allocs_per_op": "1 allocation for returned frame/payload ownership",
+    "owning_payload_decode_allocs_per_op": "copies keys/values by design; use ScanRawKVBatchPayload for replay-style zero-copy application"
+  }
 }
