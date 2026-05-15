@@ -289,6 +289,10 @@ func decodeColumnPartDescriptorSection(data []byte) (ColumnPartDescriptor, map[s
 	if err != nil {
 		return ColumnPartDescriptor{}, nil, err
 	}
+	granules, err := dec.boundedCount(granuleCount, 64, "descriptor granules")
+	if err != nil {
+		return ColumnPartDescriptor{}, nil, err
+	}
 	desc := ColumnPartDescriptor{
 		Version:           uint8(version),
 		PartID:            partID,
@@ -296,9 +300,9 @@ func decodeColumnPartDescriptorSection(data []byte) (ColumnPartDescriptor, map[s
 		RowCount:          int(rowCount),
 		VisibleRowCount:   int(visibleRows),
 		LogicalPrimaryKey: logicalPrimaryKey,
-		Granules:          make([]GranuleDescriptor, 0, granuleCount),
+		Granules:          make([]GranuleDescriptor, 0, granules),
 	}
-	for i := 0; i < int(granuleCount); i++ {
+	for i := 0; i < granules; i++ {
 		granule, err := decodeGranuleDescriptor(&dec)
 		if err != nil {
 			return ColumnPartDescriptor{}, nil, err
@@ -309,8 +313,12 @@ func decodeColumnPartDescriptorSection(data []byte) (ColumnPartDescriptor, map[s
 	if err != nil {
 		return ColumnPartDescriptor{}, nil, err
 	}
-	columns := make(map[string]ColumnPartColumn, columnCount)
-	for i := 0; i < int(columnCount); i++ {
+	columnTotal, err := dec.boundedCount(columnCount, 10, "descriptor columns")
+	if err != nil {
+		return ColumnPartDescriptor{}, nil, err
+	}
+	columns := make(map[string]ColumnPartColumn, columnTotal)
+	for i := 0; i < columnTotal; i++ {
 		name, err := dec.str()
 		if err != nil {
 			return ColumnPartDescriptor{}, nil, err
@@ -327,15 +335,19 @@ func decodeColumnPartDescriptorSection(data []byte) (ColumnPartDescriptor, map[s
 		if err != nil {
 			return ColumnPartDescriptor{}, nil, err
 		}
-		columnDesc := ColumnPartColumnDescriptor{Name: name, Type: columnType, Blocks: make([]ColumnBlockDescriptor, 0, blockCount)}
+		blocks, err := dec.boundedCount(blockCount, 94, "descriptor column blocks")
+		if err != nil {
+			return ColumnPartDescriptor{}, nil, err
+		}
+		columnDesc := ColumnPartColumnDescriptor{Name: name, Type: columnType, Blocks: make([]ColumnBlockDescriptor, 0, blocks)}
 		column := ColumnPartColumn{
 			Definition: ColumnDefinition{
 				Name: name,
 				Type: columnType,
 			},
-			Blocks: make([]ColumnBlock, 0, blockCount),
+			Blocks: make([]ColumnBlock, 0, blocks),
 		}
-		for j := 0; j < int(blockCount); j++ {
+		for j := 0; j < blocks; j++ {
 			blockDesc, granule, err := decodeColumnBlockDescriptorAndGranule(&dec)
 			if err != nil {
 				return ColumnPartDescriptor{}, nil, err
@@ -507,8 +519,12 @@ func decodeSortKeyMetadataSection(image ColumnPartImage) ([]SortKeyColumn, error
 	if err != nil {
 		return nil, err
 	}
-	out := make([]SortKeyColumn, 0, count)
-	for i := 0; i < int(count); i++ {
+	total, err := dec.boundedCount(count, 12, "sort key columns")
+	if err != nil {
+		return nil, err
+	}
+	out := make([]SortKeyColumn, 0, total)
+	for i := 0; i < total; i++ {
 		column, err := dec.str()
 		if err != nil {
 			return nil, err
@@ -539,8 +555,12 @@ func decodeSortKeyMarksSection(image ColumnPartImage) ([]SortKeyMark, error) {
 	if err != nil {
 		return nil, err
 	}
-	out := make([]SortKeyMark, 0, count)
-	for i := 0; i < int(count); i++ {
+	total, err := dec.boundedCount(count, 16, "sort key marks")
+	if err != nil {
+		return nil, err
+	}
+	out := make([]SortKeyMark, 0, total)
+	for i := 0; i < total; i++ {
 		rows, err := dec.i64()
 		if err != nil {
 			return nil, err
@@ -553,8 +573,12 @@ func decodeSortKeyMarksSection(image ColumnPartImage) ([]SortKeyMark, error) {
 		if err != nil {
 			return nil, err
 		}
-		mark := SortKeyMark{Rows: int(rows), Columns: columns, Prefixes: make([]SortKeyPrefixSummary, 0, prefixCount)}
-		for j := 0; j < int(prefixCount); j++ {
+		prefixes, err := dec.boundedCount(prefixCount, 20, "sort key mark prefixes")
+		if err != nil {
+			return nil, err
+		}
+		mark := SortKeyMark{Rows: int(rows), Columns: columns, Prefixes: make([]SortKeyPrefixSummary, 0, prefixes)}
+		for j := 0; j < prefixes; j++ {
 			prefixColumns, err := dec.stringSlice()
 			if err != nil {
 				return nil, err
@@ -607,8 +631,12 @@ func decodeRowLocatorsSection(image ColumnPartImage) (map[int64]RowLocator, erro
 	if err != nil {
 		return nil, err
 	}
-	out := make(map[int64]RowLocator, count)
-	for i := 0; i < int(count); i++ {
+	total, err := dec.boundedCount(count, 32, "row locators")
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[int64]RowLocator, total)
+	for i := 0; i < total; i++ {
 		primaryID, err := dec.i64()
 		if err != nil {
 			return nil, err
@@ -685,8 +713,12 @@ func (i ColumnPartImage) Dictionaries() (map[string]map[string]int64, error) {
 	if err != nil {
 		return nil, err
 	}
-	out := make(map[string]map[string]int64, count)
-	for idx := 0; idx < int(count); idx++ {
+	total, err := dec.boundedCount(count, 8, "dictionaries")
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]map[string]int64, total)
+	for idx := 0; idx < total; idx++ {
 		name, err := dec.str()
 		if err != nil {
 			return nil, err
@@ -698,9 +730,13 @@ func (i ColumnPartImage) Dictionaries() (map[string]map[string]int64, error) {
 		if err != nil {
 			return nil, err
 		}
-		values := make(map[string]int64, entryCount)
-		codes := make(map[int64]string, entryCount)
-		for j := 0; j < int(entryCount); j++ {
+		entries, err := dec.boundedCount(entryCount, 12, "dictionary entries")
+		if err != nil {
+			return nil, err
+		}
+		values := make(map[string]int64, entries)
+		codes := make(map[int64]string, entries)
+		for j := 0; j < entries; j++ {
 			code, err := dec.i64()
 			if err != nil {
 				return nil, err
@@ -746,12 +782,16 @@ func decodeAggregateMetadataSections(image ColumnPartImage) (map[string]Aggregat
 		if err != nil {
 			return nil, err
 		}
+		granules, err := dec.boundedCount(granuleCount, 36, "aggregate metadata granules")
+		if err != nil {
+			return nil, err
+		}
 		metadata := AggregateMetadata{
 			Definition: def,
 			Stats:      stats,
-			Granules:   make([]AggregateMetadataGranule, 0, granuleCount),
+			Granules:   make([]AggregateMetadataGranule, 0, granules),
 		}
-		for i := 0; i < int(granuleCount); i++ {
+		for i := 0; i < granules; i++ {
 			granuleOrdinal, err := dec.i64()
 			if err != nil {
 				return nil, err
@@ -772,14 +812,18 @@ func decodeAggregateMetadataSections(image ColumnPartImage) (map[string]Aggregat
 			if err != nil {
 				return nil, err
 			}
+			entries, err := dec.boundedCount(entryCount, 24, "aggregate metadata entries")
+			if err != nil {
+				return nil, err
+			}
 			granule := AggregateMetadataGranule{
 				GranuleOrdinal: int(granuleOrdinal),
 				FirstRow:       int(firstRow),
 				RowCount:       int(rowCount),
 				MatchedRows:    int(matchedRows),
-				Entries:        make([]AggregateMetadataEntry, 0, entryCount),
+				Entries:        make([]AggregateMetadataEntry, 0, entries),
 			}
-			for j := 0; j < int(entryCount); j++ {
+			for j := 0; j < entries; j++ {
 				group, err := dec.u32()
 				if err != nil {
 					return nil, err
@@ -833,8 +877,12 @@ func decodeAggregateMetadataDefinition(dec *columnPartImageDecoder) (AggregateMe
 	if err != nil {
 		return AggregateMetadataDefinition{}, err
 	}
-	measures := make([]AggregateMetadataMeasure, 0, measureCount)
-	for i := 0; i < int(measureCount); i++ {
+	measureTotal, err := dec.boundedCount(measureCount, 8, "aggregate metadata measures")
+	if err != nil {
+		return AggregateMetadataDefinition{}, err
+	}
+	measures := make([]AggregateMetadataMeasure, 0, measureTotal)
+	for i := 0; i < measureTotal; i++ {
 		op, err := dec.str()
 		if err != nil {
 			return AggregateMetadataDefinition{}, err
@@ -849,8 +897,12 @@ func decodeAggregateMetadataDefinition(dec *columnPartImageDecoder) (AggregateMe
 	if err != nil {
 		return AggregateMetadataDefinition{}, err
 	}
-	predicates := make([]AggregateMetadataPredicate, 0, predicateCount)
-	for i := 0; i < int(predicateCount); i++ {
+	predicateTotal, err := dec.boundedCount(predicateCount, 16, "aggregate metadata predicates")
+	if err != nil {
+		return AggregateMetadataDefinition{}, err
+	}
+	predicates := make([]AggregateMetadataPredicate, 0, predicateTotal)
+	for i := 0; i < predicateTotal; i++ {
 		column, err := dec.str()
 		if err != nil {
 			return AggregateMetadataDefinition{}, err
@@ -1149,11 +1201,15 @@ func (d *columnPartImageDecoder) str() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := d.require(int(length)); err != nil {
+	lengthInt, err := d.countToInt(length, "string bytes")
+	if err != nil {
 		return "", err
 	}
-	v := string(d.data[d.offset : d.offset+int(length)])
-	d.offset += int(length)
+	if err := d.require(lengthInt); err != nil {
+		return "", err
+	}
+	v := string(d.data[d.offset : d.offset+lengthInt])
+	d.offset += lengthInt
 	return v, nil
 }
 
@@ -1162,8 +1218,12 @@ func (d *columnPartImageDecoder) stringSlice() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	out := make([]string, 0, count)
-	for i := 0; i < int(count); i++ {
+	total, err := d.boundedCount(count, 4, "string slice values")
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, total)
+	for i := 0; i < total; i++ {
 		value, err := d.str()
 		if err != nil {
 			return nil, err
@@ -1178,8 +1238,12 @@ func (d *columnPartImageDecoder) int64Slice() ([]int64, error) {
 	if err != nil {
 		return nil, err
 	}
-	out := make([]int64, 0, count)
-	for i := 0; i < int(count); i++ {
+	total, err := d.boundedCount(count, 8, "int64 slice values")
+	if err != nil {
+		return nil, err
+	}
+	out := make([]int64, 0, total)
+	for i := 0; i < total; i++ {
 		value, err := d.i64()
 		if err != nil {
 			return nil, err
@@ -1190,10 +1254,32 @@ func (d *columnPartImageDecoder) int64Slice() ([]int64, error) {
 }
 
 func (d *columnPartImageDecoder) require(n int) error {
-	if n < 0 || d.offset+n > len(d.data) {
+	if n < 0 || n > len(d.data)-d.offset {
 		return fmt.Errorf("colgranule: truncated part image at offset %d need %d bytes have %d", d.offset, n, len(d.data)-d.offset)
 	}
 	return nil
+}
+
+func (d *columnPartImageDecoder) boundedCount(count uint32, minItemBytes int, label string) (int, error) {
+	total, err := d.countToInt(count, label)
+	if err != nil {
+		return 0, err
+	}
+	if minItemBytes < 0 {
+		return 0, fmt.Errorf("colgranule: invalid minimum item bytes %d for %s", minItemBytes, label)
+	}
+	if minItemBytes > 0 && total > (len(d.data)-d.offset)/minItemBytes {
+		return 0, fmt.Errorf("colgranule: %s count=%d exceeds section capacity=%d", label, count, (len(d.data)-d.offset)/minItemBytes)
+	}
+	return total, nil
+}
+
+func (d *columnPartImageDecoder) countToInt(count uint32, label string) (int, error) {
+	total := int(count)
+	if uint64(total) != uint64(count) {
+		return 0, fmt.Errorf("colgranule: %s count=%d exceeds host int", label, count)
+	}
+	return total, nil
 }
 
 func (d *columnPartImageDecoder) finish() error {

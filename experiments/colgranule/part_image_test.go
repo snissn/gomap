@@ -327,3 +327,88 @@ func TestColumnPartFromImageRejectsUnsupportedDescriptorVersion(t *testing.T) {
 		t.Fatal("ColumnPartFromImage accepted an unsupported descriptor version")
 	}
 }
+
+func TestColumnPartFromImageRejectsImpossibleDescriptorGranuleCount(t *testing.T) {
+	part, err := BuildColumnPart(7, partTestOptions([]SortKeyColumn{{Column: "id"}}), ColumnBatch{Columns: map[string][]int64{
+		"id":        {3, 1, 2, 5, 4},
+		"time_us":   {30, 10, 20, 50, 40},
+		"value":     {300, 100, 200, 500, 400},
+		"kind_code": {1, 0, 1, 2, 0},
+		"has_reply": {1, 0, 1, 0, 1},
+	}})
+	if err != nil {
+		t.Fatalf("BuildColumnPart: %v", err)
+	}
+	image, err := BuildColumnPartImage(part, ColumnPartImageOptions{})
+	if err != nil {
+		t.Fatalf("BuildColumnPartImage: %v", err)
+	}
+	offset := descriptorGranuleCountOffset(t, image)
+	corrupt := append([]byte(nil), image.Bytes...)
+	binary.LittleEndian.PutUint32(corrupt[offset:], ^uint32(0))
+	parsed, err := ParseColumnPartImage(corrupt)
+	if err != nil {
+		t.Fatalf("ParseColumnPartImage: %v", err)
+	}
+	if _, err := ColumnPartFromImage(parsed); err == nil {
+		t.Fatal("ColumnPartFromImage accepted an impossible descriptor granule count")
+	}
+}
+
+func TestColumnPartFromImageRejectsImpossibleRowLocatorCount(t *testing.T) {
+	part, err := BuildColumnPart(7, partTestOptions([]SortKeyColumn{{Column: "id"}}), ColumnBatch{Columns: map[string][]int64{
+		"id":        {3, 1, 2, 5, 4},
+		"time_us":   {30, 10, 20, 50, 40},
+		"value":     {300, 100, 200, 500, 400},
+		"kind_code": {1, 0, 1, 2, 0},
+		"has_reply": {1, 0, 1, 0, 1},
+	}})
+	if err != nil {
+		t.Fatalf("BuildColumnPart: %v", err)
+	}
+	image, err := BuildColumnPartImage(part, ColumnPartImageOptions{})
+	if err != nil {
+		t.Fatalf("BuildColumnPartImage: %v", err)
+	}
+	locators, err := image.singleSection(ColumnPartImageSectionRowLocators)
+	if err != nil {
+		t.Fatalf("row locators section: %v", err)
+	}
+	corrupt := append([]byte(nil), image.Bytes...)
+	binary.LittleEndian.PutUint32(corrupt[locators.Offset:], ^uint32(0))
+	parsed, err := ParseColumnPartImage(corrupt)
+	if err != nil {
+		t.Fatalf("ParseColumnPartImage: %v", err)
+	}
+	if _, err := ColumnPartFromImage(parsed); err == nil {
+		t.Fatal("ColumnPartFromImage accepted an impossible row locator count")
+	}
+}
+
+func descriptorGranuleCountOffset(t *testing.T, image ColumnPartImage) int {
+	t.Helper()
+	descriptor, err := image.singleSection(ColumnPartImageSectionDescriptor)
+	if err != nil {
+		t.Fatalf("descriptor section: %v", err)
+	}
+	dec := columnPartImageDecoder{data: image.sectionBytes(descriptor)}
+	if _, err := dec.u16(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dec.u64(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dec.u32(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dec.i64(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dec.i64(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dec.stringSlice(); err != nil {
+		t.Fatal(err)
+	}
+	return descriptor.Offset + dec.offset
+}
