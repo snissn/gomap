@@ -2,7 +2,6 @@ package db
 
 import (
 	"encoding/binary"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"math/rand"
@@ -746,6 +745,25 @@ func TestCommandWALSegmentMaxLSNStreamsFrames(t *testing.T) {
 	}
 }
 
+func TestCommandWALSegmentClassifierRequiresParsedName(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		want bool
+	}{
+		{name: "commit-l0-000001.log", want: true},
+		{name: "commit-lane-readme.log", want: false},
+		{name: "commit-l-foo.log", want: false},
+		{name: "commit-l0-000001.tmp", want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := isCommandWALLaneSegment(logSegment{path: filepath.Join(t.TempDir(), tc.name)})
+			if got != tc.want {
+				t.Fatalf("isCommandWALLaneSegment(%q)=%t, want %t", tc.name, got, tc.want)
+			}
+		})
+	}
+}
+
 func modelValidateContiguousAppliedCommandLSN(current, next uint64, covered []CommandWALLSNRange) error {
 	if next < current {
 		return ErrCommandWALAppliedLSNRegression
@@ -780,7 +798,11 @@ func modelValidateContiguousAppliedCommandLSN(current, next uint64, covered []Co
 		if r.Last == ^uint64(0) {
 			return ErrCommandWALAppliedLSNNonContig
 		}
-		cursor = r.Last + 1
+		nextCursor := r.Last + 1
+		if nextCursor <= r.Last {
+			return ErrCommandWALAppliedLSNNonContig
+		}
+		cursor = nextCursor
 	}
 	return ErrCommandWALAppliedLSNNonContig
 }
@@ -797,57 +819,6 @@ func TestCommandWALSegmentMaxLSNFailsClosedOnNonIncreasingLSN(t *testing.T) {
 	if !typed {
 		t.Fatalf("typed=false, want true for duplicate typed command segment")
 	}
-}
-
-func TestCommandWALBackupManifestShapeIncludesAppliedLSNAndRanges(t *testing.T) {
-	data, err := json.Marshal(commandWALBackupManifest{
-		AppliedCommandLSN: 7,
-		WALRanges: []commandWALBackupWALRange{{
-			Lane:     0,
-			Segment:  1,
-			FirstLSN: 1,
-			LastLSN:  7,
-			Path:     "wal/commit-l0-000001.log",
-			Bytes:    128,
-		}},
-		CleanedWALRanges: []commandWALBackupWALRange{{
-			Lane:     0,
-			Segment:  0,
-			FirstLSN: 1,
-			LastLSN:  3,
-		}},
-	})
-	if err != nil {
-		t.Fatalf("Marshal: %v", err)
-	}
-	var got map[string]any
-	if err := json.Unmarshal(data, &got); err != nil {
-		t.Fatalf("Unmarshal: %v", err)
-	}
-	if got["applied_command_lsn"].(float64) != 7 {
-		t.Fatalf("manifest applied_command_lsn=%v, want 7; json=%s", got["applied_command_lsn"], data)
-	}
-	if _, ok := got["wal_ranges"]; !ok {
-		t.Fatalf("manifest missing wal_ranges: %s", data)
-	}
-	if _, ok := got["cleaned_wal_ranges"]; !ok {
-		t.Fatalf("manifest missing cleaned_wal_ranges: %s", data)
-	}
-}
-
-type commandWALBackupManifest struct {
-	AppliedCommandLSN uint64                     `json:"applied_command_lsn"`
-	WALRanges         []commandWALBackupWALRange `json:"wal_ranges,omitempty"`
-	CleanedWALRanges  []commandWALBackupWALRange `json:"cleaned_wal_ranges,omitempty"`
-}
-
-type commandWALBackupWALRange struct {
-	Lane     int    `json:"lane"`
-	Segment  uint64 `json:"segment"`
-	FirstLSN uint64 `json:"first_lsn,omitempty"`
-	LastLSN  uint64 `json:"last_lsn,omitempty"`
-	Path     string `json:"path,omitempty"`
-	Bytes    int64  `json:"bytes,omitempty"`
 }
 
 func writeCommandWALFrame(t *testing.T, dir string, segmentSeq uint64, lsn uint64) {
