@@ -8,8 +8,6 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
-	"strconv"
-	"strings"
 )
 
 const (
@@ -769,7 +767,7 @@ func commandFrameSegmentTailAllowance(paths []string) []bool {
 	parsed := make([]parsedSegment, len(paths))
 	latestByLane := make(map[int]uint64)
 	for i, path := range paths {
-		lane, seq, ok := parseCommandFrameSegmentName(filepath.Base(path))
+		lane, seq, ok := parseCommandSegmentName(filepath.Base(path))
 		parsed[i] = parsedSegment{lane: lane, seq: seq, ok: ok}
 		if ok && seq > latestByLane[lane] {
 			latestByLane[lane] = seq
@@ -783,26 +781,6 @@ func commandFrameSegmentTailAllowance(paths []string) []bool {
 		allow[i] = i == len(paths)-1
 	}
 	return allow
-}
-
-func parseCommandFrameSegmentName(name string) (lane int, seq uint64, ok bool) {
-	if !strings.HasPrefix(name, "commit-l") || !strings.HasSuffix(name, ".log") {
-		return 0, 0, false
-	}
-	rest := strings.TrimSuffix(strings.TrimPrefix(name, "commit-l"), ".log")
-	parts := strings.SplitN(rest, "-", 2)
-	if len(parts) != 2 {
-		return 0, 0, false
-	}
-	lane, err := strconv.Atoi(parts[0])
-	if err != nil || lane < 0 {
-		return 0, 0, false
-	}
-	seq, err = strconv.ParseUint(parts[1], 10, 64)
-	if err != nil || seq == 0 {
-		return 0, 0, false
-	}
-	return lane, seq, true
 }
 
 func scanCommandFrames(path string, opts Options, seen map[uint64]struct{}, allowTerminalTail bool) ([]CommandEnvelope, error) {
