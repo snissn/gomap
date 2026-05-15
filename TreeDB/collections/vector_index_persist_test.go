@@ -1,6 +1,8 @@
 package collections
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -94,6 +96,68 @@ func TestCollectionVectorIndexSnapshotReopenSearch(t *testing.T) {
 	if got, want := loaded.Stats().MaxLevel, index.Stats().MaxLevel; got != want {
 		t.Fatalf("loaded max level=%d want %d", got, want)
 	}
+}
+
+func TestCollectionVectorIndexSnapshotLoadsLegacyEdgesWithoutDistances(t *testing.T) {
+	dir := t.TempDir()
+	d, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	col := openVectorIndexTestCollection(t, d)
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("a"), []byte("b"), []byte("c"), []byte("d")},
+		[][]byte{
+			[]byte(`{"embedding":[1,0]}`),
+			[]byte(`{"embedding":[0.8,0.2]}`),
+			[]byte(`{"embedding":[0,1]}`),
+			[]byte(`{"embedding":[0.2,0.8]}`),
+		},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	index, err := col.BuildVectorIndex(VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, M: 4})
+	if err != nil {
+		t.Fatalf("build vector index: %v", err)
+	}
+	saveStatus, err := index.SaveSnapshot()
+	if err != nil {
+		t.Fatalf("save snapshot: %v", err)
+	}
+	rewriteVectorIndexSnapshotJSONFile(t, saveStatus.ManifestPath, vectorIndexEdgesFile, func(edges []vectorIndexPersistEdges) []vectorIndexPersistEdges {
+		for i := range edges {
+			edges[i].Distance = nil
+		}
+		return edges
+	})
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	reopened, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection after reopen: %v", err)
+	}
+	loaded, loadStatus, err := reopenedCol.LoadVectorIndexSnapshot(VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine})
+	if err != nil {
+		t.Fatalf("load legacy vector index snapshot: %v", err)
+	}
+	if loaded == nil || !loadStatus.Loaded || loadStatus.ExactFallbackReason != "" {
+		t.Fatalf("unexpected legacy load status loaded=%v status=%+v", loaded != nil, loadStatus)
+	}
+	results, _, err := loaded.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 2, DisableExactFallback: true})
+	if err != nil {
+		t.Fatalf("search legacy-loaded index: %v", err)
+	}
+	requireVectorResultIDs(t, results, "a", "b")
 }
 
 func TestCollectionVectorIndexSnapshotInt8Encoding(t *testing.T) {
@@ -429,6 +493,38 @@ func rewriteVectorIndexManifest(tb testing.TB, manifestPath string, rewrite func
 	if err := os.WriteFile(manifestPath, data, 0o644); err != nil {
 		tb.Fatalf("write manifest: %v", err)
 	}
+}
+
+func rewriteVectorIndexSnapshotJSONFile[T any](tb testing.TB, manifestPath, fileName string, rewrite func(T) T) {
+	tb.Helper()
+	path := vectorIndexSnapshotFilePath(tb, manifestPath, fileName)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		tb.Fatalf("read snapshot file: %v", err)
+	}
+	var payload T
+	if err := json.Unmarshal(data, &payload); err != nil {
+		tb.Fatalf("decode snapshot file: %v", err)
+	}
+	data, err = json.MarshalIndent(rewrite(payload), "", "  ")
+	if err != nil {
+		tb.Fatalf("encode snapshot file: %v", err)
+	}
+	data = append(data, '\n')
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		tb.Fatalf("write snapshot file: %v", err)
+	}
+	sum := sha256.Sum256(data)
+	rewriteVectorIndexManifest(tb, manifestPath, func(manifest *vectorIndexManifest) {
+		for i := range manifest.Files {
+			if manifest.Files[i].Name == fileName {
+				manifest.Files[i].Size = int64(len(data))
+				manifest.Files[i].SHA256 = hex.EncodeToString(sum[:])
+				return
+			}
+		}
+		tb.Fatalf("manifest missing file entry %q", fileName)
+	})
 }
 
 func vectorIndexSnapshotFilePath(tb testing.TB, manifestPath, fileName string) string {
