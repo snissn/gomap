@@ -7,6 +7,7 @@ import (
 	"math"
 	"os"
 	"strconv"
+	"sync"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -301,17 +302,31 @@ func BenchmarkCollectionVectorIndexGraphOnlySearchParallel(b *testing.B) {
 	b.ReportMetric(float64(dims), "dims")
 	b.ReportMetric(float64(index.Stats().BytesMemory), "index_bytes")
 	b.ResetTimer()
+	var failureMu sync.Mutex
+	var firstFailure string
+	recordFailure := func(format string, args ...any) {
+		failureMu.Lock()
+		defer failureMu.Unlock()
+		if firstFailure == "" {
+			firstFailure = fmt.Sprintf(format, args...)
+		}
+	}
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			results, err := index.searchGraphOnly(query, vectorBenchmarkTopK, 128)
 			if err != nil {
-				b.Fatalf("graph-only vector search: %v", err)
+				recordFailure("graph-only vector search: %v", err)
+				return
 			}
 			if len(results) == 0 {
-				b.Fatal("graph-only vector search returned no results")
+				recordFailure("graph-only vector search returned no results")
+				return
 			}
 		}
 	})
+	if firstFailure != "" {
+		b.Fatal(firstFailure)
+	}
 }
 
 func BenchmarkCollectionVectorIndexSearchInt8(b *testing.B) {
