@@ -225,6 +225,7 @@ func (c *Collection) BuildVectorIndex(opts VectorIndexOptions) (*VectorIndex, er
 	if err := c.flushBufferedWrites(); err != nil {
 		return nil, err
 	}
+	index.nativePersistent = collectionMetaDeclaresVectorIndex(c.meta, index.name)
 	materializer, err := c.NewStoredDocumentJSONMaterializer()
 	if err != nil {
 		return nil, err

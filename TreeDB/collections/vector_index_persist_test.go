@@ -426,6 +426,63 @@ func TestCollectionVectorIndexNativeRootCreateOnExistingDocumentsDoesNotPersistP
 	}
 }
 
+func TestCollectionVectorIndexNativeRootBuildAfterCreatePersistsExistingDocumentsOnFlush(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	def := VectorIndexDefinition{
+		Name:       "embedding",
+		Field:      "embedding",
+		Metric:     VectorMetricCosine,
+		Dimensions: 2,
+		M:          4,
+	}
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("a"), []byte("b")},
+		[][]byte{
+			[]byte(`{"embedding":[1,0]}`),
+			[]byte(`{"embedding":[0,1]}`),
+		},
+	); err != nil {
+		t.Fatalf("insert before vector index registration: %v", err)
+	}
+	if _, err := col.CreateVectorIndex(def); err != nil {
+		t.Fatalf("create vector index: %v", err)
+	}
+	index, err := col.BuildVectorIndex(vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		t.Fatalf("build vector index after metadata create: %v", err)
+	}
+	if stats := index.Stats(); stats.LiveDocs != 2 || !stats.SnapshotDirty {
+		t.Fatalf("built native vector index not marked dirty for first flush: %+v", stats)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush built vector index: %v", err)
+	}
+	loaded, status, err := col.LoadVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		t.Fatalf("load flushed built vector index: %v", err)
+	}
+	if loaded == nil || !status.Loaded {
+		t.Fatalf("built vector index did not persist on flush loaded=%v status=%+v", loaded != nil, status)
+	}
+	results, _, err := loaded.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 2, DisableExactFallback: true})
+	if err != nil {
+		t.Fatalf("search flushed built vector index: %v", err)
+	}
+	requireVectorResultIDs(t, results, "a", "b")
+}
+
 func TestCollectionVectorIndexNativeRootInsertMaintenanceErrorIsCommitAmbiguous(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -533,6 +590,43 @@ func TestCollectionVectorIndexNativeRootMaintainsUpdatedDocument(t *testing.T) {
 		t.Fatalf("search updated vector index: %v", err)
 	}
 	requireVectorResultIDs(t, results, "a", "b")
+}
+
+func TestCollectionVectorSearchExactReadsBSONNumericVectors(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "docs",
+		Options: CollectionOptions{DocumentFormat: DocumentFormatBSON},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatchValidatedBSON(
+		[][]byte{[]byte("a"), []byte("b")},
+		[][]byte{
+			mustBSONCollectionDocument(t, bson.D{{Key: "embedding", Value: bson.A{1.0, 0.0}}, {Key: "name", Value: "a"}}),
+			mustBSONCollectionDocument(t, bson.D{{Key: "embedding", Value: bson.A{0.0, 1.0}}, {Key: "name", Value: "b"}}),
+		},
+	); err != nil {
+		t.Fatalf("insert BSON docs: %v", err)
+	}
+	results, err := col.SearchVectorsExact([]float32{0, 1}, VectorSearchOptions{
+		Field:  "embedding",
+		Metric: VectorMetricCosine,
+		TopK:   2,
+	})
+	if err != nil {
+		t.Fatalf("exact BSON vector search: %v", err)
+	}
+	requireVectorResultIDs(t, results, "b", "a")
 }
 
 func TestCollectionVectorIndexNativeRootMaintainsBSONSetUpdate(t *testing.T) {

@@ -164,11 +164,7 @@ func (c *Collection) SearchVectorsExact(query []float32, opts VectorSearchOption
 				return err
 			}
 		}
-		jsonDoc, err := materializer.StoredDocumentJSON(record.Document)
-		if err != nil {
-			return err
-		}
-		vector, ok, err := vectorFromJSONField(jsonDoc, fieldPath)
+		vector, ok, err := vectorFromStoredDocument(materializer, record.Document, fieldPath)
 		if err != nil {
 			return fmt.Errorf("collections: vector field %q in document %q: %w", opts.Field, record.ID, err)
 		}
