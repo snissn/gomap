@@ -924,6 +924,8 @@ type commandWALBackupManifest struct {
 	CleanedWALRanges  []commandWALBackupWALRange `json:"cleaned_wal_ranges,omitempty"`
 }
 
+// commandWALBackupWALRange is PR2/PR3 scaffolding for the backup integration
+// manifest; fields are kept in sync with the future production backup type.
 type commandWALBackupWALRange struct {
 	Lane     int    `json:"lane"`
 	Segment  uint64 `json:"segment"`
