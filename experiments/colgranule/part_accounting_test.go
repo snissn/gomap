@@ -1,0 +1,60 @@
+package colgranule
+
+import "testing"
+
+func TestColumnPartByteAccountingReconcilesCategories(t *testing.T) {
+	opts := partTestOptions([]SortKeyColumn{{Column: "time_us"}})
+	opts.AggregateMetadata = []AggregateMetadataDefinition{aggregateMetadataTestDefinition()}
+	part, err := BuildColumnPart(23, opts, ColumnBatch{Columns: map[string][]int64{
+		"id":        {5, 4, 3, 2, 1},
+		"time_us":   {50, 40, 30, 20, 10},
+		"value":     {500, 400, 300, 200, 100},
+		"kind_code": {0, 1, 1, 2, 0},
+		"has_reply": {1, 1, 0, 1, 0},
+	}})
+	if err != nil {
+		t.Fatalf("BuildColumnPart: %v", err)
+	}
+
+	accounting := part.ByteAccounting()
+	if accounting.Rows != 5 || accounting.Columns != 5 || accounting.Granules != 3 {
+		t.Fatalf("shape=%+v want rows=5 columns=5 granules=3", accounting)
+	}
+	if accounting.DeclaredColumnStoredBytes == 0 || accounting.MarkBytes == 0 || accounting.SortKeyMetadataBytes == 0 || accounting.DescriptorBytes == 0 || accounting.LocatorBytes == 0 {
+		t.Fatalf("missing accounting categories: %+v", accounting)
+	}
+	if accounting.AggregateMetadataBytes == 0 {
+		t.Fatalf("aggregate metadata bytes were not counted: %+v", accounting)
+	}
+	if got, want := accounting.TotalStoredBytes, accounting.CategoryBytes(); got != want {
+		t.Fatalf("total bytes=%d category sum=%d accounting=%+v", got, want, accounting)
+	}
+	if accounting.BytesPerRow <= 0 {
+		t.Fatalf("bytes per row=%f want positive", accounting.BytesPerRow)
+	}
+	if accounting.RetainedJSONPayload != "absent_declared_columns_only" {
+		t.Fatalf("retained JSON label=%q", accounting.RetainedJSONPayload)
+	}
+	if len(accounting.ColumnsDetail) != 5 {
+		t.Fatalf("column detail count=%d want 5", len(accounting.ColumnsDetail))
+	}
+	for _, column := range accounting.ColumnsDetail {
+		if column.Rows != 5 || column.Blocks == 0 || column.LogicalValueBytes == 0 || column.StoredBytes == 0 {
+			t.Fatalf("bad column accounting: %+v", column)
+		}
+	}
+	if len(accounting.CompressionDetail) == 0 {
+		t.Fatal("missing compression detail")
+	}
+}
+
+func TestEstimateJSONBenchDictionaryBytes(t *testing.T) {
+	ds, err := LoadJSONBenchColumns("testdata/jsonbench_sample.jsonl", 0)
+	if err != nil {
+		t.Fatalf("LoadJSONBenchColumns: %v", err)
+	}
+	bytes := EstimateJSONBenchDictionaryBytes(ds)
+	if bytes <= 0 {
+		t.Fatalf("dictionary bytes=%d want positive", bytes)
+	}
+}

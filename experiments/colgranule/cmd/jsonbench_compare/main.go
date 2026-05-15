@@ -70,6 +70,7 @@ type comparisonRaw struct {
 	EncodedPartQueryTimings  []colgranule.JSONBenchPartQueryTiming `json:"encoded_part_query_timings"`
 	EncodedPartQ4Fairness    []colgranule.JSONBenchPartQueryTiming `json:"encoded_part_q4_fairness_timings"`
 	AggregateMetadataTimings []colgranule.JSONBenchPartQueryTiming `json:"aggregate_metadata_timings"`
+	EncodedPartBuildReports  []colgranule.JSONBenchPartBuildReport `json:"encoded_part_build_reports"`
 	ColumnSummaries          []colgranule.ColumnCodecSummary       `json:"column_summaries"`
 	BestColumnStorage        []bestColumnStorage                   `json:"best_column_storage"`
 }
@@ -142,6 +143,8 @@ func main() {
 	must(err)
 	aggregateMetadataTimings, err := colgranule.RunJSONBenchPartAggregateMetadataQueries(ds, *rowsPerGranule, *attempts)
 	must(err)
+	encodedPartBuildReports, err := colgranule.RunJSONBenchPartBuildReports(ds, *rowsPerGranule, *attempts)
+	must(err)
 	var remaining remainingTreeDBResult
 	var remainingJSON remainingTreeDBResult
 	var remainingTpl remainingTreeDBResult
@@ -187,6 +190,7 @@ func main() {
 		EncodedPartQueryTimings:  encodedPartTimings,
 		EncodedPartQ4Fairness:    encodedPartQ4Fairness,
 		AggregateMetadataTimings: aggregateMetadataTimings,
+		EncodedPartBuildReports:  encodedPartBuildReports,
 		ColumnSummaries:          summaries,
 		BestColumnStorage:        bestColumns(summaries),
 	}
@@ -949,6 +953,70 @@ func writeMarkdown(path string, raw comparisonRaw) {
 				d.AggregateMetadataCompression)
 		}
 	}
+	if len(raw.EncodedPartBuildReports) > 0 {
+		fmt.Fprintf(&b, "\n## M1C Build and Size Accounting\n\n")
+		fmt.Fprintf(&b, "These reports build the actual encoded JSONBench column part layouts with aggregate metadata enabled. The current experiment stores declared columns, marks, descriptors, locators, aggregate metadata, and loader dictionary estimates; retained/original JSON payload is labeled separately and is absent from the encoded-part total.\n\n")
+		fmt.Fprintf(&b, "| Layout | Best build | ns/row | Rows/s | Encoded MiB/s | Stored MiB/s | Alloc B/op | Allocs/op | Temp B/op | Output B/row |\n")
+		fmt.Fprintf(&b, "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n")
+		for _, report := range raw.EncodedPartBuildReports {
+			fmt.Fprintf(&b, "| `%s` | %.6fs | %.1f | %.0f | %.2f | %.2f | %d | %d | %d | %.3f |\n",
+				report.Layout,
+				report.Best.Duration.Seconds(),
+				report.NanosPerRow,
+				report.RowsPerSecond,
+				report.EncodedMiBPerSecond,
+				report.StoredMiBPerSecond,
+				report.AllocatedBytesPerOp,
+				report.AllocsPerOp,
+				report.TemporaryBytes,
+				report.Accounting.BytesPerRow)
+		}
+		fmt.Fprintf(&b, "\n| Layout | Total bytes | vs raw JSON | vs source gzip | vs ClickHouse total | Declared columns | Dictionaries | Marks | Sort key | Aggregate metadata | Descriptors | Locators | Retained JSON |\n")
+		fmt.Fprintf(&b, "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|\n")
+		for _, report := range raw.EncodedPartBuildReports {
+			accounting := report.Accounting
+			fmt.Fprintf(&b, "| `%s` | %d | %s | %s | %s | %d | %d | %d | %d | %d | %d | %d | `%s` |\n",
+				report.Layout,
+				accounting.TotalStoredBytes,
+				formatPercent(float64(accounting.TotalStoredBytes), float64(report.RawJSONBytes)),
+				formatPercent(float64(accounting.TotalStoredBytes), float64(raw.InputBytes)),
+				formatPercent(float64(accounting.TotalStoredBytes), float64(raw.ClickHouseLocal.TotalSize)),
+				accounting.DeclaredColumnStoredBytes,
+				accounting.DictionaryBytes,
+				accounting.MarkBytes,
+				accounting.SortKeyMetadataBytes,
+				accounting.AggregateMetadataBytes,
+				accounting.DescriptorBytes,
+				accounting.LocatorBytes,
+				accounting.RetainedJSONPayload)
+		}
+		fmt.Fprintf(&b, "\nCompression/admission by column/substream:\n\n")
+		fmt.Fprintf(&b, "| Layout | Column | Substream | Encoding | Requested | Actual | Blocks | Raw bytes | Stored bytes | Stored/raw | Attempts | Kept | Rejected | Fallback |\n")
+		fmt.Fprintf(&b, "|---|---|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---|\n")
+		for _, report := range raw.EncodedPartBuildReports {
+			for _, detail := range report.Accounting.CompressionDetail {
+				fallback := detail.FallbackReason
+				if fallback == "" {
+					fallback = "kept"
+				}
+				fmt.Fprintf(&b, "| `%s` | `%s` | `%s` | `%s` | `%s` | `%s` | %d | %d | %d | %.3f | %d | %d | %d | `%s` |\n",
+					report.Layout,
+					detail.Column,
+					detail.Substream,
+					detail.Encoding,
+					detail.RequestedCompression,
+					detail.ActualCompression,
+					detail.Blocks,
+					detail.EncodedRawBytes,
+					detail.StoredBytes,
+					detail.StoredToEncodedRawRate,
+					detail.CompressionAttempted,
+					detail.CompressionKept,
+					detail.CompressionRejected,
+					fallback)
+			}
+		}
+	}
 	fmt.Fprintf(&b, "\n## Storage Footprint\n\n")
 	allBest := bestTotal(raw.BestColumnStorage, nil)
 	queryBest := bestTotal(raw.BestColumnStorage, queryPathColumns())
@@ -971,6 +1039,9 @@ func writeMarkdown(path string, raw comparisonRaw) {
 	fmt.Fprintf(&b, "| ClickHouse local total | %d | %.2f | `total_size` from local ClickHouse JSONBench result. |\n", raw.ClickHouseLocal.TotalSize, mib(raw.ClickHouseLocal.TotalSize))
 	fmt.Fprintf(&b, "| ClickHouse local data | %d | %.2f | `data_size` from local ClickHouse JSONBench result. |\n", raw.ClickHouseLocal.DataSize, mib(raw.ClickHouseLocal.DataSize))
 	fmt.Fprintf(&b, "| ClickHouse local index | %d | %.2f | `index_size` from local ClickHouse JSONBench result. |\n", raw.ClickHouseLocal.IndexSize, mib(raw.ClickHouseLocal.IndexSize))
+	for _, report := range raw.EncodedPartBuildReports {
+		fmt.Fprintf(&b, "| Encoded column part `%s` total | %d | %.2f | M1C actual part estimate including declared columns, loader dictionaries, marks, descriptors, locators, and admitted aggregate metadata; retained JSON is `%s`. |\n", report.Layout, report.Accounting.TotalStoredBytes, mib(int64(report.Accounting.TotalStoredBytes)), report.Accounting.RetainedJSONPayload)
+	}
 	fmt.Fprintf(&b, "| Granule best-codec all derived columns | %d | %.2f | %.2f%% of ClickHouse local total. |\n", allBest, mib(int64(allBest)), ratio(float64(allBest)*100, float64(raw.ClickHouseLocal.TotalSize)))
 	fmt.Fprintf(&b, "| Granule best-codec query/index paths | %d | %.2f | %.2f%% of ClickHouse local total. |\n", queryBest, mib(int64(queryBest)), ratio(float64(queryBest)*100, float64(raw.ClickHouseLocal.TotalSize)))
 	if raw.RemainingTreeDB.Enabled {
@@ -1180,6 +1251,13 @@ func formatSpeedup(numerator, denominator float64) string {
 		return "n/a"
 	}
 	return fmt.Sprintf("%.2fx", ratio(denominator, numerator))
+}
+
+func formatPercent(numerator, denominator float64) string {
+	if denominator == 0 {
+		return "n/a"
+	}
+	return fmt.Sprintf("%.2f%%", ratio(numerator*100, denominator))
 }
 
 func formatBreakEvenQueries(buildSeconds, baselineSeconds, metadataSeconds float64) string {

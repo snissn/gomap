@@ -262,6 +262,40 @@ func TestRunJSONBenchPartAggregateMetadataQueries(t *testing.T) {
 	}
 }
 
+func TestRunJSONBenchPartBuildReports(t *testing.T) {
+	ds, err := LoadJSONBenchColumns("testdata/jsonbench_sample.jsonl", 0)
+	if err != nil {
+		t.Fatalf("LoadJSONBenchColumns(sample): %v", err)
+	}
+	reports, err := RunJSONBenchPartBuildReports(ds, 32, 2)
+	if err != nil {
+		t.Fatalf("RunJSONBenchPartBuildReports: %v", err)
+	}
+	if len(reports) != 2 {
+		t.Fatalf("reports=%d want 2", len(reports))
+	}
+	for _, report := range reports {
+		if report.Rows != ds.Rows || report.RawJSONBytes == 0 || report.DictionaryBytes == 0 {
+			t.Fatalf("bad report input accounting: %+v", report)
+		}
+		if report.Best.Duration <= 0 || report.RowsPerSecond <= 0 || report.NanosPerRow <= 0 {
+			t.Fatalf("bad build timing: %+v", report)
+		}
+		if report.Accounting.TotalStoredBytes == 0 || report.Accounting.TotalStoredBytes != report.Accounting.CategoryBytes() {
+			t.Fatalf("bad byte accounting: %+v", report.Accounting)
+		}
+		if report.Accounting.DictionaryBytes != report.DictionaryBytes {
+			t.Fatalf("dictionary bytes accounting=%d report=%d", report.Accounting.DictionaryBytes, report.DictionaryBytes)
+		}
+		if report.Accounting.RetainedJSONPayload != "absent_declared_columns_only" {
+			t.Fatalf("retained JSON label=%q", report.Accounting.RetainedJSONPayload)
+		}
+		if len(report.Accounting.CompressionDetail) == 0 {
+			t.Fatalf("missing compression detail: %+v", report.Accounting)
+		}
+	}
+}
+
 func TestJSONBenchAggregateMetadataAdmissionRejectsOversizedMetadata(t *testing.T) {
 	ds := syntheticJSONBenchDataset(256)
 	opts, err := JSONBenchColumnPartOptionsWithAggregateMetadataForLayout(ds, 32, JSONBenchColumnPartLayoutTimeUS)
