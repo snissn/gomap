@@ -1,6 +1,6 @@
 module github.com/snissn/gomap
 
-go 1.23.0
+go 1.24
 
 require (
 	github.com/akrylysov/pogreb v0.10.2
@@ -23,6 +23,7 @@ require (
 	github.com/tidwall/gjson v1.14.3
 	github.com/tidwall/match v1.1.1
 	github.com/tidwall/redcon v1.6.2
+	github.com/wildcatdb/wildcat v1.0.13
 	github.com/yuin/goldmark v1.7.13
 	github.com/zeebo/xxh3 v1.0.2
 	go.etcd.io/bbolt v1.4.3
@@ -80,6 +81,7 @@ require (
 	github.com/xdg-go/stringprep v1.0.4 // indirect
 	github.com/xujiajun/utils v0.0.0-20220904132955-5f7c5b914235 // indirect
 	github.com/youmark/pkcs8 v0.0.0-20240726163527-a2c0da244d78 // indirect
+	go.mongodb.org/mongo-driver v1.17.3 // indirect
 	go.opentelemetry.io/auto/sdk v1.1.0 // indirect
 	go.opentelemetry.io/otel v1.37.0 // indirect
 	go.opentelemetry.io/otel/metric v1.37.0 // indirect
