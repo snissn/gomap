@@ -587,9 +587,11 @@ func (r *Reader) ReadNextMeta() (uint64, page.ValuePtr, error) {
 	return entry.rid, entry.ptr, nil
 }
 
-// ReadRIDAt reads only the RID metadata for ptr. It avoids full segment scans
-// when callers already have a trusted value-log pointer and only need the
-// append RID that owns that record.
+// ReadRIDAt reads only the RID metadata for ptr and does not verify the record
+// CRC. It avoids full segment scans when the caller's ValuePtr was just produced
+// by this process's value-log write path and only the append RID is needed for a
+// command-WAL external-reference fence. Use Reader for integrity-checked reads
+// from untrusted on-disk pointers.
 func ReadRIDAt(f *os.File, ptr page.ValuePtr) (uint64, error) {
 	if f == nil || ptr.Offset < 4 {
 		return 0, ErrCorrupt
@@ -643,7 +645,11 @@ func ReadRIDAt(f *os.File, ptr page.ValuePtr) (uint64, error) {
 		return 0, ErrCorrupt
 	}
 	var ridBytes [8]byte
-	ridOffset := start + HeaderSize + FrameHeaderSize + int64(subIndex*8)
+	ridRel := FrameHeaderSize + subIndex*8
+	if ridRel < FrameHeaderSize || ridRel+8 > int(valueLen) {
+		return 0, ErrCorrupt
+	}
+	ridOffset := start + HeaderSize + int64(ridRel)
 	if _, err := f.ReadAt(ridBytes[:], ridOffset); err != nil {
 		return 0, err
 	}

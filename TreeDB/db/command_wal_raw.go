@@ -3,6 +3,7 @@ package db
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
@@ -35,7 +36,6 @@ func (db *DB) prepareRawKVCommandWALIntent(b *Batch) (*commandWALBatchIntent, er
 		return nil, nil
 	}
 	externalRefs := false
-	flushedExternalRefsForLookup := false
 	var ridCache map[uint32]map[page.ValuePtr]uint64
 	var smallOps [16]commitlog.RawKVOperation
 	ops := smallOps[:0]
@@ -50,12 +50,6 @@ func (db *DB) prepareRawKVCommandWALIntent(b *Batch) (*commandWALBatchIntent, er
 		case batchpkg.OpPut:
 			if entry.IsPtr {
 				externalRefs = true
-				if !flushedExternalRefsForLookup {
-					if err := db.flushCommandWALExternalRefs(false); err != nil {
-						return nil, err
-					}
-					flushedExternalRefsForLookup = true
-				}
 				if ridCache == nil {
 					ridCache = make(map[uint32]map[page.ValuePtr]uint64)
 				}
@@ -99,17 +93,31 @@ func (db *DB) lookupCommandWALValueLogRID(ptr page.ValuePtr, ridCache map[uint32
 		}
 	}
 	path := db.valueLogManager.SegmentPath(ptr.FileID)
-	f, err := os.Open(path)
-	if err != nil {
-		return 0, err
+	rid, err := readCommandWALValueLogRIDAt(path, ptr)
+	if isCommandWALRIDLookupVisibilityError(err) {
+		if flushErr := db.flushCommandWALExternalRefs(false); flushErr != nil {
+			return 0, flushErr
+		}
+		rid, err = readCommandWALValueLogRIDAt(path, ptr)
 	}
-	defer func() { _ = f.Close() }()
-	rid, err := valuelog.ReadRIDAt(f, ptr)
 	if err != nil {
 		return 0, err
 	}
 	byPtr[ptr] = rid
 	return rid, nil
+}
+
+func readCommandWALValueLogRIDAt(path string, ptr page.ValuePtr) (uint64, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = f.Close() }()
+	return valuelog.ReadRIDAt(f, ptr)
+}
+
+func isCommandWALRIDLookupVisibilityError(err error) bool {
+	return errors.Is(err, os.ErrNotExist) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
 }
 
 func (db *DB) flushCommandWALExternalRefs(sync bool) error {
@@ -229,6 +237,8 @@ func applyRawKVCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map
 					// Non-ErrValueTooLarge errors abort frame replay entirely.
 					// The caller will propagate the error; recovery will retry
 					// the full frame on next reopen (at-least-once semantics).
+					// Any replay value-log bytes appended by earlier ops in this
+					// failed frame are unreachable until normal value-log GC.
 					return err
 				}
 				if inlineAppender == nil {

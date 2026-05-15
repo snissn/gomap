@@ -423,9 +423,6 @@ func Open(opts Options) (*DB, error) {
 		if cfg, ok, err := db.LoadFormatConfig(maindbDir); err != nil {
 			return nil, err
 		} else if ok {
-			if err := cfg.ValidateRuntimeSupported(); err != nil {
-				return nil, err
-			}
 			opts.CommandWAL = opts.CommandWAL || cfg.RequiresCommandWALV1()
 			cfg.ApplyIndexFormatToOptions(&opts)
 			persistedFormat = &cfg
@@ -1791,15 +1788,19 @@ func VacuumIndexOffline(opts Options) error {
 	// Preserve the persisted on-disk format knobs by default so offline index
 	// maintenance doesn't accidentally rewrite the DB into a different layout.
 	if opts.IgnoreFormatConfig {
-		if err := db.ValidateFormatRequiredFeatureGate(layout.mainDir); err != nil {
+		requiresCommandWAL, err := db.CommandWALRequiredFeatureEnabled(layout.mainDir)
+		if err != nil {
 			return err
+		}
+		if requiresCommandWAL {
+			return db.ErrCommandWALUnsupported
 		}
 	} else {
 		if cfg, ok, err := db.LoadFormatConfig(layout.mainDir); err != nil {
 			return err
 		} else if ok {
-			if err := cfg.ValidateRuntimeSupported(); err != nil {
-				return err
+			if cfg.RequiresCommandWALV1() {
+				return db.ErrCommandWALUnsupported
 			}
 			cfg.ApplyToOptions(&opts)
 		}

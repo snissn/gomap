@@ -1128,9 +1128,6 @@ func Open(opts Options) (*DB, error) {
 		if cfg, ok, err := LoadFormatConfig(opts.Dir); err != nil {
 			return nil, err
 		} else if ok {
-			if err := cfg.ValidateRuntimeSupported(); err != nil {
-				return nil, err
-			}
 			opts.CommandWAL = opts.CommandWAL || cfg.RequiresCommandWALV1()
 			cfg.ApplyIndexFormatToOptions(&opts)
 		}
@@ -1505,7 +1502,13 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 			// Persist the required feature before returning a mutable DB. If the
 			// journal open below fails, no command frames have been acknowledged;
 			// retrying Open will re-enter command-WAL recovery from the same roots.
-			if err := SaveFormatConfig(opts.Dir, cfg); err != nil {
+			//
+			// Use the raw writer here because the clean-activation precondition
+			// was validated before command-WAL recovery above. Re-running that
+			// check after recovery would make first activation depend on the
+			// transient post-recovery WAL directory shape instead of the explicit
+			// activation boundary.
+			if err := writeFormatConfig(opts.Dir, cfg); err != nil {
 				db.Close()
 				return nil, err
 			}

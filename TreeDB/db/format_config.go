@@ -51,14 +51,6 @@ func (cfg FormatConfig) RequiresCommandWALV1() bool {
 	return false
 }
 
-func (cfg FormatConfig) ValidateRuntimeSupported() error {
-	// Reserved for future format gates that are globally unsupported by this
-	// binary. command_wal_v1 is handled by open-mode-specific paths because
-	// backend opens can recover it while cached/public write opens still fail
-	// closed.
-	return nil
-}
-
 func formatConfigPath(dir string) string {
 	if dir == "" {
 		return ""
@@ -427,9 +419,6 @@ func applyFormatConfigForMaintenance(opts *Options) error {
 	}
 	if !ok {
 		return nil
-	}
-	if err := cfg.ValidateRuntimeSupported(); err != nil {
-		return err
 	}
 	if cfg.RequiresCommandWALV1() {
 		return ErrCommandWALUnsupported
