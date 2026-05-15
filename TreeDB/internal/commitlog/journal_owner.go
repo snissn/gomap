@@ -62,7 +62,7 @@ func (o *JournalOwner) ReserveLSN() (uint64, error) {
 }
 
 func (o *JournalOwner) rollbackReservedLSN(lsn uint64) error {
-	if o == nil || o.lock == nil {
+	if o == nil {
 		return errors.New("commitlog: journal owner is closed")
 	}
 	if lsn == 0 {
@@ -70,6 +70,9 @@ func (o *JournalOwner) rollbackReservedLSN(lsn uint64) error {
 	}
 	o.mu.Lock()
 	defer o.mu.Unlock()
+	if o.lock == nil {
+		return errors.New("commitlog: journal owner is closed")
+	}
 	if lsn == ^uint64(0) {
 		if !o.exhausted {
 			return fmt.Errorf("commitlog: cannot rollback non-tail lsn %d", lsn)
@@ -89,7 +92,7 @@ func (o *JournalOwner) rollbackReservedLSN(lsn uint64) error {
 // ReserveLSN, callers must not interleave direct reservations with a
 // CommandJournal that depends on tail-only rollback for failed appends.
 func (o *JournalOwner) ReserveLSNRange(count uint64) (first uint64, last uint64, err error) {
-	if o == nil || o.lock == nil {
+	if o == nil {
 		return 0, 0, errors.New("commitlog: journal owner is closed")
 	}
 	if count == 0 {
@@ -97,6 +100,9 @@ func (o *JournalOwner) ReserveLSNRange(count uint64) (first uint64, last uint64,
 	}
 	o.mu.Lock()
 	defer o.mu.Unlock()
+	if o.lock == nil {
+		return 0, 0, errors.New("commitlog: journal owner is closed")
+	}
 	if o.exhausted {
 		return 0, 0, errors.New("commitlog: journal owner lsn space exhausted")
 	}
@@ -114,7 +120,12 @@ func (o *JournalOwner) ReserveLSNRange(count uint64) (first uint64, last uint64,
 }
 
 func (o *JournalOwner) Close() error {
-	if o == nil || o.lock == nil {
+	if o == nil {
+		return nil
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.lock == nil {
 		return nil
 	}
 	lock := o.lock
