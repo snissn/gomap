@@ -375,11 +375,6 @@ func readCommandWALReplayFrames(segments []logSegment, appliedLSN uint64, maxSeg
 	return frames, nil
 }
 
-// errNeedsLogSupportSentinel is returned by the ScanRawKVBatchPayload visitor to
-// short-circuit scanning once log support is known to be needed. It is never
-// propagated to callers.
-var errNeedsLogSupportSentinel = errors.New("needs log support")
-
 func commandWALReplayFramesNeedLogSupport(db *DB, frames []commandWALReplayFrame, applied uint64) (bool, error) {
 	hasUnappliedFrame := false
 	for _, frame := range frames {
@@ -390,20 +385,17 @@ func commandWALReplayFramesNeedLogSupport(db *DB, frames []commandWALReplayFrame
 		if frame.env.Kind != commitlog.CommandKindRawKVBatch {
 			continue
 		}
-		err := commitlog.ScanRawKVBatchPayload(frame.env.Payload, func(op commitlog.RawKVOp, key, value []byte) error {
-			if op == commitlog.RawKVOpSetRID {
-				return errNeedsLogSupportSentinel
-			}
-			if op == commitlog.RawKVOpSet && commandWALRawSetNeedsReplayValueLog(db, key, value) {
-				return errNeedsLogSupportSentinel
+		needsLogSupport := false
+		if err := commitlog.ScanRawKVBatchPayload(frame.env.Payload, func(op commitlog.RawKVOp, key, value []byte) error {
+			if op == commitlog.RawKVOpSetRID || (op == commitlog.RawKVOpSet && commandWALRawSetNeedsReplayValueLog(db, key, value)) {
+				needsLogSupport = true
 			}
 			return nil
-		})
-		if errors.Is(err, errNeedsLogSupportSentinel) {
-			return true, nil
-		}
-		if err != nil {
+		}); err != nil {
 			return false, err
+		}
+		if needsLogSupport {
+			return true, nil
 		}
 	}
 	if db != nil && db.indexOuterLeavesInValueLog {

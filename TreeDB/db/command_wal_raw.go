@@ -348,8 +348,10 @@ func applyRawKVCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map
 					return fmt.Errorf("treedb: command wal replay log support unavailable")
 				}
 				var err error
-				// ensureReplayLogSupport owns the replay appender lifecycle;
-				// these assignments only cache the frame-local handles.
+				// ensureReplayLogSupport is a closure that updates the outer
+				// ridMap and inlineAppender via capture as a side effect.
+				// Assigning to the local parameters here caches the handles
+				// for subsequent iterations within this frame.
 				ridMap, inlineAppender, err = ensureReplayLogSupport()
 				if err != nil {
 					return err
