@@ -319,6 +319,8 @@ func (b *Batch) writeSerialized(sync bool, intent *commandWALBatchIntent) error 
 	sysRoot := b.db.meta.SystemRootPageID
 	b.db.mu.Unlock()
 
+	// writeMu is released by the deferred unlock above even if the command
+	// journal append fails and poisons this open handle.
 	if _, err := b.db.appendRawKVCommandWALIntent(intent, sync); err != nil {
 		return err
 	}

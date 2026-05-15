@@ -74,7 +74,11 @@ func (db *DB) prepareRawKVCommandWALIntent(b *Batch) (*commandWALBatchIntent, er
 	if err != nil {
 		return nil, err
 	}
-	return &commandWALBatchIntent{payload: payload, externalRefs: externalRefs, externalRefFileIDs: rawKVCommandWALExternalRefFileIDs(entries)}, nil
+	var externalRefFileIDs []uint32
+	if externalRefs {
+		externalRefFileIDs = rawKVCommandWALExternalRefFileIDs(entries)
+	}
+	return &commandWALBatchIntent{payload: payload, externalRefs: externalRefs, externalRefFileIDs: externalRefFileIDs}, nil
 }
 
 func rawKVCommandWALExternalRefFileIDs(entries []batchpkg.Entry) []uint32 {
@@ -316,6 +320,9 @@ func (db *DB) poisonCommandWALAfterPostAppendFailure(intent *commandWALBatchInte
 	if db == nil || intent == nil || intent.lsn == 0 {
 		return
 	}
+	// appendRawKVCommandWALIntent poisons its own flush/sync failures. This
+	// path covers the later case where a command frame was appended but root
+	// publication failed before AppliedCommandLSN could be published.
 	db.commandWALFlushPoisoned.Store(true)
 }
 

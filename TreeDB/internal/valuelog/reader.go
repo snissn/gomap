@@ -648,7 +648,7 @@ func ReadRIDAt(f *os.File, ptr page.ValuePtr) (uint64, error) {
 	}
 	var ridBytes [8]byte
 	ridRel := FrameHeaderSize + subIndex*8
-	if ridRel < FrameHeaderSize || ridRel+8 > int(valueLen) {
+	if ridRel+8 > int(valueLen) {
 		return 0, ErrCorrupt
 	}
 	ridOffset := start + HeaderSize + int64(ridRel)
