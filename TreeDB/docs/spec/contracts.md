@@ -171,18 +171,20 @@ Target user-command WAL mutators:
 
 | Method family | Target WAL-on durable-at-ack contract | WAL-off relaxed contract |
 |---|---|---|
-| Insert by explicit ID | `CollectionInsertBatchByID` is one command frame with one LSN and all-or-nothing replay. Success/visibility waits for root publication plus `AppliedLSN`. | Process-local visibility until an explicit persistence boundary covers the batch. |
-| Delete by explicit ID | `CollectionDeleteBatchByID` is one command frame with one LSN and all-or-nothing replay. Secondary-index deletes and tombstones are derived by the normal executor and published with `AppliedLSN`. | Process-local visibility until an explicit persistence boundary. |
+| Insert by explicit ID | `CollectionInsertBatchByID` is one command frame with one LSN and all-or-nothing replay. Success/visibility waits for recoverable WAL plus normal-executor apply; checkpoint/cleanup later publishes roots plus `AppliedLSN`. | Process-local visibility until an explicit persistence boundary covers the batch. |
+| Delete by explicit ID | `CollectionDeleteBatchByID` is one command frame with one LSN and all-or-nothing replay. Secondary-index deletes and tombstones are derived by the normal executor; checkpoint/cleanup later publishes roots plus `AppliedLSN`. | Process-local visibility until an explicit persistence boundary. |
 | Declarative update by explicit ID | `CollectionUpdateByIDOps` logs canonical operators over resolved literal values. Resolver helpers run before WAL append and are never invoked during recovery. | Process-local visibility until an explicit persistence boundary. |
 | Callback update by explicit ID | Callback identity is discarded before WAL append; the WAL logs final accepted replacements/no-ops or another stable replayable result. No Go callback is replayed. | Process-local visibility until an explicit persistence boundary. |
 | Query-wide update/delete | WAL-on durable-at-ack modes reject until a future command kind defines deterministic target ordering, preconditions, and result assertions. | May remain allowed only under durability profiles that make no durable-at-ack claim. |
 
 A target WAL-supported command may not return success or become owner-visible
-from the WAL frame alone. V1 has no durable pending overlay: the normal executor
-must publish roots, required reachability metadata, and `AppliedLSN` in one
-backend durability boundary before success/visibility. Unsupported command kinds
-must fail before staging, uniqueness reservation, visible mutation, or external
-ref protection that would require recovery.
+from the WAL frame alone. V1 has no durable pending overlay: success/visibility
+requires a recoverable command frame plus normal-executor apply. Checkpoint,
+flush, close, synced ack, and recovery boundaries later publish roots, required
+reachability metadata, and `AppliedLSN` in one backend durability boundary before
+WAL cleanup. Unsupported command kinds must fail before staging, uniqueness
+reservation, visible mutation, or external ref protection that would require
+recovery.
 
 Batch mutators are all-or-nothing at the command boundary. An ordinary
 pre-commit error means no item from that batch became visible or recoverable. A

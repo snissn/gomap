@@ -321,16 +321,21 @@ For a WAL-supported command, the required ordering is:
    `ExternalRefs`
 9. flush/sync WAL according to durability mode
 10. apply the command through the normal executor
-11. publish roots, system metadata, external-ref reachability, and `AppliedLSN`
-    in one publish boundary
-12. return success only after root publication plus `AppliedLSN` advancement
-    covers the command
+11. install owner-visible process state only after the command frame is
+    recoverable
+12. return ordinary WAL-on success once the command is recoverable and the
+    normal executor has accepted or installed the command according to the API
+    visibility contract
+13. later checkpoint, flush, close, or synced ack boundaries publish roots,
+    system metadata, external-ref reachability, and `AppliedLSN` in one durable
+    publish boundary before WAL cleanup
 ```
 
-For staged collection writes, no owner-visible state may be installed before the
-root publish boundary and matching `AppliedLSN` are durable in V1 WAL-on modes.
-The complete WAL frame alone is not a visibility boundary. Durable pending
-overlays that expose already-logged but not-yet-published commands are a later
+For WAL-on collection writes, no owner-visible state may be installed before the
+complete command frame and required external refs are recoverable. Ordinary
+WAL-on success does not require a checkpointed root plus `AppliedLSN`; if a crash
+happens first, recovery replays the complete frame from the previous durable
+`AppliedLSN`. Durable pending overlays that survive without replay are a later
 feature, not part of V1.
 
 Failure to prepare, sync, protect, or declare a required external ref fails the
@@ -345,11 +350,12 @@ covers it.
 
 ## 8. Checkpoint and Cleanup
 
-A checkpoint or command publish must record a durable state root and the highest
-contiguous `AppliedLSN` covered by that root state. `AppliedLSN` is not merely
-checkpoint metadata; every command publish that makes command effects durable
-and visible must also make the corresponding `AppliedLSN` durable and visible in
-the same publish boundary.
+A checkpoint, flush, close, synced ack, or recovery publish that records durable
+command effects in roots must also record the highest contiguous `AppliedLSN`
+covered by those roots. `AppliedLSN` is not ordinary asynchronous checkpoint
+metadata; every durable root publish that makes command effects independent of
+WAL replay must make the corresponding `AppliedLSN` durable in the same publish
+boundary.
 
 `AppliedLSN` is metadata for the same command WAL sequence stream, not a
 separate collection watermark. It is required because commands are not always
@@ -391,10 +397,10 @@ Required crash cases:
 - Crash during command apply before root/meta publication: copy-on-write pages or
   partial root state are unreachable from the selected meta/root; recovery
   replays the command again from WAL.
-- Crash after root publication but before `AppliedLSN` publication is forbidden
-  as a visible state. Command effects and `AppliedLSN` advancement must be in
-  the same backend durability boundary, so recovery either sees neither or sees
-  both.
+- Crash after durable root publication but before `AppliedLSN` publication is
+  forbidden as a selected recovery state. Command effects and `AppliedLSN`
+  advancement must be in the same backend durability boundary, so recovery
+  either sees neither or sees both.
 - Crash after root plus `AppliedLSN` publication but before WAL cleanup: recovery
   selects the new root state, skips frames with `LSN <= AppliedLSN`, and cleanup
   resumes idempotently.
@@ -406,7 +412,7 @@ Required crash cases:
   command group. On restart, recovery resumes from the selected durable
   `AppliedLSN` and must not double-apply commands above it.
 
-A command implementation must not publish user roots first and advance
+A command implementation must not publish durable user roots first and advance
 `AppliedLSN` later. It also must not advance `AppliedLSN` before the root state
 and all required value-log/leaf-log/external-ref bytes are durable enough for the
 selected durability profile.

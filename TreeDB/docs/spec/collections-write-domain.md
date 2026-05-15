@@ -100,13 +100,13 @@ If TreeDB later needs durable-at-ack async collection writes, it MUST add
 user-command WAL support for the relevant command category before advertising
 that stronger contract.
 
-In the V1 WAL-on contract, write-domain mutable/queued/publishing state is not a
-durable pending overlay and is not a public visibility boundary. A
-WAL-supported collection command may return success or become owner-visible only
-after the normal executor has published the affected roots and the same durable
-publish boundary has advanced `AppliedLSN` over the command. Durable-at-ack
-requested for a collection command whose command kind is not `WAL-supported`
-must fail before staging.
+In the V1 WAL-on contract, write-domain mutable/queued/publishing state is
+process-local state, not a durable pending overlay. A WAL-supported collection
+command may return success or become owner-visible only after its command frame
+and required external refs are recoverable and the normal executor has installed
+the command in the process-visible write domain. Durable-at-ack requested for a
+collection command whose command kind is not `WAL-supported` must fail before
+staging.
 
 In WAL-off relaxed mode, write-domain state is not backed by command WAL.
 Acknowledged pending writes are process-local until published. `Flush`,
@@ -117,11 +117,11 @@ reservations, publish inputs, and schema/index barrier state are not reachable
 from any read, scan, uniqueness check, update/delete planner, queued unit,
 publishing unit, or pending-state merge. The writer prepares and protects
 required external refs, appends and syncs the typed command WAL frame through the
-shared commit-log journal, applies through the normal executor, and publishes
-roots plus `AppliedLSN` in one backend durability boundary. Only after that
-boundary may the mutation become visible or return success in V1 WAL-on modes.
-Async flush over already-logged but not-yet-published commands is a future
-durable pending-overlay feature, not part of V1.
+shared commit-log journal, and applies through the normal executor. Only after
+the frame is recoverable may the mutation become visible or return success in V1
+WAL-on modes. Checkpoint, flush, close, synced ack, and recovery boundaries
+publish roots plus `AppliedLSN` before WAL cleanup. Durable pending overlays
+that survive without replay are a future feature, not part of V1.
 
 In WAL-on modes for enabled command WAL capabilities, visibility implies
 recoverability. If command WAL append/commit fails, the mutation must leave no

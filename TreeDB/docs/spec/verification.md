@@ -212,7 +212,7 @@ to the V1 gated meta-page storage field.
 
 | Normative statement | Owner section | Required test/evidence | Status |
 |---|---|---|---|
-| WAL-supported command visibility implies process-crash recoverability. | `user-command-wal.md` normal write path | `TestCommandWALInsertAckPublishesRootsAndAppliedLSN`, `TestCommandWALDeleteAckPublishesRootsAndAppliedLSN`, `TestCommandWALReplaceAckPublishesRootsAndAppliedLSN` | planned |
+| WAL-supported command visibility implies process-crash recoverability. | `user-command-wal.md` normal write path | `TestCommandWALInsertAckRecoverableBeforeCheckpoint`, `TestCommandWALDeleteAckRecoverableBeforeCheckpoint`, `TestCommandWALReplaceAckRecoverableBeforeCheckpoint` | planned |
 | No V1 WAL-backed pending overlay is visible. | `collections-write-domain.md` durability boundary | `TestCommandWALFrameDurableButUnpublishedNotVisible`, `TestCommandWALNoPendingOverlayBeforeRootPublish` | planned |
 | Pre-frame failures are ordinary not-committed failures and leave no visible state. | `user-command-wal.md` normal write path | `TestCommandWALPreFrameValidationFailureLeavesNoMutation`, `TestCommandWALExternalRefPrepareFailureRejectsBeforeVisibility` | planned |
 | Post-recoverable-frame failures are commit-ambiguous or recovery-required, not retryable not-committed errors. | `user-command-wal.md` replay idempotency, `native-wire-protocol.md` ack policy | `TestCommandWALPostFramePublishFailureCommitAmbiguous`, `TestNativeWireCommandWALPublishFailureCommitAmbiguous` | planned |
