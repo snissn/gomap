@@ -678,7 +678,7 @@ func (r *templateV1SnapshotResolver) lookupTemplateV1ByHash(hash [32]byte) (*tem
 		return nil, err
 	}
 	if tpl.hash != hash {
-		return nil, errors.New("collections: template-v1 template hash mismatch")
+		return nil, fmt.Errorf("collections: template-v1 template hash mismatch snapshot id=%d want=%x got=%x", id, hash, tpl.hash)
 	}
 	return tpl, nil
 }
@@ -764,7 +764,7 @@ func (r *templateV1BufferedRunsResolver) lookupTemplateV1ByHash(hash [32]byte) (
 			return nil, err
 		}
 		if tpl.hash != hash {
-			return nil, errors.New("collections: template-v1 template hash mismatch")
+			return nil, fmt.Errorf("collections: template-v1 template hash mismatch buffered id=%d want=%x got=%x", id, hash, tpl.hash)
 		}
 		return tpl, nil
 	}
