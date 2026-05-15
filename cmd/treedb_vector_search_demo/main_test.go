@@ -9,21 +9,22 @@ import (
 
 func TestExecuteSmokeCompactsReopensValidatesAndBenchmarks(t *testing.T) {
 	res, err := execute(t.Context(), config{
-		dir:                  t.TempDir(),
-		keepDir:              true,
-		docs:                 128,
-		dimensions:           16,
-		queries:              8,
-		validateQueries:      4,
-		validateDocs:         4,
-		topK:                 5,
-		batchSize:            32,
-		m:                    8,
-		efConstruction:       64,
-		efSearch:             64,
-		minRecall:            0.5,
-		compact:              true,
-		disableExactFallback: true,
+		dir:                   t.TempDir(),
+		keepDir:               true,
+		docs:                  128,
+		dimensions:            16,
+		queries:               8,
+		validateQueries:       4,
+		validateDocs:          4,
+		topK:                  5,
+		batchSize:             32,
+		m:                     8,
+		efConstruction:        64,
+		efSearch:              64,
+		valuePointerThreshold: defaultValuePointerThreshold,
+		minRecall:             0.5,
+		compact:               true,
+		disableExactFallback:  true,
 	})
 	if err != nil {
 		t.Fatalf("execute: %v", err)
@@ -39,6 +40,9 @@ func TestExecuteSmokeCompactsReopensValidatesAndBenchmarks(t *testing.T) {
 	}
 	if res.Profile != "bench" {
 		t.Fatalf("profile=%q want bench", res.Profile)
+	}
+	if res.ValuePointerThreshold != defaultValuePointerThreshold {
+		t.Fatalf("value pointer threshold=%d want %d", res.ValuePointerThreshold, defaultValuePointerThreshold)
 	}
 	if res.StorageAfterCompact.TotalBytes <= 0 || res.StorageAfterCompact.BytesPerDoc <= 0 {
 		t.Fatalf("missing compacted storage report: %+v", res.StorageAfterCompact)
@@ -97,6 +101,9 @@ func TestRunJSONOutput(t *testing.T) {
 	if res.Profile != "bench" || res.Docs != 64 || res.Search.Queries != 4 || res.StorageAfterCompact.TotalBytes <= 0 {
 		t.Fatalf("unexpected JSON result: %+v", res)
 	}
+	if res.ValuePointerThreshold != defaultValuePointerThreshold {
+		t.Fatalf("JSON value pointer threshold=%d want %d", res.ValuePointerThreshold, defaultValuePointerThreshold)
+	}
 	if res.FormatConfig == nil || !res.FormatConfig.IndexOuterLeavesInValueLog || !res.FormatConfig.LeafPrefixCompression {
 		t.Fatalf("unexpected JSON format config: %+v", res.FormatConfig)
 	}
@@ -104,22 +111,23 @@ func TestRunJSONOutput(t *testing.T) {
 
 func TestExecuteRequireLeafVLogBytesPassesWithDefaultBenchProfile(t *testing.T) {
 	res, err := execute(t.Context(), config{
-		dir:                  t.TempDir(),
-		keepDir:              true,
-		docs:                 64,
-		dimensions:           8,
-		queries:              2,
-		validateQueries:      1,
-		validateDocs:         1,
-		topK:                 3,
-		batchSize:            32,
-		m:                    4,
-		efConstruction:       32,
-		efSearch:             32,
-		minRecall:            0.5,
-		compact:              true,
-		disableExactFallback: true,
-		requireLeafVLogBytes: true,
+		dir:                   t.TempDir(),
+		keepDir:               true,
+		docs:                  64,
+		dimensions:            8,
+		queries:               2,
+		validateQueries:       1,
+		validateDocs:          1,
+		topK:                  3,
+		batchSize:             32,
+		m:                     4,
+		efConstruction:        32,
+		efSearch:              32,
+		valuePointerThreshold: defaultValuePointerThreshold,
+		minRecall:             0.5,
+		compact:               true,
+		disableExactFallback:  true,
+		requireLeafVLogBytes:  true,
 	})
 	if err != nil {
 		t.Fatalf("execute: %v", err)
@@ -139,6 +147,19 @@ func TestParseProfileRejectsUnsupportedProfile(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "unsupported -profile") {
 		t.Fatalf("error=%v, want unsupported -profile", err)
+	}
+}
+
+func TestParseConfigValuePointerThreshold(t *testing.T) {
+	cfg, err := parseConfig([]string{"-value-pointer-threshold", "2048"})
+	if err != nil {
+		t.Fatalf("parseConfig: %v", err)
+	}
+	if cfg.valuePointerThreshold != 2048 {
+		t.Fatalf("value pointer threshold=%d want 2048", cfg.valuePointerThreshold)
+	}
+	if _, err := parseConfig([]string{"-value-pointer-threshold", "-1"}); err == nil {
+		t.Fatal("parseConfig accepted negative value pointer threshold")
 	}
 }
 
@@ -166,6 +187,7 @@ func TestRunTextOutput(t *testing.T) {
 	for _, want := range []string{
 		"TreeDB vector search demo",
 		"profile=bench",
+		"value_pointer_threshold=1024",
 		"compact_storage_full:",
 		"Storage",
 		"format index_outer_leaves_in_vlog=",
