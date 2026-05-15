@@ -119,6 +119,14 @@ func TestRunJSONBenchPartQueriesSampleMatchesRawReference(t *testing.T) {
 			if timing.Diagnostics.AggregateKernel != "fused_dense_group_count_hour_codes" {
 				t.Fatalf("Q3 kernel=%q want fused dense hour count", timing.Diagnostics.AggregateKernel)
 			}
+		case "Q4":
+			if timing.Diagnostics.AggregateKernel != "sort_key_early_stop_min_by_user" {
+				t.Fatalf("Q4 kernel=%q want sort-key early stop", timing.Diagnostics.AggregateKernel)
+			}
+		case "Q5":
+			if timing.Diagnostics.AggregateKernel != "fused_dense_span_by_user" {
+				t.Fatalf("Q5 kernel=%q want fused dense span", timing.Diagnostics.AggregateKernel)
+			}
 		}
 	}
 }
