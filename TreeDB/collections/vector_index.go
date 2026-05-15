@@ -3,10 +3,12 @@ package collections
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 	"unsafe"
@@ -33,6 +35,50 @@ const (
 	VectorIndexEncodingFloat32 VectorIndexEncoding = iota
 	VectorIndexEncodingInt8
 )
+
+func (e VectorIndexEncoding) String() string {
+	switch e {
+	case VectorIndexEncodingFloat32:
+		return "float32"
+	case VectorIndexEncodingInt8:
+		return "int8"
+	default:
+		return fmt.Sprintf("unknown(%d)", e)
+	}
+}
+
+func (e VectorIndexEncoding) MarshalJSON() ([]byte, error) {
+	encoding, err := normalizeVectorIndexEncoding(e)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(encoding.String())
+}
+
+func (e *VectorIndexEncoding) UnmarshalJSON(raw []byte) error {
+	if e == nil {
+		return errors.New("collections: nil vector index encoding")
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		encoding, err := parseVectorIndexEncoding(s)
+		if err != nil {
+			return err
+		}
+		*e = encoding
+		return nil
+	}
+	var n uint8
+	if err := json.Unmarshal(raw, &n); err != nil {
+		return err
+	}
+	encoding, err := normalizeVectorIndexEncoding(VectorIndexEncoding(n))
+	if err != nil {
+		return err
+	}
+	*e = encoding
+	return nil
+}
 
 // VectorIndexOptions configures an in-memory vector secondary index built from
 // collection rows. The index stores stable collection document IDs and vector
@@ -265,6 +311,17 @@ func normalizeVectorIndexEncoding(encoding VectorIndexEncoding) (VectorIndexEnco
 		return encoding, nil
 	default:
 		return VectorIndexEncodingFloat32, fmt.Errorf("collections: unsupported vector index encoding %d", encoding)
+	}
+}
+
+func parseVectorIndexEncoding(value string) (VectorIndexEncoding, error) {
+	switch strings.TrimSpace(strings.ToLower(value)) {
+	case "float32":
+		return VectorIndexEncodingFloat32, nil
+	case "int8":
+		return VectorIndexEncodingInt8, nil
+	default:
+		return VectorIndexEncodingFloat32, fmt.Errorf("collections: unsupported vector index encoding %q", value)
 	}
 }
 

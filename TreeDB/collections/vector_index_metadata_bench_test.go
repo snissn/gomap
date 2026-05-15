@@ -40,6 +40,11 @@ func BenchmarkCollectionOpenVectorIndexMetadata(b *testing.B) {
 	if err != nil {
 		b.Fatalf("open db: %v", err)
 	}
+	defer func() {
+		if d != nil {
+			_ = d.Close()
+		}
+	}()
 	mgr := NewCollectionManager(d)
 	if _, err := mgr.CreateCollection(&CollectionMeta{
 		Name: "docs",
@@ -54,6 +59,7 @@ func BenchmarkCollectionOpenVectorIndexMetadata(b *testing.B) {
 	if err := d.Close(); err != nil {
 		b.Fatalf("close db: %v", err)
 	}
+	d = nil
 
 	b.ReportAllocs()
 	b.ResetTimer()

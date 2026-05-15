@@ -15778,6 +15778,11 @@ func TestCollectionVectorIndexMetadataCreateDropReopen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
+	defer func() {
+		if d != nil {
+			_ = d.Close()
+		}
+	}()
 	mgr := NewCollectionManager(d)
 	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs"}); err != nil {
 		t.Fatalf("create collection: %v", err)
@@ -15812,6 +15817,7 @@ func TestCollectionVectorIndexMetadataCreateDropReopen(t *testing.T) {
 	if err := d.Close(); err != nil {
 		t.Fatalf("close db: %v", err)
 	}
+	d = nil
 
 	reopened, err := backenddb.Open(backenddb.Options{Dir: dir})
 	if err != nil {
@@ -15835,6 +15841,52 @@ func TestCollectionVectorIndexMetadataCreateDropReopen(t *testing.T) {
 	}
 	if _, err := reopenedCol.DropVectorIndex("embedding"); !errors.Is(err, ErrIndexNotFound) {
 		t.Fatalf("drop missing vector index err=%v want ErrIndexNotFound", err)
+	}
+}
+
+func TestCollectionVectorIndexMetadataJSONUsesStableStrings(t *testing.T) {
+	meta, err := normalizeCollectionMeta(CollectionMeta{
+		Name: "docs",
+		VectorIndexes: []VectorIndexDefinition{{
+			Name:       "embedding",
+			Field:      "embedding",
+			Metric:     VectorMetricInnerProduct,
+			Dimensions: 64,
+			Encoding:   VectorIndexEncodingInt8,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("normalize meta: %v", err)
+	}
+	raw, err := json.Marshal(meta)
+	if err != nil {
+		t.Fatalf("marshal meta: %v", err)
+	}
+	if !bytes.Contains(raw, []byte(`"metric":"inner_product"`)) || !bytes.Contains(raw, []byte(`"encoding":"int8"`)) {
+		t.Fatalf("vector metadata JSON=%s want string metric and encoding", raw)
+	}
+	var decoded CollectionMeta
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("unmarshal string meta: %v", err)
+	}
+	decoded, err = normalizeCollectionMeta(decoded)
+	if err != nil {
+		t.Fatalf("normalize decoded meta: %v", err)
+	}
+	if !sameCollectionMeta(meta, decoded) {
+		t.Fatalf("decoded meta=%+v want %+v", decoded, meta)
+	}
+	var numericDecoded CollectionMeta
+	if err := json.Unmarshal([]byte(`{"name":"docs","vector_indexes":[{"name":"embedding","field":"embedding","metric":0,"dimensions":64,"encoding":1}]}`), &numericDecoded); err != nil {
+		t.Fatalf("unmarshal numeric compatibility meta: %v", err)
+	}
+	numericDecoded, err = normalizeCollectionMeta(numericDecoded)
+	if err != nil {
+		t.Fatalf("normalize numeric meta: %v", err)
+	}
+	got, ok := findVectorIndex(numericDecoded.VectorIndexes, "embedding")
+	if !ok || got.Metric != VectorMetricCosine || got.Encoding != VectorIndexEncodingInt8 {
+		t.Fatalf("numeric decoded vector index=%+v ok=%v", got, ok)
 	}
 }
 
