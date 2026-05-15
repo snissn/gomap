@@ -311,7 +311,7 @@ func commandWALFormatNeedsActivation(opts Options) (bool, error) {
 // via commandWALFormatNeedsActivation + ValidateCommandWALActivationClean +
 // writeFormatConfig in openWithLock before the journal opens.
 func saveOpenFormatConfig(opts Options) error {
-	if opts.CommandWAL && opts.ReadOnly {
+	if opts.ReadOnly {
 		return nil
 	}
 	cfg, err := formatConfigFromOptionsPreservingRequiredFeatures(opts)

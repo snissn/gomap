@@ -102,10 +102,10 @@ func rawKVCommandWALExternalRefFileIDs(entries []batchpkg.Entry) []uint32 {
 
 func (db *DB) lookupCommandWALValueLogRID(ptr page.ValuePtr, ridCache map[page.ValuePtr]uint64) (uint64, error) {
 	if db == nil || db.valueLogManager == nil {
-		return 0, fmt.Errorf("treedb: command wal raw kv pointer rid reader unavailable")
+		return 0, fmt.Errorf("treedb: command wal raw kv pointer rid reader unavailable (file=%d offset=%d len=%d)", ptr.FileID, ptr.Offset, ptr.Length)
 	}
 	if ptr.FileID == 0 || ptr.Length == 0 {
-		return 0, fmt.Errorf("treedb: command wal raw kv invalid value-log pointer")
+		return 0, fmt.Errorf("treedb: command wal raw kv invalid value-log pointer (file=%d offset=%d len=%d)", ptr.FileID, ptr.Offset, ptr.Length)
 	}
 	if ridCache == nil {
 		return 0, fmt.Errorf("treedb: command wal raw kv rid cache unavailable")
