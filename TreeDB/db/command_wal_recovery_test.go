@@ -142,6 +142,33 @@ func TestCommandWALCrashAfterRootAppliedLSNBeforeCleanupSkipsFrame(t *testing.T)
 	}
 }
 
+func TestCommandWALCleanReopenCleansCoveredNonActiveSegmentWithNoReplayFrames(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	state := db.State()
+	if err := db.publishCommandWALRoots(state.RootPageID, state.SystemRootPageID, 2, []CommandWALLSNRange{{First: 1, Last: 2}}, true); err != nil {
+		t.Fatalf("publishCommandWALRoots: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	writeCommandWALRawKVFrame(t, dir, 1, 1, []commitlog.RawKVOperation{{Op: commitlog.RawKVOpSet, Key: []byte("covered"), Value: []byte("v")}})
+	writeCommandWALRawKVFrame(t, dir, 2, 2, []commitlog.RawKVOperation{{Op: commitlog.RawKVOpSet, Key: []byte("covered-active"), Value: []byte("v")}})
+	coveredPath := filepath.Join(WALDirPath(dir), commitlog.CommandSegmentName(0, 1))
+	if _, err := os.Stat(coveredPath); err != nil {
+		t.Fatalf("covered segment missing before reopen: %v", err)
+	}
+
+	reopen := openCommandWALDB(t, dir)
+	if err := reopen.Close(); err != nil {
+		t.Fatalf("Close reopen: %v", err)
+	}
+	if _, err := os.Stat(coveredPath); !os.IsNotExist(err) {
+		t.Fatalf("covered segment stat error=%v, want removed on clean reopen", err)
+	}
+}
+
 func TestCommandWALRecoveryCrashDuringReplayResumesFromAppliedLSN(t *testing.T) {
 	dir := t.TempDir()
 	enableCommandWALFormat(t, dir)

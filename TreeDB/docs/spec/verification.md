@@ -325,6 +325,9 @@ PR3 implementation evidence:
 - Read-write recovery dispatches typed frames, replays raw KV commands through
   the normal backend batch executor, and publishes roots plus
   `AppliedCommandLSN` in one finalize boundary.
+- Clean read-write reopens still run covered-segment cleanup, so a prior crash
+  after root plus `AppliedCommandLSN` publication but before cleanup converges
+  on the next open even when no frames need replay.
 - Explicit `CommandWAL` activation first fails closed on dirty legacy WAL,
   then persists `command_wal_v1` after replay preconditions are clear and
   before opening the command journal, so a process cannot acknowledge typed

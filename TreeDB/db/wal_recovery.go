@@ -247,7 +247,8 @@ func replayCommandWALIntoBackend(db *DB, segments []logSegment, maxSegmentBytes 
 		return err
 	}
 	if len(frames) == 0 {
-		return nil
+		_, err := cleanupCommandWALSegmentsCoveredByAppliedLSN(db.dir, db.meta.AppliedCommandLSN, maxSegmentBytes)
+		return err
 	}
 	ridMap, err := scanValueLogSegments(segments, dictLookup)
 	if err != nil {
@@ -260,7 +261,7 @@ func replayCommandWALIntoBackend(db *DB, segments []logSegment, maxSegmentBytes 
 		if frame.env.LSN <= applied {
 			continue
 		}
-		if applied == ^uint64(0) || frame.env.LSN != applied+1 {
+		if frame.env.LSN != applied+1 {
 			return fmt.Errorf("%w: current=%d next=%d", ErrCommandWALAppliedLSNNonContig, applied, frame.env.LSN)
 		}
 		if err := applyCommandWALFrame(db, frame.env, ridMap); err != nil {

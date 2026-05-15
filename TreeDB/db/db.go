@@ -1461,6 +1461,20 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		}
 	}
 	if opts.CommandWAL && !opts.ReadOnly {
+		commandSegmentSeq := uint64(1)
+		journalSegments, err := listRecoverySegments(opts.Dir)
+		if err != nil {
+			db.Close()
+			return nil, err
+		}
+		activeSeqByLane, err := commandWALActiveSeqByLane(journalSegments, opts.WALMaxSegmentBytes)
+		if err != nil {
+			db.Close()
+			return nil, err
+		}
+		if seq := activeSeqByLane[0]; seq != 0 {
+			commandSegmentSeq = seq
+		}
 		if needsCommandWALFormat {
 			if err := SaveFormatConfig(opts.Dir, formatConfigFromOptions(opts)); err != nil {
 				db.Close()
@@ -1471,6 +1485,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 			MaxSegmentSize: opts.WALMaxSegmentBytes,
 			Compress:       opts.JournalCompression,
 			InitialLSN:     db.meta.AppliedCommandLSN,
+			SegmentSeq:     commandSegmentSeq,
 		})
 		if err != nil {
 			db.Close()

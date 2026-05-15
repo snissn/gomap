@@ -1,7 +1,6 @@
 package db
 
 import (
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -180,31 +179,37 @@ func applyRawKVCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map
 	ptrBatch, hasPtrBatch := b.(interface {
 		SetPointer(key []byte, ptr page.ValuePtr) error
 	})
-	opCount := 0
-	if err := commitlog.ScanRawKVBatchPayload(env.Payload, func(op commitlog.RawKVOp, key, value []byte) error {
-		opCount++
-		switch op {
+	ops, err := commitlog.DecodeRawKVBatchPayload(env.Payload)
+	if err != nil {
+		return err
+	}
+	for i := range ops {
+		entry := ops[i]
+		switch entry.Op {
 		case commitlog.RawKVOpSet:
-			return b.Set(key, value)
+			if err := b.Set(entry.Key, entry.Value); err != nil {
+				return err
+			}
 		case commitlog.RawKVOpDelete:
-			return b.Delete(key)
+			if err := b.Delete(entry.Key); err != nil {
+				return err
+			}
 		case commitlog.RawKVOpSetRID:
 			if !hasPtrBatch {
 				return fmt.Errorf("treedb: command wal raw kv pointer batch unavailable")
 			}
-			rid := binary.LittleEndian.Uint64(value)
-			ptr, ok := ridMap[rid]
+			ptr, ok := ridMap[entry.RID]
 			if !ok {
-				return fmt.Errorf("treedb: command wal missing value-log rid %d", rid)
+				return fmt.Errorf("treedb: command wal missing value-log rid %d", entry.RID)
 			}
-			return ptrBatch.SetPointer(key, ptr)
+			if err := ptrBatch.SetPointer(entry.Key, ptr); err != nil {
+				return err
+			}
 		default:
 			return commitlog.ErrCorrupt
 		}
-	}); err != nil {
-		return err
 	}
-	if opCount == 0 {
+	if len(ops) == 0 {
 		db.mu.RLock()
 		rootID := db.meta.UserRootPageID
 		sysRootID := db.meta.SystemRootPageID

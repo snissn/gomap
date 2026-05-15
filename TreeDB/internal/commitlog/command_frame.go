@@ -433,7 +433,9 @@ func validateRawKVBatchPayload(payload []byte) error {
 }
 
 // ScanRawKVBatchPayload validates payload and visits each op with slices that
-// reference payload. Use DecodeRawKVBatchPayload when callers need owned copies.
+// reference payload. For RawKVOpSetRID, value is exactly the 8-byte
+// little-endian RID payload. Use DecodeRawKVBatchPayload when callers need
+// owned copies or typed RID fields.
 func ScanRawKVBatchPayload(payload []byte, visit func(op RawKVOp, key, value []byte) error) error {
 	if len(payload) < rawKVBatchHeaderSize {
 		return ErrCorrupt

@@ -52,6 +52,10 @@ func (cfg FormatConfig) RequiresCommandWALV1() bool {
 }
 
 func (cfg FormatConfig) ValidateRuntimeSupported() error {
+	// Reserved for future format gates that are globally unsupported by this
+	// binary. command_wal_v1 is handled by open-mode-specific paths because
+	// backend opens can recover it while cached/public write opens still fail
+	// closed.
 	return nil
 }
 
@@ -90,10 +94,20 @@ func formatConfigFromOptions(opts Options) FormatConfig {
 	}
 	if opts.CommandWAL {
 		cfg.Version = formatConfigRequiredFeaturesVersion
-		cfg.RequiredFeatures = []string{RequiredFeatureCommandWALV1}
+		cfg.RequiredFeatures = appendRequiredFormatFeature(cfg.RequiredFeatures, RequiredFeatureCommandWALV1)
 	}
 
 	return cfg
+}
+
+func appendRequiredFormatFeature(features []string, feature string) []string {
+	normalized := normalizeFormatConfigMode(feature)
+	for _, existing := range features {
+		if normalizeFormatConfigMode(existing) == normalized {
+			return features
+		}
+	}
+	return append(features, feature)
 }
 
 // ApplyToOptions overwrites format-affecting knobs in opts from cfg.
