@@ -166,7 +166,7 @@ func OpenCommandJournal(walDir string, opts CommandJournalOptions) (*CommandJour
 
 func commandJournalInitialLSN(walDir, activePath string, opts CommandJournalOptions) (uint64, error) {
 	initialLSN := opts.InitialLSN
-	segments, err := commandJournalLaneSegments(walDir, opts.Lane, activePath)
+	segments, err := commandJournalSegments(walDir, activePath)
 	if err != nil {
 		return 0, err
 	}
@@ -195,12 +195,13 @@ func commandJournalInitialLSN(walDir, activePath string, opts CommandJournalOpti
 
 type commandJournalSegment struct {
 	path   string
+	lane   int
 	seq    uint64
 	size   int64
 	active bool
 }
 
-func commandJournalLaneSegments(walDir string, lane int, activePath string) ([]commandJournalSegment, error) {
+func commandJournalSegments(walDir string, activePath string) ([]commandJournalSegment, error) {
 	entries, err := os.ReadDir(walDir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -215,7 +216,7 @@ func commandJournalLaneSegments(walDir string, lane int, activePath string) ([]c
 			continue
 		}
 		entryLane, seq, ok := parseCommandSegmentName(entry.Name())
-		if !ok || entryLane != lane {
+		if !ok {
 			continue
 		}
 		path := filepath.Join(walDir, entry.Name())
@@ -225,12 +226,16 @@ func commandJournalLaneSegments(walDir string, lane int, activePath string) ([]c
 		}
 		segments = append(segments, commandJournalSegment{
 			path:   path,
+			lane:   entryLane,
 			seq:    seq,
 			size:   info.Size(),
 			active: filepath.Clean(path) == cleanActive,
 		})
 	}
 	sort.Slice(segments, func(i, j int) bool {
+		if segments[i].lane != segments[j].lane {
+			return segments[i].lane < segments[j].lane
+		}
 		if segments[i].seq != segments[j].seq {
 			return segments[i].seq < segments[j].seq
 		}

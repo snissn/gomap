@@ -140,6 +140,41 @@ func TestCommandJournalSeedsLSNFromExistingSegmentFamily(t *testing.T) {
 	}
 }
 
+func TestCommandJournalSeedsLSNFromExistingLanes(t *testing.T) {
+	dir := t.TempDir()
+	j, err := OpenCommandJournal(dir, CommandJournalOptions{Lane: 0, SegmentSeq: 1})
+	if err != nil {
+		t.Fatalf("OpenCommandJournal first lane: %v", err)
+	}
+	if _, err := j.AppendCommand(CommandEnvelope{
+		Kind:          CommandKindRawKVBatch,
+		Scope:         CommandScopeRawKV,
+		PayloadFormat: PayloadFormatRawKVBatchV1,
+	}); err != nil {
+		t.Fatalf("AppendCommand first lane: %v", err)
+	}
+	if err := j.Close(); err != nil {
+		t.Fatalf("Close first lane: %v", err)
+	}
+
+	reopen, err := OpenCommandJournal(dir, CommandJournalOptions{Lane: 1, SegmentSeq: 1})
+	if err != nil {
+		t.Fatalf("OpenCommandJournal second lane: %v", err)
+	}
+	defer reopen.Close()
+	lsn, err := reopen.AppendCommand(CommandEnvelope{
+		Kind:          CommandKindRawKVBatch,
+		Scope:         CommandScopeRawKV,
+		PayloadFormat: PayloadFormatRawKVBatchV1,
+	})
+	if err != nil {
+		t.Fatalf("AppendCommand second lane: %v", err)
+	}
+	if lsn != 2 {
+		t.Fatalf("second lane LSN=%d, want 2", lsn)
+	}
+}
+
 func TestCommandJournalRejectsNonActiveTerminalTail(t *testing.T) {
 	dir := t.TempDir()
 	j, err := OpenCommandJournal(dir, CommandJournalOptions{SegmentSeq: 1})
