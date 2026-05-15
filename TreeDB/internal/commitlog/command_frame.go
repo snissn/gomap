@@ -480,7 +480,10 @@ func ScanRawKVBatchPayload(payload []byte, visit func(op RawKVOp, key, value []b
 		}
 		value := payload[off : off+int(valueLen)]
 		if op == RawKVOpSetRID {
-			if len(value) != 8 || binary.LittleEndian.Uint64(value) == 0 {
+			// validateRawKVOperationShape already enforces valueLen == 8 for
+			// RawKVOpSetRID, so len(value) == 8 is guaranteed here. Only
+			// check for the zero-RID sentinel, which is always invalid.
+			if binary.LittleEndian.Uint64(value) == 0 {
 				return ErrCorrupt
 			}
 		}

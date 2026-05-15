@@ -498,15 +498,23 @@ func TestCommandWALPointerBatchReplaysThroughRIDFence(t *testing.T) {
 }
 
 type commandWALExternalRefSyncTestAppender struct {
-	fileID uint32
-	syncs  atomic.Int32
+	t       *testing.T
+	fileID  uint32
+	syncs   atomic.Int32
+	flushes atomic.Int32
 }
 
 func (a *commandWALExternalRefSyncTestAppender) AppendValues(values [][]byte) ([]page.ValuePtr, error) {
-	return nil, ErrValueLogAppenderUnavailable
+	// AppendValues must not be called in external-ref flush tests; panic
+	// rather than return a sentinel so misuse fails loudly.
+	if a.t != nil {
+		a.t.Fatal("AppendValues must not be called during flushCommandWALExternalRefs")
+	}
+	panic("AppendValues must not be called during flushCommandWALExternalRefs")
 }
 
 func (a *commandWALExternalRefSyncTestAppender) Flush() error {
+	a.flushes.Add(1)
 	return nil
 }
 
@@ -519,20 +527,53 @@ func (a *commandWALExternalRefSyncTestAppender) CurrentValueLogSegment() (string
 	return "", a.fileID, true
 }
 
-func TestCommandWALExternalRefFlushSkipsActiveAppenderSegment(t *testing.T) {
-	dir := t.TempDir()
-	enableCommandWALFormat(t, dir)
-	db := openCommandWALDB(t, dir)
-	defer db.Close()
+// TestCommandWALExternalRefFlushDoesNotDoubleSyncActiveSegment verifies that
+// flushCommandWALExternalRefs does not sync the active appender segment a
+// second time via the per-fileID loop. With sync=true, exactly one Sync call
+// (from the appender block) should occur; the per-fileID loop skips fileID==17
+// because it equals activeFileID.
+//
+// With sync=false, exactly one Flush call (from the appender block) should
+// occur, and the per-fileID sync loop is skipped entirely.
+func TestCommandWALExternalRefFlushDoesNotDoubleSyncActiveSegment(t *testing.T) {
+	t.Run("sync=true", func(t *testing.T) {
+		dir := t.TempDir()
+		enableCommandWALFormat(t, dir)
+		db := openCommandWALDB(t, dir)
+		defer db.Close()
 
-	appender := &commandWALExternalRefSyncTestAppender{fileID: 17}
-	db.SetValueLogAppender(appender)
-	if err := db.flushCommandWALExternalRefs(true, []uint32{17}); err != nil {
-		t.Fatalf("flushCommandWALExternalRefs active segment: %v", err)
-	}
-	if appender.syncs.Load() != 1 {
-		t.Fatalf("appender syncs=%d, want 1", appender.syncs.Load())
-	}
+		appender := &commandWALExternalRefSyncTestAppender{t: t, fileID: 17}
+		db.SetValueLogAppender(appender)
+		if err := db.flushCommandWALExternalRefs(true, []uint32{17}); err != nil {
+			t.Fatalf("flushCommandWALExternalRefs active segment: %v", err)
+		}
+		if appender.syncs.Load() != 1 {
+			t.Fatalf("appender syncs=%d, want 1", appender.syncs.Load())
+		}
+		if appender.flushes.Load() != 0 {
+			t.Fatalf("appender flushes=%d, want 0 for sync=true", appender.flushes.Load())
+		}
+	})
+
+	t.Run("sync=false", func(t *testing.T) {
+		dir := t.TempDir()
+		enableCommandWALFormat(t, dir)
+		db := openCommandWALDB(t, dir)
+		defer db.Close()
+
+		appender := &commandWALExternalRefSyncTestAppender{t: t, fileID: 17}
+		db.SetValueLogAppender(appender)
+		// sync=false: only Flush should be called (no per-fileID Sync loop).
+		if err := db.flushCommandWALExternalRefs(false, []uint32{17}); err != nil {
+			t.Fatalf("flushCommandWALExternalRefs sync=false: %v", err)
+		}
+		if appender.flushes.Load() != 1 {
+			t.Fatalf("appender flushes=%d, want 1 for sync=false", appender.flushes.Load())
+		}
+		if appender.syncs.Load() != 0 {
+			t.Fatalf("appender syncs=%d, want 0 for sync=false", appender.syncs.Load())
+		}
+	})
 }
 
 func TestCommandWALMissingRIDFenceFailsRecovery(t *testing.T) {
