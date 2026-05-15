@@ -88,7 +88,7 @@ Notes:
   `page.MetaPageBody.ActiveSlabTail` for binary compatibility.
 - Current TreeDB value storage uses persistent value-log segments and `ValuePtr` references.
 
-### 3.1 Command WAL Meta Extension
+## 3.1 Command WAL Meta Extension
 
 When `format.json` advertises the required `command_wal_v1` storage feature,
 the meta page body extends the 60-byte body above with:

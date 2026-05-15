@@ -27,8 +27,8 @@ This document defines write semantics for TreeDB cached mode and backend mode.
 
 This document owns the canonical durability-mode matrix. Other docs may
 summarize these modes but should not maintain independent durability matrices.
-Collection APIs currently have an additional write-domain distinction: before
-user-command WAL coverage lands, acknowledged collection writes can remain
+Before user-command WAL coverage lands, collection APIs have an additional
+write-domain distinction: acknowledged collection writes can remain
 flush-boundary durable rather than durable-at-ack. That current behavior is
 owned by `collections-write-domain.md`. The active target for extending
 durable-at-ack coverage is the user-command WAL in `user-command-wal.md`; the
@@ -54,8 +54,9 @@ For each write batch, implementation conceptually performs:
 
 1. Choose lane.
 2. For eligible values, append to value log and build `ValuePtr` references.
-3. If WAL enabled, append commit-log batch (inline or RID form). Under the
-   command WAL target, append a `RawKVBatch` command frame instead.
+3. If WAL enabled, append to the commit-log segment family. Pre-command-WAL
+   directories use the legacy raw batch payload (inline or RID form);
+   command-WAL directories use a `RawKVBatch` command frame payload.
 4. Apply entries to mutable memtable.
 5. Acknowledge caller based on sync mode and durability mode.
 
