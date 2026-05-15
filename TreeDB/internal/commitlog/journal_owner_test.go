@@ -69,6 +69,14 @@ func TestCommandJournalAllocatesContiguousLSNs(t *testing.T) {
 	}
 }
 
+func TestCommandJournalRejectsOutOfRangeLane(t *testing.T) {
+	for _, lane := range []int{-1, MaxCommandJournalLane + 1} {
+		if _, err := OpenCommandJournal(t.TempDir(), CommandJournalOptions{Lane: lane}); err == nil {
+			t.Fatalf("OpenCommandJournal lane=%d unexpectedly succeeded", lane)
+		}
+	}
+}
+
 func TestCommandJournalSeedsLSNFromExistingFrames(t *testing.T) {
 	dir := t.TempDir()
 	j, err := OpenCommandJournal(dir, CommandJournalOptions{})
@@ -576,20 +584,20 @@ func TestJournalOwnerRollbackMaxLSNClearsExhausted(t *testing.T) {
 	}
 	defer owner.Close()
 
-	lsn, err := owner.ReserveLSN()
+	lsn, err := owner.reserveLSN()
 	if err != nil {
 		t.Fatalf("ReserveLSN max: %v", err)
 	}
 	if lsn != ^uint64(0) {
 		t.Fatalf("LSN=%d, want max uint64", lsn)
 	}
-	if _, err := owner.ReserveLSN(); err == nil {
+	if _, err := owner.reserveLSN(); err == nil {
 		t.Fatalf("ReserveLSN after exhaustion unexpectedly succeeded")
 	}
 	if err := owner.rollbackReservedLSN(lsn); err != nil {
 		t.Fatalf("rollbackReservedLSN max: %v", err)
 	}
-	lsn, err = owner.ReserveLSN()
+	lsn, err = owner.reserveLSN()
 	if err != nil {
 		t.Fatalf("ReserveLSN after rollback: %v", err)
 	}
@@ -606,11 +614,11 @@ func TestJournalOwnerReserveAfterCloseFails(t *testing.T) {
 	if err := owner.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	if _, err := owner.ReserveLSN(); err == nil {
+	if _, err := owner.reserveLSN(); err == nil {
 		t.Fatalf("ReserveLSN after Close unexpectedly succeeded")
 	}
-	if _, _, err := owner.ReserveLSNRange(2); err == nil {
-		t.Fatalf("ReserveLSNRange after Close unexpectedly succeeded")
+	if _, _, err := owner.reserveLSNRange(2); err == nil {
+		t.Fatalf("reserveLSNRange after Close unexpectedly succeeded")
 	}
 	if err := owner.rollbackReservedLSN(1); err == nil {
 		t.Fatalf("rollbackReservedLSN after Close unexpectedly succeeded")
