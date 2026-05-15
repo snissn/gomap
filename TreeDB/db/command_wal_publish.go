@@ -309,6 +309,7 @@ func cleanupCommandWALSegmentsCoveredByAppliedLSN(dir string, appliedLSN uint64,
 		return nil, err
 	}
 	decisions := make([]commandWALSegmentCleanupDecision, 0, len(segments))
+	var scanErr error
 	for _, seg := range segments {
 		if seg.valueLog || seg.size == 0 {
 			continue
@@ -324,6 +325,7 @@ func cleanupCommandWALSegmentsCoveredByAppliedLSN(dir string, appliedLSN uint64,
 				Active: active,
 				Error:  err.Error(),
 			})
+			scanErr = errors.Join(scanErr, fmt.Errorf("scan command WAL segment %s: %w", filepath.Base(seg.path), err))
 			continue
 		}
 		if !scan.typed {
@@ -343,7 +345,7 @@ func cleanupCommandWALSegmentsCoveredByAppliedLSN(dir string, appliedLSN uint64,
 		}
 		decisions = append(decisions, decision)
 	}
-	return decisions, nil
+	return decisions, scanErr
 }
 
 type commandWALBackupManifest struct {

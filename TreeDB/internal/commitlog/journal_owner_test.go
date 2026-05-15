@@ -211,6 +211,44 @@ func TestCommandJournalDefaultSegmentSeqUsesLatestSegment(t *testing.T) {
 	}
 }
 
+func TestCommandJournalRejectsExplicitSegmentBehindLaneTail(t *testing.T) {
+	dir := t.TempDir()
+	first, err := OpenCommandJournal(dir, CommandJournalOptions{SegmentSeq: 1})
+	if err != nil {
+		t.Fatalf("OpenCommandJournal first: %v", err)
+	}
+	if _, err := first.AppendCommand(CommandEnvelope{
+		Kind:          CommandKindRawKVBatch,
+		Scope:         CommandScopeRawKV,
+		PayloadFormat: PayloadFormatRawKVBatchV1,
+	}); err != nil {
+		t.Fatalf("AppendCommand first: %v", err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatalf("Close first: %v", err)
+	}
+
+	second, err := OpenCommandJournal(dir, CommandJournalOptions{SegmentSeq: 2})
+	if err != nil {
+		t.Fatalf("OpenCommandJournal second: %v", err)
+	}
+	if _, err := second.AppendCommand(CommandEnvelope{
+		Kind:          CommandKindRawKVBatch,
+		Scope:         CommandScopeRawKV,
+		PayloadFormat: PayloadFormatRawKVBatchV1,
+	}); err != nil {
+		t.Fatalf("AppendCommand second: %v", err)
+	}
+	if err := second.Close(); err != nil {
+		t.Fatalf("Close second: %v", err)
+	}
+
+	_, err = OpenCommandJournal(dir, CommandJournalOptions{SegmentSeq: 1})
+	if !errors.Is(err, ErrCommandWALStaleSegment) {
+		t.Fatalf("OpenCommandJournal stale segment error=%v, want ErrCommandWALStaleSegment", err)
+	}
+}
+
 func TestCommandJournalSeedsLSNFromExistingLanes(t *testing.T) {
 	dir := t.TempDir()
 	j, err := OpenCommandJournal(dir, CommandJournalOptions{Lane: 0, SegmentSeq: 1})

@@ -1497,6 +1497,9 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 			return nil, err
 		}
 	} else {
+		// If a directory requires command replay but this open is not command-WAL
+		// enabled, fail closed before legacy replay can misinterpret typed frames.
+		// Frames already covered by AppliedCommandLSN are filtered below.
 		if err := requireNoUnappliedCommandWAL(opts.Dir, db.meta.AppliedCommandLSN, opts.WALMaxSegmentBytes); err != nil {
 			_ = db.Close()
 			return nil, err
