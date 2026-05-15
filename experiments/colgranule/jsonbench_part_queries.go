@@ -266,15 +266,15 @@ func runJSONBenchPartQ2(part *ColumnPart, codes queryCodeSet, scratch *jsonBench
 		return 0, 0, JSONBenchPartQueryDiagnostics{}, err
 	}
 	for blockIndex := range kindBlocks {
-		kindHeader, err := scratch.codeHeader(0, kindBlocks[blockIndex])
+		kindHeader, err := scratch.tinyCodeHeader(0, kindBlocks[blockIndex])
 		if err != nil {
 			return 0, 0, JSONBenchPartQueryDiagnostics{}, err
 		}
-		operationHeader, err := scratch.codeHeader(1, operationBlocks[blockIndex])
+		operationHeader, err := scratch.tinyCodeHeader(1, operationBlocks[blockIndex])
 		if err != nil {
 			return 0, 0, JSONBenchPartQueryDiagnostics{}, err
 		}
-		collectionHeader, err := scratch.codeHeader(2, collectionBlocks[blockIndex])
+		collectionHeader, err := scratch.tinyCodeHeader(2, collectionBlocks[blockIndex])
 		if err != nil {
 			return 0, 0, JSONBenchPartQueryDiagnostics{}, err
 		}
@@ -284,21 +284,21 @@ func runJSONBenchPartQ2(part *ColumnPart, codes queryCodeSet, scratch *jsonBench
 		}
 		rows := kindBlocks[blockIndex].Descriptor.RowCount
 		for row := 0; row < rows; row++ {
-			kind := readUint32Code(kindHeader.data, kindHeader.width, row)
+			kind := readTinyCode(kindHeader, row)
 			if kind >= kindHeader.cardinality {
 				return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: kind code %d outside cardinality %d", kind, kindHeader.cardinality)
 			}
 			if int64(kind) != codes.kindCommit {
 				continue
 			}
-			operation := readUint32Code(operationHeader.data, operationHeader.width, row)
+			operation := readTinyCode(operationHeader, row)
 			if operation >= operationHeader.cardinality {
 				return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: operation code %d outside cardinality %d", operation, operationHeader.cardinality)
 			}
 			if int64(operation) != codes.operationCreate {
 				continue
 			}
-			event := readUint32Code(collectionHeader.data, collectionHeader.width, row)
+			event := readTinyCode(collectionHeader, row)
 			if event >= collectionHeader.cardinality || event >= collectionCardinality {
 				return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: collection code %d outside cardinality %d", event, collectionCardinality)
 			}
@@ -344,46 +344,46 @@ func runJSONBenchPartQ3(part *ColumnPart, codes queryCodeSet, scratch *jsonBench
 		return 0, 0, JSONBenchPartQueryDiagnostics{}, err
 	}
 	for blockIndex := range kindBlocks {
-		kindHeader, err := scratch.codeHeader(0, kindBlocks[blockIndex])
+		kindHeader, err := scratch.tinyCodeHeader(0, kindBlocks[blockIndex])
 		if err != nil {
 			return 0, 0, JSONBenchPartQueryDiagnostics{}, err
 		}
-		operationHeader, err := scratch.codeHeader(1, operationBlocks[blockIndex])
+		operationHeader, err := scratch.tinyCodeHeader(1, operationBlocks[blockIndex])
 		if err != nil {
 			return 0, 0, JSONBenchPartQueryDiagnostics{}, err
 		}
-		collectionHeader, err := scratch.codeHeader(2, collectionBlocks[blockIndex])
+		collectionHeader, err := scratch.tinyCodeHeader(2, collectionBlocks[blockIndex])
 		if err != nil {
 			return 0, 0, JSONBenchPartQueryDiagnostics{}, err
 		}
-		hourHeader, err := scratch.codeHeader(3, hourBlocks[blockIndex])
+		hourHeader, err := scratch.tinyCodeHeader(3, hourBlocks[blockIndex])
 		if err != nil {
 			return 0, 0, JSONBenchPartQueryDiagnostics{}, err
 		}
 		rows := kindBlocks[blockIndex].Descriptor.RowCount
 		for row := 0; row < rows; row++ {
-			kind := readUint32Code(kindHeader.data, kindHeader.width, row)
+			kind := readTinyCode(kindHeader, row)
 			if kind >= kindHeader.cardinality {
 				return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: kind code %d outside cardinality %d", kind, kindHeader.cardinality)
 			}
 			if int64(kind) != codes.kindCommit {
 				continue
 			}
-			operation := readUint32Code(operationHeader.data, operationHeader.width, row)
+			operation := readTinyCode(operationHeader, row)
 			if operation >= operationHeader.cardinality {
 				return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: operation code %d outside cardinality %d", operation, operationHeader.cardinality)
 			}
 			if int64(operation) != codes.operationCreate {
 				continue
 			}
-			event := readUint32Code(collectionHeader.data, collectionHeader.width, row)
+			event := readTinyCode(collectionHeader, row)
 			if event >= collectionHeader.cardinality || event >= collectionCardinality {
 				return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: collection code %d outside cardinality %d", event, collectionCardinality)
 			}
 			if int64(event) != codes.collectionPost && int64(event) != codes.collectionRepost && int64(event) != codes.collectionLike {
 				continue
 			}
-			hour := readUint32Code(hourHeader.data, hourHeader.width, row)
+			hour := readTinyCode(hourHeader, row)
 			if hour >= hourHeader.cardinality || hour >= jsonBenchHoursPerDay {
 				return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: hour_of_day code %d outside cardinality %d", hour, hourHeader.cardinality)
 			}
@@ -436,15 +436,15 @@ func runJSONBenchPartQ4(part *ColumnPart, codes queryCodeSet, scratch *jsonBench
 	bytesDecoded := 0
 	lastGranule := -1
 	for blockIndex := range kindBlocks {
-		kindHeader, err := scratch.codeHeader(0, kindBlocks[blockIndex])
+		kindHeader, err := scratch.tinyCodeHeader(0, kindBlocks[blockIndex])
 		if err != nil {
 			return 0, 0, JSONBenchPartQueryDiagnostics{}, err
 		}
-		operationHeader, err := scratch.codeHeader(1, operationBlocks[blockIndex])
+		operationHeader, err := scratch.tinyCodeHeader(1, operationBlocks[blockIndex])
 		if err != nil {
 			return 0, 0, JSONBenchPartQueryDiagnostics{}, err
 		}
-		collectionHeader, err := scratch.codeHeader(2, collectionBlocks[blockIndex])
+		collectionHeader, err := scratch.tinyCodeHeader(2, collectionBlocks[blockIndex])
 		if err != nil {
 			return 0, 0, JSONBenchPartQueryDiagnostics{}, err
 		}
@@ -477,21 +477,21 @@ func runJSONBenchPartQ4(part *ColumnPart, codes queryCodeSet, scratch *jsonBench
 				return len(top), digestQ4Top(top), diagnostics, nil
 			}
 			rowsScanned++
-			kind := readUint32Code(kindHeader.data, kindHeader.width, row)
+			kind := readTinyCode(kindHeader, row)
 			if kind >= kindHeader.cardinality {
 				return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: kind code %d outside cardinality %d", kind, kindHeader.cardinality)
 			}
 			if int64(kind) != codes.kindCommit {
 				continue
 			}
-			operation := readUint32Code(operationHeader.data, operationHeader.width, row)
+			operation := readTinyCode(operationHeader, row)
 			if operation >= operationHeader.cardinality {
 				return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: operation code %d outside cardinality %d", operation, operationHeader.cardinality)
 			}
 			if int64(operation) != codes.operationCreate {
 				continue
 			}
-			event := readUint32Code(collectionHeader.data, collectionHeader.width, row)
+			event := readTinyCode(collectionHeader, row)
 			if event >= collectionHeader.cardinality {
 				return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: collection code %d outside cardinality %d", event, collectionHeader.cardinality)
 			}
@@ -550,15 +550,15 @@ func runJSONBenchPartQ5(part *ColumnPart, codes queryCodeSet, scratch *jsonBench
 		return 0, 0, JSONBenchPartQueryDiagnostics{}, err
 	}
 	for blockIndex := range kindBlocks {
-		kindHeader, err := scratch.codeHeader(0, kindBlocks[blockIndex])
+		kindHeader, err := scratch.tinyCodeHeader(0, kindBlocks[blockIndex])
 		if err != nil {
 			return 0, 0, JSONBenchPartQueryDiagnostics{}, err
 		}
-		operationHeader, err := scratch.codeHeader(1, operationBlocks[blockIndex])
+		operationHeader, err := scratch.tinyCodeHeader(1, operationBlocks[blockIndex])
 		if err != nil {
 			return 0, 0, JSONBenchPartQueryDiagnostics{}, err
 		}
-		collectionHeader, err := scratch.codeHeader(2, collectionBlocks[blockIndex])
+		collectionHeader, err := scratch.tinyCodeHeader(2, collectionBlocks[blockIndex])
 		if err != nil {
 			return 0, 0, JSONBenchPartQueryDiagnostics{}, err
 		}
@@ -575,21 +575,21 @@ func runJSONBenchPartQ5(part *ColumnPart, codes queryCodeSet, scratch *jsonBench
 			return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: q5 time/code row mismatch time=%d codes=%d", len(timeValues), rows)
 		}
 		for row := 0; row < rows; row++ {
-			kind := readUint32Code(kindHeader.data, kindHeader.width, row)
+			kind := readTinyCode(kindHeader, row)
 			if kind >= kindHeader.cardinality {
 				return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: kind code %d outside cardinality %d", kind, kindHeader.cardinality)
 			}
 			if int64(kind) != codes.kindCommit {
 				continue
 			}
-			operation := readUint32Code(operationHeader.data, operationHeader.width, row)
+			operation := readTinyCode(operationHeader, row)
 			if operation >= operationHeader.cardinality {
 				return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: operation code %d outside cardinality %d", operation, operationHeader.cardinality)
 			}
 			if int64(operation) != codes.operationCreate {
 				continue
 			}
-			event := readUint32Code(collectionHeader.data, collectionHeader.width, row)
+			event := readTinyCode(collectionHeader, row)
 			if event >= collectionHeader.cardinality {
 				return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: collection code %d outside cardinality %d", event, collectionHeader.cardinality)
 			}
@@ -698,6 +698,26 @@ func (s *jsonBenchPartQueryScratch) codeHeader(reader int, block ColumnBlock) (u
 		return uint32CodesHeader{}, err
 	}
 	return parseUint32CodesHeader(raw, block.Descriptor.RowCount)
+}
+
+type tinyCodeHeader struct {
+	cardinality uint32
+	data        []byte
+}
+
+func (s *jsonBenchPartQueryScratch) tinyCodeHeader(reader int, block ColumnBlock) (tinyCodeHeader, error) {
+	header, err := s.codeHeader(reader, block)
+	if err != nil {
+		return tinyCodeHeader{}, err
+	}
+	if header.width != 1 {
+		return tinyCodeHeader{}, fmt.Errorf("colgranule: tiny-code reader width=%d want 1", header.width)
+	}
+	return tinyCodeHeader{cardinality: header.cardinality, data: header.data}, nil
+}
+
+func readTinyCode(header tinyCodeHeader, row int) uint32 {
+	return uint32(header.data[row])
 }
 
 func (s *jsonBenchPartQueryScratch) resetQ4Seen(didCardinality uint32) ([]uint64, error) {

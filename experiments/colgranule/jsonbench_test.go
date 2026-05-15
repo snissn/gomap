@@ -197,6 +197,21 @@ func TestTouchedBitsetResetClearsOnlyTouchedWords(t *testing.T) {
 	}
 }
 
+func TestTinyCodeHeaderRejectsWideCodes(t *testing.T) {
+	g, err := NewGranuleBuilder(Config{Compression: CompressionNone}).BuildUint32Codes([]uint32{1, 255, 256}, 300)
+	if err != nil {
+		t.Fatalf("BuildUint32Codes: %v", err)
+	}
+	block := ColumnBlock{
+		Descriptor: ColumnBlockDescriptor{RowCount: 3},
+		Granule:    g,
+	}
+	var scratch jsonBenchPartQueryScratch
+	if _, err := scratch.tinyCodeHeader(0, block); err == nil {
+		t.Fatal("tinyCodeHeader accepted width > 1, want error")
+	}
+}
+
 func TestLoadJSONBenchColumnsLocal1MIfPresent(t *testing.T) {
 	path := os.Getenv("JSONBENCH_DATA")
 	if path == "" {
