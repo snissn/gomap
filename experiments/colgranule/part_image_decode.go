@@ -1056,6 +1056,7 @@ func decodeAggregateMetadataSections(image ColumnPartImage) (map[string]Aggregat
 			Stats:      stats,
 			Granules:   make([]AggregateMetadataGranule, 0, granules),
 		}
+		totalMatchedRows := 0
 		for i := 0; i < granules; i++ {
 			granuleOrdinal, err := dec.i64()
 			if err != nil {
@@ -1104,6 +1105,7 @@ func decodeAggregateMetadataSections(image ColumnPartImage) (map[string]Aggregat
 				MatchedRows:    matchedRowsInt,
 				Entries:        make([]AggregateMetadataEntry, 0, entries),
 			}
+			entryRows := 0
 			for j := 0; j < entries; j++ {
 				group, err := dec.u32()
 				if err != nil {
@@ -1112,6 +1114,9 @@ func decodeAggregateMetadataSections(image ColumnPartImage) (map[string]Aggregat
 				count, err := dec.u32()
 				if err != nil {
 					return nil, err
+				}
+				if count == 0 {
+					return nil, fmt.Errorf("colgranule: aggregate metadata %s granule %d entry %d has zero count", metadata.Definition.Name, granuleOrdinalInt, j)
 				}
 				minValue, err := dec.i64()
 				if err != nil {
@@ -1122,8 +1127,16 @@ func decodeAggregateMetadataSections(image ColumnPartImage) (map[string]Aggregat
 					return nil, err
 				}
 				granule.Entries = append(granule.Entries, AggregateMetadataEntry{Group: group, Count: count, Min: minValue, Max: maxValue})
+				entryRows += int(count)
+			}
+			if entryRows != granule.MatchedRows {
+				return nil, fmt.Errorf("colgranule: aggregate metadata %s granule %d entry rows=%d matched rows=%d", metadata.Definition.Name, granule.GranuleOrdinal, entryRows, granule.MatchedRows)
 			}
 			metadata.Granules = append(metadata.Granules, granule)
+			totalMatchedRows += granule.MatchedRows
+		}
+		if totalMatchedRows != metadata.Stats.RowsMatched {
+			return nil, fmt.Errorf("colgranule: aggregate metadata %s granule matched rows=%d stats matched rows=%d", metadata.Definition.Name, totalMatchedRows, metadata.Stats.RowsMatched)
 		}
 		if err := dec.finish(); err != nil {
 			return nil, err

@@ -749,6 +749,19 @@ func TestColumnPartFromImageRejectsDuplicateAggregateMetadataNames(t *testing.T)
 	}
 }
 
+func TestColumnPartFromImageRejectsZeroAggregateMetadataEntryCount(t *testing.T) {
+	_, image := testColumnPartImageFixture(t, true)
+	corrupt := append([]byte(nil), image.Bytes...)
+	binary.LittleEndian.PutUint32(corrupt[aggregateMetadataFirstEntryCountOffset(t, image):], 0)
+	parsed, err := ParseColumnPartImage(corrupt)
+	if err != nil {
+		t.Fatalf("ParseColumnPartImage: %v", err)
+	}
+	if _, err := ColumnPartFromImage(parsed); err == nil {
+		t.Fatal("ColumnPartFromImage accepted zero-count aggregate metadata entry")
+	}
+}
+
 func TestColumnPartFromImageRejectsNegativeAggregateMetadataScaledFields(t *testing.T) {
 	_, image := testColumnPartImageFixture(t, true)
 	tests := []struct {
@@ -878,10 +891,65 @@ func aggregateMetadataStatsScaledFieldOffset(t *testing.T, image ColumnPartImage
 	return 0
 }
 
+func aggregateMetadataFirstEntryCountOffset(t *testing.T, image ColumnPartImage) int {
+	t.Helper()
+	aggregate := firstImageSectionOfKind(t, image, ColumnPartImageSectionAggregateMetadata)
+	dec := columnPartImageDecoder{data: image.sectionBytes(aggregate)}
+	skipAggregateMetadataDefinition(t, &dec)
+	skipAggregateMetadataStats(t, &dec)
+	granuleCount, err := dec.u32()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if granuleCount == 0 {
+		t.Fatal("aggregate metadata has no granules")
+	}
+	for i := 0; i < 4; i++ {
+		if _, err := dec.i64(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	entryCount, err := dec.u32()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entryCount == 0 {
+		t.Fatal("aggregate metadata first granule has no entries")
+	}
+	if _, err := dec.u32(); err != nil {
+		t.Fatal(err)
+	}
+	return aggregate.Offset + dec.offset
+}
+
 func skipAggregateMetadataDefinition(t *testing.T, dec *columnPartImageDecoder) {
 	t.Helper()
 	skipAggregateMetadataDefinitionBeforeMaxBytesPerRow(t, dec)
 	if _, err := dec.i64(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func skipAggregateMetadataStats(t *testing.T, dec *columnPartImageDecoder) {
+	t.Helper()
+	if _, err := dec.boolean(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dec.str(); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 10; i++ {
+		if _, err := dec.i64(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := dec.str(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dec.i64(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dec.str(); err != nil {
 		t.Fatal(err)
 	}
 }
