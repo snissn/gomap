@@ -14,11 +14,8 @@ import (
 )
 
 func openReadOnly(opts Options) (*DB, error) {
-	if _, err := resolveLeafPageReadCacheEntries(opts.LeafPageReadCacheEntries); err != nil {
+	if err := applyReadOnlyDefaults(&opts); err != nil {
 		return nil, err
-	}
-	if opts.ChunkSize == 0 {
-		opts.ChunkSize = defaultChunkSize
 	}
 	if err := ensureNoLegacyMixedWALValueSegments(opts.Dir); err != nil {
 		return nil, err
@@ -161,11 +158,8 @@ func openReadOnly(opts Options) (*DB, error) {
 }
 
 func openReadOnlyNoLock(opts Options) (*DB, error) {
-	if _, err := resolveLeafPageReadCacheEntries(opts.LeafPageReadCacheEntries); err != nil {
+	if err := applyReadOnlyDefaults(&opts); err != nil {
 		return nil, err
-	}
-	if opts.ChunkSize == 0 {
-		opts.ChunkSize = defaultChunkSize
 	}
 	if err := ensureNoLegacyMixedWALValueSegments(opts.Dir); err != nil {
 		return nil, err
@@ -290,4 +284,14 @@ func openReadOnlyNoLock(opts Options) (*DB, error) {
 	db.publishSnapshotView(gen, initialState, vm)
 
 	return db, nil
+}
+
+func applyReadOnlyDefaults(opts *Options) error {
+	if _, err := resolveLeafPageReadCacheEntries(opts.LeafPageReadCacheEntries); err != nil {
+		return err
+	}
+	if opts.ChunkSize == 0 {
+		opts.ChunkSize = defaultChunkSize
+	}
+	return nil
 }

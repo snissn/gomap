@@ -236,7 +236,7 @@ func commandJournalInitialLSN(walDir, activePath string, opts CommandJournalOpti
 		if seg.size == 0 {
 			continue
 		}
-		maxLSN, typed, completeEnd, err := scanCommandFrameMaxLSNAndEndWithLSN(seg.path, Options{MaxSegmentSize: opts.MaxSegmentSize}, func(lsn uint64) error {
+		maxLSN, typed, completeEnd, err := scanCommandSegmentSummary(seg.path, Options{MaxSegmentSize: opts.MaxSegmentSize}, func(lsn uint64) error {
 			if _, exists := seenLSNs[lsn]; exists {
 				return ErrCommandWALDuplicateLSN
 			}
