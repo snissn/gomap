@@ -70,6 +70,8 @@ func validateCommandWALPublishLocked(current page.MetaPageBody, newRootID uint64
 	return validateContiguousAppliedCommandLSN(current.AppliedCommandLSN, opts.appliedCommandLSN, opts.appliedRanges)
 }
 
+// validateContiguousAppliedCommandLSN verifies that covered spans advance the
+// applied LSN without gaps. It never mutates the caller-owned covered slice.
 func validateContiguousAppliedCommandLSN(current, next uint64, covered []CommandWALLSNRange) error {
 	if next < current {
 		return fmt.Errorf("%w: current=%d next=%d", ErrCommandWALAppliedLSNRegression, current, next)
@@ -83,24 +85,13 @@ func validateContiguousAppliedCommandLSN(current, next uint64, covered []Command
 	if len(covered) == 0 {
 		return fmt.Errorf("%w: missing coverage for [%d,%d]", ErrCommandWALAppliedLSNNonContig, current+1, next)
 	}
-	ranges := covered
-	sorted := true
-	for i := 1; i < len(ranges); i++ {
-		prev, cur := ranges[i-1], ranges[i]
-		if prev.First > cur.First || (prev.First == cur.First && prev.Last > cur.Last) {
-			sorted = false
-			break
+	ranges := append([]CommandWALLSNRange(nil), covered...)
+	sort.Slice(ranges, func(i, j int) bool {
+		if ranges[i].First != ranges[j].First {
+			return ranges[i].First < ranges[j].First
 		}
-	}
-	if !sorted {
-		ranges = append([]CommandWALLSNRange(nil), covered...)
-		sort.Slice(ranges, func(i, j int) bool {
-			if ranges[i].First != ranges[j].First {
-				return ranges[i].First < ranges[j].First
-			}
-			return ranges[i].Last < ranges[j].Last
-		})
-	}
+		return ranges[i].Last < ranges[j].Last
+	})
 	cursor := current + 1
 	for _, r := range ranges {
 		if r.First == 0 || r.Last < r.First {
@@ -133,6 +124,7 @@ type commandWALSegmentCleanupDecision struct {
 
 type commandWALSegmentScanResult struct {
 	maxLSN       uint64
+	minLSN       uint64
 	typed        bool
 	terminalTail bool
 }
@@ -175,20 +167,13 @@ func hasUnappliedCommandWALFrames(dir string, appliedLSN uint64, maxSegmentBytes
 	return false, nil
 }
 
-func commandWALActiveSeqByLane(segments []logSegment, maxSegmentBytes int64) (map[int]uint64, error) {
+func commandWALActiveSeqByLane(segments []logSegment, _ int64) (map[int]uint64, error) {
 	activeByLane := make(map[int]uint64)
 	for _, seg := range segments {
 		if seg.valueLog || seg.size == 0 {
 			continue
 		}
 		if !isCommandWALLaneSegment(seg) {
-			continue
-		}
-		scan, err := scanCommandWALSegment(seg.path, maxSegmentBytes, true)
-		if err != nil {
-			return nil, err
-		}
-		if !scan.typed && !scan.terminalTail {
 			continue
 		}
 		if seg.seq > activeByLane[seg.lane] {
@@ -243,6 +228,9 @@ func scanCommandWALSegment(path string, maxSegmentBytes int64, allowTerminalTail
 		}
 		lastLSN = frame.LSN
 		scan.typed = true
+		if scan.minLSN == 0 || frame.LSN < scan.minLSN {
+			scan.minLSN = frame.LSN
+		}
 		if frame.LSN > scan.maxLSN {
 			scan.maxLSN = frame.LSN
 		}
@@ -279,6 +267,9 @@ func filterCommandWALSegmentsForLegacyReplay(segments []logSegment, appliedLSN u
 				filtered = append(filtered, seg)
 			}
 			continue
+		}
+		if scan.minLSN <= appliedLSN && scan.maxLSN > appliedLSN {
+			return nil, fmt.Errorf("%w: command WAL segment %s partially applied range [%d,%d] over applied LSN %d", ErrRecoveryRequired, filepath.Base(seg.path), scan.minLSN, scan.maxLSN, appliedLSN)
 		}
 		if scan.maxLSN <= appliedLSN {
 			if !skipped {

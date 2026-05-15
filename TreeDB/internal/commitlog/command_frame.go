@@ -756,7 +756,7 @@ func scanCommandFrameMaxLSNAndEnd(path string, opts Options) (maxLSN uint64, typ
 			if errorsIsEOFOrTail(err) {
 				return maxLSN, typed, start, nil
 			}
-			if err == ErrCommandWALLegacyPayload && !typed {
+			if errors.Is(err, ErrCommandWALLegacyPayload) && !typed {
 				return 0, false, completeEnd, err
 			}
 			return 0, typed, completeEnd, err
