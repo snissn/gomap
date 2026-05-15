@@ -107,6 +107,28 @@ func TestTreeDBBackendPreservesOuterLeavesFlag(t *testing.T) {
 	}
 }
 
+func TestTreeDBBackendInstallsLeafLogForPersistedOuterLeavesFormat(t *testing.T) {
+	saved := saveTreeDBFlagState()
+	defer restoreTreeDBFlagState(saved)
+	resetTreeDBIndexFlagsForTest()
+
+	dir := t.TempDir()
+	if err := treedbdb.SaveFormatConfig(dir, treedbdb.FormatConfig{IndexOuterLeavesInValueLog: true}); err != nil {
+		t.Fatalf("SaveFormatConfig: %v", err)
+	}
+	db, err := NewTreeDBBackend(dir)
+	if err != nil {
+		t.Fatalf("NewTreeDBBackend: %v", err)
+	}
+	if err := db.Set([]byte("k"), []byte("v")); err != nil {
+		_ = db.Close()
+		t.Fatalf("Set with persisted outer leaves format: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close backend: %v", err)
+	}
+}
+
 func TestTreeDBBackendCommandWALForcesWALOnWhenProfileDisablesWAL(t *testing.T) {
 	saved := saveTreeDBFlagState()
 	defer restoreTreeDBFlagState(saved)

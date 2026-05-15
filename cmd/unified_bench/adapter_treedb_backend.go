@@ -48,12 +48,20 @@ func newTreeDBBackend(dir string, commandWAL bool, name string) (kvstore.DB, err
 	if opts.ValueLog.PointerThreshold <= 0 {
 		opts.ValueLog.PointerThreshold = page.DefaultInlineThreshold
 	}
+	effectiveOuterLeaves := opts.IndexOuterLeavesInValueLog
+	if !effectiveOuterLeaves {
+		cfg, ok, err := treedbdb.LoadFormatConfig(dir)
+		if err != nil {
+			return nil, err
+		}
+		effectiveOuterLeaves = ok && cfg.IndexOuterLeavesInValueLog
+	}
 	d, err := treedbdb.Open(opts)
 	if err != nil {
 		return nil, err
 	}
 	adapter := &treeDBBackendAdapter{db: d, name: name}
-	if opts.IndexOuterLeavesInValueLog {
+	if effectiveOuterLeaves {
 		leafLog, err := treedbdb.NewStandaloneLeafPageLog(dir, treedbdb.StandaloneLeafPageLogOptions{
 			Compression: opts.ValueLog.Compression,
 			AutoPolicy:  opts.ValueLog.AutoPolicy,
