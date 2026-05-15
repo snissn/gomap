@@ -48,6 +48,8 @@ type config struct {
 	compact              bool
 	compactSyncEachPhase bool
 	disableExactFallback bool
+	requireValueLogBytes bool
+	requireLeafVLogBytes bool
 	jsonOut              bool
 }
 
@@ -76,6 +78,8 @@ type result struct {
 	IndexStatsLoaded     collections.VectorIndexStats   `json:"index_stats_loaded"`
 	NativeRootBytes      int64                          `json:"native_root_bytes"`
 	CompactStorage       *backenddb.CompactStorageStats `json:"compact_storage,omitempty"`
+	FormatConfig         *backenddb.FormatConfig        `json:"format_config,omitempty"`
+	StorageExpectation   storageExpectationReport       `json:"storage_expectation"`
 	Memory               memoryReport                   `json:"memory"`
 }
 
@@ -114,6 +118,14 @@ type storageReport struct {
 	BytesPerDoc float64          `json:"bytes_per_doc"`
 	Domains     map[string]int64 `json:"domains"`
 	Files       int              `json:"files"`
+}
+
+type storageExpectationReport struct {
+	RequireValueLogBytes bool  `json:"require_value_log_bytes"`
+	RequireLeafVLogBytes bool  `json:"require_leaf_vlog_bytes"`
+	ValueLogBytes        int64 `json:"value_log_bytes"`
+	LeafVLogBytes        int64 `json:"leaf_vlog_bytes"`
+	IndexBytes           int64 `json:"index_bytes"`
 }
 
 type memoryReport struct {
@@ -184,6 +196,8 @@ func parseConfig(args []string) (config, error) {
 	fs.BoolVar(&cfg.compact, "compact", cfg.compact, "Run CompactStorageFull after insert/index build and before reads")
 	fs.BoolVar(&cfg.compactSyncEachPhase, "compact-sync-each-phase", false, "Ask CompactStorage to fsync each rewrite/pack phase")
 	fs.BoolVar(&cfg.disableExactFallback, "disable-exact-fallback", cfg.disableExactFallback, "Disable exact fallback during ANN benchmark queries")
+	fs.BoolVar(&cfg.requireValueLogBytes, "require-value-log-bytes", false, "Fail if compacted storage has no value-log bytes")
+	fs.BoolVar(&cfg.requireLeafVLogBytes, "require-leaf-vlog-bytes", false, "Fail if compacted storage has no leaf value-log bytes")
 	fs.BoolVar(&cfg.jsonOut, "json", false, "Emit JSON instead of text")
 	if err := fs.Parse(args); err != nil {
 		return config{}, err
@@ -360,6 +374,27 @@ func execute(ctx context.Context, cfg config) (result, error) {
 	if err != nil {
 		_ = d.Close()
 		return result{}, err
+	}
+	if format, ok, err := backenddb.LoadFormatConfig(dir); err != nil {
+		_ = d.Close()
+		return result{}, err
+	} else if ok {
+		res.FormatConfig = &format
+	}
+	res.StorageExpectation = storageExpectationReport{
+		RequireValueLogBytes: cfg.requireValueLogBytes,
+		RequireLeafVLogBytes: cfg.requireLeafVLogBytes,
+		ValueLogBytes:        res.StorageAfterCompact.Domains["value_vlog"],
+		LeafVLogBytes:        res.StorageAfterCompact.Domains["leaf_vlog"],
+		IndexBytes:           res.StorageAfterCompact.Domains["index.db"],
+	}
+	if cfg.requireValueLogBytes && res.StorageExpectation.ValueLogBytes == 0 {
+		_ = d.Close()
+		return result{}, errors.New("compacted storage has zero value_vlog bytes")
+	}
+	if cfg.requireLeafVLogBytes && res.StorageExpectation.LeafVLogBytes == 0 {
+		_ = d.Close()
+		return result{}, errors.New("compacted storage has zero leaf_vlog bytes")
 	}
 	if err := d.Close(); err != nil {
 		return result{}, err
@@ -670,6 +705,16 @@ func printText(w io.Writer, res result) {
 	fmt.Fprintf(w, "\nStorage\n")
 	fmt.Fprintf(w, "before_compact_total=%d bytes (%.1f/doc)\n", res.StorageBeforeCompact.TotalBytes, res.StorageBeforeCompact.BytesPerDoc)
 	fmt.Fprintf(w, "after_compact_total=%d bytes (%.1f/doc)\n", res.StorageAfterCompact.TotalBytes, res.StorageAfterCompact.BytesPerDoc)
+	if res.FormatConfig != nil {
+		fmt.Fprintf(w, "format index_outer_leaves_in_vlog=%t leaf_prefix_compression=%t vlog_compression=%s\n",
+			res.FormatConfig.IndexOuterLeavesInValueLog,
+			res.FormatConfig.LeafPrefixCompression,
+			res.FormatConfig.ValueLogCompression)
+	}
+	fmt.Fprintf(w, "storage_domains index_db=%d value_vlog=%d leaf_vlog=%d\n",
+		res.StorageExpectation.IndexBytes,
+		res.StorageExpectation.ValueLogBytes,
+		res.StorageExpectation.LeafVLogBytes)
 	printDomains(w, "after_compact", res.StorageAfterCompact.Domains)
 	fmt.Fprintf(w, "\nMemory\n")
 	fmt.Fprintf(w, "index_bytes_memory=%d load_alloc_delta=%d alloc_after_load=%d\n",

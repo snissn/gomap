@@ -29,3 +29,8 @@ GOWORK=off go run ./cmd/treedb_vector_search_demo \
 ```
 
 Use `-keep-dir` to inspect the generated datastore after the run.
+
+The output includes the persisted TreeDB `format.json` knobs and storage-domain
+bytes for `index.db`, `value_vlog`, and `leaf_vlog`. Use
+`-require-value-log-bytes` or `-require-leaf-vlog-bytes` when a benchmark is
+meant to prove that the compacted datastore actually used those storage domains.

@@ -40,6 +40,12 @@ func TestExecuteSmokeCompactsReopensValidatesAndBenchmarks(t *testing.T) {
 	if res.StorageAfterCompact.TotalBytes <= 0 || res.StorageAfterCompact.BytesPerDoc <= 0 {
 		t.Fatalf("missing compacted storage report: %+v", res.StorageAfterCompact)
 	}
+	if res.FormatConfig == nil {
+		t.Fatal("missing format config report")
+	}
+	if res.StorageExpectation.IndexBytes <= 0 {
+		t.Fatalf("missing storage expectation index bytes: %+v", res.StorageExpectation)
+	}
 	if res.Memory.IndexBytesMemory <= 0 {
 		t.Fatalf("missing index memory report: %+v", res.Memory)
 	}
@@ -81,6 +87,33 @@ func TestRunJSONOutput(t *testing.T) {
 	}
 }
 
+func TestExecuteRequireLeafVLogBytesFailsOnPagerBackedDefault(t *testing.T) {
+	_, err := execute(t.Context(), config{
+		dir:                  t.TempDir(),
+		keepDir:              true,
+		docs:                 64,
+		dimensions:           8,
+		queries:              2,
+		validateQueries:      1,
+		validateDocs:         1,
+		topK:                 3,
+		batchSize:            32,
+		m:                    4,
+		efConstruction:       32,
+		efSearch:             32,
+		minRecall:            0.5,
+		compact:              true,
+		disableExactFallback: true,
+		requireLeafVLogBytes: true,
+	})
+	if err == nil {
+		t.Fatal("execute succeeded, want leaf-vlog requirement failure")
+	}
+	if !strings.Contains(err.Error(), "zero leaf_vlog bytes") {
+		t.Fatalf("error=%v, want zero leaf_vlog bytes", err)
+	}
+}
+
 func TestRunTextOutput(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -106,6 +139,8 @@ func TestRunTextOutput(t *testing.T) {
 		"TreeDB vector search demo",
 		"compact_storage_full:",
 		"Storage",
+		"format index_outer_leaves_in_vlog=",
+		"storage_domains index_db=",
 		"Memory",
 		"avg=",
 	} {
