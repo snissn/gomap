@@ -176,6 +176,39 @@ func TestCommandJournalSeedsLSNFromExistingLanes(t *testing.T) {
 	}
 }
 
+func TestCommandJournalInitialLSNIgnoresLegacyRawSegments(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, CommandSegmentName(0, 1))
+	w, err := NewWriter(path)
+	if err != nil {
+		t.Fatalf("NewWriter legacy raw: %v", err)
+	}
+	if err := w.AppendBatch([]Record{{Op: OpSetInline, Key: []byte("legacy"), Value: []byte("raw"), Seq: 99}}); err != nil {
+		_ = w.Close()
+		t.Fatalf("AppendBatch legacy raw: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close legacy raw: %v", err)
+	}
+
+	j, err := OpenCommandJournal(dir, CommandJournalOptions{SegmentSeq: 2})
+	if err != nil {
+		t.Fatalf("OpenCommandJournal with legacy raw segment: %v", err)
+	}
+	defer j.Close()
+	lsn, err := j.AppendCommand(CommandEnvelope{
+		Kind:          CommandKindRawKVBatch,
+		Scope:         CommandScopeRawKV,
+		PayloadFormat: PayloadFormatRawKVBatchV1,
+	})
+	if err != nil {
+		t.Fatalf("AppendCommand after legacy raw segment: %v", err)
+	}
+	if lsn != 1 {
+		t.Fatalf("LSN=%d, want 1 when only legacy raw segments exist", lsn)
+	}
+}
+
 func TestCommandJournalRejectsNonActiveTerminalTail(t *testing.T) {
 	dir := t.TempDir()
 	j, err := OpenCommandJournal(dir, CommandJournalOptions{SegmentSeq: 1})
