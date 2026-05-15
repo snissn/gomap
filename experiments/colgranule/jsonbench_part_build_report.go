@@ -100,7 +100,14 @@ func measureJSONBenchPartBuild(ds JSONBenchDataset, rowsPerGranule int, layout J
 	if err != nil {
 		return nil, JSONBenchPartBuildAttempt{}, ColumnPartByteAccounting{}, err
 	}
-	accounting := part.ByteAccountingFromImage(image)
+	parsedImage, err := ParseColumnPartImage(image.Bytes)
+	if err != nil {
+		return nil, JSONBenchPartBuildAttempt{}, ColumnPartByteAccounting{}, err
+	}
+	if _, err := ColumnPartFromImage(parsedImage); err != nil {
+		return nil, JSONBenchPartBuildAttempt{}, ColumnPartByteAccounting{}, err
+	}
+	accounting := part.ByteAccountingFromImage(parsedImage)
 	allocated := after.TotalAlloc - before.TotalAlloc
 	temporary := uint64(0)
 	if allocated > uint64(accounting.TotalStoredBytes) {

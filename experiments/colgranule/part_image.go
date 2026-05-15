@@ -249,10 +249,18 @@ func (b *columnPartImageBuilder) addDescriptorSection() error {
 	}
 	enc.u32(uint32(len(desc.Columns)))
 	for _, column := range desc.Columns {
+		partColumn, ok := b.part.Columns[column.Name]
+		if !ok {
+			return fmt.Errorf("colgranule: missing column %s", column.Name)
+		}
 		enc.str(column.Name)
 		enc.u16(uint16(columnTypeCode(column.Type)))
 		enc.u32(uint32(len(column.Blocks)))
-		for _, block := range column.Blocks {
+		for i, block := range column.Blocks {
+			if i >= len(partColumn.Blocks) {
+				return fmt.Errorf("colgranule: descriptor column %s block %d missing payload block", column.Name, i)
+			}
+			granule := partColumn.Blocks[i].Granule
 			enc.i64(int64(block.FirstRow))
 			enc.i64(int64(block.RowCount))
 			enc.i64(int64(block.FirstGranule))
@@ -262,6 +270,11 @@ func (b *columnPartImageBuilder) addDescriptorSection() error {
 			enc.i64(int64(block.RawBytes))
 			enc.i64(int64(block.StoredBytes))
 			enc.i64(int64(block.CodecBlockOrdinal))
+			enc.i64(int64(granule.NullCount))
+			enc.i64(int64(granule.DefaultCount))
+			enc.boolean(granule.HasMinMax)
+			enc.i64(granule.Min)
+			enc.i64(granule.Max)
 		}
 	}
 	b.appendSection(ColumnPartImageSection{

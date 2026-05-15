@@ -109,10 +109,12 @@ must stay aligned with the future file format:
 
 - byte accounting must reconcile to the serialized image byte length, not struct
   estimates;
+- serialized images must parse back into read-only column parts without relying
+  on builder-owned descriptor or payload structs;
 - the report must show section bytes for manifest/descriptors, declared columns,
   dictionaries, marks, sort-key metadata, aggregate metadata, and row locators;
-- JSONBench query runners must read column payloads through slices attached to
-  the serialized image;
+- JSONBench query runners must read column payloads through parsed image-backed
+  parts;
 - retained JSON must remain separate from declared column image bytes in the
   full-dataset comparison;
 - local 1M JSONBench reports must include granule count, codec block count, part

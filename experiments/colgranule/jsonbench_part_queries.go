@@ -118,7 +118,11 @@ func imageBackedJSONBenchPart(part *ColumnPart) (*ColumnPart, error) {
 	if err != nil {
 		return nil, err
 	}
-	return part.WithImagePayloads(image)
+	parsed, err := ParseColumnPartImage(image.Bytes)
+	if err != nil {
+		return nil, err
+	}
+	return ColumnPartFromImage(parsed)
 }
 
 func JSONBenchColumnPartOptions(ds JSONBenchDataset, rowsPerGranule int) (ColumnStoreOptions, error) {
