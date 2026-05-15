@@ -9,6 +9,7 @@ import (
 	"slices"
 	"sync"
 	"time"
+	"unsafe"
 
 	"github.com/cespare/xxhash/v2"
 	"gonum.org/v1/gonum/blas/blas32"
@@ -1506,7 +1507,9 @@ func (idx *VectorIndex) Stats() VectorIndexStats {
 		stats.DeletedRatio = float64(stats.DeletedDocs) / float64(stats.Nodes)
 		stats.AvgDegree = float64(edges) / float64(stats.Nodes)
 	}
-	stats.BytesMemory = vectorBytes + int64(edges*16) + int64(stats.Nodes*32)
+	// Approximate heap footprint; edge accounting tracks the neighbor struct
+	// size but excludes slice headers and spare capacity.
+	stats.BytesMemory = vectorBytes + int64(edges)*int64(unsafe.Sizeof(vectorIndexNeighbor{})) + int64(stats.Nodes*32)
 	stats.RebuildNeeded = stats.DeletedRatio >= idx.rebuildDeletedRatio && stats.DeletedDocs > 0
 	return stats
 }
