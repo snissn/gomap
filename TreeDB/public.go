@@ -414,9 +414,11 @@ func Open(opts Options) (*DB, error) {
 	// caller opts out via IgnoreFormatConfig.
 	var persistedFormat *db.FormatConfig
 	if opts.IgnoreFormatConfig {
-		if err := db.ValidateFormatRequiredFeatureGate(maindbDir); err != nil {
+		requiresCommandWAL, err := db.CommandWALRequiredFeatureEnabled(maindbDir)
+		if err != nil {
 			return nil, err
 		}
+		opts.CommandWAL = opts.CommandWAL || requiresCommandWAL
 	} else {
 		if cfg, ok, err := db.LoadFormatConfig(maindbDir); err != nil {
 			return nil, err
@@ -424,9 +426,13 @@ func Open(opts Options) (*DB, error) {
 			if err := cfg.ValidateRuntimeSupported(); err != nil {
 				return nil, err
 			}
+			opts.CommandWAL = opts.CommandWAL || cfg.RequiresCommandWALV1()
 			cfg.ApplyIndexFormatToOptions(&opts)
 			persistedFormat = &cfg
 		}
+	}
+	if opts.CommandWAL && !opts.ReadOnly {
+		return nil, db.ErrCommandWALUnsupported
 	}
 
 	// Apply runtime-only index/cache overrides after loading persisted format.json

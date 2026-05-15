@@ -1,0 +1,27 @@
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/db
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+                                                     │ artifacts/command-wal/pr3/raw-kv-direct-write-bench.txt │
+                                                     │                         sec/op                          │
+CommandWALRawKVDirectWrite/backend_no_command_wal-12                                              8.405µ ± 21%
+CommandWALRawKVDirectWrite/command_wal_raw_kv-12                                                  7.772µ ± 15%
+geomean                                                                                           8.082µ
+
+                                                     │ artifacts/command-wal/pr3/raw-kv-direct-write-bench.txt │
+                                                     │                           B/s                           │
+CommandWALRawKVDirectWrite/backend_no_command_wal-12                                             6.022Mi ± 20%
+CommandWALRawKVDirectWrite/command_wal_raw_kv-12                                                 6.504Mi ± 13%
+geomean                                                                                          6.259Mi
+
+                                                     │ artifacts/command-wal/pr3/raw-kv-direct-write-bench.txt │
+                                                     │                          B/op                           │
+CommandWALRawKVDirectWrite/backend_no_command_wal-12                                              6.486Ki ± 0%
+CommandWALRawKVDirectWrite/command_wal_raw_kv-12                                                  6.536Ki ± 0%
+geomean                                                                                           6.511Ki
+
+                                                     │ artifacts/command-wal/pr3/raw-kv-direct-write-bench.txt │
+                                                     │                        allocs/op                        │
+CommandWALRawKVDirectWrite/backend_no_command_wal-12                                                17.00 ± 0%
+CommandWALRawKVDirectWrite/command_wal_raw_kv-12                                                    19.00 ± 0%
+geomean                                                                                             17.97

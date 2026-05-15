@@ -1,0 +1,96 @@
+{
+  "tracker": "https://github.com/snissn/gomap/issues/1529",
+  "milestone": "PR3 recovery dispatcher and raw KV command conversion",
+  "branch": "codex/user-command-wal-pr3",
+  "base_branch": "codex/user-command-wal-pr2",
+  "base_commit": "6d52f96c530a06c1abd9a84ebfd913deb1404636",
+  "implementation_commit": "PR head",
+  "go_version": "go1.25.7 linux/amd64",
+  "platform": "linux/amd64",
+  "durability_mode": "direct backend command_wal_v1 mode; public cached command-WAL write opens fail closed until cached writer conversion",
+  "sync_policy": "RawKVBatch command frames are flushed for Write and synced for WriteSync before root visibility; roots and AppliedCommandLSN publish in one finalize boundary",
+  "command_support_matrix_version": "TreeDB/docs/spec/verification.md PR3 evidence update",
+  "command_kinds_touched": [
+    "RawKVBatch",
+    "RawKVBatch SetRID value-log fence"
+  ],
+  "matrix_status_changes": [
+    "RawKVBatch direct backend command-WAL mode: WAL-supported",
+    "public cached command-WAL writes: fail-closed until cached journal conversion",
+    "collection/catalog command kinds: unchanged placeholders, not WAL-supported"
+  ],
+  "passed_tests": [
+    "TestCommandWALRawSetDeleteBatchReplaysThroughNormalExecutor",
+    "TestCommandWALRIDFencePreservedForRawKVBatch",
+    "TestCommandWALMissingRIDFenceFailsRecovery",
+    "TestCommandWALCrashAfterFrameBeforeRootPublishRecovers",
+    "TestCommandWALCrashDuringRootPublishSelectsOldTupleOrNewTuple",
+    "TestCommandWALCrashAfterRootAppliedLSNBeforeCleanupSkipsFrame",
+    "TestCommandWALRecoveryCrashDuringReplayResumesFromAppliedLSN",
+    "TestCommandWALIdempotentSkipRequiresDigestProof",
+    "TestCommandWALExistingRawReplayTestsMappedToRawKVBatch",
+    "TestCommandWALExistingRIDFenceTestsMappedToExternalRefFence",
+    "TestSaveOpenFormatConfigPreservesActiveCommandWALFeature",
+    "TestCommandWALOptionPersistsFeatureBeforeJournalActivation",
+    "TestCommandWALOptionRejectsDirtyLegacyWALActivation",
+    "TestCommandWALRequiredFeatureEnablesBackendCommandWAL",
+    "TestCommandWALRawKVBatchSetRIDRoundTrip"
+  ],
+  "fuzz_targets": [
+    "FuzzCommandWALRawKVBatchPayload - fuzztime=5s, 613851 execs",
+    "FuzzCommandWALDecodeFrame - fuzztime=5s, 543734 execs"
+  ],
+  "race_tests": [
+    "GOWORK=off go test -race ./TreeDB/db -run 'TestCommandWAL(RawSetDeleteBatchReplaysThroughNormalExecutor|RecoveryCrashDuringReplayResumesFromAppliedLSN|RIDFencePreservedForRawKVBatch)'"
+  ],
+  "crash_scenarios": [
+    "frame synced before root publish, finalize failpoint, read-write reopen replays command",
+    "active meta page corrupted after root plus AppliedCommandLSN publish, reopen selects old tuple and replays frame",
+    "root plus AppliedCommandLSN visible while WAL frame remains, reopen skips covered frame and resumes cleanup safely",
+    "recovery fails after publishing LSN 1, second read-write reopen resumes from AppliedCommandLSN 1 and applies LSN 2",
+    "missing lower LSN fails non-contiguous instead of skipping without proof",
+    "missing value-log RID referenced by RawKVBatch SetRID fails recovery before serving reads"
+  ],
+  "runtime_assertions": [
+    "command WAL root publication uses validateCommandWALPublishLocked contiguous prefix checks",
+    "read-write command recovery rejects legacy raw payloads in command_wal_v1 directories",
+    "read-write command recovery rejects duplicate LSNs and unsupported command kinds before serving reads",
+    "RawKVBatch SetRID replay requires the value-log RID map to contain every referenced RID"
+  ],
+  "unsupported_modes_and_errors": [
+    "treedb.Open public cached write path with CommandWAL or command_wal_v1 returns ErrCommandWALUnsupported",
+    "offline maintenance over command_wal_v1 still returns ErrCommandWALUnsupported until backup/maintenance command-WAL proof lands",
+    "non-command-WAL directories with unapplied typed frames continue returning ErrRecoveryRequired"
+  ],
+  "benchmark_commands": [
+    "GOWORK=off go test ./TreeDB/db -run '^$' -bench 'BenchmarkCommandWALRawKVDirectWrite' -benchmem -benchtime=100x -count=6"
+  ],
+  "benchmark_artifacts": [
+    "artifacts/command-wal/pr3/raw-kv-direct-write-bench.txt",
+    "artifacts/command-wal/pr3/raw-kv-direct-write-benchstat.txt"
+  ],
+  "benchmark_summary": {
+    "backend_no_command_wal": "8.405 us/op +/- 21%, 6.486 KiB/op +/- 0%, 17 allocs/op",
+    "command_wal_raw_kv": "7.772 us/op +/- 15%, 6.536 KiB/op +/- 0%, 19 allocs/op",
+    "interpretation": "single-key direct backend command-WAL write is throughput-neutral in this smoke benchmark; command-WAL mode adds two allocations for payload/frame bookkeeping on top of current backend batch cost"
+  },
+  "cleanup_debt": "covered typed command WAL segments are cleaned through cleanupCommandWALSegmentsCoveredByAppliedLSN after recovery; active covered segment retention remains intentional",
+  "oldest_unapplied_lsn": null,
+  "external_ref_retained_byte_summaries": "RawKVBatch SetRID uses existing value-log RID scan as the PR3 fence; broader ExternalRef closure remains for later command kinds",
+  "local_validation_commands": [
+    "GOWORK=off go test ./TreeDB/internal/commitlog ./TreeDB/db -run 'CommandWAL|RawKV'",
+    "GOWORK=off go test ./TreeDB/internal/commitlog ./TreeDB/page ./TreeDB/docs",
+    "GOWORK=off go test ./TreeDB/db -run 'Test(CommandWAL|ValidateFormatRequiredFeatureGate|SaveFormatConfig|LoadFormatConfig|Recovery|ReadOnly)'",
+    "GOWORK=off go test ./TreeDB -run 'Test(CommandWAL|OpenBackend|Recovery|ReadOnly)'",
+    "GOWORK=off go test -race ./TreeDB/db -run 'TestCommandWAL(RawSetDeleteBatchReplaysThroughNormalExecutor|RecoveryCrashDuringReplayResumesFromAppliedLSN|RIDFencePreservedForRawKVBatch)'",
+    "GOWORK=off go test ./TreeDB/internal/commitlog -run '^$' -fuzz=FuzzCommandWALRawKVBatchPayload -fuzztime=5s",
+    "GOWORK=off go test ./TreeDB/internal/commitlog -run '^$' -fuzz=FuzzCommandWALDecodeFrame -fuzztime=5s",
+    "GOWORK=off go test ./TreeDB/db -run '^$' -bench 'BenchmarkCommandWALRawKVDirectWrite' -benchmem -benchtime=100x -count=6",
+    "git diff --check"
+  ],
+  "excluded_tests_or_known_gaps": [
+    "GOWORK=off go test ./TreeDB/db -timeout 90s timed out in existing TestLeafFillTarget_IsEnforced while fsyncing; command-WAL targeted db tests passed",
+    "cached public raw writer conversion is intentionally fail-closed in this PR to avoid mixed legacy payloads; follow-up must convert cached writer to typed command journal before public command-WAL writes are enabled",
+    "strict split-state detection for future non-idempotent command kinds remains required before collection/catalog command support"
+  ]
+}

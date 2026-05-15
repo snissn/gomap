@@ -79,7 +79,7 @@ func TestSaveFormatConfigCommandWALRequiresCleanActivation(t *testing.T) {
 	}
 }
 
-func TestCommandWALRequiredFeatureFailsClosedUntilExecutionEnabled(t *testing.T) {
+func TestSaveOpenFormatConfigPreservesActiveCommandWALFeature(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
@@ -87,13 +87,93 @@ func TestCommandWALRequiredFeatureFailsClosedUntilExecutionEnabled(t *testing.T)
 	if err := SaveFormatConfig(dir, FormatConfig{RequiredFeatures: []string{RequiredFeatureCommandWALV1}}); err != nil {
 		t.Fatalf("SaveFormatConfig: %v", err)
 	}
-	_, err := Open(Options{Dir: dir})
-	if !errors.Is(err, ErrCommandWALUnsupported) {
-		t.Fatalf("Open error=%v, want ErrCommandWALUnsupported", err)
+	writeCommandWALRawKVFrame(t, dir, 1, 1, []commitlog.RawKVOperation{
+		{Op: commitlog.RawKVOpSet, Key: []byte("k"), Value: []byte("v")},
+	})
+	if err := saveOpenFormatConfig(Options{Dir: dir, CommandWAL: true}); err != nil {
+		t.Fatalf("saveOpenFormatConfig: %v", err)
 	}
-	_, err = Open(Options{Dir: dir, IgnoreFormatConfig: true})
-	if !errors.Is(err, ErrCommandWALUnsupported) {
-		t.Fatalf("Open IgnoreFormatConfig error=%v, want ErrCommandWALUnsupported", err)
+}
+
+func TestCommandWALOptionPersistsFeatureBeforeJournalActivation(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir, CommandWAL: true})
+	if err != nil {
+		t.Fatalf("Open CommandWAL: %v", err)
+	}
+	requiresCommandWAL, err := CommandWALRequiredFeatureEnabled(dir)
+	if err != nil {
+		t.Fatalf("CommandWALRequiredFeatureEnabled: %v", err)
+	}
+	if !requiresCommandWAL {
+		t.Fatalf("command_wal_v1 required feature was not persisted before journal activation")
+	}
+	b := db.NewBatch().(*Batch)
+	if err := b.Set([]byte("k"), []byte("v")); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if err := b.WriteSync(); err != nil {
+		t.Fatalf("WriteSync: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopened, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("Open persisted CommandWAL: %v", err)
+	}
+	if !reopened.commandWAL {
+		t.Fatalf("reopened commandWAL=false, want true from persisted feature")
+	}
+	assertDBValue(t, reopened, "k", "v")
+	if err := reopened.Close(); err != nil {
+		t.Fatalf("Close reopened: %v", err)
+	}
+}
+
+func TestCommandWALOptionRejectsDirtyLegacyWALActivation(t *testing.T) {
+	dir := t.TempDir()
+	walDir := filepath.Join(dir, "wal")
+	if err := os.MkdirAll(walDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(walDir, "commit-l0-000001.log"), []byte("dirty commit wal"), 0o600); err != nil {
+		t.Fatalf("write commit wal: %v", err)
+	}
+	_, err := Open(Options{Dir: dir, CommandWAL: true})
+	if err == nil || !strings.Contains(err.Error(), "clean legacy WAL") {
+		t.Fatalf("Open CommandWAL dirty legacy WAL error=%v, want clean legacy WAL failure", err)
+	}
+}
+
+func TestCommandWALRequiredFeatureEnablesBackendCommandWAL(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := SaveFormatConfig(dir, FormatConfig{RequiredFeatures: []string{RequiredFeatureCommandWALV1}}); err != nil {
+		t.Fatalf("SaveFormatConfig: %v", err)
+	}
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if !db.commandWAL {
+		t.Fatalf("commandWAL=false, want true")
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	db, err = Open(Options{Dir: dir, IgnoreFormatConfig: true})
+	if err != nil {
+		t.Fatalf("Open IgnoreFormatConfig: %v", err)
+	}
+	if !db.commandWAL {
+		t.Fatalf("IgnoreFormatConfig commandWAL=false, want true from required-feature gate")
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close IgnoreFormatConfig: %v", err)
 	}
 }
 

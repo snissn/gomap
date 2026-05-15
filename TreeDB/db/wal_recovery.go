@@ -9,12 +9,15 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 )
+
+var testCommandWALRecoveryFailAfterLSN atomic.Uint64
 
 type logSegment struct {
 	seq      uint64
@@ -228,6 +231,113 @@ func replayWALIntoBackend(db *DB, segments []logSegment, maxSegmentBytes int64, 
 		return err
 	}
 	return replayCommitLogSegments(db, segments, ridMap, maxSegmentBytes)
+}
+
+type commandWALReplayFrame struct {
+	env   commitlog.CommandEnvelope
+	order int
+}
+
+func replayCommandWALIntoBackend(db *DB, segments []logSegment, maxSegmentBytes int64, dictLookup valuelog.DictLookup) error {
+	if db == nil {
+		return fmt.Errorf("treedb: command wal recovery missing db")
+	}
+	frames, err := readCommandWALReplayFrames(segments, db.meta.AppliedCommandLSN, maxSegmentBytes)
+	if err != nil {
+		return err
+	}
+	if len(frames) == 0 {
+		return nil
+	}
+	ridMap, err := scanValueLogSegments(segments, dictLookup)
+	if err != nil {
+		return err
+	}
+	for _, frame := range frames {
+		db.mu.RLock()
+		applied := db.meta.AppliedCommandLSN
+		db.mu.RUnlock()
+		if frame.env.LSN <= applied {
+			continue
+		}
+		if applied == ^uint64(0) || frame.env.LSN != applied+1 {
+			return fmt.Errorf("%w: current=%d next=%d", ErrCommandWALAppliedLSNNonContig, applied, frame.env.LSN)
+		}
+		if err := applyCommandWALFrame(db, frame.env, ridMap); err != nil {
+			return err
+		}
+		if target := testCommandWALRecoveryFailAfterLSN.Load(); target != 0 && frame.env.LSN == target {
+			testCommandWALRecoveryFailAfterLSN.Store(0)
+			return errTestFinalizeCommitFailpoint
+		}
+	}
+	_, err = cleanupCommandWALSegmentsCoveredByAppliedLSN(db.dir, db.meta.AppliedCommandLSN, maxSegmentBytes)
+	return err
+}
+
+func readCommandWALReplayFrames(segments []logSegment, appliedLSN uint64, maxSegmentBytes int64) ([]commandWALReplayFrame, error) {
+	activeByLane, err := commandWALActiveSeqByLane(segments, maxSegmentBytes)
+	if err != nil {
+		return nil, err
+	}
+	var frames []commandWALReplayFrame
+	seen := make(map[uint64]struct{})
+	readOrder := 0
+	for _, seg := range segments {
+		if seg.valueLog || seg.size == 0 {
+			continue
+		}
+		if !isCommandWALLaneSegment(seg) {
+			return nil, commitlog.ErrCommandWALLegacyPayload
+		}
+		active := seg.seq == activeByLane[seg.lane]
+		reader, err := commitlog.NewReaderWithOptions(seg.path, commitlog.Options{MaxSegmentSize: maxSegmentBytes})
+		if err != nil {
+			return nil, err
+		}
+		for {
+			env, err := reader.ReadCommandFrame()
+			if err == nil {
+				if _, ok := seen[env.LSN]; ok {
+					_ = reader.Close()
+					return nil, commitlog.ErrCommandWALDuplicateLSN
+				}
+				seen[env.LSN] = struct{}{}
+				if env.LSN > appliedLSN {
+					frames = append(frames, commandWALReplayFrame{env: env, order: readOrder})
+					readOrder++
+				}
+				continue
+			}
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if errors.Is(err, commitlog.ErrCommandWALTerminalTail) && active {
+				break
+			}
+			_ = reader.Close()
+			return nil, err
+		}
+		if err := reader.Close(); err != nil {
+			return nil, err
+		}
+	}
+	sort.Slice(frames, func(i, j int) bool {
+		if frames[i].env.LSN != frames[j].env.LSN {
+			return frames[i].env.LSN < frames[j].env.LSN
+		}
+		return frames[i].order < frames[j].order
+	})
+	return frames, nil
+}
+
+func applyCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map[uint64]page.ValuePtr) error {
+	switch env.Kind {
+	case commitlog.CommandKindRawKVBatch:
+		return applyRawKVCommandWALFrame(db, env, ridMap)
+	default:
+		return commitlog.ErrCommandWALUnsupportedKind
+	}
 }
 
 func scanValueLogSegments(segments []logSegment, dictLookup valuelog.DictLookup) (map[uint64]page.ValuePtr, error) {

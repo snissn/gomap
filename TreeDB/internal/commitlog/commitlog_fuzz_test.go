@@ -2,6 +2,7 @@ package commitlog
 
 import (
 	"bytes"
+	"encoding/binary"
 	"os"
 	"path/filepath"
 	"testing"
@@ -102,6 +103,7 @@ func FuzzCommandWALRawKVBatchPayload(f *testing.F) {
 		{Op: RawKVOpSet, Key: []byte("alpha"), Value: []byte("one")},
 		{Op: RawKVOpDelete, Key: []byte("beta")},
 		{Op: RawKVOpSet, Key: []byte{}, Value: []byte("empty-key-value")},
+		{Op: RawKVOpSetRID, Key: []byte("rid-key"), RID: 42},
 	}); err == nil {
 		f.Add(payload)
 	}
@@ -112,11 +114,16 @@ func FuzzCommandWALRawKVBatchPayload(f *testing.F) {
 		}
 		var scanned []RawKVOperation
 		scanErr := ScanRawKVBatchPayload(data, func(op RawKVOp, key, value []byte) error {
-			scanned = append(scanned, RawKVOperation{
+			entry := RawKVOperation{
 				Op:    op,
 				Key:   append([]byte(nil), key...),
 				Value: append([]byte(nil), value...),
-			})
+			}
+			if op == RawKVOpSetRID {
+				entry.RID = binary.LittleEndian.Uint64(value)
+				entry.Value = nil
+			}
+			scanned = append(scanned, entry)
 			return nil
 		})
 		decoded, decodeErr := DecodeRawKVBatchPayload(data)

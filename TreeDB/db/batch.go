@@ -158,8 +158,16 @@ func (b *Batch) write(sync bool) error {
 	if sync && b.batch != nil && len(b.batch.SortedEntries()) == 0 {
 		return b.db.Checkpoint()
 	}
+	intent, err := b.db.prepareRawKVCommandWALIntent(b)
+	if err != nil {
+		return err
+	}
+	return b.writeWithCommandWALIntent(sync, intent)
+}
+
+func (b *Batch) writeWithCommandWALIntent(sync bool, intent *commandWALBatchIntent) error {
 	for attempt := 0; attempt < optimisticWriteMaxAttempts; attempt++ {
-		committed, err := b.writeOptimistic(sync)
+		committed, err := b.writeOptimistic(sync, intent)
 		if err != nil {
 			return err
 		}
@@ -167,10 +175,10 @@ func (b *Batch) write(sync bool) error {
 			return nil
 		}
 	}
-	return b.writeSerialized(sync)
+	return b.writeSerialized(sync, intent)
 }
 
-func (b *Batch) writeOptimistic(sync bool) (bool, error) {
+func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent) (bool, error) {
 	touchedValueLogSegments := b.batch.TouchedValueLogSegments()
 
 	b.db.writeMu.RLock()
@@ -231,7 +239,16 @@ func (b *Batch) writeOptimistic(sync bool) (bool, error) {
 		return false, nil
 	}
 
-	post, err := b.db.finalizeCommitLocked(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil)
+	if _, err := b.db.appendRawKVCommandWALIntent(intent, sync); err != nil {
+		b.db.commitMu.Unlock()
+		freeErr := tracker.FreeAll()
+		b.db.writeMu.RUnlock()
+		if freeErr != nil {
+			return false, freeErr
+		}
+		return false, err
+	}
+	post, err := b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, commandWALFinalizeOptions(intent))
 	b.db.commitMu.Unlock()
 	if err != nil {
 		b.db.writeMu.RUnlock()
@@ -247,7 +264,7 @@ func (b *Batch) writeOptimistic(sync bool) (bool, error) {
 	return true, nil
 }
 
-func (b *Batch) writeSerialized(sync bool) error {
+func (b *Batch) writeSerialized(sync bool, intent *commandWALBatchIntent) error {
 	touchedValueLogSegments := b.batch.TouchedValueLogSegments()
 
 	b.db.writeMu.Lock()
@@ -290,10 +307,15 @@ func (b *Batch) writeSerialized(sync bool) error {
 	sysRoot := b.db.meta.SystemRootPageID
 	b.db.mu.Unlock()
 
-	if err := b.db.finalizeCommit(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil); err != nil {
+	if _, err := b.db.appendRawKVCommandWALIntent(intent, sync); err != nil {
+		return err
+	}
+	post, err := b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, commandWALFinalizeOptions(intent))
+	if err != nil {
 		return err
 	}
 	vlogRefDelta = nil
+	b.db.finalizeCommitPostWork(post)
 	b.db.clearLeafGenerationReachabilityCaches()
 	if b.db.vacuum.Active() {
 		b.db.vacuum.RecordEntries(entries)

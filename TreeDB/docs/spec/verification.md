@@ -318,6 +318,27 @@ PR 3: recovery dispatcher and raw KV command conversion:
 - `TestCommandWALExistingRawReplayTestsMappedToRawKVBatch`;
 - `TestCommandWALExistingRIDFenceTestsMappedToExternalRefFence`.
 
+PR3 implementation evidence:
+
+- `RawKVBatch` is the first replayable command kind for direct backend
+  command-WAL mode.
+- Read-write recovery dispatches typed frames, replays raw KV commands through
+  the normal backend batch executor, and publishes roots plus
+  `AppliedCommandLSN` in one finalize boundary.
+- Explicit `CommandWAL` activation persists `command_wal_v1` before opening the
+  command journal, so a process cannot acknowledge typed frames without a
+  durable required-feature gate.
+- Raw KV `SetRID` command entries preserve the existing value-log RID fence by
+  requiring the referenced RID to be present in scanned value-log segments
+  before recovery can publish the command.
+- Public cached-mode command WAL writes remain fail-closed until the cached
+  writer is converted to the shared typed command journal. This prevents mixed
+  legacy raw records in `command_wal_v1` directories.
+- Strict split-state detection for non-idempotent command kinds remains a
+  required gate before collection/catalog commands can be marked
+  `WAL-supported`; raw KV `set`/`delete` replay uses absolute deterministic
+  assignments and never skips over missing LSNs without contiguous proof.
+
 PR 4: collection insert/delete by explicit ID:
 
 - `TestCommandWALCollectionInsertAckBeforeCheckpointRecovers`;

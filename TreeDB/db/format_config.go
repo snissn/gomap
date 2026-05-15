@@ -52,9 +52,6 @@ func (cfg FormatConfig) RequiresCommandWALV1() bool {
 }
 
 func (cfg FormatConfig) ValidateRuntimeSupported() error {
-	if cfg.RequiresCommandWALV1() {
-		return ErrCommandWALUnsupported
-	}
 	return nil
 }
 
@@ -90,6 +87,10 @@ func formatConfigFromOptions(opts Options) FormatConfig {
 	// mixed internal-level policy is supported.
 	if cfg.IndexOuterLeavesInValueLog && cfg.IndexInternalBaseDelta {
 		cfg.IndexInternalBaseDelta = false
+	}
+	if opts.CommandWAL {
+		cfg.Version = formatConfigRequiredFeaturesVersion
+		cfg.RequiredFeatures = []string{RequiredFeatureCommandWALV1}
 	}
 
 	return cfg
@@ -183,19 +184,28 @@ func LoadFormatConfig(dir string) (FormatConfig, bool, error) {
 // IgnoreFormatConfig remains an escape hatch for malformed or future ordinary
 // format configs, while still failing closed for explicitly required features.
 func ValidateFormatRequiredFeatureGate(dir string) error {
+	_, err := commandWALRequiredFeatureGate(dir)
+	return err
+}
+
+func CommandWALRequiredFeatureEnabled(dir string) (bool, error) {
+	return commandWALRequiredFeatureGate(dir)
+}
+
+func commandWALRequiredFeatureGate(dir string) (bool, error) {
 	path := formatConfigPath(dir)
 	if path == "" {
-		return errors.New("missing db dir")
+		return false, errors.New("missing db dir")
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil
+			return false, nil
 		}
-		return err
+		return false, err
 	}
 	if len(data) == 0 {
-		return nil
+		return false, nil
 	}
 
 	var gate struct {
@@ -204,25 +214,26 @@ func ValidateFormatRequiredFeatureGate(dir string) error {
 	}
 	if err := json.Unmarshal(data, &gate); err != nil {
 		if bytes.Contains(data, []byte("required_features")) {
-			return fmt.Errorf("treedb: decode %s required-feature gate: %w", filepath.Base(path), err)
+			return false, fmt.Errorf("treedb: decode %s required-feature gate: %w", filepath.Base(path), err)
 		}
-		return nil
+		return false, nil
 	}
 	if len(gate.RequiredFeatures) == 0 {
-		return nil
+		return false, nil
 	}
 	if gate.Version < formatConfigRequiredFeaturesVersion {
-		return fmt.Errorf("treedb: decode %s: required_features require format version %d", filepath.Base(path), formatConfigRequiredFeaturesVersion)
+		return false, fmt.Errorf("treedb: decode %s: required_features require format version %d", filepath.Base(path), formatConfigRequiredFeaturesVersion)
 	}
 	if err := validateRequiredFormatFeatures(gate.RequiredFeatures); err != nil {
-		return fmt.Errorf("treedb: decode %s: %w", filepath.Base(path), err)
+		return false, fmt.Errorf("treedb: decode %s: %w", filepath.Base(path), err)
 	}
+	requiresCommandWAL := false
 	for _, feature := range gate.RequiredFeatures {
 		if normalizeFormatConfigMode(feature) == RequiredFeatureCommandWALV1 {
-			return ErrCommandWALUnsupported
+			requiresCommandWAL = true
 		}
 	}
-	return nil
+	return requiresCommandWAL, nil
 }
 
 // SaveFormatConfig writes cfg to dir/format.json atomically.
@@ -246,6 +257,36 @@ func SaveFormatConfig(dir string, cfg FormatConfig) error {
 		return err
 	}
 	return writeFileAtomic(path, data, 0o600)
+}
+
+func ensureOpenCommandWALFormat(opts Options) error {
+	if !opts.CommandWAL || opts.ReadOnly {
+		return nil
+	}
+	requiresCommandWAL, err := CommandWALRequiredFeatureEnabled(opts.Dir)
+	if err != nil {
+		return err
+	}
+	if requiresCommandWAL {
+		return nil
+	}
+	return SaveFormatConfig(opts.Dir, formatConfigFromOptions(opts))
+}
+
+func saveOpenFormatConfig(opts Options) error {
+	if opts.CommandWAL {
+		requiresCommandWAL, err := CommandWALRequiredFeatureEnabled(opts.Dir)
+		if err != nil {
+			return err
+		}
+		if requiresCommandWAL {
+			return nil
+		}
+		if opts.ReadOnly {
+			return nil
+		}
+	}
+	return SaveFormatConfig(opts.Dir, formatConfigFromOptions(opts))
 }
 
 func formatValueLogCompressionMode(mode ValueLogCompressionMode) string {
@@ -331,7 +372,14 @@ func applyFormatConfigForMaintenance(opts *Options) error {
 		return nil
 	}
 	if opts.IgnoreFormatConfig {
-		return ValidateFormatRequiredFeatureGate(opts.Dir)
+		requiresCommandWAL, err := CommandWALRequiredFeatureEnabled(opts.Dir)
+		if err != nil {
+			return err
+		}
+		if requiresCommandWAL {
+			return ErrCommandWALUnsupported
+		}
+		return nil
 	}
 	cfg, ok, err := LoadFormatConfig(opts.Dir)
 	if err != nil {
@@ -342,6 +390,9 @@ func applyFormatConfigForMaintenance(opts *Options) error {
 	}
 	if err := cfg.ValidateRuntimeSupported(); err != nil {
 		return err
+	}
+	if cfg.RequiresCommandWALV1() {
+		return ErrCommandWALUnsupported
 	}
 	cfg.ApplyToOptions(opts)
 	return nil

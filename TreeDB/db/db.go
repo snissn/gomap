@@ -14,6 +14,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/freelist"
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
 	"github.com/snissn/gomap/TreeDB/internal/bulk"
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/compression"
 	"github.com/snissn/gomap/TreeDB/internal/keyupdate"
 	"github.com/snissn/gomap/TreeDB/internal/lockfile"
@@ -98,6 +99,7 @@ type DB struct {
 
 	readOnly   bool
 	durability DurabilityMode
+	commandWAL bool
 
 	keepRecent                     uint64
 	policy                         WritePolicy
@@ -136,6 +138,7 @@ type DB struct {
 	vacuum           vacuumRecorder
 	meta             page.MetaPageBody
 	metaPageID       uint64
+	commandJournal   *commitlog.CommandJournal
 
 	state atomic.Pointer[DBState]
 
@@ -631,6 +634,10 @@ type Options struct {
 	// treedb.Open, treedb.OpenBackend) and in offline maintenance helpers
 	// (VacuumIndexOffline, ValueLogRewriteOffline, treemap vacuum/rewrite/vlog-gc).
 	IgnoreFormatConfig bool
+	// CommandWAL enables the compatibility-breaking command-WAL mode for direct
+	// backend raw KV writes. It is also enabled automatically when format.json
+	// advertises the command_wal_v1 required feature.
+	CommandWAL bool
 	// ReadOnly opens the database without acquiring an exclusive lock and without
 	// modifying on-disk state (no recovery truncation, no WAL replay, no background
 	// maintenance). Only read operations are supported. Under the collection WAL
@@ -1099,9 +1106,11 @@ func Open(opts Options) (*DB, error) {
 		return nil, errors.New("db dir required")
 	}
 	if opts.IgnoreFormatConfig {
-		if err := ValidateFormatRequiredFeatureGate(opts.Dir); err != nil {
+		requiresCommandWAL, err := CommandWALRequiredFeatureEnabled(opts.Dir)
+		if err != nil {
 			return nil, err
 		}
+		opts.CommandWAL = opts.CommandWAL || requiresCommandWAL
 	} else {
 		if cfg, ok, err := LoadFormatConfig(opts.Dir); err != nil {
 			return nil, err
@@ -1109,6 +1118,7 @@ func Open(opts Options) (*DB, error) {
 			if err := cfg.ValidateRuntimeSupported(); err != nil {
 				return nil, err
 			}
+			opts.CommandWAL = opts.CommandWAL || cfg.RequiresCommandWALV1()
 			cfg.ApplyIndexFormatToOptions(&opts)
 		}
 	}
@@ -1384,6 +1394,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		freelistRegionPages:            opts.FreelistRegionPages,
 		freelistRegionRadius:           opts.FreelistRegionRadius,
 		durability:                     opts.Durability,
+		commandWAL:                     opts.CommandWAL,
 		policy: WritePolicy{
 			InlineThreshold: inlineThreshold,
 			FlushThreshold:  opts.FlushThreshold,
@@ -1416,21 +1427,45 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		return nil, err
 	}
 
-	if err := requireNoUnappliedCommandWAL(opts.Dir, db.meta.AppliedCommandLSN, opts.WALMaxSegmentBytes); err != nil {
+	segments, err := listRecoverySegments(opts.Dir)
+	if err != nil {
 		db.Close()
 		return nil, err
 	}
-
-	if opts.Durability != DurabilityWALOffRelaxed {
-		segments, err := listRecoverySegments(opts.Dir)
+	if opts.CommandWAL && !opts.ReadOnly {
+		if err := ensureOpenCommandWALFormat(opts); err != nil {
+			db.Close()
+			return nil, err
+		}
+	}
+	if opts.CommandWAL {
+		if err := replayCommandWALIntoBackend(db, segments, opts.WALMaxSegmentBytes, opts.ValueLog.DictLookup); err != nil {
+			db.Close()
+			return nil, err
+		}
+	} else {
+		if err := requireNoUnappliedCommandWAL(opts.Dir, db.meta.AppliedCommandLSN, opts.WALMaxSegmentBytes); err != nil {
+			db.Close()
+			return nil, err
+		}
+		if opts.Durability != DurabilityWALOffRelaxed {
+			if err := replayWALIntoBackend(db, segments, opts.WALMaxSegmentBytes, opts.ValueLog.DictLookup); err != nil {
+				db.Close()
+				return nil, err
+			}
+		}
+	}
+	if opts.CommandWAL && !opts.ReadOnly {
+		journal, err := commitlog.OpenCommandJournal(WALDirPath(opts.Dir), commitlog.CommandJournalOptions{
+			MaxSegmentSize: opts.WALMaxSegmentBytes,
+			Compress:       opts.JournalCompression,
+			InitialLSN:     db.meta.AppliedCommandLSN,
+		})
 		if err != nil {
 			db.Close()
 			return nil, err
 		}
-		if err := replayWALIntoBackend(db, segments, opts.WALMaxSegmentBytes, opts.ValueLog.DictLookup); err != nil {
-			db.Close()
-			return nil, err
-		}
+		db.commandJournal = journal
 	}
 
 	// Recovery and WAL/value-log replay may touch the manager's file set. Reapply
@@ -1504,7 +1539,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	// Best-effort: persist the format knobs used for this DB directory so
 	// offline maintenance tooling (treemap, offline vacuum/rewrite) can preserve
 	// the intended on-disk layout without requiring callers to re-specify flags.
-	if err := SaveFormatConfig(opts.Dir, formatConfigFromOptions(opts)); err != nil && opts.NotifyError != nil {
+	if err := saveOpenFormatConfig(opts); err != nil && opts.NotifyError != nil {
 		opts.NotifyError(err)
 	}
 
@@ -1584,6 +1619,8 @@ func (db *DB) Close() error {
 	db.clearSnapshotView()
 	vm := db.valueLogManager
 	db.valueLogManager = nil
+	commandJournal := db.commandJournal
+	db.commandJournal = nil
 	lock := db.lock
 	db.lock = nil
 	db.mu.Unlock()
@@ -1603,6 +1640,11 @@ func (db *DB) Close() error {
 	}
 	if vm != nil {
 		if err := vm.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if commandJournal != nil {
+		if err := commandJournal.Close(); err != nil {
 			errs = append(errs, err)
 		}
 	}
