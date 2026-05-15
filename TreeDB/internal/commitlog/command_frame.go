@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -705,6 +706,9 @@ func ScanCommandFrameSegments(paths []string, opts Options) ([]CommandEnvelope, 
 		}
 		frames = append(frames, segmentFrames...)
 	}
+	sort.Slice(frames, func(i, j int) bool {
+		return frames[i].LSN < frames[j].LSN
+	})
 	return frames, nil
 }
 
