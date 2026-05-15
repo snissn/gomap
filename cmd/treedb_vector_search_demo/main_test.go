@@ -151,7 +151,7 @@ func TestExecuteRequireLeafVLogBytesPassesWithDefaultBenchProfile(t *testing.T) 
 	}
 }
 
-func TestExecuteNormalizesMainDBDirToRoot(t *testing.T) {
+func TestExecuteRejectsMainDBDir(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "demo-root")
 	maindb := filepath.Join(root, "maindb")
 	if err := os.MkdirAll(filepath.Join(root, "dictdb"), 0o755); err != nil {
@@ -161,7 +161,7 @@ func TestExecuteNormalizesMainDBDirToRoot(t *testing.T) {
 		t.Fatalf("write stale side-store file: %v", err)
 	}
 
-	res, err := execute(context.Background(), config{
+	_, err := execute(context.Background(), config{
 		dir:                   maindb,
 		keepDir:               true,
 		docs:                  64,
@@ -180,17 +180,14 @@ func TestExecuteNormalizesMainDBDirToRoot(t *testing.T) {
 		compact:               true,
 		disableExactFallback:  true,
 	})
-	if err != nil {
-		t.Fatalf("execute: %v", err)
+	if err == nil {
+		t.Fatal("execute accepted maindb path, want error")
 	}
-	if res.Dir != root {
-		t.Fatalf("dir=%q want normalized root %q", res.Dir, root)
+	if !strings.Contains(err.Error(), "TreeDB root directory") {
+		t.Fatalf("error=%v, want TreeDB root directory guidance", err)
 	}
-	if _, err := os.Stat(filepath.Join(root, "dictdb", "stale")); !os.IsNotExist(err) {
-		t.Fatalf("stale side-store file err=%v, want removed with normalized root cleanup", err)
-	}
-	if res.StorageAfterCompact.Domains["index.db"] <= 0 {
-		t.Fatalf("storage after compact did not include normalized root maindb index: %+v", res.StorageAfterCompact)
+	if _, err := os.Stat(filepath.Join(root, "dictdb", "stale")); err != nil {
+		t.Fatalf("stale side-store file err=%v, want untouched after rejected maindb path", err)
 	}
 }
 
