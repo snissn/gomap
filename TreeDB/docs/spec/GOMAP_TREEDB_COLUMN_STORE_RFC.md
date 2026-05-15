@@ -256,12 +256,14 @@ when that id is not stored as a user-visible column.
 `SortKey` is a separate physical clustering contract for column-store parts. It
 controls row order inside immutable parts, mark layout, compression locality,
 and scan pruning. A deployment may set `SortKey` equal to the logical primary
-key for a simple KV-like collection, but analytical collections should be able
-to choose a query-relevant order such as
-`(kind, commit.operation, commit.collection, did, time_us, primary_id)`.
-The primary id should normally appear as the last tie-breaker so part ordering
-is deterministic and update visibility can still resolve duplicate logical rows
-across old and replacement parts.
+key for a simple KV-like collection, but analytical collections should choose a
+workload-relevant order. For example,
+`(kind, commit.operation, commit.collection, did, time_us, primary_id)` is useful
+for event-type and per-user queries that constrain the leading fields, while a
+time-range-heavy profile may need `time_us` earlier in the key. The primary id
+should normally appear as the last tie-breaker so part ordering is deterministic
+and update visibility can still resolve duplicate logical rows across old and
+replacement parts.
 
 `Compression.Mode` defaults to `auto`. Auto mode lets the column-store codec
 selector choose per-column and per-block pipelines from the collection/profile
@@ -485,11 +487,17 @@ Required mark metadata:
   in the part descriptor.
 
 The ClickHouse JSONBench shape makes this non-optional for analytical
-comparisons: sorting by `(kind, commit.operation, commit.collection, did,
-time_us)` lets predicates on `kind`, operation, collection, user, and time skip
-large ranges of granules. TreeDB's JSONBench column-store lane should therefore
-report sort-key mark pruning separately from min/max, fast-filter, and
-secondary-index pruning.
+comparisons. A sort key such as
+`(kind, commit.operation, commit.collection, did, time_us)` can skip large
+granule ranges when predicates constrain the leftmost prefix, for example
+`kind`, operation, collection, and user before time. It should not be described
+as a general time-range pruning layout: predicates on `time_us` alone, or on
+`time_us` without the preceding high-cardinality `did`, may still span most
+granules. Time-range-heavy profiles should either put `time_us` earlier in the
+`SortKey`, add a second physical layout later, or rely on independent
+per-granule min/max, fast filters, or secondary indexes. TreeDB's JSONBench
+column-store lane should therefore report sort-key mark pruning separately from
+min/max, fast-filter, and secondary-index pruning.
 
 ### 6.1.2 Secondary Index Contract
 
