@@ -160,6 +160,103 @@ func (idx *VectorIndex) SaveNativeSnapshot() (VectorIndexLoadStatus, error) {
 	status.RootID = rootIDs[0]
 	status.Epoch = rootIDs[0]
 	status.BytesDisk = bytesDisk
+	idx.nativePersistent = true
+	idx.recordPersistedSnapshot(status.Epoch, bytesDisk, snapshotSeq)
+	nextCatalog := cloneCatalogWithRootUpdates(catalog, catalog.meta, []string{rootName}, rootIDs)
+	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
+	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
+	return status, nil
+}
+
+// SaveNativeDeltaSnapshot persists dirty graph records for a declared vector
+// index as a collection-root delta. It is used by live write maintenance; full
+// rebuild/shrink publication should continue to use SaveNativeSnapshot so
+// removed graph keys cannot survive.
+func (idx *VectorIndex) SaveNativeDeltaSnapshot() (VectorIndexLoadStatus, error) {
+	status := VectorIndexLoadStatus{}
+	if idx == nil {
+		return status, errors.New("collections: vector index is nil")
+	}
+	c := idx.collection
+	if c == nil {
+		return status, errCollectionNil
+	}
+	if c.db == nil {
+		return status, errCollectionDBNil
+	}
+	unlockMutation := c.lockMutation()
+	defer unlockMutation.Unlock()
+	if err := c.flushBufferedWrites(); err != nil {
+		return status, err
+	}
+
+	pin := c.db.AcquireSnapshot()
+	if pin == nil {
+		return status, backenddb.ErrClosed
+	}
+	defer func() { _ = pin.Close() }()
+	catalog, err := loadCollectionCatalog(pin, c.meta.Name)
+	if err != nil {
+		return status, err
+	}
+	if catalog == nil {
+		return status, errCollectionNotFound
+	}
+	def, ok := findVectorIndex(catalog.meta.VectorIndexes, idx.name)
+	if !ok {
+		return status, fmt.Errorf("%w: %q", errVectorIndexNotDeclared, idx.name)
+	}
+	if reason := idx.validateNativeSnapshotDefinition(def); reason != "" {
+		return status, fmt.Errorf("collections: vector index %q does not match collection metadata: %s", idx.name, reason)
+	}
+	rootName := collectionVectorIndexRootName(catalog.meta.Name, idx.name)
+	status.RootName = rootName
+	baseRoot := catalog.rootID(rootName)
+	baseRootIDs := map[string]uint64{rootName: baseRoot}
+	baseSystemRoot := snapshotSystemRoot(pin)
+	baseCommitSeq := snapshotCommitSeq(pin)
+	policy, err := collectionRootStoragePolicyForDB(c.db, catalog.meta, rootName)
+	if err != nil {
+		return status, err
+	}
+
+	table, bytesDisk, snapshotSeq, hasWork, err := idx.persistNativeDeltaTable(baseRoot == 0)
+	if err != nil {
+		return status, err
+	}
+	if !hasWork {
+		return status, nil
+	}
+	table.Freeze()
+	publishTable, pointerized, err := pointerizeCollectionRunTableValues(c.db, table)
+	if err != nil {
+		resetCollectionRunTable(table)
+		return status, err
+	}
+	if pointerized {
+		defer resetCollectionRunTable(publishTable)
+	}
+	iter := publishTable.NewIterator(nil, nil)
+	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder([]backenddb.OrderedRootDeltaPublishInput{{
+		BaseRoot:      baseRoot,
+		Iter:          iter,
+		StoragePolicy: policy,
+	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		return c.buildRootDescriptorSystemDeltaIteratorForMeta(catalog.meta, baseCommitSeq, baseSystemRoot, []string{rootName}, baseRootIDs, rootIDs)
+	})
+	_ = iter.Close()
+	resetCollectionRunTable(table)
+	if err != nil {
+		return status, err
+	}
+	if len(rootIDs) != 1 {
+		return status, unexpectedOrderedRootCountError(catalog.meta.Name, 1, len(rootIDs))
+	}
+	status.Loaded = true
+	status.RootID = rootIDs[0]
+	status.Epoch = rootIDs[0]
+	status.BytesDisk = bytesDisk
+	idx.nativePersistent = true
 	idx.recordPersistedSnapshot(status.Epoch, bytesDisk, snapshotSeq)
 	nextCatalog := cloneCatalogWithRootUpdates(catalog, catalog.meta, []string{rootName}, rootIDs)
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
@@ -360,6 +457,7 @@ func (c *Collection) LoadNativeVectorIndexSnapshot(opts VectorIndexOptions) (*Ve
 	status.Epoch = rootID
 	status.BytesDisk = bytesDisk
 	index.recordLoadedSnapshot(status.Epoch, bytesDisk)
+	c.meta = catalog.meta
 	c.RegisterVectorIndex(index)
 	return index, status, nil
 }
@@ -748,6 +846,138 @@ func buildVectorIndexNativeSnapshotTable(snapshot vectorIndexPersistSnapshot) (m
 	return table, bytesDisk, nil
 }
 
+func (idx *VectorIndex) persistNativeDeltaTable(includeMeta bool) (memtable.Table, int64, uint64, bool, error) {
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+	seq := idx.mutationSeq
+	if seq == 0 {
+		return nil, 0, seq, false, nil
+	}
+	if includeMeta || idx.dirtyMeta {
+		includeMeta = true
+	}
+	nodeIDs := make([]int, 0, len(idx.dirtyNodes))
+	for nodeID := range idx.dirtyNodes {
+		if nodeID >= 0 && nodeID < len(idx.nodes) {
+			nodeIDs = append(nodeIDs, nodeID)
+		}
+	}
+	sort.Ints(nodeIDs)
+	docIDs := make([]string, 0, len(idx.dirtyDocs))
+	for docID := range idx.dirtyDocs {
+		docIDs = append(docIDs, docID)
+	}
+	sort.Strings(docIDs)
+	if !includeMeta && len(nodeIDs) == 0 && len(docIDs) == 0 {
+		return nil, 0, seq, false, nil
+	}
+
+	entryCount := len(docIDs)
+	if includeMeta {
+		entryCount++
+	}
+	for _, nodeID := range nodeIDs {
+		entryCount += 1 + len(idx.nodes[nodeID].neighbors)
+		if idx.nodes[nodeID].deleted {
+			entryCount++
+		}
+	}
+	table := newCollectionRunTable(entryCount)
+	var bytesDisk int64
+	add := func(key []byte, payload any) error {
+		data, err := json.Marshal(payload)
+		if err != nil {
+			return err
+		}
+		data = append(data, '\n')
+		bytesDisk += int64(len(data))
+		table.SetSteal(key, data)
+		return nil
+	}
+	if includeMeta {
+		if err := add([]byte(vectorIndexNativeKeyMeta), idx.persistMetaLocked()); err != nil {
+			resetCollectionRunTable(table)
+			return nil, 0, seq, false, err
+		}
+	}
+	for _, nodeID := range nodeIDs {
+		node := idx.nodes[nodeID]
+		if err := add(vectorIndexNativeNodeKey(nodeID), vectorIndexPersistNodeFromRuntime(node)); err != nil {
+			resetCollectionRunTable(table)
+			return nil, 0, seq, false, err
+		}
+		for layer, neighbors := range node.neighbors {
+			edge := vectorIndexPersistEdges{
+				NodeID:    nodeID,
+				Layer:     layer,
+				Neighbor:  make([]int, len(neighbors)),
+				Distances: make([]float32, len(neighbors)),
+			}
+			for i, neighbor := range neighbors {
+				edge.Neighbor[i] = neighbor.nodeID
+				distance, ok := normalizeVectorIndexEdgeDistance(neighbor.distance)
+				if !ok {
+					distance = idx.distanceBetweenNodesLocked(nodeID, neighbor.nodeID)
+					distance, ok = normalizeVectorIndexEdgeDistance(distance)
+					if !ok {
+						distance = math.MaxFloat32
+					}
+				}
+				edge.Distances[i] = distance
+			}
+			if err := add(vectorIndexNativeEdgeKey(nodeID, layer), edge); err != nil {
+				resetCollectionRunTable(table)
+				return nil, 0, seq, false, err
+			}
+		}
+		if node.deleted {
+			if err := add(vectorIndexNativeTombstoneKey(nodeID), nodeID); err != nil {
+				resetCollectionRunTable(table)
+				return nil, 0, seq, false, err
+			}
+		}
+	}
+	for _, docID := range docIDs {
+		nodeID, ok := idx.currentNode[docID]
+		if !ok {
+			table.DeleteSteal(vectorIndexNativeDocKey(docID))
+			continue
+		}
+		if err := add(vectorIndexNativeDocKey(docID), nodeID); err != nil {
+			resetCollectionRunTable(table)
+			return nil, 0, seq, false, err
+		}
+	}
+	return table, bytesDisk, seq, true, nil
+}
+
+func (idx *VectorIndex) persistMetaLocked() vectorIndexPersistMeta {
+	return vectorIndexPersistMeta{
+		Name:                idx.name,
+		Field:               idx.field,
+		Metric:              idx.metric,
+		Encoding:            idx.encoding,
+		Dimensions:          idx.dimensions,
+		M:                   idx.m,
+		EfConstruction:      idx.efConstruction,
+		EfSearch:            idx.efSearch,
+		RebuildDeletedRatio: idx.rebuildDeletedRatio,
+		Entry:               idx.entry,
+		MaxLevel:            idx.maxLevel,
+	}
+}
+
+func vectorIndexPersistNodeFromRuntime(node vectorIndexNode) vectorIndexPersistNode {
+	return vectorIndexPersistNode{
+		DocumentID: string(node.documentID),
+		Vector:     append([]float32(nil), node.vector...),
+		Quantized:  append([]int8(nil), node.quantized...),
+		QuantScale: node.quantScale,
+		Level:      node.level,
+		Deleted:    node.deleted,
+	}
+}
+
 func readVectorIndexNativeSnapshot(snap *backenddb.Snapshot, catalog *collectionCatalog, rootName string) (vectorIndexPersistSnapshot, int64, string, error) {
 	var snapshot vectorIndexPersistSnapshot
 	var bytesDisk int64
@@ -926,6 +1156,11 @@ func (idx *VectorIndex) recordPersistedSnapshot(epoch uint64, bytesDisk int64, s
 	idx.persistedEpoch = epoch
 	idx.persistedBytesDisk = bytesDisk
 	idx.persistedSnapshotDirty = idx.mutationSeq != snapshotSeq
+	if !idx.persistedSnapshotDirty {
+		idx.dirtyMeta = false
+		clear(idx.dirtyNodes)
+		clear(idx.dirtyDocs)
+	}
 }
 
 func (idx *VectorIndex) recordLoadedSnapshot(epoch uint64, bytesDisk int64) {
@@ -935,6 +1170,18 @@ func (idx *VectorIndex) recordLoadedSnapshot(epoch uint64, bytesDisk int64) {
 	idx.persistedBytesDisk = bytesDisk
 	idx.persistedSnapshotDirty = false
 	idx.mutationSeq = 0
+	idx.dirtyMeta = false
+	clear(idx.dirtyNodes)
+	clear(idx.dirtyDocs)
+}
+
+func (idx *VectorIndex) needsNativeAutoPersist() bool {
+	if idx == nil {
+		return false
+	}
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+	return idx.mutationSeq != 0 && (idx.persistedEpoch == 0 || idx.persistedSnapshotDirty)
 }
 
 func validateVectorIndexManifest(manifest vectorIndexManifest, collection, indexName string, metric VectorMetric, encoding VectorIndexEncoding, dimensions int) string {

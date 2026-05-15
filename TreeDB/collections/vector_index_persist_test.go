@@ -295,6 +295,225 @@ func TestCollectionVectorIndexNativeRootIncompleteFallsBack(t *testing.T) {
 	}
 }
 
+func TestCollectionVectorIndexNativeRootMaintainsInsertedDocuments(t *testing.T) {
+	dir := t.TempDir()
+	d, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mgr := NewCollectionManager(d)
+	def := VectorIndexDefinition{
+		Name:       "embedding",
+		Field:      "embedding",
+		Metric:     VectorMetricCosine,
+		Dimensions: 2,
+		M:          4,
+	}
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.CreateVectorIndex(def); err != nil {
+		t.Fatalf("create vector index: %v", err)
+	}
+	indexes := col.registeredVectorIndexes()
+	if len(indexes) != 1 {
+		t.Fatalf("registered vector indexes=%d want 1", len(indexes))
+	}
+	index := indexes[0]
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("a"), []byte("b"), []byte("c")},
+		[][]byte{
+			[]byte(`{"embedding":[1,0]}`),
+			[]byte(`{"embedding":[0,1]}`),
+			[]byte(`{"embedding":[0.8,0.2]}`),
+		},
+	); err != nil {
+		t.Fatalf("insert after vector index registration: %v", err)
+	}
+	if dirtyStats := index.Stats(); dirtyStats.LiveDocs != 3 || !dirtyStats.SnapshotDirty {
+		t.Fatalf("inserted vector index not dirty before flush: %+v", dirtyStats)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush maintained vector index: %v", err)
+	}
+	if stats := index.Stats(); stats.LiveDocs != 3 || stats.SnapshotDirty {
+		t.Fatalf("inserted vector index not maintained and persisted: %+v", stats)
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+
+	reopened, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open reopened collection: %v", err)
+	}
+	loaded, status, err := reopenedCol.LoadVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		t.Fatalf("load maintained vector index: %v", err)
+	}
+	if loaded == nil || !status.Loaded {
+		t.Fatalf("maintained vector index did not load loaded=%v status=%+v", loaded != nil, status)
+	}
+	results, _, err := loaded.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 2, DisableExactFallback: true})
+	if err != nil {
+		t.Fatalf("search maintained vector index: %v", err)
+	}
+	requireVectorResultIDs(t, results, "a", "c")
+}
+
+func TestCollectionVectorIndexNativeRootMaintainsUpdatedDocument(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	def := VectorIndexDefinition{
+		Name:       "embedding",
+		Field:      "embedding",
+		Metric:     VectorMetricCosine,
+		Dimensions: 2,
+		M:          4,
+	}
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("a"), []byte("b")},
+		[][]byte{
+			[]byte(`{"embedding":[1,0],"name":"a"}`),
+			[]byte(`{"embedding":[0,1],"name":"b"}`),
+		},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	index, err := col.BuildVectorIndex(vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		t.Fatalf("build vector index: %v", err)
+	}
+	if _, err := index.SaveSnapshot(); err != nil {
+		t.Fatalf("save initial vector snapshot: %v", err)
+	}
+	matched, modified, err := col.Update([]byte("a"), func(current []byte) ([]byte, bool, error) {
+		return []byte(`{"embedding":[0,1],"name":"a"}`), true, nil
+	})
+	if err != nil {
+		t.Fatalf("update vector document: %v", err)
+	}
+	if !matched || !modified {
+		t.Fatalf("update matched=%v modified=%v", matched, modified)
+	}
+	if dirtyStats := index.Stats(); dirtyStats.LiveDocs != 2 || !dirtyStats.SnapshotDirty {
+		t.Fatalf("updated vector index not dirty before flush: %+v", dirtyStats)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush updated vector index: %v", err)
+	}
+	if stats := index.Stats(); stats.LiveDocs != 2 || stats.SnapshotDirty {
+		t.Fatalf("updated vector index not maintained and persisted: %+v", stats)
+	}
+	loaded, status, err := col.LoadVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		t.Fatalf("load updated vector index: %v", err)
+	}
+	if loaded == nil || !status.Loaded {
+		t.Fatalf("updated vector index did not load loaded=%v status=%+v", loaded != nil, status)
+	}
+	results, _, err := loaded.Search([]float32{0, 1}, VectorIndexSearchOptions{TopK: 2, DisableExactFallback: true})
+	if err != nil {
+		t.Fatalf("search updated vector index: %v", err)
+	}
+	requireVectorResultIDs(t, results, "a", "b")
+}
+
+func TestCollectionVectorIndexNativeRootMaintainsSingleDelete(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	def := VectorIndexDefinition{
+		Name:       "embedding",
+		Field:      "embedding",
+		Metric:     VectorMetricCosine,
+		Dimensions: 2,
+		M:          4,
+	}
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("a"), []byte("b"), []byte("c")},
+		[][]byte{
+			[]byte(`{"embedding":[1,0]}`),
+			[]byte(`{"embedding":[0,1]}`),
+			[]byte(`{"embedding":[0.9,0.1]}`),
+		},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	index, err := col.BuildVectorIndex(vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		t.Fatalf("build vector index: %v", err)
+	}
+	if _, err := index.SaveSnapshot(); err != nil {
+		t.Fatalf("save initial vector snapshot: %v", err)
+	}
+	deleted, err := col.DeleteDocument([]byte("c"))
+	if err != nil {
+		t.Fatalf("delete vector document: %v", err)
+	}
+	if !deleted {
+		t.Fatal("delete reported missing document")
+	}
+	if dirtyStats := index.Stats(); dirtyStats.LiveDocs != 2 || !dirtyStats.SnapshotDirty {
+		t.Fatalf("deleted vector index not dirty before flush: %+v", dirtyStats)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush deleted vector index: %v", err)
+	}
+	if stats := index.Stats(); stats.LiveDocs != 2 || stats.SnapshotDirty {
+		t.Fatalf("deleted vector index not maintained and persisted: %+v", stats)
+	}
+	loaded, status, err := col.LoadVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		t.Fatalf("load deleted vector index: %v", err)
+	}
+	if loaded == nil || !status.Loaded {
+		t.Fatalf("deleted vector index did not load loaded=%v status=%+v", loaded != nil, status)
+	}
+	results, _, err := loaded.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 3, DisableExactFallback: true})
+	if err != nil {
+		t.Fatalf("search deleted vector index: %v", err)
+	}
+	for _, result := range results {
+		if string(result.DocumentID) == "c" {
+			t.Fatalf("deleted document returned from maintained vector index: %+v", results)
+		}
+	}
+}
+
 func TestCollectionVectorIndexNativeRootSaveReplacesPriorSnapshot(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

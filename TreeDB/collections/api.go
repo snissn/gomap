@@ -2963,7 +2963,11 @@ func (c *Collection) CreateVectorIndex(def VectorIndexDefinition) (*CollectionMe
 	c.meta = baseMeta
 	_ = snap.Close()
 
-	newMeta, _, err := addVectorIndexToCollectionMeta(baseMeta, def)
+	newMeta, normalizedDef, err := addVectorIndexToCollectionMeta(baseMeta, def)
+	if err != nil {
+		return nil, err
+	}
+	runtime, err := newVectorIndex(c, vectorIndexOptionsFromDefinition(normalizedDef))
 	if err != nil {
 		return nil, err
 	}
@@ -2981,6 +2985,7 @@ func (c *Collection) CreateVectorIndex(def VectorIndexDefinition) (*CollectionMe
 	nextCatalog := cloneCatalogWithRootUpdates(catalog, newMeta, nil, nil)
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
+	c.RegisterVectorIndex(runtime)
 	return newMeta.copy(), nil
 }
 
@@ -3057,6 +3062,7 @@ func (c *Collection) DropVectorIndex(name string) (*CollectionMeta, error) {
 	nextCatalog := cloneCatalogWithRootUpdates(catalog, newMeta, clearedRootNames, []uint64{0})
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
+	c.UnregisterVectorIndex(name)
 	return newMeta.copy(), nil
 }
 
@@ -3192,7 +3198,7 @@ func (c *Collection) Insert(id, document []byte) ([]byte, error) {
 	if err := c.ensureWriteDomainOpen(); err != nil {
 		return nil, err
 	}
-	if len(c.meta.Indexes) == 0 {
+	if len(c.meta.Indexes) == 0 && len(c.meta.VectorIndexes) == 0 {
 		if c.hasBufferedNoIndexBSONRootRuns() {
 			if err := c.withMutationLock(func() error {
 				return c.flushBufferedWrites()
@@ -3224,11 +3230,18 @@ func (c *Collection) Flush() error {
 	}
 	if c.writeDomain != nil {
 		unlockMutation := c.lockMutation()
-		defer unlockMutation.Unlock()
 		c.writeDomain.waitIndexedAsyncFlush()
-		return c.flushBufferedWrites()
+		err := c.flushBufferedWrites()
+		unlockMutation.Unlock()
+		if err != nil {
+			return err
+		}
+		return c.persistDirtyNativeVectorIndexes()
 	}
-	return c.flushBufferedWrites()
+	if err := c.flushBufferedWrites(); err != nil {
+		return err
+	}
+	return c.persistDirtyNativeVectorIndexes()
 }
 
 // CompactRootOverlays folds durable collection root overlays into their base
@@ -8210,7 +8223,7 @@ func (c *Collection) insertOneViaBatch(id, document []byte) ([]byte, error) {
 func (c *Collection) InsertBatch(ids, documents [][]byte) ([][]byte, error) {
 	resultIDs, err := c.insertBatch(ids, documents, false, nil)
 	if err == nil {
-		c.notifyVectorIndexesUpsert(resultIDs)
+		err = c.notifyVectorIndexesUpsert(resultIDs)
 	}
 	return resultIDs, err
 }
@@ -8225,7 +8238,7 @@ func (c *Collection) InsertBatchWithTemplateV1Encoder(ids, documents [][]byte, e
 	}
 	resultIDs, err := c.insertBatch(ids, documents, false, encoder)
 	if err == nil {
-		c.notifyVectorIndexesUpsert(resultIDs)
+		err = c.notifyVectorIndexesUpsert(resultIDs)
 	}
 	return resultIDs, err
 }
@@ -8237,7 +8250,7 @@ func (c *Collection) InsertBatchWithTemplateV1Encoder(ids, documents [][]byte, e
 func (c *Collection) InsertBatchValidatedBSON(ids, documents [][]byte) ([][]byte, error) {
 	resultIDs, err := c.insertBatch(ids, documents, true, nil)
 	if err == nil {
-		c.notifyVectorIndexesUpsert(resultIDs)
+		err = c.notifyVectorIndexesUpsert(resultIDs)
 	}
 	return resultIDs, err
 }
@@ -9040,7 +9053,14 @@ func (c *Collection) DeleteDocument(documentID []byte) (bool, error) {
 		return false, errors.New("collections: document id cannot be empty")
 	}
 	unlockMutation := c.lockMutation()
-	defer unlockMutation.Unlock()
+	mutationLocked := true
+	unlockIfLocked := func() {
+		if mutationLocked {
+			unlockMutation.Unlock()
+			mutationLocked = false
+		}
+	}
+	defer unlockIfLocked()
 	if c.shouldFlushBeforeIndexedDelete(c.meta) {
 		if err := c.flushBufferedWrites(); err != nil {
 			return false, err
@@ -9057,6 +9077,10 @@ func (c *Collection) DeleteDocument(documentID []byte) (bool, error) {
 			}
 			waitBeforeCollectionMutationRetry(attempt)
 			continue
+		}
+		if err == nil && deleted {
+			unlockIfLocked()
+			err = c.notifyVectorIndexesDelete([][]byte{documentID})
 		}
 		return deleted, err
 	}
@@ -9102,7 +9126,14 @@ func (c *Collection) DeleteBatch(documentIDs [][]byte) (int, error) {
 		return 0, nil
 	}
 	unlockMutation := c.lockMutation()
-	defer unlockMutation.Unlock()
+	mutationLocked := true
+	unlockIfLocked := func() {
+		if mutationLocked {
+			unlockMutation.Unlock()
+			mutationLocked = false
+		}
+	}
+	defer unlockIfLocked()
 	if c.shouldFlushBeforeIndexedDelete(c.meta) {
 		if err := c.flushBufferedWrites(); err != nil {
 			return 0, err
@@ -9120,7 +9151,8 @@ func (c *Collection) DeleteBatch(documentIDs [][]byte) (int, error) {
 			continue
 		}
 		if err == nil && deleted > 0 {
-			c.notifyVectorIndexesDelete(ids)
+			unlockIfLocked()
+			err = c.notifyVectorIndexesDelete(ids)
 		}
 		return deleted, err
 	}
@@ -9511,7 +9543,7 @@ func (c *Collection) Update(documentID []byte, update func(current []byte) (repl
 		matched, modified, err = c.updateDirect(documentID, update)
 	}
 	if err == nil && modified {
-		c.notifyVectorIndexesUpsert([][]byte{documentID})
+		err = c.notifyVectorIndexesUpsert([][]byte{documentID})
 	}
 	return matched, modified, err
 }
@@ -9597,7 +9629,7 @@ func (c *Collection) updateDirectBSONSet(documentID []byte, spec bsonSetUpdate) 
 func (c *Collection) UpdateBatch(items []UpdateBatchItem) ([]UpdateBatchResult, error) {
 	results, _, err := c.updateBatch(items, updateBatchModeAny)
 	if err == nil {
-		c.notifyVectorIndexesUpdateBatch(items, results)
+		err = c.notifyVectorIndexesUpdateBatch(items, results)
 	}
 	return results, err
 }
@@ -9610,7 +9642,7 @@ func (c *Collection) UpdateBatch(items []UpdateBatchItem) ([]UpdateBatchResult, 
 func (c *Collection) UpdateBatchIfNoSecondaryUniqueIndexes(items []UpdateBatchItem) ([]UpdateBatchResult, bool, error) {
 	results, batched, err := c.updateBatch(items, updateBatchModeNoSecondaryUniqueIndexes)
 	if err == nil && batched {
-		c.notifyVectorIndexesUpdateBatch(items, results)
+		err = c.notifyVectorIndexesUpdateBatch(items, results)
 	}
 	return results, batched, err
 }
@@ -9624,7 +9656,7 @@ func (c *Collection) UpdateBatchIfNoSecondaryUniqueIndexes(items []UpdateBatchIt
 func (c *Collection) UpdateBatchIfNoSecondaryUniqueIndexChanges(items []UpdateBatchItem) ([]UpdateBatchResult, bool, error) {
 	results, batched, err := c.updateBatch(items, updateBatchModeNoSecondaryUniqueIndexChanges)
 	if err == nil && batched {
-		c.notifyVectorIndexesUpdateBatch(items, results)
+		err = c.notifyVectorIndexesUpdateBatch(items, results)
 	}
 	return results, batched, err
 }

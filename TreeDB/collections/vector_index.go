@@ -185,6 +185,10 @@ type VectorIndex struct {
 	persistedEpoch         uint64
 	persistedBytesDisk     int64
 	persistedSnapshotDirty bool
+	nativePersistent       bool
+	dirtyMeta              bool
+	dirtyNodes             map[int]struct{}
+	dirtyDocs              map[string]struct{}
 	lastRebuildDuration    time.Duration
 }
 
@@ -338,6 +342,7 @@ func (c *Collection) RegisterVectorIndex(index *VectorIndex) {
 		c.vectorIndexes = make(map[string]*VectorIndex)
 	}
 	index.collection = c
+	index.nativePersistent = collectionMetaDeclaresVectorIndex(c.meta, index.name)
 	c.vectorIndexes[index.name] = index
 }
 
@@ -367,42 +372,46 @@ func (c *Collection) registeredVectorIndexes() []*VectorIndex {
 	return out
 }
 
-func (c *Collection) notifyVectorIndexesUpsert(documentIDs [][]byte) {
+func (c *Collection) notifyVectorIndexesUpsert(documentIDs [][]byte) error {
 	if len(documentIDs) == 0 {
-		return
+		return nil
 	}
 	indexes := c.registeredVectorIndexes()
 	if len(indexes) == 0 {
-		return
+		return nil
 	}
 	for _, index := range indexes {
 		for _, documentID := range documentIDs {
 			if len(documentID) == 0 {
 				continue
 			}
-			_ = index.InsertDocument(documentID)
+			if err := index.InsertDocument(documentID); err != nil {
+				return err
+			}
 		}
 	}
+	return nil
 }
 
-func (c *Collection) notifyVectorIndexesDelete(documentIDs [][]byte) {
+func (c *Collection) notifyVectorIndexesDelete(documentIDs [][]byte) error {
 	if len(documentIDs) == 0 {
-		return
+		return nil
 	}
 	indexes := c.registeredVectorIndexes()
 	if len(indexes) == 0 {
-		return
+		return nil
 	}
 	for _, index := range indexes {
 		for _, documentID := range documentIDs {
 			index.TombstoneDocumentID(documentID)
 		}
 	}
+	return nil
 }
 
-func (c *Collection) notifyVectorIndexesUpdateBatch(items []UpdateBatchItem, results []UpdateBatchResult) {
+func (c *Collection) notifyVectorIndexesUpdateBatch(items []UpdateBatchItem, results []UpdateBatchResult) error {
 	if len(items) == 0 || len(results) == 0 {
-		return
+		return nil
 	}
 	var updated [][]byte
 	for i := range items {
@@ -413,7 +422,36 @@ func (c *Collection) notifyVectorIndexesUpdateBatch(items []UpdateBatchItem, res
 			updated = append(updated, items[i].DocumentID)
 		}
 	}
-	c.notifyVectorIndexesUpsert(updated)
+	return c.notifyVectorIndexesUpsert(updated)
+}
+
+func (c *Collection) persistNativeVectorIndexIfDeclared(index *VectorIndex) error {
+	if c == nil || index == nil || !collectionMetaDeclaresVectorIndex(c.meta, index.name) || !index.needsNativeAutoPersist() {
+		return nil
+	}
+	_, err := index.SaveNativeDeltaSnapshot()
+	if errors.Is(err, errVectorIndexNotDeclared) {
+		return nil
+	}
+	return err
+}
+
+func (c *Collection) persistDirtyNativeVectorIndexes() error {
+	indexes := c.registeredVectorIndexes()
+	for _, index := range indexes {
+		if err := c.persistNativeVectorIndexIfDeclared(index); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func collectionMetaDeclaresVectorIndex(meta CollectionMeta, name string) bool {
+	if name == "" {
+		return false
+	}
+	_, ok := findVectorIndex(meta.VectorIndexes, name)
+	return ok
 }
 
 // InsertDocument adds or replaces one committed collection document in the
@@ -493,6 +531,7 @@ func (idx *VectorIndex) insertVectorLocked(documentID []byte, vector []float32) 
 	}
 	if idx.dimensions == 0 {
 		idx.dimensions = len(vector)
+		idx.markVectorMetaDirtyLocked()
 	} else if len(vector) != idx.dimensions {
 		return fmt.Errorf("collections: vector field %q in document %q has dimension %d, want %d", idx.field, documentID, len(vector), idx.dimensions)
 	}
@@ -503,10 +542,13 @@ func (idx *VectorIndex) insertVectorLocked(documentID []byte, vector []float32) 
 	node := idx.newVectorIndexNode(documentID, vector, level)
 	idx.nodes = append(idx.nodes, node)
 	idx.markGraphChangedLocked()
+	idx.markVectorNodeDirtyLocked(nodeID)
+	idx.markVectorDocDirtyLocked(documentID)
 	idx.currentNode[string(documentID)] = nodeID
 	if idx.entry < 0 {
 		idx.entry = nodeID
 		idx.maxLevel = level
+		idx.markVectorMetaDirtyLocked()
 		return nil
 	}
 	entryPoint := idx.entry
@@ -527,6 +569,7 @@ func (idx *VectorIndex) insertVectorLocked(documentID []byte, vector []float32) 
 	if level > idx.maxLevel {
 		idx.entry = nodeID
 		idx.maxLevel = level
+		idx.markVectorMetaDirtyLocked()
 	}
 	return nil
 }
@@ -582,8 +625,10 @@ func (idx *VectorIndex) tombstoneDocumentIDLocked(documentID []byte) {
 	}
 	if nodeID >= 0 && nodeID < len(idx.nodes) {
 		idx.nodes[nodeID].deleted = true
+		idx.markVectorNodeDirtyLocked(nodeID)
 	}
 	delete(idx.currentNode, string(documentID))
+	idx.markVectorDocDirtyLocked(documentID)
 	idx.markGraphChangedLocked()
 	if idx.entry == nodeID {
 		idx.entry = idx.firstLiveNodeLocked()
@@ -591,6 +636,7 @@ func (idx *VectorIndex) tombstoneDocumentIDLocked(documentID []byte) {
 		if idx.entry >= 0 {
 			idx.entry = idx.firstLiveNodeAtLevelLocked(idx.maxLevel)
 		}
+		idx.markVectorMetaDirtyLocked()
 	}
 }
 
@@ -641,6 +687,33 @@ func (idx *VectorIndex) markGraphChangedLocked() {
 	}
 }
 
+func (idx *VectorIndex) markVectorMetaDirtyLocked() {
+	if !idx.nativePersistent {
+		return
+	}
+	idx.dirtyMeta = true
+}
+
+func (idx *VectorIndex) markVectorNodeDirtyLocked(nodeID int) {
+	if !idx.nativePersistent || nodeID < 0 {
+		return
+	}
+	if idx.dirtyNodes == nil {
+		idx.dirtyNodes = make(map[int]struct{})
+	}
+	idx.dirtyNodes[nodeID] = struct{}{}
+}
+
+func (idx *VectorIndex) markVectorDocDirtyLocked(documentID []byte) {
+	if !idx.nativePersistent || len(documentID) == 0 {
+		return
+	}
+	if idx.dirtyDocs == nil {
+		idx.dirtyDocs = make(map[string]struct{})
+	}
+	idx.dirtyDocs[string(documentID)] = struct{}{}
+}
+
 func (idx *VectorIndex) maxNeighborsForLayer(layer int) int {
 	if layer == 0 {
 		return maxInt(idx.m*2, idx.m)
@@ -683,6 +756,7 @@ func (idx *VectorIndex) linkLayerLocked(fromNodeID, toNodeID, layer int) {
 		neighbors = idx.pruneLayerNeighborsLocked(fromNodeID, neighbors, limit)
 	}
 	idx.nodes[fromNodeID].neighbors[layer] = neighbors
+	idx.markVectorNodeDirtyLocked(fromNodeID)
 }
 
 func (idx *VectorIndex) pruneLayerNeighborsLocked(_ int, neighbors []vectorIndexNeighbor, limit int) []vectorIndexNeighbor {
@@ -1563,7 +1637,7 @@ func (idx *VectorIndex) Stats() VectorIndexStats {
 		MaxLevel:            idx.maxLevel,
 		Epoch:               idx.persistedEpoch,
 		BytesDisk:           idx.persistedBytesDisk,
-		SnapshotDirty:       idx.persistedSnapshotDirty,
+		SnapshotDirty:       idx.persistedSnapshotDirty || (idx.nativePersistent && idx.persistedEpoch == 0 && idx.mutationSeq != 0),
 		LastRebuildDuration: idx.lastRebuildDuration,
 	}
 	var edges int

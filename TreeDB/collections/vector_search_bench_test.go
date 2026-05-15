@@ -318,6 +318,67 @@ func BenchmarkCollectionVectorIndexIncrementalWrite(b *testing.B) {
 	}
 }
 
+func BenchmarkCollectionVectorIndexNativeRootIncrementalWrite(b *testing.B) {
+	docs := vectorBenchmarkDocs(b)
+	dims := vectorBenchmarkDims(b)
+	ids, documents := vectorBenchmarkWriteBatch(docs, dims)
+	def := VectorIndexDefinition{
+		Name:           "embedding_write",
+		Field:          "embedding",
+		Metric:         VectorMetricCosine,
+		Dimensions:     dims,
+		M:              16,
+		EfConstruction: defaultVectorIndexEfConstruction,
+		EfSearch:       defaultVectorIndexEfSearch,
+	}
+
+	b.ReportMetric(float64(docs), "docs/write")
+	b.ReportMetric(float64(dims), "dims")
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		b.StopTimer()
+		d, err := backenddb.Open(backenddb.Options{Dir: b.TempDir()})
+		if err != nil {
+			b.Fatalf("open db: %v", err)
+		}
+		mgr := NewCollectionManager(d)
+		if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
+			_ = d.Close()
+			b.Fatalf("create collection: %v", err)
+		}
+		col, err := mgr.OpenCollection("docs")
+		if err != nil {
+			_ = d.Close()
+			b.Fatalf("open collection: %v", err)
+		}
+		index, err := col.BuildVectorIndex(vectorIndexOptionsFromDefinition(def))
+		if err != nil {
+			_ = d.Close()
+			b.Fatalf("build empty native vector index: %v", err)
+		}
+		b.StartTimer()
+		vectorBenchmarkInsertBatches(b, col, ids, documents, 512)
+		if err := col.Flush(); err != nil {
+			_ = d.Close()
+			b.Fatalf("flush native vector index: %v", err)
+		}
+		b.StopTimer()
+		stats := index.Stats()
+		if stats.LiveDocs != docs {
+			_ = d.Close()
+			b.Fatalf("native incremental index live docs=%d want %d", stats.LiveDocs, docs)
+		}
+		if stats.SnapshotDirty {
+			_ = d.Close()
+			b.Fatalf("native incremental index snapshot is dirty: %+v", stats)
+		}
+		b.ReportMetric(float64(stats.BytesMemory), "index_bytes")
+		if err := d.Close(); err != nil {
+			b.Fatalf("close db: %v", err)
+		}
+	}
+}
+
 func BenchmarkCollectionVectorIndexSearch(b *testing.B) {
 	docs := vectorBenchmarkDocs(b)
 	dims := vectorBenchmarkDims(b)
