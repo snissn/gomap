@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
@@ -150,6 +152,9 @@ func hasUnappliedCommandWALFrames(dir string, appliedLSN uint64, maxSegmentBytes
 		if seg.valueLog || seg.size == 0 {
 			continue
 		}
+		if !isCommandWALSegment(seg) {
+			continue
+		}
 		maxLSN, typed, err := commandWALSegmentMaxLSN(seg.path, maxSegmentBytes, seg.seq == activeByLane[seg.lane])
 		if err != nil {
 			return false, err
@@ -164,7 +169,7 @@ func hasUnappliedCommandWALFrames(dir string, appliedLSN uint64, maxSegmentBytes
 func commandWALActiveSeqByLane(segments []logSegment) map[int]uint64 {
 	activeByLane := make(map[int]uint64)
 	for _, seg := range segments {
-		if seg.valueLog {
+		if seg.valueLog || !isCommandWALSegment(seg) {
 			continue
 		}
 		if seg.seq > activeByLane[seg.lane] {
@@ -172,6 +177,10 @@ func commandWALActiveSeqByLane(segments []logSegment) map[int]uint64 {
 		}
 	}
 	return activeByLane
+}
+
+func isCommandWALSegment(seg logSegment) bool {
+	return strings.HasPrefix(filepath.Base(seg.path), "commit-l")
 }
 
 func commandWALSegmentMaxLSN(path string, maxSegmentBytes int64, allowTerminalTail bool) (maxLSN uint64, typed bool, err error) {
@@ -224,6 +233,12 @@ func filterCommandWALSegmentsForLegacyReplay(segments []logSegment, appliedLSN u
 			}
 			continue
 		}
+		if !isCommandWALSegment(seg) {
+			if skipped {
+				filtered = append(filtered, seg)
+			}
+			continue
+		}
 		maxLSN, typed, err := commandWALSegmentMaxLSN(seg.path, maxSegmentBytes, seg.seq == activeByLane[seg.lane])
 		if err != nil {
 			return nil, err
@@ -259,6 +274,9 @@ func cleanupCommandWALSegmentsCoveredByAppliedLSN(dir string, appliedLSN uint64,
 	decisions := make([]commandWALSegmentCleanupDecision, 0, len(segments))
 	for _, seg := range segments {
 		if seg.valueLog || seg.size == 0 {
+			continue
+		}
+		if !isCommandWALSegment(seg) {
 			continue
 		}
 		active := seg.seq == activeByLane[seg.lane]

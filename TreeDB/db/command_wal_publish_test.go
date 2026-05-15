@@ -413,6 +413,41 @@ func TestCommandWALOpenFailsClosedOnNonActiveTerminalTailEvenWhenCovered(t *test
 	}
 }
 
+func TestCommandWALOpenAllowsActiveTypedTailWithHigherLegacyWALSegment(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	state := db.State()
+	if err := db.publishCommandWALRoots(state.RootPageID, state.SystemRootPageID, 1, []CommandWALLSNRange{{First: 1, Last: 1}}, true); err != nil {
+		t.Fatalf("publishCommandWALRoots: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	writeCommandWALFrame(t, dir, 1, 1)
+	appendCommandWALTail(t, dir, 1, []byte{0xde, 0xad, 0xbe})
+	if err := os.WriteFile(filepath.Join(WALDirPath(dir), "commit-000999.log"), nil, 0o600); err != nil {
+		t.Fatalf("write high legacy WAL segment: %v", err)
+	}
+
+	ro, err := Open(Options{Dir: dir, ReadOnly: true})
+	if err != nil {
+		t.Fatalf("Open read-only with active typed tail and higher legacy segment: %v", err)
+	}
+	if err := ro.Close(); err != nil {
+		t.Fatalf("Close read-only: %v", err)
+	}
+	reopen, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("Open read-write with active typed tail and higher legacy segment: %v", err)
+	}
+	if err := reopen.Close(); err != nil {
+		t.Fatalf("Close reopen: %v", err)
+	}
+}
+
 func TestCommandWALCheckpointCleanupDeletesOnlyCoveredSegments(t *testing.T) {
 	dir := t.TempDir()
 	writeCommandWALFrame(t, dir, 1, 1)
@@ -453,6 +488,9 @@ func TestCommandWALCheckpointCleanupRetainsActiveCoveredSegment(t *testing.T) {
 	dir := t.TempDir()
 	writeCommandWALFrame(t, dir, 1, 1)
 	writeCommandWALFrame(t, dir, 2, 2)
+	if err := os.WriteFile(filepath.Join(WALDirPath(dir), "commit-000999.log"), nil, 0o600); err != nil {
+		t.Fatalf("write high legacy WAL segment: %v", err)
+	}
 
 	decisions, err := cleanupCommandWALSegmentsCoveredByAppliedLSN(dir, 2, 0)
 	if err != nil {
@@ -470,6 +508,9 @@ func TestCommandWALCheckpointCleanupRetainsActiveCoveredSegment(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(WALDirPath(dir), "commit-l0-000002.log")); err != nil {
 		t.Fatalf("active covered segment stat=%v, want retained", err)
+	}
+	if _, err := os.Stat(filepath.Join(WALDirPath(dir), "commit-000999.log")); err != nil {
+		t.Fatalf("legacy WAL segment stat=%v, want retained", err)
 	}
 }
 
