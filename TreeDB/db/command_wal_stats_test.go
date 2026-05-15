@@ -13,6 +13,12 @@ func TestCommandWALStatsProveModeAndFrames(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open command WAL: %v", err)
 	}
+	dbClosed := false
+	t.Cleanup(func() {
+		if !dbClosed {
+			_ = db.Close()
+		}
+	})
 	b := db.NewBatch()
 	if err := b.Set([]byte("k"), []byte("v")); err != nil {
 		t.Fatalf("Set: %v", err)
@@ -46,6 +52,7 @@ func TestCommandWALStatsProveModeAndFrames(t *testing.T) {
 	if err := db.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
+	dbClosed = true
 }
 
 func TestCommandWALStatsDefaultDoesNotScanWAL(t *testing.T) {
@@ -53,6 +60,12 @@ func TestCommandWALStatsDefaultDoesNotScanWAL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open command WAL: %v", err)
 	}
+	dbClosed := false
+	t.Cleanup(func() {
+		if !dbClosed {
+			_ = db.Close()
+		}
+	})
 	b := db.NewBatch()
 	if err := b.Set([]byte("k"), []byte("v")); err != nil {
 		t.Fatalf("Set: %v", err)
@@ -74,6 +87,7 @@ func TestCommandWALStatsDefaultDoesNotScanWAL(t *testing.T) {
 	if err := db.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
+	dbClosed = true
 }
 
 func TestCommandWALStatsDisabledDoesNotScanWAL(t *testing.T) {

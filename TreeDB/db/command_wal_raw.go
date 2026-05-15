@@ -110,9 +110,7 @@ func (db *DB) lookupCommandWALValueLogRID(ptr page.ValuePtr, ridCache map[uint32
 		return 0, fmt.Errorf("treedb: command wal raw kv invalid value-log pointer")
 	}
 	if rid, ok := db.lookupCachedCommandWALValueLogRID(ptr); ok {
-		if _, err := os.Stat(db.valueLogManager.SegmentPath(ptr.FileID)); err == nil {
-			return rid, nil
-		}
+		return rid, nil
 	}
 	if ridCache == nil {
 		return 0, fmt.Errorf("treedb: command wal raw kv rid cache unavailable")

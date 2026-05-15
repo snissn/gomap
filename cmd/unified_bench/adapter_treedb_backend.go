@@ -112,8 +112,18 @@ func (d *treeDBBackendAdapter) Stats() map[string]string {
 	}
 	return d.db.Stats()
 }
-func (d *treeDBBackendAdapter) Print() error                 { return d.db.Print() }
-func (d *treeDBBackendAdapter) Has(key []byte) (bool, error) { return d.db.Has(key) }
+func (d *treeDBBackendAdapter) Print() error {
+	if d == nil || d.db == nil {
+		return treedbdb.ErrClosed
+	}
+	return d.db.Print()
+}
+func (d *treeDBBackendAdapter) Has(key []byte) (bool, error) {
+	if d == nil || d.db == nil {
+		return false, treedbdb.ErrClosed
+	}
+	return d.db.Has(key)
+}
 func (d *treeDBBackendAdapter) Checkpoint() error {
 	b := d.db.NewBatch()
 	if b == nil {

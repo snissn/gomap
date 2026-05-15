@@ -1,6 +1,10 @@
 package db
 
-const standaloneLeafPageLogMaxSegmentBytes int64 = 1<<32 - 5
+const (
+	standaloneLeafPageLogCRCPrefixBytes  int64 = 4
+	standaloneLeafPageLogMaxValueOffset  int64 = 1<<32 - 1
+	standaloneLeafPageLogMaxSegmentBytes       = standaloneLeafPageLogMaxValueOffset - standaloneLeafPageLogCRCPrefixBytes
+)
 
 // LeafPageLogCloser is a standalone leaf-page log that should be closed by the
 // owner after the DB is closed.

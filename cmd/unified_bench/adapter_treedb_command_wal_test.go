@@ -62,6 +62,19 @@ func TestTreeDBBackendCommandWALVariantPersistsFeatureAndAppendsTypedFrames(t *t
 	if got := closedStats["treedb.command_wal.frames"]; got != "1" {
 		t.Fatalf("closed stats command WAL frames=%q, want cached final stats (stats=%#v)", got, closedStats)
 	}
+	postClose, ok := db.(interface {
+		Has([]byte) (bool, error)
+		Print() error
+	})
+	if !ok {
+		t.Fatalf("%T does not expose post-close Has/Print test surface", db)
+	}
+	if _, err := postClose.Has([]byte("k")); err != treedbdb.ErrClosed {
+		t.Fatalf("Has after Close error=%v, want ErrClosed", err)
+	}
+	if err := postClose.Print(); err != treedbdb.ErrClosed {
+		t.Fatalf("Print after Close error=%v, want ErrClosed", err)
+	}
 }
 
 func TestTreeDBBackendPreservesOuterLeavesFlag(t *testing.T) {

@@ -13,6 +13,12 @@ func TestStandaloneLeafPageLogEnablesDirectOuterLeafWrites(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
+	dbClosed := false
+	t.Cleanup(func() {
+		if !dbClosed {
+			_ = d.Close()
+		}
+	})
 	var leafLog LeafPageLogCloser
 	t.Cleanup(func() {
 		if leafLog != nil {
@@ -37,6 +43,7 @@ func TestStandaloneLeafPageLogEnablesDirectOuterLeafWrites(t *testing.T) {
 	if err := d.Close(); err != nil {
 		t.Fatalf("Close db: %v", err)
 	}
+	dbClosed = true
 	if err := leafLog.Close(); err != nil {
 		t.Fatalf("Close leaf log: %v", err)
 	}
@@ -46,7 +53,7 @@ func TestStandaloneLeafPageLogEnablesDirectOuterLeafWrites(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
-	defer reopened.Close()
+	t.Cleanup(func() { _ = reopened.Close() })
 	got, err := reopened.Get([]byte("k0255"))
 	if err != nil {
 		t.Fatalf("Get after reopen: %v", err)
