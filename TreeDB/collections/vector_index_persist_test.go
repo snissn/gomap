@@ -167,6 +167,7 @@ func TestCollectionVectorIndexSnapshotRecomputesShortEdgeDistances(t *testing.T)
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
+	defer func() { _ = d.Close() }()
 	col := openVectorIndexTestCollection(t, d)
 	if _, err := col.InsertBatch(
 		[][]byte{[]byte("a"), []byte("b"), []byte("c"), []byte("d")},
