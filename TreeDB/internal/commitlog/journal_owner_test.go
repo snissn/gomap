@@ -141,6 +141,72 @@ func TestCommandJournalSeedsLSNFromExistingSegmentFamily(t *testing.T) {
 	}
 }
 
+func TestCommandJournalDefaultSegmentSeqUsesLatestSegment(t *testing.T) {
+	dir := t.TempDir()
+	first, err := OpenCommandJournal(dir, CommandJournalOptions{SegmentSeq: 1})
+	if err != nil {
+		t.Fatalf("OpenCommandJournal first: %v", err)
+	}
+	if _, err := first.AppendCommand(CommandEnvelope{
+		Kind:          CommandKindRawKVBatch,
+		Scope:         CommandScopeRawKV,
+		PayloadFormat: PayloadFormatRawKVBatchV1,
+	}); err != nil {
+		t.Fatalf("AppendCommand first segment: %v", err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatalf("Close first: %v", err)
+	}
+
+	second, err := OpenCommandJournal(dir, CommandJournalOptions{SegmentSeq: 2})
+	if err != nil {
+		t.Fatalf("OpenCommandJournal second: %v", err)
+	}
+	if _, err := second.AppendCommand(CommandEnvelope{
+		Kind:          CommandKindRawKVBatch,
+		Scope:         CommandScopeRawKV,
+		PayloadFormat: PayloadFormatRawKVBatchV1,
+	}); err != nil {
+		t.Fatalf("AppendCommand second segment: %v", err)
+	}
+	if err := second.Close(); err != nil {
+		t.Fatalf("Close second: %v", err)
+	}
+
+	reopen, err := OpenCommandJournal(dir, CommandJournalOptions{})
+	if err != nil {
+		t.Fatalf("OpenCommandJournal default latest: %v", err)
+	}
+	lsn, err := reopen.AppendCommand(CommandEnvelope{
+		Kind:          CommandKindRawKVBatch,
+		Scope:         CommandScopeRawKV,
+		PayloadFormat: PayloadFormatRawKVBatchV1,
+	})
+	if err != nil {
+		t.Fatalf("AppendCommand default latest: %v", err)
+	}
+	if lsn != 3 {
+		t.Fatalf("default latest LSN=%d, want 3", lsn)
+	}
+	if err := reopen.Close(); err != nil {
+		t.Fatalf("Close reopen: %v", err)
+	}
+	seg1, err := ScanCommandFrames(filepath.Join(dir, CommandSegmentName(0, 1)), Options{})
+	if err != nil {
+		t.Fatalf("ScanCommandFrames segment 1: %v", err)
+	}
+	if len(seg1) != 1 || seg1[0].LSN != 1 {
+		t.Fatalf("segment 1 frames=%+v, want only LSN 1", seg1)
+	}
+	seg2, err := ScanCommandFrames(filepath.Join(dir, CommandSegmentName(0, 2)), Options{})
+	if err != nil {
+		t.Fatalf("ScanCommandFrames segment 2: %v", err)
+	}
+	if len(seg2) != 2 || seg2[0].LSN != 2 || seg2[1].LSN != 3 {
+		t.Fatalf("segment 2 frames=%+v, want LSNs 2,3", seg2)
+	}
+}
+
 func TestCommandJournalSeedsLSNFromExistingLanes(t *testing.T) {
 	dir := t.TempDir()
 	j, err := OpenCommandJournal(dir, CommandJournalOptions{Lane: 0, SegmentSeq: 1})
