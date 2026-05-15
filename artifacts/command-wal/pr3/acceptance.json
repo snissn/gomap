@@ -128,5 +128,5 @@
     "cached public raw writer conversion is intentionally fail-closed in this PR to avoid mixed legacy payloads; follow-up must convert cached writer to typed command journal before public command-WAL writes are enabled",
     "strict split-state detection for future non-idempotent command kinds remains required before collection/catalog command support"
   ],
-  "evidence_generated_from_commit": "pending PR3 head after final review-hardening fixes"
+  "evidence_generated_from_commit": "d6b58e669a2f0395d686e2dc306a309995c6b9d8"
 }
