@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 )
 
 func TestCollectionVectorIndexSnapshotReopenSearch(t *testing.T) {
@@ -96,6 +97,201 @@ func TestCollectionVectorIndexSnapshotReopenSearch(t *testing.T) {
 	}
 	if got, want := loaded.Stats().MaxLevel, index.Stats().MaxLevel; got != want {
 		t.Fatalf("loaded max level=%d want %d", got, want)
+	}
+}
+
+func TestCollectionVectorIndexNativeRootSnapshotReopenSearch(t *testing.T) {
+	dir := t.TempDir()
+	d, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "docs",
+		VectorIndexes: []VectorIndexDefinition{{
+			Name:       "embedding",
+			Field:      "embedding",
+			Metric:     VectorMetricCosine,
+			Dimensions: 2,
+			M:          4,
+		}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("a"), []byte("b"), []byte("c")},
+		[][]byte{
+			[]byte(`{"embedding":[1,0]}`),
+			[]byte(`{"embedding":[0,1]}`),
+			[]byte(`{"embedding":[0.8,0.2]}`),
+		},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	index, err := col.BuildVectorIndex(VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4})
+	if err != nil {
+		t.Fatalf("build vector index: %v", err)
+	}
+	saveStatus, err := index.SaveSnapshot()
+	if err != nil {
+		t.Fatalf("save native snapshot: %v", err)
+	}
+	if !saveStatus.Loaded || saveStatus.RootName != collectionVectorIndexRootName("docs", "embedding") || saveStatus.RootID == 0 || saveStatus.ManifestPath != "" {
+		t.Fatalf("unexpected native save status: %+v", saveStatus)
+	}
+	if saveStatus.BytesDisk <= 0 {
+		t.Fatalf("native save status missing bytes: %+v", saveStatus)
+	}
+	if _, err := os.Stat(filepath.Join(dir, vectorIndexDirName)); !os.IsNotExist(err) {
+		t.Fatalf("native snapshot created sidecar dir err=%v", err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	reopened, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection after reopen: %v", err)
+	}
+	loaded, loadStatus, err := reopenedCol.LoadVectorIndexSnapshot(VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2})
+	if err != nil {
+		t.Fatalf("load native vector index snapshot: %v", err)
+	}
+	if loaded == nil || !loadStatus.Loaded || loadStatus.ExactFallbackReason != "" || loadStatus.RootID != saveStatus.RootID {
+		t.Fatalf("unexpected native load status loaded=%v status=%+v save=%+v", loaded != nil, loadStatus, saveStatus)
+	}
+	results, trace, err := loaded.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 2, DisableExactFallback: true})
+	if err != nil {
+		t.Fatalf("search native-loaded index: %v", err)
+	}
+	requireVectorResultIDs(t, results, "a", "c")
+	if trace.RerankCount == 0 {
+		t.Fatalf("native-loaded index did not rerank canonical rows: %+v", trace)
+	}
+	if _, err := os.Stat(filepath.Join(dir, vectorIndexDirName)); !os.IsNotExist(err) {
+		t.Fatalf("native load created sidecar dir err=%v", err)
+	}
+}
+
+func TestCollectionVectorIndexNativeRootMissingFallsBack(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "docs",
+		VectorIndexes: []VectorIndexDefinition{{
+			Name:       "embedding",
+			Field:      "embedding",
+			Metric:     VectorMetricCosine,
+			Dimensions: 2,
+		}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	loaded, status, err := col.LoadVectorIndexSnapshot(VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2})
+	if err != nil {
+		t.Fatalf("load missing native snapshot: %v", err)
+	}
+	if loaded != nil || status.Loaded || status.ExactFallbackReason != "missing_graph_root" || status.RootName != collectionVectorIndexRootName("docs", "embedding") {
+		t.Fatalf("missing native snapshot status loaded=%v status=%+v", loaded != nil, status)
+	}
+}
+
+func TestCollectionVectorIndexNativeRootIncompleteFallsBack(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	def := VectorIndexDefinition{
+		Name:       "embedding",
+		Field:      "embedding",
+		Metric:     VectorMetricCosine,
+		Dimensions: 2,
+		M:          4,
+	}
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("a"), []byte("b")},
+		[][]byte{
+			[]byte(`{"embedding":[1,0]}`),
+			[]byte(`{"embedding":[0,1]}`),
+		},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	index, err := col.BuildVectorIndex(vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		t.Fatalf("build vector index: %v", err)
+	}
+	saveStatus, err := index.SaveSnapshot()
+	if err != nil {
+		t.Fatalf("save native snapshot: %v", err)
+	}
+	rootName := saveStatus.RootName
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("nil snapshot")
+	}
+	catalog, err := loadCollectionCatalog(snap, "docs")
+	if err != nil {
+		_ = snap.Close()
+		t.Fatalf("load catalog: %v", err)
+	}
+	baseRoot := catalog.rootID(rootName)
+	baseRootIDs := map[string]uint64{rootName: baseRoot}
+	baseSystemRoot := snapshotSystemRoot(snap)
+	baseCommitSeq := snapshotCommitSeq(snap)
+	table := newCollectionRunTable(1)
+	table.DeleteSteal(vectorIndexNativeNodeKey(0))
+	table.Freeze()
+	iter := table.NewIterator(nil, nil)
+	_, _, err = d.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder([]backenddb.OrderedRootDeltaPublishInput{{
+		BaseRoot:      baseRoot,
+		Iter:          iter,
+		StoragePolicy: backenddb.OrderedRootStorageDefault,
+	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		return col.buildRootDescriptorSystemDeltaIteratorForMeta(catalog.meta, baseCommitSeq, baseSystemRoot, []string{rootName}, baseRootIDs, rootIDs)
+	})
+	_ = iter.Close()
+	resetCollectionRunTable(table)
+	_ = snap.Close()
+	if err != nil {
+		t.Fatalf("publish incomplete graph root: %v", err)
+	}
+	loaded, status, err := col.LoadVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		t.Fatalf("load incomplete native snapshot: %v", err)
+	}
+	if loaded != nil || status.Loaded || status.ExactFallbackReason != "missing_graph_root_entry" {
+		t.Fatalf("incomplete native snapshot status loaded=%v status=%+v", loaded != nil, status)
 	}
 }
 

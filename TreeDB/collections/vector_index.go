@@ -155,9 +155,10 @@ type VectorIndexRecall struct {
 	SearchTraces []VectorIndexTrace
 }
 
-// VectorIndex is an in-memory graph secondary index for collection vector
-// fields. It is intentionally not durable; callers can rebuild it from TreeDB
-// rows on startup and persisted HNSW snapshots can build on this API.
+// VectorIndex is the process-local runtime graph for collection vector fields.
+// Declared collection vector indexes can persist this runtime graph into a
+// TreeDB-managed collection root; ad hoc indexes can still be rebuilt from
+// primary collection rows.
 type VectorIndex struct {
 	collection *Collection
 
