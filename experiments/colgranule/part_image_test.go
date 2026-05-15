@@ -267,6 +267,45 @@ func TestParseColumnPartImageRejectsImpossibleSectionCount(t *testing.T) {
 	}
 }
 
+func TestParseColumnPartImageRejectsDuplicateSingletonSections(t *testing.T) {
+	part, err := BuildColumnPart(7, partTestOptions([]SortKeyColumn{{Column: "id"}}), ColumnBatch{Columns: map[string][]int64{
+		"id":        {3, 1, 2, 5, 4},
+		"time_us":   {30, 10, 20, 50, 40},
+		"value":     {300, 100, 200, 500, 400},
+		"kind_code": {1, 0, 1, 2, 0},
+		"has_reply": {1, 0, 1, 0, 1},
+	}})
+	if err != nil {
+		t.Fatalf("BuildColumnPart: %v", err)
+	}
+	imageBytes := testColumnPartImageBytes(t, part, []ColumnPartImageSection{
+		{Kind: ColumnPartImageSectionDescriptor, Category: ColumnPartImageCategoryDescriptor, Name: "descriptor_a"},
+		{Kind: ColumnPartImageSectionDescriptor, Category: ColumnPartImageCategoryDescriptor, Name: "descriptor_b"},
+	}, [][]byte{{1}, {2}})
+	if _, err := ParseColumnPartImage(imageBytes); err == nil {
+		t.Fatal("ParseColumnPartImage accepted duplicate descriptor sections")
+	}
+}
+
+func TestParseColumnPartImageRejectsManifestDirectorySection(t *testing.T) {
+	part, err := BuildColumnPart(7, partTestOptions([]SortKeyColumn{{Column: "id"}}), ColumnBatch{Columns: map[string][]int64{
+		"id":        {3, 1, 2, 5, 4},
+		"time_us":   {30, 10, 20, 50, 40},
+		"value":     {300, 100, 200, 500, 400},
+		"kind_code": {1, 0, 1, 2, 0},
+		"has_reply": {1, 0, 1, 0, 1},
+	}})
+	if err != nil {
+		t.Fatalf("BuildColumnPart: %v", err)
+	}
+	imageBytes := testColumnPartImageBytes(t, part, []ColumnPartImageSection{
+		{Kind: ColumnPartImageSectionManifest, Category: ColumnPartImageCategoryManifest, Name: "manifest"},
+	}, [][]byte{{1}})
+	if _, err := ParseColumnPartImage(imageBytes); err == nil {
+		t.Fatal("ParseColumnPartImage accepted a manifest directory section")
+	}
+}
+
 func TestColumnPartFromImageRejectsDescriptorManifestMismatch(t *testing.T) {
 	part, err := BuildColumnPart(7, partTestOptions([]SortKeyColumn{{Column: "id"}}), ColumnBatch{Columns: map[string][]int64{
 		"id":        {3, 1, 2, 5, 4},
@@ -411,4 +450,33 @@ func descriptorGranuleCountOffset(t *testing.T, image ColumnPartImage) int {
 		t.Fatal(err)
 	}
 	return descriptor.Offset + dec.offset
+}
+
+func testColumnPartImageBytes(t *testing.T, part *ColumnPart, sections []ColumnPartImageSection, payloads [][]byte) []byte {
+	t.Helper()
+	if len(sections) != len(payloads) {
+		t.Fatalf("sections=%d payloads=%d", len(sections), len(payloads))
+	}
+	sections = append([]ColumnPartImageSection(nil), sections...)
+	manifestBytes := 0
+	for attempt := 0; attempt < 8; attempt++ {
+		manifest := encodeColumnPartImageManifest(part, sections, manifestBytes)
+		offset := len(manifest)
+		for i := range sections {
+			sections[i].Offset = offset
+			sections[i].Length = len(payloads[i])
+			offset += len(payloads[i])
+		}
+		finalManifest := encodeColumnPartImageManifest(part, sections, len(manifest))
+		if len(finalManifest) == len(manifest) {
+			out := append([]byte(nil), finalManifest...)
+			for _, payload := range payloads {
+				out = append(out, payload...)
+			}
+			return out
+		}
+		manifestBytes = len(finalManifest)
+	}
+	t.Fatal("test image manifest length did not stabilize")
+	return nil
 }

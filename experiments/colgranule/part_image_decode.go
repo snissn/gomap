@@ -115,6 +115,9 @@ func ParseColumnPartImage(data []byte) (ColumnPartImage, error) {
 		if err != nil {
 			return ColumnPartImage{}, err
 		}
+		if kind == ColumnPartImageSectionManifest {
+			return ColumnPartImage{}, fmt.Errorf("colgranule: manifest is not a directory section")
+		}
 		if err := validateImageSectionCategory(kind, category); err != nil {
 			return ColumnPartImage{}, err
 		}
@@ -685,7 +688,7 @@ func attachColumnPayloadsFromImage(image ColumnPartImage, columns map[string]Col
 		for i := range column.Blocks {
 			block := &column.Blocks[i]
 			length := block.Descriptor.StoredBytes
-			if length < 0 || offset+length > sectionEnd {
+			if length < 0 || offset > sectionEnd || length > sectionEnd-offset {
 				return fmt.Errorf("colgranule: image column %s block %d length=%d outside section", name, i, length)
 			}
 			block.Granule.Payload = image.Bytes[offset : offset+length]
