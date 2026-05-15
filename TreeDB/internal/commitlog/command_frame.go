@@ -167,6 +167,9 @@ func encodeCommandFrameTo(dst []byte, env CommandEnvelope) ([]byte, error) {
 	if env.Version == 0 {
 		env.Version = CommandFrameVersion
 	}
+	if env.Version != CommandFrameVersion {
+		return nil, ErrCommandWALUnsupportedVersion
+	}
 	if env.Kind == CommandKindRawKVBatch && env.Payload == nil {
 		payload, err := EncodeRawKVBatchPayload(nil)
 		if err != nil {

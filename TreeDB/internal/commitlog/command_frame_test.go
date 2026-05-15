@@ -120,6 +120,13 @@ func TestCommandWALFormatRejectsUnsupportedRequiredVersion(t *testing.T) {
 	}
 }
 
+func TestCommandWALFormatRejectsUnsupportedEncodeVersion(t *testing.T) {
+	_, err := EncodeCommandFrame(CommandEnvelope{Version: CommandFrameVersion + 1, LSN: 1, Kind: CommandKindRawKVBatch, Scope: CommandScopeRawKV, PayloadFormat: PayloadFormatRawKVBatchV1})
+	if !errors.Is(err, ErrCommandWALUnsupportedVersion) {
+		t.Fatalf("EncodeCommandFrame error=%v, want ErrCommandWALUnsupportedVersion", err)
+	}
+}
+
 func TestCommandWALFormatRejectsUnknownCriticalFlag(t *testing.T) {
 	_, err := EncodeCommandFrame(CommandEnvelope{LSN: 1, Kind: CommandKindRawKVBatch, Scope: CommandScopeRawKV, PayloadFormat: PayloadFormatRawKVBatchV1, FeatureFlags: 1})
 	if !errors.Is(err, ErrCommandWALUnsupportedCriticalFlag) {

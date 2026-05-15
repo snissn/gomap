@@ -24,6 +24,7 @@
     "TestCommandWALFormatGoldenV1CollectionInsertBatchByID",
     "TestCommandWALFormatGoldenV1CatalogMutationPlaceholder",
     "TestCommandWALFormatRejectsUnsupportedRequiredVersion",
+    "TestCommandWALFormatRejectsUnsupportedEncodeVersion",
     "TestCommandWALFormatRejectsUnknownRequiredKind",
     "TestCommandWALFormatRejectsUnknownCriticalFlag",
     "TestCommandWALFormatSkipsUnknownNonCriticalExtensionOnlyWhenAllowed",
