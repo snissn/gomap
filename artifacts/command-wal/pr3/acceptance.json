@@ -20,6 +20,7 @@
     "collection/catalog command kinds: unchanged placeholders, not WAL-supported"
   ],
   "passed_tests": [
+    "TestCommandWALActivationRejectsLegacyCollectionWALDebt",
     "TestCommandWALCleanReopenCleansCoveredNonActiveSegmentWithNoReplayFrames",
     "TestCommandWALCrashAfterFrameBeforeRootPublishRecovers",
     "TestCommandWALCrashAfterRootAppliedLSNBeforeCleanupSkipsFrame",
@@ -27,6 +28,7 @@
     "TestCommandWALExistingRIDFenceTestsMappedToExternalRefFence",
     "TestCommandWALExistingRawReplayTestsMappedToRawKVBatch",
     "TestCommandWALExternalRefFlushRequiresAppender",
+    "TestCommandWALFeatureGateRequiresCleanLegacyWALBeforeActivation",
     "TestCommandWALFlushFailurePoisonsOpenHandle",
     "TestCommandWALIdempotentSkipRequiresDigestProof",
     "TestCommandWALInlineReplayDoesNotScanValueLogRIDMap",
@@ -73,6 +75,7 @@
     "command journal flush/sync failure poisons the open handle so later writes cannot create a durable command LSN gap before reopen recovery",
     "covered duplicate command LSNs at or below AppliedCommandLSN are tolerated during cleanup-convergence crash windows, while unapplied duplicate LSNs still fail closed",
     "covered non-active typed WAL segments are cleaned even when a clean reopen has no frames above AppliedCommandLSN",
+    "dirty command-WAL activation and missing value-log RID recovery failures expose sentinel errors for stable tests and callers",
     "empty RawKVBatch frames are explicit no-op commands that advance AppliedCommandLSN without changing roots",
     "first-time CommandWAL activation validates clean legacy WAL before writing command_wal_v1 and opens the command journal only after the required feature is persisted",
     "inline-only replay does not scan value-log RID metadata; value-log RID maps and replay appenders are built only when SetRID, current value placement, or value-log-backed leaf pages require them",
@@ -82,7 +85,8 @@
     "pointer-backed raw KV writes log SetRID and flush/sync external refs before the command frame becomes recoverable",
     "raw Set replay that exceeds the current inline threshold is re-pointerized through the legacy replay value-log appender and synced before root plus AppliedCommandLSN publication",
     "read-write command recovery rejects duplicate LSNs and unsupported command kinds before serving reads",
-    "read-write command recovery rejects legacy raw payloads in command_wal_v1 directories"
+    "read-write command recovery rejects legacy raw payloads in command_wal_v1 directories",
+    "replay leaf-page-log restoration is explicit after successful appender close as well as deferred failure cleanup"
   ],
   "unsupported_modes_and_errors": [
     "treedb.Open public cached write path with CommandWAL or command_wal_v1 returns ErrCommandWALUnsupported",
@@ -97,9 +101,9 @@
     "artifacts/command-wal/pr3/raw-kv-direct-write-benchstat.txt"
   ],
   "benchmark_summary": {
-    "backend_no_command_wal": "6.495 us/op +/- 14%, 6.094 KiB/op +/- 6%, 18 allocs/op",
-    "command_wal_raw_kv": "6.394 us/op +/- 32%, 6.504 KiB/op +/- 0%, 21 allocs/op",
-    "interpretation": "single-key direct backend command-WAL write remains throughput-neutral in this smoke benchmark with background prune disabled; command-WAL mode adds three allocations for payload/frame bookkeeping and command publish coverage on top of current backend batch cost"
+    "backend_no_command_wal": "6.204 us/op +/- 40%, 6.446 KiB/op +/- 10%, 18 allocs/op",
+    "command_wal_raw_kv": "6.997 us/op +/- 47%, 6.504 KiB/op +/- 0%, 21 allocs/op",
+    "interpretation": "single-key direct backend command-WAL write remains in the same noisy local smoke-test band; command-WAL mode adds three allocations for payload/frame bookkeeping and command publish coverage on top of current backend batch cost"
   },
   "cleanup_debt": "covered typed command WAL segments are cleaned through cleanupCommandWALSegmentsCoveredByAppliedLSN after recovery; active covered segment retention remains intentional",
   "oldest_unapplied_lsn": null,
@@ -121,5 +125,5 @@
     "cached public raw writer conversion is intentionally fail-closed in this PR to avoid mixed legacy payloads; follow-up must convert cached writer to typed command journal before public command-WAL writes are enabled",
     "strict split-state detection for future non-idempotent command kinds remains required before collection/catalog command support"
   ],
-  "evidence_generated_from_commit": "pending PR3 head after AI review fixes"
+  "evidence_generated_from_commit": "pending PR3 head after final review-hardening fixes"
 }

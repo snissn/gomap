@@ -20,6 +20,8 @@ type commandWALBatchIntent struct {
 	coveredRange       [1]CommandWALLSNRange
 }
 
+var ErrCommandWALMissingValueLogRID = errors.New("treedb: command wal missing value-log rid")
+
 func (db *DB) prepareRawKVCommandWALIntent(b *Batch) (*commandWALBatchIntent, error) {
 	if db == nil || !db.commandWAL {
 		return nil, nil
@@ -330,7 +332,7 @@ func applyRawKVCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map
 			}
 			ptr, ok := ridMap[entry.RID]
 			if !ok {
-				return fmt.Errorf("treedb: command wal missing value-log rid %d", entry.RID)
+				return fmt.Errorf("%w: %d", ErrCommandWALMissingValueLogRID, entry.RID)
 			}
 			if err := b.SetPointer(entry.Key, ptr); err != nil {
 				return err
