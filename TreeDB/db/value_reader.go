@@ -106,6 +106,17 @@ func (r valueReader) ReadLeafLogPageUnsafeTo(ptr page.LeafLogPtr, dst []byte) ([
 	return val, usedDst, nil
 }
 
+func (r valueReader) ReadLeafLogPageUnsafeView(ptr page.LeafLogPtr) ([]byte, tree.LeafLogPageViewLease, bool, error) {
+	if r.vlogs == nil {
+		return nil, nil, false, errors.New("treedb: missing value-log reader")
+	}
+	if r.leafPageCache == nil {
+		return nil, nil, false, nil
+	}
+	data, release, ok := r.leafPageCache.getViewLocked(ptr)
+	return data, release, ok, nil
+}
+
 func (r valueReader) ReadUnsafeAppend(ptr page.ValuePtr, dst []byte) ([]byte, error) {
 	if r.vlogs == nil {
 		return nil, errors.New("treedb: missing value-log reader")
