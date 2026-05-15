@@ -27,7 +27,7 @@ func TestCommandWALFeatureGateRequiresCleanLegacyWALBeforeActivation(t *testing.
 	if err := w.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	if err := ValidateCommandWALActivationClean(dir); err == nil || !strings.Contains(err.Error(), "clean legacy WAL") {
+	if err := ValidateCommandWALActivationClean(dir); !errors.Is(err, ErrCommandWALDirtyActivation) {
 		t.Fatalf("ValidateCommandWALActivationClean error=%v, want clean legacy WAL failure", err)
 	}
 }
@@ -42,7 +42,7 @@ func TestCommandWALFeatureGateRequiresCleanLegacyCollectionWALBeforeActivation(t
 		t.Fatalf("write collection wal: %v", err)
 	}
 	err := ValidateCommandWALActivationClean(dir)
-	if !errors.Is(err, ErrRecoveryRequired) || !strings.Contains(err.Error(), "clean legacy collection WAL") {
+	if !errors.Is(err, ErrRecoveryRequired) || !errors.Is(err, ErrCommandWALDirtyActivation) {
 		t.Fatalf("ValidateCommandWALActivationClean error=%v, want clean legacy collection WAL recovery failure", err)
 	}
 }
@@ -71,11 +71,22 @@ func TestSaveFormatConfigCommandWALRequiresCleanActivation(t *testing.T) {
 		t.Fatalf("write commit wal: %v", err)
 	}
 	err := SaveFormatConfig(dir, FormatConfig{RequiredFeatures: []string{RequiredFeatureCommandWALV1}})
-	if err == nil || !strings.Contains(err.Error(), "clean legacy WAL") {
+	if !errors.Is(err, ErrCommandWALDirtyActivation) {
 		t.Fatalf("SaveFormatConfig error=%v, want clean legacy WAL failure", err)
 	}
 	if _, statErr := os.Stat(filepath.Join(dir, "format.json")); !os.IsNotExist(statErr) {
 		t.Fatalf("format.json stat error=%v, want not exist after rejected activation", statErr)
+	}
+}
+
+func TestSaveFormatConfigCommandWALResaveExistingFeatureAllowsCommandSegments(t *testing.T) {
+	dir := t.TempDir()
+	if err := SaveFormatConfig(dir, FormatConfig{RequiredFeatures: []string{RequiredFeatureCommandWALV1}}); err != nil {
+		t.Fatalf("SaveFormatConfig initial: %v", err)
+	}
+	writeCommandWALSegmentFrames(t, dir, 1, 1)
+	if err := SaveFormatConfig(dir, FormatConfig{RequiredFeatures: []string{RequiredFeatureCommandWALV1}}); err != nil {
+		t.Fatalf("SaveFormatConfig resave existing command WAL feature: %v", err)
 	}
 }
 
@@ -206,7 +217,7 @@ func TestCommandWALOptionRejectsDirtyLegacyWALActivation(t *testing.T) {
 		t.Fatalf("write commit wal: %v", err)
 	}
 	_, err := Open(Options{Dir: dir, CommandWAL: true})
-	if err == nil || !strings.Contains(err.Error(), "clean legacy WAL") {
+	if !errors.Is(err, ErrCommandWALDirtyActivation) {
 		t.Fatalf("Open CommandWAL dirty legacy WAL error=%v, want clean legacy WAL failure", err)
 	}
 	if _, statErr := os.Stat(formatConfigPath(dir)); !os.IsNotExist(statErr) {

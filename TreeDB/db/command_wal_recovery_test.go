@@ -495,8 +495,15 @@ func TestCommandWALMissingRIDFenceFailsRecovery(t *testing.T) {
 	writeCommandWALRawKVFrame(t, dir, 1, 1, []commitlog.RawKVOperation{{Op: commitlog.RawKVOpSetRID, Key: []byte("k"), RID: 99}})
 
 	_, err := Open(Options{Dir: dir})
-	if err == nil || !strings.Contains(err.Error(), "missing value-log rid 99") {
+	if !errors.Is(err, ErrCommandWALMissingValueLogRID) {
 		t.Fatalf("Open error=%v, want missing rid recovery failure", err)
+	}
+}
+
+func TestCommandWALExternalRefFlushRequiresAppender(t *testing.T) {
+	db := &DB{}
+	if err := db.flushCommandWALExternalRefs(true, nil); !errors.Is(err, ErrValueLogAppenderUnavailable) {
+		t.Fatalf("flushCommandWALExternalRefs error=%v, want ErrValueLogAppenderUnavailable", err)
 	}
 }
 

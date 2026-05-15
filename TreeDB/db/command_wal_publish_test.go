@@ -362,7 +362,7 @@ func TestCommandWALWALOffOpenRejectsUnappliedFramesUntilDispatcher(t *testing.T)
 	}
 }
 
-func TestCommandWALOpenFailsClosedOnCorruptTypedSegmentEvenWhenCovered(t *testing.T) {
+func TestCommandWALOpenAllowsCoveredDuplicateLSNBeforeCleanupConverges(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(Options{Dir: dir})
 	if err != nil {
@@ -375,7 +375,39 @@ func TestCommandWALOpenFailsClosedOnCorruptTypedSegmentEvenWhenCovered(t *testin
 	if err := db.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	writeCommandWALSegmentFrames(t, dir, 1, 1, 1)
+	writeCommandWALSegmentFrames(t, dir, 1, 1)
+	writeCommandWALSegmentFrames(t, dir, 2, 1)
+
+	ro, err := Open(Options{Dir: dir, ReadOnly: true})
+	if err != nil {
+		t.Fatalf("Open read-only covered duplicate LSN: %v", err)
+	}
+	if err := ro.Close(); err != nil {
+		t.Fatalf("Close read-only: %v", err)
+	}
+	rw, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("Open read-write covered duplicate LSN: %v", err)
+	}
+	if err := rw.Close(); err != nil {
+		t.Fatalf("Close read-write: %v", err)
+	}
+}
+
+func TestCommandWALOpenFailsClosedOnUnappliedDuplicateLSN(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	state := db.State()
+	if err := db.publishCommandWALRoots(state.RootPageID, state.SystemRootPageID, 2, []CommandWALLSNRange{{First: 1, Last: 2}}, true); err != nil {
+		t.Fatalf("publishCommandWALRoots: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	writeCommandWALSegmentFrames(t, dir, 1, 3, 3)
 
 	_, err = Open(Options{Dir: dir, ReadOnly: true})
 	if !errors.Is(err, commitlog.ErrCommandWALDuplicateLSN) {

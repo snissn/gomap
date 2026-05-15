@@ -255,6 +255,12 @@ func replayCommandWALIntoBackend(db *DB, segments []logSegment, maxSegmentBytes 
 	var inlineAppender *replayInlineAppender
 	previousLeafPageLog := db.leafPageLog
 	leafPageLogInstalled := false
+	restoreLeafPageLog := func() {
+		if leafPageLogInstalled {
+			db.SetLeafPageLog(previousLeafPageLog)
+			leafPageLogInstalled = false
+		}
+	}
 	ensureReplayLogSupport := func() (map[uint64]page.ValuePtr, *replayInlineAppender, error) {
 		if inlineAppender != nil {
 			return ridMap, inlineAppender, nil
@@ -280,9 +286,7 @@ func replayCommandWALIntoBackend(db *DB, segments []logSegment, maxSegmentBytes 
 		if inlineAppender != nil {
 			_ = inlineAppender.close()
 		}
-		if leafPageLogInstalled {
-			db.SetLeafPageLog(previousLeafPageLog)
-		}
+		restoreLeafPageLog()
 	}()
 	needsLogSupport, err := commandWALReplayFramesNeedLogSupport(db, frames)
 	if err != nil {
@@ -317,6 +321,7 @@ func replayCommandWALIntoBackend(db *DB, segments []logSegment, maxSegmentBytes 
 			return err
 		}
 		inlineAppender = nil
+		restoreLeafPageLog()
 	}
 	_, err = cleanupCommandWALSegmentsCoveredByAppliedLSN(db.dir, applied, maxSegmentBytes)
 	return err
@@ -344,12 +349,12 @@ func readCommandWALReplayFrames(segments []logSegment, appliedLSN uint64, maxSeg
 		for {
 			env, err := reader.ReadCommandFrame()
 			if err == nil {
-				if _, ok := seen[env.LSN]; ok {
-					_ = reader.Close()
-					return nil, commitlog.ErrCommandWALDuplicateLSN
-				}
-				seen[env.LSN] = struct{}{}
 				if env.LSN > appliedLSN {
+					if _, ok := seen[env.LSN]; ok {
+						_ = reader.Close()
+						return nil, commitlog.ErrCommandWALDuplicateLSN
+					}
+					seen[env.LSN] = struct{}{}
 					frames = append(frames, commandWALReplayFrame{env: env})
 				}
 				continue
