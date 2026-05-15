@@ -431,6 +431,42 @@ func TestCommandWALOpenFailsClosedOnUnappliedDuplicateLSN(t *testing.T) {
 	}
 }
 
+// TestCommandWALOpenFailsClosedOnCorruptCRCEvenWhenCovered verifies that a
+// segment containing a CRC-corrupt record still fails closed on open even when
+// the covered frames in that segment have LSN <= AppliedCommandLSN. Covered
+// duplicate LSNs are tolerated (see
+// TestCommandWALOpenAllowsCoveredDuplicateLSNBeforeCleanupConverges), but true
+// data corruption (bad CRC) is not.
+func TestCommandWALOpenFailsClosedOnCorruptCRCEvenWhenCovered(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	state := db.State()
+	if err := db.publishCommandWALRoots(state.RootPageID, state.SystemRootPageID, 2, []CommandWALLSNRange{{First: 1, Last: 2}}, true); err != nil {
+		t.Fatalf("publishCommandWALRoots: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	// Write a valid covered frame (LSN=1), then append a record header whose
+	// CRC field is wrong (length=0, CRC=0x00000001). The reader will read the
+	// 8-byte header, decode an empty payload, compute CRC(empty)!=1, and
+	// return ErrCorrupt — even though LSN=1 is covered by AppliedCommandLSN=2.
+	writeCommandWALFrame(t, dir, 1, 1)
+	appendCommandWALTail(t, dir, 1, []byte{0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00})
+
+	_, err = Open(Options{Dir: dir, ReadOnly: true})
+	if !errors.Is(err, commitlog.ErrCorrupt) {
+		t.Fatalf("Open read-only error=%v, want ErrCorrupt", err)
+	}
+	_, err = Open(Options{Dir: dir})
+	if !errors.Is(err, commitlog.ErrCorrupt) {
+		t.Fatalf("Open read-write error=%v, want ErrCorrupt", err)
+	}
+}
+
 func TestCommandWALOpenFailsClosedOnNonActiveTerminalTailEvenWhenCovered(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(Options{Dir: dir})
