@@ -293,7 +293,7 @@ PR 2: shared journal ownership and `AppliedCommandLSN` plumbing:
 - `TestCommandWALSegmentMaxLSNFailsClosedOnNonIncreasingLSN`;
 - `TestCommandWALOpenFailsClosedOnCorruptTypedSegmentEvenWhenCovered`;
 - `TestCommandWALOpenFailsClosedOnNonActiveTerminalTailEvenWhenCovered`;
-- `TestCommandWALOpenAllowsActiveTypedTailWithHigherLegacyWALSegment`;
+- `TestCommandWALOpenAllowsActiveTypedTailWithHigherLegacyRawSegment`;
 - `TestCommandWALReadOnlyOpenWithUnappliedFrameFailsRecoveryRequired`;
 - `TestCommandWALReadOnlyOpenAllowsFramesCoveredByAppliedLSN`;
 - `TestCommandWALWriteOpenSkipsCoveredFramesBeforeLegacyReplay`;
@@ -382,7 +382,7 @@ Required cut points:
 | after external-ref prepare starts but before protection | no frame; orphan prepare classified after recovery |
 | after external-ref protection but before frame append | no frame; protected ref released or quarantined by recovery artifact |
 | after partial frame header | terminal tail ignored only for active tail; sealed/nonterminal segment fails |
-| after active command segment tail with higher legacy WAL file present | legacy raw WAL files do not affect typed command active-tail selection |
+| after active command segment tail with higher canonical legacy raw WAL file present | legacy raw WAL files do not affect typed command active-tail selection |
 | after complete frame before WAL sync boundary | relaxed modes follow their advertised boundary; durable mode must not acknowledge |
 | after complete recoverable frame before command apply | read-write recovery replays; read-only open fails recovery-required |
 | during command apply before root publish | copy-on-write partial pages are unreachable; recovery replays |

@@ -5,9 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"sort"
-	"strings"
 
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
@@ -147,12 +145,12 @@ func hasUnappliedCommandWALFrames(dir string, appliedLSN uint64, maxSegmentBytes
 	if err != nil {
 		return false, err
 	}
-	activeByLane := commandWALActiveSeqByLane(segments)
+	activeByLane, err := commandWALActiveSeqByLane(segments, maxSegmentBytes)
+	if err != nil {
+		return false, err
+	}
 	for _, seg := range segments {
 		if seg.valueLog || seg.size == 0 {
-			continue
-		}
-		if !isCommandWALSegment(seg) {
 			continue
 		}
 		maxLSN, typed, err := commandWALSegmentMaxLSN(seg.path, maxSegmentBytes, seg.seq == activeByLane[seg.lane])
@@ -166,21 +164,24 @@ func hasUnappliedCommandWALFrames(dir string, appliedLSN uint64, maxSegmentBytes
 	return false, nil
 }
 
-func commandWALActiveSeqByLane(segments []logSegment) map[int]uint64 {
+func commandWALActiveSeqByLane(segments []logSegment, maxSegmentBytes int64) (map[int]uint64, error) {
 	activeByLane := make(map[int]uint64)
 	for _, seg := range segments {
-		if seg.valueLog || !isCommandWALSegment(seg) {
+		if seg.valueLog || seg.size == 0 {
+			continue
+		}
+		_, typed, err := commandWALSegmentMaxLSN(seg.path, maxSegmentBytes, true)
+		if err != nil {
+			return nil, err
+		}
+		if !typed {
 			continue
 		}
 		if seg.seq > activeByLane[seg.lane] {
 			activeByLane[seg.lane] = seg.seq
 		}
 	}
-	return activeByLane
-}
-
-func isCommandWALSegment(seg logSegment) bool {
-	return strings.HasPrefix(filepath.Base(seg.path), "commit-l")
+	return activeByLane, nil
 }
 
 func commandWALSegmentMaxLSN(path string, maxSegmentBytes int64, allowTerminalTail bool) (maxLSN uint64, typed bool, err error) {
@@ -225,15 +226,12 @@ func commandWALSegmentMaxLSN(path string, maxSegmentBytes int64, allowTerminalTa
 func filterCommandWALSegmentsForLegacyReplay(segments []logSegment, appliedLSN uint64, maxSegmentBytes int64) ([]logSegment, error) {
 	var filtered []logSegment
 	skipped := false
-	activeByLane := commandWALActiveSeqByLane(segments)
+	activeByLane, err := commandWALActiveSeqByLane(segments, maxSegmentBytes)
+	if err != nil {
+		return nil, err
+	}
 	for i, seg := range segments {
 		if seg.valueLog || seg.size == 0 {
-			if skipped {
-				filtered = append(filtered, seg)
-			}
-			continue
-		}
-		if !isCommandWALSegment(seg) {
 			if skipped {
 				filtered = append(filtered, seg)
 			}
@@ -270,13 +268,13 @@ func cleanupCommandWALSegmentsCoveredByAppliedLSN(dir string, appliedLSN uint64,
 	if err != nil {
 		return nil, err
 	}
-	activeByLane := commandWALActiveSeqByLane(segments)
+	activeByLane, err := commandWALActiveSeqByLane(segments, maxSegmentBytes)
+	if err != nil {
+		return nil, err
+	}
 	decisions := make([]commandWALSegmentCleanupDecision, 0, len(segments))
 	for _, seg := range segments {
 		if seg.valueLog || seg.size == 0 {
-			continue
-		}
-		if !isCommandWALSegment(seg) {
 			continue
 		}
 		active := seg.seq == activeByLane[seg.lane]
