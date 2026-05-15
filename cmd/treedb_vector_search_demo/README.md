@@ -33,9 +33,14 @@ Use `-keep-dir` to inspect the generated datastore after the run.
 The demo defaults to TreeDB's `bench` profile because this is a benchmark
 harness. That profile uses the same index storage profile as `fast`: outer
 index leaves are stored in the leaf value log, leaf prefix compression is
-enabled, and value-log compression remains profile/default driven. Use
+enabled, and value-log compression remains profile/default driven. The demo
+also defaults to `-value-pointer-threshold 1024` and
+`-leaf-generation-segment-target 4194304` for this vector-search workload, so
+the compacted run keeps ordinary vector documents in outer leaves and gives
+`CompactStorageFull` sealed leaf generations to rewrite and GC. Use
 `-profile durable|fast|wal_on_fast|bench` to select a different first-class
-TreeDB profile.
+TreeDB profile, or pass `0` for either demo storage knob to use the selected
+profile default.
 
 The output includes the persisted TreeDB `format.json` knobs and storage-domain
 bytes for `index.db`, `value_vlog`, and `leaf_vlog`. Use

@@ -22,6 +22,7 @@ func TestExecuteSmokeCompactsReopensValidatesAndBenchmarks(t *testing.T) {
 		efConstruction:        64,
 		efSearch:              64,
 		valuePointerThreshold: defaultValuePointerThreshold,
+		leafGenerationTarget:  defaultLeafGenerationTarget,
 		minRecall:             0.5,
 		compact:               true,
 		disableExactFallback:  true,
@@ -43,6 +44,9 @@ func TestExecuteSmokeCompactsReopensValidatesAndBenchmarks(t *testing.T) {
 	}
 	if res.ValuePointerThreshold != defaultValuePointerThreshold {
 		t.Fatalf("value pointer threshold=%d want %d", res.ValuePointerThreshold, defaultValuePointerThreshold)
+	}
+	if res.LeafGenerationTarget != defaultLeafGenerationTarget {
+		t.Fatalf("leaf generation target=%d want %d", res.LeafGenerationTarget, defaultLeafGenerationTarget)
 	}
 	if res.StorageAfterCompact.TotalBytes <= 0 || res.StorageAfterCompact.BytesPerDoc <= 0 {
 		t.Fatalf("missing compacted storage report: %+v", res.StorageAfterCompact)
@@ -104,6 +108,9 @@ func TestRunJSONOutput(t *testing.T) {
 	if res.ValuePointerThreshold != defaultValuePointerThreshold {
 		t.Fatalf("JSON value pointer threshold=%d want %d", res.ValuePointerThreshold, defaultValuePointerThreshold)
 	}
+	if res.LeafGenerationTarget != defaultLeafGenerationTarget {
+		t.Fatalf("JSON leaf generation target=%d want %d", res.LeafGenerationTarget, defaultLeafGenerationTarget)
+	}
 	if res.FormatConfig == nil || !res.FormatConfig.IndexOuterLeavesInValueLog || !res.FormatConfig.LeafPrefixCompression {
 		t.Fatalf("unexpected JSON format config: %+v", res.FormatConfig)
 	}
@@ -124,6 +131,7 @@ func TestExecuteRequireLeafVLogBytesPassesWithDefaultBenchProfile(t *testing.T) 
 		efConstruction:        32,
 		efSearch:              32,
 		valuePointerThreshold: defaultValuePointerThreshold,
+		leafGenerationTarget:  defaultLeafGenerationTarget,
 		minRecall:             0.5,
 		compact:               true,
 		disableExactFallback:  true,
@@ -163,6 +171,19 @@ func TestParseConfigValuePointerThreshold(t *testing.T) {
 	}
 }
 
+func TestParseConfigLeafGenerationSegmentTarget(t *testing.T) {
+	cfg, err := parseConfig([]string{"-leaf-generation-segment-target", "8388608"})
+	if err != nil {
+		t.Fatalf("parseConfig: %v", err)
+	}
+	if cfg.leafGenerationTarget != 8388608 {
+		t.Fatalf("leaf generation target=%d want 8388608", cfg.leafGenerationTarget)
+	}
+	if _, err := parseConfig([]string{"-leaf-generation-segment-target", "-1"}); err == nil {
+		t.Fatal("parseConfig accepted negative leaf generation target")
+	}
+}
+
 func TestRunTextOutput(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -188,6 +209,7 @@ func TestRunTextOutput(t *testing.T) {
 		"TreeDB vector search demo",
 		"profile=bench",
 		"value_pointer_threshold=1024",
+		"leaf_generation_segment_target=4194304",
 		"compact_storage_full:",
 		"Storage",
 		"format index_outer_leaves_in_vlog=",

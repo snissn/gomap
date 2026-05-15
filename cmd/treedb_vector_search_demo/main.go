@@ -31,6 +31,7 @@ const (
 	defaultEfConstruct           = 128
 	defaultEfSearch              = 128
 	defaultValuePointerThreshold = 1024
+	defaultLeafGenerationTarget  = 4 << 20
 )
 
 type config struct {
@@ -48,6 +49,7 @@ type config struct {
 	efConstruction        int
 	efSearch              int
 	valuePointerThreshold int
+	leafGenerationTarget  int64
 	minRecall             float64
 	compact               bool
 	compactSyncEachPhase  bool
@@ -71,6 +73,7 @@ type result struct {
 	EfConstruction        int                            `json:"ef_construction"`
 	EfSearch              int                            `json:"ef_search"`
 	ValuePointerThreshold int                            `json:"value_pointer_threshold"`
+	LeafGenerationTarget  int64                          `json:"leaf_generation_segment_target"`
 	Compact               bool                           `json:"compact"`
 	Insert                phaseResult                    `json:"insert"`
 	Rebuild               phaseResult                    `json:"rebuild"`
@@ -182,6 +185,7 @@ func parseConfig(args []string) (config, error) {
 		efConstruction:        defaultEfConstruct,
 		efSearch:              defaultEfSearch,
 		valuePointerThreshold: defaultValuePointerThreshold,
+		leafGenerationTarget:  defaultLeafGenerationTarget,
 		minRecall:             0.95,
 		compact:               true,
 		disableExactFallback:  true,
@@ -203,6 +207,7 @@ func parseConfig(args []string) (config, error) {
 	fs.IntVar(&cfg.efConstruction, "ef-construction", cfg.efConstruction, "HNSW efConstruction")
 	fs.IntVar(&cfg.efSearch, "ef-search", cfg.efSearch, "HNSW efSearch for ANN queries")
 	fs.IntVar(&cfg.valuePointerThreshold, "value-pointer-threshold", cfg.valuePointerThreshold, "Value-log pointer threshold for the demo DB in bytes; 0 uses the selected TreeDB profile default")
+	fs.Int64Var(&cfg.leafGenerationTarget, "leaf-generation-segment-target", cfg.leafGenerationTarget, "Leaf value-log generation segment target for the demo DB in bytes; 0 uses the selected TreeDB profile default")
 	fs.Float64Var(&cfg.minRecall, "min-recall", cfg.minRecall, "Minimum validation recall@topK")
 	fs.BoolVar(&cfg.compact, "compact", cfg.compact, "Run CompactStorageFull after insert/index build and before reads")
 	fs.BoolVar(&cfg.compactSyncEachPhase, "compact-sync-each-phase", false, "Ask CompactStorage to fsync each rewrite/pack phase")
@@ -248,6 +253,9 @@ func parseConfig(args []string) (config, error) {
 	if cfg.valuePointerThreshold < 0 {
 		return config{}, errors.New("-value-pointer-threshold cannot be negative")
 	}
+	if cfg.leafGenerationTarget < 0 {
+		return config{}, errors.New("-leaf-generation-segment-target cannot be negative")
+	}
 	if cfg.minRecall < 0 || cfg.minRecall > 1 {
 		return config{}, errors.New("-min-recall must be in [0,1]")
 	}
@@ -288,10 +296,14 @@ func defaultProfile(profile treedb.Profile) treedb.Profile {
 	return profile
 }
 
-func openDemoBackend(profile treedb.Profile, dir string, valuePointerThreshold int) (*backenddb.DB, func() error, error) {
+func openDemoBackend(profile treedb.Profile, dir string, valuePointerThreshold int, leafGenerationTarget int64) (*backenddb.DB, func() error, error) {
 	opts := treedb.OptionsFor(defaultProfile(profile), dir)
 	if valuePointerThreshold > 0 {
 		opts.ValueLog.PointerThreshold = valuePointerThreshold
+	}
+	if leafGenerationTarget > 0 {
+		opts.ValueLog.Generational.Policy = treedb.ValueLogGenerationHotWarmCold
+		opts.ValueLog.Generational.LeafSegmentTargetBytes = leafGenerationTarget
 	}
 	if opts.IndexOuterLeavesInValueLog {
 		return treedb.OpenBackendWithCachedLeafLog(opts)
@@ -347,10 +359,11 @@ func execute(ctx context.Context, cfg config) (result, error) {
 		EfConstruction:        cfg.efConstruction,
 		EfSearch:              cfg.efSearch,
 		ValuePointerThreshold: cfg.valuePointerThreshold,
+		LeafGenerationTarget:  cfg.leafGenerationTarget,
 		Compact:               cfg.compact,
 	}
 
-	d, cleanupBackend, err := openDemoBackend(cfg.profile, dir, cfg.valuePointerThreshold)
+	d, cleanupBackend, err := openDemoBackend(cfg.profile, dir, cfg.valuePointerThreshold, cfg.leafGenerationTarget)
 	if err != nil {
 		return result{}, err
 	}
@@ -454,7 +467,7 @@ func execute(ctx context.Context, cfg config) (result, error) {
 	runtime.GC()
 	runtime.ReadMemStats(&beforeLoad)
 	reopenStart := time.Now()
-	d, cleanupBackend, err = openDemoBackend(cfg.profile, dir, cfg.valuePointerThreshold)
+	d, cleanupBackend, err = openDemoBackend(cfg.profile, dir, cfg.valuePointerThreshold, cfg.leafGenerationTarget)
 	if err != nil {
 		return result{}, err
 	}
@@ -753,8 +766,8 @@ func percentile(sorted []int64, p float64) int64 {
 
 func printText(w io.Writer, res result) {
 	fmt.Fprintf(w, "TreeDB vector search demo\n")
-	fmt.Fprintf(w, "dir=%s kept=%t profile=%s docs=%d dims=%d queries=%d top_k=%d m=%d ef_construction=%d ef_search=%d value_pointer_threshold=%d\n",
-		res.Dir, res.KeptDir, res.Profile, res.Docs, res.Dimensions, res.Queries, res.TopK, res.M, res.EfConstruction, res.EfSearch, res.ValuePointerThreshold)
+	fmt.Fprintf(w, "dir=%s kept=%t profile=%s docs=%d dims=%d queries=%d top_k=%d m=%d ef_construction=%d ef_search=%d value_pointer_threshold=%d leaf_generation_segment_target=%d\n",
+		res.Dir, res.KeptDir, res.Profile, res.Docs, res.Dimensions, res.Queries, res.TopK, res.M, res.EfConstruction, res.EfSearch, res.ValuePointerThreshold, res.LeafGenerationTarget)
 	fmt.Fprintf(w, "\nPhases\n")
 	fmt.Fprintf(w, "insert: %.3fs\n", res.Insert.Seconds)
 	fmt.Fprintf(w, "rebuild_native_vector_index: %.3fs native_root_bytes=%d\n", res.Rebuild.Seconds, res.NativeRootBytes)
