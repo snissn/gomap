@@ -35,7 +35,7 @@ recovery.
 
 Copying only `maindb/index.db` is not a backup. Copying only `maindb` is not a
 complete root-layout backup when `dictdb`, `templatedb`, command-WAL external
-refs, or future column side files are enabled.
+refs, or future column external-ref files are enabled.
 
 ## 2. Live Backup Support
 
@@ -76,10 +76,10 @@ Procedure:
 2. Fence command-WAL admission at a cut.
 3. Wait for external-ref prepares before the cut to commit/protect or
    abort/classify.
-4. Rotate/seal WAL, value-log, leaf-log, and side-payload files needed by the
-   cut, or record exact byte ranges plus checksums for active tails.
-5. Fsync every manifest-listed WAL segment/range and external ref to the selected
-   durability boundary.
+4. Rotate/seal WAL, value-log, leaf-log, and external-ref payload files needed
+   by the cut, or record exact byte ranges plus checksums for active tails.
+5. Fsync every manifest-listed WAL segment/range and external-ref payload to the
+   selected durability boundary.
 6. Write and fsync the backup manifest.
 7. Release writers after the filesystem snapshot is taken, or keep manifest
    retention pins until `EndBackupBarrier` after file copy completes.
@@ -114,7 +114,7 @@ Restore/open validation before serving reads:
 7. stop open before serving reads on any missing or corrupt required external ref;
 8. replay unapplied commands and publish recovered roots plus `AppliedLSN`
    atomically;
-9. classify uncommitted prepared/final side files;
+9. classify uncommitted prepared/final external-ref payload files;
 10. quarantine, but do not immediately purge, files proven orphaned.
 
 Backup/restore validation fails closed on missing required command-WAL external
@@ -124,11 +124,11 @@ cleaned.
 
 ## 4. Quarantine and Purge
 
-Quarantine records must be durable before side files are moved, hidden, or made
-unavailable for normal recovery. A quarantine manifest records source class,
-source registry path, `FileID`/part id, size, checksum, classification reason,
-recovery generation, and the proof that no committed WAL, published root,
-snapshot, read view, or backup manifest references the file.
+Quarantine records must be durable before external-ref payload files are moved,
+hidden, or made unavailable for normal recovery. A quarantine manifest records
+source class, source registry path, `FileID`/part id, size, checksum,
+classification reason, recovery generation, and the proof that no committed WAL,
+published root, snapshot, read view, or backup manifest references the file.
 
 Quarantined IDs remain reserved until purge is durable. Purge may run only
 after a successful checkpoint/cleanup boundary or an explicit operator command.

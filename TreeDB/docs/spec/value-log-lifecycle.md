@@ -44,10 +44,10 @@ truncating, rewriting, or moving value-log bytes. The first implementation must
 skip value-log records protected only by command WAL rather than patching WAL
 records in place.
 
-WAL-only protection may be released only after the transaction is covered by a
-durable `AppliedLSN`, the root descriptors containing the refs
-are durable, and the value-log reachability tracker has incorporated those
-published roots or a full reachability scan has completed.
+WAL-only protection may be released only after the command frame is covered by a
+durable `AppliedLSN`, the root descriptors containing the refs are durable, and
+the value-log reachability tracker has incorporated those published roots or a
+full reachability scan has completed.
 
 Command-WAL protected value-log refs are also capacity charges. Admission,
 GC, rewrite, checkpoint, and cleanup must charge both the logical referenced
@@ -55,8 +55,9 @@ bytes and the incremental retained segment bytes that cannot be deleted because
 of the protected ref. A tiny protected byte range that pins an otherwise
 collectible large value-log segment is charged by the retained segment debt, not
 only by the byte range. When protected value-log debt reaches the command WAL
-soft threshold, maintenance is triggered; at the stop threshold, new collection
-writes block; at the hard threshold, new collection writes fail before ack.
+soft threshold, maintenance is triggered; at the stop threshold, new mutating
+commands that would create value-log external refs block; at the hard threshold,
+those commands fail before ack.
 
 Collection read views are also retention roots. If a live `CollectionReadView`
 can reach a pending mutable, queued, or publishing unit that references a
@@ -67,7 +68,7 @@ eligible for release.
 ### 3.1 Command WAL Maintenance Barrier
 
 Every physical maintenance operation that can delete, rewrite, move, truncate,
-rename, or stop protecting value-log, leaf-log, side-payload, column,
+rename, or stop protecting value-log, leaf-log, external-ref payload, column,
 dictionary, or template bytes must acquire the backend command WAL
 maintenance barrier before computing candidates.
 
@@ -93,7 +94,7 @@ Operation-specific rules:
 | `ValueLogGC` | Merge protected command-WAL value-log file IDs into the referenced set. A protected segment is not eligible even when no published root references it. |
 | `ValueLogRewriteOnline` | Source records protected solely by command WAL must be skipped in PR1. Rewriting and patching command WAL refs is forbidden until a separate crash-tested redirect protocol exists. |
 | `LeafGenerationGC` | Leaf-log generations referenced by command WAL or collection read views are live generations. |
-| online index vacuum | Require command WAL debt zero for the roots being rewritten, or publish/checkpoint dirty command WAL first. A future root-remap maintenance WAL transaction may relax this only with crash tests. |
+| online index vacuum | Require command WAL debt zero for the roots being rewritten, or publish/checkpoint dirty command WAL first. A future root-remap maintenance command may relax this only with crash tests. |
 | offline index vacuum | Reject dirty command WAL and unclassified prepared external refs before read-only open. |
 | `CompactStorage` | The initial checkpoint must be command-WAL-aware. If it reports command WAL debt, compaction must abort before value-log rewrite, GC, leaf GC, index vacuum, or zero-byte cleanup. |
 | zero-byte cleanup | Check protected external-ref index and backup manifest pins before unlinking. |

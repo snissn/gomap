@@ -172,11 +172,10 @@ checkpoint-without-publication mode must report command WAL debt and retain all
 required WAL segments and external refs.
 
 The authoritative `AppliedLSN` must be selected by the same backend meta choice
-as the roots whose effects it covers. If stored in the system root, the system
-root update carrying `AppliedLSN` and every command-affected ordered root must
-finalize in one backend commit. If stored directly in meta, the meta write must
-select the roots and `AppliedLSN` together. A post-commit sidecar, manifest, or
-stats update is not a valid source of recovery truth.
+as the roots whose effects it covers. The V1 storage target is the gated
+meta-page field `AppliedCommandLSN`; the meta write must select the roots and
+`AppliedCommandLSN` together. A post-commit sidecar, manifest, system-root-only
+update, or stats update is not a valid source of recovery truth.
 
 Under the user-command WAL target, `DB.Checkpoint()` success must cover command
 WAL. A checkpoint that cannot publish `AppliedLSN` covering pre-cut command

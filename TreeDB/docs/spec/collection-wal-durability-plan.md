@@ -18,7 +18,7 @@ deprecated plan.
 
 Original status before deprecation: normative target contract and implementation
 gate; not current behavior until the milestone evidence named in Section 13 is
-accepted. Sections marked MUST/SHOULD defined the target production collection
+accepted. Sections marked MUST/SHOULD define the target production collection
 durability contract. Sections explicitly marked current behavior describe the
 repository before the collection WAL lands. Future-work sections remain
 non-normative. Open questions in Section 15 were required to be resolved before

@@ -206,13 +206,17 @@ requirements that the ticket and implementation PRs must satisfy.
 
 ### 11.5.1 Normative Coverage Matrix
 
+In this matrix, `AppliedLSN` names the logical command stream boundary.
+`AppliedCommandLSN` is used only when the test or statement specifically refers
+to the V1 gated meta-page storage field.
+
 | Normative statement | Owner section | Required test/evidence | Status |
 |---|---|---|---|
 | WAL-supported command visibility implies process-crash recoverability. | `user-command-wal.md` normal write path | `TestCommandWALInsertAckPublishesRootsAndAppliedLSN`, `TestCommandWALDeleteAckPublishesRootsAndAppliedLSN`, `TestCommandWALReplaceAckPublishesRootsAndAppliedLSN` | planned |
 | No V1 WAL-backed pending overlay is visible. | `collections-write-domain.md` durability boundary | `TestCommandWALFrameDurableButUnpublishedNotVisible`, `TestCommandWALNoPendingOverlayBeforeRootPublish` | planned |
 | Pre-frame failures are ordinary not-committed failures and leave no visible state. | `user-command-wal.md` normal write path | `TestCommandWALPreFrameValidationFailureLeavesNoMutation`, `TestCommandWALExternalRefPrepareFailureRejectsBeforeVisibility` | planned |
 | Post-recoverable-frame failures are commit-ambiguous or recovery-required, not retryable not-committed errors. | `user-command-wal.md` replay idempotency, `native-wire-protocol.md` ack policy | `TestCommandWALPostFramePublishFailureCommitAmbiguous`, `TestNativeWireCommandWALPublishFailureCommitAmbiguous` | planned |
-| `AppliedCommandLSN` is selected atomically with roots. | `user-command-wal.md` checkpoint and cleanup, `storage-format.md` command WAL target | `TestCommandWALRootsAndAppliedCommandLSNPublishAtomically`, model split-state rejection proof | planned |
+| Logical `AppliedLSN` is selected atomically with roots and stored in V1 as `AppliedCommandLSN`. | `user-command-wal.md` checkpoint and cleanup, `storage-format.md` command WAL target | `TestCommandWALRootsAndAppliedCommandLSNPublishAtomically`, model split-state rejection proof | planned |
 | `AppliedLSN` advances only over a contiguous command LSN prefix. | `user-command-wal.md` publish boundary | `TestCommandWALAppliedLSNContiguousPrefixOnly`, `TestCommandWALOutOfOrderPublishRejected` | planned |
 | Complete frames with missing required external refs fail closed. | `user-command-wal.md` recovery | `TestCommandWALMissingExternalRefFailsRecovery`, `TestCommandWALCorruptExternalRefFailsRecovery` | planned |
 | Terminal incomplete tails are ignored only when no complete commit marker exists. | `recovery.md` decoder outcomes | `TestCommandWALTerminalShortHeaderIgnored`, `TestCommandWALTruncatedCompleteFrameFailsClosed` | planned |
@@ -344,8 +348,8 @@ Required cut points:
 | after complete recoverable frame before command apply | read-write recovery replays; read-only open fails recovery-required |
 | during command apply before root publish | copy-on-write partial pages are unreachable; recovery replays |
 | after root publish attempt before meta selection | recovery selects old tuple or fails closed; no split state is served |
-| after roots plus `AppliedCommandLSN` selected before response | command is committed; API returns commit-ambiguous if response cannot be built |
-| after roots plus `AppliedCommandLSN` before WAL cleanup | recovery skips covered frames and cleanup resumes idempotently |
+| after roots plus logical `AppliedLSN` selected before response | command is committed; API returns commit-ambiguous if response cannot be built |
+| after roots plus logical `AppliedLSN` before WAL cleanup | recovery skips covered frames and cleanup resumes idempotently |
 | during cleanup metadata write | cleanup is retried or leaked; missing frames are never tolerated without proof |
 | during recovery replay before publish | next open resumes from previous `AppliedLSN` |
 | during recovery replay after publish before cleanup | next open skips covered frames and resumes cleanup |

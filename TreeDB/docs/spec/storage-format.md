@@ -397,7 +397,7 @@ bytes ZstdCompressedRawPayload
 
 Compression is only kept when it is a strict size win.
 
-### 8.1 Current Raw Commit Batch Payload Format
+### 8.1 Legacy Pre-Command-WAL Raw Commit Batch Payload Format
 
 This is the current pre-command-WAL raw payload format. It is not a compatibility
 target for `command_wal_v1`. When command WAL lands, raw key/value writes are
