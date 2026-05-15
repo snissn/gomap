@@ -140,14 +140,19 @@ func OpenCommandJournal(walDir string, opts CommandJournalOptions) (*CommandJour
 	if opts.Lane < 0 {
 		return nil, fmt.Errorf("commitlog: invalid command journal lane %d", opts.Lane)
 	}
-	if opts.SegmentSeq == 0 {
-		opts.SegmentSeq = 1
-	}
-	path := filepath.Join(walDir, CommandSegmentName(opts.Lane, opts.SegmentSeq))
 	owner, err := AcquireJournalOwnerWithOptions(walDir, JournalOwnerOptions{InitialLSN: opts.InitialLSN})
 	if err != nil {
 		return nil, err
 	}
+	if opts.SegmentSeq == 0 {
+		seq, err := commandJournalLatestSegmentSeq(walDir, opts.Lane)
+		if err != nil {
+			_ = owner.Close()
+			return nil, err
+		}
+		opts.SegmentSeq = seq
+	}
+	path := filepath.Join(walDir, CommandSegmentName(opts.Lane, opts.SegmentSeq))
 	// The owner lock covers scan/truncate/seed so another writer cannot append
 	// between max-LSN discovery and this journal's first reservation.
 	initialLSN, err := commandJournalInitialLSN(walDir, path, opts)
@@ -204,6 +209,30 @@ func commandJournalInitialLSN(walDir, activePath string, opts CommandJournalOpti
 		}
 	}
 	return initialLSN, nil
+}
+
+func commandJournalLatestSegmentSeq(walDir string, lane int) (uint64, error) {
+	entries, err := os.ReadDir(walDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 1, nil
+		}
+		return 0, err
+	}
+	var maxSeq uint64
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		entryLane, seq, ok := parseCommandSegmentName(entry.Name())
+		if ok && entryLane == lane && seq > maxSeq {
+			maxSeq = seq
+		}
+	}
+	if maxSeq == 0 {
+		return 1, nil
+	}
+	return maxSeq, nil
 }
 
 func (o *JournalOwner) seedInitialLSN(initialLSN uint64) error {
