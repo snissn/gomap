@@ -1591,7 +1591,7 @@ func (idx *VectorIndex) Rebuild() error {
 	idx.entry = entry
 	idx.maxLevel = maxLevel
 	idx.dimensions = dimensions
-	idx.lastRebuildDuration = time.Since(start)
+	idx.lastRebuildDuration = collectionObservedElapsedSince(start)
 	idx.markGraphChangedLocked()
 	idx.mu.Unlock()
 	idx.collection.RegisterVectorIndex(idx)
