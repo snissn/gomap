@@ -36,6 +36,8 @@ type JSONBenchPartQueryDiagnostics struct {
 	ColumnsProjected   []string `json:"columns_projected"`
 	AggregateKernel    string   `json:"aggregate_kernel"`
 	CacheState         string   `json:"cache_state"`
+	SortKey            []string `json:"sort_key"`
+	EarlyStopAvailable bool     `json:"early_stop_available"`
 }
 
 type jsonBenchPartQueryScratch struct {
@@ -49,6 +51,9 @@ type jsonBenchPartQueryScratch struct {
 	q2Seen      []uint64
 	q3Counts    []uint64
 	q4Seen      touchedBitset
+	q4FullSeen  []uint64
+	q4Min       []int64
+	q4Users     []uint32
 	q5Seen      []uint64
 	q5Min       []int64
 	q5Max       []int64
@@ -64,6 +69,13 @@ type jsonBenchPartQueryScratch struct {
 
 type jsonBenchPartQueryRunner func(*ColumnPart, queryCodeSet, *jsonBenchPartQueryScratch) (int, uint64, JSONBenchPartQueryDiagnostics, error)
 
+type JSONBenchColumnPartLayout string
+
+const (
+	JSONBenchColumnPartLayoutTimeUS                   JSONBenchColumnPartLayout = "time_us"
+	JSONBenchColumnPartLayoutClickHouseFilterUserTime JSONBenchColumnPartLayout = "clickhouse_filter_user_time"
+)
+
 var (
 	jsonBenchPartQ2Columns = []string{"kind_code", "commit_operation_code", "commit_collection_code", "did_code"}
 	jsonBenchPartQ3Columns = []string{"kind_code", "commit_operation_code", "commit_collection_code", "hour_of_day"}
@@ -72,7 +84,11 @@ var (
 )
 
 func BuildJSONBenchColumnPart(ds JSONBenchDataset, rowsPerGranule int) (*ColumnPart, error) {
-	opts, err := JSONBenchColumnPartOptions(ds, rowsPerGranule)
+	return BuildJSONBenchColumnPartForLayout(ds, rowsPerGranule, JSONBenchColumnPartLayoutTimeUS)
+}
+
+func BuildJSONBenchColumnPartForLayout(ds JSONBenchDataset, rowsPerGranule int, layout JSONBenchColumnPartLayout) (*ColumnPart, error) {
+	opts, err := JSONBenchColumnPartOptionsForLayout(ds, rowsPerGranule, layout)
 	if err != nil {
 		return nil, err
 	}
@@ -80,6 +96,10 @@ func BuildJSONBenchColumnPart(ds JSONBenchDataset, rowsPerGranule int) (*ColumnP
 }
 
 func JSONBenchColumnPartOptions(ds JSONBenchDataset, rowsPerGranule int) (ColumnStoreOptions, error) {
+	return JSONBenchColumnPartOptionsForLayout(ds, rowsPerGranule, JSONBenchColumnPartLayoutTimeUS)
+}
+
+func JSONBenchColumnPartOptionsForLayout(ds JSONBenchDataset, rowsPerGranule int, layout JSONBenchColumnPartLayout) (ColumnStoreOptions, error) {
 	if ds.Rows <= 0 {
 		return ColumnStoreOptions{}, fmt.Errorf("colgranule: JSONBench part requires positive rows, got %d", ds.Rows)
 	}
@@ -113,6 +133,10 @@ func JSONBenchColumnPartOptions(ds JSONBenchDataset, rowsPerGranule int) (Column
 		}
 		defs = append(defs, def)
 	}
+	sortKey, err := jsonBenchSortKeyForLayout(layout)
+	if err != nil {
+		return ColumnStoreOptions{}, err
+	}
 	return ColumnStoreOptions{
 		SchemaVersion: 1,
 		SchemaMode:    ColumnSchemaFixed,
@@ -121,13 +145,30 @@ func JSONBenchColumnPartOptions(ds JSONBenchDataset, rowsPerGranule int) (Column
 			Columns: []string{"row_index"},
 		},
 		SortKey: SortKey{
-			Columns: []SortKeyColumn{{Column: "time_us"}},
+			Columns: sortKey,
 		},
 		PartPolicy: ColumnPartPolicy{
 			RowsPerGranule:        rowsPerGranule,
 			DefaultCodecBlockRows: rowsPerGranule,
 		},
 	}, nil
+}
+
+func jsonBenchSortKeyForLayout(layout JSONBenchColumnPartLayout) ([]SortKeyColumn, error) {
+	switch layout {
+	case "", JSONBenchColumnPartLayoutTimeUS:
+		return []SortKeyColumn{{Column: "time_us"}}, nil
+	case JSONBenchColumnPartLayoutClickHouseFilterUserTime:
+		return []SortKeyColumn{
+			{Column: "kind_code"},
+			{Column: "commit_operation_code"},
+			{Column: "commit_collection_code"},
+			{Column: "did_code"},
+			{Column: "time_us"},
+		}, nil
+	default:
+		return nil, fmt.Errorf("colgranule: unknown JSONBench column part layout %q", layout)
+	}
 }
 
 func RunJSONBenchPartQueries(ds JSONBenchDataset, rowsPerGranule int, attempts int) ([]JSONBenchPartQueryTiming, error) {
@@ -172,6 +213,77 @@ func RunJSONBenchPartQueries(ds JSONBenchDataset, rowsPerGranule int, attempts i
 			}
 			start := time.Now()
 			rows, digest, diagnostics, err := q.run(part, codes, scratch)
+			if err != nil {
+				return nil, fmt.Errorf("%s encoded part query: %w", q.name, err)
+			}
+			elapsed := time.Since(start)
+			diagnostics.CacheState = cache
+			attempt := JSONBenchPartQueryAttempt{
+				Cache:        cache,
+				Duration:     elapsed,
+				ResultRows:   rows,
+				ResultDigest: digest,
+				Diagnostics:  diagnostics,
+			}
+			timing.Attempts = append(timing.Attempts, attempt)
+			timing.ResultRows = rows
+			timing.ResultDigest = digest
+			if timing.Best == 0 || elapsed < timing.Best {
+				timing.Best = elapsed
+				timing.BestCache = cache
+				timing.Diagnostics = diagnostics
+			}
+		}
+		out = append(out, timing)
+	}
+	return out, nil
+}
+
+func RunJSONBenchPartQ4FairnessQueries(ds JSONBenchDataset, rowsPerGranule int, attempts int) ([]JSONBenchPartQueryTiming, error) {
+	if attempts <= 0 {
+		attempts = 3
+	}
+	codes, err := jsonBenchQueryCodes(ds)
+	if err != nil {
+		return nil, err
+	}
+	timePart, err := BuildJSONBenchColumnPartForLayout(ds, rowsPerGranule, JSONBenchColumnPartLayoutTimeUS)
+	if err != nil {
+		return nil, err
+	}
+	clickHouseOrderPart, err := BuildJSONBenchColumnPartForLayout(ds, rowsPerGranule, JSONBenchColumnPartLayoutClickHouseFilterUserTime)
+	if err != nil {
+		return nil, err
+	}
+	queries := []struct {
+		name        string
+		description string
+		engine      string
+		part        *ColumnPart
+		run         jsonBenchPartQueryRunner
+	}{
+		{"Q4a", "Top 3 post veterans, time-ordered part", "encoded_column_part_q4a_time_ordered", timePart, runJSONBenchPartQ4},
+		{"Q4b", "Top 3 post veterans, ClickHouse-order part", "encoded_column_part_q4b_clickhouse_order", clickHouseOrderPart, runJSONBenchPartQ4ClickHouseOrder},
+	}
+	out := make([]JSONBenchPartQueryTiming, 0, len(queries))
+	for _, q := range queries {
+		timing := JSONBenchPartQueryTiming{
+			Query:       q.name,
+			Description: q.description,
+			Engine:      q.engine,
+			Attempts:    make([]JSONBenchPartQueryAttempt, 0, attempts),
+		}
+		scratch := &jsonBenchPartQueryScratch{
+			scanner:   q.part.NewScanner(),
+			projected: make(map[string][]int64, 6),
+		}
+		for i := 0; i < attempts; i++ {
+			cache := "cold"
+			if i > 0 {
+				cache = "warm"
+			}
+			start := time.Now()
+			rows, digest, diagnostics, err := q.run(q.part, codes, scratch)
 			if err != nil {
 				return nil, fmt.Errorf("%s encoded part query: %w", q.name, err)
 			}
@@ -473,7 +585,8 @@ func runJSONBenchPartQ4(part *ColumnPart, codes queryCodeSet, scratch *jsonBench
 			if len(top) == 3 && timestamp > top[2].t {
 				scratch.q4Pairs = top
 				bytesDecoded += timeCursor.RawBytesRead()
-				diagnostics := queryDiagnosticsFromDecodedPrefix(jsonBenchPartQ4Columns, "sort_key_early_stop_min_by_user", rowsScanned, lastGranule, blocksDecoded, bytesDecoded)
+				diagnostics := queryDiagnosticsFromDecodedPrefix(part, jsonBenchPartQ4Columns, "sort_key_early_stop_min_by_user", rowsScanned, lastGranule, blocksDecoded, bytesDecoded)
+				diagnostics.EarlyStopAvailable = true
 				return len(top), digestQ4Top(top), diagnostics, nil
 			}
 			rowsScanned++
@@ -513,7 +626,151 @@ func runJSONBenchPartQ4(part *ColumnPart, codes queryCodeSet, scratch *jsonBench
 		bytesDecoded += timeCursor.RawBytesRead()
 	}
 	scratch.q4Pairs = top
-	diagnostics := queryDiagnosticsFromDecodedPrefix(jsonBenchPartQ4Columns, "sort_key_early_stop_min_by_user", rowsScanned, lastGranule, blocksDecoded, bytesDecoded)
+	diagnostics := queryDiagnosticsFromDecodedPrefix(part, jsonBenchPartQ4Columns, "sort_key_early_stop_min_by_user", rowsScanned, lastGranule, blocksDecoded, bytesDecoded)
+	diagnostics.EarlyStopAvailable = true
+	return len(top), digestQ4Top(top), diagnostics, nil
+}
+
+func runJSONBenchPartQ4ClickHouseOrder(part *ColumnPart, codes queryCodeSet, scratch *jsonBenchPartQueryScratch) (int, uint64, JSONBenchPartQueryDiagnostics, error) {
+	kindBlocks, err := lowCardinalityBlocks(part, "kind_code")
+	if err != nil {
+		return 0, 0, JSONBenchPartQueryDiagnostics{}, err
+	}
+	operationBlocks, err := lowCardinalityBlocks(part, "commit_operation_code")
+	if err != nil {
+		return 0, 0, JSONBenchPartQueryDiagnostics{}, err
+	}
+	collectionBlocks, err := lowCardinalityBlocks(part, "commit_collection_code")
+	if err != nil {
+		return 0, 0, JSONBenchPartQueryDiagnostics{}, err
+	}
+	didBlocks, err := lowCardinalityBlocks(part, "did_code")
+	if err != nil {
+		return 0, 0, JSONBenchPartQueryDiagnostics{}, err
+	}
+	timeBlocks, err := int64Blocks(part, "time_us")
+	if err != nil {
+		return 0, 0, JSONBenchPartQueryDiagnostics{}, err
+	}
+	if err := validateAlignedBlocks(kindBlocks, operationBlocks, collectionBlocks, didBlocks, timeBlocks); err != nil {
+		return 0, 0, JSONBenchPartQueryDiagnostics{}, err
+	}
+	didCardinality, err := partCodeCardinality(part, "did_code")
+	if err != nil {
+		return 0, 0, JSONBenchPartQueryDiagnostics{}, err
+	}
+	seen, minTime, users, err := scratch.resetQ4FullDense(didCardinality)
+	if err != nil {
+		return 0, 0, JSONBenchPartQueryDiagnostics{}, err
+	}
+	sortKeyRanges := []Int64RangePredicate{
+		{Column: "kind_code", Low: codes.kindCommit, High: codes.kindCommit},
+		{Column: "commit_operation_code", Low: codes.operationCreate, High: codes.operationCreate},
+		{Column: "commit_collection_code", Low: codes.collectionPost, High: codes.collectionPost},
+	}
+	rowsScanned := 0
+	granulesSkipped := 0
+	granulesDecoded := 0
+	blocksDecoded := 0
+	bytesDecoded := 0
+	for blockIndex := range kindBlocks {
+		mayContain, skipped, err := blockMayContainSortKeyRanges(part, kindBlocks[blockIndex], sortKeyRanges)
+		if err != nil {
+			return 0, 0, JSONBenchPartQueryDiagnostics{}, err
+		}
+		if !mayContain {
+			granulesSkipped += skipped
+			continue
+		}
+		kindHeader, err := scratch.tinyCodeHeader(0, kindBlocks[blockIndex])
+		if err != nil {
+			return 0, 0, JSONBenchPartQueryDiagnostics{}, err
+		}
+		operationHeader, err := scratch.tinyCodeHeader(1, operationBlocks[blockIndex])
+		if err != nil {
+			return 0, 0, JSONBenchPartQueryDiagnostics{}, err
+		}
+		collectionHeader, err := scratch.tinyCodeHeader(2, collectionBlocks[blockIndex])
+		if err != nil {
+			return 0, 0, JSONBenchPartQueryDiagnostics{}, err
+		}
+		didHeader, err := scratch.codeHeader(3, didBlocks[blockIndex])
+		if err != nil {
+			return 0, 0, JSONBenchPartQueryDiagnostics{}, err
+		}
+		timeCursor, err := scratch.timeReader.int64Cursor(timeBlocks[blockIndex].Granule)
+		if err != nil {
+			return 0, 0, JSONBenchPartQueryDiagnostics{}, err
+		}
+		blocksDecoded += 5
+		bytesDecoded += kindBlocks[blockIndex].Granule.RawBytes
+		bytesDecoded += operationBlocks[blockIndex].Granule.RawBytes
+		bytesDecoded += collectionBlocks[blockIndex].Granule.RawBytes
+		bytesDecoded += didBlocks[blockIndex].Granule.RawBytes
+		granulesDecoded += blockGranuleSpan(kindBlocks[blockIndex])
+		rows := kindBlocks[blockIndex].Descriptor.RowCount
+		rowsScanned += rows
+		for row := 0; row < rows; row++ {
+			timestamp, err := timeCursor.Next()
+			if err != nil {
+				return 0, 0, JSONBenchPartQueryDiagnostics{}, err
+			}
+			kind := readTinyCode(kindHeader, row)
+			if kind >= kindHeader.cardinality {
+				return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: kind code %d outside cardinality %d", kind, kindHeader.cardinality)
+			}
+			if int64(kind) != codes.kindCommit {
+				continue
+			}
+			operation := readTinyCode(operationHeader, row)
+			if operation >= operationHeader.cardinality {
+				return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: operation code %d outside cardinality %d", operation, operationHeader.cardinality)
+			}
+			if int64(operation) != codes.operationCreate {
+				continue
+			}
+			event := readTinyCode(collectionHeader, row)
+			if event >= collectionHeader.cardinality {
+				return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: collection code %d outside cardinality %d", event, collectionHeader.cardinality)
+			}
+			if int64(event) != codes.collectionPost {
+				continue
+			}
+			user := readUint32Code(didHeader.data, didHeader.width, row)
+			if user >= didHeader.cardinality || user >= didCardinality {
+				return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: did code %d outside cardinality %d", user, didCardinality)
+			}
+			if bitsetTestAndSet(seen, user) {
+				if timestamp < minTime[user] {
+					minTime[user] = timestamp
+				}
+				continue
+			}
+			minTime[user] = timestamp
+			users = append(users, user)
+		}
+		if err := timeCursor.Finish(); err != nil {
+			return 0, 0, JSONBenchPartQueryDiagnostics{}, err
+		}
+		bytesDecoded += timeCursor.RawBytesRead()
+	}
+	scratch.q4Users = users
+	top := scratch.q4Pairs[:0]
+	for _, user := range users {
+		top = insertQ4Top(top, jsonBenchPartTimePair{user: int64(user), t: minTime[user]})
+	}
+	scratch.q4Pairs = top
+	diagnostics := JSONBenchPartQueryDiagnostics{
+		RowsScanned:        rowsScanned,
+		GranulesConsidered: len(part.Descriptor.Granules),
+		GranulesSkipped:    granulesSkipped,
+		GranulesDecoded:    granulesDecoded,
+		BlocksDecoded:      blocksDecoded,
+		BytesDecoded:       bytesDecoded,
+		ColumnsProjected:   append([]string(nil), jsonBenchPartQ4Columns...),
+		AggregateKernel:    "clickhouse_order_prefix_scan_min_by_user",
+		SortKey:            sortKeyColumns(part),
+	}
 	return len(top), digestQ4Top(top), diagnostics, nil
 }
 
@@ -733,6 +990,34 @@ func (s *jsonBenchPartQueryScratch) resetQ4Seen(didCardinality uint32) ([]uint64
 	return seen, nil
 }
 
+func (s *jsonBenchPartQueryScratch) resetQ4FullDense(didCardinality uint32) ([]uint64, []int64, []uint32, error) {
+	if didCardinality == 0 {
+		return nil, nil, nil, errors.New("colgranule: invalid q4 did cardinality 0")
+	}
+	cardinality := int(didCardinality)
+	words := (cardinality + 63) / 64
+	if words <= 0 || words > maxAggregateCells {
+		return nil, nil, nil, fmt.Errorf("colgranule: q4 seen words=%d exceeds cap %d", words, maxAggregateCells)
+	}
+	if cardinality > maxAggregateCells {
+		return nil, nil, nil, fmt.Errorf("colgranule: q4 dense cardinality=%d exceeds cap %d", cardinality, maxAggregateCells)
+	}
+	if cap(s.q4FullSeen) < words {
+		s.q4FullSeen = make([]uint64, words)
+	} else {
+		s.q4FullSeen = s.q4FullSeen[:words]
+	}
+	clear(s.q4FullSeen)
+	if cap(s.q4Min) < cardinality {
+		s.q4Min = make([]int64, cardinality)
+	} else {
+		s.q4Min = s.q4Min[:cardinality]
+	}
+	s.q4Users = s.q4Users[:0]
+	s.q4Pairs = s.q4Pairs[:0]
+	return s.q4FullSeen, s.q4Min, s.q4Users, nil
+}
+
 func (s *jsonBenchPartQueryScratch) resetQ5Dense(didCardinality uint32) ([]uint64, []int64, []int64, []uint32, error) {
 	if didCardinality == 0 {
 		return nil, nil, nil, nil, errors.New("colgranule: invalid q5 did cardinality 0")
@@ -907,7 +1192,7 @@ func digestQ5Top(top []jsonBenchPartSpanPair) uint64 {
 	return digest
 }
 
-func queryDiagnosticsFromDecodedPrefix(columns []string, kernel string, rowsScanned int, lastGranule int, blocksDecoded int, bytesDecoded int) JSONBenchPartQueryDiagnostics {
+func queryDiagnosticsFromDecodedPrefix(part *ColumnPart, columns []string, kernel string, rowsScanned int, lastGranule int, blocksDecoded int, bytesDecoded int) JSONBenchPartQueryDiagnostics {
 	granulesDecoded := 0
 	if lastGranule >= 0 {
 		granulesDecoded = lastGranule + 1
@@ -920,6 +1205,7 @@ func queryDiagnosticsFromDecodedPrefix(columns []string, kernel string, rowsScan
 		BytesDecoded:       bytesDecoded,
 		ColumnsProjected:   append([]string(nil), columns...),
 		AggregateKernel:    kernel,
+		SortKey:            sortKeyColumns(part),
 	}
 }
 
@@ -1066,7 +1352,44 @@ func partColumnDiagnostics(part *ColumnPart, columns []string, kernel string) JS
 		BytesDecoded:       bytes,
 		ColumnsProjected:   append([]string(nil), columns...),
 		AggregateKernel:    kernel,
+		SortKey:            sortKeyColumns(part),
 	}
+}
+
+func blockMayContainSortKeyRanges(part *ColumnPart, block ColumnBlock, ranges []Int64RangePredicate) (bool, int, error) {
+	if len(part.Marks) == 0 {
+		return true, 0, nil
+	}
+	skipped := 0
+	for granule := block.Descriptor.FirstGranule; granule <= block.Descriptor.LastGranule; granule++ {
+		if granule < 0 || granule >= len(part.Marks) {
+			return false, skipped, fmt.Errorf("colgranule: block references granule %d outside marks=%d", granule, len(part.Marks))
+		}
+		mayContain, constrained, err := part.Marks[granule].MayContainRanges(ranges)
+		if err != nil {
+			return false, skipped, err
+		}
+		if !constrained || mayContain {
+			return true, 0, nil
+		}
+		skipped++
+	}
+	return false, skipped, nil
+}
+
+func blockGranuleSpan(block ColumnBlock) int {
+	return block.Descriptor.LastGranule - block.Descriptor.FirstGranule + 1
+}
+
+func sortKeyColumns(part *ColumnPart) []string {
+	if part == nil {
+		return nil
+	}
+	out := make([]string, 0, len(part.Descriptor.SortKey))
+	for _, column := range part.Descriptor.SortKey {
+		out = append(out, column.Column)
+	}
+	return out
 }
 
 func partCodeCardinality(part *ColumnPart, column string) (uint32, error) {

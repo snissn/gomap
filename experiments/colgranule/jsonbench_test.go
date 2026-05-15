@@ -136,11 +136,84 @@ func TestRunJSONBenchPartQueriesSampleMatchesRawReference(t *testing.T) {
 			if timing.Diagnostics.AggregateKernel != "sort_key_early_stop_min_by_user" {
 				t.Fatalf("Q4 kernel=%q want sort-key early stop", timing.Diagnostics.AggregateKernel)
 			}
+			if !timing.Diagnostics.EarlyStopAvailable {
+				t.Fatalf("Q4 diagnostics missing early-stop label: %+v", timing.Diagnostics)
+			}
 		case "Q5":
 			if timing.Diagnostics.AggregateKernel != "fused_dense_span_by_user" {
 				t.Fatalf("Q5 kernel=%q want fused dense span", timing.Diagnostics.AggregateKernel)
 			}
 		}
+	}
+}
+
+func TestRunJSONBenchPartQ4FairnessQueries(t *testing.T) {
+	ds := syntheticJSONBenchDataset(256)
+	codes, err := jsonBenchQueryCodes(ds)
+	if err != nil {
+		t.Fatalf("jsonBenchQueryCodes: %v", err)
+	}
+	rawRows, rawDigest := runJSONBenchQ4(ds, codes)
+	timings, err := RunJSONBenchPartQ4FairnessQueries(ds, 32, 2)
+	if err != nil {
+		t.Fatalf("RunJSONBenchPartQ4FairnessQueries: %v", err)
+	}
+	if len(timings) != 2 {
+		t.Fatalf("fairness timings=%d want 2", len(timings))
+	}
+	seen := map[string]bool{}
+	for _, timing := range timings {
+		seen[timing.Query] = true
+		if timing.ResultRows != rawRows || timing.ResultDigest != rawDigest {
+			t.Fatalf("%s rows/digest=(%d,%d) raw=(%d,%d)", timing.Query, timing.ResultRows, timing.ResultDigest, rawRows, rawDigest)
+		}
+		if len(timing.Attempts) != 2 || timing.Attempts[0].Cache != "cold" || timing.Attempts[1].Cache != "warm" {
+			t.Fatalf("%s attempts=%+v want cold,warm labels", timing.Query, timing.Attempts)
+		}
+		switch timing.Query {
+		case "Q4a":
+			if timing.Diagnostics.AggregateKernel != "sort_key_early_stop_min_by_user" {
+				t.Fatalf("Q4a kernel=%q want early-stop kernel", timing.Diagnostics.AggregateKernel)
+			}
+			if !timing.Diagnostics.EarlyStopAvailable {
+				t.Fatalf("Q4a early_stop_available=false: %+v", timing.Diagnostics)
+			}
+			assertStringSliceEqual(t, timing.Diagnostics.SortKey, []string{"time_us"})
+		case "Q4b":
+			if timing.Diagnostics.AggregateKernel != "clickhouse_order_prefix_scan_min_by_user" {
+				t.Fatalf("Q4b kernel=%q want ClickHouse-order prefix scan", timing.Diagnostics.AggregateKernel)
+			}
+			if timing.Diagnostics.EarlyStopAvailable {
+				t.Fatalf("Q4b unexpectedly reported early-stop available: %+v", timing.Diagnostics)
+			}
+			if timing.Diagnostics.RowsScanned <= 3 {
+				t.Fatalf("Q4b rows scanned=%d want no top-3 global-time short-circuit", timing.Diagnostics.RowsScanned)
+			}
+			if timing.Diagnostics.GranulesSkipped == 0 {
+				t.Fatalf("Q4b skipped no granules; want ClickHouse-order prefix pruning diagnostics: %+v", timing.Diagnostics)
+			}
+			assertStringSliceEqual(t, timing.Diagnostics.SortKey, []string{"kind_code", "commit_operation_code", "commit_collection_code", "did_code", "time_us"})
+		default:
+			t.Fatalf("unexpected fairness query %s", timing.Query)
+		}
+	}
+	if !seen["Q4a"] || !seen["Q4b"] {
+		t.Fatalf("fairness queries seen=%v want Q4a and Q4b", seen)
+	}
+}
+
+func TestRunJSONBenchPartQ4EarlyStopRejectsClickHouseOrder(t *testing.T) {
+	ds := syntheticJSONBenchDataset(128)
+	part, err := BuildJSONBenchColumnPartForLayout(ds, 32, JSONBenchColumnPartLayoutClickHouseFilterUserTime)
+	if err != nil {
+		t.Fatalf("BuildJSONBenchColumnPartForLayout: %v", err)
+	}
+	codes, err := jsonBenchQueryCodes(ds)
+	if err != nil {
+		t.Fatalf("jsonBenchQueryCodes: %v", err)
+	}
+	if _, _, _, err := runJSONBenchPartQ4(part, codes, &jsonBenchPartQueryScratch{}); err == nil {
+		t.Fatal("runJSONBenchPartQ4 accepted ClickHouse-order part, want fail-closed early-stop precondition")
 	}
 }
 
@@ -338,6 +411,18 @@ func assertNotContainsString(t *testing.T, values []string, unwanted string) {
 	for _, value := range values {
 		if value == unwanted {
 			t.Fatalf("%q unexpectedly found in %v", unwanted, values)
+		}
+	}
+}
+
+func assertStringSliceEqual(t *testing.T, got []string, want []string) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("slice=%v want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("slice=%v want %v", got, want)
 		}
 	}
 }
