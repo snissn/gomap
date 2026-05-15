@@ -9,7 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync/atomic"
+	"sync"
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
@@ -17,9 +17,36 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
-// testCommandWALRecoveryFailAfterLSN is process-global by design. Tests that
-// set it must not run in parallel with command-WAL recovery tests.
-var testCommandWALRecoveryFailAfterLSN atomic.Uint64
+// testCommandWALRecoveryFailAfterLSNByDir lets crash-recovery tests inject a
+// one-shot per-DB recovery failure without exposing unrelated DB opens to a
+// process-global failpoint.
+var testCommandWALRecoveryFailAfterLSNByDir sync.Map
+
+func testCommandWALRecoveryFailpointKey(dir string) string {
+	if abs, err := filepath.Abs(dir); err == nil {
+		return abs
+	}
+	return filepath.Clean(dir)
+}
+
+func setTestCommandWALRecoveryFailAfterLSN(dir string, lsn uint64) {
+	key := testCommandWALRecoveryFailpointKey(dir)
+	if lsn == 0 {
+		testCommandWALRecoveryFailAfterLSNByDir.Delete(key)
+		return
+	}
+	testCommandWALRecoveryFailAfterLSNByDir.Store(key, lsn)
+}
+
+func takeTestCommandWALRecoveryFailAfterLSN(dir string) uint64 {
+	key := testCommandWALRecoveryFailpointKey(dir)
+	value, ok := testCommandWALRecoveryFailAfterLSNByDir.LoadAndDelete(key)
+	if !ok {
+		return 0
+	}
+	lsn, _ := value.(uint64)
+	return lsn
+}
 
 type logSegment struct {
 	seq      uint64
@@ -288,16 +315,18 @@ func replayCommandWALIntoBackend(db *DB, segments []logSegment, maxSegmentBytes 
 			return err
 		}
 		applied = frame.env.LSN
-		if target := testCommandWALRecoveryFailAfterLSN.Load(); target != 0 && frame.env.LSN == target {
-			testCommandWALRecoveryFailAfterLSN.Store(0)
+		if target := db.testCommandWALRecoveryFailAfterLSN.Load(); target != 0 && frame.env.LSN == target {
+			db.testCommandWALRecoveryFailAfterLSN.Store(0)
 			return errTestFinalizeCommitFailpoint
 		}
 	}
-	if err := inlineAppender.syncIfDirty(); err != nil {
-		return err
-	}
-	if err := inlineAppender.close(); err != nil {
-		return err
+	if inlineAppender != nil {
+		if err := inlineAppender.syncIfDirty(); err != nil {
+			return err
+		}
+		if err := inlineAppender.close(); err != nil {
+			return err
+		}
 	}
 	_, err = cleanupCommandWALSegmentsCoveredByAppliedLSN(db.dir, db.meta.AppliedCommandLSN, maxSegmentBytes)
 	return err

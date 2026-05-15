@@ -355,6 +355,10 @@ PR3 implementation evidence:
   frame before root visibility.
 - Command journal flush/sync failures poison the open handle so no later write
   can create a durable LSN gap before reopen recovery.
+- Operators and callers must treat a poisoned command-WAL handle as
+  recovery-required: close the handle and reopen read-write before issuing more
+  writes. The poisoned state is intentionally not cleared by an in-process
+  retry.
 - Public cached-mode command WAL writes remain fail-closed until the cached
   writer is converted to the shared typed command journal. This prevents mixed
   legacy raw records in `command_wal_v1` directories.

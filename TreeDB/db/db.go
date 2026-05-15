@@ -250,8 +250,13 @@ type DB struct {
 	testSystemRootWarmMaxDeltaOps int
 	// testFailWriteMeta forces writeMeta to fail before mutating the target meta
 	// page so tests can exercise pre-publish cleanup paths.
-	testFailWriteMeta       atomic.Bool
-	testFailCommandWALFlush atomic.Bool
+	testFailWriteMeta                  atomic.Bool
+	testFailCommandWALFlush            atomic.Bool
+	testCommandWALRecoveryFailAfterLSN atomic.Uint64
+	// commandWALFlushPoisoned is intentionally cleared only by closing and
+	// reopening the DB. After an append reached the journal but flush/sync
+	// failed, continuing on the same handle could create an unrecoverable LSN
+	// gap.
 	commandWALFlushPoisoned atomic.Bool
 	closing                 atomic.Bool
 }
@@ -1415,6 +1420,9 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	}
 	db.ghostManager.start()
 	db.idx.Store(gen)
+	if target := takeTestCommandWALRecoveryFailAfterLSN(opts.Dir); target != 0 {
+		db.testCommandWALRecoveryFailAfterLSN.Store(target)
+	}
 
 	gen.zipper.SetFillTargets(opts.LeafFillTargetPPM, opts.InternalFillTargetPPM)
 	gen.zipper.SetPiggybackCompaction(!opts.DisablePiggybackCompaction)
@@ -1484,7 +1492,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 			}
 		}
 		if needsCommandWALFormat {
-			cfg, err := formatConfigFromOptionsPreservingRequiredFeatures(opts)
+			cfg, _, err := formatConfigFromOptionsPreservingRequiredFeatures(opts)
 			if err != nil {
 				db.Close()
 				return nil, err

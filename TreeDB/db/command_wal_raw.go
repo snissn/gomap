@@ -249,8 +249,10 @@ func applyRawKVCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map
 		db.mu.RUnlock()
 		return db.publishCommandWALRoots(rootID, sysRootID, env.LSN, []CommandWALLSNRange{{First: env.LSN, Last: env.LSN}}, true)
 	}
-	if err := inlineAppender.syncIfDirty(); err != nil {
-		return err
+	if inlineAppender != nil {
+		if err := inlineAppender.syncIfDirty(); err != nil {
+			return err
+		}
 	}
 	if raw, ok := b.(*Batch); ok {
 		return raw.writeWithCommandWALIntent(true, &commandWALBatchIntent{

@@ -276,8 +276,8 @@ func TestCommandWALRecoveryCrashDuringReplayResumesFromAppliedLSN(t *testing.T) 
 	writeCommandWALRawKVFrame(t, dir, 1, 1, []commitlog.RawKVOperation{{Op: commitlog.RawKVOpSet, Key: []byte("a"), Value: []byte("1")}})
 	writeCommandWALRawKVFrame(t, dir, 1, 2, []commitlog.RawKVOperation{{Op: commitlog.RawKVOpSet, Key: []byte("b"), Value: []byte("2")}})
 
-	testCommandWALRecoveryFailAfterLSN.Store(1)
-	t.Cleanup(func() { testCommandWALRecoveryFailAfterLSN.Store(0) })
+	setTestCommandWALRecoveryFailAfterLSN(dir, 1)
+	t.Cleanup(func() { setTestCommandWALRecoveryFailAfterLSN(dir, 0) })
 	_, err := Open(Options{Dir: dir})
 	if !errors.Is(err, errTestFinalizeCommitFailpoint) {
 		t.Fatalf("Open with recovery failpoint error=%v, want failpoint", err)
