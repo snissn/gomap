@@ -379,6 +379,62 @@ func BenchmarkCollectionVectorIndexNativeRootIncrementalWrite(b *testing.B) {
 	}
 }
 
+func BenchmarkCollectionVectorIndexNativeRootRebuild(b *testing.B) {
+	docs := vectorBenchmarkDocs(b)
+	dims := vectorBenchmarkDims(b)
+	ids, documents := vectorBenchmarkWriteBatch(docs, dims)
+	def := VectorIndexDefinition{
+		Name:           "embedding_rebuild",
+		Field:          "embedding",
+		Metric:         VectorMetricCosine,
+		Dimensions:     dims,
+		M:              16,
+		EfConstruction: defaultVectorIndexEfConstruction,
+		EfSearch:       defaultVectorIndexEfSearch,
+	}
+
+	b.ReportMetric(float64(docs), "docs/rebuild")
+	b.ReportMetric(float64(dims), "dims")
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		b.StopTimer()
+		d, err := backenddb.Open(backenddb.Options{Dir: b.TempDir()})
+		if err != nil {
+			b.Fatalf("open db: %v", err)
+		}
+		mgr := NewCollectionManager(d)
+		if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
+			_ = d.Close()
+			b.Fatalf("create collection: %v", err)
+		}
+		col, err := mgr.OpenCollection("docs")
+		if err != nil {
+			_ = d.Close()
+			b.Fatalf("open collection: %v", err)
+		}
+		vectorBenchmarkInsertBatches(b, col, ids, documents, 512)
+		b.StartTimer()
+		status, err := col.RebuildVectorIndex(def.Name)
+		b.StopTimer()
+		if err != nil {
+			_ = d.Close()
+			b.Fatalf("rebuild native vector index: %v", err)
+		}
+		if !status.NativeRootLoaded || status.Stats.LiveDocs != docs || status.RootID == 0 {
+			_ = d.Close()
+			b.Fatalf("unexpected native rebuild status: %+v", status)
+		}
+		b.ReportMetric(float64(status.NativeRootBytes), "native_root_bytes")
+		b.ReportMetric(float64(status.Stats.BytesMemory), "index_bytes")
+		b.ReportMetric(float64(status.NativeRootBytes)/float64(docs), "native_root_bytes/doc")
+		b.ReportMetric(float64(status.Stats.BytesMemory)/float64(docs), "index_bytes/doc")
+		if err := d.Close(); err != nil {
+			b.Fatalf("close db: %v", err)
+		}
+	}
+}
+
 func BenchmarkCollectionVectorIndexSearch(b *testing.B) {
 	docs := vectorBenchmarkDocs(b)
 	dims := vectorBenchmarkDims(b)
