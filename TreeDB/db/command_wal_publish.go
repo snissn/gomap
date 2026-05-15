@@ -15,7 +15,7 @@ import (
 )
 
 var (
-	ErrCommandWALSplitPublish         = errors.New("treedb: command wal roots require matching applied lsn")
+	ErrCommandWALSplitPublish         = errors.New("treedb: command wal roots changed without advancing applied lsn")
 	ErrCommandWALAppliedLSNRegression = errors.New("treedb: command wal applied lsn regression")
 	ErrCommandWALAppliedLSNNonContig  = errors.New("treedb: command wal applied lsn non-contiguous")
 )
@@ -157,10 +157,7 @@ func hasUnappliedCommandWALFrames(dir string, appliedLSN uint64, maxSegmentBytes
 	if err != nil {
 		return false, err
 	}
-	activeByLane, err := commandWALActiveSeqByLane(segments, maxSegmentBytes)
-	if err != nil {
-		return false, err
-	}
+	activeByLane := commandWALActiveSeqByLane(segments)
 	for _, seg := range segments {
 		if seg.valueLog || seg.size == 0 {
 			continue
@@ -179,7 +176,7 @@ func hasUnappliedCommandWALFrames(dir string, appliedLSN uint64, maxSegmentBytes
 	return false, nil
 }
 
-func commandWALActiveSeqByLane(segments []logSegment, _ int64) (map[int]uint64, error) {
+func commandWALActiveSeqByLane(segments []logSegment) map[int]uint64 {
 	activeByLane := make(map[int]uint64)
 	for _, seg := range segments {
 		if seg.valueLog {
@@ -192,7 +189,7 @@ func commandWALActiveSeqByLane(segments []logSegment, _ int64) (map[int]uint64, 
 			activeByLane[seg.lane] = seg.seq
 		}
 	}
-	return activeByLane, nil
+	return activeByLane
 }
 
 func isCommandWALLaneSegment(seg logSegment) bool {
@@ -252,10 +249,7 @@ func scanCommandWALSegment(path string, maxSegmentBytes int64, allowTerminalTail
 func filterCommandWALSegmentsForLegacyReplay(segments []logSegment, appliedLSN uint64, maxSegmentBytes int64) ([]logSegment, error) {
 	var filtered []logSegment
 	skipped := false
-	activeByLane, err := commandWALActiveSeqByLane(segments, maxSegmentBytes)
-	if err != nil {
-		return nil, err
-	}
+	activeByLane := commandWALActiveSeqByLane(segments)
 	for i, seg := range segments {
 		if seg.valueLog || seg.size == 0 {
 			if skipped {
@@ -280,7 +274,10 @@ func filterCommandWALSegmentsForLegacyReplay(segments []logSegment, appliedLSN u
 			}
 			continue
 		}
-		if scan.minLSN <= appliedLSN && scan.maxLSN > appliedLSN {
+		// Covered typed segments are skipped by the maxLSN check below. This
+		// branch is only the crossing case where part of the segment is already
+		// published and part would still need command replay.
+		if scan.maxLSN > appliedLSN && scan.minLSN <= appliedLSN {
 			return nil, fmt.Errorf("%w: command WAL segment %s partially applied range [%d,%d] over applied LSN %d", ErrRecoveryRequired, filepath.Base(seg.path), scan.minLSN, scan.maxLSN, appliedLSN)
 		}
 		if scan.maxLSN <= appliedLSN {
@@ -304,10 +301,7 @@ func cleanupCommandWALSegmentsCoveredByAppliedLSN(dir string, appliedLSN uint64,
 	if err != nil {
 		return nil, err
 	}
-	activeByLane, err := commandWALActiveSeqByLane(segments, maxSegmentBytes)
-	if err != nil {
-		return nil, err
-	}
+	activeByLane := commandWALActiveSeqByLane(segments)
 	decisions := make([]commandWALSegmentCleanupDecision, 0, len(segments))
 	var scanErr error
 	for _, seg := range segments {

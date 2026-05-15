@@ -43,7 +43,7 @@
     "TestCommandWALLegacyMetaDecodeIgnoresReservedAppliedLSNBytes",
     "TestCommandWALOpenAllowsActivePartialFirstFrameTail",
     "TestCommandWALOpenAllowsActiveTypedTailWithHigherPartialLegacyAliasSegment",
-    "TestCommandWALOpenAllowsActiveTypedTailWithHigherLegacyRawSegment",
+    "TestCommandWALOpenFailsClosedOnTypedTailWithHigherLegacyRawSegment",
     "TestCommandWALOpenFailsClosedOnCorruptTypedSegmentEvenWhenCovered",
     "TestCommandWALOpenFailsClosedOnNonActiveTerminalTailEvenWhenCovered",
     "TestCommandWALOpenFailsClosedOnNonActivePartialFirstFrameTail",
