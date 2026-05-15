@@ -119,6 +119,7 @@ type CommandJournalOptions struct {
 	Lane int
 	// SegmentSeq selects the segment sequence to append to. Zero means append to
 	// the latest existing segment for Lane, or segment 1 when the lane is empty.
+	// Callers that want rotation must choose the next sequence explicitly.
 	SegmentSeq uint64
 	// MaxSegmentSize caps individual command frame payloads; zero uses the
 	// commitlog default.

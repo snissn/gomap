@@ -1442,39 +1442,39 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	gen.zipper.SetMaintenanceOpsPerCoalesce(opts.MaintenanceOpsPerCoalesce)
 
 	if err := db.recover(); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, err
 	}
 
 	segments, err := listRecoverySegments(opts.Dir)
 	if err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, err
 	}
 	needsCommandWALFormat, err := commandWALFormatNeedsActivation(opts)
 	if err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, err
 	}
 	if needsCommandWALFormat {
 		if err := ValidateCommandWALActivationClean(opts.Dir); err != nil {
-			db.Close()
+			_ = db.Close()
 			return nil, err
 		}
 	}
 	if opts.CommandWAL {
 		if err := replayCommandWALIntoBackend(db, segments, opts.WALMaxSegmentBytes, opts.ValueLog.DictLookup); err != nil {
-			db.Close()
+			_ = db.Close()
 			return nil, err
 		}
 	} else {
 		if err := requireNoUnappliedCommandWAL(opts.Dir, db.meta.AppliedCommandLSN, opts.WALMaxSegmentBytes); err != nil {
-			db.Close()
+			_ = db.Close()
 			return nil, err
 		}
 		if opts.Durability != DurabilityWALOffRelaxed {
 			if err := replayWALIntoBackend(db, segments, opts.WALMaxSegmentBytes, opts.ValueLog.DictLookup); err != nil {
-				db.Close()
+				_ = db.Close()
 				return nil, err
 			}
 		}
@@ -1483,12 +1483,12 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		commandSegmentSeq := uint64(0)
 		journalSegments, err := listRecoverySegments(opts.Dir)
 		if err != nil {
-			db.Close()
+			_ = db.Close()
 			return nil, err
 		}
 		activeSeqByLane, err := commandWALActiveSeqByLane(journalSegments, opts.WALMaxSegmentBytes)
 		if err != nil {
-			db.Close()
+			_ = db.Close()
 			return nil, err
 		}
 		for _, seq := range activeSeqByLane {
@@ -1499,7 +1499,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		if needsCommandWALFormat {
 			cfg, _, err := formatConfigFromOptionsPreservingRequiredFeatures(opts)
 			if err != nil {
-				db.Close()
+				_ = db.Close()
 				return nil, err
 			}
 			// Persist the required feature before returning a mutable DB. If the
@@ -1512,7 +1512,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 			// transient post-recovery WAL directory shape instead of the explicit
 			// activation boundary.
 			if err := writeFormatConfig(opts.Dir, cfg); err != nil {
-				db.Close()
+				_ = db.Close()
 				return nil, err
 			}
 		}
@@ -1523,7 +1523,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 			SegmentSeq:     commandSegmentSeq,
 		})
 		if err != nil {
-			db.Close()
+			_ = db.Close()
 			return nil, err
 		}
 		db.commandJournal = journal
