@@ -9586,7 +9586,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		owner, err := commitlog.AcquireJournalOwner(walDir)
 		if err != nil {
 			cleanupJournalOpenFailure(-1)
-			return nil, err
+			return nil, fmt.Errorf("cachingdb: acquire command journal owner for %s: %w", walDir, err)
 		}
 		db.journalOwner = owner
 		for i := range db.lanes {
