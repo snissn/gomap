@@ -30,6 +30,13 @@ GOWORK=off go run ./cmd/treedb_vector_search_demo \
 
 Use `-keep-dir` to inspect the generated datastore after the run.
 
+The demo defaults to TreeDB's `bench` profile because this is a benchmark
+harness. That profile uses the same index storage profile as `fast`: outer
+index leaves are stored in the leaf value log, leaf prefix compression is
+enabled, and value-log compression remains profile/default driven. Use
+`-profile durable|fast|wal_on_fast|bench` to select a different first-class
+TreeDB profile.
+
 The output includes the persisted TreeDB `format.json` knobs and storage-domain
 bytes for `index.db`, `value_vlog`, and `leaf_vlog`. Use
 `-require-value-log-bytes` or `-require-leaf-vlog-bytes` when a benchmark is

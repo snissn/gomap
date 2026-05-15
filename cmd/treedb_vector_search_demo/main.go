@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
@@ -34,6 +35,7 @@ const (
 type config struct {
 	dir                  string
 	keepDir              bool
+	profile              treedb.Profile
 	docs                 int
 	dimensions           int
 	queries              int
@@ -56,6 +58,7 @@ type config struct {
 type result struct {
 	Dir                  string                         `json:"dir"`
 	KeptDir              bool                           `json:"kept_dir"`
+	Profile              string                         `json:"profile"`
 	Docs                 int                            `json:"docs"`
 	Dimensions           int                            `json:"dimensions"`
 	Queries              int                            `json:"queries"`
@@ -178,10 +181,13 @@ func parseConfig(args []string) (config, error) {
 		minRecall:            0.95,
 		compact:              true,
 		disableExactFallback: true,
+		profile:              treedb.ProfileBench,
 	}
+	profileRaw := string(cfg.profile)
 	fs := flag.NewFlagSet("treedb_vector_search_demo", flag.ContinueOnError)
 	fs.StringVar(&cfg.dir, "dir", "", "TreeDB directory to create; empty uses a temporary directory")
 	fs.BoolVar(&cfg.keepDir, "keep-dir", false, "Keep the DB directory after the run")
+	fs.StringVar(&profileRaw, "profile", profileRaw, "TreeDB profile: durable, fast, wal_on_fast, or bench")
 	fs.IntVar(&cfg.docs, "docs", cfg.docs, "Number of synthetic documents to load")
 	fs.IntVar(&cfg.dimensions, "dims", cfg.dimensions, "Vector dimensions per document")
 	fs.IntVar(&cfg.queries, "queries", cfg.queries, "Number of ANN search queries to benchmark")
@@ -202,6 +208,11 @@ func parseConfig(args []string) (config, error) {
 	if err := fs.Parse(args); err != nil {
 		return config{}, err
 	}
+	profile, err := parseProfile(profileRaw)
+	if err != nil {
+		return config{}, err
+	}
+	cfg.profile = profile
 	if cfg.docs <= 0 {
 		return config{}, errors.New("-docs must be positive")
 	}
@@ -247,7 +258,38 @@ func parseConfig(args []string) (config, error) {
 	return cfg, nil
 }
 
+func parseProfile(raw string) (treedb.Profile, error) {
+	switch treedb.Profile(strings.ToLower(strings.TrimSpace(raw))) {
+	case "", treedb.ProfileBench:
+		return treedb.ProfileBench, nil
+	case treedb.ProfileDurable:
+		return treedb.ProfileDurable, nil
+	case treedb.ProfileFast:
+		return treedb.ProfileFast, nil
+	case treedb.ProfileWALOnFast:
+		return treedb.ProfileWALOnFast, nil
+	default:
+		return "", fmt.Errorf("unsupported -profile %q", raw)
+	}
+}
+
+func defaultProfile(profile treedb.Profile) treedb.Profile {
+	if profile == "" {
+		return treedb.ProfileBench
+	}
+	return profile
+}
+
+func openDemoBackend(profile treedb.Profile, dir string) (*backenddb.DB, func() error, error) {
+	opts := treedb.OptionsFor(defaultProfile(profile), dir)
+	if opts.IndexOuterLeavesInValueLog {
+		return treedb.OpenBackendWithCachedLeafLog(opts)
+	}
+	return treedb.OpenBackend(opts)
+}
+
 func execute(ctx context.Context, cfg config) (result, error) {
+	cfg.profile = defaultProfile(cfg.profile)
 	dir := cfg.dir
 	cleanup := func() {}
 	if dir == "" {
@@ -283,6 +325,7 @@ func execute(ctx context.Context, cfg config) (result, error) {
 	res := result{
 		Dir:             dir,
 		KeptDir:         cfg.keepDir,
+		Profile:         string(cfg.profile),
 		Docs:            cfg.docs,
 		Dimensions:      cfg.dimensions,
 		Queries:         cfg.queries,
@@ -295,12 +338,7 @@ func execute(ctx context.Context, cfg config) (result, error) {
 		Compact:         cfg.compact,
 	}
 
-	d, err := backenddb.Open(backenddb.Options{
-		Dir: dir,
-		ValueLog: backenddb.ValueLogOptions{
-			Compression: backenddb.ValueLogCompressionAuto,
-		},
-	})
+	d, cleanupBackend, err := openDemoBackend(cfg.profile, dir)
 	if err != nil {
 		return result{}, err
 	}
@@ -309,22 +347,22 @@ func execute(ctx context.Context, cfg config) (result, error) {
 		Name:          "docs",
 		VectorIndexes: []collections.VectorIndexDefinition{def},
 	}); err != nil {
-		_ = d.Close()
+		_ = cleanupBackend()
 		return result{}, err
 	}
 	col, err := mgr.OpenCollection("docs")
 	if err != nil {
-		_ = d.Close()
+		_ = cleanupBackend()
 		return result{}, err
 	}
 
 	insertStart := time.Now()
 	if err := insertDocuments(col, cfg.docs, cfg.dimensions, cfg.batchSize); err != nil {
-		_ = d.Close()
+		_ = cleanupBackend()
 		return result{}, err
 	}
 	if err := col.Flush(); err != nil {
-		_ = d.Close()
+		_ = cleanupBackend()
 		return result{}, err
 	}
 	res.Insert = phaseSince(insertStart)
@@ -332,11 +370,11 @@ func execute(ctx context.Context, cfg config) (result, error) {
 	rebuildStart := time.Now()
 	status, err := col.RebuildVectorIndex(def.Name)
 	if err != nil {
-		_ = d.Close()
+		_ = cleanupBackend()
 		return result{}, err
 	}
 	if !status.NativeRootLoaded || status.RootID == 0 {
-		_ = d.Close()
+		_ = cleanupBackend()
 		return result{}, fmt.Errorf("unexpected native vector root status: %+v", status)
 	}
 	res.Rebuild = phaseSince(rebuildStart)
@@ -344,12 +382,12 @@ func execute(ctx context.Context, cfg config) (result, error) {
 	res.IndexStatsBefore = status.Stats
 
 	if err := d.Checkpoint(); err != nil {
-		_ = d.Close()
+		_ = cleanupBackend()
 		return result{}, err
 	}
 	res.StorageBeforeCompact, err = storageUsage(dir, cfg.docs)
 	if err != nil {
-		_ = d.Close()
+		_ = cleanupBackend()
 		return result{}, err
 	}
 
@@ -360,23 +398,23 @@ func execute(ctx context.Context, cfg config) (result, error) {
 			SyncEachPhase: cfg.compactSyncEachPhase,
 		})
 		if err != nil {
-			_ = d.Close()
+			_ = cleanupBackend()
 			return result{}, err
 		}
 		res.CompactPhase = phaseSince(compactStart)
 		res.CompactStorage = &stats
 		if err := d.Checkpoint(); err != nil {
-			_ = d.Close()
+			_ = cleanupBackend()
 			return result{}, err
 		}
 	}
 	res.StorageAfterCompact, err = storageUsage(dir, cfg.docs)
 	if err != nil {
-		_ = d.Close()
+		_ = cleanupBackend()
 		return result{}, err
 	}
-	if format, ok, err := backenddb.LoadFormatConfig(dir); err != nil {
-		_ = d.Close()
+	if format, ok, err := loadFormatConfig(dir); err != nil {
+		_ = cleanupBackend()
 		return result{}, err
 	} else if ok {
 		res.FormatConfig = &format
@@ -389,14 +427,14 @@ func execute(ctx context.Context, cfg config) (result, error) {
 		IndexBytes:           res.StorageAfterCompact.Domains["index.db"],
 	}
 	if cfg.requireValueLogBytes && res.StorageExpectation.ValueLogBytes == 0 {
-		_ = d.Close()
+		_ = cleanupBackend()
 		return result{}, errors.New("compacted storage has zero value_vlog bytes")
 	}
 	if cfg.requireLeafVLogBytes && res.StorageExpectation.LeafVLogBytes == 0 {
-		_ = d.Close()
+		_ = cleanupBackend()
 		return result{}, errors.New("compacted storage has zero leaf_vlog bytes")
 	}
-	if err := d.Close(); err != nil {
+	if err := cleanupBackend(); err != nil {
 		return result{}, err
 	}
 
@@ -404,11 +442,11 @@ func execute(ctx context.Context, cfg config) (result, error) {
 	runtime.GC()
 	runtime.ReadMemStats(&beforeLoad)
 	reopenStart := time.Now()
-	d, err = backenddb.Open(backenddb.Options{Dir: dir})
+	d, cleanupBackend, err = openDemoBackend(cfg.profile, dir)
 	if err != nil {
 		return result{}, err
 	}
-	defer d.Close()
+	defer cleanupBackend()
 	col, err = collections.NewCollectionManager(d).OpenCollection("docs")
 	if err != nil {
 		return result{}, err
@@ -634,11 +672,7 @@ func storageUsage(dir string, docs int) (storageReport, error) {
 		if err != nil {
 			return err
 		}
-		group := strings.Split(rel, string(os.PathSeparator))[0]
-		if group == "index.db" || group == "journal.wal" || group == "format.json" || group == "LOCK" {
-			group = rel
-		}
-		report.Domains[group] += size
+		report.Domains[storageDomain(rel)] += size
 		return nil
 	})
 	if err != nil {
@@ -648,6 +682,36 @@ func storageUsage(dir string, docs int) (storageReport, error) {
 		report.BytesPerDoc = float64(report.TotalBytes) / float64(docs)
 	}
 	return report, nil
+}
+
+func storageDomain(rel string) string {
+	rel = filepath.ToSlash(rel)
+	parts := strings.Split(rel, "/")
+	if len(parts) == 0 {
+		return rel
+	}
+	if len(parts) > 1 && parts[0] == "maindb" {
+		return storageDomain(strings.Join(parts[1:], "/"))
+	}
+	if len(parts) > 1 && (parts[0] == "dictdb" || parts[0] == "templatedb") {
+		return parts[0]
+	}
+	switch parts[0] {
+	case "leaf_vlog", "value_vlog", "wal":
+		return parts[0]
+	case "index.db", "journal.wal", "format.json", "LOCK", "vlog_ref_counts.meta":
+		return parts[0]
+	default:
+		return parts[0]
+	}
+}
+
+func loadFormatConfig(dir string) (backenddb.FormatConfig, bool, error) {
+	format, ok, err := backenddb.LoadFormatConfig(dir)
+	if err != nil || ok {
+		return format, ok, err
+	}
+	return backenddb.LoadFormatConfig(filepath.Join(dir, "maindb"))
 }
 
 func phaseSince(start time.Time) phaseResult {
@@ -677,8 +741,8 @@ func percentile(sorted []int64, p float64) int64 {
 
 func printText(w io.Writer, res result) {
 	fmt.Fprintf(w, "TreeDB vector search demo\n")
-	fmt.Fprintf(w, "dir=%s kept=%t docs=%d dims=%d queries=%d top_k=%d m=%d ef_construction=%d ef_search=%d\n",
-		res.Dir, res.KeptDir, res.Docs, res.Dimensions, res.Queries, res.TopK, res.M, res.EfConstruction, res.EfSearch)
+	fmt.Fprintf(w, "dir=%s kept=%t profile=%s docs=%d dims=%d queries=%d top_k=%d m=%d ef_construction=%d ef_search=%d\n",
+		res.Dir, res.KeptDir, res.Profile, res.Docs, res.Dimensions, res.Queries, res.TopK, res.M, res.EfConstruction, res.EfSearch)
 	fmt.Fprintf(w, "\nPhases\n")
 	fmt.Fprintf(w, "insert: %.3fs\n", res.Insert.Seconds)
 	fmt.Fprintf(w, "rebuild_native_vector_index: %.3fs native_root_bytes=%d\n", res.Rebuild.Seconds, res.NativeRootBytes)

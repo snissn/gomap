@@ -37,14 +37,26 @@ func TestExecuteSmokeCompactsReopensValidatesAndBenchmarks(t *testing.T) {
 	if res.Search.Queries != 8 || res.Search.AvgNanos <= 0 || res.Search.ExactFallbacks != 0 {
 		t.Fatalf("unexpected search benchmark result: %+v", res.Search)
 	}
+	if res.Profile != "bench" {
+		t.Fatalf("profile=%q want bench", res.Profile)
+	}
 	if res.StorageAfterCompact.TotalBytes <= 0 || res.StorageAfterCompact.BytesPerDoc <= 0 {
 		t.Fatalf("missing compacted storage report: %+v", res.StorageAfterCompact)
 	}
 	if res.FormatConfig == nil {
 		t.Fatal("missing format config report")
 	}
+	if !res.FormatConfig.IndexOuterLeavesInValueLog {
+		t.Fatalf("index_outer_leaves_in_vlog=false, want true: %+v", res.FormatConfig)
+	}
+	if !res.FormatConfig.LeafPrefixCompression {
+		t.Fatalf("leaf_prefix_compression=false, want true: %+v", res.FormatConfig)
+	}
 	if res.StorageExpectation.IndexBytes <= 0 {
 		t.Fatalf("missing storage expectation index bytes: %+v", res.StorageExpectation)
+	}
+	if res.StorageExpectation.LeafVLogBytes <= 0 {
+		t.Fatalf("missing leaf value-log bytes: %+v", res.StorageExpectation)
 	}
 	if res.Memory.IndexBytesMemory <= 0 {
 		t.Fatalf("missing index memory report: %+v", res.Memory)
@@ -82,13 +94,16 @@ func TestRunJSONOutput(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &res); err != nil {
 		t.Fatalf("decode JSON output: %v\n%s", err, stdout.String())
 	}
-	if res.Docs != 64 || res.Search.Queries != 4 || res.StorageAfterCompact.TotalBytes <= 0 {
+	if res.Profile != "bench" || res.Docs != 64 || res.Search.Queries != 4 || res.StorageAfterCompact.TotalBytes <= 0 {
 		t.Fatalf("unexpected JSON result: %+v", res)
+	}
+	if res.FormatConfig == nil || !res.FormatConfig.IndexOuterLeavesInValueLog || !res.FormatConfig.LeafPrefixCompression {
+		t.Fatalf("unexpected JSON format config: %+v", res.FormatConfig)
 	}
 }
 
-func TestExecuteRequireLeafVLogBytesFailsOnPagerBackedDefault(t *testing.T) {
-	_, err := execute(t.Context(), config{
+func TestExecuteRequireLeafVLogBytesPassesWithDefaultBenchProfile(t *testing.T) {
+	res, err := execute(t.Context(), config{
 		dir:                  t.TempDir(),
 		keepDir:              true,
 		docs:                 64,
@@ -106,11 +121,24 @@ func TestExecuteRequireLeafVLogBytesFailsOnPagerBackedDefault(t *testing.T) {
 		disableExactFallback: true,
 		requireLeafVLogBytes: true,
 	})
-	if err == nil {
-		t.Fatal("execute succeeded, want leaf-vlog requirement failure")
+	if err != nil {
+		t.Fatalf("execute: %v", err)
 	}
-	if !strings.Contains(err.Error(), "zero leaf_vlog bytes") {
-		t.Fatalf("error=%v, want zero leaf_vlog bytes", err)
+	if res.Profile != "bench" {
+		t.Fatalf("profile=%q want bench", res.Profile)
+	}
+	if res.StorageExpectation.LeafVLogBytes <= 0 {
+		t.Fatalf("missing leaf value-log bytes: %+v", res.StorageExpectation)
+	}
+}
+
+func TestParseProfileRejectsUnsupportedProfile(t *testing.T) {
+	_, err := parseProfile("raw")
+	if err == nil {
+		t.Fatal("parseProfile succeeded, want error")
+	}
+	if !strings.Contains(err.Error(), "unsupported -profile") {
+		t.Fatalf("error=%v, want unsupported -profile", err)
 	}
 }
 
@@ -137,6 +165,7 @@ func TestRunTextOutput(t *testing.T) {
 	out := stdout.String()
 	for _, want := range []string{
 		"TreeDB vector search demo",
+		"profile=bench",
 		"compact_storage_full:",
 		"Storage",
 		"format index_outer_leaves_in_vlog=",
