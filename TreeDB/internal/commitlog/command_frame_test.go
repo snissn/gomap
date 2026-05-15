@@ -526,6 +526,38 @@ func TestCommandWALDuplicateLSNAcrossSegmentsFailsClosed(t *testing.T) {
 	}
 }
 
+func TestCommandWALScanSegmentsReturnsGlobalLSNOrder(t *testing.T) {
+	dir := t.TempDir()
+	paths := []string{
+		filepath.Join(dir, "commit-l0-000001.log"),
+		filepath.Join(dir, "commit-l1-000001.log"),
+	}
+	for i, lsn := range []uint64{2, 1} {
+		w, err := NewWriter(paths[i])
+		if err != nil {
+			t.Fatalf("NewWriter %s: %v", paths[i], err)
+		}
+		if err := w.AppendCommand(CommandEnvelope{LSN: lsn, Kind: CommandKindRawKVBatch, Scope: CommandScopeRawKV, PayloadFormat: PayloadFormatRawKVBatchV1}); err != nil {
+			_ = w.Close()
+			t.Fatalf("AppendCommand %s: %v", paths[i], err)
+		}
+		if err := w.Close(); err != nil {
+			t.Fatalf("Close %s: %v", paths[i], err)
+		}
+	}
+
+	frames, err := ScanCommandFrameSegments(paths, Options{})
+	if err != nil {
+		t.Fatalf("ScanCommandFrameSegments: %v", err)
+	}
+	if len(frames) != 2 {
+		t.Fatalf("len(frames)=%d, want 2", len(frames))
+	}
+	if frames[0].LSN != 1 || frames[1].LSN != 2 {
+		t.Fatalf("frames LSN order=%v, want [1 2]", []uint64{frames[0].LSN, frames[1].LSN})
+	}
+}
+
 func TestCommandWALNonFinalSegmentTailFailsClosed(t *testing.T) {
 	dir := t.TempDir()
 	path1 := filepath.Join(dir, "commit-l0-000001.log")
