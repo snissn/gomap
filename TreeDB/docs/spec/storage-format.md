@@ -495,12 +495,13 @@ and replays complete frames with higher LSNs through the deterministic command
 executor before serving reads.
 
 The V1 physical storage target for `AppliedLSN` is an explicit gated meta-page
-field named `AppliedCommandLSN`. It must be selected atomically with the roots
-that contain the corresponding command effects. PR1 may document a blocking
-reason to revisit this before PR2 starts, but storage-format implementation must
-not proceed with both meta-page and system-root storage as live options. A
-sidecar cleanup file, manifest, stats record, or post-commit maintenance record
-is not authoritative state for recovery.
+field named `AppliedCommandLSN`, encoded by the command-WAL meta extension in
+Section 3.1 at body offset 60 / page offset 76. It must be selected atomically
+with the roots that contain the corresponding command effects. PR1 may document
+a blocking reason to revisit this before PR2 starts, but storage-format
+implementation must not proceed with both meta-page and system-root storage as
+live options. A sidecar cleanup file, manifest, stats record, or post-commit
+maintenance record is not authoritative state for recovery.
 
 The deprecated collection root-delta WAL format (`collection_wal_v1`,
 `wal/collection-l*.log`, `WALLSN`, `CollectionSeq`, and collection root-delta

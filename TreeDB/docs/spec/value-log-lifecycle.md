@@ -124,7 +124,7 @@ Health states:
 `ValueLogGC` and value-log rewrite reports must include whether bytes are
 blocked by command-WAL external refs. Required command-WAL blocker fields are
 `gc_blocked`, `gc_blocked_bytes`, `gc_blocked_segments`,
-`gc_blocked_external_refs`, `oldest_blocking_age_ms`, `blocking_txn_ids`,
+`gc_blocked_external_refs`, `oldest_blocking_age_ms`, `blocking_command_ids`,
 `blocking_external_refs`, `blocking_reason`,
 `protected_external_ref_logical_bytes`, and
 `protected_external_ref_retained_segment_bytes`.

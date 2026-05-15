@@ -762,8 +762,11 @@ mutation:
 
 `visible` means the mutation is visible to reads through the serving process or
 owning write domain. For V1 WAL-on collection modes this also requires local
-command-WAL recoverability, root publication, and `AppliedLSN` advancement. For
-WAL-off relaxed mode this is process-local visibility only.
+command-WAL recoverability: the command frame and required external refs are
+recoverable, and the normal executor has installed the mutation in the
+process-visible write domain. It does not require root publication or
+`AppliedLSN` advancement. For WAL-off relaxed mode this is process-local
+visibility only.
 
 `flushed` means all touched collection state for the command has been published
 to backend roots, and WAL-backed commands have `AppliedLSN` advanced in the same
