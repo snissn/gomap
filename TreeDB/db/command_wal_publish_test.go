@@ -637,6 +637,25 @@ func TestCommandWALCheckpointCleanupRetainsActiveCoveredSegment(t *testing.T) {
 	}
 }
 
+func TestCommandWALCheckpointCleanupRetainsActiveCoveredTypedSegment(t *testing.T) {
+	dir := t.TempDir()
+	writeCommandWALFrame(t, dir, 1, 1)
+
+	decisions, err := cleanupCommandWALSegmentsCoveredByAppliedLSN(dir, 1, 0)
+	if err != nil {
+		t.Fatalf("cleanupCommandWALSegmentsCoveredByAppliedLSN: %v", err)
+	}
+	if len(decisions) != 1 {
+		t.Fatalf("len(decisions)=%d, want 1", len(decisions))
+	}
+	if got := decisions[0]; !got.Covered || !got.Active || got.Removed {
+		t.Fatalf("active covered typed segment decision=%+v, want covered active retained", got)
+	}
+	if _, err := os.Stat(filepath.Join(WALDirPath(dir), "commit-l0-000001.log")); err != nil {
+		t.Fatalf("active covered typed segment stat=%v, want retained", err)
+	}
+}
+
 func TestCommandWALCheckpointCleanupReturnsScanErrors(t *testing.T) {
 	dir := t.TempDir()
 	writeCommandWALSegmentFrames(t, dir, 1, 2, 1)
@@ -751,6 +770,21 @@ func TestCommandWALBackupManifestShapeIncludesAppliedLSNAndRanges(t *testing.T) 
 	if _, ok := got["cleaned_wal_ranges"]; !ok {
 		t.Fatalf("manifest missing cleaned_wal_ranges: %s", data)
 	}
+}
+
+type commandWALBackupManifest struct {
+	AppliedCommandLSN uint64                     `json:"applied_command_lsn"`
+	WALRanges         []commandWALBackupWALRange `json:"wal_ranges,omitempty"`
+	CleanedWALRanges  []commandWALBackupWALRange `json:"cleaned_wal_ranges,omitempty"`
+}
+
+type commandWALBackupWALRange struct {
+	Lane     int    `json:"lane"`
+	Segment  uint64 `json:"segment"`
+	FirstLSN uint64 `json:"first_lsn,omitempty"`
+	LastLSN  uint64 `json:"last_lsn,omitempty"`
+	Path     string `json:"path,omitempty"`
+	Bytes    int64  `json:"bytes,omitempty"`
 }
 
 func writeCommandWALFrame(t *testing.T, dir string, segmentSeq uint64, lsn uint64) {

@@ -297,6 +297,9 @@ func filterCommandWALSegmentsForLegacyReplay(segments []logSegment, appliedLSN u
 }
 
 func cleanupCommandWALSegmentsCoveredByAppliedLSN(dir string, appliedLSN uint64, maxSegmentBytes int64) ([]commandWALSegmentCleanupDecision, error) {
+	// PR2 cleanup deliberately streams segments on demand. It is intended for
+	// checkpoint/maintenance boundaries; a later manifest/catalog can cache
+	// results if this moves onto a hotter path.
 	segments, err := listWALSegments(dir)
 	if err != nil {
 		return nil, err
@@ -340,22 +343,4 @@ func cleanupCommandWALSegmentsCoveredByAppliedLSN(dir string, appliedLSN uint64,
 		decisions = append(decisions, decision)
 	}
 	return decisions, scanErr
-}
-
-type commandWALBackupManifest struct {
-	AppliedCommandLSN uint64                     `json:"applied_command_lsn"`
-	WALRanges         []commandWALBackupWALRange `json:"wal_ranges,omitempty"`
-	CleanedWALRanges  []commandWALBackupWALRange `json:"cleaned_wal_ranges,omitempty"`
-}
-
-// commandWALBackupWALRange is PR2 scaffolding for the PR3/backup integration
-// manifest; PR2 keeps the JSON shape tested so later code does not drift from
-// the documented applied-LSN and WAL-range contract.
-type commandWALBackupWALRange struct {
-	Lane     int    `json:"lane"`
-	Segment  uint64 `json:"segment"`
-	FirstLSN uint64 `json:"first_lsn,omitempty"`
-	LastLSN  uint64 `json:"last_lsn,omitempty"`
-	Path     string `json:"path,omitempty"`
-	Bytes    int64  `json:"bytes,omitempty"`
 }
