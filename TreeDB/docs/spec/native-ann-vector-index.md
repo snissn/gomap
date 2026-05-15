@@ -113,6 +113,7 @@ vi/{collectionID}/{indexID}/epoch/{epoch}/node/{nodeID}
 vi/{collectionID}/{indexID}/epoch/{epoch}/edge/{nodeID}/{layer}
 vi/{collectionID}/{indexID}/epoch/{epoch}/doc/{documentID}
 vi/{collectionID}/{indexID}/epoch/{epoch}/tomb/{nodeID}
+vi/{collectionID}/{indexID}/delta/{collectionSeq}
 vi/{collectionID}/{indexID}/rebuild/{runID}/...
 ```
 
@@ -126,6 +127,13 @@ map, and tombstone records MUST be scoped by epoch so rebuilds and compaction ca
 write a complete staging epoch without overwriting the active graph. Publishing a
 new epoch is the atomic visibility boundary; old epochs are retained until active
 readers drain and then reclaimed.
+
+Numeric path segments use fixed-width big-endian bytes in native key encoding:
+`epoch` and `nodeID` are `u64`, `layer` is `u16`, and `collectionSeq` is `u64`.
+This preserves ordered iteration for prefix scans such as all edge records for a
+node or all deltas after an applied collection sequence. Human-readable paths in
+this document are illustrative; the native codec MUST use the canonical byte
+ordering.
 
 ## 6. Record Model
 
@@ -145,14 +153,14 @@ dimensions: u32
 m: u16
 ef_construction: u32
 ef_search: u32
-entry_node_id: u64
+entry_node_id: u64, u64::MAX means no entry node
 max_level: u16
 next_node_id: u64
 live_count: u64
 deleted_count: u64
 index_epoch: u64
 applied_collection_seq: u64
-build_id: u128 or bytes
+build_id: fixed 16 bytes
 state: enum { ready, building, catching_up, dirty, needs_rebuild, disabled }
 ```
 
@@ -197,8 +205,11 @@ crc_or_record_checksum: optional
 
 Edges SHOULD be stored by source node and layer. Within one edge record,
 neighbor IDs SHOULD be sorted for compact delta encoding if deterministic
-ordering does not regress HNSW behavior. The runtime graph may keep insertion
-or distance order separately if needed.
+ordering does not regress HNSW behavior. The first neighbor ID is encoded as an
+absolute unsigned varint; each subsequent neighbor ID is encoded as a signed
+delta from the previous sorted neighbor ID. The runtime graph may keep insertion
+or distance order separately if needed, but the durable codec uses this one
+canonical form.
 
 Cached edge distances are part of the target format. They remove repeated
 node-to-node scoring during pruning and rebuild operations.
@@ -236,11 +247,31 @@ deleted_ratio
 This record is the recovery decision point. It determines whether the runtime
 index can be served, must catch up, or must rebuild.
 
+### 6.7 Delta Log Record
+
+```text
+collection_seq: u64
+document_id: bytes
+op: enum { insert, update, delete }
+new_node: node payload optional
+old_node_id: u64 optional
+vector_present: bool
+checksum: optional
+```
+
+Buffered mode appends one delta record per acknowledged collection mutation that
+has not yet been applied to the durable graph epoch. Delta records are ordered by
+`collection_seq` and are replayed strictly in that order during catch-up or crash
+recovery. Once `applied_collection_seq` in the state record reaches or exceeds a
+delta's sequence and the publishing epoch is durable, that delta is eligible for
+cleanup. If a delta is missing, corrupt, or not replayable, recovery marks the
+index `needs_rebuild` instead of serving graph search as current.
+
 ## 7. Runtime Representation
 
 The runtime graph should remain close to the current optimized shape:
 
-```go
+```text
 type VectorIndex struct {
     nodes       []vectorIndexNode
     currentNode map[string]int
@@ -251,7 +282,7 @@ type VectorIndex struct {
 
 type vectorIndexNode struct {
     documentID []byte
-    vector []float32 or quantized []int8
+    vector: []float32 or quantized: []int8
     normSquared float64
     cachedInvNorm float32
     level int
@@ -267,8 +298,8 @@ type vectorIndexNeighbor struct {
 
 The runtime graph MAY use narrower types than Go `int` internally after the
 format stabilizes. For example, `uint32` node IDs are sufficient until a single
-index exceeds four billion nodes and cut edge memory in half when paired with a
-`float32` distance.
+index exceeds four billion nodes, and using them with a `float32` distance can
+cut edge memory in half.
 
 ## 8. Write Semantics
 
@@ -342,8 +373,11 @@ Index state transitions:
 ```text
 missing -> building -> ready
 ready -> catching_up -> ready
+catching_up -> dirty -> needs_rebuild
+catching_up -> needs_rebuild
 ready -> dirty -> needs_rebuild -> building -> ready
 ready -> disabled
+disabled -> building
 ```
 
 `dirty` means correctness requires exact fallback or repair. `needs_rebuild`
@@ -437,8 +471,10 @@ Recommended first format:
 - document IDs: prefix-compressed by ordered key layout,
 - page/block compression: reuse TreeDB page/value compression where available.
 
-Expected size for 10k docs x 64 dims, `M=16`, avg about 37 directed
-edges/node:
+Expected size for 10k docs x 64 dims, `M=16`, using an illustrative average of
+about 37 directed edges/node. This estimate includes base-layer and upper-layer
+directed edges from the current benchmark-sized graph shape and should be
+replaced with measured fanout once the native format lands:
 
 ```text
 float32 vectors: ~2.56 MB
@@ -603,8 +639,8 @@ Acceptance:
 
 Deliverables:
 
-1. Implement binary codecs for metadata, node, edge, doc map, tombstone, and
-   state records.
+1. Implement binary codecs for metadata, node, edge, doc map, tombstone, delta,
+   and state records.
 2. Add golden encoding fixtures.
 3. Add fuzz tests for decode rejection.
 4. Add size benchmarks for float32 and int8 modes.
