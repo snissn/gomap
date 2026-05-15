@@ -168,6 +168,7 @@ func TestCommandWALAppliedLSNContiguousPrefixOnly(t *testing.T) {
 		{name: "overlap", current: 5, next: 8, covered: []CommandWALLSNRange{{First: 6, Last: 7}, {First: 7, Last: 9}}},
 		{name: "gap", current: 5, next: 8, covered: []CommandWALLSNRange{{First: 7, Last: 8}}, wantErr: ErrCommandWALAppliedLSNNonContig},
 		{name: "regression", current: 5, next: 4, wantErr: ErrCommandWALAppliedLSNRegression},
+		{name: "same with stale coverage", current: 5, next: 5, covered: []CommandWALLSNRange{{First: 6, Last: 6}}, wantErr: ErrCommandWALAppliedLSNNonContig},
 		{name: "empty coverage", current: 5, next: 6, wantErr: ErrCommandWALAppliedLSNNonContig},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -769,6 +770,9 @@ func modelValidateContiguousAppliedCommandLSN(current, next uint64, covered []Co
 		return ErrCommandWALAppliedLSNRegression
 	}
 	if next == current {
+		if len(covered) != 0 {
+			return ErrCommandWALAppliedLSNNonContig
+		}
 		return nil
 	}
 	if current == ^uint64(0) || len(covered) == 0 {
