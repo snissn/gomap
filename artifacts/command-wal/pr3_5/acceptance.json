@@ -3,7 +3,7 @@
   "milestone": "PR3.5 raw KV command-WAL performance visibility and polish",
   "branch": "codex/user-command-wal-pr3_5",
   "base_branch": "codex/user-command-wal-pr3",
-  "base_commit": "b91f256e40f2c92652ce5690bf3ceb62181aafc3",
+  "base_commit": "96e9d06516f0357931f07775155e909a96b84d66",
   "go_version": "go1.25.7 linux/amd64",
   "platform": "linux/amd64",
   "command_support_matrix_version": "TreeDB/docs/spec/verification.md and issue #1529 PR3.5 evidence update",
@@ -74,5 +74,5 @@
     "pointer command_wal_v1 still has +6 alloc/op after RID-cache polish; remaining allocations are tracked as future optimization debt before default cutover",
     "outer-leaf direct backend throughput is much lower than earlier inline-leaf artifacts; the refreshed numbers are the correct benchmark mode because the requested outer-leaf flag is no longer silently ignored"
   ],
-  "evidence_generated_from_commit": "fa95f6b1d4cc2161d8ca0833033a0e1ff90b296d"
+  "evidence_generated_from_commit": "381554c622b784536189f2eeafc6623a51abd3af"
 }
