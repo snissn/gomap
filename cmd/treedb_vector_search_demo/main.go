@@ -742,6 +742,7 @@ func executeMatrix(ctx context.Context, cfg config) (matrixResult, error) {
 		if err != nil {
 			return matrixResult{}, fmt.Errorf("%s: %w", testCase.name, err)
 		}
+		res.KeptDir = cfg.keepDir
 		out.Cases = append(out.Cases, matrixCaseResult{
 			Name:        testCase.name,
 			Description: testCase.description,

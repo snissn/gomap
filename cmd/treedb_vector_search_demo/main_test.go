@@ -288,6 +288,42 @@ func TestRunMatrixJSONOutput(t *testing.T) {
 	}
 }
 
+func TestExecuteMatrixReportsNestedKeptDirFromRoot(t *testing.T) {
+	res, err := executeMatrix(context.Background(), config{
+		docs:                  24,
+		dimensions:            8,
+		queries:               1,
+		readOps:               4,
+		readConcurrency:       []int{2},
+		validateQueries:       1,
+		validateDocs:          1,
+		topK:                  3,
+		batchSize:             12,
+		m:                     4,
+		efConstruction:        32,
+		efSearch:              32,
+		valuePointerThreshold: defaultValuePointerThreshold,
+		leafGenerationTarget:  defaultLeafGenerationTarget,
+		minRecall:             0.5,
+		compact:               true,
+		disableExactFallback:  true,
+	})
+	if err != nil {
+		t.Fatalf("executeMatrix: %v", err)
+	}
+	if res.KeptDir {
+		t.Fatalf("matrix kept_dir=true, want false")
+	}
+	for _, testCase := range res.Cases {
+		if testCase.Result.KeptDir {
+			t.Fatalf("case %s kept_dir=true, want false inherited from matrix root", testCase.Name)
+		}
+	}
+	if _, err := os.Stat(res.Dir); !os.IsNotExist(err) {
+		t.Fatalf("matrix dir stat err=%v, want removed temp dir", err)
+	}
+}
+
 func TestRunTextOutput(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer

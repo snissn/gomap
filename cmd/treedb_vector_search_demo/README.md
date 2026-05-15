@@ -1,15 +1,24 @@
 # TreeDB Vector Search Demo
 
 `treedb_vector_search_demo` is a first-class harness for exercising native
-collection vector-index persistence end to end:
+collection vector-index persistence end to end. By default it runs a storage
+and read matrix with three cases:
+
+1. 1558-style outer B-tree leaves stored in `index.db`,
+2. 1560-style outer B-tree leaves stored in `leaf_vlog` before compaction, and
+3. 1560-style outer B-tree leaves stored in `leaf_vlog` after compaction.
+
+Each case:
 
 1. create a TreeDB collection with a declared vector field index,
 2. load deterministic synthetic JSON documents,
 3. rebuild and persist the native HNSW graph,
-4. run `DB.CompactStorage(ctx, CompactStorageFull)`,
-5. close and reopen the compacted datastore,
+4. optionally run `DB.CompactStorage(ctx, CompactStorageFull)`,
+5. close and reopen the datastore,
 6. validate document reads and ANN recall against exact search,
-7. benchmark ANN search and report storage/memory usage.
+7. benchmark ANN search,
+8. benchmark serial document reads and parallel document reads, and
+9. report storage/memory usage.
 
 `CompactStorageFull` is intentionally used instead of manually chaining
 maintenance calls. It is TreeDB's canonical full storage compaction path:
@@ -29,6 +38,10 @@ GOWORK=off go run ./cmd/treedb_vector_search_demo \
 ```
 
 Use `-keep-dir` to inspect the generated datastore after the run.
+Use `-matrix=false` to run only the single compacted 1560-style case.
+The matrix read stage defaults to 10,000 reads per lane and parallel
+concurrency levels `2,4,8,16,32,64,128`; override those with `-read-ops` and
+`-read-concurrency`.
 
 The demo defaults to TreeDB's `bench` profile because this is a benchmark
 harness. That profile uses the same index storage profile as `fast`: outer
