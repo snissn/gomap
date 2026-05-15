@@ -3,7 +3,6 @@
   "milestone": "PR1 typed commit-log frames and feature gate",
   "branch": "codex/user-command-wal-pr1",
   "base_commit": "6e32961e2a0a472e3be03e1caa91c15c739d9ba9",
-  "head_commit": "d86283ae8331666714b8b42c80dca74ada139667",
   "go_version": "go1.25.7 linux/amd64",
   "platform": "linux/amd64",
   "durability_mode": "format-gated command WAL bytes only; production raw KV WAL remains legacy until PR3",
@@ -75,5 +74,7 @@
     "production raw KV writes are not converted until PR3",
     "AppliedCommandLSN publish/checkpoint plumbing starts in PR2",
     "collection and catalog placeholders are durable-byte fixtures only"
-  ]
+  ],
+  "implementation_commit": "d86283ae8331666714b8b42c80dca74ada139667",
+  "acceptance_record_commit": "f224bc8347e05fb92818583a1ac94633e5e9aef0"
 }
