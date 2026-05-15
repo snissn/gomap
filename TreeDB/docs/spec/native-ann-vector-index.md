@@ -114,6 +114,7 @@ vi/{collectionID}/{indexID}/epoch/{epoch}/edge/{nodeID}/{layer}
 vi/{collectionID}/{indexID}/epoch/{epoch}/doc/{documentID}
 vi/{collectionID}/{indexID}/epoch/{epoch}/tomb/{nodeID}
 vi/{collectionID}/{indexID}/delta/{collectionSeq}/{deltaOrdinal}
+vi/{collectionID}/{indexID}/deltaBatch/{collectionSeq}
 vi/{collectionID}/{indexID}/rebuild/{runID}/...
 ```
 
@@ -272,6 +273,24 @@ sequence are eligible for cleanup. If a delta is missing, corrupt, or not
 replayable, recovery marks the index `needs_rebuild` instead of serving graph
 search as current.
 
+### 6.8 Delta Batch Boundary Record
+
+```text
+collection_seq: u64
+delta_count: u32
+checksum: optional
+```
+
+For a collection mutation boundary, especially `InsertBatch` and `UpdateBatch`,
+the index writer MUST persist all delta records for that `collection_seq` and
+then persist one boundary record with the exact `delta_count`. Recovery MUST NOT
+advance `applied_collection_seq` past a sequence unless the boundary record is
+present and the durable delta set contains every ordinal in
+`[0, delta_count)`. A missing boundary or truncated ordinal range means the
+durable ANN state is incomplete; recovery must keep the index catching up if the
+canonical collection log can supply the missing work, otherwise mark
+`needs_rebuild`.
+
 ## 7. Runtime Representation
 
 The runtime graph should remain close to the current optimized shape:
@@ -339,8 +358,10 @@ Required behavior:
    exist.
 2. Search MAY use the graph only if the caller accepts bounded staleness and
    the trace reports it.
-3. Default public search SHOULD exact-fallback or rerank with current document
-   validation when the index is not current.
+3. Default public search MUST use exact fallback or a delta-aware merge that
+   includes current vectors from unapplied inserts and updates. Reranking only
+   the stale graph candidates is not sufficient because acknowledged vectors may
+   be absent from the graph candidate set.
 4. Recovery MUST replay pending vector deltas or mark `needs_rebuild`.
 
 Buffered mode is the likely high-throughput production default for large batch
