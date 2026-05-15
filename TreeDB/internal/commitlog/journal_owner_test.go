@@ -598,6 +598,25 @@ func TestJournalOwnerRollbackMaxLSNClearsExhausted(t *testing.T) {
 	}
 }
 
+func TestJournalOwnerReserveAfterCloseFails(t *testing.T) {
+	owner, err := AcquireJournalOwner(t.TempDir())
+	if err != nil {
+		t.Fatalf("AcquireJournalOwner: %v", err)
+	}
+	if err := owner.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if _, err := owner.ReserveLSN(); err == nil {
+		t.Fatalf("ReserveLSN after Close unexpectedly succeeded")
+	}
+	if _, _, err := owner.ReserveLSNRange(2); err == nil {
+		t.Fatalf("ReserveLSNRange after Close unexpectedly succeeded")
+	}
+	if err := owner.rollbackReservedLSN(1); err == nil {
+		t.Fatalf("rollbackReservedLSN after Close unexpectedly succeeded")
+	}
+}
+
 func TestCommandJournalUsesCommitSegmentFamily(t *testing.T) {
 	dir := t.TempDir()
 	j, err := OpenCommandJournal(dir, CommandJournalOptions{Lane: 3, SegmentSeq: 9})
