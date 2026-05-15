@@ -401,7 +401,7 @@ func scanCommandWALSegmentForCleanup(path string, maxSegmentBytes int64, allowTe
 			scan.typed = true
 			return scan, commitlog.ErrCommandWALDuplicateLSN
 		}
-		if seenLSNs != nil {
+		if seenLSNs != nil && (appliedLSN == 0 || frame.LSN > appliedLSN) {
 			if _, ok := seenLSNs[frame.LSN]; ok {
 				scan.typed = true
 				return scan, commitlog.ErrCommandWALDuplicateLSN
