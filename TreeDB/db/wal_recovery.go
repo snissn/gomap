@@ -231,15 +231,17 @@ func replayWALIntoBackend(db *DB, segments []logSegment, maxSegmentBytes int64, 
 }
 
 type commandWALReplayFrame struct {
-	env   commitlog.CommandEnvelope
-	order int
+	env commitlog.CommandEnvelope
 }
 
 func replayCommandWALIntoBackend(db *DB, segments []logSegment, maxSegmentBytes int64, dictLookup valuelog.DictLookup) error {
 	if db == nil {
 		return fmt.Errorf("treedb: command wal recovery missing db")
 	}
-	frames, err := readCommandWALReplayFrames(segments, db.meta.AppliedCommandLSN, maxSegmentBytes)
+	db.mu.RLock()
+	applied := db.meta.AppliedCommandLSN
+	db.mu.RUnlock()
+	frames, err := readCommandWALReplayFrames(segments, applied, maxSegmentBytes)
 	if err != nil {
 		return err
 	}
@@ -269,9 +271,6 @@ func replayCommandWALIntoBackend(db *DB, segments []logSegment, maxSegmentBytes 
 			defer db.SetLeafPageLog(previousLeafPageLog)
 		}
 	}
-	db.mu.RLock()
-	applied := db.meta.AppliedCommandLSN
-	db.mu.RUnlock()
 	for _, frame := range frames {
 		if frame.env.LSN <= applied {
 			continue
@@ -307,7 +306,6 @@ func readCommandWALReplayFrames(segments []logSegment, appliedLSN uint64, maxSeg
 	}
 	var frames []commandWALReplayFrame
 	seen := make(map[uint64]struct{})
-	readOrder := 0
 	for _, seg := range segments {
 		if seg.valueLog || seg.size == 0 {
 			continue
@@ -329,8 +327,7 @@ func readCommandWALReplayFrames(segments []logSegment, appliedLSN uint64, maxSeg
 				}
 				seen[env.LSN] = struct{}{}
 				if env.LSN > appliedLSN {
-					frames = append(frames, commandWALReplayFrame{env: env, order: readOrder})
-					readOrder++
+					frames = append(frames, commandWALReplayFrame{env: env})
 				}
 				continue
 			}
@@ -348,10 +345,7 @@ func readCommandWALReplayFrames(segments []logSegment, appliedLSN uint64, maxSeg
 		}
 	}
 	sort.Slice(frames, func(i, j int) bool {
-		if frames[i].env.LSN != frames[j].env.LSN {
-			return frames[i].env.LSN < frames[j].env.LSN
-		}
-		return frames[i].order < frames[j].order
+		return frames[i].env.LSN < frames[j].env.LSN
 	})
 	return frames, nil
 }

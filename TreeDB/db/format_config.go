@@ -307,6 +307,9 @@ func commandWALFormatNeedsActivation(opts Options) (bool, error) {
 	return !requiresCommandWAL, nil
 }
 
+// saveOpenFormatConfig is an openWithLock post-open refresh hook. It must not
+// be used as a command-WAL activation helper; fresh activation is gated earlier
+// by SaveFormatConfig/ValidateCommandWALActivationClean before the journal opens.
 func saveOpenFormatConfig(opts Options) error {
 	if opts.CommandWAL && opts.ReadOnly {
 		return nil

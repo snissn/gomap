@@ -358,6 +358,10 @@ PR3 implementation evidence:
 - Once a command frame has been appended, later flush/sync failures are
   commit-ambiguous rather than definitely-not-committed: recovery may replay
   the frame after close and read-write reopen.
+- `RawKVBatch` frames that reference value-log RIDs require the external ref to
+  reach the same fresh-process recovery boundary before the frame is appended;
+  non-sync writes do not add a power-loss fsync guarantee, while sync writes
+  sync external refs before the command frame.
 - Operators and callers must treat a poisoned command-WAL handle as
   recovery-required: close the handle and reopen read-write before issuing more
   writes. The poisoned state is intentionally not cleared by an in-process

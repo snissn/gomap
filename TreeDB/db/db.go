@@ -1480,7 +1480,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		}
 	}
 	if opts.CommandWAL && !opts.ReadOnly {
-		commandSegmentSeq := uint64(1)
+		commandSegmentSeq := uint64(0)
 		journalSegments, err := listRecoverySegments(opts.Dir)
 		if err != nil {
 			db.Close()
