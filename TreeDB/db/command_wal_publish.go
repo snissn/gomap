@@ -167,13 +167,24 @@ func hasUnappliedCommandWALFrames(dir string, appliedLSN uint64, maxSegmentBytes
 	return false, nil
 }
 
-func commandWALActiveSeqByLane(segments []logSegment, _ int64) (map[int]uint64, error) {
+func commandWALActiveSeqByLane(segments []logSegment, maxSegmentBytes int64) (map[int]uint64, error) {
 	activeByLane := make(map[int]uint64)
 	for _, seg := range segments {
-		if seg.valueLog || seg.size == 0 {
+		if seg.valueLog {
 			continue
 		}
 		if !isCommandWALLaneSegment(seg) {
+			continue
+		}
+		activeCandidate := true
+		if seg.size > 0 {
+			var err error
+			activeCandidate, err = commandWALSegmentCanBeActive(seg.path, maxSegmentBytes)
+			if err != nil {
+				return nil, err
+			}
+		}
+		if !activeCandidate {
 			continue
 		}
 		if seg.seq > activeByLane[seg.lane] {
@@ -181,6 +192,25 @@ func commandWALActiveSeqByLane(segments []logSegment, _ int64) (map[int]uint64, 
 		}
 	}
 	return activeByLane, nil
+}
+
+func commandWALSegmentCanBeActive(path string, maxSegmentBytes int64) (bool, error) {
+	r, err := commitlog.NewReaderWithOptions(path, commitlog.Options{MaxSegmentSize: maxSegmentBytes})
+	if err != nil {
+		return false, err
+	}
+	defer r.Close()
+	_, err = r.ReadCommandFrame()
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, commitlog.ErrCommandWALLegacyPayload) {
+		return false, nil
+	}
+	if errors.Is(err, commitlog.ErrCommandWALTerminalTail) || errors.Is(err, io.EOF) {
+		return true, nil
+	}
+	return false, err
 }
 
 func isCommandWALLaneSegment(seg logSegment) bool {
