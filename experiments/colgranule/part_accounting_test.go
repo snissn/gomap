@@ -20,6 +20,9 @@ func TestColumnPartByteAccountingReconcilesCategories(t *testing.T) {
 	if accounting.Rows != 5 || accounting.Columns != 5 || accounting.Granules != 3 {
 		t.Fatalf("shape=%+v want rows=5 columns=5 granules=3", accounting)
 	}
+	if accounting.PhysicalFiles != 0 {
+		t.Fatalf("physical files=%d want 0 for in-memory experiment", accounting.PhysicalFiles)
+	}
 	if accounting.DeclaredColumnStoredBytes == 0 || accounting.MarkBytes == 0 || accounting.SortKeyMetadataBytes == 0 || accounting.DescriptorBytes == 0 || accounting.LocatorBytes == 0 {
 		t.Fatalf("missing accounting categories: %+v", accounting)
 	}

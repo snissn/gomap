@@ -21,6 +21,7 @@ type ColumnPartByteAccounting struct {
 	Columns                   int                                   `json:"columns"`
 	Granules                  int                                   `json:"granules"`
 	CodecBlocks               int                                   `json:"codec_blocks"`
+	PhysicalFiles             int                                   `json:"physical_files"`
 	LogicalValueBytes         int                                   `json:"logical_value_bytes"`
 	EncodedRawBytes           int                                   `json:"encoded_raw_bytes"`
 	DeclaredColumnStoredBytes int                                   `json:"declared_column_stored_bytes"`
@@ -80,6 +81,7 @@ func (p *ColumnPart) ByteAccounting() ColumnPartByteAccounting {
 		Rows:                p.Descriptor.RowCount,
 		Columns:             len(p.Columns),
 		Granules:            len(p.Descriptor.Granules),
+		PhysicalFiles:       0,
 		RetainedJSONPayload: "absent_declared_columns_only",
 	}
 	compressionByKey := make(map[columnCompressionKey]*ColumnPartCompressionByteAccounting)

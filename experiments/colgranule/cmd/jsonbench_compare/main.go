@@ -955,12 +955,15 @@ func writeMarkdown(path string, raw comparisonRaw) {
 	}
 	if len(raw.EncodedPartBuildReports) > 0 {
 		fmt.Fprintf(&b, "\n## M1C Build and Size Accounting\n\n")
-		fmt.Fprintf(&b, "These reports build the actual encoded JSONBench column part layouts with aggregate metadata enabled. The current experiment stores declared columns, marks, descriptors, locators, aggregate metadata, and loader dictionary estimates; retained/original JSON payload is labeled separately and is absent from the encoded-part total.\n\n")
-		fmt.Fprintf(&b, "| Layout | Best build | ns/row | Rows/s | Encoded MiB/s | Stored MiB/s | Alloc B/op | Allocs/op | Temp B/op | Output B/row |\n")
-		fmt.Fprintf(&b, "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n")
+		fmt.Fprintf(&b, "These reports build the actual encoded JSONBench column part layouts with aggregate metadata enabled. The current experiment stores declared columns, marks, descriptors, locators, aggregate metadata, and loader dictionary estimates; retained/original JSON payload is labeled separately and is absent from the encoded-part total. Physical file count is `0` because M1C is still an in-memory part experiment; file-backed `TCS1` work should replace this with real file/container counts.\n\n")
+		fmt.Fprintf(&b, "| Layout | Files | Granules | Codec blocks | Best build | ns/row | Rows/s | Encoded MiB/s | Stored MiB/s | Alloc B/op | Allocs/op | Temp B/op | Output B/row |\n")
+		fmt.Fprintf(&b, "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n")
 		for _, report := range raw.EncodedPartBuildReports {
-			fmt.Fprintf(&b, "| `%s` | %.6fs | %.1f | %.0f | %.2f | %.2f | %d | %d | %d | %.3f |\n",
+			fmt.Fprintf(&b, "| `%s` | %d | %d | %d | %.6fs | %.1f | %.0f | %.2f | %.2f | %d | %d | %d | %.3f |\n",
 				report.Layout,
+				report.Accounting.PhysicalFiles,
+				report.Accounting.Granules,
+				report.Accounting.CodecBlocks,
 				report.Best.Duration.Seconds(),
 				report.NanosPerRow,
 				report.RowsPerSecond,
