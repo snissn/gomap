@@ -8,6 +8,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"testing"
 
@@ -182,6 +183,17 @@ func TestCommandWALAppliedLSNContiguousPrefixOnly(t *testing.T) {
 				t.Fatalf("validateContiguousAppliedCommandLSN error=%v, want %v", err, tc.wantErr)
 			}
 		})
+	}
+}
+
+func TestCommandWALAppliedLSNValidationDoesNotMutateCoverage(t *testing.T) {
+	covered := []CommandWALLSNRange{{First: 3, Last: 3}, {First: 1, Last: 2}}
+	original := append([]CommandWALLSNRange(nil), covered...)
+	if err := validateContiguousAppliedCommandLSN(0, 3, covered); err != nil {
+		t.Fatalf("validateContiguousAppliedCommandLSN: %v", err)
+	}
+	if !reflect.DeepEqual(covered, original) {
+		t.Fatalf("coverage mutated: got %+v want %+v", covered, original)
 	}
 }
 

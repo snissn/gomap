@@ -115,11 +115,19 @@ func (o *JournalOwner) Close() error {
 }
 
 type CommandJournalOptions struct {
-	Lane           int
-	SegmentSeq     uint64
+	// Lane selects the command WAL lane and must be non-negative.
+	Lane int
+	// SegmentSeq selects the segment sequence to append to. Zero means append to
+	// the latest existing segment for Lane, or segment 1 when the lane is empty.
+	SegmentSeq uint64
+	// MaxSegmentSize caps individual command frame payloads; zero uses the
+	// commitlog default.
 	MaxSegmentSize int64
-	Compress       bool
-	InitialLSN     uint64
+	// Compress enables commitlog frame compression.
+	Compress bool
+	// InitialLSN is the highest already-applied/durable command LSN. The first
+	// reserved LSN is InitialLSN+1, subject to existing WAL frames.
+	InitialLSN uint64
 }
 
 type CommandJournal struct {
