@@ -108,11 +108,11 @@ keyspaces should be stable:
 
 ```text
 vi/{collectionID}/{indexID}/meta
-vi/{collectionID}/{indexID}/node/{nodeID}
-vi/{collectionID}/{indexID}/edge/{nodeID}/{layer}
-vi/{collectionID}/{indexID}/doc/{documentID}
-vi/{collectionID}/{indexID}/tomb/{nodeID}
 vi/{collectionID}/{indexID}/state
+vi/{collectionID}/{indexID}/epoch/{epoch}/node/{nodeID}
+vi/{collectionID}/{indexID}/epoch/{epoch}/edge/{nodeID}/{layer}
+vi/{collectionID}/{indexID}/epoch/{epoch}/doc/{documentID}
+vi/{collectionID}/{indexID}/epoch/{epoch}/tomb/{nodeID}
 vi/{collectionID}/{indexID}/rebuild/{runID}/...
 ```
 
@@ -120,6 +120,12 @@ If collection roots are available as native ordered roots, each logical
 keyspace SHOULD map to a dedicated root or prefix within a single vector-index
 root. The implementation should avoid storing large graph records inside the
 collection primary document root.
+
+The `state` record publishes the currently readable epoch. Node, edge, document
+map, and tombstone records MUST be scoped by epoch so rebuilds and compaction can
+write a complete staging epoch without overwriting the active graph. Publishing a
+new epoch is the atomic visibility boundary; old epochs are retained until active
+readers drain and then reclaimed.
 
 ## 6. Record Model
 
@@ -737,4 +743,3 @@ Recommended initial PR sequence:
 Only after those land should incremental durable maintenance be implemented,
 because recovery semantics depend on having a reliable durable epoch format and
 catalog state.
-
