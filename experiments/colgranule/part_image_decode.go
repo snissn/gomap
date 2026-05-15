@@ -37,8 +37,9 @@ func ParseColumnPartImage(data []byte) (ColumnPartImage, error) {
 	if rows < 0 {
 		return ColumnPartImage{}, fmt.Errorf("colgranule: negative image row count %d", rows)
 	}
-	if int64(int(rows)) != rows {
-		return ColumnPartImage{}, fmt.Errorf("colgranule: image rows=%d exceed host int", rows)
+	imageRows, err := nonNegativeInt64ToInt(rows, "image rows")
+	if err != nil {
+		return ColumnPartImage{}, err
 	}
 	manifestBytes, err := dec.u32()
 	if err != nil {
@@ -160,7 +161,7 @@ func ParseColumnPartImage(data []byte) (ColumnPartImage, error) {
 	return ColumnPartImage{
 		Version:       version,
 		PartID:        partID,
-		Rows:          int(rows),
+		Rows:          imageRows,
 		ManifestBytes: int(manifestBytes),
 		Sections:      sections,
 		Bytes:         data,
@@ -280,7 +281,15 @@ func decodeColumnPartDescriptorSection(data []byte) (ColumnPartDescriptor, map[s
 	if err != nil {
 		return ColumnPartDescriptor{}, nil, err
 	}
+	rowCountInt, err := nonNegativeInt64ToInt(rowCount, "descriptor row count")
+	if err != nil {
+		return ColumnPartDescriptor{}, nil, err
+	}
 	visibleRows, err := dec.i64()
+	if err != nil {
+		return ColumnPartDescriptor{}, nil, err
+	}
+	visibleRowsInt, err := nonNegativeInt64ToInt(visibleRows, "descriptor visible rows")
 	if err != nil {
 		return ColumnPartDescriptor{}, nil, err
 	}
@@ -300,8 +309,8 @@ func decodeColumnPartDescriptorSection(data []byte) (ColumnPartDescriptor, map[s
 		Version:           uint8(version),
 		PartID:            partID,
 		SchemaVersion:     schemaVersion,
-		RowCount:          int(rowCount),
-		VisibleRowCount:   int(visibleRows),
+		RowCount:          rowCountInt,
+		VisibleRowCount:   visibleRowsInt,
 		LogicalPrimaryKey: logicalPrimaryKey,
 		Granules:          make([]GranuleDescriptor, 0, granules),
 	}
@@ -404,15 +413,39 @@ func decodeGranuleDescriptor(dec *columnPartImageDecoder) (GranuleDescriptor, er
 	if err != nil {
 		return GranuleDescriptor{}, err
 	}
+	ordinalInt, err := nonNegativeInt64ToInt(ordinal, "granule ordinal")
+	if err != nil {
+		return GranuleDescriptor{}, err
+	}
+	firstRowInt, err := nonNegativeInt64ToInt(firstRow, "granule first row")
+	if err != nil {
+		return GranuleDescriptor{}, err
+	}
+	rowCountInt, err := nonNegativeInt64ToInt(rowCount, "granule row count")
+	if err != nil {
+		return GranuleDescriptor{}, err
+	}
+	visibleRowsInt, err := nonNegativeInt64ToInt(visibleRows, "granule visible rows")
+	if err != nil {
+		return GranuleDescriptor{}, err
+	}
+	deletedRowsInt, err := nonNegativeInt64ToInt(deletedRows, "granule deleted rows")
+	if err != nil {
+		return GranuleDescriptor{}, err
+	}
+	markOrdinalInt, err := nonNegativeInt64ToInt(markOrdinal, "granule mark ordinal")
+	if err != nil {
+		return GranuleDescriptor{}, err
+	}
 	return GranuleDescriptor{
-		Ordinal:          int(ordinal),
-		FirstRow:         int(firstRow),
-		RowCount:         int(rowCount),
-		VisibleRows:      int(visibleRows),
-		DeletedRows:      int(deletedRows),
+		Ordinal:          ordinalInt,
+		FirstRow:         firstRowInt,
+		RowCount:         rowCountInt,
+		VisibleRows:      visibleRowsInt,
+		DeletedRows:      deletedRowsInt,
 		IDLower:          idLower,
 		IDUpperExclusive: idUpper,
-		MarkOrdinal:      int(markOrdinal),
+		MarkOrdinal:      markOrdinalInt,
 	}, nil
 }
 
@@ -473,40 +506,76 @@ func decodeColumnBlockDescriptorAndGranule(dec *columnPartImageDecoder) (ColumnB
 	if err != nil {
 		return ColumnBlockDescriptor{}, EncodedGranule{}, err
 	}
+	firstRowInt, err := nonNegativeInt64ToInt(firstRow, "column block first row")
+	if err != nil {
+		return ColumnBlockDescriptor{}, EncodedGranule{}, err
+	}
+	rowCountInt, err := nonNegativeInt64ToInt(rowCount, "column block row count")
+	if err != nil {
+		return ColumnBlockDescriptor{}, EncodedGranule{}, err
+	}
+	firstGranuleInt, err := nonNegativeInt64ToInt(firstGranule, "column block first granule")
+	if err != nil {
+		return ColumnBlockDescriptor{}, EncodedGranule{}, err
+	}
+	lastGranuleInt, err := nonNegativeInt64ToInt(lastGranule, "column block last granule")
+	if err != nil {
+		return ColumnBlockDescriptor{}, EncodedGranule{}, err
+	}
+	rawBytesInt, err := nonNegativeInt64ToInt(rawBytes, "column block raw bytes")
+	if err != nil {
+		return ColumnBlockDescriptor{}, EncodedGranule{}, err
+	}
+	storedBytesInt, err := nonNegativeInt64ToInt(storedBytes, "column block stored bytes")
+	if err != nil {
+		return ColumnBlockDescriptor{}, EncodedGranule{}, err
+	}
+	ordinalInt, err := nonNegativeInt64ToInt(ordinal, "column block ordinal")
+	if err != nil {
+		return ColumnBlockDescriptor{}, EncodedGranule{}, err
+	}
+	nullCountInt, err := nonNegativeInt64ToInt(nullCount, "granule null count")
+	if err != nil {
+		return ColumnBlockDescriptor{}, EncodedGranule{}, err
+	}
+	defaultCountInt, err := nonNegativeInt64ToInt(defaultCount, "granule default count")
+	if err != nil {
+		return ColumnBlockDescriptor{}, EncodedGranule{}, err
+	}
 	encoding := Encoding(encodingCode)
 	compression := Compression(compressionCode)
 	desc := ColumnBlockDescriptor{
-		FirstRow:          int(firstRow),
-		RowCount:          int(rowCount),
-		FirstGranule:      int(firstGranule),
-		LastGranule:       int(lastGranule),
+		FirstRow:          firstRowInt,
+		RowCount:          rowCountInt,
+		FirstGranule:      firstGranuleInt,
+		LastGranule:       lastGranuleInt,
 		Encoding:          encoding,
 		Compression:       compression,
-		RawBytes:          int(rawBytes),
-		StoredBytes:       int(storedBytes),
-		CodecBlockOrdinal: int(ordinal),
+		RawBytes:          rawBytesInt,
+		StoredBytes:       storedBytesInt,
+		CodecBlockOrdinal: ordinalInt,
 	}
 	granule := EncodedGranule{
-		Rows:         int(rowCount),
-		NullCount:    int(nullCount),
-		DefaultCount: int(defaultCount),
+		Rows:         rowCountInt,
+		NullCount:    nullCountInt,
+		DefaultCount: defaultCountInt,
 		HasMinMax:    hasMinMax,
 		Min:          minValue,
 		Max:          maxValue,
 		Encoding:     encoding,
 		Compression:  compression,
-		RawBytes:     int(rawBytes),
-		StoredBytes:  int(storedBytes),
+		RawBytes:     rawBytesInt,
+		StoredBytes:  storedBytesInt,
 		PayloadRef: PayloadRef{
 			Kind:   PayloadRefInline,
-			Length: int(storedBytes),
+			Length: storedBytesInt,
 		},
 		CodecReport: CodecReport{
 			Encoding:             encoding,
 			ActualCompression:    compression,
 			RequestedCompression: compression,
-			RawBytes:             int(rawBytes),
-			StoredBytes:          int(storedBytes),
+			RawBytes:             rawBytesInt,
+			StoredBytes:          storedBytesInt,
 		},
 	}
 	return desc, granule, nil
@@ -568,6 +637,10 @@ func decodeSortKeyMarksSection(image ColumnPartImage) ([]SortKeyMark, error) {
 		if err != nil {
 			return nil, err
 		}
+		rowsInt, err := nonNegativeInt64ToInt(rows, "sort key mark rows")
+		if err != nil {
+			return nil, err
+		}
 		columns, err := dec.stringSlice()
 		if err != nil {
 			return nil, err
@@ -580,7 +653,7 @@ func decodeSortKeyMarksSection(image ColumnPartImage) ([]SortKeyMark, error) {
 		if err != nil {
 			return nil, err
 		}
-		mark := SortKeyMark{Rows: int(rows), Columns: columns, Prefixes: make([]SortKeyPrefixSummary, 0, prefixes)}
+		mark := SortKeyMark{Rows: rowsInt, Columns: columns, Prefixes: make([]SortKeyPrefixSummary, 0, prefixes)}
 		for j := 0; j < prefixes; j++ {
 			prefixColumns, err := dec.stringSlice()
 			if err != nil {
@@ -663,12 +736,24 @@ func decodeRowLocatorsSection(image ColumnPartImage) (map[int64]RowLocator, erro
 		if _, err := dec.u32(); err != nil {
 			return nil, err
 		}
+		partRowInt, err := dec.countToInt(partRow, "row locator part row")
+		if err != nil {
+			return nil, err
+		}
+		granuleOrdinalInt, err := dec.countToInt(granuleOrdinal, "row locator granule ordinal")
+		if err != nil {
+			return nil, err
+		}
+		rowInGranuleInt, err := dec.countToInt(rowInGranule, "row locator row in granule")
+		if err != nil {
+			return nil, err
+		}
 		out[primaryID] = RowLocator{
 			PrimaryID:      primaryID,
 			PartID:         partID,
-			PartRow:        int(partRow),
-			GranuleOrdinal: int(granuleOrdinal),
-			RowInGranule:   int(rowInGranule),
+			PartRow:        partRowInt,
+			GranuleOrdinal: granuleOrdinalInt,
+			RowInGranule:   rowInGranuleInt,
 		}
 	}
 	if err := dec.finish(); err != nil {
@@ -819,11 +904,27 @@ func decodeAggregateMetadataSections(image ColumnPartImage) (map[string]Aggregat
 			if err != nil {
 				return nil, err
 			}
+			granuleOrdinalInt, err := nonNegativeInt64ToInt(granuleOrdinal, "aggregate metadata granule ordinal")
+			if err != nil {
+				return nil, err
+			}
+			firstRowInt, err := nonNegativeInt64ToInt(firstRow, "aggregate metadata first row")
+			if err != nil {
+				return nil, err
+			}
+			rowCountInt, err := nonNegativeInt64ToInt(rowCount, "aggregate metadata row count")
+			if err != nil {
+				return nil, err
+			}
+			matchedRowsInt, err := nonNegativeInt64ToInt(matchedRows, "aggregate metadata matched rows")
+			if err != nil {
+				return nil, err
+			}
 			granule := AggregateMetadataGranule{
-				GranuleOrdinal: int(granuleOrdinal),
-				FirstRow:       int(firstRow),
-				RowCount:       int(rowCount),
-				MatchedRows:    int(matchedRows),
+				GranuleOrdinal: granuleOrdinalInt,
+				FirstRow:       firstRowInt,
+				RowCount:       rowCountInt,
+				MatchedRows:    matchedRowsInt,
 				Entries:        make([]AggregateMetadataEntry, 0, entries),
 			}
 			for j := 0; j < entries; j++ {
@@ -997,17 +1098,48 @@ func decodeAggregateMetadataStats(dec *columnPartImageDecoder) (AggregateMetadat
 	if err != nil {
 		return AggregateMetadataStats{}, err
 	}
+	if buildNanos < 0 {
+		return AggregateMetadataStats{}, fmt.Errorf("colgranule: negative aggregate metadata build duration %d", buildNanos)
+	}
+	granulesInt, err := nonNegativeInt64ToInt(granules, "aggregate metadata granules")
+	if err != nil {
+		return AggregateMetadataStats{}, err
+	}
+	granulesWithRowsInt, err := nonNegativeInt64ToInt(granulesWithRows, "aggregate metadata granules with rows")
+	if err != nil {
+		return AggregateMetadataStats{}, err
+	}
+	rowsMatchedInt, err := nonNegativeInt64ToInt(rowsMatched, "aggregate metadata rows matched")
+	if err != nil {
+		return AggregateMetadataStats{}, err
+	}
+	entriesInt, err := nonNegativeInt64ToInt(entries, "aggregate metadata entries")
+	if err != nil {
+		return AggregateMetadataStats{}, err
+	}
+	valueBytesInt, err := nonNegativeInt64ToInt(valueBytes, "aggregate metadata value bytes")
+	if err != nil {
+		return AggregateMetadataStats{}, err
+	}
+	descriptorBytesInt, err := nonNegativeInt64ToInt(descriptorBytes, "aggregate metadata descriptor bytes")
+	if err != nil {
+		return AggregateMetadataStats{}, err
+	}
+	totalBytesInt, err := nonNegativeInt64ToInt(totalBytes, "aggregate metadata total bytes")
+	if err != nil {
+		return AggregateMetadataStats{}, err
+	}
 	return AggregateMetadataStats{
 		Admitted:            admitted,
 		RejectedReason:      rejectedReason,
 		BuildDuration:       time.Duration(buildNanos),
-		Granules:            int(granules),
-		GranulesWithRows:    int(granulesWithRows),
-		RowsMatched:         int(rowsMatched),
-		Entries:             int(entries),
-		ValueBytes:          int(valueBytes),
-		DescriptorBytes:     int(descriptorBytes),
-		TotalBytes:          int(totalBytes),
+		Granules:            granulesInt,
+		GranulesWithRows:    granulesWithRowsInt,
+		RowsMatched:         rowsMatchedInt,
+		Entries:             entriesInt,
+		ValueBytes:          valueBytesInt,
+		DescriptorBytes:     descriptorBytesInt,
+		TotalBytes:          totalBytesInt,
 		BytesPerPartRow:     float64(bytesPerPartRow) / 1_000_000,
 		BytesPerMatchedRow:  float64(bytesPerMatchedRow) / 1_000_000,
 		Compression:         compression,
@@ -1283,6 +1415,17 @@ func (d *columnPartImageDecoder) countToInt(count uint32, label string) (int, er
 		return 0, fmt.Errorf("colgranule: %s count=%d exceeds host int", label, count)
 	}
 	return total, nil
+}
+
+func nonNegativeInt64ToInt(value int64, label string) (int, error) {
+	if value < 0 {
+		return 0, fmt.Errorf("colgranule: negative %s %d", label, value)
+	}
+	out := int(value)
+	if int64(out) != value {
+		return 0, fmt.Errorf("colgranule: %s=%d exceeds host int", label, value)
+	}
+	return out, nil
 }
 
 func (d *columnPartImageDecoder) finish() error {
