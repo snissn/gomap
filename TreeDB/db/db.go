@@ -645,6 +645,11 @@ type Options struct {
 	// CommandWAL enables the compatibility-breaking command-WAL mode for direct
 	// backend raw KV writes. It is also enabled automatically when format.json
 	// advertises the command_wal_v1 required feature.
+	//
+	// The public cached writer (treedb.Open) remains fail-closed for writes when
+	// CommandWAL is true; it returns ErrCommandWALUnsupported for any write open
+	// until cached writes are converted to typed command frames. Use OpenBackend
+	// for read-write opens in command-WAL mode.
 	CommandWAL bool
 	// ReadOnly opens the database without acquiring an exclusive lock and without
 	// modifying on-disk state (no recovery truncation, no WAL replay, no background
@@ -1464,7 +1469,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		// Persist the required feature gate before running typed recovery so that
 		// if recovery mutates WAL segments (cleanup pass) and then the open fails,
 		// the next open uses typed recovery rather than the legacy path.
-		cfg, _, err := formatConfigFromOptionsPreservingRequiredFeatures(opts)
+		cfg, err := formatConfigFromOptionsPreservingRequiredFeatures(opts)
 		if err != nil {
 			_ = db.Close()
 			return nil, err

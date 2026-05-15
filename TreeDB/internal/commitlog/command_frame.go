@@ -67,6 +67,13 @@ const (
 	RawKVOpSetRID
 )
 
+// RawKVOperation represents a single operation in a RawKVBatch command frame.
+//
+// Field constraints by op type:
+//   - RawKVOpSet: Key and Value are the raw bytes; RID must be zero.
+//   - RawKVOpDelete: Key is set; Value must be empty; RID must be zero.
+//   - RawKVOpSetRID: Key is set; Value MUST be empty (the RID is encoded
+//     separately as an 8-byte payload); RID must be non-zero.
 type RawKVOperation struct {
 	Op    RawKVOp
 	Key   []byte

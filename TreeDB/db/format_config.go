@@ -92,15 +92,13 @@ func formatConfigFromOptions(opts Options) FormatConfig {
 	return cfg
 }
 
-func formatConfigFromOptionsPreservingRequiredFeatures(opts Options) (FormatConfig, bool, error) {
+func formatConfigFromOptionsPreservingRequiredFeatures(opts Options) (FormatConfig, error) {
 	cfg := formatConfigFromOptions(opts)
 	existing, ok, err := LoadFormatConfig(opts.Dir)
 	if err != nil {
-		return FormatConfig{}, false, err
+		return FormatConfig{}, err
 	}
-	requiresCommandWAL := false
 	if ok {
-		requiresCommandWAL = existing.RequiresCommandWALV1()
 		for _, feature := range existing.RequiredFeatures {
 			cfg.RequiredFeatures = appendRequiredFormatFeature(cfg.RequiredFeatures, feature)
 		}
@@ -108,7 +106,7 @@ func formatConfigFromOptionsPreservingRequiredFeatures(opts Options) (FormatConf
 			cfg.Version = formatConfigRequiredFeaturesVersion
 		}
 	}
-	return cfg, requiresCommandWAL, nil
+	return cfg, nil
 }
 
 func appendRequiredFormatFeature(features []string, feature string) []string {
@@ -316,7 +314,7 @@ func saveOpenFormatConfig(opts Options) error {
 	if opts.CommandWAL && opts.ReadOnly {
 		return nil
 	}
-	cfg, _, err := formatConfigFromOptionsPreservingRequiredFeatures(opts)
+	cfg, err := formatConfigFromOptionsPreservingRequiredFeatures(opts)
 	if err != nil {
 		return err
 	}
