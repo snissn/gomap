@@ -333,7 +333,7 @@ func DecodeRawKVBatchPayload(payload []byte) ([]RawKVOperation, error) {
 	if count > uint32((len(payload)-rawKVBatchHeaderSize)/rawKVOpHeaderSize) {
 		return nil, ErrCorrupt
 	}
-	ops := make([]RawKVOperation, 0, count)
+	var ops []RawKVOperation
 	off := rawKVBatchHeaderSize
 	for i := uint32(0); i < count; i++ {
 		if off+rawKVOpHeaderSize > len(payload) {
@@ -348,7 +348,7 @@ func DecodeRawKVBatchPayload(payload []byte) ([]RawKVOperation, error) {
 			return nil, ErrCorrupt
 		}
 		entry := RawKVOperation{Op: op}
-		entry.Key = append([]byte(nil), payload[off:off+int(keyLen)]...)
+		entry.Key = cloneBytesPreserveEmpty(payload[off : off+int(keyLen)])
 		off += int(keyLen)
 		entry.Value = append([]byte(nil), payload[off:off+int(valueLen)]...)
 		off += int(valueLen)
@@ -364,7 +364,7 @@ func DecodeRawKVBatchPayload(payload []byte) ([]RawKVOperation, error) {
 }
 
 func validateRawKVOperation(op *RawKVOperation) error {
-	if op == nil || len(op.Key) == 0 {
+	if op == nil || op.Key == nil {
 		return ErrCorrupt
 	}
 	switch op.Op {
@@ -378,6 +378,16 @@ func validateRawKVOperation(op *RawKVOperation) error {
 	default:
 		return ErrCorrupt
 	}
+}
+
+func cloneBytesPreserveEmpty(src []byte) []byte {
+	if src == nil {
+		return nil
+	}
+	if len(src) == 0 {
+		return []byte{}
+	}
+	return append([]byte(nil), src...)
 }
 
 func encodeExternalRefs(refs []ExternalRef) ([]byte, error) {
@@ -420,11 +430,14 @@ func decodeExternalRefs(data []byte) ([]ExternalRef, error) {
 	if len(data) < 4 {
 		return nil, ErrCorrupt
 	}
+	const fixed = 2 + 2 + 4 + 8 + 8 + 8 + sha256.Size
 	count := binary.LittleEndian.Uint32(data[0:4])
+	if count > uint32((len(data)-4)/fixed) {
+		return nil, ErrCorrupt
+	}
 	refs := make([]ExternalRef, 0, count)
 	off := 4
 	for i := uint32(0); i < count; i++ {
-		const fixed = 2 + 2 + 4 + 8 + 8 + 8 + sha256.Size
 		if off+fixed > len(data) {
 			return nil, ErrCorrupt
 		}
@@ -487,6 +500,9 @@ func decodeCommandExtensions(data []byte) ([]CommandExtension, error) {
 		return nil, ErrCorrupt
 	}
 	count := binary.LittleEndian.Uint32(data[0:4])
+	if count > uint32((len(data)-4)/8) {
+		return nil, ErrCorrupt
+	}
 	exts := make([]CommandExtension, 0, count)
 	off := 4
 	for i := uint32(0); i < count; i++ {

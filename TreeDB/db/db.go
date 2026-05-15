@@ -1105,8 +1105,8 @@ func Open(opts Options) (*DB, error) {
 		if cfg, ok, err := LoadFormatConfig(opts.Dir); err != nil {
 			return nil, err
 		} else if ok {
-			if cfg.RequiresCommandWALV1() {
-				return nil, ErrCommandWALUnsupported
+			if err := cfg.ValidateRuntimeSupported(); err != nil {
+				return nil, err
 			}
 			cfg.ApplyIndexFormatToOptions(&opts)
 		}

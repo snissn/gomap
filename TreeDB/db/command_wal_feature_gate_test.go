@@ -65,6 +65,25 @@ func TestCommandWALRequiredFeatureFailsClosedUntilExecutionEnabled(t *testing.T)
 	}
 }
 
+func TestCommandWALRequiredFeatureFailsClosedForOfflineMaintenance(t *testing.T) {
+	dir := t.TempDir()
+	if err := SaveFormatConfig(dir, FormatConfig{RequiredFeatures: []string{RequiredFeatureCommandWALV1}}); err != nil {
+		t.Fatalf("SaveFormatConfig: %v", err)
+	}
+	if err := VacuumIndexOffline(Options{Dir: dir}); !errors.Is(err, ErrCommandWALUnsupported) {
+		t.Fatalf("VacuumIndexOffline error=%v, want ErrCommandWALUnsupported", err)
+	}
+	if err := VacuumIndexOffline(Options{Dir: dir, IgnoreFormatConfig: true}); !errors.Is(err, ErrCommandWALUnsupported) {
+		t.Fatalf("VacuumIndexOffline IgnoreFormatConfig error=%v, want ErrCommandWALUnsupported", err)
+	}
+	if _, err := ValueLogRewriteOffline(Options{Dir: dir}); !errors.Is(err, ErrCommandWALUnsupported) {
+		t.Fatalf("ValueLogRewriteOffline error=%v, want ErrCommandWALUnsupported", err)
+	}
+	if _, err := ValueLogRewriteOffline(Options{Dir: dir, IgnoreFormatConfig: true}); !errors.Is(err, ErrCommandWALUnsupported) {
+		t.Fatalf("ValueLogRewriteOffline IgnoreFormatConfig error=%v, want ErrCommandWALUnsupported", err)
+	}
+}
+
 func TestLoadFormatConfigRejectsUnknownRequiredFeature(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -76,6 +95,23 @@ func TestLoadFormatConfigRejectsUnknownRequiredFeature(t *testing.T) {
 	_, _, err := LoadFormatConfig(dir)
 	if !errors.Is(err, ErrUnsupportedRequiredFeature) {
 		t.Fatalf("LoadFormatConfig error=%v, want ErrUnsupportedRequiredFeature", err)
+	}
+}
+
+func TestSaveFormatConfigNormalizesRequiredFeaturesToVersion3(t *testing.T) {
+	dir := t.TempDir()
+	if err := SaveFormatConfig(dir, FormatConfig{Version: formatConfigVersion, RequiredFeatures: []string{RequiredFeatureCommandWALV1}}); err != nil {
+		t.Fatalf("SaveFormatConfig: %v", err)
+	}
+	cfg, ok, err := LoadFormatConfig(dir)
+	if err != nil {
+		t.Fatalf("LoadFormatConfig: %v", err)
+	}
+	if !ok {
+		t.Fatalf("expected format config")
+	}
+	if cfg.Version != formatConfigRequiredFeaturesVersion {
+		t.Fatalf("version=%d, want %d", cfg.Version, formatConfigRequiredFeaturesVersion)
 	}
 }
 

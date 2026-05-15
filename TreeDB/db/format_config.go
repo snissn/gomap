@@ -50,6 +50,13 @@ func (cfg FormatConfig) RequiresCommandWALV1() bool {
 	return false
 }
 
+func (cfg FormatConfig) ValidateRuntimeSupported() error {
+	if cfg.RequiresCommandWALV1() {
+		return ErrCommandWALUnsupported
+	}
+	return nil
+}
+
 func formatConfigPath(dir string) string {
 	if dir == "" {
 		return ""
@@ -221,11 +228,10 @@ func SaveFormatConfig(dir string, cfg FormatConfig) error {
 	if path == "" {
 		return errors.New("missing db dir")
 	}
-	if cfg.Version == 0 {
+	if len(cfg.RequiredFeatures) != 0 {
+		cfg.Version = formatConfigRequiredFeaturesVersion
+	} else if cfg.Version == 0 {
 		cfg.Version = formatConfigVersion
-		if len(cfg.RequiredFeatures) != 0 {
-			cfg.Version = formatConfigRequiredFeaturesVersion
-		}
 	}
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
@@ -317,7 +323,7 @@ func applyFormatConfigForMaintenance(opts *Options) error {
 		return nil
 	}
 	if opts.IgnoreFormatConfig {
-		return nil
+		return ValidateFormatRequiredFeatureGate(opts.Dir)
 	}
 	cfg, ok, err := LoadFormatConfig(opts.Dir)
 	if err != nil {
@@ -325,6 +331,9 @@ func applyFormatConfigForMaintenance(opts *Options) error {
 	}
 	if !ok {
 		return nil
+	}
+	if err := cfg.ValidateRuntimeSupported(); err != nil {
+		return err
 	}
 	cfg.ApplyToOptions(opts)
 	return nil

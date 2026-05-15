@@ -2,6 +2,7 @@ package commitlog
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"io"
@@ -158,6 +159,32 @@ func TestCommandWALFormatRejectsMalformedLengthBeforeAllocation(t *testing.T) {
 	}
 }
 
+func TestCommandWALFormatRejectsMalformedSectionCountsBeforeAllocation(t *testing.T) {
+	payload, err := EncodeRawKVBatchPayload(nil)
+	if err != nil {
+		t.Fatalf("EncodeRawKVBatchPayload: %v", err)
+	}
+
+	extRefs := make([]byte, 4)
+	binary.LittleEndian.PutUint32(extRefs, ^uint32(0))
+	frame := mustCommandFrameWithSections(t, payload, extRefs, nil, nil)
+	if _, err := DecodeCommandFrame(frame); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("DecodeCommandFrame external refs error=%v, want ErrCorrupt", err)
+	}
+
+	extensions := make([]byte, 4)
+	binary.LittleEndian.PutUint32(extensions, ^uint32(0))
+	frame = mustCommandFrameWithSections(t, payload, nil, extensions, nil)
+	if _, err := DecodeCommandFrame(frame); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("DecodeCommandFrame preconditions error=%v, want ErrCorrupt", err)
+	}
+
+	frame = mustCommandFrameWithSections(t, payload, nil, nil, extensions)
+	if _, err := DecodeCommandFrame(frame); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("DecodeCommandFrame assertions error=%v, want ErrCorrupt", err)
+	}
+}
+
 func TestCommandWALFormatRejectsHeaderPayloadDigestAndTrailerMismatch(t *testing.T) {
 	payload, err := EncodeRawKVBatchPayload([]RawKVOperation{{Op: RawKVOpSet, Key: []byte("k"), Value: []byte("v")}})
 	if err != nil {
@@ -227,6 +254,27 @@ func TestCommandWALFormatRoundTripExternalRefs(t *testing.T) {
 	ref := got.ExternalRefs[0]
 	if ref.Class != ExternalRefValueLog || ref.FileID != 41 || ref.Offset != 128 || ref.Length != 512 || ref.Digest != digest || string(ref.Path) != "value_vlog/value-l0-000041.log" {
 		t.Fatalf("external ref mismatch: %+v", ref)
+	}
+}
+
+func TestCommandWALRawKVBatchAllowsEmptyKeysButRejectsNilKeys(t *testing.T) {
+	if _, err := EncodeRawKVBatchPayload([]RawKVOperation{{Op: RawKVOpSet, Key: nil, Value: []byte("v")}}); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("EncodeRawKVBatchPayload nil key error=%v, want ErrCorrupt", err)
+	}
+
+	payload, err := EncodeRawKVBatchPayload([]RawKVOperation{
+		{Op: RawKVOpSet, Key: []byte{}, Value: []byte("empty-key-value")},
+		{Op: RawKVOpDelete, Key: []byte{}},
+	})
+	if err != nil {
+		t.Fatalf("EncodeRawKVBatchPayload empty keys: %v", err)
+	}
+	ops, err := DecodeRawKVBatchPayload(payload)
+	if err != nil {
+		t.Fatalf("DecodeRawKVBatchPayload empty keys: %v", err)
+	}
+	if len(ops) != 2 || ops[0].Key == nil || len(ops[0].Key) != 0 || ops[1].Key == nil || len(ops[1].Key) != 0 {
+		t.Fatalf("decoded empty keys mismatch: %+v", ops)
 	}
 }
 
@@ -362,6 +410,30 @@ func mustCommandFrame(t *testing.T, env CommandEnvelope) []byte {
 		t.Fatalf("EncodeCommandFrame: %v", err)
 	}
 	return frame
+}
+
+func mustCommandFrameWithSections(t *testing.T, payload, extRefs, preconditions, assertions []byte) []byte {
+	t.Helper()
+	frame := mustCommandFrame(t, CommandEnvelope{
+		LSN:           1,
+		Kind:          CommandKindRawKVBatch,
+		Scope:         CommandScopeRawKV,
+		PayloadFormat: PayloadFormatRawKVBatchV1,
+		Payload:       payload,
+	})
+	total := commandFrameHeaderSize + len(payload) + len(extRefs) + len(preconditions) + len(assertions)
+	out := make([]byte, total)
+	copy(out, frame[:commandFrameHeaderSize+len(payload)])
+	binary.LittleEndian.PutUint32(out[60:64], uint32(len(extRefs)))
+	binary.LittleEndian.PutUint32(out[64:68], uint32(len(preconditions)))
+	binary.LittleEndian.PutUint32(out[68:72], uint32(len(assertions)))
+	off := commandFrameHeaderSize + len(payload)
+	copy(out[off:], extRefs)
+	off += len(extRefs)
+	copy(out[off:], preconditions)
+	off += len(preconditions)
+	copy(out[off:], assertions)
+	return out
 }
 
 func assertGoldenHex(t *testing.T, name string, got []byte) {
