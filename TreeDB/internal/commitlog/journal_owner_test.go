@@ -211,6 +211,60 @@ func TestCommandJournalRejectsNonActiveTerminalTail(t *testing.T) {
 	}
 }
 
+func TestCommandJournalTruncatesActiveTerminalTailPerLane(t *testing.T) {
+	dir := t.TempDir()
+	j, err := OpenCommandJournal(dir, CommandJournalOptions{Lane: 0, SegmentSeq: 1})
+	if err != nil {
+		t.Fatalf("OpenCommandJournal lane 0: %v", err)
+	}
+	if _, err := j.AppendCommand(CommandEnvelope{
+		Kind:          CommandKindRawKVBatch,
+		Scope:         CommandScopeRawKV,
+		PayloadFormat: PayloadFormatRawKVBatchV1,
+	}); err != nil {
+		t.Fatalf("AppendCommand lane 0: %v", err)
+	}
+	if err := j.Close(); err != nil {
+		t.Fatalf("Close lane 0: %v", err)
+	}
+	lane0Path := filepath.Join(dir, CommandSegmentName(0, 1))
+	f, err := os.OpenFile(lane0Path, os.O_WRONLY|os.O_APPEND, 0)
+	if err != nil {
+		t.Fatalf("OpenFile append lane 0 tail: %v", err)
+	}
+	if _, err := f.Write([]byte{0x01, 0x02, 0x03}); err != nil {
+		_ = f.Close()
+		t.Fatalf("Write lane 0 torn tail: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("Close lane 0 torn tail: %v", err)
+	}
+
+	reopen, err := OpenCommandJournal(dir, CommandJournalOptions{Lane: 1, SegmentSeq: 1})
+	if err != nil {
+		t.Fatalf("OpenCommandJournal lane 1 with lane 0 active tail: %v", err)
+	}
+	defer reopen.Close()
+	lsn, err := reopen.AppendCommand(CommandEnvelope{
+		Kind:          CommandKindRawKVBatch,
+		Scope:         CommandScopeRawKV,
+		PayloadFormat: PayloadFormatRawKVBatchV1,
+	})
+	if err != nil {
+		t.Fatalf("AppendCommand lane 1: %v", err)
+	}
+	if lsn != 2 {
+		t.Fatalf("lane 1 LSN=%d, want 2 after lane 0 scan", lsn)
+	}
+	frames, err := ScanCommandFrames(lane0Path, Options{})
+	if err != nil {
+		t.Fatalf("ScanCommandFrames lane 0: %v", err)
+	}
+	if len(frames) != 1 || frames[0].LSN != 1 {
+		t.Fatalf("lane 0 frames=%+v, want only LSN 1 after active-tail truncation", frames)
+	}
+}
+
 func TestCommandJournalTruncatesTerminalTailBeforeAppend(t *testing.T) {
 	dir := t.TempDir()
 	j, err := OpenCommandJournal(dir, CommandJournalOptions{})

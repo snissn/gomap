@@ -230,8 +230,9 @@ func commandJournalSegments(walDir string, activePath string) ([]commandJournalS
 		}
 		return nil, err
 	}
-	cleanActive := filepath.Clean(activePath)
+	activeLane, activeSeq, hasActivePath := parseCommandSegmentName(filepath.Base(activePath))
 	segments := make([]commandJournalSegment, 0, len(entries))
+	activeSeqByLane := make(map[int]uint64)
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
@@ -246,12 +247,22 @@ func commandJournalSegments(walDir string, activePath string) ([]commandJournalS
 			return nil, err
 		}
 		segments = append(segments, commandJournalSegment{
-			path:   path,
-			lane:   entryLane,
-			seq:    seq,
-			size:   info.Size(),
-			active: filepath.Clean(path) == cleanActive,
+			path: path,
+			lane: entryLane,
+			seq:  seq,
+			size: info.Size(),
 		})
+		if seq > activeSeqByLane[entryLane] {
+			activeSeqByLane[entryLane] = seq
+		}
+	}
+	for i := range segments {
+		seg := &segments[i]
+		if hasActivePath && seg.lane == activeLane {
+			seg.active = seg.seq == activeSeq
+			continue
+		}
+		seg.active = seg.seq == activeSeqByLane[seg.lane]
 	}
 	sort.Slice(segments, func(i, j int) bool {
 		if segments[i].lane != segments[j].lane {

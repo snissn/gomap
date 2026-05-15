@@ -28,6 +28,7 @@
     "TestCommandJournalSeedsLSNFromExistingFrames",
     "TestCommandJournalSeedsLSNFromExistingLanes",
     "TestCommandJournalSeedsLSNFromExistingSegmentFamily",
+    "TestCommandJournalTruncatesActiveTerminalTailPerLane",
     "TestCommandJournalTruncatesTerminalTailBeforeAppend",
     "TestCommandJournalUnsupportedVersionDoesNotConsumeLSN",
     "TestCommandJournalUsesCommitSegmentFamily",
@@ -57,6 +58,7 @@
     "TestMetaPageBodyLegacyDecodeDefaultsAppliedCommandLSN"
   ],
   "crash_scenarios": [
+    "a torn terminal tail on another lane's latest command segment is treated as that lane's active tail and truncated while older non-active tails still fail closed",
     "active command WAL terminal tails are truncated before append, while non-active segment tails fail closed",
     "cleanup after AppliedCommandLSN only removes covered non-active typed command WAL segments",
     "cleanup retains the active segment even when its max complete LSN is covered by AppliedCommandLSN",

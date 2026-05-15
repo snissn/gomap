@@ -264,6 +264,7 @@ PR 2: shared journal ownership and `AppliedCommandLSN` plumbing:
 - `TestCommandJournalSeedsLSNFromExistingSegmentFamily`;
 - `TestCommandJournalSeedsLSNFromExistingLanes`;
 - `TestCommandJournalTruncatesTerminalTailBeforeAppend`;
+- `TestCommandJournalTruncatesActiveTerminalTailPerLane`;
 - `TestCommandJournalRejectsNonActiveTerminalTail`;
 - `TestCommandJournalConcurrentAppendsSerializeFrameOrder`;
 - `TestCommandJournalRejectsIndependentMutableOwner`;
