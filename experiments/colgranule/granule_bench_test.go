@@ -246,6 +246,62 @@ func BenchmarkCountUint32CodesGranule(b *testing.B) {
 	}
 }
 
+func BenchmarkPredicatePruningInt64Granules(b *testing.B) {
+	const granulesN = 100
+	granules, marks, err := buildPredicateBenchmarkGranules(granulesN, DefaultRowsPerGranule)
+	if err != nil {
+		b.Fatal(err)
+	}
+	totalRows := granulesN * DefaultRowsPerGranule
+	low := int64(totalRows * 9 / 10)
+	high := int64(totalRows - 1)
+	plan := PredicatePlan{
+		Filter:        Int64RangePredicate{Column: "time_us", Low: low, High: high},
+		SortKeyRanges: []Int64RangePredicate{{Column: "time_us", Low: low, High: high}},
+	}
+	b.Run("unpruned_projected_scan", func(b *testing.B) {
+		b.ReportAllocs()
+		b.SetBytes(int64(totalRows * 8))
+		var reader GranuleReader
+		count, err := countInt64RangeUnpruned(&reader, granules, low, high)
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchSink += int64(count)
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			count, err = countInt64RangeUnpruned(&reader, granules, low, high)
+			if err != nil {
+				b.Fatal(err)
+			}
+			benchSink += int64(count)
+		}
+		reportGranuleBenchMetrics(b, totalRows, totalRows*8, totalStoredBytes(granules))
+	})
+	b.Run("pruned_by_sort_key_mark", func(b *testing.B) {
+		b.ReportAllocs()
+		b.SetBytes(int64(totalRows * 8))
+		var reader GranuleReader
+		count, diagnostics, err := reader.CountInt64RangeWithDiagnostics(granules, marks, plan)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if diagnostics.SkippedByMark < granulesN*9/10 {
+			b.Fatalf("skipped_by_mark=%d want at least %d", diagnostics.SkippedByMark, granulesN*9/10)
+		}
+		benchSink += int64(count + diagnostics.SkippedByMark)
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			count, diagnostics, err = reader.CountInt64RangeWithDiagnostics(granules, marks, plan)
+			if err != nil {
+				b.Fatal(err)
+			}
+			benchSink += int64(count + diagnostics.SkippedByMark)
+		}
+		reportGranuleBenchMetrics(b, totalRows, totalRows*8, totalStoredBytes(granules))
+	})
+}
+
 func TestCompressionRatios(t *testing.T) {
 	for _, fx := range benchmarkFixtures() {
 		t.Logf("fixture=%s rows=%d raw_values_bytes=%d", fx.name, len(fx.values), len(fx.values)*8)
@@ -346,4 +402,53 @@ func makeUint32Codes(n int, cardinality uint32) []uint32 {
 		values[i] = uint32((i / 32) % int(cardinality))
 	}
 	return values
+}
+
+func buildPredicateBenchmarkGranules(granulesN int, rowsPerGranule int) ([]EncodedGranule, []SortKeyMark, error) {
+	builder := NewGranuleBuilder(Config{Encoding: EncodingDeltaVarint, Compression: CompressionLZ4})
+	granules := make([]EncodedGranule, 0, granulesN)
+	marks := make([]SortKeyMark, 0, granulesN)
+	for granuleIndex := 0; granuleIndex < granulesN; granuleIndex++ {
+		values := make([]int64, rowsPerGranule)
+		for i := range values {
+			values[i] = int64(granuleIndex*rowsPerGranule + i)
+		}
+		g, err := builder.BuildInt64(values)
+		if err != nil {
+			return nil, nil, err
+		}
+		owned := g
+		owned.Payload = append([]byte(nil), g.Payload...)
+		mark, err := BuildSortKeyMark([]SortKeyColumn{{Name: "time_us", Values: values}})
+		if err != nil {
+			return nil, nil, err
+		}
+		granules = append(granules, owned)
+		marks = append(marks, mark)
+	}
+	return granules, marks, nil
+}
+
+func countInt64RangeUnpruned(reader *GranuleReader, granules []EncodedGranule, low int64, high int64) (int, error) {
+	count := 0
+	for _, g := range granules {
+		values, err := reader.DecodeInt64(g)
+		if err != nil {
+			return 0, err
+		}
+		for _, v := range values {
+			if v >= low && v <= high {
+				count++
+			}
+		}
+	}
+	return count, nil
+}
+
+func totalStoredBytes(granules []EncodedGranule) int {
+	total := 0
+	for _, g := range granules {
+		total += g.StoredBytes
+	}
+	return total
 }
