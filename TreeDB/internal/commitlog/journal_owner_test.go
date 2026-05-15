@@ -597,6 +597,9 @@ func TestJournalOwnerRollbackMaxLSNClearsExhausted(t *testing.T) {
 	if err := owner.rollbackReservedLSN(lsn); err != nil {
 		t.Fatalf("rollbackReservedLSN max: %v", err)
 	}
+	if _, _, err := owner.reserveLSNRange(2); err == nil {
+		t.Fatalf("reserveLSNRange(2) after max rollback unexpectedly succeeded")
+	}
 	lsn, err = owner.reserveLSN()
 	if err != nil {
 		t.Fatalf("ReserveLSN after rollback: %v", err)

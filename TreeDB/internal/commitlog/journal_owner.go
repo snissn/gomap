@@ -78,6 +78,8 @@ func (o *JournalOwner) rollbackReservedLSN(lsn uint64) error {
 		if !o.exhausted {
 			return fmt.Errorf("commitlog: cannot rollback non-tail lsn %d", lsn)
 		}
+		// Re-open the final LSN for exactly one retry. A subsequent single-LSN
+		// reservation may reuse MaxUint64; larger ranges still fail exhausted.
 		o.exhausted = false
 		o.nextLSN = lsn
 		return nil
