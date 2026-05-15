@@ -273,7 +273,7 @@ func parseConfig(args []string) (config, error) {
 	fs.IntVar(&cfg.efConstruction, "ef-construction", cfg.efConstruction, "HNSW efConstruction")
 	fs.IntVar(&cfg.efSearch, "ef-search", cfg.efSearch, "HNSW efSearch for ANN queries")
 	fs.IntVar(&cfg.valuePointerThreshold, "value-pointer-threshold", cfg.valuePointerThreshold, "Value-log pointer threshold for the demo DB in bytes; 0 uses the selected TreeDB profile default")
-	fs.Int64Var(&cfg.leafGenerationTarget, "leaf-generation-segment-target", cfg.leafGenerationTarget, "Leaf value-log generation segment target for the demo DB in bytes; 0 uses the selected TreeDB profile default")
+	fs.Int64Var(&cfg.leafGenerationTarget, "leaf-generation-segment-target", cfg.leafGenerationTarget, "Leaf value-log generation segment target for the demo DB in bytes; a positive value opts the demo into leaf generation rolling, 0 uses the selected TreeDB profile default")
 	fs.Float64Var(&cfg.minRecall, "min-recall", cfg.minRecall, "Minimum validation recall@topK")
 	fs.BoolVar(&cfg.compact, "compact", cfg.compact, "Run CompactStorageFull after insert/index build and before reads")
 	fs.BoolVar(&cfg.compactSyncEachPhase, "compact-sync-each-phase", false, "Ask CompactStorage to fsync each rewrite/pack phase")
@@ -437,9 +437,9 @@ func openDemoBackend(cfg config, dir string) (*backenddb.DB, func() error, error
 		opts.ValueLog.PointerThreshold = cfg.valuePointerThreshold
 	}
 	if cfg.leafGenerationTarget > 0 {
-		if opts.ValueLog.Generational.Policy == treedb.ValueLogGenerationDefault {
-			opts.ValueLog.Generational.Policy = treedb.ValueLogGenerationHotWarmCold
-		}
+		// A positive demo-local target is an explicit opt-in to sealed leaf
+		// generations, including under the deterministic bench profile.
+		opts.ValueLog.Generational.Policy = treedb.ValueLogGenerationHotWarmCold
 		opts.ValueLog.Generational.LeafSegmentTargetBytes = cfg.leafGenerationTarget
 	}
 	if opts.IndexOuterLeavesInValueLog {
