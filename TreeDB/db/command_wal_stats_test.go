@@ -107,6 +107,9 @@ func TestCommandWALStatsDisabledDoesNotScanWAL(t *testing.T) {
 	if got := stats["treedb.command_wal.frames"]; got != "0" {
 		t.Fatalf("frames=%q, want 0 for disabled command WAL", got)
 	}
+	if got := stats["treedb.command_wal.stats_scan"]; got != "false" {
+		t.Fatalf("stats_scan=%q, want false for disabled command WAL", got)
+	}
 }
 
 func TestCommandWALRIDCacheBounded(t *testing.T) {

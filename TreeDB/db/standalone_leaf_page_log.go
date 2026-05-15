@@ -1,5 +1,7 @@
 package db
 
+import "fmt"
+
 const (
 	standaloneLeafPageLogCRCPrefixBytes  int64 = 4
 	standaloneLeafPageLogMaxValueOffset  int64 = 1<<32 - 1
@@ -42,6 +44,12 @@ func NewStandaloneLeafPageLog(dir string, opts StandaloneLeafPageLogOptions) (Le
 		// Leaf pointers store offsets in uint32 space; keep each leaf segment
 		// inside that addressable range after the value-log CRC prefix.
 		maxSegmentBytes = standaloneLeafPageLogMaxSegmentBytes
+	}
+	if maxSegmentBytes < 0 {
+		return nil, fmt.Errorf("treedb: standalone leaf-page log max segment bytes must be non-negative")
+	}
+	if maxSegmentBytes > standaloneLeafPageLogMaxSegmentBytes {
+		return nil, fmt.Errorf("treedb: standalone leaf-page log max segment bytes %d exceeds offset cap %d", maxSegmentBytes, standaloneLeafPageLogMaxSegmentBytes)
 	}
 	compression := opts.Compression
 	if compression == 0 {

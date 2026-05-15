@@ -44,7 +44,7 @@ func newTreeDBBackend(dir string, commandWAL bool, name string) (kvstore.DB, err
 	if commandWAL && opts.Durability == treedbdb.DurabilityWALOffRelaxed {
 		opts.Durability = treedbdb.DurabilityWALOnRelaxed
 	}
-	opts.CommandWALStatsScan = commandWAL
+	opts.CommandWALStatsScan = commandWAL && *treedbCommandWALStatsScan
 	if opts.ValueLog.PointerThreshold <= 0 {
 		opts.ValueLog.PointerThreshold = page.DefaultInlineThreshold
 	}

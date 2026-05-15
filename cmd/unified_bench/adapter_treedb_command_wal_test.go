@@ -10,6 +10,7 @@ func TestTreeDBBackendCommandWALVariantPersistsFeatureAndAppendsTypedFrames(t *t
 	saved := saveTreeDBFlagState()
 	defer restoreTreeDBFlagState(saved)
 	resetTreeDBIndexFlagsForTest()
+	*treedbCommandWALStatsScan = true
 
 	dir := t.TempDir()
 	db, err := NewTreeDBBackendCommandWAL(dir)

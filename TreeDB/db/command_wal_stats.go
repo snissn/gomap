@@ -22,14 +22,10 @@ func writeCommandWALStats(stats map[string]string, db *DB) {
 	if stats == nil || db == nil {
 		return
 	}
+	writeCommandWALStatsZeroCounters(stats)
 	if !db.commandWAL {
 		stats["treedb.command_wal.required_feature"] = "false"
-		stats["treedb.command_wal.segment_files"] = "0"
-		stats["treedb.command_wal.typed_segments"] = "0"
-		stats["treedb.command_wal.active_segments"] = "0"
-		stats["treedb.command_wal.frames"] = "0"
-		stats["treedb.command_wal.max_lsn"] = "0"
-		stats["treedb.command_wal.bytes"] = "0"
+		stats["treedb.command_wal.stats_scan"] = "false"
 		return
 	}
 	stats["treedb.command_wal.required_feature"] = "false"
@@ -39,12 +35,6 @@ func writeCommandWALStats(stats map[string]string, db *DB) {
 		stats["treedb.command_wal.required_feature_error"] = err.Error()
 	}
 	if !db.commandWALStatsScan {
-		stats["treedb.command_wal.segment_files"] = "0"
-		stats["treedb.command_wal.typed_segments"] = "0"
-		stats["treedb.command_wal.active_segments"] = "0"
-		stats["treedb.command_wal.frames"] = "0"
-		stats["treedb.command_wal.max_lsn"] = "0"
-		stats["treedb.command_wal.bytes"] = "0"
 		stats["treedb.command_wal.stats_scan"] = "false"
 		return
 	}
@@ -59,6 +49,15 @@ func writeCommandWALStats(stats map[string]string, db *DB) {
 	} else {
 		stats["treedb.command_wal.stats_error"] = err.Error()
 	}
+}
+
+func writeCommandWALStatsZeroCounters(stats map[string]string) {
+	stats["treedb.command_wal.segment_files"] = "0"
+	stats["treedb.command_wal.typed_segments"] = "0"
+	stats["treedb.command_wal.active_segments"] = "0"
+	stats["treedb.command_wal.frames"] = "0"
+	stats["treedb.command_wal.max_lsn"] = "0"
+	stats["treedb.command_wal.bytes"] = "0"
 }
 
 func (db *DB) cachedCommandWALStatsSummary() (commandWALStatsSummary, error) {

@@ -104,3 +104,12 @@ func TestStandaloneLeafPageLogReopenAdvancesLeafLaneSequence(t *testing.T) {
 		t.Fatalf("RID map size=%d, want 2", len(ridMap))
 	}
 }
+
+func TestStandaloneLeafPageLogRejectsInvalidMaxSegmentBytes(t *testing.T) {
+	for _, maxBytes := range []int64{-1, standaloneLeafPageLogMaxSegmentBytes + 1} {
+		if log, err := NewStandaloneLeafPageLog(t.TempDir(), StandaloneLeafPageLogOptions{MaxSegmentBytes: maxBytes}); err == nil {
+			_ = log.Close()
+			t.Fatalf("NewStandaloneLeafPageLog MaxSegmentBytes=%d unexpectedly succeeded", maxBytes)
+		}
+	}
+}
