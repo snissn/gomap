@@ -180,6 +180,9 @@ func TestColumnPartFromParsedImageScansWithoutOriginalPart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ColumnPartFromImage: %v", err)
 	}
+	if got := imagePart.Columns["kind_code"].Definition.Cardinality; got != 3 {
+		t.Fatalf("kind_code cardinality=%d want 3", got)
+	}
 	scan, err := imagePart.NewScanner().ScanProjected([]string{"id", "time_us", "value", "kind_code", "has_reply"})
 	if err != nil {
 		t.Fatalf("ScanProjected: %v", err)
@@ -237,8 +240,7 @@ func TestParseColumnPartImageRejectsNonContiguousSections(t *testing.T) {
 		t.Fatalf("BuildColumnPartImage: %v", err)
 	}
 	corrupt := append([]byte(nil), image.Bytes...)
-	const firstSectionOffsetField = 36
-	binary.LittleEndian.PutUint64(corrupt[firstSectionOffsetField:], uint64(image.ManifestBytes+1))
+	binary.LittleEndian.PutUint64(corrupt[manifestFirstSectionOffsetOffset(t, image):], uint64(image.ManifestBytes+1))
 	if _, err := ParseColumnPartImage(corrupt); err == nil {
 		t.Fatal("ParseColumnPartImage accepted a non-contiguous section layout")
 	}
@@ -260,8 +262,7 @@ func TestParseColumnPartImageRejectsImpossibleSectionCount(t *testing.T) {
 		t.Fatalf("BuildColumnPartImage: %v", err)
 	}
 	corrupt := append([]byte(nil), image.Bytes...)
-	const sectionCountField = 28
-	binary.LittleEndian.PutUint32(corrupt[sectionCountField:], ^uint32(0))
+	binary.LittleEndian.PutUint32(corrupt[manifestSectionCountOffset(t, image):], ^uint32(0))
 	if _, err := ParseColumnPartImage(corrupt); err == nil {
 		t.Fatal("ParseColumnPartImage accepted an impossible section count")
 	}
@@ -306,6 +307,30 @@ func TestParseColumnPartImageRejectsManifestDirectorySection(t *testing.T) {
 	}
 }
 
+func TestColumnPartFromImageRejectsInvalidSectionBounds(t *testing.T) {
+	part, err := BuildColumnPart(7, partTestOptions([]SortKeyColumn{{Column: "id"}}), ColumnBatch{Columns: map[string][]int64{
+		"id":        {3, 1, 2, 5, 4},
+		"time_us":   {30, 10, 20, 50, 40},
+		"value":     {300, 100, 200, 500, 400},
+		"kind_code": {1, 0, 1, 2, 0},
+		"has_reply": {1, 0, 1, 0, 1},
+	}})
+	if err != nil {
+		t.Fatalf("BuildColumnPart: %v", err)
+	}
+	image, err := BuildColumnPartImage(part, ColumnPartImageOptions{})
+	if err != nil {
+		t.Fatalf("BuildColumnPartImage: %v", err)
+	}
+	image.Sections[0].Offset = len(image.Bytes) + 1
+	if _, err := ColumnPartFromImage(image); err == nil {
+		t.Fatal("ColumnPartFromImage accepted invalid section bounds")
+	}
+	if _, err := part.WithImagePayloads(image); err == nil {
+		t.Fatal("WithImagePayloads accepted invalid section bounds")
+	}
+}
+
 func TestColumnPartFromImageRejectsDescriptorManifestMismatch(t *testing.T) {
 	part, err := BuildColumnPart(7, partTestOptions([]SortKeyColumn{{Column: "id"}}), ColumnBatch{Columns: map[string][]int64{
 		"id":        {3, 1, 2, 5, 4},
@@ -321,13 +346,8 @@ func TestColumnPartFromImageRejectsDescriptorManifestMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildColumnPartImage: %v", err)
 	}
-	descriptor, err := image.singleSection(ColumnPartImageSectionDescriptor)
-	if err != nil {
-		t.Fatalf("descriptor section: %v", err)
-	}
 	corrupt := append([]byte(nil), image.Bytes...)
-	const descriptorPartIDOffset = 2
-	binary.LittleEndian.PutUint64(corrupt[descriptor.Offset+descriptorPartIDOffset:], part.Descriptor.PartID+1)
+	binary.LittleEndian.PutUint64(corrupt[descriptorPartIDOffset(t, image):], part.Descriptor.PartID+1)
 	parsed, err := ParseColumnPartImage(corrupt)
 	if err != nil {
 		t.Fatalf("ParseColumnPartImage: %v", err)
@@ -352,13 +372,8 @@ func TestColumnPartFromImageRejectsNegativeDescriptorRowCount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildColumnPartImage: %v", err)
 	}
-	descriptor, err := image.singleSection(ColumnPartImageSectionDescriptor)
-	if err != nil {
-		t.Fatalf("descriptor section: %v", err)
-	}
 	corrupt := append([]byte(nil), image.Bytes...)
-	const descriptorRowCountOffset = 14
-	binary.LittleEndian.PutUint64(corrupt[descriptor.Offset+descriptorRowCountOffset:], ^uint64(0))
+	binary.LittleEndian.PutUint64(corrupt[descriptorRowCountOffset(t, image):], ^uint64(0))
 	parsed, err := ParseColumnPartImage(corrupt)
 	if err != nil {
 		t.Fatalf("ParseColumnPartImage: %v", err)
@@ -481,6 +496,83 @@ func descriptorGranuleCountOffset(t *testing.T, image ColumnPartImage) int {
 		t.Fatal(err)
 	}
 	return descriptor.Offset + dec.offset
+}
+
+func descriptorPartIDOffset(t *testing.T, image ColumnPartImage) int {
+	t.Helper()
+	descriptor, err := image.singleSection(ColumnPartImageSectionDescriptor)
+	if err != nil {
+		t.Fatalf("descriptor section: %v", err)
+	}
+	dec := columnPartImageDecoder{data: image.sectionBytes(descriptor)}
+	if _, err := dec.u16(); err != nil {
+		t.Fatal(err)
+	}
+	return descriptor.Offset + dec.offset
+}
+
+func descriptorRowCountOffset(t *testing.T, image ColumnPartImage) int {
+	t.Helper()
+	descriptor, err := image.singleSection(ColumnPartImageSectionDescriptor)
+	if err != nil {
+		t.Fatalf("descriptor section: %v", err)
+	}
+	dec := columnPartImageDecoder{data: image.sectionBytes(descriptor)}
+	if _, err := dec.u16(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dec.u64(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dec.u32(); err != nil {
+		t.Fatal(err)
+	}
+	return descriptor.Offset + dec.offset
+}
+
+func manifestSectionCountOffset(t *testing.T, image ColumnPartImage) int {
+	t.Helper()
+	dec := columnPartImageDecoder{data: image.Bytes}
+	skipImageManifestHeaderBeforeSectionCount(t, &dec)
+	return dec.offset
+}
+
+func manifestFirstSectionOffsetOffset(t *testing.T, image ColumnPartImage) int {
+	t.Helper()
+	dec := columnPartImageDecoder{data: image.Bytes}
+	skipImageManifestHeaderBeforeSectionCount(t, &dec)
+	if _, err := dec.u32(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dec.u16(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dec.u16(); err != nil {
+		t.Fatal(err)
+	}
+	return dec.offset
+}
+
+func skipImageManifestHeaderBeforeSectionCount(t *testing.T, dec *columnPartImageDecoder) {
+	t.Helper()
+	if _, err := dec.u32(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dec.u16(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dec.u16(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dec.u64(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dec.i64(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dec.u32(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func testColumnPartImageBytes(t *testing.T, part *ColumnPart, sections []ColumnPartImageSection, payloads [][]byte) []byte {

@@ -87,6 +87,9 @@ func (p *ColumnPart) WithImagePayloads(image ColumnPartImage) (*ColumnPart, erro
 	if image.TotalBytes() == 0 {
 		return nil, fmt.Errorf("colgranule: empty part image")
 	}
+	if err := image.validateForRead(); err != nil {
+		return nil, err
+	}
 	out := *p
 	out.Columns = make(map[string]ColumnPartColumn, len(p.Columns))
 	for name, column := range p.Columns {
@@ -258,6 +261,7 @@ func (b *columnPartImageBuilder) addDescriptorSection() error {
 		}
 		enc.str(column.Name)
 		enc.u16(uint16(columnTypeCode(column.Type)))
+		enc.u32(partColumn.Definition.Cardinality)
 		enc.u32(uint32(len(column.Blocks)))
 		for i, block := range column.Blocks {
 			if i >= len(partColumn.Blocks) {

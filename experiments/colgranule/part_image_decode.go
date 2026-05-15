@@ -172,6 +172,9 @@ func ColumnPartFromImage(image ColumnPartImage) (*ColumnPart, error) {
 	if image.TotalBytes() == 0 {
 		return nil, fmt.Errorf("colgranule: empty part image")
 	}
+	if err := image.validateForRead(); err != nil {
+		return nil, err
+	}
 	descriptorSection, err := image.singleSection(ColumnPartImageSectionDescriptor)
 	if err != nil {
 		return nil, err
@@ -209,15 +212,9 @@ func ColumnPartFromImage(image ColumnPartImage) (*ColumnPart, error) {
 		column := columns[columnDescriptor.Name]
 		def := column.Definition
 		if def.Type == ColumnTypeLowCardinalityCode {
-			granules := make([]EncodedGranule, len(column.Blocks))
-			for i, block := range column.Blocks {
-				granules[i] = block.Granule
+			if def.Cardinality == 0 || def.Cardinality > maxCodeCardinality {
+				return nil, fmt.Errorf("colgranule: invalid low-cardinality cardinality %d for %s", def.Cardinality, def.Name)
 			}
-			cardinality, err := inferCodeCardinality(granules, 0)
-			if err != nil {
-				return nil, fmt.Errorf("colgranule: infer cardinality for %s: %w", def.Name, err)
-			}
-			def.Cardinality = cardinality
 			column.Definition = def
 			columns[columnDescriptor.Name] = column
 		}
@@ -325,7 +322,7 @@ func decodeColumnPartDescriptorSection(data []byte) (ColumnPartDescriptor, map[s
 	if err != nil {
 		return ColumnPartDescriptor{}, nil, err
 	}
-	columnTotal, err := dec.boundedCount(columnCount, 10, "descriptor columns")
+	columnTotal, err := dec.boundedCount(columnCount, 14, "descriptor columns")
 	if err != nil {
 		return ColumnPartDescriptor{}, nil, err
 	}
@@ -343,6 +340,17 @@ func decodeColumnPartDescriptorSection(data []byte) (ColumnPartDescriptor, map[s
 		if err != nil {
 			return ColumnPartDescriptor{}, nil, err
 		}
+		cardinality, err := dec.u32()
+		if err != nil {
+			return ColumnPartDescriptor{}, nil, err
+		}
+		if columnType == ColumnTypeLowCardinalityCode {
+			if cardinality == 0 || cardinality > maxCodeCardinality {
+				return ColumnPartDescriptor{}, nil, fmt.Errorf("colgranule: invalid low-cardinality cardinality %d for %s", cardinality, name)
+			}
+		} else if cardinality != 0 {
+			return ColumnPartDescriptor{}, nil, fmt.Errorf("colgranule: column %s type=%s has cardinality %d", name, columnType, cardinality)
+		}
 		blockCount, err := dec.u32()
 		if err != nil {
 			return ColumnPartDescriptor{}, nil, err
@@ -354,8 +362,9 @@ func decodeColumnPartDescriptorSection(data []byte) (ColumnPartDescriptor, map[s
 		columnDesc := ColumnPartColumnDescriptor{Name: name, Type: columnType, Blocks: make([]ColumnBlockDescriptor, 0, blocks)}
 		column := ColumnPartColumn{
 			Definition: ColumnDefinition{
-				Name: name,
-				Type: columnType,
+				Name:        name,
+				Type:        columnType,
+				Cardinality: cardinality,
 			},
 			Blocks: make([]ColumnBlock, 0, blocks),
 		}
@@ -789,6 +798,9 @@ func attachColumnPayloadsFromImage(image ColumnPartImage, columns map[string]Col
 }
 
 func (i ColumnPartImage) Dictionaries() (map[string]map[string]int64, error) {
+	if err := i.validateForRead(); err != nil {
+		return nil, err
+	}
 	sections := i.sectionsByKind(ColumnPartImageSectionDictionaries)
 	if len(sections) == 0 {
 		return nil, nil
@@ -1168,6 +1180,39 @@ func (i ColumnPartImage) sectionsByKind(kind ColumnPartImageSectionKind) []Colum
 
 func (i ColumnPartImage) sectionBytes(section ColumnPartImageSection) []byte {
 	return i.Bytes[section.Offset : section.Offset+section.Length]
+}
+
+func (i ColumnPartImage) validateForRead() error {
+	if i.TotalBytes() == 0 {
+		return fmt.Errorf("colgranule: empty part image")
+	}
+	if i.Version != columnPartImageVersion {
+		return fmt.Errorf("colgranule: unsupported part image version %d", i.Version)
+	}
+	if i.Rows < 0 {
+		return fmt.Errorf("colgranule: negative image row count %d", i.Rows)
+	}
+	if i.ManifestBytes <= 0 || i.ManifestBytes > len(i.Bytes) {
+		return fmt.Errorf("colgranule: manifest bytes=%d exceed image bytes=%d", i.ManifestBytes, len(i.Bytes))
+	}
+	for _, section := range i.Sections {
+		if section.Kind == ColumnPartImageSectionManifest {
+			return fmt.Errorf("colgranule: manifest is not a directory section")
+		}
+		if err := validateImageSectionCategory(section.Kind, section.Category); err != nil {
+			return err
+		}
+		if err := validateImageSectionBounds(section, i.ManifestBytes, len(i.Bytes)); err != nil {
+			return err
+		}
+	}
+	if err := validateImageSectionLayout(i.Sections, i.ManifestBytes, len(i.Bytes)); err != nil {
+		return err
+	}
+	if err := validateImageSectionMultiplicity(i.Sections); err != nil {
+		return err
+	}
+	return nil
 }
 
 func validateImageSectionBounds(section ColumnPartImageSection, manifestBytes int, totalBytes int) error {
