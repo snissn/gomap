@@ -404,6 +404,76 @@ func BenchmarkAggregateExactDistinctInt64(b *testing.B) {
 	reportGranuleBenchMetrics(b, totalRows, totalRows*8, totalStoredBytes(idGranules))
 }
 
+func BenchmarkColumnPartBuildAndProjectedScan(b *testing.B) {
+	const rows = DefaultRowsPerGranule * 100
+	batch := buildPartBenchmarkBatch(rows)
+	opts := partBenchmarkOptions()
+	part, err := BuildColumnPart(1, opts, batch)
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Run("build_in_memory_part", func(b *testing.B) {
+		b.ReportAllocs()
+		b.SetBytes(int64(rows * len(opts.Columns) * 8))
+		builder, err := NewColumnPartBuilder(opts)
+		if err != nil {
+			b.Fatal(err)
+		}
+		b.ResetTimer()
+		var built *ColumnPart
+		for i := 0; i < b.N; i++ {
+			built, err = builder.Build(uint64(i+1), batch)
+			if err != nil {
+				b.Fatal(err)
+			}
+			benchSink += int64(built.Descriptor.RowCount)
+		}
+		reportGranuleBenchMetrics(b, rows, rows*len(opts.Columns)*8, totalPartStoredBytes(built))
+	})
+	b.Run("projected_scan_one_column", func(b *testing.B) {
+		b.ReportAllocs()
+		b.SetBytes(int64(rows * 8))
+		scanner := part.NewScanner()
+		projection := []string{"time_us"}
+		scanScratch := make(map[string][]int64, len(projection))
+		scan, err := scanner.ScanProjectedInto(scanScratch, projection)
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchSink += scan.Columns["time_us"][0]
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			scan, err = scanner.ScanProjectedInto(scanScratch, projection)
+			if err != nil {
+				b.Fatal(err)
+			}
+			benchSink += scan.Columns["time_us"][0]
+		}
+		reportGranuleBenchMetrics(b, rows, rows*8, totalPartProjectedStoredBytes(part, []string{"time_us"}))
+	})
+	b.Run("projected_scan_three_columns", func(b *testing.B) {
+		b.ReportAllocs()
+		b.SetBytes(int64(rows * 3 * 8))
+		scanner := part.NewScanner()
+		projection := []string{"time_us", "kind_code", "has_reply"}
+		scanScratch := make(map[string][]int64, len(projection))
+		scan, err := scanner.ScanProjectedInto(scanScratch, projection)
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchSink += scan.Columns["time_us"][0] + scan.Columns["kind_code"][0] + scan.Columns["has_reply"][0]
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			scan, err = scanner.ScanProjectedInto(scanScratch, projection)
+			if err != nil {
+				b.Fatal(err)
+			}
+			benchSink += scan.Columns["time_us"][0] + scan.Columns["kind_code"][0] + scan.Columns["has_reply"][0]
+		}
+		reportGranuleBenchMetrics(b, rows, rows*3*8, totalPartProjectedStoredBytes(part, projection))
+	})
+}
+
 func TestCompressionRatios(t *testing.T) {
 	for _, fx := range benchmarkFixtures() {
 		t.Logf("fixture=%s rows=%d raw_values_bytes=%d", fx.name, len(fx.values), len(fx.values)*8)
@@ -521,7 +591,7 @@ func buildPredicateBenchmarkGranules(granulesN int, rowsPerGranule int) ([]Encod
 		}
 		owned := g
 		owned.Payload = append([]byte(nil), g.Payload...)
-		mark, err := BuildSortKeyMark([]SortKeyColumn{{Name: "time_us", Values: values}})
+		mark, err := BuildSortKeyMark([]SortKeyColumnValues{{Name: "time_us", Values: values}})
 		if err != nil {
 			return nil, nil, err
 		}
@@ -635,4 +705,66 @@ func countCodesMaterialized(reader *GranuleReader, granules []EncodedGranule, co
 		}
 	}
 	return nil
+}
+
+func buildPartBenchmarkBatch(rows int) ColumnBatch {
+	columns := map[string][]int64{
+		"id":        make([]int64, rows),
+		"time_us":   make([]int64, rows),
+		"value":     make([]int64, rows),
+		"kind_code": make([]int64, rows),
+		"has_reply": make([]int64, rows),
+	}
+	for i := 0; i < rows; i++ {
+		columns["id"][i] = int64(rows - i)
+		columns["time_us"][i] = int64(i * 1000)
+		columns["value"][i] = int64((i * 17) % 1_000_003)
+		columns["kind_code"][i] = int64((i / 97) % 16)
+		columns["has_reply"][i] = int64((i / 11) & 1)
+	}
+	return ColumnBatch{Rows: rows, Columns: columns}
+}
+
+func partBenchmarkOptions() ColumnStoreOptions {
+	return ColumnStoreOptions{
+		SchemaVersion: 1,
+		SchemaMode:    ColumnSchemaFixed,
+		Columns: []ColumnDefinition{
+			{Name: "id", Type: ColumnTypeInt64, Encoding: EncodingDeltaVarint, Compression: CompressionLZ4},
+			{Name: "time_us", Type: ColumnTypeInt64, Encoding: EncodingDoubleDeltaVarint, Compression: CompressionLZ4},
+			{Name: "value", Type: ColumnTypeInt64, Encoding: EncodingDeltaVarint, Compression: CompressionLZ4},
+			{Name: "kind_code", Type: ColumnTypeLowCardinalityCode, Compression: CompressionLZ4, Cardinality: 16},
+			{Name: "has_reply", Type: ColumnTypeBool, Compression: CompressionLZ4},
+		},
+		LogicalPrimaryKey: LogicalPrimaryKey{Columns: []string{"id"}},
+		SortKey:           SortKey{Columns: []SortKeyColumn{{Column: "time_us"}}},
+		PartPolicy: ColumnPartPolicy{
+			RowsPerGranule:        DefaultRowsPerGranule,
+			DefaultCodecBlockRows: DefaultRowsPerGranule,
+		},
+	}
+}
+
+func totalPartStoredBytes(part *ColumnPart) int {
+	if part == nil {
+		return 0
+	}
+	total := 0
+	for _, column := range part.Columns {
+		for _, block := range column.Blocks {
+			total += block.Granule.StoredBytes
+		}
+	}
+	return total
+}
+
+func totalPartProjectedStoredBytes(part *ColumnPart, projection []string) int {
+	total := 0
+	for _, name := range projection {
+		column := part.Columns[name]
+		for _, block := range column.Blocks {
+			total += block.Granule.StoredBytes
+		}
+	}
+	return total
 }

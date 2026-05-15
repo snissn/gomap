@@ -6,7 +6,7 @@ import (
 )
 
 func TestSortKeyMarkPrefixSummaries(t *testing.T) {
-	mark, err := BuildSortKeyMark([]SortKeyColumn{
+	mark, err := BuildSortKeyMark([]SortKeyColumnValues{
 		{Name: "collection", Values: []int64{1, 1, 1, 2, 2}},
 		{Name: "time_us", Values: []int64{10, 20, 30, 5, 15}},
 	})
@@ -131,7 +131,7 @@ func TestMarkAndMinMaxSkipsDoNotDecodeCorruptPayload(t *testing.T) {
 	g.StoredBytes = len(g.Payload)
 	g.PayloadRef.Length = len(g.Payload)
 	g.RawBytes = len(g.Payload)
-	mark, err := BuildSortKeyMark([]SortKeyColumn{
+	mark, err := BuildSortKeyMark([]SortKeyColumnValues{
 		{Name: "collection", Values: []int64{1, 1, 1, 1, 1, 1, 1, 1, 1, 1}},
 		{Name: "time_us", Values: []int64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}},
 	})
@@ -213,7 +213,7 @@ func buildCompositeSortFixtureForTest() ([]EncodedGranule, []SortKeyMark, []int6
 			}
 			owned := g
 			owned.Payload = append([]byte(nil), g.Payload...)
-			mark, err := BuildSortKeyMark([]SortKeyColumn{
+			mark, err := BuildSortKeyMark([]SortKeyColumnValues{
 				{Name: "collection", Values: collections},
 				{Name: "time_us", Values: times},
 			})

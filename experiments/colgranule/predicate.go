@@ -31,7 +31,7 @@ type PredicateDiagnostics struct {
 	Matched         int
 }
 
-type SortKeyColumn struct {
+type SortKeyColumnValues struct {
 	Name   string
 	Values []int64
 }
@@ -62,7 +62,7 @@ type sortKeyRangePlan struct {
 	empty     bool
 }
 
-func BuildSortKeyMark(columns []SortKeyColumn) (SortKeyMark, error) {
+func BuildSortKeyMark(columns []SortKeyColumnValues) (SortKeyMark, error) {
 	if len(columns) == 0 {
 		return SortKeyMark{}, errors.New("colgranule: empty sort key")
 	}
