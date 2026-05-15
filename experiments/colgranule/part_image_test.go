@@ -426,6 +426,32 @@ func TestColumnPartFromImageRejectsBlockRowsOutsidePart(t *testing.T) {
 	}
 }
 
+func TestColumnPartFromImageRejectsNonContiguousColumnBlockRows(t *testing.T) {
+	part, err := BuildColumnPart(7, partTestOptions([]SortKeyColumn{{Column: "id"}}), ColumnBatch{Columns: map[string][]int64{
+		"id":        {3, 1, 2, 5, 4},
+		"time_us":   {30, 10, 20, 50, 40},
+		"value":     {300, 100, 200, 500, 400},
+		"kind_code": {1, 0, 1, 2, 0},
+		"has_reply": {1, 0, 1, 0, 1},
+	}})
+	if err != nil {
+		t.Fatalf("BuildColumnPart: %v", err)
+	}
+	image, err := BuildColumnPartImage(part, ColumnPartImageOptions{})
+	if err != nil {
+		t.Fatalf("BuildColumnPartImage: %v", err)
+	}
+	corrupt := append([]byte(nil), image.Bytes...)
+	binary.LittleEndian.PutUint64(corrupt[descriptorFirstColumnFirstBlockRowCountOffset(t, image):], 1)
+	parsed, err := ParseColumnPartImage(corrupt)
+	if err != nil {
+		t.Fatalf("ParseColumnPartImage: %v", err)
+	}
+	if _, err := ColumnPartFromImage(parsed); err == nil {
+		t.Fatal("ColumnPartFromImage accepted non-contiguous column block rows")
+	}
+}
+
 func TestColumnPartFromImageRejectsUnsupportedDescriptorVersion(t *testing.T) {
 	part, err := BuildColumnPart(7, partTestOptions([]SortKeyColumn{{Column: "id"}}), ColumnBatch{Columns: map[string][]int64{
 		"id":        {3, 1, 2, 5, 4},

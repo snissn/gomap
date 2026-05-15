@@ -368,6 +368,7 @@ func decodeColumnPartDescriptorSection(data []byte) (ColumnPartDescriptor, map[s
 			},
 			Blocks: make([]ColumnBlock, 0, blocks),
 		}
+		expectedFirstRow := 0
 		for j := 0; j < blocks; j++ {
 			blockDesc, granule, err := decodeColumnBlockDescriptorAndGranule(&dec)
 			if err != nil {
@@ -376,12 +377,19 @@ func decodeColumnPartDescriptorSection(data []byte) (ColumnPartDescriptor, map[s
 			if err := validateDecodedColumnBlockDescriptor(desc, name, j, blockDesc); err != nil {
 				return ColumnPartDescriptor{}, nil, err
 			}
+			if blockDesc.FirstRow != expectedFirstRow {
+				return ColumnPartDescriptor{}, nil, fmt.Errorf("colgranule: descriptor column %s block %d first row=%d want contiguous first row=%d", name, j, blockDesc.FirstRow, expectedFirstRow)
+			}
+			expectedFirstRow += blockDesc.RowCount
 			if j == 0 {
 				column.Definition.Encoding = blockDesc.Encoding
 				column.Definition.Compression = blockDesc.Compression
 			}
 			columnDesc.Blocks = append(columnDesc.Blocks, blockDesc)
 			column.Blocks = append(column.Blocks, ColumnBlock{Descriptor: blockDesc, Granule: granule})
+		}
+		if expectedFirstRow != desc.RowCount {
+			return ColumnPartDescriptor{}, nil, fmt.Errorf("colgranule: descriptor column %s covers %d rows, want %d", name, expectedFirstRow, desc.RowCount)
 		}
 		desc.Columns = append(desc.Columns, columnDesc)
 		columns[name] = column
