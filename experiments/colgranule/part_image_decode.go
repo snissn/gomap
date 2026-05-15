@@ -34,9 +34,15 @@ func ParseColumnPartImage(data []byte) (ColumnPartImage, error) {
 	if err != nil {
 		return ColumnPartImage{}, err
 	}
+	if rows < 0 {
+		return ColumnPartImage{}, fmt.Errorf("colgranule: negative image row count %d", rows)
+	}
 	manifestBytes, err := dec.u32()
 	if err != nil {
 		return ColumnPartImage{}, err
+	}
+	if int(manifestBytes) > len(data) {
+		return ColumnPartImage{}, fmt.Errorf("colgranule: manifest bytes=%d exceed image bytes=%d", manifestBytes, len(data))
 	}
 	sectionCount, err := dec.u32()
 	if err != nil {
@@ -96,6 +102,15 @@ func ParseColumnPartImage(data []byte) (ColumnPartImage, error) {
 		if err != nil {
 			return ColumnPartImage{}, err
 		}
+		if err := validateImageSectionCategory(kind, category); err != nil {
+			return ColumnPartImage{}, err
+		}
+		if sectionRows < 0 || granules < 0 || blocks < 0 {
+			return ColumnPartImage{}, fmt.Errorf("colgranule: section %s has negative rows/granules/blocks (%d,%d,%d)", kind, sectionRows, granules, blocks)
+		}
+		if uint64(int(offset)) != offset || uint64(int(length)) != length {
+			return ColumnPartImage{}, fmt.Errorf("colgranule: section %s offset=%d length=%d exceed host int", kind, offset, length)
+		}
 		section := ColumnPartImageSection{
 			Kind:        kind,
 			Category:    category,
@@ -116,6 +131,12 @@ func ParseColumnPartImage(data []byte) (ColumnPartImage, error) {
 	}
 	if dec.offset != int(manifestBytes) {
 		return ColumnPartImage{}, fmt.Errorf("colgranule: manifest bytes=%d decoded=%d", manifestBytes, dec.offset)
+	}
+	if err := validateImageSectionLayout(sections, int(manifestBytes), len(data)); err != nil {
+		return ColumnPartImage{}, err
+	}
+	if err := validateImageSectionMultiplicity(sections); err != nil {
+		return ColumnPartImage{}, err
 	}
 	return ColumnPartImage{
 		Version:       version,
@@ -138,6 +159,12 @@ func ColumnPartFromImage(image ColumnPartImage) (*ColumnPart, error) {
 	desc, columns, err := decodeColumnPartDescriptorSection(image.sectionBytes(descriptorSection))
 	if err != nil {
 		return nil, err
+	}
+	if desc.PartID != image.PartID {
+		return nil, fmt.Errorf("colgranule: descriptor part id=%d manifest part id=%d", desc.PartID, image.PartID)
+	}
+	if desc.RowCount != image.Rows {
+		return nil, fmt.Errorf("colgranule: descriptor rows=%d manifest rows=%d", desc.RowCount, image.Rows)
 	}
 	desc.PartID = image.PartID
 	desc.RowCount = image.Rows
@@ -626,6 +653,60 @@ func attachImageColumnPayloads(image ColumnPartImage, columns map[string]ColumnP
 	return nil
 }
 
+func (i ColumnPartImage) Dictionaries() (map[string]map[string]int64, error) {
+	sections := i.sectionsByKind(ColumnPartImageSectionDictionaries)
+	if len(sections) == 0 {
+		return nil, nil
+	}
+	if len(sections) != 1 {
+		return nil, fmt.Errorf("colgranule: image has %d dictionary sections, want 1", len(sections))
+	}
+	dec := columnPartImageDecoder{data: i.sectionBytes(sections[0])}
+	count, err := dec.u32()
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]map[string]int64, count)
+	for idx := 0; idx < int(count); idx++ {
+		name, err := dec.str()
+		if err != nil {
+			return nil, err
+		}
+		if _, exists := out[name]; exists {
+			return nil, fmt.Errorf("colgranule: duplicate dictionary %s", name)
+		}
+		entryCount, err := dec.u32()
+		if err != nil {
+			return nil, err
+		}
+		values := make(map[string]int64, entryCount)
+		codes := make(map[int64]string, entryCount)
+		for j := 0; j < int(entryCount); j++ {
+			code, err := dec.i64()
+			if err != nil {
+				return nil, err
+			}
+			value, err := dec.str()
+			if err != nil {
+				return nil, err
+			}
+			if _, exists := values[value]; exists {
+				return nil, fmt.Errorf("colgranule: duplicate dictionary value %s in %s", value, name)
+			}
+			if previous, exists := codes[code]; exists {
+				return nil, fmt.Errorf("colgranule: duplicate dictionary code %d in %s for %q and %q", code, name, previous, value)
+			}
+			values[value] = code
+			codes[code] = value
+		}
+		out[name] = values
+	}
+	if err := dec.finish(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func decodeAggregateMetadataSections(image ColumnPartImage) (map[string]AggregateMetadata, error) {
 	sections := image.sectionsByKind(ColumnPartImageSectionAggregateMetadata)
 	if len(sections) == 0 {
@@ -884,16 +965,83 @@ func (i ColumnPartImage) sectionBytes(section ColumnPartImageSection) []byte {
 }
 
 func validateImageSectionBounds(section ColumnPartImageSection, manifestBytes int, totalBytes int) error {
+	if section.Offset < 0 {
+		return fmt.Errorf("colgranule: section %s has negative offset %d", section.Kind, section.Offset)
+	}
 	if section.Offset < manifestBytes {
 		return fmt.Errorf("colgranule: section %s offset=%d before manifest=%d", section.Kind, section.Offset, manifestBytes)
 	}
 	if section.Length < 0 {
 		return fmt.Errorf("colgranule: section %s has negative length %d", section.Kind, section.Length)
 	}
-	if section.Offset+section.Length > totalBytes {
+	if section.Length > totalBytes || section.Offset > totalBytes-section.Length {
 		return fmt.Errorf("colgranule: section %s offset=%d length=%d exceeds image bytes=%d", section.Kind, section.Offset, section.Length, totalBytes)
 	}
 	return nil
+}
+
+func validateImageSectionLayout(sections []ColumnPartImageSection, manifestBytes int, totalBytes int) error {
+	cursor := manifestBytes
+	for _, section := range sections {
+		if section.Offset != cursor {
+			return fmt.Errorf("colgranule: section %s offset=%d want contiguous offset=%d", section.Kind, section.Offset, cursor)
+		}
+		cursor += section.Length
+	}
+	if cursor != totalBytes {
+		return fmt.Errorf("colgranule: image sections cover %d bytes, image has %d", cursor, totalBytes)
+	}
+	return nil
+}
+
+func validateImageSectionMultiplicity(sections []ColumnPartImageSection) error {
+	counts := make(map[ColumnPartImageSectionKind]int, len(sections))
+	for _, section := range sections {
+		counts[section.Kind]++
+	}
+	for _, kind := range []ColumnPartImageSectionKind{
+		ColumnPartImageSectionDescriptor,
+		ColumnPartImageSectionSortKeyMetadata,
+		ColumnPartImageSectionSortKeyMarks,
+		ColumnPartImageSectionRowLocators,
+		ColumnPartImageSectionDictionaries,
+	} {
+		if counts[kind] > 1 {
+			return fmt.Errorf("colgranule: image has %d %s sections, want at most 1", counts[kind], kind)
+		}
+	}
+	return nil
+}
+
+func validateImageSectionCategory(kind ColumnPartImageSectionKind, category ColumnPartImageSectionCategory) error {
+	expected, ok := expectedImageSectionCategory(kind)
+	if ok && category != expected {
+		return fmt.Errorf("colgranule: section %s category=%s want %s", kind, category, expected)
+	}
+	return nil
+}
+
+func expectedImageSectionCategory(kind ColumnPartImageSectionKind) (ColumnPartImageSectionCategory, bool) {
+	switch kind {
+	case ColumnPartImageSectionDescriptor:
+		return ColumnPartImageCategoryDescriptor, true
+	case ColumnPartImageSectionSortKeyMetadata:
+		return ColumnPartImageCategorySortKeyMetadata, true
+	case ColumnPartImageSectionSortKeyMarks:
+		return ColumnPartImageCategoryMarks, true
+	case ColumnPartImageSectionRowLocators:
+		return ColumnPartImageCategoryLocators, true
+	case ColumnPartImageSectionAggregateMetadata:
+		return ColumnPartImageCategoryAggregateMetadata, true
+	case ColumnPartImageSectionDictionaries:
+		return ColumnPartImageCategoryDictionaries, true
+	case ColumnPartImageSectionColumnData:
+		return ColumnPartImageCategoryDeclaredColumns, true
+	case ColumnPartImageSectionManifest:
+		return ColumnPartImageCategoryManifest, true
+	default:
+		return "", false
+	}
 }
 
 func inferredRowsPerGranule(granules []GranuleDescriptor) int {

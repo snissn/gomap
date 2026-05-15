@@ -1,6 +1,9 @@
 package colgranule
 
-import "testing"
+import (
+	"encoding/binary"
+	"testing"
+)
 
 func TestColumnPartImageAccountingReconcilesToSerializedBytes(t *testing.T) {
 	opts := partTestOptions([]SortKeyColumn{{Column: "time_us"}})
@@ -166,6 +169,13 @@ func TestColumnPartFromParsedImageScansWithoutOriginalPart(t *testing.T) {
 	if parsed.TotalBytes() != image.TotalBytes() || parsed.ManifestBytes != image.ManifestBytes || len(parsed.Sections) != len(image.Sections) {
 		t.Fatalf("parsed image shape total=%d/%d manifest=%d/%d sections=%d/%d", parsed.TotalBytes(), image.TotalBytes(), parsed.ManifestBytes, image.ManifestBytes, len(parsed.Sections), len(image.Sections))
 	}
+	dictionaries, err := parsed.Dictionaries()
+	if err != nil {
+		t.Fatalf("Dictionaries: %v", err)
+	}
+	if dictionaries["kind_code"]["zero"] != 0 || dictionaries["kind_code"]["one"] != 1 || dictionaries["kind_code"]["two"] != 2 {
+		t.Fatalf("dictionary did not round trip: %+v", dictionaries["kind_code"])
+	}
 	imagePart, err := ColumnPartFromImage(parsed)
 	if err != nil {
 		t.Fatalf("ColumnPartFromImage: %v", err)
@@ -208,5 +218,59 @@ func TestColumnPartFromParsedImageScansWithoutOriginalPart(t *testing.T) {
 	accounting := imagePart.ByteAccountingFromImage(parsed)
 	if accounting.TotalStoredBytes != parsed.TotalBytes() {
 		t.Fatalf("accounting total=%d parsed image=%d", accounting.TotalStoredBytes, parsed.TotalBytes())
+	}
+}
+
+func TestParseColumnPartImageRejectsNonContiguousSections(t *testing.T) {
+	part, err := BuildColumnPart(7, partTestOptions([]SortKeyColumn{{Column: "id"}}), ColumnBatch{Columns: map[string][]int64{
+		"id":        {3, 1, 2, 5, 4},
+		"time_us":   {30, 10, 20, 50, 40},
+		"value":     {300, 100, 200, 500, 400},
+		"kind_code": {1, 0, 1, 2, 0},
+		"has_reply": {1, 0, 1, 0, 1},
+	}})
+	if err != nil {
+		t.Fatalf("BuildColumnPart: %v", err)
+	}
+	image, err := BuildColumnPartImage(part, ColumnPartImageOptions{})
+	if err != nil {
+		t.Fatalf("BuildColumnPartImage: %v", err)
+	}
+	corrupt := append([]byte(nil), image.Bytes...)
+	const firstSectionOffsetField = 36
+	binary.LittleEndian.PutUint64(corrupt[firstSectionOffsetField:], uint64(image.ManifestBytes+1))
+	if _, err := ParseColumnPartImage(corrupt); err == nil {
+		t.Fatal("ParseColumnPartImage accepted a non-contiguous section layout")
+	}
+}
+
+func TestColumnPartFromImageRejectsDescriptorManifestMismatch(t *testing.T) {
+	part, err := BuildColumnPart(7, partTestOptions([]SortKeyColumn{{Column: "id"}}), ColumnBatch{Columns: map[string][]int64{
+		"id":        {3, 1, 2, 5, 4},
+		"time_us":   {30, 10, 20, 50, 40},
+		"value":     {300, 100, 200, 500, 400},
+		"kind_code": {1, 0, 1, 2, 0},
+		"has_reply": {1, 0, 1, 0, 1},
+	}})
+	if err != nil {
+		t.Fatalf("BuildColumnPart: %v", err)
+	}
+	image, err := BuildColumnPartImage(part, ColumnPartImageOptions{})
+	if err != nil {
+		t.Fatalf("BuildColumnPartImage: %v", err)
+	}
+	descriptor, err := image.singleSection(ColumnPartImageSectionDescriptor)
+	if err != nil {
+		t.Fatalf("descriptor section: %v", err)
+	}
+	corrupt := append([]byte(nil), image.Bytes...)
+	const descriptorPartIDOffset = 2
+	binary.LittleEndian.PutUint64(corrupt[descriptor.Offset+descriptorPartIDOffset:], part.Descriptor.PartID+1)
+	parsed, err := ParseColumnPartImage(corrupt)
+	if err != nil {
+		t.Fatalf("ParseColumnPartImage: %v", err)
+	}
+	if _, err := ColumnPartFromImage(parsed); err == nil {
+		t.Fatal("ColumnPartFromImage accepted a descriptor/manifest part id mismatch")
 	}
 }
