@@ -133,6 +133,11 @@ readers load epoch-scoped metadata from the published epoch and never combine it
 with metadata from another epoch. Old epochs are retained until active readers
 drain and then reclaimed.
 
+Delta and `deltaBatch` records intentionally span epochs. They are ordered by
+collection sequence, not graph epoch, so recovery and rebuild catch-up can replay
+all mutations after an epoch's `applied_collection_seq` or `rebuild_cut_seq`
+into whichever staging epoch is being prepared.
+
 Numeric path segments use fixed-width big-endian bytes in native key encoding:
 `epoch` and `nodeID` are `u64`, `layer` is `u16`, `collectionSeq` is `u64`, and
 `deltaOrdinal` is `u32`. This preserves ordered iteration for prefix scans such
@@ -171,7 +176,9 @@ state: enum { ready, building, catching_up, dirty, needs_rebuild, disabled, miss
 
 The metadata record MUST be validated before serving graph search. Unknown
 required feature flags MUST fail closed. `missing` is a synthetic open-time
-state used when no native ANN metadata has been published yet.
+state used when no native ANN metadata has been published yet. The all-ones
+`entry_node_id` sentinel is reserved and MUST NOT be allocated as a durable
+`node_id`; `next_node_id` must stop before that value.
 
 ### 6.2 Node Record
 
@@ -203,7 +210,7 @@ target.
 node_id: u64
 layer: u16
 neighbors: repeated {
-  neighbor_node_id_delta_or_id: varint
+  neighbor_node_id_delta_or_id: u64 varint
   cached_distance: f32 or quantized_distance
 }
 crc_or_record_checksum: optional
@@ -311,7 +318,8 @@ type VectorIndex struct {
 
 type vectorIndexNode struct {
     documentID []byte
-    vector: []float32 or quantized: []int8
+    vector []float32 // or quantized []int8 when Encoding is int8
+    quantized []int8
     normSquared float64
     cachedInvNorm float32
     level int
@@ -343,8 +351,9 @@ collection durability mode.
 Required behavior:
 
 1. Insert/update writes canonical document bytes.
-2. Vector extraction produces zero or one vector index mutation per affected
-   vector index.
+2. Vector extraction produces zero or more document-level vector index mutations
+   per affected vector index. Batch writes may emit multiple mutations under the
+   same collection sequence.
 3. ANN durable records are updated in the same publish group or recovery unit.
 4. Runtime graph is updated after durable intent is staged and before the
    write becomes visible to graph search.
@@ -408,9 +417,14 @@ missing -> building -> ready
 ready -> catching_up -> ready
 catching_up -> dirty -> needs_rebuild
 catching_up -> needs_rebuild
+dirty -> catching_up -> ready
+dirty -> building -> ready
 ready -> dirty -> needs_rebuild -> building -> ready
 ready -> needs_rebuild -> building -> ready
 ready -> disabled
+catching_up -> disabled
+dirty -> disabled
+needs_rebuild -> disabled
 disabled -> building
 ```
 
@@ -516,9 +530,9 @@ Recommended first format:
 
 Expected size for 10k docs x 64 dims, `M=16`, using binary MiB
 (`1 MiB = 1024 * 1024 bytes`) and an illustrative average of about 37 directed
-edges/node. This estimate includes base-layer and upper-layer directed edges
-from the current benchmark-sized graph shape and should be replaced with
-measured fanout once the native format lands:
+edges/node. The 37-edge estimate is a sizing placeholder derived from a base
+layer near `2*M` plus a small upper-layer average for benchmark-sized HNSW
+graphs; it should be replaced with measured fanout once the native format lands:
 
 ```text
 float32 vectors: ~2.44 MiB
@@ -529,8 +543,8 @@ node/doc metadata: ~0.5-1.0 MiB before TreeDB overhead
 With compact binary plus page compression:
 
 ```text
-float32 mode: roughly 4.5-6.5 MB effective
-int8 mode:    roughly 2.5-4.5 MB effective
+float32 mode: roughly 4.5-6.5 MiB effective
+int8 mode:    roughly 2.5-4.5 MiB effective
 ```
 
 Generic compression will not shrink normalized float32 vectors much. Format
