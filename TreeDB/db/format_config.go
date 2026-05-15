@@ -261,7 +261,10 @@ func commandWALRequiredFeatureGate(dir string) (bool, error) {
 	return requiresCommandWAL, nil
 }
 
-// SaveFormatConfig writes cfg to dir/format.json atomically.
+// SaveFormatConfig writes cfg to dir/format.json atomically. A transition into
+// command_wal_v1 validates that legacy WAL state is clean; re-saving a config
+// that already requires command_wal_v1 does not re-run activation validation
+// because command-WAL segments are expected after activation.
 func SaveFormatConfig(dir string, cfg FormatConfig) error {
 	if cfg.RequiresCommandWALV1() {
 		existing, ok, err := LoadFormatConfig(dir)

@@ -288,7 +288,7 @@ func replayCommandWALIntoBackend(db *DB, segments []logSegment, maxSegmentBytes 
 		}
 		restoreLeafPageLog()
 	}()
-	needsLogSupport, err := commandWALReplayFramesNeedLogSupport(db, frames)
+	needsLogSupport, err := commandWALReplayFramesNeedLogSupport(db, frames, applied)
 	if err != nil {
 		return err
 	}
@@ -378,8 +378,13 @@ func readCommandWALReplayFrames(segments []logSegment, appliedLSN uint64, maxSeg
 	return frames, nil
 }
 
-func commandWALReplayFramesNeedLogSupport(db *DB, frames []commandWALReplayFrame) (bool, error) {
+func commandWALReplayFramesNeedLogSupport(db *DB, frames []commandWALReplayFrame, applied uint64) (bool, error) {
+	hasUnappliedFrame := false
 	for _, frame := range frames {
+		if frame.env.LSN <= applied {
+			continue
+		}
+		hasUnappliedFrame = true
 		if frame.env.Kind != commitlog.CommandKindRawKVBatch {
 			continue
 		}
@@ -403,7 +408,7 @@ func commandWALReplayFramesNeedLogSupport(db *DB, frames []commandWALReplayFrame
 	if db != nil && db.indexOuterLeavesInValueLog {
 		// Outer-leaf mode needs a replay leaf-page log for any replayed write,
 		// even when the raw KV payload values themselves remain inline.
-		return true, nil
+		return hasUnappliedFrame, nil
 	}
 	return false, nil
 }
