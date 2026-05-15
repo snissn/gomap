@@ -496,6 +496,34 @@ func TestColumnPartFromImageRejectsImpossibleRowLocatorCount(t *testing.T) {
 	}
 }
 
+func TestColumnPartFromImageRejectsDuplicateRowLocators(t *testing.T) {
+	part, err := BuildColumnPart(7, partTestOptions([]SortKeyColumn{{Column: "id"}}), ColumnBatch{Columns: map[string][]int64{
+		"id":        {3, 1, 2, 5, 4},
+		"time_us":   {30, 10, 20, 50, 40},
+		"value":     {300, 100, 200, 500, 400},
+		"kind_code": {1, 0, 1, 2, 0},
+		"has_reply": {1, 0, 1, 0, 1},
+	}})
+	if err != nil {
+		t.Fatalf("BuildColumnPart: %v", err)
+	}
+	image, err := BuildColumnPartImage(part, ColumnPartImageOptions{})
+	if err != nil {
+		t.Fatalf("BuildColumnPartImage: %v", err)
+	}
+	firstPrimaryIDOffset, secondPrimaryIDOffset := firstTwoRowLocatorPrimaryIDOffsets(t, image)
+	corrupt := append([]byte(nil), image.Bytes...)
+	firstPrimaryID := binary.LittleEndian.Uint64(corrupt[firstPrimaryIDOffset:])
+	binary.LittleEndian.PutUint64(corrupt[secondPrimaryIDOffset:], firstPrimaryID)
+	parsed, err := ParseColumnPartImage(corrupt)
+	if err != nil {
+		t.Fatalf("ParseColumnPartImage: %v", err)
+	}
+	if _, err := ColumnPartFromImage(parsed); err == nil {
+		t.Fatal("ColumnPartFromImage accepted duplicate row locators")
+	}
+}
+
 func descriptorGranuleCountOffset(t *testing.T, image ColumnPartImage) int {
 	t.Helper()
 	descriptor, err := image.singleSection(ColumnPartImageSectionDescriptor)
@@ -522,6 +550,42 @@ func descriptorGranuleCountOffset(t *testing.T, image ColumnPartImage) int {
 		t.Fatal(err)
 	}
 	return descriptor.Offset + dec.offset
+}
+
+func firstTwoRowLocatorPrimaryIDOffsets(t *testing.T, image ColumnPartImage) (int, int) {
+	t.Helper()
+	locators, err := image.singleSection(ColumnPartImageSectionRowLocators)
+	if err != nil {
+		t.Fatalf("row locators section: %v", err)
+	}
+	dec := columnPartImageDecoder{data: image.sectionBytes(locators)}
+	count, err := dec.u32()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count < 2 {
+		t.Fatalf("row locator count=%d want at least 2", count)
+	}
+	first := locators.Offset + dec.offset
+	if _, err := dec.i64(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dec.u64(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dec.u32(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dec.u32(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dec.u32(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dec.u32(); err != nil {
+		t.Fatal(err)
+	}
+	return first, locators.Offset + dec.offset
 }
 
 func descriptorPartIDOffset(t *testing.T, image ColumnPartImage) int {

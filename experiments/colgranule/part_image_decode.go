@@ -773,6 +773,9 @@ func decodeRowLocatorsSection(image ColumnPartImage) (map[int64]RowLocator, erro
 		if err != nil {
 			return nil, err
 		}
+		if _, exists := out[primaryID]; exists {
+			return nil, fmt.Errorf("colgranule: duplicate row locator primary id %d", primaryID)
+		}
 		out[primaryID] = RowLocator{
 			PrimaryID:      primaryID,
 			PartID:         partID,
