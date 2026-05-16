@@ -609,7 +609,11 @@ func DecodeCollectionInsertBatchByIDPayload(payload []byte) (CollectionInsertBat
 	if uint64(count)*8 > uint64(len(payload)-off) {
 		return CollectionInsertBatchByIDPayload{}, ErrCorrupt
 	}
-	docs := make([]CollectionDocument, 0, count)
+	docCount, err := commandPayloadCountToInt(count)
+	if err != nil {
+		return CollectionInsertBatchByIDPayload{}, err
+	}
+	docs := make([]CollectionDocument, 0, docCount)
 	for i := uint32(0); i < count; i++ {
 		if off+8 > len(payload) {
 			return CollectionInsertBatchByIDPayload{}, ErrCorrupt
@@ -624,7 +628,7 @@ func DecodeCollectionInsertBatchByIDPayload(payload []byte) (CollectionInsertBat
 		off += int(idLen)
 		doc := payload[off : off+int(docLen)]
 		off += int(docLen)
-		if len(id) == 0 || doc == nil {
+		if len(id) == 0 {
 			return CollectionInsertBatchByIDPayload{}, ErrCorrupt
 		}
 		docs = append(docs, CollectionDocument{
@@ -678,7 +682,11 @@ func DecodeCollectionDeleteBatchByIDPayload(payload []byte) (CollectionDeleteBat
 	if uint64(count)*4 > uint64(len(payload)-off) {
 		return CollectionDeleteBatchByIDPayload{}, ErrCorrupt
 	}
-	ids := make([][]byte, 0, count)
+	idCount, err := commandPayloadCountToInt(count)
+	if err != nil {
+		return CollectionDeleteBatchByIDPayload{}, err
+	}
+	ids := make([][]byte, 0, idCount)
 	for i := uint32(0); i < count; i++ {
 		if off+4 > len(payload) {
 			return CollectionDeleteBatchByIDPayload{}, ErrCorrupt
@@ -702,6 +710,14 @@ func DecodeCollectionDeleteBatchByIDPayload(payload []byte) (CollectionDeleteBat
 		return CollectionDeleteBatchByIDPayload{}, err
 	}
 	return CollectionDeleteBatchByIDPayload{Collection: collection, IDs: ids}, nil
+}
+
+func commandPayloadCountToInt(count uint32) (int, error) {
+	maxInt := int(^uint(0) >> 1)
+	if uint64(count) > uint64(maxInt) {
+		return 0, ErrRecordTooLarge
+	}
+	return int(count), nil
 }
 
 func collectionBatchPayloadHeaderLen(collection string, count int) (int, error) {
