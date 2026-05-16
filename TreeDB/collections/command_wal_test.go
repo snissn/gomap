@@ -77,6 +77,9 @@ func TestCollectionCommandWALInsertBatchByIDReplayRecoversUnappliedFrame(t *test
 	if got := reopen.State().AppliedCommandLSN; got != 1 {
 		t.Fatalf("AppliedCommandLSN=%d, want 1", got)
 	}
+	if got := countCollectionCommandWALFrames(t, dir); got != 1 {
+		t.Fatalf("command WAL frames after replay=%d, want original frame only", got)
+	}
 }
 
 func TestCollectionCommandWALInsertBatchByIDReplayTemplateV1StoredDocument(t *testing.T) {
@@ -478,6 +481,27 @@ func writeCollectionCommandWALFrame(t *testing.T, dir string, lsn uint64, kind c
 	if err := w.Close(); err != nil {
 		t.Fatalf("Close writer: %v", err)
 	}
+}
+
+func countCollectionCommandWALFrames(t *testing.T, dir string) int {
+	t.Helper()
+	walDir := backenddb.WALDirPath(dir)
+	entries, err := os.ReadDir(walDir)
+	if err != nil {
+		t.Fatalf("ReadDir wal: %v", err)
+	}
+	paths := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || !commitlog.IsCommandSegmentName(entry.Name()) {
+			continue
+		}
+		paths = append(paths, filepath.Join(walDir, entry.Name()))
+	}
+	frames, err := commitlog.ScanCommandFrameSegments(paths, commitlog.Options{})
+	if err != nil {
+		t.Fatalf("ScanCommandFrameSegments: %v", err)
+	}
+	return len(frames)
 }
 
 func assertCollectionDocument(t *testing.T, col *Collection, id string, want string) {
