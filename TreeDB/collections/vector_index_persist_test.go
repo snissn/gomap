@@ -1721,6 +1721,113 @@ func TestCollectionVectorIndexNativeRootStatusReportsMissingRoot(t *testing.T) {
 	}
 }
 
+func TestCollectionVectorIndexNativeRootMutationRepairsSnapshotFallback(t *testing.T) {
+	dir := t.TempDir()
+	d, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mgr := NewCollectionManager(d)
+	def := VectorIndexDefinition{
+		Name:       "embedding",
+		Field:      "embedding",
+		Metric:     VectorMetricCosine,
+		Dimensions: 2,
+		M:          4,
+	}
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("a"), []byte("b")},
+		[][]byte{
+			[]byte(`{"embedding":[1,0]}`),
+			[]byte(`{"embedding":[0,1]}`),
+		},
+	); err != nil {
+		t.Fatalf("insert seed vectors: %v", err)
+	}
+	index, err := col.BuildVectorIndex(vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		t.Fatalf("build vector index: %v", err)
+	}
+	if _, err := index.SaveSnapshot(); err != nil {
+		t.Fatalf("save vector index: %v", err)
+	}
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("acquire snapshot")
+	}
+	catalog, err := loadCollectionCatalog(snap, "docs")
+	_ = snap.Close()
+	if err != nil {
+		t.Fatalf("load catalog: %v", err)
+	}
+	newMeta, err := normalizeCollectionMeta(CollectionMeta{
+		Name: "docs",
+		VectorIndexes: []VectorIndexDefinition{{
+			Name:           "embedding",
+			Field:          "embedding",
+			Metric:         VectorMetricCosine,
+			Dimensions:     2,
+			M:              8,
+			EfConstruction: 16,
+			EfSearch:       32,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("normalize collection meta: %v", err)
+	}
+	encodedMeta, err := encodeCollectionMeta(newMeta)
+	if err != nil {
+		t.Fatalf("encode collection meta: %v", err)
+	}
+	_, _, err = d.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder(nil, func([]uint64) (iterator.UnsafeIterator, error) {
+		return col.buildSchemaOnlySystemDeltaIterator(catalog.meta, encodedMeta, nil)
+	})
+	if err != nil {
+		t.Fatalf("publish stale vector metadata: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+
+	reopened, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open reopened collection: %v", err)
+	}
+	if got := len(reopenedCol.registeredVectorIndexes()); got != 0 {
+		t.Fatalf("reopened collection eagerly registered %d vector indexes want 0", got)
+	}
+	if _, err := reopenedCol.InsertBatch(
+		[][]byte{[]byte("c")},
+		[][]byte{[]byte(`{"embedding":[0.9,0.1]}`)},
+	); err != nil {
+		t.Fatalf("insert after snapshot fallback: %v", err)
+	}
+	if got := len(reopenedCol.registeredVectorIndexes()); got != 1 {
+		t.Fatalf("snapshot fallback did not repair vector index, got %d registered indexes", got)
+	}
+	loaded := reopenedCol.registeredVectorIndex("embedding")
+	if loaded == nil {
+		t.Fatal("snapshot fallback repair did not leave a registered vector index")
+	}
+	results, _, err := loaded.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 3, DisableExactFallback: true})
+	if err != nil {
+		t.Fatalf("search repaired vector index: %v", err)
+	}
+	requireVectorResultIDs(t, results, "a", "c", "b")
+}
+
 func TestCollectionVectorIndexNativeRootRebuildAPIAcceptsEmptyGraph(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

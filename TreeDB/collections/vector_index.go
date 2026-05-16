@@ -490,7 +490,7 @@ func (c *Collection) ensureDeclaredNativeVectorIndexesLoaded() error {
 		if index != nil {
 			continue
 		}
-		if status.ExactFallbackReason == vectorIndexFallbackMissingGraphRoot {
+		if status.ExactFallbackReason != "" {
 			if _, err := c.BuildVectorIndex(vectorIndexOptionsFromDefinition(def)); err != nil {
 				return err
 			}
