@@ -145,10 +145,7 @@ func parseConfig(args []string) (config, error) {
 
 func exportDataset(cfg config) (exportResult, error) {
 	out := filepath.Clean(cfg.out)
-	if err := os.RemoveAll(out); err != nil {
-		return exportResult{}, err
-	}
-	if err := os.MkdirAll(out, 0o755); err != nil {
+	if err := prepareOutputDir(out); err != nil {
 		return exportResult{}, err
 	}
 	files := make(map[string]fileManifest)
@@ -191,6 +188,27 @@ func exportDataset(cfg config) (exportResult, error) {
 		return exportResult{}, err
 	}
 	return exportResult{Dir: out, Manifest: m}, nil
+}
+
+func prepareOutputDir(path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return os.MkdirAll(path, 0o755)
+		}
+		return err
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("output path %q exists and is not a directory", path)
+	}
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return err
+	}
+	if len(entries) != 0 {
+		return fmt.Errorf("output directory %q already exists and is not empty", path)
+	}
+	return nil
 }
 
 func writeVectorFile(path string, count, dims int, vector func(int) []float32, files map[string]fileManifest, name string) error {
