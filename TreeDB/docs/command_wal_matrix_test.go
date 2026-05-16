@@ -77,6 +77,7 @@ func TestCommandWALSupportMatrixCoversCollectionMutators(t *testing.T) {
 		"Collection.DeleteDocument",
 		"Collection.DeleteBatch",
 		"Collection.Update",
+		"Collection.Replace",
 		"Collection.UpdateBatch",
 		"Collection.UpdateBatchIfNoSecondaryUniqueIndexes",
 		"Collection.UpdateBatchIfNoSecondaryUniqueIndexChanges",
