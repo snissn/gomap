@@ -181,6 +181,7 @@ func TestCollectionCommandWALDeleteBatchByIDReplayIgnoresMissingIDs(t *testing.T
 		Options: CollectionOptions{
 			DocumentFormat: DocumentFormatJSON,
 		},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city", ValueType: IndexValueString}},
 	}, collectionCommandWALSetupInsert{
 		ids: [][]byte{[]byte("u1"), []byte("u2")},
 		docs: [][]byte{
@@ -239,6 +240,133 @@ func TestCollectionCommandWALDeleteBatchByIDReplayAdvancesMissingOnlyFrame(t *te
 	}
 }
 
+func TestCollectionCommandWALUpdateByIDPublishesAppliedLSN(t *testing.T) {
+	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatJSON,
+		},
+	}, collectionCommandWALSetupInsert{
+		ids: [][]byte{[]byte("u1")},
+		docs: [][]byte{
+			[]byte(`{"name":"Ada","active":false}`),
+		},
+	})
+	d := openCollectionCommandWALDB(t, dir)
+	mgr := NewCollectionManager(d)
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	callbacks := 0
+	matched, modified, err := col.Update([]byte("u1"), func(current []byte) ([]byte, bool, error) {
+		callbacks++
+		if !bytes.Contains(current, []byte(`"active":false`)) {
+			t.Fatalf("callback current=%s, want inactive", current)
+		}
+		return []byte(`{"name":"Ada","active":true}`), true, nil
+	})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if !matched || !modified || callbacks != 1 {
+		t.Fatalf("Update matched=%t modified=%t callbacks=%d, want true/true/1", matched, modified, callbacks)
+	}
+	assertCollectionDocument(t, col, "u1", `{"name":"Ada","active":true}`)
+	if got := d.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("AppliedCommandLSN=%d, want 1", got)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopen := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopen.Close() }()
+	reopened, err := NewCollectionManager(reopen).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection reopen: %v", err)
+	}
+	assertCollectionDocument(t, reopened, "u1", `{"name":"Ada","active":true}`)
+	if got := reopen.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("AppliedCommandLSN after reopen=%d, want 1", got)
+	}
+}
+
+func TestCollectionCommandWALUpdateByIDReplayRecoversUnappliedFrame(t *testing.T) {
+	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatJSON,
+		},
+	}, collectionCommandWALSetupInsert{
+		ids: [][]byte{[]byte("u1"), []byte("u2")},
+		docs: [][]byte{
+			[]byte(`{"name":"Ada","city":"hnl"}`),
+			[]byte(`{"name":"Grace","city":"nyc"}`),
+		},
+	})
+	payload, err := commitlog.EncodeCollectionUpdateBatchByIDPayload("users", []commitlog.CollectionDocument{
+		{ID: []byte("u1"), Document: []byte(`{"name":"Ada","city":"sea"}`)},
+	})
+	if err != nil {
+		t.Fatalf("EncodeCollectionUpdateBatchByIDPayload: %v", err)
+	}
+	writeCollectionCommandWALFrame(t, dir, 1, commitlog.CommandKindCollectionUpdateBatchByID, commitlog.PayloadFormatCollectionUpdateBatchByIDV1, payload)
+
+	reopen := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopen.Close() }()
+	col, err := NewCollectionManager(reopen).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	if got := reopen.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("AppliedCommandLSN=%d, want 1", got)
+	}
+	assertCollectionDocument(t, col, "u1", `{"name":"Ada","city":"sea"}`)
+	assertCollectionDocument(t, col, "u2", `{"name":"Grace","city":"nyc"}`)
+}
+
+func TestCollectionCommandWALUpdateByIDIndexedPublishesSecondaryRoots(t *testing.T) {
+	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatJSON,
+		},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city", ValueType: IndexValueString}},
+	}, collectionCommandWALSetupInsert{
+		ids: [][]byte{[]byte("u1"), []byte("u2")},
+		docs: [][]byte{
+			[]byte(`{"name":"Ada","city":"hnl"}`),
+			[]byte(`{"name":"Grace","city":"nyc"}`),
+		},
+	})
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col, err := NewCollectionManager(d).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	results, err := col.UpdateBatch([]UpdateBatchItem{{
+		DocumentID: []byte("u1"),
+		Update: func([]byte) ([]byte, bool, error) {
+			return []byte(`{"name":"Ada","city":"sea"}`), true, nil
+		},
+	}})
+	if err != nil {
+		t.Fatalf("UpdateBatch: %v", err)
+	}
+	if len(results) != 1 || !results[0].Matched || !results[0].Modified {
+		t.Fatalf("UpdateBatch results=%+v, want one matched modified", results)
+	}
+	assertCollectionDocument(t, col, "u1", `{"name":"Ada","city":"sea"}`)
+	assertCollectionIndexIDs(t, col, "city", "hnl")
+	assertCollectionIndexIDs(t, col, "city", "sea", "u1")
+	assertCollectionIndexIDs(t, col, "city", "nyc", "u2")
+	if got := d.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("AppliedCommandLSN=%d, want 1", got)
+	}
+}
+
 func TestCollectionCommandWALRejectsCatalogCreate(t *testing.T) {
 	dir := t.TempDir()
 	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
@@ -283,6 +411,10 @@ func prepareCollectionCommandWALDir(t *testing.T, meta CollectionMeta, inserts .
 			_ = d.Close()
 			t.Fatalf("InsertBatch setup: %v", err)
 		}
+	}
+	if err := d.Checkpoint(); err != nil {
+		_ = d.Close()
+		t.Fatalf("Checkpoint setup DB: %v", err)
 	}
 	if err := d.Close(); err != nil {
 		t.Fatalf("Close setup DB: %v", err)
@@ -336,5 +468,21 @@ func assertCollectionDocument(t *testing.T, col *Collection, id string, want str
 	}
 	if !bytes.Equal(got, []byte(want)) {
 		t.Fatalf("Get(%q)=%q, want %q", id, got, want)
+	}
+}
+
+func assertCollectionIndexIDs(t *testing.T, col *Collection, indexName string, value any, want ...string) {
+	t.Helper()
+	got, err := col.FindByIndexValue(indexName, value)
+	if err != nil {
+		t.Fatalf("FindByIndexValue(%q,%v): %v", indexName, value, err)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("FindByIndexValue(%q,%v)=%q, want %q", indexName, value, got, want)
+	}
+	for i := range want {
+		if string(got[i]) != want[i] {
+			t.Fatalf("FindByIndexValue(%q,%v)[%d]=%q, want %q (all got %q)", indexName, value, i, got[i], want[i], got)
+		}
 	}
 }

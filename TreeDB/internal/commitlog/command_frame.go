@@ -39,6 +39,7 @@ const (
 	// mutations. They do not encode physical root deltas.
 	CommandKindCollectionInsertBatchByID  CommandKind = 100
 	CommandKindCollectionDeleteBatchByID  CommandKind = 101
+	CommandKindCollectionUpdateBatchByID  CommandKind = 102
 	CommandKindCatalogMutationPlaceholder CommandKind = 200
 )
 
@@ -59,6 +60,7 @@ const (
 	PayloadFormatNativeWireDeterministic     PayloadFormat = 2
 	PayloadFormatCollectionInsertBatchByIDV1 PayloadFormat = 3
 	PayloadFormatCollectionDeleteBatchByIDV1 PayloadFormat = 4
+	PayloadFormatCollectionUpdateBatchByIDV1 PayloadFormat = 5
 )
 
 // RawKVOp is a deterministic raw key/value mutation inside a RawKVBatch
@@ -99,6 +101,11 @@ type CollectionInsertBatchByIDPayload struct {
 type CollectionDeleteBatchByIDPayload struct {
 	Collection string
 	IDs        [][]byte
+}
+
+type CollectionUpdateBatchByIDPayload struct {
+	Collection string
+	Documents  []CollectionDocument
 }
 
 type ExternalRefClass uint16
@@ -369,6 +376,10 @@ func validateCommandEnvelopeIdentity(env CommandEnvelope) error {
 		if env.Scope != CommandScopeCollection || env.PayloadFormat != PayloadFormatCollectionDeleteBatchByIDV1 {
 			return ErrCorrupt
 		}
+	case CommandKindCollectionUpdateBatchByID:
+		if env.Scope != CommandScopeCollection || env.PayloadFormat != PayloadFormatCollectionUpdateBatchByIDV1 {
+			return ErrCorrupt
+		}
 	case CommandKindCatalogMutationPlaceholder:
 		if env.Scope != CommandScopeCatalog || env.PayloadFormat != PayloadFormatNativeWireDeterministic {
 			return ErrCorrupt
@@ -388,6 +399,9 @@ func validateCommandEnvelopePayload(env CommandEnvelope) error {
 		return err
 	case CommandKindCollectionDeleteBatchByID:
 		_, err := DecodeCollectionDeleteBatchByIDPayload(env.Payload)
+		return err
+	case CommandKindCollectionUpdateBatchByID:
+		_, err := DecodeCollectionUpdateBatchByIDPayload(env.Payload)
 		return err
 	default:
 		return nil
@@ -639,6 +653,21 @@ func DecodeCollectionInsertBatchByIDPayload(payload []byte) (CollectionInsertBat
 		return CollectionInsertBatchByIDPayload{}, err
 	}
 	return CollectionInsertBatchByIDPayload{Collection: collection, Documents: docs}, nil
+}
+
+func EncodeCollectionUpdateBatchByIDPayload(collection string, docs []CollectionDocument) ([]byte, error) {
+	return EncodeCollectionInsertBatchByIDPayload(collection, docs)
+}
+
+func DecodeCollectionUpdateBatchByIDPayload(payload []byte) (CollectionUpdateBatchByIDPayload, error) {
+	decoded, err := DecodeCollectionInsertBatchByIDPayload(payload)
+	if err != nil {
+		return CollectionUpdateBatchByIDPayload{}, err
+	}
+	return CollectionUpdateBatchByIDPayload{
+		Collection: decoded.Collection,
+		Documents:  decoded.Documents,
+	}, nil
 }
 
 func EncodeCollectionDeleteBatchByIDPayload(collection string, ids [][]byte) ([]byte, error) {

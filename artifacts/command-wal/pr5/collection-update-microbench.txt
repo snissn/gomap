@@ -1,0 +1,18 @@
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/collections
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkCollectionCommandWALUpdateBatchByID/indexed=false/command_wal=false-12         	     200	    149754 ns/op	    854738 docs/s	   60413 B/op	    1338 allocs/op
+BenchmarkCollectionCommandWALUpdateBatchByID/indexed=false/command_wal=false-12         	     200	    143915 ns/op	    889412 docs/s	   59196 B/op	    1337 allocs/op
+BenchmarkCollectionCommandWALUpdateBatchByID/indexed=false/command_wal=false-12         	     200	    145207 ns/op	    881503 docs/s	   59007 B/op	    1337 allocs/op
+BenchmarkCollectionCommandWALUpdateBatchByID/indexed=false/command_wal=true-12          	     200	    218308 ns/op	    586326 docs/s	  109974 B/op	    1860 allocs/op
+BenchmarkCollectionCommandWALUpdateBatchByID/indexed=false/command_wal=true-12          	     200	    219617 ns/op	    582833 docs/s	  108946 B/op	    1860 allocs/op
+BenchmarkCollectionCommandWALUpdateBatchByID/indexed=false/command_wal=true-12          	     200	    191989 ns/op	    666706 docs/s	  110121 B/op	    1860 allocs/op
+BenchmarkCollectionCommandWALUpdateBatchByID/indexed=true/command_wal=false-12          	     200	    250945 ns/op	    510072 docs/s	   61524 B/op	    1347 allocs/op
+BenchmarkCollectionCommandWALUpdateBatchByID/indexed=true/command_wal=false-12          	     200	    281303 ns/op	    455026 docs/s	   60303 B/op	    1346 allocs/op
+BenchmarkCollectionCommandWALUpdateBatchByID/indexed=true/command_wal=false-12          	     200	    276697 ns/op	    462599 docs/s	   60303 B/op	    1346 allocs/op
+BenchmarkCollectionCommandWALUpdateBatchByID/indexed=true/command_wal=true-12           	     200	    271766 ns/op	    470994 docs/s	  110789 B/op	    1869 allocs/op
+BenchmarkCollectionCommandWALUpdateBatchByID/indexed=true/command_wal=true-12           	     200	    341251 ns/op	    375090 docs/s	  109813 B/op	    1869 allocs/op
+BenchmarkCollectionCommandWALUpdateBatchByID/indexed=true/command_wal=true-12           	     200	    316143 ns/op	    404880 docs/s	  109813 B/op	    1869 allocs/op
+PASS
+ok  	github.com/snissn/gomap/TreeDB/collections	1.442s

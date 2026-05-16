@@ -63,6 +63,9 @@ func (c *Collection) UpdateBSONSet(documentID []byte, fields []BSONSetField) (bo
 	if err != nil {
 		return false, false, err
 	}
+	if c.commandWALActive(nil) {
+		return c.updateBSONSetDirect(documentID, spec)
+	}
 	if combiner, domain := c.updateFastPathWithoutCreatingCombiner(); combiner != nil {
 		return combiner.update(c, documentID, nil, spec, true)
 	} else if domain != nil {

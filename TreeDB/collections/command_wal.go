@@ -11,6 +11,7 @@ import (
 func init() {
 	backenddb.RegisterCommandWALReplayHandler(commitlog.CommandKindCollectionInsertBatchByID, replayCollectionInsertBatchByIDCommandWAL)
 	backenddb.RegisterCommandWALReplayHandler(commitlog.CommandKindCollectionDeleteBatchByID, replayCollectionDeleteBatchByIDCommandWAL)
+	backenddb.RegisterCommandWALReplayHandler(commitlog.CommandKindCollectionUpdateBatchByID, replayCollectionUpdateBatchByIDCommandWAL)
 }
 
 func (c *Collection) commandWALActive(intent *backenddb.CommandWALIntent) bool {
@@ -55,6 +56,25 @@ func (c *Collection) newCollectionDeleteCommandWALIntent(ids [][]byte, replay *b
 	)
 }
 
+func (c *Collection) newCollectionUpdateCommandWALIntent(docs []commitlog.CollectionDocument, replay *backenddb.CommandWALIntent) (*backenddb.CommandWALIntent, error) {
+	if replay != nil {
+		return replay, nil
+	}
+	if c == nil || c.db == nil || !c.db.CommandWALEnabled() {
+		return nil, nil
+	}
+	payload, err := commitlog.EncodeCollectionUpdateBatchByIDPayload(c.meta.Name, docs)
+	if err != nil {
+		return nil, err
+	}
+	return c.db.NewCommandWALIntent(
+		commitlog.CommandKindCollectionUpdateBatchByID,
+		commitlog.CommandScopeCollection,
+		commitlog.PayloadFormatCollectionUpdateBatchByIDV1,
+		payload,
+	)
+}
+
 func collectionDocumentsFromNoIndexEntries(entries []noIndexBatchEntry) []commitlog.CollectionDocument {
 	docs := make([]commitlog.CollectionDocument, len(entries))
 	for i := range entries {
@@ -88,6 +108,20 @@ func collectionDocumentsFromInsertPlan(plan *insertBatchPlan, primaryRootName st
 		return docs, nil
 	}
 	return nil, fmt.Errorf("collections: insert plan missing primary root for command wal")
+}
+
+func collectionDocumentsFromPreparedBatchUpdates(changed []preparedBatchUpdate) []commitlog.CollectionDocument {
+	if len(changed) == 0 {
+		return nil
+	}
+	docs := make([]commitlog.CollectionDocument, len(changed))
+	for i := range changed {
+		docs[i] = commitlog.CollectionDocument{
+			ID:       changed[i].documentID,
+			Document: changed[i].document,
+		}
+	}
+	return docs
 }
 
 func replayCollectionInsertBatchByIDCommandWAL(db *backenddb.DB, env commitlog.CommandEnvelope) error {
@@ -124,6 +158,37 @@ func replayCollectionDeleteBatchByIDCommandWAL(db *backenddb.DB, env commitlog.C
 		return err
 	}
 	_, err = collection.deleteBatchWithCommandWALIntent(payload.IDs, backenddb.NewCommandWALReplayIntent(env))
+	return err
+}
+
+func replayCollectionUpdateBatchByIDCommandWAL(db *backenddb.DB, env commitlog.CommandEnvelope) error {
+	payload, err := commitlog.DecodeCollectionUpdateBatchByIDPayload(env.Payload)
+	if err != nil {
+		return err
+	}
+	if len(payload.Documents) == 0 {
+		return db.PublishCommandWALNoop(backenddb.NewCommandWALReplayIntent(env), false)
+	}
+	manager := NewCollectionManager(db)
+	collection, err := manager.OpenCollection(payload.Collection)
+	if err != nil {
+		return err
+	}
+	items := make([]updateBatchItem, len(payload.Documents))
+	for i := range payload.Documents {
+		doc := payload.Documents[i]
+		items[i] = updateBatchItem{
+			UpdateBatchItem: UpdateBatchItem{
+				DocumentID: doc.ID,
+				Update: func(replacement []byte) func([]byte) ([]byte, bool, error) {
+					return func([]byte) ([]byte, bool, error) {
+						return replacement, true, nil
+					}
+				}(doc.Document),
+			},
+		}
+	}
+	_, _, err = collection.updateBatchOwnedItemsWithCommandWALIntent(items, updateBatchModeAny, backenddb.NewCommandWALReplayIntent(env))
 	return err
 }
 

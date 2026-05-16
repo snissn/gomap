@@ -1,0 +1,39 @@
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/collections
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+                                                                       │ artifacts/command-wal/pr5/collection-update-microbench.txt │
+                                                                       │                           sec/op                           │
+CollectionCommandWALUpdateBatchByID/indexed=false/command_wal=false-12                                                 145.2µ ± ∞ ¹
+CollectionCommandWALUpdateBatchByID/indexed=false/command_wal=true-12                                                  218.3µ ± ∞ ¹
+CollectionCommandWALUpdateBatchByID/indexed=true/command_wal=false-12                                                  276.7µ ± ∞ ¹
+CollectionCommandWALUpdateBatchByID/indexed=true/command_wal=true-12                                                   316.1µ ± ∞ ¹
+geomean                                                                                                                229.5µ
+¹ need >= 6 samples for confidence interval at level 0.95
+
+                                                                       │ artifacts/command-wal/pr5/collection-update-microbench.txt │
+                                                                       │                           docs/s                           │
+CollectionCommandWALUpdateBatchByID/indexed=false/command_wal=false-12                                                 881.5k ± ∞ ¹
+CollectionCommandWALUpdateBatchByID/indexed=false/command_wal=true-12                                                  586.3k ± ∞ ¹
+CollectionCommandWALUpdateBatchByID/indexed=true/command_wal=false-12                                                  462.6k ± ∞ ¹
+CollectionCommandWALUpdateBatchByID/indexed=true/command_wal=true-12                                                   404.9k ± ∞ ¹
+geomean                                                                                                                557.8k
+¹ need >= 6 samples for confidence interval at level 0.95
+
+                                                                       │ artifacts/command-wal/pr5/collection-update-microbench.txt │
+                                                                       │                            B/op                            │
+CollectionCommandWALUpdateBatchByID/indexed=false/command_wal=false-12                                                57.81Ki ± ∞ ¹
+CollectionCommandWALUpdateBatchByID/indexed=false/command_wal=true-12                                                 107.4Ki ± ∞ ¹
+CollectionCommandWALUpdateBatchByID/indexed=true/command_wal=false-12                                                 58.89Ki ± ∞ ¹
+CollectionCommandWALUpdateBatchByID/indexed=true/command_wal=true-12                                                  107.2Ki ± ∞ ¹
+geomean                                                                                                               79.13Ki
+¹ need >= 6 samples for confidence interval at level 0.95
+
+                                                                       │ artifacts/command-wal/pr5/collection-update-microbench.txt │
+                                                                       │                         allocs/op                          │
+CollectionCommandWALUpdateBatchByID/indexed=false/command_wal=false-12                                                 1.337k ± ∞ ¹
+CollectionCommandWALUpdateBatchByID/indexed=false/command_wal=true-12                                                  1.860k ± ∞ ¹
+CollectionCommandWALUpdateBatchByID/indexed=true/command_wal=false-12                                                  1.346k ± ∞ ¹
+CollectionCommandWALUpdateBatchByID/indexed=true/command_wal=true-12                                                   1.869k ± ∞ ¹
+geomean                                                                                                                1.582k
+¹ need >= 6 samples for confidence interval at level 0.95
