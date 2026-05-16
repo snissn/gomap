@@ -234,6 +234,7 @@ type commandWALReplayFrame struct {
 	env commitlog.CommandEnvelope
 }
 
+type commandWALReplayRIDMapFunc func() (map[uint64]page.ValuePtr, error)
 type commandWALReplayLogSupportFunc func() (map[uint64]page.ValuePtr, *replayInlineAppender, error)
 
 func replayCommandWALIntoBackend(db *DB, segments []logSegment, maxSegmentBytes int64, dictLookup valuelog.DictLookup) error {
@@ -261,16 +262,25 @@ func replayCommandWALIntoBackend(db *DB, segments []logSegment, maxSegmentBytes 
 			leafPageLogInstalled = false
 		}
 	}
+	ensureReplayRIDMap := func() (map[uint64]page.ValuePtr, error) {
+		if ridMap != nil {
+			return ridMap, nil
+		}
+		var err error
+		ridMap, err = scanValueLogSegments(segments, dictLookup)
+		if err != nil {
+			return nil, err
+		}
+		return ridMap, nil
+	}
 	ensureReplayLogSupport := func() (map[uint64]page.ValuePtr, *replayInlineAppender, error) {
 		if inlineAppender != nil {
 			return ridMap, inlineAppender, nil
 		}
 		var err error
-		if ridMap == nil {
-			ridMap, err = scanValueLogSegments(segments, dictLookup)
-			if err != nil {
-				return nil, nil, err
-			}
+		ridMap, err = ensureReplayRIDMap()
+		if err != nil {
+			return nil, nil, err
 		}
 		inlineAppender, err = newReplayInlineAppender(db, segments, ridMap)
 		if err != nil {
@@ -304,7 +314,7 @@ func replayCommandWALIntoBackend(db *DB, segments []logSegment, maxSegmentBytes 
 		if frame.env.LSN != applied+1 {
 			return fmt.Errorf("%w: current=%d next=%d", ErrCommandWALAppliedLSNNonContig, applied, frame.env.LSN)
 		}
-		if err := applyCommandWALFrame(db, frame.env, ridMap, inlineAppender, ensureReplayLogSupport); err != nil {
+		if err := applyCommandWALFrame(db, frame.env, ridMap, inlineAppender, ensureReplayRIDMap, ensureReplayLogSupport); err != nil {
 			return err
 		}
 		applied = frame.env.LSN
@@ -376,18 +386,18 @@ func readCommandWALReplayFrames(segments []logSegment, appliedLSN uint64, maxSeg
 }
 
 func commandWALReplayFramesNeedLogSupport(db *DB, frames []commandWALReplayFrame, applied uint64) (bool, error) {
-	hasUnappliedFrame := false
+	hasUnappliedRawKVBatch := false
 	for _, frame := range frames {
 		if frame.env.LSN <= applied {
 			continue
 		}
-		hasUnappliedFrame = true
 		if frame.env.Kind != commitlog.CommandKindRawKVBatch {
 			continue
 		}
+		hasUnappliedRawKVBatch = true
 		needsLogSupport := false
 		if err := commitlog.ScanRawKVBatchPayload(frame.env.Payload, func(op commitlog.RawKVOp, key, value []byte) error {
-			if op == commitlog.RawKVOpSetRID || (op == commitlog.RawKVOpSet && commandWALRawSetNeedsReplayValueLog(db, key, value)) {
+			if op == commitlog.RawKVOpSet && commandWALRawSetNeedsReplayValueLog(db, key, value) {
 				needsLogSupport = true
 			}
 			return nil
@@ -401,7 +411,7 @@ func commandWALReplayFramesNeedLogSupport(db *DB, frames []commandWALReplayFrame
 	if db != nil && db.indexOuterLeavesInValueLog {
 		// Outer-leaf mode needs a replay leaf-page log for any replayed write,
 		// even when the raw KV payload values themselves remain inline.
-		return hasUnappliedFrame, nil
+		return hasUnappliedRawKVBatch, nil
 	}
 	return false, nil
 }
@@ -416,10 +426,10 @@ func commandWALRawSetNeedsReplayValueLog(db *DB, key, value []byte) bool {
 	return len(value) > resolveBatchInlineThresholdForKey(threshold, key, domains)
 }
 
-func applyCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map[uint64]page.ValuePtr, inlineAppender *replayInlineAppender, ensureReplayLogSupport commandWALReplayLogSupportFunc) error {
+func applyCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map[uint64]page.ValuePtr, inlineAppender *replayInlineAppender, ensureReplayRIDMap commandWALReplayRIDMapFunc, ensureReplayLogSupport commandWALReplayLogSupportFunc) error {
 	switch env.Kind {
 	case commitlog.CommandKindRawKVBatch:
-		return applyRawKVCommandWALFrame(db, env, ridMap, inlineAppender, ensureReplayLogSupport)
+		return applyRawKVCommandWALFrame(db, env, ridMap, inlineAppender, ensureReplayRIDMap, ensureReplayLogSupport)
 	default:
 		return commitlog.ErrCommandWALUnsupportedKind
 	}

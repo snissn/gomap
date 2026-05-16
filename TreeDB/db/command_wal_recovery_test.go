@@ -199,6 +199,38 @@ func TestCommandWALInlineReplayDoesNotScanValueLogRIDMap(t *testing.T) {
 	assertDBValue(t, reopen, "inline", "v")
 }
 
+func TestCommandWALSetRIDReplayDoesNotNeedInlineAppenderWithoutOuterLeafLog(t *testing.T) {
+	payload, err := commitlog.EncodeRawKVBatchPayload([]commitlog.RawKVOperation{
+		{Op: commitlog.RawKVOpSetRID, Key: []byte("ptr-key"), RID: 7},
+	})
+	if err != nil {
+		t.Fatalf("EncodeRawKVBatchPayload: %v", err)
+	}
+	frames := []commandWALReplayFrame{{
+		env: commitlog.CommandEnvelope{
+			LSN:           1,
+			Kind:          commitlog.CommandKindRawKVBatch,
+			Scope:         commitlog.CommandScopeRawKV,
+			PayloadFormat: commitlog.PayloadFormatRawKVBatchV1,
+			Payload:       payload,
+		},
+	}}
+	needs, err := commandWALReplayFramesNeedLogSupport(&DB{}, frames, 0)
+	if err != nil {
+		t.Fatalf("commandWALReplayFramesNeedLogSupport: %v", err)
+	}
+	if needs {
+		t.Fatalf("SetRID-only replay should need only the RID map when outer-leaf log is disabled")
+	}
+	needs, err = commandWALReplayFramesNeedLogSupport(&DB{indexOuterLeavesInValueLog: true}, frames, 0)
+	if err != nil {
+		t.Fatalf("commandWALReplayFramesNeedLogSupport outer-leaf: %v", err)
+	}
+	if !needs {
+		t.Fatalf("outer-leaf replay still needs leaf-page log support")
+	}
+}
+
 func TestCommandWALRawSetReplayRePointersWhenThresholdDrops(t *testing.T) {
 	dir := t.TempDir()
 	enableCommandWALFormat(t, dir)
@@ -317,7 +349,7 @@ func TestCommandWALRawSetReplayLazilyCreatesAppenderIfPlacementDrifts(t *testing
 		Scope:         commitlog.CommandScopeRawKV,
 		PayloadFormat: commitlog.PayloadFormatRawKVBatchV1,
 		Payload:       payload,
-	}, nil, nil, ensure)
+	}, nil, nil, nil, ensure)
 	if err != nil {
 		t.Fatalf("applyRawKVCommandWALFrame: %v", err)
 	}
@@ -430,7 +462,7 @@ func TestCommandWALRecoveryCrashDuringReplayResumesFromAppliedLSN(t *testing.T) 
 		t.Fatalf("Close bootstrap db: %v", err)
 	}
 	writeCommandWALRawKVFrame(t, dir, 1, 1, []commitlog.RawKVOperation{{Op: commitlog.RawKVOpSet, Key: []byte("a"), Value: []byte("1")}})
-	writeCommandWALRawKVFrame(t, dir, 1, 2, []commitlog.RawKVOperation{{Op: commitlog.RawKVOpSet, Key: []byte("b"), Value: []byte("2")}})
+	writeCommandWALRawKVFrame(t, dir, 2, 2, []commitlog.RawKVOperation{{Op: commitlog.RawKVOpSet, Key: []byte("b"), Value: []byte("2")}})
 
 	_, err := Open(Options{Dir: dir, testCommandWALRecoveryFailAfterLSN: 1})
 	if !errors.Is(err, errTestFinalizeCommitFailpoint) {
@@ -624,6 +656,9 @@ func TestCommandWALExistingRawReplayTestsMappedToRawKVBatch(t *testing.T) {
 		{Op: commitlog.RawKVOpSet, Key: []byte("a"), Value: []byte("1")},
 		{Op: commitlog.RawKVOpSet, Key: []byte("b"), Value: []byte("2")},
 		{Op: commitlog.RawKVOpDelete, Key: []byte("a")},
+		{Op: commitlog.RawKVOpSet, Key: []byte("same"), Value: []byte("old")},
+		{Op: commitlog.RawKVOpDelete, Key: []byte("same")},
+		{Op: commitlog.RawKVOpSet, Key: []byte("same"), Value: []byte("final")},
 	})
 
 	reopen := openCommandWALDB(t, dir)
@@ -632,6 +667,7 @@ func TestCommandWALExistingRawReplayTestsMappedToRawKVBatch(t *testing.T) {
 		t.Fatalf("Get(a)=%q err=%v, want missing after typed RawKVBatch delete replay", got, err)
 	}
 	assertDBValue(t, reopen, "b", "2")
+	assertDBValue(t, reopen, "same", "final")
 }
 
 func TestCommandWALExistingRIDFenceTestsMappedToExternalRefFence(t *testing.T) {
