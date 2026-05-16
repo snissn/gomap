@@ -328,9 +328,6 @@ func vectorFromJSONField(document []byte, fieldPath []string) ([]float32, bool, 
 
 func vectorFromBSONField(document []byte, fieldPath []string) ([]float32, bool, error) {
 	raw := bson.Raw(document)
-	if err := raw.Validate(); err != nil {
-		return nil, false, fmt.Errorf("collections: BSON stored document: %w", err)
-	}
 	value := raw.Lookup(fieldPath...)
 	if value.Type == 0 || value.Type == bson.TypeNull {
 		return nil, false, nil
@@ -345,7 +342,7 @@ func vectorFromBSONField(document []byte, fieldPath []string) ([]float32, bool, 
 	}
 	out := make([]float32, 0, len(values))
 	for i, item := range values {
-		n, ok := item.AsFloat64OK()
+		n, ok := bsonVectorNumberAsFloat64(item)
 		if !ok {
 			return nil, false, fmt.Errorf("element %d is not numeric", i)
 		}
@@ -358,6 +355,26 @@ func vectorFromBSONField(document []byte, fieldPath []string) ([]float32, bool, 
 		return nil, false, errors.New("empty vector")
 	}
 	return out, true, nil
+}
+
+func bsonVectorNumberAsFloat64(value bson.RawValue) (float64, bool) {
+	switch value.Type {
+	case bson.TypeDouble:
+		return value.Double(), true
+	case bson.TypeInt32:
+		return float64(value.Int32()), true
+	case bson.TypeInt64:
+		return float64(value.Int64()), true
+	case bson.TypeDecimal128:
+		decimal, ok := value.Decimal128OK()
+		if !ok || decimal.IsNaN() || decimal.IsInf() != 0 {
+			return 0, false
+		}
+		n, err := strconv.ParseFloat(decimal.String(), 64)
+		return n, err == nil
+	default:
+		return value.AsFloat64OK()
+	}
 }
 
 func exactVectorDistance(left, right []float32, metric VectorMetric) (float32, error) {

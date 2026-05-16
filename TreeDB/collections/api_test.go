@@ -92,6 +92,94 @@ func TestCollectionManagerOpenCollectionCacheRejectsClosedDB(t *testing.T) {
 	}
 }
 
+func TestCollectionManagerOpenCollectionDoesNotRetainHandles(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	for i := 0; i < 8; i++ {
+		col, err := mgr.OpenCollection("users")
+		if err != nil {
+			t.Fatalf("open collection %d: %v", i, err)
+		}
+		if col.manager != mgr {
+			t.Fatalf("open collection %d manager=%p want %p", i, col.manager, mgr)
+		}
+	}
+
+	mgr.collectionsMu.RLock()
+	got := len(mgr.collections)
+	mgr.collectionsMu.RUnlock()
+	if got != 0 {
+		t.Fatalf("OpenCollection retained %d collection handles without vector indexes", got)
+	}
+}
+
+func TestCollectionRegisterVectorIndexDoesNotRetainCleanHandle(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+
+	first, err := newVectorIndex(col, VectorIndexOptions{
+		Name:       "embedding",
+		Field:      "embedding",
+		Metric:     VectorMetricCosine,
+		Dimensions: 2,
+	})
+	if err != nil {
+		t.Fatalf("new first vector index: %v", err)
+	}
+	second, err := newVectorIndex(col, VectorIndexOptions{
+		Name:       "summary_embedding",
+		Field:      "summary_embedding",
+		Metric:     VectorMetricCosine,
+		Dimensions: 2,
+	})
+	if err != nil {
+		t.Fatalf("new second vector index: %v", err)
+	}
+
+	col.RegisterVectorIndex(first)
+	if got := collectionManagerHandleCount(mgr); got != 0 {
+		t.Fatalf("RegisterVectorIndex retained %d clean handles want 0", got)
+	}
+	col.RegisterVectorIndex(second)
+	if got := collectionManagerHandleCount(mgr); got != 0 {
+		t.Fatalf("second RegisterVectorIndex retained %d clean handles want 0", got)
+	}
+	col.UnregisterVectorIndex("embedding")
+	if got := collectionManagerHandleCount(mgr); got != 0 {
+		t.Fatalf("UnregisterVectorIndex retained %d clean handles want 0", got)
+	}
+	col.UnregisterVectorIndex("summary_embedding")
+	if got := collectionManagerHandleCount(mgr); got != 0 {
+		t.Fatalf("last UnregisterVectorIndex left %d tracked handles want 0", got)
+	}
+}
+
+func collectionManagerHandleCount(mgr *CollectionManager) int {
+	mgr.collectionsMu.RLock()
+	defer mgr.collectionsMu.RUnlock()
+	return len(mgr.collections)
+}
+
 func TestCollectionMetaReturnsDefensiveIndexCopyAcrossHandles(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

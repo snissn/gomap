@@ -79,6 +79,35 @@ func TestVectorIndexPruneLayerNeighborsUsesDistanceThenDocumentID(t *testing.T) 
 	}
 }
 
+func TestVectorIndexInt8InsertUnchangedVectorNoops(t *testing.T) {
+	index, err := newVectorIndex(nil, VectorIndexOptions{
+		Name:       "embedding",
+		Field:      "embedding",
+		Metric:     VectorMetricCosine,
+		Dimensions: 2,
+		M:          4,
+		Encoding:   VectorIndexEncodingInt8,
+	})
+	if err != nil {
+		t.Fatalf("new vector index: %v", err)
+	}
+	index.mu.Lock()
+	if err := index.insertVectorLocked([]byte("a"), []float32{1, 0}); err != nil {
+		index.mu.Unlock()
+		t.Fatalf("insert vector: %v", err)
+	}
+	if err := index.insertVectorLocked([]byte("a"), []float32{1, 0}); err != nil {
+		index.mu.Unlock()
+		t.Fatalf("insert unchanged vector: %v", err)
+	}
+	index.mu.Unlock()
+
+	stats := index.Stats()
+	if stats.Nodes != 1 || stats.LiveDocs != 1 || stats.DeletedDocs != 0 {
+		t.Fatalf("stats=%+v want one unchanged live node", stats)
+	}
+}
+
 func TestVectorIndexSelectLayerNeighborsReusesCandidateDistances(t *testing.T) {
 	index, err := newVectorIndex(nil, VectorIndexOptions{
 		Name:   "embedding",

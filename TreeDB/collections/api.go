@@ -307,6 +307,7 @@ type CollectionManager struct {
 
 type Collection struct {
 	db                *backenddb.DB
+	manager           *CollectionManager
 	writeDomain       *collectionWriteDomain
 	meta              CollectionMeta
 	catalogMu         sync.RWMutex
@@ -317,6 +318,7 @@ type Collection struct {
 	lastInsertStats   CollectionInsertStats
 	updateStatsMu     sync.RWMutex
 	lastUpdateStats   CollectionUpdateStats
+	vectorIndexLoadMu sync.Mutex
 	vectorIndexesMu   sync.RWMutex
 	vectorIndexes     map[string]*VectorIndex
 }
@@ -2474,9 +2476,10 @@ func (m *CollectionManager) existingWriteDomainForCollection(name string) *colle
 	return m.domains[name]
 }
 
-// FlushAll publishes buffered writes for every collection opened through this
-// manager. The backend DB also calls this as a close hook while write APIs are
-// still available.
+// FlushAll publishes buffered writes for every collection write domain known to
+// this manager, then persists dirty native vector indexes registered through
+// collection handles. The backend DB also calls this as a close hook while
+// write APIs are still available.
 func (m *CollectionManager) FlushAll() error {
 	if m == nil || m.db == nil {
 		return nil
@@ -2691,7 +2694,6 @@ func (m *CollectionManager) OpenCollection(name string) (*Collection, error) {
 		if m.db.IsClosing() {
 			return nil, backenddb.ErrClosed
 		}
-		m.registerCollectionHandle(collection)
 		return collection, nil
 	}
 	snap := m.db.AcquireSnapshot()
@@ -2708,6 +2710,7 @@ func (m *CollectionManager) OpenCollection(name string) (*Collection, error) {
 	}
 	collection := &Collection{
 		db:          m.db,
+		manager:     m,
 		writeDomain: m.writeDomainForCollection(catalog.meta.Name),
 		// Collection catalogs are immutable once loaded; public Meta returns a
 		// defensive copy, so handles can keep the catalog meta value directly.
@@ -2718,7 +2721,6 @@ func (m *CollectionManager) OpenCollection(name string) (*Collection, error) {
 	}
 	collection.rememberCatalog(snap, catalog)
 	collection.noteWriteDomainCatalog(snapshotSystemRoot(snap), catalog)
-	m.registerCollectionHandle(collection)
 	return collection, nil
 }
 
@@ -2732,6 +2734,15 @@ func (m *CollectionManager) registerCollectionHandle(collection *Collection) {
 		m.collections = make(map[*Collection]struct{})
 	}
 	m.collections[collection] = struct{}{}
+}
+
+func (m *CollectionManager) unregisterCollectionHandle(collection *Collection) {
+	if m == nil || collection == nil {
+		return
+	}
+	m.collectionsMu.Lock()
+	defer m.collectionsMu.Unlock()
+	delete(m.collections, collection)
 }
 
 func (m *CollectionManager) openCollectionFromWriteDomainCache(name string) (*Collection, bool) {
@@ -2758,6 +2769,7 @@ func (m *CollectionManager) openCollectionFromWriteDomainCache(name string) (*Co
 	}
 	collection := &Collection{
 		db:          m.db,
+		manager:     m,
 		writeDomain: domain,
 		// Collection catalogs are immutable once loaded; public Meta returns a
 		// defensive copy, so handles can keep the catalog meta value directly.
@@ -3419,7 +3431,7 @@ func (c *Collection) insertOneNoIndexBuffered(id, document []byte) ([]byte, erro
 		domain.mu.Unlock()
 		return nil, err
 	}
-	if indexed || plannerOptions.documentFormat != DocumentFormatJSON {
+	if indexed || len(catalog.meta.VectorIndexes) > 0 || plannerOptions.documentFormat != DocumentFormatJSON {
 		domain.mu.Unlock()
 		return c.insertOneViaBatch(id, document)
 	}
@@ -8183,7 +8195,7 @@ func (c *Collection) insertOneNoIndex(id, document []byte) ([]byte, error) {
 		return nil, err
 	}
 	c.meta = catalog.meta
-	if len(c.meta.Indexes) > 0 {
+	if len(c.meta.Indexes) > 0 || len(c.meta.VectorIndexes) > 0 {
 		_ = snap.Close()
 		return c.insertOneViaBatch(id, document)
 	}
@@ -9099,14 +9111,7 @@ func (c *Collection) DeleteDocument(documentID []byte) (bool, error) {
 		return false, errors.New("collections: document id cannot be empty")
 	}
 	unlockMutation := c.lockMutation()
-	mutationLocked := true
-	unlockIfLocked := func() {
-		if mutationLocked {
-			unlockMutation.Unlock()
-			mutationLocked = false
-		}
-	}
-	defer unlockIfLocked()
+	defer unlockMutation.Unlock()
 	if c.shouldFlushBeforeIndexedDelete(c.meta) {
 		if err := c.flushBufferedWrites(); err != nil {
 			return false, err
@@ -9171,14 +9176,7 @@ func (c *Collection) DeleteBatch(documentIDs [][]byte) (int, error) {
 		return 0, nil
 	}
 	unlockMutation := c.lockMutation()
-	mutationLocked := true
-	unlockIfLocked := func() {
-		if mutationLocked {
-			unlockMutation.Unlock()
-			mutationLocked = false
-		}
-	}
-	defer unlockIfLocked()
+	defer unlockMutation.Unlock()
 	if c.shouldFlushBeforeIndexedDelete(c.meta) {
 		if err := c.flushBufferedWrites(); err != nil {
 			return 0, err
