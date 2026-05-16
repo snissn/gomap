@@ -266,6 +266,68 @@ func TestCollectionCommandWALDeleteBatchByIDReplayAdvancesRootlessNoopFrame(t *t
 	}
 }
 
+func TestCollectionCommandWALDeleteBatchByIDPublishesMissingOnlyNoop(t *testing.T) {
+	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatJSON,
+		},
+	}, collectionCommandWALSetupInsert{
+		ids: [][]byte{[]byte("u1")},
+		docs: [][]byte{
+			[]byte(`{"name":"Ada"}`),
+		},
+	})
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col, err := NewCollectionManager(d).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	deleted, err := col.DeleteBatch([][]byte{[]byte("missing")})
+	if err != nil {
+		t.Fatalf("DeleteBatch missing only: %v", err)
+	}
+	if deleted != 0 {
+		t.Fatalf("deleted=%d, want 0", deleted)
+	}
+	assertCollectionDocument(t, col, "u1", `{"name":"Ada"}`)
+	if got := d.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("AppliedCommandLSN=%d, want 1", got)
+	}
+}
+
+func TestCollectionCommandWALDeleteDocumentByIDPublishesMissingNoop(t *testing.T) {
+	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatJSON,
+		},
+	}, collectionCommandWALSetupInsert{
+		ids: [][]byte{[]byte("u1")},
+		docs: [][]byte{
+			[]byte(`{"name":"Ada"}`),
+		},
+	})
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col, err := NewCollectionManager(d).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	deleted, err := col.DeleteDocument([]byte("missing"))
+	if err != nil {
+		t.Fatalf("DeleteDocument missing: %v", err)
+	}
+	if deleted {
+		t.Fatal("deleted=true, want false")
+	}
+	assertCollectionDocument(t, col, "u1", `{"name":"Ada"}`)
+	if got := d.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("AppliedCommandLSN=%d, want 1", got)
+	}
+}
+
 func TestCollectionCommandWALUpdateByIDPublishesAppliedLSN(t *testing.T) {
 	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
 		Name: "users",
@@ -642,6 +704,34 @@ func TestCollectionCommandWALRejectsCatalogCreate(t *testing.T) {
 	_, err := NewCollectionManager(d).CreateCollection(&CollectionMeta{Name: "users"})
 	if !errors.Is(err, backenddb.ErrCommandWALUnsupported) {
 		t.Fatalf("CreateCollection error=%v, want ErrCommandWALUnsupported", err)
+	}
+}
+
+func TestCollectionCommandWALRejectsCatalogIndexMutations(t *testing.T) {
+	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatJSON,
+		},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city", ValueType: IndexValueString}},
+	})
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col, err := NewCollectionManager(d).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	if _, err := col.CreateIndex(IndexDefinition{Name: "email", Field: "email", ValueType: IndexValueString}); !errors.Is(err, backenddb.ErrCommandWALUnsupported) {
+		t.Fatalf("CreateIndex error=%v, want ErrCommandWALUnsupported", err)
+	}
+	if _, err := col.DropIndex("city"); !errors.Is(err, backenddb.ErrCommandWALUnsupported) {
+		t.Fatalf("DropIndex error=%v, want ErrCommandWALUnsupported", err)
+	}
+	if _, err := col.DropIndexes([]string{"city"}); !errors.Is(err, backenddb.ErrCommandWALUnsupported) {
+		t.Fatalf("DropIndexes error=%v, want ErrCommandWALUnsupported", err)
+	}
+	if _, err := col.DropAllIndexes(); !errors.Is(err, backenddb.ErrCommandWALUnsupported) {
+		t.Fatalf("DropAllIndexes error=%v, want ErrCommandWALUnsupported", err)
 	}
 }
 
