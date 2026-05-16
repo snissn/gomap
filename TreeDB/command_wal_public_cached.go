@@ -110,10 +110,11 @@ func (tdb *DB) publishPublicCommandWALPending(sync bool) error {
 }
 
 type commandWALPublicBatch struct {
-	db     *DB
-	inner  Batch
-	dirty  bool
-	closed bool
+	db      *DB
+	inner   Batch
+	opCount int
+	dirty   bool
+	closed  bool
 }
 
 func (b *commandWALPublicBatch) Set(key, value []byte) error {
@@ -123,6 +124,7 @@ func (b *commandWALPublicBatch) Set(key, value []byte) error {
 	if err := b.inner.Set(key, value); err != nil {
 		return err
 	}
+	b.opCount++
 	b.dirty = true
 	return nil
 }
@@ -137,6 +139,7 @@ func (b *commandWALPublicBatch) SetView(key, value []byte) error {
 		if err := setter.SetView(key, value); err != nil {
 			return err
 		}
+		b.opCount++
 		b.dirty = true
 		return nil
 	}
@@ -150,6 +153,7 @@ func (b *commandWALPublicBatch) Delete(key []byte) error {
 	if err := b.inner.Delete(key); err != nil {
 		return err
 	}
+	b.opCount++
 	b.dirty = true
 	return nil
 }
@@ -164,6 +168,7 @@ func (b *commandWALPublicBatch) DeleteView(key []byte) error {
 		if err := deleter.DeleteView(key); err != nil {
 			return err
 		}
+		b.opCount++
 		b.dirty = true
 		return nil
 	}
@@ -195,12 +200,14 @@ func (b *commandWALPublicBatch) write(sync bool) error {
 		if err := b.inner.WriteSync(); err != nil {
 			return err
 		}
+		b.opCount = 0
 		b.dirty = false
 		return nil
 	}
 	if err := b.inner.Write(); err != nil {
 		return err
 	}
+	b.opCount = 0
 	b.dirty = false
 	return nil
 }
@@ -222,6 +229,7 @@ func (b *commandWALPublicBatch) Reset() {
 	}
 	if resetter, ok := b.inner.(interface{ Reset() }); ok {
 		resetter.Reset()
+		b.opCount = 0
 		b.dirty = false
 		b.closed = false
 	}
@@ -231,7 +239,8 @@ func (b *commandWALPublicBatch) commandWALPayload() ([]byte, error) {
 	if b == nil || b.inner == nil {
 		return nil, ErrClosed
 	}
-	return commitlog.EncodeRawKVBatchPayloadScan(func(emit func(commitlog.RawKVOperation) error) error {
+	byteHint, _ := b.inner.GetByteSize()
+	return commitlog.EncodeRawKVBatchPayloadScanWithHint(func(emit func(commitlog.RawKVOperation) error) error {
 		return b.inner.Replay(func(entry batch.Entry) error {
 			switch entry.Type {
 			case batch.OpDelete:
@@ -241,7 +250,7 @@ func (b *commandWALPublicBatch) commandWALPayload() ([]byte, error) {
 			}
 			return nil
 		})
-	})
+	}, b.opCount, byteHint)
 }
 
 func (b *commandWALPublicBatch) Replay(fn func(batch.Entry) error) error {

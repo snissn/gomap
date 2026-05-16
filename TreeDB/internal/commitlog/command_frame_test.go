@@ -483,11 +483,25 @@ func TestEncodeRawKVBatchPayloadScanMatchesSliceEncoder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncodeRawKVBatchPayloadScan: %v", err)
 	}
-	if scanCount != 2 {
-		t.Fatalf("scan count=%d want 2", scanCount)
+	if scanCount != 1 {
+		t.Fatalf("scan count=%d want 1", scanCount)
 	}
 	if !bytes.Equal(got, want) {
 		t.Fatalf("streaming encoder mismatch\ngot  %x\nwant %x", got, want)
+	}
+	got, err = EncodeRawKVBatchPayloadScanWithHint(func(emit func(RawKVOperation) error) error {
+		for _, op := range ops {
+			if err := emit(op); err != nil {
+				return err
+			}
+		}
+		return nil
+	}, len(ops), len("alpha")+len("one")+len("bravo")+len("two")+len("charlie"))
+	if err != nil {
+		t.Fatalf("EncodeRawKVBatchPayloadScanWithHint: %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("hinted streaming encoder mismatch\ngot  %x\nwant %x", got, want)
 	}
 }
 
