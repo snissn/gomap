@@ -65,8 +65,8 @@ def load_vectors(path: Path, rows: int, dims: int) -> np.ndarray:
     return data.reshape(rows, dims)
 
 
-def connect(uri: str) -> MongoClient:
-    return MongoClient(uri, serverSelectionTimeoutMS=5000)
+def connect(uri: str, max_pool_size: int = 100) -> MongoClient:
+    return MongoClient(uri, serverSelectionTimeoutMS=5000, maxPoolSize=max_pool_size)
 
 
 def vector_search_index_definition(dims: int) -> dict[str, Any]:
@@ -263,7 +263,7 @@ def benchmark_search(args: argparse.Namespace, query_lists: list[list[float]], c
     next_index = 0
     next_lock = threading.Lock()
     first_error: list[BaseException] = []
-    client = connect(args.uri)
+    client = connect(args.uri, max_pool_size=max(100, concurrency))
     collection = client[args.database][args.collection]
 
     def worker(collection) -> None:

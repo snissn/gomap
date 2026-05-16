@@ -22,6 +22,7 @@ MIN_RECALL="${MIN_RECALL:-0.95}"
 PGVECTOR_DSN="${PGVECTOR_DSN:-}"
 PGVECTOR_DOCKER="${PGVECTOR_DOCKER:-auto}"
 PGVECTOR_IMAGE="${PGVECTOR_IMAGE:-pgvector/pgvector:pg16}"
+PGVECTOR_MAX_CONNECTIONS="${PGVECTOR_MAX_CONNECTIONS:-256}"
 PGVECTOR_CONTAINER_NAME="${PGVECTOR_CONTAINER_NAME:-gomap-pgvector-$RANDOM-$$}"
 PGVECTOR_SCHEMA="${PGVECTOR_SCHEMA:-gomap_vector_bench_${RANDOM}_$$}"
 PGVECTOR_TABLE="${PGVECTOR_TABLE:-documents}"
@@ -73,7 +74,8 @@ start_pgvector_if_needed() {
 		-e POSTGRES_PASSWORD=postgres \
 		-e POSTGRES_DB=gomap_vector_bench \
 		-p 127.0.0.1::5432 \
-		"$PGVECTOR_IMAGE")
+		"$PGVECTOR_IMAGE" \
+		-c "max_connections=$PGVECTOR_MAX_CONNECTIONS")
 	local mapped
 	mapped=$(docker port "$PGVECTOR_CONTAINER" 5432/tcp | sed -E 's/.*:([0-9]+)$/\1/')
 	PGVECTOR_DSN="postgresql://postgres:postgres@127.0.0.1:${mapped}/gomap_vector_bench?sslmode=disable"
