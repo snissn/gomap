@@ -82,7 +82,7 @@ func DecodeTCS1ColumnPartImage(data []byte) (ColumnPartImage, TCS1PartRecord, er
 	}
 	image, err := ParseColumnPartImage(payload)
 	if err != nil {
-		return ColumnPartImage{}, TCS1PartRecord{}, err
+		return ColumnPartImage{}, TCS1PartRecord{}, fmt.Errorf("colgranule: parse TCS1 column part image: %w", err)
 	}
 	if image.PartID != record.PartID {
 		return ColumnPartImage{}, TCS1PartRecord{}, fmt.Errorf("colgranule: TCS1 part id=%d image part id=%d", record.PartID, image.PartID)
@@ -191,7 +191,7 @@ func decodeTCS1Header(data []byte) (TCS1PartRecord, []byte, error) {
 		return TCS1PartRecord{}, nil, fmt.Errorf("colgranule: TCS1 payload bytes=%d exceed available=%d", payloadBytes, len(data)-tcs1HeaderBytes)
 	}
 	if payloadBytes != uint64(len(data)-tcs1HeaderBytes) {
-		return TCS1PartRecord{}, nil, fmt.Errorf("colgranule: TCS1 payload bytes=%d total payload bytes=%d", payloadBytes, len(data)-tcs1HeaderBytes)
+		return TCS1PartRecord{}, nil, fmt.Errorf("colgranule: TCS1 payload bytes=%d want payload bytes=%d", payloadBytes, len(data)-tcs1HeaderBytes)
 	}
 	partID := binary.LittleEndian.Uint64(data[24:32])
 	rows64 := binary.LittleEndian.Uint64(data[32:40])

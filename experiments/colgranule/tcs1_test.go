@@ -37,6 +37,18 @@ func TestTCS1ColumnPartAssetRoundTripsThroughMemoryStore(t *testing.T) {
 	assertInt64s(t, "has_reply", scan.Columns["has_reply"], []int64{0, 1, 1, 1, 0})
 }
 
+func TestMemoryColumnAssetStoreValidatesChecksumAfterLookup(t *testing.T) {
+	store := NewMemoryColumnAssetStore()
+	ref, err := store.Put(ColumnAssetKindTCS1PartImage, []byte("payload"))
+	if err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	ref.Checksum++
+	if _, err := store.Read(ref); err == nil || !strings.Contains(err.Error(), "checksum") {
+		t.Fatalf("Read err=%v want checksum mismatch", err)
+	}
+}
+
 func TestTCS1ColumnPartAssetRoundTripsThroughSegmentStoreAfterReopen(t *testing.T) {
 	_, image := testColumnPartImageFixture(t, true)
 	dir := t.TempDir()

@@ -32,11 +32,18 @@ type ColumnAssetStore interface {
 type MemoryColumnAssetStore struct {
 	mu      sync.Mutex
 	nextOff int64
-	assets  map[ColumnAssetRef][]byte
+	assets  map[columnAssetKey][]byte
+}
+
+type columnAssetKey struct {
+	kind   ColumnAssetKind
+	fileID uint32
+	offset int64
+	length int64
 }
 
 func NewMemoryColumnAssetStore() *MemoryColumnAssetStore {
-	return &MemoryColumnAssetStore{assets: make(map[ColumnAssetRef][]byte)}
+	return &MemoryColumnAssetStore{assets: make(map[columnAssetKey][]byte)}
 }
 
 func (s *MemoryColumnAssetStore) Reset() {
@@ -60,7 +67,7 @@ func (s *MemoryColumnAssetStore) Put(kind ColumnAssetKind, payload []byte) (Colu
 		return ColumnAssetRef{}, err
 	}
 	s.nextOff += ref.Length
-	s.assets[ref] = value
+	s.assets[ref.key()] = value
 	return ref, nil
 }
 
@@ -76,7 +83,7 @@ func (s *MemoryColumnAssetStore) ReadTo(ref ColumnAssetRef, dst []byte) ([]byte,
 		return nil, err
 	}
 	s.mu.Lock()
-	payload, ok := s.assets[ref]
+	payload, ok := s.assets[ref.key()]
 	s.mu.Unlock()
 	if !ok {
 		return nil, fmt.Errorf("colgranule: missing asset ref file=%d offset=%d length=%d kind=%s", ref.FileID, ref.Offset, ref.Length, ref.Kind)
@@ -124,7 +131,12 @@ func OpenSegmentColumnAssetStore(dir string) (*SegmentColumnAssetStore, error) {
 }
 
 func (s *SegmentColumnAssetStore) Close() error {
-	if s == nil || s.file == nil {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.file == nil {
 		return nil
 	}
 	err := s.file.Close()
@@ -140,14 +152,14 @@ func (s *SegmentColumnAssetStore) Path() string {
 }
 
 func (s *SegmentColumnAssetStore) Put(kind ColumnAssetKind, payload []byte) (ColumnAssetRef, error) {
-	if s == nil || s.file == nil {
+	if s == nil {
 		return ColumnAssetRef{}, fmt.Errorf("colgranule: closed segment asset store")
-	}
-	if _, err := newColumnAssetRef(kind, s.fileID, 0, len(payload), payload); err != nil {
-		return ColumnAssetRef{}, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.file == nil {
+		return ColumnAssetRef{}, fmt.Errorf("colgranule: closed segment asset store")
+	}
 	ref, err := newColumnAssetRef(kind, s.fileID, s.size, len(payload), payload)
 	if err != nil {
 		return ColumnAssetRef{}, err
@@ -168,17 +180,20 @@ func (s *SegmentColumnAssetStore) Read(ref ColumnAssetRef) ([]byte, error) {
 }
 
 func (s *SegmentColumnAssetStore) ReadTo(ref ColumnAssetRef, dst []byte) ([]byte, error) {
-	if s == nil || s.file == nil {
+	if s == nil {
 		return nil, fmt.Errorf("colgranule: closed segment asset store")
 	}
 	if err := validateColumnAssetRef(ref); err != nil {
 		return nil, err
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.file == nil {
+		return nil, fmt.Errorf("colgranule: closed segment asset store")
+	}
 	if ref.FileID != s.fileID {
 		return nil, fmt.Errorf("colgranule: asset file id=%d want %d", ref.FileID, s.fileID)
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	if ref.Offset > s.size || ref.Length > s.size-ref.Offset {
 		return nil, fmt.Errorf("colgranule: asset range offset=%d length=%d outside segment bytes=%d", ref.Offset, ref.Length, s.size)
 	}
@@ -240,4 +255,13 @@ func validateColumnAssetRef(ref ColumnAssetRef) error {
 		return fmt.Errorf("colgranule: negative column asset ref length %d", ref.Length)
 	}
 	return nil
+}
+
+func (ref ColumnAssetRef) key() columnAssetKey {
+	return columnAssetKey{
+		kind:   ref.Kind,
+		fileID: ref.FileID,
+		offset: ref.Offset,
+		length: ref.Length,
+	}
 }
