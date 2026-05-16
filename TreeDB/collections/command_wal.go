@@ -23,7 +23,11 @@ func RegisterCommandWALReplayHandlers() {
 		backenddb.RegisterCommandWALReplayHandler(commitlog.CommandKindCollectionInsertBatchByID, replayCollectionInsertBatchByIDCommandWAL)
 		backenddb.RegisterCommandWALReplayHandler(commitlog.CommandKindCollectionDeleteBatchByID, replayCollectionDeleteBatchByIDCommandWAL)
 		backenddb.RegisterCommandWALReplayHandler(commitlog.CommandKindCollectionUpdateBatchByID, replayCollectionUpdateBatchByIDCommandWAL)
-		backenddb.RegisterCommandWALReplayHandler(commitlog.CommandKindCatalogCreateCollection, replayCatalogCreateCollectionCommandWAL)
+		backenddb.RegisterCommandWALReplayHandlerWithOptions(
+			commitlog.CommandKindCatalogCreateCollection,
+			replayCatalogCreateCollectionCommandWAL,
+			backenddb.CommandWALReplayHandlerOptions{NeedsReplayLogSupport: false},
+		)
 	})
 }
 
