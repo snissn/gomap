@@ -3,6 +3,7 @@ package treedb
 import (
 	"errors"
 	"fmt"
+	"os"
 	"strconv"
 	"sync"
 	"testing"
@@ -309,6 +310,57 @@ func TestPublicCommandWALCheckpointPublishesOnlyCoveredLSNs(t *testing.T) {
 	if got := db.backend.State().AppliedCommandLSN; got != 2 {
 		t.Fatalf("AppliedCommandLSN after second checkpoint=%d, want 2", got)
 	}
+}
+
+func TestPublicCommandWALCheckpointRetainsCommandJournalSegment(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{
+		Dir:               dir,
+		Durability:        DurabilityWALOnRelaxed,
+		CommandWAL:        true,
+		DisableSideStores: true,
+	})
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	if err := db.Set([]byte("k"), []byte("v")); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	before := publicCommandWALSegmentNames(t, dir)
+	if len(before) == 0 {
+		t.Fatal("expected command WAL segment before checkpoint")
+	}
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	after := publicCommandWALSegmentNames(t, dir)
+	afterSet := make(map[string]struct{}, len(after))
+	for _, name := range after {
+		afterSet[name] = struct{}{}
+	}
+	for _, name := range before {
+		if _, ok := afterSet[name]; !ok {
+			t.Fatalf("checkpoint removed active command WAL segment %s; before=%v after=%v", name, before, after)
+		}
+	}
+}
+
+func publicCommandWALSegmentNames(t *testing.T, dir string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(backenddb.WALDirPath(dir))
+	if err != nil {
+		t.Fatalf("ReadDir(wal): %v", err)
+	}
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || !commitlog.IsCommandSegmentName(entry.Name()) {
+			continue
+		}
+		names = append(names, entry.Name())
+	}
+	return names
 }
 
 func TestPublicCommandWALCheckpointHookUsesSyncIntent(t *testing.T) {

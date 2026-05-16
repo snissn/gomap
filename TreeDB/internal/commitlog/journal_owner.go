@@ -73,13 +73,13 @@ func (o *JournalOwner) rollbackReservedLSN(lsn uint64) error {
 	}
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	return o.rollbackReservedLSNLocked(lsn)
+	return o.rollbackReservedLSNSerialized(lsn)
 }
 
-// rollbackReservedLSNLocked rolls back the tail LSN. Callers must serialize
+// rollbackReservedLSNSerialized rolls back the tail LSN. Callers must serialize
 // owner access by holding either o.mu (direct JournalOwner callers) or the
 // owning CommandJournal's mutex when the owner is private to that journal.
-func (o *JournalOwner) rollbackReservedLSNLocked(lsn uint64) error {
+func (o *JournalOwner) rollbackReservedLSNSerialized(lsn uint64) error {
 	if o.lock == nil {
 		return errors.New("commitlog: journal owner is closed")
 	}
@@ -115,10 +115,10 @@ func (o *JournalOwner) reserveLSNRange(count uint64) (first uint64, last uint64,
 	return o.reserveLSNRangeLocked(count)
 }
 
-// reserveLSNLocked reserves one LSN. Callers must serialize owner access by
+// reserveLSNSerialized reserves one LSN. Callers must serialize owner access by
 // holding either o.mu (direct JournalOwner callers) or the owning
 // CommandJournal's mutex when the owner is private to that journal.
-func (o *JournalOwner) reserveLSNLocked() (uint64, error) {
+func (o *JournalOwner) reserveLSNSerialized() (uint64, error) {
 	first, _, err := o.reserveLSNRangeLocked(1)
 	return first, err
 }
@@ -492,13 +492,13 @@ func (j *CommandJournal) AppendCommand(env CommandEnvelope) (uint64, error) {
 	if size > int(segmentLenMask) {
 		return 0, ErrRecordTooLarge
 	}
-	lsn, err := j.owner.reserveLSNLocked()
+	lsn, err := j.owner.reserveLSNSerialized()
 	if err != nil {
 		return 0, err
 	}
 	env.LSN = lsn
 	if err := j.writer.AppendCommand(env); err != nil {
-		if rollbackErr := j.owner.rollbackReservedLSNLocked(lsn); rollbackErr != nil {
+		if rollbackErr := j.owner.rollbackReservedLSNSerialized(lsn); rollbackErr != nil {
 			return 0, errors.Join(err, rollbackErr)
 		}
 		return 0, err
@@ -536,12 +536,12 @@ func (j *CommandJournal) AppendRawKVSingleCommand(baseAppliedLSN uint64, op RawK
 	if size > int(segmentLenMask) {
 		return 0, ErrRecordTooLarge
 	}
-	lsn, err := j.owner.reserveLSNLocked()
+	lsn, err := j.owner.reserveLSNSerialized()
 	if err != nil {
 		return 0, err
 	}
 	if err := j.writer.AppendRawKVSingleCommandDirect(lsn, baseAppliedLSN, op); err != nil {
-		if rollbackErr := j.owner.rollbackReservedLSNLocked(lsn); rollbackErr != nil {
+		if rollbackErr := j.owner.rollbackReservedLSNSerialized(lsn); rollbackErr != nil {
 			return 0, errors.Join(err, rollbackErr)
 		}
 		return 0, err
@@ -580,12 +580,12 @@ func (j *CommandJournal) AppendRawKVPointCommandTrusted(baseAppliedLSN uint64, o
 	if size > int(segmentLenMask) {
 		return 0, ErrRecordTooLarge
 	}
-	lsn, err := j.owner.reserveLSNLocked()
+	lsn, err := j.owner.reserveLSNSerialized()
 	if err != nil {
 		return 0, err
 	}
 	if err := j.writer.appendRawKVPointCommandDirectTrustedSized(lsn, baseAppliedLSN, op, key, value, valueLen, payloadLen, size); err != nil {
-		if rollbackErr := j.owner.rollbackReservedLSNLocked(lsn); rollbackErr != nil {
+		if rollbackErr := j.owner.rollbackReservedLSNSerialized(lsn); rollbackErr != nil {
 			return 0, errors.Join(err, rollbackErr)
 		}
 		return 0, err
@@ -614,12 +614,12 @@ func (j *CommandJournal) AppendRawKVBatchPayloadCommandTrusted(baseAppliedLSN ui
 	if j.writer == nil || j.owner == nil {
 		return 0, errors.New("commitlog: command journal is closed")
 	}
-	lsn, err := j.owner.reserveLSNLocked()
+	lsn, err := j.owner.reserveLSNSerialized()
 	if err != nil {
 		return 0, err
 	}
 	if err := j.writer.AppendRawKVBatchPayloadCommandDirectTrusted(lsn, baseAppliedLSN, payload); err != nil {
-		if rollbackErr := j.owner.rollbackReservedLSNLocked(lsn); rollbackErr != nil {
+		if rollbackErr := j.owner.rollbackReservedLSNSerialized(lsn); rollbackErr != nil {
 			return 0, errors.Join(err, rollbackErr)
 		}
 		return 0, err

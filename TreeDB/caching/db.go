@@ -19448,6 +19448,9 @@ func (db *DB) Checkpoint() error {
 			if seg.valueLog != db.walUsesValueLog() {
 				continue
 			}
+			if db.commandWALCheckpointPublish != nil && commitlog.IsCommandSegmentName(filepath.Base(seg.path)) {
+				continue
+			}
 			filtered = append(filtered, seg)
 			if seg.size > 0 {
 				nonEmptyBytes += seg.size

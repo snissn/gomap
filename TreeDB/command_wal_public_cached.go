@@ -49,15 +49,6 @@ func (tdb *DB) recordPublicCommandWALPendingLSN(lsn uint64) {
 	}
 	tdb.commandWALLiveFrames.Add(1)
 	for {
-		cur := tdb.commandWALLiveMaxLSN.Load()
-		if lsn <= cur {
-			break
-		}
-		if tdb.commandWALLiveMaxLSN.CompareAndSwap(cur, lsn) {
-			break
-		}
-	}
-	for {
 		first := tdb.commandWALFirst.Load()
 		if first != 0 && first <= lsn {
 			break
@@ -82,7 +73,7 @@ func (tdb *DB) publicCommandWALLiveStatsInto(stats map[string]string) {
 		return
 	}
 	frames := tdb.commandWALLiveFrames.Load()
-	maxLSN := tdb.commandWALLiveMaxLSN.Load()
+	maxLSN := tdb.commandWALLast.Load()
 	stats["treedb.command_wal.live_frames"] = fmt.Sprintf("%d", frames)
 	stats["treedb.command_wal.live_max_lsn"] = fmt.Sprintf("%d", maxLSN)
 	publicCommandWALMaxStat(stats, "treedb.command_wal.frames", frames)

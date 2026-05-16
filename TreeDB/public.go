@@ -128,7 +128,6 @@ type DB struct {
 	commandWALFirst                      atomic.Uint64
 	commandWALLast                       atomic.Uint64
 	commandWALLiveFrames                 atomic.Uint64
-	commandWALLiveMaxLSN                 atomic.Uint64
 	testAfterPublicCommandWALPointAppend func(commitlog.RawKVOperation)
 	testAfterCachedCheckpoint            func()
 	bgVac                                bgIndexVacuumWorker
