@@ -2280,6 +2280,82 @@ func TestCollectionVectorIndexNativeDeltaRejectsStalePersistedRoot(t *testing.T)
 	requireVectorResultIDs(t, results, "a", "c", "b")
 }
 
+func TestCollectionVectorIndexNativeFullSaveRejectsDroppedRecreatedRoot(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	def := VectorIndexDefinition{
+		Name:       "embedding",
+		Field:      "embedding",
+		Metric:     VectorMetricCosine,
+		Dimensions: 2,
+		M:          4,
+	}
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	seedCol, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open seed collection: %v", err)
+	}
+	if _, err := seedCol.InsertBatch(
+		[][]byte{[]byte("a")},
+		[][]byte{[]byte(`{"embedding":[1,0]}`)},
+	); err != nil {
+		t.Fatalf("insert seed vector: %v", err)
+	}
+	seedIndex, err := seedCol.BuildVectorIndex(vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		t.Fatalf("build seed vector index: %v", err)
+	}
+	seedStatus, err := seedIndex.SaveSnapshot()
+	if err != nil {
+		t.Fatalf("save seed vector index: %v", err)
+	}
+
+	staleCol, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open stale collection: %v", err)
+	}
+	if _, status, err := staleCol.LoadVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def)); err != nil {
+		t.Fatalf("load stale vector index: %v", err)
+	} else if !status.Loaded || status.RootID != seedStatus.RootID {
+		t.Fatalf("stale load status=%+v seed=%+v", status, seedStatus)
+	}
+
+	freshCol, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open fresh collection: %v", err)
+	}
+	if _, err := freshCol.DropVectorIndex("embedding"); err != nil {
+		t.Fatalf("drop vector index: %v", err)
+	}
+	if _, err := freshCol.CreateVectorIndex(def); err != nil {
+		t.Fatalf("recreate vector index: %v", err)
+	}
+	if _, status, err := freshCol.LoadVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def)); err != nil {
+		t.Fatalf("load recreated empty root: %v", err)
+	} else if status.ExactFallbackReason != vectorIndexFallbackMissingGraphRoot {
+		t.Fatalf("recreated vector index status=%+v want missing graph root", status)
+	}
+
+	staleIndex := staleCol.registeredVectorIndex(def.Name)
+	if staleIndex == nil {
+		t.Fatal("stale collection did not keep loaded vector index registered")
+	}
+	if _, err := staleIndex.SaveNativeSnapshot(); !errors.Is(err, errVectorIndexStaleNativeRoot) {
+		t.Fatalf("stale full snapshot save err=%v want stale native root", err)
+	}
+	if _, status, err := freshCol.LoadVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def)); err != nil {
+		t.Fatalf("reload recreated empty root: %v", err)
+	} else if status.ExactFallbackReason != vectorIndexFallbackMissingGraphRoot {
+		t.Fatalf("stale save changed recreated vector index status=%+v", status)
+	}
+}
+
 func TestCollectionVectorIndexSnapshotLoadsLegacyEdgesWithoutDistances(t *testing.T) {
 	dir := t.TempDir()
 	d, err := backenddb.Open(backenddb.Options{Dir: dir})

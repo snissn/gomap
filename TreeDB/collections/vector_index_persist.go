@@ -156,7 +156,7 @@ func (idx *VectorIndex) saveNativeSnapshotPrepared() (VectorIndexLoadStatus, err
 	rootName := collectionVectorIndexRootName(catalog.meta.Name, idx.name)
 	status.RootName = rootName
 	baseRoot := catalog.rootID(rootName)
-	if baseEpoch := idx.nativeSnapshotBaseEpochForFullSave(); baseRoot != 0 && baseEpoch != 0 && baseRoot != baseEpoch {
+	if baseEpoch := idx.nativeSnapshotBaseEpochForFullSave(); baseEpoch != 0 && baseRoot != baseEpoch {
 		return status, fmt.Errorf("%w: index %q loaded epoch %d current root %d", errVectorIndexStaleNativeRoot, idx.name, baseEpoch, baseRoot)
 	}
 	baseRootIDs := map[string]uint64{rootName: baseRoot}
