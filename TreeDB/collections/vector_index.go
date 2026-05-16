@@ -1010,10 +1010,16 @@ func (idx *VectorIndex) Search(query []float32, opts VectorIndexSearchOptions) (
 	}
 	fastRerank := filter == nil && idx.metric == VectorMetricCosine && idx.encoding == VectorIndexEncodingFloat32
 	var results []VectorSearchResult
+	var resultNodeIDs []int
+	var resultNodeIDStack [64]int
 	var candidateIDs [][]byte
 	var err error
 	if fastRerank {
-		results, err = idx.rerankFloat32CosineCandidatesFromNodesLocked(query, queryNorm, prepared.invNorm, candidates, opts.TopK, &trace)
+		resultNodeIDs = resultNodeIDStack[:0]
+		if opts.TopK > len(resultNodeIDStack) {
+			resultNodeIDs = make([]int, 0, opts.TopK)
+		}
+		results, resultNodeIDs, err = idx.rerankFloat32CosineCandidatesFromNodesLocked(query, queryNorm, prepared.invNorm, candidates, opts.TopK, resultNodeIDs, &trace)
 	} else {
 		candidateIDs = idx.currentCandidateDocumentIDsLocked(candidates)
 		trace.CandidatesAfterTombstone = len(candidateIDs)
@@ -1022,10 +1028,7 @@ func (idx *VectorIndex) Search(query []float32, opts VectorIndexSearchOptions) (
 	idx.mu.RUnlock()
 
 	if fastRerank && err == nil {
-		results, err = idx.attachVectorSearchResultDocuments(results, opts.TopK)
-		if err == nil {
-			results, err = idx.refreshAttachedFloat32CosineResults(query, queryNorm, prepared.invNorm, results)
-		}
+		results, err = idx.attachVectorSearchResultDocuments(results, resultNodeIDs, opts.TopK)
 	} else if !fastRerank {
 		results, err = idx.rerankCandidates(query, candidateIDs, filter, opts.TopK, &trace)
 	}
@@ -1155,16 +1158,17 @@ func vectorDocumentIDSet(ids [][]byte) map[string]struct{} {
 	return out
 }
 
-func (idx *VectorIndex) rerankFloat32CosineCandidatesFromNodesLocked(query []float32, queryNormSquared float64, queryInvNorm float32, candidates []vectorIndexCandidate, topK int, trace *VectorIndexTrace) ([]VectorSearchResult, error) {
+func (idx *VectorIndex) rerankFloat32CosineCandidatesFromNodesLocked(query []float32, queryNormSquared float64, queryInvNorm float32, candidates []vectorIndexCandidate, topK int, rankedNodeIDs []int, trace *VectorIndexTrace) ([]VectorSearchResult, []int, error) {
 	if len(candidates) == 0 {
-		return []VectorSearchResult{}, nil
+		return []VectorSearchResult{}, nil, nil
 	}
 	dims := len(query)
 	if dims == 0 {
-		return nil, errors.New("collections: invalid vector rerank query")
+		return nil, nil, errors.New("collections: invalid vector rerank query")
 	}
 
 	ranked := make([]VectorSearchResult, 0, minInt(topK, len(candidates)))
+	rankedNodeIDs = rankedNodeIDs[:0]
 	liveCandidates := 0
 	for _, candidate := range candidates {
 		if candidate.nodeID < 0 || candidate.nodeID >= len(idx.nodes) {
@@ -1180,17 +1184,17 @@ func (idx *VectorIndex) rerankFloat32CosineCandidatesFromNodesLocked(query []flo
 		}
 		liveCandidates++
 		if len(node.vector) != dims {
-			return nil, fmt.Errorf("collections: vector dimensions differ: %d vs %d", dims, len(node.vector))
+			return nil, nil, fmt.Errorf("collections: vector dimensions differ: %d vs %d", dims, len(node.vector))
 		}
 		if node.cachedInvNorm == 0 {
-			return nil, errors.New("collections: cosine vector cannot have zero magnitude")
+			return nil, nil, errors.New("collections: cosine vector cannot have zero magnitude")
 		}
 		dot := dotProductFloat32ForCosine(query, node.vector, queryNormSquared, node.normSquared)
 		distance := float32(1 - dot*float64(queryInvNorm)*float64(node.cachedInvNorm))
-		ranked = appendBoundedVectorSearchResult(ranked, VectorSearchResult{
+		ranked, rankedNodeIDs = appendBoundedVectorIndexNodeResult(ranked, rankedNodeIDs, VectorSearchResult{
 			DocumentID: node.documentID,
 			Distance:   distance,
-		}, topK)
+		}, candidate.nodeID, topK)
 	}
 	if trace != nil {
 		trace.CandidatesAfterTombstone = liveCandidates
@@ -1199,9 +1203,9 @@ func (idx *VectorIndex) rerankFloat32CosineCandidatesFromNodesLocked(query []flo
 	}
 
 	if ranked == nil {
-		return []VectorSearchResult{}, nil
+		return []VectorSearchResult{}, nil, nil
 	}
-	return ranked, nil
+	return ranked, rankedNodeIDs, nil
 }
 
 func (idx *VectorIndex) rerankCandidates(query []float32, candidateIDs [][]byte, filter func(DocumentRecord) (bool, error), topK int, trace *VectorIndexTrace) ([]VectorSearchResult, error) {
@@ -1256,40 +1260,50 @@ func (idx *VectorIndex) rerankCandidates(query []float32, candidateIDs [][]byte,
 	return results, nil
 }
 
-func (idx *VectorIndex) refreshAttachedFloat32CosineResults(query []float32, queryNormSquared float64, queryInvNorm float32, results []VectorSearchResult) ([]VectorSearchResult, error) {
-	if len(results) == 0 {
-		return results, nil
+func appendBoundedVectorIndexNodeResult(matches []VectorSearchResult, nodeIDs []int, result VectorSearchResult, nodeID, limit int) ([]VectorSearchResult, []int) {
+	if limit <= 0 {
+		return matches, nodeIDs
+	}
+	if len(matches) == limit && compareVectorSearchResults(result, matches[len(matches)-1]) >= 0 {
+		return matches, nodeIDs
+	}
+	matches = append(matches, result)
+	nodeIDs = append(nodeIDs, nodeID)
+	for i := len(matches) - 1; i > 0 && compareVectorSearchResults(matches[i], matches[i-1]) < 0; i-- {
+		matches[i], matches[i-1] = matches[i-1], matches[i]
+		nodeIDs[i], nodeIDs[i-1] = nodeIDs[i-1], nodeIDs[i]
+	}
+	if len(matches) > limit {
+		matches = matches[:limit]
+		nodeIDs = nodeIDs[:limit]
+	}
+	return matches, nodeIDs
+}
+
+func (idx *VectorIndex) filterAttachedCurrentNodeResults(results []VectorSearchResult, nodeIDs []int) []VectorSearchResult {
+	if len(results) == 0 || len(nodeIDs) != len(results) {
+		return results
 	}
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
-	refreshed := results[:0]
-	for _, result := range results {
-		nodeID, ok := idx.currentNode[string(result.DocumentID)]
-		if !ok || nodeID < 0 || nodeID >= len(idx.nodes) {
+	filtered := results[:0]
+	for i, result := range results {
+		currentNodeID, ok := idx.currentNode[string(result.DocumentID)]
+		if !ok || currentNodeID != nodeIDs[i] {
 			continue
 		}
-		node := &idx.nodes[nodeID]
-		if node.deleted {
+		if currentNodeID < 0 || currentNodeID >= len(idx.nodes) || idx.nodes[currentNodeID].deleted {
 			continue
 		}
-		if len(node.vector) != len(query) {
-			return nil, fmt.Errorf("collections: vector dimensions differ: %d vs %d", len(query), len(node.vector))
-		}
-		if node.cachedInvNorm == 0 {
-			return nil, errors.New("collections: cosine vector cannot have zero magnitude")
-		}
-		dot := dotProductFloat32ForCosine(query, node.vector, queryNormSquared, node.normSquared)
-		result.Distance = float32(1 - dot*float64(queryInvNorm)*float64(node.cachedInvNorm))
-		refreshed = append(refreshed, result)
+		filtered = append(filtered, result)
 	}
-	if refreshed == nil {
-		return []VectorSearchResult{}, nil
+	if filtered == nil {
+		return []VectorSearchResult{}
 	}
-	sortVectorSearchResults(refreshed)
-	return refreshed, nil
+	return filtered
 }
 
-func (idx *VectorIndex) attachVectorSearchResultDocuments(ranked []VectorSearchResult, topK int) ([]VectorSearchResult, error) {
+func (idx *VectorIndex) attachVectorSearchResultDocuments(ranked []VectorSearchResult, rankedNodeIDs []int, topK int) ([]VectorSearchResult, error) {
 	if idx == nil {
 		return nil, errors.New("collections: vector index is nil")
 	}
@@ -1300,6 +1314,7 @@ func (idx *VectorIndex) attachVectorSearchResultDocuments(ranked []VectorSearchR
 		return nil, errCollectionDBNil
 	}
 	results := ranked[:0]
+	resultNodeIDs := rankedNodeIDs[:0]
 	limit := minInt(topK, len(ranked))
 	var modeStack [64]vectorDocumentAttachMode
 	modes := modeStack[:0]
@@ -1336,6 +1351,7 @@ func (idx *VectorIndex) attachVectorSearchResultDocuments(ranked []VectorSearchR
 			result.Document = document
 			resultIDBytes += len(result.DocumentID)
 			results = append(results, result)
+			resultNodeIDs = append(resultNodeIDs, rankedNodeIDs[i])
 			modes = append(modes, vectorDocumentAttachBuffered)
 			continue
 		}
@@ -1350,6 +1366,7 @@ func (idx *VectorIndex) attachVectorSearchResultDocuments(ranked []VectorSearchR
 		resultIDBytes += len(result.DocumentID)
 		snapshotCopyBytes += len(document)
 		results = append(results, result)
+		resultNodeIDs = append(resultNodeIDs, rankedNodeIDs[i])
 		modes = append(modes, vectorDocumentAttachSnapshotView)
 	}
 	if len(results) == 0 {
@@ -1379,7 +1396,7 @@ func (idx *VectorIndex) attachVectorSearchResultDocuments(ranked []VectorSearchR
 	if len(out) == 0 {
 		return []VectorSearchResult{}, nil
 	}
-	return out, nil
+	return idx.filterAttachedCurrentNodeResults(out, resultNodeIDs), nil
 }
 
 type vectorDocumentAttachMode uint8
