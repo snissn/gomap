@@ -189,8 +189,6 @@ func ColumnPartFromImage(image ColumnPartImage) (*ColumnPart, error) {
 	if desc.RowCount != image.Rows {
 		return nil, fmt.Errorf("colgranule: descriptor rows=%d manifest rows=%d", desc.RowCount, image.Rows)
 	}
-	desc.PartID = image.PartID
-	desc.RowCount = image.Rows
 	sortKey, err := decodeSortKeyMetadataSection(image)
 	if err != nil {
 		return nil, err
@@ -211,6 +209,9 @@ func ColumnPartFromImage(image ColumnPartImage) (*ColumnPart, error) {
 		return nil, err
 	}
 	if err := attachColumnPayloadsFromImage(image, columns); err != nil {
+		return nil, err
+	}
+	if err := validateDecodedRowLocatorsPrimaryKey(desc, columns, locators); err != nil {
 		return nil, err
 	}
 	optionsColumns := make([]ColumnDefinition, 0, len(desc.Columns))
@@ -519,7 +520,12 @@ func decodedBlockGranuleRange(granules []GranuleDescriptor, firstRow int, rowCou
 }
 
 func decodedGranuleIndexForRow(granules []GranuleDescriptor, row int) (int, bool) {
-	for i, granule := range granules {
+	i := sort.Search(len(granules), func(i int) bool {
+		granule := granules[i]
+		return granule.FirstRow+granule.RowCount > row
+	})
+	if i < len(granules) {
+		granule := granules[i]
 		if row >= granule.FirstRow && row < granule.FirstRow+granule.RowCount {
 			return i, true
 		}
@@ -1024,8 +1030,12 @@ func decodeRowLocatorsSection(image ColumnPartImage) (map[int64]RowLocator, erro
 		if err != nil {
 			return nil, err
 		}
-		if _, err := dec.u32(); err != nil {
+		reserved, err := dec.u32()
+		if err != nil {
 			return nil, err
+		}
+		if reserved != 0 {
+			return nil, fmt.Errorf("colgranule: row locator primary id %d reserved=%d want 0", primaryID, reserved)
 		}
 		partRowInt, err := dec.countToInt(partRow, "row locator part row")
 		if err != nil {
@@ -1086,6 +1096,40 @@ func validateDecodedRowLocators(desc ColumnPartDescriptor, partID uint64, locato
 			return fmt.Errorf("colgranule: duplicate row locator part row %d", locator.PartRow)
 		}
 		seenRows[locator.PartRow] = true
+	}
+	return nil
+}
+
+func validateDecodedRowLocatorsPrimaryKey(desc ColumnPartDescriptor, columns map[string]ColumnPartColumn, locators map[int64]RowLocator) error {
+	if len(desc.LogicalPrimaryKey) != 1 {
+		return fmt.Errorf("colgranule: row locator validation requires one logical primary key column, got %d", len(desc.LogicalPrimaryKey))
+	}
+	primaryColumnName := desc.LogicalPrimaryKey[0]
+	column, ok := columns[primaryColumnName]
+	if !ok {
+		return fmt.Errorf("colgranule: row locator validation missing primary key column %s", primaryColumnName)
+	}
+	if column.Definition.Type != ColumnTypeInt64 {
+		return fmt.Errorf("colgranule: row locator validation primary key column %s type=%s want int64", primaryColumnName, column.Definition.Type)
+	}
+	primaryValues := make([]int64, desc.RowCount)
+	var reader GranuleReader
+	var scratch []int64
+	for blockIndex, block := range column.Blocks {
+		values, err := reader.DecodeInt64Into(scratch[:0], block.Granule)
+		if err != nil {
+			return fmt.Errorf("colgranule: decode primary key column %s block %d: %w", primaryColumnName, blockIndex, err)
+		}
+		scratch = values
+		if len(values) != block.Descriptor.RowCount {
+			return fmt.Errorf("colgranule: primary key column %s block %d decoded rows=%d want %d", primaryColumnName, blockIndex, len(values), block.Descriptor.RowCount)
+		}
+		copy(primaryValues[block.Descriptor.FirstRow:block.Descriptor.FirstRow+block.Descriptor.RowCount], values)
+	}
+	for primaryID, locator := range locators {
+		if got := primaryValues[locator.PartRow]; got != primaryID {
+			return fmt.Errorf("colgranule: row locator primary id %d points to part row %d with primary key %d", primaryID, locator.PartRow, got)
+		}
 	}
 	return nil
 }

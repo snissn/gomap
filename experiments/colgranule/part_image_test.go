@@ -171,6 +171,9 @@ func TestColumnPartWithImagePayloadsScansFromImageBytes(t *testing.T) {
 			if block.Descriptor.StoredBytes == 0 {
 				continue
 			}
+			if len(block.Granule.Payload) == 0 {
+				t.Fatalf("column %s block %d stored bytes=%d but payload is empty", column.Definition.Name, block.Descriptor.CodecBlockOrdinal, block.Descriptor.StoredBytes)
+			}
 			offset := int(block.Granule.PayloadRef.Offset)
 			if &block.Granule.Payload[0] != &image.Bytes[offset] {
 				t.Fatalf("column %s block %d payload does not alias image bytes", column.Definition.Name, block.Descriptor.CodecBlockOrdinal)
@@ -842,6 +845,37 @@ func TestColumnPartFromImageRejectsInvalidRowLocatorReferences(t *testing.T) {
 	}
 }
 
+func TestColumnPartFromImageRejectsNonZeroRowLocatorReserved(t *testing.T) {
+	_, image := testColumnPartImageFixture(t, false)
+	offsets := firstRowLocatorOffsets(t, image)
+	corrupt := append([]byte(nil), image.Bytes...)
+	binary.LittleEndian.PutUint32(corrupt[offsets.reserved:], 1)
+	parsed, err := ParseColumnPartImage(corrupt)
+	if err != nil {
+		t.Fatalf("ParseColumnPartImage: %v", err)
+	}
+	if _, err := ColumnPartFromImage(parsed); err == nil {
+		t.Fatal("ColumnPartFromImage accepted a non-zero row locator reserved field")
+	}
+}
+
+func TestColumnPartFromImageRejectsRowLocatorPrimaryIDMismatchesColumn(t *testing.T) {
+	_, image := testColumnPartImageFixture(t, false)
+	first, second := firstTwoRowLocatorFieldOffsets(t, image)
+	corrupt := append([]byte(nil), image.Bytes...)
+	firstPrimaryID := binary.LittleEndian.Uint64(corrupt[first.primaryID:])
+	secondPrimaryID := binary.LittleEndian.Uint64(corrupt[second.primaryID:])
+	binary.LittleEndian.PutUint64(corrupt[first.primaryID:], secondPrimaryID)
+	binary.LittleEndian.PutUint64(corrupt[second.primaryID:], firstPrimaryID)
+	parsed, err := ParseColumnPartImage(corrupt)
+	if err != nil {
+		t.Fatalf("ParseColumnPartImage: %v", err)
+	}
+	if _, err := ColumnPartFromImage(parsed); err == nil {
+		t.Fatal("ColumnPartFromImage accepted row locator primary IDs that do not match the primary-key column")
+	}
+}
+
 func TestColumnPartFromImageRejectsIncompleteRowLocators(t *testing.T) {
 	part, _ := testColumnPartImageFixture(t, false)
 	corruptPart := *part
@@ -1473,6 +1507,7 @@ type rowLocatorOffsets struct {
 	partRow        int
 	granuleOrdinal int
 	rowInGranule   int
+	reserved       int
 }
 
 func firstRowLocatorOffsets(t *testing.T, image ColumnPartImage) rowLocatorOffsets {
@@ -1510,6 +1545,7 @@ func firstNRowLocatorOffsets(t *testing.T, image ColumnPartImage, n int) []rowLo
 			partRow:        primaryID + 16,
 			granuleOrdinal: primaryID + 20,
 			rowInGranule:   primaryID + 24,
+			reserved:       primaryID + 28,
 		})
 		if _, err := dec.i64(); err != nil {
 			t.Fatal(err)
