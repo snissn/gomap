@@ -92,6 +92,9 @@ func TestNativeWireAndLocalCommandDigestStable(t *testing.T) {
 		if entry.Notes == "" {
 			t.Fatalf("%s missing alignment notes", entry.NativeWireCommand)
 		}
+		if (entry.NativeWireFixture == "") != (entry.NativeWireFixtureSHA256 == "") {
+			t.Fatalf("%s native-wire fixture and digest must both be empty or both be set: fixture=%q sha256=%q", entry.NativeWireCommand, entry.NativeWireFixture, entry.NativeWireFixtureSHA256)
+		}
 		if (entry.LocalFixture == "") != (entry.LocalFixtureSHA256 == "") {
 			t.Fatalf("%s local fixture and digest must both be empty or both be set: fixture=%q sha256=%q", entry.NativeWireCommand, entry.LocalFixture, entry.LocalFixtureSHA256)
 		}
