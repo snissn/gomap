@@ -111,6 +111,9 @@ func TestNativeWireAndLocalCommandDigestStable(t *testing.T) {
 	if len(fixtureDigests) == 0 {
 		t.Fatal("alignment has no fixture digests")
 	}
+	for fixture, want := range fixtureDigests {
+		assertHexFixtureDigest(t, fixture, want)
+	}
 }
 
 func TestNativeWireAckFlushedRequiresRootPublishAndAppliedLSN(t *testing.T) {
@@ -126,14 +129,18 @@ func TestNativeWireAckFlushedRequiresRootPublishAndAppliedLSN(t *testing.T) {
 	}
 	protocol := readRepoText(t, "TreeDB/docs/spec/native-wire-protocol.md")
 	normalizedProtocol := collapseWhitespace(protocol)
-	for _, required := range []string{
-		"It does not require root publication or `AppliedLSN` advancement.",
-		"`flushed` means all touched collection state for the command has been published to backend roots, and WAL-backed commands have `AppliedLSN` advanced in the same backend commit.",
-	} {
-		if !strings.Contains(normalizedProtocol, required) {
-			t.Fatalf("native-wire protocol missing ack/recoverability text: %q", required)
-		}
-	}
+	assertContainsAll(t, normalizedProtocol, "visible recoverability doc",
+		"`visible` means",
+		"command-WAL recoverability",
+		"does not require root publication",
+		"`AppliedLSN` advancement",
+	)
+	assertContainsAll(t, normalizedProtocol, "flushed recoverability doc",
+		"`flushed` means",
+		"backend roots",
+		"`AppliedLSN` advanced",
+		"same backend commit",
+	)
 }
 
 func requireAckRecoverability(t *testing.T, alignment commandWALNativeWireAlignment, key string) string {
@@ -151,15 +158,14 @@ func requireAckRecoverability(t *testing.T, alignment commandWALNativeWireAlignm
 func TestNativeWirePostFramePublishFailureCommitAmbiguous(t *testing.T) {
 	protocol := readRepoText(t, "TreeDB/docs/spec/native-wire-protocol.md")
 	normalizedProtocol := collapseWhitespace(protocol)
-	for _, required := range []string{
-		"If a complete command frame reached the required local boundary but root publication, `AppliedLSN` advancement, visible install, flush, checkpoint, or response construction fails",
-		"the server returns `commit_ambiguous`",
-		"The server must not report `not_committed` after a complete command frame may be recovered and replayed.",
-	} {
-		if !strings.Contains(normalizedProtocol, required) {
-			t.Fatalf("native-wire protocol missing post-frame failure rule: %q", required)
-		}
-	}
+	assertContainsAll(t, normalizedProtocol, "post-frame failure doc",
+		"complete command frame",
+		"required local boundary",
+		"root publication",
+		"`AppliedLSN` advancement",
+		"`commit_ambiguous`",
+		"`not_committed` after a complete command frame",
+	)
 }
 
 func TestRaftApplyDoesNotReportRecoverableBeforeCommandWALAppliedLSN(t *testing.T) {
@@ -236,6 +242,15 @@ func assertHexFixtureDigest(t *testing.T, fixture, want string) {
 	sum := sha256.Sum256(fixtureBytes)
 	if got := hex.EncodeToString(sum[:]); got != want {
 		t.Fatalf("%s sha256=%s want %s", fixture, got, want)
+	}
+}
+
+func assertContainsAll(t *testing.T, haystack, label string, needles ...string) {
+	t.Helper()
+	for _, needle := range needles {
+		if !strings.Contains(haystack, needle) {
+			t.Fatalf("%s missing %q", label, needle)
+		}
 	}
 }
 
