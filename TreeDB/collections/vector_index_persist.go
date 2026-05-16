@@ -91,13 +91,13 @@ func (idx *VectorIndex) SaveNativeSnapshot() (VectorIndexLoadStatus, error) {
 	if c.db == nil {
 		return status, errCollectionDBNil
 	}
-	if !c.isRegisteredVectorIndex(idx) {
+	if shouldIgnoreStaleNativeSnapshotSave(c, idx) {
 		status.ExactFallbackReason = vectorIndexFallbackStaleRuntimeIndex
 		return status, nil
 	}
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()
-	if !c.isRegisteredVectorIndex(idx) {
+	if shouldIgnoreStaleNativeSnapshotSave(c, idx) {
 		status.ExactFallbackReason = vectorIndexFallbackStaleRuntimeIndex
 		return status, nil
 	}
@@ -105,6 +105,10 @@ func (idx *VectorIndex) SaveNativeSnapshot() (VectorIndexLoadStatus, error) {
 		return status, err
 	}
 	return idx.saveNativeSnapshotPrepared()
+}
+
+func shouldIgnoreStaleNativeSnapshotSave(c *Collection, idx *VectorIndex) bool {
+	return idx.isNativePersistent() && !c.isRegisteredVectorIndex(idx)
 }
 
 // saveNativeSnapshotPrepared publishes the current graph after the caller has
@@ -212,13 +216,13 @@ func (idx *VectorIndex) SaveNativeDeltaSnapshot() (VectorIndexLoadStatus, error)
 	if c.db == nil {
 		return status, errCollectionDBNil
 	}
-	if !c.isRegisteredVectorIndex(idx) {
+	if shouldIgnoreStaleNativeSnapshotSave(c, idx) {
 		status.ExactFallbackReason = vectorIndexFallbackStaleRuntimeIndex
 		return status, nil
 	}
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()
-	if !c.isRegisteredVectorIndex(idx) {
+	if shouldIgnoreStaleNativeSnapshotSave(c, idx) {
 		status.ExactFallbackReason = vectorIndexFallbackStaleRuntimeIndex
 		return status, nil
 	}
