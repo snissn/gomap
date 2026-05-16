@@ -75,10 +75,13 @@ func TestCommandWALSupportMatrixCoversCollectionMutators(t *testing.T) {
 	matrix := loadCommandWALSupportMatrix(t)
 	for _, entryPoint := range []string{
 		"CollectionManager.CreateCollection",
+		"CollectionManager.FlushAll",
 		"Collection.CreateIndex",
 		"Collection.DropIndex",
 		"Collection.DropIndexes",
 		"Collection.DropAllIndexes",
+		"Collection.Flush",
+		"Collection.CompactRootOverlays",
 		"Collection.Insert",
 		"Collection.InsertBatch",
 		"Collection.InsertBatchWithTemplateV1Encoder",
