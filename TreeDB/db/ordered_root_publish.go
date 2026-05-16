@@ -1286,6 +1286,14 @@ func (db *DB) PublishOrderedRootDeltaBatchGroupWithCommandWALAndSystemDeltaBuild
 	return db.publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered, nil, intent, buildSystemDeltaIter)
 }
 
+// PublishOrderedRootDeltaBatchGroupWithPreflightCommandWALAndSystemDeltaBuilder
+// is like PublishOrderedRootDeltaBatchGroupWithCommandWALAndSystemDeltaBuilder,
+// but runs preflight under the DB write lock before appending the command-WAL
+// frame or applying root-local deltas.
+func (db *DB) PublishOrderedRootDeltaBatchGroupWithPreflightCommandWALAndSystemDeltaBuilder(ordered []OrderedRootDeltaBatchPublishInput, preflight OrderedRootGroupPreflight, intent *CommandWALIntent, buildSystemDeltaIter OrderedRootGroupSystemBuilder) (uint64, []uint64, error) {
+	return db.publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered, preflight, intent, buildSystemDeltaIter)
+}
+
 // PublishOrderedRootDeltaBatchGroupWithPreflightAndSystemDeltaBuilder is like
 // PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder, but runs preflight
 // under the DB write lock before applying root-local deltas.

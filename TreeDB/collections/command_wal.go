@@ -186,6 +186,7 @@ func replayCollectionUpdateBatchByIDCommandWAL(db *backenddb.DB, env commitlog.C
 					}
 				}(doc.Document),
 			},
+			allowTemplateV1StoredDocument: true,
 		}
 	}
 	_, _, err = collection.updateBatchOwnedItemsWithCommandWALIntent(items, updateBatchModeAny, backenddb.NewCommandWALReplayIntent(env))

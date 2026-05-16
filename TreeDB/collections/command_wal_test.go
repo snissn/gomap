@@ -5,7 +5,9 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
@@ -349,6 +351,82 @@ func TestCollectionCommandWALUpdateByIDReplayRecoversUnappliedFrame(t *testing.T
 	assertCollectionDocument(t, col, "u2", `{"name":"Grace","city":"nyc"}`)
 }
 
+func TestCollectionCommandWALUpdateByIDReplayTemplateV1StoredDocument(t *testing.T) {
+	dir := t.TempDir()
+	d, err := backenddb.Open(backenddb.Options{
+		Dir:                    dir,
+		Durability:             backenddb.DurabilityWALOffRelaxed,
+		DisableBackgroundPrune: true,
+	})
+	if err != nil {
+		t.Fatalf("Open setup DB: %v", err)
+	}
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatTemplateV1,
+		},
+	}); err != nil {
+		_ = d.Close()
+		t.Fatalf("CreateCollection setup: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		_ = d.Close()
+		t.Fatalf("OpenCollection setup: %v", err)
+	}
+	encoder := &TemplateV1Encoder{}
+	seed := mustTemplateV1Document(t, []string{"name", "city"}, []any{"Ada", "HNL"})
+	if _, err := col.InsertBatchWithTemplateV1Encoder([][]byte{[]byte("u1")}, [][]byte{seed}, encoder); err != nil {
+		_ = d.Close()
+		t.Fatalf("InsertBatchWithTemplateV1Encoder setup: %v", err)
+	}
+	stored, err := encoder.EncodeDocument([]string{"name", "city"}, []any{"Ada", "SEA"})
+	if err != nil {
+		_ = d.Close()
+		t.Fatalf("EncodeDocument stored: %v", err)
+	}
+	if !bytes.HasPrefix(stored, []byte(templateV1StoredMagic)) {
+		_ = d.Close()
+		t.Fatalf("stored prefix=%q, want %q", stored[:min(len(stored), len(templateV1StoredMagic))], templateV1StoredMagic)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close setup DB: %v", err)
+	}
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+		t.Fatalf("SaveFormatConfig: %v", err)
+	}
+	payload, err := commitlog.EncodeCollectionUpdateBatchByIDPayload("users", []commitlog.CollectionDocument{
+		{ID: []byte("u1"), Document: stored},
+	})
+	if err != nil {
+		t.Fatalf("EncodeCollectionUpdateBatchByIDPayload: %v", err)
+	}
+	writeCollectionCommandWALFrame(t, dir, 1, commitlog.CommandKindCollectionUpdateBatchByID, commitlog.PayloadFormatCollectionUpdateBatchByIDV1, payload)
+
+	reopen := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopen.Close() }()
+	replayed, err := NewCollectionManager(reopen).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection replayed: %v", err)
+	}
+	got, err := replayed.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("Get replayed template doc: %v", err)
+	}
+	jsonDoc, err := replayed.StoredDocumentJSON(got)
+	if err != nil {
+		t.Fatalf("StoredDocumentJSON: %v", err)
+	}
+	if !bytes.Contains(jsonDoc, []byte(`"Ada"`)) || !bytes.Contains(jsonDoc, []byte(`"SEA"`)) {
+		t.Fatalf("materialized template doc=%s, want Ada/SEA", jsonDoc)
+	}
+	if got := reopen.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("AppliedCommandLSN=%d, want 1", got)
+	}
+}
+
 func TestCollectionCommandWALUpdateByIDIndexedPublishesSecondaryRoots(t *testing.T) {
 	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
 		Name: "users",
@@ -387,6 +465,83 @@ func TestCollectionCommandWALUpdateByIDIndexedPublishesSecondaryRoots(t *testing
 	assertCollectionIndexIDs(t, col, "city", "nyc", "u2")
 	if got := d.State().AppliedCommandLSN; got != 1 {
 		t.Fatalf("AppliedCommandLSN=%d, want 1", got)
+	}
+}
+
+func TestCollectionCommandWALUpdateByIDPreflightReplansStaleIndexedPlan(t *testing.T) {
+	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatJSON,
+		},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city", ValueType: IndexValueString}},
+	}, collectionCommandWALSetupInsert{
+		ids: [][]byte{[]byte("u1"), []byte("u2")},
+		docs: [][]byte{
+			[]byte(`{"name":"Ada","city":"hnl"}`),
+			[]byte(`{"name":"Grace","city":"nyc"}`),
+		},
+	})
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	colA, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection A: %v", err)
+	}
+	colB, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection B: %v", err)
+	}
+
+	readyA := make(chan struct{}, 2)
+	readyB := make(chan struct{}, 2)
+	releaseA := make(chan struct{})
+	releaseB := make(chan struct{})
+	doneA := make(chan error, 1)
+	doneB := make(chan error, 1)
+	var callsA atomic.Int32
+	var callsB atomic.Int32
+	go func() {
+		_, _, err := colA.Update([]byte("u1"), func([]byte) ([]byte, bool, error) {
+			callsA.Add(1)
+			readyA <- struct{}{}
+			<-releaseA
+			return []byte(`{"name":"Ada","city":"sea"}`), true, nil
+		})
+		doneA <- err
+	}()
+	go func() {
+		_, _, err := colB.Update([]byte("u2"), func([]byte) ([]byte, bool, error) {
+			callsB.Add(1)
+			readyB <- struct{}{}
+			<-releaseB
+			return []byte(`{"name":"Grace","city":"lax"}`), true, nil
+		})
+		doneB <- err
+	}()
+	waitCollectionCommandWALSignal(t, readyA, "update A planned")
+	waitCollectionCommandWALSignal(t, readyB, "update B planned")
+	close(releaseA)
+	if err := waitCollectionCommandWALErr(t, doneA, "update A"); err != nil {
+		t.Fatalf("update A error: %v", err)
+	}
+	close(releaseB)
+	if err := waitCollectionCommandWALErr(t, doneB, "update B"); err != nil {
+		t.Fatalf("update B error: %v", err)
+	}
+	if got := callsB.Load(); got < 2 {
+		t.Fatalf("update B callbacks=%d, want retry after stale command-WAL preflight", got)
+	}
+	assertCollectionDocument(t, colA, "u1", `{"name":"Ada","city":"sea"}`)
+	assertCollectionDocument(t, colA, "u2", `{"name":"Grace","city":"lax"}`)
+	assertCollectionIndexIDs(t, colA, "city", "sea", "u1")
+	assertCollectionIndexIDs(t, colA, "city", "lax", "u2")
+	if got := d.State().AppliedCommandLSN; got != 2 {
+		t.Fatalf("AppliedCommandLSN=%d, want 2", got)
+	}
+	if got := callsA.Load(); got != 1 {
+		t.Fatalf("update A callbacks=%d, want 1", got)
 	}
 }
 
@@ -512,6 +667,26 @@ func assertCollectionDocument(t *testing.T, col *Collection, id string, want str
 	}
 	if !bytes.Equal(got, []byte(want)) {
 		t.Fatalf("Get(%q)=%q, want %q", id, got, want)
+	}
+}
+
+func waitCollectionCommandWALSignal(t *testing.T, ch <-chan struct{}, label string) {
+	t.Helper()
+	select {
+	case <-ch:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timeout waiting for %s", label)
+	}
+}
+
+func waitCollectionCommandWALErr(t *testing.T, ch <-chan error, label string) error {
+	t.Helper()
+	select {
+	case err := <-ch:
+		return err
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timeout waiting for %s", label)
+		return nil
 	}
 }
 

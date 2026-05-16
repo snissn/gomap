@@ -160,8 +160,9 @@ type UpdateBatchItem struct {
 
 type updateBatchItem struct {
 	UpdateBatchItem
-	bsonSet    bsonSetUpdate
-	hasBSONSet bool
+	bsonSet                       bsonSetUpdate
+	hasBSONSet                    bool
+	allowTemplateV1StoredDocument bool
 }
 
 func newBSONSetUpdateBatchItem(documentID []byte, spec bsonSetUpdate) updateBatchItem {
@@ -9683,6 +9684,15 @@ func updateBatchItemsAllHaveBSONSet(items []updateBatchItem) bool {
 	return true
 }
 
+func updateBatchItemsAllowTemplateV1StoredDocuments(items []updateBatchItem) bool {
+	for _, item := range items {
+		if item.allowTemplateV1StoredDocument {
+			return true
+		}
+	}
+	return false
+}
+
 func updateBatchItemError(index int, err error) error {
 	if err == nil {
 		return nil
@@ -13314,6 +13324,9 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 		return nil, updateBatchItemError(itemIndex, errBSONSetRequiresBSONFormat)
 	}
 	plannerOptions = collectionOptionsWithTemplateV1Resolver(plannerOptions, snap, catalog)
+	if updateBatchItemsAllowTemplateV1StoredDocuments(items) {
+		plannerOptions.allowTemplateV1Stored = true
+	}
 	baseUserRoot := snapshotUserRoot(snap)
 	baseSystemRoot := snapshotSystemRoot(snap)
 	baseCommitSeq := snapshotCommitSeq(snap)
@@ -13963,7 +13976,7 @@ func (c *Collection) publishUpdateBatchPlanLocked(plan *updateBatchPlan, command
 	var newSystemRoot uint64
 	var rootIDs []uint64
 	if commandWALIntent != nil {
-		newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaBatchGroupWithCommandWALAndSystemDeltaBuilder(ordered, commandWALIntent, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaBatchGroupWithPreflightCommandWALAndSystemDeltaBuilder(ordered, preflight, commandWALIntent, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 			return c.buildRootDescriptorSystemDeltaIteratorForMeta(plan.meta, plan.baseCommitSeq, plan.baseSystemRoot, plan.rootNames, plan.baseRootIDs, rootIDs)
 		})
 	} else {
