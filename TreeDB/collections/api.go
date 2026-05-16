@@ -150,6 +150,9 @@ func commitAmbiguousError(operation string, err error) error {
 	if err == nil {
 		return nil
 	}
+	if errors.Is(err, ErrCommitAmbiguous) {
+		return err
+	}
 	return &CommitAmbiguousError{Operation: operation, Err: err}
 }
 
