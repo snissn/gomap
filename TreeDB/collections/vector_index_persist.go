@@ -156,6 +156,9 @@ func (idx *VectorIndex) saveNativeSnapshotPrepared() (VectorIndexLoadStatus, err
 	rootName := collectionVectorIndexRootName(catalog.meta.Name, idx.name)
 	status.RootName = rootName
 	baseRoot := catalog.rootID(rootName)
+	if baseEpoch := idx.nativeSnapshotBaseEpochForFullSave(); baseRoot != 0 && baseEpoch != 0 && baseRoot != baseEpoch {
+		return status, fmt.Errorf("%w: index %q loaded epoch %d current root %d", errVectorIndexStaleNativeRoot, idx.name, baseEpoch, baseRoot)
+	}
 	baseRootIDs := map[string]uint64{rootName: baseRoot}
 	baseSystemRoot := snapshotSystemRoot(pin)
 	baseCommitSeq := snapshotCommitSeq(pin)
@@ -532,7 +535,7 @@ func (c *Collection) loadLegacyVectorIndexSnapshot(opts VectorIndexOptions) (*Ve
 	}
 	manifestData, err := os.ReadFile(status.ManifestPath)
 	if errors.Is(err, os.ErrNotExist) {
-		status.ExactFallbackReason = "missing_manifest"
+		status.ExactFallbackReason = vectorIndexFallbackMissingManifest
 		return nil, status, nil
 	}
 	if err != nil {
@@ -540,7 +543,7 @@ func (c *Collection) loadLegacyVectorIndexSnapshot(opts VectorIndexOptions) (*Ve
 	}
 	var manifest vectorIndexManifest
 	if err := json.Unmarshal(manifestData, &manifest); err != nil {
-		status.ExactFallbackReason = "invalid_manifest"
+		status.ExactFallbackReason = vectorIndexFallbackInvalidManifest
 		return nil, status, nil
 	}
 	if reason := validateVectorIndexManifest(manifest, c.meta.Name, index.name, index.metric, index.encoding, index.dimensions); reason != "" {
@@ -1202,6 +1205,7 @@ func (idx *VectorIndex) recordPersistedSnapshot(epoch uint64, bytesDisk int64, s
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
 	idx.persistedEpoch = epoch
+	idx.fullSnapshotBaseEpoch = 0
 	idx.persistedBytesDisk = bytesDisk
 	idx.persistedSnapshotDirty = idx.mutationSeq != snapshotSeq
 	if !idx.persistedSnapshotDirty {
@@ -1215,6 +1219,7 @@ func (idx *VectorIndex) recordLoadedSnapshot(epoch uint64, bytesDisk int64) {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
 	idx.persistedEpoch = epoch
+	idx.fullSnapshotBaseEpoch = 0
 	idx.persistedBytesDisk = bytesDisk
 	idx.persistedSnapshotDirty = false
 	idx.mutationSeq = 0
@@ -1410,6 +1415,7 @@ func (idx *VectorIndex) loadPersistSnapshot(snapshot vectorIndexPersistSnapshot)
 		idx.entry = -1
 		idx.maxLevel = -1
 		idx.persistedEpoch = 0
+		idx.fullSnapshotBaseEpoch = 0
 		idx.persistedBytesDisk = 0
 		idx.persistedSnapshotDirty = false
 		idx.lastRebuildDuration = 0
@@ -1528,6 +1534,7 @@ func (idx *VectorIndex) loadPersistSnapshot(snapshot vectorIndexPersistSnapshot)
 	idx.entry = entry
 	idx.maxLevel = idx.maxLiveLevelLocked()
 	idx.persistedEpoch = 0
+	idx.fullSnapshotBaseEpoch = 0
 	idx.persistedBytesDisk = 0
 	idx.persistedSnapshotDirty = false
 	idx.lastRebuildDuration = 0

@@ -930,6 +930,45 @@ func TestCollectionVectorIndexNativeRootInsertReturnsIDOnCommitAmbiguousMaintena
 	}
 }
 
+func TestCommitAmbiguousErrorPreservesExistingAmbiguousError(t *testing.T) {
+	inner := commitAmbiguousError("flush", errors.New("boom"))
+	got := commitAmbiguousError("insert", inner)
+	if got != inner {
+		t.Fatalf("nested ambiguous error=%v want original %v", got, inner)
+	}
+	if !errors.Is(got, ErrCommitAmbiguous) {
+		t.Fatalf("ambiguous error=%v want ErrCommitAmbiguous", got)
+	}
+}
+
+func TestDeclaredNativeVectorIndexesLoadedNoDeclaredAdHocIndex(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	index, err := newVectorIndex(col, VectorIndexOptions{Name: "ad_hoc", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2})
+	if err != nil {
+		t.Fatalf("new vector index: %v", err)
+	}
+	col.RegisterVectorIndex(index)
+	if !col.declaredNativeVectorIndexesLoadedForCurrentCatalog() {
+		t.Fatal("ad-hoc registered vector index forced native catalog load with no declared vector indexes")
+	}
+	index.setNativePersistent(true)
+	if col.declaredNativeVectorIndexesLoadedForCurrentCatalog() {
+		t.Fatal("native-persistent runtime index without declaration should require reconciliation")
+	}
+}
+
 func TestCollectionVectorIndexNativeRootMaintainsUpdatedDocument(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -2129,6 +2168,13 @@ func TestCollectionVectorIndexNativeDeltaRejectsStalePersistedRoot(t *testing.T)
 		t.Fatalf("reload handle A vector index: %v", err)
 	} else if !statusA2.Loaded || statusA2.RootID == seedStatus.RootID {
 		t.Fatalf("handle A did not advance persisted root status=%+v seed=%+v", statusA2, seedStatus)
+	}
+	staleIndex := handleB.registeredVectorIndex(def.Name)
+	if staleIndex == nil {
+		t.Fatal("handle B did not keep loaded vector index registered")
+	}
+	if _, err := staleIndex.SaveNativeSnapshot(); !errors.Is(err, errVectorIndexStaleNativeRoot) {
+		t.Fatalf("stale full snapshot save err=%v want stale native root", err)
 	}
 
 	if _, err := handleB.InsertBatch(
