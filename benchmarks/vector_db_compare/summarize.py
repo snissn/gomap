@@ -34,11 +34,18 @@ def storage_record(result: dict[str, Any]) -> dict[str, Any]:
         return result["storage_after_compact"]
     if "storage" in result:
         return result["storage"]
-    raise KeyError(f"{result_label(result)} missing storage result")
+    raise ValueError(f"{result_label(result)} missing storage result")
 
 
 def storage_bytes(result: dict[str, Any]) -> int:
     return int(storage_record(result)["total_bytes"])
+
+
+def storage_display(result: dict[str, Any]) -> str:
+    label = bytes_human(storage_bytes(result))
+    if storage_record(result).get("total_bytes_excludes_vector_search_index"):
+        return f"{label}*"
+    return label
 
 
 def bytes_per_doc(result: dict[str, Any]) -> float:
@@ -54,7 +61,7 @@ def build_seconds(result: dict[str, Any]) -> float:
         return float(result["build"]["seconds"])
     if "rebuild" in result:
         return float(result["rebuild"]["seconds"])
-    raise KeyError(f"{result_label(result)} missing build/rebuild phase")
+    raise ValueError(f"{result_label(result)} missing build/rebuild phase")
 
 
 def reopen_seconds(result: dict[str, Any]) -> float:
@@ -124,7 +131,7 @@ def render(results: list[dict[str, Any]]) -> str:
                 build=build_seconds(result),
                 reopen=reopen_seconds(result),
                 recall=recall(result),
-                storage=bytes_human(storage_bytes(result)),
+                storage=storage_display(result),
                 per_doc=bytes_per_doc(result),
                 index_memory=index_memory(result),
                 process_rss=process_rss(result),
@@ -155,6 +162,7 @@ def render(results: list[dict[str, Any]]) -> str:
     lines.append("- SQLite+Vectorlite stores the SQLite table and its HNSW index file under the benchmark DB directory; storage includes both.")
     lines.append("- PostgreSQL+pgvector storage uses the benchmark table's `pg_total_relation_size`, including its HNSW index.")
     lines.append("- MongoDB is included only when run against a MongoDB Vector Search deployment, such as Atlas or local Atlas with `mongot`; plain `mongod` is not a vector-search comparator.")
+    lines.append("- MongoDB storage marked with `*` uses `collStats` collection storage and ordinary index bytes; MongoDB Vector Search index bytes are not exposed by this harness.")
     lines.append("- TreeDB storage is the reopened benchmark datastore reported by `treedb_vector_search_demo`.")
     lines.append("- Memory columns are intentionally separated: TreeDB reports native vector-index memory when available, while Python-backed comparator harnesses report whole benchmark process max RSS.")
     lines.append("")
@@ -175,8 +183,19 @@ def main() -> None:
         if legacy:
             paths.append(legacy)
     if not paths:
-        raise SystemExit("at least one --result is required")
-    text = render([load(path) for path in paths])
+        raise SystemExit("at least one input is required: pass --result, or one of --treedb/--vectorlite/--pgvector/--mongodb")
+    deduped = []
+    seen = set()
+    for path in paths:
+        if path in seen:
+            continue
+        seen.add(path)
+        deduped.append(path)
+    paths = deduped
+    try:
+        text = render([load(path) for path in paths])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise SystemExit(f"invalid benchmark result: {exc}") from exc
     Path(args.output).write_text(text, encoding="utf-8")
     print(text)
 

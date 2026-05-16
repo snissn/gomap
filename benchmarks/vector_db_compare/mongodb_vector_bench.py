@@ -10,10 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
-import os
 import statistics
-import sys
 import threading
 import time
 from pathlib import Path
@@ -23,51 +20,15 @@ import numpy as np
 from pymongo import MongoClient
 from pymongo.errors import OperationFailure
 
-
-def parse_ints(raw: str) -> list[int]:
-    values: list[int] = []
-    seen: set[int] = set()
-    for part in raw.split(","):
-        part = part.strip()
-        if not part:
-            continue
-        value = int(part)
-        if value < 1:
-            raise ValueError("concurrency values must be at least 1")
-        if value not in seen:
-            values.append(value)
-            seen.add(value)
-    if not values:
-        raise ValueError("at least one concurrency value is required")
-    return sorted(values)
-
-
-def percentile(sorted_values: list[int], p: float) -> int:
-    if not sorted_values:
-        return 0
-    idx = math.ceil(p * len(sorted_values)) - 1
-    return sorted_values[max(0, min(idx, len(sorted_values) - 1))]
-
-
-def phase(start: float) -> dict[str, Any]:
-    seconds = time.perf_counter() - start
-    return {"duration_nanos": int(seconds * 1_000_000_000), "seconds": seconds}
+from common import load_vectors, max_rss_bytes, parse_ints, percentile, phase
 
 
 def load_manifest(dataset_dir: Path) -> dict[str, Any]:
     return json.loads((dataset_dir / "manifest.json").read_text(encoding="utf-8"))
 
 
-def load_vectors(path: Path, rows: int, dims: int) -> np.ndarray:
-    data = np.fromfile(path, dtype="<f4")
-    expected = rows * dims
-    if data.size != expected:
-        raise ValueError(f"{path} has {data.size} float32s, want {expected}")
-    return data.reshape(rows, dims)
-
-
-def connect(uri: str) -> MongoClient:
-    return MongoClient(uri, serverSelectionTimeoutMS=5000)
+def connect(uri: str, max_pool_size: int = 100) -> MongoClient:
+    return MongoClient(uri, serverSelectionTimeoutMS=5000, maxPoolSize=max_pool_size)
 
 
 def vector_search_index_definition(dims: int) -> dict[str, Any]:
@@ -166,24 +127,29 @@ def reopen_database(args: argparse.Namespace) -> tuple[MongoClient, Any, dict[st
     client = connect(args.uri)
     collection = client[args.database][args.collection]
     count = collection.count_documents({})
-    probe = list(
-        collection.aggregate(
-            [
-                {
-                    "$vectorSearch": {
-                        "index": args.index_name,
-                        "path": "embedding",
-                        "queryVector": collection.find_one({"_id": 1}, {"embedding": 1})["embedding"],
-                        "numCandidates": args.num_candidates,
-                        "limit": 1,
-                    }
-                },
-                {"$project": {"_id": 1}},
-            ]
+    probe = []
+    if count:
+        seed = collection.find_one({"_id": 1}, {"embedding": 1})
+        if seed is None or "embedding" not in seed:
+            raise RuntimeError("MongoDB reopen probe could not load seed document _id=1")
+        probe = list(
+            collection.aggregate(
+                [
+                    {
+                        "$vectorSearch": {
+                            "index": args.index_name,
+                            "path": "embedding",
+                            "queryVector": seed["embedding"],
+                            "numCandidates": args.num_candidates,
+                            "limit": 1,
+                        }
+                    },
+                    {"$project": {"_id": 1}},
+                ]
+            )
         )
-    )
-    if len(probe) != 1:
-        raise RuntimeError(f"MongoDB reopen probe returned {len(probe)} rows, want 1")
+        if len(probe) != 1:
+            raise RuntimeError(f"MongoDB reopen probe returned {len(probe)} rows, want 1")
     out = phase(start)
     out["rows"] = int(count)
     out["probe_rows"] = len(probe)
@@ -258,13 +224,40 @@ def benchmark_search(args: argparse.Namespace, query_lists: list[list[float]], c
     latencies = [0] * len(query_lists)
     next_index = 0
     next_lock = threading.Lock()
-    first_error: list[BaseException] = []
-    client = connect(args.uri)
+    first_error: BaseException | None = None
+    error_lock = threading.Lock()
+    stop_event = threading.Event()
+    client = connect(args.uri, max_pool_size=max(100, concurrency))
     collection = client[args.database][args.collection]
+
+    def record_error(exc: BaseException) -> None:
+        nonlocal first_error
+        with error_lock:
+            if first_error is None:
+                first_error = exc
+        stop_event.set()
+
+    def warm_connection() -> None:
+        try:
+            client.admin.command("ping")
+        except BaseException as exc:  # noqa: BLE001
+            record_error(exc)
+
+    warm_threads = [threading.Thread(target=warm_connection) for _ in range(concurrency)]
+    for thread in warm_threads:
+        thread.start()
+    for thread in warm_threads:
+        thread.join()
+    if first_error:
+        client.close()
+        raise first_error
+    stop_event.clear()
 
     def worker(collection) -> None:
         nonlocal next_index
         while True:
+            if stop_event.is_set():
+                return
             with next_lock:
                 i = next_index
                 next_index += 1
@@ -274,7 +267,7 @@ def benchmark_search(args: argparse.Namespace, query_lists: list[list[float]], c
             try:
                 search_one(collection, query_lists[i], args.index_name, args.top_k, args.num_candidates)
             except BaseException as exc:  # noqa: BLE001
-                first_error.append(exc)
+                record_error(exc)
                 return
             latencies[i] = time.perf_counter_ns() - start
 
@@ -287,7 +280,7 @@ def benchmark_search(args: argparse.Namespace, query_lists: list[list[float]], c
     total = time.perf_counter() - start_all
     client.close()
     if first_error:
-        raise first_error[0]
+        raise first_error
     sorted_latencies = sorted(latencies)
     avg = statistics.fmean(latencies)
     return {
@@ -308,27 +301,26 @@ def storage_usage(client: MongoClient, args: argparse.Namespace, docs: int) -> d
     storage_size = int(stats.get("storageSize", 0))
     index_size = int(stats.get("totalIndexSize", stats.get("indexSize", 0)))
     total = storage_size + index_size
+    collection = client[args.database][args.collection]
+    search_index: dict[str, Any] = {"name": args.index_name, "bytes_available": False}
+    try:
+        indexes = list(collection.aggregate([{"$listSearchIndexes": {"name": args.index_name}}]))
+        if indexes:
+            search_index["status"] = indexes[0].get("status")
+            search_index["queryable"] = indexes[0].get("queryable")
+    except OperationFailure as exc:
+        search_index["error"] = str(exc)
     return {
         "total_bytes": total,
+        "total_bytes_excludes_vector_search_index": True,
         "files": 0,
         "domains": {
             "collection_storageSize": storage_size,
             "collection_totalIndexSize": index_size,
+            "vector_search_index": search_index,
         },
         "bytes_per_doc": total / docs if docs else 0,
     }
-
-
-def max_rss_bytes() -> int:
-    try:
-        import resource
-
-        value = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-        if sys.platform == "darwin":
-            return int(value)
-        return int(value) * 1024
-    except Exception:
-        return 0
 
 
 def main() -> None:
