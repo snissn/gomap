@@ -328,9 +328,6 @@ func vectorFromJSONField(document []byte, fieldPath []string) ([]float32, bool, 
 
 func vectorFromBSONField(document []byte, fieldPath []string) ([]float32, bool, error) {
 	raw := bson.Raw(document)
-	if err := raw.Validate(); err != nil {
-		return nil, false, fmt.Errorf("collections: BSON stored document: %w", err)
-	}
 	value := raw.Lookup(fieldPath...)
 	if value.Type == 0 || value.Type == bson.TypeNull {
 		return nil, false, nil
