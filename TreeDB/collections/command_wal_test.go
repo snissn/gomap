@@ -490,6 +490,86 @@ func TestCollectionCommandWALUpdateByIDReplayTemplateV1StoredDocument(t *testing
 	}
 }
 
+func TestCollectionCommandWALUpdateByIDTemplateV1NewShapeReplay(t *testing.T) {
+	baseMeta := CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatTemplateV1,
+		},
+	}
+	baseInsert := collectionCommandWALSetupInsert{
+		ids: [][]byte{[]byte("u1")},
+		docs: [][]byte{
+			mustTemplateV1Document(t, []string{"name"}, []any{"Ada"}),
+		},
+	}
+	replacement := mustTemplateV1Document(t, []string{"name", "city"}, []any{"Ada", "SEA"})
+
+	updateDir := prepareCollectionCommandWALDir(t, baseMeta, baseInsert)
+	updateDB := openCollectionCommandWALDB(t, updateDir)
+	updateCol, err := NewCollectionManager(updateDB).OpenCollection("users")
+	if err != nil {
+		_ = updateDB.Close()
+		t.Fatalf("OpenCollection update: %v", err)
+	}
+	matched, modified, err := updateCol.Update([]byte("u1"), func([]byte) ([]byte, bool, error) {
+		return replacement, true, nil
+	})
+	if err != nil {
+		_ = updateDB.Close()
+		t.Fatalf("Update: %v", err)
+	}
+	if !matched || !modified {
+		_ = updateDB.Close()
+		t.Fatalf("Update matched=%t modified=%t, want true/true", matched, modified)
+	}
+	if err := updateDB.Close(); err != nil {
+		t.Fatalf("Close update DB: %v", err)
+	}
+
+	frames := collectionCommandWALFrames(t, updateDir)
+	if len(frames) != 1 {
+		t.Fatalf("command WAL frames=%d, want 1", len(frames))
+	}
+	frame := frames[0]
+	if frame.Kind != commitlog.CommandKindCollectionUpdateBatchByID {
+		t.Fatalf("frame kind=%d, want update batch", frame.Kind)
+	}
+	payload, err := commitlog.DecodeCollectionUpdateBatchByIDPayload(frame.Payload)
+	if err != nil {
+		t.Fatalf("DecodeCollectionUpdateBatchByIDPayload: %v", err)
+	}
+	if len(payload.Documents) != 1 {
+		t.Fatalf("payload documents=%d, want 1", len(payload.Documents))
+	}
+	if bytes.HasPrefix(payload.Documents[0].Document, []byte(templateV1StoredMagic)) {
+		t.Fatalf("TemplateV1 update WAL payload used stored document bytes; replay needs deterministic input envelope")
+	}
+
+	replayDir := prepareCollectionCommandWALDir(t, baseMeta, baseInsert)
+	writeCollectionCommandWALFrame(t, replayDir, 1, commitlog.CommandKindCollectionUpdateBatchByID, commitlog.PayloadFormatCollectionUpdateBatchByIDV1, frame.Payload)
+	reopen := openCollectionCommandWALDB(t, replayDir)
+	defer func() { _ = reopen.Close() }()
+	replayed, err := NewCollectionManager(reopen).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection replay: %v", err)
+	}
+	got, err := replayed.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("Get replayed template doc: %v", err)
+	}
+	jsonDoc, err := replayed.StoredDocumentJSON(got)
+	if err != nil {
+		t.Fatalf("StoredDocumentJSON: %v", err)
+	}
+	if !bytes.Contains(jsonDoc, []byte(`"Ada"`)) || !bytes.Contains(jsonDoc, []byte(`"SEA"`)) {
+		t.Fatalf("materialized template doc=%s, want Ada/SEA", jsonDoc)
+	}
+	if got := reopen.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("AppliedCommandLSN=%d, want 1", got)
+	}
+}
+
 func TestCollectionCommandWALUpdateByIDIndexedPublishesSecondaryRoots(t *testing.T) {
 	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
 		Name: "users",
@@ -817,6 +897,11 @@ func writeCollectionCommandWALFrame(t *testing.T, dir string, lsn uint64, kind c
 
 func countCollectionCommandWALFrames(t *testing.T, dir string) int {
 	t.Helper()
+	return len(collectionCommandWALFrames(t, dir))
+}
+
+func collectionCommandWALFrames(t *testing.T, dir string) []commitlog.CommandEnvelope {
+	t.Helper()
 	walDir := backenddb.WALDirPath(dir)
 	entries, err := os.ReadDir(walDir)
 	if err != nil {
@@ -833,7 +918,7 @@ func countCollectionCommandWALFrames(t *testing.T, dir string) int {
 	if err != nil {
 		t.Fatalf("ScanCommandFrameSegments: %v", err)
 	}
-	return len(frames)
+	return frames
 }
 
 func assertCollectionDocument(t *testing.T, col *Collection, id string, want string) {

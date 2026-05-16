@@ -124,6 +124,20 @@ func collectionDocumentsFromPreparedBatchUpdates(changed []preparedBatchUpdate) 
 	return docs
 }
 
+func collectionDocumentsFromBatchUpdateDocuments(changed []preparedBatchUpdate, documents [][]byte) []commitlog.CollectionDocument {
+	if len(changed) == 0 {
+		return nil
+	}
+	docs := make([]commitlog.CollectionDocument, len(changed))
+	for i := range changed {
+		docs[i] = commitlog.CollectionDocument{
+			ID:       changed[i].documentID,
+			Document: documents[i],
+		}
+	}
+	return docs
+}
+
 func replayCollectionInsertBatchByIDCommandWAL(db *backenddb.DB, env commitlog.CommandEnvelope) error {
 	payload, err := commitlog.DecodeCollectionInsertBatchByIDPayload(env.Payload)
 	if err != nil {

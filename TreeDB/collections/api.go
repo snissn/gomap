@@ -13586,6 +13586,10 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 	if templateResolver != nil {
 		plannerOptions.templateResolver = templateResolver
 	}
+	var templateV1CommandWALDocuments []commitlog.CollectionDocument
+	if normalizedDocumentFormat(plannerOptions.documentFormat) == DocumentFormatTemplateV1 {
+		templateV1CommandWALDocuments = collectionDocumentsFromBatchUpdateDocuments(changed, changedDocuments)
+	}
 	for i := range changed {
 		changed[i].document = preparedDocuments[i]
 		if len(runtimes) > 0 {
@@ -13652,6 +13656,10 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 			changed[i].changedIndexes = changedIndexes
 			changed[i].indexStateChanged = indexStateChanged
 		}
+	}
+	commandWALDocuments := collectionDocumentsFromPreparedBatchUpdates(changed)
+	if templateV1CommandWALDocuments != nil {
+		commandWALDocuments = templateV1CommandWALDocuments
 	}
 	if mode == updateBatchModeNoSecondaryUniqueIndexChanges && updateBatchChangesSecondaryUniqueIndex(runtimes, changed) {
 		_ = snap.Close()
@@ -13751,7 +13759,7 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 			bufferedReadGeneration:      bufferedRead.writeGeneration,
 			bufferedReadBlocked:         bufferedReadBlocked,
 			policies:                    policies,
-			commandWALDocuments:         collectionDocumentsFromPreparedBatchUpdates(changed),
+			commandWALDocuments:         commandWALDocuments,
 			directBufferedUpdate: &directBufferedUpdatePlan{
 				templateEntries:    templateEntries,
 				primaryEntries:     primaryEntries,
@@ -13952,7 +13960,7 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 		bufferedReadBlocked:         bufferedReadBlocked,
 		policies:                    policies,
 		deltaTables:                 deltaTables,
-		commandWALDocuments:         collectionDocumentsFromPreparedBatchUpdates(changed),
+		commandWALDocuments:         commandWALDocuments,
 		scratch:                     scratch,
 	}
 	scratchOwnedByPlan = true
