@@ -1,0 +1,34 @@
+{
+  "tracker": "https://github.com/snissn/gomap/issues/1529",
+  "milestone": "PR9 default command-WAL public raw KV cutover",
+  "branch": "codex/user-command-wal-pr9",
+  "base_branch": "codex/user-command-wal-pr8",
+  "implementation_commit": "0b18b47d2c85c4667348a3e1fd030a4bed8d13af",
+  "go_version": "go1.25.7",
+  "platform": "linux/amd64",
+  "command_support_matrix_version": "TreeDB/docs/spec/command-wal-support-matrix.json version 1",
+  "features": [
+    "public treedb.Open read-write command-WAL handles",
+    "public Set/Delete/Batch.Write raw KV writes routed to RawKVBatch typed command frames",
+    "public command-WAL mode proof through treedb.write_path.mode=command_wal_backend",
+    "reopen from persisted command_wal_v1 without explicit backend-only APIs"
+  ],
+  "passed_tests": [
+    "TestPublicCommandWALRawKVWritesUseTypedFrames",
+    "TestCommandWALSupportMatrix",
+    "TestCommandWALRawSetDeleteBatchReplaysThroughNormalExecutor"
+  ],
+  "local_validation_commands": [
+    "git diff --check",
+    "GOWORK=off go test ./TreeDB ./TreeDB/docs ./TreeDB/db -run 'TestPublicCommandWALRawKVWritesUseTypedFrames|TestCommandWALSupportMatrix|TestCommandWALRawSetDeleteBatchReplaysThroughNormalExecutor|^$' -count=1"
+  ],
+  "performance_gate": {
+    "required": true,
+    "status": "pending",
+    "rationale": "PR9 changes public raw KV write routing for command-WAL mode. A controlled microbenchmark/unified-bench mode proof must be added before tracker mergeable state."
+  },
+  "unsupported_modes": [
+    "cached memtable command-WAL writes remain disabled; public command-WAL writes use direct backend command-WAL mode to avoid the legacy cached redo journal",
+    "DeleteRange and Update use existing public fallbacks and are not newly broadened beyond raw KV Set/Delete/Batch.Write support in this slice"
+  ]
+}
