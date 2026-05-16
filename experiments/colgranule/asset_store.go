@@ -177,6 +177,11 @@ func (s *SegmentColumnAssetStore) ReadTo(ref ColumnAssetRef, dst []byte) ([]byte
 	if ref.FileID != s.fileID {
 		return nil, fmt.Errorf("colgranule: asset file id=%d want %d", ref.FileID, s.fileID)
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if ref.Offset > s.size || ref.Length > s.size-ref.Offset {
+		return nil, fmt.Errorf("colgranule: asset range offset=%d length=%d outside segment bytes=%d", ref.Offset, ref.Length, s.size)
+	}
 	if ref.Length > int64(int(ref.Length)) {
 		return nil, fmt.Errorf("colgranule: asset length=%d exceeds host int", ref.Length)
 	}

@@ -79,6 +79,22 @@ func TestTCS1ColumnPartAssetRoundTripsThroughSegmentStoreAfterReopen(t *testing.
 	}
 }
 
+func TestSegmentColumnAssetStoreRejectsOutOfRangeRefBeforeAllocation(t *testing.T) {
+	store, err := OpenSegmentColumnAssetStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("OpenSegmentColumnAssetStore: %v", err)
+	}
+	defer store.Close()
+	ref, err := store.Put(ColumnAssetKindTCS1PartImage, []byte("tiny"))
+	if err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	ref.Length = 1 << 62
+	if _, err := store.ReadTo(ref, nil); err == nil || !strings.Contains(err.Error(), "outside segment") {
+		t.Fatalf("ReadTo err=%v want outside segment", err)
+	}
+}
+
 func TestTCS1ColumnPartAssetRejectsCorruption(t *testing.T) {
 	_, image := testColumnPartImageFixture(t, false)
 	payload, _, err := EncodeTCS1ColumnPartImage(image)
