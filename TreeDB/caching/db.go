@@ -2838,6 +2838,26 @@ type backendBatchCommandWALPublisher interface {
 	SetCommandWALPublish(appliedLSN uint64, covered []backenddb.CommandWALLSNRange) error
 }
 
+type checkpointCommandWALPublish struct {
+	appliedLSN uint64
+	ranges     []backenddb.CommandWALLSNRange
+	consumed   bool
+}
+
+func (p *checkpointCommandWALPublish) attach(backendBatch batch.Interface) (bool, error) {
+	if p == nil || p.consumed || p.appliedLSN == 0 {
+		return false, nil
+	}
+	publisher, ok := backendBatch.(backendBatchCommandWALPublisher)
+	if !ok {
+		return false, errors.New("cachingdb: backend batch cannot publish command wal applied lsn")
+	}
+	if err := publisher.SetCommandWALPublish(p.appliedLSN, p.ranges); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 func reserveBackendBatchOps(backendBatch batch.Interface, n int) {
 	if backendBatch == nil || n <= 0 {
 		return
@@ -6803,6 +6823,8 @@ type DB struct {
 	checkpointTotalNs                                            atomic.Uint64
 	checkpointMaxNs                                              atomic.Uint64
 	checkpointNoopSkips                                          atomic.Uint64
+	commandWALCheckpointPublishPiggybacked                       atomic.Uint64
+	commandWALCheckpointPublishSeparate                          atomic.Uint64
 	checkpointFlushMuWaitNs                                      atomic.Uint64
 	checkpointFlushMuWaitMaxNs                                   atomic.Uint64
 	checkpointAutoVacuumRuns                                     atomic.Uint64
@@ -19434,18 +19456,36 @@ func (db *DB) Checkpoint() error {
 		return err
 	}
 
+	var (
+		commandWALAppliedLSN       uint64
+		commandWALRanges           []backenddb.CommandWALLSNRange
+		commandWALPublishPiggyback *checkpointCommandWALPublish
+		commandWALPublishPrepared  bool
+	)
+	if db.commandWALCheckpointPublish != nil && db.canPiggybackCommandWALCheckpointPublish(true) {
+		var err error
+		commandWALAppliedLSN, commandWALRanges, err = db.commandWALCheckpointPublish(!db.relaxedSync)
+		if err != nil {
+			return err
+		}
+		commandWALPublishPrepared = true
+		if commandWALAppliedLSN != 0 && len(commandWALRanges) == 1 {
+			commandWALPublishPiggyback = &checkpointCommandWALPublish{
+				appliedLSN: commandWALAppliedLSN,
+				ranges:     commandWALRanges,
+			}
+		}
+	}
+
 	// Flush all queued memtables with backend sync.
 	bgErrBefore := db.backgroundError()
-	db.flushAllLocked(true)
+	db.flushAllLocked(true, commandWALPublishPiggyback)
 	if bgErr := db.backgroundError(); bgErr != nil && bgErrBefore == nil {
 		return bgErr
 	}
 
-	var (
-		commandWALAppliedLSN uint64
-		commandWALRanges     []backenddb.CommandWALLSNRange
-	)
-	if db.commandWALCheckpointPublish != nil {
+	commandWALPublishCovered := commandWALPublishPiggyback != nil && commandWALPublishPiggyback.consumed
+	if !commandWALPublishCovered && !commandWALPublishPrepared && db.commandWALCheckpointPublish != nil {
 		var err error
 		commandWALAppliedLSN, commandWALRanges, err = db.commandWALCheckpointPublish(!db.relaxedSync)
 		if err != nil {
@@ -19473,8 +19513,8 @@ func (db *DB) Checkpoint() error {
 	}
 	// New logic: perform sync write only if not relaxedSync
 	var commitErr error
-	if nonEmptyBytes > 0 || commandWALAppliedLSN != 0 {
-		if commandWALAppliedLSN != 0 {
+	if nonEmptyBytes > 0 || (commandWALAppliedLSN != 0 && !commandWALPublishCovered) {
+		if commandWALAppliedLSN != 0 && !commandWALPublishCovered {
 			// This backend batch is also the checkpoint durability boundary for any
 			// non-command WAL segments observed above, so command-LSN publication and
 			// ordinary cached checkpoint proof are not mutually exclusive.
@@ -19572,7 +19612,30 @@ func (db *DB) publishCommandWALCheckpointApplied(appliedLSN uint64, ranges []bac
 	if err == nil {
 		err = cerr
 	}
+	if err == nil {
+		db.commandWALCheckpointPublishSeparate.Add(1)
+	}
 	return true, err
+}
+
+func (db *DB) canPiggybackCommandWALCheckpointPublish(sync bool) bool {
+	if db == nil || db.commandWALCheckpointPublish == nil {
+		return false
+	}
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+	if len(db.queue) != 1 {
+		return false
+	}
+	mem := db.queue[0]
+	if mem == nil {
+		return false
+	}
+	memLen := mem.Len()
+	if memLen <= 0 {
+		return false
+	}
+	return memLen <= db.flushBackendEntriesCap(memLen, sync)
 }
 
 func (db *DB) waitForStop() {
@@ -22079,7 +22142,11 @@ func (db *DB) flushAll(reqSync bool) {
 	db.flushAllLocked(reqSync)
 }
 
-func (db *DB) flushAllLocked(reqSync bool) {
+func (db *DB) flushAllLocked(reqSync bool, commandPublishOpt ...*checkpointCommandWALPublish) {
+	var commandPublish *checkpointCommandWALPublish
+	if len(commandPublishOpt) > 0 {
+		commandPublish = commandPublishOpt[0]
+	}
 	origSync := reqSync
 	syncFlag := db.flushSyncRequested(reqSync)
 	if !origSync && syncFlag && db.disableJournal && !db.relaxedSync {
@@ -22127,6 +22194,9 @@ func (db *DB) flushAllLocked(reqSync bool) {
 	if activeCount == 0 {
 		return
 	}
+	if activeCount != 1 {
+		commandPublish = nil
+	}
 	var wg sync.WaitGroup
 	wg.Add(activeCount)
 	for i := 0; i < lanes; i++ {
@@ -22139,7 +22209,7 @@ func (db *DB) flushAllLocked(reqSync bool) {
 				db.flushLaneMu[laneID].Lock()
 				defer db.flushLaneMu[laneID].Unlock()
 			}
-			for db.flushLaneOnce(syncFlag, laneID) {
+			for db.flushLaneOnce(syncFlag, laneID, commandPublish) {
 			}
 			wg.Done()
 		}()
@@ -22343,7 +22413,11 @@ func (db *DB) removeQueuedUnitsLocked(removeIDs map[uint64]struct{}, units []flu
 	db.publishMemtablesLocked()
 }
 
-func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
+func (db *DB) flushLaneOnce(sync bool, laneID int, commandPublishOpt ...*checkpointCommandWALPublish) bool {
+	var commandPublish *checkpointCommandWALPublish
+	if len(commandPublishOpt) > 0 {
+		commandPublish = commandPublishOpt[0]
+	}
 	db.mu.Lock()
 	queueLen := len(db.queue)
 	if queueLen == 0 {
@@ -22683,7 +22757,15 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 		}
 
 		var err error
+		commandPublishAttached := false
 		if backendPendingOps > 0 {
+			var attachErr error
+			commandPublishAttached, attachErr = commandPublish.attach(backendBatch)
+			if attachErr != nil {
+				db.reportError(attachErr)
+				_ = backendBatch.Close()
+				return false
+			}
 			db.backendWriteBatchesTotal.Add(1)
 			if sync {
 				err = backendBatch.WriteSync()
@@ -22691,6 +22773,13 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 				err = backendBatch.Write()
 			}
 		} else if sync && emittedChunk {
+			var attachErr error
+			commandPublishAttached, attachErr = commandPublish.attach(backendBatch)
+			if attachErr != nil {
+				db.reportError(attachErr)
+				_ = backendBatch.Close()
+				return false
+			}
 			// If we emitted intermediate chunks and happened to land exactly on a
 			// chunk boundary, force a single durability boundary at the end.
 			db.backendWriteBatchesTotal.Add(1)
@@ -22703,6 +22792,10 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 		if err != nil {
 			db.reportError(err)
 			return false
+		}
+		if commandPublishAttached {
+			commandPublish.consumed = true
+			db.commandWALCheckpointPublishPiggybacked.Add(1)
 		}
 
 		db.mu.Lock()
@@ -22972,7 +23065,15 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 	}
 
 	var err error
+	commandPublishAttached := false
 	if backendPendingOps > 0 {
+		var attachErr error
+		commandPublishAttached, attachErr = commandPublish.attach(backendBatch)
+		if attachErr != nil {
+			db.reportError(attachErr)
+			_ = backendBatch.Close()
+			return false
+		}
 		db.backendWriteBatchesTotal.Add(1)
 		if sync {
 			err = backendBatch.WriteSync()
@@ -22986,6 +23087,10 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 		if err != nil {
 			db.reportError(err)
 			return false
+		}
+		if commandPublishAttached {
+			commandPublish.consumed = true
+			db.commandWALCheckpointPublishPiggybacked.Add(1)
 		}
 	} else {
 		if err := backendBatch.Close(); err != nil {
@@ -24568,6 +24673,8 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.checkpoint.flushmu_wait_total_ms"] = fmt.Sprintf("%.3f", float64(db.checkpointFlushMuWaitNs.Load())/float64(time.Millisecond))
 	stats["treedb.cache.checkpoint.flushmu_wait_max_ms"] = fmt.Sprintf("%.3f", float64(db.checkpointFlushMuWaitMaxNs.Load())/float64(time.Millisecond))
 	stats["treedb.cache.checkpoint.noop_skips"] = fmt.Sprintf("%d", db.checkpointNoopSkips.Load())
+	stats["treedb.cache.command_wal.checkpoint_publish.piggybacked"] = fmt.Sprintf("%d", db.commandWALCheckpointPublishPiggybacked.Load())
+	stats["treedb.cache.command_wal.checkpoint_publish.separate"] = fmt.Sprintf("%d", db.commandWALCheckpointPublishSeparate.Load())
 	stats["treedb.cache.checkpoint.auto_vacuum_runs"] = fmt.Sprintf("%d", db.checkpointAutoVacuumRuns.Load())
 	stats["treedb.cache.checkpoint.auto_vacuum_last_pages"] = fmt.Sprintf("%d", db.checkpointAutoVacuumLastPages.Load())
 	stats["treedb.cache.checkpoint.auto_vacuum_last_internal_fill_p50_ppm"] = fmt.Sprintf("%d", db.checkpointAutoVacuumLastInternalP50.Load())

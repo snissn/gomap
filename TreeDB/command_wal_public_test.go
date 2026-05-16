@@ -348,6 +348,36 @@ func TestPublicCommandWALCheckpointRetainsCommandJournalSegment(t *testing.T) {
 	}
 }
 
+func TestPublicCommandWALCheckpointPiggybacksAppliedLSN(t *testing.T) {
+	db, err := Open(Options{
+		Dir:               t.TempDir(),
+		Durability:        DurabilityWALOnRelaxed,
+		CommandWAL:        true,
+		DisableSideStores: true,
+	})
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	if err := db.Set([]byte("k"), []byte("v")); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	if got := db.backend.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("AppliedCommandLSN=%d, want 1", got)
+	}
+	stats := db.cached.Stats()
+	if got := stats["treedb.cache.command_wal.checkpoint_publish.piggybacked"]; got != "1" {
+		t.Fatalf("piggybacked checkpoint publishes=%q, want 1", got)
+	}
+	if got := stats["treedb.cache.command_wal.checkpoint_publish.separate"]; got != "0" {
+		t.Fatalf("separate checkpoint publishes=%q, want 0", got)
+	}
+}
+
 func TestPublicCommandWALNoopCheckpointRunsPublishHook(t *testing.T) {
 	db, err := Open(Options{
 		Dir:               t.TempDir(),
