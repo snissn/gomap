@@ -2,14 +2,30 @@ package collections
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
 	"strconv"
 	"testing"
+	"unsafe"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
+)
+
+type vectorIndexNativeRootRecordFormat uint8
+
+const (
+	vectorIndexNativeRootRecordFormatJSON vectorIndexNativeRootRecordFormat = iota
+	vectorIndexNativeRootRecordFormatTemplateV1Raw
+)
+
+const (
+	vectorIndexTemplateV1NodeTemplateID uint64 = 1
+	vectorIndexTemplateV1EdgeTemplateID uint64 = 2
 )
 
 type vectorIndexNativeRootBackedGraphReader struct {
@@ -18,6 +34,7 @@ type vectorIndexNativeRootBackedGraphReader struct {
 	rootName  string
 	meta      vectorIndexPersistMeta
 	nodeCount int
+	format    vectorIndexNativeRootRecordFormat
 
 	nodeBuf []byte
 	edgeBuf []byte
@@ -55,6 +72,53 @@ func TestVectorIndexNativeRootBackedGraphSearchMatchesLoadedGraph(t *testing.T) 
 	rootResults, err := reader.searchGraphOnly(query, topK, ef)
 	if err != nil {
 		t.Fatalf("native root-backed graph search: %v", err)
+	}
+	if len(rootResults) != len(loadedResults) {
+		t.Fatalf("result count=%d want %d", len(rootResults), len(loadedResults))
+	}
+	for i := range loadedResults {
+		if string(rootResults[i].DocumentID) != string(loadedResults[i].DocumentID) {
+			t.Fatalf("result %d document=%q want %q", i, rootResults[i].DocumentID, loadedResults[i].DocumentID)
+		}
+		if rootResults[i].Distance != loadedResults[i].Distance {
+			t.Fatalf("result %d distance=%g want %g", i, rootResults[i].Distance, loadedResults[i].Distance)
+		}
+	}
+}
+
+func TestVectorIndexNativeRootTemplateV1GraphSearchMatchesLoadedGraph(t *testing.T) {
+	const (
+		docs = 512
+		dims = 32
+		topK = 10
+		ef   = 64
+	)
+	d, col, status, setupStats := openTemplateV1NativeVectorBenchmarkIndexRoot(t, docs, dims, "embedding_graph_template_v1_match")
+	defer func() { _ = d.Close() }()
+	reader := newVectorIndexNativeRootTemplateV1GraphReader(t, d, col, "embedding_graph_template_v1_match", setupStats.Nodes, status.Meta)
+	defer func() { _ = reader.Close() }()
+	loaded, _, err := col.LoadVectorIndexSnapshot(VectorIndexOptions{
+		Name:       "embedding_graph_template_v1_match",
+		Field:      "embedding",
+		Metric:     VectorMetricCosine,
+		Dimensions: dims,
+		M:          16,
+	})
+	if err == nil && loaded != nil {
+		t.Fatal("template-v1 raw benchmark root should not load through JSON native snapshot loader")
+	}
+
+	referenceD, referenceCol, loadedReference, _ := openLoadedNativeVectorBenchmarkIndex(t, docs, dims, "embedding_graph_template_v1_match_reference")
+	defer func() { _ = referenceD.Close() }()
+	_ = referenceCol
+	query := vectorBenchmarkEmbedding(docs/3, dims)
+	loadedResults, err := loadedReference.searchGraphOnly(query, topK, ef)
+	if err != nil {
+		t.Fatalf("loaded graph search: %v", err)
+	}
+	rootResults, err := reader.searchGraphOnly(query, topK, ef)
+	if err != nil {
+		t.Fatalf("template-v1 native root-backed graph search: %v", err)
 	}
 	if len(rootResults) != len(loadedResults) {
 		t.Fatalf("result count=%d want %d", len(rootResults), len(loadedResults))
@@ -110,6 +174,202 @@ func openNativeVectorBenchmarkIndexRoot(tb testing.TB, docs, dims int, name stri
 	return d, col, saveStatus, stats
 }
 
+type vectorIndexTemplateV1BenchmarkStatus struct {
+	VectorIndexLoadStatus
+	Meta vectorIndexPersistMeta
+}
+
+func openTemplateV1NativeVectorBenchmarkIndexRoot(tb testing.TB, docs, dims int, name string) (*backenddb.DB, *Collection, vectorIndexTemplateV1BenchmarkStatus, VectorIndexStats) {
+	tb.Helper()
+	dir := tb.TempDir()
+	def := VectorIndexDefinition{
+		Name:       name,
+		Field:      "embedding",
+		Metric:     VectorMetricCosine,
+		Dimensions: dims,
+		M:          16,
+	}
+	d, col := openVectorBenchmarkCollectionWithVectorIndex(tb, dir, docs, dims, def)
+	index, err := col.BuildVectorIndex(vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		_ = d.Close()
+		tb.Fatalf("build native vector index: %v", err)
+	}
+	stats := index.Stats()
+	saveStatus, err := saveTemplateV1NativeVectorBenchmarkRoot(index)
+	if err != nil {
+		_ = d.Close()
+		tb.Fatalf("save template-v1 native vector index root: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		tb.Fatalf("close setup db: %v", err)
+	}
+	d, err = backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		tb.Fatalf("reopen db: %v", err)
+	}
+	col, err = NewCollectionManager(d).OpenCollection("docs")
+	if err != nil {
+		_ = d.Close()
+		tb.Fatalf("open collection: %v", err)
+	}
+	return d, col, saveStatus, stats
+}
+
+func saveTemplateV1NativeVectorBenchmarkRoot(idx *VectorIndex) (vectorIndexTemplateV1BenchmarkStatus, error) {
+	status := vectorIndexTemplateV1BenchmarkStatus{}
+	c := idx.collection
+	pin := c.db.AcquireSnapshot()
+	if pin == nil {
+		return status, backenddb.ErrClosed
+	}
+	defer func() { _ = pin.Close() }()
+	catalog, err := loadCollectionCatalog(pin, c.meta.Name)
+	if err != nil {
+		return status, err
+	}
+	rootName := collectionVectorIndexRootName(catalog.meta.Name, idx.name)
+	baseRootIDs := map[string]uint64{rootName: catalog.rootID(rootName)}
+	baseSystemRoot := snapshotSystemRoot(pin)
+	baseCommitSeq := snapshotCommitSeq(pin)
+	policy, err := collectionRootStoragePolicyForDB(c.db, catalog.meta, rootName)
+	if err != nil {
+		return status, err
+	}
+	snapshot, snapshotSeq := idx.persistSnapshot()
+	table, bytesDisk, err := buildVectorIndexTemplateV1RawSnapshotTable(snapshot)
+	if err != nil {
+		return status, err
+	}
+	table.Freeze()
+	publishTable, pointerized, err := pointerizeCollectionRunTableValues(c.db, table)
+	if err != nil {
+		resetCollectionRunTable(table)
+		return status, err
+	}
+	if pointerized {
+		defer resetCollectionRunTable(publishTable)
+	}
+	iter := publishTable.NewIterator(nil, nil)
+	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder([]backenddb.OrderedRootDeltaPublishInput{{
+		BaseRoot:      0,
+		Iter:          iter,
+		StoragePolicy: policy,
+	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		return c.buildRootDescriptorSystemDeltaIteratorForMeta(catalog.meta, baseCommitSeq, baseSystemRoot, []string{rootName}, baseRootIDs, rootIDs)
+	})
+	_ = iter.Close()
+	resetCollectionRunTable(table)
+	if err != nil {
+		return status, err
+	}
+	if len(rootIDs) != 1 {
+		return status, unexpectedOrderedRootCountError(catalog.meta.Name, 1, len(rootIDs))
+	}
+	status.Loaded = true
+	status.RootName = rootName
+	status.RootID = rootIDs[0]
+	status.Epoch = rootIDs[0]
+	status.BytesDisk = bytesDisk
+	status.Meta = snapshot.Meta
+	idx.setNativePersistent(true)
+	idx.recordPersistedSnapshot(status.Epoch, bytesDisk, snapshotSeq)
+	nextCatalog := cloneCatalogWithRootUpdates(catalog, catalog.meta, []string{rootName}, rootIDs)
+	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
+	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
+	return status, nil
+}
+
+func buildVectorIndexTemplateV1RawSnapshotTable(snapshot vectorIndexPersistSnapshot) (memtable.Table, int64, error) {
+	entryCount := 1 + len(snapshot.Nodes) + len(snapshot.Edges) + len(snapshot.Tombstones.NodeIDs) + len(snapshot.DocMap.Current)
+	table := newCollectionRunTable(entryCount)
+	var bytesDisk int64
+	addRaw := func(key []byte, data []byte) {
+		bytesDisk += int64(len(data))
+		table.SetSteal(key, data)
+	}
+	meta, err := json.Marshal(snapshot.Meta)
+	if err != nil {
+		resetCollectionRunTable(table)
+		return nil, 0, err
+	}
+	meta = append(meta, '\n')
+	addRaw([]byte(vectorIndexNativeKeyMeta), meta)
+	for i := range snapshot.Nodes {
+		addRaw(vectorIndexNativeNodeKey(i), appendVectorIndexTemplateV1RawNode(nil, snapshot.Nodes[i]))
+	}
+	for i := range snapshot.Edges {
+		edge := snapshot.Edges[i]
+		addRaw(vectorIndexNativeEdgeKey(edge.NodeID, edge.Layer), appendVectorIndexTemplateV1RawEdges(nil, edge))
+	}
+	for _, nodeID := range snapshot.Tombstones.NodeIDs {
+		addRaw(vectorIndexNativeTombstoneKey(nodeID), binary.AppendUvarint(nil, uint64(nodeID)))
+	}
+	for docID, nodeID := range snapshot.DocMap.Current {
+		addRaw(vectorIndexNativeDocKey(docID), binary.AppendUvarint(nil, uint64(nodeID)))
+	}
+	return table, bytesDisk, nil
+}
+
+func appendVectorIndexTemplateV1RawNode(dst []byte, node vectorIndexPersistNode) []byte {
+	dst = append(dst, templateV1StoredMagic...)
+	dst = appendTemplateV1Uvarint(dst, vectorIndexTemplateV1NodeTemplateID)
+	if node.Deleted {
+		dst = append(dst, templateV1KindTrue)
+	} else {
+		dst = append(dst, templateV1KindFalse)
+	}
+	dst = appendTemplateV1RawBytes(dst, []byte(node.DocumentID))
+	dst = appendTemplateV1RawFloat64(dst, float64(node.Level))
+	dst = appendTemplateV1RawFloat64(dst, vectorNormSquared(node.Vector))
+	dst = appendTemplateV1RawFloat32Slice(dst, node.Vector)
+	return dst
+}
+
+func appendVectorIndexTemplateV1RawEdges(dst []byte, edge vectorIndexPersistEdges) []byte {
+	dst = append(dst, templateV1StoredMagic...)
+	dst = appendTemplateV1Uvarint(dst, vectorIndexTemplateV1EdgeTemplateID)
+	dst = appendTemplateV1RawFloat64(dst, float64(edge.Layer))
+	dst = appendTemplateV1RawIntSlice(dst, edge.Neighbor)
+	dst = appendTemplateV1RawFloat64(dst, float64(edge.NodeID))
+	return dst
+}
+
+func appendTemplateV1RawFloat64(dst []byte, value float64) []byte {
+	dst = append(dst, templateV1KindFloat64)
+	var scratch [8]byte
+	binary.BigEndian.PutUint64(scratch[:], math.Float64bits(value))
+	return append(dst, scratch[:]...)
+}
+
+func appendTemplateV1RawBytes(dst []byte, raw []byte) []byte {
+	dst = append(dst, templateV1KindString)
+	dst = appendTemplateV1Uvarint(dst, uint64(len(raw)))
+	return append(dst, raw...)
+}
+
+func appendTemplateV1RawFloat32Slice(dst []byte, values []float32) []byte {
+	dst = append(dst, templateV1KindString)
+	dst = appendTemplateV1Uvarint(dst, uint64(len(values)*4))
+	var scratch [4]byte
+	for _, value := range values {
+		binary.LittleEndian.PutUint32(scratch[:], math.Float32bits(value))
+		dst = append(dst, scratch[:]...)
+	}
+	return dst
+}
+
+func appendTemplateV1RawIntSlice(dst []byte, values []int) []byte {
+	dst = append(dst, templateV1KindString)
+	dst = appendTemplateV1Uvarint(dst, uint64(len(values)*4))
+	var scratch [4]byte
+	for _, value := range values {
+		binary.LittleEndian.PutUint32(scratch[:], uint32(value))
+		dst = append(dst, scratch[:]...)
+	}
+	return dst
+}
+
 func newVectorIndexNativeRootBackedGraphReader(tb testing.TB, d *backenddb.DB, col *Collection, indexName string, nodeCount int) *vectorIndexNativeRootBackedGraphReader {
 	tb.Helper()
 	snap := d.AcquireSnapshot()
@@ -146,6 +406,32 @@ func newVectorIndexNativeRootBackedGraphReader(tb testing.TB, d *backenddb.DB, c
 		rootName:  rootName,
 		meta:      meta,
 		nodeCount: nodeCount,
+		format:    vectorIndexNativeRootRecordFormatJSON,
+	}
+}
+
+func newVectorIndexNativeRootTemplateV1GraphReader(tb testing.TB, d *backenddb.DB, col *Collection, indexName string, nodeCount int, meta vectorIndexPersistMeta) *vectorIndexNativeRootBackedGraphReader {
+	tb.Helper()
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		tb.Fatal("acquire snapshot: nil")
+	}
+	catalog, err := loadCollectionCatalog(snap, col.meta.Name)
+	if err != nil {
+		_ = snap.Close()
+		tb.Fatalf("load collection catalog: %v", err)
+	}
+	if catalog == nil {
+		_ = snap.Close()
+		tb.Fatal("load collection catalog: missing catalog")
+	}
+	return &vectorIndexNativeRootBackedGraphReader{
+		snap:      snap,
+		catalog:   catalog,
+		rootName:  collectionVectorIndexRootName(col.meta.Name, indexName),
+		meta:      meta,
+		nodeCount: nodeCount,
+		format:    vectorIndexNativeRootRecordFormatTemplateV1Raw,
 	}
 }
 
@@ -376,6 +662,9 @@ func (r *vectorIndexNativeRootBackedGraphReader) readDistanceNode(nodeID int) (v
 	if err != nil || !ok {
 		return vectorIndexNode{}, ok, err
 	}
+	if r.format == vectorIndexNativeRootRecordFormatTemplateV1Raw {
+		return parseVectorIndexTemplateV1RawDistanceNode(data)
+	}
 	vector, normSquared, vectorOK, err := parseVectorIndexNativeRootFloat32Vector(data, r.vector[:0])
 	if err != nil {
 		return vectorIndexNode{}, false, err
@@ -419,6 +708,9 @@ func (r *vectorIndexNativeRootBackedGraphReader) readNodeDocumentID(nodeID int) 
 	if err != nil || !ok {
 		return nil, false, ok, err
 	}
+	if r.format == vectorIndexNativeRootRecordFormatTemplateV1Raw {
+		return parseVectorIndexTemplateV1RawNodeDocumentID(data)
+	}
 	docID, docOK := parseVectorIndexNativeRootJSONStringField(data, "document_id")
 	if docOK {
 		return docID, vectorIndexNativeRootJSONBoolTrue(data, "deleted"), true, nil
@@ -440,6 +732,14 @@ func (r *vectorIndexNativeRootBackedGraphReader) readNeighbors(nodeID, layer int
 	r.edgeBuf = data
 	if err != nil || !ok {
 		return nil, ok, err
+	}
+	if r.format == vectorIndexNativeRootRecordFormatTemplateV1Raw {
+		neighbors, err := parseVectorIndexTemplateV1RawNeighbors(data, r.edges[:0])
+		if err != nil {
+			return nil, false, err
+		}
+		r.edges = neighbors
+		return r.edges, true, nil
 	}
 	neighbors, neighborsOK, err := parseVectorIndexNativeRootIntArrayField(data, "neighbors", r.edges[:0])
 	if err != nil {
@@ -464,6 +764,13 @@ func (r *vectorIndexNativeRootBackedGraphReader) isCurrentNode(nodeID int, docID
 	r.docBuf = data
 	if err != nil || !ok {
 		return false, err
+	}
+	if r.format == vectorIndexNativeRootRecordFormatTemplateV1Raw {
+		currentNodeID, err := parseVectorIndexNativeRootBinaryUint64(data)
+		if err != nil {
+			return false, err
+		}
+		return currentNodeID == nodeID, nil
 	}
 	currentNodeID, err := parseVectorIndexNativeRootJSONInt(data)
 	if err != nil {
@@ -701,4 +1008,165 @@ func vectorIndexNativeRootSkipSpaces(data []byte, i int) int {
 
 func isVectorIndexNativeRootSpace(c byte) bool {
 	return c == ' ' || c == '\n' || c == '\r' || c == '\t'
+}
+
+func parseVectorIndexTemplateV1RawDistanceNode(data []byte) (vectorIndexNode, bool, error) {
+	pos, err := parseVectorIndexTemplateV1RawHeader(data, vectorIndexTemplateV1NodeTemplateID)
+	if err != nil {
+		return vectorIndexNode{}, false, err
+	}
+	deleted, pos, err := readTemplateV1RawBool(data, pos)
+	if err != nil {
+		return vectorIndexNode{}, false, err
+	}
+	_, pos, err = readTemplateV1RawBytes(data, pos)
+	if err != nil {
+		return vectorIndexNode{}, false, err
+	}
+	_, pos, err = readTemplateV1RawFloat64(data, pos)
+	if err != nil {
+		return vectorIndexNode{}, false, err
+	}
+	normSquared, pos, err := readTemplateV1RawFloat64(data, pos)
+	if err != nil {
+		return vectorIndexNode{}, false, err
+	}
+	rawVector, pos, err := readTemplateV1RawBytes(data, pos)
+	if err != nil {
+		return vectorIndexNode{}, false, err
+	}
+	if pos != len(data) {
+		return vectorIndexNode{}, false, errors.New("collections: trailing template-v1 raw node bytes")
+	}
+	vector, err := unsafeTemplateV1RawFloat32Slice(rawVector)
+	if err != nil {
+		return vectorIndexNode{}, false, err
+	}
+	node := vectorIndexNode{
+		vector:      vector,
+		normSquared: normSquared,
+		deleted:     deleted,
+	}
+	if normSquared > 0 {
+		node.cachedInvNorm = float32(1 / math.Sqrt(normSquared))
+	}
+	return node, true, nil
+}
+
+func parseVectorIndexTemplateV1RawNodeDocumentID(data []byte) ([]byte, bool, bool, error) {
+	pos, err := parseVectorIndexTemplateV1RawHeader(data, vectorIndexTemplateV1NodeTemplateID)
+	if err != nil {
+		return nil, false, false, err
+	}
+	deleted, pos, err := readTemplateV1RawBool(data, pos)
+	if err != nil {
+		return nil, false, false, err
+	}
+	docID, _, err := readTemplateV1RawBytes(data, pos)
+	if err != nil {
+		return nil, false, false, err
+	}
+	return docID, deleted, true, nil
+}
+
+func parseVectorIndexTemplateV1RawNeighbors(data []byte, dst []int) ([]int, error) {
+	pos, err := parseVectorIndexTemplateV1RawHeader(data, vectorIndexTemplateV1EdgeTemplateID)
+	if err != nil {
+		return dst, err
+	}
+	_, pos, err = readTemplateV1RawFloat64(data, pos)
+	if err != nil {
+		return dst, err
+	}
+	rawNeighbors, _, err := readTemplateV1RawBytes(data, pos)
+	if err != nil {
+		return dst, err
+	}
+	if len(rawNeighbors)%4 != 0 {
+		return dst, errors.New("collections: malformed template-v1 raw neighbor bytes")
+	}
+	dst = dst[:0]
+	for i := 0; i < len(rawNeighbors); i += 4 {
+		dst = append(dst, int(binary.LittleEndian.Uint32(rawNeighbors[i:])))
+	}
+	return dst, nil
+}
+
+func parseVectorIndexNativeRootBinaryUint64(data []byte) (int, error) {
+	value, n := binary.Uvarint(data)
+	if n <= 0 || n != len(data) {
+		return 0, errors.New("collections: invalid native vector binary integer")
+	}
+	const maxIntValue = int(^uint(0) >> 1)
+	if value > uint64(maxIntValue) {
+		return 0, errors.New("collections: native vector binary integer overflows int")
+	}
+	return int(value), nil
+}
+
+func parseVectorIndexTemplateV1RawHeader(data []byte, wantID uint64) (int, error) {
+	pos := 0
+	if !consumeMagic(data, &pos, templateV1StoredMagic) {
+		return 0, errors.New("collections: malformed template-v1 raw stored document")
+	}
+	id, err := readTemplateV1TemplateID(data, &pos)
+	if err != nil {
+		return 0, fmt.Errorf("collections: malformed template-v1 raw template id: %w", err)
+	}
+	if id != wantID {
+		return 0, fmt.Errorf("collections: template-v1 raw template id=%d want %d", id, wantID)
+	}
+	return pos, nil
+}
+
+func readTemplateV1RawBool(raw []byte, pos int) (bool, int, error) {
+	if pos >= len(raw) {
+		return false, pos, errors.New("collections: malformed template-v1 raw bool")
+	}
+	switch raw[pos] {
+	case templateV1KindFalse:
+		return false, pos + 1, nil
+	case templateV1KindTrue:
+		return true, pos + 1, nil
+	default:
+		return false, pos, errors.New("collections: malformed template-v1 raw bool")
+	}
+}
+
+func readTemplateV1RawFloat64(raw []byte, pos int) (float64, int, error) {
+	if pos >= len(raw) || raw[pos] != templateV1KindFloat64 {
+		return 0, pos, errors.New("collections: malformed template-v1 raw float64")
+	}
+	pos++
+	if len(raw)-pos < 8 {
+		return 0, pos, errors.New("collections: malformed template-v1 raw float64")
+	}
+	value := math.Float64frombits(binary.BigEndian.Uint64(raw[pos:]))
+	return value, pos + 8, nil
+}
+
+func readTemplateV1RawBytes(raw []byte, pos int) ([]byte, int, error) {
+	if pos >= len(raw) || raw[pos] != templateV1KindString {
+		return nil, pos, errors.New("collections: malformed template-v1 raw bytes")
+	}
+	pos++
+	n, err := readTemplateV1Uvarint(raw, &pos)
+	if err != nil {
+		return nil, pos, err
+	}
+	if n > uint64(len(raw)-pos) {
+		return nil, pos, errors.New("collections: malformed template-v1 raw bytes")
+	}
+	end := pos + int(n)
+	return raw[pos:end], end, nil
+}
+
+func unsafeTemplateV1RawFloat32Slice(raw []byte) ([]float32, error) {
+	if len(raw)%4 != 0 {
+		return nil, errors.New("collections: malformed template-v1 raw float32 bytes")
+	}
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	return unsafe.Slice((*float32)(unsafe.Pointer(&raw[0])), len(raw)/4), nil
 }
