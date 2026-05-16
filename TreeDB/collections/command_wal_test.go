@@ -921,9 +921,12 @@ func TestCollectionCommandWALUpdateByIDPreflightReplansStaleIndexedPlan(t *testi
 	}()
 	go func() {
 		_, _, err := colB.Update([]byte("u2"), func([]byte) ([]byte, bool, error) {
-			callsB.Add(1)
+			call := callsB.Add(1)
 			readyB <- struct{}{}
 			<-releaseB
+			if call == 1 {
+				return []byte(`{"name":"Grace","city":"bos"}`), true, nil
+			}
 			return []byte(`{"name":"Grace","city":"lax"}`), true, nil
 		})
 		doneB <- err
@@ -950,6 +953,30 @@ func TestCollectionCommandWALUpdateByIDPreflightReplansStaleIndexedPlan(t *testi
 	}
 	if got := callsA.Load(); got != 1 {
 		t.Fatalf("update A callbacks=%d, want 1", got)
+	}
+	frames := collectionCommandWALFrames(t, dir)
+	var foundRetryPayload bool
+	for _, frame := range frames {
+		if frame.Kind != commitlog.CommandKindCollectionUpdateBatchByID {
+			continue
+		}
+		payload, err := commitlog.DecodeCollectionUpdateBatchByIDPayload(frame.Payload)
+		if err != nil {
+			t.Fatalf("DecodeCollectionUpdateBatchByIDPayload: %v", err)
+		}
+		for _, doc := range payload.Documents {
+			if bytes.Equal(doc.ID, []byte("u2")) {
+				if bytes.Contains(doc.Document, []byte(`"city":"bos"`)) {
+					t.Fatalf("stale retry command WAL payload recorded first callback result: %s", doc.Document)
+				}
+				if bytes.Contains(doc.Document, []byte(`"city":"lax"`)) {
+					foundRetryPayload = true
+				}
+			}
+		}
+	}
+	if !foundRetryPayload {
+		t.Fatalf("command WAL frames did not record retry result for u2: %+v", frames)
 	}
 }
 
