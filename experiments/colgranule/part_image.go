@@ -354,7 +354,11 @@ func (b *columnPartImageBuilder) addDescriptorSection() error {
 		}
 		enc.str(column.Name)
 		enc.u16(uint16(columnTypeCode(column.Type)))
-		enc.u32(partColumn.Definition.Cardinality)
+		cardinality, err := imageColumnCardinalityForDescriptor(column, partColumn)
+		if err != nil {
+			return err
+		}
+		enc.u32(cardinality)
 		enc.u32(uint32(len(column.Blocks)))
 		for i, block := range column.Blocks {
 			if i >= len(partColumn.Blocks) {
@@ -386,6 +390,32 @@ func (b *columnPartImageBuilder) addDescriptorSection() error {
 		Blocks:   countColumnBlocks(desc),
 	}, enc.bytes())
 	return nil
+}
+
+func imageColumnCardinalityForDescriptor(column ColumnPartColumnDescriptor, partColumn ColumnPartColumn) (uint32, error) {
+	cardinality := partColumn.Definition.Cardinality
+	if column.Type != ColumnTypeLowCardinalityCode {
+		return cardinality, nil
+	}
+	for i, block := range partColumn.Blocks {
+		if !block.Granule.HasMinMax {
+			continue
+		}
+		if block.Granule.Min < 0 || block.Granule.Max < 0 {
+			return 0, fmt.Errorf("colgranule: descriptor column %s block %d has negative low-cardinality min/max", column.Name, i)
+		}
+		needed := uint64(block.Granule.Max) + 1
+		if needed > maxCodeCardinality {
+			return 0, fmt.Errorf("colgranule: descriptor column %s block %d inferred cardinality %d exceeds cap %d", column.Name, i, needed, maxCodeCardinality)
+		}
+		if uint32(needed) > cardinality {
+			cardinality = uint32(needed)
+		}
+	}
+	if cardinality == 0 {
+		return 0, fmt.Errorf("colgranule: descriptor column %s has zero low-cardinality cardinality", column.Name)
+	}
+	return cardinality, nil
 }
 
 func (b *columnPartImageBuilder) addSortKeyMetadataSection() error {

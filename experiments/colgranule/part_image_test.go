@@ -340,6 +340,49 @@ func TestColumnPartFromParsedImageScansWithoutOriginalPart(t *testing.T) {
 	}
 }
 
+func TestColumnPartImagePersistsInferredLowCardinalityCardinality(t *testing.T) {
+	opts := partTestOptions([]SortKeyColumn{{Column: "id"}})
+	for i := range opts.Columns {
+		if opts.Columns[i].Name == "kind_code" {
+			opts.Columns[i].Cardinality = 0
+		}
+	}
+	part, err := BuildColumnPart(7, opts, ColumnBatch{Columns: map[string][]int64{
+		"id":        {3, 1, 2, 5, 4},
+		"time_us":   {30, 10, 20, 50, 40},
+		"value":     {300, 100, 200, 500, 400},
+		"kind_code": {1, 0, 1, 2, 0},
+		"has_reply": {1, 0, 1, 0, 1},
+	}})
+	if err != nil {
+		t.Fatalf("BuildColumnPart: %v", err)
+	}
+	if got := part.Columns["kind_code"].Definition.Cardinality; got != 0 {
+		t.Fatalf("source kind_code cardinality=%d want inferred zero in definition", got)
+	}
+	image, err := BuildColumnPartImage(part, ColumnPartImageOptions{})
+	if err != nil {
+		t.Fatalf("BuildColumnPartImage: %v", err)
+	}
+	parsed, err := ParseColumnPartImage(image.Bytes)
+	if err != nil {
+		t.Fatalf("ParseColumnPartImage: %v", err)
+	}
+	imagePart, err := ColumnPartFromImage(parsed)
+	if err != nil {
+		t.Fatalf("ColumnPartFromImage: %v", err)
+	}
+	if got := imagePart.Columns["kind_code"].Definition.Cardinality; got != 3 {
+		t.Fatalf("image kind_code cardinality=%d want inferred 3", got)
+	}
+	scan, err := imagePart.NewScanner().ScanProjected([]string{"id", "kind_code"})
+	if err != nil {
+		t.Fatalf("ScanProjected: %v", err)
+	}
+	assertInt64s(t, "id", scan.Columns["id"], []int64{1, 2, 3, 4, 5})
+	assertInt64s(t, "kind_code", scan.Columns["kind_code"], []int64{0, 1, 1, 0, 2})
+}
+
 func TestParseColumnPartImageRejectsNonContiguousSections(t *testing.T) {
 	part, err := BuildColumnPart(7, partTestOptions([]SortKeyColumn{{Column: "id"}}), ColumnBatch{Columns: map[string][]int64{
 		"id":        {3, 1, 2, 5, 4},
