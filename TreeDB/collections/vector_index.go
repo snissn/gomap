@@ -1874,8 +1874,14 @@ func (idx *VectorIndex) Rebuild() error {
 	if idx == nil {
 		return errors.New("collections: vector index is nil")
 	}
+	c := idx.collection
+	if c == nil {
+		return errCollectionNil
+	}
+	unlockMutation := c.lockMutation()
+	defer unlockMutation.Unlock()
 	start := time.Now()
-	rebuilt, err := idx.collection.buildVectorIndex(VectorIndexOptions{
+	rebuilt, err := c.buildVectorIndex(VectorIndexOptions{
 		Name:                idx.name,
 		Field:               idx.field,
 		Metric:              idx.metric,
@@ -1906,7 +1912,7 @@ func (idx *VectorIndex) Rebuild() error {
 	idx.lastRebuildDuration = collectionObservedElapsedSince(start)
 	idx.markGraphChangedLocked()
 	idx.mu.Unlock()
-	idx.collection.RegisterVectorIndex(idx)
+	c.RegisterVectorIndex(idx)
 	return nil
 }
 
