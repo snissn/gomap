@@ -1,12 +1,10 @@
-//go:build !arm64
+//go:build !arm64 && !amd64
 
 package collections
 
 import "gonum.org/v1/gonum/blas/blas32"
 
 func vectorDotProductFloat32(left, right []float32) float32 {
-	// Axiom's non-arm64 implementation is scalar; Gonum gives a faster BLAS32
-	// dot path on linux/amd64 in the TreeDB HNSW search profile.
 	n := len(left)
 	if len(right) < n {
 		n = len(right)
