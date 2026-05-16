@@ -15,6 +15,8 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
+var testRegisteredReplayHandlerKind atomic.Uint32
+
 func TestCommandWALRawSetDeleteBatchReplaysThroughNormalExecutor(t *testing.T) {
 	dir := t.TempDir()
 	enableCommandWALFormat(t, dir)
@@ -344,7 +346,11 @@ func TestCommandWALRegisteredReplayHandlerInstallsValueLogAppender(t *testing.T)
 	}
 	defer db.Close()
 
-	const kind = commitlog.CommandKind(60000)
+	kindOffset := testRegisteredReplayHandlerKind.Add(1)
+	if kindOffset > 5000 {
+		t.Fatalf("test replay handler kind offset exhausted: %d", kindOffset)
+	}
+	kind := commitlog.CommandKind(60000 + kindOffset)
 	var handlerCalled atomic.Bool
 	RegisterCommandWALReplayHandler(kind, func(db *DB, env commitlog.CommandEnvelope) error {
 		handlerCalled.Store(true)
