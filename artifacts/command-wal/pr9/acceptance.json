@@ -27,11 +27,11 @@
     "TestCommandWALRawSetDeleteBatchReplaysThroughNormalExecutor",
     "TestTreeDBPublicCommandWALVariantUsesCachedCommandWALPath",
     "TestEncodeRawKVBatchPayloadScanMatchesSliceEncoder",
-    "TestMetadataIndexCommandWALRejectionsReturnUnsupportedFeature",
+    "TestMetadataUnsupportedCatalogCommandsReturnUnsupportedFeature",
     "TestEncodeRawKVSingleOperationPayloadMatchesSliceEncoder"
   ],
   "local_validation_commands": [
-    "GOWORK=off go test ./TreeDB ./TreeDB/docs ./TreeDB/db ./TreeDB/nativewire ./TreeDB/internal/commitlog ./cmd/unified_bench -run 'TestPublicCommandWALRawKVWritesUseTypedFrames|TestEncodeRawKVBatchPayloadScanMatchesSliceEncoder|TestEncodeRawKVSingleOperationPayloadMatchesSliceEncoder|TestCommandWALSupportMatrix|TestCommandWALRejectedErrorDistinctFromUnsupported|TestMetadataIndexCommandWALRejectionsReturnUnsupportedFeature|TestCommandWALNativeWireAlignmentManifestCoverage|TestNativeWireAndLocalCommandDigestStable|TestNativeWireAckFlushedRequiresRootPublishAndAppliedLSN|TestNativeWirePostFramePublishFailureCommitAmbiguous|TestRaftCommandEntryAndLocalCommandPayloadUseSharedCanonicalSchema|TestCommandWALRawSetDeleteBatchReplaysThroughNormalExecutor|TestTreeDBPublicCommandWALVariantUsesCachedCommandWALPath|TestTreeDBCommandWALAliasResolvesToBackendVariant|^$' -count=1",
+    "GOWORK=off go test ./TreeDB ./TreeDB/docs ./TreeDB/db ./TreeDB/nativewire ./TreeDB/internal/commitlog ./cmd/unified_bench -run 'TestPublicCommandWALRawKVWritesUseTypedFrames|TestEncodeRawKVBatchPayloadScanMatchesSliceEncoder|TestEncodeRawKVSingleOperationPayloadMatchesSliceEncoder|TestCommandWALSupportMatrix|TestCommandWALRejectedErrorDistinctFromUnsupported|TestMetadataUnsupportedCatalogCommandsReturnUnsupportedFeature|TestCommandWALNativeWireAlignmentManifestCoverage|TestNativeWireAndLocalCommandDigestStable|TestNativeWireAckFlushedRequiresRootPublishAndAppliedLSN|TestNativeWirePostFramePublishFailureCommitAmbiguous|TestRaftCommandEntryAndLocalCommandPayloadUseSharedCanonicalSchema|TestCommandWALRawSetDeleteBatchReplaysThroughNormalExecutor|TestTreeDBPublicCommandWALVariantUsesCachedCommandWALPath|TestTreeDBCommandWALAliasResolvesToBackendVariant|^$' -count=1",
     "GOWORK=off go test ./TreeDB/caching ./TreeDB/db -run '^$' -count=1",
     "GOWORK=off go test ./TreeDB -run 'TestPublicCommandWALRawKVWritesUseTypedFrames|^$' -bench 'BenchmarkPublicCommandWALRawKV(Set|BatchWrite)$' -benchtime=50x -count=1",
     "GOWORK=off go test ./TreeDB -run '^$' -bench 'BenchmarkPublicCommandWALRawKVSet$' -benchtime=5000x -count=1",
