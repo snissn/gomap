@@ -659,7 +659,7 @@ func (idx *VectorIndex) insertVectorLocked(documentID []byte, vector []float32) 
 	}
 	if nodeID, ok := idx.currentNode[string(documentID)]; ok && nodeID >= 0 && nodeID < len(idx.nodes) {
 		node := &idx.nodes[nodeID]
-		if !node.deleted && node.matchesVector(vector, idx.encoding) {
+		if idx.encoding == VectorIndexEncodingFloat32 && !node.deleted && node.matchesVector(vector) {
 			return nil
 		}
 	}
@@ -702,17 +702,11 @@ func (idx *VectorIndex) insertVectorLocked(documentID []byte, vector []float32) 
 	return nil
 }
 
-func (node *vectorIndexNode) matchesVector(vector []float32, encoding VectorIndexEncoding) bool {
+func (node *vectorIndexNode) matchesVector(vector []float32) bool {
 	if node == nil {
 		return false
 	}
-	switch encoding {
-	case VectorIndexEncodingInt8:
-		quantized, quantScale := quantizeVectorIndexInt8(vector)
-		return node.quantScale == quantScale && slices.Equal(node.quantized, quantized)
-	default:
-		return slices.Equal(node.vector, vector)
-	}
+	return slices.Equal(node.vector, vector)
 }
 
 func (idx *VectorIndex) newVectorIndexNode(documentID []byte, vector []float32, level int) vectorIndexNode {

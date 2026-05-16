@@ -398,7 +398,7 @@ func BenchmarkCollectionVectorIndexNativeRootRebuild(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	var lastNativeRootBytes int64
-	var lastIndexBytes int64
+	var lastIndexBytesMemory int64
 	for i := 0; i < b.N; i++ {
 		b.StopTimer()
 		d, err := backenddb.Open(backenddb.Options{Dir: b.TempDir()})
@@ -428,15 +428,15 @@ func BenchmarkCollectionVectorIndexNativeRootRebuild(b *testing.B) {
 			b.Fatalf("unexpected native rebuild status: %+v", status)
 		}
 		lastNativeRootBytes = status.NativeRootBytes
-		lastIndexBytes = status.Stats.BytesMemory
+		lastIndexBytesMemory = status.Stats.BytesMemory
 		if err := d.Close(); err != nil {
 			b.Fatalf("close db: %v", err)
 		}
 	}
 	b.ReportMetric(float64(lastNativeRootBytes), "native_root_bytes")
-	b.ReportMetric(float64(lastIndexBytes), "index_bytes")
+	b.ReportMetric(float64(lastIndexBytesMemory), "index_bytes_memory")
 	b.ReportMetric(float64(lastNativeRootBytes)/float64(docs), "native_root_bytes/doc")
-	b.ReportMetric(float64(lastIndexBytes)/float64(docs), "index_bytes/doc")
+	b.ReportMetric(float64(lastIndexBytesMemory)/float64(docs), "index_bytes_memory/doc")
 }
 
 func BenchmarkCollectionVectorIndexSearch(b *testing.B) {
