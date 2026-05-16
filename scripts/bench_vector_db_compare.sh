@@ -23,10 +23,12 @@ PGVECTOR_DSN="${PGVECTOR_DSN:-}"
 PGVECTOR_DOCKER="${PGVECTOR_DOCKER:-auto}"
 PGVECTOR_IMAGE="${PGVECTOR_IMAGE:-pgvector/pgvector:pg16}"
 PGVECTOR_CONTAINER_NAME="${PGVECTOR_CONTAINER_NAME:-gomap-pgvector-$RANDOM-$$}"
+PGVECTOR_SCHEMA="${PGVECTOR_SCHEMA:-gomap_vector_bench_${RANDOM}_$$}"
+PGVECTOR_TABLE="${PGVECTOR_TABLE:-documents}"
 PGVECTOR_CONTAINER=""
 
 MONGODB_VECTOR_URI="${MONGODB_VECTOR_URI:-}"
-MONGODB_VECTOR_DATABASE="${MONGODB_VECTOR_DATABASE:-gomap_vector_bench}"
+MONGODB_VECTOR_DATABASE="${MONGODB_VECTOR_DATABASE:-gomap_vector_bench_${RANDOM}_$$}"
 MONGODB_VECTOR_COLLECTION="${MONGODB_VECTOR_COLLECTION:-documents}"
 MONGODB_VECTOR_INDEX="${MONGODB_VECTOR_INDEX:-embedding_vector_index}"
 MONGODB_VECTOR_NUM_CANDIDATES="${MONGODB_VECTOR_NUM_CANDIDATES:-$EF_SEARCH}"
@@ -197,6 +199,8 @@ if contains_backend pgvector; then
 	"$VENV/bin/python" benchmarks/vector_db_compare/pgvector_bench.py \
 		--dataset-dir "$RUN_DIR/dataset" \
 		--dsn "$PGVECTOR_DSN" \
+		--schema "$PGVECTOR_SCHEMA" \
+		--table "$PGVECTOR_TABLE" \
 		--output "$RUN_DIR/pgvector.json" \
 		--queries "$QUERIES" \
 		--validate-queries "$VALIDATE_QUERIES" \

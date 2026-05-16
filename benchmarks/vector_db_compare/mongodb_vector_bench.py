@@ -105,7 +105,13 @@ def build_database(args: argparse.Namespace, manifest: dict[str, Any], docs: np.
     client.admin.command("ping")
     info = client.server_info().get("version", "unknown")
     db = client[args.database]
-    db.drop_collection(args.collection)
+    if args.collection in db.list_collection_names():
+        if not args.allow_drop_collection:
+            raise RuntimeError(
+                f"collection {args.database}.{args.collection} already exists; use a fresh collection or pass "
+                "--allow-drop-collection for a disposable benchmark database"
+            )
+        db.drop_collection(args.collection)
     collection = db[args.collection]
 
     insert_start = time.perf_counter()
@@ -331,6 +337,7 @@ def main() -> None:
     parser.add_argument("--database", default="gomap_vector_bench")
     parser.add_argument("--collection", default="documents")
     parser.add_argument("--index-name", default="embedding_vector_index")
+    parser.add_argument("--allow-drop-collection", action="store_true")
     parser.add_argument("--output", required=True)
     parser.add_argument("--queries", type=int, default=10000)
     parser.add_argument("--validate-queries", type=int, default=64)

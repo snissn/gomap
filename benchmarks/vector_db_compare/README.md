@@ -40,9 +40,12 @@ Backends:
 - `treedb`: runs the TreeDB native persisted vector index benchmark.
 - `vectorlite`: runs SQLite+Vectorlite with its persisted HNSW sidecar file.
 - `pgvector`: runs PostgreSQL+pgvector. If `PGVECTOR_DSN` is not set, the
-  runner starts a temporary `pgvector/pgvector:pg16` Docker container.
+  runner starts a temporary `pgvector/pgvector:pg16` Docker container. The
+  harness writes into a fresh benchmark schema (`PGVECTOR_SCHEMA`) instead of
+  dropping tables in the caller's default schema.
 - `mongodb`: runs MongoDB Vector Search only when `MONGODB_VECTOR_URI` points
-  at a deployment that supports `$vectorSearch` and `createSearchIndexes`.
+  at a deployment that supports `$vectorSearch` and `createSearchIndexes`. The
+  runner uses a fresh benchmark database name by default.
 
 The runner writes:
 

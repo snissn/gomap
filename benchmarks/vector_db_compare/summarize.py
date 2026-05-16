@@ -141,7 +141,7 @@ def render(results: list[dict[str, Any]]) -> str:
     lines.append("")
     lines.append("- sqlite-vec is intentionally not used here because upstream sqlite-vec is brute-force today; ANN support is tracked as future work.")
     lines.append("- SQLite+Vectorlite stores the SQLite table and its HNSW index file under the benchmark DB directory; storage includes both.")
-    lines.append("- PostgreSQL+pgvector storage uses `pg_database_size(current_database())` for the benchmark database.")
+    lines.append("- PostgreSQL+pgvector storage uses the benchmark table's `pg_total_relation_size`, including its HNSW index.")
     lines.append("- MongoDB is included only when run against a MongoDB Vector Search deployment, such as Atlas or local Atlas with `mongot`; plain `mongod` is not a vector-search comparator.")
     lines.append("- TreeDB storage is the reopened benchmark datastore reported by `treedb_vector_search_demo`.")
     lines.append("- Memory columns are intentionally separated: TreeDB reports native vector-index memory when available, while Python-backed comparator harnesses report whole benchmark process max RSS.")

@@ -7,6 +7,7 @@ import argparse
 import json
 import math
 import os
+import re
 import statistics
 import sys
 import threading
@@ -16,6 +17,8 @@ from typing import Any
 
 import numpy as np
 import psycopg
+
+identifierPattern = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 def parse_ints(raw: str) -> list[int]:
@@ -68,14 +71,35 @@ def connect(dsn: str) -> psycopg.Connection:
     return psycopg.connect(dsn, autocommit=True)
 
 
+def checked_identifier(value: str, name: str) -> str:
+    if not identifierPattern.fullmatch(value):
+        raise ValueError(f"{name} must be a simple PostgreSQL identifier")
+    return value
+
+
+def table_name(args: argparse.Namespace) -> str:
+    schema = checked_identifier(args.schema, "--schema")
+    table = checked_identifier(args.table, "--table")
+    return f"{schema}.{table}"
+
+
 def build_database(args: argparse.Namespace, manifest: dict[str, Any], docs: np.ndarray) -> tuple[dict[str, Any], str]:
     start = time.perf_counter()
+    qualified_table = table_name(args)
+    schema = checked_identifier(args.schema, "--schema")
     with connect(args.dsn) as conn:
         version = conn.execute("select version()").fetchone()[0]
         conn.execute("create extension if not exists vector")
-        conn.execute("drop table if exists documents")
+        exists = conn.execute("select exists(select 1 from information_schema.schemata where schema_name = %s)", [schema]).fetchone()[0]
+        if exists:
+            if not args.allow_drop_schema:
+                raise RuntimeError(
+                    f"schema {schema!r} already exists; use a fresh --schema or pass --allow-drop-schema for a disposable benchmark database"
+                )
+            conn.execute(f"drop schema {schema} cascade")
+        conn.execute(f"create schema {schema}")
         conn.execute(
-            f"create table documents ("
+            f"create table {qualified_table} ("
             f"doc_id integer primary key, "
             f"id text not null, "
             f"grp integer not null, "
@@ -83,7 +107,7 @@ def build_database(args: argparse.Namespace, manifest: dict[str, Any], docs: np.
         )
         insert_start = time.perf_counter()
         with conn.transaction():
-            with conn.cursor().copy("copy documents (doc_id, id, grp, embedding) from stdin") as copy:
+            with conn.cursor().copy(f"copy {qualified_table} (doc_id, id, grp, embedding) from stdin") as copy:
                 for i in range(manifest["docs"]):
                     copy.write_row((i + 1, f"doc-{i:06d}", i % 16, vector_literal(docs[i])))
         insert_phase = phase(insert_start)
@@ -91,10 +115,10 @@ def build_database(args: argparse.Namespace, manifest: dict[str, Any], docs: np.
         with conn.transaction():
             conn.execute(
                 "create index documents_embedding_hnsw "
-                f"on documents using hnsw (embedding vector_cosine_ops) "
+                f"on {qualified_table} using hnsw (embedding vector_cosine_ops) "
                 f"with (m = {args.m}, ef_construction = {args.ef_construction})"
             )
-            conn.execute("analyze documents")
+            conn.execute(f"analyze {qualified_table}")
         build_phase = phase(build_start)
     return {
         "insert": insert_phase,
@@ -105,11 +129,14 @@ def build_database(args: argparse.Namespace, manifest: dict[str, Any], docs: np.
 
 def reopen_database(args: argparse.Namespace) -> tuple[psycopg.Connection, dict[str, Any]]:
     start = time.perf_counter()
+    qualified_table = table_name(args)
+    schema = checked_identifier(args.schema, "--schema")
     conn = connect(args.dsn)
     conn.execute(f"set hnsw.ef_search = {int(args.ef_search)}")
-    count = conn.execute("select count(*) from documents").fetchone()[0]
+    conn.execute(f"set search_path = {schema}, public")
+    count = conn.execute(f"select count(*) from {qualified_table}").fetchone()[0]
     probe = conn.execute(
-        "select doc_id from documents order by embedding <=> (select embedding from documents where doc_id = 1) limit 1"
+        f"select doc_id from {qualified_table} order by embedding <=> (select embedding from {qualified_table} where doc_id = 1) limit 1"
     ).fetchall()
     if len(probe) != 1:
         raise RuntimeError(f"pgvector reopen probe returned {len(probe)} rows, want 1")
@@ -181,6 +208,7 @@ def benchmark_search(args: argparse.Namespace, query_literals: list[str], concur
     conns = [connect(args.dsn) for _ in range(concurrency)]
     for conn in conns:
         conn.execute(f"set hnsw.ef_search = {int(args.ef_search)}")
+        conn.execute(f"set search_path = {checked_identifier(args.schema, '--schema')}, public")
 
     def worker(conn: psycopg.Connection) -> None:
         nonlocal next_index
@@ -224,19 +252,18 @@ def benchmark_search(args: argparse.Namespace, query_literals: list[str], concur
     }
 
 
-def storage_usage(conn: psycopg.Connection, docs: int) -> dict[str, Any]:
-    database = int(conn.execute("select pg_database_size(current_database())").fetchone()[0])
-    table = int(conn.execute("select pg_total_relation_size('documents')").fetchone()[0])
-    indexes = int(conn.execute("select pg_indexes_size('documents')").fetchone()[0])
+def storage_usage(conn: psycopg.Connection, args: argparse.Namespace, docs: int) -> dict[str, Any]:
+    qualified = f"{checked_identifier(args.schema, '--schema')}.{checked_identifier(args.table, '--table')}"
+    table = int(conn.execute("select pg_total_relation_size(%s::regclass)", [qualified]).fetchone()[0])
+    indexes = int(conn.execute("select pg_indexes_size(%s::regclass)", [qualified]).fetchone()[0])
     return {
-        "total_bytes": database,
+        "total_bytes": table,
         "files": 0,
         "domains": {
-            "database": database,
             "documents_total_relation": table,
             "documents_indexes": indexes,
         },
-        "bytes_per_doc": database / docs,
+        "bytes_per_doc": table / docs,
     }
 
 
@@ -256,6 +283,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Benchmark PostgreSQL+pgvector HNSW against a TreeDB vector dataset")
     parser.add_argument("--dataset-dir", required=True)
     parser.add_argument("--dsn", required=True)
+    parser.add_argument("--schema", default="gomap_vector_bench")
+    parser.add_argument("--table", default="documents")
+    parser.add_argument("--allow-drop-schema", action="store_true")
     parser.add_argument("--output", required=True)
     parser.add_argument("--queries", type=int, default=10000)
     parser.add_argument("--validate-queries", type=int, default=64)
@@ -280,7 +310,7 @@ def main() -> None:
     phases, postgres_info = build_database(args, manifest, docs)
     conn, reopen = reopen_database(args)
     validation = validate_recall(conn, docs, query_literals, queries, args.top_k, args.validate_queries, args.min_recall)
-    storage = storage_usage(conn, manifest["docs"])
+    storage = storage_usage(conn, args, manifest["docs"])
     conn.close()
 
     levels = [1] + concurrency
@@ -292,6 +322,8 @@ def main() -> None:
         "engine_info": postgres_info,
         "ann_index": "hnsw",
         "dataset_dir": str(dataset_dir),
+        "schema": args.schema,
+        "table": args.table,
         "docs": manifest["docs"],
         "dimensions": manifest["dimensions"],
         "queries": len(queries),
