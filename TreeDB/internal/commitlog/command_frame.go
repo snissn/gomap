@@ -91,6 +91,129 @@ type RawKVOperation struct {
 	RID   uint64
 }
 
+// RawKVBatchPayloadBuilder incrementally constructs a canonical RawKVBatch
+// payload while returning stable key/value views into the owned payload bytes.
+type RawKVBatchPayloadBuilder struct {
+	payload []byte
+	count   int
+}
+
+func NewRawKVBatchPayloadBuilder(opHint, byteHint int) RawKVBatchPayloadBuilder {
+	var b RawKVBatchPayloadBuilder
+	b.ResetWithHint(opHint, byteHint)
+	return b
+}
+
+func (b *RawKVBatchPayloadBuilder) ResetWithHint(opHint, byteHint int) {
+	capHint := rawKVBatchHeaderSize
+	if hint, err := rawKVBatchPayloadSizeHint(opHint, byteHint); err == nil {
+		capHint = hint
+	}
+	if cap(b.payload) < capHint {
+		b.payload = make([]byte, rawKVBatchHeaderSize, capHint)
+	} else {
+		b.payload = b.payload[:rawKVBatchHeaderSize]
+		clear(b.payload)
+	}
+	binary.LittleEndian.PutUint16(b.payload[0:2], 1)
+	b.count = 0
+}
+
+func (b *RawKVBatchPayloadBuilder) Payload() []byte {
+	if b == nil {
+		return nil
+	}
+	return b.payload
+}
+
+func (b *RawKVBatchPayloadBuilder) Count() int {
+	if b == nil {
+		return 0
+	}
+	return b.count
+}
+
+func (b *RawKVBatchPayloadBuilder) Len() int {
+	if b == nil {
+		return 0
+	}
+	return len(b.payload)
+}
+
+func (b *RawKVBatchPayloadBuilder) Truncate(payloadLen, count int) {
+	if b == nil || payloadLen < rawKVBatchHeaderSize || payloadLen > len(b.payload) || count < 0 {
+		return
+	}
+	b.payload = b.payload[:payloadLen]
+	b.count = count
+	binary.LittleEndian.PutUint32(b.payload[2:6], uint32(count))
+}
+
+func (b *RawKVBatchPayloadBuilder) Append(op RawKVOperation) (keyView, valueView []byte, err error) {
+	if b == nil {
+		return nil, nil, ErrCorrupt
+	}
+	if b.payload == nil {
+		b.ResetWithHint(0, 0)
+	}
+	if commandFrameIntExceedsUint32(b.count + 1) {
+		return nil, nil, ErrRecordTooLarge
+	}
+	if err := validateRawKVOperation(&op); err != nil {
+		return nil, nil, err
+	}
+	valueLen := len(op.Value)
+	if op.Op == RawKVOpSetRID {
+		valueLen = 8
+	}
+	if commandFrameIntExceedsUint32(len(op.Key)) || commandFrameIntExceedsUint32(valueLen) {
+		return nil, nil, ErrRecordTooLarge
+	}
+	value := op.Value
+	var ridBuf [8]byte
+	if op.Op == RawKVOpSetRID {
+		binary.LittleEndian.PutUint64(ridBuf[:], op.RID)
+		value = ridBuf[:]
+	}
+	needed := rawKVOpHeaderSize + len(op.Key) + len(value)
+	if needed > int(^uint32(0))-len(b.payload) || needed > int(^uint(0)>>1)-len(b.payload) {
+		return nil, nil, ErrRecordTooLarge
+	}
+	off := len(b.payload)
+	newLen := off + needed
+	if newLen > cap(b.payload) {
+		newCap := cap(b.payload) * 2
+		if newCap < newLen {
+			newCap = newLen
+		}
+		if newCap < 0 {
+			return nil, nil, ErrRecordTooLarge
+		}
+		next := make([]byte, newLen, newCap)
+		copy(next, b.payload)
+		b.payload = next
+	} else {
+		b.payload = b.payload[:newLen]
+	}
+	b.payload[off] = byte(op.Op)
+	binary.LittleEndian.PutUint32(b.payload[off+1:off+5], uint32(len(op.Key)))
+	binary.LittleEndian.PutUint32(b.payload[off+5:off+9], uint32(len(value)))
+	off += rawKVOpHeaderSize
+	keyStart := off
+	copy(b.payload[off:], op.Key)
+	off += len(op.Key)
+	valueStart := off
+	copy(b.payload[off:], value)
+	off += len(value)
+	b.count++
+	binary.LittleEndian.PutUint32(b.payload[2:6], uint32(b.count))
+	keyView = b.payload[keyStart : keyStart+len(op.Key) : keyStart+len(op.Key)]
+	if op.Op == RawKVOpSet {
+		valueView = b.payload[valueStart:off:off]
+	}
+	return keyView, valueView, nil
+}
+
 type CollectionDocument struct {
 	ID       []byte
 	Document []byte
@@ -556,6 +679,23 @@ func EncodeRawKVSingleOperationPayload(op RawKVOperation) ([]byte, error) {
 	return payload, nil
 }
 
+func rawKVBatchPayloadSizeHint(opHint, byteHint int) (int, error) {
+	capHint := rawKVBatchHeaderSize
+	if opHint > 0 {
+		if commandFrameIntExceedsUint32(opHint) || opHint > (int(^uint(0)>>1)-capHint)/rawKVOpHeaderSize {
+			return 0, ErrRecordTooLarge
+		}
+		capHint += opHint * rawKVOpHeaderSize
+	}
+	if byteHint > 0 {
+		if byteHint > int(^uint(0)>>1)-capHint {
+			return 0, ErrRecordTooLarge
+		}
+		capHint += byteHint
+	}
+	return capHint, nil
+}
+
 // EncodeRawKVBatchPayloadScan encodes a RawKVBatch payload by scanning the
 // caller's operation source once. It avoids materializing a []RawKVOperation
 // when the caller already owns a replayable batch representation.
@@ -570,18 +710,9 @@ func EncodeRawKVBatchPayloadScanWithHint(scan func(func(RawKVOperation) error) e
 	if scan == nil {
 		return EncodeRawKVBatchPayload(nil)
 	}
-	capHint := rawKVBatchHeaderSize
-	if opHint > 0 {
-		if commandFrameIntExceedsUint32(opHint) || opHint > (int(^uint(0)>>1)-capHint)/rawKVOpHeaderSize {
-			return nil, ErrRecordTooLarge
-		}
-		capHint += opHint * rawKVOpHeaderSize
-	}
-	if byteHint > 0 {
-		if byteHint > int(^uint(0)>>1)-capHint {
-			return nil, ErrRecordTooLarge
-		}
-		capHint += byteHint
+	capHint, err := rawKVBatchPayloadSizeHint(opHint, byteHint)
+	if err != nil {
+		return nil, err
 	}
 	payload := make([]byte, rawKVBatchHeaderSize, capHint)
 	binary.LittleEndian.PutUint16(payload[0:2], 1)

@@ -505,6 +505,37 @@ func TestEncodeRawKVBatchPayloadScanMatchesSliceEncoder(t *testing.T) {
 	}
 }
 
+func TestRawKVBatchPayloadBuilderMatchesSliceEncoder(t *testing.T) {
+	ops := []RawKVOperation{
+		{Op: RawKVOpSet, Key: []byte("alpha"), Value: []byte("one")},
+		{Op: RawKVOpSet, Key: []byte("bravo"), Value: []byte{}},
+		{Op: RawKVOpDelete, Key: []byte("charlie")},
+	}
+	want, err := EncodeRawKVBatchPayload(ops)
+	if err != nil {
+		t.Fatalf("EncodeRawKVBatchPayload: %v", err)
+	}
+	builder := NewRawKVBatchPayloadBuilder(len(ops), len("alpha")+len("one")+len("bravo")+len("charlie"))
+	for _, op := range ops {
+		keyView, valueView, err := builder.Append(op)
+		if err != nil {
+			t.Fatalf("Append(%v): %v", op.Op, err)
+		}
+		if !bytes.Equal(keyView, op.Key) {
+			t.Fatalf("key view=%q want %q", keyView, op.Key)
+		}
+		if op.Op == RawKVOpSet && !bytes.Equal(valueView, op.Value) {
+			t.Fatalf("value view=%q want %q", valueView, op.Value)
+		}
+	}
+	if builder.Count() != len(ops) {
+		t.Fatalf("builder count=%d want %d", builder.Count(), len(ops))
+	}
+	if !bytes.Equal(builder.Payload(), want) {
+		t.Fatalf("builder payload mismatch\ngot  %x\nwant %x", builder.Payload(), want)
+	}
+}
+
 func TestEncodeRawKVSingleOperationPayloadMatchesSliceEncoder(t *testing.T) {
 	for _, op := range []RawKVOperation{
 		{Op: RawKVOpSet, Key: []byte("alpha"), Value: []byte("one")},

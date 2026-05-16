@@ -302,8 +302,6 @@ func (db *DB) AppendRawKVSingleCommandWAL(op commitlog.RawKVOperation, sync bool
 	}
 	if sync {
 		err = db.commandJournal.Sync()
-	} else {
-		err = db.commandJournal.Flush()
 	}
 	if err == nil && db.testFailCommandWALFlush.Load() {
 		err = errTestCommandWALFlushFailpoint

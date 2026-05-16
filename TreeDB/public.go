@@ -1656,7 +1656,7 @@ func (db *DB) NewBatch() Batch {
 	if db.cached != nil {
 		inner := db.cached.NewBatch()
 		if db.commandWALCached {
-			return &commandWALPublicBatch{db: db, inner: inner}
+			return newCommandWALPublicBatch(db, inner, 0)
 		}
 		return inner
 	}
@@ -1679,7 +1679,7 @@ func (db *DB) NewBatchWithSize(size int) Batch {
 	if db.cached != nil {
 		inner := db.cached.NewBatchWithSize(size)
 		if db.commandWALCached {
-			return &commandWALPublicBatch{db: db, inner: inner}
+			return newCommandWALPublicBatch(db, inner, size)
 		}
 		return inner
 	}

@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/snissn/gomap/TreeDB/batch"
+	"github.com/snissn/gomap/TreeDB/caching"
 	"github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 )
@@ -112,16 +113,42 @@ func (tdb *DB) publishPublicCommandWALPending(sync bool) error {
 type commandWALPublicBatch struct {
 	db      *DB
 	inner   Batch
+	payload commitlog.RawKVBatchPayloadBuilder
 	opCount int
 	dirty   bool
 	closed  bool
+}
+
+const commandWALPublicBatchEstimatedKeyValueBytes = 48
+
+func newCommandWALPublicBatch(tdb *DB, inner Batch, opHint int) *commandWALPublicBatch {
+	b := &commandWALPublicBatch{db: tdb, inner: inner}
+	opHint = db.NormalizePublicBatchReserveHint(opHint)
+	byteHint := 0
+	if opHint > 0 && opHint <= int(^uint(0)>>1)/commandWALPublicBatchEstimatedKeyValueBytes {
+		byteHint = opHint * commandWALPublicBatchEstimatedKeyValueBytes
+	}
+	b.payload.ResetWithHint(opHint, byteHint)
+	return b
 }
 
 func (b *commandWALPublicBatch) Set(key, value []byte) error {
 	if b == nil || b.inner == nil {
 		return ErrClosed
 	}
-	if err := b.inner.Set(key, value); err != nil {
+	if len(key) == 0 {
+		return caching.ErrKeyEmpty
+	}
+	if value == nil {
+		return caching.ErrValueNil
+	}
+	oldLen, oldCount := b.payload.Len(), b.payload.Count()
+	keyView, valueView, err := b.payload.Append(commitlog.RawKVOperation{Op: commitlog.RawKVOpSet, Key: key, Value: value})
+	if err != nil {
+		return err
+	}
+	if err := b.innerSetView(keyView, valueView); err != nil {
+		b.payload.Truncate(oldLen, oldCount)
 		return err
 	}
 	b.opCount++
@@ -130,19 +157,6 @@ func (b *commandWALPublicBatch) Set(key, value []byte) error {
 }
 
 func (b *commandWALPublicBatch) SetView(key, value []byte) error {
-	if b == nil || b.inner == nil {
-		return ErrClosed
-	}
-	if setter, ok := b.inner.(interface {
-		SetView(key, value []byte) error
-	}); ok {
-		if err := setter.SetView(key, value); err != nil {
-			return err
-		}
-		b.opCount++
-		b.dirty = true
-		return nil
-	}
 	return b.Set(key, value)
 }
 
@@ -150,7 +164,16 @@ func (b *commandWALPublicBatch) Delete(key []byte) error {
 	if b == nil || b.inner == nil {
 		return ErrClosed
 	}
-	if err := b.inner.Delete(key); err != nil {
+	if len(key) == 0 {
+		return caching.ErrKeyEmpty
+	}
+	oldLen, oldCount := b.payload.Len(), b.payload.Count()
+	keyView, _, err := b.payload.Append(commitlog.RawKVOperation{Op: commitlog.RawKVOpDelete, Key: key})
+	if err != nil {
+		return err
+	}
+	if err := b.innerDeleteView(keyView); err != nil {
+		b.payload.Truncate(oldLen, oldCount)
 		return err
 	}
 	b.opCount++
@@ -159,20 +182,25 @@ func (b *commandWALPublicBatch) Delete(key []byte) error {
 }
 
 func (b *commandWALPublicBatch) DeleteView(key []byte) error {
-	if b == nil || b.inner == nil {
-		return ErrClosed
+	return b.Delete(key)
+}
+
+func (b *commandWALPublicBatch) innerSetView(key, value []byte) error {
+	if setter, ok := b.inner.(interface {
+		SetView(key, value []byte) error
+	}); ok {
+		return setter.SetView(key, value)
 	}
+	return b.inner.Set(key, value)
+}
+
+func (b *commandWALPublicBatch) innerDeleteView(key []byte) error {
 	if deleter, ok := b.inner.(interface {
 		DeleteView(key []byte) error
 	}); ok {
-		if err := deleter.DeleteView(key); err != nil {
-			return err
-		}
-		b.opCount++
-		b.dirty = true
-		return nil
+		return deleter.DeleteView(key)
 	}
-	return b.Delete(key)
+	return b.inner.Delete(key)
 }
 
 func (b *commandWALPublicBatch) Write() error {
@@ -188,11 +216,7 @@ func (b *commandWALPublicBatch) write(sync bool) error {
 		return ErrClosed
 	}
 	if b.dirty {
-		payload, err := b.commandWALPayload()
-		if err != nil {
-			return err
-		}
-		if err := b.db.appendPublicRawKVCommandPayload(payload, sync); err != nil {
+		if err := b.appendCommandWAL(sync); err != nil {
 			return err
 		}
 	}
@@ -200,6 +224,7 @@ func (b *commandWALPublicBatch) write(sync bool) error {
 		if err := b.inner.WriteSync(); err != nil {
 			return err
 		}
+		b.payload.ResetWithHint(0, 0)
 		b.opCount = 0
 		b.dirty = false
 		return nil
@@ -207,6 +232,7 @@ func (b *commandWALPublicBatch) write(sync bool) error {
 	if err := b.inner.Write(); err != nil {
 		return err
 	}
+	b.payload.ResetWithHint(0, 0)
 	b.opCount = 0
 	b.dirty = false
 	return nil
@@ -218,6 +244,7 @@ func (b *commandWALPublicBatch) Close() error {
 	}
 	err := b.inner.Close()
 	b.inner = nil
+	b.payload.ResetWithHint(0, 0)
 	b.dirty = false
 	b.closed = true
 	return err
@@ -229,6 +256,7 @@ func (b *commandWALPublicBatch) Reset() {
 	}
 	if resetter, ok := b.inner.(interface{ Reset() }); ok {
 		resetter.Reset()
+		b.payload.ResetWithHint(0, 0)
 		b.opCount = 0
 		b.dirty = false
 		b.closed = false
@@ -238,6 +266,9 @@ func (b *commandWALPublicBatch) Reset() {
 func (b *commandWALPublicBatch) commandWALPayload() ([]byte, error) {
 	if b == nil || b.inner == nil {
 		return nil, ErrClosed
+	}
+	if b.payload.Count() == b.opCount && b.payload.Count() > 0 {
+		return b.payload.Payload(), nil
 	}
 	byteHint, _ := b.inner.GetByteSize()
 	return commitlog.EncodeRawKVBatchPayloadScanWithHint(func(emit func(commitlog.RawKVOperation) error) error {
@@ -251,6 +282,17 @@ func (b *commandWALPublicBatch) commandWALPayload() ([]byte, error) {
 			return nil
 		})
 	}, b.opCount, byteHint)
+}
+
+func (b *commandWALPublicBatch) appendCommandWAL(sync bool) error {
+	if b == nil || b.inner == nil {
+		return ErrClosed
+	}
+	payload, err := b.commandWALPayload()
+	if err != nil {
+		return err
+	}
+	return b.db.appendPublicRawKVCommandPayload(payload, sync)
 }
 
 func (b *commandWALPublicBatch) Replay(fn func(batch.Entry) error) error {
