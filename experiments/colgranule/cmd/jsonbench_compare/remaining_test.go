@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -125,13 +126,39 @@ func TestRemainingJSONDocumentConservativeOnlyRemovesTimeUS(t *testing.T) {
 	}
 }
 
+func TestRestoreClickHouseTypedPathsLeavesMissingCommitAbsent(t *testing.T) {
+	doc := map[string]any{
+		"identity": map[string]any{"handle": "example.test"},
+	}
+	restoreClickHouseTypedPathsForTest(doc, typedJSONBenchValues{
+		TimeUS:           1732206349164509,
+		Did:              "did:plc:identity",
+		Kind:             "identity",
+		CommitOperation:  "",
+		CommitCollection: "",
+	})
+	if _, ok := doc["commit"]; ok {
+		t.Fatalf("identity row should not materialize empty commit object: %+v", doc["commit"])
+	}
+}
+
 func TestRemainingPayloadPlusImageColumnsReconstructsJSONBenchRows(t *testing.T) {
 	source := filepath.Join("..", "..", "testdata", "jsonbench_sample.jsonl")
-	ds, err := colgranule.LoadJSONBenchColumns(source, 0)
+	validateRemainingPayloadPlusImageColumnsReconstructsJSONBenchRows(t, source, 0, 2)
+}
+
+func TestRemainingPayloadPlusImageColumnsReconstructsLocalJSONBenchIfRequested(t *testing.T) {
+	source, limit := localJSONBenchFullReconstructionSource(t)
+	validateRemainingPayloadPlusImageColumnsReconstructsJSONBenchRows(t, source, limit, colgranule.DefaultRowsPerGranule)
+}
+
+func validateRemainingPayloadPlusImageColumnsReconstructsJSONBenchRows(t *testing.T, source string, limit int, rowsPerGranule int) {
+	t.Helper()
+	ds, err := colgranule.LoadJSONBenchColumns(source, limit)
 	if err != nil {
 		t.Fatalf("LoadJSONBenchColumns: %v", err)
 	}
-	part, err := colgranule.BuildJSONBenchColumnPartWithAggregateMetadataForLayout(ds, 2, colgranule.JSONBenchColumnPartLayoutClickHouseFilterUserTime)
+	part, err := colgranule.BuildJSONBenchColumnPartWithAggregateMetadataForLayout(ds, rowsPerGranule, colgranule.JSONBenchColumnPartLayoutClickHouseFilterUserTime)
 	if err != nil {
 		t.Fatalf("BuildJSONBenchColumnPartWithAggregateMetadataForLayout: %v", err)
 	}
@@ -163,6 +190,9 @@ func TestRemainingPayloadPlusImageColumnsReconstructsJSONBenchRows(t *testing.T)
 		t.Run(name, func(t *testing.T) {
 			row := int64(0)
 			if err := scanJSONBenchFile(source, func(raw []byte) error {
+				if row >= int64(ds.Rows) {
+					return errStopScan
+				}
 				remaining, err := encodeRemaining(raw)
 				if err != nil {
 					return err
@@ -198,11 +228,16 @@ func TestRemainingPayloadPlusImageColumnsReconstructsJSONBenchRows(t *testing.T)
 
 func TestRemainingTemplateV1PayloadPlusImageColumnsReconstructsJSONBenchRows(t *testing.T) {
 	source := filepath.Join("..", "..", "testdata", "jsonbench_sample.jsonl")
-	ds, err := colgranule.LoadJSONBenchColumns(source, 0)
+	validateRemainingTemplateV1PayloadPlusImageColumnsReconstructsJSONBenchRows(t, source, 0, 2)
+}
+
+func validateRemainingTemplateV1PayloadPlusImageColumnsReconstructsJSONBenchRows(t *testing.T, source string, limit int, rowsPerGranule int) {
+	t.Helper()
+	ds, err := colgranule.LoadJSONBenchColumns(source, limit)
 	if err != nil {
 		t.Fatalf("LoadJSONBenchColumns: %v", err)
 	}
-	part, err := colgranule.BuildJSONBenchColumnPartWithAggregateMetadataForLayout(ds, 2, colgranule.JSONBenchColumnPartLayoutClickHouseFilterUserTime)
+	part, err := colgranule.BuildJSONBenchColumnPartWithAggregateMetadataForLayout(ds, rowsPerGranule, colgranule.JSONBenchColumnPartLayoutClickHouseFilterUserTime)
 	if err != nil {
 		t.Fatalf("BuildJSONBenchColumnPartWithAggregateMetadataForLayout: %v", err)
 	}
@@ -240,8 +275,28 @@ func TestRemainingTemplateV1PayloadPlusImageColumnsReconstructsJSONBenchRows(t *
 
 	var ids [][]byte
 	var docs [][]byte
+	var storedIDs [][]byte
+	var encoder collections.TemplateV1Encoder
+	flush := func() error {
+		if len(ids) == 0 {
+			return nil
+		}
+		resultIDs, err := col.InsertBatchWithTemplateV1Encoder(ids, docs, &encoder)
+		if err != nil {
+			return err
+		}
+		for _, id := range resultIDs {
+			storedIDs = append(storedIDs, append([]byte(nil), id...))
+		}
+		ids = ids[:0]
+		docs = docs[:0]
+		return nil
+	}
 	row := uint64(1)
 	if err := scanJSONBenchFile(source, func(raw []byte) error {
+		if row > uint64(ds.Rows) {
+			return errStopScan
+		}
 		doc, err := remainingDocument(raw, collections.DocumentFormatTemplateV1, remainingShapeClickHouseTyped)
 		if err != nil {
 			return err
@@ -249,20 +304,28 @@ func TestRemainingTemplateV1PayloadPlusImageColumnsReconstructsJSONBenchRows(t *
 		ids = append(ids, documentID(row))
 		docs = append(docs, doc)
 		row++
+		if len(ids) >= 64 {
+			return flush()
+		}
 		return nil
 	}); err != nil {
 		t.Fatalf("prepare template-v1 retained docs: %v", err)
 	}
-	var encoder collections.TemplateV1Encoder
-	if _, err := col.InsertBatchWithTemplateV1Encoder(ids, docs, &encoder); err != nil {
+	if err := flush(); err != nil {
 		t.Fatalf("insert template-v1 retained docs: %v", err)
+	}
+	if len(storedIDs) != ds.Rows {
+		t.Fatalf("stored template-v1 ids=%d want %d", len(storedIDs), ds.Rows)
 	}
 
 	reverseDictionaries := reverseJSONBenchDictionaries(ds.Dictionaries)
 	scanner := imagePart.NewScanner()
 	rowIndex := int64(0)
 	if err := scanJSONBenchFile(source, func(raw []byte) error {
-		stored, err := col.Get(documentID(uint64(rowIndex + 1)))
+		if rowIndex >= int64(ds.Rows) {
+			return errStopScan
+		}
+		stored, err := col.Get(storedIDs[int(rowIndex)])
 		if err != nil {
 			return err
 		}
@@ -295,6 +358,33 @@ func TestRemainingTemplateV1PayloadPlusImageColumnsReconstructsJSONBenchRows(t *
 	if rowIndex != int64(ds.Rows) {
 		t.Fatalf("validated rows=%d want %d", rowIndex, ds.Rows)
 	}
+}
+
+func localJSONBenchFullReconstructionSource(t *testing.T) (string, int) {
+	t.Helper()
+	if os.Getenv("JSONBENCH_VALIDATE_FULL_RECONSTRUCTION") == "" {
+		t.Skip("JSONBENCH_VALIDATE_FULL_RECONSTRUCTION not set")
+	}
+	path := os.Getenv("JSONBENCH_DATA")
+	if path == "" {
+		t.Skip("JSONBENCH_DATA not set")
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Skipf("local JSONBench fixture not present at %s", path)
+	}
+	if info.IsDir() {
+		t.Skipf("JSONBENCH_DATA points to directory %s; full reconstruction harness expects a file", path)
+	}
+	limit := 0
+	if raw := os.Getenv("JSONBENCH_VALIDATE_FULL_RECONSTRUCTION_LIMIT"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 0 {
+			t.Fatalf("invalid JSONBENCH_VALIDATE_FULL_RECONSTRUCTION_LIMIT=%q", raw)
+		}
+		limit = parsed
+	}
+	return path, limit
 }
 
 func TestMeasureRawJSONTreeDBSample(t *testing.T) {
@@ -451,6 +541,9 @@ func restoreClickHouseTypedPathsForTest(doc map[string]any, values typedJSONBenc
 	doc["time_us"] = values.TimeUS
 	doc["did"] = values.Did
 	doc["kind"] = values.Kind
+	if values.Kind != "commit" && values.CommitOperation == "" && values.CommitCollection == "" {
+		return
+	}
 	commit, ok := doc["commit"].(map[string]any)
 	if !ok {
 		commit = make(map[string]any, 2)
