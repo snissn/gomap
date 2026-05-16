@@ -250,6 +250,9 @@ func (c *Collection) BuildVectorIndex(opts VectorIndexOptions) (*VectorIndex, er
 		return nil, err
 	}
 	c.RegisterVectorIndex(index)
+	if c.manager != nil && index.needsNativeAutoPersist() {
+		c.manager.registerCollectionHandle(c)
+	}
 	return index, nil
 }
 
@@ -404,14 +407,8 @@ func (c *Collection) ensureDeclaredNativeVectorIndexesLoaded() error {
 	if c.db == nil {
 		return errCollectionDBNil
 	}
-	if len(c.meta.VectorIndexes) == 0 && len(c.registeredVectorIndexes()) == 0 {
-		commitSeq, systemRoot := dbCommitSeqAndSystemRoot(c.db)
-		c.catalogMu.RLock()
-		catalogCurrent := c.catalogCommitSeq == commitSeq && c.catalogSystemRoot == systemRoot
-		c.catalogMu.RUnlock()
-		if catalogCurrent {
-			return nil
-		}
+	if c.declaredNativeVectorIndexesLoadedForCurrentCatalog() {
+		return nil
 	}
 	c.vectorIndexLoadMu.Lock()
 	defer c.vectorIndexLoadMu.Unlock()
@@ -467,6 +464,30 @@ func (c *Collection) ensureDeclaredNativeVectorIndexesLoaded() error {
 		}
 	}
 	return nil
+}
+
+func (c *Collection) declaredNativeVectorIndexesLoadedForCurrentCatalog() bool {
+	if c == nil || c.db == nil {
+		return false
+	}
+	commitSeq, systemRoot := dbCommitSeqAndSystemRoot(c.db)
+	c.catalogMu.RLock()
+	catalogCurrent := c.catalogCommitSeq == commitSeq && c.catalogSystemRoot == systemRoot
+	defs := append([]VectorIndexDefinition(nil), c.meta.VectorIndexes...)
+	c.catalogMu.RUnlock()
+	if !catalogCurrent {
+		return false
+	}
+	if len(defs) == 0 {
+		return len(c.registeredVectorIndexes()) == 0
+	}
+	for _, def := range defs {
+		index := c.registeredVectorIndex(def.Name)
+		if index == nil || index.validateNativeSnapshotDefinition(def) != "" {
+			return false
+		}
+	}
+	return true
 }
 
 func (c *Collection) notifyVectorIndexesUpsert(documentIDs [][]byte) error {

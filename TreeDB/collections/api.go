@@ -9111,14 +9111,7 @@ func (c *Collection) DeleteDocument(documentID []byte) (bool, error) {
 		return false, errors.New("collections: document id cannot be empty")
 	}
 	unlockMutation := c.lockMutation()
-	mutationLocked := true
-	unlockIfLocked := func() {
-		if mutationLocked {
-			unlockMutation.Unlock()
-			mutationLocked = false
-		}
-	}
-	defer unlockIfLocked()
+	defer unlockMutation.Unlock()
 	if c.shouldFlushBeforeIndexedDelete(c.meta) {
 		if err := c.flushBufferedWrites(); err != nil {
 			return false, err
@@ -9183,14 +9176,7 @@ func (c *Collection) DeleteBatch(documentIDs [][]byte) (int, error) {
 		return 0, nil
 	}
 	unlockMutation := c.lockMutation()
-	mutationLocked := true
-	unlockIfLocked := func() {
-		if mutationLocked {
-			unlockMutation.Unlock()
-			mutationLocked = false
-		}
-	}
-	defer unlockIfLocked()
+	defer unlockMutation.Unlock()
 	if c.shouldFlushBeforeIndexedDelete(c.meta) {
 		if err := c.flushBufferedWrites(); err != nil {
 			return 0, err

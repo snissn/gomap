@@ -640,6 +640,73 @@ func TestCollectionVectorIndexNativeRootBuildAfterCreatePersistsExistingDocument
 	requireVectorResultIDs(t, results, "a", "b")
 }
 
+func TestCollectionVectorIndexNativeRootBuildAfterCreatePersistsExistingDocumentsOnClose(t *testing.T) {
+	dir := t.TempDir()
+	d, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mgr := NewCollectionManager(d)
+	def := VectorIndexDefinition{
+		Name:       "embedding",
+		Field:      "embedding",
+		Metric:     VectorMetricCosine,
+		Dimensions: 2,
+		M:          4,
+	}
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("a"), []byte("b")},
+		[][]byte{
+			[]byte(`{"embedding":[1,0]}`),
+			[]byte(`{"embedding":[0,1]}`),
+		},
+	); err != nil {
+		t.Fatalf("insert before vector index registration: %v", err)
+	}
+	if _, err := col.CreateVectorIndex(def); err != nil {
+		t.Fatalf("create vector index: %v", err)
+	}
+	index, err := col.BuildVectorIndex(vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		t.Fatalf("build vector index after metadata create: %v", err)
+	}
+	if stats := index.Stats(); stats.LiveDocs != 2 || !stats.SnapshotDirty {
+		t.Fatalf("built native vector index not marked dirty for close: %+v", stats)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+
+	reopened, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open reopened collection: %v", err)
+	}
+	loaded, status, err := reopenedCol.LoadVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		t.Fatalf("load close-persisted built vector index: %v", err)
+	}
+	if loaded == nil || !status.Loaded {
+		t.Fatalf("built vector index did not persist on close loaded=%v status=%+v", loaded != nil, status)
+	}
+	results, _, err := loaded.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 2, DisableExactFallback: true})
+	if err != nil {
+		t.Fatalf("search close-persisted built vector index: %v", err)
+	}
+	requireVectorResultIDs(t, results, "a", "b")
+}
+
 func TestCollectionVectorIndexNativeRootAdHocRuntimeBecomesDeclaredFullSnapshot(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
