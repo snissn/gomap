@@ -83,7 +83,10 @@ type result struct {
 	EfSearch              int                            `json:"ef_search"`
 	ValuePointerThreshold int                            `json:"value_pointer_threshold"`
 	LeafGenerationTarget  int64                          `json:"leaf_generation_segment_target"`
+	MinRecall             float64                        `json:"min_recall"`
 	Compact               bool                           `json:"compact"`
+	CompactSyncEachPhase  bool                           `json:"compact_sync_each_phase"`
+	DisableExactFallback  bool                           `json:"disable_exact_fallback"`
 	Insert                phaseResult                    `json:"insert"`
 	Rebuild               phaseResult                    `json:"rebuild"`
 	CompactPhase          phaseResult                    `json:"compact_phase"`
@@ -196,7 +199,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 			return enc.Encode(res)
 		}
 		printMatrixText(stdout, res)
-		if !cfg.keepDir {
+		if !res.KeptDir {
 			fmt.Fprintf(stderr, "temporary db removed; rerun with -keep-dir to inspect files\n")
 		}
 		return nil
@@ -211,7 +214,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return enc.Encode(res)
 	}
 	printText(stdout, res)
-	if !cfg.keepDir {
+	if !res.KeptDir {
 		fmt.Fprintf(stderr, "temporary db removed; rerun with -keep-dir to inspect files\n")
 	}
 	return nil
@@ -320,10 +323,10 @@ func parseConfig(args []string) (config, error) {
 		return config{}, errors.New("-validate-docs cannot be negative")
 	}
 	if cfg.validateQueries > cfg.docs {
-		cfg.validateQueries = cfg.docs
+		return config{}, errors.New("-validate-queries cannot exceed -docs")
 	}
 	if cfg.validateDocs > cfg.docs {
-		cfg.validateDocs = cfg.docs
+		return config{}, errors.New("-validate-docs cannot exceed -docs")
 	}
 	return cfg, nil
 }
@@ -431,6 +434,7 @@ func execute(ctx context.Context, cfg config) (result, error) {
 	if err != nil {
 		return result{}, err
 	}
+	explicitDir := dir != ""
 	cleanup := func() {}
 	if dir == "" {
 		tmp, err := os.MkdirTemp("", "treedb-vector-search-demo-*")
@@ -442,10 +446,23 @@ func execute(ctx context.Context, cfg config) (result, error) {
 			cleanup = func() { _ = os.RemoveAll(tmp) }
 		}
 	} else {
-		if err := os.RemoveAll(dir); err != nil {
-			return result{}, err
-		}
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		info, err := os.Stat(dir)
+		if err == nil {
+			if !info.IsDir() {
+				return result{}, fmt.Errorf("-dir %q exists and is not a directory", dir)
+			}
+			entries, err := os.ReadDir(dir)
+			if err != nil {
+				return result{}, err
+			}
+			if len(entries) > 0 {
+				return result{}, fmt.Errorf("-dir %q already exists and is not empty; choose a new directory", dir)
+			}
+		} else if errors.Is(err, os.ErrNotExist) {
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				return result{}, err
+			}
+		} else {
 			return result{}, err
 		}
 	}
@@ -464,7 +481,7 @@ func execute(ctx context.Context, cfg config) (result, error) {
 	}
 	res := result{
 		Dir:                   dir,
-		KeptDir:               cfg.keepDir,
+		KeptDir:               cfg.keepDir || explicitDir,
 		Profile:               string(cfg.profile),
 		Docs:                  cfg.docs,
 		Dimensions:            cfg.dimensions,
@@ -478,7 +495,10 @@ func execute(ctx context.Context, cfg config) (result, error) {
 		EfSearch:              cfg.efSearch,
 		ValuePointerThreshold: cfg.valuePointerThreshold,
 		LeafGenerationTarget:  cfg.leafGenerationTarget,
+		MinRecall:             cfg.minRecall,
 		Compact:               cfg.compact,
+		CompactSyncEachPhase:  cfg.compactSyncEachPhase,
+		DisableExactFallback:  cfg.disableExactFallback,
 	}
 
 	d, cleanupBackend, err := openDemoBackend(cfg, dir)
@@ -589,7 +609,12 @@ func execute(ctx context.Context, cfg config) (result, error) {
 	if err != nil {
 		return result{}, err
 	}
-	defer cleanupBackend()
+	closeReopened := true
+	defer func() {
+		if closeReopened {
+			_ = cleanupBackend()
+		}
+	}()
 	col, err = collections.NewCollectionManager(d).OpenCollection("docs")
 	if err != nil {
 		return result{}, err
@@ -604,6 +629,7 @@ func execute(ctx context.Context, cfg config) (result, error) {
 	res.ReopenLoad = phaseSince(reopenStart)
 	res.IndexStatsLoaded = loaded.Stats()
 	var afterLoad runtime.MemStats
+	runtime.GC()
 	runtime.ReadMemStats(&afterLoad)
 	res.Memory = memoryReport{
 		AllocBeforeLoadBytes: beforeLoad.Alloc,
@@ -626,6 +652,10 @@ func execute(ctx context.Context, cfg config) (result, error) {
 	if len(searchBenchmarks) > 0 {
 		res.Search = searchBenchmarks[0]
 	}
+	closeReopened = false
+	if err := cleanupBackend(); err != nil {
+		return result{}, err
+	}
 	return res, nil
 }
 
@@ -638,6 +668,7 @@ func executeMatrix(ctx context.Context, cfg config) (matrixResult, error) {
 	if err != nil {
 		return matrixResult{}, err
 	}
+	explicitRoot := root != ""
 	cleanup := func() {}
 	if root == "" {
 		tmp, err := os.MkdirTemp("", "treedb-vector-search-matrix-*")
@@ -649,10 +680,23 @@ func executeMatrix(ctx context.Context, cfg config) (matrixResult, error) {
 			cleanup = func() { _ = os.RemoveAll(tmp) }
 		}
 	} else {
-		if err := os.RemoveAll(root); err != nil {
-			return matrixResult{}, err
-		}
-		if err := os.MkdirAll(root, 0o755); err != nil {
+		info, err := os.Stat(root)
+		if err == nil {
+			if !info.IsDir() {
+				return matrixResult{}, fmt.Errorf("-dir %q exists and is not a directory", root)
+			}
+			entries, err := os.ReadDir(root)
+			if err != nil {
+				return matrixResult{}, err
+			}
+			if len(entries) > 0 {
+				return matrixResult{}, fmt.Errorf("-dir %q already exists and is not empty; choose a new directory", root)
+			}
+		} else if errors.Is(err, os.ErrNotExist) {
+			if err := os.MkdirAll(root, 0o755); err != nil {
+				return matrixResult{}, err
+			}
+		} else {
 			return matrixResult{}, err
 		}
 	}
@@ -689,7 +733,7 @@ func executeMatrix(ctx context.Context, cfg config) (matrixResult, error) {
 	}
 	out := matrixResult{
 		Dir:               root,
-		KeptDir:           cfg.keepDir,
+		KeptDir:           cfg.keepDir || explicitRoot,
 		Profile:           string(cfg.profile),
 		Docs:              cfg.docs,
 		Dimensions:        cfg.dimensions,
@@ -712,7 +756,7 @@ func executeMatrix(ctx context.Context, cfg config) (matrixResult, error) {
 		if err != nil {
 			return matrixResult{}, fmt.Errorf("%s: %w", testCase.name, err)
 		}
-		res.KeptDir = cfg.keepDir
+		res.KeptDir = out.KeptDir
 		out.Cases = append(out.Cases, matrixCaseResult{
 			Name:        testCase.name,
 			Description: testCase.description,
@@ -763,6 +807,8 @@ func validateCompactedData(col *collections.Collection, idx *collections.VectorI
 		out.Recall = 1
 		return out, nil
 	}
+	// Recall validation disables exact fallback on the ANN side so it measures
+	// the graph result against the exact baseline computed inside CheckRecall.
 	recall, err := idx.CheckRecall(validationQueries(cfg.validateQueries, cfg.docs, cfg.dimensions), collections.VectorIndexSearchOptions{
 		TopK:                 cfg.topK,
 		EfSearch:             cfg.efSearch,
@@ -804,7 +850,7 @@ func benchmarkSearchConcurrent(idx *collections.VectorIndex, cfg config, concurr
 	if concurrency <= 0 {
 		return searchBenchmarkResult{}, errors.New("search concurrency must be positive")
 	}
-	queries := validationQueries(cfg.queries, cfg.docs, cfg.dimensions)
+	queries := syntheticQueries(cfg.queries, cfg.docs, cfg.dimensions, cfg.validateQueries+1)
 	latencies := make([]int64, len(queries))
 	var next atomic.Int64
 	var candidatesTotal int64
@@ -871,13 +917,17 @@ func benchmarkSearchConcurrent(idx *collections.VectorIndex, cfg config, concurr
 	}
 	sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
 	avg := float64(latencyTotal) / float64(len(queries))
+	opsPerSecond := 0.0
+	if total > 0 {
+		opsPerSecond = float64(len(queries)) / total.Seconds()
+	}
 	return searchBenchmarkResult{
 		Concurrency:          concurrency,
 		Queries:              len(queries),
 		TotalDurationNanos:   total.Nanoseconds(),
 		AvgNanos:             avg,
 		AvgMicros:            avg / 1000,
-		OpsPerSecond:         float64(len(queries)) / total.Seconds(),
+		OpsPerSecond:         opsPerSecond,
 		P50Nanos:             percentile(latencies, 0.50),
 		P95Nanos:             percentile(latencies, 0.95),
 		P99Nanos:             percentile(latencies, 0.99),
@@ -902,9 +952,13 @@ func vectorIndexOptions(def collections.VectorIndexDefinition) collections.Vecto
 }
 
 func validationQueries(count, docs, dims int) [][]float32 {
+	return syntheticQueries(count, docs, dims, 0)
+}
+
+func syntheticQueries(count, docs, dims, offset int) [][]float32 {
 	queries := make([][]float32, count)
 	for i := 0; i < count; i++ {
-		queries[i] = embedding(queryDocIndex(i, docs), dims)
+		queries[i] = embedding(queryDocIndex(i+offset, docs), dims)
 	}
 	return queries
 }
@@ -1020,6 +1074,7 @@ func phaseSince(start time.Time) phaseResult {
 }
 
 func percentile(sorted []int64, p float64) int64 {
+	// Nearest-rank percentile over an already sorted sample.
 	if len(sorted) == 0 {
 		return 0
 	}
