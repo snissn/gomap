@@ -241,6 +241,11 @@ func (db *DB) appendPublicCommandWALIntent(intent *CommandWALIntent, sync bool) 
 	if intent == nil {
 		return 0, nil
 	}
+	if intent.inner.lsn != 0 {
+		// Replay intents already refer to a durable frame; recovery must only
+		// publish that covered LSN, never append a duplicate command.
+		return intent.inner.lsn, nil
+	}
 	return db.appendCommandWALIntent(&intent.inner, sync)
 }
 
