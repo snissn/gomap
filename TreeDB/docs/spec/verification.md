@@ -422,6 +422,7 @@ PR 7: matrix enforcement and drift tests:
 - `TestCommandWALSupportMatrixCoversNativeWireMutationCommands`;
 - `TestCommandWALSupportMatrixDocumentsRejectedCommandsWithPublicError`;
 - `TestCommandWALRejectedErrorDistinctFromUnsupported`;
+- `TestMetadataIndexCommandWALRejectionsReturnUnsupportedFeature`;
 - `TestCommandWALNoActiveCollectionWALImplementationDrift`;
 - `TestCommandWALDocsRejectActiveCollectionWALReferencesOutsideDeprecatedDoc`;
 - `TestCommandWALDocsRequireAppliedCommandLSNAsV1Target`;

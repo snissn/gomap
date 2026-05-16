@@ -132,8 +132,11 @@ func TestCommandWALSupportMatrixDocumentsRejectedCommandsWithPublicError(t *test
 			continue
 		}
 		want := "ErrCommandWALRejected"
-		if entry.Surface == "mongo_gateway" {
+		switch entry.Surface {
+		case "mongo_gateway":
 			want = "MongoCommandError(BadValue)"
+		case "nativewire":
+			want = "WireError(ErrUnsupportedFeature)"
 		}
 		if entry.PublicError != want {
 			t.Fatalf("%s/%s WAL-rejected public_error=%q, want %s", entry.Surface, entry.EntryPoint, entry.PublicError, want)
