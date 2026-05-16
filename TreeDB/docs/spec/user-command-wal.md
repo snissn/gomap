@@ -960,7 +960,8 @@ Deliverables:
   artifacts before matrix hardening and public raw KV default cutover;
 - apply the strict default-ready throughput gate to collection/catalog lanes:
   command-WAL throughput divided by the relevant WAL-off baseline throughput
-  must be greater than `1.01x`; `1.01x` or lower fails;
+  must be greater than `1.01x`; anything not strictly greater than `1.01x`
+  fails;
 - explicitly prevent PR9 public raw KV performance evidence from being reused as
   a collection command-WAL default-readiness claim;
 - convert any below-gate collection overhead into a follow-up issue with exact
@@ -973,8 +974,8 @@ Acceptance:
 - collection insert/delete/update command-WAL lanes remain supported command
   kinds but are not default-ready performance lanes until the follow-up issue
   clears strict `>1.01x` throughput for every supported lane;
-- PR9 may only claim public raw KV default-readiness unless it adds new
-  collection/catalog performance artifacts that clear the same strict gate.
+- PR9 must restrict default-readiness claims to public raw KV unless it adds
+  new collection/catalog performance artifacts that clear the same strict gate.
 
 PR6.5 evidence:
 

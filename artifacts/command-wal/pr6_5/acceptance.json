@@ -3,7 +3,7 @@
   "milestone": "PR6.5 collection/catalog command-WAL performance polish",
   "branch": "codex/user-command-wal-pr6_5",
   "base_branch": "codex/user-command-wal-pr6",
-  "implementation_commit": "pr-head",
+  "implementation_commit": "ea9de049ee9f4f741f5dbeba55648cd8ee8357b2",
   "follow_up_issue": "https://github.com/snissn/gomap/issues/1584",
   "go_version": "go1.25.7",
   "platform": "linux/amd64",
@@ -30,52 +30,53 @@
     "required": true,
     "threshold_operator": ">",
     "default_ready_min_ratio": 1.01,
-    "status": "satisfied_for_pr6_5_scope_by_measured_exclusion_and_follow_up",
+    "status": "excluded_with_follow_up",
     "decision": "catalog create clears strict parity-plus; collection insert/delete/update lanes are measured below strict parity-plus and are explicitly excluded from PR9 default-ready scope until issue 1584 passes",
     "lanes": {
       "insert_unindexed": {
         "baseline_docs_per_sec": 1205000,
         "command_wal_docs_per_sec": 873200,
-        "ratio": 0.725,
+        "ratio": "0.725",
         "default_ready": false
       },
       "insert_indexed": {
         "baseline_docs_per_sec": 482100,
         "command_wal_docs_per_sec": 479800,
-        "ratio": 0.995,
+        "ratio": "0.995",
         "default_ready": false
       },
       "delete_unindexed": {
         "baseline_docs_per_sec": 866900,
         "command_wal_docs_per_sec": 807800,
-        "ratio": 0.932,
+        "ratio": "0.932",
         "default_ready": false
       },
       "delete_indexed": {
         "baseline_docs_per_sec": 407800,
         "command_wal_docs_per_sec": 383200,
-        "ratio": 0.94,
+        "ratio": "0.940",
         "default_ready": false
       },
       "update_unindexed": {
         "baseline_docs_per_sec": 793300,
         "command_wal_docs_per_sec": 649000,
-        "ratio": 0.818,
+        "ratio": "0.818",
         "default_ready": false
       },
       "update_indexed": {
         "baseline_docs_per_sec": 486800,
         "command_wal_docs_per_sec": 412000,
-        "ratio": 0.846,
+        "ratio": "0.846",
         "default_ready": false
       },
       "catalog_create": {
         "baseline_collections_per_sec": 18223,
         "command_wal_collections_per_sec": 51910,
-        "ratio": 2.848,
+        "ratio": "2.848",
         "default_ready": true
       }
-    }
+    },
+    "ratio_note": "ratio values are strings computed from the recorded throughput fields and rounded to three decimal places"
   },
   "default_cutover_scope": {
     "pr9_may_enable": [
