@@ -352,6 +352,9 @@ func (c *Collection) RegisterVectorIndex(index *VectorIndex) {
 	index.collection = c
 	index.setNativePersistent(collectionMetaDeclaresVectorIndex(c.meta, index.name))
 	c.vectorIndexes[index.name] = index
+	if c.manager != nil {
+		c.manager.registerCollectionHandle(c)
+	}
 }
 
 // UnregisterVectorIndex detaches a registered in-memory vector index.
@@ -362,6 +365,10 @@ func (c *Collection) UnregisterVectorIndex(name string) {
 	c.vectorIndexesMu.Lock()
 	defer c.vectorIndexesMu.Unlock()
 	delete(c.vectorIndexes, name)
+	empty := len(c.vectorIndexes) == 0
+	if empty && c.manager != nil {
+		c.manager.unregisterCollectionHandle(c)
+	}
 }
 
 func (c *Collection) registeredVectorIndexes() []*VectorIndex {
@@ -380,9 +387,37 @@ func (c *Collection) registeredVectorIndexes() []*VectorIndex {
 	return out
 }
 
+func (c *Collection) hasRegisteredVectorIndex(name string) bool {
+	if c == nil || name == "" {
+		return false
+	}
+	c.vectorIndexesMu.RLock()
+	defer c.vectorIndexesMu.RUnlock()
+	_, ok := c.vectorIndexes[name]
+	return ok
+}
+
+func (c *Collection) ensureDeclaredNativeVectorIndexesLoaded() error {
+	if c == nil || len(c.meta.VectorIndexes) == 0 {
+		return nil
+	}
+	for _, def := range c.meta.VectorIndexes {
+		if c.hasRegisteredVectorIndex(def.Name) {
+			continue
+		}
+		if _, _, err := c.LoadNativeVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (c *Collection) notifyVectorIndexesUpsert(documentIDs [][]byte) error {
 	if len(documentIDs) == 0 {
 		return nil
+	}
+	if err := c.ensureDeclaredNativeVectorIndexesLoaded(); err != nil {
+		return err
 	}
 	indexes := c.registeredVectorIndexes()
 	if len(indexes) == 0 {
@@ -404,6 +439,9 @@ func (c *Collection) notifyVectorIndexesUpsert(documentIDs [][]byte) error {
 func (c *Collection) notifyVectorIndexesDelete(documentIDs [][]byte) error {
 	if len(documentIDs) == 0 {
 		return nil
+	}
+	if err := c.ensureDeclaredNativeVectorIndexesLoaded(); err != nil {
+		return err
 	}
 	indexes := c.registeredVectorIndexes()
 	if len(indexes) == 0 {
@@ -459,7 +497,7 @@ func (c *Collection) persistNativeVectorIndexIfDeclared(index *VectorIndex) erro
 			return err
 		}
 	}
-	if !index.isNativePersistent() {
+	if !index.isNativePersistent() || !index.hasNativePersistedSnapshot() {
 		_, err := index.SaveNativeSnapshot()
 		if errors.Is(err, errVectorIndexNotDeclared) {
 			return nil
@@ -780,6 +818,15 @@ func (idx *VectorIndex) isNativePersistent() bool {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
 	return idx.nativePersistent
+}
+
+func (idx *VectorIndex) hasNativePersistedSnapshot() bool {
+	if idx == nil {
+		return false
+	}
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+	return idx.persistedEpoch != 0
 }
 
 func (idx *VectorIndex) markVectorMetaDirtyLocked() {
@@ -1809,6 +1856,9 @@ func (idx *VectorIndex) CheckRecall(queries [][]float32, opts VectorIndexSearchO
 func vectorFromStoredDocument(materializer *StoredDocumentJSONMaterializer, document []byte, fieldPath []string) ([]float32, bool, error) {
 	if materializer != nil && materializer.DocumentFormat() == DocumentFormatBSON {
 		return vectorFromBSONField(document, fieldPath)
+	}
+	if materializer == nil {
+		return nil, false, errors.New("collections: nil stored document materializer")
 	}
 	jsonDoc, err := materializer.StoredDocumentJSON(document)
 	if err != nil {
