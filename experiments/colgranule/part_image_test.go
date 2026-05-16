@@ -823,6 +823,52 @@ func TestColumnPartFromImageRejectsZeroAggregateMetadataEntryCount(t *testing.T)
 	}
 }
 
+func TestColumnPartFromImageRoundTripsRejectedAggregateMetadata(t *testing.T) {
+	opts := partTestOptions([]SortKeyColumn{{Column: "id"}})
+	def := aggregateMetadataTestDefinition()
+	def.MaxBytesPerRow = 0.001
+	opts.AggregateMetadata = []AggregateMetadataDefinition{def}
+	part, err := BuildColumnPart(7, opts, ColumnBatch{Columns: map[string][]int64{
+		"id":        {3, 1, 2, 5, 4},
+		"time_us":   {30, 10, 20, 50, 40},
+		"value":     {300, 100, 200, 500, 400},
+		"kind_code": {1, 0, 1, 2, 0},
+		"has_reply": {1, 0, 1, 0, 1},
+	}})
+	if err != nil {
+		t.Fatalf("BuildColumnPart: %v", err)
+	}
+	metadata, ok := part.AggregateMetadataByName("test_kind_time")
+	if !ok {
+		t.Fatal("missing aggregate metadata")
+	}
+	if metadata.Stats.Admitted {
+		t.Fatal("test metadata was admitted")
+	}
+	if metadata.Stats.RowsMatched == 0 || len(metadata.Granules) != 0 {
+		t.Fatalf("bad rejected metadata before image: %+v granules=%d", metadata.Stats, len(metadata.Granules))
+	}
+	image, err := BuildColumnPartImage(part, ColumnPartImageOptions{})
+	if err != nil {
+		t.Fatalf("BuildColumnPartImage: %v", err)
+	}
+	parsed, err := ParseColumnPartImage(image.Bytes)
+	if err != nil {
+		t.Fatalf("ParseColumnPartImage: %v", err)
+	}
+	imagePart, err := ColumnPartFromImage(parsed)
+	if err != nil {
+		t.Fatalf("ColumnPartFromImage: %v", err)
+	}
+	decoded, ok := imagePart.AggregateMetadataByName("test_kind_time")
+	if !ok {
+		t.Fatal("missing decoded aggregate metadata")
+	}
+	if decoded.Stats.Admitted || decoded.Stats.RowsMatched != metadata.Stats.RowsMatched || len(decoded.Granules) != 0 {
+		t.Fatalf("bad rejected metadata after image: %+v granules=%d", decoded.Stats, len(decoded.Granules))
+	}
+}
+
 func TestColumnPartFromImageRejectsNegativeAggregateMetadataScaledFields(t *testing.T) {
 	_, image := testColumnPartImageFixture(t, true)
 	tests := []struct {

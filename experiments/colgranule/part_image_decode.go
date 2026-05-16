@@ -1143,8 +1143,11 @@ func decodeAggregateMetadataSections(image ColumnPartImage) (map[string]Aggregat
 			metadata.Granules = append(metadata.Granules, granule)
 			totalMatchedRows += granule.MatchedRows
 		}
-		if totalMatchedRows != metadata.Stats.RowsMatched {
+		if metadata.Stats.Admitted && totalMatchedRows != metadata.Stats.RowsMatched {
 			return nil, fmt.Errorf("colgranule: aggregate metadata %s granule matched rows=%d stats matched rows=%d", metadata.Definition.Name, totalMatchedRows, metadata.Stats.RowsMatched)
+		}
+		if !metadata.Stats.Admitted && len(metadata.Granules) != 0 {
+			return nil, fmt.Errorf("colgranule: aggregate metadata %s is rejected but has %d granules", metadata.Definition.Name, len(metadata.Granules))
 		}
 		if err := dec.finish(); err != nil {
 			return nil, err
