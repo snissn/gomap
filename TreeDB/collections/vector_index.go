@@ -346,9 +346,6 @@ func (c *Collection) RegisterVectorIndex(index *VectorIndex) {
 	index.collection = c
 	index.setNativePersistent(collectionMetaDeclaresVectorIndex(c.meta, index.name))
 	c.vectorIndexes[index.name] = index
-	if c.manager != nil {
-		c.manager.registerCollectionHandle(c)
-	}
 }
 
 // UnregisterVectorIndex detaches a registered in-memory vector index.
@@ -395,12 +392,23 @@ func (c *Collection) ensureDeclaredNativeVectorIndexesLoaded() error {
 	if c == nil || len(c.meta.VectorIndexes) == 0 {
 		return nil
 	}
+	c.vectorIndexLoadMu.Lock()
+	defer c.vectorIndexLoadMu.Unlock()
 	for _, def := range c.meta.VectorIndexes {
 		if c.hasRegisteredVectorIndex(def.Name) {
 			continue
 		}
-		if _, _, err := c.LoadNativeVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def)); err != nil {
+		index, status, err := c.LoadNativeVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
+		if err != nil {
 			return err
+		}
+		if index != nil {
+			continue
+		}
+		if status.ExactFallbackReason == "missing_graph_root" {
+			if _, err := c.BuildVectorIndex(vectorIndexOptionsFromDefinition(def)); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -416,6 +424,9 @@ func (c *Collection) notifyVectorIndexesUpsert(documentIDs [][]byte) error {
 	indexes := c.registeredVectorIndexes()
 	if len(indexes) == 0 {
 		return nil
+	}
+	if c.manager != nil {
+		c.manager.registerCollectionHandle(c)
 	}
 	for _, index := range indexes {
 		for _, documentID := range documentIDs {
@@ -440,6 +451,9 @@ func (c *Collection) notifyVectorIndexesDelete(documentIDs [][]byte) error {
 	indexes := c.registeredVectorIndexes()
 	if len(indexes) == 0 {
 		return nil
+	}
+	if c.manager != nil {
+		c.manager.registerCollectionHandle(c)
 	}
 	for _, index := range indexes {
 		for _, documentID := range documentIDs {
@@ -533,7 +547,19 @@ func (c *Collection) persistDirtyNativeVectorIndexes() error {
 			return err
 		}
 	}
+	if c.manager != nil && !c.hasDirtyNativeVectorIndex() {
+		c.manager.unregisterCollectionHandle(c)
+	}
 	return nil
+}
+
+func (c *Collection) hasDirtyNativeVectorIndex() bool {
+	for _, index := range c.registeredVectorIndexes() {
+		if index.needsNativeAutoPersist() {
+			return true
+		}
+	}
+	return false
 }
 
 func collectionMetaDeclaresVectorIndex(meta CollectionMeta, name string) bool {

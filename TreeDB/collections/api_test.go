@@ -121,7 +121,7 @@ func TestCollectionManagerOpenCollectionDoesNotRetainHandles(t *testing.T) {
 	}
 }
 
-func TestCollectionRegisterVectorIndexTracksHandleUntilLastIndexRemoved(t *testing.T) {
+func TestCollectionRegisterVectorIndexDoesNotRetainCleanHandle(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
@@ -157,16 +157,16 @@ func TestCollectionRegisterVectorIndexTracksHandleUntilLastIndexRemoved(t *testi
 	}
 
 	col.RegisterVectorIndex(first)
-	if got := collectionManagerHandleCount(mgr); got != 1 {
-		t.Fatalf("RegisterVectorIndex tracked %d handles want 1", got)
+	if got := collectionManagerHandleCount(mgr); got != 0 {
+		t.Fatalf("RegisterVectorIndex retained %d clean handles want 0", got)
 	}
 	col.RegisterVectorIndex(second)
-	if got := collectionManagerHandleCount(mgr); got != 1 {
-		t.Fatalf("second RegisterVectorIndex tracked %d handles want 1", got)
+	if got := collectionManagerHandleCount(mgr); got != 0 {
+		t.Fatalf("second RegisterVectorIndex retained %d clean handles want 0", got)
 	}
 	col.UnregisterVectorIndex("embedding")
-	if got := collectionManagerHandleCount(mgr); got != 1 {
-		t.Fatalf("UnregisterVectorIndex removed handle with another index still registered: got %d want 1", got)
+	if got := collectionManagerHandleCount(mgr); got != 0 {
+		t.Fatalf("UnregisterVectorIndex retained %d clean handles want 0", got)
 	}
 	col.UnregisterVectorIndex("summary_embedding")
 	if got := collectionManagerHandleCount(mgr); got != 0 {
