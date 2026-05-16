@@ -2,6 +2,7 @@ package colgranule
 
 import (
 	"encoding/binary"
+	"hash/crc32"
 	"strings"
 	"testing"
 )
@@ -185,6 +186,30 @@ func TestTCS1ColumnPartAssetRejectsImageHeaderMismatch(t *testing.T) {
 	binary.LittleEndian.PutUint64(payload[24:32], image.PartID+1)
 	if _, _, err := DecodeTCS1ColumnPartImage(payload); err == nil || !strings.Contains(err.Error(), "part id") {
 		t.Fatalf("DecodeTCS1ColumnPartImage err=%v want part id mismatch", err)
+	}
+}
+
+func TestTCS1ColumnPartAssetRejectsUnknownInnerEncoding(t *testing.T) {
+	_, image := testColumnPartImageFixture(t, false)
+	descriptor, dec := descriptorDecoderAtFirstColumnFirstBlock(t, image)
+	corruptImage := append([]byte(nil), image.Bytes...)
+	encodingOffset := descriptor.Offset + dec.offset + 4*8
+	binary.LittleEndian.PutUint16(corruptImage[encodingOffset:], 0xffff)
+
+	payload, _, err := EncodeTCS1ColumnPartImage(image)
+	if err != nil {
+		t.Fatalf("EncodeTCS1ColumnPartImage: %v", err)
+	}
+	copy(payload[tcs1HeaderBytes:], corruptImage)
+	binary.LittleEndian.PutUint32(payload[44:48], crc32.ChecksumIEEE(corruptImage))
+
+	store := NewMemoryColumnAssetStore()
+	ref, err := store.Put(ColumnAssetKindTCS1PartImage, payload)
+	if err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if _, _, err := ColumnPartFromTCS1Asset(store, ref); err == nil || !strings.Contains(err.Error(), "unsupported int64 encoding") {
+		t.Fatalf("ColumnPartFromTCS1Asset err=%v want unsupported inner encoding", err)
 	}
 }
 
