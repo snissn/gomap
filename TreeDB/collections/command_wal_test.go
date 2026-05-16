@@ -11,6 +11,7 @@ import (
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 func TestCollectionCommandWALInsertBatchByIDPublishesAppliedLSN(t *testing.T) {
@@ -460,6 +461,44 @@ func TestCollectionCommandWALUpdateByIDIndexedPublishesSecondaryRoots(t *testing
 		t.Fatalf("UpdateBatch results=%+v, want one matched modified", results)
 	}
 	assertCollectionDocument(t, col, "u1", `{"name":"Ada","city":"sea"}`)
+	assertCollectionIndexIDs(t, col, "city", "hnl")
+	assertCollectionIndexIDs(t, col, "city", "sea", "u1")
+	assertCollectionIndexIDs(t, col, "city", "nyc", "u2")
+	if got := d.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("AppliedCommandLSN=%d, want 1", got)
+	}
+}
+
+func TestCollectionCommandWALUpdateBSONSetUniqueIndexChangePublishesAppliedLSN(t *testing.T) {
+	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatBSON,
+		},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city", ValueType: IndexValueString, Unique: true}},
+	}, collectionCommandWALSetupInsert{
+		ids: [][]byte{[]byte("u1"), []byte("u2")},
+		docs: [][]byte{
+			mustBSONCollectionDocument(t, bson.D{{Key: "name", Value: "Ada"}, {Key: "city", Value: "hnl"}}),
+			mustBSONCollectionDocument(t, bson.D{{Key: "name", Value: "Grace"}, {Key: "city", Value: "nyc"}}),
+		},
+	})
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col, err := NewCollectionManager(d).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	matched, modified, err := col.UpdateBSONSet([]byte("u1"), []BSONSetField{{
+		Key:   "city",
+		Value: mustBSONRawValue(t, "sea"),
+	}})
+	if err != nil {
+		t.Fatalf("UpdateBSONSet: %v", err)
+	}
+	if !matched || !modified {
+		t.Fatalf("UpdateBSONSet matched=%t modified=%t, want true/true", matched, modified)
+	}
 	assertCollectionIndexIDs(t, col, "city", "hnl")
 	assertCollectionIndexIDs(t, col, "city", "sea", "u1")
 	assertCollectionIndexIDs(t, col, "city", "nyc", "u2")

@@ -94,8 +94,15 @@ func (c *Collection) updateBSONSetDirect(documentID []byte, spec bsonSetUpdate) 
 		return false, false, err
 	}
 	items := []updateBatchItem{newBSONSetUpdateBatchItem(documentID, spec)}
-	results, batched, err := c.updateBatchOwnedItems(items, updateBatchModeNoSecondaryUniqueIndexChanges)
+	mode := updateBatchModeNoSecondaryUniqueIndexChanges
+	if c.commandWALActive(nil) {
+		mode = updateBatchModeAny
+	}
+	results, batched, err := c.updateBatchOwnedItems(items, mode)
 	if !batched && err == nil {
+		if c.commandWALActive(nil) {
+			return false, false, errors.New("collections: command WAL BSON $set fallback unexpectedly unbatched")
+		}
 		return c.updateDirectBSONSet(documentID, spec)
 	}
 	if err != nil {
