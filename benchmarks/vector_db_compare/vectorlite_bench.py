@@ -123,7 +123,7 @@ def build_database(args: argparse.Namespace, manifest: dict[str, Any], docs: np.
         f"hnsw(max_elements={manifest['docs']}, ef_construction={args.ef_construction}, M={args.m}), "
         f"{sqlite_quote(str(index_path))})"
     )
-    build_start = time.perf_counter()
+    insert_start = time.perf_counter()
     with db:
         db.executemany(
             "insert into documents(rowid, id, grp, embedding) values (?, ?, ?, ?)",
@@ -132,6 +132,9 @@ def build_database(args: argparse.Namespace, manifest: dict[str, Any], docs: np.
                 for i in range(manifest["docs"])
             ),
         )
+    insert_phase = phase(insert_start)
+    build_start = time.perf_counter()
+    with db:
         db.executemany(
             "insert into vectors(rowid, embedding) values (?, ?)",
             ((i + 1, memoryview(docs[i]).tobytes()) for i in range(manifest["docs"])),
@@ -141,7 +144,7 @@ def build_database(args: argparse.Namespace, manifest: dict[str, Any], docs: np.
     db.close()
     total_phase = phase(start)
     return {
-        "insert": build_phase,
+        "insert": insert_phase,
         "build": build_phase,
         "create_total": total_phase,
     }, version
