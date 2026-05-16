@@ -318,6 +318,30 @@ func TestVectorIndexSelectDiverseCandidatesKeepsBackfillDistanceSorted(t *testin
 	}
 }
 
+func TestVectorIndexFloat32CosineCandidateDistanceFastPathMatchesExact(t *testing.T) {
+	index, err := newVectorIndex(nil, VectorIndexOptions{
+		Name:   "embedding",
+		Field:  "embedding",
+		Metric: VectorMetricCosine,
+	})
+	if err != nil {
+		t.Fatalf("new vector index: %v", err)
+	}
+	index.nodes = []vectorIndexNode{
+		{documentID: []byte("candidate"), vector: []float32{0.25, -0.5, 1.25, 2}, level: 0},
+		{documentID: []byte("existing"), vector: []float32{1.5, -0.25, 0.75, 3}, level: 0},
+	}
+	for i := range index.nodes {
+		index.nodes[i].cacheVectorNorms()
+	}
+
+	got := index.distanceBetweenFloat32CosineCandidateAndNodeLocked(&index.nodes[0], 1)
+	want := mustExactVectorDistance(t, index.nodes[0].vector, index.nodes[1].vector)
+	if math.Abs(float64(got-want)) > 1e-6 {
+		t.Fatalf("fast candidate distance=%v want %v", got, want)
+	}
+}
+
 func TestVectorIndexSelectLayerNeighborsReusesCandidateDistances(t *testing.T) {
 	index, err := newVectorIndex(nil, VectorIndexOptions{
 		Name:   "embedding",
