@@ -1,6 +1,7 @@
 package colgranule
 
 import (
+	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -206,6 +207,78 @@ func BenchmarkJSONBenchColumnPartSetQueriesM4(b *testing.B) {
 	}
 }
 
+func BenchmarkJSONBenchColumnPartSetQueriesM4PerQuery(b *testing.B) {
+	ds := syntheticJSONBenchDataset(DefaultRowsPerGranule * 100)
+	benchmarkJSONBenchColumnPartSetQueriesM4PerQuery(b, ds)
+}
+
+func BenchmarkJSONBenchLocalColumnPartSetQueriesM4PerQuery(b *testing.B) {
+	path := os.Getenv("JSONBENCH_DATA")
+	if path == "" {
+		path = DefaultJSONBenchDir
+	}
+	if _, err := os.Stat(path); err != nil {
+		b.Skipf("JSONBench data not present; set JSONBENCH_DATA or install %s", DefaultJSONBenchDir)
+	}
+	ds, err := LoadJSONBenchColumns(path, 1_000_000)
+	if err != nil {
+		b.Fatalf("LoadJSONBenchColumns: %v", err)
+	}
+	if ds.Rows < 1_000_000 {
+		b.Skipf("local JSONBench fixture has rows=%d; set JSONBENCH_DATA to a 1M-row fixture for the local part-set gate", ds.Rows)
+	}
+	benchmarkJSONBenchColumnPartSetQueriesM4PerQuery(b, ds)
+}
+
+func benchmarkJSONBenchColumnPartSetQueriesM4PerQuery(b *testing.B, ds JSONBenchDataset) {
+	opts, err := JSONBenchColumnPartOptions(ds, DefaultRowsPerGranule)
+	if err != nil {
+		b.Fatalf("JSONBenchColumnPartOptions: %v", err)
+	}
+	codes, err := jsonBenchQueryCodes(ds)
+	if err != nil {
+		b.Fatalf("jsonBenchQueryCodes: %v", err)
+	}
+	reader, cleanup := benchmarkColumnPartSetReader(b, ds, opts)
+	defer cleanup()
+	queries := []struct {
+		name    string
+		columns int
+		run     func(*ColumnPartSetReader, queryCodeSet, *jsonBenchPartQueryScratch) (int, uint64, JSONBenchPartQueryDiagnostics, error)
+	}{
+		{"Q1_grouped_count", 1, runJSONBenchPartSetQ1},
+		{"Q2_group_count_distinct", len(jsonBenchPartQ2Columns), runJSONBenchPartSetQ2},
+		{"Q3_hourly_grouped_count", len(jsonBenchPartQ3Columns), runJSONBenchPartSetQ3},
+		{"Q4_min_by_user", len(jsonBenchPartQ4Columns), runJSONBenchPartSetQ4},
+		{"Q5_span_by_user", len(jsonBenchPartQ5Columns), runJSONBenchPartSetQ5},
+	}
+	for _, query := range queries {
+		b.Run(query.name, func(b *testing.B) {
+			b.ReportAllocs()
+			scratch := &jsonBenchPartQueryScratch{}
+			rows, digest, diagnostics, err := query.run(reader, codes, scratch)
+			if err != nil {
+				b.Fatal(err)
+			}
+			benchSink += int64(rows) + int64(digest)
+			valueBytes := diagnostics.RowsScanned * query.columns * 8
+			if valueBytes == 0 {
+				valueBytes = reader.VisibilityStats().VisibleRows * query.columns * 8
+			}
+			b.SetBytes(int64(valueBytes))
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				rows, digest, diagnostics, err = query.run(reader, codes, scratch)
+				if err != nil {
+					b.Fatal(err)
+				}
+				benchSink += int64(rows) + int64(digest)
+			}
+			reportGranuleBenchMetrics(b, diagnostics.RowsScanned, valueBytes, diagnostics.BytesDecoded)
+		})
+	}
+}
+
 func BenchmarkColumnPartSetCompactionM5(b *testing.B) {
 	ds := syntheticJSONBenchDataset(DefaultRowsPerGranule * 100)
 	opts, err := JSONBenchColumnPartOptions(ds, DefaultRowsPerGranule)
@@ -258,6 +331,106 @@ func BenchmarkColumnPartSetCompactionM5(b *testing.B) {
 	if seconds > 0 {
 		b.ReportMetric(float64(ds.Rows*b.N)/seconds, "input_rows/s")
 	}
+}
+
+func BenchmarkColumnPartSetCompactionM5Breakdown(b *testing.B) {
+	ds := syntheticJSONBenchDataset(DefaultRowsPerGranule * 100)
+	opts, err := JSONBenchColumnPartOptions(ds, DefaultRowsPerGranule)
+	if err != nil {
+		b.Fatalf("JSONBenchColumnPartOptions: %v", err)
+	}
+	updates, deletes := benchmarkJSONBenchMutations(b, ds)
+	columnNames := make([]string, 0, len(opts.Columns))
+	for _, def := range opts.Columns {
+		columnNames = append(columnNames, def.Name)
+	}
+
+	b.Run("visible_scan_declared_columns", func(b *testing.B) {
+		workspace, reader := benchmarkMutableColumnPartSetReader(b, b.TempDir(), ds, opts, updates, deletes)
+		defer workspace.Close()
+		projected := make(map[string][]int64, len(columnNames))
+		b.ReportAllocs()
+		b.SetBytes(int64(ds.Rows * len(columnNames) * 8))
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			scan, err := reader.ScanProjectedInto(projected, columnNames)
+			if err != nil {
+				b.Fatal(err)
+			}
+			benchSink += int64(scan.Rows)
+		}
+		seconds := b.Elapsed().Seconds()
+		if seconds > 0 {
+			b.ReportMetric(float64(ds.Rows*b.N)/seconds, "input_rows/s")
+		}
+	})
+
+	b.Run("build_compacted_part", func(b *testing.B) {
+		workspace, reader := benchmarkMutableColumnPartSetReader(b, b.TempDir(), ds, opts, updates, deletes)
+		defer workspace.Close()
+		scan, err := reader.ScanProjected(columnNames)
+		if err != nil {
+			b.Fatalf("ScanProjected: %v", err)
+		}
+		b.ReportAllocs()
+		b.SetBytes(int64(scan.Rows * len(columnNames) * 8))
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			part, err := BuildColumnPart(uint64(20_000+i), opts, ColumnBatch{Rows: scan.Rows, Columns: scan.Columns})
+			if err != nil {
+				b.Fatal(err)
+			}
+			benchSink += int64(part.Descriptor.RowCount)
+		}
+		seconds := b.Elapsed().Seconds()
+		if seconds > 0 {
+			b.ReportMetric(float64(scan.Rows*b.N)/seconds, "visible_rows/s")
+		}
+	})
+
+	b.Run("build_part_image", func(b *testing.B) {
+		workspace, reader := benchmarkMutableColumnPartSetReader(b, b.TempDir(), ds, opts, updates, deletes)
+		defer workspace.Close()
+		scan, err := reader.ScanProjected(columnNames)
+		if err != nil {
+			b.Fatalf("ScanProjected: %v", err)
+		}
+		part, err := BuildColumnPart(30_000, opts, ColumnBatch{Rows: scan.Rows, Columns: scan.Columns})
+		if err != nil {
+			b.Fatalf("BuildColumnPart: %v", err)
+		}
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			image, err := BuildColumnPartImage(part, ColumnPartImageOptions{Dictionaries: ds.Dictionaries})
+			if err != nil {
+				b.Fatal(err)
+			}
+			benchSink += int64(image.TotalBytes())
+		}
+	})
+
+	b.Run("publish_compacted_part", func(b *testing.B) {
+		workspace, reader := benchmarkMutableColumnPartSetReader(b, b.TempDir(), ds, opts, updates, deletes)
+		defer workspace.Close()
+		scan, err := reader.ScanProjected(columnNames)
+		if err != nil {
+			b.Fatalf("ScanProjected: %v", err)
+		}
+		part, err := BuildColumnPart(40_000, opts, ColumnBatch{Rows: scan.Rows, Columns: scan.Columns})
+		if err != nil {
+			b.Fatalf("BuildColumnPart: %v", err)
+		}
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			entry, err := workspace.PublishPart(part, ds.Dictionaries)
+			if err != nil {
+				b.Fatal(err)
+			}
+			benchSink += int64(entry.AssetBytes)
+		}
+	})
 }
 
 func benchmarkColumnPartSetReader(b *testing.B, ds JSONBenchDataset, opts ColumnStoreOptions) (*ColumnPartSetReader, func()) {
@@ -327,6 +500,34 @@ func benchmarkMutableColumnPartSetReader(b *testing.B, dir string, ds JSONBenchD
 		b.Fatalf("OpenColumnPartSetReader: %v", err)
 	}
 	return workspace, reader
+}
+
+func benchmarkJSONBenchMutations(b *testing.B, ds JSONBenchDataset) (map[int64]map[string]int64, map[int64]bool) {
+	b.Helper()
+	codes, err := jsonBenchQueryCodes(ds)
+	if err != nil {
+		b.Fatalf("jsonBenchQueryCodes: %v", err)
+	}
+	updates := map[int64]map[string]int64{
+		5: {
+			"kind_code":              codes.kindCommit,
+			"commit_operation_code":  codes.operationCreate,
+			"commit_collection_code": codes.collectionPost,
+			"did_code":               ds.Columns["did_code"][40],
+			"time_us":                ds.Columns["time_us"][5] - 10_000_000,
+		},
+		25: {
+			"kind_code":              codes.kindCommit,
+			"commit_operation_code":  codes.operationCreate,
+			"commit_collection_code": codes.collectionPost,
+			"did_code":               ds.Columns["did_code"][41],
+			"time_us":                ds.Columns["time_us"][25] + 20_000_000,
+		},
+	}
+	for _, update := range updates {
+		update["hour_of_day"] = unixMicroHour(update["time_us"])
+	}
+	return updates, map[int64]bool{10: true, 11: true}
 }
 
 func benchmarkPublishJSONBenchPartRows(b *testing.B, workspace *ColumnWorkspace, opts ColumnStoreOptions, ds JSONBenchDataset, partID uint64, start int, end int) ColumnWorkspacePartManifest {

@@ -366,6 +366,53 @@ func (s *ColumnPartScanner) scanColumnInto(name string, dst []int64) ([]int64, P
 	return out, diagnostics, nil
 }
 
+func (s *ColumnPartScanner) scanColumnRowsInto(name string, dst []int64, rows []int) ([]int64, PartScanDiagnostics, error) {
+	column, ok := s.part.Columns[name]
+	if !ok {
+		return nil, PartScanDiagnostics{}, fmt.Errorf("colgranule: missing column %s", name)
+	}
+	if len(rows) == 0 {
+		return dst[:0], PartScanDiagnostics{}, nil
+	}
+	if rows[0] < 0 || rows[len(rows)-1] >= s.part.Descriptor.RowCount {
+		return nil, PartScanDiagnostics{}, fmt.Errorf("colgranule: visible row range [%d,%d] outside part rows=%d", rows[0], rows[len(rows)-1], s.part.Descriptor.RowCount)
+	}
+	out := dst
+	var diagnostics PartScanDiagnostics
+	rowIndex := 0
+	for _, block := range column.Blocks {
+		first := block.Descriptor.FirstRow
+		limit := first + block.Descriptor.RowCount
+		for rowIndex < len(rows) && rows[rowIndex] < first {
+			return nil, diagnostics, fmt.Errorf("colgranule: visible row %d before block %d first row %d", rows[rowIndex], block.Descriptor.CodecBlockOrdinal, first)
+		}
+		start := rowIndex
+		for rowIndex < len(rows) && rows[rowIndex] < limit {
+			rowIndex++
+		}
+		if start == rowIndex {
+			continue
+		}
+		values, err := s.decodeBlock(column.Definition.Type, block.Granule)
+		if err != nil {
+			return nil, diagnostics, err
+		}
+		if len(values) != block.Descriptor.RowCount {
+			return nil, diagnostics, fmt.Errorf("colgranule: block rows=%d decoded=%d", block.Descriptor.RowCount, len(values))
+		}
+		for _, row := range rows[start:rowIndex] {
+			out = append(out, values[row-first])
+		}
+		diagnostics.BlocksDecoded++
+		diagnostics.BytesDecoded += block.Granule.RawBytes
+	}
+	if rowIndex != len(rows) {
+		return nil, diagnostics, fmt.Errorf("colgranule: %d visible rows outside column %s blocks", len(rows)-rowIndex, name)
+	}
+	diagnostics.RowsScanned = len(rows)
+	return out, diagnostics, nil
+}
+
 func (s *ColumnPartScanner) decodeBlock(columnType ColumnType, g EncodedGranule) ([]int64, error) {
 	switch columnType {
 	case ColumnTypeInt64:

@@ -64,6 +64,7 @@ type jsonBenchPartQueryScratch struct {
 	codeReaders [4]GranuleReader
 	timeReader  GranuleReader
 	q2Counts    []uint64
+	q1Counts    []uint64
 	q2Seen      []uint64
 	q3Counts    []uint64
 	q4Seen      touchedBitset
