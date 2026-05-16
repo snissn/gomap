@@ -22,6 +22,7 @@ type commandWALBatchIntent struct {
 	externalRefFileIDs []uint32
 	lsn                uint64
 	coveredRange       [1]CommandWALLSNRange
+	syncOnPublish      bool
 }
 
 // CommandWALIntent is an opaque command-WAL append/finalize token used by
@@ -59,6 +60,7 @@ func NewCommandWALReplayIntent(env commitlog.CommandEnvelope) *CommandWALIntent 
 		payload:       env.Payload,
 		lsn:           env.LSN,
 		coveredRange:  [1]CommandWALLSNRange{{First: env.LSN, Last: env.LSN}},
+		syncOnPublish: true,
 	}}
 }
 
@@ -259,6 +261,7 @@ func (db *DB) PublishCommandWALNoop(intent *CommandWALIntent, sync bool) error {
 	if !db.CommandWALEnabled() {
 		return ErrCommandWALUnsupported
 	}
+	sync = commandWALIntentPublishSync(intent, sync)
 	db.writeMu.Lock()
 	defer db.writeMu.Unlock()
 	db.commitMu.Lock()
@@ -279,6 +282,10 @@ func (db *DB) PublishCommandWALNoop(intent *CommandWALIntent, sync bool) error {
 	db.commitMu.Unlock()
 	db.finalizeCommitPostWork(post)
 	return nil
+}
+
+func commandWALIntentPublishSync(intent *CommandWALIntent, sync bool) bool {
+	return sync || (intent != nil && intent.inner.syncOnPublish)
 }
 
 func (db *DB) appendCommandWALIntent(intent *commandWALBatchIntent, sync bool) (uint64, error) {

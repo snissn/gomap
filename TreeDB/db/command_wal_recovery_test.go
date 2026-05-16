@@ -458,6 +458,24 @@ func TestPublishCommandWALNoopRequiresCommandWALEnabled(t *testing.T) {
 	}
 }
 
+func TestCommandWALReplayIntentRequestsSynchronousPublish(t *testing.T) {
+	intent := NewCommandWALReplayIntent(commitlog.CommandEnvelope{
+		LSN:           1,
+		Kind:          commitlog.CommandKindRawKVBatch,
+		Scope:         commitlog.CommandScopeRawKV,
+		PayloadFormat: commitlog.PayloadFormatRawKVBatchV1,
+	})
+	if !commandWALIntentPublishSync(intent, false) {
+		t.Fatal("replay intent did not request synchronous publish")
+	}
+	if !commandWALIntentPublishSync(nil, true) {
+		t.Fatal("explicit sync publish was not preserved")
+	}
+	if commandWALIntentPublishSync(nil, false) {
+		t.Fatal("nil intent unexpectedly requested sync publish")
+	}
+}
+
 func TestCommandWALRawEmptyBatchAdvancesAppliedLSNAsNoop(t *testing.T) {
 	dir := t.TempDir()
 	enableCommandWALFormat(t, dir)
