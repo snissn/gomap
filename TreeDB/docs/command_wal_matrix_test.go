@@ -96,7 +96,7 @@ func TestCommandWALSupportMatrixCoversNativeWireMutationCommands(t *testing.T) {
 		"CommandCreateIndex",
 		"CommandDropIndex",
 		"CommandInsertBatch",
-		"CommandUpdateBatch",
+		"CommandReplaceBatch",
 		"CommandDeleteBatch",
 	} {
 		requireMatrixEntry(t, matrix, "nativewire", command)

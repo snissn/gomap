@@ -38,7 +38,7 @@
     {"surface":"nativewire","entry_point":"CommandCreateIndex","command":"future catalog index create","status":"WAL-rejected","first_pr":"PR6","tests":["TestCollectionCommandWALRejectsCatalogIndexMutations"]},
     {"surface":"nativewire","entry_point":"CommandDropIndex","command":"future catalog index drop","status":"WAL-rejected","first_pr":"PR6","tests":["TestCollectionCommandWALRejectsCatalogIndexMutations"]},
     {"surface":"nativewire","entry_point":"CommandInsertBatch","command":"CollectionInsertBatchByID","status":"WAL-supported","first_pr":"PR4","tests":["TestCollectionCommandWALInsertBatchByIDPublishesAppliedLSN"]},
-    {"surface":"nativewire","entry_point":"CommandUpdateBatch","command":"CollectionUpdateBatchByID","status":"WAL-supported","first_pr":"PR5","tests":["TestCollectionCommandWALUpdateByIDIndexedPublishesSecondaryRoots"]},
+    {"surface":"nativewire","entry_point":"CommandReplaceBatch","command":"CollectionUpdateBatchByID","status":"WAL-supported","first_pr":"PR5","tests":["TestCollectionCommandWALUpdateByIDIndexedPublishesSecondaryRoots"]},
     {"surface":"nativewire","entry_point":"CommandDeleteBatch","command":"CollectionDeleteBatchByID","status":"WAL-supported","first_pr":"PR4","tests":["TestCollectionCommandWALDeleteBatchByIDPublishesMissingOnlyNoop"]}
   ]
 }
