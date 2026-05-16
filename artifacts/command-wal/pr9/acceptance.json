@@ -20,12 +20,22 @@
   ],
   "local_validation_commands": [
     "git diff --check",
-    "GOWORK=off go test ./TreeDB ./TreeDB/docs ./TreeDB/db -run 'TestPublicCommandWALRawKVWritesUseTypedFrames|TestCommandWALSupportMatrix|TestCommandWALRawSetDeleteBatchReplaysThroughNormalExecutor|^$' -count=1"
+    "GOWORK=off go test ./TreeDB ./TreeDB/docs ./TreeDB/db -run 'TestPublicCommandWALRawKVWritesUseTypedFrames|TestCommandWALSupportMatrix|TestCommandWALRawSetDeleteBatchReplaysThroughNormalExecutor|^$' -count=1",
+    "GOWORK=off go test ./TreeDB -run 'TestPublicCommandWALRawKVWritesUseTypedFrames|^$' -bench '^BenchmarkPublicCommandWALRawKVSet$' -benchtime=100x -count=1"
+  ],
+  "benchmark_artifacts": [
+    "artifacts/command-wal/pr9/public-raw-kv-microbench.txt"
   ],
   "performance_gate": {
     "required": true,
-    "status": "pending",
-    "rationale": "PR9 changes public raw KV write routing for command-WAL mode. A controlled microbenchmark/unified-bench mode proof must be added before tracker mergeable state."
+    "status": "blocked",
+    "rationale": "The initial correctness slice proves public typed command-WAL routing but direct backend per-Set command WAL is much slower than public cached legacy WAL. This PR is not tracker-mergeable until the cached typed command path or another batching strategy closes the throughput/allocation gap.",
+    "observed_smoke_result": {
+      "legacy_public_cached_wal_on_sets_per_sec": 442978,
+      "public_command_wal_backend_sets_per_sec": 958.7,
+      "legacy_public_cached_allocs_per_op": 4,
+      "public_command_wal_backend_allocs_per_op": 32
+    }
   },
   "unsupported_modes": [
     "cached memtable command-WAL writes remain disabled; public command-WAL writes use direct backend command-WAL mode to avoid the legacy cached redo journal",
