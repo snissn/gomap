@@ -473,6 +473,49 @@ func (j *CommandJournal) AppendCommand(env CommandEnvelope) (uint64, error) {
 	return lsn, nil
 }
 
+func (j *CommandJournal) AppendRawKVSingleCommand(baseAppliedLSN uint64, op RawKVOperation) (uint64, error) {
+	if j == nil {
+		return 0, errors.New("commitlog: command journal is closed")
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.writer == nil || j.owner == nil {
+		return 0, errors.New("commitlog: command journal is closed")
+	}
+	if err := validateRawKVOperation(&op); err != nil {
+		return 0, err
+	}
+	valueLen := len(op.Value)
+	if op.Op == RawKVOpSetRID {
+		valueLen = 8
+	}
+	if commandFrameIntExceedsUint32(len(op.Key)) || commandFrameIntExceedsUint32(valueLen) {
+		return 0, ErrRecordTooLarge
+	}
+	payloadLen := rawKVBatchHeaderSize + rawKVOpHeaderSize + len(op.Key) + valueLen
+	size, err := commandFrameEncodedSizeFromLengths(payloadLen, 0, 0, 0)
+	if err != nil {
+		return 0, err
+	}
+	if j.writer.maxSegmentSize > 0 && int64(size) > j.writer.maxSegmentSize {
+		return 0, ErrRecordTooLarge
+	}
+	if size > int(segmentLenMask) {
+		return 0, ErrRecordTooLarge
+	}
+	lsn, err := j.owner.reserveLSN()
+	if err != nil {
+		return 0, err
+	}
+	if err := j.writer.AppendRawKVSingleCommand(lsn, baseAppliedLSN, op); err != nil {
+		if rollbackErr := j.owner.rollbackReservedLSN(lsn); rollbackErr != nil {
+			return 0, errors.Join(err, rollbackErr)
+		}
+		return 0, err
+	}
+	return lsn, nil
+}
+
 func (j *CommandJournal) Path() string {
 	if j == nil {
 		return ""

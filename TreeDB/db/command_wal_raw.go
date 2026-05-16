@@ -277,6 +277,44 @@ func (db *DB) AppendCommandWALPayload(kind commitlog.CommandKind, scope commitlo
 	return db.appendCommandWALIntent(&intent, sync)
 }
 
+func (db *DB) AppendRawKVSingleCommandWAL(op commitlog.RawKVOperation, sync bool) (uint64, error) {
+	if db == nil || !db.commandWAL {
+		return 0, nil
+	}
+	if db.durability == DurabilityWALOffRelaxed {
+		return 0, fmt.Errorf("%w: WAL-off durability is incompatible with command WAL", ErrCommandWALUnsupported)
+	}
+	if op.Op == commitlog.RawKVOpSetRID {
+		return 0, fmt.Errorf("%w: public single-op command WAL cannot carry external refs", ErrCommandWALUnsupported)
+	}
+	if db.commandJournal == nil {
+		return 0, fmt.Errorf("treedb: command wal journal unavailable")
+	}
+	if db.commandWALFlushPoisoned.Load() {
+		return 0, fmt.Errorf("%w: command wal post-append failure; reopen required", ErrRecoveryRequired)
+	}
+	db.mu.RLock()
+	baseAppliedLSN := db.meta.AppliedCommandLSN
+	db.mu.RUnlock()
+	lsn, err := db.commandJournal.AppendRawKVSingleCommand(baseAppliedLSN, op)
+	if err != nil {
+		return 0, err
+	}
+	if sync {
+		err = db.commandJournal.Sync()
+	} else {
+		err = db.commandJournal.Flush()
+	}
+	if err == nil && db.testFailCommandWALFlush.Load() {
+		err = errTestCommandWALFlushFailpoint
+	}
+	if err != nil {
+		db.commandWALFlushPoisoned.Store(true)
+		return 0, err
+	}
+	return lsn, nil
+}
+
 func (db *DB) PublishCommandWALNoop(intent *CommandWALIntent, sync bool) error {
 	if intent == nil {
 		return nil

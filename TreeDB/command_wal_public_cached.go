@@ -29,11 +29,11 @@ func (tdb *DB) appendPublicRawKVSingleCommand(op commitlog.RawKVOperation, sync 
 	if tdb.backend == nil {
 		return ErrClosed
 	}
-	payload, err := commitlog.EncodeRawKVSingleOperationPayload(op)
-	if err != nil {
-		return err
+	lsn, err := tdb.backend.AppendRawKVSingleCommandWAL(op, sync)
+	if err == nil {
+		tdb.recordPublicCommandWALPendingLSN(lsn)
 	}
-	return tdb.appendPublicRawKVCommandPayload(payload, sync)
+	return err
 }
 
 func (tdb *DB) appendPublicRawKVCommandPayload(payload []byte, sync bool) error {

@@ -317,6 +317,30 @@ func (w *Writer) AppendCommand(env CommandEnvelope) error {
 	return w.writeSegment(payload)
 }
 
+func (w *Writer) AppendRawKVSingleCommand(lsn, baseAppliedLSN uint64, op RawKVOperation) error {
+	valueLen := len(op.Value)
+	if op.Op == RawKVOpSetRID {
+		valueLen = 8
+	}
+	payloadLen := rawKVBatchHeaderSize + rawKVOpHeaderSize + len(op.Key) + valueLen
+	size, err := commandFrameEncodedSizeFromLengths(payloadLen, 0, 0, 0)
+	if err != nil {
+		return err
+	}
+	if w.maxSegmentSize > 0 && int64(size) > w.maxSegmentSize {
+		return ErrRecordTooLarge
+	}
+	if size > int(segmentLenMask) {
+		return ErrRecordTooLarge
+	}
+	payload, err := encodeRawKVSingleCommandFrameTo(w.scratch[:0], lsn, baseAppliedLSN, op)
+	if err != nil {
+		return err
+	}
+	w.scratch = payload
+	return w.writeSegment(payload)
+}
+
 func (w *Writer) writeSegment(payload []byte) error {
 	stored := payload
 	length := uint32(len(payload))

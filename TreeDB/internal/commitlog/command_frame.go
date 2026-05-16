@@ -160,6 +160,66 @@ func EncodeCommandFrame(env CommandEnvelope) ([]byte, error) {
 	return encodeCommandFrameTo(nil, env)
 }
 
+func encodeRawKVSingleCommandFrameTo(dst []byte, lsn, baseAppliedLSN uint64, op RawKVOperation) ([]byte, error) {
+	if lsn == 0 {
+		return nil, fmt.Errorf("%w: zero lsn", ErrCorrupt)
+	}
+	if err := validateRawKVOperation(&op); err != nil {
+		return nil, err
+	}
+	valueLen := len(op.Value)
+	if op.Op == RawKVOpSetRID {
+		valueLen = 8
+	}
+	if commandFrameIntExceedsUint32(len(op.Key)) || commandFrameIntExceedsUint32(valueLen) {
+		return nil, ErrRecordTooLarge
+	}
+	payloadLen := rawKVBatchHeaderSize + rawKVOpHeaderSize + len(op.Key) + valueLen
+	total, err := commandFrameEncodedSizeFromLengths(payloadLen, 0, 0, 0)
+	if err != nil {
+		return nil, err
+	}
+	if cap(dst) < total {
+		dst = make([]byte, total)
+	} else {
+		dst = dst[:total]
+	}
+	frame := dst
+	clear(frame[:commandFrameHeaderSize])
+	copy(frame[0:4], commandFrameMagic[:])
+	binary.LittleEndian.PutUint16(frame[4:6], CommandFrameVersion)
+	binary.LittleEndian.PutUint16(frame[6:8], CommandFrameVersion)
+	binary.LittleEndian.PutUint16(frame[8:10], uint16(CommandKindRawKVBatch))
+	binary.LittleEndian.PutUint16(frame[10:12], uint16(CommandScopeRawKV))
+	binary.LittleEndian.PutUint64(frame[20:28], lsn)
+	binary.LittleEndian.PutUint64(frame[44:52], baseAppliedLSN)
+	binary.LittleEndian.PutUint16(frame[52:54], uint16(PayloadFormatRawKVBatchV1))
+	binary.LittleEndian.PutUint32(frame[56:60], uint32(payloadLen))
+
+	off := commandFrameHeaderSize
+	payloadStart := off
+	binary.LittleEndian.PutUint16(frame[off:off+2], 1)
+	binary.LittleEndian.PutUint32(frame[off+2:off+6], 1)
+	off += rawKVBatchHeaderSize
+	value := op.Value
+	var ridBuf [8]byte
+	if op.Op == RawKVOpSetRID {
+		binary.LittleEndian.PutUint64(ridBuf[:], op.RID)
+		value = ridBuf[:]
+	}
+	frame[off] = byte(op.Op)
+	binary.LittleEndian.PutUint32(frame[off+1:off+5], uint32(len(op.Key)))
+	binary.LittleEndian.PutUint32(frame[off+5:off+9], uint32(len(value)))
+	off += rawKVOpHeaderSize
+	copy(frame[off:], op.Key)
+	off += len(op.Key)
+	copy(frame[off:], value)
+	off += len(value)
+	digest := sha256.Sum256(frame[payloadStart:off])
+	copy(frame[72:72+sha256.Size], digest[:])
+	return frame, nil
+}
+
 func commandFrameEncodedSize(env CommandEnvelope) (int, error) {
 	payloadLen := len(env.Payload)
 	if env.Kind == CommandKindRawKVBatch && env.Payload == nil {
