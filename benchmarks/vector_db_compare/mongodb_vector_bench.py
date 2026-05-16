@@ -33,7 +33,7 @@ def parse_ints(raw: str) -> list[int]:
             continue
         value = int(part)
         if value < 1:
-            raise ValueError("concurrency values must be positive")
+            raise ValueError("concurrency values must be at least 1")
         if value not in seen:
             values.append(value)
             seen.add(value)
@@ -305,13 +305,15 @@ def benchmark_search(args: argparse.Namespace, query_lists: list[list[float]], c
 
 def storage_usage(client: MongoClient, args: argparse.Namespace, docs: int) -> dict[str, Any]:
     stats = client[args.database].command("collStats", args.collection)
-    total = int(stats.get("storageSize", 0)) + int(stats.get("totalIndexSize", 0))
+    storage_size = int(stats.get("storageSize", 0))
+    index_size = int(stats.get("totalIndexSize", stats.get("indexSize", 0)))
+    total = storage_size + index_size
     return {
         "total_bytes": total,
         "files": 0,
         "domains": {
-            "storageSize": int(stats.get("storageSize", 0)),
-            "totalIndexSize": int(stats.get("totalIndexSize", 0)),
+            "collection_storageSize": storage_size,
+            "collection_totalIndexSize": index_size,
         },
         "bytes_per_doc": total / docs if docs else 0,
     }
@@ -364,7 +366,7 @@ def main() -> None:
     storage = storage_usage(client, args, manifest["docs"])
     client.close()
 
-    levels = [1] + [level for level in concurrency if level != 1]
+    levels = sorted({1, *concurrency})
     search_benchmarks = [benchmark_search(args, query_lists, level) for level in levels]
 
     result = {
