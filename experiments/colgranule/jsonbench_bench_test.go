@@ -449,11 +449,11 @@ func benchmarkJSONBenchPartAssetM2(b *testing.B, ds JSONBenchDataset) {
 				b.ResetTimer()
 				for i := 0; i < b.N; i++ {
 					store.Reset()
-					ref, record, err := StoreTCS1ColumnPartImage(store, image)
+					ref, storedRecord, err := StoreTCS1ColumnPartImage(store, image)
 					if err != nil {
 						b.Fatal(err)
 					}
-					benchSink += int64(ref.Length + int64(record.PayloadBytes))
+					benchSink += int64(ref.Length + int64(storedRecord.PayloadBytes))
 				}
 				reportTCS1AssetThroughput(b, ds, record)
 			})
@@ -468,11 +468,11 @@ func benchmarkJSONBenchPartAssetM2(b *testing.B, ds JSONBenchDataset) {
 				b.SetBytes(int64(record.TotalBytes))
 				b.ResetTimer()
 				for i := 0; i < b.N; i++ {
-					reconstructed, record, err := ColumnPartFromTCS1Asset(store, ref)
+					reconstructed, loadedRecord, err := ColumnPartFromTCS1Asset(store, ref)
 					if err != nil {
 						b.Fatal(err)
 					}
-					benchSink += int64(reconstructed.Descriptor.RowCount + record.PayloadBytes)
+					benchSink += int64(reconstructed.Descriptor.RowCount + loadedRecord.PayloadBytes)
 				}
 				reportTCS1AssetThroughput(b, ds, record)
 			})
@@ -488,11 +488,11 @@ func benchmarkJSONBenchPartAssetM2(b *testing.B, ds JSONBenchDataset) {
 					if err != nil {
 						b.Fatal(err)
 					}
-					reconstructed, ref, record, err := TCS1AssetBackedColumnPart(part, ds.Dictionaries, store)
+					reconstructed, ref, rebuiltRecord, err := TCS1AssetBackedColumnPart(part, ds.Dictionaries, store)
 					if err != nil {
 						b.Fatal(err)
 					}
-					benchSink += int64(reconstructed.Descriptor.RowCount) + ref.Length + int64(record.PayloadBytes)
+					benchSink += int64(reconstructed.Descriptor.RowCount) + ref.Length + int64(rebuiltRecord.PayloadBytes)
 				}
 				reportTCS1AssetThroughput(b, ds, record)
 			})

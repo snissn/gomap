@@ -122,7 +122,7 @@ func TestTCS1ColumnPartAssetRejectsCorruption(t *testing.T) {
 		{
 			name: "magic",
 			edit: func(in []byte) []byte {
-				binary.LittleEndian.PutUint32(in[0:4], 0)
+				binary.LittleEndian.PutUint32(in[tcs1MagicOffset:tcs1VersionOffset], 0)
 				return in
 			},
 			want: "magic",
@@ -130,7 +130,7 @@ func TestTCS1ColumnPartAssetRejectsCorruption(t *testing.T) {
 		{
 			name: "version",
 			edit: func(in []byte) []byte {
-				binary.LittleEndian.PutUint16(in[4:6], 99)
+				binary.LittleEndian.PutUint16(in[tcs1VersionOffset:tcs1KindOffset], 99)
 				return in
 			},
 			want: "version",
@@ -138,7 +138,7 @@ func TestTCS1ColumnPartAssetRejectsCorruption(t *testing.T) {
 		{
 			name: "flags",
 			edit: func(in []byte) []byte {
-				binary.LittleEndian.PutUint32(in[8:12], 1)
+				binary.LittleEndian.PutUint32(in[tcs1FlagsOffset:tcs1HeaderBytesOffset], 1)
 				return in
 			},
 			want: "flags",
@@ -146,7 +146,7 @@ func TestTCS1ColumnPartAssetRejectsCorruption(t *testing.T) {
 		{
 			name: "reserved",
 			edit: func(in []byte) []byte {
-				binary.LittleEndian.PutUint16(in[42:44], 1)
+				binary.LittleEndian.PutUint16(in[tcs1ReservedOffset:tcs1PayloadCRC32Offset], 1)
 				return in
 			},
 			want: "reserved",
@@ -183,7 +183,7 @@ func TestTCS1ColumnPartAssetRejectsImageHeaderMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncodeTCS1ColumnPartImage: %v", err)
 	}
-	binary.LittleEndian.PutUint64(payload[24:32], image.PartID+1)
+	binary.LittleEndian.PutUint64(payload[tcs1PartIDOffset:tcs1RowsOffset], image.PartID+1)
 	if _, _, err := DecodeTCS1ColumnPartImage(payload); err == nil || !strings.Contains(err.Error(), "part id") {
 		t.Fatalf("DecodeTCS1ColumnPartImage err=%v want part id mismatch", err)
 	}
@@ -200,8 +200,8 @@ func TestTCS1ColumnPartAssetRejectsUnknownInnerEncoding(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncodeTCS1ColumnPartImage: %v", err)
 	}
-	copy(payload[tcs1HeaderBytes:], corruptImage)
-	binary.LittleEndian.PutUint32(payload[44:48], crc32.ChecksumIEEE(corruptImage))
+	copy(payload[tcs1PayloadOffset:], corruptImage)
+	binary.LittleEndian.PutUint32(payload[tcs1PayloadCRC32Offset:tcs1PayloadOffset], crc32.ChecksumIEEE(corruptImage))
 
 	store := NewMemoryColumnAssetStore()
 	ref, err := store.Put(ColumnAssetKindTCS1PartImage, payload)

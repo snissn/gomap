@@ -7,11 +7,23 @@ import (
 )
 
 const (
-	tcs1Magic          uint32 = 0x31534354 // "TCS1", little-endian on disk.
-	tcs1Version        uint16 = 1
-	tcs1PartImageKind  uint16 = 1
-	tcs1HeaderBytes           = 48
-	tcs1SupportedFlags uint32 = 0
+	tcs1Magic              uint32 = 0x31534354 // "TCS1", little-endian on disk.
+	tcs1Version            uint16 = 1
+	tcs1PartImageKind      uint16 = 1
+	tcs1SupportedFlags     uint32 = 0
+	tcs1MagicOffset               = 0
+	tcs1VersionOffset             = tcs1MagicOffset + 4
+	tcs1KindOffset                = tcs1VersionOffset + 2
+	tcs1FlagsOffset               = tcs1KindOffset + 2
+	tcs1HeaderBytesOffset         = tcs1FlagsOffset + 4
+	tcs1PayloadBytesOffset        = tcs1HeaderBytesOffset + 4
+	tcs1PartIDOffset              = tcs1PayloadBytesOffset + 8
+	tcs1RowsOffset                = tcs1PartIDOffset + 8
+	tcs1ImageVersionOffset        = tcs1RowsOffset + 8
+	tcs1ReservedOffset            = tcs1ImageVersionOffset + 2
+	tcs1PayloadCRC32Offset        = tcs1ReservedOffset + 2
+	tcs1HeaderBytes               = tcs1PayloadCRC32Offset + 4
+	tcs1PayloadOffset             = tcs1HeaderBytes
 )
 
 type TCS1PartRecord struct {
@@ -50,19 +62,19 @@ func EncodeTCS1ColumnPartImage(image ColumnPartImage) ([]byte, TCS1PartRecord, e
 	payloadBytes := len(image.Bytes)
 	totalBytes := tcs1HeaderBytes + payloadBytes
 	out := make([]byte, totalBytes)
-	binary.LittleEndian.PutUint32(out[0:4], tcs1Magic)
-	binary.LittleEndian.PutUint16(out[4:6], tcs1Version)
-	binary.LittleEndian.PutUint16(out[6:8], tcs1PartImageKind)
-	binary.LittleEndian.PutUint32(out[8:12], 0)
-	binary.LittleEndian.PutUint32(out[12:16], tcs1HeaderBytes)
-	binary.LittleEndian.PutUint64(out[16:24], uint64(payloadBytes))
-	binary.LittleEndian.PutUint64(out[24:32], image.PartID)
-	binary.LittleEndian.PutUint64(out[32:40], uint64(image.Rows))
-	binary.LittleEndian.PutUint16(out[40:42], image.Version)
-	binary.LittleEndian.PutUint16(out[42:44], 0)
+	binary.LittleEndian.PutUint32(out[tcs1MagicOffset:tcs1VersionOffset], tcs1Magic)
+	binary.LittleEndian.PutUint16(out[tcs1VersionOffset:tcs1KindOffset], tcs1Version)
+	binary.LittleEndian.PutUint16(out[tcs1KindOffset:tcs1FlagsOffset], tcs1PartImageKind)
+	binary.LittleEndian.PutUint32(out[tcs1FlagsOffset:tcs1HeaderBytesOffset], 0)
+	binary.LittleEndian.PutUint32(out[tcs1HeaderBytesOffset:tcs1PayloadBytesOffset], tcs1HeaderBytes)
+	binary.LittleEndian.PutUint64(out[tcs1PayloadBytesOffset:tcs1PartIDOffset], uint64(payloadBytes))
+	binary.LittleEndian.PutUint64(out[tcs1PartIDOffset:tcs1RowsOffset], image.PartID)
+	binary.LittleEndian.PutUint64(out[tcs1RowsOffset:tcs1ImageVersionOffset], uint64(image.Rows))
+	binary.LittleEndian.PutUint16(out[tcs1ImageVersionOffset:tcs1ReservedOffset], image.Version)
+	binary.LittleEndian.PutUint16(out[tcs1ReservedOffset:tcs1PayloadCRC32Offset], 0)
 	checksum := crc32.ChecksumIEEE(image.Bytes)
-	binary.LittleEndian.PutUint32(out[44:48], checksum)
-	copy(out[tcs1HeaderBytes:], image.Bytes)
+	binary.LittleEndian.PutUint32(out[tcs1PayloadCRC32Offset:tcs1PayloadOffset], checksum)
+	copy(out[tcs1PayloadOffset:], image.Bytes)
 	return out, TCS1PartRecord{
 		Version:      tcs1Version,
 		Kind:         tcs1PartImageKind,
@@ -166,45 +178,45 @@ func decodeTCS1Header(data []byte) (TCS1PartRecord, []byte, error) {
 	if len(data) < tcs1HeaderBytes {
 		return TCS1PartRecord{}, nil, fmt.Errorf("colgranule: truncated TCS1 header bytes=%d", len(data))
 	}
-	magic := binary.LittleEndian.Uint32(data[0:4])
+	magic := binary.LittleEndian.Uint32(data[tcs1MagicOffset:tcs1VersionOffset])
 	if magic != tcs1Magic {
 		return TCS1PartRecord{}, nil, fmt.Errorf("colgranule: invalid TCS1 magic 0x%x", magic)
 	}
-	version := binary.LittleEndian.Uint16(data[4:6])
+	version := binary.LittleEndian.Uint16(data[tcs1VersionOffset:tcs1KindOffset])
 	if version != tcs1Version {
 		return TCS1PartRecord{}, nil, fmt.Errorf("colgranule: unsupported TCS1 version %d", version)
 	}
-	kind := binary.LittleEndian.Uint16(data[6:8])
+	kind := binary.LittleEndian.Uint16(data[tcs1KindOffset:tcs1FlagsOffset])
 	if kind != tcs1PartImageKind {
 		return TCS1PartRecord{}, nil, fmt.Errorf("colgranule: unsupported TCS1 kind %d", kind)
 	}
-	flags := binary.LittleEndian.Uint32(data[8:12])
+	flags := binary.LittleEndian.Uint32(data[tcs1FlagsOffset:tcs1HeaderBytesOffset])
 	if flags&^tcs1SupportedFlags != 0 {
 		return TCS1PartRecord{}, nil, fmt.Errorf("colgranule: unsupported TCS1 flags 0x%x", flags)
 	}
-	headerBytes := binary.LittleEndian.Uint32(data[12:16])
+	headerBytes := binary.LittleEndian.Uint32(data[tcs1HeaderBytesOffset:tcs1PayloadBytesOffset])
 	if headerBytes != tcs1HeaderBytes {
 		return TCS1PartRecord{}, nil, fmt.Errorf("colgranule: TCS1 header bytes=%d want %d", headerBytes, tcs1HeaderBytes)
 	}
-	payloadBytes := binary.LittleEndian.Uint64(data[16:24])
-	if payloadBytes > uint64(len(data)-tcs1HeaderBytes) {
-		return TCS1PartRecord{}, nil, fmt.Errorf("colgranule: TCS1 payload bytes=%d exceed available=%d", payloadBytes, len(data)-tcs1HeaderBytes)
+	payloadBytes := binary.LittleEndian.Uint64(data[tcs1PayloadBytesOffset:tcs1PartIDOffset])
+	if payloadBytes > uint64(len(data)-tcs1PayloadOffset) {
+		return TCS1PartRecord{}, nil, fmt.Errorf("colgranule: TCS1 payload bytes=%d exceed available=%d", payloadBytes, len(data)-tcs1PayloadOffset)
 	}
-	if payloadBytes != uint64(len(data)-tcs1HeaderBytes) {
-		return TCS1PartRecord{}, nil, fmt.Errorf("colgranule: TCS1 payload bytes=%d want payload bytes=%d", payloadBytes, len(data)-tcs1HeaderBytes)
+	if payloadBytes != uint64(len(data)-tcs1PayloadOffset) {
+		return TCS1PartRecord{}, nil, fmt.Errorf("colgranule: TCS1 payload bytes=%d want payload bytes=%d", payloadBytes, len(data)-tcs1PayloadOffset)
 	}
-	partID := binary.LittleEndian.Uint64(data[24:32])
-	rows64 := binary.LittleEndian.Uint64(data[32:40])
+	partID := binary.LittleEndian.Uint64(data[tcs1PartIDOffset:tcs1RowsOffset])
+	rows64 := binary.LittleEndian.Uint64(data[tcs1RowsOffset:tcs1ImageVersionOffset])
 	if rows64 > uint64(^uint(0)>>1) {
 		return TCS1PartRecord{}, nil, fmt.Errorf("colgranule: TCS1 rows=%d exceeds host int", rows64)
 	}
 	rows := int(rows64)
-	imageVersion := binary.LittleEndian.Uint16(data[40:42])
-	if reserved := binary.LittleEndian.Uint16(data[42:44]); reserved != 0 {
+	imageVersion := binary.LittleEndian.Uint16(data[tcs1ImageVersionOffset:tcs1ReservedOffset])
+	if reserved := binary.LittleEndian.Uint16(data[tcs1ReservedOffset:tcs1PayloadCRC32Offset]); reserved != 0 {
 		return TCS1PartRecord{}, nil, fmt.Errorf("colgranule: TCS1 reserved=%d want 0", reserved)
 	}
-	wantChecksum := binary.LittleEndian.Uint32(data[44:48])
-	payload := data[tcs1HeaderBytes:]
+	wantChecksum := binary.LittleEndian.Uint32(data[tcs1PayloadCRC32Offset:tcs1PayloadOffset])
+	payload := data[tcs1PayloadOffset:]
 	if checksum := crc32.ChecksumIEEE(payload); checksum != wantChecksum {
 		return TCS1PartRecord{}, nil, fmt.Errorf("colgranule: TCS1 payload checksum=%08x want %08x", checksum, wantChecksum)
 	}

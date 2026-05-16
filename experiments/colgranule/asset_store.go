@@ -25,6 +25,7 @@ type ColumnAssetRef struct {
 
 type ColumnAssetStore interface {
 	Put(kind ColumnAssetKind, payload []byte) (ColumnAssetRef, error)
+	// Read may return store-owned bytes. Callers must treat the returned bytes as read-only.
 	Read(ref ColumnAssetRef) ([]byte, error)
 	ReadTo(ref ColumnAssetRef, dst []byte) ([]byte, error)
 }
@@ -72,10 +73,6 @@ func (s *MemoryColumnAssetStore) Put(kind ColumnAssetKind, payload []byte) (Colu
 }
 
 func (s *MemoryColumnAssetStore) Read(ref ColumnAssetRef) ([]byte, error) {
-	return s.ReadTo(ref, nil)
-}
-
-func (s *MemoryColumnAssetStore) ReadTo(ref ColumnAssetRef, dst []byte) ([]byte, error) {
 	if s == nil {
 		return nil, fmt.Errorf("colgranule: nil memory asset store")
 	}
@@ -90,6 +87,14 @@ func (s *MemoryColumnAssetStore) ReadTo(ref ColumnAssetRef, dst []byte) ([]byte,
 	}
 	if checksum := crc32.ChecksumIEEE(payload); checksum != ref.Checksum {
 		return nil, fmt.Errorf("colgranule: asset ref checksum=%08x want %08x", checksum, ref.Checksum)
+	}
+	return payload, nil
+}
+
+func (s *MemoryColumnAssetStore) ReadTo(ref ColumnAssetRef, dst []byte) ([]byte, error) {
+	payload, err := s.Read(ref)
+	if err != nil {
+		return nil, err
 	}
 	out := append(dst[:0], payload...)
 	return out, nil
@@ -153,7 +158,7 @@ func (s *SegmentColumnAssetStore) Path() string {
 
 func (s *SegmentColumnAssetStore) Put(kind ColumnAssetKind, payload []byte) (ColumnAssetRef, error) {
 	if s == nil {
-		return ColumnAssetRef{}, fmt.Errorf("colgranule: closed segment asset store")
+		return ColumnAssetRef{}, fmt.Errorf("colgranule: nil segment asset store")
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -181,7 +186,7 @@ func (s *SegmentColumnAssetStore) Read(ref ColumnAssetRef) ([]byte, error) {
 
 func (s *SegmentColumnAssetStore) ReadTo(ref ColumnAssetRef, dst []byte) ([]byte, error) {
 	if s == nil {
-		return nil, fmt.Errorf("colgranule: closed segment asset store")
+		return nil, fmt.Errorf("colgranule: nil segment asset store")
 	}
 	if err := validateColumnAssetRef(ref); err != nil {
 		return nil, err
