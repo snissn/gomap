@@ -91,6 +91,10 @@ func (idx *VectorIndex) SaveNativeSnapshot() (VectorIndexLoadStatus, error) {
 	if c.db == nil {
 		return status, errCollectionDBNil
 	}
+	if !c.isRegisteredVectorIndex(idx) {
+		status.ExactFallbackReason = vectorIndexFallbackStaleRuntimeIndex
+		return status, nil
+	}
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()
 	if !c.isRegisteredVectorIndex(idx) {
@@ -207,6 +211,10 @@ func (idx *VectorIndex) SaveNativeDeltaSnapshot() (VectorIndexLoadStatus, error)
 	}
 	if c.db == nil {
 		return status, errCollectionDBNil
+	}
+	if !c.isRegisteredVectorIndex(idx) {
+		status.ExactFallbackReason = vectorIndexFallbackStaleRuntimeIndex
+		return status, nil
 	}
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()
@@ -1300,7 +1308,7 @@ func validateVectorIndexPersistNode(node vectorIndexPersistNode, meta vectorInde
 			}
 		}
 	default:
-		return "invalid_encoding"
+		return vectorIndexFallbackInvalidEncoding
 	}
 	return ""
 }
@@ -1353,33 +1361,33 @@ func readVectorIndexSnapshotFiles(epochDir string, entries []vectorIndexManifest
 
 func (idx *VectorIndex) loadPersistSnapshot(snapshot vectorIndexPersistSnapshot) string {
 	if snapshot.Meta.Field != idx.field || snapshot.Meta.Metric != idx.metric {
-		return "meta_mismatch"
+		return vectorIndexFallbackMetaMismatch
 	}
 	encoding, err := normalizeVectorIndexEncoding(snapshot.Meta.Encoding)
 	if err != nil {
-		return "invalid_encoding"
+		return vectorIndexFallbackInvalidEncoding
 	}
 	if encoding != idx.encoding {
-		return "meta_encoding_mismatch"
+		return vectorIndexFallbackMetaEncodingMismatch
 	}
 	if idx.dimensions != 0 && snapshot.Meta.Dimensions != idx.dimensions {
-		return "meta_dimension_mismatch"
+		return vectorIndexFallbackMetaDimensionMismatch
 	}
 	if snapshot.Meta.Dimensions <= 0 {
-		return "invalid_dimensions"
+		return vectorIndexFallbackInvalidDimensions
 	}
 	if len(snapshot.Nodes) == 0 {
 		if len(snapshot.Edges) != 0 {
-			return "invalid_edge_node"
+			return vectorIndexFallbackInvalidEdgeNode
 		}
 		if len(snapshot.Tombstones.NodeIDs) != 0 {
-			return "invalid_tombstone"
+			return vectorIndexFallbackInvalidTombstone
 		}
 		if len(snapshot.DocMap.Current) != 0 {
-			return "invalid_docmap_node"
+			return vectorIndexFallbackInvalidDocMapNode
 		}
 		if snapshot.Meta.Entry >= 0 {
-			return "invalid_entry"
+			return vectorIndexFallbackInvalidEntry
 		}
 		idx.mu.Lock()
 		defer idx.mu.Unlock()
@@ -1404,7 +1412,7 @@ func (idx *VectorIndex) loadPersistSnapshot(snapshot vectorIndexPersistSnapshot)
 	tombstoned := make(map[int]struct{}, len(snapshot.Tombstones.NodeIDs))
 	for _, nodeID := range snapshot.Tombstones.NodeIDs {
 		if nodeID < 0 || nodeID >= len(snapshot.Nodes) {
-			return "invalid_tombstone"
+			return vectorIndexFallbackInvalidTombstone
 		}
 		tombstoned[nodeID] = struct{}{}
 	}
@@ -1433,7 +1441,7 @@ func (idx *VectorIndex) loadPersistSnapshot(snapshot vectorIndexPersistSnapshot)
 	}
 	for _, edge := range snapshot.Edges {
 		if edge.NodeID < 0 || edge.NodeID >= len(nodes) {
-			return "invalid_edge_node"
+			return vectorIndexFallbackInvalidEdgeNode
 		}
 		if edge.Layer < 0 || edge.Layer > nodes[edge.NodeID].level {
 			return "invalid_edge_layer"
@@ -1479,7 +1487,7 @@ func (idx *VectorIndex) loadPersistSnapshot(snapshot vectorIndexPersistSnapshot)
 	current := make(map[string]int, len(snapshot.DocMap.Current))
 	for docID, nodeID := range snapshot.DocMap.Current {
 		if nodeID < 0 || nodeID >= len(nodes) {
-			return "invalid_docmap_node"
+			return vectorIndexFallbackInvalidDocMapNode
 		}
 		if nodes[nodeID].deleted {
 			return "docmap_points_to_deleted_node"
