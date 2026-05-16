@@ -10,7 +10,12 @@ from typing import Any
 
 
 def load(path: str) -> dict[str, Any]:
-    return json.loads(Path(path).read_text(encoding="utf-8"))
+    try:
+        return json.loads(Path(path).read_text(encoding="utf-8"))
+    except OSError as exc:
+        raise RuntimeError(f"read benchmark result {path}: {exc}") from exc
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"parse benchmark result {path}: {exc}") from exc
 
 
 def micros(value: float) -> str:
@@ -20,11 +25,10 @@ def micros(value: float) -> str:
 
 
 def bytes_human(value: float) -> str:
-    for unit in ["B", "KB", "MB", "GB"]:
-        if value < 1024 or unit == "GB":
+    for unit in ["B", "KB", "MB", "GB", "TB", "PB"]:
+        if value < 1024 or unit == "PB":
             return f"{value:.2f}{unit}" if unit != "B" else f"{value:.0f}B"
         value /= 1024
-    return f"{value:.2f}GB"
 
 
 def storage_bytes(result: dict[str, Any]) -> int:
@@ -64,7 +68,9 @@ def search_by_concurrency(result: dict[str, Any]) -> dict[int, dict[str, Any]]:
 def backend_name(result: dict[str, Any]) -> str:
     if result.get("backend") == "sqlite_vectorlite":
         return "SQLite+Vectorlite HNSW"
-    return "TreeDB native HNSW"
+    if result.get("backend") in (None, "treedb"):
+        return "TreeDB native HNSW"
+    raise ValueError(f"unknown backend {result.get('backend')!r}")
 
 
 def index_memory(result: dict[str, Any]) -> str:
