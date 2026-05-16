@@ -1716,6 +1716,76 @@ func TestCollectionVectorIndexNativeRootReopenMaintainsLoadedGraphOnWrite(t *tes
 	requireVectorResultIDs(t, results, "a", "c", "b")
 }
 
+func TestCollectionVectorIndexNativeEmptyRootMaintainsInsertedDocuments(t *testing.T) {
+	dir := t.TempDir()
+	d, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mgr := NewCollectionManager(d)
+	def := VectorIndexDefinition{
+		Name:       "embedding",
+		Field:      "embedding",
+		Metric:     VectorMetricCosine,
+		Dimensions: 2,
+		M:          4,
+	}
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	index, err := col.BuildVectorIndex(vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		t.Fatalf("build empty vector index: %v", err)
+	}
+	if _, err := index.SaveSnapshot(); err != nil {
+		t.Fatalf("save empty vector snapshot: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+
+	reopened, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open reopened collection: %v", err)
+	}
+	if got := len(reopenedCol.registeredVectorIndexes()); got != 0 {
+		t.Fatalf("reopened collection eagerly registered %d vector indexes want 0", got)
+	}
+	if _, err := reopenedCol.InsertBatch(
+		[][]byte{[]byte("a")},
+		[][]byte{[]byte(`{"embedding":[1,0]}`)},
+	); err != nil {
+		t.Fatalf("insert after empty vector snapshot reopen: %v", err)
+	}
+	if got := len(reopenedCol.registeredVectorIndexes()); got != 1 {
+		t.Fatalf("write did not lazily load empty vector index, got %d registered indexes", got)
+	}
+	if err := reopenedCol.Flush(); err != nil {
+		t.Fatalf("flush reopened vector write: %v", err)
+	}
+	loaded, status, err := reopenedCol.LoadVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		t.Fatalf("load maintained vector index: %v", err)
+	}
+	if loaded == nil || !status.Loaded {
+		t.Fatalf("maintained vector index did not load loaded=%v status=%+v", loaded != nil, status)
+	}
+	results, _, err := loaded.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 1, DisableExactFallback: true})
+	if err != nil {
+		t.Fatalf("search maintained vector index: %v", err)
+	}
+	requireVectorResultIDs(t, results, "a")
+}
+
 func TestCollectionVectorIndexNativeDeltaRejectsStalePersistedRoot(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

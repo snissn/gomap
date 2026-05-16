@@ -1065,9 +1065,6 @@ func readVectorIndexNativeSnapshot(snap *backenddb.Snapshot, catalog *collection
 	if err := it.Error(); err != nil {
 		return snapshot, bytesDisk, "", err
 	}
-	if maxNodeID < 0 {
-		return snapshot, bytesDisk, "empty_index", nil
-	}
 	snapshot.Nodes = make([]vectorIndexPersistNode, maxNodeID+1)
 	for nodeID := 0; nodeID <= maxNodeID; nodeID++ {
 		node, ok := nodes[nodeID]
@@ -1344,9 +1341,6 @@ func (idx *VectorIndex) loadPersistSnapshot(snapshot vectorIndexPersistSnapshot)
 	}
 	if snapshot.Meta.Dimensions <= 0 {
 		return "invalid_dimensions"
-	}
-	if len(snapshot.Nodes) == 0 {
-		return "empty_index"
 	}
 	tombstoned := make(map[int]struct{}, len(snapshot.Tombstones.NodeIDs))
 	for _, nodeID := range snapshot.Tombstones.NodeIDs {
