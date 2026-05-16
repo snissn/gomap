@@ -10,20 +10,6 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 )
 
-func (tdb *DB) appendPublicRawKVCommand(ops []commitlog.RawKVOperation, sync bool) error {
-	if tdb == nil || !tdb.commandWALCached || len(ops) == 0 {
-		return nil
-	}
-	if tdb.backend == nil {
-		return ErrClosed
-	}
-	payload, err := commitlog.EncodeRawKVBatchPayload(ops)
-	if err != nil {
-		return err
-	}
-	return tdb.appendPublicRawKVCommandPayload(payload, sync)
-}
-
 func (tdb *DB) appendPublicRawKVSingleCommand(op commitlog.RawKVOperation, sync bool) error {
 	if tdb == nil || !tdb.commandWALCached {
 		return nil
@@ -35,6 +21,9 @@ func (tdb *DB) appendPublicRawKVSingleCommand(op commitlog.RawKVOperation, sync 
 	if err == nil {
 		tdb.recordPublicCommandWALPendingLSN(lsn)
 	}
+	if err == nil && tdb.testAfterPublicCommandWALPointAppend != nil {
+		tdb.testAfterPublicCommandWALPointAppend(op)
+	}
 	return err
 }
 
@@ -45,7 +34,7 @@ func (tdb *DB) appendPublicRawKVCommandPayload(payload []byte, sync bool) error 
 	if tdb.backend == nil {
 		return ErrClosed
 	}
-	lsn, err := tdb.backend.AppendRawKVBatchPayloadCommandWAL(payload, sync)
+	lsn, err := tdb.backend.AppendRawKVBatchPayloadCommandWALTrusted(payload, sync)
 	if err != nil {
 		return err
 	}
@@ -100,7 +89,7 @@ func (tdb *DB) publishPublicCommandWALPending(sync bool) error {
 	if err := tdb.backend.FlushCommandWAL(sync); err != nil {
 		return err
 	}
-	publishSync := sync && !strings.HasPrefix(tdb.durabilityMode, "wal_on_relaxed_sync")
+	publishSync := publicCommandWALPublishSync(tdb.durabilityMode, sync)
 	if err := tdb.backend.PublishCommandWALAppliedLSN(last, []db.CommandWALLSNRange{{First: current + 1, Last: last}}, publishSync); err != nil {
 		return err
 	}
@@ -115,9 +104,19 @@ func (tdb *DB) publishPublicCommandWALPending(sync bool) error {
 	return nil
 }
 
+func publicCommandWALPublishSync(durabilityMode string, sync bool) bool {
+	return sync && strings.HasPrefix(durabilityMode, "wal_on_sync")
+}
+
 type commandWALPublicBatch struct {
-	db      *DB
-	inner   Batch
+	db        *DB
+	inner     Batch
+	setViewer interface {
+		SetView(key, value []byte) error
+	}
+	deleteViewer interface {
+		DeleteView(key []byte) error
+	}
 	payload commitlog.RawKVBatchPayloadBuilder
 	opCount int
 	dirty   bool
@@ -128,6 +127,16 @@ const commandWALPublicBatchEstimatedKeyValueBytes = 48
 
 func newCommandWALPublicBatch(tdb *DB, inner Batch, opHint int) *commandWALPublicBatch {
 	b := &commandWALPublicBatch{db: tdb, inner: inner}
+	if setter, ok := inner.(interface {
+		SetView(key, value []byte) error
+	}); ok {
+		b.setViewer = setter
+	}
+	if deleter, ok := inner.(interface {
+		DeleteView(key []byte) error
+	}); ok {
+		b.deleteViewer = deleter
+	}
 	opHint = db.NormalizePublicBatchReserveHint(opHint)
 	byteHint := 0
 	if opHint > 0 && opHint <= int(^uint(0)>>1)/commandWALPublicBatchEstimatedKeyValueBytes {
@@ -148,7 +157,7 @@ func (b *commandWALPublicBatch) Set(key, value []byte) error {
 		return caching.ErrValueNil
 	}
 	oldLen, oldCount := b.payload.Len(), b.payload.Count()
-	keyView, valueView, err := b.payload.Append(commitlog.RawKVOperation{Op: commitlog.RawKVOpSet, Key: key, Value: value})
+	keyView, valueView, err := b.payload.AppendSet(key, value)
 	if err != nil {
 		return err
 	}
@@ -173,7 +182,7 @@ func (b *commandWALPublicBatch) Delete(key []byte) error {
 		return caching.ErrKeyEmpty
 	}
 	oldLen, oldCount := b.payload.Len(), b.payload.Count()
-	keyView, _, err := b.payload.Append(commitlog.RawKVOperation{Op: commitlog.RawKVOpDelete, Key: key})
+	keyView, err := b.payload.AppendDelete(key)
 	if err != nil {
 		return err
 	}
@@ -191,19 +200,15 @@ func (b *commandWALPublicBatch) DeleteView(key []byte) error {
 }
 
 func (b *commandWALPublicBatch) innerSetView(key, value []byte) error {
-	if setter, ok := b.inner.(interface {
-		SetView(key, value []byte) error
-	}); ok {
-		return setter.SetView(key, value)
+	if b.setViewer != nil {
+		return b.setViewer.SetView(key, value)
 	}
 	return b.inner.Set(key, value)
 }
 
 func (b *commandWALPublicBatch) innerDeleteView(key []byte) error {
-	if deleter, ok := b.inner.(interface {
-		DeleteView(key []byte) error
-	}); ok {
-		return deleter.DeleteView(key)
+	if b.deleteViewer != nil {
+		return b.deleteViewer.DeleteView(key)
 	}
 	return b.inner.Delete(key)
 }
@@ -247,8 +252,13 @@ func (b *commandWALPublicBatch) Close() error {
 	if b == nil || b.inner == nil {
 		return nil
 	}
+	// Closing an uncommitted batch intentionally discards staged command-WAL
+	// payload bytes, matching ordinary batch semantics: only Write/WriteSync
+	// appends and publishes a RawKVBatch command frame.
 	err := b.inner.Close()
 	b.inner = nil
+	b.setViewer = nil
+	b.deleteViewer = nil
 	b.payload.ResetWithHint(0, 0)
 	b.dirty = false
 	b.closed = true
@@ -261,6 +271,20 @@ func (b *commandWALPublicBatch) Reset() {
 	}
 	if resetter, ok := b.inner.(interface{ Reset() }); ok {
 		resetter.Reset()
+		if setter, ok := b.inner.(interface {
+			SetView(key, value []byte) error
+		}); ok {
+			b.setViewer = setter
+		} else {
+			b.setViewer = nil
+		}
+		if deleter, ok := b.inner.(interface {
+			DeleteView(key []byte) error
+		}); ok {
+			b.deleteViewer = deleter
+		} else {
+			b.deleteViewer = nil
+		}
 		b.payload.ResetWithHint(0, 0)
 		b.opCount = 0
 		b.dirty = false

@@ -3,7 +3,11 @@ package treedb
 import (
 	"fmt"
 	"strconv"
+	"sync"
 	"testing"
+	"time"
+
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 )
 
 func TestPublicCommandWALRawKVWritesUseTypedFrames(t *testing.T) {
@@ -102,6 +106,147 @@ func assertPublicCommandWALFrames(t *testing.T, db *DB, minFrames uint64) {
 	}
 	if maxLSN < minFrames {
 		t.Fatalf("command_wal.max_lsn=%d, want at least %d", maxLSN, minFrames)
+	}
+}
+
+func TestPublicCommandWALPointWritesSerializeLSNWithCachedMutation(t *testing.T) {
+	db, err := Open(Options{
+		Dir:                 t.TempDir(),
+		Durability:          DurabilityWALOnRelaxed,
+		CommandWAL:          true,
+		CommandWALStatsScan: true,
+		DisableSideStores:   true,
+	})
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	aAppended := make(chan struct{})
+	bAppended := make(chan struct{})
+	releaseA := make(chan struct{})
+	var aOnce, bOnce, releaseOnce sync.Once
+	db.testAfterPublicCommandWALPointAppend = func(op commitlog.RawKVOperation) {
+		switch string(op.Value) {
+		case "A":
+			aOnce.Do(func() { close(aAppended) })
+			<-releaseA
+		case "B":
+			bOnce.Do(func() { close(bAppended) })
+		}
+	}
+
+	errA := make(chan error, 1)
+	go func() {
+		errA <- db.Set([]byte("same-key"), []byte("A"))
+	}()
+	select {
+	case <-aAppended:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first command append did not reach test hook")
+	}
+
+	errB := make(chan error, 1)
+	bStarted := make(chan struct{})
+	go func() {
+		close(bStarted)
+		errB <- db.Set([]byte("same-key"), []byte("B"))
+	}()
+	<-bStarted
+	select {
+	case <-bAppended:
+		releaseOnce.Do(func() { close(releaseA) })
+		t.Fatal("second same-key command appended before first cached mutation was released")
+	case <-time.After(100 * time.Millisecond):
+	}
+	releaseOnce.Do(func() { close(releaseA) })
+	if err := recvTestErr(t, errA); err != nil {
+		t.Fatalf("first Set: %v", err)
+	}
+	if err := recvTestErr(t, errB); err != nil {
+		t.Fatalf("second Set: %v", err)
+	}
+	select {
+	case <-bAppended:
+	default:
+		t.Fatal("second command append hook did not run")
+	}
+	got, err := db.Get([]byte("same-key"))
+	if err != nil {
+		t.Fatalf("Get(same-key): %v", err)
+	}
+	if string(got) != "B" {
+		t.Fatalf("Get(same-key)=%q, want B", got)
+	}
+	assertPublicCommandWALFrames(t, db, 2)
+}
+
+func TestPublicCommandWALBatchCloseDiscardsDirtyPayload(t *testing.T) {
+	db, err := Open(Options{
+		Dir:                 t.TempDir(),
+		Durability:          DurabilityWALOnRelaxed,
+		CommandWAL:          true,
+		CommandWALStatsScan: true,
+		DisableSideStores:   true,
+	})
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	b := db.NewBatch()
+	if err := b.Set([]byte("discarded"), []byte("value")); err != nil {
+		_ = b.Close()
+		t.Fatalf("batch Set: %v", err)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatalf("batch Close: %v", err)
+	}
+	has, err := db.Has([]byte("discarded"))
+	if err != nil {
+		t.Fatalf("Has(discarded): %v", err)
+	}
+	if has {
+		t.Fatal("closed dirty batch became visible without Write")
+	}
+	stats := db.Stats()
+	frames, err := strconv.ParseUint(stats["treedb.command_wal.frames"], 10, 64)
+	if err != nil {
+		t.Fatalf("parse command_wal.frames=%q: %v", stats["treedb.command_wal.frames"], err)
+	}
+	if frames != 0 {
+		t.Fatalf("command_wal.frames=%d, want 0 after Close without Write", frames)
+	}
+}
+
+func TestPublicCommandWALPublishSyncMatrix(t *testing.T) {
+	tests := []struct {
+		mode string
+		sync bool
+		want bool
+	}{
+		{mode: "wal_on_sync", sync: false, want: false},
+		{mode: "wal_on_sync", sync: true, want: true},
+		{mode: "wal_on_sync+no_read_checksum", sync: true, want: true},
+		{mode: "wal_on_relaxed_sync", sync: true, want: false},
+		{mode: "wal_on_relaxed_sync+verify_on_read", sync: true, want: false},
+		{mode: "wal_off_relaxed_sync", sync: true, want: false},
+	}
+	for _, tt := range tests {
+		if got := publicCommandWALPublishSync(tt.mode, tt.sync); got != tt.want {
+			t.Fatalf("publicCommandWALPublishSync(%q, %t)=%t, want %t", tt.mode, tt.sync, got, tt.want)
+		}
+	}
+}
+
+func recvTestErr(t *testing.T, ch <-chan error) error {
+	t.Helper()
+	select {
+	case err := <-ch:
+		return err
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for goroutine")
+		return nil
 	}
 }
 

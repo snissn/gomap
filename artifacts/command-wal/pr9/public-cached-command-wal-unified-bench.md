@@ -60,7 +60,7 @@ notes:
 ```text
        Test         TreeDB  TreeDB (public cached command_wal_v1)
 -----------  -------------  -------------------------------------
-Batch Write      5,962,245                              5,091,184
+Batch Write      5,945,384                              5,402,973
 ```
 
 ## Disk Usage (End of Run)
@@ -70,13 +70,13 @@ TreeDB:
   maindb/index.db: 512 KiB
   maindb/wal: total=12 B files=1 other=12 B
   maindb/value_vlog: total=0 B files=3
-  maindb/leaf_vlog: total=5 MiB files=2 value=5 MiB other=244 B
+  maindb/leaf_vlog: total=4 MiB files=2 value=4 MiB other=244 B
   dictdb/index.db: 64 KiB
 
 TreeDB (public cached command_wal_v1):
   maindb/index.db: 512 KiB
   maindb/wal: total=12 B files=1 other=12 B
-  maindb/leaf_vlog: total=4 MiB files=2 value=4 MiB other=244 B
+  maindb/leaf_vlog: total=5 MiB files=2 value=5 MiB other=244 B
   dictdb/index.db: 64 KiB
 ```
 

@@ -100,14 +100,21 @@ type RawKVBatchPayloadBuilder struct {
 
 func NewRawKVBatchPayloadBuilder(opHint, byteHint int) RawKVBatchPayloadBuilder {
 	var b RawKVBatchPayloadBuilder
-	b.ResetWithHint(opHint, byteHint)
+	_ = b.ResetWithHint(opHint, byteHint)
 	return b
 }
 
-func (b *RawKVBatchPayloadBuilder) ResetWithHint(opHint, byteHint int) {
+// ResetWithHint resets the builder and reserves capacity for the supplied
+// approximate operation and key/value byte counts. Invalid or overflowing hints
+// return ErrRecordTooLarge and fall back to the minimum header capacity so the
+// builder remains usable.
+func (b *RawKVBatchPayloadBuilder) ResetWithHint(opHint, byteHint int) error {
 	capHint := rawKVBatchHeaderSize
-	if hint, err := rawKVBatchPayloadSizeHint(opHint, byteHint); err == nil {
+	var err error
+	if hint, hintErr := rawKVBatchPayloadSizeHint(opHint, byteHint); hintErr == nil {
 		capHint = hint
+	} else {
+		err = hintErr
 	}
 	if cap(b.payload) < capHint {
 		b.payload = make([]byte, rawKVBatchHeaderSize, capHint)
@@ -117,6 +124,7 @@ func (b *RawKVBatchPayloadBuilder) ResetWithHint(opHint, byteHint int) {
 	}
 	binary.LittleEndian.PutUint16(b.payload[0:2], 1)
 	b.count = 0
+	return err
 }
 
 func (b *RawKVBatchPayloadBuilder) Payload() []byte {
@@ -175,7 +183,45 @@ func (b *RawKVBatchPayloadBuilder) Append(op RawKVOperation) (keyView, valueView
 		binary.LittleEndian.PutUint64(ridBuf[:], op.RID)
 		value = ridBuf[:]
 	}
-	needed := rawKVOpHeaderSize + len(op.Key) + len(value)
+	return b.appendValidated(op.Op, op.Key, value)
+}
+
+// AppendSet appends a validated RawKV Set operation without materializing a
+// RawKVOperation wrapper. The key and value must be non-nil.
+func (b *RawKVBatchPayloadBuilder) AppendSet(key, value []byte) (keyView, valueView []byte, err error) {
+	if key == nil || value == nil {
+		return nil, nil, ErrCorrupt
+	}
+	if commandFrameIntExceedsUint32(len(key)) || commandFrameIntExceedsUint32(len(value)) {
+		return nil, nil, ErrRecordTooLarge
+	}
+	return b.appendValidated(RawKVOpSet, key, value)
+}
+
+// AppendDelete appends a validated RawKV Delete operation without
+// materializing a RawKVOperation wrapper. The key must be non-nil.
+func (b *RawKVBatchPayloadBuilder) AppendDelete(key []byte) (keyView []byte, err error) {
+	if key == nil {
+		return nil, ErrCorrupt
+	}
+	if commandFrameIntExceedsUint32(len(key)) {
+		return nil, ErrRecordTooLarge
+	}
+	keyView, _, err = b.appendValidated(RawKVOpDelete, key, nil)
+	return keyView, err
+}
+
+func (b *RawKVBatchPayloadBuilder) appendValidated(op RawKVOp, key, value []byte) (keyView, valueView []byte, err error) {
+	if b == nil {
+		return nil, nil, ErrCorrupt
+	}
+	if b.payload == nil {
+		_ = b.ResetWithHint(0, 0)
+	}
+	if commandFrameIntExceedsUint32(b.count + 1) {
+		return nil, nil, ErrRecordTooLarge
+	}
+	needed := rawKVOpHeaderSize + len(key) + len(value)
 	if needed > int(^uint32(0))-len(b.payload) || needed > int(^uint(0)>>1)-len(b.payload) {
 		return nil, nil, ErrRecordTooLarge
 	}
@@ -195,20 +241,20 @@ func (b *RawKVBatchPayloadBuilder) Append(op RawKVOperation) (keyView, valueView
 	} else {
 		b.payload = b.payload[:newLen]
 	}
-	b.payload[off] = byte(op.Op)
-	binary.LittleEndian.PutUint32(b.payload[off+1:off+5], uint32(len(op.Key)))
+	b.payload[off] = byte(op)
+	binary.LittleEndian.PutUint32(b.payload[off+1:off+5], uint32(len(key)))
 	binary.LittleEndian.PutUint32(b.payload[off+5:off+9], uint32(len(value)))
 	off += rawKVOpHeaderSize
 	keyStart := off
-	copy(b.payload[off:], op.Key)
-	off += len(op.Key)
+	copy(b.payload[off:], key)
+	off += len(key)
 	valueStart := off
 	copy(b.payload[off:], value)
 	off += len(value)
 	b.count++
 	binary.LittleEndian.PutUint32(b.payload[2:6], uint32(b.count))
-	keyView = b.payload[keyStart : keyStart+len(op.Key) : keyStart+len(op.Key)]
-	if op.Op == RawKVOpSet {
+	keyView = b.payload[keyStart : keyStart+len(key) : keyStart+len(key)]
+	if op == RawKVOpSet {
 		valueView = b.payload[valueStart:off:off]
 	}
 	return keyView, valueView, nil

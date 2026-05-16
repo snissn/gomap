@@ -37,6 +37,9 @@ func (db *DB) CommandWALEnabled() bool {
 	return db != nil && db.commandWAL
 }
 
+// FlushCommandWAL flushes the command WAL writer. When sync is true, durable
+// modes fsync the command WAL; DurabilityWALOnRelaxed intentionally downgrades
+// this to a flush-to-kernel boundary to preserve relaxed-sync semantics.
 func (db *DB) FlushCommandWAL(sync bool) error {
 	if db == nil || !db.commandWAL || db.commandJournal == nil {
 		return nil
@@ -296,6 +299,9 @@ func (db *DB) AppendCommandWALPayload(kind commitlog.CommandKind, scope commitlo
 	return db.appendCommandWALIntent(&intent, sync)
 }
 
+// AppendRawKVSingleCommandWAL appends a one-operation RawKVBatch command frame.
+// When sync is true, it delegates to FlushCommandWAL(true); relaxed durability
+// therefore flushes without fsync rather than forcing strict-sync semantics.
 func (db *DB) AppendRawKVSingleCommandWAL(op commitlog.RawKVOperation, sync bool) (uint64, error) {
 	if db == nil || !db.commandWAL {
 		return 0, nil
@@ -329,7 +335,20 @@ func (db *DB) AppendRawKVSingleCommandWAL(op commitlog.RawKVOperation, sync bool
 	return lsn, nil
 }
 
+// AppendRawKVBatchPayloadCommandWAL appends a prebuilt RawKVBatch payload as a
+// command frame. When sync is true, it delegates to FlushCommandWAL(true);
+// relaxed durability flushes without fsync.
 func (db *DB) AppendRawKVBatchPayloadCommandWAL(payload []byte, sync bool) (uint64, error) {
+	return db.appendRawKVBatchPayloadCommandWAL(payload, sync, false)
+}
+
+// AppendRawKVBatchPayloadCommandWALTrusted appends a prebuilt RawKVBatch
+// payload that was constructed through a trusted canonical encoder/builder.
+func (db *DB) AppendRawKVBatchPayloadCommandWALTrusted(payload []byte, sync bool) (uint64, error) {
+	return db.appendRawKVBatchPayloadCommandWAL(payload, sync, true)
+}
+
+func (db *DB) appendRawKVBatchPayloadCommandWAL(payload []byte, sync bool, trusted bool) (uint64, error) {
 	if db == nil || !db.commandWAL {
 		return 0, nil
 	}
@@ -346,7 +365,13 @@ func (db *DB) AppendRawKVBatchPayloadCommandWAL(payload []byte, sync bool) (uint
 	if state := db.state.Load(); state != nil {
 		baseAppliedLSN = state.AppliedCommandLSN
 	}
-	lsn, err := db.commandJournal.AppendRawKVBatchPayloadCommand(baseAppliedLSN, payload)
+	var lsn uint64
+	var err error
+	if trusted {
+		lsn, err = db.commandJournal.AppendRawKVBatchPayloadCommandTrusted(baseAppliedLSN, payload)
+	} else {
+		lsn, err = db.commandJournal.AppendRawKVBatchPayloadCommand(baseAppliedLSN, payload)
+	}
 	if err != nil {
 		return 0, err
 	}

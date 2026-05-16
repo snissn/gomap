@@ -523,6 +523,15 @@ func (j *CommandJournal) AppendRawKVBatchPayloadCommand(baseAppliedLSN uint64, p
 	if err := validateRawKVBatchPayload(payload); err != nil {
 		return 0, err
 	}
+	return j.AppendRawKVBatchPayloadCommandTrusted(baseAppliedLSN, payload)
+}
+
+// AppendRawKVBatchPayloadCommandTrusted appends a caller-validated canonical
+// RawKVBatch payload.
+func (j *CommandJournal) AppendRawKVBatchPayloadCommandTrusted(baseAppliedLSN uint64, payload []byte) (uint64, error) {
+	if j == nil {
+		return 0, errors.New("commitlog: command journal is closed")
+	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	if j.writer == nil || j.owner == nil {
@@ -532,7 +541,7 @@ func (j *CommandJournal) AppendRawKVBatchPayloadCommand(baseAppliedLSN uint64, p
 	if err != nil {
 		return 0, err
 	}
-	if err := j.writer.AppendRawKVBatchPayloadCommandDirect(lsn, baseAppliedLSN, payload); err != nil {
+	if err := j.writer.AppendRawKVBatchPayloadCommandDirectTrusted(lsn, baseAppliedLSN, payload); err != nil {
 		if rollbackErr := j.owner.rollbackReservedLSN(lsn); rollbackErr != nil {
 			return 0, errors.Join(err, rollbackErr)
 		}

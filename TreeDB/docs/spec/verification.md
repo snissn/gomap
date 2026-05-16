@@ -719,7 +719,7 @@ This test must prove public `treedb.Open` can open a read-write
 frames, expose mode proof through stats, reopen without explicit backend-only
 APIs, and recover final set/delete state. It is intentionally narrower than the
 future cached typed-frame path: while this gate is active,
-`treedb.write_path.mode=command_wal_backend` is the expected proof that public
+`treedb.write_path.mode=command_wal_cached` is the expected proof that public
 command-WAL writes did not use the cached legacy redo journal.
 
 ## 12. Collections Document Formats

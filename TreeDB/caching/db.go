@@ -19964,6 +19964,27 @@ func (db *DB) SetSync(key, value []byte) error {
 	return db.set(key, value, true)
 }
 
+// SetAfterCommandWALAppend applies a point Set after appendCommand succeeds.
+// appendCommand runs while holding the same per-key serialization lock as Set,
+// after cached-mode preflight has ruled out ordinary rejection paths and before
+// the mutation becomes visible in the mutable table. This is for public
+// command-WAL mode, where command WAL durability replaces the cached redo log.
+func (db *DB) SetAfterCommandWALAppend(key, value []byte, appendCommand func() error) error {
+	if len(key) == 0 {
+		return ErrKeyEmpty
+	}
+	if value == nil {
+		return ErrValueNil
+	}
+	if appendCommand == nil {
+		return fmt.Errorf("cachingdb: missing command wal append callback")
+	}
+	db.waitForCheckpoint()
+	unlock := db.lockUpdateKey(key)
+	defer unlock()
+	return db.setDirectAfterCommandWALAppend(key, value, appendCommand)
+}
+
 // Update applies fn to the current value for key and writes the returned
 // mutation without forcing an fsync boundary.
 func (db *DB) Update(key []byte, fn backenddb.UpdateFunc) error {
@@ -20286,6 +20307,142 @@ func (db *DB) setDirect(key, value []byte, sync bool) error {
 	if needSyncBarrier {
 		if err := db.syncBarrierAfterWrite(true); err != nil {
 			return err
+		}
+	}
+
+	db.noteWrite()
+	db.maybeAssistFlush()
+	return nil
+}
+
+func (db *DB) setDirectAfterCommandWALAppend(key, value []byte, appendCommand func() error) error {
+	if !db.disableJournal {
+		return fmt.Errorf("cachingdb: command wal point writes require disabled cached redo log")
+	}
+	db.writeMu.RLock()
+	needRotate := false
+	var ptr page.ValuePtr
+	var retainPath string
+	usePointer := false
+	debugPtr := db.debugFlushPointers
+
+	shard := db.shardForKey(key)
+
+	eligible := db.shouldWriteViaValueLogForKeyValue(key, value)
+	valueLogEnabled := db.valueLogEnabled()
+	allowPointers := eligible && valueLogEnabled && db.allowValueLogPointers()
+	if allowPointers && db.disableJournal && !db.memtableValueLogPointers {
+		allowPointers = false
+	}
+	addBytesForLimit := int64(len(key) + len(value))
+	if allowPointers && db.memtableValueLogPointers {
+		addBytesForLimit = int64(len(key) + page.ValuePtrSize)
+	}
+	if maxMemtableBytesPerShard > 0 {
+		if addBytesForLimit > maxMemtableBytesPerShard {
+			db.writeMu.RUnlock()
+			return ErrMemtableFull
+		}
+		shard.mu.Lock()
+		exceedsLimit := db.shardExceedsLimit(shard, addBytesForLimit)
+		shard.mu.Unlock()
+		if exceedsLimit {
+			db.writeMu.RUnlock()
+			return ErrMemtableFull
+		}
+	}
+	if debugPtr && eligible {
+		db.debugPtrEligible.Add(1)
+	}
+
+	var lane *lane
+	if allowPointers {
+		l, err := db.pickLane(false, db.laneForShardIndex(db.shardIndex(key)))
+		if err != nil {
+			db.writeMu.RUnlock()
+			return err
+		}
+		lane = l
+
+		dictID := uint64(0)
+		class := db.valueLogDictClassForValue(value)
+		if db.dictStore != nil && (db.valueLogDictTrain.TrainBytes > 0 || db.dictClassMode() == vlogDictClassModeSplitOuterLeaf) {
+			id, err := db.currentDictIDForClass(context.Background(), class)
+			if err != nil {
+				db.writeMu.RUnlock()
+				return err
+			}
+			dictID = id
+		} else {
+			dictID = db.dictCurrentCached.Load()
+		}
+
+		rid := db.nextRID.Add(1)
+		appendPtr, retain, appendErr := db.appendValueLogOneRaw(lane, dictID, nil, rid, value, journalDurabilityNone)
+		if appendErr != nil {
+			db.writeMu.RUnlock()
+			return appendErr
+		}
+		ptr = appendPtr
+		retainPath = retain
+		usePointer = true
+		if debugPtr {
+			db.debugPtrUsed.Add(1)
+		}
+	} else if debugPtr && eligible {
+		if !valueLogEnabled {
+			db.debugPtrDisabled.Add(1)
+		} else {
+			db.debugPtrDenied.Add(1)
+		}
+	}
+
+	if err := appendCommand(); err != nil {
+		db.writeMu.RUnlock()
+		return err
+	}
+
+	shard.mu.Lock()
+	if usePointer {
+		memVal := []byte(nil)
+		if !db.memtableValueLogPointers {
+			memVal = value
+		}
+		if borrower, ok := shard.mem.(memtable.ValueBorrower); ok && len(memVal) > 0 {
+			owned := shard.appendOnlyDirectValueArena.alloc(len(memVal))
+			copy(owned, memVal)
+			borrower.SetEntryBorrowValue(key, owned, ptr, node.FlagPointer)
+		} else {
+			shard.mem.SetEntry(key, memVal, ptr, node.FlagPointer)
+		}
+	} else {
+		if borrower, ok := shard.mem.(memtable.ValueBorrower); ok && len(value) > 0 {
+			owned := shard.appendOnlyDirectValueArena.alloc(len(value))
+			copy(owned, value)
+			borrower.SetEntryBorrowValue(key, owned, page.ValuePtr{}, node.FlagInline)
+		} else {
+			shard.mem.SetEntry(key, value, page.ValuePtr{}, node.FlagInline)
+		}
+	}
+	shard.rng.add(key)
+	newBytes := shard.mem.Size()
+	delta := newBytes - shard.bytes
+	shard.bytes = newBytes
+	db.mutableBytes.Add(delta)
+	shard.mu.Unlock()
+	db.noteWriteKey(key)
+
+	if db.mutableBytes.Load() > db.mutableFlushThreshold() {
+		needRotate = true
+	}
+	db.writeMu.RUnlock()
+
+	if retainPath != "" {
+		db.markValueLogRetain(retainPath)
+	}
+	if needRotate {
+		if err := db.maybeRotateMemtable(true); err != nil {
+			db.reportError(fmt.Errorf("cachingdb: post-command-wal set rotate failed: %w", err))
 		}
 	}
 
@@ -20918,6 +21075,21 @@ func (db *DB) DeleteSync(key []byte) error {
 	return db.delete(key, true)
 }
 
+// DeleteAfterCommandWALAppend applies a point Delete after appendCommand
+// succeeds under the same per-key serialization lock as Delete.
+func (db *DB) DeleteAfterCommandWALAppend(key []byte, appendCommand func() error) error {
+	if len(key) == 0 {
+		return ErrKeyEmpty
+	}
+	if appendCommand == nil {
+		return fmt.Errorf("cachingdb: missing command wal append callback")
+	}
+	db.waitForCheckpoint()
+	unlock := db.lockUpdateKey(key)
+	defer unlock()
+	return db.deleteDirectAfterCommandWALAppend(key, appendCommand)
+}
+
 func (db *DB) lockUpdateKey(key []byte) func() {
 	if db == nil {
 		return func() {}
@@ -20997,6 +21169,53 @@ func (db *DB) deleteDirect(key []byte, sync bool) error {
 	if needSyncBarrier {
 		if err := db.syncBarrierAfterWrite(true); err != nil {
 			return err
+		}
+	}
+
+	db.noteWrite()
+	db.maybeAssistFlush()
+	return nil
+}
+
+func (db *DB) deleteDirectAfterCommandWALAppend(key []byte, appendCommand func() error) error {
+	if !db.disableJournal {
+		return fmt.Errorf("cachingdb: command wal point writes require disabled cached redo log")
+	}
+	db.writeMu.RLock()
+	needRotate := false
+
+	shard := db.shardForKey(key)
+	shard.mu.Lock()
+	if db.shardExceedsLimit(shard, int64(len(key))) {
+		shard.mu.Unlock()
+		db.writeMu.RUnlock()
+		return ErrMemtableFull
+	}
+	shard.mu.Unlock()
+
+	if err := appendCommand(); err != nil {
+		db.writeMu.RUnlock()
+		return err
+	}
+
+	shard.mu.Lock()
+	shard.mem.Delete(key)
+	shard.rng.add(key)
+	newBytes := shard.mem.Size()
+	delta := newBytes - shard.bytes
+	shard.bytes = newBytes
+	db.mutableBytes.Add(delta)
+	shard.mu.Unlock()
+	db.noteWriteKey(key)
+
+	if db.mutableBytes.Load() > db.mutableFlushThreshold() {
+		needRotate = true
+	}
+	db.writeMu.RUnlock()
+
+	if needRotate {
+		if err := db.maybeRotateMemtable(true); err != nil {
+			db.reportError(fmt.Errorf("cachingdb: post-command-wal delete rotate failed: %w", err))
 		}
 	}
 

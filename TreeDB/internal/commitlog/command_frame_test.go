@@ -516,8 +516,16 @@ func TestRawKVBatchPayloadBuilderMatchesSliceEncoder(t *testing.T) {
 		t.Fatalf("EncodeRawKVBatchPayload: %v", err)
 	}
 	builder := NewRawKVBatchPayloadBuilder(len(ops), len("alpha")+len("one")+len("bravo")+len("charlie"))
-	for _, op := range ops {
-		keyView, valueView, err := builder.Append(op)
+	for i, op := range ops {
+		var keyView, valueView []byte
+		var err error
+		if i == 0 {
+			keyView, valueView, err = builder.AppendSet(op.Key, op.Value)
+		} else if op.Op == RawKVOpDelete {
+			keyView, err = builder.AppendDelete(op.Key)
+		} else {
+			keyView, valueView, err = builder.Append(op)
+		}
 		if err != nil {
 			t.Fatalf("Append(%v): %v", op.Op, err)
 		}
@@ -533,6 +541,22 @@ func TestRawKVBatchPayloadBuilderMatchesSliceEncoder(t *testing.T) {
 	}
 	if !bytes.Equal(builder.Payload(), want) {
 		t.Fatalf("builder payload mismatch\ngot  %x\nwant %x", builder.Payload(), want)
+	}
+}
+
+func TestRawKVBatchPayloadBuilderResetWithHintReportsOverflow(t *testing.T) {
+	var builder RawKVBatchPayloadBuilder
+	if err := builder.ResetWithHint(int(^uint(0)>>1), int(^uint(0)>>1)); !errors.Is(err, ErrRecordTooLarge) {
+		t.Fatalf("ResetWithHint overflow error=%v, want ErrRecordTooLarge", err)
+	}
+	if builder.Count() != 0 {
+		t.Fatalf("builder count=%d, want 0", builder.Count())
+	}
+	if got := len(builder.Payload()); got != rawKVBatchHeaderSize {
+		t.Fatalf("payload len=%d, want header size %d", got, rawKVBatchHeaderSize)
+	}
+	if _, _, err := builder.Append(RawKVOperation{Op: RawKVOpSet, Key: []byte("k"), Value: []byte("v")}); err != nil {
+		t.Fatalf("Append after overflow reset: %v", err)
 	}
 }
 

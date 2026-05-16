@@ -119,22 +119,23 @@ type UpdateFunc = db.UpdateFunc
 
 // DB is the public TreeDB handle (cached mode by default; read-only opens skip caching).
 type DB struct {
-	cached           *caching.DB
-	backend          *db.DB
-	dictdb           *db.DB
-	templateDB       *DB
-	writePath        writePathInfo
-	commandWALCached bool
-	commandWALMu     sync.Mutex
-	commandWALFirst  uint64
-	commandWALLast   uint64
-	bgVac            bgIndexVacuumWorker
-	notifyError      func(error)
-	bgErrMu          sync.Mutex
-	bgErr            error
-	durabilityMode   string
-	dir              string
-	maintenance      maintenanceCoordinator
+	cached                               *caching.DB
+	backend                              *db.DB
+	dictdb                               *db.DB
+	templateDB                           *DB
+	writePath                            writePathInfo
+	commandWALCached                     bool
+	commandWALMu                         sync.Mutex
+	commandWALFirst                      uint64
+	commandWALLast                       uint64
+	testAfterPublicCommandWALPointAppend func(commitlog.RawKVOperation)
+	bgVac                                bgIndexVacuumWorker
+	notifyError                          func(error)
+	bgErrMu                              sync.Mutex
+	bgErr                                error
+	durabilityMode                       string
+	dir                                  string
+	maintenance                          maintenanceCoordinator
 }
 
 type writePathInfo struct {
@@ -1470,15 +1471,10 @@ func (db *DB) Set(key, value []byte) error {
 	}
 	if db.cached != nil {
 		if db.commandWALCached {
-			if len(key) == 0 {
-				return caching.ErrKeyEmpty
-			}
-			if value == nil {
-				return caching.ErrValueNil
-			}
-			if err := db.appendPublicRawKVSingleCommand(commitlog.RawKVOperation{Op: commitlog.RawKVOpSet, Key: key, Value: value}, false); err != nil {
-				return err
-			}
+			op := commitlog.RawKVOperation{Op: commitlog.RawKVOpSet, Key: key, Value: value}
+			return db.cached.SetAfterCommandWALAppend(key, value, func() error {
+				return db.appendPublicRawKVSingleCommand(op, false)
+			})
 		}
 		return db.cached.Set(key, value)
 	}
@@ -1494,15 +1490,10 @@ func (db *DB) SetSync(key, value []byte) error {
 	}
 	if db.cached != nil {
 		if db.commandWALCached {
-			if len(key) == 0 {
-				return caching.ErrKeyEmpty
-			}
-			if value == nil {
-				return caching.ErrValueNil
-			}
-			if err := db.appendPublicRawKVSingleCommand(commitlog.RawKVOperation{Op: commitlog.RawKVOpSet, Key: key, Value: value}, true); err != nil {
-				return err
-			}
+			op := commitlog.RawKVOperation{Op: commitlog.RawKVOpSet, Key: key, Value: value}
+			return db.cached.SetAfterCommandWALAppend(key, value, func() error {
+				return db.appendPublicRawKVSingleCommand(op, true)
+			})
 		}
 		return db.cached.SetSync(key, value)
 	}
@@ -1558,12 +1549,10 @@ func (db *DB) Delete(key []byte) error {
 	}
 	if db.cached != nil {
 		if db.commandWALCached {
-			if len(key) == 0 {
-				return caching.ErrKeyEmpty
-			}
-			if err := db.appendPublicRawKVSingleCommand(commitlog.RawKVOperation{Op: commitlog.RawKVOpDelete, Key: key}, false); err != nil {
-				return err
-			}
+			op := commitlog.RawKVOperation{Op: commitlog.RawKVOpDelete, Key: key}
+			return db.cached.DeleteAfterCommandWALAppend(key, func() error {
+				return db.appendPublicRawKVSingleCommand(op, false)
+			})
 		}
 		return db.cached.Delete(key)
 	}
@@ -1614,12 +1603,10 @@ func (db *DB) DeleteSync(key []byte) error {
 	}
 	if db.cached != nil {
 		if db.commandWALCached {
-			if len(key) == 0 {
-				return caching.ErrKeyEmpty
-			}
-			if err := db.appendPublicRawKVSingleCommand(commitlog.RawKVOperation{Op: commitlog.RawKVOpDelete, Key: key}, true); err != nil {
-				return err
-			}
+			op := commitlog.RawKVOperation{Op: commitlog.RawKVOpDelete, Key: key}
+			return db.cached.DeleteAfterCommandWALAppend(key, func() error {
+				return db.appendPublicRawKVSingleCommand(op, true)
+			})
 		}
 		return db.cached.DeleteSync(key)
 	}

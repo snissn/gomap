@@ -354,11 +354,18 @@ func (w *Writer) AppendRawKVSingleCommandDirect(lsn, baseAppliedLSN uint64, op R
 }
 
 func (w *Writer) AppendRawKVBatchPayloadCommandDirect(lsn, baseAppliedLSN uint64, payload []byte) error {
-	if lsn == 0 {
-		return fmt.Errorf("%w: zero lsn", ErrCorrupt)
-	}
 	if err := validateRawKVBatchPayload(payload); err != nil {
 		return err
+	}
+	return w.AppendRawKVBatchPayloadCommandDirectTrusted(lsn, baseAppliedLSN, payload)
+}
+
+// AppendRawKVBatchPayloadCommandDirectTrusted appends a canonical RawKVBatch
+// payload that the caller has already validated or constructed through the
+// RawKVBatchPayloadBuilder.
+func (w *Writer) AppendRawKVBatchPayloadCommandDirectTrusted(lsn, baseAppliedLSN uint64, payload []byte) error {
+	if lsn == 0 {
+		return fmt.Errorf("%w: zero lsn", ErrCorrupt)
 	}
 	size, err := commandFrameEncodedSizeFromLengths(len(payload), 0, 0, 0)
 	if err != nil {
