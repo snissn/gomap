@@ -17,7 +17,7 @@ from typing import Any
 import numpy as np
 import psycopg
 
-identifierPattern = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 def parse_ints(raw: str) -> list[int]:
@@ -71,7 +71,7 @@ def connect(dsn: str) -> psycopg.Connection:
 
 
 def checked_identifier(value: str, name: str) -> str:
-    if not identifierPattern.fullmatch(value):
+    if not IDENTIFIER_PATTERN.fullmatch(value):
         raise ValueError(f"{name} must be a simple PostgreSQL identifier")
     return value
 
@@ -111,18 +111,26 @@ def build_database(args: argparse.Namespace, manifest: dict[str, Any], docs: np.
             f"embedding vector({manifest['dimensions']}) not null)"
         )
         insert_start = time.perf_counter()
-        prepare_start = time.perf_counter()
-        rows = [(i + 1, f"doc-{i:06d}", i % 16, vector_literal(docs[i])) for i in range(manifest["docs"])]
-        prepare_phase = phase(prepare_start)
-        copy_start = time.perf_counter()
+        prepare_seconds = 0.0
+        copy_write_seconds = 0.0
         with conn.transaction():
             with conn.cursor().copy(f"copy {qualified_table} (doc_id, id, grp, embedding) from stdin") as copy:
-                for row in rows:
+                for i in range(manifest["docs"]):
+                    prepare_start = time.perf_counter()
+                    row = (i + 1, f"doc-{i:06d}", i % 16, vector_literal(docs[i]))
+                    prepare_seconds += time.perf_counter() - prepare_start
+                    copy_write_start = time.perf_counter()
                     copy.write_row(row)
-        copy_phase = phase(copy_start)
+                    copy_write_seconds += time.perf_counter() - copy_write_start
         insert_phase = phase(insert_start)
-        insert_phase["client_prepare"] = prepare_phase
-        insert_phase["copy"] = copy_phase
+        insert_phase["client_prepare"] = {
+            "duration_nanos": int(prepare_seconds * 1_000_000_000),
+            "seconds": prepare_seconds,
+        }
+        insert_phase["copy_write"] = {
+            "duration_nanos": int(copy_write_seconds * 1_000_000_000),
+            "seconds": copy_write_seconds,
+        }
         build_start = time.perf_counter()
         with conn.transaction():
             conn.execute(

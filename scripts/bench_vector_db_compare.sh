@@ -133,19 +133,19 @@ echo "creating Python environment: $VENV"
 "$VENV/bin/python" -m pip install -q --upgrade pip
 
 binary_pip_packages=(numpy)
-source_pip_packages=()
+backend_pip_packages=()
 if contains_backend vectorlite; then
 	binary_pip_packages+=(vectorlite-py)
 fi
 if contains_backend pgvector; then
-	source_pip_packages+=("psycopg[binary]")
+	backend_pip_packages+=("psycopg[binary]")
 fi
 if contains_backend mongodb; then
-	source_pip_packages+=(pymongo)
+	backend_pip_packages+=(pymongo)
 fi
 "$VENV/bin/python" -m pip install -q --only-binary=:all: "${binary_pip_packages[@]}"
-if ((${#source_pip_packages[@]})); then
-	"$VENV/bin/python" -m pip install -q --only-binary=:all: "${source_pip_packages[@]}"
+if ((${#backend_pip_packages[@]})); then
+	"$VENV/bin/python" -m pip install -q --only-binary=:all: "${backend_pip_packages[@]}"
 fi
 
 echo "exporting TreeDB dataset"
