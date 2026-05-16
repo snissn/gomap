@@ -1805,6 +1805,7 @@ func (db *DB) finalizeOrderedRootPublishWithCommandWAL(newRootID uint64, sysRoot
 	if intent == nil {
 		return db.finalizeCommit(newRootID, sysRootID, retired, sync, metrics, touchedValueLogSegments, forceValueLogRefresh, vlogRefDelta, leafManifest, leafManifestRawFileIDs)
 	}
+	sync = commandWALIntentPublishSync(intent, sync)
 	db.commitMu.Lock()
 	if _, err := db.appendPublicCommandWALIntent(intent, sync); err != nil {
 		db.commitMu.Unlock()
