@@ -721,6 +721,12 @@ than `1.01x` of the relevant baseline. Any required lane at or below `1.01x` is
 a failing gate, including sub-parity results such as `0.80x`; those results may
 be recorded only as failing evidence, not accepted evidence.
 
+The same strict parity-plus rule applies to every command-WAL acceptance artifact
+with a required performance gate: a passing status must have `>` throughput-gate
+semantics, explicit `1.01x` minimum ratio thresholds, and recorded comparative
+throughput ratios above that bar. Historical or diagnostic results below that
+bar must be labeled as failing evidence.
+
 This test must prove public `treedb.Open` can open a read-write
 `command_wal_v1` handle, route raw KV writes through typed `RawKVBatch` command
 frames, expose mode proof through stats, reopen without explicit backend-only

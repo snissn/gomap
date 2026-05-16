@@ -1055,6 +1055,11 @@ Acceptance:
   throughput strictly greater than `1.01x` of the relevant baseline. Any
   required lane at or below `1.01x`, including sub-parity evidence such as
   `0.80x`, is a failing gate rather than accepted evidence.
+- all required command-WAL acceptance performance gates use the same strict
+  parity-plus policy: passing evidence must include `>` semantics, explicit
+  `1.01x` minimum ratio thresholds, and comparative throughput ratios above the
+  threshold; stale or diagnostic evidence below that threshold is failing
+  evidence.
 
 PR9 initial evidence:
 

@@ -40,7 +40,17 @@
   ],
   "performance_gate": {
     "required": true,
-    "status": "passed with recorded local microbenchmark artifact; command-WAL mode proof checks CommandWALEnabled and AppliedCommandLSN advancement",
+    "status": "failed_strict_parity_plus_historical_evidence",
+    "throughput_gate_operator": ">",
+    "thresholds": {
+      "insert_unindexed_min_ratio": 1.01,
+      "insert_indexed_min_ratio": 1.01,
+      "delete_unindexed_min_ratio": 1.01,
+      "delete_indexed_min_ratio": 1.01,
+      "allocation_regression_allowed": false,
+      "all_throughput_gates_must_exceed_ratio": 1.01
+    },
+    "rationale": "The recorded PR4 local microbenchmark artifact is retained as historical evidence, but it is no longer accepted as a passing performance gate under the final strict parity-plus policy. Required command-WAL throughput lanes must be strictly greater than 1.01x of the WAL-off baseline; these recorded PR4 lanes are sub-parity and therefore fail the gate.",
     "benchmark_command": "GOWORK=off go test ./TreeDB/collections -run '^$' -bench 'BenchmarkCollectionCommandWAL(InsertBatch|DeleteBatch)ByID' -benchtime=200x -benchmem -count=3",
     "artifacts": {
       "artifacts/command-wal/pr4/collection-insert-delete-microbench.txt": "da0b87f9c7b4736596ec049523da5d6d030595e033fe8aca3fb6821b617f63ac",
@@ -48,9 +58,19 @@
     },
     "summary": {
       "insert_unindexed_command_wal_docs_per_sec": "873k docs/s median-ish benchstat row; baseline WAL-off 1.205M docs/s",
+      "insert_unindexed_command_wal_to_wal_off_docs_per_sec_ratio": 0.7246,
       "insert_indexed_command_wal_docs_per_sec": "480k docs/s; baseline WAL-off 482k docs/s",
+      "insert_indexed_command_wal_to_wal_off_docs_per_sec_ratio": 0.9952,
       "delete_unindexed_command_wal_docs_per_sec": "808k docs/s; baseline WAL-off 867k docs/s",
+      "delete_unindexed_command_wal_to_wal_off_docs_per_sec_ratio": 0.9318,
       "delete_indexed_command_wal_docs_per_sec": "383k docs/s; baseline WAL-off 408k docs/s",
+      "delete_indexed_command_wal_to_wal_off_docs_per_sec_ratio": 0.9397,
+      "failing_lanes": [
+        "insert_unindexed",
+        "insert_indexed",
+        "delete_unindexed",
+        "delete_indexed"
+      ],
       "allocation_note": "payload encoders avoid per-document clone allocation before frame copy; command mode still records expected extra frame payload and publish bookkeeping allocations"
     }
   },
