@@ -514,23 +514,12 @@ func (db *DB) appendCommandWALIntent(intent *commandWALBatchIntent, sync bool) (
 	if err != nil {
 		return 0, err
 	}
-	if sync {
-		err = db.commandJournal.Sync()
-	} else {
-		err = db.commandJournal.Flush()
-	}
-	// testFailCommandWALFlush fires after the real Flush/Sync succeeds. The
-	// frame is replay-visible, and sync writes are durable; the later error
-	// makes the commit result ambiguous, so the open handle must fail closed.
-	if err == nil && db.testFailCommandWALFlush.Load() {
-		err = errTestCommandWALFlushFailpoint
-	}
-	if err != nil {
+	if err := db.FlushCommandWAL(sync); err != nil {
 		// AppendCommand already assigned a logical LSN, and the frame may be
 		// replayed if the append reached disk. A later flush/sync failure is
 		// commit-ambiguous: reopen recovery may apply the frame, so this handle
 		// must fail closed instead of allowing a retry to create an LSN gap.
-		db.commandWALFlushPoisoned.Store(true)
+		// FlushCommandWAL owns the relaxed-sync downgrade and poison state.
 		return 0, err
 	}
 	intent.lsn = lsn
