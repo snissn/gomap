@@ -33,6 +33,7 @@ const (
 	vectorIndexFallbackMissingGraphRootEntry      = "missing_graph_root_entry"
 	vectorIndexFallbackInvalidGraphRootKey        = "invalid_graph_root_key"
 	vectorIndexFallbackInvalidGraphRootEntry      = "invalid_graph_root_entry"
+	vectorIndexFallbackStaleRuntimeIndex          = "stale_runtime_index_ignored"
 )
 
 // VectorIndexEncoding selects the process-local ANN vector copy format. The

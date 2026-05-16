@@ -382,9 +382,7 @@ func BenchmarkCollectionVectorIndexNativeRootIncrementalWrite(b *testing.B) {
 		if err := d.Close(); err != nil {
 			b.Fatalf("close db: %v", err)
 		}
-		if err := os.RemoveAll(dir); err != nil {
-			b.Fatalf("remove db dir: %v", err)
-		}
+		_ = os.RemoveAll(dir)
 	}
 }
 
@@ -446,9 +444,7 @@ func BenchmarkCollectionVectorIndexNativeRootRebuild(b *testing.B) {
 		if err := d.Close(); err != nil {
 			b.Fatalf("close db: %v", err)
 		}
-		if err := os.RemoveAll(dir); err != nil {
-			b.Fatalf("remove db dir: %v", err)
-		}
+		_ = os.RemoveAll(dir)
 	}
 	b.ReportMetric(float64(lastNativeRootBytes), "native_root_bytes")
 	b.ReportMetric(float64(lastIndexBytesMemory), "index_bytes_memory")

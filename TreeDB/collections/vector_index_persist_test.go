@@ -1662,6 +1662,12 @@ func TestCollectionVectorIndexNativeRootRebuildAPIPersistsCleanGraph(t *testing.
 	if !rebuild.NativeRootLoaded || rebuild.RootID == 0 || rebuild.Stats.LiveDocs != 2 || rebuild.Stats.DeletedDocs != 0 || rebuild.RebuildNeeded {
 		t.Fatalf("unexpected rebuild status: %+v", rebuild)
 	}
+	mgr.collectionsMu.RLock()
+	_, registeredForAutoPersist := mgr.collections[col]
+	mgr.collectionsMu.RUnlock()
+	if !registeredForAutoPersist {
+		t.Fatalf("rebuilt native index did not register collection handle for auto-persist")
+	}
 	clean, err := col.VectorIndexStatus("embedding")
 	if err != nil {
 		t.Fatalf("clean vector index status: %v", err)
@@ -1735,11 +1741,11 @@ func TestCollectionVectorIndexNativeRootRebuildIgnoresStaleRuntimeSave(t *testin
 		t.Fatalf("unexpected rebuild status: %+v", rebuild)
 	}
 
-	if staleStatus, err := stale.SaveNativeSnapshot(); err != nil || staleStatus.Loaded {
+	if staleStatus, err := stale.SaveNativeSnapshot(); err != nil || staleStatus.Loaded || staleStatus.ExactFallbackReason != vectorIndexFallbackStaleRuntimeIndex {
 		t.Fatalf("stale runtime native save status=%+v err=%v, want ignored", staleStatus, err)
 	}
 	stale.TombstoneDocumentID([]byte("b"))
-	if staleStatus, err := stale.SaveNativeDeltaSnapshot(); err != nil || staleStatus.Loaded {
+	if staleStatus, err := stale.SaveNativeDeltaSnapshot(); err != nil || staleStatus.Loaded || staleStatus.ExactFallbackReason != vectorIndexFallbackStaleRuntimeIndex {
 		t.Fatalf("stale runtime native delta status=%+v err=%v, want ignored", staleStatus, err)
 	}
 	status, err := col.VectorIndexStatus("embedding")

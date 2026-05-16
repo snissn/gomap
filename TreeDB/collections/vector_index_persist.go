@@ -94,6 +94,7 @@ func (idx *VectorIndex) SaveNativeSnapshot() (VectorIndexLoadStatus, error) {
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()
 	if !c.isRegisteredVectorIndex(idx) {
+		status.ExactFallbackReason = vectorIndexFallbackStaleRuntimeIndex
 		return status, nil
 	}
 	if err := c.flushBufferedWrites(); err != nil {
@@ -210,6 +211,7 @@ func (idx *VectorIndex) SaveNativeDeltaSnapshot() (VectorIndexLoadStatus, error)
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()
 	if !c.isRegisteredVectorIndex(idx) {
+		status.ExactFallbackReason = vectorIndexFallbackStaleRuntimeIndex
 		return status, nil
 	}
 	if err := c.flushBufferedWrites(); err != nil {

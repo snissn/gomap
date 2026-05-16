@@ -51,7 +51,7 @@ func (c *Collection) RebuildVectorIndex(name string) (VectorIndexStatus, error) 
 	if err := c.flushBufferedWrites(); err != nil {
 		return VectorIndexStatus{}, err
 	}
-	def, err := c.declaredVectorIndexDefinition(name)
+	def, err := c.declaredVectorIndexDefinitionPrepared(name)
 	if err != nil {
 		return VectorIndexStatus{}, err
 	}
@@ -64,21 +64,29 @@ func (c *Collection) RebuildVectorIndex(name string) (VectorIndexStatus, error) 
 		return VectorIndexStatus{}, err
 	}
 	c.RegisterVectorIndex(index)
+	if c.manager != nil && index.isNativePersistent() {
+		c.manager.registerCollectionHandle(c)
+	}
 	duration := collectionObservedElapsedSince(start)
 	index.mu.Lock()
 	index.lastRebuildDuration = duration
 	index.mu.Unlock()
 
-	status, err := c.vectorIndexStatus(def.Name, false)
-	if err != nil {
-		return VectorIndexStatus{}, err
+	stats := index.Stats()
+	stats.BytesDisk = native.BytesDisk
+	status := VectorIndexStatus{
+		Definition:          def,
+		Name:                def.Name,
+		RootName:            collectionVectorIndexRootName(c.meta.Name, def.Name),
+		RootID:              native.RootID,
+		NativeRootLoaded:    native.Loaded,
+		NativeRootBytes:     native.BytesDisk,
+		ExactFallbackReason: native.ExactFallbackReason,
+		Registered:          true,
+		Stats:               stats,
+		RebuildNeeded:       native.ExactFallbackReason != "" || stats.RebuildNeeded || stats.SnapshotDirty,
+		Duration:            duration,
 	}
-	status.Duration = duration
-	status.RootID = native.RootID
-	status.NativeRootLoaded = native.Loaded
-	status.NativeRootBytes = native.BytesDisk
-	status.Stats.BytesDisk = native.BytesDisk
-	status.ExactFallbackReason = native.ExactFallbackReason
 	return status, nil
 }
 
@@ -93,6 +101,13 @@ func (c *Collection) declaredVectorIndexDefinition(name string) (VectorIndexDefi
 		return VectorIndexDefinition{}, errCollectionDBNil
 	}
 	if err := c.flushBufferedWrites(); err != nil {
+		return VectorIndexDefinition{}, err
+	}
+	return c.declaredVectorIndexDefinitionPrepared(name)
+}
+
+func (c *Collection) declaredVectorIndexDefinitionPrepared(name string) (VectorIndexDefinition, error) {
+	if err := ValidateIndexName(name); err != nil {
 		return VectorIndexDefinition{}, err
 	}
 	snap := c.db.AcquireSnapshot()
