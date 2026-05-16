@@ -108,7 +108,14 @@ func (idx *VectorIndex) SaveNativeSnapshot() (VectorIndexLoadStatus, error) {
 }
 
 func shouldIgnoreStaleNativeSnapshotSave(c *Collection, idx *VectorIndex) bool {
-	return idx.isNativePersistent() && !c.isRegisteredVectorIndex(idx)
+	if c == nil || idx == nil || c.isRegisteredVectorIndex(idx) {
+		return false
+	}
+	if idx.isNativePersistent() || collectionMetaDeclaresVectorIndex(c.meta, idx.name) {
+		return true
+	}
+	declared, err := c.refreshVectorIndexDeclaration(idx.name)
+	return err == nil && declared
 }
 
 // saveNativeSnapshotPrepared publishes the current graph after the caller has
