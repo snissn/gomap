@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -247,6 +248,12 @@ func parseConfig(args []string) (config, error) {
 	if cfg.validateDocs > cfg.docs {
 		return config{}, errors.New("-validate-docs cannot exceed -docs")
 	}
+	if cfg.validateQueries == 0 && cfg.minRecall > 0 {
+		return config{}, errors.New("-min-recall must be 0 when -validate-queries is 0")
+	}
+	if cfg.validateQueries+cfg.queries > cfg.docs {
+		return config{}, errors.New("-validate-queries plus -queries cannot exceed -docs")
+	}
 	return cfg, nil
 }
 
@@ -428,12 +435,15 @@ func execute(ctx context.Context, cfg config) (result, error) {
 	if err != nil {
 		return result{}, err
 	}
-	closeReopened := true
-	defer func() {
-		if closeReopened {
-			_ = d.Close()
+	closeReopened := func() error {
+		if d == nil {
+			return nil
 		}
-	}()
+		err := d.Close()
+		d = nil
+		return err
+	}
+	defer func() { _ = closeReopened() }()
 	col, err = collections.NewCollectionManager(d).OpenCollection("docs")
 	if err != nil {
 		return result{}, err
@@ -453,7 +463,7 @@ func execute(ctx context.Context, cfg config) (result, error) {
 	res.Memory = memoryReport{
 		AllocBeforeLoadBytes: beforeLoad.Alloc,
 		AllocAfterLoadBytes:  afterLoad.Alloc,
-		LoadAllocDeltaBytes:  int64(afterLoad.Alloc) - int64(beforeLoad.Alloc),
+		LoadAllocDeltaBytes:  allocDeltaBytes(afterLoad.Alloc, beforeLoad.Alloc),
 		IndexBytesMemory:     res.IndexStatsLoaded.BytesMemory,
 	}
 
@@ -468,11 +478,26 @@ func execute(ctx context.Context, cfg config) (result, error) {
 		return result{}, err
 	}
 	res.Search = search
-	closeReopened = false
-	if err := d.Close(); err != nil {
+	if err := closeReopened(); err != nil {
 		return result{}, err
 	}
 	return res, nil
+}
+
+func allocDeltaBytes(after, before uint64) int64 {
+	const maxInt64 = uint64(1<<63 - 1)
+	if after >= before {
+		delta := after - before
+		if delta > maxInt64 {
+			return int64(maxInt64)
+		}
+		return int64(delta)
+	}
+	delta := before - after
+	if delta > maxInt64 {
+		return -int64(maxInt64)
+	}
+	return -int64(delta)
 }
 
 func insertDocuments(col *collections.Collection, docs, dims, batchSize int) error {
@@ -513,7 +538,6 @@ func validateCompactedData(col *collections.Collection, idx *collections.VectorI
 		}
 	}
 	if cfg.validateQueries == 0 {
-		out.Recall = 1
 		return out, nil
 	}
 	// Recall validation disables exact fallback on the ANN side so it measures
@@ -605,14 +629,42 @@ func validationQueries(count, docs, dims int) [][]float32 {
 
 func syntheticQueries(count, docs, dims, offset int) [][]float32 {
 	queries := make([][]float32, count)
+	stride := queryDocStride(docs)
 	for i := 0; i < count; i++ {
-		queries[i] = embedding(queryDocIndex(i+offset, docs), dims)
+		queries[i] = embedding(queryDocIndex(i+offset, docs, stride), dims)
 	}
 	return queries
 }
 
-func queryDocIndex(i, docs int) int {
-	return (i*7919 + docs/3 + 17) % docs
+func queryDocStride(docs int) int {
+	stride := 7919
+	if docs > 0 {
+		stride %= docs
+	}
+	if stride <= 0 {
+		stride = 1
+	}
+	for gcd(stride, docs) != 1 {
+		stride++
+	}
+	return stride
+}
+
+func queryDocIndex(i, docs, stride int) int {
+	return (i*stride + docs/3 + 17) % docs
+}
+
+func gcd(a, b int) int {
+	if a < 0 {
+		a = -a
+	}
+	if b < 0 {
+		b = -b
+	}
+	for b != 0 {
+		a, b = b, a%b
+	}
+	return a
 }
 
 func validationDocIndex(i, docs int) int {
@@ -626,12 +678,14 @@ func documentID(id int) []byte {
 func documentJSON(id, dims int) []byte {
 	vector := embedding(id, dims)
 	out := make([]byte, 0, 48+dims*10)
-	out = append(out, fmt.Sprintf(`{"group":%d,"embedding":[`, id%16)...)
+	out = append(out, `{"group":`...)
+	out = strconv.AppendInt(out, int64(id%16), 10)
+	out = append(out, `,"embedding":[`...)
 	for i, value := range vector {
 		if i > 0 {
 			out = append(out, ',')
 		}
-		out = append(out, fmt.Sprintf("%.7g", value)...)
+		out = strconv.AppendFloat(out, float64(value), 'g', 7, 32)
 	}
 	out = append(out, ']', '}')
 	return out
@@ -646,6 +700,10 @@ func embedding(id, dims int) []float32 {
 		value := math.Sin(x*d*0.013) + math.Cos((x+17)*d*0.007) + math.Sin(float64((id%31)+1)*d*0.019)
 		out[i] = float32(value)
 		norm += value * value
+	}
+	if norm == 0 || math.IsNaN(norm) || math.IsInf(norm, 0) {
+		out[0] = 1
+		return out
 	}
 	scale := 1 / math.Sqrt(norm)
 	for i := range out {
@@ -674,10 +732,7 @@ func storageUsage(dir string, docs int) (storageReport, error) {
 		if err != nil {
 			return err
 		}
-		group := strings.Split(rel, string(os.PathSeparator))[0]
-		if rel == group && (group == "index.db" || group == "journal.wal" || group == "format.json" || group == "LOCK") {
-			group = rel
-		}
+		group := strings.SplitN(rel, string(os.PathSeparator), 2)[0]
 		report.Domains[group] += size
 		return nil
 	})
@@ -729,6 +784,8 @@ func printText(w io.Writer, res result) {
 			fully = res.CompactStorage.FullyCompacted
 		}
 		fmt.Fprintf(w, "compact_storage_full: %.3fs fully_compacted=%t\n", res.CompactPhase.Seconds, fully)
+	} else {
+		fmt.Fprintf(w, "compact_storage_full: skipped\n")
 	}
 	fmt.Fprintf(w, "reopen_and_load_native_index: %.3fs\n", res.ReopenLoad.Seconds)
 	fmt.Fprintf(w, "\nValidation\n")

@@ -180,6 +180,84 @@ func TestExecuteRejectsNonEmptyDir(t *testing.T) {
 	}
 }
 
+func TestExecuteRemovesTemporaryDirWhenNotKept(t *testing.T) {
+	res, err := execute(context.Background(), config{
+		docs:                 64,
+		dimensions:           8,
+		queries:              4,
+		validateQueries:      2,
+		validateDocs:         2,
+		topK:                 3,
+		batchSize:            32,
+		m:                    4,
+		efConstruction:       32,
+		efSearch:             32,
+		minRecall:            0.5,
+		compact:              false,
+		disableExactFallback: true,
+	})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if res.KeptDir {
+		t.Fatalf("KeptDir=%t want false", res.KeptDir)
+	}
+	if _, err := os.Stat(res.Dir); !os.IsNotExist(err) {
+		t.Fatalf("temporary dir stat err=%v, want not exist", err)
+	}
+}
+
+func TestParseConfigRejectsInvalidValidationCombinations(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{
+			name: "recall gate without validation queries",
+			args: []string{"-validate-queries", "0"},
+			want: "-min-recall must be 0",
+		},
+		{
+			name: "overlapping validation and benchmark queries",
+			args: []string{"-docs", "10", "-queries", "8", "-validate-queries", "3", "-validate-docs", "0"},
+			want: "-validate-queries plus -queries cannot exceed -docs",
+		},
+		{
+			name: "topk exceeds docs",
+			args: []string{"-docs", "2", "-top-k", "3"},
+			want: "-top-k cannot exceed -docs",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := parseConfig(tc.args)
+			if err == nil {
+				t.Fatal("parseConfig succeeded, want error")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error=%v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestSyntheticQueriesDoNotOverlapValidationQueries(t *testing.T) {
+	docs := 97
+	validateCount := 17
+	benchmarkCount := 53
+	stride := queryDocStride(docs)
+	seen := make(map[int]struct{}, validateCount)
+	for i := 0; i < validateCount; i++ {
+		seen[queryDocIndex(i, docs, stride)] = struct{}{}
+	}
+	for i := 0; i < benchmarkCount; i++ {
+		docIndex := queryDocIndex(i+validateCount, docs, stride)
+		if _, ok := seen[docIndex]; ok {
+			t.Fatalf("benchmark query doc %d overlapped validation set", docIndex)
+		}
+	}
+}
+
 func TestRunTextOutput(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
