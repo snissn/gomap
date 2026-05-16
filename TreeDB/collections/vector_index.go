@@ -1851,7 +1851,8 @@ func (idx *VectorIndex) vectorIndexCandidateIsDiverseLocked(candidate vectorInde
 
 // sortVectorIndexCandidatesByDistanceLocked keeps the common already-sorted
 // case allocation-free and handles the exactly-one-candidate-appended-at-tail
-// case with insertion sort. Other unsorted shapes fall back to the full sort.
+// case with insertion sort. Broader near-sorted shapes intentionally fall back
+// to the full sort instead of carrying more repair logic in the hot path.
 func (idx *VectorIndex) sortVectorIndexCandidatesByDistanceLocked(candidates []vectorIndexCandidate) {
 	for i := 1; i < len(candidates); i++ {
 		if idx.compareVectorIndexCandidatesByDistanceLocked(candidates[i-1], candidates[i]) > 0 {
