@@ -87,6 +87,11 @@ const (
 	// Force-pointer workloads with large values are write-path throughput-bound.
 	// Keep them on a stable block codec path and avoid selector overhead.
 	forcePointerAutoBlockMinPayloadBytes = 1024
+	// High-entropy forced-pointer streams below the block fast-path threshold
+	// should stay on the raw path once a cheap sample says compression is very
+	// unlikely to help. This keeps auto mode close to off-mode throughput while
+	// retaining auto's leaf-log compression path.
+	forcePointerAutoRawBypassMinPayloadBytes = 512
 	// Larger grouped-frame targets reduce per-record compression overhead for
 	// large forced-pointer streams.
 	forcePointerBlockTargetCompressedBytes = 32 << 10
@@ -1575,6 +1580,37 @@ func (db *DB) resolveVlogWriteMode(l *lane, dictID uint64, rawPayloadBytes, unit
 	}
 }
 
+func (db *DB) shouldBypassAutoRawValueCompression(dictID uint64, records []valuelog.Record, unitPayloadBytes int, payloadKind vlogPayloadKind) bool {
+	if db == nil || normalizeVlogCompressionMode(db.valueLogCompressionMode) != vlogCompressionAuto {
+		return false
+	}
+	if dictID != 0 || !db.forceValueLogPointers || payloadKind != vlogPayloadKindSingleValue {
+		return false
+	}
+	if unitPayloadBytes < forcePointerAutoRawBypassMinPayloadBytes ||
+		unitPayloadBytes >= forcePointerAutoBlockMinPayloadBytes ||
+		len(records) == 0 {
+		return false
+	}
+	checks := [3]int{0, len(records) / 2, len(records) - 1}
+	checked := 0
+	prev := -1
+	for _, idx := range checks {
+		if idx < 0 || idx >= len(records) {
+			continue
+		}
+		if idx == prev {
+			continue
+		}
+		prev = idx
+		checked++
+		if likelyCompressibleSample(records[idx].Value) {
+			return false
+		}
+	}
+	return checked > 0
+}
+
 func (db *DB) observeVlogWriteMode(l *lane, mode vlogCompressionWriteMode, blockCodec valuelog.BlockCodec, rawPayloadBytes, unitPayloadBytes, storedPayloadBytes int, probe bool, wallNs int64) {
 	if db == nil || l == nil {
 		return
@@ -1588,6 +1624,14 @@ func (db *DB) observeVlogWriteMode(l *lane, mode vlogCompressionWriteMode, block
 	}
 	compressionMode := normalizeVlogCompressionMode(db.valueLogCompressionMode)
 	if !db.vlogSelectorEnabled(compressionMode) {
+		return
+	}
+	if compressionMode == vlogCompressionAuto &&
+		db.forceValueLogPointers &&
+		mode == vlogWriteOff &&
+		unitPayloadBytes >= forcePointerAutoRawBypassMinPayloadBytes {
+		// Raw high-entropy forced-pointer batches do not teach the selector
+		// anything useful after the caller already bypassed compression.
 		return
 	}
 	if compressionMode == vlogCompressionAuto &&
