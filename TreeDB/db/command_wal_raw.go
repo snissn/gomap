@@ -258,6 +258,25 @@ func (db *DB) AppendCommandWALIntent(intent *CommandWALIntent, sync bool) (uint6
 	return db.appendPublicCommandWALIntent(intent, sync)
 }
 
+// AppendCommandWALPayload appends a command-WAL frame without allocating a
+// reusable intent token. It is for public cached write paths that only need the
+// assigned LSN after the append succeeds.
+func (db *DB) AppendCommandWALPayload(kind commitlog.CommandKind, scope commitlog.CommandScope, payloadFormat commitlog.PayloadFormat, payload []byte, sync bool) (uint64, error) {
+	if db == nil || !db.commandWAL {
+		return 0, nil
+	}
+	if db.durability == DurabilityWALOffRelaxed {
+		return 0, fmt.Errorf("%w: WAL-off durability is incompatible with command WAL", ErrCommandWALUnsupported)
+	}
+	intent := commandWALBatchIntent{
+		kind:          kind,
+		scope:         scope,
+		payloadFormat: payloadFormat,
+		payload:       payload,
+	}
+	return db.appendCommandWALIntent(&intent, sync)
+}
+
 func (db *DB) PublishCommandWALNoop(intent *CommandWALIntent, sync bool) error {
 	if intent == nil {
 		return nil

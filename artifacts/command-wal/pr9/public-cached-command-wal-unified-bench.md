@@ -60,7 +60,7 @@ notes:
 ```text
        Test         TreeDB  TreeDB (public cached command_wal_v1)
 -----------  -------------  -------------------------------------
-Batch Write      6,016,954                              4,006,371
+Batch Write      5,969,182                              4,500,139
 ```
 
 ## Disk Usage (End of Run)

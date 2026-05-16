@@ -2,9 +2,9 @@ goos: linux
 goarch: amd64
 pkg: github.com/snissn/gomap/TreeDB
 cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
-BenchmarkPublicCommandWALRawKVBatchWrite/batch_size=64/command_wal=false-12         	    1000	     32038 ns/op	        64.00 sets/batch	   1997602 sets/s	   34409 B/op	     145 allocs/op
-BenchmarkPublicCommandWALRawKVBatchWrite/batch_size=64/command_wal=true-12          	    1000	     30730 ns/op	        64.00 sets/batch	   2082672 sets/s	   36784 B/op	     149 allocs/op
-BenchmarkPublicCommandWALRawKVBatchWrite/batch_size=1024/command_wal=false-12       	    1000	    421519 ns/op	      1024 sets/batch	   2429312 sets/s	  849995 B/op	    2072 allocs/op
-BenchmarkPublicCommandWALRawKVBatchWrite/batch_size=1024/command_wal=true-12        	    1000	    520783 ns/op	      1024 sets/batch	   1966269 sets/s	  875955 B/op	    2076 allocs/op
+BenchmarkPublicCommandWALRawKVBatchWrite/batch_size=64/command_wal=false-12         	    1000	     29489 ns/op	        64.00 sets/batch	   2170331 sets/s	   34355 B/op	     145 allocs/op
+BenchmarkPublicCommandWALRawKVBatchWrite/batch_size=64/command_wal=true-12          	    1000	     30900 ns/op	        64.00 sets/batch	   2071180 sets/s	   31883 B/op	     151 allocs/op
+BenchmarkPublicCommandWALRawKVBatchWrite/batch_size=1024/command_wal=false-12       	    1000	    429730 ns/op	      1024 sets/batch	   2382890 sets/s	  851348 B/op	    2072 allocs/op
+BenchmarkPublicCommandWALRawKVBatchWrite/batch_size=1024/command_wal=true-12        	    1000	    546887 ns/op	      1024 sets/batch	   1872417 sets/s	  810665 B/op	    2078 allocs/op
 PASS
-ok  	github.com/snissn/gomap/TreeDB	4.930s
+ok  	github.com/snissn/gomap/TreeDB	4.934s

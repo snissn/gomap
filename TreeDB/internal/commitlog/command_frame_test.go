@@ -460,6 +460,57 @@ func TestCommandWALRawKVBatchScanUsesPayloadBackedViews(t *testing.T) {
 	}
 }
 
+func TestEncodeRawKVBatchPayloadScanMatchesSliceEncoder(t *testing.T) {
+	ops := []RawKVOperation{
+		{Op: RawKVOpSet, Key: []byte("alpha"), Value: []byte("one")},
+		{Op: RawKVOpSet, Key: []byte("bravo"), Value: []byte("two")},
+		{Op: RawKVOpDelete, Key: []byte("charlie")},
+	}
+	want, err := EncodeRawKVBatchPayload(ops)
+	if err != nil {
+		t.Fatalf("EncodeRawKVBatchPayload: %v", err)
+	}
+	var scanCount int
+	got, err := EncodeRawKVBatchPayloadScan(func(emit func(RawKVOperation) error) error {
+		scanCount++
+		for _, op := range ops {
+			if err := emit(op); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("EncodeRawKVBatchPayloadScan: %v", err)
+	}
+	if scanCount != 2 {
+		t.Fatalf("scan count=%d want 2", scanCount)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("streaming encoder mismatch\ngot  %x\nwant %x", got, want)
+	}
+}
+
+func TestEncodeRawKVSingleOperationPayloadMatchesSliceEncoder(t *testing.T) {
+	for _, op := range []RawKVOperation{
+		{Op: RawKVOpSet, Key: []byte("alpha"), Value: []byte("one")},
+		{Op: RawKVOpDelete, Key: []byte("bravo")},
+		{Op: RawKVOpSetRID, Key: []byte("charlie"), RID: 42},
+	} {
+		want, err := EncodeRawKVBatchPayload([]RawKVOperation{op})
+		if err != nil {
+			t.Fatalf("EncodeRawKVBatchPayload(%v): %v", op.Op, err)
+		}
+		got, err := EncodeRawKVSingleOperationPayload(op)
+		if err != nil {
+			t.Fatalf("EncodeRawKVSingleOperationPayload(%v): %v", op.Op, err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("single-op encoder mismatch for op %v\ngot  %x\nwant %x", op.Op, got, want)
+		}
+	}
+}
+
 func TestCommandWALRawKVBatchOneLSNAtomic(t *testing.T) {
 	payload, err := EncodeRawKVBatchPayload([]RawKVOperation{
 		{Op: RawKVOpSet, Key: []byte("a"), Value: []byte("1")},

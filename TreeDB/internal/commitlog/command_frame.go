@@ -462,6 +462,102 @@ func EncodeRawKVBatchPayload(ops []RawKVOperation) ([]byte, error) {
 	return payload, nil
 }
 
+// EncodeRawKVSingleOperationPayload encodes the common one-op RawKVBatch
+// command without forcing callers to materialize a single-entry operation slice.
+func EncodeRawKVSingleOperationPayload(op RawKVOperation) ([]byte, error) {
+	if err := validateRawKVOperation(&op); err != nil {
+		return nil, err
+	}
+	valueLen := len(op.Value)
+	if op.Op == RawKVOpSetRID {
+		valueLen = 8
+	}
+	if commandFrameIntExceedsUint32(len(op.Key)) || commandFrameIntExceedsUint32(valueLen) {
+		return nil, ErrRecordTooLarge
+	}
+	total := rawKVBatchHeaderSize + rawKVOpHeaderSize + len(op.Key) + valueLen
+	payload := make([]byte, total)
+	binary.LittleEndian.PutUint16(payload[0:2], 1)
+	binary.LittleEndian.PutUint32(payload[2:6], 1)
+	value := op.Value
+	var ridBuf [8]byte
+	if op.Op == RawKVOpSetRID {
+		binary.LittleEndian.PutUint64(ridBuf[:], op.RID)
+		value = ridBuf[:]
+	}
+	off := rawKVBatchHeaderSize
+	payload[off] = byte(op.Op)
+	binary.LittleEndian.PutUint32(payload[off+1:off+5], uint32(len(op.Key)))
+	binary.LittleEndian.PutUint32(payload[off+5:off+9], uint32(len(value)))
+	off += rawKVOpHeaderSize
+	copy(payload[off:], op.Key)
+	off += len(op.Key)
+	copy(payload[off:], value)
+	return payload, nil
+}
+
+// EncodeRawKVBatchPayloadScan encodes a RawKVBatch payload by scanning the
+// caller's operation source twice: once for sizing/validation and once for
+// encoding. It avoids materializing a []RawKVOperation when the caller already
+// owns a replayable batch representation.
+func EncodeRawKVBatchPayloadScan(scan func(func(RawKVOperation) error) error) ([]byte, error) {
+	if scan == nil {
+		return EncodeRawKVBatchPayload(nil)
+	}
+	count := 0
+	total := rawKVBatchHeaderSize
+	if err := scan(func(op RawKVOperation) error {
+		if commandFrameIntExceedsUint32(count + 1) {
+			return ErrRecordTooLarge
+		}
+		if err := validateRawKVOperation(&op); err != nil {
+			return err
+		}
+		valueLen := len(op.Value)
+		if op.Op == RawKVOpSetRID {
+			valueLen = 8
+		}
+		if commandFrameIntExceedsUint32(len(op.Key)) || commandFrameIntExceedsUint32(valueLen) {
+			return ErrRecordTooLarge
+		}
+		total += rawKVOpHeaderSize + len(op.Key) + valueLen
+		count++
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	payload := make([]byte, total)
+	binary.LittleEndian.PutUint16(payload[0:2], 1)
+	binary.LittleEndian.PutUint32(payload[2:6], uint32(count))
+	off := rawKVBatchHeaderSize
+	if err := scan(func(op RawKVOperation) error {
+		if err := validateRawKVOperation(&op); err != nil {
+			return err
+		}
+		value := op.Value
+		var ridBuf [8]byte
+		if op.Op == RawKVOpSetRID {
+			binary.LittleEndian.PutUint64(ridBuf[:], op.RID)
+			value = ridBuf[:]
+		}
+		payload[off] = byte(op.Op)
+		binary.LittleEndian.PutUint32(payload[off+1:off+5], uint32(len(op.Key)))
+		binary.LittleEndian.PutUint32(payload[off+5:off+9], uint32(len(value)))
+		off += rawKVOpHeaderSize
+		copy(payload[off:], op.Key)
+		off += len(op.Key)
+		copy(payload[off:], value)
+		off += len(value)
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	if off != len(payload) {
+		return nil, ErrCorrupt
+	}
+	return payload, nil
+}
+
 func DecodeRawKVBatchPayload(payload []byte) ([]RawKVOperation, error) {
 	if err := validateRawKVBatchPayload(payload); err != nil {
 		return nil, err

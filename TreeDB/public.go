@@ -1476,7 +1476,7 @@ func (db *DB) Set(key, value []byte) error {
 			if value == nil {
 				return caching.ErrValueNil
 			}
-			if err := db.appendPublicRawKVCommand([]commitlog.RawKVOperation{{Op: commitlog.RawKVOpSet, Key: key, Value: value}}, false); err != nil {
+			if err := db.appendPublicRawKVSingleCommand(commitlog.RawKVOperation{Op: commitlog.RawKVOpSet, Key: key, Value: value}, false); err != nil {
 				return err
 			}
 		}
@@ -1500,7 +1500,7 @@ func (db *DB) SetSync(key, value []byte) error {
 			if value == nil {
 				return caching.ErrValueNil
 			}
-			if err := db.appendPublicRawKVCommand([]commitlog.RawKVOperation{{Op: commitlog.RawKVOpSet, Key: key, Value: value}}, true); err != nil {
+			if err := db.appendPublicRawKVSingleCommand(commitlog.RawKVOperation{Op: commitlog.RawKVOpSet, Key: key, Value: value}, true); err != nil {
 				return err
 			}
 		}
@@ -1561,7 +1561,7 @@ func (db *DB) Delete(key []byte) error {
 			if len(key) == 0 {
 				return caching.ErrKeyEmpty
 			}
-			if err := db.appendPublicRawKVCommand([]commitlog.RawKVOperation{{Op: commitlog.RawKVOpDelete, Key: key}}, false); err != nil {
+			if err := db.appendPublicRawKVSingleCommand(commitlog.RawKVOperation{Op: commitlog.RawKVOpDelete, Key: key}, false); err != nil {
 				return err
 			}
 		}
@@ -1617,7 +1617,7 @@ func (db *DB) DeleteSync(key []byte) error {
 			if len(key) == 0 {
 				return caching.ErrKeyEmpty
 			}
-			if err := db.appendPublicRawKVCommand([]commitlog.RawKVOperation{{Op: commitlog.RawKVOpDelete, Key: key}}, true); err != nil {
+			if err := db.appendPublicRawKVSingleCommand(commitlog.RawKVOperation{Op: commitlog.RawKVOpDelete, Key: key}, true); err != nil {
 				return err
 			}
 		}
@@ -1679,7 +1679,7 @@ func (db *DB) NewBatchWithSize(size int) Batch {
 	if db.cached != nil {
 		inner := db.cached.NewBatchWithSize(size)
 		if db.commandWALCached {
-			return &commandWALPublicBatch{db: db, inner: inner, expectedOps: size}
+			return &commandWALPublicBatch{db: db, inner: inner}
 		}
 		return inner
 	}

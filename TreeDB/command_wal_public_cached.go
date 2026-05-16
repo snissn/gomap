@@ -19,11 +19,31 @@ func (tdb *DB) appendPublicRawKVCommand(ops []commitlog.RawKVOperation, sync boo
 	if err != nil {
 		return err
 	}
-	intent, err := tdb.backend.NewCommandWALIntent(commitlog.CommandKindRawKVBatch, commitlog.CommandScopeRawKV, commitlog.PayloadFormatRawKVBatchV1, payload)
+	return tdb.appendPublicRawKVCommandPayload(payload, sync)
+}
+
+func (tdb *DB) appendPublicRawKVSingleCommand(op commitlog.RawKVOperation, sync bool) error {
+	if tdb == nil || !tdb.commandWALCached {
+		return nil
+	}
+	if tdb.backend == nil {
+		return ErrClosed
+	}
+	payload, err := commitlog.EncodeRawKVSingleOperationPayload(op)
 	if err != nil {
 		return err
 	}
-	lsn, err := tdb.backend.AppendCommandWALIntent(intent, sync)
+	return tdb.appendPublicRawKVCommandPayload(payload, sync)
+}
+
+func (tdb *DB) appendPublicRawKVCommandPayload(payload []byte, sync bool) error {
+	if tdb == nil || !tdb.commandWALCached || len(payload) == 0 {
+		return nil
+	}
+	if tdb.backend == nil {
+		return ErrClosed
+	}
+	lsn, err := tdb.backend.AppendCommandWALPayload(commitlog.CommandKindRawKVBatch, commitlog.CommandScopeRawKV, commitlog.PayloadFormatRawKVBatchV1, payload, sync)
 	if err != nil {
 		return err
 	}
@@ -90,11 +110,10 @@ func (tdb *DB) publishPublicCommandWALPending(sync bool) error {
 }
 
 type commandWALPublicBatch struct {
-	db          *DB
-	inner       Batch
-	expectedOps int
-	dirty       bool
-	closed      bool
+	db     *DB
+	inner  Batch
+	dirty  bool
+	closed bool
 }
 
 func (b *commandWALPublicBatch) Set(key, value []byte) error {
@@ -108,6 +127,22 @@ func (b *commandWALPublicBatch) Set(key, value []byte) error {
 	return nil
 }
 
+func (b *commandWALPublicBatch) SetView(key, value []byte) error {
+	if b == nil || b.inner == nil {
+		return ErrClosed
+	}
+	if setter, ok := b.inner.(interface {
+		SetView(key, value []byte) error
+	}); ok {
+		if err := setter.SetView(key, value); err != nil {
+			return err
+		}
+		b.dirty = true
+		return nil
+	}
+	return b.Set(key, value)
+}
+
 func (b *commandWALPublicBatch) Delete(key []byte) error {
 	if b == nil || b.inner == nil {
 		return ErrClosed
@@ -117,6 +152,22 @@ func (b *commandWALPublicBatch) Delete(key []byte) error {
 	}
 	b.dirty = true
 	return nil
+}
+
+func (b *commandWALPublicBatch) DeleteView(key []byte) error {
+	if b == nil || b.inner == nil {
+		return ErrClosed
+	}
+	if deleter, ok := b.inner.(interface {
+		DeleteView(key []byte) error
+	}); ok {
+		if err := deleter.DeleteView(key); err != nil {
+			return err
+		}
+		b.dirty = true
+		return nil
+	}
+	return b.Delete(key)
 }
 
 func (b *commandWALPublicBatch) Write() error {
@@ -132,11 +183,11 @@ func (b *commandWALPublicBatch) write(sync bool) error {
 		return ErrClosed
 	}
 	if b.dirty {
-		ops, err := b.commandWALOps()
+		payload, err := b.commandWALPayload()
 		if err != nil {
 			return err
 		}
-		if err := b.db.appendPublicRawKVCommand(ops, sync); err != nil {
+		if err := b.db.appendPublicRawKVCommandPayload(payload, sync); err != nil {
 			return err
 		}
 	}
@@ -165,21 +216,32 @@ func (b *commandWALPublicBatch) Close() error {
 	return err
 }
 
-func (b *commandWALPublicBatch) commandWALOps() ([]commitlog.RawKVOperation, error) {
+func (b *commandWALPublicBatch) Reset() {
+	if b == nil || b.inner == nil {
+		return
+	}
+	if resetter, ok := b.inner.(interface{ Reset() }); ok {
+		resetter.Reset()
+		b.dirty = false
+		b.closed = false
+	}
+}
+
+func (b *commandWALPublicBatch) commandWALPayload() ([]byte, error) {
 	if b == nil || b.inner == nil {
 		return nil, ErrClosed
 	}
-	ops := make([]commitlog.RawKVOperation, 0, b.expectedOps)
-	err := b.inner.Replay(func(entry batch.Entry) error {
-		switch entry.Type {
-		case batch.OpDelete:
-			ops = append(ops, commitlog.RawKVOperation{Op: commitlog.RawKVOpDelete, Key: entry.Key})
-		case batch.OpPut:
-			ops = append(ops, commitlog.RawKVOperation{Op: commitlog.RawKVOpSet, Key: entry.Key, Value: entry.Value})
-		}
-		return nil
+	return commitlog.EncodeRawKVBatchPayloadScan(func(emit func(commitlog.RawKVOperation) error) error {
+		return b.inner.Replay(func(entry batch.Entry) error {
+			switch entry.Type {
+			case batch.OpDelete:
+				return emit(commitlog.RawKVOperation{Op: commitlog.RawKVOpDelete, Key: entry.Key})
+			case batch.OpPut:
+				return emit(commitlog.RawKVOperation{Op: commitlog.RawKVOpSet, Key: entry.Key, Value: entry.Value})
+			}
+			return nil
+		})
 	})
-	return ops, err
 }
 
 func (b *commandWALPublicBatch) Replay(fn func(batch.Entry) error) error {
