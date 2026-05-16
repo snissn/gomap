@@ -152,8 +152,12 @@ func (s *SegmentColumnAssetStore) Put(kind ColumnAssetKind, payload []byte) (Col
 	if err != nil {
 		return ColumnAssetRef{}, err
 	}
-	if _, err := s.file.WriteAt(payload, ref.Offset); err != nil {
+	n, err := s.file.WriteAt(payload, ref.Offset)
+	if err != nil {
 		return ColumnAssetRef{}, err
+	}
+	if n != len(payload) {
+		return ColumnAssetRef{}, fmt.Errorf("colgranule: short asset write bytes=%d want %d", n, len(payload))
 	}
 	s.size += ref.Length
 	return ref, nil

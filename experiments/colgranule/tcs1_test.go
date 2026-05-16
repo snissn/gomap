@@ -160,6 +160,20 @@ func TestTCS1ColumnPartAssetRejectsImageHeaderMismatch(t *testing.T) {
 	}
 }
 
+func TestTCS1ColumnPartAssetEncodeRejectsImageStructMismatch(t *testing.T) {
+	_, image := testColumnPartImageFixture(t, false)
+	mismatched := image
+	mismatched.PartID++
+	if _, _, err := EncodeTCS1ColumnPartImage(mismatched); err == nil || !strings.Contains(err.Error(), "part id") {
+		t.Fatalf("EncodeTCS1ColumnPartImage part id err=%v want mismatch", err)
+	}
+	mismatched = image
+	mismatched.Rows++
+	if _, _, err := EncodeTCS1ColumnPartImage(mismatched); err == nil || !strings.Contains(err.Error(), "rows") {
+		t.Fatalf("EncodeTCS1ColumnPartImage rows err=%v want mismatch", err)
+	}
+}
+
 func TestJSONBenchPartQueriesRunFromReopenedTCS1Asset(t *testing.T) {
 	ds, err := LoadJSONBenchColumns("testdata/jsonbench_sample.jsonl", 0)
 	if err != nil {

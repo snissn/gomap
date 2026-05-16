@@ -34,8 +34,18 @@ func EncodeTCS1ColumnPartImage(image ColumnPartImage) ([]byte, TCS1PartRecord, e
 	if image.Rows < 0 {
 		return nil, TCS1PartRecord{}, fmt.Errorf("colgranule: negative image rows %d", image.Rows)
 	}
-	if _, err := ParseColumnPartImage(image.Bytes); err != nil {
+	parsed, err := ParseColumnPartImage(image.Bytes)
+	if err != nil {
 		return nil, TCS1PartRecord{}, fmt.Errorf("colgranule: validate image before TCS1 encode: %w", err)
+	}
+	if parsed.PartID != image.PartID {
+		return nil, TCS1PartRecord{}, fmt.Errorf("colgranule: TCS1 encode part id=%d parsed image part id=%d", image.PartID, parsed.PartID)
+	}
+	if parsed.Rows != image.Rows {
+		return nil, TCS1PartRecord{}, fmt.Errorf("colgranule: TCS1 encode rows=%d parsed image rows=%d", image.Rows, parsed.Rows)
+	}
+	if parsed.Version != image.Version {
+		return nil, TCS1PartRecord{}, fmt.Errorf("colgranule: TCS1 encode image version=%d parsed image version=%d", image.Version, parsed.Version)
 	}
 	payloadBytes := len(image.Bytes)
 	totalBytes := tcs1HeaderBytes + payloadBytes
