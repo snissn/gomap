@@ -220,7 +220,7 @@ func BenchmarkCollectionVectorIndexNativeRootLoad(b *testing.B) {
 func BenchmarkCollectionVectorIndexNativeRootGraphOnlySearch(b *testing.B) {
 	docs := vectorBenchmarkDocs(b)
 	dims := vectorBenchmarkDims(b)
-	d, _, loaded, status := openLoadedNativeVectorBenchmarkIndex(b, docs, dims, "embedding_graph_only")
+	d, loaded, status := openLoadedNativeVectorBenchmarkIndex(b, docs, dims, "embedding_graph_only")
 	defer func() { _ = d.Close() }()
 	query := vectorBenchmarkEmbedding(docs/3, dims)
 	warm, err := loaded.searchGraphOnly(query, vectorBenchmarkTopK, 128)
@@ -251,7 +251,7 @@ func BenchmarkCollectionVectorIndexNativeRootGraphOnlySearch(b *testing.B) {
 func BenchmarkCollectionVectorIndexNativeRootGraphOnlySearchParallel(b *testing.B) {
 	docs := vectorBenchmarkDocs(b)
 	dims := vectorBenchmarkDims(b)
-	d, _, loaded, status := openLoadedNativeVectorBenchmarkIndex(b, docs, dims, "embedding_graph_only_parallel")
+	d, loaded, status := openLoadedNativeVectorBenchmarkIndex(b, docs, dims, "embedding_graph_only_parallel")
 	defer func() { _ = d.Close() }()
 	query := vectorBenchmarkEmbedding(docs/3, dims)
 	warm, err := loaded.searchGraphOnly(query, vectorBenchmarkTopK, 128)
@@ -283,15 +283,16 @@ func BenchmarkCollectionVectorIndexNativeRootGraphOnlySearchParallel(b *testing.
 func BenchmarkCollectionVectorIndexNativeRootSearch(b *testing.B) {
 	docs := vectorBenchmarkDocs(b)
 	dims := vectorBenchmarkDims(b)
-	d, _, loaded, status := openLoadedNativeVectorBenchmarkIndex(b, docs, dims, "embedding_search")
+	d, loaded, status := openLoadedNativeVectorBenchmarkIndex(b, docs, dims, "embedding_search")
 	defer func() { _ = d.Close() }()
 	query := vectorBenchmarkEmbedding(docs/3, dims)
-	warm, trace, err := loaded.Search(query, VectorIndexSearchOptions{
+	opts := VectorIndexSearchOptions{
 		TopK:                 vectorBenchmarkTopK,
 		EfSearch:             128,
 		FetchMultiplier:      16,
 		DisableExactFallback: true,
-	})
+	}
+	warm, trace, err := loaded.Search(query, opts)
 	if err != nil {
 		b.Fatalf("warm native vector search: %v", err)
 	}
@@ -306,12 +307,7 @@ func BenchmarkCollectionVectorIndexNativeRootSearch(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		results, trace, err := loaded.Search(query, VectorIndexSearchOptions{
-			TopK:                 vectorBenchmarkTopK,
-			EfSearch:             128,
-			FetchMultiplier:      16,
-			DisableExactFallback: true,
-		})
+		results, trace, err := loaded.Search(query, opts)
 		if err != nil {
 			b.Fatalf("native vector search: %v", err)
 		}
@@ -324,15 +320,16 @@ func BenchmarkCollectionVectorIndexNativeRootSearch(b *testing.B) {
 func BenchmarkCollectionVectorIndexNativeRootSearchParallel(b *testing.B) {
 	docs := vectorBenchmarkDocs(b)
 	dims := vectorBenchmarkDims(b)
-	d, _, loaded, status := openLoadedNativeVectorBenchmarkIndex(b, docs, dims, "embedding_search_parallel")
+	d, loaded, status := openLoadedNativeVectorBenchmarkIndex(b, docs, dims, "embedding_search_parallel")
 	defer func() { _ = d.Close() }()
 	query := vectorBenchmarkEmbedding(docs/3, dims)
-	warm, trace, err := loaded.Search(query, VectorIndexSearchOptions{
+	opts := VectorIndexSearchOptions{
 		TopK:                 vectorBenchmarkTopK,
 		EfSearch:             128,
 		FetchMultiplier:      16,
 		DisableExactFallback: true,
-	})
+	}
+	warm, trace, err := loaded.Search(query, opts)
 	if err != nil {
 		b.Fatalf("warm native vector parallel search: %v", err)
 	}
@@ -347,12 +344,7 @@ func BenchmarkCollectionVectorIndexNativeRootSearchParallel(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	runParallelVectorSearchBenchmark(b, func() error {
-		results, trace, err := loaded.Search(query, VectorIndexSearchOptions{
-			TopK:                 vectorBenchmarkTopK,
-			EfSearch:             128,
-			FetchMultiplier:      16,
-			DisableExactFallback: true,
-		})
+		results, trace, err := loaded.Search(query, opts)
 		if err != nil {
 			return fmt.Errorf("native vector search: %w", err)
 		}
@@ -417,6 +409,7 @@ func BenchmarkCollectionVectorIndexNativeRootIncrementalWrite(b *testing.B) {
 	b.ReportMetric(float64(docs), "docs/write")
 	b.ReportMetric(float64(dims), "dims")
 	baseDir := b.TempDir()
+	var indexBytes int64
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		b.StopTimer()
@@ -459,12 +452,13 @@ func BenchmarkCollectionVectorIndexNativeRootIncrementalWrite(b *testing.B) {
 			_ = d.Close()
 			b.Fatalf("native incremental index snapshot is dirty: %+v", stats)
 		}
-		b.ReportMetric(float64(stats.BytesMemory), "index_bytes")
+		indexBytes = stats.BytesMemory
 		if err := d.Close(); err != nil {
 			b.Fatalf("close db: %v", err)
 		}
 		removeVectorBenchmarkDirAfterClose(b, dir)
 	}
+	b.ReportMetric(float64(indexBytes), "index_bytes")
 }
 
 func BenchmarkCollectionVectorIndexNativeRootRebuild(b *testing.B) {
@@ -992,7 +986,7 @@ func vectorBenchmarkWriteBatch(docs, dims int) ([][]byte, [][]byte) {
 	return ids, documents
 }
 
-func openLoadedNativeVectorBenchmarkIndex(tb testing.TB, docs, dims int, name string) (*backenddb.DB, *Collection, *VectorIndex, VectorIndexLoadStatus) {
+func openLoadedNativeVectorBenchmarkIndex(tb testing.TB, docs, dims int, name string) (*backenddb.DB, *VectorIndex, VectorIndexLoadStatus) {
 	tb.Helper()
 	dir := tb.TempDir()
 	def := VectorIndexDefinition{
@@ -1034,18 +1028,18 @@ func openLoadedNativeVectorBenchmarkIndex(tb testing.TB, docs, dims int, name st
 		_ = d.Close()
 		tb.Fatalf("unexpected native load status loaded=%v status=%+v save=%+v", loaded != nil, loadStatus, saveStatus)
 	}
-	return d, col, loaded, saveStatus
+	return d, loaded, loadStatus
 }
 
 func runParallelVectorSearchBenchmark(b *testing.B, search func() error) {
 	b.Helper()
 	var failureMu sync.Mutex
-	var firstFailure string
+	var firstFailure error
 	recordFailure := func(err error) {
 		failureMu.Lock()
 		defer failureMu.Unlock()
-		if firstFailure == "" {
-			firstFailure = err.Error()
+		if firstFailure == nil {
+			firstFailure = err
 		}
 	}
 	b.RunParallel(func(pb *testing.PB) {
@@ -1056,7 +1050,7 @@ func runParallelVectorSearchBenchmark(b *testing.B, search func() error) {
 			}
 		}
 	})
-	if firstFailure != "" {
+	if firstFailure != nil {
 		b.Fatal(firstFailure)
 	}
 }
