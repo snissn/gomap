@@ -2,13 +2,14 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
 )
 
 func TestExecuteSmokeCompactsReopensValidatesAndBenchmarks(t *testing.T) {
-	res, err := execute(t.Context(), config{
+	res, err := execute(context.Background(), config{
 		dir:                  t.TempDir(),
 		keepDir:              true,
 		docs:                 128,
@@ -88,7 +89,7 @@ func TestRunJSONOutput(t *testing.T) {
 }
 
 func TestExecuteRequireLeafVLogBytesFailsOnPagerBackedDefault(t *testing.T) {
-	_, err := execute(t.Context(), config{
+	_, err := execute(context.Background(), config{
 		dir:                  t.TempDir(),
 		keepDir:              true,
 		docs:                 64,
