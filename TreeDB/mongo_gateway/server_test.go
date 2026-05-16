@@ -2834,6 +2834,50 @@ func TestServerIndexMetadataRejectsInvalidCommands(t *testing.T) {
 	})
 	assertCommandError(t, crossKindDuplicate, "DuplicateKey")
 
+	assertOK(t, serveCommand(t, server, 23330, bson.D{
+		{Key: "insert", Value: "vector_dup"},
+		{Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}}}},
+		{Key: "$db", Value: "app"},
+	}))
+	conflictingVectorDuplicate := serveCommand(t, server, 23331, bson.D{
+		{Key: "createIndexes", Value: "vector_dup"},
+		{Key: "indexes", Value: bson.A{
+			bson.D{
+				{Key: "key", Value: bson.D{{Key: "embedding", Value: "vector"}}},
+				{Key: "name", Value: "embedding_vector"},
+				{Key: "treedbIndexType", Value: "vector"},
+				{Key: "treedbVector", Value: bson.D{{Key: "dimensions", Value: int32(64)}}},
+			},
+			bson.D{
+				{Key: "key", Value: bson.D{{Key: "embedding", Value: "vector"}}},
+				{Key: "name", Value: "embedding_vector"},
+				{Key: "treedbIndexType", Value: "vector"},
+				{Key: "treedbVector", Value: bson.D{{Key: "dimensions", Value: int32(128)}}},
+			},
+		}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, conflictingVectorDuplicate, "BadValue")
+	errmsg, ok = bson.Raw(conflictingVectorDuplicate).Lookup("errmsg").StringValueOK()
+	if !ok || !strings.Contains(errmsg, `duplicate vector index "embedding_vector"`) {
+		t.Fatalf("conflicting vector duplicate errmsg=%q ok=%v want duplicate vector index", errmsg, ok)
+	}
+	vectorDupCol, err := server.Collections.OpenCollection("app.vector_dup")
+	if err != nil {
+		t.Fatalf("open vector_dup collection: %v", err)
+	}
+	if got := len(vectorDupCol.Meta().VectorIndexes); got != 0 {
+		t.Fatalf("vector indexes after rejected duplicate=%d want 0", got)
+	}
+	vectorDupIndexes := cursorFirstBatch(t, serveCommand(t, server, 23332, bson.D{
+		{Key: "listIndexes", Value: "vector_dup"},
+		{Key: "$db", Value: "app"},
+	}))
+	if got, want := len(vectorDupIndexes), 1; got != want {
+		t.Fatalf("vector_dup indexes after rejected duplicate len=%d want %d", got, want)
+	}
+	assertIndexName(t, vectorDupIndexes[0], "_id_")
+
 	invalidListCollectionsDB := serveCommand(t, server, 234, bson.D{
 		{Key: "listCollections", Value: int32(1)},
 		{Key: "$db", Value: "bad/name"},
