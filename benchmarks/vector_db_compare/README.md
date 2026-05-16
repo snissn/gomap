@@ -22,6 +22,9 @@ Run:
 scripts/bench_vector_db_compare.sh
 ```
 
+The default backend set is `treedb,vectorlite`. Add `pgvector` or `mongodb` to
+`BACKENDS` when those external services are available.
+
 Useful overrides:
 
 ```sh
@@ -42,7 +45,11 @@ Backends:
 - `pgvector`: runs PostgreSQL+pgvector. If `PGVECTOR_DSN` is not set, the
   runner starts a temporary `pgvector/pgvector:pg16` Docker container. The
   harness writes into a fresh benchmark schema (`PGVECTOR_SCHEMA`) instead of
-  dropping tables in the caller's default schema.
+  dropping tables in the caller's default schema. Set
+  `PGVECTOR_DROP_SCHEMA_AFTER=true` when using an external DSN and you want the
+  benchmark schema dropped after the run. Insert timing includes client-side
+  vector text serialization for COPY; the JSON result reports that preparation
+  time separately under the insert phase.
 - `mongodb`: runs MongoDB Vector Search only when `MONGODB_VECTOR_URI` points
   at a deployment that supports `$vectorSearch` and `createSearchIndexes`. The
   runner uses a fresh benchmark database name by default.

@@ -34,7 +34,9 @@ func (c *Collection) VectorIndexStatus(name string) (VectorIndexStatus, error) {
 }
 
 // RebuildVectorIndex scans canonical collection documents, rebuilds the
-// declared HNSW graph, and publishes a full native vector-index root.
+// declared HNSW graph, and publishes a full native vector-index root. It is an
+// operational maintenance call: collection writes wait while the rebuild scans
+// and publishes so the replacement graph cannot miss committed mutations.
 func (c *Collection) RebuildVectorIndex(name string) (VectorIndexStatus, error) {
 	start := time.Now()
 	if c == nil {
@@ -48,11 +50,14 @@ func (c *Collection) RebuildVectorIndex(name string) (VectorIndexStatus, error) 
 	// committed write can be skipped by the clean replacement snapshot.
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()
-	def, err := c.declaredVectorIndexDefinition(name)
+	if err := c.flushBufferedWrites(); err != nil {
+		return VectorIndexStatus{}, err
+	}
+	def, err := c.declaredVectorIndexDefinitionPrepared(name)
 	if err != nil {
 		return VectorIndexStatus{}, err
 	}
-	index, err := c.buildVectorIndex(vectorIndexOptionsFromDefinition(def), false)
+	index, err := c.buildVectorIndexPrepared(vectorIndexOptionsFromDefinition(def), false, false)
 	if err != nil {
 		return VectorIndexStatus{}, err
 	}
@@ -61,27 +66,33 @@ func (c *Collection) RebuildVectorIndex(name string) (VectorIndexStatus, error) 
 		return VectorIndexStatus{}, err
 	}
 	c.RegisterVectorIndex(index)
+	if c.manager != nil && index.isNativePersistent() {
+		c.manager.registerCollectionHandle(c)
+	}
 	duration := collectionObservedElapsedSince(start)
 	index.mu.Lock()
 	index.lastRebuildDuration = duration
 	index.mu.Unlock()
 
-	status, err := c.vectorIndexStatus(def.Name, false)
-	if err != nil {
-		return VectorIndexStatus{}, err
+	stats := index.Stats()
+	stats.BytesDisk = native.BytesDisk
+	status := VectorIndexStatus{
+		Definition:          def,
+		Name:                def.Name,
+		RootName:            collectionVectorIndexRootName(c.meta.Name, def.Name),
+		RootID:              native.RootID,
+		NativeRootLoaded:    native.Loaded,
+		NativeRootBytes:     native.BytesDisk,
+		ExactFallbackReason: native.ExactFallbackReason,
+		Registered:          true,
+		Stats:               stats,
+		RebuildNeeded:       native.ExactFallbackReason != "" || stats.RebuildNeeded || stats.SnapshotDirty,
+		Duration:            duration,
 	}
-	status.Duration = duration
-	status.RootID = native.RootID
-	status.NativeRootLoaded = native.Loaded
-	status.NativeRootBytes = native.BytesDisk
-	status.ExactFallbackReason = native.ExactFallbackReason
 	return status, nil
 }
 
 func (c *Collection) declaredVectorIndexDefinition(name string) (VectorIndexDefinition, error) {
-	if err := ValidateIndexName(name); err != nil {
-		return VectorIndexDefinition{}, err
-	}
 	if c == nil {
 		return VectorIndexDefinition{}, errCollectionNil
 	}
@@ -89,6 +100,13 @@ func (c *Collection) declaredVectorIndexDefinition(name string) (VectorIndexDefi
 		return VectorIndexDefinition{}, errCollectionDBNil
 	}
 	if err := c.flushBufferedWrites(); err != nil {
+		return VectorIndexDefinition{}, err
+	}
+	return c.declaredVectorIndexDefinitionPrepared(name)
+}
+
+func (c *Collection) declaredVectorIndexDefinitionPrepared(name string) (VectorIndexDefinition, error) {
+	if err := ValidateIndexName(name); err != nil {
 		return VectorIndexDefinition{}, err
 	}
 	snap := c.db.AcquireSnapshot()
@@ -103,7 +121,6 @@ func (c *Collection) declaredVectorIndexDefinition(name string) (VectorIndexDefi
 	if catalog == nil {
 		return VectorIndexDefinition{}, errCollectionNotFound
 	}
-	c.meta = catalog.meta
 	def, ok := findVectorIndex(catalog.meta.VectorIndexes, name)
 	if !ok {
 		return VectorIndexDefinition{}, ErrIndexNotFound
@@ -136,31 +153,34 @@ func (c *Collection) vectorIndexStatus(name string, inspectNativeRoot bool) (Vec
 	if catalog == nil {
 		return VectorIndexStatus{}, errCollectionNotFound
 	}
-	c.meta = catalog.meta
 	def, ok := findVectorIndex(catalog.meta.VectorIndexes, name)
 	if !ok {
 		return VectorIndexStatus{}, ErrIndexNotFound
 	}
 
 	rootName := collectionVectorIndexRootName(catalog.meta.Name, def.Name)
+	rootID := catalog.rootID(rootName)
+	overlayRootIDs := catalog.overlayRootIDs(rootName)
+	if rootID == 0 && len(overlayRootIDs) != 0 {
+		rootID = overlayRootIDs[len(overlayRootIDs)-1]
+	}
 	status := VectorIndexStatus{
 		Definition: def,
 		Name:       def.Name,
 		RootName:   rootName,
-		RootID:     catalog.rootID(rootName),
+		RootID:     rootID,
 	}
-	if runtime := c.registeredVectorIndex(def.Name); runtime != nil {
+	if runtimeIdx := c.registeredVectorIndex(def.Name); runtimeIdx != nil {
 		status.Registered = true
-		status.Stats = runtime.Stats()
+		status.Stats = runtimeIdx.Stats()
 	}
-	if status.RootID == 0 && len(catalog.overlayRootIDs(rootName)) == 0 {
-		status.ExactFallbackReason = "missing_graph_root"
+	if status.RootID == 0 && len(overlayRootIDs) == 0 {
+		status.ExactFallbackReason = vectorIndexFallbackMissingGraphRoot
 		status.RebuildNeeded = true
 		return status, nil
 	}
 	if !inspectNativeRoot {
-		status.NativeRootLoaded = status.RootID != 0 || len(catalog.overlayRootIDs(rootName)) != 0
-		status.NativeRootBytes = status.Stats.BytesDisk
+		status.NativeRootLoaded = status.RootID != 0 || len(overlayRootIDs) != 0
 		status.RebuildNeeded = status.Stats.RebuildNeeded || status.Stats.SnapshotDirty
 		return status, nil
 	}

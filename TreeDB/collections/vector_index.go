@@ -27,6 +27,25 @@ const (
 	defaultVectorIndexRebuildPPM     = 250_000
 	defaultVectorIndexExactFilterMax = 1024
 	defaultVectorRecallBatchCells    = 1 << 20
+	maxVectorIndexEagerNeighborCap   = 64
+)
+
+const (
+	vectorIndexFallbackMissingVectorIndexMetadata = "missing_vector_index_metadata"
+	vectorIndexFallbackMissingGraphRoot           = "missing_graph_root"
+	vectorIndexFallbackMissingGraphRootEntry      = "missing_graph_root_entry"
+	vectorIndexFallbackInvalidGraphRootKey        = "invalid_graph_root_key"
+	vectorIndexFallbackInvalidGraphRootEntry      = "invalid_graph_root_entry"
+	vectorIndexFallbackStaleRuntimeIndex          = "stale_runtime_index_ignored"
+	vectorIndexFallbackMetaMismatch               = "meta_mismatch"
+	vectorIndexFallbackInvalidEncoding            = "invalid_encoding"
+	vectorIndexFallbackMetaEncodingMismatch       = "meta_encoding_mismatch"
+	vectorIndexFallbackMetaDimensionMismatch      = "meta_dimension_mismatch"
+	vectorIndexFallbackInvalidDimensions          = "invalid_dimensions"
+	vectorIndexFallbackInvalidEdgeNode            = "invalid_edge_node"
+	vectorIndexFallbackInvalidTombstone           = "invalid_tombstone"
+	vectorIndexFallbackInvalidDocMapNode          = "invalid_docmap_node"
+	vectorIndexFallbackInvalidEntry               = "invalid_entry"
 )
 
 // VectorIndexEncoding selects the process-local ANN vector copy format. The
@@ -219,6 +238,10 @@ func (c *Collection) BuildVectorIndex(opts VectorIndexOptions) (*VectorIndex, er
 }
 
 func (c *Collection) buildVectorIndex(opts VectorIndexOptions, register bool) (*VectorIndex, error) {
+	return c.buildVectorIndexPrepared(opts, register, true)
+}
+
+func (c *Collection) buildVectorIndexPrepared(opts VectorIndexOptions, register, flushBuffered bool) (*VectorIndex, error) {
 	if c == nil {
 		return nil, errCollectionNil
 	}
@@ -229,8 +252,10 @@ func (c *Collection) buildVectorIndex(opts VectorIndexOptions, register bool) (*
 	if err != nil {
 		return nil, err
 	}
-	if err := c.flushBufferedWrites(); err != nil {
-		return nil, err
+	if flushBuffered {
+		if err := c.flushBufferedWrites(); err != nil {
+			return nil, err
+		}
 	}
 	index.setNativePersistent(collectionMetaDeclaresVectorIndex(c.meta, index.name))
 	materializer, err := c.NewStoredDocumentJSONMaterializer()
@@ -257,6 +282,9 @@ func (c *Collection) buildVectorIndex(opts VectorIndexOptions, register bool) (*
 	}
 	if register {
 		c.RegisterVectorIndex(index)
+		if c.manager != nil && index.needsNativeAutoPersist() {
+			c.manager.registerCollectionHandle(c)
+		}
 	}
 	return index, nil
 }
@@ -356,6 +384,15 @@ func (c *Collection) RegisterVectorIndex(index *VectorIndex) {
 	c.vectorIndexes[index.name] = index
 }
 
+func (c *Collection) isRegisteredVectorIndex(index *VectorIndex) bool {
+	if c == nil || index == nil {
+		return false
+	}
+	c.vectorIndexesMu.RLock()
+	defer c.vectorIndexesMu.RUnlock()
+	return c.vectorIndexes[index.name] == index
+}
+
 // UnregisterVectorIndex detaches a registered in-memory vector index.
 func (c *Collection) UnregisterVectorIndex(name string) {
 	if c == nil {
@@ -364,6 +401,10 @@ func (c *Collection) UnregisterVectorIndex(name string) {
 	c.vectorIndexesMu.Lock()
 	defer c.vectorIndexesMu.Unlock()
 	delete(c.vectorIndexes, name)
+	empty := len(c.vectorIndexes) == 0
+	if empty && c.manager != nil {
+		c.manager.unregisterCollectionHandle(c)
+	}
 }
 
 func (c *Collection) registeredVectorIndexes() []*VectorIndex {
@@ -382,13 +423,122 @@ func (c *Collection) registeredVectorIndexes() []*VectorIndex {
 	return out
 }
 
+func (c *Collection) hasRegisteredVectorIndex(name string) bool {
+	if c == nil || name == "" {
+		return false
+	}
+	c.vectorIndexesMu.RLock()
+	defer c.vectorIndexesMu.RUnlock()
+	_, ok := c.vectorIndexes[name]
+	return ok
+}
+
+func (c *Collection) ensureDeclaredNativeVectorIndexesLoaded() error {
+	if c == nil {
+		return nil
+	}
+	if c.db == nil {
+		return errCollectionDBNil
+	}
+	if c.declaredNativeVectorIndexesLoadedForCurrentCatalog() {
+		return nil
+	}
+	c.vectorIndexLoadMu.Lock()
+	defer c.vectorIndexLoadMu.Unlock()
+
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return backenddb.ErrClosed
+	}
+	catalog, err := loadCollectionCatalog(snap, c.meta.Name)
+	if err != nil {
+		_ = snap.Close()
+		return err
+	}
+	if catalog == nil {
+		_ = snap.Close()
+		return errCollectionNotFound
+	}
+	c.meta = catalog.meta
+	c.rememberCatalog(snap, catalog)
+	_ = snap.Close()
+
+	declared := make(map[string]VectorIndexDefinition, len(c.meta.VectorIndexes))
+	for _, def := range c.meta.VectorIndexes {
+		declared[def.Name] = def
+	}
+	for _, index := range c.registeredVectorIndexes() {
+		def, ok := declared[index.name]
+		if !ok {
+			if index.isNativePersistent() {
+				c.UnregisterVectorIndex(index.name)
+			}
+			continue
+		}
+		if index.validateNativeSnapshotDefinition(def) != "" {
+			c.UnregisterVectorIndex(index.name)
+		}
+	}
+	for _, def := range c.meta.VectorIndexes {
+		if index := c.registeredVectorIndex(def.Name); index != nil {
+			continue
+		}
+		index, status, err := c.LoadNativeVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
+		if err != nil {
+			return err
+		}
+		if index != nil {
+			continue
+		}
+		if status.ExactFallbackReason != "" {
+			if _, err := c.BuildVectorIndex(vectorIndexOptionsFromDefinition(def)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (c *Collection) declaredNativeVectorIndexesLoadedForCurrentCatalog() bool {
+	if c == nil || c.db == nil {
+		return false
+	}
+	commitSeq, systemRoot := dbCommitSeqAndSystemRoot(c.db)
+	c.catalogMu.RLock()
+	catalogCurrent := c.catalog != nil && c.catalogCommitSeq == commitSeq && c.catalogSystemRoot == systemRoot
+	var defs []VectorIndexDefinition
+	if catalogCurrent {
+		defs = append([]VectorIndexDefinition(nil), c.catalog.meta.VectorIndexes...)
+	}
+	c.catalogMu.RUnlock()
+	if !catalogCurrent {
+		return false
+	}
+	if len(defs) == 0 {
+		return len(c.registeredVectorIndexes()) == 0
+	}
+	for _, def := range defs {
+		index := c.registeredVectorIndex(def.Name)
+		if index == nil || index.validateNativeSnapshotDefinition(def) != "" {
+			return false
+		}
+	}
+	return true
+}
+
 func (c *Collection) notifyVectorIndexesUpsert(documentIDs [][]byte) error {
 	if len(documentIDs) == 0 {
 		return nil
 	}
+	if err := c.ensureDeclaredNativeVectorIndexesLoaded(); err != nil {
+		return err
+	}
 	indexes := c.registeredVectorIndexes()
 	if len(indexes) == 0 {
 		return nil
+	}
+	if c.manager != nil {
+		c.manager.registerCollectionHandle(c)
 	}
 	for _, index := range indexes {
 		for _, documentID := range documentIDs {
@@ -407,9 +557,15 @@ func (c *Collection) notifyVectorIndexesDelete(documentIDs [][]byte) error {
 	if len(documentIDs) == 0 {
 		return nil
 	}
+	if err := c.ensureDeclaredNativeVectorIndexesLoaded(); err != nil {
+		return err
+	}
 	indexes := c.registeredVectorIndexes()
 	if len(indexes) == 0 {
 		return nil
+	}
+	if c.manager != nil {
+		c.manager.registerCollectionHandle(c)
 	}
 	for _, index := range indexes {
 		for _, documentID := range documentIDs {
@@ -461,7 +617,7 @@ func (c *Collection) persistNativeVectorIndexIfDeclared(index *VectorIndex) erro
 			return err
 		}
 	}
-	if !index.isNativePersistent() {
+	if !index.isNativePersistent() || !index.hasNativePersistedSnapshot() {
 		_, err := index.SaveNativeSnapshot()
 		if errors.Is(err, errVectorIndexNotDeclared) {
 			return nil
@@ -503,7 +659,19 @@ func (c *Collection) persistDirtyNativeVectorIndexes() error {
 			return err
 		}
 	}
+	if c.manager != nil && !c.hasDirtyNativeVectorIndex() {
+		c.manager.unregisterCollectionHandle(c)
+	}
 	return nil
+}
+
+func (c *Collection) hasDirtyNativeVectorIndex() bool {
+	for _, index := range c.registeredVectorIndexes() {
+		if index.needsNativeAutoPersist() {
+			return true
+		}
+	}
+	return false
 }
 
 func collectionMetaDeclaresVectorIndex(meta CollectionMeta, name string) bool {
@@ -595,17 +763,31 @@ func (idx *VectorIndex) insertVectorLocked(documentID []byte, vector []float32) 
 	} else if len(vector) != idx.dimensions {
 		return fmt.Errorf("collections: vector field %q in document %q has dimension %d, want %d", idx.field, documentID, len(vector), idx.dimensions)
 	}
+	var quantized []int8
+	var quantScale float32
 	if nodeID, ok := idx.currentNode[string(documentID)]; ok && nodeID >= 0 && nodeID < len(idx.nodes) {
 		node := &idx.nodes[nodeID]
-		if !node.deleted && node.matchesVector(vector, idx.encoding) {
-			return nil
+		if !node.deleted {
+			switch idx.encoding {
+			case VectorIndexEncodingInt8:
+				if node.matchesInt8SourceVector(vector) {
+					return nil
+				}
+			default:
+				if node.matchesVector(vector) {
+					return nil
+				}
+			}
 		}
 	}
 	idx.tombstoneDocumentIDLocked(documentID)
 
 	nodeID := len(idx.nodes)
 	level := idx.levelForDocumentID(documentID)
-	node := idx.newVectorIndexNode(documentID, vector, level)
+	if idx.encoding == VectorIndexEncodingInt8 && quantized == nil {
+		quantized, quantScale = quantizeVectorIndexInt8(vector)
+	}
+	node := idx.newVectorIndexNodePrepared(documentID, vector, level, quantized, quantScale)
 	idx.nodes = append(idx.nodes, node)
 	idx.markGraphChangedLocked()
 	idx.markVectorNodeDirtyLocked(nodeID)
@@ -640,31 +822,58 @@ func (idx *VectorIndex) insertVectorLocked(documentID []byte, vector []float32) 
 	return nil
 }
 
-func (node *vectorIndexNode) matchesVector(vector []float32, encoding VectorIndexEncoding) bool {
+func (node *vectorIndexNode) matchesVector(vector []float32) bool {
 	if node == nil {
 		return false
 	}
-	switch encoding {
-	case VectorIndexEncodingInt8:
-		quantized, quantScale := quantizeVectorIndexInt8(vector)
-		return node.quantScale == quantScale && slices.Equal(node.quantized, quantized)
-	default:
-		return slices.Equal(node.vector, vector)
+	return slices.Equal(node.vector, vector)
+}
+
+func (node *vectorIndexNode) matchesQuantizedVector(quantized []int8, quantScale float32) bool {
+	if node == nil {
+		return false
 	}
+	return node.quantScale == quantScale && slices.Equal(node.quantized, quantized)
+}
+
+func (node *vectorIndexNode) matchesInt8SourceVector(vector []float32) bool {
+	if node == nil || len(node.quantized) != len(vector) {
+		return false
+	}
+	scale := vectorIndexInt8Scale(vector)
+	if node.quantScale != scale {
+		return false
+	}
+	for i, value := range vector {
+		if node.quantized[i] != quantizeVectorIndexInt8Value(value, scale) {
+			return false
+		}
+	}
+	return true
 }
 
 func (idx *VectorIndex) newVectorIndexNode(documentID []byte, vector []float32, level int) vectorIndexNode {
+	var quantized []int8
+	var quantScale float32
+	if idx.encoding == VectorIndexEncodingInt8 {
+		quantized, quantScale = quantizeVectorIndexInt8(vector)
+	}
+	return idx.newVectorIndexNodePrepared(documentID, vector, level, quantized, quantScale)
+}
+
+func (idx *VectorIndex) newVectorIndexNodePrepared(documentID []byte, vector []float32, level int, quantized []int8, quantScale float32) vectorIndexNode {
 	node := vectorIndexNode{
 		documentID: bytes.Clone(documentID),
 		level:      level,
 		neighbors:  make([][]vectorIndexNeighbor, level+1),
 	}
 	for layer := range node.neighbors {
-		node.neighbors[layer] = make([]vectorIndexNeighbor, 0, idx.maxNeighborsForLayer(layer))
+		node.neighbors[layer] = make([]vectorIndexNeighbor, 0, idx.initialNeighborCapacityForLayer(layer))
 	}
 	switch idx.encoding {
 	case VectorIndexEncodingInt8:
-		node.quantized, node.quantScale = quantizeVectorIndexInt8(vector)
+		node.quantized = quantized
+		node.quantScale = quantScale
 	default:
 		node.vector = append([]float32(nil), vector...)
 	}
@@ -673,6 +882,15 @@ func (idx *VectorIndex) newVectorIndexNode(documentID []byte, vector []float32, 
 }
 
 func quantizeVectorIndexInt8(vector []float32) ([]int8, float32) {
+	scale := vectorIndexInt8Scale(vector)
+	out := make([]int8, len(vector))
+	for i, value := range vector {
+		out[i] = quantizeVectorIndexInt8Value(value, scale)
+	}
+	return out, scale
+}
+
+func vectorIndexInt8Scale(vector []float32) float32 {
 	var maxAbs float32
 	for _, value := range vector {
 		abs := value
@@ -687,17 +905,17 @@ func quantizeVectorIndexInt8(vector []float32) ([]int8, float32) {
 	if scale == 0 {
 		scale = 1
 	}
-	out := make([]int8, len(vector))
-	for i, value := range vector {
-		q := int(math.Round(float64(value / scale)))
-		if q > 127 {
-			q = 127
-		} else if q < -127 {
-			q = -127
-		}
-		out[i] = int8(q)
+	return scale
+}
+
+func quantizeVectorIndexInt8Value(value, scale float32) int8 {
+	q := int(math.Round(float64(value / scale)))
+	if q > 127 {
+		q = 127
+	} else if q < -127 {
+		q = -127
 	}
-	return out, scale
+	return int8(q)
 }
 
 func (idx *VectorIndex) tombstoneDocumentIDLocked(documentID []byte) {
@@ -776,6 +994,18 @@ func (idx *VectorIndex) markGraphChangedLocked() {
 	}
 }
 
+func (idx *VectorIndex) requireFullNativeSnapshotLocked() {
+	if !idx.nativePersistent {
+		return
+	}
+	idx.persistedEpoch = 0
+	idx.persistedBytesDisk = 0
+	idx.persistedSnapshotDirty = true
+	idx.dirtyMeta = false
+	clear(idx.dirtyNodes)
+	clear(idx.dirtyDocs)
+}
+
 func (idx *VectorIndex) setNativePersistent(enabled bool) {
 	if idx == nil {
 		return
@@ -792,6 +1022,15 @@ func (idx *VectorIndex) isNativePersistent() bool {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
 	return idx.nativePersistent
+}
+
+func (idx *VectorIndex) hasNativePersistedSnapshot() bool {
+	if idx == nil {
+		return false
+	}
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+	return idx.persistedEpoch != 0
 }
 
 func (idx *VectorIndex) markVectorMetaDirtyLocked() {
@@ -826,6 +1065,10 @@ func (idx *VectorIndex) maxNeighborsForLayer(layer int) int {
 		return maxInt(idx.m*2, idx.m)
 	}
 	return idx.m
+}
+
+func (idx *VectorIndex) initialNeighborCapacityForLayer(layer int) int {
+	return minInt(idx.maxNeighborsForLayer(layer), maxVectorIndexEagerNeighborCap)
 }
 
 func normalizeVectorIndexEdgeDistance(distance float32) (float32, bool) {
@@ -1617,7 +1860,8 @@ func (idx *VectorIndex) selectDiverseCandidatesLocked(candidates []vectorIndexCa
 	}
 	for _, candidate := range candidates {
 		if len(selected) >= limit {
-			break
+			rejected = append(rejected, candidate)
+			continue
 		}
 		if idx.vectorIndexCandidateIsDiverseLocked(candidate, selected) {
 			selected = append(selected, candidate)
@@ -1649,7 +1893,10 @@ func (idx *VectorIndex) selectDiverseCandidatesLocked(candidates []vectorIndexCa
 
 func (idx *VectorIndex) vectorIndexCandidateIsDiverseLocked(candidate vectorIndexCandidate, selected []vectorIndexCandidate) bool {
 	for _, existing := range selected {
-		distance := idx.distanceBetweenNodesFastLocked(candidate.nodeID, existing.nodeID)
+		distance, ok := idx.distanceBetweenNodesFastLocked(candidate.nodeID, existing.nodeID)
+		if !ok {
+			return false
+		}
 		if distance <= candidate.distance {
 			return false
 		}
@@ -1657,6 +1904,10 @@ func (idx *VectorIndex) vectorIndexCandidateIsDiverseLocked(candidate vectorInde
 	return true
 }
 
+// sortVectorIndexCandidatesByDistanceLocked keeps the common already-sorted
+// case allocation-free and handles the exactly-one-candidate-appended-at-tail
+// case with insertion sort. Broader near-sorted shapes intentionally fall back
+// to the full sort instead of carrying more repair logic in the hot path.
 func (idx *VectorIndex) sortVectorIndexCandidatesByDistanceLocked(candidates []vectorIndexCandidate) {
 	for i := 1; i < len(candidates); i++ {
 		if idx.compareVectorIndexCandidatesByDistanceLocked(candidates[i-1], candidates[i]) > 0 {
@@ -1731,20 +1982,20 @@ func (idx *VectorIndex) distanceBetweenNodesLocked(leftNodeID, rightNodeID int) 
 	return distance
 }
 
-func (idx *VectorIndex) distanceBetweenNodesFastLocked(leftNodeID, rightNodeID int) float32 {
+func (idx *VectorIndex) distanceBetweenNodesFastLocked(leftNodeID, rightNodeID int) (float32, bool) {
 	if leftNodeID < 0 || leftNodeID >= len(idx.nodes) || rightNodeID < 0 || rightNodeID >= len(idx.nodes) {
-		return float32(math.Inf(1))
+		return 0, false
 	}
 	left := &idx.nodes[leftNodeID]
 	right := &idx.nodes[rightNodeID]
-	if idx.metric == VectorMetricCosine && len(left.vector) > 0 && len(left.vector) == len(right.vector) && left.cachedInvNorm != 0 && right.cachedInvNorm != 0 {
-		return vectorDistanceBetweenFloat32NodesCosineUnchecked(left, right)
+	if idx.metric == VectorMetricCosine && canUseUncheckedFloat32NodeCosine(left, right) {
+		return vectorDistanceBetweenFloat32NodesCosineUnchecked(left, right), true
 	}
 	distance, err := vectorDistanceBetweenStoredNodes(left, right, idx.metric)
 	if err != nil {
-		return float32(math.Inf(1))
+		return 0, false
 	}
-	return distance
+	return distance, true
 }
 
 func vectorDistanceToStoredNode(query []float32, node *vectorIndexNode, metric VectorMetric) (float32, error) {
@@ -1886,10 +2137,17 @@ func vectorDistanceBetweenFloat32NodesCosine(left, right *vectorIndexNode) (floa
 	if len(left.vector) != len(right.vector) {
 		return 0, fmt.Errorf("collections: vector dimensions differ: %d vs %d", len(left.vector), len(right.vector))
 	}
-	if left.cachedInvNorm == 0 || right.cachedInvNorm == 0 {
+	if !canUseUncheckedFloat32NodeCosine(left, right) {
 		return 0, errors.New("collections: cosine vector cannot have zero magnitude")
 	}
 	return vectorDistanceBetweenFloat32NodesCosineUnchecked(left, right), nil
+}
+
+func canUseUncheckedFloat32NodeCosine(left, right *vectorIndexNode) bool {
+	return len(left.vector) > 0 &&
+		len(left.vector) == len(right.vector) &&
+		left.cachedInvNorm != 0 &&
+		right.cachedInvNorm != 0
 }
 
 func vectorDistanceBetweenFloat32NodesCosineUnchecked(left, right *vectorIndexNode) float32 {
@@ -2328,6 +2586,9 @@ func vectorFromStoredDocument(materializer *StoredDocumentJSONMaterializer, docu
 	if materializer != nil && materializer.DocumentFormat() == DocumentFormatBSON {
 		return vectorFromBSONField(document, fieldPath)
 	}
+	if materializer == nil {
+		return nil, false, errors.New("collections: nil stored document materializer")
+	}
 	jsonDoc, err := materializer.StoredDocumentJSON(document)
 	if err != nil {
 		return nil, false, err
@@ -2342,8 +2603,14 @@ func (idx *VectorIndex) Rebuild() error {
 	if idx == nil {
 		return errors.New("collections: vector index is nil")
 	}
+	c := idx.collection
+	if c == nil {
+		return errCollectionNil
+	}
+	unlockMutation := c.lockMutation()
+	defer unlockMutation.Unlock()
 	start := time.Now()
-	rebuilt, err := idx.collection.buildVectorIndex(VectorIndexOptions{
+	rebuilt, err := c.buildVectorIndex(VectorIndexOptions{
 		Name:                idx.name,
 		Field:               idx.field,
 		Metric:              idx.metric,
@@ -2373,8 +2640,12 @@ func (idx *VectorIndex) Rebuild() error {
 	idx.dimensions = dimensions
 	idx.lastRebuildDuration = collectionObservedElapsedSince(start)
 	idx.markGraphChangedLocked()
+	idx.requireFullNativeSnapshotLocked()
 	idx.mu.Unlock()
-	idx.collection.RegisterVectorIndex(idx)
+	c.RegisterVectorIndex(idx)
+	if c.manager != nil && idx.needsNativeAutoPersist() {
+		c.manager.registerCollectionHandle(c)
+	}
 	return nil
 }
 

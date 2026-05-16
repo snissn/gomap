@@ -5,11 +5,8 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
-import os
 import re
 import statistics
-import sys
 import threading
 import time
 from pathlib import Path
@@ -18,49 +15,27 @@ from typing import Any
 import numpy as np
 import psycopg
 
-identifierPattern = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+from common import load_vectors, max_rss_bytes, parse_ints, percentile, phase
 
-
-def parse_ints(raw: str) -> list[int]:
-    values: list[int] = []
-    seen: set[int] = set()
-    for part in raw.split(","):
-        part = part.strip()
-        if not part:
-            continue
-        value = int(part)
-        if value < 1:
-            raise ValueError("concurrency values must be at least 1")
-        if value not in seen:
-            values.append(value)
-            seen.add(value)
-    if not values:
-        raise ValueError("at least one concurrency value is required")
-    return sorted(values)
-
-
-def percentile(sorted_values: list[int], p: float) -> int:
-    if not sorted_values:
-        return 0
-    idx = math.ceil(p * len(sorted_values)) - 1
-    return sorted_values[max(0, min(idx, len(sorted_values) - 1))]
-
-
-def phase(start: float) -> dict[str, Any]:
-    seconds = time.perf_counter() - start
-    return {"duration_nanos": int(seconds * 1_000_000_000), "seconds": seconds}
+IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 def load_manifest(dataset_dir: Path) -> dict[str, Any]:
     return json.loads((dataset_dir / "manifest.json").read_text(encoding="utf-8"))
 
 
-def load_vectors(path: Path, rows: int, dims: int) -> np.ndarray:
-    data = np.fromfile(path, dtype="<f4")
-    expected = rows * dims
-    if data.size != expected:
-        raise ValueError(f"{path} has {data.size} float32s, want {expected}")
-    return data.reshape(rows, dims)
+def checked_manifest_positive_int(manifest: dict[str, Any], key: str) -> int:
+    value = manifest.get(key)
+    if isinstance(value, bool):
+        raise ValueError(f"manifest {key!r} must be a positive integer")
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"manifest {key!r} must be a positive integer") from exc
+    if parsed < 1:
+        raise ValueError(f"manifest {key!r} must be a positive integer")
+    manifest[key] = parsed
+    return parsed
 
 
 def vector_literal(vector: np.ndarray) -> str:
@@ -72,7 +47,7 @@ def connect(dsn: str) -> psycopg.Connection:
 
 
 def checked_identifier(value: str, name: str) -> str:
-    if not identifierPattern.fullmatch(value):
+    if not IDENTIFIER_PATTERN.fullmatch(value):
         raise ValueError(f"{name} must be a simple PostgreSQL identifier")
     return value
 
@@ -83,10 +58,18 @@ def table_name(args: argparse.Namespace) -> str:
     return f"{schema}.{table}"
 
 
+def index_name(args: argparse.Namespace) -> str:
+    raw = args.index or f"{args.table}_embedding_hnsw"
+    return checked_identifier(raw, "--index")
+
+
 def build_database(args: argparse.Namespace, manifest: dict[str, Any], docs: np.ndarray) -> tuple[dict[str, Any], str]:
     start = time.perf_counter()
     qualified_table = table_name(args)
     schema = checked_identifier(args.schema, "--schema")
+    index = index_name(args)
+    dimensions = checked_manifest_positive_int(manifest, "dimensions")
+    doc_count = checked_manifest_positive_int(manifest, "docs")
     with connect(args.dsn) as conn:
         version = conn.execute("select version()").fetchone()[0]
         conn.execute("create extension if not exists vector")
@@ -103,18 +86,33 @@ def build_database(args: argparse.Namespace, manifest: dict[str, Any], docs: np.
             f"doc_id integer primary key, "
             f"id text not null, "
             f"grp integer not null, "
-            f"embedding vector({manifest['dimensions']}) not null)"
+            f"embedding vector({dimensions}) not null)"
         )
         insert_start = time.perf_counter()
+        prepare_seconds = 0.0
+        copy_write_seconds = 0.0
         with conn.transaction():
             with conn.cursor().copy(f"copy {qualified_table} (doc_id, id, grp, embedding) from stdin") as copy:
-                for i in range(manifest["docs"]):
-                    copy.write_row((i + 1, f"doc-{i:06d}", i % 16, vector_literal(docs[i])))
+                for i in range(doc_count):
+                    prepare_start = time.perf_counter()
+                    row = (i + 1, f"doc-{i:06d}", i % 16, vector_literal(docs[i]))
+                    prepare_seconds += time.perf_counter() - prepare_start
+                    copy_write_start = time.perf_counter()
+                    copy.write_row(row)
+                    copy_write_seconds += time.perf_counter() - copy_write_start
         insert_phase = phase(insert_start)
+        insert_phase["client_prepare"] = {
+            "duration_nanos": int(prepare_seconds * 1_000_000_000),
+            "seconds": prepare_seconds,
+        }
+        insert_phase["copy_write"] = {
+            "duration_nanos": int(copy_write_seconds * 1_000_000_000),
+            "seconds": copy_write_seconds,
+        }
         build_start = time.perf_counter()
         with conn.transaction():
             conn.execute(
-                "create index documents_embedding_hnsw "
+                f"create index {index} "
                 f"on {qualified_table} using hnsw (embedding vector_cosine_ops) "
                 f"with (m = {args.m}, ef_construction = {args.ef_construction})"
             )
@@ -206,15 +204,19 @@ def benchmark_search(args: argparse.Namespace, query_literals: list[str], concur
     latencies = [0] * len(query_literals)
     next_index = 0
     next_lock = threading.Lock()
-    first_error: list[BaseException] = []
+    first_error: BaseException | None = None
+    error_lock = threading.Lock()
+    stop_event = threading.Event()
     conns = [connect(args.dsn) for _ in range(concurrency)]
     for conn in conns:
         conn.execute(f"set hnsw.ef_search = {int(args.ef_search)}")
         conn.execute(f"set search_path = {checked_identifier(args.schema, '--schema')}, public")
 
     def worker(conn: psycopg.Connection) -> None:
-        nonlocal next_index
+        nonlocal first_error, next_index
         while True:
+            if stop_event.is_set():
+                return
             with next_lock:
                 i = next_index
                 next_index += 1
@@ -224,7 +226,10 @@ def benchmark_search(args: argparse.Namespace, query_literals: list[str], concur
             try:
                 search_one(conn, args, query_literals[i], args.top_k)
             except BaseException as exc:  # noqa: BLE001
-                first_error.append(exc)
+                with error_lock:
+                    if first_error is None:
+                        first_error = exc
+                stop_event.set()
                 return
             latencies[i] = time.perf_counter_ns() - start
 
@@ -238,7 +243,7 @@ def benchmark_search(args: argparse.Namespace, query_literals: list[str], concur
     for conn in conns:
         conn.close()
     if first_error:
-        raise first_error[0]
+        raise first_error
     sorted_latencies = sorted(latencies)
     avg = statistics.fmean(latencies)
     return {
@@ -269,16 +274,10 @@ def storage_usage(conn: psycopg.Connection, args: argparse.Namespace, docs: int)
     }
 
 
-def max_rss_bytes() -> int:
-    try:
-        import resource
-
-        value = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-        if sys.platform == "darwin":
-            return int(value)
-        return int(value) * 1024
-    except Exception:
-        return 0
+def drop_schema(args: argparse.Namespace) -> None:
+    schema = checked_identifier(args.schema, "--schema")
+    with connect(args.dsn) as conn:
+        conn.execute(f"drop schema if exists {schema} cascade")
 
 
 def main() -> None:
@@ -287,7 +286,9 @@ def main() -> None:
     parser.add_argument("--dsn", required=True)
     parser.add_argument("--schema", default="gomap_vector_bench")
     parser.add_argument("--table", default="documents")
+    parser.add_argument("--index", default="", help="HNSW index name. Defaults to <table>_embedding_hnsw.")
     parser.add_argument("--allow-drop-schema", action="store_true")
+    parser.add_argument("--drop-schema-after", action="store_true")
     parser.add_argument("--output", required=True)
     parser.add_argument("--queries", type=int, default=10000)
     parser.add_argument("--validate-queries", type=int, default=64)
@@ -301,52 +302,60 @@ def main() -> None:
 
     dataset_dir = Path(args.dataset_dir)
     manifest = load_manifest(dataset_dir)
+    checked_manifest_positive_int(manifest, "docs")
+    checked_manifest_positive_int(manifest, "dimensions")
+    checked_manifest_positive_int(manifest, "queries")
     if manifest["metric"] != "cosine" or not manifest["normalized"]:
         raise RuntimeError(f"unsupported dataset metric/normalization: {manifest}")
-    docs = load_vectors(dataset_dir / manifest["document_vectors_file"], manifest["docs"], manifest["dimensions"])
-    all_queries = load_vectors(dataset_dir / manifest["query_vectors_file"], manifest["queries"], manifest["dimensions"])
-    queries = all_queries[: min(args.queries, len(all_queries))]
-    query_literals = [vector_literal(query) for query in queries]
-    concurrency = parse_ints(args.search_concurrency)
+    try:
+        docs = load_vectors(dataset_dir / manifest["document_vectors_file"], manifest["docs"], manifest["dimensions"])
+        all_queries = load_vectors(dataset_dir / manifest["query_vectors_file"], manifest["queries"], manifest["dimensions"])
+        queries = all_queries[: min(args.queries, len(all_queries))]
+        query_literals = [vector_literal(query) for query in queries]
+        concurrency = parse_ints(args.search_concurrency)
 
-    phases, postgres_info = build_database(args, manifest, docs)
-    conn, reopen = reopen_database(args)
-    validation = validate_recall(conn, args, docs, query_literals, queries, args.top_k, args.validate_queries, args.min_recall)
-    storage = storage_usage(conn, args, manifest["docs"])
-    conn.close()
+        phases, postgres_info = build_database(args, manifest, docs)
+        conn, reopen = reopen_database(args)
+        validation = validate_recall(conn, args, docs, query_literals, queries, args.top_k, args.validate_queries, args.min_recall)
+        storage = storage_usage(conn, args, manifest["docs"])
+        conn.close()
 
-    levels = sorted({1, *concurrency})
-    search_benchmarks = [benchmark_search(args, query_literals, level) for level in levels]
+        levels = sorted({1, *concurrency})
+        search_benchmarks = [benchmark_search(args, query_literals, level) for level in levels]
 
-    result = {
-        "backend": "pgvector",
-        "engine": "pgvector",
-        "engine_info": postgres_info,
-        "ann_index": "hnsw",
-        "dataset_dir": str(dataset_dir),
-        "schema": args.schema,
-        "table": args.table,
-        "docs": manifest["docs"],
-        "dimensions": manifest["dimensions"],
-        "queries": len(queries),
-        "top_k": args.top_k,
-        "m": args.m,
-        "ef_construction": args.ef_construction,
-        "ef_search": args.ef_search,
-        "insert": phases["insert"],
-        "build": phases["build"],
-        "create_total": phases["create_total"],
-        "reopen_load": reopen,
-        "validation": validation,
-        "search": search_benchmarks[0],
-        "search_benchmarks": search_benchmarks,
-        "storage_after_build": storage,
-        "memory": {"max_rss_bytes": max_rss_bytes()},
-    }
-    output = Path(args.output)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
-    print(json.dumps(result, indent=2))
+        result = {
+            "backend": "pgvector",
+            "engine": "pgvector",
+            "engine_info": postgres_info,
+            "ann_index": "hnsw",
+            "dataset_dir": str(dataset_dir),
+            "schema": args.schema,
+            "table": args.table,
+            "index": index_name(args),
+            "docs": manifest["docs"],
+            "dimensions": manifest["dimensions"],
+            "queries": len(queries),
+            "top_k": args.top_k,
+            "m": args.m,
+            "ef_construction": args.ef_construction,
+            "ef_search": args.ef_search,
+            "insert": phases["insert"],
+            "build": phases["build"],
+            "create_total": phases["create_total"],
+            "reopen_load": reopen,
+            "validation": validation,
+            "search": search_benchmarks[0],
+            "search_benchmarks": search_benchmarks,
+            "storage_after_build": storage,
+            "memory": {"max_rss_bytes": max_rss_bytes()},
+        }
+        output = Path(args.output)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+        print(json.dumps(result, indent=2))
+    finally:
+        if args.drop_schema_after:
+            drop_schema(args)
 
 
 if __name__ == "__main__":
