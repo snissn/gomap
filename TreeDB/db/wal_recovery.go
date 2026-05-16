@@ -421,7 +421,37 @@ func applyCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map[uint
 	case commitlog.CommandKindRawKVBatch:
 		return applyRawKVCommandWALFrame(db, env, ridMap, inlineAppender, ensureReplayLogSupport)
 	default:
+		if handler, ok := lookupCommandWALReplayHandler(env.Kind); ok {
+			db.ensureCommandWALRecoverySnapshotView()
+			return handler(db, env)
+		}
 		return commitlog.ErrCommandWALUnsupportedKind
+	}
+}
+
+func (db *DB) ensureCommandWALRecoverySnapshotView() {
+	if db == nil || db.state.Load() != nil {
+		return
+	}
+	db.mu.RLock()
+	state := &DBState{
+		CommitSeq:                  db.meta.CommitSeq,
+		RootPageID:                 db.meta.UserRootPageID,
+		SystemRootPageID:           db.meta.SystemRootPageID,
+		AppliedCommandLSN:          db.meta.AppliedCommandLSN,
+		LeafGenerations:            db.currentLeafGenerationView(),
+		LeafGenerationStateVersion: db.leafGenerationStateVersion,
+	}
+	db.mu.RUnlock()
+	if db.valueLogManager != nil {
+		state.ValueLogSet = db.valueLogManager.CurrentSetNoRefresh()
+	}
+	if db.state.CompareAndSwap(nil, state) {
+		db.publishSnapshotView(db.idx.Load(), state, db.valueLogManager)
+		return
+	}
+	if state.ValueLogSet != nil && db.valueLogManager != nil {
+		_ = db.valueLogManager.Release(state.ValueLogSet)
 	}
 }
 

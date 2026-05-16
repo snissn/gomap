@@ -378,14 +378,16 @@ PR3 implementation evidence:
 
 PR 4: collection insert/delete by explicit ID:
 
-- `TestCommandWALCollectionInsertAckBeforeCheckpointRecovers`;
-- `TestCommandWALCollectionInsertBatchOneLSNAtomic`;
-- `TestCommandWALCollectionDeleteAckBeforeCheckpointRecovers`;
-- `TestCommandWALCollectionDeleteBatchOneLSNAtomic`;
-- `TestCommandWALInsertUniqueConflictBeforeFrameLeavesNoPartialItems`;
-- `TestCommandWALInsertDuplicateReplayUsesConfiguredIdempotencyRule`;
-- `TestCommandWALUnsupportedIndexedInsertModeFailsBeforeStagingUntilSupported`;
-- `TestCommandWALWALOffDoesNotCreateCommandFrameForFlushBoundaryWrites`.
+- `TestCollectionCommandWALInsertBatchByIDPublishesAppliedLSN`;
+- `TestCollectionCommandWALInsertBatchByIDReplayRecoversUnappliedFrame`;
+- `TestCollectionCommandWALInsertBatchByIDReplayTemplateV1StoredDocument`;
+- `TestCollectionCommandWALDeleteBatchByIDReplayIgnoresMissingIDs`;
+- `TestCollectionCommandWALDeleteBatchByIDReplayAdvancesMissingOnlyFrame`;
+- `TestCollectionCommandWALRejectsCatalogCreate`;
+- `BenchmarkCollectionCommandWALInsertBatchByID`;
+- `BenchmarkCollectionCommandWALDeleteBatchByID`;
+- acceptance artifact:
+  `artifacts/command-wal/pr4/acceptance.json`.
 
 PR 5: collection update by explicit ID:
 

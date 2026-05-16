@@ -7,12 +7,16 @@ import (
 	"os"
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
+	"github.com/snissn/gomap/TreeDB/internal/adaptive"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
 type commandWALBatchIntent struct {
+	kind               commitlog.CommandKind
+	scope              commitlog.CommandScope
+	payloadFormat      commitlog.PayloadFormat
 	payload            []byte
 	externalRefs       bool
 	externalRefFileIDs []uint32
@@ -20,7 +24,43 @@ type commandWALBatchIntent struct {
 	coveredRange       [1]CommandWALLSNRange
 }
 
+// CommandWALIntent is an opaque command-WAL append/finalize token used by
+// higher-level deterministic command executors such as collections.
+type CommandWALIntent struct {
+	inner commandWALBatchIntent
+}
+
 var ErrCommandWALMissingValueLogRID = errors.New("treedb: command wal missing value-log rid")
+
+func (db *DB) CommandWALEnabled() bool {
+	return db != nil && db.commandWAL
+}
+
+func (db *DB) NewCommandWALIntent(kind commitlog.CommandKind, scope commitlog.CommandScope, payloadFormat commitlog.PayloadFormat, payload []byte) (*CommandWALIntent, error) {
+	if db == nil || !db.commandWAL {
+		return nil, nil
+	}
+	if db.durability == DurabilityWALOffRelaxed {
+		return nil, fmt.Errorf("%w: WAL-off durability is incompatible with command WAL", ErrCommandWALUnsupported)
+	}
+	return &CommandWALIntent{inner: commandWALBatchIntent{
+		kind:          kind,
+		scope:         scope,
+		payloadFormat: payloadFormat,
+		payload:       payload,
+	}}, nil
+}
+
+func NewCommandWALReplayIntent(env commitlog.CommandEnvelope) *CommandWALIntent {
+	return &CommandWALIntent{inner: commandWALBatchIntent{
+		kind:          env.Kind,
+		scope:         env.Scope,
+		payloadFormat: env.PayloadFormat,
+		payload:       env.Payload,
+		lsn:           env.LSN,
+		coveredRange:  [1]CommandWALLSNRange{{First: env.LSN, Last: env.LSN}},
+	}}
+}
 
 func (db *DB) prepareRawKVCommandWALIntent(b *Batch) (*commandWALBatchIntent, error) {
 	if db == nil || !db.commandWAL {
@@ -76,7 +116,14 @@ func (db *DB) prepareRawKVCommandWALIntent(b *Batch) (*commandWALBatchIntent, er
 	if externalRefs {
 		externalRefFileIDs = rawKVCommandWALExternalRefFileIDs(entries)
 	}
-	return &commandWALBatchIntent{payload: payload, externalRefs: externalRefs, externalRefFileIDs: externalRefFileIDs}, nil
+	return &commandWALBatchIntent{
+		kind:               commitlog.CommandKindRawKVBatch,
+		scope:              commitlog.CommandScopeRawKV,
+		payloadFormat:      commitlog.PayloadFormatRawKVBatchV1,
+		payload:            payload,
+		externalRefs:       externalRefs,
+		externalRefFileIDs: externalRefFileIDs,
+	}, nil
 }
 
 func rawKVCommandWALExternalRefFileIDs(entries []batchpkg.Entry) []uint32 {
@@ -187,6 +234,46 @@ func (db *DB) syncCommandWALExternalRefSegment(fileID uint32) error {
 }
 
 func (db *DB) appendRawKVCommandWALIntent(intent *commandWALBatchIntent, sync bool) (uint64, error) {
+	return db.appendCommandWALIntent(intent, sync)
+}
+
+func (db *DB) appendPublicCommandWALIntent(intent *CommandWALIntent, sync bool) (uint64, error) {
+	if intent == nil {
+		return 0, nil
+	}
+	return db.appendCommandWALIntent(&intent.inner, sync)
+}
+
+func (db *DB) PublishCommandWALNoop(intent *CommandWALIntent, sync bool) error {
+	if intent == nil {
+		return nil
+	}
+	if db == nil {
+		return ErrClosed
+	}
+	db.writeMu.Lock()
+	defer db.writeMu.Unlock()
+	db.commitMu.Lock()
+	if _, err := db.appendPublicCommandWALIntent(intent, sync); err != nil {
+		db.commitMu.Unlock()
+		return err
+	}
+	db.mu.RLock()
+	userRoot := db.meta.UserRootPageID
+	systemRoot := db.meta.SystemRootPageID
+	db.mu.RUnlock()
+	post, err := db.finalizeCommitLockedWithOptions(userRoot, systemRoot, nil, sync, adaptive.Metrics{}, nil, false, nil, nil, nil, commandWALFinalizeOptionsForPublicIntent(intent))
+	if err != nil {
+		db.poisonCommandWALAfterPublicPostAppendFailure(intent)
+		db.commitMu.Unlock()
+		return err
+	}
+	db.commitMu.Unlock()
+	db.finalizeCommitPostWork(post)
+	return nil
+}
+
+func (db *DB) appendCommandWALIntent(intent *commandWALBatchIntent, sync bool) (uint64, error) {
 	if intent == nil {
 		return 0, nil
 	}
@@ -221,10 +308,10 @@ func (db *DB) appendRawKVCommandWALIntent(intent *commandWALBatchIntent, sync bo
 	baseAppliedLSN := db.meta.AppliedCommandLSN
 	db.mu.RUnlock()
 	lsn, err := db.commandJournal.AppendCommand(commitlog.CommandEnvelope{
-		Kind:           commitlog.CommandKindRawKVBatch,
-		Scope:          commitlog.CommandScopeRawKV,
+		Kind:           intent.kind,
+		Scope:          intent.scope,
 		BaseAppliedLSN: baseAppliedLSN,
-		PayloadFormat:  commitlog.PayloadFormatRawKVBatchV1,
+		PayloadFormat:  intent.payloadFormat,
 		Payload:        intent.payload,
 	})
 	if err != nil {
@@ -271,6 +358,13 @@ func commandWALFinalizeOptions(intent *commandWALBatchIntent) finalizeCommitOpti
 	}
 }
 
+func commandWALFinalizeOptionsForPublicIntent(intent *CommandWALIntent) finalizeCommitOptions {
+	if intent == nil {
+		return finalizeCommitOptions{}
+	}
+	return commandWALFinalizeOptions(&intent.inner)
+}
+
 func (db *DB) poisonCommandWALAfterPostAppendFailure(intent *commandWALBatchIntent) {
 	if db == nil || intent == nil || intent.lsn == 0 {
 		// intent.lsn == 0 means the frame was never durably appended
@@ -283,6 +377,13 @@ func (db *DB) poisonCommandWALAfterPostAppendFailure(intent *commandWALBatchInte
 	// path covers the later case where a command frame was appended but root
 	// publication failed before AppliedCommandLSN could be published.
 	db.commandWALFlushPoisoned.Store(true)
+}
+
+func (db *DB) poisonCommandWALAfterPublicPostAppendFailure(intent *CommandWALIntent) {
+	if intent == nil {
+		return
+	}
+	db.poisonCommandWALAfterPostAppendFailure(&intent.inner)
 }
 
 func applyRawKVCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map[uint64]page.ValuePtr, inlineAppender *replayInlineAppender, ensureReplayLogSupport commandWALReplayLogSupportFunc) error {
