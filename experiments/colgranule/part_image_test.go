@@ -538,6 +538,22 @@ func TestColumnPartFromImageRejectsOversizedBlockRawBytes(t *testing.T) {
 	}
 }
 
+func TestColumnPartFromImageRejectsInvertedBlockMinMax(t *testing.T) {
+	_, image := testColumnPartImageFixture(t, false)
+	hasMinMaxOffset, minOffset, maxOffset := descriptorFirstColumnFirstBlockMinMaxOffsets(t, image)
+	corrupt := append([]byte(nil), image.Bytes...)
+	binary.LittleEndian.PutUint16(corrupt[hasMinMaxOffset:], 1)
+	binary.LittleEndian.PutUint64(corrupt[minOffset:], 10)
+	binary.LittleEndian.PutUint64(corrupt[maxOffset:], 1)
+	parsed, err := ParseColumnPartImage(corrupt)
+	if err != nil {
+		t.Fatalf("ParseColumnPartImage: %v", err)
+	}
+	if _, err := ColumnPartFromImage(parsed); err == nil {
+		t.Fatal("ColumnPartFromImage accepted inverted block min/max metadata")
+	}
+}
+
 func TestColumnPartFromImageRejectsNonContiguousColumnBlockRows(t *testing.T) {
 	part, err := BuildColumnPart(7, partTestOptions([]SortKeyColumn{{Column: "id"}}), ColumnBatch{Columns: map[string][]int64{
 		"id":        {3, 1, 2, 5, 4},
@@ -1633,6 +1649,37 @@ func descriptorFirstColumnFirstBlockRawBytesOffset(t *testing.T, image ColumnPar
 		t.Fatal(err)
 	}
 	return descriptor.Offset + dec.offset
+}
+
+func descriptorFirstColumnFirstBlockMinMaxOffsets(t *testing.T, image ColumnPartImage) (int, int, int) {
+	t.Helper()
+	descriptor, dec := descriptorDecoderAtFirstColumnFirstBlock(t, image)
+	for i := 0; i < 4; i++ {
+		if _, err := dec.i64(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := dec.u16(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dec.u16(); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 5; i++ {
+		if _, err := dec.i64(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	hasMinMax := descriptor.Offset + dec.offset
+	if _, err := dec.boolean(); err != nil {
+		t.Fatal(err)
+	}
+	minValue := descriptor.Offset + dec.offset
+	if _, err := dec.i64(); err != nil {
+		t.Fatal(err)
+	}
+	maxValue := descriptor.Offset + dec.offset
+	return hasMinMax, minValue, maxValue
 }
 
 func descriptorDecoderBeforeGranules(t *testing.T, image ColumnPartImage) (ColumnPartImageSection, columnPartImageDecoder) {

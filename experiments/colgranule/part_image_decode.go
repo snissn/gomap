@@ -389,6 +389,9 @@ func decodeColumnPartDescriptorSection(data []byte) (ColumnPartDescriptor, map[s
 			if err := validateDecodedColumnBlockDescriptor(desc, name, columnType, cardinality, j, blockDesc); err != nil {
 				return ColumnPartDescriptor{}, nil, err
 			}
+			if err := validateDecodedColumnBlockGranuleMetadata(name, j, granule); err != nil {
+				return ColumnPartDescriptor{}, nil, err
+			}
 			if blockDesc.FirstRow != expectedFirstRow {
 				return ColumnPartDescriptor{}, nil, fmt.Errorf("colgranule: descriptor column %s block %d first row=%d want contiguous first row=%d", name, j, blockDesc.FirstRow, expectedFirstRow)
 			}
@@ -476,6 +479,25 @@ func validateDecodedColumnBlockDescriptor(desc ColumnPartDescriptor, column stri
 	}
 	if block.Compression != CompressionNone && block.StoredBytes > block.RawBytes {
 		return fmt.Errorf("colgranule: descriptor column %s block %d compressed stored bytes=%d exceed raw bytes=%d", column, blockIndex, block.StoredBytes, block.RawBytes)
+	}
+	return nil
+}
+
+func validateDecodedColumnBlockGranuleMetadata(column string, blockIndex int, granule EncodedGranule) error {
+	if granule.Rows <= 0 {
+		return fmt.Errorf("colgranule: descriptor column %s block %d granule has invalid row count %d", column, blockIndex, granule.Rows)
+	}
+	if granule.NullCount < 0 {
+		return fmt.Errorf("colgranule: descriptor column %s block %d granule has negative null count %d", column, blockIndex, granule.NullCount)
+	}
+	if granule.DefaultCount < 0 {
+		return fmt.Errorf("colgranule: descriptor column %s block %d granule has negative default count %d", column, blockIndex, granule.DefaultCount)
+	}
+	if granule.NullCount > granule.Rows || granule.DefaultCount > granule.Rows-granule.NullCount {
+		return fmt.Errorf("colgranule: descriptor column %s block %d granule null/default count exceeds rows", column, blockIndex)
+	}
+	if granule.HasMinMax && granule.Min > granule.Max {
+		return fmt.Errorf("colgranule: descriptor column %s block %d granule min=%d exceeds max=%d", column, blockIndex, granule.Min, granule.Max)
 	}
 	return nil
 }
