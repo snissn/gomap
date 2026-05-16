@@ -113,6 +113,54 @@ func assertPublicCommandWALFrames(t *testing.T, db *DB, minFrames uint64) {
 	}
 }
 
+func TestPublicCommandWALLiveCountersDoNotRequireStatsScan(t *testing.T) {
+	db, err := Open(Options{
+		Dir:               t.TempDir(),
+		Durability:        DurabilityWALOnRelaxed,
+		CommandWAL:        true,
+		DisableSideStores: true,
+	})
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	if err := db.Set([]byte("k1"), []byte("v1")); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	b := db.NewBatch()
+	if err := b.Set([]byte("k2"), []byte("v2")); err != nil {
+		_ = b.Close()
+		t.Fatalf("batch Set: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		_ = b.Close()
+		t.Fatalf("batch Write: %v", err)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatalf("batch Close: %v", err)
+	}
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+
+	stats := db.Stats()
+	if got := stats["treedb.command_wal.stats_scan"]; got != "false" {
+		t.Fatalf("stats_scan=%q, want false (stats=%#v)", got, stats)
+	}
+	for key, want := range map[string]string{
+		"treedb.command_wal.live_accepted_frames":  "2",
+		"treedb.command_wal.live_accepted_max_lsn": "2",
+		"treedb.command_wal.live_covered_frames":   "2",
+		"treedb.command_wal.live_covered_max_lsn":  "2",
+		"treedb.applied_command_lsn":               "2",
+	} {
+		if got := stats[key]; got != want {
+			t.Fatalf("stats[%q]=%q, want %q (stats=%#v)", key, got, want, stats)
+		}
+	}
+}
+
 func TestPublicCommandWALPointWritesSerializeLSNWithCachedMutation(t *testing.T) {
 	db, err := Open(Options{
 		Dir:                 t.TempDir(),

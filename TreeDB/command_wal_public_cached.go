@@ -64,10 +64,16 @@ func (tdb *DB) publicCommandWALLiveStatsInto(stats map[string]string) {
 	}
 	frames := tdb.commandWALLiveFrames.Load()
 	maxLSN := tdb.commandWALLast.Load()
+	acceptedMaxLSN := maxLSN
+	if current, err := strconv.ParseUint(stats["treedb.command_wal.live_accepted_max_lsn"], 10, 64); err == nil && current > acceptedMaxLSN {
+		acceptedMaxLSN = current
+	}
 	stats["treedb.command_wal.live_frames"] = fmt.Sprintf("%d", frames)
 	stats["treedb.command_wal.live_max_lsn"] = fmt.Sprintf("%d", maxLSN)
+	publicCommandWALMaxStat(stats, "treedb.command_wal.live_accepted_frames", frames)
+	publicCommandWALMaxStat(stats, "treedb.command_wal.live_accepted_max_lsn", maxLSN)
 	publicCommandWALMaxStat(stats, "treedb.command_wal.frames", frames)
-	publicCommandWALMaxStat(stats, "treedb.command_wal.max_lsn", maxLSN)
+	publicCommandWALMaxStat(stats, "treedb.command_wal.max_lsn", acceptedMaxLSN)
 }
 
 func publicCommandWALMaxStat(stats map[string]string, key string, value uint64) {

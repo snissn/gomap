@@ -102,7 +102,7 @@ var (
 	treedbIndexPackedValuePtr             = flag.Bool("treedb-index-packed-valueptr", false, "TreeDB: enable packed 12-byte ValuePtr encoding for pointer entries in leaf pages")
 	treedbIndexInternalBaseDelta          = flag.Bool("treedb-index-internal-base-delta", false, "TreeDB: enable internal base-delta encoding")
 	treedbIndexOuterLeavesInVlog          = flag.Bool("treedb-index-outer-leaves-in-vlog", true, "TreeDB: store B+Tree leaf pages (outer leaves) in the value log instead of index.db")
-	treedbCommandWALStatsScan             = flag.Bool("treedb-command-wal-stats-scan", false, "TreeDB command-WAL variants: scan WAL segments in Stats for diagnostic proof counters")
+	treedbCommandWALStatsScan             = flag.Bool("treedb-command-wal-stats-scan", false, "TreeDB command-WAL variants: scan WAL segments in Stats for diagnostic segment inventory; live accepted/covered counters are reported without this scan")
 
 	treedbDisableWAL             = flag.Bool("treedb-disable-wal", false, "TreeDB: disable journal/redo log while keeping value-log pointers (unsafe)")
 	treedbRelaxedSync            = flag.Bool("treedb-relaxed-sync", false, "TreeDB: relaxed sync (unsafe)")

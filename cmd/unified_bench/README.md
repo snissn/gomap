@@ -70,9 +70,12 @@ GOWORK=off GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -json -p 1 . \
     `treedb_backend` for the direct backend path and
     `treedb_backend_command_wal` (alias `treedb_command_wal`) for the direct
     backend `command_wal_v1` path. The command-WAL variants report
-    `treedb.command_wal.*` and `treedb.applied_command_lsn` stats so benchmark
-    artifacts prove the required feature was persisted and typed frames were
-    appended.
+    `treedb.command_wal.live_accepted_*`,
+    `treedb.command_wal.live_covered_*`, and `treedb.applied_command_lsn`
+    stats without scanning WAL segments, so benchmark artifacts can prove that
+    typed frames were accepted and covered. Use
+    `-treedb-command-wal-stats-scan` only when segment inventory counters such
+    as `treedb.command_wal.typed_segments` are required.
 - `-test` (`all` or CSV): see list above
 - `-keys` number of keys (default 100000)
 - `-keycounts` comma-separated key counts to sweep over (overrides `-keys`)

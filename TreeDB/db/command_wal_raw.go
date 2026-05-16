@@ -352,6 +352,7 @@ func (db *DB) AppendRawKVSingleCommandWAL(op commitlog.RawKVOperation, sync bool
 	if err := db.FlushCommandWAL(sync); err != nil {
 		return lsn, err
 	}
+	db.observeCommandWALAccepted(lsn)
 	return lsn, nil
 }
 
@@ -387,6 +388,7 @@ func (db *DB) AppendRawKVPointCommandWALTrusted(op commitlog.RawKVOp, key, value
 	if err := db.FlushCommandWAL(sync); err != nil {
 		return lsn, err
 	}
+	db.observeCommandWALAccepted(lsn)
 	return lsn, nil
 }
 
@@ -438,6 +440,7 @@ func (db *DB) appendRawKVBatchPayloadCommandWAL(payload []byte, sync bool, trust
 	if err := db.FlushCommandWAL(sync); err != nil {
 		return lsn, err
 	}
+	db.observeCommandWALAccepted(lsn)
 	return lsn, nil
 }
 
@@ -530,6 +533,7 @@ func (db *DB) appendCommandWALIntent(intent *commandWALBatchIntent, sync bool) (
 		// FlushCommandWAL owns the relaxed-sync downgrade and poison state.
 		return 0, err
 	}
+	db.observeCommandWALAccepted(lsn)
 	intent.lsn = lsn
 	intent.coveredRange[0] = CommandWALLSNRange{First: lsn, Last: lsn}
 	return lsn, nil

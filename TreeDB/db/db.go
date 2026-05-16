@@ -265,6 +265,10 @@ type DB struct {
 	commandWALStatsAppliedLSN uint64
 	commandWALStatsSummary    commandWALStatsSummary
 	commandWALStatsOK         bool
+	commandWALLiveAccepted    atomic.Uint64
+	commandWALLiveAcceptedMax atomic.Uint64
+	commandWALLiveCovered     atomic.Uint64
+	commandWALLiveCoveredMax  atomic.Uint64
 	closing                   atomic.Bool
 }
 
@@ -2247,6 +2251,13 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 		newState.LeafGenerationStateVersion = db.leafGenerationStateVersion
 	}
 	db.state.Store(newState)
+	if opts.commandWALPublish {
+		previousApplied := uint64(0)
+		if post.oldState != nil {
+			previousApplied = post.oldState.AppliedCommandLSN
+		}
+		db.observeCommandWALCovered(previousApplied, nextMeta.AppliedCommandLSN)
+	}
 	db.publishSnapshotView(idx, newState, db.valueLogManager)
 	post.commitSeq = nextMeta.CommitSeq
 	post.vlogRefDelta = vlogRefDelta

@@ -1039,7 +1039,9 @@ Deliverables:
   cached legacy redo journal and appending typed command frames through the
   shared backend journal owner;
 - stats expose mode proof with `treedb.write_path.mode=command_wal_cached`,
-  `treedb.command_wal.required_feature=true`, command frame counts, and max LSN.
+  `treedb.command_wal.required_feature=true`, live accepted/covered command
+  frame counters, and max LSN. Diagnostic WAL segment scans are optional
+  inventory proof, not required for normal benchmark mode proof.
 
 Acceptance:
 

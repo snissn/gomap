@@ -724,8 +724,10 @@ be recorded only as failing evidence, not accepted evidence.
 This test must prove public `treedb.Open` can open a read-write
 `command_wal_v1` handle, route raw KV writes through typed `RawKVBatch` command
 frames, expose mode proof through stats, reopen without explicit backend-only
-APIs, and recover final set/delete state. It is intentionally narrower than the
-future cached typed-frame path: while this gate is active,
+APIs, and recover final set/delete state. Mode proof must include cheap live
+accepted/covered command-frame counters so benchmark artifacts do not require
+diagnostic WAL segment scans. It is intentionally narrower than the future
+cached typed-frame path: while this gate is active,
 `treedb.write_path.mode=command_wal_cached` is the expected proof that public
 command-WAL writes did not use the cached legacy redo journal.
 
