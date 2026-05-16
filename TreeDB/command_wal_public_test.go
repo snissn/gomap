@@ -1,6 +1,7 @@
 package treedb
 
 import (
+	"fmt"
 	"strconv"
 	"testing"
 )
@@ -96,5 +97,50 @@ func assertPublicCommandWALFrames(t *testing.T, db *DB, minFrames uint64) {
 	}
 	if maxLSN < minFrames {
 		t.Fatalf("command_wal.max_lsn=%d, want at least %d", maxLSN, minFrames)
+	}
+}
+
+func BenchmarkPublicCommandWALRawKVSet(b *testing.B) {
+	for _, commandWAL := range []bool{false, true} {
+		b.Run(fmt.Sprintf("command_wal=%t", commandWAL), func(b *testing.B) {
+			db, err := Open(Options{
+				Dir:                 b.TempDir(),
+				Durability:          DurabilityWALOnRelaxed,
+				CommandWAL:          commandWAL,
+				CommandWALStatsScan: commandWAL,
+				DisableSideStores:   true,
+			})
+			if err != nil {
+				b.Fatalf("Open: %v", err)
+			}
+			defer func() { _ = db.Close() }()
+
+			value := []byte("public-command-wal-value")
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				key := []byte(fmt.Sprintf("k%09d", i))
+				if err := db.Set(key, value); err != nil {
+					b.Fatalf("Set: %v", err)
+				}
+			}
+			b.StopTimer()
+			b.ReportMetric(float64(b.N)/b.Elapsed().Seconds(), "sets/s")
+			if commandWAL {
+				assertPublicCommandWALFramesB(b, db, uint64(b.N))
+			}
+		})
+	}
+}
+
+func assertPublicCommandWALFramesB(b *testing.B, db *DB, minFrames uint64) {
+	b.Helper()
+	stats := db.Stats()
+	frames, err := strconv.ParseUint(stats["treedb.command_wal.frames"], 10, 64)
+	if err != nil {
+		b.Fatalf("parse command_wal.frames=%q: %v", stats["treedb.command_wal.frames"], err)
+	}
+	if frames < minFrames {
+		b.Fatalf("command_wal.frames=%d, want at least %d", frames, minFrames)
 	}
 }
