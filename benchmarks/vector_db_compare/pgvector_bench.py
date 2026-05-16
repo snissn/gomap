@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import os
 import re
 import statistics
 import sys
@@ -83,10 +82,16 @@ def table_name(args: argparse.Namespace) -> str:
     return f"{schema}.{table}"
 
 
+def index_name(args: argparse.Namespace) -> str:
+    raw = args.index or f"{args.table}_embedding_hnsw"
+    return checked_identifier(raw, "--index")
+
+
 def build_database(args: argparse.Namespace, manifest: dict[str, Any], docs: np.ndarray) -> tuple[dict[str, Any], str]:
     start = time.perf_counter()
     qualified_table = table_name(args)
     schema = checked_identifier(args.schema, "--schema")
+    index = index_name(args)
     with connect(args.dsn) as conn:
         version = conn.execute("select version()").fetchone()[0]
         conn.execute("create extension if not exists vector")
@@ -105,16 +110,17 @@ def build_database(args: argparse.Namespace, manifest: dict[str, Any], docs: np.
             f"grp integer not null, "
             f"embedding vector({manifest['dimensions']}) not null)"
         )
+        rows = [(i + 1, f"doc-{i:06d}", i % 16, vector_literal(docs[i])) for i in range(manifest["docs"])]
         insert_start = time.perf_counter()
         with conn.transaction():
             with conn.cursor().copy(f"copy {qualified_table} (doc_id, id, grp, embedding) from stdin") as copy:
-                for i in range(manifest["docs"]):
-                    copy.write_row((i + 1, f"doc-{i:06d}", i % 16, vector_literal(docs[i])))
+                for row in rows:
+                    copy.write_row(row)
         insert_phase = phase(insert_start)
         build_start = time.perf_counter()
         with conn.transaction():
             conn.execute(
-                "create index documents_embedding_hnsw "
+                f"create index {index} "
                 f"on {qualified_table} using hnsw (embedding vector_cosine_ops) "
                 f"with (m = {args.m}, ef_construction = {args.ef_construction})"
             )
@@ -287,6 +293,7 @@ def main() -> None:
     parser.add_argument("--dsn", required=True)
     parser.add_argument("--schema", default="gomap_vector_bench")
     parser.add_argument("--table", default="documents")
+    parser.add_argument("--index", default="", help="HNSW index name. Defaults to <table>_embedding_hnsw.")
     parser.add_argument("--allow-drop-schema", action="store_true")
     parser.add_argument("--output", required=True)
     parser.add_argument("--queries", type=int, default=10000)
@@ -326,6 +333,7 @@ def main() -> None:
         "dataset_dir": str(dataset_dir),
         "schema": args.schema,
         "table": args.table,
+        "index": index_name(args),
         "docs": manifest["docs"],
         "dimensions": manifest["dimensions"],
         "queries": len(queries),

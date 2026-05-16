@@ -77,7 +77,7 @@ start_pgvector_if_needed() {
 	local mapped
 	mapped=$(docker port "$PGVECTOR_CONTAINER" 5432/tcp | sed -E 's/.*:([0-9]+)$/\1/')
 	PGVECTOR_DSN="postgresql://postgres:postgres@127.0.0.1:${mapped}/gomap_vector_bench?sslmode=disable"
-	echo "pgvector dsn: $PGVECTOR_DSN"
+	echo "pgvector dsn: [redacted]"
 	"$VENV/bin/python" - <<'PY' "$PGVECTOR_DSN"
 import sys
 import time
@@ -145,7 +145,7 @@ if contains_backend mongodb; then
 fi
 "$VENV/bin/python" -m pip install -q --only-binary=:all: "${binary_pip_packages[@]}"
 if ((${#source_pip_packages[@]})); then
-	"$VENV/bin/python" -m pip install -q "${source_pip_packages[@]}"
+	"$VENV/bin/python" -m pip install -q --only-binary=:all: "${source_pip_packages[@]}"
 fi
 
 echo "exporting TreeDB dataset"

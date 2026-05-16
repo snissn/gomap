@@ -11,7 +11,6 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import os
 import statistics
 import sys
 import threading
@@ -166,24 +165,29 @@ def reopen_database(args: argparse.Namespace) -> tuple[MongoClient, Any, dict[st
     client = connect(args.uri)
     collection = client[args.database][args.collection]
     count = collection.count_documents({})
-    probe = list(
-        collection.aggregate(
-            [
-                {
-                    "$vectorSearch": {
-                        "index": args.index_name,
-                        "path": "embedding",
-                        "queryVector": collection.find_one({"_id": 1}, {"embedding": 1})["embedding"],
-                        "numCandidates": args.num_candidates,
-                        "limit": 1,
-                    }
-                },
-                {"$project": {"_id": 1}},
-            ]
+    probe = []
+    if count:
+        seed = collection.find_one({"_id": 1}, {"embedding": 1})
+        if seed is None or "embedding" not in seed:
+            raise RuntimeError("MongoDB reopen probe could not load seed document _id=1")
+        probe = list(
+            collection.aggregate(
+                [
+                    {
+                        "$vectorSearch": {
+                            "index": args.index_name,
+                            "path": "embedding",
+                            "queryVector": seed["embedding"],
+                            "numCandidates": args.num_candidates,
+                            "limit": 1,
+                        }
+                    },
+                    {"$project": {"_id": 1}},
+                ]
+            )
         )
-    )
-    if len(probe) != 1:
-        raise RuntimeError(f"MongoDB reopen probe returned {len(probe)} rows, want 1")
+        if len(probe) != 1:
+            raise RuntimeError(f"MongoDB reopen probe returned {len(probe)} rows, want 1")
     out = phase(start)
     out["rows"] = int(count)
     out["probe_rows"] = len(probe)
@@ -308,12 +312,23 @@ def storage_usage(client: MongoClient, args: argparse.Namespace, docs: int) -> d
     storage_size = int(stats.get("storageSize", 0))
     index_size = int(stats.get("totalIndexSize", stats.get("indexSize", 0)))
     total = storage_size + index_size
+    collection = client[args.database][args.collection]
+    search_index: dict[str, Any] = {"name": args.index_name, "bytes_available": False}
+    try:
+        indexes = list(collection.aggregate([{"$listSearchIndexes": {"name": args.index_name}}]))
+        if indexes:
+            search_index["status"] = indexes[0].get("status")
+            search_index["queryable"] = indexes[0].get("queryable")
+    except OperationFailure as exc:
+        search_index["error"] = str(exc)
     return {
         "total_bytes": total,
+        "total_bytes_excludes_vector_search_index": True,
         "files": 0,
         "domains": {
             "collection_storageSize": storage_size,
             "collection_totalIndexSize": index_size,
+            "vector_search_index": search_index,
         },
         "bytes_per_doc": total / docs if docs else 0,
     }
