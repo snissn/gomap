@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/experiments/colgranule"
@@ -231,6 +232,16 @@ func TestRemainingTemplateV1PayloadPlusImageColumnsReconstructsJSONBenchRows(t *
 	validateRemainingTemplateV1PayloadPlusImageColumnsReconstructsJSONBenchRows(t, source, 0, 2)
 }
 
+func TestRemainingTemplateV1MeasurementStorageReconstructsJSONBenchRows(t *testing.T) {
+	source := filepath.Join("..", "..", "testdata", "jsonbench_sample.jsonl")
+	validateRemainingTemplateV1MeasurementStorageReconstructsJSONBenchRows(t, source, 0, 2)
+}
+
+func TestRemainingTemplateV1MeasurementStorageReconstructsLocalJSONBenchIfRequested(t *testing.T) {
+	source, limit := localJSONBenchFullReconstructionSource(t)
+	validateRemainingTemplateV1MeasurementStorageReconstructsJSONBenchRows(t, source, limit, colgranule.DefaultRowsPerGranule)
+}
+
 func validateRemainingTemplateV1PayloadPlusImageColumnsReconstructsJSONBenchRows(t *testing.T, source string, limit int, rowsPerGranule int) {
 	t.Helper()
 	ds, err := colgranule.LoadJSONBenchColumns(source, limit)
@@ -354,6 +365,116 @@ func validateRemainingTemplateV1PayloadPlusImageColumnsReconstructsJSONBenchRows
 		return nil
 	}); err != nil {
 		t.Fatalf("validate template-v1 retained docs: %v", err)
+	}
+	if rowIndex != int64(ds.Rows) {
+		t.Fatalf("validated rows=%d want %d", rowIndex, ds.Rows)
+	}
+}
+
+func validateRemainingTemplateV1MeasurementStorageReconstructsJSONBenchRows(t *testing.T, source string, limit int, rowsPerGranule int) {
+	t.Helper()
+	ds, imagePart := buildJSONBenchImagePartForReconstructionTest(t, source, limit, rowsPerGranule)
+	dbDir := t.TempDir()
+	result, err := measureRemainingTreeDB(context.Background(), []string{source}, ds.Rows, dbDir, collections.DocumentFormatTemplateV1, remainingShapeClickHouseTyped)
+	if err != nil {
+		t.Fatalf("measure template-v1 remaining TreeDB: %v", err)
+	}
+	if result.Rows != ds.Rows {
+		t.Fatalf("measured rows=%d want %d", result.Rows, ds.Rows)
+	}
+	validateStoredRemainingCollectionReconstructsJSONBenchRows(t, source, ds, imagePart, dbDir, collections.DocumentFormatTemplateV1)
+}
+
+func buildJSONBenchImagePartForReconstructionTest(t *testing.T, source string, limit int, rowsPerGranule int) (*colgranule.JSONBenchDataset, *colgranule.ColumnPart) {
+	t.Helper()
+	ds, err := colgranule.LoadJSONBenchColumns(source, limit)
+	if err != nil {
+		t.Fatalf("LoadJSONBenchColumns: %v", err)
+	}
+	part, err := colgranule.BuildJSONBenchColumnPartWithAggregateMetadataForLayout(ds, rowsPerGranule, colgranule.JSONBenchColumnPartLayoutClickHouseFilterUserTime)
+	if err != nil {
+		t.Fatalf("BuildJSONBenchColumnPartWithAggregateMetadataForLayout: %v", err)
+	}
+	image, err := colgranule.BuildColumnPartImage(part, colgranule.ColumnPartImageOptions{Dictionaries: ds.Dictionaries})
+	if err != nil {
+		t.Fatalf("BuildColumnPartImage: %v", err)
+	}
+	parsed, err := colgranule.ParseColumnPartImage(image.Bytes)
+	if err != nil {
+		t.Fatalf("ParseColumnPartImage: %v", err)
+	}
+	imagePart, err := colgranule.ColumnPartFromImage(parsed)
+	if err != nil {
+		t.Fatalf("ColumnPartFromImage: %v", err)
+	}
+	return &ds, imagePart
+}
+
+func validateStoredRemainingCollectionReconstructsJSONBenchRows(t *testing.T, source string, ds *colgranule.JSONBenchDataset, imagePart *colgranule.ColumnPart, dbDir string, format collections.DocumentFormat) {
+	t.Helper()
+	opts := treedb.OptionsFor(treedb.ProfileBench, dbDir)
+	opts.ValueLog.PointerThreshold = 1
+	opts.ValueLog.ForcePointers = true
+	backend, cleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)
+	if err != nil {
+		t.Fatalf("open remaining TreeDB for validation: %v", err)
+	}
+	defer func() {
+		if err := cleanup(); err != nil {
+			t.Errorf("close remaining TreeDB validation handle: %v", err)
+		}
+	}()
+	col, err := collections.NewCollectionManager(backend).OpenCollection("jsonbench_remaining_" + string(format))
+	if err != nil {
+		t.Fatalf("open remaining collection for validation: %v", err)
+	}
+	materializer, err := col.NewStoredDocumentJSONMaterializer()
+	if err != nil {
+		t.Fatalf("create remaining materializer: %v", err)
+	}
+	defer func() {
+		if err := materializer.Close(); err != nil {
+			t.Errorf("close remaining materializer: %v", err)
+		}
+	}()
+
+	reverseDictionaries := reverseJSONBenchDictionaries(ds.Dictionaries)
+	scanner := imagePart.NewScanner()
+	rowIndex := int64(0)
+	if err := scanJSONBenchFile(source, func(raw []byte) error {
+		if rowIndex >= int64(ds.Rows) {
+			return errStopScan
+		}
+		id := documentID(uint64(rowIndex + 1))
+		stored, err := col.Get(id)
+		if err != nil {
+			return fmt.Errorf("get stored retained row %d: %w", rowIndex, err)
+		}
+		retainedJSON, err := materializer.StoredDocumentJSON(stored)
+		if err != nil {
+			return fmt.Errorf("materialize stored retained row %d: %w", rowIndex, err)
+		}
+		retained, err := decodeRetainedDocumentForTest("json", retainedJSON)
+		if err != nil {
+			return fmt.Errorf("decode stored retained row %d: %w", rowIndex, err)
+		}
+		typed, err := typedJSONBenchValuesFromImage(scanner, imagePart, reverseDictionaries, rowIndex)
+		if err != nil {
+			return fmt.Errorf("read typed column values for row %d: %w", rowIndex, err)
+		}
+		restoreClickHouseTypedPathsForTest(retained, typed)
+
+		var original map[string]any
+		if err := decodeJSONPreserveNumbers(raw, &original); err != nil {
+			return fmt.Errorf("decode source row %d: %w", rowIndex, err)
+		}
+		if got, want := canonicalJSONForTest(t, retained), canonicalJSONForTest(t, original); string(got) != string(want) {
+			return fmt.Errorf("row %d reconstructed stored remaining mismatch\ngot  %s\nwant %s", rowIndex, got, want)
+		}
+		rowIndex++
+		return nil
+	}); err != nil {
+		t.Fatalf("validate stored remaining collection: %v", err)
 	}
 	if rowIndex != int64(ds.Rows) {
 		t.Fatalf("validated rows=%d want %d", rowIndex, ds.Rows)
