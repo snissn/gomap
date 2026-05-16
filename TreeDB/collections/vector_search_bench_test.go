@@ -7,6 +7,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"sync"
 	"testing"
@@ -382,7 +383,7 @@ func BenchmarkCollectionVectorIndexNativeRootIncrementalWrite(b *testing.B) {
 		if err := d.Close(); err != nil {
 			b.Fatalf("close db: %v", err)
 		}
-		removeVectorBenchmarkDirBestEffort(b, dir)
+		removeVectorBenchmarkDirAfterClose(b, dir)
 	}
 }
 
@@ -444,7 +445,7 @@ func BenchmarkCollectionVectorIndexNativeRootRebuild(b *testing.B) {
 		if err := d.Close(); err != nil {
 			b.Fatalf("close db: %v", err)
 		}
-		removeVectorBenchmarkDirBestEffort(b, dir)
+		removeVectorBenchmarkDirAfterClose(b, dir)
 	}
 	b.ReportMetric(float64(lastNativeRootBytes), "native_root_bytes")
 	b.ReportMetric(float64(lastIndexBytesMemory), "index_bytes_memory")
@@ -452,9 +453,12 @@ func BenchmarkCollectionVectorIndexNativeRootRebuild(b *testing.B) {
 	b.ReportMetric(float64(lastIndexBytesMemory)/float64(docs), "index_bytes_memory/doc")
 }
 
-func removeVectorBenchmarkDirBestEffort(b *testing.B, dir string) {
+func removeVectorBenchmarkDirAfterClose(b *testing.B, dir string) {
 	b.Helper()
 	if err := os.RemoveAll(dir); err != nil {
+		if runtime.GOOS != "windows" {
+			b.Fatalf("remove db dir: %v", err)
+		}
 		b.Logf("best-effort remove db dir %q: %v", dir, err)
 	}
 }

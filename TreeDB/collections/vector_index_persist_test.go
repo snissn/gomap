@@ -794,6 +794,62 @@ func TestCollectionVectorIndexNativeRootAdHocRuntimeBecomesDeclaredFullSnapshot(
 	requireVectorResultIDs(t, results, "a", "b")
 }
 
+func TestCollectionVectorIndexNativeRootIgnoresStaleDeclaredAdHocBeforeFirstNativeSave(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	def := VectorIndexDefinition{
+		Name:       "embedding",
+		Field:      "embedding",
+		Metric:     VectorMetricCosine,
+		Dimensions: 2,
+		M:          4,
+	}
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("a"), []byte("b")},
+		[][]byte{
+			[]byte(`{"embedding":[1,0]}`),
+			[]byte(`{"embedding":[0,1]}`),
+		},
+	); err != nil {
+		t.Fatalf("insert before vector index metadata: %v", err)
+	}
+	stale, err := col.BuildVectorIndex(vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		t.Fatalf("build ad hoc vector index: %v", err)
+	}
+	if _, err := col.CreateVectorIndex(def); err != nil {
+		t.Fatalf("create vector index metadata: %v", err)
+	}
+	rebuild, err := col.RebuildVectorIndex(def.Name)
+	if err != nil {
+		t.Fatalf("rebuild vector index: %v", err)
+	}
+	if rebuild.RootID == 0 || rebuild.ExactFallbackReason != "" {
+		t.Fatalf("unexpected rebuild status: %+v", rebuild)
+	}
+	if staleStatus, err := stale.SaveNativeSnapshot(); err != nil || staleStatus.Loaded || staleStatus.ExactFallbackReason != vectorIndexFallbackStaleRuntimeIndex {
+		t.Fatalf("stale declared ad hoc native save status=%+v err=%v, want ignored", staleStatus, err)
+	}
+	status, err := col.VectorIndexStatus(def.Name)
+	if err != nil {
+		t.Fatalf("status after stale declared ad hoc save: %v", err)
+	}
+	if status.RootID != rebuild.RootID || status.ExactFallbackReason != "" {
+		t.Fatalf("stale declared ad hoc save changed status=%+v rebuild=%+v", status, rebuild)
+	}
+}
+
 func TestCollectionVectorIndexNativeRootInsertMaintenanceErrorIsCommitAmbiguous(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

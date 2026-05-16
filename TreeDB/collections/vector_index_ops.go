@@ -34,7 +34,9 @@ func (c *Collection) VectorIndexStatus(name string) (VectorIndexStatus, error) {
 }
 
 // RebuildVectorIndex scans canonical collection documents, rebuilds the
-// declared HNSW graph, and publishes a full native vector-index root.
+// declared HNSW graph, and publishes a full native vector-index root. It is an
+// operational maintenance call: collection writes wait while the rebuild scans
+// and publishes so the replacement graph cannot miss committed mutations.
 func (c *Collection) RebuildVectorIndex(name string) (VectorIndexStatus, error) {
 	start := time.Now()
 	if c == nil {
@@ -55,7 +57,7 @@ func (c *Collection) RebuildVectorIndex(name string) (VectorIndexStatus, error) 
 	if err != nil {
 		return VectorIndexStatus{}, err
 	}
-	index, err := c.buildVectorIndex(vectorIndexOptionsFromDefinition(def), false)
+	index, err := c.buildVectorIndexPrepared(vectorIndexOptionsFromDefinition(def), false, false)
 	if err != nil {
 		return VectorIndexStatus{}, err
 	}
