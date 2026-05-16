@@ -1,0 +1,319 @@
+#!/usr/bin/env python3
+"""Persistent PostgreSQL+pgvector HNSW benchmark for TreeDB vector datasets."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import os
+import statistics
+import sys
+import threading
+import time
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+import psycopg
+
+
+def parse_ints(raw: str) -> list[int]:
+    values: list[int] = []
+    seen: set[int] = set()
+    for part in raw.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        value = int(part)
+        if value <= 1:
+            raise ValueError("concurrency values must be greater than 1")
+        if value not in seen:
+            values.append(value)
+            seen.add(value)
+    if not values:
+        raise ValueError("at least one concurrency value is required")
+    return sorted(values)
+
+
+def percentile(sorted_values: list[int], p: float) -> int:
+    if not sorted_values:
+        return 0
+    idx = math.ceil(p * len(sorted_values)) - 1
+    return sorted_values[max(0, min(idx, len(sorted_values) - 1))]
+
+
+def phase(start: float) -> dict[str, Any]:
+    seconds = time.perf_counter() - start
+    return {"duration_nanos": int(seconds * 1_000_000_000), "seconds": seconds}
+
+
+def load_manifest(dataset_dir: Path) -> dict[str, Any]:
+    return json.loads((dataset_dir / "manifest.json").read_text(encoding="utf-8"))
+
+
+def load_vectors(path: Path, rows: int, dims: int) -> np.ndarray:
+    data = np.fromfile(path, dtype="<f4")
+    expected = rows * dims
+    if data.size != expected:
+        raise ValueError(f"{path} has {data.size} float32s, want {expected}")
+    return data.reshape(rows, dims)
+
+
+def vector_literal(vector: np.ndarray) -> str:
+    return "[" + ",".join(f"{float(value):.9g}" for value in vector) + "]"
+
+
+def connect(dsn: str) -> psycopg.Connection:
+    return psycopg.connect(dsn, autocommit=True)
+
+
+def build_database(args: argparse.Namespace, manifest: dict[str, Any], docs: np.ndarray) -> tuple[dict[str, Any], str]:
+    start = time.perf_counter()
+    with connect(args.dsn) as conn:
+        version = conn.execute("select version()").fetchone()[0]
+        conn.execute("create extension if not exists vector")
+        conn.execute("drop table if exists documents")
+        conn.execute(
+            f"create table documents ("
+            f"doc_id integer primary key, "
+            f"id text not null, "
+            f"grp integer not null, "
+            f"embedding vector({manifest['dimensions']}) not null)"
+        )
+        insert_start = time.perf_counter()
+        with conn.transaction():
+            with conn.cursor().copy("copy documents (doc_id, id, grp, embedding) from stdin") as copy:
+                for i in range(manifest["docs"]):
+                    copy.write_row((i + 1, f"doc-{i:06d}", i % 16, vector_literal(docs[i])))
+        insert_phase = phase(insert_start)
+        build_start = time.perf_counter()
+        with conn.transaction():
+            conn.execute(
+                "create index documents_embedding_hnsw "
+                f"on documents using hnsw (embedding vector_cosine_ops) "
+                f"with (m = {args.m}, ef_construction = {args.ef_construction})"
+            )
+            conn.execute("analyze documents")
+        build_phase = phase(build_start)
+    return {
+        "insert": insert_phase,
+        "build": build_phase,
+        "create_total": phase(start),
+    }, version
+
+
+def reopen_database(args: argparse.Namespace) -> tuple[psycopg.Connection, dict[str, Any]]:
+    start = time.perf_counter()
+    conn = connect(args.dsn)
+    conn.execute(f"set hnsw.ef_search = {int(args.ef_search)}")
+    count = conn.execute("select count(*) from documents").fetchone()[0]
+    probe = conn.execute(
+        "select doc_id from documents order by embedding <=> (select embedding from documents where doc_id = 1) limit 1"
+    ).fetchall()
+    if len(probe) != 1:
+        raise RuntimeError(f"pgvector reopen probe returned {len(probe)} rows, want 1")
+    out = phase(start)
+    out["rows"] = int(count)
+    out["probe_rows"] = len(probe)
+    return conn, out
+
+
+def search_one(conn: psycopg.Connection, query: str, top_k: int) -> list[int]:
+    rows = conn.execute(
+        "select doc_id from documents order by embedding <=> %s::vector limit %s",
+        [query, top_k],
+    ).fetchall()
+    if len(rows) != top_k:
+        raise RuntimeError(f"pgvector returned {len(rows)} results, want {top_k}")
+    return [int(row[0]) for row in rows]
+
+
+def exact_topk(docs: np.ndarray, query: np.ndarray, top_k: int) -> set[int]:
+    scores = docs @ query
+    idx = np.argpartition(-scores, top_k - 1)[:top_k]
+    idx = idx[np.argsort(-scores[idx])]
+    return {int(i) + 1 for i in idx}
+
+
+def validate_recall(
+    conn: psycopg.Connection,
+    docs: np.ndarray,
+    query_literals: list[str],
+    queries: np.ndarray,
+    top_k: int,
+    validate_queries: int,
+    min_recall: float,
+) -> dict[str, Any]:
+    start = time.perf_counter()
+    exact_total = 0
+    ann_total = 0
+    overlap = 0
+    count = min(validate_queries, len(queries))
+    for i in range(count):
+        exact = exact_topk(docs, queries[i], top_k)
+        ann = set(search_one(conn, query_literals[i], top_k))
+        exact_total += len(exact)
+        ann_total += len(ann)
+        overlap += len(exact & ann)
+    recall = overlap / exact_total if exact_total else 1.0
+    if recall < min_recall:
+        raise RuntimeError(f"recall {recall:.4f} below minimum {min_recall:.4f}")
+    out = phase(start)
+    out.update(
+        {
+            "queries_checked": count,
+            "exact_total": exact_total,
+            "ann_total": ann_total,
+            "overlap": overlap,
+            "recall": recall,
+            "min_recall": min_recall,
+        }
+    )
+    return out
+
+
+def benchmark_search(args: argparse.Namespace, query_literals: list[str], concurrency: int) -> dict[str, Any]:
+    latencies = [0] * len(query_literals)
+    next_index = 0
+    next_lock = threading.Lock()
+    first_error: list[BaseException] = []
+    conns = [connect(args.dsn) for _ in range(concurrency)]
+    for conn in conns:
+        conn.execute(f"set hnsw.ef_search = {int(args.ef_search)}")
+
+    def worker(conn: psycopg.Connection) -> None:
+        nonlocal next_index
+        while True:
+            with next_lock:
+                i = next_index
+                next_index += 1
+            if i >= len(query_literals):
+                return
+            start = time.perf_counter_ns()
+            try:
+                search_one(conn, query_literals[i], args.top_k)
+            except BaseException as exc:  # noqa: BLE001
+                first_error.append(exc)
+                return
+            latencies[i] = time.perf_counter_ns() - start
+
+    start_all = time.perf_counter()
+    threads = [threading.Thread(target=worker, args=(conn,)) for conn in conns]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    total = time.perf_counter() - start_all
+    for conn in conns:
+        conn.close()
+    if first_error:
+        raise first_error[0]
+    sorted_latencies = sorted(latencies)
+    avg = statistics.fmean(latencies)
+    return {
+        "concurrency": concurrency,
+        "queries": len(query_literals),
+        "total_duration_nanos": int(total * 1_000_000_000),
+        "avg_nanos": avg,
+        "avg_micros": avg / 1000,
+        "ops_per_second": len(query_literals) / total,
+        "p50_nanos": percentile(sorted_latencies, 0.50),
+        "p95_nanos": percentile(sorted_latencies, 0.95),
+        "p99_nanos": percentile(sorted_latencies, 0.99),
+    }
+
+
+def storage_usage(conn: psycopg.Connection, docs: int) -> dict[str, Any]:
+    database = int(conn.execute("select pg_database_size(current_database())").fetchone()[0])
+    table = int(conn.execute("select pg_total_relation_size('documents')").fetchone()[0])
+    indexes = int(conn.execute("select pg_indexes_size('documents')").fetchone()[0])
+    return {
+        "total_bytes": database,
+        "files": 0,
+        "domains": {
+            "database": database,
+            "documents_total_relation": table,
+            "documents_indexes": indexes,
+        },
+        "bytes_per_doc": database / docs,
+    }
+
+
+def max_rss_bytes() -> int:
+    try:
+        import resource
+
+        value = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        if sys.platform == "darwin":
+            return int(value)
+        return int(value) * 1024
+    except Exception:
+        return 0
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Benchmark PostgreSQL+pgvector HNSW against a TreeDB vector dataset")
+    parser.add_argument("--dataset-dir", required=True)
+    parser.add_argument("--dsn", required=True)
+    parser.add_argument("--output", required=True)
+    parser.add_argument("--queries", type=int, default=10000)
+    parser.add_argument("--validate-queries", type=int, default=64)
+    parser.add_argument("--top-k", type=int, default=10)
+    parser.add_argument("--search-concurrency", default="2,4,8,16,32,64,128")
+    parser.add_argument("--m", type=int, default=16)
+    parser.add_argument("--ef-construction", type=int, default=128)
+    parser.add_argument("--ef-search", type=int, default=128)
+    parser.add_argument("--min-recall", type=float, default=0.95)
+    args = parser.parse_args()
+
+    dataset_dir = Path(args.dataset_dir)
+    manifest = load_manifest(dataset_dir)
+    if manifest["metric"] != "cosine" or not manifest["normalized"]:
+        raise RuntimeError(f"unsupported dataset metric/normalization: {manifest}")
+    docs = load_vectors(dataset_dir / manifest["document_vectors_file"], manifest["docs"], manifest["dimensions"])
+    all_queries = load_vectors(dataset_dir / manifest["query_vectors_file"], manifest["queries"], manifest["dimensions"])
+    queries = all_queries[: min(args.queries, len(all_queries))]
+    query_literals = [vector_literal(query) for query in queries]
+    concurrency = parse_ints(args.search_concurrency)
+
+    phases, postgres_info = build_database(args, manifest, docs)
+    conn, reopen = reopen_database(args)
+    validation = validate_recall(conn, docs, query_literals, queries, args.top_k, args.validate_queries, args.min_recall)
+    storage = storage_usage(conn, manifest["docs"])
+    conn.close()
+
+    levels = [1] + concurrency
+    search_benchmarks = [benchmark_search(args, query_literals, level) for level in levels]
+
+    result = {
+        "backend": "pgvector",
+        "engine": "pgvector",
+        "engine_info": postgres_info,
+        "ann_index": "hnsw",
+        "dataset_dir": str(dataset_dir),
+        "docs": manifest["docs"],
+        "dimensions": manifest["dimensions"],
+        "queries": len(queries),
+        "top_k": args.top_k,
+        "m": args.m,
+        "ef_construction": args.ef_construction,
+        "ef_search": args.ef_search,
+        "insert": phases["insert"],
+        "build": phases["build"],
+        "create_total": phases["create_total"],
+        "reopen_load": reopen,
+        "validation": validation,
+        "search": search_benchmarks[0],
+        "search_benchmarks": search_benchmarks,
+        "storage_after_build": storage,
+        "memory": {"max_rss_bytes": max_rss_bytes()},
+    }
+    output = Path(args.output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+    print(json.dumps(result, indent=2))
+
+
+if __name__ == "__main__":
+    main()
