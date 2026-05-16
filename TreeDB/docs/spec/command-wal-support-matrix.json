@@ -31,14 +31,19 @@
     {"surface":"mongo_gateway","entry_point":"insert","command":"CollectionInsertBatchByID","status":"WAL-supported","first_pr":"PR4","tests":["TestMongoCompatibilityMatrix"]},
     {"surface":"mongo_gateway","entry_point":"update","command":"CollectionUpdateBatchByID","status":"WAL-supported","first_pr":"PR5","tests":["TestMongoCompatibilityMatrix"]},
     {"surface":"mongo_gateway","entry_point":"delete","command":"CollectionDeleteBatchByID","status":"WAL-supported","first_pr":"PR4","tests":["TestMongoCompatibilityMatrix"]},
-    {"surface":"mongo_gateway","entry_point":"createIndexes","command":"future catalog index create","status":"WAL-rejected","first_pr":"PR6","tests":["TestCollectionCommandWALRejectsCatalogIndexMutations"]},
+    {"surface":"mongo_gateway","entry_point":"createIndexes (auto-create collection)","command":"CatalogCreateCollection","status":"WAL-supported","first_pr":"PR6","tests":["TestCollectionCommandWALCreateCollectionPublishesAppliedLSN"]},
+    {"surface":"mongo_gateway","entry_point":"createIndexes (existing collection)","command":"future catalog index create","status":"WAL-rejected","first_pr":"PR6","tests":["TestCollectionCommandWALRejectsCatalogIndexMutations"]},
     {"surface":"mongo_gateway","entry_point":"dropIndexes","command":"future catalog index drop","status":"WAL-rejected","first_pr":"PR6","tests":["TestCollectionCommandWALRejectsCatalogIndexMutations"]},
 
     {"surface":"nativewire","entry_point":"CommandCreateCollection","command":"CatalogCreateCollection","status":"WAL-supported","first_pr":"PR6","tests":["TestCollectionCommandWALCreateCollectionPublishesAppliedLSN"]},
     {"surface":"nativewire","entry_point":"CommandCreateIndex","command":"future catalog index create","status":"WAL-rejected","first_pr":"PR6","tests":["TestCollectionCommandWALRejectsCatalogIndexMutations"]},
     {"surface":"nativewire","entry_point":"CommandDropIndex","command":"future catalog index drop","status":"WAL-rejected","first_pr":"PR6","tests":["TestCollectionCommandWALRejectsCatalogIndexMutations"]},
+    {"surface":"nativewire","entry_point":"CommandDropCollection","command":"future catalog collection drop","status":"WAL-rejected","first_pr":"PR7","tests":["TestCommandWALSupportMatrixCoversNativeWireMutationCommands"]},
     {"surface":"nativewire","entry_point":"CommandInsertBatch","command":"CollectionInsertBatchByID","status":"WAL-supported","first_pr":"PR4","tests":["TestCollectionCommandWALInsertBatchByIDPublishesAppliedLSN"]},
     {"surface":"nativewire","entry_point":"CommandReplaceBatch","command":"CollectionUpdateBatchByID","status":"WAL-supported","first_pr":"PR5","tests":["TestCollectionCommandWALUpdateByIDIndexedPublishesSecondaryRoots"]},
-    {"surface":"nativewire","entry_point":"CommandDeleteBatch","command":"CollectionDeleteBatchByID","status":"WAL-supported","first_pr":"PR4","tests":["TestCollectionCommandWALDeleteBatchByIDPublishesMissingOnlyNoop"]}
+    {"surface":"nativewire","entry_point":"CommandDeleteBatch","command":"CollectionDeleteBatchByID","status":"WAL-supported","first_pr":"PR4","tests":["TestCollectionCommandWALDeleteBatchByIDPublishesMissingOnlyNoop"]},
+    {"surface":"nativewire","entry_point":"CommandFlushCollection","command":"local durability barrier","status":"WAL-supported","first_pr":"PR7","tests":["TestCommandWALSupportMatrixCoversNativeWireMutationCommands"]},
+    {"surface":"nativewire","entry_point":"CommandFlushAll","command":"local durability barrier","status":"WAL-supported","first_pr":"PR7","tests":["TestCommandWALSupportMatrixCoversNativeWireMutationCommands"]},
+    {"surface":"nativewire","entry_point":"CommandCheckpoint","command":"local durability barrier","status":"WAL-supported","first_pr":"PR7","tests":["TestCommandWALSupportMatrixCoversNativeWireMutationCommands"]}
   ]
 }

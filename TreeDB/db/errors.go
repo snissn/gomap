@@ -25,5 +25,5 @@ var (
 	ErrCommandWALUnsupported = errors.New("treedb: command_wal_v1 execution is not enabled")
 	// ErrCommandWALRejected is the stable public sentinel for commands that are
 	// intentionally rejected while command_wal_v1 is active.
-	ErrCommandWALRejected = ErrCommandWALUnsupported
+	ErrCommandWALRejected = errors.New("treedb: command_wal_v1 command rejected")
 )

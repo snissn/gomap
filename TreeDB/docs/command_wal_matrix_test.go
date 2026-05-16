@@ -2,10 +2,15 @@ package docs_test
 
 import (
 	"encoding/json"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
+
+	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
 )
 
 type commandWALSupportMatrix struct {
@@ -84,21 +89,31 @@ func TestCommandWALSupportMatrixCoversCollectionMutators(t *testing.T) {
 
 func TestCommandWALSupportMatrixCoversMongoMutationHandlers(t *testing.T) {
 	matrix := loadCommandWALSupportMatrix(t)
-	for _, command := range []string{"create", "insert", "update", "delete", "createIndexes", "dropIndexes"} {
+	for _, command := range []string{
+		"create",
+		"insert",
+		"update",
+		"delete",
+		"createIndexes (auto-create collection)",
+		"createIndexes (existing collection)",
+		"dropIndexes",
+	} {
 		requireMatrixEntry(t, matrix, "mongo_gateway", command)
 	}
 }
 
 func TestCommandWALSupportMatrixCoversNativeWireMutationCommands(t *testing.T) {
 	matrix := loadCommandWALSupportMatrix(t)
-	for _, command := range []string{
-		"CommandCreateCollection",
-		"CommandCreateIndex",
-		"CommandDropIndex",
-		"CommandInsertBatch",
-		"CommandReplaceBatch",
-		"CommandDeleteBatch",
-	} {
+	registry := iwire.MustV1Registry()
+	var commands []string
+	for _, schema := range registry.Schemas() {
+		if schema.Kind != iwire.CommandKindMutation {
+			continue
+		}
+		commands = append(commands, nativeWireCommandName(t, schema.ID))
+	}
+	sort.Strings(commands)
+	for _, command := range commands {
 		requireMatrixEntry(t, matrix, "nativewire", command)
 	}
 }
@@ -143,7 +158,7 @@ func TestCommandWALNoActiveCollectionWALImplementationDrift(t *testing.T) {
 		if strings.Contains(text, "collection-l*.log") || strings.Contains(text, "collection-l0") {
 			t.Fatalf("%s references collection WAL segment names outside deprecated implementation", path)
 		}
-		if strings.Contains(text, "internal/collectionwal") &&
+		if importsInternalCollectionWAL(t, path) &&
 			!strings.Contains(text, "legacy collection WAL") &&
 			!strings.Contains(text, "RequireClean") &&
 			!strings.Contains(text, "ErrRecoveryRequired = collectionwal.ErrCollectionWALRecoveryRequired") {
@@ -180,6 +195,49 @@ func requireMatrixEntry(t *testing.T, matrix commandWALSupportMatrix, surface, e
 	}
 	t.Fatalf("matrix missing %s/%s", surface, entryPoint)
 	return commandWALSupportEntry{}
+}
+
+func nativeWireCommandName(t *testing.T, id iwire.CommandID) string {
+	t.Helper()
+	switch id {
+	case iwire.CommandCreateCollection:
+		return "CommandCreateCollection"
+	case iwire.CommandCreateIndex:
+		return "CommandCreateIndex"
+	case iwire.CommandDropIndex:
+		return "CommandDropIndex"
+	case iwire.CommandDropCollection:
+		return "CommandDropCollection"
+	case iwire.CommandInsertBatch:
+		return "CommandInsertBatch"
+	case iwire.CommandReplaceBatch:
+		return "CommandReplaceBatch"
+	case iwire.CommandDeleteBatch:
+		return "CommandDeleteBatch"
+	case iwire.CommandFlushCollection:
+		return "CommandFlushCollection"
+	case iwire.CommandFlushAll:
+		return "CommandFlushAll"
+	case iwire.CommandCheckpoint:
+		return "CommandCheckpoint"
+	default:
+		t.Fatalf("native-wire mutation command %d needs a matrix name mapping", id)
+		return ""
+	}
+}
+
+func importsInternalCollectionWAL(t *testing.T, path string) bool {
+	t.Helper()
+	file, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.ImportsOnly)
+	if err != nil {
+		t.Fatalf("parse %s imports: %v", path, err)
+	}
+	for _, spec := range file.Imports {
+		if spec.Path != nil && spec.Path.Value == `"github.com/snissn/gomap/TreeDB/internal/collectionwal"` {
+			return true
+		}
+	}
+	return false
 }
 
 func repoRootForDocsTest(t *testing.T) string {

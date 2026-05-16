@@ -424,7 +424,7 @@ PR 7: matrix enforcement and drift tests:
 - `TestCommandWALNoActiveCollectionWALImplementationDrift`;
 - `TestCommandWALDocsRejectActiveCollectionWALReferencesOutsideDeprecatedDoc`;
 - `TestCommandWALDocsRequireAppliedCommandLSNAsV1Target`;
-- `TestCommandWALDocsRequireBatchAtomicityText`;
+- `TestCommandWALDocsRequireBatchAtomicityText`.
 
 PR 8: native-wire/Raft alignment closeout:
 
