@@ -1872,7 +1872,7 @@ func (idx *VectorIndex) selectDiverseCandidatesLocked(candidates []vectorIndexCa
 func (idx *VectorIndex) vectorIndexCandidateIsDiverseLocked(candidate vectorIndexCandidate, selected []vectorIndexCandidate) bool {
 	for _, existing := range selected {
 		distance := idx.distanceBetweenNodesLocked(candidate.nodeID, existing.nodeID)
-		if distance <= candidate.distance {
+		if distance < candidate.distance {
 			return false
 		}
 	}
