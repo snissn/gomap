@@ -457,21 +457,34 @@ func runJSONBenchPartSetQ1(reader *ColumnPartSetReader, _ queryCodeSet, scratch 
 		}
 		cursor := 0
 		for _, block := range collectionBlocks {
-			rows := visibleRowsInBlock(visible.Rows, &cursor, block.Descriptor.FirstRow, block.Descriptor.RowCount)
-			if len(rows) == 0 {
-				continue
+			var rows []int
+			if !visible.All {
+				rows = visibleRowsInBlock(visible.Rows, &cursor, block.Descriptor.FirstRow, block.Descriptor.RowCount)
+				if len(rows) == 0 {
+					continue
+				}
 			}
 			header, err := scratch.tinyCodeHeader(0, block)
 			if err != nil {
 				return 0, 0, JSONBenchPartQueryDiagnostics{}, err
 			}
 			decoded.addBlock(block)
-			for _, partRow := range rows {
-				code := readTinyCode(header, partRow-block.Descriptor.FirstRow)
-				if code >= header.cardinality || code >= cardinality {
-					return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: collection code %d outside cardinality %d", code, cardinality)
+			if visible.All {
+				for row := 0; row < block.Descriptor.RowCount; row++ {
+					code := readTinyCode(header, row)
+					if code >= header.cardinality || code >= cardinality {
+						return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: collection code %d outside cardinality %d", code, cardinality)
+					}
+					counts[code]++
 				}
-				counts[code]++
+			} else {
+				for _, partRow := range rows {
+					code := readTinyCode(header, partRow-block.Descriptor.FirstRow)
+					if code >= header.cardinality || code >= cardinality {
+						return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: collection code %d outside cardinality %d", code, cardinality)
+					}
+					counts[code]++
+				}
 			}
 		}
 	}
@@ -504,42 +517,75 @@ func runJSONBenchPartSetQ2(reader *ColumnPartSetReader, codes queryCodeSet, scra
 		}
 		cursor := 0
 		for blockIndex := range kindBlocks {
-			rows := visibleRowsInBlock(visible.Rows, &cursor, kindBlocks[blockIndex].Descriptor.FirstRow, kindBlocks[blockIndex].Descriptor.RowCount)
-			if len(rows) == 0 {
-				continue
+			first := kindBlocks[blockIndex].Descriptor.FirstRow
+			rowCount := kindBlocks[blockIndex].Descriptor.RowCount
+			var rows []int
+			if !visible.All {
+				rows = visibleRowsInBlock(visible.Rows, &cursor, first, rowCount)
+				if len(rows) == 0 {
+					continue
+				}
 			}
 			kindHeader, operationHeader, collectionHeader, didHeader, err := scratch.partSetTinyCodeHeaders(kindBlocks[blockIndex], operationBlocks[blockIndex], collectionBlocks[blockIndex], didBlocks[blockIndex])
 			if err != nil {
 				return 0, 0, JSONBenchPartQueryDiagnostics{}, err
 			}
 			decoded.addBlocks(kindBlocks[blockIndex], operationBlocks[blockIndex], collectionBlocks[blockIndex], didBlocks[blockIndex])
-			first := kindBlocks[blockIndex].Descriptor.FirstRow
-			for _, partRow := range rows {
-				row := partRow - first
-				kind := readTinyCode(kindHeader, row)
-				if kind >= kindHeader.cardinality {
-					return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: kind code %d outside cardinality %d", kind, kindHeader.cardinality)
+			if visible.All {
+				for row := 0; row < rowCount; row++ {
+					kind := readTinyCode(kindHeader, row)
+					if kind >= kindHeader.cardinality {
+						return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: kind code %d outside cardinality %d", kind, kindHeader.cardinality)
+					}
+					if int64(kind) != codes.kindCommit {
+						continue
+					}
+					operation := readTinyCode(operationHeader, row)
+					if operation >= operationHeader.cardinality {
+						return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: operation code %d outside cardinality %d", operation, operationHeader.cardinality)
+					}
+					if int64(operation) != codes.operationCreate {
+						continue
+					}
+					event := readTinyCode(collectionHeader, row)
+					if event >= collectionHeader.cardinality || event >= collectionCardinality {
+						return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: collection code %d outside cardinality %d", event, collectionCardinality)
+					}
+					did := readUint32Code(didHeader.data, didHeader.width, row)
+					if did >= didHeader.cardinality || did >= didCardinality {
+						return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: did code %d outside cardinality %d", did, didCardinality)
+					}
+					counts[event]++
+					seen[int(event)*didWords+int(did/64)] |= uint64(1) << uint(did%64)
 				}
-				if int64(kind) != codes.kindCommit {
-					continue
+			} else {
+				for _, partRow := range rows {
+					row := partRow - first
+					kind := readTinyCode(kindHeader, row)
+					if kind >= kindHeader.cardinality {
+						return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: kind code %d outside cardinality %d", kind, kindHeader.cardinality)
+					}
+					if int64(kind) != codes.kindCommit {
+						continue
+					}
+					operation := readTinyCode(operationHeader, row)
+					if operation >= operationHeader.cardinality {
+						return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: operation code %d outside cardinality %d", operation, operationHeader.cardinality)
+					}
+					if int64(operation) != codes.operationCreate {
+						continue
+					}
+					event := readTinyCode(collectionHeader, row)
+					if event >= collectionHeader.cardinality || event >= collectionCardinality {
+						return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: collection code %d outside cardinality %d", event, collectionCardinality)
+					}
+					did := readUint32Code(didHeader.data, didHeader.width, row)
+					if did >= didHeader.cardinality || did >= didCardinality {
+						return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: did code %d outside cardinality %d", did, didCardinality)
+					}
+					counts[event]++
+					seen[int(event)*didWords+int(did/64)] |= uint64(1) << uint(did%64)
 				}
-				operation := readTinyCode(operationHeader, row)
-				if operation >= operationHeader.cardinality {
-					return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: operation code %d outside cardinality %d", operation, operationHeader.cardinality)
-				}
-				if int64(operation) != codes.operationCreate {
-					continue
-				}
-				event := readTinyCode(collectionHeader, row)
-				if event >= collectionHeader.cardinality || event >= collectionCardinality {
-					return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: collection code %d outside cardinality %d", event, collectionCardinality)
-				}
-				did := readUint32Code(didHeader.data, didHeader.width, row)
-				if did >= didHeader.cardinality || did >= didCardinality {
-					return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: did code %d outside cardinality %d", did, didCardinality)
-				}
-				counts[event]++
-				seen[int(event)*didWords+int(did/64)] |= uint64(1) << uint(did%64)
 			}
 		}
 	}
@@ -568,44 +614,79 @@ func runJSONBenchPartSetQ3(reader *ColumnPartSetReader, codes queryCodeSet, scra
 		}
 		cursor := 0
 		for blockIndex := range kindBlocks {
-			rows := visibleRowsInBlock(visible.Rows, &cursor, kindBlocks[blockIndex].Descriptor.FirstRow, kindBlocks[blockIndex].Descriptor.RowCount)
-			if len(rows) == 0 {
-				continue
+			first := kindBlocks[blockIndex].Descriptor.FirstRow
+			rowCount := kindBlocks[blockIndex].Descriptor.RowCount
+			var rows []int
+			if !visible.All {
+				rows = visibleRowsInBlock(visible.Rows, &cursor, first, rowCount)
+				if len(rows) == 0 {
+					continue
+				}
 			}
 			kindHeader, operationHeader, collectionHeader, hourHeader, err := scratch.partSetTinyCodeHeaders(kindBlocks[blockIndex], operationBlocks[blockIndex], collectionBlocks[blockIndex], hourBlocks[blockIndex])
 			if err != nil {
 				return 0, 0, JSONBenchPartQueryDiagnostics{}, err
 			}
 			decoded.addBlocks(kindBlocks[blockIndex], operationBlocks[blockIndex], collectionBlocks[blockIndex], hourBlocks[blockIndex])
-			first := kindBlocks[blockIndex].Descriptor.FirstRow
-			for _, partRow := range rows {
-				row := partRow - first
-				kind := readTinyCode(kindHeader, row)
-				if kind >= kindHeader.cardinality {
-					return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: kind code %d outside cardinality %d", kind, kindHeader.cardinality)
+			if visible.All {
+				for row := 0; row < rowCount; row++ {
+					kind := readTinyCode(kindHeader, row)
+					if kind >= kindHeader.cardinality {
+						return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: kind code %d outside cardinality %d", kind, kindHeader.cardinality)
+					}
+					if int64(kind) != codes.kindCommit {
+						continue
+					}
+					operation := readTinyCode(operationHeader, row)
+					if operation >= operationHeader.cardinality {
+						return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: operation code %d outside cardinality %d", operation, operationHeader.cardinality)
+					}
+					if int64(operation) != codes.operationCreate {
+						continue
+					}
+					event := readTinyCode(collectionHeader, row)
+					if event >= collectionHeader.cardinality || event >= collectionCardinality {
+						return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: collection code %d outside cardinality %d", event, collectionCardinality)
+					}
+					if int64(event) != codes.collectionPost && int64(event) != codes.collectionRepost && int64(event) != codes.collectionLike {
+						continue
+					}
+					hour := readUint32Code(hourHeader.data, hourHeader.width, row)
+					if hour >= hourHeader.cardinality || hour >= jsonBenchHoursPerDay {
+						return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: hour_of_day code %d outside cardinality %d", hour, hourHeader.cardinality)
+					}
+					counts[int(event)*jsonBenchHoursPerDay+int(hour)]++
 				}
-				if int64(kind) != codes.kindCommit {
-					continue
+			} else {
+				for _, partRow := range rows {
+					row := partRow - first
+					kind := readTinyCode(kindHeader, row)
+					if kind >= kindHeader.cardinality {
+						return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: kind code %d outside cardinality %d", kind, kindHeader.cardinality)
+					}
+					if int64(kind) != codes.kindCommit {
+						continue
+					}
+					operation := readTinyCode(operationHeader, row)
+					if operation >= operationHeader.cardinality {
+						return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: operation code %d outside cardinality %d", operation, operationHeader.cardinality)
+					}
+					if int64(operation) != codes.operationCreate {
+						continue
+					}
+					event := readTinyCode(collectionHeader, row)
+					if event >= collectionHeader.cardinality || event >= collectionCardinality {
+						return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: collection code %d outside cardinality %d", event, collectionCardinality)
+					}
+					if int64(event) != codes.collectionPost && int64(event) != codes.collectionRepost && int64(event) != codes.collectionLike {
+						continue
+					}
+					hour := readUint32Code(hourHeader.data, hourHeader.width, row)
+					if hour >= hourHeader.cardinality || hour >= jsonBenchHoursPerDay {
+						return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: hour_of_day code %d outside cardinality %d", hour, hourHeader.cardinality)
+					}
+					counts[int(event)*jsonBenchHoursPerDay+int(hour)]++
 				}
-				operation := readTinyCode(operationHeader, row)
-				if operation >= operationHeader.cardinality {
-					return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: operation code %d outside cardinality %d", operation, operationHeader.cardinality)
-				}
-				if int64(operation) != codes.operationCreate {
-					continue
-				}
-				event := readTinyCode(collectionHeader, row)
-				if event >= collectionHeader.cardinality || event >= collectionCardinality {
-					return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: collection code %d outside cardinality %d", event, collectionCardinality)
-				}
-				if int64(event) != codes.collectionPost && int64(event) != codes.collectionRepost && int64(event) != codes.collectionLike {
-					continue
-				}
-				hour := readUint32Code(hourHeader.data, hourHeader.width, row)
-				if hour >= hourHeader.cardinality || hour >= jsonBenchHoursPerDay {
-					return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: hour_of_day code %d outside cardinality %d", hour, hourHeader.cardinality)
-				}
-				counts[int(event)*jsonBenchHoursPerDay+int(hour)]++
 			}
 		}
 	}
@@ -634,9 +715,14 @@ func runJSONBenchPartSetQ4(reader *ColumnPartSetReader, codes queryCodeSet, scra
 		}
 		cursor := 0
 		for blockIndex := range kindBlocks {
-			rows := visibleRowsInBlock(visible.Rows, &cursor, kindBlocks[blockIndex].Descriptor.FirstRow, kindBlocks[blockIndex].Descriptor.RowCount)
-			if len(rows) == 0 {
-				continue
+			first := kindBlocks[blockIndex].Descriptor.FirstRow
+			rowCount := kindBlocks[blockIndex].Descriptor.RowCount
+			var rows []int
+			if !visible.All {
+				rows = visibleRowsInBlock(visible.Rows, &cursor, first, rowCount)
+				if len(rows) == 0 {
+					continue
+				}
 			}
 			kindHeader, operationHeader, collectionHeader, didHeader, err := scratch.partSetTinyCodeHeaders(kindBlocks[blockIndex], operationBlocks[blockIndex], collectionBlocks[blockIndex], didBlocks[blockIndex])
 			if err != nil {
@@ -647,43 +733,81 @@ func runJSONBenchPartSetQ4(reader *ColumnPartSetReader, codes queryCodeSet, scra
 				return 0, 0, JSONBenchPartQueryDiagnostics{}, err
 			}
 			decoded.addBlocks(kindBlocks[blockIndex], operationBlocks[blockIndex], collectionBlocks[blockIndex], didBlocks[blockIndex], timeBlocks[blockIndex])
-			first := kindBlocks[blockIndex].Descriptor.FirstRow
-			for _, partRow := range rows {
-				row := partRow - first
-				kind := readTinyCode(kindHeader, row)
-				if kind >= kindHeader.cardinality {
-					return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: kind code %d outside cardinality %d", kind, kindHeader.cardinality)
-				}
-				if int64(kind) != codes.kindCommit {
-					continue
-				}
-				operation := readTinyCode(operationHeader, row)
-				if operation >= operationHeader.cardinality {
-					return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: operation code %d outside cardinality %d", operation, operationHeader.cardinality)
-				}
-				if int64(operation) != codes.operationCreate {
-					continue
-				}
-				event := readTinyCode(collectionHeader, row)
-				if event >= collectionHeader.cardinality {
-					return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: collection code %d outside cardinality %d", event, collectionHeader.cardinality)
-				}
-				if int64(event) != codes.collectionPost {
-					continue
-				}
-				user := readUint32Code(didHeader.data, didHeader.width, row)
-				if user >= didHeader.cardinality || user >= didCardinality {
-					return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: did code %d outside cardinality %d", user, didCardinality)
-				}
-				timestamp := timeValues[row]
-				if bitsetTestAndSet(seen, user) {
-					if timestamp < minTime[user] {
-						minTime[user] = timestamp
+			if visible.All {
+				for row := 0; row < rowCount; row++ {
+					kind := readTinyCode(kindHeader, row)
+					if kind >= kindHeader.cardinality {
+						return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: kind code %d outside cardinality %d", kind, kindHeader.cardinality)
 					}
-					continue
+					if int64(kind) != codes.kindCommit {
+						continue
+					}
+					operation := readTinyCode(operationHeader, row)
+					if operation >= operationHeader.cardinality {
+						return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: operation code %d outside cardinality %d", operation, operationHeader.cardinality)
+					}
+					if int64(operation) != codes.operationCreate {
+						continue
+					}
+					event := readTinyCode(collectionHeader, row)
+					if event >= collectionHeader.cardinality {
+						return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: collection code %d outside cardinality %d", event, collectionHeader.cardinality)
+					}
+					if int64(event) != codes.collectionPost {
+						continue
+					}
+					user := readUint32Code(didHeader.data, didHeader.width, row)
+					if user >= didHeader.cardinality || user >= didCardinality {
+						return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: did code %d outside cardinality %d", user, didCardinality)
+					}
+					timestamp := timeValues[row]
+					if bitsetTestAndSet(seen, user) {
+						if timestamp < minTime[user] {
+							minTime[user] = timestamp
+						}
+						continue
+					}
+					minTime[user] = timestamp
+					users = append(users, user)
 				}
-				minTime[user] = timestamp
-				users = append(users, user)
+			} else {
+				for _, partRow := range rows {
+					row := partRow - first
+					kind := readTinyCode(kindHeader, row)
+					if kind >= kindHeader.cardinality {
+						return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: kind code %d outside cardinality %d", kind, kindHeader.cardinality)
+					}
+					if int64(kind) != codes.kindCommit {
+						continue
+					}
+					operation := readTinyCode(operationHeader, row)
+					if operation >= operationHeader.cardinality {
+						return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: operation code %d outside cardinality %d", operation, operationHeader.cardinality)
+					}
+					if int64(operation) != codes.operationCreate {
+						continue
+					}
+					event := readTinyCode(collectionHeader, row)
+					if event >= collectionHeader.cardinality {
+						return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: collection code %d outside cardinality %d", event, collectionHeader.cardinality)
+					}
+					if int64(event) != codes.collectionPost {
+						continue
+					}
+					user := readUint32Code(didHeader.data, didHeader.width, row)
+					if user >= didHeader.cardinality || user >= didCardinality {
+						return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: did code %d outside cardinality %d", user, didCardinality)
+					}
+					timestamp := timeValues[row]
+					if bitsetTestAndSet(seen, user) {
+						if timestamp < minTime[user] {
+							minTime[user] = timestamp
+						}
+						continue
+					}
+					minTime[user] = timestamp
+					users = append(users, user)
+				}
 			}
 		}
 	}
@@ -717,9 +841,14 @@ func runJSONBenchPartSetQ5(reader *ColumnPartSetReader, codes queryCodeSet, scra
 		}
 		cursor := 0
 		for blockIndex := range kindBlocks {
-			rows := visibleRowsInBlock(visible.Rows, &cursor, kindBlocks[blockIndex].Descriptor.FirstRow, kindBlocks[blockIndex].Descriptor.RowCount)
-			if len(rows) == 0 {
-				continue
+			first := kindBlocks[blockIndex].Descriptor.FirstRow
+			rowCount := kindBlocks[blockIndex].Descriptor.RowCount
+			var rows []int
+			if !visible.All {
+				rows = visibleRowsInBlock(visible.Rows, &cursor, first, rowCount)
+				if len(rows) == 0 {
+					continue
+				}
 			}
 			kindHeader, operationHeader, collectionHeader, didHeader, err := scratch.partSetTinyCodeHeaders(kindBlocks[blockIndex], operationBlocks[blockIndex], collectionBlocks[blockIndex], didBlocks[blockIndex])
 			if err != nil {
@@ -730,47 +859,89 @@ func runJSONBenchPartSetQ5(reader *ColumnPartSetReader, codes queryCodeSet, scra
 				return 0, 0, JSONBenchPartQueryDiagnostics{}, err
 			}
 			decoded.addBlocks(kindBlocks[blockIndex], operationBlocks[blockIndex], collectionBlocks[blockIndex], didBlocks[blockIndex], timeBlocks[blockIndex])
-			first := kindBlocks[blockIndex].Descriptor.FirstRow
-			for _, partRow := range rows {
-				row := partRow - first
-				kind := readTinyCode(kindHeader, row)
-				if kind >= kindHeader.cardinality {
-					return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: kind code %d outside cardinality %d", kind, kindHeader.cardinality)
-				}
-				if int64(kind) != codes.kindCommit {
-					continue
-				}
-				operation := readTinyCode(operationHeader, row)
-				if operation >= operationHeader.cardinality {
-					return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: operation code %d outside cardinality %d", operation, operationHeader.cardinality)
-				}
-				if int64(operation) != codes.operationCreate {
-					continue
-				}
-				event := readTinyCode(collectionHeader, row)
-				if event >= collectionHeader.cardinality {
-					return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: collection code %d outside cardinality %d", event, collectionHeader.cardinality)
-				}
-				if int64(event) != codes.collectionPost {
-					continue
-				}
-				user := readUint32Code(didHeader.data, didHeader.width, row)
-				if user >= didHeader.cardinality || user >= didCardinality {
-					return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: did code %d outside cardinality %d", user, didCardinality)
-				}
-				timestamp := timeValues[row]
-				if bitsetTestAndSet(seen, user) {
-					if timestamp < minTime[user] {
-						minTime[user] = timestamp
+			if visible.All {
+				for row := 0; row < rowCount; row++ {
+					kind := readTinyCode(kindHeader, row)
+					if kind >= kindHeader.cardinality {
+						return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: kind code %d outside cardinality %d", kind, kindHeader.cardinality)
 					}
-					if timestamp > maxTime[user] {
-						maxTime[user] = timestamp
+					if int64(kind) != codes.kindCommit {
+						continue
 					}
-					continue
+					operation := readTinyCode(operationHeader, row)
+					if operation >= operationHeader.cardinality {
+						return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: operation code %d outside cardinality %d", operation, operationHeader.cardinality)
+					}
+					if int64(operation) != codes.operationCreate {
+						continue
+					}
+					event := readTinyCode(collectionHeader, row)
+					if event >= collectionHeader.cardinality {
+						return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: collection code %d outside cardinality %d", event, collectionHeader.cardinality)
+					}
+					if int64(event) != codes.collectionPost {
+						continue
+					}
+					user := readUint32Code(didHeader.data, didHeader.width, row)
+					if user >= didHeader.cardinality || user >= didCardinality {
+						return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: did code %d outside cardinality %d", user, didCardinality)
+					}
+					timestamp := timeValues[row]
+					if bitsetTestAndSet(seen, user) {
+						if timestamp < minTime[user] {
+							minTime[user] = timestamp
+						}
+						if timestamp > maxTime[user] {
+							maxTime[user] = timestamp
+						}
+						continue
+					}
+					minTime[user] = timestamp
+					maxTime[user] = timestamp
+					users = append(users, user)
 				}
-				minTime[user] = timestamp
-				maxTime[user] = timestamp
-				users = append(users, user)
+			} else {
+				for _, partRow := range rows {
+					row := partRow - first
+					kind := readTinyCode(kindHeader, row)
+					if kind >= kindHeader.cardinality {
+						return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: kind code %d outside cardinality %d", kind, kindHeader.cardinality)
+					}
+					if int64(kind) != codes.kindCommit {
+						continue
+					}
+					operation := readTinyCode(operationHeader, row)
+					if operation >= operationHeader.cardinality {
+						return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: operation code %d outside cardinality %d", operation, operationHeader.cardinality)
+					}
+					if int64(operation) != codes.operationCreate {
+						continue
+					}
+					event := readTinyCode(collectionHeader, row)
+					if event >= collectionHeader.cardinality {
+						return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: collection code %d outside cardinality %d", event, collectionHeader.cardinality)
+					}
+					if int64(event) != codes.collectionPost {
+						continue
+					}
+					user := readUint32Code(didHeader.data, didHeader.width, row)
+					if user >= didHeader.cardinality || user >= didCardinality {
+						return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: did code %d outside cardinality %d", user, didCardinality)
+					}
+					timestamp := timeValues[row]
+					if bitsetTestAndSet(seen, user) {
+						if timestamp < minTime[user] {
+							minTime[user] = timestamp
+						}
+						if timestamp > maxTime[user] {
+							maxTime[user] = timestamp
+						}
+						continue
+					}
+					minTime[user] = timestamp
+					maxTime[user] = timestamp
+					users = append(users, user)
+				}
 			}
 		}
 	}
