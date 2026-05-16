@@ -1166,6 +1166,74 @@ func TestCollectionVectorIndexNativeRootUsesCurrentCatalogForStaleHandles(t *tes
 	requireVectorResultIDs(t, results, "a", "c")
 }
 
+func TestCollectionVectorIndexNativeRootStaleHandleSingleInsertMaintainsGraph(t *testing.T) {
+	dir := t.TempDir()
+	d, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	staleCol, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open stale collection handle: %v", err)
+	}
+	freshCol, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open fresh collection handle: %v", err)
+	}
+	def := VectorIndexDefinition{
+		Name:       "embedding",
+		Field:      "embedding",
+		Metric:     VectorMetricCosine,
+		Dimensions: 2,
+		M:          4,
+	}
+	if _, err := freshCol.CreateVectorIndex(def); err != nil {
+		t.Fatalf("create vector index metadata: %v", err)
+	}
+	if len(staleCol.Meta().VectorIndexes) != 0 {
+		t.Fatalf("stale handle unexpectedly saw vector metadata: %+v", staleCol.Meta())
+	}
+	if _, err := freshCol.InsertBatch(
+		[][]byte{[]byte("a"), []byte("b")},
+		[][]byte{
+			[]byte(`{"embedding":[1,0]}`),
+			[]byte(`{"embedding":[0,1]}`),
+		},
+	); err != nil {
+		t.Fatalf("seed vector documents: %v", err)
+	}
+	index, err := freshCol.BuildVectorIndex(vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		t.Fatalf("build vector index: %v", err)
+	}
+	if _, err := index.SaveSnapshot(); err != nil {
+		t.Fatalf("save vector index: %v", err)
+	}
+	if _, err := staleCol.Insert([]byte("c"), []byte(`{"embedding":[0.9,0.1]}`)); err != nil {
+		t.Fatalf("single insert through stale handle: %v", err)
+	}
+	if err := staleCol.Flush(); err != nil {
+		t.Fatalf("flush stale handle: %v", err)
+	}
+	reloaded, status, err := freshCol.LoadVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		t.Fatalf("reload vector index: %v", err)
+	}
+	if reloaded == nil || !status.Loaded {
+		t.Fatalf("vector index did not reload after stale insert loaded=%v status=%+v", reloaded != nil, status)
+	}
+	results, _, err := reloaded.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 2, DisableExactFallback: true})
+	if err != nil {
+		t.Fatalf("search reloaded vector index: %v", err)
+	}
+	requireVectorResultIDs(t, results, "a", "c")
+}
+
 func TestCollectionVectorIndexNativeRootFlushAllOnClosePersistsDirtyGraph(t *testing.T) {
 	dir := t.TempDir()
 	d, err := backenddb.Open(backenddb.Options{Dir: dir})

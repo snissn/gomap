@@ -3430,7 +3430,7 @@ func (c *Collection) insertOneNoIndexBuffered(id, document []byte) ([]byte, erro
 		domain.mu.Unlock()
 		return nil, err
 	}
-	if indexed || plannerOptions.documentFormat != DocumentFormatJSON {
+	if indexed || len(catalog.meta.VectorIndexes) > 0 || plannerOptions.documentFormat != DocumentFormatJSON {
 		domain.mu.Unlock()
 		return c.insertOneViaBatch(id, document)
 	}
@@ -8194,7 +8194,7 @@ func (c *Collection) insertOneNoIndex(id, document []byte) ([]byte, error) {
 		return nil, err
 	}
 	c.meta = catalog.meta
-	if len(c.meta.Indexes) > 0 {
+	if len(c.meta.Indexes) > 0 || len(c.meta.VectorIndexes) > 0 {
 		_ = snap.Close()
 		return c.insertOneViaBatch(id, document)
 	}
