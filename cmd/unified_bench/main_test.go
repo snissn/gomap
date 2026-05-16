@@ -677,6 +677,44 @@ func TestNormalizeTests_ReadRandomParallelAlias(t *testing.T) {
 	}
 }
 
+func TestNormalizeTests_ReadUnderWriteAliases(t *testing.T) {
+	got := normalizeTests(parseList("read_under_write,mixed_rw,read_under_write_parallel"))
+	want := []string{"read_under_write_parallel"}
+	if len(got) != len(want) {
+		t.Fatalf("unexpected len: got=%v want=%v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("unexpected normalize result: got=%v want=%v", got, want)
+		}
+	}
+}
+
+func TestRunBenchmark_ReadUnderWriteParallel_Smoke(t *testing.T) {
+	run, err := runBenchmark(BenchConfig{
+		Keys:         2_000,
+		ValueSize:    16,
+		BatchSize:    128,
+		WriteWorkers: 1,
+		ReadWorkers:  2,
+		RangeQueries: 20,
+		RangeSpan:    20,
+		DBsArg:       "treedb",
+		TestsArg:     "sequential_write,read_under_write_parallel",
+		KeepDir:      false,
+		Progress:     false,
+		SeedUsed:     1,
+	})
+	if err != nil {
+		t.Fatalf("runBenchmark: %v", err)
+	}
+
+	got := run.Results["read_under_write_parallel"]["TreeDB"]
+	if math.IsNaN(got) || got <= 0 {
+		t.Fatalf("expected read_under_write_parallel > 0 for TreeDB, got %v", got)
+	}
+}
+
 func TestRunBenchmark_AllIncludesRandomReadParallel(t *testing.T) {
 	run, err := runBenchmark(BenchConfig{
 		Keys:         2_000,

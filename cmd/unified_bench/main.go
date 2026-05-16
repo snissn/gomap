@@ -57,7 +57,7 @@ var (
 	keysMax            = flag.Int("keys-max", 10000000, "Maximum key count for -keyscale")
 	dbsArg             = flag.String("dbs", "all", "Comma-separated list of DBs to run. Use 'all' for registered DBs.")
 	dbsExcludeArg      = flag.String("exclude-dbs", "", "Comma-separated list of DBs to exclude")
-	testArg            = flag.String("test", "all", "Comma-separated list of tests (sequential_write,random_read,random_read_parallel,random_read_parallel_acquire_snapshot,random_read_batch,random_write,random_write_parallel,dataset_write_random,dataset_write_sorted,dataset_update_fork_choice,dataset_read_random,random_delete,full_scan,prefix_scan,batch_write,batch_write_steady,batch_random,batch_delete,update_fork_choice); aliases: write_seq->sequential_write, write_rand->random_write, write_sorted->dataset_write_sorted, write_dataset->dataset_write_random, read_rand->random_read, read_rand_parallel->random_read_parallel, read_rand_batch->random_read_batch, read_random_batch->random_read_batch, delete_rand->random_delete, scan->full_scan, range_scan->prefix_scan, batch_write_ss->batch_write_steady, forkchoice->update_fork_choice")
+	testArg            = flag.String("test", "all", "Comma-separated list of tests (sequential_write,random_read,random_read_parallel,random_read_parallel_acquire_snapshot,random_read_batch,read_under_write_parallel,random_write,random_write_parallel,dataset_write_random,dataset_write_sorted,dataset_update_fork_choice,dataset_read_random,random_delete,full_scan,prefix_scan,batch_write,batch_write_steady,batch_random,batch_delete,update_fork_choice); aliases: write_seq->sequential_write, write_rand->random_write, write_sorted->dataset_write_sorted, write_dataset->dataset_write_random, read_rand->random_read, read_rand_parallel->random_read_parallel, read_rand_batch->random_read_batch, read_random_batch->random_read_batch, read_under_write->read_under_write_parallel, mixed_rw->read_under_write_parallel, delete_rand->random_delete, scan->full_scan, range_scan->prefix_scan, batch_write_ss->batch_write_steady, forkchoice->update_fork_choice")
 	formatArg          = flag.String("format", "table", "Output format: table or markdown")
 	suiteArg           = flag.String("suite", "", "Named benchmark suite (e.g. readme)")
 	outDirArg          = flag.String("outdir", "", "Write plots/results to this directory (used by -suite readme)")
@@ -3167,6 +3167,134 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			totalOps := float64(cfg.Keys) * float64(workers)
 			return totalOps / time.Since(start).Seconds(), nil
 		},
+		"read_under_write_parallel": func(db kvstore.DB, rng *rand.Rand) (float64, error) {
+			readWorkers := cfg.ReadWorkers
+			if readWorkers <= 0 {
+				readWorkers = 1
+			}
+			writeWorkers := cfg.WriteWorkers
+			if writeWorkers < 0 {
+				writeWorkers = 0
+			}
+			if cfg.Keys <= 0 {
+				return 0, nil
+			}
+
+			values, err := getWriteValuePool()
+			if err != nil {
+				return 0, fmt.Errorf("read_under_write_parallel values: %w", err)
+			}
+			writeValue := values[0]
+			if len(writeValue) == 0 {
+				writeValue = make([]byte, cfg.ValueSize)
+			}
+
+			appendGetter, hasAppendGetter := db.(interface {
+				GetAppend(key, dst []byte) ([]byte, error)
+			})
+
+			var stop atomic.Bool
+			var failed atomic.Bool
+			errCh := make(chan error, 1)
+			reportErr := func(err error) {
+				if err == nil {
+					return
+				}
+				if failed.CompareAndSwap(false, true) {
+					stop.Store(true)
+					select {
+					case errCh <- err:
+					default:
+					}
+				}
+			}
+
+			runReadWorker := func(workerRng *rand.Rand) error {
+				var k [8]byte
+				buf := make([]byte, 0, cfg.ValueSize)
+				for i := 0; i < cfg.Keys; i++ {
+					if stop.Load() {
+						return nil
+					}
+					if i&8191 == 0 {
+						if err := guard.Checkpoint(); err != nil {
+							return err
+						}
+					}
+					encodeKey(k[:], uint64(workerRng.Intn(cfg.Keys)))
+					if hasAppendGetter {
+						buf, _ = appendGetter.GetAppend(k[:], buf[:0])
+					} else {
+						_, _ = db.Get(k[:])
+					}
+				}
+				return nil
+			}
+
+			var writeWG sync.WaitGroup
+			if writeWorkers > 0 {
+				baseWriteSeed := testSeed(cfg.SeedUsed, "read_under_write_parallel_write")
+				for w := 0; w < writeWorkers; w++ {
+					seedW := baseWriteSeed + int64(w)
+					rngW := rand.New(rand.NewSource(seedW))
+					writeWG.Add(1)
+					go func(workerRng *rand.Rand) {
+						defer writeWG.Done()
+						var k [8]byte
+						i := 0
+						for !stop.Load() {
+							if i&8191 == 0 {
+								if err := guard.Checkpoint(); err != nil {
+									reportErr(err)
+									return
+								}
+							}
+							encodeKey(k[:], uint64(workerRng.Intn(cfg.Keys)))
+							if err := db.Set(k[:], writeValue); err != nil {
+								reportErr(fmt.Errorf("read_under_write_parallel writer: %w", err))
+								return
+							}
+							i++
+						}
+					}(rngW)
+				}
+				// Give writers a moment to enter the hot path before timing reads.
+				time.Sleep(10 * time.Millisecond)
+			}
+
+			start := time.Now()
+			if readWorkers == 1 {
+				if err := runReadWorker(rng); err != nil {
+					reportErr(err)
+				}
+			} else {
+				baseReadSeed := testSeed(cfg.SeedUsed, "read_under_write_parallel_read")
+				var readWG sync.WaitGroup
+				for w := 0; w < readWorkers; w++ {
+					seedW := baseReadSeed + int64(w)
+					rngW := rand.New(rand.NewSource(seedW))
+					readWG.Add(1)
+					go func(workerRng *rand.Rand) {
+						defer readWG.Done()
+						if err := runReadWorker(workerRng); err != nil {
+							reportErr(err)
+						}
+					}(rngW)
+				}
+				readWG.Wait()
+			}
+			stop.Store(true)
+			writeWG.Wait()
+
+			select {
+			case err := <-errCh:
+				return 0, fmt.Errorf("read_under_write_parallel: %w", err)
+			default:
+			}
+
+			totalReadOps := float64(cfg.Keys) * float64(readWorkers)
+			return totalReadOps / time.Since(start).Seconds(), nil
+		},
 		"random_read_parallel_acquire_snapshot": func(db kvstore.DB, rng *rand.Rand) (float64, error) {
 			workers := cfg.ReadWorkers
 			if workers <= 0 {
@@ -3636,6 +3764,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		"dataset_write_sorted":                  "Dataset Write (Sorted)",
 		"random_read":                           "Random Read",
 		"random_read_parallel":                  "Random Read (Parallel)",
+		"read_under_write_parallel":             "Read Under Write (Parallel)",
 		"random_read_parallel_acquire_snapshot": "Random Read (Parallel, Snapshot Per Key)",
 		"random_read_batch":                     "Random Read (Batch)",
 		"full_scan":                             "Full Scan",
@@ -3710,6 +3839,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 	needsExistingData := containsAny(finalTestOrder,
 		"random_read",
 		"random_read_parallel",
+		"read_under_write_parallel",
 		"random_read_parallel_acquire_snapshot",
 		"random_read_batch",
 		"random_delete",
@@ -5874,6 +6004,8 @@ func normalizeTests(list []string) []string {
 			t = "random_read_parallel"
 		case "read_rand_batch", "read_random_batch":
 			t = "random_read_batch"
+		case "read_under_write", "mixed_rw":
+			t = "read_under_write_parallel"
 		case "delete_rand":
 			t = "random_delete"
 		case "batch_write_random":
