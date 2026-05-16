@@ -10,19 +10,19 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 )
 
-func (tdb *DB) appendPublicRawKVSingleCommand(op commitlog.RawKVOperation, sync bool) error {
+func (tdb *DB) appendPublicRawKVPointCommand(op commitlog.RawKVOp, key, value []byte, sync bool) error {
 	if tdb == nil || !tdb.commandWALCached {
 		return nil
 	}
 	if tdb.backend == nil {
 		return ErrClosed
 	}
-	lsn, err := tdb.backend.AppendRawKVSingleCommandWAL(op, sync)
+	lsn, err := tdb.backend.AppendRawKVPointCommandWALTrusted(op, key, value, sync)
 	if err == nil {
 		tdb.recordPublicCommandWALPendingLSN(lsn)
 	}
 	if err == nil && tdb.testAfterPublicCommandWALPointAppend != nil {
-		tdb.testAfterPublicCommandWALPointAppend(op)
+		tdb.testAfterPublicCommandWALPointAppend(commitlog.RawKVOperation{Op: op, Key: key, Value: value})
 	}
 	return err
 }
@@ -46,14 +46,61 @@ func (tdb *DB) recordPublicCommandWALPendingLSN(lsn uint64) {
 	if tdb == nil || lsn == 0 {
 		return
 	}
-	tdb.commandWALMu.Lock()
-	if tdb.commandWALFirst == 0 || lsn < tdb.commandWALFirst {
-		tdb.commandWALFirst = lsn
+	for {
+		first := tdb.commandWALFirst.Load()
+		if first != 0 && first <= lsn {
+			break
+		}
+		if tdb.commandWALFirst.CompareAndSwap(first, lsn) {
+			break
+		}
 	}
-	if lsn > tdb.commandWALLast {
-		tdb.commandWALLast = lsn
+	for {
+		last := tdb.commandWALLast.Load()
+		if last >= lsn {
+			break
+		}
+		if tdb.commandWALLast.CompareAndSwap(last, lsn) {
+			break
+		}
 	}
-	tdb.commandWALMu.Unlock()
+}
+
+func (tdb *DB) publicCommandWALPendingRange() (first, last uint64) {
+	if tdb == nil {
+		return 0, 0
+	}
+	return tdb.commandWALFirst.Load(), tdb.commandWALLast.Load()
+}
+
+func (tdb *DB) clearPublicCommandWALPendingThrough(lsn uint64) {
+	if tdb == nil || lsn == 0 {
+		return
+	}
+	last := tdb.commandWALLast.Load()
+	if last == 0 {
+		tdb.commandWALFirst.Store(0)
+		return
+	}
+	if last <= lsn {
+		tdb.commandWALFirst.Store(0)
+		tdb.commandWALLast.Store(0)
+		return
+	}
+	next := lsn + 1
+	if next == 0 {
+		tdb.commandWALFirst.Store(0)
+		return
+	}
+	for {
+		first := tdb.commandWALFirst.Load()
+		if first == 0 || first > lsn {
+			return
+		}
+		if tdb.commandWALFirst.CompareAndSwap(first, next) {
+			return
+		}
+	}
 }
 
 func (tdb *DB) publishPublicCommandWALPending(sync bool) error {
@@ -63,9 +110,7 @@ func (tdb *DB) publishPublicCommandWALPending(sync bool) error {
 	if tdb.backend == nil {
 		return ErrClosed
 	}
-	tdb.commandWALMu.Lock()
-	first, last := tdb.commandWALFirst, tdb.commandWALLast
-	tdb.commandWALMu.Unlock()
+	first, last := tdb.publicCommandWALPendingRange()
 	if first == 0 || last == 0 {
 		return nil
 	}
@@ -75,12 +120,7 @@ func (tdb *DB) publishPublicCommandWALPending(sync bool) error {
 	}
 	current := state.AppliedCommandLSN
 	if last <= current {
-		tdb.commandWALMu.Lock()
-		if tdb.commandWALLast <= current {
-			tdb.commandWALFirst = 0
-			tdb.commandWALLast = 0
-		}
-		tdb.commandWALMu.Unlock()
+		tdb.clearPublicCommandWALPendingThrough(current)
 		return nil
 	}
 	if first > current+1 {
@@ -93,15 +133,36 @@ func (tdb *DB) publishPublicCommandWALPending(sync bool) error {
 	if err := tdb.backend.PublishCommandWALAppliedLSN(last, []db.CommandWALLSNRange{{First: current + 1, Last: last}}, publishSync); err != nil {
 		return err
 	}
-	tdb.commandWALMu.Lock()
-	if tdb.commandWALLast <= last {
-		tdb.commandWALFirst = 0
-		tdb.commandWALLast = 0
-	} else if tdb.commandWALFirst <= last {
-		tdb.commandWALFirst = last + 1
-	}
-	tdb.commandWALMu.Unlock()
+	tdb.clearPublicCommandWALPendingThrough(last)
 	return nil
+}
+
+func (tdb *DB) preparePublicCommandWALPendingPublish(sync bool) (uint64, []db.CommandWALLSNRange, error) {
+	if tdb == nil || !tdb.commandWALCached {
+		return 0, nil, nil
+	}
+	if tdb.backend == nil {
+		return 0, nil, ErrClosed
+	}
+	first, last := tdb.publicCommandWALPendingRange()
+	if first == 0 || last == 0 {
+		return 0, nil, nil
+	}
+	state := tdb.backend.State()
+	if state == nil {
+		return 0, nil, ErrClosed
+	}
+	current := state.AppliedCommandLSN
+	if last <= current {
+		return 0, nil, nil
+	}
+	if first > current+1 {
+		return 0, nil, fmt.Errorf("%w: pending public command WAL starts at %d after applied %d", db.ErrCommandWALAppliedLSNNonContig, first, current)
+	}
+	if err := tdb.backend.FlushCommandWAL(sync); err != nil {
+		return 0, nil, err
+	}
+	return last, []db.CommandWALLSNRange{{First: current + 1, Last: last}}, nil
 }
 
 func publicCommandWALPublishSync(durabilityMode string, sync bool) bool {
@@ -114,8 +175,14 @@ type commandWALPublicBatch struct {
 	setViewer interface {
 		SetView(key, value []byte) error
 	}
+	setViewValidated interface {
+		SetViewValidated(key, value []byte) error
+	}
 	deleteViewer interface {
 		DeleteView(key []byte) error
+	}
+	deleteViewValidated interface {
+		DeleteViewValidated(key []byte) error
 	}
 	payload commitlog.RawKVBatchPayloadBuilder
 	opCount int
@@ -127,15 +194,26 @@ const commandWALPublicBatchEstimatedKeyValueBytes = 48
 
 func newCommandWALPublicBatch(tdb *DB, inner Batch, opHint int) *commandWALPublicBatch {
 	b := &commandWALPublicBatch{db: tdb, inner: inner}
+	b.disableInnerStreamingBypass()
 	if setter, ok := inner.(interface {
 		SetView(key, value []byte) error
 	}); ok {
 		b.setViewer = setter
 	}
+	if setter, ok := inner.(interface {
+		SetViewValidated(key, value []byte) error
+	}); ok {
+		b.setViewValidated = setter
+	}
 	if deleter, ok := inner.(interface {
 		DeleteView(key []byte) error
 	}); ok {
 		b.deleteViewer = deleter
+	}
+	if deleter, ok := inner.(interface {
+		DeleteViewValidated(key []byte) error
+	}); ok {
+		b.deleteViewValidated = deleter
 	}
 	opHint = db.NormalizePublicBatchReserveHint(opHint)
 	byteHint := 0
@@ -144,6 +222,15 @@ func newCommandWALPublicBatch(tdb *DB, inner Batch, opHint int) *commandWALPubli
 	}
 	b.payload.ResetWithHint(opHint, byteHint)
 	return b
+}
+
+func (b *commandWALPublicBatch) disableInnerStreamingBypass() {
+	if b == nil || b.inner == nil {
+		return
+	}
+	if disabler, ok := b.inner.(interface{ DisableStreamingBypass() }); ok {
+		disabler.DisableStreamingBypass()
+	}
 }
 
 func (b *commandWALPublicBatch) Set(key, value []byte) error {
@@ -171,7 +258,26 @@ func (b *commandWALPublicBatch) Set(key, value []byte) error {
 }
 
 func (b *commandWALPublicBatch) SetView(key, value []byte) error {
-	return b.Set(key, value)
+	if b == nil || b.inner == nil {
+		return ErrClosed
+	}
+	if len(key) == 0 {
+		return caching.ErrKeyEmpty
+	}
+	if value == nil {
+		return caching.ErrValueNil
+	}
+	oldLen, oldCount := b.payload.Len(), b.payload.Count()
+	if _, _, err := b.payload.AppendSet(key, value); err != nil {
+		return err
+	}
+	if err := b.innerSetView(key, value); err != nil {
+		b.payload.Truncate(oldLen, oldCount)
+		return err
+	}
+	b.opCount++
+	b.dirty = true
+	return nil
 }
 
 func (b *commandWALPublicBatch) Delete(key []byte) error {
@@ -196,10 +302,29 @@ func (b *commandWALPublicBatch) Delete(key []byte) error {
 }
 
 func (b *commandWALPublicBatch) DeleteView(key []byte) error {
-	return b.Delete(key)
+	if b == nil || b.inner == nil {
+		return ErrClosed
+	}
+	if len(key) == 0 {
+		return caching.ErrKeyEmpty
+	}
+	oldLen, oldCount := b.payload.Len(), b.payload.Count()
+	if _, err := b.payload.AppendDelete(key); err != nil {
+		return err
+	}
+	if err := b.innerDeleteView(key); err != nil {
+		b.payload.Truncate(oldLen, oldCount)
+		return err
+	}
+	b.opCount++
+	b.dirty = true
+	return nil
 }
 
 func (b *commandWALPublicBatch) innerSetView(key, value []byte) error {
+	if b.setViewValidated != nil {
+		return b.setViewValidated.SetViewValidated(key, value)
+	}
 	if b.setViewer != nil {
 		return b.setViewer.SetView(key, value)
 	}
@@ -207,6 +332,9 @@ func (b *commandWALPublicBatch) innerSetView(key, value []byte) error {
 }
 
 func (b *commandWALPublicBatch) innerDeleteView(key []byte) error {
+	if b.deleteViewValidated != nil {
+		return b.deleteViewValidated.DeleteViewValidated(key)
+	}
 	if b.deleteViewer != nil {
 		return b.deleteViewer.DeleteView(key)
 	}
@@ -226,22 +354,33 @@ func (b *commandWALPublicBatch) write(sync bool) error {
 		return ErrClosed
 	}
 	if b.dirty {
-		if err := b.appendCommandWAL(sync); err != nil {
+		writer, ok := b.inner.(interface {
+			WriteAfterCommandWALAppend(sync bool, appendCommand func() error) error
+		})
+		if !ok {
+			return fmt.Errorf("treedb: command wal batch requires cached command append hook")
+		}
+		if err := writer.WriteAfterCommandWALAppend(sync, func() error {
+			return b.appendCommandWAL(sync)
+		}); err != nil {
 			return err
 		}
-	}
-	if sync {
-		if err := b.inner.WriteSync(); err != nil {
-			return err
-		}
+		b.disableInnerStreamingBypass()
 		b.payload.ResetWithHint(0, 0)
 		b.opCount = 0
 		b.dirty = false
 		return nil
 	}
-	if err := b.inner.Write(); err != nil {
-		return err
+	if sync {
+		if err := b.inner.WriteSync(); err != nil {
+			return err
+		}
+	} else {
+		if err := b.inner.Write(); err != nil {
+			return err
+		}
 	}
+	b.disableInnerStreamingBypass()
 	b.payload.ResetWithHint(0, 0)
 	b.opCount = 0
 	b.dirty = false
@@ -258,7 +397,9 @@ func (b *commandWALPublicBatch) Close() error {
 	err := b.inner.Close()
 	b.inner = nil
 	b.setViewer = nil
+	b.setViewValidated = nil
 	b.deleteViewer = nil
+	b.deleteViewValidated = nil
 	b.payload.ResetWithHint(0, 0)
 	b.dirty = false
 	b.closed = true
@@ -278,6 +419,13 @@ func (b *commandWALPublicBatch) Reset() {
 		} else {
 			b.setViewer = nil
 		}
+		if setter, ok := b.inner.(interface {
+			SetViewValidated(key, value []byte) error
+		}); ok {
+			b.setViewValidated = setter
+		} else {
+			b.setViewValidated = nil
+		}
 		if deleter, ok := b.inner.(interface {
 			DeleteView(key []byte) error
 		}); ok {
@@ -285,6 +433,14 @@ func (b *commandWALPublicBatch) Reset() {
 		} else {
 			b.deleteViewer = nil
 		}
+		if deleter, ok := b.inner.(interface {
+			DeleteViewValidated(key []byte) error
+		}); ok {
+			b.deleteViewValidated = deleter
+		} else {
+			b.deleteViewValidated = nil
+		}
+		b.disableInnerStreamingBypass()
 		b.payload.ResetWithHint(0, 0)
 		b.opCount = 0
 		b.dirty = false

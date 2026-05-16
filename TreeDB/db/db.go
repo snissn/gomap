@@ -306,6 +306,11 @@ var errTestFinalizeCommitFailpoint = errors.New("treedb: finalize commit failpoi
 var errTestCommandWALFlushFailpoint = errors.New("treedb: command wal flush failpoint")
 var errTestWriteMetaFailpoint = errors.New("treedb: write meta failpoint")
 
+const (
+	commandWALWriterBufferSize        = 16 << 20
+	commandWALDeferredPointBufferSize = 64 << 20
+)
+
 type finalizeCommitError struct {
 	err                        error
 	cleanupCreatedSegmentsSafe bool
@@ -1519,10 +1524,12 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 			}
 		}
 		journal, err := commitlog.OpenCommandJournal(WALDirPath(opts.Dir), commitlog.CommandJournalOptions{
-			MaxSegmentSize: opts.WALMaxSegmentBytes,
-			Compress:       opts.JournalCompression,
-			InitialLSN:     db.meta.AppliedCommandLSN,
-			SegmentSeq:     commandSegmentSeq,
+			MaxSegmentSize:            opts.WALMaxSegmentBytes,
+			BufferSize:                commandWALWriterBufferSize,
+			DeferredCommandBufferSize: commandWALDeferredPointBufferSize,
+			Compress:                  opts.JournalCompression,
+			InitialLSN:                db.meta.AppliedCommandLSN,
+			SegmentSeq:                commandSegmentSeq,
 		})
 		if err != nil {
 			_ = db.Close()

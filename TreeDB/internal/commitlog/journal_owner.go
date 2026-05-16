@@ -58,7 +58,9 @@ func AcquireJournalOwnerWithOptions(dir string, opts JournalOwnerOptions) (*Jour
 // reserveLSN reserves one LSN from this owner. Only CommandJournal should call
 // this directly because failed appends rely on tail-only rollback.
 func (o *JournalOwner) reserveLSN() (uint64, error) {
-	first, _, err := o.reserveLSNRange(1)
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	first, _, err := o.reserveLSNRangeLocked(1)
 	return first, err
 }
 
@@ -71,6 +73,10 @@ func (o *JournalOwner) rollbackReservedLSN(lsn uint64) error {
 	}
 	o.mu.Lock()
 	defer o.mu.Unlock()
+	return o.rollbackReservedLSNLocked(lsn)
+}
+
+func (o *JournalOwner) rollbackReservedLSNLocked(lsn uint64) error {
 	if o.lock == nil {
 		return errors.New("commitlog: journal owner is closed")
 	}
@@ -103,6 +109,21 @@ func (o *JournalOwner) reserveLSNRange(count uint64) (first uint64, last uint64,
 	}
 	o.mu.Lock()
 	defer o.mu.Unlock()
+	return o.reserveLSNRangeLocked(count)
+}
+
+func (o *JournalOwner) reserveLSNLocked() (uint64, error) {
+	first, _, err := o.reserveLSNRangeLocked(1)
+	return first, err
+}
+
+func (o *JournalOwner) reserveLSNRangeLocked(count uint64) (first uint64, last uint64, err error) {
+	if o == nil {
+		return 0, 0, errors.New("commitlog: journal owner is closed")
+	}
+	if count == 0 {
+		return 0, 0, errors.New("commitlog: journal owner lsn range is empty")
+	}
 	if o.lock == nil {
 		return 0, 0, errors.New("commitlog: journal owner is closed")
 	}
@@ -150,6 +171,12 @@ type CommandJournalOptions struct {
 	// MaxSegmentSize caps individual command frame payloads; zero uses the
 	// commitlog default.
 	MaxSegmentSize int64
+	// BufferSize controls this command journal's buffered writer size. Zero
+	// uses the commitlog default.
+	BufferSize int
+	// DeferredCommandBufferSize preallocates a writer-owned buffer used to
+	// finalize trusted public command frames at flush/sync boundaries.
+	DeferredCommandBufferSize int
 	// Compress enables commitlog frame compression.
 	Compress bool
 	// InitialLSN is the highest already-applied/durable command LSN. CommandJournal
@@ -217,7 +244,7 @@ func OpenCommandJournal(walDir string, opts CommandJournalOptions) (*CommandJour
 		_ = owner.Close()
 		return nil, err
 	}
-	writer, err := NewWriterWithOptions(path, Options{MaxSegmentSize: opts.MaxSegmentSize, Compress: opts.Compress})
+	writer, err := NewWriterWithOptions(path, Options{MaxSegmentSize: opts.MaxSegmentSize, BufferSize: opts.BufferSize, DeferredCommandBufferSize: opts.DeferredCommandBufferSize, Compress: opts.Compress})
 	if err != nil {
 		_ = owner.Close()
 		return nil, err
@@ -459,13 +486,13 @@ func (j *CommandJournal) AppendCommand(env CommandEnvelope) (uint64, error) {
 	if size > int(segmentLenMask) {
 		return 0, ErrRecordTooLarge
 	}
-	lsn, err := j.owner.reserveLSN()
+	lsn, err := j.owner.reserveLSNLocked()
 	if err != nil {
 		return 0, err
 	}
 	env.LSN = lsn
 	if err := j.writer.AppendCommand(env); err != nil {
-		if rollbackErr := j.owner.rollbackReservedLSN(lsn); rollbackErr != nil {
+		if rollbackErr := j.owner.rollbackReservedLSNLocked(lsn); rollbackErr != nil {
 			return 0, errors.Join(err, rollbackErr)
 		}
 		return 0, err
@@ -503,12 +530,56 @@ func (j *CommandJournal) AppendRawKVSingleCommand(baseAppliedLSN uint64, op RawK
 	if size > int(segmentLenMask) {
 		return 0, ErrRecordTooLarge
 	}
-	lsn, err := j.owner.reserveLSN()
+	lsn, err := j.owner.reserveLSNLocked()
 	if err != nil {
 		return 0, err
 	}
 	if err := j.writer.AppendRawKVSingleCommandDirect(lsn, baseAppliedLSN, op); err != nil {
-		if rollbackErr := j.owner.rollbackReservedLSN(lsn); rollbackErr != nil {
+		if rollbackErr := j.owner.rollbackReservedLSNLocked(lsn); rollbackErr != nil {
+			return 0, errors.Join(err, rollbackErr)
+		}
+		return 0, err
+	}
+	return lsn, nil
+}
+
+// AppendRawKVPointCommandTrusted appends a caller-validated public raw KV point
+// Set/Delete command. It preserves the same LSN reservation and rollback
+// semantics as AppendRawKVSingleCommand while avoiding redundant operation
+// validation in the public cached hot path.
+func (j *CommandJournal) AppendRawKVPointCommandTrusted(baseAppliedLSN uint64, op RawKVOp, key, value []byte) (uint64, error) {
+	if j == nil {
+		return 0, errors.New("commitlog: command journal is closed")
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.writer == nil || j.owner == nil {
+		return 0, errors.New("commitlog: command journal is closed")
+	}
+	valueLen := len(value)
+	if op == RawKVOpDelete {
+		valueLen = 0
+	}
+	if commandFrameIntExceedsUint32(len(key)) || commandFrameIntExceedsUint32(valueLen) {
+		return 0, ErrRecordTooLarge
+	}
+	payloadLen := rawKVBatchHeaderSize + rawKVOpHeaderSize + len(key) + valueLen
+	size, err := commandFrameEncodedSizeFromLengths(payloadLen, 0, 0, 0)
+	if err != nil {
+		return 0, err
+	}
+	if j.writer.maxSegmentSize > 0 && int64(size) > j.writer.maxSegmentSize {
+		return 0, ErrRecordTooLarge
+	}
+	if size > int(segmentLenMask) {
+		return 0, ErrRecordTooLarge
+	}
+	lsn, err := j.owner.reserveLSNLocked()
+	if err != nil {
+		return 0, err
+	}
+	if err := j.writer.appendRawKVPointCommandDirectTrustedSized(lsn, baseAppliedLSN, op, key, value, valueLen, payloadLen, size); err != nil {
+		if rollbackErr := j.owner.rollbackReservedLSNLocked(lsn); rollbackErr != nil {
 			return 0, errors.Join(err, rollbackErr)
 		}
 		return 0, err
@@ -537,12 +608,12 @@ func (j *CommandJournal) AppendRawKVBatchPayloadCommandTrusted(baseAppliedLSN ui
 	if j.writer == nil || j.owner == nil {
 		return 0, errors.New("commitlog: command journal is closed")
 	}
-	lsn, err := j.owner.reserveLSN()
+	lsn, err := j.owner.reserveLSNLocked()
 	if err != nil {
 		return 0, err
 	}
 	if err := j.writer.AppendRawKVBatchPayloadCommandDirectTrusted(lsn, baseAppliedLSN, payload); err != nil {
-		if rollbackErr := j.owner.rollbackReservedLSN(lsn); rollbackErr != nil {
+		if rollbackErr := j.owner.rollbackReservedLSNLocked(lsn); rollbackErr != nil {
 			return 0, errors.Join(err, rollbackErr)
 		}
 		return 0, err

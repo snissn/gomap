@@ -9,9 +9,10 @@ import (
 
 // Batch implements the cosmos-db Batch interface.
 type Batch struct {
-	db           *DB
-	batch        *batch.Batch
-	physicalOnly bool
+	db                      *DB
+	batch                   *batch.Batch
+	physicalOnly            bool
+	commandWALPublishIntent *commandWALBatchIntent
 }
 
 const optimisticWriteMaxAttempts = 3
@@ -62,6 +63,33 @@ func (db *DB) NewPhysicalBatchWithSize(size int) batch.Interface {
 		pb.physicalOnly = true
 	}
 	return b
+}
+
+// SetCommandWALPublish records an already-appended command-WAL LSN range to
+// publish atomically with this physical batch's root commit.
+func (b *Batch) SetCommandWALPublish(appliedLSN uint64, covered []CommandWALLSNRange) error {
+	if b == nil {
+		return ErrClosed
+	}
+	if appliedLSN == 0 {
+		b.commandWALPublishIntent = nil
+		return nil
+	}
+	if !b.physicalOnly {
+		return fmt.Errorf("treedb: command wal publish piggyback requires physical batch")
+	}
+	if len(covered) != 1 {
+		return fmt.Errorf("treedb: command wal publish piggyback requires one covered range")
+	}
+	r := covered[0]
+	if r.First == 0 || r.Last < r.First || r.Last != appliedLSN {
+		return fmt.Errorf("%w: invalid coverage range [%d,%d] for applied %d", ErrCommandWALAppliedLSNNonContig, r.First, r.Last, appliedLSN)
+	}
+	b.commandWALPublishIntent = &commandWALBatchIntent{
+		lsn:          appliedLSN,
+		coveredRange: [1]CommandWALLSNRange{r},
+	}
+	return nil
 }
 
 // NormalizePublicBatchReserveHint keeps small public hints behaving like entry
@@ -185,10 +213,10 @@ func (b *Batch) write(sync bool) error {
 	if b.db.readOnly {
 		return ErrReadOnly
 	}
-	if sync && b.batch != nil && len(b.batch.SortedEntries()) == 0 {
+	if sync && b.batch != nil && len(b.batch.SortedEntries()) == 0 && b.commandWALPublishIntent == nil {
 		return b.db.Checkpoint()
 	}
-	var intent *commandWALBatchIntent
+	intent := b.commandWALPublishIntent
 	if !b.physicalOnly {
 		var err error
 		intent, err = b.db.prepareRawKVCommandWALIntent(b)
@@ -374,9 +402,11 @@ func (b *Batch) Close() error {
 	if b.batch != nil {
 		err := b.batch.Close()
 		b.batch = nil
+		b.commandWALPublishIntent = nil
 		return err
 	}
 	b.batch = nil
+	b.commandWALPublishIntent = nil
 	return nil
 }
 
@@ -386,6 +416,7 @@ func (b *Batch) Reset() {
 		return
 	}
 	b.batch.Reset()
+	b.commandWALPublishIntent = nil
 }
 
 func (b *Batch) Replay(fn func(batch.Entry) error) error {

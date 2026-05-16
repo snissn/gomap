@@ -125,9 +125,8 @@ type DB struct {
 	templateDB                           *DB
 	writePath                            writePathInfo
 	commandWALCached                     bool
-	commandWALMu                         sync.Mutex
-	commandWALFirst                      uint64
-	commandWALLast                       uint64
+	commandWALFirst                      atomic.Uint64
+	commandWALLast                       atomic.Uint64
 	testAfterPublicCommandWALPointAppend func(commitlog.RawKVOperation)
 	bgVac                                bgIndexVacuumWorker
 	notifyError                          func(error)
@@ -735,6 +734,9 @@ func Open(opts Options) (*DB, error) {
 	cached.SetDictStore(dictStore)
 	cached.SetTemplateStore(templateStore)
 	out := &DB{cached: cached, backend: backend, dictdb: dictBackend, templateDB: templateDB, writePath: writePath, commandWALCached: opts.CommandWAL, notifyError: opts.NotifyError, durabilityMode: computeDurabilityMode(opts), dir: rootDir}
+	if out.commandWALCached {
+		cached.SetCommandWALCheckpointPublishHook(out.preparePublicCommandWALPendingPublish)
+	}
 
 	// Cached-mode auto checkpointing is enabled by default to keep `wal/` growth
 	// bounded for long-running workloads, aligning operational expectations with
@@ -1471,9 +1473,8 @@ func (db *DB) Set(key, value []byte) error {
 	}
 	if db.cached != nil {
 		if db.commandWALCached {
-			op := commitlog.RawKVOperation{Op: commitlog.RawKVOpSet, Key: key, Value: value}
 			return db.cached.SetAfterCommandWALAppend(key, value, func() error {
-				return db.appendPublicRawKVSingleCommand(op, false)
+				return db.appendPublicRawKVPointCommand(commitlog.RawKVOpSet, key, value, false)
 			})
 		}
 		return db.cached.Set(key, value)
@@ -1490,9 +1491,8 @@ func (db *DB) SetSync(key, value []byte) error {
 	}
 	if db.cached != nil {
 		if db.commandWALCached {
-			op := commitlog.RawKVOperation{Op: commitlog.RawKVOpSet, Key: key, Value: value}
 			return db.cached.SetAfterCommandWALAppend(key, value, func() error {
-				return db.appendPublicRawKVSingleCommand(op, true)
+				return db.appendPublicRawKVPointCommand(commitlog.RawKVOpSet, key, value, true)
 			})
 		}
 		return db.cached.SetSync(key, value)
@@ -1549,9 +1549,8 @@ func (db *DB) Delete(key []byte) error {
 	}
 	if db.cached != nil {
 		if db.commandWALCached {
-			op := commitlog.RawKVOperation{Op: commitlog.RawKVOpDelete, Key: key}
 			return db.cached.DeleteAfterCommandWALAppend(key, func() error {
-				return db.appendPublicRawKVSingleCommand(op, false)
+				return db.appendPublicRawKVPointCommand(commitlog.RawKVOpDelete, key, nil, false)
 			})
 		}
 		return db.cached.Delete(key)
@@ -1603,9 +1602,8 @@ func (db *DB) DeleteSync(key []byte) error {
 	}
 	if db.cached != nil {
 		if db.commandWALCached {
-			op := commitlog.RawKVOperation{Op: commitlog.RawKVOpDelete, Key: key}
 			return db.cached.DeleteAfterCommandWALAppend(key, func() error {
-				return db.appendPublicRawKVSingleCommand(op, true)
+				return db.appendPublicRawKVPointCommand(commitlog.RawKVOpDelete, key, nil, true)
 			})
 		}
 		return db.cached.DeleteSync(key)

@@ -1047,7 +1047,12 @@ Acceptance:
   backend-only APIs;
 - recovery preserves visible state and deletes after public batch writes;
 - the support matrix classifies public raw KV writes as `WAL-supported` and
-  points at executable evidence.
+  points at executable evidence;
+- point `Set`, focused `Batch.Write`, and `unified_bench` batch-write
+  throughput gates each require public command-WAL throughput strictly greater
+  than `1.01x` of the legacy public cached WAL baseline. Any required lane at
+  or below `1.01x`, including sub-parity evidence such as `0.80x`, is a failing
+  gate rather than accepted evidence.
 
 PR9 initial evidence:
 

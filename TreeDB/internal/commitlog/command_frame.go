@@ -25,6 +25,16 @@ const (
 )
 
 var commandFrameMagic = [4]byte{'T', 'C', 'W', '1'}
+var rawKVCommandFrameHeaderTemplate = func() [commandFrameHeaderSize]byte {
+	var h [commandFrameHeaderSize]byte
+	copy(h[0:4], commandFrameMagic[:])
+	binary.LittleEndian.PutUint16(h[4:6], CommandFrameVersion)
+	binary.LittleEndian.PutUint16(h[6:8], CommandFrameVersion)
+	binary.LittleEndian.PutUint16(h[8:10], uint16(CommandKindRawKVBatch))
+	binary.LittleEndian.PutUint16(h[10:12], uint16(CommandScopeRawKV))
+	binary.LittleEndian.PutUint16(h[52:54], uint16(PayloadFormatRawKVBatchV1))
+	return h
+}()
 
 const commandWALCriticalFlagsMask uint64 = CommandWALNonCriticalFlagStart - 1
 const maxCommandFrameUint32 = uint64(^uint32(0))
@@ -131,6 +141,9 @@ func (b *RawKVBatchPayloadBuilder) Payload() []byte {
 	if b == nil {
 		return nil
 	}
+	if len(b.payload) >= rawKVBatchHeaderSize {
+		binary.LittleEndian.PutUint32(b.payload[2:6], uint32(b.count))
+	}
 	return b.payload
 }
 
@@ -189,26 +202,93 @@ func (b *RawKVBatchPayloadBuilder) Append(op RawKVOperation) (keyView, valueView
 // AppendSet appends a validated RawKV Set operation without materializing a
 // RawKVOperation wrapper. The key and value must be non-nil.
 func (b *RawKVBatchPayloadBuilder) AppendSet(key, value []byte) (keyView, valueView []byte, err error) {
+	if b == nil {
+		return nil, nil, ErrCorrupt
+	}
 	if key == nil || value == nil {
 		return nil, nil, ErrCorrupt
+	}
+	if b.payload == nil {
+		_ = b.ResetWithHint(0, 0)
+	}
+	if commandFrameIntExceedsUint32(b.count + 1) {
+		return nil, nil, ErrRecordTooLarge
 	}
 	if commandFrameIntExceedsUint32(len(key)) || commandFrameIntExceedsUint32(len(value)) {
 		return nil, nil, ErrRecordTooLarge
 	}
-	return b.appendValidated(RawKVOpSet, key, value)
+	off, err := b.appendRawKVPayloadSpace(rawKVOpHeaderSize + len(key) + len(value))
+	if err != nil {
+		return nil, nil, err
+	}
+	b.payload[off] = byte(RawKVOpSet)
+	binary.LittleEndian.PutUint32(b.payload[off+1:off+5], uint32(len(key)))
+	binary.LittleEndian.PutUint32(b.payload[off+5:off+9], uint32(len(value)))
+	off += rawKVOpHeaderSize
+	keyStart := off
+	copy(b.payload[off:], key)
+	off += len(key)
+	valueStart := off
+	copy(b.payload[off:], value)
+	off += len(value)
+	b.count++
+	return b.payload[keyStart : keyStart+len(key) : keyStart+len(key)], b.payload[valueStart:off:off], nil
 }
 
 // AppendDelete appends a validated RawKV Delete operation without
 // materializing a RawKVOperation wrapper. The key must be non-nil.
 func (b *RawKVBatchPayloadBuilder) AppendDelete(key []byte) (keyView []byte, err error) {
+	if b == nil {
+		return nil, ErrCorrupt
+	}
 	if key == nil {
 		return nil, ErrCorrupt
+	}
+	if b.payload == nil {
+		_ = b.ResetWithHint(0, 0)
+	}
+	if commandFrameIntExceedsUint32(b.count + 1) {
+		return nil, ErrRecordTooLarge
 	}
 	if commandFrameIntExceedsUint32(len(key)) {
 		return nil, ErrRecordTooLarge
 	}
-	keyView, _, err = b.appendValidated(RawKVOpDelete, key, nil)
-	return keyView, err
+	off, err := b.appendRawKVPayloadSpace(rawKVOpHeaderSize + len(key))
+	if err != nil {
+		return nil, err
+	}
+	b.payload[off] = byte(RawKVOpDelete)
+	binary.LittleEndian.PutUint32(b.payload[off+1:off+5], uint32(len(key)))
+	binary.LittleEndian.PutUint32(b.payload[off+5:off+9], 0)
+	off += rawKVOpHeaderSize
+	keyStart := off
+	copy(b.payload[off:], key)
+	off += len(key)
+	b.count++
+	return b.payload[keyStart:off:off], nil
+}
+
+func (b *RawKVBatchPayloadBuilder) appendRawKVPayloadSpace(needed int) (int, error) {
+	if needed > int(^uint32(0))-len(b.payload) || needed > int(^uint(0)>>1)-len(b.payload) {
+		return 0, ErrRecordTooLarge
+	}
+	off := len(b.payload)
+	newLen := off + needed
+	if newLen > cap(b.payload) {
+		newCap := cap(b.payload) * 2
+		if newCap < newLen {
+			newCap = newLen
+		}
+		if newCap < 0 {
+			return 0, ErrRecordTooLarge
+		}
+		next := make([]byte, newLen, newCap)
+		copy(next, b.payload)
+		b.payload = next
+	} else {
+		b.payload = b.payload[:newLen]
+	}
+	return off, nil
 }
 
 func (b *RawKVBatchPayloadBuilder) appendValidated(op RawKVOp, key, value []byte) (keyView, valueView []byte, err error) {
@@ -221,25 +301,9 @@ func (b *RawKVBatchPayloadBuilder) appendValidated(op RawKVOp, key, value []byte
 	if commandFrameIntExceedsUint32(b.count + 1) {
 		return nil, nil, ErrRecordTooLarge
 	}
-	needed := rawKVOpHeaderSize + len(key) + len(value)
-	if needed > int(^uint32(0))-len(b.payload) || needed > int(^uint(0)>>1)-len(b.payload) {
-		return nil, nil, ErrRecordTooLarge
-	}
-	off := len(b.payload)
-	newLen := off + needed
-	if newLen > cap(b.payload) {
-		newCap := cap(b.payload) * 2
-		if newCap < newLen {
-			newCap = newLen
-		}
-		if newCap < 0 {
-			return nil, nil, ErrRecordTooLarge
-		}
-		next := make([]byte, newLen, newCap)
-		copy(next, b.payload)
-		b.payload = next
-	} else {
-		b.payload = b.payload[:newLen]
+	off, err := b.appendRawKVPayloadSpace(rawKVOpHeaderSize + len(key) + len(value))
+	if err != nil {
+		return nil, nil, err
 	}
 	b.payload[off] = byte(op)
 	binary.LittleEndian.PutUint32(b.payload[off+1:off+5], uint32(len(key)))
@@ -252,7 +316,6 @@ func (b *RawKVBatchPayloadBuilder) appendValidated(op RawKVOp, key, value []byte
 	copy(b.payload[off:], value)
 	off += len(value)
 	b.count++
-	binary.LittleEndian.PutUint32(b.payload[2:6], uint32(b.count))
 	keyView = b.payload[keyStart : keyStart+len(key) : keyStart+len(key)]
 	if op == RawKVOpSet {
 		valueView = b.payload[valueStart:off:off]
@@ -354,15 +417,9 @@ func encodeRawKVSingleCommandFrameTo(dst []byte, lsn, baseAppliedLSN uint64, op 
 		dst = dst[:total]
 	}
 	frame := dst
-	clear(frame[:commandFrameHeaderSize])
-	copy(frame[0:4], commandFrameMagic[:])
-	binary.LittleEndian.PutUint16(frame[4:6], CommandFrameVersion)
-	binary.LittleEndian.PutUint16(frame[6:8], CommandFrameVersion)
-	binary.LittleEndian.PutUint16(frame[8:10], uint16(CommandKindRawKVBatch))
-	binary.LittleEndian.PutUint16(frame[10:12], uint16(CommandScopeRawKV))
+	copy(frame[:commandFrameHeaderSize], rawKVCommandFrameHeaderTemplate[:])
 	binary.LittleEndian.PutUint64(frame[20:28], lsn)
 	binary.LittleEndian.PutUint64(frame[44:52], baseAppliedLSN)
-	binary.LittleEndian.PutUint16(frame[52:54], uint16(PayloadFormatRawKVBatchV1))
 	binary.LittleEndian.PutUint32(frame[56:60], uint32(payloadLen))
 
 	off := commandFrameHeaderSize
@@ -387,6 +444,66 @@ func encodeRawKVSingleCommandFrameTo(dst []byte, lsn, baseAppliedLSN uint64, op 
 	digest := sha256.Sum256(frame[payloadStart:off])
 	copy(frame[72:72+sha256.Size], digest[:])
 	return frame, nil
+}
+
+func encodeTrustedRawKVPointCommandFrameTo(dst []byte, lsn, baseAppliedLSN uint64, op RawKVOp, key, value []byte) ([]byte, error) {
+	if lsn == 0 {
+		return nil, fmt.Errorf("%w: zero lsn", ErrCorrupt)
+	}
+	if op != RawKVOpSet && op != RawKVOpDelete {
+		return nil, fmt.Errorf("commitlog: unsupported trusted raw kv point op %d", op)
+	}
+	valueLen := len(value)
+	if op == RawKVOpDelete {
+		valueLen = 0
+	}
+	if commandFrameIntExceedsUint32(len(key)) || commandFrameIntExceedsUint32(valueLen) {
+		return nil, ErrRecordTooLarge
+	}
+	payloadLen := rawKVBatchHeaderSize + rawKVOpHeaderSize + len(key) + valueLen
+	total, err := commandFrameEncodedSizeFromLengths(payloadLen, 0, 0, 0)
+	if err != nil {
+		return nil, err
+	}
+	return encodeTrustedRawKVPointCommandFrameSizedTo(dst, lsn, baseAppliedLSN, op, key, value, valueLen, payloadLen, total)
+}
+
+func encodeTrustedRawKVPointCommandFrameSizedTo(dst []byte, lsn, baseAppliedLSN uint64, op RawKVOp, key, value []byte, valueLen, payloadLen, total int) ([]byte, error) {
+	frame := encodeTrustedRawKVPointCommandFramePayloadSizedTo(dst, lsn, baseAppliedLSN, op, key, value, valueLen, payloadLen, total)
+	payloadStart := commandFrameHeaderSize
+	payloadEnd := payloadStart + payloadLen
+	digest := sha256.Sum256(frame[payloadStart:payloadEnd])
+	copy(frame[72:72+sha256.Size], digest[:])
+	return frame, nil
+}
+
+func encodeTrustedRawKVPointCommandFramePayloadSizedTo(dst []byte, lsn, baseAppliedLSN uint64, op RawKVOp, key, value []byte, valueLen, payloadLen, total int) []byte {
+	if cap(dst) < total {
+		dst = make([]byte, total)
+	} else {
+		dst = dst[:total]
+	}
+	frame := dst
+	copy(frame[:commandFrameHeaderSize], rawKVCommandFrameHeaderTemplate[:])
+	binary.LittleEndian.PutUint64(frame[20:28], lsn)
+	binary.LittleEndian.PutUint64(frame[44:52], baseAppliedLSN)
+	binary.LittleEndian.PutUint32(frame[56:60], uint32(payloadLen))
+
+	off := commandFrameHeaderSize
+	binary.LittleEndian.PutUint16(frame[off:off+2], 1)
+	binary.LittleEndian.PutUint32(frame[off+2:off+6], 1)
+	off += rawKVBatchHeaderSize
+	frame[off] = byte(op)
+	binary.LittleEndian.PutUint32(frame[off+1:off+5], uint32(len(key)))
+	binary.LittleEndian.PutUint32(frame[off+5:off+9], uint32(valueLen))
+	off += rawKVOpHeaderSize
+	copy(frame[off:], key)
+	off += len(key)
+	if op == RawKVOpSet {
+		copy(frame[off:], value)
+		off += valueLen
+	}
+	return frame
 }
 
 func commandFrameEncodedSize(env CommandEnvelope) (int, error) {

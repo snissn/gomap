@@ -644,6 +644,15 @@ func TestEncodeRawKVSingleCommandFrameMatchesEnvelopeEncoder(t *testing.T) {
 		if !bytes.Equal(got, want) {
 			t.Fatalf("single-op frame mismatch for op %v\ngot  %x\nwant %x", op.Op, got, want)
 		}
+		if op.Op == RawKVOpSet || op.Op == RawKVOpDelete {
+			trusted, err := encodeTrustedRawKVPointCommandFrameTo(nil, 7, 3, op.Op, op.Key, op.Value)
+			if err != nil {
+				t.Fatalf("encodeTrustedRawKVPointCommandFrameTo(%v): %v", op.Op, err)
+			}
+			if !bytes.Equal(trusted, want) {
+				t.Fatalf("trusted point frame mismatch for op %v\ngot  %x\nwant %x", op.Op, trusted, want)
+			}
+		}
 	}
 }
 

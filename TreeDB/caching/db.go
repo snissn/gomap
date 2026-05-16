@@ -2834,6 +2834,10 @@ type backendBatchPointerSetterView interface {
 	SetPointerView(key []byte, ptr page.ValuePtr) error
 }
 
+type backendBatchCommandWALPublisher interface {
+	SetCommandWALPublish(appliedLSN uint64, covered []backenddb.CommandWALLSNRange) error
+}
+
 func reserveBackendBatchOps(backendBatch batch.Interface, n int) {
 	if backendBatch == nil || n <= 0 {
 		return
@@ -3393,6 +3397,16 @@ func (db *DB) SetDictStore(store DictStore) {
 		})
 	}
 	db.ensureValueLogDictTrainer()
+}
+
+// SetCommandWALCheckpointPublishHook installs an optional hook that lets a
+// caller publish already-covered command-WAL LSNs in the same backend commit
+// that Checkpoint uses for its root/sync boundary.
+func (db *DB) SetCommandWALCheckpointPublishHook(h func(sync bool) (uint64, []backenddb.CommandWALLSNRange, error)) {
+	if db == nil {
+		return
+	}
+	db.commandWALCheckpointPublish = h
 }
 
 // SetTemplateStore installs the template store used for template compression.
@@ -6546,6 +6560,7 @@ type DB struct {
 	rootPublishedSet                 *publishedRootSet
 	rootPublishStats                 rootDomainPublishTelemetry
 	rootPublishHook                  func(*rootPublishGroup) error
+	commandWALCheckpointPublish      func(sync bool) (uint64, []backenddb.CommandWALLSNRange, error)
 	dirtyRootPublishGroupID          uint64
 	dirtyRootPublishGroupPending     bool
 	rootPublishRetryPending          bool
@@ -19413,6 +19428,18 @@ func (db *DB) Checkpoint() error {
 	// Flush all queued memtables with backend sync.
 	db.flushAllLocked(true)
 
+	var (
+		commandWALAppliedLSN uint64
+		commandWALRanges     []backenddb.CommandWALLSNRange
+	)
+	if db.commandWALCheckpointPublish != nil {
+		var err error
+		commandWALAppliedLSN, commandWALRanges, err = db.commandWALCheckpointPublish(true)
+		if err != nil {
+			return err
+		}
+	}
+
 	segments, nonEmptyBytes := listNonEmptyLogSegments(walDir)
 	if len(segments) > 0 {
 		filtered := segments[:0]
@@ -19430,8 +19457,28 @@ func (db *DB) Checkpoint() error {
 	}
 	// New logic: perform sync write only if not relaxedSync
 	var commitErr error
-	if nonEmptyBytes > 0 {
-		if db.relaxedSync {
+	if nonEmptyBytes > 0 || commandWALAppliedLSN != 0 {
+		if commandWALAppliedLSN != 0 {
+			backendBatch := db.newBackendBatchWithSize(0)
+			publisher, ok := backendBatch.(backendBatchCommandWALPublisher)
+			if !ok {
+				_ = backendBatch.Close()
+				return errors.New("cachingdb: backend batch cannot publish command wal applied lsn")
+			}
+			if err := publisher.SetCommandWALPublish(commandWALAppliedLSN, commandWALRanges); err != nil {
+				_ = backendBatch.Close()
+				return err
+			}
+			if db.relaxedSync {
+				commitErr = backendBatch.Write()
+			} else {
+				commitErr = backendBatch.WriteSync()
+			}
+			cerr := backendBatch.Close()
+			if commitErr == nil {
+				commitErr = cerr
+			}
+		} else if db.relaxedSync {
 			backendBatch := db.backend.NewBatch()
 			// If relaxed sync, just write the batch without forcing sync
 			commitErr = backendBatch.Write()
@@ -26976,12 +27023,14 @@ type Batch struct {
 	closed bool
 	// SetView/DeleteView keep caller-owned bytes until Write/Close, so memtables
 	// must not borrow the batch arena when any view op is present.
-	hasViewOps     bool
-	streamEligible bool
-	streamTried    bool
-	firstKey       []byte
-	lastKey        []byte
-	batchRange     keyRange
+	hasViewOps       bool
+	streamEligible   bool
+	streamTried      bool
+	streamBypassOff  bool
+	firstKey         []byte
+	lastKey          []byte
+	batchRange       keyRange
+	commandWALAppend func() error
 }
 
 func (db *DB) NewBatch() *Batch {
@@ -27005,6 +27054,16 @@ func (db *DB) NewBatchWithSize(size int) *Batch {
 		copyArenaCap:   db.batchCopyArenaInitCap(reserveHint),
 		streamEligible: true,
 	}
+}
+
+// DisableStreamingBypass keeps subsequent writes on the cached memtable path.
+// Command-WAL public batches use this so the command frame can be appended
+// after cached preflight and before the batch becomes visible.
+func (b *Batch) DisableStreamingBypass() {
+	if b == nil {
+		return
+	}
+	b.streamBypassOff = true
 }
 
 func clampAppendOnlyEntryHint(entries int) int {
@@ -27427,11 +27486,13 @@ func (b *Batch) Reset() {
 	b.walBuf = b.walBuf[:0]
 	b.streamEligible = true
 	b.streamTried = false
+	b.streamBypassOff = false
 	b.hasViewOps = false
 	b.firstKey = nil
 	b.lastKey = nil
 	b.batchRange = keyRange{}
 	b.maxEntries = 0
+	b.commandWALAppend = nil
 	if b.ptrValueIdxs != nil {
 		b.ptrValueIdxs = b.ptrValueIdxs[:0]
 	}
@@ -27859,6 +27920,12 @@ func (b *Batch) SetView(key, value []byte) error {
 	if value == nil {
 		return ErrValueNil
 	}
+	return b.SetViewValidated(key, value)
+}
+
+// SetViewValidated is SetView for callers that already performed public input
+// validation. The caller must still keep key/value immutable until Write/Close.
+func (b *Batch) SetViewValidated(key, value []byte) error {
 	batchSetViewCallsTotal.Add(1)
 	batchSetViewBytesTotal.Add(uint64(len(key) + len(value)))
 
@@ -27944,7 +28011,12 @@ func (b *Batch) DeleteView(key []byte) error {
 	if len(key) == 0 {
 		return ErrKeyEmpty
 	}
+	return b.DeleteViewValidated(key)
+}
 
+// DeleteViewValidated is DeleteView for callers that already performed public
+// input validation. The caller must keep key immutable until Write/Close.
+func (b *Batch) DeleteViewValidated(key []byte) error {
 	if b.backend != nil {
 		b.batchRange.add(key)
 		b.size += len(key)
@@ -28078,7 +28150,7 @@ func batchCopyArenaInitCapForEntries(entries int) int {
 }
 
 func (b *Batch) maybeSwitchToStreaming() {
-	if b.streamTried || !b.streamEligible || b.backend != nil {
+	if b.streamBypassOff || b.streamTried || !b.streamEligible || b.backend != nil {
 		return
 	}
 	// Streaming writes directly to the backend batch and therefore bypasses the
@@ -28156,6 +28228,36 @@ func (b *Batch) WriteSync() error {
 	return b.write(true)
 }
 
+// WriteAfterCommandWALAppend writes a cached batch by running appendCommand
+// after cached write preflight succeeds and before the mutation becomes
+// visible in the mutable table. This is intentionally limited to command-WAL
+// public mode, where the cached redo log is disabled.
+func (b *Batch) WriteAfterCommandWALAppend(sync bool, appendCommand func() error) error {
+	if b == nil || b.db == nil {
+		return backenddb.ErrClosed
+	}
+	if b.closed {
+		return ErrBatchClosed
+	}
+	if appendCommand == nil {
+		return fmt.Errorf("cachingdb: missing command wal append callback")
+	}
+	if !b.db.disableJournal {
+		return fmt.Errorf("cachingdb: command wal batch writes require disabled cached redo log")
+	}
+	b.db.waitForCheckpoint()
+	if b.backend != nil {
+		return fmt.Errorf("cachingdb: command wal batch writes require cached memtable path")
+	}
+
+	prevAppend := b.commandWALAppend
+	b.commandWALAppend = appendCommand
+	defer func() {
+		b.commandWALAppend = prevAppend
+	}()
+	return b.writeRegular(sync)
+}
+
 func (b *Batch) write(sync bool) error {
 	if b.closed {
 		return ErrBatchClosed
@@ -28222,7 +28324,7 @@ func (b *Batch) tryWriteWALOffStreamBypass(sync bool) (bool, error) {
 	if !b.db.deferredValueLogEnabled() {
 		return false, nil
 	}
-	if b.backend != nil || !b.streamEligible {
+	if b.backend != nil || b.streamBypassOff || !b.streamEligible {
 		return false, nil
 	}
 	if b.firstKey == nil || b.lastKey == nil {
@@ -28313,6 +28415,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 	b.db.writeMu.RLock()
 	needRotate := false
 	needSyncBarrier := false
+	commandWALAppended := false
 
 	// 1. Memtable capacity pre-check
 	shardCount := len(b.db.mutableShards)
@@ -28716,6 +28819,14 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 		}
 	}
 
+	if b.commandWALAppend != nil {
+		if err := b.commandWALAppend(); err != nil {
+			b.db.writeMu.RUnlock()
+			return err
+		}
+		commandWALAppended = true
+	}
+
 	if !allDeletes {
 		// Before borrowing batch arena chunks into memtables, compact
 		// pathologically underfilled tail chunks by cloning only the aliased
@@ -28969,12 +29080,20 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 
 	if needRotate {
 		if err := b.db.maybeRotateMemtable(true); err != nil {
-			return err
+			if commandWALAppended {
+				b.db.reportError(fmt.Errorf("cachingdb: post-command-wal batch rotate failed: %w", err))
+			} else {
+				return err
+			}
 		}
 	}
 	if needSyncBarrier {
 		if err := b.db.syncBarrierAfterWrite(true); err != nil {
-			return err
+			if commandWALAppended {
+				b.db.reportError(fmt.Errorf("cachingdb: post-command-wal batch sync barrier failed: %w", err))
+			} else {
+				return err
+			}
 		}
 	}
 

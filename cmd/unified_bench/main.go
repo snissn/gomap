@@ -4164,6 +4164,11 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		if err := inst.Wrapper.Close(); err != nil {
 			return BenchRun{}, fmt.Errorf("close %s: %w", inst.Name, err)
 		}
+		if hasStatsProvider {
+			if postCloseStats := sp.Stats(); len(postCloseStats) > 0 {
+				statsSnapshot = postCloseStats
+			}
+		}
 		if len(statsSnapshot) > 0 {
 			copySnap := make(map[string]string, len(statsSnapshot))
 			for k, v := range statsSnapshot {

@@ -335,6 +335,39 @@ func (db *DB) AppendRawKVSingleCommandWAL(op commitlog.RawKVOperation, sync bool
 	return lsn, nil
 }
 
+// AppendRawKVPointCommandWALTrusted appends a caller-validated public raw KV
+// point Set/Delete command. It is intended for public cached command-WAL writes
+// after cached preflight has validated the user input and before visibility.
+func (db *DB) AppendRawKVPointCommandWALTrusted(op commitlog.RawKVOp, key, value []byte, sync bool) (uint64, error) {
+	if db == nil || !db.commandWAL {
+		return 0, nil
+	}
+	if db.durability == DurabilityWALOffRelaxed {
+		return 0, fmt.Errorf("%w: WAL-off durability is incompatible with command WAL", ErrCommandWALUnsupported)
+	}
+	if db.commandJournal == nil {
+		return 0, fmt.Errorf("treedb: command wal journal unavailable")
+	}
+	if db.commandWALFlushPoisoned.Load() {
+		return 0, fmt.Errorf("%w: command wal post-append failure; reopen required", ErrRecoveryRequired)
+	}
+	baseAppliedLSN := uint64(0)
+	if state := db.state.Load(); state != nil {
+		baseAppliedLSN = state.AppliedCommandLSN
+	}
+	lsn, err := db.commandJournal.AppendRawKVPointCommandTrusted(baseAppliedLSN, op, key, value)
+	if err != nil {
+		return 0, err
+	}
+	if sync {
+		err = db.FlushCommandWAL(true)
+	}
+	if err != nil {
+		return 0, err
+	}
+	return lsn, nil
+}
+
 // AppendRawKVBatchPayloadCommandWAL appends a prebuilt RawKVBatch payload as a
 // command frame. When sync is true, it delegates to FlushCommandWAL(true);
 // relaxed durability flushes without fsync.

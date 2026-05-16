@@ -219,6 +219,44 @@ func TestPublicCommandWALBatchCloseDiscardsDirtyPayload(t *testing.T) {
 	}
 }
 
+func TestPublicCommandWALBatchWriteFailureDoesNotAppendFrame(t *testing.T) {
+	db, err := Open(Options{
+		Dir:                 t.TempDir(),
+		Durability:          DurabilityWALOnRelaxed,
+		CommandWAL:          true,
+		CommandWALStatsScan: true,
+		DisableSideStores:   true,
+	})
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	b, ok := db.NewBatch().(*commandWALPublicBatch)
+	if !ok {
+		t.Fatalf("NewBatch type=%T, want *commandWALPublicBatch", db.NewBatch())
+	}
+	defer func() { _ = b.Close() }()
+	if err := b.Set([]byte("k"), []byte("v")); err != nil {
+		t.Fatalf("batch Set: %v", err)
+	}
+	if err := b.inner.Close(); err != nil {
+		t.Fatalf("inner Close: %v", err)
+	}
+	if err := b.Write(); err == nil {
+		t.Fatal("batch Write succeeded after inner batch was closed")
+	}
+
+	stats := db.Stats()
+	frames, err := strconv.ParseUint(stats["treedb.command_wal.frames"], 10, 64)
+	if err != nil {
+		t.Fatalf("parse command_wal.frames=%q: %v", stats["treedb.command_wal.frames"], err)
+	}
+	if frames != 0 {
+		t.Fatalf("command_wal.frames=%d, want 0 after failed batch Write", frames)
+	}
+}
+
 func TestPublicCommandWALPublishSyncMatrix(t *testing.T) {
 	tests := []struct {
 		mode string
