@@ -258,7 +258,15 @@ func (c *Collection) buildVectorIndexPrepared(opts VectorIndexOptions, register,
 			return nil, err
 		}
 	}
-	index.setNativePersistent(collectionMetaDeclaresVectorIndex(c.meta, index.name))
+	nativePersistent := collectionMetaDeclaresVectorIndex(c.meta, index.name)
+	index.setNativePersistent(nativePersistent)
+	if nativePersistent {
+		baseEpoch, err := c.currentNativeVectorIndexRootID(index.name)
+		if err != nil {
+			return nil, err
+		}
+		index.recordFullSnapshotBaseEpoch(baseEpoch)
+	}
 	materializer, err := c.NewStoredDocumentJSONMaterializer()
 	if err != nil {
 		return nil, err
@@ -1056,6 +1064,15 @@ func (idx *VectorIndex) nativeSnapshotBaseEpochForFullSave() uint64 {
 		return idx.persistedEpoch
 	}
 	return idx.fullSnapshotBaseEpoch
+}
+
+func (idx *VectorIndex) recordFullSnapshotBaseEpoch(epoch uint64) {
+	if idx == nil {
+		return
+	}
+	idx.mu.Lock()
+	idx.fullSnapshotBaseEpoch = epoch
+	idx.mu.Unlock()
 }
 
 func (idx *VectorIndex) markVectorMetaDirtyLocked() {
