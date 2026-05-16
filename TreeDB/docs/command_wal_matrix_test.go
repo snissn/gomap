@@ -23,12 +23,13 @@ type commandWALSupportMatrix struct {
 }
 
 type commandWALSupportEntry struct {
-	Surface    string   `json:"surface"`
-	EntryPoint string   `json:"entry_point"`
-	Command    string   `json:"command"`
-	Status     string   `json:"status"`
-	FirstPR    string   `json:"first_pr"`
-	Tests      []string `json:"tests"`
+	Surface     string   `json:"surface"`
+	EntryPoint  string   `json:"entry_point"`
+	Command     string   `json:"command"`
+	Status      string   `json:"status"`
+	PublicError string   `json:"public_error,omitempty"`
+	FirstPR     string   `json:"first_pr"`
+	Tests       []string `json:"tests"`
 }
 
 func TestCommandWALSupportMatrixIsWellFormed(t *testing.T) {
@@ -103,15 +104,7 @@ func TestCommandWALSupportMatrixCoversCollectionMutators(t *testing.T) {
 
 func TestCommandWALSupportMatrixCoversMongoMutationHandlers(t *testing.T) {
 	matrix := loadCommandWALSupportMatrix(t)
-	for _, command := range []string{
-		"create",
-		"insert",
-		"update",
-		"delete",
-		"createIndexes (auto-create collection)",
-		"createIndexes (existing collection)",
-		"dropIndexes",
-	} {
+	for _, command := range mongoGatewayMutationMatrixEntryPoints(t) {
 		requireMatrixEntry(t, matrix, "mongo_gateway", command)
 	}
 }
@@ -138,8 +131,8 @@ func TestCommandWALSupportMatrixDocumentsRejectedCommandsWithPublicError(t *test
 		if entry.Status != "WAL-rejected" {
 			continue
 		}
-		if !strings.Contains(strings.Join(entry.Tests, " "), "Reject") {
-			t.Fatalf("%s/%s WAL-rejected entry lacks rejection evidence: %+v", entry.Surface, entry.EntryPoint, entry)
+		if entry.PublicError != "ErrCommandWALRejected" {
+			t.Fatalf("%s/%s WAL-rejected public_error=%q, want ErrCommandWALRejected", entry.Surface, entry.EntryPoint, entry.PublicError)
 		}
 	}
 	assertFileContains(t, filepath.Join(repoRootForDocsTest(t), "TreeDB", "errors.go"), "ErrCommandWALRejected")
@@ -230,6 +223,84 @@ func requireMatrixEntry(t *testing.T, matrix commandWALSupportMatrix, surface, e
 	}
 	t.Fatalf("matrix missing %s/%s", surface, entryPoint)
 	return commandWALSupportEntry{}
+}
+
+func mongoGatewayMutationMatrixEntryPoints(t *testing.T) []string {
+	t.Helper()
+	_, repoRoot := repoRoots(t)
+	path := filepath.Join(repoRoot, "TreeDB", "mongo_gateway", "server_core.go")
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, path, nil, 0)
+	if err != nil {
+		t.Fatalf("parse mongo gateway dispatch: %v", err)
+	}
+	nonMutating := map[string]struct{}{
+		"buildInfo":        {},
+		"connectionStatus": {},
+		"endSessions":      {},
+		"find":             {},
+		"getMore":          {},
+		"getParameter":     {},
+		"hello":            {},
+		"hostInfo":         {},
+		"isMaster":         {},
+		"ismaster":         {},
+		"killCursors":      {},
+		"listCollections":  {},
+		"listIndexes":      {},
+		"ping":             {},
+		"saslContinue":     {},
+		"saslStart":        {},
+	}
+	commands := make(map[string]struct{})
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Name == nil || fn.Name.Name != "commandResponse" || fn.Body == nil {
+			continue
+		}
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			sw, ok := n.(*ast.SwitchStmt)
+			if !ok {
+				return true
+			}
+			if ident, ok := sw.Tag.(*ast.Ident); !ok || ident.Name != "name" {
+				return true
+			}
+			for _, stmt := range sw.Body.List {
+				cc, ok := stmt.(*ast.CaseClause)
+				if !ok {
+					continue
+				}
+				for _, expr := range cc.List {
+					lit, ok := expr.(*ast.BasicLit)
+					if !ok {
+						continue
+					}
+					command := strings.Trim(lit.Value, `"`)
+					if _, skip := nonMutating[command]; skip {
+						continue
+					}
+					switch command {
+					case "createIndexes":
+						commands["createIndexes (auto-create collection)"] = struct{}{}
+						commands["createIndexes (existing collection)"] = struct{}{}
+					default:
+						commands[command] = struct{}{}
+					}
+				}
+			}
+			return false
+		})
+	}
+	if len(commands) == 0 {
+		t.Fatalf("no mongo gateway mutation commands derived from commandResponse")
+	}
+	out := make([]string, 0, len(commands))
+	for command := range commands {
+		out = append(out, command)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func nativeWireCommandName(t *testing.T, id iwire.CommandID) string {
@@ -387,13 +458,4 @@ func equalStringSlices(got, want []string) bool {
 		}
 	}
 	return true
-}
-
-func sortedSetKeys(set map[string]struct{}) []string {
-	keys := make([]string, 0, len(set))
-	for key := range set {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	return keys
 }
