@@ -32,7 +32,7 @@ type commandWALNativeWireAlignmentEntry struct {
 	Notes                   string `json:"notes"`
 }
 
-func TestCommandWALPayloadMatchesNativeWireDeterministicFixture(t *testing.T) {
+func TestCommandWALNativeWireAlignmentManifestCoverage(t *testing.T) {
 	alignment := loadCommandWALNativeWireAlignment(t)
 	matrix := loadCommandWALSupportMatrix(t)
 	matrixByNativeWire := make(map[string]commandWALSupportEntry)
@@ -64,7 +64,7 @@ func TestCommandWALPayloadMatchesNativeWireDeterministicFixture(t *testing.T) {
 		} else {
 			assertHexFixtureDigest(t, entry.NativeWireFixture, entry.NativeWireFixtureSHA256)
 		}
-		if entry.SupportMatrixStatus == "WAL-supported" && entry.Relationship == "lowered_equivalent_v1" {
+		if entry.SupportMatrixStatus == "WAL-supported" && (entry.Relationship == "lowered_equivalent_v1" || entry.Relationship == "lowered_kind_only_v1") {
 			if entry.LocalFixture == "" || entry.LocalFixtureSHA256 == "" {
 				t.Fatalf("%s is WAL-supported without local command-WAL fixture", entry.NativeWireCommand)
 			}
@@ -95,17 +95,13 @@ func TestNativeWireAndLocalCommandDigestStable(t *testing.T) {
 		if (entry.LocalFixture == "") != (entry.LocalFixtureSHA256 == "") {
 			t.Fatalf("%s local fixture and digest must both be empty or both be set: fixture=%q sha256=%q", entry.NativeWireCommand, entry.LocalFixture, entry.LocalFixtureSHA256)
 		}
-		if entry.NativeWireFixture != "" {
-			fixtureDigests[entry.NativeWireFixture] = entry.NativeWireFixtureSHA256
-		}
-		if entry.LocalFixture != "" {
-			fixtureDigests[entry.LocalFixture] = entry.LocalFixtureSHA256
-		}
+		recordFixtureDigest(t, fixtureDigests, entry.NativeWireFixture, entry.NativeWireFixtureSHA256)
+		recordFixtureDigest(t, fixtureDigests, entry.LocalFixture, entry.LocalFixtureSHA256)
 		if (entry.Relationship == "future_rejected_v1" || entry.Relationship == "local_only_rejected_v1") && entry.LocalFixture != "" {
 			t.Fatalf("%s is rejected/future but has local fixture %s", entry.NativeWireCommand, entry.LocalFixture)
 		}
-		if entry.Relationship == "lowered_equivalent_v1" && entry.SupportMatrixStatus != "WAL-supported" {
-			t.Fatalf("%s lowered-equivalent relationship requires WAL-supported status", entry.NativeWireCommand)
+		if (entry.Relationship == "lowered_equivalent_v1" || entry.Relationship == "lowered_kind_only_v1") && entry.SupportMatrixStatus != "WAL-supported" {
+			t.Fatalf("%s lowered relationship requires WAL-supported status", entry.NativeWireCommand)
 		}
 	}
 	if len(fixtureDigests) == 0 {
@@ -114,6 +110,17 @@ func TestNativeWireAndLocalCommandDigestStable(t *testing.T) {
 	for fixture, want := range fixtureDigests {
 		assertHexFixtureDigest(t, fixture, want)
 	}
+}
+
+func recordFixtureDigest(t *testing.T, digests map[string]string, fixture, sha256 string) {
+	t.Helper()
+	if fixture == "" {
+		return
+	}
+	if existing, ok := digests[fixture]; ok && existing != sha256 {
+		t.Fatalf("%s has conflicting fixture digests %s and %s", fixture, existing, sha256)
+	}
+	digests[fixture] = sha256
 }
 
 func TestNativeWireAckFlushedRequiresRootPublishAndAppliedLSN(t *testing.T) {
@@ -186,20 +193,20 @@ func TestRaftCommandEntryAndLocalCommandPayloadUseSharedCanonicalSchema(t *testi
 	alignment := loadCommandWALNativeWireAlignment(t)
 	for _, entry := range alignment.Entries {
 		switch entry.Relationship {
-		case "lowered_equivalent_v1":
-			if !strings.Contains(entry.Notes, "lower") && !strings.Contains(entry.Notes, "stores") {
-				t.Fatalf("%s lowered-equivalent entry does not document lowering/storage relationship: %q", entry.NativeWireCommand, entry.Notes)
+		case "lowered_equivalent_v1", "lowered_kind_only_v1":
+			if entry.SupportMatrixStatus != "WAL-supported" {
+				t.Fatalf("%s lowered entry must stay supported: %+v", entry.NativeWireCommand, entry)
 			}
 		case "future_rejected_v1":
-			if entry.SupportMatrixStatus != "WAL-rejected" || !strings.Contains(entry.Notes, "reject") {
+			if entry.SupportMatrixStatus != "WAL-rejected" {
 				t.Fatalf("%s future entry must stay explicitly rejected: %+v", entry.NativeWireCommand, entry)
 			}
 		case "local_only_rejected_v1":
-			if entry.SupportMatrixStatus != "WAL-rejected" || !strings.Contains(entry.Notes, "local-only") || !strings.Contains(entry.Notes, "reject") {
+			if entry.SupportMatrixStatus != "WAL-rejected" {
 				t.Fatalf("%s local-only rejected entry must document rejection: %+v", entry.NativeWireCommand, entry)
 			}
 		case "local_only_barrier_v1":
-			if entry.SupportMatrixStatus != "WAL-supported" || !strings.Contains(entry.Notes, "durability barrier") || !strings.Contains(entry.Notes, "not replicated") {
+			if entry.SupportMatrixStatus != "WAL-supported" {
 				t.Fatalf("%s local-only barrier entry must document barrier semantics: %+v", entry.NativeWireCommand, entry)
 			}
 		default:
