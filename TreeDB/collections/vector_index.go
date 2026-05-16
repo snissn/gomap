@@ -346,6 +346,9 @@ func (c *Collection) RegisterVectorIndex(index *VectorIndex) {
 	index.collection = c
 	index.setNativePersistent(collectionMetaDeclaresVectorIndex(c.meta, index.name))
 	c.vectorIndexes[index.name] = index
+	if c.manager != nil {
+		c.manager.registerCollectionHandle(c)
+	}
 }
 
 // UnregisterVectorIndex detaches a registered in-memory vector index.
@@ -354,8 +357,12 @@ func (c *Collection) UnregisterVectorIndex(name string) {
 		return
 	}
 	c.vectorIndexesMu.Lock()
-	defer c.vectorIndexesMu.Unlock()
 	delete(c.vectorIndexes, name)
+	empty := len(c.vectorIndexes) == 0
+	c.vectorIndexesMu.Unlock()
+	if empty && c.manager != nil {
+		c.manager.unregisterCollectionHandle(c)
+	}
 }
 
 func (c *Collection) registeredVectorIndexes() []*VectorIndex {

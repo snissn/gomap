@@ -307,6 +307,7 @@ type CollectionManager struct {
 
 type Collection struct {
 	db                *backenddb.DB
+	manager           *CollectionManager
 	writeDomain       *collectionWriteDomain
 	meta              CollectionMeta
 	catalogMu         sync.RWMutex
@@ -2474,9 +2475,10 @@ func (m *CollectionManager) existingWriteDomainForCollection(name string) *colle
 	return m.domains[name]
 }
 
-// FlushAll publishes buffered writes for every collection opened through this
-// manager. The backend DB also calls this as a close hook while write APIs are
-// still available.
+// FlushAll publishes buffered writes for every collection write domain known to
+// this manager, then persists dirty native vector indexes registered through
+// collection handles. The backend DB also calls this as a close hook while
+// write APIs are still available.
 func (m *CollectionManager) FlushAll() error {
 	if m == nil || m.db == nil {
 		return nil
@@ -2691,7 +2693,6 @@ func (m *CollectionManager) OpenCollection(name string) (*Collection, error) {
 		if m.db.IsClosing() {
 			return nil, backenddb.ErrClosed
 		}
-		m.registerCollectionHandle(collection)
 		return collection, nil
 	}
 	snap := m.db.AcquireSnapshot()
@@ -2708,6 +2709,7 @@ func (m *CollectionManager) OpenCollection(name string) (*Collection, error) {
 	}
 	collection := &Collection{
 		db:          m.db,
+		manager:     m,
 		writeDomain: m.writeDomainForCollection(catalog.meta.Name),
 		// Collection catalogs are immutable once loaded; public Meta returns a
 		// defensive copy, so handles can keep the catalog meta value directly.
@@ -2718,7 +2720,6 @@ func (m *CollectionManager) OpenCollection(name string) (*Collection, error) {
 	}
 	collection.rememberCatalog(snap, catalog)
 	collection.noteWriteDomainCatalog(snapshotSystemRoot(snap), catalog)
-	m.registerCollectionHandle(collection)
 	return collection, nil
 }
 
@@ -2732,6 +2733,15 @@ func (m *CollectionManager) registerCollectionHandle(collection *Collection) {
 		m.collections = make(map[*Collection]struct{})
 	}
 	m.collections[collection] = struct{}{}
+}
+
+func (m *CollectionManager) unregisterCollectionHandle(collection *Collection) {
+	if m == nil || collection == nil {
+		return
+	}
+	m.collectionsMu.Lock()
+	defer m.collectionsMu.Unlock()
+	delete(m.collections, collection)
 }
 
 func (m *CollectionManager) openCollectionFromWriteDomainCache(name string) (*Collection, bool) {
@@ -2758,6 +2768,7 @@ func (m *CollectionManager) openCollectionFromWriteDomainCache(name string) (*Co
 	}
 	collection := &Collection{
 		db:          m.db,
+		manager:     m,
 		writeDomain: domain,
 		// Collection catalogs are immutable once loaded; public Meta returns a
 		// defensive copy, so handles can keep the catalog meta value directly.
