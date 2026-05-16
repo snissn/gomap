@@ -914,7 +914,7 @@ func TestRunBenchmark_CheckpointBetweenTests_RunsFinalCheckpoint(t *testing.T) {
 }
 
 func TestRunBenchmark_CapturesTreeDBStatsAfterClose(t *testing.T) {
-	const dbName = "close_stats_mock"
+	const dbName = "treedb_close_stats_mock"
 	RegisterHiddenDB(dbName, func(dir string) (kvstore.DB, error) {
 		return &closeStatsDB{name: dbName}, nil
 	})

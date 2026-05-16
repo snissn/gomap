@@ -4164,7 +4164,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		if err := inst.Wrapper.Close(); err != nil {
 			return BenchRun{}, fmt.Errorf("close %s: %w", inst.Name, err)
 		}
-		if hasStatsProvider {
+		if hasStatsProvider && isTreeDBInstance(inst) {
 			if postCloseStats := sp.Stats(); len(postCloseStats) > 0 {
 				statsSnapshot = postCloseStats
 			}

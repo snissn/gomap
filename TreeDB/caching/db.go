@@ -19434,7 +19434,7 @@ func (db *DB) Checkpoint() error {
 	)
 	if db.commandWALCheckpointPublish != nil {
 		var err error
-		commandWALAppliedLSN, commandWALRanges, err = db.commandWALCheckpointPublish(true)
+		commandWALAppliedLSN, commandWALRanges, err = db.commandWALCheckpointPublish(!db.relaxedSync)
 		if err != nil {
 			return err
 		}

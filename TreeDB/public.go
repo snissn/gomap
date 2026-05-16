@@ -127,7 +127,10 @@ type DB struct {
 	commandWALCached                     bool
 	commandWALFirst                      atomic.Uint64
 	commandWALLast                       atomic.Uint64
+	commandWALLiveFrames                 atomic.Uint64
+	commandWALLiveMaxLSN                 atomic.Uint64
 	testAfterPublicCommandWALPointAppend func(commitlog.RawKVOperation)
+	testAfterCachedCheckpoint            func()
 	bgVac                                bgIndexVacuumWorker
 	notifyError                          func(error)
 	bgErrMu                              sync.Mutex
@@ -1302,7 +1305,9 @@ func (db *DB) Close() error {
 	// Close cached layer first if present
 	if db.cached != nil {
 		if db.commandWALCached {
-			err = errors.Join(err, db.Checkpoint())
+			if e := db.Checkpoint(); e != nil {
+				db.reportError(fmt.Errorf("treedb: final command WAL checkpoint during close: %w", e))
+			}
 		}
 		err = errors.Join(err, db.cached.Close())
 		db.cached = nil
@@ -1701,6 +1706,7 @@ func (db *DB) Stats() map[string]string {
 			stats = make(map[string]string)
 		}
 		writePathStatsInto(stats, db.writePath)
+		db.publicCommandWALLiveStatsInto(stats)
 		stats["treedb.durability_mode"] = db.durabilityMode
 		bgIndexVacuumStatsInto(stats, &db.bgVac)
 		maintenanceStatsInto(stats, &db.maintenance)
@@ -1770,7 +1776,11 @@ func (db *DB) Checkpoint() error {
 		if err := db.cached.Checkpoint(); err != nil {
 			return err
 		}
-		return db.publishPublicCommandWALPending(true)
+		if db.testAfterCachedCheckpoint != nil {
+			db.testAfterCachedCheckpoint()
+		}
+		db.clearPublishedPublicCommandWALPending()
+		return nil
 	}
 	return db.backend.Checkpoint()
 }

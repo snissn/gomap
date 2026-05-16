@@ -76,6 +76,9 @@ func (o *JournalOwner) rollbackReservedLSN(lsn uint64) error {
 	return o.rollbackReservedLSNLocked(lsn)
 }
 
+// rollbackReservedLSNLocked rolls back the tail LSN. Callers must serialize
+// owner access by holding either o.mu (direct JournalOwner callers) or the
+// owning CommandJournal's mutex when the owner is private to that journal.
 func (o *JournalOwner) rollbackReservedLSNLocked(lsn uint64) error {
 	if o.lock == nil {
 		return errors.New("commitlog: journal owner is closed")
@@ -112,6 +115,9 @@ func (o *JournalOwner) reserveLSNRange(count uint64) (first uint64, last uint64,
 	return o.reserveLSNRangeLocked(count)
 }
 
+// reserveLSNLocked reserves one LSN. Callers must serialize owner access by
+// holding either o.mu (direct JournalOwner callers) or the owning
+// CommandJournal's mutex when the owner is private to that journal.
 func (o *JournalOwner) reserveLSNLocked() (uint64, error) {
 	first, _, err := o.reserveLSNRangeLocked(1)
 	return first, err

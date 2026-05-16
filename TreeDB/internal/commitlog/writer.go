@@ -576,7 +576,7 @@ func (w *Writer) flushBufferedCommandFrames() error {
 		}
 		frame := w.commandBuf[frameStart:frameEnd]
 		payloadLen := int(binary.LittleEndian.Uint32(frame[56:60]))
-		if payloadLen < 0 || commandFrameHeaderSize+payloadLen > size {
+		if commandFrameHeaderSize+payloadLen > size {
 			return ErrCorrupt
 		}
 		payload := frame[commandFrameHeaderSize : commandFrameHeaderSize+payloadLen]

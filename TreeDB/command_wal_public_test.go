@@ -1,12 +1,14 @@
 package treedb
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"sync"
 	"testing"
 	"time"
 
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 )
 
@@ -254,6 +256,138 @@ func TestPublicCommandWALBatchWriteFailureDoesNotAppendFrame(t *testing.T) {
 	}
 	if frames != 0 {
 		t.Fatalf("command_wal.frames=%d, want 0 after failed batch Write", frames)
+	}
+}
+
+func TestPublicCommandWALCheckpointPublishesOnlyCoveredLSNs(t *testing.T) {
+	db, err := Open(Options{
+		Dir:                 t.TempDir(),
+		Durability:          DurabilityWALOnRelaxed,
+		CommandWAL:          true,
+		CommandWALStatsScan: true,
+		DisableSideStores:   true,
+	})
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	if err := db.Set([]byte("covered"), []byte("v1")); err != nil {
+		t.Fatalf("covered Set: %v", err)
+	}
+
+	var hookOnce sync.Once
+	db.testAfterCachedCheckpoint = func() {
+		hookOnce.Do(func() {
+			if err := db.Set([]byte("post-cut"), []byte("v2")); err != nil {
+				t.Errorf("post-cut Set: %v", err)
+			}
+		})
+	}
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	db.testAfterCachedCheckpoint = nil
+
+	if got := db.backend.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("AppliedCommandLSN after checkpoint=%d, want only covered LSN 1", got)
+	}
+	first, last := db.publicCommandWALPendingRange()
+	if first != 2 || last != 2 {
+		t.Fatalf("pending command WAL range=(%d,%d), want post-cut LSN range (2,2)", first, last)
+	}
+	got, err := db.Get([]byte("post-cut"))
+	if err != nil {
+		t.Fatalf("Get(post-cut): %v", err)
+	}
+	if string(got) != "v2" {
+		t.Fatalf("Get(post-cut)=%q, want v2", got)
+	}
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("second Checkpoint: %v", err)
+	}
+	if got := db.backend.State().AppliedCommandLSN; got != 2 {
+		t.Fatalf("AppliedCommandLSN after second checkpoint=%d, want 2", got)
+	}
+}
+
+func TestPublicCommandWALCheckpointHookUsesSyncIntent(t *testing.T) {
+	tests := []struct {
+		name       string
+		durability DurabilityMode
+		wantSync   bool
+	}{
+		{name: "durable", durability: DurabilityDurable, wantSync: true},
+		{name: "relaxed", durability: DurabilityWALOnRelaxed, wantSync: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db, err := Open(Options{
+				Dir:               t.TempDir(),
+				Durability:        tt.durability,
+				CommandWAL:        true,
+				DisableSideStores: true,
+			})
+			if err != nil {
+				t.Fatalf("Open command WAL: %v", err)
+			}
+			defer func() { _ = db.Close() }()
+			if err := db.Set([]byte("k"), []byte("v")); err != nil {
+				t.Fatalf("Set: %v", err)
+			}
+
+			called := false
+			db.cached.SetCommandWALCheckpointPublishHook(func(sync bool) (uint64, []backenddb.CommandWALLSNRange, error) {
+				called = true
+				if sync != tt.wantSync {
+					t.Fatalf("checkpoint hook sync=%t, want %t", sync, tt.wantSync)
+				}
+				return 0, nil, nil
+			})
+			if err := db.Checkpoint(); err != nil {
+				t.Fatalf("Checkpoint: %v", err)
+			}
+			if !called {
+				t.Fatal("checkpoint publish hook was not called")
+			}
+		})
+	}
+}
+
+func TestPublicCommandWALCloseReportsFinalCheckpointError(t *testing.T) {
+	checkpointErr := errors.New("forced checkpoint failure")
+	var notified []error
+	db, err := Open(Options{
+		Dir:               t.TempDir(),
+		Durability:        DurabilityWALOnRelaxed,
+		CommandWAL:        true,
+		DisableSideStores: true,
+		NotifyError: func(err error) {
+			notified = append(notified, err)
+		},
+	})
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+	if err := db.Set([]byte("k"), []byte("v")); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	db.cached.SetCommandWALCheckpointPublishHook(func(sync bool) (uint64, []backenddb.CommandWALLSNRange, error) {
+		return 0, nil, checkpointErr
+	})
+	err = db.Close()
+	if !errors.Is(err, checkpointErr) {
+		t.Fatalf("Close error=%v, want checkpoint error", err)
+	}
+	found := false
+	for _, err := range notified {
+		if errors.Is(err, checkpointErr) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("NotifyError=%v, want checkpoint error", notified)
 	}
 }
 
