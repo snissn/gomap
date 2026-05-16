@@ -430,7 +430,7 @@ PR 8: native-wire/Raft alignment closeout:
 
 - `TestCommandWALPayloadMatchesNativeWireDeterministicFixture`;
 - `TestNativeWireAndLocalCommandDigestStable`;
-- `TestNativeWireAckVisibleRequiresRootPublishAndAppliedLSN`;
+- `TestNativeWireAckFlushedRequiresRootPublishAndAppliedLSN`;
 - `TestNativeWirePostFramePublishFailureCommitAmbiguous`;
 - `TestRaftApplyDoesNotReportRecoverableBeforeCommandWALAppliedLSN`;
 - `TestRaftCommandEntryAndLocalCommandPayloadUseSharedCanonicalSchema`.

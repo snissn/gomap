@@ -1,0 +1,86 @@
+{
+  "version": 1,
+  "owner": "TreeDB/docs/spec/user-command-wal.md",
+  "tracker": "https://github.com/snissn/gomap/issues/1529",
+  "relationship_values": ["lowered_equivalent_v1", "future_rejected_v1"],
+  "ack_recoverability": {
+    "visible": "process-visible after local command-WAL recoverability and normal-executor install; does not require root publication or AppliedLSN advancement",
+    "flushed": "backend roots and AppliedLSN are selected in the same backend commit",
+    "synced": "flushed plus fsync-capable local durability boundary",
+    "raft_committed": "reserved distributed consensus policy; not local WAL append and not deterministic command identity"
+  },
+  "entries": [
+    {
+      "nativewire_command": "CommandCreateCollection",
+      "nativewire_fixture": "TreeDB/internal/nativewire/testdata/v1/create_collection_entry.hex",
+      "nativewire_fixture_sha256": "43f1a3433faa5c04b5047ce74325ff8e75423d180e40521afea23bb368660ca7",
+      "command_wal_kind": "CatalogCreateCollection",
+      "command_wal_payload_format": "CatalogCreateCollectionV1",
+      "local_fixture": "TreeDB/internal/commitlog/testdata/command_wal_v1_catalog_create_collection.hex",
+      "local_fixture_sha256": "fb8f76176374e9ec060d1038543b74ec0ca6c872bd40df9d06b156e807148736",
+      "support_matrix_status": "WAL-supported",
+      "relationship": "lowered_equivalent_v1",
+      "notes": "V1 local WAL stores the accepted catalog metadata payload. A future native-wire/Raft path must lower the deterministic entry to the same catalog command before acknowledgement or wrap exact deterministic bytes in a separately tested command kind."
+    },
+    {
+      "nativewire_command": "CommandCreateIndex",
+      "nativewire_fixture": "TreeDB/internal/nativewire/testdata/v1/create_index_entry.hex",
+      "nativewire_fixture_sha256": "11d87d1bb8eaa2d882c581e6769e960fb0f552b5a3bb401ddc3877ccd656dc88",
+      "command_wal_kind": "future catalog index create",
+      "command_wal_payload_format": "future",
+      "local_fixture": "",
+      "local_fixture_sha256": "",
+      "support_matrix_status": "WAL-rejected",
+      "relationship": "future_rejected_v1",
+      "notes": "Native-wire deterministic bytes are pinned, but local command WAL must reject index DDL until catalog index command payloads and recovery tests land."
+    },
+    {
+      "nativewire_command": "CommandDropIndex",
+      "nativewire_fixture": "TreeDB/internal/nativewire/testdata/v1/drop_index_entry.hex",
+      "nativewire_fixture_sha256": "82e84147edf6a2bfec82d18acb344733c32aa9aff6e0cb21621058e23b05ca6d",
+      "command_wal_kind": "future catalog index drop",
+      "command_wal_payload_format": "future",
+      "local_fixture": "",
+      "local_fixture_sha256": "",
+      "support_matrix_status": "WAL-rejected",
+      "relationship": "future_rejected_v1",
+      "notes": "Native-wire deterministic bytes are pinned, but local command WAL must reject index DDL until catalog index command payloads and recovery tests land."
+    },
+    {
+      "nativewire_command": "CommandInsertBatch",
+      "nativewire_fixture": "TreeDB/internal/nativewire/testdata/v1/insert_batch_entry.hex",
+      "nativewire_fixture_sha256": "8f9addb37992fc59913e0b7db43e64a01ddd3e2d5990587a39ece66f842ea3de",
+      "command_wal_kind": "CollectionInsertBatchByID",
+      "command_wal_payload_format": "CollectionInsertBatchByIDV1",
+      "local_fixture": "TreeDB/internal/commitlog/testdata/command_wal_v1_collection_insert_by_id.hex",
+      "local_fixture_sha256": "bc0f11dfca58fabb7b5596dda201e62bb7170d6d1e347d5d234c42821b6dd91c",
+      "support_matrix_status": "WAL-supported",
+      "relationship": "lowered_equivalent_v1",
+      "notes": "V1 local WAL stores a collection/id/document batch payload. Native-wire deterministic entries carry the same logical user input plus transport-independent guards and idempotency, and must lower to this local command before local recoverability is reported."
+    },
+    {
+      "nativewire_command": "CommandReplaceBatch",
+      "nativewire_fixture": "TreeDB/internal/nativewire/testdata/v1/replace_batch_entry.hex",
+      "nativewire_fixture_sha256": "c3dfab6323a70f78c1c39dca933793b43455ae4413443fba228ccb380bcaef83",
+      "command_wal_kind": "CollectionUpdateBatchByID",
+      "command_wal_payload_format": "CollectionUpdateBatchByIDV1",
+      "local_fixture": "TreeDB/internal/commitlog/testdata/command_wal_v1_collection_update_by_id.hex",
+      "local_fixture_sha256": "5b09f896c6f470c58bb1c687a36a81ac1d6559699eb15ba1342a38c85b6246ca",
+      "support_matrix_status": "WAL-supported",
+      "relationship": "lowered_equivalent_v1",
+      "notes": "V1 local WAL stores accepted replacement documents as CollectionUpdateBatchByID. Native-wire CommandReplaceBatch is the distributed command surface for the same explicit-ID replacement semantics."
+    },
+    {
+      "nativewire_command": "CommandDeleteBatch",
+      "nativewire_fixture": "TreeDB/internal/nativewire/testdata/v1/delete_batch_entry.hex",
+      "nativewire_fixture_sha256": "28b486eef9ed0ed19f97774890d447dc744e4e9a6062668900bf09dbc42f22e9",
+      "command_wal_kind": "CollectionDeleteBatchByID",
+      "command_wal_payload_format": "CollectionDeleteBatchByIDV1",
+      "local_fixture": "TreeDB/internal/commitlog/testdata/command_wal_v1_collection_delete_by_id.hex",
+      "local_fixture_sha256": "eb7162bc4c5c8b7dbe32692d10524293fd4c4ea00783f821861c7baa8e1c54a2",
+      "support_matrix_status": "WAL-supported",
+      "relationship": "lowered_equivalent_v1",
+      "notes": "V1 local WAL stores explicit IDs only. Native-wire deterministic delete entries must lower to this local command before local recoverability is reported."
+    }
+  ]
+}

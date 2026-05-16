@@ -140,6 +140,34 @@ not grow separate local-WAL and native-wire encoders for the same command unless
 the divergence is documented in the command matrix and covered by golden fixtures
 that prove both encodings lower to the same command semantics.
 
+### 5.1 Native-wire and Raft alignment
+
+The V1 local command WAL and native-wire deterministic-entry encoder have the
+same semantic owner but not the same durability role. Native-wire/Raft entries
+describe deterministic user command input. Local command-WAL frames describe the
+single-node recoverable command that TreeDB will replay after a crash. A
+native-wire mutation that maps to a supported command-WAL kind must lower to a
+local command-WAL frame and satisfy the requested local ack boundary before
+reporting local recoverability.
+
+`raft_committed` is not local WAL append. It is a future distributed consensus
+policy that may wrap native-wire deterministic entry bytes with term/index
+metadata. Applying a committed Raft entry still has to respect the local
+recoverability boundary for the serving replica: the replica may not claim that
+the command is locally recoverable until the local command-WAL frame, required
+external refs, normal executor effects, and any requested root/`AppliedLSN`
+barrier are complete.
+
+The V1 relationship between native-wire deterministic fixtures and local
+command-WAL fixtures is tracked in
+`TreeDB/docs/spec/command-wal-nativewire-alignment.json`. Entries marked
+`lowered_equivalent_v1` intentionally use different local frame bytes from the
+native-wire deterministic entry, but the native-wire command must lower to the
+listed local command kind before local acknowledgement. Entries marked
+`future_rejected_v1` have pinned native-wire deterministic bytes but remain
+explicitly rejected by local command WAL until the matching command kind and
+recovery tests land.
+
 This is a compatibility-breaking WAL format transition. TreeDB is pre-alpha, so
 the command WAL implementation may require old directories to be cleanly
 checkpointed with the previous binary or rebuilt. Once a directory advertises
@@ -171,7 +199,7 @@ type CommandEnvelope struct {
 of deterministic command identity. They may influence when an API returns, but
 must not change replay bytes.
 
-### 5.1 Required Envelope Properties
+### 5.2 Required Envelope Properties
 
 - `LSN` is assigned by the shared commit-log journal service before a complete
   frame can become recoverable.
@@ -188,7 +216,7 @@ must not change replay bytes.
   idempotent-skip rule. Strict commands fail closed if replay observes evidence
   that the command effect already exists while `AppliedLSN` does not cover it.
 
-### 5.2 Compatibility-Breaking Command WAL Format
+### 5.3 Compatibility-Breaking Command WAL Format
 
 The first implementation should modify `TreeDB/internal/commitlog` into the
 command WAL format rather than layering command frames beside legacy raw batch
@@ -212,7 +240,7 @@ Required integration points:
   handling, rotation, flush/sync ordering, and cleanup only after durable proof;
 - fail closed on unknown required frame versions or command kinds.
 
-### 5.3 Single Journal Owner
+### 5.4 Single Journal Owner
 
 Exactly one journal owner may open mutable WAL writers for a database directory.
 The implementation should extract or reuse the existing cached WAL lane writer
