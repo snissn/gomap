@@ -228,7 +228,7 @@ to the V1 in-page-marked meta-page storage field.
 | Catalog/schema barriers cannot race lower unapplied commands. | `collections-write-domain.md` barrier semantics | `TestCollectionCommandWALCreateCollectionDrainsRecoveredLowerLSN`, `TestCollectionCommandWALRejectsCatalogIndexMutations` | PR6 coverage for create collection and rejected index DDL; index command support remains future |
 | Read-only open fails when mutating command replay would be required. | `recovery.md`, `contracts.md` read-only open | `TestCommandWALReadOnlyOpenWithUnappliedFrameFailsRecoveryRequired` | planned |
 | Backup/restore either includes needed WAL/external refs or has durable cleanup proof. | `backup-restore.md` restore validation | `TestCommandWALBackupManifestRestoresUnappliedCommands`, `TestCommandWALRestoreMissingRequiredFrameFailsWithoutCleanupProof` | planned |
-| Native-wire deterministic command schemas align with local command WAL payload schemas. | `native-wire-protocol.md`, `user-command-wal.md` Raft/native-wire relationship | `TestCommandWALPayloadMatchesNativeWireDeterministicFixture`, `TestNativeWireAndLocalCommandDigestStable` | planned |
+| Native-wire deterministic command schemas align with local command WAL payload schemas. | `native-wire-protocol.md`, `user-command-wal.md` Raft/native-wire relationship | `TestCommandWALNativeWireAlignmentManifestCoverage`, `TestNativeWireAndLocalCommandDigestStable` | planned |
 | Raft/local recoverability is not reported before local command WAL publish and `AppliedLSN`. | `native-query-raft-roadmap.md` local apply layering | `TestRaftApplyDoesNotReportRecoverableBeforeCommandWALAppliedLSN` | future |
 
 ### 11.5.2 Milestone Test Slices
@@ -429,7 +429,7 @@ PR 7: matrix enforcement and drift tests:
 
 PR 8: native-wire/Raft alignment closeout:
 
-- `TestCommandWALPayloadMatchesNativeWireDeterministicFixture`;
+- `TestCommandWALNativeWireAlignmentManifestCoverage`;
 - `TestNativeWireAndLocalCommandDigestStable`;
 - `TestNativeWireAckFlushedRequiresRootPublishAndAppliedLSN`;
 - `TestNativeWirePostFramePublishFailureCommitAmbiguous`;

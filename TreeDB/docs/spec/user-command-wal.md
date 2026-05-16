@@ -161,12 +161,15 @@ barrier are complete.
 The V1 relationship between native-wire deterministic fixtures and local
 command-WAL fixtures is tracked in
 `TreeDB/docs/spec/command-wal-nativewire-alignment.json`. Entries marked
-`lowered_equivalent_v1` intentionally use different local frame bytes from the
-native-wire deterministic entry, but the native-wire command must lower to the
-listed local command kind before local acknowledgement. Entries marked
-`future_rejected_v1` have pinned native-wire deterministic bytes but remain
-explicitly rejected by local command WAL until the matching command kind and
-recovery tests land.
+`lowered_equivalent_v1` are reserved for matched logical inputs that prove
+native-wire deterministic command bytes lower to the listed local command-WAL
+payload schema before local acknowledgement. Entries marked
+`lowered_kind_only_v1` pin only the shared command kind and supported surface:
+their current native-wire and local command-WAL fixtures intentionally use
+different logical inputs and must not be treated as payload-equivalence proof.
+Entries marked `future_rejected_v1` have pinned native-wire deterministic bytes
+but remain explicitly rejected by local command WAL until the matching command
+kind and recovery tests land.
 
 This is a compatibility-breaking WAL format transition. TreeDB is pre-alpha, so
 the command WAL implementation may require old directories to be cleanly
