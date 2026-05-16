@@ -15,7 +15,6 @@ import (
 	"unsafe"
 
 	nk "github.com/ashvardanian/NumKong/golang"
-	axiomsimd "github.com/axiomhq/simd-go"
 	"github.com/cespare/xxhash/v2"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/node"
@@ -1183,7 +1182,7 @@ func (idx *VectorIndex) rerankFloat32CosineCandidatesFromNodesLocked(query []flo
 		if node.cachedInvNorm == 0 {
 			return nil, errors.New("collections: cosine vector cannot have zero magnitude")
 		}
-		dot := axiomsimd.DotProductFloat32(query, node.vector)
+		dot := vectorDotProductFloat32(query, node.vector)
 		distance := 1 - dot*queryInvNorm*node.cachedInvNorm
 		ranked = appendBoundedVectorSearchResult(ranked, VectorSearchResult{
 			DocumentID: node.documentID,
@@ -1713,7 +1712,7 @@ func vectorDistanceToFloat32NodeCosineUnchecked(query preparedFloat32CosineQuery
 	if n != len(node.vector) {
 		panic(fmt.Sprintf("collections: vector dimensions differ: %d vs %d", n, len(node.vector)))
 	}
-	dot := axiomsimd.DotProductFloat32(
+	dot := vectorDotProductFloat32(
 		query.vector,
 		node.vector,
 	)
@@ -1727,7 +1726,7 @@ func vectorDistanceBetweenFloat32NodesCosine(left, right *vectorIndexNode) (floa
 	if left.cachedInvNorm == 0 || right.cachedInvNorm == 0 {
 		return 0, errors.New("collections: cosine vector cannot have zero magnitude")
 	}
-	dot := axiomsimd.DotProductFloat32(
+	dot := vectorDotProductFloat32(
 		left.vector,
 		right.vector,
 	)
