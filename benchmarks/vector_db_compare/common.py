@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import math
+import sys
 import time
+from pathlib import Path
 from typing import Any
+
+import numpy as np
 
 
 def parse_ints(raw: str) -> list[int]:
@@ -39,3 +43,23 @@ def percentile(sorted_values: list[int], p: float) -> int:
 def phase(start: float) -> dict[str, Any]:
     seconds = time.perf_counter() - start
     return {"duration_nanos": int(seconds * 1_000_000_000), "seconds": seconds}
+
+
+def load_vectors(path: Path, rows: int, dims: int) -> np.ndarray:
+    data = np.fromfile(path, dtype="<f4")
+    expected = rows * dims
+    if data.size != expected:
+        raise ValueError(f"{path} has {data.size} float32s, want {expected}")
+    return data.reshape(rows, dims)
+
+
+def max_rss_bytes() -> int:
+    try:
+        import resource
+
+        value = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        if sys.platform == "darwin":
+            return int(value)
+        return int(value) * 1024
+    except Exception:
+        return 0

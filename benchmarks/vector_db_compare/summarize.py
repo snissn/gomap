@@ -34,7 +34,7 @@ def storage_record(result: dict[str, Any]) -> dict[str, Any]:
         return result["storage_after_compact"]
     if "storage" in result:
         return result["storage"]
-    raise KeyError(f"{result_label(result)} missing storage result")
+    raise ValueError(f"{result_label(result)} missing storage result")
 
 
 def storage_bytes(result: dict[str, Any]) -> int:
@@ -61,7 +61,7 @@ def build_seconds(result: dict[str, Any]) -> float:
         return float(result["build"]["seconds"])
     if "rebuild" in result:
         return float(result["rebuild"]["seconds"])
-    raise KeyError(f"{result_label(result)} missing build/rebuild phase")
+    raise ValueError(f"{result_label(result)} missing build/rebuild phase")
 
 
 def reopen_seconds(result: dict[str, Any]) -> float:
@@ -183,7 +183,7 @@ def main() -> None:
         if legacy:
             paths.append(legacy)
     if not paths:
-        raise SystemExit("at least one --result is required")
+        raise SystemExit("at least one input is required: pass --result, or one of --treedb/--vectorlite/--pgvector/--mongodb")
     deduped = []
     seen = set()
     for path in paths:
@@ -192,7 +192,10 @@ def main() -> None:
         seen.add(path)
         deduped.append(path)
     paths = deduped
-    text = render([load(path) for path in paths])
+    try:
+        text = render([load(path) for path in paths])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise SystemExit(f"invalid benchmark result: {exc}") from exc
     Path(args.output).write_text(text, encoding="utf-8")
     print(text)
 

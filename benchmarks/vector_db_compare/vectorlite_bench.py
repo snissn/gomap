@@ -8,7 +8,6 @@ import json
 import os
 import sqlite3
 import statistics
-import sys
 import threading
 import time
 from pathlib import Path
@@ -16,7 +15,7 @@ from typing import Any
 
 import numpy as np
 
-from common import parse_ints, percentile, phase
+from common import load_vectors, max_rss_bytes, parse_ints, percentile, phase
 
 
 def storage_usage(path: Path) -> dict[str, Any]:
@@ -38,14 +37,6 @@ def storage_usage(path: Path) -> dict[str, Any]:
 def load_manifest(dataset_dir: Path) -> dict[str, Any]:
     with (dataset_dir / "manifest.json").open("r", encoding="utf-8") as f:
         return json.load(f)
-
-
-def load_vectors(path: Path, rows: int, dims: int) -> np.ndarray:
-    data = np.fromfile(path, dtype="<f4")
-    expected = rows * dims
-    if data.size != expected:
-        raise ValueError(f"{path} has {data.size} float32s, want {expected}")
-    return data.reshape(rows, dims)
 
 
 def load_document_payloads(dataset_dir: Path, manifest: dict[str, Any]) -> list[tuple[str, bytes]]:
@@ -273,18 +264,6 @@ def benchmark_search(args: argparse.Namespace, queries: np.ndarray, concurrency:
         "p95_nanos": percentile(sorted_latencies, 0.95),
         "p99_nanos": percentile(sorted_latencies, 0.99),
     }
-
-
-def max_rss_bytes() -> int:
-    try:
-        import resource
-
-        value = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-        if sys.platform == "darwin":
-            return int(value)
-        return int(value) * 1024
-    except Exception:
-        return 0
 
 
 def main() -> None:

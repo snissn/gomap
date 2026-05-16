@@ -11,7 +11,6 @@ from __future__ import annotations
 import argparse
 import json
 import statistics
-import sys
 import threading
 import time
 from pathlib import Path
@@ -21,19 +20,11 @@ import numpy as np
 from pymongo import MongoClient
 from pymongo.errors import OperationFailure
 
-from common import parse_ints, percentile, phase
+from common import load_vectors, max_rss_bytes, parse_ints, percentile, phase
 
 
 def load_manifest(dataset_dir: Path) -> dict[str, Any]:
     return json.loads((dataset_dir / "manifest.json").read_text(encoding="utf-8"))
-
-
-def load_vectors(path: Path, rows: int, dims: int) -> np.ndarray:
-    data = np.fromfile(path, dtype="<f4")
-    expected = rows * dims
-    if data.size != expected:
-        raise ValueError(f"{path} has {data.size} float32s, want {expected}")
-    return data.reshape(rows, dims)
 
 
 def connect(uri: str, max_pool_size: int = 100) -> MongoClient:
@@ -330,18 +321,6 @@ def storage_usage(client: MongoClient, args: argparse.Namespace, docs: int) -> d
         },
         "bytes_per_doc": total / docs if docs else 0,
     }
-
-
-def max_rss_bytes() -> int:
-    try:
-        import resource
-
-        value = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-        if sys.platform == "darwin":
-            return int(value)
-        return int(value) * 1024
-    except Exception:
-        return 0
 
 
 def main() -> None:

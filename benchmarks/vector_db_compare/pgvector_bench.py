@@ -7,7 +7,6 @@ import argparse
 import json
 import re
 import statistics
-import sys
 import threading
 import time
 from pathlib import Path
@@ -16,7 +15,7 @@ from typing import Any
 import numpy as np
 import psycopg
 
-from common import parse_ints, percentile, phase
+from common import load_vectors, max_rss_bytes, parse_ints, percentile, phase
 
 IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -37,14 +36,6 @@ def checked_manifest_positive_int(manifest: dict[str, Any], key: str) -> int:
         raise ValueError(f"manifest {key!r} must be a positive integer")
     manifest[key] = parsed
     return parsed
-
-
-def load_vectors(path: Path, rows: int, dims: int) -> np.ndarray:
-    data = np.fromfile(path, dtype="<f4")
-    expected = rows * dims
-    if data.size != expected:
-        raise ValueError(f"{path} has {data.size} float32s, want {expected}")
-    return data.reshape(rows, dims)
 
 
 def vector_literal(vector: np.ndarray) -> str:
@@ -281,18 +272,6 @@ def storage_usage(conn: psycopg.Connection, args: argparse.Namespace, docs: int)
         },
         "bytes_per_doc": table / docs,
     }
-
-
-def max_rss_bytes() -> int:
-    try:
-        import resource
-
-        value = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-        if sys.platform == "darwin":
-            return int(value)
-        return int(value) * 1024
-    except Exception:
-        return 0
 
 
 def drop_schema(args: argparse.Namespace) -> None:
