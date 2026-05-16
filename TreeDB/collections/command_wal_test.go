@@ -9,6 +9,7 @@ import (
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 func TestCollectionCommandWALInsertBatchByIDPublishesAppliedLSN(t *testing.T) {
@@ -262,6 +263,68 @@ func TestCollectionCommandWALDeleteBatchByIDReplayAdvancesRootlessNoopFrame(t *t
 	}
 }
 
+func TestCollectionCommandWALDeleteBatchByIDPublishesMissingOnlyNoop(t *testing.T) {
+	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatJSON,
+		},
+	}, collectionCommandWALSetupInsert{
+		ids: [][]byte{[]byte("u1")},
+		docs: [][]byte{
+			[]byte(`{"name":"Ada"}`),
+		},
+	})
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col, err := NewCollectionManager(d).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	deleted, err := col.DeleteBatch([][]byte{[]byte("missing")})
+	if err != nil {
+		t.Fatalf("DeleteBatch missing only: %v", err)
+	}
+	if deleted != 0 {
+		t.Fatalf("deleted=%d, want 0", deleted)
+	}
+	assertCollectionDocument(t, col, "u1", `{"name":"Ada"}`)
+	if got := d.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("AppliedCommandLSN=%d, want 1", got)
+	}
+}
+
+func TestCollectionCommandWALDeleteDocumentByIDPublishesMissingNoop(t *testing.T) {
+	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatJSON,
+		},
+	}, collectionCommandWALSetupInsert{
+		ids: [][]byte{[]byte("u1")},
+		docs: [][]byte{
+			[]byte(`{"name":"Ada"}`),
+		},
+	})
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col, err := NewCollectionManager(d).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	deleted, err := col.DeleteDocument([]byte("missing"))
+	if err != nil {
+		t.Fatalf("DeleteDocument missing: %v", err)
+	}
+	if deleted {
+		t.Fatal("deleted=true, want false")
+	}
+	assertCollectionDocument(t, col, "u1", `{"name":"Ada"}`)
+	if got := d.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("AppliedCommandLSN=%d, want 1", got)
+	}
+}
+
 func TestCollectionCommandWALRejectsCatalogCreate(t *testing.T) {
 	dir := t.TempDir()
 	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
@@ -272,6 +335,97 @@ func TestCollectionCommandWALRejectsCatalogCreate(t *testing.T) {
 	_, err := NewCollectionManager(d).CreateCollection(&CollectionMeta{Name: "users"})
 	if !errors.Is(err, backenddb.ErrCommandWALUnsupported) {
 		t.Fatalf("CreateCollection error=%v, want ErrCommandWALUnsupported", err)
+	}
+}
+
+func TestCollectionCommandWALRejectsCatalogIndexMutations(t *testing.T) {
+	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatJSON,
+		},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city", ValueType: IndexValueString}},
+	})
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col, err := NewCollectionManager(d).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	if _, err := col.CreateIndex(IndexDefinition{Name: "email", Field: "email", ValueType: IndexValueString}); !errors.Is(err, backenddb.ErrCommandWALUnsupported) {
+		t.Fatalf("CreateIndex error=%v, want ErrCommandWALUnsupported", err)
+	}
+	if _, err := col.DropIndex("city"); !errors.Is(err, backenddb.ErrCommandWALUnsupported) {
+		t.Fatalf("DropIndex error=%v, want ErrCommandWALUnsupported", err)
+	}
+	if _, err := col.DropIndexes([]string{"city"}); !errors.Is(err, backenddb.ErrCommandWALUnsupported) {
+		t.Fatalf("DropIndexes error=%v, want ErrCommandWALUnsupported", err)
+	}
+	if _, err := col.DropAllIndexes(); !errors.Is(err, backenddb.ErrCommandWALUnsupported) {
+		t.Fatalf("DropAllIndexes error=%v, want ErrCommandWALUnsupported", err)
+	}
+}
+
+func TestCollectionCommandWALRejectsUnsupportedDocumentMutators(t *testing.T) {
+	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatJSON,
+		},
+	}, collectionCommandWALSetupInsert{
+		ids: [][]byte{[]byte("u1")},
+		docs: [][]byte{
+			[]byte(`{"name":"Ada"}`),
+		},
+	})
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col, err := NewCollectionManager(d).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	if _, err := col.Replace([]byte("u1"), []byte(`{"name":"Ada Lovelace"}`)); !errors.Is(err, backenddb.ErrCommandWALUnsupported) {
+		t.Fatalf("Replace error=%v, want ErrCommandWALUnsupported", err)
+	}
+	if _, _, err := col.Update([]byte("u1"), func([]byte) ([]byte, bool, error) {
+		return []byte(`{"name":"Ada Lovelace"}`), true, nil
+	}); !errors.Is(err, backenddb.ErrCommandWALUnsupported) {
+		t.Fatalf("Update error=%v, want ErrCommandWALUnsupported", err)
+	}
+	if _, err := col.UpdateBatch([]UpdateBatchItem{{
+		DocumentID: []byte("u1"),
+		Update: func([]byte) ([]byte, bool, error) {
+			return []byte(`{"name":"Ada Lovelace"}`), true, nil
+		},
+	}}); !errors.Is(err, backenddb.ErrCommandWALUnsupported) {
+		t.Fatalf("UpdateBatch error=%v, want ErrCommandWALUnsupported", err)
+	}
+}
+
+func TestCollectionCommandWALRejectsUnsupportedBSONSetMutators(t *testing.T) {
+	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatBSON,
+		},
+	}, collectionCommandWALSetupInsert{
+		ids: [][]byte{[]byte("u1")},
+		docs: [][]byte{
+			mustBSONCollectionDocument(t, bson.D{{Key: "name", Value: "Ada"}, {Key: "city", Value: "hnl"}}),
+		},
+	})
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col, err := NewCollectionManager(d).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	fields := []BSONSetField{{Key: "city", Value: mustBSONRawValue(t, "sea")}}
+	if _, _, err := col.UpdateBSONSet([]byte("u1"), fields); !errors.Is(err, backenddb.ErrCommandWALUnsupported) {
+		t.Fatalf("UpdateBSONSet error=%v, want ErrCommandWALUnsupported", err)
+	}
+	if _, _, err := col.UpdateBSONSetBatchIfNoSecondaryUniqueIndexChanges([]BSONSetUpdateBatchItem{{DocumentID: []byte("u1"), Fields: fields}}); !errors.Is(err, backenddb.ErrCommandWALUnsupported) {
+		t.Fatalf("UpdateBSONSetBatchIfNoSecondaryUniqueIndexChanges error=%v, want ErrCommandWALUnsupported", err)
 	}
 }
 

@@ -2816,6 +2816,9 @@ func (c *Collection) CreateIndex(def IndexDefinition) (*CollectionMeta, error) {
 	if c.db == nil {
 		return nil, errCollectionDBNil
 	}
+	if c.db.CommandWALEnabled() {
+		return nil, fmt.Errorf("%w: collection catalog mutation requires catalog command WAL support", backenddb.ErrCommandWALUnsupported)
+	}
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()
 	if err := c.flushBufferedWrites(); err != nil {
@@ -2940,6 +2943,9 @@ func (c *Collection) dropIndexes(names map[string]struct{}, all bool) (*Collecti
 	}
 	if c.db == nil {
 		return nil, errCollectionDBNil
+	}
+	if c.db.CommandWALEnabled() {
+		return nil, fmt.Errorf("%w: collection catalog mutation requires catalog command WAL support", backenddb.ErrCommandWALUnsupported)
 	}
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()
@@ -9038,6 +9044,14 @@ func (c *Collection) deleteBatchOnce(documentIDs [][]byte, commandWALIntent *bac
 	baseCommitSeq := snapshotCommitSeq(snap)
 
 	primaryRootName := collectionPrimaryRootName(c.meta.Name)
+	commandWALActive := c.commandWALActive(commandWALIntent)
+	if commandWALIntent == nil && commandWALActive {
+		commandWALIntent, err = c.newCollectionDeleteCommandWALIntent(documentIDs, nil)
+		if err != nil {
+			_ = snap.Close()
+			return 0, err
+		}
+	}
 	primaryRoot := catalog.rootID(primaryRootName)
 	if primaryRoot == 0 {
 		_ = snap.Close()
@@ -9157,7 +9171,6 @@ func (c *Collection) deleteBatchOnce(documentIDs [][]byte, commandWALIntent *bac
 		}
 	}
 
-	commandWALActive := c.commandWALActive(commandWALIntent)
 	if !commandWALActive {
 		if buffered, err := c.bufferIndexedDeleteTablesLocked(catalog, baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, policies, deltaTables, len(existing)); buffered || err != nil {
 			_ = snap.Close()
@@ -9168,15 +9181,6 @@ func (c *Collection) deleteBatchOnce(documentIDs [][]byte, commandWALIntent *bac
 			return len(existing), err
 		}
 	}
-	if commandWALIntent == nil && commandWALActive {
-		commandWALIntent, err = c.newCollectionDeleteCommandWALIntent(documentIDs, nil)
-		if err != nil {
-			_ = snap.Close()
-			resetCollectionTables(deltaTables)
-			return 0, err
-		}
-	}
-
 	defer func() { _ = snap.Close() }()
 	defer func() { resetCollectionTables(deltaTables) }()
 	ordered, cleanupDeltas, err := buildRootDeltaBatchPublishInputsFromTables(c.meta.Name, rootNames, deltaTables, baseRootIDs, policies)
@@ -9244,18 +9248,36 @@ func (c *Collection) deleteDocumentOnce(documentID []byte, commandWALIntent *bac
 	baseCommitSeq := snapshotCommitSeq(snap)
 
 	primaryRootName := collectionPrimaryRootName(c.meta.Name)
+	commandWALActive := c.commandWALActive(commandWALIntent)
+	if commandWALIntent == nil && commandWALActive {
+		commandWALIntent, err = c.newCollectionDeleteCommandWALIntent([][]byte{documentID}, nil)
+		if err != nil {
+			_ = snap.Close()
+			return false, err
+		}
+	}
 	if c.writeDomain != nil {
 		c.writeDomain.mu.RLock()
 		alreadyDeleted := c.bufferedIndexedDeleteTombstoneLocked(c.writeDomain, documentID)
 		c.writeDomain.mu.RUnlock()
 		if alreadyDeleted {
 			_ = snap.Close()
+			if commandWALIntent != nil {
+				if err := c.db.PublishCommandWALNoop(commandWALIntent, false); err != nil {
+					return false, err
+				}
+			}
 			return false, nil
 		}
 	}
 	entry, primaryRoot, err := collectionGetEntryAtCatalogRoot(snap, catalog, primaryRootName, documentID)
 	if errors.Is(err, tree.ErrKeyNotFound) {
 		_ = snap.Close()
+		if commandWALIntent != nil {
+			if err := c.db.PublishCommandWALNoop(commandWALIntent, false); err != nil {
+				return false, err
+			}
+		}
 		return false, nil
 	}
 	if err != nil {
@@ -9264,6 +9286,11 @@ func (c *Collection) deleteDocumentOnce(documentID []byte, commandWALIntent *bac
 	}
 	if entry.Flags&node.FlagTombstone != 0 {
 		_ = snap.Close()
+		if commandWALIntent != nil {
+			if err := c.db.PublishCommandWALNoop(commandWALIntent, false); err != nil {
+				return false, err
+			}
+		}
 		return false, nil
 	}
 
@@ -9328,7 +9355,6 @@ func (c *Collection) deleteDocumentOnce(documentID []byte, commandWALIntent *bac
 	}
 	// Keep the base snapshot pinned through publish so page reuse cannot invalidate
 	// base roots before stale-root validation rejects concurrent modifications.
-	commandWALActive := c.commandWALActive(commandWALIntent)
 	if !commandWALActive {
 		if buffered, err := c.bufferIndexedDeleteTablesLocked(catalog, baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, policies, deltaTables, 1); buffered || err != nil {
 			_ = snap.Close()
@@ -9336,14 +9362,6 @@ func (c *Collection) deleteDocumentOnce(documentID []byte, commandWALIntent *bac
 				resetCollectionTables(deltaTables)
 			}
 			return buffered, err
-		}
-	}
-	if commandWALIntent == nil && commandWALActive {
-		commandWALIntent, err = c.newCollectionDeleteCommandWALIntent([][]byte{documentID}, nil)
-		if err != nil {
-			_ = snap.Close()
-			resetCollectionTables(deltaTables)
-			return false, err
 		}
 	}
 	defer func() { _ = snap.Close() }()
@@ -9426,6 +9444,9 @@ func (c *Collection) Replace(documentID, document []byte) (bool, error) {
 func (c *Collection) Update(documentID []byte, update func(current []byte) (replacement []byte, changed bool, err error)) (bool, bool, error) {
 	if err := validateCollectionUpdateInput(c, documentID, update); err != nil {
 		return false, false, err
+	}
+	if c.commandWALActive(nil) {
+		return false, false, fmt.Errorf("%w: collection update requires update command WAL support", backenddb.ErrCommandWALUnsupported)
 	}
 	if combiner, domain := c.updateFastPathWithoutCreatingCombiner(); combiner != nil {
 		return combiner.update(c, documentID, update, bsonSetUpdate{}, false)
@@ -9551,6 +9572,9 @@ func (c *Collection) updateBatch(items []UpdateBatchItem, mode updateBatchMode) 
 	}
 	if err := c.ensureWriteDomainOpen(); err != nil {
 		return nil, false, err
+	}
+	if c.commandWALActive(nil) {
+		return nil, false, fmt.Errorf("%w: collection update requires update command WAL support", backenddb.ErrCommandWALUnsupported)
 	}
 	if len(items) == 0 {
 		c.setLastUpdateStats(CollectionUpdateStats{})
