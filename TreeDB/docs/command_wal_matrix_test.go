@@ -265,13 +265,20 @@ func collectionWALImportAndSelectors(t *testing.T, path string) (bool, map[strin
 	if err != nil {
 		t.Fatalf("parse %s: %v", path, err)
 	}
-	importsCollectionWAL := false
+	collectionWALNames := make(map[string]struct{})
 	for _, spec := range file.Imports {
 		if spec.Path != nil && spec.Path.Value == `"github.com/snissn/gomap/TreeDB/internal/collectionwal"` {
-			importsCollectionWAL = true
+			name := "collectionwal"
+			if spec.Name != nil {
+				name = spec.Name.Name
+				if name == "." || name == "_" {
+					t.Fatalf("%s imports internal/collectionwal with unsupported %q import; use a named import so guard selectors remain auditable", path, name)
+				}
+			}
+			collectionWALNames[name] = struct{}{}
 		}
 	}
-	if !importsCollectionWAL {
+	if len(collectionWALNames) == 0 {
 		return false, nil
 	}
 	selectors := make(map[string]struct{})
@@ -281,8 +288,10 @@ func collectionWALImportAndSelectors(t *testing.T, path string) (bool, map[strin
 			return true
 		}
 		ident, ok := sel.X.(*ast.Ident)
-		if ok && ident.Name == "collectionwal" {
-			selectors[sel.Sel.Name] = struct{}{}
+		if ok {
+			if _, imported := collectionWALNames[ident.Name]; imported {
+				selectors[sel.Sel.Name] = struct{}{}
+			}
 		}
 		return true
 	})
