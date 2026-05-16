@@ -131,8 +131,12 @@ func TestCommandWALSupportMatrixDocumentsRejectedCommandsWithPublicError(t *test
 		if entry.Status != "WAL-rejected" {
 			continue
 		}
-		if entry.PublicError != "ErrCommandWALRejected" {
-			t.Fatalf("%s/%s WAL-rejected public_error=%q, want ErrCommandWALRejected", entry.Surface, entry.EntryPoint, entry.PublicError)
+		want := "ErrCommandWALRejected"
+		if entry.Surface == "mongo_gateway" {
+			want = "MongoCommandError(BadValue)"
+		}
+		if entry.PublicError != want {
+			t.Fatalf("%s/%s WAL-rejected public_error=%q, want %s", entry.Surface, entry.EntryPoint, entry.PublicError, want)
 		}
 	}
 	assertFileContains(t, filepath.Join(repoRootForDocsTest(t), "TreeDB", "errors.go"), "ErrCommandWALRejected")
