@@ -279,6 +279,45 @@ func TestVectorIndexSelectLayerNeighborsBackfillsPrunedCandidates(t *testing.T) 
 	}
 }
 
+func TestVectorIndexSelectDiverseCandidatesKeepsBackfillDistanceSorted(t *testing.T) {
+	index, err := newVectorIndex(nil, VectorIndexOptions{
+		Name:   "embedding",
+		Field:  "embedding",
+		Metric: VectorMetricCosine,
+		M:      2,
+	})
+	if err != nil {
+		t.Fatalf("new vector index: %v", err)
+	}
+	query := []float32{1, 0}
+	index.nodes = []vectorIndexNode{
+		{documentID: []byte("from"), vector: query, level: 0},
+		{documentID: []byte("a"), vector: unitVectorAtDegrees(1), level: 0},
+		{documentID: []byte("backfill"), vector: unitVectorAtDegrees(2), level: 0},
+		{documentID: []byte("diverse"), vector: unitVectorAtDegrees(-20), level: 0},
+		{documentID: []byte("extra"), vector: unitVectorAtDegrees(-21), level: 0},
+	}
+	for i := range index.nodes {
+		index.nodes[i].cacheVectorNorms()
+	}
+	candidates := []vectorIndexCandidate{
+		{nodeID: 1, distance: mustExactVectorDistance(t, query, index.nodes[1].vector)},
+		{nodeID: 2, distance: mustExactVectorDistance(t, query, index.nodes[2].vector)},
+		{nodeID: 3, distance: mustExactVectorDistance(t, query, index.nodes[3].vector)},
+		{nodeID: 4, distance: mustExactVectorDistance(t, query, index.nodes[4].vector)},
+	}
+
+	got := index.selectDiverseCandidatesLocked(candidates, 3)
+	if len(got) != 3 {
+		t.Fatalf("selected %d candidates=%v, want 3", len(got), got)
+	}
+	for i := 1; i < len(got); i++ {
+		if index.compareVectorIndexCandidatesByDistanceLocked(got[i-1], got[i]) > 0 {
+			t.Fatalf("selected candidates not distance sorted: %v", got)
+		}
+	}
+}
+
 func TestVectorIndexSelectLayerNeighborsReusesCandidateDistances(t *testing.T) {
 	index, err := newVectorIndex(nil, VectorIndexOptions{
 		Name:   "embedding",
