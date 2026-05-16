@@ -331,6 +331,27 @@ func TestVectorIndexCandidateDiversityRejectsInvalidPairDistance(t *testing.T) {
 	}
 }
 
+func TestVectorIndexNewNodeCapsEagerNeighborCapacity(t *testing.T) {
+	index, err := newVectorIndex(nil, VectorIndexOptions{
+		Name:   "embedding",
+		Field:  "embedding",
+		Metric: VectorMetricCosine,
+		M:      10_000,
+	})
+	if err != nil {
+		t.Fatalf("new vector index: %v", err)
+	}
+	node := index.newVectorIndexNode([]byte("a"), []float32{1, 0}, 2)
+	for layer, neighbors := range node.neighbors {
+		if cap(neighbors) > maxVectorIndexEagerNeighborCap {
+			t.Fatalf("layer %d eager cap=%d exceeds cap %d", layer, cap(neighbors), maxVectorIndexEagerNeighborCap)
+		}
+	}
+	if got := index.maxNeighborsForLayer(0); got <= maxVectorIndexEagerNeighborCap {
+		t.Fatalf("test did not exercise high-M logical limit: %d", got)
+	}
+}
+
 func TestVectorIndexSelectLayerNeighborsReusesCandidateDistances(t *testing.T) {
 	index, err := newVectorIndex(nil, VectorIndexOptions{
 		Name:   "embedding",

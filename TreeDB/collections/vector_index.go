@@ -27,6 +27,7 @@ const (
 	defaultVectorIndexRebuildPPM     = 250_000
 	defaultVectorIndexExactFilterMax = 1024
 	defaultVectorRecallBatchCells    = 1 << 20
+	maxVectorIndexEagerNeighborCap   = 64
 )
 
 const (
@@ -867,7 +868,7 @@ func (idx *VectorIndex) newVectorIndexNodePrepared(documentID []byte, vector []f
 		neighbors:  make([][]vectorIndexNeighbor, level+1),
 	}
 	for layer := range node.neighbors {
-		node.neighbors[layer] = make([]vectorIndexNeighbor, 0, idx.maxNeighborsForLayer(layer))
+		node.neighbors[layer] = make([]vectorIndexNeighbor, 0, idx.initialNeighborCapacityForLayer(layer))
 	}
 	switch idx.encoding {
 	case VectorIndexEncodingInt8:
@@ -1064,6 +1065,10 @@ func (idx *VectorIndex) maxNeighborsForLayer(layer int) int {
 		return maxInt(idx.m*2, idx.m)
 	}
 	return idx.m
+}
+
+func (idx *VectorIndex) initialNeighborCapacityForLayer(layer int) int {
+	return minInt(idx.maxNeighborsForLayer(layer), maxVectorIndexEagerNeighborCap)
 }
 
 func normalizeVectorIndexEdgeDistance(distance float32) (float32, bool) {
