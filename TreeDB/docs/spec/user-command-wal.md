@@ -257,7 +257,11 @@ replayable without adding query-wide mutation semantics.
 | Column-store file publish | external side-file refs | future command plus external-ref classes | Deferred until external-file prepare/recovery is specified. |
 
 The matrix is normative for planning: adding or broadening a mutating API also
-requires a matrix update in the same PR.
+requires a matrix update in the same PR. PR7 makes this executable through
+`TreeDB/docs/spec/command-wal-support-matrix.json`; docs tests require current
+collection APIs, Mongo gateway mutating commands, and native-wire mutating
+commands to have explicit `WAL-supported`, `WAL-rejected`, `WAL-off-only`, or
+`future` status.
 
 ### 6.1 Batch Atomicity
 
@@ -958,6 +962,17 @@ Acceptance:
 
 - adding a new mutating command without a WAL status fails tests;
 - current unsupported query-wide mutation remains explicitly rejected.
+
+PR7 evidence:
+
+- machine-readable matrix:
+  `TreeDB/docs/spec/command-wal-support-matrix.json`;
+- docs tests require rows for current collection mutators, Mongo gateway
+  mutation handlers, and native-wire mutation commands;
+- docs drift test rejects active collection-WAL segment references outside the
+  deprecated implementation/docs allowance;
+- public sentinel aliases:
+  `db.ErrCommandWALRejected` and `treedb.ErrCommandWALRejected`.
 
 ### PR 8: Raft alignment design closeout
 

@@ -416,13 +416,15 @@ PR 6: catalog mutation commands:
 
 PR 7: matrix enforcement and drift tests:
 
-- `TestCommandWALSupportMatrixCoversMutatingCollectionRegistry`;
-- `TestCommandWALSupportMatrixCoversMongoGatewayMutations`;
-- `TestCommandWALSupportMatrixCoversNativeWireMutations`;
+- `TestCommandWALSupportMatrixIsWellFormed`;
+- `TestCommandWALSupportMatrixCoversCollectionMutators`;
+- `TestCommandWALSupportMatrixCoversMongoMutationHandlers`;
+- `TestCommandWALSupportMatrixCoversNativeWireMutationCommands`;
+- `TestCommandWALSupportMatrixDocumentsRejectedCommandsWithPublicError`;
+- `TestCommandWALNoActiveCollectionWALImplementationDrift`;
 - `TestCommandWALDocsRejectActiveCollectionWALReferencesOutsideDeprecatedDoc`;
 - `TestCommandWALDocsRequireAppliedCommandLSNAsV1Target`;
 - `TestCommandWALDocsRequireBatchAtomicityText`;
-- `TestCommandWALUnsupportedCommandReturnsStablePublicError`.
 
 PR 8: native-wire/Raft alignment closeout:
 
