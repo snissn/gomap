@@ -394,15 +394,6 @@ func (c *Collection) hasRegisteredVectorIndex(name string) bool {
 	return ok
 }
 
-func (c *Collection) registeredVectorIndex(name string) *VectorIndex {
-	if c == nil || name == "" {
-		return nil
-	}
-	c.vectorIndexesMu.RLock()
-	defer c.vectorIndexesMu.RUnlock()
-	return c.vectorIndexes[name]
-}
-
 func (c *Collection) ensureDeclaredNativeVectorIndexesLoaded() error {
 	if c == nil {
 		return nil
