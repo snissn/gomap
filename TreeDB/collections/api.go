@@ -3085,7 +3085,7 @@ func (c *Collection) Insert(id, document []byte) ([]byte, error) {
 	if err := c.ensureWriteDomainOpen(); err != nil {
 		return nil, err
 	}
-	if len(c.meta.Indexes) == 0 {
+	if len(c.meta.Indexes) == 0 && !c.db.CommandWALEnabled() {
 		if c.hasBufferedNoIndexBSONRootRuns() {
 			if err := c.withMutationLock(func() error {
 				return c.flushBufferedWrites()
@@ -12825,6 +12825,17 @@ func (c *Collection) updateBatchOnce(items []updateBatchItem, mode updateBatchMo
 				return err
 			}
 			c.meta = plan.meta
+			if c.commandWALActive(commandWALIntent) {
+				if commandWALIntent == nil {
+					commandWALIntent, err = c.newCollectionUpdateCommandWALIntent(nil, nil)
+					if err != nil {
+						return err
+					}
+				}
+				if err := c.db.PublishCommandWALNoop(commandWALIntent, false); err != nil {
+					return err
+				}
+			}
 			return nil
 		}); err != nil {
 			return nil, err

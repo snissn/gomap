@@ -52,14 +52,14 @@
     "status": "passed with recorded local microbenchmark artifact; command-WAL mode proof checks CommandWALEnabled and AppliedCommandLSN advancement",
     "benchmark_command": "GOWORK=off go test ./TreeDB/collections -run '^$' -bench 'BenchmarkCollectionCommandWAL(CreateCollection|RejectedIndexDDL)$' -benchmem -benchtime=100x -count=1",
     "artifacts": {
-      "artifacts/command-wal/pr6/bench.txt": "13ab2c56bc0ca2c68098798b209fa29eff50fb7f4f35e5f6664830b61a5e2915"
+      "artifacts/command-wal/pr6/bench.txt": "1ccfca68762b7287d0b5e59f95000ea56d6155a2f1382fe32db575077fe0453a"
     },
     "summary": {
-      "create_wal_off_ns_per_op": 58770,
-      "create_command_wal_ns_per_op": 18444,
+      "create_wal_off_ns_per_op": 54876,
+      "create_command_wal_ns_per_op": 19264,
       "create_wal_off_allocs_per_op": 194,
       "create_command_wal_allocs_per_op": 38,
-      "rejected_index_ddl_ns_per_op": 480.1,
+      "rejected_index_ddl_ns_per_op": 429.4,
       "rejected_index_ddl_allocs_per_op": 3
     }
   },

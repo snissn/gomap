@@ -53,6 +53,49 @@ func TestCollectionCommandWALInsertBatchByIDPublishesAppliedLSN(t *testing.T) {
 	}
 }
 
+func TestCollectionCommandWALInsertByIDPublishesAppliedLSN(t *testing.T) {
+	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatJSON,
+		},
+	})
+	d := openCollectionCommandWALDB(t, dir)
+	mgr := NewCollectionManager(d)
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		_ = d.Close()
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	if _, err := col.Insert([]byte("u1"), []byte(`{"name":"Ada"}`)); err != nil {
+		_ = d.Close()
+		t.Fatalf("Insert: %v", err)
+	}
+	if got := d.State().AppliedCommandLSN; got != 1 {
+		_ = d.Close()
+		t.Fatalf("AppliedCommandLSN=%d, want 1", got)
+	}
+	frames := collectionCommandWALFrames(t, dir)
+	if len(frames) != 1 || frames[0].Kind != commitlog.CommandKindCollectionInsertBatchByID {
+		_ = d.Close()
+		t.Fatalf("command WAL frames=%+v, want one collection insert frame", frames)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopen := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopen.Close() }()
+	reopened, err := NewCollectionManager(reopen).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection reopen: %v", err)
+	}
+	assertCollectionDocument(t, reopened, "u1", `{"name":"Ada"}`)
+	if got := reopen.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("AppliedCommandLSN after reopen=%d, want 1", got)
+	}
+}
+
 func TestCollectionCommandWALInsertBatchByIDReplayRecoversUnappliedFrame(t *testing.T) {
 	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
 		Name: "users",
@@ -676,6 +719,75 @@ func TestCollectionCommandWALUpdateByIDIndexedPublishesSecondaryRoots(t *testing
 	if got := d.State().AppliedCommandLSN; got != 1 {
 		t.Fatalf("AppliedCommandLSN=%d, want 1", got)
 	}
+}
+
+func TestCollectionCommandWALUpdateByIDPublishesMissingNoop(t *testing.T) {
+	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatJSON,
+		},
+	})
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col, err := NewCollectionManager(d).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	matched, modified, err := col.Update([]byte("missing"), func([]byte) ([]byte, bool, error) {
+		return []byte(`{"name":"Ada"}`), true, nil
+	})
+	if err != nil {
+		t.Fatalf("Update missing: %v", err)
+	}
+	if matched || modified {
+		t.Fatalf("Update missing matched=%t modified=%t, want false/false", matched, modified)
+	}
+	if got := d.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("AppliedCommandLSN=%d, want 1", got)
+	}
+	frames := collectionCommandWALFrames(t, dir)
+	if len(frames) != 1 || frames[0].Kind != commitlog.CommandKindCollectionUpdateBatchByID {
+		t.Fatalf("command WAL frames=%+v, want one collection update noop frame", frames)
+	}
+	payload, err := commitlog.DecodeCollectionUpdateBatchByIDPayload(frames[0].Payload)
+	if err != nil {
+		t.Fatalf("DecodeCollectionUpdateBatchByIDPayload: %v", err)
+	}
+	if len(payload.Documents) != 0 {
+		t.Fatalf("noop update payload documents=%d, want 0", len(payload.Documents))
+	}
+}
+
+func TestCollectionCommandWALUpdateByIDPublishesCallbackNoop(t *testing.T) {
+	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatJSON,
+		},
+	}, collectionCommandWALSetupInsert{
+		ids:  [][]byte{[]byte("u1")},
+		docs: [][]byte{[]byte(`{"name":"Ada"}`)},
+	})
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col, err := NewCollectionManager(d).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	matched, modified, err := col.Update([]byte("u1"), func([]byte) ([]byte, bool, error) {
+		return nil, false, nil
+	})
+	if err != nil {
+		t.Fatalf("Update callback noop: %v", err)
+	}
+	if !matched || modified {
+		t.Fatalf("Update callback noop matched=%t modified=%t, want true/false", matched, modified)
+	}
+	if got := d.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("AppliedCommandLSN=%d, want 1", got)
+	}
+	assertCollectionDocument(t, col, "u1", `{"name":"Ada"}`)
 }
 
 func TestCollectionCommandWALUpdateBSONSetUniqueIndexChangePublishesAppliedLSN(t *testing.T) {
