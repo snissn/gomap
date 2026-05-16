@@ -2612,6 +2612,9 @@ func (m *CollectionManager) createCollectionWithCommandWALIntent(normalized Coll
 		}
 		return existing.meta.copy(), nil
 	}
+	if m.db.CommandWALEnabled() {
+		return nil, fmt.Errorf("%w: collection catalog mutation requires catalog command WAL support", backenddb.ErrCommandWALUnsupported)
+	}
 
 	encoded, err := encodeCollectionMeta(normalized)
 	if err != nil {
