@@ -1111,6 +1111,31 @@ func TestCollectionCommandWALCreateCollectionDrainsRecoveredLowerLSN(t *testing.
 	}
 }
 
+func TestCollectionCommandWALCreateCollectionExistingNoop(t *testing.T) {
+	meta := CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatJSON,
+		},
+	}
+	dir := prepareCollectionCommandWALDir(t, meta)
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	got, err := NewCollectionManager(d).CreateCollection(&meta)
+	if err != nil {
+		t.Fatalf("CreateCollection existing: %v", err)
+	}
+	if got.Name != meta.Name {
+		t.Fatalf("existing metadata=%+v want collection name %q", got, meta.Name)
+	}
+	if got := d.State().AppliedCommandLSN; got != 0 {
+		t.Fatalf("AppliedCommandLSN=%d, want 0 for existing no-op", got)
+	}
+	if got := countCollectionCommandWALFrames(t, dir); got != 0 {
+		t.Fatalf("command WAL frames=%d, want 0 for existing no-op", got)
+	}
+}
+
 func TestCollectionCommandWALRejectsCatalogIndexMutations(t *testing.T) {
 	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
 		Name: "users",
@@ -1259,6 +1284,9 @@ func collectionCommandWALFrames(t *testing.T, dir string) []commitlog.CommandEnv
 	walDir := backenddb.WALDirPath(dir)
 	entries, err := os.ReadDir(walDir)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
 		t.Fatalf("ReadDir wal: %v", err)
 	}
 	paths := make([]string, 0, len(entries))
