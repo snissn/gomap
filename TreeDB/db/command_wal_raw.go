@@ -251,6 +251,13 @@ func (db *DB) appendPublicCommandWALIntent(intent *CommandWALIntent, sync bool) 
 	return db.appendCommandWALIntent(&intent.inner, sync)
 }
 
+// AppendCommandWALIntent appends a deterministic command frame without
+// publishing roots. It is used by cached public command-WAL writers that must
+// make a typed frame replay-visible before inserting the mutation into memory.
+func (db *DB) AppendCommandWALIntent(intent *CommandWALIntent, sync bool) (uint64, error) {
+	return db.appendPublicCommandWALIntent(intent, sync)
+}
+
 func (db *DB) PublishCommandWALNoop(intent *CommandWALIntent, sync bool) error {
 	if intent == nil {
 		return nil

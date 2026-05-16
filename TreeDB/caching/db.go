@@ -2810,6 +2810,14 @@ type backendBatchReserveHint interface {
 	Reserve(int)
 }
 
+type physicalBackendBatchSizer interface {
+	NewPhysicalBatchWithSize(size int) batch.Interface
+}
+
+type physicalBackendBatcher interface {
+	NewPhysicalBatch() batch.Interface
+}
+
 type backendBatchSetViewer interface {
 	SetView(key, value []byte) error
 }
@@ -6084,6 +6092,14 @@ func (db *DB) newBackendBatchWithSize(size int) batch.Interface {
 	}
 	if maxSize > 0 && size > maxSize {
 		size = maxSize
+	}
+	if physical, ok := db.backend.(physicalBackendBatchSizer); ok {
+		return physical.NewPhysicalBatchWithSize(size)
+	}
+	if size == 0 {
+		if physical, ok := db.backend.(physicalBackendBatcher); ok {
+			return physical.NewPhysicalBatch()
+		}
 	}
 	if sizer, ok := db.backend.(batchSizer); ok {
 		return sizer.NewBatchWithSize(size)

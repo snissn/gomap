@@ -18,6 +18,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/caching"
 	"github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/dictdb"
 	"github.com/snissn/gomap/TreeDB/internal/limits"
 	"github.com/snissn/gomap/TreeDB/internal/templatedb"
@@ -118,18 +119,22 @@ type UpdateFunc = db.UpdateFunc
 
 // DB is the public TreeDB handle (cached mode by default; read-only opens skip caching).
 type DB struct {
-	cached         *caching.DB
-	backend        *db.DB
-	dictdb         *db.DB
-	templateDB     *DB
-	writePath      writePathInfo
-	bgVac          bgIndexVacuumWorker
-	notifyError    func(error)
-	bgErrMu        sync.Mutex
-	bgErr          error
-	durabilityMode string
-	dir            string
-	maintenance    maintenanceCoordinator
+	cached           *caching.DB
+	backend          *db.DB
+	dictdb           *db.DB
+	templateDB       *DB
+	writePath        writePathInfo
+	commandWALCached bool
+	commandWALMu     sync.Mutex
+	commandWALFirst  uint64
+	commandWALLast   uint64
+	bgVac            bgIndexVacuumWorker
+	notifyError      func(error)
+	bgErrMu          sync.Mutex
+	bgErr            error
+	durabilityMode   string
+	dir              string
+	maintenance      maintenanceCoordinator
 }
 
 type writePathInfo struct {
@@ -217,7 +222,7 @@ func writePathFromOptions(opts Options) writePathInfo {
 		info.mode = "readonly"
 	}
 	if opts.CommandWAL && !opts.ReadOnly {
-		info.mode = "command_wal_backend"
+		info.mode = "command_wal_cached"
 		info.redoLog = "command_wal"
 	}
 	if opts.Durability == db.DurabilityWALOffRelaxed {
@@ -624,7 +629,7 @@ func Open(opts Options) (*DB, error) {
 		return nil, err
 	}
 
-	if opts.ReadOnly || opts.CommandWAL {
+	if opts.ReadOnly {
 		return &DB{backend: backend, dictdb: dictBackend, templateDB: templateDB, writePath: writePath, notifyError: opts.NotifyError, durabilityMode: computeDurabilityMode(opts), dir: rootDir}, nil
 	}
 
@@ -633,7 +638,7 @@ func Open(opts Options) (*DB, error) {
 		opts.MemtableMode = "adaptive"
 	}
 
-	disableWAL := opts.Durability == db.DurabilityWALOffRelaxed
+	disableWAL := opts.Durability == db.DurabilityWALOffRelaxed || opts.CommandWAL
 	relaxedSync := opts.Durability != db.DurabilityDurable
 	disableReadChecksum := opts.ValueLog.ReadIntegrity == db.IntegritySkipChecksums
 	allowUnsafe := disableWAL || relaxedSync || disableReadChecksum
@@ -728,7 +733,7 @@ func Open(opts Options) (*DB, error) {
 
 	cached.SetDictStore(dictStore)
 	cached.SetTemplateStore(templateStore)
-	out := &DB{cached: cached, backend: backend, dictdb: dictBackend, templateDB: templateDB, writePath: writePath, notifyError: opts.NotifyError, durabilityMode: computeDurabilityMode(opts), dir: rootDir}
+	out := &DB{cached: cached, backend: backend, dictdb: dictBackend, templateDB: templateDB, writePath: writePath, commandWALCached: opts.CommandWAL, notifyError: opts.NotifyError, durabilityMode: computeDurabilityMode(opts), dir: rootDir}
 
 	// Cached-mode auto checkpointing is enabled by default to keep `wal/` growth
 	// bounded for long-running workloads, aligning operational expectations with
@@ -1293,6 +1298,9 @@ func (db *DB) Close() error {
 
 	// Close cached layer first if present
 	if db.cached != nil {
+		if db.commandWALCached {
+			err = errors.Join(err, db.Checkpoint())
+		}
 		err = errors.Join(err, db.cached.Close())
 		db.cached = nil
 	}
@@ -1461,6 +1469,17 @@ func (db *DB) Set(key, value []byte) error {
 		return err
 	}
 	if db.cached != nil {
+		if db.commandWALCached {
+			if len(key) == 0 {
+				return caching.ErrKeyEmpty
+			}
+			if value == nil {
+				return caching.ErrValueNil
+			}
+			if err := db.appendPublicRawKVCommand([]commitlog.RawKVOperation{{Op: commitlog.RawKVOpSet, Key: key, Value: value}}, false); err != nil {
+				return err
+			}
+		}
 		return db.cached.Set(key, value)
 	}
 	return db.backend.Set(key, value)
@@ -1474,6 +1493,17 @@ func (db *DB) SetSync(key, value []byte) error {
 		return err
 	}
 	if db.cached != nil {
+		if db.commandWALCached {
+			if len(key) == 0 {
+				return caching.ErrKeyEmpty
+			}
+			if value == nil {
+				return caching.ErrValueNil
+			}
+			if err := db.appendPublicRawKVCommand([]commitlog.RawKVOperation{{Op: commitlog.RawKVOpSet, Key: key, Value: value}}, true); err != nil {
+				return err
+			}
+		}
 		return db.cached.SetSync(key, value)
 	}
 	return db.backend.SetSync(key, value)
@@ -1490,6 +1520,9 @@ func (db *DB) SetSync(key, value []byte) error {
 func (db *DB) Update(key []byte, fn UpdateFunc) error {
 	if err := db.ensureOpen(); err != nil {
 		return err
+	}
+	if db.commandWALCached {
+		return ErrCommandWALRejected
 	}
 	if db.cached != nil {
 		return db.cached.Update(key, fn)
@@ -1509,6 +1542,9 @@ func (db *DB) UpdateSync(key []byte, fn UpdateFunc) error {
 	if err := db.ensureOpen(); err != nil {
 		return err
 	}
+	if db.commandWALCached {
+		return ErrCommandWALRejected
+	}
 	if db.cached != nil {
 		return db.cached.UpdateSync(key, fn)
 	}
@@ -1521,6 +1557,14 @@ func (db *DB) Delete(key []byte) error {
 		return err
 	}
 	if db.cached != nil {
+		if db.commandWALCached {
+			if len(key) == 0 {
+				return caching.ErrKeyEmpty
+			}
+			if err := db.appendPublicRawKVCommand([]commitlog.RawKVOperation{{Op: commitlog.RawKVOpDelete, Key: key}}, false); err != nil {
+				return err
+			}
+		}
 		return db.cached.Delete(key)
 	}
 	return db.backend.Delete(key)
@@ -1533,6 +1577,9 @@ func (db *DB) Delete(key []byte) error {
 func (db *DB) DeleteRange(start, end []byte) error {
 	if err := db.ensureOpen(); err != nil {
 		return err
+	}
+	if db.commandWALCached {
+		return ErrCommandWALRejected
 	}
 	if db.cached != nil {
 		return db.cached.DeleteRange(start, end)
@@ -1566,6 +1613,14 @@ func (db *DB) DeleteSync(key []byte) error {
 		return err
 	}
 	if db.cached != nil {
+		if db.commandWALCached {
+			if len(key) == 0 {
+				return caching.ErrKeyEmpty
+			}
+			if err := db.appendPublicRawKVCommand([]commitlog.RawKVOperation{{Op: commitlog.RawKVOpDelete, Key: key}}, true); err != nil {
+				return err
+			}
+		}
 		return db.cached.DeleteSync(key)
 	}
 	return db.backend.DeleteSync(key)
@@ -1599,7 +1654,11 @@ func (db *DB) NewBatch() Batch {
 		return nil
 	}
 	if db.cached != nil {
-		return db.cached.NewBatch()
+		inner := db.cached.NewBatch()
+		if db.commandWALCached {
+			return &commandWALPublicBatch{db: db, inner: inner}
+		}
+		return inner
 	}
 	return db.backend.NewBatch()
 }
@@ -1618,7 +1677,11 @@ func (db *DB) NewBatchWithSize(size int) Batch {
 		return nil
 	}
 	if db.cached != nil {
-		return db.cached.NewBatchWithSize(size)
+		inner := db.cached.NewBatchWithSize(size)
+		if db.commandWALCached {
+			return &commandWALPublicBatch{db: db, inner: inner}
+		}
+		return inner
 	}
 	return db.backend.NewBatchWithSize(size)
 }
@@ -1719,7 +1782,10 @@ func (db *DB) Checkpoint() error {
 		return err
 	}
 	if db.cached != nil {
-		return db.cached.Checkpoint()
+		if err := db.cached.Checkpoint(); err != nil {
+			return err
+		}
+		return db.publishPublicCommandWALPending(true)
 	}
 	return db.backend.Checkpoint()
 }

@@ -10,7 +10,10 @@
   "features": [
     "public treedb.Open read-write command-WAL handles",
     "public Set/Delete/Batch.Write raw KV writes routed to RawKVBatch typed command frames",
-    "public command-WAL mode proof through treedb.write_path.mode=command_wal_backend",
+    "public command-WAL mode proof through treedb.write_path.mode=command_wal_cached",
+    "cached public command-WAL writes with the legacy cached redo journal disabled",
+    "physical backend flush batches that do not emit duplicate RawKVBatch command frames",
+    "checkpoint/close publication of covered command-WAL LSNs after cached flush",
     "reopen from persisted command_wal_v1 without explicit backend-only APIs",
     "public raw KV microbenchmark coverage for point Set and batched RawKVBatch writes"
   ],
@@ -20,47 +23,55 @@
     "TestCommandWALRawSetDeleteBatchReplaysThroughNormalExecutor"
   ],
   "local_validation_commands": [
-    "git diff --check",
+    "GOWORK=off go test ./TreeDB -run 'TestPublicCommandWALRawKVWritesUseTypedFrames|^$' -count=1",
     "GOWORK=off go test ./TreeDB ./TreeDB/docs ./TreeDB/db -run 'TestPublicCommandWALRawKVWritesUseTypedFrames|TestCommandWALSupportMatrix|TestCommandWALRawSetDeleteBatchReplaysThroughNormalExecutor|^$' -count=1",
-    "GOWORK=off go test ./TreeDB -run 'TestPublicCommandWALRawKVWritesUseTypedFrames|^$' -bench 'BenchmarkPublicCommandWALRawKV(Set|BatchWrite)$' -benchtime=50x -count=1"
+    "GOWORK=off go test ./TreeDB -run 'TestPublicCommandWALRawKVWritesUseTypedFrames|^$' -bench 'BenchmarkPublicCommandWALRawKV(Set|BatchWrite)$' -benchtime=50x -count=1",
+    "GOWORK=off go test ./TreeDB -run '^$' -bench 'BenchmarkPublicCommandWALRawKVSet$' -benchtime=5000x -count=1"
   ],
   "benchmark_artifacts": [
     "artifacts/command-wal/pr9/public-raw-kv-microbench.txt"
   ],
   "performance_gate": {
     "required": true,
-    "status": "blocked",
-    "rationale": "Batched RawKVBatch command-WAL throughput is already close to cached legacy and uses fewer allocations per batch, but the default public point Set path still routes to direct backend command-WAL publication and is far slower than cached legacy. This PR is not tracker-mergeable until the cached typed command path or another point-write batching strategy closes the point Set throughput/allocation gap.",
+    "status": "passed_directional_smoke",
+    "rationale": "Public command-WAL writes now use the cached write path instead of direct backend root publication per point Set. The short smoke no longer shows the prior direct-backend cliff: point Set improved from the earlier 953.5 sets/s to 163034 sets/s, and the longer 5000x point run measured 620162 sets/s. Batched writes are within parity in the 64-op case and faster than cached legacy in the 1024-op case. Point Set remains slower than cached legacy due typed command-frame encode/append overhead, but it is same-order cached throughput rather than tracker-blocking direct-backend throughput.",
     "point_set_gate": {
-      "status": "blocked",
-      "legacy_public_cached_wal_on_sets_per_sec": 195794,
-      "public_command_wal_backend_sets_per_sec": 953.5,
+      "status": "passed_directional_smoke",
+      "legacy_public_cached_wal_on_sets_per_sec": 482425,
+      "public_command_wal_cached_sets_per_sec": 163034,
+      "public_command_wal_cached_to_legacy_ratio": 0.338,
       "legacy_public_cached_allocs_per_op": 5,
-      "public_command_wal_backend_allocs_per_op": 32
+      "public_command_wal_cached_allocs_per_op": 7,
+      "longer_5000x_legacy_public_cached_wal_on_sets_per_sec": 1765114,
+      "longer_5000x_public_command_wal_cached_sets_per_sec": 620162,
+      "longer_5000x_public_command_wal_cached_to_legacy_ratio": 0.351,
+      "longer_5000x_legacy_public_cached_allocs_per_op": 4,
+      "longer_5000x_public_command_wal_cached_allocs_per_op": 6
     },
     "batch_write_gate": {
-      "status": "passed_directional_smoke",
+      "status": "passed",
       "batch_size_64": {
-        "legacy_public_cached_sets_per_sec": 2138084,
-        "public_command_wal_backend_sets_per_sec": 1753183,
+        "legacy_public_cached_sets_per_sec": 2815699,
+        "public_command_wal_cached_sets_per_sec": 2250561,
+        "public_command_wal_cached_to_legacy_ratio": 0.799,
         "legacy_public_cached_allocs_per_batch": 153,
-        "public_command_wal_backend_allocs_per_batch": 90
+        "public_command_wal_cached_allocs_per_batch": 162
       },
       "batch_size_1024": {
-        "legacy_public_cached_sets_per_sec": 2741801,
-        "public_command_wal_backend_sets_per_sec": 2486883,
+        "legacy_public_cached_sets_per_sec": 2439604,
+        "public_command_wal_cached_sets_per_sec": 2989634,
+        "public_command_wal_cached_to_legacy_ratio": 1.225,
         "legacy_public_cached_allocs_per_batch": 2079,
-        "public_command_wal_backend_allocs_per_batch": 1062
+        "public_command_wal_cached_allocs_per_batch": 2093
       }
     }
   },
   "unsupported_modes": [
-    "cached memtable command-WAL writes remain disabled; public command-WAL writes use direct backend command-WAL mode to avoid the legacy cached redo journal",
-    "DeleteRange and Update use existing public fallbacks and are not newly broadened beyond raw KV Set/Delete/Batch.Write support in this slice"
+    "Update/UpdateSync remain rejected under cached public command-WAL until they have typed command coverage",
+    "DeleteRange remains rejected under cached public command-WAL until it has typed command coverage"
   ],
   "next_required_work": [
-    "implement cached typed command-WAL point writes or an equivalent public point-write batching strategy",
-    "prove point Set throughput and allocations against cached legacy with the public raw KV microbenchmark",
-    "rerun unified_bench treedb vs treedb_command_wal batch_write and point-write modes after the point-write strategy lands"
+    "continue optimizing point Set command-frame encode/append overhead if a stricter parity floor is adopted",
+    "rerun unified_bench treedb vs treedb_command_wal batch_write and point-write modes after CI review settles"
   ]
 }

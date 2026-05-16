@@ -9,8 +9,9 @@ import (
 
 // Batch implements the cosmos-db Batch interface.
 type Batch struct {
-	db    *DB
-	batch *batch.Batch
+	db           *DB
+	batch        *batch.Batch
+	physicalOnly bool
 }
 
 const optimisticWriteMaxAttempts = 3
@@ -29,6 +30,18 @@ func (db *DB) NewBatch() batch.Interface {
 	return db.newBatchWithEntryReserve(0)
 }
 
+// NewPhysicalBatch creates a backend batch that mutates the physical index
+// without appending a RawKVBatch command frame. It is for higher-level command
+// WAL executors that have already appended their logical command frames before
+// making writes visible through the cached layer.
+func (db *DB) NewPhysicalBatch() batch.Interface {
+	b := db.newBatchWithEntryReserve(0)
+	if pb, ok := b.(*Batch); ok {
+		pb.physicalOnly = true
+	}
+	return b
+}
+
 // NewBatchWithSize accepts the public cosmos-db style size hint. Small values
 // are treated like exact entry reserves; larger values are normalized as
 // approximate byte budgets and capped to avoid preallocating one entry per
@@ -39,6 +52,16 @@ func (db *DB) NewBatch() batch.Interface {
 func (db *DB) NewBatchWithSize(size int) batch.Interface {
 	reserveHint := NormalizePublicBatchReserveHint(size)
 	return db.newBatchWithReserveHint(reserveHint)
+}
+
+// NewPhysicalBatchWithSize is NewPhysicalBatch with the public size hint.
+func (db *DB) NewPhysicalBatchWithSize(size int) batch.Interface {
+	reserveHint := NormalizePublicBatchReserveHint(size)
+	b := db.newBatchWithReserveHint(reserveHint)
+	if pb, ok := b.(*Batch); ok {
+		pb.physicalOnly = true
+	}
+	return b
 }
 
 // NormalizePublicBatchReserveHint keeps small public hints behaving like entry
@@ -165,9 +188,13 @@ func (b *Batch) write(sync bool) error {
 	if sync && b.batch != nil && len(b.batch.SortedEntries()) == 0 {
 		return b.db.Checkpoint()
 	}
-	intent, err := b.db.prepareRawKVCommandWALIntent(b)
-	if err != nil {
-		return err
+	var intent *commandWALBatchIntent
+	if !b.physicalOnly {
+		var err error
+		intent, err = b.db.prepareRawKVCommandWALIntent(b)
+		if err != nil {
+			return err
+		}
 	}
 	return b.writeWithCommandWALIntent(sync, intent)
 }

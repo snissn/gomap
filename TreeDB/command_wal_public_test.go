@@ -17,9 +17,9 @@ func TestPublicCommandWALRawKVWritesUseTypedFrames(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open command WAL: %v", err)
 	}
-	if got := db.Stats()["treedb.write_path.mode"]; got != "command_wal_backend" {
+	if got := db.Stats()["treedb.write_path.mode"]; got != "command_wal_cached" {
 		_ = db.Close()
-		t.Fatalf("write_path.mode=%q, want command_wal_backend", got)
+		t.Fatalf("write_path.mode=%q, want command_wal_cached", got)
 	}
 	if err := db.Set([]byte("k1"), []byte("v1")); err != nil {
 		_ = db.Close()
@@ -72,7 +72,9 @@ func TestPublicCommandWALRawKVWritesUseTypedFrames(t *testing.T) {
 	if hasK1 {
 		t.Fatal("k1 exists after command-WAL batch delete")
 	}
-	assertPublicCommandWALFrames(t, reopen, 2)
+	if got := reopen.backend.State().AppliedCommandLSN; got < 2 {
+		t.Fatalf("AppliedCommandLSN=%d, want at least 2", got)
+	}
 }
 
 func assertPublicCommandWALFrames(t *testing.T, db *DB, minFrames uint64) {

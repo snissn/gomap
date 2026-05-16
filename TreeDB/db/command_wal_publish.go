@@ -58,6 +58,20 @@ func (db *DB) publishCommandWALRoots(newRootID uint64, sysRootID uint64, applied
 	return nil
 }
 
+// PublishCommandWALAppliedLSN publishes the current roots with an advanced
+// AppliedCommandLSN. Callers must only pass ranges for command frames already
+// reflected in the current roots.
+func (db *DB) PublishCommandWALAppliedLSN(appliedLSN uint64, covered []CommandWALLSNRange, sync bool) error {
+	if db == nil {
+		return ErrClosed
+	}
+	state := db.State()
+	if state == nil {
+		return ErrClosed
+	}
+	return db.publishCommandWALRoots(state.RootPageID, state.SystemRootPageID, appliedLSN, covered, sync)
+}
+
 func validateCommandWALPublishLocked(current page.MetaPageBody, newRootID uint64, sysRootID uint64, opts finalizeCommitOptions) error {
 	if !opts.commandWALPublish {
 		return nil
