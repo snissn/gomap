@@ -659,6 +659,9 @@ func (idx *VectorIndex) newVectorIndexNode(documentID []byte, vector []float32, 
 		level:      level,
 		neighbors:  make([][]vectorIndexNeighbor, level+1),
 	}
+	for layer := range node.neighbors {
+		node.neighbors[layer] = make([]vectorIndexNeighbor, 0, idx.maxNeighborsForLayer(layer))
+	}
 	switch idx.encoding {
 	case VectorIndexEncodingInt8:
 		node.quantized, node.quantScale = quantizeVectorIndexInt8(vector)
@@ -1614,8 +1617,7 @@ func (idx *VectorIndex) selectDiverseCandidatesLocked(candidates []vectorIndexCa
 	}
 	for _, candidate := range candidates {
 		if len(selected) >= limit {
-			rejected = append(rejected, candidate)
-			continue
+			break
 		}
 		if idx.vectorIndexCandidateIsDiverseLocked(candidate, selected) {
 			selected = append(selected, candidate)
@@ -1633,7 +1635,7 @@ func (idx *VectorIndex) selectDiverseCandidatesLocked(candidates []vectorIndexCa
 
 func (idx *VectorIndex) vectorIndexCandidateIsDiverseLocked(candidate vectorIndexCandidate, selected []vectorIndexCandidate) bool {
 	for _, existing := range selected {
-		distance := idx.distanceBetweenNodesLocked(candidate.nodeID, existing.nodeID)
+		distance := idx.distanceBetweenNodesFastLocked(candidate.nodeID, existing.nodeID)
 		if distance <= candidate.distance {
 			return false
 		}
@@ -1642,26 +1644,43 @@ func (idx *VectorIndex) vectorIndexCandidateIsDiverseLocked(candidate vectorInde
 }
 
 func (idx *VectorIndex) sortVectorIndexCandidatesByDistanceLocked(candidates []vectorIndexCandidate) {
-	slices.SortFunc(candidates, func(left, right vectorIndexCandidate) int {
-		if left.distance < right.distance {
-			return -1
-		}
-		if left.distance > right.distance {
-			return 1
-		}
-		if left.nodeID >= 0 && left.nodeID < len(idx.nodes) && right.nodeID >= 0 && right.nodeID < len(idx.nodes) {
-			if cmp := bytes.Compare(idx.nodes[left.nodeID].documentID, idx.nodes[right.nodeID].documentID); cmp != 0 {
-				return cmp
+	for i := 1; i < len(candidates); i++ {
+		if idx.compareVectorIndexCandidatesByDistanceLocked(candidates[i-1], candidates[i]) > 0 {
+			if i == len(candidates)-1 {
+				candidate := candidates[i]
+				insert := i - 1
+				for insert >= 0 && idx.compareVectorIndexCandidatesByDistanceLocked(candidates[insert], candidate) > 0 {
+					candidates[insert+1] = candidates[insert]
+					insert--
+				}
+				candidates[insert+1] = candidate
+				return
 			}
+			slices.SortFunc(candidates, idx.compareVectorIndexCandidatesByDistanceLocked)
+			return
 		}
-		if left.nodeID < right.nodeID {
-			return -1
+	}
+}
+
+func (idx *VectorIndex) compareVectorIndexCandidatesByDistanceLocked(left, right vectorIndexCandidate) int {
+	if left.distance < right.distance {
+		return -1
+	}
+	if left.distance > right.distance {
+		return 1
+	}
+	if left.nodeID >= 0 && left.nodeID < len(idx.nodes) && right.nodeID >= 0 && right.nodeID < len(idx.nodes) {
+		if cmp := bytes.Compare(idx.nodes[left.nodeID].documentID, idx.nodes[right.nodeID].documentID); cmp != 0 {
+			return cmp
 		}
-		if left.nodeID > right.nodeID {
-			return 1
-		}
-		return 0
-	})
+	}
+	if left.nodeID < right.nodeID {
+		return -1
+	}
+	if left.nodeID > right.nodeID {
+		return 1
+	}
+	return 0
 }
 
 func (idx *VectorIndex) distanceToNodeLocked(query []float32, nodeID int) float32 {
@@ -1692,6 +1711,22 @@ func (idx *VectorIndex) distanceBetweenNodesLocked(leftNodeID, rightNodeID int) 
 		return float32(math.Inf(1))
 	}
 	distance, err := vectorDistanceBetweenStoredNodes(&idx.nodes[leftNodeID], &idx.nodes[rightNodeID], idx.metric)
+	if err != nil {
+		return float32(math.Inf(1))
+	}
+	return distance
+}
+
+func (idx *VectorIndex) distanceBetweenNodesFastLocked(leftNodeID, rightNodeID int) float32 {
+	if leftNodeID < 0 || leftNodeID >= len(idx.nodes) || rightNodeID < 0 || rightNodeID >= len(idx.nodes) {
+		return float32(math.Inf(1))
+	}
+	left := &idx.nodes[leftNodeID]
+	right := &idx.nodes[rightNodeID]
+	if idx.metric == VectorMetricCosine && len(left.vector) > 0 && len(left.vector) == len(right.vector) && left.cachedInvNorm != 0 && right.cachedInvNorm != 0 {
+		return vectorDistanceBetweenFloat32NodesCosineUnchecked(left, right)
+	}
+	distance, err := vectorDistanceBetweenStoredNodes(left, right, idx.metric)
 	if err != nil {
 		return float32(math.Inf(1))
 	}
@@ -1840,8 +1875,12 @@ func vectorDistanceBetweenFloat32NodesCosine(left, right *vectorIndexNode) (floa
 	if left.cachedInvNorm == 0 || right.cachedInvNorm == 0 {
 		return 0, errors.New("collections: cosine vector cannot have zero magnitude")
 	}
+	return vectorDistanceBetweenFloat32NodesCosineUnchecked(left, right), nil
+}
+
+func vectorDistanceBetweenFloat32NodesCosineUnchecked(left, right *vectorIndexNode) float32 {
 	dot := dotProductFloat32ForCosine(left.vector, right.vector, left.normSquared, right.normSquared)
-	return float32(1 - dot*float64(left.cachedInvNorm)*float64(right.cachedInvNorm)), nil
+	return float32(1 - dot*float64(left.cachedInvNorm)*float64(right.cachedInvNorm))
 }
 
 func dotProductFloat32ForCosine(left, right []float32, leftNormSquared, rightNormSquared float64) float64 {
