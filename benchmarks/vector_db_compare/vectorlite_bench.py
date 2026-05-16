@@ -139,9 +139,9 @@ def build_database(args: argparse.Namespace, manifest: dict[str, Any], docs: np.
             "insert into vectors(rowid, embedding) values (?, ?)",
             ((i + 1, memoryview(docs[i]).tobytes()) for i in range(manifest["docs"])),
         )
-    build_phase = phase(build_start)
     db.execute("pragma wal_checkpoint(truncate)")
     db.close()
+    build_phase = phase(build_start)
     total_phase = phase(start)
     return {
         "insert": insert_phase,
