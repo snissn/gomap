@@ -3,7 +3,7 @@
   "milestone": "PR9 default command-WAL public raw KV cutover",
   "branch": "codex/user-command-wal-pr9",
   "base_branch": "codex/user-command-wal-pr8",
-  "implementation_commit": "0b18b47d2c85c4667348a3e1fd030a4bed8d13af",
+  "implementation_commit": "pr-head",
   "go_version": "go1.25.7",
   "platform": "linux/amd64",
   "command_support_matrix_version": "TreeDB/docs/spec/command-wal-support-matrix.json version 1",
@@ -11,7 +11,8 @@
     "public treedb.Open read-write command-WAL handles",
     "public Set/Delete/Batch.Write raw KV writes routed to RawKVBatch typed command frames",
     "public command-WAL mode proof through treedb.write_path.mode=command_wal_backend",
-    "reopen from persisted command_wal_v1 without explicit backend-only APIs"
+    "reopen from persisted command_wal_v1 without explicit backend-only APIs",
+    "public raw KV microbenchmark coverage for point Set and batched RawKVBatch writes"
   ],
   "passed_tests": [
     "TestPublicCommandWALRawKVWritesUseTypedFrames",
@@ -21,7 +22,7 @@
   "local_validation_commands": [
     "git diff --check",
     "GOWORK=off go test ./TreeDB ./TreeDB/docs ./TreeDB/db -run 'TestPublicCommandWALRawKVWritesUseTypedFrames|TestCommandWALSupportMatrix|TestCommandWALRawSetDeleteBatchReplaysThroughNormalExecutor|^$' -count=1",
-    "GOWORK=off go test ./TreeDB -run 'TestPublicCommandWALRawKVWritesUseTypedFrames|^$' -bench '^BenchmarkPublicCommandWALRawKVSet$' -benchtime=100x -count=1"
+    "GOWORK=off go test ./TreeDB -run 'TestPublicCommandWALRawKVWritesUseTypedFrames|^$' -bench 'BenchmarkPublicCommandWALRawKV(Set|BatchWrite)$' -benchtime=50x -count=1"
   ],
   "benchmark_artifacts": [
     "artifacts/command-wal/pr9/public-raw-kv-microbench.txt"
@@ -29,16 +30,37 @@
   "performance_gate": {
     "required": true,
     "status": "blocked",
-    "rationale": "The initial correctness slice proves public typed command-WAL routing but direct backend per-Set command WAL is much slower than public cached legacy WAL. This PR is not tracker-mergeable until the cached typed command path or another batching strategy closes the throughput/allocation gap.",
-    "observed_smoke_result": {
-      "legacy_public_cached_wal_on_sets_per_sec": 442978,
-      "public_command_wal_backend_sets_per_sec": 958.7,
-      "legacy_public_cached_allocs_per_op": 4,
+    "rationale": "Batched RawKVBatch command-WAL throughput is already close to cached legacy and uses fewer allocations per batch, but the default public point Set path still routes to direct backend command-WAL publication and is far slower than cached legacy. This PR is not tracker-mergeable until the cached typed command path or another point-write batching strategy closes the point Set throughput/allocation gap.",
+    "point_set_gate": {
+      "status": "blocked",
+      "legacy_public_cached_wal_on_sets_per_sec": 195794,
+      "public_command_wal_backend_sets_per_sec": 953.5,
+      "legacy_public_cached_allocs_per_op": 5,
       "public_command_wal_backend_allocs_per_op": 32
+    },
+    "batch_write_gate": {
+      "status": "passed_directional_smoke",
+      "batch_size_64": {
+        "legacy_public_cached_sets_per_sec": 2138084,
+        "public_command_wal_backend_sets_per_sec": 1753183,
+        "legacy_public_cached_allocs_per_batch": 153,
+        "public_command_wal_backend_allocs_per_batch": 90
+      },
+      "batch_size_1024": {
+        "legacy_public_cached_sets_per_sec": 2741801,
+        "public_command_wal_backend_sets_per_sec": 2486883,
+        "legacy_public_cached_allocs_per_batch": 2079,
+        "public_command_wal_backend_allocs_per_batch": 1062
+      }
     }
   },
   "unsupported_modes": [
     "cached memtable command-WAL writes remain disabled; public command-WAL writes use direct backend command-WAL mode to avoid the legacy cached redo journal",
     "DeleteRange and Update use existing public fallbacks and are not newly broadened beyond raw KV Set/Delete/Batch.Write support in this slice"
+  ],
+  "next_required_work": [
+    "implement cached typed command-WAL point writes or an equivalent public point-write batching strategy",
+    "prove point Set throughput and allocations against cached legacy with the public raw KV microbenchmark",
+    "rerun unified_bench treedb vs treedb_command_wal batch_write and point-write modes after the point-write strategy lands"
   ]
 }

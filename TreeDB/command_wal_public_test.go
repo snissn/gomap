@@ -133,6 +133,58 @@ func BenchmarkPublicCommandWALRawKVSet(b *testing.B) {
 	}
 }
 
+func BenchmarkPublicCommandWALRawKVBatchWrite(b *testing.B) {
+	for _, batchSize := range []int{64, 1024} {
+		b.Run(fmt.Sprintf("batch_size=%d", batchSize), func(b *testing.B) {
+			for _, commandWAL := range []bool{false, true} {
+				b.Run(fmt.Sprintf("command_wal=%t", commandWAL), func(b *testing.B) {
+					db, err := Open(Options{
+						Dir:                 b.TempDir(),
+						Durability:          DurabilityWALOnRelaxed,
+						CommandWAL:          commandWAL,
+						CommandWALStatsScan: commandWAL,
+						DisableSideStores:   true,
+					})
+					if err != nil {
+						b.Fatalf("Open: %v", err)
+					}
+					defer func() { _ = db.Close() }()
+
+					value := []byte("public-command-wal-value")
+					b.ReportAllocs()
+					b.ResetTimer()
+					for i := 0; i < b.N; i++ {
+						batch := db.NewBatchWithSize(batchSize)
+						base := i * batchSize
+						for j := 0; j < batchSize; j++ {
+							var keyBuf [32]byte
+							key := strconv.AppendInt(keyBuf[:0], int64(base+j), 10)
+							if err := batch.Set(key, value); err != nil {
+								_ = batch.Close()
+								b.Fatalf("batch Set: %v", err)
+							}
+						}
+						if err := batch.Write(); err != nil {
+							_ = batch.Close()
+							b.Fatalf("batch Write: %v", err)
+						}
+						if err := batch.Close(); err != nil {
+							b.Fatalf("batch Close: %v", err)
+						}
+					}
+					b.StopTimer()
+					totalSets := float64(b.N * batchSize)
+					b.ReportMetric(totalSets/b.Elapsed().Seconds(), "sets/s")
+					b.ReportMetric(float64(batchSize), "sets/batch")
+					if commandWAL {
+						assertPublicCommandWALFramesB(b, db, uint64(b.N))
+					}
+				})
+			}
+		})
+	}
+}
+
 func assertPublicCommandWALFramesB(b *testing.B, db *DB, minFrames uint64) {
 	b.Helper()
 	stats := db.Stats()
