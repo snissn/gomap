@@ -238,6 +238,10 @@ func (c *Collection) BuildVectorIndex(opts VectorIndexOptions) (*VectorIndex, er
 }
 
 func (c *Collection) buildVectorIndex(opts VectorIndexOptions, register bool) (*VectorIndex, error) {
+	return c.buildVectorIndexPrepared(opts, register, true)
+}
+
+func (c *Collection) buildVectorIndexPrepared(opts VectorIndexOptions, register, flushBuffered bool) (*VectorIndex, error) {
 	if c == nil {
 		return nil, errCollectionNil
 	}
@@ -248,8 +252,10 @@ func (c *Collection) buildVectorIndex(opts VectorIndexOptions, register bool) (*
 	if err != nil {
 		return nil, err
 	}
-	if err := c.flushBufferedWrites(); err != nil {
-		return nil, err
+	if flushBuffered {
+		if err := c.flushBufferedWrites(); err != nil {
+			return nil, err
+		}
 	}
 	index.setNativePersistent(collectionMetaDeclaresVectorIndex(c.meta, index.name))
 	materializer, err := c.NewStoredDocumentJSONMaterializer()
