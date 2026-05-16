@@ -564,6 +564,21 @@ func TestColumnPartFromImageRejectsNonContiguousColumnBlockRows(t *testing.T) {
 	}
 }
 
+func TestColumnPartFromImageRejectsMismatchedBlockGranuleRange(t *testing.T) {
+	_, image := testColumnPartImageFixture(t, false)
+	firstGranuleOffset, lastGranuleOffset := descriptorFirstColumnFirstBlockGranuleRangeOffsets(t, image)
+	corrupt := append([]byte(nil), image.Bytes...)
+	binary.LittleEndian.PutUint64(corrupt[firstGranuleOffset:], 1)
+	binary.LittleEndian.PutUint64(corrupt[lastGranuleOffset:], 1)
+	parsed, err := ParseColumnPartImage(corrupt)
+	if err != nil {
+		t.Fatalf("ParseColumnPartImage: %v", err)
+	}
+	if _, err := ColumnPartFromImage(parsed); err == nil {
+		t.Fatal("ColumnPartFromImage accepted a block granule range that does not cover its row range")
+	}
+}
+
 func TestColumnPartFromImageRejectsDuplicateDescriptorColumns(t *testing.T) {
 	part, _ := testColumnPartImageFixture(t, false)
 	corruptPart := *part
@@ -993,6 +1008,19 @@ func TestColumnPartFromImageRejectsMissingSortKeyMark(t *testing.T) {
 	}
 }
 
+func TestColumnPartFromImageRejectsOutOfOrderGranuleMarkOrdinal(t *testing.T) {
+	_, image := testColumnPartImageFixture(t, false)
+	corrupt := append([]byte(nil), image.Bytes...)
+	binary.LittleEndian.PutUint64(corrupt[descriptorGranuleMarkOrdinalOffset(t, image, 0):], 1)
+	parsed, err := ParseColumnPartImage(corrupt)
+	if err != nil {
+		t.Fatalf("ParseColumnPartImage: %v", err)
+	}
+	if _, err := ColumnPartFromImage(parsed); err == nil {
+		t.Fatal("ColumnPartFromImage accepted a granule mark ordinal that does not match granule order")
+	}
+}
+
 func testColumnPartImageFixture(t *testing.T, withAggregateMetadata bool) (*ColumnPart, ColumnPartImage) {
 	t.Helper()
 	return testColumnPartImageFixtureWithPartID(t, 7, withAggregateMetadata)
@@ -1307,6 +1335,29 @@ func descriptorGranuleCountOffset(t *testing.T, image ColumnPartImage) int {
 	return descriptor.Offset + dec.offset
 }
 
+func descriptorGranuleMarkOrdinalOffset(t *testing.T, image ColumnPartImage, index int) int {
+	t.Helper()
+	descriptor, dec := descriptorDecoderBeforeGranules(t, image)
+	granuleCount, err := dec.u32()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if index < 0 || index >= int(granuleCount) {
+		t.Fatalf("granule index=%d count=%d", index, granuleCount)
+	}
+	for i := 0; i < index; i++ {
+		if _, err := decodeGranuleDescriptor(&dec); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 0; i < 7; i++ {
+		if _, err := dec.i64(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return descriptor.Offset + dec.offset
+}
+
 func firstTwoRowLocatorPrimaryIDOffsets(t *testing.T, image ColumnPartImage) (int, int) {
 	t.Helper()
 	locators, err := image.singleSection(ColumnPartImageSectionRowLocators)
@@ -1497,6 +1548,22 @@ func descriptorFirstColumnFirstBlockRowCountOffset(t *testing.T, image ColumnPar
 	return descriptor.Offset + dec.offset
 }
 
+func descriptorFirstColumnFirstBlockGranuleRangeOffsets(t *testing.T, image ColumnPartImage) (int, int) {
+	t.Helper()
+	descriptor, dec := descriptorDecoderAtFirstColumnFirstBlock(t, image)
+	if _, err := dec.i64(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dec.i64(); err != nil {
+		t.Fatal(err)
+	}
+	firstGranule := descriptor.Offset + dec.offset
+	if _, err := dec.i64(); err != nil {
+		t.Fatal(err)
+	}
+	return firstGranule, descriptor.Offset + dec.offset
+}
+
 func descriptorFirstColumnFirstBlockRawBytesOffset(t *testing.T, image ColumnPartImage) int {
 	t.Helper()
 	descriptor, err := image.singleSection(ColumnPartImageSectionDescriptor)
@@ -1566,6 +1633,72 @@ func descriptorFirstColumnFirstBlockRawBytesOffset(t *testing.T, image ColumnPar
 		t.Fatal(err)
 	}
 	return descriptor.Offset + dec.offset
+}
+
+func descriptorDecoderBeforeGranules(t *testing.T, image ColumnPartImage) (ColumnPartImageSection, columnPartImageDecoder) {
+	t.Helper()
+	descriptor, err := image.singleSection(ColumnPartImageSectionDescriptor)
+	if err != nil {
+		t.Fatalf("descriptor section: %v", err)
+	}
+	dec := columnPartImageDecoder{data: image.sectionBytes(descriptor)}
+	if _, err := dec.u16(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dec.u64(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dec.u32(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dec.i64(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dec.i64(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dec.stringSlice(); err != nil {
+		t.Fatal(err)
+	}
+	return descriptor, dec
+}
+
+func descriptorDecoderAtFirstColumnFirstBlock(t *testing.T, image ColumnPartImage) (ColumnPartImageSection, columnPartImageDecoder) {
+	t.Helper()
+	descriptor, dec := descriptorDecoderBeforeGranules(t, image)
+	granuleCount, err := dec.u32()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := uint32(0); i < granuleCount; i++ {
+		if _, err := decodeGranuleDescriptor(&dec); err != nil {
+			t.Fatal(err)
+		}
+	}
+	columnCount, err := dec.u32()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if columnCount == 0 {
+		t.Fatal("descriptor has no columns")
+	}
+	if _, err := dec.str(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dec.u16(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dec.u32(); err != nil {
+		t.Fatal(err)
+	}
+	blockCount, err := dec.u32()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if blockCount == 0 {
+		t.Fatal("first descriptor column has no blocks")
+	}
+	return descriptor, dec
 }
 
 func manifestSectionCountOffset(t *testing.T, image ColumnPartImage) int {

@@ -324,6 +324,9 @@ func decodeColumnPartDescriptorSection(data []byte) (ColumnPartDescriptor, map[s
 		}
 		desc.Granules = append(desc.Granules, granule)
 	}
+	if err := validateDecodedGranuleDescriptors(desc); err != nil {
+		return ColumnPartDescriptor{}, nil, err
+	}
 	columnCount, err := dec.u32()
 	if err != nil {
 		return ColumnPartDescriptor{}, nil, err
@@ -409,6 +412,38 @@ func decodeColumnPartDescriptorSection(data []byte) (ColumnPartDescriptor, map[s
 	return desc, columns, nil
 }
 
+func validateDecodedGranuleDescriptors(desc ColumnPartDescriptor) error {
+	if desc.RowCount > 0 && len(desc.Granules) == 0 {
+		return fmt.Errorf("colgranule: descriptor rows=%d has no granules", desc.RowCount)
+	}
+	expectedFirstRow := 0
+	for i, granule := range desc.Granules {
+		if granule.Ordinal != i {
+			return fmt.Errorf("colgranule: granule %d has ordinal=%d", i, granule.Ordinal)
+		}
+		if granule.RowCount <= 0 {
+			return fmt.Errorf("colgranule: granule %d has invalid row count %d", i, granule.RowCount)
+		}
+		if granule.FirstRow != expectedFirstRow {
+			return fmt.Errorf("colgranule: granule %d first row=%d want %d", i, granule.FirstRow, expectedFirstRow)
+		}
+		if granule.VisibleRows > granule.RowCount {
+			return fmt.Errorf("colgranule: granule %d visible rows=%d exceed row count=%d", i, granule.VisibleRows, granule.RowCount)
+		}
+		if granule.DeletedRows > granule.RowCount {
+			return fmt.Errorf("colgranule: granule %d deleted rows=%d exceed row count=%d", i, granule.DeletedRows, granule.RowCount)
+		}
+		if granule.VisibleRows+granule.DeletedRows > granule.RowCount {
+			return fmt.Errorf("colgranule: granule %d visible+deleted rows=%d exceed row count=%d", i, granule.VisibleRows+granule.DeletedRows, granule.RowCount)
+		}
+		expectedFirstRow += granule.RowCount
+	}
+	if expectedFirstRow != desc.RowCount {
+		return fmt.Errorf("colgranule: descriptor granules cover %d rows, want %d", expectedFirstRow, desc.RowCount)
+	}
+	return nil
+}
+
 func validateDecodedColumnBlockDescriptor(desc ColumnPartDescriptor, column string, columnType ColumnType, cardinality uint32, blockIndex int, block ColumnBlockDescriptor) error {
 	if block.RowCount <= 0 {
 		return fmt.Errorf("colgranule: descriptor column %s block %d has invalid row count %d", column, blockIndex, block.RowCount)
@@ -421,6 +456,13 @@ func validateDecodedColumnBlockDescriptor(desc ColumnPartDescriptor, column stri
 	}
 	if len(desc.Granules) > 0 && block.LastGranule >= len(desc.Granules) {
 		return fmt.Errorf("colgranule: descriptor column %s block %d last granule=%d outside granules=%d", column, blockIndex, block.LastGranule, len(desc.Granules))
+	}
+	firstGranule, lastGranule, err := decodedBlockGranuleRange(desc.Granules, block.FirstRow, block.RowCount)
+	if err != nil {
+		return fmt.Errorf("colgranule: descriptor column %s block %d: %w", column, blockIndex, err)
+	}
+	if block.FirstGranule != firstGranule || block.LastGranule != lastGranule {
+		return fmt.Errorf("colgranule: descriptor column %s block %d granule range [%d,%d] want [%d,%d] for rows [%d,%d)", column, blockIndex, block.FirstGranule, block.LastGranule, firstGranule, lastGranule, block.FirstRow, block.FirstRow+block.RowCount)
 	}
 	maxRawBytes, err := maxDecodedBlockRawBytes(columnType, cardinality, block.Encoding, block.RowCount)
 	if err != nil {
@@ -436,6 +478,31 @@ func validateDecodedColumnBlockDescriptor(desc ColumnPartDescriptor, column stri
 		return fmt.Errorf("colgranule: descriptor column %s block %d compressed stored bytes=%d exceed raw bytes=%d", column, blockIndex, block.StoredBytes, block.RawBytes)
 	}
 	return nil
+}
+
+func decodedBlockGranuleRange(granules []GranuleDescriptor, firstRow int, rowCount int) (int, int, error) {
+	if rowCount <= 0 {
+		return 0, 0, fmt.Errorf("invalid block row count %d", rowCount)
+	}
+	firstGranule, ok := decodedGranuleIndexForRow(granules, firstRow)
+	if !ok {
+		return 0, 0, fmt.Errorf("first row=%d is not covered by descriptor granules", firstRow)
+	}
+	lastRow := firstRow + rowCount - 1
+	lastGranule, ok := decodedGranuleIndexForRow(granules, lastRow)
+	if !ok {
+		return 0, 0, fmt.Errorf("last row=%d is not covered by descriptor granules", lastRow)
+	}
+	return firstGranule, lastGranule, nil
+}
+
+func decodedGranuleIndexForRow(granules []GranuleDescriptor, row int) (int, bool) {
+	for i, granule := range granules {
+		if row >= granule.FirstRow && row < granule.FirstRow+granule.RowCount {
+			return i, true
+		}
+	}
+	return 0, false
 }
 
 func maxDecodedBlockRawBytes(columnType ColumnType, cardinality uint32, encoding Encoding, rows int) (int, error) {
@@ -870,11 +937,14 @@ func validateDecodedSortKeyMarks(desc ColumnPartDescriptor, marks []SortKeyMark)
 		}
 	}
 	for i, granule := range desc.Granules {
+		if granule.MarkOrdinal != i {
+			return fmt.Errorf("colgranule: granule %d mark ordinal=%d want %d", i, granule.MarkOrdinal, i)
+		}
 		if granule.MarkOrdinal >= len(marks) {
 			return fmt.Errorf("colgranule: granule %d mark ordinal=%d outside marks=%d", i, granule.MarkOrdinal, len(marks))
 		}
-		if marks[granule.MarkOrdinal].Rows != granule.RowCount {
-			return fmt.Errorf("colgranule: granule %d rows=%d mark %d rows=%d", i, granule.RowCount, granule.MarkOrdinal, marks[granule.MarkOrdinal].Rows)
+		if marks[i].Rows != granule.RowCount {
+			return fmt.Errorf("colgranule: granule %d rows=%d mark rows=%d", i, granule.RowCount, marks[i].Rows)
 		}
 	}
 	return nil
