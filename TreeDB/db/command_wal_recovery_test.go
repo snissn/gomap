@@ -330,6 +330,70 @@ func TestCommandWALRawSetReplayLazilyCreatesAppenderIfPlacementDrifts(t *testing
 	}
 }
 
+func TestCommandWALRegisteredReplayHandlerInstallsValueLogAppender(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db, err := Open(Options{
+		Dir: dir,
+		ValueLog: ValueLogOptions{
+			PointerThreshold: 1,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	const kind = commitlog.CommandKind(60000)
+	var handlerCalled atomic.Bool
+	RegisterCommandWALReplayHandler(kind, func(db *DB, env commitlog.CommandEnvelope) error {
+		handlerCalled.Store(true)
+		if !db.HasValueLogAppender() {
+			return ErrValueLogAppenderUnavailable
+		}
+		_, err := db.AppendValueLogValues([][]byte{[]byte(strings.Repeat("collection-replay-value-", 32))})
+		return err
+	})
+
+	var ensured atomic.Bool
+	var appender *replayInlineAppender
+	ensure := func() (map[uint64]page.ValuePtr, *replayInlineAppender, error) {
+		ensured.Store(true)
+		if appender != nil {
+			return nil, appender, nil
+		}
+		var err error
+		appender, err = newReplayInlineAppender(db, nil, nil)
+		if err != nil {
+			return nil, nil, err
+		}
+		db.SetValueLogAppender(appender)
+		return nil, appender, nil
+	}
+	defer func() {
+		db.SetValueLogAppender(nil)
+		if appender != nil {
+			_ = appender.close()
+		}
+	}()
+
+	err = applyCommandWALFrame(db, commitlog.CommandEnvelope{
+		LSN:           1,
+		Kind:          kind,
+		Scope:         commitlog.CommandScopeCollection,
+		PayloadFormat: commitlog.PayloadFormatNativeWireDeterministic,
+	}, nil, nil, ensure)
+	if err != nil {
+		t.Fatalf("applyCommandWALFrame: %v", err)
+	}
+	if !ensured.Load() {
+		t.Fatal("registered command replay did not install replay log support")
+	}
+	if !handlerCalled.Load() {
+		t.Fatal("registered command replay handler was not called")
+	}
+}
+
 func TestCommandWALRawEmptyBatchAdvancesAppliedLSNAsNoop(t *testing.T) {
 	dir := t.TempDir()
 	enableCommandWALFormat(t, dir)

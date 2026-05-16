@@ -86,6 +86,20 @@ func collectionDocumentsFromNoIndexEntries(entries []noIndexBatchEntry) []commit
 	return docs
 }
 
+func collectionDocumentsFromBatchInput(ids, documents [][]byte) ([]commitlog.CollectionDocument, error) {
+	if len(ids) != len(documents) {
+		return nil, fmt.Errorf("collections: command wal batch ids length mismatch")
+	}
+	docs := make([]commitlog.CollectionDocument, len(ids))
+	for i := range ids {
+		docs[i] = commitlog.CollectionDocument{
+			ID:       ids[i],
+			Document: documents[i],
+		}
+	}
+	return docs, nil
+}
+
 func collectionDocumentsFromInsertPlan(plan *insertBatchPlan, primaryRootName string) ([]commitlog.CollectionDocument, error) {
 	if plan == nil {
 		return nil, fmt.Errorf("collections: missing insert plan for command wal")

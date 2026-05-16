@@ -161,6 +161,73 @@ func TestCollectionCommandWALInsertBatchByIDReplayTemplateV1StoredDocument(t *te
 	}
 }
 
+func TestCollectionCommandWALInsertBatchByIDTemplateV1NewShapeReplay(t *testing.T) {
+	meta := CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatTemplateV1,
+		},
+	}
+	doc := mustTemplateV1Document(t, []string{"name", "city"}, []any{"Ada", "SEA"})
+
+	updateDir := prepareCollectionCommandWALDir(t, meta)
+	updateDB := openCollectionCommandWALDB(t, updateDir)
+	updateCol, err := NewCollectionManager(updateDB).OpenCollection("users")
+	if err != nil {
+		_ = updateDB.Close()
+		t.Fatalf("OpenCollection update: %v", err)
+	}
+	if _, err := updateCol.InsertBatch([][]byte{[]byte("u1")}, [][]byte{doc}); err != nil {
+		_ = updateDB.Close()
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	if err := updateDB.Close(); err != nil {
+		t.Fatalf("Close update DB: %v", err)
+	}
+
+	frames := collectionCommandWALFrames(t, updateDir)
+	if len(frames) != 1 {
+		t.Fatalf("command WAL frames=%d, want 1", len(frames))
+	}
+	frame := frames[0]
+	if frame.Kind != commitlog.CommandKindCollectionInsertBatchByID {
+		t.Fatalf("frame kind=%d, want insert batch", frame.Kind)
+	}
+	payload, err := commitlog.DecodeCollectionInsertBatchByIDPayload(frame.Payload)
+	if err != nil {
+		t.Fatalf("DecodeCollectionInsertBatchByIDPayload: %v", err)
+	}
+	if len(payload.Documents) != 1 {
+		t.Fatalf("payload documents=%d, want 1", len(payload.Documents))
+	}
+	if bytes.HasPrefix(payload.Documents[0].Document, []byte(templateV1StoredMagic)) {
+		t.Fatalf("TemplateV1 insert WAL payload used stored document bytes; replay needs deterministic input envelope")
+	}
+
+	replayDir := prepareCollectionCommandWALDir(t, meta)
+	writeCollectionCommandWALFrame(t, replayDir, 1, commitlog.CommandKindCollectionInsertBatchByID, commitlog.PayloadFormatCollectionInsertBatchByIDV1, frame.Payload)
+	reopen := openCollectionCommandWALDB(t, replayDir)
+	defer func() { _ = reopen.Close() }()
+	replayed, err := NewCollectionManager(reopen).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection replay: %v", err)
+	}
+	got, err := replayed.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("Get replayed template doc: %v", err)
+	}
+	jsonDoc, err := replayed.StoredDocumentJSON(got)
+	if err != nil {
+		t.Fatalf("StoredDocumentJSON: %v", err)
+	}
+	if !bytes.Contains(jsonDoc, []byte(`"Ada"`)) || !bytes.Contains(jsonDoc, []byte(`"SEA"`)) {
+		t.Fatalf("materialized template doc=%s, want Ada/SEA", jsonDoc)
+	}
+	if got := reopen.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("AppliedCommandLSN=%d, want 1", got)
+	}
+}
+
 func TestCollectionCommandWALInsertBatchByIDReplayAdvancesEmptyFrame(t *testing.T) {
 	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
 		Name: "users",

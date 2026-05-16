@@ -8388,11 +8388,21 @@ func (c *Collection) insertBatchOnceWithLockState(
 		return nil, err
 	}
 	if commandWALIntent == nil && commandWALActive {
-		docs, err := collectionDocumentsFromInsertPlan(plan, collectionPrimaryRootName(meta.Name))
-		if err != nil {
-			closePlanningSnapshot()
-			resetCollectionRunTables(plan.runs)
-			return nil, err
+		var docs []commitlog.CollectionDocument
+		if normalizedDocumentFormat(plannerOptions.documentFormat) == DocumentFormatTemplateV1 {
+			docs, err = collectionDocumentsFromBatchInput(ids, documents)
+			if err != nil {
+				closePlanningSnapshot()
+				resetCollectionRunTables(plan.runs)
+				return nil, err
+			}
+		} else {
+			docs, err = collectionDocumentsFromInsertPlan(plan, collectionPrimaryRootName(meta.Name))
+			if err != nil {
+				closePlanningSnapshot()
+				resetCollectionRunTables(plan.runs)
+				return nil, err
+			}
 		}
 		commandWALIntent, err = c.newCollectionInsertCommandWALIntent(docs, nil)
 		if err != nil {
