@@ -110,13 +110,19 @@ def build_database(args: argparse.Namespace, manifest: dict[str, Any], docs: np.
             f"grp integer not null, "
             f"embedding vector({manifest['dimensions']}) not null)"
         )
-        rows = [(i + 1, f"doc-{i:06d}", i % 16, vector_literal(docs[i])) for i in range(manifest["docs"])]
         insert_start = time.perf_counter()
+        prepare_start = time.perf_counter()
+        rows = [(i + 1, f"doc-{i:06d}", i % 16, vector_literal(docs[i])) for i in range(manifest["docs"])]
+        prepare_phase = phase(prepare_start)
+        copy_start = time.perf_counter()
         with conn.transaction():
             with conn.cursor().copy(f"copy {qualified_table} (doc_id, id, grp, embedding) from stdin") as copy:
                 for row in rows:
                     copy.write_row(row)
+        copy_phase = phase(copy_start)
         insert_phase = phase(insert_start)
+        insert_phase["client_prepare"] = prepare_phase
+        insert_phase["copy"] = copy_phase
         build_start = time.perf_counter()
         with conn.transaction():
             conn.execute(
