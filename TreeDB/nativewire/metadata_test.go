@@ -212,7 +212,7 @@ func TestMetadataHandleRefsWorkForIndexMetadata(t *testing.T) {
 	}
 }
 
-func TestMetadataIndexCommandWALRejectionsReturnUnsupportedFeature(t *testing.T) {
+func TestMetadataUnsupportedCatalogCommandsReturnUnsupportedFeature(t *testing.T) {
 	client, _, _ := serveCommandWALCollectionPipe(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()

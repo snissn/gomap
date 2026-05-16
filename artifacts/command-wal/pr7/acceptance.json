@@ -26,11 +26,11 @@
     "TestCommandWALNoActiveCollectionWALImplementationDrift",
     "TestCommandWALDocsRejectActiveCollectionWALReferencesOutsideDeprecatedDoc",
     "TestCommandWALRejectedErrorDistinctFromUnsupported",
-    "TestMetadataIndexCommandWALRejectionsReturnUnsupportedFeature"
+    "TestMetadataUnsupportedCatalogCommandsReturnUnsupportedFeature"
   ],
   "local_validation_commands": [
     "git diff --check",
-    "GOWORK=off go test ./TreeDB/docs ./TreeDB/db ./TreeDB/nativewire -run 'TestCommandWALSupportMatrix|TestCommandWALRejectedErrorDistinctFromUnsupported|TestMetadataIndexCommandWALRejectionsReturnUnsupportedFeature|^$' -count=1"
+    "GOWORK=off go test ./TreeDB/docs ./TreeDB/db ./TreeDB/nativewire -run 'TestCommandWALSupportMatrix|TestCommandWALRejectedErrorDistinctFromUnsupported|TestMetadataUnsupportedCatalogCommandsReturnUnsupportedFeature|^$' -count=1"
   ],
   "performance_gate": {
     "required": false,
