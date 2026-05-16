@@ -653,10 +653,10 @@ type Options struct {
 	// backend raw KV writes. It is also enabled automatically when format.json
 	// advertises the command_wal_v1 required feature.
 	//
-	// The public cached writer (treedb.Open) remains fail-closed for writes when
-	// CommandWAL is true; it returns ErrCommandWALUnsupported for any write open
-	// until cached writes are converted to typed command frames. Use OpenBackend
-	// for read-write opens in command-WAL mode.
+	// Public treedb.Open write handles route raw KV writes through the direct
+	// backend command-WAL path while command_wal_v1 is active, avoiding the
+	// legacy cached redo journal until cached writes are converted to typed
+	// command frames.
 	CommandWAL bool
 	// CommandWALStatsScan enables expensive diagnostic Stats() counters that scan
 	// command-WAL segment files for frame counts and max LSN. Keep this disabled

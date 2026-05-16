@@ -1024,6 +1024,36 @@ Acceptance:
 - future Raft work can reuse the command payload contract without depending on
   local WAL segment layout.
 
+### PR 9: Default command-WAL public raw KV cutover
+
+Deliverables:
+
+- public `treedb.Open` read-write handles no longer fail closed solely because
+  `CommandWAL` or persisted `command_wal_v1` is active;
+- public raw KV `Set`, `Delete`, and `Batch.Write` calls use `RawKVBatch`
+  command frames through the direct backend command-WAL path;
+- the public command-WAL write path avoids the cached legacy redo journal until
+  cached writes are converted to typed command frames;
+- stats expose mode proof with `treedb.write_path.mode=command_wal_backend`,
+  `treedb.command_wal.required_feature=true`, command frame counts, and max LSN.
+
+Acceptance:
+
+- public raw KV command-WAL writes reopen through `treedb.Open` without explicit
+  backend-only APIs;
+- recovery preserves visible state and deletes after public batch writes;
+- the support matrix classifies public raw KV writes as `WAL-supported` and
+  points at executable evidence.
+
+PR9 initial evidence:
+
+- `TestPublicCommandWALRawKVWritesUseTypedFrames` opens with public
+  `treedb.Open`, writes `Set` plus batch set/delete operations, proves command
+  frame/max-LSN stats are non-zero, closes, reopens from persisted
+  `command_wal_v1`, and verifies the final public state;
+- this PR intentionally routes public command-WAL writes through the direct
+  backend command-WAL path rather than enabling the cached legacy journal.
+
 ## 16. Deprecation of the Collection Root-Delta WAL Target
 
 The collection-specific physical/root-delta WAL target is deprecated for new

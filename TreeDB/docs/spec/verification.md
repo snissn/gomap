@@ -706,6 +706,20 @@ verification gate links to green typed-frame, `AppliedCommandLSN`, collection
 command, catalog barrier, external-ref, backup/restore, and read-only-open
 evidence.
 
+### Public raw KV command-WAL cutover evidence
+
+The first PR9 public cutover gate is:
+
+- `TestPublicCommandWALRawKVWritesUseTypedFrames`
+
+This test must prove public `treedb.Open` can open a read-write
+`command_wal_v1` handle, route raw KV writes through typed `RawKVBatch` command
+frames, expose mode proof through stats, reopen without explicit backend-only
+APIs, and recover final set/delete state. It is intentionally narrower than the
+future cached typed-frame path: while this gate is active,
+`treedb.write_path.mode=command_wal_backend` is the expected proof that public
+command-WAL writes did not use the cached legacy redo journal.
+
 ## 12. Collections Document Formats
 
 Invariant:

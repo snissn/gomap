@@ -216,6 +216,10 @@ func writePathFromOptions(opts Options) writePathInfo {
 	if opts.ReadOnly {
 		info.mode = "readonly"
 	}
+	if opts.CommandWAL && !opts.ReadOnly {
+		info.mode = "command_wal_backend"
+		info.redoLog = "command_wal"
+	}
 	if opts.Durability == db.DurabilityWALOffRelaxed {
 		info.redoLog = "off"
 	}
@@ -428,10 +432,6 @@ func Open(opts Options) (*DB, error) {
 			persistedFormat = &cfg
 		}
 	}
-	if opts.CommandWAL && !opts.ReadOnly {
-		return nil, db.ErrCommandWALUnsupported
-	}
-
 	// Apply runtime-only index/cache overrides after loading persisted format.json
 	// so downstream apps can toggle safe behavior without plumbing new CLI flags.
 	//
@@ -624,7 +624,7 @@ func Open(opts Options) (*DB, error) {
 		return nil, err
 	}
 
-	if opts.ReadOnly {
+	if opts.ReadOnly || opts.CommandWAL {
 		return &DB{backend: backend, dictdb: dictBackend, templateDB: templateDB, writePath: writePath, notifyError: opts.NotifyError, durabilityMode: computeDurabilityMode(opts), dir: rootDir}, nil
 	}
 

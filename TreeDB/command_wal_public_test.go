@@ -1,0 +1,100 @@
+package treedb
+
+import (
+	"strconv"
+	"testing"
+)
+
+func TestPublicCommandWALRawKVWritesUseTypedFrames(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{
+		Dir:                 dir,
+		Durability:          DurabilityWALOnRelaxed,
+		CommandWAL:          true,
+		CommandWALStatsScan: true,
+	})
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+	if got := db.Stats()["treedb.write_path.mode"]; got != "command_wal_backend" {
+		_ = db.Close()
+		t.Fatalf("write_path.mode=%q, want command_wal_backend", got)
+	}
+	if err := db.Set([]byte("k1"), []byte("v1")); err != nil {
+		_ = db.Close()
+		t.Fatalf("Set: %v", err)
+	}
+	b := db.NewBatch()
+	if err := b.Set([]byte("k2"), []byte("v2")); err != nil {
+		_ = b.Close()
+		_ = db.Close()
+		t.Fatalf("batch Set: %v", err)
+	}
+	if err := b.Delete([]byte("k1")); err != nil {
+		_ = b.Close()
+		_ = db.Close()
+		t.Fatalf("batch Delete: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		_ = b.Close()
+		_ = db.Close()
+		t.Fatalf("batch Write: %v", err)
+	}
+	if err := b.Close(); err != nil {
+		_ = db.Close()
+		t.Fatalf("batch Close: %v", err)
+	}
+	assertPublicCommandWALFrames(t, db, 2)
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopen, err := Open(Options{
+		Dir:                 dir,
+		CommandWALStatsScan: true,
+	})
+	if err != nil {
+		t.Fatalf("reopen command WAL from format: %v", err)
+	}
+	defer func() { _ = reopen.Close() }()
+	got, err := reopen.Get([]byte("k2"))
+	if err != nil {
+		t.Fatalf("Get(k2): %v", err)
+	}
+	if string(got) != "v2" {
+		t.Fatalf("Get(k2)=%q, want v2", got)
+	}
+	hasK1, err := reopen.Has([]byte("k1"))
+	if err != nil {
+		t.Fatalf("Has(k1): %v", err)
+	}
+	if hasK1 {
+		t.Fatal("k1 exists after command-WAL batch delete")
+	}
+	assertPublicCommandWALFrames(t, reopen, 2)
+}
+
+func assertPublicCommandWALFrames(t *testing.T, db *DB, minFrames uint64) {
+	t.Helper()
+	stats := db.Stats()
+	if stats["treedb.command_wal.required_feature"] != "true" {
+		t.Fatalf("required_feature=%q, want true", stats["treedb.command_wal.required_feature"])
+	}
+	if stats["treedb.command_wal.stats_scan"] != "true" {
+		t.Fatalf("stats_scan=%q, want true", stats["treedb.command_wal.stats_scan"])
+	}
+	frames, err := strconv.ParseUint(stats["treedb.command_wal.frames"], 10, 64)
+	if err != nil {
+		t.Fatalf("parse command_wal.frames=%q: %v", stats["treedb.command_wal.frames"], err)
+	}
+	if frames < minFrames {
+		t.Fatalf("command_wal.frames=%d, want at least %d", frames, minFrames)
+	}
+	maxLSN, err := strconv.ParseUint(stats["treedb.command_wal.max_lsn"], 10, 64)
+	if err != nil {
+		t.Fatalf("parse command_wal.max_lsn=%q: %v", stats["treedb.command_wal.max_lsn"], err)
+	}
+	if maxLSN < minFrames {
+		t.Fatalf("command_wal.max_lsn=%d, want at least %d", maxLSN, minFrames)
+	}
+}
