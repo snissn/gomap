@@ -507,7 +507,7 @@ func (j *CommandJournal) AppendRawKVSingleCommand(baseAppliedLSN uint64, op RawK
 	if err != nil {
 		return 0, err
 	}
-	if err := j.writer.AppendRawKVSingleCommand(lsn, baseAppliedLSN, op); err != nil {
+	if err := j.writer.AppendRawKVSingleCommandDirect(lsn, baseAppliedLSN, op); err != nil {
 		if rollbackErr := j.owner.rollbackReservedLSN(lsn); rollbackErr != nil {
 			return 0, errors.Join(err, rollbackErr)
 		}

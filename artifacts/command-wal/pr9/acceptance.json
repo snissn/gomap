@@ -50,20 +50,20 @@
   "performance_gate": {
     "required": true,
     "status": "blocked_strict_parity_not_met",
-    "rationale": "Public command-WAL writes use the cached write path instead of direct backend root publication per point Set, preserve public batch fast paths, stream RawKVBatch payload encoding directly from replayable batches in one hinted pass, avoid one-shot public Set/Delete slice plus backend intent allocations, and append point-write command frames without a separate payload allocation. Benchmark artifacts include explicit command_wal_cached mode proof. Longer Batch.Write focused runs are effectively at parity for batch size 64 and remain below parity for batch size 1024 by roughly 13%; the end-to-end unified_bench public cached batch_write lane remains roughly 20% below legacy cached throughput in this run. Point Set allocation parity is restored, but throughput remains materially slower because every public Set still appends and flushes a typed command-WAL frame. This gate is improved performance evidence but not a passed strict parity gate; default cutover should remain blocked unless an explicit threshold/follow-up is accepted.",
+    "rationale": "Public command-WAL writes use the cached write path instead of direct backend root publication per point Set, preserve public batch fast paths, stream RawKVBatch payload encoding directly from replayable batches in one hinted pass, avoid one-shot public Set/Delete slice plus backend intent allocations, and append point-write command frames without a separate payload allocation or buffered-writer flush layer. Benchmark artifacts include explicit command_wal_cached mode proof. Longer Batch.Write focused runs remain below parity for batch size 64 by roughly 12% and batch size 1024 by roughly 18%; the end-to-end unified_bench public cached batch_write lane remains roughly 24% below legacy cached throughput in this run. Point Set allocation parity is preserved and throughput is improved relative to the initial PR9 path, but it remains materially slower because every public Set still appends and flushes a typed command-WAL frame. This gate is improved performance evidence but not a passed strict parity gate; default cutover should remain blocked unless an explicit threshold/follow-up is accepted.",
     "point_set_gate": {
       "status": "directional_smoke_passed_strict_long_run_parity_not_met",
       "short_50x": {
-        "legacy_public_cached_wal_on_sets_per_sec": 600103,
-        "public_command_wal_cached_sets_per_sec": 187223,
-        "public_command_wal_cached_to_legacy_ratio": 0.312,
+        "legacy_public_cached_wal_on_sets_per_sec": 679062,
+        "public_command_wal_cached_sets_per_sec": 157898,
+        "public_command_wal_cached_to_legacy_ratio": 0.233,
         "legacy_public_cached_allocs_per_op": 5,
         "public_command_wal_cached_allocs_per_op": 5
       },
       "longer_5000x": {
-        "legacy_public_cached_wal_on_sets_per_sec": 1758571,
-        "public_command_wal_cached_sets_per_sec": 703715,
-        "public_command_wal_cached_to_legacy_ratio": 0.4,
+        "legacy_public_cached_wal_on_sets_per_sec": 1683883,
+        "public_command_wal_cached_sets_per_sec": 726363,
+        "public_command_wal_cached_to_legacy_ratio": 0.431,
         "legacy_public_cached_allocs_per_op": 4,
         "public_command_wal_cached_allocs_per_op": 4
       }
@@ -71,37 +71,37 @@
     "batch_write_gate": {
       "status": "focused_batch64_parity_batch1024_and_unified_bench_below_parity",
       "short_50x_batch_size_64": {
-        "legacy_public_cached_sets_per_sec": 2288662,
-        "public_command_wal_cached_sets_per_sec": 2415051,
-        "public_command_wal_cached_to_legacy_ratio": 1.055,
+        "legacy_public_cached_sets_per_sec": 1884292,
+        "public_command_wal_cached_sets_per_sec": 2380189,
+        "public_command_wal_cached_to_legacy_ratio": 1.263,
         "legacy_public_cached_allocs_per_batch": 153,
-        "public_command_wal_cached_allocs_per_batch": 156
+        "public_command_wal_cached_allocs_per_batch": 157
       },
       "short_50x_batch_size_1024": {
-        "legacy_public_cached_sets_per_sec": 2531698,
-        "public_command_wal_cached_sets_per_sec": 2642057,
-        "public_command_wal_cached_to_legacy_ratio": 1.044,
-        "legacy_public_cached_allocs_per_batch": 2078,
-        "public_command_wal_cached_allocs_per_batch": 2082
+        "legacy_public_cached_sets_per_sec": 2662927,
+        "public_command_wal_cached_sets_per_sec": 3272831,
+        "public_command_wal_cached_to_legacy_ratio": 1.229,
+        "legacy_public_cached_allocs_per_batch": 2079,
+        "public_command_wal_cached_allocs_per_batch": 2083
       },
       "longer_1000x_batch_size_64": {
-        "legacy_public_cached_sets_per_sec": 2171031,
-        "public_command_wal_cached_sets_per_sec": 2166843,
-        "public_command_wal_cached_to_legacy_ratio": 0.998,
+        "legacy_public_cached_sets_per_sec": 2228831,
+        "public_command_wal_cached_sets_per_sec": 1964955,
+        "public_command_wal_cached_to_legacy_ratio": 0.882,
         "legacy_public_cached_allocs_per_batch": 145,
         "public_command_wal_cached_allocs_per_batch": 149
       },
       "longer_1000x_batch_size_1024": {
-        "legacy_public_cached_sets_per_sec": 2270895,
-        "public_command_wal_cached_sets_per_sec": 1985160,
-        "public_command_wal_cached_to_legacy_ratio": 0.874,
+        "legacy_public_cached_sets_per_sec": 2385851,
+        "public_command_wal_cached_sets_per_sec": 1952074,
+        "public_command_wal_cached_to_legacy_ratio": 0.818,
         "legacy_public_cached_allocs_per_batch": 2072,
         "public_command_wal_cached_allocs_per_batch": 2076
       },
       "unified_bench_batch_write_200k_batch_size_1024": {
-        "legacy_public_cached_sets_per_sec": 5793928,
-        "public_command_wal_cached_sets_per_sec": 4611316,
-        "public_command_wal_cached_to_legacy_ratio": 0.796,
+        "legacy_public_cached_sets_per_sec": 6103193,
+        "public_command_wal_cached_sets_per_sec": 4609250,
+        "public_command_wal_cached_to_legacy_ratio": 0.755,
         "mode_proof": {
           "write_path_mode": "command_wal_cached",
           "write_path_redo_log": "command_wal",

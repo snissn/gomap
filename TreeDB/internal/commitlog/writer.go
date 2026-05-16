@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -317,7 +318,7 @@ func (w *Writer) AppendCommand(env CommandEnvelope) error {
 	return w.writeSegment(payload)
 }
 
-func (w *Writer) AppendRawKVSingleCommand(lsn, baseAppliedLSN uint64, op RawKVOperation) error {
+func (w *Writer) AppendRawKVSingleCommandDirect(lsn, baseAppliedLSN uint64, op RawKVOperation) error {
 	valueLen := len(op.Value)
 	if op.Op == RawKVOpSetRID {
 		valueLen = 8
@@ -333,12 +334,30 @@ func (w *Writer) AppendRawKVSingleCommand(lsn, baseAppliedLSN uint64, op RawKVOp
 	if size > int(segmentLenMask) {
 		return ErrRecordTooLarge
 	}
-	payload, err := encodeRawKVSingleCommandFrameTo(w.scratch[:0], lsn, baseAppliedLSN, op)
+	total := segmentHeaderSize + size
+	if cap(w.scratch) < total {
+		w.scratch = make([]byte, total)
+	}
+	buf := w.scratch[:total]
+	frame, err := encodeRawKVSingleCommandFrameTo(buf[segmentHeaderSize:segmentHeaderSize:total], lsn, baseAppliedLSN, op)
 	if err != nil {
 		return err
 	}
-	w.scratch = payload
-	return w.writeSegment(payload)
+	frame = frame[:size]
+	binary.LittleEndian.PutUint32(buf[0:4], uint32(size))
+	binary.LittleEndian.PutUint32(buf[4:8], crc.Checksum(frame))
+	if err := w.bw.Flush(); err != nil {
+		return err
+	}
+	n, err := w.f.Write(buf)
+	if err != nil {
+		return err
+	}
+	if n != len(buf) {
+		return io.ErrShortWrite
+	}
+	w.size += int64(total)
+	return nil
 }
 
 func (w *Writer) writeSegment(payload []byte) error {
