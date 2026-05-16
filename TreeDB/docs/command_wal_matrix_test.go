@@ -194,8 +194,10 @@ func TestCommandWALNoActiveCollectionWALImplementationDrift(t *testing.T) {
 		if strings.Contains(text, "collection-l*.log") || strings.Contains(text, "collection-l0") {
 			t.Fatalf("%s references collection WAL segment names outside deprecated implementation", path)
 		}
-		if imports, selectors := collectionWALImportAndSelectors(t, path); imports && !hasAllowedCollectionWALGuardSelector(selectors) {
-			t.Fatalf("%s imports internal/collectionwal without an approved legacy-clean guard selector; selectors=%v", path, sortedSetKeys(selectors))
+		if imports, selectors := collectionWALImportAndSelectors(t, path); imports {
+			if violations := collectionWALSelectorViolations(selectors); len(violations) > 0 {
+				t.Fatalf("%s imports internal/collectionwal with disallowed or missing guard selectors: %v", path, violations)
+			}
 		}
 		return nil
 	})
@@ -298,18 +300,26 @@ func collectionWALImportAndSelectors(t *testing.T, path string) (bool, map[strin
 	return true, selectors
 }
 
-func hasAllowedCollectionWALGuardSelector(selectors map[string]struct{}) bool {
-	allowed := []string{
-		"ErrCollectionWALRecoveryRequired",
-		"RequireCleanForOfflineMaintenance",
-		"RequireCleanForReadOnlyOpen",
+func collectionWALSelectorViolations(selectors map[string]struct{}) []string {
+	allowed := map[string]struct{}{
+		"ErrCollectionWALRecoveryRequired":  {},
+		"RequireCleanForOfflineMaintenance": {},
+		"RequireCleanForReadOnlyOpen":       {},
 	}
-	for _, name := range allowed {
-		if _, ok := selectors[name]; ok {
-			return true
+	hasAllowed := false
+	var violations []string
+	for name := range selectors {
+		if _, ok := allowed[name]; ok {
+			hasAllowed = true
+		} else {
+			violations = append(violations, name)
 		}
 	}
-	return false
+	if !hasAllowed {
+		violations = append(violations, "<missing approved legacy-clean guard selector>")
+	}
+	sort.Strings(violations)
+	return violations
 }
 
 func repoRootForDocsTest(t *testing.T) string {
