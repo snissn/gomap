@@ -134,8 +134,8 @@ func BenchmarkCollectionCommandWALRejectedIndexDDL(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_, err := collection.CreateIndex(IndexDefinition{Name: fmt.Sprintf("idx_%09d", i), Field: "email", ValueType: IndexValueString})
-		if !errors.Is(err, backenddb.ErrCommandWALUnsupported) {
-			b.Fatalf("CreateIndex error=%v, want ErrCommandWALUnsupported", err)
+		if !errors.Is(err, backenddb.ErrCommandWALRejected) {
+			b.Fatalf("CreateIndex error=%v, want ErrCommandWALRejected", err)
 		}
 	}
 	b.StopTimer()
