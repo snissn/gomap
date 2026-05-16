@@ -1602,7 +1602,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	oldInitialState := db.state.Swap(initialState)
 	db.publishSnapshotView(gen, initialState, vm)
 	if oldInitialState != nil && oldInitialState.ValueLogSet != nil {
-		_ = db.valueLogManager.Release(oldInitialState.ValueLogSet)
+		_ = vm.Release(oldInitialState.ValueLogSet)
 	}
 	if err := db.initValueLogRefTracker(); err != nil {
 		db.Close()

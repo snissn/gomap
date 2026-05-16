@@ -431,14 +431,14 @@ func applyCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map[uint
 	case commitlog.CommandKindRawKVBatch:
 		return applyRawKVCommandWALFrame(db, env, ridMap, inlineAppender, ensureReplayLogSupport)
 	default:
-		if handler, ok := lookupCommandWALReplayHandler(env.Kind); ok {
-			if ensureReplayLogSupport != nil {
+		if registration, ok := lookupCommandWALReplayHandler(env.Kind); ok {
+			if registration.needsReplayLogSupport && ensureReplayLogSupport != nil {
 				if _, _, err := ensureReplayLogSupport(); err != nil {
 					return err
 				}
 			}
 			db.ensureCommandWALRecoverySnapshotView()
-			return handler(db, env)
+			return registration.handler(db, env)
 		}
 		return commitlog.ErrCommandWALUnsupportedKind
 	}
