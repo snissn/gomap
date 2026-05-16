@@ -233,13 +233,40 @@ def benchmark_search(args: argparse.Namespace, query_lists: list[list[float]], c
     latencies = [0] * len(query_lists)
     next_index = 0
     next_lock = threading.Lock()
-    first_error: list[BaseException] = []
+    first_error: BaseException | None = None
+    error_lock = threading.Lock()
+    stop_event = threading.Event()
     client = connect(args.uri, max_pool_size=max(100, concurrency))
     collection = client[args.database][args.collection]
+
+    def record_error(exc: BaseException) -> None:
+        nonlocal first_error
+        with error_lock:
+            if first_error is None:
+                first_error = exc
+        stop_event.set()
+
+    def warm_connection() -> None:
+        try:
+            client.admin.command("ping")
+        except BaseException as exc:  # noqa: BLE001
+            record_error(exc)
+
+    warm_threads = [threading.Thread(target=warm_connection) for _ in range(concurrency)]
+    for thread in warm_threads:
+        thread.start()
+    for thread in warm_threads:
+        thread.join()
+    if first_error:
+        client.close()
+        raise first_error
+    stop_event.clear()
 
     def worker(collection) -> None:
         nonlocal next_index
         while True:
+            if stop_event.is_set():
+                return
             with next_lock:
                 i = next_index
                 next_index += 1
@@ -249,7 +276,7 @@ def benchmark_search(args: argparse.Namespace, query_lists: list[list[float]], c
             try:
                 search_one(collection, query_lists[i], args.index_name, args.top_k, args.num_candidates)
             except BaseException as exc:  # noqa: BLE001
-                first_error.append(exc)
+                record_error(exc)
                 return
             latencies[i] = time.perf_counter_ns() - start
 
@@ -262,7 +289,7 @@ def benchmark_search(args: argparse.Namespace, query_lists: list[list[float]], c
     total = time.perf_counter() - start_all
     client.close()
     if first_error:
-        raise first_error[0]
+        raise first_error
     sorted_latencies = sorted(latencies)
     avg = statistics.fmean(latencies)
     return {
