@@ -516,6 +516,31 @@ func (j *CommandJournal) AppendRawKVSingleCommand(baseAppliedLSN uint64, op RawK
 	return lsn, nil
 }
 
+func (j *CommandJournal) AppendRawKVBatchPayloadCommand(baseAppliedLSN uint64, payload []byte) (uint64, error) {
+	if j == nil {
+		return 0, errors.New("commitlog: command journal is closed")
+	}
+	if err := validateRawKVBatchPayload(payload); err != nil {
+		return 0, err
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.writer == nil || j.owner == nil {
+		return 0, errors.New("commitlog: command journal is closed")
+	}
+	lsn, err := j.owner.reserveLSN()
+	if err != nil {
+		return 0, err
+	}
+	if err := j.writer.AppendRawKVBatchPayloadCommandDirect(lsn, baseAppliedLSN, payload); err != nil {
+		if rollbackErr := j.owner.rollbackReservedLSN(lsn); rollbackErr != nil {
+			return 0, errors.Join(err, rollbackErr)
+		}
+		return 0, err
+	}
+	return lsn, nil
+}
+
 func (j *CommandJournal) Path() string {
 	if j == nil {
 		return ""

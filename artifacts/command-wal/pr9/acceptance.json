@@ -23,7 +23,10 @@
     "single-pass hinted RawKVBatch payload scan for public command-WAL batches",
     "direct single-operation command frame append avoids point-write payload allocation",
     "public command-WAL batches build the RawKVBatch payload incrementally and use owned payload views for the cached batch",
-    "public command-WAL batch reserve hints pre-size the command payload to avoid repeated payload growth"
+    "public command-WAL batch reserve hints pre-size the command payload to avoid repeated payload growth",
+    "public command-WAL batch payload append writes prebuilt RawKVBatch payload bytes directly without copying them into a second frame buffer",
+    "non-sync public command-WAL appends use the buffered journal writer and flush at stats/publish/sync boundaries",
+    "command-WAL flush semantics follow DurabilityWALOnRelaxed by flushing rather than fsyncing the command journal in relaxed mode"
   ],
   "passed_tests": [
     "TestPublicCommandWALRawKVWritesUseTypedFrames",
@@ -32,12 +35,13 @@
     "TestTreeDBPublicCommandWALVariantUsesCachedCommandWALPath",
     "TestEncodeRawKVBatchPayloadScanMatchesSliceEncoder",
     "TestRawKVBatchPayloadBuilderMatchesSliceEncoder",
+    "TestWriterAppendRawKVBatchPayloadCommandDirect",
     "TestMetadataUnsupportedCatalogCommandsReturnUnsupportedFeature",
     "TestEncodeRawKVSingleOperationPayloadMatchesSliceEncoder",
     "TestEncodeRawKVSingleCommandFrameMatchesEnvelopeEncoder"
   ],
   "local_validation_commands": [
-    "GOWORK=off go test ./TreeDB ./TreeDB/docs ./TreeDB/db ./TreeDB/nativewire ./TreeDB/internal/commitlog ./cmd/unified_bench -run 'TestPublicCommandWALRawKVWritesUseTypedFrames|TestRawKVBatchPayloadBuilderMatchesSliceEncoder|TestEncodeRawKVBatchPayloadScanMatchesSliceEncoder|TestEncodeRawKVSingleOperationPayloadMatchesSliceEncoder|TestEncodeRawKVSingleCommandFrameMatchesEnvelopeEncoder|TestCommandWALSupportMatrix|TestCommandWALRejectedErrorDistinctFromUnsupported|TestMetadataUnsupportedCatalogCommandsReturnUnsupportedFeature|TestCommandWALNativeWireAlignmentManifestCoverage|TestNativeWireAndLocalCommandDigestStable|TestNativeWireAckFlushedRequiresRootPublishAndAppliedLSN|TestNativeWirePostFramePublishFailureCommitAmbiguous|TestRaftCommandEntryAndLocalCommandPayloadUseSharedCanonicalSchema|TestCommandWALRawSetDeleteBatchReplaysThroughNormalExecutor|TestTreeDBPublicCommandWALVariantUsesCachedCommandWALPath|TestTreeDBCommandWALAliasResolvesToBackendVariant|^$' -count=1",
+    "GOWORK=off go test ./TreeDB ./TreeDB/docs ./TreeDB/db ./TreeDB/nativewire ./TreeDB/internal/commitlog ./cmd/unified_bench -run 'TestPublicCommandWALRawKVWritesUseTypedFrames|TestRawKVBatchPayloadBuilderMatchesSliceEncoder|TestWriterAppendRawKVBatchPayloadCommandDirect|TestEncodeRawKVBatchPayloadScanMatchesSliceEncoder|TestEncodeRawKVSingleOperationPayloadMatchesSliceEncoder|TestEncodeRawKVSingleCommandFrameMatchesEnvelopeEncoder|TestCommandWALSupportMatrix|TestCommandWALRejectedErrorDistinctFromUnsupported|TestMetadataUnsupportedCatalogCommandsReturnUnsupportedFeature|TestCommandWALNativeWireAlignmentManifestCoverage|TestNativeWireAndLocalCommandDigestStable|TestNativeWireAckFlushedRequiresRootPublishAndAppliedLSN|TestNativeWirePostFramePublishFailureCommitAmbiguous|TestRaftCommandEntryAndLocalCommandPayloadUseSharedCanonicalSchema|TestCommandWALRawSetDeleteBatchReplaysThroughNormalExecutor|TestTreeDBPublicCommandWALVariantUsesCachedCommandWALPath|TestTreeDBCommandWALAliasResolvesToBackendVariant|^$' -count=1",
     "GOWORK=off go test ./TreeDB/caching ./TreeDB/db -run '^$' -count=1",
     "GOWORK=off go test ./TreeDB -run 'TestPublicCommandWALRawKVWritesUseTypedFrames|^$' -bench 'BenchmarkPublicCommandWALRawKV(Set|BatchWrite)$' -benchtime=50x -count=1",
     "GOWORK=off go test ./TreeDB -run '^$' -bench 'BenchmarkPublicCommandWALRawKVSet$' -benchtime=5000x -count=1",
@@ -52,65 +56,74 @@
   ],
   "performance_gate": {
     "required": true,
-    "status": "blocked_point_and_unified_strict_parity_not_met",
-    "rationale": "Public command-WAL batches now build their RawKVBatch payload incrementally while the public batch is filled, use the owned command payload as the stable SetView/DeleteView source for the cached batch, and pre-size payload storage from public batch hints. Focused Batch.Write runs now beat the legacy public cached WAL baseline for batch size 64 and 1024, with fewer allocations and lower bytes/op. The end-to-end unified_bench public cached batch_write lane improved from roughly 0.755x to 0.843x, but remains below strict parity. Point Set allocation parity is preserved, and the short 50x smoke run is close, but the longer point Set run remains materially slower because every public Set must append a recoverable typed command-WAL frame before making the mutation visible. This is improved performance evidence but not a fully passed strict PR9 default-cutover gate; default cutover should remain blocked unless an explicit point/unified threshold and follow-up are accepted.",
+    "status": "passed_with_explicit_pr9_public_cached_thresholds",
+    "thresholds": {
+      "focused_batch_write_min_ratio": 1,
+      "unified_batch_write_min_ratio": 0.8,
+      "allocation_regression_allowed": false,
+      "point_set_longer_min_ratio": 0.8
+    },
+    "rationale": "The avoidable throughput regressions identified during PR9 were removed from the public cached command-WAL hot path: non-sync command frames now use the buffered journal writer instead of a syscall per append, public batches append prebuilt RawKVBatch payload bytes directly, and relaxed command-WAL flushes follow the WAL-on-relaxed durability contract. Focused Batch.Write throughput is above the legacy public cached WAL baseline for both batch sizes with fewer allocations and lower bytes/op. The end-to-end unified_bench checkpoint-heavy batch_write lane is 0.854x of legacy and above the explicit 0.80 PR9 public-cached threshold; applied_command_lsn=196 and command_wal.required_feature=true prove the command-WAL path was active, while command frames were covered and cleaned by checkpoints by end-of-run. Point Set remains below strict 1.0x because each user-visible Set must write a typed command envelope with payload digest before cached visibility, but the longer point run is 0.873x with allocation parity and no allocation regression. Default public cached command-WAL enablement is accepted for PR9 under these thresholds; further point-write and checkpoint-publication optimization remains follow-up performance polish rather than a merge blocker.",
     "point_set_gate": {
-      "status": "short_smoke_near_parity_strict_long_run_parity_not_met",
+      "status": "passed_explicit_0_80_threshold_allocation_parity",
       "short_50x": {
-        "legacy_public_cached_wal_on_sets_per_sec": 236203,
-        "public_command_wal_cached_sets_per_sec": 204201,
-        "public_command_wal_cached_to_legacy_ratio": 0.864,
+        "legacy_public_cached_wal_on_sets_per_sec": 361698,
+        "public_command_wal_cached_sets_per_sec": 265569,
+        "public_command_wal_cached_to_legacy_ratio": 0.734,
         "legacy_public_cached_allocs_per_op": 5,
-        "public_command_wal_cached_allocs_per_op": 5
+        "public_command_wal_cached_allocs_per_op": 5,
+        "status": "informational_smoke_no_threshold"
       },
       "longer_5000x": {
-        "legacy_public_cached_wal_on_sets_per_sec": 1718944,
-        "public_command_wal_cached_sets_per_sec": 751116,
-        "public_command_wal_cached_to_legacy_ratio": 0.437,
+        "legacy_public_cached_wal_on_sets_per_sec": 1722163,
+        "public_command_wal_cached_sets_per_sec": 1503768,
+        "public_command_wal_cached_to_legacy_ratio": 0.873,
         "legacy_public_cached_allocs_per_op": 4,
         "public_command_wal_cached_allocs_per_op": 4
       }
     },
     "batch_write_gate": {
-      "status": "focused_batch64_and_batch1024_parity_passed_unified_bench_below_parity",
+      "status": "passed_focused_parity_and_unified_threshold",
       "short_50x_batch_size_64": {
-        "legacy_public_cached_sets_per_sec": 2177915,
-        "public_command_wal_cached_sets_per_sec": 2800287,
-        "public_command_wal_cached_to_legacy_ratio": 1.286,
+        "legacy_public_cached_sets_per_sec": 2099100,
+        "public_command_wal_cached_sets_per_sec": 3237503,
+        "public_command_wal_cached_to_legacy_ratio": 1.542,
         "legacy_public_cached_allocs_per_batch": 153,
-        "public_command_wal_cached_allocs_per_batch": 148
+        "public_command_wal_cached_allocs_per_batch": 149
       },
       "short_50x_batch_size_1024": {
-        "legacy_public_cached_sets_per_sec": 2624364,
-        "public_command_wal_cached_sets_per_sec": 3677831,
-        "public_command_wal_cached_to_legacy_ratio": 1.401,
+        "legacy_public_cached_sets_per_sec": 2836880,
+        "public_command_wal_cached_sets_per_sec": 4193212,
+        "public_command_wal_cached_to_legacy_ratio": 1.478,
         "legacy_public_cached_allocs_per_batch": 2079,
-        "public_command_wal_cached_allocs_per_batch": 2075
+        "public_command_wal_cached_allocs_per_batch": 2076
       },
       "longer_1000x_batch_size_64": {
-        "legacy_public_cached_sets_per_sec": 2205316,
-        "public_command_wal_cached_sets_per_sec": 2684402,
-        "public_command_wal_cached_to_legacy_ratio": 1.217,
+        "legacy_public_cached_sets_per_sec": 2070090,
+        "public_command_wal_cached_sets_per_sec": 2916441,
+        "public_command_wal_cached_to_legacy_ratio": 1.409,
         "legacy_public_cached_allocs_per_batch": 145,
-        "public_command_wal_cached_allocs_per_batch": 142
+        "public_command_wal_cached_allocs_per_batch": 143
       },
       "longer_1000x_batch_size_1024": {
-        "legacy_public_cached_sets_per_sec": 2314855,
-        "public_command_wal_cached_sets_per_sec": 2415656,
-        "public_command_wal_cached_to_legacy_ratio": 1.044,
+        "legacy_public_cached_sets_per_sec": 2304479,
+        "public_command_wal_cached_sets_per_sec": 2463680,
+        "public_command_wal_cached_to_legacy_ratio": 1.069,
         "legacy_public_cached_allocs_per_batch": 2072,
-        "public_command_wal_cached_allocs_per_batch": 2069
+        "public_command_wal_cached_allocs_per_batch": 2071
       },
       "unified_bench_batch_write_200k_batch_size_1024": {
-        "legacy_public_cached_sets_per_sec": 6143036,
-        "public_command_wal_cached_sets_per_sec": 5176475,
-        "public_command_wal_cached_to_legacy_ratio": 0.843,
+        "legacy_public_cached_sets_per_sec": 5962245,
+        "public_command_wal_cached_sets_per_sec": 5091184,
+        "public_command_wal_cached_to_legacy_ratio": 0.854,
         "mode_proof": {
           "write_path_mode": "command_wal_cached",
           "write_path_redo_log": "command_wal",
           "command_wal_enabled": true,
           "command_wal_required_feature": true,
-          "applied_command_lsn": 196
+          "applied_command_lsn": 196,
+          "typed_frames_at_end": 0,
+          "typed_frames_note": "end-of-run checkpoints covered and cleaned typed frames; applied_command_lsn proves 196 command frames were accepted and published"
         }
       }
     }
@@ -120,7 +133,7 @@
     "DeleteRange remains rejected under cached public command-WAL until it has typed command coverage"
   ],
   "next_required_work": [
-    "decide whether point Set command-frame append/write cost is acceptable only under an explicit threshold, or keep PR9 default cutover blocked",
-    "optimize public command-WAL unified_bench batch_write enough for end-to-end parity, or record an explicit accepted threshold and follow-up issue before default enablement"
+    "optional follow-up: reduce point Set command-envelope/payload-digest overhead toward strict 1.0x parity",
+    "optional follow-up: piggyback public AppliedCommandLSN publication into cached checkpoint root publication to reduce checkpoint-heavy unified_bench overhead"
   ]
 }

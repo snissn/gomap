@@ -37,6 +37,25 @@ func (db *DB) CommandWALEnabled() bool {
 	return db != nil && db.commandWAL
 }
 
+func (db *DB) FlushCommandWAL(sync bool) error {
+	if db == nil || !db.commandWAL || db.commandJournal == nil {
+		return nil
+	}
+	var err error
+	if sync && db.durability != DurabilityWALOnRelaxed {
+		err = db.commandJournal.Sync()
+	} else {
+		err = db.commandJournal.Flush()
+	}
+	if err == nil && db.testFailCommandWALFlush.Load() {
+		err = errTestCommandWALFlushFailpoint
+	}
+	if err != nil {
+		db.commandWALFlushPoisoned.Store(true)
+	}
+	return err
+}
+
 func (db *DB) NewCommandWALIntent(kind commitlog.CommandKind, scope commitlog.CommandScope, payloadFormat commitlog.PayloadFormat, payload []byte) (*CommandWALIntent, error) {
 	if db == nil || !db.commandWAL {
 		return nil, nil
@@ -293,21 +312,48 @@ func (db *DB) AppendRawKVSingleCommandWAL(op commitlog.RawKVOperation, sync bool
 	if db.commandWALFlushPoisoned.Load() {
 		return 0, fmt.Errorf("%w: command wal post-append failure; reopen required", ErrRecoveryRequired)
 	}
-	db.mu.RLock()
-	baseAppliedLSN := db.meta.AppliedCommandLSN
-	db.mu.RUnlock()
+	baseAppliedLSN := uint64(0)
+	if state := db.state.Load(); state != nil {
+		baseAppliedLSN = state.AppliedCommandLSN
+	}
 	lsn, err := db.commandJournal.AppendRawKVSingleCommand(baseAppliedLSN, op)
 	if err != nil {
 		return 0, err
 	}
 	if sync {
-		err = db.commandJournal.Sync()
-	}
-	if err == nil && db.testFailCommandWALFlush.Load() {
-		err = errTestCommandWALFlushFailpoint
+		err = db.FlushCommandWAL(true)
 	}
 	if err != nil {
-		db.commandWALFlushPoisoned.Store(true)
+		return 0, err
+	}
+	return lsn, nil
+}
+
+func (db *DB) AppendRawKVBatchPayloadCommandWAL(payload []byte, sync bool) (uint64, error) {
+	if db == nil || !db.commandWAL {
+		return 0, nil
+	}
+	if db.durability == DurabilityWALOffRelaxed {
+		return 0, fmt.Errorf("%w: WAL-off durability is incompatible with command WAL", ErrCommandWALUnsupported)
+	}
+	if db.commandJournal == nil {
+		return 0, fmt.Errorf("treedb: command wal journal unavailable")
+	}
+	if db.commandWALFlushPoisoned.Load() {
+		return 0, fmt.Errorf("%w: command wal post-append failure; reopen required", ErrRecoveryRequired)
+	}
+	baseAppliedLSN := uint64(0)
+	if state := db.state.Load(); state != nil {
+		baseAppliedLSN = state.AppliedCommandLSN
+	}
+	lsn, err := db.commandJournal.AppendRawKVBatchPayloadCommand(baseAppliedLSN, payload)
+	if err != nil {
+		return 0, err
+	}
+	if sync {
+		err = db.FlushCommandWAL(true)
+	}
+	if err != nil {
 		return 0, err
 	}
 	return lsn, nil

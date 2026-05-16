@@ -2,6 +2,7 @@ package treedb
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/caching"
@@ -44,7 +45,7 @@ func (tdb *DB) appendPublicRawKVCommandPayload(payload []byte, sync bool) error 
 	if tdb.backend == nil {
 		return ErrClosed
 	}
-	lsn, err := tdb.backend.AppendCommandWALPayload(commitlog.CommandKindRawKVBatch, commitlog.CommandScopeRawKV, commitlog.PayloadFormatRawKVBatchV1, payload, sync)
+	lsn, err := tdb.backend.AppendRawKVBatchPayloadCommandWAL(payload, sync)
 	if err != nil {
 		return err
 	}
@@ -96,7 +97,11 @@ func (tdb *DB) publishPublicCommandWALPending(sync bool) error {
 	if first > current+1 {
 		return fmt.Errorf("%w: pending public command WAL starts at %d after applied %d", db.ErrCommandWALAppliedLSNNonContig, first, current)
 	}
-	if err := tdb.backend.PublishCommandWALAppliedLSN(last, []db.CommandWALLSNRange{{First: current + 1, Last: last}}, sync); err != nil {
+	if err := tdb.backend.FlushCommandWAL(sync); err != nil {
+		return err
+	}
+	publishSync := sync && !strings.HasPrefix(tdb.durabilityMode, "wal_on_relaxed_sync")
+	if err := tdb.backend.PublishCommandWALAppliedLSN(last, []db.CommandWALLSNRange{{First: current + 1, Last: last}}, publishSync); err != nil {
 		return err
 	}
 	tdb.commandWALMu.Lock()

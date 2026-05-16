@@ -536,6 +536,43 @@ func TestRawKVBatchPayloadBuilderMatchesSliceEncoder(t *testing.T) {
 	}
 }
 
+func TestWriterAppendRawKVBatchPayloadCommandDirect(t *testing.T) {
+	payload, err := EncodeRawKVBatchPayload([]RawKVOperation{
+		{Op: RawKVOpSet, Key: []byte("alpha"), Value: []byte("one")},
+		{Op: RawKVOpDelete, Key: []byte("bravo")},
+	})
+	if err != nil {
+		t.Fatalf("EncodeRawKVBatchPayload: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "commit-l0-000001.log")
+	w, err := NewWriter(path)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	if err := w.AppendRawKVBatchPayloadCommandDirect(7, 3, payload); err != nil {
+		_ = w.Close()
+		t.Fatalf("AppendRawKVBatchPayloadCommandDirect: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close writer: %v", err)
+	}
+	r, err := NewReader(path)
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+	defer r.Close()
+	env, err := r.ReadCommandFrame()
+	if err != nil {
+		t.Fatalf("ReadCommandFrame: %v", err)
+	}
+	if env.LSN != 7 || env.BaseAppliedLSN != 3 || env.Kind != CommandKindRawKVBatch || env.Scope != CommandScopeRawKV || env.PayloadFormat != PayloadFormatRawKVBatchV1 {
+		t.Fatalf("decoded command identity mismatch: %+v", env)
+	}
+	if !bytes.Equal(env.Payload, payload) {
+		t.Fatalf("payload mismatch\ngot  %x\nwant %x", env.Payload, payload)
+	}
+}
+
 func TestEncodeRawKVSingleOperationPayloadMatchesSliceEncoder(t *testing.T) {
 	for _, op := range []RawKVOperation{
 		{Op: RawKVOpSet, Key: []byte("alpha"), Value: []byte("one")},

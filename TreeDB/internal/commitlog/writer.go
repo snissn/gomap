@@ -2,10 +2,10 @@ package commitlog
 
 import (
 	"bufio"
+	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -346,17 +346,52 @@ func (w *Writer) AppendRawKVSingleCommandDirect(lsn, baseAppliedLSN uint64, op R
 	frame = frame[:size]
 	binary.LittleEndian.PutUint32(buf[0:4], uint32(size))
 	binary.LittleEndian.PutUint32(buf[4:8], crc.Checksum(frame))
-	if err := w.bw.Flush(); err != nil {
+	if _, err := w.bw.Write(buf); err != nil {
 		return err
 	}
-	n, err := w.f.Write(buf)
+	w.size += int64(total)
+	return nil
+}
+
+func (w *Writer) AppendRawKVBatchPayloadCommandDirect(lsn, baseAppliedLSN uint64, payload []byte) error {
+	if lsn == 0 {
+		return fmt.Errorf("%w: zero lsn", ErrCorrupt)
+	}
+	if err := validateRawKVBatchPayload(payload); err != nil {
+		return err
+	}
+	size, err := commandFrameEncodedSizeFromLengths(len(payload), 0, 0, 0)
 	if err != nil {
 		return err
 	}
-	if n != len(buf) {
-		return io.ErrShortWrite
+	if w.maxSegmentSize > 0 && int64(size) > w.maxSegmentSize {
+		return ErrRecordTooLarge
 	}
-	w.size += int64(total)
+	if size > int(segmentLenMask) {
+		return ErrRecordTooLarge
+	}
+	var prefix [segmentHeaderSize + commandFrameHeaderSize]byte
+	frameHeader := prefix[segmentHeaderSize:]
+	copy(frameHeader[0:4], commandFrameMagic[:])
+	binary.LittleEndian.PutUint16(frameHeader[4:6], CommandFrameVersion)
+	binary.LittleEndian.PutUint16(frameHeader[6:8], CommandFrameVersion)
+	binary.LittleEndian.PutUint16(frameHeader[8:10], uint16(CommandKindRawKVBatch))
+	binary.LittleEndian.PutUint16(frameHeader[10:12], uint16(CommandScopeRawKV))
+	binary.LittleEndian.PutUint64(frameHeader[20:28], lsn)
+	binary.LittleEndian.PutUint64(frameHeader[44:52], baseAppliedLSN)
+	binary.LittleEndian.PutUint16(frameHeader[52:54], uint16(PayloadFormatRawKVBatchV1))
+	binary.LittleEndian.PutUint32(frameHeader[56:60], uint32(len(payload)))
+	digest := sha256.Sum256(payload)
+	copy(frameHeader[72:72+sha256.Size], digest[:])
+	binary.LittleEndian.PutUint32(prefix[0:4], uint32(size))
+	binary.LittleEndian.PutUint32(prefix[4:8], crc.ChecksumParts(frameHeader, payload))
+	if _, err := w.bw.Write(prefix[:]); err != nil {
+		return err
+	}
+	if _, err := w.bw.Write(payload); err != nil {
+		return err
+	}
+	w.size += int64(segmentHeaderSize + size)
 	return nil
 }
 

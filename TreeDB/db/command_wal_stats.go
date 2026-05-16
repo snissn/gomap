@@ -69,6 +69,9 @@ func writeCommandWALStatsZeroCounters(stats map[string]string) {
 }
 
 func (db *DB) cachedCommandWALStatsSummary() (commandWALStatsSummary, error) {
+	if err := db.FlushCommandWAL(false); err != nil {
+		return commandWALStatsSummary{}, err
+	}
 	state := db.state.Load()
 	appliedLSN := uint64(0)
 	if state != nil {
