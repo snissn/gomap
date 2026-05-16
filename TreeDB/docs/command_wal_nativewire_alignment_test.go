@@ -115,10 +115,13 @@ func TestNativeWireAndLocalCommandDigestStable(t *testing.T) {
 
 func TestNativeWireAckFlushedRequiresRootPublishAndAppliedLSN(t *testing.T) {
 	alignment := loadCommandWALNativeWireAlignment(t)
-	if got := alignment.AckRecoverability["visible"]; !strings.Contains(got, "does not require root publication or AppliedLSN") {
+	for _, key := range []string{"visible", "flushed", "synced", "raft_committed"} {
+		requireAckRecoverability(t, alignment, key)
+	}
+	if got := requireAckRecoverability(t, alignment, "visible"); !strings.Contains(got, "does not require root publication or AppliedLSN") {
 		t.Fatalf("visible recoverability rule = %q", got)
 	}
-	if got := alignment.AckRecoverability["flushed"]; !strings.Contains(got, "roots and AppliedLSN") || !strings.Contains(got, "same backend commit") {
+	if got := requireAckRecoverability(t, alignment, "flushed"); !strings.Contains(got, "roots and AppliedLSN") || !strings.Contains(got, "same backend commit") {
 		t.Fatalf("flushed recoverability rule = %q", got)
 	}
 	protocol := readRepoText(t, "TreeDB/docs/spec/native-wire-protocol.md")
@@ -131,6 +134,18 @@ func TestNativeWireAckFlushedRequiresRootPublishAndAppliedLSN(t *testing.T) {
 			t.Fatalf("native-wire protocol missing ack/recoverability text: %q", required)
 		}
 	}
+}
+
+func requireAckRecoverability(t *testing.T, alignment commandWALNativeWireAlignment, key string) string {
+	t.Helper()
+	value, ok := alignment.AckRecoverability[key]
+	if !ok {
+		t.Fatalf("native-wire alignment missing ack_recoverability[%q]", key)
+	}
+	if value == "" {
+		t.Fatalf("native-wire alignment has empty ack_recoverability[%q]", key)
+	}
+	return value
 }
 
 func TestNativeWirePostFramePublishFailureCommitAmbiguous(t *testing.T) {
@@ -240,5 +255,17 @@ func readRepoText(t *testing.T, rel string) string {
 func repoPath(t *testing.T, rel string) string {
 	t.Helper()
 	_, repoRoot := repoRoots(t)
-	return filepath.Join(repoRoot, filepath.FromSlash(rel))
+	clean := filepath.Clean(filepath.FromSlash(rel))
+	if filepath.IsAbs(clean) || clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(os.PathSeparator)) {
+		t.Fatalf("repo-relative path %q escapes repo root", rel)
+	}
+	path := filepath.Join(repoRoot, clean)
+	relative, err := filepath.Rel(repoRoot, path)
+	if err != nil {
+		t.Fatalf("compute repo-relative path for %q: %v", rel, err)
+	}
+	if relative == ".." || strings.HasPrefix(relative, ".."+string(os.PathSeparator)) {
+		t.Fatalf("repo-relative path %q resolves outside repo root: %s", rel, path)
+	}
+	return path
 }
