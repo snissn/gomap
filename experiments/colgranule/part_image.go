@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"reflect"
 	"sort"
 	"time"
 )
@@ -97,6 +98,9 @@ func (p *ColumnPart) WithImagePayloads(image ColumnPartImage) (*ColumnPart, erro
 	if image.Rows != p.Descriptor.RowCount {
 		return nil, fmt.Errorf("colgranule: image rows=%d does not match part rows=%d", image.Rows, p.Descriptor.RowCount)
 	}
+	if err := validateImageDescriptorMatchesPart(image, p); err != nil {
+		return nil, err
+	}
 	out := *p
 	out.Columns = make(map[string]ColumnPartColumn, len(p.Columns))
 	for name, column := range p.Columns {
@@ -155,6 +159,87 @@ func (i ColumnPartImage) columnDataSection(column string) (ColumnPartImageSectio
 		}
 	}
 	return ColumnPartImageSection{}, false
+}
+
+func validateImageDescriptorMatchesPart(image ColumnPartImage, part *ColumnPart) error {
+	descriptorSection, err := image.singleSection(ColumnPartImageSectionDescriptor)
+	if err != nil {
+		return err
+	}
+	imageDesc, imageColumns, err := decodeColumnPartDescriptorSection(image.sectionBytes(descriptorSection))
+	if err != nil {
+		return err
+	}
+	partDesc := part.Descriptor
+	imageDesc.SortKey = nil
+	partDesc.SortKey = nil
+	if !reflect.DeepEqual(imageDesc, partDesc) {
+		return fmt.Errorf("colgranule: image descriptor does not match part descriptor")
+	}
+	sortKey, err := decodeSortKeyMetadataSection(image)
+	if err != nil {
+		return err
+	}
+	if !reflect.DeepEqual(sortKey, part.Descriptor.SortKey) {
+		return fmt.Errorf("colgranule: image sort key does not match part sort key")
+	}
+	if len(imageColumns) != len(part.Columns) {
+		return fmt.Errorf("colgranule: image has %d columns, part has %d", len(imageColumns), len(part.Columns))
+	}
+	for name, imageColumn := range imageColumns {
+		partColumn, ok := part.Columns[name]
+		if !ok {
+			return fmt.Errorf("colgranule: image descriptor has unknown column %s", name)
+		}
+		if comparableColumnDefinition(imageColumn.Definition) != comparableColumnDefinition(partColumn.Definition) {
+			return fmt.Errorf("colgranule: image descriptor column %s definition does not match part", name)
+		}
+		if len(imageColumn.Blocks) != len(partColumn.Blocks) {
+			return fmt.Errorf("colgranule: image descriptor column %s blocks=%d part blocks=%d", name, len(imageColumn.Blocks), len(partColumn.Blocks))
+		}
+		for i := range imageColumn.Blocks {
+			if imageColumn.Blocks[i].Descriptor != partColumn.Blocks[i].Descriptor {
+				return fmt.Errorf("colgranule: image descriptor column %s block %d descriptor does not match part", name, i)
+			}
+			if comparableGranuleMetadata(imageColumn.Blocks[i].Granule) != comparableGranuleMetadata(partColumn.Blocks[i].Granule) {
+				return fmt.Errorf("colgranule: image descriptor column %s block %d granule metadata does not match part", name, i)
+			}
+		}
+	}
+	return nil
+}
+
+func comparableColumnDefinition(def ColumnDefinition) ColumnDefinition {
+	def.CodecBlockRows = 0
+	return def
+}
+
+type comparableEncodedGranuleMetadata struct {
+	Rows         int
+	NullCount    int
+	DefaultCount int
+	HasMinMax    bool
+	Min          int64
+	Max          int64
+	Encoding     Encoding
+	Compression  Compression
+	RawBytes     int
+	StoredBytes  int
+}
+
+func comparableGranuleMetadata(granule EncodedGranule) comparableEncodedGranuleMetadata {
+	return comparableEncodedGranuleMetadata{
+		Rows:         granule.Rows,
+		NullCount:    granule.NullCount,
+		DefaultCount: granule.DefaultCount,
+		HasMinMax:    granule.HasMinMax,
+		Min:          granule.Min,
+		Max:          granule.Max,
+		Encoding:     granule.Encoding,
+		Compression:  granule.Compression,
+		RawBytes:     granule.RawBytes,
+		StoredBytes:  granule.StoredBytes,
+	}
 }
 
 type columnPartImageBuilder struct {

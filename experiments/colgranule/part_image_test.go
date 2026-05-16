@@ -205,6 +205,30 @@ func TestColumnPartWithImagePayloadsRejectsMismatchedImage(t *testing.T) {
 	}
 }
 
+func TestColumnPartWithImagePayloadsRejectsDescriptorMismatch(t *testing.T) {
+	part, _ := testColumnPartImageFixture(t, false)
+	otherPart, err := BuildColumnPart(part.Descriptor.PartID, partTestOptions([]SortKeyColumn{{Column: "id"}}), ColumnBatch{Columns: map[string][]int64{
+		"id":        {3, 1, 2, 5, 4},
+		"time_us":   {30, 10, 20, 50, 40},
+		"value":     {900, 800, 700, 600, 500},
+		"kind_code": {1, 0, 1, 2, 0},
+		"has_reply": {1, 0, 1, 0, 1},
+	}})
+	if err != nil {
+		t.Fatalf("BuildColumnPart: %v", err)
+	}
+	otherImage, err := BuildColumnPartImage(otherPart, ColumnPartImageOptions{})
+	if err != nil {
+		t.Fatalf("BuildColumnPartImage: %v", err)
+	}
+	if otherImage.PartID != part.Descriptor.PartID || otherImage.Rows != part.Descriptor.RowCount {
+		t.Fatalf("bad fixture image part/rows=(%d,%d), want (%d,%d)", otherImage.PartID, otherImage.Rows, part.Descriptor.PartID, part.Descriptor.RowCount)
+	}
+	if _, err := part.WithImagePayloads(otherImage); err == nil {
+		t.Fatal("WithImagePayloads accepted descriptor-compatible part id with different block metadata")
+	}
+}
+
 func TestColumnPartFromParsedImageScansWithoutOriginalPart(t *testing.T) {
 	opts := partTestOptions([]SortKeyColumn{{Column: "time_us"}})
 	opts.AggregateMetadata = []AggregateMetadataDefinition{aggregateMetadataTestDefinition()}
