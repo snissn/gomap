@@ -63,3 +63,26 @@ func TestParseConfigRejectsMissingOut(t *testing.T) {
 		t.Fatal("parseConfig accepted missing -out")
 	}
 }
+
+func TestExportDatasetRejectsNonEmptyOut(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "dataset")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "keep"), []byte("do not delete"), 0o644); err != nil {
+		t.Fatalf("write sentinel: %v", err)
+	}
+	_, err := exportDataset(config{
+		out:        dir,
+		docs:       8,
+		dimensions: 4,
+		queries:    3,
+		topK:       2,
+	})
+	if err == nil {
+		t.Fatal("exportDataset accepted non-empty output directory")
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "keep")); statErr != nil {
+		t.Fatalf("sentinel was removed: %v", statErr)
+	}
+}

@@ -7,7 +7,6 @@ import argparse
 import json
 import math
 import os
-import shutil
 import sqlite3
 import statistics
 import sys
@@ -82,6 +81,24 @@ def load_vectors(path: Path, rows: int, dims: int) -> np.ndarray:
     return data.reshape(rows, dims)
 
 
+def load_document_payloads(dataset_dir: Path, manifest: dict[str, Any]) -> list[tuple[str, bytes]]:
+    path = dataset_dir / manifest.get("documents_jsonl_file", "documents.jsonl")
+    records: list[tuple[str, bytes]] = []
+    with path.open("rb") as f:
+        for i, raw_line in enumerate(f):
+            line = raw_line.rstrip(b"\n")
+            document = json.loads(line)
+            if document.get("index") != i:
+                raise ValueError(f"{path} row {i} has index={document.get('index')}, want {i}")
+            document_id = document.get("id")
+            if not document_id:
+                raise ValueError(f"{path} row {i} has empty id")
+            records.append((str(document_id), line))
+    if len(records) != manifest["docs"]:
+        raise ValueError(f"{path} has {len(records)} rows, want {manifest['docs']}")
+    return records
+
+
 def sqlite_quote(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
@@ -104,11 +121,21 @@ def configure_sqlite(db: sqlite3.Connection, page_size: int, cache_mb: int) -> N
     db.execute(f"pragma cache_size={-cache_mb * 1024}")
 
 
-def build_database(args: argparse.Namespace, manifest: dict[str, Any], docs: np.ndarray) -> tuple[dict[str, Any], str]:
+def prepare_empty_dir(path: Path, label: str) -> None:
+    if path.exists():
+        if not path.is_dir():
+            raise RuntimeError(f"{label} {path} exists and is not a directory")
+        if any(path.iterdir()):
+            raise RuntimeError(f"{label} {path} already exists and is not empty")
+        return
+    path.mkdir(parents=True)
+
+
+def build_database(
+    args: argparse.Namespace, manifest: dict[str, Any], docs: np.ndarray, document_payloads: list[tuple[str, bytes]]
+) -> tuple[dict[str, Any], str]:
     db_dir = Path(args.db_dir)
-    if db_dir.exists():
-        shutil.rmtree(db_dir)
-    db_dir.mkdir(parents=True)
+    prepare_empty_dir(db_dir, "Vectorlite DB directory")
     db_path = db_dir / "vectorlite.db"
     index_path = db_dir / "vectorlite.hnsw"
 
@@ -116,7 +143,7 @@ def build_database(args: argparse.Namespace, manifest: dict[str, Any], docs: np.
     db = connect(db_path)
     configure_sqlite(db, args.page_size, args.cache_mb)
     version = db.execute("select vectorlite_info()").fetchone()[0]
-    db.execute("create table documents(id text primary key, grp integer, embedding blob not null)")
+    db.execute("create table documents(id text primary key, document blob not null)")
     db.execute(
         "create virtual table vectors using vectorlite("
         f"embedding float32[{manifest['dimensions']}] cosine, "
@@ -126,9 +153,9 @@ def build_database(args: argparse.Namespace, manifest: dict[str, Any], docs: np.
     insert_start = time.perf_counter()
     with db:
         db.executemany(
-            "insert into documents(rowid, id, grp, embedding) values (?, ?, ?, ?)",
+            "insert into documents(rowid, id, document) values (?, ?, ?)",
             (
-                (i + 1, f"doc-{i:06d}", i % 16, memoryview(docs[i]).tobytes())
+                (i + 1, document_payloads[i][0], sqlite3.Binary(document_payloads[i][1]))
                 for i in range(manifest["docs"])
             ),
         )
@@ -156,7 +183,9 @@ def reopen_database(args: argparse.Namespace) -> tuple[sqlite3.Connection, dict[
     configure_sqlite(db, args.page_size, args.cache_mb)
     count = db.execute("select count(*) from documents").fetchone()[0]
     if count > 0:
-        probe = db.execute("select embedding from documents where rowid = 1").fetchone()[0]
+        payload = db.execute("select document from documents where rowid = 1").fetchone()[0]
+        probe_document = json.loads(bytes(payload))
+        probe = np.asarray(probe_document["embedding"], dtype="<f4").tobytes()
         probe_rows = db.execute(
             "select rowid from vectors where knn_search(embedding, knn_param(?, 1, ?))",
             [probe, args.ef_search],
@@ -234,6 +263,8 @@ def benchmark_search(args: argparse.Namespace, queries: np.ndarray, concurrency:
     conns = [connect(db_path) for _ in range(concurrency)]
     for conn in conns:
         configure_sqlite(conn, args.page_size, args.cache_mb)
+        if len(queries) > 0:
+            search_one(conn, queries[0], args.top_k, args.ef_search)
 
     def worker(conn: sqlite3.Connection) -> None:
         nonlocal next_index
@@ -311,11 +342,12 @@ def main() -> None:
     if manifest["metric"] != "cosine" or not manifest["normalized"]:
         raise RuntimeError(f"unsupported dataset metric/normalization: {manifest}")
     docs = load_vectors(dataset_dir / manifest["document_vectors_file"], manifest["docs"], manifest["dimensions"])
+    document_payloads = load_document_payloads(dataset_dir, manifest)
     all_queries = load_vectors(dataset_dir / manifest["query_vectors_file"], manifest["queries"], manifest["dimensions"])
     queries = all_queries[: min(args.queries, len(all_queries))]
     concurrency = parse_ints(args.search_concurrency)
 
-    phases, vectorlite_info = build_database(args, manifest, docs)
+    phases, vectorlite_info = build_database(args, manifest, docs, document_payloads)
     db, reopen = reopen_database(args)
     validation = validate_recall(db, docs, queries, args.top_k, args.ef_search, args.validate_queries, args.min_recall)
     db.close()
