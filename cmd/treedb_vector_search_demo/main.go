@@ -184,7 +184,8 @@ func parseConfig(args []string) (config, error) {
 		disableExactFallback: true,
 	}
 	fs := flag.NewFlagSet("treedb_vector_search_demo", flag.ContinueOnError)
-	fs.StringVar(&cfg.dir, "dir", "", "TreeDB directory to create; empty uses a temporary directory")
+	fs.SetOutput(io.Discard)
+	fs.StringVar(&cfg.dir, "dir", "", "TreeDB directory to create; empty uses a temporary directory; explicit directories are kept")
 	fs.BoolVar(&cfg.keepDir, "keep-dir", false, "Keep the DB directory after the run")
 	fs.IntVar(&cfg.docs, "docs", cfg.docs, "Number of synthetic documents to load")
 	fs.IntVar(&cfg.dimensions, "dims", cfg.dimensions, "Vector dimensions per document")
@@ -427,9 +428,6 @@ func execute(ctx context.Context, cfg config) (result, error) {
 		return result{}, err
 	}
 
-	var beforeLoad runtime.MemStats
-	runtime.GC()
-	runtime.ReadMemStats(&beforeLoad)
 	reopenStart := time.Now()
 	d, err = backenddb.Open(backenddb.Options{Dir: dir})
 	if err != nil {
@@ -448,12 +446,21 @@ func execute(ctx context.Context, cfg config) (result, error) {
 	if err != nil {
 		return result{}, err
 	}
+	var beforeLoad runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&beforeLoad)
 	loaded, loadStatus, err := col.LoadVectorIndexSnapshot(vectorIndexOptions(def))
 	if err != nil {
 		return result{}, err
 	}
-	if loaded == nil || !loadStatus.Loaded || loadStatus.RootID == 0 {
-		return result{}, fmt.Errorf("failed to load compacted native vector root: %+v", loadStatus)
+	if loaded == nil {
+		return result{}, fmt.Errorf("native vector root load returned no runtime: %+v", loadStatus)
+	}
+	if !loadStatus.Loaded {
+		return result{}, fmt.Errorf("native vector root not marked loaded: %+v", loadStatus)
+	}
+	if loadStatus.RootID == 0 {
+		return result{}, fmt.Errorf("native vector root loaded with zero root id: %+v", loadStatus)
 	}
 	res.ReopenLoad = phaseSince(reopenStart)
 	res.IndexStatsLoaded = loaded.Stats()
@@ -561,7 +568,7 @@ func validateCompactedData(col *collections.Collection, idx *collections.VectorI
 }
 
 func benchmarkSearch(idx *collections.VectorIndex, cfg config) (searchBenchmarkResult, error) {
-	queries := syntheticQueries(cfg.queries, cfg.docs, cfg.dimensions, cfg.validateQueries+1)
+	queries := syntheticQueries(cfg.queries, cfg.docs, cfg.dimensions, cfg.validateQueries)
 	latencies := make([]int64, len(queries))
 	var candidatesTotal int64
 	var rerankTotal int64
@@ -574,10 +581,10 @@ func benchmarkSearch(idx *collections.VectorIndex, cfg config) (searchBenchmarkR
 			EfSearch:             cfg.efSearch,
 			DisableExactFallback: cfg.disableExactFallback,
 		})
-		latencies[i] = time.Since(start).Nanoseconds()
 		if err != nil {
 			return searchBenchmarkResult{}, err
 		}
+		latencies[i] = time.Since(start).Nanoseconds()
 		if len(results) == 0 {
 			return searchBenchmarkResult{}, errors.New("vector search returned no results")
 		}
@@ -668,7 +675,21 @@ func gcd(a, b int) int {
 }
 
 func validationDocIndex(i, docs int) int {
-	return (i*1543 + docs/5 + 11) % docs
+	return (i*validationDocStride(docs) + docs/5 + 11) % docs
+}
+
+func validationDocStride(docs int) int {
+	stride := 1543
+	if docs > 0 {
+		stride %= docs
+	}
+	if stride <= 0 {
+		stride = 1
+	}
+	for gcd(stride, docs) != 1 {
+		stride++
+	}
+	return stride
 }
 
 func documentID(id int) []byte {
@@ -677,7 +698,7 @@ func documentID(id int) []byte {
 
 func documentJSON(id, dims int) []byte {
 	vector := embedding(id, dims)
-	out := make([]byte, 0, 48+dims*10)
+	out := make([]byte, 0, 48+dims*16)
 	out = append(out, `{"group":`...)
 	out = strconv.AppendInt(out, int64(id%16), 10)
 	out = append(out, `,"embedding":[`...)
