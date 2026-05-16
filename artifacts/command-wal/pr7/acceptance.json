@@ -4,7 +4,7 @@
   "branch": "codex/user-command-wal-pr7",
   "base_branch": "codex/user-command-wal-pr6",
   "base_commit": "a0fdae3bafc84e9eafe6d3a2249617ddac85d603",
-  "implementation_commit": "PR head",
+  "implementation_commit": "refs/heads/codex/user-command-wal-pr7",
   "go_version": "go version go1.25.7 linux/amd64",
   "platform": "linux/amd64",
   "command_support_matrix_version": "TreeDB/docs/spec/command-wal-support-matrix.json version 1",

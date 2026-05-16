@@ -2612,7 +2612,6 @@ func (m *CollectionManager) createCollectionWithCommandWALIntent(normalized Coll
 		}
 		return existing.meta.copy(), nil
 	}
-
 	encoded, err := encodeCollectionMeta(normalized)
 	if err != nil {
 		return nil, err
