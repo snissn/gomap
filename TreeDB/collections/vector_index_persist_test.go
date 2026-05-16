@@ -102,6 +102,40 @@ func TestCollectionVectorIndexSnapshotReopenSearch(t *testing.T) {
 	}
 }
 
+func TestCollectionVectorIndexSnapshotUnregisteredAdHocUsesLegacyPath(t *testing.T) {
+	dir := t.TempDir()
+	d, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	col := openVectorIndexTestCollection(t, d)
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("a"), []byte("b")},
+		[][]byte{
+			[]byte(`{"embedding":[1,0]}`),
+			[]byte(`{"embedding":[0,1]}`),
+		},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	index, err := col.BuildVectorIndex(VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, M: 4})
+	if err != nil {
+		t.Fatalf("build vector index: %v", err)
+	}
+	col.UnregisterVectorIndex("embedding")
+	saveStatus, err := index.SaveSnapshot()
+	if err != nil {
+		t.Fatalf("save unregistered ad hoc snapshot: %v", err)
+	}
+	if !saveStatus.Loaded || saveStatus.ManifestPath == "" || saveStatus.RootID != 0 || saveStatus.ExactFallbackReason != "" {
+		t.Fatalf("unexpected unregistered ad hoc save status: %+v", saveStatus)
+	}
+	if _, err := os.Stat(saveStatus.ManifestPath); err != nil {
+		t.Fatalf("legacy manifest was not written: %v", err)
+	}
+}
+
 func TestCollectionVectorIndexNativeRootSnapshotReopenSearch(t *testing.T) {
 	dir := t.TempDir()
 	d, err := backenddb.Open(backenddb.Options{Dir: dir})
