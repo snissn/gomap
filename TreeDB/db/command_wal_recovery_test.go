@@ -400,6 +400,64 @@ func TestCommandWALRegisteredReplayHandlerInstallsValueLogAppender(t *testing.T)
 	}
 }
 
+func TestCommandWALRegisteredReplayHandlerCanOptOutOfReplayLogSupport(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	defer func() { _ = db.Close() }()
+
+	kindOffset := testRegisteredReplayHandlerKind.Add(1)
+	if kindOffset > 5000 {
+		t.Fatalf("test replay handler kind offset exhausted: %d", kindOffset)
+	}
+	kind := commitlog.CommandKind(60000 + kindOffset)
+	var handlerCalled atomic.Bool
+	RegisterCommandWALReplayHandlerWithOptions(kind, func(db *DB, env commitlog.CommandEnvelope) error {
+		handlerCalled.Store(true)
+		return nil
+	}, CommandWALReplayHandlerOptions{})
+
+	var ensured atomic.Bool
+	ensure := func() (map[uint64]page.ValuePtr, *replayInlineAppender, error) {
+		ensured.Store(true)
+		return nil, nil, nil
+	}
+	if err := applyCommandWALFrame(db, commitlog.CommandEnvelope{
+		LSN:           1,
+		Kind:          kind,
+		Scope:         commitlog.CommandScopeCollection,
+		PayloadFormat: commitlog.PayloadFormatNativeWireDeterministic,
+	}, nil, nil, ensure); err != nil {
+		t.Fatalf("applyCommandWALFrame: %v", err)
+	}
+	if !handlerCalled.Load() {
+		t.Fatal("registered replay handler was not called")
+	}
+	if ensured.Load() {
+		t.Fatal("replay log support was installed for opt-out handler")
+	}
+}
+
+func TestPublishCommandWALNoopRequiresCommandWALEnabled(t *testing.T) {
+	db, err := Open(Options{Dir: t.TempDir(), DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	intent := NewCommandWALReplayIntent(commitlog.CommandEnvelope{
+		LSN:           1,
+		Kind:          commitlog.CommandKindRawKVBatch,
+		Scope:         commitlog.CommandScopeRawKV,
+		PayloadFormat: commitlog.PayloadFormatRawKVBatchV1,
+	})
+	if err := db.PublishCommandWALNoop(intent, false); !errors.Is(err, ErrCommandWALUnsupported) {
+		t.Fatalf("PublishCommandWALNoop error=%v, want ErrCommandWALUnsupported", err)
+	}
+	if got := db.State().AppliedCommandLSN; got != 0 {
+		t.Fatalf("AppliedCommandLSN=%d, want 0", got)
+	}
+}
+
 func TestCommandWALRawEmptyBatchAdvancesAppliedLSNAsNoop(t *testing.T) {
 	dir := t.TempDir()
 	enableCommandWALFormat(t, dir)

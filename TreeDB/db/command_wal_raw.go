@@ -256,6 +256,9 @@ func (db *DB) PublishCommandWALNoop(intent *CommandWALIntent, sync bool) error {
 	if db == nil {
 		return ErrClosed
 	}
+	if !db.CommandWALEnabled() {
+		return ErrCommandWALUnsupported
+	}
 	db.writeMu.Lock()
 	defer db.writeMu.Unlock()
 	db.commitMu.Lock()
