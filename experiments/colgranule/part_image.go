@@ -211,6 +211,7 @@ func validateImageDescriptorMatchesPart(image ColumnPartImage, part *ColumnPart)
 
 func comparableColumnDefinition(def ColumnDefinition) ColumnDefinition {
 	def.CodecBlockRows = 0
+	def.Compression = 0
 	return def
 }
 

@@ -229,6 +229,34 @@ func TestColumnPartWithImagePayloadsRejectsDescriptorMismatch(t *testing.T) {
 	}
 }
 
+func TestColumnPartWithImagePayloadsAllowsFallbackCompression(t *testing.T) {
+	opts := partTestOptions([]SortKeyColumn{{Column: "id"}})
+	opts.Columns[0].Compression = CompressionLZ4
+	part, err := BuildColumnPart(7, opts, ColumnBatch{Columns: map[string][]int64{
+		"id":        {3, 1, 2, 5, 4},
+		"time_us":   {30, 10, 20, 50, 40},
+		"value":     {300, 100, 200, 500, 400},
+		"kind_code": {1, 0, 1, 2, 0},
+		"has_reply": {1, 0, 1, 0, 1},
+	}})
+	if err != nil {
+		t.Fatalf("BuildColumnPart: %v", err)
+	}
+	if part.Columns["id"].Definition.Compression != CompressionLZ4 {
+		t.Fatalf("id requested compression=%s want %s", part.Columns["id"].Definition.Compression, CompressionLZ4)
+	}
+	if part.Columns["id"].Blocks[0].Granule.Compression != CompressionNone {
+		t.Fatalf("fixture did not fall back to uncompressed first block: %s", part.Columns["id"].Blocks[0].Granule.Compression)
+	}
+	image, err := BuildColumnPartImage(part, ColumnPartImageOptions{})
+	if err != nil {
+		t.Fatalf("BuildColumnPartImage: %v", err)
+	}
+	if _, err := part.WithImagePayloads(image); err != nil {
+		t.Fatalf("WithImagePayloads rejected valid fallback-compressed image: %v", err)
+	}
+}
+
 func TestColumnPartFromParsedImageScansWithoutOriginalPart(t *testing.T) {
 	opts := partTestOptions([]SortKeyColumn{{Column: "time_us"}})
 	opts.AggregateMetadata = []AggregateMetadataDefinition{aggregateMetadataTestDefinition()}
