@@ -113,16 +113,10 @@ func BuildJSONBenchColumnPartWithAggregateMetadataForLayout(ds JSONBenchDataset,
 	return BuildColumnPart(1, opts, ColumnBatch{Rows: ds.Rows, Columns: ds.Columns})
 }
 
-func imageBackedJSONBenchPart(part *ColumnPart, dictionaries map[string]map[string]int64) (*ColumnPart, error) {
-	image, err := BuildColumnPartImage(part, ColumnPartImageOptions{Dictionaries: dictionaries})
-	if err != nil {
-		return nil, err
-	}
-	parsed, err := ParseColumnPartImage(image.Bytes)
-	if err != nil {
-		return nil, err
-	}
-	return ColumnPartFromImage(parsed)
+func assetBackedJSONBenchPart(part *ColumnPart, dictionaries map[string]map[string]int64) (*ColumnPart, error) {
+	store := NewMemoryColumnAssetStore()
+	reconstructed, _, _, err := TCS1AssetBackedColumnPart(part, dictionaries, store)
+	return reconstructed, err
 }
 
 func JSONBenchColumnPartOptions(ds JSONBenchDataset, rowsPerGranule int) (ColumnStoreOptions, error) {
@@ -247,7 +241,7 @@ func RunJSONBenchPartQueries(ds JSONBenchDataset, rowsPerGranule int, attempts i
 	if err != nil {
 		return nil, err
 	}
-	part, err = imageBackedJSONBenchPart(part, ds.Dictionaries)
+	part, err = assetBackedJSONBenchPart(part, ds.Dictionaries)
 	if err != nil {
 		return nil, err
 	}
@@ -323,7 +317,7 @@ func RunJSONBenchPartQ4FairnessQueries(ds JSONBenchDataset, rowsPerGranule int, 
 	if err != nil {
 		return nil, err
 	}
-	timePart, err = imageBackedJSONBenchPart(timePart, ds.Dictionaries)
+	timePart, err = assetBackedJSONBenchPart(timePart, ds.Dictionaries)
 	if err != nil {
 		return nil, err
 	}
@@ -331,7 +325,7 @@ func RunJSONBenchPartQ4FairnessQueries(ds JSONBenchDataset, rowsPerGranule int, 
 	if err != nil {
 		return nil, err
 	}
-	clickHouseOrderPart, err = imageBackedJSONBenchPart(clickHouseOrderPart, ds.Dictionaries)
+	clickHouseOrderPart, err = assetBackedJSONBenchPart(clickHouseOrderPart, ds.Dictionaries)
 	if err != nil {
 		return nil, err
 	}
@@ -402,7 +396,7 @@ func RunJSONBenchPartAggregateMetadataQueries(ds JSONBenchDataset, rowsPerGranul
 	if err != nil {
 		return nil, err
 	}
-	timePart, err = imageBackedJSONBenchPart(timePart, ds.Dictionaries)
+	timePart, err = assetBackedJSONBenchPart(timePart, ds.Dictionaries)
 	if err != nil {
 		return nil, err
 	}
@@ -410,7 +404,7 @@ func RunJSONBenchPartAggregateMetadataQueries(ds JSONBenchDataset, rowsPerGranul
 	if err != nil {
 		return nil, err
 	}
-	clickHouseOrderPart, err = imageBackedJSONBenchPart(clickHouseOrderPart, ds.Dictionaries)
+	clickHouseOrderPart, err = assetBackedJSONBenchPart(clickHouseOrderPart, ds.Dictionaries)
 	if err != nil {
 		return nil, err
 	}

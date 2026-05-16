@@ -1,8 +1,8 @@
 # Int64 Column Granule Experiment
 
 This package is a non-durable column-store smoke test. It does not publish
-TreeDB roots, write column files, use collection WAL, or expose public
-collection APIs.
+TreeDB roots, use production TreeDB value-log publication, use collection WAL,
+or expose public collection APIs.
 
 It currently covers:
 
@@ -20,6 +20,8 @@ It currently covers:
 - exact serialized in-memory column part images with a manifest, section
   directory, descriptor bytes, marks, locators, dictionaries, aggregate
   metadata, and column payload sections;
+- value-log-shaped `TCS1` column part assets that wrap serialized images,
+  persist/reopen through `ColumnAssetStore`, and reconstruct scan-capable parts;
 - JSONBench Bluesky fixture loading into int64-derived columns.
 
 ## Local JSONBench Data
@@ -127,10 +129,36 @@ The current canonical section kinds are:
 
 `ParseColumnPartImage` validates the manifest and section bounds.
 `ColumnPartFromImage` reconstructs a scan-capable read-only part from serialized
-bytes alone. JSONBench query timings use that parsed image-backed part so M1D
-can catch representation mistakes before M2 adds files, checksums, and recovery.
+bytes alone.
 
-## M1D Gates Before File-Backed M2
+## TCS1 Column Asset Layout
+
+`TCS1` is the M2 value-log-shaped wrapper for a serialized column part image. It
+is a logical column asset payload, not a separate production column-file
+lifecycle. The first M2 mode stores one complete `ColumnPartImage` as a single
+asset with:
+
+- `TCS1` magic and version;
+- payload kind for serialized part images;
+- format flags, currently strict-zero;
+- payload byte length;
+- part id, row count, and image version copied from the image;
+- payload checksum.
+
+`ColumnAssetStore` is the experiment seam that models future TreeDB `ValuePtr`
+storage without importing `TreeDB/internal` from this package. The memory store
+is useful for benchmarks, and the append-segment store proves reopen/readback
+through a value-log-shaped `file id + offset + length + checksum` ref. Query
+kernels still receive a reconstructed `ColumnPart`, so M2 validates storage
+plumbing without changing the encoded-block execution interface.
+
+JSONBench query timings now build the serialized image, wrap/store it as a
+`TCS1` asset, read it back, reconstruct the part, and run q1-q5 through the same
+encoded kernels. Split assets for individual blocks, dictionaries, marks,
+locators, or aggregate metadata should remain benchmark-driven follow-ups; the
+single-record mode is the baseline.
+
+## M1D Gates Before Value-Log-Backed M2
 
 Before moving this experiment into durable files, the in-memory representation
 must stay aligned with the future file format:
@@ -152,5 +180,5 @@ must stay aligned with the future file format:
   `BenchmarkJSONBenchLocalPartImageM1D` benchmark must keep measuring
   serialization of an existing part, parse/reconstruct from image bytes, and the
   full build/serialize/parse/reconstruct path;
-- M2 should add persistence, checksums, file/container layout, recovery, and
-  lifecycle behavior without changing the logical section model.
+- M2 should add `TCS1` value-log-shaped persistence, checksums, asset refs,
+  recovery, and lifecycle behavior without changing the logical section model.
