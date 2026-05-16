@@ -65,7 +65,10 @@ type result struct {
 	M                    int                            `json:"m"`
 	EfConstruction       int                            `json:"ef_construction"`
 	EfSearch             int                            `json:"ef_search"`
+	MinRecall            float64                        `json:"min_recall"`
 	Compact              bool                           `json:"compact"`
+	CompactSyncEachPhase bool                           `json:"compact_sync_each_phase"`
+	DisableExactFallback bool                           `json:"disable_exact_fallback"`
 	Insert               phaseResult                    `json:"insert"`
 	Rebuild              phaseResult                    `json:"rebuild"`
 	CompactPhase         phaseResult                    `json:"compact_phase"`
@@ -157,7 +160,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return enc.Encode(res)
 	}
 	printText(stdout, res)
-	if !cfg.keepDir {
+	if !res.KeptDir {
 		fmt.Fprintf(stderr, "temporary db removed; rerun with -keep-dir to inspect files\n")
 	}
 	return nil
@@ -239,16 +242,17 @@ func parseConfig(args []string) (config, error) {
 		return config{}, errors.New("-validate-docs cannot be negative")
 	}
 	if cfg.validateQueries > cfg.docs {
-		cfg.validateQueries = cfg.docs
+		return config{}, errors.New("-validate-queries cannot exceed -docs")
 	}
 	if cfg.validateDocs > cfg.docs {
-		cfg.validateDocs = cfg.docs
+		return config{}, errors.New("-validate-docs cannot exceed -docs")
 	}
 	return cfg, nil
 }
 
 func execute(ctx context.Context, cfg config) (result, error) {
 	dir := cfg.dir
+	explicitDir := dir != ""
 	cleanup := func() {}
 	if dir == "" {
 		tmp, err := os.MkdirTemp("", "treedb-vector-search-demo-*")
@@ -260,10 +264,23 @@ func execute(ctx context.Context, cfg config) (result, error) {
 			cleanup = func() { _ = os.RemoveAll(tmp) }
 		}
 	} else {
-		if err := os.RemoveAll(dir); err != nil {
-			return result{}, err
-		}
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		info, err := os.Stat(dir)
+		if err == nil {
+			if !info.IsDir() {
+				return result{}, fmt.Errorf("-dir %q exists and is not a directory", dir)
+			}
+			entries, err := os.ReadDir(dir)
+			if err != nil {
+				return result{}, err
+			}
+			if len(entries) > 0 {
+				return result{}, fmt.Errorf("-dir %q already exists and is not empty; choose a new directory", dir)
+			}
+		} else if errors.Is(err, os.ErrNotExist) {
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				return result{}, err
+			}
+		} else {
 			return result{}, err
 		}
 	}
@@ -281,18 +298,21 @@ func execute(ctx context.Context, cfg config) (result, error) {
 		EfSearch:       cfg.efSearch,
 	}
 	res := result{
-		Dir:             dir,
-		KeptDir:         cfg.keepDir,
-		Docs:            cfg.docs,
-		Dimensions:      cfg.dimensions,
-		Queries:         cfg.queries,
-		ValidateQueries: cfg.validateQueries,
-		ValidateDocs:    cfg.validateDocs,
-		TopK:            cfg.topK,
-		M:               cfg.m,
-		EfConstruction:  cfg.efConstruction,
-		EfSearch:        cfg.efSearch,
-		Compact:         cfg.compact,
+		Dir:                  dir,
+		KeptDir:              cfg.keepDir || explicitDir,
+		Docs:                 cfg.docs,
+		Dimensions:           cfg.dimensions,
+		Queries:              cfg.queries,
+		ValidateQueries:      cfg.validateQueries,
+		ValidateDocs:         cfg.validateDocs,
+		TopK:                 cfg.topK,
+		M:                    cfg.m,
+		EfConstruction:       cfg.efConstruction,
+		EfSearch:             cfg.efSearch,
+		MinRecall:            cfg.minRecall,
+		Compact:              cfg.compact,
+		CompactSyncEachPhase: cfg.compactSyncEachPhase,
+		DisableExactFallback: cfg.disableExactFallback,
 	}
 
 	d, err := backenddb.Open(backenddb.Options{
@@ -408,7 +428,12 @@ func execute(ctx context.Context, cfg config) (result, error) {
 	if err != nil {
 		return result{}, err
 	}
-	defer d.Close()
+	closeReopened := true
+	defer func() {
+		if closeReopened {
+			_ = d.Close()
+		}
+	}()
 	col, err = collections.NewCollectionManager(d).OpenCollection("docs")
 	if err != nil {
 		return result{}, err
@@ -423,6 +448,7 @@ func execute(ctx context.Context, cfg config) (result, error) {
 	res.ReopenLoad = phaseSince(reopenStart)
 	res.IndexStatsLoaded = loaded.Stats()
 	var afterLoad runtime.MemStats
+	runtime.GC()
 	runtime.ReadMemStats(&afterLoad)
 	res.Memory = memoryReport{
 		AllocBeforeLoadBytes: beforeLoad.Alloc,
@@ -442,6 +468,10 @@ func execute(ctx context.Context, cfg config) (result, error) {
 		return result{}, err
 	}
 	res.Search = search
+	closeReopened = false
+	if err := d.Close(); err != nil {
+		return result{}, err
+	}
 	return res, nil
 }
 
@@ -486,6 +516,8 @@ func validateCompactedData(col *collections.Collection, idx *collections.VectorI
 		out.Recall = 1
 		return out, nil
 	}
+	// Recall validation disables exact fallback on the ANN side so it measures
+	// the graph result against the exact baseline computed inside CheckRecall.
 	recall, err := idx.CheckRecall(validationQueries(cfg.validateQueries, cfg.docs, cfg.dimensions), collections.VectorIndexSearchOptions{
 		TopK:                 cfg.topK,
 		EfSearch:             cfg.efSearch,
@@ -505,7 +537,7 @@ func validateCompactedData(col *collections.Collection, idx *collections.VectorI
 }
 
 func benchmarkSearch(idx *collections.VectorIndex, cfg config) (searchBenchmarkResult, error) {
-	queries := validationQueries(cfg.queries, cfg.docs, cfg.dimensions)
+	queries := syntheticQueries(cfg.queries, cfg.docs, cfg.dimensions, cfg.validateQueries+1)
 	latencies := make([]int64, len(queries))
 	var candidatesTotal int64
 	var rerankTotal int64
@@ -534,12 +566,16 @@ func benchmarkSearch(idx *collections.VectorIndex, cfg config) (searchBenchmarkR
 	total := time.Since(startAll)
 	sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
 	avg := float64(total.Nanoseconds()) / float64(len(queries))
+	opsPerSecond := 0.0
+	if total > 0 {
+		opsPerSecond = float64(len(queries)) / total.Seconds()
+	}
 	return searchBenchmarkResult{
 		Queries:              len(queries),
 		TotalDurationNanos:   total.Nanoseconds(),
 		AvgNanos:             avg,
 		AvgMicros:            avg / 1000,
-		OpsPerSecond:         float64(len(queries)) / total.Seconds(),
+		OpsPerSecond:         opsPerSecond,
 		P50Nanos:             percentile(latencies, 0.50),
 		P95Nanos:             percentile(latencies, 0.95),
 		P99Nanos:             percentile(latencies, 0.99),
@@ -564,9 +600,13 @@ func vectorIndexOptions(def collections.VectorIndexDefinition) collections.Vecto
 }
 
 func validationQueries(count, docs, dims int) [][]float32 {
+	return syntheticQueries(count, docs, dims, 0)
+}
+
+func syntheticQueries(count, docs, dims, offset int) [][]float32 {
 	queries := make([][]float32, count)
 	for i := 0; i < count; i++ {
-		queries[i] = embedding(queryDocIndex(i, docs), dims)
+		queries[i] = embedding(queryDocIndex(i+offset, docs), dims)
 	}
 	return queries
 }
@@ -635,7 +675,7 @@ func storageUsage(dir string, docs int) (storageReport, error) {
 			return err
 		}
 		group := strings.Split(rel, string(os.PathSeparator))[0]
-		if group == "index.db" || group == "journal.wal" || group == "format.json" || group == "LOCK" {
+		if rel == group && (group == "index.db" || group == "journal.wal" || group == "format.json" || group == "LOCK") {
 			group = rel
 		}
 		report.Domains[group] += size
@@ -656,6 +696,7 @@ func phaseSince(start time.Time) phaseResult {
 }
 
 func percentile(sorted []int64, p float64) int64 {
+	// Nearest-rank percentile over an already sorted sample.
 	if len(sorted) == 0 {
 		return 0
 	}

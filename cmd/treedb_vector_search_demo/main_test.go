@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -86,6 +88,9 @@ func TestRunJSONOutput(t *testing.T) {
 	if res.Docs != 64 || res.Search.Queries != 4 || res.StorageAfterCompact.TotalBytes <= 0 {
 		t.Fatalf("unexpected JSON result: %+v", res)
 	}
+	if res.MinRecall != 0.5 || !res.Compact || !res.DisableExactFallback {
+		t.Fatalf("missing reproducibility config in JSON result: %+v", res)
+	}
 }
 
 func TestExecuteRequireLeafVLogBytesFailsOnPagerBackedDefault(t *testing.T) {
@@ -112,6 +117,66 @@ func TestExecuteRequireLeafVLogBytesFailsOnPagerBackedDefault(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "zero leaf_vlog bytes") {
 		t.Fatalf("error=%v, want zero leaf_vlog bytes", err)
+	}
+}
+
+func TestExecuteRequireValueLogBytesFailsOnPagerBackedDefault(t *testing.T) {
+	_, err := execute(context.Background(), config{
+		dir:                  t.TempDir(),
+		keepDir:              true,
+		docs:                 64,
+		dimensions:           8,
+		queries:              2,
+		validateQueries:      1,
+		validateDocs:         1,
+		topK:                 3,
+		batchSize:            32,
+		m:                    4,
+		efConstruction:       32,
+		efSearch:             32,
+		minRecall:            0.5,
+		compact:              true,
+		disableExactFallback: true,
+		requireValueLogBytes: true,
+	})
+	if err == nil {
+		t.Fatal("execute succeeded, want value-log requirement failure")
+	}
+	if !strings.Contains(err.Error(), "zero value_vlog bytes") {
+		t.Fatalf("error=%v, want zero value_vlog bytes", err)
+	}
+}
+
+func TestExecuteRejectsNonEmptyDir(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "unrelated"), []byte("keep"), 0o644); err != nil {
+		t.Fatalf("write unrelated file: %v", err)
+	}
+	_, err := execute(context.Background(), config{
+		dir:                  dir,
+		keepDir:              true,
+		docs:                 64,
+		dimensions:           8,
+		queries:              2,
+		validateQueries:      1,
+		validateDocs:         1,
+		topK:                 3,
+		batchSize:            32,
+		m:                    4,
+		efConstruction:       32,
+		efSearch:             32,
+		minRecall:            0.5,
+		compact:              true,
+		disableExactFallback: true,
+	})
+	if err == nil {
+		t.Fatal("execute accepted non-empty -dir, want error")
+	}
+	if !strings.Contains(err.Error(), "not empty") {
+		t.Fatalf("error=%v, want not-empty directory error", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "unrelated")); err != nil {
+		t.Fatalf("unrelated file err=%v, want untouched", err)
 	}
 }
 
