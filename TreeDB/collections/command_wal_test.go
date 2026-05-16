@@ -240,6 +240,26 @@ func TestCollectionCommandWALDeleteBatchByIDReplayAdvancesMissingOnlyFrame(t *te
 	}
 }
 
+func TestCollectionCommandWALDeleteBatchByIDReplayAdvancesRootlessNoopFrame(t *testing.T) {
+	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatJSON,
+		},
+	})
+	payload, err := commitlog.EncodeCollectionDeleteBatchByIDPayload("users", [][]byte{[]byte("missing")})
+	if err != nil {
+		t.Fatalf("EncodeCollectionDeleteBatchByIDPayload: %v", err)
+	}
+	writeCollectionCommandWALFrame(t, dir, 1, commitlog.CommandKindCollectionDeleteBatchByID, commitlog.PayloadFormatCollectionDeleteBatchByIDV1, payload)
+
+	reopen := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopen.Close() }()
+	if got := reopen.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("AppliedCommandLSN=%d, want 1", got)
+	}
+}
+
 func TestCollectionCommandWALUpdateByIDPublishesAppliedLSN(t *testing.T) {
 	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
 		Name: "users",
