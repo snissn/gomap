@@ -263,6 +263,14 @@ collection APIs, Mongo gateway mutating commands, and native-wire mutating
 commands to have explicit `WAL-supported`, `WAL-rejected`, `WAL-off-only`, or
 `future` status.
 
+Collection command replay handlers live in the `TreeDB/collections` package
+because replay must re-enter the normal collection executor. Binaries that may
+open `command_wal_v1` directories containing collection frames must import that
+package before `db.Open` recovery runs, or call
+`collections.RegisterCommandWALReplayHandlers()` during startup. A backend-only
+binary without those handlers must fail closed on collection command kinds
+rather than skipping frames.
+
 ### 6.1 Batch Atomicity
 
 V1 batch commands are atomic at the command-frame level. `RawKVBatch`,
