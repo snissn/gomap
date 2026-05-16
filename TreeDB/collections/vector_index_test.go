@@ -308,6 +308,29 @@ func TestVectorIndexInt8InsertUnchangedVectorNoops(t *testing.T) {
 	}
 }
 
+func TestVectorIndexCandidateDiversityRejectsInvalidPairDistance(t *testing.T) {
+	index, err := newVectorIndex(nil, VectorIndexOptions{
+		Name:   "embedding",
+		Field:  "embedding",
+		Metric: VectorMetricCosine,
+		M:      4,
+	})
+	if err != nil {
+		t.Fatalf("new vector index: %v", err)
+	}
+	index.nodes = []vectorIndexNode{
+		{documentID: []byte("candidate"), vector: []float32{1, 0}, level: 0},
+		{documentID: []byte("invalid"), vector: []float32{1, 0, 0}, level: 0},
+	}
+	for i := range index.nodes {
+		index.nodes[i].cacheVectorNorms()
+	}
+
+	if index.vectorIndexCandidateIsDiverseLocked(vectorIndexCandidate{nodeID: 0, distance: 0.1}, []vectorIndexCandidate{{nodeID: 1}}) {
+		t.Fatal("candidate with invalid pair distance was treated as diverse")
+	}
+}
+
 func TestVectorIndexSelectLayerNeighborsReusesCandidateDistances(t *testing.T) {
 	index, err := newVectorIndex(nil, VectorIndexOptions{
 		Name:   "embedding",

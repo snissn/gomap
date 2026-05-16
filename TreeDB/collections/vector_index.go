@@ -1813,9 +1813,8 @@ func (idx *VectorIndex) selectDiverseCandidatesLocked(candidates []vectorIndexCa
 	}
 	for _, candidate := range candidates {
 		if len(selected) >= limit {
-			// Backfill only runs when diversity pruning leaves room below limit.
-			// Once full, avoid scanning the tail into rejected on construction hot paths.
-			break
+			rejected = append(rejected, candidate)
+			continue
 		}
 		if idx.vectorIndexCandidateIsDiverseLocked(candidate, selected) {
 			selected = append(selected, candidate)
@@ -1833,7 +1832,10 @@ func (idx *VectorIndex) selectDiverseCandidatesLocked(candidates []vectorIndexCa
 
 func (idx *VectorIndex) vectorIndexCandidateIsDiverseLocked(candidate vectorIndexCandidate, selected []vectorIndexCandidate) bool {
 	for _, existing := range selected {
-		distance := idx.distanceBetweenNodesFastLocked(candidate.nodeID, existing.nodeID)
+		distance, ok := idx.distanceBetweenNodesFastLocked(candidate.nodeID, existing.nodeID)
+		if !ok {
+			return false
+		}
 		if distance <= candidate.distance {
 			return false
 		}
@@ -1842,8 +1844,8 @@ func (idx *VectorIndex) vectorIndexCandidateIsDiverseLocked(candidate vectorInde
 }
 
 // sortVectorIndexCandidatesByDistanceLocked keeps the common already-sorted
-// case allocation-free and handles the append-one-candidate case with insertion
-// sort. Other unsorted shapes fall back to the standard full sort.
+// case allocation-free and handles the exactly-one-candidate-appended-at-tail
+// case with insertion sort. Other unsorted shapes fall back to the full sort.
 func (idx *VectorIndex) sortVectorIndexCandidatesByDistanceLocked(candidates []vectorIndexCandidate) {
 	for i := 1; i < len(candidates); i++ {
 		if idx.compareVectorIndexCandidatesByDistanceLocked(candidates[i-1], candidates[i]) > 0 {
@@ -1918,20 +1920,20 @@ func (idx *VectorIndex) distanceBetweenNodesLocked(leftNodeID, rightNodeID int) 
 	return distance
 }
 
-func (idx *VectorIndex) distanceBetweenNodesFastLocked(leftNodeID, rightNodeID int) float32 {
+func (idx *VectorIndex) distanceBetweenNodesFastLocked(leftNodeID, rightNodeID int) (float32, bool) {
 	if leftNodeID < 0 || leftNodeID >= len(idx.nodes) || rightNodeID < 0 || rightNodeID >= len(idx.nodes) {
-		return float32(math.Inf(1))
+		return 0, false
 	}
 	left := &idx.nodes[leftNodeID]
 	right := &idx.nodes[rightNodeID]
 	if idx.metric == VectorMetricCosine && canUseUncheckedFloat32NodeCosine(left, right) {
-		return vectorDistanceBetweenFloat32NodesCosineUnchecked(left, right)
+		return vectorDistanceBetweenFloat32NodesCosineUnchecked(left, right), true
 	}
 	distance, err := vectorDistanceBetweenStoredNodes(left, right, idx.metric)
 	if err != nil {
-		return float32(math.Inf(1))
+		return 0, false
 	}
-	return distance
+	return distance, true
 }
 
 func vectorDistanceToStoredNode(query []float32, node *vectorIndexNode, metric VectorMetric) (float32, error) {
