@@ -50,7 +50,6 @@ func TestValueLogCompressionAuto_DefaultsToDictTrainingAndProbesDict(t *testing.
 		Dir:            dir,
 		FlushThreshold: 1 << 20,
 		ValueLog: ValueLogOptions{
-			ForcePointers:    true,
 			PointerThreshold: 1,
 			Compression:      ValueLogCompressionAuto,
 			AutoPolicy:       ValueLogAutoSize,

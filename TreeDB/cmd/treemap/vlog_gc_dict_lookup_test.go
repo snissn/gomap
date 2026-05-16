@@ -22,7 +22,6 @@ func TestVlogGC_BackendOpenWithDictFrames_WiresDictLookup(t *testing.T) {
 		Dir:            dir,
 		FlushThreshold: 1 << 20,
 		ValueLog: treedb.ValueLogOptions{
-			ForcePointers:    true,
 			PointerThreshold: 1,
 			Compression:      treedb.ValueLogCompressionAuto,
 			AutoPolicy:       treedb.ValueLogAutoSize,
