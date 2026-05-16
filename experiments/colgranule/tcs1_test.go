@@ -50,6 +50,44 @@ func TestMemoryColumnAssetStoreValidatesChecksumAfterLookup(t *testing.T) {
 	}
 }
 
+func TestMemoryColumnAssetStoreValidatesLengthAfterAddressLookup(t *testing.T) {
+	store := NewMemoryColumnAssetStore()
+	ref, err := store.Put(ColumnAssetKindTCS1PartImage, []byte("payload"))
+	if err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	ref.Length--
+	if _, err := store.Read(ref); err == nil || !strings.Contains(err.Error(), "asset length") {
+		t.Fatalf("Read err=%v want length mismatch", err)
+	}
+}
+
+func TestColumnAssetStoresRejectUnsupportedKind(t *testing.T) {
+	memory := NewMemoryColumnAssetStore()
+	ref, err := memory.Put(ColumnAssetKindTCS1PartImage, []byte("payload"))
+	if err != nil {
+		t.Fatalf("memory Put: %v", err)
+	}
+	ref.Kind = ColumnAssetKind("future_kind")
+	if _, err := memory.Read(ref); err == nil || !strings.Contains(err.Error(), "unsupported column asset kind") {
+		t.Fatalf("memory Read err=%v want unsupported kind", err)
+	}
+
+	segment, err := OpenSegmentColumnAssetStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("OpenSegmentColumnAssetStore: %v", err)
+	}
+	defer segment.Close()
+	ref, err = segment.Put(ColumnAssetKindTCS1PartImage, []byte("payload"))
+	if err != nil {
+		t.Fatalf("segment Put: %v", err)
+	}
+	ref.Kind = ColumnAssetKind("future_kind")
+	if _, err := segment.Read(ref); err == nil || !strings.Contains(err.Error(), "unsupported column asset kind") {
+		t.Fatalf("segment Read err=%v want unsupported kind", err)
+	}
+}
+
 func TestTCS1ColumnPartAssetRoundTripsThroughSegmentStoreAfterReopen(t *testing.T) {
 	_, image := testColumnPartImageFixture(t, true)
 	dir := t.TempDir()
@@ -105,6 +143,23 @@ func TestSegmentColumnAssetStoreRejectsOutOfRangeRefBeforeAllocation(t *testing.
 	ref.Length = 1 << 62
 	if _, err := store.ReadTo(ref, nil); err == nil || !strings.Contains(err.Error(), "outside segment") {
 		t.Fatalf("ReadTo err=%v want outside segment", err)
+	}
+}
+
+func TestSegmentColumnAssetStoreRejectsMaxReadBeforeAllocation(t *testing.T) {
+	store, err := OpenSegmentColumnAssetStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("OpenSegmentColumnAssetStore: %v", err)
+	}
+	defer store.Close()
+	ref, err := store.Put(ColumnAssetKindTCS1PartImage, []byte("tiny"))
+	if err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	ref.Length = maxColumnAssetReadBytes + 1
+	store.size = ref.Length
+	if _, err := store.ReadTo(ref, nil); err == nil || !strings.Contains(err.Error(), "exceeds max read bytes") {
+		t.Fatalf("ReadTo err=%v want max read size", err)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"sync"
@@ -13,6 +14,8 @@ type ColumnAssetKind string
 
 const (
 	ColumnAssetKindTCS1PartImage ColumnAssetKind = "tcs1_part_image"
+
+	maxColumnAssetReadBytes int64 = 512 << 20
 )
 
 type ColumnAssetRef struct {
@@ -27,6 +30,8 @@ type ColumnAssetStore interface {
 	Put(kind ColumnAssetKind, payload []byte) (ColumnAssetRef, error)
 	// Read may return store-owned bytes. Callers must treat the returned bytes as read-only.
 	Read(ref ColumnAssetRef) ([]byte, error)
+	// ReadTo appends or writes the asset bytes into dst[:0] and returns caller-owned bytes.
+	// The returned slice may alias dst and remains valid until the caller mutates or reuses it.
 	ReadTo(ref ColumnAssetRef, dst []byte) ([]byte, error)
 }
 
@@ -41,13 +46,13 @@ type MemoryColumnAssetStore struct {
 }
 
 type columnAssetKey struct {
-	kind   ColumnAssetKind
 	fileID uint32
 	offset int64
-	length int64
 }
 
 type memoryColumnAsset struct {
+	kind     ColumnAssetKind
+	length   int64
 	payload  []byte
 	checksum uint32
 }
@@ -87,7 +92,12 @@ func (s *MemoryColumnAssetStore) put(kind ColumnAssetKind, payload []byte) (Colu
 		return ColumnAssetRef{}, err
 	}
 	s.nextOff += ref.Length
-	s.assets[ref.key()] = memoryColumnAsset{payload: payload, checksum: ref.Checksum}
+	s.assets[ref.key()] = memoryColumnAsset{
+		kind:     ref.Kind,
+		length:   ref.Length,
+		payload:  payload,
+		checksum: ref.Checksum,
+	}
 	return ref, nil
 }
 
@@ -102,7 +112,13 @@ func (s *MemoryColumnAssetStore) Read(ref ColumnAssetRef) ([]byte, error) {
 	asset, ok := s.assets[ref.key()]
 	s.mu.Unlock()
 	if !ok {
-		return nil, fmt.Errorf("colgranule: missing asset ref file=%d offset=%d length=%d kind=%s", ref.FileID, ref.Offset, ref.Length, ref.Kind)
+		return nil, fmt.Errorf("colgranule: missing asset ref file=%d offset=%d", ref.FileID, ref.Offset)
+	}
+	if asset.kind != ref.Kind {
+		return nil, fmt.Errorf("colgranule: asset kind=%s want %s", asset.kind, ref.Kind)
+	}
+	if asset.length != ref.Length {
+		return nil, fmt.Errorf("colgranule: asset length=%d want %d", asset.length, ref.Length)
 	}
 	if asset.checksum != ref.Checksum {
 		return nil, fmt.Errorf("colgranule: asset ref checksum=%08x want %08x", asset.checksum, ref.Checksum)
@@ -221,8 +237,11 @@ func (s *SegmentColumnAssetStore) ReadTo(ref ColumnAssetRef, dst []byte) ([]byte
 	if ref.Offset > s.size || ref.Length > s.size-ref.Offset {
 		return nil, fmt.Errorf("colgranule: asset range offset=%d length=%d outside segment bytes=%d", ref.Offset, ref.Length, s.size)
 	}
-	if ref.Length > int64(int(ref.Length)) {
+	if ref.Length > int64(math.MaxInt) {
 		return nil, fmt.Errorf("colgranule: asset length=%d exceeds host int", ref.Length)
+	}
+	if ref.Length > maxColumnAssetReadBytes {
+		return nil, fmt.Errorf("colgranule: asset length=%d exceeds max read bytes=%d", ref.Length, maxColumnAssetReadBytes)
 	}
 	length := int(ref.Length)
 	if cap(dst) < length {
@@ -241,8 +260,8 @@ func (s *SegmentColumnAssetStore) ReadTo(ref ColumnAssetRef, dst []byte) ([]byte
 }
 
 func newColumnAssetRef(kind ColumnAssetKind, fileID uint32, offset int64, length int, payload []byte) (ColumnAssetRef, error) {
-	if kind == "" {
-		return ColumnAssetRef{}, fmt.Errorf("colgranule: empty column asset kind")
+	if err := validateColumnAssetKind(kind); err != nil {
+		return ColumnAssetRef{}, err
 	}
 	if fileID == 0 {
 		return ColumnAssetRef{}, fmt.Errorf("colgranule: zero column asset file id")
@@ -252,6 +271,9 @@ func newColumnAssetRef(kind ColumnAssetKind, fileID uint32, offset int64, length
 	}
 	if length < 0 {
 		return ColumnAssetRef{}, fmt.Errorf("colgranule: negative column asset length %d", length)
+	}
+	if length == 0 {
+		return ColumnAssetRef{}, fmt.Errorf("colgranule: empty column asset payload")
 	}
 	if len(payload) != length {
 		return ColumnAssetRef{}, fmt.Errorf("colgranule: column asset payload bytes=%d want length=%d", len(payload), length)
@@ -266,8 +288,8 @@ func newColumnAssetRef(kind ColumnAssetKind, fileID uint32, offset int64, length
 }
 
 func validateColumnAssetRef(ref ColumnAssetRef) error {
-	if ref.Kind == "" {
-		return fmt.Errorf("colgranule: empty column asset ref kind")
+	if err := validateColumnAssetKind(ref.Kind); err != nil {
+		return err
 	}
 	if ref.FileID == 0 {
 		return fmt.Errorf("colgranule: zero column asset ref file id")
@@ -278,14 +300,26 @@ func validateColumnAssetRef(ref ColumnAssetRef) error {
 	if ref.Length < 0 {
 		return fmt.Errorf("colgranule: negative column asset ref length %d", ref.Length)
 	}
+	if ref.Length == 0 {
+		return fmt.Errorf("colgranule: empty column asset ref payload")
+	}
 	return nil
 }
 
 func (ref ColumnAssetRef) key() columnAssetKey {
 	return columnAssetKey{
-		kind:   ref.Kind,
 		fileID: ref.FileID,
 		offset: ref.Offset,
-		length: ref.Length,
+	}
+}
+
+func validateColumnAssetKind(kind ColumnAssetKind) error {
+	switch kind {
+	case "":
+		return fmt.Errorf("colgranule: empty column asset kind")
+	case ColumnAssetKindTCS1PartImage:
+		return nil
+	default:
+		return fmt.Errorf("colgranule: unsupported column asset kind %s", kind)
 	}
 }
