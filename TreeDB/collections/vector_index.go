@@ -2052,6 +2052,9 @@ func (idx *VectorIndex) Rebuild() error {
 	idx.markGraphChangedLocked()
 	idx.mu.Unlock()
 	c.RegisterVectorIndex(idx)
+	if c.manager != nil && idx.needsNativeAutoPersist() {
+		c.manager.registerCollectionHandle(c)
+	}
 	return nil
 }
 
