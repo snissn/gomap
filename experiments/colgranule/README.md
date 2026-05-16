@@ -22,6 +22,11 @@ It currently covers:
   metadata, and column payload sections;
 - value-log-shaped `TCS1` column part assets that wrap serialized images,
   persist/reopen through `ColumnAssetStore`, and reconstruct scan-capable parts;
+- a disk-backed `ColumnWorkspace` that persists workspace manifests, collection
+  manifests, and `TCS1` asset refs for reopen/integrity experiments;
+- an experiment `ColumnCollectionManifest` and `ColumnPartSetReader` for
+  multipart base/delta/tombstone visibility and latest-row locator lookup;
+- compaction of visible multipart rows back into a new base column part;
 - JSONBench Bluesky fixture loading into int64-derived columns.
 
 ## Local JSONBench Data
@@ -161,6 +166,56 @@ available for point lookup, metadata kernels, and integrity tests. Split assets
 for individual blocks, dictionaries, marks, locators, or aggregate metadata
 should remain benchmark-driven follow-ups; the single-record mode is the
 baseline.
+
+## Disk Workspace, Manifests, and Multipart Parts
+
+`ColumnWorkspace` is the M3 disk-backed experiment wrapper. It stores `TCS1`
+assets in append segments, writes a checksum-protected workspace manifest, and
+validates referenced assets on reopen. It is still not a TreeDB root publication
+path and does not claim durable-at-ack collection semantics.
+
+`ColumnCollectionManifest` is the M4 collection-lane control-plane model used by
+the experiment. It records declared columns, logical primary key, sort key,
+base parts, delta parts, tombstones, retained-payload byte accounting metadata,
+and referenced `TCS1` asset records. `ColumnPartSetReader` opens those refs from
+the workspace, builds latest-visible row state, exposes `LatestLocator`, and
+runs JSONBench q1-q5 over visible rows.
+
+The multipart query gate should preserve the M2 encoded-part execution shape:
+avoid projected-row materialization for hot q1-q5 kernels, report visible,
+superseded, deleted, part, block, decoded-byte, and cache diagnostics, and keep
+per-query hot allocation bounded. The current synthetic M4 gate is:
+
+```sh
+GOWORK=off go test ./experiments/colgranule -run '^$' \
+  -bench 'BenchmarkJSONBenchEncodedPartQueries|BenchmarkJSONBenchColumnPartSetQueriesM4|BenchmarkJSONBenchColumnPartSetQueriesM4PerQuery' \
+  -benchmem -count=5
+```
+
+The current M5 compaction gate measures both full compaction and phase
+breakdowns for visible scanning, part rebuild, image serialization, asset
+publish, and manifest save:
+
+```sh
+GOWORK=off go test ./experiments/colgranule -run '^$' \
+  -bench 'BenchmarkColumnPartSetCompactionM5|BenchmarkColumnPartSetCompactionM5Breakdown' \
+  -benchmem -count=5
+```
+
+The local 1M-row multipart benchmark intentionally skips unless `JSONBENCH_DATA`
+points to a real 1M-row fixture; the repository fixture is only for tests:
+
+```sh
+JSONBENCH_DATA=/path/to/file_0001.json.gz \
+GOWORK=off go test ./experiments/colgranule -run '^$' \
+  -bench 'BenchmarkJSONBenchLocalColumnPartSetQueriesM4PerQuery' \
+  -benchmem -count=1
+```
+
+The known q4 caveat is sort order, not row materialization: M2's single-part
+baseline can early-stop on a globally time-ordered part, while the correct M4
+multipart path currently scans visible rows. A future k-way sort-key/mark merge
+across parts is needed before multipart q4 can early-stop safely.
 
 ## M1D Gates Before Value-Log-Backed M2
 
