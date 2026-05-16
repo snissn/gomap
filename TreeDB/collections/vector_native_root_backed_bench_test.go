@@ -76,14 +76,7 @@ func TestVectorIndexNativeRootBackedGraphSearchMatchesLoadedGraph(t *testing.T) 
 	if len(rootResults) != len(loadedResults) {
 		t.Fatalf("result count=%d want %d", len(rootResults), len(loadedResults))
 	}
-	for i := range loadedResults {
-		if string(rootResults[i].DocumentID) != string(loadedResults[i].DocumentID) {
-			t.Fatalf("result %d document=%q want %q", i, rootResults[i].DocumentID, loadedResults[i].DocumentID)
-		}
-		if rootResults[i].Distance != loadedResults[i].Distance {
-			t.Fatalf("result %d distance=%g want %g", i, rootResults[i].Distance, loadedResults[i].Distance)
-		}
-	}
+	assertVectorSearchResultsMatch(t, rootResults, loadedResults)
 }
 
 func TestVectorIndexNativeRootTemplateV1GraphSearchMatchesLoadedGraph(t *testing.T) {
@@ -123,12 +116,20 @@ func TestVectorIndexNativeRootTemplateV1GraphSearchMatchesLoadedGraph(t *testing
 	if len(rootResults) != len(loadedResults) {
 		t.Fatalf("result count=%d want %d", len(rootResults), len(loadedResults))
 	}
-	for i := range loadedResults {
-		if string(rootResults[i].DocumentID) != string(loadedResults[i].DocumentID) {
-			t.Fatalf("result %d document=%q want %q", i, rootResults[i].DocumentID, loadedResults[i].DocumentID)
+	assertVectorSearchResultsMatch(t, rootResults, loadedResults)
+}
+
+func assertVectorSearchResultsMatch(t *testing.T, got, want []VectorSearchResult) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("result count=%d want %d", len(got), len(want))
+	}
+	for i := range want {
+		if !bytes.Equal(got[i].DocumentID, want[i].DocumentID) {
+			t.Fatalf("result %d document=%q want %q", i, got[i].DocumentID, want[i].DocumentID)
 		}
-		if rootResults[i].Distance != loadedResults[i].Distance {
-			t.Fatalf("result %d distance=%g want %g", i, rootResults[i].Distance, loadedResults[i].Distance)
+		if math.Abs(float64(got[i].Distance-want[i].Distance)) > 1e-6 {
+			t.Fatalf("result %d distance=%g want %g", i, got[i].Distance, want[i].Distance)
 		}
 	}
 }
@@ -646,7 +647,7 @@ func (r *vectorIndexNativeRootBackedGraphReader) distanceToNode(query []float32,
 	}
 	distance, err := vectorDistanceToStoredNodeWithQueryNorm(query, queryNormSquared, &node, r.meta.Metric)
 	if err != nil {
-		return float32(math.Inf(1)), nil
+		return 0, fmt.Errorf("collections: native vector root distance node=%d metric=%s: %w", nodeID, r.meta.Metric, err)
 	}
 	return distance, nil
 }
@@ -762,8 +763,11 @@ func (r *vectorIndexNativeRootBackedGraphReader) isCurrentNode(nodeID int, docID
 	r.docKey = appendVectorIndexNativeRootDocKey(r.docKey, docID)
 	data, ok, err := collectionGetAppendAtCatalogRoot(r.snap, r.catalog, r.rootName, r.docKey, r.docBuf)
 	r.docBuf = data
-	if err != nil || !ok {
-		return false, err
+	if err != nil {
+		return false, fmt.Errorf("collections: native vector root doc map node=%d document=%q: %w", nodeID, docID, err)
+	}
+	if !ok {
+		return false, fmt.Errorf("collections: native vector root doc map missing node=%d document=%q", nodeID, docID)
 	}
 	if r.format == vectorIndexNativeRootRecordFormatTemplateV1Raw {
 		currentNodeID, err := parseVectorIndexNativeRootBinaryUint64(data)
@@ -797,6 +801,10 @@ func appendVectorIndexNativeRootDocKey(dst []byte, docID []byte) []byte {
 }
 
 func appendVectorIndexNativeRootPaddedInt(dst []byte, value, width int) []byte {
+	if value < 0 {
+		panic(fmt.Sprintf("collections: native vector root key negative ordinal %d", value))
+	}
+	original := value
 	start := len(dst)
 	for i := 0; i < width; i++ {
 		dst = append(dst, '0')
@@ -804,6 +812,9 @@ func appendVectorIndexNativeRootPaddedInt(dst []byte, value, width int) []byte {
 	for pos := start + width - 1; pos >= start && value > 0; pos-- {
 		dst[pos] = byte('0' + value%10)
 		value /= 10
+	}
+	if value > 0 {
+		panic(fmt.Sprintf("collections: native vector root key ordinal %d exceeds width %d", original, width))
 	}
 	return dst
 }
