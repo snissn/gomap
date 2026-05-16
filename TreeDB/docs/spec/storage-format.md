@@ -516,15 +516,26 @@ bytes Preconditions[PreconditionsLen]
 bytes ResultAssertions[ResultAssertionsLen]
 ```
 
-Command kinds introduced by the command-WAL stack:
+Current command kinds:
 
 | Value | Kind | Scope | Payload format | Status |
 |---:|---|---|---|---|
-| 1 | `RawKVBatch` | raw KV | `RawKVBatchV1` | encoded and fixture-tested; production raw writes stay legacy until PR3 |
-| 100 | `CollectionInsertBatchByID` | collection | `CollectionInsertBatchByIDV1` | PR4 supported |
-| 101 | `CollectionDeleteBatchByID` | collection | `CollectionDeleteBatchByIDV1` | PR4 supported |
-| 102 | `CollectionUpdateBatchByID` | collection | `CollectionUpdateBatchByIDV1` | PR5 supported |
-| 200 | `CatalogCreateCollection` | catalog | `CatalogCreateCollectionV1` | PR6 supported; old placeholder name is an alias only |
+| 1 | `RawKVBatch` | raw KV | `RawKVBatchV1` | typed raw key/value command batch |
+| 100 | `CollectionInsertBatchByID` | collection | `CollectionInsertBatchByIDV1` | deterministic collection insert/upsert-by-id batch |
+| 101 | `CollectionDeleteBatchByID` | collection | `CollectionDeleteBatchByIDV1` | deterministic collection delete-by-id batch |
+| 102 | `CollectionUpdateBatchByID` | collection | `CollectionUpdateBatchByIDV1` | deterministic collection update/replace-by-id batch |
+| 200 | `CatalogCreateCollection` | catalog | `CatalogCreateCollectionV1` | deterministic catalog create-collection command; old placeholder name is an alias only |
+
+Current payload format IDs:
+
+| Value | Payload format |
+|---:|---|
+| 1 | `RawKVBatchV1` |
+| 2 | `NativeWireDeterministic` |
+| 3 | `CollectionInsertBatchByIDV1` |
+| 4 | `CollectionDeleteBatchByIDV1` |
+| 5 | `CollectionUpdateBatchByIDV1` |
+| 6 | `CatalogCreateCollectionV1` |
 
 `RawKVBatchV1` payload:
 
@@ -558,6 +569,44 @@ bytes Metadata[MetadataLen] // canonical collection metadata JSON
 The payload name and decoded metadata name must match. Replay is idempotent only
 when an existing catalog entry has identical normalized metadata; incompatible
 metadata fails closed before advancing `AppliedCommandLSN`.
+
+`CollectionInsertBatchByIDV1` payload:
+
+```text
+u16 Version        // 1
+u32 CollectionLen
+u32 DocumentCount
+bytes Collection[CollectionLen]
+Document[DocumentCount]
+
+Document:
+u32 IDLen
+u32 DocumentLen
+bytes ID[IDLen]
+bytes Document[DocumentLen]
+```
+
+`CollectionUpdateBatchByIDV1` uses the same canonical payload layout as
+`CollectionInsertBatchByIDV1`; each document is the final accepted replacement
+for the listed ID after user callbacks or declarative updates have resolved.
+
+`CollectionDeleteBatchByIDV1` payload:
+
+```text
+u16 Version        // 1
+u32 CollectionLen
+u32 IDCount
+bytes Collection[CollectionLen]
+ID[IDCount]
+
+ID:
+u32 IDLen
+bytes ID[IDLen]
+```
+
+Collection batch payloads require a non-empty collection name and non-empty
+document IDs. Encoders canonicalize entries by strictly increasing document ID
+before writing the payload, and decoders reject duplicate or out-of-order IDs.
 
 `ExternalRefs`, `Preconditions`, and `ResultAssertions` are length-delimited
 sections so PR1 can harden framing before replay uses them. The PR1 external-ref

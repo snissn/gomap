@@ -12870,13 +12870,14 @@ func (c *Collection) updateBatchOnce(items []updateBatchItem, mode updateBatchMo
 		if err := c.flushBufferedWrites(); err != nil {
 			return err
 		}
-		if commandWALIntent == nil && c.commandWALActive(nil) && len(plan.commandWALDocuments) > 0 {
-			commandWALIntent, err = c.newCollectionUpdateCommandWALIntent(plan.commandWALDocuments, nil)
+		publishIntent := commandWALIntent
+		if publishIntent == nil && c.commandWALActive(nil) && len(plan.commandWALDocuments) > 0 {
+			publishIntent, err = c.newCollectionUpdateCommandWALIntent(plan.commandWALDocuments, nil)
 			if err != nil {
 				return err
 			}
 		}
-		results, publishErr = c.publishUpdateBatchPlanLocked(plan, commandWALIntent)
+		results, publishErr = c.publishUpdateBatchPlanLocked(plan, publishIntent)
 		return publishErr
 	})
 	if err == nil {
