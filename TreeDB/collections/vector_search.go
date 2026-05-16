@@ -428,6 +428,8 @@ func appendBoundedVectorSearchResult(matches []VectorSearchResult, result Vector
 	if limit <= 0 {
 		return matches
 	}
+	// Keep matches sorted by distance/document ID while retaining only the best
+	// limit results. Callers rely on the last element being the current worst.
 	if len(matches) == limit && compareVectorSearchResults(result, matches[len(matches)-1]) >= 0 {
 		return matches
 	}

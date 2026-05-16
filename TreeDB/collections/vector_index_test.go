@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"math"
+	"strings"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -272,6 +273,47 @@ func TestVectorIndexFloat32CosineSpecializationMatchesExactDistance(t *testing.T
 	}
 	if math.Abs(float64(gotBetween-wantBetween)) > 1e-6 {
 		t.Fatalf("specialized node distance=%v want %v", gotBetween, wantBetween)
+	}
+}
+
+func TestVectorDistanceBetweenFloat32NodesCosineRejectsMismatchedDimensions(t *testing.T) {
+	left := vectorIndexNode{documentID: []byte("left"), vector: []float32{1, 0}}
+	right := vectorIndexNode{documentID: []byte("right"), vector: []float32{1, 0, 0}}
+	left.cacheVectorNorms()
+	right.cacheVectorNorms()
+
+	_, err := vectorDistanceBetweenFloat32NodesCosine(&left, &right)
+	if err == nil {
+		t.Fatal("distance succeeded, want dimension mismatch error")
+	}
+	if !strings.Contains(err.Error(), "vector dimensions differ") {
+		t.Fatalf("error=%v, want dimension mismatch", err)
+	}
+}
+
+func TestVectorDistanceFloat32CosineFallsBackForHugeVectors(t *testing.T) {
+	huge := float32(1e20)
+	query := []float32{huge, huge}
+	node := vectorIndexNode{documentID: []byte("right"), vector: []float32{huge, huge}}
+	node.cacheVectorNorms()
+	queryNorm := vectorNormSquared(query)
+
+	gotQuery, err := vectorDistanceToFloat32NodeCosine(query, queryNorm, &node)
+	if err != nil {
+		t.Fatalf("query distance: %v", err)
+	}
+	if math.IsInf(float64(gotQuery), 0) || math.IsNaN(float64(gotQuery)) || math.Abs(float64(gotQuery)) > 1e-3 {
+		t.Fatalf("query distance=%v, want finite near zero", gotQuery)
+	}
+
+	left := vectorIndexNode{documentID: []byte("left"), vector: query}
+	left.cacheVectorNorms()
+	gotBetween, err := vectorDistanceBetweenFloat32NodesCosine(&left, &node)
+	if err != nil {
+		t.Fatalf("node distance: %v", err)
+	}
+	if math.IsInf(float64(gotBetween), 0) || math.IsNaN(float64(gotBetween)) || math.Abs(float64(gotBetween)) > 1e-3 {
+		t.Fatalf("node distance=%v, want finite near zero", gotBetween)
 	}
 }
 

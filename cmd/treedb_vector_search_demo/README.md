@@ -28,11 +28,20 @@ Example:
 
 ```sh
 GOWORK=off go run ./cmd/treedb_vector_search_demo \
+  -matrix=false \
   -docs 10000 \
   -dims 64 \
   -queries 10000 \
   -validate-queries 32 \
+  -validate-docs 16 \
   -top-k 10 \
+  -m 16 \
+  -ef-construction 128 \
+  -ef-search 128 \
+  -min-recall 0.95 \
+  -compact=true \
+  -disable-exact-fallback=true \
+  -require-leaf-vlog-bytes \
   -json
 ```
 
@@ -60,3 +69,5 @@ The output includes the persisted TreeDB `format.json` knobs and storage-domain
 bytes for `index.db`, `value_vlog`, and `leaf_vlog`. Use
 `-require-value-log-bytes` or `-require-leaf-vlog-bytes` when a benchmark is
 meant to prove that the compacted datastore actually used those storage domains.
+Those flags are assertions, not format selectors; the demo fails if the selected
+TreeDB settings leave the asserted domain empty.

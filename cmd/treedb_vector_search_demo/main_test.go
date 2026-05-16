@@ -190,6 +190,9 @@ func TestRunJSONOutput(t *testing.T) {
 	if res.FormatConfig == nil || !res.FormatConfig.IndexOuterLeavesInValueLog || !res.FormatConfig.LeafPrefixCompression {
 		t.Fatalf("unexpected JSON format config: %+v", res.FormatConfig)
 	}
+	if res.MinRecall != 0.5 || res.Compact || !res.DisableExactFallback {
+		t.Fatalf("missing reproducibility config in JSON result: %+v", res)
+	}
 }
 
 func TestExecuteRequireLeafVLogBytesPassesWithDefaultBenchProfile(t *testing.T) {
@@ -384,6 +387,99 @@ func TestExecuteMatrixReportsNestedKeptDirFromRoot(t *testing.T) {
 	}
 	if _, err := os.Stat(res.Dir); !os.IsNotExist(err) {
 		t.Fatalf("matrix dir stat err=%v, want removed temp dir", err)
+	}
+}
+
+func TestExecuteRequireValueLogBytesFailsOnPagerBackedDefault(t *testing.T) {
+	_, err := execute(context.Background(), config{
+		dir:                  t.TempDir(),
+		keepDir:              true,
+		docs:                 64,
+		dimensions:           8,
+		queries:              2,
+		validateQueries:      1,
+		validateDocs:         1,
+		topK:                 3,
+		batchSize:            32,
+		m:                    4,
+		efConstruction:       32,
+		efSearch:             32,
+		minRecall:            0.5,
+		compact:              true,
+		disableExactFallback: true,
+		requireValueLogBytes: true,
+	})
+	if err == nil {
+		t.Fatal("execute succeeded, want value-log requirement failure")
+	}
+	if !strings.Contains(err.Error(), "zero value_vlog bytes") {
+		t.Fatalf("error=%v, want zero value_vlog bytes", err)
+	}
+}
+
+func TestExecuteRejectsNonEmptyDir(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "unrelated"), []byte("keep"), 0o644); err != nil {
+		t.Fatalf("write unrelated file: %v", err)
+	}
+	_, err := execute(context.Background(), config{
+		dir:                  dir,
+		keepDir:              true,
+		docs:                 64,
+		dimensions:           8,
+		queries:              2,
+		validateQueries:      1,
+		validateDocs:         1,
+		topK:                 3,
+		batchSize:            32,
+		m:                    4,
+		efConstruction:       32,
+		efSearch:             32,
+		minRecall:            0.5,
+		compact:              true,
+		disableExactFallback: true,
+	})
+	if err == nil {
+		t.Fatal("execute accepted non-empty -dir, want error")
+	}
+	if !strings.Contains(err.Error(), "not empty") {
+		t.Fatalf("error=%v, want not-empty directory error", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "unrelated")); err != nil {
+		t.Fatalf("unrelated file err=%v, want untouched", err)
+	}
+}
+
+func TestExecuteMatrixRejectsNonEmptyDir(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "unrelated"), []byte("keep"), 0o644); err != nil {
+		t.Fatalf("write unrelated file: %v", err)
+	}
+	_, err := executeMatrix(context.Background(), config{
+		dir:                  dir,
+		docs:                 24,
+		dimensions:           8,
+		queries:              1,
+		searchConcurrency:    []int{2},
+		validateQueries:      1,
+		validateDocs:         1,
+		topK:                 3,
+		batchSize:            12,
+		m:                    4,
+		efConstruction:       32,
+		efSearch:             32,
+		minRecall:            0.5,
+		compact:              true,
+		disableExactFallback: true,
+	})
+	if err == nil {
+		t.Fatal("executeMatrix accepted non-empty -dir, want error")
+	}
+	if !strings.Contains(err.Error(), "not empty") {
+		t.Fatalf("error=%v, want not-empty directory error", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "unrelated")); err != nil {
+		t.Fatalf("unrelated file err=%v, want untouched", err)
 	}
 }
 
