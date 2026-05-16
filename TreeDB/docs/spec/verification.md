@@ -715,11 +715,11 @@ The first PR9 public cutover gate is:
 - `TestPublicCommandWALRawKVWritesUseTypedFrames`
 
 The PR9 public cutover performance gate is strict parity-plus. Required point
-`Set`, focused `Batch.Write`, and `unified_bench` batch-write lanes must each
-report public command-WAL throughput strictly greater than `1.01x` of the
-legacy public cached WAL baseline. Any required lane at or below `1.01x` is a
-failing gate, including sub-parity results such as `0.80x`; those results may be
-recorded only as failing evidence, not accepted evidence.
+`Set`, focused `Batch.Write`, `unified_bench` batch-write, and incompressible
+value-log auto/off lanes must each report candidate throughput strictly greater
+than `1.01x` of the relevant baseline. Any required lane at or below `1.01x` is
+a failing gate, including sub-parity results such as `0.80x`; those results may
+be recorded only as failing evidence, not accepted evidence.
 
 This test must prove public `treedb.Open` can open a read-write
 `command_wal_v1` handle, route raw KV writes through typed `RawKVBatch` command

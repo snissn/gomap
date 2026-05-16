@@ -125,9 +125,10 @@
       "unified_batch_write_min_ratio": 1.01,
       "allocation_regression_allowed": false,
       "point_set_longer_min_ratio": 1.01,
+      "vlog_auto_incompressible_min_ratio": 1.01,
       "all_throughput_gates_must_exceed_ratio": 1.01
     },
-    "rationale": "Strict PR9 performance gates require every measured public command-WAL throughput lane to be greater than 1.01x of the legacy public cached WAL baseline. Current refreshed evidence passes that bar: point Set median is 1.074x with allocation parity, focused Batch.Write medians are 1.542x for batch_size=64 and 1.296x for batch_size=1024 with fewer allocations, and unified_bench batch_write is 1.219x on the median representative stats-scan run. The implementation keeps same-key command ordering, appends public batch command frames after cached preflight and before cached visibility, piggybacks AppliedCommandLSN publication onto cached checkpoint publication, and buffers trusted public command-WAL batch frames in writer-owned memory so digest/CRC/write finalization occurs at command-WAL flush/checkpoint boundaries instead of as a direct writev per batch.",
+    "rationale": "Strict PR9 performance gates require every measured public command-WAL throughput lane and the incompressible value-log auto/off lane to be greater than 1.01x of its baseline. Current refreshed evidence passes that bar: point Set median is 1.074x with allocation parity, focused Batch.Write medians are 1.542x for batch_size=64 and 1.296x for batch_size=1024 with fewer allocations, unified_bench batch_write is 1.219x on the median representative stats-scan run, and value-log auto/off incompressible throughput is 1.1027x. The implementation keeps same-key command ordering, appends public batch command frames after cached preflight and before cached visibility, piggybacks AppliedCommandLSN publication onto cached checkpoint publication, and buffers trusted public command-WAL batch frames in writer-owned memory so digest/CRC/write finalization occurs at command-WAL flush/checkpoint boundaries instead of as a direct writev per batch.",
     "latest_review_fix_smoke": {
       "status": "passed_strict_greater_than_1_01_threshold",
       "focused_50x": {
