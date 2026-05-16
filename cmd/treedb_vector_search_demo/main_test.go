@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -468,7 +469,7 @@ func writeDemoDataset(t *testing.T, docs, dims, queries, topK int) string {
 			Embedding []float32 `json:"embedding"`
 		}{
 			Index:     i,
-			ID:        string(documentID(i)),
+			ID:        fmt.Sprintf("dataset-doc-%06d", i),
 			Group:     i % 16,
 			Source:    "exported-test-dataset",
 			Embedding: embedding(i, dims),

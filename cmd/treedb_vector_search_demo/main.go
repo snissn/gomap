@@ -907,13 +907,13 @@ func validateCompactedData(col *collections.Collection, idx *collections.VectorI
 	}
 	for i := 0; i < cfg.validateDocs; i++ {
 		docIndex := validationDocIndex(i, cfg.docs)
-		got, err := col.Get(documentID(docIndex))
-		if err != nil {
-			return out, fmt.Errorf("get compacted doc %d: %w", docIndex, err)
-		}
-		want, err := expectedDocumentJSON(docIndex, cfg, work)
+		id, want, err := expectedDocument(docIndex, cfg, work)
 		if err != nil {
 			return out, err
+		}
+		got, err := col.Get(id)
+		if err != nil {
+			return out, fmt.Errorf("get compacted doc %q: %w", id, err)
 		}
 		if !bytes.Equal(got, want) {
 			return out, fmt.Errorf("compacted doc %d mismatch", docIndex)
@@ -951,17 +951,21 @@ func validateCompactedData(col *collections.Collection, idx *collections.VectorI
 	return out, nil
 }
 
-func expectedDocumentJSON(docIndex int, cfg config, work workload) ([]byte, error) {
+func expectedDocument(docIndex int, cfg config, work workload) ([]byte, []byte, error) {
 	if work.datasetDir == "" {
-		return documentJSON(docIndex, cfg.dimensions), nil
+		return documentID(docIndex), documentJSON(docIndex, cfg.dimensions), nil
 	}
-	return datasetDocumentJSON(docIndex, work)
+	line, header, err := datasetDocument(docIndex, work)
+	if err != nil {
+		return nil, nil, err
+	}
+	return []byte(header.ID), line, nil
 }
 
-func datasetDocumentJSON(docIndex int, work workload) ([]byte, error) {
+func datasetDocument(docIndex int, work workload) ([]byte, datasetDocumentHeader, error) {
 	f, err := os.Open(datasetPath(work, work.manifest.DocumentsJSONLFile, "documents.jsonl"))
 	if err != nil {
-		return nil, err
+		return nil, datasetDocumentHeader{}, err
 	}
 	defer f.Close()
 	scanner := bufio.NewScanner(f)
@@ -973,17 +977,20 @@ func datasetDocumentJSON(docIndex int, work workload) ([]byte, error) {
 		line := append([]byte(nil), scanner.Bytes()...)
 		var header datasetDocumentHeader
 		if err := json.Unmarshal(line, &header); err != nil {
-			return nil, fmt.Errorf("decode dataset document %d: %w", docIndex, err)
+			return nil, datasetDocumentHeader{}, fmt.Errorf("decode dataset document %d: %w", docIndex, err)
 		}
 		if header.Index != docIndex {
-			return nil, fmt.Errorf("dataset document index=%d at row %d", header.Index, docIndex)
+			return nil, datasetDocumentHeader{}, fmt.Errorf("dataset document index=%d at row %d", header.Index, docIndex)
 		}
-		return line, nil
+		if header.ID == "" {
+			return nil, datasetDocumentHeader{}, fmt.Errorf("dataset document %d has empty id", docIndex)
+		}
+		return line, header, nil
 	}
 	if err := scanner.Err(); err != nil {
-		return nil, err
+		return nil, datasetDocumentHeader{}, err
 	}
-	return nil, fmt.Errorf("dataset document %d not found", docIndex)
+	return nil, datasetDocumentHeader{}, fmt.Errorf("dataset document %d not found", docIndex)
 }
 
 func benchmarkSearch(idx *collections.VectorIndex, cfg config, work workload) (searchBenchmarkResult, error) {
