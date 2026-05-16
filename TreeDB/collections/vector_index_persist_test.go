@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
@@ -1197,6 +1198,85 @@ func TestCollectionVectorIndexNativeRootMaintainsSingleDelete(t *testing.T) {
 		if string(result.DocumentID) == "c" {
 			t.Fatalf("deleted document returned from maintained vector index: %+v", results)
 		}
+	}
+}
+
+func TestCollectionVectorIndexNativeRootDeleteAfterMetadataOnlyCreate(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("a"), []byte("b"), []byte("c")},
+		[][]byte{
+			[]byte(`{"embedding":[1,0]}`),
+			[]byte(`{"embedding":[0,1]}`),
+			[]byte(`{"embedding":[0.9,0.1]}`),
+		},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	def := VectorIndexDefinition{
+		Name:       "embedding",
+		Field:      "embedding",
+		Metric:     VectorMetricCosine,
+		Dimensions: 2,
+		M:          4,
+	}
+	if _, err := col.CreateVectorIndex(def); err != nil {
+		t.Fatalf("create vector index: %v", err)
+	}
+
+	type deleteResult struct {
+		deleted bool
+		err     error
+	}
+	done := make(chan deleteResult, 1)
+	go func() {
+		deleted, err := col.DeleteDocument([]byte("c"))
+		done <- deleteResult{deleted: deleted, err: err}
+	}()
+	select {
+	case got := <-done:
+		if got.err != nil {
+			t.Fatalf("delete vector document: %v", got.err)
+		}
+		if !got.deleted {
+			t.Fatal("delete reported missing document")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("DeleteDocument deadlocked while building metadata-only vector index")
+	}
+
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush vector index: %v", err)
+	}
+	loaded, status, err := col.LoadVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		t.Fatalf("load vector index: %v", err)
+	}
+	if loaded == nil || !status.Loaded {
+		t.Fatalf("vector index did not load loaded=%v status=%+v", loaded != nil, status)
+	}
+	results, _, err := loaded.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 3, DisableExactFallback: true})
+	if err != nil {
+		t.Fatalf("search vector index: %v", err)
+	}
+	for _, result := range results {
+		if string(result.DocumentID) == "c" {
+			t.Fatalf("deleted document returned from maintained vector index: %+v", results)
+		}
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
 	}
 }
 
