@@ -155,8 +155,19 @@ def reopen_database(args: argparse.Namespace) -> tuple[sqlite3.Connection, dict[
     db = connect(Path(args.db_dir) / "vectorlite.db")
     configure_sqlite(db, args.page_size, args.cache_mb)
     count = db.execute("select count(*) from documents").fetchone()[0]
+    if count > 0:
+        probe = db.execute("select embedding from documents where rowid = 1").fetchone()[0]
+        probe_rows = db.execute(
+            "select rowid from vectors where knn_search(embedding, knn_param(?, 1, ?))",
+            [probe, args.ef_search],
+        ).fetchall()
+        if len(probe_rows) != 1:
+            raise RuntimeError(f"vectorlite reopen probe returned {len(probe_rows)} rows, want 1")
+    else:
+        probe_rows = []
     out = phase(start)
     out["rows"] = count
+    out["probe_rows"] = len(probe_rows)
     return db, out
 
 
