@@ -25,8 +25,8 @@
       "local_fixture": "TreeDB/internal/commitlog/testdata/command_wal_v1_catalog_create_collection.hex",
       "local_fixture_sha256": "4782f9c9cca647e33b44f1143de7e17158a7f80c3302399611596641626d807e",
       "support_matrix_status": "WAL-supported",
-      "relationship": "lowered_equivalent_v1",
-      "notes": "V1 local WAL stores the accepted catalog metadata payload. A future native-wire/Raft path must lower the deterministic entry to the same catalog command before acknowledgement or wrap exact deterministic bytes in a separately tested command kind."
+      "relationship": "lowered_kind_only_v1",
+      "notes": "Kind-only alignment: native-wire deterministic-entry fixtures and local command-WAL fixtures pin create-collection support and acknowledgement semantics, but they encode collection metadata with different wire payload shapes. A future equivalence fixture must use matched metadata payloads before claiming lowered_equivalent_v1."
     },
     {
       "nativewire_command": "CommandCreateIndex",
