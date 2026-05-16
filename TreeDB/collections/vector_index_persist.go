@@ -40,7 +40,10 @@ const (
 	vectorIndexNativeKeyEdgeLayerWidth = 3
 )
 
-var errVectorIndexNotDeclared = errors.New("collections: vector index is not declared in collection metadata")
+var (
+	errVectorIndexNotDeclared     = errors.New("collections: vector index is not declared in collection metadata")
+	errVectorIndexStaleNativeRoot = errors.New("collections: vector index native root changed since load")
+)
 
 // VectorIndexLoadStatus reports whether a persisted vector index loaded or why
 // callers should use exact search as the safe fallback.
@@ -238,12 +241,16 @@ func (idx *VectorIndex) SaveNativeDeltaSnapshot() (VectorIndexLoadStatus, error)
 		return status, err
 	}
 
-	table, bytesDisk, snapshotSeq, hasWork, err := idx.persistNativeDeltaTable(baseRoot == 0)
+	table, bytesDisk, snapshotSeq, persistedEpoch, hasWork, err := idx.persistNativeDeltaTable(baseRoot == 0)
 	if err != nil {
 		return status, err
 	}
 	if !hasWork {
 		return status, nil
+	}
+	if baseRoot != persistedEpoch {
+		resetCollectionRunTable(table)
+		return status, fmt.Errorf("%w: index %q loaded epoch %d current root %d", errVectorIndexStaleNativeRoot, idx.name, persistedEpoch, baseRoot)
 	}
 	table.Freeze()
 	publishTable, pointerized, err := pointerizeCollectionRunTableValues(c.db, table)
@@ -864,12 +871,13 @@ func buildVectorIndexNativeSnapshotTable(snapshot vectorIndexPersistSnapshot) (m
 	return table, bytesDisk, nil
 }
 
-func (idx *VectorIndex) persistNativeDeltaTable(includeMeta bool) (memtable.Table, int64, uint64, bool, error) {
+func (idx *VectorIndex) persistNativeDeltaTable(includeMeta bool) (memtable.Table, int64, uint64, uint64, bool, error) {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
 	seq := idx.mutationSeq
+	persistedEpoch := idx.persistedEpoch
 	if seq == 0 {
-		return nil, 0, seq, false, nil
+		return nil, 0, seq, persistedEpoch, false, nil
 	}
 	if includeMeta || idx.dirtyMeta {
 		includeMeta = true
@@ -887,7 +895,7 @@ func (idx *VectorIndex) persistNativeDeltaTable(includeMeta bool) (memtable.Tabl
 	}
 	sort.Strings(docIDs)
 	if !includeMeta && len(nodeIDs) == 0 && len(docIDs) == 0 {
-		return nil, 0, seq, false, nil
+		return nil, 0, seq, persistedEpoch, false, nil
 	}
 
 	entryCount := len(docIDs)
@@ -915,14 +923,14 @@ func (idx *VectorIndex) persistNativeDeltaTable(includeMeta bool) (memtable.Tabl
 	if includeMeta {
 		if err := add([]byte(vectorIndexNativeKeyMeta), idx.persistMetaLocked()); err != nil {
 			resetCollectionRunTable(table)
-			return nil, 0, seq, false, err
+			return nil, 0, seq, persistedEpoch, false, err
 		}
 	}
 	for _, nodeID := range nodeIDs {
 		node := idx.nodes[nodeID]
 		if err := add(vectorIndexNativeNodeKey(nodeID), vectorIndexPersistNodeFromRuntime(node)); err != nil {
 			resetCollectionRunTable(table)
-			return nil, 0, seq, false, err
+			return nil, 0, seq, persistedEpoch, false, err
 		}
 		for layer, neighbors := range node.neighbors {
 			edge := vectorIndexPersistEdges{
@@ -945,13 +953,13 @@ func (idx *VectorIndex) persistNativeDeltaTable(includeMeta bool) (memtable.Tabl
 			}
 			if err := add(vectorIndexNativeEdgeKey(nodeID, layer), edge); err != nil {
 				resetCollectionRunTable(table)
-				return nil, 0, seq, false, err
+				return nil, 0, seq, persistedEpoch, false, err
 			}
 		}
 		if node.deleted {
 			if err := add(vectorIndexNativeTombstoneKey(nodeID), nodeID); err != nil {
 				resetCollectionRunTable(table)
-				return nil, 0, seq, false, err
+				return nil, 0, seq, persistedEpoch, false, err
 			}
 		}
 	}
@@ -963,10 +971,10 @@ func (idx *VectorIndex) persistNativeDeltaTable(includeMeta bool) (memtable.Tabl
 		}
 		if err := add(vectorIndexNativeDocKey(docID), nodeID); err != nil {
 			resetCollectionRunTable(table)
-			return nil, 0, seq, false, err
+			return nil, 0, seq, persistedEpoch, false, err
 		}
 	}
-	return table, bytesDisk, seq, true, nil
+	return table, bytesDisk, seq, persistedEpoch, true, nil
 }
 
 func (idx *VectorIndex) persistMetaLocked() vectorIndexPersistMeta {
