@@ -32,8 +32,8 @@ def parse_ints(raw: str) -> list[int]:
         if not part:
             continue
         value = int(part)
-        if value <= 1:
-            raise ValueError("concurrency values must be greater than 1")
+        if value < 1:
+            raise ValueError("concurrency values must be positive")
         if value not in seen:
             values.append(value)
             seen.add(value)
@@ -259,8 +259,8 @@ def benchmark_search(args: argparse.Namespace, query_lists: list[list[float]], c
     next_index = 0
     next_lock = threading.Lock()
     first_error: list[BaseException] = []
-    clients = [connect(args.uri) for _ in range(concurrency)]
-    collections = [client[args.database][args.collection] for client in clients]
+    client = connect(args.uri)
+    collection = client[args.database][args.collection]
 
     def worker(collection) -> None:
         nonlocal next_index
@@ -279,14 +279,13 @@ def benchmark_search(args: argparse.Namespace, query_lists: list[list[float]], c
             latencies[i] = time.perf_counter_ns() - start
 
     start_all = time.perf_counter()
-    threads = [threading.Thread(target=worker, args=(collection,)) for collection in collections]
+    threads = [threading.Thread(target=worker, args=(collection,)) for _ in range(concurrency)]
     for thread in threads:
         thread.start()
     for thread in threads:
         thread.join()
     total = time.perf_counter() - start_all
-    for client in clients:
-        client.close()
+    client.close()
     if first_error:
         raise first_error[0]
     sorted_latencies = sorted(latencies)
@@ -305,14 +304,14 @@ def benchmark_search(args: argparse.Namespace, query_lists: list[list[float]], c
 
 
 def storage_usage(client: MongoClient, args: argparse.Namespace, docs: int) -> dict[str, Any]:
-    stats = client[args.database].command("dbStats")
-    total = int(stats.get("storageSize", 0)) + int(stats.get("indexSize", 0))
+    stats = client[args.database].command("collStats", args.collection)
+    total = int(stats.get("storageSize", 0)) + int(stats.get("totalIndexSize", 0))
     return {
         "total_bytes": total,
         "files": 0,
         "domains": {
             "storageSize": int(stats.get("storageSize", 0)),
-            "indexSize": int(stats.get("indexSize", 0)),
+            "totalIndexSize": int(stats.get("totalIndexSize", 0)),
         },
         "bytes_per_doc": total / docs if docs else 0,
     }
@@ -365,7 +364,7 @@ def main() -> None:
     storage = storage_usage(client, args, manifest["docs"])
     client.close()
 
-    levels = [1] + concurrency
+    levels = [1] + [level for level in concurrency if level != 1]
     search_benchmarks = [benchmark_search(args, query_lists, level) for level in levels]
 
     result = {

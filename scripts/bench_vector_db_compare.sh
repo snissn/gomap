@@ -44,6 +44,7 @@ trap cleanup EXIT
 contains_backend() {
 	local want="$1"
 	local raw
+	local backend
 	IFS=',' read -r -a raw <<<"$BACKENDS"
 	for backend in "${raw[@]}"; do
 		backend="${backend//[[:space:]]/}"
@@ -131,17 +132,16 @@ echo "creating Python environment: $VENV"
 "$PYTHON" -m venv "$VENV"
 "$VENV/bin/python" -m pip install -q --upgrade pip
 
-pip_packages=(numpy)
+"$VENV/bin/python" -m pip install -q --only-binary=:all: numpy
 if contains_backend vectorlite; then
-	pip_packages+=(vectorlite-py)
+	"$VENV/bin/python" -m pip install -q --only-binary=:all: vectorlite-py
 fi
 if contains_backend pgvector; then
-	pip_packages+=("psycopg[binary]")
+	"$VENV/bin/python" -m pip install -q "psycopg[binary]"
 fi
 if contains_backend mongodb; then
-	pip_packages+=(pymongo)
+	"$VENV/bin/python" -m pip install -q pymongo
 fi
-"$VENV/bin/python" -m pip install -q --only-binary=:all: "${pip_packages[@]}"
 
 echo "exporting TreeDB dataset"
 GOWORK=off go run ./cmd/treedb_vector_dataset_export \

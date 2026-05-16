@@ -26,8 +26,8 @@ def parse_ints(raw: str) -> list[int]:
         if not part:
             continue
         value = int(part)
-        if value <= 1:
-            raise ValueError("concurrency values must be greater than 1")
+        if value < 1:
+            raise ValueError("concurrency values must be positive")
         if value not in seen:
             values.append(value)
             seen.add(value)
@@ -352,7 +352,7 @@ def main() -> None:
     validation = validate_recall(db, docs, queries, args.top_k, args.ef_search, args.validate_queries, args.min_recall)
     db.close()
 
-    levels = [1] + concurrency
+    levels = [1] + [level for level in concurrency if level != 1]
     search_benchmarks = [benchmark_search(args, queries, level) for level in levels]
     storage = storage_usage(Path(args.db_dir))
     storage["bytes_per_doc"] = storage["total_bytes"] / manifest["docs"]

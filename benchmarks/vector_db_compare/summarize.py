@@ -34,7 +34,7 @@ def storage_record(result: dict[str, Any]) -> dict[str, Any]:
         return result["storage_after_compact"]
     if "storage" in result:
         return result["storage"]
-    return {"total_bytes": 0, "bytes_per_doc": 0}
+    raise KeyError(f"{backend_name(result)} result is missing storage fields")
 
 
 def storage_bytes(result: dict[str, Any]) -> int:
@@ -54,7 +54,7 @@ def build_seconds(result: dict[str, Any]) -> float:
         return float(result["build"]["seconds"])
     if "rebuild" in result:
         return float(result["rebuild"]["seconds"])
-    return 0.0
+    raise KeyError(f"{backend_name(result)} result is missing build/rebuild fields")
 
 
 def reopen_seconds(result: dict[str, Any]) -> float:
@@ -77,6 +77,8 @@ def backend_name(result: dict[str, Any]) -> str:
         return "PostgreSQL+pgvector HNSW"
     if backend == "mongodb_vector_search":
         return "MongoDB Vector Search HNSW"
+    if backend:
+        return f"Unknown backend: {backend}"
     return "TreeDB native HNSW"
 
 
