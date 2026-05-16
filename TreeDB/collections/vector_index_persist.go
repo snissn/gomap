@@ -93,6 +93,9 @@ func (idx *VectorIndex) SaveNativeSnapshot() (VectorIndexLoadStatus, error) {
 	}
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()
+	if !c.isRegisteredVectorIndex(idx) {
+		return status, nil
+	}
 	if err := c.flushBufferedWrites(); err != nil {
 		return status, err
 	}
@@ -206,6 +209,9 @@ func (idx *VectorIndex) SaveNativeDeltaSnapshot() (VectorIndexLoadStatus, error)
 	}
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()
+	if !c.isRegisteredVectorIndex(idx) {
+		return status, nil
+	}
 	if err := c.flushBufferedWrites(); err != nil {
 		return status, err
 	}

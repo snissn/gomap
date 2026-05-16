@@ -354,6 +354,15 @@ func (c *Collection) RegisterVectorIndex(index *VectorIndex) {
 	c.vectorIndexes[index.name] = index
 }
 
+func (c *Collection) isRegisteredVectorIndex(index *VectorIndex) bool {
+	if c == nil || index == nil {
+		return false
+	}
+	c.vectorIndexesMu.RLock()
+	defer c.vectorIndexesMu.RUnlock()
+	return c.vectorIndexes[index.name] == index
+}
+
 // UnregisterVectorIndex detaches a registered in-memory vector index.
 func (c *Collection) UnregisterVectorIndex(name string) {
 	if c == nil {
@@ -703,17 +712,31 @@ func (idx *VectorIndex) insertVectorLocked(documentID []byte, vector []float32) 
 	} else if len(vector) != idx.dimensions {
 		return fmt.Errorf("collections: vector field %q in document %q has dimension %d, want %d", idx.field, documentID, len(vector), idx.dimensions)
 	}
+	var quantized []int8
+	var quantScale float32
+	if idx.encoding == VectorIndexEncodingInt8 {
+		quantized, quantScale = quantizeVectorIndexInt8(vector)
+	}
 	if nodeID, ok := idx.currentNode[string(documentID)]; ok && nodeID >= 0 && nodeID < len(idx.nodes) {
 		node := &idx.nodes[nodeID]
-		if idx.encoding == VectorIndexEncodingFloat32 && !node.deleted && node.matchesVector(vector) {
-			return nil
+		if !node.deleted {
+			switch idx.encoding {
+			case VectorIndexEncodingInt8:
+				if node.matchesQuantizedVector(quantized, quantScale) {
+					return nil
+				}
+			default:
+				if node.matchesVector(vector) {
+					return nil
+				}
+			}
 		}
 	}
 	idx.tombstoneDocumentIDLocked(documentID)
 
 	nodeID := len(idx.nodes)
 	level := idx.levelForDocumentID(documentID)
-	node := idx.newVectorIndexNode(documentID, vector, level)
+	node := idx.newVectorIndexNodePrepared(documentID, vector, level, quantized, quantScale)
 	idx.nodes = append(idx.nodes, node)
 	idx.markGraphChangedLocked()
 	idx.markVectorNodeDirtyLocked(nodeID)
@@ -755,7 +778,23 @@ func (node *vectorIndexNode) matchesVector(vector []float32) bool {
 	return slices.Equal(node.vector, vector)
 }
 
+func (node *vectorIndexNode) matchesQuantizedVector(quantized []int8, quantScale float32) bool {
+	if node == nil {
+		return false
+	}
+	return node.quantScale == quantScale && slices.Equal(node.quantized, quantized)
+}
+
 func (idx *VectorIndex) newVectorIndexNode(documentID []byte, vector []float32, level int) vectorIndexNode {
+	var quantized []int8
+	var quantScale float32
+	if idx.encoding == VectorIndexEncodingInt8 {
+		quantized, quantScale = quantizeVectorIndexInt8(vector)
+	}
+	return idx.newVectorIndexNodePrepared(documentID, vector, level, quantized, quantScale)
+}
+
+func (idx *VectorIndex) newVectorIndexNodePrepared(documentID []byte, vector []float32, level int, quantized []int8, quantScale float32) vectorIndexNode {
 	node := vectorIndexNode{
 		documentID: bytes.Clone(documentID),
 		level:      level,
@@ -763,7 +802,8 @@ func (idx *VectorIndex) newVectorIndexNode(documentID []byte, vector []float32, 
 	}
 	switch idx.encoding {
 	case VectorIndexEncodingInt8:
-		node.quantized, node.quantScale = quantizeVectorIndexInt8(vector)
+		node.quantized = quantized
+		node.quantScale = quantScale
 	default:
 		node.vector = append([]float32(nil), vector...)
 	}

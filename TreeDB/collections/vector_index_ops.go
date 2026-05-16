@@ -48,6 +48,9 @@ func (c *Collection) RebuildVectorIndex(name string) (VectorIndexStatus, error) 
 	// committed write can be skipped by the clean replacement snapshot.
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()
+	if err := c.flushBufferedWrites(); err != nil {
+		return VectorIndexStatus{}, err
+	}
 	def, err := c.declaredVectorIndexDefinition(name)
 	if err != nil {
 		return VectorIndexStatus{}, err

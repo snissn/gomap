@@ -1616,6 +1616,74 @@ func TestCollectionVectorIndexNativeRootRebuildAPIPersistsCleanGraph(t *testing.
 	requireVectorResultIDs(t, results, "b", "c")
 }
 
+func TestCollectionVectorIndexNativeRootRebuildIgnoresStaleRuntimeSave(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	def := VectorIndexDefinition{
+		Name:       "embedding",
+		Field:      "embedding",
+		Metric:     VectorMetricCosine,
+		Dimensions: 2,
+		M:          4,
+	}
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("a"), []byte("b"), []byte("c")},
+		[][]byte{
+			[]byte(`{"embedding":[1,0]}`),
+			[]byte(`{"embedding":[0.9,0.1]}`),
+			[]byte(`{"embedding":[0,1]}`),
+		},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	stale, err := col.BuildVectorIndex(vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		t.Fatalf("build vector index: %v", err)
+	}
+	if _, err := stale.SaveSnapshot(); err != nil {
+		t.Fatalf("save seed vector index: %v", err)
+	}
+	if deleted, err := col.DeleteBatch([][]byte{[]byte("a")}); err != nil || deleted != 1 {
+		t.Fatalf("delete a deleted=%d err=%v", deleted, err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush dirty tombstone: %v", err)
+	}
+	rebuild, err := col.RebuildVectorIndex("embedding")
+	if err != nil {
+		t.Fatalf("rebuild vector index: %v", err)
+	}
+	if rebuild.RootID == 0 || rebuild.Stats.DeletedDocs != 0 || rebuild.Stats.LiveDocs != 2 {
+		t.Fatalf("unexpected rebuild status: %+v", rebuild)
+	}
+
+	if staleStatus, err := stale.SaveNativeSnapshot(); err != nil || staleStatus.Loaded {
+		t.Fatalf("stale runtime native save status=%+v err=%v, want ignored", staleStatus, err)
+	}
+	stale.TombstoneDocumentID([]byte("b"))
+	if staleStatus, err := stale.SaveNativeDeltaSnapshot(); err != nil || staleStatus.Loaded {
+		t.Fatalf("stale runtime native delta status=%+v err=%v, want ignored", staleStatus, err)
+	}
+	status, err := col.VectorIndexStatus("embedding")
+	if err != nil {
+		t.Fatalf("status after stale save: %v", err)
+	}
+	if status.RootID != rebuild.RootID || status.Stats.DeletedDocs != 0 || status.Stats.LiveDocs != 2 {
+		t.Fatalf("status after stale save=%+v rebuild=%+v, want rebuilt root unchanged", status, rebuild)
+	}
+}
+
 func TestCollectionDropVectorIndexClearsNativeRootStatus(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
