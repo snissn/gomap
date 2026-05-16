@@ -128,7 +128,7 @@ func openReadOnly(opts Options) (*DB, error) {
 		_ = db.Close()
 		return nil, err
 	}
-	if err := requireNoUnappliedCommandWAL(opts.Dir, db.meta.AppliedCommandLSN, opts.WALMaxSegmentBytes); err != nil {
+	if err := requireNoUnappliedCommandWALFrames(opts.Dir, db.meta.AppliedCommandLSN, opts.WALMaxSegmentBytes); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
@@ -258,7 +258,7 @@ func openReadOnlyNoLock(opts Options) (*DB, error) {
 		_ = db.Close()
 		return nil, err
 	}
-	if err := requireNoUnappliedCommandWAL(opts.Dir, db.meta.AppliedCommandLSN, opts.WALMaxSegmentBytes); err != nil {
+	if err := requireNoUnappliedCommandWALFrames(opts.Dir, db.meta.AppliedCommandLSN, opts.WALMaxSegmentBytes); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
@@ -291,6 +291,9 @@ func applyReadOnlyDefaults(opts *Options) error {
 		return err
 	}
 	if opts.ChunkSize == 0 {
+		// Open() applies the same default before dispatching to read-only mode.
+		// openReadOnlyNoLock callers bypass that path, but the pager cannot map an
+		// existing non-empty index with a zero chunk size.
 		opts.ChunkSize = defaultChunkSize
 	}
 	return nil
