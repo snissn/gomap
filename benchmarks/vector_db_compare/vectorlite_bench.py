@@ -65,9 +65,20 @@ def connect(db_path: Path):
     import vectorlite_py
 
     db = sqlite3.connect(str(db_path), check_same_thread=False)
-    db.enable_load_extension(True)
-    db.load_extension(vectorlite_py.vectorlite_path())
-    db.enable_load_extension(False)
+    try:
+        db.enable_load_extension(True)
+        db.load_extension(vectorlite_py.vectorlite_path())
+    except (AttributeError, sqlite3.Error) as exc:
+        db.close()
+        raise RuntimeError(
+            "SQLite loadable extensions are unavailable or Vectorlite could not be loaded; "
+            "use a Python sqlite3 build with extension loading enabled and install vectorlite-py"
+        ) from exc
+    finally:
+        try:
+            db.enable_load_extension(False)
+        except (AttributeError, sqlite3.Error):
+            pass
     return db
 
 
@@ -213,35 +224,41 @@ def validate_recall(
 
 
 def benchmark_search(args: argparse.Namespace, queries: np.ndarray, concurrency: int) -> dict[str, Any]:
+    if len(queries) == 0:
+        return {
+            "concurrency": concurrency,
+            "queries": 0,
+            "total_duration_nanos": 0,
+            "avg_nanos": 0,
+            "avg_micros": 0,
+            "ops_per_second": 0,
+            "p50_nanos": 0,
+            "p95_nanos": 0,
+            "p99_nanos": 0,
+        }
     db_path = Path(args.db_dir) / "vectorlite.db"
     latencies = [0] * len(queries)
-    next_index = 0
-    next_lock = threading.Lock()
-    first_error: list[BaseException] = []
+    first_error: list[Exception] = []
     conns = [connect(db_path) for _ in range(concurrency)]
     for conn in conns:
         configure_sqlite(conn, args.page_size, args.cache_mb)
-        if len(queries) > 0:
-            search_one(conn, queries[0], args.top_k, args.ef_search)
+        search_one(conn, queries[0], args.top_k, args.ef_search)
 
-    def worker(conn: sqlite3.Connection) -> None:
-        nonlocal next_index
-        while True:
-            with next_lock:
-                i = next_index
-                next_index += 1
-            if i >= len(queries):
-                return
+    def worker(conn: sqlite3.Connection, indexes: range) -> None:
+        for i in indexes:
             start = time.perf_counter_ns()
             try:
                 search_one(conn, queries[i], args.top_k, args.ef_search)
-            except BaseException as exc:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001
                 first_error.append(exc)
                 return
             latencies[i] = time.perf_counter_ns() - start
 
     start_all = time.perf_counter()
-    threads = [threading.Thread(target=worker, args=(conn,)) for conn in conns]
+    threads = [
+        threading.Thread(target=worker, args=(conn, range(worker_id, len(queries), concurrency)))
+        for worker_id, conn in enumerate(conns)
+    ]
     for thread in threads:
         thread.start()
     for thread in threads:
@@ -259,12 +276,11 @@ def benchmark_search(args: argparse.Namespace, queries: np.ndarray, concurrency:
         "total_duration_nanos": int(total * 1_000_000_000),
         "avg_nanos": avg,
         "avg_micros": avg / 1000,
-        "ops_per_second": len(queries) / total,
+        "ops_per_second": len(queries) / total if total > 0 else 0,
         "p50_nanos": percentile(sorted_latencies, 0.50),
         "p95_nanos": percentile(sorted_latencies, 0.95),
         "p99_nanos": percentile(sorted_latencies, 0.99),
     }
-
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Benchmark persistent SQLite+Vectorlite HNSW against a TreeDB vector dataset")
@@ -302,6 +318,10 @@ def main() -> None:
     search_benchmarks = [benchmark_search(args, queries, level) for level in levels]
     storage = storage_usage(Path(args.db_dir))
     storage["bytes_per_doc"] = storage["total_bytes"] / manifest["docs"]
+    memory: dict[str, Any] = {}
+    rss = max_rss_bytes()
+    if rss is not None:
+        memory["max_rss_bytes"] = rss
 
     result = {
         "backend": "sqlite_vectorlite",
@@ -327,7 +347,7 @@ def main() -> None:
         "search": search_benchmarks[0],
         "search_benchmarks": search_benchmarks,
         "storage_after_build": storage,
-        "memory": {"max_rss_bytes": max_rss_bytes()},
+        "memory": memory,
     }
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)

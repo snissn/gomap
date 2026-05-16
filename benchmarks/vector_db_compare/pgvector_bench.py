@@ -72,7 +72,14 @@ def build_database(args: argparse.Namespace, manifest: dict[str, Any], docs: np.
     doc_count = checked_manifest_positive_int(manifest, "docs")
     with connect(args.dsn) as conn:
         version = conn.execute("select version()").fetchone()[0]
-        conn.execute("create extension if not exists vector")
+        try:
+            conn.execute("create extension if not exists vector")
+        except psycopg.Error as exc:
+            raise RuntimeError(
+                "could not create or verify the pgvector extension; connect to a PostgreSQL database where "
+                "pgvector is installed and the user can run CREATE EXTENSION, or enable the extension before running "
+                f"the benchmark: {exc}"
+            ) from exc
         exists = conn.execute("select exists(select 1 from information_schema.schemata where schema_name = %s)", [schema]).fetchone()[0]
         if exists:
             if not args.allow_drop_schema:
@@ -81,6 +88,7 @@ def build_database(args: argparse.Namespace, manifest: dict[str, Any], docs: np.
                 )
             conn.execute(f"drop schema {schema} cascade")
         conn.execute(f"create schema {schema}")
+        args.created_schema = True
         conn.execute(
             f"create table {qualified_table} ("
             f"doc_id integer primary key, "
@@ -201,6 +209,18 @@ def validate_recall(
 
 
 def benchmark_search(args: argparse.Namespace, query_literals: list[str], concurrency: int) -> dict[str, Any]:
+    if not query_literals:
+        return {
+            "concurrency": concurrency,
+            "queries": 0,
+            "total_duration_nanos": 0,
+            "avg_nanos": 0,
+            "avg_micros": 0,
+            "ops_per_second": 0,
+            "p50_nanos": 0,
+            "p95_nanos": 0,
+            "p99_nanos": 0,
+        }
     latencies = [0] * len(query_literals)
     next_index = 0
     next_lock = threading.Lock()
@@ -299,6 +319,7 @@ def main() -> None:
     parser.add_argument("--ef-search", type=int, default=128)
     parser.add_argument("--min-recall", type=float, default=0.95)
     args = parser.parse_args()
+    args.created_schema = False
 
     dataset_dir = Path(args.dataset_dir)
     manifest = load_manifest(dataset_dir)
@@ -354,7 +375,7 @@ def main() -> None:
         output.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
         print(json.dumps(result, indent=2))
     finally:
-        if args.drop_schema_after:
+        if args.drop_schema_after and args.created_schema:
             drop_schema(args)
 
 
