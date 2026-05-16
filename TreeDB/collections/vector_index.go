@@ -1881,9 +1881,9 @@ func (idx *VectorIndex) vectorIndexCandidateIsDiverseLocked(candidate vectorInde
 	for _, existing := range selected {
 		distance, ok := idx.distanceBetweenNodesFastLocked(candidate.nodeID, existing.nodeID)
 		if !ok {
-			return false
+			distance = idx.distanceBetweenNodesLocked(candidate.nodeID, existing.nodeID)
 		}
-		if distance <= candidate.distance {
+		if distance < candidate.distance {
 			return false
 		}
 	}
@@ -1895,22 +1895,38 @@ func (idx *VectorIndex) vectorIndexCandidateIsDiverseLocked(candidate vectorInde
 // case with insertion sort. Broader near-sorted shapes intentionally fall back
 // to the full sort instead of carrying more repair logic in the hot path.
 func (idx *VectorIndex) sortVectorIndexCandidatesByDistanceLocked(candidates []vectorIndexCandidate) {
+	inversion := idx.firstVectorIndexCandidateInversionLocked(candidates)
+	switch {
+	case inversion == -1:
+		return
+	case inversion == len(candidates)-1:
+		idx.insertTailVectorIndexCandidateByDistanceLocked(candidates)
+	default:
+		slices.SortFunc(candidates, idx.compareVectorIndexCandidatesByDistanceLocked)
+	}
+}
+
+func (idx *VectorIndex) firstVectorIndexCandidateInversionLocked(candidates []vectorIndexCandidate) int {
 	for i := 1; i < len(candidates); i++ {
 		if idx.compareVectorIndexCandidatesByDistanceLocked(candidates[i-1], candidates[i]) > 0 {
-			if i == len(candidates)-1 {
-				candidate := candidates[i]
-				insert := i - 1
-				for insert >= 0 && idx.compareVectorIndexCandidatesByDistanceLocked(candidates[insert], candidate) > 0 {
-					candidates[insert+1] = candidates[insert]
-					insert--
-				}
-				candidates[insert+1] = candidate
-				return
-			}
-			slices.SortFunc(candidates, idx.compareVectorIndexCandidatesByDistanceLocked)
-			return
+			return i
 		}
 	}
+	return -1
+}
+
+func (idx *VectorIndex) insertTailVectorIndexCandidateByDistanceLocked(candidates []vectorIndexCandidate) {
+	tail := len(candidates) - 1
+	if tail <= 0 {
+		return
+	}
+	candidate := candidates[tail]
+	insert := tail - 1
+	for insert >= 0 && idx.compareVectorIndexCandidatesByDistanceLocked(candidates[insert], candidate) > 0 {
+		candidates[insert+1] = candidates[insert]
+		insert--
+	}
+	candidates[insert+1] = candidate
 }
 
 func (idx *VectorIndex) compareVectorIndexCandidatesByDistanceLocked(left, right vectorIndexCandidate) int {
@@ -1974,7 +1990,7 @@ func (idx *VectorIndex) distanceBetweenNodesFastLocked(leftNodeID, rightNodeID i
 	}
 	left := &idx.nodes[leftNodeID]
 	right := &idx.nodes[rightNodeID]
-	if idx.metric == VectorMetricCosine && canUseUncheckedFloat32NodeCosine(left, right) {
+	if idx.metric == VectorMetricCosine && canUseUncheckedFloat32NodeCosine(left, right, idx.dimensions) {
 		return vectorDistanceBetweenFloat32NodesCosineUnchecked(left, right), true
 	}
 	distance, err := vectorDistanceBetweenStoredNodes(left, right, idx.metric)
@@ -2123,15 +2139,16 @@ func vectorDistanceBetweenFloat32NodesCosine(left, right *vectorIndexNode) (floa
 	if len(left.vector) != len(right.vector) {
 		return 0, fmt.Errorf("collections: vector dimensions differ: %d vs %d", len(left.vector), len(right.vector))
 	}
-	if !canUseUncheckedFloat32NodeCosine(left, right) {
+	if !canUseUncheckedFloat32NodeCosine(left, right, 0) {
 		return 0, errors.New("collections: cosine vector cannot have zero magnitude")
 	}
 	return vectorDistanceBetweenFloat32NodesCosineUnchecked(left, right), nil
 }
 
-func canUseUncheckedFloat32NodeCosine(left, right *vectorIndexNode) bool {
+func canUseUncheckedFloat32NodeCosine(left, right *vectorIndexNode, dimensions int) bool {
 	return len(left.vector) > 0 &&
 		len(left.vector) == len(right.vector) &&
+		(dimensions == 0 || len(left.vector) == dimensions) &&
 		left.cachedInvNorm != 0 &&
 		right.cachedInvNorm != 0
 }

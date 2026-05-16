@@ -308,7 +308,7 @@ func TestVectorIndexInt8InsertUnchangedVectorNoops(t *testing.T) {
 	}
 }
 
-func TestVectorIndexCandidateDiversityRejectsInvalidPairDistance(t *testing.T) {
+func TestVectorIndexCandidateDiversitySkipsInvalidPairDistance(t *testing.T) {
 	index, err := newVectorIndex(nil, VectorIndexOptions{
 		Name:   "embedding",
 		Field:  "embedding",
@@ -326,8 +326,37 @@ func TestVectorIndexCandidateDiversityRejectsInvalidPairDistance(t *testing.T) {
 		index.nodes[i].cacheVectorNorms()
 	}
 
-	if index.vectorIndexCandidateIsDiverseLocked(vectorIndexCandidate{nodeID: 0, distance: 0.1}, []vectorIndexCandidate{{nodeID: 1}}) {
-		t.Fatal("candidate with invalid pair distance was treated as diverse")
+	if !index.vectorIndexCandidateIsDiverseLocked(vectorIndexCandidate{nodeID: 0, distance: 0.1}, []vectorIndexCandidate{{nodeID: 1}}) {
+		t.Fatal("invalid pair distance rejected the candidate instead of preserving sentinel fallback behavior")
+	}
+}
+
+func TestVectorIndexDistanceBetweenNodesFastMatchesStoredCosine(t *testing.T) {
+	index, err := newVectorIndex(nil, VectorIndexOptions{
+		Name:       "embedding",
+		Field:      "embedding",
+		Metric:     VectorMetricCosine,
+		Dimensions: 2,
+		M:          4,
+	})
+	if err != nil {
+		t.Fatalf("new vector index: %v", err)
+	}
+	index.nodes = []vectorIndexNode{
+		{documentID: []byte("left"), vector: []float32{1, 0}, level: 0},
+		{documentID: []byte("right"), vector: []float32{0.5, 0.5}, level: 0},
+	}
+	for i := range index.nodes {
+		index.nodes[i].cacheVectorNorms()
+	}
+
+	fast, ok := index.distanceBetweenNodesFastLocked(0, 1)
+	if !ok {
+		t.Fatal("fast pair distance path unavailable for valid cosine nodes")
+	}
+	slow := index.distanceBetweenNodesLocked(0, 1)
+	if math.Abs(float64(fast-slow)) > 1e-6 {
+		t.Fatalf("fast distance=%v slow=%v", fast, slow)
 	}
 }
 
@@ -386,6 +415,48 @@ func TestVectorIndexSelectLayerNeighborsReusesCandidateDistances(t *testing.T) {
 	)
 	if len(got) != 2 || got[0] != 2 || got[1] != 3 {
 		t.Fatalf("selected neighbors=%v want [2 3]", got)
+	}
+}
+
+func TestSortVectorIndexCandidatesByDistanceTailInsert(t *testing.T) {
+	index, err := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine})
+	if err != nil {
+		t.Fatalf("new vector index: %v", err)
+	}
+	index.nodes = []vectorIndexNode{
+		{documentID: []byte("a")},
+		{documentID: []byte("b")},
+		{documentID: []byte("c")},
+	}
+	candidates := []vectorIndexCandidate{
+		{nodeID: 0, distance: 0.1},
+		{nodeID: 2, distance: 0.3},
+		{nodeID: 1, distance: 0.2},
+	}
+	index.sortVectorIndexCandidatesByDistanceLocked(candidates)
+	if candidates[0].nodeID != 0 || candidates[1].nodeID != 1 || candidates[2].nodeID != 2 {
+		t.Fatalf("tail-insert sort candidates=%+v", candidates)
+	}
+}
+
+func TestSortVectorIndexCandidatesByDistanceFallbackSort(t *testing.T) {
+	index, err := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine})
+	if err != nil {
+		t.Fatalf("new vector index: %v", err)
+	}
+	index.nodes = []vectorIndexNode{
+		{documentID: []byte("a")},
+		{documentID: []byte("b")},
+		{documentID: []byte("c")},
+	}
+	candidates := []vectorIndexCandidate{
+		{nodeID: 2, distance: 0.3},
+		{nodeID: 1, distance: 0.2},
+		{nodeID: 0, distance: 0.1},
+	}
+	index.sortVectorIndexCandidatesByDistanceLocked(candidates)
+	if candidates[0].nodeID != 0 || candidates[1].nodeID != 1 || candidates[2].nodeID != 2 {
+		t.Fatalf("fallback sort candidates=%+v", candidates)
 	}
 }
 
