@@ -1523,6 +1523,13 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 				commandSegmentSeq = seq
 			}
 		}
+		if commandSegmentSeq == ^uint64(0) {
+			_ = db.Close()
+			return nil, errors.New("treedb: command wal segment sequence exhausted")
+		}
+		if commandSegmentSeq != 0 {
+			commandSegmentSeq++
+		}
 		journal, err := commitlog.OpenCommandJournal(WALDirPath(opts.Dir), commitlog.CommandJournalOptions{
 			MaxSegmentSize:            opts.WALMaxSegmentBytes,
 			BufferSize:                commandWALWriterBufferSize,

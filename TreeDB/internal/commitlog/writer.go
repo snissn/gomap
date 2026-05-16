@@ -419,30 +419,11 @@ func (w *Writer) appendRawKVPointCommandDirectTrustedSized(lsn, baseAppliedLSN u
 		w.size += int64(total)
 		return nil
 	}
-	if len(w.commandBuf) > 0 && len(w.commandBuf)+total > deferredCommandBufferSize {
-		if err := w.flushBufferedCommandFrames(); err != nil {
-			return err
-		}
+	off, err := w.reserveCommandBufferSpace(total)
+	if err != nil {
+		return err
 	}
-	off := len(w.commandBuf)
 	newLen := off + total
-	if cap(w.commandBuf) < newLen {
-		newCap := cap(w.commandBuf) * 2
-		if newCap < newLen {
-			newCap = newLen
-		}
-		if newCap < defaultBufferSize {
-			newCap = defaultBufferSize
-		}
-		if newCap > deferredCommandBufferSize && newLen <= deferredCommandBufferSize {
-			newCap = deferredCommandBufferSize
-		}
-		next := make([]byte, newLen, newCap)
-		copy(next, w.commandBuf)
-		w.commandBuf = next
-	} else {
-		w.commandBuf = w.commandBuf[:newLen]
-	}
 	buf := w.commandBuf[off:newLen]
 	encodeTrustedRawKVPointCommandFramePayloadSizedTo(buf[segmentHeaderSize:segmentHeaderSize+size], lsn, baseAppliedLSN, op, key, value, valueLen, payloadLen, size)
 	binary.LittleEndian.PutUint32(buf[0:4], uint32(size))
@@ -479,30 +460,11 @@ func (w *Writer) AppendRawKVBatchPayloadCommandDirectTrusted(lsn, baseAppliedLSN
 	if cap(w.commandBuf) > 0 {
 		total := segmentHeaderSize + size
 		if total <= deferredCommandBufferSize {
-			if len(w.commandBuf) > 0 && len(w.commandBuf)+total > deferredCommandBufferSize {
-				if err := w.flushBufferedCommandFrames(); err != nil {
-					return err
-				}
+			off, err := w.reserveCommandBufferSpace(total)
+			if err != nil {
+				return err
 			}
-			off := len(w.commandBuf)
 			newLen := off + total
-			if cap(w.commandBuf) < newLen {
-				newCap := cap(w.commandBuf) * 2
-				if newCap < newLen {
-					newCap = newLen
-				}
-				if newCap < defaultBufferSize {
-					newCap = defaultBufferSize
-				}
-				if newCap > deferredCommandBufferSize && newLen <= deferredCommandBufferSize {
-					newCap = deferredCommandBufferSize
-				}
-				next := make([]byte, newLen, newCap)
-				copy(next, w.commandBuf)
-				w.commandBuf = next
-			} else {
-				w.commandBuf = w.commandBuf[:newLen]
-			}
 			buf := w.commandBuf[off:newLen]
 			frameHeader := buf[segmentHeaderSize : segmentHeaderSize+commandFrameHeaderSize]
 			copy(frameHeader, rawKVCommandFrameHeaderTemplate[:])
@@ -546,6 +508,37 @@ func (w *Writer) AppendRawKVBatchPayloadCommandDirectTrusted(lsn, baseAppliedLSN
 	}
 	w.size += int64(segmentHeaderSize + size)
 	return nil
+}
+
+func (w *Writer) reserveCommandBufferSpace(total int) (int, error) {
+	if total <= 0 {
+		return 0, ErrCorrupt
+	}
+	if len(w.commandBuf) > 0 && len(w.commandBuf)+total > deferredCommandBufferSize {
+		if err := w.flushBufferedCommandFrames(); err != nil {
+			return 0, err
+		}
+	}
+	off := len(w.commandBuf)
+	newLen := off + total
+	if cap(w.commandBuf) < newLen {
+		newCap := cap(w.commandBuf) * 2
+		if newCap < newLen {
+			newCap = newLen
+		}
+		if newCap < defaultBufferSize {
+			newCap = defaultBufferSize
+		}
+		if newCap > deferredCommandBufferSize && newLen <= deferredCommandBufferSize {
+			newCap = deferredCommandBufferSize
+		}
+		next := make([]byte, newLen, newCap)
+		copy(next, w.commandBuf)
+		w.commandBuf = next
+	} else {
+		w.commandBuf = w.commandBuf[:newLen]
+	}
+	return off, nil
 }
 
 func writeFull(f *os.File, p []byte) error {
@@ -620,6 +613,11 @@ func (w *Writer) poisonCommandBuffer(err error) error {
 		return err
 	}
 	if w.commandErr == nil {
+		if w.f != nil {
+			if truncErr := w.f.Truncate(w.size); truncErr != nil {
+				err = errors.Join(err, truncErr)
+			}
+		}
 		w.commandErr = err
 	}
 	if w.commandBuf != nil {

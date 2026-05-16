@@ -439,12 +439,14 @@ func truncateCommandJournalTail(path string, size int64) error {
 }
 
 // reserveLSNLocked reserves one LSN for CommandJournal append paths. Callers
-// must hold j.mu and must not expose this as a direct JournalOwner reservation;
-// tail-only rollback depends on the journal's append serialization.
+// must hold j.mu. The owner mutex still protects owner state even though
+// OpenCommandJournal keeps the owner private to this journal.
 func (j *CommandJournal) reserveLSNLocked() (uint64, error) {
 	if j == nil || j.owner == nil {
 		return 0, errors.New("commitlog: command journal is closed")
 	}
+	j.owner.mu.Lock()
+	defer j.owner.mu.Unlock()
 	first, _, err := j.owner.reserveLSNRangeLocked(1)
 	return first, err
 }
@@ -452,9 +454,7 @@ func (j *CommandJournal) reserveLSNLocked() (uint64, error) {
 // AppendCommand validates a complete command frame, assigns the next journal
 // LSN, and appends it through this lane's single writer while holding the
 // journal mutex. This intentionally optimizes for deterministic frame order and
-// tail-only rollback, not parallel appends within one lane. The owner mutex
-// still protects direct JournalOwner users, but CommandJournal requires no other
-// owner reservation between this reserve and a failed append rollback.
+// tail-only rollback, not parallel appends within one lane.
 func (j *CommandJournal) AppendCommand(env CommandEnvelope) (uint64, error) {
 	if j == nil {
 		return 0, errors.New("commitlog: command journal is closed")
@@ -501,7 +501,7 @@ func (j *CommandJournal) AppendCommand(env CommandEnvelope) (uint64, error) {
 	}
 	env.LSN = lsn
 	if err := j.writer.AppendCommand(env); err != nil {
-		if rollbackErr := j.owner.rollbackReservedLSNSerialized(lsn); rollbackErr != nil {
+		if rollbackErr := j.owner.rollbackReservedLSN(lsn); rollbackErr != nil {
 			return 0, errors.Join(err, rollbackErr)
 		}
 		return 0, err
@@ -544,7 +544,7 @@ func (j *CommandJournal) AppendRawKVSingleCommand(baseAppliedLSN uint64, op RawK
 		return 0, err
 	}
 	if err := j.writer.AppendRawKVSingleCommandDirect(lsn, baseAppliedLSN, op); err != nil {
-		if rollbackErr := j.owner.rollbackReservedLSNSerialized(lsn); rollbackErr != nil {
+		if rollbackErr := j.owner.rollbackReservedLSN(lsn); rollbackErr != nil {
 			return 0, errors.Join(err, rollbackErr)
 		}
 		return 0, err
@@ -588,7 +588,7 @@ func (j *CommandJournal) AppendRawKVPointCommandTrusted(baseAppliedLSN uint64, o
 		return 0, err
 	}
 	if err := j.writer.appendRawKVPointCommandDirectTrustedSized(lsn, baseAppliedLSN, op, key, value, valueLen, payloadLen, size); err != nil {
-		if rollbackErr := j.owner.rollbackReservedLSNSerialized(lsn); rollbackErr != nil {
+		if rollbackErr := j.owner.rollbackReservedLSN(lsn); rollbackErr != nil {
 			return 0, errors.Join(err, rollbackErr)
 		}
 		return 0, err
@@ -622,7 +622,7 @@ func (j *CommandJournal) AppendRawKVBatchPayloadCommandTrusted(baseAppliedLSN ui
 		return 0, err
 	}
 	if err := j.writer.AppendRawKVBatchPayloadCommandDirectTrusted(lsn, baseAppliedLSN, payload); err != nil {
-		if rollbackErr := j.owner.rollbackReservedLSNSerialized(lsn); rollbackErr != nil {
+		if rollbackErr := j.owner.rollbackReservedLSN(lsn); rollbackErr != nil {
 			return 0, errors.Join(err, rollbackErr)
 		}
 		return 0, err

@@ -650,6 +650,51 @@ func TestWriterBufferedCommandSizeAdvancesOnFlush(t *testing.T) {
 	}
 }
 
+func TestWriterPoisonCommandBufferTruncatesUnaccountedTail(t *testing.T) {
+	payload, err := EncodeRawKVBatchPayload([]RawKVOperation{
+		{Op: RawKVOpSet, Key: []byte("alpha"), Value: []byte("one")},
+	})
+	if err != nil {
+		t.Fatalf("EncodeRawKVBatchPayload: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "commit-l0-000001.log")
+	w, err := NewWriterWithOptions(path, Options{})
+	if err != nil {
+		t.Fatalf("NewWriterWithOptions: %v", err)
+	}
+	defer w.Close()
+	if err := w.AppendRawKVBatchPayloadCommandDirectTrusted(1, 0, payload); err != nil {
+		t.Fatalf("AppendRawKVBatchPayloadCommandDirectTrusted: %v", err)
+	}
+	if err := w.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	accounted := w.Size()
+	if accounted == 0 {
+		t.Fatal("writer size after first flush=0")
+	}
+	if _, err := w.f.Write([]byte("partial-command-tail")); err != nil {
+		t.Fatalf("inject unaccounted tail: %v", err)
+	}
+	if info, err := os.Stat(path); err != nil {
+		t.Fatalf("stat after injected tail: %v", err)
+	} else if info.Size() <= accounted {
+		t.Fatalf("test setup file size=%d, want > accounted %d", info.Size(), accounted)
+	}
+
+	injected := errors.New("injected buffered command failure")
+	if err := w.poisonCommandBuffer(injected); !errors.Is(err, injected) {
+		t.Fatalf("poisonCommandBuffer error=%v, want %v", err, injected)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat after poison: %v", err)
+	}
+	if info.Size() != accounted {
+		t.Fatalf("poisonCommandBuffer size=%d, want accounted %d", info.Size(), accounted)
+	}
+}
+
 func TestEncodeRawKVSingleOperationPayloadMatchesSliceEncoder(t *testing.T) {
 	for _, op := range []RawKVOperation{
 		{Op: RawKVOpSet, Key: []byte("alpha"), Value: []byte("one")},

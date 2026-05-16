@@ -36,7 +36,12 @@
     "public command-WAL batch cached-view hook rebinding is centralized for constructor and Reset reuse",
     "public command-WAL batches skip duplicate cached SetView/DeleteView validation after the public wrapper validates inputs",
     "deferred command-WAL writer size advances only after buffered command frames are flushed to the segment file",
-    "trusted public command-WAL batch frames are buffered in writer-owned memory and finalized at command-WAL flush/checkpoint boundaries to avoid per-batch direct writev/digest overhead"
+    "trusted public command-WAL batch frames are buffered in writer-owned memory and finalized at command-WAL flush/checkpoint boundaries to avoid per-batch direct writev/digest overhead",
+    "command-WAL reopen after published frames opens a fresh active segment instead of reusing the covered segment",
+    "buffered command-frame write failures truncate any unaccounted partial tail back to the writer size before poisoning the writer",
+    "command journal LSN reservation and rollback paths protect owner state with the owner mutex",
+    "public command-WAL close uses the cached checkpoint helper directly instead of re-entering the public Checkpoint method",
+    "cached command-WAL checkpoint fallback re-snapshots publish ranges if a prepared piggyback is not consumed"
   ],
   "passed_tests": [
     "TestCommandWALRawSetDeleteBatchReplaysThroughNormalExecutor",
@@ -64,7 +69,9 @@
     "TestCommandJournalAllocatesContiguousLSNs",
     "TestCommandJournalAppendFailureRollsBackLSN",
     "TestCommandJournalConcurrentAppendsSerializeFrameOrder",
-    "TestWriterBufferedCommandSizeAdvancesOnFlush"
+    "TestWriterBufferedCommandSizeAdvancesOnFlush",
+    "TestCommandWALReopenAfterPublishedFrameUsesFreshSegment",
+    "TestWriterPoisonCommandBufferTruncatesUnaccountedTail"
   ],
   "local_validation_commands": [
     "GOWORK=off go test ./TreeDB ./TreeDB/docs ./TreeDB/db ./TreeDB/nativewire ./TreeDB/internal/commitlog ./cmd/unified_bench -run 'TestPublicCommandWALRawKVWritesUseTypedFrames|TestPublicCommandWALPointWritesSerializeLSNWithCachedMutation|TestPublicCommandWALBatchCloseDiscardsDirtyPayload|TestPublicCommandWALBatchWriteFailureDoesNotAppendFrame|TestPublicCommandWALPublishSyncMatrix|TestRawKVBatchPayloadBuilderMatchesSliceEncoder|TestRawKVBatchPayloadBuilderResetWithHintReportsOverflow|TestWriterAppendRawKVBatchPayloadCommandDirect|TestEncodeRawKVBatchPayloadScanMatchesSliceEncoder|TestEncodeRawKVSingleOperationPayloadMatchesSliceEncoder|TestEncodeRawKVSingleCommandFrameMatchesEnvelopeEncoder|TestCommandWALSupportMatrix|TestCommandWALRejectedErrorDistinctFromUnsupported|TestMetadataUnsupportedCatalogCommandsReturnUnsupportedFeature|TestCommandWALNativeWireAlignmentManifestCoverage|TestNativeWireAndLocalCommandDigestStable|TestNativeWireAckFlushedRequiresRootPublishAndAppliedLSN|TestNativeWirePostFramePublishFailureCommitAmbiguous|TestRaftCommandEntryAndLocalCommandPayloadUseSharedCanonicalSchema|TestCommandWALRawSetDeleteBatchReplaysThroughNormalExecutor|TestTreeDBPublicCommandWALVariantUsesCachedCommandWALPath|TestTreeDBCommandWALAliasResolvesToBackendVariant|^$' -count=1",
@@ -82,7 +89,12 @@
     "GOWORK=off go test ./TreeDB/internal/commitlog -run 'TestWriter|TestRawKV|TestCommand' -count=1",
     "GOWORK=off go test ./TreeDB/internal/commitlog -run 'TestWriterAppendRawKVBatchPayloadCommandDirect|TestWriterBufferedCommandFlushFailurePoisonsWriter|TestWriterBufferedCommandSizeAdvancesOnFlush|TestCommandJournal|TestRawKV|TestCommand' -count=1",
     "GOWORK=off go test ./cmd/unified_bench -run 'TestTreeDBCommandWAL|TestRunBenchmark' -count=1",
-    "GOWORK=off go test ./TreeDB/docs -run TestPR9AcceptancePerformanceGateIsStrictParityPlus -count=1"
+    "GOWORK=off go test ./TreeDB/docs -run TestPR9AcceptancePerformanceGateIsStrictParityPlus -count=1",
+    "GOWORK=off go test ./TreeDB/internal/commitlog -run 'TestCommandJournal|TestWriterBufferedCommand|TestWriterPoisonCommandBuffer|TestRawKVBatchPayloadBuilder|TestWriterAppendRawKVBatchPayloadCommandDirect|TestRawKV' -count=1",
+    "GOWORK=off go test ./TreeDB/db -run 'TestCommandWAL(ReopenAfterPublishedFrameUsesFreshSegment|CrashAfterRootAppliedLSNBeforeCleanupSkipsFrame|CleanReopenCleansCoveredNonActiveSegmentWithNoReplayFrames)|TestPublishCommandWAL|TestRawKV' -count=1",
+    "GOWORK=off go test ./TreeDB -run 'TestPublicCommandWALCheckpointPiggybacksAppliedLSN|TestPublicCommandWALCheckpointHookUsesSyncIntent|TestPublicCommandWALClosePublishesPendingAppliedLSN|TestPublicCommandWALCheckpointRetainsCommandJournalSegment' -count=1",
+    "GOWORK=off go test ./TreeDB/docs -run 'TestPR9AcceptancePerformanceGateIsStrictParityPlus|TestCommandWAL' -count=1",
+    "GOWORK=off go test ./cmd/unified_bench -run 'TestTreeDBCommandWAL|TestRunBenchmark|TestProfile' -count=1"
   ],
   "benchmark_artifacts": [
     "artifacts/command-wal/pr9/public-raw-kv-microbench.txt",
@@ -213,7 +225,10 @@
     "DeleteRange remains rejected under cached public command-WAL until it has typed command coverage"
   ],
   "next_required_work": [
-    "before PR9 publication: rerun full targeted correctness suite and refresh live PR CI/review state after pushing these local changes",
+    "after pushing review fixes: refresh live PR CI/review state and confirm PR9 has no active actionable review threads",
     "optional follow-up: add cheap live accepted/covered command-frame counters so benchmark mode proof does not depend on diagnostic segment scans"
+  ],
+  "local_validation_notes": [
+    "GOWORK=off go test ./TreeDB/internal/commitlog ./TreeDB/db ./TreeDB ./TreeDB/caching -count=1: command-WAL/db/caching packages passed; TreeDB package failed two value-log dict-compression tests that also fail on unmodified origin/codex/user-command-wal-pr9 in this environment"
   ]
 }

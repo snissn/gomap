@@ -146,6 +146,34 @@ func TestCommandWALCrashAfterRootAppliedLSNBeforeCleanupSkipsFrame(t *testing.T)
 	}
 }
 
+func TestCommandWALReopenAfterPublishedFrameUsesFreshSegment(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	b := db.NewBatch()
+	if err := b.Set([]byte("k"), []byte("v")); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if err := b.WriteSync(); err != nil {
+		t.Fatalf("WriteSync: %v", err)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatalf("Close batch: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(WALDirPath(dir), "commit-l0-000001.log")); err != nil {
+		t.Fatalf("command WAL frame missing before reopen: %v", err)
+	}
+
+	reopen := openCommandWALDB(t, dir)
+	defer reopen.Close()
+	if _, err := os.Stat(filepath.Join(WALDirPath(dir), "commit-l0-000002.log")); err != nil {
+		t.Fatalf("fresh command WAL segment missing after reopen: %v; entries=%v", err, commandWALSegmentNamesForTest(t, dir))
+	}
+}
+
 func TestCommandWALCleanReopenCleansCoveredNonActiveSegmentWithNoReplayFrames(t *testing.T) {
 	dir := t.TempDir()
 	enableCommandWALFormat(t, dir)
@@ -849,6 +877,19 @@ func assertDBValue(t *testing.T, db *DB, key string, want string) {
 	if !bytes.Equal(got, []byte(want)) {
 		t.Fatalf("Get(%q)=%q, want %q", key, got, want)
 	}
+}
+
+func commandWALSegmentNamesForTest(t *testing.T, dir string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(WALDirPath(dir))
+	if err != nil {
+		t.Fatalf("ReadDir command WAL: %v", err)
+	}
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		names = append(names, entry.Name())
+	}
+	return names
 }
 
 func writeCommandWALRawKVFrame(t testing.TB, dir string, segmentSeq uint64, lsn uint64, ops []commitlog.RawKVOperation) {

@@ -19473,7 +19473,6 @@ func (db *DB) Checkpoint() error {
 		commandWALAppliedLSN       uint64
 		commandWALRanges           []backenddb.CommandWALLSNRange
 		commandWALPublishPiggyback *checkpointCommandWALPublish
-		commandWALPublishPrepared  bool
 	)
 	if db.commandWALCheckpointPublish != nil && db.canPiggybackCommandWALCheckpointPublish(true) {
 		var err error
@@ -19481,7 +19480,6 @@ func (db *DB) Checkpoint() error {
 		if err != nil {
 			return err
 		}
-		commandWALPublishPrepared = true
 		if commandWALAppliedLSN != 0 && len(commandWALRanges) == 1 {
 			commandWALPublishPiggyback = &checkpointCommandWALPublish{
 				appliedLSN: commandWALAppliedLSN,
@@ -19498,7 +19496,7 @@ func (db *DB) Checkpoint() error {
 	}
 
 	commandWALPublishCovered := commandWALPublishPiggyback != nil && commandWALPublishPiggyback.consumed
-	if !commandWALPublishCovered && !commandWALPublishPrepared && db.commandWALCheckpointPublish != nil {
+	if !commandWALPublishCovered && db.commandWALCheckpointPublish != nil {
 		var err error
 		commandWALAppliedLSN, commandWALRanges, err = db.commandWALCheckpointPublish(!db.relaxedSync)
 		if err != nil {

@@ -1307,7 +1307,7 @@ func (db *DB) Close() error {
 	// Close cached layer first if present
 	if db.cached != nil {
 		if db.commandWALCached {
-			if e := db.Checkpoint(); e != nil {
+			if e := db.checkpointCachedForPublicCommandWAL(); e != nil {
 				wrapped := fmt.Errorf("treedb: final command WAL checkpoint during close: %w", e)
 				db.reportError(wrapped)
 				err = errors.Join(err, wrapped)
@@ -1777,16 +1777,23 @@ func (db *DB) Checkpoint() error {
 		return err
 	}
 	if db.cached != nil {
-		if err := db.cached.Checkpoint(); err != nil {
-			return err
-		}
-		if db.testAfterCachedCheckpoint != nil {
-			db.testAfterCachedCheckpoint()
-		}
-		db.clearPublishedPublicCommandWALPending()
-		return nil
+		return db.checkpointCachedForPublicCommandWAL()
 	}
 	return db.backend.Checkpoint()
+}
+
+func (db *DB) checkpointCachedForPublicCommandWAL() error {
+	if db == nil || db.cached == nil {
+		return ErrClosed
+	}
+	if err := db.cached.Checkpoint(); err != nil {
+		return err
+	}
+	if db.testAfterCachedCheckpoint != nil {
+		db.testAfterCachedCheckpoint()
+	}
+	db.clearPublishedPublicCommandWALPending()
+	return nil
 }
 
 // CompactIndex performs an in-place index vacuum (bulk rebuild) on the backend.

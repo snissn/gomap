@@ -108,6 +108,10 @@ type RawKVBatchPayloadBuilder struct {
 	count   int
 }
 
+// NewRawKVBatchPayloadBuilder returns a builder initialized with best-effort
+// capacity hints. Invalid or overflowing hints intentionally fall back to the
+// minimum header capacity; callers that need to observe hint errors should use
+// RawKVBatchPayloadBuilder.ResetWithHint directly.
 func NewRawKVBatchPayloadBuilder(opHint, byteHint int) RawKVBatchPayloadBuilder {
 	var b RawKVBatchPayloadBuilder
 	_ = b.ResetWithHint(opHint, byteHint)
