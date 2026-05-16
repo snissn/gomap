@@ -36,6 +36,15 @@ const (
 	vectorIndexFallbackInvalidGraphRootKey        = "invalid_graph_root_key"
 	vectorIndexFallbackInvalidGraphRootEntry      = "invalid_graph_root_entry"
 	vectorIndexFallbackStaleRuntimeIndex          = "stale_runtime_index_ignored"
+	vectorIndexFallbackMetaMismatch               = "meta_mismatch"
+	vectorIndexFallbackInvalidEncoding            = "invalid_encoding"
+	vectorIndexFallbackMetaEncodingMismatch       = "meta_encoding_mismatch"
+	vectorIndexFallbackMetaDimensionMismatch      = "meta_dimension_mismatch"
+	vectorIndexFallbackInvalidDimensions          = "invalid_dimensions"
+	vectorIndexFallbackInvalidEdgeNode            = "invalid_edge_node"
+	vectorIndexFallbackInvalidTombstone           = "invalid_tombstone"
+	vectorIndexFallbackInvalidDocMapNode          = "invalid_docmap_node"
+	vectorIndexFallbackInvalidEntry               = "invalid_entry"
 )
 
 // VectorIndexEncoding selects the process-local ANN vector copy format. The
