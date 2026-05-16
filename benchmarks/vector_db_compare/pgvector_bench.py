@@ -133,13 +133,17 @@ def build_database(args: argparse.Namespace, manifest: dict[str, Any], docs: np.
     }, version
 
 
+def configure_search_session(conn: psycopg.Connection, args: argparse.Namespace) -> None:
+    conn.execute(f"set hnsw.ef_search = {int(args.ef_search)}")
+    conn.execute("set enable_seqscan = off")
+    conn.execute(f"set search_path = {checked_identifier(args.schema, '--schema')}, public")
+
+
 def reopen_database(args: argparse.Namespace) -> tuple[psycopg.Connection, dict[str, Any]]:
     start = time.perf_counter()
     qualified_table = table_name(args)
-    schema = checked_identifier(args.schema, "--schema")
     conn = connect(args.dsn)
-    conn.execute(f"set hnsw.ef_search = {int(args.ef_search)}")
-    conn.execute(f"set search_path = {schema}, public")
+    configure_search_session(conn, args)
     count = conn.execute(f"select count(*) from {qualified_table}").fetchone()[0]
     probe = conn.execute(
         f"select doc_id from {qualified_table} order by embedding <=> (select embedding from {qualified_table} where doc_id = 1) limit 1"
@@ -150,6 +154,35 @@ def reopen_database(args: argparse.Namespace) -> tuple[psycopg.Connection, dict[
     out["rows"] = int(count)
     out["probe_rows"] = len(probe)
     return conn, out
+
+
+def plan_uses_index(plan: Any, expected_index: str) -> bool:
+    if isinstance(plan, list):
+        return any(plan_uses_index(item, expected_index) for item in plan)
+    if not isinstance(plan, dict):
+        return False
+    if plan.get("Index Name") == expected_index:
+        return True
+    return any(plan_uses_index(value, expected_index) for value in plan.values())
+
+
+def verify_hnsw_search_plan(conn: psycopg.Connection, args: argparse.Namespace, query: str) -> dict[str, Any]:
+    qualified_table = table_name(args)
+    expected_index = index_name(args)
+    row = conn.execute(
+        f"explain (format json) select doc_id from {qualified_table} order by embedding <=> %s::vector limit %s",
+        [query, args.top_k],
+    ).fetchone()
+    plan = row[0]
+    if isinstance(plan, str):
+        plan = json.loads(plan)
+    if not plan_uses_index(plan, expected_index):
+        raise RuntimeError(f"pgvector search plan did not use HNSW index {expected_index}: {json.dumps(plan)}")
+    return {
+        "verified_hnsw_index": True,
+        "index": expected_index,
+        "enable_seqscan": False,
+    }
 
 
 def search_one(conn: psycopg.Connection, args: argparse.Namespace, query: str, top_k: int) -> list[int]:
@@ -229,8 +262,7 @@ def benchmark_search(args: argparse.Namespace, query_literals: list[str], concur
     stop_event = threading.Event()
     conns = [connect(args.dsn) for _ in range(concurrency)]
     for conn in conns:
-        conn.execute(f"set hnsw.ef_search = {int(args.ef_search)}")
-        conn.execute(f"set search_path = {checked_identifier(args.schema, '--schema')}, public")
+        configure_search_session(conn, args)
 
     def worker(conn: psycopg.Connection) -> None:
         nonlocal first_error, next_index
@@ -337,6 +369,7 @@ def main() -> None:
 
         phases, postgres_info = build_database(args, manifest, docs)
         conn, reopen = reopen_database(args)
+        search_plan = verify_hnsw_search_plan(conn, args, query_literals[0]) if query_literals else {"verified_hnsw_index": False, "reason": "no queries"}
         validation = validate_recall(conn, args, docs, query_literals, queries, args.top_k, args.validate_queries, args.min_recall)
         storage = storage_usage(conn, args, manifest["docs"])
         conn.close()
@@ -364,6 +397,7 @@ def main() -> None:
             "build": phases["build"],
             "create_total": phases["create_total"],
             "reopen_load": reopen,
+            "search_plan": search_plan,
             "validation": validation,
             "search": search_benchmarks[0],
             "search_benchmarks": search_benchmarks,
