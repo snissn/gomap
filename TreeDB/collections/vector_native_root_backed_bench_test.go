@@ -91,6 +91,10 @@ func openNativeVectorBenchmarkIndexRoot(tb testing.TB, docs, dims int, name stri
 		_ = d.Close()
 		tb.Fatalf("save native vector index: %v", err)
 	}
+	if !saveStatus.Loaded || saveStatus.RootID == 0 {
+		_ = d.Close()
+		tb.Fatalf("unexpected native save status: %+v", saveStatus)
+	}
 	if err := d.Close(); err != nil {
 		tb.Fatalf("close setup db: %v", err)
 	}
@@ -190,7 +194,7 @@ func (r *vectorIndexNativeRootBackedGraphReader) searchGraphOnly(query []float32
 		prepared = &preparedQuery
 	}
 	if r.meta.Entry < 0 || r.nodeCount == 0 {
-		return nil, nil
+		return []VectorSearchResult{}, nil
 	}
 	limit := efSearch
 	if limit <= 0 {
