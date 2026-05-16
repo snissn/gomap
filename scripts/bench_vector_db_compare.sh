@@ -26,6 +26,7 @@ PGVECTOR_MAX_CONNECTIONS="${PGVECTOR_MAX_CONNECTIONS:-256}"
 PGVECTOR_CONTAINER_NAME="${PGVECTOR_CONTAINER_NAME:-gomap-pgvector-$RANDOM-$$}"
 PGVECTOR_SCHEMA="${PGVECTOR_SCHEMA:-gomap_vector_bench_${RANDOM}_$$}"
 PGVECTOR_TABLE="${PGVECTOR_TABLE:-documents}"
+PGVECTOR_DROP_SCHEMA_AFTER="${PGVECTOR_DROP_SCHEMA_AFTER:-false}"
 PGVECTOR_CONTAINER=""
 
 MONGODB_VECTOR_URI="${MONGODB_VECTOR_URI:-}"
@@ -77,7 +78,11 @@ start_pgvector_if_needed() {
 		"$PGVECTOR_IMAGE" \
 		-c "max_connections=$PGVECTOR_MAX_CONNECTIONS")
 	local mapped
-	mapped=$(docker port "$PGVECTOR_CONTAINER" 5432/tcp | sed -E 's/.*:([0-9]+)$/\1/')
+	mapped=$(docker port "$PGVECTOR_CONTAINER" 5432/tcp | sed -nE 's/.*:([0-9]+)$/\1/p' | head -n 1)
+	if [[ -z "$mapped" ]]; then
+		echo "could not determine mapped pgvector container port" >&2
+		exit 1
+	fi
 	PGVECTOR_DSN="postgresql://postgres:postgres@127.0.0.1:${mapped}/gomap_vector_bench?sslmode=disable"
 	echo "pgvector dsn: [redacted]"
 	"$VENV/bin/python" - <<'PY' "$PGVECTOR_DSN"
@@ -203,20 +208,25 @@ fi
 if contains_backend pgvector; then
 	start_pgvector_if_needed
 	echo "running PostgreSQL+pgvector benchmark"
-	"$VENV/bin/python" benchmarks/vector_db_compare/pgvector_bench.py \
-		--dataset-dir "$RUN_DIR/dataset" \
-		--dsn "$PGVECTOR_DSN" \
-		--schema "$PGVECTOR_SCHEMA" \
-		--table "$PGVECTOR_TABLE" \
-		--output "$RUN_DIR/pgvector.json" \
-		--queries "$QUERIES" \
-		--validate-queries "$VALIDATE_QUERIES" \
-		--top-k "$TOP_K" \
-		--search-concurrency "$SEARCH_CONCURRENCY" \
-		--m "$M" \
-		--ef-construction "$EF_CONSTRUCTION" \
-		--ef-search "$EF_SEARCH" \
-		--min-recall "$MIN_RECALL" >"$RUN_DIR/pgvector.stdout.json"
+	pgvector_args=(
+		--dataset-dir "$RUN_DIR/dataset"
+		--dsn "$PGVECTOR_DSN"
+		--schema "$PGVECTOR_SCHEMA"
+		--table "$PGVECTOR_TABLE"
+		--output "$RUN_DIR/pgvector.json"
+		--queries "$QUERIES"
+		--validate-queries "$VALIDATE_QUERIES"
+		--top-k "$TOP_K"
+		--search-concurrency "$SEARCH_CONCURRENCY"
+		--m "$M"
+		--ef-construction "$EF_CONSTRUCTION"
+		--ef-search "$EF_SEARCH"
+		--min-recall "$MIN_RECALL"
+	)
+	if [[ "$PGVECTOR_DROP_SCHEMA_AFTER" == "true" ]]; then
+		pgvector_args+=(--drop-schema-after)
+	fi
+	"$VENV/bin/python" benchmarks/vector_db_compare/pgvector_bench.py "${pgvector_args[@]}" >"$RUN_DIR/pgvector.stdout.json"
 	result_args+=(--result "$RUN_DIR/pgvector.json")
 fi
 
