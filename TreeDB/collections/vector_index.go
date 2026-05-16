@@ -394,14 +394,69 @@ func (c *Collection) hasRegisteredVectorIndex(name string) bool {
 	return ok
 }
 
-func (c *Collection) ensureDeclaredNativeVectorIndexesLoaded() error {
-	if c == nil || len(c.meta.VectorIndexes) == 0 {
+func (c *Collection) registeredVectorIndex(name string) *VectorIndex {
+	if c == nil || name == "" {
 		return nil
+	}
+	c.vectorIndexesMu.RLock()
+	defer c.vectorIndexesMu.RUnlock()
+	return c.vectorIndexes[name]
+}
+
+func (c *Collection) ensureDeclaredNativeVectorIndexesLoaded() error {
+	if c == nil {
+		return nil
+	}
+	if c.db == nil {
+		return errCollectionDBNil
+	}
+	if len(c.meta.VectorIndexes) == 0 && len(c.registeredVectorIndexes()) == 0 {
+		commitSeq, systemRoot := dbCommitSeqAndSystemRoot(c.db)
+		c.catalogMu.RLock()
+		catalogCurrent := c.catalogCommitSeq == commitSeq && c.catalogSystemRoot == systemRoot
+		c.catalogMu.RUnlock()
+		if catalogCurrent {
+			return nil
+		}
 	}
 	c.vectorIndexLoadMu.Lock()
 	defer c.vectorIndexLoadMu.Unlock()
+
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return backenddb.ErrClosed
+	}
+	catalog, err := loadCollectionCatalog(snap, c.meta.Name)
+	if err != nil {
+		_ = snap.Close()
+		return err
+	}
+	if catalog == nil {
+		_ = snap.Close()
+		return errCollectionNotFound
+	}
+	c.meta = catalog.meta
+	c.rememberCatalog(snap, catalog)
+	_ = snap.Close()
+
+	declared := make(map[string]VectorIndexDefinition, len(c.meta.VectorIndexes))
 	for _, def := range c.meta.VectorIndexes {
-		if c.hasRegisteredVectorIndex(def.Name) {
+		declared[def.Name] = def
+	}
+	for _, index := range c.registeredVectorIndexes() {
+		def, ok := declared[index.name]
+		if !ok {
+			if index.isNativePersistent() {
+				c.UnregisterVectorIndex(index.name)
+			}
+			continue
+		}
+		if index.validateNativeSnapshotDefinition(def) != "" {
+			c.UnregisterVectorIndex(index.name)
+		}
+	}
+	for _, def := range c.meta.VectorIndexes {
+		if index := c.registeredVectorIndex(def.Name); index != nil {
 			continue
 		}
 		index, status, err := c.LoadNativeVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
