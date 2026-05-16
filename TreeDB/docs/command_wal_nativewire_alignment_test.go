@@ -92,6 +92,9 @@ func TestNativeWireAndLocalCommandDigestStable(t *testing.T) {
 		if entry.Notes == "" {
 			t.Fatalf("%s missing alignment notes", entry.NativeWireCommand)
 		}
+		if (entry.LocalFixture == "") != (entry.LocalFixtureSHA256 == "") {
+			t.Fatalf("%s local fixture and digest must both be empty or both be set: fixture=%q sha256=%q", entry.NativeWireCommand, entry.LocalFixture, entry.LocalFixtureSHA256)
+		}
 		if entry.NativeWireFixture != "" {
 			fixtureDigests[entry.NativeWireFixture] = entry.NativeWireFixtureSHA256
 		}
@@ -119,11 +122,12 @@ func TestNativeWireAckFlushedRequiresRootPublishAndAppliedLSN(t *testing.T) {
 		t.Fatalf("flushed recoverability rule = %q", got)
 	}
 	protocol := readRepoText(t, "TreeDB/docs/spec/native-wire-protocol.md")
+	normalizedProtocol := collapseWhitespace(protocol)
 	for _, required := range []string{
-		"It does not require root publication or\n`AppliedLSN` advancement.",
-		"`flushed` means all touched collection state for the command has been published\nto backend roots, and WAL-backed commands have `AppliedLSN` advanced in the same\nbackend commit.",
+		"It does not require root publication or `AppliedLSN` advancement.",
+		"`flushed` means all touched collection state for the command has been published to backend roots, and WAL-backed commands have `AppliedLSN` advanced in the same backend commit.",
 	} {
-		if !strings.Contains(protocol, required) {
+		if !strings.Contains(normalizedProtocol, required) {
 			t.Fatalf("native-wire protocol missing ack/recoverability text: %q", required)
 		}
 	}
@@ -131,12 +135,13 @@ func TestNativeWireAckFlushedRequiresRootPublishAndAppliedLSN(t *testing.T) {
 
 func TestNativeWirePostFramePublishFailureCommitAmbiguous(t *testing.T) {
 	protocol := readRepoText(t, "TreeDB/docs/spec/native-wire-protocol.md")
+	normalizedProtocol := collapseWhitespace(protocol)
 	for _, required := range []string{
-		"If a complete command frame reached the required local boundary but root\npublication, `AppliedLSN` advancement, visible install, flush, checkpoint, or\nresponse construction fails",
+		"If a complete command frame reached the required local boundary but root publication, `AppliedLSN` advancement, visible install, flush, checkpoint, or response construction fails",
 		"the server returns `commit_ambiguous`",
-		"The server must not report\n`not_committed` after a complete command frame may be recovered and replayed.",
+		"The server must not report `not_committed` after a complete command frame may be recovered and replayed.",
 	} {
-		if !strings.Contains(protocol, required) {
+		if !strings.Contains(normalizedProtocol, required) {
 			t.Fatalf("native-wire protocol missing post-frame failure rule: %q", required)
 		}
 	}
@@ -144,12 +149,13 @@ func TestNativeWirePostFramePublishFailureCommitAmbiguous(t *testing.T) {
 
 func TestRaftApplyDoesNotReportRecoverableBeforeCommandWALAppliedLSN(t *testing.T) {
 	walSpec := readRepoText(t, "TreeDB/docs/spec/user-command-wal.md")
+	normalizedSpec := collapseWhitespace(walSpec)
 	for _, required := range []string{
 		"Native-wire and Raft alignment",
-		"must lower to a\nlocal command-WAL frame and satisfy the requested local ack boundary before\nreporting local recoverability",
+		"must lower to a local command-WAL frame and satisfy the requested local ack boundary before reporting local recoverability",
 		"`raft_committed` is not local WAL append",
 	} {
-		if !strings.Contains(walSpec, required) {
+		if !strings.Contains(normalizedSpec, required) {
 			t.Fatalf("user-command WAL spec missing Raft/local recoverability rule: %q", required)
 		}
 	}
@@ -208,13 +214,18 @@ func assertHexFixtureDigest(t *testing.T, fixture, want string) {
 	}
 	raw := readRepoText(t, fixture)
 	compact := strings.Join(strings.Fields(raw), "")
-	if _, err := hex.DecodeString(compact); err != nil {
+	fixtureBytes, err := hex.DecodeString(compact)
+	if err != nil {
 		t.Fatalf("%s is not valid hex fixture: %v", fixture, err)
 	}
-	sum := sha256.Sum256([]byte(raw))
+	sum := sha256.Sum256(fixtureBytes)
 	if got := hex.EncodeToString(sum[:]); got != want {
 		t.Fatalf("%s sha256=%s want %s", fixture, got, want)
 	}
+}
+
+func collapseWhitespace(s string) string {
+	return strings.Join(strings.Fields(s), " ")
 }
 
 func readRepoText(t *testing.T, rel string) string {
