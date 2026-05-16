@@ -2,7 +2,7 @@
   "version": 1,
   "owner": "TreeDB/docs/spec/user-command-wal.md",
   "tracker": "https://github.com/snissn/gomap/issues/1529",
-  "relationship_values": ["lowered_equivalent_v1", "future_rejected_v1"],
+  "relationship_values": ["lowered_equivalent_v1", "future_rejected_v1", "local_only_rejected_v1", "local_only_barrier_v1"],
   "ack_recoverability": {
     "visible": "process-visible after local command-WAL recoverability and normal-executor install; does not require root publication or AppliedLSN advancement",
     "flushed": "backend roots and AppliedLSN are selected in the same backend commit",
@@ -47,6 +47,18 @@
       "notes": "Native-wire deterministic bytes are pinned, but local command WAL must reject index DDL until catalog index command payloads and recovery tests land."
     },
     {
+      "nativewire_command": "CommandDropCollection",
+      "nativewire_fixture": "",
+      "nativewire_fixture_sha256": "",
+      "command_wal_kind": "future catalog collection drop",
+      "command_wal_payload_format": "future",
+      "local_fixture": "",
+      "local_fixture_sha256": "",
+      "support_matrix_status": "WAL-rejected",
+      "relationship": "local_only_rejected_v1",
+      "notes": "CommandDropCollection is a local-only native-wire mutation today and has no deterministic-entry fixture. Local command WAL rejects it until collection-drop catalog payloads and recovery tests land."
+    },
+    {
       "nativewire_command": "CommandInsertBatch",
       "nativewire_fixture": "TreeDB/internal/nativewire/testdata/v1/insert_batch_entry.hex",
       "nativewire_fixture_sha256": "8f9addb37992fc59913e0b7db43e64a01ddd3e2d5990587a39ece66f842ea3de",
@@ -81,6 +93,42 @@
       "support_matrix_status": "WAL-supported",
       "relationship": "lowered_equivalent_v1",
       "notes": "V1 local WAL stores explicit IDs only. Native-wire deterministic delete entries must lower to this local command before local recoverability is reported."
+    },
+    {
+      "nativewire_command": "CommandFlushCollection",
+      "nativewire_fixture": "",
+      "nativewire_fixture_sha256": "",
+      "command_wal_kind": "local durability barrier",
+      "command_wal_payload_format": "none",
+      "local_fixture": "",
+      "local_fixture_sha256": "",
+      "support_matrix_status": "WAL-supported",
+      "relationship": "local_only_barrier_v1",
+      "notes": "CommandFlushCollection is a local-only durability barrier, not replicated command identity. It must observe command-WAL root and AppliedLSN boundaries but does not add a replayable user command payload."
+    },
+    {
+      "nativewire_command": "CommandFlushAll",
+      "nativewire_fixture": "",
+      "nativewire_fixture_sha256": "",
+      "command_wal_kind": "local durability barrier",
+      "command_wal_payload_format": "none",
+      "local_fixture": "",
+      "local_fixture_sha256": "",
+      "support_matrix_status": "WAL-supported",
+      "relationship": "local_only_barrier_v1",
+      "notes": "CommandFlushAll is a local-only durability barrier, not replicated command identity. It must observe command-WAL root and AppliedLSN boundaries but does not add a replayable user command payload."
+    },
+    {
+      "nativewire_command": "CommandCheckpoint",
+      "nativewire_fixture": "",
+      "nativewire_fixture_sha256": "",
+      "command_wal_kind": "local durability barrier",
+      "command_wal_payload_format": "none",
+      "local_fixture": "",
+      "local_fixture_sha256": "",
+      "support_matrix_status": "WAL-supported",
+      "relationship": "local_only_barrier_v1",
+      "notes": "CommandCheckpoint is a local-only durability barrier, not replicated command identity. It must observe command-WAL root and AppliedLSN boundaries but does not add a replayable user command payload."
     }
   ]
 }

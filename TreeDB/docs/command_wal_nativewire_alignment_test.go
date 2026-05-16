@@ -57,8 +57,14 @@ func TestCommandWALPayloadMatchesNativeWireDeterministicFixture(t *testing.T) {
 		if matrixEntry.Status != entry.SupportMatrixStatus || matrixEntry.Command != entry.CommandWALKind {
 			t.Fatalf("alignment entry %s disagrees with support matrix: alignment=%+v matrix=%+v", entry.NativeWireCommand, entry, matrixEntry)
 		}
-		assertHexFixtureDigest(t, entry.NativeWireFixture, entry.NativeWireFixtureSHA256)
-		if entry.SupportMatrixStatus == "WAL-supported" {
+		if strings.HasPrefix(entry.Relationship, "local_only_") {
+			if entry.NativeWireFixture != "" || entry.NativeWireFixtureSHA256 != "" {
+				t.Fatalf("%s is local-only but declares deterministic fixture %s", entry.NativeWireCommand, entry.NativeWireFixture)
+			}
+		} else {
+			assertHexFixtureDigest(t, entry.NativeWireFixture, entry.NativeWireFixtureSHA256)
+		}
+		if entry.SupportMatrixStatus == "WAL-supported" && entry.Relationship == "lowered_equivalent_v1" {
 			if entry.LocalFixture == "" || entry.LocalFixtureSHA256 == "" {
 				t.Fatalf("%s is WAL-supported without local command-WAL fixture", entry.NativeWireCommand)
 			}
@@ -86,11 +92,13 @@ func TestNativeWireAndLocalCommandDigestStable(t *testing.T) {
 		if entry.Notes == "" {
 			t.Fatalf("%s missing alignment notes", entry.NativeWireCommand)
 		}
-		fixtureDigests[entry.NativeWireFixture] = entry.NativeWireFixtureSHA256
+		if entry.NativeWireFixture != "" {
+			fixtureDigests[entry.NativeWireFixture] = entry.NativeWireFixtureSHA256
+		}
 		if entry.LocalFixture != "" {
 			fixtureDigests[entry.LocalFixture] = entry.LocalFixtureSHA256
 		}
-		if entry.Relationship == "future_rejected_v1" && entry.LocalFixture != "" {
+		if (entry.Relationship == "future_rejected_v1" || entry.Relationship == "local_only_rejected_v1") && entry.LocalFixture != "" {
 			t.Fatalf("%s is rejected/future but has local fixture %s", entry.NativeWireCommand, entry.LocalFixture)
 		}
 		if entry.Relationship == "lowered_equivalent_v1" && entry.SupportMatrixStatus != "WAL-supported" {
@@ -158,6 +166,14 @@ func TestRaftCommandEntryAndLocalCommandPayloadUseSharedCanonicalSchema(t *testi
 		case "future_rejected_v1":
 			if entry.SupportMatrixStatus != "WAL-rejected" || !strings.Contains(entry.Notes, "reject") {
 				t.Fatalf("%s future entry must stay explicitly rejected: %+v", entry.NativeWireCommand, entry)
+			}
+		case "local_only_rejected_v1":
+			if entry.SupportMatrixStatus != "WAL-rejected" || !strings.Contains(entry.Notes, "local-only") || !strings.Contains(entry.Notes, "reject") {
+				t.Fatalf("%s local-only rejected entry must document rejection: %+v", entry.NativeWireCommand, entry)
+			}
+		case "local_only_barrier_v1":
+			if entry.SupportMatrixStatus != "WAL-supported" || !strings.Contains(entry.Notes, "durability barrier") || !strings.Contains(entry.Notes, "not replicated") {
+				t.Fatalf("%s local-only barrier entry must document barrier semantics: %+v", entry.NativeWireCommand, entry)
 			}
 		default:
 			t.Fatalf("%s has unrecognized relationship %q", entry.NativeWireCommand, entry.Relationship)
