@@ -90,10 +90,11 @@ func (tdb *DB) publishPublicCommandWALPending(sync bool) error {
 }
 
 type commandWALPublicBatch struct {
-	db     *DB
-	inner  Batch
-	dirty  bool
-	closed bool
+	db          *DB
+	inner       Batch
+	expectedOps int
+	dirty       bool
+	closed      bool
 }
 
 func (b *commandWALPublicBatch) Set(key, value []byte) error {
@@ -168,7 +169,7 @@ func (b *commandWALPublicBatch) commandWALOps() ([]commitlog.RawKVOperation, err
 	if b == nil || b.inner == nil {
 		return nil, ErrClosed
 	}
-	ops := make([]commitlog.RawKVOperation, 0)
+	ops := make([]commitlog.RawKVOperation, 0, b.expectedOps)
 	err := b.inner.Replay(func(entry batch.Entry) error {
 		switch entry.Type {
 		case batch.OpDelete:

@@ -4152,25 +4152,24 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 	for _, inst := range instances {
 		wrapperName := inst.Wrapper.Name()
 		sp, hasStatsProvider := inst.Wrapper.(kvstore.StatsProvider)
+		var statsSnapshot map[string]string
 		if hasStatsProvider {
 			if cp, ok := inst.Wrapper.(checkpointer); ok {
 				if err := cp.Checkpoint(); err != nil {
 					return BenchRun{}, fmt.Errorf("checkpoint %s before final stats: %w", inst.Name, err)
 				}
 			}
+			statsSnapshot = sp.Stats()
 		}
 		if err := inst.Wrapper.Close(); err != nil {
 			return BenchRun{}, fmt.Errorf("close %s: %w", inst.Name, err)
 		}
-		if hasStatsProvider {
-			snap := sp.Stats()
-			if len(snap) > 0 {
-				copySnap := make(map[string]string, len(snap))
-				for k, v := range snap {
-					copySnap[k] = v
-				}
-				treedbStats[wrapperName] = copySnap
+		if len(statsSnapshot) > 0 {
+			copySnap := make(map[string]string, len(statsSnapshot))
+			for k, v := range statsSnapshot {
+				copySnap[k] = v
 			}
+			treedbStats[wrapperName] = copySnap
 		}
 		if cfg.TreeDBVlogRewriteAfterRun && isTreeDBInstance(inst) {
 			beforeUsage, _ := computeDirDiskUsage(inst.Dir)
@@ -4853,6 +4852,8 @@ func renderTreeDBSelectedStatsString(instances []*DBInstance, treeStats map[stri
 		label string
 		alts  []string
 	}{
+		{label: "write_path.mode", alts: []string{"treedb.write_path.mode"}},
+		{label: "write_path.redo_log", alts: []string{"treedb.write_path.redo_log"}},
 		{label: "vlog_mmap.read.hits", alts: []string{"treedb.cache.vlog_mmap.read.hits", "treedb.vlog.mmap_read.hits"}},
 		{label: "vlog_mmap.read.miss_out_of_range", alts: []string{"treedb.cache.vlog_mmap.read.miss_out_of_range", "treedb.vlog.mmap_read.miss_out_of_range"}},
 		{label: "vlog_mmap.read.miss_no_mapping", alts: []string{"treedb.cache.vlog_mmap.read.miss_no_mapping", "treedb.vlog.mmap_read.miss_no_mapping"}},

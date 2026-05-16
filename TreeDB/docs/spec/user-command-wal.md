@@ -1034,10 +1034,11 @@ Deliverables:
 - public `treedb.Open` read-write handles no longer fail closed solely because
   `CommandWAL` or persisted `command_wal_v1` is active;
 - public raw KV `Set`, `Delete`, and `Batch.Write` calls use `RawKVBatch`
-  command frames through the direct backend command-WAL path;
-- the public command-WAL write path avoids the cached legacy redo journal until
-  cached writes are converted to typed command frames;
-- stats expose mode proof with `treedb.write_path.mode=command_wal_backend`,
+  command frames through the cached public command-WAL path;
+- the public command-WAL write path uses cached visibility while disabling the
+  cached legacy redo journal and appending typed command frames through the
+  shared backend journal owner;
+- stats expose mode proof with `treedb.write_path.mode=command_wal_cached`,
   `treedb.command_wal.required_feature=true`, command frame counts, and max LSN.
 
 Acceptance:
@@ -1054,8 +1055,9 @@ PR9 initial evidence:
   `treedb.Open`, writes `Set` plus batch set/delete operations, proves command
   frame/max-LSN stats are non-zero, closes, reopens from persisted
   `command_wal_v1`, and verifies the final public state;
-- this PR intentionally routes public command-WAL writes through the direct
-  backend command-WAL path rather than enabling the cached legacy journal.
+- this PR intentionally routes public command-WAL writes through cached
+  visibility plus typed command-WAL frames rather than re-enabling the cached
+  legacy redo journal.
 
 ## 16. Deprecation of the Collection Root-Delta WAL Target
 

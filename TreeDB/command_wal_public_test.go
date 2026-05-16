@@ -58,6 +58,9 @@ func TestPublicCommandWALRawKVWritesUseTypedFrames(t *testing.T) {
 		t.Fatalf("reopen command WAL from format: %v", err)
 	}
 	defer func() { _ = reopen.Close() }()
+	if got := reopen.Stats()["treedb.write_path.mode"]; got != "command_wal_cached" {
+		t.Fatalf("reopen write_path.mode=%q, want command_wal_cached", got)
+	}
 	got, err := reopen.Get([]byte("k2"))
 	if err != nil {
 		t.Fatalf("Get(k2): %v", err)

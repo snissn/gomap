@@ -14,55 +14,91 @@
     "cached public command-WAL writes with the legacy cached redo journal disabled",
     "physical backend flush batches that do not emit duplicate RawKVBatch command frames",
     "checkpoint/close publication of covered command-WAL LSNs after cached flush",
-    "reopen from persisted command_wal_v1 without explicit backend-only APIs",
-    "public raw KV microbenchmark coverage for point Set and batched RawKVBatch writes"
+    "reopen from persisted command_wal_v1 with command_wal_cached mode proof",
+    "unified_bench public cached command-WAL variant for end-to-end batch-write comparison"
   ],
   "passed_tests": [
     "TestPublicCommandWALRawKVWritesUseTypedFrames",
     "TestCommandWALSupportMatrix",
-    "TestCommandWALRawSetDeleteBatchReplaysThroughNormalExecutor"
+    "TestCommandWALRawSetDeleteBatchReplaysThroughNormalExecutor",
+    "TestTreeDBPublicCommandWALVariantUsesCachedCommandWALPath"
   ],
   "local_validation_commands": [
-    "GOWORK=off go test ./TreeDB -run 'TestPublicCommandWALRawKVWritesUseTypedFrames|^$' -count=1",
-    "GOWORK=off go test ./TreeDB ./TreeDB/docs ./TreeDB/db -run 'TestPublicCommandWALRawKVWritesUseTypedFrames|TestCommandWALSupportMatrix|TestCommandWALRawSetDeleteBatchReplaysThroughNormalExecutor|^$' -count=1",
+    "GOWORK=off go test ./TreeDB ./TreeDB/docs ./TreeDB/db ./cmd/unified_bench -run 'TestPublicCommandWALRawKVWritesUseTypedFrames|TestCommandWALSupportMatrix|TestCommandWALRejectedErrorDistinctFromUnsupported|TestCommandWALNativeWireAlignmentManifestCoverage|TestNativeWireAndLocalCommandDigestStable|TestNativeWireAckFlushedRequiresRootPublishAndAppliedLSN|TestNativeWirePostFramePublishFailureCommitAmbiguous|TestRaftCommandEntryAndLocalCommandPayloadUseSharedCanonicalSchema|TestCommandWALRawSetDeleteBatchReplaysThroughNormalExecutor|TestTreeDBPublicCommandWALVariantUsesCachedCommandWALPath|TestTreeDBCommandWALAliasResolvesToBackendVariant|^$' -count=1",
+    "GOWORK=off go test ./TreeDB/caching ./TreeDB/db -run '^$' -count=1",
     "GOWORK=off go test ./TreeDB -run 'TestPublicCommandWALRawKVWritesUseTypedFrames|^$' -bench 'BenchmarkPublicCommandWALRawKV(Set|BatchWrite)$' -benchtime=50x -count=1",
-    "GOWORK=off go test ./TreeDB -run '^$' -bench 'BenchmarkPublicCommandWALRawKVSet$' -benchtime=5000x -count=1"
+    "GOWORK=off go test ./TreeDB -run '^$' -bench 'BenchmarkPublicCommandWALRawKVSet$' -benchtime=5000x -count=1",
+    "GOWORK=off go test ./TreeDB -run '^$' -bench 'BenchmarkPublicCommandWALRawKVBatchWrite$' -benchtime=1000x -count=1",
+    "GOWORK=off go run ./cmd/unified_bench -dbs treedb,treedb_public_command_wal -test batch_write -keys 200000 -batchsize 1024 -valsize 32 -profile wal_on_fast -treedb-maintenance-mode bench -treedb-command-wal-stats-scan -progress=false -format markdown"
   ],
   "benchmark_artifacts": [
-    "artifacts/command-wal/pr9/public-raw-kv-microbench.txt"
+    "artifacts/command-wal/pr9/public-raw-kv-microbench.txt",
+    "artifacts/command-wal/pr9/public-raw-kv-set-longer.txt",
+    "artifacts/command-wal/pr9/public-raw-kv-batch-longer.txt",
+    "artifacts/command-wal/pr9/public-cached-command-wal-unified-bench.md"
   ],
   "performance_gate": {
     "required": true,
-    "status": "passed_directional_smoke",
-    "rationale": "Public command-WAL writes now use the cached write path instead of direct backend root publication per point Set. The short smoke no longer shows the prior direct-backend cliff: point Set improved from the earlier 953.5 sets/s to 163034 sets/s, and the longer 5000x point run measured 620162 sets/s. Batched writes are within parity in the 64-op case and faster than cached legacy in the 1024-op case. Point Set remains slower than cached legacy due typed command-frame encode/append overhead, but it is same-order cached throughput rather than tracker-blocking direct-backend throughput.",
+    "status": "partially_passed_strict_parity_not_met",
+    "rationale": "Public command-WAL writes now use the cached write path instead of direct backend root publication per point Set, and benchmark artifacts include explicit command_wal_cached mode proof. The short focused smoke is near parity for point Set and batch writes; the longer focused point Set run still shows a material typed-frame append/encode cost, and the end-to-end unified_bench public cached batch_write lane remains below legacy cached throughput. This is safe to review as performance evidence, but it should not be represented as strict throughput parity without an explicit accepted threshold or another optimization pass.",
     "point_set_gate": {
-      "status": "passed_directional_smoke",
-      "legacy_public_cached_wal_on_sets_per_sec": 482425,
-      "public_command_wal_cached_sets_per_sec": 163034,
-      "public_command_wal_cached_to_legacy_ratio": 0.338,
-      "legacy_public_cached_allocs_per_op": 5,
-      "public_command_wal_cached_allocs_per_op": 7,
-      "longer_5000x_legacy_public_cached_wal_on_sets_per_sec": 1765114,
-      "longer_5000x_public_command_wal_cached_sets_per_sec": 620162,
-      "longer_5000x_public_command_wal_cached_to_legacy_ratio": 0.351,
-      "longer_5000x_legacy_public_cached_allocs_per_op": 4,
-      "longer_5000x_public_command_wal_cached_allocs_per_op": 6
+      "status": "directional_smoke_passed_strict_long_run_parity_not_met",
+      "short_50x": {
+        "legacy_public_cached_wal_on_sets_per_sec": 256338,
+        "public_command_wal_cached_sets_per_sec": 187927,
+        "public_command_wal_cached_to_legacy_ratio": 0.733,
+        "legacy_public_cached_allocs_per_op": 5,
+        "public_command_wal_cached_allocs_per_op": 7
+      },
+      "longer_5000x": {
+        "legacy_public_cached_wal_on_sets_per_sec": 1633668,
+        "public_command_wal_cached_sets_per_sec": 623203,
+        "public_command_wal_cached_to_legacy_ratio": 0.381,
+        "legacy_public_cached_allocs_per_op": 4,
+        "public_command_wal_cached_allocs_per_op": 6
+      }
     },
     "batch_write_gate": {
-      "status": "passed",
-      "batch_size_64": {
-        "legacy_public_cached_sets_per_sec": 2815699,
-        "public_command_wal_cached_sets_per_sec": 2250561,
-        "public_command_wal_cached_to_legacy_ratio": 0.799,
+      "status": "focused_microbench_near_parity_unified_bench_below_parity",
+      "short_50x_batch_size_64": {
+        "legacy_public_cached_sets_per_sec": 2034648,
+        "public_command_wal_cached_sets_per_sec": 2205342,
+        "public_command_wal_cached_to_legacy_ratio": 1.084,
         "legacy_public_cached_allocs_per_batch": 153,
-        "public_command_wal_cached_allocs_per_batch": 162
+        "public_command_wal_cached_allocs_per_batch": 156
       },
-      "batch_size_1024": {
-        "legacy_public_cached_sets_per_sec": 2439604,
-        "public_command_wal_cached_sets_per_sec": 2989634,
-        "public_command_wal_cached_to_legacy_ratio": 1.225,
+      "short_50x_batch_size_1024": {
+        "legacy_public_cached_sets_per_sec": 3454228,
+        "public_command_wal_cached_sets_per_sec": 3227703,
+        "public_command_wal_cached_to_legacy_ratio": 0.934,
         "legacy_public_cached_allocs_per_batch": 2079,
-        "public_command_wal_cached_allocs_per_batch": 2093
+        "public_command_wal_cached_allocs_per_batch": 2083
+      },
+      "longer_1000x_batch_size_64": {
+        "legacy_public_cached_sets_per_sec": 1997602,
+        "public_command_wal_cached_sets_per_sec": 2082672,
+        "public_command_wal_cached_to_legacy_ratio": 1.043,
+        "legacy_public_cached_allocs_per_batch": 145,
+        "public_command_wal_cached_allocs_per_batch": 149
+      },
+      "longer_1000x_batch_size_1024": {
+        "legacy_public_cached_sets_per_sec": 2429312,
+        "public_command_wal_cached_sets_per_sec": 1966269,
+        "public_command_wal_cached_to_legacy_ratio": 0.809,
+        "legacy_public_cached_allocs_per_batch": 2072,
+        "public_command_wal_cached_allocs_per_batch": 2076
+      },
+      "unified_bench_batch_write_200k_batch_size_1024": {
+        "legacy_public_cached_sets_per_sec": 6016954,
+        "public_command_wal_cached_sets_per_sec": 4006371,
+        "public_command_wal_cached_to_legacy_ratio": 0.666,
+        "mode_proof": {
+          "write_path_mode": "command_wal_cached",
+          "write_path_redo_log": "command_wal",
+          "command_wal_enabled": true,
+          "command_wal_required_feature": true,
+          "applied_command_lsn": 196
+        }
       }
     }
   },
@@ -71,7 +107,7 @@
     "DeleteRange remains rejected under cached public command-WAL until it has typed command coverage"
   ],
   "next_required_work": [
-    "continue optimizing point Set command-frame encode/append overhead if a stricter parity floor is adopted",
-    "rerun unified_bench treedb vs treedb_command_wal batch_write and point-write modes after CI review settles"
+    "optimize point Set command-frame encode/append overhead or establish an explicit accepted threshold before marking strict parity passed",
+    "optimize public command-WAL Batch.Write payload construction enough for unified_bench batch_write parity, or record an explicit accepted threshold and follow-up issue before default enablement"
   ]
 }

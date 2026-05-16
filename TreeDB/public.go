@@ -389,23 +389,6 @@ func Open(opts Options) (*DB, error) {
 	applyEnvMaintenanceOverrides(&opts)
 	forceTemplateCompressionOff(&opts)
 
-	writePath := writePathFromOptions(opts)
-	if envBool(envWritePathLog) {
-		effectivePolicy := opts.ValueLog.Generational.Policy
-		if effectivePolicy == ValueLogGenerationDefault {
-			effectivePolicy = ValueLogGenerationHotWarmCold
-		}
-		fmt.Fprintf(
-			os.Stderr,
-			"treedb write_path mode=%s value_store=%s redo_log=%s vlog_generation_policy_raw=%d vlog_generation_policy_effective=%d\n",
-			writePath.mode,
-			writePath.valueStore,
-			writePath.redoLog,
-			opts.ValueLog.Generational.Policy,
-			effectivePolicy,
-		)
-	}
-
 	layout, err := resolveOpenDirLayout(opts.Dir, opts.DisableSideStores)
 	if err != nil {
 		return nil, err
@@ -455,6 +438,23 @@ func Open(opts Options) (*DB, error) {
 
 	// Keep opts.DisableSideStores consistent with the resolved layout.
 	opts.DisableSideStores = layout.disableSideStores
+
+	writePath := writePathFromOptions(opts)
+	if envBool(envWritePathLog) {
+		effectivePolicy := opts.ValueLog.Generational.Policy
+		if effectivePolicy == ValueLogGenerationDefault {
+			effectivePolicy = ValueLogGenerationHotWarmCold
+		}
+		fmt.Fprintf(
+			os.Stderr,
+			"treedb write_path mode=%s value_store=%s redo_log=%s vlog_generation_policy_raw=%d vlog_generation_policy_effective=%d\n",
+			writePath.mode,
+			writePath.valueStore,
+			writePath.redoLog,
+			opts.ValueLog.Generational.Policy,
+			effectivePolicy,
+		)
+	}
 
 	// Dict compression requires a persistent dict store so dictionaries can be
 	// published and older dict-compressed frames remain decodable.
@@ -1679,7 +1679,7 @@ func (db *DB) NewBatchWithSize(size int) Batch {
 	if db.cached != nil {
 		inner := db.cached.NewBatchWithSize(size)
 		if db.commandWALCached {
-			return &commandWALPublicBatch{db: db, inner: inner}
+			return &commandWALPublicBatch{db: db, inner: inner, expectedOps: size}
 		}
 		return inner
 	}
