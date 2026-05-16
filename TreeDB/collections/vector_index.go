@@ -18,6 +18,8 @@ import (
 	axiomsimd "github.com/axiomhq/simd-go"
 	"github.com/cespare/xxhash/v2"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/node"
+	"github.com/snissn/gomap/TreeDB/tree"
 )
 
 const (
@@ -1134,11 +1136,12 @@ func (idx *VectorIndex) searchGraphOnly(query []float32, topK, efSearch int) ([]
 			continue
 		}
 		results = append(results, VectorSearchResult{
-			DocumentID: bytes.Clone(node.documentID),
+			DocumentID: node.documentID,
 			Distance:   candidate.distance,
 		})
 	}
 	idx.putSearchScratch(scratch)
+	cloneVectorSearchResultDocumentIDs(results)
 	return results, nil
 }
 
@@ -1193,9 +1196,6 @@ func (idx *VectorIndex) rerankFloat32CosineCandidatesFromNodesLocked(query []flo
 		trace.RerankCount += liveCandidates
 	}
 
-	for i := range ranked {
-		ranked[i].DocumentID = bytes.Clone(ranked[i].DocumentID)
-	}
 	if ranked == nil {
 		return []VectorSearchResult{}, nil
 	}
@@ -1255,14 +1255,56 @@ func (idx *VectorIndex) rerankCandidates(query []float32, candidateIDs [][]byte,
 }
 
 func (idx *VectorIndex) attachVectorSearchResultDocuments(ranked []VectorSearchResult, topK int) ([]VectorSearchResult, error) {
+	if idx == nil {
+		return nil, errors.New("collections: vector index is nil")
+	}
+	if idx.collection == nil {
+		return nil, errCollectionNil
+	}
+	if idx.collection.db == nil {
+		return nil, errCollectionDBNil
+	}
 	results := ranked[:0]
 	limit := minInt(topK, len(ranked))
+	var modeStack [64]vectorDocumentAttachMode
+	modes := modeStack[:0]
+	if limit > len(modeStack) {
+		modes = make([]vectorDocumentAttachMode, 0, limit)
+	}
+	resultIDBytes := 0
+	snapshotCopyBytes := 0
+
+	snap := idx.collection.db.AcquireSnapshot()
+	if snap == nil {
+		return nil, backenddb.ErrClosed
+	}
+	defer func() { _ = snap.Close() }()
+	catalog, err := idx.collection.catalogForSnapshot(snap)
+	if err != nil {
+		return nil, err
+	}
+	if catalog == nil {
+		return nil, errCollectionNotFound
+	}
+	rootName := collectionPrimaryRootName(idx.collection.meta.Name)
+
 	for i := range ranked {
 		if len(results) >= limit {
 			break
 		}
 		result := ranked[i]
-		document, found, err := idx.collection.GetInto(result.DocumentID, nil)
+		document, buffered, found := idx.collection.getBufferedDocumentInto(result.DocumentID, nil)
+		if buffered {
+			if !found {
+				continue
+			}
+			result.Document = document
+			resultIDBytes += len(result.DocumentID)
+			results = append(results, result)
+			modes = append(modes, vectorDocumentAttachBuffered)
+			continue
+		}
+		document, found, err = collectionGetUnsafeAtCatalogRoot(snap, catalog, rootName, result.DocumentID)
 		if err != nil {
 			return nil, err
 		}
@@ -1270,12 +1312,101 @@ func (idx *VectorIndex) attachVectorSearchResultDocuments(ranked []VectorSearchR
 			continue
 		}
 		result.Document = document
+		resultIDBytes += len(result.DocumentID)
+		snapshotCopyBytes += len(document)
 		results = append(results, result)
+		modes = append(modes, vectorDocumentAttachSnapshotView)
 	}
 	if len(results) == 0 {
 		return []VectorSearchResult{}, nil
 	}
-	return results, nil
+
+	var arena []byte
+	if arenaBytes := resultIDBytes + snapshotCopyBytes; arenaBytes > 0 {
+		arena = make([]byte, 0, arenaBytes)
+	}
+	out := results[:0]
+	for i := range results {
+		result := results[i]
+		if len(result.DocumentID) > 0 {
+			start := len(arena)
+			arena = append(arena, result.DocumentID...)
+			result.DocumentID = arena[start:len(arena):len(arena)]
+		}
+		switch modes[i] {
+		case vectorDocumentAttachSnapshotView:
+			start := len(arena)
+			arena = append(arena, result.Document...)
+			result.Document = arena[start:len(arena):len(arena)]
+		}
+		out = append(out, result)
+	}
+	if len(out) == 0 {
+		return []VectorSearchResult{}, nil
+	}
+	return out, nil
+}
+
+type vectorDocumentAttachMode uint8
+
+const (
+	vectorDocumentAttachBuffered vectorDocumentAttachMode = iota
+	vectorDocumentAttachSnapshotView
+)
+
+func collectionGetUnsafeAtCatalogRoot(snap *backenddb.Snapshot, catalog *collectionCatalog, rootName string, key []byte) ([]byte, bool, error) {
+	if snap == nil {
+		return nil, false, backenddb.ErrClosed
+	}
+	if len(catalog.overlayRootIDs(rootName)) == 0 {
+		rootID := catalog.rootID(rootName)
+		if rootID == 0 {
+			return nil, false, nil
+		}
+		out, err := snap.GetUnsafeAtRoot(rootID, key)
+		if errors.Is(err, tree.ErrKeyNotFound) {
+			return nil, false, nil
+		}
+		return out, err == nil, err
+	}
+	useOverlayFilters := catalog.rootID(rootName) != 0
+	for _, rootID := range catalog.rootStack(rootName) {
+		if useOverlayFilters && !catalog.overlayRootMayContainKey(rootName, rootID, key) {
+			continue
+		}
+		entry, err := snap.GetEntryAtRoot(rootID, key)
+		if errors.Is(err, tree.ErrKeyNotFound) {
+			continue
+		}
+		if err != nil {
+			return nil, false, err
+		}
+		if entry.Flags&node.FlagTombstone != 0 {
+			return nil, false, nil
+		}
+		out, err := snap.GetUnsafeAtRoot(rootID, key)
+		if errors.Is(err, tree.ErrKeyNotFound) {
+			return nil, false, nil
+		}
+		return out, err == nil, err
+	}
+	return nil, false, nil
+}
+
+func cloneVectorSearchResultDocumentIDs(results []VectorSearchResult) {
+	total := 0
+	for _, result := range results {
+		total += len(result.DocumentID)
+	}
+	if total == 0 {
+		return
+	}
+	arena := make([]byte, 0, total)
+	for i := range results {
+		start := len(arena)
+		arena = append(arena, results[i].DocumentID...)
+		results[i].DocumentID = arena[start:len(arena):len(arena)]
+	}
 }
 
 func (idx *VectorIndex) searchCandidatesLocked(query []float32, queryNormSquared float64, prepared *preparedFloat32CosineQuery, limit int, scratch *vectorIndexSearchScratch) []vectorIndexCandidate {

@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"bytes"
 	"fmt"
 	"math"
 	"testing"
@@ -47,6 +48,74 @@ func TestCollectionVectorIndexSearchReranksCanonicalRows(t *testing.T) {
 	stats := index.Stats()
 	if stats.LiveDocs != 4 || stats.DeletedDocs != 0 || stats.Dimensions != 2 || stats.AvgDegree == 0 {
 		t.Fatalf("unexpected stats: %+v", stats)
+	}
+}
+
+func TestCollectionVectorIndexSearchDocumentsAreOwned(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		opts backenddb.Options
+	}{
+		{name: "inline"},
+		{name: "value_log_pointer", opts: backenddb.Options{
+			ValueLog: backenddb.ValueLogOptions{PointerThreshold: 1, ForcePointers: true},
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.opts.Dir = t.TempDir()
+			d, err := backenddb.Open(tc.opts)
+			if err != nil {
+				t.Fatalf("open db: %v", err)
+			}
+			defer func() { _ = d.Close() }()
+			col := openVectorIndexTestCollection(t, d)
+			docA := []byte(`{"embedding":[1,0],"tag":"alpha"}`)
+			docB := []byte(`{"embedding":[0.9,0.1],"tag":"beta"}`)
+			if _, err := col.InsertBatch(
+				[][]byte{[]byte("a"), []byte("b")},
+				[][]byte{docA, docB},
+			); err != nil {
+				t.Fatalf("insert: %v", err)
+			}
+			index, err := col.BuildVectorIndex(VectorIndexOptions{
+				Name:   "embedding",
+				Field:  "embedding",
+				Metric: VectorMetricCosine,
+				M:      4,
+			})
+			if err != nil {
+				t.Fatalf("build vector index: %v", err)
+			}
+
+			results, _, err := index.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 2, DisableExactFallback: true})
+			if err != nil {
+				t.Fatalf("search vector index: %v", err)
+			}
+			requireVectorResultIDs(t, results, "a", "b")
+			if !bytes.Equal(results[0].Document, docA) || !bytes.Equal(results[1].Document, docB) {
+				t.Fatalf("unexpected documents: %q %q", results[0].Document, results[1].Document)
+			}
+			for i, result := range results {
+				if cap(result.DocumentID) != len(result.DocumentID) {
+					t.Fatalf("result %d document id cap=%d len=%d, want exact cap", i, cap(result.DocumentID), len(result.DocumentID))
+				}
+				if cap(result.Document) != len(result.Document) {
+					t.Fatalf("result %d document cap=%d len=%d, want exact cap", i, cap(result.Document), len(result.Document))
+				}
+			}
+
+			results[0].Document[0] = '['
+			stored, err := col.Get([]byte("a"))
+			if err != nil {
+				t.Fatalf("get document: %v", err)
+			}
+			if !bytes.Equal(stored, docA) {
+				t.Fatalf("stored document changed: %q want %q", stored, docA)
+			}
+			if !bytes.Equal(results[1].Document, docB) {
+				t.Fatalf("second result changed: %q want %q", results[1].Document, docB)
+			}
+		})
 	}
 }
 
