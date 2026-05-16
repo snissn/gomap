@@ -1373,6 +1373,102 @@ func TestCollectionVectorIndexNativeRootReopenMaintainsLoadedGraphOnWrite(t *tes
 	requireVectorResultIDs(t, results, "a", "c", "b")
 }
 
+func TestCollectionVectorIndexNativeDeltaRejectsStalePersistedRoot(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	def := VectorIndexDefinition{
+		Name:       "embedding",
+		Field:      "embedding",
+		Metric:     VectorMetricCosine,
+		Dimensions: 2,
+		M:          4,
+	}
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	seedCol, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open seed collection: %v", err)
+	}
+	if _, err := seedCol.InsertBatch(
+		[][]byte{[]byte("a"), []byte("b")},
+		[][]byte{
+			[]byte(`{"embedding":[1,0]}`),
+			[]byte(`{"embedding":[0,1]}`),
+		},
+	); err != nil {
+		t.Fatalf("insert seed vectors: %v", err)
+	}
+	seedIndex, err := seedCol.BuildVectorIndex(vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		t.Fatalf("build seed vector index: %v", err)
+	}
+	seedStatus, err := seedIndex.SaveSnapshot()
+	if err != nil {
+		t.Fatalf("save seed vector index: %v", err)
+	}
+
+	handleA, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open handle A: %v", err)
+	}
+	if _, statusA, err := handleA.LoadVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def)); err != nil {
+		t.Fatalf("load handle A vector index: %v", err)
+	} else if !statusA.Loaded || statusA.RootID != seedStatus.RootID {
+		t.Fatalf("handle A load status=%+v seed=%+v", statusA, seedStatus)
+	}
+	handleB, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open handle B: %v", err)
+	}
+	if _, statusB, err := handleB.LoadVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def)); err != nil {
+		t.Fatalf("load handle B vector index: %v", err)
+	} else if !statusB.Loaded || statusB.RootID != seedStatus.RootID {
+		t.Fatalf("handle B load status=%+v seed=%+v", statusB, seedStatus)
+	}
+
+	if _, err := handleA.InsertBatch(
+		[][]byte{[]byte("c")},
+		[][]byte{[]byte(`{"embedding":[0.9,0.1]}`)},
+	); err != nil {
+		t.Fatalf("insert through handle A: %v", err)
+	}
+	if err := handleA.Flush(); err != nil {
+		t.Fatalf("flush handle A: %v", err)
+	}
+	if _, statusA2, err := handleA.LoadVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def)); err != nil {
+		t.Fatalf("reload handle A vector index: %v", err)
+	} else if !statusA2.Loaded || statusA2.RootID == seedStatus.RootID {
+		t.Fatalf("handle A did not advance persisted root status=%+v seed=%+v", statusA2, seedStatus)
+	}
+
+	if _, err := handleB.InsertBatch(
+		[][]byte{[]byte("d")},
+		[][]byte{[]byte(`{"embedding":[0.8,0.2]}`)},
+	); err != nil {
+		t.Fatalf("insert through handle B: %v", err)
+	}
+	if err := handleB.Flush(); !errors.Is(err, errVectorIndexStaleNativeRoot) {
+		t.Fatalf("flush handle B err=%v want stale native root", err)
+	}
+	loaded, status, err := handleA.LoadVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		t.Fatalf("load graph after stale rejection: %v", err)
+	}
+	if loaded == nil || !status.Loaded {
+		t.Fatalf("graph did not load after stale rejection loaded=%v status=%+v", loaded != nil, status)
+	}
+	results, _, err := loaded.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 3, DisableExactFallback: true})
+	if err != nil {
+		t.Fatalf("search graph after stale rejection: %v", err)
+	}
+	requireVectorResultIDs(t, results, "a", "c", "b")
+}
+
 func TestCollectionVectorIndexSnapshotLoadsLegacyEdgesWithoutDistances(t *testing.T) {
 	dir := t.TempDir()
 	d, err := backenddb.Open(backenddb.Options{Dir: dir})
