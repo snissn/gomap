@@ -425,7 +425,7 @@ func (c *Collection) LoadVectorIndexSnapshot(opts VectorIndexOptions) (*VectorIn
 	if err != nil {
 		return nil, status, err
 	}
-	if index != nil || status.Loaded || status.ExactFallbackReason != "missing_vector_index_metadata" {
+	if index != nil || status.Loaded || status.ExactFallbackReason != vectorIndexFallbackMissingVectorIndexMetadata {
 		return index, status, nil
 	}
 	return c.loadLegacyVectorIndexSnapshot(opts)
@@ -457,14 +457,14 @@ func (c *Collection) LoadNativeVectorIndexSnapshot(opts VectorIndexOptions) (*Ve
 	}
 	def, ok := findVectorIndex(catalog.meta.VectorIndexes, name)
 	if !ok {
-		status.ExactFallbackReason = "missing_vector_index_metadata"
+		status.ExactFallbackReason = vectorIndexFallbackMissingVectorIndexMetadata
 		return nil, status, nil
 	}
 	rootName := collectionVectorIndexRootName(catalog.meta.Name, def.Name)
 	status.RootName = rootName
 	rootID := catalog.rootID(rootName)
 	if rootID == 0 && len(catalog.overlayRootIDs(rootName)) == 0 {
-		status.ExactFallbackReason = "missing_graph_root"
+		status.ExactFallbackReason = vectorIndexFallbackMissingGraphRoot
 		return nil, status, nil
 	}
 	snapshot, bytesDisk, reason, err := readVectorIndexNativeSnapshot(snap, catalog, rootName)
@@ -1018,11 +1018,11 @@ func readVectorIndexNativeSnapshot(snap *backenddb.Snapshot, catalog *collection
 		return snapshot, 0, "", err
 	}
 	if !ok {
-		return snapshot, 0, "missing_graph_root_entry", nil
+		return snapshot, 0, vectorIndexFallbackMissingGraphRootEntry, nil
 	}
 	bytesDisk += int64(len(rawMeta))
 	if err := json.Unmarshal(rawMeta, &snapshot.Meta); err != nil {
-		return snapshot, bytesDisk, "invalid_graph_root_entry", nil
+		return snapshot, bytesDisk, vectorIndexFallbackInvalidGraphRootEntry, nil
 	}
 
 	nodes := make(map[int]vectorIndexPersistNode)
@@ -1033,7 +1033,7 @@ func readVectorIndexNativeSnapshot(snap *backenddb.Snapshot, catalog *collection
 		return snapshot, bytesDisk, "", err
 	}
 	if it == nil {
-		return snapshot, bytesDisk, "missing_graph_root", nil
+		return snapshot, bytesDisk, vectorIndexFallbackMissingGraphRoot, nil
 	}
 	defer func() { _ = it.Close() }()
 	for it.Valid() {
@@ -1051,11 +1051,11 @@ func readVectorIndexNativeSnapshot(snap *backenddb.Snapshot, catalog *collection
 		case bytes.HasPrefix(key, []byte(vectorIndexNativeKeyPrefixNode)):
 			nodeID, ok := parseVectorIndexNativeOrdinal(string(key[len(vectorIndexNativeKeyPrefixNode):]))
 			if !ok {
-				return snapshot, bytesDisk, "invalid_graph_root_key", nil
+				return snapshot, bytesDisk, vectorIndexFallbackInvalidGraphRootKey, nil
 			}
 			var node vectorIndexPersistNode
 			if err := json.Unmarshal(value, &node); err != nil {
-				return snapshot, bytesDisk, "invalid_graph_root_entry", nil
+				return snapshot, bytesDisk, vectorIndexFallbackInvalidGraphRootEntry, nil
 			}
 			nodes[nodeID] = node
 			if nodeID > maxNodeID {
@@ -1064,23 +1064,23 @@ func readVectorIndexNativeSnapshot(snap *backenddb.Snapshot, catalog *collection
 		case bytes.HasPrefix(key, []byte(vectorIndexNativeKeyPrefixEdge)):
 			var edge vectorIndexPersistEdges
 			if err := json.Unmarshal(value, &edge); err != nil {
-				return snapshot, bytesDisk, "invalid_graph_root_entry", nil
+				return snapshot, bytesDisk, vectorIndexFallbackInvalidGraphRootEntry, nil
 			}
 			snapshot.Edges = append(snapshot.Edges, edge)
 		case bytes.HasPrefix(key, []byte(vectorIndexNativeKeyPrefixTomb)):
 			nodeID, ok := parseVectorIndexNativeOrdinal(string(key[len(vectorIndexNativeKeyPrefixTomb):]))
 			if !ok {
-				return snapshot, bytesDisk, "invalid_graph_root_key", nil
+				return snapshot, bytesDisk, vectorIndexFallbackInvalidGraphRootKey, nil
 			}
 			snapshot.Tombstones.NodeIDs = append(snapshot.Tombstones.NodeIDs, nodeID)
 		case bytes.HasPrefix(key, []byte(vectorIndexNativeKeyPrefixDoc)):
 			var nodeID int
 			if err := json.Unmarshal(value, &nodeID); err != nil {
-				return snapshot, bytesDisk, "invalid_graph_root_entry", nil
+				return snapshot, bytesDisk, vectorIndexFallbackInvalidGraphRootEntry, nil
 			}
 			snapshot.DocMap.Current[string(key[len(vectorIndexNativeKeyPrefixDoc):])] = nodeID
 		default:
-			return snapshot, bytesDisk, "invalid_graph_root_key", nil
+			return snapshot, bytesDisk, vectorIndexFallbackInvalidGraphRootKey, nil
 		}
 		it.Next()
 	}
@@ -1092,7 +1092,7 @@ func readVectorIndexNativeSnapshot(snap *backenddb.Snapshot, catalog *collection
 		for nodeID := 0; nodeID <= maxNodeID; nodeID++ {
 			node, ok := nodes[nodeID]
 			if !ok {
-				return snapshot, bytesDisk, "missing_graph_root_entry", nil
+				return snapshot, bytesDisk, vectorIndexFallbackMissingGraphRootEntry, nil
 			}
 			snapshot.Nodes[nodeID] = node
 		}

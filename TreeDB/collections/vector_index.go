@@ -27,6 +27,14 @@ const (
 	defaultVectorIndexExactFilterMax = 1024
 )
 
+const (
+	vectorIndexFallbackMissingVectorIndexMetadata = "missing_vector_index_metadata"
+	vectorIndexFallbackMissingGraphRoot           = "missing_graph_root"
+	vectorIndexFallbackMissingGraphRootEntry      = "missing_graph_root_entry"
+	vectorIndexFallbackInvalidGraphRootKey        = "invalid_graph_root_key"
+	vectorIndexFallbackInvalidGraphRootEntry      = "invalid_graph_root_entry"
+)
+
 // VectorIndexEncoding selects the process-local ANN vector copy format. The
 // collection row remains canonical and exact reranking always reads the full
 // precision vector from TreeDB.
@@ -255,6 +263,9 @@ func (c *Collection) buildVectorIndex(opts VectorIndexOptions, register bool) (*
 	}
 	if register {
 		c.RegisterVectorIndex(index)
+		if c.manager != nil && index.needsNativeAutoPersist() {
+			c.manager.registerCollectionHandle(c)
+		}
 	}
 	return index, nil
 }
@@ -410,14 +421,8 @@ func (c *Collection) ensureDeclaredNativeVectorIndexesLoaded() error {
 	if c.db == nil {
 		return errCollectionDBNil
 	}
-	if len(c.meta.VectorIndexes) == 0 && len(c.registeredVectorIndexes()) == 0 {
-		commitSeq, systemRoot := dbCommitSeqAndSystemRoot(c.db)
-		c.catalogMu.RLock()
-		catalogCurrent := c.catalogCommitSeq == commitSeq && c.catalogSystemRoot == systemRoot
-		c.catalogMu.RUnlock()
-		if catalogCurrent {
-			return nil
-		}
+	if c.declaredNativeVectorIndexesLoadedForCurrentCatalog() {
+		return nil
 	}
 	c.vectorIndexLoadMu.Lock()
 	defer c.vectorIndexLoadMu.Unlock()
@@ -466,13 +471,37 @@ func (c *Collection) ensureDeclaredNativeVectorIndexesLoaded() error {
 		if index != nil {
 			continue
 		}
-		if status.ExactFallbackReason == "missing_graph_root" {
+		if status.ExactFallbackReason == vectorIndexFallbackMissingGraphRoot {
 			if _, err := c.BuildVectorIndex(vectorIndexOptionsFromDefinition(def)); err != nil {
 				return err
 			}
 		}
 	}
 	return nil
+}
+
+func (c *Collection) declaredNativeVectorIndexesLoadedForCurrentCatalog() bool {
+	if c == nil || c.db == nil {
+		return false
+	}
+	commitSeq, systemRoot := dbCommitSeqAndSystemRoot(c.db)
+	c.catalogMu.RLock()
+	catalogCurrent := c.catalogCommitSeq == commitSeq && c.catalogSystemRoot == systemRoot
+	defs := append([]VectorIndexDefinition(nil), c.meta.VectorIndexes...)
+	c.catalogMu.RUnlock()
+	if !catalogCurrent {
+		return false
+	}
+	if len(defs) == 0 {
+		return len(c.registeredVectorIndexes()) == 0
+	}
+	for _, def := range defs {
+		index := c.registeredVectorIndex(def.Name)
+		if index == nil || index.validateNativeSnapshotDefinition(def) != "" {
+			return false
+		}
+	}
+	return true
 }
 
 func (c *Collection) notifyVectorIndexesUpsert(documentIDs [][]byte) error {
@@ -714,14 +743,12 @@ func (idx *VectorIndex) insertVectorLocked(documentID []byte, vector []float32) 
 	}
 	var quantized []int8
 	var quantScale float32
-	if idx.encoding == VectorIndexEncodingInt8 {
-		quantized, quantScale = quantizeVectorIndexInt8(vector)
-	}
 	if nodeID, ok := idx.currentNode[string(documentID)]; ok && nodeID >= 0 && nodeID < len(idx.nodes) {
 		node := &idx.nodes[nodeID]
 		if !node.deleted {
 			switch idx.encoding {
 			case VectorIndexEncodingInt8:
+				quantized, quantScale = quantizeVectorIndexInt8(vector)
 				if node.matchesQuantizedVector(quantized, quantScale) {
 					return nil
 				}
@@ -736,6 +763,9 @@ func (idx *VectorIndex) insertVectorLocked(documentID []byte, vector []float32) 
 
 	nodeID := len(idx.nodes)
 	level := idx.levelForDocumentID(documentID)
+	if idx.encoding == VectorIndexEncodingInt8 && quantized == nil {
+		quantized, quantScale = quantizeVectorIndexInt8(vector)
+	}
 	node := idx.newVectorIndexNodePrepared(documentID, vector, level, quantized, quantScale)
 	idx.nodes = append(idx.nodes, node)
 	idx.markGraphChangedLocked()

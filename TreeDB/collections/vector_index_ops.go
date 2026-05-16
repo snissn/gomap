@@ -77,6 +77,7 @@ func (c *Collection) RebuildVectorIndex(name string) (VectorIndexStatus, error) 
 	status.RootID = native.RootID
 	status.NativeRootLoaded = native.Loaded
 	status.NativeRootBytes = native.BytesDisk
+	status.Stats.BytesDisk = native.BytesDisk
 	status.ExactFallbackReason = native.ExactFallbackReason
 	return status, nil
 }
@@ -157,13 +158,12 @@ func (c *Collection) vectorIndexStatus(name string, inspectNativeRoot bool) (Vec
 		status.Stats = runtime.Stats()
 	}
 	if status.RootID == 0 && len(catalog.overlayRootIDs(rootName)) == 0 {
-		status.ExactFallbackReason = "missing_graph_root"
+		status.ExactFallbackReason = vectorIndexFallbackMissingGraphRoot
 		status.RebuildNeeded = true
 		return status, nil
 	}
 	if !inspectNativeRoot {
 		status.NativeRootLoaded = status.RootID != 0 || len(catalog.overlayRootIDs(rootName)) != 0
-		status.NativeRootBytes = status.Stats.BytesDisk
 		status.RebuildNeeded = status.Stats.RebuildNeeded || status.Stats.SnapshotDirty
 		return status, nil
 	}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"testing"
@@ -334,10 +335,15 @@ func BenchmarkCollectionVectorIndexNativeRootIncrementalWrite(b *testing.B) {
 
 	b.ReportMetric(float64(docs), "docs/write")
 	b.ReportMetric(float64(dims), "dims")
+	baseDir := b.TempDir()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		b.StopTimer()
-		d, err := backenddb.Open(backenddb.Options{Dir: b.TempDir()})
+		dir := filepath.Join(baseDir, fmt.Sprintf("iter-%06d", i))
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			b.Fatalf("create db dir: %v", err)
+		}
+		d, err := backenddb.Open(backenddb.Options{Dir: dir})
 		if err != nil {
 			b.Fatalf("open db: %v", err)
 		}
@@ -376,6 +382,9 @@ func BenchmarkCollectionVectorIndexNativeRootIncrementalWrite(b *testing.B) {
 		if err := d.Close(); err != nil {
 			b.Fatalf("close db: %v", err)
 		}
+		if err := os.RemoveAll(dir); err != nil {
+			b.Fatalf("remove db dir: %v", err)
+		}
 	}
 }
 
@@ -396,12 +405,17 @@ func BenchmarkCollectionVectorIndexNativeRootRebuild(b *testing.B) {
 	b.ReportMetric(float64(docs), "docs/rebuild")
 	b.ReportMetric(float64(dims), "dims")
 	b.ReportAllocs()
+	baseDir := b.TempDir()
 	b.ResetTimer()
 	var lastNativeRootBytes int64
 	var lastIndexBytesMemory int64
 	for i := 0; i < b.N; i++ {
 		b.StopTimer()
-		d, err := backenddb.Open(backenddb.Options{Dir: b.TempDir()})
+		dir := filepath.Join(baseDir, fmt.Sprintf("rebuild-%06d", i))
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			b.Fatalf("create db dir: %v", err)
+		}
+		d, err := backenddb.Open(backenddb.Options{Dir: dir})
 		if err != nil {
 			b.Fatalf("open db: %v", err)
 		}
@@ -431,6 +445,9 @@ func BenchmarkCollectionVectorIndexNativeRootRebuild(b *testing.B) {
 		lastIndexBytesMemory = status.Stats.BytesMemory
 		if err := d.Close(); err != nil {
 			b.Fatalf("close db: %v", err)
+		}
+		if err := os.RemoveAll(dir); err != nil {
+			b.Fatalf("remove db dir: %v", err)
 		}
 	}
 	b.ReportMetric(float64(lastNativeRootBytes), "native_root_bytes")
