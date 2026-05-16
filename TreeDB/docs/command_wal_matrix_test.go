@@ -7,6 +7,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -42,7 +43,7 @@ func TestCommandWALSupportMatrixIsWellFormed(t *testing.T) {
 	}
 	expectedStatuses := []string{"WAL-supported", "WAL-rejected", "WAL-off-only", "future"}
 	if !equalStringSlices(matrix.Statuses, expectedStatuses) {
-		t.Fatalf("matrix statuses=%v, want fixed v1 set %v", matrix.Statuses, expectedStatuses)
+		t.Fatalf("matrix statuses=%v, want fixed v1 order %v", matrix.Statuses, expectedStatuses)
 	}
 	allowedStatus := stringSet(expectedStatuses)
 	testSymbols := collectTreeDBTestSymbols(t)
@@ -191,7 +192,7 @@ func TestCommandWALNoActiveCollectionWALImplementationDrift(t *testing.T) {
 			return err
 		}
 		text := string(raw)
-		if strings.Contains(text, "collection-l*.log") || strings.Contains(text, "collection-l0") {
+		if collectionWALSegmentNamePattern.MatchString(text) {
 			t.Fatalf("%s references collection WAL segment names outside deprecated implementation", path)
 		}
 		if imports, selectors := collectionWALImportAndSelectors(t, path); imports {
@@ -205,6 +206,8 @@ func TestCommandWALNoActiveCollectionWALImplementationDrift(t *testing.T) {
 		t.Fatalf("walk TreeDB: %v", err)
 	}
 }
+
+var collectionWALSegmentNamePattern = regexp.MustCompile(`collection-l[0-9]+(?:\.(?:log|ref))?`)
 
 func loadCommandWALSupportMatrix(t *testing.T) commandWALSupportMatrix {
 	t.Helper()
