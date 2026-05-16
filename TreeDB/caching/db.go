@@ -19646,18 +19646,47 @@ func (db *DB) canPiggybackCommandWALCheckpointPublish(sync bool) bool {
 	}
 	db.mu.RLock()
 	defer db.mu.RUnlock()
-	if len(db.queue) != 1 {
+	queueLen := len(db.queue)
+	if queueLen == 0 {
 		return false
 	}
-	mem := db.queue[0]
-	if mem == nil {
+	laneID := 0
+	if len(db.queueLaneIDs) > 0 {
+		laneID = int(db.queueLaneIDs[0])
+	}
+	for i := 0; i < queueLen; i++ {
+		unitLaneID := 0
+		if i < len(db.queueLaneIDs) {
+			unitLaneID = int(db.queueLaneIDs[i])
+		}
+		if unitLaneID != laneID {
+			return false
+		}
+	}
+
+	maxMemtables := 1
+	targetBytes := int64(0)
+	if db.flushBuildConcurrency > 1 || db.deferredValueLogEnabled() {
+		maxMemtables = flushCombineMaxMemtables
+		targetBytes = flushCombineTargetBytes
+		desired := db.flushThreshold * 4
+		if desired > flushCombineTargetBytesMax {
+			desired = flushCombineTargetBytesMax
+		}
+		if desired > targetBytes {
+			targetBytes = desired
+		}
+	}
+	units, _, _, totalLen := db.collectFlushUnitsLocked(laneID, maxMemtables, targetBytes)
+	if len(units) != queueLen || totalLen <= 0 {
 		return false
 	}
-	memLen := mem.Len()
-	if memLen <= 0 {
+	// Only piggyback when the whole checkpoint queue will publish in one backend
+	// commit. Chunking would publish AppliedCommandLSN before later queued roots.
+	if totalLen > db.flushBackendEntriesCap(totalLen, sync) {
 		return false
 	}
-	return memLen <= db.flushBackendEntriesCap(memLen, sync)
+	return true
 }
 
 func (db *DB) waitForStop() {
