@@ -48,7 +48,10 @@ func (c *Collection) RebuildVectorIndex(name string) (VectorIndexStatus, error) 
 	// committed write can be skipped by the clean replacement snapshot.
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()
-	def, err := c.declaredVectorIndexDefinition(name)
+	if err := c.flushBufferedWrites(); err != nil {
+		return VectorIndexStatus{}, err
+	}
+	def, err := c.declaredVectorIndexDefinitionPrepared(name)
 	if err != nil {
 		return VectorIndexStatus{}, err
 	}
@@ -61,20 +64,29 @@ func (c *Collection) RebuildVectorIndex(name string) (VectorIndexStatus, error) 
 		return VectorIndexStatus{}, err
 	}
 	c.RegisterVectorIndex(index)
+	if c.manager != nil && index.isNativePersistent() {
+		c.manager.registerCollectionHandle(c)
+	}
 	duration := collectionObservedElapsedSince(start)
 	index.mu.Lock()
 	index.lastRebuildDuration = duration
 	index.mu.Unlock()
 
-	status, err := c.vectorIndexStatus(def.Name, false)
-	if err != nil {
-		return VectorIndexStatus{}, err
+	stats := index.Stats()
+	stats.BytesDisk = native.BytesDisk
+	status := VectorIndexStatus{
+		Definition:          def,
+		Name:                def.Name,
+		RootName:            collectionVectorIndexRootName(c.meta.Name, def.Name),
+		RootID:              native.RootID,
+		NativeRootLoaded:    native.Loaded,
+		NativeRootBytes:     native.BytesDisk,
+		ExactFallbackReason: native.ExactFallbackReason,
+		Registered:          true,
+		Stats:               stats,
+		RebuildNeeded:       native.ExactFallbackReason != "" || stats.RebuildNeeded || stats.SnapshotDirty,
+		Duration:            duration,
 	}
-	status.Duration = duration
-	status.RootID = native.RootID
-	status.NativeRootLoaded = native.Loaded
-	status.NativeRootBytes = native.BytesDisk
-	status.ExactFallbackReason = native.ExactFallbackReason
 	return status, nil
 }
 
@@ -89,6 +101,13 @@ func (c *Collection) declaredVectorIndexDefinition(name string) (VectorIndexDefi
 		return VectorIndexDefinition{}, errCollectionDBNil
 	}
 	if err := c.flushBufferedWrites(); err != nil {
+		return VectorIndexDefinition{}, err
+	}
+	return c.declaredVectorIndexDefinitionPrepared(name)
+}
+
+func (c *Collection) declaredVectorIndexDefinitionPrepared(name string) (VectorIndexDefinition, error) {
+	if err := ValidateIndexName(name); err != nil {
 		return VectorIndexDefinition{}, err
 	}
 	snap := c.db.AcquireSnapshot()
@@ -154,13 +173,12 @@ func (c *Collection) vectorIndexStatus(name string, inspectNativeRoot bool) (Vec
 		status.Stats = runtime.Stats()
 	}
 	if status.RootID == 0 && len(catalog.overlayRootIDs(rootName)) == 0 {
-		status.ExactFallbackReason = "missing_graph_root"
+		status.ExactFallbackReason = vectorIndexFallbackMissingGraphRoot
 		status.RebuildNeeded = true
 		return status, nil
 	}
 	if !inspectNativeRoot {
 		status.NativeRootLoaded = status.RootID != 0 || len(catalog.overlayRootIDs(rootName)) != 0
-		status.NativeRootBytes = status.Stats.BytesDisk
 		status.RebuildNeeded = status.Stats.RebuildNeeded || status.Stats.SnapshotDirty
 		return status, nil
 	}
