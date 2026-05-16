@@ -29,8 +29,8 @@ def parse_ints(raw: str) -> list[int]:
         if not part:
             continue
         value = int(part)
-        if value <= 1:
-            raise ValueError("concurrency values must be greater than 1")
+        if value < 1:
+            raise ValueError("concurrency values must be at least 1")
         if value not in seen:
             values.append(value)
             seen.add(value)
@@ -146,9 +146,10 @@ def reopen_database(args: argparse.Namespace) -> tuple[psycopg.Connection, dict[
     return conn, out
 
 
-def search_one(conn: psycopg.Connection, query: str, top_k: int) -> list[int]:
+def search_one(conn: psycopg.Connection, args: argparse.Namespace, query: str, top_k: int) -> list[int]:
+    qualified_table = table_name(args)
     rows = conn.execute(
-        "select doc_id from documents order by embedding <=> %s::vector limit %s",
+        f"select doc_id from {qualified_table} order by embedding <=> %s::vector limit %s",
         [query, top_k],
     ).fetchall()
     if len(rows) != top_k:
@@ -165,6 +166,7 @@ def exact_topk(docs: np.ndarray, query: np.ndarray, top_k: int) -> set[int]:
 
 def validate_recall(
     conn: psycopg.Connection,
+    args: argparse.Namespace,
     docs: np.ndarray,
     query_literals: list[str],
     queries: np.ndarray,
@@ -179,7 +181,7 @@ def validate_recall(
     count = min(validate_queries, len(queries))
     for i in range(count):
         exact = exact_topk(docs, queries[i], top_k)
-        ann = set(search_one(conn, query_literals[i], top_k))
+        ann = set(search_one(conn, args, query_literals[i], top_k))
         exact_total += len(exact)
         ann_total += len(ann)
         overlap += len(exact & ann)
@@ -220,7 +222,7 @@ def benchmark_search(args: argparse.Namespace, query_literals: list[str], concur
                 return
             start = time.perf_counter_ns()
             try:
-                search_one(conn, query_literals[i], args.top_k)
+                search_one(conn, args, query_literals[i], args.top_k)
             except BaseException as exc:  # noqa: BLE001
                 first_error.append(exc)
                 return
@@ -309,11 +311,11 @@ def main() -> None:
 
     phases, postgres_info = build_database(args, manifest, docs)
     conn, reopen = reopen_database(args)
-    validation = validate_recall(conn, docs, query_literals, queries, args.top_k, args.validate_queries, args.min_recall)
+    validation = validate_recall(conn, args, docs, query_literals, queries, args.top_k, args.validate_queries, args.min_recall)
     storage = storage_usage(conn, args, manifest["docs"])
     conn.close()
 
-    levels = [1] + concurrency
+    levels = sorted({1, *concurrency})
     search_benchmarks = [benchmark_search(args, query_literals, level) for level in levels]
 
     result = {

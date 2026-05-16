@@ -34,7 +34,7 @@ def storage_record(result: dict[str, Any]) -> dict[str, Any]:
         return result["storage_after_compact"]
     if "storage" in result:
         return result["storage"]
-    return {"total_bytes": 0, "bytes_per_doc": 0}
+    raise KeyError(f"{result_label(result)} missing storage result")
 
 
 def storage_bytes(result: dict[str, Any]) -> int:
@@ -54,7 +54,7 @@ def build_seconds(result: dict[str, Any]) -> float:
         return float(result["build"]["seconds"])
     if "rebuild" in result:
         return float(result["rebuild"]["seconds"])
-    return 0.0
+    raise KeyError(f"{result_label(result)} missing build/rebuild phase")
 
 
 def reopen_seconds(result: dict[str, Any]) -> float:
@@ -71,13 +71,25 @@ def search_by_concurrency(result: dict[str, Any]) -> dict[int, dict[str, Any]]:
 
 def backend_name(result: dict[str, Any]) -> str:
     backend = result.get("backend")
+    if backend in (None, "", "treedb"):
+        return "TreeDB native HNSW"
     if backend == "sqlite_vectorlite":
         return "SQLite+Vectorlite HNSW"
     if backend == "pgvector":
         return "PostgreSQL+pgvector HNSW"
     if backend == "mongodb_vector_search":
         return "MongoDB Vector Search HNSW"
-    return "TreeDB native HNSW"
+    return f"Unknown backend: {backend}"
+
+
+def result_label(result: dict[str, Any]) -> str:
+    backend = result.get("backend")
+    if backend:
+        return f"result backend={backend!r}"
+    dataset = result.get("dataset_dir")
+    if dataset:
+        return f"result dataset_dir={dataset!r}"
+    return "result"
 
 
 def index_memory(result: dict[str, Any]) -> str:
