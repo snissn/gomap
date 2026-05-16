@@ -30,8 +30,12 @@
     "public command-WAL point writes serialize command LSN assignment with cached same-key mutation order",
     "public command-WAL batches use specialized Set/Delete payload appenders and trusted prebuilt-payload command appends to avoid redundant payload validation scans",
     "public command-WAL checkpoint publication can piggyback AppliedCommandLSN advancement onto the cached checkpoint backend publish boundary",
+    "public command-WAL pending LSN range updates are serialized so checkpoint clear cannot discard newer pending command LSNs",
+    "Close returns final command-WAL checkpoint publication failures in addition to reporting them through NotifyError",
     "public command-WAL batch correctness hook appends the command frame after cached batch preflight and before cached visibility without disabling sorted-run memtable ingestion",
+    "public command-WAL batch cached-view hook rebinding is centralized for constructor and Reset reuse",
     "public command-WAL batches skip duplicate cached SetView/DeleteView validation after the public wrapper validates inputs",
+    "deferred command-WAL writer size advances only after buffered command frames are flushed to the segment file",
     "trusted public command-WAL batch frames are buffered in writer-owned memory and finalized at command-WAL flush/checkpoint boundaries to avoid per-batch direct writev/digest overhead"
   ],
   "passed_tests": [
@@ -42,9 +46,13 @@
     "TestEncodeRawKVSingleOperationPayloadMatchesSliceEncoder",
     "TestMetadataUnsupportedCatalogCommandsReturnUnsupportedFeature",
     "TestPublicCommandWALBatchCloseDiscardsDirtyPayload",
+    "TestPublicCommandWALBatchResetFallbackKeepsWrapperUsable",
     "TestPublicCommandWALBatchWriteFailureDoesNotAppendFrame",
     "TestPublicCommandWALCheckpointPiggybacksAppliedLSN",
     "TestPublicCommandWALCheckpointPublishCapsAtCutoverLSN",
+    "TestPublicCommandWALCheckpointPublishesOnlyCoveredLSNs",
+    "TestPublicCommandWALCloseReportsFinalCheckpointError",
+    "TestPublicCommandWALPendingClearPreservesNewerRange",
     "TestPublicCommandWALPointWritesSerializeLSNWithCachedMutation",
     "TestPublicCommandWALPublishSyncMatrix",
     "TestPublicCommandWALRawKVWritesUseTypedFrames",
@@ -55,7 +63,8 @@
     "TestPR9AcceptancePerformanceGateIsStrictParityPlus",
     "TestCommandJournalAllocatesContiguousLSNs",
     "TestCommandJournalAppendFailureRollsBackLSN",
-    "TestCommandJournalConcurrentAppendsSerializeFrameOrder"
+    "TestCommandJournalConcurrentAppendsSerializeFrameOrder",
+    "TestWriterBufferedCommandSizeAdvancesOnFlush"
   ],
   "local_validation_commands": [
     "GOWORK=off go test ./TreeDB ./TreeDB/docs ./TreeDB/db ./TreeDB/nativewire ./TreeDB/internal/commitlog ./cmd/unified_bench -run 'TestPublicCommandWALRawKVWritesUseTypedFrames|TestPublicCommandWALPointWritesSerializeLSNWithCachedMutation|TestPublicCommandWALBatchCloseDiscardsDirtyPayload|TestPublicCommandWALBatchWriteFailureDoesNotAppendFrame|TestPublicCommandWALPublishSyncMatrix|TestRawKVBatchPayloadBuilderMatchesSliceEncoder|TestRawKVBatchPayloadBuilderResetWithHintReportsOverflow|TestWriterAppendRawKVBatchPayloadCommandDirect|TestEncodeRawKVBatchPayloadScanMatchesSliceEncoder|TestEncodeRawKVSingleOperationPayloadMatchesSliceEncoder|TestEncodeRawKVSingleCommandFrameMatchesEnvelopeEncoder|TestCommandWALSupportMatrix|TestCommandWALRejectedErrorDistinctFromUnsupported|TestMetadataUnsupportedCatalogCommandsReturnUnsupportedFeature|TestCommandWALNativeWireAlignmentManifestCoverage|TestNativeWireAndLocalCommandDigestStable|TestNativeWireAckFlushedRequiresRootPublishAndAppliedLSN|TestNativeWirePostFramePublishFailureCommitAmbiguous|TestRaftCommandEntryAndLocalCommandPayloadUseSharedCanonicalSchema|TestCommandWALRawSetDeleteBatchReplaysThroughNormalExecutor|TestTreeDBPublicCommandWALVariantUsesCachedCommandWALPath|TestTreeDBCommandWALAliasResolvesToBackendVariant|^$' -count=1",
@@ -71,6 +80,7 @@
     "GOWORK=off go test ./TreeDB -run 'TestPublicCommandWAL' -count=1",
     "GOWORK=off go test ./TreeDB/db -run 'TestCommandWAL|TestPublishCommandWAL|TestRawKV' -count=1",
     "GOWORK=off go test ./TreeDB/internal/commitlog -run 'TestWriter|TestRawKV|TestCommand' -count=1",
+    "GOWORK=off go test ./TreeDB/internal/commitlog -run 'TestWriterAppendRawKVBatchPayloadCommandDirect|TestWriterBufferedCommandFlushFailurePoisonsWriter|TestWriterBufferedCommandSizeAdvancesOnFlush|TestCommandJournal|TestRawKV|TestCommand' -count=1",
     "GOWORK=off go test ./cmd/unified_bench -run 'TestTreeDBCommandWAL|TestRunBenchmark' -count=1",
     "GOWORK=off go test ./TreeDB/docs -run TestPR9AcceptancePerformanceGateIsStrictParityPlus -count=1"
   ],
@@ -92,6 +102,27 @@
       "all_throughput_gates_must_exceed_ratio": 1.01
     },
     "rationale": "Strict PR9 performance gates require every measured public command-WAL throughput lane to be greater than 1.01x of the legacy public cached WAL baseline. Current refreshed evidence passes that bar: point Set median is 1.074x with allocation parity, focused Batch.Write medians are 1.542x for batch_size=64 and 1.296x for batch_size=1024 with fewer allocations, and unified_bench batch_write is 1.219x on the median representative stats-scan run. The implementation keeps same-key command ordering, appends public batch command frames after cached preflight and before cached visibility, piggybacks AppliedCommandLSN publication onto cached checkpoint publication, and buffers trusted public command-WAL batch frames in writer-owned memory so digest/CRC/write finalization occurs at command-WAL flush/checkpoint boundaries instead of as a direct writev per batch.",
+    "latest_review_fix_smoke": {
+      "status": "passed_strict_greater_than_1_01_threshold",
+      "focused_50x": {
+        "point_set_ratio": 2.161,
+        "batch_write_size_64_ratio": 1.464,
+        "batch_write_size_1024_ratio": 1.874
+      },
+      "unified_bench_batch_write_200k_batch_size_1024": {
+        "legacy_public_cached_sets_per_sec": 4197819,
+        "public_command_wal_cached_sets_per_sec": 4262801,
+        "public_command_wal_cached_to_legacy_ratio": 1.015,
+        "mode_proof": {
+          "write_path_mode": "command_wal_cached",
+          "write_path_redo_log": "command_wal",
+          "command_wal_enabled": true,
+          "command_wal_required_feature": true,
+          "applied_command_lsn": 196,
+          "typed_frames_at_end": 196
+        }
+      }
+    },
     "point_set_gate": {
       "status": "passed_strict_greater_than_1_01_threshold",
       "short_50x": {

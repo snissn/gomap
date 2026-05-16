@@ -623,6 +623,33 @@ func TestWriterBufferedCommandFlushFailurePoisonsWriter(t *testing.T) {
 	}
 }
 
+func TestWriterBufferedCommandSizeAdvancesOnFlush(t *testing.T) {
+	payload, err := EncodeRawKVBatchPayload([]RawKVOperation{
+		{Op: RawKVOpSet, Key: []byte("alpha"), Value: []byte("one")},
+	})
+	if err != nil {
+		t.Fatalf("EncodeRawKVBatchPayload: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "commit-l0-000001.log")
+	w, err := NewWriterWithOptions(path, Options{DeferredCommandBufferSize: 4096})
+	if err != nil {
+		t.Fatalf("NewWriterWithOptions: %v", err)
+	}
+	defer w.Close()
+	if err := w.AppendRawKVBatchPayloadCommandDirectTrusted(1, 0, payload); err != nil {
+		t.Fatalf("AppendRawKVBatchPayloadCommandDirectTrusted: %v", err)
+	}
+	if got := w.Size(); got != 0 {
+		t.Fatalf("writer size after buffered append=%d, want 0 before flush", got)
+	}
+	if err := w.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	if got := w.Size(); got == 0 {
+		t.Fatal("writer size after flush=0, want durable command bytes counted")
+	}
+}
+
 func TestEncodeRawKVSingleOperationPayloadMatchesSliceEncoder(t *testing.T) {
 	for _, op := range []RawKVOperation{
 		{Op: RawKVOpSet, Key: []byte("alpha"), Value: []byte("one")},

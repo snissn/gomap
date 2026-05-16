@@ -588,6 +588,13 @@ func TestPublicCommandWALPendingClearPreservesNewerRange(t *testing.T) {
 	if first != 4 || last != 4 {
 		t.Fatalf("pending range after stale clear=(%d,%d), want newer LSN (4,4)", first, last)
 	}
+
+	db.clearPublicCommandWALPendingThrough(4)
+	db.recordPublicCommandWALPendingLSN(5)
+	first, last = db.publicCommandWALPendingRange()
+	if first != 5 || last != 5 {
+		t.Fatalf("pending range after record following full clear=(%d,%d), want new LSN (5,5)", first, last)
+	}
 }
 
 func TestPublicCommandWALBatchResetFallbackKeepsWrapperUsable(t *testing.T) {

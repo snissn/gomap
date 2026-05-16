@@ -19525,9 +19525,10 @@ func (db *DB) Checkpoint() error {
 		segments = filtered
 	}
 	// New logic: perform sync write only if not relaxedSync
+	needsCommandWALPublish := commandWALAppliedLSN != 0 && !commandWALPublishCovered
 	var commitErr error
-	if nonEmptyBytes > 0 || (commandWALAppliedLSN != 0 && !commandWALPublishCovered) {
-		if commandWALAppliedLSN != 0 && !commandWALPublishCovered {
+	if nonEmptyBytes > 0 || needsCommandWALPublish {
+		if needsCommandWALPublish {
 			// This backend batch is also the checkpoint durability boundary for any
 			// non-command WAL segments observed above, so command-LSN publication and
 			// ordinary cached checkpoint proof are not mutually exclusive.
@@ -19934,7 +19935,7 @@ func (db *DB) Close() error {
 	// This avoids dropping pending memtables on close.
 	if hadMemtables {
 		// flushMu is already held by Close.
-		db.flushAllLocked(true)
+		db.flushAllLocked(true, nil)
 	}
 
 	close(db.closeCh)
@@ -20256,7 +20257,7 @@ func (db *DB) flushAllMemtablesForSync(sync bool) error {
 	db.writeMu.Unlock()
 
 	db.flushMu.Lock()
-	db.flushAllLocked(sync)
+	db.flushAllLocked(sync, nil)
 	db.flushMu.Unlock()
 	return db.backgroundError()
 }
@@ -22159,14 +22160,10 @@ func (db *DB) pickFlushLane() (int, bool) {
 func (db *DB) flushAll(reqSync bool) {
 	db.flushMu.Lock()
 	defer db.flushMu.Unlock()
-	db.flushAllLocked(reqSync)
+	db.flushAllLocked(reqSync, nil)
 }
 
-func (db *DB) flushAllLocked(reqSync bool, commandPublishOpt ...*checkpointCommandWALPublish) {
-	var commandPublish *checkpointCommandWALPublish
-	if len(commandPublishOpt) > 0 {
-		commandPublish = commandPublishOpt[0]
-	}
+func (db *DB) flushAllLocked(reqSync bool, commandPublish *checkpointCommandWALPublish) {
 	origSync := reqSync
 	syncFlag := db.flushSyncRequested(reqSync)
 	if !origSync && syncFlag && db.disableJournal && !db.relaxedSync {
@@ -22229,7 +22226,7 @@ func (db *DB) flushAllLocked(reqSync bool, commandPublishOpt ...*checkpointComma
 				db.flushLaneMu[laneID].Lock()
 				defer db.flushLaneMu[laneID].Unlock()
 			}
-			for db.flushLaneOnce(syncFlag, laneID, commandPublish) {
+			for db.flushLaneOnceWithCommandPublish(syncFlag, laneID, commandPublish) {
 			}
 			wg.Done()
 		}()
@@ -22433,11 +22430,11 @@ func (db *DB) removeQueuedUnitsLocked(removeIDs map[uint64]struct{}, units []flu
 	db.publishMemtablesLocked()
 }
 
-func (db *DB) flushLaneOnce(sync bool, laneID int, commandPublishOpt ...*checkpointCommandWALPublish) bool {
-	var commandPublish *checkpointCommandWALPublish
-	if len(commandPublishOpt) > 0 {
-		commandPublish = commandPublishOpt[0]
-	}
+func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
+	return db.flushLaneOnceWithCommandPublish(sync, laneID, nil)
+}
+
+func (db *DB) flushLaneOnceWithCommandPublish(sync bool, laneID int, commandPublish *checkpointCommandWALPublish) bool {
 	db.mu.Lock()
 	queueLen := len(db.queue)
 	if queueLen == 0 {

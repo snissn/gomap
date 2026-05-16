@@ -446,7 +446,6 @@ func (w *Writer) appendRawKVPointCommandDirectTrustedSized(lsn, baseAppliedLSN u
 	buf := w.commandBuf[off:newLen]
 	encodeTrustedRawKVPointCommandFramePayloadSizedTo(buf[segmentHeaderSize:segmentHeaderSize+size], lsn, baseAppliedLSN, op, key, value, valueLen, payloadLen, size)
 	binary.LittleEndian.PutUint32(buf[0:4], uint32(size))
-	w.size += int64(total)
 	return nil
 }
 
@@ -512,7 +511,6 @@ func (w *Writer) AppendRawKVBatchPayloadCommandDirectTrusted(lsn, baseAppliedLSN
 			binary.LittleEndian.PutUint32(frameHeader[56:60], uint32(len(payload)))
 			copy(buf[segmentHeaderSize+commandFrameHeaderSize:], payload)
 			binary.LittleEndian.PutUint32(buf[0:4], uint32(size))
-			w.size += int64(total)
 			return nil
 		}
 	}
@@ -601,9 +599,11 @@ func (w *Writer) flushBufferedCommandFrames() error {
 	if err := w.bw.Flush(); err != nil {
 		return w.poisonCommandBuffer(err)
 	}
+	flushed := len(w.commandBuf)
 	if err := writeFull(w.f, w.commandBuf); err != nil {
 		return w.poisonCommandBuffer(err)
 	}
+	w.size += int64(flushed)
 	w.commandBuf = w.commandBuf[:0]
 	return nil
 }

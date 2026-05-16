@@ -115,14 +115,6 @@ func (o *JournalOwner) reserveLSNRange(count uint64) (first uint64, last uint64,
 	return o.reserveLSNRangeLocked(count)
 }
 
-// reserveLSNSerialized reserves one LSN. Callers must serialize owner access by
-// holding either o.mu (direct JournalOwner callers) or the owning
-// CommandJournal's mutex when the owner is private to that journal.
-func (o *JournalOwner) reserveLSNSerialized() (uint64, error) {
-	first, _, err := o.reserveLSNRangeLocked(1)
-	return first, err
-}
-
 func (o *JournalOwner) reserveLSNRangeLocked(count uint64) (first uint64, last uint64, err error) {
 	if o == nil {
 		return 0, 0, errors.New("commitlog: journal owner is closed")
@@ -446,6 +438,17 @@ func truncateCommandJournalTail(path string, size int64) error {
 	return syncDirFn(path)
 }
 
+// reserveLSNLocked reserves one LSN for CommandJournal append paths. Callers
+// must hold j.mu and must not expose this as a direct JournalOwner reservation;
+// tail-only rollback depends on the journal's append serialization.
+func (j *CommandJournal) reserveLSNLocked() (uint64, error) {
+	if j == nil || j.owner == nil {
+		return 0, errors.New("commitlog: command journal is closed")
+	}
+	first, _, err := j.owner.reserveLSNRangeLocked(1)
+	return first, err
+}
+
 // AppendCommand validates a complete command frame, assigns the next journal
 // LSN, and appends it through this lane's single writer while holding the
 // journal mutex. This intentionally optimizes for deterministic frame order and
@@ -492,7 +495,7 @@ func (j *CommandJournal) AppendCommand(env CommandEnvelope) (uint64, error) {
 	if size > int(segmentLenMask) {
 		return 0, ErrRecordTooLarge
 	}
-	lsn, err := j.owner.reserveLSNSerialized()
+	lsn, err := j.reserveLSNLocked()
 	if err != nil {
 		return 0, err
 	}
@@ -536,7 +539,7 @@ func (j *CommandJournal) AppendRawKVSingleCommand(baseAppliedLSN uint64, op RawK
 	if size > int(segmentLenMask) {
 		return 0, ErrRecordTooLarge
 	}
-	lsn, err := j.owner.reserveLSNSerialized()
+	lsn, err := j.reserveLSNLocked()
 	if err != nil {
 		return 0, err
 	}
@@ -580,7 +583,7 @@ func (j *CommandJournal) AppendRawKVPointCommandTrusted(baseAppliedLSN uint64, o
 	if size > int(segmentLenMask) {
 		return 0, ErrRecordTooLarge
 	}
-	lsn, err := j.owner.reserveLSNSerialized()
+	lsn, err := j.reserveLSNLocked()
 	if err != nil {
 		return 0, err
 	}
@@ -614,7 +617,7 @@ func (j *CommandJournal) AppendRawKVBatchPayloadCommandTrusted(baseAppliedLSN ui
 	if j.writer == nil || j.owner == nil {
 		return 0, errors.New("commitlog: command journal is closed")
 	}
-	lsn, err := j.owner.reserveLSNSerialized()
+	lsn, err := j.reserveLSNLocked()
 	if err != nil {
 		return 0, err
 	}

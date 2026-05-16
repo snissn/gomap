@@ -46,24 +46,15 @@ func (tdb *DB) recordPublicCommandWALPendingLSN(lsn uint64) {
 	if tdb == nil || lsn == 0 {
 		return
 	}
+	tdb.commandWALPendingMu.Lock()
+	defer tdb.commandWALPendingMu.Unlock()
 	tdb.commandWALLiveFrames.Add(1)
-	for {
-		first := tdb.commandWALFirst.Load()
-		if first != 0 && first <= lsn {
-			break
-		}
-		if tdb.commandWALFirst.CompareAndSwap(first, lsn) {
-			break
-		}
+	first := tdb.commandWALFirst.Load()
+	if first == 0 || lsn < first {
+		tdb.commandWALFirst.Store(lsn)
 	}
-	for {
-		last := tdb.commandWALLast.Load()
-		if last >= lsn {
-			break
-		}
-		if tdb.commandWALLast.CompareAndSwap(last, lsn) {
-			break
-		}
+	if last := tdb.commandWALLast.Load(); lsn > last {
+		tdb.commandWALLast.Store(lsn)
 	}
 }
 
@@ -94,6 +85,8 @@ func (tdb *DB) publicCommandWALPendingRange() (first, last uint64) {
 	if tdb == nil {
 		return 0, 0
 	}
+	tdb.commandWALPendingMu.Lock()
+	defer tdb.commandWALPendingMu.Unlock()
 	return tdb.commandWALFirst.Load(), tdb.commandWALLast.Load()
 }
 
@@ -101,49 +94,20 @@ func (tdb *DB) clearPublicCommandWALPendingThrough(lsn uint64) {
 	if tdb == nil || lsn == 0 {
 		return
 	}
-	for {
-		last := tdb.commandWALLast.Load()
-		if last == 0 {
-			tdb.clearPublicCommandWALFirstFullyThrough(lsn)
-			return
-		}
-		if last > lsn {
-			break
-		}
-		if tdb.commandWALLast.CompareAndSwap(last, 0) {
-			tdb.clearPublicCommandWALFirstFullyThrough(lsn)
-			return
-		}
-	}
-	tdb.clearPublicCommandWALFirstThrough(lsn)
-}
-
-func (tdb *DB) clearPublicCommandWALFirstFullyThrough(lsn uint64) {
-	for {
-		first := tdb.commandWALFirst.Load()
-		if first == 0 || first > lsn {
-			return
-		}
-		if tdb.commandWALFirst.CompareAndSwap(first, 0) {
-			return
-		}
-	}
-}
-
-func (tdb *DB) clearPublicCommandWALFirstThrough(lsn uint64) {
-	next := lsn + 1
-	if next == 0 {
-		tdb.clearPublicCommandWALFirstFullyThrough(lsn)
+	tdb.commandWALPendingMu.Lock()
+	defer tdb.commandWALPendingMu.Unlock()
+	first := tdb.commandWALFirst.Load()
+	last := tdb.commandWALLast.Load()
+	if first == 0 || last == 0 {
 		return
 	}
-	for {
-		first := tdb.commandWALFirst.Load()
-		if first == 0 || first > lsn {
-			return
-		}
-		if tdb.commandWALFirst.CompareAndSwap(first, next) {
-			return
-		}
+	if last <= lsn {
+		tdb.commandWALFirst.Store(0)
+		tdb.commandWALLast.Store(0)
+		return
+	}
+	if first <= lsn {
+		tdb.commandWALFirst.Store(lsn + 1)
 	}
 }
 
@@ -162,6 +126,8 @@ func (tdb *DB) snapshotPublicCommandWALCheckpointCutover() {
 	if tdb == nil || !tdb.commandWALCached {
 		return
 	}
+	tdb.commandWALPendingMu.Lock()
+	defer tdb.commandWALPendingMu.Unlock()
 	tdb.commandWALCheckpointCutoverLast.Store(tdb.commandWALLast.Load())
 }
 
@@ -231,26 +197,7 @@ const commandWALPublicBatchEstimatedKeyValueBytes = 48
 func newCommandWALPublicBatch(tdb *DB, inner Batch, opHint int) *commandWALPublicBatch {
 	b := &commandWALPublicBatch{db: tdb, inner: inner}
 	b.disableInnerStreamingBypass()
-	if setter, ok := inner.(interface {
-		SetView(key, value []byte) error
-	}); ok {
-		b.setViewer = setter
-	}
-	if setter, ok := inner.(interface {
-		SetViewValidated(key, value []byte) error
-	}); ok {
-		b.setViewValidated = setter
-	}
-	if deleter, ok := inner.(interface {
-		DeleteView(key []byte) error
-	}); ok {
-		b.deleteViewer = deleter
-	}
-	if deleter, ok := inner.(interface {
-		DeleteViewValidated(key []byte) error
-	}); ok {
-		b.deleteViewValidated = deleter
-	}
+	b.rebindInnerViewers()
 	opHint = db.NormalizePublicBatchReserveHint(opHint)
 	byteHint := 0
 	if opHint > 0 && opHint <= int(^uint(0)>>1)/commandWALPublicBatchEstimatedKeyValueBytes {
@@ -258,6 +205,39 @@ func newCommandWALPublicBatch(tdb *DB, inner Batch, opHint int) *commandWALPubli
 	}
 	b.payload.ResetWithHint(opHint, byteHint)
 	return b
+}
+
+func (b *commandWALPublicBatch) rebindInnerViewers() {
+	if b == nil {
+		return
+	}
+	b.setViewer = nil
+	b.setViewValidated = nil
+	b.deleteViewer = nil
+	b.deleteViewValidated = nil
+	if b.inner == nil {
+		return
+	}
+	if setter, ok := b.inner.(interface {
+		SetView(key, value []byte) error
+	}); ok {
+		b.setViewer = setter
+	}
+	if setter, ok := b.inner.(interface {
+		SetViewValidated(key, value []byte) error
+	}); ok {
+		b.setViewValidated = setter
+	}
+	if deleter, ok := b.inner.(interface {
+		DeleteView(key []byte) error
+	}); ok {
+		b.deleteViewer = deleter
+	}
+	if deleter, ok := b.inner.(interface {
+		DeleteViewValidated(key []byte) error
+	}); ok {
+		b.deleteViewValidated = deleter
+	}
 }
 
 func (b *commandWALPublicBatch) disableInnerStreamingBypass() {
@@ -456,34 +436,7 @@ func (b *commandWALPublicBatch) Reset() {
 		return
 	}
 	resetter.Reset()
-	if setter, ok := b.inner.(interface {
-		SetView(key, value []byte) error
-	}); ok {
-		b.setViewer = setter
-	} else {
-		b.setViewer = nil
-	}
-	if setter, ok := b.inner.(interface {
-		SetViewValidated(key, value []byte) error
-	}); ok {
-		b.setViewValidated = setter
-	} else {
-		b.setViewValidated = nil
-	}
-	if deleter, ok := b.inner.(interface {
-		DeleteView(key []byte) error
-	}); ok {
-		b.deleteViewer = deleter
-	} else {
-		b.deleteViewer = nil
-	}
-	if deleter, ok := b.inner.(interface {
-		DeleteViewValidated(key []byte) error
-	}); ok {
-		b.deleteViewValidated = deleter
-	} else {
-		b.deleteViewValidated = nil
-	}
+	b.rebindInnerViewers()
 	b.disableInnerStreamingBypass()
 	b.payload.ResetWithHint(0, 0)
 	b.opCount = 0

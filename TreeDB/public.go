@@ -125,6 +125,7 @@ type DB struct {
 	templateDB                           *DB
 	writePath                            writePathInfo
 	commandWALCached                     bool
+	commandWALPendingMu                  sync.Mutex
 	commandWALFirst                      atomic.Uint64
 	commandWALLast                       atomic.Uint64
 	commandWALCheckpointCutoverLast      atomic.Uint64
@@ -1307,7 +1308,9 @@ func (db *DB) Close() error {
 	if db.cached != nil {
 		if db.commandWALCached {
 			if e := db.Checkpoint(); e != nil {
-				db.reportError(fmt.Errorf("treedb: final command WAL checkpoint during close: %w", e))
+				wrapped := fmt.Errorf("treedb: final command WAL checkpoint during close: %w", e)
+				db.reportError(wrapped)
+				err = errors.Join(err, wrapped)
 			}
 		}
 		err = errors.Join(err, db.cached.Close())
