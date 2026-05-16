@@ -8,10 +8,13 @@
     {"surface":"raw_kv","entry_point":"public cached Set/Delete/Batch.Write","command":"RawKVBatch","status":"future","first_pr":"PR9","tests":["PR9 default cutover"]},
 
     {"surface":"collections","entry_point":"CollectionManager.CreateCollection","command":"CatalogCreateCollection","status":"WAL-supported","first_pr":"PR6","tests":["TestCollectionCommandWALCreateCollectionPublishesAppliedLSN","TestCollectionCommandWALCreateCollectionReplayRecoversUnappliedFrame"]},
+    {"surface":"collections","entry_point":"CollectionManager.FlushAll","command":"local durability barrier","status":"WAL-supported","first_pr":"PR7","tests":["TestCollectionManagerFlushAllDrainsQueuedIndexedFlushUnit"]},
     {"surface":"collections","entry_point":"Collection.CreateIndex","command":"future catalog index create","status":"WAL-rejected","first_pr":"PR6","tests":["TestCollectionCommandWALRejectsCatalogIndexMutations"]},
     {"surface":"collections","entry_point":"Collection.DropIndex","command":"future catalog index drop","status":"WAL-rejected","first_pr":"PR6","tests":["TestCollectionCommandWALRejectsCatalogIndexMutations"]},
     {"surface":"collections","entry_point":"Collection.DropIndexes","command":"future catalog index drop batch","status":"WAL-rejected","first_pr":"PR6","tests":["TestCollectionCommandWALRejectsCatalogIndexMutations"]},
     {"surface":"collections","entry_point":"Collection.DropAllIndexes","command":"future catalog index drop all","status":"WAL-rejected","first_pr":"PR6","tests":["TestCollectionCommandWALRejectsCatalogIndexMutations"]},
+    {"surface":"collections","entry_point":"Collection.Flush","command":"local durability barrier","status":"WAL-supported","first_pr":"PR7","tests":["TestCollectionSingleInsertBufferedNoIndexFlushPersistsAfterReopen"]},
+    {"surface":"collections","entry_point":"Collection.CompactRootOverlays","command":"local root maintenance barrier","status":"WAL-supported","first_pr":"PR7","tests":["TestCollectionCompactRootOverlaysFoldsIntoBaseRoots"]},
     {"surface":"collections","entry_point":"Collection.Insert","command":"CollectionInsertBatchByID","status":"WAL-supported","first_pr":"PR4","tests":["TestCollectionCommandWALInsertByIDPublishesAppliedLSN"]},
     {"surface":"collections","entry_point":"Collection.InsertBatch","command":"CollectionInsertBatchByID","status":"WAL-supported","first_pr":"PR4","tests":["TestCollectionCommandWALInsertBatchByIDPublishesAppliedLSN"]},
     {"surface":"collections","entry_point":"Collection.InsertBatchWithTemplateV1Encoder","command":"CollectionInsertBatchByID","status":"WAL-supported","first_pr":"PR4","tests":["TestCollectionCommandWALInsertBatchByIDTemplateV1NewShapeReplay"]},
