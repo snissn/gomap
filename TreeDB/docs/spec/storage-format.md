@@ -516,13 +516,15 @@ bytes Preconditions[PreconditionsLen]
 bytes ResultAssertions[ResultAssertionsLen]
 ```
 
-PR1 command kinds:
+Command kinds introduced by the command-WAL stack:
 
-| Value | Kind | Scope | Payload format | PR1 status |
+| Value | Kind | Scope | Payload format | Status |
 |---:|---|---|---|---|
 | 1 | `RawKVBatch` | raw KV | `RawKVBatchV1` | encoded and fixture-tested; production raw writes stay legacy until PR3 |
-| 100 | `CollectionInsertBatchByID` | collection | native-wire deterministic placeholder | fixture placeholder only |
-| 200 | `CatalogMutationPlaceholder` | catalog | native-wire deterministic placeholder | fixture placeholder only |
+| 100 | `CollectionInsertBatchByID` | collection | `CollectionInsertBatchByIDV1` | PR4 supported |
+| 101 | `CollectionDeleteBatchByID` | collection | `CollectionDeleteBatchByIDV1` | PR4 supported |
+| 102 | `CollectionUpdateBatchByID` | collection | `CollectionUpdateBatchByIDV1` | PR5 supported |
+| 200 | `CatalogCreateCollection` | catalog | `CatalogCreateCollectionV1` | PR6 supported; old placeholder name is an alias only |
 
 `RawKVBatchV1` payload:
 
@@ -542,6 +544,20 @@ bytes Value[ValueLen]
 A `RawKVBatch` command frame is one atomic command: one frame, one `LSN`, and
 all contained operations decode as one batch. Delete operations require
 `ValueLen=0`.
+
+`CatalogCreateCollectionV1` payload:
+
+```text
+u16 Version        // 1
+u32 CollectionNameLen
+u32 MetadataLen
+bytes CollectionName[CollectionNameLen]
+bytes Metadata[MetadataLen] // canonical collection metadata JSON
+```
+
+The payload name and decoded metadata name must match. Replay is idempotent only
+when an existing catalog entry has identical normalized metadata; incompatible
+metadata fails closed before advancing `AppliedCommandLSN`.
 
 `ExternalRefs`, `Preconditions`, and `ResultAssertions` are length-delimited
 sections so PR1 can harden framing before replay uses them. The PR1 external-ref

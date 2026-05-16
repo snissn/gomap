@@ -2584,14 +2584,14 @@ func (m *CollectionManager) CreateCollection(meta *CollectionMeta) (*CollectionM
 	if meta == nil {
 		return nil, errors.New("collections: nil collection metadata")
 	}
-	if m.db.CommandWALEnabled() {
-		return nil, fmt.Errorf("%w: collection catalog mutation requires catalog command WAL support", backenddb.ErrCommandWALUnsupported)
-	}
 	normalized, err := normalizeCollectionMeta(*meta)
 	if err != nil {
 		return nil, err
 	}
+	return m.createCollectionWithCommandWALIntent(normalized, nil)
+}
 
+func (m *CollectionManager) createCollectionWithCommandWALIntent(normalized CollectionMeta, commandWALIntent *backenddb.CommandWALIntent) (*CollectionMeta, error) {
 	snap := m.db.AcquireSnapshot()
 	if snap == nil {
 		return nil, backenddb.ErrClosed
@@ -2605,12 +2605,49 @@ func (m *CollectionManager) CreateCollection(meta *CollectionMeta) (*CollectionM
 		if !sameCollectionMeta(existing.meta, normalized) {
 			return nil, fmt.Errorf("collections: existing schema for %q is incompatible", normalized.Name)
 		}
+		if commandWALIntent != nil {
+			if err := m.db.PublishCommandWALNoop(commandWALIntent, false); err != nil {
+				return nil, err
+			}
+		}
 		return existing.meta.copy(), nil
 	}
 
 	encoded, err := encodeCollectionMeta(normalized)
 	if err != nil {
 		return nil, err
+	}
+	buildSystemDelta := func([]uint64) (iterator.UnsafeIterator, error) {
+		current := m.db.AcquireSnapshot()
+		if current == nil {
+			return nil, backenddb.ErrClosed
+		}
+		defer func() { _ = current.Close() }()
+		existing, err := loadCollectionCatalog(current, normalized.Name)
+		if err != nil {
+			return nil, err
+		}
+		if existing != nil && !sameCollectionMeta(existing.meta, normalized) {
+			return nil, fmt.Errorf("collections: existing schema for %q is incompatible", normalized.Name)
+		}
+		iter, err := buildSystemDeltaIterator(map[string][]byte{
+			systemCollectionMetaKey(normalized.Name): encoded,
+		})
+		if err != nil {
+			return nil, err
+		}
+		return iter, nil
+	}
+	if m.db.CommandWALEnabled() || commandWALIntent != nil {
+		intent, err := m.newCatalogCreateCollectionCommandWALIntent(normalized, commandWALIntent)
+		if err != nil {
+			return nil, err
+		}
+		_, _, err = m.db.PublishOrderedRootDeltaGroupWithCommandWALAndSystemDeltaBuilder(nil, intent, buildSystemDelta)
+		if err != nil {
+			return nil, err
+		}
+		return normalized.copy(), nil
 	}
 	_, _, err = m.db.PublishOrderedRootGroupWithSystemBuilder(nil, func([]uint64) (iterator.UnsafeIterator, error) {
 		current := m.db.AcquireSnapshot()

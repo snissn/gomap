@@ -1,0 +1,83 @@
+{
+  "tracker": "https://github.com/snissn/gomap/issues/1529",
+  "milestone": "PR6 catalog mutation commands",
+  "branch": "codex/user-command-wal-pr6",
+  "base_branch": "codex/user-command-wal-pr5",
+  "base_commit": "2dc80152118e69c558284c0111d90b8fafcbe266",
+  "implementation_commit": "PR head",
+  "go_version": "go version go1.25.7 linux/amd64",
+  "platform": "linux/amd64 Intel i5-11400F",
+  "durability_modes": [
+    "DurabilityWALOffRelaxed baseline catalog create",
+    "DurabilityWALOnRelaxed command_wal_v1 catalog create",
+    "command_wal_v1 recovery open"
+  ],
+  "sync_policy": "CatalogCreateCollection frames are flushed before catalog root visibility; the system root and AppliedCommandLSN are published in the same backend finalize boundary.",
+  "command_support_matrix_version": "TreeDB/docs/spec/user-command-wal.md PR6 catalog matrix update",
+  "command_kinds_touched": [
+    "CatalogCreateCollection",
+    "CatalogCreateCollectionV1 payload",
+    "index DDL remains WAL-rejected"
+  ],
+  "matrix_status_changes": {
+    "collection_catalog_create": "WAL-supported via CatalogCreateCollection",
+    "collection_index_create_drop": "WAL-rejected pre-frame until index catalog command support lands"
+  },
+  "passed_tests": [
+    "TestCommandWALFormatGoldenV1CatalogCreateCollection",
+    "TestCommandWALFormatRejectsUnknownRequiredKind",
+    "TestCollectionCommandWALCreateCollectionPublishesAppliedLSN",
+    "TestCollectionCommandWALCreateCollectionReplayRecoversUnappliedFrame",
+    "TestCollectionCommandWALCreateCollectionReplaySameMetadataIdempotent",
+    "TestCollectionCommandWALCreateCollectionReplayIncompatibleMetadataFailsClosed",
+    "TestCollectionCommandWALCreateCollectionDrainsRecoveredLowerLSN",
+    "TestCollectionCommandWALRejectsCatalogIndexMutations"
+  ],
+  "golden_fixture_digests": {
+    "TreeDB/internal/commitlog/testdata/command_wal_v1_catalog_create_collection.hex": "fb8f76176374e9ec060d1038543b74ec0ca6c872bd40df9d06b156e807148736"
+  },
+  "crash_scenarios": [
+    "unapplied CatalogCreateCollection frame replays after reopen and advances AppliedCommandLSN",
+    "same-metadata CatalogCreateCollection replay is idempotent and still advances the covered replay LSN",
+    "incompatible CatalogCreateCollection replay fails closed before publishing AppliedCommandLSN or replacing the existing catalog metadata",
+    "a recovered lower command LSN is applied before a public catalog create receives the next contiguous command LSN"
+  ],
+  "runtime_assertions": [
+    "CatalogCreateCollection payload collection name must match decoded collection metadata name",
+    "public CreateCollection rechecks existing catalog metadata immediately before system-root publication",
+    "rejected index DDL returns ErrCommandWALUnsupported before frame append or AppliedCommandLSN movement"
+  ],
+  "performance_gate": {
+    "required": true,
+    "status": "passed with recorded local microbenchmark artifact; command-WAL mode proof checks CommandWALEnabled and AppliedCommandLSN advancement",
+    "benchmark_command": "GOWORK=off go test ./TreeDB/collections -run '^$' -bench 'BenchmarkCollectionCommandWAL(CreateCollection|RejectedIndexDDL)$' -benchmem -benchtime=100x -count=1",
+    "artifacts": {
+      "artifacts/command-wal/pr6/bench.txt": "13ab2c56bc0ca2c68098798b209fa29eff50fb7f4f35e5f6664830b61a5e2915"
+    },
+    "summary": {
+      "create_wal_off_ns_per_op": 58770,
+      "create_command_wal_ns_per_op": 18444,
+      "create_wal_off_allocs_per_op": 194,
+      "create_command_wal_allocs_per_op": 38,
+      "rejected_index_ddl_ns_per_op": 480.1,
+      "rejected_index_ddl_allocs_per_op": 3
+    }
+  },
+  "local_validation_commands": [
+    "GOWORK=off go test ./TreeDB/internal/commitlog ./TreeDB/collections -run 'TestCommandWALFormatGoldenV1CatalogCreateCollection|TestCommandWALFormatRejectsUnknownRequiredKind|TestCollectionCommandWAL' -count=1",
+    "GOWORK=off go test ./TreeDB/internal/commitlog ./TreeDB/collections -count=1",
+    "GOWORK=off go test ./TreeDB/collections -run '^$' -bench 'BenchmarkCollectionCommandWAL(CreateCollection|RejectedIndexDDL)$' -benchmem -benchtime=100x -count=1"
+  ],
+  "unsupported_modes": [
+    "CreateIndex remains WAL-rejected in command_wal_v1 mode",
+    "DropIndex remains WAL-rejected in command_wal_v1 mode",
+    "DropIndexes remains WAL-rejected in command_wal_v1 mode",
+    "DropAllIndexes remains WAL-rejected in command_wal_v1 mode",
+    "query-wide collection mutations remain outside PR6"
+  ],
+  "cleanup_debt": {
+    "oldest_unapplied_lsn": 0,
+    "external_ref_retained_bytes": 0,
+    "notes": "PR6 catalog create payload embeds canonical collection metadata and introduces no external refs."
+  }
+}
