@@ -460,7 +460,7 @@ func (c *Collection) persistNativeVectorIndexIfDeclared(index *VectorIndex) erro
 			return err
 		}
 	}
-	if !index.isNativePersistent() {
+	if !index.isNativePersistent() || !index.hasNativePersistedSnapshot() {
 		_, err := index.SaveNativeSnapshot()
 		if errors.Is(err, errVectorIndexNotDeclared) {
 			return nil
@@ -762,6 +762,15 @@ func (idx *VectorIndex) isNativePersistent() bool {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
 	return idx.nativePersistent
+}
+
+func (idx *VectorIndex) hasNativePersistedSnapshot() bool {
+	if idx == nil {
+		return false
+	}
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+	return idx.persistedEpoch != 0
 }
 
 func (idx *VectorIndex) markVectorMetaDirtyLocked() {

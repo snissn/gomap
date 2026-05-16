@@ -1010,6 +1010,81 @@ func TestCollectionVectorIndexNativeRootSaveReplacesPriorSnapshot(t *testing.T) 
 	}
 }
 
+func TestCollectionVectorIndexNativeRootAutoPersistRebuildReplacesPriorSnapshot(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	def := VectorIndexDefinition{
+		Name:       "embedding",
+		Field:      "embedding",
+		Metric:     VectorMetricCosine,
+		Dimensions: 2,
+		M:          4,
+	}
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("a"), []byte("b"), []byte("c")},
+		[][]byte{
+			[]byte(`{"embedding":[1,0]}`),
+			[]byte(`{"embedding":[0,1]}`),
+			[]byte(`{"embedding":[0.7,0.3]}`),
+		},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	index, err := col.BuildVectorIndex(vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		t.Fatalf("build vector index: %v", err)
+	}
+	if _, err := index.SaveSnapshot(); err != nil {
+		t.Fatalf("save first native snapshot: %v", err)
+	}
+	if err := col.Delete([]byte("c")); err != nil {
+		t.Fatalf("delete c: %v", err)
+	}
+	reduced, err := col.BuildVectorIndex(vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		t.Fatalf("rebuild reduced vector index: %v", err)
+	}
+	if stats := reduced.Stats(); stats.LiveDocs != 2 || !stats.SnapshotDirty {
+		t.Fatalf("rebuilt vector index should be dirty before flush: %+v", stats)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush rebuilt vector index: %v", err)
+	}
+	if stats := reduced.Stats(); stats.LiveDocs != 2 || stats.SnapshotDirty {
+		t.Fatalf("rebuilt vector index should be clean after flush: %+v", stats)
+	}
+	loaded, status, err := col.LoadVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		t.Fatalf("load auto-persisted replacement native snapshot: %v", err)
+	}
+	if loaded == nil || !status.Loaded {
+		t.Fatalf("unexpected replacement load status loaded=%v status=%+v", loaded != nil, status)
+	}
+	if stats := loaded.Stats(); stats.LiveDocs != 2 || stats.Nodes != 2 {
+		t.Fatalf("auto-persisted replacement retained stale graph entries: %+v", stats)
+	}
+	results, _, err := loaded.Search([]float32{0.7, 0.3}, VectorIndexSearchOptions{TopK: 3, DisableExactFallback: true})
+	if err != nil {
+		t.Fatalf("search auto-persisted replacement native snapshot: %v", err)
+	}
+	for _, result := range results {
+		if string(result.DocumentID) == "c" {
+			t.Fatalf("auto-persisted replacement search returned deleted document: %+v", results)
+		}
+	}
+}
+
 func TestCollectionVectorIndexNativeRootUsesCurrentCatalogForStaleHandles(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
