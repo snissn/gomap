@@ -1150,17 +1150,17 @@ func TestCollectionCommandWALRejectsCatalogIndexMutations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenCollection: %v", err)
 	}
-	if _, err := col.CreateIndex(IndexDefinition{Name: "email", Field: "email", ValueType: IndexValueString}); !errors.Is(err, backenddb.ErrCommandWALUnsupported) {
-		t.Fatalf("CreateIndex error=%v, want ErrCommandWALUnsupported", err)
+	if _, err := col.CreateIndex(IndexDefinition{Name: "email", Field: "email", ValueType: IndexValueString}); !errors.Is(err, backenddb.ErrCommandWALRejected) {
+		t.Fatalf("CreateIndex error=%v, want ErrCommandWALRejected", err)
 	}
-	if _, err := col.DropIndex("city"); !errors.Is(err, backenddb.ErrCommandWALUnsupported) {
-		t.Fatalf("DropIndex error=%v, want ErrCommandWALUnsupported", err)
+	if _, err := col.DropIndex("city"); !errors.Is(err, backenddb.ErrCommandWALRejected) {
+		t.Fatalf("DropIndex error=%v, want ErrCommandWALRejected", err)
 	}
-	if _, err := col.DropIndexes([]string{"city"}); !errors.Is(err, backenddb.ErrCommandWALUnsupported) {
-		t.Fatalf("DropIndexes error=%v, want ErrCommandWALUnsupported", err)
+	if _, err := col.DropIndexes([]string{"city"}); !errors.Is(err, backenddb.ErrCommandWALRejected) {
+		t.Fatalf("DropIndexes error=%v, want ErrCommandWALRejected", err)
 	}
-	if _, err := col.DropAllIndexes(); !errors.Is(err, backenddb.ErrCommandWALUnsupported) {
-		t.Fatalf("DropAllIndexes error=%v, want ErrCommandWALUnsupported", err)
+	if _, err := col.DropAllIndexes(); !errors.Is(err, backenddb.ErrCommandWALRejected) {
+		t.Fatalf("DropAllIndexes error=%v, want ErrCommandWALRejected", err)
 	}
 	if got := d.State().AppliedCommandLSN; got != 0 {
 		t.Fatalf("AppliedCommandLSN after rejected index DDL=%d, want 0", got)
