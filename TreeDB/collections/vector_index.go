@@ -13,7 +13,6 @@ import (
 	"time"
 	"unsafe"
 
-	nk "github.com/ashvardanian/NumKong/golang"
 	"github.com/cespare/xxhash/v2"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
@@ -1485,10 +1484,7 @@ func vectorDistanceToFloat32NodeCosineUnchecked(query preparedFloat32CosineQuery
 	if n != len(node.vector) {
 		panic(fmt.Sprintf("collections: vector dimensions differ: %d vs %d", n, len(node.vector)))
 	}
-	dot := nk.DotF32(
-		query.vector,
-		node.vector,
-	)
+	dot := dotProductFloat32(query.vector, node.vector)
 	return float32(1 - dot*float64(query.invNorm)*float64(node.cachedInvNorm))
 }
 
@@ -1499,10 +1495,7 @@ func vectorDistanceBetweenFloat32NodesCosine(left, right *vectorIndexNode) (floa
 	if left.cachedInvNorm == 0 || right.cachedInvNorm == 0 {
 		return 0, errors.New("collections: cosine vector cannot have zero magnitude")
 	}
-	dot := nk.DotF32(
-		left.vector,
-		right.vector,
-	)
+	dot := dotProductFloat32(left.vector, right.vector)
 	return float32(1 - dot*float64(left.cachedInvNorm)*float64(right.cachedInvNorm)), nil
 }
 

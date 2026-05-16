@@ -24,7 +24,7 @@ require (
 	github.com/tidwall/gjson v1.14.3
 	github.com/tidwall/match v1.1.1
 	github.com/tidwall/redcon v1.6.2
-	github.com/unum-cloud/usearch/golang v0.0.0-20260502205332-29e527731957
+	github.com/unum-cloud/usearch/golang v0.0.0-20260502205332-29e527731957 // optional usearch_bench benchmark
 	github.com/yuin/goldmark v1.7.13
 	github.com/zeebo/xxh3 v1.0.2
 	go.etcd.io/bbolt v1.4.3
