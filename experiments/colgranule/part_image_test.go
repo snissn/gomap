@@ -278,6 +278,13 @@ func TestColumnPartFromParsedImageScansWithoutOriginalPart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildColumnPartImage: %v", err)
 	}
+	attached, err := part.WithImagePayloads(image)
+	if err != nil {
+		t.Fatalf("WithImagePayloads: %v", err)
+	}
+	if got := attached.Columns["kind_code"].Definition.Cardinality; got != 3 {
+		t.Fatalf("attached kind_code cardinality=%d want 3", got)
+	}
 	parsed, err := ParseColumnPartImage(image.Bytes)
 	if err != nil {
 		t.Fatalf("ParseColumnPartImage: %v", err)
@@ -363,6 +370,13 @@ func TestColumnPartImagePersistsInferredLowCardinalityCardinality(t *testing.T) 
 	image, err := BuildColumnPartImage(part, ColumnPartImageOptions{})
 	if err != nil {
 		t.Fatalf("BuildColumnPartImage: %v", err)
+	}
+	attached, err := part.WithImagePayloads(image)
+	if err != nil {
+		t.Fatalf("WithImagePayloads: %v", err)
+	}
+	if got := attached.Columns["kind_code"].Definition.Cardinality; got != 0 {
+		t.Fatalf("attached kind_code cardinality=%d want original inferred-zero definition", got)
 	}
 	parsed, err := ParseColumnPartImage(image.Bytes)
 	if err != nil {

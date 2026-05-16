@@ -191,7 +191,11 @@ func validateImageDescriptorMatchesPart(image ColumnPartImage, part *ColumnPart)
 		if !ok {
 			return fmt.Errorf("colgranule: image descriptor has unknown column %s", name)
 		}
-		if comparableColumnDefinition(imageColumn.Definition) != comparableColumnDefinition(partColumn.Definition) {
+		partDefinition, err := comparablePartColumnDefinitionForImage(imageColumn.Definition, partColumn)
+		if err != nil {
+			return err
+		}
+		if comparableColumnDefinition(imageColumn.Definition) != partDefinition {
 			return fmt.Errorf("colgranule: image descriptor column %s definition does not match part", name)
 		}
 		if len(imageColumn.Blocks) != len(partColumn.Blocks) {
@@ -207,6 +211,22 @@ func validateImageDescriptorMatchesPart(image ColumnPartImage, part *ColumnPart)
 		}
 	}
 	return nil
+}
+
+func comparablePartColumnDefinitionForImage(imageDefinition ColumnDefinition, partColumn ColumnPartColumn) (ColumnDefinition, error) {
+	definition := comparableColumnDefinition(partColumn.Definition)
+	if imageDefinition.Type != ColumnTypeLowCardinalityCode || definition.Cardinality != 0 {
+		return definition, nil
+	}
+	cardinality, err := imageColumnCardinalityForDescriptor(ColumnPartColumnDescriptor{
+		Name: imageDefinition.Name,
+		Type: imageDefinition.Type,
+	}, partColumn)
+	if err != nil {
+		return ColumnDefinition{}, err
+	}
+	definition.Cardinality = cardinality
+	return definition, nil
 }
 
 func comparableColumnDefinition(def ColumnDefinition) ColumnDefinition {
