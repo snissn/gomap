@@ -16,7 +16,7 @@ It compares:
 - `github.com/tphakala/simd/f32` `DotProduct`, `DotProductUnsafe`, and
   `DotProductBatch`
 - `github.com/mycophonic/primordium/simd` `DotFloat32`
-- `github.com/adnilis/x-hmsw/utils/simd` `DotProduct` and `DotProductSSE2`
+- `github.com/adnilis/x-hmsw/utils/simd` `DotProduct`
 - `github.com/ic-timon/da-hvri/simd` `DotProduct`
 
 It also includes focused TreeDB rerank-shape benchmarks:

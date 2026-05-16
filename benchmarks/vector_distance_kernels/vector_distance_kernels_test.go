@@ -152,17 +152,6 @@ func BenchmarkCosineDistanceScalar64(b *testing.B) {
 		sinkDistance32 = sum
 	})
 
-	b.Run("adnilis_xhmsw_dot_product_sse2_cached_norms", func(b *testing.B) {
-		b.ReportAllocs()
-		var sum float32
-		for i := 0; i < b.N; i++ {
-			candidate := candidateAt(candidates, i, benchDims)
-			dot := adnilissimd.DotProductSSE2(query, candidate)
-			sum += 1 - dot*queryInvNorm*candidateInvNorms[i%benchCandidates]
-		}
-		sinkDistance32 = sum
-	})
-
 	b.Run("da_hvri_simd_dot_product_cached_norms", func(b *testing.B) {
 		b.ReportAllocs()
 		var sum float32
@@ -305,17 +294,6 @@ func BenchmarkCosineDistanceCandidateBatch128(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			for j := 0; j < benchCandidates; j++ {
 				dot := adnilissimd.DotProduct(query, candidateAt(candidates, j, benchDims))
-				distances[j] = 1 - dot*queryInvNorm*candidateInvNorms[j]
-			}
-		}
-		sinkDistanceBuf = distances
-	})
-
-	b.Run("adnilis_xhmsw_dot_product_sse2_loop", func(b *testing.B) {
-		b.ReportAllocs()
-		for i := 0; i < b.N; i++ {
-			for j := 0; j < benchCandidates; j++ {
-				dot := adnilissimd.DotProductSSE2(query, candidateAt(candidates, j, benchDims))
 				distances[j] = 1 - dot*queryInvNorm*candidateInvNorms[j]
 			}
 		}
@@ -593,20 +571,6 @@ func BenchmarkTreeDBRerankKernelCandidateBatch128(b *testing.B) {
 		sinkDistanceBuf = distances
 	})
 
-	b.Run("adnilis_xhmsw_dot_product_sse2_loop_reuse_output", func(b *testing.B) {
-		distances := make([]float32, benchCandidates)
-		b.ReportAllocs()
-		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
-			for j := 0; j < benchCandidates; j++ {
-				candidate := candidateVectors[j*benchDims : (j+1)*benchDims]
-				dot := adnilissimd.DotProductSSE2(query, candidate)
-				distances[j] = 1 - dot*queryInvNorm*candidateInvNorms[j]
-			}
-		}
-		sinkDistanceBuf = distances
-	})
-
 	b.Run("da_hvri_simd_dot_product_loop_reuse_output", func(b *testing.B) {
 		distances := make([]float32, benchCandidates)
 		b.ReportAllocs()
@@ -813,19 +777,6 @@ func BenchmarkTreeDBRerankGatherAndScoreCandidateBatch128(b *testing.B) {
 		sinkDistanceBuf = distances
 	})
 
-	b.Run("direct_node_vectors_adnilis_xhmsw_dot_product_sse2", func(b *testing.B) {
-		distances := make([]float32, benchCandidates)
-		b.ReportAllocs()
-		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
-			for j := range nodes {
-				dot := adnilissimd.DotProductSSE2(query, nodes[j])
-				distances[j] = 1 - dot*queryInvNorm*nodeInvNorms[j]
-			}
-		}
-		sinkDistanceBuf = distances
-	})
-
 	b.Run("direct_node_vectors_da_hvri_simd_dot_product", func(b *testing.B) {
 		distances := make([]float32, benchCandidates)
 		b.ReportAllocs()
@@ -1024,21 +975,6 @@ func BenchmarkCosineDistanceQueryBatch32x128(b *testing.B) {
 				row := distances[q*benchCandidates : (q+1)*benchCandidates]
 				for j := 0; j < benchCandidates; j++ {
 					dot := adnilissimd.DotProduct(query, candidateAt(candidates, j, benchDims))
-					row[j] = 1 - dot*queryInvNorms[q]*candidateInvNorms[j]
-				}
-			}
-		}
-		sinkDistanceBuf = distances
-	})
-
-	b.Run("adnilis_xhmsw_dot_product_sse2_loop", func(b *testing.B) {
-		b.ReportAllocs()
-		for i := 0; i < b.N; i++ {
-			for q := 0; q < benchQueries; q++ {
-				query := queries[q*benchDims : (q+1)*benchDims]
-				row := distances[q*benchCandidates : (q+1)*benchCandidates]
-				for j := 0; j < benchCandidates; j++ {
-					dot := adnilissimd.DotProductSSE2(query, candidateAt(candidates, j, benchDims))
 					row[j] = 1 - dot*queryInvNorms[q]*candidateInvNorms[j]
 				}
 			}
