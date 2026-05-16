@@ -1,10 +1,12 @@
 package collections
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
+	"strconv"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -20,6 +22,13 @@ type vectorIndexNativeRootBackedGraphReader struct {
 	nodeBuf []byte
 	edgeBuf []byte
 	docBuf  []byte
+	nodeKey []byte
+	edgeKey []byte
+	docKey  []byte
+	vector  []float32
+	edges   []int
+	docIDs  []byte
+	results []VectorSearchResult
 	scratch vectorIndexSearchScratch
 
 	nodeGets int64
@@ -203,31 +212,37 @@ func (r *vectorIndexNativeRootBackedGraphReader) searchGraphOnly(query []float32
 	if err != nil {
 		return nil, err
 	}
-	results := make([]VectorSearchResult, 0, minInt(topK, len(candidates)))
+	results := r.results[:0]
+	if cap(results) < minInt(topK, len(candidates)) {
+		results = make([]VectorSearchResult, 0, minInt(topK, len(candidates)))
+	}
+	r.docIDs = r.docIDs[:0]
 	for _, candidate := range candidates {
 		if len(results) >= topK {
 			break
 		}
-		node, ok, err := r.readNode(candidate.nodeID)
+		docID, deleted, ok, err := r.readNodeDocumentID(candidate.nodeID)
 		if err != nil {
 			return nil, err
 		}
-		if !ok || node.deleted {
+		if !ok || deleted {
 			continue
 		}
-		current, err := r.isCurrentNode(candidate.nodeID, string(node.documentID))
+		current, err := r.isCurrentNode(candidate.nodeID, docID)
 		if err != nil {
 			return nil, err
 		}
 		if !current {
 			continue
 		}
+		start := len(r.docIDs)
+		r.docIDs = append(r.docIDs, docID...)
 		results = append(results, VectorSearchResult{
-			DocumentID: node.documentID,
+			DocumentID: r.docIDs[start:len(r.docIDs):len(r.docIDs)],
 			Distance:   candidate.distance,
 		})
 	}
-	cloneVectorSearchResultDocumentIDs(results)
+	r.results = results
 	return results, nil
 }
 
@@ -243,14 +258,14 @@ func (r *vectorIndexNativeRootBackedGraphReader) greedyNearestAtLayer(query []fl
 	changed := true
 	for changed {
 		changed = false
-		edges, ok, err := r.readEdges(best, layer)
+		neighbors, ok, err := r.readNeighbors(best, layer)
 		if err != nil {
 			return best, err
 		}
 		if !ok {
 			continue
 		}
-		for _, neighborID := range edges.Neighbor {
+		for _, neighborID := range neighbors {
 			if neighborID < 0 || neighborID >= r.nodeCount {
 				continue
 			}
@@ -294,14 +309,14 @@ func (r *vectorIndexNativeRootBackedGraphReader) searchLayer(query []float32, qu
 		if current.nodeID < 0 || current.nodeID >= r.nodeCount {
 			continue
 		}
-		edges, ok, err := r.readEdges(current.nodeID, layer)
+		neighbors, ok, err := r.readNeighbors(current.nodeID, layer)
 		if err != nil {
 			return nil, err
 		}
 		if !ok {
 			continue
 		}
-		for _, neighborID := range edges.Neighbor {
+		for _, neighborID := range neighbors {
 			if neighborID < 0 || neighborID >= r.nodeCount || visited[neighborID] == mark {
 				continue
 			}
@@ -329,7 +344,7 @@ func (r *vectorIndexNativeRootBackedGraphReader) searchLayer(query []float32, qu
 }
 
 func (r *vectorIndexNativeRootBackedGraphReader) distanceToNode(query []float32, queryNormSquared float64, prepared *preparedFloat32CosineQuery, nodeID int) (float32, error) {
-	node, ok, err := r.readNode(nodeID)
+	node, ok, err := r.readDistanceNode(nodeID)
 	if err != nil {
 		return 0, err
 	}
@@ -346,15 +361,32 @@ func (r *vectorIndexNativeRootBackedGraphReader) distanceToNode(query []float32,
 	return distance, nil
 }
 
-func (r *vectorIndexNativeRootBackedGraphReader) readNode(nodeID int) (vectorIndexNode, bool, error) {
+func (r *vectorIndexNativeRootBackedGraphReader) readDistanceNode(nodeID int) (vectorIndexNode, bool, error) {
 	if nodeID < 0 || nodeID >= r.nodeCount {
 		return vectorIndexNode{}, false, nil
 	}
 	r.nodeGets++
-	data, ok, err := collectionGetAppendAtCatalogRoot(r.snap, r.catalog, r.rootName, vectorIndexNativeNodeKey(nodeID), r.nodeBuf)
+	r.nodeKey = appendVectorIndexNativeRootNodeKey(r.nodeKey, nodeID)
+	data, ok, err := collectionGetAppendAtCatalogRoot(r.snap, r.catalog, r.rootName, r.nodeKey, r.nodeBuf)
 	r.nodeBuf = data
 	if err != nil || !ok {
 		return vectorIndexNode{}, ok, err
+	}
+	vector, normSquared, vectorOK, err := parseVectorIndexNativeRootFloat32Vector(data, r.vector[:0])
+	if err != nil {
+		return vectorIndexNode{}, false, err
+	}
+	r.vector = vector
+	if vectorOK {
+		node := vectorIndexNode{
+			vector:      r.vector,
+			normSquared: normSquared,
+			deleted:     vectorIndexNativeRootJSONBoolTrue(data, "deleted"),
+		}
+		if normSquared > 0 {
+			node.cachedInvNorm = float32(1 / math.Sqrt(normSquared))
+		}
+		return node, true, nil
 	}
 	var persisted vectorIndexPersistNode
 	if err := json.Unmarshal(data, &persisted); err != nil {
@@ -372,33 +404,297 @@ func (r *vectorIndexNativeRootBackedGraphReader) readNode(nodeID int) (vectorInd
 	return node, true, nil
 }
 
-func (r *vectorIndexNativeRootBackedGraphReader) readEdges(nodeID, layer int) (vectorIndexPersistEdges, bool, error) {
+func (r *vectorIndexNativeRootBackedGraphReader) readNodeDocumentID(nodeID int) ([]byte, bool, bool, error) {
+	if nodeID < 0 || nodeID >= r.nodeCount {
+		return nil, false, false, nil
+	}
+	r.nodeGets++
+	r.nodeKey = appendVectorIndexNativeRootNodeKey(r.nodeKey, nodeID)
+	data, ok, err := collectionGetAppendAtCatalogRoot(r.snap, r.catalog, r.rootName, r.nodeKey, r.nodeBuf)
+	r.nodeBuf = data
+	if err != nil || !ok {
+		return nil, false, ok, err
+	}
+	docID, docOK := parseVectorIndexNativeRootJSONStringField(data, "document_id")
+	if docOK {
+		return docID, vectorIndexNativeRootJSONBoolTrue(data, "deleted"), true, nil
+	}
+	var persisted vectorIndexPersistNode
+	if err := json.Unmarshal(data, &persisted); err != nil {
+		return nil, false, false, err
+	}
+	return []byte(persisted.DocumentID), persisted.Deleted, true, nil
+}
+
+func (r *vectorIndexNativeRootBackedGraphReader) readNeighbors(nodeID, layer int) ([]int, bool, error) {
 	if nodeID < 0 || nodeID >= r.nodeCount || layer < 0 {
-		return vectorIndexPersistEdges{}, false, nil
+		return nil, false, nil
 	}
 	r.edgeGets++
-	data, ok, err := collectionGetAppendAtCatalogRoot(r.snap, r.catalog, r.rootName, vectorIndexNativeEdgeKey(nodeID, layer), r.edgeBuf)
+	r.edgeKey = appendVectorIndexNativeRootEdgeKey(r.edgeKey, nodeID, layer)
+	data, ok, err := collectionGetAppendAtCatalogRoot(r.snap, r.catalog, r.rootName, r.edgeKey, r.edgeBuf)
 	r.edgeBuf = data
 	if err != nil || !ok {
-		return vectorIndexPersistEdges{}, ok, err
+		return nil, ok, err
+	}
+	neighbors, neighborsOK, err := parseVectorIndexNativeRootIntArrayField(data, "neighbors", r.edges[:0])
+	if err != nil {
+		return nil, false, err
+	}
+	r.edges = neighbors
+	if neighborsOK {
+		return r.edges, true, nil
 	}
 	var edges vectorIndexPersistEdges
 	if err := json.Unmarshal(data, &edges); err != nil {
-		return vectorIndexPersistEdges{}, false, err
+		return nil, false, err
 	}
-	return edges, true, nil
+	r.edges = append(r.edges[:0], edges.Neighbor...)
+	return r.edges, true, nil
 }
 
-func (r *vectorIndexNativeRootBackedGraphReader) isCurrentNode(nodeID int, docID string) (bool, error) {
+func (r *vectorIndexNativeRootBackedGraphReader) isCurrentNode(nodeID int, docID []byte) (bool, error) {
 	r.docGets++
-	data, ok, err := collectionGetAppendAtCatalogRoot(r.snap, r.catalog, r.rootName, vectorIndexNativeDocKey(docID), r.docBuf)
+	r.docKey = appendVectorIndexNativeRootDocKey(r.docKey, docID)
+	data, ok, err := collectionGetAppendAtCatalogRoot(r.snap, r.catalog, r.rootName, r.docKey, r.docBuf)
 	r.docBuf = data
 	if err != nil || !ok {
 		return false, err
 	}
-	var currentNodeID int
-	if err := json.Unmarshal(data, &currentNodeID); err != nil {
+	currentNodeID, err := parseVectorIndexNativeRootJSONInt(data)
+	if err != nil {
 		return false, err
 	}
 	return currentNodeID == nodeID, nil
+}
+
+func appendVectorIndexNativeRootNodeKey(dst []byte, nodeID int) []byte {
+	dst = append(dst[:0], vectorIndexNativeKeyPrefixNode...)
+	return appendVectorIndexNativeRootPaddedInt(dst, nodeID, vectorIndexNativeKeyOrdinalWidth)
+}
+
+func appendVectorIndexNativeRootEdgeKey(dst []byte, nodeID, layer int) []byte {
+	dst = append(dst[:0], vectorIndexNativeKeyPrefixEdge...)
+	dst = appendVectorIndexNativeRootPaddedInt(dst, nodeID, vectorIndexNativeKeyOrdinalWidth)
+	dst = append(dst, '/')
+	return appendVectorIndexNativeRootPaddedInt(dst, layer, vectorIndexNativeKeyEdgeLayerWidth)
+}
+
+func appendVectorIndexNativeRootDocKey(dst []byte, docID []byte) []byte {
+	dst = append(dst[:0], vectorIndexNativeKeyPrefixDoc...)
+	return append(dst, docID...)
+}
+
+func appendVectorIndexNativeRootPaddedInt(dst []byte, value, width int) []byte {
+	start := len(dst)
+	for i := 0; i < width; i++ {
+		dst = append(dst, '0')
+	}
+	for pos := start + width - 1; pos >= start && value > 0; pos-- {
+		dst[pos] = byte('0' + value%10)
+		value /= 10
+	}
+	return dst
+}
+
+func parseVectorIndexNativeRootFloat32Vector(data []byte, dst []float32) ([]float32, float64, bool, error) {
+	start, ok := vectorIndexNativeRootJSONArrayStart(data, "vector")
+	if !ok {
+		return dst, 0, false, nil
+	}
+	dst = dst[:0]
+	var normSquared float64
+	i := start
+	for {
+		i = vectorIndexNativeRootSkipSpaces(data, i)
+		if i >= len(data) {
+			return dst, 0, false, errors.New("collections: invalid native vector JSON array")
+		}
+		if data[i] == ']' {
+			return dst, normSquared, true, nil
+		}
+		valueStart := i
+		for i < len(data) && data[i] != ',' && data[i] != ']' {
+			i++
+		}
+		valueEnd := i
+		for valueEnd > valueStart && isVectorIndexNativeRootSpace(data[valueEnd-1]) {
+			valueEnd--
+		}
+		value, err := parseVectorIndexNativeRootFloat32Token(data[valueStart:valueEnd])
+		if err != nil {
+			return dst, 0, false, err
+		}
+		dst = append(dst, value)
+		v := float64(value)
+		normSquared += v * v
+		i = vectorIndexNativeRootSkipSpaces(data, i)
+		if i < len(data) && data[i] == ',' {
+			i++
+		}
+	}
+}
+
+func parseVectorIndexNativeRootIntArrayField(data []byte, field string, dst []int) ([]int, bool, error) {
+	start, ok := vectorIndexNativeRootJSONArrayStart(data, field)
+	if !ok {
+		return dst, false, nil
+	}
+	dst = dst[:0]
+	i := start
+	for {
+		i = vectorIndexNativeRootSkipSpaces(data, i)
+		if i >= len(data) {
+			return dst, false, errors.New("collections: invalid native vector JSON array")
+		}
+		if data[i] == ']' {
+			return dst, true, nil
+		}
+		valueStart := i
+		for i < len(data) && data[i] != ',' && data[i] != ']' {
+			i++
+		}
+		valueEnd := i
+		for valueEnd > valueStart && isVectorIndexNativeRootSpace(data[valueEnd-1]) {
+			valueEnd--
+		}
+		value, err := parseVectorIndexNativeRootIntToken(data[valueStart:valueEnd])
+		if err != nil {
+			return dst, false, err
+		}
+		dst = append(dst, value)
+		i = vectorIndexNativeRootSkipSpaces(data, i)
+		if i < len(data) && data[i] == ',' {
+			i++
+		}
+	}
+}
+
+func vectorIndexNativeRootJSONArrayStart(data []byte, field string) (int, bool) {
+	prefix := []byte(`"` + field + `":[`)
+	pos := bytes.Index(data, prefix)
+	if pos < 0 {
+		return 0, false
+	}
+	return pos + len(prefix), true
+}
+
+func parseVectorIndexNativeRootJSONStringField(data []byte, field string) ([]byte, bool) {
+	prefix := []byte(`"` + field + `":"`)
+	pos := bytes.Index(data, prefix)
+	if pos < 0 {
+		return nil, false
+	}
+	start := pos + len(prefix)
+	end := start
+	for end < len(data) && data[end] != '"' {
+		if data[end] == '\\' {
+			return nil, false
+		}
+		end++
+	}
+	if end >= len(data) {
+		return nil, false
+	}
+	return data[start:end], true
+}
+
+func vectorIndexNativeRootJSONBoolTrue(data []byte, field string) bool {
+	return bytes.Contains(data, []byte(`"`+field+`":true`))
+}
+
+func parseVectorIndexNativeRootJSONInt(data []byte) (int, error) {
+	start := vectorIndexNativeRootSkipSpaces(data, 0)
+	end := start
+	for end < len(data) && data[end] >= '0' && data[end] <= '9' {
+		end++
+	}
+	if end == start {
+		return 0, errors.New("collections: invalid native vector JSON integer")
+	}
+	return parseVectorIndexNativeRootIntToken(data[start:end])
+}
+
+func parseVectorIndexNativeRootFloat32Token(data []byte) (float32, error) {
+	if len(data) == 0 {
+		return 0, errors.New("collections: invalid native vector JSON float")
+	}
+	i := 0
+	sign := 1.0
+	if data[i] == '-' {
+		sign = -1
+		i++
+	} else if data[i] == '+' {
+		i++
+	}
+	if i >= len(data) {
+		return 0, errors.New("collections: invalid native vector JSON float")
+	}
+	var integer uint64
+	digits := 0
+	for i < len(data) && data[i] >= '0' && data[i] <= '9' {
+		integer = integer*10 + uint64(data[i]-'0')
+		i++
+		digits++
+	}
+	value := float64(integer)
+	if i < len(data) && data[i] == '.' {
+		i++
+		scale := 1.0
+		for i < len(data) && data[i] >= '0' && data[i] <= '9' {
+			value = value*10 + float64(data[i]-'0')
+			scale *= 10
+			i++
+			digits++
+		}
+		value /= scale
+	}
+	if digits == 0 {
+		return 0, errors.New("collections: invalid native vector JSON float")
+	}
+	if i == len(data) {
+		return float32(sign * value), nil
+	}
+	if data[i] == 'e' || data[i] == 'E' {
+		value, err := strconv.ParseFloat(string(data), 32)
+		if err != nil {
+			return 0, err
+		}
+		return float32(value), nil
+	}
+	return 0, errors.New("collections: invalid native vector JSON float")
+}
+
+func parseVectorIndexNativeRootIntToken(data []byte) (int, error) {
+	if len(data) == 0 {
+		return 0, errors.New("collections: invalid native vector JSON integer")
+	}
+	i := 0
+	sign := 1
+	if data[i] == '-' {
+		sign = -1
+		i++
+	}
+	if i >= len(data) {
+		return 0, errors.New("collections: invalid native vector JSON integer")
+	}
+	value := 0
+	for ; i < len(data); i++ {
+		if data[i] < '0' || data[i] > '9' {
+			return 0, errors.New("collections: invalid native vector JSON integer")
+		}
+		value = value*10 + int(data[i]-'0')
+	}
+	return sign * value, nil
+}
+
+func vectorIndexNativeRootSkipSpaces(data []byte, i int) int {
+	for i < len(data) && isVectorIndexNativeRootSpace(data[i]) {
+		i++
+	}
+	return i
+}
+
+func isVectorIndexNativeRootSpace(c byte) bool {
+	return c == ' ' || c == '\n' || c == '\r' || c == '\t'
 }
