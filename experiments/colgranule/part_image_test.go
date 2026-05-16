@@ -823,6 +823,21 @@ func TestColumnPartFromImageRejectsZeroAggregateMetadataEntryCount(t *testing.T)
 	}
 }
 
+func TestColumnPartFromImageRejectsInvertedAggregateMetadataEntryBounds(t *testing.T) {
+	_, image := testColumnPartImageFixture(t, true)
+	minOffset, maxOffset := aggregateMetadataFirstEntryMinMaxOffsets(t, image)
+	corrupt := append([]byte(nil), image.Bytes...)
+	minValue := int64(binary.LittleEndian.Uint64(corrupt[minOffset:]))
+	binary.LittleEndian.PutUint64(corrupt[maxOffset:], uint64(minValue-1))
+	parsed, err := ParseColumnPartImage(corrupt)
+	if err != nil {
+		t.Fatalf("ParseColumnPartImage: %v", err)
+	}
+	if _, err := ColumnPartFromImage(parsed); err == nil {
+		t.Fatal("ColumnPartFromImage accepted inverted aggregate metadata entry bounds")
+	}
+}
+
 func TestColumnPartFromImageRoundTripsRejectedAggregateMetadata(t *testing.T) {
 	opts := partTestOptions([]SortKeyColumn{{Column: "id"}})
 	def := aggregateMetadataTestDefinition()
@@ -1000,6 +1015,18 @@ func aggregateMetadataStatsScaledFieldOffset(t *testing.T, image ColumnPartImage
 
 func aggregateMetadataFirstEntryCountOffset(t *testing.T, image ColumnPartImage) int {
 	t.Helper()
+	_, count, _ := aggregateMetadataFirstEntryOffsets(t, image)
+	return count
+}
+
+func aggregateMetadataFirstEntryMinMaxOffsets(t *testing.T, image ColumnPartImage) (int, int) {
+	t.Helper()
+	_, _, minOffset := aggregateMetadataFirstEntryOffsets(t, image)
+	return minOffset, minOffset + 8
+}
+
+func aggregateMetadataFirstEntryOffsets(t *testing.T, image ColumnPartImage) (int, int, int) {
+	t.Helper()
 	aggregate := firstImageSectionOfKind(t, image, ColumnPartImageSectionAggregateMetadata)
 	dec := columnPartImageDecoder{data: image.sectionBytes(aggregate)}
 	skipAggregateMetadataDefinition(t, &dec)
@@ -1023,10 +1050,16 @@ func aggregateMetadataFirstEntryCountOffset(t *testing.T, image ColumnPartImage)
 	if entryCount == 0 {
 		t.Fatal("aggregate metadata first granule has no entries")
 	}
+	groupOffset := aggregate.Offset + dec.offset
 	if _, err := dec.u32(); err != nil {
 		t.Fatal(err)
 	}
-	return aggregate.Offset + dec.offset
+	countOffset := aggregate.Offset + dec.offset
+	if _, err := dec.u32(); err != nil {
+		t.Fatal(err)
+	}
+	minOffset := aggregate.Offset + dec.offset
+	return groupOffset, countOffset, minOffset
 }
 
 func skipAggregateMetadataDefinition(t *testing.T, dec *columnPartImageDecoder) {

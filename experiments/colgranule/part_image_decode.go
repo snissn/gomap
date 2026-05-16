@@ -1134,6 +1134,9 @@ func decodeAggregateMetadataSections(image ColumnPartImage) (map[string]Aggregat
 				if err != nil {
 					return nil, err
 				}
+				if minValue > maxValue {
+					return nil, fmt.Errorf("colgranule: aggregate metadata %s granule %d entry %d min=%d exceeds max=%d", metadata.Definition.Name, granuleOrdinalInt, j, minValue, maxValue)
+				}
 				granule.Entries = append(granule.Entries, AggregateMetadataEntry{Group: group, Count: count, Min: minValue, Max: maxValue})
 				entryRows += int(count)
 			}
