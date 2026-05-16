@@ -1530,6 +1530,9 @@ func (db *DB) valueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	if db.readOnly {
 		return stats, ErrReadOnly
 	}
+	if err := db.commandWALPoisonedError(); err != nil {
+		return stats, err
+	}
 	if db.valueLogManager == nil {
 		return stats, fmt.Errorf("value log manager unavailable")
 	}

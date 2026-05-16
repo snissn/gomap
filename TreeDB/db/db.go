@@ -1508,9 +1508,10 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		}
 		// Re-list segments after replay: replayCommandWALIntoBackend may call
 		// cleanupCommandWALSegmentsCoveredByAppliedLSN, which deletes covered
-		// non-active segments. The refreshed list reflects surviving segments so
-		// commandSegmentSeq never collides with any retained segment, and
-		// OpenCommandJournal appends to a new segment with a strictly higher seq.
+		// non-active segments. Open the default writer on lane 0. When lane 0's
+		// active segment has a terminal tail, reopen that segment so
+		// OpenCommandJournal can truncate the tail. Otherwise, append to a fresh
+		// lane-0 segment to avoid extending a covered segment.
 		commandSegmentSeq := uint64(0)
 		journalSegments, err := listRecoverySegments(opts.Dir)
 		if err != nil {
@@ -1518,16 +1519,17 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 			return nil, err
 		}
 		activeSeqByLane := commandWALActiveSeqByLane(journalSegments)
-		for _, seq := range activeSeqByLane {
-			if seq > commandSegmentSeq {
-				commandSegmentSeq = seq
-			}
-		}
+		commandSegmentSeq = activeSeqByLane[0]
 		if commandSegmentSeq == ^uint64(0) {
 			_ = db.Close()
-			return nil, fmt.Errorf("%w: dir=%s lane=max active_seq=%d", ErrCommandWALSegmentSeqExhausted, WALDirPath(opts.Dir), commandSegmentSeq)
+			return nil, fmt.Errorf("%w: dir=%s lane=0 active_seq=%d", ErrCommandWALSegmentSeqExhausted, WALDirPath(opts.Dir), commandSegmentSeq)
 		}
-		if commandSegmentSeq != 0 {
+		hasTerminalTail, err := commandWALLaneActiveHasTerminalTail(journalSegments, 0, opts.WALMaxSegmentBytes)
+		if err != nil {
+			_ = db.Close()
+			return nil, err
+		}
+		if commandSegmentSeq != 0 && !hasTerminalTail {
 			commandSegmentSeq++
 		}
 		journal, err := commitlog.OpenCommandJournal(WALDirPath(opts.Dir), commitlog.CommandJournalOptions{
@@ -2042,8 +2044,8 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 	if db.readOnly {
 		return post, ErrReadOnly
 	}
-	if db.commandWALFlushPoisoned.Load() {
-		return post, fmt.Errorf("%w: command wal post-append failure; reopen required", ErrRecoveryRequired)
+	if err := db.commandWALPoisonedError(); err != nil {
+		return post, err
 	}
 	idx := db.idx.Load()
 	if idx == nil {
@@ -2360,6 +2362,9 @@ func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint6
 func (db *DB) Commit(newRootID uint64) error {
 	if db.readOnly {
 		return ErrReadOnly
+	}
+	if err := db.rejectUnloggedCommandWALRootPublish(); err != nil {
+		return err
 	}
 	// Public Commit assumes the caller has built a new tree.
 	// We need to serialize with other writers.
@@ -2685,6 +2690,9 @@ func (db *DB) MarkValueLogZombie(id uint32) error {
 func (db *DB) CompactIndex() error {
 	db.writeMu.Lock()
 	defer db.writeMu.Unlock()
+	if err := db.rejectUnloggedCommandWALRootPublish(); err != nil {
+		return err
+	}
 
 	idx := db.idx.Load()
 	if idx == nil {

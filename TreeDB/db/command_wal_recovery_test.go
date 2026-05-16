@@ -2,6 +2,7 @@ package db
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -174,6 +175,33 @@ func TestCommandWALReopenAfterPublishedFrameUsesFreshSegment(t *testing.T) {
 	}
 }
 
+func TestCommandWALOpenUsesLaneZeroActiveSegmentWhenOtherLaneHigher(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	writeCommandWALRawKVFrameForLane(t, dir, 0, 1, 1, []commitlog.RawKVOperation{{Op: commitlog.RawKVOpSet, Key: []byte("a"), Value: []byte("1")}})
+	writeCommandWALRawKVFrameForLane(t, dir, 1, 9, 2, []commitlog.RawKVOperation{{Op: commitlog.RawKVOpSet, Key: []byte("b"), Value: []byte("2")}})
+	lane0Path := filepath.Join(WALDirPath(dir), commitlog.CommandSegmentName(0, 1))
+	f, err := os.OpenFile(lane0Path, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatalf("OpenFile terminal tail: %v", err)
+	}
+	if _, err := f.Write([]byte{0x01, 0x02}); err != nil {
+		_ = f.Close()
+		t.Fatalf("Write terminal tail: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("Close terminal tail writer: %v", err)
+	}
+
+	db := openCommandWALDB(t, dir)
+	defer db.Close()
+	assertDBValue(t, db, "a", "1")
+	assertDBValue(t, db, "b", "2")
+	if _, err := os.Stat(filepath.Join(WALDirPath(dir), commitlog.CommandSegmentName(0, 10))); !os.IsNotExist(err) {
+		t.Fatalf("lane 0 opened at global max segment: stat err=%v entries=%v", err, commandWALSegmentNamesForTest(t, dir))
+	}
+}
+
 func TestCommandWALCleanReopenCleansCoveredNonActiveSegmentWithNoReplayFrames(t *testing.T) {
 	dir := t.TempDir()
 	enableCommandWALFormat(t, dir)
@@ -227,6 +255,18 @@ func TestCommandWALInlineReplayDoesNotScanValueLogRIDMap(t *testing.T) {
 	reopen := openCommandWALDB(t, dir)
 	defer reopen.Close()
 	assertDBValue(t, reopen, "inline", "v")
+}
+
+func TestCommandWALRecoveryRejectsNonIncreasingLSNInSegment(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	writeCommandWALRawKVFrame(t, dir, 1, 2, []commitlog.RawKVOperation{{Op: commitlog.RawKVOpSet, Key: []byte("b"), Value: []byte("2")}})
+	writeCommandWALRawKVFrame(t, dir, 1, 1, []commitlog.RawKVOperation{{Op: commitlog.RawKVOpSet, Key: []byte("a"), Value: []byte("1")}})
+
+	_, err := Open(Options{Dir: dir})
+	if !errors.Is(err, commitlog.ErrCommandWALDuplicateLSN) {
+		t.Fatalf("Open error=%v, want ErrCommandWALDuplicateLSN for non-increasing segment LSNs", err)
+	}
 }
 
 func TestCommandWALRawSetReplayRePointersWhenThresholdDrops(t *testing.T) {
@@ -487,6 +527,23 @@ func TestPublishCommandWALNoopRequiresCommandWALEnabled(t *testing.T) {
 	}
 }
 
+func TestCommandWALRejectsUnloggedCommit(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	defer db.Close()
+
+	if err := db.Commit(db.State().RootPageID + 1); !errors.Is(err, ErrCommandWALUnsupported) {
+		t.Fatalf("Commit in command WAL mode error=%v, want ErrCommandWALUnsupported", err)
+	}
+	if err := db.CompactIndex(); !errors.Is(err, ErrCommandWALUnsupported) {
+		t.Fatalf("CompactIndex in command WAL mode error=%v, want ErrCommandWALUnsupported", err)
+	}
+	if _, err := db.PublishSystemRootIterator(nil); !errors.Is(err, ErrCommandWALUnsupported) {
+		t.Fatalf("PublishSystemRootIterator in command WAL mode error=%v, want ErrCommandWALUnsupported", err)
+	}
+}
+
 func TestCommandWALReplayIntentRequestsSynchronousPublish(t *testing.T) {
 	intent := NewCommandWALReplayIntent(commitlog.CommandEnvelope{
 		LSN:           1,
@@ -610,6 +667,15 @@ func TestCommandWALFinalizeFailurePoisonsOpenHandle(t *testing.T) {
 
 	if err := db.Commit(db.State().RootPageID); !errors.Is(err, ErrRecoveryRequired) {
 		t.Fatalf("Commit after poison error=%v, want ErrRecoveryRequired", err)
+	}
+	if _, err := db.ValueLogGC(context.Background(), ValueLogGCOptions{}); !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("ValueLogGC after poison error=%v, want ErrRecoveryRequired", err)
+	}
+	if _, err := db.ValueLogRewriteOnline(context.Background(), ValueLogRewriteOnlineOptions{}); !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("ValueLogRewriteOnline after poison error=%v, want ErrRecoveryRequired", err)
+	}
+	if _, err := db.CompactStorage(context.Background(), CompactStorageOptions{}); !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("CompactStorage after poison error=%v, want ErrRecoveryRequired", err)
 	}
 
 	retry := db.NewBatch()
@@ -910,6 +976,11 @@ func commandWALSegmentNamesForTest(t *testing.T, dir string) []string {
 
 func writeCommandWALRawKVFrame(t testing.TB, dir string, segmentSeq uint64, lsn uint64, ops []commitlog.RawKVOperation) {
 	t.Helper()
+	writeCommandWALRawKVFrameForLane(t, dir, 0, segmentSeq, lsn, ops)
+}
+
+func writeCommandWALRawKVFrameForLane(t testing.TB, dir string, lane int, segmentSeq uint64, lsn uint64, ops []commitlog.RawKVOperation) {
+	t.Helper()
 	walDir := WALDirPath(dir)
 	if err := os.MkdirAll(walDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll wal: %v", err)
@@ -918,7 +989,7 @@ func writeCommandWALRawKVFrame(t testing.TB, dir string, segmentSeq uint64, lsn 
 	if err != nil {
 		t.Fatalf("EncodeRawKVBatchPayload: %v", err)
 	}
-	path := filepath.Join(walDir, commitlog.CommandSegmentName(0, segmentSeq))
+	path := filepath.Join(walDir, commitlog.CommandSegmentName(lane, segmentSeq))
 	w, err := commitlog.NewWriter(path)
 	if err != nil {
 		t.Fatalf("NewWriter: %v", err)

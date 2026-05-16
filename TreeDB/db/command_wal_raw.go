@@ -44,8 +44,8 @@ func (db *DB) FlushCommandWAL(sync bool) error {
 	if db == nil || !db.commandWAL || db.commandJournal == nil {
 		return nil
 	}
-	if db.commandWALFlushPoisoned.Load() {
-		return fmt.Errorf("%w: command wal post-append failure; reopen required", ErrRecoveryRequired)
+	if err := db.commandWALPoisonedError(); err != nil {
+		return err
 	}
 	var err error
 	if sync && db.durability != DurabilityWALOnRelaxed {
@@ -60,6 +60,23 @@ func (db *DB) FlushCommandWAL(sync bool) error {
 		db.commandWALFlushPoisoned.Store(true)
 	}
 	return err
+}
+
+func (db *DB) commandWALPoisonedError() error {
+	if db != nil && db.commandWAL && db.commandWALFlushPoisoned.Load() {
+		return fmt.Errorf("%w: command wal post-append failure; reopen required", ErrRecoveryRequired)
+	}
+	return nil
+}
+
+func (db *DB) rejectUnloggedCommandWALRootPublish() error {
+	if err := db.commandWALPoisonedError(); err != nil {
+		return err
+	}
+	if db != nil && db.commandWAL {
+		return fmt.Errorf("%w: command wal root publish requires a command frame", ErrCommandWALUnsupported)
+	}
+	return nil
 }
 
 func (db *DB) NewCommandWALIntent(kind commitlog.CommandKind, scope commitlog.CommandScope, payloadFormat commitlog.PayloadFormat, payload []byte) (*CommandWALIntent, error) {
