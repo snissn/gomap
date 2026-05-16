@@ -2584,9 +2584,6 @@ func (m *CollectionManager) CreateCollection(meta *CollectionMeta) (*CollectionM
 	if meta == nil {
 		return nil, errors.New("collections: nil collection metadata")
 	}
-	if m.db.CommandWALEnabled() {
-		return nil, fmt.Errorf("%w: collection catalog mutation requires catalog command WAL support", backenddb.ErrCommandWALUnsupported)
-	}
 	normalized, err := normalizeCollectionMeta(*meta)
 	if err != nil {
 		return nil, err
@@ -2606,6 +2603,9 @@ func (m *CollectionManager) CreateCollection(meta *CollectionMeta) (*CollectionM
 			return nil, fmt.Errorf("collections: existing schema for %q is incompatible", normalized.Name)
 		}
 		return existing.meta.copy(), nil
+	}
+	if m.db.CommandWALEnabled() {
+		return nil, fmt.Errorf("%w: collection catalog mutation requires catalog command WAL support", backenddb.ErrCommandWALUnsupported)
 	}
 
 	encoded, err := encodeCollectionMeta(normalized)
