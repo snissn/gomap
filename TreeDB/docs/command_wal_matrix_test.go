@@ -2,6 +2,7 @@ package docs_test
 
 import (
 	"encoding/json"
+	"go/ast"
 	"go/parser"
 	"go/token"
 	"os"
@@ -38,10 +39,12 @@ func TestCommandWALSupportMatrixIsWellFormed(t *testing.T) {
 	if matrix.Owner == "" || matrix.Tracker == "" {
 		t.Fatalf("matrix missing owner/tracker: %+v", matrix)
 	}
-	allowedStatus := make(map[string]struct{}, len(matrix.Statuses))
-	for _, status := range matrix.Statuses {
-		allowedStatus[status] = struct{}{}
+	expectedStatuses := []string{"WAL-supported", "WAL-rejected", "WAL-off-only", "future"}
+	if !equalStringSlices(matrix.Statuses, expectedStatuses) {
+		t.Fatalf("matrix statuses=%v, want fixed v1 set %v", matrix.Statuses, expectedStatuses)
 	}
+	allowedStatus := stringSet(expectedStatuses)
+	testSymbols := collectTreeDBTestSymbols(t)
 	seen := make(map[string]struct{}, len(matrix.Entries))
 	for _, entry := range matrix.Entries {
 		key := entry.Surface + "\x00" + entry.EntryPoint
@@ -57,6 +60,13 @@ func TestCommandWALSupportMatrixIsWellFormed(t *testing.T) {
 		}
 		if len(entry.Tests) == 0 && entry.Status != "future" {
 			t.Fatalf("%s/%s status %s needs test evidence", entry.Surface, entry.EntryPoint, entry.Status)
+		}
+		if entry.Status != "future" {
+			for _, testName := range entry.Tests {
+				if _, ok := testSymbols[testName]; !ok {
+					t.Fatalf("%s/%s references missing test evidence %q", entry.Surface, entry.EntryPoint, testName)
+				}
+			}
 		}
 	}
 }
@@ -125,11 +135,33 @@ func TestCommandWALSupportMatrixDocumentsRejectedCommandsWithPublicError(t *test
 		if entry.Status != "WAL-rejected" {
 			continue
 		}
-		if !strings.Contains(strings.Join(entry.Tests, " "), "Reject") && !strings.Contains(entry.Command, "future") && entry.Command != "none" {
+		if !strings.Contains(strings.Join(entry.Tests, " "), "Reject") {
 			t.Fatalf("%s/%s WAL-rejected entry lacks rejection evidence: %+v", entry.Surface, entry.EntryPoint, entry)
 		}
 	}
 	assertFileContains(t, filepath.Join(repoRootForDocsTest(t), "TreeDB", "errors.go"), "ErrCommandWALRejected")
+}
+
+func TestCommandWALSupportMatrixRejectsUnsupportedNativeWireLocalOnlyMutations(t *testing.T) {
+	matrix := loadCommandWALSupportMatrix(t)
+	entry := requireMatrixEntry(t, matrix, "nativewire", "CommandDropCollection")
+	if entry.Status != "WAL-rejected" {
+		t.Fatalf("CommandDropCollection status=%q, want WAL-rejected", entry.Status)
+	}
+	if entry.Command != "future catalog collection drop" {
+		t.Fatalf("CommandDropCollection command=%q, want future catalog collection drop", entry.Command)
+	}
+}
+
+func TestCommandWALSupportMatrixRejectsQueryWideUpdate(t *testing.T) {
+	matrix := loadCommandWALSupportMatrix(t)
+	entry := requireMatrixEntry(t, matrix, "collections", "query-wide update/delete")
+	if entry.Status != "WAL-rejected" {
+		t.Fatalf("query-wide update/delete status=%q, want WAL-rejected", entry.Status)
+	}
+	if entry.Command != "none" {
+		t.Fatalf("query-wide update/delete command=%q, want none", entry.Command)
+	}
 }
 
 func TestCommandWALNoActiveCollectionWALImplementationDrift(t *testing.T) {
@@ -159,11 +191,8 @@ func TestCommandWALNoActiveCollectionWALImplementationDrift(t *testing.T) {
 		if strings.Contains(text, "collection-l*.log") || strings.Contains(text, "collection-l0") {
 			t.Fatalf("%s references collection WAL segment names outside deprecated implementation", path)
 		}
-		if importsInternalCollectionWAL(t, path) &&
-			!strings.Contains(text, "legacy collection WAL") &&
-			!strings.Contains(text, "RequireClean") &&
-			!strings.Contains(text, "ErrRecoveryRequired = collectionwal.ErrCollectionWALRecoveryRequired") {
-			t.Fatalf("%s imports internal/collectionwal without legacy-clean guard language", path)
+		if imports, selectors := collectionWALImportAndSelectors(t, path); imports && !hasAllowedCollectionWALGuardSelector(selectors) {
+			t.Fatalf("%s imports internal/collectionwal without an approved legacy-clean guard selector; selectors=%v", path, sortedSetKeys(selectors))
 		}
 		return nil
 	})
@@ -227,14 +256,44 @@ func nativeWireCommandName(t *testing.T, id iwire.CommandID) string {
 	}
 }
 
-func importsInternalCollectionWAL(t *testing.T, path string) bool {
+func collectionWALImportAndSelectors(t *testing.T, path string) (bool, map[string]struct{}) {
 	t.Helper()
-	file, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.ImportsOnly)
+	file, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
 	if err != nil {
-		t.Fatalf("parse %s imports: %v", path, err)
+		t.Fatalf("parse %s: %v", path, err)
 	}
+	importsCollectionWAL := false
 	for _, spec := range file.Imports {
 		if spec.Path != nil && spec.Path.Value == `"github.com/snissn/gomap/TreeDB/internal/collectionwal"` {
+			importsCollectionWAL = true
+		}
+	}
+	if !importsCollectionWAL {
+		return false, nil
+	}
+	selectors := make(map[string]struct{})
+	ast.Inspect(file, func(n ast.Node) bool {
+		sel, ok := n.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		ident, ok := sel.X.(*ast.Ident)
+		if ok && ident.Name == "collectionwal" {
+			selectors[sel.Sel.Name] = struct{}{}
+		}
+		return true
+	})
+	return true, selectors
+}
+
+func hasAllowedCollectionWALGuardSelector(selectors map[string]struct{}) bool {
+	allowed := []string{
+		"ErrCollectionWALRecoveryRequired",
+		"RequireCleanForOfflineMaintenance",
+		"RequireCleanForReadOnlyOpen",
+	}
+	for _, name := range allowed {
+		if _, ok := selectors[name]; ok {
 			return true
 		}
 	}
@@ -256,4 +315,63 @@ func assertFileContains(t *testing.T, path, substr string) {
 	if !strings.Contains(string(raw), substr) {
 		t.Fatalf("%s missing %q", path, substr)
 	}
+}
+
+func collectTreeDBTestSymbols(t *testing.T) map[string]struct{} {
+	t.Helper()
+	_, repoRoot := repoRoots(t)
+	symbols := make(map[string]struct{})
+	err := filepath.WalkDir(filepath.Join(repoRoot, "TreeDB"), func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() || !strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		file, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
+		if err != nil {
+			return err
+		}
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Recv != nil || fn.Name == nil || !strings.HasPrefix(fn.Name.Name, "Test") {
+				continue
+			}
+			symbols[fn.Name.Name] = struct{}{}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("collect TreeDB test symbols: %v", err)
+	}
+	return symbols
+}
+
+func stringSet(values []string) map[string]struct{} {
+	set := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		set[value] = struct{}{}
+	}
+	return set
+}
+
+func equalStringSlices(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func sortedSetKeys(set map[string]struct{}) []string {
+	keys := make([]string, 0, len(set))
+	for key := range set {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
