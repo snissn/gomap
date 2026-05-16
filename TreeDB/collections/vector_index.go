@@ -1291,11 +1291,12 @@ func (idx *VectorIndex) Search(query []float32, opts VectorIndexSearchOptions) (
 	var candidateIDs [][]byte
 	var err error
 	if fastRerank {
+		rerankLimit := len(candidates)
 		resultNodeIDs = resultNodeIDStack[:0]
-		if opts.TopK > len(resultNodeIDStack) {
-			resultNodeIDs = make([]int, 0, opts.TopK)
+		if rerankLimit > len(resultNodeIDStack) {
+			resultNodeIDs = make([]int, 0, rerankLimit)
 		}
-		results, resultNodeIDs, err = idx.rerankFloat32CosineCandidatesFromNodesLocked(query, queryNorm, prepared.invNorm, candidates, opts.TopK, resultNodeIDs, &trace)
+		results, resultNodeIDs, err = idx.rerankFloat32CosineCandidatesFromNodesLocked(query, queryNorm, prepared.invNorm, candidates, rerankLimit, resultNodeIDs, &trace)
 	} else {
 		candidateIDs = idx.currentCandidateDocumentIDsLocked(candidates)
 		trace.CandidatesAfterTombstone = len(candidateIDs)
@@ -2408,7 +2409,8 @@ func (idx *VectorIndex) checkRecallExactBatch(queries [][]float32, opts VectorIn
 		if err := validateFloat32Vector(query); err != nil {
 			return nil, true, fmt.Errorf("collections: vector query: %w", err)
 		}
-		if vectorNormSquared(query) == 0 {
+		queryNormSquared := vectorNormSquared(query)
+		if queryNormSquared == 0 {
 			return nil, true, errors.New("collections: cosine vector query cannot have zero magnitude")
 		}
 	}
@@ -2424,6 +2426,7 @@ func (idx *VectorIndex) checkRecallExactBatch(queries [][]float32, opts VectorIn
 
 	documentIDs := make([][]byte, 0, opts.TopK)
 	vectorMatrix := make([]float32, 0, opts.TopK*queryDims)
+	documentNorms := make([]float64, 0, opts.TopK)
 	_, err = idx.collection.ScanDocumentsFunc(maxCollectionInt, func(record DocumentRecord) (bool, error) {
 		vector, ok, err := vectorFromStoredDocument(materializer, record.Document, idx.fieldPath)
 		if err != nil {
@@ -2435,11 +2438,13 @@ func (idx *VectorIndex) checkRecallExactBatch(queries [][]float32, opts VectorIn
 		if len(vector) != queryDims {
 			return false, fmt.Errorf("collections: vector field %q in document %q has dimension %d, want %d", idx.field, record.ID, len(vector), queryDims)
 		}
-		if vectorNormSquared(vector) == 0 {
+		vectorNorm := vectorNormSquared(vector)
+		if vectorNorm == 0 {
 			return false, fmt.Errorf("collections: vector field %q in document %q: cosine vectors cannot have zero magnitude", idx.field, record.ID)
 		}
 		documentIDs = append(documentIDs, bytes.Clone(record.ID))
 		vectorMatrix = append(vectorMatrix, vector...)
+		documentNorms = append(documentNorms, vectorNorm)
 		return true, nil
 	})
 	if err != nil {
@@ -2452,6 +2457,9 @@ func (idx *VectorIndex) checkRecallExactBatch(queries [][]float32, opts VectorIn
 			exact[i] = []VectorSearchResult{}
 		}
 		return exact, true, nil
+	}
+	if !cosineRecallBatchSafe(queries, documentNorms) {
+		return nil, false, nil
 	}
 
 	maxBatchQueries := defaultVectorRecallBatchCells / len(documentIDs)
@@ -2483,6 +2491,18 @@ func (idx *VectorIndex) checkRecallExactBatch(queries [][]float32, opts VectorIn
 		}
 	}
 	return exact, true, nil
+}
+
+func cosineRecallBatchSafe(queries [][]float32, documentNorms []float64) bool {
+	for _, query := range queries {
+		queryNorm := vectorNormSquared(query)
+		for _, documentNorm := range documentNorms {
+			if !safeFloat32DotProductForCosine(queryNorm, documentNorm) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func vectorFromStoredDocument(materializer *StoredDocumentJSONMaterializer, document []byte, fieldPath []string) ([]float32, bool, error) {
