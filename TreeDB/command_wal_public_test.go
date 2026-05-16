@@ -313,6 +313,40 @@ func TestPublicCommandWALCheckpointPublishesOnlyCoveredLSNs(t *testing.T) {
 	}
 }
 
+func TestPublicCommandWALCheckpointPublishCapsAtCutoverLSN(t *testing.T) {
+	db, err := Open(Options{
+		Dir:               t.TempDir(),
+		Durability:        DurabilityWALOnRelaxed,
+		CommandWAL:        true,
+		DisableSideStores: true,
+	})
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	if err := db.Set([]byte("covered"), []byte("v1")); err != nil {
+		t.Fatalf("covered Set: %v", err)
+	}
+	db.snapshotPublicCommandWALCheckpointCutover()
+	db.recordPublicCommandWALPendingLSN(2)
+
+	applied, ranges, err := db.preparePublicCommandWALPendingPublish(false)
+	if err != nil {
+		t.Fatalf("preparePublicCommandWALPendingPublish: %v", err)
+	}
+	if applied != 1 {
+		t.Fatalf("prepared AppliedCommandLSN=%d, want cutover LSN 1", applied)
+	}
+	if len(ranges) != 1 || ranges[0].First != 1 || ranges[0].Last != 1 {
+		t.Fatalf("prepared ranges=%+v, want [{First:1 Last:1}]", ranges)
+	}
+
+	// The synthetic post-cutover LSN is not backed by a cached mutation in this
+	// test. Clear it so the close-time checkpoint does not try to publish it.
+	db.clearPublicCommandWALPendingThrough(2)
+}
+
 func TestPublicCommandWALCheckpointRetainsCommandJournalSegment(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(Options{

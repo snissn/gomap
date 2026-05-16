@@ -127,6 +127,7 @@ type DB struct {
 	commandWALCached                     bool
 	commandWALFirst                      atomic.Uint64
 	commandWALLast                       atomic.Uint64
+	commandWALCheckpointCutoverLast      atomic.Uint64
 	commandWALLiveFrames                 atomic.Uint64
 	testAfterPublicCommandWALPointAppend func(commitlog.RawKVOperation)
 	testAfterCachedCheckpoint            func()
@@ -737,6 +738,7 @@ func Open(opts Options) (*DB, error) {
 	cached.SetTemplateStore(templateStore)
 	out := &DB{cached: cached, backend: backend, dictdb: dictBackend, templateDB: templateDB, writePath: writePath, commandWALCached: opts.CommandWAL, notifyError: opts.NotifyError, durabilityMode: computeDurabilityMode(opts), dir: rootDir}
 	if out.commandWALCached {
+		cached.SetCommandWALCheckpointCutoverHook(out.snapshotPublicCommandWALCheckpointCutover)
 		cached.SetCommandWALCheckpointPublishHook(out.preparePublicCommandWALPendingPublish)
 	}
 

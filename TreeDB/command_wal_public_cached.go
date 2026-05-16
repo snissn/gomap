@@ -158,6 +158,13 @@ func (tdb *DB) clearPublishedPublicCommandWALPending() {
 	tdb.clearPublicCommandWALPendingThrough(state.AppliedCommandLSN)
 }
 
+func (tdb *DB) snapshotPublicCommandWALCheckpointCutover() {
+	if tdb == nil || !tdb.commandWALCached {
+		return
+	}
+	tdb.commandWALCheckpointCutoverLast.Store(tdb.commandWALLast.Load())
+}
+
 func (tdb *DB) preparePublicCommandWALPendingPublish(sync bool) (uint64, []db.CommandWALLSNRange, error) {
 	if tdb == nil || !tdb.commandWALCached {
 		return 0, nil, nil
@@ -168,6 +175,13 @@ func (tdb *DB) preparePublicCommandWALPendingPublish(sync bool) (uint64, []db.Co
 	first, last := tdb.publicCommandWALPendingRange()
 	if first == 0 || last == 0 {
 		return 0, nil, nil
+	}
+	cutoverLast := tdb.commandWALCheckpointCutoverLast.Load()
+	if cutoverLast == 0 || first > cutoverLast {
+		return 0, nil, nil
+	}
+	if last > cutoverLast {
+		last = cutoverLast
 	}
 	state := tdb.backend.State()
 	if state == nil {

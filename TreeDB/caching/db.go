@@ -3429,6 +3429,16 @@ func (db *DB) SetCommandWALCheckpointPublishHook(h func(sync bool) (uint64, []ba
 	db.commandWALCheckpointPublish = h
 }
 
+// SetCommandWALCheckpointCutoverHook installs an optional hook called while
+// Checkpoint still holds the write cutover lock. Command-WAL publishers use it
+// to cap AppliedCommandLSN publication to writes included in this checkpoint.
+func (db *DB) SetCommandWALCheckpointCutoverHook(h func()) {
+	if db == nil {
+		return
+	}
+	db.commandWALCheckpointCutover = h
+}
+
 // SetTemplateStore installs the template store used for template compression.
 func (db *DB) SetTemplateStore(store template.Store) {
 	if db == nil {
@@ -6581,6 +6591,7 @@ type DB struct {
 	rootPublishStats                 rootDomainPublishTelemetry
 	rootPublishHook                  func(*rootPublishGroup) error
 	commandWALCheckpointPublish      func(sync bool) (uint64, []backenddb.CommandWALLSNRange, error)
+	commandWALCheckpointCutover      func()
 	dirtyRootPublishGroupID          uint64
 	dirtyRootPublishGroupPending     bool
 	rootPublishRetryPending          bool
@@ -19396,6 +19407,7 @@ func (db *DB) Checkpoint() error {
 		// can re-check recently rewritten active sources.
 		forceVLogRotate := db.vlogGenerationCheckpointKickPending.Load()
 		if !forceVLogRotate {
+			db.snapshotCommandWALCheckpointCutover()
 			db.mu.Unlock()
 			releaseWriteMu()
 			if db.commandWALCheckpointPublish != nil {
@@ -19419,6 +19431,7 @@ func (db *DB) Checkpoint() error {
 	walDir := db.dir
 	preRotateWALPaths := db.currentWALPaths()
 	ridBeforeWALRotate := db.nextRID.Load()
+	db.snapshotCommandWALCheckpointCutover()
 	db.mu.Unlock()
 	rotateLaneIDs := make([]int, 0, len(db.lanes))
 	for i := range db.lanes {
@@ -19616,6 +19629,13 @@ func (db *DB) publishCommandWALCheckpointApplied(appliedLSN uint64, ranges []bac
 		db.commandWALCheckpointPublishSeparate.Add(1)
 	}
 	return true, err
+}
+
+func (db *DB) snapshotCommandWALCheckpointCutover() {
+	if db == nil || db.commandWALCheckpointCutover == nil {
+		return
+	}
+	db.commandWALCheckpointCutover()
 }
 
 func (db *DB) canPiggybackCommandWALCheckpointPublish(sync bool) bool {
