@@ -119,27 +119,30 @@ type UpdateFunc = db.UpdateFunc
 
 // DB is the public TreeDB handle (cached mode by default; read-only opens skip caching).
 type DB struct {
-	cached                               *caching.DB
-	backend                              *db.DB
-	dictdb                               *db.DB
-	templateDB                           *DB
-	writePath                            writePathInfo
-	commandWALCached                     bool
-	commandWALPendingMu                  sync.Mutex
-	commandWALFirst                      atomic.Uint64
-	commandWALLast                       atomic.Uint64
-	commandWALCheckpointCutoverLast      atomic.Uint64
-	commandWALLiveFrames                 atomic.Uint64
+	cached                          *caching.DB
+	backend                         *db.DB
+	dictdb                          *db.DB
+	templateDB                      *DB
+	writePath                       writePathInfo
+	commandWALCached                bool
+	commandWALPendingMu             sync.Mutex
+	commandWALFirst                 atomic.Uint64
+	commandWALLast                  atomic.Uint64
+	commandWALCheckpointCutoverLast atomic.Uint64
+	commandWALLiveFrames            atomic.Uint64
+	bgVac                           bgIndexVacuumWorker
+	notifyError                     func(error)
+	bgErrMu                         sync.Mutex
+	bgErr                           error
+	durabilityMode                  string
+	dir                             string
+	maintenance                     maintenanceCoordinator
+}
+
+var (
 	testAfterPublicCommandWALPointAppend func(commitlog.RawKVOperation)
 	testAfterCachedCheckpoint            func()
-	bgVac                                bgIndexVacuumWorker
-	notifyError                          func(error)
-	bgErrMu                              sync.Mutex
-	bgErr                                error
-	durabilityMode                       string
-	dir                                  string
-	maintenance                          maintenanceCoordinator
-}
+)
 
 type writePathInfo struct {
 	mode       string
@@ -1789,8 +1792,8 @@ func (db *DB) checkpointCachedForPublicCommandWAL() error {
 	if err := db.cached.Checkpoint(); err != nil {
 		return err
 	}
-	if db.testAfterCachedCheckpoint != nil {
-		db.testAfterCachedCheckpoint()
+	if testAfterCachedCheckpoint != nil {
+		testAfterCachedCheckpoint()
 	}
 	db.clearPublishedPublicCommandWALPending()
 	return nil

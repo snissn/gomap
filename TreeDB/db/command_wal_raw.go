@@ -303,11 +303,11 @@ func (db *DB) AppendCommandWALPayload(kind commitlog.CommandKind, scope commitlo
 }
 
 // AppendRawKVSingleCommandWAL appends a one-operation RawKVBatch command frame.
-// When sync is true, it delegates to FlushCommandWAL(true); relaxed durability
-// therefore flushes without fsync rather than forcing strict-sync semantics.
-// If that post-append flush fails, the returned LSN is still the allocated LSN;
-// callers must record the command as pending and treat subsequent command-WAL
-// appends as recovery-required until the DB is reopened.
+// It delegates post-append flushing to FlushCommandWAL(sync); relaxed durability
+// flushes without fsync rather than forcing strict-sync semantics. If that
+// post-append flush fails, the returned LSN is still the allocated LSN; callers
+// must record the command as pending and treat subsequent command-WAL appends as
+// recovery-required until the DB is reopened.
 func (db *DB) AppendRawKVSingleCommandWAL(op commitlog.RawKVOperation, sync bool) (uint64, error) {
 	if db == nil || !db.commandWAL {
 		return 0, nil
@@ -332,10 +332,7 @@ func (db *DB) AppendRawKVSingleCommandWAL(op commitlog.RawKVOperation, sync bool
 	if err != nil {
 		return 0, err
 	}
-	if sync {
-		err = db.FlushCommandWAL(true)
-	}
-	if err != nil {
+	if err := db.FlushCommandWAL(sync); err != nil {
 		return lsn, err
 	}
 	return lsn, nil
@@ -344,11 +341,11 @@ func (db *DB) AppendRawKVSingleCommandWAL(op commitlog.RawKVOperation, sync bool
 // AppendRawKVPointCommandWALTrusted appends a caller-validated public raw KV
 // point Set/Delete command. It is intended for public cached command-WAL writes
 // after cached preflight has validated the user input and before visibility.
-// When sync is true, it delegates to FlushCommandWAL(true); relaxed durability
-// therefore flushes without fsync rather than forcing strict-sync semantics.
-// If that post-append flush fails, the returned LSN is still the allocated LSN;
-// callers must record the command as pending and treat subsequent command-WAL
-// appends as recovery-required until the DB is reopened.
+// It delegates post-append flushing to FlushCommandWAL(sync); relaxed durability
+// flushes without fsync rather than forcing strict-sync semantics. If that
+// post-append flush fails, the returned LSN is still the allocated LSN; callers
+// must record the command as pending and treat subsequent command-WAL appends as
+// recovery-required until the DB is reopened.
 func (db *DB) AppendRawKVPointCommandWALTrusted(op commitlog.RawKVOp, key, value []byte, sync bool) (uint64, error) {
 	if db == nil || !db.commandWAL {
 		return 0, nil
@@ -370,21 +367,18 @@ func (db *DB) AppendRawKVPointCommandWALTrusted(op commitlog.RawKVOp, key, value
 	if err != nil {
 		return 0, err
 	}
-	if sync {
-		err = db.FlushCommandWAL(true)
-	}
-	if err != nil {
+	if err := db.FlushCommandWAL(sync); err != nil {
 		return lsn, err
 	}
 	return lsn, nil
 }
 
 // AppendRawKVBatchPayloadCommandWAL appends a prebuilt RawKVBatch payload as a
-// command frame. When sync is true, it delegates to FlushCommandWAL(true);
-// relaxed durability therefore flushes without fsync rather than forcing
-// strict-sync semantics. If that post-append flush fails, the returned LSN is
-// still the allocated LSN; callers must record the command as pending and treat
-// subsequent command-WAL appends as recovery-required until the DB is reopened.
+// command frame. It delegates post-append flushing to FlushCommandWAL(sync);
+// relaxed durability flushes without fsync rather than forcing strict-sync
+// semantics. If that post-append flush fails, the returned LSN is still the
+// allocated LSN; callers must record the command as pending and treat subsequent
+// command-WAL appends as recovery-required until the DB is reopened.
 func (db *DB) AppendRawKVBatchPayloadCommandWAL(payload []byte, sync bool) (uint64, error) {
 	return db.appendRawKVBatchPayloadCommandWAL(payload, sync, false)
 }
@@ -424,10 +418,7 @@ func (db *DB) appendRawKVBatchPayloadCommandWAL(payload []byte, sync bool, trust
 	if err != nil {
 		return 0, err
 	}
-	if sync {
-		err = db.FlushCommandWAL(true)
-	}
-	if err != nil {
+	if err := db.FlushCommandWAL(sync); err != nil {
 		return lsn, err
 	}
 	return lsn, nil

@@ -22,8 +22,8 @@ func (tdb *DB) appendPublicRawKVPointCommand(op commitlog.RawKVOp, key, value []
 	if lsn != 0 {
 		tdb.recordPublicCommandWALPendingLSN(lsn)
 	}
-	if err == nil && tdb.testAfterPublicCommandWALPointAppend != nil {
-		tdb.testAfterPublicCommandWALPointAppend(commitlog.RawKVOperation{Op: op, Key: key, Value: value})
+	if err == nil && testAfterPublicCommandWALPointAppend != nil {
+		testAfterPublicCommandWALPointAppend(commitlog.RawKVOperation{Op: op, Key: key, Value: value})
 	}
 	return err
 }

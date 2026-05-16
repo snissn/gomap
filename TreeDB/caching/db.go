@@ -3421,7 +3421,10 @@ func (db *DB) SetDictStore(store DictStore) {
 
 // SetCommandWALCheckpointPublishHook installs an optional hook that lets a
 // caller publish already-covered command-WAL LSNs in the same backend commit
-// that Checkpoint uses for its root/sync boundary.
+// that Checkpoint uses for its root/sync boundary. Checkpoint may call the hook
+// more than once when a piggyback attempt is prepared but not consumed; hook
+// implementations must therefore be idempotent and safe to reinvoke within one
+// checkpoint.
 func (db *DB) SetCommandWALCheckpointPublishHook(h func(sync bool) (uint64, []backenddb.CommandWALLSNRange, error)) {
 	if db == nil {
 		return
@@ -20555,6 +20558,9 @@ func (db *DB) setDirectAfterCommandWALAppend(key, value []byte, appendCommand fu
 	}
 
 	if err := appendCommand(); err != nil {
+		if retainPath != "" {
+			db.markValueLogRetain(retainPath)
+		}
 		db.writeMu.RUnlock()
 		return err
 	}

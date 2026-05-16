@@ -575,6 +575,22 @@ func TestCommandWALPointAppendReturnsLSNOnFlushFailure(t *testing.T) {
 	}
 }
 
+func TestCommandWALPointAppendFlushesAsyncFrame(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	defer db.Close()
+
+	db.testFailCommandWALFlush.Store(true)
+	lsn, err := db.AppendRawKVPointCommandWALTrusted(commitlog.RawKVOpSet, []byte("k"), []byte("v"), false)
+	if !errors.Is(err, errTestCommandWALFlushFailpoint) {
+		t.Fatalf("AppendRawKVPointCommandWALTrusted async error=%v, want command WAL flush failpoint", err)
+	}
+	if lsn != 1 {
+		t.Fatalf("AppendRawKVPointCommandWALTrusted async lsn=%d, want allocated LSN 1 on post-append flush failure", lsn)
+	}
+}
+
 func TestCommandWALFinalizeFailurePoisonsOpenHandle(t *testing.T) {
 	dir := t.TempDir()
 	enableCommandWALFormat(t, dir)

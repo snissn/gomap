@@ -650,6 +650,55 @@ func TestWriterBufferedCommandSizeAdvancesOnFlush(t *testing.T) {
 	}
 }
 
+func TestWriterDeferredCommandBufferHonorsConfiguredLimit(t *testing.T) {
+	payload, err := EncodeRawKVBatchPayload([]RawKVOperation{
+		{Op: RawKVOpSet, Key: []byte("alpha"), Value: bytes.Repeat([]byte("x"), 512)},
+	})
+	if err != nil {
+		t.Fatalf("EncodeRawKVBatchPayload: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "commit-l0-000001.log")
+	w, err := NewWriterWithOptions(path, Options{DeferredCommandBufferSize: 128})
+	if err != nil {
+		t.Fatalf("NewWriterWithOptions: %v", err)
+	}
+	defer w.Close()
+	if err := w.AppendRawKVBatchPayloadCommandDirectTrusted(1, 0, payload); err != nil {
+		t.Fatalf("AppendRawKVBatchPayloadCommandDirectTrusted: %v", err)
+	}
+	if got := len(w.commandBuf); got != 0 {
+		t.Fatalf("deferred command buffer len=%d, want 0 for frame larger than configured cap", got)
+	}
+	if got := w.Size(); got == 0 {
+		t.Fatal("writer size after oversized deferred frame=0, want direct append accounted")
+	}
+}
+
+func TestWriterDirectCommandWriteFailurePoisonsWriter(t *testing.T) {
+	payload, err := EncodeRawKVBatchPayload([]RawKVOperation{
+		{Op: RawKVOpSet, Key: []byte("alpha"), Value: bytes.Repeat([]byte("x"), directCommandPayloadMinLen)},
+	})
+	if err != nil {
+		t.Fatalf("EncodeRawKVBatchPayload: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "commit-l0-000001.log")
+	w, err := NewWriterWithOptions(path, Options{})
+	if err != nil {
+		t.Fatalf("NewWriterWithOptions: %v", err)
+	}
+	defer w.Close()
+	if err := w.f.Close(); err != nil {
+		t.Fatalf("close underlying file: %v", err)
+	}
+	err = w.AppendRawKVBatchPayloadCommandDirectTrusted(1, 0, payload)
+	if err == nil {
+		t.Fatal("direct command append unexpectedly succeeded after underlying file close")
+	}
+	if err := w.AppendRawKVBatchPayloadCommandDirectTrusted(2, 0, payload); err == nil {
+		t.Fatal("append after direct command write failure succeeded; writer was not poisoned")
+	}
+}
+
 func TestWriterPoisonCommandBufferTruncatesUnaccountedTail(t *testing.T) {
 	payload, err := EncodeRawKVBatchPayload([]RawKVOperation{
 		{Op: RawKVOpSet, Key: []byte("alpha"), Value: []byte("one")},

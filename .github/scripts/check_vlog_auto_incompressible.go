@@ -29,7 +29,7 @@ func main() {
 	)
 	flag.StringVar(&offLogPath, "off-log", "", "path to unified_bench output for treedb_vlog_off")
 	flag.StringVar(&autoLogPath, "auto-log", "", "path to unified_bench output for treedb_vlog_auto")
-	flag.Float64Var(&minThroughputFrac, "min-throughput-frac", 1.01, "strict minimum auto/off batch-write throughput fraction; values at or below this fail")
+	flag.Float64Var(&minThroughputFrac, "min-throughput-frac", 1.01, "strict #1529 parity-plus auto/off batch-write throughput fraction; values at or below this fail")
 	flag.Float64Var(&maxSizeFrac, "max-size-frac", 1.02, "maximum allowed auto/off value-log bytes fraction")
 	flag.Parse()
 

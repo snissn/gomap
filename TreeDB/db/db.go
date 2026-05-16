@@ -1525,7 +1525,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		}
 		if commandSegmentSeq == ^uint64(0) {
 			_ = db.Close()
-			return nil, errors.New("treedb: command wal segment sequence exhausted")
+			return nil, fmt.Errorf("%w: dir=%s lane=max active_seq=%d", ErrCommandWALSegmentSeqExhausted, WALDirPath(opts.Dir), commandSegmentSeq)
 		}
 		if commandSegmentSeq != 0 {
 			commandSegmentSeq++

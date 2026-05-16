@@ -21,7 +21,6 @@ const (
 	defaultMaxSegmentSize      = 64 * 1024 * 1024
 	defaultCompressMinLen      = 64 << 10
 	directCommandPayloadMinLen = 32 << 10
-	deferredCommandBufferSize  = 64 << 20
 )
 
 var syncDirFn = syncDir
@@ -52,19 +51,20 @@ func recordSizeExceedsMax(keyLen uint16, valueLen uint32) bool {
 }
 
 type Writer struct {
-	f              *os.File
-	bw             *bufio.Writer
-	scratch        []byte
-	encScratch     []byte
-	commandBuf     []byte
-	commandErr     error
-	headerBuf      [segmentHeaderSize]byte
-	rawLenPrefix   [4]byte
-	size           int64
-	maxSegmentSize int64
-	compress       bool
-	enc            *zstd.Encoder
-	syncFn         func(*os.File) error
+	f               *os.File
+	bw              *bufio.Writer
+	scratch         []byte
+	encScratch      []byte
+	commandBuf      []byte
+	commandBufLimit int
+	commandErr      error
+	headerBuf       [segmentHeaderSize]byte
+	rawLenPrefix    [4]byte
+	size            int64
+	maxSegmentSize  int64
+	compress        bool
+	enc             *zstd.Encoder
+	syncFn          func(*os.File) error
 }
 
 func NewWriter(path string) (*Writer, error) {
@@ -86,18 +86,21 @@ func NewWriterWithOptions(path string, opts Options) (*Writer, error) {
 		return nil, err
 	}
 	var commandBuf []byte
+	commandBufLimit := 0
 	if opts.DeferredCommandBufferSize > 0 {
 		commandBuf = make([]byte, 0, opts.DeferredCommandBufferSize)
+		commandBufLimit = opts.DeferredCommandBufferSize
 	}
 	return &Writer{
-		f:              f,
-		bw:             bufio.NewWriterSize(f, normalizeBufferSize(opts.BufferSize)),
-		scratch:        make([]byte, 0, defaultBufferSize),
-		commandBuf:     commandBuf,
-		size:           info.Size(),
-		maxSegmentSize: normalizeMaxSegmentSize(opts.MaxSegmentSize),
-		compress:       opts.Compress,
-		syncFn:         func(file *os.File) error { return file.Sync() },
+		f:               f,
+		bw:              bufio.NewWriterSize(f, normalizeBufferSize(opts.BufferSize)),
+		scratch:         make([]byte, 0, defaultBufferSize),
+		commandBuf:      commandBuf,
+		commandBufLimit: commandBufLimit,
+		size:            info.Size(),
+		maxSegmentSize:  normalizeMaxSegmentSize(opts.MaxSegmentSize),
+		compress:        opts.Compress,
+		syncFn:          func(file *os.File) error { return file.Sync() },
 	}, nil
 }
 
@@ -402,7 +405,7 @@ func (w *Writer) AppendRawKVPointCommandDirectTrusted(lsn, baseAppliedLSN uint64
 
 func (w *Writer) appendRawKVPointCommandDirectTrustedSized(lsn, baseAppliedLSN uint64, op RawKVOp, key, value []byte, valueLen, payloadLen, size int) error {
 	total := segmentHeaderSize + size
-	if cap(w.commandBuf) == 0 {
+	if !w.canBufferCommandFrame(total) {
 		if cap(w.scratch) < total {
 			w.scratch = make([]byte, total)
 		}
@@ -457,24 +460,22 @@ func (w *Writer) AppendRawKVBatchPayloadCommandDirectTrusted(lsn, baseAppliedLSN
 	if size > int(segmentLenMask) {
 		return ErrRecordTooLarge
 	}
-	if cap(w.commandBuf) > 0 {
-		total := segmentHeaderSize + size
-		if total <= deferredCommandBufferSize {
-			off, err := w.reserveCommandBufferSpace(total)
-			if err != nil {
-				return err
-			}
-			newLen := off + total
-			buf := w.commandBuf[off:newLen]
-			frameHeader := buf[segmentHeaderSize : segmentHeaderSize+commandFrameHeaderSize]
-			copy(frameHeader, rawKVCommandFrameHeaderTemplate[:])
-			binary.LittleEndian.PutUint64(frameHeader[20:28], lsn)
-			binary.LittleEndian.PutUint64(frameHeader[44:52], baseAppliedLSN)
-			binary.LittleEndian.PutUint32(frameHeader[56:60], uint32(len(payload)))
-			copy(buf[segmentHeaderSize+commandFrameHeaderSize:], payload)
-			binary.LittleEndian.PutUint32(buf[0:4], uint32(size))
-			return nil
+	total := segmentHeaderSize + size
+	if w.canBufferCommandFrame(total) {
+		off, err := w.reserveCommandBufferSpace(total)
+		if err != nil {
+			return err
 		}
+		newLen := off + total
+		buf := w.commandBuf[off:newLen]
+		frameHeader := buf[segmentHeaderSize : segmentHeaderSize+commandFrameHeaderSize]
+		copy(frameHeader, rawKVCommandFrameHeaderTemplate[:])
+		binary.LittleEndian.PutUint64(frameHeader[20:28], lsn)
+		binary.LittleEndian.PutUint64(frameHeader[44:52], baseAppliedLSN)
+		binary.LittleEndian.PutUint32(frameHeader[56:60], uint32(len(payload)))
+		copy(buf[segmentHeaderSize+commandFrameHeaderSize:], payload)
+		binary.LittleEndian.PutUint32(buf[0:4], uint32(size))
+		return nil
 	}
 	if err := w.flushBufferedCommandFrames(); err != nil {
 		return err
@@ -495,7 +496,7 @@ func (w *Writer) AppendRawKVBatchPayloadCommandDirectTrusted(lsn, baseAppliedLSN
 		}
 		parts := [2][]byte{prefix[:], payload}
 		if err := writevFull(w.f, parts[:]); err != nil {
-			return err
+			return w.poisonCommandBuffer(err)
 		}
 		w.size += int64(segmentHeaderSize + size)
 		return nil
@@ -514,7 +515,11 @@ func (w *Writer) reserveCommandBufferSpace(total int) (int, error) {
 	if total <= 0 {
 		return 0, ErrCorrupt
 	}
-	if len(w.commandBuf) > 0 && len(w.commandBuf)+total > deferredCommandBufferSize {
+	limit := w.commandBufferLimit()
+	if limit <= 0 || total > limit {
+		return 0, ErrRecordTooLarge
+	}
+	if len(w.commandBuf) > 0 && len(w.commandBuf)+total > limit {
 		if err := w.flushBufferedCommandFrames(); err != nil {
 			return 0, err
 		}
@@ -526,11 +531,8 @@ func (w *Writer) reserveCommandBufferSpace(total int) (int, error) {
 		if newCap < newLen {
 			newCap = newLen
 		}
-		if newCap < defaultBufferSize {
-			newCap = defaultBufferSize
-		}
-		if newCap > deferredCommandBufferSize && newLen <= deferredCommandBufferSize {
-			newCap = deferredCommandBufferSize
+		if newCap > limit && newLen <= limit {
+			newCap = limit
 		}
 		next := make([]byte, newLen, newCap)
 		copy(next, w.commandBuf)
@@ -539,6 +541,17 @@ func (w *Writer) reserveCommandBufferSpace(total int) (int, error) {
 		w.commandBuf = w.commandBuf[:newLen]
 	}
 	return off, nil
+}
+
+func (w *Writer) canBufferCommandFrame(total int) bool {
+	return w != nil && total > 0 && w.commandBufferLimit() >= total
+}
+
+func (w *Writer) commandBufferLimit() int {
+	if w == nil || w.commandBufLimit <= 0 || cap(w.commandBuf) == 0 {
+		return 0
+	}
+	return w.commandBufLimit
 }
 
 func writeFull(f *os.File, p []byte) error {

@@ -473,6 +473,9 @@ jobs:
               continue
             fi
 
+            # #1529 intentionally makes this a strict parity-plus gate. A
+            # result at or below 1.01x is failing evidence, even for the
+            # incompressible auto-vs-off case.
             if go run .github/scripts/check_vlog_auto_incompressible.go \
               -off-log "${off_log}" \
               -auto-log "${auto_log}" \

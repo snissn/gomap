@@ -130,7 +130,7 @@ func TestPublicCommandWALPointWritesSerializeLSNWithCachedMutation(t *testing.T)
 	bAppended := make(chan struct{})
 	releaseA := make(chan struct{})
 	var aOnce, bOnce, releaseOnce sync.Once
-	db.testAfterPublicCommandWALPointAppend = func(op commitlog.RawKVOperation) {
+	testAfterPublicCommandWALPointAppend = func(op commitlog.RawKVOperation) {
 		switch string(op.Value) {
 		case "A":
 			aOnce.Do(func() { close(aAppended) })
@@ -139,6 +139,7 @@ func TestPublicCommandWALPointWritesSerializeLSNWithCachedMutation(t *testing.T)
 			bOnce.Do(func() { close(bAppended) })
 		}
 	}
+	defer func() { testAfterPublicCommandWALPointAppend = nil }()
 
 	errA := make(chan error, 1)
 	go func() {
@@ -279,17 +280,17 @@ func TestPublicCommandWALCheckpointPublishesOnlyCoveredLSNs(t *testing.T) {
 	}
 
 	var hookOnce sync.Once
-	db.testAfterCachedCheckpoint = func() {
+	testAfterCachedCheckpoint = func() {
 		hookOnce.Do(func() {
 			if err := db.Set([]byte("post-cut"), []byte("v2")); err != nil {
 				t.Errorf("post-cut Set: %v", err)
 			}
 		})
 	}
+	defer func() { testAfterCachedCheckpoint = nil }()
 	if err := db.Checkpoint(); err != nil {
 		t.Fatalf("Checkpoint: %v", err)
 	}
-	db.testAfterCachedCheckpoint = nil
 
 	if got := db.backend.State().AppliedCommandLSN; got != 1 {
 		t.Fatalf("AppliedCommandLSN after checkpoint=%d, want only covered LSN 1", got)
