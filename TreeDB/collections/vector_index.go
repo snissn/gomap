@@ -1193,17 +1193,13 @@ func (idx *VectorIndex) rerankFloat32CosineCandidatesFromNodesLocked(query []flo
 		trace.RerankCount += liveCandidates
 	}
 
-	results := make([]VectorSearchResult, 0, minInt(topK, len(ranked)))
-	for _, result := range ranked {
-		results = append(results, VectorSearchResult{
-			DocumentID: bytes.Clone(result.DocumentID),
-			Distance:   result.Distance,
-		})
+	for i := range ranked {
+		ranked[i].DocumentID = bytes.Clone(ranked[i].DocumentID)
 	}
-	if results == nil {
+	if ranked == nil {
 		return []VectorSearchResult{}, nil
 	}
-	return results, nil
+	return ranked, nil
 }
 
 func (idx *VectorIndex) rerankCandidates(query []float32, candidateIDs [][]byte, filter func(DocumentRecord) (bool, error), trace *VectorIndexTrace) ([]VectorSearchResult, error) {
@@ -1215,11 +1211,11 @@ func (idx *VectorIndex) rerankCandidates(query []float32, candidateIDs [][]byte,
 
 	results := make([]VectorSearchResult, 0, len(candidateIDs))
 	for _, documentID := range candidateIDs {
-		document, err := idx.collection.Get(documentID)
+		document, found, err := idx.collection.GetInto(documentID, nil)
 		if err != nil {
 			return nil, err
 		}
-		if document == nil {
+		if !found {
 			continue
 		}
 		record := DocumentRecord{ID: bytes.Clone(documentID), Document: document}
@@ -1252,29 +1248,31 @@ func (idx *VectorIndex) rerankCandidates(query []float32, candidateIDs [][]byte,
 		results = append(results, VectorSearchResult{
 			DocumentID: bytes.Clone(documentID),
 			Distance:   distance,
-			Document:   bytes.Clone(document),
+			Document:   document,
 		})
 	}
 	return results, nil
 }
 
 func (idx *VectorIndex) attachVectorSearchResultDocuments(ranked []VectorSearchResult, topK int) ([]VectorSearchResult, error) {
-	results := make([]VectorSearchResult, 0, minInt(topK, len(ranked)))
-	for _, result := range ranked {
-		document, err := idx.collection.Get(result.DocumentID)
+	results := ranked[:0]
+	limit := minInt(topK, len(ranked))
+	for i := range ranked {
+		if len(results) >= limit {
+			break
+		}
+		result := ranked[i]
+		document, found, err := idx.collection.GetInto(result.DocumentID, nil)
 		if err != nil {
 			return nil, err
 		}
-		if document == nil {
+		if !found {
 			continue
 		}
-		result.Document = bytes.Clone(document)
+		result.Document = document
 		results = append(results, result)
-		if len(results) >= topK {
-			break
-		}
 	}
-	if results == nil {
+	if len(results) == 0 {
 		return []VectorSearchResult{}, nil
 	}
 	return results, nil
