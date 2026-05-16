@@ -472,8 +472,11 @@ func (c *Collection) declaredNativeVectorIndexesLoadedForCurrentCatalog() bool {
 	}
 	commitSeq, systemRoot := dbCommitSeqAndSystemRoot(c.db)
 	c.catalogMu.RLock()
-	catalogCurrent := c.catalogCommitSeq == commitSeq && c.catalogSystemRoot == systemRoot
-	defs := append([]VectorIndexDefinition(nil), c.meta.VectorIndexes...)
+	catalogCurrent := c.catalog != nil && c.catalogCommitSeq == commitSeq && c.catalogSystemRoot == systemRoot
+	var defs []VectorIndexDefinition
+	if catalogCurrent {
+		defs = append([]VectorIndexDefinition(nil), c.catalog.meta.VectorIndexes...)
+	}
 	c.catalogMu.RUnlock()
 	if !catalogCurrent {
 		return false
