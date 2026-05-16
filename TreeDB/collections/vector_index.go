@@ -412,6 +412,9 @@ func (c *Collection) ensureDeclaredNativeVectorIndexesLoaded() error {
 	}
 	c.vectorIndexLoadMu.Lock()
 	defer c.vectorIndexLoadMu.Unlock()
+	if c.declaredNativeVectorIndexesLoadedForCurrentCatalog() {
+		return nil
+	}
 
 	snap := c.db.AcquireSnapshot()
 	if snap == nil {
@@ -482,7 +485,12 @@ func (c *Collection) declaredNativeVectorIndexesLoadedForCurrentCatalog() bool {
 		return false
 	}
 	if len(defs) == 0 {
-		return len(c.registeredVectorIndexes()) == 0
+		for _, index := range c.registeredVectorIndexes() {
+			if index.isNativePersistent() {
+				return false
+			}
+		}
+		return true
 	}
 	for _, def := range defs {
 		index := c.registeredVectorIndex(def.Name)

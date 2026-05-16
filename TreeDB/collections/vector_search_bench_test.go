@@ -336,6 +336,7 @@ func BenchmarkCollectionVectorIndexNativeRootIncrementalWrite(b *testing.B) {
 	b.ReportMetric(float64(docs), "docs/write")
 	b.ReportMetric(float64(dims), "dims")
 	baseDir := b.TempDir()
+	var indexBytes int64
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		b.StopTimer()
@@ -378,7 +379,7 @@ func BenchmarkCollectionVectorIndexNativeRootIncrementalWrite(b *testing.B) {
 			_ = d.Close()
 			b.Fatalf("native incremental index snapshot is dirty: %+v", stats)
 		}
-		b.ReportMetric(float64(stats.BytesMemory), "index_bytes")
+		indexBytes = stats.BytesMemory
 		if err := d.Close(); err != nil {
 			b.Fatalf("close db: %v", err)
 		}
@@ -386,6 +387,7 @@ func BenchmarkCollectionVectorIndexNativeRootIncrementalWrite(b *testing.B) {
 			b.Fatalf("remove db dir: %v", err)
 		}
 	}
+	b.ReportMetric(float64(indexBytes), "index_bytes")
 }
 
 func BenchmarkCollectionVectorIndexSearch(b *testing.B) {
