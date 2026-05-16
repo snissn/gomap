@@ -2251,6 +2251,30 @@ func TestServerVectorIndexMetadataExtension(t *testing.T) {
 		t.Fatalf("encoding=%q ok=%v want float32", got, ok)
 	}
 
+	doubleOptionsResponse := serveCommand(t, server, 231021, bson.D{
+		{Key: "createIndexes", Value: "users_double_vector_options"},
+		{Key: "indexes", Value: bson.A{bson.D{
+			{Key: "key", Value: bson.D{{Key: "embedding", Value: "vector"}}},
+			{Key: "name", Value: "embedding_vector"},
+			{Key: "treedbIndexType", Value: "vector"},
+			{Key: "treedbVector", Value: bson.D{
+				{Key: "dimensions", Value: float64(64)},
+				{Key: "m", Value: float64(16)},
+				{Key: "efConstruction", Value: float64(128)},
+				{Key: "efSearch", Value: float64(64)},
+			}},
+		}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertOK(t, doubleOptionsResponse)
+	doubleOptionsCol, err := server.Collections.OpenCollection("app.users_double_vector_options")
+	if err != nil {
+		t.Fatalf("open double-options collection: %v", err)
+	}
+	if got := doubleOptionsCol.Meta().VectorIndexes[0]; got.Dimensions != 64 || got.M != 16 || got.EfConstruction != 128 || got.EfSearch != 64 {
+		t.Fatalf("double vector options stored=%+v", got)
+	}
+
 	replayResponse := serveCommand(t, server, 23103, bson.D{
 		{Key: "createIndexes", Value: "users"},
 		{Key: "indexes", Value: bson.A{indexBatch[2]}},
@@ -2685,6 +2709,24 @@ func TestServerIndexMetadataRejectsInvalidCommands(t *testing.T) {
 	errmsg, ok = bson.Raw(missingVectorOptions).Lookup("errmsg").StringValueOK()
 	if !ok || !strings.Contains(errmsg, "treedbVector") {
 		t.Fatalf("missing vector options errmsg=%q ok=%v want treedbVector", errmsg, ok)
+	}
+
+	fractionalVectorOption := serveCommand(t, server, 233221, bson.D{
+		{Key: "createIndexes", Value: "users_fractional_vector_option"},
+		{Key: "indexes", Value: bson.A{bson.D{
+			{Key: "key", Value: bson.D{{Key: "embedding", Value: "vector"}}},
+			{Key: "name", Value: "embedding_vector"},
+			{Key: "treedbIndexType", Value: "vector"},
+			{Key: "treedbVector", Value: bson.D{{Key: "dimensions", Value: float64(64.5)}}},
+		}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, fractionalVectorOption, "BadValue")
+	errmsg, ok = bson.Raw(fractionalVectorOption).Lookup("errmsg").StringValueOK()
+	for _, want := range []string{"dimensions", "integer"} {
+		if !ok || !strings.Contains(errmsg, want) {
+			t.Fatalf("fractional vector option errmsg=%q ok=%v want %q", errmsg, ok, want)
+		}
 	}
 
 	unsupportedVectorMetric := serveCommand(t, server, 23323, bson.D{

@@ -3033,6 +3033,12 @@ func optionalPositiveIntFieldWithPresence(doc wire.Document, key string) (int, b
 		out = int64(v)
 	} else if v, ok := value.Int64OK(); ok {
 		out = v
+	} else if v, ok := value.DoubleOK(); ok {
+		var integral bool
+		out, integral = exactInt64FromFloat64(v)
+		if !integral {
+			return 0, true, fmt.Errorf("Mongo command field %q must be an integer", key)
+		}
 	} else {
 		return 0, true, fmt.Errorf("Mongo command field %q must be an integer", key)
 	}
