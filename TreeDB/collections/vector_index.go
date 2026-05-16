@@ -770,8 +770,7 @@ func (idx *VectorIndex) insertVectorLocked(documentID []byte, vector []float32) 
 		if !node.deleted {
 			switch idx.encoding {
 			case VectorIndexEncodingInt8:
-				quantized, quantScale = quantizeVectorIndexInt8(vector)
-				if node.matchesQuantizedVector(quantized, quantScale) {
+				if node.matchesInt8SourceVector(vector) {
 					return nil
 				}
 			default:
@@ -837,6 +836,22 @@ func (node *vectorIndexNode) matchesQuantizedVector(quantized []int8, quantScale
 	return node.quantScale == quantScale && slices.Equal(node.quantized, quantized)
 }
 
+func (node *vectorIndexNode) matchesInt8SourceVector(vector []float32) bool {
+	if node == nil || len(node.quantized) != len(vector) {
+		return false
+	}
+	scale := vectorIndexInt8Scale(vector)
+	if node.quantScale != scale {
+		return false
+	}
+	for i, value := range vector {
+		if node.quantized[i] != quantizeVectorIndexInt8Value(value, scale) {
+			return false
+		}
+	}
+	return true
+}
+
 func (idx *VectorIndex) newVectorIndexNode(documentID []byte, vector []float32, level int) vectorIndexNode {
 	var quantized []int8
 	var quantScale float32
@@ -864,6 +879,15 @@ func (idx *VectorIndex) newVectorIndexNodePrepared(documentID []byte, vector []f
 }
 
 func quantizeVectorIndexInt8(vector []float32) ([]int8, float32) {
+	scale := vectorIndexInt8Scale(vector)
+	out := make([]int8, len(vector))
+	for i, value := range vector {
+		out[i] = quantizeVectorIndexInt8Value(value, scale)
+	}
+	return out, scale
+}
+
+func vectorIndexInt8Scale(vector []float32) float32 {
 	var maxAbs float32
 	for _, value := range vector {
 		abs := value
@@ -878,17 +902,17 @@ func quantizeVectorIndexInt8(vector []float32) ([]int8, float32) {
 	if scale == 0 {
 		scale = 1
 	}
-	out := make([]int8, len(vector))
-	for i, value := range vector {
-		q := int(math.Round(float64(value / scale)))
-		if q > 127 {
-			q = 127
-		} else if q < -127 {
-			q = -127
-		}
-		out[i] = int8(q)
+	return scale
+}
+
+func quantizeVectorIndexInt8Value(value, scale float32) int8 {
+	q := int(math.Round(float64(value / scale)))
+	if q > 127 {
+		q = 127
+	} else if q < -127 {
+		q = -127
 	}
-	return out, scale
+	return int8(q)
 }
 
 func (idx *VectorIndex) tombstoneDocumentIDLocked(documentID []byte) {

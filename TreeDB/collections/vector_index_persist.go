@@ -91,15 +91,10 @@ func (idx *VectorIndex) SaveNativeSnapshot() (VectorIndexLoadStatus, error) {
 	if c.db == nil {
 		return status, errCollectionDBNil
 	}
-	if shouldIgnoreStaleNativeSnapshotSave(c, idx) {
-		status.ExactFallbackReason = vectorIndexFallbackStaleRuntimeIndex
-		return status, nil
-	}
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()
-	if shouldIgnoreStaleNativeSnapshotSave(c, idx) {
-		status.ExactFallbackReason = vectorIndexFallbackStaleRuntimeIndex
-		return status, nil
+	if staleStatus, stale := staleNativeSnapshotSaveStatus(c, idx); stale {
+		return staleStatus, nil
 	}
 	if err := c.flushBufferedWrites(); err != nil {
 		return status, err
@@ -107,15 +102,21 @@ func (idx *VectorIndex) SaveNativeSnapshot() (VectorIndexLoadStatus, error) {
 	return idx.saveNativeSnapshotPrepared()
 }
 
-func shouldIgnoreStaleNativeSnapshotSave(c *Collection, idx *VectorIndex) bool {
+func staleNativeSnapshotSaveStatus(c *Collection, idx *VectorIndex) (VectorIndexLoadStatus, bool) {
+	status := VectorIndexLoadStatus{}
 	if c == nil || idx == nil || c.isRegisteredVectorIndex(idx) {
-		return false
+		return status, false
 	}
 	if idx.isNativePersistent() || collectionMetaDeclaresVectorIndex(c.meta, idx.name) {
-		return true
+		status.ExactFallbackReason = vectorIndexFallbackStaleRuntimeIndex
+		return status, true
 	}
 	declared, err := c.refreshVectorIndexDeclaration(idx.name)
-	return err == nil && declared
+	if err != nil || !declared {
+		return status, false
+	}
+	status.ExactFallbackReason = vectorIndexFallbackStaleRuntimeIndex
+	return status, true
 }
 
 // saveNativeSnapshotPrepared publishes the current graph after the caller has
@@ -223,15 +224,10 @@ func (idx *VectorIndex) SaveNativeDeltaSnapshot() (VectorIndexLoadStatus, error)
 	if c.db == nil {
 		return status, errCollectionDBNil
 	}
-	if shouldIgnoreStaleNativeSnapshotSave(c, idx) {
-		status.ExactFallbackReason = vectorIndexFallbackStaleRuntimeIndex
-		return status, nil
-	}
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()
-	if shouldIgnoreStaleNativeSnapshotSave(c, idx) {
-		status.ExactFallbackReason = vectorIndexFallbackStaleRuntimeIndex
-		return status, nil
+	if staleStatus, stale := staleNativeSnapshotSaveStatus(c, idx); stale {
+		return staleStatus, nil
 	}
 	if err := c.flushBufferedWrites(); err != nil {
 		return status, err
