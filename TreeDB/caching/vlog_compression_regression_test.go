@@ -70,7 +70,7 @@ func TestResolveVlogWriteMode_DictAggressiveSizeLargeOuterLeafPayloadCanUseDict(
 	selector.metrics[vlogAutoCandidateOff] = vlogCandidateMetrics{ratio: 1.0, throughput: 1.0, samples: 16}
 	selector.metrics[vlogAutoCandidateBlockSnappy] = vlogCandidateMetrics{ratio: 0.74, throughput: 1.05, samples: 16}
 	selector.metrics[vlogAutoCandidateBlockLZ4] = vlogCandidateMetrics{ratio: 0.70, throughput: 1.10, samples: 16}
-	selector.metrics[vlogAutoCandidateDict] = vlogCandidateMetrics{ratio: 0.08, throughput: 0.90, samples: 16}
+	selector.metrics[vlogAutoCandidateDict] = vlogCandidateMetrics{ratio: 0.08, throughput: 1.12, samples: 16}
 
 	l := &lane{vlogCompressionSelector: selector}
 	mode, codec, probe := db.resolveVlogWriteMode(l, 7, 48<<10, 48<<10, true)

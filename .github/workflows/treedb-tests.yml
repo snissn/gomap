@@ -476,7 +476,7 @@ jobs:
             if go run .github/scripts/check_vlog_auto_incompressible.go \
               -off-log "${off_log}" \
               -auto-log "${auto_log}" \
-              -min-throughput-frac 0.95 \
+              -min-throughput-frac 1.01 \
               -max-size-frac 1.02; then
               exit 0
             fi

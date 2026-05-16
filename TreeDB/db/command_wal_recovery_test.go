@@ -527,6 +527,26 @@ func TestCommandWALFlushFailurePoisonsOpenHandle(t *testing.T) {
 	_ = retry.Close()
 }
 
+func TestCommandWALPointAppendReturnsLSNOnFlushFailure(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	defer db.Close()
+
+	db.testFailCommandWALFlush.Store(true)
+	lsn, err := db.AppendRawKVPointCommandWALTrusted(commitlog.RawKVOpSet, []byte("k"), []byte("v"), true)
+	if !errors.Is(err, errTestCommandWALFlushFailpoint) {
+		t.Fatalf("AppendRawKVPointCommandWALTrusted error=%v, want command WAL flush failpoint", err)
+	}
+	if lsn != 1 {
+		t.Fatalf("AppendRawKVPointCommandWALTrusted lsn=%d, want allocated LSN 1 on post-append flush failure", lsn)
+	}
+	db.testFailCommandWALFlush.Store(false)
+	if err := db.FlushCommandWAL(true); !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("FlushCommandWAL after poison error=%v, want ErrRecoveryRequired", err)
+	}
+}
+
 func TestCommandWALFinalizeFailurePoisonsOpenHandle(t *testing.T) {
 	dir := t.TempDir()
 	enableCommandWALFormat(t, dir)

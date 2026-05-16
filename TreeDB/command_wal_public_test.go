@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/snissn/gomap/TreeDB/batch"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 )
@@ -347,6 +348,34 @@ func TestPublicCommandWALCheckpointRetainsCommandJournalSegment(t *testing.T) {
 	}
 }
 
+func TestPublicCommandWALNoopCheckpointRunsPublishHook(t *testing.T) {
+	db, err := Open(Options{
+		Dir:               t.TempDir(),
+		Durability:        DurabilityWALOnRelaxed,
+		CommandWAL:        true,
+		DisableSideStores: true,
+	})
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	called := false
+	db.cached.SetCommandWALCheckpointPublishHook(func(sync bool) (uint64, []backenddb.CommandWALLSNRange, error) {
+		called = true
+		return 1, []backenddb.CommandWALLSNRange{{First: 1, Last: 1}}, nil
+	})
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	if !called {
+		t.Fatal("checkpoint publish hook was not called on no-op checkpoint")
+	}
+	if got := db.backend.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("AppliedCommandLSN=%d, want 1 from no-op checkpoint publish", got)
+	}
+}
+
 func publicCommandWALSegmentNames(t *testing.T, dir string) []string {
 	t.Helper()
 	entries, err := os.ReadDir(backenddb.WALDirPath(dir))
@@ -473,6 +502,82 @@ func recvTestErr(t *testing.T, ch <-chan error) error {
 		return nil
 	}
 }
+
+func TestPublicCommandWALPendingClearPreservesNewerRange(t *testing.T) {
+	var db DB
+	db.recordPublicCommandWALPendingLSN(1)
+	db.recordPublicCommandWALPendingLSN(3)
+	db.clearPublicCommandWALPendingThrough(1)
+	first, last := db.publicCommandWALPendingRange()
+	if first != 2 || last != 3 {
+		t.Fatalf("pending range after partial clear=(%d,%d), want (2,3)", first, last)
+	}
+	db.clearPublicCommandWALPendingThrough(3)
+	first, last = db.publicCommandWALPendingRange()
+	if first != 0 || last != 0 {
+		t.Fatalf("pending range after full clear=(%d,%d), want (0,0)", first, last)
+	}
+
+	db.recordPublicCommandWALPendingLSN(4)
+	db.clearPublicCommandWALPendingThrough(3)
+	first, last = db.publicCommandWALPendingRange()
+	if first != 4 || last != 4 {
+		t.Fatalf("pending range after stale clear=(%d,%d), want newer LSN (4,4)", first, last)
+	}
+}
+
+func TestPublicCommandWALBatchResetFallbackKeepsWrapperUsable(t *testing.T) {
+	inner := &commandWALNoResetBatch{}
+	wrapped := &commandWALPublicBatch{inner: inner}
+	_ = wrapped.payload.ResetWithHint(0, 0)
+	wrapped.dirty = true
+	wrapped.closed = true
+
+	wrapped.Reset()
+	if wrapped.closed {
+		t.Fatal("Reset fallback marked command WAL batch closed")
+	}
+	if wrapped.dirty {
+		t.Fatal("Reset fallback left command WAL batch dirty")
+	}
+	if err := wrapped.Set([]byte("k"), []byte("v")); err != nil {
+		t.Fatalf("Set after Reset fallback: %v", err)
+	}
+	if len(inner.entries) != 1 {
+		t.Fatalf("inner entries=%d, want 1 after Set", len(inner.entries))
+	}
+}
+
+type commandWALNoResetBatch struct {
+	entries []batch.Entry
+}
+
+func (b *commandWALNoResetBatch) Set(key, value []byte) error {
+	b.entries = append(b.entries, batch.Entry{Type: batch.OpPut, Key: append([]byte(nil), key...), Value: append([]byte(nil), value...)})
+	return nil
+}
+
+func (b *commandWALNoResetBatch) Delete(key []byte) error {
+	b.entries = append(b.entries, batch.Entry{Type: batch.OpDelete, Key: append([]byte(nil), key...)})
+	return nil
+}
+
+func (b *commandWALNoResetBatch) Write() error { return nil }
+
+func (b *commandWALNoResetBatch) WriteSync() error { return nil }
+
+func (b *commandWALNoResetBatch) Close() error { return nil }
+
+func (b *commandWALNoResetBatch) Replay(fn func(batch.Entry) error) error {
+	for _, entry := range b.entries {
+		if err := fn(entry); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (b *commandWALNoResetBatch) GetByteSize() (int, error) { return len(b.entries), nil }
 
 func BenchmarkPublicCommandWALRawKVSet(b *testing.B) {
 	for _, commandWAL := range []bool{false, true} {

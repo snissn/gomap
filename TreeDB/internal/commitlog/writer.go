@@ -57,6 +57,7 @@ type Writer struct {
 	scratch        []byte
 	encScratch     []byte
 	commandBuf     []byte
+	commandErr     error
 	headerBuf      [segmentHeaderSize]byte
 	rawLenPrefix   [4]byte
 	size           int64
@@ -378,6 +379,9 @@ func (w *Writer) AppendRawKVSingleCommandDirect(lsn, baseAppliedLSN uint64, op R
 // AppendRawKVPointCommandDirectTrusted appends a public point Set/Delete command
 // whose key/value have already passed the public cached preflight.
 func (w *Writer) AppendRawKVPointCommandDirectTrusted(lsn, baseAppliedLSN uint64, op RawKVOp, key, value []byte) error {
+	if err := w.commandBufferError(); err != nil {
+		return err
+	}
 	valueLen := len(value)
 	if op == RawKVOpDelete {
 		valueLen = 0
@@ -457,6 +461,9 @@ func (w *Writer) AppendRawKVBatchPayloadCommandDirect(lsn, baseAppliedLSN uint64
 // payload that the caller has already validated or constructed through the
 // RawKVBatchPayloadBuilder.
 func (w *Writer) AppendRawKVBatchPayloadCommandDirectTrusted(lsn, baseAppliedLSN uint64, payload []byte) error {
+	if err := w.commandBufferError(); err != nil {
+		return err
+	}
 	if lsn == 0 {
 		return fmt.Errorf("%w: zero lsn", ErrCorrupt)
 	}
@@ -559,25 +566,31 @@ func writeFull(f *os.File, p []byte) error {
 
 func (w *Writer) flushBufferedCommandFrames() error {
 	if w == nil || len(w.commandBuf) == 0 {
+		if w != nil {
+			return w.commandBufferError()
+		}
 		return nil
 	}
+	if err := w.commandBufferError(); err != nil {
+		return err
+	}
 	if w.f == nil {
-		return errors.New("commitlog: nil writer")
+		return w.poisonCommandBuffer(errors.New("commitlog: nil writer"))
 	}
 	for off := 0; off < len(w.commandBuf); {
 		if len(w.commandBuf)-off < segmentHeaderSize {
-			return ErrCorrupt
+			return w.poisonCommandBuffer(ErrCorrupt)
 		}
 		size := int(binary.LittleEndian.Uint32(w.commandBuf[off:off+4]) & segmentLenMask)
 		frameStart := off + segmentHeaderSize
 		frameEnd := frameStart + size
 		if size < commandFrameHeaderSize || frameEnd > len(w.commandBuf) {
-			return ErrCorrupt
+			return w.poisonCommandBuffer(ErrCorrupt)
 		}
 		frame := w.commandBuf[frameStart:frameEnd]
 		payloadLen := int(binary.LittleEndian.Uint32(frame[56:60]))
 		if commandFrameHeaderSize+payloadLen > size {
-			return ErrCorrupt
+			return w.poisonCommandBuffer(ErrCorrupt)
 		}
 		payload := frame[commandFrameHeaderSize : commandFrameHeaderSize+payloadLen]
 		digest := sha256.Sum256(payload)
@@ -586,13 +599,33 @@ func (w *Writer) flushBufferedCommandFrames() error {
 		off = frameEnd
 	}
 	if err := w.bw.Flush(); err != nil {
-		return err
+		return w.poisonCommandBuffer(err)
 	}
 	if err := writeFull(w.f, w.commandBuf); err != nil {
-		return err
+		return w.poisonCommandBuffer(err)
 	}
 	w.commandBuf = w.commandBuf[:0]
 	return nil
+}
+
+func (w *Writer) commandBufferError() error {
+	if w == nil {
+		return nil
+	}
+	return w.commandErr
+}
+
+func (w *Writer) poisonCommandBuffer(err error) error {
+	if w == nil || err == nil {
+		return err
+	}
+	if w.commandErr == nil {
+		w.commandErr = err
+	}
+	if w.commandBuf != nil {
+		w.commandBuf = w.commandBuf[:0]
+	}
+	return w.commandErr
 }
 
 func (w *Writer) writeSegment(payload []byte) error {

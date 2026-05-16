@@ -19,7 +19,7 @@ func (tdb *DB) appendPublicRawKVPointCommand(op commitlog.RawKVOp, key, value []
 		return ErrClosed
 	}
 	lsn, err := tdb.backend.AppendRawKVPointCommandWALTrusted(op, key, value, sync)
-	if err == nil {
+	if lsn != 0 {
 		tdb.recordPublicCommandWALPendingLSN(lsn)
 	}
 	if err == nil && tdb.testAfterPublicCommandWALPointAppend != nil {
@@ -36,11 +36,10 @@ func (tdb *DB) appendPublicRawKVCommandPayload(payload []byte, sync bool) error 
 		return ErrClosed
 	}
 	lsn, err := tdb.backend.AppendRawKVBatchPayloadCommandWALTrusted(payload, sync)
-	if err != nil {
-		return err
+	if lsn != 0 {
+		tdb.recordPublicCommandWALPendingLSN(lsn)
 	}
-	tdb.recordPublicCommandWALPendingLSN(lsn)
-	return nil
+	return err
 }
 
 func (tdb *DB) recordPublicCommandWALPendingLSN(lsn uint64) {
@@ -102,19 +101,39 @@ func (tdb *DB) clearPublicCommandWALPendingThrough(lsn uint64) {
 	if tdb == nil || lsn == 0 {
 		return
 	}
-	last := tdb.commandWALLast.Load()
-	if last == 0 {
-		tdb.commandWALFirst.Store(0)
-		return
+	for {
+		last := tdb.commandWALLast.Load()
+		if last == 0 {
+			tdb.clearPublicCommandWALFirstFullyThrough(lsn)
+			return
+		}
+		if last > lsn {
+			break
+		}
+		if tdb.commandWALLast.CompareAndSwap(last, 0) {
+			tdb.clearPublicCommandWALFirstFullyThrough(lsn)
+			return
+		}
 	}
-	if last <= lsn {
-		tdb.commandWALFirst.Store(0)
-		tdb.commandWALLast.Store(0)
-		return
+	tdb.clearPublicCommandWALFirstThrough(lsn)
+}
+
+func (tdb *DB) clearPublicCommandWALFirstFullyThrough(lsn uint64) {
+	for {
+		first := tdb.commandWALFirst.Load()
+		if first == 0 || first > lsn {
+			return
+		}
+		if tdb.commandWALFirst.CompareAndSwap(first, 0) {
+			return
+		}
 	}
+}
+
+func (tdb *DB) clearPublicCommandWALFirstThrough(lsn uint64) {
 	next := lsn + 1
 	if next == 0 {
-		tdb.commandWALFirst.Store(0)
+		tdb.clearPublicCommandWALFirstFullyThrough(lsn)
 		return
 	}
 	for {
@@ -419,7 +438,7 @@ func (b *commandWALPublicBatch) Reset() {
 		b.payload.ResetWithHint(0, 0)
 		b.opCount = 0
 		b.dirty = false
-		b.closed = true
+		b.closed = false
 		return
 	}
 	resetter.Reset()

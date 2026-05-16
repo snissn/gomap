@@ -98,6 +98,7 @@ const (
 	largePayloadDictPreferAbsRatioMax     = 0.15
 	largePayloadDictPreferRelRatioMax     = 0.35
 	largePayloadDictPreferHugeRelRatioMax = 0.20
+	vlogAutoThroughputParityRatioGate     = 1.01
 )
 
 func normalizeVlogCompressionMode(v uint8) vlogCompressionMode {
@@ -301,20 +302,17 @@ func (s *vlogCompressionSelector) shouldPreferLargePayloadDict(dictAvailable boo
 		return false
 	}
 	if bestBlock.samples < largePayloadDictPreferMinSamples {
-		return strongAbsolute
+		return strongAbsolute && throughputRatioAboveGate(dict.throughput, s.offThroughput(), vlogAutoThroughputParityRatioGate)
+	}
+	if !throughputRatioAboveGate(dict.throughput, bestBlock.throughput, vlogAutoThroughputParityRatioGate) {
+		return false
 	}
 
 	switch s.policy {
 	case vlogAutoThroughput:
-		if dict.throughput >= bestBlock.throughput*0.60 {
-			return true
-		}
-		return dict.ratio <= bestBlock.ratio*largePayloadDictPreferHugeRelRatioMax
+		return dict.ratio <= bestBlock.ratio*largePayloadDictPreferHugeRelRatioMax || dict.throughput >= bestBlock.throughput*1.03
 	case vlogAutoBalanced:
-		if dict.throughput >= bestBlock.throughput*0.45 {
-			return true
-		}
-		return dict.ratio <= bestBlock.ratio*largePayloadDictPreferHugeRelRatioMax
+		return dict.ratio <= bestBlock.ratio*largePayloadDictPreferHugeRelRatioMax || dict.throughput >= bestBlock.throughput*1.03
 	default:
 		return true
 	}
@@ -724,6 +722,18 @@ func (s *vlogCompressionSelector) candidateScore(c vlogAutoCandidate) float64 {
 	return scoreForPolicy(s.policy, m.ratio, m.throughput/off)
 }
 
+func throughputRatioAboveGate(candidate, baseline, minRatio float64) bool {
+	return baseline > 0 && candidate/baseline > minRatio
+}
+
+func (s *vlogCompressionSelector) candidatePassesThroughputGate(c vlogAutoCandidate) bool {
+	if c == vlogAutoCandidateOff {
+		return true
+	}
+	m := s.metric(c)
+	return throughputRatioAboveGate(m.throughput, s.offThroughput(), vlogAutoThroughputParityRatioGate)
+}
+
 func (s *vlogCompressionSelector) candidateLikelyBeneficial(c vlogAutoCandidate) bool {
 	if c == vlogAutoCandidateOff {
 		return true
@@ -733,7 +743,10 @@ func (s *vlogCompressionSelector) candidateLikelyBeneficial(c vlogAutoCandidate)
 	if offThroughput <= 0 {
 		offThroughput = 1.0
 	}
-	// Strong size wins are treated as beneficial, even if throughput is moderately lower.
+	if !s.candidatePassesThroughputGate(c) {
+		return false
+	}
+	// Strong size wins are beneficial only after the strict throughput parity gate passes.
 	if m.ratio <= 0.90 {
 		return true
 	}
@@ -742,26 +755,23 @@ func (s *vlogCompressionSelector) candidateLikelyBeneficial(c vlogAutoCandidate)
 		if m.throughput >= offThroughput*1.03 {
 			return true
 		}
-		if m.ratio <= 0.985 && m.throughput >= offThroughput*0.99 {
-			return true
-		}
-		return false
+		return m.ratio <= 0.985
 	case vlogAutoSize:
 		if m.ratio <= 0.98 {
 			return true
 		}
 		return m.throughput >= offThroughput*1.02
 	default:
-		if m.ratio <= 0.95 && m.throughput >= offThroughput*0.80 {
+		if m.ratio <= 0.95 {
 			return true
 		}
 		if m.throughput >= offThroughput*1.03 {
 			return true
 		}
-		if m.ratio <= 0.985 && m.throughput >= offThroughput*0.98 {
+		if m.ratio <= 0.985 {
 			return true
 		}
-		return m.ratio <= 0.995 && m.throughput >= offThroughput*0.90
+		return m.ratio <= 0.995
 	}
 }
 
@@ -800,6 +810,9 @@ func (s *vlogCompressionSelector) preferredCandidate(dictAvailable bool) vlogAut
 			}
 			m := s.metric(c)
 			if m.samples < 4 || m.ratio > 0.90 {
+				continue
+			}
+			if !s.candidatePassesThroughputGate(c) {
 				continue
 			}
 			score := s.candidateScore(c)

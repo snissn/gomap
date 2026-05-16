@@ -115,9 +115,10 @@ func NewRawKVBatchPayloadBuilder(opHint, byteHint int) RawKVBatchPayloadBuilder 
 }
 
 // ResetWithHint resets the builder and reserves capacity for the supplied
-// approximate operation and key/value byte counts. Invalid or overflowing hints
-// return ErrRecordTooLarge and fall back to the minimum header capacity so the
-// builder remains usable.
+// approximate operation and key/value byte counts. Hint errors are advisory:
+// invalid or overflowing hints return ErrRecordTooLarge and fall back to the
+// minimum header capacity so callers may intentionally ignore the error when
+// they can tolerate a small reusable buffer.
 func (b *RawKVBatchPayloadBuilder) ResetWithHint(opHint, byteHint int) error {
 	capHint := rawKVBatchHeaderSize
 	var err error

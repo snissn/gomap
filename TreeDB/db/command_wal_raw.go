@@ -44,6 +44,9 @@ func (db *DB) FlushCommandWAL(sync bool) error {
 	if db == nil || !db.commandWAL || db.commandJournal == nil {
 		return nil
 	}
+	if db.commandWALFlushPoisoned.Load() {
+		return fmt.Errorf("%w: command wal post-append failure; reopen required", ErrRecoveryRequired)
+	}
 	var err error
 	if sync && db.durability != DurabilityWALOnRelaxed {
 		err = db.commandJournal.Sync()
@@ -330,7 +333,7 @@ func (db *DB) AppendRawKVSingleCommandWAL(op commitlog.RawKVOperation, sync bool
 		err = db.FlushCommandWAL(true)
 	}
 	if err != nil {
-		return 0, err
+		return lsn, err
 	}
 	return lsn, nil
 }
@@ -363,7 +366,7 @@ func (db *DB) AppendRawKVPointCommandWALTrusted(op commitlog.RawKVOp, key, value
 		err = db.FlushCommandWAL(true)
 	}
 	if err != nil {
-		return 0, err
+		return lsn, err
 	}
 	return lsn, nil
 }
@@ -412,7 +415,7 @@ func (db *DB) appendRawKVBatchPayloadCommandWAL(payload []byte, sync bool, trust
 		err = db.FlushCommandWAL(true)
 	}
 	if err != nil {
-		return 0, err
+		return lsn, err
 	}
 	return lsn, nil
 }

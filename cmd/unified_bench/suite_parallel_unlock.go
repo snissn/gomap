@@ -24,14 +24,15 @@ var (
 )
 
 const (
-	maintenanceProbeBaselineWindow  = 5 * time.Second
-	maintenanceProbeDuringMinWindow = 5 * time.Second
-	maintenanceProbeDuringMaxWindow = 5 * time.Second
-	maintenanceProbeCoordMinWindow  = 5 * time.Second
-	maintenanceProbeCoordMaxWindow  = 5 * time.Second
-	maintenanceProbeKeyRingSize     = 256
-	maintenanceProbeValueSize       = 128
-	maintenanceStallThreshold       = time.Millisecond
+	maintenanceProbeBaselineWindow      = 5 * time.Second
+	maintenanceProbeDuringMinWindow     = 5 * time.Second
+	maintenanceProbeDuringMaxWindow     = 5 * time.Second
+	maintenanceProbeCoordMinWindow      = 5 * time.Second
+	maintenanceProbeCoordMaxWindow      = 5 * time.Second
+	maintenanceProbeKeyRingSize         = 256
+	maintenanceProbeValueSize           = 128
+	maintenanceStallThreshold           = time.Millisecond
+	maintenanceProbeThroughputRatioGate = 1.01
 )
 
 type writeSuiteRun struct {
@@ -707,7 +708,7 @@ func runMaintenanceGCSuite(baseCfg BenchConfig) (string, error) {
 
 	throughputRatio := probeOpsRatio(baselineProbe.opsPerSec, duringProbe.opsPerSec)
 	attributableDuty := attributableDutyCyclePct(baselineProbe.stallDutyCyclePct, duringProbe.stallDutyCyclePct)
-	ratioGate := baselineProbe.samples > 0 && throughputRatio >= 0.90
+	ratioGate := baselineProbe.samples > 0 && throughputRatio > maintenanceProbeThroughputRatioGate
 	dutyGate := duringProbe.samples > 0 && attributableDuty <= 5.0
 	p99Gate := duringProbe.samples > 0 && duringProbe.latencyP99 <= 10*time.Millisecond
 
@@ -739,7 +740,7 @@ func runMaintenanceGCSuite(baseCfg BenchConfig) (string, error) {
 	sb.WriteString(fmt.Sprintf("- writer latency p99: %.3fms\n", formatDurationMS(duringProbe.latencyP99)))
 	sb.WriteString(fmt.Sprintf("- writer latency max: %.3fms\n", formatDurationMS(duringProbe.latencyMax)))
 	sb.WriteString("\n")
-	sb.WriteString(fmt.Sprintf("- gate probe-throughput-ratio>=0.90: %s\n", passFail(ratioGate)))
+	sb.WriteString(fmt.Sprintf("- gate probe-throughput-ratio>%.2f: %s\n", maintenanceProbeThroughputRatioGate, passFail(ratioGate)))
 	sb.WriteString(fmt.Sprintf("- gate writer-stall-duty(gc-attributable)<=5%%: %s\n", passFail(dutyGate)))
 	sb.WriteString(fmt.Sprintf("- gate writer-latency-p99<=10ms: %s\n", passFail(p99Gate)))
 	return sb.String(), nil

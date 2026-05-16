@@ -29,13 +29,14 @@ WARMUP="${WARMUP:-1}" # warm-up runs per test (discarded; helps reduce first-run
 KEYS="${KEYS:-1000000}"
 VALSIZE="${VALSIZE:-1024}"
 BATCHSIZE="${BATCHSIZE:-1000}"
+MIN_THROUGHPUT_RATIO="${MIN_THROUGHPUT_RATIO:-1.01}"
 
 MAIN_WT="${MAIN_WT:-$ROOT/.worktrees/main_plain}"
 BIN_MAIN="${BIN_MAIN:-/tmp/ubench-main-plain}"
 BIN_CUR="${BIN_CUR:-/tmp/ubench-cur}"
 
 echo "compare pr8 vs main (trimmed mean)" | tee "$LOG"
-echo "ts=$TS runs=$RUNS keep=$KEEP warmup=$WARMUP sleep=${SLEEP_S}s keys=$KEYS valsize=$VALSIZE batchsize=$BATCHSIZE" | tee -a "$LOG"
+echo "ts=$TS runs=$RUNS keep=$KEEP warmup=$WARMUP sleep=${SLEEP_S}s keys=$KEYS valsize=$VALSIZE batchsize=$BATCHSIZE min_throughput_ratio=$MIN_THROUGHPUT_RATIO" | tee -a "$LOG"
 echo "root=$ROOT" | tee -a "$LOG"
 echo "main_wt=$MAIN_WT" | tee -a "$LOG"
 echo "bin_main=$BIN_MAIN bin_cur=$BIN_CUR" | tee -a "$LOG"
@@ -146,8 +147,10 @@ tests=("batch_write" "random_write" "random_read" "prefix_scan")
 echo "" | tee -a "$LOG"
 echo "--- running trimmed comparisons ---" | tee -a "$LOG"
 
-printf "| test | main avg (trimmed) | cur avg (trimmed) | delta |\n" | tee -a "$LOG"
-printf "|---|---:|---:|---:|\n" | tee -a "$LOG"
+printf "| test | main avg (trimmed) | cur avg (trimmed) | cur/main | delta | gate |\n" | tee -a "$LOG"
+printf "|---|---:|---:|---:|---:|---|\n" | tee -a "$LOG"
+
+failures=0
 
 for test in "${tests[@]}"; do
   echo "" | tee -a "$LOG"
@@ -163,24 +166,43 @@ for test in "${tests[@]}"; do
   cur_vals=$(echo "$cur_out" | sed -n '1p')
   cur_avg=$(echo "$cur_out" | sed -n '2p')
 
-  delta=$(python - "$main_avg" "$cur_avg" <<'PY'
+  decision=$(python - "$main_avg" "$cur_avg" "$MIN_THROUGHPUT_RATIO" <<'PY'
 import sys
 base = float(sys.argv[1])
 cur = float(sys.argv[2])
+minimum = float(sys.argv[3])
 if base <= 0:
-    print("nan")
+    ratio = float("nan")
+    delta = float("nan")
+    passed = False
 else:
-    print(f"{(cur/base - 1.0) * 100.0:.2f}%")
+    ratio = cur / base
+    delta = (ratio - 1.0) * 100.0
+    passed = ratio > minimum
+print("nan" if ratio != ratio else f"{ratio:.4f}x")
+print("nan" if delta != delta else f"{delta:+.2f}%")
+print("PASS" if passed else "FAIL")
 PY
 )
+  ratio=$(echo "$decision" | sed -n '1p')
+  delta=$(echo "$decision" | sed -n '2p')
+  gate=$(echo "$decision" | sed -n '3p')
+  if [[ "$gate" != "PASS" ]]; then
+    failures=$((failures + 1))
+  fi
 
   echo "main runs: $main_vals" | tee -a "$LOG"
   echo "cur  runs: $cur_vals" | tee -a "$LOG"
   echo "main trimmed avg: $main_avg" | tee -a "$LOG"
   echo "cur  trimmed avg: $cur_avg" | tee -a "$LOG"
 
-  printf "| %s | %'.0f | %'.0f | %s |\n" "$test" "$(printf "%.0f" "$main_avg")" "$(printf "%.0f" "$cur_avg")" "$delta" | tee -a "$LOG"
+  printf "| %s | %'.0f | %'.0f | %s | %s | %s |\n" "$test" "$(printf "%.0f" "$main_avg")" "$(printf "%.0f" "$cur_avg")" "$ratio" "$delta" "$gate" | tee -a "$LOG"
 done
 
 echo "" | tee -a "$LOG"
 echo "log: $LOG" | tee -a "$LOG"
+if (( failures != 0 )); then
+  echo "gate failed: $failures throughput metric(s) were <= ${MIN_THROUGHPUT_RATIO}x" | tee -a "$LOG"
+  exit 3
+fi
+echo "gate: PASS" | tee -a "$LOG"

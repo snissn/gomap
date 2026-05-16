@@ -19376,6 +19376,15 @@ func (db *DB) Checkpoint() error {
 		if !forceVLogRotate {
 			db.mu.Unlock()
 			releaseWriteMu()
+			if db.commandWALCheckpointPublish != nil {
+				commandWALAppliedLSN, commandWALRanges, err := db.commandWALCheckpointPublish(!db.relaxedSync)
+				if err != nil {
+					return err
+				}
+				if _, err := db.publishCommandWALCheckpointApplied(commandWALAppliedLSN, commandWALRanges); err != nil {
+					return err
+				}
+			}
 			db.checkpointNoopSkips.Add(1)
 			if err := db.maybeVacuumSparseIndexOnCheckpoint(); err != nil {
 				return err
@@ -19426,7 +19435,11 @@ func (db *DB) Checkpoint() error {
 	}
 
 	// Flush all queued memtables with backend sync.
+	bgErrBefore := db.backgroundError()
 	db.flushAllLocked(true)
+	if bgErr := db.backgroundError(); bgErr != nil && bgErrBefore == nil {
+		return bgErr
+	}
 
 	var (
 		commandWALAppliedLSN uint64
@@ -19462,25 +19475,10 @@ func (db *DB) Checkpoint() error {
 	var commitErr error
 	if nonEmptyBytes > 0 || commandWALAppliedLSN != 0 {
 		if commandWALAppliedLSN != 0 {
-			backendBatch := db.newBackendBatchWithSize(0)
-			publisher, ok := backendBatch.(backendBatchCommandWALPublisher)
-			if !ok {
-				_ = backendBatch.Close()
-				return errors.New("cachingdb: backend batch cannot publish command wal applied lsn")
-			}
-			if err := publisher.SetCommandWALPublish(commandWALAppliedLSN, commandWALRanges); err != nil {
-				_ = backendBatch.Close()
-				return err
-			}
-			if db.relaxedSync {
-				commitErr = backendBatch.Write()
-			} else {
-				commitErr = backendBatch.WriteSync()
-			}
-			cerr := backendBatch.Close()
-			if commitErr == nil {
-				commitErr = cerr
-			}
+			// This backend batch is also the checkpoint durability boundary for any
+			// non-command WAL segments observed above, so command-LSN publication and
+			// ordinary cached checkpoint proof are not mutually exclusive.
+			_, commitErr = db.publishCommandWALCheckpointApplied(commandWALAppliedLSN, commandWALRanges)
 		} else if db.relaxedSync {
 			backendBatch := db.backend.NewBatch()
 			// If relaxed sync, just write the batch without forcing sync
@@ -19548,6 +19546,33 @@ func (db *DB) Checkpoint() error {
 	db.trimRetainedArenasAfterFlush(true)
 
 	return nil
+}
+
+func (db *DB) publishCommandWALCheckpointApplied(appliedLSN uint64, ranges []backenddb.CommandWALLSNRange) (bool, error) {
+	if appliedLSN == 0 {
+		return false, nil
+	}
+	backendBatch := db.newBackendBatchWithSize(0)
+	publisher, ok := backendBatch.(backendBatchCommandWALPublisher)
+	if !ok {
+		_ = backendBatch.Close()
+		return false, errors.New("cachingdb: backend batch cannot publish command wal applied lsn")
+	}
+	if err := publisher.SetCommandWALPublish(appliedLSN, ranges); err != nil {
+		_ = backendBatch.Close()
+		return false, err
+	}
+	var err error
+	if db.relaxedSync {
+		err = backendBatch.Write()
+	} else {
+		err = backendBatch.WriteSync()
+	}
+	cerr := backendBatch.Close()
+	if err == nil {
+		err = cerr
+	}
+	return true, err
 }
 
 func (db *DB) waitForStop() {
