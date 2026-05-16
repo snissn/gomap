@@ -9041,6 +9041,11 @@ func (c *Collection) deleteBatchOnce(documentIDs [][]byte, commandWALIntent *bac
 	primaryRoot := catalog.rootID(primaryRootName)
 	if primaryRoot == 0 {
 		_ = snap.Close()
+		if commandWALIntent != nil {
+			if err := c.db.PublishCommandWALNoop(commandWALIntent, false); err != nil {
+				return 0, err
+			}
+		}
 		return 0, nil
 	}
 	runtimes, err := (insertBatchPlanner{
