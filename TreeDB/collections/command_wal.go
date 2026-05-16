@@ -2,15 +2,27 @@ package collections
 
 import (
 	"fmt"
+	"sync"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/node"
 )
 
+var registerCommandWALReplayHandlersOnce sync.Once
+
 func init() {
-	backenddb.RegisterCommandWALReplayHandler(commitlog.CommandKindCollectionInsertBatchByID, replayCollectionInsertBatchByIDCommandWAL)
-	backenddb.RegisterCommandWALReplayHandler(commitlog.CommandKindCollectionDeleteBatchByID, replayCollectionDeleteBatchByIDCommandWAL)
+	RegisterCommandWALReplayHandlers()
+}
+
+// RegisterCommandWALReplayHandlers installs collection command-WAL replay
+// handlers for binaries that want deterministic registration instead of relying
+// on a package side-effect import before opening a command_wal_v1 directory.
+func RegisterCommandWALReplayHandlers() {
+	registerCommandWALReplayHandlersOnce.Do(func() {
+		backenddb.RegisterCommandWALReplayHandler(commitlog.CommandKindCollectionInsertBatchByID, replayCollectionInsertBatchByIDCommandWAL)
+		backenddb.RegisterCommandWALReplayHandler(commitlog.CommandKindCollectionDeleteBatchByID, replayCollectionDeleteBatchByIDCommandWAL)
+	})
 }
 
 func (c *Collection) commandWALActive(intent *backenddb.CommandWALIntent) bool {
@@ -68,7 +80,7 @@ func collectionDocumentsFromNoIndexEntries(entries []noIndexBatchEntry) []commit
 
 func collectionDocumentsFromBatchInput(ids, documents [][]byte) ([]commitlog.CollectionDocument, error) {
 	if len(ids) != len(documents) {
-		return nil, fmt.Errorf("collections: command wal batch ids length mismatch")
+		return nil, fmt.Errorf("collections: command wal batch ids length mismatch: ids=%d documents=%d", len(ids), len(documents))
 	}
 	docs := make([]commitlog.CollectionDocument, len(ids))
 	for i := range ids {

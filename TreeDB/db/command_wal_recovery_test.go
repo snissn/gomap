@@ -387,7 +387,8 @@ func TestCommandWALRegisteredReplayHandlerInstallsValueLogAppender(t *testing.T)
 		LSN:           1,
 		Kind:          kind,
 		Scope:         commitlog.CommandScopeCollection,
-		PayloadFormat: commitlog.PayloadFormatNativeWireDeterministic,
+		PayloadFormat: commitlog.PayloadFormat(60000 + kindOffset),
+		Payload:       []byte{1},
 	}, nil, nil, ensure)
 	if err != nil {
 		t.Fatalf("applyCommandWALFrame: %v", err)
