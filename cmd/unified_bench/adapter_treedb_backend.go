@@ -11,7 +11,7 @@ import (
 )
 
 type treeDBBackendAdapter struct {
-	mu         sync.Mutex
+	mu         sync.RWMutex
 	db         *treedbdb.DB
 	leafLog    treedbdb.LeafPageLogCloser
 	name       string
@@ -82,168 +82,168 @@ func (d *treeDBBackendAdapter) Close() error {
 		return nil
 	}
 	d.mu.Lock()
+	defer d.mu.Unlock()
 	if d.closed {
-		err := d.closeErr
-		d.mu.Unlock()
-		return err
+		return d.closeErr
 	}
 	db := d.db
 	leafLog := d.leafLog
 	d.finalStats = cloneStringMap(db.Stats())
-	d.closed = true
-	d.mu.Unlock()
 
 	err := db.Close()
 	if leafLog != nil {
 		err = errors.Join(err, leafLog.Close())
 	}
 
-	d.mu.Lock()
+	d.db = nil
 	d.leafLog = nil
+	d.closed = true
 	d.closeErr = err
-	d.mu.Unlock()
 	return err
 }
 
-func (d *treeDBBackendAdapter) openDB() (*treedbdb.DB, error) {
+func (d *treeDBBackendAdapter) withDB(fn func(*treedbdb.DB) error) error {
 	if d == nil {
-		return nil, treedbdb.ErrClosed
+		return treedbdb.ErrClosed
 	}
-	d.mu.Lock()
-	defer d.mu.Unlock()
+	d.mu.RLock()
+	defer d.mu.RUnlock()
 	if d.db == nil || d.closed {
-		return nil, treedbdb.ErrClosed
+		return treedbdb.ErrClosed
 	}
-	return d.db, nil
+	return fn(d.db)
 }
 
 func (d *treeDBBackendAdapter) Get(key []byte) ([]byte, error) {
-	db, err := d.openDB()
-	if err != nil {
-		return nil, err
-	}
-	return db.Get(key)
+	var value []byte
+	err := d.withDB(func(db *treedbdb.DB) error {
+		var err error
+		value, err = db.Get(key)
+		return err
+	})
+	return value, err
 }
 
 func (d *treeDBBackendAdapter) AcquireReadSnapshot() (kvstore.ReadSnapshot, error) {
-	db, err := d.openDB()
-	if err != nil {
-		return nil, err
-	}
-	snap := db.AcquireSnapshot()
-	if snap == nil {
-		return nil, kvstore.ErrUnsupported
-	}
-	return snap, nil
+	var snap kvstore.ReadSnapshot
+	err := d.withDB(func(db *treedbdb.DB) error {
+		snap = db.AcquireSnapshot()
+		if snap == nil {
+			return kvstore.ErrUnsupported
+		}
+		return nil
+	})
+	return snap, err
 }
 
 func (d *treeDBBackendAdapter) Set(key, value []byte) error {
-	db, err := d.openDB()
-	if err != nil {
-		return err
-	}
-	return db.Set(key, value)
+	return d.withDB(func(db *treedbdb.DB) error {
+		return db.Set(key, value)
+	})
 }
 
 func (d *treeDBBackendAdapter) Delete(key []byte) error {
-	db, err := d.openDB()
-	if err != nil {
-		return err
-	}
-	return db.Delete(key)
+	return d.withDB(func(db *treedbdb.DB) error {
+		return db.Delete(key)
+	})
 }
 
 func (d *treeDBBackendAdapter) SetSync(key, value []byte) error {
-	db, err := d.openDB()
-	if err != nil {
-		return err
-	}
-	return db.SetSync(key, value)
+	return d.withDB(func(db *treedbdb.DB) error {
+		return db.SetSync(key, value)
+	})
 }
 
 func (d *treeDBBackendAdapter) DeleteSync(key []byte) error {
-	db, err := d.openDB()
-	if err != nil {
-		return err
-	}
-	return db.DeleteSync(key)
+	return d.withDB(func(db *treedbdb.DB) error {
+		return db.DeleteSync(key)
+	})
 }
 
 func (d *treeDBBackendAdapter) Stats() map[string]string {
 	if d == nil {
 		return map[string]string{}
 	}
-	d.mu.Lock()
+	d.mu.RLock()
+	defer d.mu.RUnlock()
 	if d.closed {
 		stats := cloneStringMap(d.finalStats)
-		d.mu.Unlock()
 		return stats
 	}
-	db := d.db
-	d.mu.Unlock()
-	return db.Stats()
+	if d.db == nil {
+		return map[string]string{}
+	}
+	return d.db.Stats()
 }
 func (d *treeDBBackendAdapter) Print() error {
-	db, err := d.openDB()
-	if err != nil {
-		return err
-	}
-	return db.Print()
+	return d.withDB(func(db *treedbdb.DB) error {
+		return db.Print()
+	})
 }
 func (d *treeDBBackendAdapter) Has(key []byte) (bool, error) {
-	db, err := d.openDB()
-	if err != nil {
-		return false, err
-	}
-	return db.Has(key)
+	var ok bool
+	err := d.withDB(func(db *treedbdb.DB) error {
+		var err error
+		ok, err = db.Has(key)
+		return err
+	})
+	return ok, err
 }
 func (d *treeDBBackendAdapter) Checkpoint() error {
-	db, err := d.openDB()
-	if err != nil {
-		return err
-	}
-	b := db.NewBatch()
-	if b == nil {
-		return nil
-	}
-	defer b.Close()
-	return b.WriteSync()
+	return d.withDB(func(db *treedbdb.DB) error {
+		b := db.NewBatch()
+		if b == nil {
+			return nil
+		}
+		defer b.Close()
+		return b.WriteSync()
+	})
 }
 func (d *treeDBBackendAdapter) Iterator(start, end []byte) (kvstore.Iterator, error) {
-	db, err := d.openDB()
-	if err != nil {
-		return nil, err
-	}
-	return db.Iterator(start, end)
+	var iter kvstore.Iterator
+	err := d.withDB(func(db *treedbdb.DB) error {
+		var err error
+		iter, err = db.Iterator(start, end)
+		return err
+	})
+	return iter, err
 }
 func (d *treeDBBackendAdapter) ReverseIterator(start, end []byte) (kvstore.Iterator, error) {
-	db, err := d.openDB()
-	if err != nil {
-		return nil, err
-	}
-	return db.ReverseIterator(start, end)
+	var iter kvstore.Iterator
+	err := d.withDB(func(db *treedbdb.DB) error {
+		var err error
+		iter, err = db.ReverseIterator(start, end)
+		return err
+	})
+	return iter, err
 }
 
 func (d *treeDBBackendAdapter) NewBatch() (kvstore.Batch, error) {
-	db, err := d.openDB()
+	var b batch.Interface
+	err := d.withDB(func(db *treedbdb.DB) error {
+		b = db.NewBatch()
+		if b == nil {
+			return kvstore.ErrUnsupported
+		}
+		return nil
+	})
 	if err != nil {
 		return nil, err
-	}
-	b := db.NewBatch()
-	if b == nil {
-		return nil, kvstore.ErrUnsupported
 	}
 	return &treeDBBackendBatch{b: b}, nil
 }
 
 func (d *treeDBBackendAdapter) NewBatchWithSize(size int) (kvstore.Batch, error) {
-	db, err := d.openDB()
+	var b batch.Interface
+	err := d.withDB(func(db *treedbdb.DB) error {
+		b = db.NewBatchWithSize(size)
+		if b == nil {
+			return kvstore.ErrUnsupported
+		}
+		return nil
+	})
 	if err != nil {
 		return nil, err
-	}
-	b := db.NewBatchWithSize(size)
-	if b == nil {
-		return nil, kvstore.ErrUnsupported
 	}
 	return &treeDBBackendBatch{b: b}, nil
 }

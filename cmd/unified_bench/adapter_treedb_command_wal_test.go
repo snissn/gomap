@@ -2,6 +2,8 @@ package main
 
 import (
 	"errors"
+	"fmt"
+	"sync"
 	"testing"
 
 	treedbdb "github.com/snissn/gomap/TreeDB/db"
@@ -121,6 +123,61 @@ func TestTreeDBBackendCommandWALVariantPersistsFeatureAndAppendsTypedFrames(t *t
 	}
 	if _, err := postClose.AcquireReadSnapshot(); !errors.Is(err, treedbdb.ErrClosed) {
 		t.Fatalf("AcquireReadSnapshot after Close error=%v, want ErrClosed", err)
+	}
+}
+
+func TestTreeDBBackendCloseSerializesStatsAndOperations(t *testing.T) {
+	saved := saveTreeDBFlagState()
+	defer restoreTreeDBFlagState(saved)
+	resetTreeDBIndexFlagsForTest()
+	*treedbCommandWALStatsScan = true
+
+	db, err := NewTreeDBBackendCommandWAL(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewTreeDBBackendCommandWAL: %v", err)
+	}
+	adapter, ok := db.(*treeDBBackendAdapter)
+	if !ok {
+		_ = db.Close()
+		t.Fatalf("backend type=%T, want *treeDBBackendAdapter", db)
+	}
+	if err := adapter.Set([]byte("seed"), []byte("value")); err != nil {
+		_ = adapter.Close()
+		t.Fatalf("Set seed: %v", err)
+	}
+
+	start := make(chan struct{})
+	errs := make(chan error, 16)
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func(worker int) {
+			defer wg.Done()
+			<-start
+			for j := 0; j < 25; j++ {
+				if _, err := adapter.Get([]byte("seed")); err != nil && !errors.Is(err, treedbdb.ErrClosed) {
+					errs <- fmt.Errorf("worker %d Get: %w", worker, err)
+					return
+				}
+				_ = adapter.Stats()
+			}
+		}(i)
+	}
+	close(start)
+	closeErr := adapter.Close()
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatal(err)
+	}
+	if closeErr != nil {
+		t.Fatalf("Close: %v", closeErr)
+	}
+	if _, err := adapter.Get([]byte("seed")); !errors.Is(err, treedbdb.ErrClosed) {
+		t.Fatalf("Get after Close error=%v, want ErrClosed", err)
+	}
+	if stats := adapter.Stats(); stats["treedb.command_wal.enabled"] != "true" {
+		t.Fatalf("Stats after Close lost final command WAL stats: %#v", stats)
 	}
 }
 
