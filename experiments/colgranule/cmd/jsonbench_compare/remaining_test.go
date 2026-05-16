@@ -3,11 +3,15 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/snissn/gomap/TreeDB/collections"
+	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/experiments/colgranule"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
@@ -121,6 +125,178 @@ func TestRemainingJSONDocumentConservativeOnlyRemovesTimeUS(t *testing.T) {
 	}
 }
 
+func TestRemainingPayloadPlusImageColumnsReconstructsJSONBenchRows(t *testing.T) {
+	source := filepath.Join("..", "..", "testdata", "jsonbench_sample.jsonl")
+	ds, err := colgranule.LoadJSONBenchColumns(source, 0)
+	if err != nil {
+		t.Fatalf("LoadJSONBenchColumns: %v", err)
+	}
+	part, err := colgranule.BuildJSONBenchColumnPartWithAggregateMetadataForLayout(ds, 2, colgranule.JSONBenchColumnPartLayoutClickHouseFilterUserTime)
+	if err != nil {
+		t.Fatalf("BuildJSONBenchColumnPartWithAggregateMetadataForLayout: %v", err)
+	}
+	image, err := colgranule.BuildColumnPartImage(part, colgranule.ColumnPartImageOptions{Dictionaries: ds.Dictionaries})
+	if err != nil {
+		t.Fatalf("BuildColumnPartImage: %v", err)
+	}
+	parsed, err := colgranule.ParseColumnPartImage(image.Bytes)
+	if err != nil {
+		t.Fatalf("ParseColumnPartImage: %v", err)
+	}
+	imagePart, err := colgranule.ColumnPartFromImage(parsed)
+	if err != nil {
+		t.Fatalf("ColumnPartFromImage: %v", err)
+	}
+
+	reverseDictionaries := reverseJSONBenchDictionaries(ds.Dictionaries)
+	scanner := imagePart.NewScanner()
+	remainingEncoders := map[string]func([]byte) ([]byte, error){
+		"json": func(raw []byte) ([]byte, error) {
+			return remainingJSONDocument(raw, remainingShapeClickHouseTyped)
+		},
+		"bson": func(raw []byte) ([]byte, error) {
+			return remainingBSONDocument(raw, remainingShapeClickHouseTyped)
+		},
+	}
+
+	for name, encodeRemaining := range remainingEncoders {
+		t.Run(name, func(t *testing.T) {
+			row := int64(0)
+			if err := scanJSONBenchFile(source, func(raw []byte) error {
+				remaining, err := encodeRemaining(raw)
+				if err != nil {
+					return err
+				}
+				retained, err := decodeRetainedDocumentForTest(name, remaining)
+				if err != nil {
+					return err
+				}
+				typed, err := typedJSONBenchValuesFromImage(scanner, imagePart, reverseDictionaries, row)
+				if err != nil {
+					return err
+				}
+				restoreClickHouseTypedPathsForTest(retained, typed)
+
+				var original map[string]any
+				if err := decodeJSONPreserveNumbers(raw, &original); err != nil {
+					return err
+				}
+				if got, want := canonicalJSONForTest(t, retained), canonicalJSONForTest(t, original); string(got) != string(want) {
+					t.Fatalf("row %d reconstructed %s mismatch\ngot  %s\nwant %s", row, name, got, want)
+				}
+				row++
+				return nil
+			}); err != nil {
+				t.Fatalf("scan %s: %v", name, err)
+			}
+			if row != int64(ds.Rows) {
+				t.Fatalf("validated rows=%d want %d", row, ds.Rows)
+			}
+		})
+	}
+}
+
+func TestRemainingTemplateV1PayloadPlusImageColumnsReconstructsJSONBenchRows(t *testing.T) {
+	source := filepath.Join("..", "..", "testdata", "jsonbench_sample.jsonl")
+	ds, err := colgranule.LoadJSONBenchColumns(source, 0)
+	if err != nil {
+		t.Fatalf("LoadJSONBenchColumns: %v", err)
+	}
+	part, err := colgranule.BuildJSONBenchColumnPartWithAggregateMetadataForLayout(ds, 2, colgranule.JSONBenchColumnPartLayoutClickHouseFilterUserTime)
+	if err != nil {
+		t.Fatalf("BuildJSONBenchColumnPartWithAggregateMetadataForLayout: %v", err)
+	}
+	image, err := colgranule.BuildColumnPartImage(part, colgranule.ColumnPartImageOptions{Dictionaries: ds.Dictionaries})
+	if err != nil {
+		t.Fatalf("BuildColumnPartImage: %v", err)
+	}
+	parsed, err := colgranule.ParseColumnPartImage(image.Bytes)
+	if err != nil {
+		t.Fatalf("ParseColumnPartImage: %v", err)
+	}
+	imagePart, err := colgranule.ColumnPartFromImage(parsed)
+	if err != nil {
+		t.Fatalf("ColumnPartFromImage: %v", err)
+	}
+
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open TreeDB: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := collections.NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&collections.CollectionMeta{
+		Name: "remaining",
+		Options: collections.CollectionOptions{
+			DocumentFormat: collections.DocumentFormatTemplateV1,
+		},
+	}); err != nil {
+		t.Fatalf("create remaining collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("remaining")
+	if err != nil {
+		t.Fatalf("open remaining collection: %v", err)
+	}
+
+	var ids [][]byte
+	var docs [][]byte
+	row := uint64(1)
+	if err := scanJSONBenchFile(source, func(raw []byte) error {
+		doc, err := remainingDocument(raw, collections.DocumentFormatTemplateV1, remainingShapeClickHouseTyped)
+		if err != nil {
+			return err
+		}
+		ids = append(ids, documentID(row))
+		docs = append(docs, doc)
+		row++
+		return nil
+	}); err != nil {
+		t.Fatalf("prepare template-v1 retained docs: %v", err)
+	}
+	var encoder collections.TemplateV1Encoder
+	if _, err := col.InsertBatchWithTemplateV1Encoder(ids, docs, &encoder); err != nil {
+		t.Fatalf("insert template-v1 retained docs: %v", err)
+	}
+
+	reverseDictionaries := reverseJSONBenchDictionaries(ds.Dictionaries)
+	scanner := imagePart.NewScanner()
+	rowIndex := int64(0)
+	if err := scanJSONBenchFile(source, func(raw []byte) error {
+		stored, err := col.Get(documentID(uint64(rowIndex + 1)))
+		if err != nil {
+			return err
+		}
+		retainedJSON, err := col.StoredDocumentJSON(stored)
+		if err != nil {
+			return err
+		}
+		retained, err := decodeRetainedDocumentForTest("json", retainedJSON)
+		if err != nil {
+			return err
+		}
+		typed, err := typedJSONBenchValuesFromImage(scanner, imagePart, reverseDictionaries, rowIndex)
+		if err != nil {
+			return err
+		}
+		restoreClickHouseTypedPathsForTest(retained, typed)
+
+		var original map[string]any
+		if err := decodeJSONPreserveNumbers(raw, &original); err != nil {
+			return err
+		}
+		if got, want := canonicalJSONForTest(t, retained), canonicalJSONForTest(t, original); string(got) != string(want) {
+			t.Fatalf("row %d reconstructed template-v1 mismatch\ngot  %s\nwant %s", rowIndex, got, want)
+		}
+		rowIndex++
+		return nil
+	}); err != nil {
+		t.Fatalf("validate template-v1 retained docs: %v", err)
+	}
+	if rowIndex != int64(ds.Rows) {
+		t.Fatalf("validated rows=%d want %d", rowIndex, ds.Rows)
+	}
+}
+
 func TestMeasureRawJSONTreeDBSample(t *testing.T) {
 	dbDir := t.TempDir()
 	source := filepath.Join("..", "..", "testdata", "jsonbench_sample.jsonl")
@@ -167,5 +343,159 @@ func TestValidateRawJSONTreeDBDetectsMismatchedRows(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "validation mismatch") {
 		t.Fatalf("validation error %q does not mention mismatch", err)
+	}
+}
+
+type typedJSONBenchValues struct {
+	TimeUS           int64
+	Did              string
+	Kind             string
+	CommitOperation  string
+	CommitCollection string
+}
+
+func typedJSONBenchValuesFromImage(scanner *colgranule.ColumnPartScanner, part *colgranule.ColumnPart, dictionaries map[string]map[int64]string, row int64) (typedJSONBenchValues, error) {
+	locator, ok := part.LocatePrimaryID(row)
+	if !ok {
+		return typedJSONBenchValues{}, os.ErrNotExist
+	}
+	timeUS, err := scanner.ValueAt(locator, "time_us")
+	if err != nil {
+		return typedJSONBenchValues{}, err
+	}
+	didCode, err := scanner.ValueAt(locator, "did_code")
+	if err != nil {
+		return typedJSONBenchValues{}, err
+	}
+	kindCode, err := scanner.ValueAt(locator, "kind_code")
+	if err != nil {
+		return typedJSONBenchValues{}, err
+	}
+	operationCode, err := scanner.ValueAt(locator, "commit_operation_code")
+	if err != nil {
+		return typedJSONBenchValues{}, err
+	}
+	collectionCode, err := scanner.ValueAt(locator, "commit_collection_code")
+	if err != nil {
+		return typedJSONBenchValues{}, err
+	}
+	did, err := dictionaryValueForTest(dictionaries, "did_code", didCode)
+	if err != nil {
+		return typedJSONBenchValues{}, err
+	}
+	kind, err := dictionaryValueForTest(dictionaries, "kind_code", kindCode)
+	if err != nil {
+		return typedJSONBenchValues{}, err
+	}
+	operation, err := dictionaryValueForTest(dictionaries, "commit_operation_code", operationCode)
+	if err != nil {
+		return typedJSONBenchValues{}, err
+	}
+	collection, err := dictionaryValueForTest(dictionaries, "commit_collection_code", collectionCode)
+	if err != nil {
+		return typedJSONBenchValues{}, err
+	}
+	return typedJSONBenchValues{
+		TimeUS:           timeUS,
+		Did:              did,
+		Kind:             kind,
+		CommitOperation:  operation,
+		CommitCollection: collection,
+	}, nil
+}
+
+func reverseJSONBenchDictionaries(dictionaries map[string]map[string]int64) map[string]map[int64]string {
+	out := make(map[string]map[int64]string, len(dictionaries))
+	for name, values := range dictionaries {
+		reversed := make(map[int64]string, len(values))
+		for value, code := range values {
+			reversed[code] = value
+		}
+		out[name] = reversed
+	}
+	return out
+}
+
+func dictionaryValueForTest(dictionaries map[string]map[int64]string, name string, code int64) (string, error) {
+	values := dictionaries[name]
+	if values == nil {
+		return "", fmt.Errorf("missing dictionary %s", name)
+	}
+	value, ok := values[code]
+	if !ok {
+		return "", fmt.Errorf("missing dictionary %s code %d", name, code)
+	}
+	return value, nil
+}
+
+func decodeRetainedDocumentForTest(format string, raw []byte) (map[string]any, error) {
+	var doc map[string]any
+	switch format {
+	case "json":
+		if err := decodeJSONPreserveNumbers(raw, &doc); err != nil {
+			return nil, err
+		}
+	case "bson":
+		var bsonDoc bson.M
+		if err := bson.Unmarshal(raw, &bsonDoc); err != nil {
+			return nil, err
+		}
+		doc = normalizeBSONValueForTest(bsonDoc).(map[string]any)
+	default:
+		return nil, os.ErrInvalid
+	}
+	return doc, nil
+}
+
+func restoreClickHouseTypedPathsForTest(doc map[string]any, values typedJSONBenchValues) {
+	doc["time_us"] = values.TimeUS
+	doc["did"] = values.Did
+	doc["kind"] = values.Kind
+	commit, ok := doc["commit"].(map[string]any)
+	if !ok {
+		commit = make(map[string]any, 2)
+	}
+	commit["operation"] = values.CommitOperation
+	commit["collection"] = values.CommitCollection
+	doc["commit"] = commit
+}
+
+func canonicalJSONForTest(t *testing.T, doc map[string]any) []byte {
+	t.Helper()
+	encoded, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return encoded
+}
+
+func normalizeBSONValueForTest(value any) any {
+	switch v := value.(type) {
+	case bson.M:
+		out := make(map[string]any, len(v))
+		for key, nested := range v {
+			out[key] = normalizeBSONValueForTest(nested)
+		}
+		return out
+	case bson.D:
+		out := make(map[string]any, len(v))
+		for _, element := range v {
+			out[element.Key] = normalizeBSONValueForTest(element.Value)
+		}
+		return out
+	case bson.A:
+		out := make([]any, len(v))
+		for i, nested := range v {
+			out[i] = normalizeBSONValueForTest(nested)
+		}
+		return out
+	case []any:
+		out := make([]any, len(v))
+		for i, nested := range v {
+			out[i] = normalizeBSONValueForTest(nested)
+		}
+		return out
+	default:
+		return value
 	}
 }
