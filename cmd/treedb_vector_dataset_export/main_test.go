@@ -30,7 +30,7 @@ func TestExportDatasetSmoke(t *testing.T) {
 		if info.Size() == 0 {
 			t.Fatalf("%s is empty", name)
 		}
-		if res.Manifest.Files[name].Bytes == 0 {
+		if name != "manifest.json" && res.Manifest.Files[name].Bytes == 0 {
 			t.Fatalf("manifest missing %s file stats: %+v", name, res.Manifest.Files)
 		}
 	}
@@ -44,6 +44,17 @@ func TestExportDatasetSmoke(t *testing.T) {
 	}
 	if parsed.Generator != "treedb_vector_synthetic_v1" || parsed.Metric != "cosine" || !parsed.Normalized {
 		t.Fatalf("unexpected parsed manifest: %+v", parsed)
+	}
+	if len(parsed.Files) != len(res.Manifest.Files) {
+		t.Fatalf("on-disk manifest file count differs from result: parsed=%d result=%d", len(parsed.Files), len(res.Manifest.Files))
+	}
+	for name, parsedFile := range parsed.Files {
+		if parsedFile != res.Manifest.Files[name] {
+			t.Fatalf("on-disk manifest file stats differ for %s: parsed=%+v result=%+v", name, parsedFile, res.Manifest.Files[name])
+		}
+	}
+	if _, ok := parsed.Files["manifest.json"]; ok {
+		t.Fatalf("manifest should not include self-referential manifest.json stats: %+v", parsed.Files["manifest.json"])
 	}
 }
 

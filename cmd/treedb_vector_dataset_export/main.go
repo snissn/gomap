@@ -187,10 +187,9 @@ func exportDataset(cfg config) (exportResult, error) {
 		FloatFormat:         "float32_le_row_major",
 		Files:               files,
 	}
-	if err := writeManifest(filepath.Join(out, "manifest.json"), m, files); err != nil {
+	if err := writeManifest(filepath.Join(out, "manifest.json"), m); err != nil {
 		return exportResult{}, err
 	}
-	m.Files = files
 	return exportResult{Dir: out, Manifest: m}, nil
 }
 
@@ -275,20 +274,19 @@ func writeJSONL(path string, files map[string]fileManifest, name string, write f
 	return recordFile(path, h, files, name)
 }
 
-func writeManifest(path string, m manifest, files map[string]fileManifest) error {
+func writeManifest(path string, m manifest) error {
 	f, err := os.Create(path)
 	if err != nil {
 		return err
 	}
-	h := sha256.New()
-	if err := encodeManifest(io.MultiWriter(f, h), m); err != nil {
+	if err := encodeManifest(f, m); err != nil {
 		_ = f.Close()
 		return err
 	}
 	if err := f.Close(); err != nil {
 		return err
 	}
-	return recordFile(path, h, files, "manifest.json")
+	return nil
 }
 
 func recordFile(path string, h interface{ Sum([]byte) []byte }, files map[string]fileManifest, name string) error {
