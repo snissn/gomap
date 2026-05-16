@@ -82,6 +82,17 @@ func TestCommandWALRawKVBatchPreservesEmptySetValue(t *testing.T) {
 	}
 }
 
+func TestCommandWALCollectionPayloadDecodeBoundsCountBeforeAllocation(t *testing.T) {
+	payload := make([]byte, 10+len("users"))
+	encodeCollectionBatchHeader(payload, "users", int(^uint32(0)))
+	if _, err := DecodeCollectionInsertBatchByIDPayload(payload); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("DecodeCollectionInsertBatchByIDPayload huge count error=%v, want ErrCorrupt", err)
+	}
+	if _, err := DecodeCollectionDeleteBatchByIDPayload(payload); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("DecodeCollectionDeleteBatchByIDPayload huge count error=%v, want ErrCorrupt", err)
+	}
+}
+
 func TestCommandWALFormatGoldenV1CollectionInsertBatchByID(t *testing.T) {
 	payload, err := EncodeCollectionInsertBatchByIDPayload("users", []CollectionDocument{
 		{ID: []byte("u2"), Document: []byte(`{"name":"Grace"}`)},

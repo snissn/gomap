@@ -95,6 +95,9 @@ func replayCollectionInsertBatchByIDCommandWAL(db *backenddb.DB, env commitlog.C
 	if err != nil {
 		return err
 	}
+	if len(payload.Documents) == 0 {
+		return db.PublishCommandWALNoop(backenddb.NewCommandWALReplayIntent(env), false)
+	}
 	manager := NewCollectionManager(db)
 	collection, err := manager.OpenCollection(payload.Collection)
 	if err != nil {

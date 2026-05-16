@@ -606,6 +606,9 @@ func DecodeCollectionInsertBatchByIDPayload(payload []byte) (CollectionInsertBat
 	if err != nil {
 		return CollectionInsertBatchByIDPayload{}, err
 	}
+	if uint64(count)*8 > uint64(len(payload)-off) {
+		return CollectionInsertBatchByIDPayload{}, ErrCorrupt
+	}
 	docs := make([]CollectionDocument, 0, count)
 	for i := uint32(0); i < count; i++ {
 		if off+8 > len(payload) {
@@ -671,6 +674,9 @@ func DecodeCollectionDeleteBatchByIDPayload(payload []byte) (CollectionDeleteBat
 	collection, count, off, err := decodeCollectionBatchHeader(payload)
 	if err != nil {
 		return CollectionDeleteBatchByIDPayload{}, err
+	}
+	if uint64(count)*4 > uint64(len(payload)-off) {
+		return CollectionDeleteBatchByIDPayload{}, ErrCorrupt
 	}
 	ids := make([][]byte, 0, count)
 	for i := uint32(0); i < count; i++ {

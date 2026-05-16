@@ -155,6 +155,26 @@ func TestCollectionCommandWALInsertBatchByIDReplayTemplateV1StoredDocument(t *te
 	}
 }
 
+func TestCollectionCommandWALInsertBatchByIDReplayAdvancesEmptyFrame(t *testing.T) {
+	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatJSON,
+		},
+	})
+	payload, err := commitlog.EncodeCollectionInsertBatchByIDPayload("users", nil)
+	if err != nil {
+		t.Fatalf("EncodeCollectionInsertBatchByIDPayload: %v", err)
+	}
+	writeCollectionCommandWALFrame(t, dir, 1, commitlog.CommandKindCollectionInsertBatchByID, commitlog.PayloadFormatCollectionInsertBatchByIDV1, payload)
+
+	reopen := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopen.Close() }()
+	if got := reopen.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("AppliedCommandLSN=%d, want 1", got)
+	}
+}
+
 func TestCollectionCommandWALDeleteBatchByIDReplayIgnoresMissingIDs(t *testing.T) {
 	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
 		Name: "users",
