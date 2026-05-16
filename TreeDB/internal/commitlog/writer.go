@@ -72,7 +72,7 @@ func NewWriter(path string) (*Writer, error) {
 }
 
 func NewWriterWithOptions(path string, opts Options) (*Writer, error) {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0600)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
 		return nil, err
 	}
@@ -82,6 +82,10 @@ func NewWriterWithOptions(path string, opts Options) (*Writer, error) {
 	}
 	info, err := f.Stat()
 	if err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	if _, err := f.Seek(info.Size(), io.SeekStart); err != nil {
 		_ = f.Close()
 		return nil, err
 	}
