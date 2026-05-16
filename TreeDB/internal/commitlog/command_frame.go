@@ -27,6 +27,7 @@ const (
 var commandFrameMagic = [4]byte{'T', 'C', 'W', '1'}
 
 const commandWALCriticalFlagsMask uint64 = CommandWALNonCriticalFlagStart - 1
+const maxCommandFrameUint32 = uint64(^uint32(0))
 
 // CommandKind identifies the deterministic command payload schema carried by a
 // command WAL frame.
@@ -191,7 +192,7 @@ func commandFrameEncodedSizeFromLengths(payloadLen, extRefsLen, preconditionsLen
 }
 
 func addCommandFrameEncodedSectionLen(total, n int) (int, error) {
-	if n < 0 || n > int(^uint32(0)) {
+	if commandFrameIntExceedsUint32(n) {
 		return 0, ErrRecordTooLarge
 	}
 	if total > int(^uint(0)>>1)-n {
@@ -409,7 +410,7 @@ func validateCommandEnvelopePayload(env CommandEnvelope) error {
 }
 
 func EncodeRawKVBatchPayload(ops []RawKVOperation) ([]byte, error) {
-	if len(ops) > int(^uint32(0)) {
+	if commandFrameIntExceedsUint32(len(ops)) {
 		return nil, ErrRecordTooLarge
 	}
 	total := rawKVBatchHeaderSize
@@ -422,7 +423,7 @@ func EncodeRawKVBatchPayload(ops []RawKVOperation) ([]byte, error) {
 		if op.Op == RawKVOpSetRID {
 			valueLen = 8
 		}
-		if len(op.Key) > int(^uint32(0)) || valueLen > int(^uint32(0)) {
+		if commandFrameIntExceedsUint32(len(op.Key)) || commandFrameIntExceedsUint32(valueLen) {
 			return nil, ErrRecordTooLarge
 		}
 		total += rawKVOpHeaderSize + len(op.Key) + valueLen
@@ -517,7 +518,7 @@ func ScanRawKVBatchPayload(payload []byte, visit func(op RawKVOp, key, value []b
 		}
 		key := payload[off : off+int(keyLen)]
 		off += int(keyLen)
-		if err := validateRawKVOperationShape(op, key, valueLen); err != nil {
+		if err := validateRawKVOperationShape(op, key, int(valueLen)); err != nil {
 			return err
 		}
 		value := payload[off : off+int(valueLen)]
@@ -546,17 +547,20 @@ func validateRawKVOperation(op *RawKVOperation) error {
 	if op == nil || op.Key == nil {
 		return ErrCorrupt
 	}
-	valueLen := uint32(len(op.Value))
+	valueLen := len(op.Value)
 	if op.Op == RawKVOpSetRID {
 		if op.RID == 0 || len(op.Value) != 0 {
 			return ErrCorrupt
 		}
 		valueLen = 8
 	}
+	if commandFrameIntExceedsUint32(valueLen) {
+		return ErrRecordTooLarge
+	}
 	return validateRawKVOperationShape(op.Op, op.Key, valueLen)
 }
 
-func validateRawKVOperationShape(op RawKVOp, key []byte, valueLen uint32) error {
+func validateRawKVOperationShape(op RawKVOp, key []byte, valueLen int) error {
 	if key == nil {
 		return ErrCorrupt
 	}
@@ -592,7 +596,7 @@ func EncodeCollectionInsertBatchByIDPayload(collection string, docs []Collection
 	}
 	for i := range ordered {
 		doc := ordered[i]
-		if len(doc.Document) > int(^uint32(0)) {
+		if commandFrameIntExceedsUint32(len(doc.Document)) {
 			return nil, ErrRecordTooLarge
 		}
 		total, err = addCommandFrameEncodedSectionLen(total, 8+len(doc.ID)+len(doc.Document))
@@ -750,7 +754,7 @@ func commandPayloadCountToInt(count uint32) (int, error) {
 }
 
 func collectionBatchPayloadHeaderLen(collection string, count int) (int, error) {
-	if len(collection) > int(^uint32(0)) || count > int(^uint32(0)) {
+	if commandFrameIntExceedsUint32(len(collection)) || commandFrameIntExceedsUint32(count) {
 		return 0, ErrRecordTooLarge
 	}
 	return addCommandFrameEncodedSectionLen(2+4+4, len(collection))
@@ -786,7 +790,7 @@ func decodeCollectionBatchHeader(payload []byte) (collection string, count uint3
 }
 
 func canonicalCollectionDocuments(docs []CollectionDocument) ([]CollectionDocument, error) {
-	if len(docs) > int(^uint32(0)) {
+	if commandFrameIntExceedsUint32(len(docs)) {
 		return nil, ErrRecordTooLarge
 	}
 	ordered := make([]CollectionDocument, len(docs))
@@ -795,7 +799,7 @@ func canonicalCollectionDocuments(docs []CollectionDocument) ([]CollectionDocume
 		if len(doc.ID) == 0 || doc.ID == nil || doc.Document == nil {
 			return nil, ErrCorrupt
 		}
-		if len(doc.ID) > int(^uint32(0)) {
+		if commandFrameIntExceedsUint32(len(doc.ID)) {
 			return nil, ErrRecordTooLarge
 		}
 		ordered[i] = doc
@@ -810,7 +814,7 @@ func canonicalCollectionDocuments(docs []CollectionDocument) ([]CollectionDocume
 }
 
 func canonicalCollectionIDs(ids [][]byte) ([][]byte, error) {
-	if len(ids) > int(^uint32(0)) {
+	if commandFrameIntExceedsUint32(len(ids)) {
 		return nil, ErrRecordTooLarge
 	}
 	ordered := make([][]byte, len(ids))
@@ -818,7 +822,7 @@ func canonicalCollectionIDs(ids [][]byte) ([][]byte, error) {
 		if len(ids[i]) == 0 || ids[i] == nil {
 			return nil, ErrCorrupt
 		}
-		if len(ids[i]) > int(^uint32(0)) {
+		if commandFrameIntExceedsUint32(len(ids[i])) {
 			return nil, ErrRecordTooLarge
 		}
 		ordered[i] = ids[i]
@@ -891,14 +895,14 @@ func externalRefsEncodedLen(refs []ExternalRef) (int, error) {
 	if len(refs) == 0 {
 		return 0, nil
 	}
-	if len(refs) > int(^uint32(0)) {
+	if commandFrameIntExceedsUint32(len(refs)) {
 		return 0, ErrRecordTooLarge
 	}
 	total := 4
 	maxInt := int(^uint(0) >> 1)
 	for i := range refs {
 		pathLen := len(refs[i].Path)
-		if pathLen > int(^uint32(0)) {
+		if commandFrameIntExceedsUint32(pathLen) {
 			return 0, ErrRecordTooLarge
 		}
 		if pathLen > maxInt-externalRefEncodedFixedSize {
@@ -910,7 +914,7 @@ func externalRefsEncodedLen(refs []ExternalRef) (int, error) {
 		}
 		total += n
 	}
-	if total > int(^uint32(0)) {
+	if commandFrameIntExceedsUint32(total) {
 		return 0, ErrRecordTooLarge
 	}
 	return total, nil
@@ -982,14 +986,14 @@ func commandExtensionsEncodedLen(exts []CommandExtension) (int, error) {
 	if len(exts) == 0 {
 		return 0, nil
 	}
-	if len(exts) > int(^uint32(0)) {
+	if commandFrameIntExceedsUint32(len(exts)) {
 		return 0, ErrRecordTooLarge
 	}
 	total := 4
 	maxInt := int(^uint(0) >> 1)
 	for i := range exts {
 		payloadLen := len(exts[i].Payload)
-		if payloadLen > int(^uint32(0)) {
+		if commandFrameIntExceedsUint32(payloadLen) {
 			return 0, ErrRecordTooLarge
 		}
 		if payloadLen > maxInt-commandExtensionEncodedFixedSize {
@@ -1001,10 +1005,14 @@ func commandExtensionsEncodedLen(exts []CommandExtension) (int, error) {
 		}
 		total += n
 	}
-	if total > int(^uint32(0)) {
+	if commandFrameIntExceedsUint32(total) {
 		return 0, ErrRecordTooLarge
 	}
 	return total, nil
+}
+
+func commandFrameIntExceedsUint32(n int) bool {
+	return n < 0 || uint64(n) > maxCommandFrameUint32
 }
 
 func decodeCommandExtensions(data []byte) ([]CommandExtension, error) {
