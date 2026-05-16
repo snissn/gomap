@@ -7,7 +7,7 @@ cd "$ROOT"
 RUN_DIR="${RUN_DIR:-/tmp/gomap_vector_db_compare_$(date +%Y%m%d_%H%M%S)}"
 PYTHON="${PYTHON:-python3}"
 VENV="${VENV:-$RUN_DIR/venv}"
-BACKENDS="${BACKENDS:-treedb,vectorlite,pgvector}"
+BACKENDS="${BACKENDS:-treedb,vectorlite}"
 DOCS="${DOCS:-10000}"
 DIMS="${DIMS:-64}"
 QUERIES="${QUERIES:-10000}"
@@ -22,9 +22,11 @@ MIN_RECALL="${MIN_RECALL:-0.95}"
 PGVECTOR_DSN="${PGVECTOR_DSN:-}"
 PGVECTOR_DOCKER="${PGVECTOR_DOCKER:-auto}"
 PGVECTOR_IMAGE="${PGVECTOR_IMAGE:-pgvector/pgvector:pg16}"
+PGVECTOR_MAX_CONNECTIONS="${PGVECTOR_MAX_CONNECTIONS:-256}"
 PGVECTOR_CONTAINER_NAME="${PGVECTOR_CONTAINER_NAME:-gomap-pgvector-$RANDOM-$$}"
 PGVECTOR_SCHEMA="${PGVECTOR_SCHEMA:-gomap_vector_bench_${RANDOM}_$$}"
 PGVECTOR_TABLE="${PGVECTOR_TABLE:-documents}"
+PGVECTOR_DROP_SCHEMA_AFTER="${PGVECTOR_DROP_SCHEMA_AFTER:-false}"
 PGVECTOR_CONTAINER=""
 
 MONGODB_VECTOR_URI="${MONGODB_VECTOR_URI:-}"
@@ -73,11 +75,16 @@ start_pgvector_if_needed() {
 		-e POSTGRES_PASSWORD=postgres \
 		-e POSTGRES_DB=gomap_vector_bench \
 		-p 127.0.0.1::5432 \
-		"$PGVECTOR_IMAGE")
+		"$PGVECTOR_IMAGE" \
+		-c "max_connections=$PGVECTOR_MAX_CONNECTIONS")
 	local mapped
-	mapped=$(docker port "$PGVECTOR_CONTAINER" 5432/tcp | sed -E 's/.*:([0-9]+)$/\1/')
+	mapped=$(docker port "$PGVECTOR_CONTAINER" 5432/tcp | sed -nE 's/.*:([0-9]+)$/\1/p' | head -n 1)
+	if [[ -z "$mapped" ]]; then
+		echo "could not determine mapped pgvector container port" >&2
+		exit 1
+	fi
 	PGVECTOR_DSN="postgresql://postgres:postgres@127.0.0.1:${mapped}/gomap_vector_bench?sslmode=disable"
-	echo "pgvector dsn: $PGVECTOR_DSN"
+	echo "pgvector dsn: [redacted]"
 	"$VENV/bin/python" - <<'PY' "$PGVECTOR_DSN"
 import sys
 import time
@@ -133,19 +140,19 @@ echo "creating Python environment: $VENV"
 "$VENV/bin/python" -m pip install -q --upgrade pip
 
 binary_pip_packages=(numpy)
-source_pip_packages=()
+backend_pip_packages=()
 if contains_backend vectorlite; then
 	binary_pip_packages+=(vectorlite-py)
 fi
 if contains_backend pgvector; then
-	source_pip_packages+=("psycopg[binary]")
+	backend_pip_packages+=("psycopg[binary]")
 fi
 if contains_backend mongodb; then
-	source_pip_packages+=(pymongo)
+	backend_pip_packages+=(pymongo)
 fi
 "$VENV/bin/python" -m pip install -q --only-binary=:all: "${binary_pip_packages[@]}"
-if ((${#source_pip_packages[@]})); then
-	"$VENV/bin/python" -m pip install -q "${source_pip_packages[@]}"
+if ((${#backend_pip_packages[@]})); then
+	"$VENV/bin/python" -m pip install -q --only-binary=:all: "${backend_pip_packages[@]}"
 fi
 
 echo "exporting TreeDB dataset"
@@ -201,20 +208,25 @@ fi
 if contains_backend pgvector; then
 	start_pgvector_if_needed
 	echo "running PostgreSQL+pgvector benchmark"
-	"$VENV/bin/python" benchmarks/vector_db_compare/pgvector_bench.py \
-		--dataset-dir "$RUN_DIR/dataset" \
-		--dsn "$PGVECTOR_DSN" \
-		--schema "$PGVECTOR_SCHEMA" \
-		--table "$PGVECTOR_TABLE" \
-		--output "$RUN_DIR/pgvector.json" \
-		--queries "$QUERIES" \
-		--validate-queries "$VALIDATE_QUERIES" \
-		--top-k "$TOP_K" \
-		--search-concurrency "$SEARCH_CONCURRENCY" \
-		--m "$M" \
-		--ef-construction "$EF_CONSTRUCTION" \
-		--ef-search "$EF_SEARCH" \
-		--min-recall "$MIN_RECALL" >"$RUN_DIR/pgvector.stdout.json"
+	pgvector_args=(
+		--dataset-dir "$RUN_DIR/dataset"
+		--dsn "$PGVECTOR_DSN"
+		--schema "$PGVECTOR_SCHEMA"
+		--table "$PGVECTOR_TABLE"
+		--output "$RUN_DIR/pgvector.json"
+		--queries "$QUERIES"
+		--validate-queries "$VALIDATE_QUERIES"
+		--top-k "$TOP_K"
+		--search-concurrency "$SEARCH_CONCURRENCY"
+		--m "$M"
+		--ef-construction "$EF_CONSTRUCTION"
+		--ef-search "$EF_SEARCH"
+		--min-recall "$MIN_RECALL"
+	)
+	if [[ "$PGVECTOR_DROP_SCHEMA_AFTER" == "true" ]]; then
+		pgvector_args+=(--drop-schema-after)
+	fi
+	"$VENV/bin/python" benchmarks/vector_db_compare/pgvector_bench.py "${pgvector_args[@]}" >"$RUN_DIR/pgvector.stdout.json"
 	result_args+=(--result "$RUN_DIR/pgvector.json")
 fi
 
