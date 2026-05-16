@@ -53,6 +53,49 @@ func TestCollectionCommandWALInsertBatchByIDPublishesAppliedLSN(t *testing.T) {
 	}
 }
 
+func TestCollectionCommandWALInsertByIDPublishesAppliedLSN(t *testing.T) {
+	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatJSON,
+		},
+	})
+	d := openCollectionCommandWALDB(t, dir)
+	mgr := NewCollectionManager(d)
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		_ = d.Close()
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	if _, err := col.Insert([]byte("u1"), []byte(`{"name":"Ada"}`)); err != nil {
+		_ = d.Close()
+		t.Fatalf("Insert: %v", err)
+	}
+	if got := d.State().AppliedCommandLSN; got != 1 {
+		_ = d.Close()
+		t.Fatalf("AppliedCommandLSN=%d, want 1", got)
+	}
+	frames := collectionCommandWALFrames(t, dir)
+	if len(frames) != 1 || frames[0].Kind != commitlog.CommandKindCollectionInsertBatchByID {
+		_ = d.Close()
+		t.Fatalf("command WAL frames=%+v, want one collection insert frame", frames)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopen := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopen.Close() }()
+	reopened, err := NewCollectionManager(reopen).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection reopen: %v", err)
+	}
+	assertCollectionDocument(t, reopened, "u1", `{"name":"Ada"}`)
+	if got := reopen.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("AppliedCommandLSN after reopen=%d, want 1", got)
+	}
+}
+
 func TestCollectionCommandWALInsertBatchByIDReplayRecoversUnappliedFrame(t *testing.T) {
 	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
 		Name: "users",

@@ -3048,7 +3048,7 @@ func (c *Collection) Insert(id, document []byte) ([]byte, error) {
 	if err := c.ensureWriteDomainOpen(); err != nil {
 		return nil, err
 	}
-	if len(c.meta.Indexes) == 0 {
+	if len(c.meta.Indexes) == 0 && !c.db.CommandWALEnabled() {
 		if c.hasBufferedNoIndexBSONRootRuns() {
 			if err := c.withMutationLock(func() error {
 				return c.flushBufferedWrites()
