@@ -468,11 +468,49 @@ func benchmarkJSONBenchPartAssetM2(b *testing.B, ds JSONBenchDataset) {
 				b.SetBytes(int64(record.TotalBytes))
 				b.ResetTimer()
 				for i := 0; i < b.N; i++ {
-					reconstructed, loadedRecord, err := ColumnPartFromTCS1Asset(store, ref)
+					reconstructed, loadedRecord, err := ColumnPartFromTCS1AssetWithOptions(store, ref, ColumnPartImageReadOptions{})
 					if err != nil {
 						b.Fatal(err)
 					}
 					benchSink += int64(reconstructed.Descriptor.RowCount + loadedRecord.PayloadBytes)
+				}
+				reportTCS1AssetThroughput(b, ds, record)
+			})
+
+			b.Run("load_parse_reconstruct_metadata", func(b *testing.B) {
+				store := NewMemoryColumnAssetStore()
+				ref, err := store.Put(ColumnAssetKindTCS1PartImage, assetBytes)
+				if err != nil {
+					b.Fatalf("Put: %v", err)
+				}
+				b.ReportAllocs()
+				b.SetBytes(int64(record.TotalBytes))
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					reconstructed, loadedRecord, err := ColumnPartFromTCS1AssetWithOptions(store, ref, ColumnPartImageReadOptions{IncludeAggregateMetadata: true})
+					if err != nil {
+						b.Fatal(err)
+					}
+					benchSink += int64(reconstructed.Descriptor.RowCount+len(reconstructed.AggregateMetadata)) + int64(loadedRecord.PayloadBytes)
+				}
+				reportTCS1AssetThroughput(b, ds, record)
+			})
+
+			b.Run("load_parse_reconstruct_full_locators", func(b *testing.B) {
+				store := NewMemoryColumnAssetStore()
+				ref, err := store.Put(ColumnAssetKindTCS1PartImage, assetBytes)
+				if err != nil {
+					b.Fatalf("Put: %v", err)
+				}
+				b.ReportAllocs()
+				b.SetBytes(int64(record.TotalBytes))
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					reconstructed, loadedRecord, err := ColumnPartFromTCS1Asset(store, ref)
+					if err != nil {
+						b.Fatal(err)
+					}
+					benchSink += int64(reconstructed.Descriptor.RowCount+len(reconstructed.Locators)) + int64(loadedRecord.PayloadBytes)
 				}
 				reportTCS1AssetThroughput(b, ds, record)
 			})
@@ -488,7 +526,7 @@ func benchmarkJSONBenchPartAssetM2(b *testing.B, ds JSONBenchDataset) {
 					if err != nil {
 						b.Fatal(err)
 					}
-					reconstructed, ref, rebuiltRecord, err := TCS1AssetBackedColumnPart(part, ds.Dictionaries, store)
+					reconstructed, ref, rebuiltRecord, err := ScanOnlyTCS1AssetBackedColumnPart(part, ds.Dictionaries, store)
 					if err != nil {
 						b.Fatal(err)
 					}

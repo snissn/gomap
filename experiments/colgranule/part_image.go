@@ -478,12 +478,23 @@ func (b *columnPartImageBuilder) addSortKeyMarksSection() error {
 }
 
 func (b *columnPartImageBuilder) addRowLocatorsSection() error {
-	var enc columnPartImageEncoder
 	primaryIDs := make([]int64, 0, len(b.part.Locators))
 	for primaryID := range b.part.Locators {
 		primaryIDs = append(primaryIDs, primaryID)
 	}
 	sort.Slice(primaryIDs, func(i, j int) bool { return primaryIDs[i] < primaryIDs[j] })
+	if uint64(len(primaryIDs)) > uint64(^uint32(0)) {
+		return fmt.Errorf("colgranule: row locator count=%d exceeds uint32", len(primaryIDs))
+	}
+	recordBytes, err := checkedMulInt(len(primaryIDs), rowLocatorBytes, "row locator section bytes")
+	if err != nil {
+		return err
+	}
+	payloadBytes, err := checkedAddInt(4, recordBytes, "row locator section bytes")
+	if err != nil {
+		return err
+	}
+	enc := columnPartImageEncoder{buf: make([]byte, 0, payloadBytes)}
 	enc.u32(uint32(len(primaryIDs)))
 	for _, primaryID := range primaryIDs {
 		locator := b.part.Locators[primaryID]

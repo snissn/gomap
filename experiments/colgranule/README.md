@@ -154,9 +154,13 @@ plumbing without changing the encoded-block execution interface.
 
 JSONBench query timings now build the serialized image, wrap/store it as a
 `TCS1` asset, read it back, reconstruct the part, and run q1-q5 through the same
-encoded kernels. Split assets for individual blocks, dictionaries, marks,
-locators, or aggregate metadata should remain benchmark-driven follow-ups; the
-single-record mode is the baseline.
+encoded kernels. The query hot path uses scan-only reconstruction so it does not
+decode the point-lookup row-locator map or aggregate metadata for scans that do
+not need them. Full reconstruction with locators and eager metadata remains
+available for point lookup, metadata kernels, and integrity tests. Split assets
+for individual blocks, dictionaries, marks, locators, or aggregate metadata
+should remain benchmark-driven follow-ups; the single-record mode is the
+baseline.
 
 ## M1D Gates Before Value-Log-Backed M2
 

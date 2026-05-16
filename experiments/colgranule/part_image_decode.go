@@ -168,9 +168,26 @@ func ParseColumnPartImage(data []byte) (ColumnPartImage, error) {
 	}, nil
 }
 
+type ColumnPartImageReadOptions struct {
+	IncludeRowLocators       bool
+	ValidateRowLocators      bool
+	IncludeAggregateMetadata bool
+}
+
 func ColumnPartFromImage(image ColumnPartImage) (*ColumnPart, error) {
+	return ColumnPartFromImageWithOptions(image, ColumnPartImageReadOptions{
+		IncludeRowLocators:       true,
+		ValidateRowLocators:      true,
+		IncludeAggregateMetadata: true,
+	})
+}
+
+func ColumnPartFromImageWithOptions(image ColumnPartImage, opts ColumnPartImageReadOptions) (*ColumnPart, error) {
 	if image.TotalBytes() == 0 {
 		return nil, fmt.Errorf("colgranule: empty part image")
+	}
+	if opts.ValidateRowLocators {
+		opts.IncludeRowLocators = true
 	}
 	if err := image.validateForRead(); err != nil {
 		return nil, err
@@ -201,18 +218,25 @@ func ColumnPartFromImage(image ColumnPartImage) (*ColumnPart, error) {
 	if err := validateDecodedSortKeyMarks(desc, marks); err != nil {
 		return nil, err
 	}
-	locators, err := decodeRowLocatorsSection(image)
-	if err != nil {
-		return nil, err
-	}
-	if err := validateDecodedRowLocators(desc, image.PartID, locators); err != nil {
-		return nil, err
+	var locators map[int64]RowLocator
+	if opts.IncludeRowLocators {
+		locators, err = decodeRowLocatorsSection(image)
+		if err != nil {
+			return nil, err
+		}
+		if opts.ValidateRowLocators {
+			if err := validateDecodedRowLocators(desc, image.PartID, locators); err != nil {
+				return nil, err
+			}
+		}
 	}
 	if err := attachColumnPayloadsFromImage(image, columns); err != nil {
 		return nil, err
 	}
-	if err := validateDecodedRowLocatorsPrimaryKey(desc, columns, locators); err != nil {
-		return nil, err
+	if opts.ValidateRowLocators {
+		if err := validateDecodedRowLocatorsPrimaryKey(desc, columns, locators); err != nil {
+			return nil, err
+		}
 	}
 	optionsColumns := make([]ColumnDefinition, 0, len(desc.Columns))
 	for _, columnDescriptor := range desc.Columns {
@@ -227,9 +251,12 @@ func ColumnPartFromImage(image ColumnPartImage) (*ColumnPart, error) {
 		}
 		optionsColumns = append(optionsColumns, def)
 	}
-	aggregateMetadata, err := decodeAggregateMetadataSections(image)
-	if err != nil {
-		return nil, err
+	var aggregateMetadata map[string]AggregateMetadata
+	if opts.IncludeAggregateMetadata {
+		aggregateMetadata, err = decodeAggregateMetadataSections(image)
+		if err != nil {
+			return nil, err
+		}
 	}
 	aggregateDefinitions := make([]AggregateMetadataDefinition, 0, len(aggregateMetadata))
 	for _, metadata := range aggregateMetadata {
@@ -588,6 +615,13 @@ func checkedAddInt(a int, b int, field string) (int, error) {
 		return 0, fmt.Errorf("%s overflow %d+%d", field, a, b)
 	}
 	return a + b, nil
+}
+
+func uint32ToInt(v uint32, field string) (int, error) {
+	if uint64(int(v)) != uint64(v) {
+		return 0, fmt.Errorf("colgranule: %s=%d exceeds host int", field, v)
+	}
+	return int(v), nil
 }
 
 func decodeGranuleDescriptor(dec *columnPartImageDecoder) (GranuleDescriptor, error) {
@@ -999,53 +1033,57 @@ func decodeRowLocatorsSection(image ColumnPartImage) (map[int64]RowLocator, erro
 	if err != nil {
 		return nil, err
 	}
-	dec := columnPartImageDecoder{data: image.sectionBytes(section)}
-	count, err := dec.u32()
+	data := image.sectionBytes(section)
+	if len(data) < 4 {
+		return nil, fmt.Errorf("colgranule: truncated row locators section bytes=%d", len(data))
+	}
+	count := binary.LittleEndian.Uint32(data[:4])
+	maxLocators := (len(data) - 4) / rowLocatorBytes
+	if uint64(count) > uint64(maxLocators) {
+		return nil, fmt.Errorf("colgranule: row locators count=%d exceeds section capacity=%d", count, maxLocators)
+	}
+	total, err := uint32ToInt(count, "row locators count")
 	if err != nil {
 		return nil, err
 	}
-	total, err := dec.boundedCount(count, 32, "row locators")
+	recordBytes, err := checkedMulInt(total, rowLocatorBytes, "row locator section bytes")
 	if err != nil {
 		return nil, err
+	}
+	wantBytes, err := checkedAddInt(4, recordBytes, "row locator section bytes")
+	if err != nil {
+		return nil, err
+	}
+	if len(data) != wantBytes {
+		return nil, fmt.Errorf("colgranule: row locators section bytes=%d want %d", len(data), wantBytes)
 	}
 	out := make(map[int64]RowLocator, total)
+	offset := 4
 	for i := 0; i < total; i++ {
-		primaryID, err := dec.i64()
-		if err != nil {
-			return nil, err
-		}
-		partID, err := dec.u64()
-		if err != nil {
-			return nil, err
-		}
-		partRow, err := dec.u32()
-		if err != nil {
-			return nil, err
-		}
-		granuleOrdinal, err := dec.u32()
-		if err != nil {
-			return nil, err
-		}
-		rowInGranule, err := dec.u32()
-		if err != nil {
-			return nil, err
-		}
-		reserved, err := dec.u32()
-		if err != nil {
-			return nil, err
-		}
+		primaryID := int64(binary.LittleEndian.Uint64(data[offset:]))
+		offset += 8
+		partID := binary.LittleEndian.Uint64(data[offset:])
+		offset += 8
+		partRow := binary.LittleEndian.Uint32(data[offset:])
+		offset += 4
+		granuleOrdinal := binary.LittleEndian.Uint32(data[offset:])
+		offset += 4
+		rowInGranule := binary.LittleEndian.Uint32(data[offset:])
+		offset += 4
+		reserved := binary.LittleEndian.Uint32(data[offset:])
+		offset += 4
 		if reserved != 0 {
 			return nil, fmt.Errorf("colgranule: row locator primary id %d reserved=%d want 0", primaryID, reserved)
 		}
-		partRowInt, err := dec.countToInt(partRow, "row locator part row")
+		partRowInt, err := uint32ToInt(partRow, "row locator part row")
 		if err != nil {
 			return nil, err
 		}
-		granuleOrdinalInt, err := dec.countToInt(granuleOrdinal, "row locator granule ordinal")
+		granuleOrdinalInt, err := uint32ToInt(granuleOrdinal, "row locator granule ordinal")
 		if err != nil {
 			return nil, err
 		}
-		rowInGranuleInt, err := dec.countToInt(rowInGranule, "row locator row in granule")
+		rowInGranuleInt, err := uint32ToInt(rowInGranule, "row locator row in granule")
 		if err != nil {
 			return nil, err
 		}
@@ -1059,9 +1097,6 @@ func decodeRowLocatorsSection(image ColumnPartImage) (map[int64]RowLocator, erro
 			GranuleOrdinal: granuleOrdinalInt,
 			RowInGranule:   rowInGranuleInt,
 		}
-	}
-	if err := dec.finish(); err != nil {
-		return nil, err
 	}
 	return out, nil
 }

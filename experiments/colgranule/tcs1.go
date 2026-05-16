@@ -116,7 +116,7 @@ func StoreTCS1ColumnPartImage(store ColumnAssetStore, image ColumnPartImage) (Co
 	if err != nil {
 		return ColumnAssetRef{}, TCS1PartRecord{}, err
 	}
-	ref, err := store.Put(ColumnAssetKindTCS1PartImage, payload)
+	ref, err := putColumnAssetPayload(store, ColumnAssetKindTCS1PartImage, payload)
 	if err != nil {
 		return ColumnAssetRef{}, TCS1PartRecord{}, err
 	}
@@ -144,11 +144,19 @@ func LoadTCS1ColumnPartImage(store ColumnAssetStore, ref ColumnAssetRef) (Column
 }
 
 func ColumnPartFromTCS1Asset(store ColumnAssetStore, ref ColumnAssetRef) (*ColumnPart, TCS1PartRecord, error) {
+	return ColumnPartFromTCS1AssetWithOptions(store, ref, ColumnPartImageReadOptions{
+		IncludeRowLocators:       true,
+		ValidateRowLocators:      true,
+		IncludeAggregateMetadata: true,
+	})
+}
+
+func ColumnPartFromTCS1AssetWithOptions(store ColumnAssetStore, ref ColumnAssetRef, opts ColumnPartImageReadOptions) (*ColumnPart, TCS1PartRecord, error) {
 	image, record, err := LoadTCS1ColumnPartImage(store, ref)
 	if err != nil {
 		return nil, TCS1PartRecord{}, err
 	}
-	part, err := ColumnPartFromImage(image)
+	part, err := ColumnPartFromImageWithOptions(image, opts)
 	if err != nil {
 		return nil, TCS1PartRecord{}, err
 	}
@@ -156,6 +164,14 @@ func ColumnPartFromTCS1Asset(store ColumnAssetStore, ref ColumnAssetRef) (*Colum
 }
 
 func TCS1AssetBackedColumnPart(part *ColumnPart, dictionaries map[string]map[string]int64, store ColumnAssetStore) (*ColumnPart, ColumnAssetRef, TCS1PartRecord, error) {
+	return TCS1AssetBackedColumnPartWithOptions(part, dictionaries, store, ColumnPartImageReadOptions{
+		IncludeRowLocators:       true,
+		ValidateRowLocators:      true,
+		IncludeAggregateMetadata: true,
+	})
+}
+
+func TCS1AssetBackedColumnPartWithOptions(part *ColumnPart, dictionaries map[string]map[string]int64, store ColumnAssetStore, opts ColumnPartImageReadOptions) (*ColumnPart, ColumnAssetRef, TCS1PartRecord, error) {
 	if part == nil {
 		return nil, ColumnAssetRef{}, TCS1PartRecord{}, fmt.Errorf("colgranule: nil part")
 	}
@@ -167,11 +183,22 @@ func TCS1AssetBackedColumnPart(part *ColumnPart, dictionaries map[string]map[str
 	if err != nil {
 		return nil, ColumnAssetRef{}, TCS1PartRecord{}, err
 	}
-	reconstructed, record, err := ColumnPartFromTCS1Asset(store, ref)
+	reconstructed, record, err := ColumnPartFromTCS1AssetWithOptions(store, ref, opts)
 	if err != nil {
 		return nil, ColumnAssetRef{}, TCS1PartRecord{}, err
 	}
 	return reconstructed, ref, record, nil
+}
+
+func ScanOnlyTCS1AssetBackedColumnPart(part *ColumnPart, dictionaries map[string]map[string]int64, store ColumnAssetStore) (*ColumnPart, ColumnAssetRef, TCS1PartRecord, error) {
+	return TCS1AssetBackedColumnPartWithOptions(part, dictionaries, store, ColumnPartImageReadOptions{})
+}
+
+func putColumnAssetPayload(store ColumnAssetStore, kind ColumnAssetKind, payload []byte) (ColumnAssetRef, error) {
+	if owned, ok := store.(columnAssetOwnedStore); ok {
+		return owned.PutOwned(kind, payload)
+	}
+	return store.Put(kind, payload)
 }
 
 func decodeTCS1Header(data []byte) (TCS1PartRecord, []byte, error) {

@@ -114,8 +114,12 @@ func BuildJSONBenchColumnPartWithAggregateMetadataForLayout(ds JSONBenchDataset,
 }
 
 func assetBackedJSONBenchPart(part *ColumnPart, dictionaries map[string]map[string]int64) (*ColumnPart, error) {
+	return assetBackedJSONBenchPartWithOptions(part, dictionaries, ColumnPartImageReadOptions{})
+}
+
+func assetBackedJSONBenchPartWithOptions(part *ColumnPart, dictionaries map[string]map[string]int64, opts ColumnPartImageReadOptions) (*ColumnPart, error) {
 	store := NewMemoryColumnAssetStore()
-	reconstructed, _, _, err := TCS1AssetBackedColumnPart(part, dictionaries, store)
+	reconstructed, _, _, err := TCS1AssetBackedColumnPartWithOptions(part, dictionaries, store, opts)
 	return reconstructed, err
 }
 
@@ -396,7 +400,7 @@ func RunJSONBenchPartAggregateMetadataQueries(ds JSONBenchDataset, rowsPerGranul
 	if err != nil {
 		return nil, err
 	}
-	timePart, err = assetBackedJSONBenchPart(timePart, ds.Dictionaries)
+	timePart, err = assetBackedJSONBenchPartWithOptions(timePart, ds.Dictionaries, ColumnPartImageReadOptions{IncludeAggregateMetadata: true})
 	if err != nil {
 		return nil, err
 	}
@@ -404,7 +408,7 @@ func RunJSONBenchPartAggregateMetadataQueries(ds JSONBenchDataset, rowsPerGranul
 	if err != nil {
 		return nil, err
 	}
-	clickHouseOrderPart, err = assetBackedJSONBenchPart(clickHouseOrderPart, ds.Dictionaries)
+	clickHouseOrderPart, err = assetBackedJSONBenchPartWithOptions(clickHouseOrderPart, ds.Dictionaries, ColumnPartImageReadOptions{IncludeAggregateMetadata: true})
 	if err != nil {
 		return nil, err
 	}

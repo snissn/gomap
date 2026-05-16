@@ -30,10 +30,14 @@ type ColumnAssetStore interface {
 	ReadTo(ref ColumnAssetRef, dst []byte) ([]byte, error)
 }
 
+type columnAssetOwnedStore interface {
+	PutOwned(kind ColumnAssetKind, payload []byte) (ColumnAssetRef, error)
+}
+
 type MemoryColumnAssetStore struct {
 	mu      sync.Mutex
 	nextOff int64
-	assets  map[columnAssetKey][]byte
+	assets  map[columnAssetKey]memoryColumnAsset
 }
 
 type columnAssetKey struct {
@@ -43,8 +47,13 @@ type columnAssetKey struct {
 	length int64
 }
 
+type memoryColumnAsset struct {
+	payload  []byte
+	checksum uint32
+}
+
 func NewMemoryColumnAssetStore() *MemoryColumnAssetStore {
-	return &MemoryColumnAssetStore{assets: make(map[columnAssetKey][]byte)}
+	return &MemoryColumnAssetStore{assets: make(map[columnAssetKey]memoryColumnAsset)}
 }
 
 func (s *MemoryColumnAssetStore) Reset() {
@@ -60,7 +69,17 @@ func (s *MemoryColumnAssetStore) Put(kind ColumnAssetKind, payload []byte) (Colu
 	if s == nil {
 		return ColumnAssetRef{}, fmt.Errorf("colgranule: nil memory asset store")
 	}
-	value := append([]byte(nil), payload...)
+	return s.put(kind, append([]byte(nil), payload...))
+}
+
+func (s *MemoryColumnAssetStore) PutOwned(kind ColumnAssetKind, payload []byte) (ColumnAssetRef, error) {
+	if s == nil {
+		return ColumnAssetRef{}, fmt.Errorf("colgranule: nil memory asset store")
+	}
+	return s.put(kind, payload)
+}
+
+func (s *MemoryColumnAssetStore) put(kind ColumnAssetKind, payload []byte) (ColumnAssetRef, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	ref, err := newColumnAssetRef(kind, 1, s.nextOff, len(payload), payload)
@@ -68,7 +87,7 @@ func (s *MemoryColumnAssetStore) Put(kind ColumnAssetKind, payload []byte) (Colu
 		return ColumnAssetRef{}, err
 	}
 	s.nextOff += ref.Length
-	s.assets[ref.key()] = value
+	s.assets[ref.key()] = memoryColumnAsset{payload: payload, checksum: ref.Checksum}
 	return ref, nil
 }
 
@@ -80,15 +99,15 @@ func (s *MemoryColumnAssetStore) Read(ref ColumnAssetRef) ([]byte, error) {
 		return nil, err
 	}
 	s.mu.Lock()
-	payload, ok := s.assets[ref.key()]
+	asset, ok := s.assets[ref.key()]
 	s.mu.Unlock()
 	if !ok {
 		return nil, fmt.Errorf("colgranule: missing asset ref file=%d offset=%d length=%d kind=%s", ref.FileID, ref.Offset, ref.Length, ref.Kind)
 	}
-	if checksum := crc32.ChecksumIEEE(payload); checksum != ref.Checksum {
-		return nil, fmt.Errorf("colgranule: asset ref checksum=%08x want %08x", checksum, ref.Checksum)
+	if asset.checksum != ref.Checksum {
+		return nil, fmt.Errorf("colgranule: asset ref checksum=%08x want %08x", asset.checksum, ref.Checksum)
 	}
-	return payload, nil
+	return asset.payload, nil
 }
 
 func (s *MemoryColumnAssetStore) ReadTo(ref ColumnAssetRef, dst []byte) ([]byte, error) {

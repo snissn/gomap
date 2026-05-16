@@ -261,9 +261,12 @@ func TestJSONBenchPartQueriesRunFromReopenedTCS1Asset(t *testing.T) {
 		t.Fatalf("reopen segment store: %v", err)
 	}
 	defer reopenedStore.Close()
-	reopenedPart, _, err := ColumnPartFromTCS1Asset(reopenedStore, assetRef)
+	reopenedPart, _, err := ColumnPartFromTCS1AssetWithOptions(reopenedStore, assetRef, ColumnPartImageReadOptions{})
 	if err != nil {
 		t.Fatalf("ColumnPartFromTCS1Asset after reopen: %v", err)
+	}
+	if len(reopenedPart.Locators) != 0 {
+		t.Fatalf("scan-only asset load decoded %d locators", len(reopenedPart.Locators))
 	}
 
 	codes, err := jsonBenchQueryCodes(ds)
