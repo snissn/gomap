@@ -200,6 +200,9 @@ func ColumnPartFromImage(image ColumnPartImage) (*ColumnPart, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := validateDecodedSortKeyMarks(desc, marks); err != nil {
+		return nil, err
+	}
 	locators, err := decodeRowLocatorsSection(image)
 	if err != nil {
 		return nil, err
@@ -785,12 +788,96 @@ func decodeSortKeyMarksSection(image ColumnPartImage) ([]SortKeyMark, error) {
 				UpperExclusive: upper,
 			})
 		}
+		if err := validateDecodedSortKeyMark(mark, i); err != nil {
+			return nil, err
+		}
 		out = append(out, mark)
 	}
 	if err := dec.finish(); err != nil {
 		return nil, err
 	}
 	return out, nil
+}
+
+func validateDecodedSortKeyMark(mark SortKeyMark, index int) error {
+	if mark.Rows <= 0 {
+		return fmt.Errorf("colgranule: sort key mark %d has invalid row count %d", index, mark.Rows)
+	}
+	if len(mark.Columns) == 0 {
+		return fmt.Errorf("colgranule: sort key mark %d has no columns", index)
+	}
+	if len(mark.Columns) > maxSortKeyColumns {
+		return fmt.Errorf("colgranule: sort key mark %d columns=%d exceeds cap %d", index, len(mark.Columns), maxSortKeyColumns)
+	}
+	for columnIndex, column := range mark.Columns {
+		if column == "" {
+			return fmt.Errorf("colgranule: sort key mark %d has empty column name at %d", index, columnIndex)
+		}
+	}
+	if len(mark.Prefixes) != len(mark.Columns) {
+		return fmt.Errorf("colgranule: sort key mark %d prefixes=%d want columns=%d", index, len(mark.Prefixes), len(mark.Columns))
+	}
+	for prefixIndex, prefix := range mark.Prefixes {
+		prefixLen := prefixIndex + 1
+		if !sameStringSlice(prefix.Columns, mark.Columns[:prefixLen]) {
+			return fmt.Errorf("colgranule: sort key mark %d prefix %d columns=%v want %v", index, prefixIndex, prefix.Columns, mark.Columns[:prefixLen])
+		}
+		if prefix.Lower.Exclusive {
+			return fmt.Errorf("colgranule: sort key mark %d prefix %d lower bound is exclusive", index, prefixIndex)
+		}
+		if prefix.Lower.Unbounded {
+			return fmt.Errorf("colgranule: sort key mark %d prefix %d lower bound is unbounded", index, prefixIndex)
+		}
+		if len(prefix.Lower.Values) != prefixLen {
+			return fmt.Errorf("colgranule: sort key mark %d prefix %d lower values=%d want %d", index, prefixIndex, len(prefix.Lower.Values), prefixLen)
+		}
+		if !prefix.UpperExclusive.Exclusive {
+			return fmt.Errorf("colgranule: sort key mark %d prefix %d upper bound is not exclusive", index, prefixIndex)
+		}
+		if prefix.UpperExclusive.Unbounded {
+			if len(prefix.UpperExclusive.Values) != 0 {
+				return fmt.Errorf("colgranule: sort key mark %d prefix %d unbounded upper has %d values", index, prefixIndex, len(prefix.UpperExclusive.Values))
+			}
+			continue
+		}
+		if len(prefix.UpperExclusive.Values) != prefixLen {
+			return fmt.Errorf("colgranule: sort key mark %d prefix %d upper values=%d want %d", index, prefixIndex, len(prefix.UpperExclusive.Values), prefixLen)
+		}
+		if compareInt64Tuple(prefix.UpperExclusive.Values, prefix.Lower.Values) <= 0 {
+			return fmt.Errorf("colgranule: sort key mark %d prefix %d upper bound %v is not greater than lower bound %v", index, prefixIndex, prefix.UpperExclusive.Values, prefix.Lower.Values)
+		}
+	}
+	return nil
+}
+
+func validateDecodedSortKeyMarks(desc ColumnPartDescriptor, marks []SortKeyMark) error {
+	if len(desc.SortKey) == 0 {
+		return fmt.Errorf("colgranule: descriptor has no sort key")
+	}
+	if len(marks) != len(desc.Granules) {
+		return fmt.Errorf("colgranule: sort key marks=%d granules=%d", len(marks), len(desc.Granules))
+	}
+	expectedColumns := make([]string, len(desc.SortKey))
+	for i, column := range desc.SortKey {
+		if column.Column == "" {
+			return fmt.Errorf("colgranule: descriptor sort key has empty column at %d", i)
+		}
+		expectedColumns[i] = column.Column
+	}
+	for i, mark := range marks {
+		if !sameStringSlice(mark.Columns, expectedColumns) {
+			return fmt.Errorf("colgranule: sort key mark %d columns=%v want descriptor sort key %v", i, mark.Columns, expectedColumns)
+		}
+	}
+	for i, granule := range desc.Granules {
+		if granule.MarkOrdinal >= len(marks) {
+			return fmt.Errorf("colgranule: granule %d mark ordinal=%d outside marks=%d", i, granule.MarkOrdinal, len(marks))
+		}
+		if marks[granule.MarkOrdinal].Rows != granule.RowCount {
+			return fmt.Errorf("colgranule: granule %d rows=%d mark %d rows=%d", i, granule.RowCount, granule.MarkOrdinal, marks[granule.MarkOrdinal].Rows)
+		}
+	}
+	return nil
 }
 
 func decodeSortKeyBound(dec *columnPartImageDecoder) (SortKeyBound, error) {

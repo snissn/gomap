@@ -944,6 +944,55 @@ func TestColumnPartFromImageRejectsNegativeAggregateMetadataScaledFields(t *test
 	}
 }
 
+func TestColumnPartFromImageRejectsInvalidSortKeyMarkBounds(t *testing.T) {
+	part, image := testColumnPartImageFixture(t, false)
+	marks := cloneSortKeyMarksForTest(part.Marks)
+	prefix := &marks[0].Prefixes[0]
+	prefix.UpperExclusive.Unbounded = false
+	prefix.UpperExclusive.Exclusive = true
+	prefix.UpperExclusive.Values = append([]int64(nil), prefix.Lower.Values...)
+
+	imageBytes := testColumnPartImageBytesWithReplacedSection(t, part, image, firstImageSectionOfKind(t, image, ColumnPartImageSectionSortKeyMarks), encodeSortKeyMarksPayloadForTest(marks))
+	parsed, err := ParseColumnPartImage(imageBytes)
+	if err != nil {
+		t.Fatalf("ParseColumnPartImage: %v", err)
+	}
+	if _, err := ColumnPartFromImage(parsed); err == nil {
+		t.Fatal("ColumnPartFromImage accepted an invalid sort-key mark upper bound")
+	}
+}
+
+func TestColumnPartFromImageRejectsInvalidSortKeyMarkValueWidth(t *testing.T) {
+	part, image := testColumnPartImageFixture(t, false)
+	marks := cloneSortKeyMarksForTest(part.Marks)
+	prefix := &marks[0].Prefixes[0]
+	prefix.Lower.Values = append(prefix.Lower.Values, 0)
+
+	imageBytes := testColumnPartImageBytesWithReplacedSection(t, part, image, firstImageSectionOfKind(t, image, ColumnPartImageSectionSortKeyMarks), encodeSortKeyMarksPayloadForTest(marks))
+	parsed, err := ParseColumnPartImage(imageBytes)
+	if err != nil {
+		t.Fatalf("ParseColumnPartImage: %v", err)
+	}
+	if _, err := ColumnPartFromImage(parsed); err == nil {
+		t.Fatal("ColumnPartFromImage accepted a sort-key mark lower bound with the wrong value width")
+	}
+}
+
+func TestColumnPartFromImageRejectsMissingSortKeyMark(t *testing.T) {
+	part, image := testColumnPartImageFixture(t, false)
+	marks := cloneSortKeyMarksForTest(part.Marks)
+	marks = marks[:len(marks)-1]
+
+	imageBytes := testColumnPartImageBytesWithReplacedSection(t, part, image, firstImageSectionOfKind(t, image, ColumnPartImageSectionSortKeyMarks), encodeSortKeyMarksPayloadForTest(marks))
+	parsed, err := ParseColumnPartImage(imageBytes)
+	if err != nil {
+		t.Fatalf("ParseColumnPartImage: %v", err)
+	}
+	if _, err := ColumnPartFromImage(parsed); err == nil {
+		t.Fatal("ColumnPartFromImage accepted fewer sort-key marks than descriptor granules")
+	}
+}
+
 func testColumnPartImageFixture(t *testing.T, withAggregateMetadata bool) (*ColumnPart, ColumnPartImage) {
 	t.Helper()
 	return testColumnPartImageFixtureWithPartID(t, 7, withAggregateMetadata)
@@ -991,6 +1040,68 @@ func testColumnPartImageBytesWithAppendedSection(t *testing.T, part *ColumnPart,
 	sections = append(sections, section)
 	payloads = append(payloads, payload)
 	return testColumnPartImageBytes(t, part, sections, payloads)
+}
+
+func testColumnPartImageBytesWithReplacedSection(t *testing.T, part *ColumnPart, image ColumnPartImage, target ColumnPartImageSection, payload []byte) []byte {
+	t.Helper()
+	sections := append([]ColumnPartImageSection(nil), image.Sections...)
+	payloads := make([][]byte, 0, len(image.Sections))
+	replaced := false
+	for _, existing := range image.Sections {
+		if existing.Kind == target.Kind && existing.Name == target.Name && existing.Column == target.Column && existing.Offset == target.Offset {
+			payloads = append(payloads, payload)
+			replaced = true
+			continue
+		}
+		payloads = append(payloads, image.sectionBytes(existing))
+	}
+	if !replaced {
+		t.Fatalf("image has no replacement target section: %+v", target)
+	}
+	return testColumnPartImageBytes(t, part, sections, payloads)
+}
+
+func cloneSortKeyMarksForTest(marks []SortKeyMark) []SortKeyMark {
+	out := make([]SortKeyMark, len(marks))
+	for i, mark := range marks {
+		out[i] = SortKeyMark{
+			Rows:     mark.Rows,
+			Columns:  append([]string(nil), mark.Columns...),
+			Prefixes: make([]SortKeyPrefixSummary, len(mark.Prefixes)),
+		}
+		for j, prefix := range mark.Prefixes {
+			out[i].Prefixes[j] = SortKeyPrefixSummary{
+				Columns: append([]string(nil), prefix.Columns...),
+				Lower: SortKeyBound{
+					Values:    append([]int64(nil), prefix.Lower.Values...),
+					Exclusive: prefix.Lower.Exclusive,
+					Unbounded: prefix.Lower.Unbounded,
+				},
+				UpperExclusive: SortKeyBound{
+					Values:    append([]int64(nil), prefix.UpperExclusive.Values...),
+					Exclusive: prefix.UpperExclusive.Exclusive,
+					Unbounded: prefix.UpperExclusive.Unbounded,
+				},
+			}
+		}
+	}
+	return out
+}
+
+func encodeSortKeyMarksPayloadForTest(marks []SortKeyMark) []byte {
+	var enc columnPartImageEncoder
+	enc.u32(uint32(len(marks)))
+	for _, mark := range marks {
+		enc.i64(int64(mark.Rows))
+		enc.stringSlice(mark.Columns)
+		enc.u32(uint32(len(mark.Prefixes)))
+		for _, prefix := range mark.Prefixes {
+			enc.stringSlice(prefix.Columns)
+			encodeSortKeyBound(&enc, prefix.Lower)
+			encodeSortKeyBound(&enc, prefix.UpperExclusive)
+		}
+	}
+	return enc.bytes()
 }
 
 func aggregateMetadataMaxBytesPerRowOffset(t *testing.T, image ColumnPartImage) int {
