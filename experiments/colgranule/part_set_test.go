@@ -122,6 +122,101 @@ func TestColumnPartSetDeltaTombstoneVisibilityAndCompaction(t *testing.T) {
 	assertJSONBenchPartSetQueriesMatchRaw(t, compactedReader, expected)
 }
 
+func TestColumnPartSetQ4FairnessKernelsMatchRaw(t *testing.T) {
+	ds := syntheticJSONBenchDataset(256)
+	codes, err := jsonBenchQueryCodes(ds)
+	if err != nil {
+		t.Fatalf("jsonBenchQueryCodes: %v", err)
+	}
+	rawRows, rawDigest := runJSONBenchQ4(ds, codes)
+	timeOpts, err := JSONBenchColumnPartOptionsForLayout(ds, 32, JSONBenchColumnPartLayoutTimeUS)
+	if err != nil {
+		t.Fatalf("JSONBenchColumnPartOptionsForLayout(time): %v", err)
+	}
+	clickHouseOpts, err := JSONBenchColumnPartOptionsForLayout(ds, 32, JSONBenchColumnPartLayoutClickHouseFilterUserTime)
+	if err != nil {
+		t.Fatalf("JSONBenchColumnPartOptionsForLayout(clickhouse): %v", err)
+	}
+	timeWorkspace, timeReader := testColumnPartSetReader(t, ds, timeOpts, ColumnPartImageReadOptions{})
+	defer timeWorkspace.Close()
+	clickHouseWorkspace, clickHouseReader := testColumnPartSetReader(t, ds, clickHouseOpts, ColumnPartImageReadOptions{})
+	defer clickHouseWorkspace.Close()
+
+	q4aRows, q4aDigest, q4aDiagnostics, err := runJSONBenchPartSetQ4TimeOrdered(timeReader, codes, &jsonBenchPartQueryScratch{})
+	if err != nil {
+		t.Fatalf("runJSONBenchPartSetQ4TimeOrdered: %v", err)
+	}
+	if q4aRows != rawRows || q4aDigest != rawDigest {
+		t.Fatalf("q4a rows/digest=(%d,%d) raw=(%d,%d)", q4aRows, q4aDigest, rawRows, rawDigest)
+	}
+	if q4aDiagnostics.AggregateKernel != "multipart_sort_key_early_stop_min_by_user" || !q4aDiagnostics.EarlyStopAvailable {
+		t.Fatalf("q4a diagnostics=%+v want multipart early-stop", q4aDiagnostics)
+	}
+	assertStringSliceEqual(t, q4aDiagnostics.SortKey, []string{"time_us"})
+
+	q4bRows, q4bDigest, q4bDiagnostics, err := runJSONBenchPartSetQ4ClickHouseOrder(clickHouseReader, codes, &jsonBenchPartQueryScratch{})
+	if err != nil {
+		t.Fatalf("runJSONBenchPartSetQ4ClickHouseOrder: %v", err)
+	}
+	if q4bRows != rawRows || q4bDigest != rawDigest {
+		t.Fatalf("q4b rows/digest=(%d,%d) raw=(%d,%d)", q4bRows, q4bDigest, rawRows, rawDigest)
+	}
+	if q4bDiagnostics.AggregateKernel != "multipart_clickhouse_order_prefix_scan_min_by_user" || q4bDiagnostics.EarlyStopAvailable {
+		t.Fatalf("q4b diagnostics=%+v want ClickHouse-order prefix scan only", q4bDiagnostics)
+	}
+	if q4bDiagnostics.GranulesSkipped == 0 {
+		t.Fatalf("q4b diagnostics skipped no granules: %+v", q4bDiagnostics)
+	}
+	assertStringSliceEqual(t, q4bDiagnostics.SortKey, []string{"kind_code", "commit_operation_code", "commit_collection_code", "did_code", "time_us"})
+}
+
+func TestColumnPartSetAggregateMetadataKernelsMatchRaw(t *testing.T) {
+	ds := syntheticJSONBenchDataset(256)
+	codes, err := jsonBenchQueryCodes(ds)
+	if err != nil {
+		t.Fatalf("jsonBenchQueryCodes: %v", err)
+	}
+	rawQ4Rows, rawQ4Digest := runJSONBenchQ4(ds, codes)
+	rawQ5Rows, rawQ5Digest := runJSONBenchQ5(ds, codes)
+	timeOpts, err := JSONBenchColumnPartOptionsWithAggregateMetadataForLayout(ds, 32, JSONBenchColumnPartLayoutTimeUS)
+	if err != nil {
+		t.Fatalf("JSONBenchColumnPartOptionsWithAggregateMetadataForLayout(time): %v", err)
+	}
+	clickHouseOpts, err := JSONBenchColumnPartOptionsWithAggregateMetadataForLayout(ds, 32, JSONBenchColumnPartLayoutClickHouseFilterUserTime)
+	if err != nil {
+		t.Fatalf("JSONBenchColumnPartOptionsWithAggregateMetadataForLayout(clickhouse): %v", err)
+	}
+	readOpts := ColumnPartImageReadOptions{IncludeAggregateMetadata: true}
+	timeWorkspace, timeReader := testColumnPartSetReader(t, ds, timeOpts, readOpts)
+	defer timeWorkspace.Close()
+	clickHouseWorkspace, clickHouseReader := testColumnPartSetReader(t, ds, clickHouseOpts, readOpts)
+	defer clickHouseWorkspace.Close()
+
+	q4Rows, q4Digest, q4Diagnostics, err := runJSONBenchPartSetQ4AggregateMetadata(clickHouseReader, codes, &jsonBenchPartQueryScratch{})
+	if err != nil {
+		t.Fatalf("runJSONBenchPartSetQ4AggregateMetadata: %v", err)
+	}
+	if q4Rows != rawQ4Rows || q4Digest != rawQ4Digest {
+		t.Fatalf("q4 metadata rows/digest=(%d,%d) raw=(%d,%d)", q4Rows, q4Digest, rawQ4Rows, rawQ4Digest)
+	}
+	if !q4Diagnostics.AggregateMetadataUsed || q4Diagnostics.RowsScanned != 0 || q4Diagnostics.BlocksDecoded != 0 {
+		t.Fatalf("q4 metadata diagnostics=%+v want metadata-only", q4Diagnostics)
+	}
+	assertStringSliceEqual(t, q4Diagnostics.SortKey, []string{"kind_code", "commit_operation_code", "commit_collection_code", "did_code", "time_us"})
+
+	q5Rows, q5Digest, q5Diagnostics, err := runJSONBenchPartSetQ5AggregateMetadata(timeReader, codes, &jsonBenchPartQueryScratch{})
+	if err != nil {
+		t.Fatalf("runJSONBenchPartSetQ5AggregateMetadata: %v", err)
+	}
+	if q5Rows != rawQ5Rows || q5Digest != rawQ5Digest {
+		t.Fatalf("q5 metadata rows/digest=(%d,%d) raw=(%d,%d)", q5Rows, q5Digest, rawQ5Rows, rawQ5Digest)
+	}
+	if !q5Diagnostics.AggregateMetadataUsed || q5Diagnostics.RowsScanned != 0 || q5Diagnostics.BlocksDecoded != 0 {
+		t.Fatalf("q5 metadata diagnostics=%+v want metadata-only", q5Diagnostics)
+	}
+	assertStringSliceEqual(t, q5Diagnostics.SortKey, []string{"time_us"})
+}
+
 func jsonBenchDeltaBatch(ds JSONBenchDataset, updates map[int64]map[string]int64) ColumnBatch {
 	ids := make([]int64, 0, len(updates))
 	for id := range updates {
@@ -144,6 +239,30 @@ func jsonBenchDeltaBatch(ds JSONBenchDataset, updates map[int64]map[string]int64
 		}
 	}
 	return ColumnBatch{Rows: len(ids), Columns: columns}
+}
+
+func testColumnPartSetReader(t *testing.T, ds JSONBenchDataset, opts ColumnStoreOptions, readOpts ColumnPartImageReadOptions) (*ColumnWorkspace, *ColumnPartSetReader) {
+	t.Helper()
+	workspace, err := OpenColumnWorkspace(t.TempDir(), ColumnWorkspaceOptions{Collection: "jsonbench"})
+	if err != nil {
+		t.Fatalf("OpenColumnWorkspace: %v", err)
+	}
+	entry1 := publishJSONBenchPartRows(t, workspace, opts, ds, 701, 0, ds.Rows/2)
+	entry2 := publishJSONBenchPartRows(t, workspace, opts, ds, 702, ds.Rows/2, ds.Rows)
+	manifest, err := NewColumnCollectionManifest("jsonbench", opts, []ColumnManifestPartRef{
+		NewColumnManifestPartRef(ColumnPartRoleBase, 1, entry1),
+		NewColumnManifestPartRef(ColumnPartRoleBase, 2, entry2),
+	}, nil, nil)
+	if err != nil {
+		_ = workspace.Close()
+		t.Fatalf("NewColumnCollectionManifest: %v", err)
+	}
+	reader, err := OpenColumnPartSetReader(workspace, manifest, readOpts)
+	if err != nil {
+		_ = workspace.Close()
+		t.Fatalf("OpenColumnPartSetReader: %v", err)
+	}
+	return workspace, reader
 }
 
 func applyJSONBenchMutations(ds JSONBenchDataset, updates map[int64]map[string]int64, deletes map[int64]bool) JSONBenchDataset {
@@ -230,6 +349,52 @@ func BenchmarkJSONBenchLocalColumnPartSetQueriesM4PerQuery(b *testing.B) {
 	benchmarkJSONBenchColumnPartSetQueriesM4PerQuery(b, ds)
 }
 
+func BenchmarkJSONBenchColumnPartSetQ4FairnessM4(b *testing.B) {
+	ds := syntheticJSONBenchDataset(DefaultRowsPerGranule * 100)
+	benchmarkJSONBenchColumnPartSetQ4FairnessM4(b, ds)
+}
+
+func BenchmarkJSONBenchLocalColumnPartSetQ4FairnessM4(b *testing.B) {
+	path := os.Getenv("JSONBENCH_DATA")
+	if path == "" {
+		path = DefaultJSONBenchDir
+	}
+	if _, err := os.Stat(path); err != nil {
+		b.Skipf("JSONBench data not present; set JSONBENCH_DATA or install %s", DefaultJSONBenchDir)
+	}
+	ds, err := LoadJSONBenchColumns(path, 1_000_000)
+	if err != nil {
+		b.Fatalf("LoadJSONBenchColumns: %v", err)
+	}
+	if ds.Rows < 1_000_000 {
+		b.Skipf("local JSONBench fixture has rows=%d; set JSONBENCH_DATA to a 1M-row fixture for the local q4 fairness gate", ds.Rows)
+	}
+	benchmarkJSONBenchColumnPartSetQ4FairnessM4(b, ds)
+}
+
+func BenchmarkJSONBenchColumnPartSetAggregateMetadataM4(b *testing.B) {
+	ds := syntheticJSONBenchDataset(DefaultRowsPerGranule * 100)
+	benchmarkJSONBenchColumnPartSetAggregateMetadataM4(b, ds)
+}
+
+func BenchmarkJSONBenchLocalColumnPartSetAggregateMetadataM4(b *testing.B) {
+	path := os.Getenv("JSONBENCH_DATA")
+	if path == "" {
+		path = DefaultJSONBenchDir
+	}
+	if _, err := os.Stat(path); err != nil {
+		b.Skipf("JSONBench data not present; set JSONBENCH_DATA or install %s", DefaultJSONBenchDir)
+	}
+	ds, err := LoadJSONBenchColumns(path, 1_000_000)
+	if err != nil {
+		b.Fatalf("LoadJSONBenchColumns: %v", err)
+	}
+	if ds.Rows < 1_000_000 {
+		b.Skipf("local JSONBench fixture has rows=%d; set JSONBENCH_DATA to a 1M-row fixture for the local metadata gate", ds.Rows)
+	}
+	benchmarkJSONBenchColumnPartSetAggregateMetadataM4(b, ds)
+}
+
 func benchmarkJSONBenchColumnPartSetQueriesM4PerQuery(b *testing.B, ds JSONBenchDataset) {
 	opts, err := JSONBenchColumnPartOptions(ds, DefaultRowsPerGranule)
 	if err != nil {
@@ -275,6 +440,123 @@ func benchmarkJSONBenchColumnPartSetQueriesM4PerQuery(b *testing.B, ds JSONBench
 				benchSink += int64(rows) + int64(digest)
 			}
 			reportGranuleBenchMetrics(b, diagnostics.RowsScanned, valueBytes, diagnostics.BytesDecoded)
+		})
+	}
+}
+
+func benchmarkJSONBenchColumnPartSetQ4FairnessM4(b *testing.B, ds JSONBenchDataset) {
+	codes, err := jsonBenchQueryCodes(ds)
+	if err != nil {
+		b.Fatalf("jsonBenchQueryCodes: %v", err)
+	}
+	timeOpts, err := JSONBenchColumnPartOptionsForLayout(ds, DefaultRowsPerGranule, JSONBenchColumnPartLayoutTimeUS)
+	if err != nil {
+		b.Fatalf("JSONBenchColumnPartOptionsForLayout(time): %v", err)
+	}
+	clickHouseOpts, err := JSONBenchColumnPartOptionsForLayout(ds, DefaultRowsPerGranule, JSONBenchColumnPartLayoutClickHouseFilterUserTime)
+	if err != nil {
+		b.Fatalf("JSONBenchColumnPartOptionsForLayout(clickhouse): %v", err)
+	}
+	timeReader, timeCleanup := benchmarkColumnPartSetReader(b, ds, timeOpts)
+	defer timeCleanup()
+	clickHouseReader, clickHouseCleanup := benchmarkColumnPartSetReader(b, ds, clickHouseOpts)
+	defer clickHouseCleanup()
+	queries := []struct {
+		name    string
+		columns int
+		reader  *ColumnPartSetReader
+		run     func(*ColumnPartSetReader, queryCodeSet, *jsonBenchPartQueryScratch) (int, uint64, JSONBenchPartQueryDiagnostics, error)
+	}{
+		{"Q4a_time_ordered", len(jsonBenchPartQ4Columns), timeReader, runJSONBenchPartSetQ4TimeOrdered},
+		{"Q4b_clickhouse_order", len(jsonBenchPartQ4Columns), clickHouseReader, runJSONBenchPartSetQ4ClickHouseOrder},
+	}
+	for _, query := range queries {
+		b.Run(query.name, func(b *testing.B) {
+			b.ReportAllocs()
+			scratch := &jsonBenchPartQueryScratch{}
+			rows, digest, diagnostics, err := query.run(query.reader, codes, scratch)
+			if err != nil {
+				b.Fatal(err)
+			}
+			benchSink += int64(rows) + int64(digest)
+			valueBytes := diagnostics.RowsScanned * query.columns * 8
+			if valueBytes == 0 {
+				valueBytes = query.reader.VisibilityStats().VisibleRows * query.columns * 8
+			}
+			b.SetBytes(int64(valueBytes))
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				rows, digest, diagnostics, err = query.run(query.reader, codes, scratch)
+				if err != nil {
+					b.Fatal(err)
+				}
+				benchSink += int64(rows) + int64(digest)
+			}
+			reportGranuleBenchMetrics(b, diagnostics.RowsScanned, valueBytes, diagnostics.BytesDecoded)
+		})
+	}
+}
+
+func benchmarkJSONBenchColumnPartSetAggregateMetadataM4(b *testing.B, ds JSONBenchDataset) {
+	codes, err := jsonBenchQueryCodes(ds)
+	if err != nil {
+		b.Fatalf("jsonBenchQueryCodes: %v", err)
+	}
+	timeOpts, err := JSONBenchColumnPartOptionsWithAggregateMetadataForLayout(ds, DefaultRowsPerGranule, JSONBenchColumnPartLayoutTimeUS)
+	if err != nil {
+		b.Fatalf("JSONBenchColumnPartOptionsWithAggregateMetadataForLayout(time): %v", err)
+	}
+	clickHouseOpts, err := JSONBenchColumnPartOptionsWithAggregateMetadataForLayout(ds, DefaultRowsPerGranule, JSONBenchColumnPartLayoutClickHouseFilterUserTime)
+	if err != nil {
+		b.Fatalf("JSONBenchColumnPartOptionsWithAggregateMetadataForLayout(clickhouse): %v", err)
+	}
+	readOpts := ColumnPartImageReadOptions{IncludeAggregateMetadata: true}
+	timeReader, timeCleanup := benchmarkColumnPartSetReaderWithReadOptions(b, ds, timeOpts, readOpts)
+	defer timeCleanup()
+	clickHouseReader, clickHouseCleanup := benchmarkColumnPartSetReaderWithReadOptions(b, ds, clickHouseOpts, readOpts)
+	defer clickHouseCleanup()
+	queries := []struct {
+		name    string
+		columns int
+		reader  *ColumnPartSetReader
+		run     func(*ColumnPartSetReader, queryCodeSet, *jsonBenchPartQueryScratch) (int, uint64, JSONBenchPartQueryDiagnostics, error)
+	}{
+		{"Q4b_metadata_min_by_user", len(jsonBenchPartQ4Columns), clickHouseReader, runJSONBenchPartSetQ4AggregateMetadata},
+		{"Q5_metadata_span_by_user", len(jsonBenchPartQ5Columns), timeReader, runJSONBenchPartSetQ5AggregateMetadata},
+		{"Q4b_row_scan_min_by_user", len(jsonBenchPartQ4Columns), clickHouseReader, runJSONBenchPartSetQ4ClickHouseOrder},
+		{"Q5_row_scan_span_by_user", len(jsonBenchPartQ5Columns), timeReader, runJSONBenchPartSetQ5},
+	}
+	for _, query := range queries {
+		b.Run(query.name, func(b *testing.B) {
+			b.ReportAllocs()
+			scratch := &jsonBenchPartQueryScratch{}
+			rows, digest, diagnostics, err := query.run(query.reader, codes, scratch)
+			if err != nil {
+				b.Fatal(err)
+			}
+			benchSink += int64(rows) + int64(digest)
+			rowsMeasured := diagnostics.RowsScanned
+			if rowsMeasured == 0 {
+				rowsMeasured = diagnostics.AggregateMetadataEntries
+			}
+			if rowsMeasured == 0 {
+				rowsMeasured = query.reader.VisibilityStats().VisibleRows
+			}
+			valueBytes := rowsMeasured * query.columns * 8
+			b.SetBytes(int64(valueBytes))
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				rows, digest, diagnostics, err = query.run(query.reader, codes, scratch)
+				if err != nil {
+					b.Fatal(err)
+				}
+				benchSink += int64(rows) + int64(digest)
+			}
+			storedBytes := diagnostics.BytesDecoded
+			if diagnostics.RowsScanned == 0 {
+				storedBytes = diagnostics.AggregateMetadataBytes
+			}
+			reportGranuleBenchMetrics(b, rowsMeasured, valueBytes, storedBytes)
 		})
 	}
 }
@@ -434,6 +716,10 @@ func BenchmarkColumnPartSetCompactionM5Breakdown(b *testing.B) {
 }
 
 func benchmarkColumnPartSetReader(b *testing.B, ds JSONBenchDataset, opts ColumnStoreOptions) (*ColumnPartSetReader, func()) {
+	return benchmarkColumnPartSetReaderWithReadOptions(b, ds, opts, ColumnPartImageReadOptions{})
+}
+
+func benchmarkColumnPartSetReaderWithReadOptions(b *testing.B, ds JSONBenchDataset, opts ColumnStoreOptions, readOpts ColumnPartImageReadOptions) (*ColumnPartSetReader, func()) {
 	b.Helper()
 	dir := b.TempDir()
 	workspace, err := OpenColumnWorkspace(dir, ColumnWorkspaceOptions{Collection: "jsonbench"})
@@ -450,7 +736,7 @@ func benchmarkColumnPartSetReader(b *testing.B, ds JSONBenchDataset, opts Column
 		_ = workspace.Close()
 		b.Fatalf("NewColumnCollectionManifest: %v", err)
 	}
-	reader, err := OpenColumnPartSetReader(workspace, manifest, ColumnPartImageReadOptions{})
+	reader, err := OpenColumnPartSetReader(workspace, manifest, readOpts)
 	if err != nil {
 		_ = workspace.Close()
 		b.Fatalf("OpenColumnPartSetReader: %v", err)
