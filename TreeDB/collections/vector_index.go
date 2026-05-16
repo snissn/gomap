@@ -1813,6 +1813,8 @@ func (idx *VectorIndex) selectDiverseCandidatesLocked(candidates []vectorIndexCa
 	}
 	for _, candidate := range candidates {
 		if len(selected) >= limit {
+			// Backfill only runs when diversity pruning leaves room below limit.
+			// Once full, avoid scanning the tail into rejected on construction hot paths.
 			break
 		}
 		if idx.vectorIndexCandidateIsDiverseLocked(candidate, selected) {
@@ -1839,6 +1841,9 @@ func (idx *VectorIndex) vectorIndexCandidateIsDiverseLocked(candidate vectorInde
 	return true
 }
 
+// sortVectorIndexCandidatesByDistanceLocked keeps the common already-sorted
+// case allocation-free and handles the append-one-candidate case with insertion
+// sort. Other unsorted shapes fall back to the standard full sort.
 func (idx *VectorIndex) sortVectorIndexCandidatesByDistanceLocked(candidates []vectorIndexCandidate) {
 	for i := 1; i < len(candidates); i++ {
 		if idx.compareVectorIndexCandidatesByDistanceLocked(candidates[i-1], candidates[i]) > 0 {
@@ -1919,7 +1924,7 @@ func (idx *VectorIndex) distanceBetweenNodesFastLocked(leftNodeID, rightNodeID i
 	}
 	left := &idx.nodes[leftNodeID]
 	right := &idx.nodes[rightNodeID]
-	if idx.metric == VectorMetricCosine && len(left.vector) > 0 && len(left.vector) == len(right.vector) && left.cachedInvNorm != 0 && right.cachedInvNorm != 0 {
+	if idx.metric == VectorMetricCosine && canUseUncheckedFloat32NodeCosine(left, right) {
 		return vectorDistanceBetweenFloat32NodesCosineUnchecked(left, right)
 	}
 	distance, err := vectorDistanceBetweenStoredNodes(left, right, idx.metric)
@@ -2068,10 +2073,17 @@ func vectorDistanceBetweenFloat32NodesCosine(left, right *vectorIndexNode) (floa
 	if len(left.vector) != len(right.vector) {
 		return 0, fmt.Errorf("collections: vector dimensions differ: %d vs %d", len(left.vector), len(right.vector))
 	}
-	if left.cachedInvNorm == 0 || right.cachedInvNorm == 0 {
+	if !canUseUncheckedFloat32NodeCosine(left, right) {
 		return 0, errors.New("collections: cosine vector cannot have zero magnitude")
 	}
 	return vectorDistanceBetweenFloat32NodesCosineUnchecked(left, right), nil
+}
+
+func canUseUncheckedFloat32NodeCosine(left, right *vectorIndexNode) bool {
+	return len(left.vector) > 0 &&
+		len(left.vector) == len(right.vector) &&
+		left.cachedInvNorm != 0 &&
+		right.cachedInvNorm != 0
 }
 
 func vectorDistanceBetweenFloat32NodesCosineUnchecked(left, right *vectorIndexNode) float32 {
