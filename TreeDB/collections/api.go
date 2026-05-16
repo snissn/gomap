@@ -19,6 +19,7 @@ import (
 	"github.com/cespare/xxhash/v2"
 	"github.com/snissn/gomap/TreeDB/batch"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/node"
@@ -8386,11 +8387,21 @@ func (c *Collection) insertBatchOnceWithLockState(
 		return nil, err
 	}
 	if commandWALIntent == nil && commandWALActive {
-		docs, err := collectionDocumentsFromInsertPlan(plan, collectionPrimaryRootName(meta.Name))
-		if err != nil {
-			closePlanningSnapshot()
-			resetCollectionRunTables(plan.runs)
-			return nil, err
+		var docs []commitlog.CollectionDocument
+		if normalizedDocumentFormat(plannerOptions.documentFormat) == DocumentFormatTemplateV1 {
+			docs, err = collectionDocumentsFromBatchInput(ids, documents)
+			if err != nil {
+				closePlanningSnapshot()
+				resetCollectionRunTables(plan.runs)
+				return nil, err
+			}
+		} else {
+			docs, err = collectionDocumentsFromInsertPlan(plan, collectionPrimaryRootName(meta.Name))
+			if err != nil {
+				closePlanningSnapshot()
+				resetCollectionRunTables(plan.runs)
+				return nil, err
+			}
 		}
 		commandWALIntent, err = c.newCollectionInsertCommandWALIntent(docs, nil)
 		if err != nil {
