@@ -9,7 +9,6 @@ import (
 	"math"
 	"strconv"
 	"testing"
-	"unsafe"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
@@ -117,6 +116,24 @@ func TestVectorIndexNativeRootTemplateV1GraphSearchMatchesLoadedGraph(t *testing
 		t.Fatalf("result count=%d want %d", len(rootResults), len(loadedResults))
 	}
 	assertVectorSearchResultsMatch(t, rootResults, loadedResults)
+}
+
+func TestDecodeTemplateV1RawFloat32SliceUsesLittleEndian(t *testing.T) {
+	raw := make([]byte, 8)
+	binary.LittleEndian.PutUint32(raw[0:], math.Float32bits(1.25))
+	binary.LittleEndian.PutUint32(raw[4:], math.Float32bits(-2.5))
+
+	dst := []float32{99, 99, 99}
+	got, err := decodeTemplateV1RawFloat32Slice(raw, dst[:0])
+	if err != nil {
+		t.Fatalf("decode raw vector: %v", err)
+	}
+	if len(got) != 2 || got[0] != 1.25 || got[1] != -2.5 {
+		t.Fatalf("decoded vector=%v want [1.25 -2.5]", got)
+	}
+	if cap(got) != cap(dst) {
+		t.Fatalf("decoded vector cap=%d want reused cap %d", cap(got), cap(dst))
+	}
 }
 
 func assertVectorSearchResultsMatch(t *testing.T, got, want []VectorSearchResult) {
@@ -664,7 +681,12 @@ func (r *vectorIndexNativeRootBackedGraphReader) readDistanceNode(nodeID int) (v
 		return vectorIndexNode{}, ok, err
 	}
 	if r.format == vectorIndexNativeRootRecordFormatTemplateV1Raw {
-		return parseVectorIndexTemplateV1RawDistanceNode(data)
+		node, ok, err := parseVectorIndexTemplateV1RawDistanceNode(data, r.vector[:0])
+		if err != nil || !ok {
+			return vectorIndexNode{}, ok, err
+		}
+		r.vector = node.vector
+		return node, true, nil
 	}
 	vector, normSquared, vectorOK, err := parseVectorIndexNativeRootFloat32Vector(data, r.vector[:0])
 	if err != nil {
@@ -1021,7 +1043,7 @@ func isVectorIndexNativeRootSpace(c byte) bool {
 	return c == ' ' || c == '\n' || c == '\r' || c == '\t'
 }
 
-func parseVectorIndexTemplateV1RawDistanceNode(data []byte) (vectorIndexNode, bool, error) {
+func parseVectorIndexTemplateV1RawDistanceNode(data []byte, dst []float32) (vectorIndexNode, bool, error) {
 	pos, err := parseVectorIndexTemplateV1RawHeader(data, vectorIndexTemplateV1NodeTemplateID)
 	if err != nil {
 		return vectorIndexNode{}, false, err
@@ -1049,7 +1071,7 @@ func parseVectorIndexTemplateV1RawDistanceNode(data []byte) (vectorIndexNode, bo
 	if pos != len(data) {
 		return vectorIndexNode{}, false, errors.New("collections: trailing template-v1 raw node bytes")
 	}
-	vector, err := unsafeTemplateV1RawFloat32Slice(rawVector)
+	vector, err := decodeTemplateV1RawFloat32Slice(rawVector, dst)
 	if err != nil {
 		return vectorIndexNode{}, false, err
 	}
@@ -1172,12 +1194,21 @@ func readTemplateV1RawBytes(raw []byte, pos int) ([]byte, int, error) {
 	return raw[pos:end], end, nil
 }
 
-func unsafeTemplateV1RawFloat32Slice(raw []byte) ([]float32, error) {
+func decodeTemplateV1RawFloat32Slice(raw []byte, dst []float32) ([]float32, error) {
 	if len(raw)%4 != 0 {
 		return nil, errors.New("collections: malformed template-v1 raw float32 bytes")
 	}
 	if len(raw) == 0 {
 		return nil, nil
 	}
-	return unsafe.Slice((*float32)(unsafe.Pointer(&raw[0])), len(raw)/4), nil
+	count := len(raw) / 4
+	if cap(dst) < count {
+		dst = make([]float32, count)
+	} else {
+		dst = dst[:count]
+	}
+	for i := range dst {
+		dst[i] = math.Float32frombits(binary.LittleEndian.Uint32(raw[i*4:]))
+	}
+	return dst, nil
 }
