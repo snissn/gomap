@@ -15,7 +15,10 @@ func TestColumnVectorGraphSearchMatchesExactOnCompleteGraph(t *testing.T) {
 	if stats.Rows != 16 || stats.Dims != 8 || stats.Edges != 16*15 {
 		t.Fatalf("load stats=%+v want rows=16 dims=8 edges=%d", stats, 16*15)
 	}
-	query := append([]float32(nil), graph.Vectors[9*graph.Dims:10*graph.Dims]...)
+	query, ok := graph.VectorAt(nil, 9)
+	if !ok {
+		t.Fatal("missing graph vector ordinal 9")
+	}
 	var scratch ColumnVectorGraphSearchScratch
 	results, searchStats, err := graph.SearchCosine(query, ColumnVectorGraphSearchOptions{TopK: 5, EfSearch: 16}, &scratch)
 	if err != nil {
@@ -44,7 +47,10 @@ func TestColumnVectorGraphSearchAllocs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewColumnVectorGraphFromPartSet: %v", err)
 	}
-	query := append([]float32(nil), graph.Vectors[511*graph.Dims:512*graph.Dims]...)
+	query, ok := graph.VectorAt(nil, 511)
+	if !ok {
+		t.Fatal("missing graph vector ordinal 511")
+	}
 	opts := ColumnVectorGraphSearchOptions{TopK: 10, EfSearch: 128}
 	var scratch ColumnVectorGraphSearchScratch
 	if results, _, err := graph.SearchCosine(query, opts, &scratch); err != nil {
@@ -73,7 +79,10 @@ func BenchmarkColumnVectorGraphSearchCosine(b *testing.B) {
 	if err != nil {
 		b.Fatalf("NewColumnVectorGraphFromPartSet: %v", err)
 	}
-	query := append([]float32(nil), graph.Vectors[4096*graph.Dims:4097*graph.Dims]...)
+	query, ok := graph.VectorAt(nil, 4096)
+	if !ok {
+		b.Fatal("missing graph vector ordinal 4096")
+	}
 	opts := ColumnVectorGraphSearchOptions{TopK: 10, EfSearch: 128}
 	var scratch ColumnVectorGraphSearchScratch
 	warm, warmStats, err := graph.SearchCosine(query, opts, &scratch)
@@ -84,7 +93,7 @@ func BenchmarkColumnVectorGraphSearchCosine(b *testing.B) {
 		b.Fatalf("warm results=%d want %d", len(warm), opts.TopK)
 	}
 	b.ReportAllocs()
-	b.SetBytes(int64(warmStats.CandidatesExamined * graph.Dims * 4))
+	b.SetBytes(int64(warmStats.CandidatesExamined * graph.Dims() * 4))
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		results, stats, err := graph.SearchCosine(query, opts, &scratch)
@@ -110,7 +119,7 @@ func BenchmarkColumnVectorGraphLoadFromPartSet(b *testing.B) {
 		if err != nil {
 			b.Fatalf("NewColumnVectorGraphFromPartSet: %v", err)
 		}
-		benchSink += int64(len(graph.Vectors) + stats.Edges)
+		benchSink += int64(graph.Rows()*graph.Dims() + stats.Edges)
 	}
 }
 
@@ -230,10 +239,11 @@ func exactColumnVectorGraphCosine(t *testing.T, graph *ColumnVectorGraph, query 
 	if err != nil {
 		t.Fatalf("columnVectorGraphQueryInvNorm: %v", err)
 	}
-	results := make([]ColumnVectorGraphSearchResult, len(graph.IDs))
-	for ordinal := range graph.IDs {
+	ids := graph.PrimaryIDs(nil)
+	results := make([]ColumnVectorGraphSearchResult, len(ids))
+	for ordinal := range ids {
 		results[ordinal] = ColumnVectorGraphSearchResult{
-			PrimaryID: graph.IDs[ordinal],
+			PrimaryID: ids[ordinal],
 			Ordinal:   ordinal,
 			Distance:  graph.cosineDistance(query, queryInvNorm, ordinal),
 		}

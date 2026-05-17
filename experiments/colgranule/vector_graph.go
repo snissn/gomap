@@ -56,16 +56,22 @@ type ColumnVectorGraphSearchResult struct {
 	Distance  float32
 }
 
+// ColumnVectorGraph is an immutable, single-layer ANN graph loaded from column
+// store vector, inverse-norm, and adjacency-list columns.
 type ColumnVectorGraph struct {
-	IDs              []int64
-	Dims             int
-	Vectors          []float32
-	InvNorms         []float32
-	NeighborOffsets  []uint32
-	NeighborOrdinals []int64
-	EntryOrdinal     int
+	ids              []int64
+	dims             int
+	vectors          []float32
+	invNorms         []float32
+	neighborOffsets  []uint32
+	neighborOrdinals []int64
+	entryOrdinal     int
 }
 
+// ColumnVectorGraphSearchScratch is caller-owned reusable search workspace.
+// It is not safe for concurrent use. Results returned by SearchCosine may alias
+// scratch memory and are invalidated by later SearchCosine calls using the same
+// scratch; callers that need long-lived results should copy them.
 type ColumnVectorGraphSearchScratch struct {
 	visitedEpochs []uint32
 	visitedEpoch  uint32
@@ -141,17 +147,77 @@ func NewColumnVectorGraphFromPartSet(reader *ColumnPartSetReader, opts ColumnVec
 		PartsConsidered: neighbors.Diagnostics.PartsConsidered,
 	}
 	graph := &ColumnVectorGraph{
-		IDs:              ids.Columns[opts.IDColumn],
-		Dims:             vectors.Dims,
-		Vectors:          vectors.Values,
-		InvNorms:         invNorms.Values,
-		NeighborOffsets:  neighbors.Offsets,
-		NeighborOrdinals: neighbors.Values,
-		EntryOrdinal:     opts.EntryOrdinal,
+		ids:              ids.Columns[opts.IDColumn],
+		dims:             vectors.Dims,
+		vectors:          vectors.Values,
+		invNorms:         invNorms.Values,
+		neighborOffsets:  neighbors.Offsets,
+		neighborOrdinals: neighbors.Values,
+		entryOrdinal:     opts.EntryOrdinal,
 	}
 	return graph, stats, nil
 }
 
+// Rows returns the number of rows in the graph.
+func (g *ColumnVectorGraph) Rows() int {
+	if g == nil {
+		return 0
+	}
+	return len(g.ids)
+}
+
+// Dims returns the vector dimensionality of each graph row.
+func (g *ColumnVectorGraph) Dims() int {
+	if g == nil {
+		return 0
+	}
+	return g.dims
+}
+
+// EntryOrdinal returns the graph entry row ordinal.
+func (g *ColumnVectorGraph) EntryOrdinal() int {
+	if g == nil {
+		return -1
+	}
+	return g.entryOrdinal
+}
+
+// PrimaryIDs appends the graph primary IDs to dst and returns the extended slice.
+func (g *ColumnVectorGraph) PrimaryIDs(dst []int64) []int64 {
+	if g == nil {
+		return dst
+	}
+	return append(dst, g.ids...)
+}
+
+// VectorAt appends the vector for ordinal to dst and reports whether it exists.
+func (g *ColumnVectorGraph) VectorAt(dst []float32, ordinal int) ([]float32, bool) {
+	if g == nil || ordinal < 0 || ordinal >= len(g.ids) {
+		return dst, false
+	}
+	start := ordinal * g.dims
+	return append(dst, g.vectors[start:start+g.dims]...), true
+}
+
+// NeighborOffsets appends the CSR adjacency offsets to dst.
+func (g *ColumnVectorGraph) NeighborOffsets(dst []uint32) []uint32 {
+	if g == nil {
+		return dst
+	}
+	return append(dst, g.neighborOffsets...)
+}
+
+// NeighborOrdinals appends the CSR adjacency ordinals to dst.
+func (g *ColumnVectorGraph) NeighborOrdinals(dst []int64) []int64 {
+	if g == nil {
+		return dst
+	}
+	return append(dst, g.neighborOrdinals...)
+}
+
+// SearchCosine runs cosine ANN search over the column-backed graph. If scratch
+// is non-nil, returned results may alias scratch memory and are invalidated by
+// subsequent calls that reuse that scratch.
 func (g *ColumnVectorGraph) SearchCosine(query []float32, opts ColumnVectorGraphSearchOptions, scratch *ColumnVectorGraphSearchScratch) ([]ColumnVectorGraphSearchResult, ColumnVectorGraphSearchStats, error) {
 	stats := ColumnVectorGraphSearchStats{Strategy: "column_graph_cosine"}
 	if g == nil {
@@ -160,8 +226,8 @@ func (g *ColumnVectorGraph) SearchCosine(query []float32, opts ColumnVectorGraph
 	if opts.TopK <= 0 {
 		return nil, stats, errors.New("colgranule: column vector graph TopK must be positive")
 	}
-	if len(query) != g.Dims {
-		return nil, stats, fmt.Errorf("colgranule: column vector graph query dims=%d want %d", len(query), g.Dims)
+	if len(query) != g.dims {
+		return nil, stats, fmt.Errorf("colgranule: column vector graph query dims=%d want %d", len(query), g.dims)
 	}
 	queryInvNorm, err := columnVectorGraphQueryInvNorm(query)
 	if err != nil {
@@ -192,7 +258,7 @@ func (g *ColumnVectorGraph) SearchCosine(query []float32, opts ColumnVectorGraph
 			break
 		}
 		results = append(results, ColumnVectorGraphSearchResult{
-			PrimaryID: g.IDs[candidate.ordinal],
+			PrimaryID: g.ids[candidate.ordinal],
 			Ordinal:   candidate.ordinal,
 			Distance:  candidate.distance,
 		})
@@ -286,13 +352,13 @@ func columnVectorGraphFinite(value float32) bool {
 }
 
 func (g *ColumnVectorGraph) searchCandidates(query []float32, queryInvNorm float32, limit int, scratch *ColumnVectorGraphSearchScratch) ([]columnVectorGraphCandidate, int) {
-	if g.EntryOrdinal < 0 || g.EntryOrdinal >= len(g.IDs) || limit <= 0 {
+	if g.entryOrdinal < 0 || g.entryOrdinal >= len(g.ids) || limit <= 0 {
 		return nil, 0
 	}
-	visited, mark := scratch.nextVisitedEpoch(len(g.IDs))
+	visited, mark := scratch.nextVisitedEpoch(len(g.ids))
 	entry := columnVectorGraphCandidate{
-		ordinal:  g.EntryOrdinal,
-		distance: g.cosineDistance(query, queryInvNorm, g.EntryOrdinal),
+		ordinal:  g.entryOrdinal,
+		distance: g.cosineDistance(query, queryInvNorm, g.entryOrdinal),
 	}
 	if math.IsInf(float64(entry.distance), 1) {
 		return nil, 0
@@ -308,10 +374,10 @@ func (g *ColumnVectorGraph) searchCandidates(query []float32, queryInvNorm float
 		if len(best) >= limit && columnVectorGraphCandidateWorse(current, best[0]) {
 			break
 		}
-		start := int(g.NeighborOffsets[current.ordinal])
-		end := int(g.NeighborOffsets[current.ordinal+1])
+		start := int(g.neighborOffsets[current.ordinal])
+		end := int(g.neighborOffsets[current.ordinal+1])
 		edgesVisited += end - start
-		for _, rawNeighbor := range g.NeighborOrdinals[start:end] {
+		for _, rawNeighbor := range g.neighborOrdinals[start:end] {
 			neighbor := int(rawNeighbor)
 			if visited[neighbor] == mark {
 				continue
@@ -339,13 +405,13 @@ func (g *ColumnVectorGraph) searchCandidates(query []float32, queryInvNorm float
 }
 
 func (g *ColumnVectorGraph) cosineDistance(query []float32, queryInvNorm float32, ordinal int) float32 {
-	if ordinal < 0 || ordinal >= len(g.IDs) {
+	if ordinal < 0 || ordinal >= len(g.ids) {
 		return float32(math.Inf(1))
 	}
-	start := ordinal * g.Dims
-	vector := g.Vectors[start : start+g.Dims]
+	start := ordinal * g.dims
+	vector := g.vectors[start : start+g.dims]
 	dot := columnVectorGraphDotProductFloat32(query, vector)
-	return 1 - dot*queryInvNorm*g.InvNorms[ordinal]
+	return 1 - dot*queryInvNorm*g.invNorms[ordinal]
 }
 
 func (scratch *ColumnVectorGraphSearchScratch) nextVisitedEpoch(nodes int) ([]uint32, uint32) {
