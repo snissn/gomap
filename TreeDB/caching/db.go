@@ -12214,6 +12214,7 @@ func (db *DB) flushWALRequests(l *lane, requests []walWriteRequest) error {
 		l.walMu.Unlock()
 		return errWALUnavailable
 	}
+	beforeSize := w.Size()
 	for i := range requests {
 		req := &requests[i]
 		if len(req.records) == 1 {
@@ -12223,14 +12224,12 @@ func (db *DB) flushWALRequests(l *lane, requests []walWriteRequest) error {
 				l.walMu.Unlock()
 				return err
 			}
-			totalBytes += db.logRecordSize(rec.Key, rec.Value)
 		} else {
 			err := w.AppendBatch(req.records)
 			if err != nil {
 				l.walMu.Unlock()
 				return err
 			}
-			totalBytes += db.logBatchSize(req.records)
 		}
 		if req.sync {
 			needSync = true
@@ -12242,6 +12241,7 @@ func (db *DB) flushWALRequests(l *lane, requests []walWriteRequest) error {
 			return err
 		}
 	}
+	totalBytes = w.Size() - beforeSize
 	l.walMu.Unlock()
 
 	if totalBytes > 0 {
@@ -13048,7 +13048,10 @@ func (db *DB) appendWAL(l *lane, records []logRecord, durability journalDurabili
 	}
 
 	db.assignCommitSeq(records)
+	return db.appendWALPrepared(l, records, durability)
+}
 
+func (db *DB) appendWALPrepared(l *lane, records []logRecord, durability journalDurability) error {
 	switch durability {
 	case journalDurabilitySync:
 		return db.appendWALDirect(l, records, true)
@@ -13057,6 +13060,32 @@ func (db *DB) appendWAL(l *lane, records []logRecord, durability journalDurabili
 	default:
 		return db.appendWALInline(l, records, false)
 	}
+}
+
+func (db *DB) appendWALAssigned(l *lane, records []logRecord, durability journalDurability) error {
+	if db.disableJournal {
+		return nil
+	}
+	if len(records) == 0 {
+		return nil
+	}
+	if l == nil {
+		return errWALUnavailable
+	}
+	select {
+	case <-db.closeCh:
+		return errWALClosed
+	default:
+	}
+	db.walAckMu.Lock()
+	if db.walErr != nil {
+		err := db.walErr
+		db.walAckMu.Unlock()
+		return err
+	}
+	db.walAckMu.Unlock()
+
+	return db.appendWALPrepared(l, records, durability)
 }
 
 func (db *DB) appendWALOne(l *lane, record logRecord, durability journalDurability) error {
@@ -14557,16 +14586,18 @@ func (db *DB) appendWALInline(l *lane, records []logRecord, flush bool) error {
 		l.walMu.Unlock()
 		return errWALUnavailable
 	}
+	beforeSize := w.Size()
 	if len(records) == 1 {
 		rec := records[0]
 		err = w.Append(rec)
-		totalBytes = db.logRecordSize(rec.Key, rec.Value)
 	} else {
 		err = w.AppendBatch(records)
-		totalBytes = db.logBatchSize(records)
 	}
 	if err == nil && flush {
 		err = w.Flush()
+	}
+	if err == nil {
+		totalBytes = w.Size() - beforeSize
 	}
 	l.walMu.Unlock()
 
@@ -14596,10 +14627,14 @@ func (db *DB) appendWALInlineOne(l *lane, record logRecord, flush bool) error {
 		l.walMu.Unlock()
 		return errWALUnavailable
 	}
+	beforeSize := w.Size()
 	err := w.Append(record)
-	totalBytes := db.logRecordSize(record.Key, record.Value)
 	if err == nil && flush {
 		err = w.Flush()
+	}
+	totalBytes := int64(0)
+	if err == nil {
+		totalBytes = w.Size() - beforeSize
 	}
 	l.walMu.Unlock()
 
@@ -19411,6 +19446,15 @@ func (db *DB) Checkpoint() error {
 	hasMutable := db.mutableBytes.Load() > 0
 	hasQueue := len(db.queue) > 0
 	hasDirtyVLog := db.hasDirtyValueLogLanes()
+	hasLiveWAL := false
+	if !db.disableJournal {
+		for i := range db.lanes {
+			if db.lanes[i].walLiveBytes.Load() > 0 {
+				hasLiveWAL = true
+				break
+			}
+		}
+	}
 	if hasMutable {
 		if err := db.rotateMutableShardsLocked(db.checkpointRotateCapacity(), false); err != nil {
 			db.mu.Unlock()
@@ -19418,6 +19462,17 @@ func (db *DB) Checkpoint() error {
 			return err
 		}
 		hasQueue = len(db.queue) > 0
+		hasLiveWAL = hasLiveWAL || !db.disableJournal
+	} else if !hasQueue && !hasDirtyVLog && !hasLiveWAL && db.commandWALCheckpointPublish == nil {
+		db.mu.Unlock()
+		releaseWriteMu()
+		db.checkpointNoopSkips.Add(1)
+		if err := db.maybeVacuumSparseIndexOnCheckpoint(); err != nil {
+			return err
+		}
+		db.checkValueLogRetention()
+		db.scheduleRetainedValueLogPrune()
+		return nil
 	} else if db.disableJournal && !hasQueue && !hasDirtyVLog {
 		// Checkpoint-kick retries may need to rotate current value-log segments
 		// even when there is no new foreground dirtiness, so observed-source GC
@@ -21850,7 +21905,7 @@ func (db *DB) rotateWALLockedWithOptions(l *lane, rotateValueLog bool) error {
 	if l.wal != nil {
 		oldPath := l.walPath
 		oldSize := l.wal.Size()
-		if err := l.wal.RotateTo(path); err != nil {
+		if err := l.wal.RotateToWithSync(path, !db.relaxedSync); err != nil {
 			return err
 		}
 		l.walSeq = nextSeq
@@ -28790,7 +28845,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 		if durability == journalDurabilitySync {
 			defer b.db.releaseLaneSync(lane)
 		}
-		if !b.db.disableJournal {
+		if !b.db.disableJournal && allowPointers {
 			rids = make([]uint64, len(b.entries))
 		}
 	}
@@ -29002,21 +29057,22 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 		if cap(records) < len(b.entries) {
 			records = make([]logRecord, 0, len(b.entries))
 		}
+		seq := b.db.nextCommitSeq.Add(1)
 		for i := range b.entries {
 			op := &b.entries[i]
 			switch op.Type {
 			case batch.OpDelete:
-				records = append(records, logRecord{Op: logOpDelete, Key: op.Key})
+				records = append(records, logRecord{Op: logOpDelete, Key: op.Key, Seq: seq})
 			case batch.OpPut:
 				if rids != nil && rids[i] != 0 {
-					records = append(records, logRecord{Op: logOpSetRID, Key: op.Key, RID: rids[i]})
+					records = append(records, logRecord{Op: logOpSetRID, Key: op.Key, RID: rids[i], Seq: seq})
 				} else {
-					records = append(records, logRecord{Op: logOpSetInline, Key: op.Key, Value: op.Value})
+					records = append(records, logRecord{Op: logOpSetInline, Key: op.Key, Value: op.Value, Seq: seq})
 				}
 			}
 		}
 		b.walBuf = records
-		if err := b.db.appendWAL(lane, records, durability); err != nil {
+		if err := b.db.appendWALAssigned(lane, records, durability); err != nil {
 			b.db.writeMu.RUnlock()
 			return err
 		}

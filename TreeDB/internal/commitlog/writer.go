@@ -20,7 +20,9 @@ const (
 	defaultBufferSize          = 4 << 20
 	defaultMaxSegmentSize      = 64 * 1024 * 1024
 	defaultCompressMinLen      = 64 << 10
+	directSegmentPayloadMinLen = 128 << 10
 	directCommandPayloadMinLen = 32 << 10
+	batchChecksumChunkBytes    = 64 << 10
 )
 
 var syncDirFn = syncDir
@@ -132,6 +134,13 @@ func (w *Writer) ensureEncoder() error {
 // RotateTo flushes and closes the current file, then opens (or creates) the
 // provided path and reuses the writer's buffers for future appends.
 func (w *Writer) RotateTo(path string) error {
+	return w.RotateToWithSync(path, true)
+}
+
+// RotateToWithSync flushes and closes the current file, then opens (or creates)
+// the provided path and reuses the writer's buffers for future appends. When
+// syncCurrent is false, the current file is flushed to the OS but not fsynced.
+func (w *Writer) RotateToWithSync(path string, syncCurrent bool) error {
 	if w == nil {
 		return errors.New("commitlog: nil writer")
 	}
@@ -141,9 +150,11 @@ func (w *Writer) RotateTo(path string) error {
 		if err != nil {
 			return err
 		}
-		if err := syncDirFn(path); err != nil {
-			_ = f.Close()
-			return err
+		if syncCurrent {
+			if err := syncDirFn(path); err != nil {
+				_ = f.Close()
+				return err
+			}
 		}
 		info, err := f.Stat()
 		if err != nil {
@@ -163,7 +174,7 @@ func (w *Writer) RotateTo(path string) error {
 	if err := w.bw.Flush(); err != nil {
 		return err
 	}
-	if w.syncFn != nil {
+	if syncCurrent && w.syncFn != nil {
 		if err := w.syncFn(w.f); err != nil {
 			return err
 		}
@@ -178,9 +189,11 @@ func (w *Writer) RotateTo(path string) error {
 		_ = f.Close()
 		return err
 	}
-	if err := syncDirFn(path); err != nil {
-		_ = f.Close()
-		return err
+	if syncCurrent {
+		if err := syncDirFn(path); err != nil {
+			_ = f.Close()
+			return err
+		}
 	}
 
 	old := w.f
@@ -270,8 +283,20 @@ func (w *Writer) AppendBatch(records []Record) error {
 		return ErrRecordTooLarge
 	}
 
-	total := int64(batchHeaderSize)
 	batchSeq := records[0].Seq
+	if cap(w.scratch) < batchHeaderSize {
+		w.scratch = make([]byte, batchHeaderSize)
+	}
+	buf := w.scratch
+	if len(buf) < batchHeaderSize {
+		buf = buf[:batchHeaderSize]
+	}
+	buf[0] = Version
+	binary.LittleEndian.PutUint32(buf[1:5], uint32(len(records)))
+
+	off := batchHeaderSize
+	checksum := uint32(0)
+	checksumStart := 0
 	for i := range records {
 		r := &records[i]
 		if err := validateRecord(r); err != nil {
@@ -291,39 +316,51 @@ func (w *Writer) AppendBatch(records []Record) error {
 		if recordSizeExceedsMax(keyLen, valLen) {
 			return ErrRecordTooLarge
 		}
-		total += int64(recordHeaderSize) + int64(len(r.Key)) + int64(len(r.Value))
-	}
-	if w.maxSegmentSize > 0 && total > w.maxSegmentSize {
-		return ErrRecordTooLarge
-	}
-	if total > int64(int(^uint(0)>>1)) {
-		return ErrRecordTooLarge
-	}
 
-	if cap(w.scratch) < int(total) {
-		w.scratch = make([]byte, int(total))
-	}
-	buf := w.scratch[:int(total)]
-
-	buf[0] = Version
-	binary.LittleEndian.PutUint32(buf[1:5], uint32(len(records)))
-
-	off := batchHeaderSize
-	for i := range records {
-		r := &records[i]
-		keyLen := uint16(len(r.Key))
-		valLen := uint32(len(r.Value))
+		recLen := recordHeaderSize + len(r.Key) + len(r.Value)
+		if off > int(^uint(0)>>1)-recLen {
+			return ErrRecordTooLarge
+		}
+		next := off + recLen
+		if w.maxSegmentSize > 0 && int64(next) > w.maxSegmentSize {
+			return ErrRecordTooLarge
+		}
+		if next > int(segmentLenMask) {
+			return ErrRecordTooLarge
+		}
+		if next > cap(buf) {
+			newCap := cap(buf) * 2
+			if newCap < next {
+				newCap = next
+			}
+			nextBuf := make([]byte, next, newCap)
+			copy(nextBuf, buf[:off])
+			buf = nextBuf
+		} else if next > len(buf) {
+			buf = buf[:next]
+		}
 		buf[off] = r.Op
 		binary.LittleEndian.PutUint16(buf[off+1:off+3], keyLen)
 		binary.LittleEndian.PutUint32(buf[off+3:off+7], valLen)
 		binary.LittleEndian.PutUint64(buf[off+7:off+15], r.RID)
 		binary.LittleEndian.PutUint64(buf[off+15:off+23], r.Seq)
 		copy(buf[off+recordHeaderSize:], r.Key)
-		copy(buf[off+recordHeaderSize+len(r.Key):], r.Value)
-		off += recordHeaderSize + len(r.Key) + len(r.Value)
+		valueStart := off + recordHeaderSize + len(r.Key)
+		valueEnd := valueStart + len(r.Value)
+		copy(buf[valueStart:valueEnd], r.Value)
+		off = next
+		if !w.compress && off-checksumStart >= batchChecksumChunkBytes {
+			checksum = crc.Update(checksum, buf[checksumStart:off])
+			checksumStart = off
+		}
 	}
 
-	return w.writeSegment(buf)
+	w.scratch = buf[:off]
+	if !w.compress {
+		checksum = crc.Update(checksum, w.scratch[checksumStart:])
+		return w.writeRawSegmentWithChecksum(w.scratch, checksum)
+	}
+	return w.writeSegment(w.scratch)
 }
 
 func (w *Writer) AppendCommand(env CommandEnvelope) error {
@@ -674,6 +711,22 @@ func (w *Writer) writeSegment(payload []byte) error {
 	binary.LittleEndian.PutUint32(header[0:4], length)
 	binary.LittleEndian.PutUint32(header[4:8], wantCRC)
 
+	storedLen := int(length & segmentLenMask)
+	if segmentHeaderSize+storedLen >= directSegmentPayloadMinLen {
+		if err := w.bw.Flush(); err != nil {
+			return err
+		}
+		if length&segmentFlagCompressed != 0 {
+			if err := writevFull(w.f, [][]byte{header, rawLenPrefix, stored}); err != nil {
+				return err
+			}
+		} else if err := writevFull(w.f, [][]byte{header, stored}); err != nil {
+			return err
+		}
+		w.size += int64(segmentHeaderSize) + int64(storedLen)
+		return nil
+	}
+
 	if _, err := w.bw.Write(header); err != nil {
 		return err
 	}
@@ -685,7 +738,41 @@ func (w *Writer) writeSegment(payload []byte) error {
 	if _, err := w.bw.Write(stored); err != nil {
 		return err
 	}
-	w.size += int64(segmentHeaderSize) + int64(length&segmentLenMask)
+	w.size += int64(segmentHeaderSize) + int64(storedLen)
+	return nil
+}
+
+func (w *Writer) writeRawSegmentWithChecksum(payload []byte, wantCRC uint32) error {
+	if err := w.flushBufferedCommandFrames(); err != nil {
+		return err
+	}
+	if len(payload) > int(segmentLenMask) {
+		return ErrRecordTooLarge
+	}
+	length := uint32(len(payload))
+	header := w.headerBuf[:]
+	binary.LittleEndian.PutUint32(header[0:4], length)
+	binary.LittleEndian.PutUint32(header[4:8], wantCRC)
+
+	storedLen := int(length)
+	if segmentHeaderSize+storedLen >= directSegmentPayloadMinLen {
+		if err := w.bw.Flush(); err != nil {
+			return err
+		}
+		if err := writevFull(w.f, [][]byte{header, payload}); err != nil {
+			return err
+		}
+		w.size += int64(segmentHeaderSize) + int64(storedLen)
+		return nil
+	}
+
+	if _, err := w.bw.Write(header); err != nil {
+		return err
+	}
+	if _, err := w.bw.Write(payload); err != nil {
+		return err
+	}
+	w.size += int64(segmentHeaderSize) + int64(storedLen)
 	return nil
 }
 

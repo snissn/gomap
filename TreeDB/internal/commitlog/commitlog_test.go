@@ -73,6 +73,89 @@ func TestCommitLogWriteReadBatch(t *testing.T) {
 	_ = reader.Close()
 }
 
+func TestCommitLogWriteReadLargeRawBatch(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "commit.log")
+
+	writer, err := NewWriterWithOptions(path, Options{Compress: false})
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+	records := make([]Record, 2048)
+	value := bytes.Repeat([]byte("v"), 128)
+	for i := range records {
+		records[i] = Record{
+			Op:    OpSetInline,
+			Key:   []byte{byte(i), byte(i >> 8), byte(i >> 16)},
+			Value: value,
+			Seq:   7,
+		}
+	}
+	if err := writer.AppendBatch(records); err != nil {
+		_ = writer.Close()
+		t.Fatalf("append large raw batch: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	reader, err := NewReader(path)
+	if err != nil {
+		t.Fatalf("new reader: %v", err)
+	}
+	got, err := reader.ReadBatch()
+	if err != nil {
+		_ = reader.Close()
+		t.Fatalf("read batch: %v", err)
+	}
+	if len(got) != len(records) {
+		_ = reader.Close()
+		t.Fatalf("record count: got %d want %d", len(got), len(records))
+	}
+	for i := range records {
+		if got[i].Op != records[i].Op || got[i].Seq != records[i].Seq ||
+			!bytes.Equal(got[i].Key, records[i].Key) || !bytes.Equal(got[i].Value, records[i].Value) {
+			_ = reader.Close()
+			t.Fatalf("record %d mismatch", i)
+		}
+	}
+	_ = reader.Close()
+}
+
+func TestWriterRotateToWithSyncSkipsDirSyncWhenRelaxed(t *testing.T) {
+	dir := t.TempDir()
+	path0 := filepath.Join(dir, "commit-0.log")
+	path1 := filepath.Join(dir, "commit-1.log")
+	path2 := filepath.Join(dir, "commit-2.log")
+
+	oldSyncDirFn := syncDirFn
+	defer func() { syncDirFn = oldSyncDirFn }()
+	calls := 0
+	syncDirFn = func(string) error {
+		calls++
+		return nil
+	}
+
+	writer, err := NewWriterWithOptions(path0, Options{})
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+	defer func() { _ = writer.Close() }()
+	calls = 0
+	if err := writer.RotateToWithSync(path1, false); err != nil {
+		t.Fatalf("relaxed RotateToWithSync: %v", err)
+	}
+	if calls != 0 {
+		t.Fatalf("relaxed RotateToWithSync syncDir calls=%d, want 0", calls)
+	}
+	if err := writer.RotateToWithSync(path2, true); err != nil {
+		t.Fatalf("strict RotateToWithSync: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("strict RotateToWithSync syncDir calls=%d, want 1", calls)
+	}
+}
+
 func TestCommitLogWriteReadBatchCompressed(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "commit.log")
