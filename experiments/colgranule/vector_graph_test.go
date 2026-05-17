@@ -157,6 +157,52 @@ func TestColumnVectorGraphSearchHandlesOverflowingFloat32Dot(t *testing.T) {
 	}
 }
 
+func TestColumnVectorGraphSearchHandlesOverflowingScaledCosine(t *testing.T) {
+	const dims = 128
+	vectorValue := float32(1e38)
+	queryValue := float32(0.1 / math.Sqrt(float64(dims)))
+	invNorm := float32(1 / math.Sqrt(float64(dims)*1e76))
+	if invNorm <= 0 || math.IsInf(float64(invNorm), 0) || math.IsNaN(float64(invNorm)) {
+		t.Fatalf("invNorm=%g want positive finite", invNorm)
+	}
+
+	vectors := make([]float32, dims*2)
+	for dim := 0; dim < dims; dim++ {
+		vectors[dim] = vectorValue
+		vectors[dims+dim] = -vectorValue
+	}
+	graph := &ColumnVectorGraph{
+		ids:              []int64{101, 202},
+		dims:             dims,
+		vectors:          vectors,
+		invNorms:         []float32{invNorm, invNorm},
+		neighborOffsets:  []uint32{0, 1, 2},
+		neighborOrdinals: []int64{1, 0},
+		entryOrdinal:     0,
+	}
+
+	query := make([]float32, dims)
+	for dim := range query {
+		query[dim] = queryValue
+	}
+	results, _, err := graph.SearchCosine(query, ColumnVectorGraphSearchOptions{TopK: 1, EfSearch: 2}, &ColumnVectorGraphSearchScratch{})
+	if err != nil {
+		t.Fatalf("SearchCosine: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("results=%d want 1", len(results))
+	}
+	if results[0].PrimaryID != 101 || results[0].Ordinal != 0 {
+		t.Fatalf("result=(id=%d ord=%d) want (id=101 ord=0)", results[0].PrimaryID, results[0].Ordinal)
+	}
+	if math.IsInf(float64(results[0].Distance), 0) || math.IsNaN(float64(results[0].Distance)) {
+		t.Fatalf("distance=%g want finite", results[0].Distance)
+	}
+	if math.Abs(float64(results[0].Distance)) > 1e-5 {
+		t.Fatalf("distance=%g want near 0", results[0].Distance)
+	}
+}
+
 func TestColumnVectorGraphScratchClearsFullVisitedCapacityOnWrap(t *testing.T) {
 	var scratch ColumnVectorGraphSearchScratch
 	visited, mark := scratch.nextVisitedEpoch(8)
