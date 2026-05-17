@@ -13,10 +13,11 @@ import (
 )
 
 const (
-	columnManifestFormatTCS1        = "tcs1"
-	columnManifestIdentityMagic     = uint32(0x54434d49) // TCMI
-	columnManifestIdentityVersion   = uint16(1)
-	columnManifestIdentityRecordKey = "\x00column-manifest/identity"
+	columnManifestFormatTCS1         = "tcs1"
+	columnManifestIdentityMagic      = uint32(0x54434d49) // TCMI
+	columnManifestIdentityVersion    = uint16(1)
+	columnManifestIdentityRecordSize = 28
+	columnManifestIdentityRecordKey  = "\x00column-manifest/identity"
 )
 
 type ColumnStoreValueType string
@@ -564,7 +565,14 @@ func validateColumnStoreCatalogRoot(snap *backenddb.Snapshot, catalog *collectio
 }
 
 func encodeColumnManifestIdentityRecord(identity ColumnManifestIdentity) []byte {
-	out := make([]byte, 28)
+	record := encodeColumnManifestIdentityRecordArray(identity)
+	out := make([]byte, len(record))
+	copy(out, record[:])
+	return out
+}
+
+func encodeColumnManifestIdentityRecordArray(identity ColumnManifestIdentity) [columnManifestIdentityRecordSize]byte {
+	var out [columnManifestIdentityRecordSize]byte
 	binary.BigEndian.PutUint32(out[0:4], columnManifestIdentityMagic)
 	binary.BigEndian.PutUint16(out[4:6], columnManifestIdentityVersion)
 	binary.BigEndian.PutUint16(out[6:8], identity.Version)
@@ -575,7 +583,7 @@ func encodeColumnManifestIdentityRecord(identity ColumnManifestIdentity) []byte 
 }
 
 func decodeColumnManifestIdentityRecord(raw []byte) (columnManifestIdentityRecord, error) {
-	if len(raw) != 28 {
+	if len(raw) != columnManifestIdentityRecordSize {
 		return columnManifestIdentityRecord{}, fmt.Errorf("malformed identity record length %d", len(raw))
 	}
 	if magic := binary.BigEndian.Uint32(raw[0:4]); magic != columnManifestIdentityMagic {
