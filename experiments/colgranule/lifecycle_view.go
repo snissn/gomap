@@ -456,6 +456,7 @@ func finalizeColumnAssetReachabilitySummary(records []columnAssetReachabilitySum
 	for fileID, seg := range segments {
 		seg.liveRefs = 0
 		seg.candidateRefs = 0
+		seg.protectedRefs = 0
 		segments[fileID] = seg
 	}
 	for _, record := range records {
@@ -466,14 +467,17 @@ func finalizeColumnAssetReachabilitySummary(records []columnAssetReachabilitySum
 		if record.candidate && !record.live && !record.quarantined {
 			seg.candidateRefs++
 		}
+		if !record.live && (!record.candidate || record.quarantined) {
+			seg.protectedRefs++
+		}
 		segments[record.ref.FileID] = seg
 	}
 	summary.Stats.SegmentRefs = len(segments)
 	for _, seg := range segments {
-		if seg.liveRefs == 0 && seg.candidateRefs > 0 {
+		if seg.liveRefs == 0 && seg.protectedRefs == 0 && seg.candidateRefs > 0 {
 			summary.Stats.DirectlyDeletableSegments++
 		}
-		if seg.liveRefs > 0 && seg.candidateRefs > 0 {
+		if (seg.liveRefs > 0 || seg.protectedRefs > 0) && seg.candidateRefs > 0 {
 			summary.Stats.MixedLiveDeadSegments++
 		}
 	}
@@ -504,7 +508,7 @@ func finalizeColumnAssetReachabilitySummary(records []columnAssetReachabilitySum
 		case record.candidate:
 			summary.CleanupSafeBytes += record.bytes
 			seg := segments[record.ref.FileID]
-			if seg.liveRefs == 0 {
+			if seg.liveRefs == 0 && seg.protectedRefs == 0 {
 				summary.ReclaimableBytes += record.bytes
 			} else {
 				summary.RewriteDebtBytes += record.bytes
@@ -521,6 +525,7 @@ func finalizeColumnAssetReachabilityRecords(records map[ColumnAssetRef]columnAss
 	for _, seg := range segments {
 		seg.liveRefs = 0
 		seg.candidateRefs = 0
+		seg.protectedRefs = 0
 	}
 	for _, record := range records {
 		seg := segments[record.entry.Ref.FileID]
@@ -534,13 +539,16 @@ func finalizeColumnAssetReachabilityRecords(records map[ColumnAssetRef]columnAss
 		if record.candidate && !record.live && !record.quarantined {
 			seg.candidateRefs++
 		}
+		if !record.live && (!record.candidate || record.quarantined) {
+			seg.protectedRefs++
+		}
 	}
 	plan.Stats.SegmentRefs = len(segments)
 	for _, seg := range segments {
-		if seg.liveRefs == 0 && seg.candidateRefs > 0 {
+		if seg.liveRefs == 0 && seg.protectedRefs == 0 && seg.candidateRefs > 0 {
 			plan.Stats.DirectlyDeletableSegments++
 		}
-		if seg.liveRefs > 0 && seg.candidateRefs > 0 {
+		if (seg.liveRefs > 0 || seg.protectedRefs > 0) && seg.candidateRefs > 0 {
 			plan.Stats.MixedLiveDeadSegments++
 		}
 	}
@@ -574,7 +582,7 @@ func finalizeColumnAssetReachabilityRecords(records map[ColumnAssetRef]columnAss
 		case record.candidate:
 			plan.CleanupSafeBytes += entry.Bytes
 			seg := segments[entry.Ref.FileID]
-			if seg != nil && seg.liveRefs == 0 {
+			if seg != nil && seg.liveRefs == 0 && seg.protectedRefs == 0 {
 				entry.DeleteEligible = true
 				entry.State = ColumnAssetStateReclaimable
 				plan.ReclaimableBytes += entry.Bytes

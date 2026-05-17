@@ -310,6 +310,7 @@ func columnAssetRefDeltaEntry(kind ColumnAssetRefDeltaKind, ref ColumnManifestPa
 type columnAssetSegmentState struct {
 	liveRefs      int
 	candidateRefs int
+	protectedRefs int
 }
 
 func addManifestAssetRefs(records map[ColumnAssetRef]columnAssetReachabilityRecord, segments map[uint32]*columnAssetSegmentState, manifest ColumnCollectionManifest, state ColumnAssetLifecycleState, live bool, candidate bool, stats *ColumnAssetReachabilityStats) error {
