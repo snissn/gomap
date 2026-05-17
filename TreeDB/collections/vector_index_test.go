@@ -1389,6 +1389,39 @@ func TestCollectionVectorIndexCheckRecallFallsBackForUnsafeBatchNorms(t *testing
 	}
 }
 
+func TestAngularDistancesFloat32BatchMatchesExactCosine(t *testing.T) {
+	queries := [][]float32{
+		{1e9, 1e9 + 128, 1e9 - 64},
+		{1e9, -1e9, 3},
+	}
+	documents := [][]float32{
+		{1e9, 1e9 + 256, 1e9 - 128},
+		{1e9, 1e9 + 128, -1e9},
+	}
+	queryMatrix := make([]float32, 0, len(queries)*len(queries[0]))
+	for _, query := range queries {
+		queryMatrix = append(queryMatrix, query...)
+	}
+	documentMatrix := make([]float32, 0, len(documents)*len(documents[0]))
+	for _, document := range documents {
+		documentMatrix = append(documentMatrix, document...)
+	}
+	distances := make([]float64, len(queries)*len(documents))
+	angularDistancesFloat32Batch(queryMatrix, documentMatrix, len(queries), len(documents), len(queries[0]), distances)
+	for queryIndex, query := range queries {
+		for docIndex, document := range documents {
+			want, err := exactVectorDistance(query, document, VectorMetricCosine)
+			if err != nil {
+				t.Fatalf("exact cosine distance: %v", err)
+			}
+			got := float32(distances[queryIndex*len(documents)+docIndex])
+			if got != want {
+				t.Fatalf("distance[%d][%d]=%.9g want exact %.9g", queryIndex, docIndex, got, want)
+			}
+		}
+	}
+}
+
 func openVectorIndexTestCollection(tb testing.TB, d *backenddb.DB) *Collection {
 	tb.Helper()
 	return openVectorIndexTestCollectionWithIndexes(tb, d)
