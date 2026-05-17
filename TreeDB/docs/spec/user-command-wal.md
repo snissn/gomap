@@ -242,15 +242,15 @@ replayable without adding query-wide mutation semantics.
 
 | Surface | Current user-facing shape | V1 WAL command | Status policy |
 |---|---|---|---|
-| Raw KV set/delete/batch | `Set`, `Delete`, `Batch.Write` | `RawKVBatch` | `WAL-supported`; this is the bridge from the current commit log. |
-| Collection insert batch | explicit IDs plus stored documents | `CollectionInsertBatchByID` | `WAL-supported` after canonical payload and recovery tests. |
+| Raw KV set/delete/batch | `Set`, `Delete`, `Batch.Write` | `RawKVBatch` | PR1 has gated typed bytes and fixtures; production raw writes become `WAL-supported` after PR3 recovery dispatch and `AppliedCommandLSN` plumbing. |
+| Collection insert batch | explicit IDs plus stored documents | `CollectionInsertBatchByID` | PR1 reserves a native-wire deterministic fixture placeholder; `WAL-supported` only after canonical payload and recovery tests. |
 | Collection delete | explicit document ID or ID batch | `CollectionDeleteBatchByID` | `WAL-supported` after canonical payload and recovery tests. |
 | Collection declarative update | explicit document ID plus canonical update ops over resolved literal values | `CollectionUpdateByIDOps` or final replacement | `WAL-supported` after operator registry, canonical encoding, and recovery tests. |
 | Resolver-backed update helpers | helpers such as server-now, UUID, random, or sequence values used by declarative update APIs | not a replay command; lowers to resolved literals inside `CollectionUpdateByIDOps` | `WAL-supported` only when resolved before WAL append. Recovery must not invoke helper functions. |
 | Collection update callback | explicit document ID plus Go callback | `CollectionReplaceBatchByID` after callback execution | Callback itself is not replayed. WAL logs final accepted replacements/no-ops. |
 | Mongo `updateOne` | `_id` equality plus accepted `$set` subset | `CollectionUpdateByIDSet` or final replacement | `WAL-supported` only after canonical lowering and result assertions. |
 | Mongo `deleteOne` | `_id` equality | `CollectionDeleteBatchByID` | Same as native explicit-ID delete. |
-| Collection/index metadata | create collection, create/drop index | `CatalogMutation` | Add deliberately; if not implemented yet, reject in WAL-on durable-at-ack modes. |
+| Collection/index metadata | create collection, create/drop index | `CatalogMutation` | PR1 reserves a catalog fixture placeholder; if not implemented yet, reject in WAL-on durable-at-ack modes. |
 | Query-wide update/delete | predicate/range matched mutation | none | `WAL-rejected`; future command kind required. |
 | User-defined callback replay | arbitrary function | none | `WAL-rejected`; lower to final replacement first. |
 | Column-store file publish | external side-file refs | future command plus external-ref classes | Deferred until external-file prepare/recovery is specified. |
