@@ -15,7 +15,6 @@ It compares:
 - `github.com/viterin/vek/vek32` `Dot`
 - `github.com/tphakala/simd/f32` `DotProduct`, `DotProductUnsafe`, and
   `DotProductBatch`
-- `github.com/mycophonic/primordium/simd` `DotFloat32`
 - `github.com/ic-timon/da-hvri/simd` `DotProduct`
 
 It also includes focused TreeDB rerank-shape benchmarks:
@@ -42,8 +41,8 @@ The benchmark compares that against:
 - using `PackedMatrix.DotsF32WithPool` with a reusable `WorkerPool`
 - using `AngularsPackedF32` directly
 - looping over candidates with `axiomhq/simd-go` `DotProductFloat32`
-- looping over candidates with `vek32`, `tphakala/simd/f32`, and
-  `primordium/simd` fused dot products
+- looping over candidates with `vek32` and `tphakala/simd/f32` fused dot
+  products
 - using `tphakala/simd/f32.DotProductBatch` for one query against many rows
 - looping over candidates with `da-hvri` dot products
 

@@ -529,6 +529,11 @@ func TestParseConfigRejectsInvalidValidationCombinations(t *testing.T) {
 			want: "-top-k cannot exceed -docs",
 		},
 		{
+			name: "synthetic validate queries exceeds docs",
+			args: []string{"-docs", "2", "-top-k", "2", "-validate-queries", "3"},
+			want: "-validate-queries cannot exceed -docs",
+		},
+		{
 			name: "negative validate docs",
 			args: []string{"-validate-docs", "-1"},
 			want: "-validate-docs cannot be negative",
@@ -543,6 +548,25 @@ func TestParseConfigRejectsInvalidValidationCombinations(t *testing.T) {
 				t.Fatalf("error=%v, want %q", err, tc.want)
 			}
 		})
+	}
+}
+
+func TestParseConfigDatasetDirAllowsValidateQueriesAboveDocs(t *testing.T) {
+	cfg, err := parseConfig([]string{
+		"-dataset-dir", filepath.Join("tmp", "dataset"),
+		"-docs", "2",
+		"-top-k", "2",
+		"-validate-queries", "7",
+		"-validate-docs", "2",
+	})
+	if err != nil {
+		t.Fatalf("parseConfig: %v", err)
+	}
+	if cfg.validateQueries != 7 {
+		t.Fatalf("validateQueries=%d want 7", cfg.validateQueries)
+	}
+	if cfg.datasetDir != filepath.Join("tmp", "dataset") {
+		t.Fatalf("datasetDir=%q", cfg.datasetDir)
 	}
 }
 
@@ -580,12 +604,22 @@ func TestSyntheticQueriesDoNotOverlapValidationQueries(t *testing.T) {
 	for i := 0; i < validateCount; i++ {
 		seen[syntheticQueryID(i, docs, 0, docs, stride)] = struct{}{}
 	}
-	benchmarkStart := validateCount + 1
+	benchmarkStart := validateCount
 	benchmarkSpan := docs - benchmarkStart
 	for i := 0; i < benchmarkCount; i++ {
 		queryID := syntheticQueryID(i, docs, benchmarkStart, benchmarkSpan, stride)
 		if _, ok := seen[queryID]; ok {
 			t.Fatalf("benchmark query id %d overlapped validation set", queryID)
+		}
+	}
+}
+
+func TestSyntheticQueryIDSpillsPastCorpusAfterFullValidation(t *testing.T) {
+	docs := 17
+	stride := queryDocStride(docs)
+	for i := 0; i < 5; i++ {
+		if got := syntheticQueryID(i, docs, docs, 0, stride); got != docs+i {
+			t.Fatalf("syntheticQueryID(%d)=%d want %d", i, got, docs+i)
 		}
 	}
 }
