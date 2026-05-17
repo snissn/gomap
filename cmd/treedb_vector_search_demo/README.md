@@ -45,7 +45,10 @@ GOWORK=off go run ./cmd/treedb_vector_search_demo \
   -json
 ```
 
-Use `-keep-dir` to inspect the generated datastore after the run.
+Use `-keep-dir` to inspect an automatically-created temporary datastore after
+the run. Passing an explicit `-dir` always keeps that directory, and it must be
+empty or absent before the run starts.
+
 Use `-matrix=false` to run only the single 1560-style case; add
 `-compact=true` when that single case should run `CompactStorageFull`.
 The matrix search stage defaults to 10,000 ANN queries per lane and parallel
@@ -78,6 +81,8 @@ Useful flags:
   behavior.
 - `-compact-sync-each-phase=true`: ask compaction to fsync each rewrite/pack
   phase.
+- `-dir PATH`: write into a caller-chosen empty directory and keep it after the
+  run.
 - `-disable-exact-fallback=false`: allow exact fallback during benchmark
   searches.
 - `-validate-queries N` and `-min-recall R`: run recall validation for `N`
