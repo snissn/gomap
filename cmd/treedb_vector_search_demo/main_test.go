@@ -512,12 +512,22 @@ func TestSyntheticQueriesDoNotOverlapValidationQueries(t *testing.T) {
 	for i := 0; i < validateCount; i++ {
 		seen[syntheticQueryID(i, docs, 0, docs, stride)] = struct{}{}
 	}
-	benchmarkStart := validateCount + 1
+	benchmarkStart := validateCount
 	benchmarkSpan := docs - benchmarkStart
 	for i := 0; i < benchmarkCount; i++ {
 		queryID := syntheticQueryID(i, docs, benchmarkStart, benchmarkSpan, stride)
 		if _, ok := seen[queryID]; ok {
 			t.Fatalf("benchmark query id %d overlapped validation set", queryID)
+		}
+	}
+}
+
+func TestSyntheticQueryIDSpillsPastCorpusAfterFullValidation(t *testing.T) {
+	docs := 17
+	stride := queryDocStride(docs)
+	for i := 0; i < 5; i++ {
+		if got := syntheticQueryID(i, docs, docs, 0, stride); got != docs+i {
+			t.Fatalf("syntheticQueryID(%d)=%d want %d", i, got, docs+i)
 		}
 	}
 }
