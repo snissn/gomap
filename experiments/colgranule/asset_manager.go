@@ -267,6 +267,9 @@ func (m *ColumnAssetManager) SyncPublishClosure(closure ColumnAssetPublishClosur
 			return err
 		}
 	}
+	if !closure.SyncRequired {
+		return nil
+	}
 	if syncer, ok := store.(columnAssetSyncer); ok {
 		return syncer.Sync()
 	}
