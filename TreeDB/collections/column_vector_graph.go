@@ -42,7 +42,9 @@ type ColumnVectorGraphSearchTrace struct {
 // ColumnVectorGraphSearchScratch is caller-owned reusable search workspace.
 // It is not safe for concurrent use. SearchCosine returns slices backed by this
 // scratch, and reusing the scratch invalidates previously returned result
-// slices. Result document IDs alias graph-owned immutable ID storage.
+// slices. Result document IDs alias graph-owned immutable ID storage. A
+// ColumnVectorGraph can be searched concurrently only when each goroutine uses
+// its own scratch and the borrowed graph columns remain immutable.
 type ColumnVectorGraphSearchScratch struct {
 	graph   vectorIndexSearchScratch
 	results []VectorSearchResult

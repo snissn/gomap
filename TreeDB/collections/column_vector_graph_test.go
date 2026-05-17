@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"fmt"
 	"math"
+	"runtime"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 )
 
@@ -187,6 +190,79 @@ func TestColumnVectorGraphSearchAllocs(t *testing.T) {
 	}
 }
 
+func TestColumnVectorGraphSearchParallelIndependentScratch(t *testing.T) {
+	graph, err := NewColumnVectorGraphFromColumns(columnVectorGraphTestColumns(1024, 64, 16, false))
+	if err != nil {
+		t.Fatalf("NewColumnVectorGraphFromColumns: %v", err)
+	}
+	query, ok := graph.VectorAt(nil, 511)
+	if !ok {
+		t.Fatal("missing query vector")
+	}
+	opts := ColumnVectorGraphSearchOptions{TopK: 10, EfSearch: 128}
+	var expectedScratch ColumnVectorGraphSearchScratch
+	expected, expectedTrace, err := graph.SearchCosine(query, opts, &expectedScratch)
+	if err != nil {
+		t.Fatalf("expected SearchCosine: %v", err)
+	}
+	if len(expected) != opts.TopK {
+		t.Fatalf("expected results=%d want %d", len(expected), opts.TopK)
+	}
+	expectedFirstID := bytes.Clone(expected[0].DocumentID)
+	expectedFirstDistance := expected[0].Distance
+
+	const iterations = 100
+	workers := runtime.GOMAXPROCS(0)
+	if workers < 2 {
+		workers = 2
+	}
+	errs := make(chan error, workers)
+	var wg sync.WaitGroup
+	for worker := 0; worker < workers; worker++ {
+		worker := worker
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			var scratch ColumnVectorGraphSearchScratch
+			if results, _, err := graph.SearchCosine(query, opts, &scratch); err != nil {
+				errs <- fmt.Errorf("worker %d warm SearchCosine: %w", worker, err)
+				return
+			} else if len(results) != opts.TopK {
+				errs <- fmt.Errorf("worker %d warm results=%d want %d", worker, len(results), opts.TopK)
+				return
+			}
+			for i := 0; i < iterations; i++ {
+				results, trace, err := graph.SearchCosine(query, opts, &scratch)
+				if err != nil {
+					errs <- fmt.Errorf("worker %d iteration %d SearchCosine: %w", worker, i, err)
+					return
+				}
+				if len(results) != opts.TopK {
+					errs <- fmt.Errorf("worker %d iteration %d results=%d want %d", worker, i, len(results), opts.TopK)
+					return
+				}
+				if trace.CandidatesExamined != expectedTrace.CandidatesExamined || trace.EdgesVisited != expectedTrace.EdgesVisited {
+					errs <- fmt.Errorf("worker %d iteration %d trace=%+v want candidates=%d edges=%d", worker, i, trace, expectedTrace.CandidatesExamined, expectedTrace.EdgesVisited)
+					return
+				}
+				if !bytes.Equal(results[0].DocumentID, expectedFirstID) {
+					errs <- fmt.Errorf("worker %d iteration %d first document ID=%q want %q", worker, i, results[0].DocumentID, expectedFirstID)
+					return
+				}
+				if results[0].Distance != expectedFirstDistance {
+					errs <- fmt.Errorf("worker %d iteration %d first distance=%g want %g", worker, i, results[0].Distance, expectedFirstDistance)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatal(err)
+	}
+}
+
 func BenchmarkColumnVectorGraphSearchCosine(b *testing.B) {
 	graph, err := NewColumnVectorGraphFromColumns(columnVectorGraphTestColumns(8192, 128, 16, false))
 	if err != nil {
@@ -218,6 +294,58 @@ func BenchmarkColumnVectorGraphSearchCosine(b *testing.B) {
 		}
 		columnVectorGraphBenchSink += int64(len(results[0].DocumentID) + trace.CandidatesExamined + trace.EdgesVisited)
 	}
+	b.ReportMetric(float64(graph.Edges())/float64(graph.Rows()), "edges/node")
+	b.ReportMetric(float64(warmTrace.CandidatesExamined), "candidates/search")
+	b.ReportMetric(float64(warmTrace.EdgesVisited), "edges/search")
+}
+
+func BenchmarkColumnVectorGraphSearchCosineParallel(b *testing.B) {
+	graph, err := NewColumnVectorGraphFromColumns(columnVectorGraphTestColumns(8192, 128, 16, false))
+	if err != nil {
+		b.Fatalf("NewColumnVectorGraphFromColumns: %v", err)
+	}
+	query, ok := graph.VectorAt(nil, 4096)
+	if !ok {
+		b.Fatal("missing query vector")
+	}
+	opts := ColumnVectorGraphSearchOptions{TopK: 10, EfSearch: 128}
+	b.SetParallelism(1)
+	// RunParallel starts parallelism*GOMAXPROCS workers; keep that mapping
+	// explicit so each worker receives one prewarmed scratch before ResetTimer.
+	workers := runtime.GOMAXPROCS(0)
+	scratches := make(chan *ColumnVectorGraphSearchScratch, workers)
+	var warmTrace ColumnVectorGraphSearchTrace
+	for i := 0; i < workers; i++ {
+		scratch := new(ColumnVectorGraphSearchScratch)
+		warm, trace, err := graph.SearchCosine(query, opts, scratch)
+		if err != nil {
+			b.Fatalf("warm SearchCosine worker %d: %v", i, err)
+		}
+		if len(warm) != opts.TopK {
+			b.Fatalf("warm worker %d results=%d want %d", i, len(warm), opts.TopK)
+		}
+		warmTrace = trace
+		scratches <- scratch
+	}
+	b.ReportAllocs()
+	b.SetBytes(int64(warmTrace.CandidatesExamined * graph.Dims() * 4))
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		scratch := <-scratches
+		var localSink int64
+		for pb.Next() {
+			results, trace, err := graph.SearchCosine(query, opts, scratch)
+			if err != nil {
+				panic(err)
+			}
+			if len(results) != opts.TopK {
+				panic("unexpected column vector graph result count")
+			}
+			localSink += int64(len(results[0].DocumentID) + trace.CandidatesExamined + trace.EdgesVisited)
+		}
+		atomic.AddInt64(&columnVectorGraphBenchSink, localSink)
+		scratches <- scratch
+	})
 	b.ReportMetric(float64(graph.Edges())/float64(graph.Rows()), "edges/node")
 	b.ReportMetric(float64(warmTrace.CandidatesExamined), "candidates/search")
 	b.ReportMetric(float64(warmTrace.EdgesVisited), "edges/search")
