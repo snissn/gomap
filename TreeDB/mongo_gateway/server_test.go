@@ -2357,6 +2357,66 @@ func TestServerVectorIndexMetadataExtension(t *testing.T) {
 	assertIndexName(t, afterDropAll[0], "_id_")
 }
 
+func TestServerCreateIndexesConflictingExistingVectorDoesNotCreateScalar(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	vectorIndex := bson.D{
+		{Key: "key", Value: bson.D{{Key: "embedding", Value: "vector"}}},
+		{Key: "name", Value: "embedding_vector"},
+		{Key: "treedbIndexType", Value: "vector"},
+		{Key: "treedbVector", Value: bson.D{
+			{Key: "dimensions", Value: int32(64)},
+			{Key: "metric", Value: "cosine"},
+		}},
+	}
+	assertOK(t, serveCommand(t, server, 23114, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{vectorIndex}},
+		{Key: "$db", Value: "app"},
+	}))
+
+	conflictingVector := bson.D{
+		{Key: "key", Value: bson.D{{Key: "embedding", Value: "vector"}}},
+		{Key: "name", Value: "embedding_vector"},
+		{Key: "treedbIndexType", Value: "vector"},
+		{Key: "treedbVector", Value: bson.D{
+			{Key: "dimensions", Value: int32(32)},
+			{Key: "metric", Value: "cosine"},
+		}},
+	}
+	response := serveCommand(t, server, 23115, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{
+			bson.D{
+				{Key: "key", Value: bson.D{{Key: "city", Value: int32(1)}}},
+				{Key: "name", Value: "city_1"},
+				{Key: "treedbValueType", Value: "string"},
+			},
+			conflictingVector,
+		}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, response, "BadValue")
+
+	col, err := server.Collections.OpenCollection("app.users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, ok := findIndexDefinition(col.Meta().Indexes, "city_1"); ok {
+		t.Fatalf("conflicting vector request created scalar index: %+v", col.Meta().Indexes)
+	}
+	stored, ok := findVectorIndexDefinition(col.Meta().VectorIndexes, "embedding_vector")
+	if !ok || stored.Dimensions != 64 {
+		t.Fatalf("vector index changed after conflicting request: %+v ok=%v", stored, ok)
+	}
+}
+
 func TestServerCreateCollectionCommand(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

@@ -1491,6 +1491,9 @@ func (s *Server) createIndexesResponse(command wire.Document) (wire.Document, er
 	if err := validateCreateIndexesCrossKindNames(meta, scalarDefs, vectorDefs); err != nil {
 		return commandError(commandCodeDuplicateKey, "DuplicateKey", err.Error())
 	}
+	if err := validateCreateIndexesExistingVectorDefinitions(meta, vectorDefs); err != nil {
+		return commandError(commandCodeBadValue, "BadValue", err.Error())
+	}
 	for _, def := range scalarDefs {
 		if existing, ok := findIndexDefinition(meta.Indexes, def.Name); ok && sameIndexDefinition(existing, def) {
 			continue
@@ -3248,6 +3251,16 @@ func validateCreateIndexesCrossKindNames(meta collections.CollectionMeta, scalar
 	for _, def := range vectorDefs {
 		if _, ok := scalarNames[def.Name]; ok {
 			return fmt.Errorf("index name %q conflicts between scalar and vector indexes", def.Name)
+		}
+	}
+	return nil
+}
+
+func validateCreateIndexesExistingVectorDefinitions(meta collections.CollectionMeta, vectorDefs []collections.VectorIndexDefinition) error {
+	for _, def := range vectorDefs {
+		existing, ok := findVectorIndexDefinition(meta.VectorIndexes, def.Name)
+		if ok && !sameVectorIndexDefinition(existing, def) {
+			return fmt.Errorf("vector index %q already exists with a different definition", def.Name)
 		}
 	}
 	return nil
