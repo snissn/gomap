@@ -94,7 +94,7 @@ func TestColumnPartSetVectorAdjacencyVisibilityAndCompaction(t *testing.T) {
 		t.Fatal("inserted id 6 missing latest adjacency")
 	}
 	assertInt64s(t, "inserted adjacency", neighbors, []int64{61, 62, 63})
-	if _, ok, err := reader.ScanFloat32VectorAtLatest(3, "embedding", nil); err != nil || ok {
+	if _, ok, err := reader.Float32VectorAtLatest(3, "embedding", nil); err != nil || ok {
 		t.Fatalf("deleted id 3 latest vector ok=%v err=%v", ok, err)
 	}
 
