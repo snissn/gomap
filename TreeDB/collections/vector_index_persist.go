@@ -93,7 +93,9 @@ func (idx *VectorIndex) SaveNativeSnapshot() (VectorIndexLoadStatus, error) {
 	}
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()
-	if staleStatus, stale := staleNativeSnapshotSaveStatus(c, idx); stale {
+	if staleStatus, stale, err := staleNativeSnapshotSaveStatus(c, idx); err != nil {
+		return staleStatus, err
+	} else if stale {
 		return staleStatus, nil
 	}
 	if err := c.flushBufferedWrites(); err != nil {
@@ -102,29 +104,32 @@ func (idx *VectorIndex) SaveNativeSnapshot() (VectorIndexLoadStatus, error) {
 	return idx.saveNativeSnapshotPrepared()
 }
 
-func staleNativeSnapshotSaveStatus(c *Collection, idx *VectorIndex) (VectorIndexLoadStatus, bool) {
+func staleNativeSnapshotSaveStatus(c *Collection, idx *VectorIndex) (VectorIndexLoadStatus, bool, error) {
 	status := VectorIndexLoadStatus{}
 	if c == nil || idx == nil {
-		return status, false
+		return status, false, nil
 	}
 	if c.isRegisteredVectorIndex(idx) {
 		stale, err := c.registeredVectorIndexNativeRuntimeIsStale(idx)
 		if err == nil && stale {
 			status.ExactFallbackReason = vectorIndexFallbackStaleRuntimeIndex
-			return status, true
+			if idx.needsNativeAutoPersist() {
+				return status, false, fmt.Errorf("%w: index %q has dirty registered stale runtime", errVectorIndexStaleNativeRoot, idx.name)
+			}
+			return status, true, nil
 		}
-		return status, false
+		return status, false, nil
 	}
 	if idx.isNativePersistent() || collectionMetaDeclaresVectorIndex(c.meta, idx.name) {
 		status.ExactFallbackReason = vectorIndexFallbackStaleRuntimeIndex
-		return status, true
+		return status, true, nil
 	}
 	declared, err := c.refreshVectorIndexDeclaration(idx.name)
 	if err != nil || !declared {
-		return status, false
+		return status, false, nil
 	}
 	status.ExactFallbackReason = vectorIndexFallbackStaleRuntimeIndex
-	return status, true
+	return status, true, nil
 }
 
 // saveNativeSnapshotPrepared publishes the current graph after the caller has
@@ -259,7 +264,9 @@ func (idx *VectorIndex) SaveNativeDeltaSnapshot() (VectorIndexLoadStatus, error)
 	}
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()
-	if staleStatus, stale := staleNativeSnapshotSaveStatus(c, idx); stale {
+	if staleStatus, stale, err := staleNativeSnapshotSaveStatus(c, idx); err != nil {
+		return staleStatus, err
+	} else if stale {
 		return staleStatus, nil
 	}
 	if err := c.flushBufferedWrites(); err != nil {
