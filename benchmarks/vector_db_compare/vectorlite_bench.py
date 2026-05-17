@@ -310,6 +310,8 @@ def main() -> None:
     if args.top_k > manifest["docs"]:
         raise ValueError(f"--top-k={args.top_k} exceeds document count {manifest['docs']}")
     concurrency = parse_ints(args.search_concurrency)
+    if any(level <= 0 for level in concurrency):
+        raise ValueError("--search-concurrency values must be positive")
 
     phases, vectorlite_info, docs = build_database(args, dataset_dir, manifest)
     db, reopen = reopen_database(args)
