@@ -529,6 +529,11 @@ func TestParseConfigRejectsInvalidValidationCombinations(t *testing.T) {
 			want: "-top-k cannot exceed -docs",
 		},
 		{
+			name: "synthetic validate queries exceeds docs",
+			args: []string{"-docs", "2", "-top-k", "2", "-validate-queries", "3"},
+			want: "-validate-queries cannot exceed -docs",
+		},
+		{
 			name: "negative validate docs",
 			args: []string{"-validate-docs", "-1"},
 			want: "-validate-docs cannot be negative",
@@ -543,6 +548,25 @@ func TestParseConfigRejectsInvalidValidationCombinations(t *testing.T) {
 				t.Fatalf("error=%v, want %q", err, tc.want)
 			}
 		})
+	}
+}
+
+func TestParseConfigDatasetDirAllowsValidateQueriesAboveDocs(t *testing.T) {
+	cfg, err := parseConfig([]string{
+		"-dataset-dir", filepath.Join("tmp", "dataset"),
+		"-docs", "2",
+		"-top-k", "2",
+		"-validate-queries", "7",
+		"-validate-docs", "2",
+	})
+	if err != nil {
+		t.Fatalf("parseConfig: %v", err)
+	}
+	if cfg.validateQueries != 7 {
+		t.Fatalf("validateQueries=%d want 7", cfg.validateQueries)
+	}
+	if cfg.datasetDir != filepath.Join("tmp", "dataset") {
+		t.Fatalf("datasetDir=%q", cfg.datasetDir)
 	}
 }
 

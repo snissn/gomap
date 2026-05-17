@@ -353,14 +353,14 @@ func parseConfig(args []string) (config, error) {
 	if cfg.validateDocs < 0 {
 		return config{}, errors.New("-validate-docs cannot be negative")
 	}
-	if cfg.validateQueries > cfg.docs {
+	if cfg.datasetDir != "" {
+		cfg.datasetDir = filepath.Clean(cfg.datasetDir)
+	}
+	if cfg.datasetDir == "" && cfg.validateQueries > cfg.docs {
 		return config{}, errors.New("-validate-queries cannot exceed -docs")
 	}
 	if cfg.validateDocs > cfg.docs {
 		return config{}, errors.New("-validate-docs cannot exceed -docs")
-	}
-	if cfg.datasetDir != "" {
-		cfg.datasetDir = filepath.Clean(cfg.datasetDir)
 	}
 	if cfg.validateQueries == 0 && cfg.minRecall > 0 {
 		return config{}, errors.New("-min-recall must be 0 when -validate-queries is 0")
