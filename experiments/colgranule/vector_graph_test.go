@@ -94,6 +94,39 @@ func TestColumnVectorGraphRejectsStaleInvNorm(t *testing.T) {
 	}
 }
 
+func TestColumnVectorGraphRejectsLooseTinyInvNorm(t *testing.T) {
+	err := validateColumnVectorGraphStorage(
+		[]float32{1e7},
+		1,
+		[]float32{1e-8},
+		[]uint32{0, 0},
+		nil,
+		1,
+	)
+	if err == nil {
+		t.Fatal("validateColumnVectorGraphStorage succeeded with materially wrong tiny inverse norm")
+	}
+	if !strings.Contains(err.Error(), "inv-norm") {
+		t.Fatalf("error=%q want inv-norm validation", err)
+	}
+}
+
+func TestColumnVectorGraphRejectsUnrepresentableQueryInvNorm(t *testing.T) {
+	reader := columnVectorGraphTestReader(t, 4, 4, 2, false)
+	graph, _, err := NewColumnVectorGraphFromPartSet(reader, ColumnVectorGraphOptions{})
+	if err != nil {
+		t.Fatalf("NewColumnVectorGraphFromPartSet: %v", err)
+	}
+	query := []float32{math.SmallestNonzeroFloat32, 0, 0, 0}
+	_, _, err = graph.SearchCosine(query, ColumnVectorGraphSearchOptions{TopK: 1}, &ColumnVectorGraphSearchScratch{})
+	if err == nil {
+		t.Fatal("SearchCosine succeeded with unrepresentable query inverse norm")
+	}
+	if !strings.Contains(err.Error(), "inverse norm") {
+		t.Fatalf("error=%q want inverse norm validation", err)
+	}
+}
+
 func BenchmarkColumnVectorGraphSearchCosine(b *testing.B) {
 	reader := columnVectorGraphTestReader(b, 8192, 128, 16, false)
 	graph, loadStats, err := NewColumnVectorGraphFromPartSet(reader, ColumnVectorGraphOptions{})
