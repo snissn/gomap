@@ -21,13 +21,12 @@ func angularDistancesFloat32Batch(queries, documents []float32, queryCount, docu
 	for queryIndex := 0; queryIndex < queryCount; queryIndex++ {
 		query := queries[queryIndex*dims : (queryIndex+1)*dims]
 		queryNorm := vectorNormSquared(query)
-		queryScale := 1 / math.Sqrt(queryNorm)
 		row := distances[queryIndex*documentCount : (queryIndex+1)*documentCount]
 		for docIndex := 0; docIndex < documentCount; docIndex++ {
 			document := documents[docIndex*dims : (docIndex+1)*dims]
 			documentNorm := vectorNormSquared(document)
 			dot := dotProductFloat32(query, document)
-			row[docIndex] = 1 - dot*queryScale/math.Sqrt(documentNorm)
+			row[docIndex] = 1 - dot/(math.Sqrt(queryNorm)*math.Sqrt(documentNorm))
 		}
 	}
 }
