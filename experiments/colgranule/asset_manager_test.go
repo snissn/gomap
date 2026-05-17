@@ -134,6 +134,36 @@ func TestColumnAssetManagerSyncPublishClosureHonorsSyncRequired(t *testing.T) {
 	}
 }
 
+func TestColumnAssetManagerSyncPublishClosureVerifiesNoopClosureAssets(t *testing.T) {
+	store := &syncProbeAssetStore{MemoryColumnAssetStore: NewMemoryColumnAssetStore()}
+	manager, err := NewColumnAssetManager(store)
+	if err != nil {
+		t.Fatalf("NewColumnAssetManager: %v", err)
+	}
+	ref, err := manager.Put(ColumnAssetKindTCS1PartImage, make([]byte, tcs1HeaderBytes+16))
+	if err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	prepared := ColumnPreparedAsset{
+		Ref:          ref,
+		GenerationID: 7,
+		PublishID:    11,
+		Reason:       "publish staged",
+	}
+	closure, err := manager.PreparePublishClosure([]ColumnPreparedAsset{prepared})
+	if err != nil {
+		t.Fatalf("PreparePublishClosure: %v", err)
+	}
+	closure.SyncRequired = false
+	store.Reset()
+	if err := manager.SyncPublishClosure(closure); err == nil {
+		t.Fatal("SyncPublishClosure succeeded for missing no-op closure asset")
+	}
+	if store.syncCalls != 0 {
+		t.Fatalf("sync calls=%d want 0 after failed no-op closure verification", store.syncCalls)
+	}
+}
+
 func TestColumnAssetManagerPreparedPublishFailureQuarantinesAssets(t *testing.T) {
 	store := NewMemoryColumnAssetStore()
 	manager, err := NewColumnAssetManager(store)

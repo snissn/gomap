@@ -266,6 +266,9 @@ func (m *ColumnAssetManager) SyncPublishClosure(closure ColumnAssetPublishClosur
 		if err := validateColumnPreparedAsset(asset); err != nil {
 			return err
 		}
+		if err := verifyColumnAssetStoreRef(store, asset.Ref); err != nil {
+			return fmt.Errorf("colgranule: missing required prepared asset %+v: %w", asset.Ref, err)
+		}
 	}
 	if !closure.SyncRequired {
 		return nil
