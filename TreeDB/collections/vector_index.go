@@ -1919,6 +1919,9 @@ func (idx *VectorIndex) selectDiverseCandidatesLocked(candidates []vectorIndexCa
 	if len(candidates) <= limit {
 		return candidates
 	}
+	if idx.metric == VectorMetricInnerProduct {
+		return candidates[:limit]
+	}
 	var selectedStack [128]vectorIndexCandidate
 	selected := selectedStack[:0]
 	if limit > len(selectedStack) {
