@@ -720,7 +720,7 @@ func assertDBValue(t *testing.T, db *DB, key string, want string) {
 	}
 }
 
-func writeCommandWALRawKVFrame(t *testing.T, dir string, segmentSeq uint64, lsn uint64, ops []commitlog.RawKVOperation) {
+func writeCommandWALRawKVFrame(t testing.TB, dir string, segmentSeq uint64, lsn uint64, ops []commitlog.RawKVOperation) {
 	t.Helper()
 	walDir := WALDirPath(dir)
 	if err := os.MkdirAll(walDir, 0o755); err != nil {
@@ -750,7 +750,7 @@ func writeCommandWALRawKVFrame(t *testing.T, dir string, segmentSeq uint64, lsn 
 	}
 }
 
-func writeValueLogRID(t *testing.T, dir string, rid uint64, value []byte) page.ValuePtr {
+func writeValueLogRID(t testing.TB, dir string, rid uint64, value []byte) page.ValuePtr {
 	t.Helper()
 	valueLogDir := resolveStorageLayout(dir).valueVLogDir
 	if err := os.MkdirAll(valueLogDir, 0o755); err != nil {

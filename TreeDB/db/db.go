@@ -97,10 +97,11 @@ type DB struct {
 	freelistRegionPages  uint64
 	freelistRegionRadius int
 
-	readOnly   bool
-	durability DurabilityMode
-	commandWAL bool
-
+	readOnly                       bool
+	durability                     DurabilityMode
+	commandWAL                     bool
+	commandWALStatsScan            bool
+	walMaxSegmentBytes             int64
 	keepRecent                     uint64
 	policy                         WritePolicy
 	valueLogCompression            ValueLogCompressionMode
@@ -257,8 +258,14 @@ type DB struct {
 	// reopening the DB. After an append reached the journal but flush/sync or
 	// root publication failed, continuing on the same handle could create an
 	// unrecoverable LSN gap.
-	commandWALFlushPoisoned atomic.Bool
-	closing                 atomic.Bool
+	commandWALFlushPoisoned   atomic.Bool
+	commandWALStatsMu         sync.Mutex
+	commandWALRequiredFeature bool
+	commandWALRequiredErr     string
+	commandWALStatsAppliedLSN uint64
+	commandWALStatsSummary    commandWALStatsSummary
+	commandWALStatsOK         bool
+	closing                   atomic.Bool
 }
 
 type valueLogRewriteLiveBytesKey struct {
@@ -651,6 +658,10 @@ type Options struct {
 	// until cached writes are converted to typed command frames. Use OpenBackend
 	// for read-write opens in command-WAL mode.
 	CommandWAL bool
+	// CommandWALStatsScan enables expensive diagnostic Stats() counters that scan
+	// command-WAL segment files for frame counts and max LSN. Keep this disabled
+	// for normal telemetry; benchmark proof paths can opt in explicitly.
+	CommandWALStatsScan bool
 	// ReadOnly opens the database without acquiring an exclusive lock and without
 	// modifying on-disk state (no recovery truncation, no WAL replay, no background
 	// maintenance). Only read operations are supported. Under the collection WAL
@@ -1416,6 +1427,8 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		freelistRegionRadius:           opts.FreelistRegionRadius,
 		durability:                     opts.Durability,
 		commandWAL:                     opts.CommandWAL,
+		commandWALStatsScan:            opts.CommandWALStatsScan,
+		walMaxSegmentBytes:             opts.WALMaxSegmentBytes,
 		policy: WritePolicy{
 			InlineThreshold: inlineThreshold,
 			FlushThreshold:  opts.FlushThreshold,
@@ -1516,6 +1529,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 			return nil, err
 		}
 		db.commandJournal = journal
+		db.cacheCommandWALRequiredFeatureStats()
 	} else {
 		// If a directory requires command replay but this open is not command-WAL
 		// enabled, fail closed before legacy replay can misinterpret typed frames.
