@@ -587,6 +587,81 @@ func (r *Reader) ReadNextMeta() (uint64, page.ValuePtr, error) {
 	return entry.rid, entry.ptr, nil
 }
 
+// ReadRIDAtUnverified reads only the RID metadata for ptr and does not verify
+// the record CRC. It avoids full segment scans when the caller's ValuePtr was
+// just produced by this process's value-log write path and only the append RID
+// is needed for a command-WAL external-reference fence.
+//
+// It MUST NOT be used on pointers loaded from durable index pages or any other
+// untrusted source; use Reader for integrity-checked reads from durable pointers.
+func ReadRIDAtUnverified(f *os.File, fileID uint32, ptr page.ValuePtr) (uint64, error) {
+	if f == nil || fileID == 0 || ptr.FileID != fileID || ptr.Offset < 4 {
+		return 0, ErrCorrupt
+	}
+	// ValuePtr.Offset is stored immediately after the CRC prefix, so the first
+	// valid value-log record has Offset == 4 and starts at file position 0.
+	start := int64(ptr.Offset) - 4
+	var header [HeaderSize]byte
+	if _, err := f.ReadAt(header[:], start); err != nil {
+		return 0, err
+	}
+	if header[4] != Version {
+		return 0, ErrCorrupt
+	}
+	flags := header[5]
+	rid := binary.LittleEndian.Uint64(header[8:16])
+	valueLen := binary.LittleEndian.Uint32(header[16:20])
+	if recordSizeExceedsMax(valueLen) {
+		return 0, ErrRecordTooLarge
+	}
+	recordLen := uint32(headerWithoutCRC) + valueLen
+	grouped := flags&recordFlagGrouped != 0
+	if !grouped {
+		if page.ValuePtrIsGrouped(ptr) || !page.ValuePtrRecordLengthHintMatches(ptr, recordLen) || rid == 0 {
+			return 0, ErrCorrupt
+		}
+		return rid, nil
+	}
+	if !page.ValuePtrIsGrouped(ptr) || !page.ValuePtrRecordLengthHintMatches(ptr, recordLen) || valueLen < FrameHeaderSize {
+		return 0, ErrCorrupt
+	}
+	var frameHeader [FrameHeaderSize]byte
+	if _, err := f.ReadAt(frameHeader[:], start+HeaderSize); err != nil {
+		return 0, err
+	}
+	if frameHeader[0] != FrameVersion {
+		return 0, ErrCorrupt
+	}
+	k := int(frameHeader[2])
+	if k <= 0 || k > MaxFrameK {
+		return 0, ErrCorrupt
+	}
+	// k is bounded by MaxFrameK above, keeping this prefix length calculation
+	// small and safe on all supported platforms.
+	prefixLen := FrameHeaderSize + k*8 + (k+1)*4
+	if int(valueLen) < prefixLen {
+		return 0, ErrCorrupt
+	}
+	subIndex := int(page.ValuePtrSubIndex(ptr))
+	if subIndex >= k {
+		return 0, ErrCorrupt
+	}
+	var ridBytes [8]byte
+	ridRel := FrameHeaderSize + subIndex*8
+	if ridRel+8 > int(valueLen) {
+		return 0, ErrCorrupt
+	}
+	ridOffset := start + HeaderSize + int64(ridRel)
+	if _, err := f.ReadAt(ridBytes[:], ridOffset); err != nil {
+		return 0, err
+	}
+	rid = binary.LittleEndian.Uint64(ridBytes[:])
+	if rid == 0 {
+		return 0, ErrCorrupt
+	}
+	return rid, nil
+}
+
 func (r *Reader) discardN(n int) error {
 	if n <= 0 {
 		return nil

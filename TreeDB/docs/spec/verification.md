@@ -313,11 +313,68 @@ PR 3: recovery dispatcher and raw KV command conversion:
 - `TestCommandWALCrashAfterFrameBeforeRootPublishRecovers`;
 - `TestCommandWALCrashDuringRootPublishSelectsOldTupleOrNewTuple`;
 - `TestCommandWALCrashAfterRootAppliedLSNBeforeCleanupSkipsFrame`;
+- `TestCommandWALRawSetReplayRePointersWhenThresholdDrops`;
+- `TestCommandWALRawEmptyBatchAdvancesAppliedLSNAsNoop`;
 - `TestCommandWALRecoveryCrashDuringReplayResumesFromAppliedLSN`;
 - `TestCommandWALStrictCommandEffectWithoutAppliedLSNFailsClosed`;
 - `TestCommandWALIdempotentSkipRequiresDigestProof`;
 - `TestCommandWALExistingRawReplayTestsMappedToRawKVBatch`;
 - `TestCommandWALExistingRIDFenceTestsMappedToExternalRefFence`.
+
+PR3 implementation evidence:
+
+- `RawKVBatch` is the first replayable command kind for direct backend
+  command-WAL mode.
+- Read-write recovery dispatches typed frames, replays raw KV commands through
+  the normal backend batch executor, and publishes roots plus
+  `AppliedCommandLSN` in one finalize boundary.
+- Clean read-write reopens still run covered-segment cleanup, so a prior crash
+  after root plus `AppliedCommandLSN` publication but before cleanup converges
+  on the next open even when no frames need replay.
+- Explicit `CommandWAL` activation first fails closed on dirty legacy WAL,
+  then persists `command_wal_v1` after replay preconditions are clear and
+  before opening the command journal, so a process cannot acknowledge typed
+  frames without a durable required-feature gate.
+- Raw KV `SetRID` command entries preserve the existing value-log RID fence by
+  requiring the referenced RID to be present in scanned value-log segments
+  before recovery can publish the command.
+- Pointer-backed raw KV command writes resolve the source RID directly from
+  value-log pointer metadata instead of scanning whole value-log segments.
+- Inline-only raw KV replay does not depend on value-log RID scanning. Recovery
+  builds the RID map and replay value-log appender only when a pending frame
+  contains `SetRID`, the current value-placement policy requires
+  re-pointerizing a logged `set`, or value-log-backed leaf pages require a
+  replay appender.
+- Raw KV `set` replay that exceeds the current inline threshold is
+  re-pointerized through the existing replay value-log appender, and the
+  appended value-log bytes are synced before roots plus `AppliedCommandLSN` are
+  published.
+- Empty `RawKVBatch` frames are explicit no-op command frames: they publish the
+  current roots with the frame LSN so command-stream contiguity remains exact.
+- Command WAL with WAL-off durability fails closed, including after
+  `command_wal_v1` is persisted, because PR3 requires a recoverable command
+  frame before root visibility.
+- Command journal flush/sync failures and post-append root publication failures
+  poison the open handle so no later write can create a durable LSN gap before
+  reopen recovery.
+- Once a command frame has been appended, later flush/sync failures are
+  commit-ambiguous rather than definitely-not-committed: recovery may replay
+  the frame after close and read-write reopen.
+- `RawKVBatch` frames that reference value-log RIDs require the external ref to
+  reach the same fresh-process recovery boundary before the frame is appended;
+  non-sync writes do not add a power-loss fsync guarantee, while sync writes
+  sync external refs before the command frame.
+- Operators and callers must treat a poisoned command-WAL handle as
+  recovery-required: close the handle and reopen read-write before issuing more
+  writes. The poisoned state is intentionally not cleared by an in-process
+  retry.
+- Public cached-mode command WAL writes remain fail-closed until the cached
+  writer is converted to the shared typed command journal. This prevents mixed
+  legacy raw records in `command_wal_v1` directories.
+- Strict split-state detection for non-idempotent command kinds remains a
+  required gate before collection/catalog commands can be marked
+  `WAL-supported`; raw KV `set`/`delete` replay uses absolute deterministic
+  assignments and never skips over missing LSNs without contiguous proof.
 
 PR 4: collection insert/delete by explicit ID:
 

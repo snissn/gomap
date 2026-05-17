@@ -414,19 +414,22 @@ func Open(opts Options) (*DB, error) {
 	// caller opts out via IgnoreFormatConfig.
 	var persistedFormat *db.FormatConfig
 	if opts.IgnoreFormatConfig {
-		if err := db.ValidateFormatRequiredFeatureGate(maindbDir); err != nil {
+		requiresCommandWAL, err := db.CommandWALRequiredFeatureEnabled(maindbDir)
+		if err != nil {
 			return nil, err
 		}
+		opts.CommandWAL = opts.CommandWAL || requiresCommandWAL
 	} else {
 		if cfg, ok, err := db.LoadFormatConfig(maindbDir); err != nil {
 			return nil, err
 		} else if ok {
-			if err := cfg.ValidateRuntimeSupported(); err != nil {
-				return nil, err
-			}
+			opts.CommandWAL = opts.CommandWAL || cfg.RequiresCommandWALV1()
 			cfg.ApplyIndexFormatToOptions(&opts)
 			persistedFormat = &cfg
 		}
+	}
+	if opts.CommandWAL && !opts.ReadOnly {
+		return nil, db.ErrCommandWALUnsupported
 	}
 
 	// Apply runtime-only index/cache overrides after loading persisted format.json
@@ -515,6 +518,7 @@ func Open(opts Options) (*DB, error) {
 	if !opts.DisableSideStores {
 		dictOpts := opts
 		dictOpts.Dir = dictdbDir
+		dictOpts.CommandWAL = false
 		// Side stores are opened via the backend (no caching layer). They must
 		// not inherit outer-leaf-in-value-log from the main DB, since that mode
 		// requires a leaf-page log wired by the cached layer.
@@ -564,6 +568,7 @@ func Open(opts Options) (*DB, error) {
 	if !opts.DisableSideStores && opts.ValueLog.TemplateMode != template.TemplateOff {
 		templateOpts := opts
 		templateOpts.Dir = templatedbDir
+		templateOpts.CommandWAL = false
 		templateOpts.DisableSideStores = true
 		templateOpts.DisableBackgroundPrune = true
 		// Like dictdb, templatedb is an internal side store; avoid inheriting the
@@ -1785,15 +1790,19 @@ func VacuumIndexOffline(opts Options) error {
 	// Preserve the persisted on-disk format knobs by default so offline index
 	// maintenance doesn't accidentally rewrite the DB into a different layout.
 	if opts.IgnoreFormatConfig {
-		if err := db.ValidateFormatRequiredFeatureGate(layout.mainDir); err != nil {
+		requiresCommandWAL, err := db.CommandWALRequiredFeatureEnabled(layout.mainDir)
+		if err != nil {
 			return err
+		}
+		if requiresCommandWAL {
+			return db.ErrCommandWALUnsupported
 		}
 	} else {
 		if cfg, ok, err := db.LoadFormatConfig(layout.mainDir); err != nil {
 			return err
 		} else if ok {
-			if err := cfg.ValidateRuntimeSupported(); err != nil {
-				return err
+			if cfg.RequiresCommandWALV1() {
+				return db.ErrCommandWALUnsupported
 			}
 			cfg.ApplyToOptions(&opts)
 		}

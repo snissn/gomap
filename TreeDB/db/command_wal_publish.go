@@ -149,6 +149,7 @@ type commandWALSegmentScanResult struct {
 
 type commandWALSegmentScanOptions struct {
 	seenLSNs                         map[uint64]struct{}
+	seenLSNAppliedLSN                uint64
 	stopAfterFirstLSNGreaterThan     uint64
 	stopAfterFirstLSNGreaterThanSeen bool
 }
@@ -167,7 +168,7 @@ func requireNoUnappliedCommandWALFrames(dir string, appliedLSN uint64, maxSegmen
 		if !isCommandWALLaneSegment(seg) {
 			continue
 		}
-		scan, err := scanCommandWALSegmentWithSeen(seg.path, maxSegmentBytes, seg.seq == activeByLane[seg.lane], seenLSNs)
+		scan, err := scanCommandWALSegmentWithSeen(seg.path, maxSegmentBytes, seg.seq == activeByLane[seg.lane], seenLSNs, appliedLSN)
 		if err != nil {
 			return err
 		}
@@ -207,8 +208,8 @@ func scanCommandWALSegment(path string, maxSegmentBytes int64, allowTerminalTail
 	return scanCommandWALSegmentWithOptions(path, maxSegmentBytes, allowTerminalTail, commandWALSegmentScanOptions{})
 }
 
-func scanCommandWALSegmentWithSeen(path string, maxSegmentBytes int64, allowTerminalTail bool, seenLSNs map[uint64]struct{}) (commandWALSegmentScanResult, error) {
-	return scanCommandWALSegmentWithOptions(path, maxSegmentBytes, allowTerminalTail, commandWALSegmentScanOptions{seenLSNs: seenLSNs})
+func scanCommandWALSegmentWithSeen(path string, maxSegmentBytes int64, allowTerminalTail bool, seenLSNs map[uint64]struct{}, appliedLSN uint64) (commandWALSegmentScanResult, error) {
+	return scanCommandWALSegmentWithOptions(path, maxSegmentBytes, allowTerminalTail, commandWALSegmentScanOptions{seenLSNs: seenLSNs, seenLSNAppliedLSN: appliedLSN})
 }
 
 func scanCommandWALSegmentWithOptions(path string, maxSegmentBytes int64, allowTerminalTail bool, opts commandWALSegmentScanOptions) (commandWALSegmentScanResult, error) {
@@ -247,7 +248,7 @@ func scanCommandWALSegmentWithOptions(path string, maxSegmentBytes int64, allowT
 			scan.typed = true
 			return scan, commitlog.ErrCommandWALDuplicateLSN
 		}
-		if opts.seenLSNs != nil {
+		if opts.seenLSNs != nil && (opts.seenLSNAppliedLSN == 0 || frame.LSN > opts.seenLSNAppliedLSN) {
 			if _, ok := opts.seenLSNs[frame.LSN]; ok {
 				scan.typed = true
 				return scan, commitlog.ErrCommandWALDuplicateLSN
@@ -287,7 +288,7 @@ func filterCommandWALSegmentsForLegacyReplay(segments []logSegment, appliedLSN u
 			continue
 		}
 		active := seg.seq == activeByLane[seg.lane]
-		scan, err := scanCommandWALSegmentWithSeen(seg.path, maxSegmentBytes, active, seenLSNs)
+		scan, err := scanCommandWALSegmentWithSeen(seg.path, maxSegmentBytes, active, seenLSNs, appliedLSN)
 		if err != nil {
 			return nil, err
 		}
@@ -345,6 +346,7 @@ func cleanupCommandWALSegmentsCoveredByAppliedLSN(dir string, appliedLSN uint64,
 		active := seg.seq == activeByLane[seg.lane]
 		scan, err := scanCommandWALSegmentWithOptions(seg.path, maxSegmentBytes, active, commandWALSegmentScanOptions{
 			seenLSNs:                         seenLSNs,
+			seenLSNAppliedLSN:                appliedLSN,
 			stopAfterFirstLSNGreaterThan:     appliedLSN,
 			stopAfterFirstLSNGreaterThanSeen: true,
 		})
