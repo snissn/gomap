@@ -1936,7 +1936,10 @@ func (idx *VectorIndex) vectorIndexCandidateIsDiverseLocked(candidate vectorInde
 		if len(candidateNode.vector) > 0 && candidateNode.cachedInvNorm != 0 {
 			for _, existing := range selected {
 				distance := idx.distanceBetweenFloat32CosineCandidateAndNodeLocked(candidateNode, existing.nodeID)
-				if math.IsInf(float64(distance), 1) || distance <= candidate.distance {
+				if math.IsInf(float64(distance), 1) {
+					continue
+				}
+				if distance < candidate.distance {
 					return false
 				}
 			}
