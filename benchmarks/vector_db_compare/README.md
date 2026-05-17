@@ -50,10 +50,10 @@ Backends:
   benchmark schema dropped after the run. Insert timing includes client-side
   vector text serialization for COPY; the JSON result reports that preparation
   time separately under the insert phase.
-- `mongodb`: runs MongoDB Vector Search only when `MONGODB_VECTOR_URI` points
-  at a deployment that supports `$vectorSearch` and `createSearchIndexes`. The
-  runner installs PyMongo with SRV support for Atlas `mongodb+srv://` URIs and
-  uses a fresh benchmark database name by default.
+- `mongodb`: runs MongoDB Vector Search and requires `MONGODB_VECTOR_URI` to
+  point at a deployment that supports `$vectorSearch` and `createSearchIndexes`.
+  The runner installs PyMongo with SRV support for Atlas `mongodb+srv://` URIs
+  and uses a fresh benchmark database name by default.
 
 Configuration:
 
