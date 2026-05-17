@@ -13,11 +13,12 @@ import (
 type CollectionHandle uint64
 
 const (
-	maxCollectionMetaIndexDefinitions  = 1 << 16
-	minEncodedIndexDefinitionLen       = 6
-	minEncodedVectorIndexDefinitionLen = 7
-	collectionRefTagName               = 1
-	collectionRefTagHandle             = 2
+	maxCollectionMetaIndexDefinitions    = 1 << 16
+	minEncodedIndexDefinitionLen         = 6
+	minEncodedVectorIndexDefinitionLen   = 8
+	minEncodedVectorIndexDefinitionV3Len = 9
+	collectionRefTagName                 = 1
+	collectionRefTagHandle               = 2
 )
 
 type metadataIdempotencyEntry struct {
@@ -208,7 +209,11 @@ func decodeCollectionMeta(src []byte) (collections.CollectionMeta, error) {
 		if vectorIndexCount > maxCollectionMetaIndexDefinitions {
 			return collections.CollectionMeta{}, protocolError(iwire.ErrResourceExhausted, "vector index count %d exceeds limit %d", vectorIndexCount, maxCollectionMetaIndexDefinitions)
 		}
-		if vectorIndexCount > uint64((len(src)-off)/minEncodedVectorIndexDefinitionLen) {
+		minVectorDefinitionLen := minEncodedVectorIndexDefinitionLen
+		if version >= 3 {
+			minVectorDefinitionLen = minEncodedVectorIndexDefinitionV3Len
+		}
+		if vectorIndexCount > uint64((len(src)-off)/minVectorDefinitionLen) {
 			return collections.CollectionMeta{}, protocolError(iwire.ErrMalformedFrame, "vector index count %d exceeds remaining collection_meta payload", vectorIndexCount)
 		}
 		meta.VectorIndexes = make([]collections.VectorIndexDefinition, 0, int(vectorIndexCount))

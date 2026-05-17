@@ -229,7 +229,13 @@ func newVectorUSearchIndex(tb testing.TB, dims, docs, m, efConstruction, efSearc
 		_ = index.Destroy()
 		tb.Fatalf("reserve usearch index: %v", err)
 	}
-	_ = index.ChangeThreadsAdd(uint(runtime.NumCPU()))
-	_ = index.ChangeThreadsSearch(1)
+	if err := index.ChangeThreadsAdd(uint(runtime.NumCPU())); err != nil {
+		_ = index.Destroy()
+		tb.Fatalf("change usearch add threads: %v", err)
+	}
+	if err := index.ChangeThreadsSearch(1); err != nil {
+		_ = index.Destroy()
+		tb.Fatalf("change usearch search threads: %v", err)
+	}
 	return index
 }

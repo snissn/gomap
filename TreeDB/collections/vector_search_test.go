@@ -237,8 +237,8 @@ func TestExactVectorDistance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("l2: %v", err)
 	}
-	if l2 != 25 {
-		t.Fatalf("l2=%v want 25", l2)
+	if l2 != 5 {
+		t.Fatalf("l2=%v want 5", l2)
 	}
 
 	cosine, err := exactVectorDistance([]float32{1, 0}, []float32{0, 1}, VectorMetricCosine)

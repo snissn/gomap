@@ -1169,7 +1169,8 @@ func TestCollectionCommandWALRejectsCatalogIndexMutations(t *testing.T) {
 		Options: CollectionOptions{
 			DocumentFormat: DocumentFormatJSON,
 		},
-		Indexes: []IndexDefinition{{Name: "city", Field: "city", ValueType: IndexValueString}},
+		Indexes:       []IndexDefinition{{Name: "city", Field: "city", ValueType: IndexValueString}},
+		VectorIndexes: []VectorIndexDefinition{{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2}},
 	})
 	d := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = d.Close() }()
@@ -1188,6 +1189,12 @@ func TestCollectionCommandWALRejectsCatalogIndexMutations(t *testing.T) {
 	}
 	if _, err := col.DropAllIndexes(); !errors.Is(err, backenddb.ErrCommandWALRejected) {
 		t.Fatalf("DropAllIndexes error=%v, want ErrCommandWALRejected", err)
+	}
+	if _, err := col.CreateVectorIndex(VectorIndexDefinition{Name: "other_embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2}); !errors.Is(err, backenddb.ErrCommandWALRejected) {
+		t.Fatalf("CreateVectorIndex error=%v, want ErrCommandWALRejected", err)
+	}
+	if _, err := col.DropVectorIndex("embedding"); !errors.Is(err, backenddb.ErrCommandWALRejected) {
+		t.Fatalf("DropVectorIndex error=%v, want ErrCommandWALRejected", err)
 	}
 	if got := d.State().AppliedCommandLSN; got != 0 {
 		t.Fatalf("AppliedCommandLSN after rejected index DDL=%d, want 0", got)

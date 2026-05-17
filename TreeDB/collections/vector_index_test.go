@@ -437,16 +437,16 @@ func TestVectorIndexInt8InsertUnchangedVectorNoops(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new vector index: %v", err)
 	}
-	index.mu.Lock()
-	if err := index.insertVectorLocked([]byte("a"), []float32{1, 0}); err != nil {
-		index.mu.Unlock()
-		t.Fatalf("insert vector: %v", err)
-	}
-	if err := index.insertVectorLocked([]byte("a"), []float32{1, 0}); err != nil {
-		index.mu.Unlock()
-		t.Fatalf("insert unchanged vector: %v", err)
-	}
-	index.mu.Unlock()
+	func() {
+		index.mu.Lock()
+		defer index.mu.Unlock()
+		if err := index.insertVectorLocked([]byte("a"), []float32{1, 0}); err != nil {
+			t.Fatalf("insert vector: %v", err)
+		}
+		if err := index.insertVectorLocked([]byte("a"), []float32{1, 0}); err != nil {
+			t.Fatalf("insert unchanged vector: %v", err)
+		}
+	}()
 
 	stats := index.Stats()
 	if stats.Nodes != 1 || stats.LiveDocs != 1 || stats.DeletedDocs != 0 {
