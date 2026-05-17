@@ -171,7 +171,7 @@ if contains_backend pgvector; then
 	backend_pip_packages+=("psycopg[binary]")
 fi
 if contains_backend mongodb; then
-	backend_pip_packages+=(pymongo)
+	backend_pip_packages+=("pymongo[srv]")
 fi
 "$VENV/bin/python" -m pip install -q --only-binary=:all: "${binary_pip_packages[@]}"
 if ((${#backend_pip_packages[@]})); then
