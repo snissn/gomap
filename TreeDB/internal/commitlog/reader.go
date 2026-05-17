@@ -101,9 +101,17 @@ func decodeBatch(payload []byte) ([]Record, error) {
 	if len(payload) < batchHeaderSize {
 		return nil, ErrCorrupt
 	}
-	if payload[0] != Version {
+	switch payload[0] {
+	case Version:
+		return decodeBatchV1(payload)
+	case zeroInlineBatchVersion:
+		return decodeZeroInlineBatch(payload)
+	default:
 		return nil, ErrCorrupt
 	}
+}
+
+func decodeBatchV1(payload []byte) ([]Record, error) {
 	count := binary.LittleEndian.Uint32(payload[1:5])
 	minBytes := int64(count) * int64(recordHeaderSize)
 	if minBytes < 0 || minBytes > int64(len(payload)) {
@@ -128,13 +136,19 @@ func decodeBatch(payload []byte) ([]Record, error) {
 			return nil, ErrRecordTooLarge
 		}
 		recSize := recordHeaderSize + int(keyLen) + int(valLen)
+		if op == OpSetInlineZero {
+			recSize = recordHeaderSize + int(keyLen)
+		}
 		if off+recSize > len(payload) {
 			return nil, ErrCorrupt
 		}
 		keyStart := off + recordHeaderSize
 		valStart := keyStart + int(keyLen)
 		key := payload[keyStart:valStart]
-		val := payload[valStart : valStart+int(valLen)]
+		var val []byte
+		if op != OpSetInlineZero {
+			val = payload[valStart : valStart+int(valLen)]
+		}
 
 		switch op {
 		case OpDelete:
@@ -149,12 +163,57 @@ func decodeBatch(payload []byte) ([]Record, error) {
 			if rid != 0 {
 				return nil, ErrCorrupt
 			}
+		case OpSetInlineZero:
+			if rid != 0 {
+				return nil, ErrCorrupt
+			}
+			val = make([]byte, int(valLen))
+			op = OpSetInline
 		default:
 			return nil, ErrCorrupt
 		}
 
 		records = append(records, Record{Op: op, Key: key, Value: val, RID: rid, Seq: seq})
 		off += recSize
+	}
+	if off != len(payload) {
+		return nil, ErrCorrupt
+	}
+	return records, nil
+}
+
+func decodeZeroInlineBatch(payload []byte) ([]Record, error) {
+	if len(payload) < zeroInlineBatchHeaderSize {
+		return nil, ErrCorrupt
+	}
+	count := binary.LittleEndian.Uint32(payload[1:5])
+	seq := binary.LittleEndian.Uint64(payload[5:13])
+	valLen := binary.LittleEndian.Uint32(payload[13:17])
+	minBytes := int64(count) * int64(zeroInlineRecordHeaderSize)
+	if minBytes < 0 || minBytes > int64(len(payload)-zeroInlineBatchHeaderSize) {
+		return nil, ErrCorrupt
+	}
+	if recordSizeExceedsMax(0, valLen) {
+		return nil, ErrRecordTooLarge
+	}
+	records := make([]Record, 0, count)
+	value := make([]byte, int(valLen))
+	off := zeroInlineBatchHeaderSize
+	for i := uint32(0); i < count; i++ {
+		if off+zeroInlineRecordHeaderSize > len(payload) {
+			return nil, ErrCorrupt
+		}
+		keyLen := binary.LittleEndian.Uint16(payload[off : off+2])
+		if recordSizeExceedsMax(keyLen, valLen) {
+			return nil, ErrRecordTooLarge
+		}
+		off += zeroInlineRecordHeaderSize
+		if off+int(keyLen) > len(payload) {
+			return nil, ErrCorrupt
+		}
+		key := payload[off : off+int(keyLen)]
+		off += int(keyLen)
+		records = append(records, Record{Op: OpSetInline, Key: key, Value: value, Seq: seq})
 	}
 	if off != len(payload) {
 		return nil, ErrCorrupt

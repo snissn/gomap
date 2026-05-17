@@ -556,6 +556,38 @@ A `RawKVBatch` command frame is one atomic command: one frame, one `LSN`, and
 all contained operations decode as one batch. Delete operations require
 `ValueLen=0`.
 
+Writers may use compact all-zero set payload variants when every operation is a
+set with the same non-empty zero-filled value length:
+
+```text
+u16 Version        // 2
+u32 OpCount
+u32 ValueLen
+ZeroOp[OpCount]
+
+ZeroOp:
+u32 KeyLen
+bytes Key[KeyLen]
+```
+
+Version 3 is the same compact zero-set payload with a narrower per-key length
+field and is valid only when every key length fits in `u16`:
+
+```text
+u16 Version        // 3
+u32 OpCount
+u32 ValueLen
+ZeroOp[OpCount]
+
+ZeroOp:
+u16 KeyLen
+bytes Key[KeyLen]
+```
+
+Readers expand version 2 and version 3 entries to ordinary `RawKVBatch` set
+operations with a zero-filled `Value[ValueLen]`; the command frame still carries
+payload format `RawKVBatchV1`.
+
 `CatalogCreateCollectionV1` payload:
 
 ```text

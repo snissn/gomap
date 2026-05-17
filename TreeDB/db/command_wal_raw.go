@@ -69,6 +69,14 @@ func (db *DB) commandWALPoisonedError() error {
 	return nil
 }
 
+// CheckCommandWALPublishReady verifies that this open handle can publish
+// command-WAL coverage without forcing another writer flush. Public cached
+// command-WAL writes already flush their command frame before visibility; the
+// checkpoint publish path uses this for relaxed AppliedCommandLSN publication.
+func (db *DB) CheckCommandWALPublishReady() error {
+	return db.commandWALPoisonedError()
+}
+
 func (db *DB) rejectUnloggedCommandWALRootPublish() error {
 	if err := db.commandWALPoisonedError(); err != nil {
 		return err
@@ -429,15 +437,26 @@ func (db *DB) appendRawKVBatchPayloadCommandWAL(payload []byte, sync bool, trust
 	}
 	var lsn uint64
 	var err error
+	flushSync := sync && db.durability != DurabilityWALOnRelaxed
 	if trusted {
-		lsn, err = db.commandJournal.AppendRawKVBatchPayloadCommandTrusted(baseAppliedLSN, payload)
+		lsn, err = db.commandJournal.AppendRawKVBatchPayloadCommandTrustedAndFlush(baseAppliedLSN, payload, flushSync)
 	} else {
 		lsn, err = db.commandJournal.AppendRawKVBatchPayloadCommand(baseAppliedLSN, payload)
+		if err == nil {
+			if flushSync {
+				err = db.commandJournal.Sync()
+			} else {
+				err = db.commandJournal.Flush()
+			}
+		}
+	}
+	if err == nil && db.testFailCommandWALFlush.Load() {
+		err = errTestCommandWALFlushFailpoint
 	}
 	if err != nil {
-		return 0, err
-	}
-	if err := db.FlushCommandWAL(sync); err != nil {
+		if lsn != 0 {
+			db.commandWALFlushPoisoned.Store(true)
+		}
 		return lsn, err
 	}
 	db.observeCommandWALAccepted(lsn)
