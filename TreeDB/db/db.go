@@ -14,6 +14,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/freelist"
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
 	"github.com/snissn/gomap/TreeDB/internal/bulk"
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/compression"
 	"github.com/snissn/gomap/TreeDB/internal/keyupdate"
 	"github.com/snissn/gomap/TreeDB/internal/lockfile"
@@ -44,6 +45,7 @@ type DBState struct {
 	CommitSeq                  uint64
 	RootPageID                 uint64
 	SystemRootPageID           uint64
+	AppliedCommandLSN          uint64
 	ValueLogSet                *valuelog.Set
 	LeafGenerations            *leafGenerationView
 	LeafGenerationStateVersion uint64
@@ -95,9 +97,11 @@ type DB struct {
 	freelistRegionPages  uint64
 	freelistRegionRadius int
 
-	readOnly   bool
-	durability DurabilityMode
-
+	readOnly                       bool
+	durability                     DurabilityMode
+	commandWAL                     bool
+	commandWALStatsScan            bool
+	walMaxSegmentBytes             int64
 	keepRecent                     uint64
 	policy                         WritePolicy
 	valueLogCompression            ValueLogCompressionMode
@@ -135,6 +139,7 @@ type DB struct {
 	vacuum           vacuumRecorder
 	meta             page.MetaPageBody
 	metaPageID       uint64
+	commandJournal   *commitlog.CommandJournal
 
 	state atomic.Pointer[DBState]
 
@@ -246,8 +251,25 @@ type DB struct {
 	testSystemRootWarmMaxDeltaOps int
 	// testFailWriteMeta forces writeMeta to fail before mutating the target meta
 	// page so tests can exercise pre-publish cleanup paths.
-	testFailWriteMeta atomic.Bool
-	closing           atomic.Bool
+	testFailWriteMeta                  atomic.Bool
+	testFailCommandWALFlush            atomic.Bool
+	testCommandWALRecoveryFailAfterLSN atomic.Uint64
+	// commandWALFlushPoisoned is intentionally cleared only by closing and
+	// reopening the DB. After an append reached the journal but flush/sync or
+	// root publication failed, continuing on the same handle could create an
+	// unrecoverable LSN gap.
+	commandWALFlushPoisoned   atomic.Bool
+	commandWALStatsMu         sync.Mutex
+	commandWALRequiredFeature bool
+	commandWALRequiredErr     string
+	commandWALStatsAppliedLSN uint64
+	commandWALStatsSummary    commandWALStatsSummary
+	commandWALStatsOK         bool
+	commandWALLiveAccepted    atomic.Uint64
+	commandWALLiveAcceptedMax atomic.Uint64
+	commandWALLiveCovered     atomic.Uint64
+	commandWALLiveCoveredMax  atomic.Uint64
+	closing                   atomic.Bool
 }
 
 type valueLogRewriteLiveBytesKey struct {
@@ -285,7 +307,13 @@ const (
 const snapshotShardHintUnset = -1
 
 var errTestFinalizeCommitFailpoint = errors.New("treedb: finalize commit failpoint")
+var errTestCommandWALFlushFailpoint = errors.New("treedb: command wal flush failpoint")
 var errTestWriteMetaFailpoint = errors.New("treedb: write meta failpoint")
+
+const (
+	commandWALWriterBufferSize        = 16 << 20
+	commandWALDeferredPointBufferSize = 64 << 20
+)
 
 type finalizeCommitError struct {
 	err                        error
@@ -630,6 +658,19 @@ type Options struct {
 	// treedb.Open, treedb.OpenBackend) and in offline maintenance helpers
 	// (VacuumIndexOffline, ValueLogRewriteOffline, treemap vacuum/rewrite/vlog-gc).
 	IgnoreFormatConfig bool
+	// CommandWAL enables the compatibility-breaking command-WAL mode for direct
+	// backend raw KV writes. It is also enabled automatically when format.json
+	// advertises the command_wal_v1 required feature.
+	//
+	// Public treedb.Open write handles route raw KV writes through the direct
+	// backend command-WAL path while command_wal_v1 is active, avoiding the
+	// legacy cached redo journal until cached writes are converted to typed
+	// command frames.
+	CommandWAL bool
+	// CommandWALStatsScan enables expensive diagnostic Stats() counters that scan
+	// command-WAL segment files for frame counts and max LSN. Keep this disabled
+	// for normal telemetry; benchmark proof paths can opt in explicitly.
+	CommandWALStatsScan bool
 	// ReadOnly opens the database without acquiring an exclusive lock and without
 	// modifying on-disk state (no recovery truncation, no WAL replay, no background
 	// maintenance). Only read operations are supported. Under the collection WAL
@@ -839,6 +880,11 @@ type Options struct {
 	// DisableSideStores skips opening dictdb/templatedb side stores.
 	// This is intended for internal side-store usage (e.g. templatedb itself).
 	DisableSideStores bool
+
+	// testCommandWALRecoveryFailAfterLSN injects a one-shot recovery failure
+	// after the given LSN is published. It is package-private test plumbing so
+	// crash-recovery tests can avoid process-global failpoints.
+	testCommandWALRecoveryFailAfterLSN uint64
 
 	// DisablePiggybackCompaction disables opportunistic defragmentation during writes.
 	// When false (default), nodes are rewritten if their siblings are physically
@@ -1097,10 +1143,17 @@ func Open(opts Options) (*DB, error) {
 	if opts.Dir == "" {
 		return nil, errors.New("db dir required")
 	}
-	if !opts.IgnoreFormatConfig {
+	if opts.IgnoreFormatConfig {
+		requiresCommandWAL, err := CommandWALRequiredFeatureEnabled(opts.Dir)
+		if err != nil {
+			return nil, err
+		}
+		opts.CommandWAL = opts.CommandWAL || requiresCommandWAL
+	} else {
 		if cfg, ok, err := LoadFormatConfig(opts.Dir); err != nil {
 			return nil, err
 		} else if ok {
+			opts.CommandWAL = opts.CommandWAL || cfg.RequiresCommandWALV1()
 			cfg.ApplyIndexFormatToOptions(&opts)
 		}
 	}
@@ -1196,6 +1249,9 @@ func validateOptions(opts Options) error {
 	case DurabilityDurable, DurabilityWALOnRelaxed, DurabilityWALOffRelaxed:
 	default:
 		return fmt.Errorf("treedb: invalid durability mode %d", opts.Durability)
+	}
+	if opts.CommandWAL && opts.Durability == DurabilityWALOffRelaxed {
+		return fmt.Errorf("%w: WAL-off durability is incompatible with command WAL", ErrCommandWALUnsupported)
 	}
 	switch opts.ValueLog.ReadIntegrity {
 	case IntegrityVerify, IntegritySkipChecksums:
@@ -1302,6 +1358,9 @@ func resolveInlineThresholdAndAdaptive(opts Options) (*adaptive.Controller, int)
 }
 
 func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
+	if opts.ReadOnly {
+		return nil, errors.New("BUG: treedb: openWithLock called with read-only options")
+	}
 	if err := recoverIndexSwap(opts.Dir); err != nil {
 		return nil, err
 	}
@@ -1376,6 +1435,9 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		freelistRegionPages:            opts.FreelistRegionPages,
 		freelistRegionRadius:           opts.FreelistRegionRadius,
 		durability:                     opts.Durability,
+		commandWAL:                     opts.CommandWAL,
+		commandWALStatsScan:            opts.CommandWALStatsScan,
+		walMaxSegmentBytes:             opts.WALMaxSegmentBytes,
 		policy: WritePolicy{
 			InlineThreshold: inlineThreshold,
 			FlushThreshold:  opts.FlushThreshold,
@@ -1390,6 +1452,9 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	}
 	db.ghostManager.start()
 	db.idx.Store(gen)
+	if opts.testCommandWALRecoveryFailAfterLSN != 0 {
+		db.testCommandWALRecoveryFailAfterLSN.Store(opts.testCommandWALRecoveryFailAfterLSN)
+	}
 
 	gen.zipper.SetFillTargets(opts.LeafFillTargetPPM, opts.InternalFillTargetPPM)
 	gen.zipper.SetPiggybackCompaction(!opts.DisablePiggybackCompaction)
@@ -1404,19 +1469,100 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	gen.zipper.SetMaintenanceOpsPerCoalesce(opts.MaintenanceOpsPerCoalesce)
 
 	if err := db.recover(); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, err
 	}
 
-	if opts.Durability != DurabilityWALOffRelaxed {
-		segments, err := listRecoverySegments(opts.Dir)
-		if err != nil {
-			db.Close()
+	segments, err := listRecoverySegments(opts.Dir)
+	if err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	needsCommandWALFormat, err := commandWALFormatNeedsActivation(opts)
+	if err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if needsCommandWALFormat {
+		if err := ValidateCommandWALActivationClean(opts.Dir); err != nil {
+			_ = db.Close()
 			return nil, err
 		}
-		if err := replayWALIntoBackend(db, segments, opts.WALMaxSegmentBytes, opts.ValueLog.DictLookup); err != nil {
-			db.Close()
+		// Persist the required feature gate before running typed recovery so that
+		// if recovery mutates WAL segments (cleanup pass) and then the open fails,
+		// the next open uses typed recovery rather than the legacy path.
+		cfg, err := formatConfigFromOptionsPreservingRequiredFeatures(opts)
+		if err != nil {
+			_ = db.Close()
 			return nil, err
+		}
+		// Use the raw writer here because ValidateCommandWALActivationClean was
+		// already called above. Re-checking after recovery would make first
+		// activation depend on the transient post-recovery WAL directory shape
+		// instead of the explicit activation boundary.
+		if err := writeFormatConfig(opts.Dir, cfg); err != nil {
+			_ = db.Close()
+			return nil, err
+		}
+	}
+	if opts.CommandWAL {
+		if err := replayCommandWALIntoBackend(db, segments, opts.WALMaxSegmentBytes, opts.ValueLog.DictLookup); err != nil {
+			_ = db.Close()
+			return nil, err
+		}
+		// Re-list segments after replay: replayCommandWALIntoBackend may call
+		// cleanupCommandWALSegmentsCoveredByAppliedLSN, which deletes covered
+		// non-active segments. Open the default writer on lane 0. When lane 0's
+		// active segment has a terminal tail, reopen that segment so
+		// OpenCommandJournal can truncate the tail. Otherwise, append to a fresh
+		// lane-0 segment to avoid extending a covered segment.
+		commandSegmentSeq := uint64(0)
+		journalSegments, err := listRecoverySegments(opts.Dir)
+		if err != nil {
+			_ = db.Close()
+			return nil, err
+		}
+		activeSeqByLane := commandWALActiveSeqByLane(journalSegments)
+		commandSegmentSeq = activeSeqByLane[0]
+		if commandSegmentSeq == ^uint64(0) {
+			_ = db.Close()
+			return nil, fmt.Errorf("%w: dir=%s lane=0 active_seq=%d", ErrCommandWALSegmentSeqExhausted, WALDirPath(opts.Dir), commandSegmentSeq)
+		}
+		hasTerminalTail, err := commandWALLaneActiveHasTerminalTail(journalSegments, 0, opts.WALMaxSegmentBytes)
+		if err != nil {
+			_ = db.Close()
+			return nil, err
+		}
+		if commandSegmentSeq != 0 && !hasTerminalTail {
+			commandSegmentSeq++
+		}
+		journal, err := commitlog.OpenCommandJournal(WALDirPath(opts.Dir), commitlog.CommandJournalOptions{
+			MaxSegmentSize:            opts.WALMaxSegmentBytes,
+			BufferSize:                commandWALWriterBufferSize,
+			DeferredCommandBufferSize: commandWALDeferredPointBufferSize,
+			Compress:                  opts.JournalCompression,
+			InitialLSN:                db.meta.AppliedCommandLSN,
+			SegmentSeq:                commandSegmentSeq,
+		})
+		if err != nil {
+			_ = db.Close()
+			return nil, err
+		}
+		db.commandJournal = journal
+		db.cacheCommandWALRequiredFeatureStats()
+	} else {
+		// If a directory requires command replay but this open is not command-WAL
+		// enabled, fail closed before legacy replay can misinterpret typed frames.
+		// Frames already covered by AppliedCommandLSN are filtered below.
+		if err := requireNoUnappliedCommandWAL(opts.Dir, db.meta.AppliedCommandLSN, opts.WALMaxSegmentBytes); err != nil {
+			_ = db.Close()
+			return nil, err
+		}
+		if opts.Durability != DurabilityWALOffRelaxed {
+			if err := replayWALIntoBackend(db, segments, opts.WALMaxSegmentBytes, opts.ValueLog.DictLookup); err != nil {
+				_ = db.Close()
+				return nil, err
+			}
 		}
 	}
 
@@ -1468,12 +1614,16 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		CommitSeq:                  db.meta.CommitSeq,
 		RootPageID:                 db.meta.UserRootPageID,
 		SystemRootPageID:           db.meta.SystemRootPageID,
+		AppliedCommandLSN:          db.meta.AppliedCommandLSN,
 		ValueLogSet:                vm.CurrentSet(),
 		LeafGenerations:            db.currentLeafGenerationView(),
 		LeafGenerationStateVersion: db.leafGenerationStateVersion,
 	}
-	db.state.Store(initialState)
+	oldInitialState := db.state.Swap(initialState)
 	db.publishSnapshotView(gen, initialState, vm)
+	if oldInitialState != nil && oldInitialState.ValueLogSet != nil {
+		_ = vm.Release(oldInitialState.ValueLogSet)
+	}
 	if err := db.initValueLogRefTracker(); err != nil {
 		db.Close()
 		return nil, err
@@ -1490,7 +1640,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	// Best-effort: persist the format knobs used for this DB directory so
 	// offline maintenance tooling (treemap, offline vacuum/rewrite) can preserve
 	// the intended on-disk layout without requiring callers to re-specify flags.
-	if err := SaveFormatConfig(opts.Dir, formatConfigFromOptions(opts)); err != nil && opts.NotifyError != nil {
+	if err := saveOpenFormatConfig(opts); err != nil && opts.NotifyError != nil {
 		opts.NotifyError(err)
 	}
 
@@ -1570,6 +1720,8 @@ func (db *DB) Close() error {
 	db.clearSnapshotView()
 	vm := db.valueLogManager
 	db.valueLogManager = nil
+	commandJournal := db.commandJournal
+	db.commandJournal = nil
 	lock := db.lock
 	db.lock = nil
 	db.mu.Unlock()
@@ -1589,6 +1741,11 @@ func (db *DB) Close() error {
 	}
 	if vm != nil {
 		if err := vm.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if commandJournal != nil {
+		if err := commandJournal.Close(); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -1829,7 +1986,8 @@ func (db *DB) readMeta(pageID uint64) (page.MetaPageBody, bool) {
 	if n.Type() != page.PageTypeMeta {
 		return page.MetaPageBody{}, false
 	}
-	return page.DecodeMetaBody(data[page.PageHeaderSize:]), true
+	body := data[page.PageHeaderSize:]
+	return page.DecodeMetaBodyCommandWALV1(body), true
 }
 
 func (db *DB) writeMeta(pageID uint64, meta page.MetaPageBody) error {
@@ -1877,6 +2035,10 @@ type finalizeCommitPost struct {
 // Callers that already hold commit serialization may run post work after
 // releasing the serialization lock.
 func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired []uint64, sync bool, metrics adaptive.Metrics, touchedValueLogSegments []uint32, forceValueLogRefresh bool, vlogRefDelta *valueLogRefDelta, leafManifest *leafGenerationManifest, leafManifestRawFileIDs []uint32) (finalizeCommitPost, error) {
+	return db.finalizeCommitLockedWithOptions(newRootID, sysRootID, retired, sync, metrics, touchedValueLogSegments, forceValueLogRefresh, vlogRefDelta, leafManifest, leafManifestRawFileIDs, finalizeCommitOptions{})
+}
+
+func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64, retired []uint64, sync bool, metrics adaptive.Metrics, touchedValueLogSegments []uint32, forceValueLogRefresh bool, vlogRefDelta *valueLogRefDelta, leafManifest *leafGenerationManifest, leafManifestRawFileIDs []uint32, opts finalizeCommitOptions) (finalizeCommitPost, error) {
 	post := finalizeCommitPost{
 		metrics: metrics,
 	}
@@ -1885,6 +2047,9 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 	}
 	if db.readOnly {
 		return post, ErrReadOnly
+	}
+	if err := db.commandWALPoisonedError(); err != nil {
+		return post, err
 	}
 	idx := db.idx.Load()
 	if idx == nil {
@@ -1951,6 +2116,14 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 	nextMeta.SystemRootPageID = sysRootID
 	nextMeta.FreelistHeadID = idx.allocator.Head()
 	nextMeta.TotalPages = idx.pager.PageCount()
+	if opts.commandWALPublish {
+		if err := validateCommandWALPublishLocked(db.meta, newRootID, sysRootID, opts); err != nil {
+			db.mu.Unlock()
+			watermarkHold += time.Since(holdStart)
+			return post, prePublishErr(err)
+		}
+		nextMeta.AppliedCommandLSN = opts.appliedCommandLSN
+	}
 
 	targetPageID := uint64(0)
 	if db.metaPageID == 0 {
@@ -2066,17 +2239,25 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 		}
 	}
 	newState := &DBState{
-		CommitSeq:        nextMeta.CommitSeq,
-		RootPageID:       nextMeta.UserRootPageID,
-		SystemRootPageID: nextMeta.SystemRootPageID,
-		ValueLogSet:      valueLogSet,
-		LeafGenerations:  leafGenerationView,
+		CommitSeq:         nextMeta.CommitSeq,
+		RootPageID:        nextMeta.UserRootPageID,
+		SystemRootPageID:  nextMeta.SystemRootPageID,
+		AppliedCommandLSN: nextMeta.AppliedCommandLSN,
+		ValueLogSet:       valueLogSet,
+		LeafGenerations:   leafGenerationView,
 	}
 	if leafGenerationView != nil {
 		db.leafGenerationStateVersion++
 		newState.LeafGenerationStateVersion = db.leafGenerationStateVersion
 	}
 	db.state.Store(newState)
+	if opts.commandWALPublish {
+		previousApplied := uint64(0)
+		if post.oldState != nil {
+			previousApplied = post.oldState.AppliedCommandLSN
+		}
+		db.observeCommandWALCovered(previousApplied, nextMeta.AppliedCommandLSN)
+	}
 	db.publishSnapshotView(idx, newState, db.valueLogManager)
 	post.commitSeq = nextMeta.CommitSeq
 	post.vlogRefDelta = vlogRefDelta
@@ -2192,6 +2373,9 @@ func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint6
 func (db *DB) Commit(newRootID uint64) error {
 	if db.readOnly {
 		return ErrReadOnly
+	}
+	if err := db.rejectUnloggedCommandWALRootPublish(); err != nil {
+		return err
 	}
 	// Public Commit assumes the caller has built a new tree.
 	// We need to serialize with other writers.
@@ -2443,6 +2627,7 @@ func (db *DB) RefreshValueLogSet() error {
 		CommitSeq:                  oldState.CommitSeq,
 		RootPageID:                 oldState.RootPageID,
 		SystemRootPageID:           oldState.SystemRootPageID,
+		AppliedCommandLSN:          oldState.AppliedCommandLSN,
 		ValueLogSet:                db.valueLogManager.CurrentSetNoRefresh(),
 		LeafGenerations:            oldState.LeafGenerations,
 		LeafGenerationStateVersion: oldState.LeafGenerationStateVersion,
@@ -2486,6 +2671,7 @@ func (db *DB) publishValueLogSetNoRefresh() error {
 		CommitSeq:                  oldState.CommitSeq,
 		RootPageID:                 oldState.RootPageID,
 		SystemRootPageID:           oldState.SystemRootPageID,
+		AppliedCommandLSN:          oldState.AppliedCommandLSN,
 		ValueLogSet:                valueLogSet,
 		LeafGenerations:            oldState.LeafGenerations,
 		LeafGenerationStateVersion: oldState.LeafGenerationStateVersion,
@@ -2515,6 +2701,9 @@ func (db *DB) MarkValueLogZombie(id uint32) error {
 func (db *DB) CompactIndex() error {
 	db.writeMu.Lock()
 	defer db.writeMu.Unlock()
+	if err := db.rejectUnloggedCommandWALRootPublish(); err != nil {
+		return err
+	}
 
 	idx := db.idx.Load()
 	if idx == nil {

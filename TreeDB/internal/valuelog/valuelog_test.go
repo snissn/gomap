@@ -273,6 +273,32 @@ func TestValueLogReaderReadNextMeta(t *testing.T) {
 	if gotPtr3 != ptr3 {
 		t.Fatalf("ptr3 mismatch")
 	}
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("open for ReadRIDAt: %v", err)
+	}
+	defer f.Close()
+	for _, tc := range []struct {
+		ptr page.ValuePtr
+		rid uint64
+	}{
+		{ptr: ptrs[0], rid: 1},
+		{ptr: ptrs[1], rid: 2},
+		{ptr: ptr3, rid: 3},
+	} {
+		gotRID, err := ReadRIDAt(f, tc.ptr)
+		if err != nil {
+			t.Fatalf("ReadRIDAt(%+v): %v", tc.ptr, err)
+		}
+		if gotRID != tc.rid {
+			t.Fatalf("ReadRIDAt(%+v)=%d, want %d", tc.ptr, gotRID, tc.rid)
+		}
+	}
+	badPtr := ptr3
+	badPtr.Offset = 3
+	if _, err := ReadRIDAt(f, badPtr); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("ReadRIDAt short offset error=%v, want ErrCorrupt", err)
+	}
 }
 
 func TestValueLogManager_MmapReadAppend(t *testing.T) {

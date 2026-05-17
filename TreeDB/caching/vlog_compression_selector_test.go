@@ -79,9 +79,9 @@ func TestVlogCompressionSelector_DictSelectionByPolicy(t *testing.T) {
 
 	// Establish an off baseline first.
 	s.observe(vlogWriteOff, valuelog.BlockCodecSnappy, 1024, 1024, 1024, false)
-	// Dict clearly beats block on ratio while keeping throughput.
+	// Dict clearly beats block on ratio while exceeding the strict throughput gate.
 	s.observe(vlogWriteBlock, valuelog.BlockCodecSnappy, 1024, 900, 1400, false)
-	s.observe(vlogWriteDict, valuelog.BlockCodecSnappy, 1024, 650, 1024, false)
+	s.observe(vlogWriteDict, valuelog.BlockCodecSnappy, 1024, 650, 900, false)
 
 	mode, _, _ := s.choose(true, 1024, 1024)
 	if mode != vlogWriteDict {
@@ -89,7 +89,7 @@ func TestVlogCompressionSelector_DictSelectionByPolicy(t *testing.T) {
 	}
 }
 
-func TestVlogCompressionSelector_SeedDictCandidate_PromotesThroughputChoice(t *testing.T) {
+func TestVlogCompressionSelector_SeedDictCandidate_DoesNotBypassThroughputGate(t *testing.T) {
 	s := newVlogCompressionSelector(vlogAutoThroughput, 0, 0)
 	s.dwellBytes = 0
 	s.metrics[vlogAutoCandidateOff] = vlogCandidateMetrics{ratio: 1.0, throughput: 1.0, samples: 16}
@@ -99,8 +99,8 @@ func TestVlogCompressionSelector_SeedDictCandidate_PromotesThroughputChoice(t *t
 	s.seedDictCandidate(0.10)
 
 	mode, _, _ := s.choose(true, 4096, 4096)
-	if mode != vlogWriteDict {
-		t.Fatalf("expected seeded dict candidate to win throughput choice, got %v", mode)
+	if mode != vlogWriteBlock {
+		t.Fatalf("expected neutral seeded dict throughput to keep throughput block mode, got %v", mode)
 	}
 }
 
@@ -133,7 +133,7 @@ func TestVlogCompressionSelector_DwellPreventsFlap(t *testing.T) {
 	s.observe(vlogWriteOff, valuelog.BlockCodecSnappy, 1024, 1024, 1024, false)
 	// Dict looks better, but current mode should hold until dwell budget is spent.
 	s.observe(vlogWriteBlock, valuelog.BlockCodecSnappy, 1024, 900, 1400, false)
-	s.observe(vlogWriteDict, valuelog.BlockCodecSnappy, 1024, 600, 1024, false)
+	s.observe(vlogWriteDict, valuelog.BlockCodecSnappy, 1024, 600, 900, false)
 
 	mode, _, _ := s.choose(true, 512, 512)
 	if mode != vlogWriteBlock {
@@ -547,7 +547,7 @@ func TestVlogCompressionSelector_AvoidsOffWithStrongCompressionSignal(t *testing
 	s.dwellBytes = 0
 	s.currentCandidate = vlogAutoCandidateOff
 	s.metrics[vlogAutoCandidateOff] = vlogCandidateMetrics{ratio: 1.0, throughput: 1.0, samples: 16}
-	s.metrics[vlogAutoCandidateBlockLZ4] = vlogCandidateMetrics{ratio: 0.50, throughput: 0.70, samples: 8}
+	s.metrics[vlogAutoCandidateBlockLZ4] = vlogCandidateMetrics{ratio: 0.50, throughput: 1.05, samples: 8}
 
 	mode, codec, probe := s.choose(false, 4096, 4096)
 	if probe {
@@ -720,7 +720,7 @@ func TestVlogCompressionSelector_LargePayloadThroughputPrefersDictOnStrongSizeWi
 	s.metrics[vlogAutoCandidateOff] = vlogCandidateMetrics{ratio: 1.0, throughput: 1.0, samples: 16}
 	s.metrics[vlogAutoCandidateBlockSnappy] = vlogCandidateMetrics{ratio: 0.70, throughput: 1.10, samples: 16}
 	s.metrics[vlogAutoCandidateBlockLZ4] = vlogCandidateMetrics{ratio: 0.74, throughput: 1.06, samples: 16}
-	s.metrics[vlogAutoCandidateDict] = vlogCandidateMetrics{ratio: 0.08, throughput: 0.50, samples: 8}
+	s.metrics[vlogAutoCandidateDict] = vlogCandidateMetrics{ratio: 0.08, throughput: 1.12, samples: 8}
 
 	mode, _, probe := s.choose(true, 43<<10, 43<<10)
 	if probe {
@@ -815,7 +815,7 @@ func TestResolveVlogWriteMode_ThroughputPolicyLargePayloadWithDictCanPreferDict(
 	s.metrics[vlogAutoCandidateOff] = vlogCandidateMetrics{ratio: 1.0, throughput: 1.0, samples: 16}
 	s.metrics[vlogAutoCandidateBlockSnappy] = vlogCandidateMetrics{ratio: 0.70, throughput: 1.10, samples: 16}
 	s.metrics[vlogAutoCandidateBlockLZ4] = vlogCandidateMetrics{ratio: 0.74, throughput: 1.06, samples: 16}
-	s.metrics[vlogAutoCandidateDict] = vlogCandidateMetrics{ratio: 0.08, throughput: 0.50, samples: 8}
+	s.metrics[vlogAutoCandidateDict] = vlogCandidateMetrics{ratio: 0.08, throughput: 1.12, samples: 8}
 	l := &lane{vlogCompressionSelector: s}
 
 	mode, codec, probe := db.resolveVlogWriteMode(l, 9, 43<<10, 43<<10, false)
@@ -890,6 +890,51 @@ func TestObserveVlogWriteMode_ForcePointersLargeSkipsSelectorObserve(t *testing.
 	after := s.metrics[vlogAutoCandidateBlockSnappy].samples
 	if after != before {
 		t.Fatalf("expected selector observe to be skipped for force-pointer large payload, samples %d -> %d", before, after)
+	}
+}
+
+func TestShouldBypassAutoRawValueCompression_ForcePointerHighEntropy(t *testing.T) {
+	db := &DB{
+		valueLogCompressionMode: uint8(vlogCompressionAuto),
+		forceValueLogPointers:   true,
+	}
+	value := make([]byte, forcePointerAutoRawBypassMinPayloadBytes)
+	for i := range value {
+		value[i] = byte(i)
+	}
+	records := []valuelog.Record{
+		{RID: 1, Value: value},
+		{RID: 2, Value: value},
+		{RID: 3, Value: value},
+	}
+
+	if !db.shouldBypassAutoRawValueCompression(0, records, len(value), vlogPayloadKindSingleValue) {
+		t.Fatal("expected high-entropy force-pointer value batch to bypass auto compression")
+	}
+	if db.shouldBypassAutoRawValueCompression(7, records, len(value), vlogPayloadKindSingleValue) {
+		t.Fatal("expected dict-backed values to stay eligible for compression")
+	}
+	if db.shouldBypassAutoRawValueCompression(0, records, len(value)-1, vlogPayloadKindSingleValue) {
+		t.Fatal("expected sub-threshold values to stay eligible for selector sampling")
+	}
+	if db.shouldBypassAutoRawValueCompression(0, records, forcePointerAutoBlockMinPayloadBytes, vlogPayloadKindSingleValue) {
+		t.Fatal("expected large force-pointer values to stay on the block fast path")
+	}
+	if db.shouldBypassAutoRawValueCompression(0, records, len(value), vlogPayloadKindOuterLeaf) {
+		t.Fatal("expected outer-leaf payloads to keep leaf-log compression selection")
+	}
+}
+
+func TestShouldBypassAutoRawValueCompression_CompressibleStaysEligible(t *testing.T) {
+	db := &DB{
+		valueLogCompressionMode: uint8(vlogCompressionAuto),
+		forceValueLogPointers:   true,
+	}
+	value := make([]byte, forcePointerAutoRawBypassMinPayloadBytes)
+	records := []valuelog.Record{{RID: 1, Value: value}}
+
+	if db.shouldBypassAutoRawValueCompression(0, records, len(value), vlogPayloadKindSingleValue) {
+		t.Fatal("expected low-entropy value batch to stay eligible for selector sampling")
 	}
 }
 

@@ -109,6 +109,11 @@ func (db *DB) valueLogGC(ctx context.Context, opts ValueLogGCOptions, lockMainte
 	if db.readOnly && !opts.DryRun {
 		return stats, ErrReadOnly
 	}
+	if !opts.DryRun {
+		if err := db.commandWALPoisonedError(); err != nil {
+			return stats, err
+		}
+	}
 	if lockMaintenance {
 		db.maintenanceMu.Lock()
 		defer db.maintenanceMu.Unlock()

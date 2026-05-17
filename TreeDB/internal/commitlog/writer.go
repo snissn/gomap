@@ -2,9 +2,11 @@ package commitlog
 
 import (
 	"bufio"
+	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -15,9 +17,12 @@ import (
 )
 
 const (
-	defaultBufferSize     = 4 << 20
-	defaultMaxSegmentSize = 64 * 1024 * 1024
-	defaultCompressMinLen = 64 << 10
+	defaultBufferSize          = 4 << 20
+	defaultMaxSegmentSize      = 64 * 1024 * 1024
+	defaultCompressMinLen      = 64 << 10
+	directSegmentPayloadMinLen = 128 << 10
+	directCommandPayloadMinLen = 64 << 10
+	batchChecksumChunkBytes    = 64 << 10
 )
 
 var syncDirFn = syncDir
@@ -32,6 +37,13 @@ func normalizeMaxSegmentSize(size int64) int64 {
 	return size
 }
 
+func normalizeBufferSize(size int) int {
+	if size <= 0 {
+		return defaultBufferSize
+	}
+	return size
+}
+
 func recordSizeExceedsMax(keyLen uint16, valueLen uint32) bool {
 	if limits.MaxRecordSize <= 0 {
 		return false
@@ -40,18 +52,34 @@ func recordSizeExceedsMax(keyLen uint16, valueLen uint32) bool {
 	return recordLen > limits.MaxRecordSize
 }
 
+func allZeroBytes(p []byte) bool {
+	for _, b := range p {
+		if b != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func sameNonEmptyBytesData(a, b []byte) bool {
+	return len(a) > 0 && len(a) == len(b) && &a[0] == &b[0]
+}
+
 type Writer struct {
-	f              *os.File
-	bw             *bufio.Writer
-	scratch        []byte
-	encScratch     []byte
-	headerBuf      [segmentHeaderSize]byte
-	rawLenPrefix   [4]byte
-	size           int64
-	maxSegmentSize int64
-	compress       bool
-	enc            *zstd.Encoder
-	syncFn         func(*os.File) error
+	f               *os.File
+	bw              *bufio.Writer
+	scratch         []byte
+	encScratch      []byte
+	commandBuf      []byte
+	commandBufLimit int
+	commandErr      error
+	headerBuf       [segmentHeaderSize]byte
+	rawLenPrefix    [4]byte
+	size            int64
+	maxSegmentSize  int64
+	compress        bool
+	enc             *zstd.Encoder
+	syncFn          func(*os.File) error
 }
 
 func NewWriter(path string) (*Writer, error) {
@@ -59,7 +87,7 @@ func NewWriter(path string) (*Writer, error) {
 }
 
 func NewWriterWithOptions(path string, opts Options) (*Writer, error) {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
 		return nil, err
 	}
@@ -72,14 +100,26 @@ func NewWriterWithOptions(path string, opts Options) (*Writer, error) {
 		_ = f.Close()
 		return nil, err
 	}
+	if _, err := f.Seek(info.Size(), io.SeekStart); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	var commandBuf []byte
+	commandBufLimit := 0
+	if opts.DeferredCommandBufferSize > 0 {
+		commandBuf = make([]byte, 0, opts.DeferredCommandBufferSize)
+		commandBufLimit = opts.DeferredCommandBufferSize
+	}
 	return &Writer{
-		f:              f,
-		bw:             bufio.NewWriterSize(f, defaultBufferSize),
-		scratch:        make([]byte, 0, defaultBufferSize),
-		size:           info.Size(),
-		maxSegmentSize: normalizeMaxSegmentSize(opts.MaxSegmentSize),
-		compress:       opts.Compress,
-		syncFn:         func(file *os.File) error { return file.Sync() },
+		f:               f,
+		bw:              bufio.NewWriterSize(f, normalizeBufferSize(opts.BufferSize)),
+		scratch:         make([]byte, 0, defaultBufferSize),
+		commandBuf:      commandBuf,
+		commandBufLimit: commandBufLimit,
+		size:            info.Size(),
+		maxSegmentSize:  normalizeMaxSegmentSize(opts.MaxSegmentSize),
+		compress:        opts.Compress,
+		syncFn:          func(file *os.File) error { return file.Sync() },
 	}, nil
 }
 
@@ -107,6 +147,13 @@ func (w *Writer) ensureEncoder() error {
 // RotateTo flushes and closes the current file, then opens (or creates) the
 // provided path and reuses the writer's buffers for future appends.
 func (w *Writer) RotateTo(path string) error {
+	return w.RotateToWithSync(path, true)
+}
+
+// RotateToWithSync flushes and closes the current file, then opens (or creates)
+// the provided path and reuses the writer's buffers for future appends. When
+// syncCurrent is false, the current file is flushed to the OS but not fsynced.
+func (w *Writer) RotateToWithSync(path string, syncCurrent bool) error {
 	if w == nil {
 		return errors.New("commitlog: nil writer")
 	}
@@ -116,9 +163,11 @@ func (w *Writer) RotateTo(path string) error {
 		if err != nil {
 			return err
 		}
-		if err := syncDirFn(path); err != nil {
-			_ = f.Close()
-			return err
+		if syncCurrent {
+			if err := syncDirFn(path); err != nil {
+				_ = f.Close()
+				return err
+			}
 		}
 		info, err := f.Stat()
 		if err != nil {
@@ -132,10 +181,13 @@ func (w *Writer) RotateTo(path string) error {
 		return nil
 	}
 
+	if err := w.flushBufferedCommandFrames(); err != nil {
+		return err
+	}
 	if err := w.bw.Flush(); err != nil {
 		return err
 	}
-	if w.syncFn != nil {
+	if syncCurrent && w.syncFn != nil {
 		if err := w.syncFn(w.f); err != nil {
 			return err
 		}
@@ -150,9 +202,11 @@ func (w *Writer) RotateTo(path string) error {
 		_ = f.Close()
 		return err
 	}
-	if err := syncDirFn(path); err != nil {
-		_ = f.Close()
-		return err
+	if syncCurrent {
+		if err := syncDirFn(path); err != nil {
+			_ = f.Close()
+			return err
+		}
 	}
 
 	old := w.f
@@ -242,8 +296,26 @@ func (w *Writer) AppendBatch(records []Record) error {
 		return ErrRecordTooLarge
 	}
 
-	total := int64(batchHeaderSize)
 	batchSeq := records[0].Seq
+	if !w.compress {
+		if ok, err := w.appendZeroInlineBatchIfCompact(records, batchSeq); ok || err != nil {
+			return err
+		}
+	}
+	if cap(w.scratch) < batchHeaderSize {
+		w.scratch = make([]byte, batchHeaderSize)
+	}
+	buf := w.scratch
+	if len(buf) < batchHeaderSize {
+		buf = buf[:batchHeaderSize]
+	}
+	buf[0] = Version
+	binary.LittleEndian.PutUint32(buf[1:5], uint32(len(records)))
+
+	off := batchHeaderSize
+	checksum := uint32(0)
+	checksumStart := 0
+	var zeroValueRef []byte
 	for i := range records {
 		r := &records[i]
 		if err := validateRecord(r); err != nil {
@@ -263,42 +335,545 @@ func (w *Writer) AppendBatch(records []Record) error {
 		if recordSizeExceedsMax(keyLen, valLen) {
 			return ErrRecordTooLarge
 		}
-		total += int64(recordHeaderSize) + int64(len(r.Key)) + int64(len(r.Value))
-	}
-	if w.maxSegmentSize > 0 && total > w.maxSegmentSize {
-		return ErrRecordTooLarge
-	}
-	if total > int64(int(^uint(0)>>1)) {
-		return ErrRecordTooLarge
-	}
 
-	if cap(w.scratch) < int(total) {
-		w.scratch = make([]byte, int(total))
-	}
-	buf := w.scratch[:int(total)]
+		encodedOp := r.Op
+		writeValue := len(r.Value) > 0
+		if r.Op == OpSetInline && len(r.Value) > 0 {
+			if sameNonEmptyBytesData(r.Value, zeroValueRef) || allZeroBytes(r.Value) {
+				zeroValueRef = r.Value
+				encodedOp = OpSetInlineZero
+				writeValue = false
+			}
+		}
 
-	buf[0] = Version
-	binary.LittleEndian.PutUint32(buf[1:5], uint32(len(records)))
-
-	off := batchHeaderSize
-	for i := range records {
-		r := &records[i]
-		keyLen := uint16(len(r.Key))
-		valLen := uint32(len(r.Value))
-		buf[off] = r.Op
+		recLen := recordHeaderSize + len(r.Key)
+		if writeValue {
+			recLen += len(r.Value)
+		}
+		if off > int(^uint(0)>>1)-recLen {
+			return ErrRecordTooLarge
+		}
+		next := off + recLen
+		if w.maxSegmentSize > 0 && int64(next) > w.maxSegmentSize {
+			return ErrRecordTooLarge
+		}
+		if next > int(segmentLenMask) {
+			return ErrRecordTooLarge
+		}
+		if next > cap(buf) {
+			newCap := cap(buf) * 2
+			if newCap < next {
+				newCap = next
+			}
+			nextBuf := make([]byte, next, newCap)
+			copy(nextBuf, buf[:off])
+			buf = nextBuf
+		} else if next > len(buf) {
+			buf = buf[:next]
+		}
+		buf[off] = encodedOp
 		binary.LittleEndian.PutUint16(buf[off+1:off+3], keyLen)
 		binary.LittleEndian.PutUint32(buf[off+3:off+7], valLen)
 		binary.LittleEndian.PutUint64(buf[off+7:off+15], r.RID)
 		binary.LittleEndian.PutUint64(buf[off+15:off+23], r.Seq)
 		copy(buf[off+recordHeaderSize:], r.Key)
-		copy(buf[off+recordHeaderSize+len(r.Key):], r.Value)
-		off += recordHeaderSize + len(r.Key) + len(r.Value)
+		if writeValue {
+			valueStart := off + recordHeaderSize + len(r.Key)
+			valueEnd := valueStart + len(r.Value)
+			copy(buf[valueStart:valueEnd], r.Value)
+		}
+		off = next
+		if !w.compress && off-checksumStart >= batchChecksumChunkBytes {
+			checksum = crc.Update(checksum, buf[checksumStart:off])
+			checksumStart = off
+		}
 	}
 
-	return w.writeSegment(buf)
+	w.scratch = buf[:off]
+	if !w.compress {
+		checksum = crc.Update(checksum, w.scratch[checksumStart:])
+		return w.writeRawSegmentWithChecksum(w.scratch, checksum)
+	}
+	return w.writeSegment(w.scratch)
+}
+
+func (w *Writer) appendZeroInlineBatchIfCompact(records []Record, batchSeq uint64) (bool, error) {
+	valueLen := -1
+	var zeroValueRef []byte
+	total := int64(zeroInlineBatchHeaderSize)
+	for i := range records {
+		r := &records[i]
+		if r.Op != OpSetInline {
+			return false, nil
+		}
+		if err := validateRecord(r); err != nil {
+			return true, err
+		}
+		if r.Seq != batchSeq {
+			return true, ErrMixedBatchSeq
+		}
+		if len(r.Key) > int(^uint16(0)) {
+			return true, ErrRecordTooLarge
+		}
+		if len(r.Value) > int(^uint32(0)) {
+			return true, ErrRecordTooLarge
+		}
+		keyLen := uint16(len(r.Key))
+		valLen := uint32(len(r.Value))
+		if recordSizeExceedsMax(keyLen, valLen) {
+			return true, ErrRecordTooLarge
+		}
+		if len(r.Value) == 0 {
+			return false, nil
+		}
+		if valueLen < 0 {
+			valueLen = len(r.Value)
+		} else if valueLen != len(r.Value) {
+			return false, nil
+		}
+		if sameNonEmptyBytesData(r.Value, zeroValueRef) {
+			// Same immutable value buffer as the first zero value in this batch.
+		} else if allZeroBytes(r.Value) {
+			zeroValueRef = r.Value
+		} else {
+			return false, nil
+		}
+		total += int64(zeroInlineRecordHeaderSize) + int64(len(r.Key))
+		if w.maxSegmentSize > 0 && total > w.maxSegmentSize {
+			return true, ErrRecordTooLarge
+		}
+		if total > int64(segmentLenMask) || total > int64(int(^uint(0)>>1)) {
+			return true, ErrRecordTooLarge
+		}
+	}
+	if valueLen < 0 {
+		return false, nil
+	}
+	payloadLen := int(total)
+	if cap(w.scratch) < payloadLen {
+		w.scratch = make([]byte, payloadLen)
+	}
+	buf := w.scratch[:payloadLen]
+	buf[0] = zeroInlineBatchVersion
+	binary.LittleEndian.PutUint32(buf[1:5], uint32(len(records)))
+	binary.LittleEndian.PutUint64(buf[5:13], batchSeq)
+	binary.LittleEndian.PutUint32(buf[13:17], uint32(valueLen))
+
+	off := zeroInlineBatchHeaderSize
+	checksum := uint32(0)
+	checksumStart := 0
+	for i := range records {
+		r := &records[i]
+		keyLen := uint16(len(r.Key))
+		binary.LittleEndian.PutUint16(buf[off:off+2], keyLen)
+		off += zeroInlineRecordHeaderSize
+		copy(buf[off:off+len(r.Key)], r.Key)
+		off += len(r.Key)
+		if off-checksumStart >= batchChecksumChunkBytes {
+			checksum = crc.Update(checksum, buf[checksumStart:off])
+			checksumStart = off
+		}
+	}
+	checksum = crc.Update(checksum, buf[checksumStart:])
+	w.scratch = buf
+	return true, w.writeRawSegmentWithChecksum(buf, checksum)
+}
+
+func (w *Writer) AppendZeroInlineBatchFunc(count int, seq uint64, valueLen int, keyAt func(int) []byte) error {
+	if count == 0 {
+		return nil
+	}
+	if count < 0 || count > int(^uint32(0)) || valueLen <= 0 || valueLen > int(^uint32(0)) {
+		return ErrRecordTooLarge
+	}
+	if cap(w.scratch) < zeroInlineBatchHeaderSize {
+		w.scratch = make([]byte, zeroInlineBatchHeaderSize)
+	}
+	buf := w.scratch
+	if len(buf) < zeroInlineBatchHeaderSize {
+		buf = buf[:zeroInlineBatchHeaderSize]
+	}
+	buf[0] = zeroInlineBatchVersion
+	binary.LittleEndian.PutUint32(buf[1:5], uint32(count))
+	binary.LittleEndian.PutUint64(buf[5:13], seq)
+	binary.LittleEndian.PutUint32(buf[13:17], uint32(valueLen))
+
+	off := zeroInlineBatchHeaderSize
+	checksum := uint32(0)
+	checksumStart := 0
+	for i := 0; i < count; i++ {
+		key := keyAt(i)
+		if len(key) > int(^uint16(0)) {
+			return ErrRecordTooLarge
+		}
+		keyLen := uint16(len(key))
+		if recordSizeExceedsMax(keyLen, uint32(valueLen)) {
+			return ErrRecordTooLarge
+		}
+		recLen := zeroInlineRecordHeaderSize + len(key)
+		if off > int(^uint(0)>>1)-recLen {
+			return ErrRecordTooLarge
+		}
+		next := off + recLen
+		if w.maxSegmentSize > 0 && int64(next) > w.maxSegmentSize {
+			return ErrRecordTooLarge
+		}
+		if next > int(segmentLenMask) {
+			return ErrRecordTooLarge
+		}
+		if next > cap(buf) {
+			newCap := cap(buf) * 2
+			if newCap < next {
+				newCap = next
+			}
+			nextBuf := make([]byte, next, newCap)
+			copy(nextBuf, buf[:off])
+			buf = nextBuf
+		} else if next > len(buf) {
+			buf = buf[:next]
+		}
+		binary.LittleEndian.PutUint16(buf[off:off+2], keyLen)
+		off += zeroInlineRecordHeaderSize
+		copy(buf[off:off+len(key)], key)
+		off += len(key)
+		if off-checksumStart >= batchChecksumChunkBytes {
+			checksum = crc.Update(checksum, buf[checksumStart:off])
+			checksumStart = off
+		}
+	}
+	checksum = crc.Update(checksum, buf[checksumStart:])
+	w.scratch = buf[:off]
+	return w.writeRawSegmentWithChecksum(w.scratch, checksum)
+}
+
+func (w *Writer) AppendCommand(env CommandEnvelope) error {
+	size, err := commandFrameEncodedSize(env)
+	if err != nil {
+		return err
+	}
+	if w.maxSegmentSize > 0 && int64(size) > w.maxSegmentSize {
+		return ErrRecordTooLarge
+	}
+	if size > int(segmentLenMask) {
+		return ErrRecordTooLarge
+	}
+	payload, err := encodeCommandFrameTo(w.scratch[:0], env)
+	if err != nil {
+		return err
+	}
+	w.scratch = payload
+	return w.writeSegment(payload)
+}
+
+func (w *Writer) AppendRawKVSingleCommandDirect(lsn, baseAppliedLSN uint64, op RawKVOperation) error {
+	valueLen := len(op.Value)
+	if op.Op == RawKVOpSetRID {
+		valueLen = 8
+	}
+	payloadLen := rawKVBatchHeaderSize + rawKVOpHeaderSize + len(op.Key) + valueLen
+	size, err := commandFrameEncodedSizeFromLengths(payloadLen, 0, 0, 0)
+	if err != nil {
+		return err
+	}
+	if w.maxSegmentSize > 0 && int64(size) > w.maxSegmentSize {
+		return ErrRecordTooLarge
+	}
+	if size > int(segmentLenMask) {
+		return ErrRecordTooLarge
+	}
+	if err := w.flushBufferedCommandFrames(); err != nil {
+		return err
+	}
+	total := segmentHeaderSize + size
+	if cap(w.scratch) < total {
+		w.scratch = make([]byte, total)
+	}
+	buf := w.scratch[:total]
+	frame, err := encodeRawKVSingleCommandFrameTo(buf[segmentHeaderSize:segmentHeaderSize:total], lsn, baseAppliedLSN, op)
+	if err != nil {
+		return err
+	}
+	frame = frame[:size]
+	binary.LittleEndian.PutUint32(buf[0:4], uint32(size))
+	binary.LittleEndian.PutUint32(buf[4:8], crc.Checksum(frame))
+	if _, err := w.bw.Write(buf); err != nil {
+		return err
+	}
+	w.size += int64(total)
+	return nil
+}
+
+// AppendRawKVPointCommandDirectTrusted appends a public point Set/Delete command
+// whose key/value have already passed the public cached preflight.
+func (w *Writer) AppendRawKVPointCommandDirectTrusted(lsn, baseAppliedLSN uint64, op RawKVOp, key, value []byte) error {
+	if err := w.commandBufferError(); err != nil {
+		return err
+	}
+	valueLen := len(value)
+	if op == RawKVOpDelete {
+		valueLen = 0
+	}
+	payloadLen := rawKVBatchHeaderSize + rawKVOpHeaderSize + len(key) + valueLen
+	size, err := commandFrameEncodedSizeFromLengths(payloadLen, 0, 0, 0)
+	if err != nil {
+		return err
+	}
+	if w.maxSegmentSize > 0 && int64(size) > w.maxSegmentSize {
+		return ErrRecordTooLarge
+	}
+	if size > int(segmentLenMask) {
+		return ErrRecordTooLarge
+	}
+	return w.appendRawKVPointCommandDirectTrustedSized(lsn, baseAppliedLSN, op, key, value, valueLen, payloadLen, size)
+}
+
+func (w *Writer) appendRawKVPointCommandDirectTrustedSized(lsn, baseAppliedLSN uint64, op RawKVOp, key, value []byte, valueLen, payloadLen, size int) error {
+	total := segmentHeaderSize + size
+	if !w.canBufferCommandFrame(total) {
+		if cap(w.scratch) < total {
+			w.scratch = make([]byte, total)
+		}
+		buf := w.scratch[:total]
+		frame, err := encodeTrustedRawKVPointCommandFrameSizedTo(buf[segmentHeaderSize:segmentHeaderSize+size], lsn, baseAppliedLSN, op, key, value, valueLen, payloadLen, size)
+		if err != nil {
+			return err
+		}
+		binary.LittleEndian.PutUint32(buf[0:4], uint32(size))
+		binary.LittleEndian.PutUint32(buf[4:8], crc.Checksum(frame))
+		if _, err := w.bw.Write(buf); err != nil {
+			return err
+		}
+		w.size += int64(total)
+		return nil
+	}
+	off, err := w.reserveCommandBufferSpace(total)
+	if err != nil {
+		return err
+	}
+	newLen := off + total
+	buf := w.commandBuf[off:newLen]
+	encodeTrustedRawKVPointCommandFramePayloadSizedTo(buf[segmentHeaderSize:segmentHeaderSize+size], lsn, baseAppliedLSN, op, key, value, valueLen, payloadLen, size)
+	binary.LittleEndian.PutUint32(buf[0:4], uint32(size))
+	return nil
+}
+
+func (w *Writer) AppendRawKVBatchPayloadCommandDirect(lsn, baseAppliedLSN uint64, payload []byte) error {
+	if err := validateRawKVBatchPayload(payload); err != nil {
+		return err
+	}
+	return w.AppendRawKVBatchPayloadCommandDirectTrusted(lsn, baseAppliedLSN, payload)
+}
+
+// AppendRawKVBatchPayloadCommandDirectTrusted appends a canonical RawKVBatch
+// payload that the caller has already validated or constructed through the
+// RawKVBatchPayloadBuilder.
+func (w *Writer) AppendRawKVBatchPayloadCommandDirectTrusted(lsn, baseAppliedLSN uint64, payload []byte) error {
+	if err := w.commandBufferError(); err != nil {
+		return err
+	}
+	if lsn == 0 {
+		return fmt.Errorf("%w: zero lsn", ErrCorrupt)
+	}
+	size, err := commandFrameEncodedSizeFromLengths(len(payload), 0, 0, 0)
+	if err != nil {
+		return err
+	}
+	if w.maxSegmentSize > 0 && int64(size) > w.maxSegmentSize {
+		return ErrRecordTooLarge
+	}
+	if size > int(segmentLenMask) {
+		return ErrRecordTooLarge
+	}
+	total := segmentHeaderSize + size
+	if len(payload) >= directCommandPayloadMinLen {
+		return w.appendRawKVBatchPayloadCommandDirect(lsn, baseAppliedLSN, payload, size)
+	}
+	if w.canBufferCommandFrame(total) {
+		off, err := w.reserveCommandBufferSpace(total)
+		if err != nil {
+			return err
+		}
+		newLen := off + total
+		buf := w.commandBuf[off:newLen]
+		frameHeader := buf[segmentHeaderSize : segmentHeaderSize+commandFrameHeaderSize]
+		copy(frameHeader, rawKVCommandFrameHeaderTemplate[:])
+		binary.LittleEndian.PutUint64(frameHeader[20:28], lsn)
+		binary.LittleEndian.PutUint64(frameHeader[44:52], baseAppliedLSN)
+		binary.LittleEndian.PutUint32(frameHeader[56:60], uint32(len(payload)))
+		copy(buf[segmentHeaderSize+commandFrameHeaderSize:], payload)
+		binary.LittleEndian.PutUint32(buf[0:4], uint32(size))
+		return nil
+	}
+	return w.appendRawKVBatchPayloadCommandDirect(lsn, baseAppliedLSN, payload, size)
+}
+
+func (w *Writer) appendRawKVBatchPayloadCommandDirect(lsn, baseAppliedLSN uint64, payload []byte, size int) error {
+	if err := w.flushBufferedCommandFrames(); err != nil {
+		return err
+	}
+	var prefix [segmentHeaderSize + commandFrameHeaderSize]byte
+	frameHeader := prefix[segmentHeaderSize:]
+	copy(frameHeader, rawKVCommandFrameHeaderTemplate[:])
+	binary.LittleEndian.PutUint64(frameHeader[20:28], lsn)
+	binary.LittleEndian.PutUint64(frameHeader[44:52], baseAppliedLSN)
+	binary.LittleEndian.PutUint32(frameHeader[56:60], uint32(len(payload)))
+	digest := sha256.Sum256(payload)
+	copy(frameHeader[72:72+sha256.Size], digest[:])
+	binary.LittleEndian.PutUint32(prefix[0:4], uint32(size))
+	binary.LittleEndian.PutUint32(prefix[4:8], crc.ChecksumParts(frameHeader, payload))
+	if len(payload) >= directCommandPayloadMinLen {
+		if err := w.bw.Flush(); err != nil {
+			return err
+		}
+		parts := [2][]byte{prefix[:], payload}
+		if err := writevFull(w.f, parts[:]); err != nil {
+			return w.poisonCommandBuffer(err)
+		}
+		w.size += int64(segmentHeaderSize + size)
+		return nil
+	}
+	if _, err := w.bw.Write(prefix[:]); err != nil {
+		return err
+	}
+	if _, err := w.bw.Write(payload); err != nil {
+		return err
+	}
+	w.size += int64(segmentHeaderSize + size)
+	return nil
+}
+
+func (w *Writer) reserveCommandBufferSpace(total int) (int, error) {
+	if total <= 0 {
+		return 0, ErrCorrupt
+	}
+	limit := w.commandBufferLimit()
+	if limit <= 0 || total > limit {
+		return 0, ErrRecordTooLarge
+	}
+	if len(w.commandBuf) > 0 && len(w.commandBuf)+total > limit {
+		if err := w.flushBufferedCommandFrames(); err != nil {
+			return 0, err
+		}
+	}
+	off := len(w.commandBuf)
+	newLen := off + total
+	if cap(w.commandBuf) < newLen {
+		newCap := cap(w.commandBuf) * 2
+		if newCap < newLen {
+			newCap = newLen
+		}
+		if newCap > limit && newLen <= limit {
+			newCap = limit
+		}
+		next := make([]byte, newLen, newCap)
+		copy(next, w.commandBuf)
+		w.commandBuf = next
+	} else {
+		w.commandBuf = w.commandBuf[:newLen]
+	}
+	return off, nil
+}
+
+func (w *Writer) canBufferCommandFrame(total int) bool {
+	return w != nil && total > 0 && w.commandBufferLimit() >= total
+}
+
+func (w *Writer) commandBufferLimit() int {
+	if w == nil || w.commandBufLimit <= 0 || cap(w.commandBuf) == 0 {
+		return 0
+	}
+	return w.commandBufLimit
+}
+
+func writeFull(f *os.File, p []byte) error {
+	for len(p) > 0 {
+		n, err := f.Write(p)
+		if err != nil {
+			return err
+		}
+		if n <= 0 {
+			return io.ErrShortWrite
+		}
+		p = p[n:]
+	}
+	return nil
+}
+
+func (w *Writer) flushBufferedCommandFrames() error {
+	if w == nil || len(w.commandBuf) == 0 {
+		if w != nil {
+			return w.commandBufferError()
+		}
+		return nil
+	}
+	if err := w.commandBufferError(); err != nil {
+		return err
+	}
+	if w.f == nil {
+		return w.poisonCommandBuffer(errors.New("commitlog: nil writer"))
+	}
+	for off := 0; off < len(w.commandBuf); {
+		if len(w.commandBuf)-off < segmentHeaderSize {
+			return w.poisonCommandBuffer(ErrCorrupt)
+		}
+		size := int(binary.LittleEndian.Uint32(w.commandBuf[off:off+4]) & segmentLenMask)
+		frameStart := off + segmentHeaderSize
+		frameEnd := frameStart + size
+		if size < commandFrameHeaderSize || frameEnd > len(w.commandBuf) {
+			return w.poisonCommandBuffer(ErrCorrupt)
+		}
+		frame := w.commandBuf[frameStart:frameEnd]
+		payloadLen := int(binary.LittleEndian.Uint32(frame[56:60]))
+		if commandFrameHeaderSize+payloadLen > size {
+			return w.poisonCommandBuffer(ErrCorrupt)
+		}
+		payload := frame[commandFrameHeaderSize : commandFrameHeaderSize+payloadLen]
+		digest := sha256.Sum256(payload)
+		copy(frame[72:72+sha256.Size], digest[:])
+		binary.LittleEndian.PutUint32(w.commandBuf[off+4:off+8], crc.Checksum(frame))
+		off = frameEnd
+	}
+	if err := w.bw.Flush(); err != nil {
+		return w.poisonCommandBuffer(err)
+	}
+	flushed := len(w.commandBuf)
+	if err := writeFull(w.f, w.commandBuf); err != nil {
+		return w.poisonCommandBuffer(err)
+	}
+	w.size += int64(flushed)
+	w.commandBuf = w.commandBuf[:0]
+	return nil
+}
+
+func (w *Writer) commandBufferError() error {
+	if w == nil {
+		return nil
+	}
+	return w.commandErr
+}
+
+func (w *Writer) poisonCommandBuffer(err error) error {
+	if w == nil || err == nil {
+		return err
+	}
+	if w.commandErr == nil {
+		if w.f != nil {
+			if truncErr := w.f.Truncate(w.size); truncErr != nil {
+				err = errors.Join(err, truncErr)
+			}
+		}
+		w.commandErr = err
+	}
+	if w.commandBuf != nil {
+		w.commandBuf = w.commandBuf[:0]
+	}
+	return w.commandErr
 }
 
 func (w *Writer) writeSegment(payload []byte) error {
+	if err := w.flushBufferedCommandFrames(); err != nil {
+		return err
+	}
 	stored := payload
 	length := uint32(len(payload))
 	wantCRC := crc.Checksum(payload)
@@ -326,6 +901,22 @@ func (w *Writer) writeSegment(payload []byte) error {
 	binary.LittleEndian.PutUint32(header[0:4], length)
 	binary.LittleEndian.PutUint32(header[4:8], wantCRC)
 
+	storedLen := int(length & segmentLenMask)
+	if segmentHeaderSize+storedLen >= directSegmentPayloadMinLen {
+		if err := w.bw.Flush(); err != nil {
+			return err
+		}
+		if length&segmentFlagCompressed != 0 {
+			if err := writevFull(w.f, [][]byte{header, rawLenPrefix, stored}); err != nil {
+				return err
+			}
+		} else if err := writevFull(w.f, [][]byte{header, stored}); err != nil {
+			return err
+		}
+		w.size += int64(segmentHeaderSize) + int64(storedLen)
+		return nil
+	}
+
 	if _, err := w.bw.Write(header); err != nil {
 		return err
 	}
@@ -337,7 +928,41 @@ func (w *Writer) writeSegment(payload []byte) error {
 	if _, err := w.bw.Write(stored); err != nil {
 		return err
 	}
-	w.size += int64(segmentHeaderSize) + int64(length&segmentLenMask)
+	w.size += int64(segmentHeaderSize) + int64(storedLen)
+	return nil
+}
+
+func (w *Writer) writeRawSegmentWithChecksum(payload []byte, wantCRC uint32) error {
+	if err := w.flushBufferedCommandFrames(); err != nil {
+		return err
+	}
+	if len(payload) > int(segmentLenMask) {
+		return ErrRecordTooLarge
+	}
+	length := uint32(len(payload))
+	header := w.headerBuf[:]
+	binary.LittleEndian.PutUint32(header[0:4], length)
+	binary.LittleEndian.PutUint32(header[4:8], wantCRC)
+
+	storedLen := int(length)
+	if segmentHeaderSize+storedLen >= directSegmentPayloadMinLen {
+		if err := w.bw.Flush(); err != nil {
+			return err
+		}
+		if err := writevFull(w.f, [][]byte{header, payload}); err != nil {
+			return err
+		}
+		w.size += int64(segmentHeaderSize) + int64(storedLen)
+		return nil
+	}
+
+	if _, err := w.bw.Write(header); err != nil {
+		return err
+	}
+	if _, err := w.bw.Write(payload); err != nil {
+		return err
+	}
+	w.size += int64(segmentHeaderSize) + int64(storedLen)
 	return nil
 }
 
@@ -375,12 +1000,18 @@ func (w *Writer) Flush() error {
 	if w == nil || w.f == nil {
 		return nil
 	}
+	if err := w.flushBufferedCommandFrames(); err != nil {
+		return err
+	}
 	return w.bw.Flush()
 }
 
 func (w *Writer) Sync() error {
 	if w == nil || w.f == nil {
 		return nil
+	}
+	if err := w.flushBufferedCommandFrames(); err != nil {
+		return err
 	}
 	if err := w.bw.Flush(); err != nil {
 		return err
@@ -395,6 +1026,10 @@ func (w *Writer) Close() error {
 	if w.enc != nil {
 		w.enc.Close()
 		w.enc = nil
+	}
+	if err := w.flushBufferedCommandFrames(); err != nil {
+		_ = w.f.Close()
+		return err
 	}
 	if err := w.bw.Flush(); err != nil {
 		_ = w.f.Close()

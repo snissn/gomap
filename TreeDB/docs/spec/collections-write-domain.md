@@ -140,9 +140,11 @@ async publishing units; silently skipping publishing units can make a new index
 backfill miss documents that were already acknowledged in the write domain.
 
 Under the user-command WAL plan, schema/index changes must also respect shared
-commit-log progress. They either publish `AppliedLSN` covering all lower
-commands before becoming visible, or are encoded as their own `CatalogMutation`
-command frame that carries the schema/root descriptor changes atomically.
+commit-log progress. Supported catalog changes, such as PR6
+`CatalogCreateCollection`, publish `AppliedLSN` covering all lower commands and
+the catalog descriptor change before becoming visible. Unsupported index DDL
+remains a pre-frame WAL-on rejection until its own catalog command frame carries
+the schema/root descriptor changes atomically.
 
 `CreateIndex`, `DropIndex`, `DropIndexes`, `DropAllIndexes`, collection
 creation, and future schema mutations are public barriers. They must state

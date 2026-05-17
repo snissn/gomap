@@ -76,6 +76,9 @@ Given pre-alpha status, this is a living spec that tracks implementation.
 - `TreeDB/docs/spec/user-command-wal.md`
   - target user-command WAL, applied-LSN checkpointing, command support policy,
     and PR milestones for durable-at-ack mutation recovery.
+- `TreeDB/docs/spec/user-command-wal-test-migration.md`
+  - PR1 test migration inventory mapping legacy raw WAL invariants to typed
+    command-frame coverage.
 - `TreeDB/docs/spec/value-log-lifecycle.md`
   - retention, GC, rewrite, and operational lifecycle of value-log segments.
 - `TreeDB/docs/spec/backup-restore.md`

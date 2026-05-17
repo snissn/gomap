@@ -46,18 +46,64 @@ func benchmarkBatchSize(b *testing.B) int {
 func benchmarkTreeDBProfile(b *testing.B) treedb.Profile {
 	b.Helper()
 
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("TREEDB_COLLECTION_BENCH_ENGINE"))) {
-	case "", "production_fast", "backend_direct_fast", "backend_direct", "cached", "fast":
-		return treedb.ProfileFast
-	case "production_wal_on_fast", "backend_direct_wal_on_fast", "wal_on_fast":
-		return treedb.ProfileWALOnFast
+	raw := os.Getenv("TREEDB_COLLECTION_BENCH_ENGINE")
+	profile, ok := collectionBenchProfileForEngine(raw)
+	if !ok {
+		b.Fatalf("unsupported TREEDB_COLLECTION_BENCH_ENGINE=%q", raw)
+	}
+	return profile
+}
+
+func collectionBenchProfileForEngine(raw string) (treedb.Profile, bool) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "production_wal_on_fast", "backend_direct_wal_on_fast", "wal_on_fast":
+		return treedb.ProfileWALOnFast, true
+	case "production_fast", "backend_direct_fast", "backend_direct", "cached", "fast":
+		return treedb.ProfileFast, true
 	case "durable":
-		return treedb.ProfileDurable
+		return treedb.ProfileDurable, true
 	case "bench":
-		return treedb.ProfileBench
+		return treedb.ProfileBench, true
 	default:
-		b.Fatalf("unsupported TREEDB_COLLECTION_BENCH_ENGINE=%q", os.Getenv("TREEDB_COLLECTION_BENCH_ENGINE"))
-		return treedb.ProfileFast
+		return treedb.ProfileWALOnFast, false
+	}
+}
+
+func TestCollectionBenchProfileForEngineDefaultsToWALOnFast(t *testing.T) {
+	got, ok := collectionBenchProfileForEngine("")
+	if !ok {
+		t.Fatal("empty collection bench engine was rejected")
+	}
+	if got != treedb.ProfileWALOnFast {
+		t.Fatalf("default collection bench profile=%q want %q", got, treedb.ProfileWALOnFast)
+	}
+}
+
+func TestCollectionBenchProfileForEngineKeepsExplicitFast(t *testing.T) {
+	got, ok := collectionBenchProfileForEngine("production_fast")
+	if !ok {
+		t.Fatal("production_fast collection bench engine was rejected")
+	}
+	if got != treedb.ProfileFast {
+		t.Fatalf("production_fast collection bench profile=%q want %q", got, treedb.ProfileFast)
+	}
+}
+
+func TestCollectionBenchProfileForEngineKeepsExplicitWALOnFastAliases(t *testing.T) {
+	for _, raw := range []string{"production_wal_on_fast", "backend_direct_wal_on_fast", "wal_on_fast"} {
+		got, ok := collectionBenchProfileForEngine(raw)
+		if !ok {
+			t.Fatalf("%q collection bench engine was rejected", raw)
+		}
+		if got != treedb.ProfileWALOnFast {
+			t.Fatalf("%q collection bench profile=%q want %q", raw, got, treedb.ProfileWALOnFast)
+		}
+	}
+}
+
+func TestCollectionBenchProfileForEngineRejectsUnknown(t *testing.T) {
+	if _, ok := collectionBenchProfileForEngine("bogus"); ok {
+		t.Fatal("bogus collection bench engine was accepted")
 	}
 }
 
