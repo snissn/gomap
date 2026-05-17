@@ -382,6 +382,12 @@ func BenchmarkColumnPublishPlanM10A(b *testing.B) {
 			AppliedCommandLSN:     101,
 			BaseManifestRootID:    44,
 			Hooks: ColumnPublishPlanHooks{
+				ExtractDocuments: func() error {
+					return nil
+				},
+				EncodeDeclaredColumns: func(ColumnPublishDeclaredColumnEncodeInput) error {
+					return nil
+				},
 				PrepareAssets: func(ColumnPublishAssetPrepareInput) (ColumnPublishPreparedAssets, error) {
 					return prepared, nil
 				},
@@ -391,8 +397,13 @@ func BenchmarkColumnPublishPlanM10A(b *testing.B) {
 				ValidateClosure: func(ColumnPublishClosureValidationInput) (ColumnPublishDurabilityClosure, error) {
 					return closure, nil
 				},
+				BuildSystemDelta: func(ColumnPublishSystemDeltaInput) error {
+					return nil
+				},
 			},
 		}
+		var stages ColumnPublishStageMetrics
+		var last ColumnPublishPlan
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
 			plan, err := BuildColumnPublishPlan(input)
@@ -402,7 +413,26 @@ func BenchmarkColumnPublishPlanM10A(b *testing.B) {
 			if !plan.Enabled || plan.RequiredAssetBytes != asset.Bytes {
 				b.Fatal(plan)
 			}
+			stages.DocumentExtraction += plan.StageMetrics.DocumentExtraction
+			stages.DeclaredColumnEncoding += plan.StageMetrics.DeclaredColumnEncoding
+			stages.AssetPreparation += plan.StageMetrics.AssetPreparation
+			stages.AssetFlushSync += plan.StageMetrics.AssetFlushSync
+			stages.ManifestEncode += plan.StageMetrics.ManifestEncode
+			stages.RootDeltaConstruction += plan.StageMetrics.RootDeltaConstruction
+			stages.SystemDeltaConstruction += plan.StageMetrics.SystemDeltaConstruction
+			last = plan
 		}
+		b.ReportMetric(float64(stages.DocumentExtraction.Nanoseconds())/float64(b.N), "extract_ns/op")
+		b.ReportMetric(float64(stages.DeclaredColumnEncoding.Nanoseconds())/float64(b.N), "declared_encode_ns/op")
+		b.ReportMetric(float64(stages.AssetPreparation.Nanoseconds())/float64(b.N), "asset_prepare_ns/op")
+		b.ReportMetric(float64(stages.AssetFlushSync.Nanoseconds())/float64(b.N), "asset_flush_sync_ns/op")
+		b.ReportMetric(float64(stages.ManifestEncode.Nanoseconds())/float64(b.N), "manifest_encode_ns/op")
+		b.ReportMetric(float64(stages.RootDeltaConstruction.Nanoseconds())/float64(b.N), "root_delta_ns/op")
+		b.ReportMetric(float64(stages.SystemDeltaConstruction.Nanoseconds())/float64(b.N), "system_delta_ns/op")
+		b.ReportMetric(float64(last.Rows), "rows/op")
+		b.ReportMetric(float64(last.RequiredAssetCount), "prepared_refs/op")
+		b.ReportMetric(float64(last.RequiredAssetBytes), "prepared_asset_B/op")
+		b.ReportMetric(float64(last.ManifestBytes), "manifest_B/op")
 	})
 }
 
