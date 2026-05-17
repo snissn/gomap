@@ -421,7 +421,7 @@ func TestCommandWALRegisteredReplayHandlerInstallsValueLogAppender(t *testing.T)
 		Scope:         commitlog.CommandScopeCollection,
 		PayloadFormat: commitlog.PayloadFormat(60000 + kindOffset),
 		Payload:       []byte{1},
-	}, nil, nil, ensure)
+	}, nil, nil, nil, ensure)
 	if err != nil {
 		t.Fatalf("applyCommandWALFrame: %v", err)
 	}
@@ -460,7 +460,7 @@ func TestCommandWALRegisteredReplayHandlerCanOptOutOfReplayLogSupport(t *testing
 		Kind:          kind,
 		Scope:         commitlog.CommandScopeCollection,
 		PayloadFormat: commitlog.PayloadFormatNativeWireDeterministic,
-	}, nil, nil, ensure); err != nil {
+	}, nil, nil, nil, ensure); err != nil {
 		t.Fatalf("applyCommandWALFrame: %v", err)
 	}
 	if !handlerCalled.Load() {
