@@ -79,6 +79,14 @@ validate_backends() {
 	done
 }
 
+validate_backend_configuration() {
+	if contains_backend mongodb && [[ -z "$MONGODB_VECTOR_URI" ]]; then
+		echo "mongodb backend requested, but MONGODB_VECTOR_URI is empty" >&2
+		echo "Set MONGODB_VECTOR_URI to an Atlas or local Atlas Vector Search deployment, or remove mongodb from BACKENDS." >&2
+		exit 1
+	fi
+}
+
 start_pgvector_if_needed() {
 	if [[ -n "$PGVECTOR_DSN" ]]; then
 		return
@@ -127,6 +135,7 @@ PY
 }
 
 validate_backends
+validate_backend_configuration
 mkdir -p "$RUN_DIR"
 
 cat >"$RUN_DIR/README.md" <<EOF
@@ -257,26 +266,22 @@ if contains_backend pgvector; then
 fi
 
 if contains_backend mongodb; then
-	if [[ -z "$MONGODB_VECTOR_URI" ]]; then
-		echo "mongodb backend requested, but MONGODB_VECTOR_URI is empty; skipping MongoDB Vector Search" | tee "$RUN_DIR/mongodb.skipped.txt"
-	else
-		echo "running MongoDB Vector Search benchmark"
-		"$VENV/bin/python" benchmarks/vector_db_compare/mongodb_vector_bench.py \
-			--dataset-dir "$RUN_DIR/dataset" \
-			--uri "$MONGODB_VECTOR_URI" \
-			--database "$MONGODB_VECTOR_DATABASE" \
-			--collection "$MONGODB_VECTOR_COLLECTION" \
-			--index-name "$MONGODB_VECTOR_INDEX" \
-			--output "$RUN_DIR/mongodb.json" \
-			--queries "$QUERIES" \
-			--validate-queries "$VALIDATE_QUERIES" \
-			--top-k "$TOP_K" \
-			--search-concurrency "$SEARCH_CONCURRENCY" \
-			--num-candidates "$MONGODB_VECTOR_NUM_CANDIDATES" \
-			--index-timeout-seconds "$MONGODB_VECTOR_INDEX_TIMEOUT_SECONDS" \
-			--min-recall "$MIN_RECALL" >"$RUN_DIR/mongodb.stdout.json"
-		result_args+=(--result "$RUN_DIR/mongodb.json")
-	fi
+	echo "running MongoDB Vector Search benchmark"
+	"$VENV/bin/python" benchmarks/vector_db_compare/mongodb_vector_bench.py \
+		--dataset-dir "$RUN_DIR/dataset" \
+		--uri "$MONGODB_VECTOR_URI" \
+		--database "$MONGODB_VECTOR_DATABASE" \
+		--collection "$MONGODB_VECTOR_COLLECTION" \
+		--index-name "$MONGODB_VECTOR_INDEX" \
+		--output "$RUN_DIR/mongodb.json" \
+		--queries "$QUERIES" \
+		--validate-queries "$VALIDATE_QUERIES" \
+		--top-k "$TOP_K" \
+		--search-concurrency "$SEARCH_CONCURRENCY" \
+		--num-candidates "$MONGODB_VECTOR_NUM_CANDIDATES" \
+		--index-timeout-seconds "$MONGODB_VECTOR_INDEX_TIMEOUT_SECONDS" \
+		--min-recall "$MIN_RECALL" >"$RUN_DIR/mongodb.stdout.json"
+	result_args+=(--result "$RUN_DIR/mongodb.json")
 fi
 
 if ((${#result_args[@]} == 0)); then
