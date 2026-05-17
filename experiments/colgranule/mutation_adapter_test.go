@@ -198,6 +198,8 @@ func TestColumnMutationReplayProfileContractM9D(t *testing.T) {
 	}{
 		{name: "default durable", want: "durable"},
 		{name: "durable", profile: ColumnMutationReplayProfile{Durability: ColumnMutationReplayDurable}, want: "durable"},
+		{name: "default durable benchmark only rejected", profile: ColumnMutationReplayProfile{BenchmarkOnly: true}, wantErr: true},
+		{name: "durable benchmark only rejected", profile: ColumnMutationReplayProfile{Durability: ColumnMutationReplayDurable, BenchmarkOnly: true}, wantErr: true},
 		{name: "wal on fast production rejected", profile: ColumnMutationReplayProfile{Durability: ColumnMutationReplayWALOnFast}, wantErr: true},
 		{name: "fast production rejected", profile: ColumnMutationReplayProfile{Durability: ColumnMutationReplayFast}, wantErr: true},
 		{name: "wal on fast benchmark ceiling", profile: ColumnMutationReplayProfile{Durability: ColumnMutationReplayWALOnFast, BenchmarkOnly: true}, want: "wal_on_fast_benchmark_ceiling"},
