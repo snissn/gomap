@@ -414,7 +414,8 @@ func (c *Collection) vectorIndexRuntimeIsStale(index *VectorIndex) bool {
 	registered := c.vectorIndexes[index.name]
 	c.vectorIndexesMu.RUnlock()
 	if registered == index {
-		return false
+		stale, err := c.registeredVectorIndexNativeRuntimeIsStale(index)
+		return err == nil && stale
 	}
 	if registered != nil {
 		return true
@@ -424,6 +425,33 @@ func (c *Collection) vectorIndexRuntimeIsStale(index *VectorIndex) bool {
 	}
 	declared, err := c.refreshVectorIndexDeclaration(index.name)
 	return err == nil && declared
+}
+
+func (c *Collection) registeredVectorIndexNativeRuntimeIsStale(index *VectorIndex) (bool, error) {
+	if c == nil || index == nil || c.db == nil {
+		return false, nil
+	}
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return false, backenddb.ErrClosed
+	}
+	defer func() { _ = snap.Close() }()
+	catalog, err := loadCollectionCatalog(snap, c.meta.Name)
+	if err != nil || catalog == nil {
+		return false, err
+	}
+	c.meta = catalog.meta
+	c.rememberCatalog(snap, catalog)
+	def, ok := findVectorIndex(catalog.meta.VectorIndexes, index.name)
+	if !ok {
+		return index.isNativePersistent(), nil
+	}
+	if reason := index.validateNativeSnapshotDefinition(def); reason != "" {
+		return true, nil
+	}
+	index.setNativePersistent(true)
+	rootName := collectionVectorIndexRootName(catalog.meta.Name, index.name)
+	return catalog.rootID(rootName) != index.nativeSnapshotBaseEpochForFullSave(), nil
 }
 
 // UnregisterVectorIndex detaches a registered in-memory vector index.
@@ -1049,7 +1077,9 @@ func (idx *VectorIndex) requireFullNativeSnapshotLocked() {
 	if !idx.nativePersistent {
 		return
 	}
-	idx.fullSnapshotBaseEpoch = idx.persistedEpoch
+	if idx.persistedEpoch != 0 {
+		idx.fullSnapshotBaseEpoch = idx.persistedEpoch
+	}
 	idx.persistedEpoch = 0
 	idx.persistedBytesDisk = 0
 	idx.persistedSnapshotDirty = true

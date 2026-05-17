@@ -52,7 +52,8 @@ Backends:
   time separately under the insert phase.
 - `mongodb`: runs MongoDB Vector Search only when `MONGODB_VECTOR_URI` points
   at a deployment that supports `$vectorSearch` and `createSearchIndexes`. The
-  runner uses a fresh benchmark database name by default.
+  runner installs PyMongo with SRV support for Atlas `mongodb+srv://` URIs and
+  uses a fresh benchmark database name by default.
 
 Configuration:
 
