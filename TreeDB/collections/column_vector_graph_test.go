@@ -159,6 +159,115 @@ func TestColumnVectorGraphSearchHandlesOverflowingFloat32Dot(t *testing.T) {
 	}
 }
 
+func TestColumnVectorGraphSearchHandlesOverflowingScaledCosine(t *testing.T) {
+	const dims = 128
+	vectorValue := float32(1e38)
+	queryValue := float32(0.1 / math.Sqrt(float64(dims)))
+	invNorm := float32(1 / math.Sqrt(float64(dims)*1e76))
+	if invNorm <= 0 || math.IsInf(float64(invNorm), 0) || math.IsNaN(float64(invNorm)) {
+		t.Fatalf("invNorm=%g want positive finite", invNorm)
+	}
+
+	vectors := make([]float32, dims*2)
+	for dim := 0; dim < dims; dim++ {
+		vectors[dim] = vectorValue
+		vectors[dims+dim] = -vectorValue
+	}
+	graph, err := NewColumnVectorGraphFromColumns(ColumnVectorGraphColumns{
+		DocumentIDs:     [][]byte{[]byte("doc-positive"), []byte("doc-negative")},
+		Vectors:         vectors,
+		InvNorms:        []float32{invNorm, invNorm},
+		NeighborOffsets: []uint32{0, 1, 2},
+		Neighbors:       []uint32{1, 0},
+		Dimensions:      dims,
+		EntryPoint:      0,
+		EfSearch:        2,
+	})
+	if err != nil {
+		t.Fatalf("NewColumnVectorGraphFromColumns: %v", err)
+	}
+
+	query := make([]float32, dims)
+	for dim := range query {
+		query[dim] = queryValue
+	}
+	results, _, err := graph.SearchCosine(query, ColumnVectorGraphSearchOptions{TopK: 1, EfSearch: 2}, &ColumnVectorGraphSearchScratch{})
+	if err != nil {
+		t.Fatalf("SearchCosine: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("results=%d want 1", len(results))
+	}
+	if !bytes.Equal(results[0].DocumentID, []byte("doc-positive")) {
+		t.Fatalf("result document ID=%q want doc-positive", results[0].DocumentID)
+	}
+	if math.IsInf(float64(results[0].Distance), 0) || math.IsNaN(float64(results[0].Distance)) {
+		t.Fatalf("distance=%g want finite", results[0].Distance)
+	}
+	if math.Abs(float64(results[0].Distance)) > 1e-5 {
+		t.Fatalf("distance=%g want near 0", results[0].Distance)
+	}
+}
+
+func TestColumnVectorGraphSearchRecomputesTinyDotUnderflow(t *testing.T) {
+	const tiny = float32(1e-38)
+	invNorm := float32(1e38)
+	graph, err := NewColumnVectorGraphFromColumns(ColumnVectorGraphColumns{
+		DocumentIDs:     [][]byte{[]byte("doc-z-positive"), []byte("doc-a-negative")},
+		Vectors:         []float32{tiny, -tiny},
+		InvNorms:        []float32{invNorm, invNorm},
+		NeighborOffsets: []uint32{0, 1, 2},
+		Neighbors:       []uint32{1, 0},
+		Dimensions:      1,
+		EntryPoint:      0,
+		EfSearch:        2,
+	})
+	if err != nil {
+		t.Fatalf("NewColumnVectorGraphFromColumns: %v", err)
+	}
+
+	results, _, err := graph.SearchCosine([]float32{tiny}, ColumnVectorGraphSearchOptions{TopK: 1, EfSearch: 2}, &ColumnVectorGraphSearchScratch{})
+	if err != nil {
+		t.Fatalf("SearchCosine: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("results=%d want 1", len(results))
+	}
+	if !bytes.Equal(results[0].DocumentID, []byte("doc-z-positive")) {
+		t.Fatalf("result document ID=%q want doc-z-positive", results[0].DocumentID)
+	}
+	if math.Abs(float64(results[0].Distance)) > 1e-5 {
+		t.Fatalf("distance=%g want near 0", results[0].Distance)
+	}
+}
+
+func TestColumnVectorGraphSearchUsesDocumentIDTieOrdering(t *testing.T) {
+	graph, err := NewColumnVectorGraphFromColumns(ColumnVectorGraphColumns{
+		DocumentIDs:     [][]byte{[]byte("doc-z"), []byte("doc-a"), []byte("doc-b")},
+		Vectors:         []float32{1, 0, 1, 0, 1, 0},
+		InvNorms:        []float32{1, 1, 1},
+		NeighborOffsets: []uint32{0, 2, 4, 6},
+		Neighbors:       []uint32{1, 2, 0, 2, 0, 1},
+		Dimensions:      2,
+		EntryPoint:      0,
+		EfSearch:        2,
+	})
+	if err != nil {
+		t.Fatalf("NewColumnVectorGraphFromColumns: %v", err)
+	}
+
+	results, _, err := graph.SearchCosine([]float32{1, 0}, ColumnVectorGraphSearchOptions{TopK: 2, EfSearch: 2}, &ColumnVectorGraphSearchScratch{})
+	if err != nil {
+		t.Fatalf("SearchCosine: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("results=%d want 2", len(results))
+	}
+	if !bytes.Equal(results[0].DocumentID, []byte("doc-a")) || !bytes.Equal(results[1].DocumentID, []byte("doc-b")) {
+		t.Fatalf("result IDs=(%q,%q) want (doc-a,doc-b)", results[0].DocumentID, results[1].DocumentID)
+	}
+}
+
 func TestColumnVectorGraphSearchAllocs(t *testing.T) {
 	graph, err := NewColumnVectorGraphFromColumns(columnVectorGraphTestColumns(1024, 64, 16, false))
 	if err != nil {
@@ -219,9 +328,8 @@ func TestColumnVectorGraphSearchParallelIndependentScratch(t *testing.T) {
 	errs := make(chan error, workers)
 	var wg sync.WaitGroup
 	for worker := 0; worker < workers; worker++ {
-		worker := worker
 		wg.Add(1)
-		go func() {
+		go func(worker int) {
 			defer wg.Done()
 			var scratch ColumnVectorGraphSearchScratch
 			if results, _, err := graph.SearchCosine(query, opts, &scratch); err != nil {
@@ -254,7 +362,7 @@ func TestColumnVectorGraphSearchParallelIndependentScratch(t *testing.T) {
 					return
 				}
 			}
-		}()
+		}(worker)
 	}
 	wg.Wait()
 	close(errs)

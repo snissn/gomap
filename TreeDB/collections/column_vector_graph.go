@@ -1,9 +1,11 @@
 package collections
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 )
 
 const (
@@ -47,6 +49,9 @@ type ColumnVectorGraphSearchTrace struct {
 // its own scratch and the borrowed graph columns remain immutable.
 type ColumnVectorGraphSearchScratch struct {
 	graph   vectorIndexSearchScratch
+	queue   columnVectorGraphMinCandidateHeap
+	best    columnVectorGraphMaxCandidateHeap
+	out     []vectorIndexCandidate
 	results []VectorSearchResult
 }
 
@@ -63,6 +68,8 @@ type ColumnVectorGraph struct {
 	neighbors       []uint32
 	idArena         []byte
 	idOffsets       []uint32
+	idRanks         []uint32
+	ordinalTieOrder bool
 }
 
 // NewColumnVectorGraphFromColumns validates column-store vector graph buffers
@@ -77,6 +84,8 @@ func NewColumnVectorGraphFromColumns(columns ColumnVectorGraphColumns) (*ColumnV
 	if err != nil {
 		return nil, err
 	}
+	idRanks := columnVectorGraphDocumentIDRanks(columns.DocumentIDs)
+	ordinalTieOrder := columnVectorGraphRanksMatchOrdinals(idRanks)
 	efSearch := columns.EfSearch
 	if efSearch <= 0 {
 		efSearch = defaultVectorIndexEfSearch
@@ -91,6 +100,8 @@ func NewColumnVectorGraphFromColumns(columns ColumnVectorGraphColumns) (*ColumnV
 		neighbors:       columns.Neighbors,
 		idArena:         idArena,
 		idOffsets:       idOffsets[:rows+1],
+		idRanks:         idRanks,
+		ordinalTieOrder: ordinalTieOrder,
 	}, nil
 }
 
@@ -171,7 +182,7 @@ func (g *ColumnVectorGraph) SearchCosine(query []float32, opts ColumnVectorGraph
 	}
 	efSearch := g.normalizeEfSearch(opts.EfSearch, opts.TopK)
 	trace.EfSearch = efSearch
-	candidates, edgesVisited, candidatesExamined := g.searchCandidates(query, queryInvNorm, efSearch, &scratch.graph)
+	candidates, edgesVisited, candidatesExamined := g.searchCandidates(query, queryInvNorm, efSearch, scratch)
 	trace.CandidatesExamined = candidatesExamined
 	trace.CandidatesAfterTombstone = len(candidates)
 	trace.CandidatesAfterFilter = len(candidates)
@@ -320,6 +331,40 @@ func copyColumnVectorGraphIDs(ids [][]byte) ([]byte, []uint32, error) {
 	return arena, offsets, nil
 }
 
+func columnVectorGraphDocumentIDRanks(ids [][]byte) []uint32 {
+	ordinals := make([]int, len(ids))
+	for ordinal := range ordinals {
+		ordinals[ordinal] = ordinal
+	}
+	slices.SortFunc(ordinals, func(left, right int) int {
+		if cmp := bytes.Compare(ids[left], ids[right]); cmp != 0 {
+			return cmp
+		}
+		switch {
+		case left < right:
+			return -1
+		case left > right:
+			return 1
+		default:
+			return 0
+		}
+	})
+	ranks := make([]uint32, len(ids))
+	for rank, ordinal := range ordinals {
+		ranks[ordinal] = uint32(rank)
+	}
+	return ranks
+}
+
+func columnVectorGraphRanksMatchOrdinals(ranks []uint32) bool {
+	for ordinal, rank := range ranks {
+		if int(rank) != ordinal {
+			return false
+		}
+	}
+	return true
+}
+
 func (g *ColumnVectorGraph) normalizeEfSearch(efSearch int, topK int) int {
 	if efSearch <= 0 {
 		efSearch = g.efSearch
@@ -336,7 +381,14 @@ func (g *ColumnVectorGraph) normalizeEfSearch(efSearch int, topK int) int {
 	return efSearch
 }
 
-func (g *ColumnVectorGraph) searchCandidates(query []float32, queryInvNorm float32, limit int, scratch *vectorIndexSearchScratch) ([]vectorIndexCandidate, int, int) {
+func (g *ColumnVectorGraph) searchCandidates(query []float32, queryInvNorm float32, limit int, scratch *ColumnVectorGraphSearchScratch) ([]vectorIndexCandidate, int, int) {
+	if g.ordinalTieOrder {
+		return g.searchCandidatesOrdinalTies(query, queryInvNorm, limit, &scratch.graph)
+	}
+	return g.searchCandidatesDocumentTies(query, queryInvNorm, limit, scratch)
+}
+
+func (g *ColumnVectorGraph) searchCandidatesOrdinalTies(query []float32, queryInvNorm float32, limit int, scratch *vectorIndexSearchScratch) ([]vectorIndexCandidate, int, int) {
 	if g.entryPoint < 0 || g.entryPoint >= g.Rows() || limit <= 0 {
 		return nil, 0, 0
 	}
@@ -385,16 +437,194 @@ func (g *ColumnVectorGraph) searchCandidates(query []float32, queryInvNorm float
 	return out, edgesVisited, candidatesExamined
 }
 
+func (g *ColumnVectorGraph) searchCandidatesDocumentTies(query []float32, queryInvNorm float32, limit int, scratch *ColumnVectorGraphSearchScratch) ([]vectorIndexCandidate, int, int) {
+	if g.entryPoint < 0 || g.entryPoint >= g.Rows() || limit <= 0 {
+		return nil, 0, 0
+	}
+	visited, mark := scratch.graph.nextVisitedEpoch(g.Rows())
+	entry := vectorIndexCandidate{nodeID: g.entryPoint, distance: g.cosineDistance(query, queryInvNorm, g.entryPoint)}
+	if math.IsInf(float64(entry.distance), 1) {
+		return nil, 0, 1
+	}
+	visited[entry.nodeID] = mark
+	queue := scratch.queue[:0]
+	queue.push(g, entry)
+	best := scratch.best[:0]
+	best.pushBounded(g, entry, limit)
+	edgesVisited := 0
+	candidatesExamined := 1
+	for len(queue) > 0 {
+		current := queue.pop(g)
+		if len(best) >= limit && g.candidateWorse(current, best[0]) {
+			break
+		}
+		start := int(g.neighborOffsets[current.nodeID])
+		end := int(g.neighborOffsets[current.nodeID+1])
+		edgesVisited += end - start
+		for _, rawNeighbor := range g.neighbors[start:end] {
+			neighbor := int(rawNeighbor)
+			if visited[neighbor] == mark {
+				continue
+			}
+			visited[neighbor] = mark
+			candidate := vectorIndexCandidate{nodeID: neighbor, distance: g.cosineDistance(query, queryInvNorm, neighbor)}
+			candidatesExamined++
+			if math.IsInf(float64(candidate.distance), 1) {
+				continue
+			}
+			if len(best) < limit || g.candidateLess(candidate, best[0]) {
+				queue.push(g, candidate)
+				best.pushBounded(g, candidate, limit)
+			}
+		}
+	}
+	scratch.queue = queue[:0]
+	scratch.best = best[:0]
+	out := append(scratch.out[:0], best...)
+	scratch.out = out
+	g.sortCandidates(out)
+	return out, edgesVisited, candidatesExamined
+}
+
+func (g *ColumnVectorGraph) sortCandidates(candidates []vectorIndexCandidate) {
+	slices.SortFunc(candidates, g.compareCandidates)
+}
+
+func (g *ColumnVectorGraph) compareCandidates(left, right vectorIndexCandidate) int {
+	if left.distance < right.distance {
+		return -1
+	}
+	if left.distance > right.distance {
+		return 1
+	}
+	leftRank := g.idRanks[left.nodeID]
+	rightRank := g.idRanks[right.nodeID]
+	switch {
+	case leftRank < rightRank:
+		return -1
+	case leftRank > rightRank:
+		return 1
+	default:
+		return 0
+	}
+}
+
+func (g *ColumnVectorGraph) candidateLess(left, right vectorIndexCandidate) bool {
+	return g.compareCandidates(left, right) < 0
+}
+
+func (g *ColumnVectorGraph) candidateWorse(left, right vectorIndexCandidate) bool {
+	return g.candidateLess(right, left)
+}
+
+type columnVectorGraphMinCandidateHeap []vectorIndexCandidate
+
+func (h *columnVectorGraphMinCandidateHeap) push(graph *ColumnVectorGraph, candidate vectorIndexCandidate) {
+	*h = append(*h, candidate)
+	for child := len(*h) - 1; child > 0; {
+		parent := (child - 1) / 2
+		if !graph.candidateLess((*h)[child], (*h)[parent]) {
+			break
+		}
+		(*h)[child], (*h)[parent] = (*h)[parent], (*h)[child]
+		child = parent
+	}
+}
+
+func (h *columnVectorGraphMinCandidateHeap) pop(graph *ColumnVectorGraph) vectorIndexCandidate {
+	out := (*h)[0]
+	last := len(*h) - 1
+	(*h)[0] = (*h)[last]
+	*h = (*h)[:last]
+	h.down(graph, 0)
+	return out
+}
+
+func (h columnVectorGraphMinCandidateHeap) down(graph *ColumnVectorGraph, parent int) {
+	for {
+		left := parent*2 + 1
+		if left >= len(h) {
+			return
+		}
+		child := left
+		right := left + 1
+		if right < len(h) && graph.candidateLess(h[right], h[left]) {
+			child = right
+		}
+		if !graph.candidateLess(h[child], h[parent]) {
+			return
+		}
+		h[parent], h[child] = h[child], h[parent]
+		parent = child
+	}
+}
+
+type columnVectorGraphMaxCandidateHeap []vectorIndexCandidate
+
+func (h *columnVectorGraphMaxCandidateHeap) pushBounded(graph *ColumnVectorGraph, candidate vectorIndexCandidate, limit int) {
+	if limit <= 0 {
+		return
+	}
+	if len(*h) < limit {
+		*h = append(*h, candidate)
+		h.up(graph, len(*h)-1)
+		return
+	}
+	if !graph.candidateLess(candidate, (*h)[0]) {
+		return
+	}
+	(*h)[0] = candidate
+	h.down(graph, 0)
+}
+
+func (h *columnVectorGraphMaxCandidateHeap) up(graph *ColumnVectorGraph, child int) {
+	for child > 0 {
+		parent := (child - 1) / 2
+		if !graph.candidateWorse((*h)[child], (*h)[parent]) {
+			return
+		}
+		(*h)[child], (*h)[parent] = (*h)[parent], (*h)[child]
+		child = parent
+	}
+}
+
+func (h columnVectorGraphMaxCandidateHeap) down(graph *ColumnVectorGraph, parent int) {
+	for {
+		left := parent*2 + 1
+		if left >= len(h) {
+			return
+		}
+		child := left
+		right := left + 1
+		if right < len(h) && graph.candidateWorse(h[right], h[left]) {
+			child = right
+		}
+		if !graph.candidateWorse(h[child], h[parent]) {
+			return
+		}
+		h[parent], h[child] = h[child], h[parent]
+		parent = child
+	}
+}
+
 func (g *ColumnVectorGraph) cosineDistance(query []float32, queryInvNorm float32, ordinal int) float32 {
 	if ordinal < 0 || ordinal >= g.Rows() {
 		return float32(math.Inf(1))
 	}
 	vector := g.vectorAt(ordinal)
 	dot := vectorDotProductFloat32(query, vector)
-	if math.IsInf(float64(dot), 0) || math.IsNaN(float64(dot)) {
+	if dot == 0 || math.IsInf(float64(dot), 0) || math.IsNaN(float64(dot)) {
 		return columnVectorGraphCosineDistanceWide(query, vector, queryInvNorm, g.invNorms[ordinal])
 	}
-	return 1 - dot*queryInvNorm*g.invNorms[ordinal]
+	cosine := float64(dot) * float64(queryInvNorm) * float64(g.invNorms[ordinal])
+	if math.IsInf(cosine, 0) || math.IsNaN(cosine) {
+		return columnVectorGraphCosineDistanceWide(query, vector, queryInvNorm, g.invNorms[ordinal])
+	}
+	distance := 1 - cosine
+	if math.IsInf(distance, 0) || math.IsNaN(distance) {
+		return columnVectorGraphCosineDistanceWide(query, vector, queryInvNorm, g.invNorms[ordinal])
+	}
+	return float32(distance)
 }
 
 func columnVectorGraphCosineDistanceWide(query []float32, vector []float32, queryInvNorm float32, vectorInvNorm float32) float32 {
