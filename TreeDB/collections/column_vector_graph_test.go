@@ -76,6 +76,9 @@ func TestColumnVectorGraphZeroValueRows(t *testing.T) {
 	if got := graph.Rows(); got != 0 {
 		t.Fatalf("zero-value Rows()=%d want 0", got)
 	}
+	if got := graph.EntryPoint(); got != -1 {
+		t.Fatalf("zero-value EntryPoint()=%d want -1", got)
+	}
 }
 
 func TestColumnVectorGraphRejectsUnrepresentableQueryInvNorm(t *testing.T) {
@@ -289,14 +292,14 @@ func exactColumnVectorGraphDistance(t *testing.T, graph *ColumnVectorGraph, quer
 	if !ok {
 		return float32(math.Inf(1))
 	}
-	var dot float32
+	var dot float64
 	var normSquared float64
 	for dim, value := range vector {
-		dot += query[dim] * value
+		dot += float64(query[dim]) * float64(value)
 		normSquared += float64(value) * float64(value)
 	}
 	if normSquared == 0 {
 		return float32(math.Inf(1))
 	}
-	return 1 - dot*queryInvNorm*float32(1/math.Sqrt(normSquared))
+	return float32(1 - dot*float64(queryInvNorm)*(1/math.Sqrt(normSquared)))
 }

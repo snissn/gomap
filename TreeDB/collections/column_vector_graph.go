@@ -118,7 +118,7 @@ func (g *ColumnVectorGraph) Edges() int {
 
 // EntryPoint returns the graph entry row ordinal.
 func (g *ColumnVectorGraph) EntryPoint() int {
-	if g == nil {
+	if g == nil || len(g.idOffsets) == 0 {
 		return -1
 	}
 	return g.entryPoint
