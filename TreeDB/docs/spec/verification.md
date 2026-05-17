@@ -225,7 +225,7 @@ to the V1 in-page-marked meta-page storage field.
 | Batch commands are one command frame, one LSN, and all-or-nothing. | `user-command-wal.md` batch atomicity | `TestCommandWALRawKVBatchOneLSNAtomic`, `TestCommandWALCollectionInsertBatchOneLSNAtomic`, `TestCommandWALOversizedBatchRejectsBeforeLSN` | planned |
 | Callback update APIs never replay Go callback code. | `user-command-wal.md` update API categories | `TestCommandWALCallbackUpdateLogsFinalReplacement`, `TestCommandWALRecoveryDoesNotInvokeCallback` | planned |
 | Resolver helpers are resolved before WAL append. | `user-command-wal.md` update API categories | `TestCommandWALSetNowStoresResolvedLiteral`, `TestCommandWALRecoveryDoesNotInvokeResolver` | planned |
-| Catalog/schema barriers cannot race lower unapplied commands. | `collections-write-domain.md` barrier semantics | `TestCommandWALCatalogMutationDrainsLowerLSNs`, `TestCommandWALCreateIndexRejectsUntilCatalogCommandSupported` | planned |
+| Catalog/schema barriers cannot race lower unapplied commands. | `collections-write-domain.md` barrier semantics | `TestCollectionCommandWALCreateCollectionDrainsRecoveredLowerLSN`, `TestCollectionCommandWALRejectsCatalogIndexMutations` | PR6 coverage for create collection and rejected index DDL; index command support remains future |
 | Read-only open fails when mutating command replay would be required. | `recovery.md`, `contracts.md` read-only open | `TestCommandWALReadOnlyOpenWithUnappliedFrameFailsRecoveryRequired` | planned |
 | Backup/restore either includes needed WAL/external refs or has durable cleanup proof. | `backup-restore.md` restore validation | `TestCommandWALBackupManifestRestoresUnappliedCommands`, `TestCommandWALRestoreMissingRequiredFrameFailsWithoutCleanupProof` | planned |
 | Native-wire deterministic command schemas align with local command WAL payload schemas. | `native-wire-protocol.md`, `user-command-wal.md` Raft/native-wire relationship | `TestCommandWALPayloadMatchesNativeWireDeterministicFixture`, `TestNativeWireAndLocalCommandDigestStable` | planned |
@@ -238,7 +238,7 @@ PR 1: typed commit-log frames and feature gate:
 - `TestCommandWALFormatGoldenV1EmptySegment`;
 - `TestCommandWALFormatGoldenV1RawKVBatch`;
 - `TestCommandWALFormatGoldenV1CollectionInsertBatchByID`;
-- `TestCommandWALFormatGoldenV1CatalogMutationPlaceholder`;
+- `TestCommandWALFormatGoldenV1CatalogCreateCollection`;
 - `TestCommandWALFormatRejectsUnsupportedRequiredVersion`;
 - `TestCommandWALFormatRejectsUnknownRequiredKind`;
 - `TestCommandWALFormatRejectsUnknownCriticalFlag`;
@@ -384,7 +384,6 @@ PR 4: collection insert/delete by explicit ID:
 - `TestCollectionCommandWALInsertBatchByIDReplayAdvancesEmptyFrame`;
 - `TestCollectionCommandWALDeleteBatchByIDReplayIgnoresMissingIDs`;
 - `TestCollectionCommandWALDeleteBatchByIDReplayAdvancesMissingOnlyFrame`;
-- `TestCollectionCommandWALRejectsCatalogCreate`;
 - `BenchmarkCollectionCommandWALInsertBatchByID`;
 - `BenchmarkCollectionCommandWALDeleteBatchByID`;
 - acceptance artifact:
@@ -403,13 +402,17 @@ PR 5: collection update by explicit ID:
 
 PR 6: catalog mutation commands:
 
-- `TestCommandWALCreateCollectionCommandReopens`;
-- `TestCommandWALCreateCollectionIdempotentRetrySameMetadata`;
-- `TestCommandWALCreateCollectionIncompatibleRetryFailsNoMutation`;
-- `TestCommandWALCreateIndexCommandDrainsLowerLSNs`;
-- `TestCommandWALDropIndexCommandDoesNotResurrectSameNameOldUID`;
-- `TestCommandWALCatalogEpochGuardRejectsStaleReplay`;
-- `TestCommandWALSchemaEpochGuardRejectsStaleReplay`.
+- `TestCommandWALFormatGoldenV1CatalogCreateCollection`;
+- `TestCollectionCommandWALCreateCollectionPublishesAppliedLSN`;
+- `TestCollectionCommandWALCreateCollectionReplayRecoversUnappliedFrame`;
+- `TestCollectionCommandWALCreateCollectionReplaySameMetadataIdempotent`;
+- `TestCollectionCommandWALCreateCollectionReplayIncompatibleMetadataFailsClosed`;
+- `TestCollectionCommandWALCreateCollectionDrainsRecoveredLowerLSN`;
+- `TestCollectionCommandWALRejectsCatalogIndexMutations`;
+- `BenchmarkCollectionCommandWALCreateCollection`;
+- `BenchmarkCollectionCommandWALRejectedIndexDDL`;
+- acceptance artifact:
+  `artifacts/command-wal/pr6/acceptance.json`.
 
 PR 7: matrix enforcement and drift tests:
 

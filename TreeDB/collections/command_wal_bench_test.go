@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"errors"
 	"fmt"
 	"testing"
 
@@ -103,6 +104,47 @@ func BenchmarkCollectionCommandWALUpdateBatchByID(b *testing.B) {
 	}
 }
 
+func BenchmarkCollectionCommandWALCreateCollection(b *testing.B) {
+	for _, commandWAL := range []bool{false, true} {
+		b.Run(fmt.Sprintf("command_wal=%t", commandWAL), func(b *testing.B) {
+			backend, manager := openCollectionCatalogCommandWALBenchmark(b, commandWAL)
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				if _, err := manager.CreateCollection(&CollectionMeta{
+					Name: fmt.Sprintf("bench_%09d", i),
+					Options: CollectionOptions{
+						DocumentFormat: DocumentFormatJSON,
+					},
+				}); err != nil {
+					b.Fatalf("CreateCollection: %v", err)
+				}
+			}
+			b.StopTimer()
+			assertCommandWALBenchModeForMutations(b, backend, commandWAL, uint64(b.N))
+			b.ReportMetric(float64(b.N)/b.Elapsed().Seconds(), "collections/s")
+		})
+	}
+}
+
+func BenchmarkCollectionCommandWALRejectedIndexDDL(b *testing.B) {
+	backend, collection := openCollectionCommandWALBenchmark(b, false, true)
+	beforeLSN := backend.State().AppliedCommandLSN
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, err := collection.CreateIndex(IndexDefinition{Name: fmt.Sprintf("idx_%09d", i), Field: "email", ValueType: IndexValueString})
+		if !errors.Is(err, backenddb.ErrCommandWALUnsupported) {
+			b.Fatalf("CreateIndex error=%v, want ErrCommandWALUnsupported", err)
+		}
+	}
+	b.StopTimer()
+	if got := backend.State().AppliedCommandLSN; got != beforeLSN {
+		b.Fatalf("AppliedCommandLSN after rejected DDL=%d, want %d", got, beforeLSN)
+	}
+	b.ReportMetric(float64(b.N)/b.Elapsed().Seconds(), "rejects/s")
+}
+
 func openCollectionCommandWALBenchmark(b *testing.B, indexed bool, commandWAL bool) (*backenddb.DB, *Collection) {
 	b.Helper()
 	dir := b.TempDir()
@@ -168,6 +210,29 @@ func openCollectionCommandWALBenchmark(b *testing.B, indexed bool, commandWAL bo
 	return backend, collection
 }
 
+func openCollectionCatalogCommandWALBenchmark(b *testing.B, commandWAL bool) (*backenddb.DB, *CollectionManager) {
+	b.Helper()
+	openOpts := backenddb.Options{
+		Dir:                    b.TempDir(),
+		Durability:             backenddb.DurabilityWALOffRelaxed,
+		DisableBackgroundPrune: true,
+	}
+	if commandWAL {
+		openOpts.CommandWAL = true
+		openOpts.Durability = backenddb.DurabilityWALOnRelaxed
+	}
+	backend, err := backenddb.Open(openOpts)
+	if err != nil {
+		b.Fatalf("open catalog benchmark DB: %v", err)
+	}
+	b.Cleanup(func() {
+		if err := backend.Close(); err != nil {
+			b.Errorf("close catalog benchmark DB: %v", err)
+		}
+	})
+	return backend, NewCollectionManager(backend)
+}
+
 func commandWALBenchDocuments(start int, count int) ([][]byte, [][]byte) {
 	ids := make([][]byte, count)
 	docs := make([][]byte, count)
@@ -181,10 +246,15 @@ func commandWALBenchDocuments(start int, count int) ([][]byte, [][]byte) {
 
 func assertCommandWALBenchMode(b *testing.B, backend *backenddb.DB, want bool) {
 	b.Helper()
+	assertCommandWALBenchModeForMutations(b, backend, want, 1)
+}
+
+func assertCommandWALBenchModeForMutations(b *testing.B, backend *backenddb.DB, want bool, minAppliedLSN uint64) {
+	b.Helper()
 	if got := backend.CommandWALEnabled(); got != want {
 		b.Fatalf("CommandWALEnabled=%t, want %t", got, want)
 	}
-	if want && backend.State().AppliedCommandLSN == 0 {
-		b.Fatalf("command WAL benchmark did not advance AppliedCommandLSN")
+	if want && backend.State().AppliedCommandLSN < minAppliedLSN {
+		b.Fatalf("command WAL benchmark AppliedCommandLSN=%d, want at least %d", backend.State().AppliedCommandLSN, minAppliedLSN)
 	}
 }

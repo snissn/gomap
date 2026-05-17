@@ -980,16 +980,161 @@ func TestCollectionCommandWALUpdateByIDPreflightReplansStaleIndexedPlan(t *testi
 	}
 }
 
-func TestCollectionCommandWALRejectsCatalogCreate(t *testing.T) {
+func TestCollectionCommandWALCreateCollectionPublishesAppliedLSN(t *testing.T) {
 	dir := t.TempDir()
 	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
 		t.Fatalf("SaveFormatConfig: %v", err)
 	}
 	d := openCollectionCommandWALDB(t, dir)
-	defer func() { _ = d.Close() }()
-	_, err := NewCollectionManager(d).CreateCollection(&CollectionMeta{Name: "users"})
-	if !errors.Is(err, backenddb.ErrCommandWALUnsupported) {
-		t.Fatalf("CreateCollection error=%v, want ErrCommandWALUnsupported", err)
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatJSON,
+		},
+	}); err != nil {
+		_ = d.Close()
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	if got := d.State().AppliedCommandLSN; got != 1 {
+		_ = d.Close()
+		t.Fatalf("AppliedCommandLSN=%d, want 1", got)
+	}
+	frames := collectionCommandWALFrames(t, dir)
+	if len(frames) != 1 || frames[0].Kind != commitlog.CommandKindCatalogCreateCollection || frames[0].Scope != commitlog.CommandScopeCatalog {
+		_ = d.Close()
+		t.Fatalf("catalog create frames=%+v, want one catalog create frame", frames)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopen := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopen.Close() }()
+	if _, err := NewCollectionManager(reopen).OpenCollection("users"); err != nil {
+		t.Fatalf("OpenCollection after reopen: %v", err)
+	}
+	if got := reopen.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("reopen AppliedCommandLSN=%d, want 1", got)
+	}
+}
+
+func TestCollectionCommandWALCreateCollectionReplayRecoversUnappliedFrame(t *testing.T) {
+	dir := t.TempDir()
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+		t.Fatalf("SaveFormatConfig: %v", err)
+	}
+	meta := CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatJSON,
+		},
+	}
+	payload := catalogCreateCollectionPayload(t, meta)
+	writeCollectionCommandWALFrame(t, dir, 1, commitlog.CommandKindCatalogCreateCollection, commitlog.PayloadFormatCatalogCreateCollectionV1, payload)
+
+	reopen := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopen.Close() }()
+	if _, err := NewCollectionManager(reopen).OpenCollection("users"); err != nil {
+		t.Fatalf("OpenCollection after replay: %v", err)
+	}
+	if got := reopen.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("AppliedCommandLSN=%d, want 1", got)
+	}
+}
+
+func TestCollectionCommandWALCreateCollectionReplaySameMetadataIdempotent(t *testing.T) {
+	meta := CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatJSON,
+		},
+	}
+	dir := prepareCollectionCommandWALDir(t, meta)
+	writeCollectionCommandWALFrame(t, dir, 1, commitlog.CommandKindCatalogCreateCollection, commitlog.PayloadFormatCatalogCreateCollectionV1, catalogCreateCollectionPayload(t, meta))
+
+	reopen := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopen.Close() }()
+	col, err := NewCollectionManager(reopen).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection after idempotent replay: %v", err)
+	}
+	if normalizedDocumentFormat(col.meta.Options.DocumentFormat) != DocumentFormatJSON {
+		t.Fatalf("document format=%q, want json", col.meta.Options.DocumentFormat)
+	}
+	if got := reopen.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("AppliedCommandLSN=%d, want 1", got)
+	}
+}
+
+func TestCollectionCommandWALCreateCollectionReplayIncompatibleMetadataFailsClosed(t *testing.T) {
+	existing := CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatJSON,
+		},
+	}
+	dir := prepareCollectionCommandWALDir(t, existing)
+	incompatible := CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatBSON,
+		},
+	}
+	writeCollectionCommandWALFrame(t, dir, 1, commitlog.CommandKindCatalogCreateCollection, commitlog.PayloadFormatCatalogCreateCollectionV1, catalogCreateCollectionPayload(t, incompatible))
+
+	d, err := backenddb.Open(backenddb.Options{Dir: dir, DisableBackgroundPrune: true})
+	if err == nil {
+		_ = d.Close()
+		t.Fatalf("Open with incompatible catalog replay succeeded, want fail-closed error")
+	}
+	if !errors.Is(err, backenddb.ErrCommandWALUnsupported) && !bytes.Contains([]byte(err.Error()), []byte("incompatible")) {
+		t.Fatalf("Open error=%v, want incompatible catalog replay failure", err)
+	}
+
+	if err := os.RemoveAll(backenddb.WALDirPath(dir)); err != nil {
+		t.Fatalf("RemoveAll wal: %v", err)
+	}
+	inspect := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = inspect.Close() }()
+	col, err := NewCollectionManager(inspect).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection after removing failed frame: %v", err)
+	}
+	if normalizedDocumentFormat(col.meta.Options.DocumentFormat) != DocumentFormatJSON {
+		t.Fatalf("document format after failed replay=%q, want original json", col.meta.Options.DocumentFormat)
+	}
+	if got := inspect.State().AppliedCommandLSN; got != 0 {
+		t.Fatalf("AppliedCommandLSN after failed replay=%d, want original 0", got)
+	}
+}
+
+func TestCollectionCommandWALCreateCollectionDrainsRecoveredLowerLSN(t *testing.T) {
+	dir := t.TempDir()
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+		t.Fatalf("SaveFormatConfig: %v", err)
+	}
+	rawPayload, err := commitlog.EncodeRawKVBatchPayload(nil)
+	if err != nil {
+		t.Fatalf("EncodeRawKVBatchPayload: %v", err)
+	}
+	writeCollectionCommandWALFrame(t, dir, 1, commitlog.CommandKindRawKVBatch, commitlog.PayloadFormatRawKVBatchV1, rawPayload)
+
+	d := openCollectionCommandWALDB(t, dir)
+	if got := d.State().AppliedCommandLSN; got != 1 {
+		_ = d.Close()
+		t.Fatalf("AppliedCommandLSN after lower LSN recovery=%d, want 1", got)
+	}
+	if _, err := NewCollectionManager(d).CreateCollection(&CollectionMeta{Name: "users"}); err != nil {
+		_ = d.Close()
+		t.Fatalf("CreateCollection after lower LSN recovery: %v", err)
+	}
+	if got := d.State().AppliedCommandLSN; got != 2 {
+		_ = d.Close()
+		t.Fatalf("AppliedCommandLSN after catalog create=%d, want 2", got)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
 	}
 }
 
@@ -1043,6 +1188,12 @@ func TestCollectionCommandWALRejectsCatalogIndexMutations(t *testing.T) {
 	}
 	if _, err := col.DropAllIndexes(); !errors.Is(err, backenddb.ErrCommandWALUnsupported) {
 		t.Fatalf("DropAllIndexes error=%v, want ErrCommandWALUnsupported", err)
+	}
+	if got := d.State().AppliedCommandLSN; got != 0 {
+		t.Fatalf("AppliedCommandLSN after rejected index DDL=%d, want 0", got)
+	}
+	if got := countCollectionCommandWALFrames(t, dir); got != 0 {
+		t.Fatalf("command WAL frames after rejected index DDL=%d, want 0", got)
 	}
 }
 
@@ -1114,7 +1265,7 @@ func writeCollectionCommandWALFrame(t *testing.T, dir string, lsn uint64, kind c
 	if err := w.AppendCommand(commitlog.CommandEnvelope{
 		LSN:           lsn,
 		Kind:          kind,
-		Scope:         commitlog.CommandScopeCollection,
+		Scope:         commandWALScopeForKind(kind),
 		PayloadFormat: format,
 		Payload:       payload,
 	}); err != nil {
@@ -1124,6 +1275,30 @@ func writeCollectionCommandWALFrame(t *testing.T, dir string, lsn uint64, kind c
 	if err := w.Close(); err != nil {
 		t.Fatalf("Close writer: %v", err)
 	}
+}
+
+func commandWALScopeForKind(kind commitlog.CommandKind) commitlog.CommandScope {
+	switch kind {
+	case commitlog.CommandKindRawKVBatch:
+		return commitlog.CommandScopeRawKV
+	case commitlog.CommandKindCatalogCreateCollection:
+		return commitlog.CommandScopeCatalog
+	default:
+		return commitlog.CommandScopeCollection
+	}
+}
+
+func catalogCreateCollectionPayload(t *testing.T, meta CollectionMeta) []byte {
+	t.Helper()
+	encoded, err := encodeCollectionMeta(meta)
+	if err != nil {
+		t.Fatalf("encodeCollectionMeta: %v", err)
+	}
+	payload, err := commitlog.EncodeCatalogCreateCollectionPayload(meta.Name, encoded)
+	if err != nil {
+		t.Fatalf("EncodeCatalogCreateCollectionPayload: %v", err)
+	}
+	return payload
 }
 
 func countCollectionCommandWALFrames(t *testing.T, dir string) int {

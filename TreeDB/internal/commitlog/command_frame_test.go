@@ -202,25 +202,36 @@ func TestCommandWALFormatGoldenV1CollectionUpdateBatchByID(t *testing.T) {
 	}
 }
 
-func TestCommandWALFormatGoldenV1CatalogMutationPlaceholder(t *testing.T) {
+func TestCommandWALFormatGoldenV1CatalogCreateCollection(t *testing.T) {
+	payload, err := EncodeCatalogCreateCollectionPayload("users", []byte(`{"version":1,"name":"users"}`))
+	if err != nil {
+		t.Fatalf("EncodeCatalogCreateCollectionPayload: %v", err)
+	}
 	env := CommandEnvelope{
 		LSN:           13,
-		Kind:          CommandKindCatalogMutationPlaceholder,
+		Kind:          CommandKindCatalogCreateCollection,
 		Scope:         CommandScopeCatalog,
-		PayloadFormat: PayloadFormatNativeWireDeterministic,
-		Payload:       []byte("native-wire-placeholder:catalog-mutation"),
+		PayloadFormat: PayloadFormatCatalogCreateCollectionV1,
+		Payload:       payload,
 	}
 	frame, err := EncodeCommandFrame(env)
 	if err != nil {
 		t.Fatalf("EncodeCommandFrame: %v", err)
 	}
-	assertGoldenHex(t, "command_wal_v1_catalog_placeholder.hex", frame)
+	assertGoldenHex(t, "command_wal_v1_catalog_create_collection.hex", frame)
 	got, err := DecodeCommandFrame(frame)
 	if err != nil {
 		t.Fatalf("DecodeCommandFrame: %v", err)
 	}
-	if got.Kind != CommandKindCatalogMutationPlaceholder || got.Scope != CommandScopeCatalog {
-		t.Fatalf("decoded catalog placeholder mismatch: %+v", got)
+	if got.Kind != CommandKindCatalogCreateCollection || got.Scope != CommandScopeCatalog || got.PayloadFormat != PayloadFormatCatalogCreateCollectionV1 {
+		t.Fatalf("decoded catalog create mismatch: %+v", got)
+	}
+	decoded, err := DecodeCatalogCreateCollectionPayload(got.Payload)
+	if err != nil {
+		t.Fatalf("DecodeCatalogCreateCollectionPayload: %v", err)
+	}
+	if decoded.Collection != "users" || string(decoded.Metadata) != `{"version":1,"name":"users"}` {
+		t.Fatalf("decoded catalog create payload=%+v", decoded)
 	}
 }
 
