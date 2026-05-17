@@ -2700,6 +2700,9 @@ func (m *CollectionManager) OpenCollection(name string) (*Collection, error) {
 		if m.db.IsClosing() {
 			return nil, backenddb.ErrClosed
 		}
+		if err := validateColumnStoreProfileSupportForDB(m.db, collection.meta.Options.ColumnStore, "open"); err != nil {
+			return nil, err
+		}
 		return collection, nil
 	}
 	snap := m.db.AcquireSnapshot()

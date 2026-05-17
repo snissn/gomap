@@ -366,6 +366,42 @@ func TestColumnStoreProfileSupportMatrix(t *testing.T) {
 	}
 }
 
+func TestColumnStoreProfileSupportRejectsWriteDomainCacheOpen(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), Durability: backenddb.DurabilityWALOnRelaxed})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "seed"}); err != nil {
+		t.Fatalf("create seed collection: %v", err)
+	}
+	state := d.State()
+	if state == nil || state.SystemRootPageID == 0 {
+		t.Fatalf("unexpected db state: %+v", state)
+	}
+	meta, err := normalizeCollectionMeta(CollectionMeta{Name: "events", Options: CollectionOptions{ColumnStore: testColumnStoreConfig(nil)}})
+	if err != nil {
+		t.Fatalf("normalize column meta: %v", err)
+	}
+	domain := &collectionWriteDomain{
+		loaded:         true,
+		meta:           meta,
+		catalog:        &collectionCatalog{meta: meta},
+		baseSystemRoot: state.SystemRootPageID,
+		baseCommitSeq:  state.CommitSeq,
+	}
+	mgr.domainMu.Lock()
+	mgr.domains = map[string]*collectionWriteDomain{"events": domain}
+	mgr.domainMu.Unlock()
+
+	_, err = mgr.OpenCollection("events")
+	if err == nil || !strings.Contains(err.Error(), "durable-only") {
+		t.Fatalf("OpenCollection cached err=%v want durable-only rejection", err)
+	}
+}
+
 func TestColumnStoreDisabledCacheIdentityAllocatesZero(t *testing.T) {
 	catalog := &collectionCatalog{meta: CollectionMeta{Name: "users"}}
 	allocs := testing.AllocsPerRun(1000, func() {
