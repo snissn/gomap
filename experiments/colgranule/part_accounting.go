@@ -5,7 +5,7 @@ import "sort"
 const (
 	columnPartDescriptorBaseBytes = 96
 	granuleDescriptorBytes        = 64
-	columnDescriptorBytes         = 32
+	columnDescriptorBytes         = 40
 	columnBlockDescriptorBytes    = 64
 	sortKeyColumnDescriptorBytes  = 32
 	sortKeyMarkBaseBytes          = 16
@@ -105,6 +105,12 @@ func (p *ColumnPart) ByteAccounting() ColumnPartByteAccounting {
 			report := block.Granule.CodecReport
 			out.CodecBlocks++
 			valueBytes := logicalColumnValueBytes(column.Definition.Type, block.Descriptor.RowCount)
+			if column.Definition.Type == ColumnTypeFloat32Vector {
+				valueBytes = block.Descriptor.RowCount * column.Definition.VectorDims * 4
+			}
+			if column.Definition.Type == ColumnTypeAdjacencyList {
+				valueBytes = block.Descriptor.RawBytes
+			}
 			detail.Rows += block.Descriptor.RowCount
 			detail.Blocks++
 			detail.LogicalValueBytes += valueBytes

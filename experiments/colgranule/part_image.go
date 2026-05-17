@@ -379,6 +379,7 @@ func (b *columnPartImageBuilder) addDescriptorSection() error {
 			return err
 		}
 		enc.u32(cardinality)
+		enc.i64(int64(column.VectorDims))
 		enc.u32(uint32(len(column.Blocks)))
 		for i, block := range column.Blocks {
 			if i >= len(partColumn.Blocks) {
@@ -817,6 +818,10 @@ func columnTypeCode(t ColumnType) uint16 {
 		return 2
 	case ColumnTypeBool:
 		return 3
+	case ColumnTypeFloat32Vector:
+		return 4
+	case ColumnTypeAdjacencyList:
+		return 5
 	default:
 		return 0
 	}

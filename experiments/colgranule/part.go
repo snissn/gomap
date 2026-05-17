@@ -21,6 +21,8 @@ const (
 	ColumnTypeInt64              ColumnType = "int64"
 	ColumnTypeLowCardinalityCode ColumnType = "low_cardinality_code"
 	ColumnTypeBool               ColumnType = "bool"
+	ColumnTypeFloat32Vector      ColumnType = "float32_vector"
+	ColumnTypeAdjacencyList      ColumnType = "adjacency_list"
 )
 
 type SortKeyDirection string
@@ -79,12 +81,15 @@ type ColumnDefinition struct {
 	Encoding       Encoding
 	Compression    Compression
 	Cardinality    uint32
+	VectorDims     int
 	CodecBlockRows int
 }
 
 type ColumnBatch struct {
-	Rows    int
-	Columns map[string][]int64
+	Rows           int
+	Columns        map[string][]int64
+	Float32Vectors map[string]Float32VectorColumn
+	AdjacencyLists map[string]AdjacencyListColumn
 }
 
 type ColumnPart struct {
@@ -120,9 +125,10 @@ type GranuleDescriptor struct {
 }
 
 type ColumnPartColumnDescriptor struct {
-	Name   string
-	Type   ColumnType
-	Blocks []ColumnBlockDescriptor
+	Name       string
+	Type       ColumnType
+	VectorDims int
+	Blocks     []ColumnBlockDescriptor
 }
 
 type ColumnBlockDescriptor struct {
@@ -156,12 +162,15 @@ type RowLocator struct {
 }
 
 type ColumnPartBuilder struct {
-	opts     ColumnStoreOptions
-	order    []int
-	values64 []int64
-	codes32  []uint32
-	bools    []bool
-	builder  *GranuleBuilder
+	opts        ColumnStoreOptions
+	order       []int
+	values64    []int64
+	codes32     []uint32
+	bools       []bool
+	vectors32   []float32
+	listOffsets []uint32
+	listValues  []int64
+	builder     *GranuleBuilder
 }
 
 func NewColumnPartBuilder(opts ColumnStoreOptions) (*ColumnPartBuilder, error) {
@@ -257,17 +266,35 @@ func (p *ColumnPart) NewScanner() *ColumnPartScanner {
 }
 
 type ColumnPartScanner struct {
-	part    *ColumnPart
-	reader  GranuleReader
-	values  []int64
-	codes   []uint32
-	bools   []bool
-	scratch []int64
+	part        *ColumnPart
+	reader      GranuleReader
+	values      []int64
+	codes       []uint32
+	bools       []bool
+	scratch     []int64
+	vectors32   []float32
+	listOffsets []uint32
+	listValues  []int64
+	listScratch []int64
 }
 
 type ProjectedScanResult struct {
 	Rows        int
 	Columns     map[string][]int64
+	Diagnostics PartScanDiagnostics
+}
+
+type Float32VectorScanResult struct {
+	Rows        int
+	Dims        int
+	Values      []float32
+	Diagnostics PartScanDiagnostics
+}
+
+type AdjacencyListScanResult struct {
+	Rows        int
+	Offsets     []uint32
+	Values      []int64
 	Diagnostics PartScanDiagnostics
 }
 
@@ -352,6 +379,119 @@ func (s *ColumnPartScanner) ValueAt(locator RowLocator, columnName string) (int6
 	return 0, fmt.Errorf("colgranule: locator row %d outside column %s", locator.PartRow, columnName)
 }
 
+func (s *ColumnPartScanner) Float32VectorAt(locator RowLocator, columnName string, dst []float32) ([]float32, error) {
+	if s.part == nil {
+		return nil, errors.New("colgranule: nil part scanner")
+	}
+	if locator.PartID != s.part.Descriptor.PartID {
+		return nil, fmt.Errorf("colgranule: locator part=%d want %d", locator.PartID, s.part.Descriptor.PartID)
+	}
+	column, ok := s.part.Columns[columnName]
+	if !ok {
+		return nil, fmt.Errorf("colgranule: missing column %s", columnName)
+	}
+	if column.Definition.Type != ColumnTypeFloat32Vector {
+		return nil, fmt.Errorf("colgranule: column %s type=%s is not %s", columnName, column.Definition.Type, ColumnTypeFloat32Vector)
+	}
+	dims := column.Definition.VectorDims
+	for _, block := range column.Blocks {
+		if locator.PartRow < block.Descriptor.FirstRow || locator.PartRow >= block.Descriptor.FirstRow+block.Descriptor.RowCount {
+			continue
+		}
+		row := locator.PartRow - block.Descriptor.FirstRow
+		if block.Granule.Compression == CompressionNone {
+			raw, err := s.reader.decompressPayload(block.Granule)
+			if err != nil {
+				return nil, err
+			}
+			return decodeFloat32VectorRowInto(dst[:0], raw, block.Descriptor.RowCount, dims, row)
+		}
+		values, err := s.reader.DecodeFloat32VectorsInto(s.vectors32[:0], block.Granule, dims)
+		if err != nil {
+			return nil, err
+		}
+		s.vectors32 = values
+		start := row * dims
+		out := ensureFloat32Len(dst[:0], dims)
+		copy(out, values[start:start+dims])
+		return out, nil
+	}
+	return nil, fmt.Errorf("colgranule: locator row %d outside column %s", locator.PartRow, columnName)
+}
+
+func (s *ColumnPartScanner) AdjacencyListAt(locator RowLocator, columnName string, dst []int64) ([]int64, error) {
+	if s.part == nil {
+		return nil, errors.New("colgranule: nil part scanner")
+	}
+	if locator.PartID != s.part.Descriptor.PartID {
+		return nil, fmt.Errorf("colgranule: locator part=%d want %d", locator.PartID, s.part.Descriptor.PartID)
+	}
+	column, ok := s.part.Columns[columnName]
+	if !ok {
+		return nil, fmt.Errorf("colgranule: missing column %s", columnName)
+	}
+	if column.Definition.Type != ColumnTypeAdjacencyList {
+		return nil, fmt.Errorf("colgranule: column %s type=%s is not %s", columnName, column.Definition.Type, ColumnTypeAdjacencyList)
+	}
+	for _, block := range column.Blocks {
+		if locator.PartRow < block.Descriptor.FirstRow || locator.PartRow >= block.Descriptor.FirstRow+block.Descriptor.RowCount {
+			continue
+		}
+		row := locator.PartRow - block.Descriptor.FirstRow
+		if block.Granule.Compression == CompressionNone {
+			raw, err := s.reader.decompressPayload(block.Granule)
+			if err != nil {
+				return nil, err
+			}
+			return decodeInt64AdjacencyListRowInto(dst[:0], raw, block.Descriptor.RowCount, row)
+		}
+		offsets, values, err := s.reader.DecodeInt64AdjacencyListsInto(s.listOffsets[:0], s.listValues[:0], block.Granule)
+		if err != nil {
+			return nil, err
+		}
+		s.listOffsets = offsets
+		s.listValues = values
+		start := int(offsets[row])
+		end := int(offsets[row+1])
+		out := ensureInt64Len(dst[:0], end-start)
+		copy(out, values[start:end])
+		return out, nil
+	}
+	return nil, fmt.Errorf("colgranule: locator row %d outside column %s", locator.PartRow, columnName)
+}
+
+func (s *ColumnPartScanner) ScanFloat32VectorsInto(columnName string, dst []float32) (Float32VectorScanResult, error) {
+	if s.part == nil {
+		return Float32VectorScanResult{}, errors.New("colgranule: nil part scanner")
+	}
+	values, dims, diagnostics, err := s.scanFloat32VectorColumnInto(columnName, dst)
+	if err != nil {
+		return Float32VectorScanResult{}, err
+	}
+	return Float32VectorScanResult{
+		Rows:        s.part.Descriptor.RowCount,
+		Dims:        dims,
+		Values:      values,
+		Diagnostics: diagnostics,
+	}, nil
+}
+
+func (s *ColumnPartScanner) ScanAdjacencyListsInto(columnName string, offsets []uint32, values []int64) (AdjacencyListScanResult, error) {
+	if s.part == nil {
+		return AdjacencyListScanResult{}, errors.New("colgranule: nil part scanner")
+	}
+	outOffsets, outValues, diagnostics, err := s.scanAdjacencyListColumnInto(columnName, offsets, values)
+	if err != nil {
+		return AdjacencyListScanResult{}, err
+	}
+	return AdjacencyListScanResult{
+		Rows:        s.part.Descriptor.RowCount,
+		Offsets:     outOffsets,
+		Values:      outValues,
+		Diagnostics: diagnostics,
+	}, nil
+}
+
 func (s *ColumnPartScanner) scanColumn(name string) ([]int64, PartScanDiagnostics, error) {
 	return s.scanColumnInto(name, nil)
 }
@@ -376,6 +516,85 @@ func (s *ColumnPartScanner) scanColumnInto(name string, dst []int64) ([]int64, P
 		diagnostics.BytesDecoded += block.Granule.RawBytes
 	}
 	return out, diagnostics, nil
+}
+
+func (s *ColumnPartScanner) scanFloat32VectorColumnInto(name string, dst []float32) ([]float32, int, PartScanDiagnostics, error) {
+	column, ok := s.part.Columns[name]
+	if !ok {
+		return nil, 0, PartScanDiagnostics{}, fmt.Errorf("colgranule: missing column %s", name)
+	}
+	if column.Definition.Type != ColumnTypeFloat32Vector {
+		return nil, 0, PartScanDiagnostics{}, fmt.Errorf("colgranule: column %s type=%s is not %s", name, column.Definition.Type, ColumnTypeFloat32Vector)
+	}
+	dims := column.Definition.VectorDims
+	valueCount, err := checkedMulInt(s.part.Descriptor.RowCount, dims, "float32 vector scan values")
+	if err != nil {
+		return nil, 0, PartScanDiagnostics{}, err
+	}
+	out := ensureFloat32Len(dst[:0], valueCount)
+	var diagnostics PartScanDiagnostics
+	for _, block := range column.Blocks {
+		values, err := s.reader.DecodeFloat32VectorsInto(s.vectors32[:0], block.Granule, dims)
+		if err != nil {
+			return nil, 0, diagnostics, err
+		}
+		s.vectors32 = values
+		blockValueCount, err := checkedMulInt(block.Descriptor.RowCount, dims, "float32 vector block values")
+		if err != nil {
+			return nil, 0, diagnostics, err
+		}
+		if len(values) != blockValueCount {
+			return nil, 0, diagnostics, fmt.Errorf("colgranule: block vector values=%d want=%d", len(values), blockValueCount)
+		}
+		start := block.Descriptor.FirstRow * dims
+		copy(out[start:start+blockValueCount], values)
+		diagnostics.BlocksDecoded++
+		diagnostics.BytesDecoded += block.Granule.RawBytes
+	}
+	diagnostics.RowsScanned = s.part.Descriptor.RowCount
+	diagnostics.ColumnsProjected = 1
+	diagnostics.GranulesConsidered = len(s.part.Descriptor.Granules)
+	return out, dims, diagnostics, nil
+}
+
+func (s *ColumnPartScanner) scanAdjacencyListColumnInto(name string, offsetDst []uint32, valueDst []int64) ([]uint32, []int64, PartScanDiagnostics, error) {
+	column, ok := s.part.Columns[name]
+	if !ok {
+		return nil, nil, PartScanDiagnostics{}, fmt.Errorf("colgranule: missing column %s", name)
+	}
+	if column.Definition.Type != ColumnTypeAdjacencyList {
+		return nil, nil, PartScanDiagnostics{}, fmt.Errorf("colgranule: column %s type=%s is not %s", name, column.Definition.Type, ColumnTypeAdjacencyList)
+	}
+	outOffsets := ensureUint32Len(offsetDst[:0], s.part.Descriptor.RowCount+1)
+	clear(outOffsets)
+	outValues := valueDst[:0]
+	var diagnostics PartScanDiagnostics
+	for _, block := range column.Blocks {
+		offsets, values, err := s.reader.DecodeInt64AdjacencyListsInto(s.listOffsets[:0], s.listValues[:0], block.Granule)
+		if err != nil {
+			return nil, nil, diagnostics, err
+		}
+		s.listOffsets = offsets
+		s.listValues = values
+		if len(offsets) != block.Descriptor.RowCount+1 {
+			return nil, nil, diagnostics, fmt.Errorf("colgranule: block adjacency offsets=%d want=%d", len(offsets), block.Descriptor.RowCount+1)
+		}
+		for row := 0; row < block.Descriptor.RowCount; row++ {
+			start := int(offsets[row])
+			end := int(offsets[row+1])
+			outValues = append(outValues, values[start:end]...)
+			if len(outValues) > math.MaxUint32 {
+				return nil, nil, diagnostics, fmt.Errorf("colgranule: adjacency scan values=%d exceed uint32 offsets", len(outValues))
+			}
+			outOffsets[block.Descriptor.FirstRow+row+1] = uint32(len(outValues))
+		}
+		diagnostics.BlocksDecoded++
+		diagnostics.BytesDecoded += block.Granule.RawBytes
+	}
+	diagnostics.RowsScanned = s.part.Descriptor.RowCount
+	diagnostics.ColumnsProjected = 1
+	diagnostics.GranulesConsidered = len(s.part.Descriptor.Granules)
+	return outOffsets, outValues, diagnostics, nil
 }
 
 func (s *ColumnPartScanner) scanColumnRowsInto(name string, dst []int64, rows []int) ([]int64, PartScanDiagnostics, error) {
@@ -519,6 +738,9 @@ func normalizeColumnStoreOptions(opts ColumnStoreOptions) (ColumnStoreOptions, e
 	if _, ok := seen[opts.LogicalPrimaryKey.Columns[0]]; !ok {
 		return ColumnStoreOptions{}, fmt.Errorf("colgranule: logical primary key column %s is not declared", opts.LogicalPrimaryKey.Columns[0])
 	}
+	if columnsByName[opts.LogicalPrimaryKey.Columns[0]].Type != ColumnTypeInt64 {
+		return ColumnStoreOptions{}, fmt.Errorf("colgranule: logical primary key column %s type=%s want %s", opts.LogicalPrimaryKey.Columns[0], columnsByName[opts.LogicalPrimaryKey.Columns[0]].Type, ColumnTypeInt64)
+	}
 	for i := range opts.SortKey.Columns {
 		c := &opts.SortKey.Columns[i]
 		if c.Column == "" {
@@ -526,6 +748,9 @@ func normalizeColumnStoreOptions(opts ColumnStoreOptions) (ColumnStoreOptions, e
 		}
 		if _, ok := seen[c.Column]; !ok {
 			return ColumnStoreOptions{}, fmt.Errorf("colgranule: sort key column %s is not declared", c.Column)
+		}
+		if !columnTypeSupportsOrdering(columnsByName[c.Column].Type) {
+			return ColumnStoreOptions{}, fmt.Errorf("colgranule: sort key column %s type=%s is not orderable", c.Column, columnsByName[c.Column].Type)
 		}
 		if c.Direction == "" {
 			c.Direction = SortKeyAsc
@@ -580,6 +805,18 @@ func normalizeColumnDefinition(def ColumnDefinition, defaultCompression Compress
 		def.Encoding = EncodingLowCardinalityUint32
 	case ColumnTypeBool:
 		def.Encoding = EncodingBoolBitpackRLE
+	case ColumnTypeFloat32Vector:
+		if def.VectorDims <= 0 {
+			return ColumnDefinition{}, fmt.Errorf("colgranule: invalid vector dims %d for %s", def.VectorDims, def.Name)
+		}
+		def.Encoding = EncodingRawFloat32Vector
+		def.Cardinality = 0
+	case ColumnTypeAdjacencyList:
+		if def.VectorDims != 0 {
+			return ColumnDefinition{}, fmt.Errorf("colgranule: adjacency column %s has vector dims %d", def.Name, def.VectorDims)
+		}
+		def.Encoding = EncodingRawInt64AdjacencyList
+		def.Cardinality = 0
 	default:
 		return ColumnDefinition{}, fmt.Errorf("colgranule: unsupported column type %s for %s", def.Type, def.Name)
 	}
@@ -587,26 +824,71 @@ func normalizeColumnDefinition(def ColumnDefinition, defaultCompression Compress
 }
 
 func validateColumnBatch(batch ColumnBatch, defs []ColumnDefinition) (int, error) {
-	if batch.Columns == nil {
+	if batch.Columns == nil && batch.Float32Vectors == nil && batch.AdjacencyLists == nil {
 		return 0, errors.New("colgranule: nil column batch")
 	}
 	rows := batch.Rows
 	for _, def := range defs {
-		values, ok := batch.Columns[def.Name]
-		if !ok {
-			return 0, fmt.Errorf("colgranule: missing column %s", def.Name)
+		columnRows, err := columnBatchRows(batch, def)
+		if err != nil {
+			return 0, err
 		}
 		if rows == 0 {
-			rows = len(values)
+			rows = columnRows
 		}
-		if len(values) != rows {
-			return 0, fmt.Errorf("colgranule: column %s rows=%d want=%d", def.Name, len(values), rows)
+		if columnRows != rows {
+			return 0, fmt.Errorf("colgranule: column %s rows=%d want=%d", def.Name, columnRows, rows)
 		}
 	}
 	if rows <= 0 {
 		return 0, fmt.Errorf("colgranule: invalid part rows %d", rows)
 	}
 	return rows, nil
+}
+
+func columnBatchRows(batch ColumnBatch, def ColumnDefinition) (int, error) {
+	switch def.Type {
+	case ColumnTypeInt64, ColumnTypeLowCardinalityCode, ColumnTypeBool:
+		values, ok := batch.Columns[def.Name]
+		if !ok {
+			return 0, fmt.Errorf("colgranule: missing column %s", def.Name)
+		}
+		return len(values), nil
+	case ColumnTypeFloat32Vector:
+		column, ok := batch.Float32Vectors[def.Name]
+		if !ok {
+			return 0, fmt.Errorf("colgranule: missing float32 vector column %s", def.Name)
+		}
+		if column.Dims != def.VectorDims {
+			return 0, fmt.Errorf("colgranule: vector column %s dims=%d want=%d", def.Name, column.Dims, def.VectorDims)
+		}
+		rows, err := validateFloat32VectorValues(column.Values, column.Dims)
+		if err != nil {
+			return 0, fmt.Errorf("colgranule: vector column %s: %w", def.Name, err)
+		}
+		return rows, nil
+	case ColumnTypeAdjacencyList:
+		column, ok := batch.AdjacencyLists[def.Name]
+		if !ok {
+			return 0, fmt.Errorf("colgranule: missing adjacency-list column %s", def.Name)
+		}
+		rows, err := validateAdjacencyListValues(column.Offsets, column.Values)
+		if err != nil {
+			return 0, fmt.Errorf("colgranule: adjacency-list column %s: %w", def.Name, err)
+		}
+		return rows, nil
+	default:
+		return 0, fmt.Errorf("colgranule: unsupported column type %s for %s", def.Type, def.Name)
+	}
+}
+
+func columnTypeSupportsOrdering(columnType ColumnType) bool {
+	switch columnType {
+	case ColumnTypeInt64, ColumnTypeLowCardinalityCode, ColumnTypeBool:
+		return true
+	default:
+		return false
+	}
 }
 
 func (b *ColumnPartBuilder) sortedOrder(batch ColumnBatch, rows int, pkColumn string) ([]int, error) {
@@ -702,11 +984,10 @@ func (b *ColumnPartBuilder) buildColumn(batch ColumnBatch, def ColumnDefinition)
 		blockRows = b.opts.PartPolicy.RowsPerGranule
 	}
 	column := ColumnPartColumn{Definition: def}
-	descriptor := ColumnPartColumnDescriptor{Name: def.Name, Type: def.Type}
-	sourceValues := batch.Columns[def.Name]
+	descriptor := ColumnPartColumnDescriptor{Name: def.Name, Type: def.Type, VectorDims: def.VectorDims}
 	for start := 0; start < len(b.order); start += blockRows {
 		end := min(start+blockRows, len(b.order))
-		g, err := b.buildColumnBlockGranule(sourceValues, def, start, end)
+		g, err := b.buildColumnBlockGranule(batch, def, start, end)
 		if err != nil {
 			return ColumnPartColumn{}, ColumnPartColumnDescriptor{}, err
 		}
@@ -729,17 +1010,23 @@ func (b *ColumnPartBuilder) buildColumn(batch ColumnBatch, def ColumnDefinition)
 	return column, descriptor, nil
 }
 
-func (b *ColumnPartBuilder) buildColumnBlockGranule(sourceValues []int64, def ColumnDefinition, start int, end int) (EncodedGranule, error) {
-	b.values64 = ensureInt64Len(b.values64[:0], end-start)
-	for row := start; row < end; row++ {
-		b.values64[row-start] = sourceValues[b.order[row]]
-	}
+func (b *ColumnPartBuilder) buildColumnBlockGranule(batch ColumnBatch, def ColumnDefinition, start int, end int) (EncodedGranule, error) {
 	cfg := Config{Encoding: def.Encoding, Compression: def.Compression}
 	b.builder.Reset(cfg)
 	switch def.Type {
 	case ColumnTypeInt64:
+		sourceValues := batch.Columns[def.Name]
+		b.values64 = ensureInt64Len(b.values64[:0], end-start)
+		for row := start; row < end; row++ {
+			b.values64[row-start] = sourceValues[b.order[row]]
+		}
 		return b.builder.BuildInt64(b.values64)
 	case ColumnTypeLowCardinalityCode:
+		sourceValues := batch.Columns[def.Name]
+		b.values64 = ensureInt64Len(b.values64[:0], end-start)
+		for row := start; row < end; row++ {
+			b.values64[row-start] = sourceValues[b.order[row]]
+		}
 		b.codes32 = ensureUint32Len(b.codes32[:0], len(b.values64))
 		for i, v := range b.values64 {
 			if v < 0 || v > math.MaxUint32 {
@@ -749,6 +1036,11 @@ func (b *ColumnPartBuilder) buildColumnBlockGranule(sourceValues []int64, def Co
 		}
 		return b.builder.BuildUint32Codes(b.codes32, def.Cardinality)
 	case ColumnTypeBool:
+		sourceValues := batch.Columns[def.Name]
+		b.values64 = ensureInt64Len(b.values64[:0], end-start)
+		for row := start; row < end; row++ {
+			b.values64[row-start] = sourceValues[b.order[row]]
+		}
 		b.bools = ensureBoolLen(b.bools[:0], len(b.values64))
 		for i, v := range b.values64 {
 			if v != 0 && v != 1 {
@@ -757,9 +1049,47 @@ func (b *ColumnPartBuilder) buildColumnBlockGranule(sourceValues []int64, def Co
 			b.bools[i] = v == 1
 		}
 		return b.builder.BuildBool(b.bools)
+	case ColumnTypeFloat32Vector:
+		return b.buildFloat32VectorBlockGranule(batch.Float32Vectors[def.Name], def, start, end)
+	case ColumnTypeAdjacencyList:
+		return b.buildAdjacencyListBlockGranule(batch.AdjacencyLists[def.Name], start, end)
 	default:
 		return EncodedGranule{}, fmt.Errorf("colgranule: unsupported column type %s", def.Type)
 	}
+}
+
+func (b *ColumnPartBuilder) buildFloat32VectorBlockGranule(source Float32VectorColumn, def ColumnDefinition, start int, end int) (EncodedGranule, error) {
+	rows := end - start
+	valueCount, err := checkedMulInt(rows, def.VectorDims, "float32 vector block values")
+	if err != nil {
+		return EncodedGranule{}, err
+	}
+	b.vectors32 = ensureFloat32Len(b.vectors32[:0], valueCount)
+	for row := start; row < end; row++ {
+		sourceRow := b.order[row]
+		sourceStart := sourceRow * def.VectorDims
+		dstStart := (row - start) * def.VectorDims
+		copy(b.vectors32[dstStart:dstStart+def.VectorDims], source.Values[sourceStart:sourceStart+def.VectorDims])
+	}
+	return b.builder.BuildFloat32Vectors(b.vectors32, def.VectorDims)
+}
+
+func (b *ColumnPartBuilder) buildAdjacencyListBlockGranule(source AdjacencyListColumn, start int, end int) (EncodedGranule, error) {
+	rows := end - start
+	b.listOffsets = ensureUint32Len(b.listOffsets[:0], rows+1)
+	b.listOffsets[0] = 0
+	b.listValues = b.listValues[:0]
+	for row := start; row < end; row++ {
+		sourceRow := b.order[row]
+		sourceStart := int(source.Offsets[sourceRow])
+		sourceEnd := int(source.Offsets[sourceRow+1])
+		b.listValues = append(b.listValues, source.Values[sourceStart:sourceEnd]...)
+		if len(b.listValues) > math.MaxUint32 {
+			return EncodedGranule{}, fmt.Errorf("colgranule: adjacency block values=%d exceed uint32 offsets", len(b.listValues))
+		}
+		b.listOffsets[row-start+1] = uint32(len(b.listValues))
+	}
+	return b.builder.BuildInt64AdjacencyLists(b.listOffsets, b.listValues)
 }
 
 func exclusiveInt64Upper(v int64) int64 {

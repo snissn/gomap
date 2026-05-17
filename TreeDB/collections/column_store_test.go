@@ -190,6 +190,48 @@ func TestColumnStoreMetadataValidation(t *testing.T) {
 			want: "unknown column",
 		},
 		{
+			name: "vector column requires dims",
+			cfg: &ColumnStoreConfig{
+				Enabled: true,
+				Columns: []ColumnStoreColumn{{Name: "embedding", Path: "embedding", ValueType: ColumnStoreValueFloat32Vector}},
+			},
+			want: "vector_dims",
+		},
+		{
+			name: "adjacency column rejects dims",
+			cfg: &ColumnStoreConfig{
+				Enabled: true,
+				Columns: []ColumnStoreColumn{{Name: "neighbors", Path: "neighbors", ValueType: ColumnStoreValueAdjacencyList, VectorDims: 16}},
+			},
+			want: "only float32_vector columns may set vector_dims",
+		},
+		{
+			name: "vector sort key rejected",
+			cfg: &ColumnStoreConfig{
+				Enabled: true,
+				Columns: []ColumnStoreColumn{{Name: "embedding", Path: "embedding", ValueType: ColumnStoreValueFloat32Vector, VectorDims: 128}},
+				SortKey: []ColumnSortKey{{Column: "embedding"}},
+			},
+			want: "not orderable",
+		},
+		{
+			name: "vector aggregate rejected",
+			cfg: &ColumnStoreConfig{
+				Enabled:           true,
+				Columns:           []ColumnStoreColumn{{Name: "embedding", Path: "embedding", ValueType: ColumnStoreValueFloat32Vector, VectorDims: 128}},
+				AggregateMetadata: []ColumnAggregateMetadata{{Name: "min_embedding", Column: "embedding", Kind: ColumnAggregateMin}},
+			},
+			want: "does not support",
+		},
+		{
+			name: "vector dictionary rejected",
+			cfg: &ColumnStoreConfig{
+				Enabled: true,
+				Columns: []ColumnStoreColumn{{Name: "embedding", Path: "embedding", ValueType: ColumnStoreValueFloat32Vector, VectorDims: 128, Dictionary: true}},
+			},
+			want: "dictionary",
+		},
+		{
 			name: "unsupported locator",
 			cfg: &ColumnStoreConfig{
 				Enabled: true,
@@ -219,6 +261,34 @@ func TestColumnStoreMetadataValidation(t *testing.T) {
 				t.Fatalf("normalizeCollectionMeta err=%v want %q", err, tt.want)
 			}
 		})
+	}
+}
+
+func TestColumnStoreVectorMetadataNormalizes(t *testing.T) {
+	cfg := testColumnStoreConfig(nil)
+	cfg.Columns = append(cfg.Columns,
+		ColumnStoreColumn{Name: "embedding", Path: "embedding", ValueType: ColumnStoreValueFloat32Vector, VectorDims: 128},
+		ColumnStoreColumn{Name: "neighbors", Path: "neighbors", ValueType: ColumnStoreValueAdjacencyList},
+	)
+	meta, err := normalizeCollectionMeta(CollectionMeta{Name: "events", Options: CollectionOptions{ColumnStore: cfg}})
+	if err != nil {
+		t.Fatalf("normalizeCollectionMeta: %v", err)
+	}
+	if meta.Options.ColumnStore.SchemaHash == 0 {
+		t.Fatal("schema hash was not populated")
+	}
+
+	changed := testColumnStoreConfig(nil)
+	changed.Columns = append(changed.Columns,
+		ColumnStoreColumn{Name: "embedding", Path: "embedding", ValueType: ColumnStoreValueFloat32Vector, VectorDims: 256},
+		ColumnStoreColumn{Name: "neighbors", Path: "neighbors", ValueType: ColumnStoreValueAdjacencyList},
+	)
+	changedMeta, err := normalizeCollectionMeta(CollectionMeta{Name: "events", Options: CollectionOptions{ColumnStore: changed}})
+	if err != nil {
+		t.Fatalf("normalizeCollectionMeta changed: %v", err)
+	}
+	if changedMeta.Options.ColumnStore.SchemaHash == meta.Options.ColumnStore.SchemaHash {
+		t.Fatalf("schema hash did not include vector dims: %x", meta.Options.ColumnStore.SchemaHash)
 	}
 }
 
