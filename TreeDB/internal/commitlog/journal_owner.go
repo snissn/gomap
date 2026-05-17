@@ -639,6 +639,41 @@ func (j *CommandJournal) AppendRawKVBatchPayloadCommandTrusted(baseAppliedLSN ui
 	return lsn, nil
 }
 
+// AppendRawKVBatchPayloadCommandTrustedAndFlush appends a caller-validated
+// RawKVBatch payload and flushes/syncs the writer while holding the journal
+// lock. If the append succeeds but the flush fails, the allocated LSN is
+// returned with the flush error so callers can preserve the commit-ambiguous
+// command-WAL failure contract.
+func (j *CommandJournal) AppendRawKVBatchPayloadCommandTrustedAndFlush(baseAppliedLSN uint64, payload []byte, sync bool) (uint64, error) {
+	if j == nil {
+		return 0, errors.New("commitlog: command journal is closed")
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.writer == nil || j.owner == nil {
+		return 0, errors.New("commitlog: command journal is closed")
+	}
+	lsn, err := j.reserveLSNLocked()
+	if err != nil {
+		return 0, err
+	}
+	if err := j.writer.AppendRawKVBatchPayloadCommandDirectTrusted(lsn, baseAppliedLSN, payload); err != nil {
+		if rollbackErr := j.owner.rollbackReservedLSN(lsn); rollbackErr != nil {
+			return 0, errors.Join(err, rollbackErr)
+		}
+		return 0, err
+	}
+	if sync {
+		err = j.writer.Sync()
+	} else {
+		err = j.writer.Flush()
+	}
+	if err != nil {
+		return lsn, err
+	}
+	return lsn, nil
+}
+
 func (j *CommandJournal) Path() string {
 	if j == nil {
 		return ""

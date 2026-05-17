@@ -167,7 +167,11 @@ func (tdb *DB) preparePublicCommandWALPendingPublish(sync bool) (uint64, []db.Co
 	if first > current+1 {
 		return 0, nil, fmt.Errorf("%w: pending public command WAL starts at %d after applied %d", db.ErrCommandWALAppliedLSNNonContig, first, current)
 	}
-	if err := tdb.backend.FlushCommandWAL(sync); err != nil {
+	if sync {
+		if err := tdb.backend.FlushCommandWAL(true); err != nil {
+			return 0, nil, err
+		}
+	} else if err := tdb.backend.CheckCommandWALPublishReady(); err != nil {
 		return 0, nil, err
 	}
 	return last, []db.CommandWALLSNRange{{First: current + 1, Last: last}}, nil
@@ -178,27 +182,21 @@ func publicCommandWALPublishSync(durabilityMode string, sync bool) bool {
 }
 
 type commandWALPublicBatch struct {
-	db        *DB
-	inner     Batch
-	setViewer interface {
-		SetView(key, value []byte) error
-	}
-	setViewValidated interface {
-		SetViewValidated(key, value []byte) error
-	}
-	deleteViewer interface {
-		DeleteView(key []byte) error
-	}
-	deleteViewValidated interface {
-		DeleteViewValidated(key []byte) error
-	}
-	payload commitlog.RawKVBatchPayloadBuilder
-	opCount int
-	dirty   bool
-	closed  bool
+	db                *DB
+	inner             Batch
+	innerSetViewFn    func(key, value []byte) error
+	innerDeleteViewFn func(key []byte) error
+	payload           commitlog.RawKVBatchPayloadBuilder
+	payloadOpHint     int
+	payloadByteHint   int
+	opCount           int
+	dirty             bool
+	closed            bool
 }
 
-const commandWALPublicBatchEstimatedKeyValueBytes = 48
+// Seed command payload capacity for moderately sized values. The op hint is
+// bounded, so this avoids repeated grow/copy churn without unbounded retention.
+const commandWALPublicBatchEstimatedKeyValueBytes = 192
 
 func newCommandWALPublicBatch(tdb *DB, inner Batch, opHint int) *commandWALPublicBatch {
 	b := &commandWALPublicBatch{db: tdb, inner: inner}
@@ -209,40 +207,45 @@ func newCommandWALPublicBatch(tdb *DB, inner Batch, opHint int) *commandWALPubli
 	if opHint > 0 && opHint <= int(^uint(0)>>1)/commandWALPublicBatchEstimatedKeyValueBytes {
 		byteHint = opHint * commandWALPublicBatchEstimatedKeyValueBytes
 	}
-	b.payload.ResetWithHint(opHint, byteHint)
+	b.payloadOpHint = opHint
+	b.payloadByteHint = byteHint
+	b.resetPayloadWithHint()
 	return b
+}
+
+func (b *commandWALPublicBatch) resetPayloadWithHint() {
+	if b == nil {
+		return
+	}
+	_ = b.payload.ResetWithHint(b.payloadOpHint, b.payloadByteHint)
 }
 
 func (b *commandWALPublicBatch) rebindInnerViewers() {
 	if b == nil {
 		return
 	}
-	b.setViewer = nil
-	b.setViewValidated = nil
-	b.deleteViewer = nil
-	b.deleteViewValidated = nil
+	b.innerSetViewFn = nil
+	b.innerDeleteViewFn = nil
 	if b.inner == nil {
 		return
 	}
 	if setter, ok := b.inner.(interface {
-		SetView(key, value []byte) error
-	}); ok {
-		b.setViewer = setter
-	}
-	if setter, ok := b.inner.(interface {
 		SetViewValidated(key, value []byte) error
 	}); ok {
-		b.setViewValidated = setter
-	}
-	if deleter, ok := b.inner.(interface {
-		DeleteView(key []byte) error
+		b.innerSetViewFn = setter.SetViewValidated
+	} else if setter, ok := b.inner.(interface {
+		SetView(key, value []byte) error
 	}); ok {
-		b.deleteViewer = deleter
+		b.innerSetViewFn = setter.SetView
 	}
 	if deleter, ok := b.inner.(interface {
 		DeleteViewValidated(key []byte) error
 	}); ok {
-		b.deleteViewValidated = deleter
+		b.innerDeleteViewFn = deleter.DeleteViewValidated
+	} else if deleter, ok := b.inner.(interface {
+		DeleteView(key []byte) error
+	}); ok {
+		b.innerDeleteViewFn = deleter.DeleteView
 	}
 }
 
@@ -290,10 +293,11 @@ func (b *commandWALPublicBatch) SetView(key, value []byte) error {
 		return caching.ErrValueNil
 	}
 	oldLen, oldCount := b.payload.Len(), b.payload.Count()
-	if _, _, err := b.payload.AppendSet(key, value); err != nil {
+	keyView, valueView, err := b.payload.AppendSet(key, value)
+	if err != nil {
 		return err
 	}
-	if err := b.innerSetView(key, value); err != nil {
+	if err := b.innerSetView(keyView, valueView); err != nil {
 		b.payload.Truncate(oldLen, oldCount)
 		return err
 	}
@@ -331,10 +335,11 @@ func (b *commandWALPublicBatch) DeleteView(key []byte) error {
 		return caching.ErrKeyEmpty
 	}
 	oldLen, oldCount := b.payload.Len(), b.payload.Count()
-	if _, err := b.payload.AppendDelete(key); err != nil {
+	keyView, err := b.payload.AppendDelete(key)
+	if err != nil {
 		return err
 	}
-	if err := b.innerDeleteView(key); err != nil {
+	if err := b.innerDeleteView(keyView); err != nil {
 		b.payload.Truncate(oldLen, oldCount)
 		return err
 	}
@@ -344,21 +349,15 @@ func (b *commandWALPublicBatch) DeleteView(key []byte) error {
 }
 
 func (b *commandWALPublicBatch) innerSetView(key, value []byte) error {
-	if b.setViewValidated != nil {
-		return b.setViewValidated.SetViewValidated(key, value)
-	}
-	if b.setViewer != nil {
-		return b.setViewer.SetView(key, value)
+	if b.innerSetViewFn != nil {
+		return b.innerSetViewFn(key, value)
 	}
 	return b.inner.Set(key, value)
 }
 
 func (b *commandWALPublicBatch) innerDeleteView(key []byte) error {
-	if b.deleteViewValidated != nil {
-		return b.deleteViewValidated.DeleteViewValidated(key)
-	}
-	if b.deleteViewer != nil {
-		return b.deleteViewer.DeleteView(key)
+	if b.innerDeleteViewFn != nil {
+		return b.innerDeleteViewFn(key)
 	}
 	return b.inner.Delete(key)
 }
@@ -388,7 +387,7 @@ func (b *commandWALPublicBatch) write(sync bool) error {
 			return err
 		}
 		b.disableInnerStreamingBypass()
-		b.payload.ResetWithHint(0, 0)
+		b.resetPayloadWithHint()
 		b.opCount = 0
 		b.dirty = false
 		return nil
@@ -403,7 +402,7 @@ func (b *commandWALPublicBatch) write(sync bool) error {
 		}
 	}
 	b.disableInnerStreamingBypass()
-	b.payload.ResetWithHint(0, 0)
+	b.resetPayloadWithHint()
 	b.opCount = 0
 	b.dirty = false
 	return nil
@@ -418,11 +417,9 @@ func (b *commandWALPublicBatch) Close() error {
 	// appends and publishes a RawKVBatch command frame.
 	err := b.inner.Close()
 	b.inner = nil
-	b.setViewer = nil
-	b.setViewValidated = nil
-	b.deleteViewer = nil
-	b.deleteViewValidated = nil
-	b.payload.ResetWithHint(0, 0)
+	b.innerSetViewFn = nil
+	b.innerDeleteViewFn = nil
+	b.resetPayloadWithHint()
 	b.dirty = false
 	b.closed = true
 	return err
@@ -435,7 +432,7 @@ func (b *commandWALPublicBatch) Reset() {
 	resetter, ok := b.inner.(interface{ Reset() })
 	if !ok {
 		b.disableInnerStreamingBypass()
-		b.payload.ResetWithHint(0, 0)
+		b.resetPayloadWithHint()
 		b.opCount = 0
 		b.dirty = false
 		b.closed = false
@@ -444,7 +441,7 @@ func (b *commandWALPublicBatch) Reset() {
 	resetter.Reset()
 	b.rebindInnerViewers()
 	b.disableInnerStreamingBypass()
-	b.payload.ResetWithHint(0, 0)
+	b.resetPayloadWithHint()
 	b.opCount = 0
 	b.dirty = false
 	b.closed = false

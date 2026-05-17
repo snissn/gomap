@@ -112,10 +112,13 @@ func (w *rotateFailCommitWriter) AppendBatch(records []logRecord) error {
 	return errors.New("test: unexpected AppendBatch call")
 }
 func (w *rotateFailCommitWriter) RotateTo(path string) error { return errRotateFailed }
-func (w *rotateFailCommitWriter) Size() int64                { return w.size }
-func (w *rotateFailCommitWriter) Flush() error               { return nil }
-func (w *rotateFailCommitWriter) Sync() error                { return nil }
-func (w *rotateFailCommitWriter) Close() error               { return nil }
+func (w *rotateFailCommitWriter) RotateToWithSync(path string, syncCurrent bool) error {
+	return errRotateFailed
+}
+func (w *rotateFailCommitWriter) Size() int64  { return w.size }
+func (w *rotateFailCommitWriter) Flush() error { return nil }
+func (w *rotateFailCommitWriter) Sync() error  { return nil }
+func (w *rotateFailCommitWriter) Close() error { return nil }
 
 func TestAppendValueLog_ReloadWriterAfterRotation(t *testing.T) {
 	t.Parallel()

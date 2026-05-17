@@ -668,8 +668,71 @@ func TestPublicCommandWALBatchResetFallbackKeepsWrapperUsable(t *testing.T) {
 	}
 }
 
+func TestPublicCommandWALBatchResetPreservesCompactZeroScanFallback(t *testing.T) {
+	wrapped := newCommandWALPublicBatch(nil, &commandWALResetBatch{}, 8000)
+	zeroValue := make([]byte, 128)
+	key := []byte("k")
+
+	if err := wrapped.SetView(key, zeroValue); err != nil {
+		t.Fatalf("SetView before reset: %v", err)
+	}
+	payload, err := wrapped.commandWALPayload()
+	if err != nil {
+		t.Fatalf("commandWALPayload before reset: %v", err)
+	}
+	if len(payload) >= 6+9+len(key)+len(zeroValue) {
+		t.Fatalf("commandWALPayload before reset len=%d, want compact zero payload below expanded size", len(payload))
+	}
+	visits := 0
+	if err := commitlog.ScanRawKVBatchPayload(payload, func(op commitlog.RawKVOp, gotKey, gotValue []byte) error {
+		visits++
+		if op != commitlog.RawKVOpSet || string(gotKey) != string(key) || len(gotValue) != len(zeroValue) {
+			t.Fatalf("scan before reset op=%v key=%q value_len=%d", op, gotKey, len(gotValue))
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("scan before reset: %v", err)
+	}
+	if visits != 1 {
+		t.Fatalf("scan visits before reset=%d, want 1", visits)
+	}
+
+	wrapped.Reset()
+	if err := wrapped.SetView(key, zeroValue); err != nil {
+		t.Fatalf("SetView after reset: %v", err)
+	}
+	payload, err = wrapped.commandWALPayload()
+	if err != nil {
+		t.Fatalf("commandWALPayload after reset: %v", err)
+	}
+	if len(payload) >= 6+9+len(key)+len(zeroValue) {
+		t.Fatalf("commandWALPayload after reset len=%d, want compact zero payload below expanded size", len(payload))
+	}
+	visits = 0
+	if err := commitlog.ScanRawKVBatchPayload(payload, func(op commitlog.RawKVOp, gotKey, gotValue []byte) error {
+		visits++
+		if op != commitlog.RawKVOpSet || string(gotKey) != string(key) || len(gotValue) != len(zeroValue) {
+			t.Fatalf("scan after reset op=%v key=%q value_len=%d", op, gotKey, len(gotValue))
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("scan after reset: %v", err)
+	}
+	if visits != 1 {
+		t.Fatalf("scan visits after reset=%d, want 1", visits)
+	}
+}
+
 type commandWALNoResetBatch struct {
 	entries []batch.Entry
+}
+
+type commandWALResetBatch struct {
+	commandWALNoResetBatch
+}
+
+func (b *commandWALResetBatch) Reset() {
+	b.entries = b.entries[:0]
 }
 
 func (b *commandWALNoResetBatch) Set(key, value []byte) error {

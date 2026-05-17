@@ -19,6 +19,7 @@ type commitWriter interface {
 	Append(record commitlog.Record) error
 	AppendBatch(records []commitlog.Record) error
 	RotateTo(path string) error
+	RotateToWithSync(path string, syncCurrent bool) error
 	Size() int64
 	Flush() error
 	Sync() error
