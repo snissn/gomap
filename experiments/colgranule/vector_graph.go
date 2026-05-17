@@ -450,7 +450,15 @@ func (g *ColumnVectorGraph) cosineDistance(query []float32, queryInvNorm float32
 	if !columnVectorGraphFinite(dot) {
 		return columnVectorGraphCosineDistanceWide(query, vector, queryInvNorm, g.invNorms[ordinal])
 	}
-	return 1 - dot*queryInvNorm*g.invNorms[ordinal]
+	cosine := dot * queryInvNorm * g.invNorms[ordinal]
+	if !columnVectorGraphFinite(cosine) {
+		return columnVectorGraphCosineDistanceWide(query, vector, queryInvNorm, g.invNorms[ordinal])
+	}
+	distance := 1 - cosine
+	if !columnVectorGraphFinite(distance) {
+		return columnVectorGraphCosineDistanceWide(query, vector, queryInvNorm, g.invNorms[ordinal])
+	}
+	return distance
 }
 
 func columnVectorGraphCosineDistanceWide(query []float32, vector []float32, queryInvNorm float32, vectorInvNorm float32) float32 {
