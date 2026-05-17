@@ -33,8 +33,8 @@ func TestCanPiggybackCommandWALCheckpointPublishSingleLaneCombinedQueue(t *testi
 
 	db.queueLaneIDs = []uint16{0, 0}
 	db.flushBackendMaxEntries = 1
-	if db.canPiggybackCommandWALCheckpointPublish(true) {
-		t.Fatal("expected chunked checkpoint queue to skip command WAL publish piggyback")
+	if !db.canPiggybackCommandWALCheckpointPublish(true) {
+		t.Fatal("expected chunked checkpoint queue to piggyback command WAL publish on the final sync batch")
 	}
 }
 
