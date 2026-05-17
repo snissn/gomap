@@ -2251,6 +2251,30 @@ func TestServerVectorIndexMetadataExtension(t *testing.T) {
 		t.Fatalf("encoding=%q ok=%v want float32", got, ok)
 	}
 
+	doubleOptionsResponse := serveCommand(t, server, 231021, bson.D{
+		{Key: "createIndexes", Value: "users_double_vector_options"},
+		{Key: "indexes", Value: bson.A{bson.D{
+			{Key: "key", Value: bson.D{{Key: "embedding", Value: "vector"}}},
+			{Key: "name", Value: "embedding_vector"},
+			{Key: "treedbIndexType", Value: "vector"},
+			{Key: "treedbVector", Value: bson.D{
+				{Key: "dimensions", Value: float64(64)},
+				{Key: "m", Value: float64(16)},
+				{Key: "efConstruction", Value: float64(128)},
+				{Key: "efSearch", Value: float64(64)},
+			}},
+		}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertOK(t, doubleOptionsResponse)
+	doubleOptionsCol, err := server.Collections.OpenCollection("app.users_double_vector_options")
+	if err != nil {
+		t.Fatalf("open double-options collection: %v", err)
+	}
+	if got := doubleOptionsCol.Meta().VectorIndexes[0]; got.Dimensions != 64 || got.M != 16 || got.EfConstruction != 128 || got.EfSearch != 64 {
+		t.Fatalf("double vector options stored=%+v", got)
+	}
+
 	replayResponse := serveCommand(t, server, 23103, bson.D{
 		{Key: "createIndexes", Value: "users"},
 		{Key: "indexes", Value: bson.A{indexBatch[2]}},
@@ -2331,6 +2355,66 @@ func TestServerVectorIndexMetadataExtension(t *testing.T) {
 		t.Fatalf("index batch after drop all len=%d want %d", got, want)
 	}
 	assertIndexName(t, afterDropAll[0], "_id_")
+}
+
+func TestServerCreateIndexesConflictingExistingVectorDoesNotCreateScalar(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	vectorIndex := bson.D{
+		{Key: "key", Value: bson.D{{Key: "embedding", Value: "vector"}}},
+		{Key: "name", Value: "embedding_vector"},
+		{Key: "treedbIndexType", Value: "vector"},
+		{Key: "treedbVector", Value: bson.D{
+			{Key: "dimensions", Value: int32(64)},
+			{Key: "metric", Value: "cosine"},
+		}},
+	}
+	assertOK(t, serveCommand(t, server, 23114, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{vectorIndex}},
+		{Key: "$db", Value: "app"},
+	}))
+
+	conflictingVector := bson.D{
+		{Key: "key", Value: bson.D{{Key: "embedding", Value: "vector"}}},
+		{Key: "name", Value: "embedding_vector"},
+		{Key: "treedbIndexType", Value: "vector"},
+		{Key: "treedbVector", Value: bson.D{
+			{Key: "dimensions", Value: int32(32)},
+			{Key: "metric", Value: "cosine"},
+		}},
+	}
+	response := serveCommand(t, server, 23115, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{
+			bson.D{
+				{Key: "key", Value: bson.D{{Key: "city", Value: int32(1)}}},
+				{Key: "name", Value: "city_1"},
+				{Key: "treedbValueType", Value: "string"},
+			},
+			conflictingVector,
+		}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, response, "BadValue")
+
+	col, err := server.Collections.OpenCollection("app.users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, ok := findIndexDefinition(col.Meta().Indexes, "city_1"); ok {
+		t.Fatalf("conflicting vector request created scalar index: %+v", col.Meta().Indexes)
+	}
+	stored, ok := findVectorIndexDefinition(col.Meta().VectorIndexes, "embedding_vector")
+	if !ok || stored.Dimensions != 64 {
+		t.Fatalf("vector index changed after conflicting request: %+v ok=%v", stored, ok)
+	}
 }
 
 func TestServerCreateCollectionCommand(t *testing.T) {
@@ -2685,6 +2769,24 @@ func TestServerIndexMetadataRejectsInvalidCommands(t *testing.T) {
 	errmsg, ok = bson.Raw(missingVectorOptions).Lookup("errmsg").StringValueOK()
 	if !ok || !strings.Contains(errmsg, "treedbVector") {
 		t.Fatalf("missing vector options errmsg=%q ok=%v want treedbVector", errmsg, ok)
+	}
+
+	fractionalVectorOption := serveCommand(t, server, 233221, bson.D{
+		{Key: "createIndexes", Value: "users_fractional_vector_option"},
+		{Key: "indexes", Value: bson.A{bson.D{
+			{Key: "key", Value: bson.D{{Key: "embedding", Value: "vector"}}},
+			{Key: "name", Value: "embedding_vector"},
+			{Key: "treedbIndexType", Value: "vector"},
+			{Key: "treedbVector", Value: bson.D{{Key: "dimensions", Value: float64(64.5)}}},
+		}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, fractionalVectorOption, "BadValue")
+	errmsg, ok = bson.Raw(fractionalVectorOption).Lookup("errmsg").StringValueOK()
+	for _, want := range []string{"dimensions", "integer"} {
+		if !ok || !strings.Contains(errmsg, want) {
+			t.Fatalf("fractional vector option errmsg=%q ok=%v want %q", errmsg, ok, want)
+		}
 	}
 
 	unsupportedVectorMetric := serveCommand(t, server, 23323, bson.D{

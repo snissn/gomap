@@ -47,6 +47,8 @@ const (
 	vectorIndexFallbackInvalidManifest            = "invalid_manifest"
 )
 
+var errVectorIndexStaleRuntime = errors.New("collections: vector index runtime handle is stale")
+
 // VectorIndexEncoding selects the process-local ANN vector copy format. The
 // collection row remains canonical and exact reranking always reads the full
 // precision vector from TreeDB.
@@ -400,6 +402,26 @@ func (c *Collection) isRegisteredVectorIndex(index *VectorIndex) bool {
 	c.vectorIndexesMu.RLock()
 	defer c.vectorIndexesMu.RUnlock()
 	return c.vectorIndexes[index.name] == index
+}
+
+func (c *Collection) vectorIndexRuntimeIsStale(index *VectorIndex) bool {
+	if c == nil || index == nil {
+		return false
+	}
+	c.vectorIndexesMu.RLock()
+	registered := c.vectorIndexes[index.name]
+	c.vectorIndexesMu.RUnlock()
+	if registered == index {
+		return false
+	}
+	if registered != nil {
+		return true
+	}
+	if index.isNativePersistent() || collectionMetaDeclaresVectorIndex(c.meta, index.name) {
+		return true
+	}
+	declared, err := c.refreshVectorIndexDeclaration(index.name)
+	return err == nil && declared
 }
 
 // UnregisterVectorIndex detaches a registered in-memory vector index.
@@ -2126,6 +2148,9 @@ func (idx *VectorIndex) Rebuild() error {
 	}
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()
+	if c.vectorIndexRuntimeIsStale(idx) {
+		return fmt.Errorf("%w: %q", errVectorIndexStaleRuntime, idx.name)
+	}
 	start := time.Now()
 	rebuilt, err := c.buildVectorIndex(VectorIndexOptions{
 		Name:                idx.name,

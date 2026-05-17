@@ -1981,6 +1981,74 @@ func TestCollectionVectorIndexNativeRootRebuildAPIPersistsCleanGraph(t *testing.
 	requireVectorResultIDs(t, results, "b", "c")
 }
 
+func TestCollectionVectorIndexNativeRootRebuildUsesCurrentRootForStaleHandle(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	staleCol, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open stale collection handle: %v", err)
+	}
+	freshCol, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open fresh collection handle: %v", err)
+	}
+	def := VectorIndexDefinition{
+		Name:       "embedding",
+		Field:      "embedding",
+		Metric:     VectorMetricCosine,
+		Dimensions: 2,
+		M:          4,
+	}
+	if _, err := freshCol.InsertBatch(
+		[][]byte{[]byte("a"), []byte("b")},
+		[][]byte{
+			[]byte(`{"embedding":[1,0]}`),
+			[]byte(`{"embedding":[0,1]}`),
+		},
+	); err != nil {
+		t.Fatalf("insert seed vectors: %v", err)
+	}
+	if _, err := freshCol.CreateVectorIndex(def); err != nil {
+		t.Fatalf("create vector index metadata: %v", err)
+	}
+	freshIndex, err := freshCol.BuildVectorIndex(vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		t.Fatalf("build fresh vector index: %v", err)
+	}
+	freshStatus, err := freshIndex.SaveSnapshot()
+	if err != nil {
+		t.Fatalf("save fresh vector root: %v", err)
+	}
+	if !freshStatus.Loaded || freshStatus.RootID == 0 {
+		t.Fatalf("fresh save status=%+v", freshStatus)
+	}
+	if len(staleCol.Meta().VectorIndexes) != 0 {
+		t.Fatalf("stale handle unexpectedly saw vector metadata: %+v", staleCol.Meta())
+	}
+
+	rebuild, err := staleCol.RebuildVectorIndex(def.Name)
+	if err != nil {
+		t.Fatalf("rebuild through stale handle: %v", err)
+	}
+	if !rebuild.NativeRootLoaded || rebuild.RootID == 0 || rebuild.Stats.LiveDocs != 2 || rebuild.RebuildNeeded {
+		t.Fatalf("unexpected stale-handle rebuild status: %+v", rebuild)
+	}
+	loaded, loadStatus, err := freshCol.LoadVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		t.Fatalf("load rebuilt root: %v", err)
+	}
+	if loaded == nil || !loadStatus.Loaded || loadStatus.RootID != rebuild.RootID {
+		t.Fatalf("load status=%+v loaded=%v rebuild=%+v", loadStatus, loaded != nil, rebuild)
+	}
+}
+
 func TestCollectionVectorIndexNativeRootRebuildIgnoresStaleRuntimeSave(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -2046,6 +2114,64 @@ func TestCollectionVectorIndexNativeRootRebuildIgnoresStaleRuntimeSave(t *testin
 	}
 	if status.RootID != rebuild.RootID || status.Stats.DeletedDocs != 0 || status.Stats.LiveDocs != 2 {
 		t.Fatalf("status after stale save=%+v rebuild=%+v, want rebuilt root unchanged", status, rebuild)
+	}
+}
+
+func TestCollectionVectorIndexNativeRootRebuildRejectsStaleRuntime(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	def := VectorIndexDefinition{
+		Name:       "embedding",
+		Field:      "embedding",
+		Metric:     VectorMetricCosine,
+		Dimensions: 2,
+		M:          4,
+	}
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("a"), []byte("b"), []byte("c")},
+		[][]byte{
+			[]byte(`{"embedding":[1,0]}`),
+			[]byte(`{"embedding":[0.9,0.1]}`),
+			[]byte(`{"embedding":[0,1]}`),
+		},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	stale, err := col.BuildVectorIndex(vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		t.Fatalf("build vector index: %v", err)
+	}
+	rebuild, err := col.RebuildVectorIndex("embedding")
+	if err != nil {
+		t.Fatalf("rebuild vector index: %v", err)
+	}
+	if current := col.registeredVectorIndex(def.Name); current == nil || current == stale {
+		t.Fatalf("rebuild did not replace stale runtime current=%p stale=%p", current, stale)
+	}
+
+	if err := stale.Rebuild(); !errors.Is(err, errVectorIndexStaleRuntime) {
+		t.Fatalf("stale runtime rebuild err=%v want stale runtime", err)
+	}
+	if current := col.registeredVectorIndex(def.Name); current == stale {
+		t.Fatal("stale runtime re-registered itself after failed rebuild")
+	}
+	status, err := col.VectorIndexStatus(def.Name)
+	if err != nil {
+		t.Fatalf("status after stale rebuild: %v", err)
+	}
+	if status.RootID != rebuild.RootID || status.Stats.LiveDocs != rebuild.Stats.LiveDocs || status.Stats.DeletedDocs != rebuild.Stats.DeletedDocs {
+		t.Fatalf("stale rebuild changed status=%+v rebuild=%+v", status, rebuild)
 	}
 }
 
