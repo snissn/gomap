@@ -12,8 +12,6 @@ github.com/ic-timon/da-hvri v0.6.0 h1:7rtbrTsu5hNJy4q6KTAVd7JB20Ttwb4VSIgumSh3WU
 github.com/ic-timon/da-hvri v0.6.0/go.mod h1:BGU2TcwaO6r3IoPQwC957fxrm9zrPAzzCziaq7KClig=
 github.com/klauspost/cpuid/v2 v2.3.0 h1:S4CRMLnYUhGeDFDqkGriYKdfoFlDnMtqTiI/sFzhA9Y=
 github.com/klauspost/cpuid/v2 v2.3.0/go.mod h1:hqwkgyIinND0mEev00jJYCxPNVRVXFQeu1XKlok6oO0=
-github.com/mycophonic/primordium v0.5.0 h1:C+rN/X1zQLhuAPnX6drDJLDfxUu2cIRzLsP8FQFH9Vg=
-github.com/mycophonic/primordium v0.5.0/go.mod h1:pMPa9FlDW77Pv06xTOIri1kbfaW3quN7czr9CYT01xc=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
 github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu7U=

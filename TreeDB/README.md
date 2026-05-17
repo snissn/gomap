@@ -170,6 +170,10 @@ TREEDB_VECTOR_BENCH_DOCS=1000 TREEDB_VECTOR_BENCH_DIMS=32 \
   -benchtime=1x -count=1
 ```
 
+Optional NumKong dot-product kernel: build with `-tags numkong` on hosts where
+cgo and NumKong are available. Default builds, including cgo-enabled builds,
+use the pure-Go kernel.
+
 External comparison benchmark with local USearch bootstrap:
 
 ```sh
