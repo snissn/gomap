@@ -602,9 +602,13 @@ func execute(ctx context.Context, cfg config) (result, error) {
 		_ = cleanupBackend()
 		return result{}, errors.New("compacted storage has zero leaf_vlog bytes")
 	}
+	mgr = nil
+	col = nil
 	if err := cleanupBackend(); err != nil {
 		return result{}, err
 	}
+	cleanupBackend = nil
+	d = nil
 
 	reopenStart := time.Now()
 	d, cleanupBackend, err = openDemoBackend(cfg, dir)
