@@ -436,7 +436,24 @@ func (g *ColumnVectorGraph) cosineDistance(query []float32, queryInvNorm float32
 	start := ordinal * g.dims
 	vector := g.vectors[start : start+g.dims]
 	dot := columnVectorGraphDotProductFloat32(query, vector)
+	if !columnVectorGraphFinite(dot) {
+		return columnVectorGraphCosineDistanceWide(query, vector, queryInvNorm, g.invNorms[ordinal])
+	}
 	return 1 - dot*queryInvNorm*g.invNorms[ordinal]
+}
+
+func columnVectorGraphCosineDistanceWide(query []float32, vector []float32, queryInvNorm float32, vectorInvNorm float32) float32 {
+	var cosine float64
+	queryScale := float64(queryInvNorm)
+	vectorScale := float64(vectorInvNorm)
+	for i := range query {
+		cosine += float64(query[i]) * queryScale * float64(vector[i]) * vectorScale
+	}
+	distance := 1 - cosine
+	if math.IsNaN(distance) || math.IsInf(distance, 0) {
+		return float32(math.Inf(1))
+	}
+	return float32(distance)
 }
 
 func (scratch *ColumnVectorGraphSearchScratch) nextVisitedEpoch(nodes int) ([]uint32, uint32) {
