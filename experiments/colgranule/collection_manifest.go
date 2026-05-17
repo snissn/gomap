@@ -55,44 +55,9 @@ type ColumnPartSetManifest struct {
 }
 
 type ColumnManifestPartRef struct {
-	Role         ColumnPartRole               `json:"role"`
-	GenerationID uint64                       `json:"generation_id"`
-	Coverage     ColumnPartCoverageDescriptor `json:"coverage"`
-	Part         ColumnWorkspacePartManifest  `json:"part"`
-}
-
-type ColumnPartCoverageDescriptor struct {
-	Role                    ColumnPartRole               `json:"role"`
-	GenerationID            uint64                       `json:"generation_id"`
-	CompactionLevel         uint8                        `json:"compaction_level,omitempty"`
-	SourceParts             []ColumnSourcePartGeneration `json:"source_parts,omitempty"`
-	SourceRowRootGeneration uint64                       `json:"source_row_root_generation,omitempty"`
-	SourceRowVersionLower   uint64                       `json:"source_row_version_lower,omitempty"`
-	SourceRowVersionUpper   uint64                       `json:"source_row_version_upper_exclusive,omitempty"`
-	PrimaryIDLower          int64                        `json:"primary_id_lower"`
-	PrimaryIDUpperExclusive int64                        `json:"primary_id_upper_exclusive"`
-	SortKeyColumns          []string                     `json:"sort_key_columns,omitempty"`
-	SortKeyLower            []int64                      `json:"sort_key_lower,omitempty"`
-	SortKeyUpperExclusive   []int64                      `json:"sort_key_upper_exclusive,omitempty"`
-	SortKeyUpperUnbounded   bool                         `json:"sort_key_upper_unbounded,omitempty"`
-	Rows                    int                          `json:"rows"`
-	VisibleRows             int                          `json:"visible_rows"`
-	DeletedRows             int                          `json:"deleted_rows,omitempty"`
-	AssetRefs               []ColumnAssetRef             `json:"asset_refs"`
-	Checksums               []uint32                     `json:"checksums"`
-}
-
-type ColumnSourcePartGeneration struct {
-	PartID       uint64 `json:"part_id"`
-	GenerationID uint64 `json:"generation_id"`
-}
-
-type ColumnPartCoverageOptions struct {
-	SourceParts             []ColumnSourcePartGeneration
-	CompactionLevel         uint8
-	SourceRowRootGeneration uint64
-	SourceRowVersionLower   uint64
-	SourceRowVersionUpper   uint64
+	Role         ColumnPartRole              `json:"role"`
+	GenerationID uint64                      `json:"generation_id"`
+	Part         ColumnWorkspacePartManifest `json:"part"`
 }
 
 type ColumnTombstone struct {
@@ -125,23 +90,7 @@ type columnCollectionManifestEnvelope struct {
 }
 
 func NewColumnManifestPartRef(role ColumnPartRole, generationID uint64, part ColumnWorkspacePartManifest) ColumnManifestPartRef {
-	return NewColumnManifestPartRefWithCoverage(role, generationID, part, nil, 0)
-}
-
-func NewColumnManifestPartRefWithCoverage(role ColumnPartRole, generationID uint64, part ColumnWorkspacePartManifest, sourceParts []ColumnSourcePartGeneration, compactionLevel uint8) ColumnManifestPartRef {
-	return NewColumnManifestPartRefWithCoverageOptions(role, generationID, part, ColumnPartCoverageOptions{
-		SourceParts:     sourceParts,
-		CompactionLevel: compactionLevel,
-	})
-}
-
-func NewColumnManifestPartRefWithCoverageOptions(role ColumnPartRole, generationID uint64, part ColumnWorkspacePartManifest, opts ColumnPartCoverageOptions) ColumnManifestPartRef {
-	return ColumnManifestPartRef{
-		Role:         role,
-		GenerationID: generationID,
-		Coverage:     columnPartCoverageDescriptor(role, generationID, part, opts),
-		Part:         part,
-	}
+	return ColumnManifestPartRef{Role: role, GenerationID: generationID, Part: part}
 }
 
 func NewColumnCollectionManifest(collection string, opts ColumnStoreOptions, baseParts []ColumnManifestPartRef, deltaParts []ColumnManifestPartRef, tombstones []ColumnTombstone) (ColumnCollectionManifest, error) {
@@ -204,7 +153,7 @@ func (w *ColumnWorkspace) SaveCollectionManifest(manifest ColumnCollectionManife
 	if err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(w.namespace.TempDir, ".column-collection-manifest-*.tmp")
+	tmp, err := os.CreateTemp(w.dir, ".column-collection-manifest-*.tmp")
 	if err != nil {
 		return err
 	}
@@ -293,7 +242,7 @@ func (w *ColumnWorkspace) collectionManifestPath() string {
 	if w == nil {
 		return ""
 	}
-	return filepath.Join(w.namespace.ManifestDir, columnCollectionManifestFile)
+	return filepath.Join(w.dir, columnCollectionManifestFile)
 }
 
 func (w *ColumnWorkspace) validateCollectionManifestPartRefs(manifest ColumnCollectionManifest) error {
@@ -390,9 +339,6 @@ func validateColumnCollectionManifest(manifest ColumnCollectionManifest) error {
 }
 
 func validateColumnManifestPartRef(ref ColumnManifestPartRef, role ColumnPartRole) error {
-	if err := validateColumnPartRole(role); err != nil {
-		return err
-	}
 	if ref.Role != role {
 		return fmt.Errorf("colgranule: collection manifest part %d role=%s want %s", ref.Part.PartID, ref.Role, role)
 	}
@@ -401,89 +347,6 @@ func validateColumnManifestPartRef(ref ColumnManifestPartRef, role ColumnPartRol
 	}
 	if err := validateColumnWorkspacePartManifest(ref.Part); err != nil {
 		return fmt.Errorf("colgranule: collection manifest part %d invalid: %w", ref.Part.PartID, err)
-	}
-	if err := validateColumnPartCoverageDescriptor(ref.Coverage, ref.Role, ref.GenerationID, ref.Part); err != nil {
-		return fmt.Errorf("colgranule: collection manifest part %d coverage invalid: %w", ref.Part.PartID, err)
-	}
-	return nil
-}
-
-func validateColumnPartRole(role ColumnPartRole) error {
-	switch role {
-	case ColumnPartRoleBase, ColumnPartRoleDelta:
-		return nil
-	default:
-		return fmt.Errorf("colgranule: unsupported collection manifest part role %s", role)
-	}
-}
-
-func columnPartCoverageDescriptor(role ColumnPartRole, generationID uint64, part ColumnWorkspacePartManifest, opts ColumnPartCoverageOptions) ColumnPartCoverageDescriptor {
-	coverage := ColumnPartCoverageDescriptor{
-		Role:                    role,
-		GenerationID:            generationID,
-		CompactionLevel:         opts.CompactionLevel,
-		SourceParts:             append([]ColumnSourcePartGeneration(nil), opts.SourceParts...),
-		SourceRowRootGeneration: opts.SourceRowRootGeneration,
-		SourceRowVersionLower:   opts.SourceRowVersionLower,
-		SourceRowVersionUpper:   opts.SourceRowVersionUpper,
-		PrimaryIDLower:          part.Coverage.PrimaryIDLower,
-		PrimaryIDUpperExclusive: part.Coverage.PrimaryIDUpperExclusive,
-		SortKeyColumns:          append([]string(nil), part.Coverage.SortKeyColumns...),
-		SortKeyLower:            append([]int64(nil), part.Coverage.SortKeyLower...),
-		SortKeyUpperExclusive:   append([]int64(nil), part.Coverage.SortKeyUpperExclusive...),
-		SortKeyUpperUnbounded:   part.Coverage.SortKeyUpperUnbounded,
-		Rows:                    part.Rows,
-		VisibleRows:             part.VisibleRows,
-		DeletedRows:             part.Rows - part.VisibleRows,
-		AssetRefs:               []ColumnAssetRef{part.AssetRef},
-		Checksums:               []uint32{part.AssetRef.Checksum},
-	}
-	if len(coverage.SortKeyColumns) == 0 && len(part.SortKey) != 0 {
-		for _, sortKey := range part.SortKey {
-			coverage.SortKeyColumns = append(coverage.SortKeyColumns, sortKey.Column)
-		}
-	}
-	return coverage
-}
-
-func validateColumnPartCoverageDescriptor(coverage ColumnPartCoverageDescriptor, role ColumnPartRole, generationID uint64, part ColumnWorkspacePartManifest) error {
-	if coverage.Role != role {
-		return fmt.Errorf("role=%s want %s", coverage.Role, role)
-	}
-	if coverage.GenerationID != generationID {
-		return fmt.Errorf("generation=%d want %d", coverage.GenerationID, generationID)
-	}
-	if coverage.SourceRowVersionUpper != 0 && coverage.SourceRowVersionLower >= coverage.SourceRowVersionUpper {
-		return fmt.Errorf("source row version lower=%d upper=%d", coverage.SourceRowVersionLower, coverage.SourceRowVersionUpper)
-	}
-	if coverage.SourceRowVersionLower != 0 && coverage.SourceRowVersionUpper == 0 {
-		return fmt.Errorf("source row version lower=%d without upper bound", coverage.SourceRowVersionLower)
-	}
-	if coverage.SourceRowRootGeneration == 0 && (coverage.SourceRowVersionLower != 0 || coverage.SourceRowVersionUpper != 0) {
-		return fmt.Errorf("source row versions require source row root generation")
-	}
-	if coverage.Rows != part.Rows || coverage.VisibleRows != part.VisibleRows || coverage.DeletedRows != part.Rows-part.VisibleRows {
-		return fmt.Errorf("rows/visible/deleted=(%d,%d,%d) want (%d,%d,%d)", coverage.Rows, coverage.VisibleRows, coverage.DeletedRows, part.Rows, part.VisibleRows, part.Rows-part.VisibleRows)
-	}
-	if len(coverage.SortKeyColumns) != len(part.SortKey) {
-		return fmt.Errorf("sort key columns=%d want %d", len(coverage.SortKeyColumns), len(part.SortKey))
-	}
-	for i, sortKey := range part.SortKey {
-		if coverage.SortKeyColumns[i] != sortKey.Column {
-			return fmt.Errorf("sort key column %d=%s want %s", i, coverage.SortKeyColumns[i], sortKey.Column)
-		}
-	}
-	if len(coverage.SortKeyLower) != 0 && len(coverage.SortKeyLower) != len(part.SortKey) {
-		return fmt.Errorf("sort key lower width=%d want %d", len(coverage.SortKeyLower), len(part.SortKey))
-	}
-	if len(coverage.SortKeyUpperExclusive) != 0 && len(coverage.SortKeyUpperExclusive) != len(part.SortKey) {
-		return fmt.Errorf("sort key upper width=%d want %d", len(coverage.SortKeyUpperExclusive), len(part.SortKey))
-	}
-	if len(coverage.AssetRefs) != 1 || coverage.AssetRefs[0] != part.AssetRef {
-		return fmt.Errorf("asset refs=%+v want [%+v]", coverage.AssetRefs, part.AssetRef)
-	}
-	if len(coverage.Checksums) != 1 || coverage.Checksums[0] != part.AssetRef.Checksum {
-		return fmt.Errorf("checksums=%+v want [%08x]", coverage.Checksums, part.AssetRef.Checksum)
 	}
 	return nil
 }
@@ -540,18 +403,6 @@ func cloneColumnManifestPartRefs(refs []ColumnManifestPartRef) []ColumnManifestP
 	out := append([]ColumnManifestPartRef(nil), refs...)
 	for i := range out {
 		out[i].Part.SortKey = append([]SortKeyColumn(nil), out[i].Part.SortKey...)
-		out[i].Part.Coverage = cloneColumnWorkspacePartCoverage(out[i].Part.Coverage)
-		out[i].Coverage = cloneColumnPartCoverageDescriptor(out[i].Coverage)
 	}
 	return out
-}
-
-func cloneColumnPartCoverageDescriptor(coverage ColumnPartCoverageDescriptor) ColumnPartCoverageDescriptor {
-	coverage.SourceParts = append([]ColumnSourcePartGeneration(nil), coverage.SourceParts...)
-	coverage.SortKeyColumns = append([]string(nil), coverage.SortKeyColumns...)
-	coverage.SortKeyLower = append([]int64(nil), coverage.SortKeyLower...)
-	coverage.SortKeyUpperExclusive = append([]int64(nil), coverage.SortKeyUpperExclusive...)
-	coverage.AssetRefs = append([]ColumnAssetRef(nil), coverage.AssetRefs...)
-	coverage.Checksums = append([]uint32(nil), coverage.Checksums...)
-	return coverage
 }

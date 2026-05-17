@@ -91,25 +91,6 @@ func TestColumnPartSetDeltaTombstoneVisibilityAndCompaction(t *testing.T) {
 		t.Fatal("deleted id 10 still has latest locator")
 	}
 	assertJSONBenchPartSetQueriesMatchRaw(t, reader, expected)
-	plan, err := PlanColumnPartSetCompaction(manifest, reader.VisibilityStats(), ColumnPartSetCompactionPolicy{
-		MaxDeltaParts:             1,
-		MaxTombstones:             1,
-		MaxReadAmplificationParts: 2,
-		MaxStaleBytes:             1,
-		MinExpectedReclaimPPM:     1,
-		MinVisibleRowsPPM:         990_000,
-	})
-	if err != nil {
-		t.Fatalf("PlanColumnPartSetCompaction: %v", err)
-	}
-	for _, reason := range []string{"delta_part_count", "tombstone_count", "read_amplification", "column_asset_stale_bytes", "expected_reclaim_ratio", "sparse_visible_rows", "aggregate_metadata_invalidation"} {
-		if !containsString(plan.Reasons, reason) {
-			t.Fatalf("compaction reasons=%v missing %s", plan.Reasons, reason)
-		}
-	}
-	if !plan.ShouldCompact || plan.SelectedParts != 2 || plan.SkippedParts != 0 || plan.StaleBytes == 0 || plan.LiveBytes == 0 {
-		t.Fatalf("bad compaction plan=%+v", plan)
-	}
 
 	compacted, err := CompactColumnPartSet(workspace, reader, opts, ds.Dictionaries, 399)
 	if err != nil {
@@ -118,27 +99,11 @@ func TestColumnPartSetDeltaTombstoneVisibilityAndCompaction(t *testing.T) {
 	if compacted.VisibleRows != expected.Rows || compacted.DroppedRows != len(updates)+len(deletes) {
 		t.Fatalf("compaction rows visible=%d dropped=%d want visible=%d dropped=%d", compacted.VisibleRows, compacted.DroppedRows, expected.Rows, len(updates)+len(deletes))
 	}
-	if compacted.OldAssetBytes != manifest.ByteAccounting.TotalAssetBytes || compacted.NewAssetBytes == 0 {
+	if compacted.ReclaimableBytes != manifest.ByteAccounting.TotalAssetBytes || compacted.NewAssetBytes == 0 {
 		t.Fatalf("compaction bytes=%+v manifest bytes=%d", compacted, manifest.ByteAccounting.TotalAssetBytes)
-	}
-	if compacted.ReclaimableBytes != 0 || compacted.RewriteDebtBytes != manifest.ByteAccounting.TotalAssetBytes {
-		t.Fatalf("compaction reachability reclaimable/rewrite=(%d,%d) want (0,%d)", compacted.ReclaimableBytes, compacted.RewriteDebtBytes, manifest.ByteAccounting.TotalAssetBytes)
-	}
-	if compacted.PrePublishReachability.ReclaimableBytes != 0 || compacted.PrePublishReachability.RewriteDebtBytes != 0 {
-		t.Fatalf("pre-publish reachability should not expose old bytes to GC: %+v", compacted.PrePublishReachability)
-	}
-	if !compacted.SelectionPlan.ShouldCompact || compacted.SelectionPlan.SelectedParts != 2 {
-		t.Fatalf("bad compacted selection plan=%+v", compacted.SelectionPlan)
-	}
-	if compacted.PostPublishReachability.Stats.MixedLiveDeadSegments != 1 {
-		t.Fatalf("post-publish reachability mixed segments=%d want 1", compacted.PostPublishReachability.Stats.MixedLiveDeadSegments)
 	}
 	if len(compacted.Manifest.PartSet.BaseParts) != 1 || len(compacted.Manifest.PartSet.DeltaParts) != 0 || len(compacted.Manifest.PartSet.Tombstones) != 0 {
 		t.Fatalf("bad compacted manifest part set=%+v", compacted.Manifest.PartSet)
-	}
-	coverage := compacted.Manifest.PartSet.BaseParts[0].Coverage
-	if coverage.CompactionLevel != 1 || len(coverage.SourceParts) != 2 || coverage.SourceParts[0].PartID != baseEntry.PartID || coverage.SourceParts[1].PartID != deltaEntry.PartID {
-		t.Fatalf("bad compacted coverage=%+v base=%d delta=%d", coverage, baseEntry.PartID, deltaEntry.PartID)
 	}
 	if err := workspace.SaveCollectionManifest(compacted.Manifest); err != nil {
 		t.Fatalf("SaveCollectionManifest(compacted): %v", err)
@@ -593,50 +558,6 @@ func benchmarkJSONBenchColumnPartSetAggregateMetadataM4(b *testing.B, ds JSONBen
 			}
 			reportGranuleBenchMetrics(b, rowsMeasured, valueBytes, storedBytes)
 		})
-	}
-}
-
-func BenchmarkColumnPartSetCompactionPlan10K(b *testing.B) {
-	manifest := syntheticColumnCollectionManifestForBenchmark(10_000)
-	manifest.PartSet.Tombstones = make([]ColumnTombstone, 1000)
-	for i := range manifest.PartSet.Tombstones {
-		manifest.PartSet.Tombstones[i] = ColumnTombstone{
-			PrimaryID:    int64(i + 1),
-			GenerationID: manifest.ActiveGeneration,
-			Reason:       "benchmark delete",
-		}
-	}
-	manifest.ByteAccounting = columnManifestByteAccounting(manifest)
-	stats := ColumnPartSetVisibilityStats{
-		Parts:          len(manifest.PartSet.BaseParts),
-		BaseParts:      len(manifest.PartSet.BaseParts),
-		InputRows:      manifest.ByteAccounting.Rows,
-		VisibleRows:    manifest.ByteAccounting.Rows - 2000,
-		SupersededRows: 1000,
-		DeletedRows:    1000,
-		Tombstones:     len(manifest.PartSet.Tombstones),
-	}
-	policy := ColumnPartSetCompactionPolicy{
-		MaxTombstones:             1000,
-		MaxReadAmplificationParts: 1024,
-		MinExpectedReclaimPPM:     100_000,
-		MinVisibleRowsPPM:         900_000,
-	}
-	plan, err := PlanColumnPartSetCompaction(manifest, stats, policy)
-	if err != nil {
-		b.Fatalf("PlanColumnPartSetCompaction: %v", err)
-	}
-	b.ReportMetric(float64(len(manifest.PartSet.BaseParts)), "parts")
-	b.ReportMetric(float64(plan.StaleBytes), "stale_bytes")
-	b.ReportMetric(float64(plan.ExpectedReclaimPPM), "expected_reclaim_ppm")
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		plan, err := PlanColumnPartSetCompaction(manifest, stats, policy)
-		if err != nil {
-			b.Fatal(err)
-		}
-		benchSink += int64(plan.SelectedParts + plan.StaleBytes)
 	}
 }
 
