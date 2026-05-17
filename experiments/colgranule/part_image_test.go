@@ -1644,6 +1644,9 @@ func descriptorFirstColumnFirstBlockRowCountOffset(t *testing.T, image ColumnPar
 	if _, err := dec.u32(); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := dec.i64(); err != nil {
+		t.Fatal(err)
+	}
 	blockCount, err := dec.u32()
 	if err != nil {
 		t.Fatal(err)
@@ -1721,6 +1724,9 @@ func descriptorFirstColumnFirstBlockRawBytesOffset(t *testing.T, image ColumnPar
 		t.Fatal(err)
 	}
 	if _, err := dec.u32(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dec.i64(); err != nil {
 		t.Fatal(err)
 	}
 	blockCount, err := dec.u32()
@@ -1829,6 +1835,9 @@ func descriptorDecoderAtFirstColumnFirstBlock(t *testing.T, image ColumnPartImag
 		t.Fatal(err)
 	}
 	if _, err := dec.u32(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dec.i64(); err != nil {
 		t.Fatal(err)
 	}
 	blockCount, err := dec.u32()

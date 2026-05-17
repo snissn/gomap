@@ -22,10 +22,12 @@ const (
 type ColumnStoreValueType string
 
 const (
-	ColumnStoreValueBool   ColumnStoreValueType = "bool"
-	ColumnStoreValueInt64  ColumnStoreValueType = "int64"
-	ColumnStoreValueDouble ColumnStoreValueType = "double"
-	ColumnStoreValueString ColumnStoreValueType = "string"
+	ColumnStoreValueBool          ColumnStoreValueType = "bool"
+	ColumnStoreValueInt64         ColumnStoreValueType = "int64"
+	ColumnStoreValueDouble        ColumnStoreValueType = "double"
+	ColumnStoreValueString        ColumnStoreValueType = "string"
+	ColumnStoreValueFloat32Vector ColumnStoreValueType = "float32_vector"
+	ColumnStoreValueAdjacencyList ColumnStoreValueType = "adjacency_list"
 )
 
 type ColumnSortDirection string
@@ -92,6 +94,7 @@ type ColumnStoreColumn struct {
 	ValueType  ColumnStoreValueType `json:"value_type"`
 	Nullable   bool                 `json:"nullable,omitempty"`
 	Dictionary bool                 `json:"dictionary,omitempty"`
+	VectorDims int                  `json:"vector_dims,omitempty"`
 }
 
 type ColumnSortKey struct {
@@ -262,6 +265,7 @@ func validateColumnStoreConfig(cfg ColumnStoreConfig) error {
 		return nil
 	}
 	columnNames := make(map[string]struct{}, len(cfg.Columns))
+	columnTypes := make(map[string]ColumnStoreValueType, len(cfg.Columns))
 	columnPaths := make(map[string]struct{}, len(cfg.Columns))
 	for i := range cfg.Columns {
 		col := cfg.Columns[i]
@@ -271,8 +275,19 @@ func validateColumnStoreConfig(cfg ColumnStoreConfig) error {
 		if err := ValidateIndexPath(col.Path); err != nil {
 			return fmt.Errorf("collections: invalid column %q path: %w", col.Name, err)
 		}
-		if _, err := normalizeColumnStoreValueType(col.ValueType); err != nil {
+		valueType, err := normalizeColumnStoreValueType(col.ValueType)
+		if err != nil {
 			return fmt.Errorf("collections: invalid column %q value_type: %w", col.Name, err)
+		}
+		if valueType == ColumnStoreValueFloat32Vector {
+			if col.VectorDims <= 0 {
+				return fmt.Errorf("collections: invalid column %q vector_dims: must be positive", col.Name)
+			}
+		} else if col.VectorDims != 0 {
+			return fmt.Errorf("collections: invalid column %q vector_dims: only float32_vector columns may set vector_dims", col.Name)
+		}
+		if col.Dictionary && !columnStoreValueTypeSupportsDictionary(valueType) {
+			return fmt.Errorf("collections: invalid column %q dictionary: unsupported for value_type %q", col.Name, valueType)
 		}
 		if _, ok := columnNames[col.Name]; ok {
 			return fmt.Errorf("collections: duplicate column %q", col.Name)
@@ -281,11 +296,15 @@ func validateColumnStoreConfig(cfg ColumnStoreConfig) error {
 			return fmt.Errorf("collections: duplicate column path %q", col.Path)
 		}
 		columnNames[col.Name] = struct{}{}
+		columnTypes[col.Name] = valueType
 		columnPaths[col.Path] = struct{}{}
 	}
 	for _, sortKey := range cfg.SortKey {
 		if _, ok := columnNames[sortKey.Column]; !ok {
 			return fmt.Errorf("collections: sort key references unknown column %q", sortKey.Column)
+		}
+		if !columnStoreValueTypeSupportsSort(columnTypes[sortKey.Column]) {
+			return fmt.Errorf("collections: sort key column %q value_type %q is not orderable", sortKey.Column, columnTypes[sortKey.Column])
 		}
 		switch sortKey.Direction {
 		case ColumnSortAscending, ColumnSortDescending:
@@ -305,6 +324,9 @@ func validateColumnStoreConfig(cfg ColumnStoreConfig) error {
 		}
 		if err := validateColumnAggregateKind(aggregate.Kind, aggregate.Column); err != nil {
 			return fmt.Errorf("collections: invalid aggregate metadata %q: %w", aggregate.Name, err)
+		}
+		if aggregate.Column != "" && !columnStoreValueTypeSupportsAggregate(columnTypes[aggregate.Column], aggregate.Kind) {
+			return fmt.Errorf("collections: aggregate metadata %q kind %q does not support value_type %q", aggregate.Name, aggregate.Kind, columnTypes[aggregate.Column])
 		}
 		if _, ok := aggregateNames[aggregate.Name]; ok {
 			return fmt.Errorf("collections: duplicate aggregate metadata %q", aggregate.Name)
@@ -351,12 +373,37 @@ func validateColumnStoreConfig(cfg ColumnStoreConfig) error {
 
 func normalizeColumnStoreValueType(valueType ColumnStoreValueType) (ColumnStoreValueType, error) {
 	switch valueType {
-	case ColumnStoreValueBool, ColumnStoreValueInt64, ColumnStoreValueDouble, ColumnStoreValueString:
+	case ColumnStoreValueBool, ColumnStoreValueInt64, ColumnStoreValueDouble, ColumnStoreValueString, ColumnStoreValueFloat32Vector, ColumnStoreValueAdjacencyList:
 		return valueType, nil
 	case "":
 		return "", errors.New("value_type is required")
 	default:
 		return "", fmt.Errorf("unsupported value_type %q", valueType)
+	}
+}
+
+func columnStoreValueTypeSupportsDictionary(valueType ColumnStoreValueType) bool {
+	return valueType == ColumnStoreValueString
+}
+
+func columnStoreValueTypeSupportsSort(valueType ColumnStoreValueType) bool {
+	switch valueType {
+	case ColumnStoreValueBool, ColumnStoreValueInt64, ColumnStoreValueDouble, ColumnStoreValueString:
+		return true
+	default:
+		return false
+	}
+}
+
+func columnStoreValueTypeSupportsAggregate(valueType ColumnStoreValueType, kind ColumnAggregateKind) bool {
+	if kind == ColumnAggregateCount {
+		return true
+	}
+	switch valueType {
+	case ColumnStoreValueBool, ColumnStoreValueInt64, ColumnStoreValueDouble, ColumnStoreValueString:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -591,6 +638,7 @@ func hashColumnStoreSchema(cfg *ColumnStoreConfig) uint64 {
 		writeHashString(&d, string(col.ValueType))
 		writeHashBool(&d, col.Nullable)
 		writeHashBool(&d, col.Dictionary)
+		writeHashInt(&d, col.VectorDims)
 	}
 	for _, sortKey := range cfg.SortKey {
 		writeHashString(&d, sortKey.Column)
@@ -624,6 +672,12 @@ func writeHashBool(d *xxhash.Digest, value bool) {
 	if value {
 		b[0] = 1
 	}
+	_, _ = d.Write(b[:])
+}
+
+func writeHashInt(d *xxhash.Digest, value int) {
+	var b [8]byte
+	binary.LittleEndian.PutUint64(b[:], uint64(value))
 	_, _ = d.Write(b[:])
 }
 
