@@ -257,6 +257,10 @@ func (w *ColumnWorkspace) LoadCollectionManifest() (ColumnCollectionManifest, er
 }
 
 func EncodeColumnCollectionManifest(manifest ColumnCollectionManifest) ([]byte, error) {
+	return encodeColumnCollectionManifestBinaryEnvelope(manifest)
+}
+
+func encodeColumnCollectionManifestJSONEnvelope(manifest ColumnCollectionManifest) ([]byte, error) {
 	if err := validateColumnCollectionManifest(manifest); err != nil {
 		return nil, err
 	}
@@ -274,6 +278,9 @@ func EncodeColumnCollectionManifest(manifest ColumnCollectionManifest) ([]byte, 
 }
 
 func DecodeColumnCollectionManifest(data []byte) (ColumnCollectionManifest, error) {
+	if isColumnControlPlaneBinary(data, columnCollectionManifestBinaryMagic) {
+		return decodeColumnCollectionManifestBinaryEnvelope(data)
+	}
 	var env columnCollectionManifestRawEnvelope
 	if err := json.Unmarshal(data, &env); err != nil {
 		return ColumnCollectionManifest{}, err

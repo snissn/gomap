@@ -1,7 +1,8 @@
 package colgranule
 
 import (
-	"encoding/json"
+	"bytes"
+	"encoding/binary"
 	"os"
 	"path/filepath"
 	"strings"
@@ -119,6 +120,13 @@ func TestColumnWorkspaceCreatesIsolatedNamespace(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(namespace.ManifestDir, columnWorkspaceManifestFile)); err != nil {
 		t.Fatalf("workspace manifest in isolated manifest dir: %v", err)
 	}
+	data, err := os.ReadFile(filepath.Join(namespace.ManifestDir, columnWorkspaceManifestFile))
+	if err != nil {
+		t.Fatalf("ReadFile workspace manifest: %v", err)
+	}
+	if !bytes.HasPrefix(data, []byte(columnWorkspaceManifestBinaryMagic)) {
+		t.Fatalf("workspace manifest magic=%q want binary %q", data[:min(len(data), 4)], columnWorkspaceManifestBinaryMagic)
+	}
 	if _, err := os.Stat(filepath.Join(namespace.SegmentDir, "column-assets-000001.seg")); err != nil {
 		t.Fatalf("asset segment in isolated segment dir: %v", err)
 	}
@@ -151,6 +159,13 @@ func TestColumnWorkspacePreparedRegistryAndInventory(t *testing.T) {
 	}
 	if err := workspace.SavePreparedAssetRegistry(9, 10, []ColumnPreparedAsset{prepared}); err != nil {
 		t.Fatalf("SavePreparedAssetRegistry: %v", err)
+	}
+	registryData, err := os.ReadFile(filepath.Join(ColumnWorkspaceNamespaceForDir(dir).PreparedDir, columnWorkspacePreparedFile))
+	if err != nil {
+		t.Fatalf("ReadFile prepared registry: %v", err)
+	}
+	if !bytes.HasPrefix(registryData, []byte(columnWorkspacePreparedBinaryMagic)) {
+		t.Fatalf("prepared registry magic=%q want binary %q", registryData[:min(len(registryData), 4)], columnWorkspacePreparedBinaryMagic)
 	}
 	inventory, err := workspace.InventoryNamespace()
 	if err != nil {
@@ -216,19 +231,12 @@ func TestColumnWorkspaceRejectsUnknownManifestVersion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}
-	var env columnWorkspaceManifestEnvelope
-	if err := json.Unmarshal(data, &env); err != nil {
-		t.Fatalf("unmarshal manifest: %v", err)
-	}
-	env.Version = columnWorkspaceManifestVersion + 1
-	corrupt, err := json.Marshal(env)
-	if err != nil {
-		t.Fatalf("marshal corrupt manifest: %v", err)
-	}
+	corrupt := append([]byte(nil), data...)
+	binary.LittleEndian.PutUint16(corrupt[4:], columnWorkspaceManifestBinaryVersion+1)
 	if err := os.WriteFile(path, corrupt, 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
-	if _, err := OpenColumnWorkspace(dir, ColumnWorkspaceOptions{Collection: "jsonbench"}); err == nil || !strings.Contains(err.Error(), "unsupported workspace manifest version") {
+	if _, err := OpenColumnWorkspace(dir, ColumnWorkspaceOptions{Collection: "jsonbench"}); err == nil || !strings.Contains(err.Error(), "unsupported workspace manifest binary version") {
 		t.Fatalf("OpenColumnWorkspace err=%v want unsupported manifest version", err)
 	}
 }
@@ -240,19 +248,12 @@ func TestColumnWorkspaceRejectsManifestChecksumMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}
-	var env columnWorkspaceManifestEnvelope
-	if err := json.Unmarshal(data, &env); err != nil {
-		t.Fatalf("unmarshal manifest: %v", err)
-	}
-	env.Manifest.Generation++
-	corrupt, err := json.Marshal(env)
-	if err != nil {
-		t.Fatalf("marshal corrupt manifest: %v", err)
-	}
+	corrupt := append([]byte(nil), data...)
+	corrupt[len(corrupt)-1] ^= 0xff
 	if err := os.WriteFile(path, corrupt, 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
-	if _, err := OpenColumnWorkspace(dir, ColumnWorkspaceOptions{Collection: "jsonbench"}); err == nil || !strings.Contains(err.Error(), "workspace manifest checksum") {
+	if _, err := OpenColumnWorkspace(dir, ColumnWorkspaceOptions{Collection: "jsonbench"}); err == nil || !strings.Contains(err.Error(), "workspace manifest binary checksum") {
 		t.Fatalf("OpenColumnWorkspace err=%v want checksum mismatch", err)
 	}
 }
