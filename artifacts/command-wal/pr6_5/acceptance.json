@@ -28,9 +28,10 @@
   ],
   "performance_gate": {
     "required": true,
+    "throughput_gate_operator": ">",
     "threshold_operator": ">",
     "default_ready_min_ratio": 1.01,
-    "status": "excluded_with_follow_up",
+    "status": "fail_excluded_with_follow_up",
     "decision": "catalog create clears strict parity-plus; collection insert/delete/update lanes are measured below strict parity-plus and are explicitly excluded from PR9 default-ready scope until issue 1584 passes",
     "lanes": {
       "insert_unindexed": {
