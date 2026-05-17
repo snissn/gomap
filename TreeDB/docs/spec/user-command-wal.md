@@ -245,9 +245,9 @@ replayable without adding query-wide mutation semantics.
 | Raw KV set/delete/batch | `Set`, `Delete`, `Batch.Write` | `RawKVBatch` | PR1 has gated typed bytes and fixtures; production raw writes become `WAL-supported` after PR3 recovery dispatch and `AppliedCommandLSN` plumbing. |
 | Collection insert batch | explicit IDs plus stored documents | `CollectionInsertBatchByID` | PR4 implementation: `WAL-supported` for JSON, BSON, and template-v1 stored documents through the normal collection executor. |
 | Collection delete | explicit document ID or ID batch | `CollectionDeleteBatchByID` | PR4 implementation: `WAL-supported`; missing IDs are explicit no-ops and recovery still advances `AppliedCommandLSN`. |
-| Collection declarative update | explicit document ID plus canonical update ops over resolved literal values | `CollectionUpdateByIDOps` or final replacement | `WAL-supported` after operator registry, canonical encoding, and recovery tests. |
+| Collection declarative update | explicit document ID plus canonical update ops over resolved literal values | `CollectionUpdateByIDOps` or final replacement | PR5 implementation: callback and BSON-set update paths are `WAL-supported` by logging final accepted replacements; operator-native payloads remain future work. |
 | Resolver-backed update helpers | helpers such as server-now, UUID, random, or sequence values used by declarative update APIs | not a replay command; lowers to resolved literals inside `CollectionUpdateByIDOps` | `WAL-supported` only when resolved before WAL append. Recovery must not invoke helper functions. |
-| Collection update callback | explicit document ID plus Go callback | `CollectionReplaceBatchByID` after callback execution | Callback itself is not replayed. WAL logs final accepted replacements/no-ops. |
+| Collection update callback | explicit document ID plus Go callback | `CollectionUpdateBatchByID` after callback execution | PR5 implementation: callback itself is not replayed. WAL logs final accepted replacements; missing/no-op updates do not append production frames. |
 | Mongo `updateOne` | `_id` equality plus accepted `$set` subset | `CollectionUpdateByIDSet` or final replacement | `WAL-supported` only after canonical lowering and result assertions. |
 | Mongo `deleteOne` | `_id` equality | `CollectionDeleteBatchByID` | Same as native explicit-ID delete. |
 | Collection/index metadata | create collection, create/drop index | `CatalogMutation` | PR4 rejects create collection while command WAL is active; PR6 owns WAL-supported catalog commands. |
@@ -876,25 +876,39 @@ PR4 evidence:
 
 Deliverables:
 
-- `CollectionReplaceBatchByID` for callback APIs after final replacement is known;
-- `CollectionUpdateByIDOps` for declarative update operators over canonical
-  literal values;
-- resolver-backed helpers such as server-now or UUID lower to resolved literals
-  before WAL append;
-- optional `CollectionUpdateByIDSet` for Mongo `$set` if it remains a distinct,
-  compact subset of the declarative operator payload;
-- result assertions for matched/modified counts;
+- `CollectionUpdateBatchByID` canonical payload for callback/BSON-set APIs after
+  final replacement is known;
+- public `Update`, `UpdateBatch`, and structured BSON `$set` update paths lower
+  to accepted replacement documents before WAL append;
+- declarative operator and resolver-backed helper payloads stay explicitly
+  future work rather than replaying helper functions;
 - one-frame/one-LSN all-or-nothing semantics for replacement/update batches, with
   no implicit atomic split without a future `CommandGroup` protocol;
-- tests for indexed fields, unchanged fields, BSON `_id` preservation, and
-  unique-index conflicts.
+- tests for public publish, open-time replay, indexed secondary-root updates,
+  no-op frame advancement, and corrupt-payload count bounds.
 
 Acceptance:
 
 - no Go callback is replayed;
-- no resolver helper is invoked during recovery;
+- no resolver/helper code is invoked during recovery for implemented update
+  paths because the WAL payload is the resolved stored document;
 - recovered primary and secondary index state matches normal execution;
-- unsupported update operators fail closed in WAL-on modes.
+- unsupported future update operators remain outside the support matrix until a
+  canonical operator payload lands.
+
+PR5 evidence:
+
+- canonical frame fixture:
+  `command_wal_v1_collection_update_by_id.hex`;
+- normal path: public `Update`, `UpdateBatch`, and BSON-set updates append one
+  collection update command frame and publish roots with `AppliedCommandLSN`;
+- recovery path: unapplied update frames replay through the collection executor
+  without invoking the original callback;
+- indexed public update coverage verifies secondary index delete/set state under
+  command WAL;
+- performance artifacts:
+  `artifacts/command-wal/pr5/collection-update-microbench.txt` and
+  `artifacts/command-wal/pr5/collection-update-microbench-benchstat.txt`.
 
 ### PR 6: Catalog mutation commands
 
