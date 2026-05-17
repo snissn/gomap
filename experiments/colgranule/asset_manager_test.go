@@ -96,7 +96,7 @@ func TestColumnAssetManagerValidatesPreparedPublishClosure(t *testing.T) {
 	}
 }
 
-func TestColumnAssetManagerSyncPublishClosureHonorsSyncRequired(t *testing.T) {
+func TestColumnAssetManagerSyncPublishClosureDerivesSyncRequired(t *testing.T) {
 	store := &syncProbeAssetStore{MemoryColumnAssetStore: NewMemoryColumnAssetStore()}
 	manager, err := NewColumnAssetManager(store)
 	if err != nil {
@@ -119,18 +119,41 @@ func TestColumnAssetManagerSyncPublishClosureHonorsSyncRequired(t *testing.T) {
 	if !closure.SyncRequired {
 		t.Fatalf("SyncRequired=false want true for sync-capable store")
 	}
-	if err := manager.SyncPublishClosure(closure); err != nil {
+	synced, err := manager.SyncPublishClosure(closure)
+	if err != nil {
 		t.Fatalf("SyncPublishClosure required: %v", err)
+	}
+	if !synced.sealed || !synced.closure.SyncRequired {
+		t.Fatalf("synced closure=%+v want sealed sync-required token", synced)
 	}
 	if store.syncCalls != 1 {
 		t.Fatalf("sync calls=%d want 1", store.syncCalls)
 	}
 	closure.SyncRequired = false
-	if err := manager.SyncPublishClosure(closure); err != nil {
-		t.Fatalf("SyncPublishClosure not required: %v", err)
+	synced, err = manager.SyncPublishClosure(closure)
+	if err != nil {
+		t.Fatalf("SyncPublishClosure tampered sync flag: %v", err)
 	}
-	if store.syncCalls != 1 {
-		t.Fatalf("sync calls=%d want unchanged 1", store.syncCalls)
+	if !synced.closure.SyncRequired {
+		t.Fatalf("synced closure SyncRequired=false want derived true")
+	}
+	if store.syncCalls != 2 {
+		t.Fatalf("sync calls=%d want 2 after tampered sync flag", store.syncCalls)
+	}
+
+	empty, err := manager.PreparePublishClosure(nil)
+	if err != nil {
+		t.Fatalf("PreparePublishClosure empty: %v", err)
+	}
+	synced, err = manager.SyncPublishClosure(empty)
+	if err != nil {
+		t.Fatalf("SyncPublishClosure empty: %v", err)
+	}
+	if !synced.sealed || synced.closure.SyncRequired {
+		t.Fatalf("empty synced closure=%+v want sealed no-sync token", synced)
+	}
+	if store.syncCalls != 2 {
+		t.Fatalf("sync calls=%d want unchanged 2 after empty closure", store.syncCalls)
 	}
 }
 
@@ -156,11 +179,51 @@ func TestColumnAssetManagerSyncPublishClosureVerifiesNoopClosureAssets(t *testin
 	}
 	closure.SyncRequired = false
 	store.Reset()
-	if err := manager.SyncPublishClosure(closure); err == nil {
+	if _, err := manager.SyncPublishClosure(closure); err == nil {
 		t.Fatal("SyncPublishClosure succeeded for missing no-op closure asset")
 	}
 	if store.syncCalls != 0 {
 		t.Fatalf("sync calls=%d want 0 after failed no-op closure verification", store.syncCalls)
+	}
+}
+
+func TestColumnAssetManagerPublishSucceededRequiresSyncedClosure(t *testing.T) {
+	store := NewMemoryColumnAssetStore()
+	manager, err := NewColumnAssetManager(store)
+	if err != nil {
+		t.Fatalf("NewColumnAssetManager: %v", err)
+	}
+	ref, err := manager.Put(ColumnAssetKindTCS1PartImage, make([]byte, tcs1HeaderBytes+16))
+	if err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	prepared := ColumnPreparedAsset{
+		Ref:          ref,
+		GenerationID: 7,
+		PublishID:    11,
+		Reason:       "publish staged",
+	}
+	if err := manager.MarkPublishFailed([]ColumnPreparedAsset{prepared}, "root publish failed"); err != nil {
+		t.Fatalf("MarkPublishFailed: %v", err)
+	}
+	if err := manager.MarkPublishSucceeded(ColumnAssetSyncedPublishClosure{}, "root published"); err == nil {
+		t.Fatal("MarkPublishSucceeded accepted an unsealed publish closure")
+	}
+	closure, err := manager.PreparePublishClosure([]ColumnPreparedAsset{prepared})
+	if err != nil {
+		t.Fatalf("PreparePublishClosure: %v", err)
+	}
+	synced, err := manager.SyncPublishClosure(closure)
+	if err != nil {
+		t.Fatalf("SyncPublishClosure: %v", err)
+	}
+	if err := manager.MarkPublishSucceeded(synced, "root published"); err != nil {
+		t.Fatalf("MarkPublishSucceeded: %v", err)
+	}
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	if len(manager.quarantine) != 0 || len(manager.zombies) != 0 || len(manager.rewriteDebt) != 0 {
+		t.Fatalf("manager state quarantine=%d zombies=%d rewrite=%d want all cleared", len(manager.quarantine), len(manager.zombies), len(manager.rewriteDebt))
 	}
 }
 

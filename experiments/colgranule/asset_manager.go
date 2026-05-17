@@ -36,6 +36,11 @@ type ColumnAssetPublishClosure struct {
 	SyncRequired   bool                  `json:"sync_required,omitempty"`
 }
 
+type ColumnAssetSyncedPublishClosure struct {
+	closure ColumnAssetPublishClosure
+	sealed  bool
+}
+
 type ColumnAssetManagerReclamationEntry struct {
 	Ref              ColumnAssetRef            `json:"ref"`
 	State            ColumnAssetLifecycleState `json:"state"`
@@ -220,6 +225,13 @@ func (m *ColumnAssetManager) PreparePublishClosure(prepared []ColumnPreparedAsse
 	if store == nil {
 		return ColumnAssetPublishClosure{}, fmt.Errorf("colgranule: closed column asset manager")
 	}
+	return prepareColumnAssetPublishClosure(store, prepared)
+}
+
+func prepareColumnAssetPublishClosure(store ColumnAssetStore, prepared []ColumnPreparedAsset) (ColumnAssetPublishClosure, error) {
+	if store == nil {
+		return ColumnAssetPublishClosure{}, fmt.Errorf("colgranule: closed column asset manager")
+	}
 	closure := ColumnAssetPublishClosure{
 		PreparedAssets: cloneColumnPreparedAssets(prepared),
 		FlushRequired:  len(prepared) > 0,
@@ -252,43 +264,46 @@ func (m *ColumnAssetManager) PreparePublishClosure(prepared []ColumnPreparedAsse
 	return closure, nil
 }
 
-func (m *ColumnAssetManager) SyncPublishClosure(closure ColumnAssetPublishClosure) error {
+func (m *ColumnAssetManager) SyncPublishClosure(closure ColumnAssetPublishClosure) (ColumnAssetSyncedPublishClosure, error) {
 	if m == nil {
-		return fmt.Errorf("colgranule: nil column asset manager")
+		return ColumnAssetSyncedPublishClosure{}, fmt.Errorf("colgranule: nil column asset manager")
 	}
 	m.mu.Lock()
 	store := m.store
 	m.mu.Unlock()
 	if store == nil {
-		return fmt.Errorf("colgranule: closed column asset manager")
+		return ColumnAssetSyncedPublishClosure{}, fmt.Errorf("colgranule: closed column asset manager")
 	}
-	for _, asset := range closure.PreparedAssets {
-		if err := validateColumnPreparedAsset(asset); err != nil {
-			return err
+	verified, err := prepareColumnAssetPublishClosure(store, closure.PreparedAssets)
+	if err != nil {
+		return ColumnAssetSyncedPublishClosure{}, err
+	}
+	if verified.SyncRequired {
+		if syncer, ok := store.(columnAssetSyncer); ok {
+			if err := syncer.Sync(); err != nil {
+				return ColumnAssetSyncedPublishClosure{}, err
+			}
 		}
-		if err := verifyColumnAssetStoreRef(store, asset.Ref); err != nil {
-			return fmt.Errorf("colgranule: missing required prepared asset %+v: %w", asset.Ref, err)
-		}
 	}
-	if !closure.SyncRequired {
-		return nil
-	}
-	if syncer, ok := store.(columnAssetSyncer); ok {
-		return syncer.Sync()
-	}
-	return nil
+	return ColumnAssetSyncedPublishClosure{
+		closure: verified,
+		sealed:  true,
+	}, nil
 }
 
-func (m *ColumnAssetManager) MarkPublishSucceeded(prepared []ColumnPreparedAsset, _ string) error {
+func (m *ColumnAssetManager) MarkPublishSucceeded(synced ColumnAssetSyncedPublishClosure, _ string) error {
 	if m == nil {
 		return fmt.Errorf("colgranule: nil column asset manager")
 	}
-	if _, err := m.PreparePublishClosure(prepared); err != nil {
+	if !synced.sealed {
+		return fmt.Errorf("colgranule: publish succeeded requires synced publish closure")
+	}
+	if _, err := m.PreparePublishClosure(synced.closure.PreparedAssets); err != nil {
 		return err
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	for _, asset := range prepared {
+	for _, asset := range synced.closure.PreparedAssets {
 		delete(m.quarantine, asset.Ref)
 		delete(m.zombies, asset.Ref)
 		delete(m.rewriteDebt, asset.Ref)
