@@ -286,6 +286,9 @@ func BuildColumnPublishPlan(input ColumnPublishPlanInput) (ColumnPublishPlan, er
 		return ColumnPublishPlan{}, fmt.Errorf("collections: column publish root-delta construction failed: %w", err)
 	}
 	metrics.RootDeltaConstruction = time.Since(start)
+	if err := validateColumnManifestRootDeltaForPlan(rootDelta, input.BaseManifestRootID, *cfg, manifest.Identity); err != nil {
+		return ColumnPublishPlan{}, fmt.Errorf("collections: invalid column publish root delta: %w", err)
+	}
 
 	plan := ColumnPublishPlan{
 		Enabled:                                true,
@@ -516,6 +519,31 @@ func validateColumnPublishPlanConfig(collection string, cfg *ColumnStoreConfig) 
 	return nil
 }
 
+func validateColumnManifestRootDeltaForPlan(delta ColumnManifestRootDelta, baseRootID uint64, cfg ColumnStoreConfig, identity ColumnManifestIdentity) error {
+	if cfg.ManifestRoot == nil {
+		return errors.New("missing column manifest root descriptor")
+	}
+	if delta.RootName == "" {
+		return errors.New("missing column manifest root name")
+	}
+	if delta.RootName != cfg.ManifestRoot.Name {
+		return fmt.Errorf("root name %q does not match configured manifest root %q", delta.RootName, cfg.ManifestRoot.Name)
+	}
+	if delta.BaseRootID != baseRootID {
+		return fmt.Errorf("base root id=%d does not match expected %d", delta.BaseRootID, baseRootID)
+	}
+	if delta.StoragePolicy != cfg.ManifestRoot.StoragePolicy {
+		return fmt.Errorf("storage policy %q does not match configured manifest root policy %q", delta.StoragePolicy, cfg.ManifestRoot.StoragePolicy)
+	}
+	if delta.Identity != identity {
+		return fmt.Errorf("identity %+v does not match manifest identity %+v", delta.Identity, identity)
+	}
+	if delta.IdentityRecord != encodeColumnManifestIdentityRecordArray(identity) {
+		return errors.New("identity record does not match manifest identity")
+	}
+	return nil
+}
+
 func columnManifestRootNameMatches(collection, rootName string) bool {
 	if len(rootName) != len(collection)+len(columnManifestRootSuffix) {
 		return false
@@ -573,8 +601,13 @@ func validateColumnPreparedAssetForPlan(asset ColumnPreparedAsset) error {
 }
 
 func validateColumnAssetRefForPlan(ref ColumnAssetRef) error {
-	if ref.Kind == "" {
-		return errors.New("collections: column asset ref kind is required")
+	switch ref.Kind {
+	case ColumnAssetKindTCS1PartImage:
+	default:
+		if ref.Kind == "" {
+			return errors.New("collections: column asset ref kind is required")
+		}
+		return fmt.Errorf("collections: unsupported column asset ref kind %q", ref.Kind)
 	}
 	if ref.FileID == 0 {
 		return errors.New("collections: column asset ref file_id is required")

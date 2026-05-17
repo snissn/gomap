@@ -228,6 +228,90 @@ func TestColumnPublishPlanFailsClosedBeforeRootPublishM10A(t *testing.T) {
 	}
 }
 
+func TestColumnPublishPlanRejectsInvalidRootDeltaM10A(t *testing.T) {
+	asset := testColumnPublishPreparedAssetM10A()
+	identity := ColumnManifestIdentity{Generation: 7, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0xfeedbeef}
+	tests := []struct {
+		name      string
+		mutate    func(*ColumnManifestRootDelta)
+		wantError string
+	}{
+		{
+			name: "wrong root name",
+			mutate: func(delta *ColumnManifestRootDelta) {
+				delta.RootName = "events/column/wrong"
+			},
+			wantError: "root name",
+		},
+		{
+			name: "wrong base root",
+			mutate: func(delta *ColumnManifestRootDelta) {
+				delta.BaseRootID++
+			},
+			wantError: "base root id",
+		},
+		{
+			name: "wrong storage policy",
+			mutate: func(delta *ColumnManifestRootDelta) {
+				delta.StoragePolicy = RootStorageCompressed
+			},
+			wantError: "storage policy",
+		},
+		{
+			name: "wrong identity",
+			mutate: func(delta *ColumnManifestRootDelta) {
+				delta.Identity.Generation++
+			},
+			wantError: "identity",
+		},
+		{
+			name: "wrong identity record",
+			mutate: func(delta *ColumnManifestRootDelta) {
+				delta.IdentityRecord[0] ^= 0xff
+			},
+			wantError: "identity record",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			input := testColumnPublishPlanInputM10A(identity, asset)
+			input.Hooks.BuildRootDelta = func(in ColumnPublishRootDeltaInput) (ColumnManifestRootDelta, error) {
+				delta := ColumnManifestRootDelta{
+					RootName:       in.ColumnStore.ManifestRoot.Name,
+					BaseRootID:     in.BaseManifestRootID,
+					StoragePolicy:  in.ColumnStore.ManifestRoot.StoragePolicy,
+					Identity:       in.Manifest.Identity,
+					IdentityRecord: encodeColumnManifestIdentityRecordArray(in.Manifest.Identity),
+				}
+				tt.mutate(&delta)
+				return delta, nil
+			}
+
+			plan, err := BuildColumnPublishPlan(input)
+			if err == nil || !strings.Contains(err.Error(), tt.wantError) {
+				t.Fatalf("BuildColumnPublishPlan err=%v want %q", err, tt.wantError)
+			}
+			if plan.Enabled {
+				t.Fatalf("invalid root delta returned enabled plan: %+v", plan)
+			}
+		})
+	}
+}
+
+func TestColumnPublishPlanRejectsUnsupportedAssetKindM10A(t *testing.T) {
+	asset := testColumnPublishPreparedAssetM10A()
+	asset.Ref.Kind = ColumnAssetKind("future-kind")
+	identity := ColumnManifestIdentity{Generation: 7, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0xfeedbeef}
+
+	plan, err := BuildColumnPublishPlan(testColumnPublishPlanInputM10A(identity, asset))
+	if err == nil || !strings.Contains(err.Error(), "unsupported column asset ref kind") {
+		t.Fatalf("BuildColumnPublishPlan err=%v want unsupported kind", err)
+	}
+	if plan.Enabled {
+		t.Fatalf("unsupported asset kind returned enabled plan: %+v", plan)
+	}
+}
+
 func TestColumnManifestPublishSystemDeltaUpdatesRootAndMetadataTogetherM10A(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
