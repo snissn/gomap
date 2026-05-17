@@ -58,6 +58,27 @@ contains_backend() {
 	return 1
 }
 
+validate_backends() {
+	local raw
+	local backend
+	IFS=',' read -r -a raw <<<"$BACKENDS"
+	for backend in "${raw[@]}"; do
+		backend="${backend//[[:space:]]/}"
+		case "$backend" in
+			treedb|vectorlite|pgvector|mongodb)
+				;;
+			"")
+				echo "empty backend in BACKENDS=$BACKENDS" >&2
+				exit 1
+				;;
+			*)
+				echo "unknown backend: $backend (known: treedb,vectorlite,pgvector,mongodb)" >&2
+				exit 1
+				;;
+		esac
+	done
+}
+
 start_pgvector_if_needed() {
 	if [[ -n "$PGVECTOR_DSN" ]]; then
 		return
@@ -105,6 +126,7 @@ raise SystemExit(f"PostgreSQL+pgvector did not become ready: {last}")
 PY
 }
 
+validate_backends
 mkdir -p "$RUN_DIR"
 
 cat >"$RUN_DIR/README.md" <<EOF
