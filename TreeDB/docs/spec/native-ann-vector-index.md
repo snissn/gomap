@@ -745,6 +745,9 @@ Acceptance:
 Deliverables:
 
 1. Store vector index definitions in collection catalog/index metadata.
+   Each declaration carries a `schema_generation` assigned when the index is
+   created so stale pre-root runtimes cannot publish into a dropped/recreated
+   declaration with the same name and root ID `0`.
 2. Auto-open native vector indexes with collections.
 3. Register loaded indexes for search and write notifications.
 4. Add `CreateVectorIndex`, `OpenVectorIndex`, and `DropVectorIndex`.
