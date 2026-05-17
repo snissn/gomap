@@ -1678,6 +1678,7 @@ func (idx *VectorIndex) attachVectorSearchResultDocuments(ranked []VectorSearchR
 		if !found {
 			continue
 		}
+		document = bytes.Clone(document)
 		result.Document = document
 		resultIDBytes += len(result.DocumentID)
 		snapshotCopyBytes += len(document)
