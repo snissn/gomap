@@ -126,3 +126,78 @@ func TestColumnAssetManagerPreparedPublishFailureQuarantinesAssets(t *testing.T)
 		t.Fatalf("reclaim=%+v want quarantined and not ready", reclaim)
 	}
 }
+
+func TestColumnAssetManagerPreparedPublishFailureIsAtomic(t *testing.T) {
+	store := NewMemoryColumnAssetStore()
+	manager, err := NewColumnAssetManager(store)
+	if err != nil {
+		t.Fatalf("NewColumnAssetManager: %v", err)
+	}
+	ref, err := manager.Put(ColumnAssetKindTCS1PartImage, make([]byte, tcs1HeaderBytes+16))
+	if err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	prepared := ColumnPreparedAsset{
+		Ref:          ref,
+		GenerationID: 7,
+		PublishID:    11,
+		Reason:       "publish staged",
+	}
+	invalid := prepared
+	invalid.Ref.FileID = 0
+	if err := manager.MarkPublishFailed([]ColumnPreparedAsset{prepared, invalid}, "root publish failed"); err == nil {
+		t.Fatalf("MarkPublishFailed with invalid prepared asset succeeded")
+	}
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	if len(manager.quarantine) != 0 {
+		t.Fatalf("quarantine entries=%d want 0 after failed publish-failure mark", len(manager.quarantine))
+	}
+}
+
+func TestColumnAssetStoreRangeProbeReadsNonZeroBytes(t *testing.T) {
+	ref := ColumnAssetRef{
+		Kind:     ColumnAssetKindTCS1PartImage,
+		FileID:   1,
+		Offset:   0,
+		Length:   int64(tcs1HeaderBytes),
+		Checksum: 1,
+	}
+	store := &rangeProbeOnlyStore{}
+	if err := verifyColumnAssetStoreRef(store, ref); err != nil {
+		t.Fatalf("verifyColumnAssetStoreRef: %v", err)
+	}
+	if store.readRangeCalls != 1 || store.lastLength != 1 {
+		t.Fatalf("ReadRange calls=%d length=%d want one non-zero byte probe", store.readRangeCalls, store.lastLength)
+	}
+}
+
+type rangeProbeOnlyStore struct {
+	readRangeCalls int
+	lastLength     int
+}
+
+func (s *rangeProbeOnlyStore) Put(ColumnAssetKind, []byte) (ColumnAssetRef, error) {
+	return ColumnAssetRef{}, nil
+}
+
+func (s *rangeProbeOnlyStore) Read(ColumnAssetRef) ([]byte, error) {
+	return nil, nil
+}
+
+func (s *rangeProbeOnlyStore) ReadTo(ColumnAssetRef, []byte) ([]byte, error) {
+	return nil, nil
+}
+
+func (s *rangeProbeOnlyStore) ReadRange(ref ColumnAssetRef, offset int64, length int) ([]byte, error) {
+	s.readRangeCalls++
+	s.lastLength = length
+	if err := validateColumnAssetRef(ref); err != nil {
+		return nil, err
+	}
+	if offset != 0 || length != 1 {
+		t := make([]byte, 0)
+		return t, nil
+	}
+	return []byte{0}, nil
+}
