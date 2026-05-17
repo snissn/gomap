@@ -112,8 +112,19 @@ type columnAssetReachabilityRecord struct {
 	quarantined bool
 }
 
+var (
+	columnAssetReasonPrepared       = []string{string(ColumnAssetStatePrepared)}
+	columnAssetReasonPendingPublish = []string{string(ColumnAssetStatePendingPublish)}
+	columnAssetReasonActive         = []string{string(ColumnAssetStateActive)}
+	columnAssetReasonSuperseded     = []string{string(ColumnAssetStateSuperseded)}
+	columnAssetReasonSnapshotPinned = []string{string(ColumnAssetStateSnapshotPinned)}
+	columnAssetReasonReclaimable    = []string{string(ColumnAssetStateReclaimable)}
+	columnAssetReasonDeleting       = []string{string(ColumnAssetStateDeleting)}
+	columnAssetReasonQuarantined    = []string{string(ColumnAssetStateQuarantined)}
+)
+
 func PlanColumnAssetReachability(input ColumnAssetReachabilityInput) (ColumnAssetReachabilityPlan, error) {
-	records := make(map[ColumnAssetRef]*columnAssetReachabilityRecord)
+	records := make(map[ColumnAssetRef]columnAssetReachabilityRecord, estimateColumnAssetReachabilityRefs(input))
 	segments := make(map[uint32]*columnAssetSegmentState)
 	plan := ColumnAssetReachabilityPlan{}
 
@@ -291,7 +302,7 @@ func PlanColumnAssetRefDelta(input ColumnAssetRefDeltaInput) (ColumnAssetRefDelt
 
 func ColumnCollectionManifestAssetRefs(manifest ColumnCollectionManifest) ([]ColumnAssetReachabilityEntry, error) {
 	stats := ColumnAssetReachabilityStats{}
-	records := make(map[ColumnAssetRef]*columnAssetReachabilityRecord)
+	records := make(map[ColumnAssetRef]columnAssetReachabilityRecord, len(manifest.PartSet.BaseParts)+len(manifest.PartSet.DeltaParts))
 	segments := make(map[uint32]*columnAssetSegmentState)
 	if err := addManifestAssetRefs(records, segments, manifest, ColumnAssetStateActive, true, false, &stats); err != nil {
 		return nil, err
@@ -327,7 +338,7 @@ type columnAssetSegmentState struct {
 	candidateRefs int
 }
 
-func addManifestAssetRefs(records map[ColumnAssetRef]*columnAssetReachabilityRecord, segments map[uint32]*columnAssetSegmentState, manifest ColumnCollectionManifest, state ColumnAssetLifecycleState, live bool, candidate bool, stats *ColumnAssetReachabilityStats) error {
+func addManifestAssetRefs(records map[ColumnAssetRef]columnAssetReachabilityRecord, segments map[uint32]*columnAssetSegmentState, manifest ColumnCollectionManifest, state ColumnAssetLifecycleState, live bool, candidate bool, stats *ColumnAssetReachabilityStats) error {
 	if err := validateColumnCollectionManifest(manifest); err != nil {
 		return err
 	}
@@ -347,14 +358,14 @@ func addManifestAssetRefs(records map[ColumnAssetRef]*columnAssetReachabilityRec
 	return nil
 }
 
-func addManifestPartAssetRef(records map[ColumnAssetRef]*columnAssetReachabilityRecord, segments map[uint32]*columnAssetSegmentState, partRef ColumnManifestPartRef, state ColumnAssetLifecycleState, live bool, candidate bool, stats *ColumnAssetReachabilityStats) error {
+func addManifestPartAssetRef(records map[ColumnAssetRef]columnAssetReachabilityRecord, segments map[uint32]*columnAssetSegmentState, partRef ColumnManifestPartRef, state ColumnAssetLifecycleState, live bool, candidate bool, stats *ColumnAssetReachabilityStats) error {
 	entry := ColumnAssetReachabilityEntry{
 		Ref:          partRef.Part.AssetRef,
 		State:        state,
 		Bytes:        partRef.Part.AssetBytes,
 		PartID:       partRef.Part.PartID,
 		GenerationID: partRef.GenerationID,
-		Reasons:      []string{string(state)},
+		Reasons:      columnAssetReachabilityDefaultReasons(state),
 	}
 	if err := addReachabilityEntry(records, segments, entry, live, candidate, false); err != nil {
 		return err
@@ -365,7 +376,7 @@ func addManifestPartAssetRef(records map[ColumnAssetRef]*columnAssetReachability
 	return nil
 }
 
-func addPreparedAsset(records map[ColumnAssetRef]*columnAssetReachabilityRecord, segments map[uint32]*columnAssetSegmentState, prepared ColumnPreparedAsset, state ColumnAssetLifecycleState, live bool, candidate bool, stats *ColumnAssetReachabilityStats) error {
+func addPreparedAsset(records map[ColumnAssetRef]columnAssetReachabilityRecord, segments map[uint32]*columnAssetSegmentState, prepared ColumnPreparedAsset, state ColumnAssetLifecycleState, live bool, candidate bool, stats *ColumnAssetReachabilityStats) error {
 	if err := validateColumnAssetRef(prepared.Ref); err != nil {
 		return err
 	}
@@ -384,7 +395,7 @@ func addPreparedAsset(records map[ColumnAssetRef]*columnAssetReachabilityRecord,
 		Reasons:      []string{prepared.Reason},
 	}
 	if prepared.Reason == "" {
-		entry.Reasons = []string{string(state)}
+		entry.Reasons = columnAssetReachabilityDefaultReasons(state)
 	}
 	if err := addReachabilityEntry(records, segments, entry, live, candidate, state == ColumnAssetStateQuarantined); err != nil {
 		return err
@@ -395,7 +406,7 @@ func addPreparedAsset(records map[ColumnAssetRef]*columnAssetReachabilityRecord,
 	return nil
 }
 
-func addReachabilityEntry(records map[ColumnAssetRef]*columnAssetReachabilityRecord, segments map[uint32]*columnAssetSegmentState, entry ColumnAssetReachabilityEntry, live bool, candidate bool, quarantined bool) error {
+func addReachabilityEntry(records map[ColumnAssetRef]columnAssetReachabilityRecord, segments map[uint32]*columnAssetSegmentState, entry ColumnAssetReachabilityEntry, live bool, candidate bool, quarantined bool) error {
 	if entry.Bytes < 0 {
 		return fmt.Errorf("colgranule: negative asset bytes %d", entry.Bytes)
 	}
@@ -404,8 +415,7 @@ func addReachabilityEntry(records map[ColumnAssetRef]*columnAssetReachabilityRec
 	}
 	record, ok := records[entry.Ref]
 	if !ok {
-		record = &columnAssetReachabilityRecord{entry: entry}
-		records[entry.Ref] = record
+		record = columnAssetReachabilityRecord{entry: entry}
 	} else {
 		record.entry.State = strongestColumnAssetState(record.entry.State, entry.State)
 		if record.entry.Bytes == 0 {
@@ -422,10 +432,51 @@ func addReachabilityEntry(records map[ColumnAssetRef]*columnAssetReachabilityRec
 	record.live = record.live || live
 	record.candidate = record.candidate || candidate
 	record.quarantined = record.quarantined || quarantined
+	records[entry.Ref] = record
 	if segments[entry.Ref.FileID] == nil {
 		segments[entry.Ref.FileID] = &columnAssetSegmentState{}
 	}
 	return nil
+}
+
+func estimateColumnAssetReachabilityRefs(input ColumnAssetReachabilityInput) int {
+	refs := len(input.PreparedAssets) + len(input.QuarantinedAssets)
+	if input.ActiveManifest != nil {
+		refs += len(input.ActiveManifest.PartSet.BaseParts) + len(input.ActiveManifest.PartSet.DeltaParts)
+	}
+	for i := range input.PendingManifests {
+		refs += len(input.PendingManifests[i].PartSet.BaseParts) + len(input.PendingManifests[i].PartSet.DeltaParts)
+	}
+	for i := range input.SnapshotPinnedManifests {
+		refs += len(input.SnapshotPinnedManifests[i].PartSet.BaseParts) + len(input.SnapshotPinnedManifests[i].PartSet.DeltaParts)
+	}
+	for i := range input.SupersededManifests {
+		refs += len(input.SupersededManifests[i].PartSet.BaseParts) + len(input.SupersededManifests[i].PartSet.DeltaParts)
+	}
+	return refs
+}
+
+func columnAssetReachabilityDefaultReasons(state ColumnAssetLifecycleState) []string {
+	switch state {
+	case ColumnAssetStatePrepared:
+		return columnAssetReasonPrepared
+	case ColumnAssetStatePendingPublish:
+		return columnAssetReasonPendingPublish
+	case ColumnAssetStateActive:
+		return columnAssetReasonActive
+	case ColumnAssetStateSuperseded:
+		return columnAssetReasonSuperseded
+	case ColumnAssetStateSnapshotPinned:
+		return columnAssetReasonSnapshotPinned
+	case ColumnAssetStateReclaimable:
+		return columnAssetReasonReclaimable
+	case ColumnAssetStateDeleting:
+		return columnAssetReasonDeleting
+	case ColumnAssetStateQuarantined:
+		return columnAssetReasonQuarantined
+	default:
+		return nil
+	}
 }
 
 func strongestColumnAssetState(a ColumnAssetLifecycleState, b ColumnAssetLifecycleState) ColumnAssetLifecycleState {

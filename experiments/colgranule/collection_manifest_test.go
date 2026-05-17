@@ -1,6 +1,7 @@
 package colgranule
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -110,6 +111,40 @@ func TestColumnCollectionManifestRejectsUnknownVersionAndChecksumMismatch(t *tes
 	}
 	if _, err := workspace.LoadCollectionManifest(); err == nil || !strings.Contains(err.Error(), "collection manifest checksum") {
 		t.Fatalf("LoadCollectionManifest checksum err=%v want checksum mismatch", err)
+	}
+}
+
+func TestColumnCollectionManifestCompactEncodeAndPrettyFallback(t *testing.T) {
+	manifest := syntheticColumnCollectionManifestForBenchmark(2)
+	payload, err := EncodeColumnCollectionManifest(manifest)
+	if err != nil {
+		t.Fatalf("EncodeColumnCollectionManifest: %v", err)
+	}
+	if bytes.Contains(payload, []byte("\n")) {
+		t.Fatalf("encoded manifest contains newlines, want compact envelope")
+	}
+	decoded, err := DecodeColumnCollectionManifest(payload)
+	if err != nil {
+		t.Fatalf("DecodeColumnCollectionManifest compact: %v", err)
+	}
+	if decoded.ActiveGeneration != manifest.ActiveGeneration || len(decoded.PartSet.BaseParts) != len(manifest.PartSet.BaseParts) {
+		t.Fatalf("decoded compact manifest generation/parts=(%d,%d) want (%d,%d)", decoded.ActiveGeneration, len(decoded.PartSet.BaseParts), manifest.ActiveGeneration, len(manifest.PartSet.BaseParts))
+	}
+
+	var env columnCollectionManifestEnvelope
+	if err := json.Unmarshal(payload, &env); err != nil {
+		t.Fatalf("unmarshal compact envelope: %v", err)
+	}
+	pretty, err := json.MarshalIndent(env, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent envelope: %v", err)
+	}
+	decoded, err = DecodeColumnCollectionManifest(pretty)
+	if err != nil {
+		t.Fatalf("DecodeColumnCollectionManifest pretty fallback: %v", err)
+	}
+	if decoded.ActiveGeneration != manifest.ActiveGeneration || len(decoded.PartSet.BaseParts) != len(manifest.PartSet.BaseParts) {
+		t.Fatalf("decoded pretty manifest generation/parts=(%d,%d) want (%d,%d)", decoded.ActiveGeneration, len(decoded.PartSet.BaseParts), manifest.ActiveGeneration, len(manifest.PartSet.BaseParts))
 	}
 }
 

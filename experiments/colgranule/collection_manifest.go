@@ -1,6 +1,7 @@
 package colgranule
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"hash/crc32"
@@ -122,6 +123,13 @@ type columnCollectionManifestEnvelope struct {
 	Version  uint16                   `json:"version"`
 	Checksum uint32                   `json:"checksum"`
 	Manifest ColumnCollectionManifest `json:"manifest"`
+}
+
+type columnCollectionManifestRawEnvelope struct {
+	Magic    string          `json:"magic"`
+	Version  uint16          `json:"version"`
+	Checksum uint32          `json:"checksum"`
+	Manifest json.RawMessage `json:"manifest"`
 }
 
 func NewColumnManifestPartRef(role ColumnPartRole, generationID uint64, part ColumnWorkspacePartManifest) ColumnManifestPartRef {
@@ -256,17 +264,17 @@ func EncodeColumnCollectionManifest(manifest ColumnCollectionManifest) ([]byte, 
 	if err != nil {
 		return nil, err
 	}
-	env := columnCollectionManifestEnvelope{
+	env := columnCollectionManifestRawEnvelope{
 		Magic:    columnCollectionManifestMagic,
 		Version:  columnCollectionManifestVersion,
 		Checksum: crc32.ChecksumIEEE(manifestBytes),
-		Manifest: manifest,
+		Manifest: manifestBytes,
 	}
-	return json.MarshalIndent(env, "", "  ")
+	return json.Marshal(env)
 }
 
 func DecodeColumnCollectionManifest(data []byte) (ColumnCollectionManifest, error) {
-	var env columnCollectionManifestEnvelope
+	var env columnCollectionManifestRawEnvelope
 	if err := json.Unmarshal(data, &env); err != nil {
 		return ColumnCollectionManifest{}, err
 	}
@@ -276,17 +284,30 @@ func DecodeColumnCollectionManifest(data []byte) (ColumnCollectionManifest, erro
 	if env.Version != columnCollectionManifestVersion {
 		return ColumnCollectionManifest{}, fmt.Errorf("colgranule: unsupported collection manifest version %d", env.Version)
 	}
-	manifestBytes, err := json.Marshal(env.Manifest)
-	if err != nil {
-		return ColumnCollectionManifest{}, err
+	if len(env.Manifest) == 0 {
+		return ColumnCollectionManifest{}, fmt.Errorf("colgranule: collection manifest missing manifest payload")
 	}
-	if checksum := crc32.ChecksumIEEE(manifestBytes); checksum != env.Checksum {
+	checksum := crc32.ChecksumIEEE(env.Manifest)
+	if checksum != env.Checksum {
+		// Support earlier pretty-printed experiment payloads without paying this
+		// compaction cost on newly encoded compact manifests.
+		var compact bytes.Buffer
+		if err := json.Compact(&compact, env.Manifest); err != nil {
+			return ColumnCollectionManifest{}, err
+		}
+		checksum = crc32.ChecksumIEEE(compact.Bytes())
+	}
+	if checksum != env.Checksum {
 		return ColumnCollectionManifest{}, fmt.Errorf("colgranule: collection manifest checksum=%08x want %08x", checksum, env.Checksum)
 	}
-	if err := validateColumnCollectionManifest(env.Manifest); err != nil {
+	var manifest ColumnCollectionManifest
+	if err := json.Unmarshal(env.Manifest, &manifest); err != nil {
 		return ColumnCollectionManifest{}, err
 	}
-	return env.Manifest, nil
+	if err := validateColumnCollectionManifest(manifest); err != nil {
+		return ColumnCollectionManifest{}, err
+	}
+	return manifest, nil
 }
 
 func (w *ColumnWorkspace) collectionManifestPath() string {
@@ -355,24 +376,37 @@ func validateColumnCollectionManifest(manifest ColumnCollectionManifest) error {
 			return fmt.Errorf("colgranule: collection manifest sort key column %s is not declared", c.Column)
 		}
 	}
-	seenParts := make(map[uint64]struct{}, len(manifest.PartSet.BaseParts)+len(manifest.PartSet.DeltaParts))
-	for _, ref := range manifest.PartSet.BaseParts {
-		if err := validateColumnManifestPartRef(ref, ColumnPartRoleBase); err != nil {
-			return err
+	if columnManifestPartIDsStrictlyIncreasing(manifest.PartSet) {
+		for _, ref := range manifest.PartSet.BaseParts {
+			if err := validateColumnManifestPartRef(ref, ColumnPartRoleBase); err != nil {
+				return err
+			}
 		}
-		if _, ok := seenParts[ref.Part.PartID]; ok {
-			return fmt.Errorf("colgranule: duplicate collection manifest part %d", ref.Part.PartID)
+		for _, ref := range manifest.PartSet.DeltaParts {
+			if err := validateColumnManifestPartRef(ref, ColumnPartRoleDelta); err != nil {
+				return err
+			}
 		}
-		seenParts[ref.Part.PartID] = struct{}{}
-	}
-	for _, ref := range manifest.PartSet.DeltaParts {
-		if err := validateColumnManifestPartRef(ref, ColumnPartRoleDelta); err != nil {
-			return err
+	} else {
+		seenParts := make(map[uint64]struct{}, len(manifest.PartSet.BaseParts)+len(manifest.PartSet.DeltaParts))
+		for _, ref := range manifest.PartSet.BaseParts {
+			if err := validateColumnManifestPartRef(ref, ColumnPartRoleBase); err != nil {
+				return err
+			}
+			if _, ok := seenParts[ref.Part.PartID]; ok {
+				return fmt.Errorf("colgranule: duplicate collection manifest part %d", ref.Part.PartID)
+			}
+			seenParts[ref.Part.PartID] = struct{}{}
 		}
-		if _, ok := seenParts[ref.Part.PartID]; ok {
-			return fmt.Errorf("colgranule: duplicate collection manifest part %d", ref.Part.PartID)
+		for _, ref := range manifest.PartSet.DeltaParts {
+			if err := validateColumnManifestPartRef(ref, ColumnPartRoleDelta); err != nil {
+				return err
+			}
+			if _, ok := seenParts[ref.Part.PartID]; ok {
+				return fmt.Errorf("colgranule: duplicate collection manifest part %d", ref.Part.PartID)
+			}
+			seenParts[ref.Part.PartID] = struct{}{}
 		}
-		seenParts[ref.Part.PartID] = struct{}{}
 	}
 	for _, tombstone := range manifest.PartSet.Tombstones {
 		if tombstone.GenerationID == 0 {
@@ -406,6 +440,26 @@ func validateColumnManifestPartRef(ref ColumnManifestPartRef, role ColumnPartRol
 		return fmt.Errorf("colgranule: collection manifest part %d coverage invalid: %w", ref.Part.PartID, err)
 	}
 	return nil
+}
+
+func columnManifestPartIDsStrictlyIncreasing(partSet ColumnPartSetManifest) bool {
+	var last uint64
+	var haveLast bool
+	for _, ref := range partSet.BaseParts {
+		if haveLast && ref.Part.PartID <= last {
+			return false
+		}
+		last = ref.Part.PartID
+		haveLast = true
+	}
+	for _, ref := range partSet.DeltaParts {
+		if haveLast && ref.Part.PartID <= last {
+			return false
+		}
+		last = ref.Part.PartID
+		haveLast = true
+	}
+	return true
 }
 
 func validateColumnPartRole(role ColumnPartRole) error {

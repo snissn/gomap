@@ -185,6 +185,10 @@ referenced `TCS1` asset records, and compact coverage descriptors for each part
 ref. Coverage descriptors carry role, generation, compaction level, source
 parts, optional replacement-delta source row/root generation ranges, primary-id
 range, sort-key range, row counts, deleted counts, asset refs, and checksums.
+Collection manifest envelopes are written as compact JSON and checksum the
+canonical compact manifest payload; reopen can still validate earlier
+pretty-printed experiment payloads by compacting the raw manifest field before
+checksum comparison.
 `ColumnPartSetReader` opens those refs from the workspace, builds latest-visible
 row state, exposes `LatestLocator`, and runs JSONBench q1-q5 over visible rows.
 
