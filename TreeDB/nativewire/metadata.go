@@ -49,7 +49,7 @@ func appendCollectionHandleRefPayload(dst []byte, handle CollectionHandle) []byt
 }
 
 func encodeCollectionMeta(meta collections.CollectionMeta) []byte {
-	dst := binary.AppendUvarint(nil, 2)
+	dst := binary.AppendUvarint(nil, 3)
 	dst = appendString(dst, meta.Name)
 	dst = binary.AppendUvarint(dst, uint64(encodeDocumentFormat(meta.Options.DocumentFormat)))
 	dst = binary.AppendUvarint(dst, uint64(encodeRootStorage(meta.Options.DataRootStoragePolicy)))
@@ -79,7 +79,7 @@ func decodeCollectionMeta(src []byte) (collections.CollectionMeta, error) {
 	if err != nil {
 		return collections.CollectionMeta{}, err
 	}
-	if version != 1 && version != 2 {
+	if version != 1 && version != 2 && version != 3 {
 		return collections.CollectionMeta{}, protocolError(iwire.ErrUnsupportedVersion, "collection_meta version %d", version)
 	}
 	name, err := readString(src, &off)
@@ -213,7 +213,7 @@ func decodeCollectionMeta(src []byte) (collections.CollectionMeta, error) {
 		}
 		meta.VectorIndexes = make([]collections.VectorIndexDefinition, 0, int(vectorIndexCount))
 		for i := uint64(0); i < vectorIndexCount; i++ {
-			def, next, err := decodeVectorIndexDefinitionAt(src, off, false)
+			def, next, err := decodeVectorIndexDefinitionAt(src, off, false, version >= 3)
 			if err != nil {
 				return collections.CollectionMeta{}, err
 			}
@@ -310,7 +310,7 @@ func decodeIndexDefinitionAt(src []byte, off int, withVersion bool) (collections
 
 func appendVectorIndexDefinition(dst []byte, def collections.VectorIndexDefinition, withVersion bool) []byte {
 	if withVersion && len(dst) == 0 {
-		dst = binary.AppendUvarint(dst, 1)
+		dst = binary.AppendUvarint(dst, 2)
 	}
 	dst = appendString(dst, def.Name)
 	dst = appendString(dst, def.Field)
@@ -320,16 +320,21 @@ func appendVectorIndexDefinition(dst []byte, def collections.VectorIndexDefiniti
 	dst = binary.AppendVarint(dst, int64(def.EfConstruction))
 	dst = binary.AppendVarint(dst, int64(def.EfSearch))
 	dst = binary.AppendUvarint(dst, encodeVectorIndexEncoding(def.Encoding))
+	dst = binary.AppendUvarint(dst, def.SchemaGeneration)
 	return dst
 }
 
-func decodeVectorIndexDefinitionAt(src []byte, off int, withVersion bool) (collections.VectorIndexDefinition, int, error) {
+func decodeVectorIndexDefinitionAt(src []byte, off int, withVersion bool, withSchemaGeneration bool) (collections.VectorIndexDefinition, int, error) {
 	if withVersion {
 		version, n, err := readUvarint(src[off:])
 		if err != nil {
 			return collections.VectorIndexDefinition{}, 0, err
 		}
-		if version != 1 {
+		switch version {
+		case 1:
+		case 2:
+			withSchemaGeneration = true
+		default:
 			return collections.VectorIndexDefinition{}, 0, protocolError(iwire.ErrUnsupportedVersion, "vector_index_definition version %d", version)
 		}
 		off += n
@@ -366,6 +371,13 @@ func decodeVectorIndexDefinitionAt(src []byte, off int, withVersion bool) (colle
 	if err != nil {
 		return collections.VectorIndexDefinition{}, 0, err
 	}
+	var schemaGeneration uint64
+	if withSchemaGeneration {
+		schemaGeneration, err = readUvarintField(src, &off, "vector_index schema_generation")
+		if err != nil {
+			return collections.VectorIndexDefinition{}, 0, err
+		}
+	}
 	if err := ensureNonNegativeIntCapacity("vector_index dimensions", dimensions); err != nil {
 		return collections.VectorIndexDefinition{}, 0, err
 	}
@@ -387,14 +399,15 @@ func decodeVectorIndexDefinitionAt(src []byte, off int, withVersion bool) (colle
 		return collections.VectorIndexDefinition{}, 0, err
 	}
 	return collections.VectorIndexDefinition{
-		Name:           name,
-		Field:          field,
-		Metric:         decodedMetric,
-		Dimensions:     int(dimensions),
-		M:              int(m),
-		EfConstruction: int(efConstruction),
-		EfSearch:       int(efSearch),
-		Encoding:       decodedEncoding,
+		Name:             name,
+		Field:            field,
+		Metric:           decodedMetric,
+		Dimensions:       int(dimensions),
+		M:                int(m),
+		EfConstruction:   int(efConstruction),
+		EfSearch:         int(efSearch),
+		Encoding:         decodedEncoding,
+		SchemaGeneration: schemaGeneration,
 	}, off, nil
 }
 
