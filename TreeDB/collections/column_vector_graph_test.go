@@ -93,6 +93,39 @@ func TestColumnVectorGraphRejectsUnrepresentableQueryInvNorm(t *testing.T) {
 	}
 }
 
+func TestColumnVectorGraphSearchHandlesOverflowingFloat32Dot(t *testing.T) {
+	graph, err := NewColumnVectorGraphFromColumns(ColumnVectorGraphColumns{
+		DocumentIDs:     [][]byte{[]byte("doc-large"), []byte("doc-orthogonal")},
+		Vectors:         []float32{1e20, 0, 0, 1e20},
+		InvNorms:        []float32{1e-20, 1e-20},
+		NeighborOffsets: []uint32{0, 1, 2},
+		Neighbors:       []uint32{1, 0},
+		Dimensions:      2,
+		EntryPoint:      0,
+		EfSearch:        2,
+	})
+	if err != nil {
+		t.Fatalf("NewColumnVectorGraphFromColumns: %v", err)
+	}
+
+	results, _, err := graph.SearchCosine([]float32{1e20, 0}, ColumnVectorGraphSearchOptions{TopK: 1, EfSearch: 2}, &ColumnVectorGraphSearchScratch{})
+	if err != nil {
+		t.Fatalf("SearchCosine: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("results=%d want 1", len(results))
+	}
+	if !bytes.Equal(results[0].DocumentID, []byte("doc-large")) {
+		t.Fatalf("result document ID=%q want doc-large", results[0].DocumentID)
+	}
+	if math.IsInf(float64(results[0].Distance), 0) || math.IsNaN(float64(results[0].Distance)) {
+		t.Fatalf("distance=%g want finite", results[0].Distance)
+	}
+	if math.Abs(float64(results[0].Distance)) > 1e-6 {
+		t.Fatalf("distance=%g want near 0", results[0].Distance)
+	}
+}
+
 func TestColumnVectorGraphSearchAllocs(t *testing.T) {
 	graph, err := NewColumnVectorGraphFromColumns(columnVectorGraphTestColumns(1024, 64, 16, false))
 	if err != nil {

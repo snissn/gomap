@@ -379,7 +379,24 @@ func (g *ColumnVectorGraph) cosineDistance(query []float32, queryInvNorm float32
 	}
 	vector := g.vectorAt(ordinal)
 	dot := vectorDotProductFloat32(query, vector)
+	if math.IsInf(float64(dot), 0) || math.IsNaN(float64(dot)) {
+		return columnVectorGraphCosineDistanceWide(query, vector, queryInvNorm, g.invNorms[ordinal])
+	}
 	return 1 - dot*queryInvNorm*g.invNorms[ordinal]
+}
+
+func columnVectorGraphCosineDistanceWide(query []float32, vector []float32, queryInvNorm float32, vectorInvNorm float32) float32 {
+	var cosine float64
+	queryScale := float64(queryInvNorm)
+	vectorScale := float64(vectorInvNorm)
+	for i := range query {
+		cosine += float64(query[i]) * queryScale * float64(vector[i]) * vectorScale
+	}
+	distance := 1 - cosine
+	if math.IsNaN(distance) || math.IsInf(distance, 0) {
+		return float32(math.Inf(1))
+	}
+	return float32(distance)
 }
 
 func (g *ColumnVectorGraph) vectorAt(ordinal int) []float32 {
