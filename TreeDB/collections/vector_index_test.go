@@ -171,7 +171,7 @@ func TestCollectionVectorIndexSearchKeepsExtraCandidatesThroughAttach(t *testing
 	}
 }
 
-func TestVectorIndexPruneLayerNeighborsUsesDistanceThenDocumentID(t *testing.T) {
+func TestVectorIndexPruneLayerNeighborsUsesDistanceThenDocumentIDForDiverseNeighbors(t *testing.T) {
 	index, err := newVectorIndex(nil, VectorIndexOptions{
 		Name:   "embedding",
 		Field:  "embedding",
@@ -182,8 +182,8 @@ func TestVectorIndexPruneLayerNeighborsUsesDistanceThenDocumentID(t *testing.T) 
 	}
 	index.nodes = []vectorIndexNode{
 		{documentID: []byte("from"), vector: []float32{1, 0}},
-		{documentID: []byte("b"), vector: []float32{0.8, 0.2}},
-		{documentID: []byte("a"), vector: []float32{0.8, 0.2}},
+		{documentID: []byte("b"), vector: unitVectorAtDegrees(10)},
+		{documentID: []byte("a"), vector: unitVectorAtDegrees(-10)},
 		{documentID: []byte("far"), vector: []float32{0, 1}},
 	}
 	for i := range index.nodes {
@@ -191,9 +191,9 @@ func TestVectorIndexPruneLayerNeighborsUsesDistanceThenDocumentID(t *testing.T) 
 	}
 
 	got := index.pruneLayerNeighborsLocked(0, []vectorIndexNeighbor{
-		{nodeID: 3, distance: 1},
-		{nodeID: 1, distance: 0.03},
-		{nodeID: 2, distance: 0.03},
+		{nodeID: 3, distance: mustExactVectorDistance(t, index.nodes[0].vector, index.nodes[3].vector)},
+		{nodeID: 1, distance: mustExactVectorDistance(t, index.nodes[0].vector, index.nodes[1].vector)},
+		{nodeID: 2, distance: mustExactVectorDistance(t, index.nodes[0].vector, index.nodes[2].vector)},
 	}, 2)
 	if len(got) != 2 || got[0].nodeID != 2 || got[1].nodeID != 1 {
 		t.Fatalf("pruned neighbors=%v want [2 1]", got)
