@@ -145,6 +145,52 @@ func TestUnifiedWAL_CrashRecoveryMissingPayloadSkipped(t *testing.T) {
 	}
 }
 
+func TestUnifiedWAL_CrashRecoveryCompactZeroInlineBatch(t *testing.T) {
+	dir := t.TempDir()
+	walDir := filepath.Join(dir, "wal")
+	if err := os.MkdirAll(walDir, 0755); err != nil {
+		t.Fatalf("mkdir wal: %v", err)
+	}
+
+	commitPath := filepath.Join(walDir, "commit-l0-000001.log")
+	writer, err := commitlog.NewWriter(commitPath)
+	if err != nil {
+		t.Fatalf("commitlog.NewWriter: %v", err)
+	}
+	want := make([]byte, 64)
+	records := []commitlog.Record{
+		{Op: commitlog.OpSetInline, Key: []byte("zero-a"), Value: want, Seq: 1},
+		{Op: commitlog.OpSetInline, Key: []byte("zero-b"), Value: want, Seq: 1},
+	}
+	if err := writer.AppendBatch(records); err != nil {
+		_ = writer.Close()
+		t.Fatalf("commitlog.AppendBatch: %v", err)
+	}
+	if err := writer.Sync(); err != nil {
+		_ = writer.Close()
+		t.Fatalf("commitlog.Sync: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("commitlog.Close: %v", err)
+	}
+
+	opened, err := db.Open(db.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer opened.Close()
+
+	for _, key := range [][]byte{[]byte("zero-a"), []byte("zero-b")} {
+		got, err := opened.Get(key)
+		if err != nil {
+			t.Fatalf("get %q: %v", key, err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("value mismatch for %q: got %x want %x", key, got, want)
+		}
+	}
+}
+
 func TestUnifiedWAL_LargeBatch(t *testing.T) {
 	dir := t.TempDir()
 	backend, _ := db.Open(db.Options{Dir: dir})

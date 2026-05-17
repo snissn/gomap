@@ -10780,6 +10780,19 @@ func (db *DB) assignCommitSeq(records []logRecord) {
 	}
 }
 
+func allZeroBytes(p []byte) bool {
+	for _, b := range p {
+		if b != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func sameNonEmptyBytesData(a, b []byte) bool {
+	return len(a) > 0 && len(a) == len(b) && &a[0] == &b[0]
+}
+
 type domainIngressOp uint8
 
 const (
@@ -12218,6 +12231,7 @@ func (db *DB) flushWALRequests(l *lane, requests []walWriteRequest) error {
 		l.walMu.Unlock()
 		return errWALUnavailable
 	}
+	beforeSize := w.Size()
 	for i := range requests {
 		req := &requests[i]
 		if len(req.records) == 1 {
@@ -12227,14 +12241,12 @@ func (db *DB) flushWALRequests(l *lane, requests []walWriteRequest) error {
 				l.walMu.Unlock()
 				return err
 			}
-			totalBytes += db.logRecordSize(rec.Key, rec.Value)
 		} else {
 			err := w.AppendBatch(req.records)
 			if err != nil {
 				l.walMu.Unlock()
 				return err
 			}
-			totalBytes += db.logBatchSize(req.records)
 		}
 		if req.sync {
 			needSync = true
@@ -12246,6 +12258,7 @@ func (db *DB) flushWALRequests(l *lane, requests []walWriteRequest) error {
 			return err
 		}
 	}
+	totalBytes = w.Size() - beforeSize
 	l.walMu.Unlock()
 
 	if totalBytes > 0 {
@@ -13052,7 +13065,10 @@ func (db *DB) appendWAL(l *lane, records []logRecord, durability journalDurabili
 	}
 
 	db.assignCommitSeq(records)
+	return db.appendWALPrepared(l, records, durability)
+}
 
+func (db *DB) appendWALPrepared(l *lane, records []logRecord, durability journalDurability) error {
 	switch durability {
 	case journalDurabilitySync:
 		return db.appendWALDirect(l, records, true)
@@ -13061,6 +13077,106 @@ func (db *DB) appendWAL(l *lane, records []logRecord, durability journalDurabili
 	default:
 		return db.appendWALInline(l, records, false)
 	}
+}
+
+func (db *DB) appendWALAssigned(l *lane, records []logRecord, durability journalDurability) error {
+	if db.disableJournal {
+		return nil
+	}
+	if len(records) == 0 {
+		return nil
+	}
+	if l == nil {
+		return errWALUnavailable
+	}
+	select {
+	case <-db.closeCh:
+		return errWALClosed
+	default:
+	}
+	db.walAckMu.Lock()
+	if db.walErr != nil {
+		err := db.walErr
+		db.walAckMu.Unlock()
+		return err
+	}
+	db.walAckMu.Unlock()
+
+	return db.appendWALPrepared(l, records, durability)
+}
+
+type zeroInlineBatchCommitWriter interface {
+	AppendZeroInlineBatchFunc(count int, seq uint64, valueLen int, keyAt func(int) []byte) error
+}
+
+func (db *DB) appendWALZeroInlineEntries(l *lane, entries []batch.Entry, seq uint64, valueLen int, durability journalDurability) (bool, error) {
+	if db.disableJournal {
+		return true, nil
+	}
+	if len(entries) == 0 {
+		return true, nil
+	}
+	if l == nil {
+		return true, errWALUnavailable
+	}
+	select {
+	case <-db.closeCh:
+		return true, errWALClosed
+	default:
+	}
+	db.walAckMu.Lock()
+	if db.walErr != nil {
+		err := db.walErr
+		db.walAckMu.Unlock()
+		return true, err
+	}
+	db.walAckMu.Unlock()
+
+	var (
+		totalBytes int64
+		err        error
+	)
+	l.walMu.Lock()
+	w := l.wal
+	if w == nil {
+		l.walMu.Unlock()
+		return true, errWALUnavailable
+	}
+	beforeSize := w.Size()
+	zw, ok := w.(zeroInlineBatchCommitWriter)
+	if !ok {
+		l.walMu.Unlock()
+		return false, nil
+	}
+	err = zw.AppendZeroInlineBatchFunc(len(entries), seq, valueLen, func(i int) []byte {
+		return entries[i].Key
+	})
+	if err == nil {
+		switch durability {
+		case journalDurabilitySync:
+			err = w.Sync()
+		case journalDurabilityFlush:
+			err = w.Flush()
+		}
+	}
+	if err == nil {
+		totalBytes = w.Size() - beforeSize
+	}
+	l.walMu.Unlock()
+
+	if err != nil {
+		db.walAckMu.Lock()
+		if db.walErr == nil {
+			db.walErr = err
+		}
+		db.walAckMu.Unlock()
+		return true, err
+	}
+
+	if totalBytes > 0 {
+		l.walLiveBytes.Add(totalBytes)
+	}
+	return true, nil
 }
 
 func (db *DB) appendWALOne(l *lane, record logRecord, durability journalDurability) error {
@@ -14561,16 +14677,18 @@ func (db *DB) appendWALInline(l *lane, records []logRecord, flush bool) error {
 		l.walMu.Unlock()
 		return errWALUnavailable
 	}
+	beforeSize := w.Size()
 	if len(records) == 1 {
 		rec := records[0]
 		err = w.Append(rec)
-		totalBytes = db.logRecordSize(rec.Key, rec.Value)
 	} else {
 		err = w.AppendBatch(records)
-		totalBytes = db.logBatchSize(records)
 	}
 	if err == nil && flush {
 		err = w.Flush()
+	}
+	if err == nil {
+		totalBytes = w.Size() - beforeSize
 	}
 	l.walMu.Unlock()
 
@@ -14600,10 +14718,14 @@ func (db *DB) appendWALInlineOne(l *lane, record logRecord, flush bool) error {
 		l.walMu.Unlock()
 		return errWALUnavailable
 	}
+	beforeSize := w.Size()
 	err := w.Append(record)
-	totalBytes := db.logRecordSize(record.Key, record.Value)
 	if err == nil && flush {
 		err = w.Flush()
+	}
+	totalBytes := int64(0)
+	if err == nil {
+		totalBytes = w.Size() - beforeSize
 	}
 	l.walMu.Unlock()
 
@@ -19415,6 +19537,15 @@ func (db *DB) Checkpoint() error {
 	hasMutable := db.mutableBytes.Load() > 0
 	hasQueue := len(db.queue) > 0
 	hasDirtyVLog := db.hasDirtyValueLogLanes()
+	hasLiveWAL := false
+	if !db.disableJournal {
+		for i := range db.lanes {
+			if db.lanes[i].walLiveBytes.Load() > 0 {
+				hasLiveWAL = true
+				break
+			}
+		}
+	}
 	if hasMutable {
 		if err := db.rotateMutableShardsLocked(db.checkpointRotateCapacity(), false); err != nil {
 			db.mu.Unlock()
@@ -19422,6 +19553,17 @@ func (db *DB) Checkpoint() error {
 			return err
 		}
 		hasQueue = len(db.queue) > 0
+		hasLiveWAL = hasLiveWAL || !db.disableJournal
+	} else if !hasQueue && !hasDirtyVLog && !hasLiveWAL && db.commandWALCheckpointPublish == nil {
+		db.mu.Unlock()
+		releaseWriteMu()
+		db.checkpointNoopSkips.Add(1)
+		if err := db.maybeVacuumSparseIndexOnCheckpoint(); err != nil {
+			return err
+		}
+		db.checkValueLogRetention()
+		db.scheduleRetainedValueLogPrune()
+		return nil
 	} else if db.disableJournal && !hasQueue && !hasDirtyVLog {
 		// Checkpoint-kick retries may need to rotate current value-log segments
 		// even when there is no new foreground dirtiness, so observed-source GC
@@ -19607,7 +19749,7 @@ func (db *DB) Checkpoint() error {
 		db.mu.Unlock()
 		db.forgetValueLogRetain(path)
 	}
-	if removed {
+	if removed && !db.relaxedSync {
 		db.syncDirBestEffort(db.dir)
 	}
 	if err := db.maybeVacuumSparseIndexOnCheckpoint(); err != nil {
@@ -19699,11 +19841,10 @@ func (db *DB) canPiggybackCommandWALCheckpointPublish(sync bool) bool {
 	if len(units) != queueLen || totalLen <= 0 {
 		return false
 	}
-	// Only piggyback when the whole checkpoint queue will publish in one backend
-	// commit. Chunking would publish AppliedCommandLSN before later queued roots.
-	if totalLen > db.flushBackendEntriesCap(totalLen, sync) {
-		return false
-	}
+	// Chunked checkpoint flushes attach command-LSN publication to the final
+	// backend batch. Intermediate chunks publish roots without advancing
+	// AppliedCommandLSN, so crash recovery either replays the command frames or
+	// observes the final root/applied-LSN tuple together.
 	return true
 }
 
@@ -21854,7 +21995,7 @@ func (db *DB) rotateWALLockedWithOptions(l *lane, rotateValueLog bool) error {
 	if l.wal != nil {
 		oldPath := l.walPath
 		oldSize := l.wal.Size()
-		if err := l.wal.RotateTo(path); err != nil {
+		if err := l.wal.RotateToWithSync(path, !db.relaxedSync); err != nil {
 			return err
 		}
 		l.walSeq = nextSeq
@@ -22951,6 +23092,7 @@ func (db *DB) flushLaneOnceWithCommandPublish(sync bool, laneID int, commandPubl
 	// to reduce peak allocator demand (and thus index.db high-watermark growth)
 	// under small KeepRecent windows.
 	chunkBackend := totalLen > backendEntriesCap
+	emittedChunk := false
 
 	// backendBatch := db.backend.NewBatch() // Original line, now replaced
 	if db.deferredValueLogEnabled() {
@@ -22986,6 +23128,7 @@ func (db *DB) flushLaneOnceWithCommandPublish(sync bool, laneID int, commandPubl
 				return nil
 			}
 
+			emittedChunk = true
 			db.backendWriteBatchesTotal.Add(1)
 			// If sync==true, we only need a single durability boundary at the end of
 			// the flush. Write the intermediate chunks without fsync to avoid
@@ -23148,6 +23291,31 @@ func (db *DB) flushLaneOnceWithCommandPublish(sync bool, laneID int, commandPubl
 		} else {
 			err = backendBatch.Write()
 		}
+		cerr := backendBatch.Close()
+		if err == nil {
+			err = cerr
+		}
+		if err != nil {
+			db.reportError(err)
+			return false
+		}
+		if commandPublishAttached {
+			commandPublish.consumed = true
+			db.commandWALCheckpointPublishPiggybacked.Add(1)
+		}
+	} else if sync && emittedChunk {
+		var attachErr error
+		commandPublishAttached, attachErr = commandPublish.attach(backendBatch)
+		if attachErr != nil {
+			db.reportError(attachErr)
+			_ = backendBatch.Close()
+			return false
+		}
+		// If the sequential path landed exactly on a chunk boundary, this empty
+		// final batch provides the single sync boundary for the prior chunks and
+		// can carry the command-WAL AppliedCommandLSN publication.
+		db.backendWriteBatchesTotal.Add(1)
+		err = backendBatch.WriteSync()
 		cerr := backendBatch.Close()
 		if err == nil {
 			err = cerr
@@ -28653,10 +28821,33 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 	}
 	b.shardIdxs = shardIdxs
 	allDeletes := true
+	zeroInlineWALBatch := !b.db.disableJournal
+	zeroInlineValueLen := -1
+	var zeroInlineValueRef []byte
 	for i := range b.entries {
 		op := &b.entries[i]
 		if op.Type != batch.OpDelete {
 			allDeletes = false
+		}
+		if zeroInlineWALBatch {
+			if op.Type != batch.OpPut || op.IsPtr || len(op.Value) == 0 {
+				zeroInlineWALBatch = false
+			} else {
+				if zeroInlineValueLen < 0 {
+					zeroInlineValueLen = len(op.Value)
+				} else if zeroInlineValueLen != len(op.Value) {
+					zeroInlineWALBatch = false
+				}
+				if zeroInlineWALBatch {
+					if sameNonEmptyBytesData(op.Value, zeroInlineValueRef) {
+						// Same immutable value buffer as the first zero value in this batch.
+					} else if allZeroBytes(op.Value) {
+						zeroInlineValueRef = op.Value
+					} else {
+						zeroInlineWALBatch = false
+					}
+				}
+			}
 		}
 		idx := b.db.shardIndex(op.Key)
 		shardIdxs[i] = idx
@@ -28794,7 +28985,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 		if durability == journalDurabilitySync {
 			defer b.db.releaseLaneSync(lane)
 		}
-		if !b.db.disableJournal {
+		if !b.db.disableJournal && allowPointers {
 			rids = make([]uint64, len(b.entries))
 		}
 	}
@@ -29002,27 +29193,42 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 	}
 
 	if !b.db.disableJournal {
-		records := b.walBuf[:0]
-		if cap(records) < len(b.entries) {
-			records = make([]logRecord, 0, len(b.entries))
-		}
-		for i := range b.entries {
-			op := &b.entries[i]
-			switch op.Type {
-			case batch.OpDelete:
-				records = append(records, logRecord{Op: logOpDelete, Key: op.Key})
-			case batch.OpPut:
-				if rids != nil && rids[i] != 0 {
-					records = append(records, logRecord{Op: logOpSetRID, Key: op.Key, RID: rids[i]})
-				} else {
-					records = append(records, logRecord{Op: logOpSetInline, Key: op.Key, Value: op.Value})
-				}
+		seq := b.db.nextCommitSeq.Add(1)
+		handledZeroInline := false
+		if zeroInlineWALBatch && rids == nil && zeroInlineValueLen > 0 {
+			var err error
+			handledZeroInline, err = b.db.appendWALZeroInlineEntries(lane, b.entries, seq, zeroInlineValueLen, durability)
+			if err != nil {
+				b.db.writeMu.RUnlock()
+				return err
+			}
+			if handledZeroInline {
+				b.walBuf = b.walBuf[:0]
 			}
 		}
-		b.walBuf = records
-		if err := b.db.appendWAL(lane, records, durability); err != nil {
-			b.db.writeMu.RUnlock()
-			return err
+		if !handledZeroInline {
+			records := b.walBuf[:0]
+			if cap(records) < len(b.entries) {
+				records = make([]logRecord, 0, len(b.entries))
+			}
+			for i := range b.entries {
+				op := &b.entries[i]
+				switch op.Type {
+				case batch.OpDelete:
+					records = append(records, logRecord{Op: logOpDelete, Key: op.Key, Seq: seq})
+				case batch.OpPut:
+					if rids != nil && rids[i] != 0 {
+						records = append(records, logRecord{Op: logOpSetRID, Key: op.Key, RID: rids[i], Seq: seq})
+					} else {
+						records = append(records, logRecord{Op: logOpSetInline, Key: op.Key, Value: op.Value, Seq: seq})
+					}
+				}
+			}
+			b.walBuf = records
+			if err := b.db.appendWALAssigned(lane, records, durability); err != nil {
+				b.db.writeMu.RUnlock()
+				return err
+			}
 		}
 	}
 

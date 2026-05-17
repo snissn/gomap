@@ -4,14 +4,23 @@ import "errors"
 
 const (
 	Version = 1
+	// zeroInlineBatchVersion is a compact batch payload for all-zero inline
+	// values. Readers normalize it to ordinary OpSetInline records.
+	zeroInlineBatchVersion = 2
 
 	OpSetRID    = byte(0)
 	OpSetInline = byte(1)
 	OpDelete    = byte(2)
+	// OpSetInlineZero stores an inline zero-filled value without carrying the
+	// value bytes. Readers normalize it back to OpSetInline.
+	OpSetInlineZero = byte(3)
 
 	segmentHeaderSize = 8
 	batchHeaderSize   = 1 + 4
 	recordHeaderSize  = 1 + 2 + 4 + 8 + 8
+
+	zeroInlineBatchHeaderSize  = 1 + 4 + 8 + 4
+	zeroInlineRecordHeaderSize = 2
 )
 
 const (
@@ -33,6 +42,10 @@ var (
 	ErrCommandWALStaleSegment            = errors.New("commitlog: command wal stale segment")
 	ErrJournalOwnerExists                = errors.New("commitlog: journal owner already exists")
 )
+
+func isBatchPayloadVersion(version byte) bool {
+	return version == Version || version == zeroInlineBatchVersion
+}
 
 type Record struct {
 	Op    byte

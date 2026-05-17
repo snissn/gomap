@@ -16,9 +16,15 @@ const (
 
 	CommandWALNonCriticalFlagStart uint64 = 1 << 32
 
-	commandFrameHeaderSize = 4 + 2 + 2 + 2 + 2 + 8 + 8 + 8 + 8 + 8 + 2 + 2 + 4 + 4 + 4 + 4 + sha256.Size
-	rawKVBatchHeaderSize   = 2 + 4
-	rawKVOpHeaderSize      = 1 + 4 + 4
+	commandFrameHeaderSize   = 4 + 2 + 2 + 2 + 2 + 8 + 8 + 8 + 8 + 8 + 2 + 2 + 4 + 4 + 4 + 4 + sha256.Size
+	rawKVBatchPayloadVersion = uint16(1)
+	rawKVZeroBatchPayloadV2  = uint16(2)
+	rawKVZeroBatchPayloadV3  = uint16(3)
+	rawKVBatchHeaderSize     = 2 + 4
+	rawKVZeroBatchHeaderSize = 2 + 4 + 4
+	rawKVOpHeaderSize        = 1 + 4 + 4
+	rawKVZeroOpHeaderSize    = 4
+	rawKVZeroOpHeaderSizeV3  = 2
 
 	externalRefEncodedFixedSize      = 2 + 2 + 4 + 8 + 8 + 8 + sha256.Size
 	commandExtensionEncodedFixedSize = 2 + 2 + 4
@@ -104,8 +110,20 @@ type RawKVOperation struct {
 // RawKVBatchPayloadBuilder incrementally constructs a canonical RawKVBatch
 // payload while returning stable key/value views into the owned payload bytes.
 type RawKVBatchPayloadBuilder struct {
-	payload []byte
-	count   int
+	payload               []byte
+	zeroPayload           []byte
+	zeroSetValueView      []byte
+	payloadCapHint        int
+	opHint                int
+	count                 int
+	zeroSetCandidate      bool
+	zeroSetCompactOnly    bool
+	zeroSetValuesOmitted  bool
+	zeroSetValueLen       int
+	zeroSetKeyBytes       int
+	zeroSetMaxKeyLen      int
+	zeroSetCompactVersion uint16
+	zeroSetValueRef       []byte
 }
 
 // NewRawKVBatchPayloadBuilder returns a builder initialized with best-effort
@@ -131,14 +149,31 @@ func (b *RawKVBatchPayloadBuilder) ResetWithHint(opHint, byteHint int) error {
 	} else {
 		err = hintErr
 	}
-	if cap(b.payload) < capHint {
-		b.payload = make([]byte, rawKVBatchHeaderSize, capHint)
+	b.payloadCapHint = capHint
+	if opHint > 0 {
+		b.opHint = opHint
+	} else {
+		b.opHint = 0
+	}
+	if cap(b.payload) < rawKVBatchHeaderSize {
+		b.payload = make([]byte, rawKVBatchHeaderSize, rawKVBatchHeaderSize)
 	} else {
 		b.payload = b.payload[:rawKVBatchHeaderSize]
 		clear(b.payload)
 	}
-	binary.LittleEndian.PutUint16(b.payload[0:2], 1)
+	binary.LittleEndian.PutUint16(b.payload[0:2], rawKVBatchPayloadVersion)
 	b.count = 0
+	b.zeroSetCandidate = true
+	b.zeroSetCompactOnly = true
+	b.zeroSetValuesOmitted = false
+	b.zeroSetValueLen = -1
+	b.zeroSetKeyBytes = 0
+	b.zeroSetMaxKeyLen = 0
+	b.zeroSetCompactVersion = 0
+	b.zeroSetValueRef = nil
+	if b.zeroPayload != nil {
+		b.zeroPayload = b.zeroPayload[:0]
+	}
 	return err
 }
 
@@ -149,6 +184,28 @@ func (b *RawKVBatchPayloadBuilder) Payload() []byte {
 	if len(b.payload) >= rawKVBatchHeaderSize {
 		binary.LittleEndian.PutUint32(b.payload[2:6], uint32(b.count))
 	}
+	if b.zeroSetCompactOnly && b.zeroSetCandidate && b.count > 0 && b.zeroSetValueLen > 0 && len(b.zeroPayload) >= rawKVZeroBatchHeaderSize {
+		version := b.zeroSetCompactVersion
+		if version == 0 {
+			version = rawKVZeroBatchPayloadV2
+		}
+		binary.LittleEndian.PutUint16(b.zeroPayload[0:2], version)
+		binary.LittleEndian.PutUint32(b.zeroPayload[2:6], uint32(b.count))
+		binary.LittleEndian.PutUint32(b.zeroPayload[6:10], uint32(b.zeroSetValueLen))
+		return b.zeroPayload
+	}
+	if b.zeroSetCompactOnly && b.zeroSetCandidate && b.count > 0 && b.zeroSetValueLen > 0 {
+		if err := b.materializeCompactZeroSetPayload(); err == nil {
+			b.zeroSetCompactOnly = false
+			return b.payload
+		}
+	}
+	if b.zeroSetCandidate && b.count > 0 && b.zeroSetValueLen > 0 {
+		if payload, ok := b.compactZeroSetPayload(); ok {
+			return payload
+		}
+	}
+	b.materializeOmittedZeroValues()
 	return b.payload
 }
 
@@ -170,9 +227,15 @@ func (b *RawKVBatchPayloadBuilder) Truncate(payloadLen, count int) {
 	if b == nil || payloadLen < rawKVBatchHeaderSize || payloadLen > len(b.payload) || count < 0 {
 		return
 	}
+	if b.zeroSetCompactOnly {
+		b.truncateCompactZeroSetPayload(count)
+		return
+	}
+	b.materializeOmittedZeroValues()
 	b.payload = b.payload[:payloadLen]
 	b.count = count
 	binary.LittleEndian.PutUint32(b.payload[2:6], uint32(count))
+	b.recomputeZeroSetCandidate()
 }
 
 func (b *RawKVBatchPayloadBuilder) Append(op RawKVOperation) (keyView, valueView []byte, err error) {
@@ -222,6 +285,19 @@ func (b *RawKVBatchPayloadBuilder) AppendSet(key, value []byte) (keyView, valueV
 	if commandFrameIntExceedsUint32(len(key)) || commandFrameIntExceedsUint32(len(value)) {
 		return nil, nil, ErrRecordTooLarge
 	}
+	if b.zeroSetCompactOnly && b.canAppendCompactZeroSet(value) {
+		keyView, err := b.appendCompactZeroSet(key, value)
+		if err != nil {
+			return nil, nil, err
+		}
+		return keyView, b.zeroSetValueViewForLen(len(value)), nil
+	}
+	if b.zeroSetCompactOnly {
+		if err := b.materializeCompactZeroSetPayload(); err != nil {
+			return nil, nil, err
+		}
+		b.zeroSetCompactOnly = false
+	}
 	off, err := b.appendRawKVPayloadSpace(rawKVOpHeaderSize + len(key) + len(value))
 	if err != nil {
 		return nil, nil, err
@@ -234,10 +310,17 @@ func (b *RawKVBatchPayloadBuilder) AppendSet(key, value []byte) (keyView, valueV
 	copy(b.payload[off:], key)
 	off += len(key)
 	valueStart := off
-	copy(b.payload[off:], value)
+	zeroCompact := b.recordZeroSetCandidateForAppended(key, value)
+	if zeroCompact {
+		b.zeroSetValuesOmitted = true
+		valueView = b.zeroSetValueViewForLen(len(value))
+	} else {
+		copy(b.payload[off:], value)
+		valueView = b.payload[valueStart : valueStart+len(value) : valueStart+len(value)]
+	}
 	off += len(value)
 	b.count++
-	return b.payload[keyStart : keyStart+len(key) : keyStart+len(key)], b.payload[valueStart:off:off], nil
+	return b.payload[keyStart : keyStart+len(key) : keyStart+len(key)], valueView, nil
 }
 
 // AppendDelete appends a validated RawKV Delete operation without
@@ -258,6 +341,12 @@ func (b *RawKVBatchPayloadBuilder) AppendDelete(key []byte) (keyView []byte, err
 	if commandFrameIntExceedsUint32(len(key)) {
 		return nil, ErrRecordTooLarge
 	}
+	if b.zeroSetCompactOnly {
+		if err := b.materializeCompactZeroSetPayload(); err != nil {
+			return nil, err
+		}
+		b.zeroSetCompactOnly = false
+	}
 	off, err := b.appendRawKVPayloadSpace(rawKVOpHeaderSize + len(key))
 	if err != nil {
 		return nil, err
@@ -270,6 +359,7 @@ func (b *RawKVBatchPayloadBuilder) AppendDelete(key []byte) (keyView []byte, err
 	copy(b.payload[off:], key)
 	off += len(key)
 	b.count++
+	b.disableZeroSetCandidate()
 	return b.payload[keyStart:off:off], nil
 }
 
@@ -283,6 +373,9 @@ func (b *RawKVBatchPayloadBuilder) appendRawKVPayloadSpace(needed int) (int, err
 		newCap := cap(b.payload) * 2
 		if newCap < newLen {
 			newCap = newLen
+		}
+		if b.payloadCapHint > newCap {
+			newCap = b.payloadCapHint
 		}
 		if newCap < 0 {
 			return 0, ErrRecordTooLarge
@@ -306,6 +399,19 @@ func (b *RawKVBatchPayloadBuilder) appendValidated(op RawKVOp, key, value []byte
 	if commandFrameIntExceedsUint32(b.count + 1) {
 		return nil, nil, ErrRecordTooLarge
 	}
+	if b.zeroSetCompactOnly && op == RawKVOpSet && b.canAppendCompactZeroSet(value) {
+		keyView, err := b.appendCompactZeroSet(key, value)
+		if err != nil {
+			return nil, nil, err
+		}
+		return keyView, b.zeroSetValueViewForLen(len(value)), nil
+	}
+	if b.zeroSetCompactOnly {
+		if err := b.materializeCompactZeroSetPayload(); err != nil {
+			return nil, nil, err
+		}
+		b.zeroSetCompactOnly = false
+	}
 	off, err := b.appendRawKVPayloadSpace(rawKVOpHeaderSize + len(key) + len(value))
 	if err != nil {
 		return nil, nil, err
@@ -318,14 +424,474 @@ func (b *RawKVBatchPayloadBuilder) appendValidated(op RawKVOp, key, value []byte
 	copy(b.payload[off:], key)
 	off += len(key)
 	valueStart := off
-	copy(b.payload[off:], value)
+	zeroCompact := false
+	if op == RawKVOpSet {
+		zeroCompact = b.recordZeroSetCandidateForAppended(key, value)
+	} else {
+		b.disableZeroSetCandidate()
+	}
+	if zeroCompact {
+		b.zeroSetValuesOmitted = true
+		valueView = b.zeroSetValueViewForLen(len(value))
+	} else {
+		copy(b.payload[off:], value)
+		if op == RawKVOpSet {
+			valueView = b.payload[valueStart : valueStart+len(value) : valueStart+len(value)]
+		}
+	}
 	off += len(value)
 	b.count++
 	keyView = b.payload[keyStart : keyStart+len(key) : keyStart+len(key)]
-	if op == RawKVOpSet {
-		valueView = b.payload[valueStart:off:off]
-	}
 	return keyView, valueView, nil
+}
+
+func (b *RawKVBatchPayloadBuilder) canAppendCompactZeroSet(value []byte) bool {
+	if b == nil || !b.zeroSetCandidate || !b.zeroSetCompactOnly || len(value) == 0 {
+		return false
+	}
+	if b.zeroSetValueLen >= 0 && b.zeroSetValueLen != len(value) {
+		return false
+	}
+	if sameNonEmptyBytesData(value, b.zeroSetValueRef) {
+		return true
+	}
+	return allZeroBytes(value)
+}
+
+func (b *RawKVBatchPayloadBuilder) appendCompactZeroSet(key, value []byte) ([]byte, error) {
+	if b == nil || len(value) == 0 {
+		return nil, ErrCorrupt
+	}
+	if commandFrameIntExceedsUint32(len(key)) || commandFrameIntExceedsUint32(b.count+1) {
+		return nil, ErrRecordTooLarge
+	}
+	if len(b.zeroPayload) == 0 {
+		b.zeroSetCompactVersion = rawKVZeroBatchPayloadV3
+		if len(key) > int(^uint16(0)) {
+			b.zeroSetCompactVersion = rawKVZeroBatchPayloadV2
+		}
+		capHint := rawKVZeroBatchHeaderSize
+		if b.opHint > 0 {
+			if hint, ok := rawKVZeroBatchPayloadSizeHint(b.opHint, len(key)); ok {
+				capHint = hint
+			}
+		}
+		if cap(b.zeroPayload) < rawKVZeroBatchHeaderSize {
+			b.zeroPayload = make([]byte, rawKVZeroBatchHeaderSize, capHint)
+		} else {
+			b.zeroPayload = b.zeroPayload[:rawKVZeroBatchHeaderSize]
+			clear(b.zeroPayload)
+		}
+	}
+	if b.zeroSetCompactVersion == rawKVZeroBatchPayloadV3 && len(key) > int(^uint16(0)) {
+		if err := b.promoteCompactZeroPayloadToV2(); err != nil {
+			return nil, err
+		}
+	}
+	opHeaderSize := rawKVZeroOpHeaderSizeForVersion(b.zeroSetCompactVersion)
+	needed := opHeaderSize + len(key)
+	if needed > int(^uint32(0))-len(b.zeroPayload) || needed > int(^uint(0)>>1)-len(b.zeroPayload) {
+		return nil, ErrRecordTooLarge
+	}
+	off := len(b.zeroPayload)
+	newLen := off + needed
+	if newLen > cap(b.zeroPayload) {
+		newCap := cap(b.zeroPayload) * 2
+		if newCap < newLen {
+			newCap = newLen
+		}
+		next := make([]byte, newLen, newCap)
+		copy(next, b.zeroPayload)
+		b.zeroPayload = next
+	} else {
+		b.zeroPayload = b.zeroPayload[:newLen]
+	}
+	if b.zeroSetValueLen < 0 {
+		b.zeroSetValueLen = len(value)
+	}
+	if !sameNonEmptyBytesData(value, b.zeroSetValueRef) {
+		b.zeroSetValueRef = value
+	}
+	if b.zeroSetCompactVersion == rawKVZeroBatchPayloadV3 {
+		binary.LittleEndian.PutUint16(b.zeroPayload[off:off+rawKVZeroOpHeaderSizeV3], uint16(len(key)))
+	} else {
+		binary.LittleEndian.PutUint32(b.zeroPayload[off:off+rawKVZeroOpHeaderSize], uint32(len(key)))
+	}
+	keyStart := off + opHeaderSize
+	copy(b.zeroPayload[keyStart:keyStart+len(key)], key)
+	b.zeroSetKeyBytes += len(key)
+	if len(key) > b.zeroSetMaxKeyLen {
+		b.zeroSetMaxKeyLen = len(key)
+	}
+	b.count++
+	return b.zeroPayload[keyStart : keyStart+len(key) : keyStart+len(key)], nil
+}
+
+func (b *RawKVBatchPayloadBuilder) materializeCompactZeroSetPayload() error {
+	if b == nil || !b.zeroSetCompactOnly || b.count == 0 {
+		return nil
+	}
+	if b.zeroSetValueLen <= 0 || len(b.zeroPayload) < rawKVZeroBatchHeaderSize {
+		return ErrCorrupt
+	}
+	total, ok := rawKVExpandedZeroBatchPayloadSize(b.count, b.zeroSetKeyBytes, b.zeroSetValueLen)
+	if !ok || commandFrameIntExceedsUint32(total) {
+		return ErrRecordTooLarge
+	}
+	if cap(b.payload) < total {
+		b.payload = make([]byte, total)
+	} else {
+		b.payload = b.payload[:total]
+		clear(b.payload)
+	}
+	binary.LittleEndian.PutUint16(b.payload[0:2], rawKVBatchPayloadVersion)
+	binary.LittleEndian.PutUint32(b.payload[2:6], uint32(b.count))
+	version := b.zeroSetCompactVersion
+	if version == 0 {
+		version = binary.LittleEndian.Uint16(b.zeroPayload[0:2])
+	}
+	srcOff := rawKVZeroBatchHeaderSize
+	dstOff := rawKVBatchHeaderSize
+	for i := 0; i < b.count; i++ {
+		keyLen, nextOff, err := readCompactZeroKeyLen(b.zeroPayload, srcOff, version)
+		if err != nil || dstOff+rawKVOpHeaderSize > len(b.payload) {
+			return ErrCorrupt
+		}
+		srcOff = nextOff
+		if keyLen < 0 || keyLen > len(b.zeroPayload)-srcOff || dstOff+rawKVOpHeaderSize+keyLen+b.zeroSetValueLen > len(b.payload) {
+			return ErrCorrupt
+		}
+		b.payload[dstOff] = byte(RawKVOpSet)
+		binary.LittleEndian.PutUint32(b.payload[dstOff+1:dstOff+5], uint32(keyLen))
+		binary.LittleEndian.PutUint32(b.payload[dstOff+5:dstOff+9], uint32(b.zeroSetValueLen))
+		dstOff += rawKVOpHeaderSize
+		copy(b.payload[dstOff:dstOff+keyLen], b.zeroPayload[srcOff:srcOff+keyLen])
+		srcOff += keyLen
+		dstOff += keyLen + b.zeroSetValueLen
+	}
+	if srcOff != len(b.zeroPayload) || dstOff != len(b.payload) {
+		return ErrCorrupt
+	}
+	b.zeroSetValuesOmitted = false
+	return nil
+}
+
+func rawKVZeroOpHeaderSizeForKeyLen(keyLen int) int {
+	if keyLen >= 0 && keyLen <= int(^uint16(0)) {
+		return rawKVZeroOpHeaderSizeV3
+	}
+	return rawKVZeroOpHeaderSize
+}
+
+func rawKVZeroOpHeaderSizeForVersion(version uint16) int {
+	if version == rawKVZeroBatchPayloadV3 {
+		return rawKVZeroOpHeaderSizeV3
+	}
+	return rawKVZeroOpHeaderSize
+}
+
+func readCompactZeroKeyLen(payload []byte, off int, version uint16) (int, int, error) {
+	switch version {
+	case rawKVZeroBatchPayloadV3:
+		if off+rawKVZeroOpHeaderSizeV3 > len(payload) {
+			return 0, off, ErrCorrupt
+		}
+		return int(binary.LittleEndian.Uint16(payload[off : off+rawKVZeroOpHeaderSizeV3])), off + rawKVZeroOpHeaderSizeV3, nil
+	case rawKVZeroBatchPayloadV2:
+		if off+rawKVZeroOpHeaderSize > len(payload) {
+			return 0, off, ErrCorrupt
+		}
+		keyLen := binary.LittleEndian.Uint32(payload[off : off+rawKVZeroOpHeaderSize])
+		if uint64(keyLen) > uint64(^uint(0)>>1) {
+			return 0, off, ErrRecordTooLarge
+		}
+		return int(keyLen), off + rawKVZeroOpHeaderSize, nil
+	default:
+		return 0, off, ErrCommandWALUnsupportedVersion
+	}
+}
+
+func (b *RawKVBatchPayloadBuilder) promoteCompactZeroPayloadToV2() error {
+	if b == nil || b.zeroSetCompactVersion != rawKVZeroBatchPayloadV3 {
+		return nil
+	}
+	total := rawKVZeroBatchHeaderSize + b.count*rawKVZeroOpHeaderSize + b.zeroSetKeyBytes
+	if total < rawKVZeroBatchHeaderSize || commandFrameIntExceedsUint32(total) {
+		return ErrRecordTooLarge
+	}
+	next := make([]byte, rawKVZeroBatchHeaderSize, total)
+	copy(next, b.zeroPayload[:rawKVZeroBatchHeaderSize])
+	binary.LittleEndian.PutUint16(next[0:2], rawKVZeroBatchPayloadV2)
+	off := rawKVZeroBatchHeaderSize
+	for i := 0; i < b.count; i++ {
+		keyLen, nextOff, err := readCompactZeroKeyLen(b.zeroPayload, off, rawKVZeroBatchPayloadV3)
+		if err != nil {
+			return err
+		}
+		off = nextOff
+		if keyLen > len(b.zeroPayload)-off {
+			return ErrCorrupt
+		}
+		dstOff := len(next)
+		next = next[:dstOff+rawKVZeroOpHeaderSize+keyLen]
+		binary.LittleEndian.PutUint32(next[dstOff:dstOff+rawKVZeroOpHeaderSize], uint32(keyLen))
+		copy(next[dstOff+rawKVZeroOpHeaderSize:], b.zeroPayload[off:off+keyLen])
+		off += keyLen
+	}
+	if off != len(b.zeroPayload) {
+		return ErrCorrupt
+	}
+	b.zeroPayload = next
+	b.zeroSetCompactVersion = rawKVZeroBatchPayloadV2
+	return nil
+}
+
+func rawKVZeroBatchPayloadSizeHint(opHint, firstKeyLen int) (int, bool) {
+	if opHint <= 0 || firstKeyLen < 0 {
+		return rawKVZeroBatchHeaderSize, true
+	}
+	maxInt := int(^uint(0) >> 1)
+	perOp := rawKVZeroOpHeaderSizeForKeyLen(firstKeyLen) + firstKeyLen
+	if perOp < rawKVZeroOpHeaderSizeV3 || perOp > (maxInt-rawKVZeroBatchHeaderSize)/opHint {
+		return 0, false
+	}
+	total := rawKVZeroBatchHeaderSize + opHint*perOp
+	if commandFrameIntExceedsUint32(total) {
+		return 0, false
+	}
+	return total, true
+}
+
+func rawKVExpandedZeroBatchPayloadSize(count, keyBytes, valueLen int) (int, bool) {
+	if count < 0 || keyBytes < 0 || valueLen <= 0 {
+		return 0, false
+	}
+	maxInt := int(^uint(0) >> 1)
+	total := rawKVBatchHeaderSize
+	if count > (maxInt-total)/rawKVOpHeaderSize {
+		return 0, false
+	}
+	total += count * rawKVOpHeaderSize
+	if keyBytes > maxInt-total {
+		return 0, false
+	}
+	total += keyBytes
+	if count > (maxInt-total)/valueLen {
+		return 0, false
+	}
+	total += count * valueLen
+	return total, true
+}
+
+func (b *RawKVBatchPayloadBuilder) truncateCompactZeroSetPayload(count int) {
+	if b == nil || count < 0 {
+		return
+	}
+	if count == 0 {
+		b.count = 0
+		b.zeroSetCandidate = true
+		b.zeroSetCompactOnly = true
+		b.zeroSetValuesOmitted = false
+		b.zeroSetValueLen = -1
+		b.zeroSetKeyBytes = 0
+		b.zeroSetMaxKeyLen = 0
+		b.zeroSetCompactVersion = 0
+		b.zeroSetValueRef = nil
+		if b.zeroPayload != nil {
+			b.zeroPayload = b.zeroPayload[:0]
+		}
+		if len(b.payload) >= rawKVBatchHeaderSize {
+			b.payload = b.payload[:rawKVBatchHeaderSize]
+			clear(b.payload)
+			binary.LittleEndian.PutUint16(b.payload[0:2], rawKVBatchPayloadVersion)
+		}
+		return
+	}
+	if count >= b.count {
+		return
+	}
+	off := rawKVZeroBatchHeaderSize
+	keyBytes := 0
+	maxKeyLen := 0
+	version := b.zeroSetCompactVersion
+	if version == 0 && len(b.zeroPayload) >= 2 {
+		version = binary.LittleEndian.Uint16(b.zeroPayload[0:2])
+	}
+	for i := 0; i < count; i++ {
+		keyLen, nextOff, err := readCompactZeroKeyLen(b.zeroPayload, off, version)
+		if err != nil {
+			return
+		}
+		off = nextOff
+		if keyLen < 0 || keyLen > len(b.zeroPayload)-off {
+			return
+		}
+		off += keyLen
+		keyBytes += keyLen
+		if keyLen > maxKeyLen {
+			maxKeyLen = keyLen
+		}
+	}
+	b.zeroPayload = b.zeroPayload[:off]
+	b.count = count
+	b.zeroSetKeyBytes = keyBytes
+	b.zeroSetMaxKeyLen = maxKeyLen
+}
+
+func (b *RawKVBatchPayloadBuilder) recordZeroSetCandidateForAppended(key, value []byte) bool {
+	if b == nil || !b.zeroSetCandidate {
+		return false
+	}
+	if len(value) == 0 {
+		b.disableZeroSetCandidate()
+		return false
+	}
+	if b.zeroSetValueLen < 0 {
+		b.zeroSetValueLen = len(value)
+	} else if b.zeroSetValueLen != len(value) {
+		b.disableZeroSetCandidate()
+		return false
+	}
+	if sameNonEmptyBytesData(value, b.zeroSetValueRef) {
+		// Same immutable zero buffer as an earlier op in this batch.
+	} else if allZeroBytes(value) {
+		b.zeroSetValueRef = value
+	} else {
+		b.disableZeroSetCandidate()
+		return false
+	}
+	b.zeroSetKeyBytes += len(key)
+	if len(key) > b.zeroSetMaxKeyLen {
+		b.zeroSetMaxKeyLen = len(key)
+	}
+	return true
+}
+
+func (b *RawKVBatchPayloadBuilder) disableZeroSetCandidate() {
+	if b == nil || !b.zeroSetCandidate {
+		return
+	}
+	b.zeroSetCandidate = false
+	b.materializeOmittedZeroValues()
+}
+
+func (b *RawKVBatchPayloadBuilder) zeroSetValueViewForLen(n int) []byte {
+	if b == nil || n <= 0 {
+		return nil
+	}
+	if cap(b.zeroSetValueView) < n {
+		b.zeroSetValueView = make([]byte, n)
+	}
+	return b.zeroSetValueView[:n:n]
+}
+
+func (b *RawKVBatchPayloadBuilder) materializeOmittedZeroValues() {
+	if b == nil || !b.zeroSetValuesOmitted || b.count <= 0 || len(b.payload) < rawKVBatchHeaderSize {
+		return
+	}
+	off := rawKVBatchHeaderSize
+	for i := 0; i < b.count; i++ {
+		if off+rawKVOpHeaderSize > len(b.payload) {
+			break
+		}
+		op := RawKVOp(b.payload[off])
+		keyLen := int(binary.LittleEndian.Uint32(b.payload[off+1 : off+5]))
+		valueLen := int(binary.LittleEndian.Uint32(b.payload[off+5 : off+9]))
+		off += rawKVOpHeaderSize
+		if keyLen < 0 || keyLen > len(b.payload)-off {
+			break
+		}
+		off += keyLen
+		if valueLen < 0 || valueLen > len(b.payload)-off {
+			break
+		}
+		if op == RawKVOpSet && valueLen > 0 {
+			clear(b.payload[off : off+valueLen])
+		}
+		off += valueLen
+	}
+	b.zeroSetValuesOmitted = false
+}
+
+func (b *RawKVBatchPayloadBuilder) recomputeZeroSetCandidate() {
+	if b == nil {
+		return
+	}
+	b.materializeOmittedZeroValues()
+	b.zeroSetCandidate = true
+	b.zeroSetCompactOnly = false
+	b.zeroSetValuesOmitted = false
+	b.zeroSetValueLen = -1
+	b.zeroSetKeyBytes = 0
+	b.zeroSetMaxKeyLen = 0
+	b.zeroSetCompactVersion = 0
+	b.zeroSetValueRef = nil
+	if b.count == 0 || len(b.payload) < rawKVBatchHeaderSize {
+		return
+	}
+	_ = ScanRawKVBatchPayload(b.payload, func(op RawKVOp, key, value []byte) error {
+		if op != RawKVOpSet {
+			b.disableZeroSetCandidate()
+			return nil
+		}
+		b.recordZeroSetCandidateForAppended(key, value)
+		return nil
+	})
+}
+
+func (b *RawKVBatchPayloadBuilder) compactZeroSetPayload() ([]byte, bool) {
+	if b == nil || !b.zeroSetCandidate || b.count <= 0 || b.zeroSetValueLen <= 0 {
+		return nil, false
+	}
+	version := rawKVZeroBatchPayloadV2
+	if b.zeroSetMaxKeyLen <= int(^uint16(0)) {
+		version = rawKVZeroBatchPayloadV3
+	}
+	opHeaderSize := rawKVZeroOpHeaderSizeForVersion(version)
+	total := rawKVZeroBatchHeaderSize + b.count*opHeaderSize + b.zeroSetKeyBytes
+	if total < rawKVZeroBatchHeaderSize || commandFrameIntExceedsUint32(total) {
+		return nil, false
+	}
+	if cap(b.zeroPayload) < total {
+		b.zeroPayload = make([]byte, total)
+	} else {
+		b.zeroPayload = b.zeroPayload[:total]
+	}
+	dst := b.zeroPayload
+	b.zeroSetCompactVersion = version
+	binary.LittleEndian.PutUint16(dst[0:2], version)
+	binary.LittleEndian.PutUint32(dst[2:6], uint32(b.count))
+	binary.LittleEndian.PutUint32(dst[6:10], uint32(b.zeroSetValueLen))
+	srcOff := rawKVBatchHeaderSize
+	dstOff := rawKVZeroBatchHeaderSize
+	for i := 0; i < b.count; i++ {
+		if srcOff+rawKVOpHeaderSize > len(b.payload) || dstOff+opHeaderSize > len(dst) {
+			return nil, false
+		}
+		op := RawKVOp(b.payload[srcOff])
+		keyLen := int(binary.LittleEndian.Uint32(b.payload[srcOff+1 : srcOff+5]))
+		valueLen := int(binary.LittleEndian.Uint32(b.payload[srcOff+5 : srcOff+9]))
+		srcOff += rawKVOpHeaderSize
+		if op != RawKVOpSet || valueLen != b.zeroSetValueLen || keyLen < 0 || keyLen > len(b.payload)-srcOff || valueLen > len(b.payload)-srcOff-keyLen {
+			return nil, false
+		}
+		if version == rawKVZeroBatchPayloadV3 {
+			if keyLen > int(^uint16(0)) {
+				return nil, false
+			}
+			binary.LittleEndian.PutUint16(dst[dstOff:dstOff+rawKVZeroOpHeaderSizeV3], uint16(keyLen))
+		} else {
+			binary.LittleEndian.PutUint32(dst[dstOff:dstOff+rawKVZeroOpHeaderSize], uint32(keyLen))
+		}
+		dstOff += opHeaderSize
+		copy(dst[dstOff:], b.payload[srcOff:srcOff+keyLen])
+		srcOff += keyLen + valueLen
+		dstOff += keyLen
+	}
+	if srcOff != len(b.payload) || dstOff != len(dst) {
+		return nil, false
+	}
+	return dst, true
 }
 
 type CollectionDocument struct {
@@ -629,14 +1195,14 @@ func encodeCommandFrameTo(dst []byte, env CommandEnvelope) ([]byte, error) {
 
 func DecodeCommandFrame(frame []byte) (CommandEnvelope, error) {
 	var env CommandEnvelope
-	if len(frame) >= batchHeaderSize && len(frame) < commandFrameHeaderSize && frame[0] == Version {
+	if len(frame) >= batchHeaderSize && len(frame) < commandFrameHeaderSize && isBatchPayloadVersion(frame[0]) {
 		return env, ErrCommandWALLegacyPayload
 	}
 	if len(frame) < commandFrameHeaderSize {
 		return env, ErrCorrupt
 	}
 	if !bytes.Equal(frame[0:4], commandFrameMagic[:]) {
-		if frame[0] == Version {
+		if isBatchPayloadVersion(frame[0]) {
 			return env, ErrCommandWALLegacyPayload
 		}
 		return env, ErrCorrupt
@@ -790,7 +1356,7 @@ func EncodeRawKVBatchPayload(ops []RawKVOperation) ([]byte, error) {
 		total += rawKVOpHeaderSize + len(op.Key) + valueLen
 	}
 	payload := make([]byte, total)
-	binary.LittleEndian.PutUint16(payload[0:2], 1)
+	binary.LittleEndian.PutUint16(payload[0:2], rawKVBatchPayloadVersion)
 	binary.LittleEndian.PutUint32(payload[2:6], uint32(len(ops)))
 	off := rawKVBatchHeaderSize
 	for i := range ops {
@@ -828,7 +1394,7 @@ func EncodeRawKVSingleOperationPayload(op RawKVOperation) ([]byte, error) {
 	}
 	total := rawKVBatchHeaderSize + rawKVOpHeaderSize + len(op.Key) + valueLen
 	payload := make([]byte, total)
-	binary.LittleEndian.PutUint16(payload[0:2], 1)
+	binary.LittleEndian.PutUint16(payload[0:2], rawKVBatchPayloadVersion)
 	binary.LittleEndian.PutUint32(payload[2:6], 1)
 	value := op.Value
 	var ridBuf [8]byte
@@ -878,73 +1444,43 @@ func EncodeRawKVBatchPayloadScanWithHint(scan func(func(RawKVOperation) error) e
 	if scan == nil {
 		return EncodeRawKVBatchPayload(nil)
 	}
-	capHint, err := rawKVBatchPayloadSizeHint(opHint, byteHint)
-	if err != nil {
+	var builder RawKVBatchPayloadBuilder
+	if err := builder.ResetWithHint(opHint, byteHint); err != nil {
 		return nil, err
 	}
-	payload := make([]byte, rawKVBatchHeaderSize, capHint)
-	binary.LittleEndian.PutUint16(payload[0:2], 1)
-	count := 0
 	if err := scan(func(op RawKVOperation) error {
-		if commandFrameIntExceedsUint32(count + 1) {
-			return ErrRecordTooLarge
-		}
-		if err := validateRawKVOperation(&op); err != nil {
-			return err
-		}
-		valueLen := len(op.Value)
-		if op.Op == RawKVOpSetRID {
-			valueLen = 8
-		}
-		if commandFrameIntExceedsUint32(len(op.Key)) || commandFrameIntExceedsUint32(valueLen) {
-			return ErrRecordTooLarge
-		}
-		value := op.Value
-		var ridBuf [8]byte
-		if op.Op == RawKVOpSetRID {
-			binary.LittleEndian.PutUint64(ridBuf[:], op.RID)
-			value = ridBuf[:]
-		}
-		needed := rawKVOpHeaderSize + len(op.Key) + len(value)
-		if needed > int(^uint32(0))-len(payload) || needed > int(^uint(0)>>1)-len(payload) {
-			return ErrRecordTooLarge
-		}
-		off := len(payload)
-		newLen := off + needed
-		if newLen > cap(payload) {
-			newCap := cap(payload) * 2
-			if newCap < newLen {
-				newCap = newLen
-			}
-			if newCap < 0 {
-				return ErrRecordTooLarge
-			}
-			next := make([]byte, newLen, newCap)
-			copy(next, payload)
-			payload = next
-		} else {
-			payload = payload[:newLen]
-		}
-		payload[off] = byte(op.Op)
-		binary.LittleEndian.PutUint32(payload[off+1:off+5], uint32(len(op.Key)))
-		binary.LittleEndian.PutUint32(payload[off+5:off+9], uint32(len(value)))
-		off += rawKVOpHeaderSize
-		copy(payload[off:], op.Key)
-		off += len(op.Key)
-		copy(payload[off:], value)
-		off += len(value)
-		count++
-		return nil
+		_, _, err := builder.Append(op)
+		return err
 	}); err != nil {
 		return nil, err
 	}
-	binary.LittleEndian.PutUint32(payload[2:6], uint32(count))
-	return payload, nil
+	return builder.Payload(), nil
 }
 
 func DecodeRawKVBatchPayload(payload []byte) ([]RawKVOperation, error) {
 	if err := validateRawKVBatchPayload(payload); err != nil {
 		return nil, err
+	}
+	version := binary.LittleEndian.Uint16(payload[0:2])
+	if version == rawKVZeroBatchPayloadV2 || version == rawKVZeroBatchPayloadV3 {
+		count := binary.LittleEndian.Uint32(payload[2:6])
+		valueLen := int(binary.LittleEndian.Uint32(payload[6:10]))
+		ops := make([]RawKVOperation, 0, count)
+		zeroValue := make([]byte, valueLen)
+		off := rawKVZeroBatchHeaderSize
+		for i := uint32(0); i < count; i++ {
+			keyLen, nextOff, err := readCompactZeroKeyLen(payload, off, version)
+			if err != nil {
+				return nil, err
+			}
+			off = nextOff
+			entry := RawKVOperation{Op: RawKVOpSet}
+			entry.Key = cloneBytesPreserveEmpty(payload[off : off+keyLen])
+			off += keyLen
+			entry.Value = cloneBytesPreserveEmpty(zeroValue)
+			ops = append(ops, entry)
+		}
+		return ops, nil
 	}
 	count := binary.LittleEndian.Uint32(payload[2:6])
 	ops := make([]RawKVOperation, 0, count)
@@ -986,7 +1522,11 @@ func ScanRawKVBatchPayload(payload []byte, visit func(op RawKVOp, key, value []b
 	if len(payload) < rawKVBatchHeaderSize {
 		return ErrCorrupt
 	}
-	if binary.LittleEndian.Uint16(payload[0:2]) != 1 {
+	version := binary.LittleEndian.Uint16(payload[0:2])
+	if version == rawKVZeroBatchPayloadV2 || version == rawKVZeroBatchPayloadV3 {
+		return scanRawKVZeroBatchPayload(payload, visit)
+	}
+	if version != rawKVBatchPayloadVersion {
 		return ErrCommandWALUnsupportedVersion
 	}
 	count := binary.LittleEndian.Uint32(payload[2:6])
@@ -1026,6 +1566,54 @@ func ScanRawKVBatchPayload(payload []byte, visit func(op RawKVOp, key, value []b
 			}
 		}
 		off += int(valueLen)
+	}
+	if off != len(payload) {
+		return ErrCorrupt
+	}
+	return nil
+}
+
+func scanRawKVZeroBatchPayload(payload []byte, visit func(op RawKVOp, key, value []byte) error) error {
+	if len(payload) < rawKVZeroBatchHeaderSize {
+		return ErrCorrupt
+	}
+	count := binary.LittleEndian.Uint32(payload[2:6])
+	valueLen := binary.LittleEndian.Uint32(payload[6:10])
+	version := binary.LittleEndian.Uint16(payload[0:2])
+	opHeaderSize := rawKVZeroOpHeaderSizeForVersion(version)
+	if valueLen == 0 {
+		return ErrCorrupt
+	}
+	if count > uint32((len(payload)-rawKVZeroBatchHeaderSize)/opHeaderSize) {
+		return ErrCorrupt
+	}
+	if uint64(valueLen) > uint64(^uint(0)>>1) {
+		return ErrRecordTooLarge
+	}
+	var zeroValue []byte
+	if visit != nil {
+		zeroValue = make([]byte, int(valueLen))
+	}
+	off := rawKVZeroBatchHeaderSize
+	for i := uint32(0); i < count; i++ {
+		keyLen, nextOff, err := readCompactZeroKeyLen(payload, off, version)
+		if err != nil {
+			return err
+		}
+		off = nextOff
+		if keyLen > len(payload)-off {
+			return ErrCorrupt
+		}
+		key := payload[off : off+keyLen]
+		off += keyLen
+		if key == nil {
+			return ErrCorrupt
+		}
+		if visit != nil {
+			if err := visit(RawKVOpSet, key, zeroValue); err != nil {
+				return err
+			}
+		}
 	}
 	if off != len(payload) {
 		return ErrCorrupt
