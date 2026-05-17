@@ -9,8 +9,6 @@ import (
 	"io"
 	"path/filepath"
 	"sort"
-	"strconv"
-	"strings"
 )
 
 const (
@@ -315,6 +313,9 @@ func DecodeCommandFrame(frame []byte) (CommandEnvelope, error) {
 }
 
 func validateCommandEnvelopeForEncode(env CommandEnvelope) error {
+	if env.Version != 0 && env.Version != CommandFrameVersion {
+		return ErrCommandWALUnsupportedVersion
+	}
 	if env.FeatureFlags&commandWALCriticalFlagsMask != 0 {
 		return ErrCommandWALUnsupportedCriticalFlag
 	}
@@ -722,7 +723,7 @@ func commandFrameSegmentTailAllowance(paths []string) []bool {
 	parsed := make([]parsedSegment, len(paths))
 	latestByLane := make(map[int]uint64)
 	for i, path := range paths {
-		lane, seq, ok := parseCommandFrameSegmentName(filepath.Base(path))
+		lane, seq, ok := parseCommandSegmentName(filepath.Base(path))
 		parsed[i] = parsedSegment{lane: lane, seq: seq, ok: ok}
 		if ok && seq > latestByLane[lane] {
 			latestByLane[lane] = seq
@@ -736,26 +737,6 @@ func commandFrameSegmentTailAllowance(paths []string) []bool {
 		allow[i] = i == len(paths)-1
 	}
 	return allow
-}
-
-func parseCommandFrameSegmentName(name string) (lane int, seq uint64, ok bool) {
-	if !strings.HasPrefix(name, "commit-l") || !strings.HasSuffix(name, ".log") {
-		return 0, 0, false
-	}
-	rest := strings.TrimSuffix(strings.TrimPrefix(name, "commit-l"), ".log")
-	parts := strings.SplitN(rest, "-", 2)
-	if len(parts) != 2 {
-		return 0, 0, false
-	}
-	lane, err := strconv.Atoi(parts[0])
-	if err != nil || lane < 0 {
-		return 0, 0, false
-	}
-	seq, err = strconv.ParseUint(parts[1], 10, 64)
-	if err != nil || seq == 0 {
-		return 0, 0, false
-	}
-	return lane, seq, true
 }
 
 func scanCommandFrames(path string, opts Options, seen map[uint64]struct{}, allowTerminalTail bool) ([]CommandEnvelope, error) {
@@ -782,4 +763,51 @@ func scanCommandFrames(path string, opts Options, seen map[uint64]struct{}, allo
 		seen[env.LSN] = struct{}{}
 		frames = append(frames, env)
 	}
+}
+
+func scanCommandSegmentSummary(path string, opts Options, onLSN func(uint64) error) (maxLSN uint64, typed bool, completeEnd int64, err error) {
+	r, err := NewReaderWithOptions(path, opts)
+	if err != nil {
+		return 0, false, 0, err
+	}
+	defer r.Close()
+
+	var lastLSN uint64
+	for {
+		start, seekErr := r.f.Seek(0, io.SeekCurrent)
+		if seekErr != nil {
+			return 0, typed, completeEnd, seekErr
+		}
+		env, err := r.ReadCommandFrame()
+		if err != nil {
+			if errorsIsEOFOrTail(err) {
+				return maxLSN, typed, start, nil
+			}
+			if errors.Is(err, ErrCommandWALLegacyPayload) && !typed {
+				return 0, false, completeEnd, err
+			}
+			return 0, typed, completeEnd, err
+		}
+		if lastLSN != 0 && env.LSN <= lastLSN {
+			return 0, true, completeEnd, ErrCommandWALDuplicateLSN
+		}
+		lastLSN = env.LSN
+		typed = true
+		if onLSN != nil {
+			if err := onLSN(env.LSN); err != nil {
+				return 0, typed, completeEnd, err
+			}
+		}
+		if env.LSN > maxLSN {
+			maxLSN = env.LSN
+		}
+		completeEnd, err = r.f.Seek(0, io.SeekCurrent)
+		if err != nil {
+			return 0, typed, completeEnd, err
+		}
+	}
+}
+
+func errorsIsEOFOrTail(err error) bool {
+	return err == io.EOF || errors.Is(err, ErrCommandWALTerminalTail)
 }

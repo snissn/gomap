@@ -374,15 +374,16 @@ Required publish/checkpoint ordering:
 6. delete or mark clean WAL segments whose max LSN <= AppliedLSN
 ```
 
-The V1 implementation target is an explicit gated meta-page field named
+The V1 implementation target is an in-page-marked meta-page field named
 `AppliedCommandLSN`. It must be selected by the same meta-page choice as the
-roots. PR1 may document a blocking reason to change this decision before PR2
-starts, but PR2 must not proceed with both meta-page and system-root storage as
-live implementation options.
+roots, and the same selected page body must contain the command-WAL V1 marker
+before the field is authoritative. PR1 may document a blocking reason to change
+this decision before PR2 starts, but PR2 must not proceed with both meta-page
+and system-root storage as live implementation options.
 
-A sidecar file, post-commit manifest, async stats record, or post-work callback
-must not be the authoritative `AppliedLSN` source because it would allow split
-states after crash.
+A sidecar file, format-config marker, post-commit manifest, async stats record,
+or post-work callback must not be the authoritative `AppliedLSN` source because
+it would allow split states after crash.
 
 ### 8.1 Crash-Correctness Requirements
 
@@ -778,8 +779,8 @@ Deliverables:
 - single mutable journal owner per DB directory;
 - typed command appends use `wal/commit-l<lane>-<seq>.log`;
 - WAL sequence allocation comes from the shared journal service;
-- durable `AppliedCommandLSN` storage in the gated meta-page format, selected by
-  the same meta-page boundary as command roots;
+- durable `AppliedCommandLSN` storage in the in-page-marked meta-page format,
+  selected by the same meta-page boundary as command roots;
 - checkpoint and publish-boundary integration;
 - segment cleanup rules;
 - read-only dirty-WAL detection;
@@ -793,6 +794,23 @@ Acceptance:
 - roots and `AppliedLSN` cannot be published as split commits;
 - typed command frames with `LSN <= AppliedLSN` are skipped during recovery;
 - read-only open fails when mutating recovery would be required.
+
+Implementation evidence expected for this milestone:
+
+- the cached write path and command journal service acquire the same mutable
+  journal-owner lock before opening commit-log writers;
+- the command journal service assigns contiguous LSNs before typed frame append;
+- `AppliedCommandLSN` is stored in the alternating meta page body and published
+  with roots through a dedicated command-WAL publish helper;
+- read-only opens scan typed command frames and return `ErrRecoveryRequired`
+  when any complete frame has `LSN > AppliedCommandLSN`;
+- read-write opens keep typed command frames with `LSN <= AppliedCommandLSN`
+  out of legacy raw batch replay and fail closed on higher typed LSNs until the
+  PR3 typed replay dispatcher is present;
+- cleanup removes only non-active typed command WAL segments whose max complete
+  LSN is covered by durable `AppliedCommandLSN`;
+- benchmark evidence records shared journal allocation/append overhead and
+  root/meta publication overhead with `AppliedCommandLSN`.
 
 ### PR 3: Recovery dispatcher and raw KV command conversion
 

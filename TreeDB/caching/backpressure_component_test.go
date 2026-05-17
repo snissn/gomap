@@ -193,10 +193,7 @@ func TestFlushSkipsEmptyUnitsAndRemovesNonEmptyUnits(t *testing.T) {
 }
 
 func TestBackpressureModeStatsLegacyVsAdaptive(t *testing.T) {
-	dir := t.TempDir()
-	backend := NewMockBackend()
-
-	legacy, err := Open(dir, backend, Options{
+	legacy, err := Open(t.TempDir(), NewMockBackend(), Options{
 		FlushThreshold:     1024,
 		MemtableShards:     1,
 		MaxQueuedMemtables: 2,
@@ -211,7 +208,7 @@ func TestBackpressureModeStatsLegacyVsAdaptive(t *testing.T) {
 		t.Fatalf("legacy backpressure_mode=%q want queue_len", got)
 	}
 
-	adaptive, err := Open(dir, backend, Options{
+	adaptive, err := Open(t.TempDir(), NewMockBackend(), Options{
 		FlushThreshold:         1024,
 		MemtableShards:         1,
 		MaxBacklogBytes:        2048,

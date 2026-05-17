@@ -89,19 +89,27 @@ Notes:
 
 ## 3.1 Command WAL Meta Extension
 
-When `format.json` advertises the required `command_wal_v1` storage feature,
-the meta page body extends the 60-byte body above with:
+Command-WAL V1 meta pages extend the 60-byte body above with an in-page marker
+and the applied command stream boundary:
 
 ```text
 body offset 60 / page offset 76:
+[8]byte CommandWALV1Marker = "TMETAW1\x00"
+
+body offset 68 / page offset 84:
 u64 AppliedCommandLSN
 ```
 
-The `command_wal_v1` meta body size is 68 bytes. Bytes after offset 68 are
+The `command_wal_v1` meta body size is 76 bytes. Bytes after offset 76 are
 reserved and must be written as zero until assigned by a later required feature.
 `AppliedCommandLSN` is the physical on-disk field for the logical `AppliedLSN`
 command stream boundary. Alternating meta-page selection must choose roots and
 `AppliedCommandLSN` from the same meta page candidate.
+
+The marker is checksummed with the selected meta page. A decoder must treat
+`AppliedCommandLSN` as zero unless the marker is present in that same page body.
+`format.json`, manifests, stats, or any other sidecar file must not decide
+whether a meta page's `AppliedCommandLSN` bytes are authoritative.
 
 Rules:
 
@@ -110,12 +118,14 @@ Rules:
   command effects is invalid.
 - Selecting roots that contain command effects without the matching
   `AppliedCommandLSN` is invalid for durable root publish/checkpoint state.
-- Required feature validation must fail closed if a `command_wal_v1` directory is
-  opened by code that decodes only the 60-byte pre-command-WAL meta body.
+- Required feature validation must fail closed before full `command_wal_v1`
+  execution is enabled if a command-WAL directory is opened by code that decodes
+  only the 60-byte pre-command-WAL meta body.
 - `format.json` must use version 3 or newer when `required_features` contains
   `command_wal_v1`; putting required features in version 2 is invalid because
   older binaries would ignore unknown JSON fields and fail open.
-- PR2 must add golden meta-page fixtures covering both alternating meta pages,
+- PR2 must add meta-page tests covering `AppliedCommandLSN` encode/decode,
+  in-page marker gating for legacy/reserved bytes, alternating meta pages,
   old/new tuple selection, and checksum validation over the extended body.
 
 ## 3.2 Collection Document Payloads
@@ -579,14 +589,15 @@ applied marker. Recovery skips typed command frames with `LSN <= AppliedLSN`
 and replays complete frames with higher LSNs through the deterministic command
 executor before serving reads.
 
-The V1 physical storage target for `AppliedLSN` is an explicit gated meta-page
+The V1 physical storage target for `AppliedLSN` is the in-page-marked meta-page
 field named `AppliedCommandLSN`, encoded by the command-WAL meta extension in
-Section 3.1 at body offset 60 / page offset 76. It must be selected atomically
+Section 3.1 at body offset 68 / page offset 84. It must be selected atomically
 with the roots that contain the corresponding command effects. PR1 may document
 a blocking reason to revisit this before PR2 starts, but storage-format
 implementation must not proceed with both meta-page and system-root storage as
-live options. A sidecar cleanup file, manifest, stats record, or post-commit
-maintenance record is not authoritative state for recovery.
+live options. A sidecar cleanup file, manifest, stats record, format-config
+marker, or post-commit maintenance record is not authoritative state for
+recovery.
 
 The deprecated collection root-delta WAL format (`collection_wal_v1`,
 `wal/collection-l*.log`, `WALLSN`, `CollectionSeq`, and collection root-delta
