@@ -2117,6 +2117,64 @@ func TestCollectionVectorIndexNativeRootRebuildIgnoresStaleRuntimeSave(t *testin
 	}
 }
 
+func TestCollectionVectorIndexNativeRootRebuildRejectsStaleRuntime(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	def := VectorIndexDefinition{
+		Name:       "embedding",
+		Field:      "embedding",
+		Metric:     VectorMetricCosine,
+		Dimensions: 2,
+		M:          4,
+	}
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("a"), []byte("b"), []byte("c")},
+		[][]byte{
+			[]byte(`{"embedding":[1,0]}`),
+			[]byte(`{"embedding":[0.9,0.1]}`),
+			[]byte(`{"embedding":[0,1]}`),
+		},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	stale, err := col.BuildVectorIndex(vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		t.Fatalf("build vector index: %v", err)
+	}
+	rebuild, err := col.RebuildVectorIndex("embedding")
+	if err != nil {
+		t.Fatalf("rebuild vector index: %v", err)
+	}
+	if current := col.registeredVectorIndex(def.Name); current == nil || current == stale {
+		t.Fatalf("rebuild did not replace stale runtime current=%p stale=%p", current, stale)
+	}
+
+	if err := stale.Rebuild(); !errors.Is(err, errVectorIndexStaleRuntime) {
+		t.Fatalf("stale runtime rebuild err=%v want stale runtime", err)
+	}
+	if current := col.registeredVectorIndex(def.Name); current == stale {
+		t.Fatal("stale runtime re-registered itself after failed rebuild")
+	}
+	status, err := col.VectorIndexStatus(def.Name)
+	if err != nil {
+		t.Fatalf("status after stale rebuild: %v", err)
+	}
+	if status.RootID != rebuild.RootID || status.Stats.LiveDocs != rebuild.Stats.LiveDocs || status.Stats.DeletedDocs != rebuild.Stats.DeletedDocs {
+		t.Fatalf("stale rebuild changed status=%+v rebuild=%+v", status, rebuild)
+	}
+}
+
 func TestCollectionDropVectorIndexClearsNativeRootStatus(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
