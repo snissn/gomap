@@ -176,6 +176,51 @@ func TestColumnVectorGraphScratchClearsFullVisitedCapacityOnWrap(t *testing.T) {
 	}
 }
 
+func TestColumnVectorGraphRejectsHiddenRowsBeforeOrdinals(t *testing.T) {
+	rows := 4
+	dims := 3
+	opts := columnVectorGraphTestOptions(rows, dims)
+	workspace, err := OpenColumnWorkspace(t.TempDir(), ColumnWorkspaceOptions{Collection: "vector_graph_hidden"})
+	if err != nil {
+		t.Fatalf("OpenColumnWorkspace: %v", err)
+	}
+	defer workspace.Close()
+	adapter, err := NewColumnMutationAdapter(workspace, ColumnMutationAdapterOptions{
+		Collection:        "vector_graph_hidden",
+		StoreOptions:      opts,
+		InitialPartID:     1,
+		InitialGeneration: 1,
+	})
+	if err != nil {
+		t.Fatalf("NewColumnMutationAdapter: %v", err)
+	}
+	if _, err := adapter.PublishBaseBatch(columnVectorGraphTestBatch(rows, dims, rows-1, true), ColumnPartCoverageOptions{SourceRowRootGeneration: 1, SourceRowVersionUpper: uint64(rows)}); err != nil {
+		t.Fatalf("PublishBaseBatch: %v", err)
+	}
+	if _, err := adapter.Apply(ColumnMutationBatch{
+		Deletes:                 []int64{1},
+		SourceRowRootGeneration: 2,
+		SourceRowVersionLower:   uint64(rows),
+		SourceRowVersionUpper:   uint64(rows + 1),
+	}); err != nil {
+		t.Fatalf("Apply delete: %v", err)
+	}
+	reader, err := adapter.Reader(ColumnPartImageReadOptions{})
+	if err != nil {
+		t.Fatalf("Reader: %v", err)
+	}
+	if stats := reader.VisibilityStats(); stats.VisibleRows != rows-1 || stats.DeletedRows != 1 {
+		t.Fatalf("visibility stats=%+v want visible=%d deleted=1", stats, rows-1)
+	}
+	_, _, err = NewColumnVectorGraphFromPartSet(reader, ColumnVectorGraphOptions{})
+	if err == nil {
+		t.Fatal("NewColumnVectorGraphFromPartSet succeeded with hidden rows")
+	}
+	if !strings.Contains(err.Error(), "requires compacted/pristine") {
+		t.Fatalf("error=%q want compacted/pristine validation", err)
+	}
+}
+
 func BenchmarkColumnVectorGraphSearchCosine(b *testing.B) {
 	reader := columnVectorGraphTestReader(b, 8192, 128, 16, false)
 	graph, loadStats, err := NewColumnVectorGraphFromPartSet(reader, ColumnVectorGraphOptions{})
