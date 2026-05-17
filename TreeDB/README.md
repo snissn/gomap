@@ -194,6 +194,9 @@ installing the USearch C library and headers for the host. This runs the same
 synthetic vectors against USearch's Go bindings with cosine/f32 HNSW and matching
 `M`, `efConstruction`, and `efSearch` knobs:
 
+The Go binding is intentionally kept as an indirect module dependency because it
+is only imported by the optional `usearch_bench` build tag.
+
 ```sh
 TREEDB_VECTOR_BENCH_DOCS=1000 TREEDB_VECTOR_BENCH_DIMS=32 \
   go test -tags usearch_bench ./TreeDB/collections -run '^$' \

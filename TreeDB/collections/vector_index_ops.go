@@ -61,6 +61,7 @@ func (c *Collection) RebuildVectorIndex(name string) (VectorIndexStatus, error) 
 	if err != nil {
 		return VectorIndexStatus{}, err
 	}
+	index.setNativePersistent(true)
 	native, err := index.saveNativeSnapshotPrepared()
 	if err != nil {
 		return VectorIndexStatus{}, err
@@ -106,6 +107,12 @@ func (c *Collection) declaredVectorIndexDefinition(name string) (VectorIndexDefi
 }
 
 func (c *Collection) declaredVectorIndexDefinitionPrepared(name string) (VectorIndexDefinition, error) {
+	if c == nil {
+		return VectorIndexDefinition{}, errCollectionNil
+	}
+	if c.db == nil {
+		return VectorIndexDefinition{}, errCollectionDBNil
+	}
 	if err := ValidateIndexName(name); err != nil {
 		return VectorIndexDefinition{}, err
 	}
@@ -129,14 +136,14 @@ func (c *Collection) declaredVectorIndexDefinitionPrepared(name string) (VectorI
 }
 
 func (c *Collection) vectorIndexStatus(name string, inspectNativeRoot bool) (VectorIndexStatus, error) {
-	if err := ValidateIndexName(name); err != nil {
-		return VectorIndexStatus{}, err
-	}
 	if c == nil {
 		return VectorIndexStatus{}, errCollectionNil
 	}
 	if c.db == nil {
 		return VectorIndexStatus{}, errCollectionDBNil
+	}
+	if err := ValidateIndexName(name); err != nil {
+		return VectorIndexStatus{}, err
 	}
 	if err := c.flushBufferedWrites(); err != nil {
 		return VectorIndexStatus{}, err

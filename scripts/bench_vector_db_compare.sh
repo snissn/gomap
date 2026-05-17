@@ -26,6 +26,7 @@ PGVECTOR_MAX_CONNECTIONS="${PGVECTOR_MAX_CONNECTIONS:-256}"
 PGVECTOR_CONTAINER_NAME="${PGVECTOR_CONTAINER_NAME:-gomap-pgvector-$RANDOM-$$}"
 PGVECTOR_SCHEMA="${PGVECTOR_SCHEMA:-gomap_vector_bench_${RANDOM}_$$}"
 PGVECTOR_TABLE="${PGVECTOR_TABLE:-documents}"
+PGVECTOR_ALLOW_DROP_SCHEMA="${PGVECTOR_ALLOW_DROP_SCHEMA:-false}"
 PGVECTOR_DROP_SCHEMA_AFTER="${PGVECTOR_DROP_SCHEMA_AFTER:-false}"
 PGVECTOR_CONTAINER=""
 
@@ -66,7 +67,7 @@ start_pgvector_if_needed() {
 		exit 1
 	fi
 	if ! command -v docker >/dev/null 2>&1; then
-		echo "docker is required for automatic pgvector startup; set PGVECTOR_DSN or PGVECTOR_DOCKER=false" >&2
+		echo "docker is required for automatic pgvector startup; set PGVECTOR_DSN to use an external PostgreSQL service" >&2
 		exit 1
 	fi
 	echo "starting PostgreSQL+pgvector container: $PGVECTOR_IMAGE"
@@ -152,7 +153,7 @@ if contains_backend mongodb; then
 fi
 "$VENV/bin/python" -m pip install -q --only-binary=:all: "${binary_pip_packages[@]}"
 if ((${#backend_pip_packages[@]})); then
-	"$VENV/bin/python" -m pip install -q --only-binary=:all: "${backend_pip_packages[@]}"
+	"$VENV/bin/python" -m pip install -q --prefer-binary "${backend_pip_packages[@]}"
 fi
 
 echo "exporting TreeDB dataset"
@@ -225,6 +226,9 @@ if contains_backend pgvector; then
 	)
 	if [[ "$PGVECTOR_DROP_SCHEMA_AFTER" == "true" ]]; then
 		pgvector_args+=(--drop-schema-after)
+	fi
+	if [[ "$PGVECTOR_ALLOW_DROP_SCHEMA" == "true" ]]; then
+		pgvector_args+=(--allow-drop-schema)
 	fi
 	"$VENV/bin/python" benchmarks/vector_db_compare/pgvector_bench.py "${pgvector_args[@]}" >"$RUN_DIR/pgvector.stdout.json"
 	result_args+=(--result "$RUN_DIR/pgvector.json")

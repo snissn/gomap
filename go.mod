@@ -26,7 +26,6 @@ require (
 	github.com/tidwall/match v1.1.1
 	github.com/tidwall/redcon v1.6.2
 	github.com/tphakala/simd v1.0.22
-	github.com/unum-cloud/usearch/golang v0.0.0-20260502205332-29e527731957 // optional usearch_bench benchmark
 	github.com/yuin/goldmark v1.7.13
 	github.com/zeebo/xxh3 v1.0.2
 	go.etcd.io/bbolt v1.4.3
@@ -80,6 +79,7 @@ require (
 	github.com/tidwall/pretty v1.2.0 // indirect
 	github.com/tidwall/rtred v0.1.2 // indirect
 	github.com/tidwall/tinyqueue v0.1.1 // indirect
+	github.com/unum-cloud/usearch/golang v0.0.0-20260502205332-29e527731957 // indirect
 	github.com/xdg-go/pbkdf2 v1.0.0 // indirect
 	github.com/xdg-go/scram v1.2.0 // indirect
 	github.com/xdg-go/stringprep v1.0.4 // indirect

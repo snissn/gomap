@@ -412,6 +412,8 @@ func TestExecuteRequireValueLogBytesFailsOnPagerBackedDefault(t *testing.T) {
 	if err == nil {
 		t.Fatal("execute succeeded, want value-log requirement failure")
 	}
+	// These assertions intentionally describe the current default backend
+	// profile, where this demo does not force value-log storage.
 	if !strings.Contains(err.Error(), "zero value_vlog bytes") {
 		t.Fatalf("error=%v, want zero value_vlog bytes", err)
 	}
@@ -483,6 +485,123 @@ func TestExecuteMatrixRejectsNonEmptyDir(t *testing.T) {
 	}
 }
 
+func TestExecuteRemovesTemporaryDirWhenNotKept(t *testing.T) {
+	res, err := execute(context.Background(), config{
+		docs:                 64,
+		dimensions:           8,
+		queries:              4,
+		validateQueries:      2,
+		validateDocs:         2,
+		topK:                 3,
+		batchSize:            32,
+		m:                    4,
+		efConstruction:       32,
+		efSearch:             32,
+		minRecall:            0.5,
+		compact:              false,
+		disableExactFallback: true,
+	})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if res.KeptDir {
+		t.Fatalf("KeptDir=%t want false", res.KeptDir)
+	}
+	if _, err := os.Stat(res.Dir); !os.IsNotExist(err) {
+		t.Fatalf("temporary dir stat err=%v, want not exist", err)
+	}
+}
+
+func TestParseConfigRejectsInvalidValidationCombinations(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{
+			name: "recall gate without validation queries",
+			args: []string{"-validate-queries", "0"},
+			want: "-min-recall must be 0",
+		},
+		{
+			name: "topk exceeds docs",
+			args: []string{"-docs", "2", "-top-k", "3"},
+			want: "-top-k cannot exceed -docs",
+		},
+		{
+			name: "negative validate docs",
+			args: []string{"-validate-docs", "-1"},
+			want: "-validate-docs cannot be negative",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := parseConfig(tc.args)
+			if err == nil {
+				t.Fatal("parseConfig succeeded, want error")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error=%v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestParseConfigDoesNotWriteFlagErrorsToProcessStderr(t *testing.T) {
+	readPipe, writePipe, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	originalStderr := os.Stderr
+	os.Stderr = writePipe
+	t.Cleanup(func() {
+		os.Stderr = originalStderr
+		_ = readPipe.Close()
+	})
+	_, err = parseConfig([]string{"-not-a-real-flag"})
+	_ = writePipe.Close()
+	if err == nil {
+		t.Fatal("parseConfig accepted unknown flag")
+	}
+	var stderr bytes.Buffer
+	if _, err := stderr.ReadFrom(readPipe); err != nil {
+		t.Fatalf("read stderr: %v", err)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("parseConfig wrote to stderr: %q", stderr.String())
+	}
+}
+
+func TestSyntheticQueriesDoNotOverlapValidationQueries(t *testing.T) {
+	docs := 97
+	validateCount := 17
+	benchmarkCount := 53
+	stride := queryDocStride(docs)
+	seen := make(map[int]struct{}, validateCount)
+	for i := 0; i < validateCount; i++ {
+		seen[syntheticQueryID(i, docs, 0, docs, stride)] = struct{}{}
+	}
+	benchmarkStart := validateCount + 1
+	benchmarkSpan := docs - benchmarkStart
+	for i := 0; i < benchmarkCount; i++ {
+		queryID := syntheticQueryID(i, docs, benchmarkStart, benchmarkSpan, stride)
+		if _, ok := seen[queryID]; ok {
+			t.Fatalf("benchmark query id %d overlapped validation set", queryID)
+		}
+	}
+}
+
+func TestValidationDocIndexSamplesDistinctDocsWhenStrideWouldCollapse(t *testing.T) {
+	docs := 1543
+	seen := make(map[int]struct{}, 16)
+	for i := 0; i < 16; i++ {
+		docIndex := validationDocIndex(i, docs)
+		if _, ok := seen[docIndex]; ok {
+			t.Fatalf("validation doc index repeated %d for docs=%d", docIndex, docs)
+		}
+		seen[docIndex] = struct{}{}
+	}
+}
+
 func TestRunTextOutput(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -548,8 +667,9 @@ func writeDemoDataset(t *testing.T, docs, dims, queries, topK int) string {
 	writeTestVectorFile(t, filepath.Join(dir, "documents.f32"), docs, dims, func(i int) []float32 {
 		return embedding(i, dims)
 	})
+	stride := queryDocStride(docs)
 	writeTestVectorFile(t, filepath.Join(dir, "queries.f32"), queries, dims, func(i int) []float32 {
-		return embedding(queryDocIndex(i, docs), dims)
+		return embedding(queryDocIndex(i, docs, stride), dims)
 	})
 	f, err := os.Create(filepath.Join(dir, "documents.jsonl"))
 	if err != nil {

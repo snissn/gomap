@@ -54,6 +54,28 @@ Backends:
   at a deployment that supports `$vectorSearch` and `createSearchIndexes`. The
   runner uses a fresh benchmark database name by default.
 
+Configuration:
+
+- `RUN_DIR`: output directory. Defaults to a timestamped directory under `/tmp`.
+- `BACKENDS`: comma-separated backend list. Defaults to `treedb,vectorlite`.
+- `DOCS`, `DIMS`, `QUERIES`, `VALIDATE_QUERIES`, `TOP_K`: dataset and validation sizes.
+- `SEARCH_CONCURRENCY`: comma-separated search concurrency levels.
+- `M`, `EF_CONSTRUCTION`, `EF_SEARCH`, `MIN_RECALL`: HNSW and recall parameters.
+- `PGVECTOR_DSN`: external PostgreSQL DSN. If empty and `pgvector` is enabled,
+  the runner starts Docker unless `PGVECTOR_DOCKER=false`.
+- `PGVECTOR_DOCKER`, `PGVECTOR_IMAGE`, `PGVECTOR_MAX_CONNECTIONS`: automatic
+  pgvector container controls.
+- `PGVECTOR_SCHEMA`, `PGVECTOR_TABLE`: benchmark schema/table names.
+- `PGVECTOR_ALLOW_DROP_SCHEMA`: pass `--allow-drop-schema` to permit replacing
+  an existing disposable schema.
+- `PGVECTOR_DROP_SCHEMA_AFTER`: drop the schema after the run, but only if this
+  invocation created it.
+- `MONGODB_VECTOR_URI`: Atlas or local Atlas connection URI.
+- `MONGODB_VECTOR_DATABASE`, `MONGODB_VECTOR_COLLECTION`,
+  `MONGODB_VECTOR_INDEX`: MongoDB benchmark namespace and index names.
+- `MONGODB_VECTOR_NUM_CANDIDATES`: `$vectorSearch` candidate count.
+- `MONGODB_VECTOR_INDEX_TIMEOUT_SECONDS`: Vector Search index readiness timeout.
+
 The runner writes:
 
 - `dataset/`: TreeDB-owned synthetic vectors and manifest
