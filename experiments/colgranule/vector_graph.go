@@ -447,7 +447,7 @@ func (scratch *ColumnVectorGraphSearchScratch) nextVisitedEpoch(nodes int) ([]ui
 	}
 	scratch.visitedEpoch++
 	if scratch.visitedEpoch == 0 {
-		clear(scratch.visitedEpochs)
+		clear(scratch.visitedEpochs[:cap(scratch.visitedEpochs)])
 		scratch.visitedEpoch = 1
 	}
 	return scratch.visitedEpochs, scratch.visitedEpoch
