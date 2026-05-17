@@ -28,6 +28,7 @@ require (
 	go.etcd.io/bbolt v1.4.3
 	go.mongodb.org/mongo-driver/v2 v2.6.0
 	golang.org/x/sys v0.35.0
+	gonum.org/v1/gonum v0.16.0
 	gonum.org/v1/plot v0.16.0
 )
 
@@ -75,6 +76,7 @@ require (
 	github.com/tidwall/pretty v1.2.0 // indirect
 	github.com/tidwall/rtred v0.1.2 // indirect
 	github.com/tidwall/tinyqueue v0.1.1 // indirect
+	github.com/unum-cloud/usearch/golang v0.0.0-20260502205332-29e527731957 // indirect
 	github.com/xdg-go/pbkdf2 v1.0.0 // indirect
 	github.com/xdg-go/scram v1.2.0 // indirect
 	github.com/xdg-go/stringprep v1.0.4 // indirect

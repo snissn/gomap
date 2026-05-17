@@ -127,6 +127,80 @@ lookup routing to a single leaf page (no leaf scanning).
 Leaf pages may still contain inline values or `ValuePtr` entries using the
 existing placement rules.
 
+## Collection Vector Search
+
+Collections can store caller-generated float32 embeddings in JSON document
+fields and search them without making ANN storage the source of truth. Canonical
+documents and embeddings remain in TreeDB primary storage; vector indexes keep
+stable collection document IDs and exact-rerank candidates from canonical rows.
+
+The initial API lives in `TreeDB/collections`:
+
+- `Collection.SearchVectorsExact` scans live rows and returns exact top-k
+  results for cosine, squared L2, or inner-product distance.
+- `Collection.BuildVectorIndex` builds an in-memory HNSW-style secondary index
+  that returns candidates and exact-reranks final results.
+- `BenchmarkCollectionVectorIndexGraphOnlySearch` is a benchmark-only engine
+  comparison path that times TreeDB graph search without collection row fetches,
+  JSON vector extraction, metadata filtering, or exact rerank.
+- `BenchmarkCollectionVectorIndexBuild` and
+  `BenchmarkCollectionVectorUSearchBuild` isolate index build cost from query
+  latency for TreeDB and the optional USearch comparator.
+- `VectorIndexOptions.Encoding` can be set to `VectorIndexEncodingInt8` to keep
+  an ANN-side scalar-quantized vector copy. This reduces index vector memory and
+  snapshot size while preserving full-precision canonical rows for exact rerank.
+- `VectorIndex.SaveSnapshot` and `Collection.LoadVectorIndexSnapshot` persist
+  immutable index epochs under `vector_indexes/<collection>/<index>/` with a
+  manifest plus checksum-verified node, edge, tombstone, and docmap files.
+- `VectorIndexRangeFilter` restricts exact or ANN searches with an existing
+  scalar secondary-index range. Selective filters use an `exact_filtered`
+  strategy; broader filters use `ann_postfilter` and can fall back to exact
+  filtered search if ANN underfills.
+- `VectorIndex.Stats`, `VectorIndex.Search` traces, and `VectorIndex.CheckRecall`
+  expose live/deleted counts, memory and disk bytes, persisted epoch state,
+  snapshot dirtiness, candidate counts, selected strategy, exact fallback
+  reason, rebuild duration, and recall-at-k.
+
+Smoke benchmark:
+
+```sh
+TREEDB_VECTOR_BENCH_DOCS=1000 TREEDB_VECTOR_BENCH_DIMS=32 \
+  go test ./TreeDB/collections -run '^$' \
+  -bench 'BenchmarkCollectionVector(SearchExact|Index(Search|SearchInt8|FilteredSearch))$' \
+  -benchtime=1x -count=1
+```
+
+External comparison benchmark with local USearch bootstrap:
+
+```sh
+scripts/bench_vector_search_compare.sh
+```
+
+The script downloads and extracts the USearch Linux release package into `/tmp`,
+sets `CGO_CFLAGS`, `CGO_LDFLAGS`, and `LD_LIBRARY_PATH`, and writes results under
+`/tmp/gomap_vector_search_compare_*`. Override `USEARCH_VERSION`,
+`TREEDB_VECTOR_BENCH_DOCS`, `TREEDB_VECTOR_BENCH_DIMS`, `BENCHTIME`, and `COUNT`
+to change the comparison shape. The USearch filtered Go binding currently trips
+Go's cgo pointer checks on this toolchain; set `RUN_UNSAFE_USEARCH_FILTERED=true`
+only when you explicitly want that benchmark with `GODEBUG=cgocheck=0`.
+
+The tiny BERT embedding demo in `../examples/vector_search/tiny_bert/` is a
+caller-side fixture/demo; TreeDB core does not generate embeddings. Export it
+with `--output-jsonl` and set `TREEDB_VECTOR_BENCH_JSONL` to run
+`BenchmarkCollectionVectorTinyBERTFixture`.
+
+Optional external engine baseline: build with `-tags usearch_bench` after
+installing the USearch C library and headers for the host. This runs the same
+synthetic vectors against USearch's Go bindings with cosine/f32 HNSW and matching
+`M`, `efConstruction`, and `efSearch` knobs:
+
+```sh
+TREEDB_VECTOR_BENCH_DOCS=1000 TREEDB_VECTOR_BENCH_DIMS=32 \
+  go test -tags usearch_bench ./TreeDB/collections -run '^$' \
+  -bench 'BenchmarkCollectionVector(USearch|SearchExact|Index(Search|SearchInt8|FilteredSearch))' \
+  -benchtime=1x -count=1
+```
+
 ## Durability & Safety Notes
 
 - Safe defaults keep WAL, fsync, and read checksums enabled; relax safety knobs via `Options.Durability` and `Options.ValueLog.ReadIntegrity`.

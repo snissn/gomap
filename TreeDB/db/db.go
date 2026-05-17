@@ -1534,7 +1534,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		// If a directory requires command replay but this open is not command-WAL
 		// enabled, fail closed before legacy replay can misinterpret typed frames.
 		// Frames already covered by AppliedCommandLSN are filtered below.
-		if err := requireNoUnappliedCommandWAL(opts.Dir, db.meta.AppliedCommandLSN, opts.WALMaxSegmentBytes); err != nil {
+		if err := requireNoUnappliedCommandWALFrames(opts.Dir, db.meta.AppliedCommandLSN, opts.WALMaxSegmentBytes); err != nil {
 			_ = db.Close()
 			return nil, err
 		}
@@ -1967,6 +1967,9 @@ func (db *DB) readMeta(pageID uint64) (page.MetaPageBody, bool) {
 		return page.MetaPageBody{}, false
 	}
 	body := data[page.PageHeaderSize:]
+	// Meta page selection is still commit-sequence based. The command-WAL V1
+	// decoder only changes how the selected page interprets the reserved
+	// AppliedCommandLSN extension bytes: unmarked legacy pages decode as zero.
 	return page.DecodeMetaBodyCommandWALV1(body), true
 }
 
