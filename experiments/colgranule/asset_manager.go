@@ -297,12 +297,14 @@ func (m *ColumnAssetManager) MarkPublishFailed(prepared []ColumnPreparedAsset, r
 	if reason == "" {
 		reason = "publish failed"
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
 	for _, asset := range prepared {
 		if err := validateColumnPreparedAsset(asset); err != nil {
 			return err
 		}
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, asset := range prepared {
 		m.quarantine[asset.Ref] = reason
 	}
 	return nil
@@ -379,7 +381,7 @@ func verifyColumnAssetStoreRef(store ColumnAssetStore, ref ColumnAssetRef) error
 		return verifier.Verify(ref)
 	}
 	if ranged, ok := store.(ColumnAssetRangeReader); ok {
-		_, err := ranged.ReadRange(ref, 0, 0)
+		_, err := ranged.ReadRange(ref, 0, 1)
 		return err
 	}
 	_, err := store.ReadTo(ref, nil)
