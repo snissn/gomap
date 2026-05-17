@@ -163,16 +163,12 @@ func (g *ColumnVectorGraph) SearchCosine(query []float32, opts ColumnVectorGraph
 	if badDim >= 0 {
 		return nil, trace, fmt.Errorf("collections: column vector graph query dim %d is not finite: %g", badDim, badValue)
 	}
-	if queryNormSquared == 0 {
-		return nil, trace, errors.New("collections: cosine column vector graph query cannot have zero magnitude")
+	queryInvNorm, err := validateColumnVectorGraphQueryInvNorm(queryNormSquared)
+	if err != nil {
+		return nil, trace, err
 	}
 	efSearch := g.normalizeEfSearch(opts.EfSearch, opts.TopK)
 	trace.EfSearch = efSearch
-	queryInvNorm64 := 1 / math.Sqrt(queryNormSquared)
-	if math.IsNaN(queryInvNorm64) || math.IsInf(queryInvNorm64, 0) || queryInvNorm64 > math.MaxFloat32 {
-		return nil, trace, errors.New("collections: cosine column vector graph query inverse norm is not representable")
-	}
-	queryInvNorm := float32(queryInvNorm64)
 	candidates, edgesVisited, candidatesExamined := g.searchCandidates(query, queryInvNorm, efSearch, &scratch.graph)
 	trace.CandidatesExamined = candidatesExamined
 	trace.CandidatesAfterTombstone = len(candidates)
@@ -276,6 +272,20 @@ func validateColumnVectorGraphInvNorm(row int, invNorm float32, normSquared floa
 		return fmt.Errorf("collections: column vector graph row %d inverse norm=%g want %g", row, invNorm, want)
 	}
 	return nil
+}
+
+func validateColumnVectorGraphQueryInvNorm(normSquared float64) (float32, error) {
+	if math.IsNaN(normSquared) || math.IsInf(normSquared, 0) {
+		return 0, errors.New("collections: cosine column vector graph query magnitude is not representable")
+	}
+	if normSquared == 0 {
+		return 0, errors.New("collections: cosine column vector graph query cannot have zero magnitude")
+	}
+	queryInvNorm64 := 1 / math.Sqrt(normSquared)
+	if math.IsNaN(queryInvNorm64) || math.IsInf(queryInvNorm64, 0) || queryInvNorm64 > math.MaxFloat32 {
+		return 0, errors.New("collections: cosine column vector graph query inverse norm is not representable")
+	}
+	return float32(queryInvNorm64), nil
 }
 
 func columnVectorGraphNormSquared(vector []float32) (float64, int, float32) {

@@ -113,6 +113,16 @@ func TestColumnVectorGraphRejectsUnrepresentableQueryInvNorm(t *testing.T) {
 	}
 }
 
+func TestColumnVectorGraphRejectsOverflowedQueryNorm(t *testing.T) {
+	_, err := validateColumnVectorGraphQueryInvNorm(math.Inf(1))
+	if err == nil {
+		t.Fatal("validateColumnVectorGraphQueryInvNorm succeeded with overflowed norm")
+	}
+	if !strings.Contains(err.Error(), "magnitude") {
+		t.Fatalf("error=%q want magnitude validation", err)
+	}
+}
+
 func TestColumnVectorGraphSearchHandlesOverflowingFloat32Dot(t *testing.T) {
 	graph, err := NewColumnVectorGraphFromColumns(ColumnVectorGraphColumns{
 		DocumentIDs:     [][]byte{[]byte("doc-large"), []byte("doc-orthogonal")},
