@@ -20,6 +20,9 @@ var (
 	// ErrCommandWALUnsupported indicates a directory advertises command_wal_v1
 	// before this binary has enabled command WAL execution/recovery.
 	ErrCommandWALUnsupported = db.ErrCommandWALUnsupported
+	// ErrCommandWALRejected indicates a command is intentionally rejected while
+	// command_wal_v1 is active.
+	ErrCommandWALRejected = db.ErrCommandWALRejected
 	// ErrUnsupportedRequiredFeature indicates format.json requires a storage
 	// feature this binary does not understand.
 	ErrUnsupportedRequiredFeature = db.ErrUnsupportedRequiredFeature

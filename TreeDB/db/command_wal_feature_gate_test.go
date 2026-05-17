@@ -10,6 +10,15 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 )
 
+func TestCommandWALRejectedErrorDistinctFromUnsupported(t *testing.T) {
+	if ErrCommandWALRejected == ErrCommandWALUnsupported {
+		t.Fatal("ErrCommandWALRejected must be a distinct public sentinel from ErrCommandWALUnsupported")
+	}
+	if errors.Is(ErrCommandWALRejected, ErrCommandWALUnsupported) {
+		t.Fatal("ErrCommandWALRejected must not match ErrCommandWALUnsupported")
+	}
+}
+
 func TestCommandWALFeatureGateRequiresCleanLegacyWALBeforeActivation(t *testing.T) {
 	dir := t.TempDir()
 	walDir := filepath.Join(dir, "wal")
