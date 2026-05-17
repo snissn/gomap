@@ -217,7 +217,7 @@ func (b *Batch) write(sync bool) error {
 		return b.db.Checkpoint()
 	}
 	intent := b.commandWALPublishIntent
-	if !b.physicalOnly {
+	if !b.physicalOnly && b.db.commandWAL {
 		var err error
 		intent, err = b.db.prepareRawKVCommandWALIntent(b)
 		if err != nil {
@@ -305,21 +305,26 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent) (bool,
 		return false, nil
 	}
 
-	if _, err := b.db.appendRawKVCommandWALIntent(intent, sync); err != nil {
-		b.db.commitMu.Unlock()
-		freeErr := tracker.FreeAll()
-		b.db.writeMu.RUnlock()
-		if freeErr != nil {
-			return false, freeErr
+	var post finalizeCommitPost
+	if intent == nil {
+		post, err = b.db.finalizeCommitLocked(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil)
+	} else {
+		if _, err = b.db.appendRawKVCommandWALIntent(intent, sync); err != nil {
+			b.db.commitMu.Unlock()
+			freeErr := tracker.FreeAll()
+			b.db.writeMu.RUnlock()
+			if freeErr != nil {
+				return false, freeErr
+			}
+			return false, err
 		}
-		return false, err
-	}
-	post, err := b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, commandWALFinalizeOptions(intent))
-	// Poison while still holding commitMu so that no concurrent writer can
-	// slip past the poison check in appendRawKVCommandWALIntent and publish a
-	// root that covers the unapplied frame's LSN.
-	if err != nil {
-		b.db.poisonCommandWALAfterPostAppendFailure(intent)
+		post, err = b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, commandWALFinalizeOptions(intent))
+		// Poison while still holding commitMu so that no concurrent writer can
+		// slip past the poison check in appendRawKVCommandWALIntent and publish a
+		// root that covers the unapplied frame's LSN.
+		if err != nil {
+			b.db.poisonCommandWALAfterPostAppendFailure(intent)
+		}
 	}
 	b.db.commitMu.Unlock()
 	if err != nil {
@@ -379,14 +384,21 @@ func (b *Batch) writeSerialized(sync bool, intent *commandWALBatchIntent) error 
 	sysRoot := b.db.meta.SystemRootPageID
 	b.db.mu.Unlock()
 
-	// writeMu is released by the deferred unlock above even if the command
-	// journal append fails and poisons this open handle.
-	if _, err := b.db.appendRawKVCommandWALIntent(intent, sync); err != nil {
-		return err
+	var post finalizeCommitPost
+	if intent == nil {
+		post, err = b.db.finalizeCommitLocked(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil)
+	} else {
+		// writeMu is released by the deferred unlock above even if the command
+		// journal append fails and poisons this open handle.
+		if _, err = b.db.appendRawKVCommandWALIntent(intent, sync); err != nil {
+			return err
+		}
+		post, err = b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, commandWALFinalizeOptions(intent))
 	}
-	post, err := b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, commandWALFinalizeOptions(intent))
 	if err != nil {
-		b.db.poisonCommandWALAfterPostAppendFailure(intent)
+		if intent != nil {
+			b.db.poisonCommandWALAfterPostAppendFailure(intent)
+		}
 		return err
 	}
 	vlogRefDelta = nil

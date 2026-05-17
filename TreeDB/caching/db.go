@@ -118,6 +118,7 @@ var batchSetViewBytesTotal atomic.Uint64
 var batchSetCallerSamplesTotal atomic.Uint64
 var batchSetCallerSampleSeq atomic.Uint64
 var batchSetCallerStatsMap sync.Map
+var hotPathStatsEnabled = os.Getenv("TREEDB_HOT_PATH_STATS") != ""
 var dbGetCallerSamplesTotal atomic.Uint64
 var dbGetCallerSampleSeq atomic.Uint64
 var dbGetCallerStatsMap sync.Map
@@ -28057,8 +28058,10 @@ func (b *Batch) Set(key, value []byte) error {
 	if value == nil {
 		return ErrValueNil
 	}
-	batchSetCallsTotal.Add(1)
-	batchSetBytesTotal.Add(uint64(len(key) + len(value)))
+	if hotPathStatsEnabled {
+		batchSetCallsTotal.Add(1)
+		batchSetBytesTotal.Add(uint64(len(key) + len(value)))
+	}
 	maybeRecordBatchSetCallerSample(len(key) + len(value))
 
 	idx := len(b.entries)
@@ -28124,8 +28127,10 @@ func (b *Batch) SetView(key, value []byte) error {
 // SetViewValidated is SetView for callers that already performed public input
 // validation. The caller must still keep key/value immutable until Write/Close.
 func (b *Batch) SetViewValidated(key, value []byte) error {
-	batchSetViewCallsTotal.Add(1)
-	batchSetViewBytesTotal.Add(uint64(len(key) + len(value)))
+	if hotPathStatsEnabled {
+		batchSetViewCallsTotal.Add(1)
+		batchSetViewBytesTotal.Add(uint64(len(key) + len(value)))
+	}
 
 	if b.backend != nil {
 		b.batchRange.add(key)
