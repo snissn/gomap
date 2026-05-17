@@ -305,11 +305,15 @@ def main() -> None:
         raise RuntimeError(f"unsupported dataset metric/normalization: {manifest}")
     all_queries = load_vectors(dataset_dir / manifest["query_vectors_file"], manifest["queries"], manifest["dimensions"])
     queries = all_queries[: min(args.queries, len(all_queries))]
+    if args.top_k <= 0:
+        raise ValueError("--top-k must be positive")
+    if args.top_k > manifest["docs"]:
+        raise ValueError(f"--top-k={args.top_k} exceeds document count {manifest['docs']}")
     concurrency = parse_ints(args.search_concurrency)
 
     phases, vectorlite_info, docs = build_database(args, dataset_dir, manifest)
     db, reopen = reopen_database(args)
-    validation = validate_recall(db, docs, all_queries, args.top_k, args.ef_search, args.validate_queries, args.min_recall)
+    validation = validate_recall(db, docs, queries, args.top_k, args.ef_search, args.validate_queries, args.min_recall)
     db.close()
 
     levels = sorted({1, *concurrency})

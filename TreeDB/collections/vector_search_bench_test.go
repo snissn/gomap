@@ -108,7 +108,7 @@ func BenchmarkCollectionVectorIndexBuild(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		index, err := col.BuildVectorIndex(VectorIndexOptions{
-			Name:   "embedding_build",
+			Name:   fmt.Sprintf("embedding_build_%d", i),
 			Field:  "embedding",
 			Metric: VectorMetricCosine,
 			M:      16,
@@ -135,7 +135,7 @@ func BenchmarkCollectionVectorIndexBuildInt8(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		index, err := col.BuildVectorIndex(VectorIndexOptions{
-			Name:     "embedding_build_i8",
+			Name:     fmt.Sprintf("embedding_build_i8_%d", i),
 			Field:    "embedding",
 			Metric:   VectorMetricCosine,
 			M:        16,

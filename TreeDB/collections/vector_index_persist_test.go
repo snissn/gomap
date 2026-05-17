@@ -942,6 +942,20 @@ func TestCommitAmbiguousErrorPreservesExistingAmbiguousError(t *testing.T) {
 	}
 }
 
+func TestCommitAmbiguousErrorWrapsPlainSentinelWithOperation(t *testing.T) {
+	got := commitAmbiguousError("insert", ErrCommitAmbiguous)
+	if !errors.Is(got, ErrCommitAmbiguous) {
+		t.Fatalf("ambiguous error=%v want ErrCommitAmbiguous", got)
+	}
+	ambiguous, ok := got.(*CommitAmbiguousError)
+	if !ok {
+		t.Fatalf("ambiguous error type=%T want *CommitAmbiguousError", got)
+	}
+	if ambiguous.Operation != "insert" {
+		t.Fatalf("ambiguous operation=%q want insert", ambiguous.Operation)
+	}
+}
+
 func TestDeclaredNativeVectorIndexesLoadedNoDeclaredAdHocIndex(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
