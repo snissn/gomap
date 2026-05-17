@@ -91,6 +91,10 @@ func NewColumnVectorGraphFromPartSet(reader *ColumnPartSetReader, opts ColumnVec
 		return nil, ColumnVectorGraphLoadStats{}, errors.New("colgranule: nil column vector graph reader")
 	}
 	opts = normalizeColumnVectorGraphOptions(opts)
+	visibility := reader.VisibilityStats()
+	if err := validateColumnVectorGraphVisibility(visibility); err != nil {
+		return nil, ColumnVectorGraphLoadStats{}, err
+	}
 	ids, err := reader.ScanProjected([]string{opts.IDColumn})
 	if err != nil {
 		return nil, ColumnVectorGraphLoadStats{}, err
@@ -143,7 +147,7 @@ func NewColumnVectorGraphFromPartSet(reader *ColumnPartSetReader, opts ColumnVec
 		Edges:           len(neighbors.Values),
 		BlocksDecoded:   ids.Diagnostics.BlocksDecoded + vectors.Diagnostics.BlocksDecoded + invNorms.Diagnostics.BlocksDecoded + neighbors.Diagnostics.BlocksDecoded,
 		BytesDecoded:    ids.Diagnostics.BytesDecoded + vectors.Diagnostics.BytesDecoded + invNorms.Diagnostics.BytesDecoded + neighbors.Diagnostics.BytesDecoded,
-		VisibleRows:     reader.VisibilityStats().VisibleRows,
+		VisibleRows:     visibility.VisibleRows,
 		PartsConsidered: neighbors.Diagnostics.PartsConsidered,
 	}
 	graph := &ColumnVectorGraph{
@@ -156,6 +160,13 @@ func NewColumnVectorGraphFromPartSet(reader *ColumnPartSetReader, opts ColumnVec
 		entryOrdinal:     opts.EntryOrdinal,
 	}
 	return graph, stats, nil
+}
+
+func validateColumnVectorGraphVisibility(stats ColumnPartSetVisibilityStats) error {
+	if stats.VisibleRows != stats.InputRows {
+		return fmt.Errorf("colgranule: column vector graph requires compacted/pristine part set; visible rows=%d input rows=%d superseded=%d deleted=%d", stats.VisibleRows, stats.InputRows, stats.SupersededRows, stats.DeletedRows)
+	}
+	return nil
 }
 
 // Rows returns the number of rows in the graph.
