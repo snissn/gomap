@@ -255,7 +255,9 @@ func replayCommandWALIntoBackend(db *DB, segments []logSegment, maxSegmentBytes 
 	var ridMap map[uint64]page.ValuePtr
 	var inlineAppender *replayInlineAppender
 	previousLeafPageLog := db.leafPageLog
+	previousValueLogAppender := db.currentValueLogAppender()
 	leafPageLogInstalled := false
+	valueLogAppenderInstalled := false
 	restoreLeafPageLog := func() {
 		if leafPageLogInstalled {
 			db.SetLeafPageLog(previousLeafPageLog)
@@ -273,6 +275,12 @@ func replayCommandWALIntoBackend(db *DB, segments []logSegment, maxSegmentBytes 
 		}
 		return ridMap, nil
 	}
+	restoreValueLogAppender := func() {
+		if valueLogAppenderInstalled {
+			db.SetValueLogAppender(previousValueLogAppender)
+			valueLogAppenderInstalled = false
+		}
+	}
 	ensureReplayLogSupport := func() (map[uint64]page.ValuePtr, *replayInlineAppender, error) {
 		if inlineAppender != nil {
 			return ridMap, inlineAppender, nil
@@ -286,16 +294,17 @@ func replayCommandWALIntoBackend(db *DB, segments []logSegment, maxSegmentBytes 
 		if err != nil {
 			return nil, nil, err
 		}
-		if db.indexOuterLeavesInValueLog {
-			db.SetLeafPageLog(inlineAppender)
-			leafPageLogInstalled = true
-		}
+		db.SetValueLogAppender(inlineAppender)
+		valueLogAppenderInstalled = true
+		db.SetLeafPageLog(inlineAppender)
+		leafPageLogInstalled = true
 		return ridMap, inlineAppender, nil
 	}
 	defer func() {
 		if inlineAppender != nil {
 			_ = inlineAppender.close()
 		}
+		restoreValueLogAppender()
 		restoreLeafPageLog()
 	}()
 	needsLogSupport, err := commandWALReplayFramesNeedLogSupport(db, frames, applied)
@@ -331,6 +340,7 @@ func replayCommandWALIntoBackend(db *DB, segments []logSegment, maxSegmentBytes 
 			return err
 		}
 		inlineAppender = nil
+		restoreValueLogAppender()
 		restoreLeafPageLog()
 	}
 	_, err = cleanupCommandWALSegmentsCoveredByAppliedLSN(db.dir, applied, maxSegmentBytes)
@@ -431,7 +441,42 @@ func applyCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map[uint
 	case commitlog.CommandKindRawKVBatch:
 		return applyRawKVCommandWALFrame(db, env, ridMap, inlineAppender, ensureReplayRIDMap, ensureReplayLogSupport)
 	default:
+		if registration, ok := lookupCommandWALReplayHandler(env.Kind); ok {
+			if registration.needsReplayLogSupport && ensureReplayLogSupport != nil {
+				if _, _, err := ensureReplayLogSupport(); err != nil {
+					return err
+				}
+			}
+			db.ensureCommandWALRecoverySnapshotView()
+			return registration.handler(db, env)
+		}
 		return commitlog.ErrCommandWALUnsupportedKind
+	}
+}
+
+func (db *DB) ensureCommandWALRecoverySnapshotView() {
+	if db == nil || db.state.Load() != nil {
+		return
+	}
+	db.mu.RLock()
+	state := &DBState{
+		CommitSeq:                  db.meta.CommitSeq,
+		RootPageID:                 db.meta.UserRootPageID,
+		SystemRootPageID:           db.meta.SystemRootPageID,
+		AppliedCommandLSN:          db.meta.AppliedCommandLSN,
+		LeafGenerations:            db.currentLeafGenerationView(),
+		LeafGenerationStateVersion: db.leafGenerationStateVersion,
+	}
+	db.mu.RUnlock()
+	if db.valueLogManager != nil {
+		state.ValueLogSet = db.valueLogManager.CurrentSetNoRefresh()
+	}
+	if db.state.CompareAndSwap(nil, state) {
+		db.publishSnapshotView(db.idx.Load(), state, db.valueLogManager)
+		return
+	}
+	if state.ValueLogSet != nil && db.valueLogManager != nil {
+		_ = db.valueLogManager.Release(state.ValueLogSet)
 	}
 }
 
@@ -669,6 +714,18 @@ func (a *replayInlineAppender) append(value []byte) (page.ValuePtr, error) {
 	return ptr, nil
 }
 
+func (a *replayInlineAppender) AppendValues(values [][]byte) ([]page.ValuePtr, error) {
+	ptrs := make([]page.ValuePtr, len(values))
+	for i := range values {
+		ptr, err := a.append(values[i])
+		if err != nil {
+			return nil, err
+		}
+		ptrs[i] = ptr
+	}
+	return ptrs, nil
+}
+
 func (a *replayInlineAppender) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, error) {
 	if a == nil || a.writer == nil {
 		return page.LeafLogPtr{}, fmt.Errorf("commitlog: replay value-log appender unavailable")
@@ -706,6 +763,13 @@ func (a *replayInlineAppender) Flush() error {
 
 func (a *replayInlineAppender) Sync() error {
 	return a.syncIfDirty()
+}
+
+func (a *replayInlineAppender) CurrentValueLogSegment() (string, uint32, bool) {
+	if a == nil || a.writer == nil {
+		return "", 0, false
+	}
+	return a.writer.CurrentValueLogSegment()
 }
 
 func (a *replayInlineAppender) syncIfDirty() error {

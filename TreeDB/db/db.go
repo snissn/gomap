@@ -1599,8 +1599,11 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		LeafGenerations:            db.currentLeafGenerationView(),
 		LeafGenerationStateVersion: db.leafGenerationStateVersion,
 	}
-	db.state.Store(initialState)
+	oldInitialState := db.state.Swap(initialState)
 	db.publishSnapshotView(gen, initialState, vm)
+	if oldInitialState != nil && oldInitialState.ValueLogSet != nil {
+		_ = vm.Release(oldInitialState.ValueLogSet)
+	}
 	if err := db.initValueLogRefTracker(); err != nil {
 		db.Close()
 		return nil, err
