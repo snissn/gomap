@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	treedb "github.com/snissn/gomap/TreeDB"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
@@ -435,6 +436,83 @@ func TestTemplateV1EncoderLearnsIDsAfterInsertBatch(t *testing.T) {
 	}
 	if !bytes.Equal(gotJSON, []byte(`{"city":"sea","email":"grace@example.com"}`)) {
 		t.Fatalf("u2 json=%s", gotJSON)
+	}
+}
+
+func TestTemplateV1MaterializesPointerizedCompressedTemplateRootAfterReopen(t *testing.T) {
+	dir := t.TempDir()
+	opts := treedb.OptionsFor(treedb.ProfileBench, dir)
+	opts.ValueLog.PointerThreshold = 1
+	opts.ValueLog.ForcePointers = true
+
+	d, cleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat:        DocumentFormatTemplateV1,
+			DataRootStoragePolicy: RootStorageCompressed,
+		},
+	}); err != nil {
+		_ = cleanup()
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		_ = cleanup()
+		t.Fatalf("open collection: %v", err)
+	}
+
+	var encoder TemplateV1Encoder
+	doc, err := encoder.EncodeDocument([]string{"email", "city", "pad"}, []any{"ada@example.com", "hnl", strings.Repeat("x", 128)})
+	if err != nil {
+		_ = cleanup()
+		t.Fatalf("encode doc: %v", err)
+	}
+	if _, err := col.InsertBatchWithTemplateV1Encoder([][]byte{[]byte("u1")}, [][]byte{doc}, &encoder); err != nil {
+		_ = cleanup()
+		t.Fatalf("insert doc: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		_ = cleanup()
+		t.Fatalf("flush collection: %v", err)
+	}
+	if err := mgr.FlushAll(); err != nil {
+		_ = cleanup()
+		t.Fatalf("flush manager: %v", err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		_ = cleanup()
+		t.Fatalf("checkpoint: %v", err)
+	}
+	if err := cleanup(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+
+	reopened, reopenedCleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	defer func() { _ = reopenedCleanup() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open reopened collection: %v", err)
+	}
+	stored, err := reopenedCol.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get reopened doc: %v", err)
+	}
+	gotJSON, err := reopenedCol.StoredDocumentJSON(stored)
+	if err != nil {
+		t.Fatalf("materialize reopened doc: %v", err)
+	}
+	for _, want := range [][]byte{[]byte(`"email":"ada@example.com"`), []byte(`"city":"hnl"`), []byte(`"pad":"`)} {
+		if !bytes.Contains(gotJSON, want) {
+			t.Fatalf("reopened json=%s missing %s", gotJSON, want)
+		}
 	}
 }
 

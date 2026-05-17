@@ -29,7 +29,7 @@ func main() {
 	)
 	flag.StringVar(&offLogPath, "off-log", "", "path to unified_bench output for treedb_vlog_off")
 	flag.StringVar(&autoLogPath, "auto-log", "", "path to unified_bench output for treedb_vlog_auto")
-	flag.Float64Var(&minThroughputFrac, "min-throughput-frac", 0.95, "minimum allowed auto/off batch-write throughput fraction")
+	flag.Float64Var(&minThroughputFrac, "min-throughput-frac", 1.01, "strict #1529 parity-plus auto/off batch-write throughput fraction; values at or below this fail")
 	flag.Float64Var(&maxSizeFrac, "max-size-frac", 1.02, "maximum allowed auto/off value-log bytes fraction")
 	flag.Parse()
 
@@ -64,8 +64,8 @@ func main() {
 	fmt.Printf("incompressible gate: off_value_log=%.0f auto_value_log=%.0f size_frac=%.4f (max=%.4f)\n", off.WALValue, auto.WALValue, sizeFrac, maxSizeFrac)
 
 	fail := false
-	if throughputFrac < minThroughputFrac {
-		fmt.Fprintf(os.Stderr, "FAIL throughput gate: auto/off=%.4f < %.4f\n", throughputFrac, minThroughputFrac)
+	if throughputFrac <= minThroughputFrac {
+		fmt.Fprintf(os.Stderr, "FAIL throughput gate: auto/off=%.4f <= %.4f\n", throughputFrac, minThroughputFrac)
 		fail = true
 	}
 	if sizeFrac > maxSizeFrac {

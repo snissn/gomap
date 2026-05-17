@@ -3,11 +3,17 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
+	treedb "github.com/snissn/gomap/TreeDB"
+	"github.com/snissn/gomap/TreeDB/collections"
+	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/experiments/colgranule"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
@@ -121,6 +127,387 @@ func TestRemainingJSONDocumentConservativeOnlyRemovesTimeUS(t *testing.T) {
 	}
 }
 
+func TestRestoreClickHouseTypedPathsLeavesMissingCommitAbsent(t *testing.T) {
+	doc := map[string]any{
+		"identity": map[string]any{"handle": "example.test"},
+	}
+	restoreClickHouseTypedPathsForTest(doc, typedJSONBenchValues{
+		TimeUS:           1732206349164509,
+		Did:              "did:plc:identity",
+		Kind:             "identity",
+		CommitOperation:  "",
+		CommitCollection: "",
+	})
+	if _, ok := doc["commit"]; ok {
+		t.Fatalf("identity row should not materialize empty commit object: %+v", doc["commit"])
+	}
+}
+
+func TestRemainingPayloadPlusImageColumnsReconstructsJSONBenchRows(t *testing.T) {
+	source := filepath.Join("..", "..", "testdata", "jsonbench_sample.jsonl")
+	validateRemainingPayloadPlusImageColumnsReconstructsJSONBenchRows(t, source, 0, 2)
+}
+
+func TestRemainingPayloadPlusImageColumnsReconstructsLocalJSONBenchIfRequested(t *testing.T) {
+	source, limit := localJSONBenchFullReconstructionSource(t)
+	validateRemainingPayloadPlusImageColumnsReconstructsJSONBenchRows(t, source, limit, colgranule.DefaultRowsPerGranule)
+}
+
+func validateRemainingPayloadPlusImageColumnsReconstructsJSONBenchRows(t *testing.T, source string, limit int, rowsPerGranule int) {
+	t.Helper()
+	ds, err := colgranule.LoadJSONBenchColumns(source, limit)
+	if err != nil {
+		t.Fatalf("LoadJSONBenchColumns: %v", err)
+	}
+	part, err := colgranule.BuildJSONBenchColumnPartWithAggregateMetadataForLayout(ds, rowsPerGranule, colgranule.JSONBenchColumnPartLayoutClickHouseFilterUserTime)
+	if err != nil {
+		t.Fatalf("BuildJSONBenchColumnPartWithAggregateMetadataForLayout: %v", err)
+	}
+	image, err := colgranule.BuildColumnPartImage(part, colgranule.ColumnPartImageOptions{Dictionaries: ds.Dictionaries})
+	if err != nil {
+		t.Fatalf("BuildColumnPartImage: %v", err)
+	}
+	parsed, err := colgranule.ParseColumnPartImage(image.Bytes)
+	if err != nil {
+		t.Fatalf("ParseColumnPartImage: %v", err)
+	}
+	imagePart, err := colgranule.ColumnPartFromImage(parsed)
+	if err != nil {
+		t.Fatalf("ColumnPartFromImage: %v", err)
+	}
+
+	reverseDictionaries := reverseJSONBenchDictionaries(ds.Dictionaries)
+	scanner := imagePart.NewScanner()
+	remainingEncoders := map[string]func([]byte) ([]byte, error){
+		"json": func(raw []byte) ([]byte, error) {
+			return remainingJSONDocument(raw, remainingShapeClickHouseTyped)
+		},
+		"bson": func(raw []byte) ([]byte, error) {
+			return remainingBSONDocument(raw, remainingShapeClickHouseTyped)
+		},
+	}
+
+	for name, encodeRemaining := range remainingEncoders {
+		t.Run(name, func(t *testing.T) {
+			row := int64(0)
+			if err := scanJSONBenchFile(source, func(raw []byte) error {
+				if row >= int64(ds.Rows) {
+					return errStopScan
+				}
+				remaining, err := encodeRemaining(raw)
+				if err != nil {
+					return err
+				}
+				retained, err := decodeRetainedDocumentForTest(name, remaining)
+				if err != nil {
+					return err
+				}
+				typed, err := typedJSONBenchValuesFromImage(scanner, imagePart, reverseDictionaries, row)
+				if err != nil {
+					return err
+				}
+				restoreClickHouseTypedPathsForTest(retained, typed)
+
+				var original map[string]any
+				if err := decodeJSONPreserveNumbers(raw, &original); err != nil {
+					return err
+				}
+				if got, want := canonicalJSONForTest(t, retained), canonicalJSONForTest(t, original); string(got) != string(want) {
+					t.Fatalf("row %d reconstructed %s mismatch\ngot  %s\nwant %s", row, name, got, want)
+				}
+				row++
+				return nil
+			}); err != nil {
+				t.Fatalf("scan %s: %v", name, err)
+			}
+			if row != int64(ds.Rows) {
+				t.Fatalf("validated rows=%d want %d", row, ds.Rows)
+			}
+		})
+	}
+}
+
+func TestRemainingTemplateV1PayloadPlusImageColumnsReconstructsJSONBenchRows(t *testing.T) {
+	source := filepath.Join("..", "..", "testdata", "jsonbench_sample.jsonl")
+	validateRemainingTemplateV1PayloadPlusImageColumnsReconstructsJSONBenchRows(t, source, 0, 2)
+}
+
+func TestRemainingTemplateV1MeasurementStorageReconstructsJSONBenchRows(t *testing.T) {
+	source := filepath.Join("..", "..", "testdata", "jsonbench_sample.jsonl")
+	validateRemainingTemplateV1MeasurementStorageReconstructsJSONBenchRows(t, source, 0, 2)
+}
+
+func TestRemainingTemplateV1MeasurementStorageReconstructsLocalJSONBenchIfRequested(t *testing.T) {
+	source, limit := localJSONBenchFullReconstructionSource(t)
+	validateRemainingTemplateV1MeasurementStorageReconstructsJSONBenchRows(t, source, limit, colgranule.DefaultRowsPerGranule)
+}
+
+func validateRemainingTemplateV1PayloadPlusImageColumnsReconstructsJSONBenchRows(t *testing.T, source string, limit int, rowsPerGranule int) {
+	t.Helper()
+	ds, err := colgranule.LoadJSONBenchColumns(source, limit)
+	if err != nil {
+		t.Fatalf("LoadJSONBenchColumns: %v", err)
+	}
+	part, err := colgranule.BuildJSONBenchColumnPartWithAggregateMetadataForLayout(ds, rowsPerGranule, colgranule.JSONBenchColumnPartLayoutClickHouseFilterUserTime)
+	if err != nil {
+		t.Fatalf("BuildJSONBenchColumnPartWithAggregateMetadataForLayout: %v", err)
+	}
+	image, err := colgranule.BuildColumnPartImage(part, colgranule.ColumnPartImageOptions{Dictionaries: ds.Dictionaries})
+	if err != nil {
+		t.Fatalf("BuildColumnPartImage: %v", err)
+	}
+	parsed, err := colgranule.ParseColumnPartImage(image.Bytes)
+	if err != nil {
+		t.Fatalf("ParseColumnPartImage: %v", err)
+	}
+	imagePart, err := colgranule.ColumnPartFromImage(parsed)
+	if err != nil {
+		t.Fatalf("ColumnPartFromImage: %v", err)
+	}
+
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open TreeDB: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := collections.NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&collections.CollectionMeta{
+		Name: "remaining",
+		Options: collections.CollectionOptions{
+			DocumentFormat: collections.DocumentFormatTemplateV1,
+		},
+	}); err != nil {
+		t.Fatalf("create remaining collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("remaining")
+	if err != nil {
+		t.Fatalf("open remaining collection: %v", err)
+	}
+
+	var ids [][]byte
+	var docs [][]byte
+	var storedIDs [][]byte
+	var encoder collections.TemplateV1Encoder
+	flush := func() error {
+		if len(ids) == 0 {
+			return nil
+		}
+		resultIDs, err := col.InsertBatchWithTemplateV1Encoder(ids, docs, &encoder)
+		if err != nil {
+			return err
+		}
+		for _, id := range resultIDs {
+			storedIDs = append(storedIDs, append([]byte(nil), id...))
+		}
+		ids = ids[:0]
+		docs = docs[:0]
+		return nil
+	}
+	row := uint64(1)
+	if err := scanJSONBenchFile(source, func(raw []byte) error {
+		if row > uint64(ds.Rows) {
+			return errStopScan
+		}
+		doc, err := remainingDocument(raw, collections.DocumentFormatTemplateV1, remainingShapeClickHouseTyped)
+		if err != nil {
+			return err
+		}
+		ids = append(ids, documentID(row))
+		docs = append(docs, doc)
+		row++
+		if len(ids) >= 64 {
+			return flush()
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("prepare template-v1 retained docs: %v", err)
+	}
+	if err := flush(); err != nil {
+		t.Fatalf("insert template-v1 retained docs: %v", err)
+	}
+	if len(storedIDs) != ds.Rows {
+		t.Fatalf("stored template-v1 ids=%d want %d", len(storedIDs), ds.Rows)
+	}
+
+	reverseDictionaries := reverseJSONBenchDictionaries(ds.Dictionaries)
+	scanner := imagePart.NewScanner()
+	rowIndex := int64(0)
+	if err := scanJSONBenchFile(source, func(raw []byte) error {
+		if rowIndex >= int64(ds.Rows) {
+			return errStopScan
+		}
+		stored, err := col.Get(storedIDs[int(rowIndex)])
+		if err != nil {
+			return err
+		}
+		retainedJSON, err := col.StoredDocumentJSON(stored)
+		if err != nil {
+			return err
+		}
+		retained, err := decodeRetainedDocumentForTest("json", retainedJSON)
+		if err != nil {
+			return err
+		}
+		typed, err := typedJSONBenchValuesFromImage(scanner, imagePart, reverseDictionaries, rowIndex)
+		if err != nil {
+			return err
+		}
+		restoreClickHouseTypedPathsForTest(retained, typed)
+
+		var original map[string]any
+		if err := decodeJSONPreserveNumbers(raw, &original); err != nil {
+			return err
+		}
+		if got, want := canonicalJSONForTest(t, retained), canonicalJSONForTest(t, original); string(got) != string(want) {
+			t.Fatalf("row %d reconstructed template-v1 mismatch\ngot  %s\nwant %s", rowIndex, got, want)
+		}
+		rowIndex++
+		return nil
+	}); err != nil {
+		t.Fatalf("validate template-v1 retained docs: %v", err)
+	}
+	if rowIndex != int64(ds.Rows) {
+		t.Fatalf("validated rows=%d want %d", rowIndex, ds.Rows)
+	}
+}
+
+func validateRemainingTemplateV1MeasurementStorageReconstructsJSONBenchRows(t *testing.T, source string, limit int, rowsPerGranule int) {
+	t.Helper()
+	ds, imagePart := buildJSONBenchImagePartForReconstructionTest(t, source, limit, rowsPerGranule)
+	dbDir := t.TempDir()
+	result, err := measureRemainingTreeDB(context.Background(), []string{source}, ds.Rows, dbDir, collections.DocumentFormatTemplateV1, remainingShapeClickHouseTyped)
+	if err != nil {
+		t.Fatalf("measure template-v1 remaining TreeDB: %v", err)
+	}
+	if result.Rows != ds.Rows {
+		t.Fatalf("measured rows=%d want %d", result.Rows, ds.Rows)
+	}
+	validateStoredRemainingCollectionReconstructsJSONBenchRows(t, source, ds, imagePart, dbDir, collections.DocumentFormatTemplateV1)
+}
+
+func buildJSONBenchImagePartForReconstructionTest(t *testing.T, source string, limit int, rowsPerGranule int) (*colgranule.JSONBenchDataset, *colgranule.ColumnPart) {
+	t.Helper()
+	ds, err := colgranule.LoadJSONBenchColumns(source, limit)
+	if err != nil {
+		t.Fatalf("LoadJSONBenchColumns: %v", err)
+	}
+	part, err := colgranule.BuildJSONBenchColumnPartWithAggregateMetadataForLayout(ds, rowsPerGranule, colgranule.JSONBenchColumnPartLayoutClickHouseFilterUserTime)
+	if err != nil {
+		t.Fatalf("BuildJSONBenchColumnPartWithAggregateMetadataForLayout: %v", err)
+	}
+	image, err := colgranule.BuildColumnPartImage(part, colgranule.ColumnPartImageOptions{Dictionaries: ds.Dictionaries})
+	if err != nil {
+		t.Fatalf("BuildColumnPartImage: %v", err)
+	}
+	parsed, err := colgranule.ParseColumnPartImage(image.Bytes)
+	if err != nil {
+		t.Fatalf("ParseColumnPartImage: %v", err)
+	}
+	imagePart, err := colgranule.ColumnPartFromImage(parsed)
+	if err != nil {
+		t.Fatalf("ColumnPartFromImage: %v", err)
+	}
+	return &ds, imagePart
+}
+
+func validateStoredRemainingCollectionReconstructsJSONBenchRows(t *testing.T, source string, ds *colgranule.JSONBenchDataset, imagePart *colgranule.ColumnPart, dbDir string, format collections.DocumentFormat) {
+	t.Helper()
+	opts := treedb.OptionsFor(treedb.ProfileBench, dbDir)
+	opts.ValueLog.PointerThreshold = 1
+	opts.ValueLog.ForcePointers = true
+	backend, cleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)
+	if err != nil {
+		t.Fatalf("open remaining TreeDB for validation: %v", err)
+	}
+	defer func() {
+		if err := cleanup(); err != nil {
+			t.Errorf("close remaining TreeDB validation handle: %v", err)
+		}
+	}()
+	col, err := collections.NewCollectionManager(backend).OpenCollection("jsonbench_remaining_" + string(format))
+	if err != nil {
+		t.Fatalf("open remaining collection for validation: %v", err)
+	}
+	materializer, err := col.NewStoredDocumentJSONMaterializer()
+	if err != nil {
+		t.Fatalf("create remaining materializer: %v", err)
+	}
+	defer func() {
+		if err := materializer.Close(); err != nil {
+			t.Errorf("close remaining materializer: %v", err)
+		}
+	}()
+
+	reverseDictionaries := reverseJSONBenchDictionaries(ds.Dictionaries)
+	scanner := imagePart.NewScanner()
+	rowIndex := int64(0)
+	if err := scanJSONBenchFile(source, func(raw []byte) error {
+		if rowIndex >= int64(ds.Rows) {
+			return errStopScan
+		}
+		id := documentID(uint64(rowIndex + 1))
+		stored, err := col.Get(id)
+		if err != nil {
+			return fmt.Errorf("get stored retained row %d: %w", rowIndex, err)
+		}
+		retainedJSON, err := materializer.StoredDocumentJSON(stored)
+		if err != nil {
+			return fmt.Errorf("materialize stored retained row %d: %w", rowIndex, err)
+		}
+		retained, err := decodeRetainedDocumentForTest("json", retainedJSON)
+		if err != nil {
+			return fmt.Errorf("decode stored retained row %d: %w", rowIndex, err)
+		}
+		typed, err := typedJSONBenchValuesFromImage(scanner, imagePart, reverseDictionaries, rowIndex)
+		if err != nil {
+			return fmt.Errorf("read typed column values for row %d: %w", rowIndex, err)
+		}
+		restoreClickHouseTypedPathsForTest(retained, typed)
+
+		var original map[string]any
+		if err := decodeJSONPreserveNumbers(raw, &original); err != nil {
+			return fmt.Errorf("decode source row %d: %w", rowIndex, err)
+		}
+		if got, want := canonicalJSONForTest(t, retained), canonicalJSONForTest(t, original); string(got) != string(want) {
+			return fmt.Errorf("row %d reconstructed stored remaining mismatch\ngot  %s\nwant %s", rowIndex, got, want)
+		}
+		rowIndex++
+		return nil
+	}); err != nil {
+		t.Fatalf("validate stored remaining collection: %v", err)
+	}
+	if rowIndex != int64(ds.Rows) {
+		t.Fatalf("validated rows=%d want %d", rowIndex, ds.Rows)
+	}
+}
+
+func localJSONBenchFullReconstructionSource(t *testing.T) (string, int) {
+	t.Helper()
+	if os.Getenv("JSONBENCH_VALIDATE_FULL_RECONSTRUCTION") == "" {
+		t.Skip("JSONBENCH_VALIDATE_FULL_RECONSTRUCTION not set")
+	}
+	path := os.Getenv("JSONBENCH_DATA")
+	if path == "" {
+		t.Skip("JSONBENCH_DATA not set")
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Skipf("local JSONBench fixture not present at %s", path)
+	}
+	if info.IsDir() {
+		t.Skipf("JSONBENCH_DATA points to directory %s; full reconstruction harness expects a file", path)
+	}
+	limit := 0
+	if raw := os.Getenv("JSONBENCH_VALIDATE_FULL_RECONSTRUCTION_LIMIT"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 0 {
+			t.Fatalf("invalid JSONBENCH_VALIDATE_FULL_RECONSTRUCTION_LIMIT=%q", raw)
+		}
+		limit = parsed
+	}
+	return path, limit
+}
+
 func TestMeasureRawJSONTreeDBSample(t *testing.T) {
 	dbDir := t.TempDir()
 	source := filepath.Join("..", "..", "testdata", "jsonbench_sample.jsonl")
@@ -167,5 +554,162 @@ func TestValidateRawJSONTreeDBDetectsMismatchedRows(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "validation mismatch") {
 		t.Fatalf("validation error %q does not mention mismatch", err)
+	}
+}
+
+type typedJSONBenchValues struct {
+	TimeUS           int64
+	Did              string
+	Kind             string
+	CommitOperation  string
+	CommitCollection string
+}
+
+func typedJSONBenchValuesFromImage(scanner *colgranule.ColumnPartScanner, part *colgranule.ColumnPart, dictionaries map[string]map[int64]string, row int64) (typedJSONBenchValues, error) {
+	locator, ok := part.LocatePrimaryID(row)
+	if !ok {
+		return typedJSONBenchValues{}, os.ErrNotExist
+	}
+	timeUS, err := scanner.ValueAt(locator, "time_us")
+	if err != nil {
+		return typedJSONBenchValues{}, err
+	}
+	didCode, err := scanner.ValueAt(locator, "did_code")
+	if err != nil {
+		return typedJSONBenchValues{}, err
+	}
+	kindCode, err := scanner.ValueAt(locator, "kind_code")
+	if err != nil {
+		return typedJSONBenchValues{}, err
+	}
+	operationCode, err := scanner.ValueAt(locator, "commit_operation_code")
+	if err != nil {
+		return typedJSONBenchValues{}, err
+	}
+	collectionCode, err := scanner.ValueAt(locator, "commit_collection_code")
+	if err != nil {
+		return typedJSONBenchValues{}, err
+	}
+	did, err := dictionaryValueForTest(dictionaries, "did_code", didCode)
+	if err != nil {
+		return typedJSONBenchValues{}, err
+	}
+	kind, err := dictionaryValueForTest(dictionaries, "kind_code", kindCode)
+	if err != nil {
+		return typedJSONBenchValues{}, err
+	}
+	operation, err := dictionaryValueForTest(dictionaries, "commit_operation_code", operationCode)
+	if err != nil {
+		return typedJSONBenchValues{}, err
+	}
+	collection, err := dictionaryValueForTest(dictionaries, "commit_collection_code", collectionCode)
+	if err != nil {
+		return typedJSONBenchValues{}, err
+	}
+	return typedJSONBenchValues{
+		TimeUS:           timeUS,
+		Did:              did,
+		Kind:             kind,
+		CommitOperation:  operation,
+		CommitCollection: collection,
+	}, nil
+}
+
+func reverseJSONBenchDictionaries(dictionaries map[string]map[string]int64) map[string]map[int64]string {
+	out := make(map[string]map[int64]string, len(dictionaries))
+	for name, values := range dictionaries {
+		reversed := make(map[int64]string, len(values))
+		for value, code := range values {
+			reversed[code] = value
+		}
+		out[name] = reversed
+	}
+	return out
+}
+
+func dictionaryValueForTest(dictionaries map[string]map[int64]string, name string, code int64) (string, error) {
+	values := dictionaries[name]
+	if values == nil {
+		return "", fmt.Errorf("missing dictionary %s", name)
+	}
+	value, ok := values[code]
+	if !ok {
+		return "", fmt.Errorf("missing dictionary %s code %d", name, code)
+	}
+	return value, nil
+}
+
+func decodeRetainedDocumentForTest(format string, raw []byte) (map[string]any, error) {
+	var doc map[string]any
+	switch format {
+	case "json":
+		if err := decodeJSONPreserveNumbers(raw, &doc); err != nil {
+			return nil, err
+		}
+	case "bson":
+		var bsonDoc bson.M
+		if err := bson.Unmarshal(raw, &bsonDoc); err != nil {
+			return nil, err
+		}
+		doc = normalizeBSONValueForTest(bsonDoc).(map[string]any)
+	default:
+		return nil, os.ErrInvalid
+	}
+	return doc, nil
+}
+
+func restoreClickHouseTypedPathsForTest(doc map[string]any, values typedJSONBenchValues) {
+	doc["time_us"] = values.TimeUS
+	doc["did"] = values.Did
+	doc["kind"] = values.Kind
+	if values.Kind != "commit" && values.CommitOperation == "" && values.CommitCollection == "" {
+		return
+	}
+	commit, ok := doc["commit"].(map[string]any)
+	if !ok {
+		commit = make(map[string]any, 2)
+	}
+	commit["operation"] = values.CommitOperation
+	commit["collection"] = values.CommitCollection
+	doc["commit"] = commit
+}
+
+func canonicalJSONForTest(t *testing.T, doc map[string]any) []byte {
+	t.Helper()
+	encoded, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return encoded
+}
+
+func normalizeBSONValueForTest(value any) any {
+	switch v := value.(type) {
+	case bson.M:
+		out := make(map[string]any, len(v))
+		for key, nested := range v {
+			out[key] = normalizeBSONValueForTest(nested)
+		}
+		return out
+	case bson.D:
+		out := make(map[string]any, len(v))
+		for _, element := range v {
+			out[element.Key] = normalizeBSONValueForTest(element.Value)
+		}
+		return out
+	case bson.A:
+		out := make([]any, len(v))
+		for i, nested := range v {
+			out[i] = normalizeBSONValueForTest(nested)
+		}
+		return out
+	case []any:
+		out := make([]any, len(v))
+		for i, nested := range v {
+			out[i] = normalizeBSONValueForTest(nested)
+		}
+		return out
+	default:
+		return value
 	}
 }

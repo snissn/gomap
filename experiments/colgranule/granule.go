@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"time"
 
 	"github.com/golang/snappy"
 	"github.com/pierrec/lz4/v4"
@@ -17,6 +18,10 @@ type Encoding uint8
 const (
 	EncodingRawInt64 Encoding = iota + 1
 	EncodingDeltaVarint
+	EncodingDoubleDeltaVarint
+	EncodingNullableInt64
+	EncodingBoolBitpackRLE
+	EncodingLowCardinalityUint32
 )
 
 func (e Encoding) String() string {
@@ -25,6 +30,14 @@ func (e Encoding) String() string {
 		return "raw_int64"
 	case EncodingDeltaVarint:
 		return "delta_varint"
+	case EncodingDoubleDeltaVarint:
+		return "double_delta_varint"
+	case EncodingNullableInt64:
+		return "nullable_int64"
+	case EncodingBoolBitpackRLE:
+		return "bool_bitpack_rle"
+	case EncodingLowCardinalityUint32:
+		return "low_cardinality_uint32"
 	default:
 		return fmt.Sprintf("encoding_%d", e)
 	}
@@ -36,6 +49,8 @@ const (
 	CompressionNone Compression = iota
 	CompressionSnappy
 	CompressionLZ4
+	CompressionZSTD
+	CompressionZSTDDict
 )
 
 func (c Compression) String() string {
@@ -46,6 +61,10 @@ func (c Compression) String() string {
 		return "snappy"
 	case CompressionLZ4:
 		return "lz4"
+	case CompressionZSTD:
+		return "zstd"
+	case CompressionZSTDDict:
+		return "zstd_dict"
 	default:
 		return fmt.Sprintf("compression_%d", c)
 	}
@@ -56,14 +75,160 @@ type Config struct {
 	Compression Compression
 }
 
+type PayloadRefKind uint8
+
+const (
+	PayloadRefInline PayloadRefKind = iota + 1
+)
+
+func (k PayloadRefKind) String() string {
+	switch k {
+	case PayloadRefInline:
+		return "inline"
+	default:
+		return fmt.Sprintf("payload_ref_%d", k)
+	}
+}
+
+type PayloadRef struct {
+	Kind   PayloadRefKind
+	Offset int64
+	Length int
+}
+
+type CodecReport struct {
+	Encoding                  Encoding
+	RequestedCompression      Compression
+	ActualCompression         Compression
+	CompressionAttempted      bool
+	CompressionKept           bool
+	CompressionFallbackReason string
+	RawBytes                  int
+	StoredBytes               int
+	CompressionNanos          int64
+}
+
 type EncodedGranule struct {
-	Rows        int
-	Min         int64
-	Max         int64
-	Encoding    Encoding
-	Compression Compression
-	RawBytes    int
-	Payload     []byte
+	Rows         int
+	NullCount    int
+	DefaultCount int
+	HasMinMax    bool
+	Min          int64
+	Max          int64
+	Encoding     Encoding
+	Compression  Compression
+	RawBytes     int
+	StoredBytes  int
+	PayloadRef   PayloadRef
+	CodecReport  CodecReport
+	Payload      []byte
+}
+
+type GranuleBuilder struct {
+	cfg        Config
+	raw        []byte
+	encoded    []byte
+	compressed []byte
+	values64   []int64
+	bools      []bool
+	codes32    []uint32
+}
+
+func NewGranuleBuilder(cfg Config) *GranuleBuilder {
+	return &GranuleBuilder{cfg: cfg}
+}
+
+func (b *GranuleBuilder) Reset(cfg Config) {
+	b.cfg = cfg
+	b.raw = b.raw[:0]
+	b.compressed = b.compressed[:0]
+}
+
+// BuildInt64 returns a granule whose payload aliases builder-owned scratch until
+// the next BuildInt64 or Reset call.
+func (b *GranuleBuilder) BuildInt64(values []int64) (EncodedGranule, error) {
+	if len(values) == 0 {
+		return EncodedGranule{}, errors.New("colgranule: empty granule")
+	}
+	min, max := minMax(values)
+	raw, err := encodeInt64Payload(b.raw[:0], values, b.cfg.Encoding)
+	if err != nil {
+		return EncodedGranule{}, err
+	}
+	b.raw = raw
+	selection, err := admitCompressionInto(b.compressed[:0], raw, b.cfg.Encoding, b.cfg.Compression)
+	if err != nil {
+		return EncodedGranule{}, err
+	}
+	b.compressed = selection.Scratch
+	return newEncodedGranule(len(values), min, max, true, b.cfg.Encoding, selection), nil
+}
+
+type GranuleReader struct {
+	raw      []byte
+	values   []int64
+	stored64 []int64
+	bools    []bool
+	nulls    []bool
+	defaults []bool
+	codes    []uint32
+}
+
+func (r *GranuleReader) DecodeInt64(g EncodedGranule) ([]int64, error) {
+	values, err := r.DecodeInt64Into(r.values[:0], g)
+	if err != nil {
+		return nil, err
+	}
+	r.values = values
+	return values, nil
+}
+
+func (r *GranuleReader) DecodeInt64Into(dst []int64, g EncodedGranule) ([]int64, error) {
+	raw, err := r.decompressPayload(g)
+	if err != nil {
+		return nil, err
+	}
+	return decodeInt64Payload(dst, raw, g)
+}
+
+func (r *GranuleReader) int64Cursor(g EncodedGranule) (int64Cursor, error) {
+	raw, err := r.decompressPayload(g)
+	if err != nil {
+		return int64Cursor{}, err
+	}
+	cursor := int64Cursor{
+		encoding: g.Encoding,
+		raw:      raw,
+		rows:     g.Rows,
+	}
+	switch g.Encoding {
+	case EncodingRawInt64:
+		if len(raw)%8 != 0 || len(raw)/8 != g.Rows {
+			return int64Cursor{}, fmt.Errorf("colgranule: raw int64 length=%d rows=%d", len(raw), g.Rows)
+		}
+	case EncodingDeltaVarint, EncodingDoubleDeltaVarint:
+	default:
+		return int64Cursor{}, fmt.Errorf("colgranule: unsupported encoding %d", g.Encoding)
+	}
+	return cursor, nil
+}
+
+func (r *GranuleReader) RangeScanCountInt64(g EncodedGranule, low, high int64) (int, error) {
+	if low > high || (g.HasMinMax && (high < g.Min || low > g.Max)) {
+		r.values = r.values[:0]
+		return 0, nil
+	}
+	values, err := r.DecodeInt64(g)
+	if err != nil {
+		return 0, err
+	}
+	count := 0
+	for _, v := range values {
+		if v >= low && v <= high {
+			count++
+		}
+	}
+	return count, nil
 }
 
 func EncodeInt64(dst []byte, values []int64, cfg Config) (EncodedGranule, error) {
@@ -75,38 +240,42 @@ func EncodeInt64(dst []byte, values []int64, cfg Config) (EncodedGranule, error)
 	if err != nil {
 		return EncodedGranule{}, err
 	}
-	payload, compression, err := compressPayload(raw, cfg.Compression)
+	selection, err := compressPayload(raw, cfg.Encoding, cfg.Compression)
 	if err != nil {
 		return EncodedGranule{}, err
 	}
-	return EncodedGranule{
-		Rows:        len(values),
-		Min:         min,
-		Max:         max,
-		Encoding:    cfg.Encoding,
-		Compression: compression,
-		RawBytes:    len(raw),
-		Payload:     payload,
-	}, nil
+	return newEncodedGranule(len(values), min, max, true, cfg.Encoding, selection), nil
 }
 
 func DecodeInt64(dst []int64, g EncodedGranule) ([]int64, error) {
-	raw, err := decompressPayload(g)
-	if err != nil {
-		return nil, err
-	}
+	var reader GranuleReader
+	return reader.DecodeInt64Into(dst, g)
+}
+
+func decodeInt64Payload(dst []int64, raw []byte, g EncodedGranule) ([]int64, error) {
 	out := dst[:0]
 	switch g.Encoding {
 	case EncodingRawInt64:
-		if len(raw) != g.Rows*8 {
+		if len(raw)%8 != 0 || len(raw)/8 != g.Rows {
 			return nil, fmt.Errorf("colgranule: raw int64 length=%d rows=%d", len(raw), g.Rows)
 		}
-		for len(raw) >= 8 {
-			out = append(out, int64(binary.LittleEndian.Uint64(raw[:8])))
-			raw = raw[8:]
+		if cap(out) < g.Rows {
+			out = make([]int64, g.Rows)
+		} else {
+			out = out[:g.Rows]
+		}
+		for i := range out {
+			out[i] = int64(binary.LittleEndian.Uint64(raw[i*8:]))
 		}
 	case EncodingDeltaVarint:
+		var err error
 		out, err = decodeDeltaVarint(out, raw, g.Rows)
+		if err != nil {
+			return nil, err
+		}
+	case EncodingDoubleDeltaVarint:
+		var err error
+		out, err = decodeDoubleDeltaVarint(out, raw, g.Rows)
 		if err != nil {
 			return nil, err
 		}
@@ -117,10 +286,11 @@ func DecodeInt64(dst []int64, g EncodedGranule) ([]int64, error) {
 }
 
 func RangeScanCount(g EncodedGranule, low, high int64, scratch []int64) (int, []int64, error) {
-	if low > high || high < g.Min || low > g.Max {
+	if low > high || (g.HasMinMax && (high < g.Min || low > g.Max)) {
 		return 0, scratch[:0], nil
 	}
-	values, err := DecodeInt64(scratch, g)
+	var reader GranuleReader
+	values, err := reader.DecodeInt64Into(scratch, g)
 	if err != nil {
 		return 0, scratch, err
 	}
@@ -131,6 +301,29 @@ func RangeScanCount(g EncodedGranule, low, high int64, scratch []int64) (int, []
 		}
 	}
 	return count, values, nil
+}
+
+func newEncodedGranule(rows int, min int64, max int64, hasMinMax bool, encoding Encoding, selection CompressionSelection) EncodedGranule {
+	report := selection.Report
+	report.Encoding = encoding
+	report.ActualCompression = selection.Actual
+	report.StoredBytes = len(selection.Payload)
+	return EncodedGranule{
+		Rows:        rows,
+		HasMinMax:   hasMinMax,
+		Min:         min,
+		Max:         max,
+		Encoding:    encoding,
+		Compression: selection.Actual,
+		RawBytes:    report.RawBytes,
+		StoredBytes: len(selection.Payload),
+		PayloadRef: PayloadRef{
+			Kind:   PayloadRefInline,
+			Length: len(selection.Payload),
+		},
+		CodecReport: report,
+		Payload:     selection.Payload,
+	}
 }
 
 func encodeInt64Payload(dst []byte, values []int64, encoding Encoding) ([]byte, error) {
@@ -162,6 +355,31 @@ func encodeInt64Payload(dst []byte, values []int64, encoding Encoding) ([]byte, 
 			prev = v
 		}
 		return dst, nil
+	case EncodingDoubleDeltaVarint:
+		if cap(dst) < len(values)*2 {
+			dst = make([]byte, 0, len(values)*2)
+		}
+		var buf [binary.MaxVarintLen64]byte
+		prev := int64(0)
+		prevDelta := int64(0)
+		for i, v := range values {
+			var encoded int64
+			switch i {
+			case 0:
+				encoded = v
+			case 1:
+				encoded = v - prev
+				prevDelta = encoded
+			default:
+				delta := v - prev
+				encoded = delta - prevDelta
+				prevDelta = delta
+			}
+			n := binary.PutUvarint(buf[:], zigzag(encoded))
+			dst = append(dst, buf[:n]...)
+			prev = v
+		}
+		return dst, nil
 	default:
 		return nil, fmt.Errorf("colgranule: unsupported encoding %d", encoding)
 	}
@@ -169,6 +387,9 @@ func encodeInt64Payload(dst []byte, values []int64, encoding Encoding) ([]byte, 
 
 func decodeDeltaVarint(dst []int64, raw []byte, rows int) ([]int64, error) {
 	out := dst[:0]
+	if cap(out) < rows {
+		out = make([]int64, 0, rows)
+	}
 	prev := int64(0)
 	for len(raw) > 0 && len(out) < rows {
 		u, n := binary.Uvarint(raw)
@@ -193,30 +414,210 @@ func decodeDeltaVarint(dst []int64, raw []byte, rows int) ([]int64, error) {
 	return out, nil
 }
 
-func compressPayload(raw []byte, compression Compression) ([]byte, Compression, error) {
-	switch compression {
-	case CompressionNone:
-		return append([]byte(nil), raw...), CompressionNone, nil
-	case CompressionSnappy:
-		return snappy.Encode(nil, raw), CompressionSnappy, nil
-	case CompressionLZ4:
-		dst := make([]byte, lz4.CompressBlockBound(len(raw)))
-		n, err := lz4.CompressBlock(raw, dst, nil)
-		if err != nil {
-			return nil, 0, err
+func decodeDoubleDeltaVarint(dst []int64, raw []byte, rows int) ([]int64, error) {
+	out := dst[:0]
+	if cap(out) < rows {
+		out = make([]int64, 0, rows)
+	}
+	prev := int64(0)
+	prevDelta := int64(0)
+	for len(raw) > 0 && len(out) < rows {
+		u, n := binary.Uvarint(raw)
+		if n <= 0 {
+			return nil, errors.New("colgranule: malformed double-delta varint")
 		}
-		if n == 0 || n >= len(raw) {
-			return append([]byte(nil), raw...), CompressionNone, nil
+		encoded := unzigzag(u)
+		var v int64
+		switch len(out) {
+		case 0:
+			v = encoded
+		case 1:
+			prevDelta = encoded
+			v = prev + encoded
+		default:
+			delta := prevDelta + encoded
+			v = prev + delta
+			prevDelta = delta
 		}
-		return dst[:n], CompressionLZ4, nil
+		out = append(out, v)
+		prev = v
+		raw = raw[n:]
+	}
+	if len(out) != rows {
+		return nil, fmt.Errorf("colgranule: decoded rows=%d want=%d", len(out), rows)
+	}
+	if len(raw) != 0 {
+		return nil, errors.New("colgranule: trailing double-delta bytes")
+	}
+	return out, nil
+}
+
+type int64Cursor struct {
+	encoding  Encoding
+	raw       []byte
+	rows      int
+	row       int
+	offset    int
+	prev      int64
+	prevDelta int64
+}
+
+func (c *int64Cursor) Next() (int64, error) {
+	if c.row >= c.rows {
+		return 0, fmt.Errorf("colgranule: int64 cursor row=%d exceeds rows=%d", c.row, c.rows)
+	}
+	switch c.encoding {
+	case EncodingRawInt64:
+		v := int64(binary.LittleEndian.Uint64(c.raw[c.row*8:]))
+		c.row++
+		c.offset = c.row * 8
+		return v, nil
+	case EncodingDeltaVarint:
+		u, n := binary.Uvarint(c.raw[c.offset:])
+		if n <= 0 {
+			return 0, errors.New("colgranule: malformed delta varint")
+		}
+		delta := unzigzag(u)
+		v := delta
+		if c.row > 0 {
+			v = c.prev + delta
+		}
+		c.row++
+		c.offset += n
+		c.prev = v
+		return v, nil
+	case EncodingDoubleDeltaVarint:
+		u, n := binary.Uvarint(c.raw[c.offset:])
+		if n <= 0 {
+			return 0, errors.New("colgranule: malformed double-delta varint")
+		}
+		encoded := unzigzag(u)
+		var v int64
+		switch c.row {
+		case 0:
+			v = encoded
+		case 1:
+			c.prevDelta = encoded
+			v = c.prev + encoded
+		default:
+			delta := c.prevDelta + encoded
+			v = c.prev + delta
+			c.prevDelta = delta
+		}
+		c.row++
+		c.offset += n
+		c.prev = v
+		return v, nil
 	default:
-		return nil, 0, fmt.Errorf("colgranule: unsupported compression %d", compression)
+		return 0, fmt.Errorf("colgranule: unsupported encoding %d", c.encoding)
 	}
 }
 
+func (c *int64Cursor) Finish() error {
+	if c.row != c.rows {
+		return fmt.Errorf("colgranule: decoded rows=%d want=%d", c.row, c.rows)
+	}
+	if c.encoding != EncodingRawInt64 && c.offset != len(c.raw) {
+		return fmt.Errorf("colgranule: trailing %s bytes", c.encoding)
+	}
+	return nil
+}
+
+func (c *int64Cursor) RawBytesRead() int {
+	return c.offset
+}
+
+type CompressionSelection struct {
+	Payload []byte
+	Actual  Compression
+	Scratch []byte
+	Report  CodecReport
+}
+
+func admitCompressionInto(dst []byte, raw []byte, encoding Encoding, compression Compression) (CompressionSelection, error) {
+	report := CodecReport{
+		Encoding:             encoding,
+		RequestedCompression: compression,
+		ActualCompression:    compression,
+		RawBytes:             len(raw),
+	}
+	switch compression {
+	case CompressionNone:
+		report.ActualCompression = CompressionNone
+		report.CompressionKept = true
+		report.CompressionFallbackReason = "none_requested"
+		report.StoredBytes = len(raw)
+		return CompressionSelection{Payload: raw, Actual: CompressionNone, Scratch: dst[:0], Report: report}, nil
+	case CompressionSnappy:
+		need := snappy.MaxEncodedLen(len(raw))
+		if cap(dst) < need {
+			dst = make([]byte, need)
+		} else {
+			dst = dst[:need]
+		}
+		start := time.Now()
+		out := snappy.Encode(dst, raw)
+		report.CompressionNanos = time.Since(start).Nanoseconds()
+		report.CompressionAttempted = true
+		if len(out) >= len(raw) {
+			report.ActualCompression = CompressionNone
+			report.CompressionFallbackReason = "not_smaller"
+			report.StoredBytes = len(raw)
+			return CompressionSelection{Payload: raw, Actual: CompressionNone, Scratch: dst[:0], Report: report}, nil
+		}
+		report.ActualCompression = CompressionSnappy
+		report.CompressionKept = true
+		report.StoredBytes = len(out)
+		return CompressionSelection{Payload: out, Actual: CompressionSnappy, Scratch: out, Report: report}, nil
+	case CompressionLZ4:
+		need := lz4.CompressBlockBound(len(raw))
+		if cap(dst) < need {
+			dst = make([]byte, need)
+		} else {
+			dst = dst[:need]
+		}
+		start := time.Now()
+		n, err := lz4.CompressBlock(raw, dst, nil)
+		report.CompressionNanos = time.Since(start).Nanoseconds()
+		if err != nil {
+			return CompressionSelection{}, err
+		}
+		report.CompressionAttempted = true
+		if n == 0 || n >= len(raw) {
+			report.ActualCompression = CompressionNone
+			report.CompressionFallbackReason = "not_smaller"
+			report.StoredBytes = len(raw)
+			return CompressionSelection{Payload: raw, Actual: CompressionNone, Scratch: dst[:0], Report: report}, nil
+		}
+		out := dst[:n]
+		report.ActualCompression = CompressionLZ4
+		report.CompressionKept = true
+		report.StoredBytes = len(out)
+		return CompressionSelection{Payload: out, Actual: CompressionLZ4, Scratch: out, Report: report}, nil
+	default:
+		return CompressionSelection{}, fmt.Errorf("colgranule: unsupported compression %d", compression)
+	}
+}
+
+func compressPayload(raw []byte, encoding Encoding, compression Compression) (CompressionSelection, error) {
+	selection, err := admitCompressionInto(nil, raw, encoding, compression)
+	if err != nil {
+		return CompressionSelection{}, err
+	}
+	payload := append([]byte(nil), selection.Payload...)
+	selection.Payload = payload
+	selection.Report.StoredBytes = len(payload)
+	return selection, nil
+}
+
 func decompressPayload(g EncodedGranule) ([]byte, error) {
-	if g.RawBytes < 0 {
-		return nil, fmt.Errorf("colgranule: negative raw payload length %d", g.RawBytes)
+	var reader GranuleReader
+	return reader.decompressPayload(g)
+}
+
+func (r *GranuleReader) decompressPayload(g EncodedGranule) ([]byte, error) {
+	if err := validateGranule(g); err != nil {
+		return nil, err
 	}
 	switch g.Compression {
 	case CompressionNone:
@@ -225,16 +626,34 @@ func decompressPayload(g EncodedGranule) ([]byte, error) {
 		}
 		return g.Payload, nil
 	case CompressionSnappy:
-		out, err := snappy.Decode(nil, g.Payload)
+		decodedLen, err := snappy.DecodedLen(g.Payload)
+		if err != nil {
+			return nil, err
+		}
+		if decodedLen != g.RawBytes {
+			return nil, fmt.Errorf("colgranule: snappy decoded length=%d want=%d", decodedLen, g.RawBytes)
+		}
+		if cap(r.raw) < decodedLen {
+			r.raw = make([]byte, decodedLen)
+		} else {
+			r.raw = r.raw[:decodedLen]
+		}
+		out, err := snappy.Decode(r.raw, g.Payload)
 		if err != nil {
 			return nil, err
 		}
 		if len(out) != g.RawBytes {
 			return nil, fmt.Errorf("colgranule: snappy decoded length=%d want=%d", len(out), g.RawBytes)
 		}
+		r.raw = out
 		return out, nil
 	case CompressionLZ4:
-		out := make([]byte, g.RawBytes)
+		if cap(r.raw) < g.RawBytes {
+			r.raw = make([]byte, g.RawBytes)
+		} else {
+			r.raw = r.raw[:g.RawBytes]
+		}
+		out := r.raw
 		n, err := lz4.UncompressBlock(g.Payload, out)
 		if err != nil {
 			return nil, err
@@ -246,6 +665,34 @@ func decompressPayload(g EncodedGranule) ([]byte, error) {
 	default:
 		return nil, fmt.Errorf("colgranule: unsupported compression %d", g.Compression)
 	}
+}
+
+func validateGranule(g EncodedGranule) error {
+	if g.Rows <= 0 {
+		return fmt.Errorf("colgranule: invalid row count %d", g.Rows)
+	}
+	if g.NullCount < 0 {
+		return fmt.Errorf("colgranule: negative null count %d", g.NullCount)
+	}
+	if g.DefaultCount < 0 {
+		return fmt.Errorf("colgranule: negative default count %d", g.DefaultCount)
+	}
+	if g.NullCount > g.Rows || g.DefaultCount > g.Rows-g.NullCount {
+		return errors.New("colgranule: null/default count exceeds rows")
+	}
+	if g.RawBytes < 0 {
+		return fmt.Errorf("colgranule: negative raw payload length %d", g.RawBytes)
+	}
+	if g.StoredBytes < 0 {
+		return fmt.Errorf("colgranule: negative stored payload length %d", g.StoredBytes)
+	}
+	if g.StoredBytes != 0 && g.StoredBytes != len(g.Payload) {
+		return fmt.Errorf("colgranule: stored payload length=%d want=%d", len(g.Payload), g.StoredBytes)
+	}
+	if g.PayloadRef.Length != 0 && g.PayloadRef.Length != len(g.Payload) {
+		return fmt.Errorf("colgranule: payload ref length=%d want=%d", g.PayloadRef.Length, len(g.Payload))
+	}
+	return nil
 }
 
 func minMax(values []int64) (int64, int64) {

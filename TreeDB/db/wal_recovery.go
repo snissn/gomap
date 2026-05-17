@@ -206,6 +206,13 @@ func isTruncatedLogError(err error) bool {
 }
 
 func replayWALIntoBackend(db *DB, segments []logSegment, maxSegmentBytes int64, dictLookup valuelog.DictLookup) error {
+	if db != nil {
+		filtered, err := filterCommandWALSegmentsForLegacyReplay(segments, db.meta.AppliedCommandLSN, maxSegmentBytes)
+		if err != nil {
+			return err
+		}
+		segments = filtered
+	}
 	hasCommitSegments := false
 	for _, seg := range segments {
 		if !seg.valueLog && seg.size > 0 {
@@ -221,6 +228,284 @@ func replayWALIntoBackend(db *DB, segments []logSegment, maxSegmentBytes int64, 
 		return err
 	}
 	return replayCommitLogSegments(db, segments, ridMap, maxSegmentBytes)
+}
+
+type commandWALReplayFrame struct {
+	env commitlog.CommandEnvelope
+}
+
+type commandWALReplayLogSupportFunc func() (map[uint64]page.ValuePtr, *replayInlineAppender, error)
+
+func replayCommandWALIntoBackend(db *DB, segments []logSegment, maxSegmentBytes int64, dictLookup valuelog.DictLookup) error {
+	if db == nil {
+		return fmt.Errorf("treedb: command wal recovery missing db")
+	}
+	db.mu.RLock()
+	applied := db.meta.AppliedCommandLSN
+	db.mu.RUnlock()
+	frames, err := readCommandWALReplayFrames(segments, applied, maxSegmentBytes)
+	if err != nil {
+		return err
+	}
+	if len(frames) == 0 {
+		_, err := cleanupCommandWALSegmentsCoveredByAppliedLSN(db.dir, applied, maxSegmentBytes)
+		return err
+	}
+	var ridMap map[uint64]page.ValuePtr
+	var inlineAppender *replayInlineAppender
+	previousLeafPageLog := db.leafPageLog
+	previousValueLogAppender := db.currentValueLogAppender()
+	leafPageLogInstalled := false
+	valueLogAppenderInstalled := false
+	restoreLeafPageLog := func() {
+		if leafPageLogInstalled {
+			db.SetLeafPageLog(previousLeafPageLog)
+			leafPageLogInstalled = false
+		}
+	}
+	restoreValueLogAppender := func() {
+		if valueLogAppenderInstalled {
+			db.SetValueLogAppender(previousValueLogAppender)
+			valueLogAppenderInstalled = false
+		}
+	}
+	ensureReplayLogSupport := func() (map[uint64]page.ValuePtr, *replayInlineAppender, error) {
+		if inlineAppender != nil {
+			return ridMap, inlineAppender, nil
+		}
+		var err error
+		if ridMap == nil {
+			ridMap, err = scanValueLogSegments(segments, dictLookup)
+			if err != nil {
+				return nil, nil, err
+			}
+		}
+		inlineAppender, err = newReplayInlineAppender(db, segments, ridMap)
+		if err != nil {
+			return nil, nil, err
+		}
+		db.SetValueLogAppender(inlineAppender)
+		valueLogAppenderInstalled = true
+		db.SetLeafPageLog(inlineAppender)
+		leafPageLogInstalled = true
+		return ridMap, inlineAppender, nil
+	}
+	defer func() {
+		if inlineAppender != nil {
+			_ = inlineAppender.close()
+		}
+		restoreValueLogAppender()
+		restoreLeafPageLog()
+	}()
+	needsLogSupport, err := commandWALReplayFramesNeedLogSupport(db, frames, applied)
+	if err != nil {
+		return err
+	}
+	if needsLogSupport {
+		if _, _, err := ensureReplayLogSupport(); err != nil {
+			return err
+		}
+	}
+	for _, frame := range frames {
+		if frame.env.LSN <= applied {
+			continue
+		}
+		if frame.env.LSN != applied+1 {
+			return fmt.Errorf("%w: current=%d next=%d", ErrCommandWALAppliedLSNNonContig, applied, frame.env.LSN)
+		}
+		if err := applyCommandWALFrame(db, frame.env, ridMap, inlineAppender, ensureReplayLogSupport); err != nil {
+			return err
+		}
+		applied = frame.env.LSN
+		if target := db.testCommandWALRecoveryFailAfterLSN.Load(); target != 0 && frame.env.LSN == target {
+			db.testCommandWALRecoveryFailAfterLSN.Store(0)
+			return errTestFinalizeCommitFailpoint
+		}
+	}
+	if inlineAppender != nil {
+		if err := inlineAppender.syncIfDirty(); err != nil {
+			return err
+		}
+		if err := inlineAppender.close(); err != nil {
+			return err
+		}
+		inlineAppender = nil
+		restoreValueLogAppender()
+		restoreLeafPageLog()
+	}
+	_, err = cleanupCommandWALSegmentsCoveredByAppliedLSN(db.dir, applied, maxSegmentBytes)
+	return err
+}
+
+func readCommandWALReplayFrames(segments []logSegment, appliedLSN uint64, maxSegmentBytes int64) ([]commandWALReplayFrame, error) {
+	activeByLane := commandWALActiveSeqByLane(segments)
+	var frames []commandWALReplayFrame
+	seen := make(map[uint64]struct{})
+	for _, seg := range segments {
+		if seg.valueLog || seg.size == 0 {
+			continue
+		}
+		if !isCommandWALLaneSegment(seg) {
+			return nil, commitlog.ErrCommandWALLegacyPayload
+		}
+		active := seg.seq == activeByLane[seg.lane]
+		reader, err := commitlog.NewReaderWithOptions(seg.path, commitlog.Options{MaxSegmentSize: maxSegmentBytes})
+		if err != nil {
+			return nil, err
+		}
+		var lastLSN uint64
+		for {
+			env, err := reader.ReadCommandFrame()
+			if err == nil {
+				if lastLSN != 0 && env.LSN <= lastLSN {
+					_ = reader.Close()
+					return nil, commitlog.ErrCommandWALDuplicateLSN
+				}
+				lastLSN = env.LSN
+				if env.LSN > appliedLSN {
+					if _, ok := seen[env.LSN]; ok {
+						_ = reader.Close()
+						return nil, commitlog.ErrCommandWALDuplicateLSN
+					}
+					seen[env.LSN] = struct{}{}
+					frames = append(frames, commandWALReplayFrame{env: env})
+				}
+				continue
+			}
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if errors.Is(err, commitlog.ErrCommandWALTerminalTail) && active {
+				break
+			}
+			_ = reader.Close()
+			return nil, err
+		}
+		if err := reader.Close(); err != nil {
+			return nil, err
+		}
+	}
+	sort.Slice(frames, func(i, j int) bool {
+		return frames[i].env.LSN < frames[j].env.LSN
+	})
+	return frames, nil
+}
+
+func commandWALLaneActiveHasTerminalTail(segments []logSegment, lane int, maxSegmentBytes int64) (bool, error) {
+	activeByLane := commandWALActiveSeqByLane(segments)
+	activeSeq := activeByLane[lane]
+	if activeSeq == 0 {
+		return false, nil
+	}
+	for _, seg := range segments {
+		if seg.valueLog || seg.lane != lane || seg.seq != activeSeq || !isCommandWALLaneSegment(seg) {
+			continue
+		}
+		reader, err := commitlog.NewReaderWithOptions(seg.path, commitlog.Options{MaxSegmentSize: maxSegmentBytes})
+		if err != nil {
+			return false, err
+		}
+		for {
+			_, err := reader.ReadCommandFrame()
+			if err == nil {
+				continue
+			}
+			_ = reader.Close()
+			if errors.Is(err, io.EOF) {
+				return false, nil
+			}
+			if errors.Is(err, commitlog.ErrCommandWALTerminalTail) {
+				return true, nil
+			}
+			return false, err
+		}
+	}
+	return false, nil
+}
+
+func commandWALReplayFramesNeedLogSupport(db *DB, frames []commandWALReplayFrame, applied uint64) (bool, error) {
+	hasUnappliedFrame := false
+	for _, frame := range frames {
+		if frame.env.LSN <= applied {
+			continue
+		}
+		hasUnappliedFrame = true
+		if frame.env.Kind != commitlog.CommandKindRawKVBatch {
+			continue
+		}
+		needsLogSupport := false
+		if err := commitlog.ScanRawKVBatchPayload(frame.env.Payload, func(op commitlog.RawKVOp, key, value []byte) error {
+			if op == commitlog.RawKVOpSetRID || (op == commitlog.RawKVOpSet && commandWALRawSetNeedsReplayValueLog(db, key, value)) {
+				needsLogSupport = true
+			}
+			return nil
+		}); err != nil {
+			return false, err
+		}
+		if needsLogSupport {
+			return true, nil
+		}
+	}
+	if db != nil && db.indexOuterLeavesInValueLog {
+		// Outer-leaf mode needs a replay leaf-page log for any replayed write,
+		// even when the raw KV payload values themselves remain inline.
+		return hasUnappliedFrame, nil
+	}
+	return false, nil
+}
+
+func commandWALRawSetNeedsReplayValueLog(db *DB, key, value []byte) bool {
+	threshold := page.DefaultInlineThreshold
+	var domains []ValueLogDomainThreshold
+	if db != nil {
+		threshold = db.InlineThreshold()
+		domains = db.valueLogDomainThresholds
+	}
+	return len(value) > resolveBatchInlineThresholdForKey(threshold, key, domains)
+}
+
+func applyCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map[uint64]page.ValuePtr, inlineAppender *replayInlineAppender, ensureReplayLogSupport commandWALReplayLogSupportFunc) error {
+	switch env.Kind {
+	case commitlog.CommandKindRawKVBatch:
+		return applyRawKVCommandWALFrame(db, env, ridMap, inlineAppender, ensureReplayLogSupport)
+	default:
+		if registration, ok := lookupCommandWALReplayHandler(env.Kind); ok {
+			if registration.needsReplayLogSupport && ensureReplayLogSupport != nil {
+				if _, _, err := ensureReplayLogSupport(); err != nil {
+					return err
+				}
+			}
+			db.ensureCommandWALRecoverySnapshotView()
+			return registration.handler(db, env)
+		}
+		return commitlog.ErrCommandWALUnsupportedKind
+	}
+}
+
+func (db *DB) ensureCommandWALRecoverySnapshotView() {
+	if db == nil || db.state.Load() != nil {
+		return
+	}
+	db.mu.RLock()
+	state := &DBState{
+		CommitSeq:                  db.meta.CommitSeq,
+		RootPageID:                 db.meta.UserRootPageID,
+		SystemRootPageID:           db.meta.SystemRootPageID,
+		AppliedCommandLSN:          db.meta.AppliedCommandLSN,
+		LeafGenerations:            db.currentLeafGenerationView(),
+		LeafGenerationStateVersion: db.leafGenerationStateVersion,
+	}
+	db.mu.RUnlock()
+	if db.valueLogManager != nil {
+		state.ValueLogSet = db.valueLogManager.CurrentSetNoRefresh()
+	}
+	if db.state.CompareAndSwap(nil, state) {
+		db.publishSnapshotView(db.idx.Load(), state, db.valueLogManager)
+		return
+	}
+	if state.ValueLogSet != nil && db.valueLogManager != nil {
+		_ = db.valueLogManager.Release(state.ValueLogSet)
+	}
 }
 
 func scanValueLogSegments(segments []logSegment, dictLookup valuelog.DictLookup) (map[uint64]page.ValuePtr, error) {
@@ -457,6 +742,18 @@ func (a *replayInlineAppender) append(value []byte) (page.ValuePtr, error) {
 	return ptr, nil
 }
 
+func (a *replayInlineAppender) AppendValues(values [][]byte) ([]page.ValuePtr, error) {
+	ptrs := make([]page.ValuePtr, len(values))
+	for i := range values {
+		ptr, err := a.append(values[i])
+		if err != nil {
+			return nil, err
+		}
+		ptrs[i] = ptr
+	}
+	return ptrs, nil
+}
+
 func (a *replayInlineAppender) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, error) {
 	if a == nil || a.writer == nil {
 		return page.LeafLogPtr{}, fmt.Errorf("commitlog: replay value-log appender unavailable")
@@ -494,6 +791,13 @@ func (a *replayInlineAppender) Flush() error {
 
 func (a *replayInlineAppender) Sync() error {
 	return a.syncIfDirty()
+}
+
+func (a *replayInlineAppender) CurrentValueLogSegment() (string, uint32, bool) {
+	if a == nil || a.writer == nil {
+		return "", 0, false
+	}
+	return a.writer.CurrentValueLogSegment()
 }
 
 func (a *replayInlineAppender) syncIfDirty() error {
@@ -539,6 +843,9 @@ func applyCommitBatch(db *DB, records []commitlog.Record, ridMap map[uint64]page
 		case commitlog.OpSetInline:
 			if err := batch.Set(rec.Key, rec.Value); err != nil {
 				if !errors.Is(err, batchpkg.ErrValueTooLarge) {
+					// Abort this replay attempt on non-placement errors. The
+					// commit batch remains unapplied and the next open retries
+					// from the last published root.
 					return err
 				}
 				if !hasPtrBatch {

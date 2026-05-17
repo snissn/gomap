@@ -263,6 +263,9 @@ func (s *Snapshot) lookupCachedRootDomainEntry(key []byte) (val []byte, ptr page
 }
 
 func recordSnapshotRootDomainRead(source rootDomainEntrySource, pointer bool, bytes int) {
+	if !hotPathStatsEnabled {
+		return
+	}
 	if source == rootDomainEntrySourcePublished {
 		snapshotReadBackendHitsTotal.Add(1)
 		if bytes > 0 {
@@ -545,9 +548,11 @@ func (s *Snapshot) GetAppend(key, dst []byte) ([]byte, error) {
 	if err != nil {
 		return dst, err
 	}
-	snapshotReadBackendHitsTotal.Add(1)
-	if n := len(out) - oldLen; n > 0 {
-		snapshotReadBackendBytesTotal.Add(uint64(n))
+	if hotPathStatsEnabled {
+		snapshotReadBackendHitsTotal.Add(1)
+		if n := len(out) - oldLen; n > 0 {
+			snapshotReadBackendBytesTotal.Add(uint64(n))
+		}
 	}
 	return out, nil
 }
@@ -614,11 +619,15 @@ func (s *Snapshot) Get(key []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	snapshotReadBackendHitsTotal.Add(1)
+	if hotPathStatsEnabled {
+		snapshotReadBackendHitsTotal.Add(1)
+	}
 	if len(out) == 0 {
 		return nil, nil
 	}
-	snapshotReadBackendBytesTotal.Add(uint64(len(out)))
+	if hotPathStatsEnabled {
+		snapshotReadBackendBytesTotal.Add(uint64(len(out)))
+	}
 	maybeRecordSnapshotGetCallerSample(len(out))
 	return out, nil
 }

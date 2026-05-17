@@ -26,38 +26,53 @@ import (
 )
 
 type clickHouseResult struct {
-	System             string      `json:"system"`
-	Version            string      `json:"version"`
-	OS                 string      `json:"os"`
-	Machine            string      `json:"machine"`
-	DatasetSize        int         `json:"dataset_size"`
-	NumLoadedDocuments int         `json:"num_loaded_documents"`
-	TotalSize          int64       `json:"total_size"`
-	DataSize           int64       `json:"data_size"`
-	IndexSize          int64       `json:"index_size"`
-	Result             [][]float64 `json:"result"`
+	System             string                       `json:"system"`
+	Version            string                       `json:"version"`
+	OS                 string                       `json:"os"`
+	Machine            string                       `json:"machine"`
+	DatasetSize        int                          `json:"dataset_size"`
+	NumLoadedDocuments int                          `json:"num_loaded_documents"`
+	TotalSize          int64                        `json:"total_size"`
+	DataSize           int64                        `json:"data_size"`
+	IndexSize          int64                        `json:"index_size"`
+	Result             [][]float64                  `json:"result"`
+	Q4Fairness         []clickHouseQ4FairnessResult `json:"q4_fairness"`
+}
+
+type clickHouseQ4FairnessResult struct {
+	Query       string    `json:"query"`
+	Description string    `json:"description"`
+	Table       string    `json:"table"`
+	SortKey     string    `json:"sort_key"`
+	QueryShape  string    `json:"query_shape"`
+	Attempts    []float64 `json:"attempts"`
+	Best        float64   `json:"best"`
 }
 
 type comparisonRaw struct {
-	GeneratedAt         string                            `json:"generated_at"`
-	DataPath            string                            `json:"data_path"`
-	Limit               int                               `json:"limit"`
-	Rows                int                               `json:"rows"`
-	Files               []string                          `json:"files"`
-	InputBytes          int64                             `json:"input_bytes"`
-	RowsPerGranule      int                               `json:"rows_per_granule"`
-	LoadDuration        time.Duration                     `json:"load_duration"`
-	ClickHouseLocal     clickHouseResult                  `json:"clickhouse_local"`
-	RemainingTreeDB     remainingTreeDBResult             `json:"remaining_treedb"`
-	RemainingTreeDBJSON remainingTreeDBResult             `json:"remaining_treedb_json"`
-	RemainingTreeDBTpl  remainingTreeDBResult             `json:"remaining_treedb_template_v1"`
-	ConservativeBSON    remainingTreeDBResult             `json:"conservative_remaining_treedb_bson"`
-	ConservativeJSON    remainingTreeDBResult             `json:"conservative_remaining_treedb_json"`
-	ConservativeTpl     remainingTreeDBResult             `json:"conservative_remaining_treedb_template_v1"`
-	RawTreeDBJSON       remainingTreeDBResult             `json:"raw_treedb_json"`
-	QueryTimings        []colgranule.JSONBenchQueryTiming `json:"query_timings"`
-	ColumnSummaries     []colgranule.ColumnCodecSummary   `json:"column_summaries"`
-	BestColumnStorage   []bestColumnStorage               `json:"best_column_storage"`
+	GeneratedAt              string                                `json:"generated_at"`
+	DataPath                 string                                `json:"data_path"`
+	Limit                    int                                   `json:"limit"`
+	Rows                     int                                   `json:"rows"`
+	Files                    []string                              `json:"files"`
+	InputBytes               int64                                 `json:"input_bytes"`
+	RowsPerGranule           int                                   `json:"rows_per_granule"`
+	LoadDuration             time.Duration                         `json:"load_duration"`
+	ClickHouseLocal          clickHouseResult                      `json:"clickhouse_local"`
+	RemainingTreeDB          remainingTreeDBResult                 `json:"remaining_treedb"`
+	RemainingTreeDBJSON      remainingTreeDBResult                 `json:"remaining_treedb_json"`
+	RemainingTreeDBTpl       remainingTreeDBResult                 `json:"remaining_treedb_template_v1"`
+	ConservativeBSON         remainingTreeDBResult                 `json:"conservative_remaining_treedb_bson"`
+	ConservativeJSON         remainingTreeDBResult                 `json:"conservative_remaining_treedb_json"`
+	ConservativeTpl          remainingTreeDBResult                 `json:"conservative_remaining_treedb_template_v1"`
+	RawTreeDBJSON            remainingTreeDBResult                 `json:"raw_treedb_json"`
+	QueryTimings             []colgranule.JSONBenchQueryTiming     `json:"query_timings"`
+	EncodedPartQueryTimings  []colgranule.JSONBenchPartQueryTiming `json:"encoded_part_query_timings"`
+	EncodedPartQ4Fairness    []colgranule.JSONBenchPartQueryTiming `json:"encoded_part_q4_fairness_timings"`
+	AggregateMetadataTimings []colgranule.JSONBenchPartQueryTiming `json:"aggregate_metadata_timings"`
+	EncodedPartBuildReports  []colgranule.JSONBenchPartBuildReport `json:"encoded_part_build_reports"`
+	ColumnSummaries          []colgranule.ColumnCodecSummary       `json:"column_summaries"`
+	BestColumnStorage        []bestColumnStorage                   `json:"best_column_storage"`
 }
 
 type remainingTreeDBResult struct {
@@ -94,6 +109,11 @@ type bestColumnStorage struct {
 	ActualCompressionMix map[colgranule.Compression]int `json:"actual_compression_mix"`
 }
 
+type retainedPayloadOption struct {
+	Label  string
+	Result remainingTreeDBResult
+}
+
 type remainingShape string
 
 const (
@@ -109,9 +129,13 @@ func main() {
 	clickHouseLocalPath := flag.String("clickhouse-local", "", "optional local ClickHouse JSONBench result")
 	remainingDBDir := flag.String("remaining-db-dir", "artifacts/colgranule_remaining_treedb", "temporary TreeDB directory prefix for remaining payload measurement")
 	measureRemaining := flag.Bool("measure-remaining-treedb", true, "load remaining JSON shapes into JSON, BSON, and Template-v1 TreeDB collections, compact them, and include disk usage")
+	retainedPayloadFromJSON := flag.String("retained-payload-from-json", "", "optional jsonbench_compare raw JSON file whose retained-payload measurements should be reused when -measure-remaining-treedb=false")
 	outJSON := flag.String("out-json", "artifacts/colgranule/JSONBENCH_COMPARISON_RAW.json", "raw JSON output")
 	outMarkdown := flag.String("out-md", "artifacts/colgranule/JSONBENCH_COMPARISON_REPORT.md", "Markdown report output")
 	flag.Parse()
+	if *measureRemaining && *retainedPayloadFromJSON != "" {
+		must(errors.New("-retained-payload-from-json requires -measure-remaining-treedb=false"))
+	}
 
 	start := time.Now()
 	ds, err := colgranule.LoadJSONBenchColumns(*data, *limit)
@@ -121,6 +145,14 @@ func main() {
 	summaries, err := colgranule.SummarizeJSONBenchDataset(ds, *rowsPerGranule, colgranule.DefaultJSONBenchConfigs())
 	must(err)
 	timings, err := colgranule.RunJSONBenchQueries(ds, *attempts)
+	must(err)
+	encodedPartTimings, err := colgranule.RunJSONBenchPartQueries(ds, *rowsPerGranule, *attempts)
+	must(err)
+	encodedPartQ4Fairness, err := colgranule.RunJSONBenchPartQ4FairnessQueries(ds, *rowsPerGranule, *attempts)
+	must(err)
+	aggregateMetadataTimings, err := colgranule.RunJSONBenchPartAggregateMetadataQueries(ds, *rowsPerGranule, *attempts)
+	must(err)
+	encodedPartBuildReports, err := colgranule.RunJSONBenchPartBuildReports(ds, *rowsPerGranule, *attempts)
 	must(err)
 	var remaining remainingTreeDBResult
 	var remainingJSON remainingTreeDBResult
@@ -144,28 +176,41 @@ func main() {
 		must(err)
 		rawTreeDBJSON, err = measureRawJSONTreeDB(context.Background(), ds.Files, ds.Rows, *remainingDBDir+"-raw-json")
 		must(err)
+	} else if *retainedPayloadFromJSON != "" {
+		retainedRaw := readComparisonRaw(*retainedPayloadFromJSON)
+		remaining = retainedRaw.RemainingTreeDB
+		remainingJSON = retainedRaw.RemainingTreeDBJSON
+		remainingTpl = retainedRaw.RemainingTreeDBTpl
+		conservativeBSON = retainedRaw.ConservativeBSON
+		conservativeJSON = retainedRaw.ConservativeJSON
+		conservativeTpl = retainedRaw.ConservativeTpl
+		rawTreeDBJSON = retainedRaw.RawTreeDBJSON
 	}
 
 	raw := comparisonRaw{
-		GeneratedAt:         time.Now().UTC().Format(time.RFC3339),
-		DataPath:            *data,
-		Limit:               *limit,
-		Rows:                ds.Rows,
-		Files:               ds.Files,
-		InputBytes:          inputBytes(ds.Files),
-		RowsPerGranule:      *rowsPerGranule,
-		LoadDuration:        loadDuration,
-		ClickHouseLocal:     readClickHouseResult(*clickHouseLocalPath),
-		RemainingTreeDB:     remaining,
-		RemainingTreeDBJSON: remainingJSON,
-		RemainingTreeDBTpl:  remainingTpl,
-		ConservativeBSON:    conservativeBSON,
-		ConservativeJSON:    conservativeJSON,
-		ConservativeTpl:     conservativeTpl,
-		RawTreeDBJSON:       rawTreeDBJSON,
-		QueryTimings:        timings,
-		ColumnSummaries:     summaries,
-		BestColumnStorage:   bestColumns(summaries),
+		GeneratedAt:              time.Now().UTC().Format(time.RFC3339),
+		DataPath:                 *data,
+		Limit:                    *limit,
+		Rows:                     ds.Rows,
+		Files:                    ds.Files,
+		InputBytes:               inputBytes(ds.Files),
+		RowsPerGranule:           *rowsPerGranule,
+		LoadDuration:             loadDuration,
+		ClickHouseLocal:          readClickHouseResult(*clickHouseLocalPath),
+		RemainingTreeDB:          remaining,
+		RemainingTreeDBJSON:      remainingJSON,
+		RemainingTreeDBTpl:       remainingTpl,
+		ConservativeBSON:         conservativeBSON,
+		ConservativeJSON:         conservativeJSON,
+		ConservativeTpl:          conservativeTpl,
+		RawTreeDBJSON:            rawTreeDBJSON,
+		QueryTimings:             timings,
+		EncodedPartQueryTimings:  encodedPartTimings,
+		EncodedPartQ4Fairness:    encodedPartQ4Fairness,
+		AggregateMetadataTimings: aggregateMetadataTimings,
+		EncodedPartBuildReports:  encodedPartBuildReports,
+		ColumnSummaries:          summaries,
+		BestColumnStorage:        bestColumns(summaries),
 	}
 
 	writeJSON(*outJSON, raw)
@@ -179,6 +224,14 @@ func readClickHouseResult(path string) clickHouseResult {
 	data, err := os.ReadFile(path)
 	must(err)
 	var result clickHouseResult
+	must(json.Unmarshal(data, &result))
+	return result
+}
+
+func readComparisonRaw(path string) comparisonRaw {
+	data, err := os.ReadFile(path)
+	must(err)
+	var result comparisonRaw
 	must(json.Unmarshal(data, &result))
 	return result
 }
@@ -846,6 +899,182 @@ func writeMarkdown(path string, raw comparisonRaw) {
 		local := clickHouseBest(raw.ClickHouseLocal, i)
 		fmt.Fprintf(&b, "| %s | %.6fs | %.6fs | %.2fx | %s |\n", timing.Query, timing.Best.Seconds(), local, ratio(timing.Best.Seconds(), local), timing.Description)
 	}
+	if len(raw.EncodedPartQueryTimings) > 0 {
+		fmt.Fprintf(&b, "\n## Encoded Part Query Timing\n\n")
+		fmt.Fprintf(&b, "| Query | Best | Best cache | ClickHouse local | Part / ClickHouse | Kernel | Diagnostics |\n")
+		fmt.Fprintf(&b, "|---|---:|---|---:|---:|---|---|\n")
+		for i, timing := range raw.EncodedPartQueryTimings {
+			local := clickHouseBest(raw.ClickHouseLocal, i)
+			d := timing.Diagnostics
+			fmt.Fprintf(&b, "| %s | %.6fs | %s | %.6fs | %.2fx | `%s` | rows=%d granules=%d decoded=%d blocks=%d bytes=%d columns=`%s` |\n",
+				timing.Query,
+				timing.Best.Seconds(),
+				timing.BestCache,
+				local,
+				ratio(timing.Best.Seconds(), local),
+				d.AggregateKernel,
+				d.RowsScanned,
+				d.GranulesConsidered,
+				d.GranulesDecoded,
+				d.BlocksDecoded,
+				d.BytesDecoded,
+				strings.Join(d.ColumnsProjected, ","))
+		}
+	}
+	if len(raw.EncodedPartQ4Fairness) > 0 {
+		fmt.Fprintf(&b, "\n## Q4 Sort-Order Fairness\n\n")
+		fmt.Fprintf(&b, "Q4a compares time-ordered TreeDB against a time-ordered ClickHouse table when the local ClickHouse result includes `q4_fairness`. Q4b compares a TreeDB part ordered by `kind`, `operation`, `collection`, `did`, and `time_us` against the standard ClickHouse table order, without TreeDB's global `time_us` early-stop shortcut.\n\n")
+		fmt.Fprintf(&b, "| Query | TreeDB best | Best cache | ClickHouse local | TreeDB / ClickHouse | Speedup | TreeDB sort key | Early stop | Kernel | Diagnostics | ClickHouse shape |\n")
+		fmt.Fprintf(&b, "|---|---:|---|---:|---:|---:|---|---|---|---|---|\n")
+		for _, timing := range raw.EncodedPartQ4Fairness {
+			d := timing.Diagnostics
+			local := clickHouseQ4FairnessBest(raw.ClickHouseLocal, timing.Query)
+			localSeconds := local.Best
+			localShape := local.QueryShape
+			if localShape == "" {
+				localShape = "not provided"
+			}
+			fmt.Fprintf(&b, "| %s | %.6fs | %s | %s | %s | %s | `%s` | %t | `%s` | rows=%d granules=%d skipped=%d decoded=%d blocks=%d bytes=%d | `%s` |\n",
+				timing.Query,
+				timing.Best.Seconds(),
+				timing.BestCache,
+				formatSeconds(localSeconds),
+				formatRatio(timing.Best.Seconds(), localSeconds),
+				formatSpeedup(timing.Best.Seconds(), localSeconds),
+				strings.Join(d.SortKey, ","),
+				d.EarlyStopAvailable,
+				d.AggregateKernel,
+				d.RowsScanned,
+				d.GranulesConsidered,
+				d.GranulesSkipped,
+				d.GranulesDecoded,
+				d.BlocksDecoded,
+				d.BytesDecoded,
+				localShape)
+		}
+	}
+	if len(raw.AggregateMetadataTimings) > 0 {
+		fmt.Fprintf(&b, "\n## Aggregate Metadata Prototype\n\n")
+		fmt.Fprintf(&b, "These M1B timings use exact per-granule `did_code -> min(time_us), max(time_us), count` metadata for declared post/create rows. The prototype stores metadata uncompressed in memory and reports build cost plus byte accounting so later file-backed work can decide admission and compression policies.\n\n")
+		fmt.Fprintf(&b, "| Query | Metadata best | Best cache | Baseline | Speedup | Break-even | Kernel | Metadata rows | Entries | Entries/matched row | Bytes | B/part row | B/matched row | Build | Compression |\n")
+		fmt.Fprintf(&b, "|---|---:|---|---:|---:|---:|---|---:|---:|---:|---:|---:|---:|---:|---|\n")
+		for _, timing := range raw.AggregateMetadataTimings {
+			d := timing.Diagnostics
+			baseline := aggregateMetadataBaselineSeconds(raw, timing.Query)
+			fmt.Fprintf(&b, "| %s | %.6fs | %s | %s | %s | %s | `%s` | %d | %d | %.3f | %d | %.3f | %.3f | %.6fs | `%s` |\n",
+				timing.Query,
+				timing.Best.Seconds(),
+				timing.BestCache,
+				formatSeconds(baseline),
+				formatSpeedup(timing.Best.Seconds(), baseline),
+				formatBreakEvenQueries(d.AggregateMetadataBuildDuration.Seconds(), baseline, timing.Best.Seconds()),
+				d.AggregateKernel,
+				d.AggregateMetadataRows,
+				d.AggregateMetadataEntries,
+				ratio(float64(d.AggregateMetadataEntries), float64(d.AggregateMetadataRows)),
+				d.AggregateMetadataBytes,
+				d.AggregateMetadataBytesPerRow,
+				ratio(float64(d.AggregateMetadataBytes), float64(d.AggregateMetadataRows)),
+				d.AggregateMetadataBuildDuration.Seconds(),
+				d.AggregateMetadataCompression)
+		}
+	}
+	if len(raw.EncodedPartBuildReports) > 0 {
+		fmt.Fprintf(&b, "\n## M1D Serialized Image Build and Size Accounting\n\n")
+		fmt.Fprintf(&b, "These reports build the actual encoded JSONBench column part layouts with aggregate metadata enabled, then serialize the part into an exact in-memory image. The image contains a manifest, descriptors, declared column payload sections, sort-key metadata, marks, row locators, aggregate metadata, and part-local dictionaries when available. Retained/original JSON payload is labeled separately and is absent from the encoded-part total. Physical file count is `0` because the image is still in memory; file-backed `TCS1` work should replace this with real file/container counts.\n\n")
+		fmt.Fprintf(&b, "| Layout | Files | Granules | Codec blocks | Best build | ns/row | Rows/s | Encoded MiB/s | Stored MiB/s | Alloc B/op | Allocs/op | Temp B/op | Output B/row |\n")
+		fmt.Fprintf(&b, "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n")
+		for _, report := range raw.EncodedPartBuildReports {
+			fmt.Fprintf(&b, "| `%s` | %d | %d | %d | %.6fs | %.1f | %.0f | %.2f | %.2f | %d | %d | %d | %.3f |\n",
+				report.Layout,
+				report.Accounting.PhysicalFiles,
+				report.Accounting.Granules,
+				report.Accounting.CodecBlocks,
+				report.Best.Duration.Seconds(),
+				report.NanosPerRow,
+				report.RowsPerSecond,
+				report.EncodedMiBPerSecond,
+				report.StoredMiBPerSecond,
+				report.AllocatedBytesPerOp,
+				report.AllocsPerOp,
+				report.TemporaryBytes,
+				report.Accounting.BytesPerRow)
+		}
+		fmt.Fprintf(&b, "\n| Layout | Total bytes | Serialized image | Manifest | vs raw JSON | vs source gzip | vs ClickHouse total | Declared columns | Dictionaries | Marks | Sort key | Aggregate metadata | Descriptors | Locators | Retained JSON |\n")
+		fmt.Fprintf(&b, "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|\n")
+		for _, report := range raw.EncodedPartBuildReports {
+			accounting := report.Accounting
+			fmt.Fprintf(&b, "| `%s` | %d | %d | %d | %s | %s | %s | %d | %d | %d | %d | %d | %d | %d | `%s` |\n",
+				report.Layout,
+				accounting.TotalStoredBytes,
+				accounting.SerializedImageBytes,
+				accounting.SerializedManifestBytes,
+				formatPercent(float64(accounting.TotalStoredBytes), float64(report.RawJSONBytes)),
+				formatPercent(float64(accounting.TotalStoredBytes), float64(raw.InputBytes)),
+				formatPercent(float64(accounting.TotalStoredBytes), float64(raw.ClickHouseLocal.TotalSize)),
+				accounting.DeclaredColumnStoredBytes,
+				accounting.DictionaryBytes,
+				accounting.MarkBytes,
+				accounting.SortKeyMetadataBytes,
+				accounting.AggregateMetadataBytes,
+				accounting.DescriptorBytes,
+				accounting.LocatorBytes,
+				accounting.RetainedJSONPayload)
+		}
+		retainedPayloads := retainedPayloadOptions(raw)
+		if len(retainedPayloads) > 0 {
+			fmt.Fprintf(&b, "\nFull-dataset retained-payload estimates add the current serialized column-part image total to a measured TreeDB payload collection containing the original JSON row with ClickHouse typed paths removed. This is the closest pre-M2 comparison to ClickHouse `total_size`: the column part is serialized but still in memory, while the retained payload is an actual compacted TreeDB directory measurement.\n\n")
+			fmt.Fprintf(&b, "| Layout | Retained payload | Part bytes | Payload bytes | Total bytes | MiB | B/row | TreeDB / ClickHouse | Delta vs ClickHouse | Granules | Codec blocks | Part files | Payload files |\n")
+			fmt.Fprintf(&b, "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n")
+			for _, report := range raw.EncodedPartBuildReports {
+				for _, payload := range retainedPayloads {
+					total := int64(report.Accounting.TotalStoredBytes) + payload.Result.AfterCompactBytes
+					fmt.Fprintf(&b, "| `%s` | `%s` | %d | %d | %d | %.2f | %.3f | %s | %s | %d | %d | %d | %d |\n",
+						report.Layout,
+						payload.Label,
+						report.Accounting.TotalStoredBytes,
+						payload.Result.AfterCompactBytes,
+						total,
+						mib(total),
+						ratio(float64(total), float64(report.Accounting.Rows)),
+						formatMultiplier(float64(total), float64(raw.ClickHouseLocal.TotalSize)),
+						formatSignedMiB(total-raw.ClickHouseLocal.TotalSize),
+						report.Accounting.Granules,
+						report.Accounting.CodecBlocks,
+						report.Accounting.PhysicalFiles,
+						payload.Result.AfterCompactFiles)
+				}
+			}
+		} else {
+			fmt.Fprintf(&b, "\nFull-dataset retained-payload estimate: not measured in this run. Re-run with `-measure-remaining-treedb=true`, or reuse a prior retained-payload run with `-measure-remaining-treedb=false -retained-payload-from-json <raw-json>`.\n")
+		}
+		fmt.Fprintf(&b, "\nCompression/admission by column/substream:\n\n")
+		fmt.Fprintf(&b, "| Layout | Column | Substream | Encoding | Requested | Actual | Blocks | Raw bytes | Stored bytes | Stored/raw | Attempts | Kept | Rejected | Fallback |\n")
+		fmt.Fprintf(&b, "|---|---|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---|\n")
+		for _, report := range raw.EncodedPartBuildReports {
+			for _, detail := range report.Accounting.CompressionDetail {
+				fallback := detail.FallbackReason
+				if fallback == "" {
+					fallback = "kept"
+				}
+				fmt.Fprintf(&b, "| `%s` | `%s` | `%s` | `%s` | `%s` | `%s` | %d | %d | %d | %.3f | %d | %d | %d | `%s` |\n",
+					report.Layout,
+					detail.Column,
+					detail.Substream,
+					detail.Encoding,
+					detail.RequestedCompression,
+					detail.ActualCompression,
+					detail.Blocks,
+					detail.EncodedRawBytes,
+					detail.StoredBytes,
+					detail.StoredToEncodedRawRate,
+					detail.CompressionAttempted,
+					detail.CompressionKept,
+					detail.CompressionRejected,
+					fallback)
+			}
+		}
+	}
 	fmt.Fprintf(&b, "\n## Storage Footprint\n\n")
 	allBest := bestTotal(raw.BestColumnStorage, nil)
 	queryBest := bestTotal(raw.BestColumnStorage, queryPathColumns())
@@ -868,8 +1097,17 @@ func writeMarkdown(path string, raw comparisonRaw) {
 	fmt.Fprintf(&b, "| ClickHouse local total | %d | %.2f | `total_size` from local ClickHouse JSONBench result. |\n", raw.ClickHouseLocal.TotalSize, mib(raw.ClickHouseLocal.TotalSize))
 	fmt.Fprintf(&b, "| ClickHouse local data | %d | %.2f | `data_size` from local ClickHouse JSONBench result. |\n", raw.ClickHouseLocal.DataSize, mib(raw.ClickHouseLocal.DataSize))
 	fmt.Fprintf(&b, "| ClickHouse local index | %d | %.2f | `index_size` from local ClickHouse JSONBench result. |\n", raw.ClickHouseLocal.IndexSize, mib(raw.ClickHouseLocal.IndexSize))
-	fmt.Fprintf(&b, "| Granule best-codec all derived columns | %d | %.2f | %.2f%% of ClickHouse local total. |\n", allBest, mib(int64(allBest)), ratio(float64(allBest)*100, float64(raw.ClickHouseLocal.TotalSize)))
-	fmt.Fprintf(&b, "| Granule best-codec query/index paths | %d | %.2f | %.2f%% of ClickHouse local total. |\n", queryBest, mib(int64(queryBest)), ratio(float64(queryBest)*100, float64(raw.ClickHouseLocal.TotalSize)))
+	for _, report := range raw.EncodedPartBuildReports {
+		fmt.Fprintf(&b, "| Serialized column part `%s` total | %d | %.2f | Exact serialized in-memory image including declared columns, dictionaries, marks, descriptors, locators, and admitted aggregate metadata; retained JSON is `%s`. |\n", report.Layout, report.Accounting.TotalStoredBytes, mib(int64(report.Accounting.TotalStoredBytes)), report.Accounting.RetainedJSONPayload)
+	}
+	for _, report := range raw.EncodedPartBuildReports {
+		for _, payload := range retainedPayloadOptions(raw) {
+			total := int64(report.Accounting.TotalStoredBytes) + payload.Result.AfterCompactBytes
+			fmt.Fprintf(&b, "| M1D serialized image `%s` + `%s` retained payload | %d | %.2f | Full-dataset estimate: %.2f%% of ClickHouse local total, delta %s; part files `%d`, payload files `%d`, granules `%d`. |\n", report.Layout, payload.Label, total, mib(total), ratio(float64(total)*100, float64(raw.ClickHouseLocal.TotalSize)), formatSignedMiB(total-raw.ClickHouseLocal.TotalSize), report.Accounting.PhysicalFiles, payload.Result.AfterCompactFiles, report.Accounting.Granules)
+		}
+	}
+	fmt.Fprintf(&b, "| Legacy one-column best-codec lower bound, all derived columns | %d | %.2f | %.2f%% of ClickHouse local total; excludes manifest, locators, dictionaries, marks, aggregate metadata, and retained JSON. |\n", allBest, mib(int64(allBest)), ratio(float64(allBest)*100, float64(raw.ClickHouseLocal.TotalSize)))
+	fmt.Fprintf(&b, "| Legacy one-column best-codec lower bound, query/index paths | %d | %.2f | %.2f%% of ClickHouse local total; excludes manifest, locators, dictionaries, marks, aggregate metadata, and retained JSON. |\n", queryBest, mib(int64(queryBest)), ratio(float64(queryBest)*100, float64(raw.ClickHouseLocal.TotalSize)))
 	if raw.RemainingTreeDB.Enabled {
 		fmt.Fprintf(&b, "| TreeDB BSON remaining fields after compaction + value-log rewrite | %d | %.2f | Stores original JSON minus ClickHouse typed paths as BSON in a compressed no-index collection. |\n", raw.RemainingTreeDB.AfterCompactBytes, mib(raw.RemainingTreeDB.AfterCompactBytes))
 		fmt.Fprintf(&b, "| Granules all derived columns + TreeDB BSON remaining fields | %d | %.2f | %.2f%% of ClickHouse local total. |\n", combinedAllBSON, mib(combinedAllBSON), ratio(float64(combinedAllBSON)*100, float64(raw.ClickHouseLocal.TotalSize)))
@@ -992,6 +1230,48 @@ func clickHouseBest(result clickHouseResult, i int) float64 {
 	return best
 }
 
+func clickHouseQ4FairnessBest(result clickHouseResult, query string) clickHouseQ4FairnessResult {
+	prefix := strings.ToLower(query)
+	var out clickHouseQ4FairnessResult
+	for _, candidate := range result.Q4Fairness {
+		if !strings.HasPrefix(strings.ToLower(candidate.Query), prefix) {
+			continue
+		}
+		if candidate.Best == 0 {
+			for i, attempt := range candidate.Attempts {
+				if i == 0 || attempt < candidate.Best {
+					candidate.Best = attempt
+				}
+			}
+		}
+		if candidate.Best == 0 {
+			continue
+		}
+		if out.Best == 0 || candidate.Best < out.Best {
+			out = candidate
+		}
+	}
+	return out
+}
+
+func aggregateMetadataBaselineSeconds(raw comparisonRaw, query string) float64 {
+	switch query {
+	case "Q4b-meta":
+		for _, timing := range raw.EncodedPartQ4Fairness {
+			if timing.Query == "Q4b" {
+				return timing.Best.Seconds()
+			}
+		}
+	case "Q5-meta":
+		for _, timing := range raw.EncodedPartQueryTimings {
+			if timing.Query == "Q5" {
+				return timing.Best.Seconds()
+			}
+		}
+	}
+	return 0
+}
+
 func queryPathColumns() map[string]bool {
 	return map[string]bool{
 		"kind_code": true, "commit_operation_code": true, "commit_collection_code": true, "did_code": true, "time_us": true,
@@ -1009,11 +1289,77 @@ func bestTotal(cols []bestColumnStorage, include map[string]bool) int {
 	return total
 }
 
+func retainedPayloadOptions(raw comparisonRaw) []retainedPayloadOption {
+	options := make([]retainedPayloadOption, 0, 3)
+	if raw.RemainingTreeDB.Enabled {
+		options = append(options, retainedPayloadOption{Label: "BSON remaining", Result: raw.RemainingTreeDB})
+	}
+	if raw.RemainingTreeDBJSON.Enabled {
+		options = append(options, retainedPayloadOption{Label: "JSON remaining", Result: raw.RemainingTreeDBJSON})
+	}
+	if raw.RemainingTreeDBTpl.Enabled {
+		options = append(options, retainedPayloadOption{Label: "Template-v1 remaining", Result: raw.RemainingTreeDBTpl})
+	}
+	return options
+}
+
 func ratio(numerator, denominator float64) float64 {
 	if denominator == 0 {
 		return 0
 	}
 	return numerator / denominator
+}
+
+func formatSeconds(seconds float64) string {
+	if seconds == 0 {
+		return "n/a"
+	}
+	return fmt.Sprintf("%.6fs", seconds)
+}
+
+func formatRatio(numerator, denominator float64) string {
+	if denominator == 0 {
+		return "n/a"
+	}
+	return fmt.Sprintf("%.2fx", ratio(numerator, denominator))
+}
+
+func formatMultiplier(numerator, denominator float64) string {
+	if denominator == 0 {
+		return "n/a"
+	}
+	return fmt.Sprintf("%.3fx", ratio(numerator, denominator))
+}
+
+func formatSpeedup(numerator, denominator float64) string {
+	if numerator == 0 || denominator == 0 {
+		return "n/a"
+	}
+	return fmt.Sprintf("%.2fx", ratio(denominator, numerator))
+}
+
+func formatPercent(numerator, denominator float64) string {
+	if denominator == 0 {
+		return "n/a"
+	}
+	return fmt.Sprintf("%.2f%%", ratio(numerator*100, denominator))
+}
+
+func formatSignedMiB(bytes int64) string {
+	sign := "+"
+	if bytes < 0 {
+		sign = "-"
+		bytes = -bytes
+	}
+	return fmt.Sprintf("%s%.2f MiB", sign, mib(bytes))
+}
+
+func formatBreakEvenQueries(buildSeconds, baselineSeconds, metadataSeconds float64) string {
+	saved := baselineSeconds - metadataSeconds
+	if buildSeconds <= 0 || saved <= 0 {
+		return "n/a"
+	}
+	return fmt.Sprintf("%.1f", buildSeconds/saved)
 }
 
 func mib(bytes int64) float64 {

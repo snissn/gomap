@@ -14,7 +14,7 @@ import (
 )
 
 func openReadOnly(opts Options) (*DB, error) {
-	if _, err := resolveLeafPageReadCacheEntries(opts.LeafPageReadCacheEntries); err != nil {
+	if err := applyReadOnlyDefaults(&opts); err != nil {
 		return nil, err
 	}
 	if err := ensureNoLegacyMixedWALValueSegments(opts.Dir); err != nil {
@@ -102,6 +102,9 @@ func openReadOnly(opts Options) (*DB, error) {
 		maintenanceOpsPerCoalesce:      opts.MaintenanceOpsPerCoalesce,
 		dir:                            opts.Dir,
 		chunkSize:                      opts.ChunkSize,
+		walMaxSegmentBytes:             opts.WALMaxSegmentBytes,
+		commandWAL:                     opts.CommandWAL,
+		commandWALStatsScan:            opts.CommandWALStatsScan,
 		preferAppendAlloc:              opts.PreferAppendAlloc,
 		freelistRegionPages:            opts.FreelistRegionPages,
 		freelistRegionRadius:           opts.FreelistRegionRadius,
@@ -128,6 +131,13 @@ func openReadOnly(opts Options) (*DB, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	if err := requireNoUnappliedCommandWAL(opts.Dir, db.meta.AppliedCommandLSN, opts.WALMaxSegmentBytes); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if db.commandWAL {
+		db.cacheCommandWALRequiredFeatureStats()
+	}
 	if opts.IndexOuterLeavesInValueLog {
 		manifest, err := loadOrCreateLeafGenerationManifest(layout.leafVLogDir, db.meta.CommitSeq, true)
 		if err != nil {
@@ -141,6 +151,7 @@ func openReadOnly(opts Options) (*DB, error) {
 		CommitSeq:                  db.meta.CommitSeq,
 		RootPageID:                 db.meta.UserRootPageID,
 		SystemRootPageID:           db.meta.SystemRootPageID,
+		AppliedCommandLSN:          db.meta.AppliedCommandLSN,
 		ValueLogSet:                vm.CurrentSet(),
 		LeafGenerations:            db.currentLeafGenerationView(),
 		LeafGenerationStateVersion: db.leafGenerationStateVersion,
@@ -153,7 +164,7 @@ func openReadOnly(opts Options) (*DB, error) {
 }
 
 func openReadOnlyNoLock(opts Options) (*DB, error) {
-	if _, err := resolveLeafPageReadCacheEntries(opts.LeafPageReadCacheEntries); err != nil {
+	if err := applyReadOnlyDefaults(&opts); err != nil {
 		return nil, err
 	}
 	if err := ensureNoLegacyMixedWALValueSegments(opts.Dir); err != nil {
@@ -227,6 +238,9 @@ func openReadOnlyNoLock(opts Options) (*DB, error) {
 		maintenanceOpsPerCoalesce:      opts.MaintenanceOpsPerCoalesce,
 		dir:                            opts.Dir,
 		chunkSize:                      opts.ChunkSize,
+		walMaxSegmentBytes:             opts.WALMaxSegmentBytes,
+		commandWAL:                     opts.CommandWAL,
+		commandWALStatsScan:            opts.CommandWALStatsScan,
 		preferAppendAlloc:              opts.PreferAppendAlloc,
 		freelistRegionPages:            opts.FreelistRegionPages,
 		freelistRegionRadius:           opts.FreelistRegionRadius,
@@ -253,6 +267,13 @@ func openReadOnlyNoLock(opts Options) (*DB, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	if err := requireNoUnappliedCommandWAL(opts.Dir, db.meta.AppliedCommandLSN, opts.WALMaxSegmentBytes); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if db.commandWAL {
+		db.cacheCommandWALRequiredFeatureStats()
+	}
 	if opts.IndexOuterLeavesInValueLog {
 		manifest, err := loadOrCreateLeafGenerationManifest(layout.leafVLogDir, db.meta.CommitSeq, true)
 		if err != nil {
@@ -266,6 +287,7 @@ func openReadOnlyNoLock(opts Options) (*DB, error) {
 		CommitSeq:                  db.meta.CommitSeq,
 		RootPageID:                 db.meta.UserRootPageID,
 		SystemRootPageID:           db.meta.SystemRootPageID,
+		AppliedCommandLSN:          db.meta.AppliedCommandLSN,
 		ValueLogSet:                vm.CurrentSet(),
 		LeafGenerations:            db.currentLeafGenerationView(),
 		LeafGenerationStateVersion: db.leafGenerationStateVersion,
@@ -274,4 +296,14 @@ func openReadOnlyNoLock(opts Options) (*DB, error) {
 	db.publishSnapshotView(gen, initialState, vm)
 
 	return db, nil
+}
+
+func applyReadOnlyDefaults(opts *Options) error {
+	if _, err := resolveLeafPageReadCacheEntries(opts.LeafPageReadCacheEntries); err != nil {
+		return err
+	}
+	if opts.ChunkSize == 0 {
+		opts.ChunkSize = defaultChunkSize
+	}
+	return nil
 }

@@ -26,7 +26,10 @@ func (w *countingLogWriter) AppendBatch(records []commitlog.Record) error {
 }
 
 func (w *countingLogWriter) RotateTo(_ string) error { return nil }
-func (w *countingLogWriter) Size() int64             { return 0 }
+func (w *countingLogWriter) RotateToWithSync(_ string, _ bool) error {
+	return nil
+}
+func (w *countingLogWriter) Size() int64 { return 0 }
 func (w *countingLogWriter) Flush() error {
 	w.flushCalls++
 	return nil

@@ -251,7 +251,7 @@ func runJSONBenchQ5(ds JSONBenchDataset, codes queryCodeSet) (int, uint64) {
 }
 
 func unixMicroHour(us int64) int64 {
-	return (us / 1_000_000 / 3600) % 24
+	return (us / 1_000_000 / 3600) % jsonBenchHoursPerDay
 }
 
 func digestCounts(counts map[int64]int64) uint64 {

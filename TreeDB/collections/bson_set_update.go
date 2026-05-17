@@ -64,7 +64,9 @@ func (c *Collection) UpdateBSONSet(documentID []byte, fields []BSONSetField) (bo
 		return false, false, err
 	}
 	var matched, modified bool
-	if combiner, domain := c.updateFastPathWithoutCreatingCombiner(); combiner != nil {
+	if c.commandWALActive(nil) {
+		matched, modified, err = c.updateBSONSetDirect(documentID, spec)
+	} else if combiner, domain := c.updateFastPathWithoutCreatingCombiner(); combiner != nil {
 		matched, modified, err = combiner.update(c, documentID, nil, spec, true)
 	} else if domain != nil {
 		defer domain.finishInlineUpdateWithoutCombiner()
@@ -96,8 +98,15 @@ func (c *Collection) updateBSONSetDirect(documentID []byte, spec bsonSetUpdate) 
 		return false, false, err
 	}
 	items := []updateBatchItem{newBSONSetUpdateBatchItem(documentID, spec)}
-	results, batched, err := c.updateBatchOwnedItems(items, updateBatchModeNoSecondaryUniqueIndexChanges)
+	mode := updateBatchModeNoSecondaryUniqueIndexChanges
+	if c.commandWALActive(nil) {
+		mode = updateBatchModeAny
+	}
+	results, batched, err := c.updateBatchOwnedItems(items, mode)
 	if !batched && err == nil {
+		if c.commandWALActive(nil) {
+			return false, false, errors.New("collections: command WAL BSON $set fallback unexpectedly unbatched")
+		}
 		return c.updateDirectBSONSet(documentID, spec)
 	}
 	if err != nil {

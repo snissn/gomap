@@ -640,14 +640,14 @@ func (r *templateV1SnapshotResolver) lookupTemplateV1(id uint64) (*templateV1Tem
 	if tpl := r.byID[id]; tpl != nil {
 		return tpl, nil
 	}
-	entry, err := r.snap.GetEntryAtRoot(r.rootID, templateV1RecordKey(id))
+	raw, err := r.snap.GetAppendAtRoot(r.rootID, templateV1RecordKey(id), nil)
 	if errors.Is(err, tree.ErrKeyNotFound) {
 		return nil, errTemplateV1TemplateNotFound
 	}
 	if err != nil {
 		return nil, err
 	}
-	record, err := parseTemplateV1RecordWithID(id, entry.Value)
+	record, err := parseTemplateV1RecordWithID(id, raw)
 	if err != nil {
 		return nil, err
 	}
@@ -662,14 +662,14 @@ func (r *templateV1SnapshotResolver) lookupTemplateV1ByHash(hash [32]byte) (*tem
 	if tpl := r.byHash[hash]; tpl != nil {
 		return tpl, nil
 	}
-	entry, err := r.snap.GetEntryAtRoot(r.rootID, templateV1HashKey(hash))
+	raw, err := r.snap.GetAppendAtRoot(r.rootID, templateV1HashKey(hash), nil)
 	if errors.Is(err, tree.ErrKeyNotFound) {
 		return nil, errTemplateV1TemplateNotFound
 	}
 	if err != nil {
 		return nil, err
 	}
-	id, err := decodeTemplateV1ID(entry.Value)
+	id, err := decodeTemplateV1ID(raw)
 	if err != nil {
 		return nil, err
 	}
@@ -687,14 +687,14 @@ func (r *templateV1SnapshotResolver) nextTemplateV1ID() (uint64, error) {
 	if r == nil || r.snap == nil || r.rootID == 0 {
 		return 0, errTemplateV1MissingTemplateRoot
 	}
-	entry, err := r.snap.GetEntryAtRoot(r.rootID, templateV1NextIDKey())
+	raw, err := r.snap.GetAppendAtRoot(r.rootID, templateV1NextIDKey(), nil)
 	if errors.Is(err, tree.ErrKeyNotFound) {
 		return 1, nil
 	}
 	if err != nil {
 		return 0, err
 	}
-	return decodeTemplateV1ID(entry.Value)
+	return decodeTemplateV1ID(raw)
 }
 
 func (r *templateV1SnapshotResolver) cacheTemplate(tpl *templateV1Template) {

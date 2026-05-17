@@ -140,7 +140,30 @@ func InitNodeView(n *Node, data []byte) {
 	if n == nil {
 		return
 	}
-	*n = Node{data: data}
+	n.data = data
+	n.count = 0
+	n.ptype = 0
+	n.leafKey = nil
+	n.leafEntry = 0
+	n.leafIndex = 0
+	n.leafFlags = 0
+	n.leafValid = false
+	n.leafColPrefixMetaValid = false
+	n.internalMetaValid = false
+	if len(data) >= NodeHeaderSize {
+		flags := getUint16At(data, 12)
+		n.ptype = page.PageType(flags & pageTypeMask)
+		n.count = getUint16At(data, 14)
+	}
+}
+
+// InitFreshNodeView wraps data in a fresh zero-value Node without clearing
+// reusable decode caches. It must only be used when n has no live cached state.
+func InitFreshNodeView(n *Node, data []byte) {
+	if n == nil {
+		return
+	}
+	n.data = data
 	if len(data) >= NodeHeaderSize {
 		flags := getUint16At(data, 12)
 		n.ptype = page.PageType(flags & pageTypeMask)

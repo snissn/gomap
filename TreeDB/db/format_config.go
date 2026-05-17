@@ -1,6 +1,7 @@
 package db
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +13,9 @@ import (
 const formatConfigFileName = "format.json"
 
 const formatConfigVersion = 2
+const formatConfigRequiredFeaturesVersion = 3
+
+const RequiredFeatureCommandWALV1 = "command_wal_v1"
 
 // FormatConfig captures the format-affecting knobs that maintenance tooling
 // should preserve when rewriting index/value-log state.
@@ -22,6 +26,8 @@ const formatConfigVersion = 2
 // bumped so older binaries do not accidentally apply zero-values.
 type FormatConfig struct {
 	Version int `json:"version"`
+
+	RequiredFeatures []string `json:"required_features,omitempty"`
 
 	IndexOuterLeavesInValueLog bool `json:"index_outer_leaves_in_vlog"`
 
@@ -34,6 +40,15 @@ type FormatConfig struct {
 	ValueLogCompression string `json:"vlog_compression"`
 	ValueLogBlockCodec  string `json:"vlog_block_codec"`
 	ValueLogAutoPolicy  string `json:"vlog_auto_policy"`
+}
+
+func (cfg FormatConfig) RequiresCommandWALV1() bool {
+	for _, feature := range cfg.RequiredFeatures {
+		if normalizeFormatConfigMode(feature) == RequiredFeatureCommandWALV1 {
+			return true
+		}
+	}
+	return false
 }
 
 func formatConfigPath(dir string) string {
@@ -63,15 +78,45 @@ func formatConfigFromOptions(opts Options) FormatConfig {
 		ValueLogBlockCodec:  normalizeFormatConfigMode(formatValueLogBlockCodec(opts.ValueLog.BlockCodec)),
 		ValueLogAutoPolicy:  normalizeFormatConfigMode(formatValueLogAutoPolicy(opts.ValueLog.AutoPolicy)),
 	}
-
 	// Leaf-log child pages use an explicit LogRecordRef layout instead of page
 	// child IDs, so keep base-delta disabled for outer-leaf-in-vlog roots until
 	// mixed internal-level policy is supported.
 	if cfg.IndexOuterLeavesInValueLog && cfg.IndexInternalBaseDelta {
 		cfg.IndexInternalBaseDelta = false
 	}
+	if opts.CommandWAL {
+		cfg.Version = formatConfigRequiredFeaturesVersion
+		cfg.RequiredFeatures = appendRequiredFormatFeature(cfg.RequiredFeatures, RequiredFeatureCommandWALV1)
+	}
 
 	return cfg
+}
+
+func formatConfigFromOptionsPreservingRequiredFeatures(opts Options) (FormatConfig, error) {
+	cfg := formatConfigFromOptions(opts)
+	existing, ok, err := LoadFormatConfig(opts.Dir)
+	if err != nil {
+		return FormatConfig{}, err
+	}
+	if ok {
+		for _, feature := range existing.RequiredFeatures {
+			cfg.RequiredFeatures = appendRequiredFormatFeature(cfg.RequiredFeatures, feature)
+		}
+		if len(cfg.RequiredFeatures) != 0 {
+			cfg.Version = formatConfigRequiredFeaturesVersion
+		}
+	}
+	return cfg, nil
+}
+
+func appendRequiredFormatFeature(features []string, feature string) []string {
+	normalized := normalizeFormatConfigMode(feature)
+	for _, existing := range features {
+		if normalizeFormatConfigMode(existing) == normalized {
+			return features
+		}
+	}
+	return append(features, normalized)
 }
 
 // ApplyToOptions overwrites format-affecting knobs in opts from cfg.
@@ -142,19 +187,105 @@ func LoadFormatConfig(dir string) (FormatConfig, bool, error) {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return FormatConfig{}, false, fmt.Errorf("treedb: decode %s: %w", filepath.Base(path), err)
 	}
-	if cfg.Version != formatConfigVersion {
+	switch cfg.Version {
+	case formatConfigVersion:
+		if len(cfg.RequiredFeatures) != 0 {
+			return FormatConfig{}, false, fmt.Errorf("treedb: decode %s: required_features require format version %d", filepath.Base(path), formatConfigRequiredFeaturesVersion)
+		}
+	case formatConfigRequiredFeaturesVersion:
+	default:
 		return FormatConfig{}, false, fmt.Errorf("treedb: unsupported %s version %d", filepath.Base(path), cfg.Version)
+	}
+	if err := validateRequiredFormatFeatures(cfg.RequiredFeatures); err != nil {
+		return FormatConfig{}, false, fmt.Errorf("treedb: decode %s: %w", filepath.Base(path), err)
 	}
 	return cfg, true, nil
 }
 
-// SaveFormatConfig writes cfg to dir/format.json atomically.
+// ValidateFormatRequiredFeatureGate checks only the required-feature gate in
+// format.json. It is intentionally narrower than LoadFormatConfig so
+// IgnoreFormatConfig remains an escape hatch for malformed or future ordinary
+// format configs, while still failing closed for explicitly required features.
+func ValidateFormatRequiredFeatureGate(dir string) error {
+	_, err := commandWALRequiredFeatureGate(dir)
+	return err
+}
+
+func CommandWALRequiredFeatureEnabled(dir string) (bool, error) {
+	return commandWALRequiredFeatureGate(dir)
+}
+
+func commandWALRequiredFeatureGate(dir string) (bool, error) {
+	path := formatConfigPath(dir)
+	if path == "" {
+		return false, errors.New("missing db dir")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	if len(data) == 0 {
+		return false, nil
+	}
+
+	var gate struct {
+		Version          int      `json:"version"`
+		RequiredFeatures []string `json:"required_features,omitempty"`
+	}
+	if err := json.Unmarshal(data, &gate); err != nil {
+		if bytes.Contains(data, []byte("required_features")) {
+			return false, fmt.Errorf("treedb: decode %s required-feature gate: %w", filepath.Base(path), err)
+		}
+		return false, nil
+	}
+	if len(gate.RequiredFeatures) == 0 {
+		return false, nil
+	}
+	if gate.Version < formatConfigRequiredFeaturesVersion {
+		return false, fmt.Errorf("treedb: decode %s: required_features require format version %d", filepath.Base(path), formatConfigRequiredFeaturesVersion)
+	}
+	if err := validateRequiredFormatFeatures(gate.RequiredFeatures); err != nil {
+		return false, fmt.Errorf("treedb: decode %s: %w", filepath.Base(path), err)
+	}
+	requiresCommandWAL := false
+	for _, feature := range gate.RequiredFeatures {
+		if normalizeFormatConfigMode(feature) == RequiredFeatureCommandWALV1 {
+			requiresCommandWAL = true
+		}
+	}
+	return requiresCommandWAL, nil
+}
+
+// SaveFormatConfig writes cfg to dir/format.json atomically. A transition into
+// command_wal_v1 validates that legacy WAL state is clean; re-saving a config
+// that already requires command_wal_v1 does not re-run activation validation
+// because command-WAL segments are expected after activation.
 func SaveFormatConfig(dir string, cfg FormatConfig) error {
+	if cfg.RequiresCommandWALV1() {
+		existing, ok, err := LoadFormatConfig(dir)
+		if err != nil {
+			return err
+		}
+		if !ok || !existing.RequiresCommandWALV1() {
+			if err := ValidateCommandWALActivationClean(dir); err != nil {
+				return err
+			}
+		}
+	}
+	return writeFormatConfig(dir, cfg)
+}
+
+func writeFormatConfig(dir string, cfg FormatConfig) error {
 	path := formatConfigPath(dir)
 	if path == "" {
 		return errors.New("missing db dir")
 	}
-	if cfg.Version == 0 {
+	if len(cfg.RequiredFeatures) != 0 {
+		cfg.Version = formatConfigRequiredFeaturesVersion
+	} else if cfg.Version == 0 {
 		cfg.Version = formatConfigVersion
 	}
 	data, err := json.MarshalIndent(cfg, "", "  ")
@@ -162,6 +293,40 @@ func SaveFormatConfig(dir string, cfg FormatConfig) error {
 		return err
 	}
 	return writeFileAtomic(path, data, 0o600)
+}
+
+func commandWALFormatNeedsActivation(opts Options) (bool, error) {
+	if !opts.CommandWAL || opts.ReadOnly {
+		return false, nil
+	}
+	requiresCommandWAL, err := CommandWALRequiredFeatureEnabled(opts.Dir)
+	if err != nil {
+		return false, err
+	}
+	return !requiresCommandWAL, nil
+}
+
+// saveOpenFormatConfig is an openWithLock post-open refresh hook. It must not
+// be used as a command-WAL activation helper; fresh activation is gated earlier
+// via commandWALFormatNeedsActivation + ValidateCommandWALActivationClean +
+// writeFormatConfig in openWithLock before the journal opens.
+func saveOpenFormatConfig(opts Options) error {
+	if opts.ReadOnly {
+		return nil
+	}
+	cfg, err := formatConfigFromOptionsPreservingRequiredFeatures(opts)
+	if err != nil {
+		return err
+	}
+	if opts.CommandWAL {
+		// By the time saveOpenFormatConfig is called at the end of openWithLock,
+		// the command journal is already open. Skip ValidateCommandWALActivationClean
+		// (which asserts the WAL directory is clean) because it only applies to
+		// fresh activations; those are handled by the needsCommandWALFormat path
+		// in openWithLock before the journal is opened.
+		return writeFormatConfig(opts.Dir, cfg)
+	}
+	return SaveFormatConfig(opts.Dir, cfg)
 }
 
 func formatValueLogCompressionMode(mode ValueLogCompressionMode) string {
@@ -247,6 +412,13 @@ func applyFormatConfigForMaintenance(opts *Options) error {
 		return nil
 	}
 	if opts.IgnoreFormatConfig {
+		requiresCommandWAL, err := CommandWALRequiredFeatureEnabled(opts.Dir)
+		if err != nil {
+			return err
+		}
+		if requiresCommandWAL {
+			return ErrCommandWALUnsupported
+		}
 		return nil
 	}
 	cfg, ok, err := LoadFormatConfig(opts.Dir)
@@ -256,6 +428,31 @@ func applyFormatConfigForMaintenance(opts *Options) error {
 	if !ok {
 		return nil
 	}
+	if cfg.RequiresCommandWALV1() {
+		return ErrCommandWALUnsupported
+	}
 	cfg.ApplyToOptions(opts)
+	return nil
+}
+
+func validateRequiredFormatFeatures(features []string) error {
+	seen := make(map[string]struct{}, len(features))
+	for _, raw := range features {
+		feature := normalizeFormatConfigMode(raw)
+		if feature == "" {
+			return fmt.Errorf("%w: empty feature", ErrUnsupportedRequiredFeature)
+		}
+		if _, dup := seen[feature]; dup {
+			continue
+		}
+		seen[feature] = struct{}{}
+		switch feature {
+		case RequiredFeatureCommandWALV1:
+			// Known by this binary, but DB open still fails closed until the
+			// execution/recovery path is enabled by later command-WAL PRs.
+		default:
+			return fmt.Errorf("%w: %s", ErrUnsupportedRequiredFeature, raw)
+		}
+	}
 	return nil
 }
