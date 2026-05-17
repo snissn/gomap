@@ -54,6 +54,45 @@ func TestColumnVectorGraphRejectsStaleInvNorm(t *testing.T) {
 	}
 }
 
+func TestColumnVectorGraphRejectsLooseTinyInvNorm(t *testing.T) {
+	_, err := NewColumnVectorGraphFromColumns(ColumnVectorGraphColumns{
+		DocumentIDs:     [][]byte{[]byte("doc-large")},
+		Vectors:         []float32{1e7},
+		InvNorms:        []float32{1e-8},
+		NeighborOffsets: []uint32{0, 0},
+		Dimensions:      1,
+		EntryPoint:      0,
+	})
+	if err == nil {
+		t.Fatal("NewColumnVectorGraphFromColumns succeeded with materially wrong tiny inverse norm")
+	}
+	if !strings.Contains(err.Error(), "inverse norm") {
+		t.Fatalf("error=%q want inverse norm validation", err)
+	}
+}
+
+func TestColumnVectorGraphZeroValueRows(t *testing.T) {
+	var graph ColumnVectorGraph
+	if got := graph.Rows(); got != 0 {
+		t.Fatalf("zero-value Rows()=%d want 0", got)
+	}
+}
+
+func TestColumnVectorGraphRejectsUnrepresentableQueryInvNorm(t *testing.T) {
+	graph, err := NewColumnVectorGraphFromColumns(columnVectorGraphTestColumns(4, 4, 2, false))
+	if err != nil {
+		t.Fatalf("NewColumnVectorGraphFromColumns: %v", err)
+	}
+	query := []float32{math.SmallestNonzeroFloat32, 0, 0, 0}
+	_, _, err = graph.SearchCosine(query, ColumnVectorGraphSearchOptions{TopK: 1}, &ColumnVectorGraphSearchScratch{})
+	if err == nil {
+		t.Fatal("SearchCosine succeeded with unrepresentable query inverse norm")
+	}
+	if !strings.Contains(err.Error(), "inverse norm") {
+		t.Fatalf("error=%q want inverse norm validation", err)
+	}
+}
+
 func TestColumnVectorGraphSearchAllocs(t *testing.T) {
 	graph, err := NewColumnVectorGraphFromColumns(columnVectorGraphTestColumns(1024, 64, 16, false))
 	if err != nil {

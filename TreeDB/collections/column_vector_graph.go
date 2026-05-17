@@ -94,7 +94,7 @@ func NewColumnVectorGraphFromColumns(columns ColumnVectorGraphColumns) (*ColumnV
 
 // Rows returns the number of graph rows.
 func (g *ColumnVectorGraph) Rows() int {
-	if g == nil {
+	if g == nil || len(g.idOffsets) == 0 {
 		return 0
 	}
 	return len(g.idOffsets) - 1
@@ -168,7 +168,11 @@ func (g *ColumnVectorGraph) SearchCosine(query []float32, opts ColumnVectorGraph
 	}
 	efSearch := g.normalizeEfSearch(opts.EfSearch, opts.TopK)
 	trace.EfSearch = efSearch
-	queryInvNorm := float32(1 / math.Sqrt(queryNormSquared))
+	queryInvNorm64 := 1 / math.Sqrt(queryNormSquared)
+	if math.IsNaN(queryInvNorm64) || math.IsInf(queryInvNorm64, 0) || queryInvNorm64 > math.MaxFloat32 {
+		return nil, trace, errors.New("collections: cosine column vector graph query inverse norm is not representable")
+	}
+	queryInvNorm := float32(queryInvNorm64)
 	candidates, edgesVisited, candidatesExamined := g.searchCandidates(query, queryInvNorm, efSearch, &scratch.graph)
 	trace.CandidatesExamined = candidatesExamined
 	trace.CandidatesAfterTombstone = len(candidates)
@@ -267,7 +271,7 @@ func validateColumnVectorGraphInvNorm(row int, invNorm float32, normSquared floa
 	}
 	want := 1 / math.Sqrt(normSquared)
 	diff := math.Abs(f - want)
-	allowed := math.Max(1e-5, math.Abs(want)*1e-4)
+	allowed := math.Max(1e-12, math.Abs(want)*1e-4)
 	if diff > allowed {
 		return fmt.Errorf("collections: column vector graph row %d inverse norm=%g want %g", row, invNorm, want)
 	}
