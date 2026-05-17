@@ -130,6 +130,38 @@ func TestTCS1ColumnPartAssetRoundTripsThroughSegmentStoreAfterReopen(t *testing.
 	}
 }
 
+func TestSegmentColumnAssetStoreSyncsNewSegmentDirectoryEntry(t *testing.T) {
+	dir := t.TempDir()
+	store, err := OpenSegmentColumnAssetStore(dir)
+	if err != nil {
+		t.Fatalf("OpenSegmentColumnAssetStore: %v", err)
+	}
+	if !store.dirSyncRequired {
+		t.Fatal("new segment store did not require directory sync")
+	}
+	if _, err := store.Put(ColumnAssetKindTCS1PartImage, []byte("payload")); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if err := store.Sync(); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	if store.dirSyncRequired {
+		t.Fatal("segment store still requires directory sync after Sync")
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopened, err := OpenSegmentColumnAssetStore(dir)
+	if err != nil {
+		t.Fatalf("reopen segment store: %v", err)
+	}
+	defer reopened.Close()
+	if reopened.dirSyncRequired {
+		t.Fatal("existing segment file should not require directory sync on reopen")
+	}
+}
+
 func TestSegmentColumnAssetStoreRejectsOutOfRangeRefBeforeAllocation(t *testing.T) {
 	store, err := OpenSegmentColumnAssetStore(t.TempDir())
 	if err != nil {

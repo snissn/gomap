@@ -1,12 +1,14 @@
 package colgranule
 
 import (
+	"errors"
 	"fmt"
 	"hash/crc32"
 	"io"
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 )
 
@@ -173,12 +175,13 @@ func (s *MemoryColumnAssetStore) Verify(ref ColumnAssetRef) error {
 }
 
 type SegmentColumnAssetStore struct {
-	mu     sync.Mutex
-	dir    string
-	path   string
-	file   *os.File
-	fileID uint32
-	size   int64
+	mu              sync.Mutex
+	dir             string
+	path            string
+	file            *os.File
+	fileID          uint32
+	size            int64
+	dirSyncRequired bool
 }
 
 func OpenSegmentColumnAssetStore(dir string) (*SegmentColumnAssetStore, error) {
@@ -189,6 +192,11 @@ func OpenSegmentColumnAssetStore(dir string) (*SegmentColumnAssetStore, error) {
 		return nil, err
 	}
 	path := filepath.Join(dir, "column-assets-000001.seg")
+	_, statErr := os.Stat(path)
+	created := errors.Is(statErr, os.ErrNotExist)
+	if statErr != nil && !created {
+		return nil, statErr
+	}
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {
 		return nil, err
@@ -199,11 +207,12 @@ func OpenSegmentColumnAssetStore(dir string) (*SegmentColumnAssetStore, error) {
 		return nil, err
 	}
 	return &SegmentColumnAssetStore{
-		dir:    dir,
-		path:   path,
-		file:   file,
-		fileID: 1,
-		size:   info.Size(),
+		dir:             dir,
+		path:            path,
+		file:            file,
+		fileID:          1,
+		size:            info.Size(),
+		dirSyncRequired: created,
 	}, nil
 }
 
@@ -230,7 +239,31 @@ func (s *SegmentColumnAssetStore) Sync() error {
 	if s.file == nil {
 		return fmt.Errorf("colgranule: closed segment asset store")
 	}
-	return s.file.Sync()
+	if err := s.file.Sync(); err != nil {
+		return err
+	}
+	if s.dirSyncRequired {
+		if err := syncColumnAssetDirectory(s.dir); err != nil {
+			return err
+		}
+		s.dirSyncRequired = false
+	}
+	return nil
+}
+
+func syncColumnAssetDirectory(dir string) error {
+	if dir == "" {
+		return fmt.Errorf("colgranule: empty segment asset dir")
+	}
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+	file, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	return file.Sync()
 }
 
 func (s *SegmentColumnAssetStore) Path() string {
