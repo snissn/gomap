@@ -279,6 +279,9 @@ func BuildColumnPublishPlan(input ColumnPublishPlanInput) (ColumnPublishPlan, er
 	if err := validateColumnPublishDurabilityClosure(closure); err != nil {
 		return ColumnPublishPlan{}, err
 	}
+	if err := validateColumnPublishClosureMatchesPrepared(prepared, closure); err != nil {
+		return ColumnPublishPlan{}, err
+	}
 
 	start = time.Now()
 	rootDelta, err := buildColumnPublishRootDelta(input, *cfg, manifest, closure)
@@ -582,6 +585,18 @@ func validateColumnPublishDurabilityClosure(closure ColumnPublishDurabilityClosu
 	for _, asset := range closure.PreparedAssets {
 		if err := validateColumnPreparedAssetForPlan(asset); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+func validateColumnPublishClosureMatchesPrepared(prepared ColumnPublishPreparedAssets, closure ColumnPublishDurabilityClosure) error {
+	if len(closure.PreparedAssets) != len(prepared.Assets) {
+		return fmt.Errorf("collections: column publish closure prepared assets=%d manifest prepared assets=%d", len(closure.PreparedAssets), len(prepared.Assets))
+	}
+	for i := range prepared.Assets {
+		if closure.PreparedAssets[i] != prepared.Assets[i] {
+			return fmt.Errorf("collections: column publish closure prepared asset %d does not match manifest prepared asset", i)
 		}
 	}
 	return nil

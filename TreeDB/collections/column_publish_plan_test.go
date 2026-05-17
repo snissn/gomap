@@ -312,6 +312,31 @@ func TestColumnPublishPlanRejectsUnsupportedAssetKindM10A(t *testing.T) {
 	}
 }
 
+func TestColumnPublishPlanRejectsClosurePreparedAssetMismatchM10A(t *testing.T) {
+	asset := testColumnPublishPreparedAssetM10A()
+	closureAsset := asset
+	closureAsset.Ref.Offset += int64(asset.Bytes)
+	identity := ColumnManifestIdentity{Generation: 7, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0xfeedbeef}
+	input := testColumnPublishPlanInputM10A(identity, asset)
+	input.Hooks.ValidateClosure = func(ColumnPublishClosureValidationInput) (ColumnPublishDurabilityClosure, error) {
+		return ColumnPublishDurabilityClosure{
+			PreparedAssets: []ColumnPreparedAsset{closureAsset},
+			RequiredAssets: 1,
+			RequiredBytes:  closureAsset.Bytes,
+			FlushRequired:  true,
+			SyncRequired:   true,
+		}, nil
+	}
+
+	plan, err := BuildColumnPublishPlan(input)
+	if err == nil || !strings.Contains(err.Error(), "does not match manifest prepared asset") {
+		t.Fatalf("BuildColumnPublishPlan err=%v want closure prepared asset mismatch", err)
+	}
+	if plan.Enabled {
+		t.Fatalf("mismatched closure prepared asset returned enabled plan: %+v", plan)
+	}
+}
+
 func TestColumnManifestPublishSystemDeltaUpdatesRootAndMetadataTogetherM10A(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
