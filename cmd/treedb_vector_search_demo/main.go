@@ -430,6 +430,8 @@ func execute(ctx context.Context, cfg config) (result, error) {
 	if err := d.Close(); err != nil {
 		return result{}, err
 	}
+	d = nil
+	runtime.GC()
 
 	reopenStart := time.Now()
 	d, err = backenddb.Open(backenddb.Options{Dir: dir})
