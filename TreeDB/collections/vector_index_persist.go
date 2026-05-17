@@ -1205,14 +1205,15 @@ func vectorIndexOptionName(opts VectorIndexOptions) string {
 
 func vectorIndexOptionsFromDefinition(def VectorIndexDefinition) VectorIndexOptions {
 	return VectorIndexOptions{
-		Name:           def.Name,
-		Field:          def.Field,
-		Metric:         def.Metric,
-		Dimensions:     def.Dimensions,
-		M:              def.M,
-		EfConstruction: def.EfConstruction,
-		EfSearch:       def.EfSearch,
-		Encoding:       def.Encoding,
+		Name:             def.Name,
+		Field:            def.Field,
+		Metric:           def.Metric,
+		Dimensions:       def.Dimensions,
+		M:                def.M,
+		EfConstruction:   def.EfConstruction,
+		EfSearch:         def.EfSearch,
+		Encoding:         def.Encoding,
+		schemaGeneration: def.SchemaGeneration,
 	}
 }
 
@@ -1228,6 +1229,9 @@ func (idx *VectorIndex) validateNativeSnapshotDefinition(def VectorIndexDefiniti
 	}
 	if def.Encoding != idx.encoding {
 		return "encoding_mismatch"
+	}
+	if def.SchemaGeneration != idx.schemaGeneration {
+		return "schema_generation_mismatch"
 	}
 	if def.Dimensions != idx.dimensions {
 		return "dimension_mismatch"
