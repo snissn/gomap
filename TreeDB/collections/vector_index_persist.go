@@ -104,7 +104,15 @@ func (idx *VectorIndex) SaveNativeSnapshot() (VectorIndexLoadStatus, error) {
 
 func staleNativeSnapshotSaveStatus(c *Collection, idx *VectorIndex) (VectorIndexLoadStatus, bool) {
 	status := VectorIndexLoadStatus{}
-	if c == nil || idx == nil || c.isRegisteredVectorIndex(idx) {
+	if c == nil || idx == nil {
+		return status, false
+	}
+	if c.isRegisteredVectorIndex(idx) {
+		stale, err := c.registeredVectorIndexNativeRuntimeIsStale(idx)
+		if err == nil && stale {
+			status.ExactFallbackReason = vectorIndexFallbackStaleRuntimeIndex
+			return status, true
+		}
 		return status, false
 	}
 	if idx.isNativePersistent() || collectionMetaDeclaresVectorIndex(c.meta, idx.name) {
