@@ -15,19 +15,98 @@ const (
 	columnWorkspaceManifestFile    = "column-workspace-manifest.json"
 	columnWorkspaceManifestMagic   = "TCWS1"
 	columnWorkspaceManifestVersion = 1
+	columnWorkspacePreparedFile    = "column-prepared-assets.json"
+	columnWorkspacePreparedMagic   = "TCPR1"
+	columnWorkspacePreparedVersion = 1
+
+	columnWorkspaceManifestDirName   = "manifests"
+	columnWorkspaceAssetsDirName     = "assets"
+	columnWorkspaceSegmentsDirName   = "segments"
+	columnWorkspaceIndexesDirName    = "indexes"
+	columnWorkspacePreparedDirName   = "prepared"
+	columnWorkspaceQuarantineDirName = "quarantine"
+	columnWorkspaceTmpDirName        = "tmp"
 )
 
 type ColumnWorkspaceOptions struct {
-	Collection string
+	Collection     string
+	ValidationMode ColumnWorkspaceValidationMode
+}
+
+type ColumnWorkspaceValidationMode string
+
+const (
+	ColumnWorkspaceValidateFullImage  ColumnWorkspaceValidationMode = "full_image"
+	ColumnWorkspaceValidateTCS1Header ColumnWorkspaceValidationMode = "tcs1_header"
+)
+
+type ColumnWorkspaceNamespace struct {
+	RootDir       string `json:"root_dir"`
+	ManifestDir   string `json:"manifest_dir"`
+	AssetDir      string `json:"asset_dir"`
+	SegmentDir    string `json:"segment_dir"`
+	IndexDir      string `json:"index_dir"`
+	PreparedDir   string `json:"prepared_dir"`
+	QuarantineDir string `json:"quarantine_dir"`
+	TempDir       string `json:"temp_dir"`
+}
+
+func ColumnWorkspaceNamespaceForDir(dir string) ColumnWorkspaceNamespace {
+	assetDir := filepath.Join(dir, columnWorkspaceAssetsDirName)
+	return ColumnWorkspaceNamespace{
+		RootDir:       dir,
+		ManifestDir:   filepath.Join(dir, columnWorkspaceManifestDirName),
+		AssetDir:      assetDir,
+		SegmentDir:    filepath.Join(assetDir, columnWorkspaceSegmentsDirName),
+		IndexDir:      filepath.Join(assetDir, columnWorkspaceIndexesDirName),
+		PreparedDir:   filepath.Join(dir, columnWorkspacePreparedDirName),
+		QuarantineDir: filepath.Join(dir, columnWorkspaceQuarantineDirName),
+		TempDir:       filepath.Join(dir, columnWorkspaceTmpDirName),
+	}
+}
+
+func ensureColumnWorkspaceNamespace(namespace ColumnWorkspaceNamespace) error {
+	dirs := []string{
+		namespace.RootDir,
+		namespace.ManifestDir,
+		namespace.AssetDir,
+		namespace.SegmentDir,
+		namespace.IndexDir,
+		namespace.PreparedDir,
+		namespace.QuarantineDir,
+		namespace.TempDir,
+	}
+	for _, dir := range dirs {
+		if dir == "" {
+			return fmt.Errorf("colgranule: empty column workspace namespace dir")
+		}
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func normalizeColumnWorkspaceOptions(opts ColumnWorkspaceOptions) (ColumnWorkspaceOptions, error) {
+	switch opts.ValidationMode {
+	case "":
+		opts.ValidationMode = ColumnWorkspaceValidateFullImage
+	case ColumnWorkspaceValidateFullImage, ColumnWorkspaceValidateTCS1Header:
+	default:
+		return ColumnWorkspaceOptions{}, fmt.Errorf("colgranule: unsupported workspace validation mode %s", opts.ValidationMode)
+	}
+	return opts, nil
 }
 
 type ColumnWorkspace struct {
-	dir       string
-	assets    *SegmentColumnAssetStore
-	manifest  ColumnWorkspaceManifest
-	partByID  map[uint64]int
-	cacheSeen map[string]struct{}
-	cache     ColumnWorkspaceCacheStats
+	dir            string
+	namespace      ColumnWorkspaceNamespace
+	assets         *ColumnAssetManager
+	manifest       ColumnWorkspaceManifest
+	validationMode ColumnWorkspaceValidationMode
+	partByID       map[uint64]int
+	cacheSeen      map[string]struct{}
+	cache          ColumnWorkspaceCacheStats
 }
 
 type ColumnWorkspaceManifest struct {
@@ -41,19 +120,39 @@ type ColumnWorkspaceManifest struct {
 	Parts       []ColumnWorkspacePartManifest `json:"parts,omitempty"`
 }
 
+type ColumnPreparedAssetRegistry struct {
+	Magic        string                `json:"magic"`
+	Version      uint16                `json:"version"`
+	Collection   string                `json:"collection,omitempty"`
+	PublishID    uint64                `json:"publish_id"`
+	GenerationID uint64                `json:"generation_id"`
+	UpdatedUnix  int64                 `json:"updated_unix_nano"`
+	Assets       []ColumnPreparedAsset `json:"assets,omitempty"`
+}
+
 type ColumnWorkspacePartManifest struct {
-	PartID        uint64          `json:"part_id"`
-	Rows          int             `json:"rows"`
-	VisibleRows   int             `json:"visible_rows"`
-	SchemaVersion uint32          `json:"schema_version"`
-	SortKey       []SortKeyColumn `json:"sort_key,omitempty"`
-	AssetRef      ColumnAssetRef  `json:"asset_ref"`
-	TCS1          TCS1PartRecord  `json:"tcs1"`
-	ImageBytes    int             `json:"image_bytes"`
-	ManifestBytes int             `json:"manifest_bytes"`
-	Sections      int             `json:"sections"`
-	AssetBytes    int             `json:"asset_bytes"`
-	PublishedUnix int64           `json:"published_unix_nano"`
+	PartID        uint64                      `json:"part_id"`
+	Rows          int                         `json:"rows"`
+	VisibleRows   int                         `json:"visible_rows"`
+	SchemaVersion uint32                      `json:"schema_version"`
+	SortKey       []SortKeyColumn             `json:"sort_key,omitempty"`
+	Coverage      ColumnWorkspacePartCoverage `json:"coverage"`
+	AssetRef      ColumnAssetRef              `json:"asset_ref"`
+	TCS1          TCS1PartRecord              `json:"tcs1"`
+	ImageBytes    int                         `json:"image_bytes"`
+	ManifestBytes int                         `json:"manifest_bytes"`
+	Sections      int                         `json:"sections"`
+	AssetBytes    int                         `json:"asset_bytes"`
+	PublishedUnix int64                       `json:"published_unix_nano"`
+}
+
+type ColumnWorkspacePartCoverage struct {
+	PrimaryIDLower          int64    `json:"primary_id_lower"`
+	PrimaryIDUpperExclusive int64    `json:"primary_id_upper_exclusive"`
+	SortKeyColumns          []string `json:"sort_key_columns,omitempty"`
+	SortKeyLower            []int64  `json:"sort_key_lower,omitempty"`
+	SortKeyUpperExclusive   []int64  `json:"sort_key_upper_exclusive,omitempty"`
+	SortKeyUpperUnbounded   bool     `json:"sort_key_upper_unbounded,omitempty"`
 }
 
 type columnWorkspaceManifestEnvelope struct {
@@ -61,6 +160,27 @@ type columnWorkspaceManifestEnvelope struct {
 	Version  uint16                  `json:"version"`
 	Checksum uint32                  `json:"checksum"`
 	Manifest ColumnWorkspaceManifest `json:"manifest"`
+}
+
+type columnPreparedAssetRegistryEnvelope struct {
+	Magic    string                      `json:"magic"`
+	Version  uint16                      `json:"version"`
+	Checksum uint32                      `json:"checksum"`
+	Registry ColumnPreparedAssetRegistry `json:"registry"`
+}
+
+type ColumnWorkspaceNamespaceInventory struct {
+	SegmentFiles            []ColumnWorkspaceSegmentFile `json:"segment_files"`
+	PreparedRegistryPresent bool                         `json:"prepared_registry_present"`
+	PreparedAssets          []ColumnPreparedAsset        `json:"prepared_assets,omitempty"`
+	OrphanPreparedAssets    []ColumnPreparedAsset        `json:"orphan_prepared_assets,omitempty"`
+	ReferencedAssets        int                          `json:"referenced_assets"`
+}
+
+type ColumnWorkspaceSegmentFile struct {
+	FileID uint32 `json:"file_id"`
+	Path   string `json:"path"`
+	Bytes  int64  `json:"bytes"`
 }
 
 type ColumnWorkspaceLoadResult struct {
@@ -87,21 +207,36 @@ func OpenColumnWorkspace(dir string, opts ColumnWorkspaceOptions) (*ColumnWorksp
 	if dir == "" {
 		return nil, fmt.Errorf("colgranule: empty column workspace dir")
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return nil, err
-	}
-	assets, err := OpenSegmentColumnAssetStore(filepath.Join(dir, "assets"))
+	normalized, err := normalizeColumnWorkspaceOptions(opts)
 	if err != nil {
 		return nil, err
 	}
-	w := &ColumnWorkspace{
-		dir:       dir,
-		assets:    assets,
-		partByID:  make(map[uint64]int),
-		cacheSeen: make(map[string]struct{}),
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, err
 	}
-	if err := w.loadOrInitManifest(opts); err != nil {
+	namespace := ColumnWorkspaceNamespaceForDir(dir)
+	if err := ensureColumnWorkspaceNamespace(namespace); err != nil {
+		return nil, err
+	}
+	assets, err := OpenSegmentColumnAssetStore(namespace.SegmentDir)
+	if err != nil {
+		return nil, err
+	}
+	assetManager, err := NewColumnAssetManager(assets)
+	if err != nil {
 		_ = assets.Close()
+		return nil, err
+	}
+	w := &ColumnWorkspace{
+		dir:            dir,
+		namespace:      namespace,
+		assets:         assetManager,
+		validationMode: normalized.ValidationMode,
+		partByID:       make(map[uint64]int),
+		cacheSeen:      make(map[string]struct{}),
+	}
+	if err := w.loadOrInitManifest(normalized); err != nil {
+		_ = assetManager.Close()
 		return nil, err
 	}
 	return w, nil
@@ -126,6 +261,13 @@ func (w *ColumnWorkspace) Dir() string {
 	return w.dir
 }
 
+func (w *ColumnWorkspace) Namespace() ColumnWorkspaceNamespace {
+	if w == nil {
+		return ColumnWorkspaceNamespace{}
+	}
+	return w.namespace
+}
+
 func (w *ColumnWorkspace) Manifest() ColumnWorkspaceManifest {
 	if w == nil {
 		return ColumnWorkspaceManifest{}
@@ -134,6 +276,7 @@ func (w *ColumnWorkspace) Manifest() ColumnWorkspaceManifest {
 	out.Parts = append([]ColumnWorkspacePartManifest(nil), w.manifest.Parts...)
 	for i := range out.Parts {
 		out.Parts[i].SortKey = append([]SortKeyColumn(nil), out.Parts[i].SortKey...)
+		out.Parts[i].Coverage = cloneColumnWorkspacePartCoverage(out.Parts[i].Coverage)
 	}
 	return out
 }
@@ -160,12 +303,17 @@ func (w *ColumnWorkspace) PublishPart(part *ColumnPart, dictionaries map[string]
 	if err != nil {
 		return ColumnWorkspacePartManifest{}, err
 	}
+	coverage, err := columnWorkspacePartCoverageFromPart(part)
+	if err != nil {
+		return ColumnWorkspacePartManifest{}, err
+	}
 	entry := ColumnWorkspacePartManifest{
 		PartID:        part.Descriptor.PartID,
 		Rows:          part.Descriptor.RowCount,
 		VisibleRows:   part.Descriptor.VisibleRowCount,
 		SchemaVersion: part.Descriptor.SchemaVersion,
 		SortKey:       append([]SortKeyColumn(nil), part.Descriptor.SortKey...),
+		Coverage:      coverage,
 		AssetRef:      ref,
 		TCS1:          record,
 		ImageBytes:    image.TotalBytes(),
@@ -273,7 +421,7 @@ func (w *ColumnWorkspace) saveManifest() error {
 	if err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(w.dir, ".column-workspace-manifest-*.tmp")
+	tmp, err := os.CreateTemp(w.namespace.TempDir, ".column-workspace-manifest-*.tmp")
 	if err != nil {
 		return err
 	}
@@ -299,11 +447,163 @@ func (w *ColumnWorkspace) saveManifest() error {
 	return nil
 }
 
+func (w *ColumnWorkspace) SavePreparedAssetRegistry(publishID uint64, generationID uint64, assets []ColumnPreparedAsset) error {
+	if w == nil {
+		return fmt.Errorf("colgranule: nil column workspace")
+	}
+	registry := ColumnPreparedAssetRegistry{
+		Magic:        columnWorkspacePreparedMagic,
+		Version:      columnWorkspacePreparedVersion,
+		Collection:   w.manifest.Collection,
+		PublishID:    publishID,
+		GenerationID: generationID,
+		UpdatedUnix:  time.Now().UnixNano(),
+		Assets:       cloneColumnPreparedAssets(assets),
+	}
+	if err := validateColumnPreparedAssetRegistry(registry); err != nil {
+		return err
+	}
+	payload, err := encodeColumnPreparedAssetRegistryEnvelope(registry)
+	if err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(w.namespace.TempDir, ".column-prepared-assets-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	if _, err = tmp.Write(payload); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err = tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err = tmp.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err = os.Rename(tmpPath, w.preparedRegistryPath()); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	return nil
+}
+
+func (w *ColumnWorkspace) LoadPreparedAssetRegistry() (ColumnPreparedAssetRegistry, error) {
+	if w == nil {
+		return ColumnPreparedAssetRegistry{}, fmt.Errorf("colgranule: nil column workspace")
+	}
+	data, err := os.ReadFile(w.preparedRegistryPath())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return ColumnPreparedAssetRegistry{
+				Magic:      columnWorkspacePreparedMagic,
+				Version:    columnWorkspacePreparedVersion,
+				Collection: w.manifest.Collection,
+			}, nil
+		}
+		return ColumnPreparedAssetRegistry{}, err
+	}
+	registry, err := decodeColumnPreparedAssetRegistryEnvelope(data)
+	if err != nil {
+		return ColumnPreparedAssetRegistry{}, err
+	}
+	if w.manifest.Collection != "" && registry.Collection != "" && registry.Collection != w.manifest.Collection {
+		return ColumnPreparedAssetRegistry{}, fmt.Errorf("colgranule: prepared registry collection=%q want %q", registry.Collection, w.manifest.Collection)
+	}
+	return registry, nil
+}
+
+func (w *ColumnWorkspace) ClearPreparedAssetRegistry() error {
+	if w == nil {
+		return fmt.Errorf("colgranule: nil column workspace")
+	}
+	err := os.Remove(w.preparedRegistryPath())
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
+func (w *ColumnWorkspace) InventoryNamespace(manifests ...ColumnCollectionManifest) (ColumnWorkspaceNamespaceInventory, error) {
+	if w == nil {
+		return ColumnWorkspaceNamespaceInventory{}, fmt.Errorf("colgranule: nil column workspace")
+	}
+	inventory := ColumnWorkspaceNamespaceInventory{}
+	entries, err := os.ReadDir(w.namespace.SegmentDir)
+	if err != nil {
+		return ColumnWorkspaceNamespaceInventory{}, err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		fileID, ok := columnWorkspaceSegmentFileID(entry.Name())
+		if !ok {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return ColumnWorkspaceNamespaceInventory{}, err
+		}
+		inventory.SegmentFiles = append(inventory.SegmentFiles, ColumnWorkspaceSegmentFile{
+			FileID: fileID,
+			Path:   filepath.Join(w.namespace.SegmentDir, entry.Name()),
+			Bytes:  info.Size(),
+		})
+	}
+	sort.Slice(inventory.SegmentFiles, func(i, j int) bool {
+		return inventory.SegmentFiles[i].FileID < inventory.SegmentFiles[j].FileID
+	})
+	registryPath := w.preparedRegistryPath()
+	if _, err := os.Stat(registryPath); err == nil {
+		inventory.PreparedRegistryPresent = true
+	} else if !os.IsNotExist(err) {
+		return ColumnWorkspaceNamespaceInventory{}, err
+	}
+	registry, err := w.LoadPreparedAssetRegistry()
+	if err != nil {
+		return ColumnWorkspaceNamespaceInventory{}, err
+	}
+	inventory.PreparedAssets = cloneColumnPreparedAssets(registry.Assets)
+	referenced := make(map[ColumnAssetRef]struct{})
+	for _, part := range w.manifest.Parts {
+		referenced[part.AssetRef] = struct{}{}
+	}
+	for _, manifest := range manifests {
+		refs, err := ColumnCollectionManifestAssetRefs(manifest)
+		if err != nil {
+			return ColumnWorkspaceNamespaceInventory{}, err
+		}
+		for _, ref := range refs {
+			referenced[ref.Ref] = struct{}{}
+		}
+	}
+	inventory.ReferencedAssets = len(referenced)
+	for _, prepared := range registry.Assets {
+		if _, ok := referenced[prepared.Ref]; !ok {
+			inventory.OrphanPreparedAssets = append(inventory.OrphanPreparedAssets, prepared)
+		}
+	}
+	return inventory, nil
+}
+
 func (w *ColumnWorkspace) manifestPath() string {
 	if w == nil {
 		return ""
 	}
-	return filepath.Join(w.dir, columnWorkspaceManifestFile)
+	return filepath.Join(w.namespace.ManifestDir, columnWorkspaceManifestFile)
+}
+
+func (w *ColumnWorkspace) preparedRegistryPath() string {
+	if w == nil {
+		return ""
+	}
+	return filepath.Join(w.namespace.PreparedDir, columnWorkspacePreparedFile)
 }
 
 func (w *ColumnWorkspace) rebuildPartIndex() {
@@ -315,12 +615,23 @@ func (w *ColumnWorkspace) rebuildPartIndex() {
 
 func (w *ColumnWorkspace) validateManifestAssets() error {
 	for _, entry := range w.manifest.Parts {
-		image, record, err := LoadTCS1ColumnPartImage(w.assets, entry.AssetRef)
-		if err != nil {
-			return fmt.Errorf("colgranule: validate workspace part %d asset: %w", entry.PartID, err)
-		}
-		if err := validateColumnWorkspacePartImage(entry, record, image); err != nil {
-			return err
+		switch w.validationMode {
+		case ColumnWorkspaceValidateTCS1Header:
+			record, err := LoadTCS1ColumnPartHeader(w.assets, entry.AssetRef)
+			if err != nil {
+				return fmt.Errorf("colgranule: validate workspace part %d asset header: %w", entry.PartID, err)
+			}
+			if err := validateColumnWorkspacePartHeader(entry, record); err != nil {
+				return err
+			}
+		default:
+			image, record, err := LoadTCS1ColumnPartImage(w.assets, entry.AssetRef)
+			if err != nil {
+				return fmt.Errorf("colgranule: validate workspace part %d asset: %w", entry.PartID, err)
+			}
+			if err := validateColumnWorkspacePartImage(entry, record, image); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -390,6 +701,92 @@ func decodeColumnWorkspaceManifestEnvelope(data []byte) (columnWorkspaceManifest
 	return env, nil
 }
 
+func encodeColumnPreparedAssetRegistryEnvelope(registry ColumnPreparedAssetRegistry) ([]byte, error) {
+	if err := validateColumnPreparedAssetRegistry(registry); err != nil {
+		return nil, err
+	}
+	registryBytes, err := json.Marshal(registry)
+	if err != nil {
+		return nil, err
+	}
+	env := columnPreparedAssetRegistryEnvelope{
+		Magic:    columnWorkspacePreparedMagic,
+		Version:  columnWorkspacePreparedVersion,
+		Checksum: crc32.ChecksumIEEE(registryBytes),
+		Registry: registry,
+	}
+	return json.MarshalIndent(env, "", "  ")
+}
+
+func decodeColumnPreparedAssetRegistryEnvelope(data []byte) (ColumnPreparedAssetRegistry, error) {
+	var env columnPreparedAssetRegistryEnvelope
+	if err := json.Unmarshal(data, &env); err != nil {
+		return ColumnPreparedAssetRegistry{}, err
+	}
+	if env.Magic != columnWorkspacePreparedMagic {
+		return ColumnPreparedAssetRegistry{}, fmt.Errorf("colgranule: invalid prepared registry magic %q", env.Magic)
+	}
+	if env.Version != columnWorkspacePreparedVersion {
+		return ColumnPreparedAssetRegistry{}, fmt.Errorf("colgranule: unsupported prepared registry version %d", env.Version)
+	}
+	registryBytes, err := json.Marshal(env.Registry)
+	if err != nil {
+		return ColumnPreparedAssetRegistry{}, err
+	}
+	if checksum := crc32.ChecksumIEEE(registryBytes); checksum != env.Checksum {
+		return ColumnPreparedAssetRegistry{}, fmt.Errorf("colgranule: prepared registry checksum=%08x want %08x", checksum, env.Checksum)
+	}
+	if err := validateColumnPreparedAssetRegistry(env.Registry); err != nil {
+		return ColumnPreparedAssetRegistry{}, err
+	}
+	return env.Registry, nil
+}
+
+func validateColumnPreparedAssetRegistry(registry ColumnPreparedAssetRegistry) error {
+	if registry.Magic != columnWorkspacePreparedMagic {
+		return fmt.Errorf("colgranule: invalid prepared registry magic %q", registry.Magic)
+	}
+	if registry.Version != columnWorkspacePreparedVersion {
+		return fmt.Errorf("colgranule: unsupported prepared registry version %d", registry.Version)
+	}
+	if len(registry.Assets) == 0 {
+		return nil
+	}
+	seen := make(map[ColumnAssetRef]struct{}, len(registry.Assets))
+	for _, asset := range registry.Assets {
+		if err := validateColumnAssetRef(asset.Ref); err != nil {
+			return fmt.Errorf("colgranule: invalid prepared asset ref: %w", err)
+		}
+		if asset.Bytes < 0 {
+			return fmt.Errorf("colgranule: negative prepared asset bytes %d", asset.Bytes)
+		}
+		if asset.Bytes == 0 && asset.Ref.Length > int64(^uint(0)>>1) {
+			return fmt.Errorf("colgranule: prepared asset length=%d exceeds host int", asset.Ref.Length)
+		}
+		if _, ok := seen[asset.Ref]; ok {
+			return fmt.Errorf("colgranule: duplicate prepared asset ref %+v", asset.Ref)
+		}
+		seen[asset.Ref] = struct{}{}
+	}
+	return nil
+}
+
+func cloneColumnPreparedAssets(assets []ColumnPreparedAsset) []ColumnPreparedAsset {
+	return append([]ColumnPreparedAsset(nil), assets...)
+}
+
+func columnWorkspaceSegmentFileID(name string) (uint32, bool) {
+	var fileID uint32
+	var suffix string
+	if _, err := fmt.Sscanf(name, "column-assets-%06d%s", &fileID, &suffix); err != nil {
+		return 0, false
+	}
+	if suffix != ".seg" || fileID == 0 {
+		return 0, false
+	}
+	return fileID, true
+}
+
 func validateColumnWorkspaceManifest(manifest ColumnWorkspaceManifest) error {
 	if manifest.Magic != columnWorkspaceManifestMagic {
 		return fmt.Errorf("colgranule: invalid workspace manifest magic %q", manifest.Magic)
@@ -420,6 +817,9 @@ func validateColumnWorkspacePartManifest(part ColumnWorkspacePartManifest) error
 	if part.SchemaVersion == 0 {
 		return fmt.Errorf("colgranule: workspace part %d missing schema version", part.PartID)
 	}
+	if err := validateColumnWorkspacePartCoverage(part); err != nil {
+		return err
+	}
 	if err := validateColumnAssetRef(part.AssetRef); err != nil {
 		return fmt.Errorf("colgranule: workspace part %d invalid asset ref: %w", part.PartID, err)
 	}
@@ -444,6 +844,43 @@ func validateColumnWorkspacePartManifest(part ColumnWorkspacePartManifest) error
 	return nil
 }
 
+func validateColumnWorkspacePartCoverage(part ColumnWorkspacePartManifest) error {
+	if len(part.Coverage.SortKeyColumns) == 0 && len(part.Coverage.SortKeyLower) == 0 && len(part.Coverage.SortKeyUpperExclusive) == 0 && part.Coverage.PrimaryIDLower == 0 && part.Coverage.PrimaryIDUpperExclusive == 0 {
+		return nil
+	}
+	if len(part.Coverage.SortKeyColumns) != len(part.SortKey) {
+		return fmt.Errorf("colgranule: workspace part %d coverage sort key columns=%d want %d", part.PartID, len(part.Coverage.SortKeyColumns), len(part.SortKey))
+	}
+	for i, sortKey := range part.SortKey {
+		if part.Coverage.SortKeyColumns[i] != sortKey.Column {
+			return fmt.Errorf("colgranule: workspace part %d coverage sort key column %d=%s want %s", part.PartID, i, part.Coverage.SortKeyColumns[i], sortKey.Column)
+		}
+	}
+	if len(part.Coverage.SortKeyLower) != 0 && len(part.Coverage.SortKeyLower) != len(part.SortKey) {
+		return fmt.Errorf("colgranule: workspace part %d coverage lower sort key width=%d want %d", part.PartID, len(part.Coverage.SortKeyLower), len(part.SortKey))
+	}
+	if len(part.Coverage.SortKeyUpperExclusive) != 0 && len(part.Coverage.SortKeyUpperExclusive) != len(part.SortKey) {
+		return fmt.Errorf("colgranule: workspace part %d coverage upper sort key width=%d want %d", part.PartID, len(part.Coverage.SortKeyUpperExclusive), len(part.SortKey))
+	}
+	return nil
+}
+
+func validateColumnWorkspacePartHeader(entry ColumnWorkspacePartManifest, record TCS1PartRecord) error {
+	if record.AssetRef != entry.AssetRef {
+		return fmt.Errorf("colgranule: workspace part %d header ref=%+v want %+v", entry.PartID, record.AssetRef, entry.AssetRef)
+	}
+	if record.Version != entry.TCS1.Version || record.Kind != entry.TCS1.Kind || record.Flags != entry.TCS1.Flags {
+		return fmt.Errorf("colgranule: workspace part %d header version/kind/flags=(%d,%d,%d) want (%d,%d,%d)", entry.PartID, record.Version, record.Kind, record.Flags, entry.TCS1.Version, entry.TCS1.Kind, entry.TCS1.Flags)
+	}
+	if record.PartID != entry.PartID || record.Rows != entry.Rows || record.ImageVersion != entry.TCS1.ImageVersion {
+		return fmt.Errorf("colgranule: workspace part %d header part/rows/image=(%d,%d,%d) want (%d,%d,%d)", entry.PartID, record.PartID, record.Rows, record.ImageVersion, entry.PartID, entry.Rows, entry.TCS1.ImageVersion)
+	}
+	if record.PayloadBytes != entry.ImageBytes || record.TotalBytes != entry.AssetBytes || record.PayloadCRC32 != entry.TCS1.PayloadCRC32 {
+		return fmt.Errorf("colgranule: workspace part %d header payload/total/crc=(%d,%d,%08x) want (%d,%d,%08x)", entry.PartID, record.PayloadBytes, record.TotalBytes, record.PayloadCRC32, entry.ImageBytes, entry.AssetBytes, entry.TCS1.PayloadCRC32)
+	}
+	return nil
+}
+
 func validateColumnWorkspaceLoadedPart(entry ColumnWorkspacePartManifest, record TCS1PartRecord, part *ColumnPart) error {
 	if part == nil {
 		return fmt.Errorf("colgranule: workspace part %d loaded nil part", entry.PartID)
@@ -461,6 +898,9 @@ func validateColumnWorkspaceLoadedPart(entry ColumnWorkspacePartManifest, record
 }
 
 func validateColumnWorkspacePartImage(entry ColumnWorkspacePartManifest, record TCS1PartRecord, image ColumnPartImage) error {
+	if err := validateColumnWorkspacePartHeader(entry, record); err != nil {
+		return err
+	}
 	if record.AssetRef != entry.AssetRef {
 		return fmt.Errorf("colgranule: workspace part %d asset record ref=%+v want %+v", entry.PartID, record.AssetRef, entry.AssetRef)
 	}
@@ -477,4 +917,46 @@ func validateColumnWorkspacePartImage(entry ColumnWorkspacePartManifest, record 
 		return fmt.Errorf("colgranule: workspace image shape mismatch manifest bytes/sections=(%d,%d) image=(%d,%d)", entry.ManifestBytes, entry.Sections, image.ManifestBytes, len(image.Sections))
 	}
 	return nil
+}
+
+func columnWorkspacePartCoverageFromPart(part *ColumnPart) (ColumnWorkspacePartCoverage, error) {
+	if part == nil {
+		return ColumnWorkspacePartCoverage{}, fmt.Errorf("colgranule: nil part coverage")
+	}
+	if len(part.Descriptor.Granules) == 0 {
+		return ColumnWorkspacePartCoverage{}, fmt.Errorf("colgranule: part %d has no granules for coverage", part.Descriptor.PartID)
+	}
+	if len(part.Marks) == 0 {
+		return ColumnWorkspacePartCoverage{}, fmt.Errorf("colgranule: part %d has no sort-key marks for coverage", part.Descriptor.PartID)
+	}
+	coverage := ColumnWorkspacePartCoverage{
+		PrimaryIDLower:          part.Descriptor.Granules[0].IDLower,
+		PrimaryIDUpperExclusive: part.Descriptor.Granules[0].IDUpperExclusive,
+	}
+	for _, granule := range part.Descriptor.Granules[1:] {
+		if granule.IDLower < coverage.PrimaryIDLower {
+			coverage.PrimaryIDLower = granule.IDLower
+		}
+		if granule.IDUpperExclusive > coverage.PrimaryIDUpperExclusive {
+			coverage.PrimaryIDUpperExclusive = granule.IDUpperExclusive
+		}
+	}
+	fullPrefix := len(part.Marks[0].Prefixes) - 1
+	if fullPrefix < 0 {
+		return ColumnWorkspacePartCoverage{}, fmt.Errorf("colgranule: part %d has empty sort-key mark prefix", part.Descriptor.PartID)
+	}
+	first := part.Marks[0].Prefixes[fullPrefix]
+	last := part.Marks[len(part.Marks)-1].Prefixes[fullPrefix]
+	coverage.SortKeyColumns = append([]string(nil), first.Columns...)
+	coverage.SortKeyLower = append([]int64(nil), first.Lower.Values...)
+	coverage.SortKeyUpperExclusive = append([]int64(nil), last.UpperExclusive.Values...)
+	coverage.SortKeyUpperUnbounded = last.UpperExclusive.Unbounded
+	return coverage, nil
+}
+
+func cloneColumnWorkspacePartCoverage(coverage ColumnWorkspacePartCoverage) ColumnWorkspacePartCoverage {
+	coverage.SortKeyColumns = append([]string(nil), coverage.SortKeyColumns...)
+	coverage.SortKeyLower = append([]int64(nil), coverage.SortKeyLower...)
+	coverage.SortKeyUpperExclusive = append([]int64(nil), coverage.SortKeyUpperExclusive...)
+	return coverage
 }

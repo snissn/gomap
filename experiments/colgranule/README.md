@@ -170,16 +170,66 @@ baseline.
 ## Disk Workspace, Manifests, and Multipart Parts
 
 `ColumnWorkspace` is the M3 disk-backed experiment wrapper. It stores `TCS1`
-assets in append segments, writes a checksum-protected workspace manifest, and
-validates referenced assets on reopen. It is still not a TreeDB root publication
+assets in append segments, writes checksum-protected manifests, and validates
+referenced assets on reopen. Column-lane files live under an isolated namespace:
+`manifests/` for workspace and collection manifests, `assets/segments/` for
+append-segment assets, `assets/indexes/` for future secondary column metadata,
+`prepared/` for staged publish state, `quarantine/` for suspect assets, and
+`tmp/` for atomic manifest writes. It is still not a TreeDB root publication
 path and does not claim durable-at-ack collection semantics.
 
 `ColumnCollectionManifest` is the M4 collection-lane control-plane model used by
 the experiment. It records declared columns, logical primary key, sort key,
 base parts, delta parts, tombstones, retained-payload byte accounting metadata,
-and referenced `TCS1` asset records. `ColumnPartSetReader` opens those refs from
-the workspace, builds latest-visible row state, exposes `LatestLocator`, and
-runs JSONBench q1-q5 over visible rows.
+referenced `TCS1` asset records, and compact coverage descriptors for each part
+ref. Coverage descriptors carry role, generation, compaction level, source
+parts, optional replacement-delta source row/root generation ranges, primary-id
+range, sort-key range, row counts, deleted counts, asset refs, and checksums.
+`ColumnPartSetReader` opens those refs from the workspace, builds latest-visible
+row state, exposes `LatestLocator`, and runs JSONBench q1-q5 over visible rows.
+
+M6 treats declared JSONBench paths as column-owned state and the retained row
+payload as the non-column remainder. `JSONBenchRetainedDocument` removes the
+declared paths from row JSON, `JSONBenchDeclaredColumnValuesFromPart` reads
+those values back from an image-backed column part, and
+`RestoreJSONBenchDeclaredColumns` must reconstruct the original JSON document
+under canonical JSON comparison.
+
+Column asset lifecycle planning is manifest/ref based. `ColumnAssetRef`
+reachability is computed from active manifests, pending manifests,
+snapshot-pinned manifests, superseded manifests, prepared assets, and
+quarantined assets without decoding `TCS1` payload bytes or scanning rows. A
+typed `ColumnAssetManager` facade owns the experiment refs and models the
+production pin, zombie, rewrite-debt, quarantine, and deletion gate: reclaimable
+bytes are not ready to delete until reachability, zombie marking, and pin drain
+all agree. Compaction reports both pre-publish and post-publish reachability:
+before the new manifest is published, old active assets remain protected; after
+publish, old assets are directly reclaimable only when their whole segment has
+no live refs, otherwise they are rewrite debt. Prepared publish state is recorded
+in a checksum-protected registry under `prepared/`, and namespace inventory is a
+read-only reconciliation input that joins segment files and prepared refs against
+manifest/ref state before reporting orphan candidates. Publish bookkeeping can
+also use `PlanColumnAssetRefDelta` when the changed part refs are known, keeping
+the accounting path proportional to newly published, superseded, and prepared
+refs instead of rows or unchanged manifests.
+
+`PlanColumnPartSetCompaction` is the M6 policy-report seam for future background
+selection. It reports selected/skipped parts, live bytes, stale bytes, tombstone
+debt, expected reclaim ratio, sparse-visible-row pressure, read amplification,
+aggregate-metadata invalidation, and column-asset stale-byte pressure without
+publishing a new part. The explicit `CompactColumnPartSet` helper remains the
+only experiment path that writes the replacement base asset.
+
+Reopen validation has an explicit lazy boundary. The default experiment mode
+still validates full `TCS1` images for integrity tests, while
+`ColumnWorkspaceValidateTCS1Header` validates manifest/ref/header metadata
+without reading every full image payload. Loading the part still verifies the
+payload checksum and section structure before use.
+
+Adaptive mark sizing is explicit and opt-in through `ColumnAdaptiveMarkSizing`.
+When enabled, part build estimates uncompressed declared-column bytes per row
+and chooses rows per mark from a target byte budget with min/max row clamps.
+Fixed `RowsPerGranule` remains the default path for existing gates.
 
 The multipart query gate should preserve the M2 encoded-part execution shape:
 avoid projected-row materialization for hot q1-q5 kernels, report visible,
