@@ -345,7 +345,7 @@ func validateColumnVectorGraphStorage(vectors []float32, dims int, invNorms []fl
 func validateColumnVectorGraphInvNorm(row int, invNorm float32, normSquared float64) error {
 	expected := 1 / math.Sqrt(normSquared)
 	diff := math.Abs(float64(invNorm) - expected)
-	allowed := math.Max(1e-5, math.Abs(expected)*1e-4)
+	allowed := math.Max(1e-12, math.Abs(expected)*1e-4)
 	if diff > allowed {
 		return fmt.Errorf("colgranule: graph inv-norm row=%d value=%g does not match vector norm=%g", row, invNorm, expected)
 	}
@@ -363,7 +363,11 @@ func columnVectorGraphQueryInvNorm(query []float32) (float32, error) {
 	if normSquared == 0 {
 		return 0, errors.New("colgranule: cosine column vector graph query cannot have zero magnitude")
 	}
-	return float32(1 / math.Sqrt(normSquared)), nil
+	invNorm := 1 / math.Sqrt(normSquared)
+	if math.IsNaN(invNorm) || math.IsInf(invNorm, 0) || invNorm > math.MaxFloat32 {
+		return 0, errors.New("colgranule: cosine column vector graph query inverse norm is not representable")
+	}
+	return float32(invNorm), nil
 }
 
 func columnVectorGraphFinite(value float32) bool {
