@@ -41,7 +41,8 @@ const (
 	CommandKindCollectionInsertBatchByID  CommandKind = 100
 	CommandKindCollectionDeleteBatchByID  CommandKind = 101
 	CommandKindCollectionUpdateBatchByID  CommandKind = 102
-	CommandKindCatalogMutationPlaceholder CommandKind = 200
+	CommandKindCatalogCreateCollection    CommandKind = 200
+	CommandKindCatalogMutationPlaceholder CommandKind = CommandKindCatalogCreateCollection
 )
 
 // CommandScope identifies which logical TreeDB surface a command mutates.
@@ -62,6 +63,7 @@ const (
 	PayloadFormatCollectionInsertBatchByIDV1 PayloadFormat = 3
 	PayloadFormatCollectionDeleteBatchByIDV1 PayloadFormat = 4
 	PayloadFormatCollectionUpdateBatchByIDV1 PayloadFormat = 5
+	PayloadFormatCatalogCreateCollectionV1   PayloadFormat = 6
 )
 
 // RawKVOp is a deterministic raw key/value mutation inside a RawKVBatch
@@ -107,6 +109,11 @@ type CollectionDeleteBatchByIDPayload struct {
 type CollectionUpdateBatchByIDPayload struct {
 	Collection string
 	Documents  []CollectionDocument
+}
+
+type CatalogCreateCollectionPayload struct {
+	Collection string
+	Metadata   []byte
 }
 
 type ExternalRefClass uint16
@@ -381,8 +388,8 @@ func validateCommandEnvelopeIdentity(env CommandEnvelope) error {
 		if env.Scope != CommandScopeCollection || env.PayloadFormat != PayloadFormatCollectionUpdateBatchByIDV1 {
 			return ErrCorrupt
 		}
-	case CommandKindCatalogMutationPlaceholder:
-		if env.Scope != CommandScopeCatalog || env.PayloadFormat != PayloadFormatNativeWireDeterministic {
+	case CommandKindCatalogCreateCollection:
+		if env.Scope != CommandScopeCatalog || env.PayloadFormat != PayloadFormatCatalogCreateCollectionV1 {
 			return ErrCorrupt
 		}
 	default:
@@ -403,6 +410,9 @@ func validateCommandEnvelopePayload(env CommandEnvelope) error {
 		return err
 	case CommandKindCollectionUpdateBatchByID:
 		_, err := DecodeCollectionUpdateBatchByIDPayload(env.Payload)
+		return err
+	case CommandKindCatalogCreateCollection:
+		_, err := DecodeCatalogCreateCollectionPayload(env.Payload)
 		return err
 	default:
 		return nil
@@ -743,6 +753,56 @@ func DecodeCollectionDeleteBatchByIDPayload(payload []byte) (CollectionDeleteBat
 		return CollectionDeleteBatchByIDPayload{}, err
 	}
 	return CollectionDeleteBatchByIDPayload{Collection: collection, IDs: ids}, nil
+}
+
+func EncodeCatalogCreateCollectionPayload(collection string, metadata []byte) ([]byte, error) {
+	if collection == "" || metadata == nil {
+		return nil, fmt.Errorf("%w: invalid catalog create collection payload", ErrCorrupt)
+	}
+	if commandFrameIntExceedsUint32(len(collection)) || commandFrameIntExceedsUint32(len(metadata)) {
+		return nil, ErrRecordTooLarge
+	}
+	total, err := addCommandFrameEncodedSectionLen(2+4+4, len(collection))
+	if err != nil {
+		return nil, err
+	}
+	total, err = addCommandFrameEncodedSectionLen(total, len(metadata))
+	if err != nil {
+		return nil, err
+	}
+	payload := make([]byte, total)
+	binary.LittleEndian.PutUint16(payload[0:2], 1)
+	binary.LittleEndian.PutUint32(payload[2:6], uint32(len(collection)))
+	binary.LittleEndian.PutUint32(payload[6:10], uint32(len(metadata)))
+	copy(payload[10:], collection)
+	copy(payload[10+len(collection):], metadata)
+	return payload, nil
+}
+
+func DecodeCatalogCreateCollectionPayload(payload []byte) (CatalogCreateCollectionPayload, error) {
+	if len(payload) < 10 {
+		return CatalogCreateCollectionPayload{}, ErrCorrupt
+	}
+	if binary.LittleEndian.Uint16(payload[0:2]) != 1 {
+		return CatalogCreateCollectionPayload{}, ErrCommandWALUnsupportedVersion
+	}
+	nameLen := binary.LittleEndian.Uint32(payload[2:6])
+	metaLen := binary.LittleEndian.Uint32(payload[6:10])
+	off := 10
+	if uint64(nameLen)+uint64(metaLen) > uint64(len(payload)-off) {
+		return CatalogCreateCollectionPayload{}, ErrCorrupt
+	}
+	collection := payload[off : off+int(nameLen)]
+	off += int(nameLen)
+	metadata := payload[off : off+int(metaLen)]
+	off += int(metaLen)
+	if off != len(payload) || len(collection) == 0 || metadata == nil {
+		return CatalogCreateCollectionPayload{}, ErrCorrupt
+	}
+	return CatalogCreateCollectionPayload{
+		Collection: string(collection),
+		Metadata:   cloneBytesPreserveEmpty(metadata),
+	}, nil
 }
 
 func commandPayloadCountToInt(count uint32) (int, error) {

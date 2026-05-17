@@ -523,7 +523,8 @@ Current command kinds:
 | 1 | `RawKVBatch` | raw KV | `RawKVBatchV1` | typed raw key/value command batch |
 | 100 | `CollectionInsertBatchByID` | collection | `CollectionInsertBatchByIDV1` | deterministic collection insert/upsert-by-id batch |
 | 101 | `CollectionDeleteBatchByID` | collection | `CollectionDeleteBatchByIDV1` | deterministic collection delete-by-id batch |
-| 200 | `CatalogMutationPlaceholder` | catalog | native-wire deterministic placeholder | reserved placeholder until catalog command payloads land |
+| 102 | `CollectionUpdateBatchByID` | collection | `CollectionUpdateBatchByIDV1` | deterministic collection update/replace-by-id batch |
+| 200 | `CatalogCreateCollection` | catalog | `CatalogCreateCollectionV1` | deterministic catalog create-collection command; old placeholder name is an alias only |
 
 Current payload format IDs:
 
@@ -533,6 +534,8 @@ Current payload format IDs:
 | 2 | `NativeWireDeterministic` |
 | 3 | `CollectionInsertBatchByIDV1` |
 | 4 | `CollectionDeleteBatchByIDV1` |
+| 5 | `CollectionUpdateBatchByIDV1` |
+| 6 | `CatalogCreateCollectionV1` |
 
 `RawKVBatchV1` payload:
 
@@ -553,6 +556,20 @@ A `RawKVBatch` command frame is one atomic command: one frame, one `LSN`, and
 all contained operations decode as one batch. Delete operations require
 `ValueLen=0`.
 
+`CatalogCreateCollectionV1` payload:
+
+```text
+u16 Version        // 1
+u32 CollectionNameLen
+u32 MetadataLen
+bytes CollectionName[CollectionNameLen]
+bytes Metadata[MetadataLen] // canonical collection metadata JSON
+```
+
+The payload name and decoded metadata name must match. Replay is idempotent only
+when an existing catalog entry has identical normalized metadata; incompatible
+metadata fails closed before advancing `AppliedCommandLSN`.
+
 `CollectionInsertBatchByIDV1` payload:
 
 ```text
@@ -568,6 +585,10 @@ u32 DocumentLen
 bytes ID[IDLen]
 bytes Document[DocumentLen]
 ```
+
+`CollectionUpdateBatchByIDV1` uses the same canonical payload layout as
+`CollectionInsertBatchByIDV1`; each document is the final accepted replacement
+for the listed ID after user callbacks or declarative updates have resolved.
 
 `CollectionDeleteBatchByIDV1` payload:
 

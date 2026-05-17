@@ -23,6 +23,11 @@ func RegisterCommandWALReplayHandlers() {
 		backenddb.RegisterCommandWALReplayHandler(commitlog.CommandKindCollectionInsertBatchByID, replayCollectionInsertBatchByIDCommandWAL)
 		backenddb.RegisterCommandWALReplayHandler(commitlog.CommandKindCollectionDeleteBatchByID, replayCollectionDeleteBatchByIDCommandWAL)
 		backenddb.RegisterCommandWALReplayHandler(commitlog.CommandKindCollectionUpdateBatchByID, replayCollectionUpdateBatchByIDCommandWAL)
+		backenddb.RegisterCommandWALReplayHandlerWithOptions(
+			commitlog.CommandKindCatalogCreateCollection,
+			replayCatalogCreateCollectionCommandWAL,
+			backenddb.CommandWALReplayHandlerOptions{NeedsReplayLogSupport: false},
+		)
 	})
 }
 
@@ -83,6 +88,29 @@ func (c *Collection) newCollectionUpdateCommandWALIntent(docs []commitlog.Collec
 		commitlog.CommandKindCollectionUpdateBatchByID,
 		commitlog.CommandScopeCollection,
 		commitlog.PayloadFormatCollectionUpdateBatchByIDV1,
+		payload,
+	)
+}
+
+func (m *CollectionManager) newCatalogCreateCollectionCommandWALIntent(meta CollectionMeta, replay *backenddb.CommandWALIntent) (*backenddb.CommandWALIntent, error) {
+	if replay != nil {
+		return replay, nil
+	}
+	if m == nil || m.db == nil || !m.db.CommandWALEnabled() {
+		return nil, nil
+	}
+	encoded, err := encodeCollectionMeta(meta)
+	if err != nil {
+		return nil, err
+	}
+	payload, err := commitlog.EncodeCatalogCreateCollectionPayload(meta.Name, encoded)
+	if err != nil {
+		return nil, err
+	}
+	return m.db.NewCommandWALIntent(
+		commitlog.CommandKindCatalogCreateCollection,
+		commitlog.CommandScopeCatalog,
+		commitlog.PayloadFormatCatalogCreateCollectionV1,
 		payload,
 	)
 }
@@ -230,6 +258,22 @@ func replayCollectionUpdateBatchByIDCommandWAL(db *backenddb.DB, env commitlog.C
 		}
 	}
 	_, _, err = collection.updateBatchOwnedItemsWithCommandWALIntent(items, updateBatchModeAny, backenddb.NewCommandWALReplayIntent(env))
+	return err
+}
+
+func replayCatalogCreateCollectionCommandWAL(db *backenddb.DB, env commitlog.CommandEnvelope) error {
+	payload, err := commitlog.DecodeCatalogCreateCollectionPayload(env.Payload)
+	if err != nil {
+		return err
+	}
+	meta, err := decodeCollectionMeta(payload.Metadata)
+	if err != nil {
+		return err
+	}
+	if meta.Name != payload.Collection {
+		return fmt.Errorf("collections: catalog create payload collection %q does not match metadata name %q", payload.Collection, meta.Name)
+	}
+	_, err = NewCollectionManager(db).createCollectionWithCommandWALIntent(meta, backenddb.NewCommandWALReplayIntent(env))
 	return err
 }
 

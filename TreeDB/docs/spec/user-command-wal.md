@@ -250,7 +250,8 @@ replayable without adding query-wide mutation semantics.
 | Collection update callback | explicit document ID plus Go callback | `CollectionUpdateBatchByID` after callback execution | PR5 implementation: callback itself is not replayed. WAL logs final accepted replacements; missing/no-op updates do not append production frames. |
 | Mongo `updateOne` | `_id` equality plus accepted `$set` subset | `CollectionUpdateByIDSet` or final replacement | `WAL-supported` only after canonical lowering and result assertions. |
 | Mongo `deleteOne` | `_id` equality | `CollectionDeleteBatchByID` | Same as native explicit-ID delete. |
-| Collection/index metadata | create collection, create/drop index | `CatalogMutation` | PR4 rejects create collection while command WAL is active; PR6 owns WAL-supported catalog commands. |
+| Collection/catalog metadata | create collection | `CatalogCreateCollection` | PR6 implementation: `WAL-supported`; payload carries canonical collection metadata, replay is idempotent for matching metadata and fail-closed for incompatible metadata. |
+| Collection/index metadata | create/drop index | future catalog command | `WAL-rejected` in PR6; public index DDL fails before frame append or `AppliedCommandLSN` advancement until index catalog commands land. |
 | Query-wide update/delete | predicate/range matched mutation | none | `WAL-rejected`; future command kind required. |
 | User-defined callback replay | arbitrary function | none | `WAL-rejected`; lower to final replacement first. |
 | Column-store file publish | external side-file refs | future command plus external-ref classes | Deferred until external-file prepare/recovery is specified. |
@@ -867,7 +868,8 @@ PR4 evidence:
 - recovery path: unapplied insert/delete frames replay through collection
   executors, including template-v1 stored documents and missing-only delete
   no-ops;
-- unsupported catalog create fails with `ErrCommandWALUnsupported` until PR6;
+- unsupported index DDL fails with `ErrCommandWALUnsupported` until PR6+ index
+  catalog commands;
 - performance artifacts:
   `artifacts/command-wal/pr4/collection-insert-delete-microbench.txt` and
   `artifacts/command-wal/pr4/collection-insert-delete-microbench-benchstat.txt`.
@@ -914,15 +916,41 @@ PR5 evidence:
 
 Deliverables:
 
-- create collection command;
-- create/drop index commands or explicit WAL-on rejection until implemented;
-- catalog/schema epoch guards;
-- recovery tests around DDL plus subsequent document mutations.
+- `CatalogCreateCollection` command frame and payload fixture;
+- public `CreateCollection` appends one catalog command frame and publishes the
+  system catalog root plus `AppliedCommandLSN` in one backend tuple;
+- open-time replay creates missing collections, treats same-metadata replay as
+  idempotent, and fails closed on incompatible metadata without publishing the
+  replay LSN;
+- create/drop index commands remain explicit WAL-on pre-frame rejections until
+  index catalog payloads land;
+- lower-LSN drain evidence uses the shared command journal: recovered lower raw
+  KV frames advance `AppliedCommandLSN` before a catalog create receives the next
+  contiguous LSN.
 
 Acceptance:
 
-- GUI/Mongo-compatible `create` behavior has documented durability semantics;
-- schema/index changes cannot race lower unapplied command LSNs.
+- GUI/Mongo-compatible `create` maps to the same `CreateCollection` command-WAL
+  path: acknowledged success means the catalog command frame is recoverable and
+  the catalog root plus `AppliedCommandLSN` were published together; it is not an
+  fsync guarantee unless the caller uses a sync-capable durability barrier;
+- schema/index changes cannot race lower unapplied command LSNs because catalog
+  create uses the shared command journal and contiguous `AppliedCommandLSN`
+  validation;
+- unsupported index DDL is cheap and non-mutating in command-WAL mode.
+
+PR6 evidence:
+
+- canonical frame fixture:
+  `command_wal_v1_catalog_create_collection.hex`;
+- normal path: public `CreateCollection` appends a `CatalogCreateCollection`
+  frame and advances `AppliedCommandLSN`;
+- recovery path: unapplied catalog create frames replay through the collection
+  catalog executor, including same-metadata idempotent replay;
+- negative path: incompatible replay fails closed, and rejected index DDL leaves
+  `AppliedCommandLSN` and frame count unchanged;
+- performance artifact:
+  `artifacts/command-wal/pr6/bench.txt`.
 
 ### PR 7: Matrix enforcement and future-command guardrails
 
