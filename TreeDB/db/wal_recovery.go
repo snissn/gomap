@@ -230,6 +230,211 @@ func replayWALIntoBackend(db *DB, segments []logSegment, maxSegmentBytes int64, 
 	return replayCommitLogSegments(db, segments, ridMap, maxSegmentBytes)
 }
 
+type commandWALReplayFrame struct {
+	env commitlog.CommandEnvelope
+}
+
+type commandWALReplayRIDMapFunc func() (map[uint64]page.ValuePtr, error)
+type commandWALReplayLogSupportFunc func() (map[uint64]page.ValuePtr, *replayInlineAppender, error)
+
+func replayCommandWALIntoBackend(db *DB, segments []logSegment, maxSegmentBytes int64, dictLookup valuelog.DictLookup) error {
+	if db == nil {
+		return fmt.Errorf("treedb: command wal recovery missing db")
+	}
+	db.mu.RLock()
+	applied := db.meta.AppliedCommandLSN
+	db.mu.RUnlock()
+	frames, err := readCommandWALReplayFrames(segments, applied, maxSegmentBytes)
+	if err != nil {
+		return err
+	}
+	if len(frames) == 0 {
+		_, err := cleanupCommandWALSegmentsCoveredByAppliedLSN(db.dir, applied, maxSegmentBytes)
+		return err
+	}
+	var ridMap map[uint64]page.ValuePtr
+	var inlineAppender *replayInlineAppender
+	previousLeafPageLog := db.leafPageLog
+	leafPageLogInstalled := false
+	restoreLeafPageLog := func() {
+		if leafPageLogInstalled {
+			db.SetLeafPageLog(previousLeafPageLog)
+			leafPageLogInstalled = false
+		}
+	}
+	ensureReplayRIDMap := func() (map[uint64]page.ValuePtr, error) {
+		if ridMap != nil {
+			return ridMap, nil
+		}
+		var err error
+		ridMap, err = scanValueLogSegments(segments, dictLookup)
+		if err != nil {
+			return nil, err
+		}
+		return ridMap, nil
+	}
+	ensureReplayLogSupport := func() (map[uint64]page.ValuePtr, *replayInlineAppender, error) {
+		if inlineAppender != nil {
+			return ridMap, inlineAppender, nil
+		}
+		var err error
+		ridMap, err = ensureReplayRIDMap()
+		if err != nil {
+			return nil, nil, err
+		}
+		inlineAppender, err = newReplayInlineAppender(db, segments, ridMap)
+		if err != nil {
+			return nil, nil, err
+		}
+		if db.indexOuterLeavesInValueLog {
+			db.SetLeafPageLog(inlineAppender)
+			leafPageLogInstalled = true
+		}
+		return ridMap, inlineAppender, nil
+	}
+	defer func() {
+		if inlineAppender != nil {
+			_ = inlineAppender.close()
+		}
+		restoreLeafPageLog()
+	}()
+	needsLogSupport, err := commandWALReplayFramesNeedLogSupport(db, frames, applied)
+	if err != nil {
+		return err
+	}
+	if needsLogSupport {
+		if _, _, err := ensureReplayLogSupport(); err != nil {
+			return err
+		}
+	}
+	for _, frame := range frames {
+		if frame.env.LSN <= applied {
+			continue
+		}
+		if frame.env.LSN != applied+1 {
+			return fmt.Errorf("%w: current=%d next=%d", ErrCommandWALAppliedLSNNonContig, applied, frame.env.LSN)
+		}
+		if err := applyCommandWALFrame(db, frame.env, ridMap, inlineAppender, ensureReplayRIDMap, ensureReplayLogSupport); err != nil {
+			return err
+		}
+		applied = frame.env.LSN
+		if target := db.testCommandWALRecoveryFailAfterLSN.Load(); target != 0 && frame.env.LSN == target {
+			db.testCommandWALRecoveryFailAfterLSN.Store(0)
+			return errTestFinalizeCommitFailpoint
+		}
+	}
+	if inlineAppender != nil {
+		if err := inlineAppender.syncIfDirty(); err != nil {
+			return err
+		}
+		if err := inlineAppender.close(); err != nil {
+			return err
+		}
+		inlineAppender = nil
+		restoreLeafPageLog()
+	}
+	_, err = cleanupCommandWALSegmentsCoveredByAppliedLSN(db.dir, applied, maxSegmentBytes)
+	return err
+}
+
+func readCommandWALReplayFrames(segments []logSegment, appliedLSN uint64, maxSegmentBytes int64) ([]commandWALReplayFrame, error) {
+	activeByLane := commandWALActiveSeqByLane(segments)
+	var frames []commandWALReplayFrame
+	seen := make(map[uint64]struct{})
+	for _, seg := range segments {
+		if seg.valueLog || seg.size == 0 {
+			continue
+		}
+		if !isCommandWALLaneSegment(seg) {
+			return nil, commitlog.ErrCommandWALLegacyPayload
+		}
+		active := seg.seq == activeByLane[seg.lane]
+		reader, err := commitlog.NewReaderWithOptions(seg.path, commitlog.Options{MaxSegmentSize: maxSegmentBytes})
+		if err != nil {
+			return nil, err
+		}
+		for {
+			env, err := reader.ReadCommandFrame()
+			if err == nil {
+				if env.LSN > appliedLSN {
+					if _, ok := seen[env.LSN]; ok {
+						_ = reader.Close()
+						return nil, commitlog.ErrCommandWALDuplicateLSN
+					}
+					seen[env.LSN] = struct{}{}
+					frames = append(frames, commandWALReplayFrame{env: env})
+				}
+				continue
+			}
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if errors.Is(err, commitlog.ErrCommandWALTerminalTail) && active {
+				break
+			}
+			_ = reader.Close()
+			return nil, err
+		}
+		if err := reader.Close(); err != nil {
+			return nil, err
+		}
+	}
+	sort.Slice(frames, func(i, j int) bool {
+		return frames[i].env.LSN < frames[j].env.LSN
+	})
+	return frames, nil
+}
+
+func commandWALReplayFramesNeedLogSupport(db *DB, frames []commandWALReplayFrame, applied uint64) (bool, error) {
+	hasUnappliedRawKVBatch := false
+	for _, frame := range frames {
+		if frame.env.LSN <= applied {
+			continue
+		}
+		if frame.env.Kind != commitlog.CommandKindRawKVBatch {
+			continue
+		}
+		hasUnappliedRawKVBatch = true
+		needsLogSupport := false
+		if err := commitlog.ScanRawKVBatchPayload(frame.env.Payload, func(op commitlog.RawKVOp, key, value []byte) error {
+			if op == commitlog.RawKVOpSet && commandWALRawSetNeedsReplayValueLog(db, key, value) {
+				needsLogSupport = true
+			}
+			return nil
+		}); err != nil {
+			return false, err
+		}
+		if needsLogSupport {
+			return true, nil
+		}
+	}
+	if db != nil && db.indexOuterLeavesInValueLog {
+		// Outer-leaf mode needs a replay leaf-page log for any replayed write,
+		// even when the raw KV payload values themselves remain inline.
+		return hasUnappliedRawKVBatch, nil
+	}
+	return false, nil
+}
+
+func commandWALRawSetNeedsReplayValueLog(db *DB, key, value []byte) bool {
+	threshold := page.DefaultInlineThreshold
+	var domains []ValueLogDomainThreshold
+	if db != nil {
+		threshold = db.InlineThreshold()
+		domains = db.valueLogDomainThresholds
+	}
+	return len(value) > resolveBatchInlineThresholdForKey(threshold, key, domains)
+}
+
+func applyCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map[uint64]page.ValuePtr, inlineAppender *replayInlineAppender, ensureReplayRIDMap commandWALReplayRIDMapFunc, ensureReplayLogSupport commandWALReplayLogSupportFunc) error {
+	switch env.Kind {
+	case commitlog.CommandKindRawKVBatch:
+		return applyRawKVCommandWALFrame(db, env, ridMap, inlineAppender, ensureReplayRIDMap, ensureReplayLogSupport)
+	default:
+		return commitlog.ErrCommandWALUnsupportedKind
+	}
+}
+
 func scanValueLogSegments(segments []logSegment, dictLookup valuelog.DictLookup) (map[uint64]page.ValuePtr, error) {
 	ridMap := make(map[uint64]page.ValuePtr)
 	for _, segment := range segments {
@@ -546,6 +751,9 @@ func applyCommitBatch(db *DB, records []commitlog.Record, ridMap map[uint64]page
 		case commitlog.OpSetInline:
 			if err := batch.Set(rec.Key, rec.Value); err != nil {
 				if !errors.Is(err, batchpkg.ErrValueTooLarge) {
+					// Abort this replay attempt on non-placement errors. The
+					// commit batch remains unapplied and the next open retries
+					// from the last published root.
 					return err
 				}
 				if !hasPtrBatch {

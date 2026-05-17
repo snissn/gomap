@@ -81,7 +81,7 @@ func TestCommandWALLegacyRawEncodingTestsHaveTypedFrameEquivalents(t *testing.T)
 		"TestRecovery_RIDJoinReplaysValueLog":          "TestCommandWALRIDFencePreservedForRawKVBatch",
 		"TestRecovery_PartialCommitBatchIgnored":       "TestCommandWALOpenAllowsActivePartialFirstFrameTail",
 		"TestReadOnlyDoesNotReplayOrRemoveCommitLog":   "TestCommandWALReadOnlyOpenWithUnappliedFrameFailsRecoveryRequired",
-		"TestCachingDB_Checkpoint_TrimsWAL":            "TestCommandWALCheckpointCleansOnlyCoveredSegments",
+		"TestCachingDB_Checkpoint_TrimsWAL":            "TestCommandWALCheckpointCleanupDeletesOnlyCoveredSegments",
 	}
 	for legacy, typed := range pairs {
 		row, ok := rows[legacy]

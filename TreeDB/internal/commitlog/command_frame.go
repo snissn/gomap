@@ -66,12 +66,21 @@ type RawKVOp byte
 const (
 	RawKVOpSet RawKVOp = iota + 1
 	RawKVOpDelete
+	RawKVOpSetRID
 )
 
+// RawKVOperation represents a single operation in a RawKVBatch command frame.
+//
+// Field constraints by op type:
+//   - RawKVOpSet: Key and Value are the raw bytes; RID must be zero.
+//   - RawKVOpDelete: Key is set; Value must be empty; RID must be zero.
+//   - RawKVOpSetRID: Key is set; Value MUST be empty (the RID is encoded
+//     separately as an 8-byte payload); RID must be non-zero.
 type RawKVOperation struct {
 	Op    RawKVOp
 	Key   []byte
 	Value []byte
+	RID   uint64
 }
 
 type ExternalRefClass uint16
@@ -367,10 +376,14 @@ func EncodeRawKVBatchPayload(ops []RawKVOperation) ([]byte, error) {
 		if err := validateRawKVOperation(op); err != nil {
 			return nil, err
 		}
-		if len(op.Key) > int(^uint32(0)) || len(op.Value) > int(^uint32(0)) {
+		valueLen := len(op.Value)
+		if op.Op == RawKVOpSetRID {
+			valueLen = 8
+		}
+		if len(op.Key) > int(^uint32(0)) || valueLen > int(^uint32(0)) {
 			return nil, ErrRecordTooLarge
 		}
-		total += rawKVOpHeaderSize + len(op.Key) + len(op.Value)
+		total += rawKVOpHeaderSize + len(op.Key) + valueLen
 	}
 	payload := make([]byte, total)
 	binary.LittleEndian.PutUint16(payload[0:2], 1)
@@ -378,14 +391,20 @@ func EncodeRawKVBatchPayload(ops []RawKVOperation) ([]byte, error) {
 	off := rawKVBatchHeaderSize
 	for i := range ops {
 		op := &ops[i]
+		value := op.Value
+		var ridBuf [8]byte
+		if op.Op == RawKVOpSetRID {
+			binary.LittleEndian.PutUint64(ridBuf[:], op.RID)
+			value = ridBuf[:]
+		}
 		payload[off] = byte(op.Op)
 		binary.LittleEndian.PutUint32(payload[off+1:off+5], uint32(len(op.Key)))
-		binary.LittleEndian.PutUint32(payload[off+5:off+9], uint32(len(op.Value)))
+		binary.LittleEndian.PutUint32(payload[off+5:off+9], uint32(len(value)))
 		off += rawKVOpHeaderSize
 		copy(payload[off:], op.Key)
 		off += len(op.Key)
-		copy(payload[off:], op.Value)
-		off += len(op.Value)
+		copy(payload[off:], value)
+		off += len(value)
 	}
 	return payload, nil
 }
@@ -405,7 +424,17 @@ func DecodeRawKVBatchPayload(payload []byte) ([]RawKVOperation, error) {
 		entry := RawKVOperation{Op: op}
 		entry.Key = cloneBytesPreserveEmpty(payload[off : off+int(keyLen)])
 		off += int(keyLen)
-		entry.Value = cloneBytesPreserveEmpty(payload[off : off+int(valueLen)])
+		if op == RawKVOpSetRID {
+			if valueLen != 8 {
+				return nil, ErrCorrupt
+			}
+			entry.RID = binary.LittleEndian.Uint64(payload[off : off+8])
+			if entry.RID == 0 {
+				return nil, ErrCorrupt
+			}
+		} else {
+			entry.Value = cloneBytesPreserveEmpty(payload[off : off+int(valueLen)])
+		}
 		off += int(valueLen)
 		ops = append(ops, entry)
 	}
@@ -417,7 +446,9 @@ func validateRawKVBatchPayload(payload []byte) error {
 }
 
 // ScanRawKVBatchPayload validates payload and visits each op with slices that
-// reference payload. Use DecodeRawKVBatchPayload when callers need owned copies.
+// reference payload. For RawKVOpSetRID, value is exactly the 8-byte
+// little-endian RID payload. Use DecodeRawKVBatchPayload when callers need
+// owned copies or typed RID fields.
 func ScanRawKVBatchPayload(payload []byte, visit func(op RawKVOp, key, value []byte) error) error {
 	if len(payload) < rawKVBatchHeaderSize {
 		return ErrCorrupt
@@ -448,6 +479,14 @@ func ScanRawKVBatchPayload(payload []byte, visit func(op RawKVOp, key, value []b
 			return err
 		}
 		value := payload[off : off+int(valueLen)]
+		if op == RawKVOpSetRID {
+			// validateRawKVOperationShape already enforces valueLen == 8 for
+			// RawKVOpSetRID, so len(value) == 8 is guaranteed here. Only
+			// check for the zero-RID sentinel, which is always invalid.
+			if binary.LittleEndian.Uint64(value) == 0 {
+				return ErrCorrupt
+			}
+		}
 		if visit != nil {
 			if err := visit(op, key, value); err != nil {
 				return err
@@ -465,7 +504,14 @@ func validateRawKVOperation(op *RawKVOperation) error {
 	if op == nil || op.Key == nil {
 		return ErrCorrupt
 	}
-	return validateRawKVOperationShape(op.Op, op.Key, uint32(len(op.Value)))
+	valueLen := uint32(len(op.Value))
+	if op.Op == RawKVOpSetRID {
+		if op.RID == 0 || len(op.Value) != 0 {
+			return ErrCorrupt
+		}
+		valueLen = 8
+	}
+	return validateRawKVOperationShape(op.Op, op.Key, valueLen)
 }
 
 func validateRawKVOperationShape(op RawKVOp, key []byte, valueLen uint32) error {
@@ -477,6 +523,11 @@ func validateRawKVOperationShape(op RawKVOp, key []byte, valueLen uint32) error 
 		return nil
 	case RawKVOpDelete:
 		if valueLen != 0 {
+			return ErrCorrupt
+		}
+		return nil
+	case RawKVOpSetRID:
+		if valueLen != 8 {
 			return ErrCorrupt
 		}
 		return nil

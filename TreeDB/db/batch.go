@@ -85,7 +85,7 @@ func (db *DB) newBatchWithReserveHint(reserveHint int) batch.Interface {
 	internal := batch.New(db.valueLogManager, threshold)
 	if threshold > 0 {
 		internal.SetInlineThresholdResolver(func(key []byte) int {
-			return ResolveInlineThresholdForKey(threshold, key, domains)
+			return resolveBatchInlineThresholdForKey(threshold, key, domains)
 		})
 	}
 	internal.Reserve(reserveHint)
@@ -93,6 +93,13 @@ func (db *DB) newBatchWithReserveHint(reserveHint int) batch.Interface {
 		db:    db,
 		batch: internal,
 	}
+}
+
+func resolveBatchInlineThresholdForKey(threshold int, key []byte, domains []ValueLogDomainThreshold) int {
+	if threshold > 0 {
+		return ResolveInlineThresholdForKey(threshold, key, domains)
+	}
+	return threshold
 }
 
 func (b *Batch) Set(key, value []byte) error {
@@ -158,8 +165,20 @@ func (b *Batch) write(sync bool) error {
 	if sync && b.batch != nil && len(b.batch.SortedEntries()) == 0 {
 		return b.db.Checkpoint()
 	}
+	intent, err := b.db.prepareRawKVCommandWALIntent(b)
+	if err != nil {
+		return err
+	}
+	return b.writeWithCommandWALIntent(sync, intent)
+}
+
+func (b *Batch) writeWithCommandWALIntent(sync bool, intent *commandWALBatchIntent) error {
+	// If a command frame is appended but root publication later returns an
+	// error, the durable frame is intentionally left for reopen recovery. Reuse
+	// the same intent across optimistic/serialized attempts so one user batch
+	// keeps one command LSN.
 	for attempt := 0; attempt < optimisticWriteMaxAttempts; attempt++ {
-		committed, err := b.writeOptimistic(sync)
+		committed, err := b.writeOptimistic(sync, intent)
 		if err != nil {
 			return err
 		}
@@ -167,10 +186,10 @@ func (b *Batch) write(sync bool) error {
 			return nil
 		}
 	}
-	return b.writeSerialized(sync)
+	return b.writeSerialized(sync, intent)
 }
 
-func (b *Batch) writeOptimistic(sync bool) (bool, error) {
+func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent) (bool, error) {
 	touchedValueLogSegments := b.batch.TouchedValueLogSegments()
 
 	b.db.writeMu.RLock()
@@ -231,7 +250,22 @@ func (b *Batch) writeOptimistic(sync bool) (bool, error) {
 		return false, nil
 	}
 
-	post, err := b.db.finalizeCommitLocked(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil)
+	if _, err := b.db.appendRawKVCommandWALIntent(intent, sync); err != nil {
+		b.db.commitMu.Unlock()
+		freeErr := tracker.FreeAll()
+		b.db.writeMu.RUnlock()
+		if freeErr != nil {
+			return false, freeErr
+		}
+		return false, err
+	}
+	post, err := b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, commandWALFinalizeOptions(intent))
+	// Poison while still holding commitMu so that no concurrent writer can
+	// slip past the poison check in appendRawKVCommandWALIntent and publish a
+	// root that covers the unapplied frame's LSN.
+	if err != nil {
+		b.db.poisonCommandWALAfterPostAppendFailure(intent)
+	}
 	b.db.commitMu.Unlock()
 	if err != nil {
 		b.db.writeMu.RUnlock()
@@ -247,7 +281,7 @@ func (b *Batch) writeOptimistic(sync bool) (bool, error) {
 	return true, nil
 }
 
-func (b *Batch) writeSerialized(sync bool) error {
+func (b *Batch) writeSerialized(sync bool, intent *commandWALBatchIntent) error {
 	touchedValueLogSegments := b.batch.TouchedValueLogSegments()
 
 	b.db.writeMu.Lock()
@@ -290,10 +324,18 @@ func (b *Batch) writeSerialized(sync bool) error {
 	sysRoot := b.db.meta.SystemRootPageID
 	b.db.mu.Unlock()
 
-	if err := b.db.finalizeCommit(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil); err != nil {
+	// writeMu is released by the deferred unlock above even if the command
+	// journal append fails and poisons this open handle.
+	if _, err := b.db.appendRawKVCommandWALIntent(intent, sync); err != nil {
+		return err
+	}
+	post, err := b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, commandWALFinalizeOptions(intent))
+	if err != nil {
+		b.db.poisonCommandWALAfterPostAppendFailure(intent)
 		return err
 	}
 	vlogRefDelta = nil
+	b.db.finalizeCommitPostWork(post)
 	b.db.clearLeafGenerationReachabilityCaches()
 	if b.db.vacuum.Active() {
 		b.db.vacuum.RecordEntries(entries)

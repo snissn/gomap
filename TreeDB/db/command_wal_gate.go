@@ -1,11 +1,14 @@
 package db
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 
 	"github.com/snissn/gomap/TreeDB/internal/collectionwal"
 )
+
+var ErrCommandWALDirtyActivation = errors.New("treedb: command_wal_v1 requires clean legacy WAL before activation")
 
 // ValidateCommandWALActivationClean enforces the PR1 activation precondition:
 // command_wal_v1 can only be advertised after legacy commit-log debt has been
@@ -13,7 +16,7 @@ import (
 // production code now so tests and tooling cannot silently enable mixed modes.
 func ValidateCommandWALActivationClean(dir string) error {
 	if err := collectionwal.RequireCleanForOfflineMaintenance(dir); err != nil {
-		return fmt.Errorf("treedb: command_wal_v1 requires clean legacy collection WAL before activation: %w", err)
+		return fmt.Errorf("%w: legacy collection WAL: %w", ErrCommandWALDirtyActivation, err)
 	}
 	segments, err := listWALSegments(dir)
 	if err != nil {
@@ -23,7 +26,7 @@ func ValidateCommandWALActivationClean(dir string) error {
 		if seg.size == 0 {
 			continue
 		}
-		return fmt.Errorf("treedb: command_wal_v1 requires clean legacy WAL before activation; found %s", filepath.Base(seg.path))
+		return fmt.Errorf("%w: found %s", ErrCommandWALDirtyActivation, filepath.Base(seg.path))
 	}
 	return nil
 }

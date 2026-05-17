@@ -14,6 +14,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/freelist"
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
 	"github.com/snissn/gomap/TreeDB/internal/bulk"
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/compression"
 	"github.com/snissn/gomap/TreeDB/internal/keyupdate"
 	"github.com/snissn/gomap/TreeDB/internal/lockfile"
@@ -98,6 +99,7 @@ type DB struct {
 
 	readOnly   bool
 	durability DurabilityMode
+	commandWAL bool
 
 	keepRecent                     uint64
 	policy                         WritePolicy
@@ -136,6 +138,7 @@ type DB struct {
 	vacuum           vacuumRecorder
 	meta             page.MetaPageBody
 	metaPageID       uint64
+	commandJournal   *commitlog.CommandJournal
 
 	state atomic.Pointer[DBState]
 
@@ -247,8 +250,15 @@ type DB struct {
 	testSystemRootWarmMaxDeltaOps int
 	// testFailWriteMeta forces writeMeta to fail before mutating the target meta
 	// page so tests can exercise pre-publish cleanup paths.
-	testFailWriteMeta atomic.Bool
-	closing           atomic.Bool
+	testFailWriteMeta                  atomic.Bool
+	testFailCommandWALFlush            atomic.Bool
+	testCommandWALRecoveryFailAfterLSN atomic.Uint64
+	// commandWALFlushPoisoned is intentionally cleared only by closing and
+	// reopening the DB. After an append reached the journal but flush/sync or
+	// root publication failed, continuing on the same handle could create an
+	// unrecoverable LSN gap.
+	commandWALFlushPoisoned atomic.Bool
+	closing                 atomic.Bool
 }
 
 type valueLogRewriteLiveBytesKey struct {
@@ -286,6 +296,7 @@ const (
 const snapshotShardHintUnset = -1
 
 var errTestFinalizeCommitFailpoint = errors.New("treedb: finalize commit failpoint")
+var errTestCommandWALFlushFailpoint = errors.New("treedb: command wal flush failpoint")
 var errTestWriteMetaFailpoint = errors.New("treedb: write meta failpoint")
 
 type finalizeCommitError struct {
@@ -631,6 +642,15 @@ type Options struct {
 	// treedb.Open, treedb.OpenBackend) and in offline maintenance helpers
 	// (VacuumIndexOffline, ValueLogRewriteOffline, treemap vacuum/rewrite/vlog-gc).
 	IgnoreFormatConfig bool
+	// CommandWAL enables the compatibility-breaking command-WAL mode for direct
+	// backend raw KV writes. It is also enabled automatically when format.json
+	// advertises the command_wal_v1 required feature.
+	//
+	// The public cached writer (treedb.Open) remains fail-closed for writes when
+	// CommandWAL is true; it returns ErrCommandWALUnsupported for any write open
+	// until cached writes are converted to typed command frames. Use OpenBackend
+	// for read-write opens in command-WAL mode.
+	CommandWAL bool
 	// ReadOnly opens the database without acquiring an exclusive lock and without
 	// modifying on-disk state (no recovery truncation, no WAL replay, no background
 	// maintenance). Only read operations are supported. Under the collection WAL
@@ -840,6 +860,11 @@ type Options struct {
 	// DisableSideStores skips opening dictdb/templatedb side stores.
 	// This is intended for internal side-store usage (e.g. templatedb itself).
 	DisableSideStores bool
+
+	// testCommandWALRecoveryFailAfterLSN injects a one-shot recovery failure
+	// after the given LSN is published. It is package-private test plumbing so
+	// crash-recovery tests can avoid process-global failpoints.
+	testCommandWALRecoveryFailAfterLSN uint64
 
 	// DisablePiggybackCompaction disables opportunistic defragmentation during writes.
 	// When false (default), nodes are rewritten if their siblings are physically
@@ -1099,16 +1124,16 @@ func Open(opts Options) (*DB, error) {
 		return nil, errors.New("db dir required")
 	}
 	if opts.IgnoreFormatConfig {
-		if err := ValidateFormatRequiredFeatureGate(opts.Dir); err != nil {
+		requiresCommandWAL, err := CommandWALRequiredFeatureEnabled(opts.Dir)
+		if err != nil {
 			return nil, err
 		}
+		opts.CommandWAL = opts.CommandWAL || requiresCommandWAL
 	} else {
 		if cfg, ok, err := LoadFormatConfig(opts.Dir); err != nil {
 			return nil, err
 		} else if ok {
-			if err := cfg.ValidateRuntimeSupported(); err != nil {
-				return nil, err
-			}
+			opts.CommandWAL = opts.CommandWAL || cfg.RequiresCommandWALV1()
 			cfg.ApplyIndexFormatToOptions(&opts)
 		}
 	}
@@ -1204,6 +1229,9 @@ func validateOptions(opts Options) error {
 	case DurabilityDurable, DurabilityWALOnRelaxed, DurabilityWALOffRelaxed:
 	default:
 		return fmt.Errorf("treedb: invalid durability mode %d", opts.Durability)
+	}
+	if opts.CommandWAL && opts.Durability == DurabilityWALOffRelaxed {
+		return fmt.Errorf("%w: WAL-off durability is incompatible with command WAL", ErrCommandWALUnsupported)
 	}
 	switch opts.ValueLog.ReadIntegrity {
 	case IntegrityVerify, IntegritySkipChecksums:
@@ -1310,6 +1338,9 @@ func resolveInlineThresholdAndAdaptive(opts Options) (*adaptive.Controller, int)
 }
 
 func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
+	if opts.ReadOnly {
+		return nil, errors.New("BUG: treedb: openWithLock called with read-only options")
+	}
 	if err := recoverIndexSwap(opts.Dir); err != nil {
 		return nil, err
 	}
@@ -1384,6 +1415,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		freelistRegionPages:            opts.FreelistRegionPages,
 		freelistRegionRadius:           opts.FreelistRegionRadius,
 		durability:                     opts.Durability,
+		commandWAL:                     opts.CommandWAL,
 		policy: WritePolicy{
 			InlineThreshold: inlineThreshold,
 			FlushThreshold:  opts.FlushThreshold,
@@ -1398,6 +1430,9 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	}
 	db.ghostManager.start()
 	db.idx.Store(gen)
+	if opts.testCommandWALRecoveryFailAfterLSN != 0 {
+		db.testCommandWALRecoveryFailAfterLSN.Store(opts.testCommandWALRecoveryFailAfterLSN)
+	}
 
 	gen.zipper.SetFillTargets(opts.LeafFillTargetPPM, opts.InternalFillTargetPPM)
 	gen.zipper.SetPiggybackCompaction(!opts.DisablePiggybackCompaction)
@@ -1416,24 +1451,84 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		return nil, err
 	}
 
-	// PR2 has only the applied-LSN publish guard. Until PR3 installs command
-	// dispatch/replay, write-open must fail if any complete command frame is
-	// newer than the published root; frames already covered by AppliedCommandLSN
-	// are filtered before legacy replay below.
-	if err := requireNoUnappliedCommandWALFrames(opts.Dir, db.meta.AppliedCommandLSN, opts.WALMaxSegmentBytes); err != nil {
+	segments, err := listRecoverySegments(opts.Dir)
+	if err != nil {
 		_ = db.Close()
 		return nil, err
 	}
-
-	if opts.Durability != DurabilityWALOffRelaxed {
-		segments, err := listRecoverySegments(opts.Dir)
+	needsCommandWALFormat, err := commandWALFormatNeedsActivation(opts)
+	if err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if needsCommandWALFormat {
+		if err := ValidateCommandWALActivationClean(opts.Dir); err != nil {
+			_ = db.Close()
+			return nil, err
+		}
+		// Persist the required feature gate before running typed recovery so that
+		// if recovery mutates WAL segments (cleanup pass) and then the open fails,
+		// the next open uses typed recovery rather than the legacy path.
+		cfg, err := formatConfigFromOptionsPreservingRequiredFeatures(opts)
 		if err != nil {
 			_ = db.Close()
 			return nil, err
 		}
-		if err := replayWALIntoBackend(db, segments, opts.WALMaxSegmentBytes, opts.ValueLog.DictLookup); err != nil {
-			db.Close()
+		// Use the raw writer here because ValidateCommandWALActivationClean was
+		// already called above. Re-checking after recovery would make first
+		// activation depend on the transient post-recovery WAL directory shape
+		// instead of the explicit activation boundary.
+		if err := writeFormatConfig(opts.Dir, cfg); err != nil {
+			_ = db.Close()
 			return nil, err
+		}
+	}
+	if opts.CommandWAL {
+		if err := replayCommandWALIntoBackend(db, segments, opts.WALMaxSegmentBytes, opts.ValueLog.DictLookup); err != nil {
+			_ = db.Close()
+			return nil, err
+		}
+		// Re-list segments after replay: replayCommandWALIntoBackend may call
+		// cleanupCommandWALSegmentsCoveredByAppliedLSN, which deletes covered
+		// non-active segments. The refreshed list reflects surviving segments so
+		// commandSegmentSeq never collides with any retained segment, and
+		// OpenCommandJournal appends to a new segment with a strictly higher seq.
+		commandSegmentSeq := uint64(0)
+		journalSegments, err := listRecoverySegments(opts.Dir)
+		if err != nil {
+			_ = db.Close()
+			return nil, err
+		}
+		activeSeqByLane := commandWALActiveSeqByLane(journalSegments)
+		for _, seq := range activeSeqByLane {
+			if seq > commandSegmentSeq {
+				commandSegmentSeq = seq
+			}
+		}
+		journal, err := commitlog.OpenCommandJournal(WALDirPath(opts.Dir), commitlog.CommandJournalOptions{
+			MaxSegmentSize: opts.WALMaxSegmentBytes,
+			Compress:       opts.JournalCompression,
+			InitialLSN:     db.meta.AppliedCommandLSN,
+			SegmentSeq:     commandSegmentSeq,
+		})
+		if err != nil {
+			_ = db.Close()
+			return nil, err
+		}
+		db.commandJournal = journal
+	} else {
+		// If a directory requires command replay but this open is not command-WAL
+		// enabled, fail closed before legacy replay can misinterpret typed frames.
+		// Frames already covered by AppliedCommandLSN are filtered below.
+		if err := requireNoUnappliedCommandWALFrames(opts.Dir, db.meta.AppliedCommandLSN, opts.WALMaxSegmentBytes); err != nil {
+			_ = db.Close()
+			return nil, err
+		}
+		if opts.Durability != DurabilityWALOffRelaxed {
+			if err := replayWALIntoBackend(db, segments, opts.WALMaxSegmentBytes, opts.ValueLog.DictLookup); err != nil {
+				_ = db.Close()
+				return nil, err
+			}
 		}
 	}
 
@@ -1508,7 +1603,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	// Best-effort: persist the format knobs used for this DB directory so
 	// offline maintenance tooling (treemap, offline vacuum/rewrite) can preserve
 	// the intended on-disk layout without requiring callers to re-specify flags.
-	if err := SaveFormatConfig(opts.Dir, formatConfigFromOptions(opts)); err != nil && opts.NotifyError != nil {
+	if err := saveOpenFormatConfig(opts); err != nil && opts.NotifyError != nil {
 		opts.NotifyError(err)
 	}
 
@@ -1588,6 +1683,8 @@ func (db *DB) Close() error {
 	db.clearSnapshotView()
 	vm := db.valueLogManager
 	db.valueLogManager = nil
+	commandJournal := db.commandJournal
+	db.commandJournal = nil
 	lock := db.lock
 	db.lock = nil
 	db.mu.Unlock()
@@ -1607,6 +1704,11 @@ func (db *DB) Close() error {
 	}
 	if vm != nil {
 		if err := vm.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if commandJournal != nil {
+		if err := commandJournal.Close(); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -1911,6 +2013,9 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 	}
 	if db.readOnly {
 		return post, ErrReadOnly
+	}
+	if db.commandWALFlushPoisoned.Load() {
+		return post, fmt.Errorf("%w: command wal post-append failure; reopen required", ErrRecoveryRequired)
 	}
 	idx := db.idx.Load()
 	if idx == nil {

@@ -377,6 +377,49 @@ func TestCommandWALRawKVBatchOneLSNAtomic(t *testing.T) {
 	}
 }
 
+func TestCommandWALRawKVBatchSetRIDRoundTrip(t *testing.T) {
+	payload, err := EncodeRawKVBatchPayload([]RawKVOperation{
+		{Op: RawKVOpSetRID, Key: []byte("ptr-key"), RID: 42},
+	})
+	if err != nil {
+		t.Fatalf("EncodeRawKVBatchPayload SetRID: %v", err)
+	}
+	var scannedRID uint64
+	err = ScanRawKVBatchPayload(payload, func(op RawKVOp, key, value []byte) error {
+		if op != RawKVOpSetRID || string(key) != "ptr-key" || len(value) != 8 {
+			t.Fatalf("scanned op=%d key=%q valueLen=%d, want SetRID ptr-key 8", op, key, len(value))
+		}
+		scannedRID = binary.LittleEndian.Uint64(value)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("ScanRawKVBatchPayload SetRID: %v", err)
+	}
+	if scannedRID != 42 {
+		t.Fatalf("scanned RID=%d, want 42", scannedRID)
+	}
+	ops, err := DecodeRawKVBatchPayload(payload)
+	if err != nil {
+		t.Fatalf("DecodeRawKVBatchPayload SetRID: %v", err)
+	}
+	if len(ops) != 1 || ops[0].Op != RawKVOpSetRID || string(ops[0].Key) != "ptr-key" || ops[0].RID != 42 || len(ops[0].Value) != 0 {
+		t.Fatalf("decoded ops=%+v, want SetRID ptr-key RID=42", ops)
+	}
+	if _, err := EncodeRawKVBatchPayload([]RawKVOperation{{Op: RawKVOpSetRID, Key: []byte("bad")}}); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("EncodeRawKVBatchPayload missing RID error=%v, want ErrCorrupt", err)
+	}
+	if _, err := EncodeRawKVBatchPayload([]RawKVOperation{{Op: RawKVOpSetRID, Key: []byte("bad"), RID: 0}}); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("EncodeRawKVBatchPayload zero RID error=%v, want ErrCorrupt", err)
+	}
+	if _, err := EncodeRawKVBatchPayload([]RawKVOperation{{Op: RawKVOpSetRID, Key: []byte("bad"), RID: 42, Value: []byte("ambiguous")}}); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("EncodeRawKVBatchPayload SetRID value error=%v, want ErrCorrupt", err)
+	}
+	binary.LittleEndian.PutUint32(payload[rawKVBatchHeaderSize+5:rawKVBatchHeaderSize+9], 7)
+	if _, err := DecodeRawKVBatchPayload(payload); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("DecodeRawKVBatchPayload malformed SetRID length error=%v, want ErrCorrupt", err)
+	}
+}
+
 func TestCommandWALFeatureGateRejectsLegacyRawPayload(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "commit-l0-000001.log")
 	w, err := NewWriter(path)
