@@ -43,6 +43,14 @@ type columnAssetOwnedStore interface {
 	PutOwned(kind ColumnAssetKind, payload []byte) (ColumnAssetRef, error)
 }
 
+type columnAssetVerifier interface {
+	Verify(ref ColumnAssetRef) error
+}
+
+type columnAssetSyncer interface {
+	Sync() error
+}
+
 type MemoryColumnAssetStore struct {
 	mu      sync.Mutex
 	nextOff int64
@@ -159,6 +167,11 @@ func (s *MemoryColumnAssetStore) ReadRange(ref ColumnAssetRef, offset int64, len
 	return out, nil
 }
 
+func (s *MemoryColumnAssetStore) Verify(ref ColumnAssetRef) error {
+	_, err := s.Read(ref)
+	return err
+}
+
 type SegmentColumnAssetStore struct {
 	mu     sync.Mutex
 	dir    string
@@ -206,6 +219,18 @@ func (s *SegmentColumnAssetStore) Close() error {
 	err := s.file.Close()
 	s.file = nil
 	return err
+}
+
+func (s *SegmentColumnAssetStore) Sync() error {
+	if s == nil {
+		return fmt.Errorf("colgranule: nil segment asset store")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.file == nil {
+		return fmt.Errorf("colgranule: closed segment asset store")
+	}
+	return s.file.Sync()
 }
 
 func (s *SegmentColumnAssetStore) Path() string {
@@ -317,6 +342,36 @@ func (s *SegmentColumnAssetStore) ReadRange(ref ColumnAssetRef, offset int64, le
 		return nil, err
 	}
 	return out, nil
+}
+
+func (s *SegmentColumnAssetStore) Verify(ref ColumnAssetRef) error {
+	if s == nil {
+		return fmt.Errorf("colgranule: nil segment asset store")
+	}
+	if err := validateColumnAssetRef(ref); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.file == nil {
+		return fmt.Errorf("colgranule: closed segment asset store")
+	}
+	if ref.FileID != s.fileID {
+		return fmt.Errorf("colgranule: asset file id=%d want %d", ref.FileID, s.fileID)
+	}
+	if ref.Offset > s.size || ref.Length > s.size-ref.Offset {
+		return fmt.Errorf("colgranule: asset range offset=%d length=%d outside segment bytes=%d", ref.Offset, ref.Length, s.size)
+	}
+	h := crc32.NewIEEE()
+	reader := io.NewSectionReader(s.file, ref.Offset, ref.Length)
+	var buf [32 << 10]byte
+	if _, err := io.CopyBuffer(h, reader, buf[:]); err != nil {
+		return err
+	}
+	if checksum := h.Sum32(); checksum != ref.Checksum {
+		return fmt.Errorf("colgranule: asset ref checksum=%08x want %08x", checksum, ref.Checksum)
+	}
+	return nil
 }
 
 func newColumnAssetRef(kind ColumnAssetKind, fileID uint32, offset int64, length int, payload []byte) (ColumnAssetRef, error) {

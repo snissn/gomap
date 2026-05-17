@@ -28,6 +28,14 @@ type ColumnAssetManagerReclamationPlan struct {
 	RewriteDebtBytes   int                                  `json:"rewrite_debt_bytes"`
 }
 
+type ColumnAssetPublishClosure struct {
+	PreparedAssets []ColumnPreparedAsset `json:"prepared_assets,omitempty"`
+	RequiredAssets int                   `json:"required_assets"`
+	RequiredBytes  int                   `json:"required_bytes"`
+	FlushRequired  bool                  `json:"flush_required,omitempty"`
+	SyncRequired   bool                  `json:"sync_required,omitempty"`
+}
+
 type ColumnAssetManagerReclamationEntry struct {
 	Ref              ColumnAssetRef            `json:"ref"`
 	State            ColumnAssetLifecycleState `json:"state"`
@@ -202,6 +210,104 @@ func (m *ColumnAssetManager) Quarantine(ref ColumnAssetRef, reason string) error
 	return nil
 }
 
+func (m *ColumnAssetManager) PreparePublishClosure(prepared []ColumnPreparedAsset) (ColumnAssetPublishClosure, error) {
+	if m == nil {
+		return ColumnAssetPublishClosure{}, fmt.Errorf("colgranule: nil column asset manager")
+	}
+	m.mu.Lock()
+	store := m.store
+	m.mu.Unlock()
+	if store == nil {
+		return ColumnAssetPublishClosure{}, fmt.Errorf("colgranule: closed column asset manager")
+	}
+	closure := ColumnAssetPublishClosure{
+		PreparedAssets: cloneColumnPreparedAssets(prepared),
+		FlushRequired:  len(prepared) > 0,
+	}
+	if _, ok := store.(columnAssetSyncer); ok && len(prepared) > 0 {
+		closure.SyncRequired = true
+	}
+	seen := make(map[ColumnAssetRef]struct{}, len(prepared))
+	for _, asset := range prepared {
+		if err := validateColumnPreparedAsset(asset); err != nil {
+			return ColumnAssetPublishClosure{}, err
+		}
+		if _, ok := seen[asset.Ref]; ok {
+			return ColumnAssetPublishClosure{}, fmt.Errorf("colgranule: duplicate prepared asset ref %+v", asset.Ref)
+		}
+		seen[asset.Ref] = struct{}{}
+		if err := verifyColumnAssetStoreRef(store, asset.Ref); err != nil {
+			return ColumnAssetPublishClosure{}, fmt.Errorf("colgranule: missing required prepared asset %+v: %w", asset.Ref, err)
+		}
+		closure.RequiredAssets++
+		bytes := asset.Bytes
+		if bytes == 0 {
+			if asset.Ref.Length > int64(^uint(0)>>1) {
+				return ColumnAssetPublishClosure{}, fmt.Errorf("colgranule: prepared asset length=%d exceeds host int", asset.Ref.Length)
+			}
+			bytes = int(asset.Ref.Length)
+		}
+		closure.RequiredBytes += bytes
+	}
+	return closure, nil
+}
+
+func (m *ColumnAssetManager) SyncPublishClosure(closure ColumnAssetPublishClosure) error {
+	if m == nil {
+		return fmt.Errorf("colgranule: nil column asset manager")
+	}
+	m.mu.Lock()
+	store := m.store
+	m.mu.Unlock()
+	if store == nil {
+		return fmt.Errorf("colgranule: closed column asset manager")
+	}
+	for _, asset := range closure.PreparedAssets {
+		if err := validateColumnPreparedAsset(asset); err != nil {
+			return err
+		}
+	}
+	if syncer, ok := store.(columnAssetSyncer); ok {
+		return syncer.Sync()
+	}
+	return nil
+}
+
+func (m *ColumnAssetManager) MarkPublishSucceeded(prepared []ColumnPreparedAsset, _ string) error {
+	if m == nil {
+		return fmt.Errorf("colgranule: nil column asset manager")
+	}
+	if _, err := m.PreparePublishClosure(prepared); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, asset := range prepared {
+		delete(m.quarantine, asset.Ref)
+		delete(m.zombies, asset.Ref)
+		delete(m.rewriteDebt, asset.Ref)
+	}
+	return nil
+}
+
+func (m *ColumnAssetManager) MarkPublishFailed(prepared []ColumnPreparedAsset, reason string) error {
+	if m == nil {
+		return fmt.Errorf("colgranule: nil column asset manager")
+	}
+	if reason == "" {
+		reason = "publish failed"
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, asset := range prepared {
+		if err := validateColumnPreparedAsset(asset); err != nil {
+			return err
+		}
+		m.quarantine[asset.Ref] = reason
+	}
+	return nil
+}
+
 func (m *ColumnAssetManager) PlanReclamation(reachability ColumnAssetReachabilityPlan) ColumnAssetManagerReclamationPlan {
 	var plan ColumnAssetManagerReclamationPlan
 	if m == nil {
@@ -223,7 +329,7 @@ func (m *ColumnAssetManager) PlanReclamation(reachability ColumnAssetReachabilit
 			Pinned:           pinCount > 0,
 			Zombie:           zombie,
 			Quarantined:      quarantined,
-			RewriteRequired:  rewrite || (!reachable.DeleteEligible && reachable.State == ColumnAssetStateSuperseded),
+			RewriteRequired:  rewrite || (!reachable.DeleteEligible && reachable.State == ColumnAssetStateCleanupSafe),
 			ReachableReasons: reachable.Reasons,
 		}
 		switch {
@@ -253,4 +359,29 @@ func (m *ColumnAssetManager) PlanReclamation(reachability ColumnAssetReachabilit
 		plan.Entries = append(plan.Entries, entry)
 	}
 	return plan
+}
+
+func validateColumnPreparedAsset(asset ColumnPreparedAsset) error {
+	if err := validateColumnAssetRef(asset.Ref); err != nil {
+		return err
+	}
+	if asset.Bytes < 0 {
+		return fmt.Errorf("colgranule: negative prepared asset bytes %d", asset.Bytes)
+	}
+	if asset.Bytes == 0 && asset.Ref.Length > int64(^uint(0)>>1) {
+		return fmt.Errorf("colgranule: prepared asset length=%d exceeds host int", asset.Ref.Length)
+	}
+	return nil
+}
+
+func verifyColumnAssetStoreRef(store ColumnAssetStore, ref ColumnAssetRef) error {
+	if verifier, ok := store.(columnAssetVerifier); ok {
+		return verifier.Verify(ref)
+	}
+	if ranged, ok := store.(ColumnAssetRangeReader); ok {
+		_, err := ranged.ReadRange(ref, 0, 0)
+		return err
+	}
+	_, err := store.ReadTo(ref, nil)
+	return err
 }

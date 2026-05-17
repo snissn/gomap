@@ -566,8 +566,8 @@ func CompactColumnPartSet(workspace *ColumnWorkspace, reader *ColumnPartSetReade
 		return ColumnPartSetCompactionResult{}, err
 	}
 	postPublishPlan, err := PlanColumnAssetReachability(ColumnAssetReachabilityInput{
-		ActiveManifest:      &manifest,
-		SupersededManifests: []ColumnCollectionManifest{oldManifest},
+		RecoveryAuthoritativeManifests: []ColumnCollectionManifest{manifest},
+		CleanupSafeManifests:           []ColumnCollectionManifest{oldManifest},
 	})
 	if err != nil {
 		return ColumnPartSetCompactionResult{}, err
