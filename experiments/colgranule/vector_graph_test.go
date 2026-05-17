@@ -3,6 +3,7 @@ package colgranule
 import (
 	"math"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -70,6 +71,26 @@ func TestColumnVectorGraphSearchAllocs(t *testing.T) {
 	})
 	if allocs != 0 {
 		t.Fatalf("hot SearchCosine allocs/run=%g want 0", allocs)
+	}
+}
+
+func TestColumnVectorGraphRejectsStaleInvNorm(t *testing.T) {
+	batch := columnVectorGraphTestBatch(8, 4, 2, false)
+	batch.Float32Vectors["embedding_inv_norm"] = Float32VectorColumn{
+		Dims:   1,
+		Values: append([]float32(nil), batch.Float32Vectors["embedding_inv_norm"].Values...),
+	}
+	batch.Float32Vectors["embedding_inv_norm"].Values[3] *= 1.25
+
+	vectors := batch.Float32Vectors["embedding"]
+	invNorms := batch.Float32Vectors["embedding_inv_norm"]
+	neighbors := batch.AdjacencyLists["neighbors"]
+	err := validateColumnVectorGraphStorage(vectors.Values, vectors.Dims, invNorms.Values, neighbors.Offsets, neighbors.Values, batch.Rows)
+	if err == nil {
+		t.Fatal("validateColumnVectorGraphStorage succeeded with stale inverse norm")
+	}
+	if !strings.Contains(err.Error(), "inv-norm") {
+		t.Fatalf("error=%q want inv-norm validation", err)
 	}
 }
 
@@ -245,7 +266,7 @@ func exactColumnVectorGraphCosine(t *testing.T, graph *ColumnVectorGraph, query 
 		results[ordinal] = ColumnVectorGraphSearchResult{
 			PrimaryID: ids[ordinal],
 			Ordinal:   ordinal,
-			Distance:  graph.cosineDistance(query, queryInvNorm, ordinal),
+			Distance:  exactColumnVectorGraphDistance(t, graph, query, queryInvNorm, ordinal),
 		}
 	}
 	slices.SortFunc(results, func(left, right ColumnVectorGraphSearchResult) int {
@@ -262,5 +283,29 @@ func exactColumnVectorGraphCosine(t *testing.T, graph *ColumnVectorGraph, query 
 			return 0
 		}
 	})
+	if topK < 0 {
+		topK = 0
+	}
+	if topK > len(results) {
+		topK = len(results)
+	}
 	return results[:topK]
+}
+
+func exactColumnVectorGraphDistance(t *testing.T, graph *ColumnVectorGraph, query []float32, queryInvNorm float32, ordinal int) float32 {
+	t.Helper()
+	vector, ok := graph.VectorAt(nil, ordinal)
+	if !ok {
+		return float32(math.Inf(1))
+	}
+	var dot float32
+	var normSquared float64
+	for dim, value := range vector {
+		dot += query[dim] * value
+		normSquared += float64(value) * float64(value)
+	}
+	if normSquared == 0 {
+		return float32(math.Inf(1))
+	}
+	return 1 - dot*queryInvNorm*float32(1/math.Sqrt(normSquared))
 }
