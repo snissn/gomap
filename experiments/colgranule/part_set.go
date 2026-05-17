@@ -84,6 +84,10 @@ type ColumnPartSetScanResult struct {
 	Diagnostics ColumnPartSetScanDiagnostics
 }
 
+type ColumnPartSetPointLookupScratch struct {
+	scanner ColumnPartScanner
+}
+
 type ColumnPartSetScanDiagnostics struct {
 	RowsReturned       int                       `json:"rows_returned"`
 	RowsScanned        int                       `json:"rows_scanned"`
@@ -189,6 +193,49 @@ func (r *ColumnPartSetReader) LatestLocator(primaryID int64) (RowLocator, bool) 
 		return RowLocator{}, false
 	}
 	return ref.Locator, true
+}
+
+func (r *ColumnPartSetReader) ScanLatestLocator(primaryID int64) (RowLocator, bool) {
+	ref, ok := r.scanLatestRowRef(primaryID)
+	if !ok {
+		return RowLocator{}, false
+	}
+	return ref.Locator, true
+}
+
+func (r *ColumnPartSetReader) ValueAtLatest(primaryID int64, columnName string) (int64, bool, error) {
+	return r.ValueAtLatestWithScratch(primaryID, columnName, nil)
+}
+
+func (r *ColumnPartSetReader) ValueAtLatestWithScratch(primaryID int64, columnName string, scratch *ColumnPartSetPointLookupScratch) (int64, bool, error) {
+	if r == nil {
+		return 0, false, nil
+	}
+	ref, ok := r.latest[primaryID]
+	if !ok {
+		return 0, false, nil
+	}
+	value, err := r.valueAtRowRef(ref, columnName, scratch)
+	if err != nil {
+		return 0, false, err
+	}
+	return value, true, nil
+}
+
+func (r *ColumnPartSetReader) ScanValueAtLatest(primaryID int64, columnName string) (int64, bool, error) {
+	return r.ScanValueAtLatestWithScratch(primaryID, columnName, nil)
+}
+
+func (r *ColumnPartSetReader) ScanValueAtLatestWithScratch(primaryID int64, columnName string, scratch *ColumnPartSetPointLookupScratch) (int64, bool, error) {
+	ref, ok := r.scanLatestRowRef(primaryID)
+	if !ok {
+		return 0, false, nil
+	}
+	value, err := r.valueAtRowRef(ref, columnName, scratch)
+	if err != nil {
+		return 0, false, err
+	}
+	return value, true, nil
 }
 
 func (r *ColumnPartSetReader) ScanProjected(columns []string) (ColumnPartSetScanResult, error) {
@@ -326,6 +373,52 @@ func (r *ColumnPartSetReader) visibleRowsForPart(partIndex int) columnPartSetVis
 		return columnPartSetVisibleRows{}
 	}
 	return r.visibleRowList[partIndex]
+}
+
+func (r *ColumnPartSetReader) scanLatestRowRef(primaryID int64) (columnPartSetRowRef, bool) {
+	if r == nil {
+		return columnPartSetRowRef{}, false
+	}
+	var best columnPartSetRowRef
+	var found bool
+	tombstoneGeneration, tombstoned := r.tombstoneByID[primaryID]
+	for partIndex, loaded := range r.parts {
+		locator, ok := loaded.Part.LocatePrimaryID(primaryID)
+		if !ok {
+			continue
+		}
+		row := columnPartSetRowRef{
+			PrimaryID:    primaryID,
+			PartIndex:    partIndex,
+			PartRow:      locator.PartRow,
+			GenerationID: loaded.Ref.GenerationID,
+			Ordinal:      loaded.Ordinal,
+			Locator:      locator,
+		}
+		if tombstoned && tombstoneGeneration >= row.GenerationID {
+			continue
+		}
+		if !found || row.newerThan(best) {
+			best = row
+			found = true
+		}
+	}
+	return best, found
+}
+
+func (r *ColumnPartSetReader) valueAtRowRef(ref columnPartSetRowRef, columnName string, scratch *ColumnPartSetPointLookupScratch) (int64, error) {
+	if r == nil {
+		return 0, fmt.Errorf("colgranule: nil part set reader")
+	}
+	if ref.PartIndex < 0 || ref.PartIndex >= len(r.parts) {
+		return 0, fmt.Errorf("colgranule: row ref part index %d outside %d parts", ref.PartIndex, len(r.parts))
+	}
+	if scratch == nil {
+		scanner := ColumnPartScanner{part: r.parts[ref.PartIndex].Part}
+		return scanner.ValueAt(ref.Locator, columnName)
+	}
+	scratch.scanner.part = r.parts[ref.PartIndex].Part
+	return scratch.scanner.ValueAt(ref.Locator, columnName)
 }
 
 func (r columnPartSetRowRef) newerThan(other columnPartSetRowRef) bool {
