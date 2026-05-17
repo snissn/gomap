@@ -1054,6 +1054,9 @@ func (db *DB) PublishOrderedRootIterator(baseRoot uint64, iter iterator.UnsafeIt
 	if db.readOnly {
 		return 0, ErrReadOnly
 	}
+	if err := db.rejectUnloggedCommandWALRootPublish(); err != nil {
+		return 0, err
+	}
 
 	db.mu.RLock()
 	userRoot := db.meta.UserRootPageID
@@ -1147,6 +1150,9 @@ func (db *DB) PublishOrderedRootDeltaGroupWithSystemBuilder(ordered []OrderedRoo
 
 	if db.readOnly {
 		err = ErrReadOnly
+		return 0, nil, err
+	}
+	if err = db.rejectUnloggedCommandWALRootPublish(); err != nil {
 		return 0, nil, err
 	}
 
@@ -1337,6 +1343,11 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered []Order
 		err = ErrReadOnly
 		return 0, nil, err
 	}
+	if commandWALIntent == nil {
+		if err = db.rejectUnloggedCommandWALRootPublish(); err != nil {
+			return 0, nil, err
+		}
+	}
 
 	db.mu.RLock()
 	userRoot := db.meta.UserRootPageID
@@ -1520,6 +1531,10 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 	if db.readOnly {
 		db.writeMu.RUnlock()
 		err = ErrReadOnly
+		return 0, nil, false, err
+	}
+	if err = db.rejectUnloggedCommandWALRootPublish(); err != nil {
+		db.writeMu.RUnlock()
 		return 0, nil, false, err
 	}
 	idx := db.idx.Load()
@@ -1715,6 +1730,11 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 		err = ErrReadOnly
 		return 0, nil, err
 	}
+	if commandWALIntent == nil {
+		if err = db.rejectUnloggedCommandWALRootPublish(); err != nil {
+			return 0, nil, err
+		}
+	}
 	idxGen := db.idx.Load()
 	if idxGen == nil {
 		err = errors.New("missing index")
@@ -1838,6 +1858,9 @@ func (db *DB) publishOrderedRootGroup(systemIter iterator.UnsafeIterator, ordere
 
 	if db.readOnly {
 		return 0, nil, ErrReadOnly
+	}
+	if err := db.rejectUnloggedCommandWALRootPublish(); err != nil {
+		return 0, nil, err
 	}
 
 	db.mu.RLock()

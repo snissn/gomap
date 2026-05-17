@@ -26,4 +26,7 @@ var (
 	// ErrCommandWALRejected is the stable public sentinel for commands that are
 	// intentionally rejected while command_wal_v1 is active.
 	ErrCommandWALRejected = errors.New("treedb: command_wal_v1 command rejected")
+	// ErrCommandWALSegmentSeqExhausted indicates the command WAL segment sequence
+	// number space has no strictly higher segment available.
+	ErrCommandWALSegmentSeqExhausted = errors.New("treedb: command wal segment sequence exhausted")
 )

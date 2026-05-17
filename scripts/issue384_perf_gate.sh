@@ -23,7 +23,7 @@ fi
 # The scored matrix is intentionally compression-off to isolate #384 changes.
 SCORED_PATTERN="${SCORED_PATTERN:-medium_compressible_sparse}"
 NIGHTLY_EXTRA_PATTERN="${NIGHTLY_EXTRA_PATTERN:-}"
-AUTO_SANITY_MIN_FRAC="${AUTO_SANITY_MIN_FRAC:-0.95}"
+AUTO_SANITY_MIN_FRAC="${AUTO_SANITY_MIN_FRAC:-1.01}"
 STRICT_GATE="${STRICT_GATE:-1}"
 
 if (( RUNS < 1 )); then
@@ -241,21 +241,28 @@ for case_id, tests, valsize, pattern, comp, threshold, mode in case_specs:
     base_med = median(base_vals)
     cand_med = median(cand_vals)
     if base_med <= 0:
+        ratio = math.nan
         delta = math.nan
     else:
+        ratio = cand_med / base_med
         delta = (cand_med - base_med) * 100.0 / base_med
 
     passed = True
     reason = ""
+    min_ratio = math.nan
     if mode == "scored":
-        passed = (not math.isnan(delta)) and delta >= threshold
+        min_ratio = max(1.01, 1.0 + threshold / 100.0)
+        passed = (not math.isnan(ratio)) and ratio > min_ratio
         if not passed:
-            reason = f"delta {delta:+.2f}% < threshold {threshold:+.2f}%"
+            reason = f"candidate/baseline {ratio:.4f} <= min {min_ratio:.4f}"
     elif mode == "auto_sanity":
-        frac = cand_med / base_med if base_med > 0 else math.nan
-        passed = (not math.isnan(frac)) and frac >= auto_min_frac
+        min_ratio = auto_min_frac
+        frac = ratio
+        passed = (not math.isnan(frac)) and frac > auto_min_frac
         if not passed:
-            reason = f"candidate/baseline {frac:.4f} < min {auto_min_frac:.4f}"
+            reason = f"candidate/baseline {frac:.4f} <= min {auto_min_frac:.4f}"
+    else:
+        raise SystemExit(f"unknown gate mode {mode!r} for case {case_id}")
 
     all_pass = all_pass and passed
     rows.append({
@@ -270,6 +277,8 @@ for case_id, tests, valsize, pattern, comp, threshold, mode in case_specs:
         "candidate_runs": cand_vals,
         "baseline_median": base_med,
         "candidate_median": cand_med,
+        "candidate_baseline_ratio": ratio,
+        "min_ratio": min_ratio,
         "delta_pct": delta,
         "passed": passed,
         "reason": reason,
@@ -292,13 +301,13 @@ md.append(f"- keys={meta.get('keys', '')} batch={meta.get('batch', '')} seed={me
 if meta.get("run_prefix", ""):
     md.append(f"- run_prefix: `{meta.get('run_prefix', '')}`")
 md.append("")
-md.append("| case | mode | tests | valsize | pattern | comp | baseline median | candidate median | delta | threshold | pass |")
-md.append("|---|---|---|---:|---|---|---:|---:|---:|---:|---|")
+md.append("| case | mode | tests | valsize | pattern | comp | baseline median | candidate median | candidate/baseline | min ratio | delta | pass |")
+md.append("|---|---|---|---:|---|---|---:|---:|---:|---:|---:|---|")
 for r in rows:
-    threshold = "-" if r["mode"] == "auto_sanity" else f"{r['threshold_pct']:+.2f}%"
+    min_ratio = "-" if math.isnan(r["min_ratio"]) else f"{r['min_ratio']:.4f}x"
     md.append(
         f"| {r['case']} | {r['mode']} | {r['tests']} | {r['valsize']} | {r['pattern']} | {r['compression']} | "
-        f"{r['baseline_median']:,.0f} | {r['candidate_median']:,.0f} | {r['delta_pct']:+.2f}% | {threshold} | {'PASS' if r['passed'] else 'FAIL'} |"
+        f"{r['baseline_median']:,.0f} | {r['candidate_median']:,.0f} | {r['candidate_baseline_ratio']:.4f}x | {min_ratio} | {r['delta_pct']:+.2f}% | {'PASS' if r['passed'] else 'FAIL'} |"
     )
 
 failed = [r for r in rows if not r["passed"]]

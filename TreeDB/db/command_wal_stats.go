@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"sync/atomic"
 
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 )
@@ -32,6 +33,7 @@ func writeCommandWALStats(stats map[string]string, db *DB) {
 	if db.commandWALRequiredErr != "" {
 		stats["treedb.command_wal.required_feature_error"] = db.commandWALRequiredErr
 	}
+	writeCommandWALLiveStats(stats, db)
 	if !db.commandWALStatsScan {
 		stats["treedb.command_wal.stats_scan"] = "false"
 		return
@@ -66,9 +68,51 @@ func writeCommandWALStatsZeroCounters(stats map[string]string) {
 	stats["treedb.command_wal.frames"] = "0"
 	stats["treedb.command_wal.max_lsn"] = "0"
 	stats["treedb.command_wal.bytes"] = "0"
+	stats["treedb.command_wal.live_accepted_frames"] = "0"
+	stats["treedb.command_wal.live_accepted_max_lsn"] = "0"
+	stats["treedb.command_wal.live_covered_frames"] = "0"
+	stats["treedb.command_wal.live_covered_max_lsn"] = "0"
+}
+
+func writeCommandWALLiveStats(stats map[string]string, db *DB) {
+	stats["treedb.command_wal.live_accepted_frames"] = fmt.Sprintf("%d", db.commandWALLiveAccepted.Load())
+	stats["treedb.command_wal.live_accepted_max_lsn"] = fmt.Sprintf("%d", db.commandWALLiveAcceptedMax.Load())
+	stats["treedb.command_wal.live_covered_frames"] = fmt.Sprintf("%d", db.commandWALLiveCovered.Load())
+	stats["treedb.command_wal.live_covered_max_lsn"] = fmt.Sprintf("%d", db.commandWALLiveCoveredMax.Load())
+}
+
+func (db *DB) observeCommandWALAccepted(lsn uint64) {
+	if db == nil || lsn == 0 {
+		return
+	}
+	db.commandWALLiveAccepted.Add(1)
+	commandWALStoreMax(&db.commandWALLiveAcceptedMax, lsn)
+}
+
+func (db *DB) observeCommandWALCovered(previous, next uint64) {
+	if db == nil || next <= previous {
+		return
+	}
+	db.commandWALLiveCovered.Add(next - previous)
+	commandWALStoreMax(&db.commandWALLiveCoveredMax, next)
+}
+
+func commandWALStoreMax(dst *atomic.Uint64, value uint64) {
+	for {
+		current := dst.Load()
+		if current >= value {
+			return
+		}
+		if dst.CompareAndSwap(current, value) {
+			return
+		}
+	}
 }
 
 func (db *DB) cachedCommandWALStatsSummary() (commandWALStatsSummary, error) {
+	if err := db.FlushCommandWAL(false); err != nil {
+		return commandWALStatsSummary{}, err
+	}
 	state := db.state.Load()
 	appliedLSN := uint64(0)
 	if state != nil {

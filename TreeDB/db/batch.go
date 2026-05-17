@@ -9,8 +9,10 @@ import (
 
 // Batch implements the cosmos-db Batch interface.
 type Batch struct {
-	db    *DB
-	batch *batch.Batch
+	db                      *DB
+	batch                   *batch.Batch
+	physicalOnly            bool
+	commandWALPublishIntent *commandWALBatchIntent
 }
 
 const optimisticWriteMaxAttempts = 3
@@ -29,6 +31,18 @@ func (db *DB) NewBatch() batch.Interface {
 	return db.newBatchWithEntryReserve(0)
 }
 
+// NewPhysicalBatch creates a backend batch that mutates the physical index
+// without appending a RawKVBatch command frame. It is for higher-level command
+// WAL executors that have already appended their logical command frames before
+// making writes visible through the cached layer.
+func (db *DB) NewPhysicalBatch() batch.Interface {
+	b := db.newBatchWithEntryReserve(0)
+	if pb, ok := b.(*Batch); ok {
+		pb.physicalOnly = true
+	}
+	return b
+}
+
 // NewBatchWithSize accepts the public cosmos-db style size hint. Small values
 // are treated like exact entry reserves; larger values are normalized as
 // approximate byte budgets and capped to avoid preallocating one entry per
@@ -39,6 +53,43 @@ func (db *DB) NewBatch() batch.Interface {
 func (db *DB) NewBatchWithSize(size int) batch.Interface {
 	reserveHint := NormalizePublicBatchReserveHint(size)
 	return db.newBatchWithReserveHint(reserveHint)
+}
+
+// NewPhysicalBatchWithSize is NewPhysicalBatch with the public size hint.
+func (db *DB) NewPhysicalBatchWithSize(size int) batch.Interface {
+	reserveHint := NormalizePublicBatchReserveHint(size)
+	b := db.newBatchWithReserveHint(reserveHint)
+	if pb, ok := b.(*Batch); ok {
+		pb.physicalOnly = true
+	}
+	return b
+}
+
+// SetCommandWALPublish records an already-appended command-WAL LSN range to
+// publish atomically with this physical batch's root commit.
+func (b *Batch) SetCommandWALPublish(appliedLSN uint64, covered []CommandWALLSNRange) error {
+	if b == nil {
+		return ErrClosed
+	}
+	if appliedLSN == 0 {
+		b.commandWALPublishIntent = nil
+		return nil
+	}
+	if !b.physicalOnly {
+		return fmt.Errorf("treedb: command wal publish piggyback requires physical batch")
+	}
+	if len(covered) != 1 {
+		return fmt.Errorf("treedb: command wal publish piggyback requires one covered range")
+	}
+	r := covered[0]
+	if r.First == 0 || r.Last < r.First || r.Last != appliedLSN {
+		return fmt.Errorf("%w: invalid coverage range [%d,%d] for applied %d", ErrCommandWALAppliedLSNNonContig, r.First, r.Last, appliedLSN)
+	}
+	b.commandWALPublishIntent = &commandWALBatchIntent{
+		lsn:          appliedLSN,
+		coveredRange: [1]CommandWALLSNRange{r},
+	}
+	return nil
 }
 
 // NormalizePublicBatchReserveHint keeps small public hints behaving like entry
@@ -162,12 +213,16 @@ func (b *Batch) write(sync bool) error {
 	if b.db.readOnly {
 		return ErrReadOnly
 	}
-	if sync && b.batch != nil && len(b.batch.SortedEntries()) == 0 {
+	if sync && b.batch != nil && len(b.batch.SortedEntries()) == 0 && b.commandWALPublishIntent == nil {
 		return b.db.Checkpoint()
 	}
-	intent, err := b.db.prepareRawKVCommandWALIntent(b)
-	if err != nil {
-		return err
+	intent := b.commandWALPublishIntent
+	if !b.physicalOnly && b.db.commandWAL {
+		var err error
+		intent, err = b.db.prepareRawKVCommandWALIntent(b)
+		if err != nil {
+			return err
+		}
 	}
 	return b.writeWithCommandWALIntent(sync, intent)
 }
@@ -250,21 +305,26 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent) (bool,
 		return false, nil
 	}
 
-	if _, err := b.db.appendRawKVCommandWALIntent(intent, sync); err != nil {
-		b.db.commitMu.Unlock()
-		freeErr := tracker.FreeAll()
-		b.db.writeMu.RUnlock()
-		if freeErr != nil {
-			return false, freeErr
+	var post finalizeCommitPost
+	if intent == nil {
+		post, err = b.db.finalizeCommitLocked(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil)
+	} else {
+		if _, err = b.db.appendRawKVCommandWALIntent(intent, sync); err != nil {
+			b.db.commitMu.Unlock()
+			freeErr := tracker.FreeAll()
+			b.db.writeMu.RUnlock()
+			if freeErr != nil {
+				return false, freeErr
+			}
+			return false, err
 		}
-		return false, err
-	}
-	post, err := b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, commandWALFinalizeOptions(intent))
-	// Poison while still holding commitMu so that no concurrent writer can
-	// slip past the poison check in appendRawKVCommandWALIntent and publish a
-	// root that covers the unapplied frame's LSN.
-	if err != nil {
-		b.db.poisonCommandWALAfterPostAppendFailure(intent)
+		post, err = b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, commandWALFinalizeOptions(intent))
+		// Poison while still holding commitMu so that no concurrent writer can
+		// slip past the poison check in appendRawKVCommandWALIntent and publish a
+		// root that covers the unapplied frame's LSN.
+		if err != nil {
+			b.db.poisonCommandWALAfterPostAppendFailure(intent)
+		}
 	}
 	b.db.commitMu.Unlock()
 	if err != nil {
@@ -324,14 +384,21 @@ func (b *Batch) writeSerialized(sync bool, intent *commandWALBatchIntent) error 
 	sysRoot := b.db.meta.SystemRootPageID
 	b.db.mu.Unlock()
 
-	// writeMu is released by the deferred unlock above even if the command
-	// journal append fails and poisons this open handle.
-	if _, err := b.db.appendRawKVCommandWALIntent(intent, sync); err != nil {
-		return err
+	var post finalizeCommitPost
+	if intent == nil {
+		post, err = b.db.finalizeCommitLocked(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil)
+	} else {
+		// writeMu is released by the deferred unlock above even if the command
+		// journal append fails and poisons this open handle.
+		if _, err = b.db.appendRawKVCommandWALIntent(intent, sync); err != nil {
+			return err
+		}
+		post, err = b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, commandWALFinalizeOptions(intent))
 	}
-	post, err := b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, commandWALFinalizeOptions(intent))
 	if err != nil {
-		b.db.poisonCommandWALAfterPostAppendFailure(intent)
+		if intent != nil {
+			b.db.poisonCommandWALAfterPostAppendFailure(intent)
+		}
 		return err
 	}
 	vlogRefDelta = nil
@@ -347,9 +414,11 @@ func (b *Batch) Close() error {
 	if b.batch != nil {
 		err := b.batch.Close()
 		b.batch = nil
+		b.commandWALPublishIntent = nil
 		return err
 	}
 	b.batch = nil
+	b.commandWALPublishIntent = nil
 	return nil
 }
 
@@ -359,6 +428,7 @@ func (b *Batch) Reset() {
 		return
 	}
 	b.batch.Reset()
+	b.commandWALPublishIntent = nil
 }
 
 func (b *Batch) Replay(fn func(batch.Entry) error) error {

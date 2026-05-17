@@ -23,6 +23,9 @@ var (
 	// ErrCommandWALRejected indicates a command is intentionally rejected while
 	// command_wal_v1 is active.
 	ErrCommandWALRejected = db.ErrCommandWALRejected
+	// ErrCommandWALSegmentSeqExhausted indicates no new command-WAL segment
+	// sequence is available during open.
+	ErrCommandWALSegmentSeqExhausted = db.ErrCommandWALSegmentSeqExhausted
 	// ErrUnsupportedRequiredFeature indicates format.json requires a storage
 	// feature this binary does not understand.
 	ErrUnsupportedRequiredFeature = db.ErrUnsupportedRequiredFeature

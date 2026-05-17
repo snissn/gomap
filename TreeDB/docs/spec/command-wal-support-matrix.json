@@ -5,7 +5,7 @@
   "statuses": ["WAL-supported", "WAL-rejected", "WAL-off-only", "future"],
   "entries": [
     {"surface":"raw_kv","entry_point":"DB.Set/Delete/Batch.Write direct backend","command":"RawKVBatch","status":"WAL-supported","first_pr":"PR3","tests":["TestCommandWALRawSetDeleteBatchReplaysThroughNormalExecutor"]},
-    {"surface":"raw_kv","entry_point":"public cached Set/Delete/Batch.Write","command":"RawKVBatch","status":"future","first_pr":"PR9","tests":["PR9 default cutover"]},
+    {"surface":"raw_kv","entry_point":"public cached Set/Delete/Batch.Write","command":"RawKVBatch","status":"WAL-supported","first_pr":"PR9","tests":["TestPublicCommandWALRawKVWritesUseTypedFrames"]},
 
     {"surface":"collections","entry_point":"CollectionManager.CreateCollection","command":"CatalogCreateCollection","status":"WAL-supported","first_pr":"PR6","tests":["TestCollectionCommandWALCreateCollectionPublishesAppliedLSN","TestCollectionCommandWALCreateCollectionReplayRecoversUnappliedFrame"]},
     {"surface":"collections","entry_point":"CollectionManager.FlushAll","command":"local durability barrier","status":"WAL-supported","first_pr":"PR7","tests":["TestCollectionManagerFlushAllDrainsQueuedIndexedFlushUnit"]},

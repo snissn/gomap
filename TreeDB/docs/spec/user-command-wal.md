@@ -1061,6 +1061,50 @@ Acceptance:
 - future Raft work can reuse the command payload contract without depending on
   local WAL segment layout.
 
+### PR 9: Default command-WAL public raw KV cutover
+
+Deliverables:
+
+- public `treedb.Open` read-write handles no longer fail closed solely because
+  `CommandWAL` or persisted `command_wal_v1` is active;
+- public raw KV `Set`, `Delete`, and `Batch.Write` calls use `RawKVBatch`
+  command frames through the cached public command-WAL path;
+- the public command-WAL write path uses cached visibility while disabling the
+  cached legacy redo journal and appending typed command frames through the
+  shared backend journal owner;
+- stats expose mode proof with `treedb.write_path.mode=command_wal_cached`,
+  `treedb.command_wal.required_feature=true`, live accepted/covered command
+  frame counters, and max LSN. Diagnostic WAL segment scans are optional
+  inventory proof, not required for normal benchmark mode proof.
+
+Acceptance:
+
+- public raw KV command-WAL writes reopen through `treedb.Open` without explicit
+  backend-only APIs;
+- recovery preserves visible state and deletes after public batch writes;
+- the support matrix classifies public raw KV writes as `WAL-supported` and
+  points at executable evidence;
+- point `Set`, focused `Batch.Write`, `unified_bench` batch-write, and
+  incompressible value-log auto/off throughput gates each require candidate
+  throughput strictly greater than `1.01x` of the relevant baseline. Any
+  required lane at or below `1.01x`, including sub-parity evidence such as
+  `0.80x`, is a failing gate rather than accepted evidence.
+- all required command-WAL acceptance performance gates use the same strict
+  parity-plus policy: passing evidence must include `>` semantics, explicit
+  `1.01x` minimum ratio thresholds, and comparative throughput ratios above the
+  threshold; stale or diagnostic evidence below that threshold is failing
+  evidence.
+
+PR9 initial evidence:
+
+- `TestPublicCommandWALRawKVWritesUseTypedFrames` opens with public
+  `treedb.Open`, writes `Set` plus batch set/delete operations, proves command
+  frame/max-LSN stats are non-zero, closes, reopens from persisted
+  `command_wal_v1`, and verifies the final public state;
+- this PR intentionally routes public command-WAL writes through cached
+  visibility plus typed command-WAL frames rather than re-enabling the cached
+  legacy redo journal.
+
 ## 16. Deprecation of the Collection Root-Delta WAL Target
 
 The collection-specific physical/root-delta WAL target is deprecated for new
