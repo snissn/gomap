@@ -8,7 +8,6 @@ import (
 	"strings"
 	"unsafe"
 
-	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/x/bsonx/bsoncore"
 )
@@ -57,15 +56,15 @@ func (c *Collection) UpdateBSONSet(documentID []byte, fields []BSONSetField) (bo
 	if err := validateCollectionUpdateDocumentInput(c, documentID); err != nil {
 		return false, false, err
 	}
-	if c.commandWALActive(nil) {
-		return false, false, fmt.Errorf("%w: collection update requires update command WAL support", backenddb.ErrCommandWALUnsupported)
-	}
 	if err := c.validateBSONSetDocumentFormat(); err != nil {
 		return false, false, err
 	}
 	spec, err := newBSONSetUpdate(fields)
 	if err != nil {
 		return false, false, err
+	}
+	if c.commandWALActive(nil) {
+		return c.updateBSONSetDirect(documentID, spec)
 	}
 	if combiner, domain := c.updateFastPathWithoutCreatingCombiner(); combiner != nil {
 		return combiner.update(c, documentID, nil, spec, true)
@@ -95,8 +94,15 @@ func (c *Collection) updateBSONSetDirect(documentID []byte, spec bsonSetUpdate) 
 		return false, false, err
 	}
 	items := []updateBatchItem{newBSONSetUpdateBatchItem(documentID, spec)}
-	results, batched, err := c.updateBatchOwnedItems(items, updateBatchModeNoSecondaryUniqueIndexChanges)
+	mode := updateBatchModeNoSecondaryUniqueIndexChanges
+	if c.commandWALActive(nil) {
+		mode = updateBatchModeAny
+	}
+	results, batched, err := c.updateBatchOwnedItems(items, mode)
 	if !batched && err == nil {
+		if c.commandWALActive(nil) {
+			return false, false, errors.New("collections: command WAL BSON $set fallback unexpectedly unbatched")
+		}
 		return c.updateDirectBSONSet(documentID, spec)
 	}
 	if err != nil {
@@ -129,9 +135,6 @@ func (c *Collection) updateBSONSetBatch(items []BSONSetUpdateBatchItem, mode upd
 	}
 	if err := c.ensureWriteDomainOpen(); err != nil {
 		return nil, false, err
-	}
-	if c.commandWALActive(nil) {
-		return nil, false, fmt.Errorf("%w: collection update requires update command WAL support", backenddb.ErrCommandWALUnsupported)
 	}
 	if err := c.validateBSONSetDocumentFormat(); err != nil {
 		return nil, false, err

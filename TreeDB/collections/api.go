@@ -160,8 +160,9 @@ type UpdateBatchItem struct {
 
 type updateBatchItem struct {
 	UpdateBatchItem
-	bsonSet    bsonSetUpdate
-	hasBSONSet bool
+	bsonSet                       bsonSetUpdate
+	hasBSONSet                    bool
+	allowTemplateV1StoredDocument bool
 }
 
 func newBSONSetUpdateBatchItem(documentID []byte, spec bsonSetUpdate) updateBatchItem {
@@ -9474,7 +9475,19 @@ func (c *Collection) Update(documentID []byte, update func(current []byte) (repl
 		return false, false, err
 	}
 	if c.commandWALActive(nil) {
-		return false, false, fmt.Errorf("%w: collection update requires update command WAL support", backenddb.ErrCommandWALUnsupported)
+		results, _, err := c.updateBatchOwnedItemsWithCommandWALIntent([]updateBatchItem{{
+			UpdateBatchItem: UpdateBatchItem{
+				DocumentID: bytes.Clone(documentID),
+				Update:     update,
+			},
+		}}, updateBatchModeAny, nil)
+		if err != nil {
+			return false, false, err
+		}
+		if len(results) != 1 {
+			return false, false, fmt.Errorf("collections: update result count %d for single command WAL update", len(results))
+		}
+		return results[0].Matched, results[0].Modified, nil
 	}
 	var matched, modified bool
 	var err error
@@ -9618,9 +9631,6 @@ func (c *Collection) updateBatch(items []UpdateBatchItem, mode updateBatchMode) 
 	if err := c.ensureWriteDomainOpen(); err != nil {
 		return nil, false, err
 	}
-	if c.commandWALActive(nil) {
-		return nil, false, fmt.Errorf("%w: collection update requires update command WAL support", backenddb.ErrCommandWALUnsupported)
-	}
 	if len(items) == 0 {
 		c.setLastUpdateStats(CollectionUpdateStats{})
 		return nil, true, nil
@@ -9633,9 +9643,13 @@ func (c *Collection) updateBatch(items []UpdateBatchItem, mode updateBatchMode) 
 }
 
 func (c *Collection) updateBatchOwnedItems(items []updateBatchItem, mode updateBatchMode) ([]UpdateBatchResult, bool, error) {
+	return c.updateBatchOwnedItemsWithCommandWALIntent(items, mode, nil)
+}
+
+func (c *Collection) updateBatchOwnedItemsWithCommandWALIntent(items []updateBatchItem, mode updateBatchMode, commandWALIntent *backenddb.CommandWALIntent) ([]UpdateBatchResult, bool, error) {
 	var lastErr error
 	for attempt := 0; attempt < maxCollectionMutationRetries; attempt++ {
-		results, err := c.updateBatchOnce(items, mode)
+		results, err := c.updateBatchOnce(items, mode, commandWALIntent)
 		if errors.Is(err, errUpdateBatchHasSecondaryUniqueIndex) ||
 			errors.Is(err, errUpdateBatchChangesSecondaryUniqueIndex) {
 			return make([]UpdateBatchResult, len(items)), false, nil
@@ -9730,6 +9744,15 @@ func updateBatchItemsAllHaveBSONSet(items []updateBatchItem) bool {
 		}
 	}
 	return true
+}
+
+func updateBatchItemsAllowTemplateV1StoredDocuments(items []updateBatchItem) bool {
+	for _, item := range items {
+		if item.allowTemplateV1StoredDocument {
+			return true
+		}
+	}
+	return false
 }
 
 func updateBatchItemError(index int, err error) error {
@@ -12046,6 +12069,7 @@ type updateBatchPlan struct {
 	baseRootIDs                 map[string]uint64
 	policies                    []backenddb.OrderedRootStoragePolicy
 	deltaTables                 []memtable.Table
+	commandWALDocuments         []commitlog.CollectionDocument
 	directBufferedUpdate        *directBufferedUpdatePlan
 	uniqueSecondaryIndexByRoot  []int
 	canBufferIndexedUpdateBatch bool
@@ -12627,6 +12651,9 @@ func (c *Collection) shouldUseDirectBufferedUpdatePlan(meta CollectionMeta, opts
 	if c == nil || c.writeDomain == nil {
 		return false
 	}
+	if c.commandWALActive(nil) {
+		return false
+	}
 	if len(changed) == 0 {
 		return false
 	}
@@ -12651,8 +12678,8 @@ func (c *Collection) shouldUseDirectBufferedUpdatePlan(meta CollectionMeta, opts
 	return !persistIndexStateForOptions(opts)
 }
 
-func (c *Collection) updateBatchOnce(items []updateBatchItem, mode updateBatchMode) ([]UpdateBatchResult, error) {
-	if c.shouldPlanUpdateBatchWithBufferedWrites(mode) {
+func (c *Collection) updateBatchOnce(items []updateBatchItem, mode updateBatchMode, commandWALIntent *backenddb.CommandWALIntent) ([]UpdateBatchResult, error) {
+	if !c.commandWALActive(commandWALIntent) && c.shouldPlanUpdateBatchWithBufferedWrites(mode) {
 		useBufferedRead := true
 		bufferedReadReplans := 0
 		for {
@@ -12749,7 +12776,7 @@ func (c *Collection) updateBatchOnce(items []updateBatchItem, mode updateBatchMo
 					return nil
 				}
 				var publishErr error
-				results, publishErr = c.publishUpdateBatchPlanLocked(plan)
+				results, publishErr = c.publishUpdateBatchPlanLocked(plan, nil)
 				return publishErr
 			})
 			primaryOnlyNoPublish := len(plan.meta.Indexes) == 0 && len(plan.deltaTables) == 0 && plan.directBufferedUpdate == nil
@@ -12795,6 +12822,17 @@ func (c *Collection) updateBatchOnce(items []updateBatchItem, mode updateBatchMo
 				return err
 			}
 			c.meta = plan.meta
+			if c.commandWALActive(commandWALIntent) {
+				if commandWALIntent == nil {
+					commandWALIntent, err = c.newCollectionUpdateCommandWALIntent(nil, nil)
+					if err != nil {
+						return err
+					}
+				}
+				if err := c.db.PublishCommandWALNoop(commandWALIntent, false); err != nil {
+					return err
+				}
+			}
 			return nil
 		}); err != nil {
 			return nil, err
@@ -12808,27 +12846,36 @@ func (c *Collection) updateBatchOnce(items []updateBatchItem, mode updateBatchMo
 
 	var results []UpdateBatchResult
 	err = c.withMutationLock(func() error {
-		buffered, bufferErr := c.bufferUpdateBatchPlanLocked(plan)
-		if bufferErr != nil {
-			return bufferErr
-		}
-		if buffered {
-			results = plan.results
-			return nil
-		}
-		if plan.directBufferedUpdate != nil {
-			if !c.canBufferDirectUpdateAck() {
-				if err := c.flushBufferedWrites(); err != nil {
-					return err
-				}
+		if !c.commandWALActive(commandWALIntent) {
+			buffered, bufferErr := c.bufferUpdateBatchPlanLocked(plan)
+			if bufferErr != nil {
+				return bufferErr
 			}
-			return ErrConcurrentMutation
+			if buffered {
+				results = plan.results
+				return nil
+			}
+			if plan.directBufferedUpdate != nil {
+				if !c.canBufferDirectUpdateAck() {
+					if err := c.flushBufferedWrites(); err != nil {
+						return err
+					}
+				}
+				return ErrConcurrentMutation
+			}
 		}
 		var publishErr error
 		if err := c.flushBufferedWrites(); err != nil {
 			return err
 		}
-		results, publishErr = c.publishUpdateBatchPlanLocked(plan)
+		publishIntent := commandWALIntent
+		if publishIntent == nil && c.commandWALActive(nil) && len(plan.commandWALDocuments) > 0 {
+			publishIntent, err = c.newCollectionUpdateCommandWALIntent(plan.commandWALDocuments, nil)
+			if err != nil {
+				return err
+			}
+		}
+		results, publishErr = c.publishUpdateBatchPlanLocked(plan, publishIntent)
 		return publishErr
 	})
 	if err == nil {
@@ -13351,6 +13398,9 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 		return nil, updateBatchItemError(itemIndex, errBSONSetRequiresBSONFormat)
 	}
 	plannerOptions = collectionOptionsWithTemplateV1Resolver(plannerOptions, snap, catalog)
+	if updateBatchItemsAllowTemplateV1StoredDocuments(items) {
+		plannerOptions.allowTemplateV1Stored = true
+	}
 	baseUserRoot := snapshotUserRoot(snap)
 	baseSystemRoot := snapshotSystemRoot(snap)
 	baseCommitSeq := snapshotCommitSeq(snap)
@@ -13592,6 +13642,10 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 	if templateResolver != nil {
 		plannerOptions.templateResolver = templateResolver
 	}
+	var templateV1CommandWALDocuments []commitlog.CollectionDocument
+	if normalizedDocumentFormat(plannerOptions.documentFormat) == DocumentFormatTemplateV1 {
+		templateV1CommandWALDocuments = collectionDocumentsFromBatchUpdateDocuments(changed, changedDocuments)
+	}
 	for i := range changed {
 		changed[i].document = preparedDocuments[i]
 		if len(runtimes) > 0 {
@@ -13658,6 +13712,10 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 			changed[i].changedIndexes = changedIndexes
 			changed[i].indexStateChanged = indexStateChanged
 		}
+	}
+	commandWALDocuments := collectionDocumentsFromPreparedBatchUpdates(changed)
+	if templateV1CommandWALDocuments != nil {
+		commandWALDocuments = templateV1CommandWALDocuments
 	}
 	if mode == updateBatchModeNoSecondaryUniqueIndexChanges && updateBatchChangesSecondaryUniqueIndex(runtimes, changed) {
 		_ = snap.Close()
@@ -13757,6 +13815,7 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 			bufferedReadGeneration:      bufferedRead.writeGeneration,
 			bufferedReadBlocked:         bufferedReadBlocked,
 			policies:                    policies,
+			commandWALDocuments:         commandWALDocuments,
 			directBufferedUpdate: &directBufferedUpdatePlan{
 				templateEntries:    templateEntries,
 				primaryEntries:     primaryEntries,
@@ -13957,13 +14016,14 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 		bufferedReadBlocked:         bufferedReadBlocked,
 		policies:                    policies,
 		deltaTables:                 deltaTables,
+		commandWALDocuments:         commandWALDocuments,
 		scratch:                     scratch,
 	}
 	scratchOwnedByPlan = true
 	return plan, nil
 }
 
-func (c *Collection) publishUpdateBatchPlanLocked(plan *updateBatchPlan) ([]UpdateBatchResult, error) {
+func (c *Collection) publishUpdateBatchPlanLocked(plan *updateBatchPlan, commandWALIntent *backenddb.CommandWALIntent) ([]UpdateBatchResult, error) {
 	if plan == nil {
 		return nil, nil
 	}
@@ -13995,9 +14055,17 @@ func (c *Collection) publishUpdateBatchPlanLocked(plan *updateBatchPlan) ([]Upda
 	}
 	detailedStats := c.updateBatchDetailedStatsEnabled()
 	publishStart := updateBatchStatsNow(detailedStats)
-	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaBatchGroupWithPreflightAndSystemDeltaBuilder(ordered, preflight, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
-		return c.buildRootDescriptorSystemDeltaIteratorForMeta(plan.meta, plan.baseCommitSeq, plan.baseSystemRoot, plan.rootNames, plan.baseRootIDs, rootIDs)
-	})
+	var newSystemRoot uint64
+	var rootIDs []uint64
+	if commandWALIntent != nil {
+		newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaBatchGroupWithPreflightCommandWALAndSystemDeltaBuilder(ordered, preflight, commandWALIntent, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+			return c.buildRootDescriptorSystemDeltaIteratorForMeta(plan.meta, plan.baseCommitSeq, plan.baseSystemRoot, plan.rootNames, plan.baseRootIDs, rootIDs)
+		})
+	} else {
+		newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaBatchGroupWithPreflightAndSystemDeltaBuilder(ordered, preflight, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+			return c.buildRootDescriptorSystemDeltaIteratorForMeta(plan.meta, plan.baseCommitSeq, plan.baseSystemRoot, plan.rootNames, plan.baseRootIDs, rootIDs)
+		})
+	}
 	cleanupDeltas()
 	plan.stats.Publish += updateBatchStatsSince(detailedStats, publishStart)
 	if err != nil {

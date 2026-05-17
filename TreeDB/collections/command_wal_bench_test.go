@@ -61,6 +61,48 @@ func BenchmarkCollectionCommandWALDeleteBatchByID(b *testing.B) {
 	}
 }
 
+func BenchmarkCollectionCommandWALUpdateBatchByID(b *testing.B) {
+	for _, indexed := range []bool{false, true} {
+		for _, commandWAL := range []bool{false, true} {
+			name := fmt.Sprintf("indexed=%t/command_wal=%t", indexed, commandWAL)
+			b.Run(name, func(b *testing.B) {
+				backend, collection := openCollectionCommandWALBenchmark(b, indexed, commandWAL)
+				for i := 0; i < b.N; i++ {
+					ids, docs := commandWALBenchDocuments(i*commandWALBenchBatchSize, commandWALBenchBatchSize)
+					if _, err := collection.InsertBatch(ids, docs); err != nil {
+						b.Fatalf("seed InsertBatch: %v", err)
+					}
+				}
+				b.ReportAllocs()
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					items := make([]UpdateBatchItem, commandWALBenchBatchSize)
+					for j := 0; j < commandWALBenchBatchSize; j++ {
+						n := i*commandWALBenchBatchSize + j
+						replacement := []byte(fmt.Sprintf(`{"email":"u%09d@example.com","city":"sea","age":%d}`, n, n%120))
+						items[j] = UpdateBatchItem{
+							DocumentID: []byte(fmt.Sprintf("u%09d", n)),
+							Update: func([]byte) ([]byte, bool, error) {
+								return replacement, true, nil
+							},
+						}
+					}
+					results, err := collection.UpdateBatch(items)
+					if err != nil {
+						b.Fatalf("UpdateBatch: %v", err)
+					}
+					if len(results) != commandWALBenchBatchSize {
+						b.Fatalf("UpdateBatch results=%d, want %d", len(results), commandWALBenchBatchSize)
+					}
+				}
+				b.StopTimer()
+				assertCommandWALBenchMode(b, backend, commandWAL)
+				b.ReportMetric(float64(b.N*commandWALBenchBatchSize)/b.Elapsed().Seconds(), "docs/s")
+			})
+		}
+	}
+}
+
 func openCollectionCommandWALBenchmark(b *testing.B, indexed bool, commandWAL bool) (*backenddb.DB, *Collection) {
 	b.Helper()
 	dir := b.TempDir()

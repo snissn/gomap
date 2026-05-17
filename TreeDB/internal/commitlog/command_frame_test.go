@@ -164,6 +164,44 @@ func TestCommandWALFormatGoldenV1CollectionDeleteBatchByID(t *testing.T) {
 	}
 }
 
+func TestCommandWALFormatGoldenV1CollectionUpdateBatchByID(t *testing.T) {
+	payload, err := EncodeCollectionUpdateBatchByIDPayload("users", []CollectionDocument{
+		{ID: []byte("u2"), Document: []byte(`{"name":"Grace","active":true}`)},
+		{ID: []byte("u1"), Document: []byte(`{"name":"Ada","active":true}`)},
+	})
+	if err != nil {
+		t.Fatalf("EncodeCollectionUpdateBatchByIDPayload: %v", err)
+	}
+	env := CommandEnvelope{
+		LSN:           14,
+		Kind:          CommandKindCollectionUpdateBatchByID,
+		Scope:         CommandScopeCollection,
+		PayloadFormat: PayloadFormatCollectionUpdateBatchByIDV1,
+		Payload:       payload,
+	}
+	frame, err := EncodeCommandFrame(env)
+	if err != nil {
+		t.Fatalf("EncodeCommandFrame: %v", err)
+	}
+	assertGoldenHex(t, "command_wal_v1_collection_update_by_id.hex", frame)
+	got, err := DecodeCommandFrame(frame)
+	if err != nil {
+		t.Fatalf("DecodeCommandFrame: %v", err)
+	}
+	if got.Kind != CommandKindCollectionUpdateBatchByID || got.PayloadFormat != PayloadFormatCollectionUpdateBatchByIDV1 {
+		t.Fatalf("decoded collection update mismatch: %+v", got)
+	}
+	decoded, err := DecodeCollectionUpdateBatchByIDPayload(got.Payload)
+	if err != nil {
+		t.Fatalf("DecodeCollectionUpdateBatchByIDPayload: %v", err)
+	}
+	if decoded.Collection != "users" || len(decoded.Documents) != 2 ||
+		string(decoded.Documents[0].ID) != "u1" || string(decoded.Documents[0].Document) != `{"name":"Ada","active":true}` ||
+		string(decoded.Documents[1].ID) != "u2" || string(decoded.Documents[1].Document) != `{"name":"Grace","active":true}` {
+		t.Fatalf("decoded collection update payload=%+v", decoded)
+	}
+}
+
 func TestCommandWALFormatGoldenV1CatalogMutationPlaceholder(t *testing.T) {
 	env := CommandEnvelope{
 		LSN:           13,

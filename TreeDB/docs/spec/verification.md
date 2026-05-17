@@ -381,6 +381,7 @@ PR 4: collection insert/delete by explicit ID:
 - `TestCollectionCommandWALInsertBatchByIDPublishesAppliedLSN`;
 - `TestCollectionCommandWALInsertBatchByIDReplayRecoversUnappliedFrame`;
 - `TestCollectionCommandWALInsertBatchByIDReplayTemplateV1StoredDocument`;
+- `TestCollectionCommandWALInsertBatchByIDReplayAdvancesEmptyFrame`;
 - `TestCollectionCommandWALDeleteBatchByIDReplayIgnoresMissingIDs`;
 - `TestCollectionCommandWALDeleteBatchByIDReplayAdvancesMissingOnlyFrame`;
 - `TestCollectionCommandWALRejectsCatalogCreate`;
@@ -391,16 +392,14 @@ PR 4: collection insert/delete by explicit ID:
 
 PR 5: collection update by explicit ID:
 
-- `TestCommandWALCallbackUpdateLogsFinalReplacement`;
-- `TestCommandWALRecoveryDoesNotInvokeCallback`;
-- `TestCommandWALDeclarativeSetStoresCanonicalOps`;
-- `TestCommandWALSetNowStoresResolvedLiteral`;
-- `TestCommandWALRecoveryDoesNotInvokeResolver`;
-- `TestCommandWALUpdateChangedSecondaryRecoversAtomically`;
-- `TestCommandWALUpdateUnchangedSecondaryPreservesIndexState`;
-- `TestCommandWALUpdateBatchOneLSNAtomic`;
-- `TestCommandWALUnsupportedUpdateOperatorFailsBeforeFrame`;
-- `TestCommandWALQueryWideUpdateRejectedInWALOnMode`.
+- `TestCommandWALFormatGoldenV1CollectionUpdateBatchByID`;
+- `TestCommandWALCollectionPayloadDecodeBoundsCountBeforeAllocation`;
+- `TestCollectionCommandWALUpdateByIDPublishesAppliedLSN`;
+- `TestCollectionCommandWALUpdateByIDReplayRecoversUnappliedFrame`;
+- `TestCollectionCommandWALUpdateByIDIndexedPublishesSecondaryRoots`;
+- `BenchmarkCollectionCommandWALUpdateBatchByID`;
+- acceptance artifact:
+  `artifacts/command-wal/pr5/acceptance.json`.
 
 PR 6: catalog mutation commands:
 
