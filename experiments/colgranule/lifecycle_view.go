@@ -25,12 +25,38 @@ type ColumnAssetReachabilityViewInput struct {
 	QuarantinedAssets       []ColumnPreparedAsset
 }
 
+type ColumnAssetReachabilitySummary struct {
+	Stats                  ColumnAssetReachabilityStats `json:"stats"`
+	RetainedBytes          int                          `json:"retained_bytes"`
+	PreparedBytes          int                          `json:"prepared_bytes"`
+	QuarantinedBytes       int                          `json:"quarantined_bytes"`
+	SupersededBytes        int                          `json:"superseded_bytes"`
+	SnapshotProtectedBytes int                          `json:"snapshot_protected_bytes"`
+	RewriteDebtBytes       int                          `json:"rewrite_debt_bytes"`
+	ReclaimableBytes       int                          `json:"reclaimable_bytes"`
+}
+
+type ColumnAssetReachabilitySummaryScratch struct {
+	records     []columnAssetReachabilitySummaryRecord
+	recordIndex map[ColumnAssetRef]int
+	segments    map[uint32]columnAssetSegmentState
+}
+
 type columnManifestViewAssetRef struct {
 	ref           ColumnAssetRef
 	bytes         int
 	partID        uint64
 	generationID  uint64
 	manifestBytes int
+}
+
+type columnAssetReachabilitySummaryRecord struct {
+	ref         ColumnAssetRef
+	state       ColumnAssetLifecycleState
+	bytes       int
+	live        bool
+	candidate   bool
+	quarantined bool
 }
 
 func DecodeColumnCollectionManifestView(data []byte) (ColumnCollectionManifestView, error) {
@@ -140,6 +166,92 @@ func PlanColumnAssetReachabilityFromViews(input ColumnAssetReachabilityViewInput
 	return plan, nil
 }
 
+func PlanColumnAssetReachabilitySummaryFromViews(input ColumnAssetReachabilityViewInput) (ColumnAssetReachabilitySummary, error) {
+	return PlanColumnAssetReachabilitySummaryFromViewsWithScratch(input, nil)
+}
+
+func PlanColumnAssetReachabilitySummaryFromViewsWithScratch(input ColumnAssetReachabilityViewInput, scratch *ColumnAssetReachabilitySummaryScratch) (ColumnAssetReachabilitySummary, error) {
+	estimatedRefs, err := estimateColumnAssetReachabilityViewRefs(input)
+	if err != nil {
+		return ColumnAssetReachabilitySummary{}, err
+	}
+	if scratch == nil {
+		scratch = &ColumnAssetReachabilitySummaryScratch{}
+	}
+	scratch.reset(estimatedRefs)
+
+	summary := ColumnAssetReachabilitySummary{}
+
+	if input.ActiveManifest != nil {
+		summary.Stats.ActiveManifests = 1
+		if err := addManifestViewAssetRefsToSummary(scratch, *input.ActiveManifest, ColumnAssetStateActive, true, false, &summary.Stats); err != nil {
+			return ColumnAssetReachabilitySummary{}, err
+		}
+	}
+	for _, manifest := range input.PendingManifests {
+		if err := addManifestViewAssetRefsToSummary(scratch, manifest, ColumnAssetStatePendingPublish, true, false, &summary.Stats); err != nil {
+			return ColumnAssetReachabilitySummary{}, err
+		}
+		summary.Stats.PendingManifests++
+	}
+	for _, manifest := range input.SnapshotPinnedManifests {
+		if err := addManifestViewAssetRefsToSummary(scratch, manifest, ColumnAssetStateSnapshotPinned, true, false, &summary.Stats); err != nil {
+			return ColumnAssetReachabilitySummary{}, err
+		}
+		summary.Stats.SnapshotPinnedManifests++
+	}
+	for _, manifest := range input.SupersededManifests {
+		if err := addManifestViewAssetRefsToSummary(scratch, manifest, ColumnAssetStateSuperseded, false, true, &summary.Stats); err != nil {
+			return ColumnAssetReachabilitySummary{}, err
+		}
+		summary.Stats.SupersededManifests++
+	}
+	if input.PreparedRegistry != nil {
+		if err := scanColumnPreparedRegistryViewAssetSummaries(*input.PreparedRegistry, func(ref ColumnAssetRef, bytes int) error {
+			if err := addPreparedAssetRefToSummary(scratch, ref, bytes, ColumnAssetStatePrepared, true, false, &summary.Stats); err != nil {
+				return err
+			}
+			summary.Stats.PreparedAssets++
+			return nil
+		}); err != nil {
+			return ColumnAssetReachabilitySummary{}, err
+		}
+	}
+	for _, prepared := range input.PreparedAssets {
+		if err := addPreparedAssetRefToSummary(scratch, prepared.Ref, prepared.Bytes, ColumnAssetStatePrepared, true, false, &summary.Stats); err != nil {
+			return ColumnAssetReachabilitySummary{}, err
+		}
+		summary.Stats.PreparedAssets++
+	}
+	for _, quarantined := range input.QuarantinedAssets {
+		if err := addPreparedAssetRefToSummary(scratch, quarantined.Ref, quarantined.Bytes, ColumnAssetStateQuarantined, false, false, &summary.Stats); err != nil {
+			return ColumnAssetReachabilitySummary{}, err
+		}
+		summary.Stats.QuarantinedAssets++
+	}
+	finalizeColumnAssetReachabilitySummary(scratch.records, scratch.segments, &summary)
+	return summary, nil
+}
+
+func (s *ColumnAssetReachabilitySummaryScratch) reset(recordCap int) {
+	if cap(s.records) < recordCap {
+		s.records = make([]columnAssetReachabilitySummaryRecord, 0, recordCap)
+	} else {
+		clear(s.records)
+		s.records = s.records[:0]
+	}
+	if s.recordIndex == nil {
+		s.recordIndex = make(map[ColumnAssetRef]int, recordCap)
+	} else {
+		clear(s.recordIndex)
+	}
+	if s.segments == nil {
+		s.segments = make(map[uint32]columnAssetSegmentState)
+	} else {
+		clear(s.segments)
+	}
+}
+
 func estimateColumnAssetReachabilityViewRefs(input ColumnAssetReachabilityViewInput) (int, error) {
 	refs := len(input.PreparedAssets) + len(input.QuarantinedAssets)
 	if input.ActiveManifest != nil {
@@ -199,6 +311,128 @@ func addManifestViewAssetRefs(records map[ColumnAssetRef]columnAssetReachability
 		stats.MetadataBytesScanned += tombstones
 	}
 	return nil
+}
+
+func addManifestViewAssetRefsToSummary(scratch *ColumnAssetReachabilitySummaryScratch, view ColumnCollectionManifestView, state ColumnAssetLifecycleState, live bool, candidate bool, stats *ColumnAssetReachabilityStats) error {
+	tombstones, err := scanColumnCollectionManifestViewAssetRefs(view, func(ref columnManifestViewAssetRef) error {
+		if err := scratch.addAssetRefToReachabilitySummary(ref.ref, ref.bytes, state, live, candidate, false); err != nil {
+			return err
+		}
+		if stats != nil {
+			stats.MetadataBytesScanned += ref.manifestBytes
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if stats != nil {
+		stats.MetadataBytesScanned += tombstones
+	}
+	return nil
+}
+
+func addPreparedAssetRefToSummary(scratch *ColumnAssetReachabilitySummaryScratch, ref ColumnAssetRef, bytes int, state ColumnAssetLifecycleState, live bool, candidate bool, stats *ColumnAssetReachabilityStats) error {
+	if bytes == 0 {
+		if ref.Length > int64(^uint(0)>>1) {
+			return fmt.Errorf("colgranule: prepared asset length=%d exceeds host int", ref.Length)
+		}
+		bytes = int(ref.Length)
+	}
+	if err := scratch.addAssetRefToReachabilitySummary(ref, bytes, state, live, candidate, state == ColumnAssetStateQuarantined); err != nil {
+		return err
+	}
+	if stats != nil {
+		stats.MetadataBytesScanned++
+	}
+	return nil
+}
+
+func (s *ColumnAssetReachabilitySummaryScratch) addAssetRefToReachabilitySummary(ref ColumnAssetRef, bytes int, state ColumnAssetLifecycleState, live bool, candidate bool, quarantined bool) error {
+	if bytes < 0 {
+		return fmt.Errorf("colgranule: negative asset bytes %d", bytes)
+	}
+	if err := validateColumnAssetRef(ref); err != nil {
+		return err
+	}
+	if index := s.recordIndex[ref]; index > 0 {
+		record := &s.records[index-1]
+		record.state = strongestColumnAssetState(record.state, state)
+		if record.bytes == 0 {
+			record.bytes = bytes
+		}
+		record.live = record.live || live
+		record.candidate = record.candidate || candidate
+		record.quarantined = record.quarantined || quarantined
+	} else {
+		s.records = append(s.records, columnAssetReachabilitySummaryRecord{
+			ref:   ref,
+			state: state,
+			bytes: bytes,
+			live:  live,
+		})
+		record := &s.records[len(s.records)-1]
+		record.candidate = candidate
+		record.quarantined = quarantined
+		s.recordIndex[ref] = len(s.records)
+	}
+	if _, ok := s.segments[ref.FileID]; !ok {
+		s.segments[ref.FileID] = columnAssetSegmentState{}
+	}
+	return nil
+}
+
+func finalizeColumnAssetReachabilitySummary(records []columnAssetReachabilitySummaryRecord, segments map[uint32]columnAssetSegmentState, summary *ColumnAssetReachabilitySummary) {
+	summary.Stats.Manifests = summary.Stats.ActiveManifests + summary.Stats.PendingManifests + summary.Stats.SnapshotPinnedManifests + summary.Stats.SupersededManifests
+	summary.Stats.AssetRefs = len(records)
+	for fileID, seg := range segments {
+		seg.liveRefs = 0
+		seg.candidateRefs = 0
+		segments[fileID] = seg
+	}
+	for _, record := range records {
+		seg := segments[record.ref.FileID]
+		if record.live {
+			seg.liveRefs++
+		}
+		if record.candidate && !record.live && !record.quarantined {
+			seg.candidateRefs++
+		}
+		segments[record.ref.FileID] = seg
+	}
+	summary.Stats.SegmentRefs = len(segments)
+	for _, seg := range segments {
+		if seg.liveRefs == 0 && seg.candidateRefs > 0 {
+			summary.Stats.DirectlyDeletableSegments++
+		}
+		if seg.liveRefs > 0 && seg.candidateRefs > 0 {
+			summary.Stats.MixedLiveDeadSegments++
+		}
+	}
+	for _, record := range records {
+		switch {
+		case record.quarantined:
+			summary.QuarantinedBytes += record.bytes
+		case record.live:
+			switch record.state {
+			case ColumnAssetStatePrepared, ColumnAssetStatePendingPublish:
+				summary.PreparedBytes += record.bytes
+			case ColumnAssetStateSnapshotPinned:
+				summary.SnapshotProtectedBytes += record.bytes
+				summary.RetainedBytes += record.bytes
+			default:
+				summary.RetainedBytes += record.bytes
+			}
+		case record.candidate:
+			summary.SupersededBytes += record.bytes
+			seg := segments[record.ref.FileID]
+			if seg.liveRefs == 0 {
+				summary.ReclaimableBytes += record.bytes
+			} else {
+				summary.RewriteDebtBytes += record.bytes
+			}
+		}
+	}
 }
 
 func finalizeColumnAssetReachabilityRecords(records map[ColumnAssetRef]columnAssetReachabilityRecord, segments map[uint32]*columnAssetSegmentState, plan *ColumnAssetReachabilityPlan) {
@@ -387,6 +621,31 @@ func scanColumnPreparedRegistryViewAssets(view ColumnPreparedAssetRegistryView) 
 		return nil, err
 	}
 	return assets, nil
+}
+
+func scanColumnPreparedRegistryViewAssetSummaries(view ColumnPreparedAssetRegistryView, fn func(ColumnAssetRef, int) error) error {
+	if len(view.body) == 0 {
+		return fmt.Errorf("colgranule: empty prepared registry view")
+	}
+	r := columnBinaryReader{data: view.body, label: "prepared registry view"}
+	r.skipString()
+	r.u64()
+	r.u64()
+	r.i64()
+	n := r.count("prepared assets")
+	for i := 0; i < n; i++ {
+		ref := readColumnAssetRefBinary(&r)
+		bytes := r.intValue("prepared bytes")
+		r.u64()
+		r.u64()
+		r.skipString()
+		if fn != nil && r.err == nil {
+			if err := fn(ref, bytes); err != nil {
+				r.err = err
+			}
+		}
+	}
+	return r.done()
 }
 
 func (r *columnBinaryReader) doneAfterSkippingPreparedAssets(count int) error {
