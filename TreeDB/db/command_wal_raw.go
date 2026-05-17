@@ -225,11 +225,13 @@ func readCommandWALValueLogRIDAt(path string, ptr page.ValuePtr) (uint64, error)
 		return 0, err
 	}
 	defer func() { _ = f.Close() }()
-	return valuelog.ReadRIDAt(f, ptr)
+	return valuelog.ReadRIDAtUnverified(f, ptr.FileID, ptr)
 }
 
 func isCommandWALRIDLookupVisibilityError(err error) bool {
-	return errors.Is(err, os.ErrNotExist) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
+	// Missing segment files are real recovery blockers. Retry only short-read
+	// visibility cases where the current appender may not have flushed bytes yet.
+	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
 }
 
 func (db *DB) flushCommandWALExternalRefs(sync bool, fileIDs []uint32) error {
@@ -503,12 +505,11 @@ func (db *DB) appendCommandWALIntent(intent *commandWALBatchIntent, sync bool) (
 	}
 	if intent.externalRefs {
 		// SetRID frames reference value-log positions by offset. The
-		// value-log data MUST be durable before the command frame is
-		// written, otherwise a power loss could leave the command frame
-		// referencing a non-durable RID and cause a hard recovery failure
-		// ("missing value-log RID"). For external-ref batches only, always
-		// sync regardless of the caller's sync flag.
-		if err := db.flushCommandWALExternalRefs(true, intent.externalRefFileIDs); err != nil {
+		// value-log data must be visible before the command frame is written.
+		// WriteSync also fsyncs referenced value-log segments for power-loss
+		// durability. Non-sync Write only flushes process buffers, matching the
+		// command-journal Flush path's non-fsync durability contract.
+		if err := db.flushCommandWALExternalRefs(sync, intent.externalRefFileIDs); err != nil {
 			return 0, err
 		}
 	}
@@ -584,7 +585,7 @@ func (db *DB) poisonCommandWALAfterPublicPostAppendFailure(intent *CommandWALInt
 	db.poisonCommandWALAfterPostAppendFailure(&intent.inner)
 }
 
-func applyRawKVCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map[uint64]page.ValuePtr, inlineAppender *replayInlineAppender, ensureReplayLogSupport commandWALReplayLogSupportFunc) error {
+func applyRawKVCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map[uint64]page.ValuePtr, inlineAppender *replayInlineAppender, ensureReplayRIDMap commandWALReplayRIDMapFunc, ensureReplayLogSupport commandWALReplayLogSupportFunc) error {
 	if db == nil {
 		return fmt.Errorf("treedb: command wal recovery missing db")
 	}
@@ -651,15 +652,11 @@ func applyRawKVCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map
 			}
 		case commitlog.RawKVOpSetRID:
 			if ridMap == nil {
-				if ensureReplayLogSupport == nil {
-					return fmt.Errorf("treedb: command wal replay log support unavailable")
+				if ensureReplayRIDMap == nil {
+					return fmt.Errorf("treedb: command wal replay rid map unavailable")
 				}
 				var err error
-				// ensureReplayLogSupport is a closure that updates the outer
-				// ridMap and inlineAppender via capture as a side effect.
-				// Assigning to the local parameters here caches the handles
-				// for subsequent iterations within this frame.
-				ridMap, inlineAppender, err = ensureReplayLogSupport()
+				ridMap, err = ensureReplayRIDMap()
 				if err != nil {
 					return err
 				}
