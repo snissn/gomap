@@ -100,9 +100,7 @@ def prepare_empty_dir(path: Path, label: str) -> None:
     path.mkdir(parents=True)
 
 
-def build_database(
-    args: argparse.Namespace, manifest: dict[str, Any], docs: np.ndarray, document_payloads: list[tuple[str, bytes]]
-) -> tuple[dict[str, Any], str]:
+def build_database(args: argparse.Namespace, dataset_dir: Path, manifest: dict[str, Any]) -> tuple[dict[str, Any], str, np.ndarray]:
     db_dir = Path(args.db_dir)
     prepare_empty_dir(db_dir, "Vectorlite DB directory")
     db_path = db_dir / "vectorlite.db"
@@ -120,6 +118,7 @@ def build_database(
         f"{sqlite_quote(str(index_path))})"
     )
     insert_start = time.perf_counter()
+    document_payloads = load_document_payloads(dataset_dir, manifest)
     with db:
         db.executemany(
             "insert into documents(rowid, id, document) values (?, ?, ?)",
@@ -130,6 +129,7 @@ def build_database(
         )
     insert_phase = phase(insert_start)
     build_start = time.perf_counter()
+    docs = load_vectors(dataset_dir / manifest["document_vectors_file"], manifest["docs"], manifest["dimensions"])
     with db:
         db.executemany(
             "insert into vectors(rowid, embedding) values (?, ?)",
@@ -143,7 +143,7 @@ def build_database(
         "insert": insert_phase,
         "build": build_phase,
         "create_total": total_phase,
-    }, version
+    }, version, docs
 
 
 def reopen_database(args: argparse.Namespace) -> tuple[sqlite3.Connection, dict[str, Any]]:
@@ -303,13 +303,11 @@ def main() -> None:
     manifest = load_manifest(dataset_dir)
     if manifest["metric"] != "cosine" or not manifest["normalized"]:
         raise RuntimeError(f"unsupported dataset metric/normalization: {manifest}")
-    docs = load_vectors(dataset_dir / manifest["document_vectors_file"], manifest["docs"], manifest["dimensions"])
-    document_payloads = load_document_payloads(dataset_dir, manifest)
     all_queries = load_vectors(dataset_dir / manifest["query_vectors_file"], manifest["queries"], manifest["dimensions"])
     queries = all_queries[: min(args.queries, len(all_queries))]
     concurrency = parse_ints(args.search_concurrency)
 
-    phases, vectorlite_info = build_database(args, manifest, docs, document_payloads)
+    phases, vectorlite_info, docs = build_database(args, dataset_dir, manifest)
     db, reopen = reopen_database(args)
     validation = validate_recall(db, docs, all_queries, args.top_k, args.ef_search, args.validate_queries, args.min_recall)
     db.close()
