@@ -156,7 +156,7 @@ func (idx *VectorIndex) saveNativeSnapshotPrepared() (VectorIndexLoadStatus, err
 	rootName := collectionVectorIndexRootName(catalog.meta.Name, idx.name)
 	status.RootName = rootName
 	baseRoot := catalog.rootID(rootName)
-	if baseEpoch := idx.nativeSnapshotBaseEpochForFullSave(); baseEpoch != 0 && baseRoot != baseEpoch {
+	if baseEpoch := idx.nativeSnapshotBaseEpochForFullSave(); baseRoot != baseEpoch {
 		return status, fmt.Errorf("%w: index %q loaded epoch %d current root %d", errVectorIndexStaleNativeRoot, idx.name, baseEpoch, baseRoot)
 	}
 	baseRootIDs := map[string]uint64{rootName: baseRoot}
@@ -209,6 +209,28 @@ func (idx *VectorIndex) saveNativeSnapshotPrepared() (VectorIndexLoadStatus, err
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
 	return status, nil
+}
+
+func (c *Collection) currentNativeVectorIndexRootID(name string) (uint64, error) {
+	if c == nil {
+		return 0, errCollectionNil
+	}
+	if c.db == nil {
+		return 0, errCollectionDBNil
+	}
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return 0, backenddb.ErrClosed
+	}
+	defer func() { _ = snap.Close() }()
+	catalog, err := c.catalogForSnapshot(snap)
+	if err != nil {
+		return 0, err
+	}
+	if catalog == nil {
+		return 0, errCollectionNotFound
+	}
+	return catalog.rootID(collectionVectorIndexRootName(catalog.meta.Name, name)), nil
 }
 
 // SaveNativeDeltaSnapshot persists dirty graph records for a declared vector
