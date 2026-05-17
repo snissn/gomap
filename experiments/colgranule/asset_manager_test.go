@@ -96,6 +96,44 @@ func TestColumnAssetManagerValidatesPreparedPublishClosure(t *testing.T) {
 	}
 }
 
+func TestColumnAssetManagerSyncPublishClosureHonorsSyncRequired(t *testing.T) {
+	store := &syncProbeAssetStore{MemoryColumnAssetStore: NewMemoryColumnAssetStore()}
+	manager, err := NewColumnAssetManager(store)
+	if err != nil {
+		t.Fatalf("NewColumnAssetManager: %v", err)
+	}
+	ref, err := manager.Put(ColumnAssetKindTCS1PartImage, make([]byte, tcs1HeaderBytes+16))
+	if err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	prepared := ColumnPreparedAsset{
+		Ref:          ref,
+		GenerationID: 7,
+		PublishID:    11,
+		Reason:       "publish staged",
+	}
+	closure, err := manager.PreparePublishClosure([]ColumnPreparedAsset{prepared})
+	if err != nil {
+		t.Fatalf("PreparePublishClosure: %v", err)
+	}
+	if !closure.SyncRequired {
+		t.Fatalf("SyncRequired=false want true for sync-capable store")
+	}
+	if err := manager.SyncPublishClosure(closure); err != nil {
+		t.Fatalf("SyncPublishClosure required: %v", err)
+	}
+	if store.syncCalls != 1 {
+		t.Fatalf("sync calls=%d want 1", store.syncCalls)
+	}
+	closure.SyncRequired = false
+	if err := manager.SyncPublishClosure(closure); err != nil {
+		t.Fatalf("SyncPublishClosure not required: %v", err)
+	}
+	if store.syncCalls != 1 {
+		t.Fatalf("sync calls=%d want unchanged 1", store.syncCalls)
+	}
+}
+
 func TestColumnAssetManagerPreparedPublishFailureQuarantinesAssets(t *testing.T) {
 	store := NewMemoryColumnAssetStore()
 	manager, err := NewColumnAssetManager(store)
@@ -175,6 +213,16 @@ func TestColumnAssetStoreRangeProbeReadsNonZeroBytes(t *testing.T) {
 type rangeProbeOnlyStore struct {
 	readRangeCalls int
 	lastLength     int
+}
+
+type syncProbeAssetStore struct {
+	*MemoryColumnAssetStore
+	syncCalls int
+}
+
+func (s *syncProbeAssetStore) Sync() error {
+	s.syncCalls++
+	return nil
 }
 
 func (s *rangeProbeOnlyStore) Put(ColumnAssetKind, []byte) (ColumnAssetRef, error) {

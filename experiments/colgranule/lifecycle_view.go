@@ -354,6 +354,7 @@ func estimateColumnCollectionManifestViewAssetRefs(view ColumnCollectionManifest
 }
 
 func addManifestViewAssetRefs(records map[ColumnAssetRef]columnAssetReachabilityRecord, segments map[uint32]*columnAssetSegmentState, view ColumnCollectionManifestView, state ColumnAssetLifecycleState, live bool, candidate bool, stats *ColumnAssetReachabilityStats) error {
+	reasons := columnAssetReachabilityDefaultReasons(state)
 	tombstones, err := scanColumnCollectionManifestViewAssetRefs(view, func(ref columnManifestViewAssetRef) error {
 		entry := ColumnAssetReachabilityEntry{
 			Ref:          ref.ref,
@@ -361,7 +362,7 @@ func addManifestViewAssetRefs(records map[ColumnAssetRef]columnAssetReachability
 			Bytes:        ref.bytes,
 			PartID:       ref.partID,
 			GenerationID: ref.generationID,
-			Reasons:      columnAssetReachabilityDefaultReasons(state),
+			Reasons:      reasons,
 		}
 		if err := addReachabilityEntry(records, segments, entry, live, candidate, false); err != nil {
 			return err
@@ -455,6 +456,7 @@ func finalizeColumnAssetReachabilitySummary(records []columnAssetReachabilitySum
 	for fileID, seg := range segments {
 		seg.liveRefs = 0
 		seg.candidateRefs = 0
+		seg.protectedRefs = 0
 		segments[fileID] = seg
 	}
 	for _, record := range records {
@@ -465,14 +467,17 @@ func finalizeColumnAssetReachabilitySummary(records []columnAssetReachabilitySum
 		if record.candidate && !record.live && !record.quarantined {
 			seg.candidateRefs++
 		}
+		if !record.live && (!record.candidate || record.quarantined) {
+			seg.protectedRefs++
+		}
 		segments[record.ref.FileID] = seg
 	}
 	summary.Stats.SegmentRefs = len(segments)
 	for _, seg := range segments {
-		if seg.liveRefs == 0 && seg.candidateRefs > 0 {
+		if seg.liveRefs == 0 && seg.protectedRefs == 0 && seg.candidateRefs > 0 {
 			summary.Stats.DirectlyDeletableSegments++
 		}
-		if seg.liveRefs > 0 && seg.candidateRefs > 0 {
+		if (seg.liveRefs > 0 || seg.protectedRefs > 0) && seg.candidateRefs > 0 {
 			summary.Stats.MixedLiveDeadSegments++
 		}
 	}
@@ -503,7 +508,7 @@ func finalizeColumnAssetReachabilitySummary(records []columnAssetReachabilitySum
 		case record.candidate:
 			summary.CleanupSafeBytes += record.bytes
 			seg := segments[record.ref.FileID]
-			if seg.liveRefs == 0 {
+			if seg.liveRefs == 0 && seg.protectedRefs == 0 {
 				summary.ReclaimableBytes += record.bytes
 			} else {
 				summary.RewriteDebtBytes += record.bytes
@@ -520,6 +525,7 @@ func finalizeColumnAssetReachabilityRecords(records map[ColumnAssetRef]columnAss
 	for _, seg := range segments {
 		seg.liveRefs = 0
 		seg.candidateRefs = 0
+		seg.protectedRefs = 0
 	}
 	for _, record := range records {
 		seg := segments[record.entry.Ref.FileID]
@@ -533,13 +539,16 @@ func finalizeColumnAssetReachabilityRecords(records map[ColumnAssetRef]columnAss
 		if record.candidate && !record.live && !record.quarantined {
 			seg.candidateRefs++
 		}
+		if !record.live && (!record.candidate || record.quarantined) {
+			seg.protectedRefs++
+		}
 	}
 	plan.Stats.SegmentRefs = len(segments)
 	for _, seg := range segments {
-		if seg.liveRefs == 0 && seg.candidateRefs > 0 {
+		if seg.liveRefs == 0 && seg.protectedRefs == 0 && seg.candidateRefs > 0 {
 			plan.Stats.DirectlyDeletableSegments++
 		}
-		if seg.liveRefs > 0 && seg.candidateRefs > 0 {
+		if (seg.liveRefs > 0 || seg.protectedRefs > 0) && seg.candidateRefs > 0 {
 			plan.Stats.MixedLiveDeadSegments++
 		}
 	}
@@ -573,7 +582,7 @@ func finalizeColumnAssetReachabilityRecords(records map[ColumnAssetRef]columnAss
 		case record.candidate:
 			plan.CleanupSafeBytes += entry.Bytes
 			seg := segments[entry.Ref.FileID]
-			if seg != nil && seg.liveRefs == 0 {
+			if seg != nil && seg.liveRefs == 0 && seg.protectedRefs == 0 {
 				entry.DeleteEligible = true
 				entry.State = ColumnAssetStateReclaimable
 				plan.ReclaimableBytes += entry.Bytes
