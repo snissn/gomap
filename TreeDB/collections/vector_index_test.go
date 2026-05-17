@@ -858,6 +858,25 @@ func TestVectorIndexSearchScratchVisitedEpochsGrowGeometrically(t *testing.T) {
 	}
 }
 
+func TestVectorIndexSearchScratchClearsFullVisitedCapacityOnWrap(t *testing.T) {
+	var scratch vectorIndexSearchScratch
+	visited, mark := scratch.nextVisitedEpoch(8)
+	for i := range visited {
+		visited[i] = mark
+	}
+
+	scratch.visitedEpoch = math.MaxUint32
+	if _, mark := scratch.nextVisitedEpoch(4); mark != 1 {
+		t.Fatalf("wrapped mark=%d want 1", mark)
+	}
+	full := scratch.visitedEpochs[:cap(scratch.visitedEpochs)]
+	for i, value := range full {
+		if value != 0 {
+			t.Fatalf("visited epoch slot %d=%d after wrap; want 0", i, value)
+		}
+	}
+}
+
 func TestCollectionVectorIndexInt8EncodingReranksCanonicalRows(t *testing.T) {
 	const (
 		docs = 24

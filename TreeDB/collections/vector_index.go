@@ -2428,7 +2428,7 @@ func (scratch *vectorIndexSearchScratch) nextVisitedEpoch(nodes int) ([]uint32, 
 	}
 	scratch.visitedEpoch++
 	if scratch.visitedEpoch == 0 {
-		clear(scratch.visitedEpochs)
+		clear(scratch.visitedEpochs[:cap(scratch.visitedEpochs)])
 		scratch.visitedEpoch = 1
 	}
 	return scratch.visitedEpochs, scratch.visitedEpoch
