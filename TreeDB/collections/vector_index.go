@@ -116,6 +116,7 @@ type VectorIndexOptions struct {
 	EfSearch            int
 	RebuildDeletedRatio float64
 	Encoding            VectorIndexEncoding
+	schemaGeneration    uint64
 }
 
 // VectorIndexSearchOptions configures one in-memory vector index search.
@@ -194,6 +195,7 @@ type VectorIndex struct {
 	efConstruction      int
 	efSearch            int
 	rebuildDeletedRatio float64
+	schemaGeneration    uint64
 
 	mu            sync.RWMutex
 	nodes         []vectorIndexNode
@@ -352,6 +354,7 @@ func newVectorIndex(c *Collection, opts VectorIndexOptions) (*VectorIndex, error
 		efConstruction:      efConstruction,
 		efSearch:            efSearch,
 		rebuildDeletedRatio: rebuildRatio,
+		schemaGeneration:    opts.schemaGeneration,
 		currentNode:         make(map[string]int),
 		entry:               -1,
 		maxLevel:            -1,
@@ -390,7 +393,11 @@ func (c *Collection) RegisterVectorIndex(index *VectorIndex) {
 		c.vectorIndexes = make(map[string]*VectorIndex)
 	}
 	index.collection = c
-	index.setNativePersistent(collectionMetaDeclaresVectorIndex(c.meta, index.name))
+	if def, ok := findVectorIndex(c.meta.VectorIndexes, index.name); ok {
+		index.recordNativeDefinition(def)
+	} else {
+		index.setNativePersistent(false)
+	}
 	c.vectorIndexes[index.name] = index
 }
 
@@ -443,10 +450,16 @@ func (c *Collection) registeredVectorIndexNativeRuntimeIsStale(index *VectorInde
 	if !ok {
 		return index.isNativePersistent(), nil
 	}
+	wasNativePersistent := index.isNativePersistent()
 	if reason := index.validateNativeSnapshotDefinition(def); reason != "" {
+		if reason == "schema_generation_mismatch" && !wasNativePersistent {
+			index.recordNativeDefinition(def)
+			rootName := collectionVectorIndexRootName(catalog.meta.Name, index.name)
+			return catalog.rootID(rootName) != index.nativeSnapshotBaseEpochForFullSave(), nil
+		}
 		return true, nil
 	}
-	index.setNativePersistent(true)
+	index.recordNativeDefinition(def)
 	rootName := collectionVectorIndexRootName(catalog.meta.Name, index.name)
 	return catalog.rootID(rootName) != index.nativeSnapshotBaseEpochForFullSave(), nil
 }
@@ -1084,6 +1097,16 @@ func (idx *VectorIndex) setNativePersistent(enabled bool) {
 	}
 	idx.mu.Lock()
 	idx.nativePersistent = enabled
+	idx.mu.Unlock()
+}
+
+func (idx *VectorIndex) recordNativeDefinition(def VectorIndexDefinition) {
+	if idx == nil {
+		return
+	}
+	idx.mu.Lock()
+	idx.nativePersistent = true
+	idx.schemaGeneration = def.SchemaGeneration
 	idx.mu.Unlock()
 }
 
