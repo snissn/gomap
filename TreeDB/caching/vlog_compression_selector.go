@@ -87,6 +87,11 @@ const (
 	// Force-pointer workloads with large values are write-path throughput-bound.
 	// Keep them on a stable block codec path and avoid selector overhead.
 	forcePointerAutoBlockMinPayloadBytes = 1024
+	// High-entropy forced-pointer streams below the block fast-path threshold
+	// should stay on the raw path once a cheap sample says compression is very
+	// unlikely to help. This keeps auto mode close to off-mode throughput while
+	// retaining auto's leaf-log compression path.
+	forcePointerAutoRawBypassMinPayloadBytes = 512
 	// Larger grouped-frame targets reduce per-record compression overhead for
 	// large forced-pointer streams.
 	forcePointerBlockTargetCompressedBytes = 32 << 10
@@ -98,6 +103,7 @@ const (
 	largePayloadDictPreferAbsRatioMax     = 0.15
 	largePayloadDictPreferRelRatioMax     = 0.35
 	largePayloadDictPreferHugeRelRatioMax = 0.20
+	vlogAutoThroughputParityRatioGate     = 1.01
 )
 
 func normalizeVlogCompressionMode(v uint8) vlogCompressionMode {
@@ -301,20 +307,17 @@ func (s *vlogCompressionSelector) shouldPreferLargePayloadDict(dictAvailable boo
 		return false
 	}
 	if bestBlock.samples < largePayloadDictPreferMinSamples {
-		return strongAbsolute
+		return strongAbsolute && throughputRatioAboveGate(dict.throughput, s.offThroughput(), vlogAutoThroughputParityRatioGate)
+	}
+	if !throughputRatioAboveGate(dict.throughput, bestBlock.throughput, vlogAutoThroughputParityRatioGate) {
+		return false
 	}
 
 	switch s.policy {
 	case vlogAutoThroughput:
-		if dict.throughput >= bestBlock.throughput*0.60 {
-			return true
-		}
-		return dict.ratio <= bestBlock.ratio*largePayloadDictPreferHugeRelRatioMax
+		return dict.ratio <= bestBlock.ratio*largePayloadDictPreferHugeRelRatioMax || dict.throughput >= bestBlock.throughput*1.03
 	case vlogAutoBalanced:
-		if dict.throughput >= bestBlock.throughput*0.45 {
-			return true
-		}
-		return dict.ratio <= bestBlock.ratio*largePayloadDictPreferHugeRelRatioMax
+		return dict.ratio <= bestBlock.ratio*largePayloadDictPreferHugeRelRatioMax || dict.throughput >= bestBlock.throughput*1.03
 	default:
 		return true
 	}
@@ -724,6 +727,18 @@ func (s *vlogCompressionSelector) candidateScore(c vlogAutoCandidate) float64 {
 	return scoreForPolicy(s.policy, m.ratio, m.throughput/off)
 }
 
+func throughputRatioAboveGate(candidate, baseline, minRatio float64) bool {
+	return baseline > 0 && candidate/baseline > minRatio
+}
+
+func (s *vlogCompressionSelector) candidatePassesThroughputGate(c vlogAutoCandidate) bool {
+	if c == vlogAutoCandidateOff {
+		return true
+	}
+	m := s.metric(c)
+	return throughputRatioAboveGate(m.throughput, s.offThroughput(), vlogAutoThroughputParityRatioGate)
+}
+
 func (s *vlogCompressionSelector) candidateLikelyBeneficial(c vlogAutoCandidate) bool {
 	if c == vlogAutoCandidateOff {
 		return true
@@ -733,7 +748,10 @@ func (s *vlogCompressionSelector) candidateLikelyBeneficial(c vlogAutoCandidate)
 	if offThroughput <= 0 {
 		offThroughput = 1.0
 	}
-	// Strong size wins are treated as beneficial, even if throughput is moderately lower.
+	if !s.candidatePassesThroughputGate(c) {
+		return false
+	}
+	// Strong size wins are beneficial only after the strict throughput parity gate passes.
 	if m.ratio <= 0.90 {
 		return true
 	}
@@ -742,26 +760,23 @@ func (s *vlogCompressionSelector) candidateLikelyBeneficial(c vlogAutoCandidate)
 		if m.throughput >= offThroughput*1.03 {
 			return true
 		}
-		if m.ratio <= 0.985 && m.throughput >= offThroughput*0.99 {
-			return true
-		}
-		return false
+		return m.ratio <= 0.985
 	case vlogAutoSize:
 		if m.ratio <= 0.98 {
 			return true
 		}
 		return m.throughput >= offThroughput*1.02
 	default:
-		if m.ratio <= 0.95 && m.throughput >= offThroughput*0.80 {
+		if m.ratio <= 0.95 {
 			return true
 		}
 		if m.throughput >= offThroughput*1.03 {
 			return true
 		}
-		if m.ratio <= 0.985 && m.throughput >= offThroughput*0.98 {
+		if m.ratio <= 0.985 {
 			return true
 		}
-		return m.ratio <= 0.995 && m.throughput >= offThroughput*0.90
+		return m.ratio <= 0.995
 	}
 }
 
@@ -800,6 +815,9 @@ func (s *vlogCompressionSelector) preferredCandidate(dictAvailable bool) vlogAut
 			}
 			m := s.metric(c)
 			if m.samples < 4 || m.ratio > 0.90 {
+				continue
+			}
+			if !s.candidatePassesThroughputGate(c) {
 				continue
 			}
 			score := s.candidateScore(c)
@@ -1562,6 +1580,37 @@ func (db *DB) resolveVlogWriteMode(l *lane, dictID uint64, rawPayloadBytes, unit
 	}
 }
 
+func (db *DB) shouldBypassAutoRawValueCompression(dictID uint64, records []valuelog.Record, unitPayloadBytes int, payloadKind vlogPayloadKind) bool {
+	if db == nil || normalizeVlogCompressionMode(db.valueLogCompressionMode) != vlogCompressionAuto {
+		return false
+	}
+	if dictID != 0 || !db.forceValueLogPointers || payloadKind != vlogPayloadKindSingleValue {
+		return false
+	}
+	if unitPayloadBytes < forcePointerAutoRawBypassMinPayloadBytes ||
+		unitPayloadBytes >= forcePointerAutoBlockMinPayloadBytes ||
+		len(records) == 0 {
+		return false
+	}
+	checks := [3]int{0, len(records) / 2, len(records) - 1}
+	checked := 0
+	prev := -1
+	for _, idx := range checks {
+		if idx < 0 || idx >= len(records) {
+			continue
+		}
+		if idx == prev {
+			continue
+		}
+		prev = idx
+		checked++
+		if likelyCompressibleSample(records[idx].Value) {
+			return false
+		}
+	}
+	return checked > 0
+}
+
 func (db *DB) observeVlogWriteMode(l *lane, mode vlogCompressionWriteMode, blockCodec valuelog.BlockCodec, rawPayloadBytes, unitPayloadBytes, storedPayloadBytes int, probe bool, wallNs int64) {
 	if db == nil || l == nil {
 		return
@@ -1575,6 +1624,14 @@ func (db *DB) observeVlogWriteMode(l *lane, mode vlogCompressionWriteMode, block
 	}
 	compressionMode := normalizeVlogCompressionMode(db.valueLogCompressionMode)
 	if !db.vlogSelectorEnabled(compressionMode) {
+		return
+	}
+	if compressionMode == vlogCompressionAuto &&
+		db.forceValueLogPointers &&
+		mode == vlogWriteOff &&
+		unitPayloadBytes >= forcePointerAutoRawBypassMinPayloadBytes {
+		// Raw high-entropy forced-pointer batches do not teach the selector
+		// anything useful after the caller already bypassed compression.
 		return
 	}
 	if compressionMode == vlogCompressionAuto &&

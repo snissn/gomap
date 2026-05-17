@@ -720,6 +720,35 @@ verification gate links to green typed-frame, `AppliedCommandLSN`, collection
 command, catalog barrier, external-ref, backup/restore, and read-only-open
 evidence.
 
+### Public raw KV command-WAL cutover evidence
+
+The first PR9 public cutover gate is:
+
+- `TestPublicCommandWALRawKVWritesUseTypedFrames`
+
+The PR9 public cutover performance gate is strict parity-plus. Required point
+`Set`, focused `Batch.Write`, `unified_bench` batch-write, and incompressible
+value-log auto/off lanes must each report candidate throughput strictly greater
+than `1.01x` of the relevant baseline. Any required lane at or below `1.01x` is
+a failing gate, including sub-parity results such as `0.80x`; those results may
+be recorded only as failing evidence, not accepted evidence.
+
+The same strict parity-plus rule applies to every command-WAL acceptance artifact
+with a required performance gate: a passing status must have `>` throughput-gate
+semantics, explicit `1.01x` minimum ratio thresholds, and recorded comparative
+throughput ratios above that bar. Historical or diagnostic results below that
+bar must be labeled as failing evidence.
+
+This test must prove public `treedb.Open` can open a read-write
+`command_wal_v1` handle, route raw KV writes through typed `RawKVBatch` command
+frames, expose mode proof through stats, reopen without explicit backend-only
+APIs, and recover final set/delete state. Mode proof must include cheap live
+accepted/covered command-frame counters so benchmark artifacts do not require
+diagnostic WAL segment scans. It is intentionally narrower than the future
+cached typed-frame path: while this gate is active,
+`treedb.write_path.mode=command_wal_cached` is the expected proof that public
+command-WAL writes did not use the cached legacy redo journal.
+
 ## 12. Collections Document Formats
 
 Invariant:

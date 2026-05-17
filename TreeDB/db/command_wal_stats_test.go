@@ -41,6 +41,12 @@ func TestCommandWALStatsProveModeAndFrames(t *testing.T) {
 	if got := stats["treedb.command_wal.frames"]; got != "1" {
 		t.Fatalf("command WAL frame stat=%q, want 1 (stats=%#v)", got, stats)
 	}
+	if got := stats["treedb.command_wal.live_accepted_frames"]; got != "1" {
+		t.Fatalf("live accepted frame stat=%q, want 1 (stats=%#v)", got, stats)
+	}
+	if got := stats["treedb.command_wal.live_covered_frames"]; got != "1" {
+		t.Fatalf("live covered frame stat=%q, want 1 (stats=%#v)", got, stats)
+	}
 	if got := stats["treedb.command_wal.typed_segments"]; got != "1" {
 		t.Fatalf("command WAL typed segment stat=%q, want 1 (stats=%#v)", got, stats)
 	}
@@ -90,6 +96,18 @@ func TestCommandWALStatsDefaultDoesNotScanWAL(t *testing.T) {
 	}
 	if got := stats["treedb.command_wal.frames"]; got != "0" {
 		t.Fatalf("frames=%q, want 0 without diagnostic scan (stats=%#v)", got, stats)
+	}
+	if got := stats["treedb.command_wal.live_accepted_frames"]; got != "1" {
+		t.Fatalf("live accepted frames=%q, want 1 without diagnostic scan (stats=%#v)", got, stats)
+	}
+	if got := stats["treedb.command_wal.live_accepted_max_lsn"]; got != "1" {
+		t.Fatalf("live accepted max lsn=%q, want 1 without diagnostic scan (stats=%#v)", got, stats)
+	}
+	if got := stats["treedb.command_wal.live_covered_frames"]; got != "1" {
+		t.Fatalf("live covered frames=%q, want 1 without diagnostic scan (stats=%#v)", got, stats)
+	}
+	if got := stats["treedb.command_wal.live_covered_max_lsn"]; got != "1" {
+		t.Fatalf("live covered max lsn=%q, want 1 without diagnostic scan (stats=%#v)", got, stats)
 	}
 	if err := db.Close(); err != nil {
 		t.Fatalf("Close: %v", err)

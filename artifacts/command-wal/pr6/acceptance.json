@@ -49,7 +49,14 @@
   ],
   "performance_gate": {
     "required": true,
-    "status": "passed with recorded local microbenchmark artifact; command-WAL mode proof checks CommandWALEnabled and AppliedCommandLSN advancement",
+    "status": "passed_strict_parity_plus",
+    "throughput_gate_operator": ">",
+    "thresholds": {
+      "create_collection_min_ratio": 1.01,
+      "allocation_regression_allowed": false,
+      "all_throughput_gates_must_exceed_ratio": 1.01
+    },
+    "rationale": "The catalog-create throughput lane is a required command-WAL performance gate and must be strictly greater than 1.01x of the WAL-off baseline. The recorded artifact passes that bar; rejected index DDL is reported as unsupported-path cost evidence rather than a comparative throughput gate.",
     "benchmark_command": "GOWORK=off go test ./TreeDB/collections -run '^$' -bench 'BenchmarkCollectionCommandWAL(CreateCollection|RejectedIndexDDL)$' -benchmem -benchtime=100x -count=1",
     "artifacts": {
       "artifacts/command-wal/pr6/bench.txt": "1ccfca68762b7287d0b5e59f95000ea56d6155a2f1382fe32db575077fe0453a"
@@ -57,6 +64,7 @@
     "summary": {
       "create_wal_off_ns_per_op": 54876,
       "create_command_wal_ns_per_op": 19264,
+      "create_command_wal_to_wal_off_collections_per_sec_ratio": 2.8486,
       "create_wal_off_allocs_per_op": 194,
       "create_command_wal_allocs_per_op": 38,
       "rejected_index_ddl_ns_per_op": 429.4,

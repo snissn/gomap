@@ -1158,11 +1158,25 @@ func (n *Node) SearchInternalChildID(key []byte) (childID uint64, found bool, er
 	}
 
 	if i > 0 {
-		childID, err := n.internalBaseDeltaChildIDAtIndex(meta, i-1, deltaWidth, entryHeader)
-		return childID, true, err
+		ptr := int(getUint16At(data, NodeHeaderSize+(i-1)*DirectoryEntrySize))
+		if ptr < NodeHeaderSize || ptr+entryHeader > meta.footerStart {
+			return 0, false, ErrCorruptedNode
+		}
+		deltaStart := ptr + 2
+		if deltaWidth == 2 {
+			return meta.baseChildID + uint64(getUint16At(data, deltaStart)), true, nil
+		}
+		return meta.baseChildID + uint64(binary.LittleEndian.Uint32(data[deltaStart:deltaStart+4])), true, nil
 	}
-	childID, err = n.internalBaseDeltaChildIDAtIndex(meta, 0, deltaWidth, entryHeader)
-	return childID, false, err
+	ptr := int(getUint16At(data, NodeHeaderSize))
+	if ptr < NodeHeaderSize || ptr+entryHeader > meta.footerStart {
+		return 0, false, ErrCorruptedNode
+	}
+	deltaStart := ptr + 2
+	if deltaWidth == 2 {
+		return meta.baseChildID + uint64(getUint16At(data, deltaStart)), false, nil
+	}
+	return meta.baseChildID + uint64(binary.LittleEndian.Uint32(data[deltaStart:deltaStart+4])), false, nil
 }
 
 func (n *Node) SearchInternalChildRef(key []byte) (childRef page.ChildRef, found bool, err error) {

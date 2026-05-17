@@ -47,6 +47,15 @@ type Options struct {
 	// 0 uses the default limit; values < 0 disable the cap.
 	MaxSegmentSize int64
 
+	// BufferSize controls the buffered writer size. Values <= 0 use the
+	// commitlog default.
+	BufferSize int
+
+	// DeferredCommandBufferSize preallocates an internal command-frame buffer
+	// used by trusted public command appends. Values <= 0 disable deferred
+	// command-frame finalization.
+	DeferredCommandBufferSize int
+
 	// Compress enables best-effort zstd compression for commitlog segments.
 	// Segments are only stored compressed when the compressed payload (plus a
 	// small header) is smaller than the raw payload, so compression never causes

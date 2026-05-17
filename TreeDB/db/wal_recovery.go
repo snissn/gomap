@@ -363,9 +363,15 @@ func readCommandWALReplayFrames(segments []logSegment, appliedLSN uint64, maxSeg
 		if err != nil {
 			return nil, err
 		}
+		var lastLSN uint64
 		for {
 			env, err := reader.ReadCommandFrame()
 			if err == nil {
+				if lastLSN != 0 && env.LSN <= lastLSN {
+					_ = reader.Close()
+					return nil, commitlog.ErrCommandWALDuplicateLSN
+				}
+				lastLSN = env.LSN
 				if env.LSN > appliedLSN {
 					if _, ok := seen[env.LSN]; ok {
 						_ = reader.Close()
@@ -393,6 +399,38 @@ func readCommandWALReplayFrames(segments []logSegment, appliedLSN uint64, maxSeg
 		return frames[i].env.LSN < frames[j].env.LSN
 	})
 	return frames, nil
+}
+
+func commandWALLaneActiveHasTerminalTail(segments []logSegment, lane int, maxSegmentBytes int64) (bool, error) {
+	activeByLane := commandWALActiveSeqByLane(segments)
+	activeSeq := activeByLane[lane]
+	if activeSeq == 0 {
+		return false, nil
+	}
+	for _, seg := range segments {
+		if seg.valueLog || seg.lane != lane || seg.seq != activeSeq || !isCommandWALLaneSegment(seg) {
+			continue
+		}
+		reader, err := commitlog.NewReaderWithOptions(seg.path, commitlog.Options{MaxSegmentSize: maxSegmentBytes})
+		if err != nil {
+			return false, err
+		}
+		for {
+			_, err := reader.ReadCommandFrame()
+			if err == nil {
+				continue
+			}
+			_ = reader.Close()
+			if errors.Is(err, io.EOF) {
+				return false, nil
+			}
+			if errors.Is(err, commitlog.ErrCommandWALTerminalTail) {
+				return true, nil
+			}
+			return false, err
+		}
+	}
+	return false, nil
 }
 
 func commandWALReplayFramesNeedLogSupport(db *DB, frames []commandWALReplayFrame, applied uint64) (bool, error) {

@@ -6,6 +6,7 @@ import (
 	"sync"
 	"testing"
 
+	treedb "github.com/snissn/gomap/TreeDB"
 	treedbdb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/kvstore"
 )
@@ -123,6 +124,74 @@ func TestTreeDBBackendCommandWALVariantPersistsFeatureAndAppendsTypedFrames(t *t
 	}
 	if _, err := postClose.AcquireReadSnapshot(); !errors.Is(err, treedbdb.ErrClosed) {
 		t.Fatalf("AcquireReadSnapshot after Close error=%v, want ErrClosed", err)
+	}
+}
+
+func TestTreeDBPublicCommandWALVariantUsesCachedCommandWALPath(t *testing.T) {
+	saved := saveTreeDBFlagState()
+	defer restoreTreeDBFlagState(saved)
+	resetTreeDBIndexFlagsForTest()
+	*treedbCommandWALStatsScan = true
+
+	dir := t.TempDir()
+	db, err := NewTreeDBPublicCommandWAL(dir)
+	if err != nil {
+		t.Fatalf("NewTreeDBPublicCommandWAL: %v", err)
+	}
+	if got := db.Name(); got != "TreeDB (public cached command_wal_v1)" {
+		_ = db.Close()
+		t.Fatalf("Name=%q, want explicit public cached command WAL variant name", got)
+	}
+	if err := db.Set([]byte("k"), []byte("v")); err != nil {
+		_ = db.Close()
+		t.Fatalf("Set: %v", err)
+	}
+	sp, ok := db.(interface{ Stats() map[string]string })
+	if !ok {
+		_ = db.Close()
+		t.Fatalf("%T does not expose Stats", db)
+	}
+	stats := sp.Stats()
+	for key, want := range map[string]string{
+		"treedb.write_path.mode":              "command_wal_cached",
+		"treedb.command_wal.enabled":          "true",
+		"treedb.command_wal.required_feature": "true",
+		"treedb.command_wal.frames":           "1",
+		"treedb.command_wal.typed_segments":   "1",
+	} {
+		if got := stats[key]; got != want {
+			_ = db.Close()
+			t.Fatalf("stats[%q]=%q, want %q (stats=%#v)", key, got, want, stats)
+		}
+	}
+	checkpointer, ok := db.(interface{ Checkpoint() error })
+	if !ok {
+		_ = db.Close()
+		t.Fatalf("%T does not expose Checkpoint", db)
+	}
+	if err := checkpointer.Checkpoint(); err != nil {
+		_ = db.Close()
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	stats = sp.Stats()
+	if got := stats["treedb.applied_command_lsn"]; got != "1" {
+		_ = db.Close()
+		t.Fatalf("applied_command_lsn=%q, want 1 after checkpoint (stats=%#v)", got, stats)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	reopen, err := treedb.Open(treedb.Options{Dir: dir, CommandWALStatsScan: true})
+	if err != nil {
+		t.Fatalf("reopen public command WAL variant dir: %v", err)
+	}
+	defer func() { _ = reopen.Close() }()
+	reopenStats := reopen.Stats()
+	if got := reopenStats["treedb.write_path.mode"]; got != "command_wal_cached" {
+		t.Fatalf("reopen write_path.mode=%q, want command_wal_cached (stats=%#v)", got, reopenStats)
+	}
+	if got := reopenStats["treedb.command_wal.required_feature"]; got != "true" {
+		t.Fatalf("reopen required_feature=%q, want true (stats=%#v)", got, reopenStats)
 	}
 }
 

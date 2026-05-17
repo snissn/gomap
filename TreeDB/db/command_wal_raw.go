@@ -37,6 +37,48 @@ func (db *DB) CommandWALEnabled() bool {
 	return db != nil && db.commandWAL
 }
 
+// FlushCommandWAL flushes the command WAL writer. When sync is true, durable
+// modes fsync the command WAL; DurabilityWALOnRelaxed intentionally downgrades
+// this to a flush-to-kernel boundary to preserve relaxed-sync semantics.
+func (db *DB) FlushCommandWAL(sync bool) error {
+	if db == nil || !db.commandWAL || db.commandJournal == nil {
+		return nil
+	}
+	if err := db.commandWALPoisonedError(); err != nil {
+		return err
+	}
+	var err error
+	if sync && db.durability != DurabilityWALOnRelaxed {
+		err = db.commandJournal.Sync()
+	} else {
+		err = db.commandJournal.Flush()
+	}
+	if err == nil && db.testFailCommandWALFlush.Load() {
+		err = errTestCommandWALFlushFailpoint
+	}
+	if err != nil {
+		db.commandWALFlushPoisoned.Store(true)
+	}
+	return err
+}
+
+func (db *DB) commandWALPoisonedError() error {
+	if db != nil && db.commandWAL && db.commandWALFlushPoisoned.Load() {
+		return fmt.Errorf("%w: command wal post-append failure; reopen required", ErrRecoveryRequired)
+	}
+	return nil
+}
+
+func (db *DB) rejectUnloggedCommandWALRootPublish() error {
+	if err := db.commandWALPoisonedError(); err != nil {
+		return err
+	}
+	if db != nil && db.commandWAL {
+		return fmt.Errorf("%w: command wal root publish requires a command frame", ErrCommandWALUnsupported)
+	}
+	return nil
+}
+
 func (db *DB) NewCommandWALIntent(kind commitlog.CommandKind, scope commitlog.CommandScope, payloadFormat commitlog.PayloadFormat, payload []byte) (*CommandWALIntent, error) {
 	if db == nil || !db.commandWAL {
 		return nil, nil
@@ -253,6 +295,157 @@ func (db *DB) appendPublicCommandWALIntent(intent *CommandWALIntent, sync bool) 
 	return db.appendCommandWALIntent(&intent.inner, sync)
 }
 
+// AppendCommandWALIntent appends a deterministic command frame without
+// publishing roots. It is used by cached public command-WAL writers that must
+// make a typed frame replay-visible before inserting the mutation into memory.
+func (db *DB) AppendCommandWALIntent(intent *CommandWALIntent, sync bool) (uint64, error) {
+	return db.appendPublicCommandWALIntent(intent, sync)
+}
+
+// AppendCommandWALPayload appends a command-WAL frame without allocating a
+// reusable intent token. It is for public cached write paths that only need the
+// assigned LSN after the append succeeds.
+func (db *DB) AppendCommandWALPayload(kind commitlog.CommandKind, scope commitlog.CommandScope, payloadFormat commitlog.PayloadFormat, payload []byte, sync bool) (uint64, error) {
+	if db == nil || !db.commandWAL {
+		return 0, nil
+	}
+	if db.durability == DurabilityWALOffRelaxed {
+		return 0, fmt.Errorf("%w: WAL-off durability is incompatible with command WAL", ErrCommandWALUnsupported)
+	}
+	intent := commandWALBatchIntent{
+		kind:          kind,
+		scope:         scope,
+		payloadFormat: payloadFormat,
+		payload:       payload,
+	}
+	return db.appendCommandWALIntent(&intent, sync)
+}
+
+// AppendRawKVSingleCommandWAL appends a one-operation RawKVBatch command frame.
+// It delegates post-append flushing to FlushCommandWAL(sync); relaxed durability
+// flushes without fsync rather than forcing strict-sync semantics. If that
+// post-append flush fails, the returned LSN is still the allocated LSN; callers
+// must record the command as pending and treat subsequent command-WAL appends as
+// recovery-required until the DB is reopened.
+func (db *DB) AppendRawKVSingleCommandWAL(op commitlog.RawKVOperation, sync bool) (uint64, error) {
+	if db == nil || !db.commandWAL {
+		return 0, nil
+	}
+	if db.durability == DurabilityWALOffRelaxed {
+		return 0, fmt.Errorf("%w: WAL-off durability is incompatible with command WAL", ErrCommandWALUnsupported)
+	}
+	if op.Op == commitlog.RawKVOpSetRID {
+		return 0, fmt.Errorf("%w: public single-op command WAL cannot carry external refs", ErrCommandWALUnsupported)
+	}
+	if db.commandJournal == nil {
+		return 0, fmt.Errorf("treedb: command wal journal unavailable")
+	}
+	if db.commandWALFlushPoisoned.Load() {
+		return 0, fmt.Errorf("%w: command wal post-append failure; reopen required", ErrRecoveryRequired)
+	}
+	baseAppliedLSN := uint64(0)
+	if state := db.state.Load(); state != nil {
+		baseAppliedLSN = state.AppliedCommandLSN
+	}
+	lsn, err := db.commandJournal.AppendRawKVSingleCommand(baseAppliedLSN, op)
+	if err != nil {
+		return 0, err
+	}
+	if err := db.FlushCommandWAL(sync); err != nil {
+		return lsn, err
+	}
+	db.observeCommandWALAccepted(lsn)
+	return lsn, nil
+}
+
+// AppendRawKVPointCommandWALTrusted appends a caller-validated public raw KV
+// point Set/Delete command. It is intended for public cached command-WAL writes
+// after cached preflight has validated the user input and before visibility.
+// It delegates post-append flushing to FlushCommandWAL(sync); relaxed durability
+// flushes without fsync rather than forcing strict-sync semantics. If that
+// post-append flush fails, the returned LSN is still the allocated LSN; callers
+// must record the command as pending and treat subsequent command-WAL appends as
+// recovery-required until the DB is reopened.
+func (db *DB) AppendRawKVPointCommandWALTrusted(op commitlog.RawKVOp, key, value []byte, sync bool) (uint64, error) {
+	if db == nil || !db.commandWAL {
+		return 0, nil
+	}
+	if db.durability == DurabilityWALOffRelaxed {
+		return 0, fmt.Errorf("%w: WAL-off durability is incompatible with command WAL", ErrCommandWALUnsupported)
+	}
+	if db.commandJournal == nil {
+		return 0, fmt.Errorf("treedb: command wal journal unavailable")
+	}
+	if db.commandWALFlushPoisoned.Load() {
+		return 0, fmt.Errorf("%w: command wal post-append failure; reopen required", ErrRecoveryRequired)
+	}
+	baseAppliedLSN := uint64(0)
+	if state := db.state.Load(); state != nil {
+		baseAppliedLSN = state.AppliedCommandLSN
+	}
+	lsn, err := db.commandJournal.AppendRawKVPointCommandTrusted(baseAppliedLSN, op, key, value)
+	if err != nil {
+		return 0, err
+	}
+	if err := db.FlushCommandWAL(sync); err != nil {
+		return lsn, err
+	}
+	db.observeCommandWALAccepted(lsn)
+	return lsn, nil
+}
+
+// AppendRawKVBatchPayloadCommandWAL appends a prebuilt RawKVBatch payload as a
+// command frame. It delegates post-append flushing to FlushCommandWAL(sync);
+// relaxed durability flushes without fsync rather than forcing strict-sync
+// semantics. If that post-append flush fails, the returned LSN is still the
+// allocated LSN; callers must record the command as pending and treat subsequent
+// command-WAL appends as recovery-required until the DB is reopened.
+func (db *DB) AppendRawKVBatchPayloadCommandWAL(payload []byte, sync bool) (uint64, error) {
+	return db.appendRawKVBatchPayloadCommandWAL(payload, sync, false)
+}
+
+// AppendRawKVBatchPayloadCommandWALTrusted appends a prebuilt RawKVBatch
+// payload that was constructed through a trusted canonical encoder/builder.
+// It has the same post-append flush-failure contract as
+// AppendRawKVBatchPayloadCommandWAL.
+func (db *DB) AppendRawKVBatchPayloadCommandWALTrusted(payload []byte, sync bool) (uint64, error) {
+	return db.appendRawKVBatchPayloadCommandWAL(payload, sync, true)
+}
+
+func (db *DB) appendRawKVBatchPayloadCommandWAL(payload []byte, sync bool, trusted bool) (uint64, error) {
+	if db == nil || !db.commandWAL {
+		return 0, nil
+	}
+	if db.durability == DurabilityWALOffRelaxed {
+		return 0, fmt.Errorf("%w: WAL-off durability is incompatible with command WAL", ErrCommandWALUnsupported)
+	}
+	if db.commandJournal == nil {
+		return 0, fmt.Errorf("treedb: command wal journal unavailable")
+	}
+	if db.commandWALFlushPoisoned.Load() {
+		return 0, fmt.Errorf("%w: command wal post-append failure; reopen required", ErrRecoveryRequired)
+	}
+	baseAppliedLSN := uint64(0)
+	if state := db.state.Load(); state != nil {
+		baseAppliedLSN = state.AppliedCommandLSN
+	}
+	var lsn uint64
+	var err error
+	if trusted {
+		lsn, err = db.commandJournal.AppendRawKVBatchPayloadCommandTrusted(baseAppliedLSN, payload)
+	} else {
+		lsn, err = db.commandJournal.AppendRawKVBatchPayloadCommand(baseAppliedLSN, payload)
+	}
+	if err != nil {
+		return 0, err
+	}
+	if err := db.FlushCommandWAL(sync); err != nil {
+		return lsn, err
+	}
+	db.observeCommandWALAccepted(lsn)
+	return lsn, nil
+}
+
 func (db *DB) PublishCommandWALNoop(intent *CommandWALIntent, sync bool) error {
 	if intent == nil {
 		return nil
@@ -333,25 +526,15 @@ func (db *DB) appendCommandWALIntent(intent *commandWALBatchIntent, sync bool) (
 	if err != nil {
 		return 0, err
 	}
-	if sync {
-		err = db.commandJournal.Sync()
-	} else {
-		err = db.commandJournal.Flush()
-	}
-	// testFailCommandWALFlush fires after the real Flush/Sync succeeds. The
-	// frame is replay-visible, and sync writes are durable; the later error
-	// makes the commit result ambiguous, so the open handle must fail closed.
-	if err == nil && db.testFailCommandWALFlush.Load() {
-		err = errTestCommandWALFlushFailpoint
-	}
-	if err != nil {
+	if err := db.FlushCommandWAL(sync); err != nil {
 		// AppendCommand already assigned a logical LSN, and the frame may be
 		// replayed if the append reached disk. A later flush/sync failure is
 		// commit-ambiguous: reopen recovery may apply the frame, so this handle
 		// must fail closed instead of allowing a retry to create an LSN gap.
-		db.commandWALFlushPoisoned.Store(true)
+		// FlushCommandWAL owns the relaxed-sync downgrade and poison state.
 		return 0, err
 	}
+	db.observeCommandWALAccepted(lsn)
 	intent.lsn = lsn
 	intent.coveredRange[0] = CommandWALLSNRange{First: lsn, Last: lsn}
 	return lsn, nil

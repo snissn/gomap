@@ -175,6 +175,11 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (C
 	if db.readOnly && !opts.DryRun {
 		return stats, ErrReadOnly
 	}
+	if !opts.DryRun {
+		if err := db.commandWALPoisonedError(); err != nil {
+			return stats, err
+		}
+	}
 	maintenanceLocked := false
 	if !opts.DryRun {
 		db.maintenanceMu.Lock()
