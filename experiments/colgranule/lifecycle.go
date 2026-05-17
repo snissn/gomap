@@ -316,13 +316,14 @@ func addManifestAssetRefs(records map[ColumnAssetRef]columnAssetReachabilityReco
 	if err := validateColumnCollectionManifest(manifest); err != nil {
 		return err
 	}
+	reasons := columnAssetReachabilityDefaultReasons(state)
 	for i := range manifest.PartSet.BaseParts {
-		if err := addManifestPartAssetRef(records, segments, manifest.PartSet.BaseParts[i], state, live, candidate, stats); err != nil {
+		if err := addManifestPartAssetRef(records, segments, manifest.PartSet.BaseParts[i], state, live, candidate, reasons, stats); err != nil {
 			return err
 		}
 	}
 	for i := range manifest.PartSet.DeltaParts {
-		if err := addManifestPartAssetRef(records, segments, manifest.PartSet.DeltaParts[i], state, live, candidate, stats); err != nil {
+		if err := addManifestPartAssetRef(records, segments, manifest.PartSet.DeltaParts[i], state, live, candidate, reasons, stats); err != nil {
 			return err
 		}
 	}
@@ -332,14 +333,14 @@ func addManifestAssetRefs(records map[ColumnAssetRef]columnAssetReachabilityReco
 	return nil
 }
 
-func addManifestPartAssetRef(records map[ColumnAssetRef]columnAssetReachabilityRecord, segments map[uint32]*columnAssetSegmentState, partRef ColumnManifestPartRef, state ColumnAssetLifecycleState, live bool, candidate bool, stats *ColumnAssetReachabilityStats) error {
+func addManifestPartAssetRef(records map[ColumnAssetRef]columnAssetReachabilityRecord, segments map[uint32]*columnAssetSegmentState, partRef ColumnManifestPartRef, state ColumnAssetLifecycleState, live bool, candidate bool, reasons []string, stats *ColumnAssetReachabilityStats) error {
 	entry := ColumnAssetReachabilityEntry{
 		Ref:          partRef.Part.AssetRef,
 		State:        state,
 		Bytes:        partRef.Part.AssetBytes,
 		PartID:       partRef.Part.PartID,
 		GenerationID: partRef.GenerationID,
-		Reasons:      columnAssetReachabilityDefaultReasons(state),
+		Reasons:      reasons,
 	}
 	if err := addReachabilityEntry(records, segments, entry, live, candidate, false); err != nil {
 		return err

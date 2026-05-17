@@ -354,6 +354,7 @@ func estimateColumnCollectionManifestViewAssetRefs(view ColumnCollectionManifest
 }
 
 func addManifestViewAssetRefs(records map[ColumnAssetRef]columnAssetReachabilityRecord, segments map[uint32]*columnAssetSegmentState, view ColumnCollectionManifestView, state ColumnAssetLifecycleState, live bool, candidate bool, stats *ColumnAssetReachabilityStats) error {
+	reasons := columnAssetReachabilityDefaultReasons(state)
 	tombstones, err := scanColumnCollectionManifestViewAssetRefs(view, func(ref columnManifestViewAssetRef) error {
 		entry := ColumnAssetReachabilityEntry{
 			Ref:          ref.ref,
@@ -361,7 +362,7 @@ func addManifestViewAssetRefs(records map[ColumnAssetRef]columnAssetReachability
 			Bytes:        ref.bytes,
 			PartID:       ref.partID,
 			GenerationID: ref.generationID,
-			Reasons:      columnAssetReachabilityDefaultReasons(state),
+			Reasons:      reasons,
 		}
 		if err := addReachabilityEntry(records, segments, entry, live, candidate, false); err != nil {
 			return err
