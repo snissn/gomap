@@ -1450,6 +1450,11 @@ func (s *Server) createIndexesResponse(command wire.Document) (wire.Document, er
 		}
 		scalarDefs = append(scalarDefs, s.applyDefaultIndexOptions(def.scalarDef))
 	}
+	if err := validateCreateIndexesRequestDuplicates(scalarDefs, vectorDefs); err != nil {
+		return commandError(commandCodeBadValue, "BadValue", err.Error())
+	}
+	scalarDefs = dedupeIdenticalIndexDefinitions(scalarDefs)
+	vectorDefs = dedupeIdenticalVectorIndexDefinitions(vectorDefs)
 	if err := validateCreateIndexesCrossKindNames(collections.CollectionMeta{}, scalarDefs, vectorDefs); err != nil {
 		return commandError(commandCodeDuplicateKey, "DuplicateKey", err.Error())
 	}
@@ -1461,8 +1466,8 @@ func (s *Server) createIndexesResponse(command wire.Document) (wire.Document, er
 			return commandError(commandCodeBadValue, "BadValue", err.Error())
 		}
 		meta := s.defaultCollectionMeta(name)
-		meta.Indexes = dedupeIdenticalIndexDefinitions(scalarDefs)
-		meta.VectorIndexes = dedupeIdenticalVectorIndexDefinitions(vectorDefs)
+		meta.Indexes = scalarDefs
+		meta.VectorIndexes = vectorDefs
 		created, err := s.Collections.CreateCollection(meta)
 		if err != nil {
 			// If another request created the collection after our miss, fall
@@ -1485,6 +1490,9 @@ func (s *Server) createIndexesResponse(command wire.Document) (wire.Document, er
 	meta := col.Meta()
 	if err := validateCreateIndexesCrossKindNames(meta, scalarDefs, vectorDefs); err != nil {
 		return commandError(commandCodeDuplicateKey, "DuplicateKey", err.Error())
+	}
+	if err := validateCreateIndexesExistingVectorDefinitions(meta, vectorDefs); err != nil {
+		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
 	for _, def := range scalarDefs {
 		if existing, ok := findIndexDefinition(meta.Indexes, def.Name); ok && sameIndexDefinition(existing, def) {
@@ -3028,6 +3036,12 @@ func optionalPositiveIntFieldWithPresence(doc wire.Document, key string) (int, b
 		out = int64(v)
 	} else if v, ok := value.Int64OK(); ok {
 		out = v
+	} else if v, ok := value.DoubleOK(); ok {
+		var integral bool
+		out, integral = exactInt64FromFloat64(v)
+		if !integral {
+			return 0, true, fmt.Errorf("Mongo command field %q must be an integer", key)
+		}
 	} else {
 		return 0, true, fmt.Errorf("Mongo command field %q must be an integer", key)
 	}
@@ -3197,6 +3211,30 @@ func sameVectorIndexDefinition(left, right collections.VectorIndexDefinition) bo
 		left.Encoding == right.Encoding
 }
 
+func validateCreateIndexesRequestDuplicates(scalarDefs []collections.IndexDefinition, vectorDefs []collections.VectorIndexDefinition) error {
+	scalarSeen := make(map[string]collections.IndexDefinition, len(scalarDefs))
+	for _, def := range scalarDefs {
+		if existing, ok := scalarSeen[def.Name]; ok {
+			if !sameIndexDefinition(existing, def) {
+				return fmt.Errorf("duplicate index %q has conflicting definitions", def.Name)
+			}
+			continue
+		}
+		scalarSeen[def.Name] = def
+	}
+	vectorSeen := make(map[string]collections.VectorIndexDefinition, len(vectorDefs))
+	for _, def := range vectorDefs {
+		if existing, ok := vectorSeen[def.Name]; ok {
+			if !sameVectorIndexDefinition(existing, def) {
+				return fmt.Errorf("duplicate vector index %q has conflicting definitions", def.Name)
+			}
+			continue
+		}
+		vectorSeen[def.Name] = def
+	}
+	return nil
+}
+
 func validateCreateIndexesCrossKindNames(meta collections.CollectionMeta, scalarDefs []collections.IndexDefinition, vectorDefs []collections.VectorIndexDefinition) error {
 	scalarNames := make(map[string]struct{}, len(meta.Indexes)+len(scalarDefs))
 	for _, def := range meta.Indexes {
@@ -3213,6 +3251,16 @@ func validateCreateIndexesCrossKindNames(meta collections.CollectionMeta, scalar
 	for _, def := range vectorDefs {
 		if _, ok := scalarNames[def.Name]; ok {
 			return fmt.Errorf("index name %q conflicts between scalar and vector indexes", def.Name)
+		}
+	}
+	return nil
+}
+
+func validateCreateIndexesExistingVectorDefinitions(meta collections.CollectionMeta, vectorDefs []collections.VectorIndexDefinition) error {
+	for _, def := range vectorDefs {
+		existing, ok := findVectorIndexDefinition(meta.VectorIndexes, def.Name)
+		if ok && !sameVectorIndexDefinition(existing, def) {
+			return fmt.Errorf("vector index %q already exists with a different definition", def.Name)
 		}
 	}
 	return nil
