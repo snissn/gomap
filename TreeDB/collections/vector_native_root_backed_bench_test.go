@@ -101,7 +101,7 @@ func TestVectorIndexNativeRootTemplateV1GraphSearchMatchesLoadedGraph(t *testing
 		t.Fatal("template-v1 raw benchmark root should not load through JSON native snapshot loader")
 	}
 
-	referenceD, loadedReference, _ := openLoadedNativeVectorBenchmarkIndex(t, docs, dims, "embedding_graph_template_v1_match_reference")
+	referenceD, loadedReference, _ := openLoadedNativeVectorBenchmarkIndex(t, docs, dims, "embedding_graph_template_v1_match")
 	defer func() { _ = referenceD.Close() }()
 	query := vectorBenchmarkEmbedding(docs/3, dims)
 	loadedResults, err := loadedReference.searchGraphOnly(query, topK, ef)
