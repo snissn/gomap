@@ -1073,6 +1073,46 @@ func TestCollectionVectorIndexInsertAndTombstone(t *testing.T) {
 	}
 }
 
+func TestCollectionVectorIndexStaleDeleteNotificationKeepsReinsert(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	col := openVectorIndexTestCollection(t, d)
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("a"), []byte("b")},
+		[][]byte{
+			[]byte(`{"embedding":[0,1]}`),
+			[]byte(`{"embedding":[1,0]}`),
+		},
+	); err != nil {
+		t.Fatalf("insert seed: %v", err)
+	}
+	index, err := col.BuildVectorIndex(VectorIndexOptions{Field: "embedding", Metric: VectorMetricCosine, M: 4})
+	if err != nil {
+		t.Fatalf("build vector index: %v", err)
+	}
+	if deleted, err := col.DeleteBatch([][]byte{[]byte("a")}); err != nil || deleted != 1 {
+		t.Fatalf("delete a deleted=%d err=%v", deleted, err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("a")},
+		[][]byte{[]byte(`{"embedding":[1,0]}`)},
+	); err != nil {
+		t.Fatalf("reinsert a: %v", err)
+	}
+	if err := col.notifyVectorIndexesDelete([][]byte{[]byte("a")}); err != nil {
+		t.Fatalf("stale delete notification: %v", err)
+	}
+
+	results, _, err := index.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 1, DisableExactFallback: true})
+	if err != nil {
+		t.Fatalf("search after stale delete notification: %v", err)
+	}
+	requireVectorResultIDs(t, results, "a")
+}
+
 func TestCollectionVectorIndexInsertDocumentNoopsWhenVectorUnchanged(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

@@ -650,12 +650,56 @@ func (c *Collection) notifyVectorIndexesDelete(documentIDs [][]byte) error {
 	if c.manager != nil {
 		c.manager.registerCollectionHandle(c)
 	}
+	unlockMutation := c.lockMutation()
+	defer unlockMutation.Unlock()
 	for _, index := range indexes {
 		for _, documentID := range documentIDs {
+			live, err := c.documentLiveForVectorDeleteLocked(documentID)
+			if err != nil {
+				return err
+			}
+			if live {
+				continue
+			}
 			index.TombstoneDocumentID(documentID)
 		}
 	}
 	return nil
+}
+
+func (c *Collection) documentLiveForVectorDeleteLocked(documentID []byte) (bool, error) {
+	if c == nil {
+		return false, errCollectionNil
+	}
+	if c.db == nil {
+		return false, errCollectionDBNil
+	}
+	if len(documentID) == 0 {
+		return false, nil
+	}
+	if _, buffered, found := c.getBufferedDocumentInto(documentID, nil); buffered {
+		return found, nil
+	}
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return false, backenddb.ErrClosed
+	}
+	defer func() { _ = snap.Close() }()
+	catalog, err := c.catalogForSnapshot(snap)
+	if err != nil {
+		return false, err
+	}
+	if catalog == nil {
+		return false, errCollectionNotFound
+	}
+	entry, _, err := collectionGetEntryAtCatalogRoot(snap, catalog, collectionPrimaryRootName(c.meta.Name), documentID)
+	if errors.Is(err, tree.ErrKeyNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return entry.Flags&node.FlagTombstone == 0, nil
 }
 
 func (c *Collection) notifyVectorIndexesUpdateBatch(items []UpdateBatchItem, results []UpdateBatchResult) error {
