@@ -48,7 +48,13 @@ def wait_for_index(collection, name: str, timeout_seconds: float) -> dict[str, A
     start = time.perf_counter()
     last: dict[str, Any] = {}
     while time.perf_counter() - start < timeout_seconds:
-        indexes = list(collection.aggregate([{"$listSearchIndexes": {"name": name}}]))
+        try:
+            indexes = list(collection.aggregate([{"$listSearchIndexes": {"name": name}}]))
+        except OperationFailure as exc:
+            raise RuntimeError(
+                "MongoDB Vector Search index inspection failed. This benchmark requires Atlas or local Atlas "
+                "Vector Search and a user allowed to list search indexes."
+            ) from exc
         if indexes:
             last = indexes[0]
             status = str(last.get("status") or last.get("queryable") or "").upper()
@@ -112,8 +118,10 @@ def build_database(args: argparse.Namespace, manifest: dict[str, Any], docs: np.
             "MongoDB Vector Search index creation failed. This benchmark requires Atlas or local Atlas Vector Search; "
             "plain mongod does not provide the required createSearchIndexes/$vectorSearch path."
         ) from exc
-    build_phase = wait_for_index(collection, args.index_name, args.index_timeout_seconds)
-    build_phase["create_index_seconds"] = phase(build_start)["seconds"]
+    wait_phase = wait_for_index(collection, args.index_name, args.index_timeout_seconds)
+    build_phase = phase(build_start)
+    build_phase["wait"] = wait_phase
+    build_phase["index_status"] = wait_phase.get("index_status")
     client.close()
     return {
         "insert": insert_phase,
@@ -221,6 +229,18 @@ def validate_recall(
 
 
 def benchmark_search(args: argparse.Namespace, query_lists: list[list[float]], concurrency: int) -> dict[str, Any]:
+    if not query_lists:
+        return {
+            "concurrency": concurrency,
+            "queries": 0,
+            "total_duration_nanos": 0,
+            "avg_nanos": 0,
+            "avg_micros": 0,
+            "ops_per_second": 0,
+            "p50_nanos": 0,
+            "p95_nanos": 0,
+            "p99_nanos": 0,
+        }
     latencies = [0] * len(query_lists)
     next_index = 0
     next_lock = threading.Lock()
