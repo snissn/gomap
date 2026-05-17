@@ -16,7 +16,6 @@ It compares:
 - `github.com/tphakala/simd/f32` `DotProduct`, `DotProductUnsafe`, and
   `DotProductBatch`
 - `github.com/mycophonic/primordium/simd` `DotFloat32`
-- `github.com/adnilis/x-hmsw/utils/simd` `DotProduct`
 - `github.com/ic-timon/da-hvri/simd` `DotProduct`
 
 It also includes focused TreeDB rerank-shape benchmarks:
@@ -46,7 +45,7 @@ The benchmark compares that against:
 - looping over candidates with `vek32`, `tphakala/simd/f32`, and
   `primordium/simd` fused dot products
 - using `tphakala/simd/f32.DotProductBatch` for one query against many rows
-- looping over candidates with `adnilis/x-hmsw` and `da-hvri` dot products
+- looping over candidates with `da-hvri` dot products
 
 NumKong's public Go API currently allocates the packed buffer inside
 `NewPackedMatrixF32`. There is no public pack-into-caller-buffer API, so the

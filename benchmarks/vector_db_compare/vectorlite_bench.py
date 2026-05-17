@@ -311,7 +311,7 @@ def main() -> None:
 
     phases, vectorlite_info = build_database(args, manifest, docs, document_payloads)
     db, reopen = reopen_database(args)
-    validation = validate_recall(db, docs, queries, args.top_k, args.ef_search, args.validate_queries, args.min_recall)
+    validation = validate_recall(db, docs, all_queries, args.top_k, args.ef_search, args.validate_queries, args.min_recall)
     db.close()
 
     levels = sorted({1, *concurrency})
