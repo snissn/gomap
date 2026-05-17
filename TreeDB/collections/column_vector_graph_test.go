@@ -71,6 +71,23 @@ func TestColumnVectorGraphRejectsLooseTinyInvNorm(t *testing.T) {
 	}
 }
 
+func TestColumnVectorGraphRejectsTinyInvNormAbsoluteToleranceHole(t *testing.T) {
+	_, err := NewColumnVectorGraphFromColumns(ColumnVectorGraphColumns{
+		DocumentIDs:     [][]byte{[]byte("doc-huge")},
+		Vectors:         []float32{1e20},
+		InvNorms:        []float32{1e-13},
+		NeighborOffsets: []uint32{0, 0},
+		Dimensions:      1,
+		EntryPoint:      0,
+	})
+	if err == nil {
+		t.Fatal("NewColumnVectorGraphFromColumns succeeded with stale tiny inverse norm")
+	}
+	if !strings.Contains(err.Error(), "inverse norm") {
+		t.Fatalf("error=%q want inverse norm validation", err)
+	}
+}
+
 func TestColumnVectorGraphZeroValueRows(t *testing.T) {
 	var graph ColumnVectorGraph
 	if got := graph.Rows(); got != 0 {

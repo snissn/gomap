@@ -271,7 +271,7 @@ func validateColumnVectorGraphInvNorm(row int, invNorm float32, normSquared floa
 	}
 	want := 1 / math.Sqrt(normSquared)
 	diff := math.Abs(f - want)
-	allowed := math.Max(1e-12, math.Abs(want)*1e-4)
+	allowed := math.Abs(want) * 1e-4
 	if diff > allowed {
 		return fmt.Errorf("collections: column vector graph row %d inverse norm=%g want %g", row, invNorm, want)
 	}
