@@ -9,6 +9,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"hash"
 	"io"
 	"math"
 	"os"
@@ -154,8 +155,9 @@ func exportDataset(cfg config) (exportResult, error) {
 	}, files, "documents.f32"); err != nil {
 		return exportResult{}, err
 	}
+	queryStride := queryDocStride(cfg.docs)
 	if err := writeVectorFile(filepath.Join(out, "queries.f32"), cfg.queries, cfg.dimensions, func(i int) []float32 {
-		return embedding(queryDocIndex(i, cfg.docs), cfg.dimensions)
+		return embedding(queryDocIndex(i, cfg.docs, queryStride), cfg.dimensions)
 	}, files, "queries.f32"); err != nil {
 		return exportResult{}, err
 	}
@@ -218,17 +220,19 @@ func writeVectorFile(path string, count, dims int, vector func(int) []float32, f
 	}
 	h := sha256.New()
 	w := io.MultiWriter(f, h)
+	row := make([]byte, dims*4)
 	for i := 0; i < count; i++ {
 		v := vector(i)
 		if len(v) != dims {
 			_ = f.Close()
 			return fmt.Errorf("vector %d dimensions=%d want %d", i, len(v), dims)
 		}
-		for _, value := range v {
-			if err := binary.Write(w, binary.LittleEndian, value); err != nil {
-				_ = f.Close()
-				return err
-			}
+		for j, value := range v {
+			binary.LittleEndian.PutUint32(row[j*4:], math.Float32bits(value))
+		}
+		if _, err := w.Write(row); err != nil {
+			_ = f.Close()
+			return err
 		}
 	}
 	if err := f.Close(); err != nil {
@@ -255,8 +259,9 @@ func writeDocumentsJSONL(path string, cfg config, files map[string]fileManifest)
 
 func writeQueriesJSONL(path string, cfg config, files map[string]fileManifest) error {
 	return writeJSONL(path, files, "queries.jsonl", func(enc *json.Encoder) error {
+		stride := queryDocStride(cfg.docs)
 		for i := 0; i < cfg.queries; i++ {
-			docIndex := queryDocIndex(i, cfg.docs)
+			docIndex := queryDocIndex(i, cfg.docs, stride)
 			if err := enc.Encode(queryJSONL{
 				Index:         i,
 				ID:            fmt.Sprintf("query-%06d", i),
@@ -307,7 +312,7 @@ func writeManifest(path string, m manifest) error {
 	return nil
 }
 
-func recordFile(path string, h interface{ Sum([]byte) []byte }, files map[string]fileManifest, name string) error {
+func recordFile(path string, h hash.Hash, files map[string]fileManifest, name string) error {
 	info, err := os.Stat(path)
 	if err != nil {
 		return err
@@ -326,8 +331,35 @@ func documentID(id int) string {
 	return fmt.Sprintf("doc-%06d", id)
 }
 
-func queryDocIndex(i, docs int) int {
-	return (i*7919 + docs/3 + 17) % docs
+func queryDocStride(docs int) int {
+	stride := 7919
+	if docs > 0 {
+		stride %= docs
+	}
+	if stride <= 0 {
+		stride = 1
+	}
+	for gcd(stride, docs) != 1 {
+		stride++
+	}
+	return stride
+}
+
+func queryDocIndex(i, docs, stride int) int {
+	return (i*stride + docs/3 + 17) % docs
+}
+
+func gcd(a, b int) int {
+	if a < 0 {
+		a = -a
+	}
+	if b < 0 {
+		b = -b
+	}
+	for b != 0 {
+		a, b = b, a%b
+	}
+	return a
 }
 
 func embedding(id, dims int) []float32 {
@@ -339,6 +371,10 @@ func embedding(id, dims int) []float32 {
 		value := math.Sin(x*d*0.013) + math.Cos((x+17)*d*0.007) + math.Sin(float64((id%31)+1)*d*0.019)
 		out[i] = float32(value)
 		norm += value * value
+	}
+	if norm == 0 || math.IsNaN(norm) || math.IsInf(norm, 0) {
+		out[0] = 1
+		return out
 	}
 	scale := 1 / math.Sqrt(norm)
 	for i := range out {

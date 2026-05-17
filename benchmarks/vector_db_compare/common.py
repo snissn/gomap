@@ -53,7 +53,7 @@ def load_vectors(path: Path, rows: int, dims: int) -> np.ndarray:
     return data.reshape(rows, dims)
 
 
-def max_rss_bytes() -> int:
+def max_rss_bytes() -> int | None:
     try:
         import resource
 
@@ -61,5 +61,5 @@ def max_rss_bytes() -> int:
         if sys.platform == "darwin":
             return int(value)
         return int(value) * 1024
-    except Exception:
-        return 0
+    except (ImportError, OSError, AttributeError):
+        return None

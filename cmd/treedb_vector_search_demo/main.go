@@ -272,7 +272,8 @@ func parseConfig(args []string) (config, error) {
 	profileRaw := string(cfg.profile)
 	searchConcurrencyRaw := defaultSearchConcurrency
 	fs := flag.NewFlagSet("treedb_vector_search_demo", flag.ContinueOnError)
-	fs.StringVar(&cfg.dir, "dir", "", "TreeDB directory to create; empty uses a temporary directory")
+	fs.SetOutput(io.Discard)
+	fs.StringVar(&cfg.dir, "dir", "", "TreeDB directory to create; empty uses a temporary directory; explicit directories are kept")
 	fs.StringVar(&cfg.datasetDir, "dataset-dir", "", "Optional exported vector dataset directory to load documents and queries from")
 	fs.BoolVar(&cfg.keepDir, "keep-dir", false, "Keep the DB directory after the run")
 	fs.BoolVar(&cfg.matrix, "matrix", cfg.matrix, "Run the storage/search benchmark matrix instead of a single storage case")
@@ -360,6 +361,9 @@ func parseConfig(args []string) (config, error) {
 	}
 	if cfg.datasetDir != "" {
 		cfg.datasetDir = filepath.Clean(cfg.datasetDir)
+	}
+	if cfg.validateQueries == 0 && cfg.minRecall > 0 {
+		return config{}, errors.New("-min-recall must be 0 when -validate-queries is 0")
 	}
 	return cfg, nil
 }
@@ -639,30 +643,40 @@ func execute(ctx context.Context, cfg config) (result, error) {
 		return result{}, err
 	}
 
-	var beforeLoad runtime.MemStats
-	runtime.GC()
-	runtime.ReadMemStats(&beforeLoad)
 	reopenStart := time.Now()
 	d, cleanupBackend, err = openDemoBackend(cfg, dir)
 	if err != nil {
 		return result{}, err
 	}
-	closeReopened := true
-	defer func() {
-		if closeReopened {
-			_ = cleanupBackend()
+	closeReopened := func() error {
+		if cleanupBackend == nil {
+			return nil
 		}
-	}()
+		err := cleanupBackend()
+		cleanupBackend = nil
+		d = nil
+		return err
+	}
+	defer func() { _ = closeReopened() }()
 	col, err = collections.NewCollectionManager(d).OpenCollection("docs")
 	if err != nil {
 		return result{}, err
 	}
+	var beforeLoad runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&beforeLoad)
 	loaded, loadStatus, err := col.LoadVectorIndexSnapshot(vectorIndexOptions(def))
 	if err != nil {
 		return result{}, err
 	}
-	if loaded == nil || !loadStatus.Loaded || loadStatus.RootID == 0 {
-		return result{}, fmt.Errorf("failed to load compacted native vector root: %+v", loadStatus)
+	if loaded == nil {
+		return result{}, fmt.Errorf("native vector root load returned no runtime: %+v", loadStatus)
+	}
+	if !loadStatus.Loaded {
+		return result{}, fmt.Errorf("native vector root not marked loaded: %+v", loadStatus)
+	}
+	if loadStatus.RootID == 0 {
+		return result{}, fmt.Errorf("native vector root loaded with zero root id: %+v", loadStatus)
 	}
 	res.ReopenLoad = phaseSince(reopenStart)
 	res.IndexStatsLoaded = loaded.Stats()
@@ -672,7 +686,7 @@ func execute(ctx context.Context, cfg config) (result, error) {
 	res.Memory = memoryReport{
 		AllocBeforeLoadBytes: beforeLoad.Alloc,
 		AllocAfterLoadBytes:  afterLoad.Alloc,
-		LoadAllocDeltaBytes:  int64(afterLoad.Alloc) - int64(beforeLoad.Alloc),
+		LoadAllocDeltaBytes:  allocDeltaBytes(afterLoad.Alloc, beforeLoad.Alloc),
 		IndexBytesMemory:     res.IndexStatsLoaded.BytesMemory,
 	}
 
@@ -690,11 +704,26 @@ func execute(ctx context.Context, cfg config) (result, error) {
 	if len(searchBenchmarks) > 0 {
 		res.Search = searchBenchmarks[0]
 	}
-	closeReopened = false
-	if err := cleanupBackend(); err != nil {
+	if err := closeReopened(); err != nil {
 		return result{}, err
 	}
 	return res, nil
+}
+
+func allocDeltaBytes(after, before uint64) int64 {
+	const maxInt64 = uint64(1<<63 - 1)
+	if after >= before {
+		delta := after - before
+		if delta > maxInt64 {
+			return int64(maxInt64)
+		}
+		return int64(delta)
+	}
+	delta := before - after
+	if delta > maxInt64 {
+		return -int64(maxInt64)
+	}
+	return -int64(delta)
 }
 
 func executeMatrix(ctx context.Context, cfg config) (matrixResult, error) {
@@ -969,10 +998,9 @@ func validateCompactedData(col *collections.Collection, idx *collections.VectorI
 		}
 	}
 	if cfg.validateQueries == 0 {
-		out.Recall = 1
 		return out, nil
 	}
-	queries, err := loadQueries(cfg.validateQueries, cfg, work)
+	queries, err := loadQueries(cfg.validateQueries, cfg, work, 0)
 	if err != nil {
 		return out, err
 	}
@@ -1061,7 +1089,7 @@ func benchmarkSearchConcurrent(idx *collections.VectorIndex, cfg config, work wo
 	if concurrency <= 0 {
 		return searchBenchmarkResult{}, errors.New("search concurrency must be positive")
 	}
-	queries, err := loadQueries(cfg.queries, cfg, work)
+	queries, err := loadQueries(cfg.queries, cfg, work, cfg.validateQueries)
 	if err != nil {
 		return searchBenchmarkResult{}, err
 	}
@@ -1091,11 +1119,11 @@ func benchmarkSearchConcurrent(idx *collections.VectorIndex, cfg config, work wo
 				EfSearch:             cfg.efSearch,
 				DisableExactFallback: cfg.disableExactFallback,
 			})
-			latencies[i] = time.Since(start).Nanoseconds()
 			if err != nil {
 				setErr(err)
 				return
 			}
+			latencies[i] = time.Since(start).Nanoseconds()
 			if len(results) == 0 {
 				setErr(errors.New("vector search returned no results"))
 				return
@@ -1165,9 +1193,9 @@ func vectorIndexOptions(def collections.VectorIndexDefinition) collections.Vecto
 	}
 }
 
-func loadQueries(count int, cfg config, work workload) ([][]float32, error) {
+func loadQueries(count int, cfg config, work workload, syntheticOffset int) ([][]float32, error) {
 	if work.datasetDir == "" {
-		return validationQueries(count, cfg.docs, cfg.dimensions), nil
+		return syntheticQueries(count, cfg.docs, cfg.dimensions, syntheticOffset), nil
 	}
 	return readFloat32Vectors(datasetPath(work, work.manifest.QueryVectorsFile, "queries.f32"), count, cfg.dimensions)
 }
@@ -1200,18 +1228,73 @@ func validationQueries(count, docs, dims int) [][]float32 {
 
 func syntheticQueries(count, docs, dims, offset int) [][]float32 {
 	queries := make([][]float32, count)
+	stride := queryDocStride(docs)
+	start := 0
+	span := docs
+	if offset > 0 && offset < docs {
+		start = offset
+		span = docs - offset
+	}
 	for i := 0; i < count; i++ {
-		queries[i] = embedding(queryDocIndex(i+offset, docs), dims)
+		queries[i] = embedding(syntheticQueryID(i, docs, start, span, stride), dims)
 	}
 	return queries
 }
 
-func queryDocIndex(i, docs int) int {
-	return (i*7919 + docs/3 + 17) % docs
+func syntheticQueryID(i, docs, start, span, stride int) int {
+	if i < span {
+		return queryDocIndex(start+i, docs, stride)
+	}
+	return docs + i - span
+}
+
+func queryDocStride(docs int) int {
+	stride := 7919
+	if docs > 0 {
+		stride %= docs
+	}
+	if stride <= 0 {
+		stride = 1
+	}
+	for gcd(stride, docs) != 1 {
+		stride++
+	}
+	return stride
+}
+
+func queryDocIndex(i, docs, stride int) int {
+	return (i*stride + docs/3 + 17) % docs
+}
+
+func gcd(a, b int) int {
+	if a < 0 {
+		a = -a
+	}
+	if b < 0 {
+		b = -b
+	}
+	for b != 0 {
+		a, b = b, a%b
+	}
+	return a
 }
 
 func validationDocIndex(i, docs int) int {
-	return (i*1543 + docs/5 + 11) % docs
+	return (i*validationDocStride(docs) + docs/5 + 11) % docs
+}
+
+func validationDocStride(docs int) int {
+	stride := 1543
+	if docs > 0 {
+		stride %= docs
+	}
+	if stride <= 0 {
+		stride = 1
+	}
+	for gcd(stride, docs) != 1 {
+		stride++
+	}
+	return stride
 }
 
 func documentID(id int) []byte {
@@ -1220,13 +1303,15 @@ func documentID(id int) []byte {
 
 func documentJSON(id, dims int) []byte {
 	vector := embedding(id, dims)
-	out := make([]byte, 0, 48+dims*10)
-	out = append(out, fmt.Sprintf(`{"group":%d,"embedding":[`, id%16)...)
+	out := make([]byte, 0, 48+dims*16)
+	out = append(out, `{"group":`...)
+	out = strconv.AppendInt(out, int64(id%16), 10)
+	out = append(out, `,"embedding":[`...)
 	for i, value := range vector {
 		if i > 0 {
 			out = append(out, ',')
 		}
-		out = append(out, fmt.Sprintf("%.7g", value)...)
+		out = strconv.AppendFloat(out, float64(value), 'g', 7, 32)
 	}
 	out = append(out, ']', '}')
 	return out
@@ -1241,6 +1326,10 @@ func embedding(id, dims int) []float32 {
 		value := math.Sin(x*d*0.013) + math.Cos((x+17)*d*0.007) + math.Sin(float64((id%31)+1)*d*0.019)
 		out[i] = float32(value)
 		norm += value * value
+	}
+	if norm == 0 || math.IsNaN(norm) || math.IsInf(norm, 0) {
+		out[0] = 1
+		return out
 	}
 	scale := 1 / math.Sqrt(norm)
 	for i := range out {
@@ -1350,6 +1439,8 @@ func printText(w io.Writer, res result) {
 			fully = res.CompactStorage.FullyCompacted
 		}
 		fmt.Fprintf(w, "compact_storage_full: %.3fs fully_compacted=%t\n", res.CompactPhase.Seconds, fully)
+	} else {
+		fmt.Fprintf(w, "compact_storage_full: skipped\n")
 	}
 	fmt.Fprintf(w, "reopen_and_load_native_index: %.3fs\n", res.ReopenLoad.Seconds)
 	fmt.Fprintf(w, "\nValidation\n")

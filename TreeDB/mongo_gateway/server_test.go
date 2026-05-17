@@ -2297,14 +2297,33 @@ func TestServerVectorIndexMetadataExtension(t *testing.T) {
 		{Key: "indexes", Value: bson.A{vectorIndex}},
 		{Key: "$db", Value: "app"},
 	}))
-	dropAllResponse := serveCommand(t, server, 23109, bson.D{
+	duplicateVectorDropResponse := serveCommand(t, server, 23109, bson.D{
+		{Key: "dropIndexes", Value: "users"},
+		{Key: "index", Value: bson.A{"embedding_vector", "embedding_vector"}},
+		{Key: "$db", Value: "app"},
+	})
+	assertOK(t, duplicateVectorDropResponse)
+	assertInt32(t, duplicateVectorDropResponse, "nIndexesWas", 3)
+	afterDuplicateVectorDrop := cursorFirstBatch(t, serveCommand(t, server, 23110, bson.D{
+		{Key: "listIndexes", Value: "users"},
+		{Key: "$db", Value: "app"},
+	}))
+	if got, want := len(afterDuplicateVectorDrop), 2; got != want {
+		t.Fatalf("index batch after duplicate vector drop len=%d want %d", got, want)
+	}
+	assertOK(t, serveCommand(t, server, 23111, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{vectorIndex}},
+		{Key: "$db", Value: "app"},
+	}))
+	dropAllResponse := serveCommand(t, server, 23112, bson.D{
 		{Key: "dropIndexes", Value: "users"},
 		{Key: "index", Value: "*"},
 		{Key: "$db", Value: "app"},
 	})
 	assertOK(t, dropAllResponse)
 	assertInt32(t, dropAllResponse, "nIndexesWas", 3)
-	afterDropAll := cursorFirstBatch(t, serveCommand(t, server, 23110, bson.D{
+	afterDropAll := cursorFirstBatch(t, serveCommand(t, server, 23113, bson.D{
 		{Key: "listIndexes", Value: "users"},
 		{Key: "$db", Value: "app"},
 	}))
@@ -2689,6 +2708,67 @@ func TestServerIndexMetadataRejectsInvalidCommands(t *testing.T) {
 		}
 	}
 
+	emptyVectorMetric := serveCommand(t, server, 23325, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{bson.D{
+			{Key: "key", Value: bson.D{{Key: "embedding", Value: "vector"}}},
+			{Key: "name", Value: "embedding_vector"},
+			{Key: "treedbIndexType", Value: "vector"},
+			{Key: "treedbVector", Value: bson.D{
+				{Key: "dimensions", Value: int32(64)},
+				{Key: "metric", Value: ""},
+			}},
+		}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, emptyVectorMetric, "BadValue")
+
+	emptyVectorEncoding := serveCommand(t, server, 23326, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{bson.D{
+			{Key: "key", Value: bson.D{{Key: "embedding", Value: "vector"}}},
+			{Key: "name", Value: "embedding_vector"},
+			{Key: "treedbIndexType", Value: "vector"},
+			{Key: "treedbVector", Value: bson.D{
+				{Key: "dimensions", Value: int32(64)},
+				{Key: "encoding", Value: ""},
+			}},
+		}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, emptyVectorEncoding, "BadValue")
+
+	efConstructionBelowM := serveCommand(t, server, 23327, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{bson.D{
+			{Key: "key", Value: bson.D{{Key: "embedding", Value: "vector"}}},
+			{Key: "name", Value: "embedding_vector"},
+			{Key: "treedbIndexType", Value: "vector"},
+			{Key: "treedbVector", Value: bson.D{
+				{Key: "dimensions", Value: int32(64)},
+				{Key: "m", Value: int32(32)},
+				{Key: "efConstruction", Value: int32(16)},
+			}},
+		}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, efConstructionBelowM, "BadValue")
+
+	unsupportedVectorType := serveCommand(t, server, 23328, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{bson.D{
+			{Key: "key", Value: bson.D{{Key: "embedding", Value: "vector"}}},
+			{Key: "treedbIndexType", Value: "hnsw"},
+			{Key: "treedbVector", Value: bson.D{{Key: "dimensions", Value: int32(64)}}},
+		}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, unsupportedVectorType, "BadValue")
+	errmsg, ok = bson.Raw(unsupportedVectorType).Lookup("errmsg").StringValueOK()
+	if !ok || !strings.Contains(errmsg, `"embedding"`) || strings.Contains(errmsg, "embedding_1") {
+		t.Fatalf("unsupported vector type errmsg=%q ok=%v want neutral default name", errmsg, ok)
+	}
+
 	oversizedVectorOption := serveCommand(t, server, 23324, bson.D{
 		{Key: "createIndexes", Value: "users"},
 		{Key: "indexes", Value: bson.A{bson.D{
@@ -2735,6 +2815,25 @@ func TestServerIndexMetadataRejectsInvalidCommands(t *testing.T) {
 		t.Fatalf("conflicting duplicate collection err=%v, want collection not found", err)
 	}
 
+	crossKindDuplicate := serveCommand(t, server, 23329, bson.D{
+		{Key: "createIndexes", Value: "cross_kind_dup"},
+		{Key: "indexes", Value: bson.A{
+			bson.D{
+				{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}},
+				{Key: "name", Value: "shared_name"},
+				{Key: "treedbValueType", Value: "string"},
+			},
+			bson.D{
+				{Key: "key", Value: bson.D{{Key: "embedding", Value: "vector"}}},
+				{Key: "name", Value: "shared_name"},
+				{Key: "treedbIndexType", Value: "vector"},
+				{Key: "treedbVector", Value: bson.D{{Key: "dimensions", Value: int32(64)}}},
+			},
+		}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, crossKindDuplicate, "DuplicateKey")
+
 	invalidListCollectionsDB := serveCommand(t, server, 234, bson.D{
 		{Key: "listCollections", Value: int32(1)},
 		{Key: "$db", Value: "bad/name"},
@@ -2776,6 +2875,17 @@ func TestServerIndexMetadataRejectsInvalidCommands(t *testing.T) {
 		}}},
 		{Key: "$db", Value: "app"},
 	}))
+	existingCrossKindDuplicate := serveCommand(t, server, 242, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{bson.D{
+			{Key: "key", Value: bson.D{{Key: "embedding", Value: "vector"}}},
+			{Key: "name", Value: "city_1"},
+			{Key: "treedbIndexType", Value: "vector"},
+			{Key: "treedbVector", Value: bson.D{{Key: "dimensions", Value: int32(64)}}},
+		}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, existingCrossKindDuplicate, "DuplicateKey")
 	emptyDrop := serveCommand(t, server, 239, bson.D{
 		{Key: "dropIndexes", Value: "users"},
 		{Key: "index", Value: bson.A{}},

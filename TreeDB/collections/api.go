@@ -150,6 +150,9 @@ func commitAmbiguousError(operation string, err error) error {
 	if err == nil {
 		return nil
 	}
+	if errors.Is(err, ErrCommitAmbiguous) {
+		return err
+	}
 	return &CommitAmbiguousError{Operation: operation, Err: err}
 }
 
@@ -9111,7 +9114,12 @@ func (c *Collection) DeleteDocument(documentID []byte) (bool, error) {
 		return false, errors.New("collections: document id cannot be empty")
 	}
 	unlockMutation := c.lockMutation()
-	defer unlockMutation.Unlock()
+	mutationLocked := true
+	defer func() {
+		if mutationLocked {
+			unlockMutation.Unlock()
+		}
+	}()
 	if c.shouldFlushBeforeIndexedDelete(c.meta) {
 		if err := c.flushBufferedWrites(); err != nil {
 			return false, err
@@ -9130,6 +9138,8 @@ func (c *Collection) DeleteDocument(documentID []byte) (bool, error) {
 			continue
 		}
 		if err == nil && deleted {
+			unlockMutation.Unlock()
+			mutationLocked = false
 			err = commitAmbiguousError("DeleteDocument vector index maintenance", c.notifyVectorIndexesDelete([][]byte{documentID}))
 		}
 		return deleted, err
@@ -9176,7 +9186,12 @@ func (c *Collection) DeleteBatch(documentIDs [][]byte) (int, error) {
 		return 0, nil
 	}
 	unlockMutation := c.lockMutation()
-	defer unlockMutation.Unlock()
+	mutationLocked := true
+	defer func() {
+		if mutationLocked {
+			unlockMutation.Unlock()
+		}
+	}()
 	if c.shouldFlushBeforeIndexedDelete(c.meta) {
 		if err := c.flushBufferedWrites(); err != nil {
 			return 0, err
@@ -9194,6 +9209,8 @@ func (c *Collection) DeleteBatch(documentIDs [][]byte) (int, error) {
 			continue
 		}
 		if err == nil && deleted > 0 {
+			unlockMutation.Unlock()
+			mutationLocked = false
 			err = commitAmbiguousError("DeleteBatch vector index maintenance", c.notifyVectorIndexesDelete(ids))
 		}
 		return deleted, err
