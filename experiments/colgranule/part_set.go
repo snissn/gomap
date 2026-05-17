@@ -519,18 +519,60 @@ func CompactColumnPartSet(workspace *ColumnWorkspace, reader *ColumnPartSetReade
 	if err != nil {
 		return ColumnPartSetCompactionResult{}, err
 	}
-	columnNames := make([]string, 0, len(normalized.Columns))
+	scalarNames := make([]string, 0, len(normalized.Columns))
+	vectorColumns := make([]ColumnDefinition, 0, len(normalized.Columns))
+	adjacencyColumns := make([]ColumnDefinition, 0, len(normalized.Columns))
 	for _, def := range normalized.Columns {
-		columnNames = append(columnNames, def.Name)
+		switch def.Type {
+		case ColumnTypeInt64, ColumnTypeLowCardinalityCode, ColumnTypeBool:
+			scalarNames = append(scalarNames, def.Name)
+		case ColumnTypeFloat32Vector:
+			vectorColumns = append(vectorColumns, def)
+		case ColumnTypeAdjacencyList:
+			adjacencyColumns = append(adjacencyColumns, def)
+		default:
+			return ColumnPartSetCompactionResult{}, fmt.Errorf("colgranule: unsupported column type %s for compaction column %s", def.Type, def.Name)
+		}
 	}
-	scan, err := reader.ScanProjected(columnNames)
-	if err != nil {
-		return ColumnPartSetCompactionResult{}, err
+	batch := ColumnBatch{Rows: reader.visibilityStat.VisibleRows}
+	if len(scalarNames) != 0 {
+		scan, err := reader.ScanProjected(scalarNames)
+		if err != nil {
+			return ColumnPartSetCompactionResult{}, err
+		}
+		batch.Rows = scan.Rows
+		batch.Columns = scan.Columns
 	}
-	if scan.Rows == 0 {
+	if batch.Rows == 0 {
 		return ColumnPartSetCompactionResult{}, fmt.Errorf("colgranule: cannot compact empty visible part set")
 	}
-	part, err := BuildColumnPart(newPartID, normalized, ColumnBatch{Rows: scan.Rows, Columns: scan.Columns})
+	if len(vectorColumns) != 0 {
+		batch.Float32Vectors = make(map[string]Float32VectorColumn, len(vectorColumns))
+		for _, def := range vectorColumns {
+			column, rows, err := scanCompactionFloat32VectorColumn(reader, def)
+			if err != nil {
+				return ColumnPartSetCompactionResult{}, err
+			}
+			if rows != batch.Rows {
+				return ColumnPartSetCompactionResult{}, fmt.Errorf("colgranule: vector column %s rows=%d want=%d", def.Name, rows, batch.Rows)
+			}
+			batch.Float32Vectors[def.Name] = column
+		}
+	}
+	if len(adjacencyColumns) != 0 {
+		batch.AdjacencyLists = make(map[string]AdjacencyListColumn, len(adjacencyColumns))
+		for _, def := range adjacencyColumns {
+			column, rows, err := scanCompactionAdjacencyListColumn(reader, def)
+			if err != nil {
+				return ColumnPartSetCompactionResult{}, err
+			}
+			if rows != batch.Rows {
+				return ColumnPartSetCompactionResult{}, fmt.Errorf("colgranule: adjacency-list column %s rows=%d want=%d", def.Name, rows, batch.Rows)
+			}
+			batch.AdjacencyLists[def.Name] = column
+		}
+	}
+	part, err := BuildColumnPart(newPartID, normalized, batch)
 	if err != nil {
 		return ColumnPartSetCompactionResult{}, err
 	}
@@ -580,8 +622,8 @@ func CompactColumnPartSet(workspace *ColumnWorkspace, reader *ColumnPartSetReade
 		Manifest:                manifest,
 		Part:                    entry,
 		InputRows:               reader.visibilityStat.InputRows,
-		VisibleRows:             scan.Rows,
-		DroppedRows:             reader.visibilityStat.InputRows - scan.Rows,
+		VisibleRows:             batch.Rows,
+		DroppedRows:             reader.visibilityStat.InputRows - batch.Rows,
 		SupersededRows:          reader.visibilityStat.SupersededRows,
 		DeletedRows:             reader.visibilityStat.DeletedRows,
 		OldAssetBytes:           oldAssetBytes,
@@ -594,6 +636,69 @@ func CompactColumnPartSet(workspace *ColumnWorkspace, reader *ColumnPartSetReade
 		PostPublishReachability: postPublishPlan,
 		CompactionUnix:          time.Now().UnixNano(),
 	}, nil
+}
+
+func scanCompactionFloat32VectorColumn(reader *ColumnPartSetReader, def ColumnDefinition) (Float32VectorColumn, int, error) {
+	valueCount, err := checkedMulInt(reader.visibilityStat.VisibleRows, def.VectorDims, "compaction float32 vector values")
+	if err != nil {
+		return Float32VectorColumn{}, 0, err
+	}
+	values := make([]float32, 0, valueCount)
+	rowsOut := 0
+	for partIndex, loaded := range reader.parts {
+		visible := reader.visibleRowsForPart(partIndex)
+		if len(visible.Rows) == 0 {
+			continue
+		}
+		scanner := loaded.Part.NewScanner()
+		partValues, dims, _, err := scanner.scanFloat32VectorColumnInto(def.Name, nil)
+		if err != nil {
+			return Float32VectorColumn{}, 0, err
+		}
+		if dims != def.VectorDims {
+			return Float32VectorColumn{}, 0, fmt.Errorf("colgranule: vector column %s dims=%d want=%d", def.Name, dims, def.VectorDims)
+		}
+		for _, row := range visible.Rows {
+			start := row * dims
+			values = append(values, partValues[start:start+dims]...)
+		}
+		rowsOut += len(visible.Rows)
+	}
+	if len(values) != valueCount {
+		return Float32VectorColumn{}, 0, fmt.Errorf("colgranule: compacted vector column %s values=%d want=%d", def.Name, len(values), valueCount)
+	}
+	return Float32VectorColumn{Dims: def.VectorDims, Values: values}, rowsOut, nil
+}
+
+func scanCompactionAdjacencyListColumn(reader *ColumnPartSetReader, def ColumnDefinition) (AdjacencyListColumn, int, error) {
+	offsets := make([]uint32, 1, reader.visibilityStat.VisibleRows+1)
+	values := make([]int64, 0)
+	rowsOut := 0
+	for partIndex, loaded := range reader.parts {
+		visible := reader.visibleRowsForPart(partIndex)
+		if len(visible.Rows) == 0 {
+			continue
+		}
+		scanner := loaded.Part.NewScanner()
+		partOffsets, partValues, _, err := scanner.scanAdjacencyListColumnInto(def.Name, nil, nil)
+		if err != nil {
+			return AdjacencyListColumn{}, 0, err
+		}
+		for _, row := range visible.Rows {
+			start := int(partOffsets[row])
+			end := int(partOffsets[row+1])
+			values = append(values, partValues[start:end]...)
+			if uint64(len(values)) > uint64(^uint32(0)) {
+				return AdjacencyListColumn{}, 0, fmt.Errorf("colgranule: compacted adjacency-list column %s values=%d exceed uint32 offsets", def.Name, len(values))
+			}
+			offsets = append(offsets, uint32(len(values)))
+		}
+		rowsOut += len(visible.Rows)
+	}
+	if len(offsets) != rowsOut+1 {
+		return AdjacencyListColumn{}, 0, fmt.Errorf("colgranule: compacted adjacency-list column %s offsets=%d want=%d", def.Name, len(offsets), rowsOut+1)
+	}
+	return AdjacencyListColumn{Offsets: offsets, Values: values}, rowsOut, nil
 }
 
 func proportionalBytes(totalBytes int, rows int, totalRows int) int {

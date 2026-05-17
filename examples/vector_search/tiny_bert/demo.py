@@ -49,7 +49,7 @@ def mean_pool(last_hidden_state: torch.Tensor, attention_mask: torch.Tensor) -> 
 
 def embed_documents(documents: list[str]) -> torch.Tensor:
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-    model = AutoModel.from_pretrained(MODEL_NAME, dtype="auto")
+    model = AutoModel.from_pretrained(MODEL_NAME, torch_dtype="auto")
     model.eval()
 
     encoded = tokenizer(
