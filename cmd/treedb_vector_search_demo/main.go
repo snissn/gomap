@@ -611,6 +611,7 @@ func execute(ctx context.Context, cfg config) (result, error) {
 	}
 	cleanupBackend = nil
 	d = nil
+	runtime.GC()
 
 	reopenStart := time.Now()
 	d, cleanupBackend, err = openDemoBackend(cfg, dir)
