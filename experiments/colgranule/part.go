@@ -1,6 +1,7 @@
 package colgranule
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"math"
@@ -642,6 +643,230 @@ func (s *ColumnPartScanner) scanColumnRowsInto(name string, dst []int64, rows []
 	}
 	diagnostics.RowsScanned = len(rows)
 	return out, diagnostics, nil
+}
+
+func (s *ColumnPartScanner) scanFloat32VectorRowsInto(name string, dst []float32, rows []int) ([]float32, int, PartScanDiagnostics, error) {
+	column, ok := s.part.Columns[name]
+	if !ok {
+		return nil, 0, PartScanDiagnostics{}, fmt.Errorf("colgranule: missing column %s", name)
+	}
+	if column.Definition.Type != ColumnTypeFloat32Vector {
+		return nil, 0, PartScanDiagnostics{}, fmt.Errorf("colgranule: column %s type=%s is not %s", name, column.Definition.Type, ColumnTypeFloat32Vector)
+	}
+	dims := column.Definition.VectorDims
+	if len(rows) == 0 {
+		return dst, dims, PartScanDiagnostics{}, nil
+	}
+	if rows[0] < 0 || rows[len(rows)-1] >= s.part.Descriptor.RowCount {
+		return nil, 0, PartScanDiagnostics{}, fmt.Errorf("colgranule: visible row range [%d,%d] outside part rows=%d", rows[0], rows[len(rows)-1], s.part.Descriptor.RowCount)
+	}
+	addValues, err := checkedMulInt(len(rows), dims, "float32 visible vector values")
+	if err != nil {
+		return nil, 0, PartScanDiagnostics{}, err
+	}
+	outLen, err := checkedAddInt(len(dst), addValues, "float32 visible vector output")
+	if err != nil {
+		return nil, 0, PartScanDiagnostics{}, err
+	}
+	out := ensureFloat32Len(dst, outLen)
+	write := len(dst)
+	var diagnostics PartScanDiagnostics
+	rowIndex := 0
+	for _, block := range column.Blocks {
+		first := block.Descriptor.FirstRow
+		limit := first + block.Descriptor.RowCount
+		for rowIndex < len(rows) && rows[rowIndex] < first {
+			return nil, 0, diagnostics, fmt.Errorf("colgranule: visible row %d before block %d first row %d", rows[rowIndex], block.Descriptor.CodecBlockOrdinal, first)
+		}
+		start := rowIndex
+		for rowIndex < len(rows) && rows[rowIndex] < limit {
+			rowIndex++
+		}
+		if start == rowIndex {
+			continue
+		}
+		if block.Granule.Compression == CompressionNone {
+			raw, err := s.reader.decompressPayload(block.Granule)
+			if err != nil {
+				return nil, 0, diagnostics, err
+			}
+			write, err = appendFloat32VectorRowsFromRaw(out, write, raw, block.Descriptor.RowCount, dims, rows[start:rowIndex], first)
+			if err != nil {
+				return nil, 0, diagnostics, err
+			}
+		} else {
+			values, err := s.reader.DecodeFloat32VectorsInto(s.vectors32[:0], block.Granule, dims)
+			if err != nil {
+				return nil, 0, diagnostics, err
+			}
+			s.vectors32 = values
+			blockValueCount, err := checkedMulInt(block.Descriptor.RowCount, dims, "float32 vector block values")
+			if err != nil {
+				return nil, 0, diagnostics, err
+			}
+			if len(values) != blockValueCount {
+				return nil, 0, diagnostics, fmt.Errorf("colgranule: block vector values=%d want=%d", len(values), blockValueCount)
+			}
+			for _, row := range rows[start:rowIndex] {
+				sourceStart := (row - first) * dims
+				copy(out[write:write+dims], values[sourceStart:sourceStart+dims])
+				write += dims
+			}
+		}
+		diagnostics.BlocksDecoded++
+		diagnostics.BytesDecoded += block.Granule.RawBytes
+	}
+	if rowIndex != len(rows) {
+		return nil, 0, diagnostics, fmt.Errorf("colgranule: %d visible rows outside column %s blocks", len(rows)-rowIndex, name)
+	}
+	diagnostics.RowsScanned = len(rows)
+	diagnostics.ColumnsProjected = 1
+	return out[:write], dims, diagnostics, nil
+}
+
+func appendFloat32VectorRowsFromRaw(out []float32, write int, raw []byte, blockRows int, dims int, rows []int, first int) (int, error) {
+	values, err := checkedMulInt(blockRows, dims, "float32 vector values")
+	if err != nil {
+		return 0, err
+	}
+	need, err := checkedMulInt(values, 4, "float32 vector bytes")
+	if err != nil {
+		return 0, err
+	}
+	if len(raw) != need {
+		return 0, fmt.Errorf("colgranule: float32 vector raw bytes=%d want=%d", len(raw), need)
+	}
+	for _, partRow := range rows {
+		row := partRow - first
+		if row < 0 || row >= blockRows {
+			return 0, fmt.Errorf("colgranule: vector row=%d outside block rows=%d", row, blockRows)
+		}
+		offset := row * dims * 4
+		for i := 0; i < dims; i++ {
+			out[write+i] = math.Float32frombits(binary.LittleEndian.Uint32(raw[offset+i*4:]))
+		}
+		write += dims
+	}
+	return write, nil
+}
+
+func (s *ColumnPartScanner) scanAdjacencyListRowsInto(name string, offsetDst []uint32, valueDst []int64, rows []int) ([]uint32, []int64, PartScanDiagnostics, error) {
+	column, ok := s.part.Columns[name]
+	if !ok {
+		return nil, nil, PartScanDiagnostics{}, fmt.Errorf("colgranule: missing column %s", name)
+	}
+	if column.Definition.Type != ColumnTypeAdjacencyList {
+		return nil, nil, PartScanDiagnostics{}, fmt.Errorf("colgranule: column %s type=%s is not %s", name, column.Definition.Type, ColumnTypeAdjacencyList)
+	}
+	if len(rows) == 0 {
+		return offsetDst, valueDst, PartScanDiagnostics{}, nil
+	}
+	if rows[0] < 0 || rows[len(rows)-1] >= s.part.Descriptor.RowCount {
+		return nil, nil, PartScanDiagnostics{}, fmt.Errorf("colgranule: visible row range [%d,%d] outside part rows=%d", rows[0], rows[len(rows)-1], s.part.Descriptor.RowCount)
+	}
+	if len(offsetDst) == 0 {
+		offsetDst = append(offsetDst, 0)
+	}
+	outOffsets := offsetDst
+	outValues := valueDst
+	var diagnostics PartScanDiagnostics
+	rowIndex := 0
+	for _, block := range column.Blocks {
+		first := block.Descriptor.FirstRow
+		limit := first + block.Descriptor.RowCount
+		for rowIndex < len(rows) && rows[rowIndex] < first {
+			return nil, nil, diagnostics, fmt.Errorf("colgranule: visible row %d before block %d first row %d", rows[rowIndex], block.Descriptor.CodecBlockOrdinal, first)
+		}
+		start := rowIndex
+		for rowIndex < len(rows) && rows[rowIndex] < limit {
+			rowIndex++
+		}
+		if start == rowIndex {
+			continue
+		}
+		if block.Granule.Compression == CompressionNone {
+			raw, err := s.reader.decompressPayload(block.Granule)
+			if err != nil {
+				return nil, nil, diagnostics, err
+			}
+			var appendErr error
+			outOffsets, outValues, appendErr = appendAdjacencyRowsFromRaw(outOffsets, outValues, raw, block.Descriptor.RowCount, rows[start:rowIndex], first)
+			if appendErr != nil {
+				return nil, nil, diagnostics, appendErr
+			}
+		} else {
+			offsets, values, err := s.reader.DecodeInt64AdjacencyListsInto(s.listOffsets[:0], s.listValues[:0], block.Granule)
+			if err != nil {
+				return nil, nil, diagnostics, err
+			}
+			s.listOffsets = offsets
+			s.listValues = values
+			if len(offsets) != block.Descriptor.RowCount+1 {
+				return nil, nil, diagnostics, fmt.Errorf("colgranule: block adjacency offsets=%d want=%d", len(offsets), block.Descriptor.RowCount+1)
+			}
+			for _, row := range rows[start:rowIndex] {
+				sourceRow := row - first
+				sourceStart := int(offsets[sourceRow])
+				sourceEnd := int(offsets[sourceRow+1])
+				outValues = append(outValues, values[sourceStart:sourceEnd]...)
+				if len(outValues) > math.MaxUint32 {
+					return nil, nil, diagnostics, fmt.Errorf("colgranule: adjacency visible scan values=%d exceed uint32 offsets", len(outValues))
+				}
+				outOffsets = append(outOffsets, uint32(len(outValues)))
+			}
+		}
+		diagnostics.BlocksDecoded++
+		diagnostics.BytesDecoded += block.Granule.RawBytes
+	}
+	if rowIndex != len(rows) {
+		return nil, nil, diagnostics, fmt.Errorf("colgranule: %d visible rows outside column %s blocks", len(rows)-rowIndex, name)
+	}
+	diagnostics.RowsScanned = len(rows)
+	diagnostics.ColumnsProjected = 1
+	return outOffsets, outValues, diagnostics, nil
+}
+
+func appendAdjacencyRowsFromRaw(offsetDst []uint32, valueDst []int64, raw []byte, blockRows int, rows []int, first int) ([]uint32, []int64, error) {
+	offsetCount := blockRows + 1
+	offsetBytes, err := checkedMulInt(offsetCount, 4, "adjacency offset bytes")
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(raw) < offsetBytes {
+		return nil, nil, fmt.Errorf("colgranule: adjacency raw bytes=%d below offsets=%d", len(raw), offsetBytes)
+	}
+	final := binary.LittleEndian.Uint32(raw[blockRows*4:])
+	valueBytes, err := checkedMulInt(int(final), 8, "adjacency value bytes")
+	if err != nil {
+		return nil, nil, err
+	}
+	need, err := checkedAddInt(offsetBytes, valueBytes, "adjacency raw bytes")
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(raw) != need {
+		return nil, nil, fmt.Errorf("colgranule: adjacency raw bytes=%d want=%d", len(raw), need)
+	}
+	valueRaw := raw[offsetBytes:]
+	for _, partRow := range rows {
+		row := partRow - first
+		if row < 0 || row >= blockRows {
+			return nil, nil, fmt.Errorf("colgranule: adjacency row=%d outside block rows=%d", row, blockRows)
+		}
+		start := binary.LittleEndian.Uint32(raw[row*4:])
+		end := binary.LittleEndian.Uint32(raw[(row+1)*4:])
+		if start > end || end > final {
+			return nil, nil, fmt.Errorf("colgranule: invalid adjacency row offsets start=%d end=%d final=%d", start, end, final)
+		}
+		for i := int(start); i < int(end); i++ {
+			valueDst = append(valueDst, int64(binary.LittleEndian.Uint64(valueRaw[i*8:])))
+		}
+		if len(valueDst) > math.MaxUint32 {
+			return nil, nil, fmt.Errorf("colgranule: adjacency visible scan values=%d exceed uint32 offsets", len(valueDst))
+		}
+		offsetDst = append(offsetDst, uint32(len(valueDst)))
+	}
+	return offsetDst, valueDst, nil
 }
 
 func (s *ColumnPartScanner) decodeBlock(columnType ColumnType, g EncodedGranule) ([]int64, error) {
