@@ -208,7 +208,7 @@ requirements that the ticket and implementation PRs must satisfy.
 
 In this matrix, `AppliedLSN` names the logical command stream boundary.
 `AppliedCommandLSN` is used only when the test or statement specifically refers
-to the V1 gated meta-page storage field.
+to the V1 in-page-marked meta-page storage field.
 
 | Normative statement | Owner section | Required test/evidence | Status |
 |---|---|---|---|
@@ -260,17 +260,51 @@ PR 1: typed commit-log frames and feature gate:
 
 PR 2: shared journal ownership and `AppliedCommandLSN` plumbing:
 
+- `TestCommandJournalAllocatesContiguousLSNs`;
+- `TestCommandJournalSeedsLSNFromExistingFrames`;
+- `TestCommandJournalSeedsLSNFromExistingSegmentFamily`;
+- `TestCommandJournalSeedsLSNFromExistingLanes`;
+- `TestCommandJournalTruncatesTerminalTailBeforeAppend`;
+- `TestCommandJournalTruncatesActiveTerminalTailPerLane`;
+- `TestCommandJournalRejectsNonActiveTerminalTail`;
+- `TestCommandJournalConcurrentAppendsSerializeFrameOrder`;
+- `TestCommandJournalRejectsIndependentMutableOwner`;
+- `TestJournalOwnerRollbackMaxLSNClearsExhausted`;
+- `TestCommandJournalUsesCommitSegmentFamily`;
+- `TestCommandJournalValidationFailureDoesNotConsumeLSN`;
+- `TestCommandJournalUnsupportedVersionDoesNotConsumeLSN`;
+- `TestCommandJournalAppendFailureRollsBackLSN`;
+- `TestCommandJournalOversizedFrameDoesNotConsumeLSN`;
+- `TestCommandJournalDeterministicStressReopenAcrossLanesAndTails`;
+- `FuzzCommandWALDecodeFrame`;
+- `FuzzCommandWALRawKVBatchPayload`;
+- `TestMetaPageBodyAppliedCommandLSNRoundTrip`;
+- `TestMetaPageBodyFullLegacyDecodeIgnoresReservedAppliedCommandLSNBytes`;
+- `TestMetaPageBodyLegacyDecodeDefaultsAppliedCommandLSN`;
 - `TestCommandWALAppliedCommandLSNMetaFieldRoundTrip`;
-- `TestCommandWALMetaGateRejectsOldBinaryServingCommandWALDir`;
+- `TestCommandWALAppliedCommandLSNAlternatingMetaPages`;
+- `TestCommandWALLegacyMetaDecodeIgnoresReservedAppliedLSNBytes`;
 - `TestCommandWALRootsAndAppliedCommandLSNPublishAtomically`;
 - `TestCommandWALPublishHelperRejectsRootsWithoutAppliedLSN`;
 - `TestCommandWALAppliedLSNContiguousPrefixOnly`;
-- `TestCommandWALSingleJournalOwnerRejectsSecondMutableWriter`;
-- `TestCommandWALCheckpointCleansOnlyCoveredSegments`;
-- `TestCommandWALCheckpointCrashBeforeCleanupReplaysIdempotently`;
-- `TestCommandWALCleanupManifestMissingBlocksSegmentDeletion`;
+- `TestCommandWALAppliedLSNContiguousPrefixMatchesModelStress`;
+- `TestCommandWALCheckpointCleanupDeletesOnlyCoveredSegments`;
+- `TestCommandWALCheckpointCleanupRetainsActiveCoveredSegment`;
+- `TestCommandWALSegmentMaxLSNStreamsFrames`;
+- `TestCommandWALSegmentMaxLSNFailsClosedOnNonIncreasingLSN`;
+- `TestCommandWALOpenFailsClosedOnCorruptTypedSegmentEvenWhenCovered`;
+- `TestCommandWALOpenFailsClosedOnNonActiveTerminalTailEvenWhenCovered`;
+- `TestCommandWALOpenFailsClosedOnTypedTailWithHigherLegacyRawSegment`;
+- `TestCommandWALOpenAllowsActiveTypedTailWithHigherPartialLegacyAliasSegment`;
+- `TestCommandWALOpenAllowsActivePartialFirstFrameTail`;
+- `TestCommandWALOpenFailsClosedOnNonActivePartialFirstFrameTail`;
 - `TestCommandWALReadOnlyOpenWithUnappliedFrameFailsRecoveryRequired`;
-- `TestCommandWALExistingCheckpointCleanupTestsMappedToAppliedLSN`.
+- `TestCommandWALReadOnlyOpenAllowsFramesCoveredByAppliedLSN`;
+- `TestCommandWALWriteOpenSkipsCoveredFramesBeforeLegacyReplay`;
+- `TestCommandWALWriteOpenRejectsUnappliedFramesUntilDispatcher`;
+- `TestCommandWALWriteOpenRejectsFirstUnappliedFrameUntilDispatcher`;
+- `TestCommandWALWALOffOpenRejectsUnappliedFramesUntilDispatcher`;
+- `TestCommandWALBackupManifestShapeIncludesAppliedLSNAndRanges`.
 
 PR 3: recovery dispatcher and raw KV command conversion:
 
@@ -352,6 +386,9 @@ Required cut points:
 | after external-ref prepare starts but before protection | no frame; orphan prepare classified after recovery |
 | after external-ref protection but before frame append | no frame; protected ref released or quarantined by recovery artifact |
 | after partial frame header | terminal tail ignored only for active tail; sealed/nonterminal segment fails |
+| after partial first frame in newest command segment | active tail is ignored/truncated; older partial first-frame tails fail closed |
+| after active command segment tail with higher canonical legacy raw WAL file present | legacy raw WAL files do not affect typed command active-tail selection |
+| after active command segment tail with higher partial legacy alias WAL file present | legacy alias WAL files do not affect typed command active-tail selection |
 | after complete frame before WAL sync boundary | relaxed modes follow their advertised boundary; durable mode must not acknowledge |
 | after complete recoverable frame before command apply | read-write recovery replays; read-only open fails recovery-required |
 | during command apply before root publish | copy-on-write partial pages are unreachable; recovery replays |

@@ -1,0 +1,21 @@
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/db
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+                               │ artifacts/command-wal/pr2/publish-microbench.txt │
+                               │                      sec/op                      │
+CommandWALPublishAppliedLSN-12                                        899.7n ± 1%
+FinalizeCommitSameRoots-12                                            861.6n ± 1%
+geomean                                                               880.4n
+
+                               │ artifacts/command-wal/pr2/publish-microbench.txt │
+                               │                       B/op                       │
+CommandWALPublishAppliedLSN-12                                         160.0 ± 0%
+FinalizeCommitSameRoots-12                                             160.0 ± 0%
+geomean                                                                160.0
+
+                               │ artifacts/command-wal/pr2/publish-microbench.txt │
+                               │                    allocs/op                     │
+CommandWALPublishAppliedLSN-12                                         4.000 ± 0%
+FinalizeCommitSameRoots-12                                             4.000 ± 0%
+geomean                                                                4.000

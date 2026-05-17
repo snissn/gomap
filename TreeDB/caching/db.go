@@ -6476,6 +6476,7 @@ type DB struct {
 	bpCond      *sync.Cond
 
 	// Commit workers removed; backend commits are synchronous.
+	journalOwner *commitlog.JournalOwner
 
 	checkpointMu      sync.Mutex
 	checkpointCond    *sync.Cond
@@ -9027,6 +9028,27 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	if err := ensureNoLegacyMixedWALValueSegments(walDir); err != nil {
 		return nil, err
 	}
+	disableJournal := opts.DisableWAL
+	var journalOwner *commitlog.JournalOwner
+	journalOwnerTransferred := false
+	if !disableJournal {
+		// Cached read-write opens take a process-wide journal owner so split WAL
+		// writers cannot race command-WAL LSN ownership in the same directory.
+		// TreeDB read-only opens use the db.openReadOnly path, which never enters
+		// caching.Open and therefore never acquires this exclusive owner.
+		var err error
+		journalOwner, err = commitlog.AcquireJournalOwner(walDir)
+		if err != nil {
+			return nil, fmt.Errorf("cachingdb: acquire command journal owner for %s: %w", walDir, err)
+		}
+		// Cached DB uses this owner as a lock-only handle while raw WAL writers
+		// are open. LSN assignment belongs to CommandJournal, not this path.
+		defer func() {
+			if !journalOwnerTransferred && journalOwner != nil {
+				_ = journalOwner.Close()
+			}
+		}()
+	}
 	segments, _ := listNonEmptySplitLogSegments(walDir, valueLogDir, leafLogDir)
 	reserveLeafLogLane := opts.IndexOuterLeavesInValueLog
 	// Cached value-log RIDs remain globally unique across reopen/rewrite cycles.
@@ -9189,7 +9211,6 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	if valueLogRawWritevMinRecords <= 0 {
 		valueLogRawWritevMinRecords = 8
 	}
-	disableJournal := opts.DisableWAL
 	var retained map[string]struct{}
 	for _, seg := range segments {
 		if !seg.valueLog {
@@ -9569,15 +9590,24 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	// never receive values. Value-log appends allocate the current lane segment
 	// on first write instead.
 	if !db.disableJournal {
+		cleanupJournalOpenFailure := func(upToLane int) {
+			if db.valueLogReader != nil {
+				_ = db.valueLogReader.Close()
+				db.valueLogReader = nil
+			}
+			for j := 0; j <= upToLane && j < len(db.lanes); j++ {
+				db.cleanupLaneWALWriters(&db.lanes[j])
+			}
+			if db.journalOwner != nil {
+				_ = db.journalOwner.Close()
+				db.journalOwner = nil
+			}
+		}
+		db.journalOwner = journalOwner
+		journalOwnerTransferred = true
 		for i := range db.lanes {
 			if err := db.rotateWALLocked(&db.lanes[i]); err != nil {
-				if db.valueLogReader != nil {
-					_ = db.valueLogReader.Close()
-					db.valueLogReader = nil
-				}
-				for j := 0; j <= i && j < len(db.lanes); j++ {
-					db.cleanupLaneWALWriters(&db.lanes[j])
-				}
+				cleanupJournalOpenFailure(i)
 				return nil, err
 			}
 		}
@@ -19872,6 +19902,12 @@ func (db *DB) Close() error {
 	}
 	if removed {
 		db.syncDirBestEffort(db.dir)
+	}
+	if db.journalOwner != nil {
+		if err := db.journalOwner.Close(); err != nil {
+			errs = append(errs, err)
+		}
+		db.journalOwner = nil
 	}
 
 	db.waitForRetainedValueLogPrune()

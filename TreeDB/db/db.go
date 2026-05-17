@@ -44,6 +44,7 @@ type DBState struct {
 	CommitSeq                  uint64
 	RootPageID                 uint64
 	SystemRootPageID           uint64
+	AppliedCommandLSN          uint64
 	ValueLogSet                *valuelog.Set
 	LeafGenerations            *leafGenerationView
 	LeafGenerationStateVersion uint64
@@ -1411,14 +1412,23 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	gen.zipper.SetMaintenanceOpsPerCoalesce(opts.MaintenanceOpsPerCoalesce)
 
 	if err := db.recover(); err != nil {
-		db.Close()
+		_ = db.Close()
+		return nil, err
+	}
+
+	// PR2 has only the applied-LSN publish guard. Until PR3 installs command
+	// dispatch/replay, write-open must fail if any complete command frame is
+	// newer than the published root; frames already covered by AppliedCommandLSN
+	// are filtered before legacy replay below.
+	if err := requireNoUnappliedCommandWALFrames(opts.Dir, db.meta.AppliedCommandLSN, opts.WALMaxSegmentBytes); err != nil {
+		_ = db.Close()
 		return nil, err
 	}
 
 	if opts.Durability != DurabilityWALOffRelaxed {
 		segments, err := listRecoverySegments(opts.Dir)
 		if err != nil {
-			db.Close()
+			_ = db.Close()
 			return nil, err
 		}
 		if err := replayWALIntoBackend(db, segments, opts.WALMaxSegmentBytes, opts.ValueLog.DictLookup); err != nil {
@@ -1475,6 +1485,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		CommitSeq:                  db.meta.CommitSeq,
 		RootPageID:                 db.meta.UserRootPageID,
 		SystemRootPageID:           db.meta.SystemRootPageID,
+		AppliedCommandLSN:          db.meta.AppliedCommandLSN,
 		ValueLogSet:                vm.CurrentSet(),
 		LeafGenerations:            db.currentLeafGenerationView(),
 		LeafGenerationStateVersion: db.leafGenerationStateVersion,
@@ -1836,7 +1847,11 @@ func (db *DB) readMeta(pageID uint64) (page.MetaPageBody, bool) {
 	if n.Type() != page.PageTypeMeta {
 		return page.MetaPageBody{}, false
 	}
-	return page.DecodeMetaBody(data[page.PageHeaderSize:]), true
+	body := data[page.PageHeaderSize:]
+	// Meta page selection is still commit-sequence based. The command-WAL V1
+	// decoder only changes how the selected page interprets the reserved
+	// AppliedCommandLSN extension bytes: unmarked legacy pages decode as zero.
+	return page.DecodeMetaBodyCommandWALV1(body), true
 }
 
 func (db *DB) writeMeta(pageID uint64, meta page.MetaPageBody) error {
@@ -1884,6 +1899,10 @@ type finalizeCommitPost struct {
 // Callers that already hold commit serialization may run post work after
 // releasing the serialization lock.
 func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired []uint64, sync bool, metrics adaptive.Metrics, touchedValueLogSegments []uint32, forceValueLogRefresh bool, vlogRefDelta *valueLogRefDelta, leafManifest *leafGenerationManifest, leafManifestRawFileIDs []uint32) (finalizeCommitPost, error) {
+	return db.finalizeCommitLockedWithOptions(newRootID, sysRootID, retired, sync, metrics, touchedValueLogSegments, forceValueLogRefresh, vlogRefDelta, leafManifest, leafManifestRawFileIDs, finalizeCommitOptions{})
+}
+
+func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64, retired []uint64, sync bool, metrics adaptive.Metrics, touchedValueLogSegments []uint32, forceValueLogRefresh bool, vlogRefDelta *valueLogRefDelta, leafManifest *leafGenerationManifest, leafManifestRawFileIDs []uint32, opts finalizeCommitOptions) (finalizeCommitPost, error) {
 	post := finalizeCommitPost{
 		metrics: metrics,
 	}
@@ -1958,6 +1977,14 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 	nextMeta.SystemRootPageID = sysRootID
 	nextMeta.FreelistHeadID = idx.allocator.Head()
 	nextMeta.TotalPages = idx.pager.PageCount()
+	if opts.commandWALPublish {
+		if err := validateCommandWALPublishLocked(db.meta, newRootID, sysRootID, opts); err != nil {
+			db.mu.Unlock()
+			watermarkHold += time.Since(holdStart)
+			return post, prePublishErr(err)
+		}
+		nextMeta.AppliedCommandLSN = opts.appliedCommandLSN
+	}
 
 	targetPageID := uint64(0)
 	if db.metaPageID == 0 {
@@ -2073,11 +2100,12 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 		}
 	}
 	newState := &DBState{
-		CommitSeq:        nextMeta.CommitSeq,
-		RootPageID:       nextMeta.UserRootPageID,
-		SystemRootPageID: nextMeta.SystemRootPageID,
-		ValueLogSet:      valueLogSet,
-		LeafGenerations:  leafGenerationView,
+		CommitSeq:         nextMeta.CommitSeq,
+		RootPageID:        nextMeta.UserRootPageID,
+		SystemRootPageID:  nextMeta.SystemRootPageID,
+		AppliedCommandLSN: nextMeta.AppliedCommandLSN,
+		ValueLogSet:       valueLogSet,
+		LeafGenerations:   leafGenerationView,
 	}
 	if leafGenerationView != nil {
 		db.leafGenerationStateVersion++
@@ -2450,6 +2478,7 @@ func (db *DB) RefreshValueLogSet() error {
 		CommitSeq:                  oldState.CommitSeq,
 		RootPageID:                 oldState.RootPageID,
 		SystemRootPageID:           oldState.SystemRootPageID,
+		AppliedCommandLSN:          oldState.AppliedCommandLSN,
 		ValueLogSet:                db.valueLogManager.CurrentSetNoRefresh(),
 		LeafGenerations:            oldState.LeafGenerations,
 		LeafGenerationStateVersion: oldState.LeafGenerationStateVersion,
@@ -2493,6 +2522,7 @@ func (db *DB) publishValueLogSetNoRefresh() error {
 		CommitSeq:                  oldState.CommitSeq,
 		RootPageID:                 oldState.RootPageID,
 		SystemRootPageID:           oldState.SystemRootPageID,
+		AppliedCommandLSN:          oldState.AppliedCommandLSN,
 		ValueLogSet:                valueLogSet,
 		LeafGenerations:            oldState.LeafGenerations,
 		LeafGenerationStateVersion: oldState.LeafGenerationStateVersion,

@@ -30,6 +30,8 @@ var (
 	ErrCommandWALUnsupportedCriticalFlag = errors.New("commitlog: command wal unsupported critical flag")
 	ErrCommandWALPayloadDigestMismatch   = errors.New("commitlog: command wal payload digest mismatch")
 	ErrCommandWALDuplicateLSN            = errors.New("commitlog: command wal duplicate lsn")
+	ErrCommandWALStaleSegment            = errors.New("commitlog: command wal stale segment")
+	ErrJournalOwnerExists                = errors.New("commitlog: journal owner already exists")
 )
 
 type Record struct {

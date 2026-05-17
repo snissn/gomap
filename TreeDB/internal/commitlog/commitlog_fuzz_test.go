@@ -1,6 +1,7 @@
 package commitlog
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"testing"
@@ -91,6 +92,54 @@ func FuzzCommandWALDecodeFrame(f *testing.F) {
 		}
 		if env.Kind == CommandKindRawKVBatch {
 			_, _ = DecodeRawKVBatchPayload(env.Payload)
+		}
+	})
+}
+
+func FuzzCommandWALRawKVBatchPayload(f *testing.F) {
+	f.Add([]byte{})
+	if payload, err := EncodeRawKVBatchPayload([]RawKVOperation{
+		{Op: RawKVOpSet, Key: []byte("alpha"), Value: []byte("one")},
+		{Op: RawKVOpDelete, Key: []byte("beta")},
+		{Op: RawKVOpSet, Key: []byte{}, Value: []byte("empty-key-value")},
+	}); err == nil {
+		f.Add(payload)
+	}
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		if len(data) > commitlogFuzzMaxSegment {
+			return
+		}
+		var scanned []RawKVOperation
+		scanErr := ScanRawKVBatchPayload(data, func(op RawKVOp, key, value []byte) error {
+			scanned = append(scanned, RawKVOperation{
+				Op:    op,
+				Key:   append([]byte(nil), key...),
+				Value: append([]byte(nil), value...),
+			})
+			return nil
+		})
+		decoded, decodeErr := DecodeRawKVBatchPayload(data)
+		if (scanErr == nil) != (decodeErr == nil) {
+			t.Fatalf("scanErr=%v decodeErr=%v", scanErr, decodeErr)
+		}
+		if scanErr != nil {
+			return
+		}
+		if len(scanned) != len(decoded) {
+			t.Fatalf("scanned len=%d decoded len=%d", len(scanned), len(decoded))
+		}
+		for i := range scanned {
+			if scanned[i].Op != decoded[i].Op || !bytes.Equal(scanned[i].Key, decoded[i].Key) || !bytes.Equal(scanned[i].Value, decoded[i].Value) {
+				t.Fatalf("op[%d] scan=%+v decode=%+v", i, scanned[i], decoded[i])
+			}
+		}
+		encoded, err := EncodeRawKVBatchPayload(decoded)
+		if err != nil {
+			t.Fatalf("re-encode decoded valid payload: %v", err)
+		}
+		if !bytes.Equal(encoded, data) {
+			t.Fatalf("re-encoded valid payload changed bytes")
 		}
 	})
 }

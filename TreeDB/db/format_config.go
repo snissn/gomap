@@ -85,7 +85,6 @@ func formatConfigFromOptions(opts Options) FormatConfig {
 		ValueLogBlockCodec:  normalizeFormatConfigMode(formatValueLogBlockCodec(opts.ValueLog.BlockCodec)),
 		ValueLogAutoPolicy:  normalizeFormatConfigMode(formatValueLogAutoPolicy(opts.ValueLog.AutoPolicy)),
 	}
-
 	// Leaf-log child pages use an explicit LogRecordRef layout instead of page
 	// child IDs, so keep base-delta disabled for outer-leaf-in-vlog roots until
 	// mixed internal-level policy is supported.

@@ -388,11 +388,12 @@ func (db *DB) publishLeafGenerationState(refreshValueLogSet bool) error {
 	}
 
 	newState := &DBState{
-		CommitSeq:        oldState.CommitSeq,
-		RootPageID:       oldState.RootPageID,
-		SystemRootPageID: oldState.SystemRootPageID,
-		ValueLogSet:      valueLogSet,
-		LeafGenerations:  db.currentLeafGenerationView(),
+		CommitSeq:         oldState.CommitSeq,
+		RootPageID:        oldState.RootPageID,
+		SystemRootPageID:  oldState.SystemRootPageID,
+		AppliedCommandLSN: oldState.AppliedCommandLSN,
+		ValueLogSet:       valueLogSet,
+		LeafGenerations:   db.currentLeafGenerationView(),
 	}
 	if newState.LeafGenerations != nil {
 		db.leafGenerationStateVersion++
