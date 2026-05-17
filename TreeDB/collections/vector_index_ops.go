@@ -182,9 +182,13 @@ func (c *Collection) vectorIndexStatus(name string, inspectNativeRoot bool) (Vec
 		RootName:   rootName,
 		RootID:     rootID,
 	}
+	registeredRuntimeStale := false
 	if runtimeIdx := c.registeredVectorIndex(def.Name); runtimeIdx != nil {
 		status.Registered = true
-		status.Stats = runtimeIdx.Stats()
+		registeredRuntimeStale = runtimeIdx.validateNativeSnapshotDefinition(def) != "" || rootID != runtimeIdx.nativeSnapshotBaseEpochForFullSave()
+		if !registeredRuntimeStale {
+			status.Stats = runtimeIdx.Stats()
+		}
 	}
 	if status.RootID == 0 && len(overlayRootIDs) == 0 {
 		status.ExactFallbackReason = vectorIndexFallbackMissingGraphRoot
@@ -218,7 +222,7 @@ func (c *Collection) vectorIndexStatus(name string, inspectNativeRoot bool) (Vec
 	probe.recordLoadedSnapshot(status.RootID, bytesDisk)
 	status.NativeRootLoaded = true
 	status.NativeRootBytes = bytesDisk
-	if !status.Registered {
+	if !status.Registered || registeredRuntimeStale {
 		status.Stats = probe.Stats()
 	} else if status.Stats.BytesDisk == 0 {
 		status.Stats.BytesDisk = bytesDisk
