@@ -2857,7 +2857,7 @@ func (c *Collection) CreateIndex(def IndexDefinition) (*CollectionMeta, error) {
 		return nil, errCollectionDBNil
 	}
 	if c.db.CommandWALEnabled() {
-		return nil, fmt.Errorf("%w: collection catalog mutation requires catalog command WAL support", backenddb.ErrCommandWALUnsupported)
+		return nil, fmt.Errorf("%w: collection catalog index mutation is rejected under command_wal_v1 until catalog index commands are supported", backenddb.ErrCommandWALRejected)
 	}
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()
@@ -2985,7 +2985,7 @@ func (c *Collection) dropIndexes(names map[string]struct{}, all bool) (*Collecti
 		return nil, errCollectionDBNil
 	}
 	if c.db.CommandWALEnabled() {
-		return nil, fmt.Errorf("%w: collection catalog mutation requires catalog command WAL support", backenddb.ErrCommandWALUnsupported)
+		return nil, fmt.Errorf("%w: collection catalog index mutation is rejected under command_wal_v1 until catalog index commands are supported", backenddb.ErrCommandWALRejected)
 	}
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()

@@ -428,13 +428,17 @@ PR 6.5: collection/catalog command-WAL performance polish:
 
 PR 7: matrix enforcement and drift tests:
 
-- `TestCommandWALSupportMatrixCoversMutatingCollectionRegistry`;
-- `TestCommandWALSupportMatrixCoversMongoGatewayMutations`;
-- `TestCommandWALSupportMatrixCoversNativeWireMutations`;
+- `TestCommandWALSupportMatrixIsWellFormed`;
+- `TestCommandWALSupportMatrixCoversCollectionMutators`;
+- `TestCommandWALSupportMatrixCoversMongoMutationHandlers`;
+- `TestCommandWALSupportMatrixCoversNativeWireMutationCommands`;
+- `TestCommandWALSupportMatrixDocumentsRejectedCommandsWithPublicError`;
+- `TestCommandWALRejectedErrorDistinctFromUnsupported`;
+- `TestMetadataUnsupportedCatalogCommandsReturnUnsupportedFeature`;
+- `TestCommandWALNoActiveCollectionWALImplementationDrift`;
 - `TestCommandWALDocsRejectActiveCollectionWALReferencesOutsideDeprecatedDoc`;
 - `TestCommandWALDocsRequireAppliedCommandLSNAsV1Target`;
-- `TestCommandWALDocsRequireBatchAtomicityText`;
-- `TestCommandWALUnsupportedCommandReturnsStablePublicError`.
+- `TestCommandWALDocsRequireBatchAtomicityText`.
 
 PR 8: native-wire/Raft alignment closeout:
 

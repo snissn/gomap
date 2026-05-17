@@ -1,0 +1,44 @@
+{
+  "tracker": "https://github.com/snissn/gomap/issues/1529",
+  "milestone": "PR7 matrix enforcement and future-command guardrails",
+  "branch": "codex/user-command-wal-pr7",
+  "base_branch": "codex/user-command-wal-pr6",
+  "base_commit": "a0fdae3bafc84e9eafe6d3a2249617ddac85d603",
+  "implementation_commit": "pr-head",
+  "go_version": "go version go1.25.7 linux/amd64",
+  "platform": "linux/amd64",
+  "command_support_matrix_version": "TreeDB/docs/spec/command-wal-support-matrix.json version 1",
+  "features": [
+    "machine-readable command WAL support matrix",
+    "docs tests requiring explicit matrix entries for current collection mutators",
+    "docs tests requiring explicit matrix entries for Mongo gateway mutation handlers",
+    "docs tests requiring explicit matrix entries for native-wire mutation commands",
+    "drift test for active collection WAL implementation references",
+    "stable public ErrCommandWALRejected aliases",
+    "native-wire command-WAL rejected index commands map to WireError(ErrUnsupportedFeature)"
+  ],
+  "passed_tests": [
+    "TestCommandWALSupportMatrixIsWellFormed",
+    "TestCommandWALSupportMatrixCoversCollectionMutators",
+    "TestCommandWALSupportMatrixCoversMongoMutationHandlers",
+    "TestCommandWALSupportMatrixCoversNativeWireMutationCommands",
+    "TestCommandWALSupportMatrixDocumentsRejectedCommandsWithPublicError",
+    "TestCommandWALNoActiveCollectionWALImplementationDrift",
+    "TestCommandWALDocsRejectActiveCollectionWALReferencesOutsideDeprecatedDoc",
+    "TestCommandWALRejectedErrorDistinctFromUnsupported",
+    "TestMetadataUnsupportedCatalogCommandsReturnUnsupportedFeature"
+  ],
+  "local_validation_commands": [
+    "git diff --check",
+    "GOWORK=off go test ./TreeDB/docs ./TreeDB/db ./TreeDB/nativewire -run 'TestCommandWALSupportMatrix|TestCommandWALRejectedErrorDistinctFromUnsupported|TestMetadataUnsupportedCatalogCommandsReturnUnsupportedFeature|^$' -count=1"
+  ],
+  "performance_gate": {
+    "required": false,
+    "rationale": "PR7 adds matrix/docs guardrails and protocol error-contract mapping for rejected command-WAL catalog mutations. It does not add runtime matrix lookup or mutating hot-path execution; the mapping only changes error classification after a rejected command returns."
+  },
+  "unsupported_modes": [
+    "index catalog commands remain WAL-rejected until future catalog index payloads land",
+    "public cached raw command WAL cutover remains future PR9 work",
+    "query-wide collection mutations remain WAL-rejected/future"
+  ]
+}

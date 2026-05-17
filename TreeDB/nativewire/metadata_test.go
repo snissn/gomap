@@ -31,6 +31,19 @@ func serveCollectionPipeWithOptions(t *testing.T, opts ServerOptions) (*Client, 
 	return client, mgr, db
 }
 
+func serveCommandWALCollectionPipe(t *testing.T) (*Client, *collections.CollectionManager, *backenddb.DB) {
+	t.Helper()
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), CommandWAL: true})
+	if err != nil {
+		t.Fatalf("open command WAL db: %v", err)
+	}
+	mgr := collections.NewCollectionManager(db)
+	server := NewServer(ServerOptions{Collections: mgr, Backend: db})
+	client, _ := servePipe(t, server)
+	t.Cleanup(func() { _ = db.Close() })
+	return client, mgr, db
+}
+
 func TestMetadataCommandsRoundTrip(t *testing.T) {
 	client, mgr, _ := serveCollectionPipe(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -196,6 +209,27 @@ func TestMetadataHandleRefsWorkForIndexMetadata(t *testing.T) {
 	)
 	if _, err := client.commandSections(ctx, iwire.CommandDropIndex, dropIndexReq...); err != nil {
 		t.Fatalf("DropIndex by handle: %v", err)
+	}
+}
+
+func TestMetadataUnsupportedCatalogCommandsReturnUnsupportedFeature(t *testing.T) {
+	client, _, _ := serveCommandWALCollectionPipe(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	if _, err := client.CreateCollection(ctx, collections.CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	if _, err := client.CreateIndex(ctx, "users", collections.IndexDefinition{Name: "email", Field: "email", ValueType: collections.IndexValueString}); !isRemoteError(err, iwire.ErrUnsupportedFeature) {
+		t.Fatalf("CreateIndex command WAL rejection err=%v, want unsupported feature", err)
+	}
+	if _, err := client.DropIndex(ctx, "users", "email"); !isRemoteError(err, iwire.ErrUnsupportedFeature) {
+		t.Fatalf("DropIndex command WAL rejection err=%v, want unsupported feature", err)
+	}
+	if _, _, err := client.roundTrip(ctx, iwire.FrameRequest, mustCommandBody(t, iwire.CommandDropCollection, collectionNameRef("users")), iwire.FrameResponse); !isRemoteError(err, iwire.ErrUnsupportedFeature) {
+		t.Fatalf("DropCollection command WAL rejection err=%v, want unsupported feature", err)
 	}
 }
 
