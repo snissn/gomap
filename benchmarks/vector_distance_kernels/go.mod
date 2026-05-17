@@ -1,9 +1,8 @@
 module github.com/snissn/gomap/benchmarks/vector_distance_kernels
 
-go 1.26.0
+go 1.25.8
 
 require (
-	github.com/adnilis/x-hmsw v1.0.4
 	github.com/ashvardanian/NumKong v1.5.3-0.20260420003853-48cbd21db85c
 	github.com/axiomhq/simd-go v0.0.0-20260109224133-a87ae27ede09
 	github.com/ic-timon/da-hvri v0.6.0

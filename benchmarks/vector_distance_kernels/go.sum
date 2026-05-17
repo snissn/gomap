@@ -1,5 +1,3 @@
-github.com/adnilis/x-hmsw v1.0.4 h1:NwQaLuyLVIKrMXHuoe5FZV32S4C4qZFh6jN9h+VPfiM=
-github.com/adnilis/x-hmsw v1.0.4/go.mod h1:yCzV0eUxJZSGWMel6Wi9iRtZiDiYBfSORXKC0o8/J4Y=
 github.com/ashvardanian/NumKong v1.5.3-0.20260420003853-48cbd21db85c h1:g2tkK3X0S0VmY45zQBl7mbvi9yhWoqpPvNm1VDRJ+ZU=
 github.com/ashvardanian/NumKong v1.5.3-0.20260420003853-48cbd21db85c/go.mod h1:L/omoL1LFCg25bGEa2U3rMbzievEEDzdjs5l+H0dIVg=
 github.com/axiomhq/simd-go v0.0.0-20260109224133-a87ae27ede09 h1:EUeZQEHBAROz3OL4eu6QQa3xfbn4vBiMNJlRbZ2ukMk=
