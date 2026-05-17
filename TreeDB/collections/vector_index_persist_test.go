@@ -2731,8 +2731,8 @@ func TestCollectionVectorIndexNativeDeltaRejectsStalePersistedRoot(t *testing.T)
 	); err != nil {
 		t.Fatalf("insert through handle B: %v", err)
 	}
-	if err := handleB.Flush(); err != nil {
-		t.Fatalf("flush stale handle B: %v", err)
+	if err := handleB.Flush(); !errors.Is(err, errVectorIndexStaleNativeRoot) {
+		t.Fatalf("flush stale dirty handle B err=%v, want %v", err, errVectorIndexStaleNativeRoot)
 	}
 	loaded, status, err := handleA.LoadVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
 	if err != nil {
