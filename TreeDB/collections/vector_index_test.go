@@ -120,6 +120,57 @@ func TestCollectionVectorIndexSearchDocumentsAreOwned(t *testing.T) {
 	}
 }
 
+func TestCollectionVectorIndexSearchKeepsExtraCandidatesThroughAttach(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	col := openVectorIndexTestCollection(t, d)
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("a"), []byte("b"), []byte("c")},
+		[][]byte{
+			[]byte(`{"embedding":[1,0]}`),
+			[]byte(`{"embedding":[0.9,0.1]}`),
+			[]byte(`{"embedding":[0.8,0.2]}`),
+		},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	index, err := col.BuildVectorIndex(VectorIndexOptions{
+		Name:     "embedding",
+		Field:    "embedding",
+		Metric:   VectorMetricCosine,
+		M:        4,
+		EfSearch: 8,
+	})
+	if err != nil {
+		t.Fatalf("build vector index: %v", err)
+	}
+	otherCol, err := NewCollectionManager(d).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open second collection handle: %v", err)
+	}
+	if deleted, err := otherCol.DeleteBatch([][]byte{[]byte("a")}); err != nil || deleted != 1 {
+		t.Fatalf("delete through second handle deleted=%d err=%v", deleted, err)
+	}
+	if err := otherCol.Flush(); err != nil {
+		t.Fatalf("flush second handle: %v", err)
+	}
+
+	results, trace, err := index.Search([]float32{1, 0}, VectorIndexSearchOptions{
+		TopK:                 2,
+		DisableExactFallback: true,
+	})
+	if err != nil {
+		t.Fatalf("search stale vector index: %v", err)
+	}
+	requireVectorResultIDs(t, results, "b", "c")
+	if trace.ReturnedCount != 2 {
+		t.Fatalf("trace returned count=%d want 2: %+v", trace.ReturnedCount, trace)
+	}
+}
+
 func TestVectorIndexPruneLayerNeighborsUsesDistanceThenDocumentID(t *testing.T) {
 	index, err := newVectorIndex(nil, VectorIndexOptions{
 		Name:   "embedding",
@@ -1092,6 +1143,39 @@ func TestCollectionVectorIndexCheckRecallUsesIndexRangeFilter(t *testing.T) {
 	}
 	if len(recall.SearchTraces) != 1 || recall.SearchTraces[0].Strategy != "exact_filtered" {
 		t.Fatalf("unexpected filtered recall traces: %+v", recall.SearchTraces)
+	}
+}
+
+func TestCollectionVectorIndexCheckRecallFallsBackForUnsafeBatchNorms(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	col := openVectorIndexTestCollection(t, d)
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("a"), []byte("b")},
+		[][]byte{
+			[]byte(`{"embedding":[100000000000000000000,100000000000000000000]}`),
+			[]byte(`{"embedding":[100000000000000000000,-100000000000000000000]}`),
+		},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	index, err := col.BuildVectorIndex(VectorIndexOptions{Field: "embedding", Metric: VectorMetricCosine, M: 4})
+	if err != nil {
+		t.Fatalf("build vector index: %v", err)
+	}
+
+	_, usedBatch, err := index.checkRecallExactBatch([][]float32{
+		{1e20, 1e20},
+		{1e20, -1e20},
+	}, VectorIndexSearchOptions{TopK: 1})
+	if err != nil {
+		t.Fatalf("check recall exact batch: %v", err)
+	}
+	if usedBatch {
+		t.Fatal("unsafe cosine norms used float32 batch path")
 	}
 }
 

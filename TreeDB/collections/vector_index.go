@@ -45,6 +45,8 @@ const (
 	vectorIndexFallbackInvalidTombstone           = "invalid_tombstone"
 	vectorIndexFallbackInvalidDocMapNode          = "invalid_docmap_node"
 	vectorIndexFallbackInvalidEntry               = "invalid_entry"
+	vectorIndexFallbackMissingManifest            = "missing_manifest"
+	vectorIndexFallbackInvalidManifest            = "invalid_manifest"
 )
 
 // VectorIndexEncoding selects the process-local ANN vector copy format. The
@@ -204,6 +206,7 @@ type VectorIndex struct {
 
 	mutationSeq            uint64
 	persistedEpoch         uint64
+	fullSnapshotBaseEpoch  uint64
 	persistedBytesDisk     int64
 	persistedSnapshotDirty bool
 	nativePersistent       bool
@@ -211,6 +214,7 @@ type VectorIndex struct {
 	dirtyNodes             map[int]struct{}
 	dirtyDocs              map[string]struct{}
 	lastRebuildDuration    time.Duration
+	insertQuantScratch     []int8
 }
 
 type vectorIndexNode struct {
@@ -444,6 +448,9 @@ func (c *Collection) ensureDeclaredNativeVectorIndexesLoaded() error {
 	}
 	c.vectorIndexLoadMu.Lock()
 	defer c.vectorIndexLoadMu.Unlock()
+	if c.declaredNativeVectorIndexesLoadedForCurrentCatalog() {
+		return nil
+	}
 
 	snap := c.db.AcquireSnapshot()
 	if snap == nil {
@@ -514,7 +521,12 @@ func (c *Collection) declaredNativeVectorIndexesLoadedForCurrentCatalog() bool {
 		return false
 	}
 	if len(defs) == 0 {
-		return len(c.registeredVectorIndexes()) == 0
+		for _, index := range c.registeredVectorIndexes() {
+			if index.isNativePersistent() {
+				return false
+			}
+		}
+		return true
 	}
 	for _, def := range defs {
 		index := c.registeredVectorIndex(def.Name)
@@ -764,12 +776,16 @@ func (idx *VectorIndex) insertVectorLocked(documentID []byte, vector []float32) 
 	}
 	var quantized []int8
 	var quantScale float32
+	if idx.encoding == VectorIndexEncodingInt8 {
+		idx.insertQuantScratch, quantScale = quantizeVectorIndexInt8Into(idx.insertQuantScratch[:0], vector)
+		quantized = idx.insertQuantScratch
+	}
 	if nodeID, ok := idx.currentNode[string(documentID)]; ok && nodeID >= 0 && nodeID < len(idx.nodes) {
 		node := &idx.nodes[nodeID]
 		if !node.deleted {
 			switch idx.encoding {
 			case VectorIndexEncodingInt8:
-				if node.matchesInt8SourceVector(vector) {
+				if node.matchesQuantizedVector(quantized, quantScale) {
 					return nil
 				}
 			default:
@@ -783,8 +799,8 @@ func (idx *VectorIndex) insertVectorLocked(documentID []byte, vector []float32) 
 
 	nodeID := len(idx.nodes)
 	level := idx.levelForDocumentID(documentID)
-	if idx.encoding == VectorIndexEncodingInt8 && quantized == nil {
-		quantized, quantScale = quantizeVectorIndexInt8(vector)
+	if idx.encoding == VectorIndexEncodingInt8 {
+		quantized = append([]int8(nil), quantized...)
 	}
 	node := idx.newVectorIndexNodePrepared(documentID, vector, level, quantized, quantScale)
 	idx.nodes = append(idx.nodes, node)
@@ -878,12 +894,21 @@ func (idx *VectorIndex) newVectorIndexNodePrepared(documentID []byte, vector []f
 }
 
 func quantizeVectorIndexInt8(vector []float32) ([]int8, float32) {
+	out := make([]int8, 0, len(vector))
+	return quantizeVectorIndexInt8Into(out, vector)
+}
+
+func quantizeVectorIndexInt8Into(dst []int8, vector []float32) ([]int8, float32) {
 	scale := vectorIndexInt8Scale(vector)
-	out := make([]int8, len(vector))
-	for i, value := range vector {
-		out[i] = quantizeVectorIndexInt8Value(value, scale)
+	if cap(dst) < len(vector) {
+		dst = make([]int8, len(vector))
+	} else {
+		dst = dst[:len(vector)]
 	}
-	return out, scale
+	for i, value := range vector {
+		dst[i] = quantizeVectorIndexInt8Value(value, scale)
+	}
+	return dst, scale
 }
 
 func vectorIndexInt8Scale(vector []float32) float32 {
@@ -994,6 +1019,7 @@ func (idx *VectorIndex) requireFullNativeSnapshotLocked() {
 	if !idx.nativePersistent {
 		return
 	}
+	idx.fullSnapshotBaseEpoch = idx.persistedEpoch
 	idx.persistedEpoch = 0
 	idx.persistedBytesDisk = 0
 	idx.persistedSnapshotDirty = true
@@ -1027,6 +1053,18 @@ func (idx *VectorIndex) hasNativePersistedSnapshot() bool {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
 	return idx.persistedEpoch != 0
+}
+
+func (idx *VectorIndex) nativeSnapshotBaseEpochForFullSave() uint64 {
+	if idx == nil {
+		return 0
+	}
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+	if idx.persistedEpoch != 0 {
+		return idx.persistedEpoch
+	}
+	return idx.fullSnapshotBaseEpoch
 }
 
 func (idx *VectorIndex) markVectorMetaDirtyLocked() {
@@ -1248,11 +1286,12 @@ func (idx *VectorIndex) Search(query []float32, opts VectorIndexSearchOptions) (
 	var candidateIDs [][]byte
 	var err error
 	if fastRerank {
+		rerankLimit := len(candidates)
 		resultNodeIDs = resultNodeIDStack[:0]
-		if opts.TopK > len(resultNodeIDStack) {
-			resultNodeIDs = make([]int, 0, opts.TopK)
+		if rerankLimit > len(resultNodeIDStack) {
+			resultNodeIDs = make([]int, 0, rerankLimit)
 		}
-		results, resultNodeIDs, err = idx.rerankFloat32CosineCandidatesFromNodesLocked(query, queryNorm, prepared.invNorm, candidates, opts.TopK, resultNodeIDs, &trace)
+		results, resultNodeIDs, err = idx.rerankFloat32CosineCandidatesFromNodesLocked(query, queryNorm, prepared.invNorm, candidates, rerankLimit, resultNodeIDs, &trace)
 	} else {
 		candidateIDs = idx.currentCandidateDocumentIDsLocked(candidates)
 		trace.CandidatesAfterTombstone = len(candidateIDs)
@@ -2432,7 +2471,8 @@ func (idx *VectorIndex) checkRecallExactBatch(queries [][]float32, opts VectorIn
 		if err := validateFloat32Vector(query); err != nil {
 			return nil, true, fmt.Errorf("collections: vector query: %w", err)
 		}
-		if vectorNormSquared(query) == 0 {
+		queryNormSquared := vectorNormSquared(query)
+		if queryNormSquared == 0 {
 			return nil, true, errors.New("collections: cosine vector query cannot have zero magnitude")
 		}
 	}
@@ -2448,6 +2488,7 @@ func (idx *VectorIndex) checkRecallExactBatch(queries [][]float32, opts VectorIn
 
 	documentIDs := make([][]byte, 0, opts.TopK)
 	vectorMatrix := make([]float32, 0, opts.TopK*queryDims)
+	documentNorms := make([]float64, 0, opts.TopK)
 	_, err = idx.collection.ScanDocumentsFunc(maxCollectionInt, func(record DocumentRecord) (bool, error) {
 		vector, ok, err := vectorFromStoredDocument(materializer, record.Document, idx.fieldPath)
 		if err != nil {
@@ -2459,11 +2500,13 @@ func (idx *VectorIndex) checkRecallExactBatch(queries [][]float32, opts VectorIn
 		if len(vector) != queryDims {
 			return false, fmt.Errorf("collections: vector field %q in document %q has dimension %d, want %d", idx.field, record.ID, len(vector), queryDims)
 		}
-		if vectorNormSquared(vector) == 0 {
+		vectorNorm := vectorNormSquared(vector)
+		if vectorNorm == 0 {
 			return false, fmt.Errorf("collections: vector field %q in document %q: cosine vectors cannot have zero magnitude", idx.field, record.ID)
 		}
 		documentIDs = append(documentIDs, bytes.Clone(record.ID))
 		vectorMatrix = append(vectorMatrix, vector...)
+		documentNorms = append(documentNorms, vectorNorm)
 		return true, nil
 	})
 	if err != nil {
@@ -2476,6 +2519,9 @@ func (idx *VectorIndex) checkRecallExactBatch(queries [][]float32, opts VectorIn
 			exact[i] = []VectorSearchResult{}
 		}
 		return exact, true, nil
+	}
+	if !cosineRecallBatchSafe(queries, documentNorms) {
+		return nil, false, nil
 	}
 
 	maxBatchQueries := defaultVectorRecallBatchCells / len(documentIDs)
@@ -2507,6 +2553,18 @@ func (idx *VectorIndex) checkRecallExactBatch(queries [][]float32, opts VectorIn
 		}
 	}
 	return exact, true, nil
+}
+
+func cosineRecallBatchSafe(queries [][]float32, documentNorms []float64) bool {
+	for _, query := range queries {
+		queryNorm := vectorNormSquared(query)
+		for _, documentNorm := range documentNorms {
+			if !safeFloat32DotProductForCosine(queryNorm, documentNorm) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func vectorFromStoredDocument(materializer *StoredDocumentJSONMaterializer, document []byte, fieldPath []string) ([]float32, bool, error) {
