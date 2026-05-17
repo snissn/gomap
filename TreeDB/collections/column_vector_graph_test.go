@@ -198,9 +198,33 @@ func exactColumnVectorGraphCosine(t *testing.T, graph *ColumnVectorGraph, query 
 	for ordinal := 0; ordinal < graph.Rows(); ordinal++ {
 		results[ordinal] = VectorSearchResult{
 			DocumentID: graph.documentID(ordinal),
-			Distance:   graph.cosineDistance(query, queryInvNorm, ordinal),
+			Distance:   exactColumnVectorGraphDistance(t, graph, query, queryInvNorm, ordinal),
 		}
 	}
 	slices.SortFunc(results, compareVectorSearchResults)
+	if topK < 0 {
+		topK = 0
+	}
+	if topK > len(results) {
+		topK = len(results)
+	}
 	return results[:topK]
+}
+
+func exactColumnVectorGraphDistance(t *testing.T, graph *ColumnVectorGraph, query []float32, queryInvNorm float32, ordinal int) float32 {
+	t.Helper()
+	vector, ok := graph.VectorAt(nil, ordinal)
+	if !ok {
+		return float32(math.Inf(1))
+	}
+	var dot float32
+	var normSquared float64
+	for dim, value := range vector {
+		dot += query[dim] * value
+		normSquared += float64(value) * float64(value)
+	}
+	if normSquared == 0 {
+		return float32(math.Inf(1))
+	}
+	return 1 - dot*queryInvNorm*float32(1/math.Sqrt(normSquared))
 }

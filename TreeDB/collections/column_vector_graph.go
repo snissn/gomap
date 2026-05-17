@@ -169,8 +169,8 @@ func (g *ColumnVectorGraph) SearchCosine(query []float32, opts ColumnVectorGraph
 	efSearch := g.normalizeEfSearch(opts.EfSearch, opts.TopK)
 	trace.EfSearch = efSearch
 	queryInvNorm := float32(1 / math.Sqrt(queryNormSquared))
-	candidates, edgesVisited := g.searchCandidates(query, queryInvNorm, efSearch, &scratch.graph)
-	trace.CandidatesExamined = len(candidates)
+	candidates, edgesVisited, candidatesExamined := g.searchCandidates(query, queryInvNorm, efSearch, &scratch.graph)
+	trace.CandidatesExamined = candidatesExamined
 	trace.CandidatesAfterTombstone = len(candidates)
 	trace.CandidatesAfterFilter = len(candidates)
 	trace.RerankCount = len(candidates)
@@ -320,14 +320,14 @@ func (g *ColumnVectorGraph) normalizeEfSearch(efSearch int, topK int) int {
 	return efSearch
 }
 
-func (g *ColumnVectorGraph) searchCandidates(query []float32, queryInvNorm float32, limit int, scratch *vectorIndexSearchScratch) ([]vectorIndexCandidate, int) {
+func (g *ColumnVectorGraph) searchCandidates(query []float32, queryInvNorm float32, limit int, scratch *vectorIndexSearchScratch) ([]vectorIndexCandidate, int, int) {
 	if g.entryPoint < 0 || g.entryPoint >= g.Rows() || limit <= 0 {
-		return nil, 0
+		return nil, 0, 0
 	}
 	visited, mark := scratch.nextVisitedEpoch(g.Rows())
 	entry := vectorIndexCandidate{nodeID: g.entryPoint, distance: g.cosineDistance(query, queryInvNorm, g.entryPoint)}
 	if math.IsInf(float64(entry.distance), 1) {
-		return nil, 0
+		return nil, 0, 1
 	}
 	visited[entry.nodeID] = mark
 	queue := scratch.queue[:0]
@@ -335,6 +335,7 @@ func (g *ColumnVectorGraph) searchCandidates(query []float32, queryInvNorm float
 	best := scratch.best[:0]
 	best.pushBounded(entry, limit)
 	edgesVisited := 0
+	candidatesExamined := 1
 	for len(queue) > 0 {
 		current := queue.pop()
 		if len(best) >= limit && vectorIndexCandidateWorse(current, best[0]) {
@@ -350,6 +351,7 @@ func (g *ColumnVectorGraph) searchCandidates(query []float32, queryInvNorm float
 			}
 			visited[neighbor] = mark
 			candidate := vectorIndexCandidate{nodeID: neighbor, distance: g.cosineDistance(query, queryInvNorm, neighbor)}
+			candidatesExamined++
 			if math.IsInf(float64(candidate.distance), 1) {
 				continue
 			}
@@ -364,7 +366,7 @@ func (g *ColumnVectorGraph) searchCandidates(query []float32, queryInvNorm float
 	out := append(scratch.out[:0], best...)
 	scratch.out = out
 	sortVectorIndexCandidates(out)
-	return out, edgesVisited
+	return out, edgesVisited, candidatesExamined
 }
 
 func (g *ColumnVectorGraph) cosineDistance(query []float32, queryInvNorm float32, ordinal int) float32 {
