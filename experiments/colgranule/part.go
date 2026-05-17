@@ -7,7 +7,7 @@ import (
 	"sort"
 )
 
-const columnPartDescriptorVersion = 1
+const columnPartDescriptorVersion = 2
 
 type ColumnSchemaMode string
 
