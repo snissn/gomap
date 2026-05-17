@@ -33,10 +33,17 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 
 	// Preserve the persisted on-disk format knobs by default so offline rewrite
 	// doesn't accidentally rebuild the index/value-log into a different layout.
-	if !opts.IgnoreFormatConfig {
+	if opts.IgnoreFormatConfig {
+		if err := treedbdb.ValidateFormatRequiredFeatureGate(layout.mainDir); err != nil {
+			return ValueLogRewriteStats{}, err
+		}
+	} else {
 		if cfg, ok, err := treedbdb.LoadFormatConfig(layout.mainDir); err != nil {
 			return ValueLogRewriteStats{}, err
 		} else if ok {
+			if err := cfg.ValidateRuntimeSupported(); err != nil {
+				return ValueLogRewriteStats{}, err
+			}
 			cfg.ApplyToOptions(&opts)
 		}
 	}

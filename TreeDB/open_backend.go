@@ -18,10 +18,17 @@ func OpenBackend(opts Options) (*db.DB, func() error, error) {
 
 	// Apply persisted storage/runtime knobs so direct maintenance opens agree
 	// with the on-disk format and compression policy used by the DB.
-	if !opts.IgnoreFormatConfig {
+	if opts.IgnoreFormatConfig {
+		if err := db.ValidateFormatRequiredFeatureGate(layout.mainDir); err != nil {
+			return nil, nil, err
+		}
+	} else {
 		if cfg, ok, err := db.LoadFormatConfig(layout.mainDir); err != nil {
 			return nil, nil, err
 		} else if ok {
+			if err := cfg.ValidateRuntimeSupported(); err != nil {
+				return nil, nil, err
+			}
 			cfg.ApplyToOptions(&opts)
 		}
 	}

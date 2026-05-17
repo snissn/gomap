@@ -32,8 +32,19 @@ func NewReaderWithOptions(path string, opts Options) (*Reader, error) {
 
 // ReadBatch reads the next batch segment.
 func (r *Reader) ReadBatch() ([]Record, error) {
+	payload, err := r.readSegmentPayload(false)
+	if err != nil {
+		return nil, err
+	}
+	return decodeBatch(payload)
+}
+
+func (r *Reader) readSegmentPayload(commandMode bool) ([]byte, error) {
 	var header [segmentHeaderSize]byte
-	if _, err := io.ReadFull(r.f, header[:]); err != nil {
+	if n, err := io.ReadFull(r.f, header[:]); err != nil {
+		if commandMode && n > 0 && (err == io.EOF || err == io.ErrUnexpectedEOF) {
+			return nil, ErrCommandWALTerminalTail
+		}
 		return nil, err
 	}
 
@@ -47,6 +58,9 @@ func (r *Reader) ReadBatch() ([]Record, error) {
 
 	payload := make([]byte, length)
 	if _, err := io.ReadFull(r.f, payload); err != nil {
+		if commandMode && (err == io.EOF || err == io.ErrUnexpectedEOF) {
+			return nil, ErrCommandWALTerminalTail
+		}
 		return nil, err
 	}
 	if crc.Checksum(payload) != wantCRC {
@@ -80,7 +94,7 @@ func (r *Reader) ReadBatch() ([]Record, error) {
 		payload = decoded
 	}
 
-	return decodeBatch(payload)
+	return payload, nil
 }
 
 func decodeBatch(payload []byte) ([]Record, error) {
