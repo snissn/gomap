@@ -2810,8 +2810,8 @@ func TestCollectionVectorIndexNativeFullSaveRejectsPreRootRegisteredHandle(t *te
 		t.Fatalf("fresh save status=%+v", freshStatus)
 	}
 
-	if staleStatus, err := staleIndex.SaveNativeSnapshot(); err != nil || staleStatus.Loaded || staleStatus.ExactFallbackReason != vectorIndexFallbackStaleRuntimeIndex {
-		t.Fatalf("stale pre-root full snapshot save status=%+v err=%v, want ignored stale runtime", staleStatus, err)
+	if staleStatus, err := staleIndex.SaveNativeSnapshot(); !errors.Is(err, errVectorIndexStaleNativeRoot) || staleStatus.Loaded || staleStatus.ExactFallbackReason != vectorIndexFallbackStaleRuntimeIndex {
+		t.Fatalf("stale pre-root full snapshot save status=%+v err=%v, want dirty stale runtime rejection", staleStatus, err)
 	}
 	loaded, status, err := freshCol.LoadVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
 	if err != nil {
