@@ -439,7 +439,7 @@ func parseConfig(args []string) (config, error) {
 		BatchSize:                 16000,
 		Indexes:                   2,
 		Count:                     1,
-		TreeEngine:                "production_fast",
+		TreeEngine:                "production_wal_on_fast",
 		Profile:                   "fast",
 		Formats:                   "template-v1,bson,json",
 		StorageCells:              "index-vlog",
