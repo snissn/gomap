@@ -369,6 +369,14 @@ def main() -> None:
     docs = load_vectors(dataset_dir / manifest["document_vectors_file"], manifest["docs"], manifest["dimensions"])
     all_queries = load_vectors(dataset_dir / manifest["query_vectors_file"], manifest["queries"], manifest["dimensions"])
     queries = all_queries[: min(args.queries, len(all_queries))]
+    if args.top_k <= 0:
+        raise ValueError("--top-k must be positive")
+    if args.top_k > len(docs):
+        raise ValueError(f"--top-k={args.top_k} exceeds document count {len(docs)}")
+    if args.num_candidates <= 0:
+        raise ValueError("--num-candidates must be positive")
+    if args.num_candidates < args.top_k:
+        raise ValueError(f"--num-candidates={args.num_candidates} must be at least --top-k={args.top_k}")
     query_lists = [[float(value) for value in query] for query in queries]
     concurrency = parse_ints(args.search_concurrency)
 

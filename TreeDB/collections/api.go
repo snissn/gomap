@@ -29,7 +29,7 @@ import (
 )
 
 const (
-	collectionMetaVersion        = 2
+	collectionMetaVersion        = 3
 	maxCollectionMutationRetries = 64
 	// Bound stale buffered-read replans so a writer under constant buffered
 	// pressure eventually falls back to a publish boundary or outer retry.
@@ -152,7 +152,11 @@ func commitAmbiguousError(operation string, err error) error {
 		return nil
 	}
 	if errors.Is(err, ErrCommitAmbiguous) {
-		return err
+		var existing *CommitAmbiguousError
+		if errors.As(err, &existing) {
+			return err
+		}
+		return &CommitAmbiguousError{Operation: operation, Err: err}
 	}
 	return &CommitAmbiguousError{Operation: operation, Err: err}
 }
@@ -3037,6 +3041,9 @@ func (c *Collection) CreateVectorIndex(def VectorIndexDefinition) (*CollectionMe
 	if c.db == nil {
 		return nil, errCollectionDBNil
 	}
+	if c.db.CommandWALEnabled() {
+		return nil, fmt.Errorf("%w: collection catalog vector index mutation is rejected under command_wal_v1 until catalog vector index commands are supported", backenddb.ErrCommandWALRejected)
+	}
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()
 	if err := c.flushBufferedWrites(); err != nil {
@@ -3111,6 +3118,9 @@ func (c *Collection) DropVectorIndex(name string) (*CollectionMeta, error) {
 	}
 	if c.db == nil {
 		return nil, errCollectionDBNil
+	}
+	if c.db.CommandWALEnabled() {
+		return nil, fmt.Errorf("%w: collection catalog vector index mutation is rejected under command_wal_v1 until catalog vector index commands are supported", backenddb.ErrCommandWALRejected)
 	}
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()
