@@ -333,10 +333,7 @@ func execute(ctx context.Context, cfg config) (result, error) {
 		return result{}, err
 	}
 	mgr := collections.NewCollectionManager(d)
-	if _, err := mgr.CreateCollection(&collections.CollectionMeta{
-		Name:          "docs",
-		VectorIndexes: []collections.VectorIndexDefinition{def},
-	}); err != nil {
+	if _, err := mgr.CreateCollection(&collections.CollectionMeta{Name: "docs"}); err != nil {
 		_ = d.Close()
 		return result{}, err
 	}
@@ -357,6 +354,10 @@ func execute(ctx context.Context, cfg config) (result, error) {
 	}
 	res.Insert = phaseSince(insertStart)
 
+	if _, err := col.CreateVectorIndex(def); err != nil {
+		_ = d.Close()
+		return result{}, err
+	}
 	rebuildStart := time.Now()
 	status, err := col.RebuildVectorIndex(def.Name)
 	if err != nil {
@@ -638,9 +639,17 @@ func syntheticQueries(count, docs, dims, offset int) [][]float32 {
 	queries := make([][]float32, count)
 	stride := queryDocStride(docs)
 	for i := 0; i < count; i++ {
-		queries[i] = embedding(queryDocIndex(i+offset, docs, stride), dims)
+		queries[i] = embedding(syntheticQueryID(i, docs, offset, stride), dims)
 	}
 	return queries
+}
+
+func syntheticQueryID(i, docs, offset, stride int) int {
+	id := i + offset
+	if docs <= 0 || id >= docs {
+		return id
+	}
+	return queryDocIndex(id, docs, stride)
 }
 
 func queryDocStride(docs int) int {
