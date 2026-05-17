@@ -2,7 +2,10 @@ package colgranule
 
 import (
 	"fmt"
+	"hash/fnv"
 	"path/filepath"
+	"sort"
+	"strings"
 	"testing"
 )
 
@@ -71,7 +74,7 @@ func TestColumnMutationAdapterReplayAndJSONBenchParity(t *testing.T) {
 		t.Fatalf("delta coverage=%+v", coverage)
 	}
 
-	reader, err := adapter.Reader(ColumnPartImageReadOptions{})
+	reader, err := adapter.Reader(ColumnPartImageReadOptions{IncludeAggregateMetadata: true})
 	if err != nil {
 		t.Fatalf("Reader: %v", err)
 	}
@@ -115,6 +118,112 @@ func TestColumnMutationAdapterReplayAndJSONBenchParity(t *testing.T) {
 		t.Fatalf("replay Reader: %v", err)
 	}
 	assertJSONBenchPartSetQueriesMatchRaw(t, replayReader, expected)
+}
+
+func TestColumnMutationAdapterReplayIgnoresPhysicalDescriptorsM9D(t *testing.T) {
+	ds := syntheticJSONBenchDataset(256)
+	opts, err := JSONBenchColumnPartOptionsWithAggregateMetadataForLayout(ds, 32, JSONBenchColumnPartLayoutTimeUS)
+	if err != nil {
+		t.Fatalf("JSONBenchColumnPartOptionsWithAggregateMetadataForLayout(time): %v", err)
+	}
+	scenario := newJSONBenchMutationReplayScenario(t, ds)
+
+	original := testJSONBenchMutationReplayState(t, t.TempDir(), ds, opts, scenario, ColumnMutationAdapterOptions{}, false)
+	physicalReplay := testJSONBenchMutationReplayState(t, t.TempDir(), ds, opts, scenario, ColumnMutationAdapterOptions{
+		InitialPartID:     1_000,
+		InitialGeneration: 50,
+	}, true)
+
+	assertJSONBenchPartSetQueriesMatchRaw(t, original.reader, scenario.expected)
+	assertJSONBenchPartSetQueriesMatchRaw(t, physicalReplay.reader, scenario.expected)
+	assertJSONBenchReplaySpecializedQueriesMatchRaw(t, original.reader, scenario.expected, JSONBenchColumnPartLayoutTimeUS)
+	assertJSONBenchReplaySpecializedQueriesMatchRaw(t, physicalReplay.reader, scenario.expected, JSONBenchColumnPartLayoutTimeUS)
+	assertColumnPartSetLogicalDigestMatchesDataset(t, original.reader, scenario.expected, ds.Dictionaries)
+	assertColumnPartSetLogicalDigestMatchesDataset(t, physicalReplay.reader, scenario.expected, ds.Dictionaries)
+	assertColumnReplayPhysicalDescriptorsDiffer(t, original, physicalReplay)
+	if original.manifest.ByteAccounting != physicalReplay.manifest.ByteAccounting {
+		t.Fatalf("byte accounting changed across physical replay\noriginal=%+v\nreplay=%+v", original.manifest.ByteAccounting, physicalReplay.manifest.ByteAccounting)
+	}
+	if original.reader.VisibilityStats() != physicalReplay.reader.VisibilityStats() {
+		t.Fatalf("visibility stats changed across physical replay\noriginal=%+v\nreplay=%+v", original.reader.VisibilityStats(), physicalReplay.reader.VisibilityStats())
+	}
+
+	remapped := remapJSONBenchDictionaryCodes(t, ds, 10_000)
+	remappedOpts, err := JSONBenchColumnPartOptionsWithAggregateMetadataForLayout(remapped, 32, JSONBenchColumnPartLayoutTimeUS)
+	if err != nil {
+		t.Fatalf("JSONBenchColumnPartOptionsWithAggregateMetadataForLayout(remapped time): %v", err)
+	}
+	if ds.Dictionaries["commit_collection_code"]["app.bsky.feed.post"] == remapped.Dictionaries["commit_collection_code"]["app.bsky.feed.post"] {
+		t.Fatal("dictionary remap did not change commit_collection_code/app.bsky.feed.post")
+	}
+	remappedScenario := newJSONBenchMutationReplayScenario(t, remapped)
+	dictionaryReplay := testJSONBenchMutationReplayState(t, t.TempDir(), remapped, remappedOpts, remappedScenario, ColumnMutationAdapterOptions{
+		InitialPartID:     2_000,
+		InitialGeneration: 90,
+	}, true)
+	assertJSONBenchPartSetQueriesMatchRaw(t, dictionaryReplay.reader, remappedScenario.expected)
+	assertJSONBenchReplaySpecializedQueriesMatchRaw(t, dictionaryReplay.reader, remappedScenario.expected, JSONBenchColumnPartLayoutTimeUS)
+	assertColumnPartSetLogicalDigestMatchesDataset(t, dictionaryReplay.reader, remappedScenario.expected, ds.Dictionaries)
+	canonicalReplayExpected := canonicalizeJSONBenchDictionaryCodes(t, remappedScenario.expected, ds.Dictionaries)
+	assertJSONBenchQueryDigestsEqual(t, scenario.expected, canonicalReplayExpected)
+	if got, want := jsonBenchCanonicalDatasetDigest(t, remappedScenario.expected, ds.Dictionaries), jsonBenchCanonicalDatasetDigest(t, scenario.expected, ds.Dictionaries); got != want {
+		t.Fatalf("canonical declared-column digest=%d want %d", got, want)
+	}
+
+	clickHouseOpts, err := JSONBenchColumnPartOptionsWithAggregateMetadataForLayout(ds, 32, JSONBenchColumnPartLayoutClickHouseFilterUserTime)
+	if err != nil {
+		t.Fatalf("JSONBenchColumnPartOptionsWithAggregateMetadataForLayout(clickhouse): %v", err)
+	}
+	clickHouseOriginal := testJSONBenchMutationReplayState(t, t.TempDir(), ds, clickHouseOpts, scenario, ColumnMutationAdapterOptions{}, false)
+	clickHouseReplay := testJSONBenchMutationReplayState(t, t.TempDir(), ds, clickHouseOpts, scenario, ColumnMutationAdapterOptions{
+		InitialPartID:     3_000,
+		InitialGeneration: 130,
+	}, true)
+	assertJSONBenchPartSetQueriesMatchRaw(t, clickHouseOriginal.reader, scenario.expected)
+	assertJSONBenchPartSetQueriesMatchRaw(t, clickHouseReplay.reader, scenario.expected)
+	assertJSONBenchReplaySpecializedQueriesMatchRaw(t, clickHouseOriginal.reader, scenario.expected, JSONBenchColumnPartLayoutClickHouseFilterUserTime)
+	assertJSONBenchReplaySpecializedQueriesMatchRaw(t, clickHouseReplay.reader, scenario.expected, JSONBenchColumnPartLayoutClickHouseFilterUserTime)
+	assertColumnReplayPhysicalDescriptorsDiffer(t, clickHouseOriginal, clickHouseReplay)
+	if clickHouseOriginal.manifest.ByteAccounting != clickHouseReplay.manifest.ByteAccounting {
+		t.Fatalf("clickhouse byte accounting changed across physical replay\noriginal=%+v\nreplay=%+v", clickHouseOriginal.manifest.ByteAccounting, clickHouseReplay.manifest.ByteAccounting)
+	}
+}
+
+func TestColumnMutationReplayProfileContractM9D(t *testing.T) {
+	tests := []struct {
+		name    string
+		profile ColumnMutationReplayProfile
+		wantErr bool
+		want    string
+	}{
+		{name: "default durable", want: "durable"},
+		{name: "durable", profile: ColumnMutationReplayProfile{Durability: ColumnMutationReplayDurable}, want: "durable"},
+		{name: "wal on fast production rejected", profile: ColumnMutationReplayProfile{Durability: ColumnMutationReplayWALOnFast}, wantErr: true},
+		{name: "fast production rejected", profile: ColumnMutationReplayProfile{Durability: ColumnMutationReplayFast}, wantErr: true},
+		{name: "wal on fast benchmark ceiling", profile: ColumnMutationReplayProfile{Durability: ColumnMutationReplayWALOnFast, BenchmarkOnly: true}, want: "wal_on_fast_benchmark_ceiling"},
+		{name: "fast benchmark ceiling", profile: ColumnMutationReplayProfile{Durability: ColumnMutationReplayFast, BenchmarkOnly: true}, want: "fast_benchmark_ceiling"},
+		{name: "unknown rejected", profile: ColumnMutationReplayProfile{Durability: "unsafe"}, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.profile.Validate()
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("Validate() nil error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Validate(): %v", err)
+			}
+			if got := tt.profile.Label(); got != tt.want {
+				t.Fatalf("Label()=%q want %q", got, tt.want)
+			}
+			if production := tt.profile.ProductionSupported(); production != (tt.want == "durable") {
+				t.Fatalf("ProductionSupported()=%v label=%s", production, tt.want)
+			}
+		})
+	}
 }
 
 func TestColumnMutationAdapterDeleteOnlyBatch(t *testing.T) {
@@ -338,6 +447,64 @@ func BenchmarkColumnMutationAdapterApplyM8A(b *testing.B) {
 	}
 }
 
+func BenchmarkColumnMutationReplayM9D(b *testing.B) {
+	fixtures := []struct {
+		name    string
+		rows    int
+		updates int
+		deletes int
+	}{
+		{name: "small_1k", rows: 1_024, updates: 64, deletes: 16},
+		{name: "medium_8k", rows: 8_192, updates: 256, deletes: 64},
+	}
+	profiles := []ColumnMutationReplayProfile{
+		{Durability: ColumnMutationReplayDurable},
+		{Durability: ColumnMutationReplayWALOnFast, BenchmarkOnly: true},
+	}
+	for _, fixture := range fixtures {
+		ds := syntheticJSONBenchDataset(fixture.rows)
+		opts, err := JSONBenchColumnPartOptions(ds, 128)
+		if err != nil {
+			b.Fatalf("JSONBenchColumnPartOptions(%s): %v", fixture.name, err)
+		}
+		scenario := benchmarkJSONBenchMutationReplayScenario(b, ds, fixture.updates, fixture.deletes)
+		commandBytes := estimateColumnMutationReplayCommandBytes(ColumnBatch{Rows: ds.Rows, Columns: ds.Columns}, []ColumnMutationBatch{scenario.batch})
+		logicalRows := ds.Rows + scenario.batch.Updates.Rows + len(scenario.batch.Deletes)
+		for _, profile := range profiles {
+			if err := profile.Validate(); err != nil {
+				b.Fatalf("profile %q: %v", profile.Label(), err)
+			}
+			b.Run(fixture.name+"/"+profile.Label(), func(b *testing.B) {
+				root := b.TempDir()
+				var last ColumnCollectionManifest
+				b.ReportAllocs()
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					workspace, adapter := benchmarkColumnMutationAdapter(b, filepath.Join(root, fmt.Sprintf("iter-%06d", i)), opts, ds.Dictionaries)
+					_, err := adapter.PublishBaseBatch(ColumnBatch{Rows: ds.Rows, Columns: ds.Columns}, ColumnPartCoverageOptions{SourceRowRootGeneration: 1, SourceRowVersionUpper: uint64(ds.Rows)})
+					if err == nil {
+						_, err = adapter.Apply(scenario.batch)
+					}
+					last = adapter.Manifest()
+					_ = workspace.Close()
+					if err != nil {
+						b.Fatalf("replay: %v", err)
+					}
+				}
+				b.StopTimer()
+				if b.N > 0 {
+					b.ReportMetric(float64(logicalRows*b.N)/b.Elapsed().Seconds(), "rows/sec")
+				}
+				b.ReportMetric(float64(logicalRows), "logical_rows/op")
+				b.ReportMetric(float64(commandBytes), "command_bytes/op")
+				b.ReportMetric(0, "row_remainder_bytes/op")
+				b.ReportMetric(float64(last.ByteAccounting.TotalAssetBytes), "column_asset_bytes/op")
+				b.ReportMetric(float64(last.ByteAccounting.DescriptorBytes), "manifest_control_bytes/op")
+			})
+		}
+	}
+}
+
 func testColumnMutationAdapter(t testing.TB, dir string, opts ColumnStoreOptions, dictionaries map[string]map[string]int64) (*ColumnWorkspace, *ColumnMutationAdapter) {
 	t.Helper()
 	workspace, err := OpenColumnWorkspace(dir, ColumnWorkspaceOptions{Collection: "jsonbench"})
@@ -413,4 +580,484 @@ func benchmarkColumnMutationLocatorReader(b *testing.B, deltaParts int) (*Column
 		b.Fatalf("Reader: %v", err)
 	}
 	return reader, target
+}
+
+type jsonBenchMutationReplayScenario struct {
+	batch    ColumnMutationBatch
+	expected JSONBenchDataset
+}
+
+type jsonBenchMutationReplayState struct {
+	reader   *ColumnPartSetReader
+	manifest ColumnCollectionManifest
+}
+
+func newJSONBenchMutationReplayScenario(tb testing.TB, ds JSONBenchDataset) jsonBenchMutationReplayScenario {
+	tb.Helper()
+	codes, err := jsonBenchQueryCodes(ds)
+	if err != nil {
+		tb.Fatalf("jsonBenchQueryCodes: %v", err)
+	}
+	updates := map[int64]map[string]int64{
+		5: {
+			"kind_code":              codes.kindCommit,
+			"commit_operation_code":  codes.operationCreate,
+			"commit_collection_code": codes.collectionPost,
+			"did_code":               ds.Columns["did_code"][40],
+			"time_us":                ds.Columns["time_us"][5] - 10_000_000,
+		},
+		25: {
+			"kind_code":              codes.kindCommit,
+			"commit_operation_code":  codes.operationCreate,
+			"commit_collection_code": codes.collectionPost,
+			"did_code":               ds.Columns["did_code"][41],
+			"time_us":                ds.Columns["time_us"][25] + 20_000_000,
+		},
+		97: {
+			"kind_code":              codes.kindCommit,
+			"commit_operation_code":  codes.operationCreate,
+			"commit_collection_code": codes.collectionPost,
+			"did_code":               ds.Columns["did_code"][42],
+			"time_us":                ds.Columns["time_us"][97] + 30_000_000,
+		},
+	}
+	for _, update := range updates {
+		update["hour_of_day"] = unixMicroHour(update["time_us"])
+	}
+	deletes := []int64{10, 11, 12}
+	deleteSet := map[int64]bool{10: true, 11: true, 12: true}
+	batch := ColumnMutationBatch{
+		Updates:                 jsonBenchDeltaBatch(ds, updates),
+		Deletes:                 deletes,
+		SourceRowRootGeneration: 2,
+		SourceRowVersionLower:   uint64(ds.Rows),
+		SourceRowVersionUpper:   uint64(ds.Rows + len(updates) + len(deletes)),
+	}
+	return jsonBenchMutationReplayScenario{
+		batch:    batch,
+		expected: applyJSONBenchMutations(ds, updates, deleteSet),
+	}
+}
+
+func benchmarkJSONBenchMutationReplayScenario(tb testing.TB, ds JSONBenchDataset, updates int, deletes int) jsonBenchMutationReplayScenario {
+	tb.Helper()
+	if updates <= 0 || deletes < 0 || updates+deletes >= ds.Rows {
+		tb.Fatalf("invalid replay scenario updates=%d deletes=%d rows=%d", updates, deletes, ds.Rows)
+	}
+	codes, err := jsonBenchQueryCodes(ds)
+	if err != nil {
+		tb.Fatalf("jsonBenchQueryCodes: %v", err)
+	}
+	updateMap := make(map[int64]map[string]int64, updates)
+	for i := 0; i < updates; i++ {
+		id := int64((i*17 + 5) % (ds.Rows / 2))
+		nextTime := ds.Columns["time_us"][int(id)] + int64(i+1)*1_000_000
+		updateMap[id] = map[string]int64{
+			"kind_code":              codes.kindCommit,
+			"commit_operation_code":  codes.operationCreate,
+			"commit_collection_code": codes.collectionPost,
+			"did_code":               ds.Columns["did_code"][(int(id)+41)%ds.Rows],
+			"time_us":                nextTime,
+			"hour_of_day":            unixMicroHour(nextTime),
+		}
+	}
+	deleteList := make([]int64, 0, deletes)
+	deleteSet := make(map[int64]bool, deletes)
+	for i := 0; i < deletes; i++ {
+		id := int64(ds.Rows - 1 - i*3)
+		deleteList = append(deleteList, id)
+		deleteSet[id] = true
+	}
+	batch := ColumnMutationBatch{
+		Updates:                 jsonBenchDeltaBatch(ds, updateMap),
+		Deletes:                 deleteList,
+		SourceRowRootGeneration: 2,
+		SourceRowVersionLower:   uint64(ds.Rows),
+		SourceRowVersionUpper:   uint64(ds.Rows + len(updateMap) + len(deleteSet)),
+	}
+	return jsonBenchMutationReplayScenario{
+		batch:    batch,
+		expected: applyJSONBenchMutations(ds, updateMap, deleteSet),
+	}
+}
+
+func testJSONBenchMutationReplayState(t *testing.T, dir string, ds JSONBenchDataset, opts ColumnStoreOptions, scenario jsonBenchMutationReplayScenario, adapterOpts ColumnMutationAdapterOptions, preseedAssetOffsets bool) jsonBenchMutationReplayState {
+	t.Helper()
+	workspace, err := OpenColumnWorkspace(dir, ColumnWorkspaceOptions{Collection: "jsonbench"})
+	if err != nil {
+		t.Fatalf("OpenColumnWorkspace: %v", err)
+	}
+	t.Cleanup(func() { _ = workspace.Close() })
+	if preseedAssetOffsets {
+		part, err := BuildColumnPart(777, opts, ColumnBatch{Rows: 1, Columns: sliceJSONBenchColumns(ds, 0, 1)})
+		if err != nil {
+			t.Fatalf("BuildColumnPart(preseed): %v", err)
+		}
+		entry, err := workspace.PublishPart(part, ds.Dictionaries)
+		if err != nil {
+			t.Fatalf("PublishPart(preseed): %v", err)
+		}
+		if entry.AssetRef.Offset != 0 {
+			t.Fatalf("preseed offset=%d want 0", entry.AssetRef.Offset)
+		}
+	}
+	adapterOpts.Collection = "jsonbench"
+	adapterOpts.StoreOptions = opts
+	adapterOpts.Dictionaries = ds.Dictionaries
+	adapter, err := NewColumnMutationAdapter(workspace, adapterOpts)
+	if err != nil {
+		t.Fatalf("NewColumnMutationAdapter: %v", err)
+	}
+	if _, err := adapter.PublishBaseBatch(ColumnBatch{Rows: ds.Rows, Columns: ds.Columns}, ColumnPartCoverageOptions{
+		SourceRowRootGeneration: 1,
+		SourceRowVersionUpper:   uint64(ds.Rows),
+	}); err != nil {
+		t.Fatalf("PublishBaseBatch: %v", err)
+	}
+	if _, err := adapter.Apply(scenario.batch); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	reader, err := adapter.Reader(ColumnPartImageReadOptions{})
+	if err != nil {
+		t.Fatalf("Reader: %v", err)
+	}
+	return jsonBenchMutationReplayState{
+		reader:   reader,
+		manifest: adapter.Manifest(),
+	}
+}
+
+func assertColumnReplayPhysicalDescriptorsDiffer(t *testing.T, original jsonBenchMutationReplayState, replay jsonBenchMutationReplayState) {
+	t.Helper()
+	if original.manifest.ActiveGeneration == replay.manifest.ActiveGeneration {
+		t.Fatalf("active generation preserved: %d", original.manifest.ActiveGeneration)
+	}
+	if len(original.manifest.PartSet.BaseParts) != 1 || len(original.manifest.PartSet.DeltaParts) != 1 {
+		t.Fatalf("original part set=%+v", original.manifest.PartSet)
+	}
+	if len(replay.manifest.PartSet.BaseParts) != 1 || len(replay.manifest.PartSet.DeltaParts) != 1 {
+		t.Fatalf("replay part set=%+v", replay.manifest.PartSet)
+	}
+	originalBase := original.manifest.PartSet.BaseParts[0]
+	replayBase := replay.manifest.PartSet.BaseParts[0]
+	originalDelta := original.manifest.PartSet.DeltaParts[0]
+	replayDelta := replay.manifest.PartSet.DeltaParts[0]
+	if originalBase.GenerationID == replayBase.GenerationID || originalDelta.GenerationID == replayDelta.GenerationID {
+		t.Fatalf("generation ids preserved: original base/delta=%d/%d replay=%d/%d", originalBase.GenerationID, originalDelta.GenerationID, replayBase.GenerationID, replayDelta.GenerationID)
+	}
+	if originalBase.Part.PartID == replayBase.Part.PartID || originalDelta.Part.PartID == replayDelta.Part.PartID {
+		t.Fatalf("part ids preserved: original base/delta=%d/%d replay=%d/%d", originalBase.Part.PartID, originalDelta.Part.PartID, replayBase.Part.PartID, replayDelta.Part.PartID)
+	}
+	if originalBase.Part.AssetRef.Offset == replayBase.Part.AssetRef.Offset {
+		t.Fatalf("base asset offset preserved: %d", originalBase.Part.AssetRef.Offset)
+	}
+	originalLocator, ok := original.reader.LatestLocator(5)
+	if !ok {
+		t.Fatal("original missing locator for id 5")
+	}
+	replayLocator, ok := replay.reader.LatestLocator(5)
+	if !ok {
+		t.Fatal("replay missing locator for id 5")
+	}
+	if originalLocator.PartID == replayLocator.PartID {
+		t.Fatalf("locator part id preserved: %d", originalLocator.PartID)
+	}
+}
+
+func assertColumnPartSetLogicalDigestMatchesDataset(t *testing.T, reader *ColumnPartSetReader, ds JSONBenchDataset, canonicalDictionaries map[string]map[string]int64) {
+	t.Helper()
+	columns := sortedJSONBenchColumnNames(ds)
+	result, err := reader.ScanProjected(columns)
+	if err != nil {
+		t.Fatalf("ScanProjected: %v", err)
+	}
+	if result.Rows != ds.Rows {
+		t.Fatalf("ScanProjected rows=%d want %d", result.Rows, ds.Rows)
+	}
+	got := JSONBenchDataset{Rows: result.Rows, Columns: result.Columns, Dictionaries: ds.Dictionaries}
+	gotDigest := jsonBenchCanonicalDatasetDigest(t, got, canonicalDictionaries)
+	wantDigest := jsonBenchCanonicalDatasetDigest(t, ds, canonicalDictionaries)
+	if gotDigest != wantDigest {
+		t.Fatalf("projected declared-column digest=%d want %d", gotDigest, wantDigest)
+	}
+}
+
+func assertJSONBenchQueryDigestsEqual(t *testing.T, a JSONBenchDataset, b JSONBenchDataset) {
+	t.Helper()
+	aTimings, err := RunJSONBenchQueries(a, 1)
+	if err != nil {
+		t.Fatalf("RunJSONBenchQueries(a): %v", err)
+	}
+	bTimings, err := RunJSONBenchQueries(b, 1)
+	if err != nil {
+		t.Fatalf("RunJSONBenchQueries(b): %v", err)
+	}
+	if len(aTimings) != len(bTimings) {
+		t.Fatalf("query count=%d want %d", len(bTimings), len(aTimings))
+	}
+	for i := range aTimings {
+		if aTimings[i].Query != bTimings[i].Query || aTimings[i].ResultRows != bTimings[i].ResultRows || aTimings[i].ResultDigest != bTimings[i].ResultDigest {
+			t.Fatalf("%s rows/digest=(%d,%d) want %s (%d,%d)", bTimings[i].Query, bTimings[i].ResultRows, bTimings[i].ResultDigest, aTimings[i].Query, aTimings[i].ResultRows, aTimings[i].ResultDigest)
+		}
+	}
+}
+
+func assertJSONBenchReplaySpecializedQueriesMatchRaw(t *testing.T, reader *ColumnPartSetReader, ds JSONBenchDataset, layout JSONBenchColumnPartLayout) {
+	t.Helper()
+	codes, err := jsonBenchQueryCodes(ds)
+	if err != nil {
+		t.Fatalf("jsonBenchQueryCodes: %v", err)
+	}
+	switch layout {
+	case JSONBenchColumnPartLayoutTimeUS:
+		rawQ4Rows, rawQ4Digest := runJSONBenchQ4(ds, codes)
+		q4Rows, q4Digest, q4Diagnostics, err := runJSONBenchPartSetQ4TimeOrdered(reader, codes, &jsonBenchPartQueryScratch{})
+		if err != nil {
+			t.Fatalf("runJSONBenchPartSetQ4TimeOrdered: %v", err)
+		}
+		if q4Rows != rawQ4Rows || q4Digest != rawQ4Digest {
+			t.Fatalf("q4a rows/digest=(%d,%d) raw=(%d,%d)", q4Rows, q4Digest, rawQ4Rows, rawQ4Digest)
+		}
+		if q4Diagnostics.AggregateKernel == "" {
+			t.Fatalf("q4a diagnostics missing aggregate kernel: %+v", q4Diagnostics)
+		}
+
+		rawQ5Rows, rawQ5Digest := runJSONBenchQ5(ds, codes)
+		q5Rows, q5Digest, q5Diagnostics, err := runJSONBenchPartSetQ5AggregateMetadata(reader, codes, &jsonBenchPartQueryScratch{})
+		if err != nil {
+			if !strings.Contains(err.Error(), "requires all-visible") {
+				t.Fatalf("runJSONBenchPartSetQ5AggregateMetadata: %v", err)
+			}
+		} else {
+			if q5Rows != rawQ5Rows || q5Digest != rawQ5Digest {
+				t.Fatalf("q5 metadata rows/digest=(%d,%d) raw=(%d,%d)", q5Rows, q5Digest, rawQ5Rows, rawQ5Digest)
+			}
+			if !q5Diagnostics.AggregateMetadataUsed || q5Diagnostics.RowsScanned != 0 || q5Diagnostics.BlocksDecoded != 0 {
+				t.Fatalf("q5 metadata diagnostics=%+v want metadata-only", q5Diagnostics)
+			}
+		}
+	case JSONBenchColumnPartLayoutClickHouseFilterUserTime:
+		rawQ4Rows, rawQ4Digest := runJSONBenchQ4(ds, codes)
+		q4Rows, q4Digest, q4Diagnostics, err := runJSONBenchPartSetQ4ClickHouseOrder(reader, codes, &jsonBenchPartQueryScratch{})
+		if err != nil {
+			t.Fatalf("runJSONBenchPartSetQ4ClickHouseOrder: %v", err)
+		}
+		if q4Rows != rawQ4Rows || q4Digest != rawQ4Digest {
+			t.Fatalf("q4b rows/digest=(%d,%d) raw=(%d,%d)", q4Rows, q4Digest, rawQ4Rows, rawQ4Digest)
+		}
+		if q4Diagnostics.AggregateKernel != "multipart_clickhouse_order_prefix_scan_min_by_user" || q4Diagnostics.EarlyStopAvailable {
+			t.Fatalf("q4b diagnostics=%+v want ClickHouse-order prefix scan", q4Diagnostics)
+		}
+
+		q4MetaRows, q4MetaDigest, q4MetaDiagnostics, err := runJSONBenchPartSetQ4AggregateMetadata(reader, codes, &jsonBenchPartQueryScratch{})
+		if err != nil {
+			if !strings.Contains(err.Error(), "requires all-visible") {
+				t.Fatalf("runJSONBenchPartSetQ4AggregateMetadata: %v", err)
+			}
+		} else {
+			if q4MetaRows != rawQ4Rows || q4MetaDigest != rawQ4Digest {
+				t.Fatalf("q4 metadata rows/digest=(%d,%d) raw=(%d,%d)", q4MetaRows, q4MetaDigest, rawQ4Rows, rawQ4Digest)
+			}
+			if !q4MetaDiagnostics.AggregateMetadataUsed || q4MetaDiagnostics.RowsScanned != 0 || q4MetaDiagnostics.BlocksDecoded != 0 {
+				t.Fatalf("q4 metadata diagnostics=%+v want metadata-only", q4MetaDiagnostics)
+			}
+		}
+	default:
+		t.Fatalf("unsupported replay specialized layout %q", layout)
+	}
+}
+
+func remapJSONBenchDictionaryCodes(t *testing.T, ds JSONBenchDataset, offset int64) JSONBenchDataset {
+	t.Helper()
+	out := cloneJSONBenchDataset(ds)
+	out.Dictionaries = make(map[string]map[string]int64, len(ds.Dictionaries))
+	for name, dict := range ds.Dictionaries {
+		entries := sortedJSONBenchDictionaryEntries(dict)
+		shift := 1
+		if len(entries) > 1 {
+			shift = int(offset % int64(len(entries)))
+			if shift == 0 {
+				shift = 1
+			}
+		}
+		next := make(map[string]int64, len(entries))
+		oldToNew := make(map[int64]int64, len(entries))
+		for i, entry := range entries {
+			newCode := entries[(i+shift)%len(entries)].code
+			next[entry.label] = newCode
+			oldToNew[entry.code] = newCode
+		}
+		out.Dictionaries[name] = next
+		values := out.Columns[name]
+		for i, value := range values {
+			newValue, ok := oldToNew[value]
+			if !ok {
+				t.Fatalf("column %s row %d code=%d missing from dictionary", name, i, value)
+			}
+			values[i] = newValue
+		}
+	}
+	return out
+}
+
+func canonicalizeJSONBenchDictionaryCodes(t *testing.T, ds JSONBenchDataset, canonicalDictionaries map[string]map[string]int64) JSONBenchDataset {
+	t.Helper()
+	out := cloneJSONBenchDataset(ds)
+	out.Dictionaries = cloneJSONBenchDictionaries(canonicalDictionaries)
+	for name, canonical := range canonicalDictionaries {
+		source := ds.Dictionaries[name]
+		if source == nil {
+			continue
+		}
+		inverse := invertJSONBenchDictionary(t, name, source)
+		values := out.Columns[name]
+		for i, value := range values {
+			label, ok := inverse[value]
+			if !ok {
+				t.Fatalf("column %s row %d code=%d missing from source dictionary", name, i, value)
+			}
+			canonicalValue, ok := canonical[label]
+			if !ok {
+				t.Fatalf("column %s row %d label=%q missing from canonical dictionary", name, i, label)
+			}
+			values[i] = canonicalValue
+		}
+	}
+	return out
+}
+
+func jsonBenchCanonicalDatasetDigest(t *testing.T, ds JSONBenchDataset, canonicalDictionaries map[string]map[string]int64) uint64 {
+	t.Helper()
+	columns := sortedJSONBenchColumnNames(ds)
+	rowIndex := ds.Columns["row_index"]
+	if len(rowIndex) != ds.Rows {
+		t.Fatalf("row_index rows=%d want %d", len(rowIndex), ds.Rows)
+	}
+	order := make([]int, len(rowIndex))
+	for i := range order {
+		order[i] = i
+	}
+	sort.Slice(order, func(i, j int) bool {
+		return rowIndex[order[i]] < rowIndex[order[j]]
+	})
+	inverses := make(map[string]map[int64]string, len(ds.Dictionaries))
+	for name, dict := range ds.Dictionaries {
+		inverses[name] = invertJSONBenchDictionary(t, name, dict)
+	}
+	var digest uint64
+	digest = digestMix(digest, uint64(ds.Rows), uint64(len(columns)))
+	for _, row := range order {
+		digest = digestMix(digest, uint64(rowIndex[row]), 0)
+		for _, name := range columns {
+			values := ds.Columns[name]
+			if len(values) != ds.Rows {
+				t.Fatalf("column %s rows=%d want %d", name, len(values), ds.Rows)
+			}
+			value := values[row]
+			if canonical := canonicalDictionaries[name]; canonical != nil {
+				label, ok := inverses[name][value]
+				if !ok {
+					t.Fatalf("column %s row %d code=%d missing from source dictionary", name, row, value)
+				}
+				canonicalValue, ok := canonical[label]
+				if !ok {
+					t.Fatalf("column %s row %d label=%q missing from canonical dictionary", name, row, label)
+				}
+				value = canonicalValue
+			}
+			digest = digestMix(digest, hashString64(name), uint64(value))
+		}
+	}
+	return digest
+}
+
+func estimateColumnMutationReplayCommandBytes(base ColumnBatch, batches []ColumnMutationBatch) int {
+	total := estimateColumnBatchPayloadBytes(base)
+	for _, batch := range batches {
+		total += estimateColumnBatchPayloadBytes(batch.Inserts)
+		total += estimateColumnBatchPayloadBytes(batch.Updates)
+		total += len(batch.Deletes) * 8
+		total += 5 * 8
+	}
+	return total
+}
+
+func estimateColumnBatchPayloadBytes(batch ColumnBatch) int {
+	total := 8
+	for name, values := range batch.Columns {
+		total += len(name) + 8
+		total += len(values) * 8
+	}
+	return total
+}
+
+type jsonBenchDictionaryEntry struct {
+	label string
+	code  int64
+}
+
+func sortedJSONBenchDictionaryEntries(dict map[string]int64) []jsonBenchDictionaryEntry {
+	entries := make([]jsonBenchDictionaryEntry, 0, len(dict))
+	for label, code := range dict {
+		entries = append(entries, jsonBenchDictionaryEntry{label: label, code: code})
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].code == entries[j].code {
+			return entries[i].label < entries[j].label
+		}
+		return entries[i].code < entries[j].code
+	})
+	return entries
+}
+
+func invertJSONBenchDictionary(t *testing.T, name string, dict map[string]int64) map[int64]string {
+	t.Helper()
+	inverse := make(map[int64]string, len(dict))
+	for label, code := range dict {
+		if prev, ok := inverse[code]; ok {
+			t.Fatalf("dictionary %s duplicate code=%d labels=%q,%q", name, code, prev, label)
+		}
+		inverse[code] = label
+	}
+	return inverse
+}
+
+func cloneJSONBenchDataset(ds JSONBenchDataset) JSONBenchDataset {
+	out := JSONBenchDataset{
+		Rows:         ds.Rows,
+		Files:        append([]string(nil), ds.Files...),
+		Columns:      make(map[string][]int64, len(ds.Columns)),
+		Dictionaries: cloneJSONBenchDictionaries(ds.Dictionaries),
+	}
+	for name, values := range ds.Columns {
+		out.Columns[name] = append([]int64(nil), values...)
+	}
+	return out
+}
+
+func cloneJSONBenchDictionaries(dicts map[string]map[string]int64) map[string]map[string]int64 {
+	out := make(map[string]map[string]int64, len(dicts))
+	for name, dict := range dicts {
+		next := make(map[string]int64, len(dict))
+		for label, code := range dict {
+			next[label] = code
+		}
+		out[name] = next
+	}
+	return out
+}
+
+func sortedJSONBenchColumnNames(ds JSONBenchDataset) []string {
+	columns := make([]string, 0, len(ds.Columns))
+	for name := range ds.Columns {
+		columns = append(columns, name)
+	}
+	sort.Strings(columns)
+	return columns
+}
+
+func hashString64(value string) uint64 {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(value))
+	return h.Sum64()
 }
