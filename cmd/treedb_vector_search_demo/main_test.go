@@ -344,6 +344,8 @@ func TestExecuteRequireValueLogBytesFailsOnPagerBackedDefault(t *testing.T) {
 	if err == nil {
 		t.Fatal("execute succeeded, want value-log requirement failure")
 	}
+	// These assertions intentionally describe the current default backend
+	// profile, where this demo does not force value-log storage.
 	if !strings.Contains(err.Error(), "zero value_vlog bytes") {
 		t.Fatalf("error=%v, want zero value_vlog bytes", err)
 	}
@@ -458,6 +460,11 @@ func TestParseConfigRejectsInvalidValidationCombinations(t *testing.T) {
 			args: []string{"-docs", "2", "-top-k", "3"},
 			want: "-top-k cannot exceed -docs",
 		},
+		{
+			name: "negative validate docs",
+			args: []string{"-validate-docs", "-1"},
+			want: "-validate-docs cannot be negative",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := parseConfig(tc.args)
@@ -468,6 +475,31 @@ func TestParseConfigRejectsInvalidValidationCombinations(t *testing.T) {
 				t.Fatalf("error=%v, want %q", err, tc.want)
 			}
 		})
+	}
+}
+
+func TestParseConfigDoesNotWriteFlagErrorsToProcessStderr(t *testing.T) {
+	readPipe, writePipe, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	originalStderr := os.Stderr
+	os.Stderr = writePipe
+	t.Cleanup(func() {
+		os.Stderr = originalStderr
+		_ = readPipe.Close()
+	})
+	_, err = parseConfig([]string{"-not-a-real-flag"})
+	_ = writePipe.Close()
+	if err == nil {
+		t.Fatal("parseConfig accepted unknown flag")
+	}
+	var stderr bytes.Buffer
+	if _, err := stderr.ReadFrom(readPipe); err != nil {
+		t.Fatalf("read stderr: %v", err)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("parseConfig wrote to stderr: %q", stderr.String())
 	}
 }
 
@@ -487,6 +519,18 @@ func TestSyntheticQueriesDoNotOverlapValidationQueries(t *testing.T) {
 		if _, ok := seen[queryID]; ok {
 			t.Fatalf("benchmark query id %d overlapped validation set", queryID)
 		}
+	}
+}
+
+func TestValidationDocIndexSamplesDistinctDocsWhenStrideWouldCollapse(t *testing.T) {
+	docs := 1543
+	seen := make(map[int]struct{}, 16)
+	for i := 0; i < 16; i++ {
+		docIndex := validationDocIndex(i, docs)
+		if _, ok := seen[docIndex]; ok {
+			t.Fatalf("validation doc index repeated %d for docs=%d", docIndex, docs)
+		}
+		seen[docIndex] = struct{}{}
 	}
 }
 
