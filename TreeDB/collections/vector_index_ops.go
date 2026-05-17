@@ -62,6 +62,11 @@ func (c *Collection) RebuildVectorIndex(name string) (VectorIndexStatus, error) 
 		return VectorIndexStatus{}, err
 	}
 	index.setNativePersistent(true)
+	baseEpoch, err := c.currentNativeVectorIndexRootID(def.Name)
+	if err != nil {
+		return VectorIndexStatus{}, err
+	}
+	index.recordFullSnapshotBaseEpoch(baseEpoch)
 	native, err := index.saveNativeSnapshotPrepared()
 	if err != nil {
 		return VectorIndexStatus{}, err

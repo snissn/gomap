@@ -268,6 +268,38 @@ func TestVectorIndexSelectLayerNeighborsUsesHNSWDiversity(t *testing.T) {
 	}
 }
 
+func TestVectorIndexSelectLayerNeighborsSkipsDiversityForInnerProduct(t *testing.T) {
+	index, err := newVectorIndex(nil, VectorIndexOptions{
+		Name:   "embedding",
+		Field:  "embedding",
+		Metric: VectorMetricInnerProduct,
+		M:      4,
+	})
+	if err != nil {
+		t.Fatalf("new vector index: %v", err)
+	}
+	query := []float32{1, 0}
+	index.nodes = []vectorIndexNode{
+		{documentID: []byte("query"), vector: query, level: 0},
+		{documentID: []byte("best"), vector: []float32{10, 0}, level: 0},
+		{documentID: []byte("next"), vector: []float32{9, 0}, level: 0},
+		{documentID: []byte("orthogonal"), vector: []float32{0, 1}, level: 0},
+	}
+	for i := range index.nodes {
+		index.nodes[i].cacheVectorNorms()
+	}
+	candidates := []vectorIndexCandidate{
+		{nodeID: 1, distance: -10},
+		{nodeID: 2, distance: -9},
+		{nodeID: 3, distance: 0},
+	}
+
+	got := index.selectLayerNeighborsLocked(query, vectorNormSquared(query), nil, candidates, 0, 2, 0)
+	if len(got) != 2 || got[0] != 1 || got[1] != 2 {
+		t.Fatalf("selected neighbors=%v want inner-product top candidates [1 2]", got)
+	}
+}
+
 func TestVectorIndexPruneLayerNeighborsUsesHNSWDiversity(t *testing.T) {
 	index, err := newVectorIndex(nil, VectorIndexOptions{
 		Name:   "embedding",

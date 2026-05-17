@@ -1,12 +1,11 @@
 module github.com/snissn/gomap/benchmarks/vector_distance_kernels
 
-go 1.25.8
+go 1.25.0
 
 require (
 	github.com/ashvardanian/NumKong v1.5.3-0.20260420003853-48cbd21db85c
 	github.com/axiomhq/simd-go v0.0.0-20260109224133-a87ae27ede09
 	github.com/ic-timon/da-hvri v0.6.0
-	github.com/mycophonic/primordium v0.5.0
 	github.com/tphakala/simd v1.0.22
 	github.com/viterin/vek v0.4.3
 	gonum.org/v1/gonum v0.16.0

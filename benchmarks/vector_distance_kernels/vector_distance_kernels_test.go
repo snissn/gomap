@@ -8,7 +8,6 @@ import (
 	nk "github.com/ashvardanian/NumKong/golang"
 	axiomsimd "github.com/axiomhq/simd-go"
 	dahvrisimd "github.com/ic-timon/da-hvri/simd"
-	primordsimd "github.com/mycophonic/primordium/simd"
 	simdf32 "github.com/tphakala/simd/f32"
 	"github.com/viterin/vek/vek32"
 	"gonum.org/v1/gonum/blas/blas32"
@@ -124,17 +123,6 @@ func BenchmarkCosineDistanceScalar64(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			candidate := candidateAt(candidates, i, benchDims)
 			dot := simdf32.DotProductUnsafe(query, candidate)
-			sum += 1 - dot*queryInvNorm*candidateInvNorms[i%benchCandidates]
-		}
-		sinkDistance32 = sum
-	})
-
-	b.Run("primordium_simd_dot_float32_cached_norms", func(b *testing.B) {
-		b.ReportAllocs()
-		var sum float32
-		for i := 0; i < b.N; i++ {
-			candidate := candidateAt(candidates, i, benchDims)
-			dot := primordsimd.DotFloat32(query, candidate)
 			sum += 1 - dot*queryInvNorm*candidateInvNorms[i%benchCandidates]
 		}
 		sinkDistance32 = sum
@@ -260,17 +248,6 @@ func BenchmarkCosineDistanceCandidateBatch128(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			simdf32.DotProductBatch(dots32, candidateRows, query)
 			for j, dot := range dots32 {
-				distances[j] = 1 - dot*queryInvNorm*candidateInvNorms[j]
-			}
-		}
-		sinkDistanceBuf = distances
-	})
-
-	b.Run("primordium_simd_dot_float32_loop", func(b *testing.B) {
-		b.ReportAllocs()
-		for i := 0; i < b.N; i++ {
-			for j := 0; j < benchCandidates; j++ {
-				dot := primordsimd.DotFloat32(query, candidateAt(candidates, j, benchDims))
 				distances[j] = 1 - dot*queryInvNorm*candidateInvNorms[j]
 			}
 		}
@@ -520,20 +497,6 @@ func BenchmarkTreeDBRerankKernelCandidateBatch128(b *testing.B) {
 		sinkDistanceBuf = distances
 	})
 
-	b.Run("primordium_simd_dot_float32_loop_reuse_output", func(b *testing.B) {
-		distances := make([]float32, benchCandidates)
-		b.ReportAllocs()
-		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
-			for j := 0; j < benchCandidates; j++ {
-				candidate := candidateVectors[j*benchDims : (j+1)*benchDims]
-				dot := primordsimd.DotFloat32(query, candidate)
-				distances[j] = 1 - dot*queryInvNorm*candidateInvNorms[j]
-			}
-		}
-		sinkDistanceBuf = distances
-	})
-
 	b.Run("da_hvri_simd_dot_product_loop_reuse_output", func(b *testing.B) {
 		distances := make([]float32, benchCandidates)
 		b.ReportAllocs()
@@ -714,19 +677,6 @@ func BenchmarkTreeDBRerankGatherAndScoreCandidateBatch128(b *testing.B) {
 		sinkDistanceBuf = distances
 	})
 
-	b.Run("direct_node_vectors_primordium_simd_dot_float32", func(b *testing.B) {
-		distances := make([]float32, benchCandidates)
-		b.ReportAllocs()
-		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
-			for j := range nodes {
-				dot := primordsimd.DotFloat32(query, nodes[j])
-				distances[j] = 1 - dot*queryInvNorm*nodeInvNorms[j]
-			}
-		}
-		sinkDistanceBuf = distances
-	})
-
 	b.Run("direct_node_vectors_da_hvri_simd_dot_product", func(b *testing.B) {
 		distances := make([]float32, benchCandidates)
 		b.ReportAllocs()
@@ -895,21 +845,6 @@ func BenchmarkCosineDistanceQueryBatch32x128(b *testing.B) {
 				row := distances[q*benchCandidates : (q+1)*benchCandidates]
 				simdf32.DotProductBatch(dots32, candidateRows, query)
 				for j, dot := range dots32 {
-					row[j] = 1 - dot*queryInvNorms[q]*candidateInvNorms[j]
-				}
-			}
-		}
-		sinkDistanceBuf = distances
-	})
-
-	b.Run("primordium_simd_dot_float32_loop", func(b *testing.B) {
-		b.ReportAllocs()
-		for i := 0; i < b.N; i++ {
-			for q := 0; q < benchQueries; q++ {
-				query := queries[q*benchDims : (q+1)*benchDims]
-				row := distances[q*benchCandidates : (q+1)*benchCandidates]
-				for j := 0; j < benchCandidates; j++ {
-					dot := primordsimd.DotFloat32(query, candidateAt(candidates, j, benchDims))
 					row[j] = 1 - dot*queryInvNorms[q]*candidateInvNorms[j]
 				}
 			}
