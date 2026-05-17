@@ -196,6 +196,102 @@ func TestColumnMutationAdapterMergesVectorAndAdjacencyBatches(t *testing.T) {
 	assertInt64s(t, "merged neighbors", neighbors.Values, []int64{11, 21, 22, 31, 32})
 }
 
+func TestColumnPartSetCompactionPreservesVectorAndAdjacencyColumns(t *testing.T) {
+	opts := vectorPartTestOptions()
+	workspace, err := OpenColumnWorkspace(t.TempDir(), ColumnWorkspaceOptions{Collection: "vectors"})
+	if err != nil {
+		t.Fatalf("OpenColumnWorkspace: %v", err)
+	}
+	defer workspace.Close()
+
+	adapter, err := NewColumnMutationAdapter(workspace, ColumnMutationAdapterOptions{
+		Collection:        "vectors",
+		StoreOptions:      opts,
+		InitialPartID:     100,
+		InitialGeneration: 1,
+	})
+	if err != nil {
+		t.Fatalf("NewColumnMutationAdapter: %v", err)
+	}
+	if _, err := adapter.PublishBaseBatch(vectorPartTestBatch(), ColumnPartCoverageOptions{SourceRowRootGeneration: 1, SourceRowVersionUpper: 5}); err != nil {
+		t.Fatalf("PublishBaseBatch: %v", err)
+	}
+	_, err = adapter.Apply(ColumnMutationBatch{
+		Inserts: ColumnBatch{
+			Rows: 1,
+			Columns: map[string][]int64{
+				"id": {6},
+			},
+			Float32Vectors: map[string]Float32VectorColumn{
+				"embedding": {Dims: 3, Values: []float32{60, 61, 62}},
+			},
+			AdjacencyLists: map[string]AdjacencyListColumn{
+				"neighbors": {Offsets: []uint32{0, 3}, Values: []int64{61, 62, 63}},
+			},
+		},
+		Updates: ColumnBatch{
+			Rows: 1,
+			Columns: map[string][]int64{
+				"id": {2},
+			},
+			Float32Vectors: map[string]Float32VectorColumn{
+				"embedding": {Dims: 3, Values: []float32{200, 201, 202}},
+			},
+			AdjacencyLists: map[string]AdjacencyListColumn{
+				"neighbors": {Offsets: []uint32{0, 2}, Values: []int64{2001, 2002}},
+			},
+		},
+		Deletes:                 []int64{3},
+		SourceRowRootGeneration: 1,
+		SourceRowVersionLower:   5,
+		SourceRowVersionUpper:   7,
+	})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	reader, err := adapter.Reader(ColumnPartImageReadOptions{})
+	if err != nil {
+		t.Fatalf("Reader: %v", err)
+	}
+	compacted, err := CompactColumnPartSet(workspace, reader, opts, nil, 200)
+	if err != nil {
+		t.Fatalf("CompactColumnPartSet: %v", err)
+	}
+	if compacted.VisibleRows != 5 || compacted.DroppedRows != 2 {
+		t.Fatalf("compaction rows visible=%d dropped=%d want visible=5 dropped=2", compacted.VisibleRows, compacted.DroppedRows)
+	}
+	load, err := workspace.LoadPartWithOptions(compacted.Part.PartID, ColumnPartImageReadOptions{})
+	if err != nil {
+		t.Fatalf("LoadPartWithOptions(compacted): %v", err)
+	}
+	scanner := load.Part.NewScanner()
+	ids, err := scanner.ScanProjected([]string{"id"})
+	if err != nil {
+		t.Fatalf("ScanProjected(id): %v", err)
+	}
+	assertInt64s(t, "compacted ids", ids.Columns["id"], []int64{1, 2, 4, 5, 6})
+	vectors, err := scanner.ScanFloat32VectorsInto("embedding", nil)
+	if err != nil {
+		t.Fatalf("ScanFloat32VectorsInto: %v", err)
+	}
+	assertFloat32s(t, "compacted vectors", vectors.Values, []float32{
+		10, 11, 12,
+		200, 201, 202,
+		40, 41, 42,
+		50, 51, 52,
+		60, 61, 62,
+	})
+	neighbors, err := scanner.ScanAdjacencyListsInto("neighbors", nil, nil)
+	if err != nil {
+		t.Fatalf("ScanAdjacencyListsInto: %v", err)
+	}
+	if !slices.Equal(neighbors.Offsets, []uint32{0, 1, 3, 5, 5, 8}) {
+		t.Fatalf("compacted adjacency offsets=%v", neighbors.Offsets)
+	}
+	assertInt64s(t, "compacted neighbors", neighbors.Values, []int64{11, 2001, 2002, 41, 42, 61, 62, 63})
+}
+
 func BenchmarkColumnPartVectorAdjacencyBuild(b *testing.B) {
 	opts := vectorPartBenchmarkOptions(8192, 128)
 	batch := vectorPartBenchmarkBatch(8192, 128, 16)

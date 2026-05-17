@@ -125,7 +125,10 @@ func staleNativeSnapshotSaveStatus(c *Collection, idx *VectorIndex) (VectorIndex
 		return status, true, nil
 	}
 	declared, err := c.refreshVectorIndexDeclaration(idx.name)
-	if err != nil || !declared {
+	if err != nil {
+		return status, false, err
+	}
+	if !declared {
 		return status, false, nil
 	}
 	status.ExactFallbackReason = vectorIndexFallbackStaleRuntimeIndex

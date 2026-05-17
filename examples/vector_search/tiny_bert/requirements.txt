@@ -1,3 +1,3 @@
-torch
-transformers
-huggingface_hub
+torch>=2.2,<3
+transformers>=4.38,<5
+huggingface_hub>=0.20,<1

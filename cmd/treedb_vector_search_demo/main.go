@@ -890,11 +890,23 @@ func loadDatasetManifest(dir string) (datasetManifest, error) {
 	return m, nil
 }
 
-func datasetPath(work workload, name, fallback string) string {
+func datasetPath(work workload, name, fallback string) (string, error) {
 	if name == "" {
 		name = fallback
 	}
-	return filepath.Join(work.datasetDir, filepath.Clean(name))
+	clean := filepath.Clean(name)
+	if filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(os.PathSeparator)) {
+		return "", fmt.Errorf("dataset manifest path %q escapes dataset directory", name)
+	}
+	path := filepath.Join(work.datasetDir, clean)
+	rel, err := filepath.Rel(filepath.Clean(work.datasetDir), path)
+	if err != nil {
+		return "", fmt.Errorf("resolve dataset manifest path %q: %w", name, err)
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return "", fmt.Errorf("dataset manifest path %q escapes dataset directory", name)
+	}
+	return path, nil
 }
 
 func insertDocuments(col *collections.Collection, cfg config, work workload) error {
@@ -921,7 +933,11 @@ func insertDocuments(col *collections.Collection, cfg config, work workload) err
 }
 
 func insertDatasetDocuments(col *collections.Collection, cfg config, work workload) error {
-	f, err := os.Open(datasetPath(work, work.manifest.DocumentsJSONLFile, "documents.jsonl"))
+	path, err := datasetPath(work, work.manifest.DocumentsJSONLFile, "documents.jsonl")
+	if err != nil {
+		return err
+	}
+	f, err := os.Open(path)
 	if err != nil {
 		return err
 	}
@@ -1042,7 +1058,11 @@ func expectedDocument(docIndex int, cfg config, work workload) ([]byte, []byte, 
 }
 
 func datasetDocument(docIndex int, work workload) ([]byte, datasetDocumentHeader, error) {
-	f, err := os.Open(datasetPath(work, work.manifest.DocumentsJSONLFile, "documents.jsonl"))
+	path, err := datasetPath(work, work.manifest.DocumentsJSONLFile, "documents.jsonl")
+	if err != nil {
+		return nil, datasetDocumentHeader{}, err
+	}
+	f, err := os.Open(path)
 	if err != nil {
 		return nil, datasetDocumentHeader{}, err
 	}
@@ -1203,7 +1223,11 @@ func loadQueries(count int, cfg config, work workload, syntheticOffset int) ([][
 	if work.datasetDir == "" {
 		return syntheticQueries(count, cfg.docs, cfg.dimensions, syntheticOffset), nil
 	}
-	return readFloat32Vectors(datasetPath(work, work.manifest.QueryVectorsFile, "queries.f32"), count, cfg.dimensions)
+	path, err := datasetPath(work, work.manifest.QueryVectorsFile, "queries.f32")
+	if err != nil {
+		return nil, err
+	}
+	return readFloat32Vectors(path, count, cfg.dimensions)
 }
 
 func readFloat32Vectors(path string, count, dims int) ([][]float32, error) {

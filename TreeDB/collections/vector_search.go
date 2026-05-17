@@ -396,7 +396,7 @@ func exactVectorDistance(left, right []float32, metric VectorMetric) (float32, e
 			d := float64(left[i] - right[i])
 			sum += d * d
 		}
-		return float32(sum), nil
+		return float32(math.Sqrt(sum)), nil
 	case VectorMetricInnerProduct:
 		var dot float64
 		for i := range left {
