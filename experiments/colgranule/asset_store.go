@@ -35,6 +35,10 @@ type ColumnAssetStore interface {
 	ReadTo(ref ColumnAssetRef, dst []byte) ([]byte, error)
 }
 
+type ColumnAssetRangeReader interface {
+	ReadRange(ref ColumnAssetRef, offset int64, length int) ([]byte, error)
+}
+
 type columnAssetOwnedStore interface {
 	PutOwned(kind ColumnAssetKind, payload []byte) (ColumnAssetRef, error)
 }
@@ -132,6 +136,26 @@ func (s *MemoryColumnAssetStore) ReadTo(ref ColumnAssetRef, dst []byte) ([]byte,
 		return nil, err
 	}
 	out := append(dst[:0], payload...)
+	return out, nil
+}
+
+func (s *MemoryColumnAssetStore) ReadRange(ref ColumnAssetRef, offset int64, length int) ([]byte, error) {
+	payload, err := s.Read(ref)
+	if err != nil {
+		return nil, err
+	}
+	if offset < 0 {
+		return nil, fmt.Errorf("colgranule: negative asset range offset %d", offset)
+	}
+	if length < 0 {
+		return nil, fmt.Errorf("colgranule: negative asset range length %d", length)
+	}
+	if offset > int64(len(payload)) || int64(length) > int64(len(payload))-offset {
+		return nil, fmt.Errorf("colgranule: asset range offset=%d length=%d outside payload bytes=%d", offset, length, len(payload))
+	}
+	start := int(offset)
+	out := make([]byte, length)
+	copy(out, payload[start:start+length])
 	return out, nil
 }
 
@@ -257,6 +281,42 @@ func (s *SegmentColumnAssetStore) ReadTo(ref ColumnAssetRef, dst []byte) ([]byte
 		return nil, fmt.Errorf("colgranule: asset ref checksum=%08x want %08x", checksum, ref.Checksum)
 	}
 	return dst, nil
+}
+
+func (s *SegmentColumnAssetStore) ReadRange(ref ColumnAssetRef, offset int64, length int) ([]byte, error) {
+	if s == nil {
+		return nil, fmt.Errorf("colgranule: nil segment asset store")
+	}
+	if err := validateColumnAssetRef(ref); err != nil {
+		return nil, err
+	}
+	if offset < 0 {
+		return nil, fmt.Errorf("colgranule: negative asset range offset %d", offset)
+	}
+	if length < 0 {
+		return nil, fmt.Errorf("colgranule: negative asset range length %d", length)
+	}
+	if offset > ref.Length || int64(length) > ref.Length-offset {
+		return nil, fmt.Errorf("colgranule: asset range offset=%d length=%d outside ref length=%d", offset, length, ref.Length)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.file == nil {
+		return nil, fmt.Errorf("colgranule: closed segment asset store")
+	}
+	if ref.FileID != s.fileID {
+		return nil, fmt.Errorf("colgranule: asset file id=%d want %d", ref.FileID, s.fileID)
+	}
+	absolute := ref.Offset + offset
+	if absolute > s.size || int64(length) > s.size-absolute {
+		return nil, fmt.Errorf("colgranule: asset range offset=%d length=%d outside segment bytes=%d", absolute, length, s.size)
+	}
+	out := make([]byte, length)
+	reader := io.NewSectionReader(s.file, absolute, int64(length))
+	if _, err := io.ReadFull(reader, out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func newColumnAssetRef(kind ColumnAssetKind, fileID uint32, offset int64, length int, payload []byte) (ColumnAssetRef, error) {

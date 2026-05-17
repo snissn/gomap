@@ -78,7 +78,7 @@ func TestColumnCollectionManifestRejectsUnknownVersionAndChecksumMismatch(t *tes
 	if err := workspace.SaveCollectionManifest(manifest); err != nil {
 		t.Fatalf("SaveCollectionManifest: %v", err)
 	}
-	path := filepath.Join(dir, columnCollectionManifestFile)
+	path := filepath.Join(ColumnWorkspaceNamespaceForDir(dir).ManifestDir, columnCollectionManifestFile)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
@@ -113,6 +113,60 @@ func TestColumnCollectionManifestRejectsUnknownVersionAndChecksumMismatch(t *tes
 	}
 }
 
+func TestColumnCollectionManifestPartCoverageDescriptor(t *testing.T) {
+	ds := syntheticJSONBenchDataset(64)
+	opts, err := JSONBenchColumnPartOptions(ds, 16)
+	if err != nil {
+		t.Fatalf("JSONBenchColumnPartOptions: %v", err)
+	}
+	dir := t.TempDir()
+	workspace, err := OpenColumnWorkspace(dir, ColumnWorkspaceOptions{Collection: "jsonbench"})
+	if err != nil {
+		t.Fatalf("OpenColumnWorkspace: %v", err)
+	}
+	defer workspace.Close()
+	entry := publishJSONBenchPartRows(t, workspace, opts, ds, 301, 0, ds.Rows)
+	ref := NewColumnManifestPartRefWithCoverage(ColumnPartRoleBase, 7, entry, []ColumnSourcePartGeneration{{PartID: 11, GenerationID: 3}}, 2)
+	if ref.Coverage.Role != ColumnPartRoleBase || ref.Coverage.GenerationID != 7 || ref.Coverage.CompactionLevel != 2 {
+		t.Fatalf("bad coverage identity=%+v", ref.Coverage)
+	}
+	if len(ref.Coverage.SourceParts) != 1 || ref.Coverage.SourceParts[0].PartID != 11 || ref.Coverage.SourceParts[0].GenerationID != 3 {
+		t.Fatalf("bad coverage sources=%+v", ref.Coverage.SourceParts)
+	}
+	if got, want := ref.Coverage.AssetRefs[0], entry.AssetRef; got != want {
+		t.Fatalf("coverage asset ref=%+v want %+v", got, want)
+	}
+	if len(ref.Coverage.SortKeyColumns) == 0 || len(ref.Coverage.SortKeyLower) == 0 {
+		t.Fatalf("coverage missing sort key bounds=%+v", ref.Coverage)
+	}
+	if ref.Coverage.Rows != entry.Rows || ref.Coverage.VisibleRows != entry.VisibleRows || ref.Coverage.DeletedRows != entry.Rows-entry.VisibleRows {
+		t.Fatalf("coverage rows=%+v entry rows=%d visible=%d", ref.Coverage, entry.Rows, entry.VisibleRows)
+	}
+	deltaRef := NewColumnManifestPartRefWithCoverageOptions(ColumnPartRoleDelta, 8, entry, ColumnPartCoverageOptions{
+		SourceRowRootGeneration: 44,
+		SourceRowVersionLower:   120,
+		SourceRowVersionUpper:   121,
+	})
+	if deltaRef.Coverage.SourceRowRootGeneration != 44 || deltaRef.Coverage.SourceRowVersionLower != 120 || deltaRef.Coverage.SourceRowVersionUpper != 121 {
+		t.Fatalf("bad source row/root metadata=%+v", deltaRef.Coverage)
+	}
+	if _, err := NewColumnCollectionManifest("jsonbench", opts, nil, []ColumnManifestPartRef{deltaRef}, nil); err != nil {
+		t.Fatalf("NewColumnCollectionManifest with delta source metadata: %v", err)
+	}
+	badDelta := deltaRef
+	badDelta.Coverage.SourceRowVersionUpper = badDelta.Coverage.SourceRowVersionLower
+	if _, err := NewColumnCollectionManifest("jsonbench", opts, nil, []ColumnManifestPartRef{badDelta}, nil); err == nil || !strings.Contains(err.Error(), "source row version") {
+		t.Fatalf("NewColumnCollectionManifest err=%v want source row version rejection", err)
+	}
+	if _, err := NewColumnCollectionManifest("jsonbench", opts, []ColumnManifestPartRef{ref}, nil, nil); err != nil {
+		t.Fatalf("NewColumnCollectionManifest with coverage: %v", err)
+	}
+	ref.Coverage.Checksums[0]++
+	if _, err := NewColumnCollectionManifest("jsonbench", opts, []ColumnManifestPartRef{ref}, nil, nil); err == nil || !strings.Contains(err.Error(), "checksums") {
+		t.Fatalf("NewColumnCollectionManifest err=%v want coverage checksum rejection", err)
+	}
+}
+
 func BenchmarkColumnCollectionManifestDecode10K(b *testing.B) {
 	manifest := syntheticColumnCollectionManifestForBenchmark(10_000)
 	payload, err := EncodeColumnCollectionManifest(manifest)
@@ -129,7 +183,7 @@ func BenchmarkColumnCollectionManifestDecode10K(b *testing.B) {
 	}
 }
 
-func publishJSONBenchPartRows(t *testing.T, workspace *ColumnWorkspace, opts ColumnStoreOptions, ds JSONBenchDataset, partID uint64, start int, end int) ColumnWorkspacePartManifest {
+func publishJSONBenchPartRows(t testing.TB, workspace *ColumnWorkspace, opts ColumnStoreOptions, ds JSONBenchDataset, partID uint64, start int, end int) ColumnWorkspacePartManifest {
 	t.Helper()
 	part, err := BuildColumnPart(partID, opts, ColumnBatch{Rows: end - start, Columns: sliceJSONBenchColumns(ds, start, end)})
 	if err != nil {
