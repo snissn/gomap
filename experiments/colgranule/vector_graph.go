@@ -246,8 +246,8 @@ func (g *ColumnVectorGraph) SearchCosine(query []float32, opts ColumnVectorGraph
 		scratch = &ColumnVectorGraphSearchScratch{}
 	}
 
-	candidates, edgesVisited := g.searchCandidates(query, queryInvNorm, efSearch, scratch)
-	stats.CandidatesExamined = len(candidates)
+	candidates, edgesVisited, candidatesExamined := g.searchCandidates(query, queryInvNorm, efSearch, scratch)
+	stats.CandidatesExamined = candidatesExamined
 	stats.EdgesVisited = edgesVisited
 	if cap(scratch.results) < opts.TopK {
 		scratch.results = make([]ColumnVectorGraphSearchResult, 0, opts.TopK)
@@ -316,10 +316,19 @@ func validateColumnVectorGraphStorage(vectors []float32, dims int, invNorms []fl
 			return fmt.Errorf("colgranule: graph inv-norm row=%d value=%g is invalid", row, invNorm)
 		}
 		start := row * dims
+		var normSquared float64
 		for dim := 0; dim < dims; dim++ {
-			if !columnVectorGraphFinite(vectors[start+dim]) {
-				return fmt.Errorf("colgranule: graph vector row=%d dim=%d value=%g is invalid", row, dim, vectors[start+dim])
+			value := vectors[start+dim]
+			if !columnVectorGraphFinite(value) {
+				return fmt.Errorf("colgranule: graph vector row=%d dim=%d value=%g is invalid", row, dim, value)
 			}
+			normSquared += float64(value) * float64(value)
+		}
+		if normSquared == 0 {
+			return fmt.Errorf("colgranule: graph vector row=%d has zero magnitude", row)
+		}
+		if err := validateColumnVectorGraphInvNorm(row, invNorm, normSquared); err != nil {
+			return err
 		}
 	}
 	if int(prev) != len(neighbors) {
@@ -329,6 +338,16 @@ func validateColumnVectorGraphStorage(vectors []float32, dims int, invNorms []fl
 		if neighbor < 0 || neighbor >= int64(rows) {
 			return fmt.Errorf("colgranule: graph edge %d neighbor ordinal=%d outside rows=%d", edge, neighbor, rows)
 		}
+	}
+	return nil
+}
+
+func validateColumnVectorGraphInvNorm(row int, invNorm float32, normSquared float64) error {
+	expected := 1 / math.Sqrt(normSquared)
+	diff := math.Abs(float64(invNorm) - expected)
+	allowed := math.Max(1e-5, math.Abs(expected)*1e-4)
+	if diff > allowed {
+		return fmt.Errorf("colgranule: graph inv-norm row=%d value=%g does not match vector norm=%g", row, invNorm, expected)
 	}
 	return nil
 }
@@ -351,9 +370,9 @@ func columnVectorGraphFinite(value float32) bool {
 	return !math.IsNaN(float64(value)) && !math.IsInf(float64(value), 0)
 }
 
-func (g *ColumnVectorGraph) searchCandidates(query []float32, queryInvNorm float32, limit int, scratch *ColumnVectorGraphSearchScratch) ([]columnVectorGraphCandidate, int) {
+func (g *ColumnVectorGraph) searchCandidates(query []float32, queryInvNorm float32, limit int, scratch *ColumnVectorGraphSearchScratch) ([]columnVectorGraphCandidate, int, int) {
 	if g.entryOrdinal < 0 || g.entryOrdinal >= len(g.ids) || limit <= 0 {
-		return nil, 0
+		return nil, 0, 0
 	}
 	visited, mark := scratch.nextVisitedEpoch(len(g.ids))
 	entry := columnVectorGraphCandidate{
@@ -361,7 +380,7 @@ func (g *ColumnVectorGraph) searchCandidates(query []float32, queryInvNorm float
 		distance: g.cosineDistance(query, queryInvNorm, g.entryOrdinal),
 	}
 	if math.IsInf(float64(entry.distance), 1) {
-		return nil, 0
+		return nil, 0, 1
 	}
 	visited[entry.ordinal] = mark
 	queue := scratch.queue[:0]
@@ -369,6 +388,7 @@ func (g *ColumnVectorGraph) searchCandidates(query []float32, queryInvNorm float
 	best := scratch.best[:0]
 	best.pushBounded(entry, limit)
 	edgesVisited := 0
+	candidatesExamined := 1
 	for len(queue) > 0 {
 		current := queue.pop()
 		if len(best) >= limit && columnVectorGraphCandidateWorse(current, best[0]) {
@@ -387,6 +407,7 @@ func (g *ColumnVectorGraph) searchCandidates(query []float32, queryInvNorm float
 				ordinal:  neighbor,
 				distance: g.cosineDistance(query, queryInvNorm, neighbor),
 			}
+			candidatesExamined++
 			if math.IsInf(float64(candidate.distance), 1) {
 				continue
 			}
@@ -401,7 +422,7 @@ func (g *ColumnVectorGraph) searchCandidates(query []float32, queryInvNorm float
 	out := append(scratch.out[:0], best...)
 	scratch.out = out
 	sortColumnVectorGraphCandidates(out)
-	return out, edgesVisited
+	return out, edgesVisited, candidatesExamined
 }
 
 func (g *ColumnVectorGraph) cosineDistance(query []float32, queryInvNorm float32, ordinal int) float32 {
