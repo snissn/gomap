@@ -153,6 +153,16 @@ func TestColumnStoreActiveManifestRequiresRecoveryAuthoritativeMetadata(t *testi
 	}
 }
 
+func TestColumnStoreActiveManifestRequiresRecoveryAuthoritativeAppliedLSN(t *testing.T) {
+	identity := &ColumnManifestIdentity{Generation: 42, Version: 1, Checksum: 0xfeedbeef}
+	cfg := testColumnStoreConfig(identity)
+	cfg.RecoveryAuthoritativeAppliedCommandLSN = 0
+	_, err := normalizeCollectionMeta(CollectionMeta{Name: "events", Options: CollectionOptions{ColumnStore: cfg}})
+	if err == nil || !strings.Contains(err.Error(), "AppliedCommandLSN") {
+		t.Fatalf("normalizeCollectionMeta err=%v want recovery-authoritative AppliedCommandLSN failure", err)
+	}
+}
+
 func TestColumnStoreActiveManifestFailsClosedOnRecoveryAuthoritativeMismatch(t *testing.T) {
 	identity := &ColumnManifestIdentity{Generation: 42, Version: 1, Checksum: 0xfeedbeef}
 	cfg := testColumnStoreConfig(identity)

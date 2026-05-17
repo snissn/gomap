@@ -448,6 +448,9 @@ func validateColumnStoreConfig(collection string, cfg ColumnStoreConfig) error {
 		if cfg.RecoveryAuthoritativeManifest == nil {
 			return errors.New("collections: active column manifest requires recovery-authoritative metadata")
 		}
+		if cfg.RecoveryAuthoritativeAppliedCommandLSN == 0 {
+			return errors.New("collections: active column manifest requires recovery-authoritative AppliedCommandLSN")
+		}
 		if !columnManifestIdentityValueEqual(*cfg.ActiveManifest, *cfg.RecoveryAuthoritativeManifest) {
 			return errors.New("collections: recovery-authoritative column manifest must match active column manifest")
 		}
