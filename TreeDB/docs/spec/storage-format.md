@@ -626,7 +626,7 @@ control-plane state, not a sidecar hint. Current normalized fields are:
   command stream boundary considered safe for recovery. When `active_manifest`
   is present, the recovery-authoritative identity must also be present and must
   match it until a later format explicitly supports split active/recovery
-  generations.
+  generations; the applied command LSN must also be present and non-zero.
 - `profile_support`: current production default is `durable-only`.
   `benchmark-relaxed` is permitted only for explicit benchmark/experimental
   use under relaxed durability modes.
