@@ -15,6 +15,8 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
+var testRegisteredReplayHandlerKind atomic.Uint32
+
 func TestCommandWALRawSetDeleteBatchReplaysThroughNormalExecutor(t *testing.T) {
 	dir := t.TempDir()
 	enableCommandWALFormat(t, dir)
@@ -359,6 +361,151 @@ func TestCommandWALRawSetReplayLazilyCreatesAppenderIfPlacementDrifts(t *testing
 	assertDBValue(t, db, "k", value)
 	if got := db.State().AppliedCommandLSN; got != 1 {
 		t.Fatalf("AppliedCommandLSN=%d, want 1", got)
+	}
+}
+
+func TestCommandWALRegisteredReplayHandlerInstallsValueLogAppender(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db, err := Open(Options{
+		Dir: dir,
+		ValueLog: ValueLogOptions{
+			PointerThreshold: 1,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	kindOffset := testRegisteredReplayHandlerKind.Add(1)
+	if kindOffset > 5000 {
+		t.Fatalf("test replay handler kind offset exhausted: %d", kindOffset)
+	}
+	kind := commitlog.CommandKind(60000 + kindOffset)
+	var handlerCalled atomic.Bool
+	RegisterCommandWALReplayHandler(kind, func(db *DB, env commitlog.CommandEnvelope) error {
+		handlerCalled.Store(true)
+		if !db.HasValueLogAppender() {
+			return ErrValueLogAppenderUnavailable
+		}
+		_, err := db.AppendValueLogValues([][]byte{[]byte(strings.Repeat("collection-replay-value-", 32))})
+		return err
+	})
+
+	var ensured atomic.Bool
+	var appender *replayInlineAppender
+	ensure := func() (map[uint64]page.ValuePtr, *replayInlineAppender, error) {
+		ensured.Store(true)
+		if appender != nil {
+			return nil, appender, nil
+		}
+		var err error
+		appender, err = newReplayInlineAppender(db, nil, nil)
+		if err != nil {
+			return nil, nil, err
+		}
+		db.SetValueLogAppender(appender)
+		return nil, appender, nil
+	}
+	defer func() {
+		db.SetValueLogAppender(nil)
+		if appender != nil {
+			_ = appender.close()
+		}
+	}()
+
+	err = applyCommandWALFrame(db, commitlog.CommandEnvelope{
+		LSN:           1,
+		Kind:          kind,
+		Scope:         commitlog.CommandScopeCollection,
+		PayloadFormat: commitlog.PayloadFormat(60000 + kindOffset),
+		Payload:       []byte{1},
+	}, nil, nil, nil, ensure)
+	if err != nil {
+		t.Fatalf("applyCommandWALFrame: %v", err)
+	}
+	if !ensured.Load() {
+		t.Fatal("registered command replay did not install replay log support")
+	}
+	if !handlerCalled.Load() {
+		t.Fatal("registered command replay handler was not called")
+	}
+}
+
+func TestCommandWALRegisteredReplayHandlerCanOptOutOfReplayLogSupport(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	defer func() { _ = db.Close() }()
+
+	kindOffset := testRegisteredReplayHandlerKind.Add(1)
+	if kindOffset > 5000 {
+		t.Fatalf("test replay handler kind offset exhausted: %d", kindOffset)
+	}
+	kind := commitlog.CommandKind(60000 + kindOffset)
+	var handlerCalled atomic.Bool
+	RegisterCommandWALReplayHandlerWithOptions(kind, func(db *DB, env commitlog.CommandEnvelope) error {
+		handlerCalled.Store(true)
+		return nil
+	}, CommandWALReplayHandlerOptions{})
+
+	var ensured atomic.Bool
+	ensure := func() (map[uint64]page.ValuePtr, *replayInlineAppender, error) {
+		ensured.Store(true)
+		return nil, nil, nil
+	}
+	if err := applyCommandWALFrame(db, commitlog.CommandEnvelope{
+		LSN:           1,
+		Kind:          kind,
+		Scope:         commitlog.CommandScopeCollection,
+		PayloadFormat: commitlog.PayloadFormatNativeWireDeterministic,
+	}, nil, nil, nil, ensure); err != nil {
+		t.Fatalf("applyCommandWALFrame: %v", err)
+	}
+	if !handlerCalled.Load() {
+		t.Fatal("registered replay handler was not called")
+	}
+	if ensured.Load() {
+		t.Fatal("replay log support was installed for opt-out handler")
+	}
+}
+
+func TestPublishCommandWALNoopRequiresCommandWALEnabled(t *testing.T) {
+	db, err := Open(Options{Dir: t.TempDir(), DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	intent := NewCommandWALReplayIntent(commitlog.CommandEnvelope{
+		LSN:           1,
+		Kind:          commitlog.CommandKindRawKVBatch,
+		Scope:         commitlog.CommandScopeRawKV,
+		PayloadFormat: commitlog.PayloadFormatRawKVBatchV1,
+	})
+	if err := db.PublishCommandWALNoop(intent, false); !errors.Is(err, ErrCommandWALUnsupported) {
+		t.Fatalf("PublishCommandWALNoop error=%v, want ErrCommandWALUnsupported", err)
+	}
+	if got := db.State().AppliedCommandLSN; got != 0 {
+		t.Fatalf("AppliedCommandLSN=%d, want 0", got)
+	}
+}
+
+func TestCommandWALReplayIntentRequestsSynchronousPublish(t *testing.T) {
+	intent := NewCommandWALReplayIntent(commitlog.CommandEnvelope{
+		LSN:           1,
+		Kind:          commitlog.CommandKindRawKVBatch,
+		Scope:         commitlog.CommandScopeRawKV,
+		PayloadFormat: commitlog.PayloadFormatRawKVBatchV1,
+	})
+	if !commandWALIntentPublishSync(intent, false) {
+		t.Fatal("replay intent did not request synchronous publish")
+	}
+	if !commandWALIntentPublishSync(nil, true) {
+		t.Fatal("explicit sync publish was not preserved")
+	}
+	if commandWALIntentPublishSync(nil, false) {
+		t.Fatal("nil intent unexpectedly requested sync publish")
 	}
 }
 

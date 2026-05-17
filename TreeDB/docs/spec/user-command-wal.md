@@ -243,20 +243,28 @@ replayable without adding query-wide mutation semantics.
 | Surface | Current user-facing shape | V1 WAL command | Status policy |
 |---|---|---|---|
 | Raw KV set/delete/batch | `Set`, `Delete`, `Batch.Write` | `RawKVBatch` | PR1 has gated typed bytes and fixtures; production raw writes become `WAL-supported` after PR3 recovery dispatch and `AppliedCommandLSN` plumbing. |
-| Collection insert batch | explicit IDs plus stored documents | `CollectionInsertBatchByID` | PR1 reserves a native-wire deterministic fixture placeholder; `WAL-supported` only after canonical payload and recovery tests. |
-| Collection delete | explicit document ID or ID batch | `CollectionDeleteBatchByID` | `WAL-supported` after canonical payload and recovery tests. |
+| Collection insert batch | explicit IDs plus stored documents | `CollectionInsertBatchByID` | PR4 implementation: `WAL-supported` for JSON, BSON, and template-v1 stored documents through the normal collection executor. |
+| Collection delete | explicit document ID or ID batch | `CollectionDeleteBatchByID` | PR4 implementation: `WAL-supported`; missing IDs are explicit no-ops and recovery still advances `AppliedCommandLSN`. |
 | Collection declarative update | explicit document ID plus canonical update ops over resolved literal values | `CollectionUpdateByIDOps` or final replacement | `WAL-supported` after operator registry, canonical encoding, and recovery tests. |
 | Resolver-backed update helpers | helpers such as server-now, UUID, random, or sequence values used by declarative update APIs | not a replay command; lowers to resolved literals inside `CollectionUpdateByIDOps` | `WAL-supported` only when resolved before WAL append. Recovery must not invoke helper functions. |
 | Collection update callback | explicit document ID plus Go callback | `CollectionReplaceBatchByID` after callback execution | Callback itself is not replayed. WAL logs final accepted replacements/no-ops. |
 | Mongo `updateOne` | `_id` equality plus accepted `$set` subset | `CollectionUpdateByIDSet` or final replacement | `WAL-supported` only after canonical lowering and result assertions. |
 | Mongo `deleteOne` | `_id` equality | `CollectionDeleteBatchByID` | Same as native explicit-ID delete. |
-| Collection/index metadata | create collection, create/drop index | `CatalogMutation` | PR1 reserves a catalog fixture placeholder; if not implemented yet, reject in WAL-on durable-at-ack modes. |
+| Collection/index metadata | create collection, create/drop index | `CatalogMutation` | PR4 rejects create collection while command WAL is active; PR6 owns WAL-supported catalog commands. |
 | Query-wide update/delete | predicate/range matched mutation | none | `WAL-rejected`; future command kind required. |
 | User-defined callback replay | arbitrary function | none | `WAL-rejected`; lower to final replacement first. |
 | Column-store file publish | external side-file refs | future command plus external-ref classes | Deferred until external-file prepare/recovery is specified. |
 
 The matrix is normative for planning: adding or broadening a mutating API also
 requires a matrix update in the same PR.
+
+Collection command replay handlers live in the `TreeDB/collections` package
+because replay must re-enter the normal collection executor. Binaries that may
+open `command_wal_v1` directories containing collection frames must import that
+package before `db.Open` recovery runs, or call
+`collections.RegisterCommandWALReplayHandlers()` during startup. A backend-only
+binary without those handlers must fail closed on collection command kinds
+rather than skipping frames.
 
 ### 6.1 Batch Atomicity
 
@@ -848,6 +856,21 @@ Acceptance:
 
 - crash after acknowledged insert/delete and before checkpoint recovers correctly;
 - duplicate/missing IDs replay idempotency behavior is explicit and tested.
+
+PR4 evidence:
+
+- canonical frame fixtures:
+  `command_wal_v1_collection_insert_by_id.hex` and
+  `command_wal_v1_collection_delete_by_id.hex`;
+- normal path: public `InsertBatch` appends one collection command frame and
+  publishes roots with `AppliedCommandLSN`;
+- recovery path: unapplied insert/delete frames replay through collection
+  executors, including template-v1 stored documents and missing-only delete
+  no-ops;
+- unsupported catalog create fails with `ErrCommandWALUnsupported` until PR6;
+- performance artifacts:
+  `artifacts/command-wal/pr4/collection-insert-delete-microbench.txt` and
+  `artifacts/command-wal/pr4/collection-insert-delete-microbench-benchstat.txt`.
 
 ### PR 5: Collection update by explicit ID
 

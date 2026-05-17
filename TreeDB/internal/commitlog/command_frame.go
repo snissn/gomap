@@ -27,6 +27,7 @@ const (
 var commandFrameMagic = [4]byte{'T', 'C', 'W', '1'}
 
 const commandWALCriticalFlagsMask uint64 = CommandWALNonCriticalFlagStart - 1
+const maxCommandFrameUint32 = uint64(^uint32(0))
 
 // CommandKind identifies the deterministic command payload schema carried by a
 // command WAL frame.
@@ -35,9 +36,10 @@ type CommandKind uint16
 const (
 	CommandKindRawKVBatch CommandKind = 1
 
-	// PR1 fixtures reserve the collection/catalog command families without
-	// enabling production replay for them.
+	// Collection command frames carry deterministic user-level collection
+	// mutations. They do not encode physical root deltas.
 	CommandKindCollectionInsertBatchByID  CommandKind = 100
+	CommandKindCollectionDeleteBatchByID  CommandKind = 101
 	CommandKindCatalogMutationPlaceholder CommandKind = 200
 )
 
@@ -54,8 +56,10 @@ const (
 type PayloadFormat uint16
 
 const (
-	PayloadFormatRawKVBatchV1            PayloadFormat = 1
-	PayloadFormatNativeWireDeterministic PayloadFormat = 2
+	PayloadFormatRawKVBatchV1                PayloadFormat = 1
+	PayloadFormatNativeWireDeterministic     PayloadFormat = 2
+	PayloadFormatCollectionInsertBatchByIDV1 PayloadFormat = 3
+	PayloadFormatCollectionDeleteBatchByIDV1 PayloadFormat = 4
 )
 
 // RawKVOp is a deterministic raw key/value mutation inside a RawKVBatch
@@ -81,6 +85,21 @@ type RawKVOperation struct {
 	Key   []byte
 	Value []byte
 	RID   uint64
+}
+
+type CollectionDocument struct {
+	ID       []byte
+	Document []byte
+}
+
+type CollectionInsertBatchByIDPayload struct {
+	Collection string
+	Documents  []CollectionDocument
+}
+
+type CollectionDeleteBatchByIDPayload struct {
+	Collection string
+	IDs        [][]byte
 }
 
 type ExternalRefClass uint16
@@ -166,7 +185,7 @@ func commandFrameEncodedSizeFromLengths(payloadLen, extRefsLen, preconditionsLen
 }
 
 func addCommandFrameEncodedSectionLen(total, n int) (int, error) {
-	if n < 0 || n > int(^uint32(0)) {
+	if commandFrameIntExceedsUint32(n) {
 		return 0, ErrRecordTooLarge
 	}
 	if total > int(^uint(0)>>1)-n {
@@ -344,7 +363,11 @@ func validateCommandEnvelopeIdentity(env CommandEnvelope) error {
 			return ErrCorrupt
 		}
 	case CommandKindCollectionInsertBatchByID:
-		if env.Scope != CommandScopeCollection || env.PayloadFormat != PayloadFormatNativeWireDeterministic {
+		if env.Scope != CommandScopeCollection || env.PayloadFormat != PayloadFormatCollectionInsertBatchByIDV1 {
+			return ErrCorrupt
+		}
+	case CommandKindCollectionDeleteBatchByID:
+		if env.Scope != CommandScopeCollection || env.PayloadFormat != PayloadFormatCollectionDeleteBatchByIDV1 {
 			return ErrCorrupt
 		}
 	case CommandKindCatalogMutationPlaceholder:
@@ -361,13 +384,19 @@ func validateCommandEnvelopePayload(env CommandEnvelope) error {
 	switch env.Kind {
 	case CommandKindRawKVBatch:
 		return validateRawKVBatchPayload(env.Payload)
+	case CommandKindCollectionInsertBatchByID:
+		_, err := DecodeCollectionInsertBatchByIDPayload(env.Payload)
+		return err
+	case CommandKindCollectionDeleteBatchByID:
+		_, err := DecodeCollectionDeleteBatchByIDPayload(env.Payload)
+		return err
 	default:
 		return nil
 	}
 }
 
 func EncodeRawKVBatchPayload(ops []RawKVOperation) ([]byte, error) {
-	if len(ops) > int(^uint32(0)) {
+	if commandFrameIntExceedsUint32(len(ops)) {
 		return nil, ErrRecordTooLarge
 	}
 	total := rawKVBatchHeaderSize
@@ -380,7 +409,7 @@ func EncodeRawKVBatchPayload(ops []RawKVOperation) ([]byte, error) {
 		if op.Op == RawKVOpSetRID {
 			valueLen = 8
 		}
-		if len(op.Key) > int(^uint32(0)) || valueLen > int(^uint32(0)) {
+		if commandFrameIntExceedsUint32(len(op.Key)) || commandFrameIntExceedsUint32(valueLen) {
 			return nil, ErrRecordTooLarge
 		}
 		total += rawKVOpHeaderSize + len(op.Key) + valueLen
@@ -475,7 +504,7 @@ func ScanRawKVBatchPayload(payload []byte, visit func(op RawKVOp, key, value []b
 		}
 		key := payload[off : off+int(keyLen)]
 		off += int(keyLen)
-		if err := validateRawKVOperationShape(op, key, valueLen); err != nil {
+		if err := validateRawKVOperationShape(op, key, int(valueLen)); err != nil {
 			return err
 		}
 		value := payload[off : off+int(valueLen)]
@@ -504,17 +533,20 @@ func validateRawKVOperation(op *RawKVOperation) error {
 	if op == nil || op.Key == nil {
 		return ErrCorrupt
 	}
-	valueLen := uint32(len(op.Value))
+	valueLen := len(op.Value)
 	if op.Op == RawKVOpSetRID {
 		if op.RID == 0 || len(op.Value) != 0 {
 			return ErrCorrupt
 		}
 		valueLen = 8
 	}
+	if commandFrameIntExceedsUint32(valueLen) {
+		return ErrRecordTooLarge
+	}
 	return validateRawKVOperationShape(op.Op, op.Key, valueLen)
 }
 
-func validateRawKVOperationShape(op RawKVOp, key []byte, valueLen uint32) error {
+func validateRawKVOperationShape(op RawKVOp, key []byte, valueLen int) error {
 	if key == nil {
 		return ErrCorrupt
 	}
@@ -534,6 +566,263 @@ func validateRawKVOperationShape(op RawKVOp, key []byte, valueLen uint32) error 
 	default:
 		return ErrCorrupt
 	}
+}
+
+func EncodeCollectionInsertBatchByIDPayload(collection string, docs []CollectionDocument) ([]byte, error) {
+	if collection == "" {
+		return nil, fmt.Errorf("%w: empty collection", ErrCorrupt)
+	}
+	ordered, err := canonicalCollectionDocuments(docs)
+	if err != nil {
+		return nil, err
+	}
+	total, err := collectionBatchPayloadHeaderLen(collection, len(ordered))
+	if err != nil {
+		return nil, err
+	}
+	for i := range ordered {
+		doc := ordered[i]
+		if commandFrameIntExceedsUint32(len(doc.Document)) {
+			return nil, ErrRecordTooLarge
+		}
+		total, err = addCommandFrameEncodedSectionLen(total, 8+len(doc.ID)+len(doc.Document))
+		if err != nil {
+			return nil, err
+		}
+	}
+	payload := make([]byte, total)
+	off := encodeCollectionBatchHeader(payload, collection, len(ordered))
+	for i := range ordered {
+		doc := ordered[i]
+		binary.LittleEndian.PutUint32(payload[off:off+4], uint32(len(doc.ID)))
+		binary.LittleEndian.PutUint32(payload[off+4:off+8], uint32(len(doc.Document)))
+		off += 8
+		copy(payload[off:], doc.ID)
+		off += len(doc.ID)
+		copy(payload[off:], doc.Document)
+		off += len(doc.Document)
+	}
+	return payload, nil
+}
+
+func DecodeCollectionInsertBatchByIDPayload(payload []byte) (CollectionInsertBatchByIDPayload, error) {
+	collection, count, off, err := decodeCollectionBatchHeader(payload)
+	if err != nil {
+		return CollectionInsertBatchByIDPayload{}, err
+	}
+	if uint64(count)*8 > uint64(len(payload)-off) {
+		return CollectionInsertBatchByIDPayload{}, ErrCorrupt
+	}
+	docCount, err := commandPayloadCountToInt(count)
+	if err != nil {
+		return CollectionInsertBatchByIDPayload{}, err
+	}
+	docs := make([]CollectionDocument, 0, docCount)
+	for i := uint32(0); i < count; i++ {
+		if off+8 > len(payload) {
+			return CollectionInsertBatchByIDPayload{}, ErrCorrupt
+		}
+		idLen := binary.LittleEndian.Uint32(payload[off : off+4])
+		docLen := binary.LittleEndian.Uint32(payload[off+4 : off+8])
+		off += 8
+		if uint64(idLen)+uint64(docLen) > uint64(len(payload)-off) {
+			return CollectionInsertBatchByIDPayload{}, ErrCorrupt
+		}
+		id := payload[off : off+int(idLen)]
+		off += int(idLen)
+		doc := payload[off : off+int(docLen)]
+		off += int(docLen)
+		if len(id) == 0 {
+			return CollectionInsertBatchByIDPayload{}, ErrCorrupt
+		}
+		docs = append(docs, CollectionDocument{
+			ID:       cloneBytesPreserveEmpty(id),
+			Document: cloneBytesPreserveEmpty(doc),
+		})
+	}
+	if off != len(payload) {
+		return CollectionInsertBatchByIDPayload{}, ErrCorrupt
+	}
+	if err := validateStrictlyIncreasingCollectionIDsFromDocs(docs); err != nil {
+		return CollectionInsertBatchByIDPayload{}, err
+	}
+	return CollectionInsertBatchByIDPayload{Collection: collection, Documents: docs}, nil
+}
+
+func EncodeCollectionDeleteBatchByIDPayload(collection string, ids [][]byte) ([]byte, error) {
+	if collection == "" {
+		return nil, fmt.Errorf("%w: empty collection", ErrCorrupt)
+	}
+	ordered, err := canonicalCollectionIDs(ids)
+	if err != nil {
+		return nil, err
+	}
+	total, err := collectionBatchPayloadHeaderLen(collection, len(ordered))
+	if err != nil {
+		return nil, err
+	}
+	for _, id := range ordered {
+		total, err = addCommandFrameEncodedSectionLen(total, 4+len(id))
+		if err != nil {
+			return nil, err
+		}
+	}
+	payload := make([]byte, total)
+	off := encodeCollectionBatchHeader(payload, collection, len(ordered))
+	for _, id := range ordered {
+		binary.LittleEndian.PutUint32(payload[off:off+4], uint32(len(id)))
+		off += 4
+		copy(payload[off:], id)
+		off += len(id)
+	}
+	return payload, nil
+}
+
+func DecodeCollectionDeleteBatchByIDPayload(payload []byte) (CollectionDeleteBatchByIDPayload, error) {
+	collection, count, off, err := decodeCollectionBatchHeader(payload)
+	if err != nil {
+		return CollectionDeleteBatchByIDPayload{}, err
+	}
+	if uint64(count)*4 > uint64(len(payload)-off) {
+		return CollectionDeleteBatchByIDPayload{}, ErrCorrupt
+	}
+	idCount, err := commandPayloadCountToInt(count)
+	if err != nil {
+		return CollectionDeleteBatchByIDPayload{}, err
+	}
+	ids := make([][]byte, 0, idCount)
+	for i := uint32(0); i < count; i++ {
+		if off+4 > len(payload) {
+			return CollectionDeleteBatchByIDPayload{}, ErrCorrupt
+		}
+		idLen := binary.LittleEndian.Uint32(payload[off : off+4])
+		off += 4
+		if uint64(idLen) > uint64(len(payload)-off) {
+			return CollectionDeleteBatchByIDPayload{}, ErrCorrupt
+		}
+		id := payload[off : off+int(idLen)]
+		off += int(idLen)
+		if len(id) == 0 {
+			return CollectionDeleteBatchByIDPayload{}, ErrCorrupt
+		}
+		ids = append(ids, cloneBytesPreserveEmpty(id))
+	}
+	if off != len(payload) {
+		return CollectionDeleteBatchByIDPayload{}, ErrCorrupt
+	}
+	if err := validateStrictlyIncreasingCollectionIDs(ids); err != nil {
+		return CollectionDeleteBatchByIDPayload{}, err
+	}
+	return CollectionDeleteBatchByIDPayload{Collection: collection, IDs: ids}, nil
+}
+
+func commandPayloadCountToInt(count uint32) (int, error) {
+	maxInt := int(^uint(0) >> 1)
+	if uint64(count) > uint64(maxInt) {
+		return 0, ErrRecordTooLarge
+	}
+	return int(count), nil
+}
+
+func collectionBatchPayloadHeaderLen(collection string, count int) (int, error) {
+	if commandFrameIntExceedsUint32(len(collection)) || commandFrameIntExceedsUint32(count) {
+		return 0, ErrRecordTooLarge
+	}
+	return addCommandFrameEncodedSectionLen(2+4+4, len(collection))
+}
+
+func encodeCollectionBatchHeader(payload []byte, collection string, count int) int {
+	binary.LittleEndian.PutUint16(payload[0:2], 1)
+	binary.LittleEndian.PutUint32(payload[2:6], uint32(len(collection)))
+	binary.LittleEndian.PutUint32(payload[6:10], uint32(count))
+	copy(payload[10:], collection)
+	return 10 + len(collection)
+}
+
+func decodeCollectionBatchHeader(payload []byte) (collection string, count uint32, off int, err error) {
+	if len(payload) < 10 {
+		return "", 0, 0, ErrCorrupt
+	}
+	if binary.LittleEndian.Uint16(payload[0:2]) != 1 {
+		return "", 0, 0, ErrCommandWALUnsupportedVersion
+	}
+	nameLen := binary.LittleEndian.Uint32(payload[2:6])
+	count = binary.LittleEndian.Uint32(payload[6:10])
+	off = 10
+	if uint64(nameLen) > uint64(len(payload)-off) {
+		return "", 0, 0, ErrCorrupt
+	}
+	nameBytes := payload[off : off+int(nameLen)]
+	off += int(nameLen)
+	if len(nameBytes) == 0 {
+		return "", 0, 0, ErrCorrupt
+	}
+	return string(nameBytes), count, off, nil
+}
+
+func canonicalCollectionDocuments(docs []CollectionDocument) ([]CollectionDocument, error) {
+	if commandFrameIntExceedsUint32(len(docs)) {
+		return nil, ErrRecordTooLarge
+	}
+	ordered := make([]CollectionDocument, len(docs))
+	for i := range docs {
+		doc := docs[i]
+		if len(doc.ID) == 0 || doc.ID == nil || doc.Document == nil {
+			return nil, ErrCorrupt
+		}
+		if commandFrameIntExceedsUint32(len(doc.ID)) {
+			return nil, ErrRecordTooLarge
+		}
+		ordered[i] = doc
+	}
+	sort.Slice(ordered, func(i, j int) bool {
+		return bytes.Compare(ordered[i].ID, ordered[j].ID) < 0
+	})
+	if err := validateStrictlyIncreasingCollectionIDsFromDocs(ordered); err != nil {
+		return nil, err
+	}
+	return ordered, nil
+}
+
+func canonicalCollectionIDs(ids [][]byte) ([][]byte, error) {
+	if commandFrameIntExceedsUint32(len(ids)) {
+		return nil, ErrRecordTooLarge
+	}
+	ordered := make([][]byte, len(ids))
+	for i := range ids {
+		if len(ids[i]) == 0 || ids[i] == nil {
+			return nil, ErrCorrupt
+		}
+		if commandFrameIntExceedsUint32(len(ids[i])) {
+			return nil, ErrRecordTooLarge
+		}
+		ordered[i] = ids[i]
+	}
+	sort.Slice(ordered, func(i, j int) bool {
+		return bytes.Compare(ordered[i], ordered[j]) < 0
+	})
+	if err := validateStrictlyIncreasingCollectionIDs(ordered); err != nil {
+		return nil, err
+	}
+	return ordered, nil
+}
+
+func validateStrictlyIncreasingCollectionIDsFromDocs(docs []CollectionDocument) error {
+	for i := 1; i < len(docs); i++ {
+		if bytes.Compare(docs[i-1].ID, docs[i].ID) >= 0 {
+			return ErrCorrupt
+		}
+	}
+	return nil
+}
+
+func validateStrictlyIncreasingCollectionIDs(ids [][]byte) error {
+	for i := 1; i < len(ids); i++ {
+		if bytes.Compare(ids[i-1], ids[i]) >= 0 {
+			return ErrCorrupt
+		}
+	}
+	return nil
 }
 
 func cloneBytesPreserveEmpty(src []byte) []byte {
@@ -577,14 +866,14 @@ func externalRefsEncodedLen(refs []ExternalRef) (int, error) {
 	if len(refs) == 0 {
 		return 0, nil
 	}
-	if len(refs) > int(^uint32(0)) {
+	if commandFrameIntExceedsUint32(len(refs)) {
 		return 0, ErrRecordTooLarge
 	}
 	total := 4
 	maxInt := int(^uint(0) >> 1)
 	for i := range refs {
 		pathLen := len(refs[i].Path)
-		if pathLen > int(^uint32(0)) {
+		if commandFrameIntExceedsUint32(pathLen) {
 			return 0, ErrRecordTooLarge
 		}
 		if pathLen > maxInt-externalRefEncodedFixedSize {
@@ -596,7 +885,7 @@ func externalRefsEncodedLen(refs []ExternalRef) (int, error) {
 		}
 		total += n
 	}
-	if total > int(^uint32(0)) {
+	if commandFrameIntExceedsUint32(total) {
 		return 0, ErrRecordTooLarge
 	}
 	return total, nil
@@ -668,14 +957,14 @@ func commandExtensionsEncodedLen(exts []CommandExtension) (int, error) {
 	if len(exts) == 0 {
 		return 0, nil
 	}
-	if len(exts) > int(^uint32(0)) {
+	if commandFrameIntExceedsUint32(len(exts)) {
 		return 0, ErrRecordTooLarge
 	}
 	total := 4
 	maxInt := int(^uint(0) >> 1)
 	for i := range exts {
 		payloadLen := len(exts[i].Payload)
-		if payloadLen > int(^uint32(0)) {
+		if commandFrameIntExceedsUint32(payloadLen) {
 			return 0, ErrRecordTooLarge
 		}
 		if payloadLen > maxInt-commandExtensionEncodedFixedSize {
@@ -687,10 +976,14 @@ func commandExtensionsEncodedLen(exts []CommandExtension) (int, error) {
 		}
 		total += n
 	}
-	if total > int(^uint32(0)) {
+	if commandFrameIntExceedsUint32(total) {
 		return 0, ErrRecordTooLarge
 	}
 	return total, nil
+}
+
+func commandFrameIntExceedsUint32(n int) bool {
+	return n < 0 || uint64(n) > maxCommandFrameUint32
 }
 
 func decodeCommandExtensions(data []byte) ([]CommandExtension, error) {

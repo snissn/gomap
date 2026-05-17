@@ -8,6 +8,7 @@ import (
 	"strings"
 	"unsafe"
 
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/x/bsonx/bsoncore"
 )
@@ -55,6 +56,9 @@ var bsonSetBatchDocumentIDHashSeed = maphash.MakeSeed()
 func (c *Collection) UpdateBSONSet(documentID []byte, fields []BSONSetField) (bool, bool, error) {
 	if err := validateCollectionUpdateDocumentInput(c, documentID); err != nil {
 		return false, false, err
+	}
+	if c.commandWALActive(nil) {
+		return false, false, fmt.Errorf("%w: collection update requires update command WAL support", backenddb.ErrCommandWALUnsupported)
 	}
 	if err := c.validateBSONSetDocumentFormat(); err != nil {
 		return false, false, err
@@ -125,6 +129,9 @@ func (c *Collection) updateBSONSetBatch(items []BSONSetUpdateBatchItem, mode upd
 	}
 	if err := c.ensureWriteDomainOpen(); err != nil {
 		return nil, false, err
+	}
+	if c.commandWALActive(nil) {
+		return nil, false, fmt.Errorf("%w: collection update requires update command WAL support", backenddb.ErrCommandWALUnsupported)
 	}
 	if err := c.validateBSONSetDocumentFormat(); err != nil {
 		return nil, false, err

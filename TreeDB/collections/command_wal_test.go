@@ -1,0 +1,681 @@
+package collections
+
+import (
+	"bytes"
+	"errors"
+	"os"
+	"path/filepath"
+	"testing"
+
+	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
+	"go.mongodb.org/mongo-driver/v2/bson"
+)
+
+func TestCollectionCommandWALInsertBatchByIDPublishesAppliedLSN(t *testing.T) {
+	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatJSON,
+		},
+	})
+	d := openCollectionCommandWALDB(t, dir)
+	mgr := NewCollectionManager(d)
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("u1"), []byte("u2")}, [][]byte{
+		[]byte(`{"name":"Ada"}`),
+		[]byte(`{"name":"Grace"}`),
+	}); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	if got := d.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("AppliedCommandLSN=%d, want 1", got)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopen := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopen.Close() }()
+	reopened, err := NewCollectionManager(reopen).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection reopen: %v", err)
+	}
+	assertCollectionDocument(t, reopened, "u1", `{"name":"Ada"}`)
+	assertCollectionDocument(t, reopened, "u2", `{"name":"Grace"}`)
+	if got := reopen.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("AppliedCommandLSN after reopen=%d, want 1", got)
+	}
+}
+
+func TestCollectionCommandWALInsertByIDPublishesAppliedLSN(t *testing.T) {
+	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatJSON,
+		},
+	})
+	d := openCollectionCommandWALDB(t, dir)
+	mgr := NewCollectionManager(d)
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		_ = d.Close()
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	if _, err := col.Insert([]byte("u1"), []byte(`{"name":"Ada"}`)); err != nil {
+		_ = d.Close()
+		t.Fatalf("Insert: %v", err)
+	}
+	if got := d.State().AppliedCommandLSN; got != 1 {
+		_ = d.Close()
+		t.Fatalf("AppliedCommandLSN=%d, want 1", got)
+	}
+	frames := collectionCommandWALFrames(t, dir)
+	if len(frames) != 1 || frames[0].Kind != commitlog.CommandKindCollectionInsertBatchByID {
+		_ = d.Close()
+		t.Fatalf("command WAL frames=%+v, want one collection insert frame", frames)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopen := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopen.Close() }()
+	reopened, err := NewCollectionManager(reopen).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection reopen: %v", err)
+	}
+	assertCollectionDocument(t, reopened, "u1", `{"name":"Ada"}`)
+	if got := reopen.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("AppliedCommandLSN after reopen=%d, want 1", got)
+	}
+}
+
+func TestCollectionCommandWALInsertBatchByIDReplayRecoversUnappliedFrame(t *testing.T) {
+	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatJSON,
+		},
+	})
+	payload, err := commitlog.EncodeCollectionInsertBatchByIDPayload("users", []commitlog.CollectionDocument{
+		{ID: []byte("u2"), Document: []byte(`{"name":"Grace"}`)},
+		{ID: []byte("u1"), Document: []byte(`{"name":"Ada"}`)},
+	})
+	if err != nil {
+		t.Fatalf("EncodeCollectionInsertBatchByIDPayload: %v", err)
+	}
+	writeCollectionCommandWALFrame(t, dir, 1, commitlog.CommandKindCollectionInsertBatchByID, commitlog.PayloadFormatCollectionInsertBatchByIDV1, payload)
+
+	reopen := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopen.Close() }()
+	col, err := NewCollectionManager(reopen).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	assertCollectionDocument(t, col, "u1", `{"name":"Ada"}`)
+	assertCollectionDocument(t, col, "u2", `{"name":"Grace"}`)
+	if got := reopen.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("AppliedCommandLSN=%d, want 1", got)
+	}
+	if got := countCollectionCommandWALFrames(t, dir); got != 1 {
+		t.Fatalf("command WAL frames after replay=%d, want original frame only", got)
+	}
+}
+
+func TestCollectionCommandWALInsertBatchByIDReplayTemplateV1StoredDocument(t *testing.T) {
+	dir := t.TempDir()
+	d, err := backenddb.Open(backenddb.Options{
+		Dir:                    dir,
+		Durability:             backenddb.DurabilityWALOffRelaxed,
+		DisableBackgroundPrune: true,
+	})
+	if err != nil {
+		t.Fatalf("Open setup DB: %v", err)
+	}
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatTemplateV1,
+		},
+	}); err != nil {
+		_ = d.Close()
+		t.Fatalf("CreateCollection setup: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		_ = d.Close()
+		t.Fatalf("OpenCollection setup: %v", err)
+	}
+	encoder := &TemplateV1Encoder{}
+	seed := mustTemplateV1Document(t, []string{"name", "city"}, []any{"Ada", "HNL"})
+	if _, err := col.InsertBatchWithTemplateV1Encoder([][]byte{[]byte("seed")}, [][]byte{seed}, encoder); err != nil {
+		_ = d.Close()
+		t.Fatalf("InsertBatchWithTemplateV1Encoder setup: %v", err)
+	}
+	stored, err := encoder.EncodeDocument([]string{"name", "city"}, []any{"Grace", "NYC"})
+	if err != nil {
+		_ = d.Close()
+		t.Fatalf("EncodeDocument stored: %v", err)
+	}
+	if !bytes.HasPrefix(stored, []byte(templateV1StoredMagic)) {
+		_ = d.Close()
+		t.Fatalf("stored prefix=%q, want %q", stored[:min(len(stored), len(templateV1StoredMagic))], templateV1StoredMagic)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close setup DB: %v", err)
+	}
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+		t.Fatalf("SaveFormatConfig: %v", err)
+	}
+	payload, err := commitlog.EncodeCollectionInsertBatchByIDPayload("users", []commitlog.CollectionDocument{
+		{ID: []byte("u1"), Document: stored},
+	})
+	if err != nil {
+		t.Fatalf("EncodeCollectionInsertBatchByIDPayload: %v", err)
+	}
+	writeCollectionCommandWALFrame(t, dir, 1, commitlog.CommandKindCollectionInsertBatchByID, commitlog.PayloadFormatCollectionInsertBatchByIDV1, payload)
+
+	reopen := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopen.Close() }()
+	replayed, err := NewCollectionManager(reopen).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection replayed: %v", err)
+	}
+	got, err := replayed.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("Get replayed template doc: %v", err)
+	}
+	jsonDoc, err := replayed.StoredDocumentJSON(got)
+	if err != nil {
+		t.Fatalf("StoredDocumentJSON: %v", err)
+	}
+	if !bytes.Contains(jsonDoc, []byte(`"Grace"`)) || !bytes.Contains(jsonDoc, []byte(`"NYC"`)) {
+		t.Fatalf("materialized template doc=%s, want Grace/NYC", jsonDoc)
+	}
+	if got := reopen.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("AppliedCommandLSN=%d, want 1", got)
+	}
+}
+
+func TestCollectionCommandWALInsertBatchByIDTemplateV1NewShapeReplay(t *testing.T) {
+	meta := CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatTemplateV1,
+		},
+	}
+	doc := mustTemplateV1Document(t, []string{"name", "city"}, []any{"Ada", "SEA"})
+
+	updateDir := prepareCollectionCommandWALDir(t, meta)
+	updateDB := openCollectionCommandWALDB(t, updateDir)
+	updateCol, err := NewCollectionManager(updateDB).OpenCollection("users")
+	if err != nil {
+		_ = updateDB.Close()
+		t.Fatalf("OpenCollection update: %v", err)
+	}
+	if _, err := updateCol.InsertBatch([][]byte{[]byte("u1")}, [][]byte{doc}); err != nil {
+		_ = updateDB.Close()
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	if err := updateDB.Close(); err != nil {
+		t.Fatalf("Close update DB: %v", err)
+	}
+
+	frames := collectionCommandWALFrames(t, updateDir)
+	if len(frames) != 1 {
+		t.Fatalf("command WAL frames=%d, want 1", len(frames))
+	}
+	frame := frames[0]
+	if frame.Kind != commitlog.CommandKindCollectionInsertBatchByID {
+		t.Fatalf("frame kind=%d, want insert batch", frame.Kind)
+	}
+	payload, err := commitlog.DecodeCollectionInsertBatchByIDPayload(frame.Payload)
+	if err != nil {
+		t.Fatalf("DecodeCollectionInsertBatchByIDPayload: %v", err)
+	}
+	if len(payload.Documents) != 1 {
+		t.Fatalf("payload documents=%d, want 1", len(payload.Documents))
+	}
+	if bytes.HasPrefix(payload.Documents[0].Document, []byte(templateV1StoredMagic)) {
+		t.Fatalf("TemplateV1 insert WAL payload used stored document bytes; replay needs deterministic input envelope")
+	}
+
+	replayDir := prepareCollectionCommandWALDir(t, meta)
+	writeCollectionCommandWALFrame(t, replayDir, 1, commitlog.CommandKindCollectionInsertBatchByID, commitlog.PayloadFormatCollectionInsertBatchByIDV1, frame.Payload)
+	reopen := openCollectionCommandWALDB(t, replayDir)
+	defer func() { _ = reopen.Close() }()
+	replayed, err := NewCollectionManager(reopen).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection replay: %v", err)
+	}
+	got, err := replayed.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("Get replayed template doc: %v", err)
+	}
+	jsonDoc, err := replayed.StoredDocumentJSON(got)
+	if err != nil {
+		t.Fatalf("StoredDocumentJSON: %v", err)
+	}
+	if !bytes.Contains(jsonDoc, []byte(`"Ada"`)) || !bytes.Contains(jsonDoc, []byte(`"SEA"`)) {
+		t.Fatalf("materialized template doc=%s, want Ada/SEA", jsonDoc)
+	}
+	if got := reopen.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("AppliedCommandLSN=%d, want 1", got)
+	}
+}
+
+func TestCollectionCommandWALInsertBatchByIDReplayAdvancesEmptyFrame(t *testing.T) {
+	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatJSON,
+		},
+	})
+	payload, err := commitlog.EncodeCollectionInsertBatchByIDPayload("users", nil)
+	if err != nil {
+		t.Fatalf("EncodeCollectionInsertBatchByIDPayload: %v", err)
+	}
+	writeCollectionCommandWALFrame(t, dir, 1, commitlog.CommandKindCollectionInsertBatchByID, commitlog.PayloadFormatCollectionInsertBatchByIDV1, payload)
+
+	reopen := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopen.Close() }()
+	if got := reopen.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("AppliedCommandLSN=%d, want 1", got)
+	}
+}
+
+func TestCollectionCommandWALDeleteBatchByIDReplayIgnoresMissingIDs(t *testing.T) {
+	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatJSON,
+		},
+	}, collectionCommandWALSetupInsert{
+		ids: [][]byte{[]byte("u1"), []byte("u2")},
+		docs: [][]byte{
+			[]byte(`{"name":"Ada"}`),
+			[]byte(`{"name":"Grace"}`),
+		},
+	})
+	payload, err := commitlog.EncodeCollectionDeleteBatchByIDPayload("users", [][]byte{[]byte("u1"), []byte("missing")})
+	if err != nil {
+		t.Fatalf("EncodeCollectionDeleteBatchByIDPayload: %v", err)
+	}
+	writeCollectionCommandWALFrame(t, dir, 1, commitlog.CommandKindCollectionDeleteBatchByID, commitlog.PayloadFormatCollectionDeleteBatchByIDV1, payload)
+
+	reopen := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopen.Close() }()
+	col, err := NewCollectionManager(reopen).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	if got, err := col.Get([]byte("u1")); err != nil || got != nil {
+		t.Fatalf("u1=%q err=%v, want missing", got, err)
+	}
+	assertCollectionDocument(t, col, "u2", `{"name":"Grace"}`)
+	if got := reopen.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("AppliedCommandLSN=%d, want 1", got)
+	}
+}
+
+func TestCollectionCommandWALDeleteBatchByIDReplayAdvancesMissingOnlyFrame(t *testing.T) {
+	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatJSON,
+		},
+	}, collectionCommandWALSetupInsert{
+		ids: [][]byte{[]byte("u1")},
+		docs: [][]byte{
+			[]byte(`{"name":"Ada"}`),
+		},
+	})
+	payload, err := commitlog.EncodeCollectionDeleteBatchByIDPayload("users", [][]byte{[]byte("missing")})
+	if err != nil {
+		t.Fatalf("EncodeCollectionDeleteBatchByIDPayload: %v", err)
+	}
+	writeCollectionCommandWALFrame(t, dir, 1, commitlog.CommandKindCollectionDeleteBatchByID, commitlog.PayloadFormatCollectionDeleteBatchByIDV1, payload)
+
+	reopen := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopen.Close() }()
+	col, err := NewCollectionManager(reopen).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	assertCollectionDocument(t, col, "u1", `{"name":"Ada"}`)
+	if got := reopen.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("AppliedCommandLSN=%d, want 1", got)
+	}
+}
+
+func TestCollectionCommandWALDeleteBatchByIDReplayAdvancesRootlessNoopFrame(t *testing.T) {
+	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatJSON,
+		},
+	})
+	payload, err := commitlog.EncodeCollectionDeleteBatchByIDPayload("users", [][]byte{[]byte("missing")})
+	if err != nil {
+		t.Fatalf("EncodeCollectionDeleteBatchByIDPayload: %v", err)
+	}
+	writeCollectionCommandWALFrame(t, dir, 1, commitlog.CommandKindCollectionDeleteBatchByID, commitlog.PayloadFormatCollectionDeleteBatchByIDV1, payload)
+
+	reopen := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopen.Close() }()
+	if got := reopen.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("AppliedCommandLSN=%d, want 1", got)
+	}
+}
+
+func TestCollectionCommandWALDeleteBatchByIDPublishesMissingOnlyNoop(t *testing.T) {
+	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatJSON,
+		},
+	}, collectionCommandWALSetupInsert{
+		ids: [][]byte{[]byte("u1")},
+		docs: [][]byte{
+			[]byte(`{"name":"Ada"}`),
+		},
+	})
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col, err := NewCollectionManager(d).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	deleted, err := col.DeleteBatch([][]byte{[]byte("missing")})
+	if err != nil {
+		t.Fatalf("DeleteBatch missing only: %v", err)
+	}
+	if deleted != 0 {
+		t.Fatalf("deleted=%d, want 0", deleted)
+	}
+	assertCollectionDocument(t, col, "u1", `{"name":"Ada"}`)
+	if got := d.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("AppliedCommandLSN=%d, want 1", got)
+	}
+}
+
+func TestCollectionCommandWALDeleteDocumentByIDPublishesMissingNoop(t *testing.T) {
+	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatJSON,
+		},
+	}, collectionCommandWALSetupInsert{
+		ids: [][]byte{[]byte("u1")},
+		docs: [][]byte{
+			[]byte(`{"name":"Ada"}`),
+		},
+	})
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col, err := NewCollectionManager(d).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	deleted, err := col.DeleteDocument([]byte("missing"))
+	if err != nil {
+		t.Fatalf("DeleteDocument missing: %v", err)
+	}
+	if deleted {
+		t.Fatal("deleted=true, want false")
+	}
+	assertCollectionDocument(t, col, "u1", `{"name":"Ada"}`)
+	if got := d.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("AppliedCommandLSN=%d, want 1", got)
+	}
+}
+
+func TestCollectionCommandWALRejectsCatalogCreate(t *testing.T) {
+	dir := t.TempDir()
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+		t.Fatalf("SaveFormatConfig: %v", err)
+	}
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	_, err := NewCollectionManager(d).CreateCollection(&CollectionMeta{Name: "users"})
+	if !errors.Is(err, backenddb.ErrCommandWALUnsupported) {
+		t.Fatalf("CreateCollection error=%v, want ErrCommandWALUnsupported", err)
+	}
+}
+
+func TestCollectionCommandWALCreateCollectionExistingNoop(t *testing.T) {
+	meta := CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatJSON,
+		},
+	}
+	dir := prepareCollectionCommandWALDir(t, meta)
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	got, err := NewCollectionManager(d).CreateCollection(&meta)
+	if err != nil {
+		t.Fatalf("CreateCollection existing: %v", err)
+	}
+	if got.Name != meta.Name {
+		t.Fatalf("existing metadata=%+v want collection name %q", got, meta.Name)
+	}
+	if got := d.State().AppliedCommandLSN; got != 0 {
+		t.Fatalf("AppliedCommandLSN=%d, want 0 for existing no-op", got)
+	}
+	if got := countCollectionCommandWALFrames(t, dir); got != 0 {
+		t.Fatalf("command WAL frames=%d, want 0 for existing no-op", got)
+	}
+}
+
+func TestCollectionCommandWALRejectsCatalogIndexMutations(t *testing.T) {
+	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatJSON,
+		},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city", ValueType: IndexValueString}},
+	})
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col, err := NewCollectionManager(d).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	if _, err := col.CreateIndex(IndexDefinition{Name: "email", Field: "email", ValueType: IndexValueString}); !errors.Is(err, backenddb.ErrCommandWALUnsupported) {
+		t.Fatalf("CreateIndex error=%v, want ErrCommandWALUnsupported", err)
+	}
+	if _, err := col.DropIndex("city"); !errors.Is(err, backenddb.ErrCommandWALUnsupported) {
+		t.Fatalf("DropIndex error=%v, want ErrCommandWALUnsupported", err)
+	}
+	if _, err := col.DropIndexes([]string{"city"}); !errors.Is(err, backenddb.ErrCommandWALUnsupported) {
+		t.Fatalf("DropIndexes error=%v, want ErrCommandWALUnsupported", err)
+	}
+	if _, err := col.DropAllIndexes(); !errors.Is(err, backenddb.ErrCommandWALUnsupported) {
+		t.Fatalf("DropAllIndexes error=%v, want ErrCommandWALUnsupported", err)
+	}
+}
+
+func TestCollectionCommandWALRejectsUnsupportedDocumentMutators(t *testing.T) {
+	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatJSON,
+		},
+	}, collectionCommandWALSetupInsert{
+		ids: [][]byte{[]byte("u1")},
+		docs: [][]byte{
+			[]byte(`{"name":"Ada"}`),
+		},
+	})
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col, err := NewCollectionManager(d).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	if _, err := col.Replace([]byte("u1"), []byte(`{"name":"Ada Lovelace"}`)); !errors.Is(err, backenddb.ErrCommandWALUnsupported) {
+		t.Fatalf("Replace error=%v, want ErrCommandWALUnsupported", err)
+	}
+	if _, _, err := col.Update([]byte("u1"), func([]byte) ([]byte, bool, error) {
+		return []byte(`{"name":"Ada Lovelace"}`), true, nil
+	}); !errors.Is(err, backenddb.ErrCommandWALUnsupported) {
+		t.Fatalf("Update error=%v, want ErrCommandWALUnsupported", err)
+	}
+	if _, err := col.UpdateBatch([]UpdateBatchItem{{
+		DocumentID: []byte("u1"),
+		Update: func([]byte) ([]byte, bool, error) {
+			return []byte(`{"name":"Ada Lovelace"}`), true, nil
+		},
+	}}); !errors.Is(err, backenddb.ErrCommandWALUnsupported) {
+		t.Fatalf("UpdateBatch error=%v, want ErrCommandWALUnsupported", err)
+	}
+}
+
+func TestCollectionCommandWALRejectsUnsupportedBSONSetMutators(t *testing.T) {
+	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatBSON,
+		},
+	}, collectionCommandWALSetupInsert{
+		ids: [][]byte{[]byte("u1")},
+		docs: [][]byte{
+			mustBSONCollectionDocument(t, bson.D{{Key: "name", Value: "Ada"}, {Key: "city", Value: "hnl"}}),
+		},
+	})
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col, err := NewCollectionManager(d).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	fields := []BSONSetField{{Key: "city", Value: mustBSONRawValue(t, "sea")}}
+	if _, _, err := col.UpdateBSONSet([]byte("u1"), fields); !errors.Is(err, backenddb.ErrCommandWALUnsupported) {
+		t.Fatalf("UpdateBSONSet error=%v, want ErrCommandWALUnsupported", err)
+	}
+	if _, _, err := col.UpdateBSONSetBatchIfNoSecondaryUniqueIndexChanges([]BSONSetUpdateBatchItem{{DocumentID: []byte("u1"), Fields: fields}}); !errors.Is(err, backenddb.ErrCommandWALUnsupported) {
+		t.Fatalf("UpdateBSONSetBatchIfNoSecondaryUniqueIndexChanges error=%v, want ErrCommandWALUnsupported", err)
+	}
+}
+
+type collectionCommandWALSetupInsert struct {
+	ids  [][]byte
+	docs [][]byte
+}
+
+func prepareCollectionCommandWALDir(t *testing.T, meta CollectionMeta, inserts ...collectionCommandWALSetupInsert) string {
+	t.Helper()
+	dir := t.TempDir()
+	d, err := backenddb.Open(backenddb.Options{
+		Dir:                    dir,
+		Durability:             backenddb.DurabilityWALOffRelaxed,
+		DisableBackgroundPrune: true,
+	})
+	if err != nil {
+		t.Fatalf("Open setup DB: %v", err)
+	}
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&meta); err != nil {
+		_ = d.Close()
+		t.Fatalf("CreateCollection setup: %v", err)
+	}
+	col, err := mgr.OpenCollection(meta.Name)
+	if err != nil {
+		_ = d.Close()
+		t.Fatalf("OpenCollection setup: %v", err)
+	}
+	for _, insert := range inserts {
+		if _, err := col.InsertBatch(insert.ids, insert.docs); err != nil {
+			_ = d.Close()
+			t.Fatalf("InsertBatch setup: %v", err)
+		}
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close setup DB: %v", err)
+	}
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+		t.Fatalf("SaveFormatConfig: %v", err)
+	}
+	return dir
+}
+
+func openCollectionCommandWALDB(t *testing.T, dir string) *backenddb.DB {
+	t.Helper()
+	d, err := backenddb.Open(backenddb.Options{Dir: dir, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open command WAL DB: %v", err)
+	}
+	return d
+}
+
+func writeCollectionCommandWALFrame(t *testing.T, dir string, lsn uint64, kind commitlog.CommandKind, format commitlog.PayloadFormat, payload []byte) {
+	t.Helper()
+	walDir := backenddb.WALDirPath(dir)
+	if err := os.MkdirAll(walDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll wal: %v", err)
+	}
+	path := filepath.Join(walDir, commitlog.CommandSegmentName(0, 1))
+	w, err := commitlog.NewWriter(path)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	if err := w.AppendCommand(commitlog.CommandEnvelope{
+		LSN:           lsn,
+		Kind:          kind,
+		Scope:         commitlog.CommandScopeCollection,
+		PayloadFormat: format,
+		Payload:       payload,
+	}); err != nil {
+		_ = w.Close()
+		t.Fatalf("AppendCommand: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close writer: %v", err)
+	}
+}
+
+func countCollectionCommandWALFrames(t *testing.T, dir string) int {
+	t.Helper()
+	return len(collectionCommandWALFrames(t, dir))
+}
+
+func collectionCommandWALFrames(t *testing.T, dir string) []commitlog.CommandEnvelope {
+	t.Helper()
+	walDir := backenddb.WALDirPath(dir)
+	entries, err := os.ReadDir(walDir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		t.Fatalf("ReadDir wal: %v", err)
+	}
+	paths := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || !commitlog.IsCommandSegmentName(entry.Name()) {
+			continue
+		}
+		paths = append(paths, filepath.Join(walDir, entry.Name()))
+	}
+	frames, err := commitlog.ScanCommandFrameSegments(paths, commitlog.Options{})
+	if err != nil {
+		t.Fatalf("ScanCommandFrameSegments: %v", err)
+	}
+	return frames
+}
+
+func assertCollectionDocument(t *testing.T, col *Collection, id string, want string) {
+	t.Helper()
+	got, err := col.Get([]byte(id))
+	if err != nil {
+		t.Fatalf("Get(%q): %v", id, err)
+	}
+	if !bytes.Equal(got, []byte(want)) {
+		t.Fatalf("Get(%q)=%q, want %q", id, got, want)
+	}
+}

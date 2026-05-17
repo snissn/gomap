@@ -516,13 +516,23 @@ bytes Preconditions[PreconditionsLen]
 bytes ResultAssertions[ResultAssertionsLen]
 ```
 
-PR1 command kinds:
+Current command kinds:
 
-| Value | Kind | Scope | Payload format | PR1 status |
+| Value | Kind | Scope | Payload format | Status |
 |---:|---|---|---|---|
-| 1 | `RawKVBatch` | raw KV | `RawKVBatchV1` | encoded and fixture-tested; production raw writes stay legacy until PR3 |
-| 100 | `CollectionInsertBatchByID` | collection | native-wire deterministic placeholder | fixture placeholder only |
-| 200 | `CatalogMutationPlaceholder` | catalog | native-wire deterministic placeholder | fixture placeholder only |
+| 1 | `RawKVBatch` | raw KV | `RawKVBatchV1` | typed raw key/value command batch |
+| 100 | `CollectionInsertBatchByID` | collection | `CollectionInsertBatchByIDV1` | deterministic collection insert/upsert-by-id batch |
+| 101 | `CollectionDeleteBatchByID` | collection | `CollectionDeleteBatchByIDV1` | deterministic collection delete-by-id batch |
+| 200 | `CatalogMutationPlaceholder` | catalog | native-wire deterministic placeholder | reserved placeholder until catalog command payloads land |
+
+Current payload format IDs:
+
+| Value | Payload format |
+|---:|---|
+| 1 | `RawKVBatchV1` |
+| 2 | `NativeWireDeterministic` |
+| 3 | `CollectionInsertBatchByIDV1` |
+| 4 | `CollectionDeleteBatchByIDV1` |
 
 `RawKVBatchV1` payload:
 
@@ -542,6 +552,40 @@ bytes Value[ValueLen]
 A `RawKVBatch` command frame is one atomic command: one frame, one `LSN`, and
 all contained operations decode as one batch. Delete operations require
 `ValueLen=0`.
+
+`CollectionInsertBatchByIDV1` payload:
+
+```text
+u16 Version        // 1
+u32 CollectionLen
+u32 DocumentCount
+bytes Collection[CollectionLen]
+Document[DocumentCount]
+
+Document:
+u32 IDLen
+u32 DocumentLen
+bytes ID[IDLen]
+bytes Document[DocumentLen]
+```
+
+`CollectionDeleteBatchByIDV1` payload:
+
+```text
+u16 Version        // 1
+u32 CollectionLen
+u32 IDCount
+bytes Collection[CollectionLen]
+ID[IDCount]
+
+ID:
+u32 IDLen
+bytes ID[IDLen]
+```
+
+Collection batch payloads require a non-empty collection name and non-empty
+document IDs. Encoders canonicalize entries by strictly increasing document ID
+before writing the payload, and decoders reject duplicate or out-of-order IDs.
 
 `ExternalRefs`, `Preconditions`, and `ResultAssertions` are length-delimited
 sections so PR1 can harden framing before replay uses them. The PR1 external-ref

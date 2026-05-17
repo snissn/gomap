@@ -82,25 +82,85 @@ func TestCommandWALRawKVBatchPreservesEmptySetValue(t *testing.T) {
 	}
 }
 
+func TestCommandWALCollectionPayloadDecodeBoundsCountBeforeAllocation(t *testing.T) {
+	payload := make([]byte, 10+len("users"))
+	encodeCollectionBatchHeader(payload, "users", int(^uint32(0)))
+	if _, err := DecodeCollectionInsertBatchByIDPayload(payload); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("DecodeCollectionInsertBatchByIDPayload huge count error=%v, want ErrCorrupt", err)
+	}
+	if _, err := DecodeCollectionDeleteBatchByIDPayload(payload); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("DecodeCollectionDeleteBatchByIDPayload huge count error=%v, want ErrCorrupt", err)
+	}
+}
+
 func TestCommandWALFormatGoldenV1CollectionInsertBatchByID(t *testing.T) {
+	payload, err := EncodeCollectionInsertBatchByIDPayload("users", []CollectionDocument{
+		{ID: []byte("u2"), Document: []byte(`{"name":"Grace"}`)},
+		{ID: []byte("u1"), Document: []byte(`{"name":"Ada"}`)},
+	})
+	if err != nil {
+		t.Fatalf("EncodeCollectionInsertBatchByIDPayload: %v", err)
+	}
 	env := CommandEnvelope{
 		LSN:           11,
 		Kind:          CommandKindCollectionInsertBatchByID,
 		Scope:         CommandScopeCollection,
-		PayloadFormat: PayloadFormatNativeWireDeterministic,
-		Payload:       []byte("native-wire-placeholder:collection-insert-by-id"),
+		PayloadFormat: PayloadFormatCollectionInsertBatchByIDV1,
+		Payload:       payload,
 	}
 	frame, err := EncodeCommandFrame(env)
 	if err != nil {
 		t.Fatalf("EncodeCommandFrame: %v", err)
 	}
-	assertGoldenHex(t, "command_wal_v1_collection_insert_placeholder.hex", frame)
+	assertGoldenHex(t, "command_wal_v1_collection_insert_by_id.hex", frame)
 	got, err := DecodeCommandFrame(frame)
 	if err != nil {
 		t.Fatalf("DecodeCommandFrame: %v", err)
 	}
-	if got.Kind != CommandKindCollectionInsertBatchByID || got.PayloadFormat != PayloadFormatNativeWireDeterministic {
+	if got.Kind != CommandKindCollectionInsertBatchByID || got.PayloadFormat != PayloadFormatCollectionInsertBatchByIDV1 {
 		t.Fatalf("decoded placeholder mismatch: %+v", got)
+	}
+	decoded, err := DecodeCollectionInsertBatchByIDPayload(got.Payload)
+	if err != nil {
+		t.Fatalf("DecodeCollectionInsertBatchByIDPayload: %v", err)
+	}
+	if decoded.Collection != "users" || len(decoded.Documents) != 2 ||
+		string(decoded.Documents[0].ID) != "u1" || string(decoded.Documents[0].Document) != `{"name":"Ada"}` ||
+		string(decoded.Documents[1].ID) != "u2" || string(decoded.Documents[1].Document) != `{"name":"Grace"}` {
+		t.Fatalf("decoded collection insert payload=%+v", decoded)
+	}
+}
+
+func TestCommandWALFormatGoldenV1CollectionDeleteBatchByID(t *testing.T) {
+	payload, err := EncodeCollectionDeleteBatchByIDPayload("users", [][]byte{[]byte("u2"), []byte("u1")})
+	if err != nil {
+		t.Fatalf("EncodeCollectionDeleteBatchByIDPayload: %v", err)
+	}
+	env := CommandEnvelope{
+		LSN:           12,
+		Kind:          CommandKindCollectionDeleteBatchByID,
+		Scope:         CommandScopeCollection,
+		PayloadFormat: PayloadFormatCollectionDeleteBatchByIDV1,
+		Payload:       payload,
+	}
+	frame, err := EncodeCommandFrame(env)
+	if err != nil {
+		t.Fatalf("EncodeCommandFrame: %v", err)
+	}
+	assertGoldenHex(t, "command_wal_v1_collection_delete_by_id.hex", frame)
+	got, err := DecodeCommandFrame(frame)
+	if err != nil {
+		t.Fatalf("DecodeCommandFrame: %v", err)
+	}
+	if got.Kind != CommandKindCollectionDeleteBatchByID || got.PayloadFormat != PayloadFormatCollectionDeleteBatchByIDV1 {
+		t.Fatalf("decoded collection delete mismatch: %+v", got)
+	}
+	decoded, err := DecodeCollectionDeleteBatchByIDPayload(got.Payload)
+	if err != nil {
+		t.Fatalf("DecodeCollectionDeleteBatchByIDPayload: %v", err)
+	}
+	if decoded.Collection != "users" || len(decoded.IDs) != 2 || string(decoded.IDs[0]) != "u1" || string(decoded.IDs[1]) != "u2" {
+		t.Fatalf("decoded collection delete payload=%+v", decoded)
 	}
 }
 

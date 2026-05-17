@@ -1,0 +1,55 @@
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/collections
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+                                                                       │ artifacts/command-wal/pr4/collection-insert-delete-microbench.txt │
+                                                                       │                              sec/op                               │
+CollectionCommandWALInsertBatchByID/indexed=false/command_wal=false-12                                                        106.2µ ± ∞ ¹
+CollectionCommandWALInsertBatchByID/indexed=false/command_wal=true-12                                                         146.6µ ± ∞ ¹
+CollectionCommandWALInsertBatchByID/indexed=true/command_wal=false-12                                                         265.5µ ± ∞ ¹
+CollectionCommandWALInsertBatchByID/indexed=true/command_wal=true-12                                                          266.8µ ± ∞ ¹
+CollectionCommandWALDeleteBatchByID/indexed=false/command_wal=false-12                                                        147.7µ ± ∞ ¹
+CollectionCommandWALDeleteBatchByID/indexed=false/command_wal=true-12                                                         158.5µ ± ∞ ¹
+CollectionCommandWALDeleteBatchByID/indexed=true/command_wal=false-12                                                         313.9µ ± ∞ ¹
+CollectionCommandWALDeleteBatchByID/indexed=true/command_wal=true-12                                                          334.0µ ± ∞ ¹
+geomean                                                                                                                       201.4µ
+¹ need >= 6 samples for confidence interval at level 0.95
+
+                                                                       │ artifacts/command-wal/pr4/collection-insert-delete-microbench.txt │
+                                                                       │                              docs/s                               │
+CollectionCommandWALInsertBatchByID/indexed=false/command_wal=false-12                                                        1.205M ± ∞ ¹
+CollectionCommandWALInsertBatchByID/indexed=false/command_wal=true-12                                                         873.2k ± ∞ ¹
+CollectionCommandWALInsertBatchByID/indexed=true/command_wal=false-12                                                         482.1k ± ∞ ¹
+CollectionCommandWALInsertBatchByID/indexed=true/command_wal=true-12                                                          479.8k ± ∞ ¹
+CollectionCommandWALDeleteBatchByID/indexed=false/command_wal=false-12                                                        866.9k ± ∞ ¹
+CollectionCommandWALDeleteBatchByID/indexed=false/command_wal=true-12                                                         807.8k ± ∞ ¹
+CollectionCommandWALDeleteBatchByID/indexed=true/command_wal=false-12                                                         407.8k ± ∞ ¹
+CollectionCommandWALDeleteBatchByID/indexed=true/command_wal=true-12                                                          383.2k ± ∞ ¹
+geomean                                                                                                                       635.6k
+¹ need >= 6 samples for confidence interval at level 0.95
+
+                                                                       │ artifacts/command-wal/pr4/collection-insert-delete-microbench.txt │
+                                                                       │                               B/op                                │
+CollectionCommandWALInsertBatchByID/indexed=false/command_wal=false-12                                                       45.25Ki ± ∞ ¹
+CollectionCommandWALInsertBatchByID/indexed=false/command_wal=true-12                                                        100.8Ki ± ∞ ¹
+CollectionCommandWALInsertBatchByID/indexed=true/command_wal=false-12                                                        95.61Ki ± ∞ ¹
+CollectionCommandWALInsertBatchByID/indexed=true/command_wal=true-12                                                         150.9Ki ± ∞ ¹
+CollectionCommandWALDeleteBatchByID/indexed=false/command_wal=false-12                                                       67.68Ki ± ∞ ¹
+CollectionCommandWALDeleteBatchByID/indexed=false/command_wal=true-12                                                        71.62Ki ± ∞ ¹
+CollectionCommandWALDeleteBatchByID/indexed=true/command_wal=false-12                                                        155.3Ki ± ∞ ¹
+CollectionCommandWALDeleteBatchByID/indexed=true/command_wal=true-12                                                         145.5Ki ± ∞ ¹
+geomean                                                                                                                      95.99Ki
+¹ need >= 6 samples for confidence interval at level 0.95
+
+                                                                       │ artifacts/command-wal/pr4/collection-insert-delete-microbench.txt │
+                                                                       │                             allocs/op                             │
+CollectionCommandWALInsertBatchByID/indexed=false/command_wal=false-12                                                         819.0 ± ∞ ¹
+CollectionCommandWALInsertBatchByID/indexed=false/command_wal=true-12                                                         1.343k ± ∞ ¹
+CollectionCommandWALInsertBatchByID/indexed=true/command_wal=false-12                                                          940.0 ± ∞ ¹
+CollectionCommandWALInsertBatchByID/indexed=true/command_wal=true-12                                                          1.464k ± ∞ ¹
+CollectionCommandWALDeleteBatchByID/indexed=false/command_wal=false-12                                                        1.111k ± ∞ ¹
+CollectionCommandWALDeleteBatchByID/indexed=false/command_wal=true-12                                                         1.354k ± ∞ ¹
+CollectionCommandWALDeleteBatchByID/indexed=true/command_wal=false-12                                                         2.212k ± ∞ ¹
+CollectionCommandWALDeleteBatchByID/indexed=true/command_wal=true-12                                                          2.444k ± ∞ ¹
+geomean                                                                                                                       1.369k
+¹ need >= 6 samples for confidence interval at level 0.95
