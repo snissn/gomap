@@ -2526,8 +2526,8 @@ func TestCollectionVectorIndexNativeDeltaRejectsStalePersistedRoot(t *testing.T)
 	if staleIndex == nil {
 		t.Fatal("handle B did not keep loaded vector index registered")
 	}
-	if _, err := staleIndex.SaveNativeSnapshot(); !errors.Is(err, errVectorIndexStaleNativeRoot) {
-		t.Fatalf("stale full snapshot save err=%v want stale native root", err)
+	if staleStatus, err := staleIndex.SaveNativeSnapshot(); err != nil || staleStatus.Loaded || staleStatus.ExactFallbackReason != vectorIndexFallbackStaleRuntimeIndex {
+		t.Fatalf("stale full snapshot save status=%+v err=%v, want ignored stale runtime", staleStatus, err)
 	}
 
 	if _, err := handleB.InsertBatch(
@@ -2536,8 +2536,8 @@ func TestCollectionVectorIndexNativeDeltaRejectsStalePersistedRoot(t *testing.T)
 	); err != nil {
 		t.Fatalf("insert through handle B: %v", err)
 	}
-	if err := handleB.Flush(); !errors.Is(err, errVectorIndexStaleNativeRoot) {
-		t.Fatalf("flush handle B err=%v want stale native root", err)
+	if err := handleB.Flush(); err != nil {
+		t.Fatalf("flush stale handle B: %v", err)
 	}
 	loaded, status, err := handleA.LoadVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
 	if err != nil {
@@ -2615,8 +2615,8 @@ func TestCollectionVectorIndexNativeFullSaveRejectsPreRootRegisteredHandle(t *te
 		t.Fatalf("fresh save status=%+v", freshStatus)
 	}
 
-	if _, err := staleIndex.SaveNativeSnapshot(); !errors.Is(err, errVectorIndexStaleNativeRoot) {
-		t.Fatalf("stale pre-root full snapshot save err=%v want stale native root", err)
+	if staleStatus, err := staleIndex.SaveNativeSnapshot(); err != nil || staleStatus.Loaded || staleStatus.ExactFallbackReason != vectorIndexFallbackStaleRuntimeIndex {
+		t.Fatalf("stale pre-root full snapshot save status=%+v err=%v, want ignored stale runtime", staleStatus, err)
 	}
 	loaded, status, err := freshCol.LoadVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
 	if err != nil {
@@ -2698,8 +2698,8 @@ func TestCollectionVectorIndexNativeFullSaveRejectsDroppedRecreatedRoot(t *testi
 	if staleIndex == nil {
 		t.Fatal("stale collection did not keep loaded vector index registered")
 	}
-	if _, err := staleIndex.SaveNativeSnapshot(); !errors.Is(err, errVectorIndexStaleNativeRoot) {
-		t.Fatalf("stale full snapshot save err=%v want stale native root", err)
+	if staleStatus, err := staleIndex.SaveNativeSnapshot(); err != nil || staleStatus.Loaded || staleStatus.ExactFallbackReason != vectorIndexFallbackStaleRuntimeIndex {
+		t.Fatalf("stale full snapshot save status=%+v err=%v, want ignored stale runtime", staleStatus, err)
 	}
 	if _, status, err := freshCol.LoadVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def)); err != nil {
 		t.Fatalf("reload recreated empty root: %v", err)
