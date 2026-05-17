@@ -102,6 +102,7 @@ var (
 	treedbIndexPackedValuePtr             = flag.Bool("treedb-index-packed-valueptr", false, "TreeDB: enable packed 12-byte ValuePtr encoding for pointer entries in leaf pages")
 	treedbIndexInternalBaseDelta          = flag.Bool("treedb-index-internal-base-delta", false, "TreeDB: enable internal base-delta encoding")
 	treedbIndexOuterLeavesInVlog          = flag.Bool("treedb-index-outer-leaves-in-vlog", true, "TreeDB: store B+Tree leaf pages (outer leaves) in the value log instead of index.db")
+	treedbCommandWALStatsScan             = flag.Bool("treedb-command-wal-stats-scan", false, "TreeDB command-WAL backend: scan WAL segments in Stats for diagnostic proof counters")
 
 	treedbDisableWAL             = flag.Bool("treedb-disable-wal", false, "TreeDB: disable journal/redo log while keeping value-log pointers (unsafe)")
 	treedbRelaxedSync            = flag.Bool("treedb-relaxed-sync", false, "TreeDB: relaxed sync (unsafe)")
@@ -118,6 +119,8 @@ func init() {
 	RegisterDB("treedb", NewTreeDB)
 	RegisterAlias("treedbcached", "treedb")
 	RegisterHiddenDB("treedb_backend", NewTreeDBBackend)
+	RegisterHiddenDB("treedb_backend_command_wal", NewTreeDBBackendCommandWAL)
+	RegisterAlias("treedb_command_wal", "treedb_backend_command_wal")
 	RegisterHiddenDB("treedb_vlog_off", NewTreeDBVlogOff)
 	RegisterHiddenDB("treedb_vlog_dict", NewTreeDBVlogDict)
 	RegisterHiddenDB("treedb_vlog_block_snappy", NewTreeDBVlogBlockSnappy)
@@ -555,10 +558,19 @@ func resolveIndexOptimizationBool(flagName string, flagValue bool, compositeValu
 	return flagValue
 }
 
+type treeDBOptionsBuildConfig struct {
+	forceWALOn bool
+}
+
 func buildTreeDBOptions(dir string) (treedb.Options, treeDBOptionsReport, error) {
+	return buildTreeDBOptionsWithConfig(dir, treeDBOptionsBuildConfig{})
+}
+
+func buildTreeDBOptionsWithConfig(dir string, cfg treeDBOptionsBuildConfig) (treedb.Options, treeDBOptionsReport, error) {
 	treedbcaching.SetIteratorDebug(*treedbIterDebug)
 
-	if !*treedbAllowUnsafe && (*treedbDisableWAL || *treedbRelaxedSync || *treedbDisableReadChecksum) {
+	disableWALEffective := *treedbDisableWAL && !cfg.forceWALOn
+	if !*treedbAllowUnsafe && (disableWALEffective || *treedbRelaxedSync || *treedbDisableReadChecksum) {
 		return treedb.Options{}, treeDBOptionsReport{}, fmt.Errorf("TreeDB: unsafe flags require -treedb-allow-unsafe")
 	}
 	maintenanceMode, err := normalizeTreeDBMaintenanceMode(*treedbMaintenanceMode)
@@ -567,7 +579,7 @@ func buildTreeDBOptions(dir string) (treedb.Options, treeDBOptionsReport, error)
 	}
 
 	durability := treedb.DurabilityDurable
-	if *treedbDisableWAL {
+	if disableWALEffective {
 		durability = treedb.DurabilityWALOffRelaxed
 	} else if *treedbRelaxedSync {
 		durability = treedb.DurabilityWALOnRelaxed
@@ -595,9 +607,11 @@ func buildTreeDBOptions(dir string) (treedb.Options, treeDBOptionsReport, error)
 	if leafPrefixEffective && columnarLeavesEffective {
 		notes = append(notes, "leaf_prefix_compression + index_columnar_leaves: enabling combined columnar+prefix leaf encoding for new pages")
 	}
-	if *treedbDisableWAL && *treedbRelaxedSync {
+	if disableWALEffective && *treedbRelaxedSync {
 		// This is not an error, but it can be confusing. Document precedence.
 		notes = append(notes, "disable_wal takes precedence over relaxed_sync (durability=wal_off_relaxed)")
+	} else if cfg.forceWALOn && *treedbDisableWAL {
+		notes = append(notes, "command_wal_v1 forces WAL on; ignoring -treedb-disable-wal for this variant")
 	}
 	if packedValuePtrEffective {
 		notes = append(notes, "index_packed_valueptr uses a packed 12B leaf ValuePtr encoding (u32 offset cap; cached mode rotates value-log segments automatically)")

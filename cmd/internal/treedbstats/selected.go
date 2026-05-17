@@ -25,6 +25,10 @@ func isSelectedKey(key string) bool {
 	switch {
 	case key == "treedb.commit_seq":
 		return true
+	case key == "treedb.applied_command_lsn":
+		return true
+	case strings.HasPrefix(key, "treedb.command_wal."):
+		return true
 	case strings.HasPrefix(key, "treedb.cache.vlog_mmap."):
 		return true
 	case strings.HasPrefix(key, "treedb.vlog.mmap"):
