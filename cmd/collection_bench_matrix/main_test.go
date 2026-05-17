@@ -26,17 +26,17 @@ func TestBuildMatrixCellsDefaults(t *testing.T) {
 		names[cell.Name] = cell
 	}
 	for _, want := range []string{
-		"treedb_production_fast_json_data_vlog_index_pager",
-		"treedb_production_fast_json_data_vlog_index_vlog",
-		"treedb_production_fast_template_v1_data_vlog_index_pager",
-		"treedb_production_fast_template_v1_data_vlog_index_vlog",
+		"treedb_production_wal_on_fast_json_data_vlog_index_pager",
+		"treedb_production_wal_on_fast_json_data_vlog_index_vlog",
+		"treedb_production_wal_on_fast_template_v1_data_vlog_index_pager",
+		"treedb_production_wal_on_fast_template_v1_data_vlog_index_vlog",
 		"sqlite_wal_normal",
 	} {
 		if _, ok := names[want]; !ok {
 			t.Fatalf("missing default cell %q in %#v", want, cells)
 		}
 	}
-	tree := names["treedb_production_fast_template_v1_data_vlog_index_vlog"]
+	tree := names["treedb_production_wal_on_fast_template_v1_data_vlog_index_vlog"]
 	if tree.ExecutionPath != "native-fastpath" {
 		t.Fatalf("tree execution path=%q", tree.ExecutionPath)
 	}
