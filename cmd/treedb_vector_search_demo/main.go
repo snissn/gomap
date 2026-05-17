@@ -425,6 +425,8 @@ func execute(ctx context.Context, cfg config) (result, error) {
 		_ = d.Close()
 		return result{}, errors.New("compacted storage has zero leaf_vlog bytes")
 	}
+	mgr = nil
+	col = nil
 	if err := d.Close(); err != nil {
 		return result{}, err
 	}
