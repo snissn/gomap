@@ -780,6 +780,11 @@ func validateColumnPublishDurabilityClosure(closure ColumnPublishDurabilityClosu
 	if closure.RequiredAssets != len(closure.PreparedAssets) {
 		return fmt.Errorf("collections: column publish closure required assets=%d prepared=%d", closure.RequiredAssets, len(closure.PreparedAssets))
 	}
+	for i, asset := range closure.PreparedAssets {
+		if err := validateColumnPreparedAssetForPlan(asset); err != nil {
+			return fmt.Errorf("collections: column publish closure asset[%d]: %w", i, err)
+		}
+	}
 	got, err := checkedSumColumnPreparedAssetBytes(closure.PreparedAssets)
 	if err != nil {
 		return err
@@ -789,11 +794,6 @@ func validateColumnPublishDurabilityClosure(closure ColumnPublishDurabilityClosu
 	}
 	if cfg.ProfileSupport == ColumnStoreProfileDurableOnly && closure.RequiredAssets != 0 && (!closure.FlushRequired || !closure.SyncRequired) {
 		return errors.New("collections: durable column publish closure requires asset flush and sync")
-	}
-	for i, asset := range closure.PreparedAssets {
-		if err := validateColumnPreparedAssetForPlan(asset); err != nil {
-			return fmt.Errorf("collections: column publish closure asset[%d]: %w", i, err)
-		}
 	}
 	return nil
 }
@@ -881,7 +881,7 @@ func checkedSumColumnPreparedAssetBytes(assets []ColumnPreparedAsset) (int64, er
 	var total int64
 	for i, asset := range assets {
 		if asset.Bytes > math.MaxInt64-total {
-			return 0, fmt.Errorf("collections: column publish prepared asset[%d] bytes overflow", i)
+			return 0, fmt.Errorf("collections: column publish asset[%d] bytes overflow", i)
 		}
 		total += asset.Bytes
 	}
