@@ -160,7 +160,6 @@ func (g *ColumnVectorDynamicGraph) Snapshot() ColumnVectorDynamicGraphSnapshot {
 // tombstone the previous logical document and append the replacement vector, and
 // deletes tombstone the current logical document.
 func (g *ColumnVectorDynamicGraph) ApplyBatch(mutations []ColumnVectorDynamicMutation) (ColumnVectorDynamicPublishStats, error) {
-	start := time.Now()
 	var stats ColumnVectorDynamicPublishStats
 	if g == nil {
 		return stats, errors.New("collections: nil dynamic column vector graph")
@@ -176,6 +175,7 @@ func (g *ColumnVectorDynamicGraph) ApplyBatch(mutations []ColumnVectorDynamicMut
 		return stats, nil
 	}
 
+	start := time.Now()
 	nextOverlay := current.overlay.clone(current.overlayGeneration + 1)
 	inserted, updated, deleted := 0, 0, 0
 	for mutationIndex, mutation := range mutations {
@@ -388,13 +388,15 @@ type ColumnVectorDynamicOverlaySnapshot struct {
 	liveRows        int
 	liveDocIndex    map[string]int
 	tombstoneDocIDs [][]byte
+	tombstoneDocSet map[string]struct{}
 }
 
 func newColumnVectorDynamicOverlaySnapshot(dims int) *ColumnVectorDynamicOverlaySnapshot {
 	return &ColumnVectorDynamicOverlaySnapshot{
-		dims:         dims,
-		idOffsets:    []uint32{0},
-		liveDocIndex: make(map[string]int),
+		dims:            dims,
+		idOffsets:       []uint32{0},
+		liveDocIndex:    make(map[string]int),
+		tombstoneDocSet: make(map[string]struct{}),
 	}
 }
 
@@ -410,9 +412,19 @@ func (o *ColumnVectorDynamicOverlaySnapshot) clone(generation uint64) *ColumnVec
 		liveRows:        o.liveRows,
 		tombstoneDocIDs: append([][]byte(nil), o.tombstoneDocIDs...),
 		liveDocIndex:    make(map[string]int, len(o.liveDocIndex)),
+		tombstoneDocSet: make(map[string]struct{}, max(len(o.tombstoneDocSet), len(o.tombstoneDocIDs))),
 	}
 	for key, ordinal := range o.liveDocIndex {
 		next.liveDocIndex[key] = ordinal
+	}
+	if len(o.tombstoneDocSet) > 0 {
+		for key := range o.tombstoneDocSet {
+			next.tombstoneDocSet[key] = struct{}{}
+		}
+	} else {
+		for _, documentID := range o.tombstoneDocIDs {
+			next.tombstoneDocSet[string(documentID)] = struct{}{}
+		}
 	}
 	return next
 }
@@ -465,12 +477,11 @@ func (o *ColumnVectorDynamicOverlaySnapshot) documentTombstonedWriter(documentID
 	if o == nil {
 		return false
 	}
-	for _, tombstone := range o.tombstoneDocIDs {
-		if bytes.Equal(tombstone, documentID) {
-			return true
-		}
+	if o.tombstoneDocSet == nil {
+		o.rebuildTombstoneDocSet()
 	}
-	return false
+	_, found := o.tombstoneDocSet[string(documentID)]
+	return found
 }
 
 func (o *ColumnVectorDynamicOverlaySnapshot) appendLiveDocument(documentID []byte, vector []float32) error {
@@ -511,7 +522,15 @@ func (o *ColumnVectorDynamicOverlaySnapshot) tombstoneOverlayDocument(documentID
 }
 
 func (o *ColumnVectorDynamicOverlaySnapshot) addTombstone(documentID []byte) {
+	if o.tombstoneDocSet == nil {
+		o.rebuildTombstoneDocSet()
+	}
+	key := string(documentID)
+	if _, exists := o.tombstoneDocSet[key]; exists {
+		return
+	}
 	o.tombstoneDocIDs = append(o.tombstoneDocIDs, bytes.Clone(documentID))
+	o.tombstoneDocSet[key] = struct{}{}
 }
 
 func (o *ColumnVectorDynamicOverlaySnapshot) sortAndDedupeTombstones() {
@@ -526,6 +545,13 @@ func (o *ColumnVectorDynamicOverlaySnapshot) sortAndDedupeTombstones() {
 		}
 	}
 	o.tombstoneDocIDs = out
+}
+
+func (o *ColumnVectorDynamicOverlaySnapshot) rebuildTombstoneDocSet() {
+	o.tombstoneDocSet = make(map[string]struct{}, len(o.tombstoneDocIDs))
+	for _, documentID := range o.tombstoneDocIDs {
+		o.tombstoneDocSet[string(documentID)] = struct{}{}
+	}
 }
 
 func (o *ColumnVectorDynamicOverlaySnapshot) searchCosine(query []float32, queryInvNorm float32, topK int, scratch *ColumnVectorDynamicGraphSearchScratch) ([]VectorSearchResult, int) {
