@@ -3,7 +3,6 @@ package collections
 import (
 	"errors"
 	"fmt"
-	"runtime"
 	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -59,7 +58,6 @@ type ColumnPublishPlanInput struct {
 	CurrentManifest       *ColumnManifestIdentity
 	AppliedCommandLSN     uint64
 	BaseManifestRootID    uint64
-	MeasureAllocations    bool
 	Hooks                 ColumnPublishPlanHooks
 }
 
@@ -226,8 +224,6 @@ type ColumnPublishStageMetrics struct {
 	ManifestEncode          time.Duration
 	RootDeltaConstruction   time.Duration
 	SystemDeltaConstruction time.Duration
-	AllocBytes              uint64
-	Allocs                  uint64
 }
 
 // BuildColumnPublishPlan validates and stages an atomic column manifest publish
@@ -261,10 +257,6 @@ func BuildColumnPublishPlan(input ColumnPublishPlanInput) (ColumnPublishPlan, er
 	}
 
 	var metrics ColumnPublishStageMetrics
-	var allocStart runtime.MemStats
-	if input.MeasureAllocations {
-		runtime.ReadMemStats(&allocStart)
-	}
 	if input.Hooks.ExtractDocuments != nil {
 		start := time.Now()
 		if err := input.Hooks.ExtractDocuments(); err != nil {
@@ -293,7 +285,7 @@ func BuildColumnPublishPlan(input ColumnPublishPlanInput) (ColumnPublishPlan, er
 	if err := validateColumnPublishPreparedAssets(prepared); err != nil {
 		return ColumnPublishPlan{}, err
 	}
-	manifestPrepared := cloneColumnPublishPreparedAssets(prepared)
+	manifestPrepared := prepared
 
 	start = time.Now()
 	manifest, err := encodeColumnPublishManifest(input, *cfg, manifestPrepared)
@@ -369,12 +361,6 @@ func BuildColumnPublishPlan(input ColumnPublishPlanInput) (ColumnPublishPlan, er
 			return ColumnPublishPlan{}, fmt.Errorf("collections: column publish system-delta construction failed: %w", err)
 		}
 		plan.StageMetrics.SystemDeltaConstruction = time.Since(start)
-	}
-	if input.MeasureAllocations {
-		var allocEnd runtime.MemStats
-		runtime.ReadMemStats(&allocEnd)
-		plan.StageMetrics.AllocBytes = allocEnd.TotalAlloc - allocStart.TotalAlloc
-		plan.StageMetrics.Allocs = allocEnd.Mallocs - allocStart.Mallocs
 	}
 	return plan, nil
 }

@@ -128,7 +128,6 @@ func TestColumnPublishPlanBuildsDurabilityClosureM10A(t *testing.T) {
 	identity := ColumnManifestIdentity{Generation: 7, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0xfeedbeef}
 	var called []string
 	input := testColumnPublishPlanInputM10A(identity, asset)
-	input.MeasureAllocations = true
 	input.Hooks.ExtractDocuments = func() error {
 		called = append(called, "extract")
 		return nil
