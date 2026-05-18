@@ -13,6 +13,10 @@ const (
 	DefaultColumnVectorGraphInvNormColumn   = "embedding_inv_norm"
 	DefaultColumnVectorGraphAdjacencyColumn = "neighbors"
 	DefaultColumnVectorGraphEfSearch        = 64
+	// Persisted inverse norms are float32 round-trips of a float64
+	// 1/sqrt(norm^2) calculation; this bound allows representation noise while
+	// rejecting materially stale normalization columns.
+	columnVectorGraphInvNormRelTolerance = 1e-4
 )
 
 // ColumnVectorGraphOptions names the columns that back a single-layer ANN graph.
@@ -276,9 +280,6 @@ func (g *ColumnVectorGraph) SearchCosine(query []float32, opts ColumnVectorGraph
 	}
 	scratch.results = results
 	stats.Returned = len(results)
-	if results == nil {
-		results = []ColumnVectorGraphSearchResult{}
-	}
 	return results, stats, nil
 }
 
@@ -361,7 +362,7 @@ func validateColumnVectorGraphInvNorm(row int, invNorm float32, normSquared floa
 	}
 	expectedRepresentable := float64(expected32)
 	diff := math.Abs(float64(invNorm) - expectedRepresentable)
-	allowed := math.Abs(expectedRepresentable) * 1e-4
+	allowed := math.Abs(expectedRepresentable) * columnVectorGraphInvNormRelTolerance
 	if diff > allowed {
 		return fmt.Errorf("colgranule: graph inv-norm row=%d value=%g does not match vector norm=%g", row, invNorm, expectedRepresentable)
 	}
@@ -452,18 +453,18 @@ func (g *ColumnVectorGraph) cosineDistance(query []float32, queryInvNorm float32
 	start := ordinal * g.dims
 	vector := g.vectors[start : start+g.dims]
 	dot := columnVectorGraphDotProductFloat32(query, vector)
-	if !columnVectorGraphFinite(dot) {
+	if dot == 0 || !columnVectorGraphFinite(dot) {
 		return columnVectorGraphCosineDistanceWide(query, vector, queryInvNorm, g.invNorms[ordinal])
 	}
-	cosine := dot * queryInvNorm * g.invNorms[ordinal]
-	if !columnVectorGraphFinite(cosine) {
+	cosine := float64(dot) * float64(queryInvNorm) * float64(g.invNorms[ordinal])
+	if math.IsNaN(cosine) || math.IsInf(cosine, 0) {
 		return columnVectorGraphCosineDistanceWide(query, vector, queryInvNorm, g.invNorms[ordinal])
 	}
 	distance := 1 - cosine
-	if !columnVectorGraphFinite(distance) {
+	if math.IsNaN(distance) || math.IsInf(distance, 0) {
 		return columnVectorGraphCosineDistanceWide(query, vector, queryInvNorm, g.invNorms[ordinal])
 	}
-	return distance
+	return float32(distance)
 }
 
 func columnVectorGraphCosineDistanceWide(query []float32, vector []float32, queryInvNorm float32, vectorInvNorm float32) float32 {
