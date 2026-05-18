@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -121,9 +123,7 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 	if got, want := report.ForcedPath, columnStorePathRowStoreBaseline; got != want {
 		t.Fatalf("forced_path=%q want %q", got, want)
 	}
-	if len(report.Queries) < 7 {
-		t.Fatalf("expected q1-q5/q4a/q4b/q5_metadata query metrics, got %d", len(report.Queries))
-	}
+	queryMetrics := assertColumnStoreQueryMetricCoverageM11A(t, report.Queries)
 	for _, q := range report.Queries {
 		if q.PlanLabel != columnStorePathRowStoreBaseline {
 			t.Fatalf("query %s plan_label=%q want %q", q.Name, q.PlanLabel, columnStorePathRowStoreBaseline)
@@ -137,6 +137,9 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 		if q.RowMaterializations != report.Rows {
 			t.Fatalf("query %s row_materializations=%d want %d", q.Name, q.RowMaterializations, report.Rows)
 		}
+	}
+	if q := queryMetrics["q5_metadata"]; q.AliasOf != "q5" || q.ImplementationNote == "" {
+		t.Fatalf("q5_metadata should be explicitly reported as a q5 alias placeholder: %+v", q)
 	}
 	assertColumnStoreParityCoverageM11A(t, report.Parity)
 	for name, parity := range report.Parity {
@@ -348,6 +351,46 @@ func TestColumnStoreSuiteCPUProfileStartsAfterProfileBaselinesM11A(t *testing.T)
 	}
 }
 
+func TestColumnStoreSuiteCPUProfileStartFailureRemovesArtifactM11A(t *testing.T) {
+	origStartCPUProfileFn := startCPUProfileFn
+	t.Cleanup(func() {
+		startCPUProfileFn = origStartCPUProfileFn
+	})
+	startCPUProfileFn = func(_ io.Writer) error {
+		return errors.New("start failed")
+	}
+
+	collection, events, rawHashes := newColumnStoreSuiteTestCollectionM11A(t, 8, 4)
+	profilePrefix := filepath.Join(t.TempDir(), "cpu")
+	_, _, parityErr, err := runColumnStoreSuiteQueriesProfiled(BenchConfig{
+		CPUProfile: profilePrefix,
+	}, collection, len(events), rawHashes, columnStorePathRowStoreBaseline)
+	if err == nil {
+		t.Fatal("expected CPU profile start failure")
+	}
+	if parityErr != nil {
+		t.Fatalf("hard CPU profile error returned as parity error: %v", parityErr)
+	}
+	profilePath := fmt.Sprintf("%s_%s_%s.pprof", profilePrefix, columnStoreSuiteBenchTestName, columnStoreSuiteBenchDBName)
+	if _, statErr := os.Stat(profilePath); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("expected failed CPU profile artifact to be removed, stat err=%v", statErr)
+	}
+}
+
+func TestColumnStoreSuiteProfiledQueriesReturnHardErrorsSeparatelyM11A(t *testing.T) {
+	collection, events, rawHashes := newColumnStoreSuiteTestCollectionM11A(t, 4, 2)
+	queries, parity, parityErr, err := runColumnStoreSuiteQueriesProfiled(BenchConfig{}, collection, len(events)+1, rawHashes, columnStorePathRowStoreBaseline)
+	if err == nil {
+		t.Fatal("expected hard query error")
+	}
+	if parityErr != nil {
+		t.Fatalf("hard query error returned as parity error: %v", parityErr)
+	}
+	if queries != nil || parity != nil {
+		t.Fatalf("expected no query/parity output on hard failure, queries=%v parity=%v", queries, parity)
+	}
+}
+
 func TestColumnStoreQueryHashRejectsUnknownQueryM11A(t *testing.T) {
 	_, _, err := columnStoreQueryHash("missing_query", nil)
 	if err == nil {
@@ -521,22 +564,42 @@ func BenchmarkColumnStoreSuiteRowBaselineQueriesM11A(b *testing.B) {
 		if err != nil {
 			b.Fatalf("queries: %v", err)
 		}
-		if len(queries) != queryCount {
-			b.Fatalf("queries=%d want %d", len(queries), queryCount)
-		}
+		assertColumnStoreQueryMetricCoverageM11A(b, queries)
+		assertColumnStoreParityCoverageM11A(b, parity)
 		for name, p := range parity {
 			if !p.Pass {
 				b.Fatalf("parity failed for %s: %+v", name, p)
 			}
 		}
-		if len(parity) != queryCount {
-			b.Fatalf("parity=%d want %d", len(parity), queryCount)
-		}
 	}
 	b.ReportMetric(float64(rows*queryCount), "rows/op")
 }
 
-func assertColumnStoreParityCoverageM11A(t *testing.T, parity map[string]columnStoreParity) {
+func assertColumnStoreQueryMetricCoverageM11A(t testing.TB, queries []columnStoreQueryMetric) map[string]columnStoreQueryMetric {
+	t.Helper()
+	names := columnStoreQueryNames()
+	if len(queries) != len(names) {
+		t.Fatalf("query metrics=%d want %d", len(queries), len(names))
+	}
+	byName := make(map[string]columnStoreQueryMetric, len(queries))
+	for _, q := range queries {
+		if _, exists := byName[q.Name]; exists {
+			t.Fatalf("duplicate query metric for %s", q.Name)
+		}
+		byName[q.Name] = q
+	}
+	for _, name := range names {
+		if _, ok := byName[name]; !ok {
+			t.Fatalf("missing query metric for %s", name)
+		}
+	}
+	if len(byName) != len(names) {
+		t.Fatalf("query metrics include unexpected names: %+v", byName)
+	}
+	return byName
+}
+
+func assertColumnStoreParityCoverageM11A(t testing.TB, parity map[string]columnStoreParity) {
 	t.Helper()
 	names := columnStoreQueryNames()
 	if len(parity) != len(names) {
@@ -547,4 +610,40 @@ func assertColumnStoreParityCoverageM11A(t *testing.T, parity map[string]columnS
 			t.Fatalf("missing parity entry for %s", name)
 		}
 	}
+}
+
+func newColumnStoreSuiteTestCollectionM11A(t testing.TB, rows, batchSize int) (*collections.Collection, []columnStoreFixtureEvent, map[string]uint64) {
+	t.Helper()
+	events, _ := buildColumnStoreSyntheticFixture(rows, 1)
+	dir := t.TempDir()
+	db, err := openColumnStoreSuiteDB(dir)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = db.Close()
+	})
+	manager := collections.NewCollectionManager(db)
+	if _, err := manager.CreateCollection(&collections.CollectionMeta{
+		Name: "events",
+		Options: collections.CollectionOptions{
+			DocumentFormat:               collections.DocumentFormatJSON,
+			DisableIndexedWriteMemtables: true,
+			ColumnStore:                  columnStoreSuiteConfig(),
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	collection, err := manager.OpenCollection("events")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if err := insertColumnStoreFixture(collection, events, batchSize); err != nil {
+		t.Fatalf("insert fixture: %v", err)
+	}
+	rawHashes, err := columnStoreReferenceHashes(events)
+	if err != nil {
+		t.Fatalf("reference hashes: %v", err)
+	}
+	return collection, events, rawHashes
 }

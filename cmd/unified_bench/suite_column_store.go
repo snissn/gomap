@@ -94,6 +94,8 @@ type columnStoreStageMetric struct {
 type columnStoreQueryMetric struct {
 	Name                string  `json:"name"`
 	PlanLabel           string  `json:"plan_label"`
+	AliasOf             string  `json:"alias_of,omitempty"`
+	ImplementationNote  string  `json:"implementation_note,omitempty"`
 	DurationMS          float64 `json:"duration_ms"`
 	Rows                int     `json:"rows"`
 	RowsPerSecond       float64 `json:"rows_per_second"`
@@ -732,6 +734,7 @@ func runColumnStoreSuiteQueriesProfiled(cfg BenchConfig, collection *collections
 		cpuFile = f
 		if err := startCPUProfileFn(cpuFile); err != nil {
 			_ = cpuFile.Close()
+			_ = os.Remove(profilePath)
 			_ = os.Remove(allocBasePath)
 			_ = os.Remove(blockBasePath)
 			_ = os.Remove(mutexBasePath)
@@ -749,7 +752,7 @@ func runColumnStoreSuiteQueriesProfiled(cfg BenchConfig, collection *collections
 		_ = os.Remove(allocBasePath)
 		_ = os.Remove(blockBasePath)
 		_ = os.Remove(mutexBasePath)
-		return queries, parity, runErr, nil
+		return nil, nil, nil, runErr
 	}
 
 	if allocBasePath != "" {
@@ -828,6 +831,8 @@ func runColumnStoreSuiteQueries(collection *collections.Collection, rows int, ra
 		metric := columnStoreQueryMetric{
 			Name:                name,
 			PlanLabel:           path,
+			AliasOf:             columnStoreQueryAliasOf(name, path),
+			ImplementationNote:  columnStoreQueryImplementationNote(name, path),
 			DurationMS:          durationMS(elapsed),
 			Rows:                rows,
 			RowsPerSecond:       ratePerSecond(float64(materialized), elapsed),
@@ -875,6 +880,20 @@ func scanColumnStoreSuiteEvents(collection *collections.Collection, rows int) ([
 
 func columnStoreQueryNames() []string {
 	return []string{"q1", "q2", "q3", "q4a", "q4b", "q5", "q5_metadata"}
+}
+
+func columnStoreQueryAliasOf(name, path string) string {
+	if name == "q5_metadata" && path == columnStorePathRowStoreBaseline {
+		return "q5"
+	}
+	return ""
+}
+
+func columnStoreQueryImplementationNote(name, path string) string {
+	if name == "q5_metadata" && path == columnStorePathRowStoreBaseline {
+		return "row_store_baseline_alias_until_physical_aggregate_metadata_path"
+	}
+	return ""
 }
 
 func columnStoreQueryHash(name string, events []columnStoreDecodedEvent) (uint64, int, error) {
@@ -1088,15 +1107,19 @@ func renderColumnStoreSuiteMarkdown(report columnStoreSuiteReport) string {
 	sb.WriteString("\n")
 
 	sb.WriteString("## Query Throughput And Parity\n\n")
-	sb.WriteString("| query | plan | rows/s | MiB/s | ns/row | B/read | rows materialized | skipped granules | metadata hits | hash parity |\n")
-	sb.WriteString("|---|---|---:|---:|---:|---:|---:|---:|---:|---|\n")
+	sb.WriteString("| query | plan | rows/s | MiB/s | ns/row | B/read | rows materialized | skipped granules | metadata hits | hash parity | note |\n")
+	sb.WriteString("|---|---|---:|---:|---:|---:|---:|---:|---:|---|---|\n")
 	for _, q := range report.Queries {
 		parity := "pass"
 		if p, ok := report.Parity[q.Name]; ok && !p.Pass {
 			parity = "FAIL"
 		}
-		sb.WriteString(fmt.Sprintf("| `%s` | `%s` | %.3f | %.3f | %.1f | %d | %d | %d | %d | %s |\n",
-			q.Name, q.PlanLabel, q.RowsPerSecond, q.MiBPerSecond, q.NsPerRow, q.BytesRead, q.RowMaterializations, q.SkippedGranules, q.MetadataHits, parity))
+		note := q.ImplementationNote
+		if note == "" && q.AliasOf != "" {
+			note = "alias_of_" + q.AliasOf
+		}
+		sb.WriteString(fmt.Sprintf("| `%s` | `%s` | %.3f | %.3f | %.1f | %d | %d | %d | %d | %s | `%s` |\n",
+			q.Name, q.PlanLabel, q.RowsPerSecond, q.MiBPerSecond, q.NsPerRow, q.BytesRead, q.RowMaterializations, q.SkippedGranules, q.MetadataHits, parity, note))
 	}
 	sb.WriteString("\n")
 
