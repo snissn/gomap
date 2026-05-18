@@ -123,6 +123,9 @@ func NewColumnVectorDynamicGraph(base *ColumnVectorGraph) (*ColumnVectorDynamicG
 	baseDocIndex := make(map[string]int, base.Rows())
 	for ordinal := 0; ordinal < base.Rows(); ordinal++ {
 		documentID := base.documentID(ordinal)
+		if len(documentID) == 0 {
+			return nil, fmt.Errorf("collections: empty base document ID at ordinal %d", ordinal)
+		}
 		key := string(documentID)
 		if previous, ok := baseDocIndex[key]; ok {
 			return nil, fmt.Errorf("collections: duplicate base document ID %q at ordinals %d and %d", documentID, previous, ordinal)
@@ -170,7 +173,6 @@ func (g *ColumnVectorDynamicGraph) ApplyBatch(mutations []ColumnVectorDynamicMut
 		return stats, errors.New("collections: dynamic column vector graph has no snapshot")
 	}
 	if len(mutations) == 0 {
-		stats = columnVectorDynamicPublishStats(current, 0, 0, 0, time.Since(start))
 		return stats, nil
 	}
 

@@ -128,6 +128,40 @@ func TestColumnVectorDynamicGraphApplyBatchDoesNotReportUnpublishedCounts(t *tes
 	}
 }
 
+func TestColumnVectorDynamicGraphApplyBatchEmptyIsNoOp(t *testing.T) {
+	base, err := NewColumnVectorGraphFromColumns(columnVectorGraphTestColumns(16, 16, 4, false))
+	if err != nil {
+		t.Fatalf("NewColumnVectorGraphFromColumns: %v", err)
+	}
+	graph, err := NewColumnVectorDynamicGraph(base)
+	if err != nil {
+		t.Fatalf("NewColumnVectorDynamicGraph: %v", err)
+	}
+	stats, err := graph.ApplyBatch(nil)
+	if err != nil {
+		t.Fatalf("ApplyBatch(nil): %v", err)
+	}
+	if stats != (ColumnVectorDynamicPublishStats{}) {
+		t.Fatalf("ApplyBatch(nil) stats=%+v want zero no-op stats", stats)
+	}
+	snapshot := graph.Snapshot()
+	if snapshot.OverlayGeneration() != 0 || snapshot.Overlay().Rows() != 0 {
+		t.Fatalf("snapshot after empty batch generation=%d rows=%d, want unchanged empty overlay", snapshot.OverlayGeneration(), snapshot.Overlay().Rows())
+	}
+}
+
+func TestColumnVectorDynamicGraphRejectsEmptyBaseDocumentID(t *testing.T) {
+	columns := columnVectorGraphTestColumns(16, 16, 4, false)
+	columns.DocumentIDs[7] = nil
+	base, err := NewColumnVectorGraphFromColumns(columns)
+	if err != nil {
+		t.Fatalf("NewColumnVectorGraphFromColumns: %v", err)
+	}
+	if _, err := NewColumnVectorDynamicGraph(base); err == nil {
+		t.Fatal("NewColumnVectorDynamicGraph succeeded with empty base document ID")
+	}
+}
+
 func TestColumnVectorDynamicGraphSameBatchDeleteInsertUsesWriterTombstones(t *testing.T) {
 	base, err := NewColumnVectorGraphFromColumns(columnVectorGraphTestColumns(64, 16, 63, true))
 	if err != nil {
@@ -390,6 +424,7 @@ func benchmarkColumnVectorDynamicGraphSearchCosineParallelReadWrite(b *testing.B
 	done := make(chan struct{})
 	b.ReportAllocs()
 	b.ResetTimer()
+	started := time.Now()
 	go func() {
 		defer close(done)
 		for seq := 0; ; seq++ {
@@ -412,7 +447,6 @@ func benchmarkColumnVectorDynamicGraphSearchCosineParallelReadWrite(b *testing.B
 			publishNanos.Add(int64(stats.PublishDuration))
 		}
 	}()
-	started := time.Now()
 	var nextWorker uint64
 	b.RunParallel(func(pb *testing.PB) {
 		workerID := int(atomic.AddUint64(&nextWorker, 1)) - 1
@@ -434,10 +468,13 @@ func benchmarkColumnVectorDynamicGraphSearchCosineParallelReadWrite(b *testing.B
 		}
 		atomic.AddInt64(&columnVectorGraphBenchSink, localSink)
 	})
-	elapsed := time.Since(started)
-	b.StopTimer()
 	close(stop)
 	<-done
+	elapsed := time.Since(started)
+	publishedBatchCount := publishedBatches.Load()
+	publishedMutationCount := publishedMutations.Load()
+	publishNanoCount := publishNanos.Load()
+	b.StopTimer()
 	select {
 	case err := <-errs:
 		b.Fatalf("writer ApplyBatch: %v", err)
@@ -452,7 +489,7 @@ func benchmarkColumnVectorDynamicGraphSearchCosineParallelReadWrite(b *testing.B
 		b.Fatalf("final results=%d want %d", len(finalResults), opts.TopK)
 	}
 	reportColumnVectorDynamicGraphMetrics(b, graph.Snapshot(), finalTrace)
-	reportColumnVectorDynamicReadMetrics(b, elapsed, publishedBatches.Load(), publishedMutations.Load(), publishNanos.Load())
+	reportColumnVectorDynamicReadMetrics(b, elapsed, publishedBatchCount, publishedMutationCount, publishNanoCount)
 }
 
 func openColumnVectorDynamicGraphBenchmark(b *testing.B, base *ColumnVectorGraph, query []float32, overlayRows int) *ColumnVectorDynamicGraph {
