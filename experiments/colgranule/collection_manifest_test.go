@@ -142,6 +142,12 @@ func TestColumnCollectionManifestBinaryRejectsHeaderAndChecksumCorruption(t *tes
 	if err != nil {
 		t.Fatalf("EncodeColumnCollectionManifest: %v", err)
 	}
+	oldVersion := append([]byte(nil), payload...)
+	binary.LittleEndian.PutUint16(oldVersion[4:], columnCollectionManifestBinaryVersion-1)
+	if _, err := DecodeColumnCollectionManifest(oldVersion); err == nil || !strings.Contains(err.Error(), "unsupported collection manifest binary version") {
+		t.Fatalf("DecodeColumnCollectionManifest old version err=%v want unsupported binary version", err)
+	}
+
 	badVersion := append([]byte(nil), payload...)
 	binary.LittleEndian.PutUint16(badVersion[4:], columnCollectionManifestBinaryVersion+1)
 	if _, err := DecodeColumnCollectionManifest(badVersion); err == nil || !strings.Contains(err.Error(), "unsupported collection manifest binary version") {

@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -417,6 +418,83 @@ func TestCollectionVectorIndexNativeRootMaintainsInsertedDocuments(t *testing.T)
 		t.Fatalf("search maintained vector index: %v", err)
 	}
 	requireVectorResultIDs(t, results, "a", "c")
+}
+
+func TestCollectionVectorIndexNativeRootPersistsBinaryDocumentIDsLosslessly(t *testing.T) {
+	dir := t.TempDir()
+	d, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mgr := NewCollectionManager(d)
+	def := VectorIndexDefinition{
+		Name:       "embedding",
+		Field:      "embedding",
+		Metric:     VectorMetricCosine,
+		Dimensions: 2,
+		M:          4,
+	}
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
+		_ = d.Close()
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		_ = d.Close()
+		t.Fatalf("open collection: %v", err)
+	}
+	documentID := []byte{0xff, 0x00, 'v', '1'}
+	if _, err := col.InsertBatch(
+		[][]byte{documentID},
+		[][]byte{[]byte(`{"embedding":[1,0]}`)},
+	); err != nil {
+		_ = d.Close()
+		t.Fatalf("insert binary id vector: %v", err)
+	}
+	index, err := col.BuildVectorIndex(vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		_ = d.Close()
+		t.Fatalf("build vector index: %v", err)
+	}
+	if _, err := index.SaveSnapshot(); err != nil {
+		_ = d.Close()
+		t.Fatalf("save vector index: %v", err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		_ = d.Close()
+		t.Fatalf("checkpoint: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+
+	reopened, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open reopened collection: %v", err)
+	}
+	loaded, status, err := reopenedCol.LoadNativeVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		t.Fatalf("load vector index: %v", err)
+	}
+	if loaded == nil || !status.Loaded {
+		t.Fatalf("binary id vector index did not load loaded=%v status=%+v", loaded != nil, status)
+	}
+	results, _, err := loaded.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 1, DisableExactFallback: true})
+	if err != nil {
+		t.Fatalf("search binary id vector index: %v", err)
+	}
+	if len(results) != 1 || !bytes.Equal(results[0].DocumentID, documentID) {
+		var got []byte
+		if len(results) > 0 {
+			got = results[0].DocumentID
+		}
+		t.Fatalf("result document id=%x want %x", got, documentID)
+	}
 }
 
 func TestCollectionVectorIndexNativeRootCreateOnExistingDocumentsBuildsFullGraphOnWrite(t *testing.T) {
