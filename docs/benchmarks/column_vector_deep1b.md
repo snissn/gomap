@@ -114,7 +114,9 @@ Cartesian fp32 block. It compares exact `math.Sincos` scoring against a
 half-pi-centered polynomial approximation with fallback to exact math outside
 the configured local interval. The zstd rows include byte decompression plus
 direct scoring; the raw row measures the stored angle-major stream without
-byte-codec decompression.
+byte-codec decompression. It also reports scalar profile probes for angle-byte
+loads, trig scans, and full scoring, plus an optimistic fast-kernel estimate
+anchored to the resident fp32 dot-product baseline.
 
 `BenchmarkColumnVectorGraphDeep1BLocalFrameApproxScore` uses the same
 nearest-ranked block, computes a block-centroid Householder frame, transforms
@@ -123,6 +125,15 @@ sketches. The sketch variants are explicit storage representations:
 `fp32`, IEEE-fp16-quantized values, and symmetric int8-quantized values with
 per-dimension scales. It reports top-10 overlap/recall, score error, sketch
 bytes, and a bounded-prune smoke path.
+
+`BenchmarkColumnVectorGraphDeep1BGranuleNativeScore` is the first
+storage-native scoring probe for the target granule design. It computes the
+same Householder local frame, stores vectors as residuals to the local center
+in transposed coordinate-major streams, transforms the query once per granule,
+and scores directly from the stored representation. The initial layouts are
+fp32 byte-shuffled residual columns and int8 residual columns with
+per-coordinate scales. It reports scalar Go decode/score time, fast-kernel
+estimates, bytes, top-k quality, and Cauchy-bound prune metrics.
 
 ## Manual Commands
 
@@ -400,14 +411,21 @@ Apple M3, `-benchtime=200ms -count=1`:
 
 Spherical direct-score smoke over the same stored angle-major byte stream:
 
-| Path | Stored B/entry | Decode ms | Direct score ms | Decode+score ms | Candidates/s | Top10 overlap | Poly fallback |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| raw/exact_math_sincos | 380.0 | 0.00004 | 15.21 | 15.21 | 0.539M | 10/10 | 0 |
-| raw/halfpi_poly_with_fallback | 380.0 | 0.00006 | 14.32 | 14.32 | 0.572M | 10/10 | 8.59% |
-| zstd_fast/exact_math_sincos | 288.5 | 0.480 | 15.03 | 15.51 | 0.528M | 10/10 | 0 |
-| zstd_fast/halfpi_poly_with_fallback | 288.5 | 0.482 | 14.32 | 14.80 | 0.554M | 10/10 | 8.59% |
-| zstd_better/exact_math_sincos | 271.4 | 1.307 | 14.56 | 15.87 | 0.516M | 10/10 | 0 |
-| zstd_better/halfpi_poly_with_fallback | 271.4 | 1.363 | 14.43 | 15.79 | 0.519M | 10/10 | 8.59% |
+| Path | Stored B/entry | Decode ms | Direct score ms | Decode+score ms | Candidates/s | Fast-kernel est ms | Top10 overlap | Poly fallback |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| raw/exact_math_sincos | 380.0 | 0.00015 | 15.85 | 15.85 | 0.517M | 0.095 | 10/10 | 0 |
+| raw/halfpi_poly_with_fallback | 380.0 | 0.00010 | 14.94 | 14.94 | 0.548M | 0.095 | 10/10 | 7.54% |
+| zstd_fast/exact_math_sincos | 288.5 | 0.560 | 15.59 | 16.15 | 0.507M | 0.655 | 10/10 | 0 |
+| zstd_fast/halfpi_poly_with_fallback | 288.5 | 0.508 | 15.46 | 15.97 | 0.513M | 0.603 | 10/10 | 7.54% |
+| zstd_better/exact_math_sincos | 271.4 | 1.412 | 15.28 | 16.70 | 0.491M | 1.507 | 10/10 | 0 |
+| zstd_better/halfpi_poly_with_fallback | 271.4 | 1.386 | 15.16 | 16.54 | 0.495M | 1.481 | 10/10 | 7.54% |
+
+Scalar direct-score profile probes:
+
+| Scorer | Angle load ms | Sin/cos scan ms | Full score ms | Sin/cos minus load ms |
+| --- | ---: | ---: | ---: | ---: |
+| exact_math_sincos | 2.57-3.19 | 15.25-15.61 | 14.55-15.49 | 12.12-13.04 |
+| halfpi_poly_with_fallback | 2.51-2.55 | 19.49-19.64 | 14.58-15.71 | 16.94-17.13 |
 
 Interpretation:
 
@@ -427,14 +445,75 @@ Interpretation:
   `BenchmarkColumnVectorGraphDeep1BSphericalDirectScore` is the follow-up gate:
   it must move spherical direct scoring materially above the current
   reconstruction path before engine integration is worth considering.
-- The first direct-score result does not clear that gate. Exact direct scoring
-  from the stored byte-shuffled angle stream is slower than reconstructing a
-  Cartesian block and using the normal dot-product kernel. The half-pi
-  polynomial fallback preserves the top-10 for this block but only improves the
-  direct path to roughly `0.52-0.57M candidates/s`, still below the
-  reconstruction path and far below the `5-10M candidates/s` promotion target.
-  The likely bottleneck is now the combination of per-angle trig/branch work
-  and strided byte-shuffled angle loads, not zstd decompression.
+- The current scalar Go spherical-direct path is a deliberately under-optimized
+  baseline, not a final verdict on storage-native scoring. Its profile says
+  angle byte loads are about `2.5-3.2 ms` and full scalar scoring lands around
+  `14.6-15.9 ms`. The standalone scan probes are intentionally rough and do
+  not isolate every recurrence effect, but they keep the broad conclusion clear:
+  the Go direct scorer is spending most of its time in scalar angle math and
+  recurrence work, not byte decompression.
+- The optimistic "dot-equivalent kernel" estimate is the useful ceiling: if
+  spherical direct scoring could run like the resident fp32 dot kernel, raw
+  angle scoring would be about `0.095 ms` for the block, zstd-fast would be
+  about `0.60-0.66 ms`, and zstd-better would be about `1.48-1.51 ms`. That says
+  the idea is worth separating into representation design and kernel design;
+  the current Go loop is not the shape we would promote.
+
+Granule-native local-residual scoring smoke:
+
+```sh
+COLUMN_VECTOR_DEEP1B_NEIGHBORHOOD_SMOKE=1 \
+COLUMN_VECTOR_DEEP1B_DOWNLOAD=1 \
+COLUMN_VECTOR_DEEP1B_DIR=/private/tmp/gomap-deep1b-cache \
+COLUMN_VECTOR_DEEP1B_GRANULE_NATIVE_DIMS=16,32,96 \
+COLUMN_VECTOR_DEEP1B_GRANULE_NATIVE_CODECS=raw,zstd_fast,zstd_better \
+GOWORK=off go test ./experiments/colgranule \
+  -run '^$' \
+  -bench '^BenchmarkColumnVectorGraphDeep1BGranuleNativeScore/(local_residual_(fp32_byte_shuffle|int8_columns)_top(16|32|96))/(raw|zstd_fast|zstd_better)$' \
+  -benchmem \
+  -benchtime 200ms \
+  -count 1
+```
+
+This benchmark stores `H_mu x - e1` residuals in coordinate-major columns and
+scores with `H_mu q` transformed once per granule. `stored_B/entry` includes
+the shared centroid metadata and int8 scales, but not the separately reported
+`4 B/entry` inverse-norm column.
+
+| Path | Stored B/entry | Decode ms | Native score ms | Decode+score ms | Candidates/s | Fast-kernel est ms | Top10 overlap | Mean error | Bound pruned |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| fp32_top96/raw | 384.0 | 0.00002 | 0.797 | 0.797 | 10.3M | 0.085 | 10/10 | 0.0000001 | 99.88% |
+| fp32_top96/zstd_fast | 327.5 | 1.753 | 0.795 | 2.548 | 3.21M | 1.838 | 10/10 | 0.0000001 | 99.88% |
+| int8_top96/raw | 96.09 | 0.00002 | 0.310 | 0.310 | 26.4M | 0.085 | 10/10 | 0.00132 | 99.88% |
+| int8_top96/zstd_fast | 96.10 | 0.015 | 0.310 | 0.325 | 25.2M | 0.101 | 10/10 | 0.00132 | 99.88% |
+| int8_top96/zstd_better | 86.73 | 0.966 | 0.299 | 1.265 | 6.47M | 1.052 | 10/10 | 0.00132 | 99.88% |
+| int8_top32/raw | 32.06 | 0.00002 | 0.114 | 0.114 | 71.8M | 0.028 | 3/10 | 0.0453 | 0.085% |
+| int8_top16/raw | 16.05 | 0.00002 | 0.0688 | 0.0689 | 119M | 0.014 | 3/10 | 0.0626 | 0% |
+
+Interpretation:
+
+- This is the first benchmark that matches the target architecture: a
+  granule-local frame, residual storage relative to the local center,
+  transposed native streams, one query transform per granule, and direct
+  scoring from that stored layout.
+- Full local int8 residuals are the most interesting hot-representation result
+  so far. On this block they retain `10/10` exact top-10 overlap at about
+  `96 B/entry` plus the inverse-norm column, and the scalar Go scorer reaches
+  `~26M candidates/s` without zstd. That is still below resident fp32 but is
+  now in the same order of magnitude.
+- zstd-fast does not help the full int8 row on this block, while zstd-better
+  reduces the full int8 row to `86.7 B/entry` but spends almost `1 ms` in
+  decompression. That makes specialized numeric codecs the right next storage
+  question; plain zstd is a useful baseline, not the likely final codec.
+- Prefix rows confirm the earlier local-frame result: low-rank tangent prefixes
+  are very fast and tiny, but they only recover `3/10` top-10 candidates on
+  this nearest-ranked block. The bound is safe, but it only becomes tight when
+  the full 96 dimensions are present; `M=16` prunes nothing and `M=32` prunes
+  only `7/8192`.
+- The fast-kernel estimate is now meaningful because the scalar loop is already
+  storage-native. A vectorized/native int8 residual scorer has an optimistic
+  block target near `0.085-0.10 ms` for full dimensions before graph traversal
+  overhead, which is the right bar for deciding whether to build a real kernel.
 
 Local-frame approximate scoring smoke:
 
@@ -533,15 +612,25 @@ Useful reported metrics:
   intentionally does not fetch source documents or traverse a graph.
 - `decode_score_ms`, `decode_ms`, `direct_score_ms`, `candidates/s`,
   `max_score_error`, `mean_score_error`, `top10_overlap`, `recall@10`,
-  `poly_fallback_angle_ratio`, `stored_B/entry`, and `allocs/op` inside
+  `poly_fallback_angle_ratio`, `profile_angle_load_ms`,
+  `profile_sincos_scan_ms`, `fast_kernel_est_decode_score_ms`,
+  `stored_B/entry`, and `allocs/op` inside
   `BenchmarkColumnVectorGraphDeep1BSphericalDirectScore`: direct spherical
   scoring evidence over the stored angle-major byte stream. The exact-math row
   is the correctness/performance baseline; the half-pi polynomial row tests
   whether local-angle approximation can reduce trig cost without corrupting
-  top-k ranking.
+  top-k ranking. The profile metrics are scalar Go probes, while the
+  fast-kernel metrics are estimates anchored to the resident fp32 dot baseline.
 - `dims_used`, `top10_overlap`, `recall@10`, `max_score_error`,
   `mean_score_error`, `search_sketch_B/entry`, `quantized`,
   `bound_pruned_ratio`, and `bound_false_negative_count` inside
   `BenchmarkColumnVectorGraphDeep1BLocalFrameApproxScore`: local-frame
   approximate scoring evidence for future hot search sketches. The fp16/int8
   rows are actual quantized score paths, not hypothetical byte estimates.
+- `native_score_ms`, `decode_ms`, `fast_kernel_est_decode_score_ms`,
+  `native_raw_B/entry`, `stored_B/entry`, `top10_overlap`, `recall@10`,
+  `bound_pruned_ratio`, and `bound_false_negative_count` inside
+  `BenchmarkColumnVectorGraphDeep1BGranuleNativeScore`: storage-native
+  local-residual scoring evidence. These rows score directly from transposed
+  residual streams and separate scalar Go time from a dot-equivalent native
+  kernel estimate.
