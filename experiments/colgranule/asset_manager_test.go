@@ -376,6 +376,52 @@ func TestColumnAssetManagerPublishSucceededPreservesQuarantineAfterPublishFailur
 	}
 }
 
+func TestColumnAssetManagerPublishSucceededPreservesSameReasonQuarantineAfterPublishFailure(t *testing.T) {
+	store := NewMemoryColumnAssetStore()
+	manager, err := NewColumnAssetManager(store)
+	if err != nil {
+		t.Fatalf("NewColumnAssetManager: %v", err)
+	}
+	ref, err := manager.Put(ColumnAssetKindTCS1PartImage, make([]byte, tcs1HeaderBytes+16))
+	if err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	prepared := ColumnPreparedAsset{
+		Ref:          ref,
+		GenerationID: 7,
+		PublishID:    11,
+		Reason:       "publish staged",
+	}
+	if err := manager.MarkPublishFailed([]ColumnPreparedAsset{prepared}, "root publish failed"); err != nil {
+		t.Fatalf("MarkPublishFailed: %v", err)
+	}
+	if err := manager.Quarantine(ref, "root publish failed"); err != nil {
+		t.Fatalf("Quarantine: %v", err)
+	}
+	closure, err := manager.PreparePublishClosure([]ColumnPreparedAsset{prepared})
+	if err != nil {
+		t.Fatalf("PreparePublishClosure: %v", err)
+	}
+	synced, err := manager.SyncPublishClosure(closure)
+	if err != nil {
+		t.Fatalf("SyncPublishClosure: %v", err)
+	}
+	if err := manager.MarkPublishSucceeded(synced, "root published"); err != nil {
+		t.Fatalf("MarkPublishSucceeded: %v", err)
+	}
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	if got := manager.quarantine[ref]; got != "root publish failed" {
+		t.Fatalf("quarantine reason=%q want root publish failed", got)
+	}
+	if _, ok := manager.publishFailed[ref]; ok {
+		t.Fatalf("publish-failed marker preserved after successful publish")
+	}
+	if got := manager.published[ref]; got != "root published" {
+		t.Fatalf("published reason=%q want root published", got)
+	}
+}
+
 func TestColumnAssetManagerPreparedPublishFailureQuarantinesAssets(t *testing.T) {
 	store := NewMemoryColumnAssetStore()
 	manager, err := NewColumnAssetManager(store)
