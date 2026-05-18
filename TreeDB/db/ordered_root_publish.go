@@ -20,7 +20,11 @@ import (
 
 type orderedRootPublishPlan uint8
 
-var errCommandWALContextMissingFrame = errors.New("command wal context publish requires a command frame")
+// ErrCommandWALContextMissingFrame reports a command-WAL context publish that
+// was called without the command frame that defines the publish LSN.
+var ErrCommandWALContextMissingFrame = errors.New("treedb: command WAL context publish requires a command frame")
+
+var errCommandWALContextZeroLSN = errors.New("treedb: command WAL context publish appended zero LSN")
 
 const (
 	orderedRootPublishPlanColdBuild orderedRootPublishPlan = iota
@@ -167,7 +171,10 @@ type OrderedRootGroupCommandWALSystemBuilder func(CommandWALPublishContext, []ui
 type OrderedRootGroupCommandWALDeltaBuilder func(CommandWALPublishContext) ([]OrderedRootDeltaPublishInput, error)
 
 // OrderedRootDeltaBatchGroupCommandWALDeltaBuilder is the batch-materialized
-// counterpart to OrderedRootGroupCommandWALDeltaBuilder.
+// counterpart to OrderedRootGroupCommandWALDeltaBuilder. Returned batch deltas
+// keep the normal OrderedRootDeltaBatchPublishInput ownership contract: the DB
+// publish path does not close them, so builders that allocate batches must
+// arrange cleanup after the enclosing publish call returns.
 type OrderedRootDeltaBatchGroupCommandWALDeltaBuilder func(CommandWALPublishContext) ([]OrderedRootDeltaBatchPublishInput, error)
 
 // OrderedRootGroupPreflight validates that a root group can still be applied.
@@ -1502,10 +1509,10 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered []Order
 
 func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBuilder(ordered []OrderedRootDeltaPublishInput, preflight OrderedRootGroupPreflight, commandWALIntent *CommandWALIntent, buildContextDeltas OrderedRootGroupCommandWALDeltaBuilder, buildSystemDeltaIter OrderedRootGroupCommandWALSystemBuilder) (newSystemRoot uint64, rootIDs []uint64, err error) {
 	if buildSystemDeltaIter == nil {
-		return 0, nil, errors.New("nil ordered root group command wal system delta builder")
+		return 0, nil, errors.New("nil ordered root group command WAL system delta builder")
 	}
 	if commandWALIntent == nil {
-		return 0, nil, errCommandWALContextMissingFrame
+		return 0, nil, ErrCommandWALContextMissingFrame
 	}
 	if db == nil {
 		return 0, nil, ErrClosed
@@ -1580,11 +1587,11 @@ func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBui
 	if err != nil {
 		return 0, nil, err
 	}
+	commandAppended = true
 	if lsn == 0 {
-		err = errCommandWALContextMissingFrame
+		err = errCommandWALContextZeroLSN
 		return 0, nil, err
 	}
-	commandAppended = true
 	ctx := CommandWALPublishContext{AppliedCommandLSN: lsn}
 
 	if buildContextDeltas != nil {
@@ -1613,6 +1620,9 @@ func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBui
 		if err != nil {
 			return 0, nil, err
 		}
+		// publishOrderedRootDeltaIterator takes ownership and closes the
+		// iterator on every non-nil path; the deferred cleanup must not close it
+		// a second time if root publication fails after ownership transfer.
 		orderedConsumed[idx] = true
 		phaseStart := time.Now()
 		rootID, rootRetired, metrics, err := db.publishOrderedRootDeltaIterator(allOrdered[idx].BaseRoot, allOrdered[idx].Iter, opts)
@@ -2069,10 +2079,10 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 
 func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilderSerialized(ordered []OrderedRootDeltaBatchPublishInput, preflight OrderedRootGroupPreflight, commandWALIntent *CommandWALIntent, buildContextDeltas OrderedRootDeltaBatchGroupCommandWALDeltaBuilder, buildSystemDeltaIter OrderedRootGroupCommandWALSystemBuilder) (newSystemRoot uint64, rootIDs []uint64, err error) {
 	if buildSystemDeltaIter == nil {
-		return 0, nil, errors.New("nil ordered root group command wal system delta builder")
+		return 0, nil, errors.New("nil ordered root group command WAL system delta builder")
 	}
 	if commandWALIntent == nil {
-		return 0, nil, errCommandWALContextMissingFrame
+		return 0, nil, ErrCommandWALContextMissingFrame
 	}
 	if db == nil {
 		return 0, nil, ErrClosed
@@ -2142,11 +2152,11 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 	if err != nil {
 		return 0, nil, err
 	}
+	commandAppended = true
 	if lsn == 0 {
-		err = errCommandWALContextMissingFrame
+		err = errCommandWALContextZeroLSN
 		return 0, nil, err
 	}
-	commandAppended = true
 	ctx := CommandWALPublishContext{AppliedCommandLSN: lsn}
 
 	allOrdered := ordered

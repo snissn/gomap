@@ -1,13 +1,16 @@
 package collections
 
 import (
+	"bytes"
 	"errors"
+	"strings"
 	"testing"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 )
 
 func TestColumnStoreWritesRequireCommandWALM10B(t *testing.T) {
@@ -85,6 +88,80 @@ func TestColumnStoreBenchmarkRelaxedRejectsBufferedWritesM10B(t *testing.T) {
 			t.Fatalf("write domain count=%d, want 0 after rejected column-store writes", count)
 		}
 	}
+}
+
+func TestColumnStoreBufferedDeletePathsRequireCommandWALM10B(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		del  func(*Collection) error
+	}{
+		{
+			name: "DeleteDocument",
+			del: func(col *Collection) error {
+				deleted, err := col.DeleteDocument([]byte("e1"))
+				if deleted {
+					return errors.New("DeleteDocument deleted=true, want rejected before delete")
+				}
+				return err
+			},
+		},
+		{
+			name: "DeleteBatch",
+			del: func(col *Collection) error {
+				deleted, err := col.DeleteBatch([][]byte{[]byte("e1")})
+				if deleted != 0 {
+					return errors.New("DeleteBatch deleted rows before rejection")
+				}
+				return err
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d, col := openBufferedBSONColumnStoreSeedM10B(t, true)
+			defer func() { _ = d.Close() }()
+
+			err := tc.del(col)
+			if !errors.Is(err, backenddb.ErrCommandWALRejected) {
+				t.Fatalf("%s error=%v, want ErrCommandWALRejected", tc.name, err)
+			}
+			got, err := col.Get([]byte("e1"))
+			if err != nil {
+				t.Fatalf("Get after rejected delete: %v", err)
+			}
+			if got == nil {
+				t.Fatalf("document was deleted after rejected %s", tc.name)
+			}
+			assertColumnStoreWriteDomainEmptyM10B(t, col)
+		})
+	}
+}
+
+func TestColumnStoreBufferedUpdatePathRequiresCommandWALM10B(t *testing.T) {
+	d, col := openBufferedBSONColumnStoreSeedM10B(t, false)
+	defer func() { _ = d.Close() }()
+
+	before, err := col.Get([]byte("e1"))
+	if err != nil {
+		t.Fatalf("Get before update: %v", err)
+	}
+	matched, modified, err := col.UpdateBSONSet([]byte("e1"), []BSONSetField{{
+		Key:   "kind",
+		Value: mustBSONRawValue(t, "post"),
+	}})
+	if !errors.Is(err, backenddb.ErrCommandWALRejected) {
+		t.Fatalf("UpdateBSONSet error=%v, want ErrCommandWALRejected", err)
+	}
+	if matched || modified {
+		t.Fatalf("UpdateBSONSet matched=%v modified=%v, want false/false on rejected write", matched, modified)
+	}
+	after, err := col.Get([]byte("e1"))
+	if err != nil {
+		t.Fatalf("Get after rejected update: %v", err)
+	}
+	if !bytes.Equal(after, before) {
+		t.Fatalf("document changed after rejected update: before=%x after=%x", before, after)
+	}
+	assertColumnStoreWriteDomainEmptyM10B(t, col)
 }
 
 func TestColumnStoreCommandWALMutationsPublishManifestM10B(t *testing.T) {
@@ -303,6 +380,76 @@ func TestColumnStoreRelaxedProfileWritesRejectedBeforeCommandAppendM10C(t *testi
 	}
 }
 
+func TestAppendColumnManifestRootPublishBaseDeduplicatesM10B(t *testing.T) {
+	columnRootName := collectionColumnManifestRootName("events")
+	rootNames := []string{collectionPrimaryRootName("events"), columnRootName}
+	baseRootIDs := map[string]uint64{
+		collectionPrimaryRootName("events"): 11,
+		columnRootName:                      22,
+	}
+
+	gotNames, gotBases := appendColumnManifestRootPublishBase(rootNames, baseRootIDs, columnRootName, 33)
+	if len(gotNames) != len(rootNames) {
+		t.Fatalf("root names len=%d want %d names=%v", len(gotNames), len(rootNames), gotNames)
+	}
+	for i := range rootNames {
+		if gotNames[i] != rootNames[i] {
+			t.Fatalf("rootNames[%d]=%q want %q", i, gotNames[i], rootNames[i])
+		}
+	}
+	if gotBases[columnRootName] != 33 {
+		t.Fatalf("column base root=%d want updated base 33", gotBases[columnRootName])
+	}
+	if gotBases[collectionPrimaryRootName("events")] != 11 {
+		t.Fatalf("primary base root changed: %v", gotBases)
+	}
+}
+
+func TestColumnManifestRootDescriptorSystemDeltaRejectsPlanRootMismatchM10B(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "events",
+		Options: CollectionOptions{ColumnStore: testColumnStoreConfig(nil)},
+	}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col := openColumnStoreCollectionM10B(t, d)
+
+	planInput := testColumnPublishPlanInputM10A(
+		ColumnManifestIdentity{Generation: 1, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0x1234},
+		testColumnPublishPreparedAssetM10A(),
+	)
+	planInput.BaseManifestRootID = 0
+	plan, err := BuildColumnPublishPlan(planInput)
+	if err != nil {
+		t.Fatalf("BuildColumnPublishPlan: %v", err)
+	}
+	plan.ManifestRootName = collectionColumnManifestRootName("other")
+	plan.RootDelta.RootName = plan.ManifestRootName
+
+	rootName := collectionColumnManifestRootName("events")
+	iter, err := col.buildRootDescriptorAndColumnManifestSystemDeltaIteratorForMeta(
+		col.Meta(),
+		0,
+		0,
+		[]string{rootName},
+		map[string]uint64{rootName: 0},
+		[]uint64{1},
+		plan,
+	)
+	if iter != nil {
+		_ = iter.Close()
+	}
+	if err == nil || !strings.Contains(err.Error(), "does not match collection root") {
+		t.Fatalf("buildRootDescriptorAndColumnManifestSystemDeltaIteratorForMeta err=%v want root mismatch", err)
+	}
+}
+
 func prepareColumnStoreCommandWALDirM10B(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -328,6 +475,105 @@ func prepareColumnStoreCommandWALDirM10B(t *testing.T) string {
 	return dir
 }
 
+func openBufferedBSONColumnStoreSeedM10B(t *testing.T, indexed bool) (*backenddb.DB, *Collection) {
+	t.Helper()
+	d, err := backenddb.Open(backenddb.Options{
+		Dir:                    t.TempDir(),
+		Durability:             backenddb.DurabilityWALOffRelaxed,
+		DisableBackgroundPrune: true,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "events",
+		Options: CollectionOptions{
+			DocumentFormat:        DocumentFormatBSON,
+			BufferedIndexedWrites: indexed,
+		},
+	}); err != nil {
+		_ = d.Close()
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := mgr.OpenCollection("events")
+	if err != nil {
+		_ = d.Close()
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	doc, err := bson.Marshal(bson.D{
+		{Key: "time_us", Value: int64(1)},
+		{Key: "kind", Value: "like"},
+		{Key: "did", Value: "d1"},
+	})
+	if err != nil {
+		_ = d.Close()
+		t.Fatalf("bson.Marshal: %v", err)
+	}
+	if _, err := col.InsertBatchValidatedBSON([][]byte{[]byte("e1")}, [][]byte{doc}); err != nil {
+		_ = d.Close()
+		t.Fatalf("InsertBatchValidatedBSON seed: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		_ = d.Close()
+		t.Fatalf("Flush seed: %v", err)
+	}
+	if indexed {
+		if _, err := col.CreateIndex(IndexDefinition{Name: "kind", Field: "kind", ValueType: IndexValueString}); err != nil {
+			_ = d.Close()
+			t.Fatalf("CreateIndex: %v", err)
+		}
+	}
+	col = enableColumnStoreForExistingCollectionM10B(t, d, "events")
+	return d, col
+}
+
+func enableColumnStoreForExistingCollectionM10B(t *testing.T, d *backenddb.DB, collectionName string) *Collection {
+	t.Helper()
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatalf("AcquireSnapshot: nil")
+	}
+	catalog, err := loadCollectionCatalog(snap, collectionName)
+	_ = snap.Close()
+	if err != nil {
+		t.Fatalf("loadCollectionCatalog: %v", err)
+	}
+	if catalog == nil {
+		t.Fatalf("missing collection catalog for %q", collectionName)
+	}
+	meta := catalog.meta
+	cfg := testColumnStoreConfig(nil)
+	cfg.ProfileSupport = ColumnStoreProfileBenchmarkRelaxed
+	meta.Options.ColumnStore = cfg
+	normalized, err := normalizeCollectionMeta(meta)
+	if err != nil {
+		t.Fatalf("normalizeCollectionMeta: %v", err)
+	}
+	encoded, err := encodeCollectionMeta(normalized)
+	if err != nil {
+		t.Fatalf("encodeCollectionMeta: %v", err)
+	}
+	_, _, err = d.PublishOrderedRootGroupWithSystemBuilder(nil, func([]uint64) (iterator.UnsafeIterator, error) {
+		current := d.AcquireSnapshot()
+		if current == nil {
+			return nil, backenddb.ErrClosed
+		}
+		defer func() { _ = current.Close() }()
+		return buildSystemTargetIterator(current, map[string][]byte{
+			systemCollectionMetaKey(normalized.Name): encoded,
+		})
+	})
+	if err != nil {
+		t.Fatalf("publish column-store metadata: %v", err)
+	}
+	col, err := NewCollectionManager(d).OpenCollection(collectionName)
+	if err != nil {
+		t.Fatalf("OpenCollection after column-store enable: %v", err)
+	}
+	return col
+}
+
 func openColumnStoreCollectionM10B(t *testing.T, d *backenddb.DB) *Collection {
 	t.Helper()
 	col, err := NewCollectionManager(d).OpenCollection("events")
@@ -335,6 +581,18 @@ func openColumnStoreCollectionM10B(t *testing.T, d *backenddb.DB) *Collection {
 		t.Fatalf("OpenCollection: %v", err)
 	}
 	return col
+}
+
+func assertColumnStoreWriteDomainEmptyM10B(t testing.TB, col *Collection) {
+	t.Helper()
+	if col.writeDomain == nil {
+		return
+	}
+	col.writeDomain.mu.RLock()
+	defer col.writeDomain.mu.RUnlock()
+	if col.writeDomain.count != 0 || col.writeDomain.rootRunCount != 0 {
+		t.Fatalf("write domain staged count=%d rootRunCount=%d, want empty", col.writeDomain.count, col.writeDomain.rootRunCount)
+	}
 }
 
 func assertColumnManifestStateM10B(t testing.TB, col *Collection, generation, appliedLSN uint64) {
