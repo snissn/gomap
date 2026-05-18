@@ -429,6 +429,7 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 	run := columnStoreBenchRun(baseCfg, profile, dataDir, report, db.Stats(), checkpointDuration)
 	if strings.TrimSpace(opts.ProfileDir) != "" {
 		report.Artifacts = columnStoreArtifactPathsForProfileDir(opts.ProfileDir, baseCfg)
+		report.Artifacts = columnStoreSuitePruneMissingRuntimeDeltaArtifacts(report.Artifacts)
 		md = renderColumnStoreSuiteMarkdown(report)
 		if err := writeColumnStoreSuiteArtifacts(opts.ProfileDir, opts.ExecutionPath, report, md, run); err != nil {
 			return "", err
@@ -1557,6 +1558,24 @@ func columnStoreBenchRun(baseCfg BenchConfig, profile, dataDir string, report co
 		TreeDBStats: map[string]map[string]string{columnStoreSuiteBenchDisplayName: stats},
 		DiskUsage:   map[string]dirDiskUsage{columnStoreSuiteBenchDisplayName: {TotalBytes: uint64(report.ByteAccounting.DBTotalBytes), TotalFiles: report.ByteAccounting.DBTotalFiles}},
 	}
+}
+
+func columnStoreSuitePruneMissingRuntimeDeltaArtifacts(paths columnStoreArtifactPaths) columnStoreArtifactPaths {
+	paths.BlockDeltaProfile = columnStoreExistingOptionalArtifactPath(paths.BlockDeltaProfile)
+	paths.MutexDeltaProfile = columnStoreExistingOptionalArtifactPath(paths.MutexDeltaProfile)
+	return paths
+}
+
+func columnStoreExistingOptionalArtifactPath(path string) string {
+	if strings.TrimSpace(path) == "" {
+		return ""
+	}
+	if _, err := os.Stat(path); err == nil {
+		return path
+	} else if errors.Is(err, os.ErrNotExist) {
+		return ""
+	}
+	return path
 }
 
 func writeColumnStoreSuiteArtifacts(dir, executionPath string, report columnStoreSuiteReport, md string, run BenchRun) error {
