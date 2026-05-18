@@ -1,0 +1,203 @@
+package collections
+
+import (
+	"strings"
+	"testing"
+)
+
+func TestColumnQueryPlannerM11BChoosesExpectedKindsForOneFixture(t *testing.T) {
+	catalog := &collectionCatalog{
+		meta: CollectionMeta{
+			Name: "events",
+			Options: CollectionOptions{ColumnStore: &ColumnStoreConfig{
+				Enabled: true,
+				Columns: []ColumnStoreColumn{
+					{Name: "time_us", Path: "time_us", ValueType: ColumnStoreValueInt64},
+					{Name: "kind", Path: "kind", ValueType: ColumnStoreValueString},
+					{Name: "did", Path: "did", ValueType: ColumnStoreValueString},
+				},
+				SortKey: []ColumnSortKey{{Column: "time_us"}},
+			}},
+			Indexes: []IndexDefinition{
+				{Name: "kind_idx", Field: "kind", ValueType: IndexValueString},
+				{Name: "time_us_idx", Field: "time_us", ValueType: IndexValueInt64},
+				{Name: "did_idx", Field: "did", ValueType: IndexValueString},
+			},
+		},
+	}
+	identity := ColumnStoreCacheIdentity{
+		Collection:                      "events",
+		ManifestRoot:                    99,
+		ManifestGeneration:              7,
+		RecoveryAuthoritativeGeneration: 7,
+	}
+	base := ColumnQueryPlanRequest{
+		Name:                  "q5",
+		ProjectedColumns:      []string{"time_us", "kind", "did"},
+		CandidateIndexColumns: []string{"kind"},
+		EstimatedRows:         100_000,
+		Capabilities: ColumnQueryPlannerCapabilities{
+			SerialColumnScan:       true,
+			AggregateMetadata:      true,
+			ParallelColumnScan:     true,
+			PhysicalAssetCount:     8,
+			PartCount:              4,
+			GranuleCount:           128,
+			MaxParallelWorkers:     4,
+			PlannerCandidateBudget: 5,
+		},
+	}
+
+	tests := []struct {
+		name  string
+		req   ColumnQueryPlanRequest
+		want  ColumnQueryPlanKind
+		index string
+	}{
+		{
+			name: "row fallback",
+			req: ColumnQueryPlanRequest{
+				Name:             "q1",
+				ProjectedColumns: []string{"time_us", "kind", "did"},
+			},
+			want: ColumnQueryPlanRowStoreBaseline,
+		},
+		{
+			name: "b tree index",
+			req: func() ColumnQueryPlanRequest {
+				req := base
+				req.ForceKind = ColumnQueryPlanBTreeIndexBaseline
+				return req
+			}(),
+			want:  ColumnQueryPlanBTreeIndexBaseline,
+			index: "kind_idx",
+		},
+		{
+			name: "serial column scan",
+			req: func() ColumnQueryPlanRequest {
+				req := base
+				req.ForceKind = ColumnQueryPlanSerialColumnScan
+				return req
+			}(),
+			want: ColumnQueryPlanSerialColumnScan,
+		},
+		{
+			name: "aggregate metadata",
+			req: func() ColumnQueryPlanRequest {
+				req := base
+				req.ForceKind = ColumnQueryPlanAggregateMetadata
+				req.AggregateMetadataName = "q5_did_time_span"
+				return req
+			}(),
+			want: ColumnQueryPlanAggregateMetadata,
+		},
+		{
+			name: "parallel column scan",
+			req: func() ColumnQueryPlanRequest {
+				req := base
+				req.ForceKind = ColumnQueryPlanParallelColumnScan
+				return req
+			}(),
+			want: ColumnQueryPlanParallelColumnScan,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			plan := planColumnQueryForCatalog(catalog, identity, true, tc.req)
+			if !plan.Supported {
+				t.Fatalf("plan unsupported: %+v", plan.Diagnostics)
+			}
+			if plan.Kind != tc.want {
+				t.Fatalf("plan kind=%q want %q diagnostics=%+v", plan.Kind, tc.want, plan.Diagnostics)
+			}
+			if tc.index != "" && plan.IndexName != tc.index {
+				t.Fatalf("index=%q want %q", plan.IndexName, tc.index)
+			}
+			if !plan.Diagnostics.RecoveryAuthoritative && plan.Kind != ColumnQueryPlanRowStoreBaseline && plan.Kind != ColumnQueryPlanBTreeIndexBaseline {
+				t.Fatalf("physical plan did not record recovery-authoritative manifest: %+v", plan.Diagnostics)
+			}
+		})
+	}
+}
+
+func TestColumnQueryPlannerM11BRejectsNonRecoveryAuthoritativeManifest(t *testing.T) {
+	catalog := &collectionCatalog{meta: CollectionMeta{
+		Name:    "events",
+		Options: CollectionOptions{ColumnStore: &ColumnStoreConfig{Enabled: true}},
+	}}
+	identity := ColumnStoreCacheIdentity{
+		Collection:                      "events",
+		ManifestRoot:                    99,
+		ManifestGeneration:              8,
+		RecoveryAuthoritativeGeneration: 7,
+	}
+	req := ColumnQueryPlanRequest{
+		Name:      "q1",
+		ForceKind: ColumnQueryPlanSerialColumnScan,
+		Capabilities: ColumnQueryPlannerCapabilities{
+			SerialColumnScan:   true,
+			PhysicalAssetCount: 1,
+			GranuleCount:       1,
+		},
+	}
+
+	plan := planColumnQueryForCatalog(catalog, identity, true, req)
+	if plan.Supported {
+		t.Fatalf("expected non-recovery-authoritative manifest to fail closed: %+v", plan)
+	}
+	if plan.Kind != ColumnQueryPlanSerialColumnScan {
+		t.Fatalf("kind=%q want serial", plan.Kind)
+	}
+	if !strings.Contains(plan.Diagnostics.UnsupportedPlanReason, "recovery-authoritative") {
+		t.Fatalf("unsupported reason=%q", plan.Diagnostics.UnsupportedPlanReason)
+	}
+}
+
+func TestColumnSkipScanM11BPrunesOnlyLeftPrefixMarks(t *testing.T) {
+	marks := []ColumnSkipScanMark{
+		{Name: "before", Rows: 10, MinKeys: [][]byte{{0x01}}, MaxKeys: [][]byte{{0x09}}},
+		{Name: "overlap", Rows: 10, MinKeys: [][]byte{{0x10}}, MaxKeys: [][]byte{{0x20}}},
+		{Name: "after", Rows: 10, MinKeys: [][]byte{{0x30}}, MaxKeys: [][]byte{{0x40}}},
+	}
+	result := PlanColumnSkipScan([]ColumnSkipScanPredicate{{
+		Position: 0,
+		Lower:    ColumnSkipScanBound{Key: []byte{0x10}, Inclusive: true},
+		Upper:    ColumnSkipScanBound{Key: []byte{0x35}, Inclusive: true},
+	}}, marks)
+	if got, want := result.LeftPrefixColumns, 1; got != want {
+		t.Fatalf("left prefix=%d want %d", got, want)
+	}
+	if got, want := result.ScheduledMarks, []int{1, 2}; !equalInts(got, want) {
+		t.Fatalf("scheduled=%v want %v", got, want)
+	}
+	if got, want := result.SkippedMarks, []int{0}; !equalInts(got, want) {
+		t.Fatalf("skipped=%v want %v", got, want)
+	}
+
+	nonLeftPrefix := PlanColumnSkipScan([]ColumnSkipScanPredicate{{
+		Position: 1,
+		Lower:    ColumnSkipScanBound{Key: []byte{0x99}, Inclusive: true},
+		Upper:    ColumnSkipScanBound{Key: []byte{0xaa}, Inclusive: true},
+	}}, marks)
+	if got, want := nonLeftPrefix.LeftPrefixColumns, 0; got != want {
+		t.Fatalf("non-left-prefix columns=%d want %d", got, want)
+	}
+	if got, want := nonLeftPrefix.ScheduledMarks, []int{0, 1, 2}; !equalInts(got, want) {
+		t.Fatalf("non-left-prefix scheduled=%v want %v", got, want)
+	}
+	if len(nonLeftPrefix.SkippedMarks) != 0 {
+		t.Fatalf("non-left-prefix skipped=%v want none", nonLeftPrefix.SkippedMarks)
+	}
+}
+
+func equalInts(left, right []int) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
+}

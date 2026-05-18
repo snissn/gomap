@@ -1,0 +1,430 @@
+package collections
+
+import (
+	"bytes"
+	"errors"
+	"fmt"
+	"strings"
+)
+
+type ColumnQueryPlanKind string
+
+const (
+	ColumnQueryPlanRowStoreBaseline   ColumnQueryPlanKind = "row_store_baseline"
+	ColumnQueryPlanBTreeIndexBaseline ColumnQueryPlanKind = "b_tree_index_baseline"
+	ColumnQueryPlanSerialColumnScan   ColumnQueryPlanKind = "serial_column_scan"
+	ColumnQueryPlanAggregateMetadata  ColumnQueryPlanKind = "aggregate_metadata"
+	ColumnQueryPlanParallelColumnScan ColumnQueryPlanKind = "parallel_column_scan"
+)
+
+var ErrColumnQueryPlanUnsupported = errors.New("collections: column query plan unsupported")
+
+type ColumnQueryPredicateOperator string
+
+const (
+	ColumnQueryPredicateEqual              ColumnQueryPredicateOperator = "="
+	ColumnQueryPredicateGreaterOrEqual     ColumnQueryPredicateOperator = ">="
+	ColumnQueryPredicateGreaterThan        ColumnQueryPredicateOperator = ">"
+	ColumnQueryPredicateLessOrEqual        ColumnQueryPredicateOperator = "<="
+	ColumnQueryPredicateLessThan           ColumnQueryPredicateOperator = "<"
+	ColumnQueryPredicateGroupOrOrderDriver ColumnQueryPredicateOperator = "driver"
+)
+
+type ColumnQueryPredicate struct {
+	Column   string
+	Operator ColumnQueryPredicateOperator
+}
+
+type ColumnQueryPlannerCapabilities struct {
+	SerialColumnScan        bool
+	AggregateMetadata       bool
+	ParallelColumnScan      bool
+	PhysicalAssetCount      int
+	PartCount               int
+	GranuleCount            int
+	MaxParallelWorkers      int
+	DecodedBlockCacheHits   uint64
+	DecodedBlockCacheMisses uint64
+	PlannerCandidateBudget  int
+}
+
+type ColumnQueryPlanRequest struct {
+	Name                  string
+	ProjectedColumns      []string
+	Predicates            []ColumnQueryPredicate
+	CandidateIndexColumns []string
+	AggregateMetadataName string
+	EstimatedRows         int
+	ForceKind             ColumnQueryPlanKind
+	Capabilities          ColumnQueryPlannerCapabilities
+}
+
+type ColumnQueryPlanDiagnostics struct {
+	Reason                  string
+	CandidatePlans          int
+	ProjectedColumns        int
+	Predicates              int
+	RecoveryAuthoritative   bool
+	PhysicalAssetCount      int
+	PartCount               int
+	GranuleCount            int
+	MaxParallelWorkers      int
+	WorkerCount             int
+	ScheduledGranules       int
+	SkippedGranules         int
+	DecodedBlockCacheHits   uint64
+	DecodedBlockCacheMisses uint64
+	SelectedIndexName       string
+	SelectedIndexField      string
+	SelectedManifestRoot    uint64
+	SelectedManifestGen     uint64
+	RecoveryManifestGen     uint64
+	AppliedCommandLSN       uint64
+	UnsupportedPlanKind     ColumnQueryPlanKind
+	UnsupportedPlanReason   string
+}
+
+type ColumnQueryPlan struct {
+	Kind        ColumnQueryPlanKind
+	Supported   bool
+	IndexName   string
+	IndexField  string
+	Diagnostics ColumnQueryPlanDiagnostics
+}
+
+func (c *Collection) PlanColumnQuery(req ColumnQueryPlanRequest) (ColumnQueryPlan, error) {
+	if c == nil {
+		return ColumnQueryPlan{}, errCollectionNil
+	}
+	c.catalogMu.RLock()
+	catalog := c.catalog
+	systemRoot := c.catalogSystemRoot
+	commitSeq := c.catalogCommitSeq
+	c.catalogMu.RUnlock()
+	if catalog == nil {
+		return ColumnQueryPlan{}, errCollectionNotFound
+	}
+	identity, identityOK := columnStoreCacheIdentity(catalog, systemRoot, commitSeq)
+	return planColumnQueryForCatalog(catalog, identity, identityOK, req), nil
+}
+
+func planColumnQueryForCatalog(catalog *collectionCatalog, identity ColumnStoreCacheIdentity, identityOK bool, req ColumnQueryPlanRequest) ColumnQueryPlan {
+	diag := ColumnQueryPlanDiagnostics{
+		CandidatePlans:          columnQueryPlannerCandidateCount(req),
+		ProjectedColumns:        len(req.ProjectedColumns),
+		Predicates:              len(req.Predicates),
+		RecoveryAuthoritative:   columnQueryManifestRecoveryAuthoritative(identity, identityOK),
+		PhysicalAssetCount:      req.Capabilities.PhysicalAssetCount,
+		PartCount:               req.Capabilities.PartCount,
+		GranuleCount:            req.Capabilities.GranuleCount,
+		MaxParallelWorkers:      req.Capabilities.MaxParallelWorkers,
+		DecodedBlockCacheHits:   req.Capabilities.DecodedBlockCacheHits,
+		DecodedBlockCacheMisses: req.Capabilities.DecodedBlockCacheMisses,
+		SelectedManifestRoot:    identity.ManifestRoot,
+		SelectedManifestGen:     identity.ManifestGeneration,
+		RecoveryManifestGen:     identity.RecoveryAuthoritativeGeneration,
+		AppliedCommandLSN:       identity.RecoveryAuthoritativeAppliedCommandLSN,
+	}
+	if req.Capabilities.GranuleCount > 0 {
+		diag.ScheduledGranules = req.Capabilities.GranuleCount
+	}
+	if req.Capabilities.MaxParallelWorkers > 0 {
+		diag.WorkerCount = 1
+	}
+
+	if req.ForceKind != "" {
+		return forcedColumnQueryPlan(catalog, identity, identityOK, req, diag)
+	}
+	if ok, plan := aggregateColumnQueryPlan(identity, identityOK, req, diag); ok {
+		return plan
+	}
+	if ok, plan := parallelColumnQueryPlan(identity, identityOK, req, diag); ok {
+		return plan
+	}
+	if ok, plan := serialColumnQueryPlan(identity, identityOK, req, diag); ok {
+		return plan
+	}
+	if idx, ok := selectColumnQueryBTreeIndex(catalog, req); ok {
+		diag.SelectedIndexName = idx.Name
+		diag.SelectedIndexField = idx.Field
+		diag.Reason = "selected matching collection secondary index"
+		return ColumnQueryPlan{Kind: ColumnQueryPlanBTreeIndexBaseline, Supported: true, IndexName: idx.Name, IndexField: idx.Field, Diagnostics: diag}
+	}
+	diag.Reason = "row-store fallback"
+	return ColumnQueryPlan{Kind: ColumnQueryPlanRowStoreBaseline, Supported: true, Diagnostics: diag}
+}
+
+func forcedColumnQueryPlan(catalog *collectionCatalog, identity ColumnStoreCacheIdentity, identityOK bool, req ColumnQueryPlanRequest, diag ColumnQueryPlanDiagnostics) ColumnQueryPlan {
+	switch req.ForceKind {
+	case ColumnQueryPlanRowStoreBaseline:
+		diag.Reason = "forced row-store baseline"
+		return ColumnQueryPlan{Kind: ColumnQueryPlanRowStoreBaseline, Supported: true, Diagnostics: diag}
+	case ColumnQueryPlanBTreeIndexBaseline:
+		idx, ok := selectColumnQueryBTreeIndex(catalog, req)
+		if !ok {
+			return unsupportedColumnQueryPlan(ColumnQueryPlanBTreeIndexBaseline, "no matching collection secondary index", diag)
+		}
+		diag.SelectedIndexName = idx.Name
+		diag.SelectedIndexField = idx.Field
+		diag.Reason = "forced matching collection secondary index"
+		return ColumnQueryPlan{Kind: ColumnQueryPlanBTreeIndexBaseline, Supported: true, IndexName: idx.Name, IndexField: idx.Field, Diagnostics: diag}
+	case ColumnQueryPlanSerialColumnScan:
+		if ok, plan := serialColumnQueryPlan(identity, identityOK, req, diag); ok {
+			plan.Diagnostics.Reason = "forced serial physical column scan"
+			return plan
+		}
+		return unsupportedColumnQueryPlan(ColumnQueryPlanSerialColumnScan, physicalColumnQueryUnsupportedReason(identity, identityOK, req, ColumnQueryPlanSerialColumnScan), diag)
+	case ColumnQueryPlanAggregateMetadata:
+		if ok, plan := aggregateColumnQueryPlan(identity, identityOK, req, diag); ok {
+			plan.Diagnostics.Reason = "forced aggregate metadata plan"
+			return plan
+		}
+		return unsupportedColumnQueryPlan(ColumnQueryPlanAggregateMetadata, physicalColumnQueryUnsupportedReason(identity, identityOK, req, ColumnQueryPlanAggregateMetadata), diag)
+	case ColumnQueryPlanParallelColumnScan:
+		if ok, plan := parallelColumnQueryPlan(identity, identityOK, req, diag); ok {
+			plan.Diagnostics.Reason = "forced parallel physical column scan"
+			return plan
+		}
+		return unsupportedColumnQueryPlan(ColumnQueryPlanParallelColumnScan, physicalColumnQueryUnsupportedReason(identity, identityOK, req, ColumnQueryPlanParallelColumnScan), diag)
+	default:
+		return unsupportedColumnQueryPlan(req.ForceKind, fmt.Sprintf("unknown column query plan kind %q", req.ForceKind), diag)
+	}
+}
+
+func serialColumnQueryPlan(identity ColumnStoreCacheIdentity, identityOK bool, req ColumnQueryPlanRequest, diag ColumnQueryPlanDiagnostics) (bool, ColumnQueryPlan) {
+	if !physicalColumnQuerySupported(identity, identityOK, req, ColumnQueryPlanSerialColumnScan) {
+		return false, ColumnQueryPlan{}
+	}
+	diag.Reason = "selected serial physical column scan"
+	return true, ColumnQueryPlan{Kind: ColumnQueryPlanSerialColumnScan, Supported: true, Diagnostics: diag}
+}
+
+func aggregateColumnQueryPlan(identity ColumnStoreCacheIdentity, identityOK bool, req ColumnQueryPlanRequest, diag ColumnQueryPlanDiagnostics) (bool, ColumnQueryPlan) {
+	if strings.TrimSpace(req.AggregateMetadataName) == "" {
+		return false, ColumnQueryPlan{}
+	}
+	if !physicalColumnQuerySupported(identity, identityOK, req, ColumnQueryPlanAggregateMetadata) {
+		return false, ColumnQueryPlan{}
+	}
+	diag.Reason = "selected aggregate metadata"
+	diag.ScheduledGranules = 0
+	return true, ColumnQueryPlan{Kind: ColumnQueryPlanAggregateMetadata, Supported: true, Diagnostics: diag}
+}
+
+func parallelColumnQueryPlan(identity ColumnStoreCacheIdentity, identityOK bool, req ColumnQueryPlanRequest, diag ColumnQueryPlanDiagnostics) (bool, ColumnQueryPlan) {
+	if !physicalColumnQuerySupported(identity, identityOK, req, ColumnQueryPlanParallelColumnScan) {
+		return false, ColumnQueryPlan{}
+	}
+	workers := req.Capabilities.MaxParallelWorkers
+	if workers <= 1 {
+		return false, ColumnQueryPlan{}
+	}
+	if req.Capabilities.PartCount <= 1 && req.Capabilities.GranuleCount <= workers {
+		return false, ColumnQueryPlan{}
+	}
+	diag.WorkerCount = workers
+	diag.Reason = "selected parallel physical column scan"
+	return true, ColumnQueryPlan{Kind: ColumnQueryPlanParallelColumnScan, Supported: true, Diagnostics: diag}
+}
+
+func physicalColumnQuerySupported(identity ColumnStoreCacheIdentity, identityOK bool, req ColumnQueryPlanRequest, kind ColumnQueryPlanKind) bool {
+	if !columnQueryManifestRecoveryAuthoritative(identity, identityOK) || req.Capabilities.PhysicalAssetCount <= 0 {
+		return false
+	}
+	switch kind {
+	case ColumnQueryPlanSerialColumnScan:
+		return req.Capabilities.SerialColumnScan
+	case ColumnQueryPlanAggregateMetadata:
+		return req.Capabilities.AggregateMetadata
+	case ColumnQueryPlanParallelColumnScan:
+		return req.Capabilities.ParallelColumnScan
+	default:
+		return false
+	}
+}
+
+func physicalColumnQueryUnsupportedReason(identity ColumnStoreCacheIdentity, identityOK bool, req ColumnQueryPlanRequest, kind ColumnQueryPlanKind) string {
+	switch {
+	case !columnQueryManifestRecoveryAuthoritative(identity, identityOK):
+		return "active column manifest is not recovery-authoritative"
+	case req.Capabilities.PhysicalAssetCount <= 0:
+		return "no durable physical column assets are available"
+	}
+	switch kind {
+	case ColumnQueryPlanSerialColumnScan:
+		if !req.Capabilities.SerialColumnScan {
+			return "serial physical column scan capability is disabled"
+		}
+	case ColumnQueryPlanAggregateMetadata:
+		if !req.Capabilities.AggregateMetadata {
+			return "aggregate metadata capability is disabled"
+		}
+		if strings.TrimSpace(req.AggregateMetadataName) == "" {
+			return "query did not request aggregate metadata"
+		}
+	case ColumnQueryPlanParallelColumnScan:
+		if !req.Capabilities.ParallelColumnScan {
+			return "parallel physical column scan capability is disabled"
+		}
+		if req.Capabilities.MaxParallelWorkers <= 1 {
+			return "parallel scan requires more than one worker"
+		}
+	}
+	return "physical column plan is not supported"
+}
+
+func unsupportedColumnQueryPlan(kind ColumnQueryPlanKind, reason string, diag ColumnQueryPlanDiagnostics) ColumnQueryPlan {
+	diag.UnsupportedPlanKind = kind
+	diag.UnsupportedPlanReason = reason
+	diag.Reason = reason
+	return ColumnQueryPlan{Kind: kind, Supported: false, Diagnostics: diag}
+}
+
+func columnQueryManifestRecoveryAuthoritative(identity ColumnStoreCacheIdentity, ok bool) bool {
+	return ok &&
+		identity.ManifestRoot != 0 &&
+		identity.ManifestGeneration != 0 &&
+		identity.RecoveryAuthoritativeGeneration == identity.ManifestGeneration
+}
+
+func columnQueryPlannerCandidateCount(req ColumnQueryPlanRequest) int {
+	if req.Capabilities.PlannerCandidateBudget > 0 {
+		return req.Capabilities.PlannerCandidateBudget
+	}
+	count := 1 // row-store fallback
+	count += len(req.CandidateIndexColumns)
+	if req.Capabilities.SerialColumnScan {
+		count++
+	}
+	if req.Capabilities.AggregateMetadata {
+		count++
+	}
+	if req.Capabilities.ParallelColumnScan {
+		count++
+	}
+	return count
+}
+
+func selectColumnQueryBTreeIndex(catalog *collectionCatalog, req ColumnQueryPlanRequest) (IndexDefinition, bool) {
+	if catalog == nil {
+		return IndexDefinition{}, false
+	}
+	candidates := make([]string, 0, len(req.CandidateIndexColumns)+len(req.Predicates))
+	candidates = append(candidates, req.CandidateIndexColumns...)
+	for _, pred := range req.Predicates {
+		candidates = append(candidates, pred.Column)
+	}
+	for _, candidate := range candidates {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" {
+			continue
+		}
+		for _, idx := range catalog.meta.Indexes {
+			if strings.EqualFold(idx.Field, candidate) || strings.EqualFold(idx.Name, candidate) {
+				return idx, true
+			}
+		}
+	}
+	return IndexDefinition{}, false
+}
+
+type ColumnSkipScanBound struct {
+	Key       []byte
+	Inclusive bool
+	Unbounded bool
+}
+
+type ColumnSkipScanPredicate struct {
+	Position int
+	Lower    ColumnSkipScanBound
+	Upper    ColumnSkipScanBound
+}
+
+type ColumnSkipScanMark struct {
+	Name    string
+	Rows    int
+	MinKeys [][]byte
+	MaxKeys [][]byte
+}
+
+type ColumnSkipScanResult struct {
+	LeftPrefixColumns int
+	ScheduledMarks    []int
+	SkippedMarks      []int
+	ScheduledRows     int
+	SkippedRows       int
+}
+
+func PlanColumnSkipScan(predicates []ColumnSkipScanPredicate, marks []ColumnSkipScanMark) ColumnSkipScanResult {
+	var result ColumnSkipScanResult
+	PlanColumnSkipScanInto(&result, predicates, marks)
+	return result
+}
+
+func PlanColumnSkipScanInto(result *ColumnSkipScanResult, predicates []ColumnSkipScanPredicate, marks []ColumnSkipScanMark) {
+	if result == nil {
+		return
+	}
+	result.LeftPrefixColumns = 0
+	result.ScheduledMarks = result.ScheduledMarks[:0]
+	result.SkippedMarks = result.SkippedMarks[:0]
+	result.ScheduledRows = 0
+	result.SkippedRows = 0
+	prefix := columnSkipScanLeftPrefix(predicates)
+	result.LeftPrefixColumns = prefix
+	for i, mark := range marks {
+		if prefix > 0 && columnSkipScanMarkDisjoint(mark, predicates, prefix) {
+			result.SkippedMarks = append(result.SkippedMarks, i)
+			result.SkippedRows += mark.Rows
+			continue
+		}
+		result.ScheduledMarks = append(result.ScheduledMarks, i)
+		result.ScheduledRows += mark.Rows
+	}
+}
+
+func columnSkipScanLeftPrefix(predicates []ColumnSkipScanPredicate) int {
+	prefix := 0
+	for {
+		if _, ok := columnSkipScanPredicateAt(predicates, prefix); !ok {
+			return prefix
+		}
+		prefix++
+	}
+}
+
+func columnSkipScanMarkDisjoint(mark ColumnSkipScanMark, predicates []ColumnSkipScanPredicate, prefix int) bool {
+	for pos := 0; pos < prefix; pos++ {
+		if pos >= len(mark.MinKeys) || pos >= len(mark.MaxKeys) {
+			return false
+		}
+		pred, ok := columnSkipScanPredicateAt(predicates, pos)
+		if !ok {
+			return false
+		}
+		minKey := mark.MinKeys[pos]
+		maxKey := mark.MaxKeys[pos]
+		if !pred.Lower.Unbounded && len(pred.Lower.Key) > 0 {
+			cmp := bytes.Compare(maxKey, pred.Lower.Key)
+			if cmp < 0 || (cmp == 0 && !pred.Lower.Inclusive) {
+				return true
+			}
+		}
+		if !pred.Upper.Unbounded && len(pred.Upper.Key) > 0 {
+			cmp := bytes.Compare(minKey, pred.Upper.Key)
+			if cmp > 0 || (cmp == 0 && !pred.Upper.Inclusive) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func columnSkipScanPredicateAt(predicates []ColumnSkipScanPredicate, position int) (ColumnSkipScanPredicate, bool) {
+	for _, pred := range predicates {
+		if pred.Position == position {
+			return pred, true
+		}
+	}
+	return ColumnSkipScanPredicate{}, false
+}
