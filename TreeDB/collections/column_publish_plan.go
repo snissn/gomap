@@ -189,7 +189,7 @@ type ColumnPublishStageMetrics struct {
 	DocumentExtraction      time.Duration
 	DeclaredColumnEncoding  time.Duration
 	AssetPreparation        time.Duration
-	AssetFlushSync          time.Duration
+	AssetClosureValidation  time.Duration
 	ManifestEncode          time.Duration
 	RootDeltaConstruction   time.Duration
 	SystemDeltaConstruction time.Duration
@@ -275,7 +275,7 @@ func BuildColumnPublishPlan(input ColumnPublishPlanInput) (ColumnPublishPlan, er
 	if err != nil {
 		return ColumnPublishPlan{}, fmt.Errorf("collections: column publish asset-closure validation failed: %w", err)
 	}
-	metrics.AssetFlushSync = time.Since(start)
+	metrics.AssetClosureValidation = time.Since(start)
 	if err := validateColumnPublishDurabilityClosure(closure); err != nil {
 		return ColumnPublishPlan{}, err
 	}
