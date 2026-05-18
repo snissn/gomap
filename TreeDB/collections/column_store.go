@@ -14,11 +14,18 @@ import (
 )
 
 const (
-	columnManifestFormatTCS1         = "tcs1"
-	columnManifestIdentityMagic      = uint32(0x54434d49) // TCMI
-	columnManifestIdentityVersion    = uint16(1)
-	columnManifestIdentityRecordSize = 28
-	columnManifestIdentityRecordKey  = "\x00column-manifest/identity"
+	columnManifestFormatTCS1                 = "tcs1"
+	columnManifestIdentityMagic              = uint32(0x54434d49) // TCMI
+	columnManifestIdentityVersion            = uint16(1)
+	columnManifestIdentityMagicOffset        = 0
+	columnManifestIdentityEncodingVersionOff = 4
+	columnManifestIdentityManifestVersionOff = 6
+	columnManifestIdentityGenerationOffset   = 8
+	columnManifestIdentityChecksumOffset     = 16
+	columnManifestIdentityReservedOffset     = 24
+	columnManifestIdentityReservedSize       = 4
+	columnManifestIdentityRecordSize         = columnManifestIdentityReservedOffset + columnManifestIdentityReservedSize
+	columnManifestIdentityRecordKey          = "\x00column-manifest/identity"
 )
 
 type ColumnStoreValueType string
@@ -595,12 +602,12 @@ func encodeColumnManifestIdentityRecord(identity ColumnManifestIdentity) []byte 
 
 func encodeColumnManifestIdentityRecordArray(identity ColumnManifestIdentity) [columnManifestIdentityRecordSize]byte {
 	var out [columnManifestIdentityRecordSize]byte
-	binary.BigEndian.PutUint32(out[0:4], columnManifestIdentityMagic)
-	binary.BigEndian.PutUint16(out[4:6], columnManifestIdentityVersion)
-	binary.BigEndian.PutUint16(out[6:8], identity.Version)
-	binary.BigEndian.PutUint64(out[8:16], identity.Generation)
-	binary.BigEndian.PutUint64(out[16:24], identity.Checksum)
-	binary.BigEndian.PutUint32(out[24:28], 0)
+	binary.BigEndian.PutUint32(out[columnManifestIdentityMagicOffset:columnManifestIdentityEncodingVersionOff], columnManifestIdentityMagic)
+	binary.BigEndian.PutUint16(out[columnManifestIdentityEncodingVersionOff:columnManifestIdentityManifestVersionOff], columnManifestIdentityVersion)
+	binary.BigEndian.PutUint16(out[columnManifestIdentityManifestVersionOff:columnManifestIdentityGenerationOffset], identity.Version)
+	binary.BigEndian.PutUint64(out[columnManifestIdentityGenerationOffset:columnManifestIdentityChecksumOffset], identity.Generation)
+	binary.BigEndian.PutUint64(out[columnManifestIdentityChecksumOffset:columnManifestIdentityReservedOffset], identity.Checksum)
+	binary.BigEndian.PutUint32(out[columnManifestIdentityReservedOffset:columnManifestIdentityRecordSize], 0)
 	return out
 }
 
@@ -608,19 +615,19 @@ func decodeColumnManifestIdentityRecord(raw []byte) (columnManifestIdentityRecor
 	if len(raw) != columnManifestIdentityRecordSize {
 		return columnManifestIdentityRecord{}, fmt.Errorf("malformed identity record length %d", len(raw))
 	}
-	if magic := binary.BigEndian.Uint32(raw[0:4]); magic != columnManifestIdentityMagic {
+	if magic := binary.BigEndian.Uint32(raw[columnManifestIdentityMagicOffset:columnManifestIdentityEncodingVersionOff]); magic != columnManifestIdentityMagic {
 		return columnManifestIdentityRecord{}, fmt.Errorf("bad identity magic 0x%x", magic)
 	}
-	if version := binary.BigEndian.Uint16(raw[4:6]); version != columnManifestIdentityVersion {
+	if version := binary.BigEndian.Uint16(raw[columnManifestIdentityEncodingVersionOff:columnManifestIdentityManifestVersionOff]); version != columnManifestIdentityVersion {
 		return columnManifestIdentityRecord{}, fmt.Errorf("unsupported identity version %d", version)
 	}
-	if reserved := binary.BigEndian.Uint32(raw[24:28]); reserved != 0 {
+	if reserved := binary.BigEndian.Uint32(raw[columnManifestIdentityReservedOffset:columnManifestIdentityRecordSize]); reserved != 0 {
 		return columnManifestIdentityRecord{}, fmt.Errorf("non-zero identity reserved field %d", reserved)
 	}
 	return columnManifestIdentityRecord{
-		Version:    binary.BigEndian.Uint16(raw[6:8]),
-		Generation: binary.BigEndian.Uint64(raw[8:16]),
-		Checksum:   binary.BigEndian.Uint64(raw[16:24]),
+		Version:    binary.BigEndian.Uint16(raw[columnManifestIdentityManifestVersionOff:columnManifestIdentityGenerationOffset]),
+		Generation: binary.BigEndian.Uint64(raw[columnManifestIdentityGenerationOffset:columnManifestIdentityChecksumOffset]),
+		Checksum:   binary.BigEndian.Uint64(raw[columnManifestIdentityChecksumOffset:columnManifestIdentityReservedOffset]),
 	}, nil
 }
 
