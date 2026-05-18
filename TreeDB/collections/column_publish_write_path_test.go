@@ -177,8 +177,8 @@ func TestColumnStoreUpdateCallbacksRequireCommandWALBeforeInvocationM10B(t *test
 		callbackCalled = true
 		return current, true, nil
 	})
-	if !errors.Is(err, backenddb.ErrCommandWALUnsupported) {
-		t.Fatalf("Update error=%v, want ErrCommandWALUnsupported", err)
+	if !errors.Is(err, backenddb.ErrCommandWALRejected) {
+		t.Fatalf("Update error=%v, want ErrCommandWALRejected", err)
 	}
 	if matched || modified {
 		t.Fatalf("Update matched=%v modified=%v, want false/false on rejected write", matched, modified)
@@ -195,8 +195,8 @@ func TestColumnStoreUpdateCallbacksRequireCommandWALBeforeInvocationM10B(t *test
 			return current, true, nil
 		},
 	}})
-	if !errors.Is(err, backenddb.ErrCommandWALUnsupported) {
-		t.Fatalf("UpdateBatch error=%v, want ErrCommandWALUnsupported", err)
+	if !errors.Is(err, backenddb.ErrCommandWALRejected) {
+		t.Fatalf("UpdateBatch error=%v, want ErrCommandWALRejected", err)
 	}
 	if len(results) != 0 {
 		t.Fatalf("UpdateBatch results len=%d, want 0 on rejected write", len(results))
@@ -345,6 +345,43 @@ func TestColumnStoreCommandWALReplayInsertUpdateDeletePublishesEquivalentManifes
 	assertColumnManifestStateM10B(t, reopened, 3, 4)
 	if got := reopen.State().AppliedCommandLSN; got != 4 {
 		t.Fatalf("AppliedCommandLSN after replay=%d, want 4", got)
+	}
+}
+
+func TestColumnStoreReplayIntentBypassesRelaxedDurabilityGateM10C(t *testing.T) {
+	dir := prepareColumnStoreCommandWALDirWithProfileM10C(t, ColumnStoreProfileBenchmarkRelaxed)
+	payload, err := commitlog.EncodeCollectionInsertBatchByIDPayload("events", []commitlog.CollectionDocument{
+		{ID: []byte("e1"), Document: []byte(`{"time_us":1,"kind":"like","did":"d1"}`)},
+	})
+	if err != nil {
+		t.Fatalf("EncodeCollectionInsertBatchByIDPayload: %v", err)
+	}
+	writeCollectionCommandWALFrame(t, dir, 2, commitlog.CommandKindCollectionInsertBatchByID, commitlog.PayloadFormatCollectionInsertBatchByIDV1, payload)
+
+	reopen, err := backenddb.Open(backenddb.Options{
+		Dir:                    dir,
+		CommandWAL:             true,
+		Durability:             backenddb.DurabilityWALOnRelaxed,
+		DisableBackgroundPrune: true,
+	})
+	if err != nil {
+		t.Fatalf("Open relaxed command WAL DB: %v", err)
+	}
+	defer func() { _ = reopen.Close() }()
+	reopened := openColumnStoreCollectionM10B(t, reopen)
+	assertCollectionDocument(t, reopened, "e1", `{"time_us":1,"kind":"like","did":"d1"}`)
+	assertColumnManifestStateM10B(t, reopened, 1, 2)
+	if got := reopen.State().AppliedCommandLSN; got != 2 {
+		t.Fatalf("AppliedCommandLSN after relaxed replay=%d, want 2", got)
+	}
+
+	framesBefore := countCollectionCommandWALFrames(t, dir)
+	_, err = reopened.InsertBatch([][]byte{[]byte("e2")}, [][]byte{[]byte(`{"time_us":2,"kind":"post","did":"d2"}`)})
+	if !errors.Is(err, backenddb.ErrCommandWALRejected) {
+		t.Fatalf("foreground relaxed InsertBatch error=%v, want ErrCommandWALRejected", err)
+	}
+	if framesAfter := countCollectionCommandWALFrames(t, dir); framesAfter != framesBefore {
+		t.Fatalf("command WAL frames after rejected foreground write=%d, want %d", framesAfter, framesBefore)
 	}
 }
 
@@ -613,15 +650,22 @@ func TestColumnManifestRootDescriptorSystemDeltaRejectsPlanRootMismatchM10B(t *t
 
 func prepareColumnStoreCommandWALDirM10B(t *testing.T) string {
 	t.Helper()
+	return prepareColumnStoreCommandWALDirWithProfileM10C(t, "")
+}
+
+func prepareColumnStoreCommandWALDirWithProfileM10C(t *testing.T, profileSupport ColumnStoreProfileSupport) string {
+	t.Helper()
 	dir := t.TempDir()
 	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
 		t.Fatalf("SaveFormatConfig: %v", err)
 	}
 	d := openCollectionCommandWALDB(t, dir)
+	cfg := testColumnStoreConfig(nil)
+	cfg.ProfileSupport = profileSupport
 	mgr := NewCollectionManager(d)
 	if _, err := mgr.CreateCollection(&CollectionMeta{
 		Name:    "events",
-		Options: CollectionOptions{ColumnStore: testColumnStoreConfig(nil)},
+		Options: CollectionOptions{ColumnStore: cfg},
 	}); err != nil {
 		_ = d.Close()
 		t.Fatalf("CreateCollection: %v", err)
