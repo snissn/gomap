@@ -24,7 +24,7 @@ func (p ColumnMutationReplayProfile) Validate() error {
 			if p.Durability == "" {
 				label = "durable (default)"
 			}
-			return fmt.Errorf("colgranule: %s column mutation replay profile cannot be benchmark-only; for benchmark-ceiling runs use Durability %q or %q and set BenchmarkOnly=true", label, ColumnMutationReplayWALOnFast, ColumnMutationReplayFast)
+			return fmt.Errorf("colgranule: %s column mutation replay profile cannot be benchmark-only; for benchmark-ceiling runs set Durability to %q or %q (BenchmarkOnly=true is already set)", label, ColumnMutationReplayWALOnFast, ColumnMutationReplayFast)
 		}
 		return nil
 	case ColumnMutationReplayWALOnFast, ColumnMutationReplayFast:

@@ -224,7 +224,7 @@ func TestColumnMutationReplayProfileContractM9D(t *testing.T) {
 		{name: "default durable", want: "durable"},
 		{name: "durable", profile: ColumnMutationReplayProfile{Durability: ColumnMutationReplayDurable}, want: "durable"},
 		{name: "default durable benchmark only rejected", profile: ColumnMutationReplayProfile{BenchmarkOnly: true}, wantErr: true, wantErrContains: "durable (default)", wantLabel: "durable_benchmark_ceiling"},
-		{name: "durable benchmark only rejected", profile: ColumnMutationReplayProfile{Durability: ColumnMutationReplayDurable, BenchmarkOnly: true}, wantErr: true, wantErrContains: "set BenchmarkOnly=true", wantLabel: "durable_benchmark_ceiling"},
+		{name: "durable benchmark only rejected", profile: ColumnMutationReplayProfile{Durability: ColumnMutationReplayDurable, BenchmarkOnly: true}, wantErr: true, wantErrContains: "set Durability", wantLabel: "durable_benchmark_ceiling"},
 		{name: "wal on fast production rejected", profile: ColumnMutationReplayProfile{Durability: ColumnMutationReplayWALOnFast}, wantErr: true, wantErrContains: "not supported for production"},
 		{name: "fast production rejected", profile: ColumnMutationReplayProfile{Durability: ColumnMutationReplayFast}, wantErr: true, wantErrContains: "not supported for production"},
 		{name: "wal on fast benchmark ceiling", profile: ColumnMutationReplayProfile{Durability: ColumnMutationReplayWALOnFast, BenchmarkOnly: true}, want: "wal_on_fast_benchmark_ceiling"},
@@ -578,28 +578,30 @@ func BenchmarkColumnMutationReplayM9D(b *testing.B) {
 			}
 			b.Run(fixture.name+"/"+profile.Label(), func(b *testing.B) {
 				root := b.TempDir()
+				cleanupDirs := make([]string, 0, b.N)
+				b.Cleanup(func() {
+					for _, dir := range cleanupDirs {
+						_ = os.RemoveAll(dir)
+					}
+				})
 				var last ColumnCollectionManifest
 				b.ReportAllocs()
 				b.ResetTimer()
 				for i := 0; i < b.N; i++ {
 					dir := filepath.Join(root, fmt.Sprintf("iter-%06d", i))
+					cleanupDirs = append(cleanupDirs, dir)
 					workspace, adapter := benchmarkColumnMutationAdapterWithProfile(b, dir, opts, ds.Dictionaries, profile)
 					_, err := adapter.PublishBaseBatch(ColumnBatch{Rows: ds.Rows, Columns: ds.Columns}, ColumnPartCoverageOptions{SourceRowRootGeneration: 1, SourceRowVersionUpper: uint64(ds.Rows)})
 					if err == nil {
 						_, err = adapter.Apply(scenario.batch)
 					}
-					last = adapter.Manifest()
 					if closeErr := workspace.Close(); err == nil {
 						err = closeErr
 					}
 					if err != nil {
 						b.Fatalf("replay: %v", err)
 					}
-					b.StopTimer()
-					if err := os.RemoveAll(dir); err != nil {
-						b.Fatalf("cleanup iteration dir: %v", err)
-					}
-					b.StartTimer()
+					last = adapter.Manifest()
 				}
 				b.StopTimer()
 				elapsed := b.Elapsed()
@@ -848,13 +850,38 @@ func testJSONBenchMutationReplayState(t *testing.T, dir string, ds JSONBenchData
 	if _, err := adapter.Apply(scenario.batch); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
-	reader, err := adapter.Reader(ColumnPartImageReadOptions{})
+	reader, err := adapter.Reader(ColumnPartImageReadOptions{IncludeAggregateMetadata: true})
 	if err != nil {
 		t.Fatalf("Reader: %v", err)
 	}
+	assertColumnPartSetReaderDecodedAggregateMetadata(t, reader, opts)
 	return jsonBenchMutationReplayState{
 		reader:   reader,
 		manifest: adapter.Manifest(),
+	}
+}
+
+func assertColumnPartSetReaderDecodedAggregateMetadata(t *testing.T, reader *ColumnPartSetReader, opts ColumnStoreOptions) {
+	t.Helper()
+	if len(opts.AggregateMetadata) == 0 {
+		return
+	}
+	if reader == nil {
+		t.Fatal("nil part set reader")
+	}
+	for _, loaded := range reader.parts {
+		if loaded.Part == nil {
+			t.Fatalf("reader loaded nil part for ref %+v", loaded.Ref)
+		}
+		for _, def := range opts.AggregateMetadata {
+			metadata, ok := loaded.Part.AggregateMetadataByName(def.Name)
+			if !ok {
+				t.Fatalf("part %d missing decoded aggregate metadata %s", loaded.Part.Descriptor.PartID, def.Name)
+			}
+			if metadata.Definition.Name != def.Name {
+				t.Fatalf("part %d aggregate metadata name=%q want %q", loaded.Part.Descriptor.PartID, metadata.Definition.Name, def.Name)
+			}
+		}
 	}
 }
 
