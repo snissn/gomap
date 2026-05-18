@@ -60,6 +60,69 @@ Reported metrics separate the major costs:
 - `base_payload_bytes` and `overlay_payload_bytes` approximate the in-memory
   payload footprint.
 
+Local M11 follow-up evidence:
+
+```sh
+GOWORK=off go test ./TreeDB/collections \
+  -run 'TestColumnVectorDynamic(Graph|Overlay|Mutation)|TestColumnVectorGraph' \
+  -count=1
+
+GOWORK=off go test -race ./TreeDB/collections \
+  -run 'TestColumnVectorDynamicGraphConcurrentReadersAndWriter|TestColumnVectorDynamicGraphSearchTombstonesAndOverlay' \
+  -count=1
+
+GOWORK=off go test ./TreeDB/collections \
+  -run '^$' \
+  -bench 'BenchmarkColumnVectorDynamicOverlayPublishCloneAppend' \
+  -benchmem \
+  -benchtime=300ms \
+  -count=5
+
+GOWORK=off go test ./TreeDB/collections \
+  -run '^$' \
+  -bench 'BenchmarkColumnVectorDynamicGraphSearchCosineScale/rows_100k_dims_128_degree_16/parallel_read_(only|write)$' \
+  -benchmem \
+  -benchtime=300ms \
+  -count=3
+
+GOWORK=off go test ./TreeDB/collections \
+  -run '^$' \
+  -bench 'BenchmarkColumnVectorDynamicGraphSearchCosineScale/rows_1m_dims_128_degree_16/parallel_read_(only|write)$' \
+  -benchmem \
+  -benchtime=100ms \
+  -count=1
+```
+
+Latest #1615 Apple M3 smoke results:
+
+- 100k read-only: `12977-13429 ns/op`, `74463-77061 read_qps`,
+  `1064 total_candidates/search`, `5600 edges/search`, `0 B/op`,
+  `0 allocs/op`.
+- 100k read-write: `332162-451084 ns/op`, `2217-3011 read_qps`,
+  `18306 total_candidates/search`, `654288-768199 publish_ns/op`,
+  `1598732-2268984 B/op`, `18-23 allocs/op`.
+- Isolated publish clone+append: `15563-16056 ns/op`, `160265-160266 B/op`,
+  and `18 allocs/op` for the 256-row overlay shape; `491165-499048 ns/op`,
+  `5179011-5179014 B/op`, and `64 allocs/op` for the
+  8192-row/4096-tombstone shape.
+
+Earlier 1M scale smoke from the same dynamic-overlay track:
+
+- 1M read-only: `8850 ns/op`, `112996 read_qps`,
+  `695 total_candidates/search`, `2688 edges/search`, `0 B/op`,
+  `0 allocs/op`.
+- 1M read-write: `127760 ns/op`, `7827 read_qps`,
+  `8902 total_candidates/search`, `400424 publish_ns/op`, `711480 B/op`,
+  `9 allocs/op`.
+
+Interpretation: warmed read-only search stays allocation-free at 100k and 1M
+because all mutable state is worker-local scratch. Read-write benchmark
+allocations are writer-side copy-on-write publish and overlay growth costs, not
+full-document fetches or shared reader scratch. The largest read amplification
+comes from exact overlay scans plus base over-fetch to compensate tombstoned
+base documents; those counters are the trigger for sealing mini-graphs or
+rebuilding a compacted base generation.
+
 Sealing and rebuild model:
 
 - Start with exact-scan overlay while deltas are small.
@@ -75,7 +138,7 @@ Focused validation:
 
 ```sh
 GOWORK=off go test ./TreeDB/collections \
-  -run 'TestColumnVectorDynamicGraph|TestColumnVectorGraph' \
+  -run 'TestColumnVectorDynamic(Graph|Overlay|Mutation)|TestColumnVectorGraph' \
   -count=1
 
 GOWORK=off go test -race ./TreeDB/collections \
