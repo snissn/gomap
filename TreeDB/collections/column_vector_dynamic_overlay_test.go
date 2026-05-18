@@ -164,7 +164,8 @@ func TestColumnVectorDynamicGraphSnapshotStableAcrossOverlayPublishes(t *testing
 	if !ok {
 		t.Fatal("missing query vector")
 	}
-	firstVector := append([]float32(nil), query...)
+	expectedVector := append([]float32(nil), query...)
+	firstVector := append([]float32(nil), expectedVector...)
 	if _, err := graph.ApplyBatch([]ColumnVectorDynamicMutation{{
 		Kind:       ColumnVectorDynamicMutationInsert,
 		DocumentID: []byte("dyn-stable"),
@@ -195,13 +196,13 @@ func TestColumnVectorDynamicGraphSnapshotStableAcrossOverlayPublishes(t *testing
 		}
 	}
 
-	if previous.Rows() != 1 || previous.LiveRows() != 1 || !previous.live[0] {
-		t.Fatalf("previous overlay mutated rows=%d liveRows=%d live=%v", previous.Rows(), previous.LiveRows(), previous.live)
+	if previous.Rows() != 1 || previous.LiveRows() != 1 || !previous.HasLiveDocument([]byte("dyn-stable")) {
+		t.Fatalf("previous overlay mutated rows=%d liveRows=%d hasLive=%v", previous.Rows(), previous.LiveRows(), previous.HasLiveDocument([]byte("dyn-stable")))
 	}
 	if got := previous.documentID(0); !bytes.Equal(got, []byte("dyn-stable")) {
 		t.Fatalf("previous documentID=%q want dyn-stable", got)
 	}
-	if got := previous.vectorAt(0); !slices.Equal(got, firstVector) {
+	if got := previous.vectorAt(0); !slices.Equal(got, expectedVector) {
 		t.Fatalf("previous vector mutated")
 	}
 	current := graph.Snapshot().Overlay()
