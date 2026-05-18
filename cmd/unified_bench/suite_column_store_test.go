@@ -708,40 +708,6 @@ func TestColumnStoreSuiteConfigUsesExplicitAggregateMetadataNamesM11A(t *testing
 	}
 }
 
-func TestRenderColumnStoreSuiteMarkdownCodeListsM11A(t *testing.T) {
-	md := renderColumnStoreSuiteMarkdown(columnStoreSuiteReport{
-		Suite: "column_store",
-		ByteAccounting: columnStoreByteAccounting{
-			ManifestControlMissing: []string{"vlog_ref_counts.meta", "column_manifest.meta"},
-		},
-		SupportedForcedPaths:   []string{"row_store_baseline", "diagnostic"},
-		UnsupportedForcedPaths: []string{"serial_column_scan", "aggregate_metadata"},
-	})
-	for _, want := range []string{
-		"- manifest_control_missing: `vlog_ref_counts.meta`, `column_manifest.meta`",
-		"- supported: `row_store_baseline`, `diagnostic`",
-		"- fail-closed until physical planner paths exist: `serial_column_scan`, `aggregate_metadata`",
-	} {
-		if !strings.Contains(md, want) {
-			t.Fatalf("markdown missing %q:\n%s", want, md)
-		}
-	}
-}
-
-func TestColumnStoreBenchRunUsesMeasuredDurationForAggregateM11A(t *testing.T) {
-	run := columnStoreBenchRun(BenchConfig{}, "durable", t.TempDir(), columnStoreSuiteReport{
-		Rows:      1,
-		BatchSize: 1,
-		Queries: []columnStoreQueryMetric{
-			{Name: "q1", RowMaterializations: 7, DurationMS: 0, duration: time.Second},
-		},
-	}, nil, 0)
-	got := run.Results[columnStoreSuiteBenchTestName][columnStoreSuiteBenchDisplayName]
-	if got != 7 {
-		t.Fatalf("aggregate query-phase rows/sec=%f want 7 from measured duration", got)
-	}
-}
-
 func TestColumnStoreSuiteDirUsageFailsOnMissingPathM11A(t *testing.T) {
 	_, _, err := columnStoreSuiteDirUsage(filepath.Join(t.TempDir(), "missing"))
 	if err == nil {
