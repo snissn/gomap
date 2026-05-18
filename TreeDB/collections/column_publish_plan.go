@@ -240,11 +240,6 @@ func BuildColumnPublishPlan(input ColumnPublishPlanInput) (ColumnPublishPlan, er
 		if columnStoreConfigEmpty(*input.ColumnStore) {
 			return ColumnPublishPlan{}, nil
 		}
-		if !input.ColumnStoreNormalized {
-			if _, err := normalizeColumnStoreConfig(input.Collection, input.ColumnStore); err != nil {
-				return ColumnPublishPlan{}, err
-			}
-		}
 		return ColumnPublishPlan{}, errors.New("collections: column publish plan requires enabled=true column_store")
 	}
 	if err := validateColumnPublishOperation(input.Operation); err != nil {

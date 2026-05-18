@@ -57,17 +57,22 @@ func TestColumnPublishPlanDisabledFastPathAllocatesZeroM10A(t *testing.T) {
 func TestColumnPublishPlanRejectsNonEmptyDisabledColumnStoreM10A(t *testing.T) {
 	cfg := testColumnStoreConfig(nil)
 	cfg.Enabled = false
-	plan, err := BuildColumnPublishPlan(ColumnPublishPlanInput{
+	input := ColumnPublishPlanInput{
 		Collection:        "events",
 		ColumnStore:       cfg,
 		Operation:         ColumnPublishOperationInsert,
 		AppliedCommandLSN: 101,
-	})
-	if err == nil || !strings.Contains(err.Error(), "requires enabled=true") {
-		t.Fatalf("BuildColumnPublishPlan err=%v want enabled=true validation", err)
 	}
-	if plan.Enabled {
-		t.Fatalf("invalid disabled column_store returned enabled plan: %+v", plan)
+	const want = "collections: column publish plan requires enabled=true column_store"
+	for _, normalized := range []bool{false, true} {
+		input.ColumnStoreNormalized = normalized
+		plan, err := BuildColumnPublishPlan(input)
+		if err == nil || err.Error() != want {
+			t.Fatalf("BuildColumnPublishPlan normalized=%v err=%v want %q", normalized, err, want)
+		}
+		if plan.Enabled {
+			t.Fatalf("invalid disabled column_store returned enabled plan: %+v", plan)
+		}
 	}
 }
 
