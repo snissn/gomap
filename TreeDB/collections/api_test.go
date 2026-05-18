@@ -3908,6 +3908,7 @@ func TestCollectionIndexedOverlayRootValidationRejectsStaleOverlayDescriptors(t 
 		Name: "users",
 		Options: CollectionOptions{
 			BufferedIndexedOverlayRoots:      true,
+			DisableBufferedIndexedAsyncFlush: true,
 			BufferedIndexedWriteMaxDocuments: 1,
 			BufferedIndexedWriteMaxRootRuns:  1,
 		},
@@ -3977,6 +3978,7 @@ func TestCollectionCompactRootOverlaysFoldsIntoBaseRoots(t *testing.T) {
 		Name: "users",
 		Options: CollectionOptions{
 			BufferedIndexedOverlayRoots:      true,
+			DisableBufferedIndexedAsyncFlush: true,
 			BufferedIndexedWriteMaxDocuments: 1,
 			BufferedIndexedWriteMaxRootRuns:  1,
 		},
