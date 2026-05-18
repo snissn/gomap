@@ -408,18 +408,23 @@ func TestColumnAssetManagerPublishFailureInvalidatesOlderSyncedClosure(t *testin
 	if err := manager.MarkPublishFailed([]ColumnPreparedAsset{prepared}, "root publish failed"); err != nil {
 		t.Fatalf("MarkPublishFailed: %v", err)
 	}
-	if err := manager.MarkPublishSucceeded(synced); err == nil || !strings.Contains(err.Error(), "predates a later publish failure") {
-		t.Fatalf("MarkPublishSucceeded after failure err=%v, want stale synced closure rejection", err)
+	if err := manager.MarkPublishSucceeded(synced); err == nil || !strings.Contains(err.Error(), "already consumed") {
+		t.Fatalf("MarkPublishSucceeded after failure err=%v, want consumed stale closure rejection", err)
 	}
-	if err := manager.MarkPublishSucceeded(synced); err == nil || !strings.Contains(err.Error(), "predates a later publish failure") {
-		t.Fatalf("second MarkPublishSucceeded after failure err=%v, want stale synced closure rejection", err)
+	if err := manager.MarkPublishSucceeded(synced); err == nil || !strings.Contains(err.Error(), "already consumed") {
+		t.Fatalf("second MarkPublishSucceeded after failure err=%v, want consumed stale closure rejection", err)
 	}
 	manager.mu.Lock()
 	gotReason, quarantined := manager.quarantine[ref]
 	gotFailedReason, publishFailed := manager.publishFailed[ref]
+	gotSyncedAttempts := len(manager.syncedAttempt)
+	gotSyncedRefs := len(manager.syncedRefs)
 	manager.mu.Unlock()
 	if !quarantined || gotReason != "root publish failed" || !publishFailed || gotFailedReason != "root publish failed" {
 		t.Fatalf("manager state quarantine=(%q,%v) publishFailed=(%q,%v), want root publish failed retained", gotReason, quarantined, gotFailedReason, publishFailed)
+	}
+	if gotSyncedAttempts != 0 || gotSyncedRefs != 0 {
+		t.Fatalf("synced attempts=%d refs=%d want failed publish to consume overlapping attempt", gotSyncedAttempts, gotSyncedRefs)
 	}
 }
 
