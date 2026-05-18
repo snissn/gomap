@@ -1381,16 +1381,13 @@ func writeColumnStoreSuiteArtifacts(dir, executionPath string, report columnStor
 	if err != nil {
 		return fmt.Errorf("column_store: marshal report: %w", err)
 	}
-	jsonPath := columnStoreArtifactPathOrFallback(report.Artifacts.ColumnJSON, dir, "column_store_results.json")
-	if err := os.WriteFile(jsonPath, js, 0o644); err != nil {
+	if err := writeColumnStoreSuiteArtifactFile(columnStoreSuiteArtifactPath(report.Artifacts.ColumnJSON, filepath.Join(dir, "column_store_results.json")), js); err != nil {
 		return fmt.Errorf("column_store: write json: %w", err)
 	}
-	markdownPath := columnStoreArtifactPathOrFallback(report.Artifacts.ColumnMarkdown, dir, "column_store_results.md")
-	if err := os.WriteFile(markdownPath, []byte(md), 0o644); err != nil {
+	if err := writeColumnStoreSuiteArtifactFile(columnStoreSuiteArtifactPath(report.Artifacts.ColumnMarkdown, filepath.Join(dir, "column_store_results.md")), []byte(md)); err != nil {
 		return fmt.Errorf("column_store: write markdown: %w", err)
 	}
-	htmlPath := columnStoreArtifactPathOrFallback(report.Artifacts.ColumnHTML, dir, "column_store_results.html")
-	if err := os.WriteFile(htmlPath, []byte(renderColumnStoreSuiteHTML(report)), 0o644); err != nil {
+	if err := writeColumnStoreSuiteArtifactFile(columnStoreSuiteArtifactPath(report.Artifacts.ColumnHTML, filepath.Join(dir, "column_store_results.html")), []byte(renderColumnStoreSuiteHTML(report))); err != nil {
 		return fmt.Errorf("column_store: write html: %w", err)
 	}
 	if err := writeBenchprofArtifacts(dir, strings.TrimSpace(executionPath), []BenchRun{run}); err != nil {
@@ -1399,9 +1396,16 @@ func writeColumnStoreSuiteArtifacts(dir, executionPath string, report columnStor
 	return nil
 }
 
-func columnStoreArtifactPathOrFallback(path, dir, filename string) string {
-	if strings.TrimSpace(path) != "" {
-		return path
+func columnStoreSuiteArtifactPath(recorded, fallback string) string {
+	if strings.TrimSpace(recorded) != "" {
+		return recorded
 	}
-	return filepath.Join(dir, filename)
+	return fallback
+}
+
+func writeColumnStoreSuiteArtifactFile(path string, data []byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o644)
 }
