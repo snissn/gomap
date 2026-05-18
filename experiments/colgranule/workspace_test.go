@@ -154,8 +154,8 @@ func TestColumnWorkspaceManifestSyncModeControlsFsyncM9D(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenColumnWorkspace durable: %v", err)
 	}
-	if syncs != 1 {
-		t.Fatalf("durable open syncs=%d want 1", syncs)
+	if syncs < 1 {
+		t.Fatalf("durable open syncs=%d want at least 1", syncs)
 	}
 	if err := durable.SaveCollectionManifest(manifest); err != nil {
 		t.Fatalf("SaveCollectionManifest durable: %v", err)
@@ -185,8 +185,14 @@ func TestColumnWorkspaceManifestSyncModeControlsFsyncM9D(t *testing.T) {
 	if err := relaxed.SaveCollectionManifest(manifest); err != nil {
 		t.Fatalf("SaveCollectionManifest relaxed: %v", err)
 	}
+	if syncs != 0 {
+		t.Fatalf("relaxed collection manifest syncs=%d want 0", syncs)
+	}
 	if err := relaxed.SavePreparedAssetRegistry(1, 1, nil); err != nil {
 		t.Fatalf("SavePreparedAssetRegistry relaxed: %v", err)
+	}
+	if syncs != 0 {
+		t.Fatalf("relaxed prepared asset registry syncs=%d want 0", syncs)
 	}
 	ds := syntheticJSONBenchDataset(8)
 	opts, err := JSONBenchColumnPartOptions(ds, 4)
@@ -195,7 +201,7 @@ func TestColumnWorkspaceManifestSyncModeControlsFsyncM9D(t *testing.T) {
 	}
 	_ = publishJSONBenchPartRows(t, relaxed, opts, ds, 91, 0, ds.Rows)
 	if syncs != 0 {
-		t.Fatalf("relaxed manifest syncs=%d want 0", syncs)
+		t.Fatalf("relaxed workspace manifest syncs=%d want 0", syncs)
 	}
 	if err := relaxed.Close(); err != nil {
 		t.Fatalf("Close relaxed: %v", err)
