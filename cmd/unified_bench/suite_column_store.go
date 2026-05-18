@@ -327,7 +327,10 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 		return "", errors.New("column_store: reopened collection has no column-store manifest identity")
 	}
 
-	rawHashes := columnStoreReferenceHashes(fixtureEvents)
+	rawHashes, err := columnStoreReferenceHashes(fixtureEvents)
+	if err != nil {
+		return "", err
+	}
 	if corrupt := strings.TrimSpace(opts.CorruptReferenceForTest); corrupt != "" {
 		rawHashes[corrupt]++
 	}
@@ -584,17 +587,20 @@ func insertColumnStoreFixture(collection *collections.Collection, events []colum
 	return nil
 }
 
-func columnStoreReferenceHashes(events []columnStoreFixtureEvent) map[string]uint64 {
+func columnStoreReferenceHashes(events []columnStoreFixtureEvent) (map[string]uint64, error) {
 	decoded := make([]columnStoreDecodedEvent, len(events))
 	for i := range events {
 		decoded[i] = columnStoreDecodedEvent{TimeUS: events[i].TimeUS, Kind: events[i].Kind, Did: events[i].Did}
 	}
 	out := make(map[string]uint64)
 	for _, name := range columnStoreQueryNames() {
-		hash, _ := columnStoreQueryHash(name, decoded)
+		hash, _, err := columnStoreQueryHash(name, decoded)
+		if err != nil {
+			return nil, err
+		}
 		out[name] = hash
 	}
-	return out
+	return out, nil
 }
 
 func startColumnStoreSuiteRuntimeProfiles(cfg BenchConfig) (func() error, error) {
@@ -626,12 +632,12 @@ func startColumnStoreSuiteRuntimeProfiles(cfg BenchConfig) (func() error, error)
 		if rate <= 0 {
 			rate = 1
 		}
-		runtime.SetBlockProfileRate(rate)
 		f, err := os.Create(cfg.BlockProfile)
 		if err != nil {
 			_ = finish()
 			return nil, fmt.Errorf("column_store: blockprofile: %w", err)
 		}
+		runtime.SetBlockProfileRate(rate)
 		cleanups = append(cleanups, func() error {
 			defer runtime.SetBlockProfileRate(0)
 			defer f.Close()
@@ -648,14 +654,14 @@ func startColumnStoreSuiteRuntimeProfiles(cfg BenchConfig) (func() error, error)
 		if frac <= 0 {
 			frac = 1
 		}
-		runtime.SetMutexProfileFraction(frac)
 		f, err := os.Create(cfg.MutexProfile)
 		if err != nil {
 			_ = finish()
 			return nil, fmt.Errorf("column_store: mutexprofile: %w", err)
 		}
+		prevFrac := runtime.SetMutexProfileFraction(frac)
 		cleanups = append(cleanups, func() error {
-			defer runtime.SetMutexProfileFraction(0)
+			defer runtime.SetMutexProfileFraction(prevFrac)
 			defer f.Close()
 			prof := pprof.Lookup("mutex")
 			if prof == nil {
@@ -813,7 +819,10 @@ func runColumnStoreSuiteQueries(collection *collections.Collection, rows int, ra
 		if err != nil {
 			return nil, nil, err
 		}
-		hash, resultCount := columnStoreQueryHash(name, events)
+		hash, resultCount, err := columnStoreQueryHash(name, events)
+		if err != nil {
+			return nil, nil, fmt.Errorf("column_store: reduce %s: %w", name, err)
+		}
 		elapsed := time.Since(start)
 		rawHash := rawHashes[name]
 		pass := rawHash == hash
@@ -873,25 +882,28 @@ func columnStoreQueryNames() []string {
 	return []string{"q1", "q2", "q3", "q4a", "q4b", "q5", "q5_metadata"}
 }
 
-func columnStoreQueryHash(name string, events []columnStoreDecodedEvent) (uint64, int) {
-	lines := columnStoreQueryLines(name, events)
+func columnStoreQueryHash(name string, events []columnStoreDecodedEvent) (uint64, int, error) {
+	lines, err := columnStoreQueryLines(name, events)
+	if err != nil {
+		return 0, 0, err
+	}
 	sort.Strings(lines)
 	h := fnv.New64a()
 	for _, line := range lines {
 		_, _ = h.Write([]byte(line))
 		_, _ = h.Write([]byte{0})
 	}
-	return h.Sum64(), len(lines)
+	return h.Sum64(), len(lines), nil
 }
 
-func columnStoreQueryLines(name string, events []columnStoreDecodedEvent) []string {
+func columnStoreQueryLines(name string, events []columnStoreDecodedEvent) ([]string, error) {
 	switch name {
 	case "q1":
 		counts := make(map[string]int)
 		for _, event := range events {
 			counts[event.Kind]++
 		}
-		return formatIntMapLines(name, counts)
+		return formatIntMapLines(name, counts), nil
 	case "q2":
 		distinct := make(map[string]map[string]struct{})
 		for _, event := range events {
@@ -906,14 +918,14 @@ func columnStoreQueryLines(name string, events []columnStoreDecodedEvent) []stri
 		for kind, set := range distinct {
 			counts[kind] = len(set)
 		}
-		return formatIntMapLines(name, counts)
+		return formatIntMapLines(name, counts), nil
 	case "q3":
 		counts := make(map[string]int)
 		for _, event := range events {
 			hour := (event.TimeUS / 3_600_000_000) % 24
 			counts[fmt.Sprintf("hour_%02d", hour)]++
 		}
-		return formatIntMapLines(name, counts)
+		return formatIntMapLines(name, counts), nil
 	case "q4a":
 		mins := make(map[string]int64)
 		for _, event := range events {
@@ -921,7 +933,7 @@ func columnStoreQueryLines(name string, events []columnStoreDecodedEvent) []stri
 				mins[event.Did] = event.TimeUS
 			}
 		}
-		return formatInt64MapLines(name, mins)
+		return formatInt64MapLines(name, mins), nil
 	case "q4b":
 		maxs := make(map[string]int64)
 		for _, event := range events {
@@ -929,7 +941,7 @@ func columnStoreQueryLines(name string, events []columnStoreDecodedEvent) []stri
 				maxs[event.Did] = event.TimeUS
 			}
 		}
-		return formatInt64MapLines(name, maxs)
+		return formatInt64MapLines(name, maxs), nil
 	case "q5", "q5_metadata":
 		type span struct {
 			min int64
@@ -954,9 +966,9 @@ func columnStoreQueryLines(name string, events []columnStoreDecodedEvent) []stri
 		for did, sp := range spans {
 			lines = append(lines, fmt.Sprintf("%s:%s=%d", name, did, sp.max-sp.min))
 		}
-		return lines
+		return lines, nil
 	default:
-		return nil
+		return nil, fmt.Errorf("unknown column_store query %q", name)
 	}
 }
 
