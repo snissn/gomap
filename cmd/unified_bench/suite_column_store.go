@@ -268,10 +268,8 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 	if err := validateColumnStoreSuiteDBSelection(baseCfg.DBsArg, baseCfg.DBsExcludeArg); err != nil {
 		return "", err
 	}
-	if strings.TrimSpace(opts.ProfileDir) != "" {
-		if err := validateBenchprofExecutionPath(strings.TrimSpace(opts.ExecutionPath)); err != nil {
-			return "", err
-		}
+	if err := validateColumnStoreSuiteExecutionPath(opts.ProfileDir, opts.ExecutionPath); err != nil {
+		return "", err
 	}
 	finishRuntimeProfiles, err := startColumnStoreSuiteRuntimeProfiles(baseCfg)
 	if err != nil {
@@ -464,7 +462,7 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 	md := renderColumnStoreSuiteMarkdown(report)
 	run := columnStoreBenchRun(baseCfg, profile, dataDir, report, db.Stats(), checkpointDuration)
 	if strings.TrimSpace(opts.ProfileDir) != "" {
-		report.Artifacts = columnStoreArtifactPathsForProfileDir(opts.ProfileDir, baseCfg)
+		report.Artifacts = columnStoreArtifactPathsForProfileDir(opts.ProfileDir, baseCfg, opts.RunBenchprof)
 		report.Artifacts = columnStoreSuitePruneMissingRuntimeDeltaArtifacts(report.Artifacts)
 		md = renderColumnStoreSuiteMarkdown(report)
 		if err := writeColumnStoreSuiteArtifacts(opts.ProfileDir, opts.ExecutionPath, report, md, run); err != nil {
@@ -507,6 +505,20 @@ func normalizeColumnStoreSuitePath(path string) string {
 	return path
 }
 
+func validateColumnStoreSuiteExecutionPath(profileDir, executionPath string) error {
+	executionPath = strings.TrimSpace(executionPath)
+	if strings.TrimSpace(profileDir) == "" && executionPath == "" {
+		return nil
+	}
+	if err := validateBenchprofExecutionPath(executionPath); err != nil {
+		return err
+	}
+	if executionPath != "native-fastpath" {
+		return fmt.Errorf("column_store: native suite requires -path-label native-fastpath; got %q", executionPath)
+	}
+	return nil
+}
+
 func columnStoreSuitePathAliasHelp(aliases []columnStoreSuitePathAlias) string {
 	out := make([]string, 0, len(aliases))
 	for _, alias := range aliases {
@@ -535,16 +547,18 @@ func columnStoreSuitePlanKind(path string) (collections.ColumnQueryPlanKind, err
 	}
 }
 
-func columnStoreArtifactPathsForProfileDir(profileDir string, cfg BenchConfig) columnStoreArtifactPaths {
+func columnStoreArtifactPathsForProfileDir(profileDir string, cfg BenchConfig, runBenchprof bool) columnStoreArtifactPaths {
 	paths := columnStoreArtifactPaths{
 		ColumnJSON:        filepath.Join(profileDir, "column_store_results.json"),
 		ColumnMarkdown:    filepath.Join(profileDir, "column_store_results.md"),
 		ColumnHTML:        filepath.Join(profileDir, "column_store_results.html"),
 		BenchprofJSON:     filepath.Join(profileDir, "benchprof_results.json"),
 		BenchprofMarkdown: filepath.Join(profileDir, "benchprof_results.md"),
-		InsightsMarkdown:  filepath.Join(profileDir, "insights.md"),
-		InsightsJSON:      filepath.Join(profileDir, "insights.json"),
-		InsightsHTML:      filepath.Join(profileDir, "insights.html"),
+	}
+	if runBenchprof {
+		paths.InsightsMarkdown = filepath.Join(profileDir, "insights.md")
+		paths.InsightsJSON = filepath.Join(profileDir, "insights.json")
+		paths.InsightsHTML = filepath.Join(profileDir, "insights.html")
 	}
 	if shouldCPUProfile(cfg, columnStoreSuiteBenchTestName) {
 		paths.CPUProfile = fmt.Sprintf("%s_%s_%s.pprof", strings.TrimSpace(cfg.CPUProfile), columnStoreSuiteBenchTestName, columnStoreSuiteBenchDBName)
@@ -574,7 +588,7 @@ func columnStoreArtifactPathsForProfileDir(profileDir string, cfg BenchConfig) c
 
 func validateColumnStoreSuiteDBSelection(dbsArg, excludeArg string) error {
 	for _, db := range parseList(excludeArg) {
-		normalized := canonicalDBName(strings.ToLower(strings.TrimSpace(db)))
+		normalized := canonicalDBName(db)
 		switch normalized {
 		case "", "none":
 			continue
@@ -736,14 +750,9 @@ func startColumnStoreSuiteRuntimeProfiles(cfg BenchConfig) (func() error, error)
 	}
 
 	if shouldAllocsProfile(cfg, columnStoreSuiteBenchTestName) {
-		rate := cfg.AllocsProfileRate
-		if rate <= 0 {
-			rate = 512 * 1024
-		}
-		prevRate := runtime.MemProfileRate
-		runtime.MemProfileRate = rate
+		restoreMemRate := installAllocsProfileRateForEnabled(true, cfg.AllocsProfileRate)
 		restore := func() error {
-			runtime.MemProfileRate = prevRate
+			restoreMemRate()
 			return nil
 		}
 		cleanups = append(cleanups, runtimeProfileCleanup{
@@ -769,6 +778,7 @@ func startColumnStoreSuiteRuntimeProfiles(cfg BenchConfig) (func() error, error)
 		runtime.SetBlockProfileRate(rate)
 		cleanups = append(cleanups, runtimeProfileCleanup{
 			finish: func() error {
+				runtime.SetBlockProfileRate(0)
 				prof := pprof.Lookup("block")
 				var writeErr error
 				if prof == nil {
@@ -776,9 +786,6 @@ func startColumnStoreSuiteRuntimeProfiles(cfg BenchConfig) (func() error, error)
 				} else {
 					writeErr = prof.WriteTo(f, 0)
 				}
-				// The runtime exposes no previous block profile rate, so the suite
-				// writes the active profile before returning sampling to off.
-				runtime.SetBlockProfileRate(0)
 				return errors.Join(writeErr, f.Close())
 			},
 			abort: func() error {
@@ -801,7 +808,7 @@ func startColumnStoreSuiteRuntimeProfiles(cfg BenchConfig) (func() error, error)
 		prevFrac := runtime.SetMutexProfileFraction(frac)
 		cleanups = append(cleanups, runtimeProfileCleanup{
 			finish: func() error {
-				runtime.SetMutexProfileFraction(prevFrac)
+				runtime.SetMutexProfileFraction(0)
 				prof := pprof.Lookup("mutex")
 				var writeErr error
 				if prof == nil {
@@ -809,6 +816,7 @@ func startColumnStoreSuiteRuntimeProfiles(cfg BenchConfig) (func() error, error)
 				} else {
 					writeErr = prof.WriteTo(f, 0)
 				}
+				runtime.SetMutexProfileFraction(prevFrac)
 				return errors.Join(writeErr, f.Close())
 			},
 			abort: func() error {
@@ -982,7 +990,7 @@ func runColumnStoreSuiteQueries(collection *collections.Collection, rows int, ra
 			if reason == "" {
 				reason = "planner did not report an unsupported reason"
 			}
-			return nil, nil, fmt.Errorf("column_store: forced path %q unsupported for %s: reason=%s: %w", path, name, reason, collections.ErrColumnQueryPlanUnsupported)
+			return nil, nil, fmt.Errorf("column_store: forced path %q unsupported for %s: refusing to route through row store; reason=%s: %w", path, name, reason, collections.ErrColumnQueryPlanUnsupported)
 		}
 
 		scanStart := time.Now()

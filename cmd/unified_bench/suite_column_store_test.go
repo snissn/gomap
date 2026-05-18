@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -74,9 +75,7 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 		"allocs_column_store_treedb_column_store.pprof",
 		"checkpoint_cpu_checkpoint_column_store_treedb_column_store.pprof",
 		"block.pprof",
-		"block_column_store_treedb_column_store.pprof",
 		"mutex.pprof",
-		"mutex_column_store_treedb_column_store.pprof",
 		"trace.out",
 	} {
 		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
@@ -221,11 +220,20 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 		report.Artifacts.AllocsProfile == "" ||
 		report.Artifacts.CheckpointCPUProfile == "" ||
 		report.Artifacts.BlockProfile == "" ||
-		report.Artifacts.BlockDeltaProfile == "" ||
 		report.Artifacts.MutexProfile == "" ||
-		report.Artifacts.MutexDeltaProfile == "" ||
 		report.Artifacts.TraceProfile == "" {
 		t.Fatalf("expected all configured profile artifacts to be recorded: %+v", report.Artifacts)
+	}
+	for label, path := range map[string]string{
+		"block": report.Artifacts.BlockDeltaProfile,
+		"mutex": report.Artifacts.MutexDeltaProfile,
+	} {
+		if path == "" {
+			continue
+		}
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("reported %s delta artifact %s: %v", label, path, err)
+		}
 	}
 }
 
@@ -300,7 +308,7 @@ func TestColumnStoreBenchRunUsesDurationForAggregateM11A(t *testing.T) {
 	}, nil, 0)
 
 	got := run.Results[columnStoreSuiteBenchTestName][columnStoreSuiteBenchDisplayName]
-	if got != 1000 {
+	if math.Abs(got-1000) > 1e-9 {
 		t.Fatalf("aggregate rows/sec=%f want 1000 from exact durations", got)
 	}
 }
@@ -812,7 +820,7 @@ func TestColumnStoreSuiteArtifactsTrimRuntimeProfilePathsM11A(t *testing.T) {
 		BlockProfile:         " \t" + blockPath + "\t ",
 		MutexProfile:         " \t" + mutexPath + "\t ",
 		TraceProfile:         " \t" + tracePath + "\t ",
-	})
+	}, true)
 	if paths.CPUProfile != fmt.Sprintf("%s_%s_%s.pprof", cpuPath, columnStoreSuiteBenchTestName, columnStoreSuiteBenchDBName) {
 		t.Fatalf("cpu artifact path was not trimmed: %+v", paths)
 	}
@@ -830,6 +838,13 @@ func TestColumnStoreSuiteArtifactsTrimRuntimeProfilePathsM11A(t *testing.T) {
 	}
 	if paths.MutexDeltaProfile != contentionProfilePath(mutexPath, "mutex", columnStoreSuiteBenchTestName, columnStoreSuiteBenchDBName) {
 		t.Fatalf("mutex delta path=%q", paths.MutexDeltaProfile)
+	}
+	if paths.InsightsMarkdown == "" || paths.InsightsJSON == "" || paths.InsightsHTML == "" {
+		t.Fatalf("runBenchprof=true should advertise insights artifacts: %+v", paths)
+	}
+	withoutBenchprof := columnStoreArtifactPathsForProfileDir(dir, BenchConfig{}, false)
+	if withoutBenchprof.InsightsMarkdown != "" || withoutBenchprof.InsightsJSON != "" || withoutBenchprof.InsightsHTML != "" {
+		t.Fatalf("runBenchprof=false should not advertise insights artifacts: %+v", withoutBenchprof)
 	}
 }
 
@@ -937,7 +952,22 @@ func TestColumnStoreSuiteRejectsForcedColumnPathM11B(t *testing.T) {
 	msg := err.Error()
 	if !strings.Contains(msg, "serial_column_scan") ||
 		!strings.Contains(msg, "unsupported") ||
+		!strings.Contains(msg, "refusing to route through row store") ||
 		!strings.Contains(msg, "reason=no durable physical column assets are available") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestColumnStoreSuiteRejectsOraclePathLabelM11B(t *testing.T) {
+	_, err := runColumnStoreSuite(BenchConfig{Keys: 8, BatchSize: 4, DBsArg: "treedb", Profile: "durable", SeedUsed: 1}, columnStoreSuiteOptions{
+		ProfileDir:    t.TempDir(),
+		ExecutionPath: "oracle",
+		ForcedPath:    columnStorePathRowStoreBaseline,
+	})
+	if err == nil {
+		t.Fatal("expected oracle path-label to fail closed")
+	}
+	if !strings.Contains(err.Error(), "requires -path-label native-fastpath") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

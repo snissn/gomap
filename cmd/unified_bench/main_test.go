@@ -2248,6 +2248,35 @@ func TestRunBenchmark_EmptyContentionDeltaOmitsArtifactM11A(t *testing.T) {
 	}
 }
 
+func TestRunBenchmarkRestoresPreviousMutexProfileFractionM11A(t *testing.T) {
+	originalFraction := runtime.SetMutexProfileFraction(0)
+	t.Cleanup(func() {
+		runtime.SetMutexProfileFraction(originalFraction)
+	})
+	runtime.SetMutexProfileFraction(3)
+
+	_, err := runBenchmark(BenchConfig{
+		Keys:                 16,
+		ValueSize:            16,
+		BatchSize:            8,
+		RangeQueries:         1,
+		RangeSpan:            4,
+		DBsArg:               "treedb",
+		TestsArg:             "sequential_write",
+		KeepDir:              false,
+		Progress:             false,
+		SeedUsed:             1,
+		MutexProfile:         filepath.Join(t.TempDir(), "mutex.pprof"),
+		MutexProfileFraction: 1,
+	})
+	if err != nil {
+		t.Fatalf("runBenchmark: %v", err)
+	}
+	if gotPrev := runtime.SetMutexProfileFraction(0); gotPrev != 3 {
+		t.Fatalf("mutex profile fraction was not restored: previous=%d want 3", gotPrev)
+	}
+}
+
 func TestRunBenchmark_IgnoresWhitespaceOnlyRuntimeProfilesM11A(t *testing.T) {
 	whitespacePath := " \t "
 	_ = os.Remove(whitespacePath)
