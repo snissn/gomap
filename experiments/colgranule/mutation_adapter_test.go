@@ -806,13 +806,15 @@ func benchmarkJSONBenchMutationReplayScenario(tb testing.TB, ds JSONBenchDataset
 
 type testJSONBenchMutationReplayStateOptions struct {
 	AdapterOptions      ColumnMutationAdapterOptions
+	ReplayProfile       ColumnMutationReplayProfile
 	PreseedAssetOffsets bool
 }
 
 func testJSONBenchMutationReplayState(t *testing.T, dir string, ds JSONBenchDataset, opts ColumnStoreOptions, scenario jsonBenchMutationReplayScenario, stateOpts testJSONBenchMutationReplayStateOptions) jsonBenchMutationReplayState {
 	t.Helper()
 	adapterOpts := stateOpts.AdapterOptions
-	workspace, err := OpenColumnWorkspace(dir, columnWorkspaceOptionsForMutationReplayProfile("jsonbench", adapterOpts.ReplayProfile))
+	adapterOpts.ReplayProfile = stateOpts.ReplayProfile
+	workspace, err := OpenColumnWorkspace(dir, columnWorkspaceOptionsForMutationReplayProfile("jsonbench", stateOpts.ReplayProfile))
 	if err != nil {
 		t.Fatalf("OpenColumnWorkspace: %v", err)
 	}
