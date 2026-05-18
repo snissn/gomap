@@ -10756,7 +10756,7 @@ func (combiner *collectionUpdateCombiner) prepareBatchWithScratch(batch []collec
 			hasBSONSet: req.hasBSONSet,
 		}
 	}
-	plan, err := ownedBatch[0].collection.buildUpdateBatchPlan(items, updateBatchModeNoSecondaryUniqueIndexChanges, combiner.hasShardWorkers())
+	plan, err := ownedBatch[0].collection.buildUpdateBatchPlan(items, updateBatchModeNoSecondaryUniqueIndexChanges, combiner.hasShardWorkers(), nil)
 	clear(items)
 	*itemsScratch = items[:0]
 	if errors.Is(err, errUpdateBatchHasSecondaryUniqueIndex) ||
@@ -11873,6 +11873,10 @@ func (c *Collection) updateDocumentOnceApply(documentID []byte, update func(curr
 		_ = snap.Close()
 		return false, false, err
 	}
+	if err := c.requireColumnStoreCommandWAL(c.meta, nil); err != nil {
+		_ = snap.Close()
+		return false, false, err
+	}
 	stats := CollectionUpdateStats{
 		Items:   1,
 		Indexes: len(c.meta.Indexes),
@@ -12871,7 +12875,7 @@ func (c *Collection) updateBatchOnce(items []updateBatchItem, mode updateBatchMo
 		useBufferedRead := true
 		bufferedReadReplans := 0
 		for {
-			plan, err := c.buildUpdateBatchPlan(items, mode, useBufferedRead)
+			plan, err := c.buildUpdateBatchPlan(items, mode, useBufferedRead, commandWALIntent)
 			if err != nil {
 				return nil, err
 			}
@@ -12993,7 +12997,7 @@ func (c *Collection) updateBatchOnce(items []updateBatchItem, mode updateBatchMo
 		return nil, err
 	}
 
-	plan, err := c.buildUpdateBatchPlan(items, mode, false)
+	plan, err := c.buildUpdateBatchPlan(items, mode, false, commandWALIntent)
 	if err != nil {
 		return nil, err
 	}
@@ -13546,7 +13550,7 @@ func collectionWriteDomainSnapshotStale(domain *collectionWriteDomain, baseCommi
 	return updateBatchBufferedSnapshotStaleLocked(domain, baseCommitSeq, baseSystemRoot)
 }
 
-func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBatchMode, useBufferedRead bool) (*updateBatchPlan, error) {
+func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBatchMode, useBufferedRead bool, commandWALIntent *backenddb.CommandWALIntent) (*updateBatchPlan, error) {
 	results := make([]UpdateBatchResult, len(items))
 	snap := c.db.AcquireSnapshot()
 	if snap == nil {
@@ -13566,6 +13570,10 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 		return nil, err
 	}
 	meta := catalog.meta
+	if err := c.requireColumnStoreCommandWAL(meta, commandWALIntent); err != nil {
+		_ = snap.Close()
+		return nil, err
+	}
 	stats := CollectionUpdateStats{
 		Items:   len(items),
 		Indexes: len(meta.Indexes),

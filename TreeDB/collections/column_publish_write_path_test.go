@@ -115,6 +115,88 @@ func TestColumnStoreStaleNoIndexBufferedInsertRechecksCommandWALAfterCatalogRefr
 	assertColumnStoreWriteDomainEmptyM10B(t, stale)
 }
 
+func TestColumnStoreStaleUpdateCallbacksRecheckCommandWALAfterCatalogRefreshM10B(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{
+		Dir:                    t.TempDir(),
+		Durability:             backenddb.DurabilityWALOffRelaxed,
+		DisableBackgroundPrune: true,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "events",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatBSON,
+		},
+	}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	stale, err := mgr.OpenCollection("events")
+	if err != nil {
+		t.Fatalf("OpenCollection stale: %v", err)
+	}
+	doc, err := bson.Marshal(bson.D{
+		{Key: "time_us", Value: int64(1)},
+		{Key: "kind", Value: "like"},
+		{Key: "did", Value: "d1"},
+	})
+	if err != nil {
+		t.Fatalf("bson.Marshal: %v", err)
+	}
+	if _, err := stale.InsertBatchValidatedBSON([][]byte{[]byte("e1")}, [][]byte{doc}); err != nil {
+		t.Fatalf("InsertBatchValidatedBSON seed: %v", err)
+	}
+	if err := stale.Flush(); err != nil {
+		t.Fatalf("Flush seed: %v", err)
+	}
+	enableColumnStoreForExistingCollectionM10B(t, d, "events", ColumnStoreProfileBenchmarkRelaxed, mgr)
+	before, err := stale.Get([]byte("e1"))
+	if err != nil {
+		t.Fatalf("Get before stale update: %v", err)
+	}
+
+	updateCalled := false
+	matched, modified, err := stale.Update([]byte("e1"), func(current []byte) ([]byte, bool, error) {
+		updateCalled = true
+		return current, true, nil
+	})
+	assertColumnStoreCommandWALWriteRejectedM10B(t, err, "stale Update")
+	if matched || modified {
+		t.Fatalf("stale Update matched=%v modified=%v, want false/false on rejected write", matched, modified)
+	}
+	if updateCalled {
+		t.Fatal("stale Update callback ran before refreshed column-store command WAL validation")
+	}
+
+	batchCalled := false
+	results, err := stale.UpdateBatch([]UpdateBatchItem{{
+		DocumentID: []byte("e1"),
+		Update: func(current []byte) ([]byte, bool, error) {
+			batchCalled = true
+			return current, true, nil
+		},
+	}})
+	assertColumnStoreCommandWALWriteRejectedM10B(t, err, "stale UpdateBatch")
+	if len(results) != 0 {
+		t.Fatalf("stale UpdateBatch results len=%d, want 0 on rejected write", len(results))
+	}
+	if batchCalled {
+		t.Fatal("stale UpdateBatch callback ran before refreshed column-store command WAL validation")
+	}
+	after, err := stale.Get([]byte("e1"))
+	if err != nil {
+		t.Fatalf("Get after stale updates: %v", err)
+	}
+	if !bytes.Equal(after, before) {
+		t.Fatalf("document changed after stale rejected updates: before=%x after=%x", before, after)
+	}
+	assertColumnStoreWriteDomainEmptyM10B(t, stale)
+}
+
 func TestColumnStoreBufferedDeletePathsRequireCommandWALM10B(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -846,10 +928,12 @@ func assertColumnStoreWriteDomainEmptyM10B(t testing.TB, col *Collection) {
 
 func assertColumnStoreCommandWALWriteRejectedM10B(t testing.TB, err error, operation string) {
 	t.Helper()
-	if errors.Is(err, backenddb.ErrCommandWALUnsupported) || errors.Is(err, backenddb.ErrCommandWALRejected) {
-		return
+	if !errors.Is(err, backenddb.ErrCommandWALRejected) {
+		t.Fatalf("%s error=%v, want ErrCommandWALRejected", operation, err)
 	}
-	t.Fatalf("%s error=%v, want ErrCommandWALUnsupported or ErrCommandWALRejected", operation, err)
+	if errors.Is(err, backenddb.ErrCommandWALUnsupported) {
+		t.Fatalf("%s error=%v must not look like ErrCommandWALUnsupported", operation, err)
+	}
 }
 
 func assertColumnStoreDocumentMissingM10B(t testing.TB, col *Collection, id string) {
