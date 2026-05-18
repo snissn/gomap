@@ -4,6 +4,8 @@ import (
 	"errors"
 	"testing"
 
+	"go.mongodb.org/mongo-driver/v2/bson"
+
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 )
@@ -30,6 +32,58 @@ func TestColumnStoreWritesRequireCommandWALM10B(t *testing.T) {
 	_, err = col.InsertBatch([][]byte{[]byte("e1")}, [][]byte{[]byte(`{"time_us":1,"kind":"like","did":"d1"}`)})
 	if !errors.Is(err, backenddb.ErrCommandWALUnsupported) {
 		t.Fatalf("InsertBatch error=%v, want ErrCommandWALUnsupported", err)
+	}
+}
+
+func TestColumnStoreBenchmarkRelaxedRejectsBufferedWritesM10B(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{
+		Dir:                    t.TempDir(),
+		Durability:             backenddb.DurabilityWALOffRelaxed,
+		DisableBackgroundPrune: true,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	cfg := testColumnStoreConfig(nil)
+	cfg.ProfileSupport = ColumnStoreProfileBenchmarkRelaxed
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "events",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatBSON,
+			ColumnStore:    cfg,
+		},
+	}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := mgr.OpenCollection("events")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+
+	doc, err := bson.Marshal(bson.D{
+		{Key: "time_us", Value: int64(1)},
+		{Key: "kind", Value: "like"},
+		{Key: "did", Value: "d1"},
+	})
+	if err != nil {
+		t.Fatalf("bson.Marshal: %v", err)
+	}
+	if _, err := col.Insert([]byte("e1"), doc); !errors.Is(err, backenddb.ErrCommandWALRejected) {
+		t.Fatalf("Insert error=%v, want ErrCommandWALRejected", err)
+	}
+	if _, err := col.InsertBatchValidatedBSON([][]byte{[]byte("e2")}, [][]byte{doc}); !errors.Is(err, backenddb.ErrCommandWALRejected) {
+		t.Fatalf("InsertBatchValidatedBSON error=%v, want ErrCommandWALRejected", err)
+	}
+	if col.writeDomain != nil {
+		col.writeDomain.mu.RLock()
+		count := col.writeDomain.count
+		col.writeDomain.mu.RUnlock()
+		if count != 0 {
+			t.Fatalf("write domain count=%d, want 0 after rejected column-store writes", count)
+		}
 	}
 }
 

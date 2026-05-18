@@ -146,6 +146,62 @@ func TestPublishOrderedRootDeltaBatchGroupWithCommandWALContextPassesAssignedLSN
 	}
 }
 
+func TestPublishOrderedRootDeltaGroupWithCommandWALContextRejectsMissingFrame(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	defer db.Close()
+
+	_, _, err := db.PublishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBuilder(
+		nil,
+		nil,
+		func(ctx CommandWALPublishContext, rootIDs []uint64) (iterator.UnsafeIterator, error) {
+			t.Fatalf("system builder should not run without a command frame")
+			return nil, nil
+		},
+	)
+	if !errors.Is(err, errCommandWALContextMissingFrame) {
+		t.Fatalf("publish error=%v, want errCommandWALContextMissingFrame", err)
+	}
+	if errors.Is(err, ErrCommandWALUnsupported) {
+		t.Fatalf("publish error=%v must not look like ErrCommandWALUnsupported", err)
+	}
+	if got := db.State().AppliedCommandLSN; got != 0 {
+		t.Fatalf("AppliedCommandLSN=%d, want 0 after missing frame rejection", got)
+	}
+	if err := db.CheckCommandWALPublishReady(); err != nil {
+		t.Fatalf("CheckCommandWALPublishReady after missing frame rejection: %v", err)
+	}
+}
+
+func TestPublishOrderedRootDeltaBatchGroupWithCommandWALContextRejectsMissingFrame(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	defer db.Close()
+
+	_, _, err := db.PublishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilder(
+		nil,
+		nil,
+		func(ctx CommandWALPublishContext, rootIDs []uint64) (iterator.UnsafeIterator, error) {
+			t.Fatalf("system builder should not run without a command frame")
+			return nil, nil
+		},
+	)
+	if !errors.Is(err, errCommandWALContextMissingFrame) {
+		t.Fatalf("publish error=%v, want errCommandWALContextMissingFrame", err)
+	}
+	if errors.Is(err, ErrCommandWALUnsupported) {
+		t.Fatalf("publish error=%v must not look like ErrCommandWALUnsupported", err)
+	}
+	if got := db.State().AppliedCommandLSN; got != 0 {
+		t.Fatalf("AppliedCommandLSN=%d, want 0 after missing frame rejection", got)
+	}
+	if err := db.CheckCommandWALPublishReady(); err != nil {
+		t.Fatalf("CheckCommandWALPublishReady after missing frame rejection: %v", err)
+	}
+}
+
 func TestPublishOrderedRootDeltaBatchGroupWithCommandWALContextPreflightFailureDoesNotPoison(t *testing.T) {
 	dir := t.TempDir()
 	enableCommandWALFormat(t, dir)
