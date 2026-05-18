@@ -2,6 +2,7 @@ package colgranule
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"hash/crc32"
 	"os"
@@ -356,6 +357,18 @@ func (w *ColumnWorkspace) PublishPart(part *ColumnPart, dictionaries map[string]
 	if err := validateColumnWorkspacePartManifest(entry); err != nil {
 		return ColumnWorkspacePartManifest{}, err
 	}
+	prepared := []ColumnPreparedAsset{{
+		Ref:          entry.AssetRef,
+		Bytes:        entry.AssetBytes,
+		GenerationID: w.manifest.Generation + 1,
+		PublishID:    w.manifest.PublishID + 1,
+		Reason:       "workspace part publish",
+	}}
+	synced, tracked, err := w.syncPreparedAssetsForManifest(prepared)
+	if err != nil {
+		markErr := w.assets.MarkPublishFailed(prepared, "workspace part asset sync failed")
+		return ColumnWorkspacePartManifest{}, errors.Join(err, markErr)
+	}
 	if idx, ok := w.partByID[entry.PartID]; ok {
 		w.manifest.Parts[idx] = entry
 	} else {
@@ -370,9 +383,37 @@ func (w *ColumnWorkspace) PublishPart(part *ColumnPart, dictionaries map[string]
 	})
 	w.rebuildPartIndex()
 	if err := w.saveManifest(); err != nil {
+		if tracked {
+			if markErr := w.assets.MarkPublishFailed(prepared, "workspace part manifest publish failed"); markErr != nil {
+				return ColumnWorkspacePartManifest{}, errors.Join(err, markErr)
+			}
+		}
 		return ColumnWorkspacePartManifest{}, err
 	}
+	if tracked {
+		if err := w.assets.MarkPublishSucceeded(synced); err != nil {
+			return ColumnWorkspacePartManifest{}, err
+		}
+	}
 	return entry, nil
+}
+
+func (w *ColumnWorkspace) syncPreparedAssetsForManifest(prepared []ColumnPreparedAsset) (ColumnAssetSyncedPublishClosure, bool, error) {
+	if w == nil || w.assets == nil {
+		return ColumnAssetSyncedPublishClosure{}, false, fmt.Errorf("colgranule: closed column workspace")
+	}
+	if len(prepared) == 0 || w.ManifestSyncMode() == ColumnWorkspaceManifestSyncDisabledForBenchmark {
+		return ColumnAssetSyncedPublishClosure{}, false, nil
+	}
+	closure, err := w.assets.PreparePublishClosure(prepared)
+	if err != nil {
+		return ColumnAssetSyncedPublishClosure{}, true, err
+	}
+	synced, err := w.assets.SyncPublishClosure(closure)
+	if err != nil {
+		return ColumnAssetSyncedPublishClosure{}, true, err
+	}
+	return synced, true, nil
 }
 
 func (w *ColumnWorkspace) LoadPart(partID uint64) (ColumnWorkspaceLoadResult, error) {

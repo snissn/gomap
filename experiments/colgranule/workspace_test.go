@@ -214,6 +214,91 @@ func TestColumnWorkspaceManifestSyncModeControlsFsyncM9D(t *testing.T) {
 	}
 }
 
+func TestColumnWorkspacePublishPartSyncsAssetsBeforeDurableManifestM9D(t *testing.T) {
+	probe := &syncProbeAssetStore{MemoryColumnAssetStore: NewMemoryColumnAssetStore()}
+	publishPhase := false
+	syncHook := func(file *os.File) error {
+		if publishPhase && probe.syncCalls.Load() == 0 {
+			t.Fatalf("durable workspace manifest sync ran before asset store sync")
+		}
+		return nil
+	}
+	workspace, err := OpenColumnWorkspace(t.TempDir(), ColumnWorkspaceOptions{
+		Collection:   "jsonbench",
+		syncTempFile: syncHook,
+	})
+	if err != nil {
+		t.Fatalf("OpenColumnWorkspace: %v", err)
+	}
+	if err := workspace.assets.Close(); err != nil {
+		t.Fatalf("close initial asset manager: %v", err)
+	}
+	manager, err := NewColumnAssetManager(probe)
+	if err != nil {
+		t.Fatalf("NewColumnAssetManager: %v", err)
+	}
+	workspace.assets = manager
+
+	ds := syntheticJSONBenchDataset(16)
+	part, err := BuildJSONBenchColumnPart(ds, 4)
+	if err != nil {
+		t.Fatalf("BuildJSONBenchColumnPart: %v", err)
+	}
+	publishPhase = true
+	entry, err := workspace.PublishPart(part, ds.Dictionaries)
+	publishPhase = false
+	if err != nil {
+		t.Fatalf("PublishPart: %v", err)
+	}
+	if entry.AssetBytes == 0 {
+		t.Fatalf("published entry missing asset bytes: %+v", entry)
+	}
+	if got := probe.syncCalls.Load(); got != 1 {
+		t.Fatalf("asset sync calls=%d want 1", got)
+	}
+	state := manager.DebugState()
+	if state.SyncedAttempts != 0 || len(state.PublishFailed) != 0 || len(state.Quarantine) != 0 {
+		t.Fatalf("asset manager retained publish state after success: %+v", state)
+	}
+	if err := workspace.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+}
+
+func TestColumnWorkspacePublishPartBenchmarkSyncModeSkipsAssetSyncM9D(t *testing.T) {
+	probe := &syncProbeAssetStore{MemoryColumnAssetStore: NewMemoryColumnAssetStore()}
+	workspace, err := OpenColumnWorkspace(t.TempDir(), ColumnWorkspaceOptions{
+		Collection:       "jsonbench",
+		ManifestSyncMode: ColumnWorkspaceManifestSyncDisabledForBenchmark,
+	})
+	if err != nil {
+		t.Fatalf("OpenColumnWorkspace: %v", err)
+	}
+	if err := workspace.assets.Close(); err != nil {
+		t.Fatalf("close initial asset manager: %v", err)
+	}
+	manager, err := NewColumnAssetManager(probe)
+	if err != nil {
+		t.Fatalf("NewColumnAssetManager: %v", err)
+	}
+	workspace.assets = manager
+
+	ds := syntheticJSONBenchDataset(16)
+	part, err := BuildJSONBenchColumnPart(ds, 4)
+	if err != nil {
+		t.Fatalf("BuildJSONBenchColumnPart: %v", err)
+	}
+	if _, err := workspace.PublishPart(part, ds.Dictionaries); err != nil {
+		t.Fatalf("PublishPart: %v", err)
+	}
+	if got := probe.syncCalls.Load(); got != 0 {
+		t.Fatalf("benchmark-no-sync asset sync calls=%d want 0", got)
+	}
+	if err := workspace.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+}
+
 func TestColumnWorkspacePreparedRegistryAndInventory(t *testing.T) {
 	ds := syntheticJSONBenchDataset(64)
 	opts, err := JSONBenchColumnPartOptions(ds, 16)
