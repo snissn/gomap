@@ -501,6 +501,43 @@ func TestColumnStoreReplayIntentBypassesRelaxedDurabilityGateM10C(t *testing.T) 
 	}
 }
 
+func TestColumnStoreAssignedForegroundIntentDoesNotBypassRelaxedDurabilityGateM10C(t *testing.T) {
+	dir := prepareColumnStoreCommandWALDirWithProfileM10C(t, ColumnStoreProfileBenchmarkRelaxed)
+	d, err := backenddb.Open(backenddb.Options{
+		Dir:                    dir,
+		CommandWAL:             true,
+		Durability:             backenddb.DurabilityWALOnRelaxed,
+		DisableBackgroundPrune: true,
+	})
+	if err != nil {
+		t.Fatalf("Open relaxed command WAL DB: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	col := openColumnStoreCollectionM10B(t, d)
+
+	docs := []commitlog.CollectionDocument{{
+		ID:       []byte("e1"),
+		Document: []byte(`{"time_us":1,"kind":"like","did":"d1"}`),
+	}}
+	intent, err := col.newCollectionInsertCommandWALIntent(docs, nil)
+	if err != nil {
+		t.Fatalf("newCollectionInsertCommandWALIntent: %v", err)
+	}
+	lsn, err := d.AppendCommandWALIntent(intent, false)
+	if err != nil {
+		t.Fatalf("AppendCommandWALIntent: %v", err)
+	}
+	if lsn == 0 || intent.AssignedLSN() != lsn || intent.ReplayAssignedLSN() != 0 {
+		t.Fatalf("assigned foreground intent lsn=%d assigned=%d replay=%d", lsn, intent.AssignedLSN(), intent.ReplayAssignedLSN())
+	}
+	if err := col.requireColumnStoreCommandWAL(col.meta, intent); !errors.Is(err, backenddb.ErrCommandWALRejected) {
+		t.Fatalf("assigned foreground relaxed intent error=%v, want ErrCommandWALRejected", err)
+	}
+	if err := col.requireColumnStoreCommandWAL(col.meta, nil); !errors.Is(err, backenddb.ErrCommandWALRejected) {
+		t.Fatalf("nil relaxed intent error=%v, want ErrCommandWALRejected", err)
+	}
+}
+
 func TestColumnStoreReadOnlyOpenWithUnappliedCollectionFrameFailsM10C(t *testing.T) {
 	dir := prepareColumnStoreCommandWALDirM10B(t)
 	payload, err := commitlog.EncodeCollectionInsertBatchByIDPayload("events", []commitlog.CollectionDocument{
