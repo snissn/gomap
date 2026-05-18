@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestColumnMutationAdapterReplayAndJSONBenchParity(t *testing.T) {
@@ -133,19 +134,30 @@ func TestColumnMutationAdapterReplayIgnoresPhysicalDescriptorsM9D(t *testing.T) 
 		InitialPartID:     1_000,
 		InitialGeneration: 50,
 	}, true)
+	offsetReplay := testJSONBenchMutationReplayState(t, t.TempDir(), ds, opts, scenario, ColumnMutationAdapterOptions{}, true)
 
 	assertJSONBenchPartSetQueriesMatchRaw(t, original.reader, scenario.expected)
 	assertJSONBenchPartSetQueriesMatchRaw(t, physicalReplay.reader, scenario.expected)
+	assertJSONBenchPartSetQueriesMatchRaw(t, offsetReplay.reader, scenario.expected)
 	assertJSONBenchReplaySpecializedQueriesMatchRaw(t, original.reader, scenario.expected, JSONBenchColumnPartLayoutTimeUS)
 	assertJSONBenchReplaySpecializedQueriesMatchRaw(t, physicalReplay.reader, scenario.expected, JSONBenchColumnPartLayoutTimeUS)
+	assertJSONBenchReplaySpecializedQueriesMatchRaw(t, offsetReplay.reader, scenario.expected, JSONBenchColumnPartLayoutTimeUS)
 	assertColumnPartSetLogicalDigestMatchesDataset(t, original.reader, scenario.expected, ds.Dictionaries)
 	assertColumnPartSetLogicalDigestMatchesDataset(t, physicalReplay.reader, scenario.expected, ds.Dictionaries)
+	assertColumnPartSetLogicalDigestMatchesDataset(t, offsetReplay.reader, scenario.expected, ds.Dictionaries)
 	assertColumnReplayPhysicalDescriptorsDiffer(t, original, physicalReplay)
+	assertColumnReplayAssetOffsetsDifferOnly(t, original, offsetReplay)
 	if original.manifest.ByteAccounting != physicalReplay.manifest.ByteAccounting {
 		t.Fatalf("byte accounting changed across physical replay\noriginal=%+v\nreplay=%+v", original.manifest.ByteAccounting, physicalReplay.manifest.ByteAccounting)
 	}
+	if original.manifest.ByteAccounting != offsetReplay.manifest.ByteAccounting {
+		t.Fatalf("byte accounting changed across offset replay\noriginal=%+v\nreplay=%+v", original.manifest.ByteAccounting, offsetReplay.manifest.ByteAccounting)
+	}
 	if original.reader.VisibilityStats() != physicalReplay.reader.VisibilityStats() {
 		t.Fatalf("visibility stats changed across physical replay\noriginal=%+v\nreplay=%+v", original.reader.VisibilityStats(), physicalReplay.reader.VisibilityStats())
+	}
+	if original.reader.VisibilityStats() != offsetReplay.reader.VisibilityStats() {
+		t.Fatalf("visibility stats changed across offset replay\noriginal=%+v\nreplay=%+v", original.reader.VisibilityStats(), offsetReplay.reader.VisibilityStats())
 	}
 
 	remapped := remapJSONBenchDictionaryCodes(t, ds, 10_000)
@@ -196,11 +208,12 @@ func TestColumnMutationReplayProfileContractM9D(t *testing.T) {
 		wantErr         bool
 		wantErrContains string
 		want            string
+		wantLabel       string
 	}{
 		{name: "default durable", want: "durable"},
 		{name: "durable", profile: ColumnMutationReplayProfile{Durability: ColumnMutationReplayDurable}, want: "durable"},
-		{name: "default durable benchmark only rejected", profile: ColumnMutationReplayProfile{BenchmarkOnly: true}, wantErr: true},
-		{name: "durable benchmark only rejected", profile: ColumnMutationReplayProfile{Durability: ColumnMutationReplayDurable, BenchmarkOnly: true}, wantErr: true},
+		{name: "default durable benchmark only rejected", profile: ColumnMutationReplayProfile{BenchmarkOnly: true}, wantErr: true, wantLabel: "durable_benchmark_ceiling"},
+		{name: "durable benchmark only rejected", profile: ColumnMutationReplayProfile{Durability: ColumnMutationReplayDurable, BenchmarkOnly: true}, wantErr: true, wantLabel: "durable_benchmark_ceiling"},
 		{name: "wal on fast production rejected", profile: ColumnMutationReplayProfile{Durability: ColumnMutationReplayWALOnFast}, wantErr: true, wantErrContains: "not supported for production"},
 		{name: "fast production rejected", profile: ColumnMutationReplayProfile{Durability: ColumnMutationReplayFast}, wantErr: true, wantErrContains: "not supported for production"},
 		{name: "wal on fast benchmark ceiling", profile: ColumnMutationReplayProfile{Durability: ColumnMutationReplayWALOnFast, BenchmarkOnly: true}, want: "wal_on_fast_benchmark_ceiling"},
@@ -216,6 +229,11 @@ func TestColumnMutationReplayProfileContractM9D(t *testing.T) {
 				}
 				if tt.wantErrContains != "" && !strings.Contains(err.Error(), tt.wantErrContains) {
 					t.Fatalf("Validate() err=%q want containing %q", err, tt.wantErrContains)
+				}
+				if tt.wantLabel != "" {
+					if got := tt.profile.Label(); got != tt.wantLabel {
+						t.Fatalf("Label()=%q want %q", got, tt.wantLabel)
+					}
 				}
 				return
 			}
@@ -557,6 +575,7 @@ func BenchmarkColumnMutationReplayM9D(b *testing.B) {
 				var last ColumnCollectionManifest
 				b.ReportAllocs()
 				b.ResetTimer()
+				start := time.Now()
 				for i := 0; i < b.N; i++ {
 					workspace, adapter := benchmarkColumnMutationAdapterWithProfile(b, filepath.Join(root, fmt.Sprintf("iter-%06d", i)), opts, ds.Dictionaries, profile)
 					_, err := adapter.PublishBaseBatch(ColumnBatch{Rows: ds.Rows, Columns: ds.Columns}, ColumnPartCoverageOptions{SourceRowRootGeneration: 1, SourceRowVersionUpper: uint64(ds.Rows)})
@@ -569,12 +588,12 @@ func BenchmarkColumnMutationReplayM9D(b *testing.B) {
 						b.Fatalf("replay: %v", err)
 					}
 				}
+				elapsed := time.Since(start)
 				b.StopTimer()
-				if b.N > 0 {
+				if b.N > 0 && elapsed > 0 {
 					// The replay gate deliberately includes per-iteration workspace
 					// open/publish/apply/close work in the timed loop.
-					perOpSeconds := b.Elapsed().Seconds() / float64(b.N)
-					b.ReportMetric(float64(logicalRows)/perOpSeconds, "rows/sec")
+					b.ReportMetric(float64(logicalRows)*float64(b.N)/elapsed.Seconds(), "rows/sec")
 				}
 				b.ReportMetric(float64(logicalRows), "logical_rows/op")
 				b.ReportMetric(float64(commandBytes), "command_bytes/op")
@@ -850,6 +869,46 @@ func assertColumnReplayPhysicalDescriptorsDiffer(t *testing.T, original jsonBenc
 	}
 	if originalLocator.PartID == replayLocator.PartID {
 		t.Fatalf("locator part id preserved: %d", originalLocator.PartID)
+	}
+}
+
+func assertColumnReplayAssetOffsetsDifferOnly(t *testing.T, original jsonBenchMutationReplayState, replay jsonBenchMutationReplayState) {
+	t.Helper()
+	if original.manifest.ActiveGeneration != replay.manifest.ActiveGeneration {
+		t.Fatalf("active generation changed: original=%d replay=%d", original.manifest.ActiveGeneration, replay.manifest.ActiveGeneration)
+	}
+	if len(original.manifest.PartSet.BaseParts) != 1 || len(original.manifest.PartSet.DeltaParts) != 1 {
+		t.Fatalf("original part set=%+v", original.manifest.PartSet)
+	}
+	if len(replay.manifest.PartSet.BaseParts) != 1 || len(replay.manifest.PartSet.DeltaParts) != 1 {
+		t.Fatalf("replay part set=%+v", replay.manifest.PartSet)
+	}
+	originalBase := original.manifest.PartSet.BaseParts[0]
+	replayBase := replay.manifest.PartSet.BaseParts[0]
+	originalDelta := original.manifest.PartSet.DeltaParts[0]
+	replayDelta := replay.manifest.PartSet.DeltaParts[0]
+	if originalBase.GenerationID != replayBase.GenerationID || originalDelta.GenerationID != replayDelta.GenerationID {
+		t.Fatalf("generation ids changed: original base/delta=%d/%d replay=%d/%d", originalBase.GenerationID, originalDelta.GenerationID, replayBase.GenerationID, replayDelta.GenerationID)
+	}
+	if originalBase.Part.PartID != replayBase.Part.PartID || originalDelta.Part.PartID != replayDelta.Part.PartID {
+		t.Fatalf("part ids changed: original base/delta=%d/%d replay=%d/%d", originalBase.Part.PartID, originalDelta.Part.PartID, replayBase.Part.PartID, replayDelta.Part.PartID)
+	}
+	if originalBase.Part.AssetRef.Offset == replayBase.Part.AssetRef.Offset {
+		t.Fatalf("base asset offset preserved: %d", originalBase.Part.AssetRef.Offset)
+	}
+	if originalDelta.Part.AssetRef.Offset == replayDelta.Part.AssetRef.Offset {
+		t.Fatalf("delta asset offset preserved: %d", originalDelta.Part.AssetRef.Offset)
+	}
+	originalLocator, ok := original.reader.LatestLocator(5)
+	if !ok {
+		t.Fatal("original missing locator for id 5")
+	}
+	replayLocator, ok := replay.reader.LatestLocator(5)
+	if !ok {
+		t.Fatal("replay missing locator for id 5")
+	}
+	if originalLocator.PartID != replayLocator.PartID {
+		t.Fatalf("locator part id changed: original=%d replay=%d", originalLocator.PartID, replayLocator.PartID)
 	}
 }
 

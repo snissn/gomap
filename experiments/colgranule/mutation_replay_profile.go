@@ -39,7 +39,7 @@ func (p ColumnMutationReplayProfile) ProductionSupported() bool {
 
 func (p ColumnMutationReplayProfile) Label() string {
 	durability := p.normalizedDurability()
-	if p.BenchmarkOnly && durability != ColumnMutationReplayDurable {
+	if p.BenchmarkOnly {
 		return string(durability) + "_benchmark_ceiling"
 	}
 	return string(durability)

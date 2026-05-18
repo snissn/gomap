@@ -136,22 +136,21 @@ func TestColumnWorkspaceCreatesIsolatedNamespace(t *testing.T) {
 }
 
 func TestColumnWorkspaceManifestSyncModeControlsFsyncM9D(t *testing.T) {
-	oldSync := columnWorkspaceSyncTempFile
 	syncs := 0
-	columnWorkspaceSyncTempFile = func(file *os.File) error {
+	syncHook := func(file *os.File) error {
 		syncs++
 		return nil
 	}
-	defer func() {
-		columnWorkspaceSyncTempFile = oldSync
-	}()
 
 	manifest, err := NewColumnCollectionManifest("jsonbench", partTestOptions([]SortKeyColumn{{Column: "id"}}), nil, nil, nil)
 	if err != nil {
 		t.Fatalf("NewColumnCollectionManifest: %v", err)
 	}
 
-	durable, err := OpenColumnWorkspace(t.TempDir(), ColumnWorkspaceOptions{Collection: "jsonbench"})
+	durable, err := OpenColumnWorkspace(t.TempDir(), ColumnWorkspaceOptions{
+		Collection:   "jsonbench",
+		syncTempFile: syncHook,
+	})
 	if err != nil {
 		t.Fatalf("OpenColumnWorkspace durable: %v", err)
 	}
@@ -172,6 +171,7 @@ func TestColumnWorkspaceManifestSyncModeControlsFsyncM9D(t *testing.T) {
 	relaxed, err := OpenColumnWorkspace(t.TempDir(), ColumnWorkspaceOptions{
 		Collection:       "jsonbench",
 		ManifestSyncMode: ColumnWorkspaceManifestSyncDisabledForBenchmark,
+		syncTempFile:     syncHook,
 	})
 	if err != nil {
 		t.Fatalf("OpenColumnWorkspace relaxed: %v", err)

@@ -88,11 +88,11 @@ func BenchmarkColumnStoreCommandWALReplayM10C(b *testing.B) {
 	)
 	for _, columnStore := range []bool{false, true} {
 		b.Run(fmt.Sprintf("insert/frames=%d/batch=%d/column_store=%t", frames, batchSize, columnStore), func(b *testing.B) {
-			templateDir, docsPerReplay, payloadBytesPerReplay := prepareColumnStoreCommandWALReplayBenchmarkDirM10C(b, columnStore, frames, batchSize)
+			templateDir, docsPerReplay, encodedPayloadBytesPerReplay := prepareColumnStoreCommandWALReplayBenchmarkDirM10C(b, columnStore, frames, batchSize)
 			wantAppliedLSN := uint64(frames + 1)
 
 			b.ReportAllocs()
-			b.SetBytes(int64(payloadBytesPerReplay))
+			b.SetBytes(int64(encodedPayloadBytesPerReplay))
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				b.StopTimer()
@@ -120,15 +120,13 @@ func BenchmarkColumnStoreCommandWALReplayM10C(b *testing.B) {
 				if err := backend.Close(); err != nil {
 					b.Fatalf("Close replay DB: %v", err)
 				}
-				b.StartTimer()
 			}
-			b.StopTimer()
 
 			elapsed := b.Elapsed().Seconds()
 			if elapsed > 0 {
 				b.ReportMetric(float64(docsPerReplay*b.N)/elapsed, "replay_docs/s")
 				b.ReportMetric(float64(frames*b.N)/elapsed, "replay_frames/s")
-				b.ReportMetric((float64(payloadBytesPerReplay*b.N)/(1024*1024))/elapsed, "payload_MiB/s")
+				b.ReportMetric((float64(encodedPayloadBytesPerReplay*b.N)/(1024*1024))/elapsed, "encoded_payload_MiB/s")
 			}
 		})
 	}
@@ -295,9 +293,24 @@ func prepareColumnStoreCommandWALReplayBenchmarkDirM10C(b *testing.B, columnStor
 	}
 
 	totalDocs := 0
-	totalPayloadBytes := 0
+	totalEncodedPayloadBytes := 0
+	walDir := backenddb.WALDirPath(dir)
+	if err := os.MkdirAll(walDir, 0o755); err != nil {
+		b.Fatalf("MkdirAll wal: %v", err)
+	}
+	path := filepath.Join(walDir, commitlog.CommandSegmentName(0, 1))
+	w, err := commitlog.NewWriter(path)
+	if err != nil {
+		b.Fatalf("NewWriter: %v", err)
+	}
+	closeWriter := true
+	defer func() {
+		if closeWriter {
+			_ = w.Close()
+		}
+	}()
 	for i := 0; i < frames; i++ {
-		ids, documents, idBytes, docBytes := columnStoreCommandWALBenchDocuments(i*batchSize, batchSize, 0)
+		ids, documents, _, _ := columnStoreCommandWALBenchDocuments(i*batchSize, batchSize, 0)
 		docs, err := collectionDocumentsFromBatchInput(ids, documents)
 		if err != nil {
 			b.Fatalf("collectionDocumentsFromBatchInput: %v", err)
@@ -306,37 +319,23 @@ func prepareColumnStoreCommandWALReplayBenchmarkDirM10C(b *testing.B, columnStor
 		if err != nil {
 			b.Fatalf("EncodeCollectionInsertBatchByIDPayload: %v", err)
 		}
-		writeColumnStoreCommandWALReplayBenchmarkFrameM10C(b, dir, uint64(i+2), commitlog.CommandKindCollectionInsertBatchByID, commitlog.PayloadFormatCollectionInsertBatchByIDV1, payload)
+		if err := w.AppendCommand(commitlog.CommandEnvelope{
+			LSN:           uint64(i + 2),
+			Kind:          commitlog.CommandKindCollectionInsertBatchByID,
+			Scope:         commitlog.CommandScopeCollection,
+			PayloadFormat: commitlog.PayloadFormatCollectionInsertBatchByIDV1,
+			Payload:       payload,
+		}); err != nil {
+			b.Fatalf("AppendCommand: %v", err)
+		}
 		totalDocs += len(ids)
-		totalPayloadBytes += idBytes + docBytes
-	}
-	return dir, totalDocs, totalPayloadBytes
-}
-
-func writeColumnStoreCommandWALReplayBenchmarkFrameM10C(tb testing.TB, dir string, lsn uint64, kind commitlog.CommandKind, format commitlog.PayloadFormat, payload []byte) {
-	tb.Helper()
-	walDir := backenddb.WALDirPath(dir)
-	if err := os.MkdirAll(walDir, 0o755); err != nil {
-		tb.Fatalf("MkdirAll wal: %v", err)
-	}
-	path := filepath.Join(walDir, commitlog.CommandSegmentName(0, 1))
-	w, err := commitlog.NewWriter(path)
-	if err != nil {
-		tb.Fatalf("NewWriter: %v", err)
-	}
-	if err := w.AppendCommand(commitlog.CommandEnvelope{
-		LSN:           lsn,
-		Kind:          kind,
-		Scope:         commandWALScopeForKind(kind),
-		PayloadFormat: format,
-		Payload:       payload,
-	}); err != nil {
-		_ = w.Close()
-		tb.Fatalf("AppendCommand: %v", err)
+		totalEncodedPayloadBytes += len(payload)
 	}
 	if err := w.Close(); err != nil {
-		tb.Fatalf("Close writer: %v", err)
+		b.Fatalf("Close writer: %v", err)
 	}
+	closeWriter = false
+	return dir, totalDocs, totalEncodedPayloadBytes
 }
 
 func copyColumnStoreCommandWALReplayBenchmarkDirM10C(tb testing.TB, src, dst string) {
