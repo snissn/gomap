@@ -190,9 +190,9 @@ func TestColumnStoreActiveManifestFailsClosedOnIdentityMismatch(t *testing.T) {
 }
 
 func TestColumnManifestIdentityRecordRejectsNonZeroReserved(t *testing.T) {
-	identity := ColumnManifestIdentity{Generation: 42, Version: 1, Checksum: 0xfeedbeef}
+	identity := ColumnManifestIdentity{Generation: 42, Version: columnManifestIdentityVersion, Checksum: 0xfeedbeef}
 	record := encodeColumnManifestIdentityRecord(identity)
-	record[27] = 1
+	record[columnManifestIdentityReservedOffset+columnManifestIdentityReservedSize-1] = 1
 	decoded, err := decodeColumnManifestIdentityRecord(record)
 	if err == nil || !strings.Contains(err.Error(), "reserved") {
 		t.Fatalf("decodeColumnManifestIdentityRecord decoded=%+v err=%v want reserved-field rejection", decoded, err)
