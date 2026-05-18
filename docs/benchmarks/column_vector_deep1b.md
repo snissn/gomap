@@ -547,8 +547,17 @@ scores. It then runs native Go storage candidates over three row orders
 per-dimension blob rows, and whole-granule blob rows for later part-size tests
 with codecs such as `NONE`, `LZ4`, `ZSTD`, `T64+ZSTD`, `Delta+ZSTD`, and
 `DoubleDelta+ZSTD`. Blob fixtures are hex-encoded in TSV for transport, and
-the generated load script decodes them with `unhex()` before ClickHouse stores
+the generated runner decodes them with `unhex()` before ClickHouse stores
 the raw byte strings.
+
+The ClickHouse fixture runner is:
+
+```sh
+cd "$OUT/clickhouse"
+CLICKHOUSE_BIN=/path/to/clickhouse \
+CLICKHOUSE_PATH="$OUT/clickhouse/chdb" \
+  ./run_clickhouse_local.sh
+```
 
 Initial native storage-only run, 8192 rows x 96 dimensions:
 
@@ -572,9 +581,30 @@ Interpretation:
   RLE, and frame-of-reference varints are all present in the tournament, but
   their best compressed rows currently land around `89-90 B/vector`, behind
   the `85.9-86.6 B/vector` zstd-better byte-stream result.
-- ClickHouse binaries were not available on the runner for this first pass, so
-  the harness generated ClickHouse-ready fixtures but did not produce
-  ClickHouse part-size measurements yet.
+
+ClickHouse local part-size run with ClickHouse `26.4.2.10`, using
+`run_clickhouse_local.sh`:
+
+| Row order | Best ClickHouse layout | Disk B/vector | Data-compressed B/vector | Best wide UInt8 layout | Disk B/vector |
+| --- | --- | ---: | ---: | --- | ---: |
+| nearest_ranked | `granule_dim_major_zstd` | 86.71 | 86.65 | `wide_zstd` | 114.80 |
+| row_id | `granule_dim_major_zstd` | 86.71 | 86.65 | `wide_zstd` | 114.79 |
+| local_coord_sort | `granule_dim_major_zstd` | 85.88 | 85.82 | `wide_zstd` | 113.95 |
+
+ClickHouse interpretation:
+
+- Whole-granule `String CODEC(ZSTD(1))` storage over the raw dim-major byte
+  stream matches the native zstd-better result closely: `85.88-86.71 B/vector`
+  on disk.
+- Per-dimension blob rows are slightly larger (`86.06-86.89 B/vector`) because
+  they split the stream into 96 separate rows but still preserve the
+  coordinate-major byte layout.
+- Wide `UInt8` tables are not competitive for this 8192-vector granule:
+  the best wide row is `wide_zstd` at `113.95-114.80 B/vector`; `T64+ZSTD` is
+  slightly worse, `Delta+ZSTD` is worse again, and `DoubleDelta+ZSTD` expands
+  substantially. This includes the wide table's `order_name`, `row_idx`, and
+  `source_row` columns, but the gap is large enough that the important lesson
+  is still table/column overhead, not just metadata bytes.
 
 Granule-native int8 micro-kernel smoke:
 
