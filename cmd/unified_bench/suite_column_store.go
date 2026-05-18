@@ -993,7 +993,9 @@ func columnStoreSuitePlanRequest(name string, rows int, forceKind collections.Co
 func columnStoreSuiteQueryIndexCandidates(name string) []string {
 	// Candidates must stay one-index-entry-per-document scalar fields because
 	// the M11B B-tree baseline does a full ordered index pass for parity, then
-	// verifies the materialized count against the fixture row count.
+	// verifies the materialized count against the fixture row count. The selected
+	// index records which secondary structure is traversed; it is not a
+	// predicate-selective read path until range pushdown lands.
 	switch name {
 	case "q1", "q2":
 		return []string{"kind"}
@@ -1008,7 +1010,10 @@ func columnStoreSuiteQueryIndexCandidates(name string) []string {
 
 func columnStoreSuiteAggregateMetadataName(name string) string {
 	if name == "q5_metadata" {
-		return "q5_did_time_span"
+		// The executable q5_metadata path still aliases q5 until physical
+		// aggregate metadata assets exist, but forced aggregate_metadata planning
+		// should validate against a real registered catalog entry.
+		return "q5_did_time_span_min"
 	}
 	return ""
 }
@@ -1062,13 +1067,13 @@ func scanColumnStoreSuiteEventsByIndex(collection *collections.Collection, rows 
 	events := make([]columnStoreDecodedEvent, 0, rows)
 	var materialized int
 	var bytesRead int64
-	// The M11B B-tree baseline records the planner-selected secondary index, but
-	// deliberately performs a full ordered pass for parity and write-amplification
-	// accounting. No q1-q5 predicate is pushed into the range yet; M11C can add
-	// selective bounds once physical column scans exist. The fixture expects one
-	// indexed row entry per document, so rows+1 is a sentinel limit: materialized
-	// != rows catches an exact sentinel hit, while truncated catches entries
-	// beyond the sentinel.
+	// The M11B B-tree baseline intentionally performs a full ordered pass over
+	// the planner-selected secondary index for parity. The selected index affects
+	// the secondary structure traversed and write-amplification accounting, not
+	// read selectivity; range pushdown is deferred to M11C. The fixture expects
+	// one indexed row entry per document, so rows+1 is a sentinel limit:
+	// materialized != rows catches an exact sentinel hit, while truncated catches
+	// entries beyond the sentinel.
 	truncated, err := collection.ScanBorrowedDocumentsByIndexRange(indexName, collections.IndexRangeOptions{
 		Lower: collections.IndexRangeBound{Unbounded: true},
 		Upper: collections.IndexRangeBound{Unbounded: true},

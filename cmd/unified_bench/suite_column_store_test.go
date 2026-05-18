@@ -888,6 +888,21 @@ func TestColumnStoreSuiteConfigUsesExplicitAggregateMetadataNamesM11A(t *testing
 	}
 }
 
+func TestColumnStoreSuiteAggregateMetadataRequestUsesRegisteredNameM11B(t *testing.T) {
+	cfg := columnStoreSuiteConfig()
+	registered := make(map[string]bool, len(cfg.AggregateMetadata))
+	for _, agg := range cfg.AggregateMetadata {
+		registered[agg.Name] = true
+	}
+	name := columnStoreSuiteAggregateMetadataName("q5_metadata")
+	if name == "" {
+		t.Fatal("q5_metadata did not request aggregate metadata")
+	}
+	if !registered[name] {
+		t.Fatalf("q5_metadata requested aggregate metadata %q outside registered names", name)
+	}
+}
+
 func TestColumnStoreSuiteDirUsageFailsOnMissingPathM11A(t *testing.T) {
 	_, _, err := columnStoreSuiteDirUsage(filepath.Join(t.TempDir(), "missing"))
 	if err == nil {
