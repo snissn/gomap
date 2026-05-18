@@ -238,15 +238,10 @@ func TestColumnVectorGraphDeep1BSphericalDirectScoreMatchesDecode(t *testing.T) 
 	}
 	for row := 0; row < rows; row++ {
 		base := row * dims
-		var normSquared float64
+		scale := 0.5 + float64(row%7)*0.25
 		for j := 0; j < dims; j++ {
 			value := math.Sin(float64((row+2)*(j+3))*0.17) + math.Cos(float64((row+5)*(j+1))*0.11)
-			vectors[base+j] = float32(value)
-			normSquared += value * value
-		}
-		invNorm := 1 / math.Sqrt(normSquared)
-		for j := 0; j < dims; j++ {
-			vectors[base+j] = float32(float64(vectors[base+j]) * invNorm)
+			vectors[base+j] = float32(value * scale)
 		}
 	}
 	queryInvNorm := float32(columnVectorGraphDeep1BInvNorm(query))
@@ -265,8 +260,11 @@ func TestColumnVectorGraphDeep1BSphericalDirectScoreMatchesDecode(t *testing.T) 
 	if err != nil {
 		t.Fatalf("Decode: %v", err)
 	}
+	exactScores := make([]float32, rows)
+	columnVectorGraphDeep1BScorePrefixInto(query, queryInvNorm, vectors, invNorms, dims, dims, exactScores)
+	decodedInvNorms := columnVectorGraphDeep1BInvNorms(decoded, dims)
 	decodedScores := make([]float32, rows)
-	columnVectorGraphDeep1BScorePrefixInto(query, queryInvNorm, decoded, invNorms, dims, dims, decodedScores)
+	columnVectorGraphDeep1BScorePrefixInto(query, queryInvNorm, decoded, decodedInvNorms, dims, dims, decodedScores)
 
 	for _, tc := range []struct {
 		name      string
@@ -286,7 +284,6 @@ func TestColumnVectorGraphDeep1BSphericalDirectScoreMatchesDecode(t *testing.T) 
 				encoded.Payload,
 				rows,
 				dims,
-				invNorms,
 				tc.scorer,
 				tc.threshold,
 				directScores,
@@ -301,6 +298,9 @@ func TestColumnVectorGraphDeep1BSphericalDirectScoreMatchesDecode(t *testing.T) 
 				if diff := math.Abs(float64(directScores[row] - decodedScores[row])); diff > tc.tolerance {
 					t.Fatalf("direct score row=%d got=%g decoded=%g diff=%g", row, directScores[row], decodedScores[row], diff)
 				}
+				if diff := math.Abs(float64(directScores[row] - exactScores[row])); diff > tc.tolerance {
+					t.Fatalf("direct score row=%d got=%g exact=%g diff=%g", row, directScores[row], exactScores[row], diff)
+				}
 			}
 			if metrics.TerminalAngles != rows {
 				t.Fatalf("terminal angles=%d want %d", metrics.TerminalAngles, rows)
@@ -311,8 +311,8 @@ func TestColumnVectorGraphDeep1BSphericalDirectScoreMatchesDecode(t *testing.T) 
 			if metrics.FallbackAngles > rows*(dims-2) {
 				t.Fatalf("fallback angles=%d exceeds non-terminal angle count %d", metrics.FallbackAngles, rows*(dims-2))
 			}
-			if diff := math.Abs(float64(bestScore - decodedScores[bestRow])); diff > tc.tolerance {
-				t.Fatalf("best score=%g decoded best row score=%g diff=%g", bestScore, decodedScores[bestRow], diff)
+			if diff := math.Abs(float64(bestScore - exactScores[bestRow])); diff > tc.tolerance {
+				t.Fatalf("best score=%g exact best row score=%g diff=%g", bestScore, exactScores[bestRow], diff)
 			}
 		})
 	}
@@ -665,6 +665,7 @@ func BenchmarkColumnVectorGraphDeep1BJZIPDecodeAndScoreSmoke(b *testing.B) {
 	}
 	vectors := columnVectorGraphDeep1BReadFbinRows(b, baseFile, data.baseHeader, nearestRankedRows)
 	invNorms := columnVectorGraphDeep1BInvNorms(vectors, columnVectorGraphDeep1BDims)
+	unitInvNorms := columnVectorGraphDeep1BUnitInvNorms(granuleRows)
 
 	reportDecodeAndScoreMetrics := func(b *testing.B, elapsed time.Duration, rawBytes int, storedBytes int, transformRawBytes int, decodeScoreNanos int64) {
 		b.Helper()
@@ -716,6 +717,10 @@ func BenchmarkColumnVectorGraphDeep1BJZIPDecodeAndScoreSmoke(b *testing.B) {
 	for _, transform := range columnVectorGraphDeep1BJZIPTransforms(b) {
 		transform := transform
 		b.Run(transform.name, func(b *testing.B) {
+			scoreInvNorms := invNorms
+			if columnVectorGraphDeep1BJZIPTransformStoresUnitDirections(transform.kind) {
+				scoreInvNorms = unitInvNorms
+			}
 			for _, byteCodec := range columnVectorGraphDeep1BJZIPByteCodecs(b) {
 				byteCodec := byteCodec
 				b.Run(byteCodec.name, func(b *testing.B) {
@@ -732,7 +737,7 @@ func BenchmarkColumnVectorGraphDeep1BJZIPDecodeAndScoreSmoke(b *testing.B) {
 					if err != nil {
 						b.Fatalf("JZIP-style decode warm: %v", err)
 					}
-					bestScore, bestRow := columnVectorGraphDeep1BScoreBlock(query, queryInvNorm, decoded, invNorms, columnVectorGraphDeep1BDims)
+					bestScore, bestRow := columnVectorGraphDeep1BScoreBlock(query, queryInvNorm, decoded, scoreInvNorms, columnVectorGraphDeep1BDims)
 					maxAbsError, maxCosineError, meanCosineError := columnVectorGraphDeep1BJZIPErrorMetrics(vectors, decoded, columnVectorGraphDeep1BDims)
 					b.ReportAllocs()
 					b.SetBytes(int64(warm.RawBytes))
@@ -751,7 +756,7 @@ func BenchmarkColumnVectorGraphDeep1BJZIPDecodeAndScoreSmoke(b *testing.B) {
 							b.Fatalf("JZIP-style decode: %v", err)
 						}
 						scoreStart := time.Now()
-						bestScore, bestRow = columnVectorGraphDeep1BScoreBlock(query, queryInvNorm, decoded, invNorms, columnVectorGraphDeep1BDims)
+						bestScore, bestRow = columnVectorGraphDeep1BScoreBlock(query, queryInvNorm, decoded, scoreInvNorms, columnVectorGraphDeep1BDims)
 						scoreNanos := time.Since(scoreStart).Nanoseconds()
 						totalDecodeNanos += profile.TotalNanos
 						totalDecompressionNanos += profile.DecompressionNanos
@@ -940,7 +945,7 @@ func BenchmarkColumnVectorGraphDeep1BSphericalDirectScore(b *testing.B) {
 						b.Fatalf("spherical decode warm: %v", err)
 					}
 					warmScores := make([]float32, granuleRows)
-					bestScore, bestRow, warmMetrics, err := columnVectorGraphDeep1BScoreSphericalShuffled(query, queryInvNorm, raw, granuleRows, columnVectorGraphDeep1BDims, invNorms, scorer.kind, halfPiFallbackThreshold, warmScores)
+					bestScore, bestRow, warmMetrics, err := columnVectorGraphDeep1BScoreSphericalShuffled(query, queryInvNorm, raw, granuleRows, columnVectorGraphDeep1BDims, scorer.kind, halfPiFallbackThreshold, warmScores)
 					if err != nil {
 						b.Fatalf("spherical direct score warm: %v", err)
 					}
@@ -949,7 +954,7 @@ func BenchmarkColumnVectorGraphDeep1BSphericalDirectScore(b *testing.B) {
 					columnVectorGraphDeep1BTopKFromScores(warmScores, topK, warmTopRows, warmTopScores)
 					overlap := columnVectorGraphDeep1BTopKOverlap(exactTopRows, warmTopRows)
 					maxError, meanError := columnVectorGraphDeep1BScoreErrorMetrics(exactScores, warmScores)
-					breakdown := columnVectorGraphDeep1BProfileSphericalShuffled(query, queryInvNorm, raw, granuleRows, columnVectorGraphDeep1BDims, invNorms, scorer.kind, halfPiFallbackThreshold, warmScores)
+					breakdown := columnVectorGraphDeep1BProfileSphericalShuffled(query, queryInvNorm, raw, granuleRows, columnVectorGraphDeep1BDims, scorer.kind, halfPiFallbackThreshold, warmScores)
 					b.ReportAllocs()
 					b.SetBytes(int64(warm.RawBytes))
 					var totalDecodeNanos int64
@@ -965,7 +970,7 @@ func BenchmarkColumnVectorGraphDeep1BSphericalDirectScore(b *testing.B) {
 						}
 						totalDecodeNanos += time.Since(decodeStart).Nanoseconds()
 						scoreStart := time.Now()
-						bestScore, bestRow, metrics, err = columnVectorGraphDeep1BScoreSphericalShuffled(query, queryInvNorm, raw, granuleRows, columnVectorGraphDeep1BDims, invNorms, scorer.kind, halfPiFallbackThreshold, nil)
+						bestScore, bestRow, metrics, err = columnVectorGraphDeep1BScoreSphericalShuffled(query, queryInvNorm, raw, granuleRows, columnVectorGraphDeep1BDims, scorer.kind, halfPiFallbackThreshold, nil)
 						if err != nil {
 							b.Fatalf("spherical direct score: %v", err)
 						}
@@ -1798,6 +1803,17 @@ const (
 	columnVectorGraphDeep1BJZIPTransformSphericalPrevDelta
 	columnVectorGraphDeep1BJZIPTransformHouseholderCartesian
 )
+
+func columnVectorGraphDeep1BJZIPTransformStoresUnitDirections(kind columnVectorGraphDeep1BJZIPTransformKind) bool {
+	// Spherical transforms store angular direction only. Cosine scoring must
+	// treat decoded rows as unit vectors instead of reapplying source invNorms.
+	switch kind {
+	case columnVectorGraphDeep1BJZIPTransformSpherical, columnVectorGraphDeep1BJZIPTransformSphericalCenterDelta, columnVectorGraphDeep1BJZIPTransformSphericalPrevDelta:
+		return true
+	default:
+		return false
+	}
+}
 
 type columnVectorGraphDeep1BJZIPTransform struct {
 	name string
@@ -2847,6 +2863,14 @@ func columnVectorGraphDeep1BInvNorms(vectors []float32, dims int) []float32 {
 	return invNorms
 }
 
+func columnVectorGraphDeep1BUnitInvNorms(rows int) []float32 {
+	invNorms := make([]float32, rows)
+	for row := range invNorms {
+		invNorms[row] = 1
+	}
+	return invNorms
+}
+
 func columnVectorGraphDeep1BScoreBlock(query []float32, queryInvNorm float32, vectors []float32, invNorms []float32, dims int) (float32, int) {
 	rows := len(vectors) / dims
 	bestScore := float32(-math.MaxFloat32)
@@ -2863,7 +2887,7 @@ func columnVectorGraphDeep1BScoreBlock(query []float32, queryInvNorm float32, ve
 	return bestScore, bestRow
 }
 
-func columnVectorGraphDeep1BScoreSphericalShuffled(query []float32, queryInvNorm float32, raw []byte, rows int, dims int, invNorms []float32, scorer columnVectorGraphDeep1BSphericalDirectScoreKind, halfPiFallbackThreshold float64, scores []float32) (float32, int, columnVectorGraphDeep1BSphericalDirectScoreMetrics, error) {
+func columnVectorGraphDeep1BScoreSphericalShuffled(query []float32, queryInvNorm float32, raw []byte, rows int, dims int, scorer columnVectorGraphDeep1BSphericalDirectScoreKind, halfPiFallbackThreshold float64, scores []float32) (float32, int, columnVectorGraphDeep1BSphericalDirectScoreMetrics, error) {
 	if rows <= 0 {
 		return 0, -1, columnVectorGraphDeep1BSphericalDirectScoreMetrics{}, fmt.Errorf("Deep1B spherical rows=%d want positive", rows)
 	}
@@ -2881,9 +2905,6 @@ func columnVectorGraphDeep1BScoreSphericalShuffled(query []float32, queryInvNorm
 	}
 	if len(raw) != rawBytes {
 		return 0, -1, columnVectorGraphDeep1BSphericalDirectScoreMetrics{}, fmt.Errorf("Deep1B spherical raw bytes=%d want=%d", len(raw), rawBytes)
-	}
-	if len(invNorms) < rows {
-		return 0, -1, columnVectorGraphDeep1BSphericalDirectScoreMetrics{}, fmt.Errorf("Deep1B spherical invNorms=%d want at least %d", len(invNorms), rows)
 	}
 	if len(query) < dims {
 		return 0, -1, columnVectorGraphDeep1BSphericalDirectScoreMetrics{}, fmt.Errorf("Deep1B spherical query dims=%d want at least %d", len(query), dims)
@@ -2913,7 +2934,7 @@ func columnVectorGraphDeep1BScoreSphericalShuffled(query []float32, queryInvNorm
 		sinTheta, cosTheta := math.Sincos(theta)
 		metrics.TerminalAngles++
 		dot += float64(query[dims-2])*prod*cosTheta + float64(query[dims-1])*prod*sinTheta
-		score := float32(dot) * queryInvNorm * invNorms[row]
+		score := float32(dot) * queryInvNorm
 		if scores != nil {
 			scores[row] = score
 		}
@@ -2925,7 +2946,7 @@ func columnVectorGraphDeep1BScoreSphericalShuffled(query []float32, queryInvNorm
 	return bestScore, bestRow, metrics, nil
 }
 
-func columnVectorGraphDeep1BProfileSphericalShuffled(query []float32, queryInvNorm float32, raw []byte, rows int, dims int, invNorms []float32, scorer columnVectorGraphDeep1BSphericalDirectScoreKind, halfPiFallbackThreshold float64, scores []float32) columnVectorGraphDeep1BSphericalDirectBreakdown {
+func columnVectorGraphDeep1BProfileSphericalShuffled(query []float32, queryInvNorm float32, raw []byte, rows int, dims int, scorer columnVectorGraphDeep1BSphericalDirectScoreKind, halfPiFallbackThreshold float64, scores []float32) columnVectorGraphDeep1BSphericalDirectBreakdown {
 	var breakdown columnVectorGraphDeep1BSphericalDirectBreakdown
 	breakdown.LoadOnlyNanos = columnVectorGraphDeep1BMeasureBestNanos(3, func() {
 		breakdown.LoadSink = columnVectorGraphDeep1BLoadSphericalShuffledAngles(raw, rows, dims)
@@ -2935,7 +2956,7 @@ func columnVectorGraphDeep1BProfileSphericalShuffled(query []float32, queryInvNo
 	})
 	breakdown.ScoreNanos = columnVectorGraphDeep1BMeasureBestNanos(3, func() {
 		var err error
-		breakdown.ScoreBestScore, breakdown.ScoreBestRow, breakdown.ScoreMetrics, err = columnVectorGraphDeep1BScoreSphericalShuffled(query, queryInvNorm, raw, rows, dims, invNorms, scorer, halfPiFallbackThreshold, scores)
+		breakdown.ScoreBestScore, breakdown.ScoreBestRow, breakdown.ScoreMetrics, err = columnVectorGraphDeep1BScoreSphericalShuffled(query, queryInvNorm, raw, rows, dims, scorer, halfPiFallbackThreshold, scores)
 		if err != nil {
 			panic(err)
 		}
