@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -176,6 +177,37 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 	}
 }
 
+func TestColumnStoreSuiteRuntimeProfilesDoNotEnableOnCreateFailureM11A(t *testing.T) {
+	prevMutexFraction := runtime.SetMutexProfileFraction(0)
+	t.Cleanup(func() {
+		runtime.SetMutexProfileFraction(prevMutexFraction)
+	})
+
+	_, err := startColumnStoreSuiteRuntimeProfiles(BenchConfig{
+		MutexProfile:         filepath.Join(t.TempDir(), "missing", "mutex.pprof"),
+		MutexProfileFraction: 1,
+	})
+	if err == nil {
+		t.Fatal("expected mutex profile create failure")
+	}
+	if !strings.Contains(err.Error(), "mutexprofile") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotPrev := runtime.SetMutexProfileFraction(0); gotPrev != 0 {
+		t.Fatalf("mutex profiler was left enabled after create failure: previous fraction=%d", gotPrev)
+	}
+}
+
+func TestColumnStoreQueryHashRejectsUnknownQueryM11A(t *testing.T) {
+	_, _, err := columnStoreQueryHash("missing_query", nil)
+	if err == nil {
+		t.Fatal("expected unknown query to fail")
+	}
+	if !strings.Contains(err.Error(), "unknown column_store query") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestColumnStoreSuiteRejectsForcedColumnPathM11B(t *testing.T) {
 	cfg := BenchConfig{Keys: 8, BatchSize: 4, DBsArg: "treedb", Profile: "durable", SeedUsed: 1}
 	_, err := runColumnStoreSuite(cfg, columnStoreSuiteOptions{
@@ -260,7 +292,11 @@ func TestColumnStoreSuiteQueriesNormalizeForcedPathAliasesM11B(t *testing.T) {
 		t.Fatalf("insert fixture: %v", err)
 	}
 
-	queries, parity, err := runColumnStoreSuiteQueries(collection, rows, columnStoreReferenceHashes(events), "row")
+	rawHashes, err := columnStoreReferenceHashes(events)
+	if err != nil {
+		t.Fatalf("reference hashes: %v", err)
+	}
+	queries, parity, err := runColumnStoreSuiteQueries(collection, rows, rawHashes, "row")
 	if err != nil {
 		t.Fatalf("runColumnStoreSuiteQueries row alias: %v", err)
 	}
@@ -411,7 +447,10 @@ func benchmarkColumnStoreSuiteQueriesM11B(b *testing.B, path string) {
 		b.Fatalf("reopen collection: %v", err)
 	}
 
-	rawHashes := columnStoreReferenceHashes(events)
+	rawHashes, err := columnStoreReferenceHashes(events)
+	if err != nil {
+		b.Fatalf("reference hashes: %v", err)
+	}
 	queryCount := len(columnStoreQueryNames())
 	b.ReportAllocs()
 	b.SetBytes(sourceBytes * int64(queryCount))
