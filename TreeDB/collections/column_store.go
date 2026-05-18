@@ -27,8 +27,7 @@ const (
 	columnManifestIdentityRecordKey             = "\x00column-manifest/identity"
 )
 
-// columnManifestIdentityRecordKeyBytes returns a fresh caller-owned key copy.
-func columnManifestIdentityRecordKeyBytes() []byte {
+func newColumnManifestIdentityRecordKey() []byte {
 	return []byte(columnManifestIdentityRecordKey)
 }
 
@@ -563,7 +562,7 @@ func validateColumnStoreCatalogRoot(snap *backenddb.Snapshot, catalog *collectio
 	if rootID == 0 {
 		return fmt.Errorf("collections: active column manifest generation %d for %q is missing root descriptor %q", identity.Generation, catalog.meta.Name, rootName)
 	}
-	entry, err := snap.GetEntryAtRoot(rootID, columnManifestIdentityRecordKeyBytes())
+	entry, err := snap.GetEntryAtRoot(rootID, newColumnManifestIdentityRecordKey())
 	if errors.Is(err, tree.ErrKeyNotFound) {
 		return fmt.Errorf("collections: active column manifest root %d for %q is missing identity record", rootID, catalog.meta.Name)
 	}
@@ -824,7 +823,7 @@ func columnManifestIdentityRecordIterator(record [columnManifestIdentityRecordSi
 	value := make([]byte, columnManifestIdentityRecordSize)
 	copy(value, record[:])
 	return &systemTargetIterator{entries: []systemTargetEntry{{
-		key:   columnManifestIdentityRecordKeyBytes(),
+		key:   newColumnManifestIdentityRecordKey(),
 		value: value,
 	}}}
 }

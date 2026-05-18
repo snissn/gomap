@@ -10,8 +10,8 @@ import (
 )
 
 func TestColumnManifestIdentityRecordKeyBytesReturnsFreshSliceM10A(t *testing.T) {
-	first := columnManifestIdentityRecordKeyBytes()
-	second := columnManifestIdentityRecordKeyBytes()
+	first := newColumnManifestIdentityRecordKey()
+	second := newColumnManifestIdentityRecordKey()
 	if string(first) != columnManifestIdentityRecordKey || string(second) != columnManifestIdentityRecordKey {
 		t.Fatalf("unexpected identity key copies: first=%q second=%q", string(first), string(second))
 	}
@@ -22,7 +22,7 @@ func TestColumnManifestIdentityRecordKeyBytesReturnsFreshSliceM10A(t *testing.T)
 	if string(second) != columnManifestIdentityRecordKey {
 		t.Fatalf("identity key copy was mutated through another caller: %q", string(second))
 	}
-	if fresh := columnManifestIdentityRecordKeyBytes(); string(fresh) != columnManifestIdentityRecordKey {
+	if fresh := newColumnManifestIdentityRecordKey(); string(fresh) != columnManifestIdentityRecordKey {
 		t.Fatalf("fresh identity key copy was mutated: %q", string(fresh))
 	}
 }
