@@ -240,6 +240,16 @@ func TestColumnPublishPlanFailsClosedBeforeRootPublishM10A(t *testing.T) {
 			wantCalls: "extract,encode_columns,prepare_assets,manifest_encode,closure_validation",
 		},
 		{
+			name: "root delta failure",
+			configure: func(input *ColumnPublishPlanInput, calls *[]string) {
+				input.Hooks.BuildRootDelta = func(ColumnPublishRootDeltaInput) (ColumnManifestRootDelta, error) {
+					*calls = append(*calls, "root_delta")
+					return ColumnManifestRootDelta{}, errStage
+				}
+			},
+			wantCalls: "extract,encode_columns,prepare_assets,manifest_encode,closure_validation,root_delta",
+		},
+		{
 			name: "system delta failure",
 			configure: func(input *ColumnPublishPlanInput, calls *[]string) {
 				input.Hooks.BuildSystemDelta = func(ColumnPublishSystemDeltaInput) error {
@@ -879,7 +889,7 @@ func TestColumnManifestPublishSystemDeltaFailureLeavesRootsUnpublishedM10A(t *te
 	if cfg := reopened.Meta().Options.ColumnStore; cfg == nil || cfg.ActiveManifest != nil || cfg.RecoveryAuthoritativeManifest != nil || cfg.RecoveryAuthoritativeAppliedCommandLSN != 0 {
 		t.Fatalf("failed publish leaked column metadata: %+v", cfg)
 	}
-	if id, ok := reopened.ColumnStoreCacheIdentity(); !ok || id.ManifestRoot != 0 || id.ManifestGeneration != 0 {
+	if id, ok := reopened.ColumnStoreCacheIdentity(); !ok || id.ManifestRoot != 0 || id.ManifestGeneration != 0 || id.RecoveryAuthoritativeAppliedCommandLSN != 0 {
 		t.Fatalf("failed publish leaked root identity: %+v ok=%v", id, ok)
 	}
 }
