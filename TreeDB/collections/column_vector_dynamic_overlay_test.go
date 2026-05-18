@@ -320,6 +320,77 @@ func TestColumnVectorDynamicGraphConcurrentReadersAndWriter(t *testing.T) {
 	}
 }
 
+func TestColumnVectorDynamicOverlayClonePreallocatesBatchAppend(t *testing.T) {
+	overlay := newColumnVectorDynamicOverlaySnapshot(4)
+	vector := []float32{1, 0, 0, 0}
+	for i := 0; i < 4; i++ {
+		if err := overlay.appendLiveDocument([]byte(fmt.Sprintf("seed-%03d", i)), vector); err != nil {
+			t.Fatalf("append seed %d: %v", i, err)
+		}
+	}
+	overlay.addTombstone([]byte("base-000"))
+	overlay.sortAndDedupeTombstones()
+
+	mutations := []ColumnVectorDynamicMutation{
+		{Kind: ColumnVectorDynamicMutationInsert, DocumentID: []byte("insert-001"), Vector: vector},
+		{Kind: ColumnVectorDynamicMutationUpdate, DocumentID: []byte("update-001"), Vector: vector},
+		{Kind: ColumnVectorDynamicMutationDelete, DocumentID: []byte("base-001")},
+	}
+	appendRows, appendIDBytes, appendTombstones := columnVectorDynamicMutationAppendCapacity(mutations)
+	next := overlay.clone(overlay.generation+1, appendRows, appendIDBytes, appendTombstones)
+	if spare := cap(next.vectors) - len(next.vectors); spare < appendRows*next.dims {
+		t.Fatalf("vector spare capacity=%d want at least %d", spare, appendRows*next.dims)
+	}
+	if spare := cap(next.invNorms) - len(next.invNorms); spare < appendRows {
+		t.Fatalf("inv-norm spare capacity=%d want at least %d", spare, appendRows)
+	}
+	if spare := cap(next.idArena) - len(next.idArena); spare < appendIDBytes {
+		t.Fatalf("id arena spare capacity=%d want at least %d", spare, appendIDBytes)
+	}
+	if spare := cap(next.idOffsets) - len(next.idOffsets); spare < appendRows {
+		t.Fatalf("id offset spare capacity=%d want at least %d", spare, appendRows)
+	}
+	if spare := cap(next.live) - len(next.live); spare < appendRows {
+		t.Fatalf("live spare capacity=%d want at least %d", spare, appendRows)
+	}
+	if spare := cap(next.tombstoneDocIDs) - len(next.tombstoneDocIDs); spare < appendTombstones {
+		t.Fatalf("tombstone spare capacity=%d want at least %d", spare, appendTombstones)
+	}
+
+	vectorBacking := &next.vectors[0]
+	invNormBacking := &next.invNorms[0]
+	idArenaBacking := &next.idArena[0]
+	idOffsetsBacking := &next.idOffsets[0]
+	liveBacking := &next.live[0]
+	tombstoneBacking := &next.tombstoneDocIDs[0]
+	if err := next.appendLiveDocument([]byte("insert-001"), vector); err != nil {
+		t.Fatalf("append insert: %v", err)
+	}
+	if err := next.appendLiveDocument([]byte("update-001"), vector); err != nil {
+		t.Fatalf("append update: %v", err)
+	}
+	next.addTombstone([]byte("base-001"))
+	next.addTombstone([]byte("base-002"))
+	if &next.vectors[0] != vectorBacking {
+		t.Fatal("vector append reallocated despite clone capacity")
+	}
+	if &next.invNorms[0] != invNormBacking {
+		t.Fatal("inverse-norm append reallocated despite clone capacity")
+	}
+	if &next.idArena[0] != idArenaBacking {
+		t.Fatal("document ID arena append reallocated despite clone capacity")
+	}
+	if &next.idOffsets[0] != idOffsetsBacking {
+		t.Fatal("document ID offset append reallocated despite clone capacity")
+	}
+	if &next.live[0] != liveBacking {
+		t.Fatal("live-row append reallocated despite clone capacity")
+	}
+	if &next.tombstoneDocIDs[0] != tombstoneBacking {
+		t.Fatal("tombstone append reallocated despite clone capacity")
+	}
+}
+
 func BenchmarkColumnVectorDynamicGraphSearchCosineScale(b *testing.B) {
 	cases := []struct {
 		name   string
@@ -346,6 +417,65 @@ func BenchmarkColumnVectorDynamicGraphSearchCosineScale(b *testing.B) {
 				graph := openColumnVectorDynamicGraphBenchmark(b, base, query, 256)
 				benchmarkColumnVectorDynamicGraphSearchCosineParallelReadWrite(b, graph, query, opts, tc.rows, tc.dims)
 			})
+		})
+	}
+}
+
+func BenchmarkColumnVectorDynamicOverlayPublishCloneAppend(b *testing.B) {
+	cases := []struct {
+		name       string
+		rows       int
+		tombstones int
+		dims       int
+	}{
+		{name: "overlay_256_tombstones_0_dims_128", rows: 256, tombstones: 0, dims: 128},
+		{name: "overlay_8192_tombstones_4096_dims_128", rows: 8192, tombstones: 4096, dims: 128},
+	}
+	for _, tc := range cases {
+		tc := tc
+		b.Run(tc.name, func(b *testing.B) {
+			overlay := newColumnVectorDynamicOverlaySnapshot(tc.dims)
+			vector := make([]float32, tc.dims)
+			for i := 0; i < tc.rows; i++ {
+				fillVectorBenchmarkEmbedding(vector, 1_000_000+i)
+				if err := overlay.appendLiveDocument([]byte(fmt.Sprintf("seed-%09d", i)), vector); err != nil {
+					b.Fatalf("seed append %d: %v", i, err)
+				}
+			}
+			for i := 0; i < tc.tombstones; i++ {
+				overlay.addTombstone(columnVectorDynamicScaleDocumentID(i))
+			}
+			overlay.sortAndDedupeTombstones()
+
+			insertVector := make([]float32, tc.dims)
+			updateVector := make([]float32, tc.dims)
+			fillVectorBenchmarkEmbedding(insertVector, 2_000_000)
+			fillVectorBenchmarkEmbedding(updateVector, 3_000_000)
+			mutations := []ColumnVectorDynamicMutation{
+				{Kind: ColumnVectorDynamicMutationInsert, DocumentID: []byte("publish-insert-000000001"), Vector: insertVector},
+				{Kind: ColumnVectorDynamicMutationUpdate, DocumentID: []byte("publish-update-000000001"), Vector: updateVector},
+				{Kind: ColumnVectorDynamicMutationDelete, DocumentID: []byte("publish-delete-000000001")},
+			}
+			appendRows, appendIDBytes, appendTombstones := columnVectorDynamicMutationAppendCapacity(mutations)
+			b.ReportAllocs()
+			b.ReportMetric(float64(tc.rows), "overlay_rows")
+			b.ReportMetric(float64(tc.tombstones), "overlay_tombstones")
+			b.ReportMetric(float64(appendRows), "append_rows/op")
+			b.ReportMetric(float64(appendTombstones), "append_tombstones/op")
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				next := overlay.clone(uint64(i+1), appendRows, appendIDBytes, appendTombstones)
+				if err := next.appendLiveDocument(mutations[0].DocumentID, mutations[0].Vector); err != nil {
+					b.Fatalf("append insert: %v", err)
+				}
+				if err := next.appendLiveDocument(mutations[1].DocumentID, mutations[1].Vector); err != nil {
+					b.Fatalf("append update: %v", err)
+				}
+				next.addTombstone(mutations[1].DocumentID)
+				next.addTombstone(mutations[2].DocumentID)
+				next.sortAndDedupeTombstones()
+				columnVectorGraphBenchSink += int64(next.Rows() + next.LiveRows() + next.Tombstones() + cap(next.vectors))
+			}
 		})
 	}
 }

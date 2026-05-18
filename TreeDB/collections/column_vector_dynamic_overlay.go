@@ -176,7 +176,8 @@ func (g *ColumnVectorDynamicGraph) ApplyBatch(mutations []ColumnVectorDynamicMut
 	}
 
 	start := time.Now()
-	nextOverlay := current.overlay.clone(current.overlayGeneration + 1)
+	appendRows, appendIDBytes, appendTombstones := columnVectorDynamicMutationAppendCapacity(mutations)
+	nextOverlay := current.overlay.clone(current.overlayGeneration+1, appendRows, appendIDBytes, appendTombstones)
 	inserted, updated, deleted := 0, 0, 0
 	for mutationIndex, mutation := range mutations {
 		if len(mutation.DocumentID) == 0 {
@@ -400,19 +401,22 @@ func newColumnVectorDynamicOverlaySnapshot(dims int) *ColumnVectorDynamicOverlay
 	}
 }
 
-func (o *ColumnVectorDynamicOverlaySnapshot) clone(generation uint64) *ColumnVectorDynamicOverlaySnapshot {
+func (o *ColumnVectorDynamicOverlaySnapshot) clone(generation uint64, appendRows int, appendIDBytes int, appendTombstones int) *ColumnVectorDynamicOverlaySnapshot {
+	appendValues := columnVectorDynamicOverlayVectorValueCapacity(appendRows, o.dims)
+	liveDocCapacity := columnVectorDynamicSliceCapacity(len(o.liveDocIndex), appendRows)
+	tombstoneSetCapacity := columnVectorDynamicSliceCapacity(max(len(o.tombstoneDocSet), len(o.tombstoneDocIDs)), appendTombstones)
 	next := &ColumnVectorDynamicOverlaySnapshot{
 		generation:      generation,
 		dims:            o.dims,
-		vectors:         append([]float32(nil), o.vectors...),
-		invNorms:        append([]float32(nil), o.invNorms...),
-		idArena:         append([]byte(nil), o.idArena...),
-		idOffsets:       append([]uint32(nil), o.idOffsets...),
-		live:            append([]bool(nil), o.live...),
+		vectors:         cloneFloat32SliceWithExtraCapacity(o.vectors, appendValues),
+		invNorms:        cloneFloat32SliceWithExtraCapacity(o.invNorms, appendRows),
+		idArena:         cloneByteSliceWithExtraCapacity(o.idArena, appendIDBytes),
+		idOffsets:       cloneUint32SliceWithExtraCapacity(o.idOffsets, appendRows),
+		live:            cloneBoolSliceWithExtraCapacity(o.live, appendRows),
 		liveRows:        o.liveRows,
-		tombstoneDocIDs: append([][]byte(nil), o.tombstoneDocIDs...),
-		liveDocIndex:    make(map[string]int, len(o.liveDocIndex)),
-		tombstoneDocSet: make(map[string]struct{}, max(len(o.tombstoneDocSet), len(o.tombstoneDocIDs))),
+		tombstoneDocIDs: cloneByteSlicesWithExtraCapacity(o.tombstoneDocIDs, appendTombstones),
+		liveDocIndex:    make(map[string]int, liveDocCapacity),
+		tombstoneDocSet: make(map[string]struct{}, tombstoneSetCapacity),
 	}
 	for key, ordinal := range o.liveDocIndex {
 		next.liveDocIndex[key] = ordinal
@@ -427,6 +431,73 @@ func (o *ColumnVectorDynamicOverlaySnapshot) clone(generation uint64) *ColumnVec
 		}
 	}
 	return next
+}
+
+func columnVectorDynamicMutationAppendCapacity(mutations []ColumnVectorDynamicMutation) (rows int, idBytes int, tombstones int) {
+	for _, mutation := range mutations {
+		switch mutation.Kind {
+		case ColumnVectorDynamicMutationInsert, ColumnVectorDynamicMutationUpdate:
+			rows++
+			idBytes += len(mutation.DocumentID)
+		}
+		switch mutation.Kind {
+		case ColumnVectorDynamicMutationUpdate, ColumnVectorDynamicMutationDelete:
+			tombstones++
+		}
+	}
+	return rows, idBytes, tombstones
+}
+
+func columnVectorDynamicOverlayVectorValueCapacity(rows int, dims int) int {
+	if rows <= 0 || dims <= 0 {
+		return 0
+	}
+	maxInt := int(^uint(0) >> 1)
+	if rows > maxInt/dims {
+		return 0
+	}
+	return rows * dims
+}
+
+func columnVectorDynamicSliceCapacity(length int, extra int) int {
+	if extra <= 0 {
+		return length
+	}
+	maxInt := int(^uint(0) >> 1)
+	if extra > maxInt-length {
+		return length
+	}
+	return length + extra
+}
+
+func cloneFloat32SliceWithExtraCapacity(src []float32, extra int) []float32 {
+	dst := make([]float32, len(src), columnVectorDynamicSliceCapacity(len(src), extra))
+	copy(dst, src)
+	return dst
+}
+
+func cloneByteSliceWithExtraCapacity(src []byte, extra int) []byte {
+	dst := make([]byte, len(src), columnVectorDynamicSliceCapacity(len(src), extra))
+	copy(dst, src)
+	return dst
+}
+
+func cloneUint32SliceWithExtraCapacity(src []uint32, extra int) []uint32 {
+	dst := make([]uint32, len(src), columnVectorDynamicSliceCapacity(len(src), extra))
+	copy(dst, src)
+	return dst
+}
+
+func cloneBoolSliceWithExtraCapacity(src []bool, extra int) []bool {
+	dst := make([]bool, len(src), columnVectorDynamicSliceCapacity(len(src), extra))
+	copy(dst, src)
+	return dst
+}
+
+func cloneByteSlicesWithExtraCapacity(src [][]byte, extra int) [][]byte {
+	dst := make([][]byte, len(src), columnVectorDynamicSliceCapacity(len(src), extra))
+	copy(dst, src)
+	return dst
 }
 
 // Rows returns all overlay vector rows, including tombstoned superseded rows.
