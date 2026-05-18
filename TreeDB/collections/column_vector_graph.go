@@ -227,6 +227,9 @@ func validateColumnVectorGraphColumns(columns ColumnVectorGraphColumns) (int, er
 	if rows == 0 {
 		return 0, errors.New("collections: column vector graph is empty")
 	}
+	if err := validateColumnVectorGraphRowCount(rows); err != nil {
+		return 0, err
+	}
 	if len(columns.DocumentIDs) != rows {
 		return 0, fmt.Errorf("collections: column vector graph document IDs=%d want rows=%d", len(columns.DocumentIDs), rows)
 	}
@@ -271,6 +274,13 @@ func validateColumnVectorGraphColumns(columns ColumnVectorGraphColumns) (int, er
 		}
 	}
 	return rows, nil
+}
+
+func validateColumnVectorGraphRowCount(rows int) error {
+	if uint64(rows) > columnVectorGraphMaxUint32 {
+		return fmt.Errorf("collections: column vector graph rows=%d exceed uint32 ordinal space", rows)
+	}
+	return nil
 }
 
 func validateColumnVectorGraphInvNorm(row int, invNorm float32, normSquared float64) error {

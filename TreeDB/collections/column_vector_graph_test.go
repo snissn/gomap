@@ -101,6 +101,20 @@ func TestColumnVectorGraphZeroValueRows(t *testing.T) {
 	}
 }
 
+func TestColumnVectorGraphRejectsRowsOutsideUint32OrdinalSpace(t *testing.T) {
+	overflowRows := columnVectorGraphMaxUint32 + 1
+	if overflowRows > uint64(^uint(0)>>1) {
+		t.Skip("test target cannot represent the overflow row count as int")
+	}
+	err := validateColumnVectorGraphRowCount(int(overflowRows))
+	if err == nil {
+		t.Fatal("validateColumnVectorGraphRowCount accepted rows outside uint32 ordinal space")
+	}
+	if !strings.Contains(err.Error(), "uint32 ordinal") {
+		t.Fatalf("error=%q want uint32 ordinal validation", err)
+	}
+}
+
 func TestColumnVectorGraphRejectsUnrepresentableQueryInvNorm(t *testing.T) {
 	graph, err := NewColumnVectorGraphFromColumns(columnVectorGraphTestColumns(4, 4, 2, false))
 	if err != nil {
