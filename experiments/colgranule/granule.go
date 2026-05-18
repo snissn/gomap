@@ -723,7 +723,7 @@ func (r *GranuleReader) decompressPayload(g EncodedGranule) ([]byte, error) {
 		if cap(r.raw) < g.RawBytes {
 			r.raw = make([]byte, 0, g.RawBytes)
 		} else {
-			r.raw = r.raw[:0]
+			r.raw = r.raw[:0:g.RawBytes]
 		}
 		out, err := dec.DecodeAll(g.Payload, r.raw)
 		if err != nil {
@@ -743,7 +743,11 @@ func columnGranuleSharedZSTDDecoder() (*zstd.Decoder, error) {
 	sharedZSTDDecoderOnce.Do(func() {
 		// DecodeAll is concurrency-safe; the reader keeps destination buffers
 		// local while the shared decoder avoids per-payload setup cost.
-		sharedZSTDDecoder, sharedZSTDDecoderErr = zstd.NewReader(nil, zstd.WithDecoderConcurrency(1))
+		sharedZSTDDecoder, sharedZSTDDecoderErr = zstd.NewReader(
+			nil,
+			zstd.WithDecoderConcurrency(1),
+			zstd.WithDecodeAllCapLimit(true),
+		)
 	})
 	return sharedZSTDDecoder, sharedZSTDDecoderErr
 }

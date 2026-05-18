@@ -310,6 +310,11 @@ func normalizeColumnVectorGraphOptions(opts ColumnVectorGraphOptions) ColumnVect
 }
 
 func validateColumnVectorGraphStorage(vectors []float32, dims int, invNorms []float32, offsets []uint32, neighbors []uint32, rows int) error {
+	if rows < 0 || rows > math.MaxUint32 {
+		return fmt.Errorf("colgranule: graph rows=%d outside uint32 neighbor ordinal range", rows)
+	}
+	rowLimit := uint32(rows)
+
 	vectorValues, err := checkedMulInt(rows, dims, "column vector graph values")
 	if err != nil {
 		return err
@@ -357,7 +362,7 @@ func validateColumnVectorGraphStorage(vectors []float32, dims int, invNorms []fl
 		return fmt.Errorf("colgranule: graph final adjacency offset=%d values=%d", prev, len(neighbors))
 	}
 	for edge, neighbor := range neighbors {
-		if neighbor >= uint32(rows) {
+		if neighbor >= rowLimit {
 			return fmt.Errorf("colgranule: graph edge %d neighbor ordinal=%d outside rows=%d", edge, neighbor, rows)
 		}
 	}

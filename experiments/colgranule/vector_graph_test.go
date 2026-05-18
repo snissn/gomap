@@ -94,6 +94,20 @@ func TestColumnVectorGraphRejectsStaleInvNorm(t *testing.T) {
 	}
 }
 
+func TestColumnVectorGraphRejectsRowsOutsideUint32OrdinalRange(t *testing.T) {
+	rows := int64(math.MaxUint32) + 1
+	if int64(int(rows)) != rows {
+		t.Skip("requires 64-bit int")
+	}
+	err := validateColumnVectorGraphStorage(nil, 1, nil, nil, nil, int(rows))
+	if err == nil {
+		t.Fatal("validateColumnVectorGraphStorage succeeded with rows outside uint32 range")
+	}
+	if !strings.Contains(err.Error(), "uint32") {
+		t.Fatalf("error=%q want uint32 range validation", err)
+	}
+}
+
 func TestColumnVectorGraphRejectsLooseTinyInvNorm(t *testing.T) {
 	err := validateColumnVectorGraphStorage(
 		[]float32{1e20},
