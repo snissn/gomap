@@ -201,7 +201,7 @@ func TestColumnAssetManagerSyncPublishClosureDerivesSyncRequired(t *testing.T) {
 	}
 }
 
-func TestColumnAssetManagerSyncPublishClosureVerifiesNoopClosureAssets(t *testing.T) {
+func TestColumnAssetManagerSyncPublishClosureUsesPreparedIdentityWithoutReverify(t *testing.T) {
 	store := &syncProbeAssetStore{MemoryColumnAssetStore: NewMemoryColumnAssetStore()}
 	manager, err := NewColumnAssetManager(store)
 	if err != nil {
@@ -226,11 +226,11 @@ func TestColumnAssetManagerSyncPublishClosureVerifiesNoopClosureAssets(t *testin
 	if _, err := store.Read(ref); err == nil {
 		t.Fatal("Reset left prepared asset readable")
 	}
-	if _, err := manager.SyncPublishClosure(closure); err == nil {
-		t.Fatal("SyncPublishClosure succeeded for missing no-op closure asset")
+	if _, err := manager.SyncPublishClosure(closure); err != nil {
+		t.Fatalf("SyncPublishClosure reverified prepared asset after prepare: %v", err)
 	}
-	if got := store.syncCalls.Load(); got != 0 {
-		t.Fatalf("sync calls=%d want 0 after failed no-op closure verification", got)
+	if got := store.syncCalls.Load(); got != 1 {
+		t.Fatalf("sync calls=%d want 1 after prepared closure sync", got)
 	}
 }
 
@@ -351,8 +351,8 @@ func TestColumnAssetManagerPublishSucceededRequiresSyncedClosure(t *testing.T) {
 	}
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
-	if len(manager.quarantine) != 0 || len(manager.zombies) != 0 || len(manager.rewriteDebt) != 0 {
-		t.Fatalf("manager state quarantine=%d zombies=%d rewrite=%d want all cleared", len(manager.quarantine), len(manager.zombies), len(manager.rewriteDebt))
+	if len(manager.quarantine) != 0 || len(manager.publishFailed) != 0 || len(manager.refFailedAt) != 0 {
+		t.Fatalf("manager state quarantine=%d publishFailed=%d refFailedAt=%d want publish failure state cleared", len(manager.quarantine), len(manager.publishFailed), len(manager.refFailedAt))
 	}
 }
 
@@ -420,6 +420,38 @@ func TestColumnAssetManagerPublishFailureInvalidatesOlderSyncedClosure(t *testin
 	manager.mu.Unlock()
 	if !quarantined || gotReason != "root publish failed" || !publishFailed || gotFailedReason != "root publish failed" {
 		t.Fatalf("manager state quarantine=(%q,%v) publishFailed=(%q,%v), want root publish failed retained", gotReason, quarantined, gotFailedReason, publishFailed)
+	}
+}
+
+func TestColumnAssetManagerEmptyPublishFailureDoesNotInvalidateSyncedClosure(t *testing.T) {
+	store := NewMemoryColumnAssetStore()
+	manager, err := NewColumnAssetManager(store)
+	if err != nil {
+		t.Fatalf("NewColumnAssetManager: %v", err)
+	}
+	ref, err := manager.Put(ColumnAssetKindTCS1PartImage, make([]byte, tcs1HeaderBytes+16))
+	if err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	prepared := ColumnPreparedAsset{Ref: ref, GenerationID: 7, PublishID: 11, Reason: "publish staged"}
+	closure, err := manager.PreparePublishClosure([]ColumnPreparedAsset{prepared})
+	if err != nil {
+		t.Fatalf("PreparePublishClosure: %v", err)
+	}
+	synced, err := manager.SyncPublishClosure(closure)
+	if err != nil {
+		t.Fatalf("SyncPublishClosure: %v", err)
+	}
+	if err := manager.MarkPublishFailed(nil, "root publish failed"); err != nil {
+		t.Fatalf("MarkPublishFailed empty: %v", err)
+	}
+	if err := manager.MarkPublishSucceeded(synced); err != nil {
+		t.Fatalf("MarkPublishSucceeded after empty publish failure: %v", err)
+	}
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	if manager.publishEpoch != 0 || len(manager.refFailedAt) != 0 {
+		t.Fatalf("publishEpoch=%d refFailedAt=%d want unchanged after empty publish failure", manager.publishEpoch, len(manager.refFailedAt))
 	}
 }
 

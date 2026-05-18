@@ -620,6 +620,7 @@ func finalizeColumnAssetReachabilityRecords(records map[ColumnAssetRef]columnAss
 		entry := record.entry
 		switch {
 		case record.quarantined:
+			entry.State = ColumnAssetStateQuarantined
 			plan.QuarantinedBytes += entry.Bytes
 		case record.live:
 			if entry.State == ColumnAssetStateActive || entry.State == ColumnAssetStateRecoveryAuthoritative {
