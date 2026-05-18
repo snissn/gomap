@@ -366,8 +366,11 @@ func (w *ColumnWorkspace) PublishPart(part *ColumnPart, dictionaries map[string]
 	}}
 	synced, tracked, err := w.syncPreparedAssetsForManifest(prepared)
 	if err != nil {
-		markErr := w.assets.MarkPublishFailed(prepared, "workspace part asset sync failed")
-		return ColumnWorkspacePartManifest{}, errors.Join(err, markErr)
+		if tracked {
+			markErr := w.assets.MarkPublishFailed(prepared, "workspace part asset sync failed")
+			return ColumnWorkspacePartManifest{}, errors.Join(err, markErr)
+		}
+		return ColumnWorkspacePartManifest{}, err
 	}
 	if idx, ok := w.partByID[entry.PartID]; ok {
 		w.manifest.Parts[idx] = entry
@@ -407,7 +410,7 @@ func (w *ColumnWorkspace) syncPreparedAssetsForManifest(prepared []ColumnPrepare
 	}
 	closure, err := w.assets.PreparePublishClosure(prepared)
 	if err != nil {
-		return ColumnAssetSyncedPublishClosure{}, true, err
+		return ColumnAssetSyncedPublishClosure{}, false, err
 	}
 	synced, err := w.assets.SyncPublishClosure(closure)
 	if err != nil {
