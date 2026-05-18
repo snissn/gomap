@@ -421,7 +421,7 @@ func columnPublishUpdatedMeta(base CollectionMeta, plan ColumnPublishPlan) (Coll
 	}
 	updated := copyCollectionMeta(base)
 	if updated.Options.ColumnStore == nil || !updated.Options.ColumnStore.Enabled {
-		return CollectionMeta{}, errors.New("collections: column manifest publish requires enabled column_store metadata")
+		return CollectionMeta{}, errors.New(errColumnPublishPlanRequiresEnabledColumnStore)
 	}
 	cfg := updated.Options.ColumnStore.copy()
 	active := plan.UpdatedActiveManifest
