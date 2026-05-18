@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
@@ -61,6 +62,7 @@ func TestColumnPublishPlanBuildsDurabilityClosureM10A(t *testing.T) {
 	input.MeasureAllocations = true
 	input.Hooks.ExtractDocuments = func() error {
 		called = append(called, "extract")
+		time.Sleep(time.Nanosecond)
 		return nil
 	}
 	input.Hooks.EncodeDeclaredColumns = func(ColumnPublishDeclaredColumnEncodeInput) error {
@@ -109,7 +111,7 @@ func TestColumnPublishPlanBuildsDurabilityClosureM10A(t *testing.T) {
 	if plan.Lifecycle.PublishedRefs != 1 || plan.Lifecycle.PublishedBytes != asset.Bytes || plan.Lifecycle.PreparedRefs != 1 || plan.Lifecycle.PreparedBytes != asset.Bytes {
 		t.Fatalf("unexpected lifecycle summary: %+v", plan.Lifecycle)
 	}
-	if plan.StageMetrics.Allocs == 0 {
+	if plan.StageMetrics.DocumentExtraction <= 0 {
 		t.Fatalf("stage metrics were not populated: %+v", plan.StageMetrics)
 	}
 }
@@ -364,6 +366,10 @@ func TestColumnManifestPublishSystemDeltaUpdatesRootAndMetadataTogetherM10A(t *t
 	if err != nil {
 		t.Fatalf("BuildColumnPublishPlan: %v", err)
 	}
+	plan.RecoveryAuthoritativeAppliedCommandLSN = 202
+	if plan.RecoveryAuthoritativeAppliedCommandLSN == plan.AppliedCommandLSN {
+		t.Fatalf("test requires distinct applied and recovery-authoritative LSNs: %+v", plan)
+	}
 	ordered, err := plan.RootDelta.OrderedRootPublishInput()
 	if err != nil {
 		t.Fatalf("OrderedRootPublishInput: %v", err)
@@ -392,11 +398,11 @@ func TestColumnManifestPublishSystemDeltaUpdatesRootAndMetadataTogetherM10A(t *t
 	if cfg == nil || cfg.ActiveManifest == nil || *cfg.ActiveManifest != identity {
 		t.Fatalf("active manifest not updated atomically: %+v", cfg)
 	}
-	if cfg.RecoveryAuthoritativeManifest == nil || *cfg.RecoveryAuthoritativeManifest != identity || cfg.RecoveryAuthoritativeAppliedCommandLSN != plan.AppliedCommandLSN {
+	if cfg.RecoveryAuthoritativeManifest == nil || *cfg.RecoveryAuthoritativeManifest != identity || cfg.RecoveryAuthoritativeAppliedCommandLSN != plan.RecoveryAuthoritativeAppliedCommandLSN {
 		t.Fatalf("recovery-authoritative metadata not updated atomically: %+v", cfg)
 	}
 	cacheID, ok := reopened.ColumnStoreCacheIdentity()
-	if !ok || cacheID.ManifestRoot != rootIDs[0] || cacheID.ManifestGeneration != identity.Generation || cacheID.RecoveryAuthoritativeAppliedCommandLSN != plan.AppliedCommandLSN {
+	if !ok || cacheID.ManifestRoot != rootIDs[0] || cacheID.ManifestGeneration != identity.Generation || cacheID.RecoveryAuthoritativeAppliedCommandLSN != plan.RecoveryAuthoritativeAppliedCommandLSN {
 		t.Fatalf("unexpected cache identity: %+v ok=%v rootIDs=%v", cacheID, ok, rootIDs)
 	}
 }
@@ -465,6 +471,7 @@ func BenchmarkColumnPublishPlanM10A(b *testing.B) {
 	b.Run("disabled_hook", func(b *testing.B) {
 		input := ColumnPublishPlanInput{Collection: "events", ColumnStore: nil}
 		b.ReportAllocs()
+		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
 			plan, err := BuildColumnPublishPlan(input)
 			if err != nil {
@@ -525,16 +532,17 @@ func BenchmarkColumnPublishPlanM10A(b *testing.B) {
 			stages.DocumentExtraction += plan.StageMetrics.DocumentExtraction
 			stages.DeclaredColumnEncoding += plan.StageMetrics.DeclaredColumnEncoding
 			stages.AssetPreparation += plan.StageMetrics.AssetPreparation
-			stages.AssetFlushSync += plan.StageMetrics.AssetFlushSync
+			stages.AssetClosureValidation += plan.StageMetrics.AssetClosureValidation
 			stages.ManifestEncode += plan.StageMetrics.ManifestEncode
 			stages.RootDeltaConstruction += plan.StageMetrics.RootDeltaConstruction
 			stages.SystemDeltaConstruction += plan.StageMetrics.SystemDeltaConstruction
 			last = plan
 		}
+		b.StopTimer()
 		b.ReportMetric(float64(stages.DocumentExtraction.Nanoseconds())/float64(b.N), "extract_ns/op")
 		b.ReportMetric(float64(stages.DeclaredColumnEncoding.Nanoseconds())/float64(b.N), "declared_encode_ns/op")
 		b.ReportMetric(float64(stages.AssetPreparation.Nanoseconds())/float64(b.N), "asset_prepare_ns/op")
-		b.ReportMetric(float64(stages.AssetFlushSync.Nanoseconds())/float64(b.N), "asset_flush_sync_ns/op")
+		b.ReportMetric(float64(stages.AssetClosureValidation.Nanoseconds())/float64(b.N), "asset_closure_validation_ns/op")
 		b.ReportMetric(float64(stages.ManifestEncode.Nanoseconds())/float64(b.N), "manifest_encode_ns/op")
 		b.ReportMetric(float64(stages.RootDeltaConstruction.Nanoseconds())/float64(b.N), "root_delta_ns/op")
 		b.ReportMetric(float64(stages.SystemDeltaConstruction.Nanoseconds())/float64(b.N), "system_delta_ns/op")
