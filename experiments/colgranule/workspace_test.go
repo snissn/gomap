@@ -3,6 +3,7 @@ package colgranule
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -211,6 +212,159 @@ func TestColumnWorkspaceManifestSyncModeControlsFsyncM9D(t *testing.T) {
 	}
 	if err := relaxed.Close(); err != nil {
 		t.Fatalf("Close relaxed: %v", err)
+	}
+}
+
+func TestColumnWorkspacePublishPartSyncsAssetsBeforeDurableManifestM9D(t *testing.T) {
+	ds := syntheticJSONBenchDataset(16)
+	opts, err := JSONBenchColumnPartOptions(ds, 8)
+	if err != nil {
+		t.Fatalf("JSONBenchColumnPartOptions: %v", err)
+	}
+	part, err := BuildColumnPart(111, opts, ColumnBatch{Rows: ds.Rows, Columns: sliceJSONBenchColumns(ds, 0, ds.Rows)})
+	if err != nil {
+		t.Fatalf("BuildColumnPart: %v", err)
+	}
+
+	var assetStore *syncProbeAssetStore
+	manifestSyncsAfterAssetSwap := 0
+	syncHook := func(file *os.File) error {
+		if assetStore != nil {
+			manifestSyncsAfterAssetSwap++
+			if got := assetStore.syncCalls.Load(); got == 0 {
+				return fmt.Errorf("asset sync count=%d before durable manifest sync", got)
+			}
+		}
+		return nil
+	}
+	workspace, err := OpenColumnWorkspace(t.TempDir(), ColumnWorkspaceOptions{
+		Collection:   "jsonbench",
+		syncTempFile: syncHook,
+	})
+	if err != nil {
+		t.Fatalf("OpenColumnWorkspace: %v", err)
+	}
+	defer workspace.Close()
+	if err := workspace.assets.Close(); err != nil {
+		t.Fatalf("Close original asset manager: %v", err)
+	}
+	assetStore = &syncProbeAssetStore{MemoryColumnAssetStore: NewMemoryColumnAssetStore()}
+	manager, err := NewColumnAssetManager(assetStore)
+	if err != nil {
+		t.Fatalf("NewColumnAssetManager: %v", err)
+	}
+	workspace.assets = manager
+
+	if _, err := workspace.PublishPart(part, ds.Dictionaries); err != nil {
+		t.Fatalf("PublishPart durable: %v", err)
+	}
+	if got := assetStore.syncCalls.Load(); got != 1 {
+		t.Fatalf("asset sync calls=%d want 1", got)
+	}
+	if manifestSyncsAfterAssetSwap != 1 {
+		t.Fatalf("durable manifest syncs after asset swap=%d want 1", manifestSyncsAfterAssetSwap)
+	}
+	if state := workspace.assets.DebugState(); state.SyncedAttempts != 0 || state.SyncedRefs != 0 || len(state.Quarantine) != 0 || len(state.PublishFailed) != 0 {
+		t.Fatalf("asset manager state after durable publish=%+v want clean synced publish closure", state)
+	}
+}
+
+func TestColumnWorkspacePublishPartBenchmarkSyncModeSkipsAssetSyncM9D(t *testing.T) {
+	ds := syntheticJSONBenchDataset(16)
+	opts, err := JSONBenchColumnPartOptions(ds, 8)
+	if err != nil {
+		t.Fatalf("JSONBenchColumnPartOptions: %v", err)
+	}
+	part, err := BuildColumnPart(112, opts, ColumnBatch{Rows: ds.Rows, Columns: sliceJSONBenchColumns(ds, 0, ds.Rows)})
+	if err != nil {
+		t.Fatalf("BuildColumnPart: %v", err)
+	}
+	workspace, err := OpenColumnWorkspace(t.TempDir(), ColumnWorkspaceOptions{
+		Collection:       "jsonbench",
+		ManifestSyncMode: ColumnWorkspaceManifestSyncDisabledForBenchmark,
+	})
+	if err != nil {
+		t.Fatalf("OpenColumnWorkspace: %v", err)
+	}
+	defer workspace.Close()
+	if err := workspace.assets.Close(); err != nil {
+		t.Fatalf("Close original asset manager: %v", err)
+	}
+	assetStore := &syncProbeAssetStore{MemoryColumnAssetStore: NewMemoryColumnAssetStore()}
+	manager, err := NewColumnAssetManager(assetStore)
+	if err != nil {
+		t.Fatalf("NewColumnAssetManager: %v", err)
+	}
+	workspace.assets = manager
+
+	if _, err := workspace.PublishPart(part, ds.Dictionaries); err != nil {
+		t.Fatalf("PublishPart benchmark sync mode: %v", err)
+	}
+	if got := assetStore.syncCalls.Load(); got != 0 {
+		t.Fatalf("asset sync calls=%d want 0 in benchmark sync mode", got)
+	}
+}
+
+func TestColumnWorkspacePublishPartMarksAssetFailedWhenDurableManifestFailsM9D(t *testing.T) {
+	ds := syntheticJSONBenchDataset(16)
+	opts, err := JSONBenchColumnPartOptions(ds, 8)
+	if err != nil {
+		t.Fatalf("JSONBenchColumnPartOptions: %v", err)
+	}
+	part, err := BuildColumnPart(113, opts, ColumnBatch{Rows: ds.Rows, Columns: sliceJSONBenchColumns(ds, 0, ds.Rows)})
+	if err != nil {
+		t.Fatalf("BuildColumnPart: %v", err)
+	}
+
+	manifestErr := fmt.Errorf("injected durable manifest sync failure")
+	var assetStore *syncProbeAssetStore
+	manifestFailures := 1
+	syncHook := func(file *os.File) error {
+		if assetStore != nil && manifestFailures > 0 {
+			manifestFailures--
+			return manifestErr
+		}
+		return nil
+	}
+	workspace, err := OpenColumnWorkspace(t.TempDir(), ColumnWorkspaceOptions{
+		Collection:   "jsonbench",
+		syncTempFile: syncHook,
+	})
+	if err != nil {
+		t.Fatalf("OpenColumnWorkspace: %v", err)
+	}
+	defer workspace.Close()
+	if err := workspace.assets.Close(); err != nil {
+		t.Fatalf("Close original asset manager: %v", err)
+	}
+	assetStore = &syncProbeAssetStore{MemoryColumnAssetStore: NewMemoryColumnAssetStore()}
+	manager, err := NewColumnAssetManager(assetStore)
+	if err != nil {
+		t.Fatalf("NewColumnAssetManager: %v", err)
+	}
+	workspace.assets = manager
+
+	if _, err := workspace.PublishPart(part, ds.Dictionaries); err == nil || !strings.Contains(err.Error(), manifestErr.Error()) {
+		t.Fatalf("PublishPart err=%v want injected manifest failure", err)
+	}
+	if got := assetStore.syncCalls.Load(); got != 1 {
+		t.Fatalf("asset sync calls=%d want 1 before failed durable manifest publish", got)
+	}
+	if manifest := workspace.Manifest(); len(manifest.Parts) != 0 || manifest.Generation != 0 || manifest.PublishID != 0 {
+		t.Fatalf("workspace manifest after failed publish=%+v want rollback to empty manifest", manifest)
+	}
+	state := workspace.assets.DebugState()
+	if len(state.Quarantine) != 1 || len(state.PublishFailed) != 1 || state.SyncedAttempts != 0 || state.SyncedRefs != 0 {
+		t.Fatalf("asset manager state after failed durable publish=%+v want quarantined publish failure", state)
+	}
+	if _, err := workspace.PublishPart(part, ds.Dictionaries); err != nil {
+		t.Fatalf("PublishPart retry after failed durable manifest publish: %v", err)
+	}
+	if got := assetStore.syncCalls.Load(); got != 2 {
+		t.Fatalf("asset sync calls after retry=%d want 2", got)
+	}
+	if manifest := workspace.Manifest(); len(manifest.Parts) != 1 || manifest.Generation != 1 || manifest.PublishID != 1 {
+		t.Fatalf("workspace manifest after retry=%+v want one published part", manifest)
 	}
 }
 
