@@ -32,11 +32,35 @@ const (
 	columnStoreSuiteBenchDBName       = "treedb_column_store"
 	columnStoreSuiteBenchDisplayName  = "TreeDB Column Store"
 	columnStoreSuitePathCanonicalHelp = "row_store_baseline, b_tree_index_baseline, serial_column_scan, aggregate_metadata, parallel_column_scan"
-	columnStoreSuitePathAliasesHelp   = "aliases: row, row-store-baseline, index, b_tree, b-tree-index-baseline, serial, serial-column-scan, metadata, aggregate-metadata, parallel, parallel-column-scan"
-	columnStoreSuitePathUsage         = "Forced column-store execution label for -suite column_store (canonical: " + columnStoreSuitePathCanonicalHelp + "; " + columnStoreSuitePathAliasesHelp + "; physical column labels fail closed until implemented)"
 )
 
+type columnStoreSuitePathAlias struct {
+	alias     string
+	canonical string
+}
+
 var (
+	columnStoreSuitePathAliases = []columnStoreSuitePathAlias{
+		{alias: "", canonical: columnStorePathRowStoreBaseline},
+		{alias: "row-store-baseline", canonical: columnStorePathRowStoreBaseline},
+		{alias: "row_store", canonical: columnStorePathRowStoreBaseline},
+		{alias: "row", canonical: columnStorePathRowStoreBaseline},
+		{alias: "b-tree-index-baseline", canonical: columnStorePathBTreeIndexBaseline},
+		{alias: "btree_index_baseline", canonical: columnStorePathBTreeIndexBaseline},
+		{alias: "b_tree", canonical: columnStorePathBTreeIndexBaseline},
+		{alias: "index", canonical: columnStorePathBTreeIndexBaseline},
+		{alias: "serial-column-scan", canonical: columnStorePathSerialColumnScan},
+		{alias: "serial", canonical: columnStorePathSerialColumnScan},
+		{alias: "aggregate-metadata", canonical: columnStorePathAggregateMetadata},
+		{alias: "metadata", canonical: columnStorePathAggregateMetadata},
+		{alias: "parallel-column-scan", canonical: columnStorePathParallelColumnScan},
+		{alias: "parallel", canonical: columnStorePathParallelColumnScan},
+	}
+	columnStoreSuitePathUsage = fmt.Sprintf(
+		"Forced column-store execution label for -suite column_store (canonical: %s; aliases: %s; physical column labels fail closed until implemented)",
+		columnStoreSuitePathCanonicalHelp,
+		columnStoreSuitePathAliasHelp(columnStoreSuitePathAliases),
+	)
 	columnStoreSuitePathArg    = flag.String("column-store-path", columnStorePathRowStoreBaseline, columnStoreSuitePathUsage)
 	columnStoreSuiteFixtureArg = flag.String("column-store-fixture", "synthetic", "Fixture for -suite column_store (synthetic; JSONBENCH_DATA mode is reserved for the large local gate)")
 
@@ -463,20 +487,23 @@ func columnStoreSuiteEffectiveProfile(profile string) (string, error) {
 
 func normalizeColumnStoreSuitePath(path string) string {
 	path = strings.ToLower(strings.TrimSpace(path))
-	switch path {
-	case "", "row-store-baseline", "row_store", "row":
-		return columnStorePathRowStoreBaseline
-	case "b-tree-index-baseline", "btree_index_baseline", "b_tree", "index":
-		return columnStorePathBTreeIndexBaseline
-	case "serial-column-scan", "serial":
-		return columnStorePathSerialColumnScan
-	case "aggregate-metadata", "metadata":
-		return columnStorePathAggregateMetadata
-	case "parallel-column-scan", "parallel":
-		return columnStorePathParallelColumnScan
-	default:
-		return path
+	for _, alias := range columnStoreSuitePathAliases {
+		if path == alias.alias {
+			return alias.canonical
+		}
 	}
+	return path
+}
+
+func columnStoreSuitePathAliasHelp(aliases []columnStoreSuitePathAlias) string {
+	out := make([]string, 0, len(aliases))
+	for _, alias := range aliases {
+		if alias.alias == "" {
+			continue
+		}
+		out = append(out, alias.alias)
+	}
+	return strings.Join(out, ", ")
 }
 
 func columnStoreSuitePlanKind(path string) (collections.ColumnQueryPlanKind, error) {
