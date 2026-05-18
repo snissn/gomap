@@ -51,7 +51,7 @@ if [[ "${RUN_NEIGHBORHOOD_SMOKE}" == "true" || "${RUN_NEIGHBORHOOD_SMOKE}" == "1
   export COLUMN_VECTOR_DEEP1B_NEIGHBORHOOD_SMOKE=1
   GOWORK=off go test ./experiments/colgranule \
     -run '^$' \
-    -bench '^BenchmarkColumnVectorGraphDeep1B(JZIPNeighborhoodCompressionSmoke|JZIPDecodeAndScoreSmoke|SphericalDirectScore|LocalFrameApproxScore|NeighborhoodCompressionSmoke)/' \
+    -bench '^BenchmarkColumnVectorGraphDeep1B(JZIPNeighborhoodCompressionSmoke|JZIPDecodeAndScoreSmoke|SphericalDirectScore|LocalFrameApproxScore|GranuleNativeScore|NeighborhoodCompressionSmoke)/' \
     -benchmem \
     -benchtime "${BENCHTIME}" \
     -count "${COUNT}" \
