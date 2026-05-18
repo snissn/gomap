@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -17,6 +18,9 @@ func TestColumnQueryPlannerM11BChoosesExpectedKindsForOneFixture(t *testing.T) {
 					{Name: "did", Path: "did", ValueType: ColumnStoreValueString},
 				},
 				SortKey: []ColumnSortKey{{Column: "time_us"}},
+				AggregateMetadata: []ColumnAggregateMetadata{
+					{Name: "q5_did_time_span", Column: "time_us", Kind: ColumnAggregateMin},
+				},
 			}},
 			Indexes: []IndexDefinition{
 				{Name: "kind_idx", Field: "kind", ValueType: IndexValueString},
@@ -153,6 +157,79 @@ func TestColumnQueryPlannerM11BRejectsNonRecoveryAuthoritativeManifest(t *testin
 	}
 }
 
+func TestColumnQueryPlannerM11BDoesNotReportPhysicalGranulesForRowOrIndexPlans(t *testing.T) {
+	catalog := &collectionCatalog{meta: CollectionMeta{
+		Name: "events",
+		Indexes: []IndexDefinition{
+			{Name: "kind_idx", Field: "kind", ValueType: IndexValueString},
+		},
+	}}
+	identity := ColumnStoreCacheIdentity{
+		Collection:                      "events",
+		ManifestRoot:                    99,
+		ManifestGeneration:              7,
+		RecoveryAuthoritativeGeneration: 7,
+	}
+	base := ColumnQueryPlanRequest{
+		Name:                  "q1",
+		CandidateIndexColumns: []string{"kind"},
+		Capabilities: ColumnQueryPlannerCapabilities{
+			GranuleCount:       128,
+			MaxParallelWorkers: 4,
+		},
+	}
+
+	rowReq := base
+	rowReq.ForceKind = ColumnQueryPlanRowStoreBaseline
+	rowPlan := planColumnQueryForCatalog(catalog, identity, true, rowReq)
+	if rowPlan.Diagnostics.ScheduledGranules != 0 || rowPlan.Diagnostics.WorkerCount != 0 {
+		t.Fatalf("row plan reported physical execution counters: %+v", rowPlan.Diagnostics)
+	}
+
+	indexReq := base
+	indexReq.ForceKind = ColumnQueryPlanBTreeIndexBaseline
+	indexPlan := planColumnQueryForCatalog(catalog, identity, true, indexReq)
+	if indexPlan.Diagnostics.ScheduledGranules != 0 || indexPlan.Diagnostics.WorkerCount != 0 {
+		t.Fatalf("B-tree plan reported physical execution counters: %+v", indexPlan.Diagnostics)
+	}
+}
+
+func TestColumnQueryPlannerM11BRejectsUnknownAggregateMetadata(t *testing.T) {
+	catalog := &collectionCatalog{meta: CollectionMeta{
+		Name: "events",
+		Options: CollectionOptions{ColumnStore: &ColumnStoreConfig{
+			Enabled: true,
+			AggregateMetadata: []ColumnAggregateMetadata{
+				{Name: "known_span", Column: "time_us", Kind: ColumnAggregateMin},
+			},
+		}},
+	}}
+	identity := ColumnStoreCacheIdentity{
+		Collection:                      "events",
+		ManifestRoot:                    99,
+		ManifestGeneration:              7,
+		RecoveryAuthoritativeGeneration: 7,
+	}
+	req := ColumnQueryPlanRequest{
+		Name:                  "q5_metadata",
+		AggregateMetadataName: "missing_span",
+		ForceKind:             ColumnQueryPlanAggregateMetadata,
+		Capabilities: ColumnQueryPlannerCapabilities{
+			AggregateMetadata:  true,
+			PhysicalAssetCount: 1,
+			GranuleCount:       8,
+		},
+	}
+
+	plan := planColumnQueryForCatalog(catalog, identity, true, req)
+	if plan.Supported {
+		t.Fatalf("expected unknown aggregate metadata to fail closed: %+v", plan)
+	}
+	if !strings.Contains(plan.Diagnostics.UnsupportedPlanReason, "unknown aggregate metadata") {
+		t.Fatalf("unsupported reason=%q", plan.Diagnostics.UnsupportedPlanReason)
+	}
+}
+
 func TestColumnSkipScanM11BPrunesOnlyLeftPrefixMarks(t *testing.T) {
 	marks := []ColumnSkipScanMark{
 		{Name: "before", Rows: 10, MinKeys: [][]byte{{0x01}}, MaxKeys: [][]byte{{0x09}}},
@@ -188,16 +265,30 @@ func TestColumnSkipScanM11BPrunesOnlyLeftPrefixMarks(t *testing.T) {
 	if len(nonLeftPrefix.SkippedMarks) != 0 {
 		t.Fatalf("non-left-prefix skipped=%v want none", nonLeftPrefix.SkippedMarks)
 	}
+
+	unboundedFirstColumn := PlanColumnSkipScan([]ColumnSkipScanPredicate{
+		{
+			Position: 0,
+			Lower:    ColumnSkipScanBound{Unbounded: true},
+			Upper:    ColumnSkipScanBound{Unbounded: true},
+		},
+		{
+			Position: 1,
+			Lower:    ColumnSkipScanBound{Key: []byte{0x99}, Inclusive: true},
+			Upper:    ColumnSkipScanBound{Key: []byte{0xaa}, Inclusive: true},
+		},
+	}, marks)
+	if got, want := unboundedFirstColumn.LeftPrefixColumns, 0; got != want {
+		t.Fatalf("unbounded-first left prefix=%d want %d", got, want)
+	}
+	if got, want := unboundedFirstColumn.ScheduledMarks, []int{0, 1, 2}; !equalInts(got, want) {
+		t.Fatalf("unbounded-first scheduled=%v want %v", got, want)
+	}
+	if len(unboundedFirstColumn.SkippedMarks) != 0 {
+		t.Fatalf("unbounded-first skipped=%v want none", unboundedFirstColumn.SkippedMarks)
+	}
 }
 
 func equalInts(left, right []int) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	for i := range left {
-		if left[i] != right[i] {
-			return false
-		}
-	}
-	return true
+	return slices.Equal(left, right)
 }

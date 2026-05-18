@@ -125,17 +125,11 @@ func planColumnQueryForCatalog(catalog *collectionCatalog, identity ColumnStoreC
 		RecoveryManifestGen:     identity.RecoveryAuthoritativeGeneration,
 		AppliedCommandLSN:       identity.RecoveryAuthoritativeAppliedCommandLSN,
 	}
-	if req.Capabilities.GranuleCount > 0 {
-		diag.ScheduledGranules = req.Capabilities.GranuleCount
-	}
-	if req.Capabilities.MaxParallelWorkers > 0 {
-		diag.WorkerCount = 1
-	}
 
 	if req.ForceKind != "" {
 		return forcedColumnQueryPlan(catalog, identity, identityOK, req, diag)
 	}
-	if ok, plan := aggregateColumnQueryPlan(identity, identityOK, req, diag); ok {
+	if ok, plan := aggregateColumnQueryPlan(catalog, identity, identityOK, req, diag); ok {
 		return plan
 	}
 	if ok, plan := parallelColumnQueryPlan(identity, identityOK, req, diag); ok {
@@ -175,11 +169,11 @@ func forcedColumnQueryPlan(catalog *collectionCatalog, identity ColumnStoreCache
 		}
 		return unsupportedColumnQueryPlan(ColumnQueryPlanSerialColumnScan, physicalColumnQueryUnsupportedReason(identity, identityOK, req, ColumnQueryPlanSerialColumnScan), diag)
 	case ColumnQueryPlanAggregateMetadata:
-		if ok, plan := aggregateColumnQueryPlan(identity, identityOK, req, diag); ok {
+		if ok, plan := aggregateColumnQueryPlan(catalog, identity, identityOK, req, diag); ok {
 			plan.Diagnostics.Reason = "forced aggregate metadata plan"
 			return plan
 		}
-		return unsupportedColumnQueryPlan(ColumnQueryPlanAggregateMetadata, physicalColumnQueryUnsupportedReason(identity, identityOK, req, ColumnQueryPlanAggregateMetadata), diag)
+		return unsupportedColumnQueryPlan(ColumnQueryPlanAggregateMetadata, aggregateColumnQueryUnsupportedReason(catalog, identity, identityOK, req), diag)
 	case ColumnQueryPlanParallelColumnScan:
 		if ok, plan := parallelColumnQueryPlan(identity, identityOK, req, diag); ok {
 			plan.Diagnostics.Reason = "forced parallel physical column scan"
@@ -196,11 +190,18 @@ func serialColumnQueryPlan(identity ColumnStoreCacheIdentity, identityOK bool, r
 		return false, ColumnQueryPlan{}
 	}
 	diag.Reason = "selected serial physical column scan"
+	diag.ScheduledGranules = req.Capabilities.GranuleCount
+	if req.Capabilities.MaxParallelWorkers > 0 {
+		diag.WorkerCount = 1
+	}
 	return true, ColumnQueryPlan{Kind: ColumnQueryPlanSerialColumnScan, Supported: true, Diagnostics: diag}
 }
 
-func aggregateColumnQueryPlan(identity ColumnStoreCacheIdentity, identityOK bool, req ColumnQueryPlanRequest, diag ColumnQueryPlanDiagnostics) (bool, ColumnQueryPlan) {
+func aggregateColumnQueryPlan(catalog *collectionCatalog, identity ColumnStoreCacheIdentity, identityOK bool, req ColumnQueryPlanRequest, diag ColumnQueryPlanDiagnostics) (bool, ColumnQueryPlan) {
 	if strings.TrimSpace(req.AggregateMetadataName) == "" {
+		return false, ColumnQueryPlan{}
+	}
+	if !catalogHasColumnAggregateMetadata(catalog, req.AggregateMetadataName) {
 		return false, ColumnQueryPlan{}
 	}
 	if !physicalColumnQuerySupported(identity, identityOK, req, ColumnQueryPlanAggregateMetadata) {
@@ -223,6 +224,7 @@ func parallelColumnQueryPlan(identity ColumnStoreCacheIdentity, identityOK bool,
 		return false, ColumnQueryPlan{}
 	}
 	diag.WorkerCount = workers
+	diag.ScheduledGranules = req.Capabilities.GranuleCount
 	diag.Reason = "selected parallel physical column scan"
 	return true, ColumnQueryPlan{Kind: ColumnQueryPlanParallelColumnScan, Supported: true, Diagnostics: diag}
 }
@@ -271,6 +273,30 @@ func physicalColumnQueryUnsupportedReason(identity ColumnStoreCacheIdentity, ide
 		}
 	}
 	return "physical column plan is not supported"
+}
+
+func aggregateColumnQueryUnsupportedReason(catalog *collectionCatalog, identity ColumnStoreCacheIdentity, identityOK bool, req ColumnQueryPlanRequest) string {
+	name := strings.TrimSpace(req.AggregateMetadataName)
+	if name == "" {
+		return "query did not request aggregate metadata"
+	}
+	if !catalogHasColumnAggregateMetadata(catalog, name) {
+		return fmt.Sprintf("unknown aggregate metadata %q", name)
+	}
+	return physicalColumnQueryUnsupportedReason(identity, identityOK, req, ColumnQueryPlanAggregateMetadata)
+}
+
+func catalogHasColumnAggregateMetadata(catalog *collectionCatalog, name string) bool {
+	name = strings.TrimSpace(name)
+	if catalog == nil || catalog.meta.Options.ColumnStore == nil || name == "" {
+		return false
+	}
+	for _, aggregate := range catalog.meta.Options.ColumnStore.AggregateMetadata {
+		if strings.EqualFold(strings.TrimSpace(aggregate.Name), name) {
+			return true
+		}
+	}
+	return false
 }
 
 func unsupportedColumnQueryPlan(kind ColumnQueryPlanKind, reason string, diag ColumnQueryPlanDiagnostics) ColumnQueryPlan {
@@ -361,6 +387,9 @@ func PlanColumnSkipScan(predicates []ColumnSkipScanPredicate, marks []ColumnSkip
 	return result
 }
 
+// PlanColumnSkipScanInto reuses result.ScheduledMarks and result.SkippedMarks as
+// caller-owned scratch. Assign a zero ColumnSkipScanResult to release retained
+// slice capacity between unrelated planning workloads.
 func PlanColumnSkipScanInto(result *ColumnSkipScanResult, predicates []ColumnSkipScanPredicate, marks []ColumnSkipScanMark) {
 	if result == nil {
 		return
@@ -370,10 +399,10 @@ func PlanColumnSkipScanInto(result *ColumnSkipScanResult, predicates []ColumnSki
 	result.SkippedMarks = result.SkippedMarks[:0]
 	result.ScheduledRows = 0
 	result.SkippedRows = 0
-	prefix := columnSkipScanLeftPrefix(predicates)
-	result.LeftPrefixColumns = prefix
+	prefixPredicates := columnSkipScanLeftPrefix(predicates)
+	result.LeftPrefixColumns = len(prefixPredicates)
 	for i, mark := range marks {
-		if prefix > 0 && columnSkipScanMarkDisjoint(mark, predicates, prefix) {
+		if len(prefixPredicates) > 0 && columnSkipScanMarkDisjoint(mark, prefixPredicates) {
 			result.SkippedMarks = append(result.SkippedMarks, i)
 			result.SkippedRows += mark.Rows
 			continue
@@ -383,23 +412,35 @@ func PlanColumnSkipScanInto(result *ColumnSkipScanResult, predicates []ColumnSki
 	}
 }
 
-func columnSkipScanLeftPrefix(predicates []ColumnSkipScanPredicate) int {
-	prefix := 0
-	for {
-		if _, ok := columnSkipScanPredicateAt(predicates, prefix); !ok {
+func columnSkipScanLeftPrefix(predicates []ColumnSkipScanPredicate) []ColumnSkipScanPredicate {
+	if len(predicates) == 0 {
+		return nil
+	}
+	byPosition := make(map[int]ColumnSkipScanPredicate, len(predicates))
+	for _, pred := range predicates {
+		if pred.Position < 0 || !columnSkipScanPredicateHasBound(pred) {
+			continue
+		}
+		byPosition[pred.Position] = pred
+	}
+	prefix := make([]ColumnSkipScanPredicate, 0, len(byPosition))
+	for pos := 0; ; pos++ {
+		pred, ok := byPosition[pos]
+		if !ok {
 			return prefix
 		}
-		prefix++
+		prefix = append(prefix, pred)
 	}
 }
 
-func columnSkipScanMarkDisjoint(mark ColumnSkipScanMark, predicates []ColumnSkipScanPredicate, prefix int) bool {
-	for pos := 0; pos < prefix; pos++ {
+func columnSkipScanPredicateHasBound(pred ColumnSkipScanPredicate) bool {
+	return (!pred.Lower.Unbounded && len(pred.Lower.Key) > 0) ||
+		(!pred.Upper.Unbounded && len(pred.Upper.Key) > 0)
+}
+
+func columnSkipScanMarkDisjoint(mark ColumnSkipScanMark, prefixPredicates []ColumnSkipScanPredicate) bool {
+	for pos, pred := range prefixPredicates {
 		if pos >= len(mark.MinKeys) || pos >= len(mark.MaxKeys) {
-			return false
-		}
-		pred, ok := columnSkipScanPredicateAt(predicates, pos)
-		if !ok {
 			return false
 		}
 		minKey := mark.MinKeys[pos]
@@ -418,13 +459,4 @@ func columnSkipScanMarkDisjoint(mark ColumnSkipScanMark, predicates []ColumnSkip
 		}
 	}
 	return false
-}
-
-func columnSkipScanPredicateAt(predicates []ColumnSkipScanPredicate, position int) (ColumnSkipScanPredicate, bool) {
-	for _, pred := range predicates {
-		if pred.Position == position {
-			return pred, true
-		}
-	}
-	return ColumnSkipScanPredicate{}, false
 }

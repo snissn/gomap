@@ -1067,6 +1067,19 @@ func runBenchprof(dir string) {
 	}
 }
 
+func runBenchprofStrict(dir string) error {
+	if err := benchprof.RunFromProfilesDir(dir); err != nil {
+		return fmt.Errorf("benchprof: %w", err)
+	}
+	for _, name := range []string{"insights.md", "insights.json", "insights.html"} {
+		path := filepath.Join(dir, name)
+		if _, err := os.Stat(path); err != nil {
+			return fmt.Errorf("benchprof: expected %s: %w", path, err)
+		}
+	}
+	return nil
+}
+
 func writeBenchprofArtifacts(dir, executionPath string, runs []BenchRun) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("mkdir %q: %w", dir, err)
