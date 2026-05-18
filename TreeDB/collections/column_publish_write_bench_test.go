@@ -16,67 +16,79 @@ func BenchmarkColumnStoreCommandWALRootPublicationM10B(b *testing.B) {
 	for _, columnStore := range []bool{false, true} {
 		b.Run(fmt.Sprintf("insert/column_store=%t", columnStore), func(b *testing.B) {
 			backend, collection := openColumnStoreCommandWALRootPublicationBenchmark(b, columnStore)
-			batches := makeColumnStoreCommandWALBenchBatches(b, 0, b.N, commandWALBenchBatchSize, false)
+			var totals columnStoreCommandWALBenchTotals
 
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				if _, err := collection.InsertBatch(batches[i].ids, batches[i].docs); err != nil {
+				b.StopTimer()
+				batch := makeColumnStoreCommandWALBenchBatch(b, i, commandWALBenchBatchSize, false)
+				totals.add(batch, true)
+				b.StartTimer()
+				if _, err := collection.InsertBatch(batch.ids, batch.docs); err != nil {
 					b.Fatalf("InsertBatch: %v", err)
 				}
 			}
 			b.StopTimer()
 
 			assertColumnStoreCommandWALBenchState(b, backend, collection, columnStore, uint64(b.N), uint64(b.N)+1)
-			reportColumnStoreCommandWALBenchMetrics(b, batches, true)
+			reportColumnStoreCommandWALBenchMetrics(b, totals)
 		})
 	}
 
 	for _, columnStore := range []bool{false, true} {
 		b.Run(fmt.Sprintf("update/column_store=%t", columnStore), func(b *testing.B) {
 			backend, collection := openColumnStoreCommandWALRootPublicationBenchmark(b, columnStore)
-			batches := makeColumnStoreCommandWALBenchBatches(b, 0, b.N, commandWALBenchBatchSize, true)
-			seedColumnStoreCommandWALBenchBatches(b, collection, batches)
+			seedColumnStoreCommandWALBenchBatches(b, collection, 0, b.N, commandWALBenchBatchSize)
+			var totals columnStoreCommandWALBenchTotals
 
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				results, err := collection.UpdateBatch(batches[i].updates)
+				b.StopTimer()
+				batch := makeColumnStoreCommandWALBenchBatch(b, i, commandWALBenchBatchSize, true)
+				totals.add(batch, true)
+				b.StartTimer()
+				results, err := collection.UpdateBatch(batch.updates)
 				if err != nil {
 					b.Fatalf("UpdateBatch: %v", err)
 				}
-				if len(results) != len(batches[i].updates) {
-					b.Fatalf("UpdateBatch results=%d, want %d", len(results), len(batches[i].updates))
+				if len(results) != len(batch.updates) {
+					b.Fatalf("UpdateBatch results=%d, want %d", len(results), len(batch.updates))
 				}
 			}
 			b.StopTimer()
 
 			assertColumnStoreCommandWALBenchState(b, backend, collection, columnStore, uint64(2*b.N), uint64(2*b.N)+1)
-			reportColumnStoreCommandWALBenchMetrics(b, batches, true)
+			reportColumnStoreCommandWALBenchMetrics(b, totals)
 		})
 	}
 
 	for _, columnStore := range []bool{false, true} {
 		b.Run(fmt.Sprintf("delete/column_store=%t", columnStore), func(b *testing.B) {
 			backend, collection := openColumnStoreCommandWALRootPublicationBenchmark(b, columnStore)
-			batches := makeColumnStoreCommandWALBenchBatches(b, 0, b.N, commandWALBenchBatchSize, false)
-			seedColumnStoreCommandWALBenchBatches(b, collection, batches)
+			seedColumnStoreCommandWALBenchBatches(b, collection, 0, b.N, commandWALBenchBatchSize)
+			var totals columnStoreCommandWALBenchTotals
 
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				deleted, err := collection.DeleteBatch(batches[i].ids)
+				b.StopTimer()
+				batch := makeColumnStoreCommandWALBenchBatch(b, i, commandWALBenchBatchSize, false)
+				totals.add(batch, false)
+				b.StartTimer()
+				deleted, err := collection.DeleteBatch(batch.ids)
 				if err != nil {
 					b.Fatalf("DeleteBatch: %v", err)
 				}
-				if deleted != len(batches[i].ids) {
-					b.Fatalf("DeleteBatch deleted=%d, want %d", deleted, len(batches[i].ids))
+				if deleted != len(batch.ids) {
+					b.Fatalf("DeleteBatch deleted=%d, want %d", deleted, len(batch.ids))
 				}
 			}
 			b.StopTimer()
 
 			assertColumnStoreCommandWALBenchState(b, backend, collection, columnStore, uint64(2*b.N), uint64(2*b.N)+1)
-			reportColumnStoreCommandWALBenchMetrics(b, batches, false)
+			reportColumnStoreCommandWALBenchMetrics(b, totals)
 		})
 	}
 }
@@ -140,6 +152,19 @@ type columnStoreCommandWALBenchBatch struct {
 	docBytes int
 }
 
+type columnStoreCommandWALBenchTotals struct {
+	docs  int
+	bytes int
+}
+
+func (totals *columnStoreCommandWALBenchTotals) add(batch columnStoreCommandWALBenchBatch, includeDocs bool) {
+	totals.docs += len(batch.ids)
+	totals.bytes += batch.idBytes
+	if includeDocs {
+		totals.bytes += batch.docBytes
+	}
+}
+
 func openColumnStoreCommandWALRootPublicationBenchmark(b *testing.B, columnStore bool) (*backenddb.DB, *Collection) {
 	b.Helper()
 	backend, err := backenddb.Open(backenddb.Options{
@@ -177,34 +202,31 @@ func openColumnStoreCommandWALRootPublicationBenchmark(b *testing.B, columnStore
 	return backend, collection
 }
 
-func makeColumnStoreCommandWALBenchBatches(b *testing.B, start, batches, batchSize int, includeUpdates bool) []columnStoreCommandWALBenchBatch {
+func makeColumnStoreCommandWALBenchBatch(b *testing.B, batchIndex, batchSize int, includeUpdates bool) columnStoreCommandWALBenchBatch {
 	b.Helper()
-	out := make([]columnStoreCommandWALBenchBatch, batches)
-	for i := 0; i < batches; i++ {
-		offset := start + i*batchSize
-		ids, docs, idBytes, docBytes := columnStoreCommandWALBenchDocuments(offset, batchSize, 0)
-		out[i] = columnStoreCommandWALBenchBatch{
-			ids:      ids,
-			docs:     docs,
-			idBytes:  idBytes,
-			docBytes: docBytes,
-		}
-		if includeUpdates {
-			_, replacements, _, replacementBytes := columnStoreCommandWALBenchDocuments(offset, batchSize, 1_000_000)
-			out[i].updates = make([]UpdateBatchItem, batchSize)
-			out[i].docBytes = replacementBytes
-			for j := 0; j < batchSize; j++ {
-				replacement := replacements[j]
-				out[i].updates[j] = UpdateBatchItem{
-					DocumentID: ids[j],
-					Update: func([]byte) ([]byte, bool, error) {
-						return replacement, true, nil
-					},
-				}
+	offset := batchIndex * batchSize
+	ids, docs, idBytes, docBytes := columnStoreCommandWALBenchDocuments(offset, batchSize, 0)
+	batch := columnStoreCommandWALBenchBatch{
+		ids:      ids,
+		docs:     docs,
+		idBytes:  idBytes,
+		docBytes: docBytes,
+	}
+	if includeUpdates {
+		_, replacements, _, replacementBytes := columnStoreCommandWALBenchDocuments(offset, batchSize, 1_000_000)
+		batch.updates = make([]UpdateBatchItem, batchSize)
+		batch.docBytes = replacementBytes
+		for j := 0; j < batchSize; j++ {
+			replacement := replacements[j]
+			batch.updates[j] = UpdateBatchItem{
+				DocumentID: ids[j],
+				Update: func([]byte) ([]byte, bool, error) {
+					return replacement, true, nil
+				},
 			}
 		}
 	}
-	return out
+	return batch
 }
 
 func columnStoreCommandWALBenchDocuments(start, count, timeOffset int) ([][]byte, [][]byte, int, int) {
@@ -222,10 +244,11 @@ func columnStoreCommandWALBenchDocuments(start, count, timeOffset int) ([][]byte
 	return ids, docs, idBytes, docBytes
 }
 
-func seedColumnStoreCommandWALBenchBatches(b *testing.B, collection *Collection, batches []columnStoreCommandWALBenchBatch) {
+func seedColumnStoreCommandWALBenchBatches(b *testing.B, collection *Collection, start, batches, batchSize int) {
 	b.Helper()
-	for i := range batches {
-		if _, err := collection.InsertBatch(batches[i].ids, batches[i].docs); err != nil {
+	for i := 0; i < batches; i++ {
+		batch := makeColumnStoreCommandWALBenchBatch(b, start+i, batchSize, false)
+		if _, err := collection.InsertBatch(batch.ids, batch.docs); err != nil {
 			b.Fatalf("seed InsertBatch: %v", err)
 		}
 	}
@@ -239,23 +262,14 @@ func assertColumnStoreCommandWALBenchState(b *testing.B, backend *backenddb.DB, 
 	}
 }
 
-func reportColumnStoreCommandWALBenchMetrics(b *testing.B, batches []columnStoreCommandWALBenchBatch, includeDocs bool) {
+func reportColumnStoreCommandWALBenchMetrics(b *testing.B, totals columnStoreCommandWALBenchTotals) {
 	b.Helper()
-	docs := 0
-	bytes := 0
-	for i := range batches {
-		docs += len(batches[i].ids)
-		bytes += batches[i].idBytes
-		if includeDocs {
-			bytes += batches[i].docBytes
-		}
-	}
 	elapsed := b.Elapsed().Seconds()
 	if elapsed <= 0 {
 		return
 	}
-	b.ReportMetric(float64(docs)/elapsed, "docs/s")
-	b.ReportMetric((float64(bytes)/(1024*1024))/elapsed, "payload_MiB/s")
+	b.ReportMetric(float64(totals.docs)/elapsed, "docs/s")
+	b.ReportMetric((float64(totals.bytes)/(1024*1024))/elapsed, "payload_MiB/s")
 }
 
 func prepareColumnStoreCommandWALReplayBenchmarkDirM10C(b *testing.B, columnStore bool, frames, batchSize int) (string, int, int) {
