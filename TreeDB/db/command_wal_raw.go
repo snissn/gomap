@@ -22,6 +22,7 @@ type commandWALBatchIntent struct {
 	externalRefFileIDs []uint32
 	fromReplay         bool
 	lsn                uint64
+	replayToken        uint64
 	coveredRange       [1]CommandWALLSNRange
 	syncOnPublish      bool
 }
@@ -123,7 +124,14 @@ func (db *DB) NewCommandWALIntent(kind commitlog.CommandKind, scope commitlog.Co
 	}}, nil
 }
 
+// NewCommandWALReplayIntent constructs an unauthenticated replay intent for
+// compatibility tests. Recovery handlers must use DB.NewCommandWALReplayIntent,
+// which binds the intent to the currently active recovery frame.
 func NewCommandWALReplayIntent(env commitlog.CommandEnvelope) *CommandWALIntent {
+	return newCommandWALReplayIntent(env, 0)
+}
+
+func newCommandWALReplayIntent(env commitlog.CommandEnvelope, replayToken uint64) *CommandWALIntent {
 	return &CommandWALIntent{inner: commandWALBatchIntent{
 		kind:          env.Kind,
 		scope:         env.Scope,
@@ -131,9 +139,22 @@ func NewCommandWALReplayIntent(env commitlog.CommandEnvelope) *CommandWALIntent 
 		payload:       env.Payload,
 		fromReplay:    true,
 		lsn:           env.LSN,
+		replayToken:   replayToken,
 		coveredRange:  [1]CommandWALLSNRange{{First: env.LSN, Last: env.LSN}},
 		syncOnPublish: true,
 	}}
+}
+
+func (db *DB) NewCommandWALReplayIntent(env commitlog.CommandEnvelope) (*CommandWALIntent, error) {
+	if db == nil {
+		return nil, ErrClosed
+	}
+	activeLSN := db.commandWALReplayLSN.Load()
+	activeToken := db.commandWALReplayToken.Load()
+	if env.LSN == 0 || activeLSN != env.LSN || activeToken == 0 {
+		return nil, fmt.Errorf("%w: replay intent lsn %d is not the active recovery frame lsn %d", ErrCommandWALRejected, env.LSN, activeLSN)
+	}
+	return newCommandWALReplayIntent(env, activeToken), nil
 }
 
 func (db *DB) checkCommandWALReplayIntentActive(intent *commandWALBatchIntent) error {
@@ -141,10 +162,12 @@ func (db *DB) checkCommandWALReplayIntentActive(intent *commandWALBatchIntent) e
 		return nil
 	}
 	active := uint64(0)
+	activeToken := uint64(0)
 	if db != nil {
 		active = db.commandWALReplayLSN.Load()
+		activeToken = db.commandWALReplayToken.Load()
 	}
-	if active != intent.lsn {
+	if active != intent.lsn || activeToken == 0 || activeToken != intent.replayToken {
 		return fmt.Errorf("%w: replay intent lsn %d is not the active recovery frame lsn %d", ErrCommandWALRejected, intent.lsn, active)
 	}
 	return nil
