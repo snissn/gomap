@@ -124,6 +124,39 @@ func TestColumnQueryPlannerM11BChoosesExpectedKindsForOneFixture(t *testing.T) {
 	}
 }
 
+func TestColumnQueryPlannerM11BForcedPlanCountsSingleCandidate(t *testing.T) {
+	catalog := &collectionCatalog{meta: CollectionMeta{
+		Name: "events",
+		Indexes: []IndexDefinition{
+			{Name: "kind_idx", Field: "kind", ValueType: IndexValueString},
+		},
+	}}
+	identity := ColumnStoreCacheIdentity{
+		Collection:                      "events",
+		ManifestRoot:                    99,
+		ManifestGeneration:              7,
+		RecoveryAuthoritativeGeneration: 7,
+	}
+	req := ColumnQueryPlanRequest{
+		Name:                  "q1",
+		CandidateIndexColumns: []string{"kind"},
+		ForceKind:             ColumnQueryPlanBTreeIndexBaseline,
+		Capabilities: ColumnQueryPlannerCapabilities{
+			SerialColumnScan:   true,
+			AggregateMetadata:  true,
+			ParallelColumnScan: true,
+		},
+	}
+
+	plan := planColumnQueryForCatalog(catalog, identity, true, req)
+	if !plan.Supported {
+		t.Fatalf("plan unsupported: %+v", plan.Diagnostics)
+	}
+	if got, want := plan.Diagnostics.CandidatePlans, 1; got != want {
+		t.Fatalf("candidate plans=%d want %d for forced plan diagnostics", got, want)
+	}
+}
+
 func TestColumnQueryPlannerM11BMatchesBTreeIndexesCaseSensitively(t *testing.T) {
 	catalog := &collectionCatalog{meta: CollectionMeta{
 		Name: "events",
