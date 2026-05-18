@@ -718,6 +718,44 @@ func (c *Collection) notifyVectorIndexesUpdateBatch(items []UpdateBatchItem, res
 	return c.notifyVectorIndexesUpsert(updated)
 }
 
+func (c *Collection) notifyAndPersistVectorIndexesUpsertForWAL(documentIDs [][]byte) error {
+	return c.applyVectorIndexUpsertCommandWAL(documentIDs, nil)
+}
+
+func (c *Collection) notifyAndPersistVectorIndexesDeleteForWAL(documentIDs [][]byte) error {
+	return c.applyVectorIndexDeleteCommandWAL(documentIDs, nil)
+}
+
+func (c *Collection) applyVectorIndexUpsertCommandWAL(documentIDs [][]byte, intent *backenddb.CommandWALIntent) error {
+	if err := c.notifyVectorIndexesUpsert(documentIDs); err != nil {
+		return err
+	}
+	return c.persistDirtyNativeVectorIndexesBeforeWALUpsertAck(documentIDs, intent)
+}
+
+func (c *Collection) applyVectorIndexDeleteCommandWAL(documentIDs [][]byte, intent *backenddb.CommandWALIntent) error {
+	if err := c.notifyVectorIndexesDelete(documentIDs); err != nil {
+		return err
+	}
+	return c.persistDirtyNativeVectorIndexesBeforeWALDeleteAck(documentIDs, intent)
+}
+
+func (c *Collection) notifyAndPersistVectorIndexesUpdateBatchForWAL(items []UpdateBatchItem, results []UpdateBatchResult) error {
+	if err := c.notifyVectorIndexesUpdateBatch(items, results); err != nil {
+		return err
+	}
+	var updated [][]byte
+	for i := range items {
+		if i >= len(results) {
+			break
+		}
+		if results[i].Modified {
+			updated = append(updated, items[i].DocumentID)
+		}
+	}
+	return c.persistDirtyNativeVectorIndexesBeforeWALUpsertAck(updated, nil)
+}
+
 func (c *Collection) notifyVectorIndexesBSONSetUpdateBatch(items []BSONSetUpdateBatchItem, results []UpdateBatchResult) error {
 	if len(items) == 0 || len(results) == 0 {
 		return nil
@@ -732,6 +770,22 @@ func (c *Collection) notifyVectorIndexesBSONSetUpdateBatch(items []BSONSetUpdate
 		}
 	}
 	return c.notifyVectorIndexesUpsert(updated)
+}
+
+func (c *Collection) notifyAndPersistVectorIndexesBSONSetUpdateBatchForWAL(items []BSONSetUpdateBatchItem, results []UpdateBatchResult) error {
+	if err := c.notifyVectorIndexesBSONSetUpdateBatch(items, results); err != nil {
+		return err
+	}
+	var updated [][]byte
+	for i := range items {
+		if i >= len(results) {
+			break
+		}
+		if results[i].Modified {
+			updated = append(updated, items[i].DocumentID)
+		}
+	}
+	return c.persistDirtyNativeVectorIndexesBeforeWALUpsertAck(updated, nil)
 }
 
 func (c *Collection) persistNativeVectorIndexIfDeclared(index *VectorIndex) error {
