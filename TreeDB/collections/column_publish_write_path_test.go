@@ -651,6 +651,9 @@ func TestColumnStoreReplayIntentBypassesRelaxedDurabilityGateM10C(t *testing.T) 
 	if framesAfter := countCollectionCommandWALFrames(t, dir); framesAfter != framesBefore {
 		t.Fatalf("command WAL frames after rejected foreground write=%d, want %d", framesAfter, framesBefore)
 	}
+	if err := reopen.CheckCommandWALPublishReady(); err != nil {
+		t.Fatalf("CheckCommandWALPublishReady after rejected foreground write: %v", err)
+	}
 }
 
 func TestColumnStoreAssignedForegroundIntentDoesNotBypassRelaxedDurabilityGateM10C(t *testing.T) {
