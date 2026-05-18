@@ -72,11 +72,11 @@ func (c *Collection) publishRootDeltaGroupMaybeColumn(ordered []backenddb.Ordere
 				return nil, err
 			}
 			plan = nextPlan
-			ordered, err := plan.RootDelta.OrderedRootDeltaPublishInput()
+			columnDelta, err := plan.RootDelta.OrderedRootDeltaPublishInput()
 			if err != nil {
 				return nil, err
 			}
-			return []backenddb.OrderedRootDeltaPublishInput{ordered}, nil
+			return []backenddb.OrderedRootDeltaPublishInput{columnDelta}, nil
 		},
 		func(ctx backenddb.CommandWALPublishContext, rootIDs []uint64) (iterator.UnsafeIterator, error) {
 			if plan.AppliedCommandLSN != ctx.AppliedCommandLSN {
@@ -128,12 +128,12 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 			return nil, err
 		}
 		plan = nextPlan
-		ordered, cleanup, err := plan.RootDelta.OrderedRootDeltaBatchPublishInput()
+		columnDelta, cleanup, err := plan.RootDelta.OrderedRootDeltaBatchPublishInput()
 		if err != nil {
 			return nil, err
 		}
 		cleanupColumnDelta = cleanup
-		return []backenddb.OrderedRootDeltaBatchPublishInput{ordered}, nil
+		return []backenddb.OrderedRootDeltaBatchPublishInput{columnDelta}, nil
 	}
 	buildSystemDelta := func(ctx backenddb.CommandWALPublishContext, rootIDs []uint64) (iterator.UnsafeIterator, error) {
 		if plan.AppliedCommandLSN != ctx.AppliedCommandLSN {
@@ -358,15 +358,30 @@ func appendColumnManifestRootPublishBase(rootNames []string, baseRootIDs map[str
 			return nil, nil, fmt.Errorf("collections: column manifest root %q must be published by the column context delta, not the row root group", columnRootName)
 		}
 	}
-	nextRootNames := make([]string, 0, len(rootNames)+1)
-	nextRootNames = append(nextRootNames, rootNames...)
-	nextRootNames = append(nextRootNames, columnRootName)
-	nextBaseRootIDs := cloneUint64Map(baseRootIDs)
-	if nextBaseRootIDs == nil {
-		nextBaseRootIDs = make(map[string]uint64, 1)
+	if baseRootIDs == nil {
+		baseRootIDs = make(map[string]uint64, 1)
 	}
-	nextBaseRootIDs[columnRootName] = columnBaseRoot
-	return nextRootNames, nextBaseRootIDs, nil
+	baseRootIDs[columnRootName] = columnBaseRoot
+	return append(rootNames, columnRootName), baseRootIDs, nil
+}
+
+func cloneColumnPublishRootNames(rootNames []string) []string {
+	if rootNames == nil {
+		return nil
+	}
+	out := make([]string, 0, len(rootNames)+1)
+	return append(out, rootNames...)
+}
+
+func cloneColumnPublishBaseRootIDs(baseRootIDs map[string]uint64) map[string]uint64 {
+	if baseRootIDs == nil {
+		return nil
+	}
+	out := make(map[string]uint64, len(baseRootIDs)+1)
+	for name, rootID := range baseRootIDs {
+		out[name] = rootID
+	}
+	return out
 }
 
 func columnPublishPlanLSNMismatchError(meta CollectionMeta, ctxLSN, planLSN uint64) error {
