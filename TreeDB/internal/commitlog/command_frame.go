@@ -54,11 +54,13 @@ const (
 
 	// Collection command frames carry deterministic user-level collection
 	// mutations. They do not encode physical root deltas.
-	CommandKindCollectionInsertBatchByID  CommandKind = 100
-	CommandKindCollectionDeleteBatchByID  CommandKind = 101
-	CommandKindCollectionUpdateBatchByID  CommandKind = 102
-	CommandKindCatalogCreateCollection    CommandKind = 200
-	CommandKindCatalogMutationPlaceholder CommandKind = CommandKindCatalogCreateCollection
+	CommandKindCollectionInsertBatchByID            CommandKind = 100
+	CommandKindCollectionDeleteBatchByID            CommandKind = 101
+	CommandKindCollectionUpdateBatchByID            CommandKind = 102
+	CommandKindCollectionVectorIndexUpsertBatchByID CommandKind = 103
+	CommandKindCollectionVectorIndexDeleteBatchByID CommandKind = 104
+	CommandKindCatalogCreateCollection              CommandKind = 200
+	CommandKindCatalogMutationPlaceholder           CommandKind = CommandKindCatalogCreateCollection
 )
 
 // CommandScope identifies which logical TreeDB surface a command mutates.
@@ -74,12 +76,14 @@ const (
 type PayloadFormat uint16
 
 const (
-	PayloadFormatRawKVBatchV1                PayloadFormat = 1
-	PayloadFormatNativeWireDeterministic     PayloadFormat = 2
-	PayloadFormatCollectionInsertBatchByIDV1 PayloadFormat = 3
-	PayloadFormatCollectionDeleteBatchByIDV1 PayloadFormat = 4
-	PayloadFormatCollectionUpdateBatchByIDV1 PayloadFormat = 5
-	PayloadFormatCatalogCreateCollectionV1   PayloadFormat = 6
+	PayloadFormatRawKVBatchV1                           PayloadFormat = 1
+	PayloadFormatNativeWireDeterministic                PayloadFormat = 2
+	PayloadFormatCollectionInsertBatchByIDV1            PayloadFormat = 3
+	PayloadFormatCollectionDeleteBatchByIDV1            PayloadFormat = 4
+	PayloadFormatCollectionUpdateBatchByIDV1            PayloadFormat = 5
+	PayloadFormatCatalogCreateCollectionV1              PayloadFormat = 6
+	PayloadFormatCollectionVectorIndexUpsertBatchByIDV1 PayloadFormat = 7
+	PayloadFormatCollectionVectorIndexDeleteBatchByIDV1 PayloadFormat = 8
 )
 
 // RawKVOp is a deterministic raw key/value mutation inside a RawKVBatch
@@ -914,6 +918,16 @@ type CollectionUpdateBatchByIDPayload struct {
 	Documents  []CollectionDocument
 }
 
+type CollectionVectorIndexUpsertBatchByIDPayload struct {
+	Collection string
+	IDs        [][]byte
+}
+
+type CollectionVectorIndexDeleteBatchByIDPayload struct {
+	Collection string
+	IDs        [][]byte
+}
+
 type CatalogCreateCollectionPayload struct {
 	Collection string
 	Metadata   []byte
@@ -1305,6 +1319,14 @@ func validateCommandEnvelopeIdentity(env CommandEnvelope) error {
 		if env.Scope != CommandScopeCollection || env.PayloadFormat != PayloadFormatCollectionUpdateBatchByIDV1 {
 			return ErrCorrupt
 		}
+	case CommandKindCollectionVectorIndexUpsertBatchByID:
+		if env.Scope != CommandScopeCollection || env.PayloadFormat != PayloadFormatCollectionVectorIndexUpsertBatchByIDV1 {
+			return ErrCorrupt
+		}
+	case CommandKindCollectionVectorIndexDeleteBatchByID:
+		if env.Scope != CommandScopeCollection || env.PayloadFormat != PayloadFormatCollectionVectorIndexDeleteBatchByIDV1 {
+			return ErrCorrupt
+		}
 	case CommandKindCatalogCreateCollection:
 		if env.Scope != CommandScopeCatalog || env.PayloadFormat != PayloadFormatCatalogCreateCollectionV1 {
 			return ErrCorrupt
@@ -1327,6 +1349,12 @@ func validateCommandEnvelopePayload(env CommandEnvelope) error {
 		return err
 	case CommandKindCollectionUpdateBatchByID:
 		_, err := DecodeCollectionUpdateBatchByIDPayload(env.Payload)
+		return err
+	case CommandKindCollectionVectorIndexUpsertBatchByID:
+		_, err := DecodeCollectionVectorIndexUpsertBatchByIDPayload(env.Payload)
+		return err
+	case CommandKindCollectionVectorIndexDeleteBatchByID:
+		_, err := DecodeCollectionVectorIndexDeleteBatchByIDPayload(env.Payload)
 		return err
 	case CommandKindCatalogCreateCollection:
 		_, err := DecodeCatalogCreateCollectionPayload(env.Payload)
@@ -1753,6 +1781,36 @@ func DecodeCollectionUpdateBatchByIDPayload(payload []byte) (CollectionUpdateBat
 	return CollectionUpdateBatchByIDPayload{
 		Collection: decoded.Collection,
 		Documents:  decoded.Documents,
+	}, nil
+}
+
+func EncodeCollectionVectorIndexUpsertBatchByIDPayload(collection string, ids [][]byte) ([]byte, error) {
+	return EncodeCollectionDeleteBatchByIDPayload(collection, ids)
+}
+
+func DecodeCollectionVectorIndexUpsertBatchByIDPayload(payload []byte) (CollectionVectorIndexUpsertBatchByIDPayload, error) {
+	decoded, err := DecodeCollectionDeleteBatchByIDPayload(payload)
+	if err != nil {
+		return CollectionVectorIndexUpsertBatchByIDPayload{}, err
+	}
+	return CollectionVectorIndexUpsertBatchByIDPayload{
+		Collection: decoded.Collection,
+		IDs:        decoded.IDs,
+	}, nil
+}
+
+func EncodeCollectionVectorIndexDeleteBatchByIDPayload(collection string, ids [][]byte) ([]byte, error) {
+	return EncodeCollectionDeleteBatchByIDPayload(collection, ids)
+}
+
+func DecodeCollectionVectorIndexDeleteBatchByIDPayload(payload []byte) (CollectionVectorIndexDeleteBatchByIDPayload, error) {
+	decoded, err := DecodeCollectionDeleteBatchByIDPayload(payload)
+	if err != nil {
+		return CollectionVectorIndexDeleteBatchByIDPayload{}, err
+	}
+	return CollectionVectorIndexDeleteBatchByIDPayload{
+		Collection: decoded.Collection,
+		IDs:        decoded.IDs,
 	}, nil
 }
 

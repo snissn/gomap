@@ -102,7 +102,7 @@ func readResp(r *bufio.Reader) (respValue, error) {
 		return respValue{kind: '+', str: line}, err
 	case '-':
 		line, err := readLine(r)
-		return respValue{kind: '-', str: line, err: fmt.Errorf(line)}, err
+		return respValue{kind: '-', str: line, err: fmt.Errorf("%s", line)}, err
 	case ':':
 		line, err := readLine(r)
 		if err != nil {

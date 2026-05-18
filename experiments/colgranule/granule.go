@@ -22,6 +22,8 @@ const (
 	EncodingNullableInt64
 	EncodingBoolBitpackRLE
 	EncodingLowCardinalityUint32
+	EncodingRawFloat32Vector
+	EncodingRawInt64AdjacencyList
 )
 
 func (e Encoding) String() string {
@@ -38,6 +40,10 @@ func (e Encoding) String() string {
 		return "bool_bitpack_rle"
 	case EncodingLowCardinalityUint32:
 		return "low_cardinality_uint32"
+	case EncodingRawFloat32Vector:
+		return "raw_float32_vector"
+	case EncodingRawInt64AdjacencyList:
+		return "raw_int64_adjacency_list"
 	default:
 		return fmt.Sprintf("encoding_%d", e)
 	}
@@ -165,13 +171,16 @@ func (b *GranuleBuilder) BuildInt64(values []int64) (EncodedGranule, error) {
 }
 
 type GranuleReader struct {
-	raw      []byte
-	values   []int64
-	stored64 []int64
-	bools    []bool
-	nulls    []bool
-	defaults []bool
-	codes    []uint32
+	raw         []byte
+	values      []int64
+	stored64    []int64
+	bools       []bool
+	nulls       []bool
+	defaults    []bool
+	codes       []uint32
+	vectors32   []float32
+	listOffsets []uint32
+	listValues  []int64
 }
 
 func (r *GranuleReader) DecodeInt64(g EncodedGranule) ([]int64, error) {

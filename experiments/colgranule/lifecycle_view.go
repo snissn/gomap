@@ -919,6 +919,7 @@ func skipColumnDefinitionsBinary(r *columnBinaryReader) {
 		r.u8()
 		r.u8()
 		r.u32()
+		r.intValue("vector dims")
 		r.intValue("codec block rows")
 	}
 }

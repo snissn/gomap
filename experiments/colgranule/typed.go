@@ -671,6 +671,13 @@ func ensureUint32Len(dst []uint32, n int) []uint32 {
 	return dst[:n]
 }
 
+func ensureFloat32Len(dst []float32, n int) []float32 {
+	if cap(dst) < n {
+		return make([]float32, n)
+	}
+	return dst[:n]
+}
+
 func ensureIntLen(dst []int, n int) []int {
 	if cap(dst) < n {
 		return make([]int, n)
