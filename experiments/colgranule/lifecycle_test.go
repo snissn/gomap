@@ -27,6 +27,32 @@ func TestColumnAssetReasonSentinelsAreAppendSafe(t *testing.T) {
 	}
 }
 
+func TestColumnAssetReachabilitySummaryRecordIsPointerFree(t *testing.T) {
+	typ := reflect.TypeOf(columnAssetReachabilitySummaryRecord{})
+	for i := 0; i < typ.NumField(); i++ {
+		field := typ.Field(i)
+		if typeContainsPointers(field.Type) {
+			t.Fatalf("columnAssetReachabilitySummaryRecord.%s has pointer-bearing type %s", field.Name, field.Type)
+		}
+	}
+}
+
+func typeContainsPointers(typ reflect.Type) bool {
+	switch typ.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice, reflect.String, reflect.UnsafePointer:
+		return true
+	case reflect.Array:
+		return typeContainsPointers(typ.Elem())
+	case reflect.Struct:
+		for i := 0; i < typ.NumField(); i++ {
+			if typeContainsPointers(typ.Field(i).Type) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func TestColumnAssetReachabilityReasonsAreDetached(t *testing.T) {
 	activeRef := lifecycleAssetRef(t, 1, 0, tcs1HeaderBytes+16)
 	preparedRef := lifecycleAssetRef(t, 2, 0, tcs1HeaderBytes+24)
