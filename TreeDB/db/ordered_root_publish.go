@@ -2319,7 +2319,7 @@ func errOrderedRootCommandWALContextNilSystemDeltaIterator() error {
 }
 
 func errOrderedRootCommandWALContextConcurrentModification(wantUserRoot, gotUserRoot, wantSystemRoot, gotSystemRoot uint64) error {
-	return fmt.Errorf("treedb: command WAL ordered root publish concurrent modification: user_root want=%d got=%d system_root want=%d got=%d", wantUserRoot, gotUserRoot, wantSystemRoot, gotSystemRoot)
+	return fmt.Errorf("%w: command WAL ordered root publish: user_root want=%d got=%d system_root want=%d got=%d", ErrConcurrentModification, wantUserRoot, gotUserRoot, wantSystemRoot, gotSystemRoot)
 }
 
 func (db *DB) finalizeOrderedRootPublishWithCommandWAL(newRootID uint64, sysRootID uint64, retired []uint64, sync bool, metrics adaptive.Metrics, touchedValueLogSegments []uint32, forceValueLogRefresh bool, vlogRefDelta *valueLogRefDelta, leafManifest *leafGenerationManifest, leafManifestRawFileIDs []uint32, intent *CommandWALIntent) error {

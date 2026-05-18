@@ -1036,6 +1036,9 @@ func assertColumnStoreCommandWALWriteRejectedM10B(t testing.TB, err error, opera
 	if errors.Is(err, backenddb.ErrCommandWALUnsupported) {
 		t.Fatalf("%s error=%v must not look like ErrCommandWALUnsupported", operation, err)
 	}
+	if !strings.Contains(err.Error(), `collection="events"`) {
+		t.Fatalf("%s error=%v missing collection context", operation, err)
+	}
 }
 
 func assertColumnStoreDocumentMissingM10B(t testing.TB, col *Collection, id string) {
