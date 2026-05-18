@@ -840,7 +840,7 @@ func main() {
 }
 
 func shouldCPUProfile(cfg BenchConfig, testName string) bool {
-	if cfg.CPUProfile == "" {
+	if strings.TrimSpace(cfg.CPUProfile) == "" {
 		return false
 	}
 	if len(cfg.CPUProfileTests) == 0 {
@@ -851,7 +851,7 @@ func shouldCPUProfile(cfg BenchConfig, testName string) bool {
 }
 
 func shouldAllocsProfile(cfg BenchConfig, testName string) bool {
-	if cfg.AllocsProfile == "" {
+	if strings.TrimSpace(cfg.AllocsProfile) == "" {
 		return false
 	}
 	if len(cfg.AllocsProfileTests) == 0 {
@@ -862,7 +862,7 @@ func shouldAllocsProfile(cfg BenchConfig, testName string) bool {
 }
 
 func shouldCheckpointCPUProfile(cfg BenchConfig, testName string) bool {
-	if cfg.CheckpointCPUProfile == "" {
+	if strings.TrimSpace(cfg.CheckpointCPUProfile) == "" {
 		return false
 	}
 	if len(cfg.CheckpointCPUProfileTests) == 0 {
@@ -873,10 +873,15 @@ func shouldCheckpointCPUProfile(cfg BenchConfig, testName string) bool {
 }
 
 func startCheckpointCPUProfile(cfg BenchConfig, profileHooks benchmarkProfileHooks, testName, dbName string) (*os.File, error) {
-	path := fmt.Sprintf("%s_checkpoint_%s_%s.pprof", cfg.CheckpointCPUProfile, sanitizeProfileSegment(testName), sanitizeProfileSegment(dbName))
+	path := fmt.Sprintf("%s_checkpoint_%s_%s.pprof", strings.TrimSpace(cfg.CheckpointCPUProfile), sanitizeProfileSegment(testName), sanitizeProfileSegment(dbName))
 	f, err := os.Create(path)
 	if err != nil {
 		return nil, fmt.Errorf("checkpoint cpu profile (%s/%s): %w", testName, dbName, err)
+	}
+	if profileHooks.startCPUProfile == nil {
+		_ = f.Close()
+		_ = os.Remove(path)
+		return nil, errors.New("checkpoint cpu profile start hook is nil")
 	}
 	if err := profileHooks.startCPUProfile(f); err != nil {
 		_ = f.Close()
