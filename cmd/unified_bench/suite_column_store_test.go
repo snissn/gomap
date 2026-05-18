@@ -528,6 +528,12 @@ func TestColumnStoreSuiteCheckpointCPUProfileStartFailureRemovesArtifactM11A(t *
 		}
 		t.Fatal("expected checkpoint CPU profile start failure")
 	}
+	msg := err.Error()
+	if !strings.Contains(msg, columnStoreSuiteBenchTestName) ||
+		!strings.Contains(msg, columnStoreSuiteBenchDBName) ||
+		!strings.Contains(msg, cfg.CheckpointCPUProfile) {
+		t.Fatalf("error=%v, want checkpoint CPU start failure test/db/path context", err)
+	}
 	profilePath := fmt.Sprintf("%s_checkpoint_%s_%s.pprof", cfg.CheckpointCPUProfile, sanitizeProfileSegment(columnStoreSuiteBenchTestName), sanitizeProfileSegment(columnStoreSuiteBenchDBName))
 	if _, statErr := os.Stat(profilePath); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("expected failed checkpoint CPU profile artifact to be removed, stat err=%v", statErr)
