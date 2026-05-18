@@ -131,7 +131,8 @@ type ColumnPublishClosureValidationInput struct {
 // synced before the manifest root can become authoritative.
 type ColumnPublishDurabilityClosure struct {
 	// PreparedAssets is owned by the closure/plan boundary. BuildColumnPublishPlan
-	// compares it against the manifest snapshot before publishing.
+	// compares it as an order-independent multiset against the manifest snapshot
+	// before publishing.
 	PreparedAssets []ColumnPreparedAsset
 	RequiredAssets int
 	RequiredBytes  int64
@@ -312,7 +313,7 @@ func BuildColumnPublishPlan(input ColumnPublishPlanInput) (ColumnPublishPlan, er
 		return ColumnPublishPlan{}, fmt.Errorf("collections: column publish asset-closure validation failed: %w", err)
 	}
 	metrics.AssetClosureValidation = time.Since(start)
-	if err := validateColumnPublishDurabilityClosure(closure); err != nil {
+	if err := validateColumnPublishDurabilityClosure(closure, *cfg); err != nil {
 		return ColumnPublishPlan{}, err
 	}
 	if err := validateColumnPublishClosureMatchesPrepared(manifestPrepared, closure); err != nil {
@@ -345,7 +346,7 @@ func BuildColumnPublishPlan(input ColumnPublishPlanInput) (ColumnPublishPlan, er
 		RecoveryAuthoritativeManifest:          manifest.Identity,
 		RecoveryAuthoritativeAppliedCommandLSN: input.AppliedCommandLSN,
 		RootDelta:                              rootDelta,
-		PreparedAssets:                         cloneColumnPreparedAssets(closure.PreparedAssets),
+		PreparedAssets:                         cloneColumnPreparedAssets(manifestPrepared.Assets),
 		RequiredAssetCount:                     closure.RequiredAssets,
 		RequiredAssetBytes:                     closure.RequiredBytes,
 		RequiredAssetFlush:                     closure.FlushRequired,
@@ -473,6 +474,15 @@ func (c *Collection) buildColumnManifestPublishSystemDeltaIterator(input ColumnM
 	if rootIDs[0] == 0 {
 		return nil, errors.New("collections: column manifest root publish returned zero root")
 	}
+	if input.BaseMeta.Options.ColumnStore == nil || input.BaseMeta.Options.ColumnStore.ManifestRoot == nil {
+		return nil, errors.New("collections: column manifest publish requires column manifest root metadata")
+	}
+	if _, err := backendRootStoragePolicy(plan.RootDelta.StoragePolicy); err != nil {
+		return nil, err
+	}
+	if plan.RootDelta.StoragePolicy != input.BaseMeta.Options.ColumnStore.ManifestRoot.StoragePolicy {
+		return nil, fmt.Errorf("collections: column publish plan storage policy %q does not match collection manifest root policy %q", plan.RootDelta.StoragePolicy, input.BaseMeta.Options.ColumnStore.ManifestRoot.StoragePolicy)
+	}
 	if plan.AppliedCommandLSN == 0 {
 		return nil, errors.New("collections: column publish plan missing AppliedCommandLSN")
 	}
@@ -591,7 +601,7 @@ func prepareColumnPublishAssets(input ColumnPublishPlanInput, cfg ColumnStoreCon
 		ColumnStore:       columnPublishHookConfig(cfg),
 		Operation:         input.Operation,
 		AppliedCommandLSN: input.AppliedCommandLSN,
-		CurrentManifest:   input.CurrentManifest,
+		CurrentManifest:   cloneColumnManifestIdentityPtr(input.CurrentManifest),
 	})
 }
 
@@ -604,7 +614,7 @@ func encodeColumnPublishManifest(input ColumnPublishPlanInput, cfg ColumnStoreCo
 		ColumnStore:       columnPublishHookConfig(cfg),
 		Operation:         input.Operation,
 		AppliedCommandLSN: input.AppliedCommandLSN,
-		CurrentManifest:   input.CurrentManifest,
+		CurrentManifest:   cloneColumnManifestIdentityPtr(input.CurrentManifest),
 		Prepared:          cloneColumnPublishPreparedAssets(prepared),
 	})
 }
@@ -702,6 +712,9 @@ func validateColumnManifestRootDeltaForPlan(delta ColumnManifestRootDelta, baseR
 	if delta.StoragePolicy != cfg.ManifestRoot.StoragePolicy {
 		return fmt.Errorf("storage policy %q does not match configured manifest root policy %q", delta.StoragePolicy, cfg.ManifestRoot.StoragePolicy)
 	}
+	if _, err := backendRootStoragePolicy(delta.StoragePolicy); err != nil {
+		return err
+	}
 	if delta.Identity != identity {
 		return fmt.Errorf("identity %+v does not match manifest identity %+v", delta.Identity, identity)
 	}
@@ -725,9 +738,9 @@ func validateColumnPublishPreparedAssets(prepared ColumnPublishPreparedAssets) e
 	if prepared.CommandBytes < 0 || prepared.RowRemainderBytes < 0 || prepared.ColumnPayloadBytes < 0 {
 		return errors.New("collections: column publish prepared byte counts cannot be negative")
 	}
-	for _, asset := range prepared.Assets {
+	for i, asset := range prepared.Assets {
 		if err := validateColumnPreparedAssetForPlan(asset); err != nil {
-			return err
+			return fmt.Errorf("collections: column publish prepared asset[%d]: %w", i, err)
 		}
 	}
 	if _, err := checkedSumColumnPreparedAssetBytes(prepared.Assets); err != nil {
@@ -736,7 +749,7 @@ func validateColumnPublishPreparedAssets(prepared ColumnPublishPreparedAssets) e
 	return nil
 }
 
-func validateColumnPublishDurabilityClosure(closure ColumnPublishDurabilityClosure) error {
+func validateColumnPublishDurabilityClosure(closure ColumnPublishDurabilityClosure, cfg ColumnStoreConfig) error {
 	if closure.RequiredAssets < 0 || closure.RequiredBytes < 0 {
 		return errors.New("collections: column publish closure counts cannot be negative")
 	}
@@ -750,12 +763,12 @@ func validateColumnPublishDurabilityClosure(closure ColumnPublishDurabilityClosu
 	if got != closure.RequiredBytes {
 		return fmt.Errorf("collections: column publish closure required bytes=%d prepared bytes=%d", closure.RequiredBytes, got)
 	}
-	if closure.RequiredAssets != 0 && (!closure.FlushRequired || !closure.SyncRequired) {
+	if cfg.ProfileSupport == ColumnStoreProfileDurableOnly && closure.RequiredAssets != 0 && (!closure.FlushRequired || !closure.SyncRequired) {
 		return errors.New("collections: durable column publish closure requires asset flush and sync")
 	}
-	for _, asset := range closure.PreparedAssets {
+	for i, asset := range closure.PreparedAssets {
 		if err := validateColumnPreparedAssetForPlan(asset); err != nil {
-			return err
+			return fmt.Errorf("collections: column publish closure asset[%d]: %w", i, err)
 		}
 	}
 	return nil
@@ -765,10 +778,26 @@ func validateColumnPublishClosureMatchesPrepared(prepared ColumnPublishPreparedA
 	if len(closure.PreparedAssets) != len(prepared.Assets) {
 		return fmt.Errorf("collections: column publish closure prepared assets=%d manifest prepared assets=%d", len(closure.PreparedAssets), len(prepared.Assets))
 	}
+	matchesOrder := true
 	for i := range prepared.Assets {
 		if closure.PreparedAssets[i] != prepared.Assets[i] {
-			return fmt.Errorf("collections: column publish closure prepared asset %d does not match manifest prepared asset", i)
+			matchesOrder = false
+			break
 		}
+	}
+	if matchesOrder {
+		return nil
+	}
+	preparedCounts := make(map[ColumnPreparedAsset]int, len(prepared.Assets))
+	for _, asset := range prepared.Assets {
+		preparedCounts[asset]++
+	}
+	for i, asset := range closure.PreparedAssets {
+		count := preparedCounts[asset]
+		if count == 0 {
+			return fmt.Errorf("collections: column publish closure prepared asset %d does not match manifest prepared assets", i)
+		}
+		preparedCounts[asset] = count - 1
 	}
 	return nil
 }
@@ -807,19 +836,11 @@ func validateColumnAssetRefForPlan(ref ColumnAssetRef) error {
 	return nil
 }
 
-func sumColumnPreparedAssetBytes(assets []ColumnPreparedAsset) int64 {
-	total, err := checkedSumColumnPreparedAssetBytes(assets)
-	if err != nil {
-		return -1
-	}
-	return total
-}
-
 func checkedSumColumnPreparedAssetBytes(assets []ColumnPreparedAsset) (int64, error) {
 	var total int64
-	for _, asset := range assets {
+	for i, asset := range assets {
 		if asset.Bytes > math.MaxInt64-total {
-			return 0, errors.New("collections: column publish prepared asset bytes overflow")
+			return 0, fmt.Errorf("collections: column publish prepared asset[%d] bytes overflow", i)
 		}
 		total += asset.Bytes
 	}
@@ -832,6 +853,14 @@ func cloneColumnPublishPreparedAssets(prepared ColumnPublishPreparedAssets) Colu
 	}
 	prepared.Assets = cloneColumnPreparedAssets(prepared.Assets)
 	return prepared
+}
+
+func cloneColumnManifestIdentityPtr(identity *ColumnManifestIdentity) *ColumnManifestIdentity {
+	if identity == nil {
+		return nil
+	}
+	copied := *identity
+	return &copied
 }
 
 func cloneColumnPreparedAssets(assets []ColumnPreparedAsset) []ColumnPreparedAsset {
