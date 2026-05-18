@@ -3,6 +3,7 @@ package collections
 import (
 	"encoding/json"
 	"errors"
+	"math"
 	"strings"
 	"testing"
 
@@ -398,6 +399,36 @@ func TestColumnPublishPlanRejectsNegativeManifestBytesM10A(t *testing.T) {
 	}
 	if plan.Enabled {
 		t.Fatalf("negative manifest bytes returned enabled plan: %+v", plan)
+	}
+}
+
+func TestColumnPublishPlanRejectsPreparedAssetByteOverflowM10A(t *testing.T) {
+	asset := testColumnPublishPreparedAssetM10A()
+	hugeAsset := asset
+	hugeAsset.Ref.FileID = 8
+	hugeAsset.Ref.Length = math.MaxInt64
+	hugeAsset.Bytes = math.MaxInt64
+	oneByteAsset := asset
+	oneByteAsset.Ref.FileID = 9
+	oneByteAsset.Ref.Length = 1
+	oneByteAsset.Bytes = 1
+
+	identity := ColumnManifestIdentity{Generation: 9, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0xbeefcaf1}
+	input := testColumnPublishPlanInputM10A(identity, hugeAsset)
+	input.Hooks.PrepareAssets = func(ColumnPublishAssetPrepareInput) (ColumnPublishPreparedAssets, error) {
+		return ColumnPublishPreparedAssets{
+			Assets:             []ColumnPreparedAsset{hugeAsset, oneByteAsset},
+			RowCount:           2,
+			ColumnPayloadBytes: math.MaxInt64,
+		}, nil
+	}
+
+	plan, err := BuildColumnPublishPlan(input)
+	if err == nil || !strings.Contains(err.Error(), "prepared asset bytes overflow") {
+		t.Fatalf("BuildColumnPublishPlan err=%v want prepared asset byte overflow", err)
+	}
+	if plan.Enabled {
+		t.Fatalf("overflowing prepared bytes returned enabled plan: %+v", plan)
 	}
 }
 
