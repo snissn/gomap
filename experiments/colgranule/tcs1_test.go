@@ -51,6 +51,19 @@ func TestMemoryColumnAssetStoreValidatesChecksumAfterLookup(t *testing.T) {
 	}
 }
 
+func TestMemoryColumnAssetStoreVerifyRecomputesChecksum(t *testing.T) {
+	store := NewMemoryColumnAssetStore()
+	payload := []byte("payload")
+	ref, err := store.PutOwned(ColumnAssetKindTCS1PartImage, payload)
+	if err != nil {
+		t.Fatalf("PutOwned: %v", err)
+	}
+	payload[0] = 'P'
+	if err := store.Verify(ref); err == nil || !strings.Contains(err.Error(), "checksum") {
+		t.Fatalf("Verify err=%v want checksum mismatch", err)
+	}
+}
+
 func TestMemoryColumnAssetStoreValidatesLengthAfterAddressLookup(t *testing.T) {
 	store := NewMemoryColumnAssetStore()
 	ref, err := store.Put(ColumnAssetKindTCS1PartImage, []byte("payload"))
@@ -206,6 +219,20 @@ func TestSegmentColumnAssetStoreCloseWaitsForActiveVerifyIO(t *testing.T) {
 	if err := store.Verify(ref); err == nil || !strings.Contains(err.Error(), "closed segment asset store") {
 		t.Fatalf("Verify after Close err=%v want closed segment asset store", err)
 	}
+}
+
+func TestSegmentColumnAssetStoreEndFileIOPanicsWithoutBegin(t *testing.T) {
+	store, err := OpenSegmentColumnAssetStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("OpenSegmentColumnAssetStore: %v", err)
+	}
+	defer store.Close()
+	defer func() {
+		if recovered := recover(); recovered == nil {
+			t.Fatal("endFileIO without beginFileIO did not panic")
+		}
+	}()
+	store.endFileIO()
 }
 
 func waitForSegmentStoreClosing(t *testing.T, store *SegmentColumnAssetStore) {

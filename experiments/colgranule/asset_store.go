@@ -170,8 +170,28 @@ func (s *MemoryColumnAssetStore) ReadRange(ref ColumnAssetRef, offset int64, len
 }
 
 func (s *MemoryColumnAssetStore) Verify(ref ColumnAssetRef) error {
-	_, err := s.Read(ref)
-	return err
+	if s == nil {
+		return fmt.Errorf("colgranule: nil memory asset store")
+	}
+	if err := validateColumnAssetRef(ref); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	asset, ok := s.assets[ref.key()]
+	s.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("colgranule: missing asset ref file=%d offset=%d", ref.FileID, ref.Offset)
+	}
+	if asset.kind != ref.Kind {
+		return fmt.Errorf("colgranule: asset kind=%s want %s", asset.kind, ref.Kind)
+	}
+	if asset.length != ref.Length {
+		return fmt.Errorf("colgranule: asset length=%d want %d", asset.length, ref.Length)
+	}
+	if checksum := crc32.ChecksumIEEE(asset.payload); checksum != ref.Checksum {
+		return fmt.Errorf("colgranule: asset ref checksum=%08x want %08x", checksum, ref.Checksum)
+	}
+	return nil
 }
 
 type SegmentColumnAssetStore struct {
@@ -447,6 +467,9 @@ func (s *SegmentColumnAssetStore) beginFileIO() (*os.File, uint32, int64, error)
 func (s *SegmentColumnAssetStore) endFileIO() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.activeFileIO <= 0 {
+		panic("colgranule: segment asset store file IO ended without matching begin")
+	}
 	s.activeFileIO--
 	if s.activeFileIO == 0 && s.fileIOCond != nil {
 		s.fileIOCond.Broadcast()
