@@ -2169,7 +2169,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 	}
 	idxGen := db.idx.Load()
 	if idxGen == nil {
-		err = errors.New("missing index")
+		err = errOrderedRootPublishMissingIndex
 		return 0, nil, err
 	}
 
