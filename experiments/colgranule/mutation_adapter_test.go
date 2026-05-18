@@ -356,8 +356,11 @@ func TestColumnMutationAdapterAppliesReplayProfileOptionM9D(t *testing.T) {
 		StoreOptions:  opts,
 		Dictionaries:  ds.Dictionaries,
 		ReplayProfile: profile,
-	}); err == nil || !strings.Contains(err.Error(), `requires ColumnWorkspaceOptions.ManifestSyncMode="benchmark_no_sync", got "durable"`) {
-		t.Fatalf("NewColumnMutationAdapter benchmark profile on durable workspace err=%v want exact sync-mode rejection", err)
+	}); err == nil ||
+		!strings.Contains(err.Error(), "requires ColumnWorkspaceOptions.ManifestSyncMode=") ||
+		!strings.Contains(err.Error(), string(ColumnWorkspaceManifestSyncDisabledForBenchmark)) ||
+		!strings.Contains(err.Error(), string(ColumnWorkspaceManifestSyncDurable)) {
+		t.Fatalf("NewColumnMutationAdapter benchmark profile on durable workspace err=%v want sync-mode rejection", err)
 	}
 
 	if _, err := NewColumnMutationAdapter(durableWorkspace, ColumnMutationAdapterOptions{
