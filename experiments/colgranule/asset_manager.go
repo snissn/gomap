@@ -27,6 +27,7 @@ type ColumnAssetManager struct {
 	publishEpoch   uint64
 	nextAttemptID  uint64
 	syncedAttempt  map[uint64]uint64
+	syncedRefs     map[uint64][]ColumnAssetRef
 	refFailedAt    map[ColumnAssetRef]uint64
 }
 
@@ -88,6 +89,7 @@ func NewColumnAssetManager(store ColumnAssetStore) (*ColumnAssetManager, error) 
 		publishFailed:  make(map[ColumnAssetRef]string),
 		rewriteDebt:    make(map[ColumnAssetRef]string),
 		syncedAttempt:  make(map[uint64]uint64),
+		syncedRefs:     make(map[uint64][]ColumnAssetRef),
 		refFailedAt:    make(map[ColumnAssetRef]uint64),
 	}, nil
 }
@@ -338,10 +340,14 @@ func (m *ColumnAssetManager) SyncPublishClosure(closure ColumnAssetPublishClosur
 	if m.syncedAttempt == nil {
 		m.syncedAttempt = make(map[uint64]uint64)
 	}
+	if m.syncedRefs == nil {
+		m.syncedRefs = make(map[uint64][]ColumnAssetRef)
+	}
 	m.nextAttemptID++
 	attempt := m.nextAttemptID
 	epoch := m.publishEpoch
 	m.syncedAttempt[attempt] = epoch
+	m.syncedRefs[attempt] = columnPreparedAssetRefs(verified.PreparedAssets)
 	m.mu.Unlock()
 	return ColumnAssetSyncedPublishClosure{
 		closure: verified,
@@ -377,10 +383,13 @@ func (m *ColumnAssetManager) MarkPublishSucceeded(synced ColumnAssetSyncedPublis
 	}
 	for _, asset := range synced.closure.PreparedAssets {
 		if m.refFailedAt[asset.Ref] > epoch {
+			delete(m.syncedAttempt, synced.attempt)
+			delete(m.syncedRefs, synced.attempt)
 			return fmt.Errorf("colgranule: synced publish closure predates a later publish failure for ref %+v", asset.Ref)
 		}
 	}
 	delete(m.syncedAttempt, synced.attempt)
+	delete(m.syncedRefs, synced.attempt)
 	for _, asset := range synced.closure.PreparedAssets {
 		if failedReason, ok := m.publishFailed[asset.Ref]; ok {
 			_, operatorLocked := m.operatorLocked[asset.Ref]
@@ -415,6 +424,12 @@ func (m *ColumnAssetManager) MarkPublishFailed(prepared []ColumnPreparedAsset, r
 	if m.refFailedAt == nil {
 		m.refFailedAt = make(map[ColumnAssetRef]uint64)
 	}
+	for attempt, refs := range m.syncedRefs {
+		if columnAssetRefsOverlapPrepared(refs, prepared) {
+			delete(m.syncedAttempt, attempt)
+			delete(m.syncedRefs, attempt)
+		}
+	}
 	for _, asset := range prepared {
 		m.refFailedAt[asset.Ref] = m.publishEpoch
 		if _, publishOwned := m.publishFailed[asset.Ref]; publishOwned {
@@ -427,6 +442,28 @@ func (m *ColumnAssetManager) MarkPublishFailed(prepared []ColumnPreparedAsset, r
 		m.publishFailed[asset.Ref] = reason
 	}
 	return nil
+}
+
+func columnPreparedAssetRefs(prepared []ColumnPreparedAsset) []ColumnAssetRef {
+	if len(prepared) == 0 {
+		return nil
+	}
+	refs := make([]ColumnAssetRef, len(prepared))
+	for i, asset := range prepared {
+		refs[i] = asset.Ref
+	}
+	return refs
+}
+
+func columnAssetRefsOverlapPrepared(refs []ColumnAssetRef, prepared []ColumnPreparedAsset) bool {
+	for _, ref := range refs {
+		for _, asset := range prepared {
+			if ref == asset.Ref {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (m *ColumnAssetManager) PlanReclamation(reachability ColumnAssetReachabilityPlan) ColumnAssetManagerReclamationPlan {
