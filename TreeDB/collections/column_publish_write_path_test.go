@@ -258,6 +258,28 @@ func TestColumnStoreCommandWALReplayPublishesManifestM10B(t *testing.T) {
 	}
 }
 
+func TestColumnStorePublishRejectsMissingCommandWALIntentM10B(t *testing.T) {
+	dir := prepareColumnStoreCommandWALDirM10B(t)
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+
+	col := openColumnStoreCollectionM10B(t, d)
+	input := columnWritePublishInput{
+		meta:      col.meta,
+		operation: ColumnPublishOperationInsert,
+	}
+	if _, _, _, _, err := col.publishRootDeltaGroupMaybeColumn(nil, input); !errors.Is(err, backenddb.ErrCommandWALContextMissingFrame) {
+		t.Fatalf("publishRootDeltaGroupMaybeColumn error=%v, want ErrCommandWALContextMissingFrame", err)
+	} else if errors.Is(err, backenddb.ErrCommandWALUnsupported) {
+		t.Fatalf("publishRootDeltaGroupMaybeColumn error=%v must not look like ErrCommandWALUnsupported", err)
+	}
+	if _, _, _, _, err := col.publishRootDeltaBatchGroupMaybeColumn(nil, nil, input); !errors.Is(err, backenddb.ErrCommandWALContextMissingFrame) {
+		t.Fatalf("publishRootDeltaBatchGroupMaybeColumn error=%v, want ErrCommandWALContextMissingFrame", err)
+	} else if errors.Is(err, backenddb.ErrCommandWALUnsupported) {
+		t.Fatalf("publishRootDeltaBatchGroupMaybeColumn error=%v must not look like ErrCommandWALUnsupported", err)
+	}
+}
+
 func TestAppendColumnManifestRootPublishBaseDeduplicatesM10B(t *testing.T) {
 	columnRootName := collectionColumnManifestRootName("events")
 	rootNames := []string{collectionPrimaryRootName("events"), columnRootName}

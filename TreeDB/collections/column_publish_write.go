@@ -48,7 +48,7 @@ func (c *Collection) publishRootDeltaGroupMaybeColumn(ordered []backenddb.Ordere
 		return newSystemRoot, rootIDs, input.meta, input.rootNames, err
 	}
 	if input.commandWALIntent == nil {
-		return 0, nil, CollectionMeta{}, nil, fmt.Errorf("%w: column_store publish requires command WAL intent", backenddb.ErrCommandWALUnsupported)
+		return 0, nil, CollectionMeta{}, nil, fmt.Errorf("%w: column_store publish requires command WAL intent", backenddb.ErrCommandWALContextMissingFrame)
 	}
 	columnRootName := collectionColumnManifestRootName(input.meta.Name)
 	columnBaseRoot := uint64(0)
@@ -98,7 +98,7 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 		return newSystemRoot, rootIDs, input.meta, input.rootNames, err
 	}
 	if input.commandWALIntent == nil {
-		return 0, nil, CollectionMeta{}, nil, fmt.Errorf("%w: column_store publish requires command WAL intent", backenddb.ErrCommandWALUnsupported)
+		return 0, nil, CollectionMeta{}, nil, fmt.Errorf("%w: column_store publish requires command WAL intent", backenddb.ErrCommandWALContextMissingFrame)
 	}
 	columnRootName := collectionColumnManifestRootName(input.meta.Name)
 	columnBaseRoot := uint64(0)
