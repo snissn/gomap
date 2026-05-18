@@ -1974,7 +1974,7 @@ func TestRunBenchmark_ContentionAfterSnapshotsBeforeAllocsPostProcessing(t *test
 		},
 		writeRuntimeProfileDeltaProfile: func(basePath, afterPath, outPath string) (bool, error) {
 			events = append(events, filepath.Base(outPath))
-			return true, nil
+			return false, nil
 		},
 	}
 
