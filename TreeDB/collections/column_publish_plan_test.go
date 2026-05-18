@@ -208,7 +208,9 @@ func TestColumnManifestRootDeltaPublishInputsValidateStoredIdentityRecordM10B(t 
 		t.Fatalf("OrderedRootDeltaPublishInput err=%v want identity record mismatch", err)
 	}
 	if _, cleanup, err := delta.OrderedRootDeltaBatchPublishInput(); err == nil || !strings.Contains(err.Error(), "identity record") {
-		cleanup()
+		if cleanup != nil {
+			cleanup()
+		}
 		t.Fatalf("OrderedRootDeltaBatchPublishInput err=%v want identity record mismatch", err)
 	}
 }
@@ -235,15 +237,19 @@ func TestColumnManifestRootDeltaPublishInputsPublishStoredIdentityRecordM10B(t *
 		t.Fatalf("OrderedRootDeltaBatchPublishInput: %v", err)
 	}
 	defer cleanup()
-	var batchRecords [][]byte
+	var (
+		batchKeys    []string
+		batchRecords [][]byte
+	)
 	if err := batched.Delta.Replay(func(entry batch.Entry) error {
+		batchKeys = append(batchKeys, string(entry.Key))
 		batchRecords = append(batchRecords, append([]byte(nil), entry.Value...))
 		return nil
 	}); err != nil {
 		t.Fatalf("Replay delta batch: %v", err)
 	}
-	if len(batchRecords) != 1 || !bytes.Equal(batchRecords[0], delta.IdentityRecord[:]) {
-		t.Fatalf("delta batch identity records=%x want %x", batchRecords, delta.IdentityRecord)
+	if len(batchRecords) != 1 || len(batchKeys) != 1 || batchKeys[0] != columnManifestIdentityRecordKey || !bytes.Equal(batchRecords[0], delta.IdentityRecord[:]) {
+		t.Fatalf("delta batch keys=%v identity records=%x want key=%q value=%x", batchKeys, batchRecords, columnManifestIdentityRecordKey, delta.IdentityRecord)
 	}
 }
 

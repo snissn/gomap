@@ -183,8 +183,62 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 
 func (c *Collection) columnPublishRootDescriptorPreflight(input columnWritePublishInput, rootNames []string, baseRootIDs map[string]uint64) backenddb.OrderedRootGroupPreflight {
 	return func() error {
-		return c.validateRootDescriptorSystemDeltaForMeta(input.meta, input.baseCommitSeq, input.baseSystemRoot, rootNames, baseRootIDs)
+		return c.validateColumnPublishRootDescriptorPreflight(input.meta, input.baseCommitSeq, input.baseSystemRoot, rootNames, baseRootIDs)
 	}
+}
+
+func (c *Collection) validateColumnPublishRootDescriptorPreflight(meta CollectionMeta, expectedCommitSeq, expectedSystemRoot uint64, rootNames []string, baseRootIDs map[string]uint64) error {
+	if c == nil || c.db == nil {
+		return backenddb.ErrClosed
+	}
+	for _, rootName := range rootNames {
+		if _, ok := baseRootIDs[rootName]; !ok {
+			return fmt.Errorf("collections: missing base root for collection %q root %q", meta.Name, rootName)
+		}
+	}
+	currentCommitSeq, currentSystemRoot := dbCommitSeqAndSystemRoot(c.db)
+	if currentSystemRoot == expectedSystemRoot && currentCommitSeq == expectedCommitSeq {
+		return nil
+	}
+	current := c.db.AcquireSnapshot()
+	if current == nil {
+		return backenddb.ErrClosed
+	}
+	defer func() { _ = current.Close() }()
+	catalog, err := loadCollectionCatalog(current, meta.Name)
+	if err != nil {
+		return err
+	}
+	if catalog == nil {
+		return errCollectionNotFound
+	}
+	if !sameCollectionMetaIgnoringColumnManifestProgress(catalog.meta, meta) {
+		return fmt.Errorf("collections: concurrent schema modification detected for %q", meta.Name)
+	}
+	for _, rootName := range rootNames {
+		want := baseRootIDs[rootName]
+		if got := catalog.rootID(rootName); got != want {
+			return errConcurrentRootModification(meta.Name, rootName)
+		}
+	}
+	return nil
+}
+
+func sameCollectionMetaIgnoringColumnManifestProgress(a, b CollectionMeta) bool {
+	return sameCollectionMeta(clearColumnManifestProgress(a), clearColumnManifestProgress(b))
+}
+
+func clearColumnManifestProgress(meta CollectionMeta) CollectionMeta {
+	copied := copyCollectionMeta(meta)
+	if copied.Options.ColumnStore == nil {
+		return copied
+	}
+	cfg := *copied.Options.ColumnStore
+	cfg.ActiveManifest = nil
+	cfg.RecoveryAuthoritativeManifest = nil
+	cfg.RecoveryAuthoritativeAppliedCommandLSN = 0
+	copied.Options.ColumnStore = &cfg
+	return copied
 }
 
 func combineOrderedRootGroupPreflight(first, second backenddb.OrderedRootGroupPreflight) backenddb.OrderedRootGroupPreflight {
@@ -330,16 +384,16 @@ func appendColumnManifestRootPublishBase(rootNames []string, baseRootIDs map[str
 	nextRootNames := make([]string, 0, len(rootNames)+1)
 	nextRootNames = append(nextRootNames, rootNames...)
 	nextRootNames = append(nextRootNames, columnRootName)
-	nextBaseRootIDs := make(map[string]uint64, len(baseRootIDs)+1)
-	for rootName, rootID := range baseRootIDs {
-		nextBaseRootIDs[rootName] = rootID
+	nextBaseRootIDs := cloneUint64Map(baseRootIDs)
+	if nextBaseRootIDs == nil {
+		nextBaseRootIDs = make(map[string]uint64, 1)
 	}
 	nextBaseRootIDs[columnRootName] = columnBaseRoot
 	return nextRootNames, nextBaseRootIDs, nil
 }
 
-func columnPublishPlanLSNMismatchError(meta CollectionMeta, expected, actual uint64) error {
-	return fmt.Errorf("collections: column publish plan LSN mismatch collection=%q expected=%d actual=%d", meta.Name, expected, actual)
+func columnPublishPlanLSNMismatchError(meta CollectionMeta, ctxLSN, planLSN uint64) error {
+	return fmt.Errorf("collections: column publish plan LSN mismatch collection=%q ctx_lsn=%d plan_lsn=%d", meta.Name, ctxLSN, planLSN)
 }
 
 func validateColumnPublishPlanRootForMeta(meta CollectionMeta, plan ColumnPublishPlan) (string, error) {
