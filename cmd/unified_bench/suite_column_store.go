@@ -748,7 +748,6 @@ func startColumnStoreSuiteRuntimeProfiles(cfg BenchConfig) (func() error, error)
 		}
 		runtime.SetBlockProfileRate(rate)
 		cleanups = append(cleanups, func() error {
-			runtime.SetBlockProfileRate(0)
 			prof := pprof.Lookup("block")
 			var writeErr error
 			if prof == nil {
@@ -756,6 +755,9 @@ func startColumnStoreSuiteRuntimeProfiles(cfg BenchConfig) (func() error, error)
 			} else {
 				writeErr = prof.WriteTo(f, 0)
 			}
+			// The runtime exposes no previous block profile rate, so the suite
+			// writes the active profile before returning sampling to off.
+			runtime.SetBlockProfileRate(0)
 			return errors.Join(writeErr, f.Close())
 		})
 	}
@@ -876,7 +878,7 @@ func runColumnStoreSuiteQueriesProfiled(cfg BenchConfig, collection *collections
 			cleanup(allocBasePath, blockBasePath, mutexBasePath)
 			return nil, nil, nil, fmt.Errorf("column_store: allocsprofile snapshot: %w", snapErr)
 		}
-		allocPath := fmt.Sprintf("%s_%s_%s.pprof", cfg.AllocsProfile, columnStoreSuiteBenchTestName, columnStoreSuiteBenchDBName)
+		allocPath := fmt.Sprintf("%s_%s_%s.pprof", strings.TrimSpace(cfg.AllocsProfile), columnStoreSuiteBenchTestName, columnStoreSuiteBenchDBName)
 		deltaErr := profileHooks.writeAllocsDeltaProfile(allocBasePath, allocAfterPath, allocPath)
 		cleanup(allocBasePath, allocAfterPath)
 		if deltaErr != nil {

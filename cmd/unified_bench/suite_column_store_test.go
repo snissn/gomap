@@ -718,6 +718,40 @@ func TestColumnStoreSuiteProfiledQueriesSkipWhitespaceOnlyRuntimeProfilePathsM11
 	assertColumnStoreParityCoverageM11A(t, parity)
 }
 
+func TestColumnStoreSuiteProfiledQueriesTrimAllocsDeltaPathM11A(t *testing.T) {
+	collection, events, rawHashes := newColumnStoreSuiteTestCollectionM11A(t, 8, 4)
+	dir := t.TempDir()
+	allocsPrefix := filepath.Join(dir, "allocs")
+	var gotOutPath string
+	profileHooks := &benchmarkProfileHooks{
+		writeAllocsSnapshotTemp: func(prefix string) (string, error) {
+			path := filepath.Join(dir, prefix+".pprof")
+			return path, os.WriteFile(path, []byte("snapshot"), 0o644)
+		},
+		writeAllocsDeltaProfile: func(basePath, afterPath, outPath string) error {
+			gotOutPath = outPath
+			return os.WriteFile(outPath, []byte("delta"), 0o644)
+		},
+	}
+	queries, parity, parityErr, err := runColumnStoreSuiteQueriesProfiled(BenchConfig{
+		AllocsProfile:     " \t" + allocsPrefix + "\t ",
+		AllocsProfileRate: 1,
+		profileHooks:      profileHooks,
+	}, collection, len(events), rawHashes, columnStorePathRowStoreBaseline)
+	if err != nil || parityErr != nil {
+		t.Fatalf("profiled queries failed: err=%v parityErr=%v", err, parityErr)
+	}
+	assertColumnStoreQueryMetricCoverageM11A(t, queries)
+	assertColumnStoreParityCoverageM11A(t, parity)
+	wantOutPath := fmt.Sprintf("%s_%s_%s.pprof", allocsPrefix, columnStoreSuiteBenchTestName, columnStoreSuiteBenchDBName)
+	if gotOutPath != wantOutPath {
+		t.Fatalf("allocs delta out path=%q want %q", gotOutPath, wantOutPath)
+	}
+	if _, err := os.Stat(wantOutPath); err != nil {
+		t.Fatalf("expected trimmed allocs delta artifact: %v", err)
+	}
+}
+
 func TestColumnStoreSuiteArtifactsTrimRuntimeProfilePathsM11A(t *testing.T) {
 	dir := t.TempDir()
 	cpuPath := filepath.Join(dir, "cpu")
