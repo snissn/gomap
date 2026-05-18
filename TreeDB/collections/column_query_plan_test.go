@@ -458,6 +458,31 @@ func TestColumnSkipScanM11BPrunesOnlyLeftPrefixMarks(t *testing.T) {
 		t.Fatalf("range-then-later skipped=%v want none", rangeThenLaterColumn.SkippedMarks)
 	}
 
+	spanningEqualityPrefix := PlanColumnSkipScan([]ColumnSkipScanPredicate{
+		{
+			Position: 0,
+			Lower:    ColumnSkipScanBound{Key: []byte{0x01}, Inclusive: true},
+			Upper:    ColumnSkipScanBound{Key: []byte{0x01}, Inclusive: true},
+		},
+		{
+			Position: 1,
+			Lower:    ColumnSkipScanBound{Key: []byte{0x05}, Inclusive: true},
+			Upper:    ColumnSkipScanBound{Key: []byte{0x05}, Inclusive: true},
+		},
+	}, []ColumnSkipScanMark{
+		{Name: "spans-first-column", Rows: 10, MinKeys: [][]byte{{0x01}, {0x01}}, MaxKeys: [][]byte{{0x02}, {0x01}}},
+		{Name: "shares-first-column", Rows: 10, MinKeys: [][]byte{{0x01}, {0x01}}, MaxKeys: [][]byte{{0x01}, {0x01}}},
+	})
+	if got, want := spanningEqualityPrefix.LeftPrefixColumns, 2; got != want {
+		t.Fatalf("spanning-equality-prefix left prefix=%d want %d", got, want)
+	}
+	if got, want := spanningEqualityPrefix.ScheduledMarks, []int{0}; !equalInts(got, want) {
+		t.Fatalf("spanning-equality-prefix scheduled=%v want %v", got, want)
+	}
+	if got, want := spanningEqualityPrefix.SkippedMarks, []int{1}; !equalInts(got, want) {
+		t.Fatalf("spanning-equality-prefix skipped=%v want %v", got, want)
+	}
+
 	highPositionOnly := PlanColumnSkipScan([]ColumnSkipScanPredicate{{
 		Position: 1_000_000,
 		Lower:    ColumnSkipScanBound{Key: []byte{0x01}, Inclusive: true},
