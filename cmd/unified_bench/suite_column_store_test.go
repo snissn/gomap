@@ -154,8 +154,21 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 			t.Fatalf("parity %s has zero hash: %+v", name, parity)
 		}
 	}
-	if report.ByteAccounting.CommandWALBytes == 0 {
+	if report.ByteAccounting.CommandWALBytesBeforeCheckpoint == 0 {
 		t.Fatalf("expected command WAL bytes in byte accounting: %+v", report.ByteAccounting)
+	}
+	if !strings.Contains(string(data), `"command_wal_bytes_before_checkpoint"`) {
+		t.Fatalf("column store JSON missing before-checkpoint command WAL label:\n%s", data)
+	}
+	if strings.Contains(string(data), `"command_wal_bytes":`) {
+		t.Fatalf("column store JSON contains ambiguous command WAL label:\n%s", data)
+	}
+	columnMarkdown, err := os.ReadFile(filepath.Join(dir, "column_store_results.md"))
+	if err != nil {
+		t.Fatalf("read column_store_results.md: %v", err)
+	}
+	if !strings.Contains(string(columnMarkdown), "command_wal_bytes_before_checkpoint") {
+		t.Fatalf("column store markdown missing before-checkpoint command WAL label:\n%s", columnMarkdown)
 	}
 	if report.ByteAccounting.ManifestControlBytes == 0 || report.ByteAccounting.DBTotalBytes == 0 || report.ByteAccounting.DBTotalFiles == 0 {
 		t.Fatalf("expected measured manifest/control and DB byte accounting: %+v", report.ByteAccounting)

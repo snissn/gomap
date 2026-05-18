@@ -300,6 +300,42 @@ func TestPublishOrderedRootDeltaGroupWithCommandWALContextRootBuilderFailureClos
 	}
 }
 
+func TestPublishOrderedRootDeltaBatchGroupWithCommandWALContextRootBuilderFailureClosesReturnedDeltas(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	defer db.Close()
+
+	delta := batch.New(nil, orderedRootDeltaBatchInlineThreshold)
+	if err := delta.Set([]byte("root/context-batch-fail"), []byte("value")); err != nil {
+		t.Fatalf("delta set: %v", err)
+	}
+	wantErr := errors.New("context batch root builder failure after command append")
+	_, _, err := db.PublishOrderedRootDeltaBatchGroupWithCommandWALContextRootBuilderAndSystemDeltaBuilder(
+		nil,
+		mustRawKVCommandWALIntent(t, db, "cmd/context-batch-fail", "1"),
+		func(ctx CommandWALPublishContext) ([]OrderedRootDeltaBatchPublishInput, error) {
+			if ctx.AppliedCommandLSN == 0 {
+				t.Fatalf("AppliedCommandLSN=0 in context builder")
+			}
+			return []OrderedRootDeltaBatchPublishInput{{Delta: delta}}, wantErr
+		},
+		func(ctx CommandWALPublishContext, rootIDs []uint64) (iterator.UnsafeIterator, error) {
+			t.Fatalf("system builder should not run after context batch root builder failure")
+			return nil, nil
+		},
+	)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("publish error=%v, want %v", err, wantErr)
+	}
+	if err := delta.Set([]byte("after-close"), []byte("value")); !errors.Is(err, batch.ErrBatchClosed) {
+		t.Fatalf("delta Set after failed context builder error=%v, want ErrBatchClosed", err)
+	}
+	if err := db.CheckCommandWALPublishReady(); !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("CheckCommandWALPublishReady error=%v, want ErrRecoveryRequired", err)
+	}
+}
+
 func TestPublishOrderedRootIterator_WarmSparseDelta_PreservesPages(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(Options{Dir: dir})
