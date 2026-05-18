@@ -177,8 +177,8 @@ func TestColumnStoreUpdateCallbacksRequireCommandWALBeforeInvocationM10B(t *test
 		callbackCalled = true
 		return current, true, nil
 	})
-	if !errors.Is(err, backenddb.ErrCommandWALUnsupported) {
-		t.Fatalf("Update error=%v, want ErrCommandWALUnsupported", err)
+	if !errors.Is(err, backenddb.ErrCommandWALRejected) {
+		t.Fatalf("Update error=%v, want ErrCommandWALRejected", err)
 	}
 	if matched || modified {
 		t.Fatalf("Update matched=%v modified=%v, want false/false on rejected write", matched, modified)
@@ -195,8 +195,8 @@ func TestColumnStoreUpdateCallbacksRequireCommandWALBeforeInvocationM10B(t *test
 			return current, true, nil
 		},
 	}})
-	if !errors.Is(err, backenddb.ErrCommandWALUnsupported) {
-		t.Fatalf("UpdateBatch error=%v, want ErrCommandWALUnsupported", err)
+	if !errors.Is(err, backenddb.ErrCommandWALRejected) {
+		t.Fatalf("UpdateBatch error=%v, want ErrCommandWALRejected", err)
 	}
 	if len(results) != 0 {
 		t.Fatalf("UpdateBatch results len=%d, want 0 on rejected write", len(results))
