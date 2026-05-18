@@ -188,6 +188,12 @@ func TestColumnWorkspaceManifestSyncModeControlsFsyncM9D(t *testing.T) {
 	if err := relaxed.SavePreparedAssetRegistry(1, 1, nil); err != nil {
 		t.Fatalf("SavePreparedAssetRegistry relaxed: %v", err)
 	}
+	ds := syntheticJSONBenchDataset(8)
+	opts, err := JSONBenchColumnPartOptions(ds, 4)
+	if err != nil {
+		t.Fatalf("JSONBenchColumnPartOptions: %v", err)
+	}
+	_ = publishJSONBenchPartRows(t, relaxed, opts, ds, 91, 0, ds.Rows)
 	if syncs != 0 {
 		t.Fatalf("relaxed manifest syncs=%d want 0", syncs)
 	}
