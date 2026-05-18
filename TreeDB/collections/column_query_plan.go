@@ -121,7 +121,7 @@ func (c *Collection) PlanColumnQuery(req ColumnQueryPlanRequest) (ColumnQueryPla
 
 func planColumnQueryForCatalog(catalog *collectionCatalog, identity ColumnStoreCacheIdentity, identityOK bool, req ColumnQueryPlanRequest) ColumnQueryPlan {
 	diag := ColumnQueryPlanDiagnostics{
-		CandidatePlans:          columnQueryPlannerCandidateCount(req),
+		CandidatePlans:          columnQueryPlannerCandidateCount(catalog, req),
 		ProjectedColumns:        len(req.ProjectedColumns),
 		Predicates:              len(req.Predicates),
 		RecoveryAuthoritative:   columnQueryManifestRecoveryAuthoritative(identity, identityOK),
@@ -385,7 +385,7 @@ func columnQueryManifestRecoveryAuthoritative(identity ColumnStoreCacheIdentity,
 		identity.RecoveryAuthoritativeGeneration == identity.ManifestGeneration
 }
 
-func columnQueryPlannerCandidateCount(req ColumnQueryPlanRequest) int {
+func columnQueryPlannerCandidateCount(catalog *collectionCatalog, req ColumnQueryPlanRequest) int {
 	if req.ForceKind != "" {
 		return 1
 	}
@@ -393,7 +393,7 @@ func columnQueryPlannerCandidateCount(req ColumnQueryPlanRequest) int {
 		return req.Capabilities.PlannerCandidateBudget
 	}
 	count := 1 // row-store fallback
-	count += len(req.CandidateIndexColumns)
+	count += columnQueryBTreeCandidateCount(catalog, req)
 	if req.Capabilities.SerialColumnScan {
 		count++
 	}
@@ -404,6 +404,64 @@ func columnQueryPlannerCandidateCount(req ColumnQueryPlanRequest) int {
 		count++
 	}
 	return count
+}
+
+func columnQueryBTreeCandidateCount(catalog *collectionCatalog, req ColumnQueryPlanRequest) int {
+	if catalog == nil {
+		return 0
+	}
+	lookup := newColumnQueryIndexLookup(catalog.meta.Indexes)
+	var smallSeen [8]string
+	seen := smallSeen[:0]
+	var overflowSeen map[string]struct{}
+	addCandidate := func(column string) {
+		column = strings.TrimSpace(column)
+		if column == "" {
+			return
+		}
+		idx, ok := lookup.find(column)
+		if !ok {
+			return
+		}
+		field := strings.TrimSpace(idx.Field)
+		if field == "" {
+			return
+		}
+		if overflowSeen != nil {
+			if _, exists := overflowSeen[field]; exists {
+				return
+			}
+			overflowSeen[field] = struct{}{}
+			return
+		}
+		for _, existing := range seen {
+			if existing == field {
+				return
+			}
+		}
+		if len(seen) < cap(seen) {
+			seen = append(seen, field)
+			return
+		}
+		overflowSeen = make(map[string]struct{}, len(seen)+1)
+		for _, existing := range seen {
+			overflowSeen[existing] = struct{}{}
+		}
+		overflowSeen[field] = struct{}{}
+	}
+	for _, candidate := range req.CandidateIndexColumns {
+		addCandidate(candidate)
+	}
+	for _, pred := range req.Predicates {
+		if !columnQueryPredicateOperatorEqualityLike(pred.Operator) && !columnQueryPredicateOperatorRangeLike(pred.Operator) {
+			continue
+		}
+		addCandidate(pred.Column)
+	}
+	if overflowSeen != nil {
+		return len(overflowSeen)
+	}
+	return len(seen)
 }
 
 func selectColumnQueryBTreeIndex(catalog *collectionCatalog, req ColumnQueryPlanRequest) (IndexDefinition, bool) {
