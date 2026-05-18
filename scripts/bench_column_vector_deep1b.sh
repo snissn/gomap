@@ -15,6 +15,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 : "${RUN_NEIGHBORHOOD_SMOKE:=false}"
 : "${BENCHTIME:=500ms}"
 : "${COUNT:=1}"
+: "${GO_TEST_TIMEOUT:=60m}"
 
 export COLUMN_VECTOR_DEEP1B=1
 export COLUMN_VECTOR_DEEP1B_DIR
@@ -43,7 +44,8 @@ GOWORK=off go test ./experiments/colgranule \
   -bench "^${bench_name}/(${shape_re})/" \
   -benchmem \
   -benchtime "${BENCHTIME}" \
-  -count "${COUNT}"
+  -count "${COUNT}" \
+  -timeout "${GO_TEST_TIMEOUT}"
 
 if [[ "${RUN_NEIGHBORHOOD_SMOKE}" == "true" || "${RUN_NEIGHBORHOOD_SMOKE}" == "1" ]]; then
   export COLUMN_VECTOR_DEEP1B_NEIGHBORHOOD_SMOKE=1
@@ -52,5 +54,6 @@ if [[ "${RUN_NEIGHBORHOOD_SMOKE}" == "true" || "${RUN_NEIGHBORHOOD_SMOKE}" == "1
     -bench '^BenchmarkColumnVectorGraphDeep1B(JZIPNeighborhoodCompressionSmoke|JZIPDecodeAndScoreSmoke|LocalFrameApproxScore|NeighborhoodCompressionSmoke)/' \
     -benchmem \
     -benchtime "${BENCHTIME}" \
-    -count "${COUNT}"
+    -count "${COUNT}" \
+    -timeout "${GO_TEST_TIMEOUT}"
 fi

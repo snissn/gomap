@@ -2,6 +2,7 @@ package colgranule
 
 import (
 	"container/heap"
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -2621,7 +2622,10 @@ func columnVectorGraphDeep1BDataDir(tb testing.TB) string {
 func columnVectorGraphDeep1BDownloadFbin(tb testing.TB, path string, url string, prefixRows int, dims int) error {
 	tb.Helper()
 	var expectedBytes int64
-	req, err := http.NewRequest(http.MethodGet, url, nil)
+	timeout := columnVectorGraphDeep1BDownloadTimeout(tb)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err
 	}
@@ -2638,7 +2642,7 @@ func columnVectorGraphDeep1BDownloadFbin(tb testing.TB, path string, url string,
 		req.Header.Set("Range", fmt.Sprintf("bytes=0-%d", expectedBytes-1))
 	}
 	tb.Logf("downloading Deep1B %s to %s", url, path)
-	client := &http.Client{Timeout: columnVectorGraphDeep1BDownloadTimeout(tb)}
+	client := &http.Client{Timeout: timeout}
 	resp, err := client.Do(req)
 	if err != nil {
 		return err

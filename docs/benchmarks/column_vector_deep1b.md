@@ -34,6 +34,10 @@ The helper script defaults to the 1M shape, downloads the missing files into
 scripts/bench_column_vector_deep1b.sh
 ```
 
+The script sets `go test -timeout` explicitly via `GO_TEST_TIMEOUT`, defaulting
+to `60m`, so opt-in 10M/download runs do not inherit Go's 10-minute package
+timeout.
+
 To choose a different cache directory:
 
 ```sh
