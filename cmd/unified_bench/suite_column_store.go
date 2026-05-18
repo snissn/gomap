@@ -65,6 +65,7 @@ type columnStoreSuiteReport struct {
 	Suite                  string                       `json:"suite"`
 	Profile                string                       `json:"profile"`
 	Fixture                string                       `json:"fixture"`
+	DataDir                string                       `json:"data_dir,omitempty"`
 	PathLabel              string                       `json:"path_label,omitempty"`
 	ForcedPath             string                       `json:"forced_path"`
 	Rows                   int                          `json:"rows"`
@@ -83,6 +84,7 @@ type columnStoreSuiteReport struct {
 	PhysicalColumnQuery    string                       `json:"physical_column_query"`
 	BenchmarkOnlyRelaxed   bool                         `json:"benchmark_only_relaxed"`
 	StageSeparatedBoundary string                       `json:"stage_separated_boundary"`
+	ProfileFinalizeError   string                       `json:"profile_finalize_error,omitempty"`
 }
 
 type columnStoreStageMetric struct {
@@ -162,11 +164,12 @@ type columnStoreArtifactPaths struct {
 }
 
 type columnStoreFixtureEvent struct {
-	ID     string
-	TimeUS int64
-	Kind   string
-	Did    string
-	Doc    []byte
+	ID      string
+	IDBytes []byte
+	TimeUS  int64
+	Kind    string
+	Did     string
+	Doc     []byte
 }
 
 type columnStoreDecodedEvent struct {
@@ -186,6 +189,7 @@ func (d *columnStoreSuiteDBLabel) Set([]byte, []byte) error   { return nil }
 func (d *columnStoreSuiteDBLabel) Delete([]byte) error        { return nil }
 
 func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (string, error) {
+	profileHooks := profileHooksFromConfig(baseCfg)
 	profile, err := columnStoreSuiteEffectiveProfile(baseCfg.Profile)
 	if err != nil {
 		return "", err
@@ -303,7 +307,7 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 	start = time.Now()
 	checkpointErr := db.Checkpoint()
 	if checkpointCPUFile != nil {
-		stopCPUProfileFn()
+		profileHooks.stopCPUProfile()
 		_ = checkpointCPUFile.Close()
 	}
 	if checkpointErr != nil {
@@ -327,7 +331,7 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 		return "", fmt.Errorf("column_store: reopen collection: %w", err)
 	}
 	reopenDuration := time.Since(start)
-	stages = append(stages, columnStoreStageFromDuration("reopen", reopenDuration, rows, sourceBytes))
+	stages = append(stages, columnStoreStageFromDuration("reopen_recovery", reopenDuration, rows, sourceBytes))
 
 	manifestIdentity, ok := collection.ColumnStoreCacheIdentity()
 	if !ok {
@@ -339,15 +343,16 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 		return "", err
 	}
 	if corrupt := strings.TrimSpace(opts.CorruptReferenceForTest); corrupt != "" {
+		if !columnStoreQueryNameKnown(corrupt) {
+			return "", fmt.Errorf("column_store: unknown corrupt reference query %q", corrupt)
+		}
 		rawHashes[corrupt]++
 	}
 	queries, parity, parityErr, err := runColumnStoreSuiteQueriesProfiled(baseCfg, collection, rows, rawHashes, forcedPath)
 	if err != nil {
 		return "", err
 	}
-	if err := finishRuntimeProfiles(); err != nil {
-		return "", err
-	}
+	profileFinalizeErr := finishRuntimeProfiles()
 	runtimeProfilesActive = false
 
 	totalBytes, totalFiles, err := columnStoreSuiteDirUsage(dataDir)
@@ -358,6 +363,9 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 	if err != nil {
 		return "", fmt.Errorf("column_store: manifest/control byte accounting: %w", err)
 	}
+	retainedPayloadBytes := sourceBytes
+	columnAssetBytes := int64(0)
+	totalReconstructableBytes := retainedPayloadBytes + columnAssetBytes + manifestControlBytes
 	report := columnStoreSuiteReport{
 		GeneratedAt:            time.Now().UTC().Format(time.RFC3339),
 		Suite:                  "column_store",
@@ -376,14 +384,14 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 		Parity:                 parity,
 		ByteAccounting: columnStoreByteAccounting{
 			SourceDocumentBytes:             sourceBytes,
-			RetainedPayloadBytes:            sourceBytes,
+			RetainedPayloadBytes:            retainedPayloadBytes,
 			RetainedPayloadBytesNote:        "M11A retains the source JSONBench payload as the reconstructable row baseline; compressed retained payload accounting is future work",
-			ColumnAssetBytes:                0,
+			ColumnAssetBytes:                columnAssetBytes,
 			ColumnAssetBytesNote:            "not measured in M11A because physical column assets are not published yet",
 			ManifestControlBytes:            manifestControlBytes,
 			ManifestControlMissing:          manifestControlMissing,
 			CommandWALBytesBeforeCheckpoint: commandWALBytesBeforeCheckpoint,
-			TotalReconstructableBytes:       sourceBytes + manifestControlBytes,
+			TotalReconstructableBytes:       totalReconstructableBytes,
 			DBTotalBytes:                    totalBytes,
 			DBTotalFiles:                    totalFiles,
 		},
@@ -397,7 +405,13 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 		ProductionScope:        "production column-enabled TreeDB collection manifest/control-plane path",
 		PhysicalColumnQuery:    "not implemented in M11A; forced physical column labels fail closed",
 		BenchmarkOnlyRelaxed:   false,
-		StageSeparatedBoundary: "fixture generation, collection create, insert, checkpoint, reopen, and q1-q5 row-store baseline scans are timed separately",
+		StageSeparatedBoundary: "fixture generation, collection create, insert, checkpoint, reopen/recovery, and q1-q5 row-store baseline scans are timed separately",
+	}
+	if baseCfg.KeepDir {
+		report.DataDir = dataDir
+	}
+	if profileFinalizeErr != nil {
+		report.ProfileFinalizeError = profileFinalizeErr.Error()
 	}
 
 	md := renderColumnStoreSuiteMarkdown(report)
@@ -415,8 +429,8 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 		}
 	}
 	// Keep artifacts available for diagnosis even when parity is the failing gate.
-	if parityErr != nil {
-		return "", parityErr
+	if parityErr != nil || profileFinalizeErr != nil {
+		return "", errors.Join(parityErr, profileFinalizeErr)
 	}
 	return md, nil
 }
@@ -501,19 +515,27 @@ func columnStoreArtifactPathsForProfileDir(profileDir string, cfg BenchConfig) c
 }
 
 func validateColumnStoreSuiteDBSelection(dbsArg, excludeArg string) error {
+	excluded := make(map[string]struct{})
 	for _, db := range parseList(excludeArg) {
-		switch strings.ToLower(strings.TrimSpace(db)) {
+		normalized := strings.ToLower(strings.TrimSpace(db))
+		switch normalized {
 		case "", "none":
 			continue
 		case "all", "treedb":
 			return fmt.Errorf("column_store: native suite requires TreeDB but -dbs-exclude=%q excludes it", excludeArg)
+		default:
+			excluded[normalized] = struct{}{}
 		}
 	}
 
 	dbs := parseList(dbsArg)
 	hasTreeDB := false
 	for _, db := range dbs {
-		switch strings.ToLower(strings.TrimSpace(db)) {
+		normalized := strings.ToLower(strings.TrimSpace(db))
+		if _, skip := excluded[normalized]; skip {
+			continue
+		}
+		switch normalized {
 		case "", "all", "treedb":
 			hasTreeDB = true
 		default:
@@ -547,7 +569,7 @@ func buildColumnStoreSyntheticFixture(rows int, seed int64) ([]columnStoreFixtur
 		payloadID := uint32(uint64(i) * uint64(2654435761))
 		doc := []byte(fmt.Sprintf(`{"time_us":%d,"kind":"%s","did":"%s","payload":"p%08x","group":%d}`,
 			timeUS, kind, did, payloadID, i%32))
-		out[i] = columnStoreFixtureEvent{ID: id, TimeUS: timeUS, Kind: kind, Did: did, Doc: doc}
+		out[i] = columnStoreFixtureEvent{ID: id, IDBytes: []byte(id), TimeUS: timeUS, Kind: kind, Did: did, Doc: doc}
 		bytesTotal += int64(len(doc))
 	}
 	return out, bytesTotal
@@ -563,7 +585,7 @@ func columnStoreSuiteConfig() *collections.ColumnStoreConfig {
 		},
 		SortKey: []collections.ColumnSortKey{{Column: "time_us"}},
 		AggregateMetadata: []collections.ColumnAggregateMetadata{
-			{Name: "q5_did_time_span", Column: "time_us", Kind: collections.ColumnAggregateMin},
+			{Name: "q5_did_time_span_min", Column: "time_us", Kind: collections.ColumnAggregateMin},
 			{Name: "q5_did_time_span_max", Column: "time_us", Kind: collections.ColumnAggregateMax},
 		},
 		RetainedPayload: collections.ColumnRetainedPayloadNonColumn,
@@ -583,18 +605,18 @@ func openColumnStoreSuiteDB(dir string) (*backenddb.DB, error) {
 }
 
 func insertColumnStoreFixture(collection *collections.Collection, events []columnStoreFixtureEvent, batchSize int) error {
+	idsAll := make([][]byte, len(events))
+	docsAll := make([][]byte, len(events))
+	for i := range events {
+		idsAll[i] = events[i].IDBytes
+		docsAll[i] = events[i].Doc
+	}
 	for start := 0; start < len(events); start += batchSize {
 		end := start + batchSize
 		if end > len(events) {
 			end = len(events)
 		}
-		ids := make([][]byte, end-start)
-		docs := make([][]byte, end-start)
-		for i := start; i < end; i++ {
-			ids[i-start] = []byte(events[i].ID)
-			docs[i-start] = events[i].Doc
-		}
-		if _, err := collection.InsertBatch(ids, docs); err != nil {
+		if _, err := collection.InsertBatch(idsAll[start:end], docsAll[start:end]); err != nil {
 			return fmt.Errorf("column_store: InsertBatch rows %d-%d: %w", start, end, err)
 		}
 	}
@@ -608,7 +630,7 @@ func columnStoreReferenceHashes(events []columnStoreFixtureEvent) (map[string]ui
 	}
 	out := make(map[string]uint64)
 	for _, name := range columnStoreQueryNames() {
-		hash, _, err := columnStoreQueryHash(name, decoded)
+		hash, _, err := columnStoreQueryHash(columnStoreQueryCanonicalName(name, columnStorePathRowStoreBaseline), decoded)
 		if err != nil {
 			return nil, err
 		}
@@ -628,7 +650,7 @@ func startColumnStoreSuiteRuntimeProfiles(cfg BenchConfig) (func() error, error)
 		return out
 	}
 
-	if cfg.AllocsProfile != "" {
+	if shouldAllocsProfile(cfg, columnStoreSuiteBenchTestName) {
 		rate := cfg.AllocsProfileRate
 		if rate <= 0 {
 			rate = 512 * 1024
@@ -653,13 +675,15 @@ func startColumnStoreSuiteRuntimeProfiles(cfg BenchConfig) (func() error, error)
 		}
 		runtime.SetBlockProfileRate(rate)
 		cleanups = append(cleanups, func() error {
-			defer runtime.SetBlockProfileRate(0)
-			defer f.Close()
+			runtime.SetBlockProfileRate(0)
 			prof := pprof.Lookup("block")
+			var writeErr error
 			if prof == nil {
-				return fmt.Errorf("block profile unavailable")
+				writeErr = fmt.Errorf("block profile unavailable")
+			} else {
+				writeErr = prof.WriteTo(f, 0)
 			}
-			return prof.WriteTo(f, 0)
+			return errors.Join(writeErr, f.Close())
 		})
 	}
 
@@ -675,13 +699,15 @@ func startColumnStoreSuiteRuntimeProfiles(cfg BenchConfig) (func() error, error)
 		}
 		prevFrac := runtime.SetMutexProfileFraction(frac)
 		cleanups = append(cleanups, func() error {
-			defer runtime.SetMutexProfileFraction(prevFrac)
-			defer f.Close()
+			runtime.SetMutexProfileFraction(prevFrac)
 			prof := pprof.Lookup("mutex")
+			var writeErr error
 			if prof == nil {
-				return fmt.Errorf("mutex profile unavailable")
+				writeErr = fmt.Errorf("mutex profile unavailable")
+			} else {
+				writeErr = prof.WriteTo(f, 0)
 			}
-			return prof.WriteTo(f, 0)
+			return errors.Join(writeErr, f.Close())
 		})
 	}
 
@@ -706,49 +732,53 @@ func startColumnStoreSuiteRuntimeProfiles(cfg BenchConfig) (func() error, error)
 }
 
 func runColumnStoreSuiteQueriesProfiled(cfg BenchConfig, collection *collections.Collection, rows int, rawHashes map[string]uint64, path string) ([]columnStoreQueryMetric, map[string]columnStoreParity, error, error) {
+	profileHooks := profileHooksFromConfig(cfg)
+	cleanup := func(paths ...string) {
+		for _, path := range paths {
+			if path != "" {
+				_ = os.Remove(path)
+			}
+		}
+	}
 	allocBasePath := ""
 	var err error
 	if shouldAllocsProfile(cfg, columnStoreSuiteBenchTestName) {
-		allocBasePath, err = writeAllocsSnapshotTempFn("unified_bench_column_store_allocs_base")
+		allocBasePath, err = profileHooks.writeAllocsSnapshotTemp("unified_bench_column_store_allocs_base")
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("column_store: allocsprofile baseline: %w", err)
 		}
 	}
 	blockBasePath := ""
 	if cfg.BlockProfile != "" {
-		blockBasePath, err = writeRuntimeProfileSnapshotTempFn("unified_bench_column_store_block_base", "block")
+		blockBasePath, err = profileHooks.writeRuntimeProfileSnapshotTemp("unified_bench_column_store_block_base", "block")
 		if err != nil {
-			_ = os.Remove(allocBasePath)
+			cleanup(allocBasePath)
 			return nil, nil, nil, fmt.Errorf("column_store: blockprofile baseline: %w", err)
 		}
 	}
 	mutexBasePath := ""
 	if cfg.MutexProfile != "" {
-		mutexBasePath, err = writeRuntimeProfileSnapshotTempFn("unified_bench_column_store_mutex_base", "mutex")
+		mutexBasePath, err = profileHooks.writeRuntimeProfileSnapshotTemp("unified_bench_column_store_mutex_base", "mutex")
 		if err != nil {
-			_ = os.Remove(allocBasePath)
-			_ = os.Remove(blockBasePath)
+			cleanup(allocBasePath, blockBasePath)
 			return nil, nil, nil, fmt.Errorf("column_store: mutexprofile baseline: %w", err)
 		}
 	}
 
 	var cpuFile *os.File
+	cpuProfilePath := ""
 	if shouldCPUProfile(cfg, columnStoreSuiteBenchTestName) {
 		profilePath := fmt.Sprintf("%s_%s_%s.pprof", cfg.CPUProfile, columnStoreSuiteBenchTestName, columnStoreSuiteBenchDBName)
 		f, err := os.Create(profilePath)
 		if err != nil {
-			_ = os.Remove(allocBasePath)
-			_ = os.Remove(blockBasePath)
-			_ = os.Remove(mutexBasePath)
+			cleanup(allocBasePath, blockBasePath, mutexBasePath)
 			return nil, nil, nil, fmt.Errorf("column_store: cpuprofile %s: %w", profilePath, err)
 		}
 		cpuFile = f
-		if err := startCPUProfileFn(cpuFile); err != nil {
+		cpuProfilePath = profilePath
+		if err := profileHooks.startCPUProfile(cpuFile); err != nil {
 			_ = cpuFile.Close()
-			_ = os.Remove(profilePath)
-			_ = os.Remove(allocBasePath)
-			_ = os.Remove(blockBasePath)
-			_ = os.Remove(mutexBasePath)
+			cleanup(profilePath, allocBasePath, blockBasePath, mutexBasePath)
 			return nil, nil, nil, fmt.Errorf("column_store: cpuprofile start %s: %w", profilePath, err)
 		}
 	}
@@ -756,62 +786,61 @@ func runColumnStoreSuiteQueriesProfiled(cfg BenchConfig, collection *collections
 	queries, parity, runErr := runColumnStoreSuiteQueries(collection, rows, rawHashes, path)
 
 	if cpuFile != nil {
-		stopCPUProfileFn()
+		profileHooks.stopCPUProfile()
 		_ = cpuFile.Close()
 	}
 	if queries == nil {
-		_ = os.Remove(allocBasePath)
-		_ = os.Remove(blockBasePath)
-		_ = os.Remove(mutexBasePath)
+		cleanup(cpuProfilePath, allocBasePath, blockBasePath, mutexBasePath)
 		return nil, nil, nil, runErr
 	}
 
 	if allocBasePath != "" {
-		allocAfterPath, snapErr := writeAllocsSnapshotTempFn("unified_bench_column_store_allocs_after")
+		allocAfterPath, snapErr := profileHooks.writeAllocsSnapshotTemp("unified_bench_column_store_allocs_after")
 		if snapErr != nil {
-			_ = os.Remove(allocBasePath)
-			_ = os.Remove(blockBasePath)
-			_ = os.Remove(mutexBasePath)
+			cleanup(allocBasePath, blockBasePath, mutexBasePath)
 			return nil, nil, nil, fmt.Errorf("column_store: allocsprofile snapshot: %w", snapErr)
 		}
 		allocPath := fmt.Sprintf("%s_%s_%s.pprof", cfg.AllocsProfile, columnStoreSuiteBenchTestName, columnStoreSuiteBenchDBName)
-		deltaErr := writeAllocsDeltaProfileFn(allocBasePath, allocAfterPath, allocPath)
-		_ = os.Remove(allocBasePath)
-		_ = os.Remove(allocAfterPath)
+		deltaErr := profileHooks.writeAllocsDeltaProfile(allocBasePath, allocAfterPath, allocPath)
+		cleanup(allocBasePath, allocAfterPath)
 		if deltaErr != nil {
-			_ = os.Remove(blockBasePath)
-			_ = os.Remove(mutexBasePath)
+			cleanup(blockBasePath, mutexBasePath)
 			return nil, nil, nil, fmt.Errorf("column_store: allocsprofile %s: %w", allocPath, deltaErr)
 		}
 	}
 	if blockBasePath != "" {
-		blockAfterPath, snapErr := writeRuntimeProfileSnapshotTempFn("unified_bench_column_store_block_after", "block")
+		blockAfterPath, snapErr := profileHooks.writeRuntimeProfileSnapshotTemp("unified_bench_column_store_block_after", "block")
 		if snapErr != nil {
-			_ = os.Remove(blockBasePath)
-			_ = os.Remove(mutexBasePath)
+			cleanup(blockBasePath, mutexBasePath)
 			return nil, nil, nil, fmt.Errorf("column_store: blockprofile snapshot: %w", snapErr)
 		}
 		blockPath := contentionProfilePath(cfg.BlockProfile, "block", columnStoreSuiteBenchTestName, columnStoreSuiteBenchDBName)
-		_, deltaErr := writeRuntimeProfileDeltaProfileFn(blockBasePath, blockAfterPath, blockPath)
-		_ = os.Remove(blockBasePath)
-		_ = os.Remove(blockAfterPath)
+		wrote, deltaErr := profileHooks.writeRuntimeProfileDeltaProfile(blockBasePath, blockAfterPath, blockPath)
+		cleanup(blockBasePath, blockAfterPath)
 		if deltaErr != nil {
-			_ = os.Remove(mutexBasePath)
+			cleanup(mutexBasePath)
 			return nil, nil, nil, fmt.Errorf("column_store: blockprofile %s: %w", blockPath, deltaErr)
+		}
+		if !wrote {
+			cleanup(blockPath, mutexBasePath)
+			return nil, nil, nil, fmt.Errorf("column_store: blockprofile %s: %w", blockPath, errEmptyPprofDeltaOutput)
 		}
 	}
 	if mutexBasePath != "" {
-		mutexAfterPath, snapErr := writeRuntimeProfileSnapshotTempFn("unified_bench_column_store_mutex_after", "mutex")
+		mutexAfterPath, snapErr := profileHooks.writeRuntimeProfileSnapshotTemp("unified_bench_column_store_mutex_after", "mutex")
 		if snapErr != nil {
-			_ = os.Remove(mutexBasePath)
+			cleanup(mutexBasePath)
 			return nil, nil, nil, fmt.Errorf("column_store: mutexprofile snapshot: %w", snapErr)
 		}
 		mutexPath := contentionProfilePath(cfg.MutexProfile, "mutex", columnStoreSuiteBenchTestName, columnStoreSuiteBenchDBName)
-		_, deltaErr := writeRuntimeProfileDeltaProfileFn(mutexBasePath, mutexAfterPath, mutexPath)
-		_ = os.Remove(mutexBasePath)
-		_ = os.Remove(mutexAfterPath)
+		wrote, deltaErr := profileHooks.writeRuntimeProfileDeltaProfile(mutexBasePath, mutexAfterPath, mutexPath)
+		cleanup(mutexBasePath, mutexAfterPath)
 		if deltaErr != nil {
 			return nil, nil, nil, fmt.Errorf("column_store: mutexprofile %s: %w", mutexPath, deltaErr)
+		}
+		if !wrote {
+			cleanup(mutexPath)
+			return nil, nil, nil, fmt.Errorf("column_store: mutexprofile %s: %w", mutexPath, errEmptyPprofDeltaOutput)
 		}
 	}
 
@@ -823,12 +852,13 @@ func runColumnStoreSuiteQueries(collection *collections.Collection, rows int, ra
 	parity := make(map[string]columnStoreParity, len(columnStoreQueryNames()))
 	var firstErr error
 	for _, name := range columnStoreQueryNames() {
+		hashName := columnStoreQueryCanonicalName(name, path)
 		start := time.Now()
 		events, materialized, bytesRead, err := scanColumnStoreSuiteEvents(collection, rows)
 		if err != nil {
 			return nil, nil, err
 		}
-		hash, resultCount, err := columnStoreQueryHash(name, events)
+		hash, resultCount, err := columnStoreQueryHash(hashName, events)
 		if err != nil {
 			return nil, nil, fmt.Errorf("column_store: reduce %s: %w", name, err)
 		}
@@ -881,7 +911,7 @@ func scanColumnStoreSuiteEvents(collection *collections.Collection, rows int) ([
 		return nil, 0, 0, fmt.Errorf("column_store: scan documents: %w", err)
 	}
 	if truncated {
-		return nil, 0, 0, fmt.Errorf("column_store: scan truncated at %d rows", rows+1)
+		return nil, 0, 0, fmt.Errorf("column_store: scan exceeded expected rows=%d (sentinel limit=%d)", rows, rows+1)
 	}
 	if materialized != rows {
 		return nil, 0, 0, fmt.Errorf("column_store: scanned %d rows, want %d", materialized, rows)
@@ -889,8 +919,17 @@ func scanColumnStoreSuiteEvents(collection *collections.Collection, rows int) ([
 	return events, materialized, bytesRead, nil
 }
 
-func columnStoreQueryNames() []string {
-	return []string{"q1", "q2", "q3", "q4a", "q4b", "q5", "q5_metadata"}
+var columnStoreQueryNameList = []string{"q1", "q2", "q3", "q4a", "q4b", "q5", "q5_metadata"}
+
+func columnStoreQueryNames() []string { return columnStoreQueryNameList }
+
+func columnStoreQueryNameKnown(name string) bool {
+	for _, candidate := range columnStoreQueryNameList {
+		if name == candidate {
+			return true
+		}
+	}
+	return false
 }
 
 func columnStoreQueryAliasOf(name, path string) string {
@@ -905,6 +944,13 @@ func columnStoreQueryImplementationNote(name, path string) string {
 		return "row_store_baseline_alias_until_physical_aggregate_metadata_path"
 	}
 	return ""
+}
+
+func columnStoreQueryCanonicalName(name, path string) string {
+	if alias := columnStoreQueryAliasOf(name, path); alias != "" {
+		return alias
+	}
+	return name
 }
 
 func columnStoreQueryHash(name string, events []columnStoreDecodedEvent) (uint64, int, error) {
@@ -1102,11 +1148,17 @@ func renderColumnStoreSuiteMarkdown(report columnStoreSuiteReport) string {
 	sb.WriteString(fmt.Sprintf("- rows: %s\n", formatInt(report.Rows)))
 	sb.WriteString(fmt.Sprintf("- batchsize: %s\n", formatInt(report.BatchSize)))
 	sb.WriteString(fmt.Sprintf("- forced path: `%s`\n", report.ForcedPath))
+	if report.DataDir != "" {
+		sb.WriteString(fmt.Sprintf("- data-dir: `%s`\n", report.DataDir))
+	}
 	if report.PathLabel != "" {
 		sb.WriteString(fmt.Sprintf("- path-label: `%s`\n", report.PathLabel))
 	}
 	sb.WriteString(fmt.Sprintf("- scope: %s\n", report.ProductionScope))
 	sb.WriteString(fmt.Sprintf("- physical column query: %s\n", report.PhysicalColumnQuery))
+	if report.ProfileFinalizeError != "" {
+		sb.WriteString(fmt.Sprintf("- profile finalize error: `%s`\n", report.ProfileFinalizeError))
+	}
 	sb.WriteString(fmt.Sprintf("- timing boundary: %s\n\n", report.StageSeparatedBoundary))
 
 	sb.WriteString("## Stage Timings\n\n")
@@ -1129,8 +1181,12 @@ func renderColumnStoreSuiteMarkdown(report columnStoreSuiteReport) string {
 		if note == "" && q.AliasOf != "" {
 			note = "alias_of_" + q.AliasOf
 		}
-		sb.WriteString(fmt.Sprintf("| `%s` | `%s` | %.3f | %.3f | %.1f | %d | %d | %d | %d | %s | `%s` |\n",
-			q.Name, q.PlanLabel, q.RowsPerSecond, q.MiBPerSecond, q.NsPerRow, q.BytesRead, q.RowMaterializations, q.SkippedGranules, q.MetadataHits, parity, note))
+		noteCell := "-"
+		if note != "" {
+			noteCell = "`" + note + "`"
+		}
+		sb.WriteString(fmt.Sprintf("| `%s` | `%s` | %.3f | %.3f | %.1f | %d | %d | %d | %d | %s | %s |\n",
+			q.Name, q.PlanLabel, q.RowsPerSecond, q.MiBPerSecond, q.NsPerRow, q.BytesRead, q.RowMaterializations, q.SkippedGranules, q.MetadataHits, parity, noteCell))
 	}
 	sb.WriteString("\n")
 
