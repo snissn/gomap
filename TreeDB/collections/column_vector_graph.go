@@ -189,11 +189,11 @@ func (g *ColumnVectorGraph) SearchCosine(query []float32, opts ColumnVectorGraph
 	}
 	efSearch := g.normalizeEfSearch(opts.EfSearch, opts.TopK)
 	trace.EfSearch = efSearch
-	candidates, edgesVisited, candidatesExamined := g.searchCandidates(query, queryInvNorm, efSearch, scratch)
+	candidates, edgesVisited, candidatesExamined, candidateCount := g.searchCandidates(query, queryInvNorm, efSearch, opts.TopK, scratch)
 	trace.CandidatesExamined = candidatesExamined
-	trace.CandidatesAfterTombstone = len(candidates)
-	trace.CandidatesAfterFilter = len(candidates)
-	trace.RerankCount = len(candidates)
+	trace.CandidatesAfterTombstone = candidateCount
+	trace.CandidatesAfterFilter = candidateCount
+	trace.RerankCount = candidateCount
 	trace.EdgesVisited = edgesVisited
 	resultLimit := opts.TopK
 	if rows := g.Rows(); resultLimit > rows {
@@ -410,21 +410,21 @@ func (g *ColumnVectorGraph) normalizeEfSearch(efSearch int, topK int) int {
 	return efSearch
 }
 
-func (g *ColumnVectorGraph) searchCandidates(query []float32, queryInvNorm float32, limit int, scratch *ColumnVectorGraphSearchScratch) ([]vectorIndexCandidate, int, int) {
+func (g *ColumnVectorGraph) searchCandidates(query []float32, queryInvNorm float32, limit int, topK int, scratch *ColumnVectorGraphSearchScratch) ([]vectorIndexCandidate, int, int, int) {
 	if g.ordinalTieOrder {
-		return g.searchCandidatesOrdinalTies(query, queryInvNorm, limit, &scratch.graph)
+		return g.searchCandidatesOrdinalTies(query, queryInvNorm, limit, topK, &scratch.graph)
 	}
-	return g.searchCandidatesDocumentTies(query, queryInvNorm, limit, scratch)
+	return g.searchCandidatesDocumentTies(query, queryInvNorm, limit, topK, scratch)
 }
 
-func (g *ColumnVectorGraph) searchCandidatesOrdinalTies(query []float32, queryInvNorm float32, limit int, scratch *vectorIndexSearchScratch) ([]vectorIndexCandidate, int, int) {
+func (g *ColumnVectorGraph) searchCandidatesOrdinalTies(query []float32, queryInvNorm float32, limit int, topK int, scratch *vectorIndexSearchScratch) ([]vectorIndexCandidate, int, int, int) {
 	if g.entryPoint < 0 || g.entryPoint >= g.Rows() || limit <= 0 {
-		return nil, 0, 0
+		return nil, 0, 0, 0
 	}
 	visited, mark := scratch.nextVisitedEpoch(g.Rows())
 	entry := vectorIndexCandidate{nodeID: g.entryPoint, distance: g.cosineDistance(query, queryInvNorm, g.entryPoint)}
 	if !columnVectorGraphFinite(entry.distance) {
-		return nil, 0, 1
+		return nil, 0, 1, 0
 	}
 	visited[entry.nodeID] = mark
 	queue := scratch.queue[:0]
@@ -477,19 +477,20 @@ func (g *ColumnVectorGraph) searchCandidatesOrdinalTies(query []float32, queryIn
 	scratch.queue = queue[:0]
 	scratch.best = best[:0]
 	out := append(scratch.out[:0], best...)
+	candidateCount := len(out)
+	out = sortTopColumnVectorGraphOrdinalCandidates(out, topK)
 	scratch.out = out
-	sortVectorIndexCandidates(out)
-	return out, edgesVisited, candidatesExamined
+	return out, edgesVisited, candidatesExamined, candidateCount
 }
 
-func (g *ColumnVectorGraph) searchCandidatesDocumentTies(query []float32, queryInvNorm float32, limit int, scratch *ColumnVectorGraphSearchScratch) ([]vectorIndexCandidate, int, int) {
+func (g *ColumnVectorGraph) searchCandidatesDocumentTies(query []float32, queryInvNorm float32, limit int, topK int, scratch *ColumnVectorGraphSearchScratch) ([]vectorIndexCandidate, int, int, int) {
 	if g.entryPoint < 0 || g.entryPoint >= g.Rows() || limit <= 0 {
-		return nil, 0, 0
+		return nil, 0, 0, 0
 	}
 	visited, mark := scratch.graph.nextVisitedEpoch(g.Rows())
 	entry := vectorIndexCandidate{nodeID: g.entryPoint, distance: g.cosineDistance(query, queryInvNorm, g.entryPoint)}
 	if !columnVectorGraphFinite(entry.distance) {
-		return nil, 0, 1
+		return nil, 0, 1, 0
 	}
 	visited[entry.nodeID] = mark
 	queue := scratch.queue[:0]
@@ -542,13 +543,58 @@ func (g *ColumnVectorGraph) searchCandidatesDocumentTies(query []float32, queryI
 	scratch.queue = queue[:0]
 	scratch.best = best[:0]
 	out := append(scratch.out[:0], best...)
+	candidateCount := len(out)
+	out = g.sortTopCandidates(out, topK)
 	scratch.out = out
-	g.sortCandidates(out)
-	return out, edgesVisited, candidatesExamined
+	return out, edgesVisited, candidatesExamined, candidateCount
 }
 
 func (g *ColumnVectorGraph) sortCandidates(candidates []vectorIndexCandidate) {
 	slices.SortFunc(candidates, g.compareCandidates)
+}
+
+func sortTopColumnVectorGraphOrdinalCandidates(candidates []vectorIndexCandidate, limit int) []vectorIndexCandidate {
+	if limit <= 0 || len(candidates) == 0 {
+		return candidates[:0]
+	}
+	if limit >= len(candidates) {
+		sortVectorIndexCandidates(candidates)
+		return candidates
+	}
+	// Selection-sort only the returned prefix. This is O(n*k), which is cheaper
+	// than a full candidate sort for the small top-k used by vector search.
+	for i := 0; i < limit; i++ {
+		best := i
+		for j := i + 1; j < len(candidates); j++ {
+			if vectorIndexCandidateLess(candidates[j], candidates[best]) {
+				best = j
+			}
+		}
+		candidates[i], candidates[best] = candidates[best], candidates[i]
+	}
+	return candidates[:limit]
+}
+
+func (g *ColumnVectorGraph) sortTopCandidates(candidates []vectorIndexCandidate, limit int) []vectorIndexCandidate {
+	if limit <= 0 || len(candidates) == 0 {
+		return candidates[:0]
+	}
+	if limit >= len(candidates) {
+		g.sortCandidates(candidates)
+		return candidates
+	}
+	// Selection-sort only the returned prefix. This is O(n*k), which is cheaper
+	// than a full candidate sort for the small top-k used by vector search.
+	for i := 0; i < limit; i++ {
+		best := i
+		for j := i + 1; j < len(candidates); j++ {
+			if g.candidateLess(candidates[j], candidates[best]) {
+				best = j
+			}
+		}
+		candidates[i], candidates[best] = candidates[best], candidates[i]
+	}
+	return candidates[:limit]
 }
 
 func (g *ColumnVectorGraph) compareCandidates(left, right vectorIndexCandidate) int {
