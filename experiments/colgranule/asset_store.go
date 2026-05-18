@@ -280,13 +280,17 @@ func (s *SegmentColumnAssetStore) Sync() error {
 		return err
 	}
 	if err := file.Sync(); err != nil {
-		_ = s.endFileIO()
+		if endErr := s.endFileIO(); endErr != nil {
+			return errors.Join(err, endErr)
+		}
 		return err
 	}
 	clearDirSync := false
 	if dirSyncRequired {
 		if err := syncColumnAssetDirectory(dir); err != nil {
-			_ = s.endFileIO()
+			if endErr := s.endFileIO(); endErr != nil {
+				return errors.Join(err, endErr)
+			}
 			return err
 		}
 		clearDirSync = true
