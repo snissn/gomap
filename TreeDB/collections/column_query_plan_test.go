@@ -158,6 +158,44 @@ func TestColumnQueryPlannerM11BMatchesBTreeIndexesCaseSensitively(t *testing.T) 
 	}
 }
 
+func TestColumnQueryPlannerM11BDoesNotMatchPredicateColumnsAgainstIndexNames(t *testing.T) {
+	catalog := &collectionCatalog{meta: CollectionMeta{
+		Name: "events",
+		Indexes: []IndexDefinition{
+			{Name: "kind", Field: "category", ValueType: IndexValueString},
+		},
+	}}
+	identity := ColumnStoreCacheIdentity{
+		Collection:                      "events",
+		ManifestRoot:                    99,
+		ManifestGeneration:              7,
+		RecoveryAuthoritativeGeneration: 7,
+	}
+	req := ColumnQueryPlanRequest{
+		Name:       "q1",
+		Predicates: []ColumnQueryPredicate{{Column: "kind", Operator: ColumnQueryPredicateEqual}},
+		ForceKind:  ColumnQueryPlanBTreeIndexBaseline,
+	}
+
+	plan := planColumnQueryForCatalog(catalog, identity, true, req)
+	if plan.Supported {
+		t.Fatalf("predicate column matched unrelated index name: %+v", plan)
+	}
+
+	req.CandidateIndexColumns = []string{"kind"}
+	plan = planColumnQueryForCatalog(catalog, identity, true, req)
+	if !plan.Supported || plan.IndexName != "kind" {
+		t.Fatalf("explicit candidate did not match index name: %+v", plan)
+	}
+
+	req.CandidateIndexColumns = nil
+	catalog.meta.Indexes = append(catalog.meta.Indexes, IndexDefinition{Name: "kind_idx", Field: "kind", ValueType: IndexValueString})
+	plan = planColumnQueryForCatalog(catalog, identity, true, req)
+	if !plan.Supported || plan.IndexName != "kind_idx" {
+		t.Fatalf("predicate column did not match index field: %+v", plan)
+	}
+}
+
 func TestColumnQueryPlannerM11BRejectsNonRecoveryAuthoritativeManifest(t *testing.T) {
 	catalog := &collectionCatalog{meta: CollectionMeta{
 		Name:    "events",
@@ -261,6 +299,48 @@ func TestColumnQueryPlannerM11BRejectsUnknownAggregateMetadata(t *testing.T) {
 	}
 	if !strings.Contains(plan.Diagnostics.UnsupportedPlanReason, "unknown aggregate metadata") {
 		t.Fatalf("unsupported reason=%q", plan.Diagnostics.UnsupportedPlanReason)
+	}
+}
+
+func TestColumnQueryPlannerM11BMatchesAggregateMetadataNamesExactly(t *testing.T) {
+	catalog := &collectionCatalog{meta: CollectionMeta{
+		Name: "events",
+		Options: CollectionOptions{ColumnStore: &ColumnStoreConfig{
+			Enabled: true,
+			AggregateMetadata: []ColumnAggregateMetadata{
+				{Name: "q5_did_time_span", Column: "time_us", Kind: ColumnAggregateMin},
+			},
+		}},
+	}}
+	identity := ColumnStoreCacheIdentity{
+		Collection:                      "events",
+		ManifestRoot:                    99,
+		ManifestGeneration:              7,
+		RecoveryAuthoritativeGeneration: 7,
+	}
+	req := ColumnQueryPlanRequest{
+		Name:                  "q5_metadata",
+		AggregateMetadataName: "Q5_DID_TIME_SPAN",
+		ForceKind:             ColumnQueryPlanAggregateMetadata,
+		Capabilities: ColumnQueryPlannerCapabilities{
+			AggregateMetadata:  true,
+			PhysicalAssetCount: 1,
+			GranuleCount:       8,
+		},
+	}
+
+	plan := planColumnQueryForCatalog(catalog, identity, true, req)
+	if plan.Supported {
+		t.Fatalf("case-mismatched aggregate metadata name matched catalog: %+v", plan)
+	}
+	if !strings.Contains(plan.Diagnostics.UnsupportedPlanReason, "unknown aggregate metadata") {
+		t.Fatalf("unsupported reason=%q", plan.Diagnostics.UnsupportedPlanReason)
+	}
+
+	req.AggregateMetadataName = " q5_did_time_span "
+	plan = planColumnQueryForCatalog(catalog, identity, true, req)
+	if !plan.Supported || plan.Kind != ColumnQueryPlanAggregateMetadata {
+		t.Fatalf("exact trimmed aggregate metadata name did not match catalog: %+v", plan)
 	}
 }
 

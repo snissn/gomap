@@ -446,6 +446,9 @@ func (delta ColumnManifestRootDelta) OrderedRootDeltaBatchPublishInput() (backen
 	deltaBatch, err := backenddb.OrderedRootDeltaBatchFromIterator(iter)
 	_ = iter.Close()
 	if err != nil {
+		if deltaBatch != nil {
+			_ = deltaBatch.Close()
+		}
 		return backenddb.OrderedRootDeltaBatchPublishInput{}, func() {}, err
 	}
 	cleanup := func() {
@@ -627,7 +630,7 @@ func buildColumnPublishRootDelta(input ColumnPublishPlanInput, cfg ColumnStoreCo
 			ColumnStore:        cfg,
 			BaseManifestRootID: input.BaseManifestRootID,
 			Manifest:           manifest,
-			Closure:            closure,
+			Closure:            cloneColumnPublishDurabilityClosure(closure),
 		})
 	}
 	if cfg.ManifestRoot == nil {
@@ -804,6 +807,11 @@ func cloneColumnPreparedAssets(assets []ColumnPreparedAsset) []ColumnPreparedAss
 		return assets
 	}
 	return append([]ColumnPreparedAsset(nil), assets...)
+}
+
+func cloneColumnPublishDurabilityClosure(closure ColumnPublishDurabilityClosure) ColumnPublishDurabilityClosure {
+	closure.PreparedAssets = cloneColumnPreparedAssets(closure.PreparedAssets)
+	return closure
 }
 
 func cloneColumnPublishPlanForHook(plan ColumnPublishPlan) ColumnPublishPlan {

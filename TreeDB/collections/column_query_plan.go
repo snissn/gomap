@@ -292,7 +292,7 @@ func catalogHasColumnAggregateMetadata(catalog *collectionCatalog, name string) 
 		return false
 	}
 	for _, aggregate := range catalog.meta.Options.ColumnStore.AggregateMetadata {
-		if strings.EqualFold(strings.TrimSpace(aggregate.Name), name) {
+		if strings.TrimSpace(aggregate.Name) == name {
 			return true
 		}
 	}
@@ -335,18 +335,24 @@ func selectColumnQueryBTreeIndex(catalog *collectionCatalog, req ColumnQueryPlan
 	if catalog == nil {
 		return IndexDefinition{}, false
 	}
-	candidates := make([]string, 0, len(req.CandidateIndexColumns)+len(req.Predicates))
-	candidates = append(candidates, req.CandidateIndexColumns...)
-	for _, pred := range req.Predicates {
-		candidates = append(candidates, pred.Column)
-	}
-	for _, candidate := range candidates {
+	for _, candidate := range req.CandidateIndexColumns {
 		candidate = strings.TrimSpace(candidate)
 		if candidate == "" {
 			continue
 		}
 		for _, idx := range catalog.meta.Indexes {
 			if idx.Field == candidate || idx.Name == candidate {
+				return idx, true
+			}
+		}
+	}
+	for _, pred := range req.Predicates {
+		candidate := strings.TrimSpace(pred.Column)
+		if candidate == "" {
+			continue
+		}
+		for _, idx := range catalog.meta.Indexes {
+			if idx.Field == candidate {
 				return idx, true
 			}
 		}

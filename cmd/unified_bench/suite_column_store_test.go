@@ -66,9 +66,11 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 		"column_store_results.html",
 		"cpu_column_store_treedb_column_store.pprof",
 		"allocs_column_store_treedb_column_store.pprof",
-		"checkpoint_cpu_checkpoint_post_run_treedb_column_store.pprof",
+		"checkpoint_cpu_checkpoint_column_store_treedb_column_store.pprof",
 		"block.pprof",
+		"block_column_store_treedb_column_store.pprof",
 		"mutex.pprof",
+		"mutex_column_store_treedb_column_store.pprof",
 		"trace.out",
 	} {
 		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
@@ -161,6 +163,16 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 	}
 	if len(report.UnsupportedForcedPaths) == 0 {
 		t.Fatalf("expected unsupported forced path labels to be recorded")
+	}
+	if report.Artifacts.CPUProfile == "" ||
+		report.Artifacts.AllocsProfile == "" ||
+		report.Artifacts.CheckpointCPUProfile == "" ||
+		report.Artifacts.BlockProfile == "" ||
+		report.Artifacts.BlockDeltaProfile == "" ||
+		report.Artifacts.MutexProfile == "" ||
+		report.Artifacts.MutexDeltaProfile == "" ||
+		report.Artifacts.TraceProfile == "" {
+		t.Fatalf("expected all configured profile artifacts to be recorded: %+v", report.Artifacts)
 	}
 }
 
@@ -320,6 +332,19 @@ func TestColumnStoreSuiteDirUsageFailsOnMissingPathM11A(t *testing.T) {
 	_, _, err := columnStoreSuiteDirUsage(filepath.Join(t.TempDir(), "missing"))
 	if err == nil {
 		t.Fatal("expected missing path to fail")
+	}
+}
+
+func TestColumnStoreSuiteManifestControlUsageTreatsMissingFilesAsZeroM11A(t *testing.T) {
+	bytes, missing, err := columnStoreSuiteManifestControlUsage(t.TempDir())
+	if err != nil {
+		t.Fatalf("manifest/control usage: %v", err)
+	}
+	if bytes != 0 {
+		t.Fatalf("manifest/control bytes=%d want 0", bytes)
+	}
+	if len(missing) != len(columnStoreSuiteManifestControlFiles) {
+		t.Fatalf("missing manifest/control files=%v want %v", missing, columnStoreSuiteManifestControlFiles)
 	}
 }
 
