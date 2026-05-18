@@ -11,13 +11,14 @@ type ColumnAssetPin struct {
 }
 
 type ColumnAssetManager struct {
-	mu          sync.Mutex
-	store       ColumnAssetStore
-	pins        map[ColumnAssetRef]int
-	zombies     map[ColumnAssetRef]string
-	quarantine  map[ColumnAssetRef]string
-	rewriteDebt map[ColumnAssetRef]string
-	published   map[ColumnAssetRef]string
+	mu            sync.Mutex
+	store         ColumnAssetStore
+	pins          map[ColumnAssetRef]int
+	zombies       map[ColumnAssetRef]string
+	quarantine    map[ColumnAssetRef]string
+	publishFailed map[ColumnAssetRef]struct{}
+	rewriteDebt   map[ColumnAssetRef]string
+	published     map[ColumnAssetRef]string
 }
 
 type ColumnAssetManagerReclamationPlan struct {
@@ -61,12 +62,13 @@ func NewColumnAssetManager(store ColumnAssetStore) (*ColumnAssetManager, error) 
 		return nil, fmt.Errorf("colgranule: nil column asset manager store")
 	}
 	return &ColumnAssetManager{
-		store:       store,
-		pins:        make(map[ColumnAssetRef]int),
-		zombies:     make(map[ColumnAssetRef]string),
-		quarantine:  make(map[ColumnAssetRef]string),
-		rewriteDebt: make(map[ColumnAssetRef]string),
-		published:   make(map[ColumnAssetRef]string),
+		store:         store,
+		pins:          make(map[ColumnAssetRef]int),
+		zombies:       make(map[ColumnAssetRef]string),
+		quarantine:    make(map[ColumnAssetRef]string),
+		publishFailed: make(map[ColumnAssetRef]struct{}),
+		rewriteDebt:   make(map[ColumnAssetRef]string),
+		published:     make(map[ColumnAssetRef]string),
 	}, nil
 }
 
@@ -282,6 +284,12 @@ func (m *ColumnAssetManager) SyncPublishClosure(closure ColumnAssetPublishClosur
 	if err != nil {
 		return ColumnAssetSyncedPublishClosure{}, err
 	}
+	// Re-derive the closure from prepared refs so sync requirements cannot be
+	// cleared by caller mutation, but require the caller-visible accounting to
+	// still match the prepared asset set that was originally reviewed.
+	if err := validateColumnAssetPublishClosureMatches(closure, verified); err != nil {
+		return ColumnAssetSyncedPublishClosure{}, err
+	}
 	if verified.SyncRequired {
 		if syncer, ok := store.(columnAssetSyncer); ok {
 			if err := syncer.Sync(); err != nil {
@@ -313,9 +321,10 @@ func (m *ColumnAssetManager) MarkPublishSucceeded(synced ColumnAssetSyncedPublis
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, asset := range synced.closure.PreparedAssets {
-		delete(m.quarantine, asset.Ref)
-		delete(m.zombies, asset.Ref)
-		delete(m.rewriteDebt, asset.Ref)
+		if _, ok := m.publishFailed[asset.Ref]; ok {
+			delete(m.quarantine, asset.Ref)
+			delete(m.publishFailed, asset.Ref)
+		}
 		m.published[asset.Ref] = reason
 	}
 	return nil
@@ -337,6 +346,7 @@ func (m *ColumnAssetManager) MarkPublishFailed(prepared []ColumnPreparedAsset, r
 	defer m.mu.Unlock()
 	for _, asset := range prepared {
 		m.quarantine[asset.Ref] = reason
+		m.publishFailed[asset.Ref] = struct{}{}
 	}
 	return nil
 }
@@ -406,6 +416,19 @@ func validateColumnPreparedAsset(asset ColumnPreparedAsset) error {
 	}
 	if asset.Bytes == 0 && asset.Ref.Length > int64(^uint(0)>>1) {
 		return fmt.Errorf("colgranule: prepared asset length=%d exceeds host int", asset.Ref.Length)
+	}
+	return nil
+}
+
+func validateColumnAssetPublishClosureMatches(caller ColumnAssetPublishClosure, verified ColumnAssetPublishClosure) error {
+	if caller.RequiredAssets != verified.RequiredAssets {
+		return fmt.Errorf("colgranule: publish closure required assets=%d want %d", caller.RequiredAssets, verified.RequiredAssets)
+	}
+	if caller.RequiredBytes != verified.RequiredBytes {
+		return fmt.Errorf("colgranule: publish closure required bytes=%d want %d", caller.RequiredBytes, verified.RequiredBytes)
+	}
+	if caller.FlushRequired != verified.FlushRequired {
+		return fmt.Errorf("colgranule: publish closure flush required=%t want %t", caller.FlushRequired, verified.FlushRequired)
 	}
 	return nil
 }

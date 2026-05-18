@@ -5,6 +5,28 @@ import (
 	"testing"
 )
 
+func TestColumnAssetReasonSentinelsAreAppendSafe(t *testing.T) {
+	reasons := map[string][]string{
+		string(ColumnAssetStatePrepared):              columnAssetReasonPrepared,
+		string(ColumnAssetStateProcessVisible):        columnAssetReasonProcessVisible,
+		string(ColumnAssetStatePendingPublish):        columnAssetReasonPendingPublish,
+		string(ColumnAssetStateRootPublished):         columnAssetReasonRootPublished,
+		string(ColumnAssetStateRecoveryAuthoritative): columnAssetReasonRecoveryAuthoritative,
+		string(ColumnAssetStateActive):                columnAssetReasonActive,
+		string(ColumnAssetStateSuperseded):            columnAssetReasonSuperseded,
+		string(ColumnAssetStateCleanupSafe):           columnAssetReasonCleanupSafe,
+		string(ColumnAssetStateSnapshotPinned):        columnAssetReasonSnapshotPinned,
+		string(ColumnAssetStateReclaimable):           columnAssetReasonReclaimable,
+		string(ColumnAssetStateDeleting):              columnAssetReasonDeleting,
+		string(ColumnAssetStateQuarantined):           columnAssetReasonQuarantined,
+	}
+	for name, reason := range reasons {
+		if len(reason) != 1 || cap(reason) != len(reason) || reason[0] != name {
+			t.Fatalf("reason sentinel %q=%v len=%d cap=%d, want one append-safe reason", name, reason, len(reason), cap(reason))
+		}
+	}
+}
+
 func TestColumnAssetReachabilityDeletesClosedSupersededSegment(t *testing.T) {
 	activeRef := lifecycleAssetRef(t, 1, 0, tcs1HeaderBytes+16)
 	oldRef := lifecycleAssetRef(t, 2, 0, tcs1HeaderBytes+24)
