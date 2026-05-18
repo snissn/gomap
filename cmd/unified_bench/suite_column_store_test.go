@@ -153,8 +153,14 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 	if report.ByteAccounting.CommandWALBytesBeforeCheckpoint == 0 {
 		t.Fatalf("expected command WAL bytes in byte accounting: %+v", report.ByteAccounting)
 	}
+	if report.ByteAccounting.RetainedPayloadBytesNote == "" || report.ByteAccounting.ColumnAssetBytesNote == "" {
+		t.Fatalf("expected M11A byte-accounting placeholder notes: %+v", report.ByteAccounting)
+	}
 	if !strings.Contains(string(data), `"command_wal_bytes_before_checkpoint"`) {
 		t.Fatalf("column store JSON missing before-checkpoint command WAL label:\n%s", data)
+	}
+	if !strings.Contains(string(data), `"column_asset_bytes_note"`) || !strings.Contains(string(data), `"retained_payload_bytes_note"`) {
+		t.Fatalf("column store JSON missing byte-accounting notes:\n%s", data)
 	}
 	if strings.Contains(string(data), `"command_wal_bytes":`) {
 		t.Fatalf("column store JSON contains ambiguous command WAL label:\n%s", data)
@@ -165,6 +171,9 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 	}
 	if !strings.Contains(string(columnMarkdown), "command_wal_bytes_before_checkpoint") {
 		t.Fatalf("column store markdown missing before-checkpoint command WAL label:\n%s", columnMarkdown)
+	}
+	if !strings.Contains(string(columnMarkdown), "column_asset_bytes_note") || !strings.Contains(string(columnMarkdown), "retained_payload_bytes_note") {
+		t.Fatalf("column store markdown missing byte-accounting notes:\n%s", columnMarkdown)
 	}
 	if report.ByteAccounting.ManifestControlBytes == 0 || report.ByteAccounting.DBTotalBytes == 0 || report.ByteAccounting.DBTotalFiles == 0 {
 		t.Fatalf("expected measured manifest/control and DB byte accounting: %+v", report.ByteAccounting)

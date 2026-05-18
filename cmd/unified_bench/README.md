@@ -214,7 +214,9 @@ counters used by raw-engine review gates.
 Use `column_store` as the canonical native TreeDB column-store benchmark entry
 point. M11A measures the production column-enabled collection manifest/control
 path with a durable command-WAL profile and a deterministic JSONBench-shaped
-fixture. The only runnable execution label in M11A is `row_store_baseline`; the
+fixture. `-profile balanced` is accepted as a `durable` alias for the column
+store suite so the unified-bench default still exercises the durable gate. The
+only runnable execution label in M11A is `row_store_baseline`; the
 physical column labels (`b_tree_index_baseline`, `serial_column_scan`,
 `aggregate_metadata`, `parallel_column_scan`) fail closed rather than silently
 falling back to row materialization.
@@ -246,7 +248,9 @@ profile, forced path, q1-q5/q5_metadata rows/sec, MiB/sec, ns/row,
 materialized-row count, parity status, byte accounting, manifest/recovery
 identity, and the generated HTML artifact paths. If a forced physical column
 path is not implemented yet, the PR must call that out explicitly and include
-the fail-closed evidence.
+the fail-closed evidence. M11A reports `column_asset_bytes=0` with a note because
+physical column assets are not published yet; `retained_payload_bytes` equals the
+source JSONBench payload until compressed retained-payload accounting lands.
 
 ## Notes
 

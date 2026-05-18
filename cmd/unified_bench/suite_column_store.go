@@ -43,6 +43,9 @@ var (
 		"aggregate_metadata",
 		"parallel_column_scan",
 	}
+	// These files are opportunistic control-plane telemetry for the benchmark
+	// report. Missing files are reported, not fatal, because the exact set can
+	// vary as TreeDB control metadata evolves.
 	columnStoreSuiteManifestControlFiles = []string{
 		"vlog_ref_counts.meta",
 	}
@@ -120,7 +123,9 @@ type columnStoreParity struct {
 type columnStoreByteAccounting struct {
 	SourceDocumentBytes             int64    `json:"source_document_bytes"`
 	RetainedPayloadBytes            int64    `json:"retained_payload_bytes"`
+	RetainedPayloadBytesNote        string   `json:"retained_payload_bytes_note,omitempty"`
 	ColumnAssetBytes                int64    `json:"column_asset_bytes"`
+	ColumnAssetBytesNote            string   `json:"column_asset_bytes_note,omitempty"`
 	ManifestControlBytes            int64    `json:"manifest_control_bytes"`
 	ManifestControlMissing          []string `json:"manifest_control_missing,omitempty"`
 	CommandWALBytesBeforeCheckpoint int64    `json:"command_wal_bytes_before_checkpoint"`
@@ -372,7 +377,9 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 		ByteAccounting: columnStoreByteAccounting{
 			SourceDocumentBytes:             sourceBytes,
 			RetainedPayloadBytes:            sourceBytes,
+			RetainedPayloadBytesNote:        "M11A retains the source JSONBench payload as the reconstructable row baseline; compressed retained payload accounting is future work",
 			ColumnAssetBytes:                0,
+			ColumnAssetBytesNote:            "not measured in M11A because physical column assets are not published yet",
 			ManifestControlBytes:            manifestControlBytes,
 			ManifestControlMissing:          manifestControlMissing,
 			CommandWALBytesBeforeCheckpoint: commandWALBytesBeforeCheckpoint,
@@ -407,6 +414,7 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 			}
 		}
 	}
+	// Keep artifacts available for diagnosis even when parity is the failing gate.
 	if parityErr != nil {
 		return "", parityErr
 	}
@@ -415,7 +423,10 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 
 func columnStoreSuiteEffectiveProfile(profile string) (string, error) {
 	switch strings.ToLower(strings.TrimSpace(profile)) {
-	case "", "durable", "balanced":
+	case "", "durable":
+		return "durable", nil
+	case "balanced":
+		// Accept unified-bench's default profile as an alias for the durable gate.
 		return "durable", nil
 	case "fast", "unsafe", "wal_on_fast":
 		return "", fmt.Errorf("column_store: profile %q is benchmark-relaxed and unsupported for M11A production column-store writes; use -profile durable", profile)
@@ -1126,7 +1137,13 @@ func renderColumnStoreSuiteMarkdown(report columnStoreSuiteReport) string {
 	sb.WriteString("## Byte Accounting\n\n")
 	sb.WriteString(fmt.Sprintf("- source_document_bytes: %d\n", report.ByteAccounting.SourceDocumentBytes))
 	sb.WriteString(fmt.Sprintf("- retained_payload_bytes: %d\n", report.ByteAccounting.RetainedPayloadBytes))
+	if report.ByteAccounting.RetainedPayloadBytesNote != "" {
+		sb.WriteString(fmt.Sprintf("- retained_payload_bytes_note: %s\n", report.ByteAccounting.RetainedPayloadBytesNote))
+	}
 	sb.WriteString(fmt.Sprintf("- column_asset_bytes: %d\n", report.ByteAccounting.ColumnAssetBytes))
+	if report.ByteAccounting.ColumnAssetBytesNote != "" {
+		sb.WriteString(fmt.Sprintf("- column_asset_bytes_note: %s\n", report.ByteAccounting.ColumnAssetBytesNote))
+	}
 	sb.WriteString(fmt.Sprintf("- manifest_control_bytes: %d\n", report.ByteAccounting.ManifestControlBytes))
 	if len(report.ByteAccounting.ManifestControlMissing) != 0 {
 		sb.WriteString(fmt.Sprintf("- manifest_control_missing: `%s`\n", strings.Join(report.ByteAccounting.ManifestControlMissing, "`, `")))
