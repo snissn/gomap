@@ -192,11 +192,7 @@ func OpenSegmentColumnAssetStore(dir string) (*SegmentColumnAssetStore, error) {
 		return nil, err
 	}
 	path := filepath.Join(dir, "column-assets-000001.seg")
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o644)
-	created := err == nil
-	if errors.Is(err, os.ErrExist) {
-		file, err = os.OpenFile(path, os.O_RDWR, 0o644)
-	}
+	file, created, err := openOrCreateColumnAssetSegment(path)
 	if err != nil {
 		return nil, err
 	}
@@ -213,6 +209,21 @@ func OpenSegmentColumnAssetStore(dir string) (*SegmentColumnAssetStore, error) {
 		size:            info.Size(),
 		dirSyncRequired: created,
 	}, nil
+}
+
+func openOrCreateColumnAssetSegment(path string) (*os.File, bool, error) {
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o644)
+	if err == nil {
+		return file, true, nil
+	}
+	if !errors.Is(err, os.ErrExist) {
+		return nil, false, err
+	}
+	file, err = os.OpenFile(path, os.O_RDWR, 0o644)
+	if err != nil {
+		return nil, false, err
+	}
+	return file, false, nil
 }
 
 func (s *SegmentColumnAssetStore) Close() error {
@@ -255,6 +266,8 @@ func syncColumnAssetDirectory(dir string) error {
 		return fmt.Errorf("colgranule: empty segment asset dir")
 	}
 	if runtime.GOOS == "windows" {
+		// Go does not expose portable directory fsync on Windows. File Sync is
+		// still required; POSIX directory-entry durability is best-effort here.
 		return nil
 	}
 	file, err := os.Open(dir)
@@ -384,27 +397,20 @@ func (s *SegmentColumnAssetStore) Verify(ref ColumnAssetRef) error {
 		return err
 	}
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.file == nil {
-		s.mu.Unlock()
 		return fmt.Errorf("colgranule: closed segment asset store")
 	}
-	path := s.path
 	fileID := s.fileID
 	size := s.size
-	s.mu.Unlock()
 	if ref.FileID != fileID {
 		return fmt.Errorf("colgranule: asset file id=%d want %d", ref.FileID, fileID)
 	}
 	if ref.Offset > size || ref.Length > size-ref.Offset {
 		return fmt.Errorf("colgranule: asset range offset=%d length=%d outside segment bytes=%d", ref.Offset, ref.Length, size)
 	}
-	file, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
 	h := crc32.NewIEEE()
-	reader := io.NewSectionReader(file, ref.Offset, ref.Length)
+	reader := io.NewSectionReader(s.file, ref.Offset, ref.Length)
 	var buf [32 << 10]byte
 	if _, err := io.CopyBuffer(h, reader, buf[:]); err != nil {
 		return err
