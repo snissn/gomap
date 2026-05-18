@@ -824,8 +824,7 @@ func runColumnStoreSuiteQueriesProfiled(cfg BenchConfig, collection *collections
 			return nil, nil, nil, fmt.Errorf("column_store: blockprofile %s: %w", blockPath, deltaErr)
 		}
 		if !wrote {
-			cleanup(blockPath, mutexBasePath)
-			return nil, nil, nil, fmt.Errorf("column_store: blockprofile %s: %w", blockPath, errEmptyPprofDeltaOutput)
+			cleanup(blockPath)
 		}
 	}
 	if mutexBasePath != "" {
@@ -842,7 +841,6 @@ func runColumnStoreSuiteQueriesProfiled(cfg BenchConfig, collection *collections
 		}
 		if !wrote {
 			cleanup(mutexPath)
-			return nil, nil, nil, fmt.Errorf("column_store: mutexprofile %s: %w", mutexPath, errEmptyPprofDeltaOutput)
 		}
 	}
 

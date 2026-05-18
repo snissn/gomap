@@ -562,9 +562,10 @@ func TestColumnStoreSuiteHardQueryFailureRemovesCPUArtifactM11A(t *testing.T) {
 	}
 }
 
-func TestColumnStoreSuiteRuntimeDeltaRequiresOutputM11A(t *testing.T) {
+func TestColumnStoreSuiteRuntimeDeltaSkipsEmptyOutputM11A(t *testing.T) {
 	collection, events, rawHashes := newColumnStoreSuiteTestCollectionM11A(t, 8, 4)
 	profileDir := t.TempDir()
+	blockPath := filepath.Join(profileDir, "block.pprof")
 	profileHooks := &benchmarkProfileHooks{
 		writeRuntimeProfileSnapshotTemp: func(prefix, profileName string) (string, error) {
 			path := filepath.Join(profileDir, prefix+".pprof")
@@ -575,14 +576,15 @@ func TestColumnStoreSuiteRuntimeDeltaRequiresOutputM11A(t *testing.T) {
 		},
 	}
 	_, _, _, err := runColumnStoreSuiteQueriesProfiled(BenchConfig{
-		BlockProfile: filepath.Join(profileDir, "block.pprof"),
+		BlockProfile: blockPath,
 		profileHooks: profileHooks,
 	}, collection, len(events), rawHashes, columnStorePathRowStoreBaseline)
-	if err == nil {
-		t.Fatal("expected empty block delta output to fail")
+	if err != nil {
+		t.Fatalf("empty block delta output should be skipped: %v", err)
 	}
-	if !errors.Is(err, errEmptyPprofDeltaOutput) {
-		t.Fatalf("expected errEmptyPprofDeltaOutput, got %v", err)
+	outPath := contentionProfilePath(blockPath, "block", columnStoreSuiteBenchTestName, columnStoreSuiteBenchDBName)
+	if _, statErr := os.Stat(outPath); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("expected empty block delta artifact to be omitted, stat err=%v", statErr)
 	}
 }
 
