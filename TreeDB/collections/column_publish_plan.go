@@ -10,7 +10,11 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 )
 
-const columnManifestRootSuffix = "/column/manifest"
+const (
+	columnManifestRootSuffix = "/column/manifest"
+
+	errColumnPublishPlanRequiresEnabledColumnStore = "collections: column publish plan requires enabled=true column_store"
+)
 
 type ColumnPublishOperation string
 
@@ -238,7 +242,7 @@ func BuildColumnPublishPlan(input ColumnPublishPlanInput) (ColumnPublishPlan, er
 		if columnStoreConfigEmpty(*input.ColumnStore) {
 			return ColumnPublishPlan{}, nil
 		}
-		return ColumnPublishPlan{}, errors.New("collections: column publish plan requires enabled=true column_store")
+		return ColumnPublishPlan{}, errors.New(errColumnPublishPlanRequiresEnabledColumnStore)
 	}
 	if err := validateColumnPublishOperation(input.Operation); err != nil {
 		return ColumnPublishPlan{}, err
@@ -684,7 +688,7 @@ func columnPublishHookConfig(cfg ColumnStoreConfig) ColumnStoreConfig {
 
 func validateColumnPublishPlanConfig(collection string, cfg *ColumnStoreConfig) error {
 	if cfg == nil || !cfg.Enabled {
-		return errors.New("collections: column publish plan requires enabled column_store")
+		return errors.New(errColumnPublishPlanRequiresEnabledColumnStore)
 	}
 	if cfg.ManifestRoot == nil {
 		return errors.New("collections: column publish plan requires column manifest root descriptor")
@@ -801,18 +805,35 @@ func validateColumnPublishClosureMatchesPrepared(prepared ColumnPublishPreparedA
 	if matchesOrder {
 		return nil
 	}
-	preparedCounts := make(map[ColumnPreparedAsset]int, len(prepared.Assets))
+	preparedCounts := make(map[columnPreparedAssetMatchKey]int, len(prepared.Assets))
 	for _, asset := range prepared.Assets {
-		preparedCounts[asset]++
+		preparedCounts[columnPreparedAssetMatchKeyOf(asset)]++
 	}
 	for i, asset := range closure.PreparedAssets {
-		count := preparedCounts[asset]
+		key := columnPreparedAssetMatchKeyOf(asset)
+		count := preparedCounts[key]
 		if count == 0 {
 			return fmt.Errorf("collections: column publish closure prepared asset %d does not match manifest prepared assets", i)
 		}
-		preparedCounts[asset] = count - 1
+		preparedCounts[key] = count - 1
 	}
 	return nil
+}
+
+type columnPreparedAssetMatchKey struct {
+	Ref          ColumnAssetRef
+	Bytes        int64
+	PublishID    uint64
+	GenerationID uint64
+}
+
+func columnPreparedAssetMatchKeyOf(asset ColumnPreparedAsset) columnPreparedAssetMatchKey {
+	return columnPreparedAssetMatchKey{
+		Ref:          asset.Ref,
+		Bytes:        asset.Bytes,
+		PublishID:    asset.PublishID,
+		GenerationID: asset.GenerationID,
+	}
 }
 
 func validateColumnPreparedAssetForPlan(asset ColumnPreparedAsset) error {

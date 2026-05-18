@@ -27,6 +27,7 @@ const (
 	columnManifestIdentityRecordKey             = "\x00column-manifest/identity"
 )
 
+// columnManifestIdentityRecordKeyBytes returns a fresh caller-owned key copy.
 func columnManifestIdentityRecordKeyBytes() []byte {
 	return []byte(columnManifestIdentityRecordKey)
 }
