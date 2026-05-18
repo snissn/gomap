@@ -330,20 +330,23 @@ func TestColumnStoreMetadataValidation(t *testing.T) {
 
 func TestColumnStoreProfileSupportMatrix(t *testing.T) {
 	tests := []struct {
-		name        string
-		durability  backenddb.DurabilityMode
-		profile     ColumnStoreProfileSupport
-		wantCreate  string
-		wantOpen    string
-		benchmarkOK bool
+		name       string
+		durability backenddb.DurabilityMode
+		profile    ColumnStoreProfileSupport
+		wantCreate string
+		wantOpen   string
 	}{
 		{name: "durable default", durability: backenddb.DurabilityDurable},
 		{name: "wal on relaxed default rejected", durability: backenddb.DurabilityWALOnRelaxed, wantCreate: "durable-only", wantOpen: "durable-only"},
 		{name: "wal off relaxed default rejected", durability: backenddb.DurabilityWALOffRelaxed, wantCreate: "durable-only", wantOpen: "durable-only"},
-		{name: "wal on relaxed benchmark allowed", durability: backenddb.DurabilityWALOnRelaxed, profile: ColumnStoreProfileBenchmarkRelaxed, benchmarkOK: true},
-		{name: "wal off relaxed benchmark allowed", durability: backenddb.DurabilityWALOffRelaxed, profile: ColumnStoreProfileBenchmarkRelaxed, benchmarkOK: true},
+		{name: "wal on relaxed benchmark allowed", durability: backenddb.DurabilityWALOnRelaxed, profile: ColumnStoreProfileBenchmarkRelaxed},
+		{name: "wal off relaxed benchmark allowed", durability: backenddb.DurabilityWALOffRelaxed, profile: ColumnStoreProfileBenchmarkRelaxed},
 	}
 	for _, tt := range tests {
+		wantProfile := tt.profile
+		if wantProfile == "" {
+			wantProfile = ColumnStoreProfileDurableOnly
+		}
 		t.Run(tt.name+"/create", func(t *testing.T) {
 			d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), Durability: tt.durability})
 			if err != nil {
@@ -375,8 +378,8 @@ func TestColumnStoreProfileSupportMatrix(t *testing.T) {
 			if err != nil {
 				t.Fatalf("OpenCollection: %v", err)
 			}
-			if got := col.Meta().Options.ColumnStore.ProfileSupport; tt.benchmarkOK && got != ColumnStoreProfileBenchmarkRelaxed {
-				t.Fatalf("ProfileSupport=%q want %q", got, ColumnStoreProfileBenchmarkRelaxed)
+			if got := col.Meta().Options.ColumnStore.ProfileSupport; got != wantProfile {
+				t.Fatalf("ProfileSupport=%q want %q", got, wantProfile)
 			}
 		})
 		t.Run(tt.name+"/open", func(t *testing.T) {
@@ -411,8 +414,8 @@ func TestColumnStoreProfileSupportMatrix(t *testing.T) {
 			if err != nil {
 				t.Fatalf("OpenCollection: %v", err)
 			}
-			if got := col.Meta().Options.ColumnStore.ProfileSupport; tt.benchmarkOK && got != ColumnStoreProfileBenchmarkRelaxed {
-				t.Fatalf("ProfileSupport=%q want %q", got, ColumnStoreProfileBenchmarkRelaxed)
+			if got := col.Meta().Options.ColumnStore.ProfileSupport; got != wantProfile {
+				t.Fatalf("ProfileSupport=%q want %q", got, wantProfile)
 			}
 		})
 	}
