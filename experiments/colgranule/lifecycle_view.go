@@ -64,6 +64,7 @@ type columnAssetReachabilitySummaryRecord struct {
 	bytes       int
 	live        bool
 	candidate   bool
+	protected   bool
 	quarantined bool
 }
 
@@ -431,13 +432,15 @@ func (s *ColumnAssetReachabilitySummaryScratch) addAssetRefToReachabilitySummary
 		}
 		record.live = record.live || live
 		record.candidate = record.candidate || candidate
+		record.protected = record.protected || (!live && (!candidate || quarantined))
 		record.quarantined = record.quarantined || quarantined
 	} else {
 		s.records = append(s.records, columnAssetReachabilitySummaryRecord{
-			ref:   ref,
-			state: state,
-			bytes: bytes,
-			live:  live,
+			ref:       ref,
+			state:     state,
+			bytes:     bytes,
+			live:      live,
+			protected: !live && (!candidate || quarantined),
 		})
 		record := &s.records[len(s.records)-1]
 		record.candidate = candidate
@@ -467,7 +470,7 @@ func finalizeColumnAssetReachabilitySummary(records []columnAssetReachabilitySum
 		if record.candidate && !record.live && !record.quarantined {
 			seg.candidateRefs++
 		}
-		if !record.live && (!record.candidate || record.quarantined) {
+		if record.protected {
 			seg.protectedRefs++
 		}
 		segments[record.ref.FileID] = seg
@@ -539,7 +542,7 @@ func finalizeColumnAssetReachabilityRecords(records map[ColumnAssetRef]columnAss
 		if record.candidate && !record.live && !record.quarantined {
 			seg.candidateRefs++
 		}
-		if !record.live && (!record.candidate || record.quarantined) {
+		if record.protected {
 			seg.protectedRefs++
 		}
 	}

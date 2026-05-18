@@ -125,6 +125,7 @@ type columnAssetReachabilityRecord struct {
 	entry       ColumnAssetReachabilityEntry
 	live        bool
 	candidate   bool
+	protected   bool
 	quarantined bool
 }
 
@@ -407,6 +408,7 @@ func addReachabilityEntry(records map[ColumnAssetRef]columnAssetReachabilityReco
 	}
 	record.live = record.live || live
 	record.candidate = record.candidate || candidate
+	record.protected = record.protected || (!live && (!candidate || quarantined))
 	record.quarantined = record.quarantined || quarantined
 	records[entry.Ref] = record
 	if segments[entry.Ref.FileID] == nil {
