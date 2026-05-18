@@ -351,26 +351,17 @@ func (w *ColumnWorkspace) PublishPart(part *ColumnPart, dictionaries map[string]
 	if err := validateColumnWorkspacePartManifest(entry); err != nil {
 		return ColumnWorkspacePartManifest{}, err
 	}
-	var synced ColumnAssetSyncedPublishClosure
-	preparedAssets := []ColumnPreparedAsset{{
+	prepared := []ColumnPreparedAsset{{
 		Ref:          entry.AssetRef,
 		Bytes:        entry.AssetBytes,
-		PublishID:    w.manifest.PublishID + 1,
 		GenerationID: w.manifest.Generation + 1,
+		PublishID:    w.manifest.PublishID + 1,
 		Reason:       "workspace part publish",
 	}}
-	if w.ManifestSyncMode() != ColumnWorkspaceManifestSyncDisabledForBenchmark {
-		closure, err := w.assets.PreparePublishClosure(preparedAssets)
-		if err != nil {
-			return ColumnWorkspacePartManifest{}, err
-		}
-		synced, err = w.assets.SyncPublishClosure(closure)
-		if err != nil {
-			if failErr := w.assets.MarkPublishFailed(preparedAssets, "workspace part asset sync failed"); failErr != nil {
-				return ColumnWorkspacePartManifest{}, errors.Join(err, failErr)
-			}
-			return ColumnWorkspacePartManifest{}, err
-		}
+	synced, tracked, err := w.syncPreparedAssetsForManifest(prepared)
+	if err != nil {
+		markErr := w.assets.MarkPublishFailed(prepared, "workspace part asset sync failed")
+		return ColumnWorkspacePartManifest{}, errors.Join(err, markErr)
 	}
 	oldManifest := cloneColumnWorkspaceManifest(w.manifest)
 	oldPartByID := cloneColumnWorkspacePartIndex(w.partByID)
@@ -390,19 +381,37 @@ func (w *ColumnWorkspace) PublishPart(part *ColumnPart, dictionaries map[string]
 	if err := w.saveManifest(); err != nil {
 		w.manifest = oldManifest
 		w.partByID = oldPartByID
-		if synced.sealed {
-			if failErr := w.assets.MarkPublishFailed(preparedAssets, "workspace part manifest publish failed"); failErr != nil {
-				return ColumnWorkspacePartManifest{}, errors.Join(err, failErr)
+		if tracked {
+			if markErr := w.assets.MarkPublishFailed(prepared, "workspace part manifest publish failed"); markErr != nil {
+				return ColumnWorkspacePartManifest{}, errors.Join(err, markErr)
 			}
 		}
 		return ColumnWorkspacePartManifest{}, err
 	}
-	if synced.sealed {
+	if tracked {
 		if err := w.assets.MarkPublishSucceeded(synced); err != nil {
 			return ColumnWorkspacePartManifest{}, err
 		}
 	}
 	return entry, nil
+}
+
+func (w *ColumnWorkspace) syncPreparedAssetsForManifest(prepared []ColumnPreparedAsset) (ColumnAssetSyncedPublishClosure, bool, error) {
+	if w == nil || w.assets == nil {
+		return ColumnAssetSyncedPublishClosure{}, false, fmt.Errorf("colgranule: closed column workspace")
+	}
+	if len(prepared) == 0 || w.ManifestSyncMode() == ColumnWorkspaceManifestSyncDisabledForBenchmark {
+		return ColumnAssetSyncedPublishClosure{}, false, nil
+	}
+	closure, err := w.assets.PreparePublishClosure(prepared)
+	if err != nil {
+		return ColumnAssetSyncedPublishClosure{}, true, err
+	}
+	synced, err := w.assets.SyncPublishClosure(closure)
+	if err != nil {
+		return ColumnAssetSyncedPublishClosure{}, true, err
+	}
+	return synced, true, nil
 }
 
 func (w *ColumnWorkspace) LoadPart(partID uint64) (ColumnWorkspaceLoadResult, error) {
