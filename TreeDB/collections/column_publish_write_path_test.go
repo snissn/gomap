@@ -629,8 +629,9 @@ func TestColumnStoreAssignedForegroundIntentDoesNotBypassRelaxedDurabilityGateM1
 	if err != nil {
 		t.Fatalf("AppendCommandWALIntent: %v", err)
 	}
-	if lsn == 0 || intent.AssignedLSN() != lsn || intent.ReplayAssignedLSN() != 0 {
-		t.Fatalf("assigned foreground intent lsn=%d assigned=%d replay=%d", lsn, intent.AssignedLSN(), intent.ReplayAssignedLSN())
+	replayLSN, replay := intent.ReplayAssignedLSN()
+	if lsn == 0 || intent.AssignedLSN() != lsn || replay || replayLSN != 0 {
+		t.Fatalf("assigned foreground intent lsn=%d assigned=%d replay=(%d,%t)", lsn, intent.AssignedLSN(), replayLSN, replay)
 	}
 	if err := col.requireColumnStoreCommandWAL(col.meta, intent); !errors.Is(err, backenddb.ErrCommandWALRejected) {
 		t.Fatalf("assigned foreground relaxed intent error=%v, want ErrCommandWALRejected", err)

@@ -44,7 +44,7 @@ func (c *Collection) requireColumnStoreCommandWAL(meta CollectionMeta, commandWA
 	if c == nil || c.db == nil {
 		return errCollectionDBNil
 	}
-	if commandWALIntent != nil && commandWALIntent.ReplayAssignedLSN() != 0 {
+	if _, replay := commandWALIntent.ReplayAssignedLSN(); replay {
 		return nil
 	}
 	if c.db.DurabilityMode() != backenddb.DurabilityDurable {

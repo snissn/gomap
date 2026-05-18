@@ -44,12 +44,13 @@ func (intent *CommandWALIntent) AssignedLSN() uint64 {
 	return intent.inner.lsn
 }
 
-// ReplayAssignedLSN returns the assigned LSN only for replay-originated intents.
-func (intent *CommandWALIntent) ReplayAssignedLSN() uint64 {
+// ReplayAssignedLSN returns the assigned LSN and true only for replay-originated
+// intents. The boolean keeps callers from treating LSN 0 as a replay sentinel.
+func (intent *CommandWALIntent) ReplayAssignedLSN() (uint64, bool) {
 	if intent == nil || !intent.inner.fromReplay {
-		return 0
+		return 0, false
 	}
-	return intent.inner.lsn
+	return intent.inner.lsn, true
 }
 
 func (db *DB) CommandWALEnabled() bool {
