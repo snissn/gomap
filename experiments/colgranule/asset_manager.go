@@ -16,6 +16,7 @@ type ColumnAssetManager struct {
 	pins          map[ColumnAssetRef]int
 	zombies       map[ColumnAssetRef]string
 	quarantine    map[ColumnAssetRef]string
+	quarantineBy  map[ColumnAssetRef]string
 	publishFailed map[ColumnAssetRef]string
 	rewriteDebt   map[ColumnAssetRef]string
 	published     map[ColumnAssetRef]string
@@ -69,6 +70,7 @@ func NewColumnAssetManager(store ColumnAssetStore) (*ColumnAssetManager, error) 
 		pins:          make(map[ColumnAssetRef]int),
 		zombies:       make(map[ColumnAssetRef]string),
 		quarantine:    make(map[ColumnAssetRef]string),
+		quarantineBy:  make(map[ColumnAssetRef]string),
 		publishFailed: make(map[ColumnAssetRef]string),
 		rewriteDebt:   make(map[ColumnAssetRef]string),
 		published:     make(map[ColumnAssetRef]string),
@@ -219,6 +221,7 @@ func (m *ColumnAssetManager) Quarantine(ref ColumnAssetRef, reason string) error
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.quarantine[ref] = reason
+	delete(m.quarantineBy, ref)
 	return nil
 }
 
@@ -330,8 +333,9 @@ func (m *ColumnAssetManager) MarkPublishSucceeded(synced ColumnAssetSyncedPublis
 	defer m.mu.Unlock()
 	for _, asset := range synced.closure.PreparedAssets {
 		if failedReason, ok := m.publishFailed[asset.Ref]; ok {
-			if quarantineReason, quarantined := m.quarantine[asset.Ref]; quarantined && quarantineReason == failedReason {
+			if quarantineReason, quarantined := m.quarantine[asset.Ref]; quarantined && quarantineReason == failedReason && m.quarantineBy[asset.Ref] == failedReason {
 				delete(m.quarantine, asset.Ref)
+				delete(m.quarantineBy, asset.Ref)
 			}
 			delete(m.publishFailed, asset.Ref)
 		}
@@ -356,6 +360,7 @@ func (m *ColumnAssetManager) MarkPublishFailed(prepared []ColumnPreparedAsset, r
 	defer m.mu.Unlock()
 	for _, asset := range prepared {
 		m.quarantine[asset.Ref] = reason
+		m.quarantineBy[asset.Ref] = reason
 		m.publishFailed[asset.Ref] = reason
 	}
 	return nil
