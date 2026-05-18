@@ -593,7 +593,7 @@ func encodeColumnPublishManifest(input ColumnPublishPlanInput, cfg ColumnStoreCo
 		Operation:         input.Operation,
 		AppliedCommandLSN: input.AppliedCommandLSN,
 		CurrentManifest:   input.CurrentManifest,
-		Prepared:          prepared,
+		Prepared:          cloneColumnPublishPreparedAssets(prepared),
 	})
 }
 

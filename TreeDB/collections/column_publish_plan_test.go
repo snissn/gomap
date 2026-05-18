@@ -404,6 +404,34 @@ func TestColumnPublishPlanRejectsClosurePreparedAssetMismatchM10A(t *testing.T) 
 	}
 }
 
+func TestColumnPublishPlanCopiesPreparedAssetsForManifestHookM10A(t *testing.T) {
+	asset := testColumnPublishPreparedAssetM10A()
+	identity := ColumnManifestIdentity{Generation: 7, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0xfeedbeef}
+	input := testColumnPublishPlanInputM10A(identity, asset)
+	input.Hooks.ValidateClosure = nil
+	var hookAssets []ColumnPreparedAsset
+	input.Hooks.EncodeManifest = func(in ColumnPublishManifestEncodeInput) (ColumnPublishManifestEncodeResult, error) {
+		hookAssets = in.Prepared.Assets
+		in.Prepared.Assets[0].Ref.Offset += int64(asset.Bytes)
+		return ColumnPublishManifestEncodeResult{Identity: identity, ManifestBytes: 256}, nil
+	}
+
+	plan, err := BuildColumnPublishPlan(input)
+	if err != nil {
+		t.Fatalf("BuildColumnPublishPlan: %v", err)
+	}
+	if len(plan.PreparedAssets) != 1 {
+		t.Fatalf("prepared assets=%d want 1", len(plan.PreparedAssets))
+	}
+	if plan.PreparedAssets[0] != asset {
+		t.Fatalf("plan prepared asset changed after manifest hook mutation: got %+v want %+v", plan.PreparedAssets[0], asset)
+	}
+	hookAssets[0].Ref.Offset += int64(asset.Bytes)
+	if plan.PreparedAssets[0] != asset {
+		t.Fatalf("plan prepared asset changed after manifest hook-owned slice mutation: got %+v want %+v", plan.PreparedAssets[0], asset)
+	}
+}
+
 func TestColumnPublishPlanSnapshotsPreparedAssetsForClosureValidationM10A(t *testing.T) {
 	asset := testColumnPublishPreparedAssetM10A()
 	identity := ColumnManifestIdentity{Generation: 7, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0xfeedbeef}
