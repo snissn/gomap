@@ -492,9 +492,6 @@ func columnSkipScanMarkDisjoint(mark ColumnSkipScanMark, prefixPredicates []Colu
 		if pos >= len(mark.MinKeys) || pos >= len(mark.MaxKeys) {
 			return false
 		}
-		if pos > 0 && !columnSkipScanMarkSharesEqualityPrefix(mark, prefixPredicates, pos) {
-			continue
-		}
 		minKey := mark.MinKeys[pos]
 		maxKey := mark.MaxKeys[pos]
 		if !pred.Lower.Unbounded && len(pred.Lower.Key) > 0 {
@@ -509,22 +506,12 @@ func columnSkipScanMarkDisjoint(mark ColumnSkipScanMark, prefixPredicates []Colu
 				return true
 			}
 		}
-	}
-	return false
-}
-
-func columnSkipScanMarkSharesEqualityPrefix(mark ColumnSkipScanMark, prefixPredicates []ColumnSkipScanPredicate, positions int) bool {
-	for pos := 0; pos < positions; pos++ {
-		if pos >= len(mark.MinKeys) || pos >= len(mark.MaxKeys) {
-			return false
-		}
-		pred := prefixPredicates[pos]
 		if !columnSkipScanPredicateIsEquality(pred) {
 			return false
 		}
-		if !bytes.Equal(mark.MinKeys[pos], pred.Lower.Key) || !bytes.Equal(mark.MaxKeys[pos], pred.Lower.Key) {
+		if !bytes.Equal(minKey, maxKey) {
 			return false
 		}
 	}
-	return true
+	return false
 }
