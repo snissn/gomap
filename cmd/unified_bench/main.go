@@ -502,7 +502,7 @@ func main() {
 		TreeDBDisableReadChecksum:        *treedbDisableReadChecksum,
 		TreeDBDisablePiggybackCompaction: *treedbDisablePiggyback,
 	}
-	if baseCfg.CPUProfile != "" {
+	if strings.TrimSpace(baseCfg.CPUProfile) != "" {
 		tests := parseList(*cpuProfileTestsArg)
 		if len(tests) > 0 && tests[0] != "" {
 			baseCfg.CPUProfileTests = make(map[string]struct{}, len(tests))
@@ -514,7 +514,7 @@ func main() {
 			}
 		}
 	}
-	if baseCfg.AllocsProfile != "" {
+	if strings.TrimSpace(baseCfg.AllocsProfile) != "" {
 		tests := parseList(*allocsProfileTests)
 		if len(tests) > 0 && tests[0] != "" {
 			baseCfg.AllocsProfileTests = make(map[string]struct{}, len(tests))
@@ -526,7 +526,7 @@ func main() {
 			}
 		}
 	}
-	if baseCfg.CheckpointCPUProfile != "" {
+	if strings.TrimSpace(baseCfg.CheckpointCPUProfile) != "" {
 		tests := parseList(*checkpointCPUProfileTests)
 		if len(tests) > 0 && tests[0] != "" {
 			baseCfg.CheckpointCPUProfileTests = make(map[string]struct{}, len(tests))
@@ -698,7 +698,11 @@ func main() {
 		log.Fatalf("keycounts: %v", err)
 	}
 
-	hasAnyProfiling := baseCfg.CPUProfile != "" || baseCfg.AllocsProfile != "" || baseCfg.BlockProfile != "" || baseCfg.MutexProfile != "" || baseCfg.TraceProfile != ""
+	hasAnyProfiling := strings.TrimSpace(baseCfg.CPUProfile) != "" ||
+		strings.TrimSpace(baseCfg.AllocsProfile) != "" ||
+		strings.TrimSpace(baseCfg.BlockProfile) != "" ||
+		strings.TrimSpace(baseCfg.MutexProfile) != "" ||
+		strings.TrimSpace(baseCfg.TraceProfile) != ""
 	if hasAnyProfiling && len(keyCounts) > 1 {
 		log.Fatalf("profiling flags require a single key count (got %d): disable sweep keycounts or omit -cpuprofile/-allocsprofile/-blockprofile/-mutexprofile/-trace", len(keyCounts))
 	}
@@ -859,6 +863,21 @@ func shouldAllocsProfile(cfg BenchConfig, testName string) bool {
 	}
 	_, ok := cfg.AllocsProfileTests[strings.ToLower(testName)]
 	return ok
+}
+
+func installAllocsProfileRate(cfg BenchConfig) func() {
+	if strings.TrimSpace(cfg.AllocsProfile) == "" {
+		return func() {}
+	}
+	rate := cfg.AllocsProfileRate
+	if rate <= 0 {
+		rate = 512 * 1024
+	}
+	prevRate := runtime.MemProfileRate
+	runtime.MemProfileRate = rate
+	return func() {
+		runtime.MemProfileRate = prevRate
+	}
 }
 
 func shouldCheckpointCPUProfile(cfg BenchConfig, testName string) bool {
@@ -1977,17 +1996,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 	cfg.ReadWorkers = resolveReadWorkers(cfg.ReadWorkers)
 	profileHooks := profileHooksFromConfig(cfg)
 
-	if cfg.AllocsProfile != "" {
-		rate := cfg.AllocsProfileRate
-		if rate <= 0 {
-			rate = 512 * 1024
-		}
-		prevRate := runtime.MemProfileRate
-		runtime.MemProfileRate = rate
-		defer func() {
-			runtime.MemProfileRate = prevRate
-		}()
-	}
+	defer installAllocsProfileRate(cfg)()
 	keyShapeName := strings.ToLower(strings.TrimSpace(cfg.KeyShape))
 	if keyShapeName == "" {
 		keyShapeName = "be8"
@@ -4013,7 +4022,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			// CPU profile if enabled (only for single key count)
 			var cpuFile *os.File
 			if shouldCPUProfile(cfg, testName) {
-				path := cfg.CPUProfile + "_" + testName + "_" + inst.Name + ".pprof"
+				path := strings.TrimSpace(cfg.CPUProfile) + "_" + testName + "_" + inst.Name + ".pprof"
 				f, err := os.Create(path)
 				if err != nil {
 					return BenchRun{}, fmt.Errorf("cpuprofile %s: %w", path, err)
@@ -4106,7 +4115,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 						_ = os.Remove(mutexAfterPath)
 						return BenchRun{}, fmt.Errorf("allocsprofile snapshot %s/%s: %w", testName, inst.Name, snapErr)
 					}
-					allocPath := cfg.AllocsProfile + "_" + testName + "_" + inst.Name + ".pprof"
+					allocPath := strings.TrimSpace(cfg.AllocsProfile) + "_" + testName + "_" + inst.Name + ".pprof"
 					deltaErr := profileHooks.writeAllocsDeltaProfile(allocBasePath, allocAfterPath, allocPath)
 					_ = os.Remove(allocBasePath)
 					_ = os.Remove(allocAfterPath)
