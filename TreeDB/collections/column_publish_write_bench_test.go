@@ -2,9 +2,14 @@ package collections
 
 import (
 	"fmt"
+	"io"
+	"io/fs"
+	"os"
+	"path/filepath"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 )
 
 func BenchmarkColumnStoreCommandWALRootPublicationM10B(b *testing.B) {
@@ -72,6 +77,59 @@ func BenchmarkColumnStoreCommandWALRootPublicationM10B(b *testing.B) {
 
 			assertColumnStoreCommandWALBenchState(b, backend, collection, columnStore, uint64(2*b.N), uint64(2*b.N)+1)
 			reportColumnStoreCommandWALBenchMetrics(b, batches, false)
+		})
+	}
+}
+
+func BenchmarkColumnStoreCommandWALReplayM10C(b *testing.B) {
+	const (
+		frames    = 128
+		batchSize = commandWALBenchBatchSize
+	)
+	for _, columnStore := range []bool{false, true} {
+		b.Run(fmt.Sprintf("insert/frames=%d/batch=%d/column_store=%t", frames, batchSize, columnStore), func(b *testing.B) {
+			templateDir, docsPerReplay, payloadBytesPerReplay := prepareColumnStoreCommandWALReplayBenchmarkDirM10C(b, columnStore, frames, batchSize)
+			wantAppliedLSN := uint64(frames + 1)
+
+			b.ReportAllocs()
+			b.SetBytes(int64(payloadBytesPerReplay))
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				b.StopTimer()
+				dir := filepath.Join(b.TempDir(), fmt.Sprintf("replay-%06d", i))
+				copyColumnStoreCommandWALReplayBenchmarkDirM10C(b, templateDir, dir)
+				b.StartTimer()
+
+				backend, err := backenddb.Open(backenddb.Options{Dir: dir, DisableBackgroundPrune: true})
+				b.StopTimer()
+				if err != nil {
+					b.Fatalf("Open replay DB: %v", err)
+				}
+				if got := backend.State().AppliedCommandLSN; got != wantAppliedLSN {
+					_ = backend.Close()
+					b.Fatalf("AppliedCommandLSN=%d, want %d", got, wantAppliedLSN)
+				}
+				if columnStore {
+					collection, err := NewCollectionManager(backend).OpenCollection("bench")
+					if err != nil {
+						_ = backend.Close()
+						b.Fatalf("OpenCollection replayed: %v", err)
+					}
+					assertColumnManifestStateM10B(b, collection, uint64(frames), wantAppliedLSN)
+				}
+				if err := backend.Close(); err != nil {
+					b.Fatalf("Close replay DB: %v", err)
+				}
+				b.StartTimer()
+			}
+			b.StopTimer()
+
+			elapsed := b.Elapsed().Seconds()
+			if elapsed > 0 {
+				b.ReportMetric(float64(docsPerReplay*b.N)/elapsed, "replay_docs/s")
+				b.ReportMetric(float64(frames*b.N)/elapsed, "replay_frames/s")
+				b.ReportMetric((float64(payloadBytesPerReplay*b.N)/(1024*1024))/elapsed, "payload_MiB/s")
+			}
 		})
 	}
 }
@@ -200,4 +258,127 @@ func reportColumnStoreCommandWALBenchMetrics(b *testing.B, batches []columnStore
 	}
 	b.ReportMetric(float64(docs)/elapsed, "docs/s")
 	b.ReportMetric((float64(bytes)/(1024*1024))/elapsed, "payload_MiB/s")
+}
+
+func prepareColumnStoreCommandWALReplayBenchmarkDirM10C(b *testing.B, columnStore bool, frames, batchSize int) (string, int, int) {
+	b.Helper()
+	dir := b.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{
+		Dir:                    dir,
+		CommandWAL:             true,
+		Durability:             backenddb.DurabilityDurable,
+		DisableBackgroundPrune: true,
+	})
+	if err != nil {
+		b.Fatalf("open setup DB: %v", err)
+	}
+	meta := CollectionMeta{
+		Name: "bench",
+		Options: CollectionOptions{
+			DocumentFormat:               DocumentFormatJSON,
+			DisableIndexedWriteMemtables: true,
+		},
+	}
+	if columnStore {
+		meta.Options.ColumnStore = testColumnStoreConfig(nil)
+	}
+	if _, err := NewCollectionManager(backend).CreateCollection(&meta); err != nil {
+		_ = backend.Close()
+		b.Fatalf("CreateCollection setup: %v", err)
+	}
+	if err := backend.Checkpoint(); err != nil {
+		_ = backend.Close()
+		b.Fatalf("Checkpoint setup: %v", err)
+	}
+	if err := backend.Close(); err != nil {
+		b.Fatalf("Close setup DB: %v", err)
+	}
+
+	totalDocs := 0
+	totalPayloadBytes := 0
+	for i := 0; i < frames; i++ {
+		ids, documents, idBytes, docBytes := columnStoreCommandWALBenchDocuments(i*batchSize, batchSize, 0)
+		docs, err := collectionDocumentsFromBatchInput(ids, documents)
+		if err != nil {
+			b.Fatalf("collectionDocumentsFromBatchInput: %v", err)
+		}
+		payload, err := commitlog.EncodeCollectionInsertBatchByIDPayload("bench", docs)
+		if err != nil {
+			b.Fatalf("EncodeCollectionInsertBatchByIDPayload: %v", err)
+		}
+		writeColumnStoreCommandWALReplayBenchmarkFrameM10C(b, dir, uint64(i+2), commitlog.CommandKindCollectionInsertBatchByID, commitlog.PayloadFormatCollectionInsertBatchByIDV1, payload)
+		totalDocs += len(ids)
+		totalPayloadBytes += idBytes + docBytes
+	}
+	return dir, totalDocs, totalPayloadBytes
+}
+
+func writeColumnStoreCommandWALReplayBenchmarkFrameM10C(tb testing.TB, dir string, lsn uint64, kind commitlog.CommandKind, format commitlog.PayloadFormat, payload []byte) {
+	tb.Helper()
+	walDir := backenddb.WALDirPath(dir)
+	if err := os.MkdirAll(walDir, 0o755); err != nil {
+		tb.Fatalf("MkdirAll wal: %v", err)
+	}
+	path := filepath.Join(walDir, commitlog.CommandSegmentName(0, 1))
+	w, err := commitlog.NewWriter(path)
+	if err != nil {
+		tb.Fatalf("NewWriter: %v", err)
+	}
+	if err := w.AppendCommand(commitlog.CommandEnvelope{
+		LSN:           lsn,
+		Kind:          kind,
+		Scope:         commandWALScopeForKind(kind),
+		PayloadFormat: format,
+		Payload:       payload,
+	}); err != nil {
+		_ = w.Close()
+		tb.Fatalf("AppendCommand: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		tb.Fatalf("Close writer: %v", err)
+	}
+}
+
+func copyColumnStoreCommandWALReplayBenchmarkDirM10C(tb testing.TB, src, dst string) {
+	tb.Helper()
+	if err := filepath.WalkDir(src, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dst, rel)
+		if entry.IsDir() {
+			return os.MkdirAll(target, 0o755)
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		return copyColumnStoreCommandWALReplayBenchmarkFileM10C(path, target, info.Mode())
+	}); err != nil {
+		tb.Fatalf("copy replay benchmark dir: %v", err)
+	}
+}
+
+func copyColumnStoreCommandWALReplayBenchmarkFileM10C(src, dst string, mode fs.FileMode) error {
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return err
+	}
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = in.Close() }()
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		_ = out.Close()
+		return err
+	}
+	return out.Close()
 }

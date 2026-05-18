@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"encoding/binary"
 	"strings"
 	"testing"
 
@@ -186,6 +187,43 @@ func TestColumnStoreActiveManifestFailsClosedOnIdentityMismatch(t *testing.T) {
 	_, err = NewCollectionManager(d).OpenCollection("events")
 	if err == nil || !strings.Contains(err.Error(), "identity mismatch") {
 		t.Fatalf("OpenCollection err=%v want identity mismatch", err)
+	}
+}
+
+func TestColumnStoreActiveManifestFailsClosedOnInvalidRootRecordM10C(t *testing.T) {
+	identity := &ColumnManifestIdentity{Generation: 42, Version: 1, Checksum: 0xfeedbeef}
+	valid := encodeColumnManifestIdentityRecord(*identity)
+	badMagic := append([]byte(nil), valid...)
+	binary.BigEndian.PutUint32(badMagic[0:4], 0xdeadbeef)
+	unsupportedRecordVersion := append([]byte(nil), valid...)
+	binary.BigEndian.PutUint16(unsupportedRecordVersion[4:6], 99)
+
+	tests := []struct {
+		name          string
+		includeRecord bool
+		record        []byte
+		want          string
+	}{
+		{name: "missing identity record", want: "missing identity record"},
+		{name: "short identity record", includeRecord: true, record: valid[:8], want: "malformed identity record length"},
+		{name: "bad identity magic", includeRecord: true, record: badMagic, want: "bad identity magic"},
+		{name: "unsupported identity record version", includeRecord: true, record: unsupportedRecordVersion, want: "unsupported identity version"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+			if err != nil {
+				t.Fatalf("open db: %v", err)
+			}
+			defer func() { _ = d.Close() }()
+
+			meta := CollectionMeta{Name: "events", Options: CollectionOptions{ColumnStore: testColumnStoreConfig(identity)}}
+			publishColumnStoreCatalogRawManifestRootForTest(t, d, meta, tt.includeRecord, tt.record)
+			_, err = NewCollectionManager(d).OpenCollection("events")
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("OpenCollection err=%v want %q", err, tt.want)
+			}
+		})
 	}
 }
 
@@ -576,6 +614,11 @@ func assertNormalizedColumnStoreMeta(t *testing.T, meta CollectionMeta) {
 
 func publishColumnStoreCatalogForTest(tb testing.TB, d *backenddb.DB, meta CollectionMeta, rootIdentity ColumnManifestIdentity) uint64 {
 	tb.Helper()
+	return publishColumnStoreCatalogRawManifestRootForTest(tb, d, meta, true, encodeColumnManifestIdentityRecord(rootIdentity))
+}
+
+func publishColumnStoreCatalogRawManifestRootForTest(tb testing.TB, d *backenddb.DB, meta CollectionMeta, includeIdentityRecord bool, identityRecord []byte) uint64 {
+	tb.Helper()
 	normalized, err := normalizeCollectionMeta(meta)
 	if err != nil {
 		tb.Fatalf("normalize meta: %v", err)
@@ -585,8 +628,15 @@ func publishColumnStoreCatalogForTest(tb testing.TB, d *backenddb.DB, meta Colle
 		tb.Fatalf("encode meta: %v", err)
 	}
 	rootName := collectionColumnManifestRootName(normalized.Name)
+	manifestIter := &systemTargetIterator{}
+	if includeIdentityRecord {
+		manifestIter.entries = []systemTargetEntry{{
+			key:   []byte(columnManifestIdentityRecordKey),
+			value: append([]byte(nil), identityRecord...),
+		}}
+	}
 	_, rootIDs, err := d.PublishOrderedRootGroupWithSystemBuilder([]backenddb.OrderedRootPublishInput{{
-		Iter: columnManifestIdentityIterator(rootIdentity),
+		Iter: manifestIter,
 	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 		current := d.AcquireSnapshot()
 		if current == nil {

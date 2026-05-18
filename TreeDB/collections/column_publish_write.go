@@ -33,6 +33,21 @@ func (c *Collection) requireColumnStoreCommandWAL(meta CollectionMeta, commandWA
 	if !columnStoreWriteEnabled(meta) {
 		return nil
 	}
+	cfg := meta.Options.ColumnStore
+	profileSupport := cfg.ProfileSupport
+	if profileSupport == "" {
+		profileSupport = ColumnStoreProfileDurableOnly
+	}
+	if c == nil || c.db == nil {
+		return errCollectionDBNil
+	}
+	if c.db.DurabilityMode() != backenddb.DurabilityDurable || profileSupport != ColumnStoreProfileDurableOnly {
+		return fmt.Errorf("%w: column_store writes require durable command WAL profile support (durability=%s profile=%s)",
+			backenddb.ErrCommandWALRejected,
+			columnStoreDurabilityModeName(c.db.DurabilityMode()),
+			profileSupport,
+		)
+	}
 	if c != nil && c.commandWALActive(commandWALIntent) {
 		return nil
 	}
