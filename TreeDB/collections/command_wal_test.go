@@ -1190,8 +1190,9 @@ func TestCollectionCommandWALReplayMutationsBypassOpenProfileGate(t *testing.T) 
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			dir := prepareDurableColumnStoreCommandReplayDir(t)
-			writeCollectionCommandWALFrame(t, dir, 1, tt.kind, tt.format, tt.payload(t))
+			dir, baseLSN := prepareDurableColumnStoreCommandReplayDir(t)
+			replayLSN := baseLSN + 1
+			writeCollectionCommandWALFrame(t, dir, replayLSN, tt.kind, tt.format, tt.payload(t))
 
 			reopen, err := backenddb.Open(backenddb.Options{
 				Dir:                    dir,
@@ -1202,9 +1203,9 @@ func TestCollectionCommandWALReplayMutationsBypassOpenProfileGate(t *testing.T) 
 			if err != nil {
 				t.Fatalf("Open relaxed command WAL DB after mutation replay: %v", err)
 			}
-			if got := reopen.State().AppliedCommandLSN; got != 1 {
+			if got := reopen.State().AppliedCommandLSN; got != replayLSN {
 				_ = reopen.Close()
-				t.Fatalf("AppliedCommandLSN=%d, want 1 after %s replay", got, tt.name)
+				t.Fatalf("AppliedCommandLSN=%d, want %d after %s replay", got, replayLSN, tt.name)
 			}
 			if _, err := NewCollectionManager(reopen).OpenCollection("events"); err == nil || !strings.Contains(err.Error(), "requires durable backend for open") {
 				_ = reopen.Close()
@@ -1229,8 +1230,8 @@ func TestCollectionCommandWALReplayMutationsBypassOpenProfileGate(t *testing.T) 
 				t.Fatalf("OpenCollection durable after replay: %v", err)
 			}
 			tt.verify(t, col)
-			if got := durable.State().AppliedCommandLSN; got != 1 {
-				t.Fatalf("durable AppliedCommandLSN=%d, want 1 after replay", got)
+			if got := durable.State().AppliedCommandLSN; got != replayLSN {
+				t.Fatalf("durable AppliedCommandLSN=%d, want %d after replay", got, replayLSN)
 			}
 		})
 	}
@@ -1371,11 +1372,12 @@ type collectionCommandWALSetupInsert struct {
 	docs [][]byte
 }
 
-func prepareDurableColumnStoreCommandReplayDir(t *testing.T) string {
+func prepareDurableColumnStoreCommandReplayDir(t *testing.T) (string, uint64) {
 	t.Helper()
 	dir := t.TempDir()
 	d, err := backenddb.Open(backenddb.Options{
 		Dir:                    dir,
+		CommandWAL:             true,
 		Durability:             backenddb.DurabilityDurable,
 		DisableBackgroundPrune: true,
 	})
@@ -1407,13 +1409,14 @@ func prepareDurableColumnStoreCommandReplayDir(t *testing.T) string {
 		_ = d.Close()
 		t.Fatalf("Checkpoint setup DB: %v", err)
 	}
+	baseLSN := d.State().AppliedCommandLSN
 	if err := d.Close(); err != nil {
 		t.Fatalf("Close setup DB: %v", err)
 	}
 	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
 		t.Fatalf("SaveFormatConfig: %v", err)
 	}
-	return dir
+	return dir, baseLSN
 }
 
 func prepareCollectionCommandWALDir(t *testing.T, meta CollectionMeta, inserts ...collectionCommandWALSetupInsert) string {
