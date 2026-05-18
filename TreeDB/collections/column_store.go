@@ -820,8 +820,7 @@ func columnManifestIdentityIterator(identity ColumnManifestIdentity) *systemTarg
 }
 
 func columnManifestIdentityRecordIterator(record [columnManifestIdentityRecordSize]byte) *systemTargetIterator {
-	value := make([]byte, columnManifestIdentityRecordSize)
-	copy(value, record[:])
+	value := record[:]
 	return &systemTargetIterator{entries: []systemTargetEntry{{
 		key:   newColumnManifestIdentityRecordKey(),
 		value: value,
