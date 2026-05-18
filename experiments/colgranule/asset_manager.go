@@ -16,7 +16,7 @@ type ColumnAssetManager struct {
 	pins          map[ColumnAssetRef]int
 	zombies       map[ColumnAssetRef]string
 	quarantine    map[ColumnAssetRef]string
-	publishFailed map[ColumnAssetRef]struct{}
+	publishFailed map[ColumnAssetRef]string
 	rewriteDebt   map[ColumnAssetRef]string
 	published     map[ColumnAssetRef]string
 }
@@ -69,7 +69,7 @@ func NewColumnAssetManager(store ColumnAssetStore) (*ColumnAssetManager, error) 
 		pins:          make(map[ColumnAssetRef]int),
 		zombies:       make(map[ColumnAssetRef]string),
 		quarantine:    make(map[ColumnAssetRef]string),
-		publishFailed: make(map[ColumnAssetRef]struct{}),
+		publishFailed: make(map[ColumnAssetRef]string),
 		rewriteDebt:   make(map[ColumnAssetRef]string),
 		published:     make(map[ColumnAssetRef]string),
 	}, nil
@@ -329,8 +329,10 @@ func (m *ColumnAssetManager) MarkPublishSucceeded(synced ColumnAssetSyncedPublis
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, asset := range synced.closure.PreparedAssets {
-		if _, ok := m.publishFailed[asset.Ref]; ok {
-			delete(m.quarantine, asset.Ref)
+		if failedReason, ok := m.publishFailed[asset.Ref]; ok {
+			if quarantineReason, quarantined := m.quarantine[asset.Ref]; quarantined && quarantineReason == failedReason {
+				delete(m.quarantine, asset.Ref)
+			}
 			delete(m.publishFailed, asset.Ref)
 		}
 		m.published[asset.Ref] = reason
@@ -354,7 +356,7 @@ func (m *ColumnAssetManager) MarkPublishFailed(prepared []ColumnPreparedAsset, r
 	defer m.mu.Unlock()
 	for _, asset := range prepared {
 		m.quarantine[asset.Ref] = reason
-		m.publishFailed[asset.Ref] = struct{}{}
+		m.publishFailed[asset.Ref] = reason
 	}
 	return nil
 }
