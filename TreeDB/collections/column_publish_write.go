@@ -122,11 +122,6 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 	var plan ColumnPublishPlan
 	var updatedMeta CollectionMeta
 	var cleanupColumnDelta func()
-	defer func() {
-		if cleanupColumnDelta != nil {
-			cleanupColumnDelta()
-		}
-	}()
 	buildColumnDelta := func(ctx backenddb.CommandWALPublishContext) ([]backenddb.OrderedRootDeltaBatchPublishInput, error) {
 		nextPlan, err := c.buildColumnPublishPlanForCommandWALContext(ctx, input, columnBaseRoot)
 		if err != nil {
@@ -156,6 +151,9 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 	newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaBatchGroupWithPreflightCommandWALContextRootBuilderAndSystemDeltaBuilder(ordered, preflight, input.commandWALIntent, buildColumnDelta, buildSystemDelta)
 	if err != nil {
 		return 0, nil, CollectionMeta{}, nil, err
+	}
+	if cleanupColumnDelta != nil {
+		cleanupColumnDelta()
 	}
 	if updatedMeta.Name == "" {
 		return 0, nil, CollectionMeta{}, nil, fmt.Errorf("collections: column publish did not prepare updated metadata collection=%q operation=%s", input.meta.Name, input.operation)
