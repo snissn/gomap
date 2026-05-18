@@ -326,10 +326,10 @@ func normalizeColumnStoreConfig(collection string, in *ColumnStoreConfig) (*Colu
 		out.ProfileSupport = ColumnStoreProfileDurableOnly
 	}
 	if out.ActiveManifest != nil {
-		normalizeColumnManifestIdentityDefaults(out.ActiveManifest)
+		normalizeColumnManifestIdentityFormat(out.ActiveManifest)
 	}
 	if out.RecoveryAuthoritativeManifest != nil {
-		normalizeColumnManifestIdentityDefaults(out.RecoveryAuthoritativeManifest)
+		normalizeColumnManifestIdentityFormat(out.RecoveryAuthoritativeManifest)
 	}
 	if err := validateColumnStoreConfig(collection, out); err != nil {
 		return nil, err
@@ -524,11 +524,18 @@ func normalizeColumnManifestIdentityDefaults(identity *ColumnManifestIdentity) {
 	if identity == nil {
 		return
 	}
-	if identity.Format == "" {
-		identity.Format = columnManifestFormatTCS1
-	}
+	normalizeColumnManifestIdentityFormat(identity)
 	if identity.Version == 0 {
 		identity.Version = columnManifestIdentityVersion
+	}
+}
+
+func normalizeColumnManifestIdentityFormat(identity *ColumnManifestIdentity) {
+	if identity == nil {
+		return
+	}
+	if identity.Format == "" {
+		identity.Format = columnManifestFormatTCS1
 	}
 }
 
