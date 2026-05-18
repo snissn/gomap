@@ -1100,16 +1100,19 @@ h1{font-size:22px}
 }
 
 func columnStoreBenchRun(baseCfg BenchConfig, profile, dataDir string, report columnStoreSuiteReport, stats map[string]string, checkpointDuration time.Duration) BenchRun {
+	const aggregateTestName = "column_store"
+
 	cfg := baseCfg
 	cfg.Keys = report.Rows
 	cfg.BatchSize = report.BatchSize
 	cfg.Profile = profile
 	cfg.DBsArg = "treedb"
-	testOrder := []string{"alias_full_scan_from_q1", "alias_prefix_scan_from_q4a", "column_store_q1", "column_store_q2", "column_store_q3", "column_store_q4a", "column_store_q4b", "column_store_q5", "column_store_q5_metadata"}
+	testOrder := []string{aggregateTestName, "alias_full_scan_from_q1", "alias_prefix_scan_from_q4a", "column_store_q1", "column_store_q2", "column_store_q3", "column_store_q4a", "column_store_q4b", "column_store_q5", "column_store_q5_metadata"}
 	cfg.TestsArg = strings.Join(testOrder, ",")
 	dbName := "TreeDB Column Store"
 	results := make(map[string]map[string]float64)
 	displayNames := map[string]string{
+		aggregateTestName:            "Column store query phase",
 		"alias_full_scan_from_q1":    "Alias full scan from q1",
 		"alias_prefix_scan_from_q4a": "Alias prefix scan from q4a",
 		"column_store_q1":            "Column q1",
@@ -1121,9 +1124,16 @@ func columnStoreBenchRun(baseCfg BenchConfig, profile, dataDir string, report co
 		"column_store_q5_metadata":   "Column q5 metadata",
 	}
 	byName := make(map[string]columnStoreQueryMetric, len(report.Queries))
+	var queryDurationMS float64
+	var queryMaterializations int
 	for _, q := range report.Queries {
 		byName[q.Name] = q
+		queryDurationMS += q.DurationMS
+		queryMaterializations += q.RowMaterializations
 		results["column_store_"+q.Name] = map[string]float64{dbName: q.RowsPerSecond}
+	}
+	if queryDurationMS > 0 {
+		results[aggregateTestName] = map[string]float64{dbName: float64(queryMaterializations) / (queryDurationMS / 1000)}
 	}
 	if q, ok := byName["q1"]; ok {
 		results["alias_full_scan_from_q1"] = map[string]float64{dbName: q.RowsPerSecond}
