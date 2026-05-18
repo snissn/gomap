@@ -32,6 +32,7 @@ type ColumnWorkspaceOptions struct {
 	Collection       string
 	ValidationMode   ColumnWorkspaceValidationMode
 	ManifestSyncMode ColumnWorkspaceManifestSyncMode
+	syncTempFile     func(*os.File) error
 }
 
 type ColumnWorkspaceValidationMode string
@@ -121,6 +122,7 @@ type ColumnWorkspace struct {
 	manifest       ColumnWorkspaceManifest
 	validationMode ColumnWorkspaceValidationMode
 	manifestSync   ColumnWorkspaceManifestSyncMode
+	syncTempFile   func(*os.File) error
 	partByID       map[uint64]int
 	cacheSeen      map[string]struct{}
 	cache          ColumnWorkspaceCacheStats
@@ -250,6 +252,7 @@ func OpenColumnWorkspace(dir string, opts ColumnWorkspaceOptions) (*ColumnWorksp
 		assets:         assetManager,
 		validationMode: normalized.ValidationMode,
 		manifestSync:   normalized.ManifestSyncMode,
+		syncTempFile:   normalized.syncTempFile,
 		partByID:       make(map[uint64]int),
 		cacheSeen:      make(map[string]struct{}),
 	}
@@ -525,7 +528,11 @@ func (w *ColumnWorkspace) syncManifestTempFile(file *os.File) error {
 	if w.ManifestSyncMode() == ColumnWorkspaceManifestSyncDisabledForBenchmark {
 		return nil
 	}
-	return columnWorkspaceSyncTempFile(file)
+	syncTempFile := w.syncTempFile
+	if syncTempFile == nil {
+		syncTempFile = columnWorkspaceSyncTempFile
+	}
+	return syncTempFile(file)
 }
 
 func (w *ColumnWorkspace) LoadPreparedAssetRegistry() (ColumnPreparedAssetRegistry, error) {
