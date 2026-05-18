@@ -217,19 +217,24 @@ func TestColumnStoreCommandWALMutationsPublishManifestM10B(t *testing.T) {
 	d := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = d.Close() }()
 
-	col := openColumnStoreCollectionM10B(t, d)
+	mgr := NewCollectionManager(d)
+	col := openColumnStoreCollectionM10B(t, d, mgr)
 	baseLSN := d.State().AppliedCommandLSN
 	if baseLSN == 0 {
 		t.Fatal("create AppliedCommandLSN=0, want command WAL create LSN")
 	}
 
-	if _, err := col.InsertBatch([][]byte{[]byte("e1"), []byte("e2")}, [][]byte{
+	insertedIDs, err := col.InsertBatch([][]byte{[]byte("e1"), []byte("e2")}, [][]byte{
 		[]byte(`{"time_us":1,"kind":"like","did":"d1"}`),
 		[]byte(`{"time_us":2,"kind":"post","did":"d2"}`),
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("InsertBatch: %v", err)
 	}
-	assertColumnManifestStateM10B(t, col, 1, baseLSN+1)
+	if len(insertedIDs) != 2 {
+		t.Fatalf("InsertBatch inserted=%d, want 2", len(insertedIDs))
+	}
+	assertColumnManifestStateM10B(t, col, 1, baseLSN+1, mgr)
 	assertDBAppliedCommandLSNM10B(t, d, baseLSN+1)
 	assertCollectionDocument(t, col, "e1", `{"time_us":1,"kind":"like","did":"d1"}`)
 
@@ -242,7 +247,7 @@ func TestColumnStoreCommandWALMutationsPublishManifestM10B(t *testing.T) {
 	if !matched || !modified {
 		t.Fatalf("Update matched=%v modified=%v, want true true", matched, modified)
 	}
-	assertColumnManifestStateM10B(t, col, 2, baseLSN+2)
+	assertColumnManifestStateM10B(t, col, 2, baseLSN+2, mgr)
 	assertDBAppliedCommandLSNM10B(t, d, baseLSN+2)
 	assertCollectionDocument(t, col, "e1", `{"time_us":3,"kind":"like","did":"d1"}`)
 
@@ -253,7 +258,7 @@ func TestColumnStoreCommandWALMutationsPublishManifestM10B(t *testing.T) {
 	if !deleted {
 		t.Fatalf("DeleteDocument deleted=false, want true")
 	}
-	assertColumnManifestStateM10B(t, col, 3, baseLSN+3)
+	assertColumnManifestStateM10B(t, col, 3, baseLSN+3, mgr)
 	assertDBAppliedCommandLSNM10B(t, d, baseLSN+3)
 
 	if err := d.Close(); err != nil {
@@ -261,8 +266,9 @@ func TestColumnStoreCommandWALMutationsPublishManifestM10B(t *testing.T) {
 	}
 	reopen := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = reopen.Close() }()
-	reopened := openColumnStoreCollectionM10B(t, reopen)
-	assertColumnManifestStateM10B(t, reopened, 3, baseLSN+3)
+	reopenMgr := NewCollectionManager(reopen)
+	reopened := openColumnStoreCollectionM10B(t, reopen, reopenMgr)
+	assertColumnManifestStateM10B(t, reopened, 3, baseLSN+3, reopenMgr)
 	assertDBAppliedCommandLSNM10B(t, reopen, baseLSN+3)
 	assertCollectionDocument(t, reopened, "e1", `{"time_us":3,"kind":"like","did":"d1"}`)
 	if got, err := reopened.Get([]byte("e2")); err != nil || got != nil {
@@ -274,7 +280,8 @@ func TestColumnStoreCommandWALReplayPublishesManifestM10B(t *testing.T) {
 	dir := prepareColumnStoreCommandWALDirM10B(t)
 	d := openCollectionCommandWALDB(t, dir)
 
-	col := openColumnStoreCollectionM10B(t, d)
+	mgr := NewCollectionManager(d)
+	col := openColumnStoreCollectionM10B(t, d, mgr)
 	baseLSN := d.State().AppliedCommandLSN
 	if baseLSN == 0 {
 		_ = d.Close()
@@ -308,9 +315,10 @@ func TestColumnStoreCommandWALReplayPublishesManifestM10B(t *testing.T) {
 
 	reopen := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = reopen.Close() }()
-	reopened := openColumnStoreCollectionM10B(t, reopen)
+	reopenMgr := NewCollectionManager(reopen)
+	reopened := openColumnStoreCollectionM10B(t, reopen, reopenMgr)
 	assertCollectionDocument(t, reopened, "e1", `{"time_us":1,"kind":"like","did":"d1"}`)
-	assertColumnManifestStateM10B(t, reopened, 1, lsn)
+	assertColumnManifestStateM10B(t, reopened, 1, lsn, reopenMgr)
 	assertDBAppliedCommandLSNM10B(t, reopen, lsn)
 }
 
@@ -339,8 +347,9 @@ func TestColumnStoreStaleColumnRootPreflightDoesNotAppendCommandWALM10B(t *testi
 			d := openCollectionCommandWALDB(t, dir)
 			defer func() { _ = d.Close() }()
 
-			stale := openColumnStoreCollectionM10B(t, d)
-			fresh := openColumnStoreCollectionM10B(t, d)
+			mgr := NewCollectionManager(d)
+			stale := openColumnStoreCollectionM10B(t, d, mgr)
+			fresh := openColumnStoreCollectionM10B(t, d, mgr)
 			staleCommitSeq, staleSystemRoot := dbCommitSeqAndSystemRoot(d)
 			stale.catalogMu.RLock()
 			staleCatalog := stale.catalog
@@ -352,10 +361,14 @@ func TestColumnStoreStaleColumnRootPreflightDoesNotAppendCommandWALM10B(t *testi
 			if _, err := fresh.InsertBatch([][]byte{[]byte("e1")}, [][]byte{[]byte(`{"time_us":1,"kind":"like","did":"d1"}`)}); err != nil {
 				t.Fatalf("InsertBatch fresh: %v", err)
 			}
-			current := openColumnStoreCollectionM10B(t, d)
+			current := openColumnStoreCollectionM10B(t, d, mgr)
 			currentMeta := current.Meta()
 			if currentMeta.Options.ColumnStore == nil || currentMeta.Options.ColumnStore.ActiveManifest == nil {
 				t.Fatalf("fresh insert did not publish active manifest: %+v", currentMeta.Options.ColumnStore)
+			}
+			staleMeta := stale.Meta()
+			if staleMeta.Options.ColumnStore == nil || staleMeta.Options.ColumnStore.ActiveManifest != nil {
+				t.Fatalf("stale handle has unexpected column manifest metadata: %+v", staleMeta.Options.ColumnStore)
 			}
 			framesBefore := countCollectionCommandWALFrames(t, dir)
 			appliedBefore := d.State().AppliedCommandLSN
@@ -368,7 +381,7 @@ func TestColumnStoreStaleColumnRootPreflightDoesNotAppendCommandWALM10B(t *testi
 				t.Fatalf("newCollectionInsertCommandWALIntent: %v", err)
 			}
 			err = tc.publish(stale, columnWritePublishInput{
-				meta:             currentMeta,
+				meta:             staleMeta,
 				catalog:          staleCatalog,
 				baseCommitSeq:    staleCommitSeq,
 				baseSystemRoot:   staleSystemRoot,
@@ -381,6 +394,9 @@ func TestColumnStoreStaleColumnRootPreflightDoesNotAppendCommandWALM10B(t *testi
 			}
 			if !strings.Contains(err.Error(), collectionColumnManifestRootName("events")) {
 				t.Fatalf("stale column-root publish error=%v, want column manifest root in error", err)
+			}
+			if strings.Contains(err.Error(), "concurrent schema modification") {
+				t.Fatalf("stale column-root publish error=%v, want retryable root modification not schema drift", err)
 			}
 			if got := countCollectionCommandWALFrames(t, dir); got != framesBefore {
 				t.Fatalf("command WAL frames after stale preflight=%d, want %d", got, framesBefore)
@@ -606,7 +622,8 @@ func TestColumnStorePublishRejectsMissingCommandWALIntentM10B(t *testing.T) {
 	d := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = d.Close() }()
 
-	col := openColumnStoreCollectionM10B(t, d)
+	mgr := NewCollectionManager(d)
+	col := openColumnStoreCollectionM10B(t, d, mgr)
 	input := columnWritePublishInput{
 		meta:      col.meta,
 		operation: ColumnPublishOperationInsert,
@@ -699,7 +716,7 @@ func TestColumnManifestRootDescriptorSystemDeltaRejectsPlanRootMismatchM10B(t *t
 	}); err != nil {
 		t.Fatalf("CreateCollection: %v", err)
 	}
-	col := openColumnStoreCollectionM10B(t, d)
+	col := openColumnStoreCollectionM10B(t, d, mgr)
 
 	planInput := testColumnPublishPlanInputM10A(
 		ColumnManifestIdentity{Generation: 1, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0x1234},
@@ -798,9 +815,14 @@ func openBufferedBSONColumnStoreSeedM10B(t *testing.T, indexed bool, profile Col
 		_ = d.Close()
 		t.Fatalf("bson.Marshal: %v", err)
 	}
-	if _, err := col.InsertBatchValidatedBSON([][]byte{[]byte("e1")}, [][]byte{doc}); err != nil {
+	insertedIDs, err := col.InsertBatchValidatedBSON([][]byte{[]byte("e1")}, [][]byte{doc})
+	if err != nil {
 		_ = d.Close()
 		t.Fatalf("InsertBatchValidatedBSON seed: %v", err)
+	}
+	if len(insertedIDs) != 1 {
+		_ = d.Close()
+		t.Fatalf("InsertBatchValidatedBSON seed inserted=%d, want 1", len(insertedIDs))
 	}
 	if err := col.Flush(); err != nil {
 		_ = d.Close()
@@ -812,11 +834,11 @@ func openBufferedBSONColumnStoreSeedM10B(t *testing.T, indexed bool, profile Col
 			t.Fatalf("CreateIndex: %v", err)
 		}
 	}
-	col = enableColumnStoreForExistingCollectionM10B(t, d, "events", profile)
+	col = enableColumnStoreForExistingCollectionM10B(t, d, "events", profile, mgr)
 	return d, col
 }
 
-func enableColumnStoreForExistingCollectionM10B(t *testing.T, d *backenddb.DB, collectionName string, profile ColumnStoreProfileSupport) *Collection {
+func enableColumnStoreForExistingCollectionM10B(t *testing.T, d *backenddb.DB, collectionName string, profile ColumnStoreProfileSupport, managers ...*CollectionManager) *Collection {
 	t.Helper()
 	snap := d.AcquireSnapshot()
 	if snap == nil {
@@ -857,16 +879,28 @@ func enableColumnStoreForExistingCollectionM10B(t *testing.T, d *backenddb.DB, c
 	if err != nil {
 		t.Fatalf("publish column-store metadata: %v", err)
 	}
-	col, err := NewCollectionManager(d).OpenCollection(collectionName)
+	var mgr *CollectionManager
+	if len(managers) != 0 && managers[0] != nil {
+		mgr = managers[0]
+	} else {
+		mgr = NewCollectionManager(d)
+	}
+	col, err := mgr.OpenCollection(collectionName)
 	if err != nil {
 		t.Fatalf("OpenCollection after column-store enable: %v", err)
 	}
 	return col
 }
 
-func openColumnStoreCollectionM10B(t *testing.T, d *backenddb.DB) *Collection {
+func openColumnStoreCollectionM10B(t *testing.T, d *backenddb.DB, managers ...*CollectionManager) *Collection {
 	t.Helper()
-	col, err := NewCollectionManager(d).OpenCollection("events")
+	var mgr *CollectionManager
+	if len(managers) != 0 && managers[0] != nil {
+		mgr = managers[0]
+	} else {
+		mgr = NewCollectionManager(d)
+	}
+	col, err := mgr.OpenCollection("events")
 	if err != nil {
 		t.Fatalf("OpenCollection: %v", err)
 	}
@@ -903,9 +937,15 @@ func assertDBAppliedCommandLSNM10B(t testing.TB, d *backenddb.DB, want uint64) {
 	}
 }
 
-func assertColumnManifestStateM10B(t testing.TB, col *Collection, generation, appliedLSN uint64) {
+func assertColumnManifestStateM10B(t testing.TB, col *Collection, generation, appliedLSN uint64, managers ...*CollectionManager) {
 	t.Helper()
-	reopened, err := NewCollectionManager(col.db).OpenCollection(col.meta.Name)
+	var mgr *CollectionManager
+	if len(managers) != 0 && managers[0] != nil {
+		mgr = managers[0]
+	} else {
+		mgr = NewCollectionManager(col.db)
+	}
+	reopened, err := mgr.OpenCollection(col.meta.Name)
 	if err != nil {
 		t.Fatalf("OpenCollection fresh: %v", err)
 	}
