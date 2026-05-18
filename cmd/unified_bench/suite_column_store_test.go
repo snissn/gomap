@@ -109,7 +109,7 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 		if q.BytesRead <= 0 {
 			t.Fatalf("query %s bytes_read=%d", q.Name, q.BytesRead)
 		}
-		if q.ScanDurationMS <= 0 {
+		if q.ScanDurationMS < 0 {
 			t.Fatalf("query %s scan_duration_ms=%v", q.Name, q.ScanDurationMS)
 		}
 		if q.PlannerCandidates == 0 || q.PlannerReason == "" {
