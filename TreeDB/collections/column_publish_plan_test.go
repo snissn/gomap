@@ -408,6 +408,35 @@ func TestColumnPublishPlanSnapshotsPreparedAssetsForClosureValidationM10A(t *tes
 	}
 }
 
+func TestColumnPublishPlanCopiesClosurePreparedAssetsM10A(t *testing.T) {
+	asset := testColumnPublishPreparedAssetM10A()
+	identity := ColumnManifestIdentity{Generation: 7, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0xfeedbeef}
+	input := testColumnPublishPlanInputM10A(identity, asset)
+	var closureAssets []ColumnPreparedAsset
+	input.Hooks.ValidateClosure = func(in ColumnPublishClosureValidationInput) (ColumnPublishDurabilityClosure, error) {
+		closureAssets = in.Prepared.Assets
+		return ColumnPublishDurabilityClosure{
+			PreparedAssets: closureAssets,
+			RequiredAssets: len(closureAssets),
+			RequiredBytes:  sumColumnPreparedAssetBytes(closureAssets),
+			FlushRequired:  true,
+			SyncRequired:   true,
+		}, nil
+	}
+
+	plan, err := BuildColumnPublishPlan(input)
+	if err != nil {
+		t.Fatalf("BuildColumnPublishPlan: %v", err)
+	}
+	if len(plan.PreparedAssets) != 1 {
+		t.Fatalf("prepared assets=%d want 1", len(plan.PreparedAssets))
+	}
+	closureAssets[0].Ref.Offset += int64(asset.Bytes)
+	if plan.PreparedAssets[0] != asset {
+		t.Fatalf("plan prepared asset changed after closure-owned slice mutation: got %+v want %+v", plan.PreparedAssets[0], asset)
+	}
+}
+
 func TestColumnManifestPublishSystemDeltaUpdatesRootAndMetadataTogetherM10A(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
