@@ -35,7 +35,7 @@ type ColumnAssetReachabilitySummary struct {
 	PreparedBytes          int                          `json:"prepared_bytes"`
 	ProcessVisibleBytes    int                          `json:"process_visible_bytes"`
 	PendingBytes           int                          `json:"pending_bytes"`
-	RecoveryPendingBytes   int                          `json:"recovery_pending_bytes"`
+	RootPublishedBytes     int                          `json:"root_published_bytes"`
 	QuarantinedBytes       int                          `json:"quarantined_bytes"`
 	SupersededBytes        int                          `json:"superseded_bytes"`
 	CleanupSafeBytes       int                          `json:"cleanup_safe_bytes"`
@@ -294,6 +294,8 @@ func (s *ColumnAssetReachabilitySummaryScratch) reset(recordCap int) {
 	if cap(s.records) < recordCap {
 		s.records = make([]columnAssetReachabilitySummaryRecord, 0, recordCap)
 	} else {
+		// Records are pointer-free scratch today; if pointer-bearing fields are
+		// added, reintroduce clear(s.records) before truncating to avoid retention.
 		s.records = s.records[:0]
 	}
 	if s.recordIndex == nil {
@@ -432,7 +434,7 @@ func (s *ColumnAssetReachabilitySummaryScratch) addAssetRefToReachabilitySummary
 		}
 		record.live = record.live || live
 		record.candidate = record.candidate || candidate
-		record.protected = record.protected || (!live && (!candidate || quarantined))
+		record.protected = record.protected || columnAssetRefBlocksSegmentDeletion(live, candidate, quarantined)
 		record.quarantined = record.quarantined || quarantined
 	} else {
 		s.records = append(s.records, columnAssetReachabilitySummaryRecord{
@@ -440,7 +442,7 @@ func (s *ColumnAssetReachabilitySummaryScratch) addAssetRefToReachabilitySummary
 			state:     state,
 			bytes:     bytes,
 			live:      live,
-			protected: !live && (!candidate || quarantined),
+			protected: columnAssetRefBlocksSegmentDeletion(live, candidate, quarantined),
 		})
 		record := &s.records[len(s.records)-1]
 		record.candidate = candidate
@@ -500,7 +502,7 @@ func finalizeColumnAssetReachabilitySummary(records []columnAssetReachabilitySum
 				case ColumnAssetStatePendingPublish:
 					summary.PendingBytes += record.bytes
 				case ColumnAssetStateRootPublished:
-					summary.RecoveryPendingBytes += record.bytes
+					summary.RootPublishedBytes += record.bytes
 				case ColumnAssetStateSnapshotPinned:
 					summary.SnapshotProtectedBytes += record.bytes
 					summary.RetainedBytes += record.bytes
@@ -574,7 +576,7 @@ func finalizeColumnAssetReachabilityRecords(records map[ColumnAssetRef]columnAss
 				case ColumnAssetStatePendingPublish:
 					plan.PendingBytes += entry.Bytes
 				case ColumnAssetStateRootPublished:
-					plan.RecoveryPendingBytes += entry.Bytes
+					plan.RootPublishedBytes += entry.Bytes
 				case ColumnAssetStateSnapshotPinned:
 					plan.SnapshotProtectedBytes += entry.Bytes
 					plan.RetainedBytes += entry.Bytes

@@ -1,6 +1,9 @@
 package colgranule
 
-import "testing"
+import (
+	"fmt"
+	"testing"
+)
 
 func TestColumnAssetManagerRequiresZombieAndPinDrainBeforeDelete(t *testing.T) {
 	activeRef := lifecycleAssetRef(t, 1, 0, tcs1HeaderBytes+16)
@@ -225,6 +228,9 @@ func TestColumnAssetManagerPublishSucceededRequiresSyncedClosure(t *testing.T) {
 	if len(manager.quarantine) != 0 || len(manager.zombies) != 0 || len(manager.rewriteDebt) != 0 {
 		t.Fatalf("manager state quarantine=%d zombies=%d rewrite=%d want all cleared", len(manager.quarantine), len(manager.zombies), len(manager.rewriteDebt))
 	}
+	if got := manager.published[ref]; got != "root published" {
+		t.Fatalf("published reason=%q want root published", got)
+	}
 }
 
 func TestColumnAssetManagerPreparedPublishFailureQuarantinesAssets(t *testing.T) {
@@ -337,8 +343,7 @@ func (s *rangeProbeOnlyStore) ReadRange(ref ColumnAssetRef, offset int64, length
 		return nil, err
 	}
 	if offset != 0 || length != 1 {
-		t := make([]byte, 0)
-		return t, nil
+		return nil, fmt.Errorf("unexpected range probe offset=%d length=%d", offset, length)
 	}
 	return []byte{0}, nil
 }

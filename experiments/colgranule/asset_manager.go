@@ -17,6 +17,7 @@ type ColumnAssetManager struct {
 	zombies     map[ColumnAssetRef]string
 	quarantine  map[ColumnAssetRef]string
 	rewriteDebt map[ColumnAssetRef]string
+	published   map[ColumnAssetRef]string
 }
 
 type ColumnAssetManagerReclamationPlan struct {
@@ -65,6 +66,7 @@ func NewColumnAssetManager(store ColumnAssetStore) (*ColumnAssetManager, error) 
 		zombies:     make(map[ColumnAssetRef]string),
 		quarantine:  make(map[ColumnAssetRef]string),
 		rewriteDebt: make(map[ColumnAssetRef]string),
+		published:   make(map[ColumnAssetRef]string),
 	}, nil
 }
 
@@ -236,6 +238,8 @@ func prepareColumnAssetPublishClosure(store ColumnAssetStore, prepared []ColumnP
 		PreparedAssets: cloneColumnPreparedAssets(prepared),
 		FlushRequired:  len(prepared) > 0,
 	}
+	// Sync is tied to the explicit publish closure: unreferenced buffered
+	// assets are not made durable until a root-visible prepared ref names them.
 	if _, ok := store.(columnAssetSyncer); ok && len(prepared) > 0 {
 		closure.SyncRequired = true
 	}
@@ -291,15 +295,20 @@ func (m *ColumnAssetManager) SyncPublishClosure(closure ColumnAssetPublishClosur
 	}, nil
 }
 
-func (m *ColumnAssetManager) MarkPublishSucceeded(synced ColumnAssetSyncedPublishClosure, _ string) error {
+func (m *ColumnAssetManager) MarkPublishSucceeded(synced ColumnAssetSyncedPublishClosure, reason string) error {
 	if m == nil {
 		return fmt.Errorf("colgranule: nil column asset manager")
 	}
 	if !synced.sealed {
 		return fmt.Errorf("colgranule: publish succeeded requires synced publish closure")
 	}
-	if _, err := m.PreparePublishClosure(synced.closure.PreparedAssets); err != nil {
-		return err
+	if reason == "" {
+		reason = "publish succeeded"
+	}
+	for _, asset := range synced.closure.PreparedAssets {
+		if err := validateColumnPreparedAsset(asset); err != nil {
+			return err
+		}
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -307,6 +316,7 @@ func (m *ColumnAssetManager) MarkPublishSucceeded(synced ColumnAssetSyncedPublis
 		delete(m.quarantine, asset.Ref)
 		delete(m.zombies, asset.Ref)
 		delete(m.rewriteDebt, asset.Ref)
+		m.published[asset.Ref] = reason
 	}
 	return nil
 }
@@ -344,6 +354,7 @@ func (m *ColumnAssetManager) PlanReclamation(reachability ColumnAssetReachabilit
 		zombieReason, zombie := m.zombies[reachable.Ref]
 		quarantineReason, quarantined := m.quarantine[reachable.Ref]
 		rewriteReason, rewrite := m.rewriteDebt[reachable.Ref]
+		publishedReason, published := m.published[reachable.Ref]
 		entry := ColumnAssetManagerReclamationEntry{
 			Ref:              reachable.Ref,
 			State:            reachable.State,
@@ -362,6 +373,8 @@ func (m *ColumnAssetManager) PlanReclamation(reachability ColumnAssetReachabilit
 			entry.ManagerReason = rewriteReason
 		case zombie:
 			entry.ManagerReason = zombieReason
+		case published:
+			entry.ManagerReason = publishedReason
 		}
 		if entry.Candidate {
 			plan.CandidateBytes += entry.Bytes
