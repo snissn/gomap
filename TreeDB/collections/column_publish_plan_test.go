@@ -88,12 +88,21 @@ func TestColumnPublishPlanAllowsBenchmarkRelaxedProfileM10A(t *testing.T) {
 	cfg.ProfileSupport = ColumnStoreProfileBenchmarkRelaxed
 	input.ColumnStore = cfg
 	input.ColumnStoreNormalized = false
+	input.Hooks.ValidateClosure = func(ColumnPublishClosureValidationInput) (ColumnPublishDurabilityClosure, error) {
+		return ColumnPublishDurabilityClosure{
+			PreparedAssets: []ColumnPreparedAsset{asset},
+			RequiredAssets: 1,
+			RequiredBytes:  asset.Bytes,
+			FlushRequired:  false,
+			SyncRequired:   false,
+		}, nil
+	}
 
 	plan, err := BuildColumnPublishPlan(input)
 	if err != nil {
 		t.Fatalf("BuildColumnPublishPlan benchmark-relaxed: %v", err)
 	}
-	if !plan.Enabled || plan.RequiredAssetBytes != asset.Bytes {
+	if !plan.Enabled || plan.RequiredAssetBytes != asset.Bytes || plan.RequiredAssetFlush || plan.RequiredAssetSync {
 		t.Fatalf("unexpected benchmark-relaxed plan: %+v", plan)
 	}
 }
@@ -500,8 +509,8 @@ func TestColumnPublishPlanRejectsPreparedAssetByteOverflowM10A(t *testing.T) {
 	}
 
 	plan, err := BuildColumnPublishPlan(input)
-	if err == nil || !strings.Contains(err.Error(), "prepared asset bytes overflow") {
-		t.Fatalf("BuildColumnPublishPlan err=%v want prepared asset byte overflow", err)
+	if err == nil || !strings.Contains(err.Error(), "prepared asset[1] bytes overflow") {
+		t.Fatalf("BuildColumnPublishPlan err=%v want indexed prepared asset byte overflow", err)
 	}
 	if plan.Enabled {
 		t.Fatalf("overflowing prepared bytes returned enabled plan: %+v", plan)
@@ -514,8 +523,8 @@ func TestColumnPublishPlanRejectsUnsupportedAssetKindM10A(t *testing.T) {
 	identity := ColumnManifestIdentity{Generation: 7, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0xfeedbeef}
 
 	plan, err := BuildColumnPublishPlan(testColumnPublishPlanInputM10A(identity, asset))
-	if err == nil || !strings.Contains(err.Error(), "unsupported column asset ref kind") {
-		t.Fatalf("BuildColumnPublishPlan err=%v want unsupported kind", err)
+	if err == nil || !strings.Contains(err.Error(), "prepared asset[0]") || !strings.Contains(err.Error(), "unsupported column asset ref kind") {
+		t.Fatalf("BuildColumnPublishPlan err=%v want indexed unsupported kind", err)
 	}
 	if plan.Enabled {
 		t.Fatalf("unsupported asset kind returned enabled plan: %+v", plan)
@@ -544,6 +553,37 @@ func TestColumnPublishPlanRejectsClosurePreparedAssetMismatchM10A(t *testing.T) 
 	}
 	if plan.Enabled {
 		t.Fatalf("mismatched closure prepared asset returned enabled plan: %+v", plan)
+	}
+}
+
+func TestColumnPublishPlanAllowsReorderedClosurePreparedAssetsM10A(t *testing.T) {
+	asset := testColumnPublishPreparedAssetM10A()
+	second := asset
+	second.Ref.FileID = 8
+	second.Ref.Offset += asset.Bytes
+	second.PublishID++
+	second.GenerationID++
+	identity := ColumnManifestIdentity{Generation: 7, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0xfeedbeef}
+	input := testColumnPublishPlanInputM10A(identity, asset)
+	input.Hooks.PrepareAssets = func(ColumnPublishAssetPrepareInput) (ColumnPublishPreparedAssets, error) {
+		return ColumnPublishPreparedAssets{Assets: []ColumnPreparedAsset{asset, second}, RowCount: 20, ColumnPayloadBytes: asset.Bytes + second.Bytes}, nil
+	}
+	input.Hooks.ValidateClosure = func(ColumnPublishClosureValidationInput) (ColumnPublishDurabilityClosure, error) {
+		return ColumnPublishDurabilityClosure{
+			PreparedAssets: []ColumnPreparedAsset{second, asset},
+			RequiredAssets: 2,
+			RequiredBytes:  asset.Bytes + second.Bytes,
+			FlushRequired:  true,
+			SyncRequired:   true,
+		}, nil
+	}
+
+	plan, err := BuildColumnPublishPlan(input)
+	if err != nil {
+		t.Fatalf("BuildColumnPublishPlan reordered closure assets: %v", err)
+	}
+	if len(plan.PreparedAssets) != 2 || plan.PreparedAssets[0] != asset || plan.PreparedAssets[1] != second {
+		t.Fatalf("plan prepared assets should retain manifest order: %+v", plan.PreparedAssets)
 	}
 }
 
@@ -584,7 +624,7 @@ func TestColumnPublishPlanSnapshotsPreparedAssetsForClosureValidationM10A(t *tes
 		return ColumnPublishDurabilityClosure{
 			PreparedAssets: in.Prepared.Assets,
 			RequiredAssets: len(in.Prepared.Assets),
-			RequiredBytes:  sumColumnPreparedAssetBytes(in.Prepared.Assets),
+			RequiredBytes:  mustSumColumnPreparedAssetBytes(t, in.Prepared.Assets),
 			FlushRequired:  true,
 			SyncRequired:   true,
 		}, nil
@@ -599,6 +639,41 @@ func TestColumnPublishPlanSnapshotsPreparedAssetsForClosureValidationM10A(t *tes
 	}
 }
 
+func TestColumnPublishPlanCopiesCurrentManifestForHooksM10A(t *testing.T) {
+	asset := testColumnPublishPreparedAssetM10A()
+	identity := ColumnManifestIdentity{Generation: 7, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0xfeedbeef}
+	current := ColumnManifestIdentity{Generation: 6, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0xabc123}
+	input := testColumnPublishPlanInputM10A(identity, asset)
+	input.CurrentManifest = &current
+	var prepareSeen, manifestSeen ColumnManifestIdentity
+	input.Hooks.PrepareAssets = func(in ColumnPublishAssetPrepareInput) (ColumnPublishPreparedAssets, error) {
+		if in.CurrentManifest == nil {
+			t.Fatal("PrepareAssets CurrentManifest is nil")
+		}
+		prepareSeen = *in.CurrentManifest
+		in.CurrentManifest.Generation = 99
+		return ColumnPublishPreparedAssets{Assets: []ColumnPreparedAsset{asset}, RowCount: 10, ColumnPayloadBytes: asset.Bytes}, nil
+	}
+	input.Hooks.EncodeManifest = func(in ColumnPublishManifestEncodeInput) (ColumnPublishManifestEncodeResult, error) {
+		if in.CurrentManifest == nil {
+			t.Fatal("EncodeManifest CurrentManifest is nil")
+		}
+		manifestSeen = *in.CurrentManifest
+		in.CurrentManifest.Generation = 100
+		return ColumnPublishManifestEncodeResult{Identity: identity, ManifestBytes: 256}, nil
+	}
+
+	if _, err := BuildColumnPublishPlan(input); err != nil {
+		t.Fatalf("BuildColumnPublishPlan: %v", err)
+	}
+	if prepareSeen != current || manifestSeen != current {
+		t.Fatalf("hooks saw mutated current manifest: prepare=%+v manifest=%+v want=%+v", prepareSeen, manifestSeen, current)
+	}
+	if *input.CurrentManifest != current {
+		t.Fatalf("input CurrentManifest mutated: got %+v want %+v", *input.CurrentManifest, current)
+	}
+}
+
 func TestColumnPublishPlanCopiesClosurePreparedAssetsM10A(t *testing.T) {
 	asset := testColumnPublishPreparedAssetM10A()
 	identity := ColumnManifestIdentity{Generation: 7, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0xfeedbeef}
@@ -609,7 +684,7 @@ func TestColumnPublishPlanCopiesClosurePreparedAssetsM10A(t *testing.T) {
 		return ColumnPublishDurabilityClosure{
 			PreparedAssets: closureAssets,
 			RequiredAssets: len(closureAssets),
-			RequiredBytes:  sumColumnPreparedAssetBytes(closureAssets),
+			RequiredBytes:  mustSumColumnPreparedAssetBytes(t, closureAssets),
 			FlushRequired:  true,
 			SyncRequired:   true,
 		}, nil
@@ -1023,6 +1098,44 @@ func TestColumnManifestPublishSystemDeltaRejectsForeignCollectionM10A(t *testing
 	}
 }
 
+func TestColumnManifestPublishSystemDeltaRevalidatesRootStoragePolicyM10A(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "events",
+		Options: CollectionOptions{ColumnStore: testColumnStoreConfig(nil)},
+	}); err != nil {
+		t.Fatalf("create column-enabled collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("events")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	planInput := testColumnPublishPlanInputM10A(ColumnManifestIdentity{Generation: 11, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0xabcdef1234}, testColumnPublishPreparedAssetM10A())
+	planInput.BaseManifestRootID = 0
+	plan, err := BuildColumnPublishPlan(planInput)
+	if err != nil {
+		t.Fatalf("BuildColumnPublishPlan: %v", err)
+	}
+	plan.RootDelta.StoragePolicy = RootStoragePolicy("corrupted")
+	iter, err := col.buildColumnManifestPublishSystemDeltaIterator(ColumnManifestPublishSystemDeltaInput{
+		BaseMeta:           col.Meta(),
+		BaseManifestRootID: 0,
+		Plan:               plan,
+	}, []uint64{123})
+	if iter != nil {
+		_ = iter.Close()
+	}
+	if err == nil || !strings.Contains(err.Error(), "unsupported root storage policy") {
+		t.Fatalf("buildColumnManifestPublishSystemDeltaIterator err=%v want storage policy rejection", err)
+	}
+}
+
 func TestColumnManifestPublishSystemDeltaRejectsStalePlanBaseM10A(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -1387,8 +1500,8 @@ func BenchmarkColumnPublishPlanM10A(b *testing.B) {
 		b.ReportMetric(float64(stages.RootDeltaConstruction.Nanoseconds())/float64(b.N), "root_delta_ns/op")
 		b.ReportMetric(float64(stages.SystemDeltaConstruction.Nanoseconds())/float64(b.N), "system_delta_ns/op")
 		b.ReportMetric(float64(last.Rows), "rows/op")
-		b.ReportMetric(float64(last.RequiredAssetCount), "prepared_refs/op")
-		b.ReportMetric(float64(last.RequiredAssetBytes), "prepared_asset_B/op")
+		b.ReportMetric(float64(last.RequiredAssetCount), "required_refs/op")
+		b.ReportMetric(float64(last.RequiredAssetBytes), "required_asset_B/op")
 		b.ReportMetric(float64(last.ManifestBytes), "manifest_B/op")
 	})
 }
@@ -1417,6 +1530,15 @@ func testColumnPublishPlanInputM10A(identity ColumnManifestIdentity, asset Colum
 			},
 		},
 	}
+}
+
+func mustSumColumnPreparedAssetBytes(t testing.TB, assets []ColumnPreparedAsset) int64 {
+	t.Helper()
+	total, err := checkedSumColumnPreparedAssetBytes(assets)
+	if err != nil {
+		t.Fatalf("checkedSumColumnPreparedAssetBytes: %v", err)
+	}
+	return total
 }
 
 func testColumnPublishPreparedAssetM10A() ColumnPreparedAsset {
