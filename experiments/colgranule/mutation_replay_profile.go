@@ -56,3 +56,17 @@ func (p ColumnMutationReplayProfile) normalized() ColumnMutationReplayProfile {
 	p.Durability = p.normalizedDurability()
 	return p
 }
+
+func (p ColumnMutationReplayProfile) workspaceManifestSyncMode() ColumnWorkspaceManifestSyncMode {
+	if p.ProductionSupported() {
+		return ColumnWorkspaceManifestSyncDurable
+	}
+	return ColumnWorkspaceManifestSyncDisabledForBenchmark
+}
+
+func columnWorkspaceOptionsForMutationReplayProfile(collection string, profile ColumnMutationReplayProfile) ColumnWorkspaceOptions {
+	return ColumnWorkspaceOptions{
+		Collection:       collection,
+		ManifestSyncMode: profile.normalized().workspaceManifestSyncMode(),
+	}
+}
