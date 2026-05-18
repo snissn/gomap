@@ -62,16 +62,23 @@ func (p ColumnMutationReplayProfile) normalized() ColumnMutationReplayProfile {
 	return p
 }
 
-func (p ColumnMutationReplayProfile) workspaceManifestSyncMode() ColumnWorkspaceManifestSyncMode {
-	if p.ProductionSupported() {
-		return ColumnWorkspaceManifestSyncDurable
+func (p ColumnMutationReplayProfile) workspaceManifestSyncMode() (ColumnWorkspaceManifestSyncMode, error) {
+	if err := p.Validate(); err != nil {
+		return "", err
 	}
-	return ColumnWorkspaceManifestSyncDisabledForBenchmark
+	if p.normalized().ProductionSupported() {
+		return ColumnWorkspaceManifestSyncDurable, nil
+	}
+	return ColumnWorkspaceManifestSyncDisabledForBenchmark, nil
 }
 
-func columnWorkspaceOptionsForMutationReplayProfile(collection string, profile ColumnMutationReplayProfile) ColumnWorkspaceOptions {
+func columnWorkspaceOptionsForMutationReplayProfile(collection string, profile ColumnMutationReplayProfile) (ColumnWorkspaceOptions, error) {
+	mode, err := profile.workspaceManifestSyncMode()
+	if err != nil {
+		return ColumnWorkspaceOptions{}, err
+	}
 	return ColumnWorkspaceOptions{
 		Collection:       collection,
-		ManifestSyncMode: profile.normalized().workspaceManifestSyncMode(),
-	}
+		ManifestSyncMode: mode,
+	}, nil
 }
