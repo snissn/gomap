@@ -297,6 +297,9 @@ func BuildColumnPublishPlan(input ColumnPublishPlanInput) (ColumnPublishPlan, er
 	if err := validateColumnManifestIdentity(manifest.Identity); err != nil {
 		return ColumnPublishPlan{}, err
 	}
+	if manifest.ManifestBytes < 0 {
+		return ColumnPublishPlan{}, errors.New("collections: column publish manifest byte count cannot be negative")
+	}
 
 	start = time.Now()
 	closurePrepared := manifestPrepared
@@ -403,6 +406,12 @@ func (c *Collection) buildColumnManifestPublishSystemDeltaIterator(input ColumnM
 	}
 	if rootIDs[0] == 0 {
 		return nil, errors.New("collections: column manifest root publish returned zero root")
+	}
+	if plan.AppliedCommandLSN == 0 {
+		return nil, errors.New("collections: column publish plan missing AppliedCommandLSN")
+	}
+	if plan.RecoveryAuthoritativeAppliedCommandLSN == 0 {
+		return nil, errors.New("collections: column publish plan missing recovery-authoritative AppliedCommandLSN")
 	}
 	rootName := plan.ManifestRootName
 	if rootName == "" {
