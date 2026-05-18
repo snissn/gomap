@@ -340,7 +340,7 @@ func TestColumnMutationAdapterAppliesReplayProfileOptionM9D(t *testing.T) {
 				StoreOptions:  opts,
 				Dictionaries:  ds.Dictionaries,
 				ReplayProfile: tt.profile,
-			}); err == nil || !strings.Contains(err.Error(), "requires ColumnWorkspaceOptions.ManifestSyncMode=") {
+			}); err == nil || !strings.Contains(err.Error(), "requires workspace manifest sync mode") {
 				t.Fatalf("NewColumnMutationAdapter durable profile on no-sync workspace err=%v want sync-mode rejection", err)
 			}
 		})
@@ -357,7 +357,7 @@ func TestColumnMutationAdapterAppliesReplayProfileOptionM9D(t *testing.T) {
 		Dictionaries:  ds.Dictionaries,
 		ReplayProfile: profile,
 	}); err == nil ||
-		!strings.Contains(err.Error(), "requires ColumnWorkspaceOptions.ManifestSyncMode=") ||
+		!strings.Contains(err.Error(), "requires workspace manifest sync mode") ||
 		!strings.Contains(err.Error(), string(ColumnWorkspaceManifestSyncDisabledForBenchmark)) ||
 		!strings.Contains(err.Error(), string(ColumnWorkspaceManifestSyncDurable)) {
 		t.Fatalf("NewColumnMutationAdapter benchmark profile on durable workspace err=%v want sync-mode rejection", err)
@@ -653,8 +653,7 @@ func BenchmarkColumnMutationReplayM9D(b *testing.B) {
 				if b.N > 0 && elapsed > 0 {
 					// The replay gate deliberately includes per-iteration workspace
 					// open/publish/apply/close work in the timed loop.
-					perOp := elapsed.Seconds() / float64(b.N)
-					b.ReportMetric(float64(logicalRows)/perOp, "rows/sec")
+					b.ReportMetric(float64(logicalRows)*float64(b.N)/elapsed.Seconds(), "rows/sec")
 				}
 				b.ReportMetric(float64(logicalRows), "logical_rows/op")
 				b.ReportMetric(float64(commandBytes), "command_bytes/op")
