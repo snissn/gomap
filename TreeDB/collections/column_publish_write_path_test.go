@@ -71,11 +71,11 @@ func TestColumnStoreBenchmarkRelaxedRejectsBufferedWritesM10B(t *testing.T) {
 	if err != nil {
 		t.Fatalf("bson.Marshal: %v", err)
 	}
-	if _, err := col.Insert([]byte("e1"), doc); !errors.Is(err, backenddb.ErrCommandWALUnsupported) {
-		t.Fatalf("Insert error=%v, want ErrCommandWALUnsupported", err)
+	if _, err := col.Insert([]byte("e1"), doc); !errors.Is(err, backenddb.ErrCommandWALRejected) {
+		t.Fatalf("Insert error=%v, want ErrCommandWALRejected", err)
 	}
-	if _, err := col.InsertBatchValidatedBSON([][]byte{[]byte("e2")}, [][]byte{doc}); !errors.Is(err, backenddb.ErrCommandWALUnsupported) {
-		t.Fatalf("InsertBatchValidatedBSON error=%v, want ErrCommandWALUnsupported", err)
+	if _, err := col.InsertBatchValidatedBSON([][]byte{[]byte("e2")}, [][]byte{doc}); !errors.Is(err, backenddb.ErrCommandWALRejected) {
+		t.Fatalf("InsertBatchValidatedBSON error=%v, want ErrCommandWALRejected", err)
 	}
 	if col.writeDomain != nil {
 		col.writeDomain.mu.RLock()
