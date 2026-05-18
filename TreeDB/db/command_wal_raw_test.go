@@ -56,3 +56,28 @@ func TestCommandWALReplayIntentZeroLSNFailsClosedM10C(t *testing.T) {
 		t.Fatalf("PublishCommandWALNoop zero-lsn replay error=%v, want missing assigned lsn", err)
 	}
 }
+
+func TestCommandWALReplayIntentRequiresActiveRecoveryFrameM10C(t *testing.T) {
+	intent := NewCommandWALReplayIntent(commitlog.CommandEnvelope{
+		LSN:           7,
+		Kind:          commitlog.CommandKindCollectionInsertBatchByID,
+		Scope:         commitlog.CommandScopeCollection,
+		PayloadFormat: commitlog.PayloadFormatCollectionInsertBatchByIDV1,
+	})
+	d, err := Open(Options{Dir: t.TempDir(), CommandWAL: true, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	if _, err := d.AppendCommandWALIntent(intent, false); !errors.Is(err, ErrCommandWALRejected) {
+		t.Fatalf("AppendCommandWALIntent fabricated replay error=%v, want ErrCommandWALRejected", err)
+	} else if !strings.Contains(err.Error(), "active recovery frame") {
+		t.Fatalf("AppendCommandWALIntent fabricated replay error=%v, want active recovery frame", err)
+	}
+	if err := d.PublishCommandWALNoop(intent, false); !errors.Is(err, ErrCommandWALRejected) {
+		t.Fatalf("PublishCommandWALNoop fabricated replay error=%v, want ErrCommandWALRejected", err)
+	} else if !strings.Contains(err.Error(), "active recovery frame") {
+		t.Fatalf("PublishCommandWALNoop fabricated replay error=%v, want active recovery frame", err)
+	}
+}

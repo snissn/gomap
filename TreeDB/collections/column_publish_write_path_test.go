@@ -1165,7 +1165,9 @@ func prepareColumnStoreCommandWALDirWithProfileM10C(t *testing.T, profileSupport
 	}
 	d := openCollectionCommandWALDB(t, dir)
 	cfg := testColumnStoreConfig(nil)
-	cfg.ProfileSupport = profileSupport
+	if profileSupport != "" {
+		cfg.ProfileSupport = profileSupport
+	}
 	mgr := NewCollectionManager(d)
 	if _, err := mgr.CreateCollection(&CollectionMeta{
 		Name:    "events",
