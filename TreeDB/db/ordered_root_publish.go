@@ -167,7 +167,10 @@ type OrderedRootGroupCommandWALSystemBuilder func(CommandWALPublishContext, []ui
 
 // OrderedRootGroupCommandWALDeltaBuilder builds additional root-local mutation
 // streams after the command-WAL LSN has been assigned. It is for roots whose
-// durable contents include the assigned AppliedCommandLSN.
+// durable contents include the assigned AppliedCommandLSN. On a nil error, the
+// DB publish path takes ownership of returned iterators and closes every
+// unconsumed iterator. If a builder returns iterators with a non-nil error, the
+// DB publish path closes those iterators before returning the error.
 type OrderedRootGroupCommandWALDeltaBuilder func(CommandWALPublishContext) ([]OrderedRootDeltaPublishInput, error)
 
 // OrderedRootDeltaBatchGroupCommandWALDeltaBuilder is the batch-materialized
@@ -1596,6 +1599,7 @@ func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBui
 	if buildContextDeltas != nil {
 		contextOrdered, buildErr := buildContextDeltas(ctx)
 		if buildErr != nil {
+			closeUnconsumedOrderedRootDeltaPublishIterators(contextOrdered, nil)
 			err = buildErr
 			return 0, nil, err
 		}
