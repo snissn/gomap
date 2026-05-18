@@ -384,7 +384,7 @@ func TestColumnQueryPlannerM11BReportsParallelShapeReason(t *testing.T) {
 			ParallelColumnScan: true,
 			PhysicalAssetCount: 1,
 			PartCount:          1,
-			GranuleCount:       2,
+			GranuleCount:       1,
 			MaxParallelWorkers: 4,
 		},
 	}
@@ -393,8 +393,42 @@ func TestColumnQueryPlannerM11BReportsParallelShapeReason(t *testing.T) {
 	if plan.Supported {
 		t.Fatalf("expected undersized parallel shape to fail closed: %+v", plan)
 	}
-	if !strings.Contains(plan.Diagnostics.UnsupportedPlanReason, "more than one part or more granules than workers") {
+	if !strings.Contains(plan.Diagnostics.UnsupportedPlanReason, "more than one available granule or part") {
 		t.Fatalf("unsupported reason=%q", plan.Diagnostics.UnsupportedPlanReason)
+	}
+}
+
+func TestColumnQueryPlannerM11BClampsParallelWorkerCountToAvailableGranules(t *testing.T) {
+	catalog := &collectionCatalog{meta: CollectionMeta{
+		Name:    "events",
+		Options: CollectionOptions{ColumnStore: &ColumnStoreConfig{Enabled: true}},
+	}}
+	identity := ColumnStoreCacheIdentity{
+		Collection:                      "events",
+		ManifestRoot:                    99,
+		ManifestGeneration:              7,
+		RecoveryAuthoritativeGeneration: 7,
+	}
+	req := ColumnQueryPlanRequest{
+		Name: "q1",
+		Capabilities: ColumnQueryPlannerCapabilities{
+			ParallelColumnScan: true,
+			PhysicalAssetCount: 1,
+			PartCount:          8,
+			GranuleCount:       2,
+			MaxParallelWorkers: 6,
+		},
+	}
+
+	plan := planColumnQueryForCatalog(catalog, identity, true, req)
+	if !plan.Supported || plan.Kind != ColumnQueryPlanParallelColumnScan {
+		t.Fatalf("parallel plan not selected: %+v", plan)
+	}
+	if got, want := plan.Diagnostics.WorkerCount, 2; got != want {
+		t.Fatalf("worker count=%d want clamped %d", got, want)
+	}
+	if got, want := plan.Diagnostics.ScheduledGranules, 2; got != want {
+		t.Fatalf("scheduled granules=%d want %d", got, want)
 	}
 }
 
@@ -519,6 +553,51 @@ func TestColumnQueryPlannerM11BRejectsMissingProjectedColumnForPhysicalPlans(t *
 	plan = planColumnQueryForCatalog(catalog, identity, true, req)
 	if !plan.Supported || plan.Kind != ColumnQueryPlanRowStoreBaseline {
 		t.Fatalf("row baseline should not enforce physical projection gate: %+v", plan)
+	}
+
+	req.ForceKind = ""
+	req.ProjectedColumns = []string{"time_us", "missing"}
+	req.Capabilities.SerialColumnScan = true
+	req.Capabilities.ParallelColumnScan = true
+	req.Capabilities.PartCount = 4
+	req.Capabilities.GranuleCount = 8
+	req.Capabilities.MaxParallelWorkers = 4
+	plan = planColumnQueryForCatalog(catalog, identity, true, req)
+	if !plan.Supported || plan.Kind != ColumnQueryPlanRowStoreBaseline {
+		t.Fatalf("missing physical column should fall back to row baseline when not forced: %+v", plan)
+	}
+	if !strings.Contains(plan.Diagnostics.UnsupportedPlanReason, `requested column "missing"`) {
+		t.Fatalf("fallback unsupported reason=%q", plan.Diagnostics.UnsupportedPlanReason)
+	}
+}
+
+func TestColumnQueryPlannerM11BReportsPhysicalAssetsGateWithClearedManifestRoot(t *testing.T) {
+	catalog := &collectionCatalog{meta: CollectionMeta{
+		Name:    "events",
+		Options: CollectionOptions{ColumnStore: &ColumnStoreConfig{Enabled: true}},
+	}}
+	identity := ColumnStoreCacheIdentity{
+		Collection:                      "events",
+		ManifestGeneration:              7,
+		RecoveryAuthoritativeGeneration: 7,
+	}
+	req := ColumnQueryPlanRequest{
+		Name:      "q1",
+		ForceKind: ColumnQueryPlanSerialColumnScan,
+		Capabilities: ColumnQueryPlannerCapabilities{
+			SerialColumnScan: true,
+		},
+	}
+
+	plan := planColumnQueryForCatalog(catalog, identity, true, req)
+	if plan.Supported {
+		t.Fatalf("expected missing physical assets to fail closed: %+v", plan)
+	}
+	if got, want := plan.Diagnostics.UnsupportedPlanReason, "no durable physical column assets are available"; got != want {
+		t.Fatalf("unsupported reason=%q want %q", got, want)
+	}
+	if !plan.Diagnostics.RecoveryAuthoritative {
+		t.Fatalf("expected recovered generation without manifest root to be authoritative: %+v", plan.Diagnostics)
 	}
 }
 

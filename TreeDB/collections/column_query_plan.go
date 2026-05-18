@@ -149,6 +149,7 @@ func planColumnQueryForCatalog(catalog *collectionCatalog, identity ColumnStoreC
 	if ok, plan := serialColumnQueryPlan(catalog, identity, identityOK, req, diag); ok {
 		return plan
 	}
+	columnQueryAnnotatePhysicalFallbackDiagnostics(catalog, req, &diag)
 	if idx, ok := selectColumnQueryBTreeIndex(catalog, req); ok {
 		diag.SelectedIndexName = idx.Name
 		diag.SelectedIndexField = idx.Field
@@ -228,7 +229,7 @@ func parallelColumnQueryPlan(catalog *collectionCatalog, identity ColumnStoreCac
 	if parallelColumnQueryShapeUnsupportedReason(req) != "" {
 		return false, ColumnQueryPlan{}
 	}
-	workers := req.Capabilities.MaxParallelWorkers
+	workers := columnQueryParallelWorkerCount(req.Capabilities)
 	diag.WorkerCount = workers
 	diag.ScheduledGranules = req.Capabilities.GranuleCount
 	diag.Reason = "selected parallel physical column scan"
@@ -295,10 +296,31 @@ func parallelColumnQueryShapeUnsupportedReason(req ColumnQueryPlanRequest) strin
 	if req.Capabilities.MaxParallelWorkers <= 1 {
 		return "parallel scan requires more than one worker"
 	}
-	if req.Capabilities.PartCount <= 1 && req.Capabilities.GranuleCount <= req.Capabilities.MaxParallelWorkers {
-		return "parallel scan requires more than one part or more granules than workers"
+	if columnQueryParallelWorkUnits(req.Capabilities) <= 1 {
+		return "parallel scan requires more than one available granule or part"
+	}
+	if columnQueryParallelWorkerCount(req.Capabilities) <= 1 {
+		return "parallel scan requires more than one worker after clamping to available granules or parts"
 	}
 	return ""
+}
+
+func columnQueryParallelWorkerCount(cap ColumnQueryPlannerCapabilities) int {
+	workers := cap.MaxParallelWorkers
+	if workers <= 0 {
+		return 0
+	}
+	if units := columnQueryParallelWorkUnits(cap); units > 0 && workers > units {
+		return units
+	}
+	return workers
+}
+
+func columnQueryParallelWorkUnits(cap ColumnQueryPlannerCapabilities) int {
+	if cap.GranuleCount > 0 {
+		return cap.GranuleCount
+	}
+	return cap.PartCount
 }
 
 func aggregateColumnQueryUnsupportedReason(catalog *collectionCatalog, identity ColumnStoreCacheIdentity, identityOK bool, req ColumnQueryPlanRequest) string {
@@ -386,9 +408,31 @@ func unsupportedColumnQueryPlan(kind ColumnQueryPlanKind, reason string, diag Co
 
 func columnQueryManifestRecoveryAuthoritative(identity ColumnStoreCacheIdentity, ok bool) bool {
 	return ok &&
-		identity.ManifestRoot != 0 &&
 		identity.ManifestGeneration != 0 &&
 		identity.RecoveryAuthoritativeGeneration == identity.ManifestGeneration
+}
+
+func columnQueryAnnotatePhysicalFallbackDiagnostics(catalog *collectionCatalog, req ColumnQueryPlanRequest, diag *ColumnQueryPlanDiagnostics) {
+	if diag == nil || diag.UnsupportedPlanReason != "" {
+		return
+	}
+	if missing, ok := missingColumnStoreRequestColumn(catalog, req); ok && missing != "" {
+		diag.UnsupportedPlanKind = columnQueryFallbackPhysicalKind(req)
+		diag.UnsupportedPlanReason = fmt.Sprintf("requested column %q is not declared in column store", missing)
+	}
+}
+
+func columnQueryFallbackPhysicalKind(req ColumnQueryPlanRequest) ColumnQueryPlanKind {
+	switch {
+	case strings.TrimSpace(req.AggregateMetadataName) != "":
+		return ColumnQueryPlanAggregateMetadata
+	case req.Capabilities.ParallelColumnScan:
+		return ColumnQueryPlanParallelColumnScan
+	case req.Capabilities.SerialColumnScan:
+		return ColumnQueryPlanSerialColumnScan
+	default:
+		return ColumnQueryPlanSerialColumnScan
+	}
 }
 
 func columnQueryPlannerCandidateCount(catalog *collectionCatalog, req ColumnQueryPlanRequest) int {

@@ -995,10 +995,13 @@ func columnStoreSuitePlanRequest(name string, rows int, forceKind collections.Co
 			// M11B deliberately has no physical column assets yet; this keeps
 			// recovery-authoritative physical planner gates unreachable until
 			// M11B/M11C wire real assets.
+			SerialColumnScan:       true,
+			AggregateMetadata:      true,
+			ParallelColumnScan:     true,
 			PhysicalAssetCount:     0,
-			PartCount:              0,
-			GranuleCount:           0,
-			MaxParallelWorkers:     1,
+			PartCount:              2,
+			GranuleCount:           2,
+			MaxParallelWorkers:     2,
 			PlannerCandidateBudget: 5,
 		},
 	}
@@ -1084,16 +1087,18 @@ func scanColumnStoreSuiteEventsByIndex(collection *collections.Collection, rows 
 	// The M11B B-tree baseline intentionally performs a full ordered pass over
 	// the planner-selected secondary index for parity. The selected index affects
 	// the secondary structure traversed and write-amplification accounting, not
-	// read selectivity; range pushdown is deferred to M11C. The fixture expects
-	// one indexed row entry per document, so rows+1 is a sentinel limit:
-	// materialized != rows catches an exact sentinel hit, while truncated catches
-	// entries beyond the sentinel.
+	// read selectivity; range pushdown is deferred to M11C. The collection index
+	// implementation emits one secondary entry per document for these scalar
+	// fields, so rows+1 is a sentinel limit: materialized != rows catches an
+	// exact sentinel hit, while truncated catches entries beyond the sentinel.
 	truncated, err := collection.ScanBorrowedDocumentsByIndexRange(indexName, collections.IndexRangeOptions{
 		Lower: collections.IndexRangeBound{Unbounded: true},
 		Upper: collections.IndexRangeBound{Unbounded: true},
 		Limit: rows + 1,
 	}, func(record collections.BorrowedDocumentRecord) (bool, error) {
 		var event columnStoreDecodedEvent
+		// columnStoreDecodedEvent must only contain owning scalar/string fields;
+		// do not add []byte fields that retain this borrowed document beyond the callback.
 		if err := json.Unmarshal(record.Document, &event); err != nil {
 			return false, err
 		}
@@ -1106,7 +1111,7 @@ func scanColumnStoreSuiteEventsByIndex(collection *collections.Collection, rows 
 		return nil, 0, 0, fmt.Errorf("column_store: scan B-tree index %s for %s: %w", indexName, queryName, err)
 	}
 	if truncated {
-		return nil, 0, 0, fmt.Errorf("column_store: B-tree index scan exceeded expected row count: materialized %d rows with sentinel limit %d; fixture expects one index entry per document", materialized, rows+1)
+		return nil, 0, 0, fmt.Errorf("column_store: B-tree index scan exceeded expected row count: materialized %d rows with sentinel limit %d; scalar index should emit one secondary entry per document", materialized, rows+1)
 	}
 	if materialized != rows {
 		return nil, 0, 0, fmt.Errorf("column_store: B-tree index scan materialized %d rows, want %d", materialized, rows)
