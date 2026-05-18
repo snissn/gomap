@@ -633,11 +633,15 @@ func TestColumnStoreAssignedForegroundIntentDoesNotBypassRelaxedDurabilityGateM1
 	if lsn == 0 || intent.AssignedLSN() != lsn || replay || replayLSN != 0 {
 		t.Fatalf("assigned foreground intent lsn=%d assigned=%d replay=(%d,%t)", lsn, intent.AssignedLSN(), replayLSN, replay)
 	}
-	if err := col.requireColumnStoreCommandWAL(col.meta, intent); !errors.Is(err, backenddb.ErrCommandWALRejected) {
-		t.Fatalf("assigned foreground relaxed intent error=%v, want ErrCommandWALRejected", err)
+	if err := col.requireColumnStoreCommandWAL(col.meta, intent); !errors.Is(err, backenddb.ErrCommandWALRejected) ||
+		!strings.Contains(err.Error(), "relaxed durability modes are unsupported") ||
+		!strings.Contains(err.Error(), "command_wal=true") {
+		t.Fatalf("assigned foreground relaxed intent error=%v, want ErrCommandWALRejected with relaxed durability diagnostics", err)
 	}
-	if err := col.requireColumnStoreCommandWAL(col.meta, nil); !errors.Is(err, backenddb.ErrCommandWALRejected) {
-		t.Fatalf("nil relaxed intent error=%v, want ErrCommandWALRejected", err)
+	if err := col.requireColumnStoreCommandWAL(col.meta, nil); !errors.Is(err, backenddb.ErrCommandWALRejected) ||
+		!strings.Contains(err.Error(), "relaxed durability modes are unsupported") ||
+		!strings.Contains(err.Error(), "command_wal=true") {
+		t.Fatalf("nil relaxed intent error=%v, want ErrCommandWALRejected with relaxed durability diagnostics", err)
 	}
 }
 
