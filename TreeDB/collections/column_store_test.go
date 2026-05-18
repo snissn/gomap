@@ -245,6 +245,35 @@ func TestColumnStoreMetadataValidation(t *testing.T) {
 			want: "unsupported active column manifest version",
 		},
 		{
+			name: "missing active manifest version",
+			cfg: &ColumnStoreConfig{
+				Enabled: true,
+				Columns: []ColumnStoreColumn{{Name: "time_us", Path: "time_us", ValueType: ColumnStoreValueInt64}},
+				ActiveManifest: &ColumnManifestIdentity{
+					Generation: 7,
+					Checksum:   123,
+				},
+			},
+			want: "active column manifest version is required",
+		},
+		{
+			name: "missing recovery-authoritative manifest version",
+			cfg: &ColumnStoreConfig{
+				Enabled: true,
+				Columns: []ColumnStoreColumn{{Name: "time_us", Path: "time_us", ValueType: ColumnStoreValueInt64}},
+				ActiveManifest: &ColumnManifestIdentity{
+					Generation: 7,
+					Version:    1,
+					Checksum:   123,
+				},
+				RecoveryAuthoritativeManifest: &ColumnManifestIdentity{
+					Generation: 7,
+					Checksum:   123,
+				},
+			},
+			want: "recovery-authoritative column manifest version is required",
+		},
+		{
 			name: "recovery without active manifest",
 			cfg: &ColumnStoreConfig{
 				Enabled: true,
