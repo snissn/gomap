@@ -303,6 +303,111 @@ func TestColumnVectorDynamicGraphBaseSearchDoesNotOverfetchForOverlayOnlyRows(t 
 	}
 }
 
+func TestColumnVectorDynamicGraphBaseSearchIgnoresNonPrefixTombstones(t *testing.T) {
+	base, err := NewColumnVectorGraphFromColumns(columnVectorGraphTestColumns(128, 16, 127, true))
+	if err != nil {
+		t.Fatalf("NewColumnVectorGraphFromColumns: %v", err)
+	}
+	query, ok := base.VectorAt(nil, 64)
+	if !ok {
+		t.Fatal("missing query vector")
+	}
+	opts := ColumnVectorGraphSearchOptions{TopK: 10, EfSearch: 128}
+	baseResults, _, err := base.SearchCosine(query, ColumnVectorGraphSearchOptions{TopK: 32, EfSearch: 128}, &ColumnVectorGraphSearchScratch{})
+	if err != nil {
+		t.Fatalf("base SearchCosine: %v", err)
+	}
+	protected := make(map[string]struct{}, len(baseResults))
+	for _, result := range baseResults {
+		protected[string(result.DocumentID)] = struct{}{}
+	}
+	mutations := make([]ColumnVectorDynamicMutation, 0, 32)
+	for ordinal := 0; ordinal < base.Rows() && len(mutations) < cap(mutations); ordinal++ {
+		documentID := []byte(fmt.Sprintf("doc-%06d", ordinal))
+		if _, found := protected[string(documentID)]; found {
+			continue
+		}
+		mutations = append(mutations, ColumnVectorDynamicMutation{
+			Kind:       ColumnVectorDynamicMutationDelete,
+			DocumentID: documentID,
+		})
+	}
+	if len(mutations) != cap(mutations) {
+		t.Fatalf("selected %d tombstones, want %d", len(mutations), cap(mutations))
+	}
+	graph, err := NewColumnVectorDynamicGraph(base)
+	if err != nil {
+		t.Fatalf("NewColumnVectorDynamicGraph: %v", err)
+	}
+	if _, err := graph.ApplyBatch(mutations); err != nil {
+		t.Fatalf("ApplyBatch tombstones: %v", err)
+	}
+	results, trace, err := graph.SearchCosine(query, opts, &ColumnVectorDynamicGraphSearchScratch{})
+	if err != nil {
+		t.Fatalf("SearchCosine: %v", err)
+	}
+	if len(results) != opts.TopK {
+		t.Fatalf("results=%d want %d", len(results), opts.TopK)
+	}
+	if trace.BaseSearches != 1 {
+		t.Fatalf("base searches=%d want one search when tombstones are outside the fetched prefix", trace.BaseSearches)
+	}
+	if trace.BaseTrace.TopK != opts.TopK {
+		t.Fatalf("base topK=%d want query topK=%d despite unrelated tombstones", trace.BaseTrace.TopK, opts.TopK)
+	}
+	if trace.BaseTombstoned != 0 {
+		t.Fatalf("base tombstoned=%d want no fetched-prefix tombstones", trace.BaseTombstoned)
+	}
+}
+
+func TestColumnVectorDynamicGraphBaseSearchRetriesTombstonePrefix(t *testing.T) {
+	base, err := NewColumnVectorGraphFromColumns(columnVectorGraphTestColumns(128, 16, 127, true))
+	if err != nil {
+		t.Fatalf("NewColumnVectorGraphFromColumns: %v", err)
+	}
+	query, ok := base.VectorAt(nil, 64)
+	if !ok {
+		t.Fatal("missing query vector")
+	}
+	opts := ColumnVectorGraphSearchOptions{TopK: 10, EfSearch: 128}
+	baseResults, _, err := base.SearchCosine(query, opts, &ColumnVectorGraphSearchScratch{})
+	if err != nil {
+		t.Fatalf("base SearchCosine: %v", err)
+	}
+	if len(baseResults) != opts.TopK {
+		t.Fatalf("base results=%d want %d", len(baseResults), opts.TopK)
+	}
+	deletedID := append([]byte(nil), baseResults[0].DocumentID...)
+	graph, err := NewColumnVectorDynamicGraph(base)
+	if err != nil {
+		t.Fatalf("NewColumnVectorDynamicGraph: %v", err)
+	}
+	if _, err := graph.ApplyBatch([]ColumnVectorDynamicMutation{
+		{Kind: ColumnVectorDynamicMutationDelete, DocumentID: deletedID},
+	}); err != nil {
+		t.Fatalf("ApplyBatch tombstone: %v", err)
+	}
+	results, trace, err := graph.SearchCosine(query, opts, &ColumnVectorDynamicGraphSearchScratch{})
+	if err != nil {
+		t.Fatalf("SearchCosine: %v", err)
+	}
+	if len(results) != opts.TopK {
+		t.Fatalf("results=%d want %d", len(results), opts.TopK)
+	}
+	if containsColumnVectorDynamicResult(results, deletedID) {
+		t.Fatalf("deleted base doc leaked into results: %+v", results)
+	}
+	if trace.BaseSearches != 2 {
+		t.Fatalf("base searches=%d want one retry after fetched-prefix tombstone", trace.BaseSearches)
+	}
+	if trace.BaseTrace.TopK != opts.TopK+1 {
+		t.Fatalf("base topK=%d want %d after one tombstone retry", trace.BaseTrace.TopK, opts.TopK+1)
+	}
+	if trace.BaseTombstoned != 1 {
+		t.Fatalf("base tombstoned=%d want one fetched-prefix tombstone", trace.BaseTombstoned)
+	}
+}
+
 func TestColumnVectorDynamicBaseTopKBoundsTombstoneOverfetch(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -939,6 +1044,7 @@ func reportColumnVectorDynamicGraphMetrics(b *testing.B, snapshot ColumnVectorDy
 		b.ReportMetric(0, "edges/node")
 	}
 	b.ReportMetric(float64(trace.BaseTrace.CandidatesExamined), "base_candidates/search")
+	b.ReportMetric(float64(trace.BaseSearches), "base_searches/search")
 	b.ReportMetric(float64(trace.BaseTombstoned), "base_tombstoned/search")
 	b.ReportMetric(float64(trace.OverlayScanned), "overlay_scanned/search")
 	b.ReportMetric(float64(trace.MergeCandidates), "merge_candidates/search")
