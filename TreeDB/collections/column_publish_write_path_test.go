@@ -87,6 +87,39 @@ func TestColumnStoreBenchmarkRelaxedRejectsBufferedWritesM10B(t *testing.T) {
 	assertColumnStoreWriteDomainEmptyM10B(t, col)
 }
 
+func TestColumnStoreStaleNoIndexBufferedInsertRechecksCommandWALAfterCatalogRefreshM10B(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{
+		Dir:                    t.TempDir(),
+		Durability:             backenddb.DurabilityWALOffRelaxed,
+		DisableBackgroundPrune: true,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "events",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatJSON,
+		},
+	}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	stale, err := mgr.OpenCollection("events")
+	if err != nil {
+		t.Fatalf("OpenCollection stale: %v", err)
+	}
+	enableColumnStoreForExistingCollectionM10B(t, d, "events", ColumnStoreProfileBenchmarkRelaxed, mgr)
+
+	if _, err := stale.Insert([]byte("e1"), []byte(`{"time_us":1,"kind":"like","did":"d1"}`)); !errors.Is(err, backenddb.ErrCommandWALUnsupported) {
+		t.Fatalf("stale Insert error=%v, want ErrCommandWALUnsupported", err)
+	}
+	assertColumnStoreDocumentMissingM10B(t, stale, "e1")
+	assertColumnStoreWriteDomainEmptyM10B(t, stale)
+}
+
 func TestColumnStoreBufferedDeletePathsRequireCommandWALM10B(t *testing.T) {
 	for _, tc := range []struct {
 		name string
