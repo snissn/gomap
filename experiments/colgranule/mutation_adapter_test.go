@@ -7,7 +7,6 @@ import (
 	"sort"
 	"strings"
 	"testing"
-	"time"
 )
 
 func TestColumnMutationAdapterReplayAndJSONBenchParity(t *testing.T) {
@@ -129,12 +128,17 @@ func TestColumnMutationAdapterReplayIgnoresPhysicalDescriptorsM9D(t *testing.T) 
 	}
 	scenario := newJSONBenchMutationReplayScenario(t, ds)
 
-	original := testJSONBenchMutationReplayState(t, t.TempDir(), ds, opts, scenario, ColumnMutationAdapterOptions{}, false)
-	physicalReplay := testJSONBenchMutationReplayState(t, t.TempDir(), ds, opts, scenario, ColumnMutationAdapterOptions{
-		InitialPartID:     1_000,
-		InitialGeneration: 50,
-	}, true)
-	offsetReplay := testJSONBenchMutationReplayState(t, t.TempDir(), ds, opts, scenario, ColumnMutationAdapterOptions{}, true)
+	original := testJSONBenchMutationReplayState(t, t.TempDir(), ds, opts, scenario, testJSONBenchMutationReplayStateOptions{})
+	physicalReplay := testJSONBenchMutationReplayState(t, t.TempDir(), ds, opts, scenario, testJSONBenchMutationReplayStateOptions{
+		AdapterOptions: ColumnMutationAdapterOptions{
+			InitialPartID:     1_000,
+			InitialGeneration: 50,
+		},
+		PreseedAssetOffsets: true,
+	})
+	offsetReplay := testJSONBenchMutationReplayState(t, t.TempDir(), ds, opts, scenario, testJSONBenchMutationReplayStateOptions{
+		PreseedAssetOffsets: true,
+	})
 
 	assertJSONBenchPartSetQueriesMatchRaw(t, original.reader, scenario.expected)
 	assertJSONBenchPartSetQueriesMatchRaw(t, physicalReplay.reader, scenario.expected)
@@ -169,10 +173,13 @@ func TestColumnMutationAdapterReplayIgnoresPhysicalDescriptorsM9D(t *testing.T) 
 		t.Fatal("dictionary remap did not change commit_collection_code/app.bsky.feed.post")
 	}
 	remappedScenario := newJSONBenchMutationReplayScenario(t, remapped)
-	dictionaryReplay := testJSONBenchMutationReplayState(t, t.TempDir(), remapped, remappedOpts, remappedScenario, ColumnMutationAdapterOptions{
-		InitialPartID:     2_000,
-		InitialGeneration: 90,
-	}, true)
+	dictionaryReplay := testJSONBenchMutationReplayState(t, t.TempDir(), remapped, remappedOpts, remappedScenario, testJSONBenchMutationReplayStateOptions{
+		AdapterOptions: ColumnMutationAdapterOptions{
+			InitialPartID:     2_000,
+			InitialGeneration: 90,
+		},
+		PreseedAssetOffsets: true,
+	})
 	assertJSONBenchPartSetQueriesMatchRaw(t, dictionaryReplay.reader, remappedScenario.expected)
 	assertJSONBenchReplaySpecializedQueriesMatchRaw(t, dictionaryReplay.reader, remappedScenario.expected, JSONBenchColumnPartLayoutTimeUS)
 	assertColumnPartSetLogicalDigestMatchesDataset(t, dictionaryReplay.reader, remappedScenario.expected, ds.Dictionaries)
@@ -186,11 +193,14 @@ func TestColumnMutationAdapterReplayIgnoresPhysicalDescriptorsM9D(t *testing.T) 
 	if err != nil {
 		t.Fatalf("JSONBenchColumnPartOptionsWithAggregateMetadataForLayout(clickhouse): %v", err)
 	}
-	clickHouseOriginal := testJSONBenchMutationReplayState(t, t.TempDir(), ds, clickHouseOpts, scenario, ColumnMutationAdapterOptions{}, false)
-	clickHouseReplay := testJSONBenchMutationReplayState(t, t.TempDir(), ds, clickHouseOpts, scenario, ColumnMutationAdapterOptions{
-		InitialPartID:     3_000,
-		InitialGeneration: 130,
-	}, true)
+	clickHouseOriginal := testJSONBenchMutationReplayState(t, t.TempDir(), ds, clickHouseOpts, scenario, testJSONBenchMutationReplayStateOptions{})
+	clickHouseReplay := testJSONBenchMutationReplayState(t, t.TempDir(), ds, clickHouseOpts, scenario, testJSONBenchMutationReplayStateOptions{
+		AdapterOptions: ColumnMutationAdapterOptions{
+			InitialPartID:     3_000,
+			InitialGeneration: 130,
+		},
+		PreseedAssetOffsets: true,
+	})
 	assertJSONBenchPartSetQueriesMatchRaw(t, clickHouseOriginal.reader, scenario.expected)
 	assertJSONBenchPartSetQueriesMatchRaw(t, clickHouseReplay.reader, scenario.expected)
 	assertJSONBenchReplaySpecializedQueriesMatchRaw(t, clickHouseOriginal.reader, scenario.expected, JSONBenchColumnPartLayoutClickHouseFilterUserTime)
@@ -575,7 +585,6 @@ func BenchmarkColumnMutationReplayM9D(b *testing.B) {
 				var last ColumnCollectionManifest
 				b.ReportAllocs()
 				b.ResetTimer()
-				start := time.Now()
 				for i := 0; i < b.N; i++ {
 					workspace, adapter := benchmarkColumnMutationAdapterWithProfile(b, filepath.Join(root, fmt.Sprintf("iter-%06d", i)), opts, ds.Dictionaries, profile)
 					_, err := adapter.PublishBaseBatch(ColumnBatch{Rows: ds.Rows, Columns: ds.Columns}, ColumnPartCoverageOptions{SourceRowRootGeneration: 1, SourceRowVersionUpper: uint64(ds.Rows)})
@@ -588,8 +597,8 @@ func BenchmarkColumnMutationReplayM9D(b *testing.B) {
 						b.Fatalf("replay: %v", err)
 					}
 				}
-				elapsed := time.Since(start)
 				b.StopTimer()
+				elapsed := b.Elapsed()
 				if b.N > 0 && elapsed > 0 {
 					// The replay gate deliberately includes per-iteration workspace
 					// open/publish/apply/close work in the timed loop.
@@ -789,14 +798,20 @@ func benchmarkJSONBenchMutationReplayScenario(tb testing.TB, ds JSONBenchDataset
 	}
 }
 
-func testJSONBenchMutationReplayState(t *testing.T, dir string, ds JSONBenchDataset, opts ColumnStoreOptions, scenario jsonBenchMutationReplayScenario, adapterOpts ColumnMutationAdapterOptions, preseedAssetOffsets bool) jsonBenchMutationReplayState {
+type testJSONBenchMutationReplayStateOptions struct {
+	AdapterOptions      ColumnMutationAdapterOptions
+	PreseedAssetOffsets bool
+}
+
+func testJSONBenchMutationReplayState(t *testing.T, dir string, ds JSONBenchDataset, opts ColumnStoreOptions, scenario jsonBenchMutationReplayScenario, stateOpts testJSONBenchMutationReplayStateOptions) jsonBenchMutationReplayState {
 	t.Helper()
-	workspace, err := OpenColumnWorkspace(dir, ColumnWorkspaceOptions{Collection: "jsonbench"})
+	adapterOpts := stateOpts.AdapterOptions
+	workspace, err := OpenColumnWorkspace(dir, columnWorkspaceOptionsForMutationReplayProfile("jsonbench", adapterOpts.ReplayProfile))
 	if err != nil {
 		t.Fatalf("OpenColumnWorkspace: %v", err)
 	}
 	t.Cleanup(func() { _ = workspace.Close() })
-	if preseedAssetOffsets {
+	if stateOpts.PreseedAssetOffsets {
 		part, err := BuildColumnPart(777, opts, ColumnBatch{Rows: 1, Columns: sliceJSONBenchColumns(ds, 0, 1)})
 		if err != nil {
 			t.Fatalf("BuildColumnPart(preseed): %v", err)
