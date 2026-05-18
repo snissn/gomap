@@ -24,10 +24,10 @@ func TestColumnAssetReasonSentinelsAreAppendSafe(t *testing.T) {
 		if len(reason) != 1 || cap(reason) != len(reason) || reason[0] != name {
 			t.Fatalf("reason sentinel %q=%v len=%d cap=%d, want one append-safe reason", name, reason, len(reason), cap(reason))
 		}
-		extended := append(reason, "caller appended reason")
-		extended[0] = "caller rewrote reason"
-		if reason[0] != name {
-			t.Fatalf("reason sentinel %q was mutated through appended slice: %v", name, reason)
+		mutated := append(reason, "caller append")
+		mutated[0] = "corrupted"
+		if got := reasons[name]; !reflect.DeepEqual(got, []string{name}) {
+			t.Fatalf("reason sentinel %q after append mutation=%v want [%q]", name, got, name)
 		}
 	}
 }
