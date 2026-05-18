@@ -125,6 +125,9 @@ cd benchmarks/vector_distance_kernels
 GOWORK=off go test -run '^$' -bench 'BenchmarkMetalDotQueryBatchRealisticIndexShapes/.*dims_768' -benchmem -benchtime=1x -count=3
 ```
 
+Hardware-labeled benchmark notes live in `METAL_RESULTS.md`. Add new hardware
+runs there as separate dated sections instead of overwriting earlier results.
+
 The realistic-shape benchmark includes `32/128/512 x 8k/65k` at both 64 and
 768 dimensions by default and defines `32/128/512 x 1M` cases behind
 `METAL_DOT_LARGE=1` because the dense output matrix can require hundreds of MiB
