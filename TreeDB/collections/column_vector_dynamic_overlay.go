@@ -75,10 +75,30 @@ type ColumnVectorDynamicGraphSearchScratch struct {
 
 // ColumnVectorDynamicGraphSnapshot is one read-consistent dynamic graph view.
 type ColumnVectorDynamicGraphSnapshot struct {
-	Base              *ColumnVectorGraph
-	Overlay           *ColumnVectorDynamicOverlaySnapshot
-	BaseGeneration    uint64
-	OverlayGeneration uint64
+	base              *ColumnVectorGraph
+	overlay           *ColumnVectorDynamicOverlaySnapshot
+	baseGeneration    uint64
+	overlayGeneration uint64
+}
+
+// Base returns the immutable base graph for this snapshot.
+func (s ColumnVectorDynamicGraphSnapshot) Base() *ColumnVectorGraph {
+	return s.base
+}
+
+// Overlay returns the immutable exact-scan overlay for this snapshot.
+func (s ColumnVectorDynamicGraphSnapshot) Overlay() *ColumnVectorDynamicOverlaySnapshot {
+	return s.overlay
+}
+
+// BaseGeneration returns the base graph generation observed by this snapshot.
+func (s ColumnVectorDynamicGraphSnapshot) BaseGeneration() uint64 {
+	return s.baseGeneration
+}
+
+// OverlayGeneration returns the overlay generation observed by this snapshot.
+func (s ColumnVectorDynamicGraphSnapshot) OverlayGeneration() uint64 {
+	return s.overlayGeneration
 }
 
 // ColumnVectorDynamicGraph combines one immutable base ColumnVectorGraph with a
@@ -111,20 +131,25 @@ func NewColumnVectorDynamicGraph(base *ColumnVectorGraph) (*ColumnVectorDynamicG
 	}
 	graph := &ColumnVectorDynamicGraph{baseDocIndex: baseDocIndex}
 	graph.snapshot.Store(&ColumnVectorDynamicGraphSnapshot{
-		Base:              base,
-		BaseGeneration:    1,
-		Overlay:           newColumnVectorDynamicOverlaySnapshot(base.Dims()),
-		OverlayGeneration: 0,
+		base:              base,
+		baseGeneration:    1,
+		overlay:           newColumnVectorDynamicOverlaySnapshot(base.Dims()),
+		overlayGeneration: 0,
 	})
 	return graph, nil
 }
 
-// Snapshot returns the current immutable read snapshot.
-func (g *ColumnVectorDynamicGraph) Snapshot() *ColumnVectorDynamicGraphSnapshot {
+// Snapshot returns a value copy of the current immutable read snapshot. The
+// zero value is returned when the graph is nil or not initialized.
+func (g *ColumnVectorDynamicGraph) Snapshot() ColumnVectorDynamicGraphSnapshot {
 	if g == nil {
-		return nil
+		return ColumnVectorDynamicGraphSnapshot{}
 	}
-	return g.snapshot.Load()
+	snapshot := g.snapshot.Load()
+	if snapshot == nil {
+		return ColumnVectorDynamicGraphSnapshot{}
+	}
+	return *snapshot
 }
 
 // ApplyBatch publishes one copy-on-write overlay generation containing all
@@ -141,7 +166,7 @@ func (g *ColumnVectorDynamicGraph) ApplyBatch(mutations []ColumnVectorDynamicMut
 	defer g.mu.Unlock()
 
 	current := g.snapshot.Load()
-	if current == nil || current.Base == nil || current.Overlay == nil {
+	if current == nil || current.base == nil || current.overlay == nil {
 		return stats, errors.New("collections: dynamic column vector graph has no snapshot")
 	}
 	if len(mutations) == 0 {
@@ -149,7 +174,7 @@ func (g *ColumnVectorDynamicGraph) ApplyBatch(mutations []ColumnVectorDynamicMut
 		return stats, nil
 	}
 
-	nextOverlay := current.Overlay.clone(current.OverlayGeneration + 1)
+	nextOverlay := current.overlay.clone(current.overlayGeneration + 1)
 	inserted, updated, deleted := 0, 0, 0
 	for mutationIndex, mutation := range mutations {
 		if len(mutation.DocumentID) == 0 {
@@ -177,14 +202,14 @@ func (g *ColumnVectorDynamicGraph) ApplyBatch(mutations []ColumnVectorDynamicMut
 	}
 	nextOverlay.sortAndDedupeTombstones()
 	nextSnapshot := &ColumnVectorDynamicGraphSnapshot{
-		Base:              current.Base,
-		BaseGeneration:    current.BaseGeneration,
-		Overlay:           nextOverlay,
-		OverlayGeneration: nextOverlay.generation,
+		base:              current.base,
+		baseGeneration:    current.baseGeneration,
+		overlay:           nextOverlay,
+		overlayGeneration: nextOverlay.generation,
 	}
 	g.snapshot.Store(nextSnapshot)
-	stats.BaseGeneration = nextSnapshot.BaseGeneration
-	stats.OverlayGeneration = nextSnapshot.OverlayGeneration
+	stats.BaseGeneration = nextSnapshot.baseGeneration
+	stats.OverlayGeneration = nextSnapshot.overlayGeneration
 	stats.Inserted = inserted
 	stats.Updated = updated
 	stats.Deleted = deleted
@@ -212,13 +237,13 @@ func (g *ColumnVectorDynamicGraph) SearchCosine(query []float32, opts ColumnVect
 		return nil, trace, errors.New("collections: dynamic column vector graph TopK must be positive")
 	}
 	snapshot := g.snapshot.Load()
-	if snapshot == nil || snapshot.Base == nil || snapshot.Overlay == nil {
+	if snapshot == nil || snapshot.base == nil || snapshot.overlay == nil {
 		return nil, trace, errors.New("collections: dynamic column vector graph has no snapshot")
 	}
-	base := snapshot.Base
-	overlay := snapshot.Overlay
-	trace.BaseGeneration = snapshot.BaseGeneration
-	trace.OverlayGeneration = snapshot.OverlayGeneration
+	base := snapshot.base
+	overlay := snapshot.overlay
+	trace.BaseGeneration = snapshot.baseGeneration
+	trace.OverlayGeneration = snapshot.overlayGeneration
 	trace.OverlayRows = overlay.Rows()
 	trace.OverlayLiveRows = overlay.LiveRows()
 	trace.OverlayTombstones = overlay.Tombstones()
@@ -317,13 +342,13 @@ func columnVectorDynamicPublishStats(snapshot *ColumnVectorDynamicGraphSnapshot,
 		Updated:           updated,
 		Deleted:           deleted,
 		PublishDuration:   duration,
-		BaseGeneration:    snapshot.BaseGeneration,
-		OverlayGeneration: snapshot.OverlayGeneration,
+		BaseGeneration:    snapshot.baseGeneration,
+		OverlayGeneration: snapshot.overlayGeneration,
 	}
-	if snapshot.Overlay != nil {
-		stats.OverlayRows = snapshot.Overlay.Rows()
-		stats.OverlayLiveRows = snapshot.Overlay.LiveRows()
-		stats.OverlayTombstones = snapshot.Overlay.Tombstones()
+	if snapshot.overlay != nil {
+		stats.OverlayRows = snapshot.overlay.Rows()
+		stats.OverlayLiveRows = snapshot.overlay.LiveRows()
+		stats.OverlayTombstones = snapshot.overlay.Tombstones()
 	}
 	return stats
 }

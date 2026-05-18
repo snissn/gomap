@@ -123,8 +123,8 @@ func TestColumnVectorDynamicGraphApplyBatchDoesNotReportUnpublishedCounts(t *tes
 		t.Fatalf("stats after failed batch=%+v want zero unpublished counts", stats)
 	}
 	snapshot := graph.Snapshot()
-	if snapshot.OverlayGeneration != 0 || snapshot.Overlay.Rows() != 0 || snapshot.Overlay.LiveRows() != 0 {
-		t.Fatalf("snapshot after failed batch generation=%d rows=%d live=%d, want unchanged empty overlay", snapshot.OverlayGeneration, snapshot.Overlay.Rows(), snapshot.Overlay.LiveRows())
+	if snapshot.OverlayGeneration() != 0 || snapshot.Overlay().Rows() != 0 || snapshot.Overlay().LiveRows() != 0 {
+		t.Fatalf("snapshot after failed batch generation=%d rows=%d live=%d, want unchanged empty overlay", snapshot.OverlayGeneration(), snapshot.Overlay().Rows(), snapshot.Overlay().LiveRows())
 	}
 }
 
@@ -335,7 +335,7 @@ func benchmarkColumnVectorDynamicGraphSearchCosineParallelReadOnly(b *testing.B,
 		scratches[i] = scratch
 	}
 	b.ReportAllocs()
-	b.SetBytes(int64(warmTrace.CandidatesExamined * graph.Snapshot().Base.Dims() * 4))
+	b.SetBytes(int64(warmTrace.CandidatesExamined * graph.Snapshot().Base().Dims() * 4))
 	b.ResetTimer()
 	started := time.Now()
 	var nextWorker uint64
@@ -514,25 +514,27 @@ func columnVectorDynamicScaleDocumentID(ordinal int) []byte {
 	return documentID
 }
 
-func reportColumnVectorDynamicGraphMetrics(b *testing.B, snapshot *ColumnVectorDynamicGraphSnapshot, trace ColumnVectorDynamicGraphSearchTrace) {
+func reportColumnVectorDynamicGraphMetrics(b *testing.B, snapshot ColumnVectorDynamicGraphSnapshot, trace ColumnVectorDynamicGraphSearchTrace) {
 	b.Helper()
-	if snapshot == nil || snapshot.Base == nil || snapshot.Overlay == nil {
+	base := snapshot.Base()
+	overlay := snapshot.Overlay()
+	if base == nil || overlay == nil {
 		return
 	}
-	graphBytes := columnVectorGraphPayloadBytes(snapshot.Base)
-	overlayBytes := columnVectorDynamicOverlayPayloadBytes(snapshot.Overlay)
-	b.ReportMetric(float64(snapshot.Base.Rows()), "base_rows")
-	b.ReportMetric(float64(snapshot.Base.Dims()), "dims")
-	b.ReportMetric(float64(snapshot.Base.Edges())/float64(snapshot.Base.Rows()), "edges/node")
+	graphBytes := columnVectorGraphPayloadBytes(base)
+	overlayBytes := columnVectorDynamicOverlayPayloadBytes(overlay)
+	b.ReportMetric(float64(base.Rows()), "base_rows")
+	b.ReportMetric(float64(base.Dims()), "dims")
+	b.ReportMetric(float64(base.Edges())/float64(base.Rows()), "edges/node")
 	b.ReportMetric(float64(trace.BaseTrace.CandidatesExamined), "base_candidates/search")
 	b.ReportMetric(float64(trace.BaseTombstoned), "base_tombstoned/search")
 	b.ReportMetric(float64(trace.OverlayScanned), "overlay_scanned/search")
 	b.ReportMetric(float64(trace.MergeCandidates), "merge_candidates/search")
 	b.ReportMetric(float64(trace.CandidatesExamined), "total_candidates/search")
 	b.ReportMetric(float64(trace.BaseTrace.EdgesVisited), "edges/search")
-	b.ReportMetric(float64(snapshot.Overlay.Rows()), "overlay_rows")
-	b.ReportMetric(float64(snapshot.Overlay.LiveRows()), "overlay_live_rows")
-	b.ReportMetric(float64(snapshot.Overlay.Tombstones()), "overlay_tombstones")
+	b.ReportMetric(float64(overlay.Rows()), "overlay_rows")
+	b.ReportMetric(float64(overlay.LiveRows()), "overlay_live_rows")
+	b.ReportMetric(float64(overlay.Tombstones()), "overlay_tombstones")
 	b.ReportMetric(float64(graphBytes), "base_payload_bytes")
 	b.ReportMetric(float64(overlayBytes), "overlay_payload_bytes")
 }
