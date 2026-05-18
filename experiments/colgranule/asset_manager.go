@@ -5,23 +5,26 @@ import (
 	"sync"
 )
 
+const maxColumnAssetInt = int(^uint(0) >> 1)
+
 type ColumnAssetPin struct {
 	Ref    ColumnAssetRef `json:"ref"`
 	Reason string         `json:"reason,omitempty"`
 }
 
 type ColumnAssetManager struct {
-	mu            sync.Mutex
-	store         ColumnAssetStore
-	pins          map[ColumnAssetRef]int
-	zombies       map[ColumnAssetRef]string
-	quarantine    map[ColumnAssetRef]string
-	publishFailed map[ColumnAssetRef]string
-	rewriteDebt   map[ColumnAssetRef]string
-	publishEpoch  uint64
-	nextAttemptID uint64
-	syncedAttempt map[uint64]uint64
-	refFailedAt   map[ColumnAssetRef]uint64
+	mu             sync.Mutex
+	store          ColumnAssetStore
+	pins           map[ColumnAssetRef]int
+	zombies        map[ColumnAssetRef]string
+	quarantine     map[ColumnAssetRef]string
+	operatorLocked map[ColumnAssetRef]struct{}
+	publishFailed  map[ColumnAssetRef]string
+	rewriteDebt    map[ColumnAssetRef]string
+	publishEpoch   uint64
+	nextAttemptID  uint64
+	syncedAttempt  map[uint64]uint64
+	refFailedAt    map[ColumnAssetRef]uint64
 }
 
 type ColumnAssetManagerReclamationPlan struct {
@@ -70,14 +73,15 @@ func NewColumnAssetManager(store ColumnAssetStore) (*ColumnAssetManager, error) 
 		return nil, fmt.Errorf("colgranule: nil column asset manager store")
 	}
 	return &ColumnAssetManager{
-		store:         store,
-		pins:          make(map[ColumnAssetRef]int),
-		zombies:       make(map[ColumnAssetRef]string),
-		quarantine:    make(map[ColumnAssetRef]string),
-		publishFailed: make(map[ColumnAssetRef]string),
-		rewriteDebt:   make(map[ColumnAssetRef]string),
-		syncedAttempt: make(map[uint64]uint64),
-		refFailedAt:   make(map[ColumnAssetRef]uint64),
+		store:          store,
+		pins:           make(map[ColumnAssetRef]int),
+		zombies:        make(map[ColumnAssetRef]string),
+		quarantine:     make(map[ColumnAssetRef]string),
+		operatorLocked: make(map[ColumnAssetRef]struct{}),
+		publishFailed:  make(map[ColumnAssetRef]string),
+		rewriteDebt:    make(map[ColumnAssetRef]string),
+		syncedAttempt:  make(map[uint64]uint64),
+		refFailedAt:    make(map[ColumnAssetRef]uint64),
 	}, nil
 }
 
@@ -225,9 +229,7 @@ func (m *ColumnAssetManager) Quarantine(ref ColumnAssetRef, reason string) error
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.quarantine[ref] = reason
-	// A direct quarantine is an explicit safety decision, even when it reuses
-	// the publish-failure reason. A later successful retry must not clear it.
-	delete(m.publishFailed, ref)
+	m.operatorLocked[ref] = struct{}{}
 	return nil
 }
 
@@ -258,11 +260,11 @@ func prepareColumnAssetPublishClosure(store ColumnAssetStore, prepared []ColumnP
 	}
 	// Sync is tied to the explicit publish closure: unreferenced buffered
 	// assets are not made durable until a root-visible prepared ref names them.
-	if _, ok := store.(columnAssetSyncer); ok && len(prepared) > 0 {
+	if _, ok := store.(columnAssetSyncer); ok && len(preparedClone) > 0 {
 		closure.SyncRequired = true
 	}
-	seen := make(map[ColumnAssetRef]struct{}, len(prepared))
-	for _, asset := range prepared {
+	seen := make(map[ColumnAssetRef]struct{}, len(preparedClone))
+	for _, asset := range preparedClone {
 		if err := validateColumnPreparedAsset(asset); err != nil {
 			return ColumnAssetPublishClosure{}, err
 		}
@@ -276,12 +278,12 @@ func prepareColumnAssetPublishClosure(store ColumnAssetStore, prepared []ColumnP
 		closure.RequiredAssets++
 		bytes := asset.Bytes
 		if bytes == 0 {
-			if asset.Ref.Length > int64(^uint(0)>>1) {
+			if asset.Ref.Length > int64(maxColumnAssetInt) {
 				return ColumnAssetPublishClosure{}, fmt.Errorf("colgranule: prepared asset length=%d exceeds host int", asset.Ref.Length)
 			}
 			bytes = int(asset.Ref.Length)
 		}
-		if bytes > int(^uint(0)>>1)-closure.RequiredBytes {
+		if bytes > maxColumnAssetInt-closure.RequiredBytes {
 			return ColumnAssetPublishClosure{}, fmt.Errorf("colgranule: prepared asset required bytes overflow")
 		}
 		closure.RequiredBytes += bytes
@@ -357,15 +359,16 @@ func (m *ColumnAssetManager) MarkPublishSucceeded(synced ColumnAssetSyncedPublis
 	if !ok {
 		return fmt.Errorf("colgranule: synced publish closure already consumed")
 	}
-	delete(m.syncedAttempt, synced.attempt)
 	for _, asset := range synced.closure.PreparedAssets {
 		if m.refFailedAt[asset.Ref] > epoch {
 			return fmt.Errorf("colgranule: synced publish closure predates a later publish failure for ref %+v", asset.Ref)
 		}
 	}
+	delete(m.syncedAttempt, synced.attempt)
 	for _, asset := range synced.closure.PreparedAssets {
 		if failedReason, ok := m.publishFailed[asset.Ref]; ok {
-			if quarantineReason, quarantined := m.quarantine[asset.Ref]; quarantined && quarantineReason == failedReason {
+			_, operatorLocked := m.operatorLocked[asset.Ref]
+			if quarantineReason, quarantined := m.quarantine[asset.Ref]; quarantined && quarantineReason == failedReason && !operatorLocked {
 				delete(m.quarantine, asset.Ref)
 			}
 			delete(m.publishFailed, asset.Ref)
@@ -466,7 +469,7 @@ func validateColumnPreparedAsset(asset ColumnPreparedAsset) error {
 	if asset.Bytes < 0 {
 		return fmt.Errorf("colgranule: negative prepared asset bytes %d", asset.Bytes)
 	}
-	if asset.Bytes == 0 && asset.Ref.Length > int64(^uint(0)>>1) {
+	if asset.Bytes == 0 && asset.Ref.Length > int64(maxColumnAssetInt) {
 		return fmt.Errorf("colgranule: prepared asset length=%d exceeds host int", asset.Ref.Length)
 	}
 	return nil
@@ -508,6 +511,10 @@ func columnPreparedAssetsEqual(left, right []ColumnPreparedAsset) bool {
 func verifyColumnAssetStoreRef(store ColumnAssetStore, ref ColumnAssetRef) error {
 	if verifier, ok := store.(columnAssetVerifier); ok {
 		return verifier.Verify(ref)
+	}
+	if ranged, ok := store.(ColumnAssetRangeReader); ok {
+		_, err := ranged.ReadRange(ref, 0, 1)
+		return err
 	}
 	_, err := store.ReadTo(ref, nil)
 	return err
