@@ -337,7 +337,7 @@ func appendVectorIndexTemplateV1RawNode(dst []byte, node vectorIndexPersistNode)
 	} else {
 		dst = append(dst, templateV1KindFalse)
 	}
-	dst = appendTemplateV1RawBytes(dst, []byte(node.DocumentID))
+	dst = appendTemplateV1RawBytes(dst, node.DocumentID)
 	dst = appendTemplateV1RawFloat64(dst, float64(node.Level))
 	dst = appendTemplateV1RawFloat64(dst, vectorNormSquared(node.Vector))
 	dst = appendTemplateV1RawFloat32Slice(dst, node.Vector)
@@ -709,7 +709,7 @@ func (r *vectorIndexNativeRootBackedGraphReader) readDistanceNode(nodeID int) (v
 		return vectorIndexNode{}, false, err
 	}
 	node := vectorIndexNode{
-		documentID: []byte(persisted.DocumentID),
+		documentID: bytes.Clone(persisted.DocumentID),
 		vector:     persisted.Vector,
 		quantized:  persisted.Quantized,
 		quantScale: persisted.QuantScale,
@@ -736,13 +736,17 @@ func (r *vectorIndexNativeRootBackedGraphReader) readNodeDocumentID(nodeID int) 
 	}
 	docID, docOK := parseVectorIndexNativeRootJSONStringField(data, "document_id")
 	if docOK {
-		return docID, vectorIndexNativeRootJSONBoolTrue(data, "deleted"), true, nil
+		decoded, err := decodeVectorIndexPersistDocumentIDKey(string(docID))
+		if err != nil {
+			return nil, false, false, err
+		}
+		return decoded, vectorIndexNativeRootJSONBoolTrue(data, "deleted"), true, nil
 	}
 	var persisted vectorIndexPersistNode
 	if err := json.Unmarshal(data, &persisted); err != nil {
 		return nil, false, false, err
 	}
-	return []byte(persisted.DocumentID), persisted.Deleted, true, nil
+	return bytes.Clone(persisted.DocumentID), persisted.Deleted, true, nil
 }
 
 func (r *vectorIndexNativeRootBackedGraphReader) readNeighbors(nodeID, layer int) ([]int, bool, error) {
@@ -819,7 +823,7 @@ func appendVectorIndexNativeRootEdgeKey(dst []byte, nodeID, layer int) []byte {
 
 func appendVectorIndexNativeRootDocKey(dst []byte, docID []byte) []byte {
 	dst = append(dst[:0], vectorIndexNativeKeyPrefixDoc...)
-	return append(dst, docID...)
+	return append(dst, encodeVectorIndexPersistDocumentIDKey(docID)...)
 }
 
 func appendVectorIndexNativeRootPaddedInt(dst []byte, value, width int) []byte {
