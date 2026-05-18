@@ -238,7 +238,7 @@ func waitForSegmentStoreClosing(t *testing.T, store *SegmentColumnAssetStore) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if store.testClosing() {
+		if segmentStoreClosing(store) {
 			return
 		}
 		time.Sleep(time.Millisecond)
@@ -246,10 +246,10 @@ func waitForSegmentStoreClosing(t *testing.T, store *SegmentColumnAssetStore) {
 	t.Fatal("segment store Close did not enter closing state")
 }
 
-func (s *SegmentColumnAssetStore) testClosing() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.closing
+func segmentStoreClosing(store *SegmentColumnAssetStore) bool {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	return store.closing
 }
 
 func TestSegmentColumnAssetStoreRejectsOutOfRangeRefBeforeAllocation(t *testing.T) {
