@@ -443,6 +443,24 @@ func (c *Collection) buildColumnManifestPublishSystemDeltaIterator(input ColumnM
 	if input.BaseManifestRootID != plan.ManifestRootBaseID || input.BaseManifestRootID != plan.RootDelta.BaseRootID {
 		return nil, errConcurrentRootModification(input.BaseMeta.Name, rootName)
 	}
+	rootIdentity := plan.RootDelta.Identity
+	normalizeColumnManifestIdentityDefaults(&rootIdentity)
+	if err := validateColumnManifestIdentity(rootIdentity); err != nil {
+		return nil, err
+	}
+	if plan.RootDelta.IdentityRecord != encodeColumnManifestIdentityRecordArray(rootIdentity) {
+		return nil, errors.New("collections: column publish plan root identity record does not match root identity")
+	}
+	activeIdentity := plan.UpdatedActiveManifest
+	normalizeColumnManifestIdentityDefaults(&activeIdentity)
+	if activeIdentity != rootIdentity {
+		return nil, errors.New("collections: column publish plan active manifest identity does not match root delta identity")
+	}
+	recoveryIdentity := plan.RecoveryAuthoritativeManifest
+	normalizeColumnManifestIdentityDefaults(&recoveryIdentity)
+	if recoveryIdentity != rootIdentity {
+		return nil, errors.New("collections: column publish plan recovery-authoritative manifest identity does not match root delta identity")
+	}
 	if input.BaseCommitSeq != 0 || input.BaseSystemRoot != 0 {
 		state := c.db.State()
 		if (input.BaseCommitSeq != 0 && state.CommitSeq != input.BaseCommitSeq) ||
