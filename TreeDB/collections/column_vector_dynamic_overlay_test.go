@@ -1069,7 +1069,9 @@ func reportColumnVectorDynamicReadMetrics(b *testing.B, elapsed time.Duration, p
 	if elapsed > 0 {
 		b.ReportMetric(float64(b.N)/elapsed.Seconds(), "read_qps")
 		if b.N > 0 {
-			b.ReportMetric(float64(elapsed.Nanoseconds())/float64(b.N), "read_ns/op")
+			// Distinguish explicit wall-clock read-loop timing from testing's
+			// built-in ns/op, which may include concurrent writer setup/teardown.
+			b.ReportMetric(float64(elapsed.Nanoseconds())/float64(b.N), "read_wall_ns/op")
 		}
 	}
 	if publishedBatches > 0 && elapsed > 0 {
