@@ -919,6 +919,21 @@ func TestColumnStoreSuitePlanKindMapsKnownPathsM11B(t *testing.T) {
 	}
 	if _, err := columnStoreSuitePlanKind("future_alias"); err == nil {
 		t.Fatal("expected unknown path to fail")
+	} else {
+		msg := err.Error()
+		for _, want := range []string{
+			"future_alias",
+			"supported=",
+			"aliases=",
+			"serial-column-scan",
+			"aggregate-metadata",
+			"fail_closed=",
+			"-column-store-path",
+		} {
+			if !strings.Contains(msg, want) {
+				t.Fatalf("unknown path error %q missing %q", msg, want)
+			}
+		}
 	}
 }
 

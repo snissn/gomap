@@ -40,11 +40,15 @@ type ColumnQueryPredicate struct {
 }
 
 type ColumnQueryPlannerCapabilities struct {
-	SerialColumnScan        bool
-	AggregateMetadata       bool
-	ParallelColumnScan      bool
-	PhysicalAssetCount      int
-	PartCount               int
+	SerialColumnScan   bool
+	AggregateMetadata  bool
+	ParallelColumnScan bool
+	PhysicalAssetCount int
+	// PartCount is a fallback schedulable-unit estimate when GranuleCount is
+	// not populated by the column asset layer.
+	PartCount int
+	// GranuleCount is the authoritative schedulable-unit count for parallel
+	// planning when the column asset layer exposes adaptive marks/granules.
 	GranuleCount            int
 	MaxParallelWorkers      int
 	DecodedBlockCacheHits   uint64

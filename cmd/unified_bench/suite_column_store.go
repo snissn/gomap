@@ -521,7 +521,7 @@ func columnStoreSuitePlanKind(path string) (collections.ColumnQueryPlanKind, err
 	case columnStorePathParallelColumnScan:
 		return collections.ColumnQueryPlanParallelColumnScan, nil
 	default:
-		return "", fmt.Errorf("column_store: unknown forced path %q; supported=%s fail_closed=%s", path, columnStoreSuitePathList(columnStoreSuiteSupportedForcedPaths), columnStoreSuitePathList(columnStoreSuiteUnsupportedForcedPaths))
+		return "", fmt.Errorf("column_store: unknown forced path %q; supported=%s aliases=%s fail_closed=%s; see -column-store-path help", path, columnStoreSuitePathList(columnStoreSuiteSupportedForcedPaths), columnStoreSuitePathAliasHelp(columnStoreSuitePathAliases), columnStoreSuitePathList(columnStoreSuiteUnsupportedForcedPaths))
 	}
 }
 
@@ -693,7 +693,7 @@ func columnStoreReferenceHashes(events []columnStoreFixtureEvent) (map[string]ui
 	}
 	out := make(map[string]uint64)
 	for _, name := range columnStoreQueryNameList {
-		hash, _, err := columnStoreQueryHash(columnStoreQueryCanonicalName(name, columnStorePathRowStoreBaseline), decoded)
+		hash, _, err := columnStoreQueryHash(name, decoded)
 		if err != nil {
 			return nil, err
 		}
@@ -949,8 +949,7 @@ func runColumnStoreSuiteQueries(collection *collections.Collection, rows int, ra
 		}
 		reduceStart := time.Now()
 		planLabel := string(plan.Kind)
-		hashName := columnStoreQueryCanonicalName(name, planLabel)
-		lines, err := columnStoreQueryLines(columnStoreQueryHashLineName(hashName), events)
+		lines, err := columnStoreQueryLines(columnStoreQueryHashLineName(name), events)
 		if err != nil {
 			return nil, nil, fmt.Errorf("column_store: reduce %s: %w", name, err)
 		}
@@ -1188,13 +1187,6 @@ func columnStoreQueryImplementationNote(name, path string) string {
 		return "full_unbounded_secondary_index_scan_no_predicate_pushdown_m11b"
 	}
 	return ""
-}
-
-func columnStoreQueryCanonicalName(name, path string) string {
-	if alias := columnStoreQueryAliasOf(name, path); alias != "" {
-		return alias
-	}
-	return name
 }
 
 func columnStoreQueryHash(name string, events []columnStoreDecodedEvent) (uint64, int, error) {
