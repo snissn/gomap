@@ -477,14 +477,9 @@ func (c *Collection) buildRootDescriptorAndColumnManifestSystemDeltaIteratorForM
 	if rootIDs[columnRootIndex] == 0 {
 		return nil, errors.New("collections: column manifest root publish returned zero root")
 	}
-	current := c.db.AcquireSnapshot()
-	if current == nil {
-		return nil, backenddb.ErrClosed
-	}
-	defer func() { _ = current.Close() }()
-	if err := validateColumnManifestPublishedRoot(current, meta.Name, rootIDs[columnRootIndex], plan.RootDelta.IdentityRecord); err != nil {
-		return nil, err
-	}
+	// The ordered-root group just built this root. Avoid reading it through the
+	// pre-commit snapshot because compressed roots may depend on value-log
+	// segment visibility published by the enclosing commit.
 	updatedMeta, err := columnPublishUpdatedMeta(meta, plan)
 	if err != nil {
 		return nil, err
