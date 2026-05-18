@@ -1,0 +1,45 @@
+package main
+
+import (
+	"reflect"
+	"testing"
+)
+
+func withDBAliasesForTest(t *testing.T, aliases map[string]string) {
+	t.Helper()
+	saved := make(map[string]string, len(dbAliases))
+	for name, target := range dbAliases {
+		saved[name] = target
+	}
+	dbAliases = aliases
+	t.Cleanup(func() {
+		dbAliases = saved
+	})
+}
+
+func TestCanonicalDBNameResolvesTransitiveAliasesM11A(t *testing.T) {
+	withDBAliasesForTest(t, map[string]string{
+		"treedb_indirect": "treedbcached",
+		"treedbcached":    "treedb",
+	})
+
+	if got := canonicalDBName("treedb_indirect"); got != "treedb" {
+		t.Fatalf("canonicalDBName(treedb_indirect)=%q, want treedb", got)
+	}
+
+	got := resolveDBs("treedb_indirect", "")
+	if want := []string{"treedb"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("resolveDBs transitive alias=%v, want %v", got, want)
+	}
+}
+
+func TestCanonicalDBNameStopsAliasCyclesM11A(t *testing.T) {
+	withDBAliasesForTest(t, map[string]string{
+		"alias_a": "alias_b",
+		"alias_b": "alias_a",
+	})
+
+	if got := canonicalDBName("alias_a"); got != "alias_a" {
+		t.Fatalf("canonicalDBName(alias_a)=%q, want alias_a", got)
+	}
+}

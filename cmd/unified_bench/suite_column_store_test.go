@@ -819,18 +819,22 @@ func TestColumnStoreSuiteArtifactsOmitMissingRuntimeDeltaPathsM11A(t *testing.T)
 	}
 }
 
-func TestColumnStoreSuiteArtifactsOmitRuntimeDeltaStatErrorsM11A(t *testing.T) {
+func TestColumnStoreSuiteArtifactsPreserveRuntimeDeltaStatErrorsM11A(t *testing.T) {
 	dir := t.TempDir()
 	notDir := filepath.Join(dir, "not-dir")
 	if err := os.WriteFile(notDir, []byte("file"), 0o644); err != nil {
 		t.Fatalf("write not-dir marker: %v", err)
 	}
+	blockDeltaPath := filepath.Join(notDir, "block_delta.pprof")
 	paths := columnStoreSuitePruneMissingRuntimeDeltaArtifacts(columnStoreArtifactPaths{
-		BlockDeltaProfile: filepath.Join(notDir, "block_delta.pprof"),
+		BlockDeltaProfile: blockDeltaPath,
 		MutexDeltaProfile: " \t ",
 	})
-	if paths.BlockDeltaProfile != "" || paths.MutexDeltaProfile != "" {
-		t.Fatalf("stat-error/blank optional delta paths should be omitted: %+v", paths)
+	if paths.BlockDeltaProfile != blockDeltaPath {
+		t.Fatalf("stat-error optional delta path should be preserved, got %+v", paths)
+	}
+	if paths.MutexDeltaProfile != "" {
+		t.Fatalf("blank optional delta path should be omitted: %+v", paths)
 	}
 }
 

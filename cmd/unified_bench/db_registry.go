@@ -35,10 +35,22 @@ func RegisterAlias(alias, target string) {
 }
 
 func canonicalDBName(name string) string {
-	if target, isAlias := dbAliases[name]; isAlias {
-		return target
+	target, isAlias := dbAliases[name]
+	if !isAlias {
+		return name
 	}
-	return name
+	seen := map[string]struct{}{name: {}}
+	for {
+		name = target
+		target, isAlias = dbAliases[name]
+		if !isAlias {
+			return name
+		}
+		if _, cycle := seen[name]; cycle {
+			return name
+		}
+		seen[name] = struct{}{}
+	}
 }
 
 func GetDBFactory(name string) (DBFactory, error) {

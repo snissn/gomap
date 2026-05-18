@@ -1605,8 +1605,10 @@ func columnStoreExistingOptionalArtifactPath(path string) string {
 	}
 	if _, err := os.Stat(path); err == nil {
 		return path
+	} else if errors.Is(err, os.ErrNotExist) {
+		return ""
 	}
-	return ""
+	return path
 }
 
 func writeColumnStoreSuiteArtifacts(dir, executionPath string, report columnStoreSuiteReport, md string, run BenchRun) error {
