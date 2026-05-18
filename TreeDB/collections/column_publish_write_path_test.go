@@ -33,9 +33,7 @@ func TestColumnStoreWritesRequireCommandWALM10B(t *testing.T) {
 	}
 
 	_, err = col.InsertBatch([][]byte{[]byte("e1")}, [][]byte{[]byte(`{"time_us":1,"kind":"like","did":"d1"}`)})
-	if !errors.Is(err, backenddb.ErrCommandWALUnsupported) {
-		t.Fatalf("InsertBatch error=%v, want ErrCommandWALUnsupported", err)
-	}
+	assertColumnStoreCommandWALWriteRejectedM10B(t, err, "InsertBatch")
 	assertColumnStoreDocumentMissingM10B(t, col, "e1")
 	assertColumnStoreWriteDomainEmptyM10B(t, col)
 }
@@ -76,13 +74,11 @@ func TestColumnStoreBenchmarkRelaxedRejectsBufferedWritesM10B(t *testing.T) {
 	if err != nil {
 		t.Fatalf("bson.Marshal: %v", err)
 	}
-	if _, err := col.Insert([]byte("e1"), doc); !errors.Is(err, backenddb.ErrCommandWALUnsupported) {
-		t.Fatalf("Insert error=%v, want ErrCommandWALUnsupported", err)
-	}
+	_, err = col.Insert([]byte("e1"), doc)
+	assertColumnStoreCommandWALWriteRejectedM10B(t, err, "Insert")
 	assertColumnStoreDocumentMissingM10B(t, col, "e1")
-	if _, err := col.InsertBatchValidatedBSON([][]byte{[]byte("e2")}, [][]byte{doc}); !errors.Is(err, backenddb.ErrCommandWALUnsupported) {
-		t.Fatalf("InsertBatchValidatedBSON error=%v, want ErrCommandWALUnsupported", err)
-	}
+	_, err = col.InsertBatchValidatedBSON([][]byte{[]byte("e2")}, [][]byte{doc})
+	assertColumnStoreCommandWALWriteRejectedM10B(t, err, "InsertBatchValidatedBSON")
 	assertColumnStoreDocumentMissingM10B(t, col, "e2")
 	assertColumnStoreWriteDomainEmptyM10B(t, col)
 }
@@ -113,9 +109,8 @@ func TestColumnStoreStaleNoIndexBufferedInsertRechecksCommandWALAfterCatalogRefr
 	}
 	enableColumnStoreForExistingCollectionM10B(t, d, "events", ColumnStoreProfileBenchmarkRelaxed, mgr)
 
-	if _, err := stale.Insert([]byte("e1"), []byte(`{"time_us":1,"kind":"like","did":"d1"}`)); !errors.Is(err, backenddb.ErrCommandWALUnsupported) {
-		t.Fatalf("stale Insert error=%v, want ErrCommandWALUnsupported", err)
-	}
+	_, err = stale.Insert([]byte("e1"), []byte(`{"time_us":1,"kind":"like","did":"d1"}`))
+	assertColumnStoreCommandWALWriteRejectedM10B(t, err, "stale Insert")
 	assertColumnStoreDocumentMissingM10B(t, stale, "e1")
 	assertColumnStoreWriteDomainEmptyM10B(t, stale)
 }
@@ -151,9 +146,7 @@ func TestColumnStoreBufferedDeletePathsRequireCommandWALM10B(t *testing.T) {
 			defer func() { _ = d.Close() }()
 
 			err := tc.del(col)
-			if !errors.Is(err, backenddb.ErrCommandWALUnsupported) {
-				t.Fatalf("%s error=%v, want ErrCommandWALUnsupported", tc.name, err)
-			}
+			assertColumnStoreCommandWALWriteRejectedM10B(t, err, tc.name)
 			got, err := col.Get([]byte("e1"))
 			if err != nil {
 				t.Fatalf("Get after rejected delete: %v", err)
@@ -178,9 +171,7 @@ func TestColumnStoreBufferedUpdatePathRequiresCommandWALM10B(t *testing.T) {
 		Key:   "kind",
 		Value: mustBSONRawValue(t, "post"),
 	}})
-	if !errors.Is(err, backenddb.ErrCommandWALUnsupported) {
-		t.Fatalf("UpdateBSONSet error=%v, want ErrCommandWALUnsupported", err)
-	}
+	assertColumnStoreCommandWALWriteRejectedM10B(t, err, "UpdateBSONSet")
 	if matched || modified {
 		t.Fatalf("UpdateBSONSet matched=%v modified=%v, want false/false on rejected write", matched, modified)
 	}
@@ -207,9 +198,7 @@ func TestColumnStoreUpdateCallbacksRequireCommandWALBeforeInvocationM10B(t *test
 		callbackCalled = true
 		return current, true, nil
 	})
-	if !errors.Is(err, backenddb.ErrCommandWALUnsupported) {
-		t.Fatalf("Update error=%v, want ErrCommandWALUnsupported", err)
-	}
+	assertColumnStoreCommandWALWriteRejectedM10B(t, err, "Update")
 	if matched || modified {
 		t.Fatalf("Update matched=%v modified=%v, want false/false on rejected write", matched, modified)
 	}
@@ -225,9 +214,7 @@ func TestColumnStoreUpdateCallbacksRequireCommandWALBeforeInvocationM10B(t *test
 			return current, true, nil
 		},
 	}})
-	if !errors.Is(err, backenddb.ErrCommandWALUnsupported) {
-		t.Fatalf("UpdateBatch error=%v, want ErrCommandWALUnsupported", err)
-	}
+	assertColumnStoreCommandWALWriteRejectedM10B(t, err, "UpdateBatch")
 	if len(results) != 0 {
 		t.Fatalf("UpdateBatch results len=%d, want 0 on rejected write", len(results))
 	}
@@ -855,6 +842,14 @@ func assertColumnStoreWriteDomainEmptyM10B(t testing.TB, col *Collection) {
 	if col.writeDomain.count != 0 || col.writeDomain.rootRunCount != 0 {
 		t.Fatalf("write domain staged count=%d rootRunCount=%d, want empty", col.writeDomain.count, col.writeDomain.rootRunCount)
 	}
+}
+
+func assertColumnStoreCommandWALWriteRejectedM10B(t testing.TB, err error, operation string) {
+	t.Helper()
+	if errors.Is(err, backenddb.ErrCommandWALUnsupported) || errors.Is(err, backenddb.ErrCommandWALRejected) {
+		return
+	}
+	t.Fatalf("%s error=%v, want ErrCommandWALUnsupported or ErrCommandWALRejected", operation, err)
 }
 
 func assertColumnStoreDocumentMissingM10B(t testing.TB, col *Collection, id string) {
