@@ -61,7 +61,7 @@ func (c *Collection) requireColumnStoreCommandWAL(meta CollectionMeta, commandWA
 	if c.commandWALActive(commandWALIntent) {
 		return nil
 	}
-	return fmt.Errorf("%w: column-store writes require command WAL", backenddb.ErrCommandWALUnsupported)
+	return fmt.Errorf("%w: column-store writes require command WAL", backenddb.ErrCommandWALRejected)
 }
 
 func (c *Collection) publishRootDeltaGroupMaybeColumn(ordered []backenddb.OrderedRootDeltaPublishInput, input columnWritePublishInput) (uint64, []uint64, CollectionMeta, []string, error) {
@@ -118,7 +118,7 @@ func (c *Collection) publishRootDeltaGroupMaybeColumn(ordered []backenddb.Ordere
 		return 0, nil, CollectionMeta{}, nil, err
 	}
 	if updatedMeta.Name == "" {
-		return 0, nil, CollectionMeta{}, nil, errors.New("collections: column publish did not prepare updated metadata")
+		return 0, nil, CollectionMeta{}, nil, fmt.Errorf("collections: column publish did not prepare updated metadata collection=%q operation=%s", input.meta.Name, input.operation)
 	}
 	return newSystemRoot, rootIDs, updatedMeta, rootNames, nil
 }
