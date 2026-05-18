@@ -965,7 +965,8 @@ func TestColumnManifestPublishSystemDeltaRejectsStalePlanBaseM10A(t *testing.T) 
 	if err != nil {
 		t.Fatalf("open collection: %v", err)
 	}
-	plan, err := BuildColumnPublishPlan(testColumnPublishPlanInputM10A(ColumnManifestIdentity{Generation: 12, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0xabcdef5678}, testColumnPublishPreparedAssetM10A()))
+	planInput := testColumnPublishPlanInputM10A(ColumnManifestIdentity{Generation: 12, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0xabcdef5678}, testColumnPublishPreparedAssetM10A())
+	plan, err := BuildColumnPublishPlan(planInput)
 	if err != nil {
 		t.Fatalf("BuildColumnPublishPlan: %v", err)
 	}
@@ -982,6 +983,54 @@ func TestColumnManifestPublishSystemDeltaRejectsStalePlanBaseM10A(t *testing.T) 
 	}
 	if err == nil || !strings.Contains(err.Error(), "concurrent root modification") {
 		t.Fatalf("buildColumnManifestPublishSystemDeltaIterator err=%v want stale plan base rejection", err)
+	}
+}
+
+func TestColumnManifestPublishSystemDeltaRejectsStaleSnapshotBaseM10A(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "events",
+		Options: CollectionOptions{ColumnStore: testColumnStoreConfig(nil)},
+	}); err != nil {
+		t.Fatalf("create column-enabled collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("events")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	baseMeta := col.Meta()
+	baseState := d.State()
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "other"}); err != nil {
+		t.Fatalf("create other collection: %v", err)
+	}
+	if state := d.State(); state.CommitSeq == baseState.CommitSeq || state.SystemRootPageID == baseState.SystemRootPageID {
+		t.Fatalf("test requires collection create to advance commit/root: before=%+v after=%+v", baseState, state)
+	}
+
+	planInput := testColumnPublishPlanInputM10A(ColumnManifestIdentity{Generation: 12, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0xabcdef5678}, testColumnPublishPreparedAssetM10A())
+	planInput.BaseManifestRootID = 0
+	plan, err := BuildColumnPublishPlan(planInput)
+	if err != nil {
+		t.Fatalf("BuildColumnPublishPlan: %v", err)
+	}
+	iter, err := col.buildColumnManifestPublishSystemDeltaIterator(ColumnManifestPublishSystemDeltaInput{
+		BaseMeta:           baseMeta,
+		BaseCommitSeq:      baseState.CommitSeq,
+		BaseSystemRoot:     baseState.SystemRootPageID,
+		BaseManifestRootID: 0,
+		Plan:               plan,
+	}, []uint64{123})
+	if iter != nil {
+		_ = iter.Close()
+	}
+	if err == nil || !strings.Contains(err.Error(), "concurrent schema modification") {
+		t.Fatalf("buildColumnManifestPublishSystemDeltaIterator err=%v want stale snapshot base rejection", err)
 	}
 }
 
