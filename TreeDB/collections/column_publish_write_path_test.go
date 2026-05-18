@@ -802,6 +802,50 @@ func TestColumnManifestRootDescriptorSystemDeltaRejectsPlanRootMismatchM10B(t *t
 	}
 }
 
+func TestColumnManifestRootDescriptorSystemDeltaDoesNotReadPublishedRootBeforeCommitM10B(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "events",
+		Options: CollectionOptions{ColumnStore: testColumnStoreConfig(nil)},
+	}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col := openColumnStoreCollectionM10B(t, d, mgr)
+
+	planInput := testColumnPublishPlanInputM10A(
+		ColumnManifestIdentity{Generation: 1, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0x1234},
+		testColumnPublishPreparedAssetM10A(),
+	)
+	planInput.BaseManifestRootID = 0
+	plan, err := BuildColumnPublishPlan(planInput)
+	if err != nil {
+		t.Fatalf("BuildColumnPublishPlan: %v", err)
+	}
+
+	rootName := collectionColumnManifestRootName("events")
+	iter, err := col.buildRootDescriptorAndColumnManifestSystemDeltaIteratorForMeta(
+		col.Meta(),
+		0,
+		0,
+		[]string{rootName},
+		map[string]uint64{rootName: 0},
+		[]uint64{123456789},
+		plan,
+	)
+	if err != nil {
+		t.Fatalf("buildRootDescriptorAndColumnManifestSystemDeltaIteratorForMeta: %v", err)
+	}
+	if iter == nil {
+		t.Fatal("buildRootDescriptorAndColumnManifestSystemDeltaIteratorForMeta returned nil iterator")
+	}
+	_ = iter.Close()
+}
+
 func prepareColumnStoreCommandWALDirM10B(t *testing.T) (string, uint64) {
 	t.Helper()
 	return prepareColumnStoreCommandWALDirWithProfileM10C(t, "")
