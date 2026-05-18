@@ -264,7 +264,10 @@ func OpenColumnWorkspace(dir string, opts ColumnWorkspaceOptions) (*ColumnWorksp
 }
 
 func (w *ColumnWorkspace) ManifestSyncMode() ColumnWorkspaceManifestSyncMode {
-	if w == nil || w.manifestSync == "" {
+	if w == nil {
+		return ""
+	}
+	if w.manifestSync == "" {
 		return ColumnWorkspaceManifestSyncDurable
 	}
 	return w.manifestSync
