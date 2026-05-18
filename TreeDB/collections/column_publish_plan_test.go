@@ -511,6 +511,32 @@ func TestColumnPublishPlanAllowsReorderedClosurePreparedAssetsM10A(t *testing.T)
 	}
 }
 
+func TestColumnPublishPlanAllowsClosurePreparedAssetReasonMismatchM10A(t *testing.T) {
+	asset := testColumnPublishPreparedAssetM10A()
+	asset.Reason = "manifest builder"
+	closureAsset := asset
+	closureAsset.Reason = "closure validator"
+	identity := ColumnManifestIdentity{Generation: 7, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0xfeedbeef}
+	input := testColumnPublishPlanInputM10A(identity, asset)
+	input.Hooks.ValidateClosure = func(ColumnPublishClosureValidationInput) (ColumnPublishDurabilityClosure, error) {
+		return ColumnPublishDurabilityClosure{
+			PreparedAssets: []ColumnPreparedAsset{closureAsset},
+			RequiredAssets: 1,
+			RequiredBytes:  closureAsset.Bytes,
+			FlushRequired:  true,
+			SyncRequired:   true,
+		}, nil
+	}
+
+	plan, err := BuildColumnPublishPlan(input)
+	if err != nil {
+		t.Fatalf("BuildColumnPublishPlan reason-only closure asset mismatch: %v", err)
+	}
+	if len(plan.PreparedAssets) != 1 || plan.PreparedAssets[0] != asset {
+		t.Fatalf("plan prepared asset should retain manifest asset including reason: %+v", plan.PreparedAssets)
+	}
+}
+
 func TestColumnPublishPlanCopiesPreparedAssetsForManifestHookM10A(t *testing.T) {
 	asset := testColumnPublishPreparedAssetM10A()
 	identity := ColumnManifestIdentity{Generation: 7, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0xfeedbeef}
