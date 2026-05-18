@@ -1180,6 +1180,21 @@ func writeBenchprofArtifacts(dir, executionPath string, runs []BenchRun) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("mkdir %q: %w", dir, err)
 	}
+	return writeBenchprofArtifactsToPaths(filepath.Join(dir, "benchprof_results.json"), filepath.Join(dir, "benchprof_results.md"), executionPath, runs)
+}
+
+func writeBenchprofArtifactsToPaths(jsonPath, markdownPath, executionPath string, runs []BenchRun) error {
+	jsonPath = strings.TrimSpace(jsonPath)
+	markdownPath = strings.TrimSpace(markdownPath)
+	if jsonPath == "" || markdownPath == "" {
+		return errors.New("benchprof: json and markdown artifact paths are required")
+	}
+	if err := os.MkdirAll(filepath.Dir(jsonPath), 0o755); err != nil {
+		return fmt.Errorf("mkdir %q: %w", filepath.Dir(jsonPath), err)
+	}
+	if err := os.MkdirAll(filepath.Dir(markdownPath), 0o755); err != nil {
+		return fmt.Errorf("mkdir %q: %w", filepath.Dir(markdownPath), err)
+	}
 	if err := validateBenchprofExecutionPath(executionPath); err != nil {
 		return err
 	}
@@ -1203,7 +1218,7 @@ func writeBenchprofArtifacts(dir, executionPath string, runs []BenchRun) error {
 	if err != nil {
 		return fmt.Errorf("marshal benchprof_results.json: %w", err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "benchprof_results.json"), js, 0o644); err != nil {
+	if err := os.WriteFile(jsonPath, js, 0o644); err != nil {
 		return fmt.Errorf("write benchprof_results.json: %w", err)
 	}
 
@@ -1216,7 +1231,7 @@ func writeBenchprofArtifacts(dir, executionPath string, runs []BenchRun) error {
 	if executionPath != "" {
 		md = fmt.Sprintf("- execution path: `%s`\n\n%s", executionPath, md)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "benchprof_results.md"), []byte(md), 0o644); err != nil {
+	if err := os.WriteFile(markdownPath, []byte(md), 0o644); err != nil {
 		return fmt.Errorf("write benchprof_results.md: %w", err)
 	}
 	return nil

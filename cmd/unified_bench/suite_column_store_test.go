@@ -229,9 +229,11 @@ func TestWriteColumnStoreSuiteArtifactsUsesRecordedColumnPathsM11A(t *testing.T)
 	report := columnStoreSuiteReport{
 		Suite: "column_store",
 		Artifacts: columnStoreArtifactPaths{
-			ColumnJSON:     filepath.Join(recordedDir, "custom_column.json"),
-			ColumnMarkdown: filepath.Join(recordedDir, "custom_column.md"),
-			ColumnHTML:     filepath.Join(recordedDir, "custom_column.html"),
+			ColumnJSON:        filepath.Join(recordedDir, "custom_column.json"),
+			ColumnMarkdown:    filepath.Join(recordedDir, "custom_column.md"),
+			ColumnHTML:        filepath.Join(recordedDir, "custom_column.html"),
+			BenchprofJSON:     filepath.Join(recordedDir, "custom_benchprof.json"),
+			BenchprofMarkdown: filepath.Join(recordedDir, "custom_benchprof.md"),
 		},
 	}
 	run := BenchRun{
@@ -262,8 +264,21 @@ func TestWriteColumnStoreSuiteArtifactsUsesRecordedColumnPathsM11A(t *testing.T)
 			t.Fatalf("expected no fallback column artifact %s, stat err=%v", name, err)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(defaultDir, "benchprof_results.json")); err != nil {
-		t.Fatalf("expected benchprof artifact in profile dir: %v", err)
+	for _, path := range []string{
+		report.Artifacts.BenchprofJSON,
+		report.Artifacts.BenchprofMarkdown,
+	} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("expected recorded benchprof artifact path %s: %v", path, err)
+		}
+	}
+	for _, name := range []string{
+		"benchprof_results.json",
+		"benchprof_results.md",
+	} {
+		if _, err := os.Stat(filepath.Join(defaultDir, name)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("expected no fallback benchprof artifact %s, stat err=%v", name, err)
+		}
 	}
 }
 

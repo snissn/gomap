@@ -16,6 +16,7 @@ var (
 )
 
 func RegisterDB(name string, factory DBFactory) {
+	name = normalizeDBNameForLookup(name)
 	if _, exists := dbFactories[name]; !exists {
 		dbOrder = append(dbOrder, name)
 	}
@@ -27,14 +28,22 @@ func RegisterDB(name string, factory DBFactory) {
 // listings. This is useful for benchmark variants that should not run by
 // default.
 func RegisterHiddenDB(name string, factory DBFactory) {
+	name = normalizeDBNameForLookup(name)
 	dbFactories[name] = factory
 }
 
 func RegisterAlias(alias, target string) {
+	alias = normalizeDBNameForLookup(alias)
+	target = normalizeDBNameForLookup(target)
 	dbAliases[alias] = target
 }
 
+func normalizeDBNameForLookup(name string) string {
+	return strings.ToLower(strings.TrimSpace(name))
+}
+
 func canonicalDBName(name string) string {
+	name = normalizeDBNameForLookup(name)
 	original := name
 	target, isAlias := dbAliases[name]
 	if !isAlias {
@@ -42,7 +51,7 @@ func canonicalDBName(name string) string {
 	}
 	seen := map[string]struct{}{name: {}}
 	for {
-		name = target
+		name = normalizeDBNameForLookup(target)
 		target, isAlias = dbAliases[name]
 		if !isAlias {
 			return name
