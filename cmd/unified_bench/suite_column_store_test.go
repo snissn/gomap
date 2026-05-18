@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -198,6 +199,149 @@ func TestColumnStoreSuiteRuntimeProfilesDoNotEnableOnCreateFailureM11A(t *testin
 	}
 }
 
+func TestColumnStoreSuiteCPUProfileStartsAfterProfileBaselinesM11A(t *testing.T) {
+	origStartCPUProfileFn := startCPUProfileFn
+	origStopCPUProfileFn := stopCPUProfileFn
+	origWriteAllocsSnapshotTempFn := writeAllocsSnapshotTempFn
+	origWriteAllocsDeltaProfileFn := writeAllocsDeltaProfileFn
+	origWriteRuntimeProfileSnapshotTempFn := writeRuntimeProfileSnapshotTempFn
+	origWriteRuntimeProfileDeltaProfileFn := writeRuntimeProfileDeltaProfileFn
+	t.Cleanup(func() {
+		startCPUProfileFn = origStartCPUProfileFn
+		stopCPUProfileFn = origStopCPUProfileFn
+		writeAllocsSnapshotTempFn = origWriteAllocsSnapshotTempFn
+		writeAllocsDeltaProfileFn = origWriteAllocsDeltaProfileFn
+		writeRuntimeProfileSnapshotTempFn = origWriteRuntimeProfileSnapshotTempFn
+		writeRuntimeProfileDeltaProfileFn = origWriteRuntimeProfileDeltaProfileFn
+	})
+
+	var events []string
+	profileTmpDir := t.TempDir()
+	newProfilePath := func(prefix string) (string, error) {
+		f, err := os.CreateTemp(profileTmpDir, prefix+"_*.pprof")
+		if err != nil {
+			return "", err
+		}
+		path := f.Name()
+		if err := f.Close(); err != nil {
+			_ = os.Remove(path)
+			return "", err
+		}
+		return path, nil
+	}
+	startCPUProfileFn = func(_ io.Writer) error {
+		events = append(events, "cpu_start")
+		return nil
+	}
+	stopCPUProfileFn = func() {
+		events = append(events, "cpu_stop")
+	}
+	writeAllocsSnapshotTempFn = func(prefix string) (string, error) {
+		events = append(events, prefix)
+		return newProfilePath(prefix)
+	}
+	writeRuntimeProfileSnapshotTempFn = func(prefix, profileName string) (string, error) {
+		events = append(events, prefix)
+		return newProfilePath(prefix)
+	}
+	writeAllocsDeltaProfileFn = func(basePath, afterPath, outPath string) error {
+		events = append(events, "alloc_delta")
+		return nil
+	}
+	writeRuntimeProfileDeltaProfileFn = func(basePath, afterPath, outPath string) (bool, error) {
+		events = append(events, filepath.Base(outPath))
+		return true, nil
+	}
+
+	fixture, _ := buildColumnStoreSyntheticFixture(8, 1)
+	dir := t.TempDir()
+	db, err := openColumnStoreSuiteDB(dir)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = db.Close()
+	})
+	manager := collections.NewCollectionManager(db)
+	if _, err := manager.CreateCollection(&collections.CollectionMeta{
+		Name: "events",
+		Options: collections.CollectionOptions{
+			DocumentFormat:               collections.DocumentFormatJSON,
+			DisableIndexedWriteMemtables: true,
+			ColumnStore:                  columnStoreSuiteConfig(),
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	collection, err := manager.OpenCollection("events")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if err := insertColumnStoreFixture(collection, fixture, 4); err != nil {
+		t.Fatalf("insert fixture: %v", err)
+	}
+	rawHashes, err := columnStoreReferenceHashes(fixture)
+	if err != nil {
+		t.Fatalf("reference hashes: %v", err)
+	}
+
+	_, parity, parityErr, err := runColumnStoreSuiteQueriesProfiled(BenchConfig{
+		CPUProfile:           filepath.Join(profileTmpDir, "cpu"),
+		AllocsProfile:        filepath.Join(profileTmpDir, "allocs"),
+		AllocsProfileRate:    1,
+		BlockProfile:         filepath.Join(profileTmpDir, "block.pprof"),
+		MutexProfile:         filepath.Join(profileTmpDir, "mutex.pprof"),
+		MutexProfileFraction: 1,
+	}, collection, len(fixture), rawHashes, columnStorePathRowStoreBaseline)
+	if err != nil {
+		t.Fatalf("profiled queries: %v", err)
+	}
+	if parityErr != nil {
+		t.Fatalf("parity: %v", parityErr)
+	}
+	assertColumnStoreParityCoverageM11A(t, parity)
+
+	indexOf := func(target string) int {
+		for i, event := range events {
+			if event == target {
+				return i
+			}
+		}
+		return -1
+	}
+	cpuStartIdx := indexOf("cpu_start")
+	cpuStopIdx := indexOf("cpu_stop")
+	if cpuStartIdx < 0 || cpuStopIdx < 0 {
+		t.Fatalf("missing CPU profile events: %v", events)
+	}
+	for _, baseline := range []string{
+		"unified_bench_column_store_allocs_base",
+		"unified_bench_column_store_block_base",
+		"unified_bench_column_store_mutex_base",
+	} {
+		idx := indexOf(baseline)
+		if idx < 0 {
+			t.Fatalf("missing baseline event %s: %v", baseline, events)
+		}
+		if idx > cpuStartIdx {
+			t.Fatalf("expected %s before cpu_start: %v", baseline, events)
+		}
+	}
+	for _, after := range []string{
+		"unified_bench_column_store_allocs_after",
+		"unified_bench_column_store_block_after",
+		"unified_bench_column_store_mutex_after",
+	} {
+		idx := indexOf(after)
+		if idx < 0 {
+			t.Fatalf("missing after event %s: %v", after, events)
+		}
+		if cpuStopIdx > idx {
+			t.Fatalf("expected cpu_stop before %s: %v", after, events)
+		}
+	}
+}
+
 func TestColumnStoreQueryHashRejectsUnknownQueryM11A(t *testing.T) {
 	_, _, err := columnStoreQueryHash("missing_query", nil)
 	if err == nil {
@@ -220,7 +364,7 @@ func TestColumnStoreSuiteRejectsForcedColumnPathM11B(t *testing.T) {
 		t.Fatalf("expected ErrColumnQueryPlanUnsupported, got %v", err)
 	}
 	msg := err.Error()
-	if !strings.Contains(msg, "serial_column_scan") || !strings.Contains(msg, "unsupported") || !strings.Contains(msg, "physical column") {
+	if !strings.Contains(msg, "serial_column_scan") || !strings.Contains(msg, "unsupported") || !strings.Contains(msg, "reason=") || !strings.Contains(msg, "physical column") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -306,6 +450,14 @@ func TestColumnStoreSuiteQueriesNormalizeForcedPathAliasesM11B(t *testing.T) {
 	for _, q := range queries {
 		if q.PlanLabel != columnStorePathRowStoreBaseline {
 			t.Fatalf("query %s plan_label=%q want %q", q.Name, q.PlanLabel, columnStorePathRowStoreBaseline)
+		}
+	}
+}
+
+func TestColumnStoreSuiteM11BIndexCandidateCoverage(t *testing.T) {
+	for _, name := range columnStoreQueryNames() {
+		if got := columnStoreSuiteQueryIndexCandidates(name); len(got) == 0 {
+			t.Fatalf("query %s has no B-tree baseline candidate columns", name)
 		}
 	}
 }

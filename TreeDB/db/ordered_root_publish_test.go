@@ -267,6 +267,39 @@ func TestPublishOrderedRootDeltaGroupWithCommandWALContextBuilderFailurePoisonsA
 	}
 }
 
+func TestPublishOrderedRootDeltaGroupWithCommandWALContextRootBuilderFailureClosesReturnedIterators(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	defer db.Close()
+
+	iter := &closeCountingUnsafeIterator{}
+	wantErr := errors.New("context root builder failure after command append")
+	_, _, err := db.PublishOrderedRootDeltaGroupWithCommandWALContextRootBuilderAndSystemDeltaBuilder(
+		nil,
+		mustRawKVCommandWALIntent(t, db, "cmd/context-fail", "1"),
+		func(ctx CommandWALPublishContext) ([]OrderedRootDeltaPublishInput, error) {
+			if ctx.AppliedCommandLSN == 0 {
+				t.Fatalf("AppliedCommandLSN=0 in context builder")
+			}
+			return []OrderedRootDeltaPublishInput{{Iter: iter}}, wantErr
+		},
+		func(ctx CommandWALPublishContext, rootIDs []uint64) (iterator.UnsafeIterator, error) {
+			t.Fatalf("system builder should not run after context root builder failure")
+			return nil, nil
+		},
+	)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("publish error=%v, want %v", err, wantErr)
+	}
+	if iter.closes != 1 {
+		t.Fatalf("context iterator closes=%d, want 1", iter.closes)
+	}
+	if err := db.CheckCommandWALPublishReady(); !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("CheckCommandWALPublishReady error=%v, want ErrRecoveryRequired", err)
+	}
+}
+
 func TestPublishOrderedRootIterator_WarmSparseDelta_PreservesPages(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(Options{Dir: dir})
