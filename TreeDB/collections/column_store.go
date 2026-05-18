@@ -566,6 +566,9 @@ func validateColumnStoreCatalogRoot(snap *backenddb.Snapshot, catalog *collectio
 }
 
 func validateColumnManifestPublishedRoot(snap *backenddb.Snapshot, collection string, rootID uint64, expected [columnManifestIdentityRecordSize]byte) error {
+	if rootID == 0 {
+		return fmt.Errorf("collections: missing published column manifest root for %q", collection)
+	}
 	entry, err := snap.GetEntryAtRoot(rootID, []byte(columnManifestIdentityRecordKey))
 	if errors.Is(err, tree.ErrKeyNotFound) {
 		return fmt.Errorf("collections: published column manifest root %d for %q is missing identity record", rootID, collection)
