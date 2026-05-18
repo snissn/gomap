@@ -489,6 +489,9 @@ func (c *Collection) buildColumnManifestPublishSystemDeltaIterator(input ColumnM
 	if plan.RecoveryAuthoritativeAppliedCommandLSN == 0 {
 		return nil, errors.New("collections: column publish plan missing recovery-authoritative AppliedCommandLSN")
 	}
+	if plan.RecoveryAuthoritativeAppliedCommandLSN < plan.AppliedCommandLSN {
+		return nil, fmt.Errorf("collections: column publish recovery-authoritative AppliedCommandLSN regression for %q: plan recovery %d < applied %d", input.BaseMeta.Name, plan.RecoveryAuthoritativeAppliedCommandLSN, plan.AppliedCommandLSN)
+	}
 	rootName := plan.ManifestRootName
 	if rootName == "" {
 		rootName = plan.RootDelta.RootName
