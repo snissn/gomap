@@ -170,7 +170,9 @@ type CommandWALPublishContext struct {
 
 // OrderedRootGroupCommandWALSystemBuilder builds a target system-root iterator
 // after the command-WAL frame has been appended and the non-system roots have
-// been built. The rootIDs slice is ordered to match the ordered root inputs.
+// been built. For context-root publish APIs, rootIDs contains the original
+// ordered inputs first, followed by any context-built roots in returned order.
+// APIs without context-built roots receive only the original ordered root IDs.
 type OrderedRootGroupCommandWALSystemBuilder func(CommandWALPublishContext, []uint64) (iterator.UnsafeIterator, error)
 
 // OrderedRootGroupCommandWALDeltaBuilder builds additional root-local mutation
@@ -182,12 +184,14 @@ type OrderedRootGroupCommandWALSystemBuilder func(CommandWALPublishContext, []ui
 type OrderedRootGroupCommandWALDeltaBuilder func(CommandWALPublishContext) ([]OrderedRootDeltaPublishInput, error)
 
 // OrderedRootDeltaBatchGroupCommandWALDeltaBuilder is the batch-materialized
-// counterpart to OrderedRootGroupCommandWALDeltaBuilder. Returned batch deltas
-// keep the normal OrderedRootDeltaBatchPublishInput ownership contract on nil
-// error: the DB publish path does not close them, so builders that allocate
+// counterpart to OrderedRootGroupCommandWALDeltaBuilder. On success, returned
+// batch deltas keep the normal OrderedRootDeltaBatchPublishInput ownership
+// contract: the DB publish path does not close them, so builders that allocate
 // batches must arrange cleanup after the enclosing publish call returns. If a
 // builder returns deltas with a non-nil error, the DB publish path closes those
-// deltas before returning the error.
+// deltas before returning the error. If context build succeeds but a later
+// publish step fails, the DB closes the context-built batch deltas before
+// returning the publish error.
 type OrderedRootDeltaBatchGroupCommandWALDeltaBuilder func(CommandWALPublishContext) ([]OrderedRootDeltaBatchPublishInput, error)
 
 // OrderedRootGroupPreflight validates that a root group can still be applied.

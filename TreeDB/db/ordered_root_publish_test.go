@@ -159,6 +159,7 @@ func TestPublishOrderedRootDeltaBatchGroupWithCommandWALContextPassesAssignedLSN
 	defer delta.Close()
 
 	var seenLSN uint64
+	beforeLSN := db.State().AppliedCommandLSN
 	_, _, err := db.PublishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilder(
 		[]OrderedRootDeltaBatchPublishInput{{
 			BaseRoot: 0,
@@ -174,8 +175,8 @@ func TestPublishOrderedRootDeltaBatchGroupWithCommandWALContextPassesAssignedLSN
 	if err != nil {
 		t.Fatalf("PublishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilder: %v", err)
 	}
-	if seenLSN != 1 {
-		t.Fatalf("builder AppliedCommandLSN=%d, want 1", seenLSN)
+	if seenLSN != beforeLSN+1 {
+		t.Fatalf("builder AppliedCommandLSN=%d, want %d", seenLSN, beforeLSN+1)
 	}
 	if got := db.State().AppliedCommandLSN; got != seenLSN {
 		t.Fatalf("state AppliedCommandLSN=%d, want builder LSN %d", got, seenLSN)
