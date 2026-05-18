@@ -2,6 +2,7 @@ package collections
 
 import (
 	"encoding/binary"
+	"errors"
 	"strings"
 	"testing"
 
@@ -181,9 +182,9 @@ func TestColumnStoreActiveManifestFailsClosedOnIdentityMismatch(t *testing.T) {
 	}
 	defer func() { _ = d.Close() }()
 
-	identity := &ColumnManifestIdentity{Generation: 42, Version: 1, Checksum: 0xfeedbeef}
+	identity := &ColumnManifestIdentity{Generation: 42, Version: columnManifestIdentityVersion, Checksum: 0xfeedbeef}
 	meta := CollectionMeta{Name: "events", Options: CollectionOptions{ColumnStore: testColumnStoreConfig(identity)}}
-	publishColumnStoreCatalogForTest(t, d, meta, ColumnManifestIdentity{Generation: 42, Version: 1, Checksum: 0x11111111})
+	publishColumnStoreCatalogForTest(t, d, meta, ColumnManifestIdentity{Generation: 42, Version: columnManifestIdentityVersion, Checksum: 0x11111111})
 	_, err = NewCollectionManager(d).OpenCollection("events")
 	if err == nil || !strings.Contains(err.Error(), "identity mismatch") {
 		t.Fatalf("OpenCollection err=%v want identity mismatch", err)
@@ -191,7 +192,7 @@ func TestColumnStoreActiveManifestFailsClosedOnIdentityMismatch(t *testing.T) {
 }
 
 func TestColumnStoreActiveManifestFailsClosedOnInvalidRootRecordM10C(t *testing.T) {
-	identity := &ColumnManifestIdentity{Generation: 42, Version: 1, Checksum: 0xfeedbeef}
+	identity := &ColumnManifestIdentity{Generation: 42, Version: columnManifestIdentityVersion, Checksum: 0xfeedbeef}
 	valid := encodeColumnManifestIdentityRecord(*identity)
 	if len(valid) < 6 {
 		t.Fatalf("encoded identity record length=%d, want at least 6 bytes for corruption cases", len(valid))
@@ -200,18 +201,18 @@ func TestColumnStoreActiveManifestFailsClosedOnInvalidRootRecordM10C(t *testing.
 	badMagic := append([]byte(nil), valid...)
 	binary.BigEndian.PutUint32(badMagic[0:4], 0xdeadbeef)
 	unsupportedRecordVersion := append([]byte(nil), valid...)
-	binary.BigEndian.PutUint16(unsupportedRecordVersion[4:6], 99)
+	binary.BigEndian.PutUint16(unsupportedRecordVersion[4:6], columnManifestIdentityVersion+1)
 
 	tests := []struct {
 		name          string
 		includeRecord bool
 		record        []byte
-		want          string
+		want          error
 	}{
-		{name: "missing identity record", want: "missing identity record"},
-		{name: "short identity record", includeRecord: true, record: shortRecord, want: "malformed identity record length"},
-		{name: "bad identity magic", includeRecord: true, record: badMagic, want: "bad identity magic"},
-		{name: "unsupported identity record version", includeRecord: true, record: unsupportedRecordVersion, want: "unsupported identity version"},
+		{name: "missing identity record", want: errColumnManifestIdentityMissing},
+		{name: "short identity record", includeRecord: true, record: shortRecord, want: errColumnManifestIdentityMalformed},
+		{name: "bad identity magic", includeRecord: true, record: badMagic, want: errColumnManifestIdentityBadMagic},
+		{name: "unsupported identity record version", includeRecord: true, record: unsupportedRecordVersion, want: errColumnManifestIdentityUnsupportedVersion},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -224,8 +225,8 @@ func TestColumnStoreActiveManifestFailsClosedOnInvalidRootRecordM10C(t *testing.
 			meta := CollectionMeta{Name: "events", Options: CollectionOptions{ColumnStore: testColumnStoreConfig(identity)}}
 			publishColumnStoreCatalogRawManifestRootForTest(t, d, meta, tt.includeRecord, tt.record)
 			_, err = NewCollectionManager(d).OpenCollection("events")
-			if err == nil || !strings.Contains(err.Error(), tt.want) {
-				t.Fatalf("OpenCollection err=%v want %q", err, tt.want)
+			if !errors.Is(err, tt.want) {
+				t.Fatalf("OpenCollection err=%v want errors.Is %v", err, tt.want)
 			}
 		})
 	}
@@ -236,7 +237,7 @@ func TestColumnManifestIdentityRecordRejectsNonZeroReserved(t *testing.T) {
 	record := encodeColumnManifestIdentityRecord(identity)
 	record[columnManifestIdentityReservedOffset+columnManifestIdentityReservedSize-1] = 1
 	decoded, err := decodeColumnManifestIdentityRecord(record)
-	if err == nil || !strings.Contains(err.Error(), "reserved trailer field 0x00000001") {
+	if !errors.Is(err, errColumnManifestIdentityNonZeroReserved) || !strings.Contains(err.Error(), "0x00000001") {
 		t.Fatalf("decodeColumnManifestIdentityRecord decoded=%+v err=%v want hex reserved-field rejection", decoded, err)
 	}
 }

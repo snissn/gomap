@@ -20,6 +20,7 @@ type commandWALBatchIntent struct {
 	payload            []byte
 	externalRefs       bool
 	externalRefFileIDs []uint32
+	replay             bool
 	lsn                uint64
 	coveredRange       [1]CommandWALLSNRange
 	syncOnPublish      bool
@@ -38,6 +39,14 @@ var ErrCommandWALMissingValueLogRID = errors.New("treedb: command wal missing va
 // duplicate foreground command frame.
 func (intent *CommandWALIntent) AssignedLSN() uint64 {
 	if intent == nil {
+		return 0
+	}
+	return intent.inner.lsn
+}
+
+// ReplayAssignedLSN returns the assigned LSN only for replay-originated intents.
+func (intent *CommandWALIntent) ReplayAssignedLSN() uint64 {
+	if intent == nil || !intent.inner.replay {
 		return 0
 	}
 	return intent.inner.lsn
@@ -118,6 +127,7 @@ func NewCommandWALReplayIntent(env commitlog.CommandEnvelope) *CommandWALIntent 
 		scope:         env.Scope,
 		payloadFormat: env.PayloadFormat,
 		payload:       env.Payload,
+		replay:        true,
 		lsn:           env.LSN,
 		coveredRange:  [1]CommandWALLSNRange{{First: env.LSN, Last: env.LSN}},
 		syncOnPublish: true,

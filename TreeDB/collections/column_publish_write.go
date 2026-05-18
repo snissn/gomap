@@ -30,10 +30,10 @@ func columnStoreWriteEnabled(meta CollectionMeta) bool {
 }
 
 func (c *Collection) requireColumnStoreCommandWAL(meta CollectionMeta, commandWALIntent *backenddb.CommandWALIntent) error {
-	if !columnStoreWriteEnabled(meta) {
+	cfg := meta.Options.ColumnStore
+	if cfg == nil || !cfg.Enabled {
 		return nil
 	}
-	cfg := meta.Options.ColumnStore
 	profileSupport := cfg.ProfileSupport
 	if profileSupport == "" {
 		profileSupport = ColumnStoreProfileDurableOnly
@@ -41,11 +41,11 @@ func (c *Collection) requireColumnStoreCommandWAL(meta CollectionMeta, commandWA
 	if c == nil || c.db == nil {
 		return errCollectionDBNil
 	}
-	if commandWALIntent.AssignedLSN() != 0 {
+	if commandWALIntent != nil && commandWALIntent.ReplayAssignedLSN() != 0 {
 		return nil
 	}
 	if c.db.DurabilityMode() != backenddb.DurabilityDurable {
-		return fmt.Errorf("%w: column_store writes require durable DB durability mode for command WAL publication (durability=%s profile=%s)",
+		return fmt.Errorf("%w: column-store writes require durable DB durability mode for command WAL publication (durability=%s profile=%s)",
 			backenddb.ErrCommandWALRejected,
 			columnStoreDurabilityModeName(c.db.DurabilityMode()),
 			profileSupport,
