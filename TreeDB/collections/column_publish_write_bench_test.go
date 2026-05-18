@@ -35,7 +35,8 @@ func BenchmarkColumnStoreCommandWALRootPublicationM10B(b *testing.B) {
 			}
 			b.StopTimer()
 
-			assertColumnStoreCommandWALBenchState(b, backend, collection, columnStore, uint64(b.N), uint64(b.N)+1)
+			iterations := uint64(b.N)
+			assertColumnStoreCommandWALBenchState(b, backend, collection, columnStore, iterations, iterations+1)
 			reportColumnStoreCommandWALBenchMetrics(b, totals)
 		})
 	}
@@ -63,7 +64,8 @@ func BenchmarkColumnStoreCommandWALRootPublicationM10B(b *testing.B) {
 			}
 			b.StopTimer()
 
-			assertColumnStoreCommandWALBenchState(b, backend, collection, columnStore, uint64(2*b.N), uint64(2*b.N)+1)
+			iterations := uint64(b.N)
+			assertColumnStoreCommandWALBenchState(b, backend, collection, columnStore, 2*iterations, 2*iterations+1)
 			reportColumnStoreCommandWALBenchMetrics(b, totals)
 		})
 	}
@@ -91,7 +93,8 @@ func BenchmarkColumnStoreCommandWALRootPublicationM10B(b *testing.B) {
 			}
 			b.StopTimer()
 
-			assertColumnStoreCommandWALBenchState(b, backend, collection, columnStore, uint64(2*b.N), uint64(2*b.N)+1)
+			iterations := uint64(b.N)
+			assertColumnStoreCommandWALBenchState(b, backend, collection, columnStore, 2*iterations, 2*iterations+1)
 			reportColumnStoreCommandWALBenchMetrics(b, totals)
 		})
 	}
@@ -104,9 +107,8 @@ func BenchmarkColumnStoreCommandWALReplayM10C(b *testing.B) {
 	)
 	for _, columnStore := range []bool{false, true} {
 		b.Run(fmt.Sprintf("insert/frames=%d/batch=%d/column_store=%t", frames, batchSize, columnStore), func(b *testing.B) {
-			templateDir, docsPerReplay, encodedPayloadBytesPerReplay := prepareColumnStoreCommandWALReplayBenchmarkDirM10C(b, columnStore, frames, batchSize)
+			templateDir, docsPerReplay, encodedPayloadBytesPerReplay, wantAppliedLSN := prepareColumnStoreCommandWALReplayBenchmarkDirM10C(b, columnStore, frames, batchSize)
 			workDir := filepath.Join(b.TempDir(), "replay-work")
-			wantAppliedLSN := uint64(frames + 1)
 
 			b.ReportAllocs()
 			b.SetBytes(int64(encodedPayloadBytesPerReplay))
@@ -135,28 +137,27 @@ func BenchmarkColumnStoreCommandWALReplayM10C(b *testing.B) {
 					b.Fatalf("AppliedCommandLSN=%d, want %d", got, wantAppliedLSN)
 				}
 				if columnStore {
-					collection, err := NewCollectionManager(backend).OpenCollection("bench")
+					mgr := NewCollectionManager(backend)
+					collection, err := mgr.OpenCollection("bench")
 					if err != nil {
 						b.StopTimer()
 						_ = backend.Close()
 						b.Fatalf("OpenCollection replayed: %v", err)
 					}
-					assertColumnManifestStateM10B(b, collection, uint64(frames), wantAppliedLSN)
+					assertColumnManifestStateNoReopenM10C(b, collection, uint64(frames), wantAppliedLSN)
 				}
 				b.StopTimer()
 				if err := backend.Close(); err != nil {
 					b.Fatalf("Close replay DB: %v", err)
 				}
-				if err := os.RemoveAll(workDir); err != nil {
-					b.Fatalf("RemoveAll replay work dir after close: %v", err)
-				}
 			}
 
 			elapsed := b.Elapsed().Seconds()
 			if elapsed > 0 {
-				b.ReportMetric(float64(docsPerReplay*b.N)/elapsed, "replay_docs/s")
-				b.ReportMetric(float64(frames*b.N)/elapsed, "replay_frames/s")
-				b.ReportMetric((float64(encodedPayloadBytesPerReplay*b.N)/(1024*1024))/elapsed, "encoded_payload_MiB/s")
+				iterations := float64(b.N)
+				b.ReportMetric(float64(docsPerReplay)*iterations/elapsed, "replay_docs/s")
+				b.ReportMetric(float64(frames)*iterations/elapsed, "replay_frames/s")
+				b.ReportMetric((float64(encodedPayloadBytesPerReplay)*iterations/(1024*1024))/elapsed, "encoded_payload_MiB/s")
 			}
 		})
 	}
@@ -290,9 +291,12 @@ func reportColumnStoreCommandWALBenchMetrics(b *testing.B, totals columnStoreCom
 	b.ReportMetric((float64(totals.bytes)/(1024*1024))/elapsed, "payload_MiB/s")
 }
 
-func prepareColumnStoreCommandWALReplayBenchmarkDirM10C(b *testing.B, columnStore bool, frames, batchSize int) (string, int, int) {
+func prepareColumnStoreCommandWALReplayBenchmarkDirM10C(b *testing.B, columnStore bool, frames, batchSize int) (string, int, int, uint64) {
 	b.Helper()
 	dir := b.TempDir()
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+		b.Fatalf("SaveFormatConfig setup: %v", err)
+	}
 	backend, err := backenddb.Open(backenddb.Options{
 		Dir:                    dir,
 		CommandWAL:             true,
@@ -320,54 +324,59 @@ func prepareColumnStoreCommandWALReplayBenchmarkDirM10C(b *testing.B, columnStor
 		_ = backend.Close()
 		b.Fatalf("Checkpoint setup: %v", err)
 	}
+	baseAppliedLSN := backend.State().AppliedCommandLSN
 	if err := backend.Close(); err != nil {
 		b.Fatalf("Close setup DB: %v", err)
 	}
 
-	totalDocs := 0
-	totalEncodedPayloadBytes := 0
 	walDir := backenddb.WALDirPath(dir)
 	if err := os.MkdirAll(walDir, 0o755); err != nil {
 		b.Fatalf("MkdirAll wal: %v", err)
 	}
 	path := filepath.Join(walDir, commitlog.CommandSegmentName(0, 1))
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		b.Fatalf("Remove existing command segment: %v", err)
+	}
+	totalDocs, totalEncodedPayloadBytes, err := writeColumnStoreCommandWALReplayFramesM10C(path, baseAppliedLSN, frames, batchSize)
+	if err != nil {
+		b.Fatalf("write command WAL replay frames: %v", err)
+	}
+	return dir, totalDocs, totalEncodedPayloadBytes, baseAppliedLSN + uint64(frames)
+}
+
+func writeColumnStoreCommandWALReplayFramesM10C(path string, baseAppliedLSN uint64, frames, batchSize int) (totalDocs int, totalEncodedPayloadBytes int, err error) {
 	w, err := commitlog.NewWriter(path)
 	if err != nil {
-		b.Fatalf("NewWriter: %v", err)
+		return 0, 0, fmt.Errorf("new writer: %w", err)
 	}
-	closeWriter := true
 	defer func() {
-		if closeWriter {
-			_ = w.Close()
+		if closeErr := w.Close(); err == nil && closeErr != nil {
+			err = fmt.Errorf("close writer: %w", closeErr)
 		}
 	}()
 	for i := 0; i < frames; i++ {
 		ids, documents, _, _ := columnStoreCommandWALBenchDocuments(i*batchSize, batchSize, 0)
 		docs, err := collectionDocumentsFromBatchInput(ids, documents)
 		if err != nil {
-			b.Fatalf("collectionDocumentsFromBatchInput: %v", err)
+			return 0, 0, fmt.Errorf("collection documents from batch input: %w", err)
 		}
 		payload, err := commitlog.EncodeCollectionInsertBatchByIDPayload("bench", docs)
 		if err != nil {
-			b.Fatalf("EncodeCollectionInsertBatchByIDPayload: %v", err)
+			return 0, 0, fmt.Errorf("encode collection insert batch by ID payload: %w", err)
 		}
 		if err := w.AppendCommand(commitlog.CommandEnvelope{
-			LSN:           uint64(i + 2),
+			LSN:           baseAppliedLSN + uint64(i) + 1,
 			Kind:          commitlog.CommandKindCollectionInsertBatchByID,
 			Scope:         commitlog.CommandScopeCollection,
 			PayloadFormat: commitlog.PayloadFormatCollectionInsertBatchByIDV1,
 			Payload:       payload,
 		}); err != nil {
-			b.Fatalf("AppendCommand: %v", err)
+			return 0, 0, fmt.Errorf("append command: %w", err)
 		}
 		totalDocs += len(ids)
 		totalEncodedPayloadBytes += len(payload)
 	}
-	if err := w.Close(); err != nil {
-		b.Fatalf("Close writer: %v", err)
-	}
-	closeWriter = false
-	return dir, totalDocs, totalEncodedPayloadBytes
+	return totalDocs, totalEncodedPayloadBytes, nil
 }
 
 func copyColumnStoreCommandWALReplayBenchmarkDirM10C(tb testing.TB, src, dst string) {
@@ -381,12 +390,15 @@ func copyColumnStoreCommandWALReplayBenchmarkDirM10C(tb testing.TB, src, dst str
 			return err
 		}
 		target := filepath.Join(dst, rel)
-		if entry.IsDir() {
-			return os.MkdirAll(target, 0o755)
+		if entry.Type()&fs.ModeSymlink != 0 {
+			return fmt.Errorf("symlink entries are not supported in replay benchmark fixtures: %s", path)
 		}
 		info, err := entry.Info()
 		if err != nil {
 			return err
+		}
+		if entry.IsDir() {
+			return os.MkdirAll(target, info.Mode())
 		}
 		return copyColumnStoreCommandWALReplayBenchmarkFileM10C(path, target, info.Mode())
 	}); err != nil {
@@ -412,4 +424,51 @@ func copyColumnStoreCommandWALReplayBenchmarkFileM10C(src, dst string, mode fs.F
 		return err
 	}
 	return out.Close()
+}
+
+func assertColumnManifestStateNoReopenM10C(tb testing.TB, col *Collection, generation, appliedLSN uint64) {
+	tb.Helper()
+	meta := col.Meta()
+	cfg := meta.Options.ColumnStore
+	if cfg == nil || cfg.ActiveManifest == nil {
+		tb.Fatalf("missing active column manifest metadata: %+v", cfg)
+	}
+	if cfg.ActiveManifest.Generation != generation {
+		tb.Fatalf("active generation=%d, want %d", cfg.ActiveManifest.Generation, generation)
+	}
+	if cfg.ActiveManifest.Format != columnManifestFormatTCS1 || cfg.ActiveManifest.Version != columnManifestIdentityVersion || cfg.ActiveManifest.Checksum == 0 {
+		tb.Fatalf("invalid active manifest identity: %+v", cfg.ActiveManifest)
+	}
+	if cfg.RecoveryAuthoritativeManifest == nil || !columnManifestIdentityValueEqual(*cfg.RecoveryAuthoritativeManifest, *cfg.ActiveManifest) {
+		tb.Fatalf("recovery-authoritative manifest mismatch: %+v active=%+v", cfg.RecoveryAuthoritativeManifest, cfg.ActiveManifest)
+	}
+	if cfg.RecoveryAuthoritativeAppliedCommandLSN != appliedLSN {
+		tb.Fatalf("recovery AppliedCommandLSN=%d, want %d", cfg.RecoveryAuthoritativeAppliedCommandLSN, appliedLSN)
+	}
+	id, ok := col.ColumnStoreCacheIdentity()
+	if !ok {
+		tb.Fatalf("ColumnStoreCacheIdentity ok=false")
+	}
+	if id.ManifestRoot == 0 {
+		tb.Fatalf("ManifestRoot=0, want non-zero")
+	}
+	if id.ManifestGeneration != generation || id.RecoveryAuthoritativeGeneration != generation || id.RecoveryAuthoritativeAppliedCommandLSN != appliedLSN {
+		tb.Fatalf("unexpected cache identity: %+v want generation=%d appliedLSN=%d", id, generation, appliedLSN)
+	}
+	snap := col.db.AcquireSnapshot()
+	if snap == nil {
+		tb.Fatalf("AcquireSnapshot returned nil")
+	}
+	defer func() { _ = snap.Close() }()
+	entry, err := snap.GetEntryAtRoot(id.ManifestRoot, []byte(columnManifestIdentityRecordKey))
+	if err != nil {
+		tb.Fatalf("GetEntryAtRoot manifest identity: %v", err)
+	}
+	record, err := decodeColumnManifestIdentityRecord(entry.Value)
+	if err != nil {
+		tb.Fatalf("decodeColumnManifestIdentityRecord: %v", err)
+	}
+	if record.Generation != generation || record.Version != columnManifestIdentityVersion || record.Checksum != cfg.ActiveManifest.Checksum {
+		tb.Fatalf("manifest root record=%+v active=%+v", record, cfg.ActiveManifest)
+	}
 }

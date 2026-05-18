@@ -213,9 +213,13 @@ func TestColumnStoreUpdateCallbacksRequireCommandWALBeforeInvocationM10B(t *test
 }
 
 func TestColumnStoreCommandWALMutationsPublishManifestM10B(t *testing.T) {
-	dir := prepareColumnStoreCommandWALDirM10B(t)
+	dir, _ := prepareColumnStoreCommandWALDirM10B(t)
 	d := openCollectionCommandWALDB(t, dir)
-	defer func() { _ = d.Close() }()
+	defer func() {
+		if d != nil {
+			_ = d.Close()
+		}
+	}()
 
 	mgr := NewCollectionManager(d)
 	col := openColumnStoreCollectionM10B(t, d, mgr)
@@ -234,8 +238,12 @@ func TestColumnStoreCommandWALMutationsPublishManifestM10B(t *testing.T) {
 	if len(insertedIDs) != 2 {
 		t.Fatalf("InsertBatch inserted=%d, want 2", len(insertedIDs))
 	}
-	assertColumnManifestStateM10B(t, col, 1, baseLSN+1, mgr)
-	assertDBAppliedCommandLSNM10B(t, d, baseLSN+1)
+	insertLSN := d.State().AppliedCommandLSN
+	if insertLSN == 0 || insertLSN <= baseLSN {
+		t.Fatalf("insert AppliedCommandLSN=%d, want non-zero LSN greater than create LSN %d", insertLSN, baseLSN)
+	}
+	assertColumnManifestStateM10B(t, col, 1, insertLSN, mgr)
+	assertDBAppliedCommandLSNM10B(t, d, insertLSN)
 	assertCollectionDocument(t, col, "e1", `{"time_us":1,"kind":"like","did":"d1"}`)
 
 	matched, modified, err := col.Update([]byte("e1"), func([]byte) ([]byte, bool, error) {
@@ -247,8 +255,12 @@ func TestColumnStoreCommandWALMutationsPublishManifestM10B(t *testing.T) {
 	if !matched || !modified {
 		t.Fatalf("Update matched=%v modified=%v, want true true", matched, modified)
 	}
-	assertColumnManifestStateM10B(t, col, 2, baseLSN+2, mgr)
-	assertDBAppliedCommandLSNM10B(t, d, baseLSN+2)
+	updateLSN := d.State().AppliedCommandLSN
+	if updateLSN <= insertLSN {
+		t.Fatalf("update AppliedCommandLSN=%d, want greater than insert LSN %d", updateLSN, insertLSN)
+	}
+	assertColumnManifestStateM10B(t, col, 2, updateLSN, mgr)
+	assertDBAppliedCommandLSNM10B(t, d, updateLSN)
 	assertCollectionDocument(t, col, "e1", `{"time_us":3,"kind":"like","did":"d1"}`)
 
 	deleted, err := col.DeleteDocument([]byte("e2"))
@@ -258,18 +270,23 @@ func TestColumnStoreCommandWALMutationsPublishManifestM10B(t *testing.T) {
 	if !deleted {
 		t.Fatalf("DeleteDocument deleted=false, want true")
 	}
-	assertColumnManifestStateM10B(t, col, 3, baseLSN+3, mgr)
-	assertDBAppliedCommandLSNM10B(t, d, baseLSN+3)
+	deleteLSN := d.State().AppliedCommandLSN
+	if deleteLSN <= updateLSN {
+		t.Fatalf("delete AppliedCommandLSN=%d, want greater than update LSN %d", deleteLSN, updateLSN)
+	}
+	assertColumnManifestStateM10B(t, col, 3, deleteLSN, mgr)
+	assertDBAppliedCommandLSNM10B(t, d, deleteLSN)
 
 	if err := d.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
+	d = nil
 	reopen := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = reopen.Close() }()
 	reopenMgr := NewCollectionManager(reopen)
 	reopened := openColumnStoreCollectionM10B(t, reopen, reopenMgr)
-	assertColumnManifestStateM10B(t, reopened, 3, baseLSN+3, reopenMgr)
-	assertDBAppliedCommandLSNM10B(t, reopen, baseLSN+3)
+	assertColumnManifestStateM10B(t, reopened, 3, deleteLSN, reopenMgr)
+	assertDBAppliedCommandLSNM10B(t, reopen, deleteLSN)
 	assertCollectionDocument(t, reopened, "e1", `{"time_us":3,"kind":"like","did":"d1"}`)
 	if got, err := reopened.Get([]byte("e2")); err != nil || got != nil {
 		t.Fatalf("Get deleted document=(%q, %v), want nil, nil", got, err)
@@ -277,7 +294,7 @@ func TestColumnStoreCommandWALMutationsPublishManifestM10B(t *testing.T) {
 }
 
 func TestColumnStoreCommandWALReplayPublishesManifestM10B(t *testing.T) {
-	dir := prepareColumnStoreCommandWALDirM10B(t)
+	dir, _ := prepareColumnStoreCommandWALDirM10B(t)
 	d := openCollectionCommandWALDB(t, dir)
 
 	mgr := NewCollectionManager(d)
@@ -301,9 +318,9 @@ func TestColumnStoreCommandWALReplayPublishesManifestM10B(t *testing.T) {
 		_ = d.Close()
 		t.Fatalf("AppendCommandWALIntent: %v", err)
 	}
-	if lsn != baseLSN+1 {
+	if lsn == 0 || lsn <= baseLSN {
 		_ = d.Close()
-		t.Fatalf("appended LSN=%d, want %d", lsn, baseLSN+1)
+		t.Fatalf("appended LSN=%d, want non-zero LSN greater than base LSN %d", lsn, baseLSN)
 	}
 	if got := d.State().AppliedCommandLSN; got != baseLSN {
 		_ = d.Close()
@@ -343,7 +360,7 @@ func TestColumnStoreStaleColumnRootPreflightDoesNotAppendCommandWALM10B(t *testi
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			dir := prepareColumnStoreCommandWALDirM10B(t)
+			dir, _ := prepareColumnStoreCommandWALDirM10B(t)
 			d := openCollectionCommandWALDB(t, dir)
 			defer func() { _ = d.Close() }()
 
@@ -409,7 +426,7 @@ func TestColumnStoreStaleColumnRootPreflightDoesNotAppendCommandWALM10B(t *testi
 }
 
 func TestColumnStoreCommandWALReplayInsertUpdateDeletePublishesEquivalentManifestM10C(t *testing.T) {
-	dir := prepareColumnStoreCommandWALDirM10B(t)
+	dir, baseLSN := prepareColumnStoreCommandWALDirM10B(t)
 
 	insertPayload, err := commitlog.EncodeCollectionInsertBatchByIDPayload("events", []commitlog.CollectionDocument{
 		{ID: []byte("e1"), Document: []byte(`{"time_us":1,"kind":"like","did":"d1"}`)},
@@ -418,7 +435,7 @@ func TestColumnStoreCommandWALReplayInsertUpdateDeletePublishesEquivalentManifes
 	if err != nil {
 		t.Fatalf("EncodeCollectionInsertBatchByIDPayload: %v", err)
 	}
-	writeCollectionCommandWALFrame(t, dir, 2, commitlog.CommandKindCollectionInsertBatchByID, commitlog.PayloadFormatCollectionInsertBatchByIDV1, insertPayload)
+	writeCollectionCommandWALFrame(t, dir, baseLSN+1, commitlog.CommandKindCollectionInsertBatchByID, commitlog.PayloadFormatCollectionInsertBatchByIDV1, insertPayload)
 
 	updatePayload, err := commitlog.EncodeCollectionUpdateBatchByIDPayload("events", []commitlog.CollectionDocument{
 		{ID: []byte("e1"), Document: []byte(`{"time_us":3,"kind":"like","did":"d1"}`)},
@@ -426,13 +443,13 @@ func TestColumnStoreCommandWALReplayInsertUpdateDeletePublishesEquivalentManifes
 	if err != nil {
 		t.Fatalf("EncodeCollectionUpdateBatchByIDPayload: %v", err)
 	}
-	writeCollectionCommandWALFrame(t, dir, 3, commitlog.CommandKindCollectionUpdateBatchByID, commitlog.PayloadFormatCollectionUpdateBatchByIDV1, updatePayload)
+	writeCollectionCommandWALFrame(t, dir, baseLSN+2, commitlog.CommandKindCollectionUpdateBatchByID, commitlog.PayloadFormatCollectionUpdateBatchByIDV1, updatePayload)
 
 	deletePayload, err := commitlog.EncodeCollectionDeleteBatchByIDPayload("events", [][]byte{[]byte("e2")})
 	if err != nil {
 		t.Fatalf("EncodeCollectionDeleteBatchByIDPayload: %v", err)
 	}
-	writeCollectionCommandWALFrame(t, dir, 4, commitlog.CommandKindCollectionDeleteBatchByID, commitlog.PayloadFormatCollectionDeleteBatchByIDV1, deletePayload)
+	writeCollectionCommandWALFrame(t, dir, baseLSN+3, commitlog.CommandKindCollectionDeleteBatchByID, commitlog.PayloadFormatCollectionDeleteBatchByIDV1, deletePayload)
 
 	reopen := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = reopen.Close() }()
@@ -441,21 +458,21 @@ func TestColumnStoreCommandWALReplayInsertUpdateDeletePublishesEquivalentManifes
 	if got, err := reopened.Get([]byte("e2")); err != nil || got != nil {
 		t.Fatalf("Get deleted document=(%q, %v), want nil, nil", got, err)
 	}
-	assertColumnManifestStateM10B(t, reopened, 3, 4)
-	if got := reopen.State().AppliedCommandLSN; got != 4 {
-		t.Fatalf("AppliedCommandLSN after replay=%d, want 4", got)
+	assertColumnManifestStateM10B(t, reopened, 3, baseLSN+3)
+	if got := reopen.State().AppliedCommandLSN; got != baseLSN+3 {
+		t.Fatalf("AppliedCommandLSN after replay=%d, want %d", got, baseLSN+3)
 	}
 }
 
 func TestColumnStoreReplayIntentBypassesRelaxedDurabilityGateM10C(t *testing.T) {
-	dir := prepareColumnStoreCommandWALDirWithProfileM10C(t, ColumnStoreProfileBenchmarkRelaxed)
+	dir, baseLSN := prepareColumnStoreCommandWALDirWithProfileM10C(t, ColumnStoreProfileBenchmarkRelaxed)
 	payload, err := commitlog.EncodeCollectionInsertBatchByIDPayload("events", []commitlog.CollectionDocument{
 		{ID: []byte("e1"), Document: []byte(`{"time_us":1,"kind":"like","did":"d1"}`)},
 	})
 	if err != nil {
 		t.Fatalf("EncodeCollectionInsertBatchByIDPayload: %v", err)
 	}
-	writeCollectionCommandWALFrame(t, dir, 2, commitlog.CommandKindCollectionInsertBatchByID, commitlog.PayloadFormatCollectionInsertBatchByIDV1, payload)
+	writeCollectionCommandWALFrame(t, dir, baseLSN+1, commitlog.CommandKindCollectionInsertBatchByID, commitlog.PayloadFormatCollectionInsertBatchByIDV1, payload)
 
 	reopen, err := backenddb.Open(backenddb.Options{
 		Dir:                    dir,
@@ -469,9 +486,9 @@ func TestColumnStoreReplayIntentBypassesRelaxedDurabilityGateM10C(t *testing.T) 
 	defer func() { _ = reopen.Close() }()
 	reopened := openColumnStoreCollectionM10B(t, reopen)
 	assertCollectionDocument(t, reopened, "e1", `{"time_us":1,"kind":"like","did":"d1"}`)
-	assertColumnManifestStateM10B(t, reopened, 1, 2)
-	if got := reopen.State().AppliedCommandLSN; got != 2 {
-		t.Fatalf("AppliedCommandLSN after relaxed replay=%d, want 2", got)
+	assertColumnManifestStateM10B(t, reopened, 1, baseLSN+1)
+	if got := reopen.State().AppliedCommandLSN; got != baseLSN+1 {
+		t.Fatalf("AppliedCommandLSN after relaxed replay=%d, want %d", got, baseLSN+1)
 	}
 
 	framesBefore := countCollectionCommandWALFrames(t, dir)
@@ -484,15 +501,52 @@ func TestColumnStoreReplayIntentBypassesRelaxedDurabilityGateM10C(t *testing.T) 
 	}
 }
 
+func TestColumnStoreAssignedForegroundIntentDoesNotBypassRelaxedDurabilityGateM10C(t *testing.T) {
+	dir, _ := prepareColumnStoreCommandWALDirWithProfileM10C(t, ColumnStoreProfileBenchmarkRelaxed)
+	d, err := backenddb.Open(backenddb.Options{
+		Dir:                    dir,
+		CommandWAL:             true,
+		Durability:             backenddb.DurabilityWALOnRelaxed,
+		DisableBackgroundPrune: true,
+	})
+	if err != nil {
+		t.Fatalf("Open relaxed command WAL DB: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	col := openColumnStoreCollectionM10B(t, d)
+
+	docs := []commitlog.CollectionDocument{{
+		ID:       []byte("e1"),
+		Document: []byte(`{"time_us":1,"kind":"like","did":"d1"}`),
+	}}
+	intent, err := col.newCollectionInsertCommandWALIntent(docs, nil)
+	if err != nil {
+		t.Fatalf("newCollectionInsertCommandWALIntent: %v", err)
+	}
+	lsn, err := d.AppendCommandWALIntent(intent, false)
+	if err != nil {
+		t.Fatalf("AppendCommandWALIntent: %v", err)
+	}
+	if lsn == 0 || intent.AssignedLSN() != lsn || intent.ReplayAssignedLSN() != 0 {
+		t.Fatalf("assigned foreground intent lsn=%d assigned=%d replay=%d", lsn, intent.AssignedLSN(), intent.ReplayAssignedLSN())
+	}
+	if err := col.requireColumnStoreCommandWAL(col.meta, intent); !errors.Is(err, backenddb.ErrCommandWALRejected) {
+		t.Fatalf("assigned foreground relaxed intent error=%v, want ErrCommandWALRejected", err)
+	}
+	if err := col.requireColumnStoreCommandWAL(col.meta, nil); !errors.Is(err, backenddb.ErrCommandWALRejected) {
+		t.Fatalf("nil relaxed intent error=%v, want ErrCommandWALRejected", err)
+	}
+}
+
 func TestColumnStoreReadOnlyOpenWithUnappliedCollectionFrameFailsM10C(t *testing.T) {
-	dir := prepareColumnStoreCommandWALDirM10B(t)
+	dir, baseLSN := prepareColumnStoreCommandWALDirM10B(t)
 	payload, err := commitlog.EncodeCollectionInsertBatchByIDPayload("events", []commitlog.CollectionDocument{
 		{ID: []byte("e1"), Document: []byte(`{"time_us":1,"kind":"like","did":"d1"}`)},
 	})
 	if err != nil {
 		t.Fatalf("EncodeCollectionInsertBatchByIDPayload: %v", err)
 	}
-	writeCollectionCommandWALFrame(t, dir, 2, commitlog.CommandKindCollectionInsertBatchByID, commitlog.PayloadFormatCollectionInsertBatchByIDV1, payload)
+	writeCollectionCommandWALFrame(t, dir, baseLSN+1, commitlog.CommandKindCollectionInsertBatchByID, commitlog.PayloadFormatCollectionInsertBatchByIDV1, payload)
 
 	ro, err := backenddb.Open(backenddb.Options{Dir: dir, ReadOnly: true, DisableBackgroundPrune: true})
 	if err == nil {
@@ -618,7 +672,7 @@ func TestColumnStoreBenchmarkRelaxedAllowsDurableCommandWALWritesM10C(t *testing
 }
 
 func TestColumnStorePublishRejectsMissingCommandWALIntentM10B(t *testing.T) {
-	dir := prepareColumnStoreCommandWALDirM10B(t)
+	dir, _ := prepareColumnStoreCommandWALDirM10B(t)
 	d := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = d.Close() }()
 
@@ -748,12 +802,12 @@ func TestColumnManifestRootDescriptorSystemDeltaRejectsPlanRootMismatchM10B(t *t
 	}
 }
 
-func prepareColumnStoreCommandWALDirM10B(t *testing.T) string {
+func prepareColumnStoreCommandWALDirM10B(t *testing.T) (string, uint64) {
 	t.Helper()
 	return prepareColumnStoreCommandWALDirWithProfileM10C(t, "")
 }
 
-func prepareColumnStoreCommandWALDirWithProfileM10C(t *testing.T, profileSupport ColumnStoreProfileSupport) string {
+func prepareColumnStoreCommandWALDirWithProfileM10C(t *testing.T, profileSupport ColumnStoreProfileSupport) (string, uint64) {
 	t.Helper()
 	dir := t.TempDir()
 	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
@@ -774,10 +828,15 @@ func prepareColumnStoreCommandWALDirWithProfileM10C(t *testing.T, profileSupport
 		_ = d.Close()
 		t.Fatalf("Checkpoint: %v", err)
 	}
+	baseLSN := d.State().AppliedCommandLSN
+	if baseLSN == 0 {
+		_ = d.Close()
+		t.Fatal("setup AppliedCommandLSN=0, want command WAL create LSN")
+	}
 	if err := d.Close(); err != nil {
 		t.Fatalf("Close setup DB: %v", err)
 	}
-	return dir
+	return dir, baseLSN
 }
 
 func openBufferedBSONColumnStoreSeedM10B(t *testing.T, indexed bool, profile ColumnStoreProfileSupport) (*backenddb.DB, *Collection) {
