@@ -312,7 +312,7 @@ func TestColumnVectorGraphSearchUsesDocumentIDTieOrdering(t *testing.T) {
 	}
 }
 
-func TestColumnVectorGraphSearchExploresEqualDistanceOrdinalBridge(t *testing.T) {
+func TestColumnVectorGraphSearchExploresEqualDistanceOnOrdinalTiePath(t *testing.T) {
 	graph, err := NewColumnVectorGraphFromColumns(ColumnVectorGraphColumns{
 		DocumentIDs:     [][]byte{[]byte("doc-a"), []byte("doc-b"), []byte("doc-c")},
 		Vectors:         []float32{1, 0, 1, 0, 1, 0},
@@ -342,7 +342,7 @@ func TestColumnVectorGraphSearchExploresEqualDistanceOrdinalBridge(t *testing.T)
 	}
 }
 
-func TestColumnVectorGraphSearchExploresEqualDistanceDocumentBridge(t *testing.T) {
+func TestColumnVectorGraphSearchExploresEqualDistanceOnDocumentTiePath(t *testing.T) {
 	graph, err := NewColumnVectorGraphFromColumns(ColumnVectorGraphColumns{
 		DocumentIDs:     [][]byte{[]byte("doc-b"), []byte("doc-c"), []byte("doc-a")},
 		Vectors:         []float32{1, 0, 1, 0, 1, 0},
@@ -540,10 +540,11 @@ func BenchmarkColumnVectorGraphSearchCosineParallel(b *testing.B) {
 	}
 	opts := ColumnVectorGraphSearchOptions{TopK: 10, EfSearch: 128}
 	b.SetParallelism(1)
-	// RunParallel starts parallelism*GOMAXPROCS workers; keep that mapping
-	// explicit so each worker receives one prewarmed scratch before ResetTimer.
+	// RunParallel normally starts parallelism*GOMAXPROCS workers. Seed that many
+	// warmed scratches and use a pool so every worker gets exclusive scratch
+	// without blocking if the runtime oversubscribes benchmark goroutines.
 	workers := runtime.GOMAXPROCS(0)
-	scratches := make(chan *ColumnVectorGraphSearchScratch, workers)
+	var scratches sync.Pool
 	var warmTrace ColumnVectorGraphSearchTrace
 	for i := 0; i < workers; i++ {
 		scratch := new(ColumnVectorGraphSearchScratch)
@@ -555,13 +556,21 @@ func BenchmarkColumnVectorGraphSearchCosineParallel(b *testing.B) {
 			b.Fatalf("warm worker %d results=%d want %d", i, len(warm), opts.TopK)
 		}
 		warmTrace = trace
-		scratches <- scratch
+		scratches.Put(scratch)
 	}
 	b.ReportAllocs()
 	b.SetBytes(int64(warmTrace.CandidatesExamined * graph.Dims() * 4))
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
-		scratch := <-scratches
+		scratch, _ := scratches.Get().(*ColumnVectorGraphSearchScratch)
+		if scratch == nil {
+			// Defensive fallback for future RunParallel scheduling changes. The
+			// seeded path above is what keeps the measured hot loop allocation-free.
+			scratch = new(ColumnVectorGraphSearchScratch)
+			if _, _, err := graph.SearchCosine(query, opts, scratch); err != nil {
+				panic(err)
+			}
+		}
 		var localSink int64
 		for pb.Next() {
 			results, trace, err := graph.SearchCosine(query, opts, scratch)
@@ -574,7 +583,7 @@ func BenchmarkColumnVectorGraphSearchCosineParallel(b *testing.B) {
 			localSink += int64(len(results[0].DocumentID) + trace.CandidatesExamined + trace.EdgesVisited)
 		}
 		atomic.AddInt64(&columnVectorGraphBenchSink, localSink)
-		scratches <- scratch
+		scratches.Put(scratch)
 	})
 	b.ReportMetric(float64(graph.Edges())/float64(graph.Rows()), "edges/node")
 	b.ReportMetric(float64(warmTrace.CandidatesExamined), "candidates/search")

@@ -333,10 +333,10 @@ func columnVectorGraphNormSquared(vector []float32) (float64, int, float32) {
 
 func copyColumnVectorGraphIDs(ids [][]byte) ([]byte, []uint32, error) {
 	var total uint64
-	for _, id := range ids {
+	for ordinal, id := range ids {
 		total += uint64(len(id))
 		if total > columnVectorGraphMaxUint32 {
-			return nil, nil, errors.New("collections: column vector graph document IDs exceed uint32 offset range")
+			return nil, nil, fmt.Errorf("collections: column vector graph document ID ordinal=%d running bytes=%d exceeds uint32 offset limit=%d", ordinal, total, columnVectorGraphMaxUint32)
 		}
 	}
 	arena := make([]byte, 0, int(total))
@@ -375,6 +375,9 @@ func columnVectorGraphDocumentIDRanks(ids [][]byte) []uint32 {
 }
 
 func columnVectorGraphDocumentIDsMatchOrdinalTieOrder(ids [][]byte) bool {
+	// Equal adjacent IDs are compatible with the ordinal fast path: the
+	// document-rank path also uses ordinal order as the final duplicate-ID
+	// tiebreaker, so non-decreasing IDs preserve the same result order.
 	for ordinal := 1; ordinal < len(ids); ordinal++ {
 		if bytes.Compare(ids[ordinal-1], ids[ordinal]) > 0 {
 			return false
