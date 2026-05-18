@@ -62,7 +62,7 @@ func NewColumnMutationAdapter(workspace *ColumnWorkspace, opts ColumnMutationAda
 	}
 	replayProfile := opts.ReplayProfile.normalized()
 	if workspace.ManifestSyncMode() != replayProfile.workspaceManifestSyncMode() {
-		return nil, fmt.Errorf("colgranule: column mutation replay profile %q requires workspace manifest sync mode %q, got %q", replayProfile.Label(), replayProfile.workspaceManifestSyncMode(), workspace.ManifestSyncMode())
+		return nil, fmt.Errorf("colgranule: column mutation replay profile %q requires workspace manifest sync mode %q, got %q; open the workspace with columnWorkspaceOptionsForMutationReplayProfile or omit benchmark_no_sync for durable replay", replayProfile.Label(), replayProfile.workspaceManifestSyncMode(), workspace.ManifestSyncMode())
 	}
 	collection := opts.Collection
 	if collection == "" {

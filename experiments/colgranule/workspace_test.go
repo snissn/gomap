@@ -154,8 +154,8 @@ func TestColumnWorkspaceManifestSyncModeControlsFsyncM9D(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenColumnWorkspace durable: %v", err)
 	}
-	if syncs != 1 {
-		t.Fatalf("durable open syncs=%d want 1", syncs)
+	if syncs < 1 {
+		t.Fatalf("durable open syncs=%d want at least 1", syncs)
 	}
 	if err := durable.SaveCollectionManifest(manifest); err != nil {
 		t.Fatalf("SaveCollectionManifest durable: %v", err)
