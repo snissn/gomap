@@ -130,8 +130,9 @@ type columnAssetReachabilityRecord struct {
 }
 
 var (
-	// Shared one-element reason slices are immutable sentinels. Clone before
-	// assigning them to any exported reachability entry.
+	// Shared one-element reason slices are immutable sentinels. Internal
+	// builders may carry them, but addReachabilityEntry must clone before any
+	// exported reachability entry observes them.
 	columnAssetReasonPrepared              = []string{string(ColumnAssetStatePrepared)}
 	columnAssetReasonProcessVisible        = []string{string(ColumnAssetStateProcessVisible)}
 	columnAssetReasonPendingPublish        = []string{string(ColumnAssetStatePendingPublish)}
