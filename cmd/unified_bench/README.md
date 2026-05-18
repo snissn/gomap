@@ -215,10 +215,12 @@ Use `column_store` as the canonical native TreeDB column-store benchmark entry
 point. M11B measures the production column-enabled collection manifest/control
 path, planner diagnostics, and executable row-store / B-tree baseline labels
 with a durable command-WAL profile and a deterministic JSONBench-shaped fixture.
-The runnable execution labels are `row_store_baseline` and
-`b_tree_index_baseline`; physical column labels (`serial_column_scan`,
-`aggregate_metadata`, `parallel_column_scan`) still fail closed through the
-planner because durable physical column assets/scanners are not implemented yet.
+`-profile balanced` is accepted as a `durable` alias for the column store suite
+so the unified-bench default still exercises the durable gate. The runnable
+execution labels are `row_store_baseline` and `b_tree_index_baseline`; physical
+column labels (`serial_column_scan`, `aggregate_metadata`,
+`parallel_column_scan`) still fail closed through the planner because durable
+physical column assets/scanners are not implemented yet.
 
 ```bash
 OUT=$(mktemp -d /tmp/gomap_column_store_profiles_XXXXXX)
@@ -248,7 +250,10 @@ planner time, scan time, reduce time, worker count, scheduled/skipped granules,
 cache hit/miss counters, materialized-row count, parity status, byte accounting,
 manifest/recovery identity, and the generated HTML artifact paths. If a forced
 physical column path is not implemented yet, the PR must call that out
-explicitly and include the fail-closed evidence.
+explicitly and include the fail-closed evidence. The suite reports
+`column_asset_bytes=0` with a note until physical column assets are published;
+`retained_payload_bytes` equals the source JSONBench payload until compressed
+retained-payload accounting lands.
 
 ## Notes
 

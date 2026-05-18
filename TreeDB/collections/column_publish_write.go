@@ -79,9 +79,11 @@ func (c *Collection) publishRootDeltaGroupMaybeColumn(ordered []backenddb.Ordere
 	if appendErr != nil {
 		return 0, nil, CollectionMeta{}, nil, appendErr
 	}
+	preflight := c.columnPublishRootDescriptorPreflight(input, rootNames, baseRootIDs)
 	var plan ColumnPublishPlan
-	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaGroupWithCommandWALContextRootBuilderAndSystemDeltaBuilder(
+	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaGroupWithPreflightCommandWALContextRootBuilderAndSystemDeltaBuilder(
 		ordered,
+		preflight,
 		input.commandWALIntent,
 		func(ctx backenddb.CommandWALPublishContext) ([]backenddb.OrderedRootDeltaPublishInput, error) {
 			nextPlan, err := c.buildColumnPublishPlanForCommandWALContext(ctx, input, columnBaseRoot)
@@ -135,6 +137,7 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 	if appendErr != nil {
 		return 0, nil, CollectionMeta{}, nil, appendErr
 	}
+	preflight = combineOrderedRootGroupPreflight(preflight, c.columnPublishRootDescriptorPreflight(input, rootNames, baseRootIDs))
 	var plan ColumnPublishPlan
 	var cleanupColumnDelta func()
 	defer func() {
@@ -165,12 +168,9 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 	var newSystemRoot uint64
 	var rootIDs []uint64
 	var err error
-	if preflight != nil {
-		newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaBatchGroupWithPreflightCommandWALContextRootBuilderAndSystemDeltaBuilder(ordered, preflight, input.commandWALIntent, buildColumnDelta, buildSystemDelta)
-	} else {
-		newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaBatchGroupWithCommandWALContextRootBuilderAndSystemDeltaBuilder(ordered, input.commandWALIntent, buildColumnDelta, buildSystemDelta)
-	}
+	newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaBatchGroupWithPreflightCommandWALContextRootBuilderAndSystemDeltaBuilder(ordered, preflight, input.commandWALIntent, buildColumnDelta, buildSystemDelta)
 	if err != nil {
+		cleanupColumnDelta = nil
 		return 0, nil, CollectionMeta{}, nil, err
 	}
 	updatedMeta, err := columnPublishUpdatedMeta(input.meta, plan)
@@ -179,6 +179,28 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 	}
 	publishRootNames, publishRootIDs := appendClearedCollectionRoots(rootNames, rootIDs, input.clearedRootNames)
 	return newSystemRoot, publishRootIDs, updatedMeta, publishRootNames, nil
+}
+
+func (c *Collection) columnPublishRootDescriptorPreflight(input columnWritePublishInput, rootNames []string, baseRootIDs map[string]uint64) backenddb.OrderedRootGroupPreflight {
+	return func() error {
+		return c.validateRootDescriptorSystemDeltaForMeta(input.meta, input.baseCommitSeq, input.baseSystemRoot, rootNames, baseRootIDs)
+	}
+}
+
+func combineOrderedRootGroupPreflight(first, second backenddb.OrderedRootGroupPreflight) backenddb.OrderedRootGroupPreflight {
+	switch {
+	case first == nil:
+		return second
+	case second == nil:
+		return first
+	default:
+		return func() error {
+			if err := first(); err != nil {
+				return err
+			}
+			return second()
+		}
+	}
 }
 
 func (c *Collection) publishRootDeltaGroupWithoutColumn(ordered []backenddb.OrderedRootDeltaPublishInput, input columnWritePublishInput) (uint64, []uint64, error) {
@@ -261,6 +283,7 @@ func encodeColumnManifestIdentityForWrite(input ColumnPublishManifestEncodeInput
 
 func checksumColumnManifestIdentityForWrite(input ColumnPublishManifestEncodeInput, generation uint64) uint64 {
 	var d xxhash.Digest
+	d.Reset()
 	writeHashString(&d, input.Collection)
 	writeHashString(&d, string(input.Operation))
 	writeHashUint64(&d, generation)

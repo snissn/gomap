@@ -20,7 +20,7 @@ func (p ColumnMutationReplayProfile) Validate() error {
 	switch durability {
 	case ColumnMutationReplayDurable:
 		if p.BenchmarkOnly {
-			return fmt.Errorf("colgranule: durable column mutation replay profile cannot be benchmark-only")
+			return fmt.Errorf("colgranule: durable column mutation replay profile cannot be benchmark-only; choose %q or %q with BenchmarkOnly for benchmark-ceiling runs", ColumnMutationReplayWALOnFast, ColumnMutationReplayFast)
 		}
 		return nil
 	case ColumnMutationReplayWALOnFast, ColumnMutationReplayFast:
@@ -37,6 +37,7 @@ func (p ColumnMutationReplayProfile) ProductionSupported() bool {
 	return p.normalizedDurability() == ColumnMutationReplayDurable && !p.BenchmarkOnly
 }
 
+// Label returns the normalized profile label and is safe to call before Validate.
 func (p ColumnMutationReplayProfile) Label() string {
 	durability := p.normalizedDurability()
 	if p.BenchmarkOnly {

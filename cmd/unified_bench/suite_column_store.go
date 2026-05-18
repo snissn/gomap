@@ -46,6 +46,9 @@ var (
 		columnStorePathAggregateMetadata,
 		columnStorePathParallelColumnScan,
 	}
+	// These files are opportunistic control-plane telemetry for the benchmark
+	// report. Missing files are reported, not fatal, because the exact set can
+	// vary as TreeDB control metadata evolves.
 	columnStoreSuiteManifestControlFiles = []string{
 		"vlog_ref_counts.meta",
 	}
@@ -97,6 +100,8 @@ type columnStoreStageMetric struct {
 type columnStoreQueryMetric struct {
 	Name                 string  `json:"name"`
 	PlanLabel            string  `json:"plan_label"`
+	AliasOf              string  `json:"alias_of,omitempty"`
+	ImplementationNote   string  `json:"implementation_note,omitempty"`
 	DurationMS           float64 `json:"duration_ms"`
 	Rows                 int     `json:"rows"`
 	RowsPerSecond        float64 `json:"rows_per_second"`
@@ -131,7 +136,9 @@ type columnStoreParity struct {
 type columnStoreByteAccounting struct {
 	SourceDocumentBytes             int64    `json:"source_document_bytes"`
 	RetainedPayloadBytes            int64    `json:"retained_payload_bytes"`
+	RetainedPayloadBytesNote        string   `json:"retained_payload_bytes_note,omitempty"`
 	ColumnAssetBytes                int64    `json:"column_asset_bytes"`
+	ColumnAssetBytesNote            string   `json:"column_asset_bytes_note,omitempty"`
 	ManifestControlBytes            int64    `json:"manifest_control_bytes"`
 	ManifestControlMissing          []string `json:"manifest_control_missing,omitempty"`
 	CommandWALBytesBeforeCheckpoint int64    `json:"command_wal_bytes_before_checkpoint"`
@@ -204,7 +211,7 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 		fixture = "synthetic"
 	}
 	if fixture != "synthetic" {
-		return "", fmt.Errorf("column_store: unsupported fixture %q; synthetic is the M11A CI fixture and JSONBENCH_DATA large mode is not wired yet", fixture)
+		return "", fmt.Errorf("column_store: unsupported fixture %q; synthetic is the M11B CI fixture and JSONBENCH_DATA large mode is not wired yet", fixture)
 	}
 	forcedPath := normalizeColumnStoreSuitePath(opts.ForcedPath)
 	if forcedPath == "" {
@@ -376,7 +383,9 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 		ByteAccounting: columnStoreByteAccounting{
 			SourceDocumentBytes:             sourceBytes,
 			RetainedPayloadBytes:            sourceBytes,
+			RetainedPayloadBytesNote:        "the suite retains the source JSONBench payload as the reconstructable row baseline; compressed retained payload accounting is future work",
 			ColumnAssetBytes:                0,
+			ColumnAssetBytesNote:            "not measured because physical column assets are not published yet",
 			ManifestControlBytes:            manifestControlBytes,
 			ManifestControlMissing:          manifestControlMissing,
 			CommandWALBytesBeforeCheckpoint: commandWALBytesBeforeCheckpoint,
@@ -411,6 +420,7 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 			}
 		}
 	}
+	// Keep artifacts available for diagnosis even when parity is the failing gate.
 	if parityErr != nil {
 		return "", parityErr
 	}
@@ -419,12 +429,15 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 
 func columnStoreSuiteEffectiveProfile(profile string) (string, error) {
 	switch strings.ToLower(strings.TrimSpace(profile)) {
-	case "", "durable", "balanced":
+	case "", "durable":
+		return "durable", nil
+	case "balanced":
+		// Accept unified-bench's default profile as an alias for the durable gate.
 		return "durable", nil
 	case "fast", "unsafe", "wal_on_fast":
-		return "", fmt.Errorf("column_store: profile %q is benchmark-relaxed and unsupported for M11A production column-store writes; use -profile durable", profile)
+		return "", fmt.Errorf("column_store: profile %q is benchmark-relaxed and unsupported for M11B production column-store writes; use -profile durable", profile)
 	default:
-		return "", fmt.Errorf("column_store: unsupported profile %q; use durable for the M11A production gate", profile)
+		return "", fmt.Errorf("column_store: unsupported profile %q; use durable for the M11B production gate", profile)
 	}
 }
 
@@ -786,6 +799,7 @@ func runColumnStoreSuiteQueriesProfiled(cfg BenchConfig, collection *collections
 		cpuFile = f
 		if err := startCPUProfileFn(cpuFile); err != nil {
 			_ = cpuFile.Close()
+			_ = os.Remove(profilePath)
 			_ = os.Remove(allocBasePath)
 			_ = os.Remove(blockBasePath)
 			_ = os.Remove(mutexBasePath)
@@ -803,7 +817,7 @@ func runColumnStoreSuiteQueriesProfiled(cfg BenchConfig, collection *collections
 		_ = os.Remove(allocBasePath)
 		_ = os.Remove(blockBasePath)
 		_ = os.Remove(mutexBasePath)
-		return queries, parity, runErr, nil
+		return nil, nil, nil, runErr
 	}
 
 	if allocBasePath != "" {
@@ -908,21 +922,25 @@ func runColumnStoreSuiteQueries(collection *collections.Collection, rows int, ra
 		if !pass && firstErr == nil {
 			firstErr = fmt.Errorf("column_store: parity mismatch for %s: raw=%016x production=%016x", name, rawHash, hash)
 		}
+		planLabel := string(plan.Kind)
 		metric := columnStoreQueryMetric{
 			Name: name,
 			// PlanLabel records the executed planner kind after alias
 			// normalization, not necessarily the raw requested path string.
-			PlanLabel:            string(plan.Kind),
-			DurationMS:           durationMS(elapsed),
-			Rows:                 rows,
-			RowsPerSecond:        ratePerSecond(float64(materialized), elapsed),
-			MiBPerSecond:         ratePerSecond(float64(bytesRead)/(1024*1024), elapsed),
-			NsPerRow:             nsPerRow(elapsed, materialized),
-			BytesRead:            bytesRead,
-			RowMaterializations:  materialized,
-			ResultCount:          resultCount,
-			RawHash:              rawHash,
-			ProductionHash:       hash,
+			PlanLabel:           planLabel,
+			AliasOf:             columnStoreQueryAliasOf(name, planLabel),
+			ImplementationNote:  columnStoreQueryImplementationNote(name, planLabel),
+			DurationMS:          durationMS(elapsed),
+			Rows:                rows,
+			RowsPerSecond:       ratePerSecond(float64(materialized), elapsed),
+			MiBPerSecond:        ratePerSecond(float64(bytesRead)/(1024*1024), elapsed),
+			NsPerRow:            nsPerRow(elapsed, materialized),
+			BytesRead:           bytesRead,
+			RowMaterializations: materialized,
+			ResultCount:         resultCount,
+			RawHash:             rawHash,
+			ProductionHash:      hash,
+			// TODO(M11C): populate from physical aggregate-metadata diagnostics.
 			MetadataHits:         0,
 			SkippedGranules:      plan.Diagnostics.SkippedGranules,
 			ScheduledGranules:    plan.Diagnostics.ScheduledGranules,
@@ -1051,9 +1069,6 @@ func scanColumnStoreSuiteEventsByIndex(collection *collections.Collection, rows 
 		return nil, 0, 0, fmt.Errorf("column_store: scan B-tree index %s for %s: %w", indexName, queryName, err)
 	}
 	if truncated {
-		if materialized <= rows {
-			return nil, 0, 0, fmt.Errorf("column_store: B-tree index scan reported truncation after %d rows with sentinel limit %d; fixture expects one index entry per document", materialized, rows+1)
-		}
 		return nil, 0, 0, fmt.Errorf("column_store: B-tree index scan exceeded expected row count: materialized %d rows with sentinel limit %d; fixture expects one index entry per document", materialized, rows+1)
 	}
 	if materialized != rows {
@@ -1064,6 +1079,20 @@ func scanColumnStoreSuiteEventsByIndex(collection *collections.Collection, rows 
 
 func columnStoreQueryNames() []string {
 	return []string{"q1", "q2", "q3", "q4a", "q4b", "q5", "q5_metadata"}
+}
+
+func columnStoreQueryAliasOf(name, path string) string {
+	if name == "q5_metadata" && path == columnStorePathRowStoreBaseline {
+		return "q5"
+	}
+	return ""
+}
+
+func columnStoreQueryImplementationNote(name, path string) string {
+	if name == "q5_metadata" && path == columnStorePathRowStoreBaseline {
+		return "row_store_baseline_alias_until_physical_aggregate_metadata_path"
+	}
+	return ""
 }
 
 func columnStoreQueryHash(name string, events []columnStoreDecodedEvent) (uint64, int, error) {
@@ -1283,22 +1312,32 @@ func renderColumnStoreSuiteMarkdown(report columnStoreSuiteReport) string {
 	sb.WriteString("\n")
 
 	sb.WriteString("## Query Throughput And Parity\n\n")
-	sb.WriteString("| query | plan | rows/s | MiB/s | ns/row | planner ms | scan ms | reduce ms | parity hash ms | workers | scheduled granules | skipped granules | B/read | rows materialized | cache hit/miss | hash parity |\n")
-	sb.WriteString("|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|\n")
+	sb.WriteString("| query | plan | rows/s | MiB/s | ns/row | planner ms | scan ms | reduce ms | parity hash ms | workers | scheduled granules | skipped granules | metadata hits | B/read | rows materialized | cache hit/miss | hash parity | note |\n")
+	sb.WriteString("|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|\n")
 	for _, q := range report.Queries {
 		parity := "pass"
 		if p, ok := report.Parity[q.Name]; ok && !p.Pass {
 			parity = "FAIL"
 		}
-		sb.WriteString(fmt.Sprintf("| `%s` | `%s` | %.3f | %.3f | %.1f | %.3f | %.3f | %.3f | %.3f | %d | %d | %d | %d | %d | %d/%d | %s |\n",
-			q.Name, q.PlanLabel, q.RowsPerSecond, q.MiBPerSecond, q.NsPerRow, q.PlannerDurationMS, q.ScanDurationMS, q.ReduceDurationMS, q.ParityHashDurationMS, q.WorkerCount, q.ScheduledGranules, q.SkippedGranules, q.BytesRead, q.RowMaterializations, q.CacheHits, q.CacheMisses, parity))
+		note := q.ImplementationNote
+		if note == "" && q.AliasOf != "" {
+			note = "alias_of_" + q.AliasOf
+		}
+		sb.WriteString(fmt.Sprintf("| `%s` | `%s` | %.3f | %.3f | %.1f | %.3f | %.3f | %.3f | %.3f | %d | %d | %d | %d | %d | %d | %d/%d | %s | `%s` |\n",
+			q.Name, q.PlanLabel, q.RowsPerSecond, q.MiBPerSecond, q.NsPerRow, q.PlannerDurationMS, q.ScanDurationMS, q.ReduceDurationMS, q.ParityHashDurationMS, q.WorkerCount, q.ScheduledGranules, q.SkippedGranules, q.MetadataHits, q.BytesRead, q.RowMaterializations, q.CacheHits, q.CacheMisses, parity, note))
 	}
 	sb.WriteString("\n")
 
 	sb.WriteString("## Byte Accounting\n\n")
 	sb.WriteString(fmt.Sprintf("- source_document_bytes: %d\n", report.ByteAccounting.SourceDocumentBytes))
 	sb.WriteString(fmt.Sprintf("- retained_payload_bytes: %d\n", report.ByteAccounting.RetainedPayloadBytes))
+	if report.ByteAccounting.RetainedPayloadBytesNote != "" {
+		sb.WriteString(fmt.Sprintf("- retained_payload_bytes_note: %s\n", report.ByteAccounting.RetainedPayloadBytesNote))
+	}
 	sb.WriteString(fmt.Sprintf("- column_asset_bytes: %d\n", report.ByteAccounting.ColumnAssetBytes))
+	if report.ByteAccounting.ColumnAssetBytesNote != "" {
+		sb.WriteString(fmt.Sprintf("- column_asset_bytes_note: %s\n", report.ByteAccounting.ColumnAssetBytesNote))
+	}
 	sb.WriteString(fmt.Sprintf("- manifest_control_bytes: %d\n", report.ByteAccounting.ManifestControlBytes))
 	if len(report.ByteAccounting.ManifestControlMissing) != 0 {
 		sb.WriteString(fmt.Sprintf("- manifest_control_missing: `%s`\n", strings.Join(report.ByteAccounting.ManifestControlMissing, "`, `")))

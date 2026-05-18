@@ -317,6 +317,9 @@ func columnQueryManifestRecoveryAuthoritative(identity ColumnStoreCacheIdentity,
 }
 
 func columnQueryPlannerCandidateCount(req ColumnQueryPlanRequest) int {
+	if req.ForceKind != "" {
+		return 1
+	}
 	if req.Capabilities.PlannerCandidateBudget > 0 {
 		return req.Capabilities.PlannerCandidateBudget
 	}
@@ -363,6 +366,8 @@ func selectColumnQueryBTreeIndex(catalog *collectionCatalog, req ColumnQueryPlan
 	return IndexDefinition{}, false
 }
 
+// ColumnSkipScanBound describes one side of a mark-pruning range. When
+// Unbounded is true, Key is ignored and should be nil or empty.
 type ColumnSkipScanBound struct {
 	Key       []byte
 	Inclusive bool
@@ -382,6 +387,9 @@ type ColumnSkipScanMark struct {
 	MaxKeys [][]byte
 }
 
+// ColumnSkipScanResult contains reusable planner scratch. Do not copy a live
+// result between workloads; pass the same pointer back to PlanColumnSkipScanInto
+// for reuse or assign a zero value to release retained scratch.
 type ColumnSkipScanResult struct {
 	LeftPrefixColumns int
 	ScheduledMarks    []int

@@ -1331,6 +1331,20 @@ func (db *DB) PublishOrderedRootDeltaGroupWithCommandWALContextRootBuilderAndSys
 	return db.publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBuilder(ordered, nil, intent, buildContextDeltas, buildSystemDeltaIter)
 }
 
+// PublishOrderedRootDeltaGroupWithPreflightCommandWALContextAndSystemDeltaBuilder
+// is like PublishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBuilder,
+// but runs preflight before the command frame is appended.
+func (db *DB) PublishOrderedRootDeltaGroupWithPreflightCommandWALContextAndSystemDeltaBuilder(ordered []OrderedRootDeltaPublishInput, preflight OrderedRootGroupPreflight, intent *CommandWALIntent, buildSystemDeltaIter OrderedRootGroupCommandWALSystemBuilder) (uint64, []uint64, error) {
+	return db.publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBuilder(ordered, preflight, intent, nil, buildSystemDeltaIter)
+}
+
+// PublishOrderedRootDeltaGroupWithPreflightCommandWALContextRootBuilderAndSystemDeltaBuilder
+// is like PublishOrderedRootDeltaGroupWithCommandWALContextRootBuilderAndSystemDeltaBuilder,
+// but runs preflight before the command frame is appended.
+func (db *DB) PublishOrderedRootDeltaGroupWithPreflightCommandWALContextRootBuilderAndSystemDeltaBuilder(ordered []OrderedRootDeltaPublishInput, preflight OrderedRootGroupPreflight, intent *CommandWALIntent, buildContextDeltas OrderedRootGroupCommandWALDeltaBuilder, buildSystemDeltaIter OrderedRootGroupCommandWALSystemBuilder) (uint64, []uint64, error) {
+	return db.publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBuilder(ordered, preflight, intent, buildContextDeltas, buildSystemDeltaIter)
+}
+
 // PublishOrderedRootDeltaGroupWithPreflightAndSystemDeltaBuilder is like
 // PublishOrderedRootDeltaGroupWithSystemDeltaBuilder, but runs preflight under
 // the DB write lock before applying root-local deltas.
@@ -1583,7 +1597,7 @@ func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBui
 		phaseStats.preflightNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	}
 
-	sync := commandWALIntentPublishSync(commandWALIntent, false)
+	syncCommandWAL := commandWALIntentPublishSync(commandWALIntent, false)
 	db.commitMu.Lock()
 	commitLocked := true
 	commandAppended := false
@@ -1595,7 +1609,7 @@ func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBui
 			db.commitMu.Unlock()
 		}
 	}()
-	lsn, err := db.appendPublicCommandWALIntent(commandWALIntent, sync)
+	lsn, err := db.appendPublicCommandWALIntent(commandWALIntent, syncCommandWAL)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -1684,7 +1698,7 @@ func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBui
 
 	var vlogRefDelta *valueLogRefDelta
 	phaseStart = time.Now()
-	post, err := db.finalizeCommitLockedWithOptions(userRoot, newSystemRoot, retired, sync, merged, nil, true, vlogRefDelta, nil, nil, commandWALFinalizeOptionsForPublicIntent(commandWALIntent))
+	post, err := db.finalizeCommitLockedWithOptions(userRoot, newSystemRoot, retired, syncCommandWAL, merged, nil, true, vlogRefDelta, nil, nil, commandWALFinalizeOptionsForPublicIntent(commandWALIntent))
 	phaseStats.finalizeNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	phaseStats.finalizeCalls++
 	if err != nil {
@@ -2092,7 +2106,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 
 func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilderSerialized(ordered []OrderedRootDeltaBatchPublishInput, preflight OrderedRootGroupPreflight, commandWALIntent *CommandWALIntent, buildContextDeltas OrderedRootDeltaBatchGroupCommandWALDeltaBuilder, buildSystemDeltaIter OrderedRootGroupCommandWALSystemBuilder) (newSystemRoot uint64, rootIDs []uint64, err error) {
 	if buildSystemDeltaIter == nil {
-		return 0, nil, errors.New("nil ordered root group command WAL system delta builder")
+		return 0, nil, errors.New("nil ordered root delta batch group command WAL system delta builder")
 	}
 	if commandWALIntent == nil {
 		return 0, nil, ErrCommandWALContextMissingFrame
@@ -2149,7 +2163,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 		phaseStats.preflightNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	}
 
-	sync := commandWALIntentPublishSync(commandWALIntent, false)
+	syncCommandWAL := commandWALIntentPublishSync(commandWALIntent, false)
 	db.commitMu.Lock()
 	commitLocked := true
 	commandAppended := false
@@ -2161,7 +2175,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 			db.commitMu.Unlock()
 		}
 	}()
-	lsn, err := db.appendPublicCommandWALIntent(commandWALIntent, sync)
+	lsn, err := db.appendPublicCommandWALIntent(commandWALIntent, syncCommandWAL)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -2173,10 +2187,18 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 	ctx := CommandWALPublishContext{AppliedCommandLSN: lsn}
 
 	allOrdered := ordered
+	var contextOrdered []OrderedRootDeltaBatchPublishInput
+	defer func() {
+		if err != nil {
+			closeOrderedRootDeltaBatchPublishDeltas(contextOrdered)
+		}
+	}()
 	if buildContextDeltas != nil {
-		contextOrdered, buildErr := buildContextDeltas(ctx)
+		var buildErr error
+		contextOrdered, buildErr = buildContextDeltas(ctx)
 		if buildErr != nil {
 			closeOrderedRootDeltaBatchPublishDeltas(contextOrdered)
+			contextOrdered = nil
 			err = buildErr
 			return 0, nil, err
 		}
@@ -2243,7 +2265,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 
 	var vlogRefDelta *valueLogRefDelta
 	phaseStart = time.Now()
-	post, err := db.finalizeCommitLockedWithOptions(userRoot, newSystemRoot, retired, sync, merged, nil, true, vlogRefDelta, nil, nil, commandWALFinalizeOptionsForPublicIntent(commandWALIntent))
+	post, err := db.finalizeCommitLockedWithOptions(userRoot, newSystemRoot, retired, syncCommandWAL, merged, nil, true, vlogRefDelta, nil, nil, commandWALFinalizeOptionsForPublicIntent(commandWALIntent))
 	phaseStats.finalizeNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	phaseStats.finalizeCalls++
 	if err != nil {

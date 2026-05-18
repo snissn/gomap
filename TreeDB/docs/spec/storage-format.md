@@ -660,8 +660,9 @@ Readers must fail closed for a column-enabled collection when active manifest
 metadata is missing required recovery-authoritative metadata, when active and
 recovery-authoritative identities disagree, when the manifest root descriptor
 does not match the collection system root name/policy, when manifest identity
-format/version/checksum fields are invalid, or when a durable-only column
-collection is opened under a relaxed durability mode.
+format/version/checksum fields are invalid, when the recovery-authoritative
+applied command LSN is zero while an active manifest is present, or when a
+durable-only column collection is opened under a relaxed durability mode.
 
 `CollectionInsertBatchByIDV1` payload:
 
