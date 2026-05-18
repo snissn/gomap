@@ -622,12 +622,11 @@ func BenchmarkColumnMutationReplayM9D(b *testing.B) {
 				root := b.TempDir()
 				var last ColumnCollectionManifest
 				b.ReportAllocs()
+				b.StopTimer()
 				b.ResetTimer()
 				for i := 0; i < b.N; i++ {
-					if i > 0 {
-						b.StartTimer()
-					}
 					dir := filepath.Join(root, fmt.Sprintf("iter-%06d", i))
+					b.StartTimer()
 					workspace, adapter := benchmarkColumnMutationAdapterWithProfile(b, dir, opts, ds.Dictionaries, profile)
 					_, err := adapter.PublishBaseBatch(ColumnBatch{Rows: ds.Rows, Columns: ds.Columns}, ColumnPartCoverageOptions{SourceRowRootGeneration: 1, SourceRowVersionUpper: uint64(ds.Rows)})
 					if err == nil {
