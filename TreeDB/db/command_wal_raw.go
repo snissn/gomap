@@ -47,7 +47,7 @@ func (intent *CommandWALIntent) AssignedLSN() uint64 {
 // ReplayAssignedLSN returns the assigned LSN and true only for replay-originated
 // intents. The boolean keeps callers from treating LSN 0 as a replay sentinel.
 func (intent *CommandWALIntent) ReplayAssignedLSN() (uint64, bool) {
-	if intent == nil || !intent.inner.fromReplay {
+	if intent == nil || !intent.inner.fromReplay || intent.inner.lsn == 0 {
 		return 0, false
 	}
 	return intent.inner.lsn, true
@@ -314,6 +314,9 @@ func (db *DB) appendPublicCommandWALIntent(intent *CommandWALIntent, sync bool) 
 	if intent == nil {
 		return 0, nil
 	}
+	if intent.inner.fromReplay && intent.inner.lsn == 0 {
+		return 0, fmt.Errorf("%w: replay intent missing assigned lsn", ErrCommandWALRejected)
+	}
 	if intent.inner.lsn != 0 {
 		// Replay intents already refer to a durable frame; recovery must only
 		// publish that covered LSN, never append a duplicate command.
@@ -524,6 +527,9 @@ func commandWALIntentPublishSync(intent *CommandWALIntent, sync bool) bool {
 func (db *DB) appendCommandWALIntent(intent *commandWALBatchIntent, sync bool) (uint64, error) {
 	if intent == nil {
 		return 0, nil
+	}
+	if intent.fromReplay && intent.lsn == 0 {
+		return 0, fmt.Errorf("%w: replay intent missing assigned lsn", ErrCommandWALRejected)
 	}
 	if intent.lsn != 0 {
 		// The frame was already durably appended. Fail closed if poison was set
