@@ -18466,12 +18466,16 @@ func encodeCollectionMeta(meta CollectionMeta) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	return encodeNormalizedCollectionMeta(normalized)
+}
+
+func encodeNormalizedCollectionMeta(meta CollectionMeta) ([]byte, error) {
 	return json.Marshal(collectionMetaDisk{
 		Version:       collectionMetaVersion,
-		Name:          normalized.Name,
-		Options:       normalized.Options,
-		Indexes:       normalized.Indexes,
-		VectorIndexes: normalized.VectorIndexes,
+		Name:          meta.Name,
+		Options:       meta.Options,
+		Indexes:       meta.Indexes,
+		VectorIndexes: meta.VectorIndexes,
 	})
 }
 

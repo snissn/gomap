@@ -228,6 +228,51 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 	}
 }
 
+func TestWriteColumnStoreSuiteArtifactsUsesRecordedColumnPathsM11A(t *testing.T) {
+	dir := t.TempDir()
+	defaultDir := filepath.Join(dir, "default")
+	recordedDir := filepath.Join(dir, "recorded")
+	report := columnStoreSuiteReport{
+		Suite: "column_store",
+		Artifacts: columnStoreArtifactPaths{
+			ColumnJSON:     filepath.Join(recordedDir, "custom_column.json"),
+			ColumnMarkdown: filepath.Join(recordedDir, "custom_column.md"),
+			ColumnHTML:     filepath.Join(recordedDir, "custom_column.html"),
+		},
+	}
+	run := BenchRun{
+		Config: BenchConfig{Keys: 1, Profile: "durable"},
+		Results: map[string]map[string]float64{
+			"column_store": {columnStoreSuiteBenchDisplayName: 1},
+		},
+	}
+
+	if err := writeColumnStoreSuiteArtifacts(defaultDir, "native-fastpath", report, "# column store", run); err != nil {
+		t.Fatalf("writeColumnStoreSuiteArtifacts: %v", err)
+	}
+	for _, path := range []string{
+		report.Artifacts.ColumnJSON,
+		report.Artifacts.ColumnMarkdown,
+		report.Artifacts.ColumnHTML,
+	} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("expected recorded artifact path %s: %v", path, err)
+		}
+	}
+	for _, name := range []string{
+		"column_store_results.json",
+		"column_store_results.md",
+		"column_store_results.html",
+	} {
+		if _, err := os.Stat(filepath.Join(defaultDir, name)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("expected no fallback column artifact %s, stat err=%v", name, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(defaultDir, "benchprof_results.json")); err != nil {
+		t.Fatalf("expected benchprof artifact in profile dir: %v", err)
+	}
+}
+
 func TestColumnStoreBenchRunUsesDurationForAggregateM11A(t *testing.T) {
 	run := columnStoreBenchRun(BenchConfig{}, "durable", t.TempDir(), columnStoreSuiteReport{
 		Rows:      30,
@@ -550,6 +595,33 @@ func TestColumnStoreSuiteRuntimeDeltaSkipsEmptyOutputM11A(t *testing.T) {
 	}
 }
 
+func TestColumnStoreSuiteArtifactsOmitMissingRuntimeDeltaPathsM11A(t *testing.T) {
+	dir := t.TempDir()
+	blockDeltaPath := filepath.Join(dir, "block_delta.pprof")
+	mutexDeltaPath := filepath.Join(dir, "mutex_delta.pprof")
+	blockPath := filepath.Join(dir, "block.pprof")
+	mutexPath := filepath.Join(dir, "mutex.pprof")
+	if err := os.WriteFile(blockDeltaPath, []byte("delta"), 0o644); err != nil {
+		t.Fatalf("write block delta: %v", err)
+	}
+
+	paths := columnStoreSuitePruneMissingRuntimeDeltaArtifacts(columnStoreArtifactPaths{
+		BlockDeltaProfile: blockDeltaPath,
+		MutexDeltaProfile: mutexDeltaPath,
+		BlockProfile:      blockPath,
+		MutexProfile:      mutexPath,
+	})
+	if paths.BlockDeltaProfile != blockDeltaPath {
+		t.Fatalf("block delta path=%q want %q", paths.BlockDeltaProfile, blockDeltaPath)
+	}
+	if paths.MutexDeltaProfile != "" {
+		t.Fatalf("missing mutex delta path should be omitted, got %q", paths.MutexDeltaProfile)
+	}
+	if paths.BlockProfile != blockPath || paths.MutexProfile != mutexPath {
+		t.Fatalf("base runtime profile artifacts should remain advertised: %+v", paths)
+	}
+}
+
 func TestColumnStoreSuiteProfiledQueriesReturnHardErrorsSeparatelyM11A(t *testing.T) {
 	collection, events, rawHashes := newColumnStoreSuiteTestCollectionM11A(t, 4, 2)
 	queries, parity, parityErr, err := runColumnStoreSuiteQueriesProfiled(BenchConfig{}, collection, len(events)+1, rawHashes, columnStorePathRowStoreBaseline)
@@ -690,6 +762,9 @@ func TestColumnStoreSuiteRunsBTreeIndexBaselineM11B(t *testing.T) {
 		if q.PlannerReason == "" || q.PlannerCandidates == 0 {
 			t.Fatalf("query %s missing planner diagnostics: %+v", q.Name, q)
 		}
+		if q.WorkerCount != 1 {
+			t.Fatalf("query %s worker_count=%d want 1 for caller-thread B-tree baseline", q.Name, q.WorkerCount)
+		}
 		if !strings.Contains(q.PlannerReason, "full-scan B-tree baseline") {
 			t.Fatalf("query %s planner_reason=%q want full-scan baseline disclosure", q.Name, q.PlannerReason)
 		}
@@ -748,6 +823,9 @@ func TestColumnStoreSuiteQueriesNormalizeForcedPathAliasesM11B(t *testing.T) {
 		if q.PlanLabel != columnStorePathRowStoreBaseline {
 			t.Fatalf("query %s plan_label=%q want %q", q.Name, q.PlanLabel, columnStorePathRowStoreBaseline)
 		}
+		if q.WorkerCount != 1 {
+			t.Fatalf("query %s worker_count=%d want 1 for caller-thread row baseline", q.Name, q.WorkerCount)
+		}
 	}
 
 	physicalAliases := map[string]collections.ColumnQueryPlanKind{
@@ -778,6 +856,35 @@ func TestColumnStoreSuiteIndexCandidateCoverageM11B(t *testing.T) {
 		if got := columnStoreSuiteQueryIndexCandidates(name); len(got) == 0 {
 			t.Fatalf("query %s has no B-tree baseline candidate columns", name)
 		}
+	}
+}
+
+func TestColumnStoreSuiteBTreeIndexScanMaterializesOneEntryPerDocumentM11B(t *testing.T) {
+	const rows = 2048
+	events, _ := buildColumnStoreSyntheticFixture(rows, 1)
+	db, err := openColumnStoreSuiteDB(t.TempDir())
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	manager := collections.NewCollectionManager(db)
+	if _, err := manager.CreateCollection(columnStoreSuiteCollectionMeta(columnStorePathBTreeIndexBaseline)); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	collection, err := manager.OpenCollection("events")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if err := insertColumnStoreFixture(collection, events, 256); err != nil {
+		t.Fatalf("insert fixture: %v", err)
+	}
+
+	decoded, materialized, _, err := scanColumnStoreSuiteEventsByIndex(collection, rows, "q1", "kind_idx")
+	if err != nil {
+		t.Fatalf("scanColumnStoreSuiteEventsByIndex: %v", err)
+	}
+	if materialized != rows || len(decoded) != rows {
+		t.Fatalf("index scan materialized=%d decoded=%d want %d", materialized, len(decoded), rows)
 	}
 }
 
