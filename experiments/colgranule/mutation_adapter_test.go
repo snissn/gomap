@@ -606,6 +606,7 @@ func BenchmarkColumnMutationReplayM9D(b *testing.B) {
 				}
 				b.ReportMetric(float64(logicalRows), "logical_rows/op")
 				b.ReportMetric(float64(commandBytes), "command_bytes/op")
+				// Row remainder payloads are intentionally absent from M9D mutation replay.
 				b.ReportMetric(0, "row_remainder_bytes/op")
 				b.ReportMetric(float64(last.ByteAccounting.TotalAssetBytes), "column_asset_bytes/op")
 				b.ReportMetric(float64(last.ByteAccounting.DescriptorBytes), "manifest_control_bytes/op")
@@ -758,7 +759,7 @@ func newJSONBenchMutationReplayScenario(tb testing.TB, ds JSONBenchDataset) json
 
 func benchmarkJSONBenchMutationReplayScenario(tb testing.TB, ds JSONBenchDataset, updates int, deletes int) jsonBenchMutationReplayScenario {
 	tb.Helper()
-	if updates <= 0 || deletes < 0 || updates+deletes >= ds.Rows {
+	if updates <= 0 || deletes < 0 || updates >= ds.Rows/2 || updates+deletes >= ds.Rows {
 		tb.Fatalf("invalid replay scenario updates=%d deletes=%d rows=%d", updates, deletes, ds.Rows)
 	}
 	codes, err := jsonBenchQueryCodes(ds)
@@ -993,6 +994,7 @@ func assertJSONBenchReplaySpecializedQueriesMatchRaw(t *testing.T, reader *Colum
 			if !strings.Contains(err.Error(), "requires all-visible") {
 				t.Fatalf("runJSONBenchPartSetQ5AggregateMetadata: %v", err)
 			}
+			t.Logf("skipping q5 metadata replay parity: %v", err)
 		} else {
 			if q5Rows != rawQ5Rows || q5Digest != rawQ5Digest {
 				t.Fatalf("q5 metadata rows/digest=(%d,%d) raw=(%d,%d)", q5Rows, q5Digest, rawQ5Rows, rawQ5Digest)
@@ -1019,6 +1021,7 @@ func assertJSONBenchReplaySpecializedQueriesMatchRaw(t *testing.T, reader *Colum
 			if !strings.Contains(err.Error(), "requires all-visible") {
 				t.Fatalf("runJSONBenchPartSetQ4AggregateMetadata: %v", err)
 			}
+			t.Logf("skipping q4 metadata replay parity: %v", err)
 		} else {
 			if q4MetaRows != rawQ4Rows || q4MetaDigest != rawQ4Digest {
 				t.Fatalf("q4 metadata rows/digest=(%d,%d) raw=(%d,%d)", q4MetaRows, q4MetaDigest, rawQ4Rows, rawQ4Digest)
@@ -1148,6 +1151,9 @@ func estimateColumnMutationReplayCommandBytes(base ColumnBatch, batches []Column
 }
 
 func estimateColumnBatchPayloadBytes(batch ColumnBatch) int {
+	if batch.Rows == 0 && len(batch.Columns) == 0 {
+		return 0
+	}
 	total := 8
 	for name, values := range batch.Columns {
 		total += len(name) + 8
