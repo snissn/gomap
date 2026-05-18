@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"strings"
@@ -9,6 +10,41 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 )
+
+func TestColumnManifestIdentityRecordKeyBytesReturnsFreshSliceM10A(t *testing.T) {
+	first := columnManifestIdentityRecordKeyBytes()
+	second := columnManifestIdentityRecordKeyBytes()
+	if string(first) != columnManifestIdentityRecordKey || string(second) != columnManifestIdentityRecordKey {
+		t.Fatalf("unexpected identity key copies: first=%q second=%q", string(first), string(second))
+	}
+	if len(first) == 0 {
+		t.Fatal("identity record key must be non-empty")
+	}
+	first[0] ^= 0xff
+	if string(second) != columnManifestIdentityRecordKey {
+		t.Fatalf("identity key copy was mutated through another caller: %q", string(second))
+	}
+	if fresh := columnManifestIdentityRecordKeyBytes(); string(fresh) != columnManifestIdentityRecordKey {
+		t.Fatalf("fresh identity key copy was mutated: %q", string(fresh))
+	}
+}
+
+func TestColumnManifestIdentityRecordIteratorUsesPrivateKeySliceM10A(t *testing.T) {
+	identity := ColumnManifestIdentity{Generation: 42, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0xfeedbeef}
+	first := columnManifestIdentityIterator(identity)
+	second := columnManifestIdentityIterator(identity)
+	defer func() { _ = first.Close() }()
+	defer func() { _ = second.Close() }()
+	firstKey := first.UnsafeKey()
+	secondKey := second.UnsafeKey()
+	if !bytes.Equal(firstKey, []byte(columnManifestIdentityRecordKey)) || !bytes.Equal(secondKey, []byte(columnManifestIdentityRecordKey)) {
+		t.Fatalf("unexpected iterator keys: first=%q second=%q", string(firstKey), string(secondKey))
+	}
+	firstKey[0] ^= 0xff
+	if string(second.UnsafeKey()) != columnManifestIdentityRecordKey {
+		t.Fatalf("iterator key slice was shared across iterators: %q", string(second.UnsafeKey()))
+	}
+}
 
 func TestColumnStoreMetadataRoundTripsReopenAndCacheIdentity(t *testing.T) {
 	dir := t.TempDir()
