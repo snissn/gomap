@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -527,6 +528,44 @@ func TestColumnPublishPlanCopiesClosureForRootDeltaHookM10A(t *testing.T) {
 	}
 }
 
+func TestColumnPublishPlanPassesHookOwnedColumnStoreConfigM10A(t *testing.T) {
+	asset := testColumnPublishPreparedAssetM10A()
+	identity := ColumnManifestIdentity{Generation: 7, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0xfeedbeef}
+	input := testColumnPublishPlanInputM10A(identity, asset)
+	if input.ColumnStore.ManifestRoot == nil || len(input.ColumnStore.Columns) == 0 {
+		t.Fatalf("test requires normalized manifest root and columns: %+v", input.ColumnStore)
+	}
+	rootName := input.ColumnStore.ManifestRoot.Name
+	storagePolicy := input.ColumnStore.ManifestRoot.StoragePolicy
+	firstColumn := input.ColumnStore.Columns[0].Name
+	input.Hooks.BuildRootDelta = func(in ColumnPublishRootDeltaInput) (ColumnManifestRootDelta, error) {
+		in.ColumnStore.ManifestRoot.Name = "events/corrupted-column-manifest"
+		in.ColumnStore.ManifestRoot.StoragePolicy = RootStoragePolicy("corrupted")
+		in.ColumnStore.Columns[0].Name = "corrupted"
+		return ColumnManifestRootDelta{
+			RootName:       rootName,
+			BaseRootID:     in.BaseManifestRootID,
+			StoragePolicy:  storagePolicy,
+			Identity:       in.Manifest.Identity,
+			IdentityRecord: encodeColumnManifestIdentityRecordArray(in.Manifest.Identity),
+		}, nil
+	}
+
+	plan, err := BuildColumnPublishPlan(input)
+	if err != nil {
+		t.Fatalf("BuildColumnPublishPlan: %v", err)
+	}
+	if plan.ManifestRootName != rootName || plan.RootDelta.RootName != rootName {
+		t.Fatalf("hook-owned config mutation leaked into root names: plan=%+v root=%q", plan, rootName)
+	}
+	if input.ColumnStore.ManifestRoot.Name != rootName || input.ColumnStore.ManifestRoot.StoragePolicy != storagePolicy {
+		t.Fatalf("input manifest root mutated by hook: %+v", input.ColumnStore.ManifestRoot)
+	}
+	if input.ColumnStore.Columns[0].Name != firstColumn {
+		t.Fatalf("input columns mutated by hook: got %q want %q", input.ColumnStore.Columns[0].Name, firstColumn)
+	}
+}
+
 func TestColumnPublishPlanCopiesPreparedAssetsForSystemDeltaHookM10A(t *testing.T) {
 	asset := testColumnPublishPreparedAssetM10A()
 	identity := ColumnManifestIdentity{Generation: 7, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0xfeedbeef}
@@ -581,6 +620,10 @@ func TestColumnManifestPublishSystemDeltaUpdatesRootAndMetadataTogetherM10A(t *t
 	if err != nil {
 		t.Fatalf("BuildColumnPublishPlan: %v", err)
 	}
+	plan.UpdatedActiveManifest.Format = ""
+	plan.UpdatedActiveManifest.Version = 0
+	plan.RecoveryAuthoritativeManifest.Format = ""
+	plan.RecoveryAuthoritativeManifest.Version = 0
 	plan.RecoveryAuthoritativeAppliedCommandLSN = 202
 	if plan.RecoveryAuthoritativeAppliedCommandLSN == plan.AppliedCommandLSN {
 		t.Fatalf("test requires distinct applied and recovery-authoritative LSNs: %+v", plan)
@@ -619,6 +662,26 @@ func TestColumnManifestPublishSystemDeltaUpdatesRootAndMetadataTogetherM10A(t *t
 	cacheID, ok := reopened.ColumnStoreCacheIdentity()
 	if !ok || cacheID.ManifestRoot != rootIDs[0] || cacheID.ManifestGeneration != identity.Generation || cacheID.RecoveryAuthoritativeAppliedCommandLSN != plan.RecoveryAuthoritativeAppliedCommandLSN {
 		t.Fatalf("unexpected cache identity: %+v ok=%v rootIDs=%v", cacheID, ok, rootIDs)
+	}
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("AcquireSnapshot returned nil")
+	}
+	defer func() { _ = snap.Close() }()
+	raw, ok, err := getSystemValue(snap, systemCollectionMetaKey("events"))
+	if err != nil || !ok {
+		t.Fatalf("load raw collection metadata: ok=%v err=%v", ok, err)
+	}
+	var disk collectionMetaDisk
+	if err := json.Unmarshal(raw, &disk); err != nil {
+		t.Fatalf("decode raw collection metadata: %v", err)
+	}
+	rawCfg := disk.Options.ColumnStore
+	if rawCfg == nil || rawCfg.ActiveManifest == nil || *rawCfg.ActiveManifest != identity {
+		t.Fatalf("raw active manifest was not stored normalized: %+v", rawCfg)
+	}
+	if rawCfg.RecoveryAuthoritativeManifest == nil || *rawCfg.RecoveryAuthoritativeManifest != identity {
+		t.Fatalf("raw recovery-authoritative manifest was not stored normalized: %+v", rawCfg)
 	}
 }
 
