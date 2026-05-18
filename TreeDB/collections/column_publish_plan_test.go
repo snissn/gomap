@@ -253,12 +253,22 @@ func TestColumnPublishPlanFailsClosedBeforeRootPublishM10A(t *testing.T) {
 		{
 			name: "system delta failure",
 			configure: func(input *ColumnPublishPlanInput, calls *[]string) {
+				input.Hooks.BuildRootDelta = func(in ColumnPublishRootDeltaInput) (ColumnManifestRootDelta, error) {
+					*calls = append(*calls, "root_delta")
+					return ColumnManifestRootDelta{
+						RootName:       in.ColumnStore.ManifestRoot.Name,
+						BaseRootID:     in.BaseManifestRootID,
+						StoragePolicy:  in.ColumnStore.ManifestRoot.StoragePolicy,
+						Identity:       in.Manifest.Identity,
+						IdentityRecord: encodeColumnManifestIdentityRecordArray(in.Manifest.Identity),
+					}, nil
+				}
 				input.Hooks.BuildSystemDelta = func(ColumnPublishSystemDeltaInput) error {
 					*calls = append(*calls, "system_delta")
 					return errStage
 				}
 			},
-			wantCalls: "extract,encode_columns,prepare_assets,manifest_encode,closure_validation,system_delta",
+			wantCalls: "extract,encode_columns,prepare_assets,manifest_encode,closure_validation,root_delta,system_delta",
 		},
 	}
 	for _, tt := range tests {
@@ -682,6 +692,50 @@ func TestColumnManifestPublishSystemDeltaUpdatesRootAndMetadataTogetherM10A(t *t
 	}
 	if rawCfg.RecoveryAuthoritativeManifest == nil || *rawCfg.RecoveryAuthoritativeManifest != identity {
 		t.Fatalf("raw recovery-authoritative manifest was not stored normalized: %+v", rawCfg)
+	}
+}
+
+func TestColumnManifestPublishSystemDeltaRejectsInvalidRootIDsM10A(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "events",
+		Options: CollectionOptions{ColumnStore: testColumnStoreConfig(nil)},
+	}); err != nil {
+		t.Fatalf("create column-enabled collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("events")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	planInput := testColumnPublishPlanInputM10A(
+		ColumnManifestIdentity{Generation: 15, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0xabcddcba},
+		testColumnPublishPreparedAssetM10A(),
+	)
+	planInput.BaseManifestRootID = 0
+	plan, err := BuildColumnPublishPlan(planInput)
+	if err != nil {
+		t.Fatalf("BuildColumnPublishPlan: %v", err)
+	}
+
+	for _, rootIDs := range [][]uint64{nil, []uint64{}, []uint64{0}} {
+		iter, err := col.buildColumnManifestPublishSystemDeltaIterator(ColumnManifestPublishSystemDeltaInput{
+			BaseMeta:           col.Meta(),
+			BaseManifestRootID: 0,
+			Plan:               plan,
+		}, rootIDs)
+		if iter != nil {
+			_ = iter.Close()
+			t.Fatalf("rootIDs=%v returned iterator with err=%v", rootIDs, err)
+		}
+		if err == nil {
+			t.Fatalf("rootIDs=%v err=nil, want invalid rootIDs rejection", rootIDs)
+		}
 	}
 }
 
