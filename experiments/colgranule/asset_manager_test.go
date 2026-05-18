@@ -106,11 +106,10 @@ func TestColumnAssetManagerRejectsPublishClosureRequiredBytesOverflow(t *testing
 	if err != nil {
 		t.Fatalf("NewColumnAssetManager: %v", err)
 	}
-	maxInt := int(^uint(0) >> 1)
 	prepared := []ColumnPreparedAsset{
 		{
 			Ref:   ColumnAssetRef{Kind: ColumnAssetKindTCS1PartImage, FileID: 1, Offset: 0, Length: 1, Checksum: 1},
-			Bytes: maxInt,
+			Bytes: maxColumnAssetInt,
 		},
 		{
 			Ref:   ColumnAssetRef{Kind: ColumnAssetKindTCS1PartImage, FileID: 1, Offset: 1, Length: 1, Checksum: 1},
@@ -412,12 +411,60 @@ func TestColumnAssetManagerPublishFailureInvalidatesOlderSyncedClosure(t *testin
 	if err := manager.MarkPublishSucceeded(synced); err == nil || !strings.Contains(err.Error(), "predates a later publish failure") {
 		t.Fatalf("MarkPublishSucceeded after failure err=%v, want stale synced closure rejection", err)
 	}
+	if err := manager.MarkPublishSucceeded(synced); err == nil || !strings.Contains(err.Error(), "predates a later publish failure") {
+		t.Fatalf("second MarkPublishSucceeded after failure err=%v, want stale synced closure rejection", err)
+	}
 	manager.mu.Lock()
 	gotReason, quarantined := manager.quarantine[ref]
 	gotFailedReason, publishFailed := manager.publishFailed[ref]
 	manager.mu.Unlock()
 	if !quarantined || gotReason != "root publish failed" || !publishFailed || gotFailedReason != "root publish failed" {
 		t.Fatalf("manager state quarantine=(%q,%v) publishFailed=(%q,%v), want root publish failed retained", gotReason, quarantined, gotFailedReason, publishFailed)
+	}
+}
+
+func TestColumnAssetManagerDirectQuarantinePreservesFailureProvenanceUntilRetry(t *testing.T) {
+	store := NewMemoryColumnAssetStore()
+	manager, err := NewColumnAssetManager(store)
+	if err != nil {
+		t.Fatalf("NewColumnAssetManager: %v", err)
+	}
+	ref, err := manager.Put(ColumnAssetKindTCS1PartImage, make([]byte, tcs1HeaderBytes+16))
+	if err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	prepared := ColumnPreparedAsset{Ref: ref, GenerationID: 7, PublishID: 11, Reason: "publish staged"}
+	if err := manager.MarkPublishFailed([]ColumnPreparedAsset{prepared}, "root publish failed"); err != nil {
+		t.Fatalf("MarkPublishFailed: %v", err)
+	}
+	if err := manager.Quarantine(ref, "root publish failed"); err != nil {
+		t.Fatalf("Quarantine: %v", err)
+	}
+	manager.mu.Lock()
+	gotFailedReason, publishFailed := manager.publishFailed[ref]
+	_, operatorLocked := manager.operatorLocked[ref]
+	manager.mu.Unlock()
+	if !publishFailed || gotFailedReason != "root publish failed" || !operatorLocked {
+		t.Fatalf("publishFailed=(%q,%v) operatorLocked=%v, want retained root publish failed and operator lock", gotFailedReason, publishFailed, operatorLocked)
+	}
+	closure, err := manager.PreparePublishClosure([]ColumnPreparedAsset{prepared})
+	if err != nil {
+		t.Fatalf("PreparePublishClosure: %v", err)
+	}
+	synced, err := manager.SyncPublishClosure(closure)
+	if err != nil {
+		t.Fatalf("SyncPublishClosure: %v", err)
+	}
+	if err := manager.MarkPublishSucceeded(synced); err != nil {
+		t.Fatalf("MarkPublishSucceeded: %v", err)
+	}
+	manager.mu.Lock()
+	gotQuarantine := manager.quarantine[ref]
+	_, publishFailed = manager.publishFailed[ref]
+	_, operatorLocked = manager.operatorLocked[ref]
+	manager.mu.Unlock()
+	if gotQuarantine != "root publish failed" || publishFailed || !operatorLocked {
+		t.Fatalf("quarantine=%q publishFailed=%v operatorLocked=%v, want operator quarantine retained and failure marker cleared", gotQuarantine, publishFailed, operatorLocked)
 	}
 }
 
@@ -705,7 +752,7 @@ func TestColumnAssetManagerPreparedPublishFailureIsAtomic(t *testing.T) {
 	}
 }
 
-func TestColumnAssetStoreFallbackVerificationReadsFullRef(t *testing.T) {
+func TestColumnAssetStoreFallbackVerificationUsesRangeProbe(t *testing.T) {
 	ref := ColumnAssetRef{
 		Kind:     ColumnAssetKindTCS1PartImage,
 		FileID:   1,
@@ -717,8 +764,8 @@ func TestColumnAssetStoreFallbackVerificationReadsFullRef(t *testing.T) {
 	if err := verifyColumnAssetStoreRef(store, ref); err != nil {
 		t.Fatalf("verifyColumnAssetStoreRef: %v", err)
 	}
-	if store.readToCalls != 1 || store.readRangeCalls != 0 {
-		t.Fatalf("ReadTo/ReadRange calls=(%d,%d) want (1,0)", store.readToCalls, store.readRangeCalls)
+	if store.readToCalls != 0 || store.readRangeCalls != 1 {
+		t.Fatalf("ReadTo/ReadRange calls=(%d,%d) want (0,1)", store.readToCalls, store.readRangeCalls)
 	}
 	badRef := ref
 	badRef.Checksum = 2
@@ -767,5 +814,11 @@ func (s *rangeProbeOnlyStore) ReadRange(ref ColumnAssetRef, offset int64, length
 	if err := validateColumnAssetRef(ref); err != nil {
 		return nil, err
 	}
-	return nil, fmt.Errorf("unexpected range probe offset=%d length=%d", offset, length)
+	if offset != 0 || length != 1 {
+		return nil, fmt.Errorf("unexpected range probe offset=%d length=%d", offset, length)
+	}
+	if ref.Checksum != 1 {
+		return nil, fmt.Errorf("checksum mismatch")
+	}
+	return []byte{0}, nil
 }
