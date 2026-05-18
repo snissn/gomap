@@ -17,6 +17,7 @@ const (
 	// 1/sqrt(norm^2) calculation; this bound allows representation noise while
 	// rejecting materially stale normalization columns.
 	columnVectorGraphInvNormRelTolerance = 1e-4
+	columnVectorGraphOrthogonalDistance  = 1
 )
 
 // ColumnVectorGraphOptions names the columns that back a single-layer ANN graph.
@@ -73,9 +74,11 @@ type ColumnVectorGraph struct {
 }
 
 // ColumnVectorGraphSearchScratch is caller-owned reusable search workspace.
-// It is not safe for concurrent use. Results returned by SearchCosine may alias
-// scratch memory and are invalidated by later SearchCosine calls using the same
-// scratch; callers that need long-lived results should copy them.
+// It is not safe for concurrent use. Parallel searches over the same immutable
+// ColumnVectorGraph are valid only when every worker uses its own scratch.
+// Results returned by SearchCosine may alias scratch memory and are invalidated
+// by later SearchCosine calls using the same scratch; callers that need
+// long-lived results should copy them.
 type ColumnVectorGraphSearchScratch struct {
 	visitedEpochs []uint32
 	visitedEpoch  uint32
@@ -261,7 +264,10 @@ func (g *ColumnVectorGraph) SearchCosine(query []float32, opts ColumnVectorGraph
 		scratch = &ColumnVectorGraphSearchScratch{}
 	}
 
-	candidates, edgesVisited, candidatesExamined := g.searchCandidates(query, queryInvNorm, efSearch, scratch)
+	candidates, edgesVisited, candidatesExamined, err := g.searchCandidates(query, queryInvNorm, efSearch, scratch)
+	if err != nil {
+		return nil, stats, err
+	}
 	stats.CandidatesExamined = candidatesExamined
 	stats.EdgesVisited = edgesVisited
 	resultLimit := opts.TopK
@@ -395,9 +401,12 @@ func columnVectorGraphFinite(value float32) bool {
 	return !math.IsNaN(float64(value)) && !math.IsInf(float64(value), 0)
 }
 
-func (g *ColumnVectorGraph) searchCandidates(query []float32, queryInvNorm float32, limit int, scratch *ColumnVectorGraphSearchScratch) ([]columnVectorGraphCandidate, int, int) {
-	if g.entryOrdinal < 0 || g.entryOrdinal >= len(g.ids) || limit <= 0 {
-		return nil, 0, 0
+func (g *ColumnVectorGraph) searchCandidates(query []float32, queryInvNorm float32, limit int, scratch *ColumnVectorGraphSearchScratch) ([]columnVectorGraphCandidate, int, int, error) {
+	if limit <= 0 {
+		return nil, 0, 0, nil
+	}
+	if g.entryOrdinal < 0 || g.entryOrdinal >= len(g.ids) {
+		return nil, 0, 0, fmt.Errorf("colgranule: column vector graph entry ordinal=%d outside rows=%d", g.entryOrdinal, len(g.ids))
 	}
 	visited, mark := scratch.nextVisitedEpoch(len(g.ids))
 	entry := columnVectorGraphCandidate{
@@ -405,7 +414,7 @@ func (g *ColumnVectorGraph) searchCandidates(query []float32, queryInvNorm float
 		distance: g.cosineDistance(query, queryInvNorm, g.entryOrdinal),
 	}
 	if math.IsInf(float64(entry.distance), 1) {
-		return nil, 0, 1
+		return nil, 0, 1, fmt.Errorf("colgranule: column vector graph entry ordinal=%d has invalid cosine distance", g.entryOrdinal)
 	}
 	visited[entry.ordinal] = mark
 	queue := scratch.queue[:0]
@@ -416,7 +425,7 @@ func (g *ColumnVectorGraph) searchCandidates(query []float32, queryInvNorm float
 	candidatesExamined := 1
 	for len(queue) > 0 {
 		current := queue.pop()
-		if len(best) >= limit && columnVectorGraphCandidateWorse(current, best[0]) {
+		if len(best) >= limit && current.distance > best[0].distance {
 			break
 		}
 		start := int(g.neighborOffsets[current.ordinal])
@@ -436,7 +445,7 @@ func (g *ColumnVectorGraph) searchCandidates(query []float32, queryInvNorm float
 			if math.IsInf(float64(candidate.distance), 1) {
 				continue
 			}
-			if len(best) < limit || columnVectorGraphCandidateLess(candidate, best[0]) {
+			if len(best) < limit || candidate.distance <= best[0].distance {
 				queue.push(candidate)
 				best.pushBounded(candidate, limit)
 			}
@@ -447,7 +456,7 @@ func (g *ColumnVectorGraph) searchCandidates(query []float32, queryInvNorm float
 	out := append(scratch.out[:0], best...)
 	scratch.out = out
 	sortColumnVectorGraphCandidates(out)
-	return out, edgesVisited, candidatesExamined
+	return out, edgesVisited, candidatesExamined, nil
 }
 
 func (g *ColumnVectorGraph) cosineDistance(query []float32, queryInvNorm float32, ordinal int) float32 {
@@ -457,7 +466,13 @@ func (g *ColumnVectorGraph) cosineDistance(query []float32, queryInvNorm float32
 	start := ordinal * g.dims
 	vector := g.vectors[start : start+g.dims]
 	dot := columnVectorGraphDotProductFloat32(query, vector)
-	if dot == 0 || !columnVectorGraphFinite(dot) {
+	if dot == 0 {
+		if columnVectorGraphDotProductFloat64(query, vector) == 0 {
+			return columnVectorGraphOrthogonalDistance
+		}
+		return columnVectorGraphCosineDistanceWide(query, vector, queryInvNorm, g.invNorms[ordinal])
+	}
+	if !columnVectorGraphFinite(dot) {
 		return columnVectorGraphCosineDistanceWide(query, vector, queryInvNorm, g.invNorms[ordinal])
 	}
 	cosine := float64(dot) * float64(queryInvNorm) * float64(g.invNorms[ordinal])
@@ -469,6 +484,14 @@ func (g *ColumnVectorGraph) cosineDistance(query []float32, queryInvNorm float32
 		return columnVectorGraphCosineDistanceWide(query, vector, queryInvNorm, g.invNorms[ordinal])
 	}
 	return float32(distance)
+}
+
+func columnVectorGraphDotProductFloat64(query []float32, vector []float32) float64 {
+	var dot float64
+	for i := range query {
+		dot += float64(query[i]) * float64(vector[i])
+	}
+	return dot
 }
 
 func columnVectorGraphCosineDistanceWide(query []float32, vector []float32, queryInvNorm float32, vectorInvNorm float32) float32 {
@@ -486,10 +509,14 @@ func columnVectorGraphCosineDistanceWide(query []float32, vector []float32, quer
 }
 
 func (scratch *ColumnVectorGraphSearchScratch) nextVisitedEpoch(nodes int) ([]uint32, uint32) {
+	oldLen := len(scratch.visitedEpochs)
 	if cap(scratch.visitedEpochs) < nodes {
 		scratch.visitedEpochs = make([]uint32, nodes, growColumnVectorGraphScratchCapacity(cap(scratch.visitedEpochs), nodes))
 	} else {
 		scratch.visitedEpochs = scratch.visitedEpochs[:nodes]
+		if nodes > oldLen {
+			clear(scratch.visitedEpochs[oldLen:nodes])
+		}
 	}
 	scratch.visitedEpoch++
 	if scratch.visitedEpoch == 0 {
