@@ -9,8 +9,10 @@ import (
 )
 
 const (
-	columnVectorGraphStrategyCosine = "column_graph_cosine"
-	columnVectorGraphMaxUint32      = uint64(^uint32(0))
+	columnVectorGraphStrategyCosine      = "column_graph_cosine"
+	columnVectorGraphMaxUint32           = uint64(^uint32(0))
+	columnVectorGraphInvNormRelTolerance = 1e-4
+	columnVectorGraphOrthogonalDistance  = 1
 )
 
 // ColumnVectorGraphColumns supplies immutable column-store buffers for a
@@ -84,8 +86,11 @@ func NewColumnVectorGraphFromColumns(columns ColumnVectorGraphColumns) (*ColumnV
 	if err != nil {
 		return nil, err
 	}
-	idRanks := columnVectorGraphDocumentIDRanks(columns.DocumentIDs)
-	ordinalTieOrder := columnVectorGraphRanksMatchOrdinals(idRanks)
+	ordinalTieOrder := columnVectorGraphDocumentIDsMatchOrdinalTieOrder(columns.DocumentIDs)
+	var idRanks []uint32
+	if !ordinalTieOrder {
+		idRanks = columnVectorGraphDocumentIDRanks(columns.DocumentIDs)
+	}
 	efSearch := columns.EfSearch
 	if efSearch <= 0 {
 		efSearch = defaultVectorIndexEfSearch
@@ -192,6 +197,9 @@ func (g *ColumnVectorGraph) SearchCosine(query []float32, opts ColumnVectorGraph
 	if rows := g.Rows(); resultLimit > rows {
 		resultLimit = rows
 	}
+	if resultLimit > len(candidates) {
+		resultLimit = len(candidates)
+	}
 	if cap(scratch.results) < resultLimit {
 		scratch.results = make([]VectorSearchResult, 0, resultLimit)
 	}
@@ -290,9 +298,9 @@ func validateColumnVectorGraphInvNorm(row int, invNorm float32, normSquared floa
 	}
 	want := 1 / math.Sqrt(normSquared)
 	diff := math.Abs(f - want)
-	allowed := math.Abs(want) * 1e-4
+	allowed := math.Abs(want) * columnVectorGraphInvNormRelTolerance
 	if diff > allowed {
-		return fmt.Errorf("collections: column vector graph row %d inverse norm=%g want %g", row, invNorm, want)
+		return fmt.Errorf("collections: column vector graph row %d inverse norm=%g want %g diff=%g relative tolerance=%g", row, invNorm, want, diff, columnVectorGraphInvNormRelTolerance)
 	}
 	return nil
 }
@@ -366,9 +374,9 @@ func columnVectorGraphDocumentIDRanks(ids [][]byte) []uint32 {
 	return ranks
 }
 
-func columnVectorGraphRanksMatchOrdinals(ranks []uint32) bool {
-	for ordinal, rank := range ranks {
-		if int(rank) != ordinal {
+func columnVectorGraphDocumentIDsMatchOrdinalTieOrder(ids [][]byte) bool {
+	for ordinal := 1; ordinal < len(ids); ordinal++ {
+		if bytes.Compare(ids[ordinal-1], ids[ordinal]) > 0 {
 			return false
 		}
 	}
@@ -623,7 +631,13 @@ func (g *ColumnVectorGraph) cosineDistance(query []float32, queryInvNorm float32
 	}
 	vector := g.vectorAt(ordinal)
 	dot := vectorDotProductFloat32(query, vector)
-	if dot == 0 || math.IsInf(float64(dot), 0) || math.IsNaN(float64(dot)) {
+	if dot == 0 {
+		if columnVectorGraphDotProductFloat64(query, vector) == 0 {
+			return columnVectorGraphOrthogonalDistance
+		}
+		return columnVectorGraphCosineDistanceWide(query, vector, queryInvNorm, g.invNorms[ordinal])
+	}
+	if math.IsInf(float64(dot), 0) || math.IsNaN(float64(dot)) {
 		return columnVectorGraphCosineDistanceWide(query, vector, queryInvNorm, g.invNorms[ordinal])
 	}
 	cosine := float64(dot) * float64(queryInvNorm) * float64(g.invNorms[ordinal])
@@ -635,6 +649,14 @@ func (g *ColumnVectorGraph) cosineDistance(query []float32, queryInvNorm float32
 		return columnVectorGraphCosineDistanceWide(query, vector, queryInvNorm, g.invNorms[ordinal])
 	}
 	return float32(distance)
+}
+
+func columnVectorGraphDotProductFloat64(left []float32, right []float32) float64 {
+	var dot float64
+	for i := range left {
+		dot += float64(left[i]) * float64(right[i])
+	}
+	return dot
 }
 
 func columnVectorGraphCosineDistanceWide(query []float32, vector []float32, queryInvNorm float32, vectorInvNorm float32) float32 {

@@ -55,6 +55,9 @@ func TestColumnVectorGraphRejectsStaleInvNorm(t *testing.T) {
 	if !strings.Contains(err.Error(), "inverse norm") {
 		t.Fatalf("error=%q want inverse norm validation", err)
 	}
+	if !strings.Contains(err.Error(), "diff=") || !strings.Contains(err.Error(), "relative tolerance=") {
+		t.Fatalf("error=%q want inverse norm diff and relative tolerance", err)
+	}
 }
 
 func TestColumnVectorGraphRejectsLooseTinyInvNorm(t *testing.T) {
@@ -255,6 +258,27 @@ func TestColumnVectorGraphSearchRecomputesTinyDotUnderflow(t *testing.T) {
 	}
 }
 
+func TestColumnVectorGraphCosineDistanceKeepsTrueOrthogonalDotFast(t *testing.T) {
+	graph, err := NewColumnVectorGraphFromColumns(ColumnVectorGraphColumns{
+		DocumentIDs:     [][]byte{[]byte("doc-orthogonal")},
+		Vectors:         []float32{1, 0},
+		InvNorms:        []float32{1},
+		NeighborOffsets: []uint32{0, 0},
+		Dimensions:      2,
+		EntryPoint:      0,
+	})
+	if err != nil {
+		t.Fatalf("NewColumnVectorGraphFromColumns: %v", err)
+	}
+
+	// Directly use an invalid inverse norm sentinel to prove a true zero dot
+	// returns before the wide scaled fallback path can observe scale values.
+	distance := graph.cosineDistance([]float32{0, 1}, float32(math.NaN()), 0)
+	if distance != columnVectorGraphOrthogonalDistance {
+		t.Fatalf("distance=%g want orthogonal distance %g", distance, float32(columnVectorGraphOrthogonalDistance))
+	}
+}
+
 func TestColumnVectorGraphSearchUsesDocumentIDTieOrdering(t *testing.T) {
 	graph, err := NewColumnVectorGraphFromColumns(ColumnVectorGraphColumns{
 		DocumentIDs:     [][]byte{[]byte("doc-z"), []byte("doc-a"), []byte("doc-b")},
@@ -269,6 +293,12 @@ func TestColumnVectorGraphSearchUsesDocumentIDTieOrdering(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewColumnVectorGraphFromColumns: %v", err)
 	}
+	if graph.ordinalTieOrder {
+		t.Fatal("graph stayed on ordinal tie path for out-of-order document IDs")
+	}
+	if len(graph.idRanks) != graph.Rows() {
+		t.Fatalf("idRanks=%d want rows=%d", len(graph.idRanks), graph.Rows())
+	}
 
 	results, _, err := graph.SearchCosine([]float32{1, 0}, ColumnVectorGraphSearchOptions{TopK: 2, EfSearch: 2}, &ColumnVectorGraphSearchScratch{})
 	if err != nil {
@@ -279,6 +309,19 @@ func TestColumnVectorGraphSearchUsesDocumentIDTieOrdering(t *testing.T) {
 	}
 	if !bytes.Equal(results[0].DocumentID, []byte("doc-a")) || !bytes.Equal(results[1].DocumentID, []byte("doc-b")) {
 		t.Fatalf("result IDs=(%q,%q) want (doc-a,doc-b)", results[0].DocumentID, results[1].DocumentID)
+	}
+}
+
+func TestColumnVectorGraphSkipsRankTableForOrdinalDocumentIDs(t *testing.T) {
+	graph, err := NewColumnVectorGraphFromColumns(columnVectorGraphTestColumns(32, 16, 4, false))
+	if err != nil {
+		t.Fatalf("NewColumnVectorGraphFromColumns: %v", err)
+	}
+	if !graph.ordinalTieOrder {
+		t.Fatal("graph did not use ordinal tie path for sorted document IDs")
+	}
+	if graph.idRanks != nil {
+		t.Fatalf("idRanks allocated on ordinal tie path: len=%d", len(graph.idRanks))
 	}
 }
 
@@ -380,8 +423,13 @@ func TestColumnVectorGraphSearchParallelIndependentScratch(t *testing.T) {
 	}
 	wg.Wait()
 	close(errs)
+	failed := false
 	for err := range errs {
-		t.Fatal(err)
+		t.Error(err)
+		failed = true
+	}
+	if failed {
+		t.FailNow()
 	}
 }
 
