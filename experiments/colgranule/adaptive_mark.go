@@ -120,7 +120,7 @@ func EstimateColumnBatchUncompressedBytes(batch ColumnBatch, defs []ColumnDefini
 			total += rows * def.VectorDims * 4
 		case ColumnTypeAdjacencyList:
 			column := batch.AdjacencyLists[def.Name]
-			total += len(column.Offsets)*4 + len(column.Values)*8
+			total += len(column.Offsets)*4 + len(column.Values)*4
 		default:
 			return 0, fmt.Errorf("colgranule: unsupported column type %s for adaptive mark sizing", def.Type)
 		}
