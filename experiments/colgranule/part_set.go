@@ -94,7 +94,7 @@ type ColumnPartSetFloat32VectorScanResult struct {
 type ColumnPartSetAdjacencyListScanResult struct {
 	Rows        int
 	Offsets     []uint32
-	Values      []int64
+	Values      []uint32
 	Diagnostics ColumnPartSetScanDiagnostics
 }
 
@@ -287,11 +287,11 @@ func (r *ColumnPartSetReader) ScanFloat32VectorAtLatestWithScratch(primaryID int
 	return value, true, nil
 }
 
-func (r *ColumnPartSetReader) AdjacencyListAtLatest(primaryID int64, columnName string, dst []int64) ([]int64, bool, error) {
+func (r *ColumnPartSetReader) AdjacencyListAtLatest(primaryID int64, columnName string, dst []uint32) ([]uint32, bool, error) {
 	return r.AdjacencyListAtLatestWithScratch(primaryID, columnName, dst, nil)
 }
 
-func (r *ColumnPartSetReader) AdjacencyListAtLatestWithScratch(primaryID int64, columnName string, dst []int64, scratch *ColumnPartSetPointLookupScratch) ([]int64, bool, error) {
+func (r *ColumnPartSetReader) AdjacencyListAtLatestWithScratch(primaryID int64, columnName string, dst []uint32, scratch *ColumnPartSetPointLookupScratch) ([]uint32, bool, error) {
 	if r == nil {
 		return nil, false, nil
 	}
@@ -306,11 +306,11 @@ func (r *ColumnPartSetReader) AdjacencyListAtLatestWithScratch(primaryID int64, 
 	return value, true, nil
 }
 
-func (r *ColumnPartSetReader) ScanAdjacencyListAtLatest(primaryID int64, columnName string, dst []int64) ([]int64, bool, error) {
+func (r *ColumnPartSetReader) ScanAdjacencyListAtLatest(primaryID int64, columnName string, dst []uint32) ([]uint32, bool, error) {
 	return r.ScanAdjacencyListAtLatestWithScratch(primaryID, columnName, dst, nil)
 }
 
-func (r *ColumnPartSetReader) ScanAdjacencyListAtLatestWithScratch(primaryID int64, columnName string, dst []int64, scratch *ColumnPartSetPointLookupScratch) ([]int64, bool, error) {
+func (r *ColumnPartSetReader) ScanAdjacencyListAtLatestWithScratch(primaryID int64, columnName string, dst []uint32, scratch *ColumnPartSetPointLookupScratch) ([]uint32, bool, error) {
 	ref, ok := r.scanLatestRowRef(primaryID)
 	if !ok {
 		return nil, false, nil
@@ -438,7 +438,7 @@ func (r *ColumnPartSetReader) ScanFloat32VectorsInto(columnName string, dst []fl
 	}, nil
 }
 
-func (r *ColumnPartSetReader) ScanAdjacencyListsInto(columnName string, offsets []uint32, values []int64) (ColumnPartSetAdjacencyListScanResult, error) {
+func (r *ColumnPartSetReader) ScanAdjacencyListsInto(columnName string, offsets []uint32, values []uint32) (ColumnPartSetAdjacencyListScanResult, error) {
 	if r == nil {
 		return ColumnPartSetAdjacencyListScanResult{}, fmt.Errorf("colgranule: nil part set reader")
 	}
@@ -621,7 +621,7 @@ func (r *ColumnPartSetReader) float32VectorAtRowRef(ref columnPartSetRowRef, col
 	return scratch.scanner.Float32VectorAt(ref.Locator, columnName, dst)
 }
 
-func (r *ColumnPartSetReader) adjacencyListAtRowRef(ref columnPartSetRowRef, columnName string, dst []int64, scratch *ColumnPartSetPointLookupScratch) ([]int64, error) {
+func (r *ColumnPartSetReader) adjacencyListAtRowRef(ref columnPartSetRowRef, columnName string, dst []uint32, scratch *ColumnPartSetPointLookupScratch) ([]uint32, error) {
 	if r == nil {
 		return nil, fmt.Errorf("colgranule: nil part set reader")
 	}

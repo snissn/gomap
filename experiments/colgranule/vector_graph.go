@@ -69,7 +69,7 @@ type ColumnVectorGraph struct {
 	vectors          []float32
 	invNorms         []float32
 	neighborOffsets  []uint32
-	neighborOrdinals []int64
+	neighborOrdinals []uint32
 	entryOrdinal     int
 }
 
@@ -226,7 +226,7 @@ func (g *ColumnVectorGraph) NeighborOffsets(dst []uint32) []uint32 {
 }
 
 // NeighborOrdinals appends the CSR adjacency ordinals to dst.
-func (g *ColumnVectorGraph) NeighborOrdinals(dst []int64) []int64 {
+func (g *ColumnVectorGraph) NeighborOrdinals(dst []uint32) []uint32 {
 	if g == nil {
 		return dst
 	}
@@ -309,7 +309,7 @@ func normalizeColumnVectorGraphOptions(opts ColumnVectorGraphOptions) ColumnVect
 	return opts
 }
 
-func validateColumnVectorGraphStorage(vectors []float32, dims int, invNorms []float32, offsets []uint32, neighbors []int64, rows int) error {
+func validateColumnVectorGraphStorage(vectors []float32, dims int, invNorms []float32, offsets []uint32, neighbors []uint32, rows int) error {
 	vectorValues, err := checkedMulInt(rows, dims, "column vector graph values")
 	if err != nil {
 		return err
@@ -357,7 +357,7 @@ func validateColumnVectorGraphStorage(vectors []float32, dims int, invNorms []fl
 		return fmt.Errorf("colgranule: graph final adjacency offset=%d values=%d", prev, len(neighbors))
 	}
 	for edge, neighbor := range neighbors {
-		if neighbor < 0 || neighbor >= int64(rows) {
+		if neighbor >= uint32(rows) {
 			return fmt.Errorf("colgranule: graph edge %d neighbor ordinal=%d outside rows=%d", edge, neighbor, rows)
 		}
 	}

@@ -134,7 +134,7 @@ func TestColumnVectorGraphSearchHandlesOverflowingFloat32Dot(t *testing.T) {
 		vectors:          []float32{1e20, 0, 0, 1e20},
 		invNorms:         []float32{1e-20, 1e-20},
 		neighborOffsets:  []uint32{0, 1, 2},
-		neighborOrdinals: []int64{1, 0},
+		neighborOrdinals: []uint32{1, 0},
 		entryOrdinal:     0,
 	}
 
@@ -177,7 +177,7 @@ func TestColumnVectorGraphSearchHandlesOverflowingScaledCosine(t *testing.T) {
 		vectors:          vectors,
 		invNorms:         []float32{invNorm, invNorm},
 		neighborOffsets:  []uint32{0, 1, 2},
-		neighborOrdinals: []int64{1, 0},
+		neighborOrdinals: []uint32{1, 0},
 		entryOrdinal:     0,
 	}
 
@@ -216,7 +216,7 @@ func TestColumnVectorGraphSearchHandlesUnderflowingFloat32Dot(t *testing.T) {
 		vectors:          []float32{value, -value},
 		invNorms:         []float32{invNorm, invNorm},
 		neighborOffsets:  []uint32{0, 1, 2},
-		neighborOrdinals: []int64{1, 0},
+		neighborOrdinals: []uint32{1, 0},
 		entryOrdinal:     0,
 	}
 
@@ -303,7 +303,7 @@ func TestColumnVectorGraphSearchExploresEqualDistanceBridge(t *testing.T) {
 		vectors:          []float32{1, 1, 1},
 		invNorms:         []float32{1, 1, 1},
 		neighborOffsets:  []uint32{0, 0, 1, 2},
-		neighborOrdinals: []int64{2, 0},
+		neighborOrdinals: []uint32{2, 0},
 		entryOrdinal:     1,
 	}
 
@@ -511,7 +511,7 @@ func columnVectorGraphTestBatch(rows int, dims int, degree int, complete bool) C
 	vectors := make([]float32, rows*dims)
 	invNorms := make([]float32, rows)
 	offsets := make([]uint32, rows+1)
-	neighbors := make([]int64, 0, rows*maxColumnVectorGraphDegree(rows, degree, complete))
+	neighbors := make([]uint32, 0, rows*maxColumnVectorGraphDegree(rows, degree, complete))
 	for row := 0; row < rows; row++ {
 		ids[row] = int64(row)
 		var normSquared float64
@@ -525,7 +525,7 @@ func columnVectorGraphTestBatch(rows int, dims int, degree int, complete bool) C
 		if complete {
 			for neighbor := 0; neighbor < rows; neighbor++ {
 				if neighbor != row {
-					neighbors = append(neighbors, int64(neighbor))
+					neighbors = append(neighbors, uint32(neighbor))
 				}
 			}
 			continue
@@ -540,7 +540,7 @@ func columnVectorGraphTestBatch(rows int, dims int, degree int, complete bool) C
 			if neighbor < 0 {
 				neighbor += rows
 			}
-			neighbors = append(neighbors, int64(neighbor))
+			neighbors = append(neighbors, uint32(neighbor))
 		}
 	}
 	offsets[rows] = uint32(len(neighbors))

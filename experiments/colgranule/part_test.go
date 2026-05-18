@@ -222,3 +222,10 @@ func assertInt64s(t *testing.T, name string, got []int64, want []int64) {
 		t.Fatalf("%s=%v want %v", name, got, want)
 	}
 }
+
+func assertUint32s(t *testing.T, name string, got []uint32, want []uint32) {
+	t.Helper()
+	if !slices.Equal(got, want) {
+		t.Fatalf("%s=%v want %v", name, got, want)
+	}
+}

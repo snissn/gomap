@@ -621,7 +621,7 @@ func maxDecodedBlockRawBytes(columnType ColumnType, cardinality uint32, vectorDi
 		}
 		return checkedMulInt(values, 4, "float32 vector raw bytes")
 	case ColumnTypeAdjacencyList:
-		if encoding != EncodingRawInt64AdjacencyList {
+		if encoding != EncodingRawUint32AdjacencyList {
 			return 0, fmt.Errorf("unsupported adjacency-list encoding %d", encoding)
 		}
 		return int(^uint(0) >> 1), nil

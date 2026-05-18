@@ -41,7 +41,7 @@ func TestColumnPartBuildsFloat32VectorAndAdjacencyColumns(t *testing.T) {
 	if !slices.Equal(neighbors.Offsets, []uint32{0, 1, 4, 6, 8, 8}) {
 		t.Fatalf("neighbors offsets=%v", neighbors.Offsets)
 	}
-	assertInt64s(t, "neighbors", neighbors.Values, []int64{11, 21, 22, 23, 31, 32, 41, 42})
+	assertUint32s(t, "neighbors", neighbors.Values, []uint32{11, 21, 22, 23, 31, 32, 41, 42})
 
 	locator, ok := part.LocatePrimaryID(4)
 	if !ok {
@@ -56,7 +56,7 @@ func TestColumnPartBuildsFloat32VectorAndAdjacencyColumns(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AdjacencyListAt: %v", err)
 	}
-	assertInt64s(t, "point neighbors", pointNeighbors, []int64{41, 42})
+	assertUint32s(t, "point neighbors", pointNeighbors, []uint32{41, 42})
 }
 
 func TestColumnPartVectorColumnsSurviveImageRoundTrip(t *testing.T) {
@@ -99,7 +99,7 @@ func TestColumnPartVectorColumnsSurviveImageRoundTrip(t *testing.T) {
 	if !slices.Equal(neighbors.Offsets, []uint32{0, 1, 4, 6, 8, 8}) {
 		t.Fatalf("image neighbors offsets=%v", neighbors.Offsets)
 	}
-	assertInt64s(t, "image neighbors", neighbors.Values, []int64{11, 21, 22, 23, 31, 32, 41, 42})
+	assertUint32s(t, "image neighbors", neighbors.Values, []uint32{11, 21, 22, 23, 31, 32, 41, 42})
 }
 
 func TestColumnPartVectorColumnsValidateShape(t *testing.T) {
@@ -114,7 +114,7 @@ func TestColumnPartVectorColumnsValidateShape(t *testing.T) {
 	batch = vectorPartTestBatch()
 	batch.AdjacencyLists["neighbors"] = AdjacencyListColumn{
 		Offsets: []uint32{0, 1, 3, 3, 4, 6},
-		Values:  []int64{11, 21, 22, 41, 42},
+		Values:  []uint32{11, 21, 22, 41, 42},
 	}
 	_, err = BuildColumnPart(1, opts, batch)
 	if err == nil || !strings.Contains(err.Error(), "final offset=6 values=5") {
@@ -142,7 +142,7 @@ func TestColumnMutationAdapterMergesVectorAndAdjacencyBatches(t *testing.T) {
 		AdjacencyLists: map[string]AdjacencyListColumn{
 			"neighbors": {
 				Offsets: []uint32{0, 2, 3},
-				Values:  []int64{31, 32, 11},
+				Values:  []uint32{31, 32, 11},
 			},
 		},
 	}
@@ -160,7 +160,7 @@ func TestColumnMutationAdapterMergesVectorAndAdjacencyBatches(t *testing.T) {
 		AdjacencyLists: map[string]AdjacencyListColumn{
 			"neighbors": {
 				Offsets: []uint32{0, 2},
-				Values:  []int64{21, 22},
+				Values:  []uint32{21, 22},
 			},
 		},
 	}
@@ -193,7 +193,7 @@ func TestColumnMutationAdapterMergesVectorAndAdjacencyBatches(t *testing.T) {
 	if !slices.Equal(neighbors.Offsets, []uint32{0, 1, 3, 5}) {
 		t.Fatalf("merged neighbor offsets=%v", neighbors.Offsets)
 	}
-	assertInt64s(t, "merged neighbors", neighbors.Values, []int64{11, 21, 22, 31, 32})
+	assertUint32s(t, "merged neighbors", neighbors.Values, []uint32{11, 21, 22, 31, 32})
 }
 
 func TestColumnPartSetCompactionPreservesVectorAndAdjacencyColumns(t *testing.T) {
@@ -226,7 +226,7 @@ func TestColumnPartSetCompactionPreservesVectorAndAdjacencyColumns(t *testing.T)
 				"embedding": {Dims: 3, Values: []float32{60, 61, 62}},
 			},
 			AdjacencyLists: map[string]AdjacencyListColumn{
-				"neighbors": {Offsets: []uint32{0, 3}, Values: []int64{61, 62, 63}},
+				"neighbors": {Offsets: []uint32{0, 3}, Values: []uint32{61, 62, 63}},
 			},
 		},
 		Updates: ColumnBatch{
@@ -238,7 +238,7 @@ func TestColumnPartSetCompactionPreservesVectorAndAdjacencyColumns(t *testing.T)
 				"embedding": {Dims: 3, Values: []float32{200, 201, 202}},
 			},
 			AdjacencyLists: map[string]AdjacencyListColumn{
-				"neighbors": {Offsets: []uint32{0, 2}, Values: []int64{2001, 2002}},
+				"neighbors": {Offsets: []uint32{0, 2}, Values: []uint32{2001, 2002}},
 			},
 		},
 		Deletes:                 []int64{3},
@@ -289,14 +289,14 @@ func TestColumnPartSetCompactionPreservesVectorAndAdjacencyColumns(t *testing.T)
 	if !slices.Equal(neighbors.Offsets, []uint32{0, 1, 3, 5, 5, 8}) {
 		t.Fatalf("compacted adjacency offsets=%v", neighbors.Offsets)
 	}
-	assertInt64s(t, "compacted neighbors", neighbors.Values, []int64{11, 2001, 2002, 41, 42, 61, 62, 63})
+	assertUint32s(t, "compacted neighbors", neighbors.Values, []uint32{11, 2001, 2002, 41, 42, 61, 62, 63})
 }
 
 func BenchmarkColumnPartVectorAdjacencyBuild(b *testing.B) {
 	opts := vectorPartBenchmarkOptions(8192, 128)
 	batch := vectorPartBenchmarkBatch(8192, 128, 16)
 	b.ReportAllocs()
-	b.SetBytes(int64(8192*128*4 + 8192*16*8))
+	b.SetBytes(int64(8192*128*4 + 8192*16*4))
 	for i := 0; i < b.N; i++ {
 		part, err := BuildColumnPart(uint64(i+1), opts, batch)
 		if err != nil {
@@ -347,7 +347,7 @@ func BenchmarkColumnPartAdjacencyScan(b *testing.B) {
 	offsets := warm.Offsets
 	values := warm.Values
 	b.ReportAllocs()
-	b.SetBytes(int64(len(values) * 8))
+	b.SetBytes(int64(len(values) * 4))
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		scan, err := scanner.ScanAdjacencyListsInto("neighbors", offsets, values)
@@ -408,7 +408,7 @@ func BenchmarkColumnPartAdjacencyPointLookup(b *testing.B) {
 	}
 	scratch := warm
 	b.ReportAllocs()
-	b.SetBytes(int64(len(scratch) * 8))
+	b.SetBytes(int64(len(scratch) * 4))
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		neighbors, err := scanner.AdjacencyListAt(locator, "neighbors", scratch)
@@ -416,7 +416,7 @@ func BenchmarkColumnPartAdjacencyPointLookup(b *testing.B) {
 			b.Fatalf("AdjacencyListAt: %v", err)
 		}
 		scratch = neighbors
-		benchSink += neighbors[0]
+		benchSink += int64(neighbors[0])
 	}
 }
 
@@ -455,7 +455,7 @@ func vectorPartTestBatch() ColumnBatch {
 		AdjacencyLists: map[string]AdjacencyListColumn{
 			"neighbors": {
 				Offsets: []uint32{0, 2, 3, 6, 6, 8},
-				Values:  []int64{31, 32, 11, 21, 22, 23, 41, 42},
+				Values:  []uint32{31, 32, 11, 21, 22, 23, 41, 42},
 			},
 		},
 	}
@@ -483,7 +483,7 @@ func vectorPartBenchmarkBatch(rows int, dims int, degree int) ColumnBatch {
 	ids := make([]int64, rows)
 	vectors := make([]float32, rows*dims)
 	offsets := make([]uint32, rows+1)
-	neighbors := make([]int64, rows*degree)
+	neighbors := make([]uint32, rows*degree)
 	for row := 0; row < rows; row++ {
 		ids[row] = int64(row)
 		for dim := 0; dim < dims; dim++ {
@@ -491,7 +491,7 @@ func vectorPartBenchmarkBatch(rows int, dims int, degree int) ColumnBatch {
 		}
 		offsets[row] = uint32(row * degree)
 		for edge := 0; edge < degree; edge++ {
-			neighbors[row*degree+edge] = int64((row + edge + 1) % rows)
+			neighbors[row*degree+edge] = uint32((row + edge + 1) % rows)
 		}
 	}
 	offsets[rows] = uint32(len(neighbors))

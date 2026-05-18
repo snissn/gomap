@@ -14,7 +14,7 @@ type Float32VectorColumn struct {
 
 type AdjacencyListColumn struct {
 	Offsets []uint32
-	Values  []int64
+	Values  []uint32
 }
 
 func (b *GranuleBuilder) BuildFloat32Vectors(values []float32, dims int) (EncodedGranule, error) {
@@ -54,33 +54,33 @@ func (r *GranuleReader) DecodeFloat32VectorsInto(dst []float32, g EncodedGranule
 	return values, nil
 }
 
-func (b *GranuleBuilder) BuildInt64AdjacencyLists(offsets []uint32, values []int64) (EncodedGranule, error) {
+func (b *GranuleBuilder) BuildUint32AdjacencyLists(offsets []uint32, values []uint32) (EncodedGranule, error) {
 	rows, err := validateAdjacencyListValues(offsets, values)
 	if err != nil {
 		return EncodedGranule{}, err
 	}
-	raw, err := encodeInt64AdjacencyListPayload(b.raw[:0], offsets, values)
+	raw, err := encodeUint32AdjacencyListPayload(b.raw[:0], offsets, values)
 	if err != nil {
 		return EncodedGranule{}, err
 	}
 	b.raw = raw
-	selection, err := admitCompressionInto(b.compressed[:0], raw, EncodingRawInt64AdjacencyList, b.cfg.Compression)
+	selection, err := admitCompressionInto(b.compressed[:0], raw, EncodingRawUint32AdjacencyList, b.cfg.Compression)
 	if err != nil {
 		return EncodedGranule{}, err
 	}
 	b.compressed = selection.Scratch
-	return newEncodedGranule(rows, 0, 0, false, EncodingRawInt64AdjacencyList, selection), nil
+	return newEncodedGranule(rows, 0, 0, false, EncodingRawUint32AdjacencyList, selection), nil
 }
 
-func (r *GranuleReader) DecodeInt64AdjacencyListsInto(offsetDst []uint32, valueDst []int64, g EncodedGranule) ([]uint32, []int64, error) {
-	if g.Encoding != EncodingRawInt64AdjacencyList {
+func (r *GranuleReader) DecodeUint32AdjacencyListsInto(offsetDst []uint32, valueDst []uint32, g EncodedGranule) ([]uint32, []uint32, error) {
+	if g.Encoding != EncodingRawUint32AdjacencyList {
 		return nil, nil, fmt.Errorf("colgranule: adjacency-list decode got encoding %d", g.Encoding)
 	}
 	raw, err := r.decompressPayload(g)
 	if err != nil {
 		return nil, nil, err
 	}
-	offsets, values, err := decodeInt64AdjacencyListPayload(offsetDst, valueDst, raw, g.Rows)
+	offsets, values, err := decodeUint32AdjacencyListPayload(offsetDst, valueDst, raw, g.Rows)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -164,7 +164,7 @@ func decodeFloat32VectorRowInto(dst []float32, raw []byte, rows int, dims int, r
 	return out, nil
 }
 
-func validateAdjacencyListValues(offsets []uint32, values []int64) (int, error) {
+func validateAdjacencyListValues(offsets []uint32, values []uint32) (int, error) {
 	if len(offsets) < 2 {
 		return 0, errors.New("colgranule: adjacency list requires rows+1 offsets")
 	}
@@ -187,12 +187,12 @@ func validateAdjacencyListValues(offsets []uint32, values []int64) (int, error) 
 	return len(offsets) - 1, nil
 }
 
-func encodeInt64AdjacencyListPayload(dst []byte, offsets []uint32, values []int64) ([]byte, error) {
+func encodeUint32AdjacencyListPayload(dst []byte, offsets []uint32, values []uint32) ([]byte, error) {
 	offsetBytes, err := checkedMulInt(len(offsets), 4, "adjacency offset bytes")
 	if err != nil {
 		return nil, err
 	}
-	valueBytes, err := checkedMulInt(len(values), 8, "adjacency value bytes")
+	valueBytes, err := checkedMulInt(len(values), 4, "adjacency value bytes")
 	if err != nil {
 		return nil, err
 	}
@@ -210,12 +210,12 @@ func encodeInt64AdjacencyListPayload(dst []byte, offsets []uint32, values []int6
 	}
 	valueStart := offsetBytes
 	for i, value := range values {
-		binary.LittleEndian.PutUint64(dst[valueStart+i*8:], uint64(value))
+		binary.LittleEndian.PutUint32(dst[valueStart+i*4:], value)
 	}
 	return dst, nil
 }
 
-func decodeInt64AdjacencyListPayload(offsetDst []uint32, valueDst []int64, raw []byte, rows int) ([]uint32, []int64, error) {
+func decodeUint32AdjacencyListPayload(offsetDst []uint32, valueDst []uint32, raw []byte, rows int) ([]uint32, []uint32, error) {
 	if rows <= 0 {
 		return nil, nil, fmt.Errorf("colgranule: invalid adjacency rows %d", rows)
 	}
@@ -232,7 +232,7 @@ func decodeInt64AdjacencyListPayload(offsetDst []uint32, valueDst []int64, raw [
 		offsets[i] = binary.LittleEndian.Uint32(raw[i*4:])
 	}
 	valueCount := int(offsets[len(offsets)-1])
-	valueBytes, err := checkedMulInt(valueCount, 8, "adjacency value bytes")
+	valueBytes, err := checkedMulInt(valueCount, 4, "adjacency value bytes")
 	if err != nil {
 		return nil, nil, err
 	}
@@ -243,10 +243,10 @@ func decodeInt64AdjacencyListPayload(offsetDst []uint32, valueDst []int64, raw [
 	if len(raw) != need {
 		return nil, nil, fmt.Errorf("colgranule: adjacency raw bytes=%d want=%d", len(raw), need)
 	}
-	values := ensureInt64Len(valueDst, valueCount)
+	values := ensureUint32Len(valueDst, valueCount)
 	valueRaw := raw[offsetBytes:]
 	for i := range values {
-		values[i] = int64(binary.LittleEndian.Uint64(valueRaw[i*8:]))
+		values[i] = binary.LittleEndian.Uint32(valueRaw[i*4:])
 	}
 	if _, err := validateAdjacencyListValues(offsets, values); err != nil {
 		return nil, nil, err
@@ -254,7 +254,7 @@ func decodeInt64AdjacencyListPayload(offsetDst []uint32, valueDst []int64, raw [
 	return offsets, values, nil
 }
 
-func decodeInt64AdjacencyListRowInto(dst []int64, raw []byte, rows int, row int) ([]int64, error) {
+func decodeUint32AdjacencyListRowInto(dst []uint32, raw []byte, rows int, row int) ([]uint32, error) {
 	if rows <= 0 {
 		return nil, fmt.Errorf("colgranule: invalid adjacency rows %d", rows)
 	}
@@ -275,7 +275,7 @@ func decodeInt64AdjacencyListRowInto(dst []int64, raw []byte, rows int, row int)
 	if start > end || end > final {
 		return nil, fmt.Errorf("colgranule: invalid adjacency row offsets start=%d end=%d final=%d", start, end, final)
 	}
-	valueBytes, err := checkedMulInt(int(final), 8, "adjacency value bytes")
+	valueBytes, err := checkedMulInt(int(final), 4, "adjacency value bytes")
 	if err != nil {
 		return nil, err
 	}
@@ -286,10 +286,10 @@ func decodeInt64AdjacencyListRowInto(dst []int64, raw []byte, rows int, row int)
 	if len(raw) != need {
 		return nil, fmt.Errorf("colgranule: adjacency raw bytes=%d want=%d", len(raw), need)
 	}
-	out := ensureInt64Len(dst, int(end-start))
+	out := ensureUint32Len(dst, int(end-start))
 	valueRaw := raw[offsetBytes:]
 	for i := range out {
-		out[i] = int64(binary.LittleEndian.Uint64(valueRaw[(int(start)+i)*8:]))
+		out[i] = binary.LittleEndian.Uint32(valueRaw[(int(start)+i)*4:])
 	}
 	return out, nil
 }

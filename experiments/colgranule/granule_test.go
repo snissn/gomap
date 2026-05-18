@@ -235,8 +235,29 @@ func TestUnsupportedCodecIDsFailClosed(t *testing.T) {
 	if _, err := DecodeInt64(nil, badCompression); err == nil {
 		t.Fatal("DecodeInt64 with bad compression succeeded, want error")
 	}
-	if _, err := EncodeInt64(nil, []int64{1, 2, 3}, Config{Encoding: EncodingRawInt64, Compression: CompressionZSTD}); err == nil {
-		t.Fatal("EncodeInt64 with unsupported zstd succeeded, want error")
+}
+
+func TestZSTDCompressionAdmissionRoundTrip(t *testing.T) {
+	values := make([]int64, 8192)
+	for i := range values {
+		values[i] = int64(i % 8)
+	}
+	g, err := EncodeInt64(nil, values, Config{Encoding: EncodingRawInt64, Compression: CompressionZSTD})
+	if err != nil {
+		t.Fatalf("EncodeInt64(zstd): %v", err)
+	}
+	if g.CodecReport.RequestedCompression != CompressionZSTD || !g.CodecReport.CompressionAttempted {
+		t.Fatalf("codec report did not record zstd attempt: %+v", g.CodecReport)
+	}
+	if g.Compression != CompressionZSTD {
+		t.Fatalf("zstd admission compression=%s want zstd; report=%+v", g.Compression, g.CodecReport)
+	}
+	got, err := DecodeInt64(nil, g)
+	if err != nil {
+		t.Fatalf("DecodeInt64(zstd): %v", err)
+	}
+	if !slices.Equal(got, values) {
+		t.Fatal("DecodeInt64(zstd) did not round-trip values")
 	}
 }
 

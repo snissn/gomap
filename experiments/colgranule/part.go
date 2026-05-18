@@ -170,7 +170,7 @@ type ColumnPartBuilder struct {
 	bools       []bool
 	vectors32   []float32
 	listOffsets []uint32
-	listValues  []int64
+	listValues  []uint32
 	builder     *GranuleBuilder
 }
 
@@ -275,8 +275,8 @@ type ColumnPartScanner struct {
 	scratch     []int64
 	vectors32   []float32
 	listOffsets []uint32
-	listValues  []int64
-	listScratch []int64
+	listValues  []uint32
+	listScratch []uint32
 }
 
 type ProjectedScanResult struct {
@@ -295,7 +295,7 @@ type Float32VectorScanResult struct {
 type AdjacencyListScanResult struct {
 	Rows        int
 	Offsets     []uint32
-	Values      []int64
+	Values      []uint32
 	Diagnostics PartScanDiagnostics
 }
 
@@ -420,7 +420,7 @@ func (s *ColumnPartScanner) Float32VectorAt(locator RowLocator, columnName strin
 	return nil, fmt.Errorf("colgranule: locator row %d outside column %s", locator.PartRow, columnName)
 }
 
-func (s *ColumnPartScanner) AdjacencyListAt(locator RowLocator, columnName string, dst []int64) ([]int64, error) {
+func (s *ColumnPartScanner) AdjacencyListAt(locator RowLocator, columnName string, dst []uint32) ([]uint32, error) {
 	if s.part == nil {
 		return nil, errors.New("colgranule: nil part scanner")
 	}
@@ -444,9 +444,9 @@ func (s *ColumnPartScanner) AdjacencyListAt(locator RowLocator, columnName strin
 			if err != nil {
 				return nil, err
 			}
-			return decodeInt64AdjacencyListRowInto(dst[:0], raw, block.Descriptor.RowCount, row)
+			return decodeUint32AdjacencyListRowInto(dst[:0], raw, block.Descriptor.RowCount, row)
 		}
-		offsets, values, err := s.reader.DecodeInt64AdjacencyListsInto(s.listOffsets[:0], s.listValues[:0], block.Granule)
+		offsets, values, err := s.reader.DecodeUint32AdjacencyListsInto(s.listOffsets[:0], s.listValues[:0], block.Granule)
 		if err != nil {
 			return nil, err
 		}
@@ -454,7 +454,7 @@ func (s *ColumnPartScanner) AdjacencyListAt(locator RowLocator, columnName strin
 		s.listValues = values
 		start := int(offsets[row])
 		end := int(offsets[row+1])
-		out := ensureInt64Len(dst[:0], end-start)
+		out := ensureUint32Len(dst[:0], end-start)
 		copy(out, values[start:end])
 		return out, nil
 	}
@@ -477,7 +477,7 @@ func (s *ColumnPartScanner) ScanFloat32VectorsInto(columnName string, dst []floa
 	}, nil
 }
 
-func (s *ColumnPartScanner) ScanAdjacencyListsInto(columnName string, offsets []uint32, values []int64) (AdjacencyListScanResult, error) {
+func (s *ColumnPartScanner) ScanAdjacencyListsInto(columnName string, offsets []uint32, values []uint32) (AdjacencyListScanResult, error) {
 	if s.part == nil {
 		return AdjacencyListScanResult{}, errors.New("colgranule: nil part scanner")
 	}
@@ -558,7 +558,7 @@ func (s *ColumnPartScanner) scanFloat32VectorColumnInto(name string, dst []float
 	return out, dims, diagnostics, nil
 }
 
-func (s *ColumnPartScanner) scanAdjacencyListColumnInto(name string, offsetDst []uint32, valueDst []int64) ([]uint32, []int64, PartScanDiagnostics, error) {
+func (s *ColumnPartScanner) scanAdjacencyListColumnInto(name string, offsetDst []uint32, valueDst []uint32) ([]uint32, []uint32, PartScanDiagnostics, error) {
 	column, ok := s.part.Columns[name]
 	if !ok {
 		return nil, nil, PartScanDiagnostics{}, fmt.Errorf("colgranule: missing column %s", name)
@@ -571,7 +571,7 @@ func (s *ColumnPartScanner) scanAdjacencyListColumnInto(name string, offsetDst [
 	outValues := valueDst[:0]
 	var diagnostics PartScanDiagnostics
 	for _, block := range column.Blocks {
-		offsets, values, err := s.reader.DecodeInt64AdjacencyListsInto(s.listOffsets[:0], s.listValues[:0], block.Granule)
+		offsets, values, err := s.reader.DecodeUint32AdjacencyListsInto(s.listOffsets[:0], s.listValues[:0], block.Granule)
 		if err != nil {
 			return nil, nil, diagnostics, err
 		}
@@ -750,7 +750,7 @@ func appendFloat32VectorRowsFromRaw(out []float32, write int, raw []byte, blockR
 	return write, nil
 }
 
-func (s *ColumnPartScanner) scanAdjacencyListRowsInto(name string, offsetDst []uint32, valueDst []int64, rows []int) ([]uint32, []int64, PartScanDiagnostics, error) {
+func (s *ColumnPartScanner) scanAdjacencyListRowsInto(name string, offsetDst []uint32, valueDst []uint32, rows []int) ([]uint32, []uint32, PartScanDiagnostics, error) {
 	column, ok := s.part.Columns[name]
 	if !ok {
 		return nil, nil, PartScanDiagnostics{}, fmt.Errorf("colgranule: missing column %s", name)
@@ -795,7 +795,7 @@ func (s *ColumnPartScanner) scanAdjacencyListRowsInto(name string, offsetDst []u
 				return nil, nil, diagnostics, appendErr
 			}
 		} else {
-			offsets, values, err := s.reader.DecodeInt64AdjacencyListsInto(s.listOffsets[:0], s.listValues[:0], block.Granule)
+			offsets, values, err := s.reader.DecodeUint32AdjacencyListsInto(s.listOffsets[:0], s.listValues[:0], block.Granule)
 			if err != nil {
 				return nil, nil, diagnostics, err
 			}
@@ -826,7 +826,7 @@ func (s *ColumnPartScanner) scanAdjacencyListRowsInto(name string, offsetDst []u
 	return outOffsets, outValues, diagnostics, nil
 }
 
-func appendAdjacencyRowsFromRaw(offsetDst []uint32, valueDst []int64, raw []byte, blockRows int, rows []int, first int) ([]uint32, []int64, error) {
+func appendAdjacencyRowsFromRaw(offsetDst []uint32, valueDst []uint32, raw []byte, blockRows int, rows []int, first int) ([]uint32, []uint32, error) {
 	offsetCount := blockRows + 1
 	offsetBytes, err := checkedMulInt(offsetCount, 4, "adjacency offset bytes")
 	if err != nil {
@@ -836,7 +836,7 @@ func appendAdjacencyRowsFromRaw(offsetDst []uint32, valueDst []int64, raw []byte
 		return nil, nil, fmt.Errorf("colgranule: adjacency raw bytes=%d below offsets=%d", len(raw), offsetBytes)
 	}
 	final := binary.LittleEndian.Uint32(raw[blockRows*4:])
-	valueBytes, err := checkedMulInt(int(final), 8, "adjacency value bytes")
+	valueBytes, err := checkedMulInt(int(final), 4, "adjacency value bytes")
 	if err != nil {
 		return nil, nil, err
 	}
@@ -859,7 +859,7 @@ func appendAdjacencyRowsFromRaw(offsetDst []uint32, valueDst []int64, raw []byte
 			return nil, nil, fmt.Errorf("colgranule: invalid adjacency row offsets start=%d end=%d final=%d", start, end, final)
 		}
 		for i := int(start); i < int(end); i++ {
-			valueDst = append(valueDst, int64(binary.LittleEndian.Uint64(valueRaw[i*8:])))
+			valueDst = append(valueDst, binary.LittleEndian.Uint32(valueRaw[i*4:]))
 		}
 		if len(valueDst) > math.MaxUint32 {
 			return nil, nil, fmt.Errorf("colgranule: adjacency visible scan values=%d exceed uint32 offsets", len(valueDst))
@@ -1040,7 +1040,7 @@ func normalizeColumnDefinition(def ColumnDefinition, defaultCompression Compress
 		if def.VectorDims != 0 {
 			return ColumnDefinition{}, fmt.Errorf("colgranule: adjacency column %s has vector dims %d", def.Name, def.VectorDims)
 		}
-		def.Encoding = EncodingRawInt64AdjacencyList
+		def.Encoding = EncodingRawUint32AdjacencyList
 		def.Cardinality = 0
 	default:
 		return ColumnDefinition{}, fmt.Errorf("colgranule: unsupported column type %s for %s", def.Type, def.Name)
@@ -1314,7 +1314,7 @@ func (b *ColumnPartBuilder) buildAdjacencyListBlockGranule(source AdjacencyListC
 		}
 		b.listOffsets[row-start+1] = uint32(len(b.listValues))
 	}
-	return b.builder.BuildInt64AdjacencyLists(b.listOffsets, b.listValues)
+	return b.builder.BuildUint32AdjacencyLists(b.listOffsets, b.listValues)
 }
 
 func exclusiveInt64Upper(v int64) int64 {

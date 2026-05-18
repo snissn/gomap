@@ -35,7 +35,7 @@ func TestColumnPartSetVectorAdjacencyVisibilityAndCompaction(t *testing.T) {
 				"embedding": {Dims: 3, Values: []float32{60, 61, 62}},
 			},
 			AdjacencyLists: map[string]AdjacencyListColumn{
-				"neighbors": {Offsets: []uint32{0, 3}, Values: []int64{61, 62, 63}},
+				"neighbors": {Offsets: []uint32{0, 3}, Values: []uint32{61, 62, 63}},
 			},
 		},
 		Updates: ColumnBatch{
@@ -47,7 +47,7 @@ func TestColumnPartSetVectorAdjacencyVisibilityAndCompaction(t *testing.T) {
 				"embedding": {Dims: 3, Values: []float32{200, 201, 202}},
 			},
 			AdjacencyLists: map[string]AdjacencyListColumn{
-				"neighbors": {Offsets: []uint32{0, 2}, Values: []int64{2001, 2002}},
+				"neighbors": {Offsets: []uint32{0, 2}, Values: []uint32{2001, 2002}},
 			},
 		},
 		Deletes:                 []int64{3},
@@ -76,7 +76,7 @@ func TestColumnPartSetVectorAdjacencyVisibilityAndCompaction(t *testing.T) {
 			60, 61, 62,
 		},
 		[]uint32{0, 1, 3, 3, 5, 8},
-		[]int64{11, 41, 42, 2001, 2002, 61, 62, 63},
+		[]uint32{11, 41, 42, 2001, 2002, 61, 62, 63},
 	)
 	vector, ok, err := reader.Float32VectorAtLatest(2, "embedding", nil)
 	if err != nil {
@@ -93,7 +93,7 @@ func TestColumnPartSetVectorAdjacencyVisibilityAndCompaction(t *testing.T) {
 	if !ok {
 		t.Fatal("inserted id 6 missing latest adjacency")
 	}
-	assertInt64s(t, "inserted adjacency", neighbors, []int64{61, 62, 63})
+	assertUint32s(t, "inserted adjacency", neighbors, []uint32{61, 62, 63})
 	if _, ok, err := reader.Float32VectorAtLatest(3, "embedding", nil); err != nil || ok {
 		t.Fatalf("deleted id 3 latest vector ok=%v err=%v", ok, err)
 	}
@@ -129,11 +129,11 @@ func TestColumnPartSetVectorAdjacencyVisibilityAndCompaction(t *testing.T) {
 			60, 61, 62,
 		},
 		[]uint32{0, 1, 3, 5, 5, 8},
-		[]int64{11, 2001, 2002, 41, 42, 61, 62, 63},
+		[]uint32{11, 2001, 2002, 41, 42, 61, 62, 63},
 	)
 }
 
-func assertVectorPartSetSnapshot(t *testing.T, reader *ColumnPartSetReader, wantIDs []int64, wantVectors []float32, wantNeighborOffsets []uint32, wantNeighbors []int64) {
+func assertVectorPartSetSnapshot(t *testing.T, reader *ColumnPartSetReader, wantIDs []int64, wantVectors []float32, wantNeighborOffsets []uint32, wantNeighbors []uint32) {
 	t.Helper()
 	ids, err := reader.ScanProjected([]string{"id"})
 	if err != nil {
@@ -158,7 +158,7 @@ func assertVectorPartSetSnapshot(t *testing.T, reader *ColumnPartSetReader, want
 	if !slices.Equal(neighbors.Offsets, wantNeighborOffsets) {
 		t.Fatalf("adjacency offsets=%v want %v", neighbors.Offsets, wantNeighborOffsets)
 	}
-	assertInt64s(t, "part-set neighbors", neighbors.Values, wantNeighbors)
+	assertUint32s(t, "part-set neighbors", neighbors.Values, wantNeighbors)
 }
 
 func BenchmarkColumnPartSetVectorScan(b *testing.B) {
@@ -190,7 +190,7 @@ func BenchmarkColumnPartSetAdjacencyScan(b *testing.B) {
 	offsets := warm.Offsets
 	values := warm.Values
 	b.ReportAllocs()
-	b.SetBytes(int64(len(values) * 8))
+	b.SetBytes(int64(len(values) * 4))
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		scan, err := reader.ScanAdjacencyListsInto("neighbors", offsets, values)
@@ -242,7 +242,7 @@ func BenchmarkColumnPartSetAdjacencyPointLookup(b *testing.B) {
 	}
 	scratch := warm
 	b.ReportAllocs()
-	b.SetBytes(int64(len(scratch) * 8))
+	b.SetBytes(int64(len(scratch) * 4))
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		neighbors, ok, err := reader.AdjacencyListAtLatestWithScratch(4096, "neighbors", scratch, &lookupScratch)
@@ -253,7 +253,7 @@ func BenchmarkColumnPartSetAdjacencyPointLookup(b *testing.B) {
 			b.Fatal("missing adjacency for id 4096")
 		}
 		scratch = neighbors
-		benchSink += neighbors[0]
+		benchSink += int64(neighbors[0])
 	}
 }
 
@@ -309,7 +309,7 @@ func vectorPartSetBenchmarkMutations(rows int, dims int, degree int, step int) (
 	ids := make([]int64, updateRows)
 	vectors := make([]float32, updateRows*dims)
 	offsets := make([]uint32, updateRows+1)
-	neighbors := make([]int64, updateRows*degree)
+	neighbors := make([]uint32, updateRows*degree)
 	deletes := make([]int64, 0, updateRows)
 	row := 0
 	for id := 0; id < rows; id += step {
@@ -319,7 +319,7 @@ func vectorPartSetBenchmarkMutations(rows int, dims int, degree int, step int) (
 		}
 		offsets[row] = uint32(row * degree)
 		for edge := 0; edge < degree; edge++ {
-			neighbors[row*degree+edge] = int64((id + edge + 17) % rows)
+			neighbors[row*degree+edge] = uint32((id + edge + 17) % rows)
 		}
 		if id+1 < rows {
 			deletes = append(deletes, int64(id+1))
