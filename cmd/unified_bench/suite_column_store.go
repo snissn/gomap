@@ -429,6 +429,7 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 	run := columnStoreBenchRun(baseCfg, profile, dataDir, report, db.Stats(), checkpointDuration)
 	if strings.TrimSpace(opts.ProfileDir) != "" {
 		report.Artifacts = columnStoreArtifactPathsForProfileDir(opts.ProfileDir, baseCfg)
+		report.Artifacts = columnStoreOmitMissingOptionalArtifacts(report.Artifacts)
 		md = renderColumnStoreSuiteMarkdown(report)
 		if err := writeColumnStoreSuiteArtifacts(opts.ProfileDir, opts.ExecutionPath, report, md, run); err != nil {
 			return "", err
@@ -527,6 +528,25 @@ func columnStoreArtifactPathsForProfileDir(profileDir string, cfg BenchConfig) c
 		paths.TraceProfile = cfg.TraceProfile
 	}
 	return paths
+}
+
+func columnStoreOmitMissingOptionalArtifacts(paths columnStoreArtifactPaths) columnStoreArtifactPaths {
+	if columnStoreArtifactMissing(paths.BlockDeltaProfile) {
+		paths.BlockDeltaProfile = ""
+	}
+	if columnStoreArtifactMissing(paths.MutexDeltaProfile) {
+		paths.MutexDeltaProfile = ""
+	}
+	return paths
+}
+
+func columnStoreArtifactMissing(path string) bool {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return false
+	}
+	_, err := os.Stat(path)
+	return errors.Is(err, os.ErrNotExist)
 }
 
 func validateColumnStoreSuiteDBSelection(dbsArg, excludeArg string) error {
