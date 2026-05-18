@@ -273,8 +273,12 @@ func (g *ColumnVectorDynamicGraph) SearchCosine(query []float32, opts ColumnVect
 	if baseTopK > baseMaxTopK {
 		baseTopK = baseMaxTopK
 	}
+	if cap(scratch.results) < opts.TopK {
+		scratch.results = make([]VectorSearchResult, 0, opts.TopK)
+	}
 	var baseResults []VectorSearchResult
 	var baseTrace ColumnVectorGraphSearchTrace
+	filteredBaseResults := scratch.results[:0]
 	totalBaseCandidatesExamined := 0
 	totalBaseEdgesVisited := 0
 	// Tombstones are usually sparse in the base result prefix. Start at the user
@@ -292,7 +296,8 @@ func (g *ColumnVectorDynamicGraph) SearchCosine(query []float32, opts ColumnVect
 		trace.BaseSearches++
 		totalBaseCandidatesExamined += baseTrace.CandidatesExamined
 		totalBaseEdgesVisited += baseTrace.EdgesVisited
-		baseReturned, baseTombstoned := columnVectorDynamicCountBaseResults(baseResults, overlay)
+		var baseReturned, baseTombstoned int
+		filteredBaseResults, baseReturned, baseTombstoned = columnVectorDynamicFilterBaseResults(filteredBaseResults, baseResults, overlay, opts.TopK)
 		if baseReturned >= opts.TopK || baseTopK >= baseMaxTopK {
 			trace.BaseReturned = baseReturned
 			trace.BaseTombstoned = baseTombstoned
@@ -316,16 +321,7 @@ func (g *ColumnVectorDynamicGraph) SearchCosine(query []float32, opts ColumnVect
 	trace.BaseTrace = baseTrace
 	trace.EdgesVisited = totalBaseEdgesVisited
 
-	if cap(scratch.results) < opts.TopK {
-		scratch.results = make([]VectorSearchResult, 0, opts.TopK)
-	}
-	results := scratch.results[:0]
-	for _, result := range baseResults {
-		if overlay.DocumentTombstoned(result.DocumentID) {
-			continue
-		}
-		results = appendBoundedVectorSearchResult(results, result, opts.TopK)
-	}
+	results := filteredBaseResults
 
 	overlayResults, overlayScanned := overlay.searchCosine(query, queryInvNorm, opts.TopK, scratch)
 	trace.OverlayScanned = overlayScanned
@@ -343,7 +339,8 @@ func (g *ColumnVectorDynamicGraph) SearchCosine(query []float32, opts ColumnVect
 	return results, trace, nil
 }
 
-func columnVectorDynamicCountBaseResults(results []VectorSearchResult, overlay *ColumnVectorDynamicOverlaySnapshot) (int, int) {
+func columnVectorDynamicFilterBaseResults(dst []VectorSearchResult, results []VectorSearchResult, overlay *ColumnVectorDynamicOverlaySnapshot, topK int) ([]VectorSearchResult, int, int) {
+	dst = dst[:0]
 	returned := 0
 	tombstoned := 0
 	for _, result := range results {
@@ -352,8 +349,11 @@ func columnVectorDynamicCountBaseResults(results []VectorSearchResult, overlay *
 			continue
 		}
 		returned++
+		if len(dst) < topK {
+			dst = append(dst, result)
+		}
 	}
-	return returned, tombstoned
+	return dst, returned, tombstoned
 }
 
 func (g *ColumnVectorDynamicGraph) applyInsert(overlay *ColumnVectorDynamicOverlaySnapshot, documentID []byte, vector []float32, invNorm float32) error {
