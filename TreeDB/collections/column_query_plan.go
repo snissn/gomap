@@ -121,7 +121,7 @@ func (c *Collection) PlanColumnQuery(req ColumnQueryPlanRequest) (ColumnQueryPla
 
 func planColumnQueryForCatalog(catalog *collectionCatalog, identity ColumnStoreCacheIdentity, identityOK bool, req ColumnQueryPlanRequest) ColumnQueryPlan {
 	diag := ColumnQueryPlanDiagnostics{
-		CandidatePlans:          columnQueryPlannerCandidateCount(catalog, req),
+		CandidatePlans:          columnQueryPlannerCandidateCount(catalog, identity, identityOK, req),
 		ProjectedColumns:        len(req.ProjectedColumns),
 		Predicates:              len(req.Predicates),
 		RecoveryAuthoritative:   columnQueryManifestRecoveryAuthoritative(identity, identityOK),
@@ -242,6 +242,9 @@ func physicalColumnQuerySupported(catalog *collectionCatalog, identity ColumnSto
 	if !columnQueryManifestRecoveryAuthoritative(identity, identityOK) || req.Capabilities.PhysicalAssetCount <= 0 {
 		return false
 	}
+	if !columnQueryCatalogHasEnabledColumnStore(catalog) {
+		return false
+	}
 	if _, ok := missingColumnStoreRequestColumn(catalog, req); ok {
 		return false
 	}
@@ -288,14 +291,17 @@ func physicalColumnQueryUnsupportedReason(identity ColumnStoreCacheIdentity, ide
 }
 
 func physicalColumnQueryUnsupportedReasonForCatalog(catalog *collectionCatalog, identity ColumnStoreCacheIdentity, identityOK bool, req ColumnQueryPlanRequest, kind ColumnQueryPlanKind) string {
-	if missing, ok := missingColumnStoreRequestColumn(catalog, req); ok && missing != "" {
+	if !columnQueryCatalogHasEnabledColumnStore(catalog) {
+		return "collection has no enabled column store"
+	}
+	if missing, ok := missingColumnStoreRequestColumn(catalog, req); ok {
 		return fmt.Sprintf("requested column %q is not declared in column store", missing)
 	}
 	return physicalColumnQueryUnsupportedReason(identity, identityOK, req, kind)
 }
 
 func physicalColumnQueryUnsupportedReasonForFallback(catalog *collectionCatalog, req ColumnQueryPlanRequest) string {
-	if missing, ok := missingColumnStoreRequestColumn(catalog, req); ok && missing != "" {
+	if missing, ok := missingColumnStoreRequestColumn(catalog, req); ok {
 		return fmt.Sprintf("requested column %q is not declared in column store", missing)
 	}
 	return ""
@@ -303,7 +309,7 @@ func physicalColumnQueryUnsupportedReasonForFallback(catalog *collectionCatalog,
 
 func parallelColumnQueryShapeUnsupportedReason(req ColumnQueryPlanRequest) string {
 	if req.Capabilities.MaxParallelWorkers <= 1 {
-		return "parallel scan requires more than one worker"
+		return "parallel scan requires at least two workers"
 	}
 	if columnQueryParallelWorkUnits(req.Capabilities) <= 1 {
 		return "parallel scan requires more than one available granule or part"
@@ -336,12 +342,12 @@ func aggregateColumnQueryUnsupportedReason(catalog *collectionCatalog, identity 
 	if missing, ok := missingColumnStoreRequestColumn(catalog, req); ok {
 		return fmt.Sprintf("requested column %q is not declared in column store", missing)
 	}
-	if !columnQueryManifestRecoveryAuthoritative(identity, identityOK) || req.Capabilities.PhysicalAssetCount <= 0 {
-		return physicalColumnQueryUnsupportedReason(identity, identityOK, req, ColumnQueryPlanAggregateMetadata)
+	if !columnQueryCatalogHasEnabledColumnStore(catalog) {
+		return "collection has no enabled column store"
 	}
 	name := strings.TrimSpace(req.AggregateMetadataName)
 	if name == "" {
-		return "query did not request aggregate metadata"
+		return physicalColumnQueryUnsupportedReason(identity, identityOK, req, ColumnQueryPlanAggregateMetadata)
 	}
 	if !catalogHasColumnAggregateMetadata(catalog, name) {
 		return fmt.Sprintf("unknown aggregate metadata %q", name)
@@ -349,9 +355,15 @@ func aggregateColumnQueryUnsupportedReason(catalog *collectionCatalog, identity 
 	return physicalColumnQueryUnsupportedReason(identity, identityOK, req, ColumnQueryPlanAggregateMetadata)
 }
 
+func columnQueryCatalogHasEnabledColumnStore(catalog *collectionCatalog) bool {
+	return catalog != nil &&
+		catalog.meta.Options.ColumnStore != nil &&
+		catalog.meta.Options.ColumnStore.Enabled
+}
+
 func catalogHasColumnAggregateMetadata(catalog *collectionCatalog, name string) bool {
 	name = strings.TrimSpace(name)
-	if catalog == nil || catalog.meta.Options.ColumnStore == nil || name == "" {
+	if !columnQueryCatalogHasEnabledColumnStore(catalog) || name == "" {
 		return false
 	}
 	for _, aggregate := range catalog.meta.Options.ColumnStore.AggregateMetadata {
@@ -368,7 +380,7 @@ func missingColumnStoreRequestColumn(catalog *collectionCatalog, req ColumnQuery
 	if len(req.ProjectedColumns) == 0 && len(req.Predicates) == 0 {
 		return "", false
 	}
-	if catalog == nil || catalog.meta.Options.ColumnStore == nil {
+	if !columnQueryCatalogHasEnabledColumnStore(catalog) {
 		for _, column := range req.ProjectedColumns {
 			column = strings.TrimSpace(column)
 			if column != "" {
@@ -400,6 +412,8 @@ func missingColumnStoreRequestColumn(catalog *collectionCatalog, req ColumnQuery
 }
 
 func columnStoreColumnDeclared(declared []ColumnStoreColumn, name string) bool {
+	// Match the request contract: names remain case-sensitive but surrounding
+	// whitespace from pre-alpha fixtures is ignored at the planner boundary.
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return false
@@ -425,21 +439,26 @@ func columnQueryManifestRecoveryAuthoritative(identity ColumnStoreCacheIdentity,
 		identity.RecoveryAuthoritativeGeneration == identity.ManifestGeneration
 }
 
-func columnQueryPlannerCandidateCount(catalog *collectionCatalog, req ColumnQueryPlanRequest) int {
+func columnQueryPlannerCandidateCount(catalog *collectionCatalog, identity ColumnStoreCacheIdentity, identityOK bool, req ColumnQueryPlanRequest) int {
 	if req.ForceKind != "" {
 		return 1
 	}
 	count := 1 // row-store fallback
 	count += columnQueryBTreeCandidateCount(catalog, req)
-	if req.Capabilities.SerialColumnScan {
+	if physicalColumnQuerySupported(catalog, identity, identityOK, req, ColumnQueryPlanSerialColumnScan) {
 		count++
 	}
-	if req.Capabilities.AggregateMetadata {
+	if strings.TrimSpace(req.AggregateMetadataName) != "" &&
+		catalogHasColumnAggregateMetadata(catalog, req.AggregateMetadataName) &&
+		physicalColumnQuerySupported(catalog, identity, identityOK, req, ColumnQueryPlanAggregateMetadata) {
 		count++
 	}
-	if req.Capabilities.ParallelColumnScan {
+	if physicalColumnQuerySupported(catalog, identity, identityOK, req, ColumnQueryPlanParallelColumnScan) &&
+		parallelColumnQueryShapeUnsupportedReason(req) == "" {
 		count++
 	}
+	// CandidatePlans reports the request-feasible plans the planner may
+	// evaluate, capped by the configured diagnostic budget when present.
 	if budget := req.Capabilities.PlannerCandidateBudget; budget > 0 && count > budget {
 		return budget
 	}
@@ -451,9 +470,7 @@ func columnQueryBTreeCandidateCount(catalog *collectionCatalog, req ColumnQueryP
 		return 0
 	}
 	lookup := newColumnQueryIndexLookup(catalog.meta.Indexes)
-	var smallSeen [8]string
-	seen := smallSeen[:0]
-	var overflowSeen map[string]struct{}
+	var seen map[string]struct{}
 	addCandidate := func(column string) {
 		column = strings.TrimSpace(column)
 		if column == "" {
@@ -467,27 +484,10 @@ func columnQueryBTreeCandidateCount(catalog *collectionCatalog, req ColumnQueryP
 		if field == "" {
 			return
 		}
-		if overflowSeen != nil {
-			if _, exists := overflowSeen[field]; exists {
-				return
-			}
-			overflowSeen[field] = struct{}{}
-			return
+		if seen == nil {
+			seen = make(map[string]struct{}, 4)
 		}
-		for _, existing := range seen {
-			if existing == field {
-				return
-			}
-		}
-		if len(seen) < cap(seen) {
-			seen = append(seen, field)
-			return
-		}
-		overflowSeen = make(map[string]struct{}, len(seen)+1)
-		for _, existing := range seen {
-			overflowSeen[existing] = struct{}{}
-		}
-		overflowSeen[field] = struct{}{}
+		seen[field] = struct{}{}
 	}
 	for _, candidate := range req.CandidateIndexColumns {
 		addCandidate(candidate)
@@ -497,9 +497,6 @@ func columnQueryBTreeCandidateCount(catalog *collectionCatalog, req ColumnQueryP
 			continue
 		}
 		addCandidate(pred.Column)
-	}
-	if overflowSeen != nil {
-		return len(overflowSeen)
 	}
 	return len(seen)
 }
@@ -651,10 +648,12 @@ func PlanColumnSkipScan(predicates []ColumnSkipScanPredicate, marks []ColumnSkip
 //
 // Predicate positions are interpreted as dense zero-based sort-key positions
 // for the left-prefix contract. Only bounded predicates in the contiguous prefix
-// starting at position zero can prune marks. Sparse later-column predicates are
-// ignored until every lower position exists, positions >= len(predicates) are
-// ignored rather than allocating sparse scratch, and duplicate positions use the
-// last bounded predicate supplied.
+// starting at position zero can prune marks. A range predicate can terminate the
+// prefix as its final column; predicates after that range are ignored because
+// they are not safe left-prefix pruning inputs. Sparse later-column predicates
+// are ignored until every lower position exists, positions >= len(predicates)
+// are ignored rather than allocating sparse scratch, and duplicate positions use
+// the last bounded predicate supplied.
 func PlanColumnSkipScanInto(result *ColumnSkipScanResult, predicates []ColumnSkipScanPredicate, marks []ColumnSkipScanMark) {
 	if result == nil {
 		return

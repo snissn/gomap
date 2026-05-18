@@ -333,6 +333,58 @@ func TestColumnQueryPlannerM11BCountsPredicateIndexCandidates(t *testing.T) {
 	}
 }
 
+func TestColumnQueryPlannerM11BCountsOnlyRequestFeasibleCandidates(t *testing.T) {
+	catalog := &collectionCatalog{meta: CollectionMeta{
+		Name: "events",
+		Options: CollectionOptions{ColumnStore: &ColumnStoreConfig{
+			Enabled: true,
+			Columns: []ColumnStoreColumn{{Name: "kind", Path: "kind", ValueType: ColumnStoreValueString}},
+			AggregateMetadata: []ColumnAggregateMetadata{
+				{Name: "q5_did_time_span", Column: "time_us", Kind: ColumnAggregateMin},
+			},
+		}},
+		Indexes: []IndexDefinition{
+			{Name: "kind_idx", Field: "kind", ValueType: IndexValueString},
+		},
+	}}
+	identity := ColumnStoreCacheIdentity{
+		Collection:                      "events",
+		ManifestRoot:                    99,
+		ManifestGeneration:              7,
+		RecoveryAuthoritativeGeneration: 7,
+	}
+	req := ColumnQueryPlanRequest{
+		Name:                  "q1",
+		CandidateIndexColumns: []string{"kind"},
+		Capabilities: ColumnQueryPlannerCapabilities{
+			SerialColumnScan:   true,
+			AggregateMetadata:  true,
+			ParallelColumnScan: true,
+			PartCount:          2,
+			GranuleCount:       2,
+			MaxParallelWorkers: 2,
+		},
+	}
+
+	plan := planColumnQueryForCatalog(catalog, identity, true, req)
+	if got, want := plan.Diagnostics.CandidatePlans, 2; got != want {
+		t.Fatalf("no-assets candidate plans=%d want %d (row fallback + B-tree)", got, want)
+	}
+
+	req.Capabilities.PhysicalAssetCount = 1
+	plan = planColumnQueryForCatalog(catalog, identity, true, req)
+	if got, want := plan.Diagnostics.CandidatePlans, 4; got != want {
+		t.Fatalf("no-aggregate-request candidate plans=%d want %d (row + B-tree + serial + parallel)", got, want)
+	}
+
+	req.AggregateMetadataName = "q5_did_time_span"
+	req.Capabilities.PlannerCandidateBudget = 3
+	plan = planColumnQueryForCatalog(catalog, identity, true, req)
+	if got, want := plan.Diagnostics.CandidatePlans, 3; got != want {
+		t.Fatalf("budgeted candidate plans=%d want %d", got, want)
+	}
+}
+
 func TestColumnQueryPlannerM11BRejectsNonRecoveryAuthoritativeManifest(t *testing.T) {
 	catalog := &collectionCatalog{meta: CollectionMeta{
 		Name:    "events",
@@ -366,6 +418,33 @@ func TestColumnQueryPlannerM11BRejectsNonRecoveryAuthoritativeManifest(t *testin
 	}
 }
 
+func TestColumnQueryPlannerM11BRejectsPhysicalPlansWithoutColumnStoreConfig(t *testing.T) {
+	catalog := &collectionCatalog{meta: CollectionMeta{Name: "events"}}
+	identity := ColumnStoreCacheIdentity{
+		Collection:                      "events",
+		ManifestRoot:                    99,
+		ManifestGeneration:              7,
+		RecoveryAuthoritativeGeneration: 7,
+	}
+	req := ColumnQueryPlanRequest{
+		Name:      "q1",
+		ForceKind: ColumnQueryPlanSerialColumnScan,
+		Capabilities: ColumnQueryPlannerCapabilities{
+			SerialColumnScan:   true,
+			PhysicalAssetCount: 1,
+			GranuleCount:       8,
+		},
+	}
+
+	plan := planColumnQueryForCatalog(catalog, identity, true, req)
+	if plan.Supported {
+		t.Fatalf("expected non-column collection to fail physical plan: %+v", plan)
+	}
+	if got, want := plan.Diagnostics.UnsupportedPlanReason, "collection has no enabled column store"; got != want {
+		t.Fatalf("unsupported reason=%q want %q", got, want)
+	}
+}
+
 func TestColumnQueryPlannerM11BReportsParallelShapeReason(t *testing.T) {
 	catalog := &collectionCatalog{meta: CollectionMeta{
 		Name:    "events",
@@ -395,6 +474,16 @@ func TestColumnQueryPlannerM11BReportsParallelShapeReason(t *testing.T) {
 	}
 	if !strings.Contains(plan.Diagnostics.UnsupportedPlanReason, "more than one available granule or part") {
 		t.Fatalf("unsupported reason=%q", plan.Diagnostics.UnsupportedPlanReason)
+	}
+
+	req.Capabilities.GranuleCount = 2
+	req.Capabilities.MaxParallelWorkers = 1
+	plan = planColumnQueryForCatalog(catalog, identity, true, req)
+	if plan.Supported {
+		t.Fatalf("expected single-worker parallel shape to fail closed: %+v", plan)
+	}
+	if !strings.Contains(plan.Diagnostics.UnsupportedPlanReason, "at least two workers") {
+		t.Fatalf("single-worker unsupported reason=%q", plan.Diagnostics.UnsupportedPlanReason)
 	}
 }
 
@@ -653,6 +742,12 @@ func TestColumnQueryPlannerM11BRejectsUnknownAggregateMetadata(t *testing.T) {
 	if !strings.Contains(plan.Diagnostics.UnsupportedPlanReason, "unknown aggregate metadata") {
 		t.Fatalf("unsupported reason=%q", plan.Diagnostics.UnsupportedPlanReason)
 	}
+
+	req.Capabilities.PhysicalAssetCount = 0
+	plan = planColumnQueryForCatalog(catalog, identity, true, req)
+	if !strings.Contains(plan.Diagnostics.UnsupportedPlanReason, "unknown aggregate metadata") {
+		t.Fatalf("unknown aggregate should be reported before physical-asset gate, got %q", plan.Diagnostics.UnsupportedPlanReason)
+	}
 }
 
 func TestColumnQueryPlannerM11BReportsPhysicalGateBeforeMissingAggregateName(t *testing.T) {
@@ -801,16 +896,18 @@ func TestColumnSkipScanM11BPrunesOnlyLeftPrefixMarks(t *testing.T) {
 			Upper:    ColumnSkipScanBound{Key: []byte{0xaa}, Inclusive: true},
 		},
 	}, []ColumnSkipScanMark{
+		{Name: "below-first-column-range", Rows: 10, MinKeys: [][]byte{{0x01}, {0xff}}, MaxKeys: [][]byte{{0x09}, {0xff}}},
 		{Name: "overlaps-first-column", Rows: 10, MinKeys: [][]byte{{0x12}, {0x01}}, MaxKeys: [][]byte{{0x20}, {0x09}}},
+		{Name: "above-first-column-range", Rows: 10, MinKeys: [][]byte{{0x31}, {0x99}}, MaxKeys: [][]byte{{0x40}, {0xaa}}},
 	})
 	if got, want := rangeThenLaterColumn.LeftPrefixColumns, 1; got != want {
 		t.Fatalf("range-then-later left prefix=%d want %d", got, want)
 	}
-	if got, want := rangeThenLaterColumn.ScheduledMarks, []int{0}; !equalInts(got, want) {
+	if got, want := rangeThenLaterColumn.ScheduledMarks, []int{1}; !equalInts(got, want) {
 		t.Fatalf("range-then-later scheduled=%v want %v", got, want)
 	}
-	if len(rangeThenLaterColumn.SkippedMarks) != 0 {
-		t.Fatalf("range-then-later skipped=%v want none", rangeThenLaterColumn.SkippedMarks)
+	if got, want := rangeThenLaterColumn.SkippedMarks, []int{0, 2}; !equalInts(got, want) {
+		t.Fatalf("range-then-later skipped=%v want %v", got, want)
 	}
 
 	spanningComposite := PlanColumnSkipScan([]ColumnSkipScanPredicate{
@@ -888,6 +985,35 @@ func TestColumnSkipScanM11BPrunesOnlyLeftPrefixMarks(t *testing.T) {
 	}
 	if got, want := duplicatePositionLastWins.SkippedMarks, []int{0, 1}; !equalInts(got, want) {
 		t.Fatalf("duplicate-position skipped=%v want %v", got, want)
+	}
+}
+
+func TestColumnSkipScanM11BPrunesRangeAtDeeperLeftPrefix(t *testing.T) {
+	result := PlanColumnSkipScan([]ColumnSkipScanPredicate{
+		{
+			Position: 0,
+			Lower:    ColumnSkipScanBound{Key: []byte{0x10}, Inclusive: true},
+			Upper:    ColumnSkipScanBound{Key: []byte{0x10}, Inclusive: true},
+		},
+		{
+			Position: 1,
+			Lower:    ColumnSkipScanBound{Key: []byte{0x20}, Inclusive: true},
+			Upper:    ColumnSkipScanBound{Key: []byte{0x30}, Inclusive: true},
+		},
+	}, []ColumnSkipScanMark{
+		{Name: "suffix-before", Rows: 10, MinKeys: [][]byte{{0x10}, {0x01}}, MaxKeys: [][]byte{{0x10}, {0x1f}}},
+		{Name: "suffix-overlap", Rows: 10, MinKeys: [][]byte{{0x10}, {0x25}}, MaxKeys: [][]byte{{0x10}, {0x26}}},
+		{Name: "suffix-after", Rows: 10, MinKeys: [][]byte{{0x10}, {0x31}}, MaxKeys: [][]byte{{0x10}, {0x40}}},
+		{Name: "first-column-spans", Rows: 10, MinKeys: [][]byte{{0x09}, {0x01}}, MaxKeys: [][]byte{{0x20}, {0x1f}}},
+	})
+	if got, want := result.LeftPrefixColumns, 2; got != want {
+		t.Fatalf("deeper-range left prefix=%d want %d", got, want)
+	}
+	if got, want := result.ScheduledMarks, []int{1, 3}; !equalInts(got, want) {
+		t.Fatalf("deeper-range scheduled=%v want %v", got, want)
+	}
+	if got, want := result.SkippedMarks, []int{0, 2}; !equalInts(got, want) {
+		t.Fatalf("deeper-range skipped=%v want %v", got, want)
 	}
 }
 

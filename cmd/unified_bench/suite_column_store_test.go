@@ -927,7 +927,7 @@ func TestColumnStoreSuitePathFlagDocumentsAliasesM11B(t *testing.T) {
 	if f == nil {
 		t.Fatal("missing column-store-path flag")
 	}
-	for _, want := range []string{"aliases:", "row-store-baseline", "b-tree-index-baseline", "serial-column-scan", "aggregate-metadata", "parallel-column-scan"} {
+	for _, want := range []string{"aliases:", "executable:", "fail-closed", "row-store-baseline", "b-tree-index-baseline", "serial-column-scan", "aggregate-metadata", "parallel-column-scan"} {
 		if !strings.Contains(f.Usage, want) {
 			t.Fatalf("column-store-path help missing %q:\n%s", want, f.Usage)
 		}
@@ -1227,7 +1227,7 @@ func TestColumnStoreSuiteConfigUsesExplicitAggregateMetadataNamesM11A(t *testing
 		names = append(names, agg.Name)
 	}
 	got := strings.Join(names, ",")
-	if !strings.Contains(got, "q5_did_time_span_min") || !strings.Contains(got, "q5_did_time_span_max") {
+	if !strings.Contains(got, columnStoreSuiteQ5AggregateMin) || !strings.Contains(got, columnStoreSuiteQ5AggregateMax) {
 		t.Fatalf("aggregate metadata names=%q", got)
 	}
 	if strings.Contains(got, "q5_did_time_span,") || strings.HasSuffix(got, "q5_did_time_span") {

@@ -32,6 +32,8 @@ const (
 	columnStoreSuiteBenchDBName       = "treedb_column_store"
 	columnStoreSuiteBenchDisplayName  = "TreeDB Column Store"
 	columnStoreSuitePathCanonicalHelp = "row_store_baseline, b_tree_index_baseline, serial_column_scan, aggregate_metadata, parallel_column_scan"
+	columnStoreSuiteQ5AggregateMin    = "q5_did_time_span_min"
+	columnStoreSuiteQ5AggregateMax    = "q5_did_time_span_max"
 )
 
 type columnStoreSuitePathAlias struct {
@@ -57,7 +59,7 @@ var (
 		{alias: "parallel", canonical: columnStorePathParallelColumnScan},
 	}
 	columnStoreSuitePathUsage = fmt.Sprintf(
-		"Forced column-store execution label for -suite column_store (canonical: %s; aliases: %s; physical column labels fail closed until implemented)",
+		"Forced column-store execution label for -suite column_store (canonical: %s; aliases: %s; executable: row_store_baseline, b_tree_index_baseline; fail-closed until physical assets exist: serial_column_scan, aggregate_metadata, parallel_column_scan)",
 		columnStoreSuitePathCanonicalHelp,
 		columnStoreSuitePathAliasHelp(columnStoreSuitePathAliases),
 	)
@@ -631,8 +633,8 @@ func columnStoreSuiteConfig() *collections.ColumnStoreConfig {
 		},
 		SortKey: []collections.ColumnSortKey{{Column: "time_us"}},
 		AggregateMetadata: []collections.ColumnAggregateMetadata{
-			{Name: "q5_did_time_span_min", Column: "time_us", Kind: collections.ColumnAggregateMin},
-			{Name: "q5_did_time_span_max", Column: "time_us", Kind: collections.ColumnAggregateMax},
+			{Name: columnStoreSuiteQ5AggregateMin, Column: "time_us", Kind: collections.ColumnAggregateMin},
+			{Name: columnStoreSuiteQ5AggregateMax, Column: "time_us", Kind: collections.ColumnAggregateMax},
 		},
 		RetainedPayload: collections.ColumnRetainedPayloadNonColumn,
 		Reconstruction:  collections.ColumnReconstructionRetainedPayloadAndColumns,
@@ -1069,7 +1071,7 @@ func columnStoreSuiteAggregateMetadataName(name string) string {
 		// The executable q5_metadata path still aliases q5 until physical
 		// aggregate metadata assets exist, but forced aggregate_metadata planning
 		// should validate against a real registered catalog entry.
-		return "q5_did_time_span_min"
+		return columnStoreSuiteQ5AggregateMin
 	}
 	return ""
 }
@@ -1081,7 +1083,7 @@ func scanColumnStoreSuiteEventsWithPlan(collection *collections.Collection, rows
 	case collections.ColumnQueryPlanBTreeIndexBaseline:
 		return scanColumnStoreSuiteEventsByIndex(collection, rows, queryName, plan.IndexName)
 	default:
-		return nil, 0, 0, fmt.Errorf("column_store: executable path %q is not implemented", plan.Kind)
+		return nil, 0, 0, fmt.Errorf("column_store: executable path %q is not implemented: %w", plan.Kind, collections.ErrColumnQueryPlanUnsupported)
 	}
 }
 
