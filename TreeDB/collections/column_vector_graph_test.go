@@ -28,7 +28,11 @@ func TestColumnVectorGraphSearchMatchesExactCompleteGraph(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SearchCosine: %v", err)
 	}
-	if trace.ReturnedCount != 7 || trace.CandidatesExamined != graph.Rows() || trace.CandidatesAfterFilter != graph.Rows() || trace.RerankCount != graph.Rows() {
+	if trace.ReturnedCount != 7 ||
+		trace.CandidatesExamined != graph.Rows() ||
+		trace.CandidatesAfterTombstone != graph.Rows() ||
+		trace.CandidatesAfterFilter != graph.Rows() ||
+		trace.RerankCount != graph.Rows() {
 		t.Fatalf("trace=%+v want returned=7 candidates=%d", trace, graph.Rows())
 	}
 	exact := exactColumnVectorGraphCosine(t, graph, query, 7)
