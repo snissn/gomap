@@ -88,6 +88,21 @@ func TestColumnPublishPlanAllowsBenchmarkRelaxedProfileM10A(t *testing.T) {
 	}
 }
 
+func TestColumnPublishPlanUsesFixedWidthAssetBytesM10A(t *testing.T) {
+	asset := testColumnPublishPreparedAssetM10A()
+	asset.Bytes = 1 << 33
+	asset.Ref.Length = asset.Bytes
+	identity := ColumnManifestIdentity{Generation: 7, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0xfeedbeef}
+
+	plan, err := BuildColumnPublishPlan(testColumnPublishPlanInputM10A(identity, asset))
+	if err != nil {
+		t.Fatalf("BuildColumnPublishPlan large asset: %v", err)
+	}
+	if plan.RequiredAssetBytes != asset.Bytes || plan.Lifecycle.PublishedBytes != asset.Bytes || plan.Lifecycle.PreparedBytes != asset.Bytes {
+		t.Fatalf("large byte counts not preserved: plan=%+v asset=%+v", plan, asset)
+	}
+}
+
 func TestColumnPublishPlanBuildsDurabilityClosureM10A(t *testing.T) {
 	asset := testColumnPublishPreparedAssetM10A()
 	identity := ColumnManifestIdentity{Generation: 7, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0xfeedbeef}
