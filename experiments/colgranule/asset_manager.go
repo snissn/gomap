@@ -21,6 +21,7 @@ type ColumnAssetManager struct {
 	publishEpoch  uint64
 	nextAttemptID uint64
 	syncedAttempt map[uint64]uint64
+	refFailedAt   map[ColumnAssetRef]uint64
 }
 
 type ColumnAssetManagerReclamationPlan struct {
@@ -39,6 +40,7 @@ type ColumnAssetPublishClosure struct {
 	FlushRequired  bool                  `json:"flush_required,omitempty"`
 	SyncRequired   bool                  `json:"sync_required,omitempty"`
 
+	prepared         bool
 	preparedIdentity []ColumnPreparedAsset
 }
 
@@ -75,6 +77,7 @@ func NewColumnAssetManager(store ColumnAssetStore) (*ColumnAssetManager, error) 
 		publishFailed: make(map[ColumnAssetRef]string),
 		rewriteDebt:   make(map[ColumnAssetRef]string),
 		syncedAttempt: make(map[uint64]uint64),
+		refFailedAt:   make(map[ColumnAssetRef]uint64),
 	}, nil
 }
 
@@ -249,6 +252,7 @@ func prepareColumnAssetPublishClosure(store ColumnAssetStore, prepared []ColumnP
 	closure := ColumnAssetPublishClosure{
 		PreparedAssets: preparedClone,
 		FlushRequired:  len(preparedClone) > 0,
+		prepared:       true,
 		// Keep a private copy so caller mutations to PreparedAssets are caught.
 		preparedIdentity: cloneColumnPreparedAssets(preparedClone),
 	}
@@ -354,8 +358,10 @@ func (m *ColumnAssetManager) MarkPublishSucceeded(synced ColumnAssetSyncedPublis
 		return fmt.Errorf("colgranule: synced publish closure already consumed")
 	}
 	delete(m.syncedAttempt, synced.attempt)
-	if epoch != m.publishEpoch {
-		return fmt.Errorf("colgranule: synced publish closure predates a later publish failure")
+	for _, asset := range synced.closure.PreparedAssets {
+		if m.refFailedAt[asset.Ref] > epoch {
+			return fmt.Errorf("colgranule: synced publish closure predates a later publish failure for ref %+v", asset.Ref)
+		}
 	}
 	for _, asset := range synced.closure.PreparedAssets {
 		if failedReason, ok := m.publishFailed[asset.Ref]; ok {
@@ -383,7 +389,14 @@ func (m *ColumnAssetManager) MarkPublishFailed(prepared []ColumnPreparedAsset, r
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.publishEpoch++
+	if m.refFailedAt == nil {
+		m.refFailedAt = make(map[ColumnAssetRef]uint64)
+	}
 	for _, asset := range prepared {
+		m.refFailedAt[asset.Ref] = m.publishEpoch
+		if _, publishOwned := m.publishFailed[asset.Ref]; publishOwned {
+			continue
+		}
 		if _, quarantined := m.quarantine[asset.Ref]; quarantined {
 			continue
 		}
@@ -460,7 +473,7 @@ func validateColumnPreparedAsset(asset ColumnPreparedAsset) error {
 }
 
 func validateColumnAssetPublishClosureMatches(caller ColumnAssetPublishClosure, verified ColumnAssetPublishClosure) error {
-	if len(caller.PreparedAssets) > 0 && len(caller.preparedIdentity) == 0 {
+	if !caller.prepared {
 		return fmt.Errorf("colgranule: publish closure was not prepared by this manager")
 	}
 	if !columnPreparedAssetsEqual(caller.PreparedAssets, caller.preparedIdentity) {
