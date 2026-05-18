@@ -146,6 +146,14 @@ func closeUnconsumedOrderedRootDeltaPublishIterators(ordered []OrderedRootDeltaP
 	}
 }
 
+func closeOrderedRootDeltaBatchPublishDeltas(ordered []OrderedRootDeltaBatchPublishInput) {
+	for idx := range ordered {
+		if ordered[idx].Delta != nil {
+			_ = ordered[idx].Delta.Close()
+		}
+	}
+}
+
 // OrderedRootGroupSystemBuilder builds a target system-root iterator after the
 // non-system roots in a group have been built. The rootIDs slice is ordered to
 // match the OrderedRootPublishInput slice passed to
@@ -175,9 +183,11 @@ type OrderedRootGroupCommandWALDeltaBuilder func(CommandWALPublishContext) ([]Or
 
 // OrderedRootDeltaBatchGroupCommandWALDeltaBuilder is the batch-materialized
 // counterpart to OrderedRootGroupCommandWALDeltaBuilder. Returned batch deltas
-// keep the normal OrderedRootDeltaBatchPublishInput ownership contract: the DB
-// publish path does not close them, so builders that allocate batches must
-// arrange cleanup after the enclosing publish call returns.
+// keep the normal OrderedRootDeltaBatchPublishInput ownership contract on nil
+// error: the DB publish path does not close them, so builders that allocate
+// batches must arrange cleanup after the enclosing publish call returns. If a
+// builder returns deltas with a non-nil error, the DB publish path closes those
+// deltas before returning the error.
 type OrderedRootDeltaBatchGroupCommandWALDeltaBuilder func(CommandWALPublishContext) ([]OrderedRootDeltaBatchPublishInput, error)
 
 // OrderedRootGroupPreflight validates that a root group can still be applied.
@@ -2166,6 +2176,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 	if buildContextDeltas != nil {
 		contextOrdered, buildErr := buildContextDeltas(ctx)
 		if buildErr != nil {
+			closeOrderedRootDeltaBatchPublishDeltas(contextOrdered)
 			err = buildErr
 			return 0, nil, err
 		}

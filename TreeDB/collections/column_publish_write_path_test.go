@@ -164,6 +164,57 @@ func TestColumnStoreBufferedUpdatePathRequiresCommandWALM10B(t *testing.T) {
 	assertColumnStoreWriteDomainEmptyM10B(t, col)
 }
 
+func TestColumnStoreUpdateCallbacksRequireCommandWALBeforeInvocationM10B(t *testing.T) {
+	d, col := openBufferedBSONColumnStoreSeedM10B(t, false)
+	defer func() { _ = d.Close() }()
+
+	before, err := col.Get([]byte("e1"))
+	if err != nil {
+		t.Fatalf("Get before update: %v", err)
+	}
+	callbackCalled := false
+	matched, modified, err := col.Update([]byte("e1"), func(current []byte) ([]byte, bool, error) {
+		callbackCalled = true
+		return current, true, nil
+	})
+	if !errors.Is(err, backenddb.ErrCommandWALUnsupported) {
+		t.Fatalf("Update error=%v, want ErrCommandWALUnsupported", err)
+	}
+	if matched || modified {
+		t.Fatalf("Update matched=%v modified=%v, want false/false on rejected write", matched, modified)
+	}
+	if callbackCalled {
+		t.Fatal("Update callback ran before column-store command WAL validation")
+	}
+
+	batchCallbackCalled := false
+	results, err := col.UpdateBatch([]UpdateBatchItem{{
+		DocumentID: []byte("e1"),
+		Update: func(current []byte) ([]byte, bool, error) {
+			batchCallbackCalled = true
+			return current, true, nil
+		},
+	}})
+	if !errors.Is(err, backenddb.ErrCommandWALUnsupported) {
+		t.Fatalf("UpdateBatch error=%v, want ErrCommandWALUnsupported", err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("UpdateBatch results len=%d, want 0 on rejected write", len(results))
+	}
+	if batchCallbackCalled {
+		t.Fatal("UpdateBatch callback ran before column-store command WAL validation")
+	}
+
+	after, err := col.Get([]byte("e1"))
+	if err != nil {
+		t.Fatalf("Get after rejected updates: %v", err)
+	}
+	if !bytes.Equal(after, before) {
+		t.Fatalf("document changed after rejected updates: before=%x after=%x", before, after)
+	}
+	assertColumnStoreWriteDomainEmptyM10B(t, col)
+}
+
 func TestColumnStoreCommandWALMutationsPublishManifestM10B(t *testing.T) {
 	dir := prepareColumnStoreCommandWALDirM10B(t)
 	d := openCollectionCommandWALDB(t, dir)

@@ -9627,6 +9627,9 @@ func (c *Collection) Update(documentID []byte, update func(current []byte) (repl
 	if err := validateCollectionUpdateInput(c, documentID, update); err != nil {
 		return false, false, err
 	}
+	if err := c.requireColumnStoreCommandWAL(c.meta, nil); err != nil {
+		return false, false, err
+	}
 	if c.commandWALActive(nil) {
 		results, _, err := c.updateBatchOwnedItemsWithCommandWALIntent([]updateBatchItem{{
 			UpdateBatchItem: UpdateBatchItem{
@@ -9773,6 +9776,9 @@ func (c *Collection) updateBatch(items []UpdateBatchItem, mode updateBatchMode) 
 	}
 	ownedItems, err := prepareUpdateBatchItems(items)
 	if err != nil {
+		return nil, false, err
+	}
+	if err := c.requireColumnStoreCommandWAL(c.meta, nil); err != nil {
 		return nil, false, err
 	}
 	return c.updateBatchOwnedItems(ownedItems, mode)
