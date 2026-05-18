@@ -425,8 +425,40 @@ func TestColumnQueryPlannerM11BClampsParallelWorkersToAvailableWork(t *testing.T
 	if !plan.Supported {
 		t.Fatalf("parallel plan unsupported: %+v", plan.Diagnostics)
 	}
-	if got, want := plan.Diagnostics.WorkerCount, 8; got != want {
+	if got, want := plan.Diagnostics.WorkerCount, 2; got != want {
 		t.Fatalf("parallel worker count=%d want %d", got, want)
+	}
+}
+
+func TestColumnQueryPlannerM11BRecoveryAuthoritativeDoesNotRequireManifestRoot(t *testing.T) {
+	catalog := &collectionCatalog{meta: CollectionMeta{
+		Name:    "events",
+		Options: CollectionOptions{ColumnStore: &ColumnStoreConfig{Enabled: true}},
+	}}
+	identity := ColumnStoreCacheIdentity{
+		Collection:                      "events",
+		ManifestGeneration:              7,
+		RecoveryAuthoritativeGeneration: 7,
+	}
+	req := ColumnQueryPlanRequest{
+		Name:      "q1",
+		ForceKind: ColumnQueryPlanSerialColumnScan,
+		Capabilities: ColumnQueryPlannerCapabilities{
+			SerialColumnScan:   true,
+			PhysicalAssetCount: 0,
+			GranuleCount:       1,
+		},
+	}
+
+	plan := planColumnQueryForCatalog(catalog, identity, true, req)
+	if plan.Supported {
+		t.Fatalf("expected no-assets manifest to fail closed: %+v", plan)
+	}
+	if !plan.Diagnostics.RecoveryAuthoritative {
+		t.Fatalf("zero manifest root should not hide recovery-authoritative generation match: %+v", plan.Diagnostics)
+	}
+	if got, want := plan.Diagnostics.UnsupportedPlanReason, "no durable physical column assets are available"; got != want {
+		t.Fatalf("unsupported reason=%q want %q", got, want)
 	}
 }
 

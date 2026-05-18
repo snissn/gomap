@@ -312,8 +312,10 @@ func parallelColumnQueryShapeUnsupportedReason(req ColumnQueryPlanRequest) strin
 }
 
 func columnQueryParallelWorkerCount(caps ColumnQueryPlannerCapabilities) int {
-	workUnits := caps.GranuleCount
-	if caps.PartCount > workUnits {
+	workUnits := 0
+	if caps.GranuleCount > 0 {
+		workUnits = caps.GranuleCount
+	} else {
 		workUnits = caps.PartCount
 	}
 	if workUnits <= 0 {
@@ -410,7 +412,6 @@ func unsupportedColumnQueryPlan(kind ColumnQueryPlanKind, reason string, diag Co
 
 func columnQueryManifestRecoveryAuthoritative(identity ColumnStoreCacheIdentity, ok bool) bool {
 	return ok &&
-		identity.ManifestRoot != 0 &&
 		identity.ManifestGeneration != 0 &&
 		identity.RecoveryAuthoritativeGeneration == identity.ManifestGeneration
 }
