@@ -703,11 +703,23 @@ func columnStoreReferenceHashes(events []columnStoreFixtureEvent) (map[string]ui
 }
 
 func startColumnStoreSuiteRuntimeProfiles(cfg BenchConfig) (func() error, error) {
-	var cleanups []func() error
+	type runtimeProfileCleanup struct {
+		finish func() error
+		abort  func() error
+	}
+	var cleanups []runtimeProfileCleanup
 	finish := func() error {
 		var out error
 		for i := len(cleanups) - 1; i >= 0; i-- {
-			out = errors.Join(out, cleanups[i]())
+			out = errors.Join(out, cleanups[i].finish())
+		}
+		cleanups = nil
+		return out
+	}
+	abort := func() error {
+		var out error
+		for i := len(cleanups) - 1; i >= 0; i-- {
+			out = errors.Join(out, cleanups[i].abort())
 		}
 		cleanups = nil
 		return out
@@ -720,9 +732,13 @@ func startColumnStoreSuiteRuntimeProfiles(cfg BenchConfig) (func() error, error)
 		}
 		prevRate := runtime.MemProfileRate
 		runtime.MemProfileRate = rate
-		cleanups = append(cleanups, func() error {
+		restore := func() error {
 			runtime.MemProfileRate = prevRate
 			return nil
+		}
+		cleanups = append(cleanups, runtimeProfileCleanup{
+			finish: restore,
+			abort:  restore,
 		})
 	}
 
@@ -737,22 +753,28 @@ func startColumnStoreSuiteRuntimeProfiles(cfg BenchConfig) (func() error, error)
 		}
 		f, err := os.Create(blockProfile)
 		if err != nil {
-			_ = finish()
+			_ = abort()
 			return nil, fmt.Errorf("column_store: blockprofile: %w", err)
 		}
 		runtime.SetBlockProfileRate(rate)
-		cleanups = append(cleanups, func() error {
-			prof := pprof.Lookup("block")
-			var writeErr error
-			if prof == nil {
-				writeErr = fmt.Errorf("block profile unavailable")
-			} else {
-				writeErr = prof.WriteTo(f, 0)
-			}
-			// The runtime exposes no previous block profile rate, so the suite
-			// writes the active profile before returning sampling to off.
-			runtime.SetBlockProfileRate(0)
-			return errors.Join(writeErr, f.Close())
+		cleanups = append(cleanups, runtimeProfileCleanup{
+			finish: func() error {
+				prof := pprof.Lookup("block")
+				var writeErr error
+				if prof == nil {
+					writeErr = fmt.Errorf("block profile unavailable")
+				} else {
+					writeErr = prof.WriteTo(f, 0)
+				}
+				// The runtime exposes no previous block profile rate, so the suite
+				// writes the active profile before returning sampling to off.
+				runtime.SetBlockProfileRate(0)
+				return errors.Join(writeErr, f.Close())
+			},
+			abort: func() error {
+				runtime.SetBlockProfileRate(0)
+				return errors.Join(f.Close(), os.Remove(blockProfile))
+			},
 		})
 	}
 
@@ -763,38 +785,50 @@ func startColumnStoreSuiteRuntimeProfiles(cfg BenchConfig) (func() error, error)
 		}
 		f, err := os.Create(mutexProfile)
 		if err != nil {
-			_ = finish()
+			_ = abort()
 			return nil, fmt.Errorf("column_store: mutexprofile: %w", err)
 		}
 		prevFrac := runtime.SetMutexProfileFraction(frac)
-		cleanups = append(cleanups, func() error {
-			runtime.SetMutexProfileFraction(prevFrac)
-			prof := pprof.Lookup("mutex")
-			var writeErr error
-			if prof == nil {
-				writeErr = fmt.Errorf("mutex profile unavailable")
-			} else {
-				writeErr = prof.WriteTo(f, 0)
-			}
-			return errors.Join(writeErr, f.Close())
+		cleanups = append(cleanups, runtimeProfileCleanup{
+			finish: func() error {
+				runtime.SetMutexProfileFraction(prevFrac)
+				prof := pprof.Lookup("mutex")
+				var writeErr error
+				if prof == nil {
+					writeErr = fmt.Errorf("mutex profile unavailable")
+				} else {
+					writeErr = prof.WriteTo(f, 0)
+				}
+				return errors.Join(writeErr, f.Close())
+			},
+			abort: func() error {
+				runtime.SetMutexProfileFraction(prevFrac)
+				return errors.Join(f.Close(), os.Remove(mutexProfile))
+			},
 		})
 	}
 
 	if traceProfile != "" {
 		f, err := os.Create(traceProfile)
 		if err != nil {
-			_ = finish()
+			_ = abort()
 			return nil, fmt.Errorf("column_store: trace: %w", err)
 		}
 		if err := trace.Start(f); err != nil {
 			_ = f.Close()
 			_ = os.Remove(traceProfile)
-			_ = finish()
+			_ = abort()
 			return nil, fmt.Errorf("column_store: trace start: %w", err)
 		}
-		cleanups = append(cleanups, func() error {
-			trace.Stop()
-			return f.Close()
+		cleanups = append(cleanups, runtimeProfileCleanup{
+			finish: func() error {
+				trace.Stop()
+				return f.Close()
+			},
+			abort: func() error {
+				trace.Stop()
+				return errors.Join(f.Close(), os.Remove(traceProfile))
+			},
 		})
 	}
 
