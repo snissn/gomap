@@ -872,13 +872,13 @@ func shouldCheckpointCPUProfile(cfg BenchConfig, testName string) bool {
 	return ok
 }
 
-func startCheckpointCPUProfile(cfg BenchConfig, testName, dbName string) (*os.File, error) {
+func startCheckpointCPUProfile(cfg BenchConfig, profileHooks benchmarkProfileHooks, testName, dbName string) (*os.File, error) {
 	path := fmt.Sprintf("%s_checkpoint_%s_%s.pprof", cfg.CheckpointCPUProfile, sanitizeProfileSegment(testName), sanitizeProfileSegment(dbName))
 	f, err := os.Create(path)
 	if err != nil {
 		return nil, fmt.Errorf("checkpoint cpu profile (%s/%s): %w", testName, dbName, err)
 	}
-	if err := profileHooksFromConfig(cfg).startCPUProfile(f); err != nil {
+	if err := profileHooks.startCPUProfile(f); err != nil {
 		_ = f.Close()
 		return nil, fmt.Errorf("checkpoint cpu profile start: %w", err)
 	}
@@ -3916,7 +3916,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					err               error
 				)
 				if shouldCheckpointCPUProfile(cfg, testName) {
-					checkpointCPUFile, err = startCheckpointCPUProfile(cfg, testName, inst.Wrapper.Name())
+					checkpointCPUFile, err = startCheckpointCPUProfile(cfg, profileHooks, testName, inst.Wrapper.Name())
 					if err != nil {
 						return BenchRun{}, fmt.Errorf("checkpoint %s before %s profiling: %w", inst.Name, testName, err)
 					}
@@ -4203,7 +4203,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				err               error
 			)
 			if shouldCheckpointCPUProfile(cfg, checkpointPostRunLabel) {
-				checkpointCPUFile, err = startCheckpointCPUProfile(cfg, checkpointPostRunLabel, inst.Wrapper.Name())
+				checkpointCPUFile, err = startCheckpointCPUProfile(cfg, profileHooks, checkpointPostRunLabel, inst.Wrapper.Name())
 				if err != nil {
 					return BenchRun{}, fmt.Errorf("checkpoint %s after run profiling: %w", inst.Name, err)
 				}

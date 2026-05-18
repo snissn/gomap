@@ -436,6 +436,35 @@ func TestColumnStoreSuiteCPUProfileStartsAfterProfileBaselinesM11A(t *testing.T)
 	}
 }
 
+func TestColumnStoreSuiteCheckpointCPUProfileUsesResolvedHooksM11A(t *testing.T) {
+	var events []string
+	profileHooks := benchmarkProfileHooks{
+		startCPUProfile: func(_ io.Writer) error {
+			events = append(events, "checkpoint_cpu_start")
+			return nil
+		},
+		stopCPUProfile: func() {
+			events = append(events, "checkpoint_cpu_stop")
+		},
+	}
+	cfg := BenchConfig{
+		CheckpointCPUProfile: filepath.Join(t.TempDir(), "checkpoint_cpu"),
+	}
+
+	f, err := startCheckpointCPUProfile(cfg, profileHooks, columnStoreSuiteBenchTestName, columnStoreSuiteBenchDBName)
+	if err != nil {
+		t.Fatalf("start checkpoint CPU profile: %v", err)
+	}
+	profileHooks.stopCPUProfile()
+	if err := f.Close(); err != nil {
+		t.Fatalf("close checkpoint CPU profile: %v", err)
+	}
+
+	if got, want := strings.Join(events, ","), "checkpoint_cpu_start,checkpoint_cpu_stop"; got != want {
+		t.Fatalf("checkpoint CPU profile hooks = %s, want %s", got, want)
+	}
+}
+
 func TestColumnStoreSuiteCPUProfileStartFailureRemovesArtifactM11A(t *testing.T) {
 	profileHooks := &benchmarkProfileHooks{
 		startCPUProfile: func(_ io.Writer) error {
@@ -836,6 +865,23 @@ func assertColumnStoreQueryMetricCoverageM11A(t testing.TB, queries []columnStor
 		t.Fatalf("query metrics include unexpected names: %+v", byName)
 	}
 	return byName
+}
+
+func TestColumnStoreQueryNamesReturnsDefensiveCopyM11A(t *testing.T) {
+	names := columnStoreQueryNames()
+	if len(names) == 0 {
+		t.Fatal("columnStoreQueryNames returned no names")
+	}
+	names[0] = "mutated"
+	names = append(names, "extra")
+
+	fresh := columnStoreQueryNames()
+	if got, want := fresh[0], "q1"; got != want {
+		t.Fatalf("fresh query names first entry = %q, want %q", got, want)
+	}
+	if len(fresh) != len(columnStoreQueryNameList) {
+		t.Fatalf("fresh query names len = %d, want %d", len(fresh), len(columnStoreQueryNameList))
+	}
 }
 
 func assertColumnStoreParityCoverageM11A(t testing.TB, parity map[string]columnStoreParity) {
