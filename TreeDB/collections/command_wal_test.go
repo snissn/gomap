@@ -1116,6 +1116,126 @@ func TestCollectionCommandWALCreateCollectionReplaySameColumnMetadataAdvancesBef
 	}
 }
 
+func TestCollectionCommandWALReplayMutationsBypassOpenProfileGate(t *testing.T) {
+	tests := []struct {
+		name    string
+		kind    commitlog.CommandKind
+		format  commitlog.PayloadFormat
+		payload func(t *testing.T) []byte
+		verify  func(t *testing.T, col *Collection)
+	}{
+		{
+			name:   "insert",
+			kind:   commitlog.CommandKindCollectionInsertBatchByID,
+			format: commitlog.PayloadFormatCollectionInsertBatchByIDV1,
+			payload: func(t *testing.T) []byte {
+				t.Helper()
+				payload, err := commitlog.EncodeCollectionInsertBatchByIDPayload("events", []commitlog.CollectionDocument{{
+					ID:       []byte("e3"),
+					Document: []byte(`{"time_us":3,"kind":"share"}`),
+				}})
+				if err != nil {
+					t.Fatalf("EncodeCollectionInsertBatchByIDPayload: %v", err)
+				}
+				return payload
+			},
+			verify: func(t *testing.T, col *Collection) {
+				t.Helper()
+				assertCollectionDocument(t, col, "e3", `{"time_us":3,"kind":"share"}`)
+			},
+		},
+		{
+			name:   "update",
+			kind:   commitlog.CommandKindCollectionUpdateBatchByID,
+			format: commitlog.PayloadFormatCollectionUpdateBatchByIDV1,
+			payload: func(t *testing.T) []byte {
+				t.Helper()
+				payload, err := commitlog.EncodeCollectionUpdateBatchByIDPayload("events", []commitlog.CollectionDocument{{
+					ID:       []byte("e1"),
+					Document: []byte(`{"time_us":10,"kind":"edited"}`),
+				}})
+				if err != nil {
+					t.Fatalf("EncodeCollectionUpdateBatchByIDPayload: %v", err)
+				}
+				return payload
+			},
+			verify: func(t *testing.T, col *Collection) {
+				t.Helper()
+				assertCollectionDocument(t, col, "e1", `{"time_us":10,"kind":"edited"}`)
+			},
+		},
+		{
+			name:   "delete",
+			kind:   commitlog.CommandKindCollectionDeleteBatchByID,
+			format: commitlog.PayloadFormatCollectionDeleteBatchByIDV1,
+			payload: func(t *testing.T) []byte {
+				t.Helper()
+				payload, err := commitlog.EncodeCollectionDeleteBatchByIDPayload("events", [][]byte{[]byte("e2")})
+				if err != nil {
+					t.Fatalf("EncodeCollectionDeleteBatchByIDPayload: %v", err)
+				}
+				return payload
+			},
+			verify: func(t *testing.T, col *Collection) {
+				t.Helper()
+				got, err := col.Get([]byte("e2"))
+				if err != nil {
+					t.Fatalf("Get deleted document: %v", err)
+				}
+				if got != nil {
+					t.Fatalf("Get deleted document=%q, want nil", got)
+				}
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := prepareDurableColumnStoreCommandReplayDir(t)
+			writeCollectionCommandWALFrame(t, dir, 1, tt.kind, tt.format, tt.payload(t))
+
+			reopen, err := backenddb.Open(backenddb.Options{
+				Dir:                    dir,
+				CommandWAL:             true,
+				Durability:             backenddb.DurabilityWALOnRelaxed,
+				DisableBackgroundPrune: true,
+			})
+			if err != nil {
+				t.Fatalf("Open relaxed command WAL DB after mutation replay: %v", err)
+			}
+			if got := reopen.State().AppliedCommandLSN; got != 1 {
+				_ = reopen.Close()
+				t.Fatalf("AppliedCommandLSN=%d, want 1 after %s replay", got, tt.name)
+			}
+			if _, err := NewCollectionManager(reopen).OpenCollection("events"); err == nil || !strings.Contains(err.Error(), "requires durable backend for open") {
+				_ = reopen.Close()
+				t.Fatalf("OpenCollection relaxed error=%v, want durable-only fail-closed after replay", err)
+			}
+			if err := reopen.Close(); err != nil {
+				t.Fatalf("Close relaxed replay DB: %v", err)
+			}
+
+			durable, err := backenddb.Open(backenddb.Options{
+				Dir:                    dir,
+				CommandWAL:             true,
+				Durability:             backenddb.DurabilityDurable,
+				DisableBackgroundPrune: true,
+			})
+			if err != nil {
+				t.Fatalf("Open durable verification DB: %v", err)
+			}
+			defer func() { _ = durable.Close() }()
+			col, err := NewCollectionManager(durable).OpenCollection("events")
+			if err != nil {
+				t.Fatalf("OpenCollection durable after replay: %v", err)
+			}
+			tt.verify(t, col)
+			if got := durable.State().AppliedCommandLSN; got != 1 {
+				t.Fatalf("durable AppliedCommandLSN=%d, want 1 after replay", got)
+			}
+		})
+	}
+}
+
 func TestCollectionCommandWALCreateCollectionReplayIncompatibleMetadataFailsClosed(t *testing.T) {
 	existing := CollectionMeta{
 		Name: "users",
@@ -1568,6 +1688,51 @@ func TestCollectionCommandWALPrimaryReplayClearsNativeVectorRootBeforeMaintenanc
 type collectionCommandWALSetupInsert struct {
 	ids  [][]byte
 	docs [][]byte
+}
+
+func prepareDurableColumnStoreCommandReplayDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	d, err := backenddb.Open(backenddb.Options{
+		Dir:                    dir,
+		Durability:             backenddb.DurabilityDurable,
+		DisableBackgroundPrune: true,
+	})
+	if err != nil {
+		t.Fatalf("Open setup DB: %v", err)
+	}
+	meta := CollectionMeta{
+		Name:    "events",
+		Options: CollectionOptions{ColumnStore: testColumnStoreConfig(nil)},
+	}
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&meta); err != nil {
+		_ = d.Close()
+		t.Fatalf("CreateCollection setup: %v", err)
+	}
+	col, err := mgr.OpenCollection("events")
+	if err != nil {
+		_ = d.Close()
+		t.Fatalf("OpenCollection setup: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("e1"), []byte("e2")}, [][]byte{
+		[]byte(`{"time_us":1,"kind":"like"}`),
+		[]byte(`{"time_us":2,"kind":"post"}`),
+	}); err != nil {
+		_ = d.Close()
+		t.Fatalf("InsertBatch setup: %v", err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		_ = d.Close()
+		t.Fatalf("Checkpoint setup DB: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close setup DB: %v", err)
+	}
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+		t.Fatalf("SaveFormatConfig: %v", err)
+	}
+	return dir
 }
 
 func prepareCollectionCommandWALDir(t *testing.T, meta CollectionMeta, inserts ...collectionCommandWALSetupInsert) string {
