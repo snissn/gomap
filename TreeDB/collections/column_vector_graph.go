@@ -424,7 +424,7 @@ func (g *ColumnVectorGraph) searchCandidatesOrdinalTies(query []float32, queryIn
 	candidatesExamined := 1
 	for len(queue) > 0 {
 		current := queue.pop()
-		if len(best) >= limit && vectorIndexCandidateWorse(current, best[0]) {
+		if len(best) >= limit && current.distance > best[0].distance {
 			break
 		}
 		start := int(g.neighborOffsets[current.nodeID])
@@ -441,7 +441,7 @@ func (g *ColumnVectorGraph) searchCandidatesOrdinalTies(query []float32, queryIn
 			if math.IsInf(float64(candidate.distance), 1) {
 				continue
 			}
-			if len(best) < limit || vectorIndexCandidateLess(candidate, best[0]) {
+			if len(best) < limit || candidate.distance <= best[0].distance {
 				queue.push(candidate)
 				best.pushBounded(candidate, limit)
 			}
@@ -473,7 +473,7 @@ func (g *ColumnVectorGraph) searchCandidatesDocumentTies(query []float32, queryI
 	candidatesExamined := 1
 	for len(queue) > 0 {
 		current := queue.pop(g)
-		if len(best) >= limit && g.candidateWorse(current, best[0]) {
+		if len(best) >= limit && current.distance > best[0].distance {
 			break
 		}
 		start := int(g.neighborOffsets[current.nodeID])
@@ -490,7 +490,7 @@ func (g *ColumnVectorGraph) searchCandidatesDocumentTies(query []float32, queryI
 			if math.IsInf(float64(candidate.distance), 1) {
 				continue
 			}
-			if len(best) < limit || g.candidateLess(candidate, best[0]) {
+			if len(best) < limit || candidate.distance <= best[0].distance {
 				queue.push(g, candidate)
 				best.pushBounded(g, candidate, limit)
 			}

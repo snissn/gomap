@@ -312,6 +312,66 @@ func TestColumnVectorGraphSearchUsesDocumentIDTieOrdering(t *testing.T) {
 	}
 }
 
+func TestColumnVectorGraphSearchExploresEqualDistanceOrdinalBridge(t *testing.T) {
+	graph, err := NewColumnVectorGraphFromColumns(ColumnVectorGraphColumns{
+		DocumentIDs:     [][]byte{[]byte("doc-a"), []byte("doc-b"), []byte("doc-c")},
+		Vectors:         []float32{1, 0, 1, 0, 1, 0},
+		InvNorms:        []float32{1, 1, 1},
+		NeighborOffsets: []uint32{0, 0, 1, 2},
+		Neighbors:       []uint32{2, 0},
+		Dimensions:      2,
+		EntryPoint:      1,
+		EfSearch:        1,
+	})
+	if err != nil {
+		t.Fatalf("NewColumnVectorGraphFromColumns: %v", err)
+	}
+	if !graph.ordinalTieOrder {
+		t.Fatal("graph did not use ordinal tie path for sorted document IDs")
+	}
+
+	results, _, err := graph.SearchCosine([]float32{1, 0}, ColumnVectorGraphSearchOptions{TopK: 1, EfSearch: 1}, &ColumnVectorGraphSearchScratch{})
+	if err != nil {
+		t.Fatalf("SearchCosine: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("results=%d want 1", len(results))
+	}
+	if !bytes.Equal(results[0].DocumentID, []byte("doc-a")) {
+		t.Fatalf("result ID=%q want doc-a", results[0].DocumentID)
+	}
+}
+
+func TestColumnVectorGraphSearchExploresEqualDistanceDocumentBridge(t *testing.T) {
+	graph, err := NewColumnVectorGraphFromColumns(ColumnVectorGraphColumns{
+		DocumentIDs:     [][]byte{[]byte("doc-b"), []byte("doc-c"), []byte("doc-a")},
+		Vectors:         []float32{1, 0, 1, 0, 1, 0},
+		InvNorms:        []float32{1, 1, 1},
+		NeighborOffsets: []uint32{0, 1, 2, 2},
+		Neighbors:       []uint32{1, 2},
+		Dimensions:      2,
+		EntryPoint:      0,
+		EfSearch:        1,
+	})
+	if err != nil {
+		t.Fatalf("NewColumnVectorGraphFromColumns: %v", err)
+	}
+	if graph.ordinalTieOrder {
+		t.Fatal("graph stayed on ordinal tie path for out-of-order document IDs")
+	}
+
+	results, _, err := graph.SearchCosine([]float32{1, 0}, ColumnVectorGraphSearchOptions{TopK: 1, EfSearch: 1}, &ColumnVectorGraphSearchScratch{})
+	if err != nil {
+		t.Fatalf("SearchCosine: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("results=%d want 1", len(results))
+	}
+	if !bytes.Equal(results[0].DocumentID, []byte("doc-a")) {
+		t.Fatalf("result ID=%q want doc-a", results[0].DocumentID)
+	}
+}
+
 func TestColumnVectorGraphSkipsRankTableForOrdinalDocumentIDs(t *testing.T) {
 	graph, err := NewColumnVectorGraphFromColumns(columnVectorGraphTestColumns(32, 16, 4, false))
 	if err != nil {
