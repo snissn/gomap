@@ -881,7 +881,7 @@ func startCheckpointCPUProfile(cfg BenchConfig, profileHooks benchmarkProfileHoo
 	if profileHooks.startCPUProfile == nil {
 		_ = f.Close()
 		_ = os.Remove(path)
-		return nil, errors.New("checkpoint cpu profile start hook is nil")
+		return nil, fmt.Errorf("checkpoint cpu profile (%s/%s) start hook is nil: path=%s", testName, dbName, path)
 	}
 	if err := profileHooks.startCPUProfile(f); err != nil {
 		_ = f.Close()
