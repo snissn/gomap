@@ -9,6 +9,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"sort"
@@ -105,6 +106,62 @@ func TestColumnVectorGraphDeep1BFloat16RoundTrip(t *testing.T) {
 		got := columnVectorGraphDeep1BFloat16BitsToFloat32(columnVectorGraphDeep1BFloat32ToFloat16Bits(value))
 		if math.Abs(float64(got-value)) > 1e-3 {
 			t.Fatalf("float16 round trip %g = %g", value, got)
+		}
+	}
+}
+
+func TestColumnVectorGraphDeep1BDownloadPrefixAcceptsRangeIgnoredOK(t *testing.T) {
+	dir := t.TempDir()
+	sourcePath := filepath.Join(dir, "source.fbin")
+	values := []float32{
+		1, 2,
+		3, 4,
+		5, 6,
+	}
+	if err := writeColumnVectorGraphDeep1BTestFbin(sourcePath, 3, 2, values); err != nil {
+		t.Fatalf("write source fbin: %v", err)
+	}
+	sourceBytes, err := os.ReadFile(sourcePath)
+	if err != nil {
+		t.Fatalf("read source fbin: %v", err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Range"); got == "" {
+			t.Errorf("missing Range header")
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(sourceBytes)
+	}))
+	defer server.Close()
+
+	path := filepath.Join(dir, "prefix.fbin")
+	if err := columnVectorGraphDeep1BDownloadFbin(t, path, server.URL, 2, 2); err != nil {
+		t.Fatalf("download prefix fbin: %v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat prefix fbin: %v", err)
+	}
+	if want := int64(8 + 2*2*4); info.Size() != want {
+		t.Fatalf("prefix size=%d want %d", info.Size(), want)
+	}
+	header, err := columnVectorGraphDeep1BValidateFbin(path, 2, 2)
+	if err != nil {
+		t.Fatalf("validate prefix fbin: %v", err)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("open prefix fbin: %v", err)
+	}
+	defer file.Close()
+	_, out, err := columnVectorGraphDeep1BReadFbinVectorsAt(file, header, 0, 2, nil, nil)
+	if err != nil {
+		t.Fatalf("read prefix vectors: %v", err)
+	}
+	wantValues := values[:4]
+	for i, got := range out {
+		if got != wantValues[i] {
+			t.Fatalf("out[%d]=%v want %v", i, got, wantValues[i])
 		}
 	}
 }
@@ -2648,8 +2705,8 @@ func columnVectorGraphDeep1BDownloadFbin(tb testing.TB, path string, url string,
 		return err
 	}
 	defer resp.Body.Close()
-	if prefixRows > 0 && resp.StatusCode != http.StatusPartialContent {
-		return fmt.Errorf("range download status=%s want 206 Partial Content", resp.Status)
+	if prefixRows > 0 && resp.StatusCode != http.StatusPartialContent && resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("range download status=%s want 206 Partial Content or 200 OK", resp.Status)
 	}
 	if prefixRows == 0 && resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("download status=%s want 200 OK", resp.Status)
@@ -2662,7 +2719,16 @@ func columnVectorGraphDeep1BDownloadFbin(tb testing.TB, path string, url string,
 	if err != nil {
 		return err
 	}
-	written, copyErr := io.Copy(out, resp.Body)
+	var written int64
+	var copyErr error
+	if prefixRows > 0 {
+		// Some HTTP servers legally ignore Range and return 200 OK with the full
+		// object. Keep the cached subset deterministic by copying only the prefix
+		// bytes needed for the rewritten .fbin header.
+		written, copyErr = io.CopyN(out, resp.Body, expectedBytes)
+	} else {
+		written, copyErr = io.Copy(out, resp.Body)
+	}
 	closeErr := out.Close()
 	if copyErr != nil {
 		_ = os.Remove(tmp)
