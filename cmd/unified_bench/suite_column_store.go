@@ -34,7 +34,7 @@ const (
 )
 
 var (
-	columnStoreSuitePathArg    = flag.String("column-store-path", columnStorePathRowStoreBaseline, "Forced column-store execution label for -suite column_store (row_store_baseline, b_tree_index_baseline; physical column labels fail closed until implemented)")
+	columnStoreSuitePathArg    = flag.String("column-store-path", columnStorePathRowStoreBaseline, "Forced column-store execution label for -suite column_store (row_store_baseline, b_tree_index_baseline, serial_column_scan, aggregate_metadata, parallel_column_scan; physical column labels fail closed until implemented)")
 	columnStoreSuiteFixtureArg = flag.String("column-store-fixture", "synthetic", "Fixture for -suite column_store (synthetic; JSONBENCH_DATA mode is reserved for the large local gate)")
 
 	columnStoreSuiteSupportedForcedPaths = []string{
@@ -458,6 +458,23 @@ func validateColumnStoreSuiteForcedPath(path string) error {
 	return fmt.Errorf("column_store: unknown forced path %q; supported=%s fail_closed=%s", path, columnStoreSuitePathList(columnStoreSuiteSupportedForcedPaths), columnStoreSuitePathList(columnStoreSuiteUnsupportedForcedPaths))
 }
 
+func columnStoreSuitePlanKind(path string) (collections.ColumnQueryPlanKind, error) {
+	switch path {
+	case columnStorePathRowStoreBaseline:
+		return collections.ColumnQueryPlanRowStoreBaseline, nil
+	case columnStorePathBTreeIndexBaseline:
+		return collections.ColumnQueryPlanBTreeIndexBaseline, nil
+	case columnStorePathSerialColumnScan:
+		return collections.ColumnQueryPlanSerialColumnScan, nil
+	case columnStorePathAggregateMetadata:
+		return collections.ColumnQueryPlanAggregateMetadata, nil
+	case columnStorePathParallelColumnScan:
+		return collections.ColumnQueryPlanParallelColumnScan, nil
+	default:
+		return "", fmt.Errorf("column_store: unknown forced path %q; supported=%s fail_closed=%s", path, columnStoreSuitePathList(columnStoreSuiteSupportedForcedPaths), columnStoreSuitePathList(columnStoreSuiteUnsupportedForcedPaths))
+	}
+}
+
 func columnStoreSuitePathListed(path string, paths []string) bool {
 	for _, candidate := range paths {
 		if path == candidate {
@@ -846,12 +863,16 @@ func runColumnStoreSuiteQueries(collection *collections.Collection, rows int, ra
 	if err := validateColumnStoreSuiteForcedPath(path); err != nil {
 		return nil, nil, err
 	}
+	forceKind, err := columnStoreSuitePlanKind(path)
+	if err != nil {
+		return nil, nil, err
+	}
 	queries := make([]columnStoreQueryMetric, 0, len(columnStoreQueryNames()))
 	parity := make(map[string]columnStoreParity, len(columnStoreQueryNames()))
 	var firstErr error
 	for _, name := range columnStoreQueryNames() {
 		plannerStart := time.Now()
-		plan, err := collection.PlanColumnQuery(columnStoreSuitePlanRequest(name, rows, path))
+		plan, err := collection.PlanColumnQuery(columnStoreSuitePlanRequest(name, rows, forceKind))
 		plannerElapsed := time.Since(plannerStart)
 		if err != nil {
 			return nil, nil, err
@@ -921,15 +942,14 @@ func runColumnStoreSuiteQueries(collection *collections.Collection, rows int, ra
 	return queries, parity, firstErr
 }
 
-func columnStoreSuitePlanRequest(name string, rows int, path string) collections.ColumnQueryPlanRequest {
+func columnStoreSuitePlanRequest(name string, rows int, forceKind collections.ColumnQueryPlanKind) collections.ColumnQueryPlanRequest {
 	return collections.ColumnQueryPlanRequest{
 		Name:                  name,
 		ProjectedColumns:      []string{"time_us", "kind", "did"},
 		CandidateIndexColumns: columnStoreSuiteQueryIndexCandidates(name),
 		AggregateMetadataName: columnStoreSuiteAggregateMetadataName(name),
 		EstimatedRows:         rows,
-		// runColumnStoreSuiteQueries validates path before this cast.
-		ForceKind: collections.ColumnQueryPlanKind(path),
+		ForceKind:             forceKind,
 		Capabilities: collections.ColumnQueryPlannerCapabilities{
 			// M11B deliberately has no physical column assets yet; this keeps
 			// recovery-authoritative physical planner gates unreachable until
@@ -1007,12 +1027,12 @@ func scanColumnStoreSuiteEventsByIndex(collection *collections.Collection, rows 
 	events := make([]columnStoreDecodedEvent, 0, rows)
 	var materialized int
 	var bytesRead int64
-	// The M11B B-tree baseline is intentionally a full secondary-index ordered
-	// pass for q1-q5 parity; none of these aggregate queries currently has a
-	// selective predicate that can safely narrow the range. The fixture expects
-	// one indexed row entry per document, so rows+1 is a sentinel limit that
-	// makes duplicate/missing index entries fail closed instead of truncating
-	// silently.
+	// The M11B B-tree baseline intentionally selects a query-relevant secondary
+	// index but performs a full ordered pass for parity; these aggregate queries
+	// currently do not have selective predicates that can safely narrow the
+	// range. The fixture expects one indexed row entry per document, so rows+1 is
+	// a sentinel limit that makes duplicate/missing index entries fail closed
+	// instead of truncating silently.
 	truncated, err := collection.ScanBorrowedDocumentsByIndexRange(indexName, collections.IndexRangeOptions{
 		Lower: collections.IndexRangeBound{Unbounded: true},
 		Upper: collections.IndexRangeBound{Unbounded: true},

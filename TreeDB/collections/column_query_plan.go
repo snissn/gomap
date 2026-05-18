@@ -411,12 +411,15 @@ func PlanColumnSkipScanInto(result *ColumnSkipScanResult, predicates []ColumnSki
 	result.SkippedMarks = result.SkippedMarks[:0]
 	result.ScheduledRows = 0
 	result.SkippedRows = 0
-	result.predicateScratch = ensureColumnSkipScanPredicateScratch(result.predicateScratch, len(predicates))
-	result.predicateSet = ensureColumnSkipScanBoolScratch(result.predicateSet, len(predicates))
+	// A contiguous left prefix can never be longer than the number of bounded
+	// predicates, so positions >= len(predicates) cannot extend the prefix.
+	maxLeftPrefixColumns := len(predicates)
+	result.predicateScratch = ensureColumnSkipScanPredicateScratch(result.predicateScratch, maxLeftPrefixColumns)
+	result.predicateSet = ensureColumnSkipScanBoolScratch(result.predicateSet, maxLeftPrefixColumns)
 	prefixPredicates := result.predicateScratch[:0]
 	if len(predicates) > 0 {
-		prefixPredicates = result.predicateScratch[:len(predicates)]
-		predicateSet := result.predicateSet[:len(predicates)]
+		prefixPredicates = result.predicateScratch[:maxLeftPrefixColumns]
+		predicateSet := result.predicateSet[:maxLeftPrefixColumns]
 		result.LeftPrefixColumns = columnSkipScanLeftPrefixPredicates(prefixPredicates, predicateSet, predicates)
 		prefixPredicates = prefixPredicates[:result.LeftPrefixColumns]
 	}
@@ -488,6 +491,8 @@ func columnSkipScanPredicateIsEquality(pred ColumnSkipScanPredicate) bool {
 }
 
 func columnSkipScanMarkDisjoint(mark ColumnSkipScanMark, prefixPredicates []ColumnSkipScanPredicate) bool {
+	// prefixPredicates is dense and ordered by column position
+	// [0:LeftPrefixColumns]; missing prefix slots are rejected before this call.
 	for pos, pred := range prefixPredicates {
 		if pos >= len(mark.MinKeys) || pos >= len(mark.MaxKeys) {
 			return false
