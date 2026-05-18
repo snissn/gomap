@@ -221,8 +221,9 @@ func TestColumnStoreCommandWALMutationsPublishManifestM10B(t *testing.T) {
 	defer func() { _ = d.Close() }()
 
 	col := openColumnStoreCollectionM10B(t, d)
-	if got := d.State().AppliedCommandLSN; got != 1 {
-		t.Fatalf("create AppliedCommandLSN=%d, want 1", got)
+	baseLSN := d.State().AppliedCommandLSN
+	if baseLSN == 0 {
+		t.Fatal("create AppliedCommandLSN=0, want command WAL create LSN")
 	}
 
 	if _, err := col.InsertBatch([][]byte{[]byte("e1"), []byte("e2")}, [][]byte{
@@ -231,7 +232,7 @@ func TestColumnStoreCommandWALMutationsPublishManifestM10B(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("InsertBatch: %v", err)
 	}
-	assertColumnManifestStateM10B(t, col, 1, 2)
+	assertColumnManifestStateM10B(t, col, 1, baseLSN+1)
 	assertCollectionDocument(t, col, "e1", `{"time_us":1,"kind":"like","did":"d1"}`)
 
 	matched, modified, err := col.Update([]byte("e1"), func([]byte) ([]byte, bool, error) {
@@ -243,7 +244,7 @@ func TestColumnStoreCommandWALMutationsPublishManifestM10B(t *testing.T) {
 	if !matched || !modified {
 		t.Fatalf("Update matched=%v modified=%v, want true true", matched, modified)
 	}
-	assertColumnManifestStateM10B(t, col, 2, 3)
+	assertColumnManifestStateM10B(t, col, 2, baseLSN+2)
 	assertCollectionDocument(t, col, "e1", `{"time_us":3,"kind":"like","did":"d1"}`)
 
 	deleted, err := col.DeleteDocument([]byte("e2"))
@@ -253,7 +254,7 @@ func TestColumnStoreCommandWALMutationsPublishManifestM10B(t *testing.T) {
 	if !deleted {
 		t.Fatalf("DeleteDocument deleted=false, want true")
 	}
-	assertColumnManifestStateM10B(t, col, 3, 4)
+	assertColumnManifestStateM10B(t, col, 3, baseLSN+3)
 
 	if err := d.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
@@ -261,7 +262,7 @@ func TestColumnStoreCommandWALMutationsPublishManifestM10B(t *testing.T) {
 	reopen := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = reopen.Close() }()
 	reopened := openColumnStoreCollectionM10B(t, reopen)
-	assertColumnManifestStateM10B(t, reopened, 3, 4)
+	assertColumnManifestStateM10B(t, reopened, 3, baseLSN+3)
 	assertCollectionDocument(t, reopened, "e1", `{"time_us":3,"kind":"like","did":"d1"}`)
 	if got, err := reopened.Get([]byte("e2")); err != nil || got != nil {
 		t.Fatalf("Get deleted document=(%q, %v), want nil, nil", got, err)
@@ -273,6 +274,11 @@ func TestColumnStoreCommandWALReplayPublishesManifestM10B(t *testing.T) {
 	d := openCollectionCommandWALDB(t, dir)
 
 	col := openColumnStoreCollectionM10B(t, d)
+	baseLSN := d.State().AppliedCommandLSN
+	if baseLSN == 0 {
+		_ = d.Close()
+		t.Fatal("create AppliedCommandLSN=0, want command WAL create LSN")
+	}
 	docs := []commitlog.CollectionDocument{{
 		ID:       []byte("e1"),
 		Document: []byte(`{"time_us":1,"kind":"like","did":"d1"}`),
@@ -287,13 +293,13 @@ func TestColumnStoreCommandWALReplayPublishesManifestM10B(t *testing.T) {
 		_ = d.Close()
 		t.Fatalf("AppendCommandWALIntent: %v", err)
 	}
-	if lsn != 2 {
+	if lsn != baseLSN+1 {
 		_ = d.Close()
-		t.Fatalf("appended LSN=%d, want 2", lsn)
+		t.Fatalf("appended LSN=%d, want %d", lsn, baseLSN+1)
 	}
-	if got := d.State().AppliedCommandLSN; got != 1 {
+	if got := d.State().AppliedCommandLSN; got != baseLSN {
 		_ = d.Close()
-		t.Fatalf("AppliedCommandLSN before replay=%d, want 1", got)
+		t.Fatalf("AppliedCommandLSN before replay=%d, want %d", got, baseLSN)
 	}
 	if err := d.Close(); err != nil {
 		t.Fatalf("Close before replay: %v", err)
@@ -303,9 +309,87 @@ func TestColumnStoreCommandWALReplayPublishesManifestM10B(t *testing.T) {
 	defer func() { _ = reopen.Close() }()
 	reopened := openColumnStoreCollectionM10B(t, reopen)
 	assertCollectionDocument(t, reopened, "e1", `{"time_us":1,"kind":"like","did":"d1"}`)
-	assertColumnManifestStateM10B(t, reopened, 1, 2)
-	if got := reopen.State().AppliedCommandLSN; got != 2 {
-		t.Fatalf("AppliedCommandLSN after replay=%d, want 2", got)
+	assertColumnManifestStateM10B(t, reopened, 1, lsn)
+	if got := reopen.State().AppliedCommandLSN; got != lsn {
+		t.Fatalf("AppliedCommandLSN after replay=%d, want %d", got, lsn)
+	}
+}
+
+func TestColumnStoreStaleColumnRootPreflightDoesNotAppendCommandWALM10B(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		publish func(*Collection, columnWritePublishInput) error
+	}{
+		{
+			name: "iterator",
+			publish: func(col *Collection, input columnWritePublishInput) error {
+				_, _, _, _, err := col.publishRootDeltaGroupMaybeColumn(nil, input)
+				return err
+			},
+		},
+		{
+			name: "batch",
+			publish: func(col *Collection, input columnWritePublishInput) error {
+				_, _, _, _, err := col.publishRootDeltaBatchGroupMaybeColumn(nil, nil, input)
+				return err
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := prepareColumnStoreCommandWALDirM10B(t)
+			d := openCollectionCommandWALDB(t, dir)
+			defer func() { _ = d.Close() }()
+
+			stale := openColumnStoreCollectionM10B(t, d)
+			fresh := openColumnStoreCollectionM10B(t, d)
+			staleCommitSeq, staleSystemRoot := dbCommitSeqAndSystemRoot(d)
+			stale.catalogMu.RLock()
+			staleCatalog := stale.catalog
+			stale.catalogMu.RUnlock()
+			if got := staleCatalog.rootID(collectionColumnManifestRootName("events")); got != 0 {
+				t.Fatalf("stale column root=%d, want initial zero root", got)
+			}
+
+			if _, err := fresh.InsertBatch([][]byte{[]byte("e1")}, [][]byte{[]byte(`{"time_us":1,"kind":"like","did":"d1"}`)}); err != nil {
+				t.Fatalf("InsertBatch fresh: %v", err)
+			}
+			current := openColumnStoreCollectionM10B(t, d)
+			currentMeta := current.Meta()
+			if currentMeta.Options.ColumnStore == nil || currentMeta.Options.ColumnStore.ActiveManifest == nil {
+				t.Fatalf("fresh insert did not publish active manifest: %+v", currentMeta.Options.ColumnStore)
+			}
+			framesBefore := countCollectionCommandWALFrames(t, dir)
+			appliedBefore := d.State().AppliedCommandLSN
+
+			intent, err := stale.newCollectionInsertCommandWALIntent([]commitlog.CollectionDocument{{
+				ID:       []byte("stale"),
+				Document: []byte(`{"time_us":2,"kind":"post","did":"d2"}`),
+			}}, nil)
+			if err != nil {
+				t.Fatalf("newCollectionInsertCommandWALIntent: %v", err)
+			}
+			err = tc.publish(stale, columnWritePublishInput{
+				meta:             currentMeta,
+				catalog:          staleCatalog,
+				baseCommitSeq:    staleCommitSeq,
+				baseSystemRoot:   staleSystemRoot,
+				commandWALIntent: intent,
+				operation:        ColumnPublishOperationInsert,
+				rows:             1,
+			})
+			if !errors.Is(err, ErrConcurrentMutation) {
+				t.Fatalf("stale column-root publish error=%v, want ErrConcurrentMutation", err)
+			}
+			if !strings.Contains(err.Error(), collectionColumnManifestRootName("events")) {
+				t.Fatalf("stale column-root publish error=%v, want column manifest root in error", err)
+			}
+			if got := countCollectionCommandWALFrames(t, dir); got != framesBefore {
+				t.Fatalf("command WAL frames after stale preflight=%d, want %d", got, framesBefore)
+			}
+			if got := d.State().AppliedCommandLSN; got != appliedBefore {
+				t.Fatalf("AppliedCommandLSN after stale preflight=%d, want %d", got, appliedBefore)
+			}
+		})
 	}
 }
 

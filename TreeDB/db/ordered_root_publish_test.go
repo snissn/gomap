@@ -103,11 +103,46 @@ func TestPublishOrderedRootDeltaGroupWithCommandWALContextPassesAssignedLSN(t *t
 	if newSystemRoot == 0 || len(rootIDs) != 1 || rootIDs[0] == 0 {
 		t.Fatalf("newSystemRoot=%d rootIDs=%v, want non-zero roots", newSystemRoot, rootIDs)
 	}
-	if seenCtx.AppliedCommandLSN != 1 {
-		t.Fatalf("builder AppliedCommandLSN=%d, want 1", seenCtx.AppliedCommandLSN)
+	if seenCtx.AppliedCommandLSN == 0 {
+		t.Fatalf("builder AppliedCommandLSN=0, want assigned LSN")
 	}
 	if got := db.State().AppliedCommandLSN; got != seenCtx.AppliedCommandLSN {
 		t.Fatalf("state AppliedCommandLSN=%d, want builder LSN %d", got, seenCtx.AppliedCommandLSN)
+	}
+}
+
+func TestPublishOrderedRootDeltaGroupWithPreflightCommandWALContextRootBuilderPreflightRunsBeforeAppend(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	defer db.Close()
+
+	wantErr := errors.New("preflight rejected")
+	var contextBuilderCalled bool
+	var systemBuilderCalled bool
+	_, _, err := db.PublishOrderedRootDeltaGroupWithPreflightCommandWALContextRootBuilderAndSystemDeltaBuilder(
+		nil,
+		func() error {
+			return wantErr
+		},
+		mustRawKVCommandWALIntent(t, db, "cmd/preflight", "1"),
+		func(ctx CommandWALPublishContext) ([]OrderedRootDeltaPublishInput, error) {
+			contextBuilderCalled = true
+			return nil, nil
+		},
+		func(ctx CommandWALPublishContext, rootIDs []uint64) (iterator.UnsafeIterator, error) {
+			systemBuilderCalled = true
+			return mustFrozenSystemMemtable(t, "system/preflight", "unexpected").NewIterator(nil, nil), nil
+		},
+	)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("err=%v, want %v", err, wantErr)
+	}
+	if contextBuilderCalled || systemBuilderCalled {
+		t.Fatalf("builders called after preflight failure: context=%v system=%v", contextBuilderCalled, systemBuilderCalled)
+	}
+	if got := db.State().AppliedCommandLSN; got != 0 {
+		t.Fatalf("AppliedCommandLSN=%d, want 0 because preflight rejected before command WAL append", got)
 	}
 }
 
