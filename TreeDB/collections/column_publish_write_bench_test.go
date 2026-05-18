@@ -112,8 +112,8 @@ func BenchmarkColumnStoreCommandWALReplayM10C(b *testing.B) {
 
 			b.ReportAllocs()
 			b.SetBytes(int64(encodedPayloadBytesPerReplay))
-			b.ResetTimer()
 			b.StopTimer()
+			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				workDir := filepath.Join(workRoot, fmt.Sprintf("replay-work-%06d", i))
 				copyColumnStoreCommandWALReplayBenchmarkDirM10C(b, templateDir, workDir)
