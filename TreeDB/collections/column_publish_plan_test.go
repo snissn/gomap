@@ -1302,6 +1302,61 @@ func TestColumnManifestPublishSystemDeltaRejectsStaleSnapshotBaseM10A(t *testing
 	}
 }
 
+func TestColumnManifestPublishSystemDeltaRejectsMissingSnapshotBaseM10A(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "events",
+		Options: CollectionOptions{ColumnStore: testColumnStoreConfig(nil)},
+	}); err != nil {
+		t.Fatalf("create column-enabled collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("events")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	baseState := d.State()
+	planInput := testColumnPublishPlanInputM10A(ColumnManifestIdentity{Generation: 12, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0xabcdef6789}, testColumnPublishPreparedAssetM10A())
+	planInput.BaseManifestRootID = 0
+	plan, err := BuildColumnPublishPlan(planInput)
+	if err != nil {
+		t.Fatalf("BuildColumnPublishPlan: %v", err)
+	}
+
+	tests := []struct {
+		name           string
+		baseCommitSeq  uint64
+		baseSystemRoot uint64
+	}{
+		{name: "missing commit", baseSystemRoot: baseState.SystemRootPageID},
+		{name: "missing root", baseCommitSeq: baseState.CommitSeq},
+		{name: "missing both"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			iter, err := col.buildColumnManifestPublishSystemDeltaIterator(ColumnManifestPublishSystemDeltaInput{
+				BaseMeta:           col.Meta(),
+				BaseCommitSeq:      tt.baseCommitSeq,
+				BaseSystemRoot:     tt.baseSystemRoot,
+				BaseManifestRootID: 0,
+				Plan:               plan,
+			}, []uint64{123})
+			if iter != nil {
+				_ = iter.Close()
+				t.Fatalf("returned iterator with err=%v", err)
+			}
+			if err == nil || !strings.Contains(err.Error(), "requires BaseCommitSeq and BaseSystemRoot") {
+				t.Fatalf("buildColumnManifestPublishSystemDeltaIterator err=%v want missing snapshot base rejection", err)
+			}
+		})
+	}
+}
+
 func TestColumnManifestPublishSystemDeltaRejectsIdentityMismatchM10A(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
