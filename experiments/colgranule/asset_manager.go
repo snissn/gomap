@@ -31,6 +31,16 @@ type ColumnAssetManager struct {
 	refFailedAt    map[ColumnAssetRef]uint64
 }
 
+type ColumnAssetManagerDebugState struct {
+	Quarantine     map[ColumnAssetRef]string
+	OperatorLocked map[ColumnAssetRef]struct{}
+	PublishFailed  map[ColumnAssetRef]string
+	PublishEpoch   uint64
+	RefFailedAt    map[ColumnAssetRef]uint64
+	SyncedAttempts int
+	SyncedRefs     int
+}
+
 type ColumnAssetManagerReclamationPlan struct {
 	Entries            []ColumnAssetManagerReclamationEntry `json:"entries"`
 	CandidateBytes     int                                  `json:"candidate_bytes"`
@@ -99,6 +109,23 @@ func (m *ColumnAssetManager) Put(kind ColumnAssetKind, payload []byte) (ColumnAs
 		return ColumnAssetRef{}, fmt.Errorf("colgranule: closed column asset manager")
 	}
 	return m.store.Put(kind, payload)
+}
+
+func (m *ColumnAssetManager) DebugState() ColumnAssetManagerDebugState {
+	if m == nil {
+		return ColumnAssetManagerDebugState{}
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return ColumnAssetManagerDebugState{
+		Quarantine:     cloneColumnAssetStringMap(m.quarantine),
+		OperatorLocked: cloneColumnAssetSet(m.operatorLocked),
+		PublishFailed:  cloneColumnAssetStringMap(m.publishFailed),
+		PublishEpoch:   m.publishEpoch,
+		RefFailedAt:    cloneColumnAssetEpochMap(m.refFailedAt),
+		SyncedAttempts: len(m.syncedAttempt),
+		SyncedRefs:     len(m.syncedRefs),
+	}
 }
 
 func (m *ColumnAssetManager) PutOwned(kind ColumnAssetKind, payload []byte) (ColumnAssetRef, error) {
@@ -271,9 +298,6 @@ func deriveColumnAssetPublishClosure(store ColumnAssetStore, prepared []ColumnPr
 		// Keep a private copy so caller mutations to PreparedAssets are caught.
 		preparedIdentity: cloneColumnPreparedAssets(preparedClone),
 	}
-	if len(preparedClone) > maxColumnAssetInt {
-		return ColumnAssetPublishClosure{}, fmt.Errorf("colgranule: prepared asset count=%d exceeds host int", len(preparedClone))
-	}
 	closure.RequiredAssets = len(preparedClone)
 	// Sync is tied to the explicit publish closure: unreferenced buffered
 	// assets are not made durable until a root-visible prepared ref names them.
@@ -315,6 +339,7 @@ func (m *ColumnAssetManager) SyncPublishClosure(closure ColumnAssetPublishClosur
 	}
 	m.mu.Lock()
 	store := m.store
+	epoch := m.publishEpoch
 	m.mu.Unlock()
 	if store == nil {
 		return ColumnAssetSyncedPublishClosure{}, fmt.Errorf("colgranule: closed column asset manager")
@@ -345,7 +370,6 @@ func (m *ColumnAssetManager) SyncPublishClosure(closure ColumnAssetPublishClosur
 	}
 	m.nextAttemptID++
 	attempt := m.nextAttemptID
-	epoch := m.publishEpoch
 	m.syncedAttempt[attempt] = epoch
 	m.syncedRefs[attempt] = columnPreparedAssetRefs(verified.PreparedAssets)
 	m.mu.Unlock()
@@ -569,10 +593,39 @@ func verifyColumnAssetStoreRef(store ColumnAssetStore, ref ColumnAssetRef) error
 	if verifier, ok := store.(columnAssetVerifier); ok {
 		return verifier.Verify(ref)
 	}
-	if ranged, ok := store.(ColumnAssetRangeReader); ok {
-		_, err := ranged.ReadRange(ref, 0, 1)
-		return err
-	}
 	_, err := store.ReadTo(ref, nil)
 	return err
+}
+
+func cloneColumnAssetStringMap(in map[ColumnAssetRef]string) map[ColumnAssetRef]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[ColumnAssetRef]string, len(in))
+	for ref, reason := range in {
+		out[ref] = reason
+	}
+	return out
+}
+
+func cloneColumnAssetSet(in map[ColumnAssetRef]struct{}) map[ColumnAssetRef]struct{} {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[ColumnAssetRef]struct{}, len(in))
+	for ref := range in {
+		out[ref] = struct{}{}
+	}
+	return out
+}
+
+func cloneColumnAssetEpochMap(in map[ColumnAssetRef]uint64) map[ColumnAssetRef]uint64 {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[ColumnAssetRef]uint64, len(in))
+	for ref, epoch := range in {
+		out[ref] = epoch
+	}
+	return out
 }
