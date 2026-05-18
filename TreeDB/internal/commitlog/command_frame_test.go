@@ -323,6 +323,62 @@ func TestCommandWALFormatGoldenV1CollectionUpdateBatchByID(t *testing.T) {
 	}
 }
 
+func TestCommandWALFormatCollectionVectorIndexMaintenanceByID(t *testing.T) {
+	upsertPayload, err := EncodeCollectionVectorIndexUpsertBatchByIDPayload("users", [][]byte{[]byte("u2"), []byte("u1")})
+	if err != nil {
+		t.Fatalf("EncodeCollectionVectorIndexUpsertBatchByIDPayload: %v", err)
+	}
+	upsertFrame, err := EncodeCommandFrame(CommandEnvelope{
+		LSN:           15,
+		Kind:          CommandKindCollectionVectorIndexUpsertBatchByID,
+		Scope:         CommandScopeCollection,
+		PayloadFormat: PayloadFormatCollectionVectorIndexUpsertBatchByIDV1,
+		Payload:       upsertPayload,
+	})
+	if err != nil {
+		t.Fatalf("EncodeCommandFrame upsert: %v", err)
+	}
+	upsertGot, err := DecodeCommandFrame(upsertFrame)
+	if err != nil {
+		t.Fatalf("DecodeCommandFrame upsert: %v", err)
+	}
+	upsertDecoded, err := DecodeCollectionVectorIndexUpsertBatchByIDPayload(upsertGot.Payload)
+	if err != nil {
+		t.Fatalf("DecodeCollectionVectorIndexUpsertBatchByIDPayload: %v", err)
+	}
+	if upsertGot.Kind != CommandKindCollectionVectorIndexUpsertBatchByID || upsertGot.PayloadFormat != PayloadFormatCollectionVectorIndexUpsertBatchByIDV1 ||
+		upsertDecoded.Collection != "users" || len(upsertDecoded.IDs) != 2 || string(upsertDecoded.IDs[0]) != "u1" || string(upsertDecoded.IDs[1]) != "u2" {
+		t.Fatalf("decoded vector upsert mismatch env=%+v payload=%+v", upsertGot, upsertDecoded)
+	}
+
+	deletePayload, err := EncodeCollectionVectorIndexDeleteBatchByIDPayload("users", [][]byte{[]byte("u4"), []byte("u3")})
+	if err != nil {
+		t.Fatalf("EncodeCollectionVectorIndexDeleteBatchByIDPayload: %v", err)
+	}
+	deleteFrame, err := EncodeCommandFrame(CommandEnvelope{
+		LSN:           16,
+		Kind:          CommandKindCollectionVectorIndexDeleteBatchByID,
+		Scope:         CommandScopeCollection,
+		PayloadFormat: PayloadFormatCollectionVectorIndexDeleteBatchByIDV1,
+		Payload:       deletePayload,
+	})
+	if err != nil {
+		t.Fatalf("EncodeCommandFrame delete: %v", err)
+	}
+	deleteGot, err := DecodeCommandFrame(deleteFrame)
+	if err != nil {
+		t.Fatalf("DecodeCommandFrame delete: %v", err)
+	}
+	deleteDecoded, err := DecodeCollectionVectorIndexDeleteBatchByIDPayload(deleteGot.Payload)
+	if err != nil {
+		t.Fatalf("DecodeCollectionVectorIndexDeleteBatchByIDPayload: %v", err)
+	}
+	if deleteGot.Kind != CommandKindCollectionVectorIndexDeleteBatchByID || deleteGot.PayloadFormat != PayloadFormatCollectionVectorIndexDeleteBatchByIDV1 ||
+		deleteDecoded.Collection != "users" || len(deleteDecoded.IDs) != 2 || string(deleteDecoded.IDs[0]) != "u3" || string(deleteDecoded.IDs[1]) != "u4" {
+		t.Fatalf("decoded vector delete mismatch env=%+v payload=%+v", deleteGot, deleteDecoded)
+	}
+}
+
 func TestCommandWALFormatGoldenV1CatalogCreateCollection(t *testing.T) {
 	payload, err := EncodeCatalogCreateCollectionPayload("users", []byte(`{"version":1,"name":"users"}`))
 	if err != nil {
