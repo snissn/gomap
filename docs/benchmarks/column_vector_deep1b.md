@@ -18,10 +18,12 @@ vector_dim  uint32
 vector data float32[num_vectors][vector_dim]
 ```
 
-Deep1B vectors are 96-dimensional and L2-normalized. The benchmark uses
-`SearchCosine`; for normalized vectors cosine and Euclidean rankings are
-monotonic, but the current benchmark is throughput and disk evidence rather
-than recall evidence because Deep1B does not publish an ANN graph.
+Deep1B vectors are 96-dimensional float32 embeddings. The benchmark uses
+`SearchCosine` and persists `embedding_inv_norm`, so the product path does not
+depend on the source rows being exactly unit-normalized. The current benchmark
+is throughput, disk, and local-ranking evidence rather than recall evidence
+because this track builds its own graph/neighborhood probes from the public
+base/query files.
 
 ## Quick Run
 
@@ -99,6 +101,14 @@ byte-shuffled float32 streams before applying byte codecs. Defaults:
 nearest-ranked block, keeps encode/setup outside the timed loop, warms decoder
 scratch, and times `decode 8192 vectors + score all 8192 candidates against one
 query`. The `resident_fp32` row is the no-decode scoring ceiling.
+
+`BenchmarkColumnVectorGraphDeep1BLocalFrameApproxScore` uses the same
+nearest-ranked block, computes a block-centroid Householder frame, transforms
+the query once into that frame, and benchmarks progressive local-frame scoring
+sketches. The sketch variants are explicit storage representations:
+`fp32`, IEEE-fp16-quantized values, and symmetric int8-quantized values with
+per-dimension scales. It reports top-10 overlap/recall, score error, sketch
+bytes, and a bounded-prune smoke path.
 
 ## Manual Commands
 
@@ -364,6 +374,60 @@ Interpretation:
   not a hot search path as implemented: trig reconstruction dominates, even
   before considering graph traversal.
 
+Local-frame approximate scoring smoke:
+
+```sh
+COLUMN_VECTOR_DEEP1B_NEIGHBORHOOD_SMOKE=1 \
+COLUMN_VECTOR_DEEP1B_DOWNLOAD=1 \
+COLUMN_VECTOR_DEEP1B_DIR=/private/tmp/gomap-deep1b-cache \
+GOWORK=off go test ./experiments/colgranule \
+  -run '^$' \
+  -bench '^BenchmarkColumnVectorGraphDeep1BLocalFrameApproxScore/(exact_fp32|centroid_frame_top(1|8|16|32)_(fp32|fp16|int8)|centroid_frame_bound_prune)$' \
+  -benchmem \
+  -benchtime 200ms \
+  -count 1
+```
+
+This benchmark is an off-band search-sketch probe, not a persisted engine
+codec. It stores/scans block-local Householder-frame prefixes as full fp32,
+IEEE fp16, or symmetric int8 with per-dimension scales, then compares each
+sketch against exact fp32 top-10 ranking for the same 8192-row nearest-ranked
+block. The bounded-prune row uses the exact threshold as a smoke-test oracle to
+measure the potential prune rate and false-negative count.
+
+Representative nearest-ranked 8192-vector local-frame sketch results. Sketch
+bytes include encoded prefix values and per-dimension int8 scales; the shared
+centroid/Householder metadata adds another `0.0469 B/entry` for local-frame
+rows.
+
+| Path | Sketch B/entry | ns/vector | Candidates/s | Top10 overlap | Recall@10 | Mean score error | B/op | allocs/op |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| exact_fp32 | 384.0 | 84.4 | 11.8M | 10 | 1.0 | 0 | 0 | 0 |
+| top1_fp32 | 4.0 | 3.75 | 266.6M | 1 | 0.1 | 0.0713 | 0 | 0 |
+| top1_int8 | 1.0 | 3.97 | 252.1M | 1 | 0.1 | 0.0713 | 0 | 0 |
+| top8_fp32 | 32.0 | 9.64 | 103.8M | 3 | 0.3 | 0.0648 | 0 | 0 |
+| top8_int8 | 8.004 | 8.95 | 111.8M | 3 | 0.3 | 0.0649 | 0 | 0 |
+| top16_fp32 | 64.0 | 12.4 | 80.6M | 3 | 0.3 | 0.0625 | 0 | 0 |
+| top16_int8 | 16.01 | 15.4 | 64.7M | 3 | 0.3 | 0.0626 | 0 | 0 |
+| top32_fp32 | 128.0 | 26.1 | 38.3M | 3 | 0.3 | 0.0453 | 0 | 0 |
+| top32_int8 | 32.02 | 30.5 | 32.8M | 3 | 0.3 | 0.0453 | 0 | 0 |
+| bound_prune_M16 | n/a | 11.1 | 90.3M | n/a | n/a | n/a | 0 | 0 |
+
+Interpretation:
+
+- The local-frame prefix sketch is fast and compact, but in this first
+  nearest-block smoke it is not a strong top-k surrogate: even 32 dimensions
+  only overlaps 3 of the exact top 10.
+- fp16/int8 quantization is not the limiting factor here. Quantized rows have
+  nearly the same recall/error as fp32 prefixes, so the main loss is coordinate
+  truncation rather than reduced precision.
+- The M=16 Cauchy bound had `0` false negatives but also pruned `0` candidates;
+  the bound is safe but too loose on this block to be useful without a tighter
+  sketch, smaller candidate set, or a later thresholding stage.
+- fp16 scoring is currently slower than fp32/int8 because the smoke benchmark
+  converts IEEE half values back to float32 in the inner loop. That is an
+  implementation cost, not a storage-size conclusion.
+
 Useful reported metrics:
 
 - `searches/s`, `B/op`, `allocs/op`: hot `SearchCosine` loop evidence.
@@ -403,3 +467,9 @@ Useful reported metrics:
   `BenchmarkColumnVectorGraphDeep1BJZIPDecodeAndScoreSmoke`: cold block decode
   plus exact candidate scoring evidence. This benchmark intentionally does not
   fetch source documents or traverse a graph.
+- `dims_used`, `top10_overlap`, `recall@10`, `max_score_error`,
+  `mean_score_error`, `search_sketch_B/entry`, `quantized`,
+  `bound_pruned_ratio`, and `bound_false_negative_count` inside
+  `BenchmarkColumnVectorGraphDeep1BLocalFrameApproxScore`: local-frame
+  approximate scoring evidence for future hot search sketches. The fp16/int8
+  rows are actual quantized score paths, not hypothetical byte estimates.
