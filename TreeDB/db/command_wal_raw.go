@@ -136,6 +136,20 @@ func NewCommandWALReplayIntent(env commitlog.CommandEnvelope) *CommandWALIntent 
 	}}
 }
 
+func (db *DB) checkCommandWALReplayIntentActive(intent *commandWALBatchIntent) error {
+	if intent == nil || !intent.fromReplay || intent.lsn == 0 {
+		return nil
+	}
+	active := uint64(0)
+	if db != nil {
+		active = db.commandWALReplayLSN.Load()
+	}
+	if active != intent.lsn {
+		return fmt.Errorf("%w: replay intent lsn %d is not the active recovery frame lsn %d", ErrCommandWALRejected, intent.lsn, active)
+	}
+	return nil
+}
+
 func (db *DB) prepareRawKVCommandWALIntent(b *Batch) (*commandWALBatchIntent, error) {
 	if db == nil || !db.commandWAL {
 		return nil, nil
@@ -317,6 +331,9 @@ func (db *DB) appendPublicCommandWALIntent(intent *CommandWALIntent, sync bool) 
 	}
 	if intent.inner.fromReplay && intent.inner.lsn == 0 {
 		return 0, fmt.Errorf("%w: replay intent missing assigned lsn", ErrCommandWALRejected)
+	}
+	if err := db.checkCommandWALReplayIntentActive(&intent.inner); err != nil {
+		return 0, err
 	}
 	if intent.inner.lsn != 0 {
 		// Replay intents already refer to a durable frame; recovery must only
@@ -531,6 +548,9 @@ func (db *DB) appendCommandWALIntent(intent *commandWALBatchIntent, sync bool) (
 	}
 	if intent.fromReplay && intent.lsn == 0 {
 		return 0, fmt.Errorf("%w: replay intent missing assigned lsn", ErrCommandWALRejected)
+	}
+	if err := db.checkCommandWALReplayIntentActive(intent); err != nil {
+		return 0, err
 	}
 	if intent.lsn != 0 {
 		// The frame was already durably appended. Fail closed if poison was set
