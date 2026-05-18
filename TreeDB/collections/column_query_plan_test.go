@@ -427,8 +427,10 @@ func TestColumnQueryPlannerM11BRejectsPhysicalPlansWithoutColumnStoreConfig(t *t
 		RecoveryAuthoritativeGeneration: 7,
 	}
 	req := ColumnQueryPlanRequest{
-		Name:      "q1",
-		ForceKind: ColumnQueryPlanSerialColumnScan,
+		Name:             "q1",
+		ProjectedColumns: []string{"time_us"},
+		Predicates:       []ColumnQueryPredicate{{Column: "kind"}},
+		ForceKind:        ColumnQueryPlanSerialColumnScan,
 		Capabilities: ColumnQueryPlannerCapabilities{
 			SerialColumnScan:   true,
 			PhysicalAssetCount: 1,
@@ -442,6 +444,15 @@ func TestColumnQueryPlannerM11BRejectsPhysicalPlansWithoutColumnStoreConfig(t *t
 	}
 	if got, want := plan.Diagnostics.UnsupportedPlanReason, "collection has no enabled column store"; got != want {
 		t.Fatalf("unsupported reason=%q want %q", got, want)
+	}
+
+	req.ForceKind = ""
+	plan = planColumnQueryForCatalog(catalog, identity, true, req)
+	if !plan.Supported || plan.Kind != ColumnQueryPlanRowStoreBaseline {
+		t.Fatalf("non-column collection should fall back to row baseline: %+v", plan)
+	}
+	if got := plan.Diagnostics.UnsupportedPlanReason; got != "" {
+		t.Fatalf("fallback should not report requested columns as undeclared without column-store config, got %q", got)
 	}
 }
 
@@ -588,6 +599,52 @@ func TestColumnQueryPlannerM11BDoesNotReportPhysicalGranulesForRowOrIndexPlans(t
 	indexPlan := planColumnQueryForCatalog(catalog, identity, true, indexReq)
 	if indexPlan.Diagnostics.ScheduledGranules != 0 || indexPlan.Diagnostics.WorkerCount != 0 {
 		t.Fatalf("B-tree plan reported physical execution counters: %+v", indexPlan.Diagnostics)
+	}
+}
+
+func TestColumnQueryPlannerM11BForcedSourceBaselinesClearPhysicalDiagnostics(t *testing.T) {
+	catalog := &collectionCatalog{meta: CollectionMeta{
+		Name: "events",
+		Indexes: []IndexDefinition{
+			{Name: "kind_idx", Field: "kind", ValueType: IndexValueString},
+		},
+	}}
+	identity := ColumnStoreCacheIdentity{
+		Collection:                      "events",
+		ManifestRoot:                    99,
+		ManifestGeneration:              7,
+		RecoveryAuthoritativeGeneration: 7,
+	}
+	base := ColumnQueryPlanRequest{
+		Name:                  "q1",
+		ProjectedColumns:      []string{"missing_column"},
+		Predicates:            []ColumnQueryPredicate{{Column: "missing_predicate"}},
+		CandidateIndexColumns: []string{"kind"},
+		Capabilities: ColumnQueryPlannerCapabilities{
+			SerialColumnScan:   true,
+			PhysicalAssetCount: 1,
+			GranuleCount:       128,
+		},
+	}
+
+	rowReq := base
+	rowReq.ForceKind = ColumnQueryPlanRowStoreBaseline
+	rowPlan := planColumnQueryForCatalog(catalog, identity, true, rowReq)
+	if !rowPlan.Supported || rowPlan.Kind != ColumnQueryPlanRowStoreBaseline {
+		t.Fatalf("forced row baseline should remain supported without physical columns: %+v", rowPlan)
+	}
+	if rowPlan.Diagnostics.UnsupportedPlanKind != "" || rowPlan.Diagnostics.UnsupportedPlanReason != "" {
+		t.Fatalf("forced row baseline carried physical unsupported diagnostics: %+v", rowPlan.Diagnostics)
+	}
+
+	indexReq := base
+	indexReq.ForceKind = ColumnQueryPlanBTreeIndexBaseline
+	indexPlan := planColumnQueryForCatalog(catalog, identity, true, indexReq)
+	if !indexPlan.Supported || indexPlan.Kind != ColumnQueryPlanBTreeIndexBaseline || indexPlan.IndexName != "kind_idx" {
+		t.Fatalf("forced B-tree baseline should remain supported without physical columns: %+v", indexPlan)
+	}
+	if indexPlan.Diagnostics.UnsupportedPlanKind != "" || indexPlan.Diagnostics.UnsupportedPlanReason != "" {
+		t.Fatalf("forced B-tree baseline carried physical unsupported diagnostics: %+v", indexPlan.Diagnostics)
 	}
 }
 

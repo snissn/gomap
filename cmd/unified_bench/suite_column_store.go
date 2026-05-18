@@ -32,6 +32,16 @@ const (
 	columnStoreSuiteBenchDBName       = "treedb_column_store"
 	columnStoreSuiteBenchDisplayName  = "TreeDB Column Store"
 	columnStoreSuitePathCanonicalHelp = "row_store_baseline, b_tree_index_baseline, serial_column_scan, aggregate_metadata, parallel_column_scan"
+	columnStoreQueryQ1                = "q1"
+	columnStoreQueryQ2                = "q2"
+	columnStoreQueryQ3                = "q3"
+	columnStoreQueryQ4A               = "q4a"
+	columnStoreQueryQ4B               = "q4b"
+	columnStoreQueryQ5                = "q5"
+	columnStoreQueryQ5Metadata        = "q5_metadata"
+	columnStoreSuiteBenchMetricPrefix = "column_store_"
+	columnStoreSuiteAliasFullScanQ1   = "alias_full_scan_from_" + columnStoreQueryQ1
+	columnStoreSuiteAliasPrefixQ4A    = "alias_prefix_scan_from_" + columnStoreQueryQ4A
 	columnStoreSuiteQ5AggregateMin    = "q5_did_time_span_min"
 	columnStoreSuiteQ5AggregateMax    = "q5_did_time_span_max"
 )
@@ -1017,7 +1027,7 @@ func runColumnStoreSuiteQueries(collection *collections.Collection, rows int, ra
 			ResultCount:         resultCount,
 			RawHash:             rawHash,
 			ProductionHash:      hash,
-			// TODO(M11C): populate from physical aggregate-metadata diagnostics.
+			// TODO(#1534 M11C): populate from physical aggregate-metadata diagnostics.
 			MetadataHits:         0,
 			SkippedGranules:      plan.Diagnostics.SkippedGranules,
 			ScheduledGranules:    plan.Diagnostics.ScheduledGranules,
@@ -1080,11 +1090,11 @@ func columnStoreSuiteQueryIndexCandidates(name string) []string {
 	// index records which secondary structure is traversed; it is not a
 	// predicate-selective read path until range pushdown lands.
 	switch name {
-	case "q1", "q2":
+	case columnStoreQueryQ1, columnStoreQueryQ2:
 		return []string{"kind"}
-	case "q3":
+	case columnStoreQueryQ3:
 		return []string{"time_us"}
-	case "q4a", "q4b", "q5", "q5_metadata":
+	case columnStoreQueryQ4A, columnStoreQueryQ4B, columnStoreQueryQ5, columnStoreQueryQ5Metadata:
 		return []string{"did"}
 	default:
 		return nil
@@ -1092,7 +1102,7 @@ func columnStoreSuiteQueryIndexCandidates(name string) []string {
 }
 
 func columnStoreSuiteAggregateMetadataName(name string) string {
-	if name == "q5_metadata" {
+	if name == columnStoreQueryQ5Metadata {
 		// The executable q5_metadata path still aliases q5 until physical
 		// aggregate metadata assets exist, but forced aggregate_metadata planning
 		// should validate against a real registered catalog entry.
@@ -1177,9 +1187,6 @@ func scanColumnStoreSuiteEventsByIndex(collection *collections.Collection, rows 
 		return nil, 0, 0, fmt.Errorf("column_store: scan B-tree index %s for %s: %w", indexName, queryName, err)
 	}
 	if truncated {
-		if materialized <= rows {
-			return nil, 0, 0, fmt.Errorf("column_store: B-tree index scan truncated before sentinel overrun: materialized %d rows with expected rows=%d and sentinel limit=%d", materialized, rows, rows+1)
-		}
 		return nil, 0, 0, fmt.Errorf("column_store: B-tree index scan exceeded expected row count: materialized at least %d rows with sentinel limit %d; scalar index should emit one secondary entry per document", materialized, rows+1)
 	}
 	if materialized != rows {
@@ -1188,7 +1195,15 @@ func scanColumnStoreSuiteEventsByIndex(collection *collections.Collection, rows 
 	return events, materialized, bytesRead, nil
 }
 
-var columnStoreQueryNameList = [...]string{"q1", "q2", "q3", "q4a", "q4b", "q5", "q5_metadata"}
+var columnStoreQueryNameList = [...]string{
+	columnStoreQueryQ1,
+	columnStoreQueryQ2,
+	columnStoreQueryQ3,
+	columnStoreQueryQ4A,
+	columnStoreQueryQ4B,
+	columnStoreQueryQ5,
+	columnStoreQueryQ5Metadata,
+}
 
 func columnStoreQueryNames() []string {
 	return append([]string(nil), columnStoreQueryNameList[:]...)
@@ -1204,17 +1219,17 @@ func columnStoreQueryNameKnown(name string) bool {
 }
 
 func columnStoreQueryAliasOf(name, path string) string {
-	if name == "q5_metadata" && (path == columnStorePathRowStoreBaseline || path == columnStorePathBTreeIndexBaseline) {
-		return "q5"
+	if name == columnStoreQueryQ5Metadata && (path == columnStorePathRowStoreBaseline || path == columnStorePathBTreeIndexBaseline) {
+		return columnStoreQueryQ5
 	}
 	return ""
 }
 
 func columnStoreQueryImplementationNote(name, path string) string {
-	if name == "q5_metadata" && path == columnStorePathBTreeIndexBaseline {
+	if name == columnStoreQueryQ5Metadata && path == columnStorePathBTreeIndexBaseline {
 		return "q5_alias_full_unbounded_secondary_index_scan_no_predicate_pushdown_until_physical_aggregate_metadata_path"
 	}
-	if name == "q5_metadata" && path == columnStorePathRowStoreBaseline {
+	if name == columnStoreQueryQ5Metadata && path == columnStorePathRowStoreBaseline {
 		return path + "_alias_until_physical_aggregate_metadata_path"
 	}
 	if path == columnStorePathBTreeIndexBaseline {
@@ -1247,21 +1262,21 @@ func columnStoreQueryHashLineName(name string) string {
 	// q5_metadata is an execution/reporting label until the physical metadata
 	// path exists; parity hashes use q5's logical result lines so alias
 	// equivalence is directly testable.
-	if name == "q5_metadata" {
-		return "q5"
+	if name == columnStoreQueryQ5Metadata {
+		return columnStoreQueryQ5
 	}
 	return name
 }
 
 func columnStoreQueryLines(name string, events []columnStoreDecodedEvent) ([]string, error) {
 	switch name {
-	case "q1":
+	case columnStoreQueryQ1:
 		counts := make(map[string]int)
 		for _, event := range events {
 			counts[event.Kind]++
 		}
 		return formatIntMapLines(name, counts), nil
-	case "q2":
+	case columnStoreQueryQ2:
 		distinct := make(map[string]map[string]struct{})
 		for _, event := range events {
 			set := distinct[event.Kind]
@@ -1276,14 +1291,14 @@ func columnStoreQueryLines(name string, events []columnStoreDecodedEvent) ([]str
 			counts[kind] = len(set)
 		}
 		return formatIntMapLines(name, counts), nil
-	case "q3":
+	case columnStoreQueryQ3:
 		counts := make(map[string]int)
 		for _, event := range events {
 			hour := (event.TimeUS / 3_600_000_000) % 24
 			counts[fmt.Sprintf("hour_%02d", hour)]++
 		}
 		return formatIntMapLines(name, counts), nil
-	case "q4a":
+	case columnStoreQueryQ4A:
 		mins := make(map[string]int64)
 		for _, event := range events {
 			if cur, ok := mins[event.Did]; !ok || event.TimeUS < cur {
@@ -1291,7 +1306,7 @@ func columnStoreQueryLines(name string, events []columnStoreDecodedEvent) ([]str
 			}
 		}
 		return formatInt64MapLines(name, mins), nil
-	case "q4b":
+	case columnStoreQueryQ4B:
 		maxs := make(map[string]int64)
 		for _, event := range events {
 			if cur, ok := maxs[event.Did]; !ok || event.TimeUS > cur {
@@ -1299,7 +1314,7 @@ func columnStoreQueryLines(name string, events []columnStoreDecodedEvent) ([]str
 			}
 		}
 		return formatInt64MapLines(name, maxs), nil
-	case "q5":
+	case columnStoreQueryQ5:
 		type span struct {
 			min int64
 			max int64
@@ -1576,20 +1591,31 @@ func columnStoreBenchRun(baseCfg BenchConfig, profile, dataDir string, report co
 	cfg.BatchSize = report.BatchSize
 	cfg.Profile = profile
 	cfg.DBsArg = "treedb"
-	testOrder := []string{columnStoreSuiteBenchTestName, "alias_full_scan_from_q1", "alias_prefix_scan_from_q4a", "column_store_q1", "column_store_q2", "column_store_q3", "column_store_q4a", "column_store_q4b", "column_store_q5", "column_store_q5_metadata"}
+	testOrder := []string{
+		columnStoreSuiteBenchTestName,
+		columnStoreSuiteAliasFullScanQ1,
+		columnStoreSuiteAliasPrefixQ4A,
+		columnStoreSuiteBenchMetricPrefix + columnStoreQueryQ1,
+		columnStoreSuiteBenchMetricPrefix + columnStoreQueryQ2,
+		columnStoreSuiteBenchMetricPrefix + columnStoreQueryQ3,
+		columnStoreSuiteBenchMetricPrefix + columnStoreQueryQ4A,
+		columnStoreSuiteBenchMetricPrefix + columnStoreQueryQ4B,
+		columnStoreSuiteBenchMetricPrefix + columnStoreQueryQ5,
+		columnStoreSuiteBenchMetricPrefix + columnStoreQueryQ5Metadata,
+	}
 	cfg.TestsArg = strings.Join(testOrder, ",")
 	results := make(map[string]map[string]float64)
 	displayNames := map[string]string{
-		columnStoreSuiteBenchTestName: "Column store query phase",
-		"alias_full_scan_from_q1":     "Alias full scan from q1",
-		"alias_prefix_scan_from_q4a":  "Alias prefix scan from q4a",
-		"column_store_q1":             "Column q1",
-		"column_store_q2":             "Column q2",
-		"column_store_q3":             "Column q3",
-		"column_store_q4a":            "Column q4a",
-		"column_store_q4b":            "Column q4b",
-		"column_store_q5":             "Column q5",
-		"column_store_q5_metadata":    "Column q5 metadata",
+		columnStoreSuiteBenchTestName:                                  "Column store query phase",
+		columnStoreSuiteAliasFullScanQ1:                                "Alias full scan from q1",
+		columnStoreSuiteAliasPrefixQ4A:                                 "Alias prefix scan from q4a",
+		columnStoreSuiteBenchMetricPrefix + columnStoreQueryQ1:         "Column q1",
+		columnStoreSuiteBenchMetricPrefix + columnStoreQueryQ2:         "Column q2",
+		columnStoreSuiteBenchMetricPrefix + columnStoreQueryQ3:         "Column q3",
+		columnStoreSuiteBenchMetricPrefix + columnStoreQueryQ4A:        "Column q4a",
+		columnStoreSuiteBenchMetricPrefix + columnStoreQueryQ4B:        "Column q4b",
+		columnStoreSuiteBenchMetricPrefix + columnStoreQueryQ5:         "Column q5",
+		columnStoreSuiteBenchMetricPrefix + columnStoreQueryQ5Metadata: "Column q5 metadata",
 	}
 	byName := make(map[string]columnStoreQueryMetric, len(report.Queries))
 	var queryDuration time.Duration
@@ -1602,16 +1628,16 @@ func columnStoreBenchRun(baseCfg BenchConfig, profile, dataDir string, report co
 		}
 		queryDuration += duration
 		queryMaterializations += q.RowMaterializations
-		results["column_store_"+q.Name] = map[string]float64{columnStoreSuiteBenchDisplayName: q.RowsPerSecond}
+		results[columnStoreSuiteBenchMetricPrefix+q.Name] = map[string]float64{columnStoreSuiteBenchDisplayName: q.RowsPerSecond}
 	}
 	if queryDuration > 0 {
 		results[columnStoreSuiteBenchTestName] = map[string]float64{columnStoreSuiteBenchDisplayName: float64(queryMaterializations) / queryDuration.Seconds()}
 	}
-	if q, ok := byName["q1"]; ok {
-		results["alias_full_scan_from_q1"] = map[string]float64{columnStoreSuiteBenchDisplayName: q.RowsPerSecond}
+	if q, ok := byName[columnStoreQueryQ1]; ok {
+		results[columnStoreSuiteAliasFullScanQ1] = map[string]float64{columnStoreSuiteBenchDisplayName: q.RowsPerSecond}
 	}
-	if q, ok := byName["q4a"]; ok {
-		results["alias_prefix_scan_from_q4a"] = map[string]float64{columnStoreSuiteBenchDisplayName: q.RowsPerSecond}
+	if q, ok := byName[columnStoreQueryQ4A]; ok {
+		results[columnStoreSuiteAliasPrefixQ4A] = map[string]float64{columnStoreSuiteBenchDisplayName: q.RowsPerSecond}
 	}
 	return BenchRun{
 		Config:       cfg,

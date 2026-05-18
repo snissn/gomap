@@ -169,6 +169,7 @@ func planColumnQueryForCatalog(catalog *collectionCatalog, identity ColumnStoreC
 func forcedColumnQueryPlan(catalog *collectionCatalog, identity ColumnStoreCacheIdentity, identityOK bool, req ColumnQueryPlanRequest, diag ColumnQueryPlanDiagnostics) ColumnQueryPlan {
 	switch req.ForceKind {
 	case ColumnQueryPlanRowStoreBaseline:
+		diag = clearColumnQueryUnsupportedDiagnostics(diag)
 		diag.Reason = "forced row-store baseline"
 		return ColumnQueryPlan{Kind: ColumnQueryPlanRowStoreBaseline, Supported: true, Diagnostics: diag}
 	case ColumnQueryPlanBTreeIndexBaseline:
@@ -176,6 +177,7 @@ func forcedColumnQueryPlan(catalog *collectionCatalog, identity ColumnStoreCache
 		if !ok {
 			return unsupportedColumnQueryPlan(ColumnQueryPlanBTreeIndexBaseline, "no matching collection secondary index", diag)
 		}
+		diag = clearColumnQueryUnsupportedDiagnostics(diag)
 		diag.SelectedIndexName = idx.Name
 		diag.SelectedIndexField = idx.Field
 		diag.Reason = "forced matching collection secondary index for full-scan B-tree baseline"
@@ -243,13 +245,7 @@ func parallelColumnQueryPlan(catalog *collectionCatalog, identity ColumnStoreCac
 }
 
 func physicalColumnQuerySupported(catalog *collectionCatalog, identity ColumnStoreCacheIdentity, identityOK bool, req ColumnQueryPlanRequest, kind ColumnQueryPlanKind) bool {
-	if !columnQueryManifestRecoveryAuthoritative(identity, identityOK) || req.Capabilities.PhysicalAssetCount <= 0 {
-		return false
-	}
-	if !columnQueryCatalogHasEnabledColumnStore(catalog) {
-		return false
-	}
-	if _, ok := missingColumnStoreRequestColumn(catalog, req); ok {
+	if !physicalColumnQueryBaseSupported(catalog, identity, identityOK, req) {
 		return false
 	}
 	switch kind {
@@ -292,6 +288,20 @@ func physicalColumnQueryUnsupportedReason(identity ColumnStoreCacheIdentity, ide
 		}
 	}
 	return "physical column plan is not supported"
+}
+
+func physicalColumnQueryBaseSupported(catalog *collectionCatalog, identity ColumnStoreCacheIdentity, identityOK bool, req ColumnQueryPlanRequest) bool {
+	if req.Capabilities.PhysicalAssetCount <= 0 {
+		return false
+	}
+	if !columnQueryManifestRecoveryAuthoritative(identity, identityOK) {
+		return false
+	}
+	if !columnQueryCatalogHasEnabledColumnStore(catalog) {
+		return false
+	}
+	_, missing := missingColumnStoreRequestColumn(catalog, req)
+	return !missing
 }
 
 func physicalColumnQueryUnsupportedReasonForCatalog(catalog *collectionCatalog, identity ColumnStoreCacheIdentity, identityOK bool, req ColumnQueryPlanRequest, kind ColumnQueryPlanKind) string {
@@ -385,18 +395,6 @@ func missingColumnStoreRequestColumn(catalog *collectionCatalog, req ColumnQuery
 		return "", false
 	}
 	if !columnQueryCatalogHasEnabledColumnStore(catalog) {
-		for _, column := range req.ProjectedColumns {
-			column = strings.TrimSpace(column)
-			if column != "" {
-				return column, true
-			}
-		}
-		for _, pred := range req.Predicates {
-			column := strings.TrimSpace(pred.Column)
-			if column != "" {
-				return column, true
-			}
-		}
 		return "", false
 	}
 	declared := catalog.meta.Options.ColumnStore.Columns
@@ -437,6 +435,12 @@ func unsupportedColumnQueryPlan(kind ColumnQueryPlanKind, reason string, diag Co
 	return ColumnQueryPlan{Kind: kind, Supported: false, Diagnostics: diag}
 }
 
+func clearColumnQueryUnsupportedDiagnostics(diag ColumnQueryPlanDiagnostics) ColumnQueryPlanDiagnostics {
+	diag.UnsupportedPlanKind = ""
+	diag.UnsupportedPlanReason = ""
+	return diag
+}
+
 func columnQueryManifestRecoveryAuthoritative(identity ColumnStoreCacheIdentity, ok bool) bool {
 	return ok &&
 		identity.ManifestGeneration != 0 &&
@@ -449,15 +453,18 @@ func columnQueryPlannerCandidateCount(catalog *collectionCatalog, identity Colum
 	}
 	count := 1 // row-store fallback
 	count += columnQueryBTreeCandidateCount(catalog, req)
-	if physicalColumnQuerySupported(catalog, identity, identityOK, req, ColumnQueryPlanSerialColumnScan) {
+	physicalBaseSupported := physicalColumnQueryBaseSupported(catalog, identity, identityOK, req)
+	if physicalBaseSupported && req.Capabilities.SerialColumnScan {
 		count++
 	}
 	if strings.TrimSpace(req.AggregateMetadataName) != "" &&
 		catalogHasColumnAggregateMetadata(catalog, req.AggregateMetadataName) &&
-		physicalColumnQuerySupported(catalog, identity, identityOK, req, ColumnQueryPlanAggregateMetadata) {
+		physicalBaseSupported &&
+		req.Capabilities.AggregateMetadata {
 		count++
 	}
-	if physicalColumnQuerySupported(catalog, identity, identityOK, req, ColumnQueryPlanParallelColumnScan) &&
+	if physicalBaseSupported &&
+		req.Capabilities.ParallelColumnScan &&
 		parallelColumnQueryShapeUnsupportedReason(req) == "" {
 		count++
 	}
