@@ -108,21 +108,20 @@ func BenchmarkColumnStoreCommandWALReplayM10C(b *testing.B) {
 	for _, columnStore := range []bool{false, true} {
 		b.Run(fmt.Sprintf("insert/frames=%d/batch=%d/column_store=%t", frames, batchSize, columnStore), func(b *testing.B) {
 			templateDir, docsPerReplay, encodedPayloadBytesPerReplay, wantAppliedLSN := prepareColumnStoreCommandWALReplayBenchmarkDirM10C(b, columnStore, frames, batchSize)
-			workDir := filepath.Join(b.TempDir(), "replay-work")
+			workRoot := b.TempDir()
+			workDirs := make([]string, b.N)
+			for i := 0; i < b.N; i++ {
+				workDir := filepath.Join(workRoot, fmt.Sprintf("replay-work-%06d", i))
+				copyColumnStoreCommandWALReplayBenchmarkDirM10C(b, templateDir, workDir)
+				workDirs[i] = workDir
+			}
 
 			b.ReportAllocs()
 			b.SetBytes(int64(encodedPayloadBytesPerReplay))
-			b.StopTimer()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				if err := os.RemoveAll(workDir); err != nil {
-					b.Fatalf("RemoveAll replay work dir: %v", err)
-				}
-				copyColumnStoreCommandWALReplayBenchmarkDirM10C(b, templateDir, workDir)
-				b.StartTimer()
-
 				backend, err := backenddb.Open(backenddb.Options{
-					Dir:                    workDir,
+					Dir:                    workDirs[i],
 					CommandWAL:             true,
 					Durability:             backenddb.DurabilityDurable,
 					DisableBackgroundPrune: true,
@@ -146,7 +145,6 @@ func BenchmarkColumnStoreCommandWALReplayM10C(b *testing.B) {
 					}
 					assertColumnManifestStateNoReopenM10C(b, collection, uint64(frames), wantAppliedLSN)
 				}
-				b.StopTimer()
 				if err := backend.Close(); err != nil {
 					b.Fatalf("Close replay DB: %v", err)
 				}
