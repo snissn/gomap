@@ -39,7 +39,8 @@ The reported `B/op` and `allocs/op` are for warmed hot-loop search. Graph
 construction, column loading, index build, and document materialization are
 outside the timed loop. `graph_payload_bytes` is an approximate in-memory
 payload footprint for vectors, inverse norms, CSR adjacency, and compact
-document IDs.
+document IDs. `graph_payload_bytes/node` reports that approximate footprint
+divided by the row count.
 
 Optional comparators:
 

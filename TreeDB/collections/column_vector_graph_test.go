@@ -668,6 +668,7 @@ func BenchmarkColumnVectorGraphSearchCosine(b *testing.B) {
 		b.Fatalf("warm results=%d want %d", len(warm), opts.TopK)
 	}
 	b.ReportAllocs()
+	// Approximate bytes scored per search: candidates touched * dims * sizeof(float32).
 	b.SetBytes(int64(warmTrace.CandidatesExamined * graph.Dims() * 4))
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -716,13 +717,15 @@ func BenchmarkColumnVectorGraphSearchCosineParallel(b *testing.B) {
 		scratches[i] = scratch
 	}
 	b.ReportAllocs()
+	// Approximate bytes scored per search: candidates touched * dims * sizeof(float32).
 	b.SetBytes(int64(warmTrace.CandidatesExamined * graph.Dims() * 4))
 	b.ResetTimer()
 	var nextWorker uint64
 	b.RunParallel(func(pb *testing.PB) {
 		workerID := int(atomic.AddUint64(&nextWorker, 1)) - 1
 		if workerID >= len(scratches) {
-			panic(fmt.Sprintf("RunParallel spawned %d workers, but only %d scratches were prewarmed", workerID+1, len(scratches)))
+			b.Errorf("RunParallel spawned worker %d, but only %d scratches were prewarmed", workerID+1, len(scratches))
+			return
 		}
 		scratch := scratches[workerID]
 		var localSink int64
@@ -756,6 +759,9 @@ func BenchmarkColumnVectorGraphSearchCosineScale(b *testing.B) {
 	for _, tc := range cases {
 		tc := tc
 		b.Run(tc.name, func(b *testing.B) {
+			if tc.rows >= 1_000_000 && testing.Short() {
+				b.Skip("skipping 1M-row scale benchmark in -short mode")
+			}
 			graph, query := openColumnVectorGraphScaleBenchmark(b, tc.rows, tc.dims, tc.degree)
 			opts := ColumnVectorGraphSearchOptions{TopK: 10, EfSearch: 128}
 			b.Run("serial", func(b *testing.B) {
@@ -779,6 +785,7 @@ func benchmarkColumnVectorGraphSearchCosineScaleSerial(b *testing.B, graph *Colu
 		b.Fatalf("warm results=%d want %d", len(warm), opts.TopK)
 	}
 	b.ReportAllocs()
+	// Approximate bytes scored per search: candidates touched * dims * sizeof(float32).
 	b.SetBytes(int64(warmTrace.CandidatesExamined * graph.Dims() * 4))
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -813,13 +820,15 @@ func benchmarkColumnVectorGraphSearchCosineScaleParallel(b *testing.B, graph *Co
 		scratches[i] = scratch
 	}
 	b.ReportAllocs()
+	// Approximate bytes scored per search: candidates touched * dims * sizeof(float32).
 	b.SetBytes(int64(warmTrace.CandidatesExamined * graph.Dims() * 4))
 	b.ResetTimer()
 	var nextWorker uint64
 	b.RunParallel(func(pb *testing.PB) {
 		workerID := int(atomic.AddUint64(&nextWorker, 1)) - 1
 		if workerID >= len(scratches) {
-			panic(fmt.Sprintf("RunParallel spawned %d workers, but only %d scratches were prewarmed", workerID+1, len(scratches)))
+			b.Errorf("RunParallel spawned worker %d, but only %d scratches were prewarmed", workerID+1, len(scratches))
+			return
 		}
 		scratch := scratches[workerID]
 		var localSink int64

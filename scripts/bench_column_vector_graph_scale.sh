@@ -43,6 +43,11 @@ if [[ "$RUN_USEARCH" == "true" ]]; then
 fi
 
 if [[ "$RUN_VECTOR_DB_COMPARE" == "true" ]]; then
+	compare_script="$ROOT/scripts/bench_vector_db_compare.sh"
+	if [[ ! -f "$compare_script" ]]; then
+		echo "ERROR: $compare_script not found" >&2
+		exit 1
+	fi
 	COMPARE_DOCS="${COMPARE_DOCS:-100000}"
 	COMPARE_DIMS="${COMPARE_DIMS:-128}"
 	COMPARE_QUERIES="${COMPARE_QUERIES:-50000}"
@@ -55,5 +60,5 @@ if [[ "$RUN_VECTOR_DB_COMPARE" == "true" ]]; then
 		QUERIES="$COMPARE_QUERIES" \
 		VALIDATE_QUERIES="$COMPARE_VALIDATE_QUERIES" \
 		BACKENDS="$COMPARE_BACKENDS" \
-		scripts/bench_vector_db_compare.sh
+		"$compare_script"
 fi

@@ -561,6 +561,8 @@ func sortTopColumnVectorGraphOrdinalCandidates(candidates []vectorIndexCandidate
 		sortVectorIndexCandidates(candidates)
 		return candidates
 	}
+	// Selection-sort only the returned prefix. This is O(n*k), which is cheaper
+	// than a full candidate sort for the small top-k used by vector search.
 	for i := 0; i < limit; i++ {
 		best := i
 		for j := i + 1; j < len(candidates); j++ {
@@ -581,6 +583,8 @@ func (g *ColumnVectorGraph) sortTopCandidates(candidates []vectorIndexCandidate,
 		g.sortCandidates(candidates)
 		return candidates
 	}
+	// Selection-sort only the returned prefix. This is O(n*k), which is cheaper
+	// than a full candidate sort for the small top-k used by vector search.
 	for i := 0; i < limit; i++ {
 		best := i
 		for j := i + 1; j < len(candidates); j++ {
