@@ -21,6 +21,7 @@ type ColumnAssetManager struct {
 	publishEpoch  uint64
 	nextAttemptID uint64
 	syncedAttempt map[uint64]uint64
+	refFailedAt   map[ColumnAssetRef]uint64
 }
 
 type ColumnAssetManagerReclamationPlan struct {
@@ -76,6 +77,7 @@ func NewColumnAssetManager(store ColumnAssetStore) (*ColumnAssetManager, error) 
 		publishFailed: make(map[ColumnAssetRef]string),
 		rewriteDebt:   make(map[ColumnAssetRef]string),
 		syncedAttempt: make(map[uint64]uint64),
+		refFailedAt:   make(map[ColumnAssetRef]uint64),
 	}, nil
 }
 
@@ -356,8 +358,10 @@ func (m *ColumnAssetManager) MarkPublishSucceeded(synced ColumnAssetSyncedPublis
 		return fmt.Errorf("colgranule: synced publish closure already consumed")
 	}
 	delete(m.syncedAttempt, synced.attempt)
-	if epoch != m.publishEpoch {
-		return fmt.Errorf("colgranule: synced publish closure predates a later publish failure")
+	for _, asset := range synced.closure.PreparedAssets {
+		if m.refFailedAt[asset.Ref] > epoch {
+			return fmt.Errorf("colgranule: synced publish closure predates a later publish failure for ref %+v", asset.Ref)
+		}
 	}
 	for _, asset := range synced.closure.PreparedAssets {
 		if failedReason, ok := m.publishFailed[asset.Ref]; ok {
@@ -385,7 +389,11 @@ func (m *ColumnAssetManager) MarkPublishFailed(prepared []ColumnPreparedAsset, r
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.publishEpoch++
+	if m.refFailedAt == nil {
+		m.refFailedAt = make(map[ColumnAssetRef]uint64)
+	}
 	for _, asset := range prepared {
+		m.refFailedAt[asset.Ref] = m.publishEpoch
 		if _, publishOwned := m.publishFailed[asset.Ref]; publishOwned {
 			continue
 		}

@@ -421,6 +421,38 @@ func TestColumnAssetManagerPublishFailureInvalidatesOlderSyncedClosure(t *testin
 	}
 }
 
+func TestColumnAssetManagerPublishFailureDoesNotInvalidateDisjointSyncedClosure(t *testing.T) {
+	store := NewMemoryColumnAssetStore()
+	manager, err := NewColumnAssetManager(store)
+	if err != nil {
+		t.Fatalf("NewColumnAssetManager: %v", err)
+	}
+	refA, err := manager.Put(ColumnAssetKindTCS1PartImage, make([]byte, tcs1HeaderBytes+16))
+	if err != nil {
+		t.Fatalf("Put A: %v", err)
+	}
+	refB, err := manager.Put(ColumnAssetKindTCS1PartImage, make([]byte, tcs1HeaderBytes+24))
+	if err != nil {
+		t.Fatalf("Put B: %v", err)
+	}
+	preparedA := ColumnPreparedAsset{Ref: refA, GenerationID: 7, PublishID: 11, Reason: "publish staged A"}
+	preparedB := ColumnPreparedAsset{Ref: refB, GenerationID: 8, PublishID: 12, Reason: "publish staged B"}
+	closureA, err := manager.PreparePublishClosure([]ColumnPreparedAsset{preparedA})
+	if err != nil {
+		t.Fatalf("PreparePublishClosure A: %v", err)
+	}
+	syncedA, err := manager.SyncPublishClosure(closureA)
+	if err != nil {
+		t.Fatalf("SyncPublishClosure A: %v", err)
+	}
+	if err := manager.MarkPublishFailed([]ColumnPreparedAsset{preparedB}, "root publish failed B"); err != nil {
+		t.Fatalf("MarkPublishFailed B: %v", err)
+	}
+	if err := manager.MarkPublishSucceeded(syncedA); err != nil {
+		t.Fatalf("MarkPublishSucceeded A after disjoint failure: %v", err)
+	}
+}
+
 func TestColumnAssetManagerPublishSucceededPreservesUnrelatedQuarantine(t *testing.T) {
 	store := NewMemoryColumnAssetStore()
 	manager, err := NewColumnAssetManager(store)
