@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -1064,6 +1065,54 @@ func TestCollectionCommandWALCreateCollectionReplaySameMetadataIdempotent(t *tes
 	}
 	if got := reopen.State().AppliedCommandLSN; got != 1 {
 		t.Fatalf("AppliedCommandLSN=%d, want 1", got)
+	}
+}
+
+func TestCollectionCommandWALCreateCollectionReplaySameColumnMetadataAdvancesBeforeRelaxedGate(t *testing.T) {
+	dir := t.TempDir()
+	meta := CollectionMeta{
+		Name:    "events",
+		Options: CollectionOptions{ColumnStore: testColumnStoreConfig(nil)},
+	}
+	d, err := backenddb.Open(backenddb.Options{
+		Dir:                    dir,
+		Durability:             backenddb.DurabilityDurable,
+		DisableBackgroundPrune: true,
+	})
+	if err != nil {
+		t.Fatalf("Open setup DB: %v", err)
+	}
+	if _, err := NewCollectionManager(d).CreateCollection(&meta); err != nil {
+		_ = d.Close()
+		t.Fatalf("CreateCollection setup: %v", err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		_ = d.Close()
+		t.Fatalf("Checkpoint setup DB: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close setup DB: %v", err)
+	}
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+		t.Fatalf("SaveFormatConfig: %v", err)
+	}
+	writeCollectionCommandWALFrame(t, dir, 1, commitlog.CommandKindCatalogCreateCollection, commitlog.PayloadFormatCatalogCreateCollectionV1, catalogCreateCollectionPayload(t, meta))
+
+	reopen, err := backenddb.Open(backenddb.Options{
+		Dir:                    dir,
+		CommandWAL:             true,
+		Durability:             backenddb.DurabilityWALOnRelaxed,
+		DisableBackgroundPrune: true,
+	})
+	if err != nil {
+		t.Fatalf("Open relaxed command WAL DB after idempotent replay: %v", err)
+	}
+	defer func() { _ = reopen.Close() }()
+	if got := reopen.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("AppliedCommandLSN=%d, want 1 after idempotent column create replay", got)
+	}
+	if _, err := NewCollectionManager(reopen).OpenCollection("events"); err == nil || !strings.Contains(err.Error(), "requires durable backend for open") {
+		t.Fatalf("OpenCollection relaxed error=%v, want durable-only fail-closed after replay", err)
 	}
 }
 

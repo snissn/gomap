@@ -2597,8 +2597,11 @@ func (m *CollectionManager) CreateCollection(meta *CollectionMeta) (*CollectionM
 }
 
 func (m *CollectionManager) createCollectionWithCommandWALIntent(normalized CollectionMeta, commandWALIntent *backenddb.CommandWALIntent) (*CollectionMeta, error) {
-	if err := validateColumnStoreProfileSupportForDB(m.db, normalized.Options.ColumnStore, "create"); err != nil {
-		return nil, err
+	coveredCommandWALIntent := commandWALIntent != nil && commandWALIntent.AssignedLSN() != 0
+	if !coveredCommandWALIntent {
+		if err := validateColumnStoreProfileSupportForDB(m.db, normalized.Options.ColumnStore, "create"); err != nil {
+			return nil, err
+		}
 	}
 	snap := m.db.AcquireSnapshot()
 	if snap == nil {
