@@ -33,11 +33,8 @@ func columnStoreWriteEnabled(meta CollectionMeta) bool {
 // live collection handle because durability mode and command-WAL state are DB
 // properties, not catalog metadata.
 func (c *Collection) requireColumnStoreCommandWAL(meta CollectionMeta, commandWALIntent *backenddb.CommandWALIntent) error {
-	if !columnStoreWriteEnabled(meta) {
-		return nil
-	}
 	cfg := meta.Options.ColumnStore
-	if cfg == nil {
+	if cfg == nil || !cfg.Enabled {
 		return nil
 	}
 	profileSupport := cfg.ProfileSupport
