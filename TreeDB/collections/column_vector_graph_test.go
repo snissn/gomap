@@ -539,14 +539,14 @@ func BenchmarkColumnVectorGraphSearchCosineParallel(b *testing.B) {
 		b.Fatal("missing query vector")
 	}
 	opts := ColumnVectorGraphSearchOptions{TopK: 10, EfSearch: 128}
-	// Pre-warm one scratch per logical CPU so the pool always returns a warmed
-	// scratch regardless of how many goroutines RunParallel actually spawns.
-	// sync.Pool is used instead of a fixed-size channel so the benchmark is
-	// robust to runtime scheduling changes that could create more goroutines
-	// than GOMAXPROCS (in which case a fixed-size channel could deadlock).
+	b.SetParallelism(1)
+	// RunParallel starts parallelism*GOMAXPROCS workers. Prewarm one exclusive
+	// scratch per worker before ResetTimer so the timed loop measures hot search,
+	// not per-worker scratch allocation or warmup. If Go ever changes this worker
+	// contract, fail instead of sharing scratch or allocating inside the timed loop.
 	workers := runtime.GOMAXPROCS(0)
 	var warmTrace ColumnVectorGraphSearchTrace
-	scratchPool := &sync.Pool{New: func() any { return new(ColumnVectorGraphSearchScratch) }}
+	scratches := make([]*ColumnVectorGraphSearchScratch, workers)
 	for i := 0; i < workers; i++ {
 		scratch := new(ColumnVectorGraphSearchScratch)
 		warm, trace, err := graph.SearchCosine(query, opts, scratch)
@@ -557,14 +557,18 @@ func BenchmarkColumnVectorGraphSearchCosineParallel(b *testing.B) {
 			b.Fatalf("warm worker %d results=%d want %d", i, len(warm), opts.TopK)
 		}
 		warmTrace = trace
-		scratchPool.Put(scratch)
+		scratches[i] = scratch
 	}
 	b.ReportAllocs()
 	b.SetBytes(int64(warmTrace.CandidatesExamined * graph.Dims() * 4))
 	b.ResetTimer()
+	var nextWorker uint64
 	b.RunParallel(func(pb *testing.PB) {
-		scratch := scratchPool.Get().(*ColumnVectorGraphSearchScratch)
-		defer scratchPool.Put(scratch)
+		workerID := int(atomic.AddUint64(&nextWorker, 1)) - 1
+		if workerID >= len(scratches) {
+			panic(fmt.Sprintf("RunParallel spawned %d workers, but only %d scratches were prewarmed", workerID+1, len(scratches)))
+		}
+		scratch := scratches[workerID]
 		var localSink int64
 		for pb.Next() {
 			results, trace, err := graph.SearchCosine(query, opts, scratch)
