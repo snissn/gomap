@@ -24,7 +24,12 @@ type orderedRootPublishPlan uint8
 // was called without the command frame that defines the publish LSN.
 var ErrCommandWALContextMissingFrame = errors.New("treedb: command WAL context publish requires a command frame")
 
-var errCommandWALContextZeroLSN = errors.New("treedb: command WAL context publish appended zero LSN")
+var (
+	errCommandWALContextZeroLSN = errors.New("treedb: command WAL context publish appended zero LSN")
+
+	errOrderedRootGroupCommandWALContextNilSystemBuilder           = errors.New("treedb: PublishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBuilder: nil system builder")
+	errOrderedRootDeltaBatchGroupCommandWALContextNilSystemBuilder = errors.New("treedb: PublishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilder: nil system builder")
+)
 
 const (
 	orderedRootPublishPlanColdBuild orderedRootPublishPlan = iota
@@ -1330,7 +1335,8 @@ func (db *DB) PublishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBui
 // PublishOrderedRootDeltaGroupWithCommandWALContextRootBuilderAndSystemDeltaBuilder
 // is like PublishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBuilder,
 // but may append additional root-local mutation streams after the command-WAL
-// LSN is assigned.
+// LSN is assigned. The returned rootIDs slice contains the original ordered
+// inputs first, then any context-built roots in returned order.
 func (db *DB) PublishOrderedRootDeltaGroupWithCommandWALContextRootBuilderAndSystemDeltaBuilder(ordered []OrderedRootDeltaPublishInput, intent *CommandWALIntent, buildContextDeltas OrderedRootGroupCommandWALDeltaBuilder, buildSystemDeltaIter OrderedRootGroupCommandWALSystemBuilder) (uint64, []uint64, error) {
 	return db.publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBuilder(ordered, nil, intent, buildContextDeltas, buildSystemDeltaIter)
 }
@@ -1344,7 +1350,9 @@ func (db *DB) PublishOrderedRootDeltaGroupWithPreflightCommandWALContextAndSyste
 
 // PublishOrderedRootDeltaGroupWithPreflightCommandWALContextRootBuilderAndSystemDeltaBuilder
 // is like PublishOrderedRootDeltaGroupWithCommandWALContextRootBuilderAndSystemDeltaBuilder,
-// but runs preflight before the command frame is appended.
+// but runs preflight before the command frame is appended. The returned rootIDs
+// slice contains the original ordered inputs first, then any context-built roots
+// in returned order.
 func (db *DB) PublishOrderedRootDeltaGroupWithPreflightCommandWALContextRootBuilderAndSystemDeltaBuilder(ordered []OrderedRootDeltaPublishInput, preflight OrderedRootGroupPreflight, intent *CommandWALIntent, buildContextDeltas OrderedRootGroupCommandWALDeltaBuilder, buildSystemDeltaIter OrderedRootGroupCommandWALSystemBuilder) (uint64, []uint64, error) {
 	return db.publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBuilder(ordered, preflight, intent, buildContextDeltas, buildSystemDeltaIter)
 }
@@ -1383,7 +1391,8 @@ func (db *DB) PublishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 // PublishOrderedRootDeltaBatchGroupWithCommandWALContextRootBuilderAndSystemDeltaBuilder
 // is like PublishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilder,
 // but may append additional batch-materialized root deltas after the command-WAL
-// LSN is assigned.
+// LSN is assigned. The returned rootIDs slice contains the original ordered
+// inputs first, then any context-built roots in returned order.
 func (db *DB) PublishOrderedRootDeltaBatchGroupWithCommandWALContextRootBuilderAndSystemDeltaBuilder(ordered []OrderedRootDeltaBatchPublishInput, intent *CommandWALIntent, buildContextDeltas OrderedRootDeltaBatchGroupCommandWALDeltaBuilder, buildSystemDeltaIter OrderedRootGroupCommandWALSystemBuilder) (uint64, []uint64, error) {
 	return db.publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilderSerialized(ordered, nil, intent, buildContextDeltas, buildSystemDeltaIter)
 }
@@ -1405,7 +1414,9 @@ func (db *DB) PublishOrderedRootDeltaBatchGroupWithPreflightCommandWALContextAnd
 
 // PublishOrderedRootDeltaBatchGroupWithPreflightCommandWALContextRootBuilderAndSystemDeltaBuilder
 // is like PublishOrderedRootDeltaBatchGroupWithCommandWALContextRootBuilderAndSystemDeltaBuilder,
-// but runs preflight before the command frame is appended.
+// but runs preflight before the command frame is appended. The returned rootIDs
+// slice contains the original ordered inputs first, then any context-built roots
+// in returned order.
 func (db *DB) PublishOrderedRootDeltaBatchGroupWithPreflightCommandWALContextRootBuilderAndSystemDeltaBuilder(ordered []OrderedRootDeltaBatchPublishInput, preflight OrderedRootGroupPreflight, intent *CommandWALIntent, buildContextDeltas OrderedRootDeltaBatchGroupCommandWALDeltaBuilder, buildSystemDeltaIter OrderedRootGroupCommandWALSystemBuilder) (uint64, []uint64, error) {
 	return db.publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilderSerialized(ordered, preflight, intent, buildContextDeltas, buildSystemDeltaIter)
 }
@@ -1540,7 +1551,7 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered []Order
 
 func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBuilder(ordered []OrderedRootDeltaPublishInput, preflight OrderedRootGroupPreflight, commandWALIntent *CommandWALIntent, buildContextDeltas OrderedRootGroupCommandWALDeltaBuilder, buildSystemDeltaIter OrderedRootGroupCommandWALSystemBuilder) (newSystemRoot uint64, rootIDs []uint64, err error) {
 	if buildSystemDeltaIter == nil {
-		return 0, nil, errors.New("nil ordered root group command WAL system delta builder")
+		return 0, nil, errOrderedRootGroupCommandWALContextNilSystemBuilder
 	}
 	if commandWALIntent == nil {
 		return 0, nil, ErrCommandWALContextMissingFrame
@@ -1673,6 +1684,9 @@ func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBui
 	iter, err := buildSystemDeltaIter(ctx, append([]uint64(nil), rootIDs...))
 	phaseStats.systemBuildNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	if err != nil {
+		if iter != nil {
+			_ = iter.Close()
+		}
 		return 0, nil, err
 	}
 	if iter == nil {
@@ -2110,7 +2124,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 
 func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilderSerialized(ordered []OrderedRootDeltaBatchPublishInput, preflight OrderedRootGroupPreflight, commandWALIntent *CommandWALIntent, buildContextDeltas OrderedRootDeltaBatchGroupCommandWALDeltaBuilder, buildSystemDeltaIter OrderedRootGroupCommandWALSystemBuilder) (newSystemRoot uint64, rootIDs []uint64, err error) {
 	if buildSystemDeltaIter == nil {
-		return 0, nil, errors.New("nil ordered root delta batch group command WAL system delta builder")
+		return 0, nil, errOrderedRootDeltaBatchGroupCommandWALContextNilSystemBuilder
 	}
 	if commandWALIntent == nil {
 		return 0, nil, ErrCommandWALContextMissingFrame
@@ -2240,6 +2254,9 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 	iter, err := buildSystemDeltaIter(ctx, append([]uint64(nil), rootIDs...))
 	phaseStats.systemBuildNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	if err != nil {
+		if iter != nil {
+			_ = iter.Close()
+		}
 		return 0, nil, err
 	}
 	if iter == nil {

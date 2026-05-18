@@ -20,8 +20,12 @@ func BenchmarkColumnStoreCommandWALRootPublicationM10B(b *testing.B) {
 				batch := makeColumnStoreCommandWALBenchBatch(b, i, commandWALBenchBatchSize, false)
 				totals.add(batch, true)
 				b.StartTimer()
-				if _, err := collection.InsertBatch(batch.ids, batch.docs); err != nil {
+				insertedIDs, err := collection.InsertBatch(batch.ids, batch.docs)
+				if err != nil {
 					b.Fatalf("InsertBatch: %v", err)
+				}
+				if len(insertedIDs) != len(batch.ids) {
+					b.Fatalf("InsertBatch inserted=%d, want %d", len(insertedIDs), len(batch.ids))
 				}
 			}
 			b.StopTimer()
