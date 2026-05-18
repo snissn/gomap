@@ -327,14 +327,22 @@ func replayCollectionVectorIndexUpsertBatchByIDCommandWAL(db *backenddb.DB, env 
 		return err
 	}
 	if len(payload.IDs) == 0 {
-		return db.PublishCommandWALNoop(backenddb.NewCommandWALReplayIntent(env), false)
+		intent, err := db.NewCommandWALReplayIntent(env)
+		if err != nil {
+			return err
+		}
+		return db.PublishCommandWALNoop(intent, false)
+	}
+	intent, err := db.NewCommandWALReplayIntent(env)
+	if err != nil {
+		return err
 	}
 	manager := NewCollectionManager(db)
 	collection, err := manager.OpenCollection(payload.Collection)
 	if err != nil {
 		return err
 	}
-	return collection.applyVectorIndexUpsertCommandWAL(payload.IDs, backenddb.NewCommandWALReplayIntent(env))
+	return collection.applyVectorIndexUpsertCommandWAL(payload.IDs, intent)
 }
 
 func replayCollectionVectorIndexDeleteBatchByIDCommandWAL(db *backenddb.DB, env commitlog.CommandEnvelope) error {
@@ -343,14 +351,22 @@ func replayCollectionVectorIndexDeleteBatchByIDCommandWAL(db *backenddb.DB, env 
 		return err
 	}
 	if len(payload.IDs) == 0 {
-		return db.PublishCommandWALNoop(backenddb.NewCommandWALReplayIntent(env), false)
+		intent, err := db.NewCommandWALReplayIntent(env)
+		if err != nil {
+			return err
+		}
+		return db.PublishCommandWALNoop(intent, false)
+	}
+	intent, err := db.NewCommandWALReplayIntent(env)
+	if err != nil {
+		return err
 	}
 	manager := NewCollectionManager(db)
 	collection, err := manager.OpenCollection(payload.Collection)
 	if err != nil {
 		return err
 	}
-	return collection.applyVectorIndexDeleteCommandWAL(payload.IDs, backenddb.NewCommandWALReplayIntent(env))
+	return collection.applyVectorIndexDeleteCommandWAL(payload.IDs, intent)
 }
 
 func replayCatalogCreateCollectionCommandWAL(db *backenddb.DB, env commitlog.CommandEnvelope) error {
