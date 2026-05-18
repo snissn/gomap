@@ -98,6 +98,22 @@ func TestColumnVectorGraphPersistedReopenPath(t *testing.T) {
 	}
 }
 
+func TestColumnVectorGraphPersistedShuffledOrderIsPermutation(t *testing.T) {
+	for _, rows := range []int{1024, 1009, 1009 * 3} {
+		seen := make([]bool, rows)
+		for ordinal := 0; ordinal < rows; ordinal++ {
+			source := columnVectorGraphPersistedSourceForOrdinal(ordinal, rows, columnVectorGraphPersistedOrderShuffled)
+			if source < 0 || source >= rows {
+				t.Fatalf("rows=%d ordinal=%d source=%d out of range", rows, ordinal, source)
+			}
+			if seen[source] {
+				t.Fatalf("rows=%d duplicate source=%d", rows, source)
+			}
+			seen[source] = true
+		}
+	}
+}
+
 func BenchmarkColumnVectorGraphPersistedSearchCosine(b *testing.B) {
 	shapes := []struct {
 		name string
@@ -146,7 +162,7 @@ func benchmarkColumnVectorGraphPersistedSearchSerial(b *testing.B, fixture *colu
 		b.Fatalf("warm results=%d want %d", len(warm), fixture.opts.TopK)
 	}
 	b.ReportAllocs()
-	b.SetBytes(int64(warmStats.CandidatesExamined * fixture.graph.Dims() * 4))
+	b.SetBytes(columnVectorGraphPersistedScoredBytes(warmStats.CandidatesExamined, fixture.graph.Dims()))
 	b.ResetTimer()
 	start := time.Now()
 	for i := 0; i < b.N; i++ {
@@ -189,7 +205,7 @@ func benchmarkColumnVectorGraphPersistedSearchParallel(b *testing.B, fixture *co
 	}
 	b.ReportAllocs()
 	b.SetParallelism(1)
-	b.SetBytes(int64(warmStats.CandidatesExamined * fixture.graph.Dims() * 4))
+	b.SetBytes(columnVectorGraphPersistedScoredBytes(warmStats.CandidatesExamined, fixture.graph.Dims()))
 	b.ResetTimer()
 	start := time.Now()
 	b.RunParallel(func(pb *testing.PB) {
@@ -260,6 +276,10 @@ func reportColumnVectorGraphPersistedProductMetrics(b *testing.B, fixture *colum
 }
 
 func buildColumnVectorGraphPersistedFixture(tb testing.TB, rows int, dims int, degree int, blockRows int, compression Compression, order columnVectorGraphPersistedOrder) *columnVectorGraphPersistedFixture {
+	return buildColumnVectorGraphPersistedFixtureWithPhaseTimer(tb, nil, rows, dims, degree, blockRows, compression, order)
+}
+
+func buildColumnVectorGraphPersistedFixtureWithPhaseTimer(tb testing.TB, phaseTimer *testing.B, rows int, dims int, degree int, blockRows int, compression Compression, order columnVectorGraphPersistedOrder) *columnVectorGraphPersistedFixture {
 	tb.Helper()
 	dir, err := os.MkdirTemp("", "colgranule-vector-graph-*")
 	if err != nil {
@@ -289,6 +309,9 @@ func buildColumnVectorGraphPersistedFixture(tb testing.TB, rows int, dims int, d
 	rowsPerPart := columnVectorGraphPersistedRowsPerPart(rows)
 	ordinalBySource := columnVectorGraphPersistedOrdinalBySource(rows, order)
 
+	if phaseTimer != nil {
+		phaseTimer.StartTimer()
+	}
 	buildStart := time.Now()
 	workspace, err := OpenColumnWorkspace(dir, ColumnWorkspaceOptions{Collection: "persisted_vector_graph"})
 	if err != nil {
@@ -327,7 +350,13 @@ func buildColumnVectorGraphPersistedFixture(tb testing.TB, rows int, dims int, d
 		tb.Fatalf("Close build workspace: %v", closeErr)
 	}
 	buildNanos := time.Since(buildStart).Nanoseconds()
+	if phaseTimer != nil {
+		phaseTimer.StopTimer()
+	}
 
+	if phaseTimer != nil {
+		phaseTimer.StartTimer()
+	}
 	openStart := time.Now()
 	reopened, err = OpenColumnWorkspace(dir, ColumnWorkspaceOptions{Collection: "persisted_vector_graph"})
 	if err != nil {
@@ -342,13 +371,22 @@ func buildColumnVectorGraphPersistedFixture(tb testing.TB, rows int, dims int, d
 		tb.Fatalf("OpenColumnPartSetReader: %v", err)
 	}
 	openNanos := time.Since(openStart).Nanoseconds()
+	if phaseTimer != nil {
+		phaseTimer.StopTimer()
+	}
 
+	if phaseTimer != nil {
+		phaseTimer.StartTimer()
+	}
 	decodeStart := time.Now()
 	graph, loadStats, err := NewColumnVectorGraphFromPartSet(reader, ColumnVectorGraphOptions{})
 	if err != nil {
 		tb.Fatalf("NewColumnVectorGraphFromPartSet: %v", err)
 	}
 	decodeNanos := time.Since(decodeStart).Nanoseconds()
+	if phaseTimer != nil {
+		phaseTimer.StopTimer()
+	}
 
 	queryOrdinal := rows / 2
 	query, ok := graph.VectorAt(nil, queryOrdinal)
@@ -421,9 +459,28 @@ func columnVectorGraphPersistedOrdinalBySource(rows int, order columnVectorGraph
 
 func columnVectorGraphPersistedSourceForOrdinal(ordinal int, rows int, order columnVectorGraphPersistedOrder) int {
 	if order == columnVectorGraphPersistedOrderShuffled {
-		return (ordinal*1009 + 9173) % rows
+		multiplier := columnVectorGraphPersistedShuffleMultiplier(rows)
+		return int((int64(ordinal)*int64(multiplier) + 9173) % int64(rows))
 	}
 	return ordinal
+}
+
+func columnVectorGraphPersistedShuffleMultiplier(rows int) int {
+	multiplier := 1009
+	for columnVectorGraphPersistedGCD(multiplier, rows) != 1 {
+		multiplier += 2
+	}
+	return multiplier
+}
+
+func columnVectorGraphPersistedGCD(a int, b int) int {
+	for b != 0 {
+		a, b = b, a%b
+	}
+	if a < 0 {
+		return -a
+	}
+	return a
 }
 
 func columnVectorGraphPersistedOrdinalForSource(source int, order columnVectorGraphPersistedOrder, ordinalBySource []int) int {
@@ -555,6 +612,10 @@ func metricToken(value string) string {
 	return value
 }
 
+func columnVectorGraphPersistedScoredBytes(candidates int, dims int) int64 {
+	return int64(candidates) * int64(dims) * 4
+}
+
 func BenchmarkColumnVectorGraphPersistedBuildOpenDecode(b *testing.B) {
 	if os.Getenv("COLUMN_VECTOR_PERSISTED_BUILD_OPEN_DECODE") != "1" {
 		b.Skip("set COLUMN_VECTOR_PERSISTED_BUILD_OPEN_DECODE=1 to run the 100k persisted build/open/decode benchmark")
@@ -568,8 +629,10 @@ func BenchmarkColumnVectorGraphPersistedBuildOpenDecode(b *testing.B) {
 			var lastAccounting columnVectorGraphPersistedAccounting
 			var lastLoadStats ColumnVectorGraphLoadStats
 			b.ReportAllocs()
+			b.ResetTimer()
+			b.StopTimer()
 			for i := 0; i < b.N; i++ {
-				fixture := buildColumnVectorGraphPersistedFixture(b, 100_000, 128, 16, 8192, compression, columnVectorGraphPersistedOrderLocal)
+				fixture := buildColumnVectorGraphPersistedFixtureWithPhaseTimer(b, b, 100_000, 128, 16, 8192, compression, columnVectorGraphPersistedOrderLocal)
 				totalBuildNanos += fixture.buildNanos
 				totalOpenNanos += fixture.openNanos
 				totalDecodeNanos += fixture.decodeNanos
@@ -579,9 +642,6 @@ func BenchmarkColumnVectorGraphPersistedBuildOpenDecode(b *testing.B) {
 				b.StopTimer()
 				if err := fixture.Close(); err != nil {
 					b.Fatalf("Close persisted vector graph fixture: %v", err)
-				}
-				if i+1 < b.N {
-					b.StartTimer()
 				}
 			}
 			if b.N > 0 {

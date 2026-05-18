@@ -310,7 +310,7 @@ func normalizeColumnVectorGraphOptions(opts ColumnVectorGraphOptions) ColumnVect
 }
 
 func validateColumnVectorGraphStorage(vectors []float32, dims int, invNorms []float32, offsets []uint32, neighbors []uint32, rows int) error {
-	if rows < 0 || rows >= math.MaxUint32 {
+	if rows < 0 || rows > math.MaxUint32 {
 		return fmt.Errorf("colgranule: graph rows=%d outside uint32 neighbor ordinal range", rows)
 	}
 	rowLimit := uint32(rows)

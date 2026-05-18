@@ -1,7 +1,6 @@
 package colgranule
 
 import (
-	"fmt"
 	"math"
 	"slices"
 	"strings"
@@ -96,20 +95,30 @@ func TestColumnVectorGraphRejectsStaleInvNorm(t *testing.T) {
 }
 
 func TestColumnVectorGraphRejectsRowsOutsideUint32OrdinalRange(t *testing.T) {
-	for _, rows := range []int64{math.MaxUint32, int64(math.MaxUint32) + 1} {
-		rows := rows
-		t.Run(fmt.Sprintf("rows=%d", rows), func(t *testing.T) {
-			if int64(int(rows)) != rows {
-				t.Skip("requires 64-bit int")
-			}
-			err := validateColumnVectorGraphStorage(nil, 1, nil, nil, nil, int(rows))
-			if err == nil {
-				t.Fatal("validateColumnVectorGraphStorage succeeded with rows outside uint32 range")
-			}
-			if !strings.Contains(err.Error(), "uint32") {
-				t.Fatalf("error=%q want uint32 range validation", err)
-			}
-		})
+	rows := int64(math.MaxUint32) + 1
+	if int64(int(rows)) != rows {
+		t.Skip("requires 64-bit int")
+	}
+	err := validateColumnVectorGraphStorage(nil, 1, nil, nil, nil, int(rows))
+	if err == nil {
+		t.Fatal("validateColumnVectorGraphStorage succeeded with rows outside uint32 range")
+	}
+	if !strings.Contains(err.Error(), "uint32") {
+		t.Fatalf("error=%q want uint32 range validation", err)
+	}
+}
+
+func TestColumnVectorGraphMaxUint32RowsReachStorageValidation(t *testing.T) {
+	rows := int64(math.MaxUint32)
+	if int64(int(rows)) != rows {
+		t.Skip("requires 64-bit int")
+	}
+	err := validateColumnVectorGraphStorage(nil, 1, nil, nil, nil, int(rows))
+	if err == nil {
+		t.Fatal("validateColumnVectorGraphStorage unexpectedly succeeded with incomplete storage")
+	}
+	if strings.Contains(err.Error(), "uint32") {
+		t.Fatalf("error=%q should not reject MaxUint32 rows as outside uint32 range", err)
 	}
 }
 
