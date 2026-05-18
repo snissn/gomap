@@ -27,7 +27,7 @@ func (p ColumnMutationReplayProfile) Validate() error {
 		if p.BenchmarkOnly {
 			return nil
 		}
-		return fmt.Errorf("colgranule: column mutation replay profile %q is benchmark-only until safe-root publication is available", durability)
+		return fmt.Errorf("colgranule: column mutation replay profile %q is not supported for production; set BenchmarkOnly for benchmark-ceiling runs until safe-root publication is available", durability)
 	default:
 		return fmt.Errorf("colgranule: unsupported column mutation replay profile %q", durability)
 	}
@@ -50,4 +50,9 @@ func (p ColumnMutationReplayProfile) normalizedDurability() ColumnMutationReplay
 		return ColumnMutationReplayDurable
 	}
 	return p.Durability
+}
+
+func (p ColumnMutationReplayProfile) normalized() ColumnMutationReplayProfile {
+	p.Durability = p.normalizedDurability()
+	return p
 }
