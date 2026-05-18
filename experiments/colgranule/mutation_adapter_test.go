@@ -191,17 +191,18 @@ func TestColumnMutationAdapterReplayIgnoresPhysicalDescriptorsM9D(t *testing.T) 
 
 func TestColumnMutationReplayProfileContractM9D(t *testing.T) {
 	tests := []struct {
-		name    string
-		profile ColumnMutationReplayProfile
-		wantErr bool
-		want    string
+		name            string
+		profile         ColumnMutationReplayProfile
+		wantErr         bool
+		wantErrContains string
+		want            string
 	}{
 		{name: "default durable", want: "durable"},
 		{name: "durable", profile: ColumnMutationReplayProfile{Durability: ColumnMutationReplayDurable}, want: "durable"},
 		{name: "default durable benchmark only rejected", profile: ColumnMutationReplayProfile{BenchmarkOnly: true}, wantErr: true},
 		{name: "durable benchmark only rejected", profile: ColumnMutationReplayProfile{Durability: ColumnMutationReplayDurable, BenchmarkOnly: true}, wantErr: true},
-		{name: "wal on fast production rejected", profile: ColumnMutationReplayProfile{Durability: ColumnMutationReplayWALOnFast}, wantErr: true},
-		{name: "fast production rejected", profile: ColumnMutationReplayProfile{Durability: ColumnMutationReplayFast}, wantErr: true},
+		{name: "wal on fast production rejected", profile: ColumnMutationReplayProfile{Durability: ColumnMutationReplayWALOnFast}, wantErr: true, wantErrContains: "not supported for production"},
+		{name: "fast production rejected", profile: ColumnMutationReplayProfile{Durability: ColumnMutationReplayFast}, wantErr: true, wantErrContains: "not supported for production"},
 		{name: "wal on fast benchmark ceiling", profile: ColumnMutationReplayProfile{Durability: ColumnMutationReplayWALOnFast, BenchmarkOnly: true}, want: "wal_on_fast_benchmark_ceiling"},
 		{name: "fast benchmark ceiling", profile: ColumnMutationReplayProfile{Durability: ColumnMutationReplayFast, BenchmarkOnly: true}, want: "fast_benchmark_ceiling"},
 		{name: "unknown rejected", profile: ColumnMutationReplayProfile{Durability: "unsafe"}, wantErr: true},
@@ -212,6 +213,9 @@ func TestColumnMutationReplayProfileContractM9D(t *testing.T) {
 			if tt.wantErr {
 				if err == nil {
 					t.Fatalf("Validate() nil error")
+				}
+				if tt.wantErrContains != "" && !strings.Contains(err.Error(), tt.wantErrContains) {
+					t.Fatalf("Validate() err=%q want containing %q", err, tt.wantErrContains)
 				}
 				return
 			}
@@ -225,6 +229,45 @@ func TestColumnMutationReplayProfileContractM9D(t *testing.T) {
 				t.Fatalf("ProductionSupported()=%v label=%s", production, tt.want)
 			}
 		})
+	}
+}
+
+func TestColumnMutationAdapterAppliesReplayProfileOptionM9D(t *testing.T) {
+	ds := syntheticJSONBenchDataset(32)
+	opts, err := JSONBenchColumnPartOptions(ds, 16)
+	if err != nil {
+		t.Fatalf("JSONBenchColumnPartOptions: %v", err)
+	}
+	workspace, err := OpenColumnWorkspace(t.TempDir(), ColumnWorkspaceOptions{Collection: "jsonbench"})
+	if err != nil {
+		t.Fatalf("OpenColumnWorkspace: %v", err)
+	}
+	defer workspace.Close()
+	adapter, err := NewColumnMutationAdapter(workspace, ColumnMutationAdapterOptions{
+		Collection:    "jsonbench",
+		StoreOptions:  opts,
+		Dictionaries:  ds.Dictionaries,
+		ReplayProfile: ColumnMutationReplayProfile{Durability: ColumnMutationReplayWALOnFast, BenchmarkOnly: true},
+	})
+	if err != nil {
+		t.Fatalf("NewColumnMutationAdapter benchmark profile: %v", err)
+	}
+	if got := adapter.ReplayProfile().Label(); got != "wal_on_fast_benchmark_ceiling" {
+		t.Fatalf("ReplayProfile label=%q want wal_on_fast_benchmark_ceiling", got)
+	}
+
+	rejectedWorkspace, err := OpenColumnWorkspace(t.TempDir(), ColumnWorkspaceOptions{Collection: "jsonbench"})
+	if err != nil {
+		t.Fatalf("OpenColumnWorkspace rejected: %v", err)
+	}
+	defer rejectedWorkspace.Close()
+	if _, err := NewColumnMutationAdapter(rejectedWorkspace, ColumnMutationAdapterOptions{
+		Collection:    "jsonbench",
+		StoreOptions:  opts,
+		Dictionaries:  ds.Dictionaries,
+		ReplayProfile: ColumnMutationReplayProfile{Durability: ColumnMutationReplayWALOnFast},
+	}); err == nil || !strings.Contains(err.Error(), "not supported for production") {
+		t.Fatalf("NewColumnMutationAdapter production wal_on_fast err=%v want production rejection", err)
 	}
 }
 
@@ -482,7 +525,7 @@ func BenchmarkColumnMutationReplayM9D(b *testing.B) {
 				b.ReportAllocs()
 				b.ResetTimer()
 				for i := 0; i < b.N; i++ {
-					workspace, adapter := benchmarkColumnMutationAdapter(b, filepath.Join(root, fmt.Sprintf("iter-%06d", i)), opts, ds.Dictionaries)
+					workspace, adapter := benchmarkColumnMutationAdapterWithProfile(b, filepath.Join(root, fmt.Sprintf("iter-%06d", i)), opts, ds.Dictionaries, profile)
 					_, err := adapter.PublishBaseBatch(ColumnBatch{Rows: ds.Rows, Columns: ds.Columns}, ColumnPartCoverageOptions{SourceRowRootGeneration: 1, SourceRowVersionUpper: uint64(ds.Rows)})
 					if err == nil {
 						_, err = adapter.Apply(scenario.batch)
@@ -495,6 +538,8 @@ func BenchmarkColumnMutationReplayM9D(b *testing.B) {
 				}
 				b.StopTimer()
 				if b.N > 0 {
+					// The replay gate deliberately includes per-iteration workspace
+					// open/publish/apply/close work in the timed loop.
 					b.ReportMetric(float64(logicalRows*b.N)/b.Elapsed().Seconds(), "rows/sec")
 				}
 				b.ReportMetric(float64(logicalRows), "logical_rows/op")
@@ -502,6 +547,9 @@ func BenchmarkColumnMutationReplayM9D(b *testing.B) {
 				b.ReportMetric(0, "row_remainder_bytes/op")
 				b.ReportMetric(float64(last.ByteAccounting.TotalAssetBytes), "column_asset_bytes/op")
 				b.ReportMetric(float64(last.ByteAccounting.DescriptorBytes), "manifest_control_bytes/op")
+				if !profile.ProductionSupported() {
+					b.ReportMetric(1, "benchmark_ceiling")
+				}
 			})
 		}
 	}
@@ -526,15 +574,20 @@ func testColumnMutationAdapter(t testing.TB, dir string, opts ColumnStoreOptions
 }
 
 func benchmarkColumnMutationAdapter(b *testing.B, dir string, opts ColumnStoreOptions, dictionaries map[string]map[string]int64) (*ColumnWorkspace, *ColumnMutationAdapter) {
+	return benchmarkColumnMutationAdapterWithProfile(b, dir, opts, dictionaries, ColumnMutationReplayProfile{})
+}
+
+func benchmarkColumnMutationAdapterWithProfile(b *testing.B, dir string, opts ColumnStoreOptions, dictionaries map[string]map[string]int64, profile ColumnMutationReplayProfile) (*ColumnWorkspace, *ColumnMutationAdapter) {
 	b.Helper()
 	workspace, err := OpenColumnWorkspace(dir, ColumnWorkspaceOptions{Collection: "jsonbench"})
 	if err != nil {
 		b.Fatalf("OpenColumnWorkspace: %v", err)
 	}
 	adapter, err := NewColumnMutationAdapter(workspace, ColumnMutationAdapterOptions{
-		Collection:   "jsonbench",
-		StoreOptions: opts,
-		Dictionaries: dictionaries,
+		Collection:    "jsonbench",
+		StoreOptions:  opts,
+		Dictionaries:  dictionaries,
+		ReplayProfile: profile,
 	})
 	if err != nil {
 		_ = workspace.Close()
