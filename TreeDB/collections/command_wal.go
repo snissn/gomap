@@ -200,8 +200,9 @@ func replayCollectionInsertBatchByIDCommandWAL(db *backenddb.DB, env commitlog.C
 	if len(payload.Documents) == 0 {
 		return db.PublishCommandWALNoop(backenddb.NewCommandWALReplayIntent(env), false)
 	}
+	intent := backenddb.NewCommandWALReplayIntent(env)
 	manager := NewCollectionManager(db)
-	collection, err := manager.OpenCollection(payload.Collection)
+	collection, err := manager.openCollectionWithCommandWALIntent(payload.Collection, intent)
 	if err != nil {
 		return err
 	}
@@ -211,7 +212,7 @@ func replayCollectionInsertBatchByIDCommandWAL(db *backenddb.DB, env commitlog.C
 		ids[i] = payload.Documents[i].ID
 		docs[i] = payload.Documents[i].Document
 	}
-	_, err = collection.insertBatchWithCommandWALIntent(ids, docs, false, templateV1ReplayStoredDocumentEncoder(collection), backenddb.NewCommandWALReplayIntent(env))
+	_, err = collection.insertBatchWithCommandWALIntent(ids, docs, false, templateV1ReplayStoredDocumentEncoder(collection), intent)
 	return err
 }
 
@@ -220,12 +221,13 @@ func replayCollectionDeleteBatchByIDCommandWAL(db *backenddb.DB, env commitlog.C
 	if err != nil {
 		return err
 	}
+	intent := backenddb.NewCommandWALReplayIntent(env)
 	manager := NewCollectionManager(db)
-	collection, err := manager.OpenCollection(payload.Collection)
+	collection, err := manager.openCollectionWithCommandWALIntent(payload.Collection, intent)
 	if err != nil {
 		return err
 	}
-	_, err = collection.deleteBatchWithCommandWALIntent(payload.IDs, backenddb.NewCommandWALReplayIntent(env))
+	_, err = collection.deleteBatchWithCommandWALIntent(payload.IDs, intent)
 	return err
 }
 
@@ -237,8 +239,9 @@ func replayCollectionUpdateBatchByIDCommandWAL(db *backenddb.DB, env commitlog.C
 	if len(payload.Documents) == 0 {
 		return db.PublishCommandWALNoop(backenddb.NewCommandWALReplayIntent(env), false)
 	}
+	intent := backenddb.NewCommandWALReplayIntent(env)
 	manager := NewCollectionManager(db)
-	collection, err := manager.OpenCollection(payload.Collection)
+	collection, err := manager.openCollectionWithCommandWALIntent(payload.Collection, intent)
 	if err != nil {
 		return err
 	}
@@ -257,7 +260,7 @@ func replayCollectionUpdateBatchByIDCommandWAL(db *backenddb.DB, env commitlog.C
 			allowTemplateV1StoredDocument: true,
 		}
 	}
-	_, _, err = collection.updateBatchOwnedItemsWithCommandWALIntent(items, updateBatchModeAny, backenddb.NewCommandWALReplayIntent(env))
+	_, _, err = collection.updateBatchOwnedItemsWithCommandWALIntent(items, updateBatchModeAny, intent)
 	return err
 }
 
