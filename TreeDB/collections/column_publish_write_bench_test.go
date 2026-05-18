@@ -325,6 +325,10 @@ func prepareColumnStoreCommandWALReplayBenchmarkDirM10C(b *testing.B, columnStor
 		b.Fatalf("Checkpoint setup: %v", err)
 	}
 	baseAppliedLSN := backend.State().AppliedCommandLSN
+	if baseAppliedLSN == 0 {
+		_ = backend.Close()
+		b.Fatal("setup AppliedCommandLSN=0, want command WAL create LSN before replay frames")
+	}
 	if err := backend.Close(); err != nil {
 		b.Fatalf("Close setup DB: %v", err)
 	}
