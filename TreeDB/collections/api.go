@@ -3284,15 +3284,19 @@ func (c *Collection) insertOneNoIndexBuffered(id, document []byte) ([]byte, erro
 		domain.mu.Unlock()
 		return nil, err
 	}
-	if indexed || plannerOptions.documentFormat != DocumentFormatJSON {
-		domain.mu.Unlock()
-		return c.insertOneViaBatch(id, document)
-	}
 	if catalog == nil {
 		domain.mu.Unlock()
 		return nil, errCollectionNotFound
 	}
 	c.meta = catalog.meta
+	if err := c.requireColumnStoreCommandWAL(catalog.meta, nil); err != nil {
+		domain.mu.Unlock()
+		return nil, err
+	}
+	if indexed || plannerOptions.documentFormat != DocumentFormatJSON {
+		domain.mu.Unlock()
+		return c.insertOneViaBatch(id, document)
+	}
 	if domain.table == nil {
 		domain.table = newCollectionRunTable(0)
 	}
