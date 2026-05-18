@@ -176,8 +176,9 @@ type CommandWALPublishContext struct {
 // OrderedRootGroupCommandWALSystemBuilder builds a target system-root iterator
 // after the command-WAL frame has been appended and the non-system roots have
 // been built. For context-root publish APIs, rootIDs contains the original
-// ordered inputs first, followed by any context-built roots in returned order.
-// APIs without context-built roots receive only the original ordered root IDs.
+// ordered inputs first, followed by any context-built roots in returned order,
+// so it may be longer than the original ordered input slice. APIs without
+// context-built roots receive only the original ordered root IDs.
 type OrderedRootGroupCommandWALSystemBuilder func(CommandWALPublishContext, []uint64) (iterator.UnsafeIterator, error)
 
 // OrderedRootGroupCommandWALDeltaBuilder builds additional root-local mutation
@@ -1336,7 +1337,8 @@ func (db *DB) PublishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBui
 // is like PublishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBuilder,
 // but may append additional root-local mutation streams after the command-WAL
 // LSN is assigned. The returned rootIDs slice contains the original ordered
-// inputs first, then any context-built roots in returned order.
+// inputs first, then any context-built roots in returned order, so it may be
+// longer than len(ordered).
 func (db *DB) PublishOrderedRootDeltaGroupWithCommandWALContextRootBuilderAndSystemDeltaBuilder(ordered []OrderedRootDeltaPublishInput, intent *CommandWALIntent, buildContextDeltas OrderedRootGroupCommandWALDeltaBuilder, buildSystemDeltaIter OrderedRootGroupCommandWALSystemBuilder) (uint64, []uint64, error) {
 	return db.publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBuilder(ordered, nil, intent, buildContextDeltas, buildSystemDeltaIter)
 }
@@ -1352,7 +1354,7 @@ func (db *DB) PublishOrderedRootDeltaGroupWithPreflightCommandWALContextAndSyste
 // is like PublishOrderedRootDeltaGroupWithCommandWALContextRootBuilderAndSystemDeltaBuilder,
 // but runs preflight before the command frame is appended. The returned rootIDs
 // slice contains the original ordered inputs first, then any context-built roots
-// in returned order.
+// in returned order, so it may be longer than len(ordered).
 func (db *DB) PublishOrderedRootDeltaGroupWithPreflightCommandWALContextRootBuilderAndSystemDeltaBuilder(ordered []OrderedRootDeltaPublishInput, preflight OrderedRootGroupPreflight, intent *CommandWALIntent, buildContextDeltas OrderedRootGroupCommandWALDeltaBuilder, buildSystemDeltaIter OrderedRootGroupCommandWALSystemBuilder) (uint64, []uint64, error) {
 	return db.publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBuilder(ordered, preflight, intent, buildContextDeltas, buildSystemDeltaIter)
 }
@@ -1392,7 +1394,8 @@ func (db *DB) PublishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 // is like PublishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilder,
 // but may append additional batch-materialized root deltas after the command-WAL
 // LSN is assigned. The returned rootIDs slice contains the original ordered
-// inputs first, then any context-built roots in returned order.
+// inputs first, then any context-built roots in returned order, so it may be
+// longer than len(ordered).
 func (db *DB) PublishOrderedRootDeltaBatchGroupWithCommandWALContextRootBuilderAndSystemDeltaBuilder(ordered []OrderedRootDeltaBatchPublishInput, intent *CommandWALIntent, buildContextDeltas OrderedRootDeltaBatchGroupCommandWALDeltaBuilder, buildSystemDeltaIter OrderedRootGroupCommandWALSystemBuilder) (uint64, []uint64, error) {
 	return db.publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilderSerialized(ordered, nil, intent, buildContextDeltas, buildSystemDeltaIter)
 }
@@ -1416,7 +1419,7 @@ func (db *DB) PublishOrderedRootDeltaBatchGroupWithPreflightCommandWALContextAnd
 // is like PublishOrderedRootDeltaBatchGroupWithCommandWALContextRootBuilderAndSystemDeltaBuilder,
 // but runs preflight before the command frame is appended. The returned rootIDs
 // slice contains the original ordered inputs first, then any context-built roots
-// in returned order.
+// in returned order, so it may be longer than len(ordered).
 func (db *DB) PublishOrderedRootDeltaBatchGroupWithPreflightCommandWALContextRootBuilderAndSystemDeltaBuilder(ordered []OrderedRootDeltaBatchPublishInput, preflight OrderedRootGroupPreflight, intent *CommandWALIntent, buildContextDeltas OrderedRootDeltaBatchGroupCommandWALDeltaBuilder, buildSystemDeltaIter OrderedRootGroupCommandWALSystemBuilder) (uint64, []uint64, error) {
 	return db.publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilderSerialized(ordered, preflight, intent, buildContextDeltas, buildSystemDeltaIter)
 }
