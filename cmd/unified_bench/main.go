@@ -3833,8 +3833,11 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 	}
 
 	settledBeforeScans := false
+	blockProfilePath := strings.TrimSpace(cfg.BlockProfile)
+	mutexProfilePath := strings.TrimSpace(cfg.MutexProfile)
+	traceProfilePath := strings.TrimSpace(cfg.TraceProfile)
 
-	if cfg.BlockProfile != "" {
+	if blockProfilePath != "" {
 		rate := cfg.BlockProfileRate
 		if rate <= 0 {
 			rate = 1
@@ -3842,7 +3845,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		runtime.SetBlockProfileRate(rate)
 		defer runtime.SetBlockProfileRate(0)
 
-		f, err := os.Create(cfg.BlockProfile)
+		f, err := os.Create(blockProfilePath)
 		if err != nil {
 			return BenchRun{}, fmt.Errorf("blockprofile: %w", err)
 		}
@@ -3852,7 +3855,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		}()
 	}
 
-	if cfg.MutexProfile != "" {
+	if mutexProfilePath != "" {
 		frac := cfg.MutexProfileFraction
 		if frac <= 0 {
 			frac = 1
@@ -3860,7 +3863,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		runtime.SetMutexProfileFraction(frac)
 		defer runtime.SetMutexProfileFraction(0)
 
-		f, err := os.Create(cfg.MutexProfile)
+		f, err := os.Create(mutexProfilePath)
 		if err != nil {
 			return BenchRun{}, fmt.Errorf("mutexprofile: %w", err)
 		}
@@ -3870,8 +3873,8 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		}()
 	}
 
-	if cfg.TraceProfile != "" {
-		f, err := os.Create(cfg.TraceProfile)
+	if traceProfilePath != "" {
+		f, err := os.Create(traceProfilePath)
 		if err != nil {
 			return BenchRun{}, fmt.Errorf("trace: %w", err)
 		}
@@ -4046,7 +4049,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				}
 			}
 			blockBasePath := ""
-			if cfg.BlockProfile != "" {
+			if blockProfilePath != "" {
 				blockBasePath, err = profileHooks.writeRuntimeProfileSnapshotTemp("unified_bench_block_base", "block")
 				if err != nil {
 					if cpuFile != nil {
@@ -4058,7 +4061,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				}
 			}
 			mutexBasePath := ""
-			if cfg.MutexProfile != "" {
+			if mutexProfilePath != "" {
 				mutexBasePath, err = profileHooks.writeRuntimeProfileSnapshotTemp("unified_bench_mutex_base", "mutex")
 				if err != nil {
 					if cpuFile != nil {
@@ -4133,7 +4136,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					_ = os.Remove(blockBasePath)
 					_ = os.Remove(blockAfterPath)
 				} else {
-					blockPath := contentionProfilePath(cfg.BlockProfile, "block", testName, inst.Name)
+					blockPath := contentionProfilePath(blockProfilePath, "block", testName, inst.Name)
 					wrote, deltaErr := profileHooks.writeRuntimeProfileDeltaProfile(blockBasePath, blockAfterPath, blockPath)
 					_ = os.Remove(blockBasePath)
 					_ = os.Remove(blockAfterPath)
@@ -4152,7 +4155,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					_ = os.Remove(mutexBasePath)
 					_ = os.Remove(mutexAfterPath)
 				} else {
-					mutexPath := contentionProfilePath(cfg.MutexProfile, "mutex", testName, inst.Name)
+					mutexPath := contentionProfilePath(mutexProfilePath, "mutex", testName, inst.Name)
 					wrote, deltaErr := profileHooks.writeRuntimeProfileDeltaProfile(mutexBasePath, mutexAfterPath, mutexPath)
 					_ = os.Remove(mutexBasePath)
 					_ = os.Remove(mutexAfterPath)

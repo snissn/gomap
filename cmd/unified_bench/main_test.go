@@ -2137,6 +2137,47 @@ func TestRunBenchmark_EmptyContentionDeltaOmitsArtifactM11A(t *testing.T) {
 	}
 }
 
+func TestRunBenchmark_IgnoresWhitespaceOnlyRuntimeProfilesM11A(t *testing.T) {
+	whitespacePath := " \t "
+	_ = os.Remove(whitespacePath)
+	t.Cleanup(func() { _ = os.Remove(whitespacePath) })
+
+	var runtimeSnapshots int
+	profileHooks := &benchmarkProfileHooks{
+		writeRuntimeProfileSnapshotTemp: func(prefix, profileName string) (string, error) {
+			runtimeSnapshots++
+			return "", errors.New("runtime profile snapshot should be disabled for whitespace-only profile")
+		},
+	}
+
+	_, err := runBenchmark(BenchConfig{
+		Keys:         64,
+		ValueSize:    16,
+		BatchSize:    16,
+		RangeQueries: 4,
+		RangeSpan:    4,
+		DBsArg:       "treedb",
+		TestsArg:     "sequential_write",
+		KeepDir:      false,
+		Progress:     false,
+		SeedUsed:     1,
+
+		BlockProfile: whitespacePath,
+		MutexProfile: whitespacePath,
+		TraceProfile: whitespacePath,
+		profileHooks: profileHooks,
+	})
+	if err != nil {
+		t.Fatalf("runBenchmark: %v", err)
+	}
+	if runtimeSnapshots != 0 {
+		t.Fatalf("runtime profile snapshots = %d, want 0", runtimeSnapshots)
+	}
+	if _, statErr := os.Stat(whitespacePath); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("whitespace trace/profile path was created, stat err=%v", statErr)
+	}
+}
+
 func TestRenderTreeDBDiskUsageString_EmitsValueLogWithoutWAL(t *testing.T) {
 	out := renderTreeDBDiskUsageString(map[string]treeDBDiskUsage{
 		"treedb": {
