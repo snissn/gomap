@@ -1,11 +1,13 @@
 package collections
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
 
+	"github.com/snissn/gomap/TreeDB/batch"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
@@ -179,6 +181,80 @@ func TestColumnPublishPlanBuildsDurabilityClosureM10A(t *testing.T) {
 	if plan.Lifecycle.PublishedRefs != 1 || plan.Lifecycle.PublishedBytes != asset.Bytes || plan.Lifecycle.PreparedRefs != 1 || plan.Lifecycle.PreparedBytes != asset.Bytes {
 		t.Fatalf("unexpected lifecycle summary: %+v", plan.Lifecycle)
 	}
+}
+
+func TestColumnManifestRootDeltaPublishInputsValidateStoredIdentityRecordM10B(t *testing.T) {
+	identity := ColumnManifestIdentity{Generation: 7, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0xfeedbeef}
+	delta := ColumnManifestRootDelta{
+		RootName:       collectionColumnManifestRootName("events"),
+		BaseRootID:     44,
+		StoragePolicy:  RootStorageFast,
+		Identity:       identity,
+		IdentityRecord: encodeColumnManifestIdentityRecordArray(identity),
+	}
+	delta.IdentityRecord[0] ^= 0xff
+
+	if _, err := delta.OrderedRootDeltaPublishInput(); err == nil || !strings.Contains(err.Error(), "identity record") {
+		t.Fatalf("OrderedRootDeltaPublishInput err=%v want identity record mismatch", err)
+	}
+	if _, cleanup, err := delta.OrderedRootDeltaBatchPublishInput(); err == nil || !strings.Contains(err.Error(), "identity record") {
+		cleanup()
+		t.Fatalf("OrderedRootDeltaBatchPublishInput err=%v want identity record mismatch", err)
+	}
+}
+
+func TestColumnManifestRootDeltaPublishInputsPublishStoredIdentityRecordM10B(t *testing.T) {
+	identity := ColumnManifestIdentity{Generation: 7, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0xfeedbeef}
+	delta := ColumnManifestRootDelta{
+		RootName:       collectionColumnManifestRootName("events"),
+		BaseRootID:     44,
+		StoragePolicy:  RootStorageFast,
+		Identity:       identity,
+		IdentityRecord: encodeColumnManifestIdentityRecordArray(identity),
+	}
+	ordered, err := delta.OrderedRootDeltaPublishInput()
+	if err != nil {
+		t.Fatalf("OrderedRootDeltaPublishInput: %v", err)
+	}
+	got := readColumnManifestIdentityRecordIteratorM10B(t, ordered.Iter)
+	if !bytes.Equal(got, delta.IdentityRecord[:]) {
+		t.Fatalf("delta iterator identity record=%x want %x", got, delta.IdentityRecord)
+	}
+	batched, cleanup, err := delta.OrderedRootDeltaBatchPublishInput()
+	if err != nil {
+		t.Fatalf("OrderedRootDeltaBatchPublishInput: %v", err)
+	}
+	defer cleanup()
+	var batchRecords [][]byte
+	if err := batched.Delta.Replay(func(entry batch.Entry) error {
+		batchRecords = append(batchRecords, append([]byte(nil), entry.Value...))
+		return nil
+	}); err != nil {
+		t.Fatalf("Replay delta batch: %v", err)
+	}
+	if len(batchRecords) != 1 || !bytes.Equal(batchRecords[0], delta.IdentityRecord[:]) {
+		t.Fatalf("delta batch identity records=%x want %x", batchRecords, delta.IdentityRecord)
+	}
+}
+
+func readColumnManifestIdentityRecordIteratorM10B(t *testing.T, it iterator.UnsafeIterator) []byte {
+	t.Helper()
+	if it == nil {
+		t.Fatal("nil iterator")
+	}
+	defer func() { _ = it.Close() }()
+	it.Seek([]byte(columnManifestIdentityRecordKey))
+	if !it.Valid() {
+		t.Fatal("identity iterator missing record")
+	}
+	if got := string(it.Key()); got != columnManifestIdentityRecordKey {
+		t.Fatalf("identity iterator key=%q want %q", got, columnManifestIdentityRecordKey)
+	}
+	value := it.ValueCopy(nil)
+	if err := it.Error(); err != nil {
+		t.Fatalf("identity iterator error: %v", err)
+	}
+	return value
 }
 
 func TestColumnPublishPlanFailsClosedBeforeRootPublishM10A(t *testing.T) {
