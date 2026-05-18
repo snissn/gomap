@@ -328,6 +328,26 @@ func TestColumnStoreSuiteRuntimeProfilesDoNotEnableOnCreateFailureM11A(t *testin
 	}
 }
 
+func TestColumnStoreSuiteRuntimeProfilesRemoveStartedArtifactsOnLaterCreateFailureM11A(t *testing.T) {
+	dir := t.TempDir()
+	blockPath := filepath.Join(dir, "block.pprof")
+	_, err := startColumnStoreSuiteRuntimeProfiles(BenchConfig{
+		BlockProfile:         blockPath,
+		BlockProfileRate:     1,
+		MutexProfile:         filepath.Join(dir, "missing", "mutex.pprof"),
+		MutexProfileFraction: 1,
+	})
+	if err == nil {
+		t.Fatal("expected mutex profile create failure")
+	}
+	if !strings.Contains(err.Error(), "mutexprofile") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, statErr := os.Stat(blockPath); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("expected started block profile artifact to be removed, stat err=%v", statErr)
+	}
+}
+
 func TestColumnStoreSuiteRuntimeProfilesDoNotChangeMemRateWhenFilteredM11A(t *testing.T) {
 	prevRate := runtime.MemProfileRate
 	t.Cleanup(func() {
