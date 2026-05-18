@@ -135,6 +135,14 @@ fp32 byte-shuffled residual columns and int8 residual columns with
 per-coordinate scales. It reports scalar Go decode/score time, fast-kernel
 estimates, bytes, top-k quality, and Cauchy-bound prune metrics.
 
+`BenchmarkColumnVectorGraphDeep1BGranuleNativeMicroKernels` breaks down the
+int8 residual scorer. It compares the current fused scalar scorer against
+accumulation-only and finalization-only loops, `github.com/kelindar/simd`
+int8 byte-column primitives, and `github.com/axiomhq/simd-go` int16/fp32
+row-major dot loops. The third-party rows are implementation-shape probes:
+they measure SIMD headroom, not a drop-in scorer for the transposed int8
+residual layout.
+
 ## Manual Commands
 
 Search-only benchmark:
@@ -515,6 +523,61 @@ Interpretation:
   block target near `0.085-0.10 ms` for full dimensions before graph traversal
   overhead, which is the right bar for deciding whether to build a real kernel.
 
+Granule-native int8 micro-kernel smoke:
+
+```sh
+COLUMN_VECTOR_DEEP1B_NEIGHBORHOOD_SMOKE=1 \
+COLUMN_VECTOR_DEEP1B_DOWNLOAD=1 \
+COLUMN_VECTOR_DEEP1B_DIR=/private/tmp/gomap-deep1b-cache \
+COLUMN_VECTOR_DEEP1B_GRANULE_NATIVE_DIMS=16,32,96 \
+GOWORK=off go test ./experiments/colgranule \
+  -run '^$' \
+  -bench '^BenchmarkColumnVectorGraphDeep1BGranuleNativeMicroKernels/top(16|32|96)/(current_fused_score_best|current_fused_score_top10|current_accumulate_only|current_finalize_best_only|current_finalize_top10_only|kelindar_sum_int8_columns|kelindar_mul_int8_payload|axiomhq_dot_int16_row_major|axiomhq_dot_fp32_row_major)$' \
+  -benchmem \
+  -benchtime 200ms \
+  -count 1
+```
+
+Representative run on 2026-05-18, Apple M3:
+
+| Path | Dims | Kernel scan B/entry | Kernel ms | Candidates/s | B/op | allocs/op |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| current_fused_score_best | 16 | 16 | 0.0734 | 111.7M | 0 | 0 |
+| current_accumulate_only | 16 | 16 | 0.0714 | 114.8M | 0 | 0 |
+| kelindar_sum_int8_columns | 16 | 16 | 0.00194 | 4.21B | 0 | 0 |
+| kelindar_mul_int8_payload | 16 | 48 | 0.00323 | 2.54B | 0 | 0 |
+| axiomhq_dot_int16_row_major | 16 | 32 | 0.0425 | 192.6M | 0 | 0 |
+| current_fused_score_best | 32 | 32 | 0.126 | 64.9M | 0 | 0 |
+| current_accumulate_only | 32 | 32 | 0.113 | 72.3M | 0 | 0 |
+| kelindar_sum_int8_columns | 32 | 32 | 0.00383 | 2.14B | 0 | 0 |
+| kelindar_mul_int8_payload | 32 | 96 | 0.00628 | 1.30B | 0 | 0 |
+| axiomhq_dot_int16_row_major | 32 | 64 | 0.0460 | 178.1M | 0 | 0 |
+| current_fused_score_best | 96 | 96 | 0.344 | 23.8M | 0 | 0 |
+| current_accumulate_only | 96 | 96 | 0.335 | 24.4M | 0 | 0 |
+| current_finalize_best_only | 96 | 8 | 0.00914 | 896.4M | 0 | 0 |
+| current_finalize_top10_only | 96 | 8 | 0.0217 | 376.7M | 0 | 0 |
+| kelindar_sum_int8_columns | 96 | 96 | 0.0113 | 724.2M | 0 | 0 |
+| kelindar_mul_int8_payload | 96 | 288 | 0.0204 | 402.3M | 0 | 0 |
+| axiomhq_dot_int16_row_major | 96 | 192 | 0.0735 | 111.5M | 0 | 0 |
+| axiomhq_dot_fp32_row_major | 96 | 384 | 0.146 | 56.0M | 0 | 0 |
+
+Interpretation:
+
+- The current full int8 residual scorer is accumulation-bound. At full
+  `M=96`, `current_fused_score_best` is `0.344 ms`, while
+  `current_accumulate_only` is `0.335 ms`; best-row finalization is only
+  `0.0091 ms`, and top-10 finalization is `0.0217 ms`.
+- `kelindar/simd` confirms that raw int8 column primitives are much faster than
+  the scalar fused scorer, but its exported API is reductions and element-wise
+  int8 ops. It does not do the needed `int8 column * float32 coefficient ->
+  float32 accum[row]` fused operation.
+- `axiomhq/simd-go` does not expose int8 dot products, but its int16 dot row
+  probe gives a useful lower-bound implementation target: full `M=96` row-major
+  int16 dot over the block is `0.0735 ms`, scanning `192 B/entry`. That is a
+  different storage shape than the preferred transposed `96 B/entry` int8
+  residual layout, but it shows that a native kernel target below `0.1 ms` is
+  plausible.
+
 Local-frame approximate scoring smoke:
 
 ```sh
@@ -634,3 +697,10 @@ Useful reported metrics:
   local-residual scoring evidence. These rows score directly from transposed
   residual streams and separate scalar Go time from a dot-equivalent native
   kernel estimate.
+- `kernel_ms`, `candidates/s`, `kernel_scan_B/entry`, `dims_used`, and
+  `native_raw_B/entry` inside
+  `BenchmarkColumnVectorGraphDeep1BGranuleNativeMicroKernels`: int8 residual
+  scorer breakdown and SIMD primitive comparison. The `kelindar` rows are
+  byte-column primitive probes, and the `axiomhq` rows are row-major dot probes,
+  so they should be read as kernel-design evidence rather than storage-codec
+  replacements.

@@ -14,6 +14,7 @@ require (
 	github.com/edsrzf/mmap-go v1.2.0
 	github.com/go-errors/errors v1.5.1
 	github.com/golang/snappy v0.0.4
+	github.com/kelindar/simd v1.2.0
 	github.com/mattn/go-sqlite3 v1.14.42
 	github.com/nutsdb/nutsdb v1.1.0
 	github.com/pierrec/lz4/v4 v4.1.22
@@ -64,7 +65,7 @@ require (
 	github.com/golang/protobuf v1.5.3 // indirect
 	github.com/google/flatbuffers v25.2.10+incompatible // indirect
 	github.com/klauspost/compress v1.18.0 // indirect
-	github.com/klauspost/cpuid/v2 v2.0.9 // indirect
+	github.com/klauspost/cpuid/v2 v2.0.12 // indirect
 	github.com/kr/pretty v0.3.1 // indirect
 	github.com/kr/text v0.2.0 // indirect
 	github.com/matttproud/golang_protobuf_extensions v1.0.4 // indirect
