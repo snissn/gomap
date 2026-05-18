@@ -382,6 +382,31 @@ func TestColumnStoreSuiteRejectsForcedColumnPathM11B(t *testing.T) {
 	}
 }
 
+func TestColumnStoreSuitePlanKindMapsKnownPathsM11B(t *testing.T) {
+	cases := []struct {
+		path string
+		want collections.ColumnQueryPlanKind
+	}{
+		{columnStorePathRowStoreBaseline, collections.ColumnQueryPlanRowStoreBaseline},
+		{columnStorePathBTreeIndexBaseline, collections.ColumnQueryPlanBTreeIndexBaseline},
+		{columnStorePathSerialColumnScan, collections.ColumnQueryPlanSerialColumnScan},
+		{columnStorePathAggregateMetadata, collections.ColumnQueryPlanAggregateMetadata},
+		{columnStorePathParallelColumnScan, collections.ColumnQueryPlanParallelColumnScan},
+	}
+	for _, tc := range cases {
+		got, err := columnStoreSuitePlanKind(tc.path)
+		if err != nil {
+			t.Fatalf("columnStoreSuitePlanKind(%q): %v", tc.path, err)
+		}
+		if got != tc.want {
+			t.Fatalf("columnStoreSuitePlanKind(%q)=%q want %q", tc.path, got, tc.want)
+		}
+	}
+	if _, err := columnStoreSuitePlanKind("future_alias"); err == nil {
+		t.Fatal("expected unknown path to fail")
+	}
+}
+
 func TestColumnStoreSuiteRunsBTreeIndexBaselineM11B(t *testing.T) {
 	dir := t.TempDir()
 	cfg := BenchConfig{

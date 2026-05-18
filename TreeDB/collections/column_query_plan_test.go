@@ -491,6 +491,27 @@ func TestColumnSkipScanM11BPrunesOnlyLeftPrefixMarks(t *testing.T) {
 	if got, want := highPositionOnly.LeftPrefixColumns, 0; got != want {
 		t.Fatalf("high-position-only left prefix=%d want %d", got, want)
 	}
+
+	highPositionAfterPrefix := PlanColumnSkipScan([]ColumnSkipScanPredicate{
+		{
+			Position: 0,
+			Lower:    ColumnSkipScanBound{Key: []byte{0x10}, Inclusive: true},
+			Upper:    ColumnSkipScanBound{Key: []byte{0x35}, Inclusive: true},
+		},
+		{
+			Position: 1_000_000,
+			Lower:    ColumnSkipScanBound{Key: []byte{0xff}, Inclusive: true},
+		},
+	}, marks)
+	if got, want := highPositionAfterPrefix.LeftPrefixColumns, 1; got != want {
+		t.Fatalf("high-position-after-prefix left prefix=%d want %d", got, want)
+	}
+	if got, want := highPositionAfterPrefix.ScheduledMarks, []int{1, 2}; !equalInts(got, want) {
+		t.Fatalf("high-position-after-prefix scheduled=%v want %v", got, want)
+	}
+	if got, want := highPositionAfterPrefix.SkippedMarks, []int{0}; !equalInts(got, want) {
+		t.Fatalf("high-position-after-prefix skipped=%v want %v", got, want)
+	}
 }
 
 func TestColumnSkipScanIntoM11BReusesScratchWithoutAllocating(t *testing.T) {
