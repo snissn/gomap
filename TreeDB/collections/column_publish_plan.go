@@ -446,6 +446,9 @@ func (delta ColumnManifestRootDelta) OrderedRootDeltaBatchPublishInput() (backen
 	deltaBatch, err := backenddb.OrderedRootDeltaBatchFromIterator(iter)
 	_ = iter.Close()
 	if err != nil {
+		if deltaBatch != nil {
+			_ = deltaBatch.Close()
+		}
 		return backenddb.OrderedRootDeltaBatchPublishInput{}, func() {}, err
 	}
 	cleanup := func() {
