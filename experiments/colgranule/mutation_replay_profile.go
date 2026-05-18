@@ -24,7 +24,7 @@ func (p ColumnMutationReplayProfile) Validate() error {
 			if p.Durability == "" {
 				label = "durable (default)"
 			}
-			return fmt.Errorf("colgranule: %s column mutation replay profile cannot be benchmark-only; for benchmark-ceiling runs use Durability %q or %q and set BenchmarkOnly=true", label, ColumnMutationReplayWALOnFast, ColumnMutationReplayFast)
+			return fmt.Errorf("colgranule: %s column mutation replay profile cannot be benchmark-only; for benchmark-ceiling runs set Durability to %q or %q (BenchmarkOnly=true is already set)", label, ColumnMutationReplayWALOnFast, ColumnMutationReplayFast)
 		}
 		return nil
 	case ColumnMutationReplayWALOnFast, ColumnMutationReplayFast:
@@ -62,16 +62,23 @@ func (p ColumnMutationReplayProfile) normalized() ColumnMutationReplayProfile {
 	return p
 }
 
-func (p ColumnMutationReplayProfile) workspaceManifestSyncMode() ColumnWorkspaceManifestSyncMode {
-	if p.ProductionSupported() {
-		return ColumnWorkspaceManifestSyncDurable
+func (p ColumnMutationReplayProfile) workspaceManifestSyncMode() (ColumnWorkspaceManifestSyncMode, error) {
+	if err := p.Validate(); err != nil {
+		return "", err
 	}
-	return ColumnWorkspaceManifestSyncDisabledForBenchmark
+	if p.normalized().ProductionSupported() {
+		return ColumnWorkspaceManifestSyncDurable, nil
+	}
+	return ColumnWorkspaceManifestSyncDisabledForBenchmark, nil
 }
 
-func columnWorkspaceOptionsForMutationReplayProfile(collection string, profile ColumnMutationReplayProfile) ColumnWorkspaceOptions {
+func columnWorkspaceOptionsForMutationReplayProfile(collection string, profile ColumnMutationReplayProfile) (ColumnWorkspaceOptions, error) {
+	mode, err := profile.workspaceManifestSyncMode()
+	if err != nil {
+		return ColumnWorkspaceOptions{}, err
+	}
 	return ColumnWorkspaceOptions{
 		Collection:       collection,
-		ManifestSyncMode: profile.normalized().workspaceManifestSyncMode(),
-	}
+		ManifestSyncMode: mode,
+	}, nil
 }
