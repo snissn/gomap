@@ -142,6 +142,11 @@ func TestColumnWorkspaceManifestSyncModeControlsFsyncM9D(t *testing.T) {
 		return nil
 	}
 
+	var nilWorkspace *ColumnWorkspace
+	if got := nilWorkspace.ManifestSyncMode(); got != "" {
+		t.Fatalf("nil ManifestSyncMode=%q want empty", got)
+	}
+
 	manifest, err := NewColumnCollectionManifest("jsonbench", partTestOptions([]SortKeyColumn{{Column: "id"}}), nil, nil, nil)
 	if err != nil {
 		t.Fatalf("NewColumnCollectionManifest: %v", err)
@@ -154,8 +159,8 @@ func TestColumnWorkspaceManifestSyncModeControlsFsyncM9D(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenColumnWorkspace durable: %v", err)
 	}
-	if syncs < 1 {
-		t.Fatalf("durable open syncs=%d want at least 1", syncs)
+	if syncs != 1 {
+		t.Fatalf("durable open syncs=%d want 1", syncs)
 	}
 	syncs = 0
 	if err := durable.SaveCollectionManifest(manifest); err != nil {

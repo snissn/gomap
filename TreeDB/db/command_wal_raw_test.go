@@ -45,10 +45,14 @@ func TestCommandWALReplayIntentZeroLSNFailsClosedM10C(t *testing.T) {
 	}
 	defer func() { _ = d.Close() }()
 
-	if _, err := d.AppendCommandWALIntent(intent, false); !errors.Is(err, ErrCommandWALRejected) || !strings.Contains(err.Error(), "missing assigned lsn") {
-		t.Fatalf("AppendCommandWALIntent zero-lsn replay error=%v, want ErrCommandWALRejected missing assigned lsn", err)
+	if _, err := d.AppendCommandWALIntent(intent, false); !errors.Is(err, ErrCommandWALRejected) {
+		t.Fatalf("AppendCommandWALIntent zero-lsn replay error=%v, want ErrCommandWALRejected", err)
+	} else if !strings.Contains(err.Error(), "missing assigned lsn") {
+		t.Fatalf("AppendCommandWALIntent zero-lsn replay error=%v, want missing assigned lsn", err)
 	}
-	if err := d.PublishCommandWALNoop(intent, false); !errors.Is(err, ErrCommandWALRejected) || !strings.Contains(err.Error(), "missing assigned lsn") {
-		t.Fatalf("PublishCommandWALNoop zero-lsn replay error=%v, want ErrCommandWALRejected missing assigned lsn", err)
+	if err := d.PublishCommandWALNoop(intent, false); !errors.Is(err, ErrCommandWALRejected) {
+		t.Fatalf("PublishCommandWALNoop zero-lsn replay error=%v, want ErrCommandWALRejected", err)
+	} else if !strings.Contains(err.Error(), "missing assigned lsn") {
+		t.Fatalf("PublishCommandWALNoop zero-lsn replay error=%v, want missing assigned lsn", err)
 	}
 }
