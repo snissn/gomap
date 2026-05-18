@@ -113,7 +113,6 @@ func BenchmarkColumnStoreCommandWALReplayM10C(b *testing.B) {
 
 			b.ReportAllocs()
 			b.SetBytes(int64(encodedPayloadBytesPerReplay))
-			b.StopTimer()
 			b.ResetTimer()
 			b.StopTimer()
 			for i := 0; i < b.N; i++ {
@@ -426,7 +425,11 @@ func copyColumnStoreCommandWALReplayBenchmarkFileM10C(src, dst string, mode fs.F
 	if err != nil {
 		return err
 	}
-	defer func() { _ = in.Close() }()
+	defer func() {
+		if closeErr := in.Close(); closeErr != nil {
+			err = errors.Join(err, closeErr)
+		}
+	}()
 	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
 	if err != nil {
 		return err
