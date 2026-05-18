@@ -222,7 +222,7 @@ func (w *ColumnWorkspace) SaveCollectionManifest(manifest ColumnCollectionManife
 		_ = os.Remove(tmpPath)
 		return err
 	}
-	if err = tmp.Sync(); err != nil {
+	if err = w.syncManifestTempFile(tmp); err != nil {
 		_ = tmp.Close()
 		_ = os.Remove(tmpPath)
 		return err
