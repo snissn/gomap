@@ -2092,7 +2092,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 
 func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilderSerialized(ordered []OrderedRootDeltaBatchPublishInput, preflight OrderedRootGroupPreflight, commandWALIntent *CommandWALIntent, buildContextDeltas OrderedRootDeltaBatchGroupCommandWALDeltaBuilder, buildSystemDeltaIter OrderedRootGroupCommandWALSystemBuilder) (newSystemRoot uint64, rootIDs []uint64, err error) {
 	if buildSystemDeltaIter == nil {
-		return 0, nil, errors.New("nil ordered root group command WAL system delta builder")
+		return 0, nil, errors.New("nil ordered root delta batch group command WAL system delta builder")
 	}
 	if commandWALIntent == nil {
 		return 0, nil, ErrCommandWALContextMissingFrame

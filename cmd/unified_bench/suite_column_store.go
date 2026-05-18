@@ -97,6 +97,8 @@ type columnStoreStageMetric struct {
 type columnStoreQueryMetric struct {
 	Name                 string  `json:"name"`
 	PlanLabel            string  `json:"plan_label"`
+	AliasOf              string  `json:"alias_of,omitempty"`
+	ImplementationNote   string  `json:"implementation_note,omitempty"`
 	DurationMS           float64 `json:"duration_ms"`
 	Rows                 int     `json:"rows"`
 	RowsPerSecond        float64 `json:"rows_per_second"`
@@ -786,6 +788,7 @@ func runColumnStoreSuiteQueriesProfiled(cfg BenchConfig, collection *collections
 		cpuFile = f
 		if err := startCPUProfileFn(cpuFile); err != nil {
 			_ = cpuFile.Close()
+			_ = os.Remove(profilePath)
 			_ = os.Remove(allocBasePath)
 			_ = os.Remove(blockBasePath)
 			_ = os.Remove(mutexBasePath)
@@ -803,7 +806,7 @@ func runColumnStoreSuiteQueriesProfiled(cfg BenchConfig, collection *collections
 		_ = os.Remove(allocBasePath)
 		_ = os.Remove(blockBasePath)
 		_ = os.Remove(mutexBasePath)
-		return queries, parity, runErr, nil
+		return nil, nil, nil, runErr
 	}
 
 	if allocBasePath != "" {
@@ -908,11 +911,14 @@ func runColumnStoreSuiteQueries(collection *collections.Collection, rows int, ra
 		if !pass && firstErr == nil {
 			firstErr = fmt.Errorf("column_store: parity mismatch for %s: raw=%016x production=%016x", name, rawHash, hash)
 		}
+		planLabel := string(plan.Kind)
 		metric := columnStoreQueryMetric{
 			Name: name,
 			// PlanLabel records the executed planner kind after alias
 			// normalization, not necessarily the raw requested path string.
-			PlanLabel:            string(plan.Kind),
+			PlanLabel:            planLabel,
+			AliasOf:              columnStoreQueryAliasOf(name, planLabel),
+			ImplementationNote:   columnStoreQueryImplementationNote(name, planLabel),
 			DurationMS:           durationMS(elapsed),
 			Rows:                 rows,
 			RowsPerSecond:        ratePerSecond(float64(materialized), elapsed),
@@ -1064,6 +1070,20 @@ func scanColumnStoreSuiteEventsByIndex(collection *collections.Collection, rows 
 
 func columnStoreQueryNames() []string {
 	return []string{"q1", "q2", "q3", "q4a", "q4b", "q5", "q5_metadata"}
+}
+
+func columnStoreQueryAliasOf(name, path string) string {
+	if name == "q5_metadata" && path == columnStorePathRowStoreBaseline {
+		return "q5"
+	}
+	return ""
+}
+
+func columnStoreQueryImplementationNote(name, path string) string {
+	if name == "q5_metadata" && path == columnStorePathRowStoreBaseline {
+		return "row_store_baseline_alias_until_physical_aggregate_metadata_path"
+	}
+	return ""
 }
 
 func columnStoreQueryHash(name string, events []columnStoreDecodedEvent) (uint64, int, error) {
@@ -1283,15 +1303,19 @@ func renderColumnStoreSuiteMarkdown(report columnStoreSuiteReport) string {
 	sb.WriteString("\n")
 
 	sb.WriteString("## Query Throughput And Parity\n\n")
-	sb.WriteString("| query | plan | rows/s | MiB/s | ns/row | planner ms | scan ms | reduce ms | parity hash ms | workers | scheduled granules | skipped granules | B/read | rows materialized | cache hit/miss | hash parity |\n")
-	sb.WriteString("|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|\n")
+	sb.WriteString("| query | plan | rows/s | MiB/s | ns/row | planner ms | scan ms | reduce ms | parity hash ms | workers | scheduled granules | skipped granules | metadata hits | B/read | rows materialized | cache hit/miss | hash parity | note |\n")
+	sb.WriteString("|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|\n")
 	for _, q := range report.Queries {
 		parity := "pass"
 		if p, ok := report.Parity[q.Name]; ok && !p.Pass {
 			parity = "FAIL"
 		}
-		sb.WriteString(fmt.Sprintf("| `%s` | `%s` | %.3f | %.3f | %.1f | %.3f | %.3f | %.3f | %.3f | %d | %d | %d | %d | %d | %d/%d | %s |\n",
-			q.Name, q.PlanLabel, q.RowsPerSecond, q.MiBPerSecond, q.NsPerRow, q.PlannerDurationMS, q.ScanDurationMS, q.ReduceDurationMS, q.ParityHashDurationMS, q.WorkerCount, q.ScheduledGranules, q.SkippedGranules, q.BytesRead, q.RowMaterializations, q.CacheHits, q.CacheMisses, parity))
+		note := q.ImplementationNote
+		if note == "" && q.AliasOf != "" {
+			note = "alias_of_" + q.AliasOf
+		}
+		sb.WriteString(fmt.Sprintf("| `%s` | `%s` | %.3f | %.3f | %.1f | %.3f | %.3f | %.3f | %.3f | %d | %d | %d | %d | %d | %d | %d/%d | %s | `%s` |\n",
+			q.Name, q.PlanLabel, q.RowsPerSecond, q.MiBPerSecond, q.NsPerRow, q.PlannerDurationMS, q.ScanDurationMS, q.ReduceDurationMS, q.ParityHashDurationMS, q.WorkerCount, q.ScheduledGranules, q.SkippedGranules, q.MetadataHits, q.BytesRead, q.RowMaterializations, q.CacheHits, q.CacheMisses, parity, note))
 	}
 	sb.WriteString("\n")
 
