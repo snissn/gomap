@@ -254,6 +254,7 @@ type DB struct {
 	testFailWriteMeta                  atomic.Bool
 	testFailCommandWALFlush            atomic.Bool
 	testCommandWALRecoveryFailAfterLSN atomic.Uint64
+	commandWALReplayLSN                atomic.Uint64
 	// commandWALFlushPoisoned is intentionally cleared only by closing and
 	// reopening the DB. After an append reached the journal but flush/sync or
 	// root publication failed, continuing on the same handle could create an

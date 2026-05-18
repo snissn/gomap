@@ -579,8 +579,8 @@ func validateColumnManifestIdentityFor(label string, identity ColumnManifestIden
 	return nil
 }
 
-// normalizeColumnManifestIdentityDefaults stays with the identity encoding
-// helpers because publish-plan assembly uses it before fail-closed validation.
+// normalizeColumnManifestIdentityDefaults is used by M10A publish-plan
+// assembly before fail-closed identity validation.
 func normalizeColumnManifestIdentityDefaults(identity *ColumnManifestIdentity) {
 	if identity == nil {
 		return
