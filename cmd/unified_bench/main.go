@@ -4129,9 +4129,6 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					}
 					if !wrote {
 						_ = os.Remove(blockPath)
-						_ = os.Remove(mutexBasePath)
-						_ = os.Remove(mutexAfterPath)
-						return BenchRun{}, fmt.Errorf("blockprofile %s/%s (%s): %w", testName, inst.Name, blockPath, errEmptyPprofDeltaOutput)
 					}
 				}
 			}
@@ -4149,7 +4146,6 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					}
 					if !wrote {
 						_ = os.Remove(mutexPath)
-						return BenchRun{}, fmt.Errorf("mutexprofile %s/%s (%s): %w", testName, inst.Name, mutexPath, errEmptyPprofDeltaOutput)
 					}
 				}
 			}

@@ -2032,6 +2032,68 @@ func TestRunBenchmark_ContentionAfterSnapshotsBeforeAllocsPostProcessing(t *test
 	}
 }
 
+func TestRunBenchmark_EmptyContentionDeltaOmitsArtifactM11A(t *testing.T) {
+	var deltas []string
+	profileTmpDir := t.TempDir()
+	newProfilePath := func(prefix string) (string, error) {
+		f, err := os.CreateTemp(profileTmpDir, prefix+"_*.pprof")
+		if err != nil {
+			return "", err
+		}
+		path := f.Name()
+		if err := f.Close(); err != nil {
+			_ = os.Remove(path)
+			return "", err
+		}
+		return path, nil
+	}
+
+	profileHooks := &benchmarkProfileHooks{
+		writeRuntimeProfileSnapshotTemp: func(prefix, profileName string) (string, error) {
+			return newProfilePath(prefix)
+		},
+		writeRuntimeProfileDeltaProfile: func(basePath, afterPath, outPath string) (bool, error) {
+			deltas = append(deltas, filepath.Base(outPath))
+			if err := os.WriteFile(outPath, []byte("stale"), 0o644); err != nil {
+				return false, err
+			}
+			return false, nil
+		},
+	}
+
+	outDir := t.TempDir()
+	_, err := runBenchmark(BenchConfig{
+		Keys:         64,
+		ValueSize:    16,
+		BatchSize:    16,
+		RangeQueries: 4,
+		RangeSpan:    4,
+		DBsArg:       "treedb",
+		TestsArg:     "sequential_write",
+		KeepDir:      false,
+		Progress:     false,
+		SeedUsed:     1,
+
+		BlockProfile: filepath.Join(outDir, "block.pprof"),
+		MutexProfile: filepath.Join(outDir, "mutex.pprof"),
+		profileHooks: profileHooks,
+	})
+	if err != nil {
+		t.Fatalf("runBenchmark: %v", err)
+	}
+	for _, name := range []string{
+		"block_sequential_write_treedb.pprof",
+		"mutex_sequential_write_treedb.pprof",
+	} {
+		if _, statErr := os.Stat(filepath.Join(outDir, name)); !errors.Is(statErr, os.ErrNotExist) {
+			t.Fatalf("expected omitted empty delta artifact %s, stat err=%v", name, statErr)
+		}
+	}
+	if got, want := strings.Join(deltas, ","), "block_sequential_write_treedb.pprof,mutex_sequential_write_treedb.pprof"; got != want {
+		t.Fatalf("contention deltas = %s, want %s", got, want)
+	}
+}
+
 func TestRenderTreeDBDiskUsageString_EmitsValueLogWithoutWAL(t *testing.T) {
 	out := renderTreeDBDiskUsageString(map[string]treeDBDiskUsage{
 		"treedb": {
