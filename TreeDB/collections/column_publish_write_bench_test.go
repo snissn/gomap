@@ -386,6 +386,9 @@ func copyColumnStoreCommandWALReplayBenchmarkDirM10C(tb testing.TB, src, dst str
 			return err
 		}
 		target := filepath.Join(dst, rel)
+		if entry.Type()&fs.ModeSymlink != 0 {
+			return fmt.Errorf("symlink entries are not supported in replay benchmark fixtures: %s", path)
+		}
 		info, err := entry.Info()
 		if err != nil {
 			return err
