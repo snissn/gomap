@@ -566,9 +566,7 @@ func validateColumnStoreCatalogRoot(snap *backenddb.Snapshot, catalog *collectio
 
 func encodeColumnManifestIdentityRecord(identity ColumnManifestIdentity) []byte {
 	record := encodeColumnManifestIdentityRecordArray(identity)
-	out := make([]byte, len(record))
-	copy(out, record[:])
-	return out
+	return record[:]
 }
 
 func encodeColumnManifestIdentityRecordArray(identity ColumnManifestIdentity) [columnManifestIdentityRecordSize]byte {
@@ -797,8 +795,13 @@ func writeHashBool(d *xxhash.Digest, value bool) {
 }
 
 func columnManifestIdentityIterator(identity ColumnManifestIdentity) *systemTargetIterator {
+	return columnManifestIdentityRecordIterator(encodeColumnManifestIdentityRecordArray(identity))
+}
+
+func columnManifestIdentityRecordIterator(record [columnManifestIdentityRecordSize]byte) *systemTargetIterator {
+	recordCopy := record
 	return &systemTargetIterator{entries: []systemTargetEntry{{
 		key:   []byte(columnManifestIdentityRecordKey),
-		value: encodeColumnManifestIdentityRecord(identity),
+		value: recordCopy[:],
 	}}}
 }
