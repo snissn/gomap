@@ -42,7 +42,7 @@ func (c *Collection) requireColumnStoreCommandWAL(meta CollectionMeta, commandWA
 		return errCollectionDBNil
 	}
 	if c.db.DurabilityMode() != backenddb.DurabilityDurable {
-		return fmt.Errorf("%w: column_store writes require durable command WAL profile support (durability=%s profile=%s)",
+		return fmt.Errorf("%w: column_store writes require durable DB durability mode for command WAL publication (durability=%s profile=%s)",
 			backenddb.ErrCommandWALRejected,
 			columnStoreDurabilityModeName(c.db.DurabilityMode()),
 			profileSupport,
