@@ -1703,7 +1703,7 @@ func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBui
 		return 0, nil, err
 	}
 	if iter == nil {
-		err = errOrderedRootCommandWALContextNilSystemDeltaIterator("PublishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBuilder")
+		err = errOrderedRootCommandWALContextNilSystemDeltaIterator()
 		return 0, nil, err
 	}
 	phaseStart = time.Now()
@@ -1723,7 +1723,7 @@ func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBui
 	curSystemRoot := db.meta.SystemRootPageID
 	db.mu.RUnlock()
 	if curUserRoot != userRoot || curSystemRoot != baseSystemRoot {
-		err = errOrderedRootCommandWALContextConcurrentModification("PublishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBuilder", userRoot, curUserRoot, baseSystemRoot, curSystemRoot)
+		err = errOrderedRootCommandWALContextConcurrentModification(userRoot, curUserRoot, baseSystemRoot, curSystemRoot)
 		return 0, nil, err
 	}
 
@@ -2273,7 +2273,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 		return 0, nil, err
 	}
 	if iter == nil {
-		err = errOrderedRootCommandWALContextNilSystemDeltaIterator("PublishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilder")
+		err = errOrderedRootCommandWALContextNilSystemDeltaIterator()
 		return 0, nil, err
 	}
 	phaseStart = time.Now()
@@ -2293,7 +2293,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 	curSystemRoot := db.meta.SystemRootPageID
 	db.mu.RUnlock()
 	if curUserRoot != userRoot || curSystemRoot != baseSystemRoot {
-		err = errOrderedRootCommandWALContextConcurrentModification("PublishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilder", userRoot, curUserRoot, baseSystemRoot, curSystemRoot)
+		err = errOrderedRootCommandWALContextConcurrentModification(userRoot, curUserRoot, baseSystemRoot, curSystemRoot)
 		return 0, nil, err
 	}
 
@@ -2312,12 +2312,12 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 	return newSystemRoot, rootIDs, nil
 }
 
-func errOrderedRootCommandWALContextNilSystemDeltaIterator(api string) error {
-	return fmt.Errorf("treedb: %s: system builder returned nil system root delta iterator", api)
+func errOrderedRootCommandWALContextNilSystemDeltaIterator() error {
+	return errors.New("treedb: command WAL ordered root publish system builder returned nil system root delta iterator")
 }
 
-func errOrderedRootCommandWALContextConcurrentModification(api string, wantUserRoot, gotUserRoot, wantSystemRoot, gotSystemRoot uint64) error {
-	return fmt.Errorf("treedb: %s: concurrent modification during ordered root publish: user_root want=%d got=%d system_root want=%d got=%d", api, wantUserRoot, gotUserRoot, wantSystemRoot, gotSystemRoot)
+func errOrderedRootCommandWALContextConcurrentModification(wantUserRoot, gotUserRoot, wantSystemRoot, gotSystemRoot uint64) error {
+	return fmt.Errorf("treedb: command WAL ordered root publish concurrent modification: user_root want=%d got=%d system_root want=%d got=%d", wantUserRoot, gotUserRoot, wantSystemRoot, gotSystemRoot)
 }
 
 func (db *DB) finalizeOrderedRootPublishWithCommandWAL(newRootID uint64, sysRootID uint64, retired []uint64, sync bool, metrics adaptive.Metrics, touchedValueLogSegments []uint32, forceValueLogRefresh bool, vlogRefDelta *valueLogRefDelta, leafManifest *leafGenerationManifest, leafManifestRawFileIDs []uint32, intent *CommandWALIntent) error {

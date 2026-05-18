@@ -12335,7 +12335,7 @@ func TestBuildUpdateBatchPlanBSONSetRejectsInvalidCurrentBSON(t *testing.T) {
 	}
 	plan, err := col.buildUpdateBatchPlan([]updateBatchItem{
 		newBSONSetUpdateBatchItem([]byte("u1"), spec),
-	}, updateBatchModeNoSecondaryUniqueIndexChanges, false)
+	}, updateBatchModeNoSecondaryUniqueIndexChanges, false, nil)
 	if plan != nil {
 		plan.close()
 	}
@@ -12802,12 +12802,12 @@ func TestCollectionUpdateBatchDirectBufferedTemplateV1RejectsStaleTemplatePlan(t
 	if err != nil {
 		t.Fatalf("prepare stale plan B items: %v", err)
 	}
-	planA, err := col.buildUpdateBatchPlan(itemsA, updateBatchModeNoSecondaryUniqueIndexChanges, true)
+	planA, err := col.buildUpdateBatchPlan(itemsA, updateBatchModeNoSecondaryUniqueIndexChanges, true, nil)
 	if err != nil {
 		t.Fatalf("build plan A: %v", err)
 	}
 	defer planA.close()
-	planB, err := col.buildUpdateBatchPlan(itemsB, updateBatchModeNoSecondaryUniqueIndexChanges, true)
+	planB, err := col.buildUpdateBatchPlan(itemsB, updateBatchModeNoSecondaryUniqueIndexChanges, true, nil)
 	if err != nil {
 		t.Fatalf("build plan B: %v", err)
 	}
@@ -13308,7 +13308,7 @@ func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesRejectsStaleBuffere
 	if err != nil {
 		t.Fatalf("prepare stale plan items: %v", err)
 	}
-	plan, err := col.buildUpdateBatchPlan(items, updateBatchModeNoSecondaryUniqueIndexChanges, true)
+	plan, err := col.buildUpdateBatchPlan(items, updateBatchModeNoSecondaryUniqueIndexChanges, true, nil)
 	if err != nil {
 		t.Fatalf("build stale plan: %v", err)
 	}
@@ -13385,7 +13385,7 @@ func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesRejectsStalePrimary
 	}
 	plan, err := col.buildUpdateBatchPlan([]updateBatchItem{
 		newBSONSetUpdateBatchItem([]byte("u1"), spec),
-	}, updateBatchModeNoSecondaryUniqueIndexChanges, true)
+	}, updateBatchModeNoSecondaryUniqueIndexChanges, true, nil)
 	if err != nil {
 		t.Fatalf("build stale primary-only plan: %v", err)
 	}
@@ -13468,7 +13468,7 @@ func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesBuffersStaleNonOver
 	}
 	plan, err := col.buildUpdateBatchPlan([]updateBatchItem{
 		newBSONSetUpdateBatchItem([]byte("u2"), spec),
-	}, updateBatchModeNoSecondaryUniqueIndexChanges, true)
+	}, updateBatchModeNoSecondaryUniqueIndexChanges, true, nil)
 	if err != nil {
 		t.Fatalf("build stale non-overlap plan: %v", err)
 	}
@@ -13562,7 +13562,7 @@ func TestCollectionUpdateBatchIfNoSecondaryUniqueIndexChangesRejectsStaleZeroDel
 	if err != nil {
 		t.Fatalf("prepare stale zero-delta plan items: %v", err)
 	}
-	plan, err := col.buildUpdateBatchPlan(items, updateBatchModeNoSecondaryUniqueIndexChanges, true)
+	plan, err := col.buildUpdateBatchPlan(items, updateBatchModeNoSecondaryUniqueIndexChanges, true, nil)
 	if err != nil {
 		t.Fatalf("build stale zero-delta plan: %v", err)
 	}
