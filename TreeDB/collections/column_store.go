@@ -577,7 +577,7 @@ func validateColumnManifestPublishedRoot(snap *backenddb.Snapshot, collection st
 		return fmt.Errorf("collections: published column manifest root %d for %q has deleted identity record", rootID, collection)
 	}
 	if !bytes.Equal(entry.Value, expected[:]) {
-		return fmt.Errorf("collections: published root identity record for %q does not match column publish plan", collection)
+		return fmt.Errorf("collections: published root identity record mismatch: column manifest root %d for %q does not match column publish plan", rootID, collection)
 	}
 	return nil
 }
