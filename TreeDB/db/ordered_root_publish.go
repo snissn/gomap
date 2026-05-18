@@ -29,6 +29,7 @@ var (
 
 	errOrderedRootGroupCommandWALContextNilSystemBuilder           = errors.New("treedb: PublishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBuilder: nil system builder")
 	errOrderedRootDeltaBatchGroupCommandWALContextNilSystemBuilder = errors.New("treedb: PublishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilder: nil system builder")
+	errOrderedRootPublishMissingIndex                              = errors.New("treedb: ordered root publish: missing index")
 )
 
 const (
@@ -177,8 +178,9 @@ type CommandWALPublishContext struct {
 // after the command-WAL frame has been appended and the non-system roots have
 // been built. For context-root publish APIs, rootIDs contains the original
 // ordered inputs first, followed by any context-built roots in returned order,
-// so it may be longer than the original ordered input slice. APIs without
-// context-built roots receive only the original ordered root IDs.
+// so it may be longer than the original ordered input slice. The rootIDs slice
+// is borrowed for the duration of the call and must be treated as read-only.
+// APIs without context-built roots receive only the original ordered root IDs.
 type OrderedRootGroupCommandWALSystemBuilder func(CommandWALPublishContext, []uint64) (iterator.UnsafeIterator, error)
 
 // OrderedRootGroupCommandWALDeltaBuilder builds additional root-local mutation
@@ -1598,7 +1600,7 @@ func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBui
 		return 0, nil, err
 	}
 	if db.idx.Load() == nil {
-		err = errors.New("missing index")
+		err = errOrderedRootPublishMissingIndex
 		return 0, nil, err
 	}
 
@@ -1684,7 +1686,7 @@ func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBui
 	}
 
 	phaseStart := time.Now()
-	iter, err := buildSystemDeltaIter(ctx, append([]uint64(nil), rootIDs...))
+	iter, err := buildSystemDeltaIter(ctx, rootIDs)
 	phaseStats.systemBuildNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	if err != nil {
 		if iter != nil {
@@ -2041,7 +2043,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 	}
 	idxGen := db.idx.Load()
 	if idxGen == nil {
-		err = errors.New("missing index")
+		err = errOrderedRootPublishMissingIndex
 		return 0, nil, err
 	}
 
@@ -2254,7 +2256,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 	}
 
 	phaseStart := time.Now()
-	iter, err := buildSystemDeltaIter(ctx, append([]uint64(nil), rootIDs...))
+	iter, err := buildSystemDeltaIter(ctx, rootIDs)
 	phaseStats.systemBuildNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	if err != nil {
 		if iter != nil {
