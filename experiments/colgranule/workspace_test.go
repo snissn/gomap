@@ -135,6 +135,67 @@ func TestColumnWorkspaceCreatesIsolatedNamespace(t *testing.T) {
 	}
 }
 
+func TestColumnWorkspaceManifestSyncModeControlsFsyncM9D(t *testing.T) {
+	oldSync := columnWorkspaceSyncTempFile
+	syncs := 0
+	columnWorkspaceSyncTempFile = func(file *os.File) error {
+		syncs++
+		return nil
+	}
+	defer func() {
+		columnWorkspaceSyncTempFile = oldSync
+	}()
+
+	manifest, err := NewColumnCollectionManifest("jsonbench", partTestOptions([]SortKeyColumn{{Column: "id"}}), nil, nil, nil)
+	if err != nil {
+		t.Fatalf("NewColumnCollectionManifest: %v", err)
+	}
+
+	durable, err := OpenColumnWorkspace(t.TempDir(), ColumnWorkspaceOptions{Collection: "jsonbench"})
+	if err != nil {
+		t.Fatalf("OpenColumnWorkspace durable: %v", err)
+	}
+	if syncs != 1 {
+		t.Fatalf("durable open syncs=%d want 1", syncs)
+	}
+	if err := durable.SaveCollectionManifest(manifest); err != nil {
+		t.Fatalf("SaveCollectionManifest durable: %v", err)
+	}
+	if syncs != 2 {
+		t.Fatalf("durable collection manifest syncs=%d want 2", syncs)
+	}
+	if err := durable.Close(); err != nil {
+		t.Fatalf("Close durable: %v", err)
+	}
+
+	syncs = 0
+	relaxed, err := OpenColumnWorkspace(t.TempDir(), ColumnWorkspaceOptions{
+		Collection:       "jsonbench",
+		ManifestSyncMode: ColumnWorkspaceManifestSyncDisabledForBenchmark,
+	})
+	if err != nil {
+		t.Fatalf("OpenColumnWorkspace relaxed: %v", err)
+	}
+	if syncs != 0 {
+		t.Fatalf("relaxed open syncs=%d want 0", syncs)
+	}
+	if got := relaxed.ManifestSyncMode(); got != ColumnWorkspaceManifestSyncDisabledForBenchmark {
+		t.Fatalf("ManifestSyncMode=%q want %q", got, ColumnWorkspaceManifestSyncDisabledForBenchmark)
+	}
+	if err := relaxed.SaveCollectionManifest(manifest); err != nil {
+		t.Fatalf("SaveCollectionManifest relaxed: %v", err)
+	}
+	if err := relaxed.SavePreparedAssetRegistry(1, 1, nil); err != nil {
+		t.Fatalf("SavePreparedAssetRegistry relaxed: %v", err)
+	}
+	if syncs != 0 {
+		t.Fatalf("relaxed manifest syncs=%d want 0", syncs)
+	}
+	if err := relaxed.Close(); err != nil {
+		t.Fatalf("Close relaxed: %v", err)
+	}
+}
+
 func TestColumnWorkspacePreparedRegistryAndInventory(t *testing.T) {
 	ds := syntheticJSONBenchDataset(64)
 	opts, err := JSONBenchColumnPartOptions(ds, 16)

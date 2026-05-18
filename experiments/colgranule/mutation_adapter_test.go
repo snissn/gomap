@@ -238,7 +238,8 @@ func TestColumnMutationAdapterAppliesReplayProfileOptionM9D(t *testing.T) {
 	if err != nil {
 		t.Fatalf("JSONBenchColumnPartOptions: %v", err)
 	}
-	workspace, err := OpenColumnWorkspace(t.TempDir(), ColumnWorkspaceOptions{Collection: "jsonbench"})
+	profile := ColumnMutationReplayProfile{Durability: ColumnMutationReplayWALOnFast, BenchmarkOnly: true}
+	workspace, err := OpenColumnWorkspace(t.TempDir(), columnWorkspaceOptionsForMutationReplayProfile("jsonbench", profile))
 	if err != nil {
 		t.Fatalf("OpenColumnWorkspace: %v", err)
 	}
@@ -247,13 +248,27 @@ func TestColumnMutationAdapterAppliesReplayProfileOptionM9D(t *testing.T) {
 		Collection:    "jsonbench",
 		StoreOptions:  opts,
 		Dictionaries:  ds.Dictionaries,
-		ReplayProfile: ColumnMutationReplayProfile{Durability: ColumnMutationReplayWALOnFast, BenchmarkOnly: true},
+		ReplayProfile: profile,
 	})
 	if err != nil {
 		t.Fatalf("NewColumnMutationAdapter benchmark profile: %v", err)
 	}
 	if got := adapter.ReplayProfile().Label(); got != "wal_on_fast_benchmark_ceiling" {
 		t.Fatalf("ReplayProfile label=%q want wal_on_fast_benchmark_ceiling", got)
+	}
+
+	durableWorkspace, err := OpenColumnWorkspace(t.TempDir(), ColumnWorkspaceOptions{Collection: "jsonbench"})
+	if err != nil {
+		t.Fatalf("OpenColumnWorkspace durable: %v", err)
+	}
+	defer durableWorkspace.Close()
+	if _, err := NewColumnMutationAdapter(durableWorkspace, ColumnMutationAdapterOptions{
+		Collection:    "jsonbench",
+		StoreOptions:  opts,
+		Dictionaries:  ds.Dictionaries,
+		ReplayProfile: profile,
+	}); err == nil || !strings.Contains(err.Error(), "requires workspace manifest sync mode") {
+		t.Fatalf("NewColumnMutationAdapter relaxed profile on durable workspace err=%v want sync-mode rejection", err)
 	}
 
 	rejectedWorkspace, err := OpenColumnWorkspace(t.TempDir(), ColumnWorkspaceOptions{Collection: "jsonbench"})
@@ -540,7 +555,8 @@ func BenchmarkColumnMutationReplayM9D(b *testing.B) {
 				if b.N > 0 {
 					// The replay gate deliberately includes per-iteration workspace
 					// open/publish/apply/close work in the timed loop.
-					b.ReportMetric(float64(logicalRows*b.N)/b.Elapsed().Seconds(), "rows/sec")
+					perOpSeconds := b.Elapsed().Seconds() / float64(b.N)
+					b.ReportMetric(float64(logicalRows)/perOpSeconds, "rows/sec")
 				}
 				b.ReportMetric(float64(logicalRows), "logical_rows/op")
 				b.ReportMetric(float64(commandBytes), "command_bytes/op")
@@ -579,7 +595,7 @@ func benchmarkColumnMutationAdapter(b *testing.B, dir string, opts ColumnStoreOp
 
 func benchmarkColumnMutationAdapterWithProfile(b *testing.B, dir string, opts ColumnStoreOptions, dictionaries map[string]map[string]int64, profile ColumnMutationReplayProfile) (*ColumnWorkspace, *ColumnMutationAdapter) {
 	b.Helper()
-	workspace, err := OpenColumnWorkspace(dir, ColumnWorkspaceOptions{Collection: "jsonbench"})
+	workspace, err := OpenColumnWorkspace(dir, columnWorkspaceOptionsForMutationReplayProfile("jsonbench", profile))
 	if err != nil {
 		b.Fatalf("OpenColumnWorkspace: %v", err)
 	}
@@ -819,19 +835,21 @@ func assertColumnReplayPhysicalDescriptorsDiffer(t *testing.T, original jsonBenc
 	}
 }
 
-func assertColumnPartSetLogicalDigestMatchesDataset(t *testing.T, reader *ColumnPartSetReader, ds JSONBenchDataset, canonicalDictionaries map[string]map[string]int64) {
+func assertColumnPartSetLogicalDigestMatchesDataset(t *testing.T, reader *ColumnPartSetReader, expected JSONBenchDataset, canonicalDictionaries map[string]map[string]int64) {
 	t.Helper()
-	columns := sortedJSONBenchColumnNames(ds)
+	columns := sortedJSONBenchColumnNames(expected)
 	result, err := reader.ScanProjected(columns)
 	if err != nil {
 		t.Fatalf("ScanProjected: %v", err)
 	}
-	if result.Rows != ds.Rows {
-		t.Fatalf("ScanProjected rows=%d want %d", result.Rows, ds.Rows)
+	if result.Rows != expected.Rows {
+		t.Fatalf("ScanProjected rows=%d want %d", result.Rows, expected.Rows)
 	}
-	got := JSONBenchDataset{Rows: result.Rows, Columns: result.Columns, Dictionaries: ds.Dictionaries}
+	// The projected values use the expected dataset's physical dictionary codes;
+	// canonicalDictionaries is only the cross-replay comparison target.
+	got := JSONBenchDataset{Rows: result.Rows, Columns: result.Columns, Dictionaries: expected.Dictionaries}
 	gotDigest := jsonBenchCanonicalDatasetDigest(t, got, canonicalDictionaries)
-	wantDigest := jsonBenchCanonicalDatasetDigest(t, ds, canonicalDictionaries)
+	wantDigest := jsonBenchCanonicalDatasetDigest(t, expected, canonicalDictionaries)
 	if gotDigest != wantDigest {
 		t.Fatalf("projected declared-column digest=%d want %d", gotDigest, wantDigest)
 	}
