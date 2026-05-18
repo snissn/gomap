@@ -548,10 +548,7 @@ func maxColumnVectorGraphDegree(rows int, degree int, complete bool) int {
 
 func exactColumnVectorGraphCosine(t *testing.T, graph *ColumnVectorGraph, query []float32, topK int) []ColumnVectorGraphSearchResult {
 	t.Helper()
-	queryInvNorm, err := columnVectorGraphQueryInvNorm(query)
-	if err != nil {
-		t.Fatalf("columnVectorGraphQueryInvNorm: %v", err)
-	}
+	queryInvNorm := exactColumnVectorGraphQueryInvNorm(t, query)
 	ids := graph.PrimaryIDs(nil)
 	results := make([]ColumnVectorGraphSearchResult, len(ids))
 	for ordinal := range ids {
@@ -582,6 +579,22 @@ func exactColumnVectorGraphCosine(t *testing.T, graph *ColumnVectorGraph, query 
 		topK = len(results)
 	}
 	return results[:topK]
+}
+
+func exactColumnVectorGraphQueryInvNorm(t *testing.T, query []float32) float32 {
+	t.Helper()
+	var normSquared float64
+	for _, value := range query {
+		normSquared += float64(value) * float64(value)
+	}
+	if normSquared == 0 || math.IsInf(normSquared, 0) || math.IsNaN(normSquared) {
+		t.Fatalf("invalid query norm squared: %g", normSquared)
+	}
+	invNorm := float32(1 / math.Sqrt(normSquared))
+	if invNorm == 0 || math.IsInf(float64(invNorm), 0) || math.IsNaN(float64(invNorm)) {
+		t.Fatalf("invalid query inverse norm: %g", invNorm)
+	}
+	return invNorm
 }
 
 func exactColumnVectorGraphDistance(t *testing.T, graph *ColumnVectorGraph, query []float32, queryInvNorm float32, ordinal int) float32 {
