@@ -22,16 +22,20 @@ var ErrColumnQueryPlanUnsupported = errors.New("collections: column query plan u
 type ColumnQueryPredicateOperator string
 
 const (
-	ColumnQueryPredicateEqual              ColumnQueryPredicateOperator = "="
-	ColumnQueryPredicateGreaterOrEqual     ColumnQueryPredicateOperator = ">="
-	ColumnQueryPredicateGreaterThan        ColumnQueryPredicateOperator = ">"
-	ColumnQueryPredicateLessOrEqual        ColumnQueryPredicateOperator = "<="
-	ColumnQueryPredicateLessThan           ColumnQueryPredicateOperator = "<"
-	ColumnQueryPredicateGroupOrOrderDriver ColumnQueryPredicateOperator = "driver"
+	ColumnQueryPredicateEqual          ColumnQueryPredicateOperator = "="
+	ColumnQueryPredicateGreaterOrEqual ColumnQueryPredicateOperator = ">="
+	ColumnQueryPredicateGreaterThan    ColumnQueryPredicateOperator = ">"
+	ColumnQueryPredicateLessOrEqual    ColumnQueryPredicateOperator = "<="
+	ColumnQueryPredicateLessThan       ColumnQueryPredicateOperator = "<"
 )
 
 type ColumnQueryPredicate struct {
-	Column   string
+	Column string
+	// Operator participates in planner candidate ordering: equality and
+	// unspecified predicates are preferred before range predicates for index
+	// baselines. Unknown operators are ignored rather than driving B-tree
+	// baseline selection; physical predicate pushdown is a later column-store
+	// milestone.
 	Operator ColumnQueryPredicateOperator
 }
 
@@ -48,6 +52,13 @@ type ColumnQueryPlannerCapabilities struct {
 	PlannerCandidateBudget  int
 }
 
+// ColumnQueryPlanRequest describes one planner decision. Column, index, and
+// aggregate metadata names are matched case-sensitively after trimming
+// surrounding whitespace; callers should canonicalize catalog names before
+// storing them rather than relying on planner-time normalization. Physical
+// column plans also require every non-empty ProjectedColumns and predicate
+// column entry to be declared in the collection's ColumnStore config; row/B-tree
+// baselines read source documents and do not enforce that projection gate.
 type ColumnQueryPlanRequest struct {
 	Name                  string
 	ProjectedColumns      []string
@@ -132,16 +143,16 @@ func planColumnQueryForCatalog(catalog *collectionCatalog, identity ColumnStoreC
 	if ok, plan := aggregateColumnQueryPlan(catalog, identity, identityOK, req, diag); ok {
 		return plan
 	}
-	if ok, plan := parallelColumnQueryPlan(identity, identityOK, req, diag); ok {
+	if ok, plan := parallelColumnQueryPlan(catalog, identity, identityOK, req, diag); ok {
 		return plan
 	}
-	if ok, plan := serialColumnQueryPlan(identity, identityOK, req, diag); ok {
+	if ok, plan := serialColumnQueryPlan(catalog, identity, identityOK, req, diag); ok {
 		return plan
 	}
 	if idx, ok := selectColumnQueryBTreeIndex(catalog, req); ok {
 		diag.SelectedIndexName = idx.Name
 		diag.SelectedIndexField = idx.Field
-		diag.Reason = "selected matching collection secondary index"
+		diag.Reason = "selected matching collection secondary index for full-scan B-tree baseline"
 		return ColumnQueryPlan{Kind: ColumnQueryPlanBTreeIndexBaseline, Supported: true, IndexName: idx.Name, IndexField: idx.Field, Diagnostics: diag}
 	}
 	diag.Reason = "row-store fallback"
@@ -160,14 +171,14 @@ func forcedColumnQueryPlan(catalog *collectionCatalog, identity ColumnStoreCache
 		}
 		diag.SelectedIndexName = idx.Name
 		diag.SelectedIndexField = idx.Field
-		diag.Reason = "forced matching collection secondary index"
+		diag.Reason = "forced matching collection secondary index for full-scan B-tree baseline"
 		return ColumnQueryPlan{Kind: ColumnQueryPlanBTreeIndexBaseline, Supported: true, IndexName: idx.Name, IndexField: idx.Field, Diagnostics: diag}
 	case ColumnQueryPlanSerialColumnScan:
-		if ok, plan := serialColumnQueryPlan(identity, identityOK, req, diag); ok {
+		if ok, plan := serialColumnQueryPlan(catalog, identity, identityOK, req, diag); ok {
 			plan.Diagnostics.Reason = "forced serial physical column scan"
 			return plan
 		}
-		return unsupportedColumnQueryPlan(ColumnQueryPlanSerialColumnScan, physicalColumnQueryUnsupportedReason(identity, identityOK, req, ColumnQueryPlanSerialColumnScan), diag)
+		return unsupportedColumnQueryPlan(ColumnQueryPlanSerialColumnScan, physicalColumnQueryUnsupportedReasonForCatalog(catalog, identity, identityOK, req, ColumnQueryPlanSerialColumnScan), diag)
 	case ColumnQueryPlanAggregateMetadata:
 		if ok, plan := aggregateColumnQueryPlan(catalog, identity, identityOK, req, diag); ok {
 			plan.Diagnostics.Reason = "forced aggregate metadata plan"
@@ -175,25 +186,23 @@ func forcedColumnQueryPlan(catalog *collectionCatalog, identity ColumnStoreCache
 		}
 		return unsupportedColumnQueryPlan(ColumnQueryPlanAggregateMetadata, aggregateColumnQueryUnsupportedReason(catalog, identity, identityOK, req), diag)
 	case ColumnQueryPlanParallelColumnScan:
-		if ok, plan := parallelColumnQueryPlan(identity, identityOK, req, diag); ok {
+		if ok, plan := parallelColumnQueryPlan(catalog, identity, identityOK, req, diag); ok {
 			plan.Diagnostics.Reason = "forced parallel physical column scan"
 			return plan
 		}
-		return unsupportedColumnQueryPlan(ColumnQueryPlanParallelColumnScan, physicalColumnQueryUnsupportedReason(identity, identityOK, req, ColumnQueryPlanParallelColumnScan), diag)
+		return unsupportedColumnQueryPlan(ColumnQueryPlanParallelColumnScan, physicalColumnQueryUnsupportedReasonForCatalog(catalog, identity, identityOK, req, ColumnQueryPlanParallelColumnScan), diag)
 	default:
 		return unsupportedColumnQueryPlan(req.ForceKind, fmt.Sprintf("unknown column query plan kind %q", req.ForceKind), diag)
 	}
 }
 
-func serialColumnQueryPlan(identity ColumnStoreCacheIdentity, identityOK bool, req ColumnQueryPlanRequest, diag ColumnQueryPlanDiagnostics) (bool, ColumnQueryPlan) {
-	if !physicalColumnQuerySupported(identity, identityOK, req, ColumnQueryPlanSerialColumnScan) {
+func serialColumnQueryPlan(catalog *collectionCatalog, identity ColumnStoreCacheIdentity, identityOK bool, req ColumnQueryPlanRequest, diag ColumnQueryPlanDiagnostics) (bool, ColumnQueryPlan) {
+	if !physicalColumnQuerySupported(catalog, identity, identityOK, req, ColumnQueryPlanSerialColumnScan) {
 		return false, ColumnQueryPlan{}
 	}
 	diag.Reason = "selected serial physical column scan"
 	diag.ScheduledGranules = req.Capabilities.GranuleCount
-	if req.Capabilities.MaxParallelWorkers > 0 {
-		diag.WorkerCount = 1
-	}
+	diag.WorkerCount = 1
 	return true, ColumnQueryPlan{Kind: ColumnQueryPlanSerialColumnScan, Supported: true, Diagnostics: diag}
 }
 
@@ -204,7 +213,7 @@ func aggregateColumnQueryPlan(catalog *collectionCatalog, identity ColumnStoreCa
 	if !catalogHasColumnAggregateMetadata(catalog, req.AggregateMetadataName) {
 		return false, ColumnQueryPlan{}
 	}
-	if !physicalColumnQuerySupported(identity, identityOK, req, ColumnQueryPlanAggregateMetadata) {
+	if !physicalColumnQuerySupported(catalog, identity, identityOK, req, ColumnQueryPlanAggregateMetadata) {
 		return false, ColumnQueryPlan{}
 	}
 	diag.Reason = "selected aggregate metadata"
@@ -212,25 +221,25 @@ func aggregateColumnQueryPlan(catalog *collectionCatalog, identity ColumnStoreCa
 	return true, ColumnQueryPlan{Kind: ColumnQueryPlanAggregateMetadata, Supported: true, Diagnostics: diag}
 }
 
-func parallelColumnQueryPlan(identity ColumnStoreCacheIdentity, identityOK bool, req ColumnQueryPlanRequest, diag ColumnQueryPlanDiagnostics) (bool, ColumnQueryPlan) {
-	if !physicalColumnQuerySupported(identity, identityOK, req, ColumnQueryPlanParallelColumnScan) {
+func parallelColumnQueryPlan(catalog *collectionCatalog, identity ColumnStoreCacheIdentity, identityOK bool, req ColumnQueryPlanRequest, diag ColumnQueryPlanDiagnostics) (bool, ColumnQueryPlan) {
+	if !physicalColumnQuerySupported(catalog, identity, identityOK, req, ColumnQueryPlanParallelColumnScan) {
+		return false, ColumnQueryPlan{}
+	}
+	if parallelColumnQueryShapeUnsupportedReason(req) != "" {
 		return false, ColumnQueryPlan{}
 	}
 	workers := req.Capabilities.MaxParallelWorkers
-	if workers <= 1 {
-		return false, ColumnQueryPlan{}
-	}
-	if req.Capabilities.PartCount <= 1 && req.Capabilities.GranuleCount <= workers {
-		return false, ColumnQueryPlan{}
-	}
 	diag.WorkerCount = workers
 	diag.ScheduledGranules = req.Capabilities.GranuleCount
 	diag.Reason = "selected parallel physical column scan"
 	return true, ColumnQueryPlan{Kind: ColumnQueryPlanParallelColumnScan, Supported: true, Diagnostics: diag}
 }
 
-func physicalColumnQuerySupported(identity ColumnStoreCacheIdentity, identityOK bool, req ColumnQueryPlanRequest, kind ColumnQueryPlanKind) bool {
+func physicalColumnQuerySupported(catalog *collectionCatalog, identity ColumnStoreCacheIdentity, identityOK bool, req ColumnQueryPlanRequest, kind ColumnQueryPlanKind) bool {
 	if !columnQueryManifestRecoveryAuthoritative(identity, identityOK) || req.Capabilities.PhysicalAssetCount <= 0 {
+		return false
+	}
+	if missing, ok := missingColumnStoreRequestColumn(catalog, req); ok && missing != "" {
 		return false
 	}
 	switch kind {
@@ -268,14 +277,28 @@ func physicalColumnQueryUnsupportedReason(identity ColumnStoreCacheIdentity, ide
 		if !req.Capabilities.ParallelColumnScan {
 			return "parallel physical column scan capability is disabled"
 		}
-		if req.Capabilities.MaxParallelWorkers <= 1 {
-			return "parallel scan requires more than one worker"
-		}
-		if req.Capabilities.PartCount <= 1 && req.Capabilities.GranuleCount <= req.Capabilities.MaxParallelWorkers {
-			return "parallel scan requires more than one part or more granules than workers"
+		if reason := parallelColumnQueryShapeUnsupportedReason(req); reason != "" {
+			return reason
 		}
 	}
 	return "physical column plan is not supported"
+}
+
+func physicalColumnQueryUnsupportedReasonForCatalog(catalog *collectionCatalog, identity ColumnStoreCacheIdentity, identityOK bool, req ColumnQueryPlanRequest, kind ColumnQueryPlanKind) string {
+	if missing, ok := missingColumnStoreRequestColumn(catalog, req); ok && missing != "" {
+		return fmt.Sprintf("requested column %q is not declared in column store", missing)
+	}
+	return physicalColumnQueryUnsupportedReason(identity, identityOK, req, kind)
+}
+
+func parallelColumnQueryShapeUnsupportedReason(req ColumnQueryPlanRequest) string {
+	if req.Capabilities.MaxParallelWorkers <= 1 {
+		return "parallel scan requires more than one worker"
+	}
+	if req.Capabilities.PartCount <= 1 && req.Capabilities.GranuleCount <= req.Capabilities.MaxParallelWorkers {
+		return "parallel scan requires more than one part or more granules than workers"
+	}
+	return ""
 }
 
 func aggregateColumnQueryUnsupportedReason(catalog *collectionCatalog, identity ColumnStoreCacheIdentity, identityOK bool, req ColumnQueryPlanRequest) string {
@@ -286,7 +309,7 @@ func aggregateColumnQueryUnsupportedReason(catalog *collectionCatalog, identity 
 	if !catalogHasColumnAggregateMetadata(catalog, name) {
 		return fmt.Sprintf("unknown aggregate metadata %q", name)
 	}
-	return physicalColumnQueryUnsupportedReason(identity, identityOK, req, ColumnQueryPlanAggregateMetadata)
+	return physicalColumnQueryUnsupportedReasonForCatalog(catalog, identity, identityOK, req, ColumnQueryPlanAggregateMetadata)
 }
 
 func catalogHasColumnAggregateMetadata(catalog *collectionCatalog, name string) bool {
@@ -295,7 +318,53 @@ func catalogHasColumnAggregateMetadata(catalog *collectionCatalog, name string) 
 		return false
 	}
 	for _, aggregate := range catalog.meta.Options.ColumnStore.AggregateMetadata {
+		// Metadata can be supplied by pre-alpha JSON fixtures, so trim at the
+		// planner boundary until catalog loading owns canonicalization.
 		if strings.TrimSpace(aggregate.Name) == name {
+			return true
+		}
+	}
+	return false
+}
+
+func missingColumnStoreRequestColumn(catalog *collectionCatalog, req ColumnQueryPlanRequest) (string, bool) {
+	if len(req.ProjectedColumns) == 0 && len(req.Predicates) == 0 {
+		return "", false
+	}
+	if catalog == nil || catalog.meta.Options.ColumnStore == nil {
+		for _, column := range req.ProjectedColumns {
+			column = strings.TrimSpace(column)
+			if column != "" {
+				return column, true
+			}
+		}
+		for _, pred := range req.Predicates {
+			column := strings.TrimSpace(pred.Column)
+			if column != "" {
+				return column, true
+			}
+		}
+		return "", false
+	}
+	declared := catalog.meta.Options.ColumnStore.Columns
+	for _, column := range req.ProjectedColumns {
+		column = strings.TrimSpace(column)
+		if column != "" && !columnStoreColumnDeclared(declared, column) {
+			return column, true
+		}
+	}
+	for _, pred := range req.Predicates {
+		column := strings.TrimSpace(pred.Column)
+		if column != "" && !columnStoreColumnDeclared(declared, column) {
+			return column, true
+		}
+	}
+	return "", false
+}
+
+func columnStoreColumnDeclared(declared []ColumnStoreColumn, name string) bool {
+	for _, declaredColumn := range declared {
+		if strings.TrimSpace(declaredColumn.Name) == name {
 			return true
 		}
 	}
@@ -341,29 +410,96 @@ func selectColumnQueryBTreeIndex(catalog *collectionCatalog, req ColumnQueryPlan
 	if catalog == nil {
 		return IndexDefinition{}, false
 	}
+	// Keep common small catalogs allocation-free while avoiding repeated linear
+	// scans for larger user-defined index lists.
+	lookup := newColumnQueryIndexLookup(catalog.meta.Indexes)
 	for _, candidate := range req.CandidateIndexColumns {
 		candidate = strings.TrimSpace(candidate)
 		if candidate == "" {
 			continue
 		}
-		for _, idx := range catalog.meta.Indexes {
-			if idx.Field == candidate {
-				return idx, true
-			}
+		if idx, ok := lookup.find(candidate); ok {
+			return idx, true
 		}
 	}
 	for _, pred := range req.Predicates {
+		if !columnQueryPredicateOperatorEqualityLike(pred.Operator) {
+			continue
+		}
 		candidate := strings.TrimSpace(pred.Column)
 		if candidate == "" {
 			continue
 		}
-		for _, idx := range catalog.meta.Indexes {
-			if idx.Field == candidate {
-				return idx, true
-			}
+		if idx, ok := lookup.find(candidate); ok {
+			return idx, true
+		}
+	}
+	for _, pred := range req.Predicates {
+		if !columnQueryPredicateOperatorRangeLike(pred.Operator) {
+			continue
+		}
+		candidate := strings.TrimSpace(pred.Column)
+		if candidate == "" {
+			continue
+		}
+		if idx, ok := lookup.find(candidate); ok {
+			return idx, true
 		}
 	}
 	return IndexDefinition{}, false
+}
+
+type columnQueryIndexLookup struct {
+	indexes []IndexDefinition
+	byField map[string]IndexDefinition
+}
+
+func newColumnQueryIndexLookup(indexes []IndexDefinition) columnQueryIndexLookup {
+	lookup := columnQueryIndexLookup{indexes: indexes}
+	if len(indexes) <= 8 {
+		return lookup
+	}
+	lookup.byField = make(map[string]IndexDefinition, len(indexes))
+	for _, idx := range indexes {
+		field := strings.TrimSpace(idx.Field)
+		if field == "" {
+			continue
+		}
+		if _, exists := lookup.byField[field]; !exists {
+			lookup.byField[field] = idx
+		}
+	}
+	return lookup
+}
+
+func (l columnQueryIndexLookup) find(field string) (IndexDefinition, bool) {
+	field = strings.TrimSpace(field)
+	if field == "" {
+		return IndexDefinition{}, false
+	}
+	if l.byField != nil {
+		idx, ok := l.byField[field]
+		return idx, ok
+	}
+	for _, idx := range l.indexes {
+		if strings.TrimSpace(idx.Field) == field {
+			return idx, true
+		}
+	}
+	return IndexDefinition{}, false
+}
+
+func columnQueryPredicateOperatorEqualityLike(op ColumnQueryPredicateOperator) bool {
+	return op == "" || op == ColumnQueryPredicateEqual
+}
+
+func columnQueryPredicateOperatorRangeLike(op ColumnQueryPredicateOperator) bool {
+	switch op {
+	case ColumnQueryPredicateGreaterOrEqual, ColumnQueryPredicateGreaterThan, ColumnQueryPredicateLessOrEqual, ColumnQueryPredicateLessThan:
+		return true
+	default:
+		return false
+	}
 }
 
 // ColumnSkipScanBound describes one side of a mark-pruning range. When
@@ -375,6 +511,10 @@ type ColumnSkipScanBound struct {
 }
 
 type ColumnSkipScanPredicate struct {
+	// Position is the zero-based sort-key position. PlanColumnSkipScan only uses
+	// bounded predicates that form a contiguous left prefix from position zero;
+	// predicates beyond the maximum possible prefix length for this predicate
+	// set are ignored for pruning rather than allocating sparse scratch.
 	Position int
 	Lower    ColumnSkipScanBound
 	Upper    ColumnSkipScanBound
@@ -410,6 +550,13 @@ func PlanColumnSkipScan(predicates []ColumnSkipScanPredicate, marks []ColumnSkip
 // PlanColumnSkipScanInto reuses result.ScheduledMarks and result.SkippedMarks as
 // caller-owned scratch. Assign a zero ColumnSkipScanResult to release retained
 // slice capacity between unrelated planning workloads.
+//
+// Predicate positions are interpreted as dense zero-based sort-key positions
+// for the left-prefix contract. Only bounded predicates in the contiguous prefix
+// starting at position zero can prune marks. Sparse later-column predicates are
+// ignored until every lower position exists, positions >= len(predicates) are
+// ignored rather than allocating sparse scratch, and duplicate positions use the
+// last bounded predicate supplied.
 func PlanColumnSkipScanInto(result *ColumnSkipScanResult, predicates []ColumnSkipScanPredicate, marks []ColumnSkipScanMark) {
 	if result == nil {
 		return
@@ -419,8 +566,9 @@ func PlanColumnSkipScanInto(result *ColumnSkipScanResult, predicates []ColumnSki
 	result.SkippedMarks = result.SkippedMarks[:0]
 	result.ScheduledRows = 0
 	result.SkippedRows = 0
-	// A contiguous left prefix can never be longer than the number of bounded
-	// predicates, so positions >= len(predicates) cannot extend the prefix.
+	// A contiguous left prefix can never be longer than the number of predicates,
+	// so positions >= len(predicates) cannot extend the prefix. This keeps sparse
+	// later-column predicates from allocating position-sized scratch.
 	maxLeftPrefixColumns := len(predicates)
 	result.predicateScratch = ensureColumnSkipScanPredicateScratch(result.predicateScratch, maxLeftPrefixColumns)
 	result.predicateSet = ensureColumnSkipScanBoolScratch(result.predicateSet, maxLeftPrefixColumns)
@@ -465,13 +613,13 @@ func columnSkipScanLeftPrefixPredicates(byPosition []ColumnSkipScanPredicate, ha
 		if pred.Position < 0 || pred.Position >= len(byPosition) || !columnSkipScanPredicateHasBound(pred) {
 			continue
 		}
-		// Preserve the old "last predicate wins" behavior while bounding the
-		// prefix search by the number of predicates, not by arbitrary positions.
+		// Preserve "last predicate wins" for duplicate positions while bounding
+		// prefix discovery by dense scratch, not arbitrary sparse positions.
 		byPosition[pred.Position] = pred
 		hasPosition[pred.Position] = true
 	}
 	prefix := 0
-	for prefix < len(predicates) {
+	for prefix < len(byPosition) {
 		if !hasPosition[prefix] {
 			break
 		}

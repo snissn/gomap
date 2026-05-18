@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -1915,20 +1916,16 @@ func TestWriteBenchprofArtifacts_RequiresExecutionPath(t *testing.T) {
 }
 
 func TestWriteRuntimeProfileDeltaProfile_EmptyOutputSkipsFile(t *testing.T) {
-	origRunPprofDeltaCommandFn := runPprofDeltaCommandFn
-	runPprofDeltaCommandFn = func(basePath, afterPath string) ([]byte, string, error) {
+	runner := func(basePath, afterPath string) ([]byte, string, error) {
 		return nil, "", nil
 	}
-	defer func() {
-		runPprofDeltaCommandFn = origRunPprofDeltaCommandFn
-	}()
 
 	outPath := filepath.Join(t.TempDir(), "block_random_read_treedb.pprof")
 	if err := os.WriteFile(outPath, []byte("stale"), 0o644); err != nil {
 		t.Fatalf("seed stale output: %v", err)
 	}
 
-	wrote, err := writeRuntimeProfileDeltaProfile("base.pprof", "after.pprof", outPath)
+	wrote, err := writeRuntimeProfileDeltaProfileWithRunner("base.pprof", "after.pprof", outPath, runner)
 	if err != nil {
 		t.Fatalf("writeRuntimeProfileDeltaProfile: %v", err)
 	}
@@ -1941,19 +1938,6 @@ func TestWriteRuntimeProfileDeltaProfile_EmptyOutputSkipsFile(t *testing.T) {
 }
 
 func TestRunBenchmark_ContentionAfterSnapshotsBeforeAllocsPostProcessing(t *testing.T) {
-	origStopCPUProfileFn := stopCPUProfileFn
-	origWriteAllocsSnapshotTempFn := writeAllocsSnapshotTempFn
-	origWriteAllocsDeltaProfileFn := writeAllocsDeltaProfileFn
-	origWriteRuntimeProfileSnapshotTempFn := writeRuntimeProfileSnapshotTempFn
-	origWriteRuntimeProfileDeltaProfileFn := writeRuntimeProfileDeltaProfileFn
-	defer func() {
-		stopCPUProfileFn = origStopCPUProfileFn
-		writeAllocsSnapshotTempFn = origWriteAllocsSnapshotTempFn
-		writeAllocsDeltaProfileFn = origWriteAllocsDeltaProfileFn
-		writeRuntimeProfileSnapshotTempFn = origWriteRuntimeProfileSnapshotTempFn
-		writeRuntimeProfileDeltaProfileFn = origWriteRuntimeProfileDeltaProfileFn
-	}()
-
 	var events []string
 	profileTmpDir := t.TempDir()
 	newProfilePath := func(prefix string) (string, error) {
@@ -1969,25 +1953,29 @@ func TestRunBenchmark_ContentionAfterSnapshotsBeforeAllocsPostProcessing(t *test
 		return path, nil
 	}
 
-	stopCPUProfileFn = func() {
-		events = append(events, "cpu_stop")
-		origStopCPUProfileFn()
-	}
-	writeAllocsSnapshotTempFn = func(prefix string) (string, error) {
-		events = append(events, prefix)
-		return newProfilePath(prefix)
-	}
-	writeRuntimeProfileSnapshotTempFn = func(prefix, profileName string) (string, error) {
-		events = append(events, prefix)
-		return newProfilePath(prefix)
-	}
-	writeAllocsDeltaProfileFn = func(basePath, afterPath, outPath string) error {
-		events = append(events, "alloc_delta")
-		return nil
-	}
-	writeRuntimeProfileDeltaProfileFn = func(basePath, afterPath, outPath string) (bool, error) {
-		events = append(events, filepath.Base(outPath))
-		return true, nil
+	profileHooks := &benchmarkProfileHooks{
+		startCPUProfile: func(_ io.Writer) error {
+			return nil
+		},
+		stopCPUProfile: func() {
+			events = append(events, "cpu_stop")
+		},
+		writeAllocsSnapshotTemp: func(prefix string) (string, error) {
+			events = append(events, prefix)
+			return newProfilePath(prefix)
+		},
+		writeRuntimeProfileSnapshotTemp: func(prefix, profileName string) (string, error) {
+			events = append(events, prefix)
+			return newProfilePath(prefix)
+		},
+		writeAllocsDeltaProfile: func(basePath, afterPath, outPath string) error {
+			events = append(events, "alloc_delta")
+			return nil
+		},
+		writeRuntimeProfileDeltaProfile: func(basePath, afterPath, outPath string) (bool, error) {
+			events = append(events, filepath.Base(outPath))
+			return true, nil
+		},
 	}
 
 	outDir := t.TempDir()
@@ -2007,6 +1995,7 @@ func TestRunBenchmark_ContentionAfterSnapshotsBeforeAllocsPostProcessing(t *test
 		AllocsProfile: filepath.Join(outDir, "allocs"),
 		BlockProfile:  filepath.Join(outDir, "block.pprof"),
 		MutexProfile:  filepath.Join(outDir, "mutex.pprof"),
+		profileHooks:  profileHooks,
 	})
 	if err != nil {
 		t.Fatalf("runBenchmark: %v", err)
