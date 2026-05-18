@@ -723,6 +723,8 @@ func (r *GranuleReader) decompressPayload(g EncodedGranule) ([]byte, error) {
 		if cap(r.raw) < g.RawBytes {
 			r.raw = make([]byte, 0, g.RawBytes)
 		} else {
+			// WithDecodeAllCapLimit(true) uses cap(dst)-len(dst) as the
+			// output ceiling, so keep capacity pinned to the expected raw size.
 			r.raw = r.raw[:0:g.RawBytes]
 		}
 		out, err := dec.DecodeAll(g.Payload, r.raw)

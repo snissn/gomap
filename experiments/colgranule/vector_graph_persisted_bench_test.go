@@ -183,18 +183,20 @@ func benchmarkColumnVectorGraphPersistedSearchParallel(b *testing.B, fixture *co
 		warmStats = stats
 		scratches[i] = scratch
 	}
+	scratchPool := make(chan *ColumnVectorGraphSearchScratch, workers)
+	for _, scratch := range scratches {
+		scratchPool <- scratch
+	}
 	b.ReportAllocs()
 	b.SetParallelism(1)
 	b.SetBytes(int64(warmStats.CandidatesExamined * fixture.graph.Dims() * 4))
 	b.ResetTimer()
 	start := time.Now()
-	var nextWorker uint64
 	b.RunParallel(func(pb *testing.PB) {
-		workerID := int(atomic.AddUint64(&nextWorker, 1)) - 1
-		if workerID >= len(scratches) {
-			panic(fmt.Errorf("RunParallel spawned worker %d, but only %d scratches were prewarmed", workerID+1, len(scratches)))
-		}
-		scratch := scratches[workerID]
+		scratch := <-scratchPool
+		defer func() {
+			scratchPool <- scratch
+		}()
 		var localSink int64
 		for pb.Next() {
 			results, stats, err := fixture.graph.SearchCosine(fixture.query, fixture.opts, scratch)
@@ -217,6 +219,14 @@ func benchmarkColumnVectorGraphPersistedSearchParallel(b *testing.B, fixture *co
 }
 
 func reportColumnVectorGraphPersistedMetrics(b *testing.B, fixture *columnVectorGraphPersistedFixture, searchStats ColumnVectorGraphSearchStats) {
+	b.Helper()
+	reportColumnVectorGraphPersistedProductMetrics(b, fixture)
+	b.ReportMetric(float64(fixture.loadStats.Edges)/float64(fixture.loadStats.Rows), "edges/node")
+	b.ReportMetric(float64(searchStats.CandidatesExamined), "candidates/search")
+	b.ReportMetric(float64(searchStats.EdgesVisited), "edges/search")
+}
+
+func reportColumnVectorGraphPersistedProductMetrics(b *testing.B, fixture *columnVectorGraphPersistedFixture) {
 	b.Helper()
 	accounting := fixture.accounting
 	rows := float64(accounting.rows)
@@ -247,9 +257,6 @@ func reportColumnVectorGraphPersistedMetrics(b *testing.B, fixture *columnVector
 	for reason, blocks := range accounting.compressionFallbackReasons {
 		b.ReportMetric(float64(blocks), "fallback_"+metricToken(reason)+"_blocks")
 	}
-	b.ReportMetric(float64(fixture.loadStats.Edges)/float64(fixture.loadStats.Rows), "edges/node")
-	b.ReportMetric(float64(searchStats.CandidatesExamined), "candidates/search")
-	b.ReportMetric(float64(searchStats.EdgesVisited), "edges/search")
 }
 
 func buildColumnVectorGraphPersistedFixture(tb testing.TB, rows int, dims int, degree int, blockRows int, compression Compression, order columnVectorGraphPersistedOrder) *columnVectorGraphPersistedFixture {
@@ -549,17 +556,38 @@ func metricToken(value string) string {
 }
 
 func BenchmarkColumnVectorGraphPersistedBuildOpenDecode(b *testing.B) {
+	if os.Getenv("COLUMN_VECTOR_PERSISTED_BUILD_OPEN_DECODE") != "1" {
+		b.Skip("set COLUMN_VECTOR_PERSISTED_BUILD_OPEN_DECODE=1 to run the 100k persisted build/open/decode benchmark")
+	}
 	for _, compression := range []Compression{CompressionNone, CompressionSnappy, CompressionLZ4, CompressionZSTD} {
 		compression := compression
 		b.Run(fmt.Sprintf("100k/%s/%s", columnVectorGraphPersistedOrderLocal, compression), func(b *testing.B) {
+			var totalBuildNanos int64
+			var totalOpenNanos int64
+			var totalDecodeNanos int64
+			var lastFixture columnVectorGraphPersistedFixture
+			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
 				fixture := buildColumnVectorGraphPersistedFixture(b, 100_000, 128, 16, 8192, compression, columnVectorGraphPersistedOrderLocal)
+				totalBuildNanos += fixture.buildNanos
+				totalOpenNanos += fixture.openNanos
+				totalDecodeNanos += fixture.decodeNanos
+				lastFixture = *fixture
 				benchSink += int64(fixture.graph.Rows() + fixture.loadStats.Edges)
 				b.StopTimer()
 				if err := fixture.Close(); err != nil {
 					b.Fatalf("Close persisted vector graph fixture: %v", err)
 				}
-				b.StartTimer()
+				if i+1 < b.N {
+					b.StartTimer()
+				}
+			}
+			if b.N > 0 {
+				lastFixture.buildNanos = totalBuildNanos / int64(b.N)
+				lastFixture.openNanos = totalOpenNanos / int64(b.N)
+				lastFixture.decodeNanos = totalDecodeNanos / int64(b.N)
+				reportColumnVectorGraphPersistedProductMetrics(b, &lastFixture)
+				b.ReportMetric(float64(lastFixture.loadStats.Edges)/float64(lastFixture.loadStats.Rows), "edges/node")
 			}
 		})
 	}
