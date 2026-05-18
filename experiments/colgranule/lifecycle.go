@@ -130,9 +130,8 @@ type columnAssetReachabilityRecord struct {
 }
 
 var (
-	// Shared one-element reason slices are immutable sentinels. Keep len == cap
-	// so any later append to a per-record copy reallocates instead of mutating
-	// package-level backing storage.
+	// Shared one-element reason slices are immutable sentinels. Clone before
+	// assigning them to any exported reachability entry.
 	columnAssetReasonPrepared              = []string{string(ColumnAssetStatePrepared)}
 	columnAssetReasonProcessVisible        = []string{string(ColumnAssetStateProcessVisible)}
 	columnAssetReasonPendingPublish        = []string{string(ColumnAssetStatePendingPublish)}
@@ -393,6 +392,7 @@ func addReachabilityEntry(records map[ColumnAssetRef]columnAssetReachabilityReco
 	if err := validateColumnAssetRef(entry.Ref); err != nil {
 		return err
 	}
+	entry.Reasons = cloneColumnAssetReachabilityReasons(entry.Reasons)
 	record, ok := records[entry.Ref]
 	if !ok {
 		record = columnAssetReachabilityRecord{entry: entry}
@@ -418,6 +418,15 @@ func addReachabilityEntry(records map[ColumnAssetRef]columnAssetReachabilityReco
 		segments[entry.Ref.FileID] = &columnAssetSegmentState{}
 	}
 	return nil
+}
+
+func cloneColumnAssetReachabilityReasons(reasons []string) []string {
+	if len(reasons) == 0 {
+		return nil
+	}
+	out := make([]string, len(reasons))
+	copy(out, reasons)
+	return out
 }
 
 func columnAssetRefBlocksSegmentDeletion(live bool, candidate bool, quarantined bool) bool {

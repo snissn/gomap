@@ -192,7 +192,7 @@ func OpenSegmentColumnAssetStore(dir string) (*SegmentColumnAssetStore, error) {
 		return nil, err
 	}
 	path := filepath.Join(dir, "column-assets-000001.seg")
-	file, created, err := openOrCreateColumnAssetSegment(path)
+	file, _, err := openOrCreateColumnAssetSegment(path)
 	if err != nil {
 		return nil, err
 	}
@@ -202,12 +202,14 @@ func OpenSegmentColumnAssetStore(dir string) (*SegmentColumnAssetStore, error) {
 		return nil, err
 	}
 	return &SegmentColumnAssetStore{
-		dir:             dir,
-		path:            path,
-		file:            file,
-		fileID:          1,
-		size:            info.Size(),
-		dirSyncRequired: created,
+		dir:    dir,
+		path:   path,
+		file:   file,
+		fileID: 1,
+		size:   info.Size(),
+		// Reopen cannot know whether a prior process synced the segment
+		// directory entry before publishing refs, so the next Sync seals it.
+		dirSyncRequired: true,
 	}, nil
 }
 

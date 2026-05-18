@@ -270,6 +270,13 @@ func TestColumnAssetManagerPublishSucceededRequiresSyncedClosure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SyncPublishClosure: %v", err)
 	}
+	otherManager, err := NewColumnAssetManager(store)
+	if err != nil {
+		t.Fatalf("NewColumnAssetManager other: %v", err)
+	}
+	if err := otherManager.MarkPublishSucceeded(synced, "root published"); err == nil {
+		t.Fatal("MarkPublishSucceeded accepted a synced closure from another manager")
+	}
 	if err := manager.MarkPublishSucceeded(synced, "root published"); err != nil {
 		t.Fatalf("MarkPublishSucceeded: %v", err)
 	}
