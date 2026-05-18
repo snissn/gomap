@@ -11948,6 +11948,10 @@ func (c *Collection) updateDocumentOnceApply(documentID []byte, update func(curr
 		_ = snap.Close()
 		return false, false, err
 	}
+	var commandWALDocument []byte
+	if normalizedDocumentFormat(plannerOptions.documentFormat) == DocumentFormatTemplateV1 {
+		commandWALDocument = bytes.Clone(document)
+	}
 	phaseStart = updateBatchStatsNow(detailedStats)
 	preparedDocuments, templateRecords, _, templateResolver, err := prepareInsertDocuments([][]byte{document}, plannerOptions)
 	stats.PrepareDocuments += updateBatchStatsSince(detailedStats, phaseStart)
@@ -11960,6 +11964,9 @@ func (c *Collection) updateDocumentOnceApply(documentID []byte, update func(curr
 		return false, false, errors.New("collections: update prepared unexpected document count")
 	}
 	document = preparedDocuments[0]
+	if commandWALDocument == nil {
+		commandWALDocument = document
+	}
 	if templateResolver != nil {
 		plannerOptions.templateResolver = templateResolver
 	}
@@ -12163,7 +12170,7 @@ func (c *Collection) updateDocumentOnceApply(documentID []byte, update func(curr
 	if columnStoreWriteEnabled(c.meta) && c.commandWALActive(nil) {
 		commandWALIntent, err = c.newCollectionUpdateCommandWALIntent([]commitlog.CollectionDocument{{
 			ID:       bytes.Clone(documentID),
-			Document: bytes.Clone(document),
+			Document: bytes.Clone(commandWALDocument),
 		}}, nil)
 		if err != nil {
 			return false, false, err
