@@ -113,8 +113,8 @@ func BenchmarkColumnStoreCommandWALReplayM10C(b *testing.B) {
 			b.ReportAllocs()
 			b.SetBytes(int64(encodedPayloadBytesPerReplay))
 			b.ResetTimer()
+			b.StopTimer()
 			for i := 0; i < b.N; i++ {
-				b.StopTimer()
 				if err := os.RemoveAll(workDir); err != nil {
 					b.Fatalf("RemoveAll replay work dir: %v", err)
 				}
