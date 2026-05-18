@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/collections"
 )
@@ -217,6 +218,46 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 		report.Artifacts.MutexDeltaProfile == "" ||
 		report.Artifacts.TraceProfile == "" {
 		t.Fatalf("expected all configured profile artifacts to be recorded: %+v", report.Artifacts)
+	}
+}
+
+func TestColumnStoreBenchRunUsesDurationForAggregateM11A(t *testing.T) {
+	run := columnStoreBenchRun(BenchConfig{}, "durable", t.TempDir(), columnStoreSuiteReport{
+		Rows:      30,
+		BatchSize: 10,
+		Queries: []columnStoreQueryMetric{
+			{Name: "q1", RowMaterializations: 10, RowsPerSecond: 1, duration: 10 * time.Millisecond},
+			{Name: "q2", RowMaterializations: 20, RowsPerSecond: 1, duration: 20 * time.Millisecond},
+		},
+	}, nil, 0)
+
+	got := run.Results[columnStoreSuiteBenchTestName][columnStoreSuiteBenchDisplayName]
+	if got != 1000 {
+		t.Fatalf("aggregate rows/sec=%f want 1000 from exact durations", got)
+	}
+}
+
+func TestRenderColumnStoreSuiteMarkdownCodeListsM11A(t *testing.T) {
+	md := renderColumnStoreSuiteMarkdown(columnStoreSuiteReport{
+		Profile:                "durable",
+		Fixture:                "fixture",
+		ForcedPath:             columnStorePathRowStoreBaseline,
+		StageSeparatedBoundary: "boundary",
+		ByteAccounting: columnStoreByteAccounting{
+			ManifestControlMissing: []string{"manifest", "dictionary"},
+		},
+		SupportedForcedPaths:   []string{"row_store_baseline", "physical_column"},
+		UnsupportedForcedPaths: []string{"planner_skipscan", "aggregate_metadata"},
+	})
+
+	for _, want := range []string{
+		"- manifest_control_missing: `manifest`, `dictionary`",
+		"- supported: `row_store_baseline`, `physical_column`",
+		"- fail-closed until physical planner paths exist: `planner_skipscan`, `aggregate_metadata`",
+	} {
+		if !strings.Contains(md, want) {
+			t.Fatalf("markdown missing %q:\n%s", want, md)
+		}
 	}
 }
 
@@ -495,6 +536,26 @@ func TestColumnStoreQueryHashRejectsUnknownQueryM11A(t *testing.T) {
 	}
 }
 
+func TestColumnStoreQueryHashCanonicalizesQ5MetadataAliasM11A(t *testing.T) {
+	events := []columnStoreDecodedEvent{
+		{TimeUS: 10, Kind: "create", Did: "did:example:a"},
+		{TimeUS: 40, Kind: "update", Did: "did:example:a"},
+		{TimeUS: 25, Kind: "create", Did: "did:example:b"},
+		{TimeUS: 55, Kind: "delete", Did: "did:example:b"},
+	}
+	q5Hash, q5Count, err := columnStoreQueryHash("q5", events)
+	if err != nil {
+		t.Fatalf("q5 hash: %v", err)
+	}
+	aliasHash, aliasCount, err := columnStoreQueryHash("q5_metadata", events)
+	if err != nil {
+		t.Fatalf("q5_metadata hash: %v", err)
+	}
+	if q5Hash != aliasHash || q5Count != aliasCount {
+		t.Fatalf("q5_metadata hash/count=(%016x,%d) want q5=(%016x,%d)", aliasHash, aliasCount, q5Hash, q5Count)
+	}
+}
+
 func TestColumnStoreSuiteRejectsForcedColumnPathM11A(t *testing.T) {
 	cfg := BenchConfig{Keys: 8, BatchSize: 4, DBsArg: "treedb", Profile: "durable", SeedUsed: 1}
 	_, err := runColumnStoreSuite(cfg, columnStoreSuiteOptions{
@@ -644,6 +705,40 @@ func TestColumnStoreSuiteConfigUsesExplicitAggregateMetadataNamesM11A(t *testing
 	}
 	if strings.Contains(got, "q5_did_time_span,") || strings.HasSuffix(got, "q5_did_time_span") {
 		t.Fatalf("aggregate metadata min name is ambiguous: %q", got)
+	}
+}
+
+func TestRenderColumnStoreSuiteMarkdownCodeListsM11A(t *testing.T) {
+	md := renderColumnStoreSuiteMarkdown(columnStoreSuiteReport{
+		Suite: "column_store",
+		ByteAccounting: columnStoreByteAccounting{
+			ManifestControlMissing: []string{"vlog_ref_counts.meta", "column_manifest.meta"},
+		},
+		SupportedForcedPaths:   []string{"row_store_baseline", "diagnostic"},
+		UnsupportedForcedPaths: []string{"serial_column_scan", "aggregate_metadata"},
+	})
+	for _, want := range []string{
+		"- manifest_control_missing: `vlog_ref_counts.meta`, `column_manifest.meta`",
+		"- supported: `row_store_baseline`, `diagnostic`",
+		"- fail-closed until physical planner paths exist: `serial_column_scan`, `aggregate_metadata`",
+	} {
+		if !strings.Contains(md, want) {
+			t.Fatalf("markdown missing %q:\n%s", want, md)
+		}
+	}
+}
+
+func TestColumnStoreBenchRunUsesMeasuredDurationForAggregateM11A(t *testing.T) {
+	run := columnStoreBenchRun(BenchConfig{}, "durable", t.TempDir(), columnStoreSuiteReport{
+		Rows:      1,
+		BatchSize: 1,
+		Queries: []columnStoreQueryMetric{
+			{Name: "q1", RowMaterializations: 7, DurationMS: 0, duration: time.Second},
+		},
+	}, nil, 0)
+	got := run.Results[columnStoreSuiteBenchTestName][columnStoreSuiteBenchDisplayName]
+	if got != 7 {
+		t.Fatalf("aggregate query-phase rows/sec=%f want 7 from measured duration", got)
 	}
 }
 

@@ -114,6 +114,8 @@ type columnStoreQueryMetric struct {
 	MetadataHits        int     `json:"metadata_hits"`
 	SkippedGranules     int     `json:"skipped_granules"`
 	CacheLabel          string  `json:"cache_label"`
+
+	duration time.Duration
 }
 
 type columnStoreParity struct {
@@ -875,6 +877,7 @@ func runColumnStoreSuiteQueries(collection *collections.Collection, rows int, ra
 			AliasOf:             columnStoreQueryAliasOf(name, path),
 			ImplementationNote:  columnStoreQueryImplementationNote(name, path),
 			DurationMS:          durationMS(elapsed),
+			duration:            elapsed,
 			Rows:                rows,
 			RowsPerSecond:       ratePerSecond(float64(materialized), elapsed),
 			MiBPerSecond:        ratePerSecond(float64(bytesRead)/(1024*1024), elapsed),
@@ -954,7 +957,7 @@ func columnStoreQueryCanonicalName(name, path string) string {
 }
 
 func columnStoreQueryHash(name string, events []columnStoreDecodedEvent) (uint64, int, error) {
-	lines, err := columnStoreQueryLines(name, events)
+	lines, err := columnStoreQueryLines(columnStoreQueryHashLineName(name), events)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -965,6 +968,16 @@ func columnStoreQueryHash(name string, events []columnStoreDecodedEvent) (uint64
 		_, _ = h.Write([]byte{0})
 	}
 	return h.Sum64(), len(lines), nil
+}
+
+func columnStoreQueryHashLineName(name string) string {
+	// q5_metadata is an execution/reporting label until the physical metadata
+	// path exists; parity hashes use q5's logical result lines so alias
+	// equivalence is directly testable.
+	if name == "q5_metadata" {
+		return "q5"
+	}
+	return name
 }
 
 func columnStoreQueryLines(name string, events []columnStoreDecodedEvent) ([]string, error) {
@@ -1013,7 +1026,7 @@ func columnStoreQueryLines(name string, events []columnStoreDecodedEvent) ([]str
 			}
 		}
 		return formatInt64MapLines(name, maxs), nil
-	case "q5", "q5_metadata":
+	case "q5":
 		type span struct {
 			min int64
 			max int64
@@ -1202,7 +1215,7 @@ func renderColumnStoreSuiteMarkdown(report columnStoreSuiteReport) string {
 	}
 	sb.WriteString(fmt.Sprintf("- manifest_control_bytes: %d\n", report.ByteAccounting.ManifestControlBytes))
 	if len(report.ByteAccounting.ManifestControlMissing) != 0 {
-		sb.WriteString(fmt.Sprintf("- manifest_control_missing: `%s`\n", strings.Join(report.ByteAccounting.ManifestControlMissing, "`, `")))
+		sb.WriteString(fmt.Sprintf("- manifest_control_missing: %s\n", markdownCodeList(report.ByteAccounting.ManifestControlMissing)))
 	}
 	sb.WriteString(fmt.Sprintf("- command_wal_bytes_before_checkpoint: %d\n", report.ByteAccounting.CommandWALBytesBeforeCheckpoint))
 	sb.WriteString(fmt.Sprintf("- total_reconstructable_bytes: %d\n", report.ByteAccounting.TotalReconstructableBytes))
@@ -1216,8 +1229,8 @@ func renderColumnStoreSuiteMarkdown(report columnStoreSuiteReport) string {
 	sb.WriteString(fmt.Sprintf("- schema_hash: %d\n\n", report.Manifest.SchemaHash))
 
 	sb.WriteString("## Forced Path Labels\n\n")
-	sb.WriteString(fmt.Sprintf("- supported: `%s`\n", strings.Join(report.SupportedForcedPaths, "`, `")))
-	sb.WriteString(fmt.Sprintf("- fail-closed until physical planner paths exist: `%s`\n", strings.Join(report.UnsupportedForcedPaths, "`, `")))
+	sb.WriteString(fmt.Sprintf("- supported: %s\n", markdownCodeList(report.SupportedForcedPaths)))
+	sb.WriteString(fmt.Sprintf("- fail-closed until physical planner paths exist: %s\n", markdownCodeList(report.UnsupportedForcedPaths)))
 	if report.Artifacts.ColumnJSON != "" {
 		sb.WriteString("\n## Artifacts\n\n")
 		columnStoreWriteArtifactLine(&sb, "column JSON", report.Artifacts.ColumnJSON)
@@ -1245,6 +1258,22 @@ func columnStoreWriteArtifactLine(sb *strings.Builder, label, path string) {
 		return
 	}
 	sb.WriteString(fmt.Sprintf("- %s: `%s`\n", label, path))
+}
+
+func markdownCodeList(values []string) string {
+	if len(values) == 0 {
+		return "-"
+	}
+	var sb strings.Builder
+	for i, value := range values {
+		if i > 0 {
+			sb.WriteString(", ")
+		}
+		sb.WriteByte('`')
+		sb.WriteString(value)
+		sb.WriteByte('`')
+	}
+	return sb.String()
 }
 
 func renderColumnStoreSuiteHTML(report columnStoreSuiteReport) string {
@@ -1290,16 +1319,20 @@ func columnStoreBenchRun(baseCfg BenchConfig, profile, dataDir string, report co
 		"column_store_q5_metadata":    "Column q5 metadata",
 	}
 	byName := make(map[string]columnStoreQueryMetric, len(report.Queries))
-	var queryDurationMS float64
+	var queryDuration time.Duration
 	var queryMaterializations int
 	for _, q := range report.Queries {
 		byName[q.Name] = q
-		queryDurationMS += q.DurationMS
+		duration := q.duration
+		if duration == 0 && q.DurationMS > 0 {
+			duration = time.Duration(q.DurationMS * float64(time.Millisecond))
+		}
+		queryDuration += duration
 		queryMaterializations += q.RowMaterializations
 		results["column_store_"+q.Name] = map[string]float64{columnStoreSuiteBenchDisplayName: q.RowsPerSecond}
 	}
-	if queryDurationMS > 0 {
-		results[columnStoreSuiteBenchTestName] = map[string]float64{columnStoreSuiteBenchDisplayName: float64(queryMaterializations) / (queryDurationMS / 1000)}
+	if queryDuration > 0 {
+		results[columnStoreSuiteBenchTestName] = map[string]float64{columnStoreSuiteBenchDisplayName: float64(queryMaterializations) / queryDuration.Seconds()}
 	}
 	if q, ok := byName["q1"]; ok {
 		results["alias_full_scan_from_q1"] = map[string]float64{columnStoreSuiteBenchDisplayName: q.RowsPerSecond}
