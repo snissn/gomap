@@ -433,7 +433,13 @@ func columnAssetRefBlocksSegmentDeletion(live bool, candidate bool, quarantined 
 	// Non-live refs still block whole-segment deletion unless they are purely
 	// cleanup-safe candidates. Quarantined refs deliberately block shared segment
 	// deletion until quarantine handling has made an explicit cleanup decision.
-	return !live && (!candidate || quarantined)
+	if live {
+		return false
+	}
+	if quarantined {
+		return true
+	}
+	return !candidate
 }
 
 func estimateColumnAssetReachabilityRefs(input ColumnAssetReachabilityInput) int {
@@ -528,6 +534,9 @@ func columnAssetStateRank(state ColumnAssetLifecycleState) int {
 	case ColumnAssetStateReclaimable:
 		return 20
 	case ColumnAssetStateSuperseded:
+		// Superseded refs are still protected from direct segment deletion, but
+		// cleanup-safe/reclaimable states win when a later lifecycle scan proves
+		// the containing segment can be reclaimed or rewritten safely.
 		return 10
 	case ColumnAssetStateDeleting:
 		return 0
