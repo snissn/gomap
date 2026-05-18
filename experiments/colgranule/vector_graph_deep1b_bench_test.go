@@ -119,7 +119,9 @@ func TestColumnVectorGraphDeep1BJZIPCodecRoundTrip(t *testing.T) {
 		}
 	}
 	transforms := []columnVectorGraphDeep1BJZIPTransform{
-		{name: "cartesian_byte_shuffle", kind: columnVectorGraphDeep1BJZIPTransformCartesian},
+		{name: "cartesian_raw", kind: columnVectorGraphDeep1BJZIPTransformCartesianRaw},
+		{name: "cartesian_transpose", kind: columnVectorGraphDeep1BJZIPTransformCartesianTranspose},
+		{name: "cartesian_byte_shuffle", kind: columnVectorGraphDeep1BJZIPTransformCartesianByteShuffle},
 		{name: "spherical", kind: columnVectorGraphDeep1BJZIPTransformSpherical},
 		{name: "spherical_center_delta", kind: columnVectorGraphDeep1BJZIPTransformSphericalCenterDelta},
 		{name: "spherical_prev_delta", kind: columnVectorGraphDeep1BJZIPTransformSphericalPrevDelta},
@@ -399,6 +401,10 @@ func BenchmarkColumnVectorGraphDeep1BJZIPNeighborhoodCompressionSmoke(b *testing
 								b.Fatalf("JZIP-style decode warm: %v", err)
 							}
 							maxAbsError, maxCosineError, meanCosineError := columnVectorGraphDeep1BJZIPErrorMetrics(vectors, decoded, columnVectorGraphDeep1BDims)
+							decodeEncoded := warm
+							decodeEncoded.Payload = append([]byte(nil), warm.Payload...)
+							decodeEncoded.Metadata = append([]float32(nil), warm.Metadata...)
+							decodeCodec := &columnVectorGraphDeep1BJZIPCodec{}
 							b.ReportAllocs()
 							b.SetBytes(int64(warm.RawBytes))
 							b.ResetTimer()
@@ -412,9 +418,28 @@ func BenchmarkColumnVectorGraphDeep1BJZIPNeighborhoodCompressionSmoke(b *testing
 							}
 							elapsed := time.Since(start)
 							b.StopTimer()
+							decodeStart := time.Now()
+							for i := 0; i < b.N; i++ {
+								decoded, _, err := decodeCodec.Decode(decodeEncoded)
+								if err != nil {
+									b.Fatalf("JZIP-style decode: %v", err)
+								}
+								benchSink += int64(len(decoded))
+							}
+							decodeElapsed := time.Since(decodeStart)
+							if b.N > 0 {
+								decodeNanos = decodeElapsed.Nanoseconds() / int64(b.N)
+							}
 							if elapsed > 0 && b.N > 0 {
 								b.ReportMetric(float64(b.N)/elapsed.Seconds(), "granules/s")
 								b.ReportMetric(float64(elapsed.Nanoseconds())/float64(b.N)/1e6, "encode_ms")
+							}
+							if decodeElapsed > 0 && b.N > 0 {
+								decodeSeconds := float64(decodeNanos) / 1e9
+								b.ReportMetric(float64(b.N)/decodeElapsed.Seconds(), "decode_granules/s")
+								b.ReportMetric(float64(granuleRows)/decodeSeconds, "decode_vectors/s")
+								b.ReportMetric(float64(warm.RawBytes)/decodeSeconds/1e6, "decode_raw_MB/s")
+								b.ReportMetric(float64(warm.TransformRawBytes)/decodeSeconds/1e6, "decode_transform_MB/s")
 							}
 							b.ReportMetric(float64(exactNanos)/1e6, "exact_scan_ms")
 							b.ReportMetric(float64(rows), "exact_rows")
@@ -429,6 +454,12 @@ func BenchmarkColumnVectorGraphDeep1BJZIPNeighborhoodCompressionSmoke(b *testing
 							b.ReportMetric(float64(warm.StoredBytes)/float64(warm.RawBytes), "stored_raw_ratio")
 							b.ReportMetric(float64(warm.StoredBytes)/float64(warm.TransformRawBytes), "stored_transform_raw_ratio")
 							b.ReportMetric(float64(warm.TransformNanos)/1e6, "warm_transform_ms")
+							if warm.TransformNanos > 0 {
+								transformSeconds := float64(warm.TransformNanos) / 1e9
+								b.ReportMetric(float64(granuleRows)/transformSeconds, "warm_transform_vectors/s")
+								b.ReportMetric(float64(warm.RawBytes)/transformSeconds/1e6, "warm_transform_raw_MB/s")
+							}
+							b.ReportMetric(float64(warm.TransposeShuffleNanos)/1e6, "warm_layout_ms")
 							b.ReportMetric(float64(warm.TransposeShuffleNanos)/1e6, "warm_transpose_shuffle_ms")
 							b.ReportMetric(float64(warm.CompressionNanos)/1e6, "warm_compress_ms")
 							b.ReportMetric(float64(decodeNanos)/1e6, "decode_ms")
@@ -439,6 +470,144 @@ func BenchmarkColumnVectorGraphDeep1BJZIPNeighborhoodCompressionSmoke(b *testing
 								b.ReportMetric(1, "fallback_"+metricToken(warm.ActualCodec.name))
 							}
 						})
+					}
+				})
+			}
+		})
+	}
+}
+
+func BenchmarkColumnVectorGraphDeep1BJZIPDecodeAndScoreSmoke(b *testing.B) {
+	if os.Getenv("COLUMN_VECTOR_DEEP1B_NEIGHBORHOOD_SMOKE") != "1" {
+		b.Skip("set COLUMN_VECTOR_DEEP1B_NEIGHBORHOOD_SMOKE=1 to run the opt-in Deep1B JZIP-style decode-and-score smoke benchmark")
+	}
+	const rows = 1_000_000
+	data := columnVectorGraphDeep1BEnsureData(b, rows)
+	granuleRows := columnVectorGraphDeep1BEnvInt(b, "COLUMN_VECTOR_DEEP1B_NEIGHBORHOOD_ROWS", columnVectorGraphDeep1BBlockRows)
+	if granuleRows <= 0 {
+		b.Fatalf("COLUMN_VECTOR_DEEP1B_NEIGHBORHOOD_ROWS=%d must be positive", granuleRows)
+	}
+	if granuleRows > rows {
+		b.Fatalf("COLUMN_VECTOR_DEEP1B_NEIGHBORHOOD_ROWS=%d exceeds rows=%d", granuleRows, rows)
+	}
+	baseFile, err := os.Open(data.basePath)
+	if err != nil {
+		b.Fatalf("Open Deep1B base: %v", err)
+	}
+	defer baseFile.Close()
+	query := columnVectorGraphDeep1BReadQuery(b, data.queryPath, data.queryHeader, 0)
+	queryInvNorm := float32(columnVectorGraphDeep1BInvNorm(query))
+	exactStart := time.Now()
+	nearest := columnVectorGraphDeep1BTopRowsByCosine(b, baseFile, data.baseHeader, rows, query, granuleRows)
+	exactNanos := time.Since(exactStart).Nanoseconds()
+	if len(nearest) != granuleRows {
+		b.Fatalf("nearest rows=%d want %d", len(nearest), granuleRows)
+	}
+	nearestRankedRows := make([]int, len(nearest))
+	for i, neighbor := range nearest {
+		nearestRankedRows[i] = neighbor.row
+	}
+	vectors := columnVectorGraphDeep1BReadFbinRows(b, baseFile, data.baseHeader, nearestRankedRows)
+	invNorms := columnVectorGraphDeep1BInvNorms(vectors, columnVectorGraphDeep1BDims)
+
+	reportDecodeAndScoreMetrics := func(b *testing.B, elapsed time.Duration, rawBytes int, storedBytes int, transformRawBytes int, decodeScoreNanos int64) {
+		b.Helper()
+		if elapsed > 0 {
+			b.ReportMetric(float64(b.N)/elapsed.Seconds(), "granules/s")
+		}
+		if decodeScoreNanos > 0 {
+			decodeScoreSeconds := float64(decodeScoreNanos) / 1e9
+			b.ReportMetric(float64(decodeScoreNanos)/1e6, "decode_score_ms")
+			b.ReportMetric(float64(granuleRows)/decodeScoreSeconds, "candidates/s")
+			b.ReportMetric(float64(rawBytes)/decodeScoreSeconds/1e6, "raw_MB/s")
+			if transformRawBytes > 0 {
+				b.ReportMetric(float64(transformRawBytes)/decodeScoreSeconds/1e6, "transform_MB/s")
+			}
+		}
+		b.ReportMetric(float64(exactNanos)/1e6, "exact_scan_ms")
+		b.ReportMetric(float64(rows), "exact_rows")
+		b.ReportMetric(float64(granuleRows), "granule_rows")
+		b.ReportMetric(nearest[0].score, "best_top_cosine")
+		b.ReportMetric(nearest[len(nearest)-1].score, "worst_top_cosine")
+		b.ReportMetric(float64(rawBytes)/float64(granuleRows), "vector_raw_B/entry")
+		if storedBytes > 0 {
+			b.ReportMetric(float64(storedBytes)/float64(granuleRows), "stored_B/entry")
+			b.ReportMetric(float64(rawBytes)/float64(storedBytes), "ratio_vs_raw")
+			b.ReportMetric(float64(storedBytes)/float64(rawBytes), "stored_raw_ratio")
+		}
+	}
+
+	b.Run("resident_fp32", func(b *testing.B) {
+		bestScore, bestRow := columnVectorGraphDeep1BScoreBlock(query, queryInvNorm, vectors, invNorms, columnVectorGraphDeep1BDims)
+		b.ReportAllocs()
+		b.SetBytes(int64(len(vectors) * 4))
+		b.ResetTimer()
+		start := time.Now()
+		for i := 0; i < b.N; i++ {
+			bestScore, bestRow = columnVectorGraphDeep1BScoreBlock(query, queryInvNorm, vectors, invNorms, columnVectorGraphDeep1BDims)
+		}
+		elapsed := time.Since(start)
+		b.StopTimer()
+		benchSink += int64(bestRow) + int64(math.Float32bits(bestScore))
+		var scoreNanos int64
+		if b.N > 0 {
+			scoreNanos = elapsed.Nanoseconds() / int64(b.N)
+		}
+		reportDecodeAndScoreMetrics(b, elapsed, len(vectors)*4, len(vectors)*4, len(vectors)*4, scoreNanos)
+		b.ReportMetric(float64(scoreNanos)/1e6, "score_only_ms")
+	})
+
+	for _, transform := range columnVectorGraphDeep1BJZIPTransforms(b) {
+		transform := transform
+		b.Run(transform.name, func(b *testing.B) {
+			for _, byteCodec := range columnVectorGraphDeep1BJZIPByteCodecs(b) {
+				byteCodec := byteCodec
+				b.Run(byteCodec.name, func(b *testing.B) {
+					encodeCodec := &columnVectorGraphDeep1BJZIPCodec{}
+					warm, err := encodeCodec.Encode(vectors, columnVectorGraphDeep1BDims, transform, byteCodec)
+					if err != nil {
+						b.Fatalf("JZIP-style encode warm: %v", err)
+					}
+					decodeEncoded := warm
+					decodeEncoded.Payload = append([]byte(nil), warm.Payload...)
+					decodeEncoded.Metadata = append([]float32(nil), warm.Metadata...)
+					decodeCodec := &columnVectorGraphDeep1BJZIPCodec{}
+					decoded, _, err := decodeCodec.Decode(decodeEncoded)
+					if err != nil {
+						b.Fatalf("JZIP-style decode warm: %v", err)
+					}
+					bestScore, bestRow := columnVectorGraphDeep1BScoreBlock(query, queryInvNorm, decoded, invNorms, columnVectorGraphDeep1BDims)
+					maxAbsError, maxCosineError, meanCosineError := columnVectorGraphDeep1BJZIPErrorMetrics(vectors, decoded, columnVectorGraphDeep1BDims)
+					b.ReportAllocs()
+					b.SetBytes(int64(warm.RawBytes))
+					b.ResetTimer()
+					start := time.Now()
+					for i := 0; i < b.N; i++ {
+						decoded, _, err = decodeCodec.Decode(decodeEncoded)
+						if err != nil {
+							b.Fatalf("JZIP-style decode: %v", err)
+						}
+						bestScore, bestRow = columnVectorGraphDeep1BScoreBlock(query, queryInvNorm, decoded, invNorms, columnVectorGraphDeep1BDims)
+					}
+					elapsed := time.Since(start)
+					b.StopTimer()
+					benchSink += int64(bestRow) + int64(math.Float32bits(bestScore))
+					var decodeScoreNanos int64
+					if b.N > 0 {
+						decodeScoreNanos = elapsed.Nanoseconds() / int64(b.N)
+					}
+					reportDecodeAndScoreMetrics(b, elapsed, warm.RawBytes, warm.StoredBytes, warm.TransformRawBytes, decodeScoreNanos)
+					b.ReportMetric(float64(warm.TransformRawBytes)/float64(granuleRows), "transform_raw_B/entry")
+					b.ReportMetric(float64(warm.MetadataBytes)/float64(granuleRows), "metadata_B/entry")
+					b.ReportMetric(float64(warm.StoredBytes)/float64(warm.TransformRawBytes), "stored_transform_raw_ratio")
+					b.ReportMetric(float64(warm.TransformNanos)/1e6, "warm_transform_ms")
+					b.ReportMetric(float64(warm.TransposeShuffleNanos)/1e6, "warm_layout_ms")
+					b.ReportMetric(float64(warm.CompressionNanos)/1e6, "warm_compress_ms")
+					b.ReportMetric(maxAbsError, "max_abs_error")
+					b.ReportMetric(maxCosineError, "max_cosine_error")
+					b.ReportMetric(meanCosineError, "mean_cosine_error")
+					if warm.ActualCodec != warm.RequestedCodec {
+						b.ReportMetric(1, "fallback_"+metricToken(warm.ActualCodec.name))
 					}
 				})
 			}
@@ -779,7 +948,9 @@ type columnVectorGraphDeep1BNeighbor struct {
 type columnVectorGraphDeep1BJZIPTransformKind uint8
 
 const (
-	columnVectorGraphDeep1BJZIPTransformCartesian columnVectorGraphDeep1BJZIPTransformKind = iota + 1
+	columnVectorGraphDeep1BJZIPTransformCartesianRaw columnVectorGraphDeep1BJZIPTransformKind = iota + 1
+	columnVectorGraphDeep1BJZIPTransformCartesianTranspose
+	columnVectorGraphDeep1BJZIPTransformCartesianByteShuffle
 	columnVectorGraphDeep1BJZIPTransformSpherical
 	columnVectorGraphDeep1BJZIPTransformSphericalCenterDelta
 	columnVectorGraphDeep1BJZIPTransformSphericalPrevDelta
@@ -875,7 +1046,9 @@ const columnVectorGraphDeep1BJZIPHeaderBytes = 16
 func columnVectorGraphDeep1BJZIPTransforms(tb testing.TB) []columnVectorGraphDeep1BJZIPTransform {
 	tb.Helper()
 	all := []columnVectorGraphDeep1BJZIPTransform{
-		{name: "cartesian_byte_shuffle", kind: columnVectorGraphDeep1BJZIPTransformCartesian},
+		{name: "cartesian_raw", kind: columnVectorGraphDeep1BJZIPTransformCartesianRaw},
+		{name: "cartesian_transpose", kind: columnVectorGraphDeep1BJZIPTransformCartesianTranspose},
+		{name: "cartesian_byte_shuffle", kind: columnVectorGraphDeep1BJZIPTransformCartesianByteShuffle},
 		{name: "spherical", kind: columnVectorGraphDeep1BJZIPTransformSpherical},
 		{name: "spherical_center_delta", kind: columnVectorGraphDeep1BJZIPTransformSphericalCenterDelta},
 		{name: "spherical_prev_delta", kind: columnVectorGraphDeep1BJZIPTransformSphericalPrevDelta},
@@ -889,6 +1062,7 @@ func columnVectorGraphDeep1BJZIPTransforms(tb testing.TB) []columnVectorGraphDee
 	for _, transform := range all {
 		byName[transform.name] = transform
 	}
+	byName["cartesian_transpose_byte_shuffle"] = byName["cartesian_byte_shuffle"]
 	parts := strings.Split(raw, ",")
 	out := make([]columnVectorGraphDeep1BJZIPTransform, 0, len(parts))
 	for _, part := range parts {
@@ -964,7 +1138,14 @@ func (c *columnVectorGraphDeep1BJZIPCodec) Encode(vectors []float32, dims int, t
 	transformNanos := time.Since(transformStart).Nanoseconds()
 
 	shuffleStart := time.Now()
-	c.shuffled = columnVectorGraphDeep1BTransposeByteShuffle(values, rows, valuesPerRow, c.shuffled)
+	switch transform.kind {
+	case columnVectorGraphDeep1BJZIPTransformCartesianRaw:
+		c.shuffled = columnVectorGraphDeep1BFloat32RowMajorBytes(values, c.shuffled)
+	case columnVectorGraphDeep1BJZIPTransformCartesianTranspose:
+		c.shuffled = columnVectorGraphDeep1BTransposeFloat32Bytes(values, rows, valuesPerRow, c.shuffled)
+	default:
+		c.shuffled = columnVectorGraphDeep1BTransposeByteShuffle(values, rows, valuesPerRow, c.shuffled)
+	}
 	shuffleNanos := time.Since(shuffleStart).Nanoseconds()
 
 	payload, actualCodec, compressionNanos, err := c.compressBytes(c.shuffled, byteCodec)
@@ -998,14 +1179,22 @@ func (c *columnVectorGraphDeep1BJZIPCodec) Decode(encoded columnVectorGraphDeep1
 	if err != nil {
 		return nil, 0, err
 	}
-	values, err := columnVectorGraphDeep1BUnshuffleTranspose(raw, encoded.Rows, encoded.ValuesPerRow, c.decodedValues)
+	var values []float32
+	switch encoded.Transform.kind {
+	case columnVectorGraphDeep1BJZIPTransformCartesianRaw:
+		values, err = columnVectorGraphDeep1BFloat32FromRowMajorBytes(raw, c.decodedValues)
+	case columnVectorGraphDeep1BJZIPTransformCartesianTranspose:
+		values, err = columnVectorGraphDeep1BUntransposeFloat32Bytes(raw, encoded.Rows, encoded.ValuesPerRow, c.decodedValues)
+	default:
+		values, err = columnVectorGraphDeep1BUnshuffleTranspose(raw, encoded.Rows, encoded.ValuesPerRow, c.decodedValues)
+	}
 	if err != nil {
 		return nil, 0, err
 	}
 	c.decodedValues = values
 	var out []float32
 	switch encoded.Transform.kind {
-	case columnVectorGraphDeep1BJZIPTransformCartesian:
+	case columnVectorGraphDeep1BJZIPTransformCartesianRaw, columnVectorGraphDeep1BJZIPTransformCartesianTranspose, columnVectorGraphDeep1BJZIPTransformCartesianByteShuffle:
 		out = c.decodedValues
 	case columnVectorGraphDeep1BJZIPTransformSpherical:
 		out = c.sphericalToCartesian(c.decodedValues, encoded.Rows, encoded.Dims)
@@ -1031,11 +1220,9 @@ func (c *columnVectorGraphDeep1BJZIPCodec) Decode(encoded columnVectorGraphDeep1
 
 func (c *columnVectorGraphDeep1BJZIPCodec) transformValues(vectors []float32, rows int, dims int, transform columnVectorGraphDeep1BJZIPTransform) ([]float32, int, []float32, error) {
 	switch transform.kind {
-	case columnVectorGraphDeep1BJZIPTransformCartesian:
-		c.values = columnVectorGraphDeep1BEnsureFloat32(c.values, len(vectors))
-		copy(c.values, vectors)
+	case columnVectorGraphDeep1BJZIPTransformCartesianRaw, columnVectorGraphDeep1BJZIPTransformCartesianTranspose, columnVectorGraphDeep1BJZIPTransformCartesianByteShuffle:
 		c.metadata = c.metadata[:0]
-		return c.values, dims, c.metadata, nil
+		return vectors, dims, c.metadata, nil
 	case columnVectorGraphDeep1BJZIPTransformSpherical:
 		angles := c.cartesianToSpherical(vectors, rows, dims)
 		c.metadata = c.metadata[:0]
@@ -1406,6 +1593,84 @@ func (c *columnVectorGraphDeep1BJZIPCodec) zstdBetter() (*zstd.Encoder, error) {
 	return enc, nil
 }
 
+func columnVectorGraphDeep1BFloat32RowMajorBytes(values []float32, dst []byte) []byte {
+	rawBytes := len(values) * 4
+	if cap(dst) < rawBytes {
+		dst = make([]byte, rawBytes)
+	} else {
+		dst = dst[:rawBytes]
+	}
+	for i, value := range values {
+		bits := math.Float32bits(value)
+		base := i * 4
+		dst[base] = byte(bits)
+		dst[base+1] = byte(bits >> 8)
+		dst[base+2] = byte(bits >> 16)
+		dst[base+3] = byte(bits >> 24)
+	}
+	return dst
+}
+
+func columnVectorGraphDeep1BFloat32FromRowMajorBytes(raw []byte, dst []float32) ([]float32, error) {
+	if len(raw)%4 != 0 {
+		return nil, fmt.Errorf("Deep1B JZIP row-major bytes=%d not divisible by 4", len(raw))
+	}
+	valueCount := len(raw) / 4
+	dst = columnVectorGraphDeep1BEnsureFloat32(dst, valueCount)
+	for i := 0; i < valueCount; i++ {
+		base := i * 4
+		bits := uint32(raw[base]) |
+			uint32(raw[base+1])<<8 |
+			uint32(raw[base+2])<<16 |
+			uint32(raw[base+3])<<24
+		dst[i] = math.Float32frombits(bits)
+	}
+	return dst, nil
+}
+
+func columnVectorGraphDeep1BTransposeFloat32Bytes(values []float32, rows int, valuesPerRow int, dst []byte) []byte {
+	valueCount := rows * valuesPerRow
+	rawBytes := valueCount * 4
+	if cap(dst) < rawBytes {
+		dst = make([]byte, rawBytes)
+	} else {
+		dst = dst[:rawBytes]
+	}
+	for j := 0; j < valuesPerRow; j++ {
+		for row := 0; row < rows; row++ {
+			transposed := j*rows + row
+			bits := math.Float32bits(values[row*valuesPerRow+j])
+			base := transposed * 4
+			dst[base] = byte(bits)
+			dst[base+1] = byte(bits >> 8)
+			dst[base+2] = byte(bits >> 16)
+			dst[base+3] = byte(bits >> 24)
+		}
+	}
+	return dst
+}
+
+func columnVectorGraphDeep1BUntransposeFloat32Bytes(raw []byte, rows int, valuesPerRow int, dst []float32) ([]float32, error) {
+	valueCount := rows * valuesPerRow
+	rawBytes := valueCount * 4
+	if len(raw) != rawBytes {
+		return nil, fmt.Errorf("Deep1B JZIP transposed bytes=%d want=%d", len(raw), rawBytes)
+	}
+	dst = columnVectorGraphDeep1BEnsureFloat32(dst, valueCount)
+	for j := 0; j < valuesPerRow; j++ {
+		for row := 0; row < rows; row++ {
+			transposed := j*rows + row
+			base := transposed * 4
+			bits := uint32(raw[base]) |
+				uint32(raw[base+1])<<8 |
+				uint32(raw[base+2])<<16 |
+				uint32(raw[base+3])<<24
+			dst[row*valuesPerRow+j] = math.Float32frombits(bits)
+		}
+	}
+	return dst, nil
+}
+
 func columnVectorGraphDeep1BTransposeByteShuffle(values []float32, rows int, valuesPerRow int, dst []byte) []byte {
 	valueCount := rows * valuesPerRow
 	rawBytes := valueCount * 4
@@ -1580,6 +1845,39 @@ func columnVectorGraphDeep1BInvNorm(values []float32) float64 {
 		return 0
 	}
 	return 1 / math.Sqrt(normSquared)
+}
+
+func columnVectorGraphDeep1BInvNorms(vectors []float32, dims int) []float32 {
+	rows := len(vectors) / dims
+	invNorms := make([]float32, rows)
+	for row := 0; row < rows; row++ {
+		base := row * dims
+		var normSquared float64
+		for j := 0; j < dims; j++ {
+			value := float64(vectors[base+j])
+			normSquared += value * value
+		}
+		if normSquared > 0 {
+			invNorms[row] = float32(1 / math.Sqrt(normSquared))
+		}
+	}
+	return invNorms
+}
+
+func columnVectorGraphDeep1BScoreBlock(query []float32, queryInvNorm float32, vectors []float32, invNorms []float32, dims int) (float32, int) {
+	rows := len(vectors) / dims
+	bestScore := float32(-math.MaxFloat32)
+	bestRow := -1
+	for row := 0; row < rows; row++ {
+		base := row * dims
+		dot := columnVectorGraphDotProductFloat32(query, vectors[base:base+dims])
+		score := dot * queryInvNorm * invNorms[row]
+		if score > bestScore {
+			bestScore = score
+			bestRow = row
+		}
+	}
+	return bestScore, bestRow
 }
 
 func columnVectorGraphDeep1BReadFbinRows(tb testing.TB, file *os.File, header columnVectorGraphDeep1BFbinHeader, rows []int) []float32 {

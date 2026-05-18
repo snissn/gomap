@@ -88,11 +88,17 @@ The same smoke run also includes
 geometric codec matrix. It transforms one 8192-vector block into transposed and
 byte-shuffled float32 streams before applying byte codecs. Defaults:
 
-- `COLUMN_VECTOR_DEEP1B_JZIP_TRANSFORMS=all`: cartesian byte-shuffle, spherical
+- `COLUMN_VECTOR_DEEP1B_JZIP_TRANSFORMS=all`: cartesian raw row-major,
+  cartesian transpose-only, cartesian transpose plus byte-shuffle, spherical
   angles, spherical center-delta, spherical previous-row delta, and
   Householder-centered cartesian.
 - `COLUMN_VECTOR_DEEP1B_JZIP_CODECS=all`: raw, snappy, lz4, zstd-fast,
   zstd-default, and zstd-better.
+
+`BenchmarkColumnVectorGraphDeep1BJZIPDecodeAndScoreSmoke` uses the same
+nearest-ranked block, keeps encode/setup outside the timed loop, warms decoder
+scratch, and times `decode 8192 vectors + score all 8192 candidates against one
+query`. The `resident_fp32` row is the no-decode scoring ceiling.
 
 ## Manual Commands
 
@@ -172,7 +178,7 @@ COLUMN_VECTOR_DEEP1B_DOWNLOAD=1 \
 COLUMN_VECTOR_DEEP1B_DIR=/private/tmp/gomap-deep1b-cache \
 GOWORK=off go test ./experiments/colgranule \
   -run '^$' \
-  -bench '^BenchmarkColumnVectorGraphDeep1BJZIPNeighborhoodCompressionSmoke/nearest_ranked/(cartesian_byte_shuffle|spherical|spherical_center_delta|spherical_prev_delta|householder_cartesian)/(snappy|lz4|zstd_fast|zstd_default|zstd_better)$' \
+  -bench '^BenchmarkColumnVectorGraphDeep1BJZIPNeighborhoodCompressionSmoke/nearest_ranked/(cartesian_raw|cartesian_transpose|cartesian_byte_shuffle|spherical|spherical_center_delta|spherical_prev_delta|householder_cartesian)/(raw|snappy|lz4|zstd_fast|zstd_default|zstd_better)$' \
   -benchmem \
   -benchtime 200ms \
   -count 1
@@ -268,7 +274,7 @@ COLUMN_VECTOR_DEEP1B_DOWNLOAD=1 \
 COLUMN_VECTOR_DEEP1B_DIR=/private/tmp/gomap-deep1b-cache \
 GOWORK=off go test ./experiments/colgranule \
   -run '^$' \
-  -bench '^BenchmarkColumnVectorGraphDeep1BJZIPNeighborhoodCompressionSmoke/nearest_ranked/(cartesian_byte_shuffle|spherical|spherical_center_delta|spherical_prev_delta|householder_cartesian)/(snappy|lz4|zstd_fast|zstd_default|zstd_better)$' \
+  -bench '^BenchmarkColumnVectorGraphDeep1BJZIPNeighborhoodCompressionSmoke/nearest_ranked/(cartesian_raw|cartesian_transpose|cartesian_byte_shuffle|spherical|spherical_center_delta|spherical_prev_delta|householder_cartesian)/(raw|snappy|lz4|zstd_fast|zstd_default|zstd_better)$' \
   -benchmem \
   -benchtime 200ms \
   -count 1
@@ -285,6 +291,8 @@ Representative nearest-ranked 8192-vector results from the same machine:
 | spherical | snappy | 293.9 | 1.306x | 12.52 | 12.04 | 0.0000001 | 0.0000000 |
 | spherical_center_delta | zstd_better | 290.0 | 1.324x | 29.45 | 15.60 | 0.0000001 | 0.0000000 |
 | spherical_prev_delta | zstd_better | 292.8 | 1.311x | 25.16 | 15.15 | 0.0000040 | 0.0000000 |
+| cartesian_raw | zstd_better | 356.0 | 1.079x | 8.137 | 5.061 | 0 | 0 |
+| cartesian_transpose | zstd_better | 355.4 | 1.080x | 8.466 | 4.991 | 0 | 0 |
 | cartesian_byte_shuffle | zstd_fast | 326.6 | 1.176x | 6.475 | 3.279 | 0 | 0 |
 | householder_cartesian | zstd_fast | 327.5 | 1.173x | 9.019 | 5.450 | 0.0000000 | 0.0000000 |
 
@@ -296,6 +304,13 @@ Interpretation:
 - Snappy and lz4 also compress the spherical stream (`293.9` and `292.6
   B/entry`), which confirms the geometry/byte-shuffle transform is doing the
   useful entropy reduction rather than zstd alone.
+- Raw row-major zstd-fast and transpose-only zstd-fast effectively do not
+  compress Deep1B fp32 blocks. zstd-better can squeeze raw/transpose-only to
+  about `355-356 B/entry`, but that is slow and far weaker than byte-shuffle or
+  spherical geometry.
+- Cartesian transpose plus byte-shuffle is the useful non-trig baseline:
+  `326.6 B/entry`, or `1.176x` versus raw, with much cheaper decode than
+  spherical reconstruction.
 - Center-angle delta and previous-row delta did not beat plain spherical on
   this block. Previous-row delta is order-sensitive but was still worse for
   nearest-ranked rows.
@@ -305,6 +320,49 @@ Interpretation:
 - A full 1x all-order matrix gave the same qualitative result:
   nearest-ranked, nearest-ordinal, and source-prefix blocks all selected plain
   spherical as the best exact transform.
+
+Decode-and-score smoke:
+
+```sh
+COLUMN_VECTOR_DEEP1B_NEIGHBORHOOD_SMOKE=1 \
+COLUMN_VECTOR_DEEP1B_DOWNLOAD=1 \
+COLUMN_VECTOR_DEEP1B_DIR=/private/tmp/gomap-deep1b-cache \
+COLUMN_VECTOR_DEEP1B_JZIP_TRANSFORMS=cartesian_raw,cartesian_transpose,cartesian_byte_shuffle,spherical \
+COLUMN_VECTOR_DEEP1B_JZIP_CODECS=raw,zstd_fast,zstd_better \
+GOWORK=off go test ./experiments/colgranule \
+  -run '^$' \
+  -bench '^BenchmarkColumnVectorGraphDeep1BJZIPDecodeAndScoreSmoke' \
+  -benchmem \
+  -benchtime 200ms \
+  -count 1
+```
+
+Representative nearest-ranked 8192-vector decode plus candidate-score results:
+
+| Path | Stored B/entry | Ratio vs 384 B | Decode+score ms | Candidates/s | Raw MB/s | B/op | allocs/op |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| resident_fp32 | 384.0 | 1.000x | 0.097 | 84.2M | 32328 | 0 | 0 |
+| cartesian_raw/raw | 384.0 | 1.000x | 0.904 | 9.07M | 3482 | 0 | 0 |
+| cartesian_transpose/raw | 384.0 | 1.000x | 0.793 | 10.3M | 3967 | 0 | 0 |
+| cartesian_byte_shuffle/zstd_fast | 326.6 | 1.176x | 2.919 | 2.81M | 1078 | 0 | 0 |
+| cartesian_byte_shuffle/zstd_better | 326.5 | 1.176x | 3.052 | 2.68M | 1031 | 0 | 0 |
+| spherical/raw | 380.0 | 1.011x | 10.95 | 0.748M | 287 | 0 | 0 |
+| spherical/zstd_fast | 288.5 | 1.331x | 11.60 | 0.706M | 271 | 0 | 0 |
+| spherical/zstd_better | 271.4 | 1.415x | 12.44 | 0.659M | 253 | 0 | 0 |
+
+Interpretation:
+
+- The no-decode resident fp32 scoring ceiling for this block is about `84M`
+  candidates/s. Any compressed hot path must be compared against that number,
+  not just byte decode throughput.
+- Raw row-major and transpose-only no-codec decode plus score are
+  `0.79-0.90 ms` for 8192 candidates. This is the true no-compression block
+  decode baseline now missing from the persisted search table.
+- Cartesian byte-shuffle plus zstd gives a real non-trig storage win, but costs
+  roughly `2.9-3.1 ms` to decode and score an 8192-vector block.
+- Spherical is clearly a storage/cold-decode candidate in this Go prototype,
+  not a hot search path as implemented: trig reconstruction dominates, even
+  before considering graph traversal.
 
 Useful reported metrics:
 
@@ -340,3 +398,8 @@ Useful reported metrics:
   inside `BenchmarkColumnVectorGraphDeep1BJZIPNeighborhoodCompressionSmoke`:
   off-band geometric codec evidence for future vector-column admission. These
   bytes are not yet persisted as engine assets.
+- `decode_score_ms`, `candidates/s`, `raw_MB/s`, `score_only_ms`, `B/op`, and
+  `allocs/op` inside
+  `BenchmarkColumnVectorGraphDeep1BJZIPDecodeAndScoreSmoke`: cold block decode
+  plus exact candidate scoring evidence. This benchmark intentionally does not
+  fetch source documents or traverse a graph.
