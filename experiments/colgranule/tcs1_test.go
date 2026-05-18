@@ -157,8 +157,14 @@ func TestSegmentColumnAssetStoreSyncsNewSegmentDirectoryEntry(t *testing.T) {
 		t.Fatalf("reopen segment store: %v", err)
 	}
 	defer reopened.Close()
+	if !reopened.dirSyncRequired {
+		t.Fatal("reopened segment store did not conservatively require directory sync")
+	}
+	if err := reopened.Sync(); err != nil {
+		t.Fatalf("reopened Sync: %v", err)
+	}
 	if reopened.dirSyncRequired {
-		t.Fatal("existing segment file should not require directory sync on reopen")
+		t.Fatal("reopened segment store still requires directory sync after Sync")
 	}
 }
 

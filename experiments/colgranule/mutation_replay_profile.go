@@ -20,7 +20,7 @@ func (p ColumnMutationReplayProfile) Validate() error {
 	switch durability {
 	case ColumnMutationReplayDurable:
 		if p.BenchmarkOnly {
-			return fmt.Errorf("colgranule: durable column mutation replay profile cannot be benchmark-only")
+			return fmt.Errorf("colgranule: durable column mutation replay profile cannot be benchmark-only; choose %q or %q with BenchmarkOnly for benchmark-ceiling runs", ColumnMutationReplayWALOnFast, ColumnMutationReplayFast)
 		}
 		return nil
 	case ColumnMutationReplayWALOnFast, ColumnMutationReplayFast:

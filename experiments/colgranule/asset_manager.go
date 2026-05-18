@@ -42,6 +42,7 @@ type ColumnAssetPublishClosure struct {
 
 type ColumnAssetSyncedPublishClosure struct {
 	closure ColumnAssetPublishClosure
+	manager *ColumnAssetManager
 	sealed  bool
 }
 
@@ -302,6 +303,7 @@ func (m *ColumnAssetManager) SyncPublishClosure(closure ColumnAssetPublishClosur
 	}
 	return ColumnAssetSyncedPublishClosure{
 		closure: verified,
+		manager: m,
 		sealed:  true,
 	}, nil
 }
@@ -312,6 +314,9 @@ func (m *ColumnAssetManager) MarkPublishSucceeded(synced ColumnAssetSyncedPublis
 	}
 	if !synced.sealed {
 		return fmt.Errorf("colgranule: publish succeeded requires synced publish closure")
+	}
+	if synced.manager != m {
+		return fmt.Errorf("colgranule: synced publish closure belongs to another column asset manager")
 	}
 	if reason == "" {
 		reason = "publish succeeded"

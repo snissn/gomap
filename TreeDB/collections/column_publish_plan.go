@@ -268,7 +268,7 @@ func BuildColumnPublishPlan(input ColumnPublishPlanInput) (ColumnPublishPlan, er
 		start := time.Now()
 		if err := input.Hooks.EncodeDeclaredColumns(ColumnPublishDeclaredColumnEncodeInput{
 			Collection:  input.Collection,
-			ColumnStore: *cfg,
+			ColumnStore: columnPublishHookConfig(*cfg),
 			Operation:   input.Operation,
 		}); err != nil {
 			return ColumnPublishPlan{}, fmt.Errorf("collections: column publish declared-column encode failed: %w", err)
@@ -399,13 +399,16 @@ func (delta ColumnManifestRootDelta) OrderedRootDeltaPublishInput() (backenddb.O
 	if err := validateColumnManifestIdentity(identity); err != nil {
 		return backenddb.OrderedRootDeltaPublishInput{}, err
 	}
+	if delta.IdentityRecord != encodeColumnManifestIdentityRecordArray(identity) {
+		return backenddb.OrderedRootDeltaPublishInput{}, errors.New("collections: column manifest root delta identity record does not match identity")
+	}
 	policy, err := backendRootStoragePolicy(delta.StoragePolicy)
 	if err != nil {
 		return backenddb.OrderedRootDeltaPublishInput{}, err
 	}
 	return backenddb.OrderedRootDeltaPublishInput{
 		BaseRoot:      delta.BaseRootID,
-		Iter:          columnManifestIdentityIterator(identity),
+		Iter:          columnManifestIdentityRecordIterator(delta.IdentityRecord),
 		StoragePolicy: policy,
 	}, nil
 }
@@ -419,11 +422,14 @@ func (delta ColumnManifestRootDelta) OrderedRootDeltaBatchPublishInput() (backen
 	if err := validateColumnManifestIdentity(identity); err != nil {
 		return backenddb.OrderedRootDeltaBatchPublishInput{}, func() {}, err
 	}
+	if delta.IdentityRecord != encodeColumnManifestIdentityRecordArray(identity) {
+		return backenddb.OrderedRootDeltaBatchPublishInput{}, func() {}, errors.New("collections: column manifest root delta identity record does not match identity")
+	}
 	policy, err := backendRootStoragePolicy(delta.StoragePolicy)
 	if err != nil {
 		return backenddb.OrderedRootDeltaBatchPublishInput{}, func() {}, err
 	}
-	iter := columnManifestIdentityIterator(identity)
+	iter := columnManifestIdentityRecordIterator(delta.IdentityRecord)
 	deltaBatch, err := backenddb.OrderedRootDeltaBatchFromIterator(iter)
 	_ = iter.Close()
 	if err != nil {
@@ -531,8 +537,8 @@ func (c *Collection) buildColumnManifestPublishSystemDeltaIterator(input ColumnM
 		return nil, errors.New("collections: column manifest publish requires enabled column_store metadata")
 	}
 	cfg := updatedMeta.Options.ColumnStore.copy()
-	active := plan.UpdatedActiveManifest
-	recovery := plan.RecoveryAuthoritativeManifest
+	active := activeIdentity
+	recovery := recoveryIdentity
 	cfg.ActiveManifest = &active
 	cfg.RecoveryAuthoritativeManifest = &recovery
 	cfg.RecoveryAuthoritativeAppliedCommandLSN = plan.RecoveryAuthoritativeAppliedCommandLSN
@@ -562,7 +568,7 @@ func prepareColumnPublishAssets(input ColumnPublishPlanInput, cfg ColumnStoreCon
 	}
 	return input.Hooks.PrepareAssets(ColumnPublishAssetPrepareInput{
 		Collection:        input.Collection,
-		ColumnStore:       cfg,
+		ColumnStore:       columnPublishHookConfig(cfg),
 		Operation:         input.Operation,
 		AppliedCommandLSN: input.AppliedCommandLSN,
 		CurrentManifest:   input.CurrentManifest,
@@ -575,7 +581,7 @@ func encodeColumnPublishManifest(input ColumnPublishPlanInput, cfg ColumnStoreCo
 	}
 	return input.Hooks.EncodeManifest(ColumnPublishManifestEncodeInput{
 		Collection:        input.Collection,
-		ColumnStore:       cfg,
+		ColumnStore:       columnPublishHookConfig(cfg),
 		Operation:         input.Operation,
 		AppliedCommandLSN: input.AppliedCommandLSN,
 		CurrentManifest:   input.CurrentManifest,
@@ -587,7 +593,7 @@ func validateColumnPublishClosure(input ColumnPublishPlanInput, cfg ColumnStoreC
 	if input.Hooks.ValidateClosure != nil {
 		return input.Hooks.ValidateClosure(ColumnPublishClosureValidationInput{
 			Collection:        input.Collection,
-			ColumnStore:       cfg,
+			ColumnStore:       columnPublishHookConfig(cfg),
 			Operation:         input.Operation,
 			AppliedCommandLSN: input.AppliedCommandLSN,
 			Prepared:          prepared,
@@ -608,7 +614,7 @@ func buildColumnPublishRootDelta(input ColumnPublishPlanInput, cfg ColumnStoreCo
 	if input.Hooks.BuildRootDelta != nil {
 		return input.Hooks.BuildRootDelta(ColumnPublishRootDeltaInput{
 			Collection:         input.Collection,
-			ColumnStore:        cfg,
+			ColumnStore:        columnPublishHookConfig(cfg),
 			BaseManifestRootID: input.BaseManifestRootID,
 			Manifest:           manifest,
 			Closure:            cloneColumnPublishDurabilityClosure(closure),
@@ -624,6 +630,10 @@ func buildColumnPublishRootDelta(input ColumnPublishPlanInput, cfg ColumnStoreCo
 		Identity:       manifest.Identity,
 		IdentityRecord: encodeColumnManifestIdentityRecordArray(manifest.Identity),
 	}, nil
+}
+
+func columnPublishHookConfig(cfg ColumnStoreConfig) ColumnStoreConfig {
+	return cfg.copy()
 }
 
 func validateColumnPublishPlanConfig(collection string, cfg *ColumnStoreConfig) error {

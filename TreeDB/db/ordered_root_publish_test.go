@@ -6,6 +6,7 @@ import (
 	"errors"
 	"reflect"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -199,6 +200,14 @@ func TestPublishOrderedRootDeltaBatchGroupWithCommandWALContextRejectsMissingFra
 	}
 	if err := db.CheckCommandWALPublishReady(); err != nil {
 		t.Fatalf("CheckCommandWALPublishReady after missing frame rejection: %v", err)
+	}
+}
+
+func TestPublishOrderedRootDeltaBatchGroupWithCommandWALContextNilSystemBuilderNamesBatch(t *testing.T) {
+	var db *DB
+	_, _, err := db.PublishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilder(nil, nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "delta batch group") {
+		t.Fatalf("err=%v want delta batch group system builder error", err)
 	}
 }
 
