@@ -521,7 +521,7 @@ func (c *Collection) buildColumnManifestPublishSystemDeltaIterator(input ColumnM
 
 	updatedMeta := copyCollectionMeta(input.BaseMeta)
 	if updatedMeta.Options.ColumnStore == nil || !updatedMeta.Options.ColumnStore.Enabled {
-		return nil, errors.New("collections: column manifest publish requires enabled column_store metadata")
+		return nil, errors.New(errColumnPublishPlanRequiresEnabledColumnStore)
 	}
 	cfg := updatedMeta.Options.ColumnStore.copy()
 	active := activeIdentity
