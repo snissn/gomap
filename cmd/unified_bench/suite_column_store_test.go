@@ -594,17 +594,15 @@ func TestColumnStoreSuitePlanKindMapsKnownPathsM11B(t *testing.T) {
 		{columnStorePathParallelColumnScan, collections.ColumnQueryPlanParallelColumnScan},
 	}
 	for _, tc := range cases {
+		if tc.path != string(tc.want) {
+			t.Fatalf("path constant %q diverged from planner kind %q", tc.path, tc.want)
+		}
 		got, err := columnStoreSuitePlanKind(tc.path)
 		if err != nil {
 			t.Fatalf("columnStoreSuitePlanKind(%q): %v", tc.path, err)
 		}
 		if got != tc.want {
 			t.Fatalf("columnStoreSuitePlanKind(%q)=%q want %q", tc.path, got, tc.want)
-		}
-	}
-	for _, tc := range cases {
-		if got, want := tc.path, string(tc.want); got != want {
-			t.Fatalf("column store path label %q diverged from planner kind %q", got, want)
 		}
 	}
 	if _, err := columnStoreSuitePlanKind("future_alias"); err == nil {
