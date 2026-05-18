@@ -333,10 +333,10 @@ func columnVectorGraphNormSquared(vector []float32) (float64, int, float32) {
 
 func copyColumnVectorGraphIDs(ids [][]byte) ([]byte, []uint32, error) {
 	var total uint64
-	for ordinal, id := range ids {
+	for i, id := range ids {
 		total += uint64(len(id))
 		if total > columnVectorGraphMaxUint32 {
-			return nil, nil, fmt.Errorf("collections: column vector graph document ID ordinal=%d running bytes=%d exceeds uint32 offset limit=%d", ordinal, total, columnVectorGraphMaxUint32)
+			return nil, nil, fmt.Errorf("collections: column vector graph document IDs exceed uint32 offset range at ordinal %d (running total=%d, limit=%d)", i, total, columnVectorGraphMaxUint32)
 		}
 	}
 	arena := make([]byte, 0, int(total))
@@ -374,10 +374,15 @@ func columnVectorGraphDocumentIDRanks(ids [][]byte) []uint32 {
 	return ranks
 }
 
+// columnVectorGraphDocumentIDsMatchOrdinalTieOrder reports whether document IDs
+// are in non-decreasing (sorted) order. Non-decreasing order, including
+// duplicate adjacent IDs, is sufficient for the ordinal-tie fast path because:
+// - In the ordinal-tie path, equal-distance candidates are ordered by nodeID.
+// - In the document-tie path, columnVectorGraphDocumentIDRanks breaks equal-ID
+//   ties by ordinal position (lower ordinal = better rank).
+// Both paths therefore produce identical ordering for equal document IDs, so
+// the ordinal-tie fast path is safe to use whenever IDs are non-decreasing.
 func columnVectorGraphDocumentIDsMatchOrdinalTieOrder(ids [][]byte) bool {
-	// Equal adjacent IDs are compatible with the ordinal fast path: the
-	// document-rank path also uses ordinal order as the final duplicate-ID
-	// tiebreaker, so non-decreasing IDs preserve the same result order.
 	for ordinal := 1; ordinal < len(ids); ordinal++ {
 		if bytes.Compare(ids[ordinal-1], ids[ordinal]) > 0 {
 			return false

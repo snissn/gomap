@@ -539,13 +539,14 @@ func BenchmarkColumnVectorGraphSearchCosineParallel(b *testing.B) {
 		b.Fatal("missing query vector")
 	}
 	opts := ColumnVectorGraphSearchOptions{TopK: 10, EfSearch: 128}
-	b.SetParallelism(1)
-	// RunParallel normally starts parallelism*GOMAXPROCS workers. Seed that many
-	// warmed scratches and use a pool so every worker gets exclusive scratch
-	// without blocking if the runtime oversubscribes benchmark goroutines.
+	// Pre-warm one scratch per logical CPU so the pool always returns a warmed
+	// scratch regardless of how many goroutines RunParallel actually spawns.
+	// sync.Pool is used instead of a fixed-size channel so the benchmark is
+	// robust to runtime scheduling changes that could create more goroutines
+	// than GOMAXPROCS (in which case a fixed-size channel could deadlock).
 	workers := runtime.GOMAXPROCS(0)
-	var scratches sync.Pool
 	var warmTrace ColumnVectorGraphSearchTrace
+	scratchPool := &sync.Pool{New: func() any { return new(ColumnVectorGraphSearchScratch) }}
 	for i := 0; i < workers; i++ {
 		scratch := new(ColumnVectorGraphSearchScratch)
 		warm, trace, err := graph.SearchCosine(query, opts, scratch)
@@ -556,21 +557,14 @@ func BenchmarkColumnVectorGraphSearchCosineParallel(b *testing.B) {
 			b.Fatalf("warm worker %d results=%d want %d", i, len(warm), opts.TopK)
 		}
 		warmTrace = trace
-		scratches.Put(scratch)
+		scratchPool.Put(scratch)
 	}
 	b.ReportAllocs()
 	b.SetBytes(int64(warmTrace.CandidatesExamined * graph.Dims() * 4))
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
-		scratch, _ := scratches.Get().(*ColumnVectorGraphSearchScratch)
-		if scratch == nil {
-			// Defensive fallback for future RunParallel scheduling changes. The
-			// seeded path above is what keeps the measured hot loop allocation-free.
-			scratch = new(ColumnVectorGraphSearchScratch)
-			if _, _, err := graph.SearchCosine(query, opts, scratch); err != nil {
-				panic(err)
-			}
-		}
+		scratch := scratchPool.Get().(*ColumnVectorGraphSearchScratch)
+		defer scratchPool.Put(scratch)
 		var localSink int64
 		for pb.Next() {
 			results, trace, err := graph.SearchCosine(query, opts, scratch)
@@ -583,7 +577,6 @@ func BenchmarkColumnVectorGraphSearchCosineParallel(b *testing.B) {
 			localSink += int64(len(results[0].DocumentID) + trace.CandidatesExamined + trace.EdgesVisited)
 		}
 		atomic.AddInt64(&columnVectorGraphBenchSink, localSink)
-		scratches.Put(scratch)
 	})
 	b.ReportMetric(float64(graph.Edges())/float64(graph.Rows()), "edges/node")
 	b.ReportMetric(float64(warmTrace.CandidatesExamined), "candidates/search")
