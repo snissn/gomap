@@ -2173,10 +2173,18 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 	ctx := CommandWALPublishContext{AppliedCommandLSN: lsn}
 
 	allOrdered := ordered
+	var contextOrdered []OrderedRootDeltaBatchPublishInput
+	defer func() {
+		if err != nil {
+			closeOrderedRootDeltaBatchPublishDeltas(contextOrdered)
+		}
+	}()
 	if buildContextDeltas != nil {
-		contextOrdered, buildErr := buildContextDeltas(ctx)
+		var buildErr error
+		contextOrdered, buildErr = buildContextDeltas(ctx)
 		if buildErr != nil {
 			closeOrderedRootDeltaBatchPublishDeltas(contextOrdered)
+			contextOrdered = nil
 			err = buildErr
 			return 0, nil, err
 		}
