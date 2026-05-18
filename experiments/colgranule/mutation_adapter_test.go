@@ -653,8 +653,7 @@ func BenchmarkColumnMutationReplayM9D(b *testing.B) {
 				if b.N > 0 && elapsed > 0 {
 					// The replay gate deliberately includes per-iteration workspace
 					// open/publish/apply/close work in the timed loop.
-					perOp := elapsed.Seconds() / float64(b.N)
-					b.ReportMetric(float64(logicalRows)/perOp, "rows/sec")
+					b.ReportMetric(float64(logicalRows)*float64(b.N)/elapsed.Seconds(), "rows/sec")
 				}
 				b.ReportMetric(float64(logicalRows), "logical_rows/op")
 				b.ReportMetric(float64(commandBytes), "command_bytes/op")
