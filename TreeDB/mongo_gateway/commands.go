@@ -1585,13 +1585,13 @@ func (s *Server) dropIndexesResponse(command wire.Document) (wire.Document, erro
 		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
 	}
 	if all {
-		if _, err := col.DropAllIndexes(); err != nil {
-			return commandError(commandCodeBadValue, "BadValue", err.Error())
-		}
 		for _, index := range metaBefore.VectorIndexes {
 			if _, err := col.DropVectorIndex(index.Name); err != nil {
 				return commandError(commandCodeBadValue, "BadValue", fmt.Sprintf("dropIndexes partially applied before vector index %q failed: %v", index.Name, err))
 			}
+		}
+		if _, err := col.DropAllIndexes(); err != nil {
+			return commandError(commandCodeBadValue, "BadValue", err.Error())
 		}
 	} else {
 		scalarNames, vectorNames, err := classifyDropIndexNames(metaBefore, names)
