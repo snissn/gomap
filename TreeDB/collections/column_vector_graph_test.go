@@ -372,6 +372,72 @@ func TestColumnVectorGraphSearchExploresEqualDistanceOnDocumentTiePath(t *testin
 	}
 }
 
+func TestColumnVectorGraphSearchBoundsEqualDistanceBridgeTraversal(t *testing.T) {
+	rows := 12
+	sortedIDs := make([][]byte, 0, rows)
+	for i := 0; i < rows; i++ {
+		sortedIDs = append(sortedIDs, []byte(fmt.Sprintf("doc-%02d", i)))
+	}
+	outOfOrderIDs := make([][]byte, len(sortedIDs))
+	copy(outOfOrderIDs, sortedIDs)
+	outOfOrderIDs[1], outOfOrderIDs[2] = outOfOrderIDs[2], outOfOrderIDs[1]
+
+	for _, tc := range []struct {
+		name           string
+		ids            [][]byte
+		wantOrdinal    bool
+		wantCandidates int
+		wantEdges      int
+	}{
+		{name: "ordinal", ids: sortedIDs, wantOrdinal: true, wantCandidates: 5, wantEdges: 4},
+		{name: "document", ids: outOfOrderIDs, wantOrdinal: false, wantCandidates: 6, wantEdges: 5},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			vectors := make([]float32, 0, rows*2)
+			invNorms := make([]float32, 0, rows)
+			neighbors := make([]uint32, 0, rows-1)
+			offsets := make([]uint32, rows+1)
+			for i := 0; i < rows; i++ {
+				vectors = append(vectors, 1, 0)
+				invNorms = append(invNorms, 1)
+				offsets[i] = uint32(len(neighbors))
+				if i+1 < rows {
+					neighbors = append(neighbors, uint32(i+1))
+				}
+			}
+			offsets[rows] = uint32(len(neighbors))
+
+			graph, err := NewColumnVectorGraphFromColumns(ColumnVectorGraphColumns{
+				DocumentIDs:     tc.ids,
+				Vectors:         vectors,
+				InvNorms:        invNorms,
+				NeighborOffsets: offsets,
+				Neighbors:       neighbors,
+				Dimensions:      2,
+				EntryPoint:      0,
+				EfSearch:        2,
+			})
+			if err != nil {
+				t.Fatalf("NewColumnVectorGraphFromColumns: %v", err)
+			}
+			if graph.ordinalTieOrder != tc.wantOrdinal {
+				t.Fatalf("ordinalTieOrder=%v want %v", graph.ordinalTieOrder, tc.wantOrdinal)
+			}
+
+			results, trace, err := graph.SearchCosine([]float32{1, 0}, ColumnVectorGraphSearchOptions{TopK: 1, EfSearch: 2}, &ColumnVectorGraphSearchScratch{})
+			if err != nil {
+				t.Fatalf("SearchCosine: %v", err)
+			}
+			if len(results) != 1 || !bytes.Equal(results[0].DocumentID, []byte("doc-00")) {
+				t.Fatalf("results=%+v want doc-00", results)
+			}
+			if trace.CandidatesExamined != tc.wantCandidates || trace.EdgesVisited != tc.wantEdges {
+				t.Fatalf("trace=%+v want bounded bridge traversal with candidates=%d edges=%d", trace, tc.wantCandidates, tc.wantEdges)
+			}
+		})
+	}
+}
+
 func TestColumnVectorGraphSkipsRankTableForOrdinalDocumentIDs(t *testing.T) {
 	graph, err := NewColumnVectorGraphFromColumns(columnVectorGraphTestColumns(32, 16, 4, false))
 	if err != nil {

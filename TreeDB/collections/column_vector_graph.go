@@ -431,6 +431,7 @@ func (g *ColumnVectorGraph) searchCandidatesOrdinalTies(query []float32, queryIn
 	best.pushBounded(entry, limit)
 	edgesVisited := 0
 	candidatesExamined := 1
+	equalDistanceBridgeBudget := limit
 	for len(queue) > 0 {
 		current := queue.pop()
 		if len(best) >= limit && current.distance > best[0].distance {
@@ -450,9 +451,19 @@ func (g *ColumnVectorGraph) searchCandidatesOrdinalTies(query []float32, queryIn
 			if math.IsInf(float64(candidate.distance), 1) {
 				continue
 			}
-			if len(best) < limit || candidate.distance <= best[0].distance {
+			if len(best) < limit || candidate.distance < best[0].distance {
 				queue.push(candidate)
 				best.pushBounded(candidate, limit)
+				continue
+			}
+			if candidate.distance == best[0].distance {
+				if vectorIndexCandidateLess(candidate, best[0]) {
+					queue.push(candidate)
+					best.pushBounded(candidate, limit)
+				} else if equalDistanceBridgeBudget > 0 {
+					queue.push(candidate)
+					equalDistanceBridgeBudget--
+				}
 			}
 		}
 	}
@@ -480,6 +491,7 @@ func (g *ColumnVectorGraph) searchCandidatesDocumentTies(query []float32, queryI
 	best.pushBounded(g, entry, limit)
 	edgesVisited := 0
 	candidatesExamined := 1
+	equalDistanceBridgeBudget := limit
 	for len(queue) > 0 {
 		current := queue.pop(g)
 		if len(best) >= limit && current.distance > best[0].distance {
@@ -499,9 +511,19 @@ func (g *ColumnVectorGraph) searchCandidatesDocumentTies(query []float32, queryI
 			if math.IsInf(float64(candidate.distance), 1) {
 				continue
 			}
-			if len(best) < limit || candidate.distance <= best[0].distance {
+			if len(best) < limit || candidate.distance < best[0].distance {
 				queue.push(g, candidate)
 				best.pushBounded(g, candidate, limit)
+				continue
+			}
+			if candidate.distance == best[0].distance {
+				if g.candidateLess(candidate, best[0]) {
+					queue.push(g, candidate)
+					best.pushBounded(g, candidate, limit)
+				} else if equalDistanceBridgeBudget > 0 {
+					queue.push(g, candidate)
+					equalDistanceBridgeBudget--
+				}
 			}
 		}
 	}
