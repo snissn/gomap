@@ -22,12 +22,11 @@ var ErrColumnQueryPlanUnsupported = errors.New("collections: column query plan u
 type ColumnQueryPredicateOperator string
 
 const (
-	ColumnQueryPredicateEqual              ColumnQueryPredicateOperator = "="
-	ColumnQueryPredicateGreaterOrEqual     ColumnQueryPredicateOperator = ">="
-	ColumnQueryPredicateGreaterThan        ColumnQueryPredicateOperator = ">"
-	ColumnQueryPredicateLessOrEqual        ColumnQueryPredicateOperator = "<="
-	ColumnQueryPredicateLessThan           ColumnQueryPredicateOperator = "<"
-	ColumnQueryPredicateGroupOrOrderDriver ColumnQueryPredicateOperator = "driver"
+	ColumnQueryPredicateEqual          ColumnQueryPredicateOperator = "="
+	ColumnQueryPredicateGreaterOrEqual ColumnQueryPredicateOperator = ">="
+	ColumnQueryPredicateGreaterThan    ColumnQueryPredicateOperator = ">"
+	ColumnQueryPredicateLessOrEqual    ColumnQueryPredicateOperator = "<="
+	ColumnQueryPredicateLessThan       ColumnQueryPredicateOperator = "<"
 )
 
 type ColumnQueryPredicate struct {
@@ -48,6 +47,10 @@ type ColumnQueryPlannerCapabilities struct {
 	PlannerCandidateBudget  int
 }
 
+// ColumnQueryPlanRequest describes one planner decision. Column, index, and
+// aggregate metadata names are matched case-sensitively after trimming
+// surrounding whitespace; callers should canonicalize catalog names before
+// storing them rather than relying on planner-time normalization.
 type ColumnQueryPlanRequest struct {
 	Name                  string
 	ProjectedColumns      []string
@@ -191,9 +194,7 @@ func serialColumnQueryPlan(identity ColumnStoreCacheIdentity, identityOK bool, r
 	}
 	diag.Reason = "selected serial physical column scan"
 	diag.ScheduledGranules = req.Capabilities.GranuleCount
-	if req.Capabilities.MaxParallelWorkers > 0 {
-		diag.WorkerCount = 1
-	}
+	diag.WorkerCount = 1
 	return true, ColumnQueryPlan{Kind: ColumnQueryPlanSerialColumnScan, Supported: true, Diagnostics: diag}
 }
 
@@ -347,7 +348,7 @@ func selectColumnQueryBTreeIndex(catalog *collectionCatalog, req ColumnQueryPlan
 			continue
 		}
 		for _, idx := range catalog.meta.Indexes {
-			if idx.Field == candidate {
+			if strings.TrimSpace(idx.Field) == candidate {
 				return idx, true
 			}
 		}
@@ -358,7 +359,7 @@ func selectColumnQueryBTreeIndex(catalog *collectionCatalog, req ColumnQueryPlan
 			continue
 		}
 		for _, idx := range catalog.meta.Indexes {
-			if idx.Field == candidate {
+			if strings.TrimSpace(idx.Field) == candidate {
 				return idx, true
 			}
 		}
@@ -375,6 +376,10 @@ type ColumnSkipScanBound struct {
 }
 
 type ColumnSkipScanPredicate struct {
+	// Position is the zero-based sort-key position. PlanColumnSkipScan only uses
+	// bounded predicates that form a contiguous left prefix from position zero;
+	// predicates beyond the maximum possible prefix length for this predicate
+	// set are ignored for pruning rather than allocating sparse scratch.
 	Position int
 	Lower    ColumnSkipScanBound
 	Upper    ColumnSkipScanBound
@@ -419,8 +424,9 @@ func PlanColumnSkipScanInto(result *ColumnSkipScanResult, predicates []ColumnSki
 	result.SkippedMarks = result.SkippedMarks[:0]
 	result.ScheduledRows = 0
 	result.SkippedRows = 0
-	// A contiguous left prefix can never be longer than the number of bounded
-	// predicates, so positions >= len(predicates) cannot extend the prefix.
+	// A contiguous left prefix can never be longer than the number of predicates,
+	// so positions >= len(predicates) cannot extend the prefix. This keeps sparse
+	// later-column predicates from allocating position-sized scratch.
 	maxLeftPrefixColumns := len(predicates)
 	result.predicateScratch = ensureColumnSkipScanPredicateScratch(result.predicateScratch, maxLeftPrefixColumns)
 	result.predicateSet = ensureColumnSkipScanBoolScratch(result.predicateSet, maxLeftPrefixColumns)
@@ -465,13 +471,13 @@ func columnSkipScanLeftPrefixPredicates(byPosition []ColumnSkipScanPredicate, ha
 		if pred.Position < 0 || pred.Position >= len(byPosition) || !columnSkipScanPredicateHasBound(pred) {
 			continue
 		}
-		// Preserve the old "last predicate wins" behavior while bounding the
-		// prefix search by the number of predicates, not by arbitrary positions.
+		// Preserve "last predicate wins" for duplicate positions while bounding
+		// prefix discovery by dense scratch, not arbitrary sparse positions.
 		byPosition[pred.Position] = pred
 		hasPosition[pred.Position] = true
 	}
 	prefix := 0
-	for prefix < len(predicates) {
+	for prefix < len(byPosition) {
 		if !hasPosition[prefix] {
 			break
 		}

@@ -687,9 +687,31 @@ func TestColumnStoreSuiteQueriesNormalizeForcedPathAliasesM11B(t *testing.T) {
 			t.Fatalf("query %s plan_label=%q want %q", q.Name, q.PlanLabel, columnStorePathRowStoreBaseline)
 		}
 	}
+
+	physicalAliases := map[string]collections.ColumnQueryPlanKind{
+		"serial":               collections.ColumnQueryPlanSerialColumnScan,
+		"serial-column-scan":   collections.ColumnQueryPlanSerialColumnScan,
+		"metadata":             collections.ColumnQueryPlanAggregateMetadata,
+		"aggregate-metadata":   collections.ColumnQueryPlanAggregateMetadata,
+		"parallel":             collections.ColumnQueryPlanParallelColumnScan,
+		"parallel-column-scan": collections.ColumnQueryPlanParallelColumnScan,
+	}
+	for alias, want := range physicalAliases {
+		normalized := normalizeColumnStoreSuitePath(alias)
+		got, err := columnStoreSuitePlanKind(normalized)
+		if err != nil {
+			t.Fatalf("columnStoreSuitePlanKind(%q): %v", alias, err)
+		}
+		if got != want {
+			t.Fatalf("columnStoreSuitePlanKind(%q)=%q want %q", alias, got, want)
+		}
+		if _, _, err := runColumnStoreSuiteQueries(collection, rows, rawHashes, alias); !errors.Is(err, collections.ErrColumnQueryPlanUnsupported) {
+			t.Fatalf("physical alias %q err=%v want ErrColumnQueryPlanUnsupported", alias, err)
+		}
+	}
 }
 
-func TestColumnStoreSuiteM11BIndexCandidateCoverage(t *testing.T) {
+func TestColumnStoreSuiteIndexCandidateCoverageM11B(t *testing.T) {
 	for _, name := range columnStoreQueryNames() {
 		if got := columnStoreSuiteQueryIndexCandidates(name); len(got) == 0 {
 			t.Fatalf("query %s has no B-tree baseline candidate columns", name)

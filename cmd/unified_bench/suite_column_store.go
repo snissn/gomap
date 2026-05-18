@@ -23,11 +23,11 @@ import (
 )
 
 const (
-	columnStorePathRowStoreBaseline   = string(collections.ColumnQueryPlanRowStoreBaseline)
-	columnStorePathBTreeIndexBaseline = string(collections.ColumnQueryPlanBTreeIndexBaseline)
-	columnStorePathSerialColumnScan   = string(collections.ColumnQueryPlanSerialColumnScan)
-	columnStorePathAggregateMetadata  = string(collections.ColumnQueryPlanAggregateMetadata)
-	columnStorePathParallelColumnScan = string(collections.ColumnQueryPlanParallelColumnScan)
+	columnStorePathRowStoreBaseline   = "row_store_baseline"
+	columnStorePathBTreeIndexBaseline = "b_tree_index_baseline"
+	columnStorePathSerialColumnScan   = "serial_column_scan"
+	columnStorePathAggregateMetadata  = "aggregate_metadata"
+	columnStorePathParallelColumnScan = "parallel_column_scan"
 	columnStoreSuiteBenchTestName     = "column_store"
 	columnStoreSuiteBenchDBName       = "treedb_column_store"
 	columnStoreSuiteBenchDisplayName  = "TreeDB Column Store"
@@ -1015,6 +1015,9 @@ func columnStoreSuitePlanRequest(name string, rows int, forceKind collections.Co
 }
 
 func columnStoreSuiteQueryIndexCandidates(name string) []string {
+	// Candidates must stay one-index-entry-per-document scalar fields because
+	// the M11B B-tree baseline does a full ordered index pass for parity, then
+	// verifies the materialized count against the fixture row count.
 	switch name {
 	case "q1", "q2":
 		return []string{"kind"}
@@ -1082,8 +1085,8 @@ func scanColumnStoreSuiteEventsByIndex(collection *collections.Collection, rows 
 	// index but performs a full ordered pass for parity; these aggregate queries
 	// currently do not have selective predicates that can safely narrow the
 	// range. The fixture expects one indexed row entry per document, so rows+1 is
-	// a sentinel limit that makes duplicate/missing index entries fail closed
-	// instead of truncating silently.
+	// a sentinel limit: materialized != rows catches an exact sentinel hit, while
+	// truncated catches entries beyond the sentinel.
 	truncated, err := collection.ScanBorrowedDocumentsByIndexRange(indexName, collections.IndexRangeOptions{
 		Lower: collections.IndexRangeBound{Unbounded: true},
 		Upper: collections.IndexRangeBound{Unbounded: true},

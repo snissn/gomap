@@ -189,6 +189,13 @@ func TestColumnQueryPlannerM11BMatchesBTreeIndexesCaseSensitively(t *testing.T) 
 	if !plan.Supported || plan.IndexName != "kind_idx" {
 		t.Fatalf("exact-case candidate did not select index: %+v", plan)
 	}
+
+	catalog.meta.Indexes[0].Field = " kind "
+	req.CandidateIndexColumns = []string{" kind "}
+	plan = planColumnQueryForCatalog(catalog, identity, true, req)
+	if !plan.Supported || plan.IndexName != "kind_idx" {
+		t.Fatalf("trimmed candidate/catalog field did not select index: %+v", plan)
+	}
 }
 
 func TestColumnQueryPlannerM11BMatchesBTreeIndexFieldsOnly(t *testing.T) {
@@ -328,6 +335,40 @@ func TestColumnQueryPlannerM11BDoesNotReportPhysicalGranulesForRowOrIndexPlans(t
 	indexPlan := planColumnQueryForCatalog(catalog, identity, true, indexReq)
 	if indexPlan.Diagnostics.ScheduledGranules != 0 || indexPlan.Diagnostics.WorkerCount != 0 {
 		t.Fatalf("B-tree plan reported physical execution counters: %+v", indexPlan.Diagnostics)
+	}
+}
+
+func TestColumnQueryPlannerM11BReportsSerialWorkerCount(t *testing.T) {
+	catalog := &collectionCatalog{meta: CollectionMeta{
+		Name:    "events",
+		Options: CollectionOptions{ColumnStore: &ColumnStoreConfig{Enabled: true}},
+	}}
+	identity := ColumnStoreCacheIdentity{
+		Collection:                      "events",
+		ManifestRoot:                    99,
+		ManifestGeneration:              7,
+		RecoveryAuthoritativeGeneration: 7,
+	}
+	req := ColumnQueryPlanRequest{
+		Name:      "q1",
+		ForceKind: ColumnQueryPlanSerialColumnScan,
+		Capabilities: ColumnQueryPlannerCapabilities{
+			SerialColumnScan:   true,
+			PhysicalAssetCount: 1,
+			GranuleCount:       8,
+			MaxParallelWorkers: 0,
+		},
+	}
+
+	plan := planColumnQueryForCatalog(catalog, identity, true, req)
+	if !plan.Supported {
+		t.Fatalf("serial plan unsupported: %+v", plan.Diagnostics)
+	}
+	if got, want := plan.Diagnostics.WorkerCount, 1; got != want {
+		t.Fatalf("serial worker count=%d want %d", got, want)
+	}
+	if got, want := plan.Diagnostics.ScheduledGranules, 8; got != want {
+		t.Fatalf("serial scheduled granules=%d want %d", got, want)
 	}
 }
 
