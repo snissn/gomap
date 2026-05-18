@@ -672,6 +672,18 @@ func main() {
 				log.Fatalf("maintenance_budget suite: %v", err)
 			}
 			fmt.Print(out)
+		case "column_store", "column-store":
+			out, err := runColumnStoreSuite(baseCfg, columnStoreSuiteOptions{
+				ProfileDir:    strings.TrimSpace(*profileDir),
+				ExecutionPath: strings.TrimSpace(*pathLabel),
+				ForcedPath:    strings.TrimSpace(*columnStoreSuitePathArg),
+				Fixture:       strings.TrimSpace(*columnStoreSuiteFixtureArg),
+				RunBenchprof:  true,
+			})
+			if err != nil {
+				log.Fatalf("column_store suite: %v", err)
+			}
+			fmt.Print(out)
 		default:
 			log.Fatalf("unknown suite: %q", suite)
 		}
