@@ -413,7 +413,7 @@ func (g *ColumnVectorGraph) searchCandidates(query []float32, queryInvNorm float
 		ordinal:  g.entryOrdinal,
 		distance: g.cosineDistance(query, queryInvNorm, g.entryOrdinal),
 	}
-	if math.IsInf(float64(entry.distance), 1) {
+	if !columnVectorGraphFinite(entry.distance) {
 		return nil, 0, 1, fmt.Errorf("colgranule: column vector graph entry ordinal=%d has invalid cosine distance", g.entryOrdinal)
 	}
 	visited[entry.ordinal] = mark
@@ -442,7 +442,7 @@ func (g *ColumnVectorGraph) searchCandidates(query []float32, queryInvNorm float
 				distance: g.cosineDistance(query, queryInvNorm, neighbor),
 			}
 			candidatesExamined++
-			if math.IsInf(float64(candidate.distance), 1) {
+			if !columnVectorGraphFinite(candidate.distance) {
 				continue
 			}
 			if len(best) < limit || candidate.distance <= best[0].distance {
@@ -475,6 +475,8 @@ func (g *ColumnVectorGraph) cosineDistance(query []float32, queryInvNorm float32
 	if !columnVectorGraphFinite(dot) {
 		return columnVectorGraphCosineDistanceWide(query, vector, queryInvNorm, g.invNorms[ordinal])
 	}
+	// The dot and both inverse norms are finite float32 values; scaling in
+	// float64 avoids the float32 intermediate overflow covered by tests.
 	cosine := float64(dot) * float64(queryInvNorm) * float64(g.invNorms[ordinal])
 	if math.IsNaN(cosine) || math.IsInf(cosine, 0) {
 		return columnVectorGraphCosineDistanceWide(query, vector, queryInvNorm, g.invNorms[ordinal])
