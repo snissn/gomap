@@ -358,8 +358,8 @@ func writeColumnStoreCommandWALReplayFramesM10C(path string, baseAppliedLSN uint
 		return 0, 0, fmt.Errorf("new writer: %w", err)
 	}
 	defer func() {
-		if closeErr := w.Close(); err == nil && closeErr != nil {
-			err = fmt.Errorf("close writer: %w", closeErr)
+		if closeErr := w.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close writer: %w", closeErr))
 		}
 	}()
 	for i := 0; i < frames; i++ {
