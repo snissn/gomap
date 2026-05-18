@@ -121,22 +121,25 @@ func BenchmarkColumnStoreCommandWALReplayM10C(b *testing.B) {
 					Durability:             backenddb.DurabilityDurable,
 					DisableBackgroundPrune: true,
 				})
-				b.StopTimer()
 				if err != nil {
+					b.StopTimer()
 					b.Fatalf("Open replay DB: %v", err)
 				}
 				if got := backend.State().AppliedCommandLSN; got != wantAppliedLSN {
+					b.StopTimer()
 					_ = backend.Close()
 					b.Fatalf("AppliedCommandLSN=%d, want %d", got, wantAppliedLSN)
 				}
 				if columnStore {
 					collection, err := NewCollectionManager(backend).OpenCollection("bench")
 					if err != nil {
+						b.StopTimer()
 						_ = backend.Close()
 						b.Fatalf("OpenCollection replayed: %v", err)
 					}
 					assertColumnManifestStateM10B(b, collection, uint64(frames), wantAppliedLSN)
 				}
+				b.StopTimer()
 				if err := backend.Close(); err != nil {
 					b.Fatalf("Close replay DB: %v", err)
 				}
