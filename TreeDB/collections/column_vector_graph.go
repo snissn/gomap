@@ -423,7 +423,7 @@ func (g *ColumnVectorGraph) searchCandidatesOrdinalTies(query []float32, queryIn
 	}
 	visited, mark := scratch.nextVisitedEpoch(g.Rows())
 	entry := vectorIndexCandidate{nodeID: g.entryPoint, distance: g.cosineDistance(query, queryInvNorm, g.entryPoint)}
-	if math.IsInf(float64(entry.distance), 1) {
+	if !columnVectorGraphFinite(entry.distance) {
 		return nil, 0, 1
 	}
 	visited[entry.nodeID] = mark
@@ -450,7 +450,7 @@ func (g *ColumnVectorGraph) searchCandidatesOrdinalTies(query []float32, queryIn
 			visited[neighbor] = mark
 			candidate := vectorIndexCandidate{nodeID: neighbor, distance: g.cosineDistance(query, queryInvNorm, neighbor)}
 			candidatesExamined++
-			if math.IsInf(float64(candidate.distance), 1) {
+			if !columnVectorGraphFinite(candidate.distance) {
 				continue
 			}
 			if len(best) < limit || candidate.distance < best[0].distance {
@@ -488,7 +488,7 @@ func (g *ColumnVectorGraph) searchCandidatesDocumentTies(query []float32, queryI
 	}
 	visited, mark := scratch.graph.nextVisitedEpoch(g.Rows())
 	entry := vectorIndexCandidate{nodeID: g.entryPoint, distance: g.cosineDistance(query, queryInvNorm, g.entryPoint)}
-	if math.IsInf(float64(entry.distance), 1) {
+	if !columnVectorGraphFinite(entry.distance) {
 		return nil, 0, 1
 	}
 	visited[entry.nodeID] = mark
@@ -515,7 +515,7 @@ func (g *ColumnVectorGraph) searchCandidatesDocumentTies(query []float32, queryI
 			visited[neighbor] = mark
 			candidate := vectorIndexCandidate{nodeID: neighbor, distance: g.cosineDistance(query, queryInvNorm, neighbor)}
 			candidatesExamined++
-			if math.IsInf(float64(candidate.distance), 1) {
+			if !columnVectorGraphFinite(candidate.distance) {
 				continue
 			}
 			if len(best) < limit || candidate.distance < best[0].distance {
@@ -683,6 +683,8 @@ func (g *ColumnVectorGraph) cosineDistance(query []float32, queryInvNorm float32
 	if math.IsInf(float64(dot), 0) || math.IsNaN(float64(dot)) {
 		return columnVectorGraphCosineDistanceWide(query, vector, queryInvNorm, g.invNorms[ordinal])
 	}
+	// The dot and both inverse norms are finite float32 values; scaling in
+	// float64 avoids the float32 intermediate overflow covered by tests.
 	cosine := float64(dot) * float64(queryInvNorm) * float64(g.invNorms[ordinal])
 	if math.IsInf(cosine, 0) || math.IsNaN(cosine) {
 		return columnVectorGraphCosineDistanceWide(query, vector, queryInvNorm, g.invNorms[ordinal])
@@ -701,6 +703,10 @@ func columnVectorGraphDotProductFloat64(left []float32, right []float32) float64
 		dot += float64(left[i]) * float64(right[i])
 	}
 	return dot
+}
+
+func columnVectorGraphFinite(value float32) bool {
+	return !math.IsNaN(float64(value)) && !math.IsInf(float64(value), 0)
 }
 
 func columnVectorGraphCosineDistanceWide(query []float32, vector []float32, queryInvNorm float32, vectorInvNorm float32) float32 {
