@@ -1117,6 +1117,108 @@ func TestColumnManifestPublishSystemDeltaRejectsRecoveryLSNRegressionM10A(t *tes
 	}
 }
 
+func TestColumnManifestPublishSystemDeltaRejectsAppliedLSNBelowBaseRecoveryM10A(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "events",
+		Options: CollectionOptions{ColumnStore: testColumnStoreConfig(nil)},
+	}); err != nil {
+		t.Fatalf("create column-enabled collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("events")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	planInput := testColumnPublishPlanInputM10A(
+		ColumnManifestIdentity{Generation: 18, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0xabcddcbe},
+		testColumnPublishPreparedAssetM10A(),
+	)
+	planInput.BaseManifestRootID = 0
+	plan, err := BuildColumnPublishPlan(planInput)
+	if err != nil {
+		t.Fatalf("BuildColumnPublishPlan: %v", err)
+	}
+	plan.AppliedCommandLSN = 90
+	plan.RecoveryAuthoritativeAppliedCommandLSN = 100
+
+	baseMeta := col.Meta()
+	cfg := baseMeta.Options.ColumnStore.copy()
+	active := ColumnManifestIdentity{Generation: 17, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0xabcddcbd}
+	cfg.ActiveManifest = &active
+	cfg.RecoveryAuthoritativeManifest = &active
+	cfg.RecoveryAuthoritativeAppliedCommandLSN = 100
+	baseMeta.Options.ColumnStore = &cfg
+
+	iter, err := col.buildColumnManifestPublishSystemDeltaIterator(ColumnManifestPublishSystemDeltaInput{
+		BaseMeta:           baseMeta,
+		BaseManifestRootID: 0,
+		Plan:               plan,
+	}, []uint64{123})
+	if iter != nil {
+		_ = iter.Close()
+		t.Fatalf("returned iterator with err=%v", err)
+	}
+	if err == nil || !strings.Contains(err.Error(), "AppliedCommandLSN regression") {
+		t.Fatalf("buildColumnManifestPublishSystemDeltaIterator err=%v want AppliedCommandLSN regression", err)
+	}
+}
+
+func TestColumnManifestPublishSystemDeltaRejectsNonAdvancingGenerationM10A(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "events",
+		Options: CollectionOptions{ColumnStore: testColumnStoreConfig(nil)},
+	}); err != nil {
+		t.Fatalf("create column-enabled collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("events")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	planInput := testColumnPublishPlanInputM10A(
+		ColumnManifestIdentity{Generation: 18, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0xabcddcbf},
+		testColumnPublishPreparedAssetM10A(),
+	)
+	planInput.BaseManifestRootID = 0
+	plan, err := BuildColumnPublishPlan(planInput)
+	if err != nil {
+		t.Fatalf("BuildColumnPublishPlan: %v", err)
+	}
+
+	baseMeta := col.Meta()
+	cfg := baseMeta.Options.ColumnStore.copy()
+	active := ColumnManifestIdentity{Generation: plan.UpdatedActiveManifest.Generation, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0xabcddcbe}
+	cfg.ActiveManifest = &active
+	cfg.RecoveryAuthoritativeManifest = &active
+	cfg.RecoveryAuthoritativeAppliedCommandLSN = plan.AppliedCommandLSN
+	baseMeta.Options.ColumnStore = &cfg
+
+	iter, err := col.buildColumnManifestPublishSystemDeltaIterator(ColumnManifestPublishSystemDeltaInput{
+		BaseMeta:           baseMeta,
+		BaseManifestRootID: 0,
+		Plan:               plan,
+	}, []uint64{123})
+	if iter != nil {
+		_ = iter.Close()
+		t.Fatalf("returned iterator with err=%v", err)
+	}
+	if err == nil || !strings.Contains(err.Error(), "manifest generation regression") {
+		t.Fatalf("buildColumnManifestPublishSystemDeltaIterator err=%v want generation regression", err)
+	}
+}
+
 func TestColumnManifestPublishSystemDeltaRejectsForeignCollectionM10A(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -1279,6 +1381,61 @@ func TestColumnManifestPublishSystemDeltaRejectsStaleSnapshotBaseM10A(t *testing
 	}
 	if err == nil || !strings.Contains(err.Error(), "concurrent schema modification") {
 		t.Fatalf("buildColumnManifestPublishSystemDeltaIterator err=%v want stale snapshot base rejection", err)
+	}
+}
+
+func TestColumnManifestPublishSystemDeltaRejectsMissingSnapshotBaseM10A(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "events",
+		Options: CollectionOptions{ColumnStore: testColumnStoreConfig(nil)},
+	}); err != nil {
+		t.Fatalf("create column-enabled collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("events")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	baseState := d.State()
+	planInput := testColumnPublishPlanInputM10A(ColumnManifestIdentity{Generation: 12, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0xabcdef6789}, testColumnPublishPreparedAssetM10A())
+	planInput.BaseManifestRootID = 0
+	plan, err := BuildColumnPublishPlan(planInput)
+	if err != nil {
+		t.Fatalf("BuildColumnPublishPlan: %v", err)
+	}
+
+	tests := []struct {
+		name           string
+		baseCommitSeq  uint64
+		baseSystemRoot uint64
+	}{
+		{name: "missing commit", baseSystemRoot: baseState.SystemRootPageID},
+		{name: "missing root", baseCommitSeq: baseState.CommitSeq},
+		{name: "missing both"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			iter, err := col.buildColumnManifestPublishSystemDeltaIterator(ColumnManifestPublishSystemDeltaInput{
+				BaseMeta:           col.Meta(),
+				BaseCommitSeq:      tt.baseCommitSeq,
+				BaseSystemRoot:     tt.baseSystemRoot,
+				BaseManifestRootID: 0,
+				Plan:               plan,
+			}, []uint64{123})
+			if iter != nil {
+				_ = iter.Close()
+				t.Fatalf("returned iterator with err=%v", err)
+			}
+			if err == nil || !strings.Contains(err.Error(), "requires BaseCommitSeq and BaseSystemRoot") {
+				t.Fatalf("buildColumnManifestPublishSystemDeltaIterator err=%v want missing snapshot base rejection", err)
+			}
+		})
 	}
 }
 

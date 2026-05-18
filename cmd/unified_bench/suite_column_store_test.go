@@ -595,6 +595,78 @@ func TestColumnStoreSuiteRuntimeDeltaSkipsEmptyOutputM11A(t *testing.T) {
 	}
 }
 
+func TestColumnStoreSuiteRuntimeProfilesTrimPaddedPathsM11A(t *testing.T) {
+	dir := t.TempDir()
+	blockPath := filepath.Join(dir, "block.pprof")
+	mutexPath := filepath.Join(dir, "mutex.pprof")
+	tracePath := filepath.Join(dir, "trace.out")
+
+	finish, err := startColumnStoreSuiteRuntimeProfiles(BenchConfig{
+		BlockProfile:         " \t" + blockPath + "\t ",
+		BlockProfileRate:     1,
+		MutexProfile:         " \t" + mutexPath + "\t ",
+		MutexProfileFraction: 1,
+		TraceProfile:         " \t" + tracePath + "\t ",
+	})
+	if err != nil {
+		t.Fatalf("startColumnStoreSuiteRuntimeProfiles: %v", err)
+	}
+	if err := finish(); err != nil {
+		t.Fatalf("finish runtime profiles: %v", err)
+	}
+	for _, path := range []string{blockPath, mutexPath, tracePath} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("expected trimmed profile path %q to exist: %v", path, err)
+		}
+	}
+}
+
+func TestColumnStoreSuiteProfiledQueriesSkipWhitespaceOnlyRuntimeProfilePathsM11A(t *testing.T) {
+	collection, events, rawHashes := newColumnStoreSuiteTestCollectionM11A(t, 8, 4)
+	profileHooks := &benchmarkProfileHooks{
+		writeRuntimeProfileSnapshotTemp: func(prefix, profileName string) (string, error) {
+			t.Fatalf("runtime profile snapshot should not run for whitespace-only %s path", profileName)
+			return "", nil
+		},
+		writeRuntimeProfileDeltaProfile: func(basePath, afterPath, outPath string) (bool, error) {
+			t.Fatalf("runtime profile delta should not run for whitespace-only path %q", outPath)
+			return false, nil
+		},
+	}
+	queries, parity, parityErr, err := runColumnStoreSuiteQueriesProfiled(BenchConfig{
+		BlockProfile: " \t ",
+		MutexProfile: " \n ",
+		profileHooks: profileHooks,
+	}, collection, len(events), rawHashes, columnStorePathRowStoreBaseline)
+	if err != nil || parityErr != nil {
+		t.Fatalf("whitespace-only runtime profiles should be ignored: err=%v parityErr=%v", err, parityErr)
+	}
+	assertColumnStoreQueryMetricCoverageM11A(t, queries)
+	assertColumnStoreParityCoverageM11A(t, parity)
+}
+
+func TestColumnStoreSuiteArtifactsTrimRuntimeProfilePathsM11A(t *testing.T) {
+	dir := t.TempDir()
+	blockPath := filepath.Join(dir, "block.pprof")
+	mutexPath := filepath.Join(dir, "mutex.pprof")
+	tracePath := filepath.Join(dir, "trace.out")
+
+	paths := columnStoreArtifactPathsForProfileDir(dir, BenchConfig{
+		BlockProfile: " \t" + blockPath + "\t ",
+		MutexProfile: " \t" + mutexPath + "\t ",
+		TraceProfile: " \t" + tracePath + "\t ",
+	})
+	if paths.BlockProfile != blockPath || paths.MutexProfile != mutexPath || paths.TraceProfile != tracePath {
+		t.Fatalf("runtime artifact paths were not trimmed: %+v", paths)
+	}
+	if paths.BlockDeltaProfile != contentionProfilePath(blockPath, "block", columnStoreSuiteBenchTestName, columnStoreSuiteBenchDBName) {
+		t.Fatalf("block delta path=%q", paths.BlockDeltaProfile)
+	}
+	if paths.MutexDeltaProfile != contentionProfilePath(mutexPath, "mutex", columnStoreSuiteBenchTestName, columnStoreSuiteBenchDBName) {
+		t.Fatalf("mutex delta path=%q", paths.MutexDeltaProfile)
+	}
+}
+
 func TestColumnStoreSuiteArtifactsOmitMissingRuntimeDeltaPathsM11A(t *testing.T) {
 	dir := t.TempDir()
 	blockDeltaPath := filepath.Join(dir, "block_delta.pprof")
@@ -619,6 +691,21 @@ func TestColumnStoreSuiteArtifactsOmitMissingRuntimeDeltaPathsM11A(t *testing.T)
 	}
 	if paths.BlockProfile != blockPath || paths.MutexProfile != mutexPath {
 		t.Fatalf("base runtime profile artifacts should remain advertised: %+v", paths)
+	}
+}
+
+func TestColumnStoreSuiteArtifactsOmitRuntimeDeltaStatErrorsM11A(t *testing.T) {
+	dir := t.TempDir()
+	notDir := filepath.Join(dir, "not-dir")
+	if err := os.WriteFile(notDir, []byte("file"), 0o644); err != nil {
+		t.Fatalf("write not-dir marker: %v", err)
+	}
+	paths := columnStoreSuitePruneMissingRuntimeDeltaArtifacts(columnStoreArtifactPaths{
+		BlockDeltaProfile: filepath.Join(notDir, "block_delta.pprof"),
+		MutexDeltaProfile: " \t ",
+	})
+	if paths.BlockDeltaProfile != "" || paths.MutexDeltaProfile != "" {
+		t.Fatalf("stat-error/blank optional delta paths should be omitted: %+v", paths)
 	}
 }
 
