@@ -692,29 +692,11 @@ func startColumnStoreSuiteRuntimeProfiles(cfg BenchConfig) (func() error, error)
 }
 
 func runColumnStoreSuiteQueriesProfiled(cfg BenchConfig, collection *collections.Collection, rows int, rawHashes map[string]uint64, path string) ([]columnStoreQueryMetric, map[string]columnStoreParity, error, error) {
-	var cpuFile *os.File
-	if shouldCPUProfile(cfg, columnStoreSuiteBenchTestName) {
-		profilePath := fmt.Sprintf("%s_%s_%s.pprof", cfg.CPUProfile, columnStoreSuiteBenchTestName, columnStoreSuiteBenchDBName)
-		f, err := os.Create(profilePath)
-		if err != nil {
-			return nil, nil, nil, fmt.Errorf("column_store: cpuprofile %s: %w", profilePath, err)
-		}
-		cpuFile = f
-		if err := pprof.StartCPUProfile(cpuFile); err != nil {
-			_ = cpuFile.Close()
-			return nil, nil, nil, fmt.Errorf("column_store: cpuprofile start %s: %w", profilePath, err)
-		}
-	}
-
 	allocBasePath := ""
 	var err error
 	if shouldAllocsProfile(cfg, columnStoreSuiteBenchTestName) {
 		allocBasePath, err = writeAllocsSnapshotTempFn("unified_bench_column_store_allocs_base")
 		if err != nil {
-			if cpuFile != nil {
-				stopCPUProfileFn()
-				_ = cpuFile.Close()
-			}
 			return nil, nil, nil, fmt.Errorf("column_store: allocsprofile baseline: %w", err)
 		}
 	}
@@ -722,10 +704,6 @@ func runColumnStoreSuiteQueriesProfiled(cfg BenchConfig, collection *collections
 	if cfg.BlockProfile != "" {
 		blockBasePath, err = writeRuntimeProfileSnapshotTempFn("unified_bench_column_store_block_base", "block")
 		if err != nil {
-			if cpuFile != nil {
-				stopCPUProfileFn()
-				_ = cpuFile.Close()
-			}
 			_ = os.Remove(allocBasePath)
 			return nil, nil, nil, fmt.Errorf("column_store: blockprofile baseline: %w", err)
 		}
@@ -734,13 +712,29 @@ func runColumnStoreSuiteQueriesProfiled(cfg BenchConfig, collection *collections
 	if cfg.MutexProfile != "" {
 		mutexBasePath, err = writeRuntimeProfileSnapshotTempFn("unified_bench_column_store_mutex_base", "mutex")
 		if err != nil {
-			if cpuFile != nil {
-				stopCPUProfileFn()
-				_ = cpuFile.Close()
-			}
 			_ = os.Remove(allocBasePath)
 			_ = os.Remove(blockBasePath)
 			return nil, nil, nil, fmt.Errorf("column_store: mutexprofile baseline: %w", err)
+		}
+	}
+
+	var cpuFile *os.File
+	if shouldCPUProfile(cfg, columnStoreSuiteBenchTestName) {
+		profilePath := fmt.Sprintf("%s_%s_%s.pprof", cfg.CPUProfile, columnStoreSuiteBenchTestName, columnStoreSuiteBenchDBName)
+		f, err := os.Create(profilePath)
+		if err != nil {
+			_ = os.Remove(allocBasePath)
+			_ = os.Remove(blockBasePath)
+			_ = os.Remove(mutexBasePath)
+			return nil, nil, nil, fmt.Errorf("column_store: cpuprofile %s: %w", profilePath, err)
+		}
+		cpuFile = f
+		if err := startCPUProfileFn(cpuFile); err != nil {
+			_ = cpuFile.Close()
+			_ = os.Remove(allocBasePath)
+			_ = os.Remove(blockBasePath)
+			_ = os.Remove(mutexBasePath)
+			return nil, nil, nil, fmt.Errorf("column_store: cpuprofile start %s: %w", profilePath, err)
 		}
 	}
 
