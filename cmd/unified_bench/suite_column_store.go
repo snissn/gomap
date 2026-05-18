@@ -305,7 +305,7 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 
 	var checkpointCPUFile *os.File
 	if shouldCheckpointCPUProfile(baseCfg, columnStoreSuiteBenchTestName) {
-		checkpointCPUFile, err = startCheckpointCPUProfile(baseCfg, columnStoreSuiteBenchTestName, columnStoreSuiteBenchDBName)
+		checkpointCPUFile, err = startCheckpointCPUProfile(baseCfg, profileHooks, columnStoreSuiteBenchTestName, columnStoreSuiteBenchDBName)
 		if err != nil {
 			_ = db.Close()
 			return "", fmt.Errorf("column_store: checkpoint profiling: %w", err)
@@ -664,7 +664,7 @@ func columnStoreReferenceHashes(events []columnStoreFixtureEvent) (map[string]ui
 		decoded[i] = columnStoreDecodedEvent{TimeUS: events[i].TimeUS, Kind: events[i].Kind, Did: events[i].Did}
 	}
 	out := make(map[string]uint64)
-	for _, name := range columnStoreQueryNames() {
+	for _, name := range columnStoreQueryNameList {
 		hash, _, err := columnStoreQueryHash(columnStoreQueryCanonicalName(name, columnStorePathRowStoreBaseline), decoded)
 		if err != nil {
 			return nil, err
@@ -888,10 +888,10 @@ func runColumnStoreSuiteQueries(collection *collections.Collection, rows int, ra
 	if err != nil {
 		return nil, nil, err
 	}
-	queries := make([]columnStoreQueryMetric, 0, len(columnStoreQueryNames()))
-	parity := make(map[string]columnStoreParity, len(columnStoreQueryNames()))
+	queries := make([]columnStoreQueryMetric, 0, len(columnStoreQueryNameList))
+	parity := make(map[string]columnStoreParity, len(columnStoreQueryNameList))
 	var firstErr error
-	for _, name := range columnStoreQueryNames() {
+	for _, name := range columnStoreQueryNameList {
 		plannerStart := time.Now()
 		plan, err := collection.PlanColumnQuery(columnStoreSuitePlanRequest(name, rows, forceKind))
 		plannerElapsed := time.Since(plannerStart)
@@ -1100,9 +1100,11 @@ func scanColumnStoreSuiteEventsByIndex(collection *collections.Collection, rows 
 	return events, materialized, bytesRead, nil
 }
 
-var columnStoreQueryNameList = []string{"q1", "q2", "q3", "q4a", "q4b", "q5", "q5_metadata"}
+var columnStoreQueryNameList = [...]string{"q1", "q2", "q3", "q4a", "q4b", "q5", "q5_metadata"}
 
-func columnStoreQueryNames() []string { return columnStoreQueryNameList }
+func columnStoreQueryNames() []string {
+	return append([]string(nil), columnStoreQueryNameList[:]...)
+}
 
 func columnStoreQueryNameKnown(name string) bool {
 	for _, candidate := range columnStoreQueryNameList {
