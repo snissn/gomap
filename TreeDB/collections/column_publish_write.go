@@ -74,7 +74,7 @@ func (c *Collection) publishRootDeltaGroupMaybeColumn(ordered []backenddb.Ordere
 		},
 		func(ctx backenddb.CommandWALPublishContext, rootIDs []uint64) (iterator.UnsafeIterator, error) {
 			if plan.AppliedCommandLSN != ctx.AppliedCommandLSN {
-				return nil, errors.New("collections: column publish plan LSN mismatch")
+				return nil, columnPublishPlanLSNMismatchError(input.meta, ctx.AppliedCommandLSN, plan.AppliedCommandLSN)
 			}
 			return c.buildRootDescriptorAndColumnManifestSystemDeltaIteratorForMeta(input.meta, input.baseCommitSeq, input.baseSystemRoot, rootNames, baseRootIDs, rootIDs, plan)
 		},
@@ -128,7 +128,7 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 	}
 	buildSystemDelta := func(ctx backenddb.CommandWALPublishContext, rootIDs []uint64) (iterator.UnsafeIterator, error) {
 		if plan.AppliedCommandLSN != ctx.AppliedCommandLSN {
-			return nil, errors.New("collections: column publish plan LSN mismatch")
+			return nil, columnPublishPlanLSNMismatchError(input.meta, ctx.AppliedCommandLSN, plan.AppliedCommandLSN)
 		}
 		return c.buildRootDescriptorAndColumnManifestSystemDeltaIteratorForMeta(input.meta, input.baseCommitSeq, input.baseSystemRoot, rootNames, baseRootIDs, rootIDs, plan)
 	}
@@ -262,15 +262,71 @@ func writeHashUint64(d *xxhash.Digest, value uint64) {
 }
 
 func appendColumnManifestRootPublishBase(rootNames []string, baseRootIDs map[string]uint64, columnRootName string, columnBaseRoot uint64) ([]string, map[string]uint64) {
-	nextRootNames := make([]string, 0, len(rootNames)+1)
+	hasColumnRoot := false
+	for _, rootName := range rootNames {
+		if rootName == columnRootName {
+			hasColumnRoot = true
+			break
+		}
+	}
+	extra := 1
+	if hasColumnRoot {
+		extra = 0
+	}
+	nextRootNames := make([]string, 0, len(rootNames)+extra)
 	nextRootNames = append(nextRootNames, rootNames...)
-	nextRootNames = append(nextRootNames, columnRootName)
+	if !hasColumnRoot {
+		nextRootNames = append(nextRootNames, columnRootName)
+	}
 	nextBaseRootIDs := make(map[string]uint64, len(baseRootIDs)+1)
 	for rootName, rootID := range baseRootIDs {
 		nextBaseRootIDs[rootName] = rootID
 	}
 	nextBaseRootIDs[columnRootName] = columnBaseRoot
 	return nextRootNames, nextBaseRootIDs
+}
+
+func columnPublishPlanLSNMismatchError(meta CollectionMeta, expected, actual uint64) error {
+	return fmt.Errorf("collections: column publish plan LSN mismatch collection=%q expected=%d actual=%d", meta.Name, expected, actual)
+}
+
+func validateColumnPublishPlanRootForMeta(meta CollectionMeta, plan ColumnPublishPlan) (string, error) {
+	rootName := plan.ManifestRootName
+	if rootName == "" {
+		rootName = plan.RootDelta.RootName
+	}
+	if rootName == "" {
+		return "", errors.New("collections: column publish plan missing manifest root name")
+	}
+	if plan.Collection != meta.Name {
+		return "", fmt.Errorf("collections: column publish plan collection %q does not match collection %q", plan.Collection, meta.Name)
+	}
+	expectedRootName := collectionColumnManifestRootName(meta.Name)
+	if rootName != expectedRootName {
+		return "", fmt.Errorf("collections: column publish plan root %q does not match collection root %q", rootName, expectedRootName)
+	}
+	if plan.RootDelta.RootName != "" && plan.RootDelta.RootName != rootName {
+		return "", fmt.Errorf("collections: column publish plan root %q does not match root delta %q", rootName, plan.RootDelta.RootName)
+	}
+	rootIdentity := plan.RootDelta.Identity
+	normalizeColumnManifestIdentityDefaults(&rootIdentity)
+	if err := validateColumnManifestIdentity(rootIdentity); err != nil {
+		return "", err
+	}
+	if plan.RootDelta.IdentityRecord != encodeColumnManifestIdentityRecordArray(rootIdentity) {
+		return "", errors.New("collections: column publish plan root identity record does not match root identity")
+	}
+	activeIdentity := plan.UpdatedActiveManifest
+	normalizeColumnManifestIdentityDefaults(&activeIdentity)
+	if activeIdentity != rootIdentity {
+		return "", errors.New("collections: column publish plan active manifest identity does not match root delta identity")
+	}
+	recoveryIdentity := plan.RecoveryAuthoritativeManifest
+	normalizeColumnManifestIdentityDefaults(&recoveryIdentity)
+	if recoveryIdentity != rootIdentity {
+		return "", errors.New("collections: column publish plan recovery-authoritative manifest identity does not match root delta identity")
+	}
+	return rootName, nil
 }
 
 func columnPublishUpdatedMeta(base CollectionMeta, plan ColumnPublishPlan) (CollectionMeta, error) {
@@ -298,7 +354,39 @@ func (c *Collection) buildRootDescriptorAndColumnManifestSystemDeltaIteratorForM
 	if !plan.Enabled {
 		return nil, errors.New("collections: disabled column publish plan cannot build system delta")
 	}
+	columnRootName, err := validateColumnPublishPlanRootForMeta(meta, plan)
+	if err != nil {
+		return nil, err
+	}
+	columnRootIndex := -1
+	for i, rootName := range rootNames {
+		if rootName == columnRootName {
+			columnRootIndex = i
+			break
+		}
+	}
+	if columnRootIndex < 0 {
+		return nil, fmt.Errorf("collections: column manifest root %q missing from published root descriptors", columnRootName)
+	}
+	columnBaseRoot, ok := baseRootIDs[columnRootName]
+	if !ok {
+		return nil, fmt.Errorf("collections: missing base root for collection %q root %q", meta.Name, columnRootName)
+	}
+	if plan.ManifestRootBaseID != columnBaseRoot || plan.RootDelta.BaseRootID != columnBaseRoot {
+		return nil, errConcurrentRootModification(meta.Name, columnRootName)
+	}
 	if err := c.validateRootDescriptorSystemDeltaForMeta(meta, expectedCommitSeq, expectedSystemRoot, rootNames, baseRootIDs); err != nil {
+		return nil, err
+	}
+	if rootIDs[columnRootIndex] == 0 {
+		return nil, errors.New("collections: column manifest root publish returned zero root")
+	}
+	current := c.db.AcquireSnapshot()
+	if current == nil {
+		return nil, backenddb.ErrClosed
+	}
+	defer func() { _ = current.Close() }()
+	if err := validateColumnManifestPublishedRoot(current, meta.Name, rootIDs[columnRootIndex], plan.RootDelta.IdentityRecord); err != nil {
 		return nil, err
 	}
 	updatedMeta, err := columnPublishUpdatedMeta(meta, plan)

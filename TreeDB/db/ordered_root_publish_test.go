@@ -160,8 +160,8 @@ func TestPublishOrderedRootDeltaGroupWithCommandWALContextRejectsMissingFrame(t 
 			return nil, nil
 		},
 	)
-	if !errors.Is(err, errCommandWALContextMissingFrame) {
-		t.Fatalf("publish error=%v, want errCommandWALContextMissingFrame", err)
+	if !errors.Is(err, ErrCommandWALContextMissingFrame) {
+		t.Fatalf("publish error=%v, want ErrCommandWALContextMissingFrame", err)
 	}
 	if errors.Is(err, ErrCommandWALUnsupported) {
 		t.Fatalf("publish error=%v must not look like ErrCommandWALUnsupported", err)
@@ -188,8 +188,8 @@ func TestPublishOrderedRootDeltaBatchGroupWithCommandWALContextRejectsMissingFra
 			return nil, nil
 		},
 	)
-	if !errors.Is(err, errCommandWALContextMissingFrame) {
-		t.Fatalf("publish error=%v, want errCommandWALContextMissingFrame", err)
+	if !errors.Is(err, ErrCommandWALContextMissingFrame) {
+		t.Fatalf("publish error=%v, want ErrCommandWALContextMissingFrame", err)
 	}
 	if errors.Is(err, ErrCommandWALUnsupported) {
 		t.Fatalf("publish error=%v must not look like ErrCommandWALUnsupported", err)
