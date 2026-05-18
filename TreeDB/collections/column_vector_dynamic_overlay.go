@@ -150,6 +150,7 @@ func (g *ColumnVectorDynamicGraph) ApplyBatch(mutations []ColumnVectorDynamicMut
 	}
 
 	nextOverlay := current.Overlay.clone(current.OverlayGeneration + 1)
+	inserted, updated, deleted := 0, 0, 0
 	for mutationIndex, mutation := range mutations {
 		if len(mutation.DocumentID) == 0 {
 			return stats, fmt.Errorf("collections: dynamic mutation %d has empty document ID", mutationIndex)
@@ -159,17 +160,17 @@ func (g *ColumnVectorDynamicGraph) ApplyBatch(mutations []ColumnVectorDynamicMut
 			if err := g.applyInsert(nextOverlay, mutation.DocumentID, mutation.Vector); err != nil {
 				return stats, fmt.Errorf("collections: dynamic insert mutation %d: %w", mutationIndex, err)
 			}
-			stats.Inserted++
+			inserted++
 		case ColumnVectorDynamicMutationUpdate:
 			if err := g.applyUpdate(nextOverlay, mutation.DocumentID, mutation.Vector); err != nil {
 				return stats, fmt.Errorf("collections: dynamic update mutation %d: %w", mutationIndex, err)
 			}
-			stats.Updated++
+			updated++
 		case ColumnVectorDynamicMutationDelete:
 			if err := g.applyDelete(nextOverlay, mutation.DocumentID); err != nil {
 				return stats, fmt.Errorf("collections: dynamic delete mutation %d: %w", mutationIndex, err)
 			}
-			stats.Deleted++
+			deleted++
 		default:
 			return stats, fmt.Errorf("collections: dynamic mutation %d has unsupported kind %d", mutationIndex, mutation.Kind)
 		}
@@ -184,6 +185,9 @@ func (g *ColumnVectorDynamicGraph) ApplyBatch(mutations []ColumnVectorDynamicMut
 	g.snapshot.Store(nextSnapshot)
 	stats.BaseGeneration = nextSnapshot.BaseGeneration
 	stats.OverlayGeneration = nextSnapshot.OverlayGeneration
+	stats.Inserted = inserted
+	stats.Updated = updated
+	stats.Deleted = deleted
 	stats.OverlayRows = nextOverlay.Rows()
 	stats.OverlayLiveRows = nextOverlay.LiveRows()
 	stats.OverlayTombstones = nextOverlay.Tombstones()
@@ -275,7 +279,7 @@ func (g *ColumnVectorDynamicGraph) applyInsert(overlay *ColumnVectorDynamicOverl
 	if overlay.HasLiveDocument(documentID) {
 		return fmt.Errorf("document %q already exists in overlay", documentID)
 	}
-	if _, ok := g.baseDocIndex[string(documentID)]; ok && !overlay.DocumentTombstoned(documentID) {
+	if _, ok := g.baseDocIndex[string(documentID)]; ok && !overlay.documentTombstonedWriter(documentID) {
 		return fmt.Errorf("document %q already exists in base", documentID)
 	}
 	return overlay.appendLiveDocument(documentID, vector)
@@ -284,7 +288,7 @@ func (g *ColumnVectorDynamicGraph) applyInsert(overlay *ColumnVectorDynamicOverl
 func (g *ColumnVectorDynamicGraph) applyUpdate(overlay *ColumnVectorDynamicOverlaySnapshot, documentID []byte, vector []float32) error {
 	overlayFound := overlay.tombstoneOverlayDocument(documentID)
 	_, baseFound := g.baseDocIndex[string(documentID)]
-	baseLive := baseFound && !overlay.DocumentTombstoned(documentID)
+	baseLive := baseFound && !overlay.documentTombstonedWriter(documentID)
 	if !overlayFound && !baseLive {
 		return fmt.Errorf("document %q does not exist", documentID)
 	}
@@ -297,7 +301,7 @@ func (g *ColumnVectorDynamicGraph) applyUpdate(overlay *ColumnVectorDynamicOverl
 func (g *ColumnVectorDynamicGraph) applyDelete(overlay *ColumnVectorDynamicOverlaySnapshot, documentID []byte) error {
 	overlayFound := overlay.tombstoneOverlayDocument(documentID)
 	_, baseFound := g.baseDocIndex[string(documentID)]
-	baseLive := baseFound && !overlay.DocumentTombstoned(documentID)
+	baseLive := baseFound && !overlay.documentTombstonedWriter(documentID)
 	if !overlayFound && !baseLive {
 		return fmt.Errorf("document %q does not exist", documentID)
 	}
@@ -424,6 +428,18 @@ func (o *ColumnVectorDynamicOverlaySnapshot) DocumentTombstoned(documentID []byt
 	}
 	_, found := slices.BinarySearchFunc(o.tombstoneDocIDs, documentID, bytes.Compare)
 	return found
+}
+
+func (o *ColumnVectorDynamicOverlaySnapshot) documentTombstonedWriter(documentID []byte) bool {
+	if o == nil {
+		return false
+	}
+	for _, tombstone := range o.tombstoneDocIDs {
+		if bytes.Equal(tombstone, documentID) {
+			return true
+		}
+	}
+	return false
 }
 
 func (o *ColumnVectorDynamicOverlaySnapshot) appendLiveDocument(documentID []byte, vector []float32) error {

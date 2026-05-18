@@ -99,6 +99,72 @@ func TestColumnVectorDynamicGraphSearchTombstonesAndOverlay(t *testing.T) {
 	}
 }
 
+func TestColumnVectorDynamicGraphApplyBatchDoesNotReportUnpublishedCounts(t *testing.T) {
+	base, err := NewColumnVectorGraphFromColumns(columnVectorGraphTestColumns(32, 16, 8, false))
+	if err != nil {
+		t.Fatalf("NewColumnVectorGraphFromColumns: %v", err)
+	}
+	graph, err := NewColumnVectorDynamicGraph(base)
+	if err != nil {
+		t.Fatalf("NewColumnVectorDynamicGraph: %v", err)
+	}
+	query, ok := base.VectorAt(nil, 7)
+	if !ok {
+		t.Fatal("missing query vector")
+	}
+	stats, err := graph.ApplyBatch([]ColumnVectorDynamicMutation{
+		{Kind: ColumnVectorDynamicMutationInsert, DocumentID: []byte("dyn-before-error"), Vector: query},
+		{Kind: ColumnVectorDynamicMutationInsert, DocumentID: []byte("doc-000001"), Vector: query},
+	})
+	if err == nil {
+		t.Fatal("ApplyBatch succeeded with duplicate base document insert")
+	}
+	if stats.Inserted != 0 || stats.Updated != 0 || stats.Deleted != 0 || stats.OverlayGeneration != 0 {
+		t.Fatalf("stats after failed batch=%+v want zero unpublished counts", stats)
+	}
+	snapshot := graph.Snapshot()
+	if snapshot.OverlayGeneration != 0 || snapshot.Overlay.Rows() != 0 || snapshot.Overlay.LiveRows() != 0 {
+		t.Fatalf("snapshot after failed batch generation=%d rows=%d live=%d, want unchanged empty overlay", snapshot.OverlayGeneration, snapshot.Overlay.Rows(), snapshot.Overlay.LiveRows())
+	}
+}
+
+func TestColumnVectorDynamicGraphSameBatchDeleteInsertUsesWriterTombstones(t *testing.T) {
+	base, err := NewColumnVectorGraphFromColumns(columnVectorGraphTestColumns(64, 16, 63, true))
+	if err != nil {
+		t.Fatalf("NewColumnVectorGraphFromColumns: %v", err)
+	}
+	graph, err := NewColumnVectorDynamicGraph(base)
+	if err != nil {
+		t.Fatalf("NewColumnVectorDynamicGraph: %v", err)
+	}
+	if _, err := graph.ApplyBatch([]ColumnVectorDynamicMutation{
+		{Kind: ColumnVectorDynamicMutationDelete, DocumentID: []byte("doc-000020")},
+		{Kind: ColumnVectorDynamicMutationDelete, DocumentID: []byte("doc-000030")},
+	}); err != nil {
+		t.Fatalf("seed tombstones: %v", err)
+	}
+	query, ok := base.VectorAt(nil, 10)
+	if !ok {
+		t.Fatal("missing query vector")
+	}
+	if _, err := graph.ApplyBatch([]ColumnVectorDynamicMutation{
+		{Kind: ColumnVectorDynamicMutationDelete, DocumentID: []byte("doc-000010")},
+		{Kind: ColumnVectorDynamicMutationInsert, DocumentID: []byte("doc-000010"), Vector: query},
+	}); err != nil {
+		t.Fatalf("same-batch delete+insert should see writer tombstone: %v", err)
+	}
+	results, trace, err := graph.SearchCosine(query, ColumnVectorGraphSearchOptions{TopK: 5, EfSearch: 64}, &ColumnVectorDynamicGraphSearchScratch{})
+	if err != nil {
+		t.Fatalf("SearchCosine: %v", err)
+	}
+	if len(results) == 0 || !bytes.Equal(results[0].DocumentID, []byte("doc-000010")) {
+		t.Fatalf("top result=%+v want reinserted doc-000010", results)
+	}
+	if trace.BaseTombstoned == 0 {
+		t.Fatalf("trace=%+v want tombstoned base candidate", trace)
+	}
+}
+
 func TestColumnVectorDynamicGraphSearchAllocs(t *testing.T) {
 	base, err := NewColumnVectorGraphFromColumns(columnVectorGraphTestColumns(1024, 64, 16, false))
 	if err != nil {
