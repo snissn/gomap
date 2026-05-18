@@ -43,3 +43,15 @@ func TestCanonicalDBNameStopsAliasCyclesM11A(t *testing.T) {
 		t.Fatalf("canonicalDBName(alias_a)=%q, want alias_a", got)
 	}
 }
+
+func TestCanonicalDBNameStopsTransitiveAliasCyclesAtOriginalM11A(t *testing.T) {
+	withDBAliasesForTest(t, map[string]string{
+		"alias_a": "alias_b",
+		"alias_b": "alias_c",
+		"alias_c": "alias_b",
+	})
+
+	if got := canonicalDBName("alias_a"); got != "alias_a" {
+		t.Fatalf("canonicalDBName(alias_a)=%q, want alias_a", got)
+	}
+}

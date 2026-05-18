@@ -35,6 +35,7 @@ func RegisterAlias(alias, target string) {
 }
 
 func canonicalDBName(name string) string {
+	original := name
 	target, isAlias := dbAliases[name]
 	if !isAlias {
 		return name
@@ -47,7 +48,7 @@ func canonicalDBName(name string) string {
 			return name
 		}
 		if _, cycle := seen[name]; cycle {
-			return name
+			return original
 		}
 		seen[name] = struct{}{}
 	}
