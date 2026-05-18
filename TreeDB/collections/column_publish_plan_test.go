@@ -452,6 +452,39 @@ func TestColumnPublishPlanCopiesClosurePreparedAssetsM10A(t *testing.T) {
 	}
 }
 
+func TestColumnPublishPlanCopiesClosureForRootDeltaHookM10A(t *testing.T) {
+	asset := testColumnPublishPreparedAssetM10A()
+	identity := ColumnManifestIdentity{Generation: 7, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0xfeedbeef}
+	input := testColumnPublishPlanInputM10A(identity, asset)
+	var hookAssets []ColumnPreparedAsset
+	input.Hooks.BuildRootDelta = func(in ColumnPublishRootDeltaInput) (ColumnManifestRootDelta, error) {
+		hookAssets = in.Closure.PreparedAssets
+		in.Closure.PreparedAssets[0].Ref.Offset += int64(asset.Bytes)
+		return ColumnManifestRootDelta{
+			RootName:       in.ColumnStore.ManifestRoot.Name,
+			BaseRootID:     in.BaseManifestRootID,
+			StoragePolicy:  in.ColumnStore.ManifestRoot.StoragePolicy,
+			Identity:       in.Manifest.Identity,
+			IdentityRecord: encodeColumnManifestIdentityRecordArray(in.Manifest.Identity),
+		}, nil
+	}
+
+	plan, err := BuildColumnPublishPlan(input)
+	if err != nil {
+		t.Fatalf("BuildColumnPublishPlan: %v", err)
+	}
+	if len(plan.PreparedAssets) != 1 {
+		t.Fatalf("prepared assets=%d want 1", len(plan.PreparedAssets))
+	}
+	if plan.PreparedAssets[0] != asset {
+		t.Fatalf("plan prepared asset changed after root hook mutation: got %+v want %+v", plan.PreparedAssets[0], asset)
+	}
+	hookAssets[0].Ref.Offset += int64(asset.Bytes)
+	if plan.PreparedAssets[0] != asset {
+		t.Fatalf("plan prepared asset changed after root hook-owned slice mutation: got %+v want %+v", plan.PreparedAssets[0], asset)
+	}
+}
+
 func TestColumnPublishPlanCopiesPreparedAssetsForSystemDeltaHookM10A(t *testing.T) {
 	asset := testColumnPublishPreparedAssetM10A()
 	identity := ColumnManifestIdentity{Generation: 7, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0xfeedbeef}

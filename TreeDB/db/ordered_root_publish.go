@@ -1552,8 +1552,7 @@ func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBui
 		err = ErrCommandWALUnsupported
 		return 0, nil, err
 	}
-	idxGen := db.idx.Load()
-	if idxGen == nil {
+	if db.idx.Load() == nil {
 		err = errors.New("missing index")
 		return 0, nil, err
 	}
