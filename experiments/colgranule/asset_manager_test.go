@@ -207,6 +207,10 @@ func TestColumnAssetManagerSyncPublishClosureRejectsPreparedAssetMismatch(t *tes
 	if err != nil {
 		t.Fatalf("Put B: %v", err)
 	}
+	refC, err := manager.Put(ColumnAssetKindTCS1PartImage, make([]byte, tcs1HeaderBytes+16))
+	if err != nil {
+		t.Fatalf("Put C: %v", err)
+	}
 	prepared := []ColumnPreparedAsset{
 		{Ref: refA, GenerationID: 7, PublishID: 11, Reason: "publish staged"},
 		{Ref: refB, GenerationID: 7, PublishID: 11, Reason: "publish staged"},
@@ -221,6 +225,18 @@ func TestColumnAssetManagerSyncPublishClosureRejectsPreparedAssetMismatch(t *tes
 	}
 	if store.syncCalls != 0 {
 		t.Fatalf("sync calls=%d want 0 after rejected closure mismatch", store.syncCalls)
+	}
+
+	closure, err = manager.PreparePublishClosure(prepared)
+	if err != nil {
+		t.Fatalf("PreparePublishClosure replacement case: %v", err)
+	}
+	closure.PreparedAssets[0].Ref = refC
+	if _, err := manager.SyncPublishClosure(closure); err == nil {
+		t.Fatal("SyncPublishClosure accepted closure with substituted prepared ref")
+	}
+	if store.syncCalls != 0 {
+		t.Fatalf("sync calls=%d want 0 after rejected closure substitution", store.syncCalls)
 	}
 }
 
