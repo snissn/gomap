@@ -523,6 +523,18 @@ func validateColumnManifestIdentityFor(label string, identity ColumnManifestIden
 	return nil
 }
 
+// normalizeColumnManifestIdentityDefaults is used by M10A publish-plan
+// assembly before fail-closed identity validation.
+func normalizeColumnManifestIdentityDefaults(identity *ColumnManifestIdentity) {
+	if identity == nil {
+		return
+	}
+	normalizeColumnManifestIdentityFormat(identity)
+	if identity.Version == 0 {
+		identity.Version = columnManifestIdentityVersion
+	}
+}
+
 func normalizeColumnManifestIdentityFormat(identity *ColumnManifestIdentity) {
 	if identity == nil {
 		return
