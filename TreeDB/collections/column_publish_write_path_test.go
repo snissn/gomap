@@ -720,14 +720,19 @@ func TestColumnStoreRelaxedProfileWritesRejectedBeforeCommandAppendM10C(t *testi
 				t.Fatalf("command WAL frames after rejected write=%d, want %d", framesAfter, framesBefore)
 			}
 			deleted, err := col.DeleteDocument([]byte("missing"))
-			if !errors.Is(err, backenddb.ErrCommandWALRejected) {
-				t.Fatalf("DeleteDocument missing error=%v, want ErrCommandWALRejected", err)
+			if err != nil {
+				t.Fatalf("DeleteDocument missing: %v", err)
 			}
 			if deleted {
 				t.Fatalf("DeleteDocument missing deleted=true, want false")
 			}
-			if framesAfter := countCollectionCommandWALFrames(t, tt.opts.Dir); framesAfter != framesBefore {
-				t.Fatalf("command WAL frames after rejected no-op delete=%d, want %d", framesAfter, framesBefore)
+			framesAfterDelete := countCollectionCommandWALFrames(t, tt.opts.Dir)
+			wantFramesAfterDelete := framesBefore
+			if tt.commandWAL {
+				wantFramesAfterDelete++
+			}
+			if framesAfterDelete != wantFramesAfterDelete {
+				t.Fatalf("command WAL frames after no-op delete=%d, want %d", framesAfterDelete, wantFramesAfterDelete)
 			}
 			matched, modified, err := col.Update([]byte("missing"), func([]byte) ([]byte, bool, error) {
 				return nil, false, nil
@@ -738,8 +743,8 @@ func TestColumnStoreRelaxedProfileWritesRejectedBeforeCommandAppendM10C(t *testi
 			if matched || modified {
 				t.Fatalf("Update missing matched=%v modified=%v, want false/false", matched, modified)
 			}
-			if framesAfter := countCollectionCommandWALFrames(t, tt.opts.Dir); framesAfter != framesBefore {
-				t.Fatalf("command WAL frames after rejected no-op update=%d, want %d", framesAfter, framesBefore)
+			if framesAfter := countCollectionCommandWALFrames(t, tt.opts.Dir); framesAfter != framesAfterDelete {
+				t.Fatalf("command WAL frames after rejected no-op update=%d, want %d", framesAfter, framesAfterDelete)
 			}
 			if tt.commandWAL {
 				if err := d.CheckCommandWALPublishReady(); err != nil {
@@ -747,6 +752,31 @@ func TestColumnStoreRelaxedProfileWritesRejectedBeforeCommandAppendM10C(t *testi
 				}
 			}
 		})
+	}
+}
+
+func TestColumnStoreDeleteMissesDoNotRequireCommandWALM10C(t *testing.T) {
+	d, col := openBufferedBSONColumnStoreSeedM10B(t, false, ColumnStoreProfileBenchmarkRelaxed)
+	defer func() { _ = d.Close() }()
+
+	deleted, err := col.DeleteDocument([]byte("missing"))
+	if err != nil {
+		t.Fatalf("DeleteDocument missing: %v", err)
+	}
+	if deleted {
+		t.Fatal("DeleteDocument missing deleted=true, want false")
+	}
+	deletedBatch, err := col.DeleteBatch([][]byte{[]byte("missing")})
+	if err != nil {
+		t.Fatalf("DeleteBatch missing: %v", err)
+	}
+	if deletedBatch != 0 {
+		t.Fatalf("DeleteBatch missing deleted=%d, want 0", deletedBatch)
+	}
+	if got, err := col.Get([]byte("e1")); err != nil {
+		t.Fatalf("Get existing after missing deletes: %v", err)
+	} else if len(got) == 0 {
+		t.Fatal("Get existing after missing deletes returned empty document")
 	}
 }
 
@@ -831,6 +861,55 @@ func TestAppendColumnManifestRootPublishBaseAppendsColumnRootM10B(t *testing.T) 
 	}
 	if gotBases[primaryRootName] != 11 {
 		t.Fatalf("primary base root changed: %v", gotBases)
+	}
+}
+
+func TestAppendColumnManifestRootPublishBaseConsumesOwnedInputsM10B(t *testing.T) {
+	columnRootName := collectionColumnManifestRootName("events")
+	primaryRootName := collectionPrimaryRootName("events")
+	rootNames := make([]string, 0, 2)
+	rootNames = append(rootNames, primaryRootName)
+	baseRootIDs := map[string]uint64{
+		primaryRootName: 11,
+	}
+
+	gotNames, gotBases, err := appendColumnManifestRootPublishBase(rootNames, baseRootIDs, columnRootName, 33)
+	if err != nil {
+		t.Fatalf("appendColumnManifestRootPublishBase: %v", err)
+	}
+	if len(gotNames) == 0 || &gotNames[0] != &rootNames[0] {
+		t.Fatalf("root names were not appended into the owned backing array: got=%v input=%v", gotNames, rootNames)
+	}
+	if gotBases[columnRootName] != 33 || baseRootIDs[columnRootName] != 33 {
+		t.Fatalf("column base root not recorded through owned map: got=%v input=%v", gotBases, baseRootIDs)
+	}
+}
+
+func TestColumnPublishRootInputClonesProtectCallersM10B(t *testing.T) {
+	columnRootName := collectionColumnManifestRootName("events")
+	primaryRootName := collectionPrimaryRootName("events")
+	rootNames := []string{primaryRootName}
+	baseRootIDs := map[string]uint64{
+		primaryRootName: 11,
+	}
+
+	clonedNames := cloneColumnPublishRootNames(rootNames)
+	clonedBases := cloneColumnPublishBaseRootIDs(baseRootIDs)
+	gotNames, gotBases, err := appendColumnManifestRootPublishBase(clonedNames, clonedBases, columnRootName, 33)
+	if err != nil {
+		t.Fatalf("appendColumnManifestRootPublishBase: %v", err)
+	}
+	if len(gotNames) != 2 || gotNames[0] != primaryRootName || gotNames[1] != columnRootName {
+		t.Fatalf("root names=%v, want primary then column", gotNames)
+	}
+	if gotBases[columnRootName] != 33 {
+		t.Fatalf("column base root=%d want 33", gotBases[columnRootName])
+	}
+	if len(rootNames) != 1 || rootNames[0] != primaryRootName {
+		t.Fatalf("caller rootNames mutated: %v", rootNames)
+	}
+	if _, ok := baseRootIDs[columnRootName]; ok {
+		t.Fatalf("caller baseRootIDs mutated with column root: %v", baseRootIDs)
 	}
 }
 

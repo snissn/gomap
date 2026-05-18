@@ -8536,8 +8536,8 @@ func (c *Collection) insertBatchOnceWithLockState(
 			catalog:          currentCatalog,
 			baseCommitSeq:    baseCommitSeq,
 			baseSystemRoot:   baseSystemRoot,
-			rootNames:        append([]string(nil), rootNames...),
-			baseRootIDs:      cloneUint64Map(baseRootIDs),
+			rootNames:        cloneColumnPublishRootNames(rootNames),
+			baseRootIDs:      cloneColumnPublishBaseRootIDs(baseRootIDs),
 			commandWALIntent: commandWALIntent,
 			operation:        ColumnPublishOperationInsert,
 			rows:             len(plan.resultIDs),
@@ -9175,10 +9175,6 @@ func (c *Collection) deleteBatchOnce(documentIDs [][]byte, commandWALIntent *bac
 		return 0, err
 	}
 	c.meta = catalog.meta
-	if err := c.requireColumnStoreCommandWAL(c.meta, commandWALIntent); err != nil {
-		_ = snap.Close()
-		return 0, err
-	}
 	plannerOptions, err := collectionPlannerOptions(c.meta)
 	if err != nil {
 		_ = snap.Close()
@@ -9259,6 +9255,10 @@ func (c *Collection) deleteBatchOnce(documentIDs [][]byte, commandWALIntent *bac
 			}
 		}
 		return 0, nil
+	}
+	if err := c.requireColumnStoreCommandWAL(c.meta, commandWALIntent); err != nil {
+		_ = snap.Close()
+		return 0, err
 	}
 
 	deleteIDs := make([][]byte, len(existing))
@@ -9346,8 +9346,8 @@ func (c *Collection) deleteBatchOnce(documentIDs [][]byte, commandWALIntent *bac
 			catalog:          catalog,
 			baseCommitSeq:    baseCommitSeq,
 			baseSystemRoot:   baseSystemRoot,
-			rootNames:        append([]string(nil), rootNames...),
-			baseRootIDs:      cloneUint64Map(baseRootIDs),
+			rootNames:        cloneColumnPublishRootNames(rootNames),
+			baseRootIDs:      cloneColumnPublishBaseRootIDs(baseRootIDs),
 			commandWALIntent: commandWALIntent,
 			operation:        ColumnPublishOperationDelete,
 			rows:             len(existing),
@@ -9413,10 +9413,6 @@ func (c *Collection) deleteDocumentOnce(documentID []byte, commandWALIntent *bac
 		return false, err
 	}
 	c.meta = catalog.meta
-	if err := c.requireColumnStoreCommandWAL(c.meta, commandWALIntent); err != nil {
-		_ = snap.Close()
-		return false, err
-	}
 	plannerOptions, err := collectionPlannerOptionsForDB(c.db, c.meta)
 	if err != nil {
 		_ = snap.Close()
@@ -9471,6 +9467,10 @@ func (c *Collection) deleteDocumentOnce(documentID []byte, commandWALIntent *bac
 			}
 		}
 		return false, nil
+	}
+	if err := c.requireColumnStoreCommandWAL(c.meta, commandWALIntent); err != nil {
+		_ = snap.Close()
+		return false, err
 	}
 
 	runtimes, err := (insertBatchPlanner{
@@ -9566,8 +9566,8 @@ func (c *Collection) deleteDocumentOnce(documentID []byte, commandWALIntent *bac
 			catalog:          catalog,
 			baseCommitSeq:    baseCommitSeq,
 			baseSystemRoot:   baseSystemRoot,
-			rootNames:        append([]string(nil), rootNames...),
-			baseRootIDs:      cloneUint64Map(baseRootIDs),
+			rootNames:        cloneColumnPublishRootNames(rootNames),
+			baseRootIDs:      cloneColumnPublishBaseRootIDs(baseRootIDs),
 			commandWALIntent: commandWALIntent,
 			operation:        ColumnPublishOperationDelete,
 			rows:             1,
@@ -12207,8 +12207,8 @@ func (c *Collection) updateDocumentOnceApply(documentID []byte, update func(curr
 			catalog:          catalog,
 			baseCommitSeq:    baseCommitSeq,
 			baseSystemRoot:   baseSystemRoot,
-			rootNames:        append([]string(nil), rootNames...),
-			baseRootIDs:      cloneUint64Map(baseRootIDs),
+			rootNames:        cloneColumnPublishRootNames(rootNames),
+			baseRootIDs:      cloneColumnPublishBaseRootIDs(baseRootIDs),
 			commandWALIntent: commandWALIntent,
 			operation:        ColumnPublishOperationUpdate,
 			rows:             1,
@@ -14275,8 +14275,8 @@ func (c *Collection) publishUpdateBatchPlanLocked(plan *updateBatchPlan, command
 			catalog:          plan.catalog,
 			baseCommitSeq:    plan.baseCommitSeq,
 			baseSystemRoot:   plan.baseSystemRoot,
-			rootNames:        append([]string(nil), plan.rootNames...),
-			baseRootIDs:      cloneUint64Map(plan.baseRootIDs),
+			rootNames:        cloneColumnPublishRootNames(plan.rootNames),
+			baseRootIDs:      cloneColumnPublishBaseRootIDs(plan.baseRootIDs),
 			commandWALIntent: commandWALIntent,
 			operation:        ColumnPublishOperationUpdate,
 			rows:             plan.stats.Modified,
