@@ -440,8 +440,8 @@ func (delta ColumnManifestRootDelta) OrderedRootDeltaBatchPublishInput() (backen
 		return backenddb.OrderedRootDeltaBatchPublishInput{}, func() {}, err
 	}
 	iter := columnManifestIdentityRecordIterator(delta.IdentityRecord)
+	defer func() { _ = iter.Close() }()
 	deltaBatch, err := backenddb.OrderedRootDeltaBatchFromIterator(iter)
-	_ = iter.Close()
 	if err != nil {
 		if deltaBatch != nil {
 			_ = deltaBatch.Close()

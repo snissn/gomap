@@ -36,7 +36,7 @@ func (c *Collection) requireColumnStoreCommandWAL(meta CollectionMeta, commandWA
 	if c != nil && c.commandWALActive(commandWALIntent) {
 		return nil
 	}
-	return fmt.Errorf("%w: column_store writes require command WAL", backenddb.ErrCommandWALUnsupported)
+	return fmt.Errorf("%w: column-store writes require command WAL", backenddb.ErrCommandWALUnsupported)
 }
 
 func (c *Collection) publishRootDeltaGroupMaybeColumn(ordered []backenddb.OrderedRootDeltaPublishInput, input columnWritePublishInput) (uint64, []uint64, CollectionMeta, []string, error) {
@@ -48,7 +48,7 @@ func (c *Collection) publishRootDeltaGroupMaybeColumn(ordered []backenddb.Ordere
 		return newSystemRoot, rootIDs, input.meta, input.rootNames, err
 	}
 	if input.commandWALIntent == nil {
-		return 0, nil, CollectionMeta{}, nil, fmt.Errorf("%w: column_store publish requires command WAL intent", backenddb.ErrCommandWALContextMissingFrame)
+		return 0, nil, CollectionMeta{}, nil, fmt.Errorf("%w: column-store publish requires command WAL intent", backenddb.ErrCommandWALContextMissingFrame)
 	}
 	columnRootName := collectionColumnManifestRootName(input.meta.Name)
 	columnBaseRoot := uint64(0)
@@ -103,7 +103,7 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 		return newSystemRoot, rootIDs, input.meta, input.rootNames, err
 	}
 	if input.commandWALIntent == nil {
-		return 0, nil, CollectionMeta{}, nil, fmt.Errorf("%w: column_store publish requires command WAL intent", backenddb.ErrCommandWALContextMissingFrame)
+		return 0, nil, CollectionMeta{}, nil, fmt.Errorf("%w: column-store publish requires command WAL intent", backenddb.ErrCommandWALContextMissingFrame)
 	}
 	columnRootName := collectionColumnManifestRootName(input.meta.Name)
 	columnBaseRoot := uint64(0)
