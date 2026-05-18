@@ -29,11 +29,17 @@ func columnStoreWriteEnabled(meta CollectionMeta) bool {
 	return meta.Options.ColumnStore != nil && meta.Options.ColumnStore.Enabled
 }
 
+// requireColumnStoreCommandWAL is an internal write-path guard. It requires a
+// live collection handle because durability mode and command-WAL state are DB
+// properties, not catalog metadata.
 func (c *Collection) requireColumnStoreCommandWAL(meta CollectionMeta, commandWALIntent *backenddb.CommandWALIntent) error {
 	if !columnStoreWriteEnabled(meta) {
 		return nil
 	}
 	cfg := meta.Options.ColumnStore
+	if cfg == nil {
+		return nil
+	}
 	profileSupport := cfg.ProfileSupport
 	if profileSupport == "" {
 		profileSupport = ColumnStoreProfileDurableOnly
@@ -45,8 +51,9 @@ func (c *Collection) requireColumnStoreCommandWAL(meta CollectionMeta, commandWA
 		return nil
 	}
 	if c.db.DurabilityMode() != backenddb.DurabilityDurable {
-		return fmt.Errorf("%w: column-store writes require durable DB durability mode for command WAL publication (durability=%s profile=%s)",
+		return fmt.Errorf("%w: column-store writes require durable DB durability mode for command WAL publication (collection=%q durability=%s profile=%s)",
 			backenddb.ErrCommandWALRejected,
+			meta.Name,
 			columnStoreDurabilityModeName(c.db.DurabilityMode()),
 			profileSupport,
 		)
@@ -439,7 +446,7 @@ func columnPublishUpdatedMeta(base CollectionMeta, plan ColumnPublishPlan) (Coll
 	}
 	updated := copyCollectionMeta(base)
 	if updated.Options.ColumnStore == nil || !updated.Options.ColumnStore.Enabled {
-		return CollectionMeta{}, errors.New("collections: column manifest publish requires enabled column_store metadata")
+		return CollectionMeta{}, errors.New(errColumnPublishPlanRequiresEnabledColumnStore)
 	}
 	cfg := updated.Options.ColumnStore.copy()
 	active := plan.UpdatedActiveManifest
