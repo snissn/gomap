@@ -136,6 +136,9 @@ func planColumnQueryForCatalog(catalog *collectionCatalog, identity ColumnStoreC
 		RecoveryManifestGen:     identity.RecoveryAuthoritativeGeneration,
 		AppliedCommandLSN:       identity.RecoveryAuthoritativeAppliedCommandLSN,
 	}
+	if reason := physicalColumnQueryUnsupportedReasonForFallback(catalog, req); reason != "" {
+		diag.UnsupportedPlanReason = reason
+	}
 
 	if req.ForceKind != "" {
 		return forcedColumnQueryPlan(catalog, identity, identityOK, req, diag)
@@ -149,7 +152,6 @@ func planColumnQueryForCatalog(catalog *collectionCatalog, identity ColumnStoreC
 	if ok, plan := serialColumnQueryPlan(catalog, identity, identityOK, req, diag); ok {
 		return plan
 	}
-	columnQueryAnnotatePhysicalFallbackDiagnostics(catalog, req, &diag)
 	if idx, ok := selectColumnQueryBTreeIndex(catalog, req); ok {
 		diag.SelectedIndexName = idx.Name
 		diag.SelectedIndexField = idx.Field
@@ -257,10 +259,10 @@ func physicalColumnQuerySupported(catalog *collectionCatalog, identity ColumnSto
 
 func physicalColumnQueryUnsupportedReason(identity ColumnStoreCacheIdentity, identityOK bool, req ColumnQueryPlanRequest, kind ColumnQueryPlanKind) string {
 	switch {
-	case !columnQueryManifestRecoveryAuthoritative(identity, identityOK):
-		return "active column manifest is not recovery-authoritative"
 	case req.Capabilities.PhysicalAssetCount <= 0:
 		return "no durable physical column assets are available"
+	case !columnQueryManifestRecoveryAuthoritative(identity, identityOK):
+		return "active column manifest is not recovery-authoritative"
 	}
 	switch kind {
 	case ColumnQueryPlanSerialColumnScan:
@@ -290,6 +292,13 @@ func physicalColumnQueryUnsupportedReasonForCatalog(catalog *collectionCatalog, 
 		return fmt.Sprintf("requested column %q is not declared in column store", missing)
 	}
 	return physicalColumnQueryUnsupportedReason(identity, identityOK, req, kind)
+}
+
+func physicalColumnQueryUnsupportedReasonForFallback(catalog *collectionCatalog, req ColumnQueryPlanRequest) string {
+	if missing, ok := missingColumnStoreRequestColumn(catalog, req); ok && missing != "" {
+		return fmt.Sprintf("requested column %q is not declared in column store", missing)
+	}
+	return ""
 }
 
 func parallelColumnQueryShapeUnsupportedReason(req ColumnQueryPlanRequest) string {
@@ -410,29 +419,6 @@ func columnQueryManifestRecoveryAuthoritative(identity ColumnStoreCacheIdentity,
 	return ok &&
 		identity.ManifestGeneration != 0 &&
 		identity.RecoveryAuthoritativeGeneration == identity.ManifestGeneration
-}
-
-func columnQueryAnnotatePhysicalFallbackDiagnostics(catalog *collectionCatalog, req ColumnQueryPlanRequest, diag *ColumnQueryPlanDiagnostics) {
-	if diag == nil || diag.UnsupportedPlanReason != "" {
-		return
-	}
-	if missing, ok := missingColumnStoreRequestColumn(catalog, req); ok && missing != "" {
-		diag.UnsupportedPlanKind = columnQueryFallbackPhysicalKind(req)
-		diag.UnsupportedPlanReason = fmt.Sprintf("requested column %q is not declared in column store", missing)
-	}
-}
-
-func columnQueryFallbackPhysicalKind(req ColumnQueryPlanRequest) ColumnQueryPlanKind {
-	switch {
-	case strings.TrimSpace(req.AggregateMetadataName) != "":
-		return ColumnQueryPlanAggregateMetadata
-	case req.Capabilities.ParallelColumnScan:
-		return ColumnQueryPlanParallelColumnScan
-	case req.Capabilities.SerialColumnScan:
-		return ColumnQueryPlanSerialColumnScan
-	default:
-		return ColumnQueryPlanSerialColumnScan
-	}
 }
 
 func columnQueryPlannerCandidateCount(catalog *collectionCatalog, req ColumnQueryPlanRequest) int {
