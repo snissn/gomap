@@ -441,6 +441,7 @@ func TestColumnManifestRootDescriptorSystemDeltaRejectsPlanRootMismatchM10B(t *t
 		map[string]uint64{rootName: 0},
 		[]uint64{1},
 		plan,
+		nil,
 	)
 	if iter != nil {
 		_ = iter.Close()
