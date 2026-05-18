@@ -357,14 +357,18 @@ func columnVectorDynamicBaseTopK(baseRows int, topK int, overlayLiveRows int, to
 	if topK <= 0 || baseRows <= 0 {
 		return 0
 	}
-	baseTopK := topK + overlayLiveRows + tombstones
-	if baseTopK > baseRows {
-		baseTopK = baseRows
+	if topK >= baseRows {
+		return baseRows
 	}
-	if baseTopK < topK && topK < baseRows {
-		return topK
+	baseTopK := topK
+	if overlayLiveRows > baseRows-baseTopK {
+		return baseRows
 	}
-	return baseTopK
+	baseTopK += overlayLiveRows
+	if tombstones > baseRows-baseTopK {
+		return baseRows
+	}
+	return baseTopK + tombstones
 }
 
 // ColumnVectorDynamicOverlaySnapshot is an immutable exact-scan overlay

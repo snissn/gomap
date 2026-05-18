@@ -521,11 +521,16 @@ func reportColumnVectorDynamicGraphMetrics(b *testing.B, snapshot ColumnVectorDy
 	if base == nil || overlay == nil {
 		return
 	}
+	baseRows := base.Rows()
 	graphBytes := columnVectorGraphPayloadBytes(base)
 	overlayBytes := columnVectorDynamicOverlayPayloadBytes(overlay)
-	b.ReportMetric(float64(base.Rows()), "base_rows")
+	b.ReportMetric(float64(baseRows), "base_rows")
 	b.ReportMetric(float64(base.Dims()), "dims")
-	b.ReportMetric(float64(base.Edges())/float64(base.Rows()), "edges/node")
+	if baseRows > 0 {
+		b.ReportMetric(float64(base.Edges())/float64(baseRows), "edges/node")
+	} else {
+		b.ReportMetric(0, "edges/node")
+	}
 	b.ReportMetric(float64(trace.BaseTrace.CandidatesExamined), "base_candidates/search")
 	b.ReportMetric(float64(trace.BaseTombstoned), "base_tombstoned/search")
 	b.ReportMetric(float64(trace.OverlayScanned), "overlay_scanned/search")
