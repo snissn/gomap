@@ -330,13 +330,16 @@ func prepareColumnStoreCommandWALReplayBenchmarkDirM10C(b *testing.B, columnStor
 	}
 
 	walDir := backenddb.WALDirPath(dir)
+	if err := os.RemoveAll(walDir); err != nil {
+		b.Fatalf("RemoveAll wal: %v", err)
+	}
 	if err := os.MkdirAll(walDir, 0o755); err != nil {
 		b.Fatalf("MkdirAll wal: %v", err)
 	}
+	// The replay fixture starts from an empty command-WAL directory after a
+	// checkpoint, so the first synthetic segment must use the commitlog's
+	// initial segment name.
 	path := filepath.Join(walDir, commitlog.CommandSegmentName(0, 1))
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-		b.Fatalf("Remove existing command segment: %v", err)
-	}
 	totalDocs, totalEncodedPayloadBytes, err := writeColumnStoreCommandWALReplayFramesM10C(path, baseAppliedLSN, frames, batchSize)
 	if err != nil {
 		b.Fatalf("write command WAL replay frames: %v", err)
@@ -399,6 +402,9 @@ func copyColumnStoreCommandWALReplayBenchmarkDirM10C(tb testing.TB, src, dst str
 		}
 		if entry.IsDir() {
 			return os.MkdirAll(target, info.Mode())
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("non-regular entries are not supported in replay benchmark fixtures: %s", path)
 		}
 		return copyColumnStoreCommandWALReplayBenchmarkFileM10C(path, target, info.Mode())
 	}); err != nil {
