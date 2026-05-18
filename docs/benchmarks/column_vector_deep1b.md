@@ -104,7 +104,17 @@ byte-shuffled float32 streams before applying byte codecs. Defaults:
 `BenchmarkColumnVectorGraphDeep1BJZIPDecodeAndScoreSmoke` uses the same
 nearest-ranked block, keeps encode/setup outside the timed loop, warms decoder
 scratch, and times `decode 8192 vectors + score all 8192 candidates against one
-query`. The `resident_fp32` row is the no-decode scoring ceiling.
+query`. The `resident_fp32` row is the no-decode scoring ceiling. The benchmark
+also reports a stage split for decoded paths: byte decompression, float32
+layout/unshuffle, delta restore, Cartesian reconstruction, and final scoring.
+
+`BenchmarkColumnVectorGraphDeep1BSphericalDirectScore` scores directly from
+the stored spherical angle-major byte stream, without reconstructing a
+Cartesian fp32 block. It compares exact `math.Sincos` scoring against a
+half-pi-centered polynomial approximation with fallback to exact math outside
+the configured local interval. The zstd rows include byte decompression plus
+direct scoring; the raw row measures the stored angle-major stream without
+byte-codec decompression.
 
 `BenchmarkColumnVectorGraphDeep1BLocalFrameApproxScore` uses the same
 nearest-ranked block, computes a block-centroid Householder frame, transforms
@@ -351,6 +361,21 @@ GOWORK=off go test ./experiments/colgranule \
   -count 1
 ```
 
+Spherical direct-score smoke:
+
+```sh
+COLUMN_VECTOR_DEEP1B_NEIGHBORHOOD_SMOKE=1 \
+COLUMN_VECTOR_DEEP1B_DOWNLOAD=1 \
+COLUMN_VECTOR_DEEP1B_DIR=/private/tmp/gomap-deep1b-cache \
+COLUMN_VECTOR_DEEP1B_JZIP_CODECS=raw,zstd_fast,zstd_better \
+GOWORK=off go test ./experiments/colgranule \
+  -run '^$' \
+  -bench '^BenchmarkColumnVectorGraphDeep1BSphericalDirectScore/spherical_angle_major_(raw|zstd_fast|zstd_better)/(exact_math_sincos|halfpi_poly_with_fallback)$' \
+  -benchmem \
+  -benchtime 200ms \
+  -count 1
+```
+
 Representative nearest-ranked 8192-vector decode plus candidate-score results:
 
 | Path | Stored B/entry | Ratio vs 384 B | Decode+score ms | Candidates/s | Raw MB/s | B/op | allocs/op |
@@ -363,6 +388,26 @@ Representative nearest-ranked 8192-vector decode plus candidate-score results:
 | spherical/raw | 380.0 | 1.011x | 10.95 | 0.748M | 287 | 0 | 0 |
 | spherical/zstd_fast | 288.5 | 1.331x | 11.60 | 0.706M | 271 | 0 | 0 |
 | spherical/zstd_better | 271.4 | 1.415x | 12.44 | 0.659M | 253 | 0 | 0 |
+
+Follow-up stage split for the spherical rows, same nearest-ranked block,
+Apple M3, `-benchtime=200ms -count=1`:
+
+| Path | Decode+score ms | Decompress ms | Layout ms | Reconstruct ms | Score ms | Candidates/s |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| spherical/raw | 10.25 | 0.00004 | 0.936 | 9.218 | 0.094 | 0.799M |
+| spherical/zstd_fast | 10.97 | 0.506 | 0.977 | 9.383 | 0.098 | 0.747M |
+| spherical/zstd_better | 11.80 | 1.386 | 0.975 | 9.341 | 0.098 | 0.694M |
+
+Spherical direct-score smoke over the same stored angle-major byte stream:
+
+| Path | Stored B/entry | Decode ms | Direct score ms | Decode+score ms | Candidates/s | Top10 overlap | Poly fallback |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| raw/exact_math_sincos | 380.0 | 0.00004 | 15.21 | 15.21 | 0.539M | 10/10 | 0 |
+| raw/halfpi_poly_with_fallback | 380.0 | 0.00006 | 14.32 | 14.32 | 0.572M | 10/10 | 8.59% |
+| zstd_fast/exact_math_sincos | 288.5 | 0.480 | 15.03 | 15.51 | 0.528M | 10/10 | 0 |
+| zstd_fast/halfpi_poly_with_fallback | 288.5 | 0.482 | 14.32 | 14.80 | 0.554M | 10/10 | 8.59% |
+| zstd_better/exact_math_sincos | 271.4 | 1.307 | 14.56 | 15.87 | 0.516M | 10/10 | 0 |
+| zstd_better/halfpi_poly_with_fallback | 271.4 | 1.363 | 14.43 | 15.79 | 0.519M | 10/10 | 8.59% |
 
 Interpretation:
 
@@ -377,6 +422,19 @@ Interpretation:
 - Spherical is clearly a storage/cold-decode candidate in this Go prototype,
   not a hot search path as implemented: trig reconstruction dominates, even
   before considering graph traversal.
+- The stage split should be used to separate byte-codec cost from spherical
+  Cartesian reconstruction cost before promoting any compressed vector path.
+  `BenchmarkColumnVectorGraphDeep1BSphericalDirectScore` is the follow-up gate:
+  it must move spherical direct scoring materially above the current
+  reconstruction path before engine integration is worth considering.
+- The first direct-score result does not clear that gate. Exact direct scoring
+  from the stored byte-shuffled angle stream is slower than reconstructing a
+  Cartesian block and using the normal dot-product kernel. The half-pi
+  polynomial fallback preserves the top-10 for this block but only improves the
+  direct path to roughly `0.52-0.57M candidates/s`, still below the
+  reconstruction path and far below the `5-10M candidates/s` promotion target.
+  The likely bottleneck is now the combination of per-angle trig/branch work
+  and strided byte-shuffled angle loads, not zstd decompression.
 
 Local-frame approximate scoring smoke:
 
@@ -469,8 +527,18 @@ Useful reported metrics:
 - `decode_score_ms`, `candidates/s`, `raw_MB/s`, `score_only_ms`, `B/op`, and
   `allocs/op` inside
   `BenchmarkColumnVectorGraphDeep1BJZIPDecodeAndScoreSmoke`: cold block decode
-  plus exact candidate scoring evidence. This benchmark intentionally does not
-  fetch source documents or traverse a graph.
+  plus exact candidate scoring evidence. This benchmark also reports
+  `decompress_ms`, `layout_ms`, `restore_ms`, and `reconstruct_ms` so spherical
+  reconstruction cost can be separated from byte-codec and scoring costs. It
+  intentionally does not fetch source documents or traverse a graph.
+- `decode_score_ms`, `decode_ms`, `direct_score_ms`, `candidates/s`,
+  `max_score_error`, `mean_score_error`, `top10_overlap`, `recall@10`,
+  `poly_fallback_angle_ratio`, `stored_B/entry`, and `allocs/op` inside
+  `BenchmarkColumnVectorGraphDeep1BSphericalDirectScore`: direct spherical
+  scoring evidence over the stored angle-major byte stream. The exact-math row
+  is the correctness/performance baseline; the half-pi polynomial row tests
+  whether local-angle approximation can reduce trig cost without corrupting
+  top-k ranking.
 - `dims_used`, `top10_overlap`, `recall@10`, `max_score_error`,
   `mean_score_error`, `search_sketch_B/entry`, `quantized`,
   `bound_pruned_ratio`, and `bound_false_negative_count` inside
