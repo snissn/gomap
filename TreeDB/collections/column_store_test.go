@@ -181,9 +181,9 @@ func TestColumnStoreActiveManifestFailsClosedOnIdentityMismatch(t *testing.T) {
 	}
 	defer func() { _ = d.Close() }()
 
-	identity := &ColumnManifestIdentity{Generation: 42, Version: 1, Checksum: 0xfeedbeef}
+	identity := &ColumnManifestIdentity{Generation: 42, Version: columnManifestIdentityVersion, Checksum: 0xfeedbeef}
 	meta := CollectionMeta{Name: "events", Options: CollectionOptions{ColumnStore: testColumnStoreConfig(identity)}}
-	publishColumnStoreCatalogForTest(t, d, meta, ColumnManifestIdentity{Generation: 42, Version: 1, Checksum: 0x11111111})
+	publishColumnStoreCatalogForTest(t, d, meta, ColumnManifestIdentity{Generation: 42, Version: columnManifestIdentityVersion, Checksum: 0x11111111})
 	_, err = NewCollectionManager(d).OpenCollection("events")
 	if err == nil || !strings.Contains(err.Error(), "identity mismatch") {
 		t.Fatalf("OpenCollection err=%v want identity mismatch", err)
@@ -191,7 +191,7 @@ func TestColumnStoreActiveManifestFailsClosedOnIdentityMismatch(t *testing.T) {
 }
 
 func TestColumnStoreActiveManifestFailsClosedOnInvalidRootRecordM10C(t *testing.T) {
-	identity := &ColumnManifestIdentity{Generation: 42, Version: 1, Checksum: 0xfeedbeef}
+	identity := &ColumnManifestIdentity{Generation: 42, Version: columnManifestIdentityVersion, Checksum: 0xfeedbeef}
 	valid := encodeColumnManifestIdentityRecord(*identity)
 	if len(valid) < 6 {
 		t.Fatalf("encoded identity record length=%d, want at least 6 bytes for corruption cases", len(valid))
@@ -200,7 +200,7 @@ func TestColumnStoreActiveManifestFailsClosedOnInvalidRootRecordM10C(t *testing.
 	badMagic := append([]byte(nil), valid...)
 	binary.BigEndian.PutUint32(badMagic[0:4], 0xdeadbeef)
 	unsupportedRecordVersion := append([]byte(nil), valid...)
-	binary.BigEndian.PutUint16(unsupportedRecordVersion[4:6], 99)
+	binary.BigEndian.PutUint16(unsupportedRecordVersion[4:6], columnManifestIdentityVersion+1)
 
 	tests := []struct {
 		name          string

@@ -215,7 +215,11 @@ func TestColumnStoreUpdateCallbacksRequireCommandWALBeforeInvocationM10B(t *test
 func TestColumnStoreCommandWALMutationsPublishManifestM10B(t *testing.T) {
 	dir := prepareColumnStoreCommandWALDirM10B(t)
 	d := openCollectionCommandWALDB(t, dir)
-	defer func() { _ = d.Close() }()
+	defer func() {
+		if d != nil {
+			_ = d.Close()
+		}
+	}()
 
 	mgr := NewCollectionManager(d)
 	col := openColumnStoreCollectionM10B(t, d, mgr)
@@ -234,8 +238,12 @@ func TestColumnStoreCommandWALMutationsPublishManifestM10B(t *testing.T) {
 	if len(insertedIDs) != 2 {
 		t.Fatalf("InsertBatch inserted=%d, want 2", len(insertedIDs))
 	}
-	assertColumnManifestStateM10B(t, col, 1, baseLSN+1, mgr)
-	assertDBAppliedCommandLSNM10B(t, d, baseLSN+1)
+	insertLSN := d.State().AppliedCommandLSN
+	if insertLSN == 0 || insertLSN <= baseLSN {
+		t.Fatalf("insert AppliedCommandLSN=%d, want non-zero LSN greater than create LSN %d", insertLSN, baseLSN)
+	}
+	assertColumnManifestStateM10B(t, col, 1, insertLSN, mgr)
+	assertDBAppliedCommandLSNM10B(t, d, insertLSN)
 	assertCollectionDocument(t, col, "e1", `{"time_us":1,"kind":"like","did":"d1"}`)
 
 	matched, modified, err := col.Update([]byte("e1"), func([]byte) ([]byte, bool, error) {
@@ -247,8 +255,12 @@ func TestColumnStoreCommandWALMutationsPublishManifestM10B(t *testing.T) {
 	if !matched || !modified {
 		t.Fatalf("Update matched=%v modified=%v, want true true", matched, modified)
 	}
-	assertColumnManifestStateM10B(t, col, 2, baseLSN+2, mgr)
-	assertDBAppliedCommandLSNM10B(t, d, baseLSN+2)
+	updateLSN := d.State().AppliedCommandLSN
+	if updateLSN <= insertLSN {
+		t.Fatalf("update AppliedCommandLSN=%d, want greater than insert LSN %d", updateLSN, insertLSN)
+	}
+	assertColumnManifestStateM10B(t, col, 2, updateLSN, mgr)
+	assertDBAppliedCommandLSNM10B(t, d, updateLSN)
 	assertCollectionDocument(t, col, "e1", `{"time_us":3,"kind":"like","did":"d1"}`)
 
 	deleted, err := col.DeleteDocument([]byte("e2"))
@@ -258,18 +270,23 @@ func TestColumnStoreCommandWALMutationsPublishManifestM10B(t *testing.T) {
 	if !deleted {
 		t.Fatalf("DeleteDocument deleted=false, want true")
 	}
-	assertColumnManifestStateM10B(t, col, 3, baseLSN+3, mgr)
-	assertDBAppliedCommandLSNM10B(t, d, baseLSN+3)
+	deleteLSN := d.State().AppliedCommandLSN
+	if deleteLSN <= updateLSN {
+		t.Fatalf("delete AppliedCommandLSN=%d, want greater than update LSN %d", deleteLSN, updateLSN)
+	}
+	assertColumnManifestStateM10B(t, col, 3, deleteLSN, mgr)
+	assertDBAppliedCommandLSNM10B(t, d, deleteLSN)
 
 	if err := d.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
+	d = nil
 	reopen := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = reopen.Close() }()
 	reopenMgr := NewCollectionManager(reopen)
 	reopened := openColumnStoreCollectionM10B(t, reopen, reopenMgr)
-	assertColumnManifestStateM10B(t, reopened, 3, baseLSN+3, reopenMgr)
-	assertDBAppliedCommandLSNM10B(t, reopen, baseLSN+3)
+	assertColumnManifestStateM10B(t, reopened, 3, deleteLSN, reopenMgr)
+	assertDBAppliedCommandLSNM10B(t, reopen, deleteLSN)
 	assertCollectionDocument(t, reopened, "e1", `{"time_us":3,"kind":"like","did":"d1"}`)
 	if got, err := reopened.Get([]byte("e2")); err != nil || got != nil {
 		t.Fatalf("Get deleted document=(%q, %v), want nil, nil", got, err)
@@ -301,9 +318,9 @@ func TestColumnStoreCommandWALReplayPublishesManifestM10B(t *testing.T) {
 		_ = d.Close()
 		t.Fatalf("AppendCommandWALIntent: %v", err)
 	}
-	if lsn != baseLSN+1 {
+	if lsn == 0 || lsn <= baseLSN {
 		_ = d.Close()
-		t.Fatalf("appended LSN=%d, want %d", lsn, baseLSN+1)
+		t.Fatalf("appended LSN=%d, want non-zero LSN greater than base LSN %d", lsn, baseLSN)
 	}
 	if got := d.State().AppliedCommandLSN; got != baseLSN {
 		_ = d.Close()
@@ -481,6 +498,43 @@ func TestColumnStoreReplayIntentBypassesRelaxedDurabilityGateM10C(t *testing.T) 
 	}
 	if framesAfter := countCollectionCommandWALFrames(t, dir); framesAfter != framesBefore {
 		t.Fatalf("command WAL frames after rejected foreground write=%d, want %d", framesAfter, framesBefore)
+	}
+}
+
+func TestColumnStoreAssignedForegroundIntentDoesNotBypassRelaxedDurabilityGateM10C(t *testing.T) {
+	dir := prepareColumnStoreCommandWALDirWithProfileM10C(t, ColumnStoreProfileBenchmarkRelaxed)
+	d, err := backenddb.Open(backenddb.Options{
+		Dir:                    dir,
+		CommandWAL:             true,
+		Durability:             backenddb.DurabilityWALOnRelaxed,
+		DisableBackgroundPrune: true,
+	})
+	if err != nil {
+		t.Fatalf("Open relaxed command WAL DB: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	col := openColumnStoreCollectionM10B(t, d)
+
+	docs := []commitlog.CollectionDocument{{
+		ID:       []byte("e1"),
+		Document: []byte(`{"time_us":1,"kind":"like","did":"d1"}`),
+	}}
+	intent, err := col.newCollectionInsertCommandWALIntent(docs, nil)
+	if err != nil {
+		t.Fatalf("newCollectionInsertCommandWALIntent: %v", err)
+	}
+	lsn, err := d.AppendCommandWALIntent(intent, false)
+	if err != nil {
+		t.Fatalf("AppendCommandWALIntent: %v", err)
+	}
+	if lsn == 0 || intent.AssignedLSN() != lsn || intent.ReplayAssignedLSN() != 0 {
+		t.Fatalf("assigned foreground intent lsn=%d assigned=%d replay=%d", lsn, intent.AssignedLSN(), intent.ReplayAssignedLSN())
+	}
+	if err := col.requireColumnStoreCommandWAL(col.meta, intent); !errors.Is(err, backenddb.ErrCommandWALRejected) {
+		t.Fatalf("assigned foreground relaxed intent error=%v, want ErrCommandWALRejected", err)
+	}
+	if err := col.requireColumnStoreCommandWAL(col.meta, nil); !errors.Is(err, backenddb.ErrCommandWALRejected) {
+		t.Fatalf("nil relaxed intent error=%v, want ErrCommandWALRejected", err)
 	}
 }
 

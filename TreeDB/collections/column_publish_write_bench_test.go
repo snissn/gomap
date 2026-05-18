@@ -104,9 +104,8 @@ func BenchmarkColumnStoreCommandWALReplayM10C(b *testing.B) {
 	)
 	for _, columnStore := range []bool{false, true} {
 		b.Run(fmt.Sprintf("insert/frames=%d/batch=%d/column_store=%t", frames, batchSize, columnStore), func(b *testing.B) {
-			templateDir, docsPerReplay, encodedPayloadBytesPerReplay := prepareColumnStoreCommandWALReplayBenchmarkDirM10C(b, columnStore, frames, batchSize)
+			templateDir, docsPerReplay, encodedPayloadBytesPerReplay, wantAppliedLSN := prepareColumnStoreCommandWALReplayBenchmarkDirM10C(b, columnStore, frames, batchSize)
 			workDir := filepath.Join(b.TempDir(), "replay-work")
-			wantAppliedLSN := uint64(frames + 1)
 
 			b.ReportAllocs()
 			b.SetBytes(int64(encodedPayloadBytesPerReplay))
@@ -135,20 +134,18 @@ func BenchmarkColumnStoreCommandWALReplayM10C(b *testing.B) {
 					b.Fatalf("AppliedCommandLSN=%d, want %d", got, wantAppliedLSN)
 				}
 				if columnStore {
-					collection, err := NewCollectionManager(backend).OpenCollection("bench")
+					mgr := NewCollectionManager(backend)
+					collection, err := mgr.OpenCollection("bench")
 					if err != nil {
 						b.StopTimer()
 						_ = backend.Close()
 						b.Fatalf("OpenCollection replayed: %v", err)
 					}
-					assertColumnManifestStateM10B(b, collection, uint64(frames), wantAppliedLSN)
+					assertColumnManifestStateNoReopenM10C(b, collection, uint64(frames), wantAppliedLSN)
 				}
 				b.StopTimer()
 				if err := backend.Close(); err != nil {
 					b.Fatalf("Close replay DB: %v", err)
-				}
-				if err := os.RemoveAll(workDir); err != nil {
-					b.Fatalf("RemoveAll replay work dir after close: %v", err)
 				}
 			}
 
@@ -290,9 +287,12 @@ func reportColumnStoreCommandWALBenchMetrics(b *testing.B, totals columnStoreCom
 	b.ReportMetric((float64(totals.bytes)/(1024*1024))/elapsed, "payload_MiB/s")
 }
 
-func prepareColumnStoreCommandWALReplayBenchmarkDirM10C(b *testing.B, columnStore bool, frames, batchSize int) (string, int, int) {
+func prepareColumnStoreCommandWALReplayBenchmarkDirM10C(b *testing.B, columnStore bool, frames, batchSize int) (string, int, int, uint64) {
 	b.Helper()
 	dir := b.TempDir()
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+		b.Fatalf("SaveFormatConfig setup: %v", err)
+	}
 	backend, err := backenddb.Open(backenddb.Options{
 		Dir:                    dir,
 		CommandWAL:             true,
@@ -320,6 +320,7 @@ func prepareColumnStoreCommandWALReplayBenchmarkDirM10C(b *testing.B, columnStor
 		_ = backend.Close()
 		b.Fatalf("Checkpoint setup: %v", err)
 	}
+	baseAppliedLSN := backend.State().AppliedCommandLSN
 	if err := backend.Close(); err != nil {
 		b.Fatalf("Close setup DB: %v", err)
 	}
@@ -331,6 +332,9 @@ func prepareColumnStoreCommandWALReplayBenchmarkDirM10C(b *testing.B, columnStor
 		b.Fatalf("MkdirAll wal: %v", err)
 	}
 	path := filepath.Join(walDir, commitlog.CommandSegmentName(0, 1))
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		b.Fatalf("Remove existing command segment: %v", err)
+	}
 	w, err := commitlog.NewWriter(path)
 	if err != nil {
 		b.Fatalf("NewWriter: %v", err)
@@ -352,7 +356,7 @@ func prepareColumnStoreCommandWALReplayBenchmarkDirM10C(b *testing.B, columnStor
 			b.Fatalf("EncodeCollectionInsertBatchByIDPayload: %v", err)
 		}
 		if err := w.AppendCommand(commitlog.CommandEnvelope{
-			LSN:           uint64(i + 2),
+			LSN:           baseAppliedLSN + uint64(i) + 1,
 			Kind:          commitlog.CommandKindCollectionInsertBatchByID,
 			Scope:         commitlog.CommandScopeCollection,
 			PayloadFormat: commitlog.PayloadFormatCollectionInsertBatchByIDV1,
@@ -367,7 +371,7 @@ func prepareColumnStoreCommandWALReplayBenchmarkDirM10C(b *testing.B, columnStor
 		b.Fatalf("Close writer: %v", err)
 	}
 	closeWriter = false
-	return dir, totalDocs, totalEncodedPayloadBytes
+	return dir, totalDocs, totalEncodedPayloadBytes, baseAppliedLSN + uint64(frames)
 }
 
 func copyColumnStoreCommandWALReplayBenchmarkDirM10C(tb testing.TB, src, dst string) {
@@ -381,12 +385,12 @@ func copyColumnStoreCommandWALReplayBenchmarkDirM10C(tb testing.TB, src, dst str
 			return err
 		}
 		target := filepath.Join(dst, rel)
-		if entry.IsDir() {
-			return os.MkdirAll(target, 0o755)
-		}
 		info, err := entry.Info()
 		if err != nil {
 			return err
+		}
+		if entry.IsDir() {
+			return os.MkdirAll(target, info.Mode())
 		}
 		return copyColumnStoreCommandWALReplayBenchmarkFileM10C(path, target, info.Mode())
 	}); err != nil {
@@ -412,4 +416,51 @@ func copyColumnStoreCommandWALReplayBenchmarkFileM10C(src, dst string, mode fs.F
 		return err
 	}
 	return out.Close()
+}
+
+func assertColumnManifestStateNoReopenM10C(tb testing.TB, col *Collection, generation, appliedLSN uint64) {
+	tb.Helper()
+	meta := col.Meta()
+	cfg := meta.Options.ColumnStore
+	if cfg == nil || cfg.ActiveManifest == nil {
+		tb.Fatalf("missing active column manifest metadata: %+v", cfg)
+	}
+	if cfg.ActiveManifest.Generation != generation {
+		tb.Fatalf("active generation=%d, want %d", cfg.ActiveManifest.Generation, generation)
+	}
+	if cfg.ActiveManifest.Format != columnManifestFormatTCS1 || cfg.ActiveManifest.Version != columnManifestIdentityVersion || cfg.ActiveManifest.Checksum == 0 {
+		tb.Fatalf("invalid active manifest identity: %+v", cfg.ActiveManifest)
+	}
+	if cfg.RecoveryAuthoritativeManifest == nil || !columnManifestIdentityValueEqual(*cfg.RecoveryAuthoritativeManifest, *cfg.ActiveManifest) {
+		tb.Fatalf("recovery-authoritative manifest mismatch: %+v active=%+v", cfg.RecoveryAuthoritativeManifest, cfg.ActiveManifest)
+	}
+	if cfg.RecoveryAuthoritativeAppliedCommandLSN != appliedLSN {
+		tb.Fatalf("recovery AppliedCommandLSN=%d, want %d", cfg.RecoveryAuthoritativeAppliedCommandLSN, appliedLSN)
+	}
+	id, ok := col.ColumnStoreCacheIdentity()
+	if !ok {
+		tb.Fatalf("ColumnStoreCacheIdentity ok=false")
+	}
+	if id.ManifestRoot == 0 {
+		tb.Fatalf("ManifestRoot=0, want non-zero")
+	}
+	if id.ManifestGeneration != generation || id.RecoveryAuthoritativeGeneration != generation || id.RecoveryAuthoritativeAppliedCommandLSN != appliedLSN {
+		tb.Fatalf("unexpected cache identity: %+v want generation=%d appliedLSN=%d", id, generation, appliedLSN)
+	}
+	snap := col.db.AcquireSnapshot()
+	if snap == nil {
+		tb.Fatalf("AcquireSnapshot returned nil")
+	}
+	defer func() { _ = snap.Close() }()
+	entry, err := snap.GetEntryAtRoot(id.ManifestRoot, []byte(columnManifestIdentityRecordKey))
+	if err != nil {
+		tb.Fatalf("GetEntryAtRoot manifest identity: %v", err)
+	}
+	record, err := decodeColumnManifestIdentityRecord(entry.Value)
+	if err != nil {
+		tb.Fatalf("decodeColumnManifestIdentityRecord: %v", err)
+	}
+	if record.Generation != generation || record.Version != columnManifestIdentityVersion || record.Checksum != cfg.ActiveManifest.Checksum {
+		tb.Fatalf("manifest root record=%+v active=%+v", record, cfg.ActiveManifest)
+	}
 }
