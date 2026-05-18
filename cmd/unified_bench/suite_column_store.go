@@ -34,7 +34,7 @@ const (
 )
 
 var (
-	columnStoreSuitePathArg    = flag.String("column-store-path", columnStorePathRowStoreBaseline, "Forced column-store execution label for -suite column_store (row_store_baseline, b_tree_index_baseline, serial_column_scan, aggregate_metadata, parallel_column_scan; physical column labels fail closed until implemented)")
+	columnStoreSuitePathArg    = flag.String("column-store-path", columnStorePathRowStoreBaseline, "Forced column-store execution label for -suite column_store (row_store_baseline, b_tree_index_baseline, serial_column_scan, aggregate_metadata, parallel_column_scan; aliases: row, row-store-baseline, index, b_tree, b-tree-index-baseline, serial, serial-column-scan, metadata, aggregate-metadata, parallel, parallel-column-scan; physical column labels fail closed until implemented)")
 	columnStoreSuiteFixtureArg = flag.String("column-store-fixture", "synthetic", "Fixture for -suite column_store (synthetic; JSONBENCH_DATA mode is reserved for the large local gate)")
 
 	columnStoreSuiteSupportedForcedPaths = []string{
@@ -223,7 +223,7 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 	if forcedPath == "" {
 		forcedPath = normalizeColumnStoreSuitePath(*columnStoreSuitePathArg)
 	}
-	if err := validateColumnStoreSuiteForcedPath(forcedPath); err != nil {
+	if _, err := columnStoreSuitePlanKind(forcedPath); err != nil {
 		return "", err
 	}
 	if err := validateColumnStoreSuiteDBSelection(baseCfg.DBsArg, baseCfg.DBsExcludeArg); err != nil {
@@ -475,18 +475,6 @@ func normalizeColumnStoreSuitePath(path string) string {
 	}
 }
 
-func validateColumnStoreSuiteForcedPath(path string) error {
-	if columnStoreSuitePathListed(path, columnStoreSuiteSupportedForcedPaths) {
-		return nil
-	}
-	if columnStoreSuitePathListed(path, columnStoreSuiteUnsupportedForcedPaths) {
-		// Physical labels are accepted here so the planner can return the
-		// capability-specific fail-closed reason.
-		return nil
-	}
-	return fmt.Errorf("column_store: unknown forced path %q; supported=%s fail_closed=%s", path, columnStoreSuitePathList(columnStoreSuiteSupportedForcedPaths), columnStoreSuitePathList(columnStoreSuiteUnsupportedForcedPaths))
-}
-
 func columnStoreSuitePlanKind(path string) (collections.ColumnQueryPlanKind, error) {
 	switch path {
 	case columnStorePathRowStoreBaseline:
@@ -502,15 +490,6 @@ func columnStoreSuitePlanKind(path string) (collections.ColumnQueryPlanKind, err
 	default:
 		return "", fmt.Errorf("column_store: unknown forced path %q; supported=%s fail_closed=%s", path, columnStoreSuitePathList(columnStoreSuiteSupportedForcedPaths), columnStoreSuitePathList(columnStoreSuiteUnsupportedForcedPaths))
 	}
-}
-
-func columnStoreSuitePathListed(path string, paths []string) bool {
-	for _, candidate := range paths {
-		if path == candidate {
-			return true
-		}
-	}
-	return false
 }
 
 func columnStoreArtifactPathsForProfileDir(profileDir string, cfg BenchConfig) columnStoreArtifactPaths {
@@ -905,9 +884,6 @@ func runColumnStoreSuiteQueriesProfiled(cfg BenchConfig, collection *collections
 
 func runColumnStoreSuiteQueries(collection *collections.Collection, rows int, rawHashes map[string]uint64, path string) ([]columnStoreQueryMetric, map[string]columnStoreParity, error) {
 	path = normalizeColumnStoreSuitePath(path)
-	if err := validateColumnStoreSuiteForcedPath(path); err != nil {
-		return nil, nil, err
-	}
 	forceKind, err := columnStoreSuitePlanKind(path)
 	if err != nil {
 		return nil, nil, err
@@ -927,7 +903,7 @@ func runColumnStoreSuiteQueries(collection *collections.Collection, rows int, ra
 			if reason == "" {
 				reason = "planner did not report an unsupported reason"
 			}
-			return nil, nil, fmt.Errorf("column_store: forced path %q unsupported for %s: %w: reason=%s", path, name, collections.ErrColumnQueryPlanUnsupported, reason)
+			return nil, nil, fmt.Errorf("column_store: forced path %q unsupported for %s: reason=%s: %w", path, name, reason, collections.ErrColumnQueryPlanUnsupported)
 		}
 
 		scanStart := time.Now()
@@ -1074,6 +1050,11 @@ func scanColumnStoreSuiteEvents(collection *collections.Collection, rows int) ([
 	return events, materialized, bytesRead, nil
 }
 
+// scanColumnStoreSuiteEventsByIndex is an M11B B-tree baseline, not predicate
+// pushdown. It scans one selected scalar secondary index fully in index order,
+// materializes every source document, and relies on deterministic reduction
+// hashing for parity. queryName is intentionally only diagnostic until M11C
+// wires query predicates into bounded index/column scans.
 func scanColumnStoreSuiteEventsByIndex(collection *collections.Collection, rows int, queryName, indexName string) ([]columnStoreDecodedEvent, int, int64, error) {
 	if strings.TrimSpace(indexName) == "" {
 		return nil, 0, 0, fmt.Errorf("column_store: no B-tree index selected for %s", queryName)
@@ -1081,12 +1062,13 @@ func scanColumnStoreSuiteEventsByIndex(collection *collections.Collection, rows 
 	events := make([]columnStoreDecodedEvent, 0, rows)
 	var materialized int
 	var bytesRead int64
-	// The M11B B-tree baseline intentionally selects a query-relevant secondary
-	// index but performs a full ordered pass for parity; these aggregate queries
-	// currently do not have selective predicates that can safely narrow the
-	// range. The fixture expects one indexed row entry per document, so rows+1 is
-	// a sentinel limit: materialized != rows catches an exact sentinel hit, while
-	// truncated catches entries beyond the sentinel.
+	// The M11B B-tree baseline records the planner-selected secondary index, but
+	// deliberately performs a full ordered pass for parity and write-amplification
+	// accounting. No q1-q5 predicate is pushed into the range yet; M11C can add
+	// selective bounds once physical column scans exist. The fixture expects one
+	// indexed row entry per document, so rows+1 is a sentinel limit: materialized
+	// != rows catches an exact sentinel hit, while truncated catches entries
+	// beyond the sentinel.
 	truncated, err := collection.ScanBorrowedDocumentsByIndexRange(indexName, collections.IndexRangeOptions{
 		Lower: collections.IndexRangeBound{Unbounded: true},
 		Upper: collections.IndexRangeBound{Unbounded: true},
@@ -1134,8 +1116,14 @@ func columnStoreQueryAliasOf(name, path string) string {
 }
 
 func columnStoreQueryImplementationNote(name, path string) string {
-	if name == "q5_metadata" && (path == columnStorePathRowStoreBaseline || path == columnStorePathBTreeIndexBaseline) {
+	if name == "q5_metadata" && path == columnStorePathBTreeIndexBaseline {
+		return "q5_alias_full_unbounded_secondary_index_scan_no_predicate_pushdown_until_physical_aggregate_metadata_path"
+	}
+	if name == "q5_metadata" && path == columnStorePathRowStoreBaseline {
 		return path + "_alias_until_physical_aggregate_metadata_path"
+	}
+	if path == columnStorePathBTreeIndexBaseline {
+		return "full_unbounded_secondary_index_scan_no_predicate_pushdown_m11b"
 	}
 	return ""
 }

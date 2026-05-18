@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -574,7 +575,9 @@ func TestColumnStoreSuiteRejectsForcedColumnPathM11B(t *testing.T) {
 		t.Fatalf("expected ErrColumnQueryPlanUnsupported, got %v", err)
 	}
 	msg := err.Error()
-	if !strings.Contains(msg, "serial_column_scan") || !strings.Contains(msg, "unsupported") || !strings.Contains(msg, "reason=") || !strings.Contains(msg, "physical column") {
+	if !strings.Contains(msg, "serial_column_scan") ||
+		!strings.Contains(msg, "unsupported") ||
+		!strings.Contains(msg, "reason=no durable physical column assets are available") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -599,8 +602,25 @@ func TestColumnStoreSuitePlanKindMapsKnownPathsM11B(t *testing.T) {
 			t.Fatalf("columnStoreSuitePlanKind(%q)=%q want %q", tc.path, got, tc.want)
 		}
 	}
+	for _, tc := range cases {
+		if got, want := tc.path, string(tc.want); got != want {
+			t.Fatalf("column store path label %q diverged from planner kind %q", got, want)
+		}
+	}
 	if _, err := columnStoreSuitePlanKind("future_alias"); err == nil {
 		t.Fatal("expected unknown path to fail")
+	}
+}
+
+func TestColumnStoreSuitePathFlagDocumentsAliasesM11B(t *testing.T) {
+	f := flag.Lookup("column-store-path")
+	if f == nil {
+		t.Fatal("missing column-store-path flag")
+	}
+	for _, want := range []string{"aliases:", "row-store-baseline", "b-tree-index-baseline", "serial-column-scan", "aggregate-metadata", "parallel-column-scan"} {
+		if !strings.Contains(f.Usage, want) {
+			t.Fatalf("column-store-path help missing %q:\n%s", want, f.Usage)
+		}
 	}
 }
 
@@ -633,6 +653,7 @@ func TestColumnStoreSuiteRunsBTreeIndexBaselineM11B(t *testing.T) {
 	if err := json.Unmarshal(data, &report); err != nil {
 		t.Fatalf("unmarshal column_store_results.json: %v", err)
 	}
+	queryMetrics := assertColumnStoreQueryMetricCoverageM11A(t, report.Queries)
 	for _, q := range report.Queries {
 		if q.PlanLabel != columnStorePathBTreeIndexBaseline {
 			t.Fatalf("query %s plan_label=%q want %q", q.Name, q.PlanLabel, columnStorePathBTreeIndexBaseline)
@@ -643,6 +664,15 @@ func TestColumnStoreSuiteRunsBTreeIndexBaselineM11B(t *testing.T) {
 		if q.RowMaterializations != report.Rows {
 			t.Fatalf("query %s row_materializations=%d want %d", q.Name, q.RowMaterializations, report.Rows)
 		}
+		if q.Name != "q5_metadata" && !strings.Contains(q.ImplementationNote, "no_predicate_pushdown") {
+			t.Fatalf("query %s missing B-tree baseline implementation note: %+v", q.Name, q)
+		}
+	}
+	if q := queryMetrics["q5_metadata"]; q.AliasOf != "q5" || !strings.Contains(q.ImplementationNote, "no_predicate_pushdown") || !strings.Contains(q.ImplementationNote, "physical_aggregate_metadata_path") {
+		t.Fatalf("q5_metadata should report both q5 aliasing and B-tree baseline scan semantics: %+v", q)
+	}
+	if got, want := queryMetrics["q5_metadata"].ProductionHash, queryMetrics["q5"].ProductionHash; got != want {
+		t.Fatalf("q5_metadata production hash=%016x want q5 hash=%016x", got, want)
 	}
 	for name, parity := range report.Parity {
 		if !parity.Pass {
