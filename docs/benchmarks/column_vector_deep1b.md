@@ -8,6 +8,7 @@ Data source:
 - Overview: https://research.yandex.com/blog/benchmarks-for-billion-scale-similarity-search
 - Deep1B 10M base subset: https://storage.yandexcloud.net/yandex-research/ann-datasets/DEEP/base.10M.fbin
 - Deep1B public queries: https://storage.yandexcloud.net/yandex-research/ann-datasets/DEEP/query.public.10K.fbin
+- JZIP reference implementation: https://github.com/jina-ai/jzip-compressor
 
 Yandex stores embeddings in `.fbin` format:
 
@@ -82,6 +83,17 @@ That smoke test exact-scans the 1M Deep1B prefix for the top
 into one raw float32 granule, and compares compression against a source-order
 prefix granule. It does not change the persisted engine layout.
 
+The same smoke run also includes
+`BenchmarkColumnVectorGraphDeep1BJZIPNeighborhoodCompressionSmoke`, an off-band
+geometric codec matrix. It transforms one 8192-vector block into transposed and
+byte-shuffled float32 streams before applying byte codecs. Defaults:
+
+- `COLUMN_VECTOR_DEEP1B_JZIP_TRANSFORMS=all`: cartesian byte-shuffle, spherical
+  angles, spherical center-delta, spherical previous-row delta, and
+  Householder-centered cartesian.
+- `COLUMN_VECTOR_DEEP1B_JZIP_CODECS=all`: raw, snappy, lz4, zstd-fast,
+  zstd-default, and zstd-better.
+
 ## Manual Commands
 
 Search-only benchmark:
@@ -147,6 +159,20 @@ COLUMN_VECTOR_DEEP1B_DOWNLOAD=1 \
 GOWORK=off go test ./experiments/colgranule \
   -run '^$' \
   -bench '^BenchmarkColumnVectorGraphDeep1BNeighborhoodCompressionSmoke/(source_prefix|nearest_ranked|nearest_ordinal)/(none|zstd)$' \
+  -benchmem \
+  -benchtime 200ms \
+  -count 1
+```
+
+JZIP/geometric codec smoke:
+
+```sh
+COLUMN_VECTOR_DEEP1B_NEIGHBORHOOD_SMOKE=1 \
+COLUMN_VECTOR_DEEP1B_DOWNLOAD=1 \
+COLUMN_VECTOR_DEEP1B_DIR=/private/tmp/gomap-deep1b-cache \
+GOWORK=off go test ./experiments/colgranule \
+  -run '^$' \
+  -bench '^BenchmarkColumnVectorGraphDeep1BJZIPNeighborhoodCompressionSmoke/nearest_ranked/(cartesian_byte_shuffle|spherical|spherical_center_delta|spherical_prev_delta|householder_cartesian)/(snappy|lz4|zstd_fast|zstd_default|zstd_better)$' \
   -benchmem \
   -benchtime 200ms \
   -count 1
@@ -234,6 +260,52 @@ does not make the current raw float32 Deep1B encoding compress; a future vector
 codec would need a different transform, such as quantization, residuals, or
 delta coding, before engine integration is worth doing for raw vector bytes.
 
+JZIP/geometric codec smoke:
+
+```sh
+COLUMN_VECTOR_DEEP1B_NEIGHBORHOOD_SMOKE=1 \
+COLUMN_VECTOR_DEEP1B_DOWNLOAD=1 \
+COLUMN_VECTOR_DEEP1B_DIR=/private/tmp/gomap-deep1b-cache \
+GOWORK=off go test ./experiments/colgranule \
+  -run '^$' \
+  -bench '^BenchmarkColumnVectorGraphDeep1BJZIPNeighborhoodCompressionSmoke/nearest_ranked/(cartesian_byte_shuffle|spherical|spherical_center_delta|spherical_prev_delta|householder_cartesian)/(snappy|lz4|zstd_fast|zstd_default|zstd_better)$' \
+  -benchmem \
+  -benchtime 200ms \
+  -count 1
+```
+
+Representative nearest-ranked 8192-vector results from the same machine:
+
+| Transform | Byte codec | Stored B/entry | Ratio vs 384 B | Encode ms | Decode ms | Max abs error | Mean cosine error |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| spherical | zstd_better | 271.4 | 1.415x | 16.63 | 13.49 | 0.0000001 | 0.0000000 |
+| spherical | zstd_default | 288.3 | 1.332x | 13.61 | 12.33 | 0.0000001 | 0.0000000 |
+| spherical | zstd_fast | 288.5 | 1.331x | 13.51 | 12.72 | 0.0000001 | 0.0000000 |
+| spherical | lz4 | 292.6 | 1.312x | 12.81 | 12.52 | 0.0000001 | 0.0000000 |
+| spherical | snappy | 293.9 | 1.306x | 12.52 | 12.04 | 0.0000001 | 0.0000000 |
+| spherical_center_delta | zstd_better | 290.0 | 1.324x | 29.45 | 15.60 | 0.0000001 | 0.0000000 |
+| spherical_prev_delta | zstd_better | 292.8 | 1.311x | 25.16 | 15.15 | 0.0000040 | 0.0000000 |
+| cartesian_byte_shuffle | zstd_fast | 326.6 | 1.176x | 6.475 | 3.279 | 0 | 0 |
+| householder_cartesian | zstd_fast | 327.5 | 1.173x | 9.019 | 5.450 | 0.0000000 | 0.0000000 |
+
+Interpretation:
+
+- Direct JZIP-style spherical angles plus byte-shuffle and zstd lands in the
+  expected Deep1B range: `271.4 B/entry` with zstd-better, or `288.3-288.5
+  B/entry` with faster zstd settings.
+- Snappy and lz4 also compress the spherical stream (`293.9` and `292.6
+  B/entry`), which confirms the geometry/byte-shuffle transform is doing the
+  useful entropy reduction rather than zstd alone.
+- Center-angle delta and previous-row delta did not beat plain spherical on
+  this block. Previous-row delta is order-sensitive but was still worse for
+  nearest-ranked rows.
+- Householder-centered cartesian did not improve over plain cartesian
+  byte-shuffle. It is cheap and exact, but this Deep1B block did not become
+  more compressible without a stronger residual/quantization step.
+- A full 1x all-order matrix gave the same qualitative result:
+  nearest-ranked, nearest-ordinal, and source-prefix blocks all selected plain
+  spherical as the best exact transform.
+
 Useful reported metrics:
 
 - `searches/s`, `B/op`, `allocs/op`: hot `SearchCosine` loop evidence.
@@ -262,3 +334,9 @@ Useful reported metrics:
   compression of one raw float32 granule ordered by source rows versus exact
   nearest-neighbor rows. This is an off-band compressibility probe, not a
   persisted search benchmark.
+- `stored_B/entry`, `transform_raw_B/entry`, `metadata_B/entry`,
+  `ratio_vs_raw`, `warm_transform_ms`, `warm_transpose_shuffle_ms`,
+  `warm_compress_ms`, `decode_ms`, `max_abs_error`, and `mean_cosine_error`
+  inside `BenchmarkColumnVectorGraphDeep1BJZIPNeighborhoodCompressionSmoke`:
+  off-band geometric codec evidence for future vector-column admission. These
+  bytes are not yet persisted as engine assets.

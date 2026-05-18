@@ -15,6 +15,10 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/golang/snappy"
+	"github.com/pierrec/lz4/v4"
+	"github.com/snissn/compress/zstd"
 )
 
 const (
@@ -92,6 +96,65 @@ func TestColumnVectorGraphDeep1BFbinReader(t *testing.T) {
 		if got != want[i] {
 			t.Fatalf("out[%d]=%v want %v", i, got, want[i])
 		}
+	}
+}
+
+func TestColumnVectorGraphDeep1BJZIPCodecRoundTrip(t *testing.T) {
+	const (
+		rows = 16
+		dims = 8
+	)
+	vectors := make([]float32, rows*dims)
+	for row := 0; row < rows; row++ {
+		base := row * dims
+		var normSquared float64
+		for j := 0; j < dims; j++ {
+			value := math.Sin(float64((row+1)*(j+2))*0.37) + math.Cos(float64((row+3)*(j+1))*0.19)
+			vectors[base+j] = float32(value)
+			normSquared += value * value
+		}
+		invNorm := 1 / math.Sqrt(normSquared)
+		for j := 0; j < dims; j++ {
+			vectors[base+j] = float32(float64(vectors[base+j]) * invNorm)
+		}
+	}
+	transforms := []columnVectorGraphDeep1BJZIPTransform{
+		{name: "cartesian_byte_shuffle", kind: columnVectorGraphDeep1BJZIPTransformCartesian},
+		{name: "spherical", kind: columnVectorGraphDeep1BJZIPTransformSpherical},
+		{name: "spherical_center_delta", kind: columnVectorGraphDeep1BJZIPTransformSphericalCenterDelta},
+		{name: "spherical_prev_delta", kind: columnVectorGraphDeep1BJZIPTransformSphericalPrevDelta},
+		{name: "householder_cartesian", kind: columnVectorGraphDeep1BJZIPTransformHouseholderCartesian},
+	}
+	codecs := []columnVectorGraphDeep1BJZIPByteCodec{
+		{name: "raw", kind: columnVectorGraphDeep1BJZIPByteCodecRaw},
+		{name: "snappy", kind: columnVectorGraphDeep1BJZIPByteCodecSnappy},
+		{name: "lz4", kind: columnVectorGraphDeep1BJZIPByteCodecLZ4},
+		{name: "zstd_fast", kind: columnVectorGraphDeep1BJZIPByteCodecZSTDFast},
+		{name: "zstd_default", kind: columnVectorGraphDeep1BJZIPByteCodecZSTDDefault},
+		{name: "zstd_better", kind: columnVectorGraphDeep1BJZIPByteCodecZSTDBetter},
+	}
+	for _, transform := range transforms {
+		transform := transform
+		t.Run(transform.name, func(t *testing.T) {
+			for _, byteCodec := range codecs {
+				byteCodec := byteCodec
+				t.Run(byteCodec.name, func(t *testing.T) {
+					codec := &columnVectorGraphDeep1BJZIPCodec{}
+					encoded, err := codec.Encode(vectors, dims, transform, byteCodec)
+					if err != nil {
+						t.Fatalf("Encode: %v", err)
+					}
+					decoded, _, err := codec.Decode(encoded)
+					if err != nil {
+						t.Fatalf("Decode: %v", err)
+					}
+					maxAbsError, maxCosineError, meanCosineError := columnVectorGraphDeep1BJZIPErrorMetrics(vectors, decoded, dims)
+					if maxAbsError > 1e-4 || maxCosineError > 1e-6 || meanCosineError > 1e-7 {
+						t.Fatalf("errors max_abs=%g max_cosine=%g mean_cosine=%g", maxAbsError, maxCosineError, meanCosineError)
+					}
+				})
+			}
+		})
 	}
 }
 
@@ -269,6 +332,113 @@ func BenchmarkColumnVectorGraphDeep1BNeighborhoodCompressionSmoke(b *testing.B) 
 					b.ReportMetric(float64(warm.StoredBytes)/float64(warm.RawBytes), "stored_raw_ratio")
 					if warm.CodecReport.CompressionFallbackReason != "" {
 						b.ReportMetric(1, "fallback_"+metricToken(warm.CodecReport.CompressionFallbackReason))
+					}
+				})
+			}
+		})
+	}
+}
+
+func BenchmarkColumnVectorGraphDeep1BJZIPNeighborhoodCompressionSmoke(b *testing.B) {
+	if os.Getenv("COLUMN_VECTOR_DEEP1B_NEIGHBORHOOD_SMOKE") != "1" {
+		b.Skip("set COLUMN_VECTOR_DEEP1B_NEIGHBORHOOD_SMOKE=1 to run the opt-in Deep1B JZIP-style nearest-neighborhood compression smoke benchmark")
+	}
+	const rows = 1_000_000
+	data := columnVectorGraphDeep1BEnsureData(b, rows)
+	granuleRows := columnVectorGraphDeep1BEnvInt(b, "COLUMN_VECTOR_DEEP1B_NEIGHBORHOOD_ROWS", columnVectorGraphDeep1BBlockRows)
+	if granuleRows <= 0 {
+		b.Fatalf("COLUMN_VECTOR_DEEP1B_NEIGHBORHOOD_ROWS=%d must be positive", granuleRows)
+	}
+	if granuleRows > rows {
+		b.Fatalf("COLUMN_VECTOR_DEEP1B_NEIGHBORHOOD_ROWS=%d exceeds rows=%d", granuleRows, rows)
+	}
+	baseFile, err := os.Open(data.basePath)
+	if err != nil {
+		b.Fatalf("Open Deep1B base: %v", err)
+	}
+	defer baseFile.Close()
+	query := columnVectorGraphDeep1BReadQuery(b, data.queryPath, data.queryHeader, 0)
+	exactStart := time.Now()
+	nearest := columnVectorGraphDeep1BTopRowsByCosine(b, baseFile, data.baseHeader, rows, query, granuleRows)
+	exactNanos := time.Since(exactStart).Nanoseconds()
+	if len(nearest) != granuleRows {
+		b.Fatalf("nearest rows=%d want %d", len(nearest), granuleRows)
+	}
+	nearestRankedRows := make([]int, len(nearest))
+	nearestOrdinalRows := make([]int, len(nearest))
+	for i, neighbor := range nearest {
+		nearestRankedRows[i] = neighbor.row
+		nearestOrdinalRows[i] = neighbor.row
+	}
+	sort.Ints(nearestOrdinalRows)
+	orders := []struct {
+		name string
+		rows []int
+	}{
+		{name: "source_prefix", rows: columnVectorGraphDeep1BSequentialRows(granuleRows)},
+		{name: "nearest_ranked", rows: nearestRankedRows},
+		{name: "nearest_ordinal", rows: nearestOrdinalRows},
+	}
+	for _, order := range orders {
+		order := order
+		vectors := columnVectorGraphDeep1BReadFbinRows(b, baseFile, data.baseHeader, order.rows)
+		b.Run(order.name, func(b *testing.B) {
+			for _, transform := range columnVectorGraphDeep1BJZIPTransforms(b) {
+				transform := transform
+				b.Run(transform.name, func(b *testing.B) {
+					for _, byteCodec := range columnVectorGraphDeep1BJZIPByteCodecs(b) {
+						byteCodec := byteCodec
+						b.Run(byteCodec.name, func(b *testing.B) {
+							codec := &columnVectorGraphDeep1BJZIPCodec{}
+							warm, err := codec.Encode(vectors, columnVectorGraphDeep1BDims, transform, byteCodec)
+							if err != nil {
+								b.Fatalf("JZIP-style encode warm: %v", err)
+							}
+							decoded, decodeNanos, err := codec.Decode(warm)
+							if err != nil {
+								b.Fatalf("JZIP-style decode warm: %v", err)
+							}
+							maxAbsError, maxCosineError, meanCosineError := columnVectorGraphDeep1BJZIPErrorMetrics(vectors, decoded, columnVectorGraphDeep1BDims)
+							b.ReportAllocs()
+							b.SetBytes(int64(warm.RawBytes))
+							b.ResetTimer()
+							start := time.Now()
+							for i := 0; i < b.N; i++ {
+								encoded, err := codec.Encode(vectors, columnVectorGraphDeep1BDims, transform, byteCodec)
+								if err != nil {
+									b.Fatalf("JZIP-style encode: %v", err)
+								}
+								benchSink += int64(encoded.StoredBytes)
+							}
+							elapsed := time.Since(start)
+							b.StopTimer()
+							if elapsed > 0 && b.N > 0 {
+								b.ReportMetric(float64(b.N)/elapsed.Seconds(), "granules/s")
+								b.ReportMetric(float64(elapsed.Nanoseconds())/float64(b.N)/1e6, "encode_ms")
+							}
+							b.ReportMetric(float64(exactNanos)/1e6, "exact_scan_ms")
+							b.ReportMetric(float64(rows), "exact_rows")
+							b.ReportMetric(float64(granuleRows), "granule_rows")
+							b.ReportMetric(nearest[0].score, "best_top_cosine")
+							b.ReportMetric(nearest[len(nearest)-1].score, "worst_top_cosine")
+							b.ReportMetric(float64(warm.RawBytes)/float64(granuleRows), "vector_raw_B/entry")
+							b.ReportMetric(float64(warm.TransformRawBytes)/float64(granuleRows), "transform_raw_B/entry")
+							b.ReportMetric(float64(warm.MetadataBytes)/float64(granuleRows), "metadata_B/entry")
+							b.ReportMetric(float64(warm.StoredBytes)/float64(granuleRows), "stored_B/entry")
+							b.ReportMetric(float64(warm.RawBytes)/float64(warm.StoredBytes), "ratio_vs_raw")
+							b.ReportMetric(float64(warm.StoredBytes)/float64(warm.RawBytes), "stored_raw_ratio")
+							b.ReportMetric(float64(warm.StoredBytes)/float64(warm.TransformRawBytes), "stored_transform_raw_ratio")
+							b.ReportMetric(float64(warm.TransformNanos)/1e6, "warm_transform_ms")
+							b.ReportMetric(float64(warm.TransposeShuffleNanos)/1e6, "warm_transpose_shuffle_ms")
+							b.ReportMetric(float64(warm.CompressionNanos)/1e6, "warm_compress_ms")
+							b.ReportMetric(float64(decodeNanos)/1e6, "decode_ms")
+							b.ReportMetric(maxAbsError, "max_abs_error")
+							b.ReportMetric(maxCosineError, "max_cosine_error")
+							b.ReportMetric(meanCosineError, "mean_cosine_error")
+							if warm.ActualCodec != warm.RequestedCodec {
+								b.ReportMetric(1, "fallback_"+metricToken(warm.ActualCodec.name))
+							}
+						})
 					}
 				})
 			}
@@ -606,6 +776,71 @@ type columnVectorGraphDeep1BNeighbor struct {
 	score float64
 }
 
+type columnVectorGraphDeep1BJZIPTransformKind uint8
+
+const (
+	columnVectorGraphDeep1BJZIPTransformCartesian columnVectorGraphDeep1BJZIPTransformKind = iota + 1
+	columnVectorGraphDeep1BJZIPTransformSpherical
+	columnVectorGraphDeep1BJZIPTransformSphericalCenterDelta
+	columnVectorGraphDeep1BJZIPTransformSphericalPrevDelta
+	columnVectorGraphDeep1BJZIPTransformHouseholderCartesian
+)
+
+type columnVectorGraphDeep1BJZIPTransform struct {
+	name string
+	kind columnVectorGraphDeep1BJZIPTransformKind
+}
+
+type columnVectorGraphDeep1BJZIPByteCodecKind uint8
+
+const (
+	columnVectorGraphDeep1BJZIPByteCodecRaw columnVectorGraphDeep1BJZIPByteCodecKind = iota
+	columnVectorGraphDeep1BJZIPByteCodecSnappy
+	columnVectorGraphDeep1BJZIPByteCodecLZ4
+	columnVectorGraphDeep1BJZIPByteCodecZSTDFast
+	columnVectorGraphDeep1BJZIPByteCodecZSTDDefault
+	columnVectorGraphDeep1BJZIPByteCodecZSTDBetter
+)
+
+type columnVectorGraphDeep1BJZIPByteCodec struct {
+	name string
+	kind columnVectorGraphDeep1BJZIPByteCodecKind
+}
+
+type columnVectorGraphDeep1BJZIPCodec struct {
+	r2                 []float64
+	angles             []float32
+	values             []float32
+	metadata           []float32
+	centroid           []float64
+	householder        []float64
+	shuffled           []byte
+	compressed         []byte
+	decodedShuffle     []byte
+	decodedValues      []float32
+	decodedVectors     []float32
+	zstdDefaultEncoder *zstd.Encoder
+	zstdBetterEncoder  *zstd.Encoder
+}
+
+type columnVectorGraphDeep1BJZIPEncoded struct {
+	Rows                  int
+	Dims                  int
+	ValuesPerRow          int
+	RawBytes              int
+	TransformRawBytes     int
+	MetadataBytes         int
+	StoredBytes           int
+	TransformNanos        int64
+	TransposeShuffleNanos int64
+	CompressionNanos      int64
+	Transform             columnVectorGraphDeep1BJZIPTransform
+	RequestedCodec        columnVectorGraphDeep1BJZIPByteCodec
+	ActualCodec           columnVectorGraphDeep1BJZIPByteCodec
+	Payload               []byte
+	Metadata              []float32
+}
+
 type columnVectorGraphDeep1BNeighborHeap []columnVectorGraphDeep1BNeighbor
 
 func (h columnVectorGraphDeep1BNeighborHeap) Len() int {
@@ -633,6 +868,646 @@ func (h *columnVectorGraphDeep1BNeighborHeap) Pop() interface{} {
 	out := old[n-1]
 	*h = old[:n-1]
 	return out
+}
+
+const columnVectorGraphDeep1BJZIPHeaderBytes = 16
+
+func columnVectorGraphDeep1BJZIPTransforms(tb testing.TB) []columnVectorGraphDeep1BJZIPTransform {
+	tb.Helper()
+	all := []columnVectorGraphDeep1BJZIPTransform{
+		{name: "cartesian_byte_shuffle", kind: columnVectorGraphDeep1BJZIPTransformCartesian},
+		{name: "spherical", kind: columnVectorGraphDeep1BJZIPTransformSpherical},
+		{name: "spherical_center_delta", kind: columnVectorGraphDeep1BJZIPTransformSphericalCenterDelta},
+		{name: "spherical_prev_delta", kind: columnVectorGraphDeep1BJZIPTransformSphericalPrevDelta},
+		{name: "householder_cartesian", kind: columnVectorGraphDeep1BJZIPTransformHouseholderCartesian},
+	}
+	raw := strings.TrimSpace(os.Getenv("COLUMN_VECTOR_DEEP1B_JZIP_TRANSFORMS"))
+	if raw == "" || strings.EqualFold(raw, "all") {
+		return all
+	}
+	byName := make(map[string]columnVectorGraphDeep1BJZIPTransform, len(all))
+	for _, transform := range all {
+		byName[transform.name] = transform
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]columnVectorGraphDeep1BJZIPTransform, 0, len(parts))
+	for _, part := range parts {
+		name := strings.ToLower(strings.TrimSpace(part))
+		if name == "" || name == "skip" {
+			continue
+		}
+		transform, ok := byName[name]
+		if !ok {
+			tb.Fatalf("unknown COLUMN_VECTOR_DEEP1B_JZIP_TRANSFORMS value %q", part)
+		}
+		out = append(out, transform)
+	}
+	if len(out) == 0 {
+		tb.Fatal("COLUMN_VECTOR_DEEP1B_JZIP_TRANSFORMS selected no transform variants")
+	}
+	return out
+}
+
+func columnVectorGraphDeep1BJZIPByteCodecs(tb testing.TB) []columnVectorGraphDeep1BJZIPByteCodec {
+	tb.Helper()
+	all := []columnVectorGraphDeep1BJZIPByteCodec{
+		{name: "raw", kind: columnVectorGraphDeep1BJZIPByteCodecRaw},
+		{name: "snappy", kind: columnVectorGraphDeep1BJZIPByteCodecSnappy},
+		{name: "lz4", kind: columnVectorGraphDeep1BJZIPByteCodecLZ4},
+		{name: "zstd_fast", kind: columnVectorGraphDeep1BJZIPByteCodecZSTDFast},
+		{name: "zstd_default", kind: columnVectorGraphDeep1BJZIPByteCodecZSTDDefault},
+		{name: "zstd_better", kind: columnVectorGraphDeep1BJZIPByteCodecZSTDBetter},
+	}
+	raw := strings.TrimSpace(os.Getenv("COLUMN_VECTOR_DEEP1B_JZIP_CODECS"))
+	if raw == "" || strings.EqualFold(raw, "all") {
+		return all
+	}
+	byName := make(map[string]columnVectorGraphDeep1BJZIPByteCodec, len(all))
+	for _, codec := range all {
+		byName[codec.name] = codec
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]columnVectorGraphDeep1BJZIPByteCodec, 0, len(parts))
+	for _, part := range parts {
+		name := strings.ToLower(strings.TrimSpace(part))
+		if name == "" || name == "skip" {
+			continue
+		}
+		codec, ok := byName[name]
+		if !ok {
+			tb.Fatalf("unknown COLUMN_VECTOR_DEEP1B_JZIP_CODECS value %q", part)
+		}
+		out = append(out, codec)
+	}
+	if len(out) == 0 {
+		tb.Fatal("COLUMN_VECTOR_DEEP1B_JZIP_CODECS selected no codec variants")
+	}
+	return out
+}
+
+func (c *columnVectorGraphDeep1BJZIPCodec) Encode(vectors []float32, dims int, transform columnVectorGraphDeep1BJZIPTransform, byteCodec columnVectorGraphDeep1BJZIPByteCodec) (columnVectorGraphDeep1BJZIPEncoded, error) {
+	if dims < 2 {
+		return columnVectorGraphDeep1BJZIPEncoded{}, fmt.Errorf("Deep1B JZIP dims=%d, need at least 2", dims)
+	}
+	if len(vectors)%dims != 0 {
+		return columnVectorGraphDeep1BJZIPEncoded{}, fmt.Errorf("Deep1B JZIP vector values=%d not divisible by dims=%d", len(vectors), dims)
+	}
+	rows := len(vectors) / dims
+	if rows == 0 {
+		return columnVectorGraphDeep1BJZIPEncoded{}, errors.New("Deep1B JZIP empty vector block")
+	}
+	transformStart := time.Now()
+	values, valuesPerRow, metadata, err := c.transformValues(vectors, rows, dims, transform)
+	if err != nil {
+		return columnVectorGraphDeep1BJZIPEncoded{}, err
+	}
+	transformNanos := time.Since(transformStart).Nanoseconds()
+
+	shuffleStart := time.Now()
+	c.shuffled = columnVectorGraphDeep1BTransposeByteShuffle(values, rows, valuesPerRow, c.shuffled)
+	shuffleNanos := time.Since(shuffleStart).Nanoseconds()
+
+	payload, actualCodec, compressionNanos, err := c.compressBytes(c.shuffled, byteCodec)
+	if err != nil {
+		return columnVectorGraphDeep1BJZIPEncoded{}, err
+	}
+	transformRawBytes := len(values) * 4
+	metadataBytes := columnVectorGraphDeep1BJZIPHeaderBytes + len(metadata)*4
+	return columnVectorGraphDeep1BJZIPEncoded{
+		Rows:                  rows,
+		Dims:                  dims,
+		ValuesPerRow:          valuesPerRow,
+		RawBytes:              len(vectors) * 4,
+		TransformRawBytes:     transformRawBytes,
+		MetadataBytes:         metadataBytes,
+		StoredBytes:           metadataBytes + len(payload),
+		TransformNanos:        transformNanos,
+		TransposeShuffleNanos: shuffleNanos,
+		CompressionNanos:      compressionNanos,
+		Transform:             transform,
+		RequestedCodec:        byteCodec,
+		ActualCodec:           actualCodec,
+		Payload:               payload,
+		Metadata:              metadata,
+	}, nil
+}
+
+func (c *columnVectorGraphDeep1BJZIPCodec) Decode(encoded columnVectorGraphDeep1BJZIPEncoded) ([]float32, int64, error) {
+	start := time.Now()
+	raw, err := c.decompressBytes(encoded.Payload, encoded.TransformRawBytes, encoded.ActualCodec)
+	if err != nil {
+		return nil, 0, err
+	}
+	values, err := columnVectorGraphDeep1BUnshuffleTranspose(raw, encoded.Rows, encoded.ValuesPerRow, c.decodedValues)
+	if err != nil {
+		return nil, 0, err
+	}
+	c.decodedValues = values
+	var out []float32
+	switch encoded.Transform.kind {
+	case columnVectorGraphDeep1BJZIPTransformCartesian:
+		out = c.decodedValues
+	case columnVectorGraphDeep1BJZIPTransformSpherical:
+		out = c.sphericalToCartesian(c.decodedValues, encoded.Rows, encoded.Dims)
+	case columnVectorGraphDeep1BJZIPTransformSphericalCenterDelta:
+		if len(encoded.Metadata) != encoded.ValuesPerRow {
+			return nil, 0, fmt.Errorf("Deep1B JZIP center metadata values=%d want=%d", len(encoded.Metadata), encoded.ValuesPerRow)
+		}
+		c.restoreSphericalCenterDelta(c.decodedValues, encoded.Metadata, encoded.Rows, encoded.ValuesPerRow)
+		out = c.sphericalToCartesian(c.decodedValues, encoded.Rows, encoded.Dims)
+	case columnVectorGraphDeep1BJZIPTransformSphericalPrevDelta:
+		c.restoreSphericalPrevDelta(c.decodedValues, encoded.Rows, encoded.ValuesPerRow)
+		out = c.sphericalToCartesian(c.decodedValues, encoded.Rows, encoded.Dims)
+	case columnVectorGraphDeep1BJZIPTransformHouseholderCartesian:
+		if len(encoded.Metadata) != encoded.Dims {
+			return nil, 0, fmt.Errorf("Deep1B JZIP householder metadata values=%d want=%d", len(encoded.Metadata), encoded.Dims)
+		}
+		out = c.inverseHouseholderCartesian(c.decodedValues, encoded.Metadata, encoded.Rows, encoded.Dims)
+	default:
+		return nil, 0, fmt.Errorf("Deep1B JZIP unsupported transform %d", encoded.Transform.kind)
+	}
+	return out, time.Since(start).Nanoseconds(), nil
+}
+
+func (c *columnVectorGraphDeep1BJZIPCodec) transformValues(vectors []float32, rows int, dims int, transform columnVectorGraphDeep1BJZIPTransform) ([]float32, int, []float32, error) {
+	switch transform.kind {
+	case columnVectorGraphDeep1BJZIPTransformCartesian:
+		c.values = columnVectorGraphDeep1BEnsureFloat32(c.values, len(vectors))
+		copy(c.values, vectors)
+		c.metadata = c.metadata[:0]
+		return c.values, dims, c.metadata, nil
+	case columnVectorGraphDeep1BJZIPTransformSpherical:
+		angles := c.cartesianToSpherical(vectors, rows, dims)
+		c.metadata = c.metadata[:0]
+		return angles, dims - 1, c.metadata, nil
+	case columnVectorGraphDeep1BJZIPTransformSphericalCenterDelta:
+		angles := c.cartesianToSpherical(vectors, rows, dims)
+		values, metadata := c.sphericalCenterDelta(angles, rows, dims-1)
+		return values, dims - 1, metadata, nil
+	case columnVectorGraphDeep1BJZIPTransformSphericalPrevDelta:
+		angles := c.cartesianToSpherical(vectors, rows, dims)
+		values := c.sphericalPrevDelta(angles, rows, dims-1)
+		c.metadata = c.metadata[:0]
+		return values, dims - 1, c.metadata, nil
+	case columnVectorGraphDeep1BJZIPTransformHouseholderCartesian:
+		values, metadata := c.householderCartesian(vectors, rows, dims)
+		return values, dims, metadata, nil
+	default:
+		return nil, 0, nil, fmt.Errorf("Deep1B JZIP unsupported transform %d", transform.kind)
+	}
+}
+
+func (c *columnVectorGraphDeep1BJZIPCodec) cartesianToSpherical(vectors []float32, rows int, dims int) []float32 {
+	angleDims := dims - 1
+	c.angles = columnVectorGraphDeep1BEnsureFloat32(c.angles, rows*angleDims)
+	if cap(c.r2) < dims {
+		c.r2 = make([]float64, dims)
+	} else {
+		c.r2 = c.r2[:dims]
+	}
+	for row := 0; row < rows; row++ {
+		vectorBase := row * dims
+		angleBase := row * angleDims
+		var suffix float64
+		for j := dims - 1; j >= 0; j-- {
+			value := float64(vectors[vectorBase+j])
+			suffix += value * value
+			c.r2[j] = suffix
+		}
+		for j := 0; j < dims-2; j++ {
+			denom := math.Sqrt(c.r2[j])
+			if denom == 0 {
+				c.angles[angleBase+j] = 0
+				continue
+			}
+			c.angles[angleBase+j] = float32(math.Acos(columnVectorGraphDeep1BClamp(float64(vectors[vectorBase+j])/denom, -1, 1)))
+		}
+		c.angles[angleBase+angleDims-1] = float32(math.Atan2(float64(vectors[vectorBase+dims-1]), float64(vectors[vectorBase+dims-2])))
+	}
+	return c.angles
+}
+
+func (c *columnVectorGraphDeep1BJZIPCodec) sphericalCenterDelta(angles []float32, rows int, angleDims int) ([]float32, []float32) {
+	c.values = columnVectorGraphDeep1BEnsureFloat32(c.values, len(angles))
+	c.metadata = columnVectorGraphDeep1BEnsureFloat32(c.metadata, angleDims)
+	for j := 0; j < angleDims-1; j++ {
+		var sum float64
+		for row := 0; row < rows; row++ {
+			sum += float64(angles[row*angleDims+j])
+		}
+		c.metadata[j] = float32(sum / float64(rows))
+	}
+	var sinSum float64
+	var cosSum float64
+	finalAngle := angleDims - 1
+	for row := 0; row < rows; row++ {
+		angle := float64(angles[row*angleDims+finalAngle])
+		sinSum += math.Sin(angle)
+		cosSum += math.Cos(angle)
+	}
+	c.metadata[finalAngle] = float32(math.Atan2(sinSum, cosSum))
+	for row := 0; row < rows; row++ {
+		base := row * angleDims
+		for j := 0; j < angleDims-1; j++ {
+			c.values[base+j] = angles[base+j] - c.metadata[j]
+		}
+		c.values[base+finalAngle] = float32(columnVectorGraphDeep1BWrapPi(float64(angles[base+finalAngle] - c.metadata[finalAngle])))
+	}
+	return c.values, c.metadata
+}
+
+func (c *columnVectorGraphDeep1BJZIPCodec) sphericalPrevDelta(angles []float32, rows int, angleDims int) []float32 {
+	c.values = columnVectorGraphDeep1BEnsureFloat32(c.values, len(angles))
+	copy(c.values[:angleDims], angles[:angleDims])
+	finalAngle := angleDims - 1
+	for row := 1; row < rows; row++ {
+		base := row * angleDims
+		prev := base - angleDims
+		for j := 0; j < angleDims-1; j++ {
+			c.values[base+j] = angles[base+j] - angles[prev+j]
+		}
+		c.values[base+finalAngle] = float32(columnVectorGraphDeep1BWrapPi(float64(angles[base+finalAngle] - angles[prev+finalAngle])))
+	}
+	return c.values
+}
+
+func (c *columnVectorGraphDeep1BJZIPCodec) restoreSphericalCenterDelta(values []float32, center []float32, rows int, angleDims int) {
+	finalAngle := angleDims - 1
+	for row := 0; row < rows; row++ {
+		base := row * angleDims
+		for j := 0; j < angleDims-1; j++ {
+			values[base+j] += center[j]
+		}
+		values[base+finalAngle] = float32(columnVectorGraphDeep1BWrapPi(float64(values[base+finalAngle] + center[finalAngle])))
+	}
+}
+
+func (c *columnVectorGraphDeep1BJZIPCodec) restoreSphericalPrevDelta(values []float32, rows int, angleDims int) {
+	finalAngle := angleDims - 1
+	for row := 1; row < rows; row++ {
+		base := row * angleDims
+		prev := base - angleDims
+		for j := 0; j < angleDims-1; j++ {
+			values[base+j] += values[prev+j]
+		}
+		values[base+finalAngle] = float32(columnVectorGraphDeep1BWrapPi(float64(values[base+finalAngle] + values[prev+finalAngle])))
+	}
+}
+
+func (c *columnVectorGraphDeep1BJZIPCodec) sphericalToCartesian(angles []float32, rows int, dims int) []float32 {
+	angleDims := dims - 1
+	c.decodedVectors = columnVectorGraphDeep1BEnsureFloat32(c.decodedVectors, rows*dims)
+	for row := 0; row < rows; row++ {
+		angleBase := row * angleDims
+		vectorBase := row * dims
+		prod := 1.0
+		for j := 0; j < dims-2; j++ {
+			theta := float64(angles[angleBase+j])
+			c.decodedVectors[vectorBase+j] = float32(prod * math.Cos(theta))
+			prod *= math.Sin(theta)
+		}
+		theta := float64(angles[angleBase+angleDims-1])
+		c.decodedVectors[vectorBase+dims-2] = float32(prod * math.Cos(theta))
+		c.decodedVectors[vectorBase+dims-1] = float32(prod * math.Sin(theta))
+	}
+	return c.decodedVectors
+}
+
+func (c *columnVectorGraphDeep1BJZIPCodec) householderCartesian(vectors []float32, rows int, dims int) ([]float32, []float32) {
+	c.metadata = columnVectorGraphDeep1BEnsureFloat32(c.metadata, dims)
+	if cap(c.centroid) < dims {
+		c.centroid = make([]float64, dims)
+	} else {
+		c.centroid = c.centroid[:dims]
+		clear(c.centroid)
+	}
+	for row := 0; row < rows; row++ {
+		base := row * dims
+		for j := 0; j < dims; j++ {
+			c.centroid[j] += float64(vectors[base+j])
+		}
+	}
+	var normSquared float64
+	for j := 0; j < dims; j++ {
+		normSquared += c.centroid[j] * c.centroid[j]
+	}
+	if normSquared == 0 {
+		c.metadata[0] = 1
+		for j := 1; j < dims; j++ {
+			c.metadata[j] = 0
+		}
+	} else {
+		invNorm := 1 / math.Sqrt(normSquared)
+		for j := 0; j < dims; j++ {
+			c.metadata[j] = float32(c.centroid[j] * invNorm)
+		}
+	}
+	c.values = columnVectorGraphDeep1BEnsureFloat32(c.values, len(vectors))
+	c.applyHouseholder(vectors, c.values, c.metadata, rows, dims)
+	return c.values, c.metadata
+}
+
+func (c *columnVectorGraphDeep1BJZIPCodec) inverseHouseholderCartesian(values []float32, metadata []float32, rows int, dims int) []float32 {
+	c.decodedVectors = columnVectorGraphDeep1BEnsureFloat32(c.decodedVectors, rows*dims)
+	c.applyHouseholder(values, c.decodedVectors, metadata, rows, dims)
+	return c.decodedVectors
+}
+
+func (c *columnVectorGraphDeep1BJZIPCodec) applyHouseholder(input []float32, output []float32, metadata []float32, rows int, dims int) {
+	if cap(c.householder) < dims {
+		c.householder = make([]float64, dims)
+	} else {
+		c.householder = c.householder[:dims]
+	}
+	var normDiffSquared float64
+	for j := 0; j < dims; j++ {
+		value := float64(metadata[j])
+		if j == 0 {
+			value--
+		}
+		c.householder[j] = value
+		normDiffSquared += value * value
+	}
+	if normDiffSquared < 1e-24 {
+		copy(output, input)
+		return
+	}
+	invNormDiff := 1 / math.Sqrt(normDiffSquared)
+	for j := 0; j < dims; j++ {
+		c.householder[j] *= invNormDiff
+	}
+	for row := 0; row < rows; row++ {
+		base := row * dims
+		var dot float64
+		for j := 0; j < dims; j++ {
+			dot += c.householder[j] * float64(input[base+j])
+		}
+		for j := 0; j < dims; j++ {
+			output[base+j] = float32(float64(input[base+j]) - 2*c.householder[j]*dot)
+		}
+	}
+}
+
+func (c *columnVectorGraphDeep1BJZIPCodec) compressBytes(raw []byte, byteCodec columnVectorGraphDeep1BJZIPByteCodec) ([]byte, columnVectorGraphDeep1BJZIPByteCodec, int64, error) {
+	switch byteCodec.kind {
+	case columnVectorGraphDeep1BJZIPByteCodecRaw:
+		return raw, byteCodec, 0, nil
+	case columnVectorGraphDeep1BJZIPByteCodecSnappy:
+		need := snappy.MaxEncodedLen(len(raw))
+		if cap(c.compressed) < need {
+			c.compressed = make([]byte, need)
+		} else {
+			c.compressed = c.compressed[:need]
+		}
+		start := time.Now()
+		out := snappy.Encode(c.compressed, raw)
+		return out, byteCodec, time.Since(start).Nanoseconds(), nil
+	case columnVectorGraphDeep1BJZIPByteCodecLZ4:
+		need := lz4.CompressBlockBound(len(raw))
+		if cap(c.compressed) < need {
+			c.compressed = make([]byte, need)
+		} else {
+			c.compressed = c.compressed[:need]
+		}
+		start := time.Now()
+		n, err := lz4.CompressBlock(raw, c.compressed, nil)
+		compressionNanos := time.Since(start).Nanoseconds()
+		if err != nil {
+			return nil, columnVectorGraphDeep1BJZIPByteCodec{}, 0, err
+		}
+		if n == 0 {
+			return raw, columnVectorGraphDeep1BJZIPByteCodec{name: "raw", kind: columnVectorGraphDeep1BJZIPByteCodecRaw}, compressionNanos, nil
+		}
+		return c.compressed[:n], byteCodec, compressionNanos, nil
+	case columnVectorGraphDeep1BJZIPByteCodecZSTDFast:
+		enc, err := columnGranuleSharedZSTDEncoder()
+		if err != nil {
+			return nil, columnVectorGraphDeep1BJZIPByteCodec{}, 0, err
+		}
+		start := time.Now()
+		out := enc.EncodeAll(raw, c.compressed[:0])
+		c.compressed = out
+		return out, byteCodec, time.Since(start).Nanoseconds(), nil
+	case columnVectorGraphDeep1BJZIPByteCodecZSTDDefault:
+		enc, err := c.zstdDefault()
+		if err != nil {
+			return nil, columnVectorGraphDeep1BJZIPByteCodec{}, 0, err
+		}
+		start := time.Now()
+		out := enc.EncodeAll(raw, c.compressed[:0])
+		c.compressed = out
+		return out, byteCodec, time.Since(start).Nanoseconds(), nil
+	case columnVectorGraphDeep1BJZIPByteCodecZSTDBetter:
+		enc, err := c.zstdBetter()
+		if err != nil {
+			return nil, columnVectorGraphDeep1BJZIPByteCodec{}, 0, err
+		}
+		start := time.Now()
+		out := enc.EncodeAll(raw, c.compressed[:0])
+		c.compressed = out
+		return out, byteCodec, time.Since(start).Nanoseconds(), nil
+	default:
+		return nil, columnVectorGraphDeep1BJZIPByteCodec{}, 0, fmt.Errorf("Deep1B JZIP unsupported byte codec %d", byteCodec.kind)
+	}
+}
+
+func (c *columnVectorGraphDeep1BJZIPCodec) decompressBytes(payload []byte, rawBytes int, byteCodec columnVectorGraphDeep1BJZIPByteCodec) ([]byte, error) {
+	switch byteCodec.kind {
+	case columnVectorGraphDeep1BJZIPByteCodecRaw:
+		if len(payload) != rawBytes {
+			return nil, fmt.Errorf("Deep1B JZIP raw payload bytes=%d want=%d", len(payload), rawBytes)
+		}
+		return payload, nil
+	case columnVectorGraphDeep1BJZIPByteCodecSnappy:
+		decodedLen, err := snappy.DecodedLen(payload)
+		if err != nil {
+			return nil, err
+		}
+		if decodedLen != rawBytes {
+			return nil, fmt.Errorf("Deep1B JZIP snappy decoded bytes=%d want=%d", decodedLen, rawBytes)
+		}
+		if cap(c.decodedShuffle) < rawBytes {
+			c.decodedShuffle = make([]byte, rawBytes)
+		} else {
+			c.decodedShuffle = c.decodedShuffle[:rawBytes]
+		}
+		out, err := snappy.Decode(c.decodedShuffle, payload)
+		if err != nil {
+			return nil, err
+		}
+		return out, nil
+	case columnVectorGraphDeep1BJZIPByteCodecLZ4:
+		if cap(c.decodedShuffle) < rawBytes {
+			c.decodedShuffle = make([]byte, rawBytes)
+		} else {
+			c.decodedShuffle = c.decodedShuffle[:rawBytes]
+		}
+		n, err := lz4.UncompressBlock(payload, c.decodedShuffle)
+		if err != nil {
+			return nil, err
+		}
+		if n != rawBytes {
+			return nil, fmt.Errorf("Deep1B JZIP lz4 decoded bytes=%d want=%d", n, rawBytes)
+		}
+		return c.decodedShuffle, nil
+	case columnVectorGraphDeep1BJZIPByteCodecZSTDFast, columnVectorGraphDeep1BJZIPByteCodecZSTDDefault, columnVectorGraphDeep1BJZIPByteCodecZSTDBetter:
+		dec, err := columnGranuleSharedZSTDDecoder()
+		if err != nil {
+			return nil, err
+		}
+		if cap(c.decodedShuffle) < rawBytes {
+			c.decodedShuffle = make([]byte, 0, rawBytes)
+		} else {
+			c.decodedShuffle = c.decodedShuffle[:0:rawBytes]
+		}
+		out, err := dec.DecodeAll(payload, c.decodedShuffle)
+		if err != nil {
+			return nil, err
+		}
+		if len(out) != rawBytes {
+			return nil, fmt.Errorf("Deep1B JZIP zstd decoded bytes=%d want=%d", len(out), rawBytes)
+		}
+		c.decodedShuffle = out
+		return out, nil
+	default:
+		return nil, fmt.Errorf("Deep1B JZIP unsupported byte codec %d", byteCodec.kind)
+	}
+}
+
+func (c *columnVectorGraphDeep1BJZIPCodec) zstdDefault() (*zstd.Encoder, error) {
+	if c.zstdDefaultEncoder != nil {
+		return c.zstdDefaultEncoder, nil
+	}
+	enc, err := zstd.NewWriter(nil,
+		zstd.WithEncoderLevel(zstd.SpeedDefault),
+		zstd.WithEncoderCRC(false),
+		zstd.WithEncoderConcurrency(1),
+	)
+	if err != nil {
+		return nil, err
+	}
+	c.zstdDefaultEncoder = enc
+	return enc, nil
+}
+
+func (c *columnVectorGraphDeep1BJZIPCodec) zstdBetter() (*zstd.Encoder, error) {
+	if c.zstdBetterEncoder != nil {
+		return c.zstdBetterEncoder, nil
+	}
+	enc, err := zstd.NewWriter(nil,
+		zstd.WithEncoderLevel(zstd.SpeedBetterCompression),
+		zstd.WithEncoderCRC(false),
+		zstd.WithEncoderConcurrency(1),
+	)
+	if err != nil {
+		return nil, err
+	}
+	c.zstdBetterEncoder = enc
+	return enc, nil
+}
+
+func columnVectorGraphDeep1BTransposeByteShuffle(values []float32, rows int, valuesPerRow int, dst []byte) []byte {
+	valueCount := rows * valuesPerRow
+	rawBytes := valueCount * 4
+	if cap(dst) < rawBytes {
+		dst = make([]byte, rawBytes)
+	} else {
+		dst = dst[:rawBytes]
+	}
+	for j := 0; j < valuesPerRow; j++ {
+		for row := 0; row < rows; row++ {
+			transposed := j*rows + row
+			bits := math.Float32bits(values[row*valuesPerRow+j])
+			dst[transposed] = byte(bits)
+			dst[valueCount+transposed] = byte(bits >> 8)
+			dst[2*valueCount+transposed] = byte(bits >> 16)
+			dst[3*valueCount+transposed] = byte(bits >> 24)
+		}
+	}
+	return dst
+}
+
+func columnVectorGraphDeep1BUnshuffleTranspose(raw []byte, rows int, valuesPerRow int, dst []float32) ([]float32, error) {
+	valueCount := rows * valuesPerRow
+	rawBytes := valueCount * 4
+	if len(raw) != rawBytes {
+		return nil, fmt.Errorf("Deep1B JZIP shuffled bytes=%d want=%d", len(raw), rawBytes)
+	}
+	dst = columnVectorGraphDeep1BEnsureFloat32(dst, valueCount)
+	for j := 0; j < valuesPerRow; j++ {
+		for row := 0; row < rows; row++ {
+			transposed := j*rows + row
+			bits := uint32(raw[transposed]) |
+				uint32(raw[valueCount+transposed])<<8 |
+				uint32(raw[2*valueCount+transposed])<<16 |
+				uint32(raw[3*valueCount+transposed])<<24
+			dst[row*valuesPerRow+j] = math.Float32frombits(bits)
+		}
+	}
+	return dst, nil
+}
+
+func columnVectorGraphDeep1BJZIPErrorMetrics(original []float32, decoded []float32, dims int) (float64, float64, float64) {
+	rows := len(original) / dims
+	var maxAbsError float64
+	for i, got := range decoded {
+		errorValue := math.Abs(float64(original[i]) - float64(got))
+		if errorValue > maxAbsError {
+			maxAbsError = errorValue
+		}
+	}
+	var maxCosineError float64
+	var sumCosineError float64
+	for row := 0; row < rows; row++ {
+		base := row * dims
+		var dot float64
+		var originalNormSquared float64
+		var decodedNormSquared float64
+		for j := 0; j < dims; j++ {
+			ov := float64(original[base+j])
+			dv := float64(decoded[base+j])
+			dot += ov * dv
+			originalNormSquared += ov * ov
+			decodedNormSquared += dv * dv
+		}
+		cosineError := 1.0
+		if originalNormSquared > 0 && decodedNormSquared > 0 {
+			cosine := dot / math.Sqrt(originalNormSquared*decodedNormSquared)
+			cosineError = math.Abs(1 - columnVectorGraphDeep1BClamp(cosine, -1, 1))
+		}
+		if cosineError > maxCosineError {
+			maxCosineError = cosineError
+		}
+		sumCosineError += cosineError
+	}
+	return maxAbsError, maxCosineError, sumCosineError / float64(rows)
+}
+
+func columnVectorGraphDeep1BEnsureFloat32(dst []float32, n int) []float32 {
+	if cap(dst) < n {
+		return make([]float32, n)
+	}
+	return dst[:n]
+}
+
+func columnVectorGraphDeep1BClamp(value float64, minValue float64, maxValue float64) float64 {
+	if value < minValue {
+		return minValue
+	}
+	if value > maxValue {
+		return maxValue
+	}
+	return value
+}
+
+func columnVectorGraphDeep1BWrapPi(value float64) float64 {
+	for value <= -math.Pi {
+		value += 2 * math.Pi
+	}
+	for value > math.Pi {
+		value -= 2 * math.Pi
+	}
+	return value
 }
 
 func columnVectorGraphDeep1BTopRowsByCosine(tb testing.TB, file *os.File, header columnVectorGraphDeep1BFbinHeader, rows int, query []float32, topK int) []columnVectorGraphDeep1BNeighbor {
