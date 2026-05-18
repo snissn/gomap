@@ -3,6 +3,7 @@ package colgranule
 import (
 	"fmt"
 	"hash/fnv"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -222,8 +223,8 @@ func TestColumnMutationReplayProfileContractM9D(t *testing.T) {
 	}{
 		{name: "default durable", want: "durable"},
 		{name: "durable", profile: ColumnMutationReplayProfile{Durability: ColumnMutationReplayDurable}, want: "durable"},
-		{name: "default durable benchmark only rejected", profile: ColumnMutationReplayProfile{BenchmarkOnly: true}, wantErr: true, wantLabel: "durable_benchmark_ceiling"},
-		{name: "durable benchmark only rejected", profile: ColumnMutationReplayProfile{Durability: ColumnMutationReplayDurable, BenchmarkOnly: true}, wantErr: true, wantLabel: "durable_benchmark_ceiling"},
+		{name: "default durable benchmark only rejected", profile: ColumnMutationReplayProfile{BenchmarkOnly: true}, wantErr: true, wantErrContains: "durable (default)", wantLabel: "durable_benchmark_ceiling"},
+		{name: "durable benchmark only rejected", profile: ColumnMutationReplayProfile{Durability: ColumnMutationReplayDurable, BenchmarkOnly: true}, wantErr: true, wantErrContains: "set BenchmarkOnly=true", wantLabel: "durable_benchmark_ceiling"},
 		{name: "wal on fast production rejected", profile: ColumnMutationReplayProfile{Durability: ColumnMutationReplayWALOnFast}, wantErr: true, wantErrContains: "not supported for production"},
 		{name: "fast production rejected", profile: ColumnMutationReplayProfile{Durability: ColumnMutationReplayFast}, wantErr: true, wantErrContains: "not supported for production"},
 		{name: "wal on fast benchmark ceiling", profile: ColumnMutationReplayProfile{Durability: ColumnMutationReplayWALOnFast, BenchmarkOnly: true}, want: "wal_on_fast_benchmark_ceiling"},
@@ -313,16 +314,11 @@ func TestColumnMutationAdapterAppliesReplayProfileOptionM9D(t *testing.T) {
 		StoreOptions:  opts,
 		Dictionaries:  ds.Dictionaries,
 		ReplayProfile: profile,
-	}); err == nil || !strings.Contains(err.Error(), "requires workspace manifest sync mode") {
-		t.Fatalf("NewColumnMutationAdapter relaxed profile on durable workspace err=%v want sync-mode rejection", err)
+	}); err == nil || !strings.Contains(err.Error(), `requires workspace manifest sync mode "benchmark_no_sync", got "durable"`) {
+		t.Fatalf("NewColumnMutationAdapter benchmark profile on durable workspace err=%v want exact sync-mode rejection", err)
 	}
 
-	rejectedWorkspace, err := OpenColumnWorkspace(t.TempDir(), ColumnWorkspaceOptions{Collection: "jsonbench"})
-	if err != nil {
-		t.Fatalf("OpenColumnWorkspace rejected: %v", err)
-	}
-	defer rejectedWorkspace.Close()
-	if _, err := NewColumnMutationAdapter(rejectedWorkspace, ColumnMutationAdapterOptions{
+	if _, err := NewColumnMutationAdapter(durableWorkspace, ColumnMutationAdapterOptions{
 		Collection:    "jsonbench",
 		StoreOptions:  opts,
 		Dictionaries:  ds.Dictionaries,
@@ -586,23 +582,32 @@ func BenchmarkColumnMutationReplayM9D(b *testing.B) {
 				b.ReportAllocs()
 				b.ResetTimer()
 				for i := 0; i < b.N; i++ {
-					workspace, adapter := benchmarkColumnMutationAdapterWithProfile(b, filepath.Join(root, fmt.Sprintf("iter-%06d", i)), opts, ds.Dictionaries, profile)
+					dir := filepath.Join(root, fmt.Sprintf("iter-%06d", i))
+					workspace, adapter := benchmarkColumnMutationAdapterWithProfile(b, dir, opts, ds.Dictionaries, profile)
 					_, err := adapter.PublishBaseBatch(ColumnBatch{Rows: ds.Rows, Columns: ds.Columns}, ColumnPartCoverageOptions{SourceRowRootGeneration: 1, SourceRowVersionUpper: uint64(ds.Rows)})
 					if err == nil {
 						_, err = adapter.Apply(scenario.batch)
 					}
 					last = adapter.Manifest()
-					_ = workspace.Close()
+					if closeErr := workspace.Close(); err == nil {
+						err = closeErr
+					}
 					if err != nil {
 						b.Fatalf("replay: %v", err)
 					}
+					b.StopTimer()
+					if err := os.RemoveAll(dir); err != nil {
+						b.Fatalf("cleanup iteration dir: %v", err)
+					}
+					b.StartTimer()
 				}
 				b.StopTimer()
 				elapsed := b.Elapsed()
 				if b.N > 0 && elapsed > 0 {
 					// The replay gate deliberately includes per-iteration workspace
 					// open/publish/apply/close work in the timed loop.
-					b.ReportMetric(float64(logicalRows)*float64(b.N)/elapsed.Seconds(), "rows/sec")
+					perOp := elapsed.Seconds() / float64(b.N)
+					b.ReportMetric(float64(logicalRows)/perOp, "rows/sec")
 				}
 				b.ReportMetric(float64(logicalRows), "logical_rows/op")
 				b.ReportMetric(float64(commandBytes), "command_bytes/op")
