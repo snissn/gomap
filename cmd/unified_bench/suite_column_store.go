@@ -1014,6 +1014,9 @@ func columnStoreSuitePlanRequest(name string, rows int, forceKind collections.Co
 			// M11B deliberately has no physical column assets yet; this keeps
 			// recovery-authoritative physical planner gates unreachable until
 			// M11B/M11C wire real assets.
+			SerialColumnScan:       true,
+			AggregateMetadata:      true,
+			ParallelColumnScan:     true,
 			PhysicalAssetCount:     0,
 			PartCount:              0,
 			GranuleCount:           0,
@@ -1113,6 +1116,8 @@ func scanColumnStoreSuiteEventsByIndex(collection *collections.Collection, rows 
 		Limit: rows + 1,
 	}, func(record collections.BorrowedDocumentRecord) (bool, error) {
 		var event columnStoreDecodedEvent
+		// The decoded event must remain value-owned; do not add fields that
+		// retain slices backed by BorrowedDocumentRecord.Document.
 		if err := json.Unmarshal(record.Document, &event); err != nil {
 			return false, err
 		}

@@ -136,6 +136,9 @@ func planColumnQueryForCatalog(catalog *collectionCatalog, identity ColumnStoreC
 		RecoveryManifestGen:     identity.RecoveryAuthoritativeGeneration,
 		AppliedCommandLSN:       identity.RecoveryAuthoritativeAppliedCommandLSN,
 	}
+	if reason := physicalColumnQueryUnsupportedReasonForFallback(catalog, req); reason != "" {
+		diag.UnsupportedPlanReason = reason
+	}
 
 	if req.ForceKind != "" {
 		return forcedColumnQueryPlan(catalog, identity, identityOK, req, diag)
@@ -228,7 +231,7 @@ func parallelColumnQueryPlan(catalog *collectionCatalog, identity ColumnStoreCac
 	if parallelColumnQueryShapeUnsupportedReason(req) != "" {
 		return false, ColumnQueryPlan{}
 	}
-	workers := req.Capabilities.MaxParallelWorkers
+	workers := columnQueryParallelWorkerCount(req.Capabilities)
 	diag.WorkerCount = workers
 	diag.ScheduledGranules = req.Capabilities.GranuleCount
 	diag.Reason = "selected parallel physical column scan"
@@ -256,10 +259,10 @@ func physicalColumnQuerySupported(catalog *collectionCatalog, identity ColumnSto
 
 func physicalColumnQueryUnsupportedReason(identity ColumnStoreCacheIdentity, identityOK bool, req ColumnQueryPlanRequest, kind ColumnQueryPlanKind) string {
 	switch {
-	case !columnQueryManifestRecoveryAuthoritative(identity, identityOK):
-		return "active column manifest is not recovery-authoritative"
 	case req.Capabilities.PhysicalAssetCount <= 0:
 		return "no durable physical column assets are available"
+	case !columnQueryManifestRecoveryAuthoritative(identity, identityOK):
+		return "active column manifest is not recovery-authoritative"
 	}
 	switch kind {
 	case ColumnQueryPlanSerialColumnScan:
@@ -291,6 +294,13 @@ func physicalColumnQueryUnsupportedReasonForCatalog(catalog *collectionCatalog, 
 	return physicalColumnQueryUnsupportedReason(identity, identityOK, req, kind)
 }
 
+func physicalColumnQueryUnsupportedReasonForFallback(catalog *collectionCatalog, req ColumnQueryPlanRequest) string {
+	if missing, ok := missingColumnStoreRequestColumn(catalog, req); ok && missing != "" {
+		return fmt.Sprintf("requested column %q is not declared in column store", missing)
+	}
+	return ""
+}
+
 func parallelColumnQueryShapeUnsupportedReason(req ColumnQueryPlanRequest) string {
 	if req.Capabilities.MaxParallelWorkers <= 1 {
 		return "parallel scan requires more than one worker"
@@ -299,6 +309,20 @@ func parallelColumnQueryShapeUnsupportedReason(req ColumnQueryPlanRequest) strin
 		return "parallel scan requires more than one part or more granules than workers"
 	}
 	return ""
+}
+
+func columnQueryParallelWorkerCount(caps ColumnQueryPlannerCapabilities) int {
+	workUnits := caps.GranuleCount
+	if caps.PartCount > workUnits {
+		workUnits = caps.PartCount
+	}
+	if workUnits <= 0 {
+		return 0
+	}
+	if caps.MaxParallelWorkers < workUnits {
+		return caps.MaxParallelWorkers
+	}
+	return workUnits
 }
 
 func aggregateColumnQueryUnsupportedReason(catalog *collectionCatalog, identity ColumnStoreCacheIdentity, identityOK bool, req ColumnQueryPlanRequest) string {

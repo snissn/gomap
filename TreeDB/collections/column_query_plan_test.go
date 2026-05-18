@@ -398,6 +398,38 @@ func TestColumnQueryPlannerM11BReportsParallelShapeReason(t *testing.T) {
 	}
 }
 
+func TestColumnQueryPlannerM11BClampsParallelWorkersToAvailableWork(t *testing.T) {
+	catalog := &collectionCatalog{meta: CollectionMeta{
+		Name:    "events",
+		Options: CollectionOptions{ColumnStore: &ColumnStoreConfig{Enabled: true}},
+	}}
+	identity := ColumnStoreCacheIdentity{
+		Collection:                      "events",
+		ManifestRoot:                    99,
+		ManifestGeneration:              7,
+		RecoveryAuthoritativeGeneration: 7,
+	}
+	req := ColumnQueryPlanRequest{
+		Name:      "q1",
+		ForceKind: ColumnQueryPlanParallelColumnScan,
+		Capabilities: ColumnQueryPlannerCapabilities{
+			ParallelColumnScan: true,
+			PhysicalAssetCount: 1,
+			PartCount:          8,
+			GranuleCount:       2,
+			MaxParallelWorkers: 16,
+		},
+	}
+
+	plan := planColumnQueryForCatalog(catalog, identity, true, req)
+	if !plan.Supported {
+		t.Fatalf("parallel plan unsupported: %+v", plan.Diagnostics)
+	}
+	if got, want := plan.Diagnostics.WorkerCount, 8; got != want {
+		t.Fatalf("parallel worker count=%d want %d", got, want)
+	}
+}
+
 func TestColumnQueryPlannerM11BDoesNotReportPhysicalGranulesForRowOrIndexPlans(t *testing.T) {
 	catalog := &collectionCatalog{meta: CollectionMeta{
 		Name: "events",
@@ -514,6 +546,15 @@ func TestColumnQueryPlannerM11BRejectsMissingProjectedColumnForPhysicalPlans(t *
 		t.Fatalf("unsupported reason=%q", plan.Diagnostics.UnsupportedPlanReason)
 	}
 
+	req.ForceKind = ""
+	plan = planColumnQueryForCatalog(catalog, identity, true, req)
+	if !plan.Supported || plan.Kind != ColumnQueryPlanRowStoreBaseline {
+		t.Fatalf("non-forced missing predicate should fall back to row store with diagnostics: %+v", plan)
+	}
+	if !strings.Contains(plan.Diagnostics.UnsupportedPlanReason, `requested column "missing_predicate"`) {
+		t.Fatalf("fallback unsupported reason=%q", plan.Diagnostics.UnsupportedPlanReason)
+	}
+
 	req.Predicates = nil
 	req.ForceKind = ColumnQueryPlanRowStoreBaseline
 	plan = planColumnQueryForCatalog(catalog, identity, true, req)
@@ -583,6 +624,12 @@ func TestColumnQueryPlannerM11BReportsPhysicalGateBeforeMissingAggregateName(t *
 	}
 	if got, want := plan.Diagnostics.UnsupportedPlanReason, "no durable physical column assets are available"; got != want {
 		t.Fatalf("unsupported reason=%q want %q", got, want)
+	}
+
+	identity.ManifestRoot = 0
+	plan = planColumnQueryForCatalog(catalog, identity, true, req)
+	if got, want := plan.Diagnostics.UnsupportedPlanReason, "no durable physical column assets are available"; got != want {
+		t.Fatalf("zero-root/no-assets unsupported reason=%q want %q", got, want)
 	}
 }
 
