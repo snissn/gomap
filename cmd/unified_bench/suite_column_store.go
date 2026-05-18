@@ -1152,6 +1152,9 @@ func scanColumnStoreSuiteEventsByIndex(collection *collections.Collection, rows 
 		return nil, 0, 0, fmt.Errorf("column_store: scan B-tree index %s for %s: %w", indexName, queryName, err)
 	}
 	if truncated {
+		if materialized <= rows {
+			return nil, 0, 0, fmt.Errorf("column_store: B-tree index scan truncated before sentinel overrun: materialized %d rows with expected rows=%d and sentinel limit=%d", materialized, rows, rows+1)
+		}
 		return nil, 0, 0, fmt.Errorf("column_store: B-tree index scan exceeded expected row count: materialized at least %d rows with sentinel limit %d; scalar index should emit one secondary entry per document", materialized, rows+1)
 	}
 	if materialized != rows {
