@@ -29,16 +29,25 @@ const (
 )
 
 type ColumnWorkspaceOptions struct {
-	Collection     string
-	ValidationMode ColumnWorkspaceValidationMode
+	Collection       string
+	ValidationMode   ColumnWorkspaceValidationMode
+	ManifestSyncMode ColumnWorkspaceManifestSyncMode
 }
 
 type ColumnWorkspaceValidationMode string
+type ColumnWorkspaceManifestSyncMode string
 
 const (
 	ColumnWorkspaceValidateFullImage  ColumnWorkspaceValidationMode = "full_image"
 	ColumnWorkspaceValidateTCS1Header ColumnWorkspaceValidationMode = "tcs1_header"
+
+	ColumnWorkspaceManifestSyncDurable              ColumnWorkspaceManifestSyncMode = "durable"
+	ColumnWorkspaceManifestSyncDisabledForBenchmark ColumnWorkspaceManifestSyncMode = "benchmark_no_sync"
 )
+
+var columnWorkspaceSyncTempFile = func(file *os.File) error {
+	return file.Sync()
+}
 
 type ColumnWorkspaceNamespace struct {
 	RootDir       string `json:"root_dir"`
@@ -95,6 +104,13 @@ func normalizeColumnWorkspaceOptions(opts ColumnWorkspaceOptions) (ColumnWorkspa
 	default:
 		return ColumnWorkspaceOptions{}, fmt.Errorf("colgranule: unsupported workspace validation mode %s", opts.ValidationMode)
 	}
+	switch opts.ManifestSyncMode {
+	case "":
+		opts.ManifestSyncMode = ColumnWorkspaceManifestSyncDurable
+	case ColumnWorkspaceManifestSyncDurable, ColumnWorkspaceManifestSyncDisabledForBenchmark:
+	default:
+		return ColumnWorkspaceOptions{}, fmt.Errorf("colgranule: unsupported workspace manifest sync mode %s", opts.ManifestSyncMode)
+	}
 	return opts, nil
 }
 
@@ -104,6 +120,7 @@ type ColumnWorkspace struct {
 	assets         *ColumnAssetManager
 	manifest       ColumnWorkspaceManifest
 	validationMode ColumnWorkspaceValidationMode
+	manifestSync   ColumnWorkspaceManifestSyncMode
 	partByID       map[uint64]int
 	cacheSeen      map[string]struct{}
 	cache          ColumnWorkspaceCacheStats
@@ -232,6 +249,7 @@ func OpenColumnWorkspace(dir string, opts ColumnWorkspaceOptions) (*ColumnWorksp
 		namespace:      namespace,
 		assets:         assetManager,
 		validationMode: normalized.ValidationMode,
+		manifestSync:   normalized.ManifestSyncMode,
 		partByID:       make(map[uint64]int),
 		cacheSeen:      make(map[string]struct{}),
 	}
@@ -240,6 +258,13 @@ func OpenColumnWorkspace(dir string, opts ColumnWorkspaceOptions) (*ColumnWorksp
 		return nil, err
 	}
 	return w, nil
+}
+
+func (w *ColumnWorkspace) ManifestSyncMode() ColumnWorkspaceManifestSyncMode {
+	if w == nil || w.manifestSync == "" {
+		return ColumnWorkspaceManifestSyncDurable
+	}
+	return w.manifestSync
 }
 
 func (w *ColumnWorkspace) Close() error {
@@ -431,7 +456,7 @@ func (w *ColumnWorkspace) saveManifest() error {
 		_ = os.Remove(tmpPath)
 		return err
 	}
-	if err = tmp.Sync(); err != nil {
+	if err = w.syncManifestTempFile(tmp); err != nil {
 		_ = tmp.Close()
 		_ = os.Remove(tmpPath)
 		return err
@@ -477,7 +502,7 @@ func (w *ColumnWorkspace) SavePreparedAssetRegistry(publishID uint64, generation
 		_ = os.Remove(tmpPath)
 		return err
 	}
-	if err = tmp.Sync(); err != nil {
+	if err = w.syncManifestTempFile(tmp); err != nil {
 		_ = tmp.Close()
 		_ = os.Remove(tmpPath)
 		return err
@@ -491,6 +516,16 @@ func (w *ColumnWorkspace) SavePreparedAssetRegistry(publishID uint64, generation
 		return err
 	}
 	return nil
+}
+
+func (w *ColumnWorkspace) syncManifestTempFile(file *os.File) error {
+	if w == nil {
+		return fmt.Errorf("colgranule: nil column workspace")
+	}
+	if w.ManifestSyncMode() == ColumnWorkspaceManifestSyncDisabledForBenchmark {
+		return nil
+	}
+	return columnWorkspaceSyncTempFile(file)
 }
 
 func (w *ColumnWorkspace) LoadPreparedAssetRegistry() (ColumnPreparedAssetRegistry, error) {
