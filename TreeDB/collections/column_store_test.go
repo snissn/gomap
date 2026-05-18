@@ -231,6 +231,16 @@ func TestColumnStoreActiveManifestFailsClosedOnInvalidRootRecordM10C(t *testing.
 	}
 }
 
+func TestColumnManifestIdentityRecordRejectsNonZeroReserved(t *testing.T) {
+	identity := ColumnManifestIdentity{Generation: 42, Version: 1, Checksum: 0xfeedbeef}
+	record := encodeColumnManifestIdentityRecord(identity)
+	record[27] = 1
+	decoded, err := decodeColumnManifestIdentityRecord(record)
+	if err == nil || !strings.Contains(err.Error(), "reserved") {
+		t.Fatalf("decodeColumnManifestIdentityRecord decoded=%+v err=%v want reserved-field rejection", decoded, err)
+	}
+}
+
 func TestColumnStoreMetadataValidation(t *testing.T) {
 	tests := []struct {
 		name string

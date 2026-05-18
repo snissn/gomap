@@ -614,6 +614,9 @@ func decodeColumnManifestIdentityRecord(raw []byte) (columnManifestIdentityRecor
 	if version := binary.BigEndian.Uint16(raw[4:6]); version != columnManifestIdentityVersion {
 		return columnManifestIdentityRecord{}, fmt.Errorf("unsupported identity version %d", version)
 	}
+	if reserved := binary.BigEndian.Uint32(raw[24:28]); reserved != 0 {
+		return columnManifestIdentityRecord{}, fmt.Errorf("non-zero identity reserved field %d", reserved)
+	}
 	return columnManifestIdentityRecord{
 		Version:    binary.BigEndian.Uint16(raw[6:8]),
 		Generation: binary.BigEndian.Uint64(raw[8:16]),
