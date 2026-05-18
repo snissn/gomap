@@ -1038,6 +1038,14 @@ func TestColumnManifestPublishSystemDeltaRejectsMissingLSNM10A(t *testing.T) {
 			},
 			want: "recovery-authoritative AppliedCommandLSN",
 		},
+		{
+			name: "recovery authoritative below applied",
+			mutate: func(plan *ColumnPublishPlan) {
+				plan.AppliedCommandLSN = 203
+				plan.RecoveryAuthoritativeAppliedCommandLSN = 202
+			},
+			want: "recovery-authoritative AppliedCommandLSN regression",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

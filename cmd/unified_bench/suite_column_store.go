@@ -31,10 +31,37 @@ const (
 	columnStoreSuiteBenchTestName     = "column_store"
 	columnStoreSuiteBenchDBName       = "treedb_column_store"
 	columnStoreSuiteBenchDisplayName  = "TreeDB Column Store"
+	columnStoreSuitePathCanonicalHelp = "row_store_baseline, b_tree_index_baseline, serial_column_scan, aggregate_metadata, parallel_column_scan"
 )
 
+type columnStoreSuitePathAlias struct {
+	alias     string
+	canonical string
+}
+
 var (
-	columnStoreSuitePathArg    = flag.String("column-store-path", columnStorePathRowStoreBaseline, "Forced column-store execution label for -suite column_store (row_store_baseline, b_tree_index_baseline, serial_column_scan, aggregate_metadata, parallel_column_scan; aliases: row, row-store-baseline, index, b_tree, b-tree-index-baseline, serial, serial-column-scan, metadata, aggregate-metadata, parallel, parallel-column-scan; physical column labels fail closed until implemented)")
+	columnStoreSuitePathAliases = []columnStoreSuitePathAlias{
+		{alias: "", canonical: columnStorePathRowStoreBaseline},
+		{alias: "row-store-baseline", canonical: columnStorePathRowStoreBaseline},
+		{alias: "row_store", canonical: columnStorePathRowStoreBaseline},
+		{alias: "row", canonical: columnStorePathRowStoreBaseline},
+		{alias: "b-tree-index-baseline", canonical: columnStorePathBTreeIndexBaseline},
+		{alias: "btree_index_baseline", canonical: columnStorePathBTreeIndexBaseline},
+		{alias: "b_tree", canonical: columnStorePathBTreeIndexBaseline},
+		{alias: "index", canonical: columnStorePathBTreeIndexBaseline},
+		{alias: "serial-column-scan", canonical: columnStorePathSerialColumnScan},
+		{alias: "serial", canonical: columnStorePathSerialColumnScan},
+		{alias: "aggregate-metadata", canonical: columnStorePathAggregateMetadata},
+		{alias: "metadata", canonical: columnStorePathAggregateMetadata},
+		{alias: "parallel-column-scan", canonical: columnStorePathParallelColumnScan},
+		{alias: "parallel", canonical: columnStorePathParallelColumnScan},
+	}
+	columnStoreSuitePathUsage = fmt.Sprintf(
+		"Forced column-store execution label for -suite column_store (canonical: %s; aliases: %s; physical column labels fail closed until implemented)",
+		columnStoreSuitePathCanonicalHelp,
+		columnStoreSuitePathAliasHelp(columnStoreSuitePathAliases),
+	)
+	columnStoreSuitePathArg    = flag.String("column-store-path", columnStorePathRowStoreBaseline, columnStoreSuitePathUsage)
 	columnStoreSuiteFixtureArg = flag.String("column-store-fixture", "synthetic", "Fixture for -suite column_store (synthetic; JSONBENCH_DATA mode is reserved for the large local gate)")
 
 	columnStoreSuiteSupportedForcedPaths = []string{
@@ -426,6 +453,7 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 	run := columnStoreBenchRun(baseCfg, profile, dataDir, report, db.Stats(), checkpointDuration)
 	if strings.TrimSpace(opts.ProfileDir) != "" {
 		report.Artifacts = columnStoreArtifactPathsForProfileDir(opts.ProfileDir, baseCfg)
+		report.Artifacts = columnStoreSuitePruneMissingRuntimeDeltaArtifacts(report.Artifacts)
 		md = renderColumnStoreSuiteMarkdown(report)
 		if err := writeColumnStoreSuiteArtifacts(opts.ProfileDir, opts.ExecutionPath, report, md, run); err != nil {
 			return "", err
@@ -459,20 +487,23 @@ func columnStoreSuiteEffectiveProfile(profile string) (string, error) {
 
 func normalizeColumnStoreSuitePath(path string) string {
 	path = strings.ToLower(strings.TrimSpace(path))
-	switch path {
-	case "", "row-store-baseline", "row_store", "row":
-		return columnStorePathRowStoreBaseline
-	case "b-tree-index-baseline", "btree_index_baseline", "b_tree", "index":
-		return columnStorePathBTreeIndexBaseline
-	case "serial-column-scan", "serial":
-		return columnStorePathSerialColumnScan
-	case "aggregate-metadata", "metadata":
-		return columnStorePathAggregateMetadata
-	case "parallel-column-scan", "parallel":
-		return columnStorePathParallelColumnScan
-	default:
-		return path
+	for _, alias := range columnStoreSuitePathAliases {
+		if path == alias.alias {
+			return alias.canonical
+		}
 	}
+	return path
+}
+
+func columnStoreSuitePathAliasHelp(aliases []columnStoreSuitePathAlias) string {
+	out := make([]string, 0, len(aliases))
+	for _, alias := range aliases {
+		if alias.alias == "" {
+			continue
+		}
+		out = append(out, alias.alias)
+	}
+	return strings.Join(out, ", ")
 }
 
 func columnStoreSuitePlanKind(path string) (collections.ColumnQueryPlanKind, error) {
@@ -951,7 +982,7 @@ func runColumnStoreSuiteQueries(collection *collections.Collection, rows int, ra
 			MetadataHits:         0,
 			SkippedGranules:      plan.Diagnostics.SkippedGranules,
 			ScheduledGranules:    plan.Diagnostics.ScheduledGranules,
-			WorkerCount:          plan.Diagnostics.WorkerCount,
+			WorkerCount:          columnStoreSuiteMetricWorkerCount(plan),
 			PlannerDurationMS:    durationMS(plannerElapsed),
 			ScanDurationMS:       durationMS(scanElapsed),
 			ReduceDurationMS:     durationMS(reduceElapsed),
@@ -967,6 +998,18 @@ func runColumnStoreSuiteQueries(collection *collections.Collection, rows int, ra
 	return queries, parity, firstErr
 }
 
+func columnStoreSuiteMetricWorkerCount(plan collections.ColumnQueryPlan) int {
+	if plan.Diagnostics.WorkerCount > 0 {
+		return plan.Diagnostics.WorkerCount
+	}
+	switch plan.Kind {
+	case collections.ColumnQueryPlanRowStoreBaseline, collections.ColumnQueryPlanBTreeIndexBaseline:
+		return 1
+	default:
+		return 0
+	}
+}
+
 func columnStoreSuitePlanRequest(name string, rows int, forceKind collections.ColumnQueryPlanKind) collections.ColumnQueryPlanRequest {
 	return collections.ColumnQueryPlanRequest{
 		Name:                  name,
@@ -979,10 +1022,13 @@ func columnStoreSuitePlanRequest(name string, rows int, forceKind collections.Co
 			// M11B deliberately has no physical column assets yet; this keeps
 			// recovery-authoritative physical planner gates unreachable until
 			// M11B/M11C wire real assets.
+			SerialColumnScan:       true,
+			AggregateMetadata:      true,
+			ParallelColumnScan:     true,
 			PhysicalAssetCount:     0,
-			PartCount:              0,
-			GranuleCount:           0,
-			MaxParallelWorkers:     1,
+			PartCount:              2,
+			GranuleCount:           2,
+			MaxParallelWorkers:     2,
 			PlannerCandidateBudget: 5,
 		},
 	}
@@ -1068,16 +1114,18 @@ func scanColumnStoreSuiteEventsByIndex(collection *collections.Collection, rows 
 	// The M11B B-tree baseline intentionally performs a full ordered pass over
 	// the planner-selected secondary index for parity. The selected index affects
 	// the secondary structure traversed and write-amplification accounting, not
-	// read selectivity; range pushdown is deferred to M11C. The fixture expects
-	// one indexed row entry per document, so rows+1 is a sentinel limit:
-	// materialized != rows catches an exact sentinel hit, while truncated catches
-	// entries beyond the sentinel.
+	// read selectivity; range pushdown is deferred to M11C. The collection index
+	// implementation emits one secondary entry per document for these scalar
+	// fields, so rows+1 is a sentinel limit: materialized != rows catches an
+	// exact sentinel hit, while truncated catches entries beyond the sentinel.
 	truncated, err := collection.ScanBorrowedDocumentsByIndexRange(indexName, collections.IndexRangeOptions{
 		Lower: collections.IndexRangeBound{Unbounded: true},
 		Upper: collections.IndexRangeBound{Unbounded: true},
 		Limit: rows + 1,
 	}, func(record collections.BorrowedDocumentRecord) (bool, error) {
 		var event columnStoreDecodedEvent
+		// The decoded event must remain value-owned; do not add fields that
+		// retain slices backed by BorrowedDocumentRecord.Document.
 		if err := json.Unmarshal(record.Document, &event); err != nil {
 			return false, err
 		}
@@ -1090,7 +1138,7 @@ func scanColumnStoreSuiteEventsByIndex(collection *collections.Collection, rows 
 		return nil, 0, 0, fmt.Errorf("column_store: scan B-tree index %s for %s: %w", indexName, queryName, err)
 	}
 	if truncated {
-		return nil, 0, 0, fmt.Errorf("column_store: B-tree index scan exceeded expected row count: materialized %d rows with sentinel limit %d; fixture expects one index entry per document", materialized, rows+1)
+		return nil, 0, 0, fmt.Errorf("column_store: B-tree index scan exceeded expected row count: materialized %d rows with sentinel limit %d; scalar index should emit one secondary entry per document", materialized, rows+1)
 	}
 	if materialized != rows {
 		return nil, 0, 0, fmt.Errorf("column_store: B-tree index scan materialized %d rows, want %d", materialized, rows)
@@ -1544,6 +1592,24 @@ func columnStoreBenchRun(baseCfg BenchConfig, profile, dataDir string, report co
 	}
 }
 
+func columnStoreSuitePruneMissingRuntimeDeltaArtifacts(paths columnStoreArtifactPaths) columnStoreArtifactPaths {
+	paths.BlockDeltaProfile = columnStoreExistingOptionalArtifactPath(paths.BlockDeltaProfile)
+	paths.MutexDeltaProfile = columnStoreExistingOptionalArtifactPath(paths.MutexDeltaProfile)
+	return paths
+}
+
+func columnStoreExistingOptionalArtifactPath(path string) string {
+	if strings.TrimSpace(path) == "" {
+		return ""
+	}
+	if _, err := os.Stat(path); err == nil {
+		return path
+	} else if errors.Is(err, os.ErrNotExist) {
+		return ""
+	}
+	return path
+}
+
 func writeColumnStoreSuiteArtifacts(dir, executionPath string, report columnStoreSuiteReport, md string, run BenchRun) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("column_store: create profile dir: %w", err)
@@ -1552,17 +1618,31 @@ func writeColumnStoreSuiteArtifacts(dir, executionPath string, report columnStor
 	if err != nil {
 		return fmt.Errorf("column_store: marshal report: %w", err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "column_store_results.json"), js, 0o644); err != nil {
+	if err := writeColumnStoreSuiteArtifactFile(columnStoreSuiteArtifactPath(report.Artifacts.ColumnJSON, filepath.Join(dir, "column_store_results.json")), js); err != nil {
 		return fmt.Errorf("column_store: write json: %w", err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "column_store_results.md"), []byte(md), 0o644); err != nil {
+	if err := writeColumnStoreSuiteArtifactFile(columnStoreSuiteArtifactPath(report.Artifacts.ColumnMarkdown, filepath.Join(dir, "column_store_results.md")), []byte(md)); err != nil {
 		return fmt.Errorf("column_store: write markdown: %w", err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "column_store_results.html"), []byte(renderColumnStoreSuiteHTML(report)), 0o644); err != nil {
+	if err := writeColumnStoreSuiteArtifactFile(columnStoreSuiteArtifactPath(report.Artifacts.ColumnHTML, filepath.Join(dir, "column_store_results.html")), []byte(renderColumnStoreSuiteHTML(report))); err != nil {
 		return fmt.Errorf("column_store: write html: %w", err)
 	}
 	if err := writeBenchprofArtifacts(dir, strings.TrimSpace(executionPath), []BenchRun{run}); err != nil {
 		return fmt.Errorf("column_store: write benchprof artifacts: %w", err)
 	}
 	return nil
+}
+
+func columnStoreSuiteArtifactPath(recorded, fallback string) string {
+	if strings.TrimSpace(recorded) != "" {
+		return recorded
+	}
+	return fallback
+}
+
+func writeColumnStoreSuiteArtifactFile(path string, data []byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o644)
 }
