@@ -145,8 +145,12 @@ func BenchmarkColumnStoreCommandWALReplayM10C(b *testing.B) {
 					}
 					assertColumnManifestStateNoReopenM10C(b, collection, uint64(frames), wantAppliedLSN)
 				}
+				b.StopTimer()
 				if err := backend.Close(); err != nil {
 					b.Fatalf("Close replay DB: %v", err)
+				}
+				if i+1 < b.N {
+					b.StartTimer()
 				}
 			}
 
