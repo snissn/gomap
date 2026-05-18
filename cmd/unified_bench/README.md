@@ -240,6 +240,7 @@ The suite writes:
 - `column_store_results.json`, `column_store_results.md`, `column_store_results.html`
 - `benchprof_results.json`, `benchprof_results.md`
 - `insights.md`, `insights.json`, `insights.html`
+- configured runtime profiles, including `cpu_column_store_treedb_column_store.pprof`, `allocs_column_store_treedb_column_store.pprof`, `checkpoint_cpu_checkpoint_column_store_treedb_column_store.pprof`, `block.pprof`, `mutex.pprof`, `trace.out`, and the query-phase delta `block_column_store_treedb_column_store.pprof` / `mutex_column_store_treedb_column_store.pprof` when those profile classes are enabled
 
 PR descriptions for column-store milestones should paste the command, row count,
 profile, forced path, q1-q5/q5_metadata rows/sec, MiB/sec, ns/row,

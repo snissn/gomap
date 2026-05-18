@@ -193,6 +193,10 @@ func TestColumnStoreActiveManifestFailsClosedOnIdentityMismatch(t *testing.T) {
 func TestColumnStoreActiveManifestFailsClosedOnInvalidRootRecordM10C(t *testing.T) {
 	identity := &ColumnManifestIdentity{Generation: 42, Version: 1, Checksum: 0xfeedbeef}
 	valid := encodeColumnManifestIdentityRecord(*identity)
+	if len(valid) < 6 {
+		t.Fatalf("encoded identity record length=%d, want at least 6 bytes for corruption cases", len(valid))
+	}
+	shortRecord := valid[:len(valid)-1]
 	badMagic := append([]byte(nil), valid...)
 	binary.BigEndian.PutUint32(badMagic[0:4], 0xdeadbeef)
 	unsupportedRecordVersion := append([]byte(nil), valid...)
@@ -205,7 +209,7 @@ func TestColumnStoreActiveManifestFailsClosedOnInvalidRootRecordM10C(t *testing.
 		want          string
 	}{
 		{name: "missing identity record", want: "missing identity record"},
-		{name: "short identity record", includeRecord: true, record: valid[:8], want: "malformed identity record length"},
+		{name: "short identity record", includeRecord: true, record: shortRecord, want: "malformed identity record length"},
 		{name: "bad identity magic", includeRecord: true, record: badMagic, want: "bad identity magic"},
 		{name: "unsupported identity record version", includeRecord: true, record: unsupportedRecordVersion, want: "unsupported identity version"},
 	}

@@ -11,6 +11,9 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"runtime"
+	"runtime/pprof"
+	"runtime/trace"
 	"sort"
 	"strings"
 	"time"
@@ -25,11 +28,27 @@ const (
 	columnStorePathSerialColumnScan   = string(collections.ColumnQueryPlanSerialColumnScan)
 	columnStorePathAggregateMetadata  = string(collections.ColumnQueryPlanAggregateMetadata)
 	columnStorePathParallelColumnScan = string(collections.ColumnQueryPlanParallelColumnScan)
+	columnStoreSuiteBenchTestName     = "column_store"
+	columnStoreSuiteBenchDBName       = "treedb_column_store"
+	columnStoreSuiteBenchDisplayName  = "TreeDB Column Store"
 )
 
 var (
 	columnStoreSuitePathArg    = flag.String("column-store-path", columnStorePathRowStoreBaseline, "Forced column-store execution label for -suite column_store (row_store_baseline, b_tree_index_baseline; physical column labels fail closed until implemented)")
 	columnStoreSuiteFixtureArg = flag.String("column-store-fixture", "synthetic", "Fixture for -suite column_store (synthetic; JSONBENCH_DATA mode is reserved for the large local gate)")
+
+	columnStoreSuiteSupportedForcedPaths = []string{
+		columnStorePathRowStoreBaseline,
+		columnStorePathBTreeIndexBaseline,
+	}
+	columnStoreSuiteUnsupportedForcedPaths = []string{
+		columnStorePathSerialColumnScan,
+		columnStorePathAggregateMetadata,
+		columnStorePathParallelColumnScan,
+	}
+	columnStoreSuiteManifestControlFiles = []string{
+		"vlog_ref_counts.meta",
+	}
 )
 
 type columnStoreSuiteOptions struct {
@@ -109,14 +128,15 @@ type columnStoreParity struct {
 }
 
 type columnStoreByteAccounting struct {
-	SourceDocumentBytes       int64 `json:"source_document_bytes"`
-	RetainedPayloadBytes      int64 `json:"retained_payload_bytes"`
-	ColumnAssetBytes          int64 `json:"column_asset_bytes"`
-	ManifestControlBytes      int64 `json:"manifest_control_bytes"`
-	CommandWALBytes           int64 `json:"command_wal_bytes"`
-	TotalReconstructableBytes int64 `json:"total_reconstructable_bytes"`
-	DBTotalBytes              int64 `json:"db_total_bytes"`
-	DBTotalFiles              int   `json:"db_total_files"`
+	SourceDocumentBytes       int64    `json:"source_document_bytes"`
+	RetainedPayloadBytes      int64    `json:"retained_payload_bytes"`
+	ColumnAssetBytes          int64    `json:"column_asset_bytes"`
+	ManifestControlBytes      int64    `json:"manifest_control_bytes"`
+	ManifestControlMissing    []string `json:"manifest_control_missing,omitempty"`
+	CommandWALBytes           int64    `json:"command_wal_bytes"`
+	TotalReconstructableBytes int64    `json:"total_reconstructable_bytes"`
+	DBTotalBytes              int64    `json:"db_total_bytes"`
+	DBTotalFiles              int      `json:"db_total_files"`
 }
 
 type columnStoreManifestMetric struct {
@@ -128,14 +148,22 @@ type columnStoreManifestMetric struct {
 }
 
 type columnStoreArtifactPaths struct {
-	ColumnJSON        string `json:"column_json,omitempty"`
-	ColumnMarkdown    string `json:"column_markdown,omitempty"`
-	ColumnHTML        string `json:"column_html,omitempty"`
-	BenchprofJSON     string `json:"benchprof_json,omitempty"`
-	BenchprofMarkdown string `json:"benchprof_markdown,omitempty"`
-	InsightsMarkdown  string `json:"insights_markdown,omitempty"`
-	InsightsJSON      string `json:"insights_json,omitempty"`
-	InsightsHTML      string `json:"insights_html,omitempty"`
+	ColumnJSON           string `json:"column_json,omitempty"`
+	ColumnMarkdown       string `json:"column_markdown,omitempty"`
+	ColumnHTML           string `json:"column_html,omitempty"`
+	BenchprofJSON        string `json:"benchprof_json,omitempty"`
+	BenchprofMarkdown    string `json:"benchprof_markdown,omitempty"`
+	InsightsMarkdown     string `json:"insights_markdown,omitempty"`
+	InsightsJSON         string `json:"insights_json,omitempty"`
+	InsightsHTML         string `json:"insights_html,omitempty"`
+	CPUProfile           string `json:"cpu_profile,omitempty"`
+	AllocsProfile        string `json:"allocs_profile,omitempty"`
+	CheckpointCPUProfile string `json:"checkpoint_cpu_profile,omitempty"`
+	BlockProfile         string `json:"block_profile,omitempty"`
+	MutexProfile         string `json:"mutex_profile,omitempty"`
+	TraceProfile         string `json:"trace_profile,omitempty"`
+	BlockDeltaProfile    string `json:"block_delta_profile,omitempty"`
+	MutexDeltaProfile    string `json:"mutex_delta_profile,omitempty"`
 }
 
 type columnStoreFixtureEvent struct {
@@ -184,14 +212,24 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 	if err := validateColumnStoreSuiteForcedPath(forcedPath); err != nil {
 		return "", err
 	}
-	if !columnStoreSuiteDBsIncludeTreeDB(baseCfg.DBsArg) {
-		return "", fmt.Errorf("column_store: native suite only supports TreeDB; got -dbs=%q", baseCfg.DBsArg)
+	if err := validateColumnStoreSuiteDBSelection(baseCfg.DBsArg, baseCfg.DBsExcludeArg); err != nil {
+		return "", err
 	}
 	if strings.TrimSpace(opts.ProfileDir) != "" {
 		if err := validateBenchprofExecutionPath(strings.TrimSpace(opts.ExecutionPath)); err != nil {
 			return "", err
 		}
 	}
+	finishRuntimeProfiles, err := startColumnStoreSuiteRuntimeProfiles(baseCfg)
+	if err != nil {
+		return "", err
+	}
+	runtimeProfilesActive := true
+	defer func() {
+		if runtimeProfilesActive {
+			_ = finishRuntimeProfiles()
+		}
+	}()
 
 	rows := baseCfg.Keys
 	if rows <= 0 {
@@ -245,12 +283,30 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 		return "", err
 	}
 	stages = append(stages, columnStoreStage("ingest_insert_batch", start, rows, sourceBytes))
-	commandWALBytesBeforeCheckpoint, _ := columnStoreSuiteDirUsage(backenddb.WALDirPath(dataDir))
+	commandWALBytesBeforeCheckpoint, _, err := columnStoreSuiteDirUsage(backenddb.WALDirPath(dataDir))
+	if err != nil {
+		_ = db.Close()
+		return "", fmt.Errorf("column_store: command WAL byte accounting: %w", err)
+	}
+
+	var checkpointCPUFile *os.File
+	if shouldCheckpointCPUProfile(baseCfg, columnStoreSuiteBenchTestName) {
+		checkpointCPUFile, err = startCheckpointCPUProfile(baseCfg, columnStoreSuiteBenchTestName, columnStoreSuiteBenchDBName)
+		if err != nil {
+			_ = db.Close()
+			return "", fmt.Errorf("column_store: checkpoint profiling: %w", err)
+		}
+	}
 
 	start = time.Now()
-	if err := db.Checkpoint(); err != nil {
+	checkpointErr := db.Checkpoint()
+	if checkpointCPUFile != nil {
+		stopCPUProfileFn()
+		_ = checkpointCPUFile.Close()
+	}
+	if checkpointErr != nil {
 		_ = db.Close()
-		return "", fmt.Errorf("column_store: checkpoint: %w", err)
+		return "", fmt.Errorf("column_store: checkpoint: %w", checkpointErr)
 	}
 	checkpointDuration := time.Since(start)
 	stages = append(stages, columnStoreStageFromDuration("checkpoint", checkpointDuration, rows, sourceBytes))
@@ -276,14 +332,30 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 		return "", errors.New("column_store: reopened collection has no column-store manifest identity")
 	}
 
-	rawHashes := columnStoreReferenceHashes(fixtureEvents)
+	rawHashes, err := columnStoreReferenceHashes(fixtureEvents)
+	if err != nil {
+		return "", err
+	}
 	if corrupt := strings.TrimSpace(opts.CorruptReferenceForTest); corrupt != "" {
 		rawHashes[corrupt]++
 	}
-	queries, parity, parityErr := runColumnStoreSuiteQueries(collection, rows, rawHashes, forcedPath)
+	queries, parity, parityErr, err := runColumnStoreSuiteQueriesProfiled(baseCfg, collection, rows, rawHashes, forcedPath)
+	if err != nil {
+		return "", err
+	}
+	if err := finishRuntimeProfiles(); err != nil {
+		return "", err
+	}
+	runtimeProfilesActive = false
 
-	totalBytes, totalFiles := columnStoreSuiteDirUsage(dataDir)
-	manifestControlBytes := int64(28 + len("events/column/manifest"))
+	totalBytes, totalFiles, err := columnStoreSuiteDirUsage(dataDir)
+	if err != nil {
+		return "", fmt.Errorf("column_store: DB byte accounting: %w", err)
+	}
+	manifestControlBytes, manifestControlMissing, err := columnStoreSuiteManifestControlUsage(dataDir)
+	if err != nil {
+		return "", fmt.Errorf("column_store: manifest/control byte accounting: %w", err)
+	}
 	report := columnStoreSuiteReport{
 		GeneratedAt:            time.Now().UTC().Format(time.RFC3339),
 		Suite:                  "column_store",
@@ -295,8 +367,8 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 		BatchSize:              batchSize,
 		Seed:                   seed,
 		CacheLabel:             "reopened_warm_process",
-		SupportedForcedPaths:   []string{columnStorePathRowStoreBaseline, columnStorePathBTreeIndexBaseline},
-		UnsupportedForcedPaths: []string{columnStorePathSerialColumnScan, columnStorePathAggregateMetadata, columnStorePathParallelColumnScan},
+		SupportedForcedPaths:   cloneStringSlice(columnStoreSuiteSupportedForcedPaths),
+		UnsupportedForcedPaths: cloneStringSlice(columnStoreSuiteUnsupportedForcedPaths),
 		Stages:                 stages,
 		Queries:                queries,
 		Parity:                 parity,
@@ -305,6 +377,7 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 			RetainedPayloadBytes:      sourceBytes,
 			ColumnAssetBytes:          0,
 			ManifestControlBytes:      manifestControlBytes,
+			ManifestControlMissing:    manifestControlMissing,
 			CommandWALBytes:           commandWALBytesBeforeCheckpoint,
 			TotalReconstructableBytes: sourceBytes + manifestControlBytes,
 			DBTotalBytes:              totalBytes,
@@ -326,22 +399,15 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 	md := renderColumnStoreSuiteMarkdown(report)
 	run := columnStoreBenchRun(baseCfg, profile, dataDir, report, db.Stats(), checkpointDuration)
 	if strings.TrimSpace(opts.ProfileDir) != "" {
-		report.Artifacts = columnStoreArtifactPaths{
-			ColumnJSON:        filepath.Join(opts.ProfileDir, "column_store_results.json"),
-			ColumnMarkdown:    filepath.Join(opts.ProfileDir, "column_store_results.md"),
-			ColumnHTML:        filepath.Join(opts.ProfileDir, "column_store_results.html"),
-			BenchprofJSON:     filepath.Join(opts.ProfileDir, "benchprof_results.json"),
-			BenchprofMarkdown: filepath.Join(opts.ProfileDir, "benchprof_results.md"),
-			InsightsMarkdown:  filepath.Join(opts.ProfileDir, "insights.md"),
-			InsightsJSON:      filepath.Join(opts.ProfileDir, "insights.json"),
-			InsightsHTML:      filepath.Join(opts.ProfileDir, "insights.html"),
-		}
+		report.Artifacts = columnStoreArtifactPathsForProfileDir(opts.ProfileDir, baseCfg)
 		md = renderColumnStoreSuiteMarkdown(report)
 		if err := writeColumnStoreSuiteArtifacts(opts.ProfileDir, opts.ExecutionPath, report, md, run); err != nil {
 			return "", err
 		}
 		if opts.RunBenchprof {
-			runBenchprof(opts.ProfileDir)
+			if err := runBenchprofStrict(opts.ProfileDir); err != nil {
+				return "", err
+			}
 		}
 	}
 	if parityErr != nil {
@@ -380,26 +446,92 @@ func normalizeColumnStoreSuitePath(path string) string {
 }
 
 func validateColumnStoreSuiteForcedPath(path string) error {
-	switch path {
-	case columnStorePathRowStoreBaseline, columnStorePathBTreeIndexBaseline, columnStorePathSerialColumnScan, columnStorePathAggregateMetadata, columnStorePathParallelColumnScan:
+	if columnStoreSuitePathListed(path, columnStoreSuiteSupportedForcedPaths) {
 		return nil
-	default:
-		return fmt.Errorf("column_store: unknown forced path %q", path)
 	}
+	if columnStoreSuitePathListed(path, columnStoreSuiteUnsupportedForcedPaths) {
+		// Physical labels are accepted here so the planner can return the
+		// capability-specific fail-closed reason.
+		return nil
+	}
+	return fmt.Errorf("column_store: unknown forced path %q; supported=%s fail_closed=%s", path, columnStoreSuitePathList(columnStoreSuiteSupportedForcedPaths), columnStoreSuitePathList(columnStoreSuiteUnsupportedForcedPaths))
 }
 
-func columnStoreSuiteDBsIncludeTreeDB(dbsArg string) bool {
-	dbs := parseList(dbsArg)
-	if len(dbs) == 0 {
-		return true
-	}
-	for _, db := range dbs {
-		switch strings.ToLower(strings.TrimSpace(db)) {
-		case "", "all", "treedb":
+func columnStoreSuitePathListed(path string, paths []string) bool {
+	for _, candidate := range paths {
+		if path == candidate {
 			return true
 		}
 	}
 	return false
+}
+
+func columnStoreArtifactPathsForProfileDir(profileDir string, cfg BenchConfig) columnStoreArtifactPaths {
+	paths := columnStoreArtifactPaths{
+		ColumnJSON:        filepath.Join(profileDir, "column_store_results.json"),
+		ColumnMarkdown:    filepath.Join(profileDir, "column_store_results.md"),
+		ColumnHTML:        filepath.Join(profileDir, "column_store_results.html"),
+		BenchprofJSON:     filepath.Join(profileDir, "benchprof_results.json"),
+		BenchprofMarkdown: filepath.Join(profileDir, "benchprof_results.md"),
+		InsightsMarkdown:  filepath.Join(profileDir, "insights.md"),
+		InsightsJSON:      filepath.Join(profileDir, "insights.json"),
+		InsightsHTML:      filepath.Join(profileDir, "insights.html"),
+	}
+	if shouldCPUProfile(cfg, columnStoreSuiteBenchTestName) {
+		paths.CPUProfile = fmt.Sprintf("%s_%s_%s.pprof", cfg.CPUProfile, columnStoreSuiteBenchTestName, columnStoreSuiteBenchDBName)
+	}
+	if shouldAllocsProfile(cfg, columnStoreSuiteBenchTestName) {
+		paths.AllocsProfile = fmt.Sprintf("%s_%s_%s.pprof", cfg.AllocsProfile, columnStoreSuiteBenchTestName, columnStoreSuiteBenchDBName)
+	}
+	if shouldCheckpointCPUProfile(cfg, columnStoreSuiteBenchTestName) {
+		paths.CheckpointCPUProfile = fmt.Sprintf("%s_checkpoint_%s_%s.pprof", cfg.CheckpointCPUProfile, sanitizeProfileSegment(columnStoreSuiteBenchTestName), sanitizeProfileSegment(columnStoreSuiteBenchDBName))
+	}
+	if strings.TrimSpace(cfg.BlockProfile) != "" {
+		paths.BlockProfile = cfg.BlockProfile
+		paths.BlockDeltaProfile = contentionProfilePath(cfg.BlockProfile, "block", columnStoreSuiteBenchTestName, columnStoreSuiteBenchDBName)
+	}
+	if strings.TrimSpace(cfg.MutexProfile) != "" {
+		paths.MutexProfile = cfg.MutexProfile
+		paths.MutexDeltaProfile = contentionProfilePath(cfg.MutexProfile, "mutex", columnStoreSuiteBenchTestName, columnStoreSuiteBenchDBName)
+	}
+	if strings.TrimSpace(cfg.TraceProfile) != "" {
+		paths.TraceProfile = cfg.TraceProfile
+	}
+	return paths
+}
+
+func validateColumnStoreSuiteDBSelection(dbsArg, excludeArg string) error {
+	for _, db := range parseList(excludeArg) {
+		switch strings.ToLower(strings.TrimSpace(db)) {
+		case "", "none":
+			continue
+		case "all", "treedb":
+			return fmt.Errorf("column_store: native suite requires TreeDB but -dbs-exclude=%q excludes it", excludeArg)
+		}
+	}
+
+	dbs := parseList(dbsArg)
+	hasTreeDB := false
+	for _, db := range dbs {
+		switch strings.ToLower(strings.TrimSpace(db)) {
+		case "", "all", "treedb":
+			hasTreeDB = true
+		default:
+			return fmt.Errorf("column_store: native suite only supports TreeDB; got -dbs=%q", dbsArg)
+		}
+	}
+	if !hasTreeDB {
+		return fmt.Errorf("column_store: native suite requires TreeDB; got -dbs=%q", dbsArg)
+	}
+	return nil
+}
+
+func columnStoreSuitePathList(paths []string) string {
+	return strings.Join(paths, ",")
+}
+
+func cloneStringSlice(in []string) []string {
+	return append([]string(nil), in...)
 }
 
 func buildColumnStoreSyntheticFixture(rows int, seed int64) ([]columnStoreFixtureEvent, int64) {
@@ -491,20 +623,233 @@ func insertColumnStoreFixture(collection *collections.Collection, events []colum
 	return nil
 }
 
-func columnStoreReferenceHashes(events []columnStoreFixtureEvent) map[string]uint64 {
+func columnStoreReferenceHashes(events []columnStoreFixtureEvent) (map[string]uint64, error) {
 	decoded := make([]columnStoreDecodedEvent, len(events))
 	for i := range events {
 		decoded[i] = columnStoreDecodedEvent{TimeUS: events[i].TimeUS, Kind: events[i].Kind, Did: events[i].Did}
 	}
 	out := make(map[string]uint64)
 	for _, name := range columnStoreQueryNames() {
-		hash, _ := columnStoreQueryHash(name, decoded)
+		hash, _, err := columnStoreQueryHash(name, decoded)
+		if err != nil {
+			return nil, err
+		}
 		out[name] = hash
 	}
-	return out
+	return out, nil
+}
+
+func startColumnStoreSuiteRuntimeProfiles(cfg BenchConfig) (func() error, error) {
+	var cleanups []func() error
+	finish := func() error {
+		var out error
+		for i := len(cleanups) - 1; i >= 0; i-- {
+			out = errors.Join(out, cleanups[i]())
+		}
+		cleanups = nil
+		return out
+	}
+
+	if cfg.AllocsProfile != "" {
+		rate := cfg.AllocsProfileRate
+		if rate <= 0 {
+			rate = 512 * 1024
+		}
+		prevRate := runtime.MemProfileRate
+		runtime.MemProfileRate = rate
+		cleanups = append(cleanups, func() error {
+			runtime.MemProfileRate = prevRate
+			return nil
+		})
+	}
+
+	if cfg.BlockProfile != "" {
+		rate := cfg.BlockProfileRate
+		if rate <= 0 {
+			rate = 1
+		}
+		f, err := os.Create(cfg.BlockProfile)
+		if err != nil {
+			_ = finish()
+			return nil, fmt.Errorf("column_store: blockprofile: %w", err)
+		}
+		runtime.SetBlockProfileRate(rate)
+		cleanups = append(cleanups, func() error {
+			defer runtime.SetBlockProfileRate(0)
+			defer f.Close()
+			prof := pprof.Lookup("block")
+			if prof == nil {
+				return fmt.Errorf("block profile unavailable")
+			}
+			return prof.WriteTo(f, 0)
+		})
+	}
+
+	if cfg.MutexProfile != "" {
+		frac := cfg.MutexProfileFraction
+		if frac <= 0 {
+			frac = 1
+		}
+		f, err := os.Create(cfg.MutexProfile)
+		if err != nil {
+			_ = finish()
+			return nil, fmt.Errorf("column_store: mutexprofile: %w", err)
+		}
+		prevFrac := runtime.SetMutexProfileFraction(frac)
+		cleanups = append(cleanups, func() error {
+			defer runtime.SetMutexProfileFraction(prevFrac)
+			defer f.Close()
+			prof := pprof.Lookup("mutex")
+			if prof == nil {
+				return fmt.Errorf("mutex profile unavailable")
+			}
+			return prof.WriteTo(f, 0)
+		})
+	}
+
+	if cfg.TraceProfile != "" {
+		f, err := os.Create(cfg.TraceProfile)
+		if err != nil {
+			_ = finish()
+			return nil, fmt.Errorf("column_store: trace: %w", err)
+		}
+		if err := trace.Start(f); err != nil {
+			_ = f.Close()
+			_ = finish()
+			return nil, fmt.Errorf("column_store: trace start: %w", err)
+		}
+		cleanups = append(cleanups, func() error {
+			trace.Stop()
+			return f.Close()
+		})
+	}
+
+	return finish, nil
+}
+
+func runColumnStoreSuiteQueriesProfiled(cfg BenchConfig, collection *collections.Collection, rows int, rawHashes map[string]uint64, path string) ([]columnStoreQueryMetric, map[string]columnStoreParity, error, error) {
+	var cpuFile *os.File
+	if shouldCPUProfile(cfg, columnStoreSuiteBenchTestName) {
+		profilePath := fmt.Sprintf("%s_%s_%s.pprof", cfg.CPUProfile, columnStoreSuiteBenchTestName, columnStoreSuiteBenchDBName)
+		f, err := os.Create(profilePath)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("column_store: cpuprofile %s: %w", profilePath, err)
+		}
+		cpuFile = f
+		if err := pprof.StartCPUProfile(cpuFile); err != nil {
+			_ = cpuFile.Close()
+			return nil, nil, nil, fmt.Errorf("column_store: cpuprofile start %s: %w", profilePath, err)
+		}
+	}
+
+	allocBasePath := ""
+	var err error
+	if shouldAllocsProfile(cfg, columnStoreSuiteBenchTestName) {
+		allocBasePath, err = writeAllocsSnapshotTempFn("unified_bench_column_store_allocs_base")
+		if err != nil {
+			if cpuFile != nil {
+				stopCPUProfileFn()
+				_ = cpuFile.Close()
+			}
+			return nil, nil, nil, fmt.Errorf("column_store: allocsprofile baseline: %w", err)
+		}
+	}
+	blockBasePath := ""
+	if cfg.BlockProfile != "" {
+		blockBasePath, err = writeRuntimeProfileSnapshotTempFn("unified_bench_column_store_block_base", "block")
+		if err != nil {
+			if cpuFile != nil {
+				stopCPUProfileFn()
+				_ = cpuFile.Close()
+			}
+			_ = os.Remove(allocBasePath)
+			return nil, nil, nil, fmt.Errorf("column_store: blockprofile baseline: %w", err)
+		}
+	}
+	mutexBasePath := ""
+	if cfg.MutexProfile != "" {
+		mutexBasePath, err = writeRuntimeProfileSnapshotTempFn("unified_bench_column_store_mutex_base", "mutex")
+		if err != nil {
+			if cpuFile != nil {
+				stopCPUProfileFn()
+				_ = cpuFile.Close()
+			}
+			_ = os.Remove(allocBasePath)
+			_ = os.Remove(blockBasePath)
+			return nil, nil, nil, fmt.Errorf("column_store: mutexprofile baseline: %w", err)
+		}
+	}
+
+	queries, parity, runErr := runColumnStoreSuiteQueries(collection, rows, rawHashes, path)
+
+	if cpuFile != nil {
+		stopCPUProfileFn()
+		_ = cpuFile.Close()
+	}
+	if queries == nil {
+		_ = os.Remove(allocBasePath)
+		_ = os.Remove(blockBasePath)
+		_ = os.Remove(mutexBasePath)
+		return queries, parity, runErr, nil
+	}
+
+	if allocBasePath != "" {
+		allocAfterPath, snapErr := writeAllocsSnapshotTempFn("unified_bench_column_store_allocs_after")
+		if snapErr != nil {
+			_ = os.Remove(allocBasePath)
+			_ = os.Remove(blockBasePath)
+			_ = os.Remove(mutexBasePath)
+			return nil, nil, nil, fmt.Errorf("column_store: allocsprofile snapshot: %w", snapErr)
+		}
+		allocPath := fmt.Sprintf("%s_%s_%s.pprof", cfg.AllocsProfile, columnStoreSuiteBenchTestName, columnStoreSuiteBenchDBName)
+		deltaErr := writeAllocsDeltaProfileFn(allocBasePath, allocAfterPath, allocPath)
+		_ = os.Remove(allocBasePath)
+		_ = os.Remove(allocAfterPath)
+		if deltaErr != nil {
+			_ = os.Remove(blockBasePath)
+			_ = os.Remove(mutexBasePath)
+			return nil, nil, nil, fmt.Errorf("column_store: allocsprofile %s: %w", allocPath, deltaErr)
+		}
+	}
+	if blockBasePath != "" {
+		blockAfterPath, snapErr := writeRuntimeProfileSnapshotTempFn("unified_bench_column_store_block_after", "block")
+		if snapErr != nil {
+			_ = os.Remove(blockBasePath)
+			_ = os.Remove(mutexBasePath)
+			return nil, nil, nil, fmt.Errorf("column_store: blockprofile snapshot: %w", snapErr)
+		}
+		blockPath := contentionProfilePath(cfg.BlockProfile, "block", columnStoreSuiteBenchTestName, columnStoreSuiteBenchDBName)
+		_, deltaErr := writeRuntimeProfileDeltaProfileFn(blockBasePath, blockAfterPath, blockPath)
+		_ = os.Remove(blockBasePath)
+		_ = os.Remove(blockAfterPath)
+		if deltaErr != nil {
+			_ = os.Remove(mutexBasePath)
+			return nil, nil, nil, fmt.Errorf("column_store: blockprofile %s: %w", blockPath, deltaErr)
+		}
+	}
+	if mutexBasePath != "" {
+		mutexAfterPath, snapErr := writeRuntimeProfileSnapshotTempFn("unified_bench_column_store_mutex_after", "mutex")
+		if snapErr != nil {
+			_ = os.Remove(mutexBasePath)
+			return nil, nil, nil, fmt.Errorf("column_store: mutexprofile snapshot: %w", snapErr)
+		}
+		mutexPath := contentionProfilePath(cfg.MutexProfile, "mutex", columnStoreSuiteBenchTestName, columnStoreSuiteBenchDBName)
+		_, deltaErr := writeRuntimeProfileDeltaProfileFn(mutexBasePath, mutexAfterPath, mutexPath)
+		_ = os.Remove(mutexBasePath)
+		_ = os.Remove(mutexAfterPath)
+		if deltaErr != nil {
+			return nil, nil, nil, fmt.Errorf("column_store: mutexprofile %s: %w", mutexPath, deltaErr)
+		}
+	}
+
+	return queries, parity, runErr, nil
 }
 
 func runColumnStoreSuiteQueries(collection *collections.Collection, rows int, rawHashes map[string]uint64, path string) ([]columnStoreQueryMetric, map[string]columnStoreParity, error) {
+	path = normalizeColumnStoreSuitePath(path)
+	if err := validateColumnStoreSuiteForcedPath(path); err != nil {
+		return nil, nil, err
+	}
 	queries := make([]columnStoreQueryMetric, 0, len(columnStoreQueryNames()))
 	parity := make(map[string]columnStoreParity, len(columnStoreQueryNames()))
 	var firstErr error
@@ -516,7 +861,11 @@ func runColumnStoreSuiteQueries(collection *collections.Collection, rows int, ra
 			return nil, nil, err
 		}
 		if !plan.Supported {
-			return nil, nil, fmt.Errorf("column_store: forced path %q unsupported for %s: %w: %s", path, name, collections.ErrColumnQueryPlanUnsupported, plan.Diagnostics.UnsupportedPlanReason)
+			reason := strings.TrimSpace(plan.Diagnostics.UnsupportedPlanReason)
+			if reason == "" {
+				reason = "planner did not report an unsupported reason"
+			}
+			return nil, nil, fmt.Errorf("column_store: forced path %q unsupported for %s: %s (%w)", path, name, reason, collections.ErrColumnQueryPlanUnsupported)
 		}
 
 		scanStart := time.Now()
@@ -525,10 +874,13 @@ func runColumnStoreSuiteQueries(collection *collections.Collection, rows int, ra
 		if err != nil {
 			return nil, nil, err
 		}
-		reduceStart := time.Now()
-		hash, resultCount := columnStoreQueryHash(name, events)
-		reduceElapsed := time.Since(reduceStart)
-		elapsed := plannerElapsed + scanElapsed + reduceElapsed
+		reduceHashStart := time.Now()
+		hash, resultCount, err := columnStoreQueryHash(name, events)
+		if err != nil {
+			return nil, nil, fmt.Errorf("column_store: reduce %s: %w", name, err)
+		}
+		reduceHashElapsed := time.Since(reduceHashStart)
+		elapsed := plannerElapsed + scanElapsed + reduceHashElapsed
 		rawHash := rawHashes[name]
 		pass := rawHash == hash
 		parity[name] = columnStoreParity{Pass: pass, RawHash: rawHash, ProductionHash: hash}
@@ -536,7 +888,9 @@ func runColumnStoreSuiteQueries(collection *collections.Collection, rows int, ra
 			firstErr = fmt.Errorf("column_store: parity mismatch for %s: raw=%016x production=%016x", name, rawHash, hash)
 		}
 		metric := columnStoreQueryMetric{
-			Name:                name,
+			Name: name,
+			// PlanLabel records the executed planner kind after alias
+			// normalization, not necessarily the raw requested path string.
 			PlanLabel:           string(plan.Kind),
 			DurationMS:          durationMS(elapsed),
 			Rows:                rows,
@@ -554,7 +908,7 @@ func runColumnStoreSuiteQueries(collection *collections.Collection, rows int, ra
 			WorkerCount:         plan.Diagnostics.WorkerCount,
 			PlannerDurationMS:   durationMS(plannerElapsed),
 			ScanDurationMS:      durationMS(scanElapsed),
-			ReduceDurationMS:    durationMS(reduceElapsed),
+			ReduceDurationMS:    durationMS(reduceHashElapsed),
 			PlannerCandidates:   plan.Diagnostics.CandidatePlans,
 			PlannerReason:       plan.Diagnostics.Reason,
 			CacheHits:           plan.Diagnostics.DecodedBlockCacheHits,
@@ -573,8 +927,12 @@ func columnStoreSuitePlanRequest(name string, rows int, path string) collections
 		CandidateIndexColumns: columnStoreSuiteQueryIndexCandidates(name),
 		AggregateMetadataName: columnStoreSuiteAggregateMetadataName(name),
 		EstimatedRows:         rows,
-		ForceKind:             collections.ColumnQueryPlanKind(path),
+		// runColumnStoreSuiteQueries validates path before this cast.
+		ForceKind: collections.ColumnQueryPlanKind(path),
 		Capabilities: collections.ColumnQueryPlannerCapabilities{
+			// M11B deliberately has no physical column assets yet; this keeps
+			// recovery-authoritative physical planner gates unreachable until
+			// M11B/M11C wire real assets.
 			PhysicalAssetCount:     0,
 			PartCount:              0,
 			GranuleCount:           0,
@@ -648,6 +1006,12 @@ func scanColumnStoreSuiteEventsByIndex(collection *collections.Collection, rows 
 	events := make([]columnStoreDecodedEvent, 0, rows)
 	var materialized int
 	var bytesRead int64
+	// The M11B B-tree baseline is intentionally a full secondary-index ordered
+	// pass for q1-q5 parity; none of these aggregate queries currently has a
+	// selective predicate that can safely narrow the range. The fixture expects
+	// one indexed row entry per document, so rows+1 is a sentinel limit that
+	// makes duplicate/missing index entries fail closed instead of truncating
+	// silently.
 	truncated, err := collection.ScanBorrowedDocumentsByIndexRange(indexName, collections.IndexRangeOptions{
 		Lower: collections.IndexRangeBound{Unbounded: true},
 		Upper: collections.IndexRangeBound{Unbounded: true},
@@ -666,7 +1030,10 @@ func scanColumnStoreSuiteEventsByIndex(collection *collections.Collection, rows 
 		return nil, 0, 0, fmt.Errorf("column_store: scan B-tree index %s for %s: %w", indexName, queryName, err)
 	}
 	if truncated {
-		return nil, 0, 0, fmt.Errorf("column_store: B-tree index scan truncated at %d rows", rows+1)
+		if materialized <= rows {
+			return nil, 0, 0, fmt.Errorf("column_store: B-tree index scan reported truncation after %d rows with sentinel limit %d; fixture expects one index entry per document", materialized, rows+1)
+		}
+		return nil, 0, 0, fmt.Errorf("column_store: B-tree index scan exceeded expected row count: materialized %d rows with sentinel limit %d; fixture expects one index entry per document", materialized, rows+1)
 	}
 	if materialized != rows {
 		return nil, 0, 0, fmt.Errorf("column_store: B-tree index scan materialized %d rows, want %d", materialized, rows)
@@ -678,25 +1045,30 @@ func columnStoreQueryNames() []string {
 	return []string{"q1", "q2", "q3", "q4a", "q4b", "q5", "q5_metadata"}
 }
 
-func columnStoreQueryHash(name string, events []columnStoreDecodedEvent) (uint64, int) {
-	lines := columnStoreQueryLines(name, events)
+func columnStoreQueryHash(name string, events []columnStoreDecodedEvent) (uint64, int, error) {
+	lines, err := columnStoreQueryLines(name, events)
+	if err != nil {
+		return 0, 0, err
+	}
 	sort.Strings(lines)
 	h := fnv.New64a()
 	for _, line := range lines {
 		_, _ = h.Write([]byte(line))
 		_, _ = h.Write([]byte{0})
 	}
-	return h.Sum64(), len(lines)
+	// ResultCount is the reduced result row count; the parity hash covers the
+	// same reduced rows after deterministic ordering.
+	return h.Sum64(), len(lines), nil
 }
 
-func columnStoreQueryLines(name string, events []columnStoreDecodedEvent) []string {
+func columnStoreQueryLines(name string, events []columnStoreDecodedEvent) ([]string, error) {
 	switch name {
 	case "q1":
 		counts := make(map[string]int)
 		for _, event := range events {
 			counts[event.Kind]++
 		}
-		return formatIntMapLines(name, counts)
+		return formatIntMapLines(name, counts), nil
 	case "q2":
 		distinct := make(map[string]map[string]struct{})
 		for _, event := range events {
@@ -711,14 +1083,14 @@ func columnStoreQueryLines(name string, events []columnStoreDecodedEvent) []stri
 		for kind, set := range distinct {
 			counts[kind] = len(set)
 		}
-		return formatIntMapLines(name, counts)
+		return formatIntMapLines(name, counts), nil
 	case "q3":
 		counts := make(map[string]int)
 		for _, event := range events {
 			hour := (event.TimeUS / 3_600_000_000) % 24
 			counts[fmt.Sprintf("hour_%02d", hour)]++
 		}
-		return formatIntMapLines(name, counts)
+		return formatIntMapLines(name, counts), nil
 	case "q4a":
 		mins := make(map[string]int64)
 		for _, event := range events {
@@ -726,7 +1098,7 @@ func columnStoreQueryLines(name string, events []columnStoreDecodedEvent) []stri
 				mins[event.Did] = event.TimeUS
 			}
 		}
-		return formatInt64MapLines(name, mins)
+		return formatInt64MapLines(name, mins), nil
 	case "q4b":
 		maxs := make(map[string]int64)
 		for _, event := range events {
@@ -734,7 +1106,7 @@ func columnStoreQueryLines(name string, events []columnStoreDecodedEvent) []stri
 				maxs[event.Did] = event.TimeUS
 			}
 		}
-		return formatInt64MapLines(name, maxs)
+		return formatInt64MapLines(name, maxs), nil
 	case "q5", "q5_metadata":
 		type span struct {
 			min int64
@@ -759,9 +1131,9 @@ func columnStoreQueryLines(name string, events []columnStoreDecodedEvent) []stri
 		for did, sp := range spans {
 			lines = append(lines, fmt.Sprintf("%s:%s=%d", name, did, sp.max-sp.min))
 		}
-		return lines
+		return lines, nil
 	default:
-		return nil
+		return nil, fmt.Errorf("unknown column_store query %q", name)
 	}
 }
 
@@ -814,22 +1186,52 @@ func nsPerRow(d time.Duration, rows int) float64 {
 	return float64(d.Nanoseconds()) / float64(rows)
 }
 
-func columnStoreSuiteDirUsage(root string) (int64, int) {
+func columnStoreSuiteDirUsage(root string) (int64, int, error) {
+	root = strings.TrimSpace(root)
+	if root == "" {
+		return 0, 0, fmt.Errorf("empty path")
+	}
 	var bytes int64
 	var files int
-	_ = filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
-		if err != nil || entry == nil || entry.IsDir() {
+	if err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry == nil || entry.IsDir() {
 			return nil
 		}
 		info, statErr := entry.Info()
 		if statErr != nil {
-			return nil
+			return statErr
 		}
 		bytes += info.Size()
 		files++
 		return nil
-	})
-	return bytes, files
+	}); err != nil {
+		return 0, 0, err
+	}
+	return bytes, files, nil
+}
+
+func columnStoreSuiteManifestControlUsage(root string) (int64, []string, error) {
+	var total int64
+	var missing []string
+	for _, rel := range columnStoreSuiteManifestControlFiles {
+		path := filepath.Join(root, rel)
+		info, err := os.Stat(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				missing = append(missing, rel)
+				continue
+			}
+			return 0, nil, fmt.Errorf("%s: %w", rel, err)
+		}
+		if info.IsDir() {
+			return 0, nil, fmt.Errorf("%s is a directory", rel)
+		}
+		total += info.Size()
+	}
+	return total, missing, nil
 }
 
 func renderColumnStoreSuiteMarkdown(report columnStoreSuiteReport) string {
@@ -856,7 +1258,7 @@ func renderColumnStoreSuiteMarkdown(report columnStoreSuiteReport) string {
 	sb.WriteString("\n")
 
 	sb.WriteString("## Query Throughput And Parity\n\n")
-	sb.WriteString("| query | plan | rows/s | MiB/s | ns/row | planner ms | scan ms | reduce ms | workers | scheduled granules | skipped granules | B/read | rows materialized | cache hit/miss | hash parity |\n")
+	sb.WriteString("| query | plan | rows/s | MiB/s | ns/row | planner ms | scan ms | reduce/hash ms | workers | scheduled granules | skipped granules | B/read | rows materialized | cache hit/miss | hash parity |\n")
 	sb.WriteString("|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|\n")
 	for _, q := range report.Queries {
 		parity := "pass"
@@ -873,6 +1275,9 @@ func renderColumnStoreSuiteMarkdown(report columnStoreSuiteReport) string {
 	sb.WriteString(fmt.Sprintf("- retained_payload_bytes: %d\n", report.ByteAccounting.RetainedPayloadBytes))
 	sb.WriteString(fmt.Sprintf("- column_asset_bytes: %d\n", report.ByteAccounting.ColumnAssetBytes))
 	sb.WriteString(fmt.Sprintf("- manifest_control_bytes: %d\n", report.ByteAccounting.ManifestControlBytes))
+	if len(report.ByteAccounting.ManifestControlMissing) != 0 {
+		sb.WriteString(fmt.Sprintf("- manifest_control_missing: `%s`\n", strings.Join(report.ByteAccounting.ManifestControlMissing, "`, `")))
+	}
 	sb.WriteString(fmt.Sprintf("- command_wal_bytes: %d\n", report.ByteAccounting.CommandWALBytes))
 	sb.WriteString(fmt.Sprintf("- total_reconstructable_bytes: %d\n", report.ByteAccounting.TotalReconstructableBytes))
 	sb.WriteString(fmt.Sprintf("- db_total_bytes: %d across %d files\n\n", report.ByteAccounting.DBTotalBytes, report.ByteAccounting.DBTotalFiles))
@@ -889,14 +1294,31 @@ func renderColumnStoreSuiteMarkdown(report columnStoreSuiteReport) string {
 	sb.WriteString(fmt.Sprintf("- fail-closed until physical planner paths exist: `%s`\n", strings.Join(report.UnsupportedForcedPaths, "`, `")))
 	if report.Artifacts.ColumnJSON != "" {
 		sb.WriteString("\n## Artifacts\n\n")
-		sb.WriteString(fmt.Sprintf("- column JSON: `%s`\n", report.Artifacts.ColumnJSON))
-		sb.WriteString(fmt.Sprintf("- column markdown: `%s`\n", report.Artifacts.ColumnMarkdown))
-		sb.WriteString(fmt.Sprintf("- column HTML: `%s`\n", report.Artifacts.ColumnHTML))
-		sb.WriteString(fmt.Sprintf("- benchprof JSON: `%s`\n", report.Artifacts.BenchprofJSON))
-		sb.WriteString(fmt.Sprintf("- benchprof markdown: `%s`\n", report.Artifacts.BenchprofMarkdown))
-		sb.WriteString(fmt.Sprintf("- insights HTML: `%s`\n", report.Artifacts.InsightsHTML))
+		columnStoreWriteArtifactLine(&sb, "column JSON", report.Artifacts.ColumnJSON)
+		columnStoreWriteArtifactLine(&sb, "column markdown", report.Artifacts.ColumnMarkdown)
+		columnStoreWriteArtifactLine(&sb, "column HTML", report.Artifacts.ColumnHTML)
+		columnStoreWriteArtifactLine(&sb, "benchprof JSON", report.Artifacts.BenchprofJSON)
+		columnStoreWriteArtifactLine(&sb, "benchprof markdown", report.Artifacts.BenchprofMarkdown)
+		columnStoreWriteArtifactLine(&sb, "insights markdown", report.Artifacts.InsightsMarkdown)
+		columnStoreWriteArtifactLine(&sb, "insights JSON", report.Artifacts.InsightsJSON)
+		columnStoreWriteArtifactLine(&sb, "insights HTML", report.Artifacts.InsightsHTML)
+		columnStoreWriteArtifactLine(&sb, "CPU profile", report.Artifacts.CPUProfile)
+		columnStoreWriteArtifactLine(&sb, "allocs profile", report.Artifacts.AllocsProfile)
+		columnStoreWriteArtifactLine(&sb, "checkpoint CPU profile", report.Artifacts.CheckpointCPUProfile)
+		columnStoreWriteArtifactLine(&sb, "block profile", report.Artifacts.BlockProfile)
+		columnStoreWriteArtifactLine(&sb, "mutex profile", report.Artifacts.MutexProfile)
+		columnStoreWriteArtifactLine(&sb, "trace", report.Artifacts.TraceProfile)
+		columnStoreWriteArtifactLine(&sb, "block delta profile", report.Artifacts.BlockDeltaProfile)
+		columnStoreWriteArtifactLine(&sb, "mutex delta profile", report.Artifacts.MutexDeltaProfile)
 	}
 	return sb.String()
+}
+
+func columnStoreWriteArtifactLine(sb *strings.Builder, label, path string) {
+	if strings.TrimSpace(path) == "" {
+		return
+	}
+	sb.WriteString(fmt.Sprintf("- %s: `%s`\n", label, path))
 }
 
 func renderColumnStoreSuiteHTML(report columnStoreSuiteReport) string {
@@ -926,43 +1348,50 @@ func columnStoreBenchRun(baseCfg BenchConfig, profile, dataDir string, report co
 	cfg.BatchSize = report.BatchSize
 	cfg.Profile = profile
 	cfg.DBsArg = "treedb"
-	cfg.TestsArg = "full_scan,prefix_scan,column_store_q1,column_store_q2,column_store_q3,column_store_q4a,column_store_q4b,column_store_q5,column_store_q5_metadata"
-	dbName := "TreeDB Column Store"
+	testOrder := []string{columnStoreSuiteBenchTestName, "alias_full_scan_from_q1", "alias_prefix_scan_from_q4a", "column_store_q1", "column_store_q2", "column_store_q3", "column_store_q4a", "column_store_q4b", "column_store_q5", "column_store_q5_metadata"}
+	cfg.TestsArg = strings.Join(testOrder, ",")
 	results := make(map[string]map[string]float64)
 	displayNames := map[string]string{
-		"full_scan":                "Full Scan",
-		"prefix_scan":              "Prefix/Selective Scan",
-		"column_store_q1":          "Column q1",
-		"column_store_q2":          "Column q2",
-		"column_store_q3":          "Column q3",
-		"column_store_q4a":         "Column q4a",
-		"column_store_q4b":         "Column q4b",
-		"column_store_q5":          "Column q5",
-		"column_store_q5_metadata": "Column q5 metadata",
+		columnStoreSuiteBenchTestName: "Column store query phase",
+		"alias_full_scan_from_q1":     "Alias full scan from q1",
+		"alias_prefix_scan_from_q4a":  "Alias prefix scan from q4a",
+		"column_store_q1":             "Column q1",
+		"column_store_q2":             "Column q2",
+		"column_store_q3":             "Column q3",
+		"column_store_q4a":            "Column q4a",
+		"column_store_q4b":            "Column q4b",
+		"column_store_q5":             "Column q5",
+		"column_store_q5_metadata":    "Column q5 metadata",
 	}
-	testOrder := []string{"full_scan", "prefix_scan", "column_store_q1", "column_store_q2", "column_store_q3", "column_store_q4a", "column_store_q4b", "column_store_q5", "column_store_q5_metadata"}
 	byName := make(map[string]columnStoreQueryMetric, len(report.Queries))
+	var queryDurationMS float64
+	var queryMaterializations int
 	for _, q := range report.Queries {
 		byName[q.Name] = q
-		results["column_store_"+q.Name] = map[string]float64{dbName: q.RowsPerSecond}
+		queryDurationMS += q.DurationMS
+		queryMaterializations += q.RowMaterializations
+		results["column_store_"+q.Name] = map[string]float64{columnStoreSuiteBenchDisplayName: q.RowsPerSecond}
+	}
+	if queryDurationMS > 0 {
+		results[columnStoreSuiteBenchTestName] = map[string]float64{columnStoreSuiteBenchDisplayName: float64(queryMaterializations) / (queryDurationMS / 1000)}
 	}
 	if q, ok := byName["q1"]; ok {
-		results["full_scan"] = map[string]float64{dbName: q.RowsPerSecond}
+		results["alias_full_scan_from_q1"] = map[string]float64{columnStoreSuiteBenchDisplayName: q.RowsPerSecond}
 	}
 	if q, ok := byName["q4a"]; ok {
-		results["prefix_scan"] = map[string]float64{dbName: q.RowsPerSecond}
+		results["alias_prefix_scan_from_q4a"] = map[string]float64{columnStoreSuiteBenchDisplayName: q.RowsPerSecond}
 	}
 	return BenchRun{
 		Config:       cfg,
-		Instances:    []*DBInstance{{Name: "treedb_column_store", Wrapper: &columnStoreSuiteDBLabel{name: dbName}, Dir: dataDir}},
+		Instances:    []*DBInstance{{Name: columnStoreSuiteBenchDBName, Wrapper: &columnStoreSuiteDBLabel{name: columnStoreSuiteBenchDisplayName}, Dir: dataDir}},
 		TestOrder:    testOrder,
 		DisplayNames: displayNames,
 		Results:      results,
 		CheckpointDurations: map[string]map[string]time.Duration{
-			checkpointPostRunLabel: {dbName: checkpointDuration},
+			columnStoreSuiteBenchTestName: {columnStoreSuiteBenchDisplayName: checkpointDuration},
 		},
-		TreeDBStats: map[string]map[string]string{dbName: stats},
-		DiskUsage:   map[string]dirDiskUsage{dbName: {TotalBytes: uint64(report.ByteAccounting.DBTotalBytes), TotalFiles: report.ByteAccounting.DBTotalFiles}},
+		TreeDBStats: map[string]map[string]string{columnStoreSuiteBenchDisplayName: stats},
+		DiskUsage:   map[string]dirDiskUsage{columnStoreSuiteBenchDisplayName: {TotalBytes: uint64(report.ByteAccounting.DBTotalBytes), TotalFiles: report.ByteAccounting.DBTotalFiles}},
 	}
 }
 

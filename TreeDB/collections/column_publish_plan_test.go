@@ -7,6 +7,7 @@ import (
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 )
 
 func TestColumnPublishPlanDisabledFastPathAllocatesZeroM10A(t *testing.T) {
@@ -56,17 +57,22 @@ func TestColumnPublishPlanDisabledFastPathAllocatesZeroM10A(t *testing.T) {
 func TestColumnPublishPlanRejectsNonEmptyDisabledColumnStoreM10A(t *testing.T) {
 	cfg := testColumnStoreConfig(nil)
 	cfg.Enabled = false
-	plan, err := BuildColumnPublishPlan(ColumnPublishPlanInput{
+	input := ColumnPublishPlanInput{
 		Collection:        "events",
 		ColumnStore:       cfg,
 		Operation:         ColumnPublishOperationInsert,
 		AppliedCommandLSN: 101,
-	})
-	if err == nil || !strings.Contains(err.Error(), "requires enabled=true") {
-		t.Fatalf("BuildColumnPublishPlan err=%v want enabled=true validation", err)
 	}
-	if plan.Enabled {
-		t.Fatalf("invalid disabled column_store returned enabled plan: %+v", plan)
+	const want = "collections: column publish plan requires enabled=true column_store"
+	for _, normalized := range []bool{false, true} {
+		input.ColumnStoreNormalized = normalized
+		plan, err := BuildColumnPublishPlan(input)
+		if err == nil || err.Error() != want {
+			t.Fatalf("BuildColumnPublishPlan normalized=%v err=%v want %q", normalized, err, want)
+		}
+		if plan.Enabled {
+			t.Fatalf("invalid disabled column_store returned enabled plan: %+v", plan)
+		}
 	}
 }
 
@@ -85,6 +91,35 @@ func TestColumnPublishPlanAllowsBenchmarkRelaxedProfileM10A(t *testing.T) {
 	}
 	if !plan.Enabled || plan.RequiredAssetBytes != asset.Bytes {
 		t.Fatalf("unexpected benchmark-relaxed plan: %+v", plan)
+	}
+}
+
+func TestColumnPublishPlanUsesFixedWidthAssetBytesM10A(t *testing.T) {
+	asset := testColumnPublishPreparedAssetM10A()
+	asset.Bytes = 1 << 33
+	asset.Ref.Length = asset.Bytes
+	identity := ColumnManifestIdentity{Generation: 7, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0xfeedbeef}
+
+	plan, err := BuildColumnPublishPlan(testColumnPublishPlanInputM10A(identity, asset))
+	if err != nil {
+		t.Fatalf("BuildColumnPublishPlan large asset: %v", err)
+	}
+	if plan.RequiredAssetBytes != asset.Bytes || plan.Lifecycle.PublishedBytes != asset.Bytes || plan.Lifecycle.PreparedBytes != asset.Bytes {
+		t.Fatalf("large byte counts not preserved: plan=%+v asset=%+v", plan, asset)
+	}
+}
+
+func TestColumnPublishPlanAllowsZeroAssetChecksumM10A(t *testing.T) {
+	asset := testColumnPublishPreparedAssetM10A()
+	asset.Ref.Checksum = 0
+	identity := ColumnManifestIdentity{Generation: 7, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0xfeedbeef}
+
+	plan, err := BuildColumnPublishPlan(testColumnPublishPlanInputM10A(identity, asset))
+	if err != nil {
+		t.Fatalf("BuildColumnPublishPlan zero asset checksum: %v", err)
+	}
+	if len(plan.PreparedAssets) != 1 || plan.PreparedAssets[0].Ref.Checksum != 0 {
+		t.Fatalf("zero asset checksum was not preserved: %+v", plan.PreparedAssets)
 	}
 }
 
@@ -369,6 +404,34 @@ func TestColumnPublishPlanRejectsClosurePreparedAssetMismatchM10A(t *testing.T) 
 	}
 }
 
+func TestColumnPublishPlanCopiesPreparedAssetsForManifestHookM10A(t *testing.T) {
+	asset := testColumnPublishPreparedAssetM10A()
+	identity := ColumnManifestIdentity{Generation: 7, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0xfeedbeef}
+	input := testColumnPublishPlanInputM10A(identity, asset)
+	input.Hooks.ValidateClosure = nil
+	var hookAssets []ColumnPreparedAsset
+	input.Hooks.EncodeManifest = func(in ColumnPublishManifestEncodeInput) (ColumnPublishManifestEncodeResult, error) {
+		hookAssets = in.Prepared.Assets
+		in.Prepared.Assets[0].Ref.Offset += int64(asset.Bytes)
+		return ColumnPublishManifestEncodeResult{Identity: identity, ManifestBytes: 256}, nil
+	}
+
+	plan, err := BuildColumnPublishPlan(input)
+	if err != nil {
+		t.Fatalf("BuildColumnPublishPlan: %v", err)
+	}
+	if len(plan.PreparedAssets) != 1 {
+		t.Fatalf("prepared assets=%d want 1", len(plan.PreparedAssets))
+	}
+	if plan.PreparedAssets[0] != asset {
+		t.Fatalf("plan prepared asset changed after manifest hook mutation: got %+v want %+v", plan.PreparedAssets[0], asset)
+	}
+	hookAssets[0].Ref.Offset += int64(asset.Bytes)
+	if plan.PreparedAssets[0] != asset {
+		t.Fatalf("plan prepared asset changed after manifest hook-owned slice mutation: got %+v want %+v", plan.PreparedAssets[0], asset)
+	}
+}
+
 func TestColumnPublishPlanSnapshotsPreparedAssetsForClosureValidationM10A(t *testing.T) {
 	asset := testColumnPublishPreparedAssetM10A()
 	identity := ColumnManifestIdentity{Generation: 7, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0xfeedbeef}
@@ -390,6 +453,95 @@ func TestColumnPublishPlanSnapshotsPreparedAssetsForClosureValidationM10A(t *tes
 	}
 	if plan.Enabled {
 		t.Fatalf("mutated closure prepared asset returned enabled plan: %+v", plan)
+	}
+}
+
+func TestColumnPublishPlanCopiesClosurePreparedAssetsM10A(t *testing.T) {
+	asset := testColumnPublishPreparedAssetM10A()
+	identity := ColumnManifestIdentity{Generation: 7, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0xfeedbeef}
+	input := testColumnPublishPlanInputM10A(identity, asset)
+	var closureAssets []ColumnPreparedAsset
+	input.Hooks.ValidateClosure = func(in ColumnPublishClosureValidationInput) (ColumnPublishDurabilityClosure, error) {
+		closureAssets = in.Prepared.Assets
+		return ColumnPublishDurabilityClosure{
+			PreparedAssets: closureAssets,
+			RequiredAssets: len(closureAssets),
+			RequiredBytes:  sumColumnPreparedAssetBytes(closureAssets),
+			FlushRequired:  true,
+			SyncRequired:   true,
+		}, nil
+	}
+
+	plan, err := BuildColumnPublishPlan(input)
+	if err != nil {
+		t.Fatalf("BuildColumnPublishPlan: %v", err)
+	}
+	if len(plan.PreparedAssets) != 1 {
+		t.Fatalf("prepared assets=%d want 1", len(plan.PreparedAssets))
+	}
+	closureAssets[0].Ref.Offset += int64(asset.Bytes)
+	if plan.PreparedAssets[0] != asset {
+		t.Fatalf("plan prepared asset changed after closure-owned slice mutation: got %+v want %+v", plan.PreparedAssets[0], asset)
+	}
+}
+
+func TestColumnPublishPlanCopiesClosureForRootDeltaHookM10A(t *testing.T) {
+	asset := testColumnPublishPreparedAssetM10A()
+	identity := ColumnManifestIdentity{Generation: 7, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0xfeedbeef}
+	input := testColumnPublishPlanInputM10A(identity, asset)
+	var hookAssets []ColumnPreparedAsset
+	input.Hooks.BuildRootDelta = func(in ColumnPublishRootDeltaInput) (ColumnManifestRootDelta, error) {
+		hookAssets = in.Closure.PreparedAssets
+		in.Closure.PreparedAssets[0].Ref.Offset += int64(asset.Bytes)
+		return ColumnManifestRootDelta{
+			RootName:       in.ColumnStore.ManifestRoot.Name,
+			BaseRootID:     in.BaseManifestRootID,
+			StoragePolicy:  in.ColumnStore.ManifestRoot.StoragePolicy,
+			Identity:       in.Manifest.Identity,
+			IdentityRecord: encodeColumnManifestIdentityRecordArray(in.Manifest.Identity),
+		}, nil
+	}
+
+	plan, err := BuildColumnPublishPlan(input)
+	if err != nil {
+		t.Fatalf("BuildColumnPublishPlan: %v", err)
+	}
+	if len(plan.PreparedAssets) != 1 {
+		t.Fatalf("prepared assets=%d want 1", len(plan.PreparedAssets))
+	}
+	if plan.PreparedAssets[0] != asset {
+		t.Fatalf("plan prepared asset changed after root hook mutation: got %+v want %+v", plan.PreparedAssets[0], asset)
+	}
+	hookAssets[0].Ref.Offset += int64(asset.Bytes)
+	if plan.PreparedAssets[0] != asset {
+		t.Fatalf("plan prepared asset changed after root hook-owned slice mutation: got %+v want %+v", plan.PreparedAssets[0], asset)
+	}
+}
+
+func TestColumnPublishPlanCopiesPreparedAssetsForSystemDeltaHookM10A(t *testing.T) {
+	asset := testColumnPublishPreparedAssetM10A()
+	identity := ColumnManifestIdentity{Generation: 7, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0xfeedbeef}
+	input := testColumnPublishPlanInputM10A(identity, asset)
+	var hookAssets []ColumnPreparedAsset
+	input.Hooks.BuildSystemDelta = func(in ColumnPublishSystemDeltaInput) error {
+		hookAssets = in.Plan.PreparedAssets
+		in.Plan.PreparedAssets[0].Ref.Offset += int64(asset.Bytes)
+		return nil
+	}
+
+	plan, err := BuildColumnPublishPlan(input)
+	if err != nil {
+		t.Fatalf("BuildColumnPublishPlan: %v", err)
+	}
+	if len(plan.PreparedAssets) != 1 {
+		t.Fatalf("prepared assets=%d want 1", len(plan.PreparedAssets))
+	}
+	if plan.PreparedAssets[0] != asset {
+		t.Fatalf("plan prepared asset changed after hook mutation: got %+v want %+v", plan.PreparedAssets[0], asset)
+	}
+	hookAssets[0].Ref.Offset += int64(asset.Bytes)
+	if plan.PreparedAssets[0] != asset {
+		t.Fatalf("plan prepared asset changed after hook-owned slice mutation: got %+v want %+v", plan.PreparedAssets[0], asset)
 	}
 }
 
@@ -622,6 +774,56 @@ func TestColumnManifestPublishSystemDeltaRejectsPublishedRootMismatchM10A(t *tes
 	})
 	if err == nil || !strings.Contains(err.Error(), "published root identity record") {
 		t.Fatalf("PublishOrderedRootGroupWithSystemBuilder err=%v want published root identity mismatch", err)
+	}
+}
+
+func TestColumnManifestPublishSystemDeltaRejectsMalformedPublishedRootIdentityM10A(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "events",
+		Options: CollectionOptions{ColumnStore: testColumnStoreConfig(nil)},
+	}); err != nil {
+		t.Fatalf("create column-enabled collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("events")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	baseMeta := col.Meta()
+	state := d.State()
+	planInput := testColumnPublishPlanInputM10A(ColumnManifestIdentity{Generation: 14, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0xabcdef3456}, testColumnPublishPreparedAssetM10A())
+	planInput.BaseManifestRootID = 0
+	plan, err := BuildColumnPublishPlan(planInput)
+	if err != nil {
+		t.Fatalf("BuildColumnPublishPlan: %v", err)
+	}
+	rootTable, err := memtable.NewWithCapacityMode(1, memtable.ModeHashSorted)
+	if err != nil {
+		t.Fatalf("new root memtable: %v", err)
+	}
+	rootTable.Set([]byte(columnManifestIdentityRecordKey), []byte{1, 2, 3})
+	rootTable.Freeze()
+
+	_, _, err = d.PublishOrderedRootGroupWithSystemBuilder([]backenddb.OrderedRootPublishInput{{
+		BaseRoot: 0,
+		Iter:     rootTable.NewIterator(nil, nil),
+	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		return col.buildColumnManifestPublishSystemDeltaIterator(ColumnManifestPublishSystemDeltaInput{
+			BaseMeta:           baseMeta,
+			BaseCommitSeq:      state.CommitSeq,
+			BaseSystemRoot:     state.SystemRootPageID,
+			BaseManifestRootID: 0,
+			Plan:               plan,
+		}, rootIDs)
+	})
+	if err == nil || !strings.Contains(err.Error(), "invalid identity record") || !strings.Contains(err.Error(), "malformed identity record length") {
+		t.Fatalf("PublishOrderedRootGroupWithSystemBuilder err=%v want malformed published root identity", err)
 	}
 }
 

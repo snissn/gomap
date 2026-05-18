@@ -21,9 +21,9 @@ type columnWritePublishInput struct {
 	commandWALIntent   *backenddb.CommandWALIntent
 	operation          ColumnPublishOperation
 	rows               int
-	commandBytes       int
-	rowRemainderBytes  int
-	columnPayloadBytes int
+	commandBytes       int64
+	rowRemainderBytes  int64
+	columnPayloadBytes int64
 }
 
 func columnStoreWriteEnabled(meta CollectionMeta) bool {
@@ -42,14 +42,14 @@ func (c *Collection) requireColumnStoreCommandWAL(meta CollectionMeta, commandWA
 	if c == nil || c.db == nil {
 		return errCollectionDBNil
 	}
-	if c.db.DurabilityMode() != backenddb.DurabilityDurable || profileSupport != ColumnStoreProfileDurableOnly {
+	if c.db.DurabilityMode() != backenddb.DurabilityDurable {
 		return fmt.Errorf("%w: column_store writes require durable command WAL profile support (durability=%s profile=%s)",
 			backenddb.ErrCommandWALRejected,
 			columnStoreDurabilityModeName(c.db.DurabilityMode()),
 			profileSupport,
 		)
 	}
-	if c != nil && c.commandWALActive(commandWALIntent) {
+	if c.commandWALActive(commandWALIntent) {
 		return nil
 	}
 	return fmt.Errorf("%w: column_store writes require command WAL", backenddb.ErrCommandWALUnsupported)
@@ -65,7 +65,7 @@ func (c *Collection) publishRootDeltaGroupMaybeColumn(ordered []backenddb.Ordere
 		return newSystemRoot, publishRootIDs, input.meta, publishRootNames, err
 	}
 	if input.commandWALIntent == nil {
-		return 0, nil, CollectionMeta{}, nil, fmt.Errorf("%w: column_store publish requires command WAL intent", backenddb.ErrCommandWALUnsupported)
+		return 0, nil, CollectionMeta{}, nil, fmt.Errorf("%w: column_store publish requires command WAL intent", backenddb.ErrCommandWALContextMissingFrame)
 	}
 	columnRootName := collectionColumnManifestRootName(input.meta.Name)
 	columnBaseRoot := uint64(0)
@@ -118,7 +118,7 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 		return newSystemRoot, publishRootIDs, input.meta, publishRootNames, err
 	}
 	if input.commandWALIntent == nil {
-		return 0, nil, CollectionMeta{}, nil, fmt.Errorf("%w: column_store publish requires command WAL intent", backenddb.ErrCommandWALUnsupported)
+		return 0, nil, CollectionMeta{}, nil, fmt.Errorf("%w: column_store publish requires command WAL intent", backenddb.ErrCommandWALContextMissingFrame)
 	}
 	columnRootName := collectionColumnManifestRootName(input.meta.Name)
 	columnBaseRoot := uint64(0)

@@ -43,7 +43,7 @@ type ColumnAssetRef struct {
 // ColumnPreparedAsset describes an immutable asset staged for manifest publish.
 type ColumnPreparedAsset struct {
 	Ref          ColumnAssetRef
-	Bytes        int
+	Bytes        int64
 	PublishID    uint64
 	GenerationID uint64
 	Reason       string
@@ -96,9 +96,9 @@ type ColumnPublishAssetPrepareInput struct {
 type ColumnPublishPreparedAssets struct {
 	Assets             []ColumnPreparedAsset
 	RowCount           int
-	CommandBytes       int
-	RowRemainderBytes  int
-	ColumnPayloadBytes int
+	CommandBytes       int64
+	RowRemainderBytes  int64
+	ColumnPayloadBytes int64
 }
 
 // ColumnPublishManifestEncodeInput is passed to the manifest encoding stage.
@@ -114,7 +114,7 @@ type ColumnPublishManifestEncodeInput struct {
 // ColumnPublishManifestEncodeResult identifies the encoded manifest generation.
 type ColumnPublishManifestEncodeResult struct {
 	Identity      ColumnManifestIdentity
-	ManifestBytes int
+	ManifestBytes int64
 }
 
 // ColumnPublishClosureValidationInput is passed to the durability-closure
@@ -135,7 +135,7 @@ type ColumnPublishDurabilityClosure struct {
 	// compares it against the manifest snapshot before publishing.
 	PreparedAssets []ColumnPreparedAsset
 	RequiredAssets int
-	RequiredBytes  int
+	RequiredBytes  int64
 	FlushRequired  bool
 	SyncRequired   bool
 }
@@ -179,14 +179,14 @@ type ColumnPublishPlan struct {
 	RootDelta                              ColumnManifestRootDelta
 	PreparedAssets                         []ColumnPreparedAsset
 	RequiredAssetCount                     int
-	RequiredAssetBytes                     int
+	RequiredAssetBytes                     int64
 	RequiredAssetFlush                     bool
 	RequiredAssetSync                      bool
 	Rows                                   int
-	CommandBytes                           int
-	RowRemainderBytes                      int
-	ColumnPayloadBytes                     int
-	ManifestBytes                          int
+	CommandBytes                           int64
+	RowRemainderBytes                      int64
+	ColumnPayloadBytes                     int64
+	ManifestBytes                          int64
 	Lifecycle                              ColumnPublishLifecycleSummary
 	StageMetrics                           ColumnPublishStageMetrics
 }
@@ -205,15 +205,15 @@ type ColumnManifestRootDelta struct {
 // of the publish.
 type ColumnPublishLifecycleSummary struct {
 	PublishedRefs         int
-	PublishedBytes        int
+	PublishedBytes        int64
 	PreparedRefs          int
-	PreparedBytes         int
+	PreparedBytes         int64
 	SupersededRefs        int
-	SupersededBytes       int
+	SupersededBytes       int64
 	CleanupSafeGeneration uint64
 	CleanupSafeRefs       int
-	CleanupSafeBytes      int
-	RewriteDebtBytes      int
+	CleanupSafeBytes      int64
+	RewriteDebtBytes      int64
 }
 
 // ColumnPublishStageMetrics records stage timings and optional allocation
@@ -239,11 +239,6 @@ func BuildColumnPublishPlan(input ColumnPublishPlanInput) (ColumnPublishPlan, er
 	if !input.ColumnStore.Enabled {
 		if columnStoreConfigEmpty(*input.ColumnStore) {
 			return ColumnPublishPlan{}, nil
-		}
-		if !input.ColumnStoreNormalized {
-			if _, err := normalizeColumnStoreConfig(input.Collection, input.ColumnStore); err != nil {
-				return ColumnPublishPlan{}, err
-			}
 		}
 		return ColumnPublishPlan{}, errors.New("collections: column publish plan requires enabled=true column_store")
 	}
@@ -349,7 +344,7 @@ func BuildColumnPublishPlan(input ColumnPublishPlanInput) (ColumnPublishPlan, er
 		RecoveryAuthoritativeManifest:          manifest.Identity,
 		RecoveryAuthoritativeAppliedCommandLSN: input.AppliedCommandLSN,
 		RootDelta:                              rootDelta,
-		PreparedAssets:                         closure.PreparedAssets,
+		PreparedAssets:                         cloneColumnPreparedAssets(closure.PreparedAssets),
 		RequiredAssetCount:                     closure.RequiredAssets,
 		RequiredAssetBytes:                     closure.RequiredBytes,
 		RequiredAssetFlush:                     closure.FlushRequired,
@@ -370,7 +365,7 @@ func BuildColumnPublishPlan(input ColumnPublishPlanInput) (ColumnPublishPlan, er
 
 	if input.Hooks.BuildSystemDelta != nil {
 		start = time.Now()
-		if err := input.Hooks.BuildSystemDelta(ColumnPublishSystemDeltaInput{Plan: plan}); err != nil {
+		if err := input.Hooks.BuildSystemDelta(ColumnPublishSystemDeltaInput{Plan: cloneColumnPublishPlanForHook(plan)}); err != nil {
 			return ColumnPublishPlan{}, fmt.Errorf("collections: column publish system-delta construction failed: %w", err)
 		}
 		plan.StageMetrics.SystemDeltaConstruction = time.Since(start)
@@ -446,6 +441,9 @@ func (delta ColumnManifestRootDelta) OrderedRootDeltaBatchPublishInput() (backen
 	deltaBatch, err := backenddb.OrderedRootDeltaBatchFromIterator(iter)
 	_ = iter.Close()
 	if err != nil {
+		if deltaBatch != nil {
+			_ = deltaBatch.Close()
+		}
 		return backenddb.OrderedRootDeltaBatchPublishInput{}, func() {}, err
 	}
 	cleanup := func() {
@@ -595,7 +593,7 @@ func encodeColumnPublishManifest(input ColumnPublishPlanInput, cfg ColumnStoreCo
 		Operation:         input.Operation,
 		AppliedCommandLSN: input.AppliedCommandLSN,
 		CurrentManifest:   input.CurrentManifest,
-		Prepared:          prepared,
+		Prepared:          cloneColumnPublishPreparedAssets(prepared),
 	})
 }
 
@@ -627,7 +625,7 @@ func buildColumnPublishRootDelta(input ColumnPublishPlanInput, cfg ColumnStoreCo
 			ColumnStore:        cfg,
 			BaseManifestRootID: input.BaseManifestRootID,
 			Manifest:           manifest,
-			Closure:            closure,
+			Closure:            cloneColumnPublishDurabilityClosure(closure),
 		})
 	}
 	if cfg.ManifestRoot == nil {
@@ -756,7 +754,7 @@ func validateColumnPreparedAssetForPlan(asset ColumnPreparedAsset) error {
 	if asset.Bytes <= 0 {
 		return fmt.Errorf("collections: column prepared asset bytes=%d must be positive", asset.Bytes)
 	}
-	if int64(asset.Bytes) != asset.Ref.Length {
+	if asset.Bytes != asset.Ref.Length {
 		return fmt.Errorf("collections: column prepared asset bytes=%d does not match ref length=%d", asset.Bytes, asset.Ref.Length)
 	}
 	return nil
@@ -780,14 +778,11 @@ func validateColumnAssetRefForPlan(ref ColumnAssetRef) error {
 	if ref.Length <= 0 {
 		return fmt.Errorf("collections: column asset ref length=%d must be positive", ref.Length)
 	}
-	if ref.Checksum == 0 {
-		return errors.New("collections: column asset ref checksum is required")
-	}
 	return nil
 }
 
-func sumColumnPreparedAssetBytes(assets []ColumnPreparedAsset) int {
-	total := 0
+func sumColumnPreparedAssetBytes(assets []ColumnPreparedAsset) int64 {
+	var total int64
 	for _, asset := range assets {
 		total += asset.Bytes
 	}
@@ -798,6 +793,23 @@ func cloneColumnPublishPreparedAssets(prepared ColumnPublishPreparedAssets) Colu
 	if len(prepared.Assets) == 0 {
 		return prepared
 	}
-	prepared.Assets = append([]ColumnPreparedAsset(nil), prepared.Assets...)
+	prepared.Assets = cloneColumnPreparedAssets(prepared.Assets)
 	return prepared
+}
+
+func cloneColumnPreparedAssets(assets []ColumnPreparedAsset) []ColumnPreparedAsset {
+	if len(assets) == 0 {
+		return assets
+	}
+	return append([]ColumnPreparedAsset(nil), assets...)
+}
+
+func cloneColumnPublishDurabilityClosure(closure ColumnPublishDurabilityClosure) ColumnPublishDurabilityClosure {
+	closure.PreparedAssets = cloneColumnPreparedAssets(closure.PreparedAssets)
+	return closure
+}
+
+func cloneColumnPublishPlanForHook(plan ColumnPublishPlan) ColumnPublishPlan {
+	plan.PreparedAssets = cloneColumnPreparedAssets(plan.PreparedAssets)
+	return plan
 }

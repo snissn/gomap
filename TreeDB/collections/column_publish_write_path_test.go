@@ -371,12 +371,84 @@ func TestColumnStoreRelaxedProfileWritesRejectedBeforeCommandAppendM10C(t *testi
 			if framesAfter := countCollectionCommandWALFrames(t, tt.opts.Dir); framesAfter != framesBefore {
 				t.Fatalf("command WAL frames after rejected write=%d, want %d", framesAfter, framesBefore)
 			}
+			deleted, err := col.DeleteDocument([]byte("missing"))
+			if !errors.Is(err, backenddb.ErrCommandWALRejected) {
+				t.Fatalf("DeleteDocument missing error=%v, want ErrCommandWALRejected", err)
+			}
+			if deleted {
+				t.Fatalf("DeleteDocument missing deleted=true, want false")
+			}
+			if framesAfter := countCollectionCommandWALFrames(t, tt.opts.Dir); framesAfter != framesBefore {
+				t.Fatalf("command WAL frames after rejected no-op delete=%d, want %d", framesAfter, framesBefore)
+			}
+			matched, modified, err := col.Update([]byte("missing"), func([]byte) ([]byte, bool, error) {
+				return nil, false, nil
+			})
+			if !errors.Is(err, backenddb.ErrCommandWALRejected) {
+				t.Fatalf("Update missing error=%v, want ErrCommandWALRejected", err)
+			}
+			if matched || modified {
+				t.Fatalf("Update missing matched=%v modified=%v, want false/false", matched, modified)
+			}
+			if framesAfter := countCollectionCommandWALFrames(t, tt.opts.Dir); framesAfter != framesBefore {
+				t.Fatalf("command WAL frames after rejected no-op update=%d, want %d", framesAfter, framesBefore)
+			}
 			if tt.commandWAL {
 				if err := d.CheckCommandWALPublishReady(); err != nil {
 					t.Fatalf("CheckCommandWALPublishReady after rejected write: %v", err)
 				}
 			}
 		})
+	}
+}
+
+func TestColumnStoreBenchmarkRelaxedAllowsDurableCommandWALWritesM10C(t *testing.T) {
+	dir := t.TempDir()
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+		t.Fatalf("SaveFormatConfig: %v", err)
+	}
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+
+	cfg := testColumnStoreConfig(nil)
+	cfg.ProfileSupport = ColumnStoreProfileBenchmarkRelaxed
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "events",
+		Options: CollectionOptions{ColumnStore: cfg},
+	}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := mgr.OpenCollection("events")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("e1")}, [][]byte{[]byte(`{"time_us":1,"kind":"like","did":"d1"}`)}); err != nil {
+		t.Fatalf("InsertBatch durable benchmark-relaxed: %v", err)
+	}
+	assertCollectionDocument(t, col, "e1", `{"time_us":1,"kind":"like","did":"d1"}`)
+	assertColumnManifestStateM10B(t, col, 1, 2)
+}
+
+func TestColumnStorePublishRejectsMissingCommandWALIntentM10B(t *testing.T) {
+	dir := prepareColumnStoreCommandWALDirM10B(t)
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+
+	col := openColumnStoreCollectionM10B(t, d)
+	input := columnWritePublishInput{
+		meta:      col.meta,
+		operation: ColumnPublishOperationInsert,
+	}
+	if _, _, _, _, err := col.publishRootDeltaGroupMaybeColumn(nil, input); !errors.Is(err, backenddb.ErrCommandWALContextMissingFrame) {
+		t.Fatalf("publishRootDeltaGroupMaybeColumn error=%v, want ErrCommandWALContextMissingFrame", err)
+	} else if errors.Is(err, backenddb.ErrCommandWALUnsupported) {
+		t.Fatalf("publishRootDeltaGroupMaybeColumn error=%v must not look like ErrCommandWALUnsupported", err)
+	}
+	if _, _, _, _, err := col.publishRootDeltaBatchGroupMaybeColumn(nil, nil, input); !errors.Is(err, backenddb.ErrCommandWALContextMissingFrame) {
+		t.Fatalf("publishRootDeltaBatchGroupMaybeColumn error=%v, want ErrCommandWALContextMissingFrame", err)
+	} else if errors.Is(err, backenddb.ErrCommandWALUnsupported) {
+		t.Fatalf("publishRootDeltaBatchGroupMaybeColumn error=%v must not look like ErrCommandWALUnsupported", err)
 	}
 }
 

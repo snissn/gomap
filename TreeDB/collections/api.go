@@ -9452,6 +9452,10 @@ func (c *Collection) deleteBatchOnce(documentIDs [][]byte, commandWALIntent *bac
 		return 0, err
 	}
 	c.meta = catalog.meta
+	if err := c.requireColumnStoreCommandWAL(c.meta, commandWALIntent); err != nil {
+		_ = snap.Close()
+		return 0, err
+	}
 	plannerOptions, err := collectionPlannerOptions(c.meta)
 	if err != nil {
 		_ = snap.Close()
@@ -9695,6 +9699,10 @@ func (c *Collection) deleteDocumentOnce(documentID []byte, commandWALIntent *bac
 		return false, err
 	}
 	c.meta = catalog.meta
+	if err := c.requireColumnStoreCommandWAL(c.meta, commandWALIntent); err != nil {
+		_ = snap.Close()
+		return false, err
+	}
 	plannerOptions, err := collectionPlannerOptionsForDB(c.db, c.meta)
 	if err != nil {
 		_ = snap.Close()
@@ -13312,6 +13320,9 @@ func (c *Collection) updateBatchOnce(items []updateBatchItem, mode updateBatchMo
 				return err
 			}
 			c.meta = plan.meta
+			if err := c.requireColumnStoreCommandWAL(plan.meta, commandWALIntent); err != nil {
+				return err
+			}
 			if c.commandWALActive(commandWALIntent) {
 				if commandWALIntent == nil {
 					commandWALIntent, err = c.newCollectionUpdateCommandWALIntent(nil, nil)

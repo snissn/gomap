@@ -2,8 +2,10 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -13,12 +15,21 @@ import (
 func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 	dir := t.TempDir()
 	cfg := BenchConfig{
-		Keys:      64,
-		BatchSize: 16,
-		DBsArg:    "treedb",
-		Profile:   "durable",
-		Progress:  false,
-		SeedUsed:  1,
+		Keys:                 64,
+		BatchSize:            16,
+		DBsArg:               "treedb",
+		Profile:              "durable",
+		Progress:             false,
+		SeedUsed:             1,
+		CPUProfile:           filepath.Join(dir, "cpu"),
+		AllocsProfile:        filepath.Join(dir, "allocs"),
+		AllocsProfileRate:    1,
+		CheckpointCPUProfile: filepath.Join(dir, "checkpoint_cpu"),
+		BlockProfile:         filepath.Join(dir, "block.pprof"),
+		BlockProfileRate:     1,
+		MutexProfile:         filepath.Join(dir, "mutex.pprof"),
+		MutexProfileFraction: 1,
+		TraceProfile:         filepath.Join(dir, "trace.out"),
 	}
 
 	out, err := runColumnStoreSuite(cfg, columnStoreSuiteOptions{
@@ -54,10 +65,40 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 		"column_store_results.json",
 		"column_store_results.md",
 		"column_store_results.html",
+		"cpu_column_store_treedb_column_store.pprof",
+		"allocs_column_store_treedb_column_store.pprof",
+		"checkpoint_cpu_checkpoint_column_store_treedb_column_store.pprof",
+		"block.pprof",
+		"block_column_store_treedb_column_store.pprof",
+		"mutex.pprof",
+		"mutex_column_store_treedb_column_store.pprof",
+		"trace.out",
 	} {
 		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
 			t.Fatalf("expected %s: %v", name, err)
 		}
+	}
+
+	var benchprof benchprofExport
+	benchprofData, err := os.ReadFile(filepath.Join(dir, "benchprof_results.json"))
+	if err != nil {
+		t.Fatalf("read benchprof_results.json: %v", err)
+	}
+	if err := json.Unmarshal(benchprofData, &benchprof); err != nil {
+		t.Fatalf("unmarshal benchprof_results.json: %v", err)
+	}
+	if len(benchprof.Runs) != 1 {
+		t.Fatalf("benchprof runs=%d want 1", len(benchprof.Runs))
+	}
+	if got := benchprof.Runs[0].Results["column_store"]["TreeDB Column Store"]; got <= 0 {
+		t.Fatalf("benchprof column_store aggregate rows/sec=%f want positive", got)
+	}
+	benchprofMarkdown, err := os.ReadFile(filepath.Join(dir, "benchprof_results.md"))
+	if err != nil {
+		t.Fatalf("read benchprof_results.md: %v", err)
+	}
+	if !strings.Contains(string(benchprofMarkdown), "Column store query phase") {
+		t.Fatalf("benchprof markdown missing aggregate column_store display name:\n%s", benchprofMarkdown)
 	}
 
 	var report columnStoreSuiteReport
@@ -87,10 +128,13 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 		if q.PlanLabel != columnStorePathRowStoreBaseline {
 			t.Fatalf("query %s plan_label=%q want %q", q.Name, q.PlanLabel, columnStorePathRowStoreBaseline)
 		}
-		if q.RowsPerSecond <= 0 {
-			t.Fatalf("query %s rows_per_second=%v", q.Name, q.RowsPerSecond)
+		if q.DurationMS < 0 || q.RowsPerSecond < 0 {
+			t.Fatalf("query %s has invalid timing metrics: %+v", q.Name, q)
 		}
-		if q.ScanDurationMS <= 0 {
+		if q.BytesRead <= 0 {
+			t.Fatalf("query %s bytes_read=%d", q.Name, q.BytesRead)
+		}
+		if q.ScanDurationMS < 0 {
 			t.Fatalf("query %s scan_duration_ms=%v", q.Name, q.ScanDurationMS)
 		}
 		if q.PlannerCandidates == 0 || q.PlannerReason == "" {
@@ -100,6 +144,7 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 			t.Fatalf("query %s row_materializations=%d want %d", q.Name, q.RowMaterializations, report.Rows)
 		}
 	}
+	assertColumnStoreParityCoverageM11A(t, report.Parity)
 	for name, parity := range report.Parity {
 		if !parity.Pass {
 			t.Fatalf("parity %s failed: %+v", name, parity)
@@ -111,11 +156,55 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 	if report.ByteAccounting.CommandWALBytes == 0 {
 		t.Fatalf("expected command WAL bytes in byte accounting: %+v", report.ByteAccounting)
 	}
+	if report.ByteAccounting.ManifestControlBytes == 0 || report.ByteAccounting.DBTotalBytes == 0 || report.ByteAccounting.DBTotalFiles == 0 {
+		t.Fatalf("expected measured manifest/control and DB byte accounting: %+v", report.ByteAccounting)
+	}
 	if report.Manifest.ActiveGeneration == 0 || report.Manifest.AppliedCommandLSN == 0 {
 		t.Fatalf("expected active/recovery-authoritative manifest identity: %+v", report.Manifest)
 	}
 	if len(report.UnsupportedForcedPaths) == 0 {
 		t.Fatalf("expected unsupported forced path labels to be recorded")
+	}
+	if report.Artifacts.CPUProfile == "" ||
+		report.Artifacts.AllocsProfile == "" ||
+		report.Artifacts.CheckpointCPUProfile == "" ||
+		report.Artifacts.BlockProfile == "" ||
+		report.Artifacts.BlockDeltaProfile == "" ||
+		report.Artifacts.MutexProfile == "" ||
+		report.Artifacts.MutexDeltaProfile == "" ||
+		report.Artifacts.TraceProfile == "" {
+		t.Fatalf("expected all configured profile artifacts to be recorded: %+v", report.Artifacts)
+	}
+}
+
+func TestColumnStoreSuiteRuntimeProfilesDoNotEnableOnCreateFailureM11A(t *testing.T) {
+	prevMutexFraction := runtime.SetMutexProfileFraction(0)
+	t.Cleanup(func() {
+		runtime.SetMutexProfileFraction(prevMutexFraction)
+	})
+
+	_, err := startColumnStoreSuiteRuntimeProfiles(BenchConfig{
+		MutexProfile:         filepath.Join(t.TempDir(), "missing", "mutex.pprof"),
+		MutexProfileFraction: 1,
+	})
+	if err == nil {
+		t.Fatal("expected mutex profile create failure")
+	}
+	if !strings.Contains(err.Error(), "mutexprofile") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotPrev := runtime.SetMutexProfileFraction(0); gotPrev != 0 {
+		t.Fatalf("mutex profiler was left enabled after create failure: previous fraction=%d", gotPrev)
+	}
+}
+
+func TestColumnStoreQueryHashRejectsUnknownQueryM11A(t *testing.T) {
+	_, _, err := columnStoreQueryHash("missing_query", nil)
+	if err == nil {
+		t.Fatal("expected unknown query to fail")
+	}
+	if !strings.Contains(err.Error(), "unknown column_store query") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
@@ -126,6 +215,9 @@ func TestColumnStoreSuiteRejectsForcedColumnPathM11B(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected forced serial column scan to fail closed")
+	}
+	if !errors.Is(err, collections.ErrColumnQueryPlanUnsupported) {
+		t.Fatalf("expected ErrColumnQueryPlanUnsupported, got %v", err)
 	}
 	msg := err.Error()
 	if !strings.Contains(msg, "serial_column_scan") || !strings.Contains(msg, "unsupported") || !strings.Contains(msg, "physical column") {
@@ -180,6 +272,44 @@ func TestColumnStoreSuiteRunsBTreeIndexBaselineM11B(t *testing.T) {
 	}
 }
 
+func TestColumnStoreSuiteQueriesNormalizeForcedPathAliasesM11B(t *testing.T) {
+	const rows = 16
+	events, _ := buildColumnStoreSyntheticFixture(rows, 1)
+	db, err := openColumnStoreSuiteDB(t.TempDir())
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	manager := collections.NewCollectionManager(db)
+	if _, err := manager.CreateCollection(columnStoreSuiteCollectionMeta(columnStorePathRowStoreBaseline)); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	collection, err := manager.OpenCollection("events")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if err := insertColumnStoreFixture(collection, events, 8); err != nil {
+		t.Fatalf("insert fixture: %v", err)
+	}
+
+	rawHashes, err := columnStoreReferenceHashes(events)
+	if err != nil {
+		t.Fatalf("reference hashes: %v", err)
+	}
+	queries, parity, err := runColumnStoreSuiteQueries(collection, rows, rawHashes, "row")
+	if err != nil {
+		t.Fatalf("runColumnStoreSuiteQueries row alias: %v", err)
+	}
+	if len(queries) == 0 || len(parity) == 0 {
+		t.Fatalf("queries=%d parity=%d want non-empty", len(queries), len(parity))
+	}
+	for _, q := range queries {
+		if q.PlanLabel != columnStorePathRowStoreBaseline {
+			t.Fatalf("query %s plan_label=%q want %q", q.Name, q.PlanLabel, columnStorePathRowStoreBaseline)
+		}
+	}
+}
+
 func TestColumnStoreSuiteReportsParityMismatchM11A(t *testing.T) {
 	dir := t.TempDir()
 	cfg := BenchConfig{Keys: 16, BatchSize: 8, DBsArg: "treedb", Profile: "durable", SeedUsed: 1}
@@ -204,8 +334,53 @@ func TestColumnStoreSuiteReportsParityMismatchM11A(t *testing.T) {
 	if err := json.Unmarshal(data, &report); err != nil {
 		t.Fatalf("unmarshal report: %v", err)
 	}
-	if report.Parity["q1"].Pass {
-		t.Fatalf("expected q1 parity to be recorded as failed: %+v", report.Parity["q1"])
+	assertColumnStoreParityCoverageM11A(t, report.Parity)
+	q1, ok := report.Parity["q1"]
+	if !ok {
+		t.Fatal("missing q1 parity entry")
+	}
+	if q1.Pass {
+		t.Fatalf("expected q1 parity to be recorded as failed: %+v", q1)
+	}
+}
+
+func TestColumnStoreSuiteRejectsMixedDBSelectionM11A(t *testing.T) {
+	err := validateColumnStoreSuiteDBSelection("treedb,leveldb", "")
+	if err == nil {
+		t.Fatal("expected mixed DB selection to fail")
+	}
+	if !strings.Contains(err.Error(), "only supports TreeDB") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestColumnStoreSuiteRejectsExcludedTreeDBM11A(t *testing.T) {
+	err := validateColumnStoreSuiteDBSelection("all", "treedb")
+	if err == nil {
+		t.Fatal("expected TreeDB exclusion to fail")
+	}
+	if !strings.Contains(err.Error(), "excludes it") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestColumnStoreSuiteDirUsageFailsOnMissingPathM11A(t *testing.T) {
+	_, _, err := columnStoreSuiteDirUsage(filepath.Join(t.TempDir(), "missing"))
+	if err == nil {
+		t.Fatal("expected missing path to fail")
+	}
+}
+
+func TestColumnStoreSuiteManifestControlUsageTreatsMissingFilesAsZeroM11A(t *testing.T) {
+	bytes, missing, err := columnStoreSuiteManifestControlUsage(t.TempDir())
+	if err != nil {
+		t.Fatalf("manifest/control usage: %v", err)
+	}
+	if bytes != 0 {
+		t.Fatalf("manifest/control bytes=%d want 0", bytes)
+	}
+	if len(missing) != len(columnStoreSuiteManifestControlFiles) {
+		t.Fatalf("missing manifest/control files=%v want %v", missing, columnStoreSuiteManifestControlFiles)
 	}
 }
 
@@ -272,7 +447,10 @@ func benchmarkColumnStoreSuiteQueriesM11B(b *testing.B, path string) {
 		b.Fatalf("reopen collection: %v", err)
 	}
 
-	rawHashes := columnStoreReferenceHashes(events)
+	rawHashes, err := columnStoreReferenceHashes(events)
+	if err != nil {
+		b.Fatalf("reference hashes: %v", err)
+	}
 	queryCount := len(columnStoreQueryNames())
 	b.ReportAllocs()
 	b.SetBytes(sourceBytes * int64(queryCount))
@@ -290,6 +468,22 @@ func benchmarkColumnStoreSuiteQueriesM11B(b *testing.B, path string) {
 				b.Fatalf("parity failed for %s: %+v", name, p)
 			}
 		}
+		if len(parity) != queryCount {
+			b.Fatalf("parity=%d want %d", len(parity), queryCount)
+		}
 	}
 	b.ReportMetric(float64(rows*queryCount), "rows/op")
+}
+
+func assertColumnStoreParityCoverageM11A(t *testing.T, parity map[string]columnStoreParity) {
+	t.Helper()
+	names := columnStoreQueryNames()
+	if len(parity) != len(names) {
+		t.Fatalf("parity entries=%d want %d", len(parity), len(names))
+	}
+	for _, name := range names {
+		if _, ok := parity[name]; !ok {
+			t.Fatalf("missing parity entry for %s", name)
+		}
+	}
 }
