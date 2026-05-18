@@ -1,6 +1,9 @@
 package colgranule
 
-import "testing"
+import (
+	"fmt"
+	"testing"
+)
 
 func TestColumnAssetManagerRequiresZombieAndPinDrainBeforeDelete(t *testing.T) {
 	activeRef := lifecycleAssetRef(t, 1, 0, tcs1HeaderBytes+16)
@@ -179,11 +182,45 @@ func TestColumnAssetManagerSyncPublishClosureVerifiesNoopClosureAssets(t *testin
 	}
 	closure.SyncRequired = false
 	store.Reset()
+	if _, err := store.Read(ref); err == nil {
+		t.Fatal("Reset left prepared asset readable")
+	}
 	if _, err := manager.SyncPublishClosure(closure); err == nil {
 		t.Fatal("SyncPublishClosure succeeded for missing no-op closure asset")
 	}
 	if store.syncCalls != 0 {
 		t.Fatalf("sync calls=%d want 0 after failed no-op closure verification", store.syncCalls)
+	}
+}
+
+func TestColumnAssetManagerSyncPublishClosureRejectsPreparedAssetMismatch(t *testing.T) {
+	store := &syncProbeAssetStore{MemoryColumnAssetStore: NewMemoryColumnAssetStore()}
+	manager, err := NewColumnAssetManager(store)
+	if err != nil {
+		t.Fatalf("NewColumnAssetManager: %v", err)
+	}
+	refA, err := manager.Put(ColumnAssetKindTCS1PartImage, make([]byte, tcs1HeaderBytes+16))
+	if err != nil {
+		t.Fatalf("Put A: %v", err)
+	}
+	refB, err := manager.Put(ColumnAssetKindTCS1PartImage, make([]byte, tcs1HeaderBytes+24))
+	if err != nil {
+		t.Fatalf("Put B: %v", err)
+	}
+	prepared := []ColumnPreparedAsset{
+		{Ref: refA, GenerationID: 7, PublishID: 11, Reason: "publish staged"},
+		{Ref: refB, GenerationID: 7, PublishID: 11, Reason: "publish staged"},
+	}
+	closure, err := manager.PreparePublishClosure(prepared)
+	if err != nil {
+		t.Fatalf("PreparePublishClosure: %v", err)
+	}
+	closure.PreparedAssets = closure.PreparedAssets[:1]
+	if _, err := manager.SyncPublishClosure(closure); err == nil {
+		t.Fatal("SyncPublishClosure accepted closure with missing prepared ref")
+	}
+	if store.syncCalls != 0 {
+		t.Fatalf("sync calls=%d want 0 after rejected closure mismatch", store.syncCalls)
 	}
 }
 
@@ -224,6 +261,49 @@ func TestColumnAssetManagerPublishSucceededRequiresSyncedClosure(t *testing.T) {
 	defer manager.mu.Unlock()
 	if len(manager.quarantine) != 0 || len(manager.zombies) != 0 || len(manager.rewriteDebt) != 0 {
 		t.Fatalf("manager state quarantine=%d zombies=%d rewrite=%d want all cleared", len(manager.quarantine), len(manager.zombies), len(manager.rewriteDebt))
+	}
+	if got := manager.published[ref]; got != "root published" {
+		t.Fatalf("published reason=%q want root published", got)
+	}
+}
+
+func TestColumnAssetManagerPublishSucceededPreservesUnrelatedQuarantine(t *testing.T) {
+	store := NewMemoryColumnAssetStore()
+	manager, err := NewColumnAssetManager(store)
+	if err != nil {
+		t.Fatalf("NewColumnAssetManager: %v", err)
+	}
+	ref, err := manager.Put(ColumnAssetKindTCS1PartImage, make([]byte, tcs1HeaderBytes+16))
+	if err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	prepared := ColumnPreparedAsset{
+		Ref:          ref,
+		GenerationID: 7,
+		PublishID:    11,
+		Reason:       "publish staged",
+	}
+	if err := manager.Quarantine(ref, "checksum mismatch"); err != nil {
+		t.Fatalf("Quarantine: %v", err)
+	}
+	closure, err := manager.PreparePublishClosure([]ColumnPreparedAsset{prepared})
+	if err != nil {
+		t.Fatalf("PreparePublishClosure: %v", err)
+	}
+	synced, err := manager.SyncPublishClosure(closure)
+	if err != nil {
+		t.Fatalf("SyncPublishClosure: %v", err)
+	}
+	if err := manager.MarkPublishSucceeded(synced, "root published"); err != nil {
+		t.Fatalf("MarkPublishSucceeded: %v", err)
+	}
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	if got := manager.quarantine[ref]; got != "checksum mismatch" {
+		t.Fatalf("quarantine reason=%q want checksum mismatch", got)
+	}
+	if got := manager.published[ref]; got != "root published" {
+		t.Fatalf("published reason=%q want root published", got)
 	}
 }
 
@@ -286,7 +366,7 @@ func TestColumnAssetManagerPreparedPublishFailureIsAtomic(t *testing.T) {
 	}
 }
 
-func TestColumnAssetStoreRangeProbeReadsNonZeroBytes(t *testing.T) {
+func TestColumnAssetStoreFallbackVerificationReadsFullRef(t *testing.T) {
 	ref := ColumnAssetRef{
 		Kind:     ColumnAssetKindTCS1PartImage,
 		FileID:   1,
@@ -298,14 +378,19 @@ func TestColumnAssetStoreRangeProbeReadsNonZeroBytes(t *testing.T) {
 	if err := verifyColumnAssetStoreRef(store, ref); err != nil {
 		t.Fatalf("verifyColumnAssetStoreRef: %v", err)
 	}
-	if store.readRangeCalls != 1 || store.lastLength != 1 {
-		t.Fatalf("ReadRange calls=%d length=%d want one non-zero byte probe", store.readRangeCalls, store.lastLength)
+	if store.readToCalls != 1 || store.readRangeCalls != 0 {
+		t.Fatalf("ReadTo/ReadRange calls=(%d,%d) want (1,0)", store.readToCalls, store.readRangeCalls)
+	}
+	badRef := ref
+	badRef.Checksum = 2
+	if err := verifyColumnAssetStoreRef(store, badRef); err == nil {
+		t.Fatal("verifyColumnAssetStoreRef accepted checksum-mismatched ref")
 	}
 }
 
 type rangeProbeOnlyStore struct {
+	readToCalls    int
 	readRangeCalls int
-	lastLength     int
 }
 
 type syncProbeAssetStore struct {
@@ -326,19 +411,22 @@ func (s *rangeProbeOnlyStore) Read(ColumnAssetRef) ([]byte, error) {
 	return nil, nil
 }
 
-func (s *rangeProbeOnlyStore) ReadTo(ColumnAssetRef, []byte) ([]byte, error) {
-	return nil, nil
+func (s *rangeProbeOnlyStore) ReadTo(ref ColumnAssetRef, dst []byte) ([]byte, error) {
+	s.readToCalls++
+	if err := validateColumnAssetRef(ref); err != nil {
+		return nil, err
+	}
+	if ref.Checksum != 1 {
+		return nil, fmt.Errorf("checksum mismatch")
+	}
+	payload := make([]byte, ref.Length)
+	return append(dst[:0], payload...), nil
 }
 
 func (s *rangeProbeOnlyStore) ReadRange(ref ColumnAssetRef, offset int64, length int) ([]byte, error) {
 	s.readRangeCalls++
-	s.lastLength = length
 	if err := validateColumnAssetRef(ref); err != nil {
 		return nil, err
 	}
-	if offset != 0 || length != 1 {
-		t := make([]byte, 0)
-		return t, nil
-	}
-	return []byte{0}, nil
+	return nil, fmt.Errorf("unexpected range probe offset=%d length=%d", offset, length)
 }

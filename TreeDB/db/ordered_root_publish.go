@@ -20,6 +20,8 @@ import (
 
 type orderedRootPublishPlan uint8
 
+var errCommandWALContextMissingFrame = errors.New("command wal context publish requires a command frame")
+
 const (
 	orderedRootPublishPlanColdBuild orderedRootPublishPlan = iota
 	orderedRootPublishPlanWarmFallbackRebuild
@@ -145,6 +147,28 @@ func closeUnconsumedOrderedRootDeltaPublishIterators(ordered []OrderedRootDeltaP
 // match the OrderedRootPublishInput slice passed to
 // PublishOrderedRootGroupWithSystemBuilder.
 type OrderedRootGroupSystemBuilder func(rootIDs []uint64) (iterator.UnsafeIterator, error)
+
+// CommandWALPublishContext carries the command-WAL LSN assigned to a grouped
+// root publish. Builders that need the LSN in durable metadata should use the
+// context-aware grouped publish APIs so command append and root publication
+// remain one fail-closed boundary.
+type CommandWALPublishContext struct {
+	AppliedCommandLSN uint64
+}
+
+// OrderedRootGroupCommandWALSystemBuilder builds a target system-root iterator
+// after the command-WAL frame has been appended and the non-system roots have
+// been built. The rootIDs slice is ordered to match the ordered root inputs.
+type OrderedRootGroupCommandWALSystemBuilder func(CommandWALPublishContext, []uint64) (iterator.UnsafeIterator, error)
+
+// OrderedRootGroupCommandWALDeltaBuilder builds additional root-local mutation
+// streams after the command-WAL LSN has been assigned. It is for roots whose
+// durable contents include the assigned AppliedCommandLSN.
+type OrderedRootGroupCommandWALDeltaBuilder func(CommandWALPublishContext) ([]OrderedRootDeltaPublishInput, error)
+
+// OrderedRootDeltaBatchGroupCommandWALDeltaBuilder is the batch-materialized
+// counterpart to OrderedRootGroupCommandWALDeltaBuilder.
+type OrderedRootDeltaBatchGroupCommandWALDeltaBuilder func(CommandWALPublishContext) ([]OrderedRootDeltaBatchPublishInput, error)
 
 // OrderedRootGroupPreflight validates that a root group can still be applied.
 // It runs while the DB write lock is held and before root-local deltas are
@@ -1269,6 +1293,24 @@ func (db *DB) PublishOrderedRootDeltaGroupWithCommandWALAndSystemDeltaBuilder(or
 	return db.publishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered, nil, intent, buildSystemDeltaIter)
 }
 
+// PublishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBuilder is
+// like PublishOrderedRootDeltaGroupWithCommandWALAndSystemDeltaBuilder, but the
+// system-delta builder receives the command-WAL LSN assigned to this publish.
+// The command frame is appended before any roots are published; if later root
+// or system publication fails, the open handle is poisoned and must be reopened
+// for recovery before more command-WAL publishes can proceed.
+func (db *DB) PublishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBuilder(ordered []OrderedRootDeltaPublishInput, intent *CommandWALIntent, buildSystemDeltaIter OrderedRootGroupCommandWALSystemBuilder) (uint64, []uint64, error) {
+	return db.publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBuilder(ordered, nil, intent, nil, buildSystemDeltaIter)
+}
+
+// PublishOrderedRootDeltaGroupWithCommandWALContextRootBuilderAndSystemDeltaBuilder
+// is like PublishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBuilder,
+// but may append additional root-local mutation streams after the command-WAL
+// LSN is assigned.
+func (db *DB) PublishOrderedRootDeltaGroupWithCommandWALContextRootBuilderAndSystemDeltaBuilder(ordered []OrderedRootDeltaPublishInput, intent *CommandWALIntent, buildContextDeltas OrderedRootGroupCommandWALDeltaBuilder, buildSystemDeltaIter OrderedRootGroupCommandWALSystemBuilder) (uint64, []uint64, error) {
+	return db.publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBuilder(ordered, nil, intent, buildContextDeltas, buildSystemDeltaIter)
+}
+
 // PublishOrderedRootDeltaGroupWithPreflightAndSystemDeltaBuilder is like
 // PublishOrderedRootDeltaGroupWithSystemDeltaBuilder, but runs preflight under
 // the DB write lock before applying root-local deltas.
@@ -1292,12 +1334,42 @@ func (db *DB) PublishOrderedRootDeltaBatchGroupWithCommandWALAndSystemDeltaBuild
 	return db.publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered, nil, intent, buildSystemDeltaIter)
 }
 
+// PublishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilder is
+// like PublishOrderedRootDeltaBatchGroupWithCommandWALAndSystemDeltaBuilder, but
+// the system-delta builder receives the command-WAL LSN assigned to this
+// publish.
+func (db *DB) PublishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilder(ordered []OrderedRootDeltaBatchPublishInput, intent *CommandWALIntent, buildSystemDeltaIter OrderedRootGroupCommandWALSystemBuilder) (uint64, []uint64, error) {
+	return db.publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilderSerialized(ordered, nil, intent, nil, buildSystemDeltaIter)
+}
+
+// PublishOrderedRootDeltaBatchGroupWithCommandWALContextRootBuilderAndSystemDeltaBuilder
+// is like PublishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilder,
+// but may append additional batch-materialized root deltas after the command-WAL
+// LSN is assigned.
+func (db *DB) PublishOrderedRootDeltaBatchGroupWithCommandWALContextRootBuilderAndSystemDeltaBuilder(ordered []OrderedRootDeltaBatchPublishInput, intent *CommandWALIntent, buildContextDeltas OrderedRootDeltaBatchGroupCommandWALDeltaBuilder, buildSystemDeltaIter OrderedRootGroupCommandWALSystemBuilder) (uint64, []uint64, error) {
+	return db.publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilderSerialized(ordered, nil, intent, buildContextDeltas, buildSystemDeltaIter)
+}
+
 // PublishOrderedRootDeltaBatchGroupWithPreflightCommandWALAndSystemDeltaBuilder
 // is like PublishOrderedRootDeltaBatchGroupWithCommandWALAndSystemDeltaBuilder,
 // but runs preflight under the DB write lock before appending the command-WAL
 // frame or applying root-local deltas.
 func (db *DB) PublishOrderedRootDeltaBatchGroupWithPreflightCommandWALAndSystemDeltaBuilder(ordered []OrderedRootDeltaBatchPublishInput, preflight OrderedRootGroupPreflight, intent *CommandWALIntent, buildSystemDeltaIter OrderedRootGroupSystemBuilder) (uint64, []uint64, error) {
 	return db.publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered, preflight, intent, buildSystemDeltaIter)
+}
+
+// PublishOrderedRootDeltaBatchGroupWithPreflightCommandWALContextAndSystemDeltaBuilder
+// is like PublishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilder,
+// but runs preflight before the command frame is appended.
+func (db *DB) PublishOrderedRootDeltaBatchGroupWithPreflightCommandWALContextAndSystemDeltaBuilder(ordered []OrderedRootDeltaBatchPublishInput, preflight OrderedRootGroupPreflight, intent *CommandWALIntent, buildSystemDeltaIter OrderedRootGroupCommandWALSystemBuilder) (uint64, []uint64, error) {
+	return db.publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilderSerialized(ordered, preflight, intent, nil, buildSystemDeltaIter)
+}
+
+// PublishOrderedRootDeltaBatchGroupWithPreflightCommandWALContextRootBuilderAndSystemDeltaBuilder
+// is like PublishOrderedRootDeltaBatchGroupWithCommandWALContextRootBuilderAndSystemDeltaBuilder,
+// but runs preflight before the command frame is appended.
+func (db *DB) PublishOrderedRootDeltaBatchGroupWithPreflightCommandWALContextRootBuilderAndSystemDeltaBuilder(ordered []OrderedRootDeltaBatchPublishInput, preflight OrderedRootGroupPreflight, intent *CommandWALIntent, buildContextDeltas OrderedRootDeltaBatchGroupCommandWALDeltaBuilder, buildSystemDeltaIter OrderedRootGroupCommandWALSystemBuilder) (uint64, []uint64, error) {
+	return db.publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilderSerialized(ordered, preflight, intent, buildContextDeltas, buildSystemDeltaIter)
 }
 
 // PublishOrderedRootDeltaBatchGroupWithPreflightAndSystemDeltaBuilder is like
@@ -1425,6 +1497,180 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered []Order
 	if err != nil {
 		return 0, nil, err
 	}
+	return newSystemRoot, rootIDs, nil
+}
+
+func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBuilder(ordered []OrderedRootDeltaPublishInput, preflight OrderedRootGroupPreflight, commandWALIntent *CommandWALIntent, buildContextDeltas OrderedRootGroupCommandWALDeltaBuilder, buildSystemDeltaIter OrderedRootGroupCommandWALSystemBuilder) (newSystemRoot uint64, rootIDs []uint64, err error) {
+	if buildSystemDeltaIter == nil {
+		return 0, nil, errors.New("nil ordered root group command wal system delta builder")
+	}
+	if commandWALIntent == nil {
+		return 0, nil, errCommandWALContextMissingFrame
+	}
+	if db == nil {
+		return 0, nil, ErrClosed
+	}
+	if db.closing.Load() {
+		return 0, nil, ErrClosed
+	}
+
+	lockStart := time.Now()
+	db.writeMu.Lock()
+	holdStart := time.Now()
+	wait := holdStart.Sub(lockStart)
+	rootsObserved := 0
+	phaseStats := orderedRootDeltaGroupPublishPhaseStats{}
+	finished := false
+	finishPublish := func() {
+		if finished {
+			return
+		}
+		finished = true
+		hold := time.Since(holdStart)
+		db.writeMu.Unlock()
+		db.observeOrderedRootDeltaGroupPublish(wait, hold, rootsObserved, phaseStats, err)
+	}
+	allOrdered := ordered
+	orderedConsumed := make([]bool, len(allOrdered))
+	defer func() {
+		closeUnconsumedOrderedRootDeltaPublishIterators(allOrdered, orderedConsumed)
+	}()
+	defer finishPublish()
+
+	if db.readOnly {
+		err = ErrReadOnly
+		return 0, nil, err
+	}
+	if !db.CommandWALEnabled() {
+		err = ErrCommandWALUnsupported
+		return 0, nil, err
+	}
+	idxGen := db.idx.Load()
+	if idxGen == nil {
+		err = errors.New("missing index")
+		return 0, nil, err
+	}
+
+	db.mu.RLock()
+	userRoot := db.meta.UserRootPageID
+	baseSystemRoot := db.meta.SystemRootPageID
+	db.mu.RUnlock()
+	if preflight != nil {
+		phaseStart := time.Now()
+		if err = preflight(); err != nil {
+			phaseStats.preflightNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
+			return 0, nil, err
+		}
+		phaseStats.preflightNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
+	}
+
+	sync := commandWALIntentPublishSync(commandWALIntent, false)
+	db.commitMu.Lock()
+	commitLocked := true
+	commandAppended := false
+	defer func() {
+		if err != nil && commandAppended {
+			db.poisonCommandWALAfterPublicPostAppendFailure(commandWALIntent)
+		}
+		if commitLocked {
+			db.commitMu.Unlock()
+		}
+	}()
+	lsn, err := db.appendPublicCommandWALIntent(commandWALIntent, sync)
+	if err != nil {
+		return 0, nil, err
+	}
+	if lsn == 0 {
+		err = errCommandWALContextMissingFrame
+		return 0, nil, err
+	}
+	commandAppended = true
+	ctx := CommandWALPublishContext{AppliedCommandLSN: lsn}
+
+	if buildContextDeltas != nil {
+		contextOrdered, buildErr := buildContextDeltas(ctx)
+		if buildErr != nil {
+			err = buildErr
+			return 0, nil, err
+		}
+		if len(contextOrdered) != 0 {
+			nextOrdered := make([]OrderedRootDeltaPublishInput, 0, len(allOrdered)+len(contextOrdered))
+			nextOrdered = append(nextOrdered, allOrdered...)
+			nextOrdered = append(nextOrdered, contextOrdered...)
+			nextConsumed := make([]bool, len(nextOrdered))
+			copy(nextConsumed, orderedConsumed)
+			allOrdered = nextOrdered
+			orderedConsumed = nextConsumed
+		}
+	}
+
+	systemOpts := systemRootOrderedPublishOptions(db)
+	var retired []uint64
+	var merged adaptive.Metrics
+	rootIDs = make([]uint64, len(allOrdered))
+	for idx := range allOrdered {
+		opts, err := db.orderedRootPublishOptionsForPolicy(allOrdered[idx].StoragePolicy)
+		if err != nil {
+			return 0, nil, err
+		}
+		orderedConsumed[idx] = true
+		phaseStart := time.Now()
+		rootID, rootRetired, metrics, err := db.publishOrderedRootDeltaIterator(allOrdered[idx].BaseRoot, allOrdered[idx].Iter, opts)
+		phaseStats.rootApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
+		phaseStats.rootApplyCalls++
+		if err != nil {
+			return 0, nil, err
+		}
+		rootIDs[idx] = rootID
+		rootsObserved++
+		retired = append(retired, rootRetired...)
+		mergeOrderedRootPublishMetrics(&merged, metrics)
+		phaseStats.rootApplyMetrics.add(metrics)
+	}
+
+	phaseStart := time.Now()
+	iter, err := buildSystemDeltaIter(ctx, append([]uint64(nil), rootIDs...))
+	phaseStats.systemBuildNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
+	if err != nil {
+		return 0, nil, err
+	}
+	if iter == nil {
+		err = errors.New("nil system root delta iterator")
+		return 0, nil, err
+	}
+	phaseStart = time.Now()
+	rootID, rootRetired, metrics, err := db.publishOrderedRootDeltaIterator(baseSystemRoot, iter, systemOpts)
+	phaseStats.systemApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
+	phaseStats.systemApplyCalls++
+	if err != nil {
+		return 0, nil, err
+	}
+	newSystemRoot = rootID
+	retired = append(retired, rootRetired...)
+	mergeOrderedRootPublishMetrics(&merged, metrics)
+	phaseStats.systemApplyMetrics.add(metrics)
+
+	db.mu.RLock()
+	curUserRoot := db.meta.UserRootPageID
+	curSystemRoot := db.meta.SystemRootPageID
+	db.mu.RUnlock()
+	if curUserRoot != userRoot || curSystemRoot != baseSystemRoot {
+		err = errors.New("concurrent modification detected during ordered root group publish")
+		return 0, nil, err
+	}
+
+	var vlogRefDelta *valueLogRefDelta
+	phaseStart = time.Now()
+	post, err := db.finalizeCommitLockedWithOptions(userRoot, newSystemRoot, retired, sync, merged, nil, true, vlogRefDelta, nil, nil, commandWALFinalizeOptionsForPublicIntent(commandWALIntent))
+	phaseStats.finalizeNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
+	phaseStats.finalizeCalls++
+	if err != nil {
+		return 0, nil, err
+	}
+	commandAppended = false
+	commitLocked = false
+	db.commitMu.Unlock()
+	db.finalizeCommitPostWork(post)
 	return newSystemRoot, rootIDs, nil
 }
 
@@ -1818,6 +2064,171 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 	if err != nil {
 		return 0, nil, err
 	}
+	return newSystemRoot, rootIDs, nil
+}
+
+func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilderSerialized(ordered []OrderedRootDeltaBatchPublishInput, preflight OrderedRootGroupPreflight, commandWALIntent *CommandWALIntent, buildContextDeltas OrderedRootDeltaBatchGroupCommandWALDeltaBuilder, buildSystemDeltaIter OrderedRootGroupCommandWALSystemBuilder) (newSystemRoot uint64, rootIDs []uint64, err error) {
+	if buildSystemDeltaIter == nil {
+		return 0, nil, errors.New("nil ordered root group command wal system delta builder")
+	}
+	if commandWALIntent == nil {
+		return 0, nil, errCommandWALContextMissingFrame
+	}
+	if db == nil {
+		return 0, nil, ErrClosed
+	}
+	if db.closing.Load() {
+		return 0, nil, ErrClosed
+	}
+
+	lockStart := time.Now()
+	db.writeMu.Lock()
+	holdStart := time.Now()
+	wait := holdStart.Sub(lockStart)
+	rootsObserved := 0
+	phaseStats := orderedRootDeltaGroupPublishPhaseStats{}
+	finished := false
+	finishPublish := func() {
+		if finished {
+			return
+		}
+		finished = true
+		hold := time.Since(holdStart)
+		db.writeMu.Unlock()
+		db.observeOrderedRootDeltaGroupPublish(wait, hold, rootsObserved, phaseStats, err)
+	}
+	defer finishPublish()
+
+	if db.readOnly {
+		err = ErrReadOnly
+		return 0, nil, err
+	}
+	if !db.CommandWALEnabled() {
+		err = ErrCommandWALUnsupported
+		return 0, nil, err
+	}
+	idxGen := db.idx.Load()
+	if idxGen == nil {
+		err = errors.New("missing index")
+		return 0, nil, err
+	}
+
+	db.mu.RLock()
+	userRoot := db.meta.UserRootPageID
+	baseSystemRoot := db.meta.SystemRootPageID
+	db.mu.RUnlock()
+	if preflight != nil {
+		phaseStart := time.Now()
+		if err = preflight(); err != nil {
+			phaseStats.preflightNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
+			return 0, nil, err
+		}
+		phaseStats.preflightNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
+	}
+
+	sync := commandWALIntentPublishSync(commandWALIntent, false)
+	db.commitMu.Lock()
+	commitLocked := true
+	commandAppended := false
+	defer func() {
+		if err != nil && commandAppended {
+			db.poisonCommandWALAfterPublicPostAppendFailure(commandWALIntent)
+		}
+		if commitLocked {
+			db.commitMu.Unlock()
+		}
+	}()
+	lsn, err := db.appendPublicCommandWALIntent(commandWALIntent, sync)
+	if err != nil {
+		return 0, nil, err
+	}
+	if lsn == 0 {
+		err = errCommandWALContextMissingFrame
+		return 0, nil, err
+	}
+	commandAppended = true
+	ctx := CommandWALPublishContext{AppliedCommandLSN: lsn}
+
+	allOrdered := ordered
+	if buildContextDeltas != nil {
+		contextOrdered, buildErr := buildContextDeltas(ctx)
+		if buildErr != nil {
+			err = buildErr
+			return 0, nil, err
+		}
+		if len(contextOrdered) != 0 {
+			allOrdered = make([]OrderedRootDeltaBatchPublishInput, 0, len(ordered)+len(contextOrdered))
+			allOrdered = append(allOrdered, ordered...)
+			allOrdered = append(allOrdered, contextOrdered...)
+		}
+	}
+
+	rootIDs = make([]uint64, len(allOrdered))
+	systemOpts := systemRootOrderedPublishOptions(db)
+	var retired []uint64
+	var merged adaptive.Metrics
+	for idx := range allOrdered {
+		opts, err := db.orderedRootPublishOptionsForPolicy(allOrdered[idx].StoragePolicy)
+		if err != nil {
+			return 0, nil, err
+		}
+		phaseStart := time.Now()
+		rootID, rootRetired, metrics, err := db.publishOrderedRootDeltaBatchWithAllocator(idxGen, allOrdered[idx].BaseRoot, allOrdered[idx].Delta, opts, idxGen.allocator, &pagerAllocator{p: idxGen.pager}, allOrdered[idx].IncludeDeletedOnColdBuild)
+		phaseStats.rootApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
+		phaseStats.rootApplyCalls++
+		if err != nil {
+			return 0, nil, err
+		}
+		rootIDs[idx] = rootID
+		rootsObserved++
+		retired = append(retired, rootRetired...)
+		mergeOrderedRootPublishMetrics(&merged, metrics)
+		phaseStats.rootApplyMetrics.add(metrics)
+	}
+
+	phaseStart := time.Now()
+	iter, err := buildSystemDeltaIter(ctx, append([]uint64(nil), rootIDs...))
+	phaseStats.systemBuildNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
+	if err != nil {
+		return 0, nil, err
+	}
+	if iter == nil {
+		err = errors.New("nil system root delta iterator")
+		return 0, nil, err
+	}
+	phaseStart = time.Now()
+	rootID, rootRetired, metrics, err := db.publishOrderedRootDeltaIterator(baseSystemRoot, iter, systemOpts)
+	phaseStats.systemApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
+	phaseStats.systemApplyCalls++
+	if err != nil {
+		return 0, nil, err
+	}
+	newSystemRoot = rootID
+	retired = append(retired, rootRetired...)
+	mergeOrderedRootPublishMetrics(&merged, metrics)
+	phaseStats.systemApplyMetrics.add(metrics)
+
+	db.mu.RLock()
+	curUserRoot := db.meta.UserRootPageID
+	curSystemRoot := db.meta.SystemRootPageID
+	db.mu.RUnlock()
+	if curUserRoot != userRoot || curSystemRoot != baseSystemRoot {
+		err = errors.New("concurrent modification detected during ordered root group publish")
+		return 0, nil, err
+	}
+
+	var vlogRefDelta *valueLogRefDelta
+	phaseStart = time.Now()
+	post, err := db.finalizeCommitLockedWithOptions(userRoot, newSystemRoot, retired, sync, merged, nil, true, vlogRefDelta, nil, nil, commandWALFinalizeOptionsForPublicIntent(commandWALIntent))
+	phaseStats.finalizeNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
+	phaseStats.finalizeCalls++
+	if err != nil {
+		return 0, nil, err
+	}
+	commandAppended = false
+	commitLocked = false
+	db.commitMu.Unlock()
+	db.finalizeCommitPostWork(post)
 	return newSystemRoot, rootIDs, nil
 }
 

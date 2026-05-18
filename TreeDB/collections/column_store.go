@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -13,10 +14,11 @@ import (
 )
 
 const (
-	columnManifestFormatTCS1        = "tcs1"
-	columnManifestIdentityMagic     = uint32(0x54434d49) // TCMI
-	columnManifestIdentityVersion   = uint16(1)
-	columnManifestIdentityRecordKey = "\x00column-manifest/identity"
+	columnManifestFormatTCS1         = "tcs1"
+	columnManifestIdentityMagic      = uint32(0x54434d49) // TCMI
+	columnManifestIdentityVersion    = uint16(1)
+	columnManifestIdentityRecordSize = 28
+	columnManifestIdentityRecordKey  = "\x00column-manifest/identity"
 )
 
 type ColumnStoreValueType string
@@ -74,18 +76,29 @@ const (
 	ColumnLocatorStrategyRoot      ColumnLocatorStrategy = "primary-id-row-root"
 )
 
+type ColumnStoreProfileSupport string
+
+const (
+	ColumnStoreProfileDurableOnly      ColumnStoreProfileSupport = "durable-only"
+	ColumnStoreProfileBenchmarkRelaxed ColumnStoreProfileSupport = "benchmark-relaxed"
+)
+
 type ColumnStoreConfig struct {
-	Enabled                  bool                        `json:"enabled,omitempty"`
-	Columns                  []ColumnStoreColumn         `json:"columns,omitempty"`
-	SortKey                  []ColumnSortKey             `json:"sort_key,omitempty"`
-	AggregateMetadata        []ColumnAggregateMetadata   `json:"aggregate_metadata,omitempty"`
-	RetainedPayload          ColumnRetainedPayloadPolicy `json:"retained_payload,omitempty"`
-	Reconstruction           ColumnReconstructionPolicy  `json:"reconstruction,omitempty"`
-	AssetManager             *ColumnAssetManagerConfig   `json:"asset_manager,omitempty"`
-	ActiveManifest           *ColumnManifestIdentity     `json:"active_manifest,omitempty"`
-	Locator                  *ColumnLocatorConfig        `json:"locator,omitempty"`
-	ControlRootStoragePolicy RootStoragePolicy           `json:"control_root_storage_policy,omitempty"`
-	SchemaHash               uint64                      `json:"schema_hash,omitempty"`
+	Enabled                                bool                          `json:"enabled,omitempty"`
+	Columns                                []ColumnStoreColumn           `json:"columns,omitempty"`
+	SortKey                                []ColumnSortKey               `json:"sort_key,omitempty"`
+	AggregateMetadata                      []ColumnAggregateMetadata     `json:"aggregate_metadata,omitempty"`
+	RetainedPayload                        ColumnRetainedPayloadPolicy   `json:"retained_payload,omitempty"`
+	Reconstruction                         ColumnReconstructionPolicy    `json:"reconstruction,omitempty"`
+	AssetManager                           *ColumnAssetManagerConfig     `json:"asset_manager,omitempty"`
+	ManifestRoot                           *ColumnManifestRootDescriptor `json:"manifest_root,omitempty"`
+	ActiveManifest                         *ColumnManifestIdentity       `json:"active_manifest,omitempty"`
+	RecoveryAuthoritativeManifest          *ColumnManifestIdentity       `json:"recovery_authoritative_manifest,omitempty"`
+	RecoveryAuthoritativeAppliedCommandLSN uint64                        `json:"recovery_authoritative_applied_command_lsn,omitempty"`
+	ProfileSupport                         ColumnStoreProfileSupport     `json:"profile_support,omitempty"`
+	Locator                                *ColumnLocatorConfig          `json:"locator,omitempty"`
+	ControlRootStoragePolicy               RootStoragePolicy             `json:"control_root_storage_policy,omitempty"`
+	SchemaHash                             uint64                        `json:"schema_hash,omitempty"`
 }
 
 type ColumnStoreColumn struct {
@@ -114,6 +127,11 @@ type ColumnAssetManagerConfig struct {
 	Namespace         string                 `json:"namespace,omitempty"`
 }
 
+type ColumnManifestRootDescriptor struct {
+	Name          string            `json:"name,omitempty"`
+	StoragePolicy RootStoragePolicy `json:"storage_policy,omitempty"`
+}
+
 type ColumnManifestIdentity struct {
 	Generation uint64 `json:"generation,omitempty"`
 	Format     string `json:"format,omitempty"`
@@ -126,12 +144,14 @@ type ColumnLocatorConfig struct {
 }
 
 type ColumnStoreCacheIdentity struct {
-	Collection         string
-	SchemaHash         uint64
-	CatalogSystemRoot  uint64
-	CatalogCommitSeq   uint64
-	ManifestGeneration uint64
-	ManifestRoot       uint64
+	Collection                             string
+	SchemaHash                             uint64
+	CatalogSystemRoot                      uint64
+	CatalogCommitSeq                       uint64
+	ManifestGeneration                     uint64
+	RecoveryAuthoritativeGeneration        uint64
+	RecoveryAuthoritativeAppliedCommandLSN uint64
+	ManifestRoot                           uint64
 }
 
 type ColumnCacheEntryKind string
@@ -203,7 +223,48 @@ func columnStoreCacheIdentity(catalog *collectionCatalog, systemRoot, commitSeq 
 	if cfg.ActiveManifest != nil {
 		id.ManifestGeneration = cfg.ActiveManifest.Generation
 	}
+	if cfg.RecoveryAuthoritativeManifest != nil {
+		id.RecoveryAuthoritativeGeneration = cfg.RecoveryAuthoritativeManifest.Generation
+		id.RecoveryAuthoritativeAppliedCommandLSN = cfg.RecoveryAuthoritativeAppliedCommandLSN
+	}
 	return id, true
+}
+
+func validateColumnStoreProfileSupportForDB(db *backenddb.DB, cfg *ColumnStoreConfig, operation string) error {
+	if cfg == nil || !cfg.Enabled {
+		return nil
+	}
+	if db == nil {
+		return errCollectionDBNil
+	}
+	profileSupport := cfg.ProfileSupport
+	if profileSupport == "" {
+		profileSupport = ColumnStoreProfileDurableOnly
+	}
+	switch db.DurabilityMode() {
+	case backenddb.DurabilityDurable:
+		return nil
+	case backenddb.DurabilityWALOnRelaxed, backenddb.DurabilityWALOffRelaxed:
+		if profileSupport == ColumnStoreProfileBenchmarkRelaxed {
+			return nil
+		}
+		return fmt.Errorf("collections: column_store profile support %q requires durable backend for %s (durability=%s)", profileSupport, operation, columnStoreDurabilityModeName(db.DurabilityMode()))
+	default:
+		return fmt.Errorf("collections: unsupported backend durability mode %s for column_store %s", columnStoreDurabilityModeName(db.DurabilityMode()), operation)
+	}
+}
+
+func columnStoreDurabilityModeName(mode backenddb.DurabilityMode) string {
+	switch mode {
+	case backenddb.DurabilityDurable:
+		return "durable"
+	case backenddb.DurabilityWALOnRelaxed:
+		return "wal_on_fast"
+	case backenddb.DurabilityWALOffRelaxed:
+		return "fast"
+	default:
+		return fmt.Sprintf("unknown(%d)", mode)
+	}
 }
 
 func normalizeColumnStoreConfig(collection string, in *ColumnStoreConfig) (*ColumnStoreConfig, error) {
@@ -239,28 +300,41 @@ func normalizeColumnStoreConfig(collection string, in *ColumnStoreConfig) (*Colu
 		out.AssetManager.Namespace = defaultColumnAssetNamespace(collection)
 	}
 	out.AssetManager.IsolatedNamespace = true
+	if out.ManifestRoot == nil {
+		out.ManifestRoot = &ColumnManifestRootDescriptor{}
+	}
+	if out.ManifestRoot.Name == "" {
+		out.ManifestRoot.Name = collectionColumnManifestRootName(collection)
+	}
+	if out.ManifestRoot.StoragePolicy != "" && out.ControlRootStoragePolicy == "" {
+		out.ControlRootStoragePolicy = out.ManifestRoot.StoragePolicy
+	}
+	if out.ManifestRoot.StoragePolicy == "" {
+		out.ManifestRoot.StoragePolicy = out.ControlRootStoragePolicy
+	}
 	if out.Locator == nil {
 		out.Locator = &ColumnLocatorConfig{Strategy: ColumnLocatorStrategySideIndex}
 	}
 	if out.Locator.Strategy == "" {
 		out.Locator.Strategy = ColumnLocatorStrategySideIndex
 	}
-	if out.ActiveManifest != nil {
-		if out.ActiveManifest.Format == "" {
-			out.ActiveManifest.Format = columnManifestFormatTCS1
-		}
-		if out.ActiveManifest.Version == 0 {
-			out.ActiveManifest.Version = columnManifestIdentityVersion
-		}
+	if out.ProfileSupport == "" {
+		out.ProfileSupport = ColumnStoreProfileDurableOnly
 	}
-	if err := validateColumnStoreConfig(out); err != nil {
+	if out.ActiveManifest != nil {
+		normalizeColumnManifestIdentityDefaults(out.ActiveManifest)
+	}
+	if out.RecoveryAuthoritativeManifest != nil {
+		normalizeColumnManifestIdentityDefaults(out.RecoveryAuthoritativeManifest)
+	}
+	if err := validateColumnStoreConfig(collection, out); err != nil {
 		return nil, err
 	}
 	out.SchemaHash = hashColumnStoreSchema(&out)
 	return &out, nil
 }
 
-func validateColumnStoreConfig(cfg ColumnStoreConfig) error {
+func validateColumnStoreConfig(collection string, cfg ColumnStoreConfig) error {
 	if !cfg.Enabled {
 		return nil
 	}
@@ -355,6 +429,24 @@ func validateColumnStoreConfig(cfg ColumnStoreConfig) error {
 	if strings.TrimSpace(cfg.AssetManager.Namespace) == "" || strings.Contains(cfg.AssetManager.Namespace, "\x00") {
 		return errors.New("collections: invalid column asset namespace")
 	}
+	if cfg.ManifestRoot == nil {
+		return errors.New("collections: column_store requires column manifest root descriptor")
+	}
+	expectedRoot := collectionColumnManifestRootName(collection)
+	if cfg.ManifestRoot.Name != expectedRoot {
+		return fmt.Errorf("collections: column manifest root descriptor name %q does not match %q", cfg.ManifestRoot.Name, expectedRoot)
+	}
+	if _, err := backendRootStoragePolicy(cfg.ManifestRoot.StoragePolicy); err != nil {
+		return err
+	}
+	if cfg.ManifestRoot.StoragePolicy != cfg.ControlRootStoragePolicy {
+		return fmt.Errorf("collections: column manifest root descriptor storage policy %q does not match control root storage policy %q", cfg.ManifestRoot.StoragePolicy, cfg.ControlRootStoragePolicy)
+	}
+	switch cfg.ProfileSupport {
+	case ColumnStoreProfileDurableOnly, ColumnStoreProfileBenchmarkRelaxed:
+	default:
+		return fmt.Errorf("collections: unsupported column profile support %q", cfg.ProfileSupport)
+	}
 	if cfg.Locator == nil {
 		return errors.New("collections: column_store requires locator strategy metadata")
 	}
@@ -367,6 +459,27 @@ func validateColumnStoreConfig(cfg ColumnStoreConfig) error {
 		if err := validateColumnManifestIdentity(*cfg.ActiveManifest); err != nil {
 			return err
 		}
+	}
+	if cfg.RecoveryAuthoritativeManifest != nil {
+		if err := validateColumnManifestIdentityFor("recovery-authoritative", *cfg.RecoveryAuthoritativeManifest); err != nil {
+			return err
+		}
+		if cfg.ActiveManifest == nil {
+			return errors.New("collections: recovery-authoritative column manifest without active column manifest")
+		}
+	}
+	if cfg.ActiveManifest != nil {
+		if cfg.RecoveryAuthoritativeManifest == nil {
+			return errors.New("collections: active column manifest requires recovery-authoritative metadata")
+		}
+		if cfg.RecoveryAuthoritativeAppliedCommandLSN == 0 {
+			return errors.New("collections: active column manifest requires recovery-authoritative AppliedCommandLSN")
+		}
+		if !columnManifestIdentityValueEqual(*cfg.ActiveManifest, *cfg.RecoveryAuthoritativeManifest) {
+			return errors.New("collections: recovery-authoritative column manifest must match active column manifest")
+		}
+	} else if cfg.RecoveryAuthoritativeAppliedCommandLSN != 0 {
+		return errors.New("collections: recovery-authoritative AppliedCommandLSN without active column manifest")
 	}
 	return nil
 }
@@ -422,25 +535,48 @@ func validateColumnAggregateKind(kind ColumnAggregateKind, column string) error 
 }
 
 func validateColumnManifestIdentity(identity ColumnManifestIdentity) error {
+	return validateColumnManifestIdentityFor("active", identity)
+}
+
+func validateColumnManifestIdentityFor(label string, identity ColumnManifestIdentity) error {
 	if identity.Generation == 0 {
-		return errors.New("collections: active column manifest generation is required")
+		return fmt.Errorf("collections: %s column manifest generation is required", label)
 	}
 	if identity.Format == "" {
 		identity.Format = columnManifestFormatTCS1
 	}
 	if identity.Format != columnManifestFormatTCS1 {
-		return fmt.Errorf("collections: unsupported active column manifest format %q", identity.Format)
+		return fmt.Errorf("collections: unsupported %s column manifest format %q", label, identity.Format)
 	}
 	if identity.Version == 0 {
-		return errors.New("collections: active column manifest version is required")
+		return fmt.Errorf("collections: %s column manifest version is required", label)
 	}
 	if identity.Version != columnManifestIdentityVersion {
-		return fmt.Errorf("collections: unsupported active column manifest version %d", identity.Version)
+		return fmt.Errorf("collections: unsupported %s column manifest version %d", label, identity.Version)
 	}
 	if identity.Checksum == 0 {
-		return errors.New("collections: active column manifest checksum is required")
+		return fmt.Errorf("collections: %s column manifest checksum is required", label)
 	}
 	return nil
+}
+
+func normalizeColumnManifestIdentityDefaults(identity *ColumnManifestIdentity) {
+	if identity == nil {
+		return
+	}
+	if identity.Format == "" {
+		identity.Format = columnManifestFormatTCS1
+	}
+	if identity.Version == 0 {
+		identity.Version = columnManifestIdentityVersion
+	}
+}
+
+func columnManifestIdentityValueEqual(a, b ColumnManifestIdentity) bool {
+	return a.Generation == b.Generation &&
+		a.Format == b.Format &&
+		a.Version == b.Version &&
+		a.Checksum == b.Checksum
 }
 
 func validateColumnStoreCatalogRoot(snap *backenddb.Snapshot, catalog *collectionCatalog) error {
@@ -476,8 +612,30 @@ func validateColumnStoreCatalogRoot(snap *backenddb.Snapshot, catalog *collectio
 	return nil
 }
 
+func validateColumnManifestPublishedRoot(snap *backenddb.Snapshot, collection string, rootID uint64, expected [columnManifestIdentityRecordSize]byte) error {
+	entry, err := snap.GetEntryAtRoot(rootID, []byte(columnManifestIdentityRecordKey))
+	if errors.Is(err, tree.ErrKeyNotFound) {
+		return fmt.Errorf("collections: published column manifest root %d for %q is missing identity record", rootID, collection)
+	}
+	if err != nil {
+		return fmt.Errorf("collections: published column manifest root %d for %q is unreadable: %w", rootID, collection, err)
+	}
+	if entry.Flags&node.FlagTombstone != 0 {
+		return fmt.Errorf("collections: published column manifest root %d for %q has deleted identity record", rootID, collection)
+	}
+	if !bytes.Equal(entry.Value, expected[:]) {
+		return fmt.Errorf("collections: published root identity record for %q does not match column publish plan", collection)
+	}
+	return nil
+}
+
 func encodeColumnManifestIdentityRecord(identity ColumnManifestIdentity) []byte {
-	out := make([]byte, 28)
+	record := encodeColumnManifestIdentityRecordArray(identity)
+	return record[:]
+}
+
+func encodeColumnManifestIdentityRecordArray(identity ColumnManifestIdentity) [columnManifestIdentityRecordSize]byte {
+	var out [columnManifestIdentityRecordSize]byte
 	binary.BigEndian.PutUint32(out[0:4], columnManifestIdentityMagic)
 	binary.BigEndian.PutUint16(out[4:6], columnManifestIdentityVersion)
 	binary.BigEndian.PutUint16(out[6:8], identity.Version)
@@ -488,7 +646,7 @@ func encodeColumnManifestIdentityRecord(identity ColumnManifestIdentity) []byte 
 }
 
 func decodeColumnManifestIdentityRecord(raw []byte) (columnManifestIdentityRecord, error) {
-	if len(raw) != 28 {
+	if len(raw) != columnManifestIdentityRecordSize {
 		return columnManifestIdentityRecord{}, fmt.Errorf("malformed identity record length %d", len(raw))
 	}
 	if magic := binary.BigEndian.Uint32(raw[0:4]); magic != columnManifestIdentityMagic {
@@ -515,7 +673,11 @@ func columnStoreConfigEmpty(cfg ColumnStoreConfig) bool {
 		cfg.RetainedPayload == "" &&
 		cfg.Reconstruction == "" &&
 		cfg.AssetManager == nil &&
+		cfg.ManifestRoot == nil &&
 		cfg.ActiveManifest == nil &&
+		cfg.RecoveryAuthoritativeManifest == nil &&
+		cfg.RecoveryAuthoritativeAppliedCommandLSN == 0 &&
+		cfg.ProfileSupport == "" &&
 		cfg.Locator == nil &&
 		cfg.ControlRootStoragePolicy == "" &&
 		cfg.SchemaHash == 0
@@ -530,9 +692,17 @@ func (cfg ColumnStoreConfig) copy() ColumnStoreConfig {
 		assetManager := *cfg.AssetManager
 		out.AssetManager = &assetManager
 	}
+	if cfg.ManifestRoot != nil {
+		manifestRoot := *cfg.ManifestRoot
+		out.ManifestRoot = &manifestRoot
+	}
 	if cfg.ActiveManifest != nil {
 		identity := *cfg.ActiveManifest
 		out.ActiveManifest = &identity
+	}
+	if cfg.RecoveryAuthoritativeManifest != nil {
+		identity := *cfg.RecoveryAuthoritativeManifest
+		out.RecoveryAuthoritativeManifest = &identity
 	}
 	if cfg.Locator != nil {
 		locator := *cfg.Locator
@@ -576,9 +746,13 @@ func columnStoreConfigEqual(a, b *ColumnStoreConfig) bool {
 		a.RetainedPayload != b.RetainedPayload ||
 		a.Reconstruction != b.Reconstruction ||
 		a.ControlRootStoragePolicy != b.ControlRootStoragePolicy ||
+		a.RecoveryAuthoritativeAppliedCommandLSN != b.RecoveryAuthoritativeAppliedCommandLSN ||
+		a.ProfileSupport != b.ProfileSupport ||
 		a.SchemaHash != b.SchemaHash ||
 		!columnAssetManagerConfigEqual(a.AssetManager, b.AssetManager) ||
+		!columnManifestRootDescriptorEqual(a.ManifestRoot, b.ManifestRoot) ||
 		!columnManifestIdentityEqual(a.ActiveManifest, b.ActiveManifest) ||
+		!columnManifestIdentityEqual(a.RecoveryAuthoritativeManifest, b.RecoveryAuthoritativeManifest) ||
 		!columnLocatorConfigEqual(a.Locator, b.Locator) ||
 		len(a.Columns) != len(b.Columns) ||
 		len(a.SortKey) != len(b.SortKey) ||
@@ -601,6 +775,13 @@ func columnStoreConfigEqual(a, b *ColumnStoreConfig) bool {
 		}
 	}
 	return true
+}
+
+func columnManifestRootDescriptorEqual(a, b *ColumnManifestRootDescriptor) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
 }
 
 func columnAssetManagerConfigEqual(a, b *ColumnAssetManagerConfig) bool {
@@ -632,6 +813,10 @@ func hashColumnStoreSchema(cfg *ColumnStoreConfig) uint64 {
 	writeHashString(&d, string(cfg.RetainedPayload))
 	writeHashString(&d, string(cfg.Reconstruction))
 	writeHashString(&d, string(cfg.ControlRootStoragePolicy))
+	if cfg.ManifestRoot != nil {
+		writeHashString(&d, cfg.ManifestRoot.Name)
+		writeHashString(&d, string(cfg.ManifestRoot.StoragePolicy))
+	}
 	for _, col := range cfg.Columns {
 		writeHashString(&d, col.Name)
 		writeHashString(&d, col.Path)
@@ -682,8 +867,13 @@ func writeHashInt(d *xxhash.Digest, value int) {
 }
 
 func columnManifestIdentityIterator(identity ColumnManifestIdentity) *systemTargetIterator {
+	return columnManifestIdentityRecordIterator(encodeColumnManifestIdentityRecordArray(identity))
+}
+
+func columnManifestIdentityRecordIterator(record [columnManifestIdentityRecordSize]byte) *systemTargetIterator {
+	recordCopy := record
 	return &systemTargetIterator{entries: []systemTargetEntry{{
 		key:   []byte(columnManifestIdentityRecordKey),
-		value: encodeColumnManifestIdentityRecord(identity),
+		value: recordCopy[:],
 	}}}
 }

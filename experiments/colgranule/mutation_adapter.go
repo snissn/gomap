@@ -12,6 +12,7 @@ type ColumnMutationAdapterOptions struct {
 	Collection        string
 	StoreOptions      ColumnStoreOptions
 	Dictionaries      map[string]map[string]int64
+	ReplayProfile     ColumnMutationReplayProfile
 	InitialPartID     uint64
 	InitialGeneration uint64
 }
@@ -35,16 +36,17 @@ type ColumnMutationApplyResult struct {
 }
 
 type ColumnMutationAdapter struct {
-	workspace    *ColumnWorkspace
-	collection   string
-	opts         ColumnStoreOptions
-	dictionaries map[string]map[string]int64
-	baseParts    []ColumnManifestPartRef
-	deltaParts   []ColumnManifestPartRef
-	tombstones   []ColumnTombstone
-	manifest     ColumnCollectionManifest
-	nextPartID   uint64
-	nextGen      uint64
+	workspace     *ColumnWorkspace
+	collection    string
+	opts          ColumnStoreOptions
+	dictionaries  map[string]map[string]int64
+	replayProfile ColumnMutationReplayProfile
+	baseParts     []ColumnManifestPartRef
+	deltaParts    []ColumnManifestPartRef
+	tombstones    []ColumnTombstone
+	manifest      ColumnCollectionManifest
+	nextPartID    uint64
+	nextGen       uint64
 }
 
 func NewColumnMutationAdapter(workspace *ColumnWorkspace, opts ColumnMutationAdapterOptions) (*ColumnMutationAdapter, error) {
@@ -55,6 +57,13 @@ func NewColumnMutationAdapter(workspace *ColumnWorkspace, opts ColumnMutationAda
 	if err != nil {
 		return nil, err
 	}
+	if err := opts.ReplayProfile.Validate(); err != nil {
+		return nil, err
+	}
+	replayProfile := opts.ReplayProfile.normalized()
+	if workspace.ManifestSyncMode() != replayProfile.workspaceManifestSyncMode() {
+		return nil, fmt.Errorf("colgranule: column mutation replay profile %q requires workspace manifest sync mode %q", replayProfile.Label(), replayProfile.workspaceManifestSyncMode())
+	}
 	collection := opts.Collection
 	if collection == "" {
 		collection = workspace.Manifest().Collection
@@ -63,12 +72,13 @@ func NewColumnMutationAdapter(workspace *ColumnWorkspace, opts ColumnMutationAda
 		return nil, fmt.Errorf("colgranule: empty column mutation collection")
 	}
 	adapter := &ColumnMutationAdapter{
-		workspace:    workspace,
-		collection:   collection,
-		opts:         normalized,
-		dictionaries: opts.Dictionaries,
-		nextPartID:   opts.InitialPartID,
-		nextGen:      opts.InitialGeneration,
+		workspace:     workspace,
+		collection:    collection,
+		opts:          normalized,
+		dictionaries:  opts.Dictionaries,
+		replayProfile: replayProfile,
+		nextPartID:    opts.InitialPartID,
+		nextGen:       opts.InitialGeneration,
 	}
 	if adapter.nextPartID == 0 {
 		adapter.nextPartID = 1
@@ -98,6 +108,13 @@ func NewColumnMutationAdapter(workspace *ColumnWorkspace, opts ColumnMutationAda
 	}
 	adapter.manifest = manifest
 	return adapter, nil
+}
+
+func (a *ColumnMutationAdapter) ReplayProfile() ColumnMutationReplayProfile {
+	if a == nil {
+		return ColumnMutationReplayProfile{}
+	}
+	return a.replayProfile
 }
 
 func (a *ColumnMutationAdapter) Manifest() ColumnCollectionManifest {
