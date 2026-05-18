@@ -36,6 +36,8 @@ type columnVectorGraphPersistedFixture struct {
 
 type columnVectorGraphPersistedAccounting struct {
 	rows                       int
+	parts                      int
+	codecBlocks                int
 	encodedRawBytes            int
 	declaredColumnStoredBytes  int
 	assetBytes                 int
@@ -50,6 +52,8 @@ type columnVectorGraphPersistedAccounting struct {
 	sourceDocumentVectorBytes  int
 	actualCompressionBlocks    map[string]int
 	compressionFallbackReasons map[string]int
+	columnCompressionBlocks    map[string]int
+	columnFallbackReasons      map[string]int
 }
 
 func (f *columnVectorGraphPersistedFixture) Close() error {
@@ -252,13 +256,17 @@ func reportColumnVectorGraphPersistedProductMetrics(b *testing.B, fixture *colum
 	b.ReportMetric(float64(fixture.buildNanos)/1e6, "build_ms")
 	b.ReportMetric(float64(fixture.openNanos)/1e6, "open_ms")
 	b.ReportMetric(float64(fixture.decodeNanos)/1e6, "decode_ms")
+	b.ReportMetric(float64(accounting.parts), "parts")
+	b.ReportMetric(float64(accounting.codecBlocks), "codec_blocks")
 	b.ReportMetric(float64(accounting.encodedRawBytes)/rows, "encoded_raw_B/entry")
 	b.ReportMetric(float64(accounting.declaredColumnStoredBytes)/rows, "stored_B/entry")
 	b.ReportMetric(float64(accounting.assetBytes)/rows, "asset_B/entry")
 	b.ReportMetric(float64(accounting.imageBytes)/rows, "image_B/entry")
+	b.ReportMetric(float64(accounting.assetBytes-accounting.imageBytes)/rows, "asset_header_B/entry")
 	// Colgranule has no row-store checkpoint/GC/rewrite hook. This is the
 	// settled namespace size after part publish, manifest save, close, and reopen.
 	b.ReportMetric(float64(accounting.settledDiskBytes)/rows, "settled_disk_B/entry")
+	b.ReportMetric(float64(accounting.settledDiskBytes-int64(accounting.assetBytes))/rows, "settled_over_asset_B/entry")
 	b.ReportMetric(float64(accounting.vectorRawBytes)/rows, "vector_raw_B/entry")
 	b.ReportMetric(float64(accounting.vectorStoredBytes)/rows, "vector_stored_B/entry")
 	b.ReportMetric(float64(accounting.invNormRawBytes)/rows, "invnorm_raw_B/entry")
@@ -272,6 +280,12 @@ func reportColumnVectorGraphPersistedProductMetrics(b *testing.B, fixture *colum
 	}
 	for reason, blocks := range accounting.compressionFallbackReasons {
 		b.ReportMetric(float64(blocks), "fallback_"+metricToken(reason)+"_blocks")
+	}
+	for columnCompression, blocks := range accounting.columnCompressionBlocks {
+		b.ReportMetric(float64(blocks), "actual_"+metricToken(columnCompression)+"_blocks")
+	}
+	for columnReason, blocks := range accounting.columnFallbackReasons {
+		b.ReportMetric(float64(blocks), "fallback_"+metricToken(columnReason)+"_blocks")
 	}
 }
 
@@ -416,6 +430,10 @@ func buildColumnVectorGraphPersistedFixtureWithPhaseTimer(tb testing.TB, phaseTi
 }
 
 func columnVectorGraphPersistedOptions(rows int, dims int, blockRows int, vectorCompression Compression) ColumnStoreOptions {
+	return columnVectorGraphPersistedOptionsWithAdjacencyCompression(rows, dims, blockRows, vectorCompression, CompressionNone)
+}
+
+func columnVectorGraphPersistedOptionsWithAdjacencyCompression(rows int, dims int, blockRows int, vectorCompression Compression, adjacencyCompression Compression) ColumnStoreOptions {
 	if blockRows <= 0 {
 		blockRows = DefaultRowsPerGranule
 	}
@@ -426,7 +444,7 @@ func columnVectorGraphPersistedOptions(rows int, dims int, blockRows int, vector
 			{Name: "id", Type: ColumnTypeInt64, Encoding: EncodingRawInt64, Compression: CompressionNone, CodecBlockRows: blockRows},
 			{Name: "embedding", Type: ColumnTypeFloat32Vector, VectorDims: dims, Compression: vectorCompression, CodecBlockRows: blockRows},
 			{Name: "embedding_inv_norm", Type: ColumnTypeFloat32Vector, VectorDims: 1, Compression: vectorCompression, CodecBlockRows: blockRows},
-			{Name: "neighbors", Type: ColumnTypeAdjacencyList, Compression: CompressionNone, CodecBlockRows: blockRows},
+			{Name: "neighbors", Type: ColumnTypeAdjacencyList, Compression: adjacencyCompression, CodecBlockRows: blockRows},
 		},
 		LogicalPrimaryKey: LogicalPrimaryKey{Columns: []string{"id"}},
 		SortKey:           SortKey{Columns: []SortKeyColumn{{Column: "id"}}},
@@ -549,6 +567,8 @@ func columnVectorGraphPersistedByteAccounting(tb testing.TB, reader *ColumnPartS
 	out := columnVectorGraphPersistedAccounting{
 		actualCompressionBlocks:    make(map[string]int),
 		compressionFallbackReasons: make(map[string]int),
+		columnCompressionBlocks:    make(map[string]int),
+		columnFallbackReasons:      make(map[string]int),
 	}
 	if reader == nil {
 		return out
@@ -556,6 +576,8 @@ func columnVectorGraphPersistedByteAccounting(tb testing.TB, reader *ColumnPartS
 	for _, loaded := range reader.parts {
 		partAccounting := loaded.Part.ByteAccounting()
 		out.rows += partAccounting.Rows
+		out.parts++
+		out.codecBlocks += partAccounting.CodecBlocks
 		out.encodedRawBytes += partAccounting.EncodedRawBytes
 		out.declaredColumnStoredBytes += partAccounting.DeclaredColumnStoredBytes
 		out.assetBytes += loaded.Ref.Part.AssetBytes
@@ -577,6 +599,11 @@ func columnVectorGraphPersistedByteAccounting(tb testing.TB, reader *ColumnPartS
 			out.actualCompressionBlocks[compression.ActualCompression.String()] += compression.Blocks
 			if compression.FallbackReason != "" {
 				out.compressionFallbackReasons[compression.FallbackReason] += compression.Blocks
+			}
+			columnName := metricToken(compression.Column)
+			out.columnCompressionBlocks[columnName+"_"+compression.ActualCompression.String()] += compression.Blocks
+			if compression.FallbackReason != "" {
+				out.columnFallbackReasons[columnName+"_"+compression.FallbackReason] += compression.Blocks
 			}
 		}
 	}

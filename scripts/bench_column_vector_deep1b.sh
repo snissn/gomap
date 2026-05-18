@@ -6,8 +6,11 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 : "${COLUMN_VECTOR_DEEP1B_DIR:="${HOME}/.cache/gomap/deep1b"}"
 : "${COLUMN_VECTOR_DEEP1B_DOWNLOAD:=1}"
 : "${COLUMN_VECTOR_DEEP1B_COMPRESSIONS:=none,zstd}"
+: "${COLUMN_VECTOR_DEEP1B_ADJACENCY_COMPRESSIONS:=}"
+: "${COLUMN_VECTOR_DEEP1B_NEIGHBORHOOD_ROWS:=8192}"
 : "${RUN_10M:=false}"
 : "${RUN_BUILD_OPEN_DECODE:=false}"
+: "${RUN_NEIGHBORHOOD_SMOKE:=false}"
 : "${BENCHTIME:=500ms}"
 : "${COUNT:=1}"
 
@@ -15,6 +18,8 @@ export COLUMN_VECTOR_DEEP1B=1
 export COLUMN_VECTOR_DEEP1B_DIR
 export COLUMN_VECTOR_DEEP1B_DOWNLOAD
 export COLUMN_VECTOR_DEEP1B_COMPRESSIONS
+export COLUMN_VECTOR_DEEP1B_ADJACENCY_COMPRESSIONS
+export COLUMN_VECTOR_DEEP1B_NEIGHBORHOOD_ROWS
 
 shape_re='1m'
 if [[ "${RUN_10M}" == "true" || "${RUN_10M}" == "1" ]]; then
@@ -35,3 +40,13 @@ GOWORK=off go test ./experiments/colgranule \
   -benchmem \
   -benchtime "${BENCHTIME}" \
   -count "${COUNT}"
+
+if [[ "${RUN_NEIGHBORHOOD_SMOKE}" == "true" || "${RUN_NEIGHBORHOOD_SMOKE}" == "1" ]]; then
+  export COLUMN_VECTOR_DEEP1B_NEIGHBORHOOD_SMOKE=1
+  GOWORK=off go test ./experiments/colgranule \
+    -run '^$' \
+    -bench '^BenchmarkColumnVectorGraphDeep1BNeighborhoodCompressionSmoke/' \
+    -benchmem \
+    -benchtime "${BENCHTIME}" \
+    -count "${COUNT}"
+fi

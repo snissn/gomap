@@ -1,6 +1,7 @@
 package colgranule
 
 import (
+	"container/heap"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -9,6 +10,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -48,6 +51,12 @@ type columnVectorGraphDeep1BFixture struct {
 	queryFileBytes   int64
 	sourceRows       int
 	subsetFrom10M    bool
+}
+
+type columnVectorGraphDeep1BCompressionCase struct {
+	name                 string
+	vectorCompression    Compression
+	adjacencyCompression Compression
 }
 
 func TestColumnVectorGraphDeep1BFbinReader(t *testing.T) {
@@ -97,10 +106,10 @@ func BenchmarkColumnVectorGraphDeep1BPersistedSearchCosine(b *testing.B) {
 				b.Skip("set COLUMN_VECTOR_DEEP1B_10M=1 to run the 10M Deep1B shape")
 			}
 			data := columnVectorGraphDeep1BEnsureData(b, shape.rows)
-			for _, compression := range columnVectorGraphDeep1BCompressions(b) {
-				compression := compression
-				b.Run(compression.String(), func(b *testing.B) {
-					fixture := buildColumnVectorGraphDeep1BFixture(b, data, shape.rows, compression)
+			for _, compressionCase := range columnVectorGraphDeep1BCompressionCases(b) {
+				compressionCase := compressionCase
+				b.Run(compressionCase.name, func(b *testing.B) {
+					fixture := buildColumnVectorGraphDeep1BFixture(b, data, shape.rows, compressionCase.vectorCompression, compressionCase.adjacencyCompression)
 					registerColumnVectorGraphPersistedFixtureCleanup(b, fixture.columnVectorGraphPersistedFixture)
 					b.Run("serial", func(b *testing.B) {
 						benchmarkColumnVectorGraphPersistedSearchSerial(b, fixture.columnVectorGraphPersistedFixture)
@@ -127,9 +136,9 @@ func BenchmarkColumnVectorGraphDeep1BPersistedBuildOpenDecode(b *testing.B) {
 				b.Skip("set COLUMN_VECTOR_DEEP1B_10M=1 to run the 10M Deep1B shape")
 			}
 			data := columnVectorGraphDeep1BEnsureData(b, shape.rows)
-			for _, compression := range columnVectorGraphDeep1BCompressions(b) {
-				compression := compression
-				b.Run(compression.String(), func(b *testing.B) {
+			for _, compressionCase := range columnVectorGraphDeep1BCompressionCases(b) {
+				compressionCase := compressionCase
+				b.Run(compressionCase.name, func(b *testing.B) {
 					var totalBuildNanos int64
 					var totalOpenNanos int64
 					var totalDecodeNanos int64
@@ -140,7 +149,7 @@ func BenchmarkColumnVectorGraphDeep1BPersistedBuildOpenDecode(b *testing.B) {
 					b.ResetTimer()
 					b.StopTimer()
 					for i := 0; i < b.N; i++ {
-						fixture := buildColumnVectorGraphDeep1BFixtureWithPhaseTimer(b, b, data, shape.rows, compression)
+						fixture := buildColumnVectorGraphDeep1BFixtureWithPhaseTimer(b, b, data, shape.rows, compressionCase.vectorCompression, compressionCase.adjacencyCompression)
 						totalBuildNanos += fixture.buildNanos
 						totalOpenNanos += fixture.openNanos
 						totalDecodeNanos += fixture.decodeNanos
@@ -179,6 +188,94 @@ func BenchmarkColumnVectorGraphDeep1BPersistedBuildOpenDecode(b *testing.B) {
 	}
 }
 
+func BenchmarkColumnVectorGraphDeep1BNeighborhoodCompressionSmoke(b *testing.B) {
+	if os.Getenv("COLUMN_VECTOR_DEEP1B_NEIGHBORHOOD_SMOKE") != "1" {
+		b.Skip("set COLUMN_VECTOR_DEEP1B_NEIGHBORHOOD_SMOKE=1 to run the opt-in Deep1B nearest-neighborhood compression smoke benchmark")
+	}
+	const rows = 1_000_000
+	data := columnVectorGraphDeep1BEnsureData(b, rows)
+	granuleRows := columnVectorGraphDeep1BEnvInt(b, "COLUMN_VECTOR_DEEP1B_NEIGHBORHOOD_ROWS", columnVectorGraphDeep1BBlockRows)
+	if granuleRows <= 0 {
+		b.Fatalf("COLUMN_VECTOR_DEEP1B_NEIGHBORHOOD_ROWS=%d must be positive", granuleRows)
+	}
+	if granuleRows > rows {
+		b.Fatalf("COLUMN_VECTOR_DEEP1B_NEIGHBORHOOD_ROWS=%d exceeds rows=%d", granuleRows, rows)
+	}
+	baseFile, err := os.Open(data.basePath)
+	if err != nil {
+		b.Fatalf("Open Deep1B base: %v", err)
+	}
+	defer baseFile.Close()
+	query := columnVectorGraphDeep1BReadQuery(b, data.queryPath, data.queryHeader, 0)
+	exactStart := time.Now()
+	nearest := columnVectorGraphDeep1BTopRowsByCosine(b, baseFile, data.baseHeader, rows, query, granuleRows)
+	exactNanos := time.Since(exactStart).Nanoseconds()
+	if len(nearest) != granuleRows {
+		b.Fatalf("nearest rows=%d want %d", len(nearest), granuleRows)
+	}
+	nearestRankedRows := make([]int, len(nearest))
+	nearestOrdinalRows := make([]int, len(nearest))
+	for i, neighbor := range nearest {
+		nearestRankedRows[i] = neighbor.row
+		nearestOrdinalRows[i] = neighbor.row
+	}
+	sort.Ints(nearestOrdinalRows)
+	orders := []struct {
+		name string
+		rows []int
+	}{
+		{name: "source_prefix", rows: columnVectorGraphDeep1BSequentialRows(granuleRows)},
+		{name: "nearest_ranked", rows: nearestRankedRows},
+		{name: "nearest_ordinal", rows: nearestOrdinalRows},
+	}
+	for _, order := range orders {
+		order := order
+		vectors := columnVectorGraphDeep1BReadFbinRows(b, baseFile, data.baseHeader, order.rows)
+		b.Run(order.name, func(b *testing.B) {
+			for _, compression := range columnVectorGraphDeep1BCompressions(b) {
+				compression := compression
+				b.Run(compression.String(), func(b *testing.B) {
+					builder := NewGranuleBuilder(Config{Encoding: EncodingRawFloat32Vector, Compression: compression})
+					warm, err := builder.BuildFloat32Vectors(vectors, columnVectorGraphDeep1BDims)
+					if err != nil {
+						b.Fatalf("BuildFloat32Vectors warm: %v", err)
+					}
+					if warm.RawBytes == 0 {
+						b.Fatal("warm raw bytes is zero")
+					}
+					b.ReportAllocs()
+					b.SetBytes(int64(warm.RawBytes))
+					b.ResetTimer()
+					start := time.Now()
+					for i := 0; i < b.N; i++ {
+						g, err := builder.BuildFloat32Vectors(vectors, columnVectorGraphDeep1BDims)
+						if err != nil {
+							b.Fatalf("BuildFloat32Vectors: %v", err)
+						}
+						benchSink += int64(g.StoredBytes)
+					}
+					elapsed := time.Since(start)
+					b.StopTimer()
+					if elapsed > 0 {
+						b.ReportMetric(float64(b.N)/elapsed.Seconds(), "granules/s")
+					}
+					b.ReportMetric(float64(exactNanos)/1e6, "exact_scan_ms")
+					b.ReportMetric(float64(rows), "exact_rows")
+					b.ReportMetric(float64(granuleRows), "granule_rows")
+					b.ReportMetric(nearest[0].score, "best_top_cosine")
+					b.ReportMetric(nearest[len(nearest)-1].score, "worst_top_cosine")
+					b.ReportMetric(float64(warm.RawBytes)/float64(granuleRows), "vector_raw_B/entry")
+					b.ReportMetric(float64(warm.StoredBytes)/float64(granuleRows), "vector_stored_B/entry")
+					b.ReportMetric(float64(warm.StoredBytes)/float64(warm.RawBytes), "stored_raw_ratio")
+					if warm.CodecReport.CompressionFallbackReason != "" {
+						b.ReportMetric(1, "fallback_"+metricToken(warm.CodecReport.CompressionFallbackReason))
+					}
+				})
+			}
+		})
+	}
+}
+
 func columnVectorGraphDeep1BShapes() []struct {
 	name string
 	rows int
@@ -194,9 +291,46 @@ func columnVectorGraphDeep1BShapes() []struct {
 
 func columnVectorGraphDeep1BCompressions(tb testing.TB) []Compression {
 	tb.Helper()
-	raw := strings.TrimSpace(os.Getenv("COLUMN_VECTOR_DEEP1B_COMPRESSIONS"))
+	return columnVectorGraphDeep1BParseCompressions(tb, "COLUMN_VECTOR_DEEP1B_COMPRESSIONS", []Compression{CompressionNone, CompressionZSTD})
+}
+
+func columnVectorGraphDeep1BCompressionCases(tb testing.TB) []columnVectorGraphDeep1BCompressionCase {
+	tb.Helper()
+	vectorCompressions := columnVectorGraphDeep1BCompressions(tb)
+	rawAdjacency := strings.TrimSpace(os.Getenv("COLUMN_VECTOR_DEEP1B_ADJACENCY_COMPRESSIONS"))
+	if rawAdjacency == "" {
+		out := make([]columnVectorGraphDeep1BCompressionCase, 0, len(vectorCompressions))
+		for _, vectorCompression := range vectorCompressions {
+			out = append(out, columnVectorGraphDeep1BCompressionCase{
+				name:                 vectorCompression.String(),
+				vectorCompression:    vectorCompression,
+				adjacencyCompression: CompressionNone,
+			})
+		}
+		return out
+	}
+	adjacencyCompressions := columnVectorGraphDeep1BParseCompressions(tb, "COLUMN_VECTOR_DEEP1B_ADJACENCY_COMPRESSIONS", nil)
+	out := make([]columnVectorGraphDeep1BCompressionCase, 0, len(vectorCompressions)*len(adjacencyCompressions))
+	for _, vectorCompression := range vectorCompressions {
+		for _, adjacencyCompression := range adjacencyCompressions {
+			out = append(out, columnVectorGraphDeep1BCompressionCase{
+				name:                 fmt.Sprintf("vec_%s_adj_%s", vectorCompression, adjacencyCompression),
+				vectorCompression:    vectorCompression,
+				adjacencyCompression: adjacencyCompression,
+			})
+		}
+	}
+	return out
+}
+
+func columnVectorGraphDeep1BParseCompressions(tb testing.TB, envName string, defaultCompressions []Compression) []Compression {
+	tb.Helper()
+	raw := strings.TrimSpace(os.Getenv(envName))
 	if raw == "" {
-		return []Compression{CompressionNone, CompressionZSTD}
+		if len(defaultCompressions) == 0 {
+			tb.Fatalf("%s selected no compression variants", envName)
+		}
+		return append([]Compression(nil), defaultCompressions...)
 	}
 	if strings.EqualFold(raw, "all") {
 		return []Compression{CompressionNone, CompressionSnappy, CompressionLZ4, CompressionZSTD}
@@ -216,20 +350,20 @@ func columnVectorGraphDeep1BCompressions(tb testing.TB) []Compression {
 		case "zstd":
 			out = append(out, CompressionZSTD)
 		default:
-			tb.Fatalf("unknown COLUMN_VECTOR_DEEP1B_COMPRESSIONS value %q", part)
+			tb.Fatalf("unknown %s value %q", envName, part)
 		}
 	}
 	if len(out) == 0 {
-		tb.Fatalf("COLUMN_VECTOR_DEEP1B_COMPRESSIONS selected no compression variants")
+		tb.Fatalf("%s selected no compression variants", envName)
 	}
 	return out
 }
 
-func buildColumnVectorGraphDeep1BFixture(tb testing.TB, data columnVectorGraphDeep1BDataPaths, rows int, compression Compression) *columnVectorGraphDeep1BFixture {
-	return buildColumnVectorGraphDeep1BFixtureWithPhaseTimer(tb, nil, data, rows, compression)
+func buildColumnVectorGraphDeep1BFixture(tb testing.TB, data columnVectorGraphDeep1BDataPaths, rows int, vectorCompression Compression, adjacencyCompression Compression) *columnVectorGraphDeep1BFixture {
+	return buildColumnVectorGraphDeep1BFixtureWithPhaseTimer(tb, nil, data, rows, vectorCompression, adjacencyCompression)
 }
 
-func buildColumnVectorGraphDeep1BFixtureWithPhaseTimer(tb testing.TB, phaseTimer *testing.B, data columnVectorGraphDeep1BDataPaths, rows int, compression Compression) *columnVectorGraphDeep1BFixture {
+func buildColumnVectorGraphDeep1BFixtureWithPhaseTimer(tb testing.TB, phaseTimer *testing.B, data columnVectorGraphDeep1BDataPaths, rows int, vectorCompression Compression, adjacencyCompression Compression) *columnVectorGraphDeep1BFixture {
 	tb.Helper()
 	dir, err := os.MkdirTemp("", "colgranule-deep1b-vector-graph-*")
 	if err != nil {
@@ -261,7 +395,7 @@ func buildColumnVectorGraphDeep1BFixtureWithPhaseTimer(tb testing.TB, phaseTimer
 		tb.Fatalf("Open Deep1B base: %v", err)
 	}
 	defer baseFile.Close()
-	opts := columnVectorGraphPersistedOptions(rows, columnVectorGraphDeep1BDims, columnVectorGraphDeep1BBlockRows, compression)
+	opts := columnVectorGraphPersistedOptionsWithAdjacencyCompression(rows, columnVectorGraphDeep1BDims, columnVectorGraphDeep1BBlockRows, vectorCompression, adjacencyCompression)
 	rowsPerPart := columnVectorGraphPersistedRowsPerPart(rows)
 
 	if phaseTimer != nil {
@@ -444,6 +578,152 @@ func reportColumnVectorGraphDeep1BProductMetrics(b *testing.B, fixture *columnVe
 	if fixture.subsetFrom10M {
 		b.ReportMetric(1, "source_prefix_from_10m")
 	}
+}
+
+func columnVectorGraphDeep1BEnvInt(tb testing.TB, name string, fallback int) int {
+	tb.Helper()
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return fallback
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil {
+		tb.Fatalf("%s=%q is not an integer: %v", name, raw, err)
+	}
+	return value
+}
+
+func columnVectorGraphDeep1BSequentialRows(rows int) []int {
+	out := make([]int, rows)
+	for i := range out {
+		out[i] = i
+	}
+	return out
+}
+
+type columnVectorGraphDeep1BNeighbor struct {
+	row   int
+	score float64
+}
+
+type columnVectorGraphDeep1BNeighborHeap []columnVectorGraphDeep1BNeighbor
+
+func (h columnVectorGraphDeep1BNeighborHeap) Len() int {
+	return len(h)
+}
+
+func (h columnVectorGraphDeep1BNeighborHeap) Less(i int, j int) bool {
+	if h[i].score == h[j].score {
+		return h[i].row > h[j].row
+	}
+	return h[i].score < h[j].score
+}
+
+func (h columnVectorGraphDeep1BNeighborHeap) Swap(i int, j int) {
+	h[i], h[j] = h[j], h[i]
+}
+
+func (h *columnVectorGraphDeep1BNeighborHeap) Push(x interface{}) {
+	*h = append(*h, x.(columnVectorGraphDeep1BNeighbor))
+}
+
+func (h *columnVectorGraphDeep1BNeighborHeap) Pop() interface{} {
+	old := *h
+	n := len(old)
+	out := old[n-1]
+	*h = old[:n-1]
+	return out
+}
+
+func columnVectorGraphDeep1BTopRowsByCosine(tb testing.TB, file *os.File, header columnVectorGraphDeep1BFbinHeader, rows int, query []float32, topK int) []columnVectorGraphDeep1BNeighbor {
+	tb.Helper()
+	if rows <= 0 || rows > header.Rows {
+		tb.Fatalf("top rows scan rows=%d outside fbin rows=%d", rows, header.Rows)
+	}
+	if topK <= 0 || topK > rows {
+		tb.Fatalf("topK=%d outside rows=%d", topK, rows)
+	}
+	queryInvNorm := columnVectorGraphDeep1BInvNorm(query)
+	if queryInvNorm == 0 {
+		tb.Fatal("Deep1B query has zero norm")
+	}
+	h := make(columnVectorGraphDeep1BNeighborHeap, 0, topK)
+	heap.Init(&h)
+	var rawScratch []byte
+	var vectorScratch []float32
+	for start := 0; start < rows; start += columnVectorGraphDeep1BBlockRows {
+		readRows := min(columnVectorGraphDeep1BBlockRows, rows-start)
+		var err error
+		rawScratch, vectorScratch, err = columnVectorGraphDeep1BReadFbinVectorsAt(file, header, start, readRows, rawScratch, vectorScratch)
+		if err != nil {
+			tb.Fatalf("read Deep1B base rows [%d,%d): %v", start, start+readRows, err)
+		}
+		for localRow := 0; localRow < readRows; localRow++ {
+			vector := vectorScratch[localRow*header.Dims : (localRow+1)*header.Dims]
+			score := columnVectorGraphDeep1BCosine(query, queryInvNorm, vector)
+			neighbor := columnVectorGraphDeep1BNeighbor{row: start + localRow, score: score}
+			if h.Len() < topK {
+				heap.Push(&h, neighbor)
+				continue
+			}
+			if h[0].score < score || (h[0].score == score && h[0].row > neighbor.row) {
+				h[0] = neighbor
+				heap.Fix(&h, 0)
+			}
+		}
+	}
+	out := append([]columnVectorGraphDeep1BNeighbor(nil), h...)
+	sort.Slice(out, func(i int, j int) bool {
+		if out[i].score == out[j].score {
+			return out[i].row < out[j].row
+		}
+		return out[i].score > out[j].score
+	})
+	return out
+}
+
+func columnVectorGraphDeep1BCosine(query []float32, queryInvNorm float64, vector []float32) float64 {
+	var dot float64
+	var normSquared float64
+	for i, value := range vector {
+		fv := float64(value)
+		dot += float64(query[i]) * fv
+		normSquared += fv * fv
+	}
+	if normSquared == 0 {
+		return 0
+	}
+	return dot * queryInvNorm / math.Sqrt(normSquared)
+}
+
+func columnVectorGraphDeep1BInvNorm(values []float32) float64 {
+	var normSquared float64
+	for _, value := range values {
+		normSquared += float64(value) * float64(value)
+	}
+	if normSquared == 0 {
+		return 0
+	}
+	return 1 / math.Sqrt(normSquared)
+}
+
+func columnVectorGraphDeep1BReadFbinRows(tb testing.TB, file *os.File, header columnVectorGraphDeep1BFbinHeader, rows []int) []float32 {
+	tb.Helper()
+	values := make([]float32, len(rows)*header.Dims)
+	var rawScratch []byte
+	var rowScratch []float32
+	for i, row := range rows {
+		if row < 0 || row >= header.Rows {
+			tb.Fatalf("Deep1B row %d outside fbin rows=%d", row, header.Rows)
+		}
+		var err error
+		rawScratch, rowScratch, err = columnVectorGraphDeep1BReadFbinVectorsAt(file, header, row, 1, rawScratch, rowScratch)
+		if err != nil {
+			tb.Fatalf("read Deep1B row %d: %v", row, err)
+		}
+		copy(values[i*header.Dims:(i+1)*header.Dims], rowScratch)
+	}
+	return values
 }
 
 func columnVectorGraphDeep1BEnsureData(tb testing.TB, rows int) columnVectorGraphDeep1BDataPaths {
