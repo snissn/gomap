@@ -264,8 +264,12 @@ func (g *ColumnVectorGraph) SearchCosine(query []float32, opts ColumnVectorGraph
 	candidates, edgesVisited, candidatesExamined := g.searchCandidates(query, queryInvNorm, efSearch, scratch)
 	stats.CandidatesExamined = candidatesExamined
 	stats.EdgesVisited = edgesVisited
-	if cap(scratch.results) < opts.TopK {
-		scratch.results = make([]ColumnVectorGraphSearchResult, 0, opts.TopK)
+	resultLimit := opts.TopK
+	if len(candidates) < resultLimit {
+		resultLimit = len(candidates)
+	}
+	if cap(scratch.results) < resultLimit {
+		scratch.results = make([]ColumnVectorGraphSearchResult, 0, resultLimit)
 	}
 	results := scratch.results[:0]
 	for _, candidate := range candidates {
