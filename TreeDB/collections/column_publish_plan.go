@@ -474,6 +474,9 @@ func (c *Collection) buildColumnManifestPublishSystemDeltaIterator(input ColumnM
 		return nil, backenddb.ErrClosed
 	}
 	defer func() { _ = current.Close() }()
+	if err := validateColumnManifestPublishedRoot(current, input.BaseMeta.Name, rootIDs[0], plan.RootDelta.IdentityRecord); err != nil {
+		return nil, err
+	}
 	catalog, err := loadCollectionCatalog(current, input.BaseMeta.Name)
 	if err != nil {
 		return nil, err

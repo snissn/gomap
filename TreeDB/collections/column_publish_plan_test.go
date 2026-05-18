@@ -577,6 +577,54 @@ func TestColumnManifestPublishSystemDeltaRejectsIdentityMismatchM10A(t *testing.
 	}
 }
 
+func TestColumnManifestPublishSystemDeltaRejectsPublishedRootMismatchM10A(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "events",
+		Options: CollectionOptions{ColumnStore: testColumnStoreConfig(nil)},
+	}); err != nil {
+		t.Fatalf("create column-enabled collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("events")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	baseMeta := col.Meta()
+	state := d.State()
+	planInput := testColumnPublishPlanInputM10A(ColumnManifestIdentity{Generation: 14, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0xabcdef3456}, testColumnPublishPreparedAssetM10A())
+	planInput.BaseManifestRootID = 0
+	plan, err := BuildColumnPublishPlan(planInput)
+	if err != nil {
+		t.Fatalf("BuildColumnPublishPlan: %v", err)
+	}
+
+	wrongDelta := plan.RootDelta
+	wrongDelta.Identity = ColumnManifestIdentity{Generation: 99, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0x1111222233334444}
+	wrongDelta.IdentityRecord = encodeColumnManifestIdentityRecordArray(wrongDelta.Identity)
+	ordered, err := wrongDelta.OrderedRootPublishInput()
+	if err != nil {
+		t.Fatalf("OrderedRootPublishInput: %v", err)
+	}
+	_, _, err = d.PublishOrderedRootGroupWithSystemBuilder([]backenddb.OrderedRootPublishInput{ordered}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		return col.buildColumnManifestPublishSystemDeltaIterator(ColumnManifestPublishSystemDeltaInput{
+			BaseMeta:           baseMeta,
+			BaseCommitSeq:      state.CommitSeq,
+			BaseSystemRoot:     state.SystemRootPageID,
+			BaseManifestRootID: 0,
+			Plan:               plan,
+		}, rootIDs)
+	})
+	if err == nil || !strings.Contains(err.Error(), "published root identity record") {
+		t.Fatalf("PublishOrderedRootGroupWithSystemBuilder err=%v want published root identity mismatch", err)
+	}
+}
+
 func TestColumnManifestPublishSystemDeltaFailureLeavesRootsUnpublishedM10A(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

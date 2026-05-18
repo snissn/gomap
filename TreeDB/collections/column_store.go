@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -560,6 +561,23 @@ func validateColumnStoreCatalogRoot(snap *backenddb.Snapshot, catalog *collectio
 	}
 	if record.Generation != identity.Generation || record.Version != identity.Version || record.Checksum != identity.Checksum {
 		return fmt.Errorf("collections: active column manifest identity mismatch for %q", catalog.meta.Name)
+	}
+	return nil
+}
+
+func validateColumnManifestPublishedRoot(snap *backenddb.Snapshot, collection string, rootID uint64, expected [columnManifestIdentityRecordSize]byte) error {
+	entry, err := snap.GetEntryAtRoot(rootID, []byte(columnManifestIdentityRecordKey))
+	if errors.Is(err, tree.ErrKeyNotFound) {
+		return fmt.Errorf("collections: published column manifest root %d for %q is missing identity record", rootID, collection)
+	}
+	if err != nil {
+		return fmt.Errorf("collections: published column manifest root %d for %q is unreadable: %w", rootID, collection, err)
+	}
+	if entry.Flags&node.FlagTombstone != 0 {
+		return fmt.Errorf("collections: published column manifest root %d for %q has deleted identity record", rootID, collection)
+	}
+	if !bytes.Equal(entry.Value, expected[:]) {
+		return fmt.Errorf("collections: published root identity record for %q does not match column publish plan", collection)
 	}
 	return nil
 }
