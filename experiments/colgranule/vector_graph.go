@@ -502,6 +502,9 @@ func columnVectorGraphCosineDistanceWide(query []float32, vector []float32, quer
 	for i := range query {
 		cosine += float64(query[i]) * queryScale * float64(vector[i]) * vectorScale
 	}
+	if math.IsNaN(cosine) || math.IsInf(cosine, 0) {
+		return float32(math.Inf(1))
+	}
 	cosine = clampColumnVectorGraphCosine(cosine)
 	distance := 1 - cosine
 	if math.IsNaN(distance) || math.IsInf(distance, 0) {
