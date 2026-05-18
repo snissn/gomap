@@ -477,12 +477,23 @@ func applyCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map[uint
 			}
 			db.ensureCommandWALRecoverySnapshotView()
 			previousReplayLSN := db.commandWALReplayLSN.Swap(env.LSN)
+			replayToken := db.nextCommandWALReplayToken()
+			previousReplayToken := db.commandWALReplayToken.Swap(replayToken)
 			err := registration.handler(db, env)
+			db.commandWALReplayToken.Store(previousReplayToken)
 			db.commandWALReplayLSN.Store(previousReplayLSN)
 			return err
 		}
 		return commitlog.ErrCommandWALUnsupportedKind
 	}
+}
+
+func (db *DB) nextCommandWALReplayToken() uint64 {
+	token := db.commandWALReplayTokenSeq.Add(1)
+	if token == 0 {
+		token = db.commandWALReplayTokenSeq.Add(1)
+	}
+	return token
 }
 
 func (db *DB) ensureCommandWALRecoverySnapshotView() {
