@@ -286,11 +286,11 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 
 	rows := baseCfg.Keys
 	if rows <= 0 {
-		rows = 1
+		return "", fmt.Errorf("column_store: invalid keys: %d", rows)
 	}
 	batchSize := baseCfg.BatchSize
 	if batchSize <= 0 {
-		batchSize = 128
+		return "", fmt.Errorf("column_store: invalid batchsize: %d", batchSize)
 	}
 	if batchSize > rows {
 		batchSize = rows

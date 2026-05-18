@@ -927,6 +927,49 @@ func TestColumnStoreSuiteRejectsForcedColumnPathM11B(t *testing.T) {
 	}
 }
 
+func TestColumnStoreSuiteRejectsInvalidKeysAndBatchSizeM11A(t *testing.T) {
+	tests := []struct {
+		name    string
+		cfg     BenchConfig
+		wantErr string
+	}{
+		{
+			name:    "zero keys",
+			cfg:     BenchConfig{Keys: 0, BatchSize: 4, DBsArg: "treedb", Profile: "durable", SeedUsed: 1},
+			wantErr: "invalid keys: 0",
+		},
+		{
+			name:    "negative keys",
+			cfg:     BenchConfig{Keys: -1, BatchSize: 4, DBsArg: "treedb", Profile: "durable", SeedUsed: 1},
+			wantErr: "invalid keys: -1",
+		},
+		{
+			name:    "zero batch",
+			cfg:     BenchConfig{Keys: 4, BatchSize: 0, DBsArg: "treedb", Profile: "durable", SeedUsed: 1},
+			wantErr: "invalid batchsize: 0",
+		},
+		{
+			name:    "negative batch",
+			cfg:     BenchConfig{Keys: 4, BatchSize: -1, DBsArg: "treedb", Profile: "durable", SeedUsed: 1},
+			wantErr: "invalid batchsize: -1",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := runColumnStoreSuite(tc.cfg, columnStoreSuiteOptions{
+				ForcedPath: columnStorePathRowStoreBaseline,
+			})
+			if err == nil {
+				t.Fatal("expected invalid column_store config to fail")
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("unexpected error %q, want substring %q", err.Error(), tc.wantErr)
+			}
+		})
+	}
+}
+
 func TestColumnStoreSuitePlanKindMapsKnownPathsM11B(t *testing.T) {
 	cases := []struct {
 		path string

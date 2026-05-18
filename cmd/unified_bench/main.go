@@ -698,13 +698,8 @@ func main() {
 		log.Fatalf("keycounts: %v", err)
 	}
 
-	hasAnyProfiling := strings.TrimSpace(baseCfg.CPUProfile) != "" ||
-		strings.TrimSpace(baseCfg.AllocsProfile) != "" ||
-		strings.TrimSpace(baseCfg.BlockProfile) != "" ||
-		strings.TrimSpace(baseCfg.MutexProfile) != "" ||
-		strings.TrimSpace(baseCfg.TraceProfile) != ""
-	if hasAnyProfiling && len(keyCounts) > 1 {
-		log.Fatalf("profiling flags require a single key count (got %d): disable sweep keycounts or omit -cpuprofile/-allocsprofile/-blockprofile/-mutexprofile/-trace", len(keyCounts))
+	if benchConfigHasAnyProfileOutput(baseCfg) && len(keyCounts) > 1 {
+		log.Fatalf("profiling flags require a single key count (got %d): disable sweep keycounts or omit -cpuprofile/-allocsprofile/-checkpoint-cpuprofile/-blockprofile/-mutexprofile/-trace", len(keyCounts))
 	}
 
 	if len(keyCounts) == 1 {
@@ -865,8 +860,36 @@ func shouldAllocsProfile(cfg BenchConfig, testName string) bool {
 	return ok
 }
 
-func installAllocsProfileRate(cfg BenchConfig) func() {
+func benchConfigHasAnyProfileOutput(cfg BenchConfig) bool {
+	return strings.TrimSpace(cfg.CPUProfile) != "" ||
+		strings.TrimSpace(cfg.AllocsProfile) != "" ||
+		strings.TrimSpace(cfg.CheckpointCPUProfile) != "" ||
+		strings.TrimSpace(cfg.BlockProfile) != "" ||
+		strings.TrimSpace(cfg.MutexProfile) != "" ||
+		strings.TrimSpace(cfg.TraceProfile) != ""
+}
+
+func benchConfigUsesAllocsProfile(cfg BenchConfig) bool {
 	if strings.TrimSpace(cfg.AllocsProfile) == "" {
+		return false
+	}
+	if len(cfg.AllocsProfileTests) == 0 {
+		return true
+	}
+	tests := normalizeTests(parseList(cfg.TestsArg))
+	if contains(tests, "all") {
+		return true
+	}
+	for _, testName := range tests {
+		if _, ok := cfg.AllocsProfileTests[strings.ToLower(testName)]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func installAllocsProfileRate(cfg BenchConfig) func() {
+	if !benchConfigUsesAllocsProfile(cfg) {
 		return func() {}
 	}
 	rate := cfg.AllocsProfileRate
@@ -4033,6 +4056,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				cpuFile = f
 				if err := profileHooks.startCPUProfile(cpuFile); err != nil {
 					_ = cpuFile.Close()
+					_ = os.Remove(path)
 					return BenchRun{}, fmt.Errorf("cpuprofile start %s: %w", path, err)
 				}
 			}

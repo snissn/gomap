@@ -621,7 +621,7 @@ func decodeColumnManifestIdentityRecord(raw []byte) (columnManifestIdentityRecor
 		return columnManifestIdentityRecord{}, fmt.Errorf("%w: length=%d", ErrColumnManifestIdentityMalformed, len(raw))
 	}
 	if magic := binary.BigEndian.Uint32(raw[columnManifestIdentityMagicOffset:columnManifestIdentityEncodingVersionOffset]); magic != columnManifestIdentityMagic {
-		return columnManifestIdentityRecord{}, fmt.Errorf("%w: magic=0x%x", ErrColumnManifestIdentityBadMagic, magic)
+		return columnManifestIdentityRecord{}, fmt.Errorf("%w: magic=0x%08x", ErrColumnManifestIdentityBadMagic, magic)
 	}
 	if version := binary.BigEndian.Uint16(raw[columnManifestIdentityEncodingVersionOffset:columnManifestIdentityManifestVersionOffset]); version != columnManifestIdentityVersion {
 		return columnManifestIdentityRecord{}, fmt.Errorf("%w: version=%d", ErrColumnManifestIdentityUnsupportedVersion, version)

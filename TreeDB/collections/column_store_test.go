@@ -244,10 +244,11 @@ func TestColumnStoreActiveManifestFailsClosedOnInvalidRootRecordM10C(t *testing.
 		includeRecord bool
 		record        []byte
 		want          error
+		wantContains  string
 	}{
 		{name: "missing identity record", want: ErrColumnManifestIdentityMissing},
 		{name: "short identity record", includeRecord: true, record: shortRecord, want: ErrColumnManifestIdentityMalformed},
-		{name: "bad identity magic", includeRecord: true, record: badMagic, want: ErrColumnManifestIdentityBadMagic},
+		{name: "bad identity magic", includeRecord: true, record: badMagic, want: ErrColumnManifestIdentityBadMagic, wantContains: "magic=0xdeadbeef"},
 		{name: "unsupported identity record version", includeRecord: true, record: unsupportedRecordVersion, want: ErrColumnManifestIdentityUnsupportedVersion},
 	}
 	for _, tt := range tests {
@@ -263,6 +264,9 @@ func TestColumnStoreActiveManifestFailsClosedOnInvalidRootRecordM10C(t *testing.
 			_, err = NewCollectionManager(d).OpenCollection("events")
 			if !errors.Is(err, tt.want) {
 				t.Fatalf("OpenCollection err=%v want errors.Is %v", err, tt.want)
+			}
+			if tt.wantContains != "" && !strings.Contains(err.Error(), tt.wantContains) {
+				t.Fatalf("OpenCollection err=%v want substring %q", err, tt.wantContains)
 			}
 		})
 	}

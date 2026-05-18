@@ -93,12 +93,17 @@ func resolveDBs(arg, excludeArg string) []string {
 	}
 
 	out := make([]string, 0, len(candidates))
+	seen := make(map[string]struct{}, len(candidates))
 	for _, name := range candidates {
 		name = canonicalDBName(name)
 		if _, skip := excludedSet[name]; skip {
 			continue
 		}
 		if _, ok := dbFactories[name]; ok {
+			if _, duplicate := seen[name]; duplicate {
+				continue
+			}
+			seen[name] = struct{}{}
 			out = append(out, name)
 			continue
 		}

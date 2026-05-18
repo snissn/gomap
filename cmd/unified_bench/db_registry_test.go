@@ -33,6 +33,23 @@ func TestCanonicalDBNameResolvesTransitiveAliasesM11A(t *testing.T) {
 	}
 }
 
+func TestResolveDBsDedupesCanonicalAliasesM11A(t *testing.T) {
+	withDBAliasesForTest(t, map[string]string{
+		"treedb_alias":    "treedb",
+		"treedb_indirect": "treedb_alias",
+	})
+
+	got := resolveDBs("treedb,treedb_alias,treedb_indirect", "")
+	if want := []string{"treedb"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("resolveDBs duplicate aliases=%v, want %v", got, want)
+	}
+
+	got = resolveDBs("treedb,treedb_alias,treedb_indirect", "treedb_alias")
+	if len(got) != 0 {
+		t.Fatalf("resolveDBs excluded canonical alias=%v, want empty", got)
+	}
+}
+
 func TestCanonicalDBNameStopsAliasCyclesM11A(t *testing.T) {
 	withDBAliasesForTest(t, map[string]string{
 		"alias_a": "alias_b",
