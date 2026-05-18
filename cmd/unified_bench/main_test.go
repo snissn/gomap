@@ -8,6 +8,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -2029,6 +2030,48 @@ func TestRunBenchmark_ContentionAfterSnapshotsBeforeAllocsPostProcessing(t *test
 	}
 	if mutexAfterIdx > allocAfterIdx {
 		t.Fatalf("expected mutex_after before allocs_after, events=%v", events)
+	}
+}
+
+func TestInstallAllocsProfileRateIgnoresWhitespaceOnlyPrefixM11A(t *testing.T) {
+	prevRate := runtime.MemProfileRate
+	t.Cleanup(func() {
+		runtime.MemProfileRate = prevRate
+	})
+	runtime.MemProfileRate = 4096
+
+	restore := installAllocsProfileRate(BenchConfig{
+		AllocsProfile:     " \t ",
+		AllocsProfileRate: 1,
+	})
+	if got := runtime.MemProfileRate; got != 4096 {
+		restore()
+		t.Fatalf("MemProfileRate changed for whitespace-only allocs profile: got %d", got)
+	}
+	restore()
+	if got := runtime.MemProfileRate; got != 4096 {
+		t.Fatalf("MemProfileRate restore changed whitespace-only allocs profile: got %d", got)
+	}
+}
+
+func TestInstallAllocsProfileRateRestoresEnabledPrefixM11A(t *testing.T) {
+	prevRate := runtime.MemProfileRate
+	t.Cleanup(func() {
+		runtime.MemProfileRate = prevRate
+	})
+	runtime.MemProfileRate = 4096
+
+	restore := installAllocsProfileRate(BenchConfig{
+		AllocsProfile:     filepath.Join(t.TempDir(), "allocs"),
+		AllocsProfileRate: 1,
+	})
+	if got := runtime.MemProfileRate; got != 1 {
+		restore()
+		t.Fatalf("MemProfileRate was not set for enabled allocs profile: got %d", got)
+	}
+	restore()
+	if got := runtime.MemProfileRate; got != 4096 {
+		t.Fatalf("MemProfileRate was not restored for enabled allocs profile: got %d", got)
 	}
 }
 
