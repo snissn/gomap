@@ -199,6 +199,73 @@ func TestColumnVectorDynamicGraphSameBatchDeleteInsertUsesWriterTombstones(t *te
 	}
 }
 
+func TestColumnVectorDynamicGraphBaseSearchDoesNotOverfetchForOverlayOnlyRows(t *testing.T) {
+	base, err := NewColumnVectorGraphFromColumns(columnVectorGraphTestColumns(1024, 32, 16, false))
+	if err != nil {
+		t.Fatalf("NewColumnVectorGraphFromColumns: %v", err)
+	}
+	graph, err := NewColumnVectorDynamicGraph(base)
+	if err != nil {
+		t.Fatalf("NewColumnVectorDynamicGraph: %v", err)
+	}
+	mutations := make([]ColumnVectorDynamicMutation, 0, 512)
+	for i := 0; i < cap(mutations); i++ {
+		mutations = append(mutations, ColumnVectorDynamicMutation{
+			Kind:       ColumnVectorDynamicMutationInsert,
+			DocumentID: []byte(fmt.Sprintf("dyn-overlay-%03d", i)),
+			Vector:     vectorBenchmarkEmbedding(100_000+i, base.Dims()),
+		})
+	}
+	if _, err := graph.ApplyBatch(mutations); err != nil {
+		t.Fatalf("ApplyBatch overlay rows: %v", err)
+	}
+	query, ok := base.VectorAt(nil, 257)
+	if !ok {
+		t.Fatal("missing query vector")
+	}
+	opts := ColumnVectorGraphSearchOptions{TopK: 10, EfSearch: 128}
+	results, trace, err := graph.SearchCosine(query, opts, &ColumnVectorDynamicGraphSearchScratch{})
+	if err != nil {
+		t.Fatalf("SearchCosine: %v", err)
+	}
+	if len(results) != opts.TopK {
+		t.Fatalf("results=%d want %d", len(results), opts.TopK)
+	}
+	if trace.BaseTrace.TopK != opts.TopK {
+		t.Fatalf("base topK=%d want query topK=%d without overlay live-row overfetch", trace.BaseTrace.TopK, opts.TopK)
+	}
+	if trace.BaseTrace.EfSearch != opts.EfSearch {
+		t.Fatalf("base efSearch=%d want query efSearch=%d", trace.BaseTrace.EfSearch, opts.EfSearch)
+	}
+	if trace.OverlayScanned != len(mutations) {
+		t.Fatalf("overlay scanned=%d want %d", trace.OverlayScanned, len(mutations))
+	}
+}
+
+func TestColumnVectorDynamicBaseTopKBoundsTombstoneOverfetch(t *testing.T) {
+	tests := []struct {
+		name       string
+		baseRows   int
+		topK       int
+		tombstones int
+		want       int
+	}{
+		{name: "empty", baseRows: 0, topK: 10, tombstones: 100, want: 0},
+		{name: "topk", baseRows: 1000, topK: 10, tombstones: 0, want: 10},
+		{name: "tombstones", baseRows: 1000, topK: 10, tombstones: 7, want: 17},
+		{name: "cap", baseRows: 1000, topK: 10, tombstones: 2000, want: 1000},
+		{name: "topk exceeds base", baseRows: 8, topK: 10, tombstones: 0, want: 8},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			if got := columnVectorDynamicBaseTopK(tc.baseRows, tc.topK, tc.tombstones); got != tc.want {
+				t.Fatalf("columnVectorDynamicBaseTopK(%d, %d, %d)=%d want %d", tc.baseRows, tc.topK, tc.tombstones, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestColumnVectorDynamicGraphSearchAllocs(t *testing.T) {
 	base, err := NewColumnVectorGraphFromColumns(columnVectorGraphTestColumns(1024, 64, 16, false))
 	if err != nil {

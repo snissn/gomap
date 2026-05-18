@@ -268,7 +268,7 @@ func (g *ColumnVectorDynamicGraph) SearchCosine(query []float32, opts ColumnVect
 	}
 
 	baseOpts := opts
-	baseOpts.TopK = columnVectorDynamicBaseTopK(base.Rows(), opts.TopK, overlay.LiveRows(), overlay.Tombstones())
+	baseOpts.TopK = columnVectorDynamicBaseTopK(base.Rows(), opts.TopK, overlay.Tombstones())
 	if baseOpts.EfSearch < baseOpts.TopK {
 		baseOpts.EfSearch = baseOpts.TopK
 	}
@@ -361,7 +361,7 @@ func columnVectorDynamicPublishStats(snapshot *ColumnVectorDynamicGraphSnapshot,
 	return stats
 }
 
-func columnVectorDynamicBaseTopK(baseRows int, topK int, overlayLiveRows int, tombstones int) int {
+func columnVectorDynamicBaseTopK(baseRows int, topK int, tombstones int) int {
 	if topK <= 0 || baseRows <= 0 {
 		return 0
 	}
@@ -369,10 +369,6 @@ func columnVectorDynamicBaseTopK(baseRows int, topK int, overlayLiveRows int, to
 		return baseRows
 	}
 	baseTopK := topK
-	if overlayLiveRows > baseRows-baseTopK {
-		return baseRows
-	}
-	baseTopK += overlayLiveRows
 	if tombstones > baseRows-baseTopK {
 		return baseRows
 	}
