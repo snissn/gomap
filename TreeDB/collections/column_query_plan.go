@@ -506,6 +506,12 @@ func columnSkipScanMarkDisjoint(mark ColumnSkipScanMark, prefixPredicates []Colu
 				return true
 			}
 		}
+		if !columnSkipScanPredicateIsEquality(pred) {
+			return false
+		}
+		if !bytes.Equal(minKey, maxKey) {
+			return false
+		}
 	}
 	return false
 }
