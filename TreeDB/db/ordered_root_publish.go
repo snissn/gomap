@@ -171,7 +171,10 @@ type OrderedRootGroupCommandWALSystemBuilder func(CommandWALPublishContext, []ui
 type OrderedRootGroupCommandWALDeltaBuilder func(CommandWALPublishContext) ([]OrderedRootDeltaPublishInput, error)
 
 // OrderedRootDeltaBatchGroupCommandWALDeltaBuilder is the batch-materialized
-// counterpart to OrderedRootGroupCommandWALDeltaBuilder.
+// counterpart to OrderedRootGroupCommandWALDeltaBuilder. Returned batch deltas
+// keep the normal OrderedRootDeltaBatchPublishInput ownership contract: the DB
+// publish path does not close them, so builders that allocate batches must
+// arrange cleanup after the enclosing publish call returns.
 type OrderedRootDeltaBatchGroupCommandWALDeltaBuilder func(CommandWALPublishContext) ([]OrderedRootDeltaBatchPublishInput, error)
 
 // OrderedRootGroupPreflight validates that a root group can still be applied.
