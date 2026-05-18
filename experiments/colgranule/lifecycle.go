@@ -50,7 +50,7 @@ type ColumnAssetReachabilityPlan struct {
 	PreparedBytes          int                            `json:"prepared_bytes"`
 	ProcessVisibleBytes    int                            `json:"process_visible_bytes"`
 	PendingBytes           int                            `json:"pending_bytes"`
-	RecoveryPendingBytes   int                            `json:"recovery_pending_bytes"`
+	RootPublishedBytes     int                            `json:"root_published_bytes"`
 	QuarantinedBytes       int                            `json:"quarantined_bytes"`
 	SupersededBytes        int                            `json:"superseded_bytes"`
 	CleanupSafeBytes       int                            `json:"cleanup_safe_bytes"`
@@ -130,6 +130,9 @@ type columnAssetReachabilityRecord struct {
 }
 
 var (
+	// Shared one-element reason slices are immutable sentinels. Keep len == cap
+	// so any later append to a per-record copy reallocates instead of mutating
+	// package-level backing storage.
 	columnAssetReasonPrepared              = []string{string(ColumnAssetStatePrepared)}
 	columnAssetReasonProcessVisible        = []string{string(ColumnAssetStateProcessVisible)}
 	columnAssetReasonPendingPublish        = []string{string(ColumnAssetStatePendingPublish)}
@@ -408,13 +411,20 @@ func addReachabilityEntry(records map[ColumnAssetRef]columnAssetReachabilityReco
 	}
 	record.live = record.live || live
 	record.candidate = record.candidate || candidate
-	record.protected = record.protected || (!live && (!candidate || quarantined))
+	record.protected = record.protected || columnAssetRefBlocksSegmentDeletion(live, candidate, quarantined)
 	record.quarantined = record.quarantined || quarantined
 	records[entry.Ref] = record
 	if segments[entry.Ref.FileID] == nil {
 		segments[entry.Ref.FileID] = &columnAssetSegmentState{}
 	}
 	return nil
+}
+
+func columnAssetRefBlocksSegmentDeletion(live bool, candidate bool, quarantined bool) bool {
+	// Non-live refs still block whole-segment deletion unless they are purely
+	// cleanup-safe candidates. Quarantined refs deliberately block shared segment
+	// deletion until quarantine handling has made an explicit cleanup decision.
+	return !live && (!candidate || quarantined)
 }
 
 func estimateColumnAssetReachabilityRefs(input ColumnAssetReachabilityInput) int {
@@ -487,6 +497,8 @@ func strongestColumnAssetState(a ColumnAssetLifecycleState, b ColumnAssetLifecyc
 func columnAssetStateRank(state ColumnAssetLifecycleState) int {
 	switch state {
 	case ColumnAssetStateQuarantined:
+		// Quarantine is reported as the dominant state so unsafe/isolated refs
+		// remain visible even if another reachable manifest still names them.
 		return 100
 	case ColumnAssetStateRecoveryAuthoritative:
 		return 90
