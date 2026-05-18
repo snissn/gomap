@@ -337,7 +337,6 @@ func encodeColumnManifestIdentityForWrite(input ColumnPublishManifestEncodeInput
 
 func checksumColumnManifestIdentityForWrite(input ColumnPublishManifestEncodeInput, generation uint64) uint64 {
 	var d xxhash.Digest
-	d.Reset()
 	writeHashString(&d, input.Collection)
 	writeHashString(&d, string(input.Operation))
 	writeHashUint64(&d, generation)

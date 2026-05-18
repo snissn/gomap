@@ -1688,7 +1688,9 @@ func writeColumnStoreSuiteArtifacts(dir, executionPath string, report columnStor
 	if err := writeColumnStoreSuiteArtifactFile(columnStoreSuiteArtifactPath(report.Artifacts.ColumnHTML, filepath.Join(dir, "column_store_results.html")), []byte(renderColumnStoreSuiteHTML(report))); err != nil {
 		return fmt.Errorf("column_store: write html: %w", err)
 	}
-	if err := writeBenchprofArtifacts(dir, strings.TrimSpace(executionPath), []BenchRun{run}); err != nil {
+	benchprofJSON := columnStoreSuiteArtifactPath(report.Artifacts.BenchprofJSON, filepath.Join(dir, "benchprof_results.json"))
+	benchprofMarkdown := columnStoreSuiteArtifactPath(report.Artifacts.BenchprofMarkdown, filepath.Join(dir, "benchprof_results.md"))
+	if err := writeBenchprofArtifactsToPaths(benchprofJSON, benchprofMarkdown, strings.TrimSpace(executionPath), []BenchRun{run}); err != nil {
 		return fmt.Errorf("column_store: write benchprof artifacts: %w", err)
 	}
 	return nil

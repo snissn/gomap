@@ -50,6 +50,19 @@ func TestResolveDBsDedupesCanonicalAliasesM11A(t *testing.T) {
 	}
 }
 
+func TestCanonicalDBNameNormalizesNonCLIInputsM11A(t *testing.T) {
+	withDBAliasesForTest(t, map[string]string{
+		"treedb_alias": "treedb",
+	})
+
+	if got := canonicalDBName(" TREEDB_ALIAS "); got != "treedb" {
+		t.Fatalf("canonicalDBName normalized alias=%q, want treedb", got)
+	}
+	if got := canonicalDBName(" TREEDB "); got != "treedb" {
+		t.Fatalf("canonicalDBName normalized name=%q, want treedb", got)
+	}
+}
+
 func TestCanonicalDBNameStopsAliasCyclesM11A(t *testing.T) {
 	withDBAliasesForTest(t, map[string]string{
 		"alias_a": "alias_b",
