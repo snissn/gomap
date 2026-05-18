@@ -64,7 +64,7 @@ Local M11 follow-up evidence:
 
 ```sh
 GOWORK=off go test ./TreeDB/collections \
-  -run 'TestColumnVectorDynamicGraph|TestColumnVectorDynamicOverlay|TestColumnVectorGraph' \
+  -run 'TestColumnVectorDynamic(Graph|Overlay|Mutation)|TestColumnVectorGraph' \
   -count=1
 
 GOWORK=off go test -race ./TreeDB/collections \
@@ -95,15 +95,15 @@ GOWORK=off go test ./TreeDB/collections \
 
 Latest #1615 Apple M3 smoke results:
 
-- 100k read-only: `13030-13194 ns/op`, `75792-76744 read_qps`,
+- 100k read-only: `12977-13429 ns/op`, `74463-77061 read_qps`,
   `1064 total_candidates/search`, `5600 edges/search`, `0 B/op`,
   `0 allocs/op`.
-- 100k read-write: `337121-456932 ns/op`, `2189-2966 read_qps`,
-  `18306 total_candidates/search`, `708812-760204 publish_ns/op`,
-  `1563561-2630119 B/op`, `18-26 allocs/op`.
-- Isolated publish clone+append: `15529-16244 ns/op`, `160265-160266 B/op`,
-  and `18 allocs/op` for the 256-row overlay shape; `474182-481100 ns/op`,
-  `5179013-5179014 B/op`, and `64 allocs/op` for the
+- 100k read-write: `332162-451084 ns/op`, `2217-3011 read_qps`,
+  `18306 total_candidates/search`, `654288-768199 publish_ns/op`,
+  `1598732-2268984 B/op`, `18-23 allocs/op`.
+- Isolated publish clone+append: `15563-16056 ns/op`, `160265-160266 B/op`,
+  and `18 allocs/op` for the 256-row overlay shape; `491165-499048 ns/op`,
+  `5179011-5179014 B/op`, and `64 allocs/op` for the
   8192-row/4096-tombstone shape.
 
 Earlier 1M scale smoke from the same dynamic-overlay track:

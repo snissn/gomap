@@ -176,21 +176,26 @@ func (g *ColumnVectorDynamicGraph) ApplyBatch(mutations []ColumnVectorDynamicMut
 	}
 
 	start := time.Now()
-	appendCapacity, err := columnVectorDynamicValidateMutationAppendCapacity(mutations, g.baseDocIndex, current.overlay, current.base.Dims())
+	mutationPlan, err := columnVectorDynamicValidateMutationAppendCapacity(mutations, g.baseDocIndex, current.overlay, current.base.Dims())
 	if err != nil {
 		return stats, err
 	}
-	nextOverlay := current.overlay.clone(current.overlayGeneration+1, appendCapacity)
+	nextOverlay := current.overlay.clone(current.overlayGeneration+1, mutationPlan.appendCapacity)
 	inserted, updated, deleted := 0, 0, 0
+	appendVectorIndex := 0
 	for mutationIndex, mutation := range mutations {
 		switch mutation.Kind {
 		case ColumnVectorDynamicMutationInsert:
-			if err := g.applyInsert(nextOverlay, mutation.DocumentID, mutation.Vector); err != nil {
+			invNorm := mutationPlan.vectorInvNorm(appendVectorIndex)
+			appendVectorIndex++
+			if err := g.applyInsert(nextOverlay, mutation.DocumentID, mutation.Vector, invNorm); err != nil {
 				return stats, fmt.Errorf("collections: dynamic insert mutation %d: %w", mutationIndex, err)
 			}
 			inserted++
 		case ColumnVectorDynamicMutationUpdate:
-			if err := g.applyUpdate(nextOverlay, mutation.DocumentID, mutation.Vector); err != nil {
+			invNorm := mutationPlan.vectorInvNorm(appendVectorIndex)
+			appendVectorIndex++
+			if err := g.applyUpdate(nextOverlay, mutation.DocumentID, mutation.Vector, invNorm); err != nil {
 				return stats, fmt.Errorf("collections: dynamic update mutation %d: %w", mutationIndex, err)
 			}
 			updated++
@@ -303,17 +308,17 @@ func (g *ColumnVectorDynamicGraph) SearchCosine(query []float32, opts ColumnVect
 	return results, trace, nil
 }
 
-func (g *ColumnVectorDynamicGraph) applyInsert(overlay *ColumnVectorDynamicOverlaySnapshot, documentID []byte, vector []float32) error {
+func (g *ColumnVectorDynamicGraph) applyInsert(overlay *ColumnVectorDynamicOverlaySnapshot, documentID []byte, vector []float32, invNorm float32) error {
 	if overlay.HasLiveDocument(documentID) {
 		return fmt.Errorf("document %q already exists in overlay", documentID)
 	}
 	if _, ok := g.baseDocIndex[string(documentID)]; ok && !overlay.documentTombstonedWriter(documentID) {
 		return fmt.Errorf("document %q already exists in base", documentID)
 	}
-	return overlay.appendLiveDocument(documentID, vector)
+	return overlay.appendPrevalidatedLiveDocument(documentID, vector, invNorm)
 }
 
-func (g *ColumnVectorDynamicGraph) applyUpdate(overlay *ColumnVectorDynamicOverlaySnapshot, documentID []byte, vector []float32) error {
+func (g *ColumnVectorDynamicGraph) applyUpdate(overlay *ColumnVectorDynamicOverlaySnapshot, documentID []byte, vector []float32, invNorm float32) error {
 	overlayFound := overlay.tombstoneOverlayDocument(documentID)
 	_, baseFound := g.baseDocIndex[string(documentID)]
 	baseLive := baseFound && !overlay.documentTombstonedWriter(documentID)
@@ -323,7 +328,7 @@ func (g *ColumnVectorDynamicGraph) applyUpdate(overlay *ColumnVectorDynamicOverl
 	if baseLive {
 		overlay.addTombstone(documentID)
 	}
-	return overlay.appendLiveDocument(documentID, vector)
+	return overlay.appendPrevalidatedLiveDocument(documentID, vector, invNorm)
 }
 
 func (g *ColumnVectorDynamicGraph) applyDelete(overlay *ColumnVectorDynamicOverlaySnapshot, documentID []byte) error {
@@ -400,6 +405,30 @@ type columnVectorDynamicOverlayAppendCapacity struct {
 	tombstoneIDBytes int
 }
 
+type columnVectorDynamicMutationPlan struct {
+	appendCapacity        columnVectorDynamicOverlayAppendCapacity
+	vectorInvNormSmall    [8]float32
+	vectorInvNormOverflow []float32
+	vectorInvNormCount    int
+}
+
+func (p *columnVectorDynamicMutationPlan) addVectorInvNorm(invNorm float32) {
+	if p.vectorInvNormCount < len(p.vectorInvNormSmall) {
+		p.vectorInvNormSmall[p.vectorInvNormCount] = invNorm
+		p.vectorInvNormCount++
+		return
+	}
+	p.vectorInvNormOverflow = append(p.vectorInvNormOverflow, invNorm)
+	p.vectorInvNormCount++
+}
+
+func (p *columnVectorDynamicMutationPlan) vectorInvNorm(index int) float32 {
+	if index < len(p.vectorInvNormSmall) {
+		return p.vectorInvNormSmall[index]
+	}
+	return p.vectorInvNormOverflow[index-len(p.vectorInvNormSmall)]
+}
+
 func newColumnVectorDynamicOverlaySnapshot(dims int) *ColumnVectorDynamicOverlaySnapshot {
 	return &ColumnVectorDynamicOverlaySnapshot{
 		dims:            dims,
@@ -458,8 +487,8 @@ type columnVectorDynamicOverlayLiveChange struct {
 	live bool
 }
 
-func columnVectorDynamicValidateMutationAppendCapacity(mutations []ColumnVectorDynamicMutation, baseDocIndex map[string]int, overlay *ColumnVectorDynamicOverlaySnapshot, dims int) (columnVectorDynamicOverlayAppendCapacity, error) {
-	var appendCapacity columnVectorDynamicOverlayAppendCapacity
+func columnVectorDynamicValidateMutationAppendCapacity(mutations []ColumnVectorDynamicMutation, baseDocIndex map[string]int, overlay *ColumnVectorDynamicOverlaySnapshot, dims int) (columnVectorDynamicMutationPlan, error) {
+	var plan columnVectorDynamicMutationPlan
 	state := columnVectorDynamicMutationValidationState{
 		baseDocIndex: baseDocIndex,
 		overlay:      overlay,
@@ -468,26 +497,29 @@ func columnVectorDynamicValidateMutationAppendCapacity(mutations []ColumnVectorD
 	state.baseTombstones = state.baseTombstoneSmall[:0]
 	for mutationIndex, mutation := range mutations {
 		if len(mutation.DocumentID) == 0 {
-			return appendCapacity, fmt.Errorf("collections: dynamic mutation %d has empty document ID", mutationIndex)
+			return plan, fmt.Errorf("collections: dynamic mutation %d has empty document ID", mutationIndex)
 		}
 		key := string(mutation.DocumentID)
 		switch mutation.Kind {
 		case ColumnVectorDynamicMutationInsert:
-			if err := columnVectorDynamicValidateMutationVector("insert", mutationIndex, mutation.Vector, dims); err != nil {
-				return appendCapacity, err
+			invNorm, err := columnVectorDynamicValidateMutationVector("insert", mutationIndex, mutation.Vector, dims)
+			if err != nil {
+				return plan, err
 			}
 			if state.documentLiveInOverlay(mutation.DocumentID, key) {
-				return appendCapacity, fmt.Errorf("collections: dynamic insert mutation %d: document %q already exists in overlay", mutationIndex, mutation.DocumentID)
+				return plan, fmt.Errorf("collections: dynamic insert mutation %d: document %q already exists in overlay", mutationIndex, mutation.DocumentID)
 			}
 			if state.documentLiveInBase(mutation.DocumentID, key) {
-				return appendCapacity, fmt.Errorf("collections: dynamic insert mutation %d: document %q already exists in base", mutationIndex, mutation.DocumentID)
+				return plan, fmt.Errorf("collections: dynamic insert mutation %d: document %q already exists in base", mutationIndex, mutation.DocumentID)
 			}
 			state.setOverlayLive(key, true)
-			appendCapacity.rows++
-			appendCapacity.idBytes += len(mutation.DocumentID)
+			plan.addVectorInvNorm(invNorm)
+			plan.appendCapacity.rows++
+			plan.appendCapacity.idBytes += len(mutation.DocumentID)
 		case ColumnVectorDynamicMutationUpdate:
-			if err := columnVectorDynamicValidateMutationVector("update", mutationIndex, mutation.Vector, dims); err != nil {
-				return appendCapacity, err
+			invNorm, err := columnVectorDynamicValidateMutationVector("update", mutationIndex, mutation.Vector, dims)
+			if err != nil {
+				return plan, err
 			}
 			overlayFound := state.documentLiveInOverlay(mutation.DocumentID, key)
 			if overlayFound {
@@ -495,15 +527,16 @@ func columnVectorDynamicValidateMutationAppendCapacity(mutations []ColumnVectorD
 			}
 			baseLive := state.documentLiveInBase(mutation.DocumentID, key)
 			if !overlayFound && !baseLive {
-				return appendCapacity, fmt.Errorf("collections: dynamic update mutation %d: document %q does not exist", mutationIndex, mutation.DocumentID)
+				return plan, fmt.Errorf("collections: dynamic update mutation %d: document %q does not exist", mutationIndex, mutation.DocumentID)
 			}
 			if baseLive && state.setBaseTombstoned(key) {
-				appendCapacity.tombstones++
-				appendCapacity.tombstoneIDBytes += len(mutation.DocumentID)
+				plan.appendCapacity.tombstones++
+				plan.appendCapacity.tombstoneIDBytes += len(mutation.DocumentID)
 			}
 			state.setOverlayLive(key, true)
-			appendCapacity.rows++
-			appendCapacity.idBytes += len(mutation.DocumentID)
+			plan.addVectorInvNorm(invNorm)
+			plan.appendCapacity.rows++
+			plan.appendCapacity.idBytes += len(mutation.DocumentID)
 		case ColumnVectorDynamicMutationDelete:
 			overlayFound := state.documentLiveInOverlay(mutation.DocumentID, key)
 			if overlayFound {
@@ -511,34 +544,43 @@ func columnVectorDynamicValidateMutationAppendCapacity(mutations []ColumnVectorD
 			}
 			baseLive := state.documentLiveInBase(mutation.DocumentID, key)
 			if !overlayFound && !baseLive {
-				return appendCapacity, fmt.Errorf("collections: dynamic delete mutation %d: document %q does not exist", mutationIndex, mutation.DocumentID)
+				return plan, fmt.Errorf("collections: dynamic delete mutation %d: document %q does not exist", mutationIndex, mutation.DocumentID)
 			}
 			if baseLive && state.setBaseTombstoned(key) {
-				appendCapacity.tombstones++
-				appendCapacity.tombstoneIDBytes += len(mutation.DocumentID)
+				plan.appendCapacity.tombstones++
+				plan.appendCapacity.tombstoneIDBytes += len(mutation.DocumentID)
 			}
 		default:
-			return appendCapacity, fmt.Errorf("collections: dynamic mutation %d has unsupported kind %d", mutationIndex, mutation.Kind)
+			return plan, fmt.Errorf("collections: dynamic mutation %d has unsupported kind %d", mutationIndex, mutation.Kind)
 		}
 	}
-	if uint64(len(overlay.idArena))+uint64(appendCapacity.idBytes) > columnVectorGraphMaxUint32 {
-		return appendCapacity, errors.New("collections: dynamic overlay document ID arena exceeds uint32 offsets")
+	if uint64(len(overlay.idArena))+uint64(plan.appendCapacity.idBytes) > columnVectorGraphMaxUint32 {
+		return plan, errors.New("collections: dynamic overlay document ID arena exceeds uint32 offsets")
 	}
-	return appendCapacity, nil
+	return plan, nil
 }
 
-func columnVectorDynamicValidateMutationVector(kind string, mutationIndex int, vector []float32, dims int) error {
+func columnVectorDynamicValidateMutationVector(kind string, mutationIndex int, vector []float32, dims int) (float32, error) {
+	invNorm, err := columnVectorDynamicValidateVector(vector, dims)
+	if err != nil {
+		return 0, fmt.Errorf("collections: dynamic %s mutation %d: %w", kind, mutationIndex, err)
+	}
+	return invNorm, nil
+}
+
+func columnVectorDynamicValidateVector(vector []float32, dims int) (float32, error) {
 	if len(vector) != dims {
-		return fmt.Errorf("collections: dynamic %s mutation %d: vector has dimension %d, want %d", kind, mutationIndex, len(vector), dims)
+		return 0, fmt.Errorf("vector has dimension %d, want %d", len(vector), dims)
 	}
 	normSquared, badDim, badValue := columnVectorGraphNormSquared(vector)
 	if badDim >= 0 {
-		return fmt.Errorf("collections: dynamic %s mutation %d: vector dim %d is not finite: %g", kind, mutationIndex, badDim, badValue)
+		return 0, fmt.Errorf("vector dim %d is not finite: %g", badDim, badValue)
 	}
-	if _, err := validateColumnVectorGraphQueryInvNorm(normSquared); err != nil {
-		return fmt.Errorf("collections: dynamic %s mutation %d: %w", kind, mutationIndex, err)
+	invNorm, err := validateColumnVectorGraphQueryInvNorm(normSquared)
+	if err != nil {
+		return 0, err
 	}
-	return nil
+	return invNorm, nil
 }
 
 func (s *columnVectorDynamicMutationValidationState) documentLiveInOverlay(documentID []byte, key string) bool {
@@ -740,16 +782,16 @@ func (o *ColumnVectorDynamicOverlaySnapshot) documentTombstonedWriter(documentID
 }
 
 func (o *ColumnVectorDynamicOverlaySnapshot) appendLiveDocument(documentID []byte, vector []float32) error {
-	if len(vector) != o.dims {
-		return fmt.Errorf("vector has dimension %d, want %d", len(vector), o.dims)
-	}
-	normSquared, badDim, badValue := columnVectorGraphNormSquared(vector)
-	if badDim >= 0 {
-		return fmt.Errorf("vector dim %d is not finite: %g", badDim, badValue)
-	}
-	invNorm, err := validateColumnVectorGraphQueryInvNorm(normSquared)
+	invNorm, err := columnVectorDynamicValidateVector(vector, o.dims)
 	if err != nil {
 		return err
+	}
+	return o.appendPrevalidatedLiveDocument(documentID, vector, invNorm)
+}
+
+func (o *ColumnVectorDynamicOverlaySnapshot) appendPrevalidatedLiveDocument(documentID []byte, vector []float32, invNorm float32) error {
+	if len(vector) != o.dims {
+		return fmt.Errorf("vector has dimension %d, want %d", len(vector), o.dims)
 	}
 	if uint64(len(o.idArena))+uint64(len(documentID)) > columnVectorGraphMaxUint32 {
 		return errors.New("overlay document ID arena exceeds uint32 offsets")

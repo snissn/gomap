@@ -340,10 +340,11 @@ func TestColumnVectorDynamicOverlayClonePreallocatesBatchAppend(t *testing.T) {
 		"update-001": 1,
 		"base-001":   2,
 	}
-	appendCapacity, err := columnVectorDynamicValidateMutationAppendCapacity(mutations, baseDocIndex, overlay, overlay.dims)
+	mutationPlan, err := columnVectorDynamicValidateMutationAppendCapacity(mutations, baseDocIndex, overlay, overlay.dims)
 	if err != nil {
 		t.Fatalf("mutation append capacity: %v", err)
 	}
+	appendCapacity := mutationPlan.appendCapacity
 	next := overlay.clone(overlay.generation+1, appendCapacity)
 	if spare := cap(next.vectors) - len(next.vectors); spare < appendCapacity.rows*next.dims {
 		t.Fatalf("vector spare capacity=%d want at least %d", spare, appendCapacity.rows*next.dims)
@@ -420,10 +421,11 @@ func TestColumnVectorDynamicMutationAppendCapacitySkipsOverlayOnlyTombstones(t *
 		{Kind: ColumnVectorDynamicMutationDelete, DocumentID: []byte("overlay-delete")},
 		{Kind: ColumnVectorDynamicMutationDelete, DocumentID: []byte("base-live")},
 	}
-	appendCapacity, err := columnVectorDynamicValidateMutationAppendCapacity(mutations, baseDocIndex, overlay, overlay.dims)
+	mutationPlan, err := columnVectorDynamicValidateMutationAppendCapacity(mutations, baseDocIndex, overlay, overlay.dims)
 	if err != nil {
 		t.Fatalf("mutation append capacity: %v", err)
 	}
+	appendCapacity := mutationPlan.appendCapacity
 	if appendCapacity.rows != 1 || appendCapacity.idBytes != len("overlay-update") {
 		t.Fatalf("append rows=%d idBytes=%d, want one overlay replacement", appendCapacity.rows, appendCapacity.idBytes)
 	}
@@ -440,10 +442,11 @@ func TestColumnVectorDynamicMutationAppendCapacityValidatesSequentialBatch(t *te
 		{Kind: ColumnVectorDynamicMutationDelete, DocumentID: []byte("base-live")},
 		{Kind: ColumnVectorDynamicMutationInsert, DocumentID: []byte("base-live"), Vector: vector},
 	}
-	appendCapacity, err := columnVectorDynamicValidateMutationAppendCapacity(validResurrection, baseDocIndex, overlay, overlay.dims)
+	mutationPlan, err := columnVectorDynamicValidateMutationAppendCapacity(validResurrection, baseDocIndex, overlay, overlay.dims)
 	if err != nil {
 		t.Fatalf("valid delete+insert capacity: %v", err)
 	}
+	appendCapacity := mutationPlan.appendCapacity
 	if appendCapacity.rows != 1 || appendCapacity.tombstones != 1 {
 		t.Fatalf("capacity after delete+insert rows=%d tombstones=%d, want 1/1", appendCapacity.rows, appendCapacity.tombstones)
 	}
@@ -526,10 +529,11 @@ func BenchmarkColumnVectorDynamicOverlayPublishCloneAppend(b *testing.B) {
 				"publish-update-000000001": 1,
 				"publish-delete-000000001": 2,
 			}
-			appendCapacity, err := columnVectorDynamicValidateMutationAppendCapacity(mutations, baseDocIndex, overlay, overlay.dims)
+			mutationPlan, err := columnVectorDynamicValidateMutationAppendCapacity(mutations, baseDocIndex, overlay, overlay.dims)
 			if err != nil {
 				b.Fatalf("mutation append capacity: %v", err)
 			}
+			appendCapacity := mutationPlan.appendCapacity
 			b.ReportAllocs()
 			b.ReportMetric(float64(tc.rows), "overlay_rows")
 			b.ReportMetric(float64(tc.tombstones), "overlay_tombstones")
