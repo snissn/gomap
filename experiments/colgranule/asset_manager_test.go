@@ -2,6 +2,7 @@ package colgranule
 
 import (
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"testing"
 )
@@ -98,6 +99,46 @@ func TestColumnAssetManagerValidatesPreparedPublishClosure(t *testing.T) {
 	if err == nil {
 		t.Fatalf("PreparePublishClosure missing ref succeeded")
 	}
+}
+
+func TestColumnAssetManagerRejectsPublishClosureRequiredBytesOverflow(t *testing.T) {
+	manager, err := NewColumnAssetManager(acceptingVerifierAssetStore{})
+	if err != nil {
+		t.Fatalf("NewColumnAssetManager: %v", err)
+	}
+	maxInt := int(^uint(0) >> 1)
+	prepared := []ColumnPreparedAsset{
+		{
+			Ref:   ColumnAssetRef{Kind: ColumnAssetKindTCS1PartImage, FileID: 1, Offset: 0, Length: 1, Checksum: 1},
+			Bytes: maxInt,
+		},
+		{
+			Ref:   ColumnAssetRef{Kind: ColumnAssetKindTCS1PartImage, FileID: 1, Offset: 1, Length: 1, Checksum: 1},
+			Bytes: 1,
+		},
+	}
+	_, err = manager.PreparePublishClosure(prepared)
+	if err == nil || !strings.Contains(err.Error(), "required bytes overflow") {
+		t.Fatalf("PreparePublishClosure overflow err=%v, want required bytes overflow", err)
+	}
+}
+
+type acceptingVerifierAssetStore struct{}
+
+func (acceptingVerifierAssetStore) Put(ColumnAssetKind, []byte) (ColumnAssetRef, error) {
+	return ColumnAssetRef{}, nil
+}
+
+func (acceptingVerifierAssetStore) Read(ColumnAssetRef) ([]byte, error) {
+	return nil, nil
+}
+
+func (acceptingVerifierAssetStore) ReadTo(ColumnAssetRef, []byte) ([]byte, error) {
+	return nil, nil
+}
+
+func (acceptingVerifierAssetStore) Verify(ref ColumnAssetRef) error {
+	return validateColumnAssetRef(ref)
 }
 
 func TestColumnAssetManagerSyncPublishClosureDerivesSyncRequired(t *testing.T) {
