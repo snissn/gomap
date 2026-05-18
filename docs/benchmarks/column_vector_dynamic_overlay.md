@@ -138,7 +138,7 @@ Focused validation:
 
 ```sh
 GOWORK=off go test ./TreeDB/collections \
-  -run 'TestColumnVectorDynamicGraph|TestColumnVectorGraph' \
+  -run 'TestColumnVectorDynamic(Graph|Overlay|Mutation)|TestColumnVectorGraph' \
   -count=1
 
 GOWORK=off go test -race ./TreeDB/collections \
