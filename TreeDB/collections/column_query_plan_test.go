@@ -372,6 +372,42 @@ func TestColumnQueryPlannerM11BReportsSerialWorkerCount(t *testing.T) {
 	}
 }
 
+func TestColumnQueryPlannerM11BRejectsUnknownPhysicalProjectedColumn(t *testing.T) {
+	catalog := &collectionCatalog{meta: CollectionMeta{
+		Name: "events",
+		Options: CollectionOptions{ColumnStore: &ColumnStoreConfig{
+			Enabled: true,
+			Columns: []ColumnStoreColumn{
+				{Name: "time_us", Path: "time_us", ValueType: ColumnStoreValueInt64},
+			},
+		}},
+	}}
+	identity := ColumnStoreCacheIdentity{
+		Collection:                      "events",
+		ManifestRoot:                    99,
+		ManifestGeneration:              7,
+		RecoveryAuthoritativeGeneration: 7,
+	}
+	req := ColumnQueryPlanRequest{
+		Name:             "q1",
+		ProjectedColumns: []string{"time_us", "missing"},
+		ForceKind:        ColumnQueryPlanSerialColumnScan,
+		Capabilities: ColumnQueryPlannerCapabilities{
+			SerialColumnScan:   true,
+			PhysicalAssetCount: 1,
+			GranuleCount:       8,
+		},
+	}
+
+	plan := planColumnQueryForCatalog(catalog, identity, true, req)
+	if plan.Supported {
+		t.Fatalf("expected unknown projected column to fail closed: %+v", plan)
+	}
+	if !strings.Contains(plan.Diagnostics.UnsupportedPlanReason, `unknown projected column "missing"`) {
+		t.Fatalf("unsupported reason=%q", plan.Diagnostics.UnsupportedPlanReason)
+	}
+}
+
 func TestColumnQueryPlannerM11BRejectsUnknownAggregateMetadata(t *testing.T) {
 	catalog := &collectionCatalog{meta: CollectionMeta{
 		Name: "events",

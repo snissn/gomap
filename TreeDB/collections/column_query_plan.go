@@ -50,7 +50,9 @@ type ColumnQueryPlannerCapabilities struct {
 // ColumnQueryPlanRequest describes one planner decision. Column, index, and
 // aggregate metadata names are matched case-sensitively after trimming
 // surrounding whitespace; callers should canonicalize catalog names before
-// storing them rather than relying on planner-time normalization.
+// storing them rather than relying on planner-time normalization. Unknown
+// projected columns make physical column plans fail closed; row-store and
+// B-tree baselines can still materialize documents without physical assets.
 type ColumnQueryPlanRequest struct {
 	Name                  string
 	ProjectedColumns      []string
@@ -135,10 +137,10 @@ func planColumnQueryForCatalog(catalog *collectionCatalog, identity ColumnStoreC
 	if ok, plan := aggregateColumnQueryPlan(catalog, identity, identityOK, req, diag); ok {
 		return plan
 	}
-	if ok, plan := parallelColumnQueryPlan(identity, identityOK, req, diag); ok {
+	if ok, plan := parallelColumnQueryPlan(catalog, identity, identityOK, req, diag); ok {
 		return plan
 	}
-	if ok, plan := serialColumnQueryPlan(identity, identityOK, req, diag); ok {
+	if ok, plan := serialColumnQueryPlan(catalog, identity, identityOK, req, diag); ok {
 		return plan
 	}
 	if idx, ok := selectColumnQueryBTreeIndex(catalog, req); ok {
@@ -166,11 +168,11 @@ func forcedColumnQueryPlan(catalog *collectionCatalog, identity ColumnStoreCache
 		diag.Reason = "forced matching collection secondary index"
 		return ColumnQueryPlan{Kind: ColumnQueryPlanBTreeIndexBaseline, Supported: true, IndexName: idx.Name, IndexField: idx.Field, Diagnostics: diag}
 	case ColumnQueryPlanSerialColumnScan:
-		if ok, plan := serialColumnQueryPlan(identity, identityOK, req, diag); ok {
+		if ok, plan := serialColumnQueryPlan(catalog, identity, identityOK, req, diag); ok {
 			plan.Diagnostics.Reason = "forced serial physical column scan"
 			return plan
 		}
-		return unsupportedColumnQueryPlan(ColumnQueryPlanSerialColumnScan, physicalColumnQueryUnsupportedReason(identity, identityOK, req, ColumnQueryPlanSerialColumnScan), diag)
+		return unsupportedColumnQueryPlan(ColumnQueryPlanSerialColumnScan, physicalColumnQueryUnsupportedReason(catalog, identity, identityOK, req, ColumnQueryPlanSerialColumnScan), diag)
 	case ColumnQueryPlanAggregateMetadata:
 		if ok, plan := aggregateColumnQueryPlan(catalog, identity, identityOK, req, diag); ok {
 			plan.Diagnostics.Reason = "forced aggregate metadata plan"
@@ -178,18 +180,18 @@ func forcedColumnQueryPlan(catalog *collectionCatalog, identity ColumnStoreCache
 		}
 		return unsupportedColumnQueryPlan(ColumnQueryPlanAggregateMetadata, aggregateColumnQueryUnsupportedReason(catalog, identity, identityOK, req), diag)
 	case ColumnQueryPlanParallelColumnScan:
-		if ok, plan := parallelColumnQueryPlan(identity, identityOK, req, diag); ok {
+		if ok, plan := parallelColumnQueryPlan(catalog, identity, identityOK, req, diag); ok {
 			plan.Diagnostics.Reason = "forced parallel physical column scan"
 			return plan
 		}
-		return unsupportedColumnQueryPlan(ColumnQueryPlanParallelColumnScan, physicalColumnQueryUnsupportedReason(identity, identityOK, req, ColumnQueryPlanParallelColumnScan), diag)
+		return unsupportedColumnQueryPlan(ColumnQueryPlanParallelColumnScan, physicalColumnQueryUnsupportedReason(catalog, identity, identityOK, req, ColumnQueryPlanParallelColumnScan), diag)
 	default:
 		return unsupportedColumnQueryPlan(req.ForceKind, fmt.Sprintf("unknown column query plan kind %q", req.ForceKind), diag)
 	}
 }
 
-func serialColumnQueryPlan(identity ColumnStoreCacheIdentity, identityOK bool, req ColumnQueryPlanRequest, diag ColumnQueryPlanDiagnostics) (bool, ColumnQueryPlan) {
-	if !physicalColumnQuerySupported(identity, identityOK, req, ColumnQueryPlanSerialColumnScan) {
+func serialColumnQueryPlan(catalog *collectionCatalog, identity ColumnStoreCacheIdentity, identityOK bool, req ColumnQueryPlanRequest, diag ColumnQueryPlanDiagnostics) (bool, ColumnQueryPlan) {
+	if !physicalColumnQuerySupported(catalog, identity, identityOK, req, ColumnQueryPlanSerialColumnScan) {
 		return false, ColumnQueryPlan{}
 	}
 	diag.Reason = "selected serial physical column scan"
@@ -205,7 +207,7 @@ func aggregateColumnQueryPlan(catalog *collectionCatalog, identity ColumnStoreCa
 	if !catalogHasColumnAggregateMetadata(catalog, req.AggregateMetadataName) {
 		return false, ColumnQueryPlan{}
 	}
-	if !physicalColumnQuerySupported(identity, identityOK, req, ColumnQueryPlanAggregateMetadata) {
+	if !physicalColumnQuerySupported(catalog, identity, identityOK, req, ColumnQueryPlanAggregateMetadata) {
 		return false, ColumnQueryPlan{}
 	}
 	diag.Reason = "selected aggregate metadata"
@@ -213,8 +215,8 @@ func aggregateColumnQueryPlan(catalog *collectionCatalog, identity ColumnStoreCa
 	return true, ColumnQueryPlan{Kind: ColumnQueryPlanAggregateMetadata, Supported: true, Diagnostics: diag}
 }
 
-func parallelColumnQueryPlan(identity ColumnStoreCacheIdentity, identityOK bool, req ColumnQueryPlanRequest, diag ColumnQueryPlanDiagnostics) (bool, ColumnQueryPlan) {
-	if !physicalColumnQuerySupported(identity, identityOK, req, ColumnQueryPlanParallelColumnScan) {
+func parallelColumnQueryPlan(catalog *collectionCatalog, identity ColumnStoreCacheIdentity, identityOK bool, req ColumnQueryPlanRequest, diag ColumnQueryPlanDiagnostics) (bool, ColumnQueryPlan) {
+	if !physicalColumnQuerySupported(catalog, identity, identityOK, req, ColumnQueryPlanParallelColumnScan) {
 		return false, ColumnQueryPlan{}
 	}
 	workers := req.Capabilities.MaxParallelWorkers
@@ -230,8 +232,11 @@ func parallelColumnQueryPlan(identity ColumnStoreCacheIdentity, identityOK bool,
 	return true, ColumnQueryPlan{Kind: ColumnQueryPlanParallelColumnScan, Supported: true, Diagnostics: diag}
 }
 
-func physicalColumnQuerySupported(identity ColumnStoreCacheIdentity, identityOK bool, req ColumnQueryPlanRequest, kind ColumnQueryPlanKind) bool {
+func physicalColumnQuerySupported(catalog *collectionCatalog, identity ColumnStoreCacheIdentity, identityOK bool, req ColumnQueryPlanRequest, kind ColumnQueryPlanKind) bool {
 	if !columnQueryManifestRecoveryAuthoritative(identity, identityOK) || req.Capabilities.PhysicalAssetCount <= 0 {
+		return false
+	}
+	if ok, _ := catalogHasColumnStoreProjectedColumns(catalog, req.ProjectedColumns); !ok {
 		return false
 	}
 	switch kind {
@@ -246,12 +251,15 @@ func physicalColumnQuerySupported(identity ColumnStoreCacheIdentity, identityOK 
 	}
 }
 
-func physicalColumnQueryUnsupportedReason(identity ColumnStoreCacheIdentity, identityOK bool, req ColumnQueryPlanRequest, kind ColumnQueryPlanKind) string {
+func physicalColumnQueryUnsupportedReason(catalog *collectionCatalog, identity ColumnStoreCacheIdentity, identityOK bool, req ColumnQueryPlanRequest, kind ColumnQueryPlanKind) string {
 	switch {
 	case !columnQueryManifestRecoveryAuthoritative(identity, identityOK):
 		return "active column manifest is not recovery-authoritative"
 	case req.Capabilities.PhysicalAssetCount <= 0:
 		return "no durable physical column assets are available"
+	}
+	if ok, missing := catalogHasColumnStoreProjectedColumns(catalog, req.ProjectedColumns); !ok {
+		return fmt.Sprintf("unknown projected column %q", missing)
 	}
 	switch kind {
 	case ColumnQueryPlanSerialColumnScan:
@@ -287,7 +295,33 @@ func aggregateColumnQueryUnsupportedReason(catalog *collectionCatalog, identity 
 	if !catalogHasColumnAggregateMetadata(catalog, name) {
 		return fmt.Sprintf("unknown aggregate metadata %q", name)
 	}
-	return physicalColumnQueryUnsupportedReason(identity, identityOK, req, ColumnQueryPlanAggregateMetadata)
+	return physicalColumnQueryUnsupportedReason(catalog, identity, identityOK, req, ColumnQueryPlanAggregateMetadata)
+}
+
+func catalogHasColumnStoreProjectedColumns(catalog *collectionCatalog, projected []string) (bool, string) {
+	for _, projectedColumn := range projected {
+		name := strings.TrimSpace(projectedColumn)
+		if name == "" {
+			continue
+		}
+		if !catalogHasColumnStoreColumn(catalog, name) {
+			return false, name
+		}
+	}
+	return true, ""
+}
+
+func catalogHasColumnStoreColumn(catalog *collectionCatalog, name string) bool {
+	name = strings.TrimSpace(name)
+	if catalog == nil || catalog.meta.Options.ColumnStore == nil || name == "" {
+		return false
+	}
+	for _, column := range catalog.meta.Options.ColumnStore.Columns {
+		if strings.TrimSpace(column.Name) == name {
+			return true
+		}
+	}
+	return false
 }
 
 func catalogHasColumnAggregateMetadata(catalog *collectionCatalog, name string) bool {

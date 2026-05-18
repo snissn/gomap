@@ -574,7 +574,7 @@ func TestColumnStoreSuiteRejectsForcedColumnPathM11B(t *testing.T) {
 		t.Fatalf("expected ErrColumnQueryPlanUnsupported, got %v", err)
 	}
 	msg := err.Error()
-	if !strings.Contains(msg, "serial_column_scan") || !strings.Contains(msg, "unsupported") || !strings.Contains(msg, "reason=") || !strings.Contains(msg, "physical column") {
+	if !strings.Contains(msg, "serial_column_scan") || !strings.Contains(msg, "unsupported") || !strings.Contains(msg, "reason=no durable physical column assets") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -591,6 +591,9 @@ func TestColumnStoreSuitePlanKindMapsKnownPathsM11B(t *testing.T) {
 		{columnStorePathParallelColumnScan, collections.ColumnQueryPlanParallelColumnScan},
 	}
 	for _, tc := range cases {
+		if tc.path != string(tc.want) {
+			t.Fatalf("path constant %q diverged from planner kind %q", tc.path, tc.want)
+		}
 		got, err := columnStoreSuitePlanKind(tc.path)
 		if err != nil {
 			t.Fatalf("columnStoreSuitePlanKind(%q): %v", tc.path, err)

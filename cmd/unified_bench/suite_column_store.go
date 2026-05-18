@@ -34,7 +34,7 @@ const (
 )
 
 var (
-	columnStoreSuitePathArg    = flag.String("column-store-path", columnStorePathRowStoreBaseline, "Forced column-store execution label for -suite column_store (row_store_baseline, b_tree_index_baseline, serial_column_scan, aggregate_metadata, parallel_column_scan; physical column labels fail closed until implemented)")
+	columnStoreSuitePathArg    = flag.String("column-store-path", columnStorePathRowStoreBaseline, "Forced column-store execution label for -suite column_store (row_store_baseline/row, b_tree_index_baseline/b_tree/index, serial_column_scan/serial, aggregate_metadata/metadata, parallel_column_scan/parallel; physical column labels fail closed until implemented)")
 	columnStoreSuiteFixtureArg = flag.String("column-store-fixture", "synthetic", "Fixture for -suite column_store (synthetic; JSONBENCH_DATA mode is reserved for the large local gate)")
 
 	columnStoreSuiteSupportedForcedPaths = []string{
@@ -476,15 +476,8 @@ func normalizeColumnStoreSuitePath(path string) string {
 }
 
 func validateColumnStoreSuiteForcedPath(path string) error {
-	if columnStoreSuitePathListed(path, columnStoreSuiteSupportedForcedPaths) {
-		return nil
-	}
-	if columnStoreSuitePathListed(path, columnStoreSuiteUnsupportedForcedPaths) {
-		// Physical labels are accepted here so the planner can return the
-		// capability-specific fail-closed reason.
-		return nil
-	}
-	return fmt.Errorf("column_store: unknown forced path %q; supported=%s fail_closed=%s", path, columnStoreSuitePathList(columnStoreSuiteSupportedForcedPaths), columnStoreSuitePathList(columnStoreSuiteUnsupportedForcedPaths))
+	_, err := columnStoreSuitePlanKind(path)
+	return err
 }
 
 func columnStoreSuitePlanKind(path string) (collections.ColumnQueryPlanKind, error) {
@@ -905,9 +898,6 @@ func runColumnStoreSuiteQueriesProfiled(cfg BenchConfig, collection *collections
 
 func runColumnStoreSuiteQueries(collection *collections.Collection, rows int, rawHashes map[string]uint64, path string) ([]columnStoreQueryMetric, map[string]columnStoreParity, error) {
 	path = normalizeColumnStoreSuitePath(path)
-	if err := validateColumnStoreSuiteForcedPath(path); err != nil {
-		return nil, nil, err
-	}
 	forceKind, err := columnStoreSuitePlanKind(path)
 	if err != nil {
 		return nil, nil, err
@@ -927,7 +917,7 @@ func runColumnStoreSuiteQueries(collection *collections.Collection, rows int, ra
 			if reason == "" {
 				reason = "planner did not report an unsupported reason"
 			}
-			return nil, nil, fmt.Errorf("column_store: forced path %q unsupported for %s: %w: reason=%s", path, name, collections.ErrColumnQueryPlanUnsupported, reason)
+			return nil, nil, fmt.Errorf("column_store: forced path %q unsupported for %s: reason=%s: %w", path, name, reason, collections.ErrColumnQueryPlanUnsupported)
 		}
 
 		scanStart := time.Now()
@@ -1134,8 +1124,14 @@ func columnStoreQueryAliasOf(name, path string) string {
 }
 
 func columnStoreQueryImplementationNote(name, path string) string {
-	if name == "q5_metadata" && (path == columnStorePathRowStoreBaseline || path == columnStorePathBTreeIndexBaseline) {
+	if name == "q5_metadata" && path == columnStorePathBTreeIndexBaseline {
+		return path + "_alias_until_physical_aggregate_metadata_path_full_index_scan_no_predicate_pushdown"
+	}
+	if name == "q5_metadata" && path == columnStorePathRowStoreBaseline {
 		return path + "_alias_until_physical_aggregate_metadata_path"
+	}
+	if path == columnStorePathBTreeIndexBaseline {
+		return "full_index_scan_no_predicate_pushdown_selectivity_deferred_to_m11c"
 	}
 	return ""
 }
