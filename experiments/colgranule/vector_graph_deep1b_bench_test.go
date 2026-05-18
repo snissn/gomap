@@ -2,7 +2,6 @@ package colgranule
 
 import (
 	"container/heap"
-	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -525,7 +524,6 @@ func BenchmarkColumnVectorGraphDeep1BJZIPNeighborhoodCompressionSmoke(b *testing
 								b.ReportMetric(float64(granuleRows)/transformSeconds, "warm_transform_vectors/s")
 								b.ReportMetric(float64(warm.RawBytes)/transformSeconds/1e6, "warm_transform_raw_MB/s")
 							}
-							b.ReportMetric(float64(warm.TransposeShuffleNanos)/1e6, "warm_layout_ms")
 							b.ReportMetric(float64(warm.TransposeShuffleNanos)/1e6, "warm_transpose_shuffle_ms")
 							b.ReportMetric(float64(warm.CompressionNanos)/1e6, "warm_compress_ms")
 							b.ReportMetric(float64(decodeNanos)/1e6, "decode_ms")
@@ -2455,12 +2453,6 @@ func columnVectorGraphDeep1BScoreErrorMetrics(exact []float32, approximate []flo
 	return maxError, sumError / float64(len(exact))
 }
 
-func columnVectorGraphDeep1BBoundPruneMetrics(query []float32, queryInvNorm float32, vectors []float32, invNorms []float32, dims int, prefixDims int, threshold float32, exactTopRows []int) (int, int, int) {
-	tailNorms := columnVectorGraphDeep1BLocalTailNorms(vectors, dims, prefixDims, nil)
-	queryTailNorm := columnVectorGraphDeep1BTailNorm(query, prefixDims)
-	return columnVectorGraphDeep1BBoundPruneMetricsWithTailNorms(query, queryInvNorm, vectors, invNorms, tailNorms, queryTailNorm, dims, prefixDims, threshold, exactTopRows)
-}
-
 func columnVectorGraphDeep1BBoundPruneMetricsWithTailNorms(query []float32, queryInvNorm float32, vectors []float32, invNorms []float32, tailNorms []float32, queryTailNorm float32, dims int, prefixDims int, threshold float32, exactTopRows []int) (int, int, int) {
 	rows := len(vectors) / dims
 	var pruned int
@@ -2680,9 +2672,7 @@ func columnVectorGraphDeep1BDownloadFbin(tb testing.TB, path string, url string,
 	tb.Helper()
 	var expectedBytes int64
 	timeout := columnVectorGraphDeep1BDownloadTimeout(tb)
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return err
 	}
