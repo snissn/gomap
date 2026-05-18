@@ -608,16 +608,16 @@ func encodeColumnManifestIdentityRecordArray(identity ColumnManifestIdentity) [c
 
 func decodeColumnManifestIdentityRecord(raw []byte) (columnManifestIdentityRecord, error) {
 	if len(raw) != columnManifestIdentityRecordSize {
-		return columnManifestIdentityRecord{}, fmt.Errorf("%w: malformed identity record length %d", errColumnManifestIdentityMalformed, len(raw))
+		return columnManifestIdentityRecord{}, fmt.Errorf("%w: length=%d", errColumnManifestIdentityMalformed, len(raw))
 	}
 	if magic := binary.BigEndian.Uint32(raw[columnManifestIdentityMagicOffset:columnManifestIdentityEncodingVersionOffset]); magic != columnManifestIdentityMagic {
-		return columnManifestIdentityRecord{}, fmt.Errorf("%w: bad identity magic 0x%x", errColumnManifestIdentityBadMagic, magic)
+		return columnManifestIdentityRecord{}, fmt.Errorf("%w: magic=0x%x", errColumnManifestIdentityBadMagic, magic)
 	}
 	if version := binary.BigEndian.Uint16(raw[columnManifestIdentityEncodingVersionOffset:columnManifestIdentityManifestVersionOffset]); version != columnManifestIdentityVersion {
-		return columnManifestIdentityRecord{}, fmt.Errorf("%w: unsupported identity version %d", errColumnManifestIdentityUnsupportedVersion, version)
+		return columnManifestIdentityRecord{}, fmt.Errorf("%w: version=%d", errColumnManifestIdentityUnsupportedVersion, version)
 	}
 	if reserved := binary.BigEndian.Uint32(raw[columnManifestIdentityReservedOffset:columnManifestIdentityRecordSize]); reserved != 0 {
-		return columnManifestIdentityRecord{}, fmt.Errorf("%w: non-zero identity reserved trailer field 0x%08x", errColumnManifestIdentityNonZeroReserved, reserved)
+		return columnManifestIdentityRecord{}, fmt.Errorf("%w: reserved=0x%08x", errColumnManifestIdentityNonZeroReserved, reserved)
 	}
 	return columnManifestIdentityRecord{
 		Version:    binary.BigEndian.Uint16(raw[columnManifestIdentityManifestVersionOffset:columnManifestIdentityGenerationOffset]),

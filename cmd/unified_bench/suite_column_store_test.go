@@ -553,8 +553,11 @@ func TestColumnStoreSuiteCheckpointCPUProfileNilStartHookReturnsErrorM11A(t *tes
 		}
 		t.Fatal("expected checkpoint CPU profile nil hook error")
 	}
-	if !strings.Contains(err.Error(), "start hook is nil") {
-		t.Fatalf("error=%v, want nil hook context", err)
+	msg := err.Error()
+	if !strings.Contains(msg, "start hook is nil") ||
+		!strings.Contains(msg, columnStoreSuiteBenchTestName) ||
+		!strings.Contains(msg, columnStoreSuiteBenchDBName) {
+		t.Fatalf("error=%v, want nil hook test/db context", err)
 	}
 	profilePath := fmt.Sprintf("%s_checkpoint_%s_%s.pprof", cfg.CheckpointCPUProfile, sanitizeProfileSegment(columnStoreSuiteBenchTestName), sanitizeProfileSegment(columnStoreSuiteBenchDBName))
 	if _, statErr := os.Stat(profilePath); !errors.Is(statErr, os.ErrNotExist) {
