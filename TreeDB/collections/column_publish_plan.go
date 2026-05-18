@@ -451,6 +451,12 @@ func (c *Collection) buildColumnManifestPublishSystemDeltaIterator(input ColumnM
 	if recoveryIdentity != rootIdentity {
 		return nil, errors.New("collections: column publish plan recovery-authoritative manifest identity does not match root delta identity")
 	}
+	if input.BaseMeta.Options.ColumnStore != nil {
+		baseRecoveryLSN := input.BaseMeta.Options.ColumnStore.RecoveryAuthoritativeAppliedCommandLSN
+		if baseRecoveryLSN != 0 && plan.RecoveryAuthoritativeAppliedCommandLSN < baseRecoveryLSN {
+			return nil, fmt.Errorf("collections: column publish recovery-authoritative AppliedCommandLSN regression for %q: plan %d < base %d", input.BaseMeta.Name, plan.RecoveryAuthoritativeAppliedCommandLSN, baseRecoveryLSN)
+		}
+	}
 	if input.BaseCommitSeq != 0 || input.BaseSystemRoot != 0 {
 		state := c.db.State()
 		if (input.BaseCommitSeq != 0 && state.CommitSeq != input.BaseCommitSeq) ||
