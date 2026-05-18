@@ -3503,6 +3503,9 @@ func (c *Collection) insertOneNoIndexBuffered(id, document []byte) ([]byte, erro
 	if len(id) == 0 {
 		return nil, errors.New("collections: document id cannot be empty")
 	}
+	if err := c.requireColumnStoreCommandWAL(c.meta, nil); err != nil {
+		return nil, err
+	}
 	domain := c.writeDomain
 	if domain == nil {
 		return c.insertOneNoIndex(id, document)
@@ -3599,6 +3602,9 @@ func (c *Collection) bufferNoIndexInsertBatch(
 ) ([][]byte, bool, error) {
 	if domain == nil || catalog == nil || snap == nil || len(catalog.meta.Indexes) > 0 {
 		return nil, false, nil
+	}
+	if err := c.requireColumnStoreCommandWAL(catalog.meta, nil); err != nil {
+		return nil, true, err
 	}
 	switch normalizedDocumentFormat(plannerOptions.documentFormat) {
 	case DocumentFormatJSON, DocumentFormatBSON:
@@ -14734,6 +14740,10 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 		plan.stats.BufferStagePrecheck += updateBatchStatsSince(detailedStats, precheckStart)
 		return false, nil
 	}
+	if err := c.requireColumnStoreCommandWAL(plan.meta, nil); err != nil {
+		plan.stats.BufferStagePrecheck += updateBatchStatsSince(detailedStats, precheckStart)
+		return false, err
+	}
 	plan.stats.BufferStagePrecheck += updateBatchStatsSince(detailedStats, precheckStart)
 
 	domain := c.writeDomain
@@ -15051,6 +15061,10 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 	if !hasDeltaTable {
 		plan.stats.BufferStagePrecheck += updateBatchStatsSince(detailedStats, precheckStart)
 		return false, fmt.Errorf("collections: UpdateBatch collection %q modified rows without delta tables modified=%d roots=%d deltas=%d policies=%d", plan.meta.Name, modifiedCount, len(plan.rootNames), len(plan.deltaTables), len(plan.policies))
+	}
+	if err := c.requireColumnStoreCommandWAL(plan.meta, nil); err != nil {
+		plan.stats.BufferStagePrecheck += updateBatchStatsSince(detailedStats, precheckStart)
+		return false, err
 	}
 	plan.stats.BufferStagePrecheck += updateBatchStatsSince(detailedStats, precheckStart)
 	domain := c.writeDomain
@@ -15939,6 +15953,9 @@ func (c *Collection) bufferIndexedDeleteTablesLocked(
 	meta := catalog.meta
 	if !c.shouldBufferIndexedDeletes(meta) {
 		return false, nil
+	}
+	if err := c.requireColumnStoreCommandWAL(meta, nil); err != nil {
+		return false, err
 	}
 	if len(rootNames) != len(deltaTables) || len(rootNames) != len(policies) {
 		return false, fmt.Errorf("collections: Delete collection %q invalid plan lengths roots=%d deltas=%d policies=%d", meta.Name, len(rootNames), len(deltaTables), len(policies))
