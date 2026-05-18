@@ -12,7 +12,7 @@ const (
 	columnCollectionManifestBinaryMagic   = "TCC2"
 	columnWorkspaceManifestBinaryMagic    = "TCW2"
 	columnWorkspacePreparedBinaryMagic    = "TCP2"
-	columnCollectionManifestBinaryVersion = 2
+	columnCollectionManifestBinaryVersion = 3
 	columnWorkspaceManifestBinaryVersion  = 2
 	columnWorkspacePreparedBinaryVersion  = 2
 	columnControlPlaneBinaryHeaderLen     = 32

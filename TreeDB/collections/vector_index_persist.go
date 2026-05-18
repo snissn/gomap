@@ -3,6 +3,7 @@ package collections
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -111,7 +112,10 @@ func staleNativeSnapshotSaveStatus(c *Collection, idx *VectorIndex) (VectorIndex
 	}
 	if c.isRegisteredVectorIndex(idx) {
 		stale, err := c.registeredVectorIndexNativeRuntimeIsStale(idx)
-		if err == nil && stale {
+		if err != nil {
+			return status, false, err
+		}
+		if stale {
 			status.ExactFallbackReason = vectorIndexFallbackStaleRuntimeIndex
 			if idx.needsNativeAutoPersist() {
 				return status, false, fmt.Errorf("%w: index %q has dirty registered stale runtime", errVectorIndexStaleNativeRoot, idx.name)
@@ -1030,7 +1034,7 @@ type vectorIndexPersistMeta struct {
 }
 
 type vectorIndexPersistNode struct {
-	DocumentID string    `json:"document_id"`
+	DocumentID []byte    `json:"document_id"`
 	Vector     []float32 `json:"vector,omitempty"`
 	Quantized  []int8    `json:"quantized,omitempty"`
 	QuantScale float32   `json:"quant_scale,omitempty"`
@@ -1051,6 +1055,14 @@ type vectorIndexPersistTombstones struct {
 
 type vectorIndexPersistDocMap struct {
 	Current map[string]int `json:"current"`
+}
+
+func encodeVectorIndexPersistDocumentIDKey(documentID []byte) string {
+	return base64.StdEncoding.EncodeToString(documentID)
+}
+
+func decodeVectorIndexPersistDocumentIDKey(encoded string) ([]byte, error) {
+	return base64.StdEncoding.DecodeString(encoded)
 }
 
 func (idx *VectorIndex) persistSnapshot() (vectorIndexPersistSnapshot, uint64) {
@@ -1078,7 +1090,7 @@ func (idx *VectorIndex) persistSnapshot() (vectorIndexPersistSnapshot, uint64) {
 	}
 	for i, node := range idx.nodes {
 		snapshot.Nodes[i] = vectorIndexPersistNode{
-			DocumentID: string(node.documentID),
+			DocumentID: bytes.Clone(node.documentID),
 			Vector:     append([]float32(nil), node.vector...),
 			Quantized:  append([]int8(nil), node.quantized...),
 			QuantScale: node.quantScale,
@@ -1112,7 +1124,7 @@ func (idx *VectorIndex) persistSnapshot() (vectorIndexPersistSnapshot, uint64) {
 		}
 	}
 	for docID, nodeID := range idx.currentNode {
-		snapshot.DocMap.Current[docID] = nodeID
+		snapshot.DocMap.Current[encodeVectorIndexPersistDocumentIDKey([]byte(docID))] = nodeID
 	}
 	sort.Ints(snapshot.Tombstones.NodeIDs)
 	return snapshot, seq
@@ -1261,11 +1273,12 @@ func (idx *VectorIndex) persistNativeDeltaTable(includeMeta bool) (memtable.Tabl
 	}
 	for _, docID := range docIDs {
 		nodeID, ok := idx.currentNode[docID]
+		docKey := encodeVectorIndexPersistDocumentIDKey([]byte(docID))
 		if !ok {
-			table.DeleteSteal(vectorIndexNativeDocKey(docID))
+			table.DeleteSteal(vectorIndexNativeDocKey(docKey))
 			continue
 		}
-		if err := add(vectorIndexNativeDocKey(docID), nodeID); err != nil {
+		if err := add(vectorIndexNativeDocKey(docKey), nodeID); err != nil {
 			resetCollectionRunTable(table)
 			return nil, 0, seq, persistedEpoch, false, err
 		}
@@ -1291,7 +1304,7 @@ func (idx *VectorIndex) persistMetaLocked() vectorIndexPersistMeta {
 
 func vectorIndexPersistNodeFromRuntime(node vectorIndexNode) vectorIndexPersistNode {
 	return vectorIndexPersistNode{
-		DocumentID: string(node.documentID),
+		DocumentID: bytes.Clone(node.documentID),
 		Vector:     append([]float32(nil), node.vector...),
 		Quantized:  append([]int8(nil), node.quantized...),
 		QuantScale: node.quantScale,
@@ -1716,7 +1729,7 @@ func (idx *VectorIndex) loadPersistSnapshot(snapshot vectorIndexPersistSnapshot)
 			return "invalid_node_level"
 		}
 		nodes[i] = vectorIndexNode{
-			documentID: []byte(node.DocumentID),
+			documentID: bytes.Clone(node.DocumentID),
 			vector:     append([]float32(nil), node.Vector...),
 			quantized:  append([]int8(nil), node.Quantized...),
 			quantScale: node.QuantScale,
@@ -1772,17 +1785,21 @@ func (idx *VectorIndex) loadPersistSnapshot(snapshot vectorIndexPersistSnapshot)
 		nodes[edge.NodeID].neighbors[edge.Layer] = neighbors
 	}
 	current := make(map[string]int, len(snapshot.DocMap.Current))
-	for docID, nodeID := range snapshot.DocMap.Current {
+	for encodedDocID, nodeID := range snapshot.DocMap.Current {
 		if nodeID < 0 || nodeID >= len(nodes) {
 			return vectorIndexFallbackInvalidDocMapNode
 		}
 		if nodes[nodeID].deleted {
 			return "docmap_points_to_deleted_node"
 		}
-		if !bytes.Equal(nodes[nodeID].documentID, []byte(docID)) {
+		documentID, err := decodeVectorIndexPersistDocumentIDKey(encodedDocID)
+		if err != nil {
+			return vectorIndexFallbackInvalidDocMapNode
+		}
+		if !bytes.Equal(nodes[nodeID].documentID, documentID) {
 			return "docmap_document_mismatch"
 		}
-		current[docID] = nodeID
+		current[string(documentID)] = nodeID
 	}
 	entry := snapshot.Meta.Entry
 	if entry < 0 || entry >= len(nodes) || nodes[entry].deleted {

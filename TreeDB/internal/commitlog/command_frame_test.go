@@ -338,6 +338,7 @@ func TestCommandWALFormatCollectionVectorIndexMaintenanceByID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncodeCommandFrame upsert: %v", err)
 	}
+	assertGoldenHex(t, "command_wal_v1_collection_vector_upsert_by_id.hex", upsertFrame)
 	upsertGot, err := DecodeCommandFrame(upsertFrame)
 	if err != nil {
 		t.Fatalf("DecodeCommandFrame upsert: %v", err)
@@ -365,6 +366,7 @@ func TestCommandWALFormatCollectionVectorIndexMaintenanceByID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncodeCommandFrame delete: %v", err)
 	}
+	assertGoldenHex(t, "command_wal_v1_collection_vector_delete_by_id.hex", deleteFrame)
 	deleteGot, err := DecodeCommandFrame(deleteFrame)
 	if err != nil {
 		t.Fatalf("DecodeCommandFrame delete: %v", err)
