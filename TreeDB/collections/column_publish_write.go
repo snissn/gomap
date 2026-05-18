@@ -48,11 +48,12 @@ func (c *Collection) requireColumnStoreCommandWAL(meta CollectionMeta, commandWA
 	if _, replay := commandWALIntent.ReplayAssignedLSN(); replay {
 		return nil
 	}
-	if c.db.DurabilityMode() != backenddb.DurabilityDurable {
+	durabilityMode := c.db.DurabilityMode()
+	if !columnStoreProfileAllowsForegroundCommandWAL(profileSupport, durabilityMode) {
 		return fmt.Errorf("%w: column-store writes require durable DB durability mode with command WAL enabled; relaxed durability modes are unsupported for column-store writes (collection=%q durability=%s command_wal=%t profile=%s)",
 			backenddb.ErrCommandWALRejected,
 			meta.Name,
-			columnStoreDurabilityModeName(c.db.DurabilityMode()),
+			columnStoreDurabilityModeName(durabilityMode),
 			c.db.CommandWALEnabled(),
 			profileSupport,
 		)
@@ -61,6 +62,15 @@ func (c *Collection) requireColumnStoreCommandWAL(meta CollectionMeta, commandWA
 		return nil
 	}
 	return fmt.Errorf("%w: column-store writes require command WAL collection=%q", backenddb.ErrCommandWALRejected, meta.Name)
+}
+
+func columnStoreProfileAllowsForegroundCommandWAL(profileSupport ColumnStoreProfileSupport, durabilityMode backenddb.DurabilityMode) bool {
+	switch profileSupport {
+	case ColumnStoreProfileDurableOnly, ColumnStoreProfileBenchmarkRelaxed:
+		return durabilityMode == backenddb.DurabilityDurable
+	default:
+		return false
+	}
 }
 
 func (c *Collection) publishRootDeltaGroupMaybeColumn(ordered []backenddb.OrderedRootDeltaPublishInput, input columnWritePublishInput) (uint64, []uint64, CollectionMeta, []string, error) {
