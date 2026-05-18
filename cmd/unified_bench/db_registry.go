@@ -34,10 +34,15 @@ func RegisterAlias(alias, target string) {
 	dbAliases[alias] = target
 }
 
-func GetDBFactory(name string) (DBFactory, error) {
+func canonicalDBName(name string) string {
 	if target, isAlias := dbAliases[name]; isAlias {
-		name = target
+		return target
 	}
+	return name
+}
+
+func GetDBFactory(name string) (DBFactory, error) {
+	name = canonicalDBName(name)
 	f, ok := dbFactories[name]
 	if !ok {
 		return nil, fmt.Errorf("unknown DB: %q", name)
@@ -62,6 +67,10 @@ func GetRegisteredDBsList() string {
 func resolveDBs(arg, excludeArg string) []string {
 	requested := parseList(arg)
 	excluded := parseList(excludeArg)
+	excludedSet := make(map[string]struct{}, len(excluded))
+	for _, name := range excluded {
+		excludedSet[canonicalDBName(name)] = struct{}{}
+	}
 
 	var candidates []string
 	if contains(requested, "all") {
@@ -72,17 +81,13 @@ func resolveDBs(arg, excludeArg string) []string {
 
 	out := make([]string, 0, len(candidates))
 	for _, name := range candidates {
-		if contains(excluded, name) {
+		name = canonicalDBName(name)
+		if _, skip := excludedSet[name]; skip {
 			continue
 		}
 		if _, ok := dbFactories[name]; ok {
 			out = append(out, name)
 			continue
-		}
-		if target, isAlias := dbAliases[name]; isAlias {
-			if _, ok := dbFactories[target]; ok {
-				out = append(out, target)
-			}
 		}
 	}
 	return out

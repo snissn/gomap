@@ -1159,6 +1159,12 @@ func TestColumnStoreSuiteAppliesDBExclusionsBeforeMixedCheckM11A(t *testing.T) {
 	if err := validateColumnStoreSuiteDBSelection("treedb,leveldb", "leveldb"); err != nil {
 		t.Fatalf("expected excluded non-TreeDB selection to pass: %v", err)
 	}
+	if err := validateColumnStoreSuiteDBSelection("treedbcached", ""); err != nil {
+		t.Fatalf("expected TreeDB alias selection to pass: %v", err)
+	}
+	if err := validateColumnStoreSuiteDBSelection("treedb,leveldb", "leveldb,treedbcached"); err == nil || !strings.Contains(err.Error(), "excludes it") {
+		t.Fatalf("expected TreeDB alias exclusion to reject suite, got %v", err)
+	}
 	err := validateColumnStoreSuiteDBSelection("leveldb", "leveldb")
 	if err == nil {
 		t.Fatal("expected all selected DBs excluded to fail")

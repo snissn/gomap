@@ -2312,8 +2312,10 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 	return newSystemRoot, rootIDs, nil
 }
 
+var errOrderedRootCommandWALContextNilSystemDeltaIteratorSentinel = errors.New("treedb: command WAL ordered root publish system builder returned nil system root delta iterator")
+
 func errOrderedRootCommandWALContextNilSystemDeltaIterator() error {
-	return errors.New("treedb: command WAL ordered root publish system builder returned nil system root delta iterator")
+	return errOrderedRootCommandWALContextNilSystemDeltaIteratorSentinel
 }
 
 func errOrderedRootCommandWALContextConcurrentModification(wantUserRoot, gotUserRoot, wantSystemRoot, gotSystemRoot uint64) error {

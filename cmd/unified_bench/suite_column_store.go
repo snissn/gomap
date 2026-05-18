@@ -563,28 +563,20 @@ func columnStoreArtifactPathsForProfileDir(profileDir string, cfg BenchConfig) c
 }
 
 func validateColumnStoreSuiteDBSelection(dbsArg, excludeArg string) error {
-	excluded := make(map[string]struct{})
 	for _, db := range parseList(excludeArg) {
-		normalized := strings.ToLower(strings.TrimSpace(db))
+		normalized := canonicalDBName(strings.ToLower(strings.TrimSpace(db)))
 		switch normalized {
 		case "", "none":
 			continue
 		case "all", "treedb":
 			return fmt.Errorf("column_store: native suite requires TreeDB but -dbs-exclude=%q excludes it", excludeArg)
-		default:
-			excluded[normalized] = struct{}{}
 		}
 	}
 
-	dbs := parseList(dbsArg)
 	hasTreeDB := false
-	for _, db := range dbs {
-		normalized := strings.ToLower(strings.TrimSpace(db))
-		if _, skip := excluded[normalized]; skip {
-			continue
-		}
-		switch normalized {
-		case "", "all", "treedb":
+	for _, db := range resolveDBs(dbsArg, excludeArg) {
+		switch db {
+		case "treedb":
 			hasTreeDB = true
 		default:
 			return fmt.Errorf("column_store: native suite only supports TreeDB; got -dbs=%q", dbsArg)
