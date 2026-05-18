@@ -108,6 +108,7 @@ func BenchmarkColumnStoreCommandWALReplayM10C(b *testing.B) {
 	)
 	for _, columnStore := range []bool{false, true} {
 		b.Run(fmt.Sprintf("insert/frames=%d/batch=%d/column_store=%t", frames, batchSize, columnStore), func(b *testing.B) {
+			b.StopTimer()
 			templateDir, docsPerReplay, encodedPayloadBytesPerReplay, wantAppliedLSN := prepareColumnStoreCommandWALReplayBenchmarkDirM10C(b, columnStore, frames, batchSize)
 			workRoot := b.TempDir()
 

@@ -232,7 +232,7 @@ func TestColumnWorkspacePublishPartSyncsAssetsBeforeDurableManifestM9D(t *testin
 		if assetStore != nil {
 			manifestSyncsAfterAssetSwap++
 			if got := assetStore.syncCalls.Load(); got == 0 {
-				return fmt.Errorf("asset sync count=%d before durable manifest sync", got)
+				t.Errorf("asset sync count=%d before durable manifest sync", got)
 			}
 		}
 		return nil

@@ -366,24 +366,49 @@ func (w *ColumnWorkspace) PublishPart(part *ColumnPart, dictionaries map[string]
 		}
 		return ColumnWorkspacePartManifest{}, err
 	}
-	oldManifest := cloneColumnWorkspaceManifest(w.manifest)
-	oldPartByID := cloneColumnWorkspacePartIndex(w.partByID)
-	if idx, ok := w.partByID[entry.PartID]; ok {
+	oldGeneration := w.manifest.Generation
+	oldPublishID := w.manifest.PublishID
+	oldUpdatedUnix := w.manifest.UpdatedUnix
+	idx, existed := w.partByID[entry.PartID]
+	var oldEntry ColumnWorkspacePartManifest
+	insertIdx := -1
+	if existed {
+		oldEntry = w.manifest.Parts[idx]
 		w.manifest.Parts[idx] = entry
 	} else {
-		w.partByID[entry.PartID] = len(w.manifest.Parts)
-		w.manifest.Parts = append(w.manifest.Parts, entry)
+		insertIdx = sort.Search(len(w.manifest.Parts), func(i int) bool {
+			return w.manifest.Parts[i].PartID >= entry.PartID
+		})
+		w.manifest.Parts = append(w.manifest.Parts, ColumnWorkspacePartManifest{})
+		copy(w.manifest.Parts[insertIdx+1:], w.manifest.Parts[insertIdx:])
+		w.manifest.Parts[insertIdx] = entry
+		for partID, partIdx := range w.partByID {
+			if partIdx >= insertIdx {
+				w.partByID[partID] = partIdx + 1
+			}
+		}
+		w.partByID[entry.PartID] = insertIdx
 	}
 	w.manifest.Generation++
 	w.manifest.PublishID++
 	w.manifest.UpdatedUnix = time.Now().UnixNano()
-	sort.Slice(w.manifest.Parts, func(i, j int) bool {
-		return w.manifest.Parts[i].PartID < w.manifest.Parts[j].PartID
-	})
-	w.rebuildPartIndex()
 	if err := w.saveManifest(); err != nil {
-		w.manifest = oldManifest
-		w.partByID = oldPartByID
+		w.manifest.Generation = oldGeneration
+		w.manifest.PublishID = oldPublishID
+		w.manifest.UpdatedUnix = oldUpdatedUnix
+		if existed {
+			w.manifest.Parts[idx] = oldEntry
+		} else {
+			copy(w.manifest.Parts[insertIdx:], w.manifest.Parts[insertIdx+1:])
+			w.manifest.Parts[len(w.manifest.Parts)-1] = ColumnWorkspacePartManifest{}
+			w.manifest.Parts = w.manifest.Parts[:len(w.manifest.Parts)-1]
+			delete(w.partByID, entry.PartID)
+			for partID, partIdx := range w.partByID {
+				if partIdx > insertIdx {
+					w.partByID[partID] = partIdx - 1
+				}
+			}
+		}
 		if tracked {
 			if markErr := w.assets.MarkPublishFailed(prepared, "workspace part manifest publish failed"); markErr != nil {
 				return ColumnWorkspacePartManifest{}, errors.Join(err, markErr)
@@ -698,14 +723,6 @@ func (w *ColumnWorkspace) rebuildPartIndex() {
 	for i := range w.manifest.Parts {
 		w.partByID[w.manifest.Parts[i].PartID] = i
 	}
-}
-
-func cloneColumnWorkspacePartIndex(index map[uint64]int) map[uint64]int {
-	out := make(map[uint64]int, len(index))
-	for partID, idx := range index {
-		out[partID] = idx
-	}
-	return out
 }
 
 func (w *ColumnWorkspace) validateManifestAssets() error {

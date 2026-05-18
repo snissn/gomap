@@ -1,12 +1,15 @@
 package colgranule
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"os"
 	"sort"
 	"time"
 )
+
+var ErrColumnMutationReplayWorkspaceSyncMode = errors.New("colgranule: column mutation replay workspace sync mode mismatch")
 
 type ColumnMutationAdapterOptions struct {
 	Collection        string
@@ -67,8 +70,9 @@ func NewColumnMutationAdapter(workspace *ColumnWorkspace, opts ColumnMutationAda
 	}
 	if workspace.ManifestSyncMode() != syncMode {
 		return nil, fmt.Errorf(
-			"colgranule: column mutation replay profile %q requires workspace manifest sync mode %q, got %q. "+
+			"%w: profile %q requires workspace manifest sync mode %q, got %q. "+
 				"Use %q for durable replay or %q for benchmark-ceiling replay",
+			ErrColumnMutationReplayWorkspaceSyncMode,
 			replayProfile.Label(),
 			syncMode,
 			workspace.ManifestSyncMode(),

@@ -1,6 +1,7 @@
 package colgranule
 
 import (
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"os"
@@ -340,7 +341,7 @@ func TestColumnMutationAdapterAppliesReplayProfileOptionM9D(t *testing.T) {
 				StoreOptions:  opts,
 				Dictionaries:  ds.Dictionaries,
 				ReplayProfile: tt.profile,
-			}); err == nil || !strings.Contains(err.Error(), "requires workspace manifest sync mode") {
+			}); !errors.Is(err, ErrColumnMutationReplayWorkspaceSyncMode) {
 				t.Fatalf("NewColumnMutationAdapter durable profile on no-sync workspace err=%v want sync-mode rejection", err)
 			}
 		})
@@ -356,10 +357,7 @@ func TestColumnMutationAdapterAppliesReplayProfileOptionM9D(t *testing.T) {
 		StoreOptions:  opts,
 		Dictionaries:  ds.Dictionaries,
 		ReplayProfile: profile,
-	}); err == nil ||
-		!strings.Contains(err.Error(), "requires workspace manifest sync mode") ||
-		!strings.Contains(err.Error(), string(ColumnWorkspaceManifestSyncDisabledForBenchmark)) ||
-		!strings.Contains(err.Error(), string(ColumnWorkspaceManifestSyncDurable)) {
+	}); !errors.Is(err, ErrColumnMutationReplayWorkspaceSyncMode) {
 		t.Fatalf("NewColumnMutationAdapter benchmark profile on durable workspace err=%v want sync-mode rejection", err)
 	}
 
