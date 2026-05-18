@@ -479,6 +479,7 @@ func (g *ColumnVectorGraph) cosineDistance(query []float32, queryInvNorm float32
 	if math.IsNaN(cosine) || math.IsInf(cosine, 0) {
 		return columnVectorGraphCosineDistanceWide(query, vector, queryInvNorm, g.invNorms[ordinal])
 	}
+	cosine = clampColumnVectorGraphCosine(cosine)
 	distance := 1 - cosine
 	if math.IsNaN(distance) || math.IsInf(distance, 0) {
 		return columnVectorGraphCosineDistanceWide(query, vector, queryInvNorm, g.invNorms[ordinal])
@@ -501,11 +502,22 @@ func columnVectorGraphCosineDistanceWide(query []float32, vector []float32, quer
 	for i := range query {
 		cosine += float64(query[i]) * queryScale * float64(vector[i]) * vectorScale
 	}
+	cosine = clampColumnVectorGraphCosine(cosine)
 	distance := 1 - cosine
 	if math.IsNaN(distance) || math.IsInf(distance, 0) {
 		return float32(math.Inf(1))
 	}
 	return float32(distance)
+}
+
+func clampColumnVectorGraphCosine(cosine float64) float64 {
+	if cosine > 1 {
+		return 1
+	}
+	if cosine < -1 {
+		return -1
+	}
+	return cosine
 }
 
 func (scratch *ColumnVectorGraphSearchScratch) nextVisitedEpoch(nodes int) ([]uint32, uint32) {
