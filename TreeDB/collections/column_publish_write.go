@@ -20,9 +20,9 @@ type columnWritePublishInput struct {
 	commandWALIntent   *backenddb.CommandWALIntent
 	operation          ColumnPublishOperation
 	rows               int
-	commandBytes       int
-	rowRemainderBytes  int
-	columnPayloadBytes int
+	commandBytes       int64
+	rowRemainderBytes  int64
+	columnPayloadBytes int64
 }
 
 func columnStoreWriteEnabled(meta CollectionMeta) bool {
