@@ -256,6 +256,24 @@ func TestColumnMutationAdapterAppliesReplayProfileOptionM9D(t *testing.T) {
 	if got := adapter.ReplayProfile().Label(); got != "wal_on_fast_benchmark_ceiling" {
 		t.Fatalf("ReplayProfile label=%q want wal_on_fast_benchmark_ceiling", got)
 	}
+	for _, tt := range []struct {
+		name    string
+		profile ColumnMutationReplayProfile
+	}{
+		{name: "default"},
+		{name: "explicit_durable", profile: ColumnMutationReplayProfile{Durability: ColumnMutationReplayDurable}},
+	} {
+		t.Run("reject_durable_on_no_sync_"+tt.name, func(t *testing.T) {
+			if _, err := NewColumnMutationAdapter(workspace, ColumnMutationAdapterOptions{
+				Collection:    "jsonbench",
+				StoreOptions:  opts,
+				Dictionaries:  ds.Dictionaries,
+				ReplayProfile: tt.profile,
+			}); err == nil || !strings.Contains(err.Error(), "requires workspace manifest sync mode") {
+				t.Fatalf("NewColumnMutationAdapter durable profile on no-sync workspace err=%v want sync-mode rejection", err)
+			}
+		})
+	}
 
 	durableWorkspace, err := OpenColumnWorkspace(t.TempDir(), ColumnWorkspaceOptions{Collection: "jsonbench"})
 	if err != nil {
