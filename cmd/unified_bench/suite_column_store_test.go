@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/trace"
 	"strings"
 	"testing"
 	"time"
@@ -510,6 +511,29 @@ func TestColumnStoreSuiteCheckpointCPUProfileUsesResolvedHooksM11A(t *testing.T)
 	}
 }
 
+func TestColumnStoreSuiteCheckpointCPUProfileStartFailureRemovesArtifactM11A(t *testing.T) {
+	profileHooks := benchmarkProfileHooks{
+		startCPUProfile: func(_ io.Writer) error {
+			return errors.New("checkpoint start failed")
+		},
+	}
+	cfg := BenchConfig{
+		CheckpointCPUProfile: filepath.Join(t.TempDir(), "checkpoint_cpu"),
+	}
+
+	f, err := startCheckpointCPUProfile(cfg, profileHooks, columnStoreSuiteBenchTestName, columnStoreSuiteBenchDBName)
+	if err == nil {
+		if f != nil {
+			_ = f.Close()
+		}
+		t.Fatal("expected checkpoint CPU profile start failure")
+	}
+	profilePath := fmt.Sprintf("%s_checkpoint_%s_%s.pprof", cfg.CheckpointCPUProfile, sanitizeProfileSegment(columnStoreSuiteBenchTestName), sanitizeProfileSegment(columnStoreSuiteBenchDBName))
+	if _, statErr := os.Stat(profilePath); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("expected failed checkpoint CPU profile artifact to be removed, stat err=%v", statErr)
+	}
+}
+
 func TestColumnStoreSuiteCPUProfileStartFailureRemovesArtifactM11A(t *testing.T) {
 	profileHooks := &benchmarkProfileHooks{
 		startCPUProfile: func(_ io.Writer) error {
@@ -532,6 +556,34 @@ func TestColumnStoreSuiteCPUProfileStartFailureRemovesArtifactM11A(t *testing.T)
 	profilePath := fmt.Sprintf("%s_%s_%s.pprof", profilePrefix, columnStoreSuiteBenchTestName, columnStoreSuiteBenchDBName)
 	if _, statErr := os.Stat(profilePath); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("expected failed CPU profile artifact to be removed, stat err=%v", statErr)
+	}
+}
+
+func TestColumnStoreSuiteRuntimeTraceStartFailureRemovesArtifactM11A(t *testing.T) {
+	activeTracePath := filepath.Join(t.TempDir(), "active_trace.out")
+	activeTrace, err := os.Create(activeTracePath)
+	if err != nil {
+		t.Fatalf("create active trace: %v", err)
+	}
+	if err := trace.Start(activeTrace); err != nil {
+		_ = activeTrace.Close()
+		t.Skipf("runtime trace unavailable: %v", err)
+	}
+	defer func() {
+		trace.Stop()
+		_ = activeTrace.Close()
+	}()
+
+	tracePath := filepath.Join(t.TempDir(), "trace.out")
+	finish, err := startColumnStoreSuiteRuntimeProfiles(BenchConfig{TraceProfile: tracePath})
+	if err == nil {
+		if finish != nil {
+			_ = finish()
+		}
+		t.Fatal("expected trace start failure while trace is already active")
+	}
+	if _, statErr := os.Stat(tracePath); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("expected failed trace artifact to be removed, stat err=%v", statErr)
 	}
 }
 

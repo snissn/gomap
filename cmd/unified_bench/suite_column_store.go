@@ -729,6 +729,7 @@ func startColumnStoreSuiteRuntimeProfiles(cfg BenchConfig) (func() error, error)
 		}
 		if err := trace.Start(f); err != nil {
 			_ = f.Close()
+			_ = os.Remove(traceProfile)
 			_ = finish()
 			return nil, fmt.Errorf("column_store: trace start: %w", err)
 		}

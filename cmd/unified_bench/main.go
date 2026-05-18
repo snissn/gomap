@@ -880,6 +880,7 @@ func startCheckpointCPUProfile(cfg BenchConfig, profileHooks benchmarkProfileHoo
 	}
 	if err := profileHooks.startCPUProfile(f); err != nil {
 		_ = f.Close()
+		_ = os.Remove(path)
 		return nil, fmt.Errorf("checkpoint cpu profile start: %w", err)
 	}
 	return f, nil
