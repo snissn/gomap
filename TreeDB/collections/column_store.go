@@ -32,11 +32,29 @@ func newColumnManifestIdentityRecordKey() []byte {
 }
 
 var (
-	errColumnManifestIdentityMissing            = errors.New("collections: column manifest missing identity record")
-	errColumnManifestIdentityMalformed          = errors.New("collections: malformed column manifest identity record")
-	errColumnManifestIdentityBadMagic           = errors.New("collections: bad column manifest identity magic")
-	errColumnManifestIdentityUnsupportedVersion = errors.New("collections: unsupported column manifest identity version")
-	errColumnManifestIdentityNonZeroReserved    = errors.New("collections: non-zero column manifest identity reserved trailer")
+	// ErrColumnManifestIdentityMissing marks a column manifest root without the
+	// required identity record.
+	ErrColumnManifestIdentityMissing = errors.New("collections: column manifest missing identity record")
+	// ErrColumnManifestIdentityMalformed marks a column manifest identity record
+	// with the wrong encoded size.
+	ErrColumnManifestIdentityMalformed = errors.New("collections: malformed column manifest identity record")
+	// ErrColumnManifestIdentityBadMagic marks a column manifest identity record
+	// whose magic does not match the supported layout.
+	ErrColumnManifestIdentityBadMagic = errors.New("collections: bad column manifest identity magic")
+	// ErrColumnManifestIdentityUnsupportedVersion marks a column manifest identity
+	// record encoded with an unsupported version.
+	ErrColumnManifestIdentityUnsupportedVersion = errors.New("collections: unsupported column manifest identity version")
+	// ErrColumnManifestIdentityNonZeroReserved marks a column manifest identity
+	// record whose reserved trailer is non-zero.
+	ErrColumnManifestIdentityNonZeroReserved = errors.New("collections: non-zero column manifest identity reserved trailer")
+)
+
+var (
+	errColumnManifestIdentityMissing            = ErrColumnManifestIdentityMissing
+	errColumnManifestIdentityMalformed          = ErrColumnManifestIdentityMalformed
+	errColumnManifestIdentityBadMagic           = ErrColumnManifestIdentityBadMagic
+	errColumnManifestIdentityUnsupportedVersion = ErrColumnManifestIdentityUnsupportedVersion
+	errColumnManifestIdentityNonZeroReserved    = ErrColumnManifestIdentityNonZeroReserved
 )
 
 type ColumnStoreValueType string
