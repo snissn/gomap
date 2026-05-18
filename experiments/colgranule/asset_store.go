@@ -207,8 +207,9 @@ func OpenSegmentColumnAssetStore(dir string) (*SegmentColumnAssetStore, error) {
 		file:   file,
 		fileID: 1,
 		size:   info.Size(),
-		// Reopen cannot know whether a prior process synced the segment
-		// directory entry before publishing refs, so the next Sync seals it.
+		// Reopen deliberately treats the directory entry as unsealed: the store
+		// cannot prove a prior process synced it before publishing refs, so the
+		// next publish Sync seals the file and its directory entry together.
 		dirSyncRequired: true,
 	}, nil
 }
@@ -399,12 +400,14 @@ func (s *SegmentColumnAssetStore) Verify(ref ColumnAssetRef) error {
 		return err
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.file == nil {
+		s.mu.Unlock()
 		return fmt.Errorf("colgranule: closed segment asset store")
 	}
+	file := s.file
 	fileID := s.fileID
 	size := s.size
+	s.mu.Unlock()
 	if ref.FileID != fileID {
 		return fmt.Errorf("colgranule: asset file id=%d want %d", ref.FileID, fileID)
 	}
@@ -412,7 +415,7 @@ func (s *SegmentColumnAssetStore) Verify(ref ColumnAssetRef) error {
 		return fmt.Errorf("colgranule: asset range offset=%d length=%d outside segment bytes=%d", ref.Offset, ref.Length, size)
 	}
 	h := crc32.NewIEEE()
-	reader := io.NewSectionReader(s.file, ref.Offset, ref.Length)
+	reader := io.NewSectionReader(file, ref.Offset, ref.Length)
 	var buf [32 << 10]byte
 	if _, err := io.CopyBuffer(h, reader, buf[:]); err != nil {
 		return err
