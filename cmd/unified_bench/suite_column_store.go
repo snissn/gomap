@@ -495,13 +495,13 @@ func columnStoreArtifactPathsForProfileDir(profileDir string, cfg BenchConfig) c
 		InsightsHTML:      filepath.Join(profileDir, "insights.html"),
 	}
 	if shouldCPUProfile(cfg, columnStoreSuiteBenchTestName) {
-		paths.CPUProfile = fmt.Sprintf("%s_%s_%s.pprof", cfg.CPUProfile, columnStoreSuiteBenchTestName, columnStoreSuiteBenchDBName)
+		paths.CPUProfile = fmt.Sprintf("%s_%s_%s.pprof", strings.TrimSpace(cfg.CPUProfile), columnStoreSuiteBenchTestName, columnStoreSuiteBenchDBName)
 	}
 	if shouldAllocsProfile(cfg, columnStoreSuiteBenchTestName) {
-		paths.AllocsProfile = fmt.Sprintf("%s_%s_%s.pprof", cfg.AllocsProfile, columnStoreSuiteBenchTestName, columnStoreSuiteBenchDBName)
+		paths.AllocsProfile = fmt.Sprintf("%s_%s_%s.pprof", strings.TrimSpace(cfg.AllocsProfile), columnStoreSuiteBenchTestName, columnStoreSuiteBenchDBName)
 	}
 	if shouldCheckpointCPUProfile(cfg, columnStoreSuiteBenchTestName) {
-		paths.CheckpointCPUProfile = fmt.Sprintf("%s_checkpoint_%s_%s.pprof", cfg.CheckpointCPUProfile, sanitizeProfileSegment(columnStoreSuiteBenchTestName), sanitizeProfileSegment(columnStoreSuiteBenchDBName))
+		paths.CheckpointCPUProfile = fmt.Sprintf("%s_checkpoint_%s_%s.pprof", strings.TrimSpace(cfg.CheckpointCPUProfile), sanitizeProfileSegment(columnStoreSuiteBenchTestName), sanitizeProfileSegment(columnStoreSuiteBenchDBName))
 	}
 	blockProfile := strings.TrimSpace(cfg.BlockProfile)
 	if blockProfile != "" {
@@ -781,7 +781,7 @@ func runColumnStoreSuiteQueriesProfiled(cfg BenchConfig, collection *collections
 	var cpuFile *os.File
 	cpuProfilePath := ""
 	if shouldCPUProfile(cfg, columnStoreSuiteBenchTestName) {
-		profilePath := fmt.Sprintf("%s_%s_%s.pprof", cfg.CPUProfile, columnStoreSuiteBenchTestName, columnStoreSuiteBenchDBName)
+		profilePath := fmt.Sprintf("%s_%s_%s.pprof", strings.TrimSpace(cfg.CPUProfile), columnStoreSuiteBenchTestName, columnStoreSuiteBenchDBName)
 		f, err := os.Create(profilePath)
 		if err != nil {
 			cleanup(allocBasePath, blockBasePath, mutexBasePath)

@@ -534,6 +534,27 @@ func TestColumnStoreSuiteCheckpointCPUProfileStartFailureRemovesArtifactM11A(t *
 	}
 }
 
+func TestColumnStoreSuiteCheckpointCPUProfileNilStartHookReturnsErrorM11A(t *testing.T) {
+	cfg := BenchConfig{
+		CheckpointCPUProfile: filepath.Join(t.TempDir(), "checkpoint_cpu"),
+	}
+
+	f, err := startCheckpointCPUProfile(cfg, benchmarkProfileHooks{}, columnStoreSuiteBenchTestName, columnStoreSuiteBenchDBName)
+	if err == nil {
+		if f != nil {
+			_ = f.Close()
+		}
+		t.Fatal("expected checkpoint CPU profile nil hook error")
+	}
+	if !strings.Contains(err.Error(), "start hook is nil") {
+		t.Fatalf("error=%v, want nil hook context", err)
+	}
+	profilePath := fmt.Sprintf("%s_checkpoint_%s_%s.pprof", cfg.CheckpointCPUProfile, sanitizeProfileSegment(columnStoreSuiteBenchTestName), sanitizeProfileSegment(columnStoreSuiteBenchDBName))
+	if _, statErr := os.Stat(profilePath); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("expected failed checkpoint CPU profile artifact to be removed, stat err=%v", statErr)
+	}
+}
+
 func TestColumnStoreSuiteCPUProfileStartFailureRemovesArtifactM11A(t *testing.T) {
 	profileHooks := &benchmarkProfileHooks{
 		startCPUProfile: func(_ io.Writer) error {
@@ -692,15 +713,30 @@ func TestColumnStoreSuiteProfiledQueriesSkipWhitespaceOnlyRuntimeProfilePathsM11
 
 func TestColumnStoreSuiteArtifactsTrimRuntimeProfilePathsM11A(t *testing.T) {
 	dir := t.TempDir()
+	cpuPath := filepath.Join(dir, "cpu")
+	allocsPath := filepath.Join(dir, "allocs")
+	checkpointPath := filepath.Join(dir, "checkpoint_cpu")
 	blockPath := filepath.Join(dir, "block.pprof")
 	mutexPath := filepath.Join(dir, "mutex.pprof")
 	tracePath := filepath.Join(dir, "trace.out")
 
 	paths := columnStoreArtifactPathsForProfileDir(dir, BenchConfig{
-		BlockProfile: " \t" + blockPath + "\t ",
-		MutexProfile: " \t" + mutexPath + "\t ",
-		TraceProfile: " \t" + tracePath + "\t ",
+		CPUProfile:           " \t" + cpuPath + "\t ",
+		AllocsProfile:        " \t" + allocsPath + "\t ",
+		CheckpointCPUProfile: " \t" + checkpointPath + "\t ",
+		BlockProfile:         " \t" + blockPath + "\t ",
+		MutexProfile:         " \t" + mutexPath + "\t ",
+		TraceProfile:         " \t" + tracePath + "\t ",
 	})
+	if paths.CPUProfile != fmt.Sprintf("%s_%s_%s.pprof", cpuPath, columnStoreSuiteBenchTestName, columnStoreSuiteBenchDBName) {
+		t.Fatalf("cpu artifact path was not trimmed: %+v", paths)
+	}
+	if paths.AllocsProfile != fmt.Sprintf("%s_%s_%s.pprof", allocsPath, columnStoreSuiteBenchTestName, columnStoreSuiteBenchDBName) {
+		t.Fatalf("allocs artifact path was not trimmed: %+v", paths)
+	}
+	if paths.CheckpointCPUProfile != fmt.Sprintf("%s_checkpoint_%s_%s.pprof", checkpointPath, sanitizeProfileSegment(columnStoreSuiteBenchTestName), sanitizeProfileSegment(columnStoreSuiteBenchDBName)) {
+		t.Fatalf("checkpoint artifact path was not trimmed: %+v", paths)
+	}
 	if paths.BlockProfile != blockPath || paths.MutexProfile != mutexPath || paths.TraceProfile != tracePath {
 		t.Fatalf("runtime artifact paths were not trimmed: %+v", paths)
 	}
