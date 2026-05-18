@@ -61,6 +61,7 @@ func (c *Collection) publishRootDeltaGroupMaybeColumn(ordered []backenddb.Ordere
 	}
 	preflight := c.columnPublishRootDescriptorPreflight(input, rootNames, baseRootIDs)
 	var plan ColumnPublishPlan
+	var updatedMeta CollectionMeta
 	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaGroupWithPreflightCommandWALContextRootBuilderAndSystemDeltaBuilder(
 		ordered,
 		preflight,
@@ -81,15 +82,18 @@ func (c *Collection) publishRootDeltaGroupMaybeColumn(ordered []backenddb.Ordere
 			if plan.AppliedCommandLSN != ctx.AppliedCommandLSN {
 				return nil, columnPublishPlanLSNMismatchError(input.meta, ctx.AppliedCommandLSN, plan.AppliedCommandLSN)
 			}
-			return c.buildRootDescriptorAndColumnManifestSystemDeltaIteratorForMeta(input.meta, input.baseCommitSeq, input.baseSystemRoot, rootNames, baseRootIDs, rootIDs, plan)
+			iter, nextMeta, err := c.buildRootDescriptorAndColumnManifestSystemDeltaIteratorAndMetaForMeta(input.meta, input.baseCommitSeq, input.baseSystemRoot, rootNames, baseRootIDs, rootIDs, plan)
+			if err == nil {
+				updatedMeta = nextMeta
+			}
+			return iter, err
 		},
 	)
 	if err != nil {
 		return 0, nil, CollectionMeta{}, nil, err
 	}
-	updatedMeta, err := columnPublishUpdatedMeta(input.meta, plan)
-	if err != nil {
-		return 0, nil, CollectionMeta{}, nil, err
+	if updatedMeta.Name == "" {
+		return 0, nil, CollectionMeta{}, nil, errors.New("collections: column publish did not prepare updated metadata")
 	}
 	return newSystemRoot, rootIDs, updatedMeta, rootNames, nil
 }
@@ -116,6 +120,7 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 	}
 	preflight = combineOrderedRootGroupPreflight(preflight, c.columnPublishRootDescriptorPreflight(input, rootNames, baseRootIDs))
 	var plan ColumnPublishPlan
+	var updatedMeta CollectionMeta
 	var cleanupColumnDelta func()
 	defer func() {
 		if cleanupColumnDelta != nil {
@@ -139,7 +144,11 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 		if plan.AppliedCommandLSN != ctx.AppliedCommandLSN {
 			return nil, columnPublishPlanLSNMismatchError(input.meta, ctx.AppliedCommandLSN, plan.AppliedCommandLSN)
 		}
-		return c.buildRootDescriptorAndColumnManifestSystemDeltaIteratorForMeta(input.meta, input.baseCommitSeq, input.baseSystemRoot, rootNames, baseRootIDs, rootIDs, plan)
+		iter, nextMeta, err := c.buildRootDescriptorAndColumnManifestSystemDeltaIteratorAndMetaForMeta(input.meta, input.baseCommitSeq, input.baseSystemRoot, rootNames, baseRootIDs, rootIDs, plan)
+		if err == nil {
+			updatedMeta = nextMeta
+		}
+		return iter, err
 	}
 	var newSystemRoot uint64
 	var rootIDs []uint64
@@ -149,9 +158,8 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 		cleanupColumnDelta = nil
 		return 0, nil, CollectionMeta{}, nil, err
 	}
-	updatedMeta, err := columnPublishUpdatedMeta(input.meta, plan)
-	if err != nil {
-		return 0, nil, CollectionMeta{}, nil, err
+	if updatedMeta.Name == "" {
+		return 0, nil, CollectionMeta{}, nil, errors.New("collections: column publish did not prepare updated metadata")
 	}
 	return newSystemRoot, rootIDs, updatedMeta, rootNames, nil
 }
@@ -426,15 +434,20 @@ func columnPublishUpdatedMeta(base CollectionMeta, plan ColumnPublishPlan) (Coll
 }
 
 func (c *Collection) buildRootDescriptorAndColumnManifestSystemDeltaIteratorForMeta(meta CollectionMeta, expectedCommitSeq, expectedSystemRoot uint64, rootNames []string, baseRootIDs map[string]uint64, rootIDs []uint64, plan ColumnPublishPlan) (iterator.UnsafeIterator, error) {
+	iter, _, err := c.buildRootDescriptorAndColumnManifestSystemDeltaIteratorAndMetaForMeta(meta, expectedCommitSeq, expectedSystemRoot, rootNames, baseRootIDs, rootIDs, plan)
+	return iter, err
+}
+
+func (c *Collection) buildRootDescriptorAndColumnManifestSystemDeltaIteratorAndMetaForMeta(meta CollectionMeta, expectedCommitSeq, expectedSystemRoot uint64, rootNames []string, baseRootIDs map[string]uint64, rootIDs []uint64, plan ColumnPublishPlan) (iterator.UnsafeIterator, CollectionMeta, error) {
 	if len(rootIDs) != len(rootNames) {
-		return nil, unexpectedOrderedRootCountError(meta.Name, len(rootNames), len(rootIDs))
+		return nil, CollectionMeta{}, unexpectedOrderedRootCountError(meta.Name, len(rootNames), len(rootIDs))
 	}
 	if !plan.Enabled {
-		return nil, errors.New("collections: disabled column publish plan cannot build system delta")
+		return nil, CollectionMeta{}, errors.New("collections: disabled column publish plan cannot build system delta")
 	}
 	columnRootName, err := validateColumnPublishPlanRootForMeta(meta, plan)
 	if err != nil {
-		return nil, err
+		return nil, CollectionMeta{}, err
 	}
 	columnRootIndex := -1
 	for i, rootName := range rootNames {
@@ -444,39 +457,43 @@ func (c *Collection) buildRootDescriptorAndColumnManifestSystemDeltaIteratorForM
 		}
 	}
 	if columnRootIndex < 0 {
-		return nil, fmt.Errorf("collections: column manifest root %q missing from published root descriptors", columnRootName)
+		return nil, CollectionMeta{}, fmt.Errorf("collections: column manifest root %q missing from published root descriptors", columnRootName)
 	}
 	columnBaseRoot, ok := baseRootIDs[columnRootName]
 	if !ok {
-		return nil, fmt.Errorf("collections: missing base root for collection %q root %q", meta.Name, columnRootName)
+		return nil, CollectionMeta{}, fmt.Errorf("collections: missing base root for collection %q root %q", meta.Name, columnRootName)
 	}
 	if plan.ManifestRootBaseID != columnBaseRoot || plan.RootDelta.BaseRootID != columnBaseRoot {
-		return nil, errConcurrentRootModification(meta.Name, columnRootName)
+		return nil, CollectionMeta{}, errConcurrentRootModification(meta.Name, columnRootName)
 	}
 	if err := c.validateRootDescriptorSystemDeltaForMeta(meta, expectedCommitSeq, expectedSystemRoot, rootNames, baseRootIDs); err != nil {
-		return nil, err
+		return nil, CollectionMeta{}, err
 	}
 	if rootIDs[columnRootIndex] == 0 {
-		return nil, errors.New("collections: column manifest root publish returned zero root")
+		return nil, CollectionMeta{}, errors.New("collections: column manifest root publish returned zero root")
 	}
 	// The ordered-root group just built this root. Avoid reading it through the
 	// pre-commit snapshot because compressed roots may depend on value-log
 	// segment visibility published by the enclosing commit.
 	updatedMeta, err := columnPublishUpdatedMeta(meta, plan)
 	if err != nil {
-		return nil, err
+		return nil, CollectionMeta{}, err
 	}
-	encodedMeta, err := encodeCollectionMeta(updatedMeta)
+	encodedMeta, err := encodeNormalizedCollectionMeta(updatedMeta)
 	if err != nil {
-		return nil, err
+		return nil, CollectionMeta{}, err
 	}
 	updates := make(map[string][]byte, len(rootNames)+1)
 	updates[systemCollectionMetaKey(updatedMeta.Name)] = encodedMeta
 	for i, rootName := range rootNames {
 		if rootIDs[i] == 0 {
-			return nil, fmt.Errorf("collections: ordered root publish returned zero root for %q", rootName)
+			return nil, CollectionMeta{}, fmt.Errorf("collections: ordered root publish returned zero root for %q", rootName)
 		}
 		updates[systemCollectionRootKey(rootName)] = encodeRootID(rootIDs[i])
 	}
-	return buildSystemDeltaIterator(updates)
+	iter, err := buildSystemDeltaIterator(updates)
+	if err != nil {
+		return nil, CollectionMeta{}, err
+	}
+	return iter, updatedMeta, nil
 }

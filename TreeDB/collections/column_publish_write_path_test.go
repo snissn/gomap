@@ -600,6 +600,66 @@ func TestColumnManifestRootDescriptorSystemDeltaDoesNotReadPublishedRootBeforeCo
 	_ = iter.Close()
 }
 
+func TestColumnManifestRootDescriptorSystemDeltaReturnsPreparedUpdatedMetaM10B(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "events",
+		Options: CollectionOptions{ColumnStore: testColumnStoreConfig(nil)},
+	}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col := openColumnStoreCollectionM10B(t, d, mgr)
+
+	identity := ColumnManifestIdentity{Generation: 1, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0x1234}
+	planInput := testColumnPublishPlanInputM10A(identity, testColumnPublishPreparedAssetM10A())
+	planInput.BaseManifestRootID = 0
+	plan, err := BuildColumnPublishPlan(planInput)
+	if err != nil {
+		t.Fatalf("BuildColumnPublishPlan: %v", err)
+	}
+
+	rootName := collectionColumnManifestRootName("events")
+	iter, updatedMeta, err := col.buildRootDescriptorAndColumnManifestSystemDeltaIteratorAndMetaForMeta(
+		col.Meta(),
+		0,
+		0,
+		[]string{rootName},
+		map[string]uint64{rootName: 0},
+		[]uint64{99},
+		plan,
+	)
+	if err != nil {
+		t.Fatalf("buildRootDescriptorAndColumnManifestSystemDeltaIteratorAndMetaForMeta: %v", err)
+	}
+	defer func() { _ = iter.Close() }()
+	if cfg := updatedMeta.Options.ColumnStore; cfg == nil || cfg.ActiveManifest == nil || *cfg.ActiveManifest != identity || cfg.RecoveryAuthoritativeAppliedCommandLSN != plan.AppliedCommandLSN {
+		t.Fatalf("updated meta column store=%+v want active identity %+v and recovery LSN %d", cfg, identity, plan.AppliedCommandLSN)
+	}
+
+	var encodedMeta []byte
+	for ; iter.Valid(); iter.Next() {
+		if bytes.Equal(iter.Key(), []byte(systemCollectionMetaKey("events"))) {
+			encodedMeta = iter.ValueCopy(nil)
+			break
+		}
+	}
+	if len(encodedMeta) == 0 {
+		t.Fatal("system delta did not include updated collection metadata")
+	}
+	decodedMeta, err := decodeCollectionMeta(encodedMeta)
+	if err != nil {
+		t.Fatalf("decodeCollectionMeta: %v", err)
+	}
+	if !sameCollectionMeta(decodedMeta, updatedMeta) {
+		t.Fatalf("encoded metadata did not match prepared updated metadata: decoded=%+v updated=%+v", decodedMeta, updatedMeta)
+	}
+}
+
 func prepareColumnStoreCommandWALDirM10B(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
