@@ -729,12 +729,16 @@ func startColumnStoreSuiteRuntimeProfiles(cfg BenchConfig) (func() error, error)
 		})
 	}
 
-	if cfg.BlockProfile != "" {
+	blockProfile := strings.TrimSpace(cfg.BlockProfile)
+	mutexProfile := strings.TrimSpace(cfg.MutexProfile)
+	traceProfile := strings.TrimSpace(cfg.TraceProfile)
+
+	if blockProfile != "" {
 		rate := cfg.BlockProfileRate
 		if rate <= 0 {
 			rate = 1
 		}
-		f, err := os.Create(cfg.BlockProfile)
+		f, err := os.Create(blockProfile)
 		if err != nil {
 			_ = finish()
 			return nil, fmt.Errorf("column_store: blockprofile: %w", err)
@@ -753,12 +757,12 @@ func startColumnStoreSuiteRuntimeProfiles(cfg BenchConfig) (func() error, error)
 		})
 	}
 
-	if cfg.MutexProfile != "" {
+	if mutexProfile != "" {
 		frac := cfg.MutexProfileFraction
 		if frac <= 0 {
 			frac = 1
 		}
-		f, err := os.Create(cfg.MutexProfile)
+		f, err := os.Create(mutexProfile)
 		if err != nil {
 			_ = finish()
 			return nil, fmt.Errorf("column_store: mutexprofile: %w", err)
@@ -777,8 +781,8 @@ func startColumnStoreSuiteRuntimeProfiles(cfg BenchConfig) (func() error, error)
 		})
 	}
 
-	if cfg.TraceProfile != "" {
-		f, err := os.Create(cfg.TraceProfile)
+	if traceProfile != "" {
+		f, err := os.Create(traceProfile)
 		if err != nil {
 			_ = finish()
 			return nil, fmt.Errorf("column_store: trace: %w", err)
@@ -1604,10 +1608,8 @@ func columnStoreExistingOptionalArtifactPath(path string) string {
 	}
 	if _, err := os.Stat(path); err == nil {
 		return path
-	} else if errors.Is(err, os.ErrNotExist) {
-		return ""
 	}
-	return path
+	return ""
 }
 
 func writeColumnStoreSuiteArtifacts(dir, executionPath string, report columnStoreSuiteReport, md string, run BenchRun) error {

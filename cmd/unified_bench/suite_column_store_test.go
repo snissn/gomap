@@ -595,6 +595,32 @@ func TestColumnStoreSuiteRuntimeDeltaSkipsEmptyOutputM11A(t *testing.T) {
 	}
 }
 
+func TestColumnStoreSuiteRuntimeProfilesTrimPaddedPathsM11A(t *testing.T) {
+	dir := t.TempDir()
+	blockPath := filepath.Join(dir, "block.pprof")
+	mutexPath := filepath.Join(dir, "mutex.pprof")
+	tracePath := filepath.Join(dir, "trace.out")
+
+	finish, err := startColumnStoreSuiteRuntimeProfiles(BenchConfig{
+		BlockProfile:         " \t" + blockPath + "\t ",
+		BlockProfileRate:     1,
+		MutexProfile:         " \t" + mutexPath + "\t ",
+		MutexProfileFraction: 1,
+		TraceProfile:         " \t" + tracePath + "\t ",
+	})
+	if err != nil {
+		t.Fatalf("startColumnStoreSuiteRuntimeProfiles: %v", err)
+	}
+	if err := finish(); err != nil {
+		t.Fatalf("finish runtime profiles: %v", err)
+	}
+	for _, path := range []string{blockPath, mutexPath, tracePath} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("expected trimmed profile path %q to exist: %v", path, err)
+		}
+	}
+}
+
 func TestColumnStoreSuiteArtifactsOmitMissingRuntimeDeltaPathsM11A(t *testing.T) {
 	dir := t.TempDir()
 	blockDeltaPath := filepath.Join(dir, "block_delta.pprof")
@@ -619,6 +645,21 @@ func TestColumnStoreSuiteArtifactsOmitMissingRuntimeDeltaPathsM11A(t *testing.T)
 	}
 	if paths.BlockProfile != blockPath || paths.MutexProfile != mutexPath {
 		t.Fatalf("base runtime profile artifacts should remain advertised: %+v", paths)
+	}
+}
+
+func TestColumnStoreSuiteArtifactsOmitRuntimeDeltaStatErrorsM11A(t *testing.T) {
+	dir := t.TempDir()
+	notDir := filepath.Join(dir, "not-dir")
+	if err := os.WriteFile(notDir, []byte("file"), 0o644); err != nil {
+		t.Fatalf("write not-dir marker: %v", err)
+	}
+	paths := columnStoreSuitePruneMissingRuntimeDeltaArtifacts(columnStoreArtifactPaths{
+		BlockDeltaProfile: filepath.Join(notDir, "block_delta.pprof"),
+		MutexDeltaProfile: " \t ",
+	})
+	if paths.BlockDeltaProfile != "" || paths.MutexDeltaProfile != "" {
+		t.Fatalf("stat-error/blank optional delta paths should be omitted: %+v", paths)
 	}
 }
 
