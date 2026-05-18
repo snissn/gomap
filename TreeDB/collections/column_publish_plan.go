@@ -523,19 +523,18 @@ func (c *Collection) buildColumnManifestPublishSystemDeltaIterator(input ColumnM
 			return nil, fmt.Errorf("collections: column publish recovery-authoritative AppliedCommandLSN regression for %q: plan %d < base %d", input.BaseMeta.Name, plan.RecoveryAuthoritativeAppliedCommandLSN, baseRecoveryLSN)
 		}
 	}
-	if input.BaseCommitSeq != 0 || input.BaseSystemRoot != 0 {
-		state := c.db.State()
-		if (input.BaseCommitSeq != 0 && state.CommitSeq != input.BaseCommitSeq) ||
-			(input.BaseSystemRoot != 0 && state.SystemRootPageID != input.BaseSystemRoot) {
-			return nil, fmt.Errorf("collections: concurrent schema modification detected for %q", input.BaseMeta.Name)
-		}
-	}
-
 	current := c.db.AcquireSnapshot()
 	if current == nil {
 		return nil, backenddb.ErrClosed
 	}
 	defer func() { _ = current.Close() }()
+	if input.BaseCommitSeq != 0 || input.BaseSystemRoot != 0 {
+		state := current.State()
+		if (input.BaseCommitSeq != 0 && state.CommitSeq != input.BaseCommitSeq) ||
+			(input.BaseSystemRoot != 0 && state.SystemRootPageID != input.BaseSystemRoot) {
+			return nil, fmt.Errorf("collections: concurrent schema modification detected for %q", input.BaseMeta.Name)
+		}
+	}
 	if err := validateColumnManifestPublishedRoot(current, input.BaseMeta.Name, rootIDs[0], plan.RootDelta.IdentityRecord); err != nil {
 		return nil, err
 	}
