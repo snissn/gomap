@@ -659,6 +659,9 @@ func TestColumnStoreSuiteRunsBTreeIndexBaselineM11B(t *testing.T) {
 		if q.PlannerReason == "" || q.PlannerCandidates == 0 {
 			t.Fatalf("query %s missing planner diagnostics: %+v", q.Name, q)
 		}
+		if !strings.Contains(q.PlannerReason, "full-scan B-tree baseline") {
+			t.Fatalf("query %s planner_reason=%q want full-scan baseline disclosure", q.Name, q.PlannerReason)
+		}
 		if q.RowMaterializations != report.Rows {
 			t.Fatalf("query %s row_materializations=%d want %d", q.Name, q.RowMaterializations, report.Rows)
 		}

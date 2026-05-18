@@ -117,6 +117,9 @@ func TestColumnQueryPlannerM11BChoosesExpectedKindsForOneFixture(t *testing.T) {
 			if tc.index != "" && plan.IndexName != tc.index {
 				t.Fatalf("index=%q want %q", plan.IndexName, tc.index)
 			}
+			if tc.want == ColumnQueryPlanBTreeIndexBaseline && !strings.Contains(plan.Diagnostics.Reason, "full-scan B-tree baseline") {
+				t.Fatalf("B-tree reason=%q want full-scan baseline disclosure", plan.Diagnostics.Reason)
+			}
 			if !plan.Diagnostics.RecoveryAuthoritative && plan.Kind != ColumnQueryPlanRowStoreBaseline && plan.Kind != ColumnQueryPlanBTreeIndexBaseline {
 				t.Fatalf("physical plan did not record recovery-authoritative manifest: %+v", plan.Diagnostics)
 			}
@@ -274,6 +277,15 @@ func TestColumnQueryPlannerM11BPredicateOperatorOrdersIndexCandidates(t *testing
 	plan = planColumnQueryForCatalog(catalog, identity, true, req)
 	if plan.Supported {
 		t.Fatalf("unknown predicate operator should not silently select index: %+v", plan)
+	}
+	if !strings.Contains(plan.Diagnostics.UnsupportedPlanReason, "no matching collection secondary index") {
+		t.Fatalf("unsupported reason=%q", plan.Diagnostics.UnsupportedPlanReason)
+	}
+
+	req.Predicates = []ColumnQueryPredicate{{Column: "kind", Operator: ColumnQueryPredicateEqual}}
+	plan = planColumnQueryForCatalog(catalog, identity, true, req)
+	if !plan.Supported || plan.IndexName != "kind_idx" {
+		t.Fatalf("known predicate operator did not select B-tree baseline: %+v", plan)
 	}
 }
 
@@ -701,6 +713,50 @@ func TestColumnSkipScanM11BPrunesOnlyLeftPrefixMarks(t *testing.T) {
 	}
 	if got, want := duplicatePositionLastWins.SkippedMarks, []int{0, 1}; !equalInts(got, want) {
 		t.Fatalf("duplicate-position skipped=%v want %v", got, want)
+	}
+}
+
+func TestColumnSkipScanM11BDocumentsSparseAndDuplicatePositions(t *testing.T) {
+	marks := []ColumnSkipScanMark{
+		{Name: "low", Rows: 10, MinKeys: [][]byte{{0x01}}, MaxKeys: [][]byte{{0x09}}},
+		{Name: "high", Rows: 10, MinKeys: [][]byte{{0x30}}, MaxKeys: [][]byte{{0x40}}},
+	}
+
+	sparse := PlanColumnSkipScan([]ColumnSkipScanPredicate{{
+		Position: 2,
+		Lower:    ColumnSkipScanBound{Key: []byte{0x30}, Inclusive: true},
+		Upper:    ColumnSkipScanBound{Key: []byte{0x40}, Inclusive: true},
+	}}, marks)
+	if got, want := sparse.LeftPrefixColumns, 0; got != want {
+		t.Fatalf("sparse left prefix=%d want %d", got, want)
+	}
+	if got, want := sparse.ScheduledMarks, []int{0, 1}; !equalInts(got, want) {
+		t.Fatalf("sparse scheduled=%v want %v", got, want)
+	}
+	if len(sparse.SkippedMarks) != 0 {
+		t.Fatalf("sparse skipped=%v want none", sparse.SkippedMarks)
+	}
+
+	duplicateLastWins := PlanColumnSkipScan([]ColumnSkipScanPredicate{
+		{
+			Position: 0,
+			Lower:    ColumnSkipScanBound{Key: []byte{0x01}, Inclusive: true},
+			Upper:    ColumnSkipScanBound{Key: []byte{0x09}, Inclusive: true},
+		},
+		{
+			Position: 0,
+			Lower:    ColumnSkipScanBound{Key: []byte{0x30}, Inclusive: true},
+			Upper:    ColumnSkipScanBound{Key: []byte{0x40}, Inclusive: true},
+		},
+	}, marks)
+	if got, want := duplicateLastWins.LeftPrefixColumns, 1; got != want {
+		t.Fatalf("duplicate left prefix=%d want %d", got, want)
+	}
+	if got, want := duplicateLastWins.ScheduledMarks, []int{1}; !equalInts(got, want) {
+		t.Fatalf("duplicate scheduled=%v want %v", got, want)
+	}
+	if got, want := duplicateLastWins.SkippedMarks, []int{0}; !equalInts(got, want) {
+		t.Fatalf("duplicate skipped=%v want %v", got, want)
 	}
 }
 

@@ -33,8 +33,9 @@ type ColumnQueryPredicate struct {
 	Column string
 	// Operator participates in planner candidate ordering: equality and
 	// unspecified predicates are preferred before range predicates for index
-	// baselines. Unknown operators are ignored until a later physical predicate
-	// pushdown path can validate them explicitly.
+	// baselines. Unknown operators are ignored rather than driving B-tree
+	// baseline selection; physical predicate pushdown is a later column-store
+	// milestone.
 	Operator ColumnQueryPredicateOperator
 }
 
@@ -151,7 +152,7 @@ func planColumnQueryForCatalog(catalog *collectionCatalog, identity ColumnStoreC
 	if idx, ok := selectColumnQueryBTreeIndex(catalog, req); ok {
 		diag.SelectedIndexName = idx.Name
 		diag.SelectedIndexField = idx.Field
-		diag.Reason = "selected matching collection secondary index for full baseline scan"
+		diag.Reason = "selected matching collection secondary index for full-scan B-tree baseline"
 		return ColumnQueryPlan{Kind: ColumnQueryPlanBTreeIndexBaseline, Supported: true, IndexName: idx.Name, IndexField: idx.Field, Diagnostics: diag}
 	}
 	diag.Reason = "row-store fallback"
@@ -170,7 +171,7 @@ func forcedColumnQueryPlan(catalog *collectionCatalog, identity ColumnStoreCache
 		}
 		diag.SelectedIndexName = idx.Name
 		diag.SelectedIndexField = idx.Field
-		diag.Reason = "forced matching collection secondary index for full baseline scan"
+		diag.Reason = "forced matching collection secondary index for full-scan B-tree baseline"
 		return ColumnQueryPlan{Kind: ColumnQueryPlanBTreeIndexBaseline, Supported: true, IndexName: idx.Name, IndexField: idx.Field, Diagnostics: diag}
 	case ColumnQueryPlanSerialColumnScan:
 		if ok, plan := serialColumnQueryPlan(catalog, identity, identityOK, req, diag); ok {
@@ -317,6 +318,8 @@ func catalogHasColumnAggregateMetadata(catalog *collectionCatalog, name string) 
 		return false
 	}
 	for _, aggregate := range catalog.meta.Options.ColumnStore.AggregateMetadata {
+		// Metadata can be supplied by pre-alpha JSON fixtures, so trim at the
+		// planner boundary until catalog loading owns canonicalization.
 		if strings.TrimSpace(aggregate.Name) == name {
 			return true
 		}
@@ -407,6 +410,8 @@ func selectColumnQueryBTreeIndex(catalog *collectionCatalog, req ColumnQueryPlan
 	if catalog == nil {
 		return IndexDefinition{}, false
 	}
+	// Keep common small catalogs allocation-free while avoiding repeated linear
+	// scans for larger user-defined index lists.
 	lookup := newColumnQueryIndexLookup(catalog.meta.Indexes)
 	for _, candidate := range req.CandidateIndexColumns {
 		candidate = strings.TrimSpace(candidate)
@@ -546,10 +551,12 @@ func PlanColumnSkipScan(predicates []ColumnSkipScanPredicate, marks []ColumnSkip
 // caller-owned scratch. Assign a zero ColumnSkipScanResult to release retained
 // slice capacity between unrelated planning workloads.
 //
-// Only bounded predicates forming a dense left prefix from Position 0 can prune
-// marks. Gaps stop the prefix, positions outside [0, len(predicates)) are
-// ignored without allocating sparse scratch, and duplicate positions use the
-// last bounded predicate supplied by the caller.
+// Predicate positions are interpreted as dense zero-based sort-key positions
+// for the left-prefix contract. Only bounded predicates in the contiguous prefix
+// starting at position zero can prune marks. Sparse later-column predicates are
+// ignored until every lower position exists, positions >= len(predicates) are
+// ignored rather than allocating sparse scratch, and duplicate positions use the
+// last bounded predicate supplied.
 func PlanColumnSkipScanInto(result *ColumnSkipScanResult, predicates []ColumnSkipScanPredicate, marks []ColumnSkipScanMark) {
 	if result == nil {
 		return
