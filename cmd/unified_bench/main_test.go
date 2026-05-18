@@ -2054,6 +2054,61 @@ func TestInstallAllocsProfileRateIgnoresWhitespaceOnlyPrefixM11A(t *testing.T) {
 	}
 }
 
+func TestBenchConfigHasAnyProfileOutputIncludesCheckpointCPUM11A(t *testing.T) {
+	if benchConfigHasAnyProfileOutput(BenchConfig{}) {
+		t.Fatal("empty config should not report profile output")
+	}
+	if !benchConfigHasAnyProfileOutput(BenchConfig{CheckpointCPUProfile: " checkpoint_cpu "}) {
+		t.Fatal("checkpoint CPU profile should count as profile output")
+	}
+}
+
+func TestInstallAllocsProfileRateIgnoresFilteredTestsM11A(t *testing.T) {
+	prevRate := runtime.MemProfileRate
+	t.Cleanup(func() {
+		runtime.MemProfileRate = prevRate
+	})
+	runtime.MemProfileRate = 4096
+
+	restore := installAllocsProfileRate(BenchConfig{
+		AllocsProfile:      filepath.Join(t.TempDir(), "allocs"),
+		AllocsProfileRate:  1,
+		TestsArg:           "sequential_write",
+		AllocsProfileTests: map[string]struct{}{"random_read": {}},
+	})
+	if got := runtime.MemProfileRate; got != 4096 {
+		restore()
+		t.Fatalf("MemProfileRate changed for filtered allocs profile: got %d", got)
+	}
+	restore()
+	if got := runtime.MemProfileRate; got != 4096 {
+		t.Fatalf("MemProfileRate restore changed filtered allocs profile: got %d", got)
+	}
+}
+
+func TestInstallAllocsProfileRateAppliesMatchingTestFilterM11A(t *testing.T) {
+	prevRate := runtime.MemProfileRate
+	t.Cleanup(func() {
+		runtime.MemProfileRate = prevRate
+	})
+	runtime.MemProfileRate = 4096
+
+	restore := installAllocsProfileRate(BenchConfig{
+		AllocsProfile:      filepath.Join(t.TempDir(), "allocs"),
+		AllocsProfileRate:  1,
+		TestsArg:           "sequential_write",
+		AllocsProfileTests: map[string]struct{}{"sequential_write": {}},
+	})
+	if got := runtime.MemProfileRate; got != 1 {
+		restore()
+		t.Fatalf("MemProfileRate was not set for matching allocs profile filter: got %d", got)
+	}
+	restore()
+	if got := runtime.MemProfileRate; got != 4096 {
+		t.Fatalf("MemProfileRate was not restored for matching allocs profile filter: got %d", got)
+	}
+}
+
 func TestInstallAllocsProfileRateRestoresEnabledPrefixM11A(t *testing.T) {
 	prevRate := runtime.MemProfileRate
 	t.Cleanup(func() {
@@ -2072,6 +2127,39 @@ func TestInstallAllocsProfileRateRestoresEnabledPrefixM11A(t *testing.T) {
 	restore()
 	if got := runtime.MemProfileRate; got != 4096 {
 		t.Fatalf("MemProfileRate was not restored for enabled allocs profile: got %d", got)
+	}
+}
+
+func TestRunBenchmarkCPUProfileStartFailureRemovesArtifactM11A(t *testing.T) {
+	profileHooks := &benchmarkProfileHooks{
+		startCPUProfile: func(_ io.Writer) error {
+			return errors.New("start failed")
+		},
+		stopCPUProfile: func() {},
+	}
+	outDir := t.TempDir()
+	prefix := filepath.Join(outDir, "cpu")
+
+	_, err := runBenchmark(BenchConfig{
+		Keys:         8,
+		ValueSize:    16,
+		BatchSize:    4,
+		RangeQueries: 0,
+		RangeSpan:    0,
+		DBsArg:       "treedb",
+		TestsArg:     "sequential_write",
+		KeepDir:      false,
+		Progress:     false,
+		SeedUsed:     1,
+		CPUProfile:   prefix,
+		profileHooks: profileHooks,
+	})
+	if err == nil {
+		t.Fatal("expected CPU profile start failure")
+	}
+	path := prefix + "_sequential_write_treedb.pprof"
+	if _, statErr := os.Stat(path); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("expected failed CPU profile artifact to be removed, stat err=%v", statErr)
 	}
 }
 
