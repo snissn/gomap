@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"math"
 	"strings"
 	"testing"
 
@@ -477,6 +478,36 @@ func TestColumnPublishPlanRejectsNegativeManifestBytesM10A(t *testing.T) {
 	}
 }
 
+func TestColumnPublishPlanRejectsPreparedAssetByteOverflowM10A(t *testing.T) {
+	asset := testColumnPublishPreparedAssetM10A()
+	hugeAsset := asset
+	hugeAsset.Ref.FileID = 8
+	hugeAsset.Ref.Length = math.MaxInt64
+	hugeAsset.Bytes = math.MaxInt64
+	oneByteAsset := asset
+	oneByteAsset.Ref.FileID = 9
+	oneByteAsset.Ref.Length = 1
+	oneByteAsset.Bytes = 1
+
+	identity := ColumnManifestIdentity{Generation: 9, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0xbeefcaf1}
+	input := testColumnPublishPlanInputM10A(identity, hugeAsset)
+	input.Hooks.PrepareAssets = func(ColumnPublishAssetPrepareInput) (ColumnPublishPreparedAssets, error) {
+		return ColumnPublishPreparedAssets{
+			Assets:             []ColumnPreparedAsset{hugeAsset, oneByteAsset},
+			RowCount:           2,
+			ColumnPayloadBytes: math.MaxInt64,
+		}, nil
+	}
+
+	plan, err := BuildColumnPublishPlan(input)
+	if err == nil || !strings.Contains(err.Error(), "prepared asset bytes overflow") {
+		t.Fatalf("BuildColumnPublishPlan err=%v want prepared asset byte overflow", err)
+	}
+	if plan.Enabled {
+		t.Fatalf("overflowing prepared bytes returned enabled plan: %+v", plan)
+	}
+}
+
 func TestColumnPublishPlanRejectsUnsupportedAssetKindM10A(t *testing.T) {
 	asset := testColumnPublishPreparedAssetM10A()
 	asset.Ref.Kind = ColumnAssetKind("future-kind")
@@ -899,6 +930,56 @@ func TestColumnManifestPublishSystemDeltaRejectsMissingLSNM10A(t *testing.T) {
 				t.Fatalf("buildColumnManifestPublishSystemDeltaIterator err=%v want %q", err, tt.want)
 			}
 		})
+	}
+}
+
+func TestColumnManifestPublishSystemDeltaRejectsRecoveryLSNRegressionM10A(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "events",
+		Options: CollectionOptions{ColumnStore: testColumnStoreConfig(nil)},
+	}); err != nil {
+		t.Fatalf("create column-enabled collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("events")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	planInput := testColumnPublishPlanInputM10A(
+		ColumnManifestIdentity{Generation: 17, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0xabcddcbc},
+		testColumnPublishPreparedAssetM10A(),
+	)
+	planInput.BaseManifestRootID = 0
+	plan, err := BuildColumnPublishPlan(planInput)
+	if err != nil {
+		t.Fatalf("BuildColumnPublishPlan: %v", err)
+	}
+
+	baseMeta := col.Meta()
+	cfg := baseMeta.Options.ColumnStore.copy()
+	active := ColumnManifestIdentity{Generation: 16, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0xabcddcba}
+	cfg.ActiveManifest = &active
+	cfg.RecoveryAuthoritativeManifest = &active
+	cfg.RecoveryAuthoritativeAppliedCommandLSN = plan.RecoveryAuthoritativeAppliedCommandLSN + 1
+	baseMeta.Options.ColumnStore = &cfg
+
+	iter, err := col.buildColumnManifestPublishSystemDeltaIterator(ColumnManifestPublishSystemDeltaInput{
+		BaseMeta:           baseMeta,
+		BaseManifestRootID: 0,
+		Plan:               plan,
+	}, []uint64{123})
+	if iter != nil {
+		_ = iter.Close()
+		t.Fatalf("returned iterator with err=%v", err)
+	}
+	if err == nil || !strings.Contains(err.Error(), "recovery-authoritative AppliedCommandLSN regression") {
+		t.Fatalf("buildColumnManifestPublishSystemDeltaIterator err=%v want recovery-authoritative LSN regression", err)
 	}
 }
 

@@ -36,6 +36,8 @@ func TestColumnStoreWritesRequireCommandWALM10B(t *testing.T) {
 	if !errors.Is(err, backenddb.ErrCommandWALUnsupported) {
 		t.Fatalf("InsertBatch error=%v, want ErrCommandWALUnsupported", err)
 	}
+	assertColumnStoreDocumentMissingM10B(t, col, "e1")
+	assertColumnStoreWriteDomainEmptyM10B(t, col)
 }
 
 func TestColumnStoreBenchmarkRelaxedRejectsBufferedWritesM10B(t *testing.T) {
@@ -77,17 +79,12 @@ func TestColumnStoreBenchmarkRelaxedRejectsBufferedWritesM10B(t *testing.T) {
 	if _, err := col.Insert([]byte("e1"), doc); !errors.Is(err, backenddb.ErrCommandWALRejected) {
 		t.Fatalf("Insert error=%v, want ErrCommandWALRejected", err)
 	}
+	assertColumnStoreDocumentMissingM10B(t, col, "e1")
 	if _, err := col.InsertBatchValidatedBSON([][]byte{[]byte("e2")}, [][]byte{doc}); !errors.Is(err, backenddb.ErrCommandWALRejected) {
 		t.Fatalf("InsertBatchValidatedBSON error=%v, want ErrCommandWALRejected", err)
 	}
-	if col.writeDomain != nil {
-		col.writeDomain.mu.RLock()
-		count := col.writeDomain.count
-		col.writeDomain.mu.RUnlock()
-		if count != 0 {
-			t.Fatalf("write domain count=%d, want 0 after rejected column-store writes", count)
-		}
-	}
+	assertColumnStoreDocumentMissingM10B(t, col, "e2")
+	assertColumnStoreWriteDomainEmptyM10B(t, col)
 }
 
 func TestColumnStoreBufferedDeletePathsRequireCommandWALM10B(t *testing.T) {
@@ -117,7 +114,7 @@ func TestColumnStoreBufferedDeletePathsRequireCommandWALM10B(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			d, col := openBufferedBSONColumnStoreSeedM10B(t, true)
+			d, col := openBufferedBSONColumnStoreSeedM10B(t, true, ColumnStoreProfileBenchmarkRelaxed)
 			defer func() { _ = d.Close() }()
 
 			err := tc.del(col)
@@ -137,7 +134,7 @@ func TestColumnStoreBufferedDeletePathsRequireCommandWALM10B(t *testing.T) {
 }
 
 func TestColumnStoreBufferedUpdatePathRequiresCommandWALM10B(t *testing.T) {
-	d, col := openBufferedBSONColumnStoreSeedM10B(t, false)
+	d, col := openBufferedBSONColumnStoreSeedM10B(t, false, ColumnStoreProfileBenchmarkRelaxed)
 	defer func() { _ = d.Close() }()
 
 	before, err := col.Get([]byte("e1"))
@@ -165,7 +162,7 @@ func TestColumnStoreBufferedUpdatePathRequiresCommandWALM10B(t *testing.T) {
 }
 
 func TestColumnStoreUpdateCallbacksRequireCommandWALBeforeInvocationM10B(t *testing.T) {
-	d, col := openBufferedBSONColumnStoreSeedM10B(t, false)
+	d, col := openBufferedBSONColumnStoreSeedM10B(t, false, ColumnStoreProfileBenchmarkRelaxed)
 	defer func() { _ = d.Close() }()
 
 	before, err := col.Get([]byte("e1"))
@@ -233,6 +230,7 @@ func TestColumnStoreCommandWALMutationsPublishManifestM10B(t *testing.T) {
 		t.Fatalf("InsertBatch: %v", err)
 	}
 	assertColumnManifestStateM10B(t, col, 1, baseLSN+1)
+	assertDBAppliedCommandLSNM10B(t, d, baseLSN+1)
 	assertCollectionDocument(t, col, "e1", `{"time_us":1,"kind":"like","did":"d1"}`)
 
 	matched, modified, err := col.Update([]byte("e1"), func([]byte) ([]byte, bool, error) {
@@ -245,6 +243,7 @@ func TestColumnStoreCommandWALMutationsPublishManifestM10B(t *testing.T) {
 		t.Fatalf("Update matched=%v modified=%v, want true true", matched, modified)
 	}
 	assertColumnManifestStateM10B(t, col, 2, baseLSN+2)
+	assertDBAppliedCommandLSNM10B(t, d, baseLSN+2)
 	assertCollectionDocument(t, col, "e1", `{"time_us":3,"kind":"like","did":"d1"}`)
 
 	deleted, err := col.DeleteDocument([]byte("e2"))
@@ -255,6 +254,7 @@ func TestColumnStoreCommandWALMutationsPublishManifestM10B(t *testing.T) {
 		t.Fatalf("DeleteDocument deleted=false, want true")
 	}
 	assertColumnManifestStateM10B(t, col, 3, baseLSN+3)
+	assertDBAppliedCommandLSNM10B(t, d, baseLSN+3)
 
 	if err := d.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
@@ -263,6 +263,7 @@ func TestColumnStoreCommandWALMutationsPublishManifestM10B(t *testing.T) {
 	defer func() { _ = reopen.Close() }()
 	reopened := openColumnStoreCollectionM10B(t, reopen)
 	assertColumnManifestStateM10B(t, reopened, 3, baseLSN+3)
+	assertDBAppliedCommandLSNM10B(t, reopen, baseLSN+3)
 	assertCollectionDocument(t, reopened, "e1", `{"time_us":3,"kind":"like","did":"d1"}`)
 	if got, err := reopened.Get([]byte("e2")); err != nil || got != nil {
 		t.Fatalf("Get deleted document=(%q, %v), want nil, nil", got, err)
@@ -310,9 +311,7 @@ func TestColumnStoreCommandWALReplayPublishesManifestM10B(t *testing.T) {
 	reopened := openColumnStoreCollectionM10B(t, reopen)
 	assertCollectionDocument(t, reopened, "e1", `{"time_us":1,"kind":"like","did":"d1"}`)
 	assertColumnManifestStateM10B(t, reopened, 1, lsn)
-	if got := reopen.State().AppliedCommandLSN; got != lsn {
-		t.Fatalf("AppliedCommandLSN after replay=%d, want %d", got, lsn)
-	}
+	assertDBAppliedCommandLSNM10B(t, reopen, lsn)
 }
 
 func TestColumnStoreStaleColumnRootPreflightDoesNotAppendCommandWALM10B(t *testing.T) {
@@ -764,7 +763,7 @@ func prepareColumnStoreCommandWALDirWithProfileM10C(t *testing.T, profileSupport
 	return dir
 }
 
-func openBufferedBSONColumnStoreSeedM10B(t *testing.T, indexed bool) (*backenddb.DB, *Collection) {
+func openBufferedBSONColumnStoreSeedM10B(t *testing.T, indexed bool, profile ColumnStoreProfileSupport) (*backenddb.DB, *Collection) {
 	t.Helper()
 	d, err := backenddb.Open(backenddb.Options{
 		Dir:                    t.TempDir(),
@@ -813,11 +812,11 @@ func openBufferedBSONColumnStoreSeedM10B(t *testing.T, indexed bool) (*backenddb
 			t.Fatalf("CreateIndex: %v", err)
 		}
 	}
-	col = enableColumnStoreForExistingCollectionM10B(t, d, "events")
+	col = enableColumnStoreForExistingCollectionM10B(t, d, "events", profile)
 	return d, col
 }
 
-func enableColumnStoreForExistingCollectionM10B(t *testing.T, d *backenddb.DB, collectionName string) *Collection {
+func enableColumnStoreForExistingCollectionM10B(t *testing.T, d *backenddb.DB, collectionName string, profile ColumnStoreProfileSupport) *Collection {
 	t.Helper()
 	snap := d.AcquireSnapshot()
 	if snap == nil {
@@ -833,7 +832,9 @@ func enableColumnStoreForExistingCollectionM10B(t *testing.T, d *backenddb.DB, c
 	}
 	meta := catalog.meta
 	cfg := testColumnStoreConfig(nil)
-	cfg.ProfileSupport = ColumnStoreProfileBenchmarkRelaxed
+	if profile != "" {
+		cfg.ProfileSupport = profile
+	}
 	meta.Options.ColumnStore = cfg
 	normalized, err := normalizeCollectionMeta(meta)
 	if err != nil {
@@ -881,6 +882,24 @@ func assertColumnStoreWriteDomainEmptyM10B(t testing.TB, col *Collection) {
 	defer col.writeDomain.mu.RUnlock()
 	if col.writeDomain.count != 0 || col.writeDomain.rootRunCount != 0 {
 		t.Fatalf("write domain staged count=%d rootRunCount=%d, want empty", col.writeDomain.count, col.writeDomain.rootRunCount)
+	}
+}
+
+func assertColumnStoreDocumentMissingM10B(t testing.TB, col *Collection, id string) {
+	t.Helper()
+	got, err := col.Get([]byte(id))
+	if err != nil {
+		t.Fatalf("Get(%q): %v", id, err)
+	}
+	if got != nil {
+		t.Fatalf("Get(%q)=%q, want missing after rejected column-store write", id, string(got))
+	}
+}
+
+func assertDBAppliedCommandLSNM10B(t testing.TB, d *backenddb.DB, want uint64) {
+	t.Helper()
+	if got := d.State().AppliedCommandLSN; got != want {
+		t.Fatalf("AppliedCommandLSN=%d, want %d", got, want)
 	}
 }
 

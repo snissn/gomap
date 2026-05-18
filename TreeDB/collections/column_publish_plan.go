@@ -3,6 +3,7 @@ package collections
 import (
 	"errors"
 	"fmt"
+	"math"
 	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -328,6 +329,11 @@ func BuildColumnPublishPlan(input ColumnPublishPlanInput) (ColumnPublishPlan, er
 		return ColumnPublishPlan{}, fmt.Errorf("collections: invalid column publish root delta: %w", err)
 	}
 
+	preparedBytes, err := checkedSumColumnPreparedAssetBytes(manifestPrepared.Assets)
+	if err != nil {
+		return ColumnPublishPlan{}, err
+	}
+
 	plan := ColumnPublishPlan{
 		Enabled:                                true,
 		Collection:                             input.Collection,
@@ -353,7 +359,7 @@ func BuildColumnPublishPlan(input ColumnPublishPlanInput) (ColumnPublishPlan, er
 			PublishedRefs:  closure.RequiredAssets,
 			PublishedBytes: closure.RequiredBytes,
 			PreparedRefs:   len(manifestPrepared.Assets),
-			PreparedBytes:  sumColumnPreparedAssetBytes(manifestPrepared.Assets),
+			PreparedBytes:  preparedBytes,
 		},
 		StageMetrics: metrics,
 	}
@@ -511,6 +517,12 @@ func (c *Collection) buildColumnManifestPublishSystemDeltaIterator(input ColumnM
 	if recoveryIdentity != rootIdentity {
 		return nil, errors.New("collections: column publish plan recovery-authoritative manifest identity does not match root delta identity")
 	}
+	if input.BaseMeta.Options.ColumnStore != nil {
+		baseRecoveryLSN := input.BaseMeta.Options.ColumnStore.RecoveryAuthoritativeAppliedCommandLSN
+		if baseRecoveryLSN != 0 && plan.RecoveryAuthoritativeAppliedCommandLSN < baseRecoveryLSN {
+			return nil, fmt.Errorf("collections: column publish recovery-authoritative AppliedCommandLSN regression for %q: plan %d < base %d", input.BaseMeta.Name, plan.RecoveryAuthoritativeAppliedCommandLSN, baseRecoveryLSN)
+		}
+	}
 	if input.BaseCommitSeq != 0 || input.BaseSystemRoot != 0 {
 		state := c.db.State()
 		if (input.BaseCommitSeq != 0 && state.CommitSeq != input.BaseCommitSeq) ||
@@ -609,7 +621,10 @@ func validateColumnPublishClosure(input ColumnPublishPlanInput, cfg ColumnStoreC
 			Manifest:          manifest,
 		})
 	}
-	requiredBytes := sumColumnPreparedAssetBytes(prepared.Assets)
+	requiredBytes, err := checkedSumColumnPreparedAssetBytes(prepared.Assets)
+	if err != nil {
+		return ColumnPublishDurabilityClosure{}, err
+	}
 	return ColumnPublishDurabilityClosure{
 		PreparedAssets: prepared.Assets,
 		RequiredAssets: len(prepared.Assets),
@@ -716,6 +731,9 @@ func validateColumnPublishPreparedAssets(prepared ColumnPublishPreparedAssets) e
 			return err
 		}
 	}
+	if _, err := checkedSumColumnPreparedAssetBytes(prepared.Assets); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -726,7 +744,11 @@ func validateColumnPublishDurabilityClosure(closure ColumnPublishDurabilityClosu
 	if closure.RequiredAssets != len(closure.PreparedAssets) {
 		return fmt.Errorf("collections: column publish closure required assets=%d prepared=%d", closure.RequiredAssets, len(closure.PreparedAssets))
 	}
-	if got := sumColumnPreparedAssetBytes(closure.PreparedAssets); got != closure.RequiredBytes {
+	got, err := checkedSumColumnPreparedAssetBytes(closure.PreparedAssets)
+	if err != nil {
+		return err
+	}
+	if got != closure.RequiredBytes {
 		return fmt.Errorf("collections: column publish closure required bytes=%d prepared bytes=%d", closure.RequiredBytes, got)
 	}
 	if closure.RequiredAssets != 0 && (!closure.FlushRequired || !closure.SyncRequired) {
@@ -787,11 +809,22 @@ func validateColumnAssetRefForPlan(ref ColumnAssetRef) error {
 }
 
 func sumColumnPreparedAssetBytes(assets []ColumnPreparedAsset) int64 {
-	var total int64
-	for _, asset := range assets {
-		total += asset.Bytes
+	total, err := checkedSumColumnPreparedAssetBytes(assets)
+	if err != nil {
+		return -1
 	}
 	return total
+}
+
+func checkedSumColumnPreparedAssetBytes(assets []ColumnPreparedAsset) (int64, error) {
+	var total int64
+	for _, asset := range assets {
+		if asset.Bytes > math.MaxInt64-total {
+			return 0, errors.New("collections: column publish prepared asset bytes overflow")
+		}
+		total += asset.Bytes
+	}
+	return total, nil
 }
 
 func cloneColumnPublishPreparedAssets(prepared ColumnPublishPreparedAssets) ColumnPublishPreparedAssets {
