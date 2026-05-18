@@ -687,6 +687,7 @@ func (g *ColumnVectorGraph) cosineDistance(query []float32, queryInvNorm float32
 	if math.IsInf(cosine, 0) || math.IsNaN(cosine) {
 		return columnVectorGraphCosineDistanceWide(query, vector, queryInvNorm, g.invNorms[ordinal])
 	}
+	cosine = clampColumnVectorGraphCosine(cosine)
 	distance := 1 - cosine
 	if math.IsInf(distance, 0) || math.IsNaN(distance) {
 		return columnVectorGraphCosineDistanceWide(query, vector, queryInvNorm, g.invNorms[ordinal])
@@ -704,11 +705,26 @@ func columnVectorGraphDotProductFloat64(left []float32, right []float32) float64
 
 func columnVectorGraphCosineDistanceWide(query []float32, vector []float32, queryInvNorm float32, vectorInvNorm float32) float32 {
 	dot := columnVectorGraphDotProductFloat64(query, vector)
-	distance := 1 - dot*float64(queryInvNorm)*float64(vectorInvNorm)
+	cosine := dot * float64(queryInvNorm) * float64(vectorInvNorm)
+	if math.IsNaN(cosine) || math.IsInf(cosine, 0) {
+		return float32(math.Inf(1))
+	}
+	cosine = clampColumnVectorGraphCosine(cosine)
+	distance := 1 - cosine
 	if math.IsNaN(distance) || math.IsInf(distance, 0) {
 		return float32(math.Inf(1))
 	}
 	return float32(distance)
+}
+
+func clampColumnVectorGraphCosine(cosine float64) float64 {
+	if cosine > 1 {
+		return 1
+	}
+	if cosine < -1 {
+		return -1
+	}
+	return cosine
 }
 
 func (g *ColumnVectorGraph) vectorAt(ordinal int) []float32 {

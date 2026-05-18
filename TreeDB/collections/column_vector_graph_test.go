@@ -279,6 +279,28 @@ func TestColumnVectorGraphCosineDistanceKeepsTrueOrthogonalDotFast(t *testing.T)
 	}
 }
 
+func TestColumnVectorGraphCosineDistanceClampsAcceptedInvNormDrift(t *testing.T) {
+	const driftedInvNorm = 1.00005
+	graph, err := NewColumnVectorGraphFromColumns(ColumnVectorGraphColumns{
+		DocumentIDs:     [][]byte{[]byte("doc-positive"), []byte("doc-negative")},
+		Vectors:         []float32{1, -1},
+		InvNorms:        []float32{driftedInvNorm, driftedInvNorm},
+		NeighborOffsets: []uint32{0, 0, 0},
+		Dimensions:      1,
+		EntryPoint:      0,
+	})
+	if err != nil {
+		t.Fatalf("NewColumnVectorGraphFromColumns: %v", err)
+	}
+
+	if distance := graph.cosineDistance([]float32{1}, 1, 0); distance != 0 {
+		t.Fatalf("positive drift distance=%g want 0", distance)
+	}
+	if distance := graph.cosineDistance([]float32{1}, 1, 1); distance != 2 {
+		t.Fatalf("negative drift distance=%g want 2", distance)
+	}
+}
+
 func TestColumnVectorGraphSearchUsesDocumentIDTieOrdering(t *testing.T) {
 	graph, err := NewColumnVectorGraphFromColumns(ColumnVectorGraphColumns{
 		DocumentIDs:     [][]byte{[]byte("doc-z"), []byte("doc-a"), []byte("doc-b")},
