@@ -176,7 +176,7 @@ func (g *ColumnVectorDynamicGraph) ApplyBatch(mutations []ColumnVectorDynamicMut
 	}
 
 	start := time.Now()
-	appendRows, appendIDBytes, appendTombstones, appendTombstoneIDBytes := columnVectorDynamicMutationAppendCapacity(mutations)
+	appendRows, appendIDBytes, appendTombstones, appendTombstoneIDBytes := columnVectorDynamicMutationAppendCapacity(mutations, g.baseDocIndex, current.overlay)
 	nextOverlay := current.overlay.clone(current.overlayGeneration+1, appendRows, appendIDBytes, appendTombstones, appendTombstoneIDBytes)
 	inserted, updated, deleted := 0, 0, 0
 	for mutationIndex, mutation := range mutations {
@@ -435,7 +435,7 @@ func (o *ColumnVectorDynamicOverlaySnapshot) clone(generation uint64, appendRows
 	return next
 }
 
-func columnVectorDynamicMutationAppendCapacity(mutations []ColumnVectorDynamicMutation) (rows int, idBytes int, tombstones int, tombstoneIDBytes int) {
+func columnVectorDynamicMutationAppendCapacity(mutations []ColumnVectorDynamicMutation, baseDocIndex map[string]int, overlay *ColumnVectorDynamicOverlaySnapshot) (rows int, idBytes int, tombstones int, tombstoneIDBytes int) {
 	for _, mutation := range mutations {
 		switch mutation.Kind {
 		case ColumnVectorDynamicMutationInsert, ColumnVectorDynamicMutationUpdate:
@@ -444,8 +444,10 @@ func columnVectorDynamicMutationAppendCapacity(mutations []ColumnVectorDynamicMu
 		}
 		switch mutation.Kind {
 		case ColumnVectorDynamicMutationUpdate, ColumnVectorDynamicMutationDelete:
-			tombstones++
-			tombstoneIDBytes += len(mutation.DocumentID)
+			if _, baseFound := baseDocIndex[string(mutation.DocumentID)]; baseFound && !overlay.documentTombstonedWriter(mutation.DocumentID) {
+				tombstones++
+				tombstoneIDBytes += len(mutation.DocumentID)
+			}
 		}
 	}
 	return rows, idBytes, tombstones, tombstoneIDBytes
