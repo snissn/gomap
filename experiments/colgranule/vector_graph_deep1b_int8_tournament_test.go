@@ -393,44 +393,69 @@ func columnVectorGraphDeep1BWriteClickHouseFixtures(outDir string, orders []colu
 	if err := os.MkdirAll(chDir, 0o755); err != nil {
 		return err
 	}
+	wideCodecs := columnVectorGraphDeep1BClickHouseWideCodecs()
+	var tables []string
 	var schema strings.Builder
 	schema.WriteString("-- Generated Deep1B int8 tournament ClickHouse fixtures.\n")
-	schema.WriteString("-- The local machine used by this test did not need ClickHouse installed; run these against clickhouse-local/client when available.\n\n")
-	for _, codec := range []struct {
-		name  string
-		codec string
-	}{
-		{name: "default", codec: ""},
-		{name: "none", codec: " CODEC(NONE)"},
-		{name: "lz4", codec: " CODEC(LZ4)"},
-		{name: "zstd", codec: " CODEC(ZSTD(1))"},
-		{name: "t64_zstd", codec: " CODEC(T64, ZSTD(1))"},
-		{name: "delta_zstd", codec: " CODEC(Delta, ZSTD(1))"},
-		{name: "double_delta_zstd", codec: " CODEC(DoubleDelta, ZSTD(1))"},
-	} {
-		table := "deep1b_int8_wide_" + codec.name
-		schema.WriteString("CREATE TABLE IF NOT EXISTS ")
-		schema.WriteString(table)
-		schema.WriteString(" (order_name LowCardinality(String), row_idx UInt32, source_row UInt32")
-		for j := 0; j < dims; j++ {
-			schema.WriteString(fmt.Sprintf(", d%d UInt8%s", j, codec.codec))
+	schema.WriteString("-- Run run_clickhouse_local.sh from this directory when clickhouse-local is available.\n\n")
+	for _, order := range orders {
+		prefix := columnVectorGraphDeep1BClickHouseOrderPrefix(order.name)
+		for _, codec := range wideCodecs {
+			table := prefix + "_wide_" + codec.name
+			tables = append(tables, table)
+			schema.WriteString("CREATE TABLE IF NOT EXISTS ")
+			schema.WriteString(table)
+			schema.WriteString(" (order_name LowCardinality(String), row_idx UInt32, source_row UInt32")
+			for j := 0; j < dims; j++ {
+				schema.WriteString(fmt.Sprintf(", d%d UInt8%s", j, codec.codec))
+			}
+			schema.WriteString(") ENGINE = MergeTree ORDER BY (order_name, row_idx);\n")
 		}
-		schema.WriteString(") ENGINE = MergeTree ORDER BY (order_name, row_idx);\n")
+		dimTable := prefix + "_dim_blob_zstd"
+		granuleDimTable := prefix + "_granule_dim_major_zstd"
+		granuleRowTable := prefix + "_granule_row_major_zstd"
+		tables = append(tables, dimTable, granuleDimTable, granuleRowTable)
+		schema.WriteString("CREATE TABLE IF NOT EXISTS ")
+		schema.WriteString(dimTable)
+		schema.WriteString(" (order_name LowCardinality(String), dim UInt16, values String CODEC(ZSTD(1))) ENGINE = MergeTree ORDER BY (order_name, dim);\n")
+		schema.WriteString("CREATE TABLE IF NOT EXISTS ")
+		schema.WriteString(granuleDimTable)
+		schema.WriteString(" (order_name LowCardinality(String), values String CODEC(ZSTD(1))) ENGINE = MergeTree ORDER BY order_name;\n")
+		schema.WriteString("CREATE TABLE IF NOT EXISTS ")
+		schema.WriteString(granuleRowTable)
+		schema.WriteString(" (order_name LowCardinality(String), values String CODEC(ZSTD(1))) ENGINE = MergeTree ORDER BY order_name;\n")
+		schema.WriteByte('\n')
 	}
-	schema.WriteString("\nCREATE TABLE IF NOT EXISTS deep1b_int8_dim_blob_zstd (order_name LowCardinality(String), dim UInt16, values String CODEC(ZSTD(1))) ENGINE = MergeTree ORDER BY (order_name, dim);\n")
-	schema.WriteString("CREATE TABLE IF NOT EXISTS deep1b_int8_granule_blob_zstd (order_name LowCardinality(String), layout LowCardinality(String), values String CODEC(ZSTD(1))) ENGINE = MergeTree ORDER BY (order_name, layout);\n")
 	if err := os.WriteFile(filepath.Join(chDir, "schema.sql"), []byte(schema.String()), 0o644); err != nil {
 		return err
 	}
 	var commands strings.Builder
 	commands.WriteString("#!/bin/sh\nset -eu\n\n")
-	commands.WriteString("clickhouse-client --multiquery < schema.sql\n")
+	commands.WriteString("CH=${CLICKHOUSE_BIN:-clickhouse}\n")
+	commands.WriteString("DB=${CLICKHOUSE_PATH:-./clickhouse-local-db}\n\n")
+	commands.WriteString("rm -rf \"$DB\"\n")
+	commands.WriteString("mkdir -p \"$DB\"\n")
+	commands.WriteString("\"$CH\" local --path \"$DB\" --multiquery < schema.sql\n")
 	for _, order := range orders {
-		commands.WriteString(fmt.Sprintf("clickhouse-client --query \"INSERT INTO deep1b_int8_wide_zstd FORMAT TSV\" < %s_wide.tsv\n", order.name))
-		commands.WriteString(fmt.Sprintf("clickhouse-client --query \"INSERT INTO deep1b_int8_dim_blob_zstd SELECT order_name, dim, unhex(values_hex) FROM input('order_name String, dim UInt16, values_hex String') FORMAT TSV\" < %s_dim_blob.tsv\n", order.name))
-		commands.WriteString(fmt.Sprintf("clickhouse-client --query \"INSERT INTO deep1b_int8_granule_blob_zstd SELECT order_name, layout, unhex(values_hex) FROM input('order_name String, layout String, values_hex String') FORMAT TSV\" < %s_granule_blob.tsv\n", order.name))
+		prefix := columnVectorGraphDeep1BClickHouseOrderPrefix(order.name)
+		for _, codec := range wideCodecs {
+			table := prefix + "_wide_" + codec.name
+			commands.WriteString(fmt.Sprintf("\"$CH\" local --path \"$DB\" --query \"INSERT INTO %s FORMAT TSV\" < %s_wide.tsv\n", table, order.name))
+		}
+		commands.WriteString(fmt.Sprintf("\"$CH\" local --path \"$DB\" --query \"INSERT INTO %s_dim_blob_zstd SELECT order_name, dim, unhex(values_hex) FROM input('order_name String, dim UInt16, values_hex String') FORMAT TSV\" < %s_dim_blob.tsv\n", prefix, order.name))
+		commands.WriteString(fmt.Sprintf("\"$CH\" local --path \"$DB\" --query \"INSERT INTO %s_granule_dim_major_zstd SELECT order_name, unhex(values_hex) FROM input('order_name String, layout String, values_hex String') WHERE layout = 'u8_dim_major_hex' FORMAT TSV\" < %s_granule_blob.tsv\n", prefix, order.name))
+		commands.WriteString(fmt.Sprintf("\"$CH\" local --path \"$DB\" --query \"INSERT INTO %s_granule_row_major_zstd SELECT order_name, unhex(values_hex) FROM input('order_name String, layout String, values_hex String') WHERE layout = 'u8_row_major_hex' FORMAT TSV\" < %s_granule_blob.tsv\n", prefix, order.name))
 	}
-	if err := os.WriteFile(filepath.Join(chDir, "load_zstd_examples.sh"), []byte(commands.String()), 0o755); err != nil {
+	commands.WriteByte('\n')
+	for _, table := range tables {
+		commands.WriteString(fmt.Sprintf("\"$CH\" local --path \"$DB\" --query \"OPTIMIZE TABLE %s FINAL\"\n", table))
+	}
+	commands.WriteString("\"$CH\" local --path \"$DB\" --query \"SELECT table, sum(rows) AS rows, sum(bytes_on_disk) AS bytes_on_disk, sum(data_compressed_bytes) AS data_compressed_bytes, sum(data_uncompressed_bytes) AS data_uncompressed_bytes FROM system.parts WHERE active AND database = 'default' GROUP BY table ORDER BY table FORMAT TSVWithNames\" > clickhouse_part_sizes.tsv\n")
+	if err := os.WriteFile(filepath.Join(chDir, "run_clickhouse_local.sh"), []byte(commands.String()), 0o755); err != nil {
+		return err
+	}
+	example := "#!/bin/sh\nset -eu\nexec ./run_clickhouse_local.sh \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(chDir, "load_zstd_examples.sh"), []byte(example), 0o755); err != nil {
 		return err
 	}
 	for _, order := range orders {
@@ -451,9 +476,30 @@ func columnVectorGraphDeep1BWriteClickHouseFixtures(outDir string, orders []colu
 		"- *_wide.tsv: one row per vector with d0..d95 UInt8 columns.\n" +
 		"- *_dim_blob.tsv: one row per dimension with a hex-encoded 8192-byte dim-major column.\n" +
 		"- *_granule_blob.tsv: one row per order/layout with a hex-encoded full granule byte stream.\n\n" +
-		"The blob TSVs are hex-encoded for transport. load_zstd_examples.sh uses unhex() so ClickHouse stores raw bytes before applying the table codec.\n\n" +
-		"Start with schema.sql, then adapt load_zstd_examples.sh for the codec/table under test.\n"
+		"The blob TSVs are hex-encoded for transport. run_clickhouse_local.sh uses unhex() so ClickHouse stores raw bytes before applying the table codec.\n\n" +
+		"Run run_clickhouse_local.sh with CLICKHOUSE_BIN pointing at a ClickHouse binary. It writes clickhouse_part_sizes.tsv with per-table part-size measurements.\n"
 	return os.WriteFile(filepath.Join(chDir, "README.md"), []byte(readme), 0o644)
+}
+
+type columnVectorGraphDeep1BClickHouseCodecSpec struct {
+	name  string
+	codec string
+}
+
+func columnVectorGraphDeep1BClickHouseWideCodecs() []columnVectorGraphDeep1BClickHouseCodecSpec {
+	return []columnVectorGraphDeep1BClickHouseCodecSpec{
+		{name: "default", codec: ""},
+		{name: "none", codec: " CODEC(NONE)"},
+		{name: "lz4", codec: " CODEC(LZ4)"},
+		{name: "zstd", codec: " CODEC(ZSTD(1))"},
+		{name: "t64_zstd", codec: " CODEC(T64, ZSTD(1))"},
+		{name: "delta_zstd", codec: " CODEC(Delta, ZSTD(1))"},
+		{name: "double_delta_zstd", codec: " CODEC(DoubleDelta, ZSTD(1))"},
+	}
+}
+
+func columnVectorGraphDeep1BClickHouseOrderPrefix(orderName string) string {
+	return "deep1b_int8_" + strings.ReplaceAll(orderName, "-", "_")
 }
 
 func columnVectorGraphDeep1BClickHouseWideTSV(orderName string, rowIDs []int, u8 []byte, rows int, dims int) string {
@@ -539,11 +585,12 @@ func columnVectorGraphDeep1BRenderInt8TournamentMarkdown(report columnVectorGrap
 	b.WriteString("## ClickHouse Fixtures\n\n")
 	b.WriteString("Generated under `clickhouse/`:\n\n")
 	b.WriteString("- `schema.sql`\n")
+	b.WriteString("- `run_clickhouse_local.sh`\n")
 	b.WriteString("- `load_zstd_examples.sh`\n")
 	b.WriteString("- `*_wide.tsv`\n")
 	b.WriteString("- `*_dim_blob.tsv`\n")
 	b.WriteString("- `*_granule_blob.tsv`\n")
-	b.WriteString("\nBlob TSVs carry hex text and `load_zstd_examples.sh` decodes them with `unhex()` before ClickHouse stores the `String` payload.\n")
+	b.WriteString("\nBlob TSVs carry hex text and `run_clickhouse_local.sh` decodes them with `unhex()` before ClickHouse stores the `String` payload. The runner writes `clickhouse_part_sizes.tsv` when a ClickHouse binary is available.\n")
 	return b.String()
 }
 
