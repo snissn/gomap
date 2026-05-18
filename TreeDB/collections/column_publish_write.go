@@ -181,7 +181,7 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 		return 0, nil, CollectionMeta{}, nil, err
 	}
 	if updatedMeta.Name == "" {
-		return 0, nil, CollectionMeta{}, nil, errors.New("collections: column publish did not prepare updated metadata")
+		return 0, nil, CollectionMeta{}, nil, fmt.Errorf("collections: column publish did not prepare updated metadata collection=%q operation=%s", input.meta.Name, input.operation)
 	}
 	return newSystemRoot, rootIDs, updatedMeta, rootNames, nil
 }
