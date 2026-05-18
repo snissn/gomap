@@ -565,14 +565,16 @@ func BenchmarkColumnVectorGraphPersistedBuildOpenDecode(b *testing.B) {
 			var totalBuildNanos int64
 			var totalOpenNanos int64
 			var totalDecodeNanos int64
-			var lastFixture columnVectorGraphPersistedFixture
+			var lastAccounting columnVectorGraphPersistedAccounting
+			var lastLoadStats ColumnVectorGraphLoadStats
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
 				fixture := buildColumnVectorGraphPersistedFixture(b, 100_000, 128, 16, 8192, compression, columnVectorGraphPersistedOrderLocal)
 				totalBuildNanos += fixture.buildNanos
 				totalOpenNanos += fixture.openNanos
 				totalDecodeNanos += fixture.decodeNanos
-				lastFixture = *fixture
+				lastAccounting = fixture.accounting
+				lastLoadStats = fixture.loadStats
 				benchSink += int64(fixture.graph.Rows() + fixture.loadStats.Edges)
 				b.StopTimer()
 				if err := fixture.Close(); err != nil {
@@ -583,11 +585,14 @@ func BenchmarkColumnVectorGraphPersistedBuildOpenDecode(b *testing.B) {
 				}
 			}
 			if b.N > 0 {
-				lastFixture.buildNanos = totalBuildNanos / int64(b.N)
-				lastFixture.openNanos = totalOpenNanos / int64(b.N)
-				lastFixture.decodeNanos = totalDecodeNanos / int64(b.N)
-				reportColumnVectorGraphPersistedProductMetrics(b, &lastFixture)
-				b.ReportMetric(float64(lastFixture.loadStats.Edges)/float64(lastFixture.loadStats.Rows), "edges/node")
+				avgFixture := &columnVectorGraphPersistedFixture{
+					buildNanos:  totalBuildNanos / int64(b.N),
+					openNanos:   totalOpenNanos / int64(b.N),
+					decodeNanos: totalDecodeNanos / int64(b.N),
+					accounting:  lastAccounting,
+				}
+				reportColumnVectorGraphPersistedProductMetrics(b, avgFixture)
+				b.ReportMetric(float64(lastLoadStats.Edges)/float64(lastLoadStats.Rows), "edges/node")
 			}
 		})
 	}
