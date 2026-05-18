@@ -1030,7 +1030,7 @@ func columnStoreSuitePlanRequest(name string, rows int, forceKind collections.Co
 		Capabilities: collections.ColumnQueryPlannerCapabilities{
 			// M11B deliberately has no physical column assets yet; this keeps
 			// recovery-authoritative physical planner gates unreachable until
-			// M11B/M11C wire real assets.
+			// a later physical-asset scanner milestone wires real assets.
 			SerialColumnScan:       true,
 			AggregateMetadata:      true,
 			ParallelColumnScan:     true,
@@ -1147,7 +1147,7 @@ func scanColumnStoreSuiteEventsByIndex(collection *collections.Collection, rows 
 		return nil, 0, 0, fmt.Errorf("column_store: scan B-tree index %s for %s: %w", indexName, queryName, err)
 	}
 	if truncated {
-		return nil, 0, 0, fmt.Errorf("column_store: B-tree index scan exceeded expected row count: materialized %d rows with sentinel limit %d; scalar index should emit one secondary entry per document", materialized, rows+1)
+		return nil, 0, 0, fmt.Errorf("column_store: B-tree index scan exceeded expected row count: materialized at least %d rows with sentinel limit %d; scalar index should emit one secondary entry per document", materialized, rows+1)
 	}
 	if materialized != rows {
 		return nil, 0, 0, fmt.Errorf("column_store: B-tree index scan materialized %d rows, want %d", materialized, rows)

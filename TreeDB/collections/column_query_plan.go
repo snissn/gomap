@@ -242,7 +242,7 @@ func physicalColumnQuerySupported(catalog *collectionCatalog, identity ColumnSto
 	if !columnQueryManifestRecoveryAuthoritative(identity, identityOK) || req.Capabilities.PhysicalAssetCount <= 0 {
 		return false
 	}
-	if missing, ok := missingColumnStoreRequestColumn(catalog, req); ok && missing != "" {
+	if _, ok := missingColumnStoreRequestColumn(catalog, req); ok {
 		return false
 	}
 	switch kind {
@@ -314,26 +314,26 @@ func parallelColumnQueryShapeUnsupportedReason(req ColumnQueryPlanRequest) strin
 	return ""
 }
 
-func columnQueryParallelWorkerCount(cap ColumnQueryPlannerCapabilities) int {
-	workers := cap.MaxParallelWorkers
+func columnQueryParallelWorkerCount(caps ColumnQueryPlannerCapabilities) int {
+	workers := caps.MaxParallelWorkers
 	if workers <= 0 {
 		return 0
 	}
-	if units := columnQueryParallelWorkUnits(cap); units > 0 && workers > units {
+	if units := columnQueryParallelWorkUnits(caps); units > 0 && workers > units {
 		return units
 	}
 	return workers
 }
 
-func columnQueryParallelWorkUnits(cap ColumnQueryPlannerCapabilities) int {
-	if cap.GranuleCount > 0 {
-		return cap.GranuleCount
+func columnQueryParallelWorkUnits(caps ColumnQueryPlannerCapabilities) int {
+	if caps.GranuleCount > 0 {
+		return caps.GranuleCount
 	}
-	return cap.PartCount
+	return caps.PartCount
 }
 
 func aggregateColumnQueryUnsupportedReason(catalog *collectionCatalog, identity ColumnStoreCacheIdentity, identityOK bool, req ColumnQueryPlanRequest) string {
-	if missing, ok := missingColumnStoreRequestColumn(catalog, req); ok && missing != "" {
+	if missing, ok := missingColumnStoreRequestColumn(catalog, req); ok {
 		return fmt.Sprintf("requested column %q is not declared in column store", missing)
 	}
 	if !columnQueryManifestRecoveryAuthoritative(identity, identityOK) || req.Capabilities.PhysicalAssetCount <= 0 {
@@ -400,6 +400,10 @@ func missingColumnStoreRequestColumn(catalog *collectionCatalog, req ColumnQuery
 }
 
 func columnStoreColumnDeclared(declared []ColumnStoreColumn, name string) bool {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return false
+	}
 	for _, declaredColumn := range declared {
 		if strings.TrimSpace(declaredColumn.Name) == name {
 			return true
@@ -425,9 +429,6 @@ func columnQueryPlannerCandidateCount(catalog *collectionCatalog, req ColumnQuer
 	if req.ForceKind != "" {
 		return 1
 	}
-	if req.Capabilities.PlannerCandidateBudget > 0 {
-		return req.Capabilities.PlannerCandidateBudget
-	}
 	count := 1 // row-store fallback
 	count += columnQueryBTreeCandidateCount(catalog, req)
 	if req.Capabilities.SerialColumnScan {
@@ -438,6 +439,9 @@ func columnQueryPlannerCandidateCount(catalog *collectionCatalog, req ColumnQuer
 	}
 	if req.Capabilities.ParallelColumnScan {
 		count++
+	}
+	if budget := req.Capabilities.PlannerCandidateBudget; budget > 0 && count > budget {
+		return budget
 	}
 	return count
 }

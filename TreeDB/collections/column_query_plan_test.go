@@ -571,6 +571,12 @@ func TestColumnQueryPlannerM11BRejectsMissingProjectedColumnForPhysicalPlans(t *
 		t.Fatalf("unsupported reason=%q", plan.Diagnostics.UnsupportedPlanReason)
 	}
 
+	req.ProjectedColumns = []string{" time_us "}
+	plan = planColumnQueryForCatalog(catalog, identity, true, req)
+	if !plan.Supported || plan.Kind != ColumnQueryPlanSerialColumnScan {
+		t.Fatalf("trimmed projected column should match declared physical column: %+v", plan)
+	}
+
 	req.ProjectedColumns = []string{"time_us"}
 	req.Predicates = []ColumnQueryPredicate{{Column: "missing_predicate"}}
 	plan = planColumnQueryForCatalog(catalog, identity, true, req)
