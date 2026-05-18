@@ -124,6 +124,40 @@ func TestColumnQueryPlannerM11BChoosesExpectedKindsForOneFixture(t *testing.T) {
 	}
 }
 
+func TestColumnQueryPlannerM11BMatchesBTreeIndexesCaseSensitively(t *testing.T) {
+	catalog := &collectionCatalog{meta: CollectionMeta{
+		Name: "events",
+		Indexes: []IndexDefinition{
+			{Name: "kind_idx", Field: "kind", ValueType: IndexValueString},
+		},
+	}}
+	identity := ColumnStoreCacheIdentity{
+		Collection:                      "events",
+		ManifestRoot:                    99,
+		ManifestGeneration:              7,
+		RecoveryAuthoritativeGeneration: 7,
+	}
+	req := ColumnQueryPlanRequest{
+		Name:                  "q1",
+		CandidateIndexColumns: []string{"KIND"},
+		ForceKind:             ColumnQueryPlanBTreeIndexBaseline,
+	}
+
+	plan := planColumnQueryForCatalog(catalog, identity, true, req)
+	if plan.Supported {
+		t.Fatalf("case-mismatched candidate selected index: %+v", plan)
+	}
+	if !strings.Contains(plan.Diagnostics.UnsupportedPlanReason, "no matching collection secondary index") {
+		t.Fatalf("unsupported reason=%q", plan.Diagnostics.UnsupportedPlanReason)
+	}
+
+	req.CandidateIndexColumns = []string{"kind"}
+	plan = planColumnQueryForCatalog(catalog, identity, true, req)
+	if !plan.Supported || plan.IndexName != "kind_idx" {
+		t.Fatalf("exact-case candidate did not select index: %+v", plan)
+	}
+}
+
 func TestColumnQueryPlannerM11BRejectsNonRecoveryAuthoritativeManifest(t *testing.T) {
 	catalog := &collectionCatalog{meta: CollectionMeta{
 		Name:    "events",
@@ -286,6 +320,39 @@ func TestColumnSkipScanM11BPrunesOnlyLeftPrefixMarks(t *testing.T) {
 	}
 	if len(unboundedFirstColumn.SkippedMarks) != 0 {
 		t.Fatalf("unbounded-first skipped=%v want none", unboundedFirstColumn.SkippedMarks)
+	}
+}
+
+func TestColumnSkipScanIntoM11BReusesScratchWithoutAllocating(t *testing.T) {
+	marks := []ColumnSkipScanMark{
+		{Name: "before", Rows: 10, MinKeys: [][]byte{{0x01}, {0x01}}, MaxKeys: [][]byte{{0x09}, {0x09}}},
+		{Name: "inside", Rows: 10, MinKeys: [][]byte{{0x10}, {0x10}}, MaxKeys: [][]byte{{0x20}, {0x20}}},
+		{Name: "after", Rows: 10, MinKeys: [][]byte{{0x30}, {0x30}}, MaxKeys: [][]byte{{0x40}, {0x40}}},
+	}
+	predicates := []ColumnSkipScanPredicate{
+		{Position: 1, Lower: ColumnSkipScanBound{Key: []byte{0x10}, Inclusive: true}},
+		{Position: 0, Lower: ColumnSkipScanBound{Key: []byte{0x10}, Inclusive: true}, Upper: ColumnSkipScanBound{Key: []byte{0x35}, Inclusive: true}},
+	}
+	result := ColumnSkipScanResult{
+		ScheduledMarks: make([]int, 0, len(marks)),
+		SkippedMarks:   make([]int, 0, len(marks)),
+	}
+	PlanColumnSkipScanInto(&result, predicates, marks)
+	if got, want := result.LeftPrefixColumns, 2; got != want {
+		t.Fatalf("left prefix=%d want %d", got, want)
+	}
+	if got, want := result.ScheduledMarks, []int{1, 2}; !equalInts(got, want) {
+		t.Fatalf("scheduled=%v want %v", got, want)
+	}
+	if got, want := result.SkippedMarks, []int{0}; !equalInts(got, want) {
+		t.Fatalf("skipped=%v want %v", got, want)
+	}
+
+	allocs := testing.AllocsPerRun(1000, func() {
+		PlanColumnSkipScanInto(&result, predicates, marks)
+	})
+	if allocs != 0 {
+		t.Fatalf("PlanColumnSkipScanInto allocations=%f want 0", allocs)
 	}
 }
 

@@ -797,6 +797,7 @@ func runColumnStoreSuiteQueriesProfiled(cfg BenchConfig, collection *collections
 }
 
 func runColumnStoreSuiteQueries(collection *collections.Collection, rows int, rawHashes map[string]uint64, path string) ([]columnStoreQueryMetric, map[string]columnStoreParity, error) {
+	path = normalizeColumnStoreSuitePath(path)
 	if err := validateColumnStoreSuiteForcedPath(path); err != nil {
 		return nil, nil, err
 	}
@@ -835,7 +836,9 @@ func runColumnStoreSuiteQueries(collection *collections.Collection, rows int, ra
 			firstErr = fmt.Errorf("column_store: parity mismatch for %s: raw=%016x production=%016x", name, rawHash, hash)
 		}
 		metric := columnStoreQueryMetric{
-			Name:                name,
+			Name: name,
+			// PlanLabel records the executed planner kind after alias
+			// normalization, not necessarily the raw requested path string.
 			PlanLabel:           string(plan.Kind),
 			DurationMS:          durationMS(elapsed),
 			Rows:                rows,
@@ -953,7 +956,10 @@ func scanColumnStoreSuiteEventsByIndex(collection *collections.Collection, rows 
 	var bytesRead int64
 	// The M11B B-tree baseline is intentionally a full secondary-index ordered
 	// pass for q1-q5 parity; none of these aggregate queries currently has a
-	// selective predicate that can safely narrow the range.
+	// selective predicate that can safely narrow the range. The fixture expects
+	// one indexed row entry per document, so rows+1 is a sentinel limit that
+	// makes duplicate/missing index entries fail closed instead of truncating
+	// silently.
 	truncated, err := collection.ScanBorrowedDocumentsByIndexRange(indexName, collections.IndexRangeOptions{
 		Lower: collections.IndexRangeBound{Unbounded: true},
 		Upper: collections.IndexRangeBound{Unbounded: true},
@@ -972,7 +978,10 @@ func scanColumnStoreSuiteEventsByIndex(collection *collections.Collection, rows 
 		return nil, 0, 0, fmt.Errorf("column_store: scan B-tree index %s for %s: %w", indexName, queryName, err)
 	}
 	if truncated {
-		return nil, 0, 0, fmt.Errorf("column_store: B-tree index scan truncated at %d rows", rows+1)
+		if materialized <= rows {
+			return nil, 0, 0, fmt.Errorf("column_store: B-tree index scan reported truncation after %d rows with sentinel limit %d; fixture expects one index entry per document", materialized, rows+1)
+		}
+		return nil, 0, 0, fmt.Errorf("column_store: B-tree index scan exceeded expected row count: materialized %d rows with sentinel limit %d; fixture expects one index entry per document", materialized, rows+1)
 	}
 	if materialized != rows {
 		return nil, 0, 0, fmt.Errorf("column_store: B-tree index scan materialized %d rows, want %d", materialized, rows)

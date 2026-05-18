@@ -346,7 +346,7 @@ func selectColumnQueryBTreeIndex(catalog *collectionCatalog, req ColumnQueryPlan
 			continue
 		}
 		for _, idx := range catalog.meta.Indexes {
-			if strings.EqualFold(idx.Field, candidate) || strings.EqualFold(idx.Name, candidate) {
+			if idx.Field == candidate || idx.Name == candidate {
 				return idx, true
 			}
 		}
@@ -399,10 +399,9 @@ func PlanColumnSkipScanInto(result *ColumnSkipScanResult, predicates []ColumnSki
 	result.SkippedMarks = result.SkippedMarks[:0]
 	result.ScheduledRows = 0
 	result.SkippedRows = 0
-	prefixPredicates := columnSkipScanLeftPrefix(predicates)
-	result.LeftPrefixColumns = len(prefixPredicates)
+	result.LeftPrefixColumns = columnSkipScanLeftPrefixColumns(predicates)
 	for i, mark := range marks {
-		if len(prefixPredicates) > 0 && columnSkipScanMarkDisjoint(mark, prefixPredicates) {
+		if result.LeftPrefixColumns > 0 && columnSkipScanMarkDisjoint(mark, predicates, result.LeftPrefixColumns) {
 			result.SkippedMarks = append(result.SkippedMarks, i)
 			result.SkippedRows += mark.Rows
 			continue
@@ -412,25 +411,25 @@ func PlanColumnSkipScanInto(result *ColumnSkipScanResult, predicates []ColumnSki
 	}
 }
 
-func columnSkipScanLeftPrefix(predicates []ColumnSkipScanPredicate) []ColumnSkipScanPredicate {
+func columnSkipScanLeftPrefixColumns(predicates []ColumnSkipScanPredicate) int {
 	if len(predicates) == 0 {
-		return nil
+		return 0
 	}
-	byPosition := make(map[int]ColumnSkipScanPredicate, len(predicates))
-	for _, pred := range predicates {
-		if pred.Position < 0 || !columnSkipScanPredicateHasBound(pred) {
-			continue
-		}
-		byPosition[pred.Position] = pred
-	}
-	prefix := make([]ColumnSkipScanPredicate, 0, len(byPosition))
 	for pos := 0; ; pos++ {
-		pred, ok := byPosition[pos]
-		if !ok {
-			return prefix
+		if _, ok := columnSkipScanPredicateForPosition(predicates, pos); !ok {
+			return pos
 		}
-		prefix = append(prefix, pred)
 	}
+}
+
+func columnSkipScanPredicateForPosition(predicates []ColumnSkipScanPredicate, position int) (ColumnSkipScanPredicate, bool) {
+	for i := len(predicates) - 1; i >= 0; i-- {
+		pred := predicates[i]
+		if pred.Position == position && columnSkipScanPredicateHasBound(pred) {
+			return pred, true
+		}
+	}
+	return ColumnSkipScanPredicate{}, false
 }
 
 func columnSkipScanPredicateHasBound(pred ColumnSkipScanPredicate) bool {
@@ -438,9 +437,13 @@ func columnSkipScanPredicateHasBound(pred ColumnSkipScanPredicate) bool {
 		(!pred.Upper.Unbounded && len(pred.Upper.Key) > 0)
 }
 
-func columnSkipScanMarkDisjoint(mark ColumnSkipScanMark, prefixPredicates []ColumnSkipScanPredicate) bool {
-	for pos, pred := range prefixPredicates {
+func columnSkipScanMarkDisjoint(mark ColumnSkipScanMark, predicates []ColumnSkipScanPredicate, leftPrefixColumns int) bool {
+	for pos := 0; pos < leftPrefixColumns; pos++ {
 		if pos >= len(mark.MinKeys) || pos >= len(mark.MaxKeys) {
+			return false
+		}
+		pred, ok := columnSkipScanPredicateForPosition(predicates, pos)
+		if !ok {
 			return false
 		}
 		minKey := mark.MinKeys[pos]

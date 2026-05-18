@@ -228,6 +228,40 @@ func TestColumnStoreSuiteRunsBTreeIndexBaselineM11B(t *testing.T) {
 	}
 }
 
+func TestColumnStoreSuiteQueriesNormalizeForcedPathAliasesM11B(t *testing.T) {
+	const rows = 16
+	events, _ := buildColumnStoreSyntheticFixture(rows, 1)
+	db, err := openColumnStoreSuiteDB(t.TempDir())
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	manager := collections.NewCollectionManager(db)
+	if _, err := manager.CreateCollection(columnStoreSuiteCollectionMeta(columnStorePathRowStoreBaseline)); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	collection, err := manager.OpenCollection("events")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if err := insertColumnStoreFixture(collection, events, 8); err != nil {
+		t.Fatalf("insert fixture: %v", err)
+	}
+
+	queries, parity, err := runColumnStoreSuiteQueries(collection, rows, columnStoreReferenceHashes(events), "row")
+	if err != nil {
+		t.Fatalf("runColumnStoreSuiteQueries row alias: %v", err)
+	}
+	if len(queries) == 0 || len(parity) == 0 {
+		t.Fatalf("queries=%d parity=%d want non-empty", len(queries), len(parity))
+	}
+	for _, q := range queries {
+		if q.PlanLabel != columnStorePathRowStoreBaseline {
+			t.Fatalf("query %s plan_label=%q want %q", q.Name, q.PlanLabel, columnStorePathRowStoreBaseline)
+		}
+	}
+}
+
 func TestColumnStoreSuiteReportsParityMismatchM11A(t *testing.T) {
 	dir := t.TempDir()
 	cfg := BenchConfig{Keys: 16, BatchSize: 8, DBsArg: "treedb", Profile: "durable", SeedUsed: 1}
