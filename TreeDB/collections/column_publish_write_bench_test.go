@@ -35,7 +35,8 @@ func BenchmarkColumnStoreCommandWALRootPublicationM10B(b *testing.B) {
 			}
 			b.StopTimer()
 
-			assertColumnStoreCommandWALBenchState(b, backend, collection, columnStore, uint64(b.N), uint64(b.N)+1)
+			iterations := uint64(b.N)
+			assertColumnStoreCommandWALBenchState(b, backend, collection, columnStore, iterations, iterations+1)
 			reportColumnStoreCommandWALBenchMetrics(b, totals)
 		})
 	}
@@ -63,7 +64,8 @@ func BenchmarkColumnStoreCommandWALRootPublicationM10B(b *testing.B) {
 			}
 			b.StopTimer()
 
-			assertColumnStoreCommandWALBenchState(b, backend, collection, columnStore, uint64(2*b.N), uint64(2*b.N)+1)
+			iterations := uint64(b.N)
+			assertColumnStoreCommandWALBenchState(b, backend, collection, columnStore, 2*iterations, 2*iterations+1)
 			reportColumnStoreCommandWALBenchMetrics(b, totals)
 		})
 	}
@@ -91,7 +93,8 @@ func BenchmarkColumnStoreCommandWALRootPublicationM10B(b *testing.B) {
 			}
 			b.StopTimer()
 
-			assertColumnStoreCommandWALBenchState(b, backend, collection, columnStore, uint64(2*b.N), uint64(2*b.N)+1)
+			iterations := uint64(b.N)
+			assertColumnStoreCommandWALBenchState(b, backend, collection, columnStore, 2*iterations, 2*iterations+1)
 			reportColumnStoreCommandWALBenchMetrics(b, totals)
 		})
 	}
@@ -151,9 +154,10 @@ func BenchmarkColumnStoreCommandWALReplayM10C(b *testing.B) {
 
 			elapsed := b.Elapsed().Seconds()
 			if elapsed > 0 {
-				b.ReportMetric(float64(docsPerReplay*b.N)/elapsed, "replay_docs/s")
-				b.ReportMetric(float64(frames*b.N)/elapsed, "replay_frames/s")
-				b.ReportMetric((float64(encodedPayloadBytesPerReplay*b.N)/(1024*1024))/elapsed, "encoded_payload_MiB/s")
+				iterations := float64(b.N)
+				b.ReportMetric(float64(docsPerReplay)*iterations/elapsed, "replay_docs/s")
+				b.ReportMetric(float64(frames)*iterations/elapsed, "replay_frames/s")
+				b.ReportMetric((float64(encodedPayloadBytesPerReplay)*iterations/(1024*1024))/elapsed, "encoded_payload_MiB/s")
 			}
 		})
 	}
