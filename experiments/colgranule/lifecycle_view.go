@@ -59,14 +59,32 @@ type columnManifestViewAssetRef struct {
 }
 
 type columnAssetReachabilitySummaryRecord struct {
-	ref         ColumnAssetRef
-	state       ColumnAssetLifecycleState
+	fileID      uint32
+	state       columnAssetReachabilitySummaryState
 	bytes       int
 	live        bool
 	candidate   bool
 	protected   bool
 	quarantined bool
 }
+
+type columnAssetReachabilitySummaryState uint8
+
+const (
+	columnAssetSummaryStateUnknown columnAssetReachabilitySummaryState = iota
+	columnAssetSummaryStateDeleting
+	columnAssetSummaryStateSuperseded
+	columnAssetSummaryStateReclaimable
+	columnAssetSummaryStateCleanupSafe
+	columnAssetSummaryStatePrepared
+	columnAssetSummaryStatePendingPublish
+	columnAssetSummaryStateProcessVisible
+	columnAssetSummaryStateRootPublished
+	columnAssetSummaryStateSnapshotPinned
+	columnAssetSummaryStateActive
+	columnAssetSummaryStateRecoveryAuthoritative
+	columnAssetSummaryStateQuarantined
+)
 
 func DecodeColumnCollectionManifestView(data []byte) (ColumnCollectionManifestView, error) {
 	if isColumnControlPlaneBinary(data, columnCollectionManifestBinaryMagic) {
@@ -294,8 +312,8 @@ func (s *ColumnAssetReachabilitySummaryScratch) reset(recordCap int) {
 	if cap(s.records) < recordCap {
 		s.records = make([]columnAssetReachabilitySummaryRecord, 0, recordCap)
 	} else {
-		// Records are pointer-free scratch today; if pointer-bearing fields are
-		// added, reintroduce clear(s.records) before truncating to avoid retention.
+		// Records are pointer-free scratch; keep them that way so reset remains
+		// a cheap truncate in the repeated GC summary path.
 		s.records = s.records[:0]
 	}
 	if s.recordIndex == nil {
@@ -428,7 +446,7 @@ func (s *ColumnAssetReachabilitySummaryScratch) addAssetRefToReachabilitySummary
 	}
 	if index := s.recordIndex[ref]; index > 0 {
 		record := &s.records[index-1]
-		record.state = strongestColumnAssetState(record.state, state)
+		record.state = strongestColumnAssetReachabilitySummaryState(record.state, state)
 		if record.bytes == 0 {
 			record.bytes = bytes
 		}
@@ -438,8 +456,8 @@ func (s *ColumnAssetReachabilitySummaryScratch) addAssetRefToReachabilitySummary
 		record.quarantined = record.quarantined || quarantined
 	} else {
 		s.records = append(s.records, columnAssetReachabilitySummaryRecord{
-			ref:       ref,
-			state:     state,
+			fileID:    ref.FileID,
+			state:     columnAssetReachabilitySummaryStateFromLifecycle(state),
 			bytes:     bytes,
 			live:      live,
 			protected: columnAssetRefBlocksSegmentDeletion(live, candidate, quarantined),
@@ -465,7 +483,7 @@ func finalizeColumnAssetReachabilitySummary(records []columnAssetReachabilitySum
 		segments[fileID] = seg
 	}
 	for _, record := range records {
-		seg := segments[record.ref.FileID]
+		seg := segments[record.fileID]
 		if record.live {
 			seg.liveRefs++
 		}
@@ -475,7 +493,7 @@ func finalizeColumnAssetReachabilitySummary(records []columnAssetReachabilitySum
 		if record.protected {
 			seg.protectedRefs++
 		}
-		segments[record.ref.FileID] = seg
+		segments[record.fileID] = seg
 	}
 	summary.Stats.SegmentRefs = len(segments)
 	for _, seg := range segments {
@@ -491,19 +509,19 @@ func finalizeColumnAssetReachabilitySummary(records []columnAssetReachabilitySum
 		case record.quarantined:
 			summary.QuarantinedBytes += record.bytes
 		case record.live:
-			if record.state == ColumnAssetStateActive || record.state == ColumnAssetStateRecoveryAuthoritative {
+			if record.state == columnAssetSummaryStateActive || record.state == columnAssetSummaryStateRecoveryAuthoritative {
 				summary.RetainedBytes += record.bytes
 			} else {
 				switch record.state {
-				case ColumnAssetStatePrepared:
+				case columnAssetSummaryStatePrepared:
 					summary.PreparedBytes += record.bytes
-				case ColumnAssetStateProcessVisible:
+				case columnAssetSummaryStateProcessVisible:
 					summary.ProcessVisibleBytes += record.bytes
-				case ColumnAssetStatePendingPublish:
+				case columnAssetSummaryStatePendingPublish:
 					summary.PendingBytes += record.bytes
-				case ColumnAssetStateRootPublished:
+				case columnAssetSummaryStateRootPublished:
 					summary.RootPublishedBytes += record.bytes
-				case ColumnAssetStateSnapshotPinned:
+				case columnAssetSummaryStateSnapshotPinned:
 					summary.SnapshotProtectedBytes += record.bytes
 					summary.RetainedBytes += record.bytes
 				default:
@@ -512,15 +530,54 @@ func finalizeColumnAssetReachabilitySummary(records []columnAssetReachabilitySum
 			}
 		case record.candidate:
 			summary.CleanupSafeBytes += record.bytes
-			seg := segments[record.ref.FileID]
+			seg := segments[record.fileID]
 			if seg.liveRefs == 0 && seg.protectedRefs == 0 {
 				summary.ReclaimableBytes += record.bytes
 			} else {
 				summary.RewriteDebtBytes += record.bytes
 			}
-		case record.state == ColumnAssetStateSuperseded:
+		case record.state == columnAssetSummaryStateSuperseded:
 			summary.SupersededBytes += record.bytes
 		}
+	}
+}
+
+func strongestColumnAssetReachabilitySummaryState(current columnAssetReachabilitySummaryState, next ColumnAssetLifecycleState) columnAssetReachabilitySummaryState {
+	nextState := columnAssetReachabilitySummaryStateFromLifecycle(next)
+	if nextState > current {
+		return nextState
+	}
+	return current
+}
+
+func columnAssetReachabilitySummaryStateFromLifecycle(state ColumnAssetLifecycleState) columnAssetReachabilitySummaryState {
+	switch state {
+	case ColumnAssetStateQuarantined:
+		return columnAssetSummaryStateQuarantined
+	case ColumnAssetStateRecoveryAuthoritative:
+		return columnAssetSummaryStateRecoveryAuthoritative
+	case ColumnAssetStateActive:
+		return columnAssetSummaryStateActive
+	case ColumnAssetStateSnapshotPinned:
+		return columnAssetSummaryStateSnapshotPinned
+	case ColumnAssetStateRootPublished:
+		return columnAssetSummaryStateRootPublished
+	case ColumnAssetStateProcessVisible:
+		return columnAssetSummaryStateProcessVisible
+	case ColumnAssetStatePendingPublish:
+		return columnAssetSummaryStatePendingPublish
+	case ColumnAssetStatePrepared:
+		return columnAssetSummaryStatePrepared
+	case ColumnAssetStateCleanupSafe:
+		return columnAssetSummaryStateCleanupSafe
+	case ColumnAssetStateReclaimable:
+		return columnAssetSummaryStateReclaimable
+	case ColumnAssetStateSuperseded:
+		return columnAssetSummaryStateSuperseded
+	case ColumnAssetStateDeleting:
+		return columnAssetSummaryStateDeleting
+	default:
+		return columnAssetSummaryStateUnknown
 	}
 }
 

@@ -16,10 +16,8 @@ type ColumnAssetManager struct {
 	pins          map[ColumnAssetRef]int
 	zombies       map[ColumnAssetRef]string
 	quarantine    map[ColumnAssetRef]string
-	quarantineBy  map[ColumnAssetRef]string
 	publishFailed map[ColumnAssetRef]string
 	rewriteDebt   map[ColumnAssetRef]string
-	published     map[ColumnAssetRef]string
 }
 
 type ColumnAssetManagerReclamationPlan struct {
@@ -70,10 +68,8 @@ func NewColumnAssetManager(store ColumnAssetStore) (*ColumnAssetManager, error) 
 		pins:          make(map[ColumnAssetRef]int),
 		zombies:       make(map[ColumnAssetRef]string),
 		quarantine:    make(map[ColumnAssetRef]string),
-		quarantineBy:  make(map[ColumnAssetRef]string),
 		publishFailed: make(map[ColumnAssetRef]string),
 		rewriteDebt:   make(map[ColumnAssetRef]string),
-		published:     make(map[ColumnAssetRef]string),
 	}, nil
 }
 
@@ -221,7 +217,9 @@ func (m *ColumnAssetManager) Quarantine(ref ColumnAssetRef, reason string) error
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.quarantine[ref] = reason
-	delete(m.quarantineBy, ref)
+	// A direct quarantine is an explicit safety decision, even when it reuses
+	// the publish-failure reason. A later successful retry must not clear it.
+	delete(m.publishFailed, ref)
 	return nil
 }
 
@@ -242,10 +240,12 @@ func prepareColumnAssetPublishClosure(store ColumnAssetStore, prepared []ColumnP
 	if store == nil {
 		return ColumnAssetPublishClosure{}, fmt.Errorf("colgranule: closed column asset manager")
 	}
+	preparedClone := cloneColumnPreparedAssets(prepared)
 	closure := ColumnAssetPublishClosure{
-		PreparedAssets:   cloneColumnPreparedAssets(prepared),
-		FlushRequired:    len(prepared) > 0,
-		preparedIdentity: cloneColumnPreparedAssets(prepared),
+		PreparedAssets: preparedClone,
+		FlushRequired:  len(preparedClone) > 0,
+		// Keep a private copy so caller mutations to PreparedAssets are caught.
+		preparedIdentity: cloneColumnPreparedAssets(preparedClone),
 	}
 	// Sync is tied to the explicit publish closure: unreferenced buffered
 	// assets are not made durable until a root-visible prepared ref names them.
@@ -311,7 +311,7 @@ func (m *ColumnAssetManager) SyncPublishClosure(closure ColumnAssetPublishClosur
 	}, nil
 }
 
-func (m *ColumnAssetManager) MarkPublishSucceeded(synced ColumnAssetSyncedPublishClosure, reason string) error {
+func (m *ColumnAssetManager) MarkPublishSucceeded(synced ColumnAssetSyncedPublishClosure, _ string) error {
 	if m == nil {
 		return fmt.Errorf("colgranule: nil column asset manager")
 	}
@@ -320,9 +320,6 @@ func (m *ColumnAssetManager) MarkPublishSucceeded(synced ColumnAssetSyncedPublis
 	}
 	if synced.manager != m {
 		return fmt.Errorf("colgranule: synced publish closure belongs to another column asset manager")
-	}
-	if reason == "" {
-		reason = "publish succeeded"
 	}
 	for _, asset := range synced.closure.PreparedAssets {
 		if err := validateColumnPreparedAsset(asset); err != nil {
@@ -333,13 +330,11 @@ func (m *ColumnAssetManager) MarkPublishSucceeded(synced ColumnAssetSyncedPublis
 	defer m.mu.Unlock()
 	for _, asset := range synced.closure.PreparedAssets {
 		if failedReason, ok := m.publishFailed[asset.Ref]; ok {
-			if quarantineReason, quarantined := m.quarantine[asset.Ref]; quarantined && quarantineReason == failedReason && m.quarantineBy[asset.Ref] == failedReason {
+			if quarantineReason, quarantined := m.quarantine[asset.Ref]; quarantined && quarantineReason == failedReason {
 				delete(m.quarantine, asset.Ref)
-				delete(m.quarantineBy, asset.Ref)
 			}
 			delete(m.publishFailed, asset.Ref)
 		}
-		m.published[asset.Ref] = reason
 	}
 	return nil
 }
@@ -359,8 +354,12 @@ func (m *ColumnAssetManager) MarkPublishFailed(prepared []ColumnPreparedAsset, r
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, asset := range prepared {
+		if _, quarantined := m.quarantine[asset.Ref]; quarantined {
+			if _, publishOwned := m.publishFailed[asset.Ref]; !publishOwned {
+				continue
+			}
+		}
 		m.quarantine[asset.Ref] = reason
-		m.quarantineBy[asset.Ref] = reason
 		m.publishFailed[asset.Ref] = reason
 	}
 	return nil
@@ -379,7 +378,6 @@ func (m *ColumnAssetManager) PlanReclamation(reachability ColumnAssetReachabilit
 		zombieReason, zombie := m.zombies[reachable.Ref]
 		quarantineReason, quarantined := m.quarantine[reachable.Ref]
 		rewriteReason, rewrite := m.rewriteDebt[reachable.Ref]
-		publishedReason, published := m.published[reachable.Ref]
 		entry := ColumnAssetManagerReclamationEntry{
 			Ref:              reachable.Ref,
 			State:            reachable.State,
@@ -398,8 +396,6 @@ func (m *ColumnAssetManager) PlanReclamation(reachability ColumnAssetReachabilit
 			entry.ManagerReason = rewriteReason
 		case zombie:
 			entry.ManagerReason = zombieReason
-		case published:
-			entry.ManagerReason = publishedReason
 		}
 		if entry.Candidate {
 			plan.CandidateBytes += entry.Bytes
@@ -439,9 +435,6 @@ func validateColumnAssetPublishClosureMatches(caller ColumnAssetPublishClosure, 
 	if !columnPreparedAssetsEqual(caller.PreparedAssets, caller.preparedIdentity) {
 		return fmt.Errorf("colgranule: publish closure prepared assets changed after prepare")
 	}
-	if !columnPreparedAssetsEqual(verified.PreparedAssets, caller.preparedIdentity) {
-		return fmt.Errorf("colgranule: publish closure verified prepared assets changed after prepare")
-	}
 	if caller.RequiredAssets != verified.RequiredAssets {
 		return fmt.Errorf("colgranule: publish closure required assets=%d want %d", caller.RequiredAssets, verified.RequiredAssets)
 	}
@@ -451,6 +444,8 @@ func validateColumnAssetPublishClosureMatches(caller ColumnAssetPublishClosure, 
 	if caller.FlushRequired != verified.FlushRequired {
 		return fmt.Errorf("colgranule: publish closure flush required=%t want %t", caller.FlushRequired, verified.FlushRequired)
 	}
+	// SyncRequired is store-authoritative. SyncPublishClosure re-derives it so
+	// callers cannot clear required fsync work by mutating the closure.
 	return nil
 }
 

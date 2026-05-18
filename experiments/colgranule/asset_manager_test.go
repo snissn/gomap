@@ -2,6 +2,7 @@ package colgranule
 
 import (
 	"fmt"
+	"sync/atomic"
 	"testing"
 )
 
@@ -129,8 +130,8 @@ func TestColumnAssetManagerSyncPublishClosureDerivesSyncRequired(t *testing.T) {
 	if !synced.sealed || !synced.closure.SyncRequired {
 		t.Fatalf("synced closure=%+v want sealed sync-required token", synced)
 	}
-	if store.syncCalls != 1 {
-		t.Fatalf("sync calls=%d want 1", store.syncCalls)
+	if got := store.syncCalls.Load(); got != 1 {
+		t.Fatalf("sync calls=%d want 1", got)
 	}
 	closure.SyncRequired = false
 	synced, err = manager.SyncPublishClosure(closure)
@@ -140,8 +141,8 @@ func TestColumnAssetManagerSyncPublishClosureDerivesSyncRequired(t *testing.T) {
 	if !synced.closure.SyncRequired {
 		t.Fatalf("synced closure SyncRequired=false want derived true")
 	}
-	if store.syncCalls != 2 {
-		t.Fatalf("sync calls=%d want 2 after tampered sync flag", store.syncCalls)
+	if got := store.syncCalls.Load(); got != 2 {
+		t.Fatalf("sync calls=%d want 2 after tampered sync flag", got)
 	}
 
 	empty, err := manager.PreparePublishClosure(nil)
@@ -155,8 +156,8 @@ func TestColumnAssetManagerSyncPublishClosureDerivesSyncRequired(t *testing.T) {
 	if !synced.sealed || synced.closure.SyncRequired {
 		t.Fatalf("empty synced closure=%+v want sealed no-sync token", synced)
 	}
-	if store.syncCalls != 2 {
-		t.Fatalf("sync calls=%d want unchanged 2 after empty closure", store.syncCalls)
+	if got := store.syncCalls.Load(); got != 2 {
+		t.Fatalf("sync calls=%d want unchanged 2 after empty closure", got)
 	}
 }
 
@@ -188,8 +189,8 @@ func TestColumnAssetManagerSyncPublishClosureVerifiesNoopClosureAssets(t *testin
 	if _, err := manager.SyncPublishClosure(closure); err == nil {
 		t.Fatal("SyncPublishClosure succeeded for missing no-op closure asset")
 	}
-	if store.syncCalls != 0 {
-		t.Fatalf("sync calls=%d want 0 after failed no-op closure verification", store.syncCalls)
+	if got := store.syncCalls.Load(); got != 0 {
+		t.Fatalf("sync calls=%d want 0 after failed no-op closure verification", got)
 	}
 }
 
@@ -223,8 +224,8 @@ func TestColumnAssetManagerSyncPublishClosureRejectsPreparedAssetMismatch(t *tes
 	if _, err := manager.SyncPublishClosure(closure); err == nil {
 		t.Fatal("SyncPublishClosure accepted closure with missing prepared ref")
 	}
-	if store.syncCalls != 0 {
-		t.Fatalf("sync calls=%d want 0 after rejected closure mismatch", store.syncCalls)
+	if got := store.syncCalls.Load(); got != 0 {
+		t.Fatalf("sync calls=%d want 0 after rejected closure mismatch", got)
 	}
 
 	closure, err = manager.PreparePublishClosure(prepared)
@@ -235,8 +236,8 @@ func TestColumnAssetManagerSyncPublishClosureRejectsPreparedAssetMismatch(t *tes
 	if _, err := manager.SyncPublishClosure(closure); err == nil {
 		t.Fatal("SyncPublishClosure accepted closure with substituted prepared ref")
 	}
-	if store.syncCalls != 0 {
-		t.Fatalf("sync calls=%d want 0 after rejected closure substitution", store.syncCalls)
+	if got := store.syncCalls.Load(); got != 0 {
+		t.Fatalf("sync calls=%d want 0 after rejected closure substitution", got)
 	}
 }
 
@@ -285,9 +286,6 @@ func TestColumnAssetManagerPublishSucceededRequiresSyncedClosure(t *testing.T) {
 	if len(manager.quarantine) != 0 || len(manager.zombies) != 0 || len(manager.rewriteDebt) != 0 {
 		t.Fatalf("manager state quarantine=%d zombies=%d rewrite=%d want all cleared", len(manager.quarantine), len(manager.zombies), len(manager.rewriteDebt))
 	}
-	if got := manager.published[ref]; got != "root published" {
-		t.Fatalf("published reason=%q want root published", got)
-	}
 }
 
 func TestColumnAssetManagerPublishSucceededPreservesUnrelatedQuarantine(t *testing.T) {
@@ -325,8 +323,39 @@ func TestColumnAssetManagerPublishSucceededPreservesUnrelatedQuarantine(t *testi
 	if got := manager.quarantine[ref]; got != "checksum mismatch" {
 		t.Fatalf("quarantine reason=%q want checksum mismatch", got)
 	}
-	if got := manager.published[ref]; got != "root published" {
-		t.Fatalf("published reason=%q want root published", got)
+}
+
+func TestColumnAssetManagerPublishFailurePreservesExistingQuarantine(t *testing.T) {
+	store := NewMemoryColumnAssetStore()
+	manager, err := NewColumnAssetManager(store)
+	if err != nil {
+		t.Fatalf("NewColumnAssetManager: %v", err)
+	}
+	ref, err := manager.Put(ColumnAssetKindTCS1PartImage, make([]byte, tcs1HeaderBytes+16))
+	if err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	prepared := ColumnPreparedAsset{
+		Ref:          ref,
+		GenerationID: 7,
+		PublishID:    11,
+		Reason:       "publish staged",
+	}
+	if err := manager.Quarantine(ref, "checksum mismatch"); err != nil {
+		t.Fatalf("Quarantine: %v", err)
+	}
+	if err := manager.MarkPublishFailed([]ColumnPreparedAsset{prepared}, "root publish failed"); err != nil {
+		t.Fatalf("MarkPublishFailed: %v", err)
+	}
+	manager.mu.Lock()
+	got := manager.quarantine[ref]
+	_, publishFailed := manager.publishFailed[ref]
+	manager.mu.Unlock()
+	if got != "checksum mismatch" {
+		t.Fatalf("quarantine reason=%q want checksum mismatch", got)
+	}
+	if publishFailed {
+		t.Fatalf("publish-failed marker attached to an explicit quarantine")
 	}
 }
 
@@ -371,9 +400,6 @@ func TestColumnAssetManagerPublishSucceededPreservesQuarantineAfterPublishFailur
 	if _, ok := manager.publishFailed[ref]; ok {
 		t.Fatalf("publish-failed marker preserved after successful publish")
 	}
-	if got := manager.published[ref]; got != "root published" {
-		t.Fatalf("published reason=%q want root published", got)
-	}
 }
 
 func TestColumnAssetManagerPublishSucceededPreservesSameReasonQuarantineAfterPublishFailure(t *testing.T) {
@@ -417,9 +443,6 @@ func TestColumnAssetManagerPublishSucceededPreservesSameReasonQuarantineAfterPub
 	if _, ok := manager.publishFailed[ref]; ok {
 		t.Fatalf("publish-failed marker preserved after successful publish")
 	}
-	if got := manager.published[ref]; got != "root published" {
-		t.Fatalf("published reason=%q want root published", got)
-	}
 }
 
 func TestColumnAssetManagerPreparedPublishFailureQuarantinesAssets(t *testing.T) {
@@ -440,6 +463,16 @@ func TestColumnAssetManagerPreparedPublishFailureQuarantinesAssets(t *testing.T)
 	}
 	if err := manager.MarkPublishFailed([]ColumnPreparedAsset{prepared}, "root publish failed"); err != nil {
 		t.Fatalf("MarkPublishFailed: %v", err)
+	}
+	manager.mu.Lock()
+	gotReason, quarantined := manager.quarantine[ref]
+	gotFailedReason, publishFailed := manager.publishFailed[ref]
+	manager.mu.Unlock()
+	if !quarantined || gotReason != "root publish failed" {
+		t.Fatalf("quarantine reason=%q present=%v want root publish failed,true", gotReason, quarantined)
+	}
+	if !publishFailed || gotFailedReason != "root publish failed" {
+		t.Fatalf("publish-failed reason=%q present=%v want root publish failed,true", gotFailedReason, publishFailed)
 	}
 	plan, err := PlanColumnAssetReachability(ColumnAssetReachabilityInput{
 		QuarantinedAssets: []ColumnPreparedAsset{prepared},
@@ -510,11 +543,11 @@ type rangeProbeOnlyStore struct {
 
 type syncProbeAssetStore struct {
 	*MemoryColumnAssetStore
-	syncCalls int
+	syncCalls atomic.Int64
 }
 
 func (s *syncProbeAssetStore) Sync() error {
-	s.syncCalls++
+	s.syncCalls.Add(1)
 	return nil
 }
 
