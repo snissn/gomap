@@ -31,7 +31,7 @@ func (p ColumnMutationReplayProfile) Validate() error {
 		if p.BenchmarkOnly {
 			return nil
 		}
-		return fmt.Errorf("colgranule: column mutation replay profile %q is not supported for production; set BenchmarkOnly=true for benchmark-ceiling runs until safe-root publication is available", durability)
+		return fmt.Errorf("colgranule: column mutation replay profile %q is not supported for production; production replay must use %q, while %q/%q are benchmark-ceiling-only and require BenchmarkOnly=true with a benchmark no-sync workspace", durability, ColumnMutationReplayDurable, ColumnMutationReplayWALOnFast, ColumnMutationReplayFast)
 	default:
 		return fmt.Errorf("colgranule: unsupported column mutation replay profile %q", durability)
 	}
