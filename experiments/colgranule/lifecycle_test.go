@@ -27,6 +27,49 @@ func TestColumnAssetReasonSentinelsAreAppendSafe(t *testing.T) {
 	}
 }
 
+func TestColumnAssetReachabilityReasonsAreDetached(t *testing.T) {
+	activeRef := lifecycleAssetRef(t, 1, 0, tcs1HeaderBytes+16)
+	preparedRef := lifecycleAssetRef(t, 2, 0, tcs1HeaderBytes+24)
+	active := lifecycleManifest(t, "jsonbench", ColumnPartRoleBase, 2, activeRef)
+
+	plan, err := PlanColumnAssetReachability(ColumnAssetReachabilityInput{
+		ActiveManifest: &active,
+		PreparedAssets: []ColumnPreparedAsset{{Ref: preparedRef}},
+	})
+	if err != nil {
+		t.Fatalf("PlanColumnAssetReachability: %v", err)
+	}
+	lifecycleFindEntry(t, plan, activeRef).Reasons[0] = "corrupted active reason"
+	lifecycleFindEntry(t, plan, preparedRef).Reasons[0] = "corrupted prepared reason"
+
+	plan, err = PlanColumnAssetReachability(ColumnAssetReachabilityInput{
+		ActiveManifest: &active,
+		PreparedAssets: []ColumnPreparedAsset{{Ref: preparedRef}},
+	})
+	if err != nil {
+		t.Fatalf("PlanColumnAssetReachability after mutation: %v", err)
+	}
+	if got := lifecycleFindEntry(t, plan, activeRef).Reasons[0]; got != string(ColumnAssetStateActive) {
+		t.Fatalf("active reason after caller mutation=%q want %q", got, ColumnAssetStateActive)
+	}
+	if got := lifecycleFindEntry(t, plan, preparedRef).Reasons[0]; got != string(ColumnAssetStatePrepared) {
+		t.Fatalf("prepared reason after caller mutation=%q want %q", got, ColumnAssetStatePrepared)
+	}
+
+	entries, err := ColumnCollectionManifestAssetRefs(active)
+	if err != nil {
+		t.Fatalf("ColumnCollectionManifestAssetRefs: %v", err)
+	}
+	entries[0].Reasons[0] = "corrupted manifest reason"
+	entries, err = ColumnCollectionManifestAssetRefs(active)
+	if err != nil {
+		t.Fatalf("ColumnCollectionManifestAssetRefs after mutation: %v", err)
+	}
+	if got := entries[0].Reasons[0]; got != string(ColumnAssetStateActive) {
+		t.Fatalf("manifest reason after caller mutation=%q want %q", got, ColumnAssetStateActive)
+	}
+}
+
 func TestColumnAssetReachabilityDeletesClosedSupersededSegment(t *testing.T) {
 	activeRef := lifecycleAssetRef(t, 1, 0, tcs1HeaderBytes+16)
 	oldRef := lifecycleAssetRef(t, 2, 0, tcs1HeaderBytes+24)
