@@ -535,21 +535,31 @@ func (c *Collection) buildColumnManifestPublishSystemDeltaIterator(input ColumnM
 		if baseRecoveryLSN != 0 && plan.RecoveryAuthoritativeAppliedCommandLSN < baseRecoveryLSN {
 			return nil, fmt.Errorf("collections: column publish recovery-authoritative AppliedCommandLSN regression for %q: plan %d < base %d", input.BaseMeta.Name, plan.RecoveryAuthoritativeAppliedCommandLSN, baseRecoveryLSN)
 		}
+		if baseRecoveryLSN != 0 && plan.AppliedCommandLSN < baseRecoveryLSN {
+			return nil, fmt.Errorf("collections: column publish AppliedCommandLSN regression for %q: plan %d < base recovery %d", input.BaseMeta.Name, plan.AppliedCommandLSN, baseRecoveryLSN)
+		}
+		if baseActive := input.BaseMeta.Options.ColumnStore.ActiveManifest; baseActive != nil {
+			normalizedBaseActive := *baseActive
+			normalizeColumnManifestIdentityDefaults(&normalizedBaseActive)
+			if activeIdentity.Generation <= normalizedBaseActive.Generation {
+				return nil, fmt.Errorf("collections: column publish manifest generation regression for %q: plan %d <= base %d", input.BaseMeta.Name, activeIdentity.Generation, normalizedBaseActive.Generation)
+			}
+		}
 	}
 	// The root IDs passed here were just built by the ordered-root publish path.
 	// Do not read them through the pre-commit snapshot: compressed roots may
 	// depend on value-log segment visibility published by the enclosing commit.
+	if input.BaseCommitSeq == 0 || input.BaseSystemRoot == 0 {
+		return nil, fmt.Errorf("collections: column publish system delta requires BaseCommitSeq and BaseSystemRoot for %q", input.BaseMeta.Name)
+	}
 	current := c.db.AcquireSnapshot()
 	if current == nil {
 		return nil, backenddb.ErrClosed
 	}
 	defer func() { _ = current.Close() }()
-	if input.BaseCommitSeq != 0 || input.BaseSystemRoot != 0 {
-		state := current.State()
-		if (input.BaseCommitSeq != 0 && state.CommitSeq != input.BaseCommitSeq) ||
-			(input.BaseSystemRoot != 0 && state.SystemRootPageID != input.BaseSystemRoot) {
-			return nil, fmt.Errorf("collections: concurrent schema modification detected for %q", input.BaseMeta.Name)
-		}
+	state := current.State()
+	if state.CommitSeq != input.BaseCommitSeq || state.SystemRootPageID != input.BaseSystemRoot {
+		return nil, fmt.Errorf("collections: concurrent schema modification detected for %q", input.BaseMeta.Name)
 	}
 	catalog, err := loadCollectionCatalog(current, input.BaseMeta.Name)
 	if err != nil {
