@@ -30,7 +30,10 @@ const (
 )
 
 type ColumnQueryPredicate struct {
-	Column   string
+	Column string
+	// Operator is currently used to reject unknown predicate operators from
+	// driving B-tree baseline selection. Physical predicate pushdown is a later
+	// column-store milestone.
 	Operator ColumnQueryPredicateOperator
 }
 
@@ -146,7 +149,7 @@ func planColumnQueryForCatalog(catalog *collectionCatalog, identity ColumnStoreC
 	if idx, ok := selectColumnQueryBTreeIndex(catalog, req); ok {
 		diag.SelectedIndexName = idx.Name
 		diag.SelectedIndexField = idx.Field
-		diag.Reason = "selected matching collection secondary index"
+		diag.Reason = "selected matching collection secondary index for full-scan B-tree baseline"
 		return ColumnQueryPlan{Kind: ColumnQueryPlanBTreeIndexBaseline, Supported: true, IndexName: idx.Name, IndexField: idx.Field, Diagnostics: diag}
 	}
 	diag.Reason = "row-store fallback"
@@ -165,7 +168,7 @@ func forcedColumnQueryPlan(catalog *collectionCatalog, identity ColumnStoreCache
 		}
 		diag.SelectedIndexName = idx.Name
 		diag.SelectedIndexField = idx.Field
-		diag.Reason = "forced matching collection secondary index"
+		diag.Reason = "forced matching collection secondary index for full-scan B-tree baseline"
 		return ColumnQueryPlan{Kind: ColumnQueryPlanBTreeIndexBaseline, Supported: true, IndexName: idx.Name, IndexField: idx.Field, Diagnostics: diag}
 	case ColumnQueryPlanSerialColumnScan:
 		if ok, plan := serialColumnQueryPlan(catalog, identity, identityOK, req, diag); ok {
@@ -330,6 +333,8 @@ func catalogHasColumnAggregateMetadata(catalog *collectionCatalog, name string) 
 		return false
 	}
 	for _, aggregate := range catalog.meta.Options.ColumnStore.AggregateMetadata {
+		// Metadata can be supplied by pre-alpha JSON fixtures, so trim at the
+		// planner boundary until catalog loading owns canonicalization.
 		if strings.TrimSpace(aggregate.Name) == name {
 			return true
 		}
@@ -376,6 +381,9 @@ func selectColumnQueryBTreeIndex(catalog *collectionCatalog, req ColumnQueryPlan
 	if catalog == nil {
 		return IndexDefinition{}, false
 	}
+	// M11B keeps this allocation-free because benchmark catalogs have a small
+	// index set. A catalog-level name map is the right place to optimize large
+	// user-defined index lists later.
 	for _, candidate := range req.CandidateIndexColumns {
 		candidate = strings.TrimSpace(candidate)
 		if candidate == "" {
@@ -388,6 +396,9 @@ func selectColumnQueryBTreeIndex(catalog *collectionCatalog, req ColumnQueryPlan
 		}
 	}
 	for _, pred := range req.Predicates {
+		if !columnQueryPredicateCanDriveBTreeIndex(pred) {
+			continue
+		}
 		candidate := strings.TrimSpace(pred.Column)
 		if candidate == "" {
 			continue
@@ -399,6 +410,15 @@ func selectColumnQueryBTreeIndex(catalog *collectionCatalog, req ColumnQueryPlan
 		}
 	}
 	return IndexDefinition{}, false
+}
+
+func columnQueryPredicateCanDriveBTreeIndex(pred ColumnQueryPredicate) bool {
+	switch pred.Operator {
+	case "", ColumnQueryPredicateEqual, ColumnQueryPredicateGreaterOrEqual, ColumnQueryPredicateGreaterThan, ColumnQueryPredicateLessOrEqual, ColumnQueryPredicateLessThan:
+		return true
+	default:
+		return false
+	}
 }
 
 // ColumnSkipScanBound describes one side of a mark-pruning range. When
@@ -449,6 +469,13 @@ func PlanColumnSkipScan(predicates []ColumnSkipScanPredicate, marks []ColumnSkip
 // PlanColumnSkipScanInto reuses result.ScheduledMarks and result.SkippedMarks as
 // caller-owned scratch. Assign a zero ColumnSkipScanResult to release retained
 // slice capacity between unrelated planning workloads.
+//
+// Predicate positions are interpreted as dense zero-based sort-key positions
+// for the left-prefix contract. Only bounded predicates in the contiguous prefix
+// starting at position zero can prune marks. Sparse later-column predicates are
+// ignored until every lower position exists, positions >= len(predicates) are
+// ignored rather than allocating sparse scratch, and duplicate positions use the
+// last bounded predicate supplied.
 func PlanColumnSkipScanInto(result *ColumnSkipScanResult, predicates []ColumnSkipScanPredicate, marks []ColumnSkipScanMark) {
 	if result == nil {
 		return
