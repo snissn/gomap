@@ -18125,6 +18125,8 @@ func encodeCollectionMeta(meta CollectionMeta) ([]byte, error) {
 	return encodeNormalizedCollectionMeta(normalized)
 }
 
+// encodeNormalizedCollectionMeta requires meta to already be normalized by
+// normalizeCollectionMeta so disk metadata preserves canonical defaults/order.
 func encodeNormalizedCollectionMeta(meta CollectionMeta) ([]byte, error) {
 	return json.Marshal(collectionMetaDisk{
 		Version: collectionMetaVersion,
