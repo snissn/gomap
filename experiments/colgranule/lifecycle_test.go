@@ -32,6 +32,37 @@ func TestColumnAssetReasonSentinelsAreAppendSafe(t *testing.T) {
 	}
 }
 
+func TestColumnAssetReasonSentinelsAreDetachedThroughMergedEntriesM9B(t *testing.T) {
+	ref := lifecycleAssetRef(t, 1, 0, tcs1HeaderBytes+16)
+	records := make(map[ColumnAssetRef]columnAssetReachabilityRecord)
+	segments := make(map[uint32]*columnAssetSegmentState)
+	if err := addReachabilityEntry(records, segments, ColumnAssetReachabilityEntry{
+		Ref:     ref,
+		State:   ColumnAssetStatePrepared,
+		Bytes:   int(ref.Length),
+		Reasons: columnAssetReachabilityDefaultReasons(ColumnAssetStatePrepared),
+	}, true, false, false); err != nil {
+		t.Fatalf("add prepared reachability: %v", err)
+	}
+	if err := addReachabilityEntry(records, segments, ColumnAssetReachabilityEntry{
+		Ref:     ref,
+		State:   ColumnAssetStateActive,
+		Bytes:   int(ref.Length),
+		Reasons: columnAssetReachabilityDefaultReasons(ColumnAssetStateActive),
+	}, true, false, false); err != nil {
+		t.Fatalf("add active reachability: %v", err)
+	}
+	record := records[ref]
+	record.entry.Reasons[0] = "corrupted"
+	record.entry.Reasons = append(record.entry.Reasons, "caller append")
+	if got := columnAssetReasonPrepared; !reflect.DeepEqual(got, []string{string(ColumnAssetStatePrepared)}) {
+		t.Fatalf("prepared sentinel mutated to %v", got)
+	}
+	if got := columnAssetReasonActive; !reflect.DeepEqual(got, []string{string(ColumnAssetStateActive)}) {
+		t.Fatalf("active sentinel mutated to %v", got)
+	}
+}
+
 func TestColumnAssetReachabilitySummaryRecordIsPointerFree(t *testing.T) {
 	typ := reflect.TypeOf(columnAssetReachabilitySummaryRecord{})
 	for i := 0; i < typ.NumField(); i++ {
@@ -360,6 +391,30 @@ func TestColumnAssetReachabilityProtectsPendingAndPreparedAssets(t *testing.T) {
 	}
 	if got := lifecycleFindEntry(t, plan, quarantinedRef); got.State != ColumnAssetStateQuarantined {
 		t.Fatalf("quarantined entry state=%s want quarantined", got.State)
+	}
+}
+
+func TestColumnAssetReachabilityQuarantineDominatesLiveEntryStateM9B(t *testing.T) {
+	ref := lifecycleAssetRef(t, 5, 0, tcs1HeaderBytes+32)
+	active := lifecycleManifest(t, "jsonbench", ColumnPartRoleBase, 2, ref)
+
+	plan, err := PlanColumnAssetReachability(ColumnAssetReachabilityInput{
+		ActiveManifest: &active,
+		QuarantinedAssets: []ColumnPreparedAsset{{
+			Ref:    ref,
+			Bytes:  int(ref.Length),
+			Reason: "checksum mismatch",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("PlanColumnAssetReachability: %v", err)
+	}
+	entry := lifecycleFindEntry(t, plan, ref)
+	if entry.State != ColumnAssetStateQuarantined {
+		t.Fatalf("entry state=%s want quarantined", entry.State)
+	}
+	if plan.QuarantinedBytes != int(ref.Length) || plan.RetainedBytes != 0 {
+		t.Fatalf("quarantined/retained bytes=(%d,%d) want (%d,0)", plan.QuarantinedBytes, plan.RetainedBytes, ref.Length)
 	}
 }
 
