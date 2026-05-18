@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -564,11 +565,26 @@ func validateColumnStoreCatalogRoot(snap *backenddb.Snapshot, catalog *collectio
 	return nil
 }
 
+func validateColumnManifestPublishedRoot(snap *backenddb.Snapshot, collection string, rootID uint64, expected [columnManifestIdentityRecordSize]byte) error {
+	entry, err := snap.GetEntryAtRoot(rootID, []byte(columnManifestIdentityRecordKey))
+	if errors.Is(err, tree.ErrKeyNotFound) {
+		return fmt.Errorf("collections: published column manifest root %d for %q is missing identity record", rootID, collection)
+	}
+	if err != nil {
+		return fmt.Errorf("collections: published column manifest root %d for %q is unreadable: %w", rootID, collection, err)
+	}
+	if entry.Flags&node.FlagTombstone != 0 {
+		return fmt.Errorf("collections: published column manifest root %d for %q has deleted identity record", rootID, collection)
+	}
+	if !bytes.Equal(entry.Value, expected[:]) {
+		return fmt.Errorf("collections: published root identity record for %q does not match column publish plan", collection)
+	}
+	return nil
+}
+
 func encodeColumnManifestIdentityRecord(identity ColumnManifestIdentity) []byte {
 	record := encodeColumnManifestIdentityRecordArray(identity)
-	out := make([]byte, len(record))
-	copy(out, record[:])
-	return out
+	return record[:]
 }
 
 func encodeColumnManifestIdentityRecordArray(identity ColumnManifestIdentity) [columnManifestIdentityRecordSize]byte {
@@ -797,8 +813,13 @@ func writeHashBool(d *xxhash.Digest, value bool) {
 }
 
 func columnManifestIdentityIterator(identity ColumnManifestIdentity) *systemTargetIterator {
+	return columnManifestIdentityRecordIterator(encodeColumnManifestIdentityRecordArray(identity))
+}
+
+func columnManifestIdentityRecordIterator(record [columnManifestIdentityRecordSize]byte) *systemTargetIterator {
+	recordCopy := record
 	return &systemTargetIterator{entries: []systemTargetEntry{{
 		key:   []byte(columnManifestIdentityRecordKey),
-		value: encodeColumnManifestIdentityRecord(identity),
+		value: recordCopy[:],
 	}}}
 }
