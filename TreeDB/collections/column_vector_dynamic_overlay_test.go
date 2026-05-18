@@ -336,8 +336,8 @@ func TestColumnVectorDynamicOverlayClonePreallocatesBatchAppend(t *testing.T) {
 		{Kind: ColumnVectorDynamicMutationUpdate, DocumentID: []byte("update-001"), Vector: vector},
 		{Kind: ColumnVectorDynamicMutationDelete, DocumentID: []byte("base-001")},
 	}
-	appendRows, appendIDBytes, appendTombstones := columnVectorDynamicMutationAppendCapacity(mutations)
-	next := overlay.clone(overlay.generation+1, appendRows, appendIDBytes, appendTombstones)
+	appendRows, appendIDBytes, appendTombstones, appendTombstoneIDBytes := columnVectorDynamicMutationAppendCapacity(mutations)
+	next := overlay.clone(overlay.generation+1, appendRows, appendIDBytes, appendTombstones, appendTombstoneIDBytes)
 	if spare := cap(next.vectors) - len(next.vectors); spare < appendRows*next.dims {
 		t.Fatalf("vector spare capacity=%d want at least %d", spare, appendRows*next.dims)
 	}
@@ -356,6 +356,9 @@ func TestColumnVectorDynamicOverlayClonePreallocatesBatchAppend(t *testing.T) {
 	if spare := cap(next.tombstoneDocIDs) - len(next.tombstoneDocIDs); spare < appendTombstones {
 		t.Fatalf("tombstone spare capacity=%d want at least %d", spare, appendTombstones)
 	}
+	if spare := cap(next.tombstoneArena) - len(next.tombstoneArena); spare < appendTombstoneIDBytes {
+		t.Fatalf("tombstone arena spare capacity=%d want at least %d", spare, appendTombstoneIDBytes)
+	}
 
 	vectorBacking := &next.vectors[0]
 	invNormBacking := &next.invNorms[0]
@@ -363,6 +366,7 @@ func TestColumnVectorDynamicOverlayClonePreallocatesBatchAppend(t *testing.T) {
 	idOffsetsBacking := &next.idOffsets[0]
 	liveBacking := &next.live[0]
 	tombstoneBacking := &next.tombstoneDocIDs[0]
+	tombstoneArenaCap := cap(next.tombstoneArena)
 	if err := next.appendLiveDocument([]byte("insert-001"), vector); err != nil {
 		t.Fatalf("append insert: %v", err)
 	}
@@ -388,6 +392,9 @@ func TestColumnVectorDynamicOverlayClonePreallocatesBatchAppend(t *testing.T) {
 	}
 	if &next.tombstoneDocIDs[0] != tombstoneBacking {
 		t.Fatal("tombstone append reallocated despite clone capacity")
+	}
+	if cap(next.tombstoneArena) != tombstoneArenaCap {
+		t.Fatal("tombstone arena append reallocated despite clone capacity")
 	}
 }
 
@@ -456,7 +463,7 @@ func BenchmarkColumnVectorDynamicOverlayPublishCloneAppend(b *testing.B) {
 				{Kind: ColumnVectorDynamicMutationUpdate, DocumentID: []byte("publish-update-000000001"), Vector: updateVector},
 				{Kind: ColumnVectorDynamicMutationDelete, DocumentID: []byte("publish-delete-000000001")},
 			}
-			appendRows, appendIDBytes, appendTombstones := columnVectorDynamicMutationAppendCapacity(mutations)
+			appendRows, appendIDBytes, appendTombstones, appendTombstoneIDBytes := columnVectorDynamicMutationAppendCapacity(mutations)
 			b.ReportAllocs()
 			b.ReportMetric(float64(tc.rows), "overlay_rows")
 			b.ReportMetric(float64(tc.tombstones), "overlay_tombstones")
@@ -464,7 +471,7 @@ func BenchmarkColumnVectorDynamicOverlayPublishCloneAppend(b *testing.B) {
 			b.ReportMetric(float64(appendTombstones), "append_tombstones/op")
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				next := overlay.clone(uint64(i+1), appendRows, appendIDBytes, appendTombstones)
+				next := overlay.clone(uint64(i+1), appendRows, appendIDBytes, appendTombstones, appendTombstoneIDBytes)
 				if err := next.appendLiveDocument(mutations[0].DocumentID, mutations[0].Vector); err != nil {
 					b.Fatalf("append insert: %v", err)
 				}

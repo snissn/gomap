@@ -176,8 +176,8 @@ func (g *ColumnVectorDynamicGraph) ApplyBatch(mutations []ColumnVectorDynamicMut
 	}
 
 	start := time.Now()
-	appendRows, appendIDBytes, appendTombstones := columnVectorDynamicMutationAppendCapacity(mutations)
-	nextOverlay := current.overlay.clone(current.overlayGeneration+1, appendRows, appendIDBytes, appendTombstones)
+	appendRows, appendIDBytes, appendTombstones, appendTombstoneIDBytes := columnVectorDynamicMutationAppendCapacity(mutations)
+	nextOverlay := current.overlay.clone(current.overlayGeneration+1, appendRows, appendIDBytes, appendTombstones, appendTombstoneIDBytes)
 	inserted, updated, deleted := 0, 0, 0
 	for mutationIndex, mutation := range mutations {
 		if len(mutation.DocumentID) == 0 {
@@ -388,6 +388,7 @@ type ColumnVectorDynamicOverlaySnapshot struct {
 	live            []bool
 	liveRows        int
 	liveDocIndex    map[string]int
+	tombstoneArena  []byte
 	tombstoneDocIDs [][]byte
 	tombstoneDocSet map[string]struct{}
 }
@@ -401,7 +402,7 @@ func newColumnVectorDynamicOverlaySnapshot(dims int) *ColumnVectorDynamicOverlay
 	}
 }
 
-func (o *ColumnVectorDynamicOverlaySnapshot) clone(generation uint64, appendRows int, appendIDBytes int, appendTombstones int) *ColumnVectorDynamicOverlaySnapshot {
+func (o *ColumnVectorDynamicOverlaySnapshot) clone(generation uint64, appendRows int, appendIDBytes int, appendTombstones int, appendTombstoneIDBytes int) *ColumnVectorDynamicOverlaySnapshot {
 	appendValues := columnVectorDynamicOverlayVectorValueCapacity(appendRows, o.dims)
 	liveDocCapacity := columnVectorDynamicSliceCapacity(len(o.liveDocIndex), appendRows)
 	tombstoneSetCapacity := columnVectorDynamicSliceCapacity(max(len(o.tombstoneDocSet), len(o.tombstoneDocIDs)), appendTombstones)
@@ -414,6 +415,7 @@ func (o *ColumnVectorDynamicOverlaySnapshot) clone(generation uint64, appendRows
 		idOffsets:       cloneUint32SliceWithExtraCapacity(o.idOffsets, appendRows),
 		live:            cloneBoolSliceWithExtraCapacity(o.live, appendRows),
 		liveRows:        o.liveRows,
+		tombstoneArena:  make([]byte, 0, appendTombstoneIDBytes),
 		tombstoneDocIDs: cloneByteSlicesWithExtraCapacity(o.tombstoneDocIDs, appendTombstones),
 		liveDocIndex:    make(map[string]int, liveDocCapacity),
 		tombstoneDocSet: make(map[string]struct{}, tombstoneSetCapacity),
@@ -433,7 +435,7 @@ func (o *ColumnVectorDynamicOverlaySnapshot) clone(generation uint64, appendRows
 	return next
 }
 
-func columnVectorDynamicMutationAppendCapacity(mutations []ColumnVectorDynamicMutation) (rows int, idBytes int, tombstones int) {
+func columnVectorDynamicMutationAppendCapacity(mutations []ColumnVectorDynamicMutation) (rows int, idBytes int, tombstones int, tombstoneIDBytes int) {
 	for _, mutation := range mutations {
 		switch mutation.Kind {
 		case ColumnVectorDynamicMutationInsert, ColumnVectorDynamicMutationUpdate:
@@ -443,9 +445,10 @@ func columnVectorDynamicMutationAppendCapacity(mutations []ColumnVectorDynamicMu
 		switch mutation.Kind {
 		case ColumnVectorDynamicMutationUpdate, ColumnVectorDynamicMutationDelete:
 			tombstones++
+			tombstoneIDBytes += len(mutation.DocumentID)
 		}
 	}
-	return rows, idBytes, tombstones
+	return rows, idBytes, tombstones, tombstoneIDBytes
 }
 
 func columnVectorDynamicOverlayVectorValueCapacity(rows int, dims int) int {
@@ -600,7 +603,9 @@ func (o *ColumnVectorDynamicOverlaySnapshot) addTombstone(documentID []byte) {
 	if _, exists := o.tombstoneDocSet[key]; exists {
 		return
 	}
-	o.tombstoneDocIDs = append(o.tombstoneDocIDs, bytes.Clone(documentID))
+	start := len(o.tombstoneArena)
+	o.tombstoneArena = append(o.tombstoneArena, documentID...)
+	o.tombstoneDocIDs = append(o.tombstoneDocIDs, o.tombstoneArena[start:len(o.tombstoneArena):len(o.tombstoneArena)])
 	o.tombstoneDocSet[key] = struct{}{}
 }
 
