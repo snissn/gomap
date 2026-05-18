@@ -514,8 +514,8 @@ func TestColumnPublishPlanRejectsPreparedAssetByteOverflowM10A(t *testing.T) {
 	}
 
 	plan, err := BuildColumnPublishPlan(input)
-	if err == nil || !strings.Contains(err.Error(), "prepared asset[1] bytes overflow") {
-		t.Fatalf("BuildColumnPublishPlan err=%v want indexed prepared asset byte overflow", err)
+	if err == nil || !strings.Contains(err.Error(), "asset[1] bytes overflow") {
+		t.Fatalf("BuildColumnPublishPlan err=%v want indexed asset byte overflow", err)
 	}
 	if plan.Enabled {
 		t.Fatalf("overflowing prepared bytes returned enabled plan: %+v", plan)
@@ -558,6 +558,38 @@ func TestColumnPublishPlanRejectsClosurePreparedAssetMismatchM10A(t *testing.T) 
 	}
 	if plan.Enabled {
 		t.Fatalf("mismatched closure prepared asset returned enabled plan: %+v", plan)
+	}
+}
+
+func TestColumnPublishPlanReportsClosureAssetValidationBeforeByteSumM10A(t *testing.T) {
+	asset := testColumnPublishPreparedAssetM10A()
+	identity := ColumnManifestIdentity{Generation: 7, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0xfeedbeef}
+	input := testColumnPublishPlanInputM10A(identity, asset)
+	invalid := asset
+	invalid.Ref.Kind = ColumnAssetKind("future-kind")
+	invalid.Ref.Length = math.MaxInt64
+	invalid.Bytes = math.MaxInt64
+	overflow := asset
+	overflow.Ref.FileID = 8
+	overflow.Ref.Offset = math.MaxInt64
+	overflow.Ref.Length = 1
+	overflow.Bytes = 1
+	input.Hooks.ValidateClosure = func(ColumnPublishClosureValidationInput) (ColumnPublishDurabilityClosure, error) {
+		return ColumnPublishDurabilityClosure{
+			PreparedAssets: []ColumnPreparedAsset{invalid, overflow},
+			RequiredAssets: 2,
+			RequiredBytes:  math.MaxInt64,
+			FlushRequired:  true,
+			SyncRequired:   true,
+		}, nil
+	}
+
+	plan, err := BuildColumnPublishPlan(input)
+	if err == nil || !strings.Contains(err.Error(), "closure asset[0]") || !strings.Contains(err.Error(), "unsupported column asset ref kind") {
+		t.Fatalf("BuildColumnPublishPlan err=%v want closure asset validation before byte sum", err)
+	}
+	if plan.Enabled {
+		t.Fatalf("invalid closure asset returned enabled plan: %+v", plan)
 	}
 }
 
