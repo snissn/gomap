@@ -523,6 +523,59 @@ Interpretation:
   block target near `0.085-0.10 ms` for full dimensions before graph traversal
   overhead, which is the right bar for deciding whether to build a real kernel.
 
+Granule-native int8 storage tournament:
+
+```sh
+OUT=/tmp/gomap_deep1b_int8_tournament_$(date +%Y%m%d_%H%M%S)
+COLUMN_VECTOR_DEEP1B_INT8_TOURNAMENT=1 \
+COLUMN_VECTOR_DEEP1B_DOWNLOAD=1 \
+COLUMN_VECTOR_DEEP1B_DIR=/private/tmp/gomap-deep1b-cache \
+COLUMN_VECTOR_DEEP1B_INT8_TOURNAMENT_OUT="$OUT" \
+GOWORK=off go test ./experiments/colgranule \
+  -run '^TestColumnVectorGraphDeep1BInt8StorageTournament$' \
+  -count 1 \
+  -v
+```
+
+The opt-in tournament exports the real nearest-neighborhood int8 residual
+matrix as `matrix_i8_dim_major.bin`, `matrix_u8_dim_major.bin`,
+`matrix_u8_row_major.bin`, centroid/scales/query metadata, row ids, and exact
+scores. It then runs native Go storage candidates over three row orders
+(`nearest_ranked`, `row_id`, and `local_coord_sort`) and writes
+`results.json`, `report.md`, and ClickHouse TSV/SQL fixtures under
+`$OUT/clickhouse`. The ClickHouse fixture set includes wide `UInt8` rows,
+per-dimension blob rows, and whole-granule blob rows for later part-size tests
+with codecs such as `NONE`, `LZ4`, `ZSTD`, `T64+ZSTD`, `Delta+ZSTD`, and
+`DoubleDelta+ZSTD`. Blob fixtures are hex-encoded in TSV for transport, and
+the generated load script decodes them with `unhex()` before ClickHouse stores
+the raw byte strings.
+
+Initial native storage-only run, 8192 rows x 96 dimensions:
+
+| Row order | Best native candidate | Stored B/vector | Ratio vs 96 B int8 | Best varint-family row | Stored B/vector |
+| --- | --- | ---: | ---: | --- | ---: |
+| nearest_ranked | `i8_dim_major/zstd_better` | 86.64 | 1.108x | `varint_i8_values` / `uvarint_zigzag_i8_values` + `zstd_better` | 90.24 |
+| row_id | `i8_dim_major/zstd_better` | 86.64 | 1.108x | `varint_i8_values` / `uvarint_zigzag_i8_values` + `zstd_better` | 90.24 |
+| local_coord_sort | `i8_dim_major/zstd_better` | 85.88 | 1.118x | `varint_i8_values` / `uvarint_zigzag_i8_values` + `zstd_better` | 89.35 |
+
+Interpretation:
+
+- The real int8 residual matrix has high byte entropy (`~7.15 bits/value`) and
+  broad per-dimension cardinality (`~207` distinct values on average), so
+  byte-level numeric hacks do not yet beat plain dim-major bytes plus
+  zstd-better.
+- Local coordinate row ordering is measurable: it improves the best zstd-better
+  row from `86.64` to `85.88 B/vector` and also improves the varint-family
+  rows, which means row-order-sensitive codecs remain worth testing.
+- The added varint probes are useful negative evidence. Plain signed varint,
+  zigzag uvarint, delta, double-delta, modulo delta, XOR-prev, zero-run/literal,
+  RLE, and frame-of-reference varints are all present in the tournament, but
+  their best compressed rows currently land around `89-90 B/vector`, behind
+  the `85.9-86.6 B/vector` zstd-better byte-stream result.
+- ClickHouse binaries were not available on the runner for this first pass, so
+  the harness generated ClickHouse-ready fixtures but did not produce
+  ClickHouse part-size measurements yet.
+
 Granule-native int8 micro-kernel smoke:
 
 ```sh
