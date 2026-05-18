@@ -423,7 +423,7 @@ func (c *Collection) vectorIndexRuntimeIsStale(index *VectorIndex) bool {
 	c.vectorIndexesMu.RUnlock()
 	if registered == index {
 		stale, err := c.registeredVectorIndexNativeRuntimeIsStale(index)
-		return err == nil && stale
+		return err != nil || stale
 	}
 	if registered != nil {
 		return true
@@ -432,7 +432,7 @@ func (c *Collection) vectorIndexRuntimeIsStale(index *VectorIndex) bool {
 		return true
 	}
 	declared, err := c.refreshVectorIndexDeclaration(index.name)
-	return err == nil && declared
+	return err != nil || declared
 }
 
 func (c *Collection) registeredVectorIndexNativeRuntimeIsStale(index *VectorIndex) (bool, error) {
@@ -445,8 +445,11 @@ func (c *Collection) registeredVectorIndexNativeRuntimeIsStale(index *VectorInde
 	}
 	defer func() { _ = snap.Close() }()
 	catalog, err := loadCollectionCatalog(snap, c.meta.Name)
-	if err != nil || catalog == nil {
+	if err != nil {
 		return false, err
+	}
+	if catalog == nil {
+		return false, errCollectionNotFound
 	}
 	c.meta = catalog.meta
 	c.rememberCatalog(snap, catalog)
@@ -719,10 +722,20 @@ func (c *Collection) notifyVectorIndexesUpdateBatch(items []UpdateBatchItem, res
 }
 
 func (c *Collection) notifyAndPersistVectorIndexesUpsertForWAL(documentIDs [][]byte) error {
+	// WAL-off buffered writes publish document roots before dirty vector roots
+	// during Flush/Close, so do not publish vector maintenance early here.
+	if c == nil || c.db == nil || !c.db.CommandWALEnabled() {
+		return c.notifyVectorIndexesUpsert(documentIDs)
+	}
 	return c.applyVectorIndexUpsertCommandWAL(documentIDs, nil)
 }
 
 func (c *Collection) notifyAndPersistVectorIndexesDeleteForWAL(documentIDs [][]byte) error {
+	// WAL-off buffered writes publish document roots before dirty vector roots
+	// during Flush/Close, so do not publish vector maintenance early here.
+	if c == nil || c.db == nil || !c.db.CommandWALEnabled() {
+		return c.notifyVectorIndexesDelete(documentIDs)
+	}
 	return c.applyVectorIndexDeleteCommandWAL(documentIDs, nil)
 }
 
@@ -743,6 +756,11 @@ func (c *Collection) applyVectorIndexDeleteCommandWAL(documentIDs [][]byte, inte
 func (c *Collection) notifyAndPersistVectorIndexesUpdateBatchForWAL(items []UpdateBatchItem, results []UpdateBatchResult) error {
 	if err := c.notifyVectorIndexesUpdateBatch(items, results); err != nil {
 		return err
+	}
+	// See notifyAndPersistVectorIndexesUpsertForWAL: WAL-off persistence is
+	// intentionally deferred until Flush/Close publishes document roots first.
+	if c == nil || c.db == nil || !c.db.CommandWALEnabled() {
+		return nil
 	}
 	var updated [][]byte
 	for i := range items {
@@ -775,6 +793,11 @@ func (c *Collection) notifyVectorIndexesBSONSetUpdateBatch(items []BSONSetUpdate
 func (c *Collection) notifyAndPersistVectorIndexesBSONSetUpdateBatchForWAL(items []BSONSetUpdateBatchItem, results []UpdateBatchResult) error {
 	if err := c.notifyVectorIndexesBSONSetUpdateBatch(items, results); err != nil {
 		return err
+	}
+	// See notifyAndPersistVectorIndexesUpsertForWAL: WAL-off persistence is
+	// intentionally deferred until Flush/Close publishes document roots first.
+	if c == nil || c.db == nil || !c.db.CommandWALEnabled() {
+		return nil
 	}
 	var updated [][]byte
 	for i := range items {
@@ -825,8 +848,11 @@ func (c *Collection) refreshVectorIndexDeclaration(name string) (bool, error) {
 	}
 	defer func() { _ = snap.Close() }()
 	catalog, err := loadCollectionCatalog(snap, c.meta.Name)
-	if err != nil || catalog == nil {
+	if err != nil {
 		return false, err
+	}
+	if catalog == nil {
+		return false, errCollectionNotFound
 	}
 	c.meta = catalog.meta
 	c.rememberCatalog(snap, catalog)
@@ -1201,6 +1227,49 @@ func (idx *VectorIndex) requireFullNativeSnapshotLocked() {
 	idx.dirtyMeta = false
 	clear(idx.dirtyNodes)
 	clear(idx.dirtyDocs)
+}
+
+func (idx *VectorIndex) noteCommandWALNativeRootCleared() {
+	if idx == nil {
+		return
+	}
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+	if !idx.nativePersistent {
+		return
+	}
+	idx.persistedEpoch = 0
+	idx.fullSnapshotBaseEpoch = 0
+	idx.persistedBytesDisk = 0
+	idx.persistedSnapshotDirty = idx.mutationSeq != 0
+	idx.dirtyMeta = false
+	clear(idx.dirtyNodes)
+	clear(idx.dirtyDocs)
+}
+
+func (c *Collection) noteCommandWALVectorRootsCleared(meta CollectionMeta, rootNames []string) {
+	if c == nil || len(rootNames) == 0 {
+		return
+	}
+	cleared := make(map[string]struct{}, len(rootNames))
+	for _, rootName := range rootNames {
+		cleared[rootName] = struct{}{}
+	}
+	var indexes []*VectorIndex
+	c.vectorIndexesMu.RLock()
+	for _, def := range meta.VectorIndexes {
+		rootName := collectionVectorIndexRootName(meta.Name, def.Name)
+		if _, ok := cleared[rootName]; !ok {
+			continue
+		}
+		if index := c.vectorIndexes[def.Name]; index != nil {
+			indexes = append(indexes, index)
+		}
+	}
+	c.vectorIndexesMu.RUnlock()
+	for _, index := range indexes {
+		index.noteCommandWALNativeRootCleared()
+	}
 }
 
 func (idx *VectorIndex) setNativePersistent(enabled bool) {

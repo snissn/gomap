@@ -1421,6 +1421,101 @@ func TestCollectionCommandWALVectorIndexMaintenanceReplayRecoversUnappliedFrame(
 	requireVectorResultIDs(t, results, "a", "c", "b")
 }
 
+func TestCollectionCommandWALPrimaryReplayClearsNativeVectorRootBeforeMaintenance(t *testing.T) {
+	dir := t.TempDir()
+	def := VectorIndexDefinition{
+		Name:       "embedding",
+		Field:      "embedding",
+		Metric:     VectorMetricCosine,
+		Dimensions: 2,
+		M:          4,
+	}
+	setup, err := backenddb.Open(backenddb.Options{
+		Dir:                    dir,
+		Durability:             backenddb.DurabilityWALOffRelaxed,
+		DisableBackgroundPrune: true,
+	})
+	if err != nil {
+		t.Fatalf("Open setup DB: %v", err)
+	}
+	setupMgr := NewCollectionManager(setup)
+	if _, err := setupMgr.CreateCollection(&CollectionMeta{
+		Name:          "docs",
+		Options:       CollectionOptions{DocumentFormat: DocumentFormatJSON},
+		VectorIndexes: []VectorIndexDefinition{def},
+	}); err != nil {
+		_ = setup.Close()
+		t.Fatalf("CreateCollection setup: %v", err)
+	}
+	setupCol, err := setupMgr.OpenCollection("docs")
+	if err != nil {
+		_ = setup.Close()
+		t.Fatalf("OpenCollection setup: %v", err)
+	}
+	if _, err := setupCol.InsertBatch(
+		[][]byte{[]byte("a"), []byte("b")},
+		[][]byte{
+			[]byte(`{"embedding":[1,0]}`),
+			[]byte(`{"embedding":[0,1]}`),
+		},
+	); err != nil {
+		_ = setup.Close()
+		t.Fatalf("InsertBatch setup: %v", err)
+	}
+	index, err := setupCol.BuildVectorIndex(vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		_ = setup.Close()
+		t.Fatalf("BuildVectorIndex setup: %v", err)
+	}
+	seedStatus, err := index.SaveSnapshot()
+	if err != nil {
+		_ = setup.Close()
+		t.Fatalf("SaveSnapshot setup: %v", err)
+	}
+	if !seedStatus.Loaded || seedStatus.RootID == 0 {
+		_ = setup.Close()
+		t.Fatalf("seed vector snapshot status=%+v", seedStatus)
+	}
+	if err := setup.Checkpoint(); err != nil {
+		_ = setup.Close()
+		t.Fatalf("Checkpoint setup DB: %v", err)
+	}
+	if err := setup.Close(); err != nil {
+		t.Fatalf("Close setup DB: %v", err)
+	}
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+		t.Fatalf("SaveFormatConfig: %v", err)
+	}
+
+	insertPayload, err := commitlog.EncodeCollectionInsertBatchByIDPayload("docs", []commitlog.CollectionDocument{
+		{ID: []byte("c"), Document: []byte(`{"embedding":[0.9,0.1]}`)},
+	})
+	if err != nil {
+		t.Fatalf("EncodeCollectionInsertBatchByIDPayload: %v", err)
+	}
+	writeCollectionCommandWALFrames(t, dir,
+		collectionCommandWALTestFrame{lsn: 1, kind: commitlog.CommandKindCollectionInsertBatchByID, format: commitlog.PayloadFormatCollectionInsertBatchByIDV1, payload: insertPayload},
+	)
+
+	reopened := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopened.Close() }()
+	if got := reopened.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("AppliedCommandLSN=%d, want 1", got)
+	}
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection reopened: %v", err)
+	}
+	assertCollectionDocument(t, reopenedCol, "c", `{"embedding":[0.9,0.1]}`)
+	loaded, status, err := reopenedCol.LoadNativeVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		t.Fatalf("LoadNativeVectorIndexSnapshot: %v", err)
+	}
+	if loaded != nil || status.ExactFallbackReason != vectorIndexFallbackMissingGraphRoot {
+		t.Fatalf("primary replay loaded stale vector root loaded=%v status=%+v seed=%+v", loaded != nil, status, seedStatus)
+	}
+}
+
 type collectionCommandWALSetupInsert struct {
 	ids  [][]byte
 	docs [][]byte
