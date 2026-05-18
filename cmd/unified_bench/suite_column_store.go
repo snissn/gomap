@@ -31,10 +31,13 @@ const (
 	columnStoreSuiteBenchTestName     = "column_store"
 	columnStoreSuiteBenchDBName       = "treedb_column_store"
 	columnStoreSuiteBenchDisplayName  = "TreeDB Column Store"
+	columnStoreSuitePathCanonicalHelp = "row_store_baseline, b_tree_index_baseline, serial_column_scan, aggregate_metadata, parallel_column_scan"
+	columnStoreSuitePathAliasesHelp   = "aliases: row, row-store-baseline, index, b_tree, b-tree-index-baseline, serial, serial-column-scan, metadata, aggregate-metadata, parallel, parallel-column-scan"
+	columnStoreSuitePathUsage         = "Forced column-store execution label for -suite column_store (canonical: " + columnStoreSuitePathCanonicalHelp + "; " + columnStoreSuitePathAliasesHelp + "; physical column labels fail closed until implemented)"
 )
 
 var (
-	columnStoreSuitePathArg    = flag.String("column-store-path", columnStorePathRowStoreBaseline, "Forced column-store execution label for -suite column_store (row_store_baseline, b_tree_index_baseline, serial_column_scan, aggregate_metadata, parallel_column_scan; aliases: row, row-store-baseline, index, b_tree, b-tree-index-baseline, serial, serial-column-scan, metadata, aggregate-metadata, parallel, parallel-column-scan; physical column labels fail closed until implemented)")
+	columnStoreSuitePathArg    = flag.String("column-store-path", columnStorePathRowStoreBaseline, columnStoreSuitePathUsage)
 	columnStoreSuiteFixtureArg = flag.String("column-store-fixture", "synthetic", "Fixture for -suite column_store (synthetic; JSONBENCH_DATA mode is reserved for the large local gate)")
 
 	columnStoreSuiteSupportedForcedPaths = []string{
@@ -951,7 +954,7 @@ func runColumnStoreSuiteQueries(collection *collections.Collection, rows int, ra
 			MetadataHits:         0,
 			SkippedGranules:      plan.Diagnostics.SkippedGranules,
 			ScheduledGranules:    plan.Diagnostics.ScheduledGranules,
-			WorkerCount:          plan.Diagnostics.WorkerCount,
+			WorkerCount:          columnStoreSuiteMetricWorkerCount(plan),
 			PlannerDurationMS:    durationMS(plannerElapsed),
 			ScanDurationMS:       durationMS(scanElapsed),
 			ReduceDurationMS:     durationMS(reduceElapsed),
@@ -965,6 +968,18 @@ func runColumnStoreSuiteQueries(collection *collections.Collection, rows int, ra
 		queries = append(queries, metric)
 	}
 	return queries, parity, firstErr
+}
+
+func columnStoreSuiteMetricWorkerCount(plan collections.ColumnQueryPlan) int {
+	if plan.Diagnostics.WorkerCount > 0 {
+		return plan.Diagnostics.WorkerCount
+	}
+	switch plan.Kind {
+	case collections.ColumnQueryPlanRowStoreBaseline, collections.ColumnQueryPlanBTreeIndexBaseline:
+		return 1
+	default:
+		return 0
+	}
 }
 
 func columnStoreSuitePlanRequest(name string, rows int, forceKind collections.ColumnQueryPlanKind) collections.ColumnQueryPlanRequest {

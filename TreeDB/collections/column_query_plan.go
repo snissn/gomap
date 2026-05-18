@@ -302,6 +302,12 @@ func parallelColumnQueryShapeUnsupportedReason(req ColumnQueryPlanRequest) strin
 }
 
 func aggregateColumnQueryUnsupportedReason(catalog *collectionCatalog, identity ColumnStoreCacheIdentity, identityOK bool, req ColumnQueryPlanRequest) string {
+	if missing, ok := missingColumnStoreRequestColumn(catalog, req); ok && missing != "" {
+		return fmt.Sprintf("requested column %q is not declared in column store", missing)
+	}
+	if !columnQueryManifestRecoveryAuthoritative(identity, identityOK) || req.Capabilities.PhysicalAssetCount <= 0 {
+		return physicalColumnQueryUnsupportedReason(identity, identityOK, req, ColumnQueryPlanAggregateMetadata)
+	}
 	name := strings.TrimSpace(req.AggregateMetadataName)
 	if name == "" {
 		return "query did not request aggregate metadata"
@@ -309,7 +315,7 @@ func aggregateColumnQueryUnsupportedReason(catalog *collectionCatalog, identity 
 	if !catalogHasColumnAggregateMetadata(catalog, name) {
 		return fmt.Sprintf("unknown aggregate metadata %q", name)
 	}
-	return physicalColumnQueryUnsupportedReasonForCatalog(catalog, identity, identityOK, req, ColumnQueryPlanAggregateMetadata)
+	return physicalColumnQueryUnsupportedReason(identity, identityOK, req, ColumnQueryPlanAggregateMetadata)
 }
 
 func catalogHasColumnAggregateMetadata(catalog *collectionCatalog, name string) bool {
@@ -664,9 +670,6 @@ func ensureColumnSkipScanBoolScratch(scratch []bool, length int) []bool {
 
 func columnSkipScanLeftPrefixPredicates(byPosition []ColumnSkipScanPredicate, hasPosition []bool, predicates []ColumnSkipScanPredicate) int {
 	clear(hasPosition)
-	for i := range byPosition {
-		byPosition[i] = ColumnSkipScanPredicate{}
-	}
 	for _, pred := range predicates {
 		if pred.Position < 0 || pred.Position >= len(byPosition) || !columnSkipScanPredicateHasBound(pred) {
 			continue

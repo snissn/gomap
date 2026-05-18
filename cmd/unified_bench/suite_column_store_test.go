@@ -735,6 +735,9 @@ func TestColumnStoreSuiteRunsBTreeIndexBaselineM11B(t *testing.T) {
 		if q.PlannerReason == "" || q.PlannerCandidates == 0 {
 			t.Fatalf("query %s missing planner diagnostics: %+v", q.Name, q)
 		}
+		if q.WorkerCount != 1 {
+			t.Fatalf("query %s worker_count=%d want 1 for caller-thread B-tree baseline", q.Name, q.WorkerCount)
+		}
 		if !strings.Contains(q.PlannerReason, "full-scan B-tree baseline") {
 			t.Fatalf("query %s planner_reason=%q want full-scan baseline disclosure", q.Name, q.PlannerReason)
 		}
@@ -793,6 +796,9 @@ func TestColumnStoreSuiteQueriesNormalizeForcedPathAliasesM11B(t *testing.T) {
 		if q.PlanLabel != columnStorePathRowStoreBaseline {
 			t.Fatalf("query %s plan_label=%q want %q", q.Name, q.PlanLabel, columnStorePathRowStoreBaseline)
 		}
+		if q.WorkerCount != 1 {
+			t.Fatalf("query %s worker_count=%d want 1 for caller-thread row baseline", q.Name, q.WorkerCount)
+		}
 	}
 
 	physicalAliases := map[string]collections.ColumnQueryPlanKind{
@@ -823,6 +829,35 @@ func TestColumnStoreSuiteIndexCandidateCoverageM11B(t *testing.T) {
 		if got := columnStoreSuiteQueryIndexCandidates(name); len(got) == 0 {
 			t.Fatalf("query %s has no B-tree baseline candidate columns", name)
 		}
+	}
+}
+
+func TestColumnStoreSuiteBTreeIndexScanMaterializesOneEntryPerDocumentM11B(t *testing.T) {
+	const rows = 2048
+	events, _ := buildColumnStoreSyntheticFixture(rows, 1)
+	db, err := openColumnStoreSuiteDB(t.TempDir())
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	manager := collections.NewCollectionManager(db)
+	if _, err := manager.CreateCollection(columnStoreSuiteCollectionMeta(columnStorePathBTreeIndexBaseline)); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	collection, err := manager.OpenCollection("events")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if err := insertColumnStoreFixture(collection, events, 256); err != nil {
+		t.Fatalf("insert fixture: %v", err)
+	}
+
+	decoded, materialized, _, err := scanColumnStoreSuiteEventsByIndex(collection, rows, "q1", "kind_idx")
+	if err != nil {
+		t.Fatalf("scanColumnStoreSuiteEventsByIndex: %v", err)
+	}
+	if materialized != rows || len(decoded) != rows {
+		t.Fatalf("index scan materialized=%d decoded=%d want %d", materialized, len(decoded), rows)
 	}
 }
 

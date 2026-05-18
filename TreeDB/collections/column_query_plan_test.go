@@ -321,6 +321,16 @@ func TestColumnQueryPlannerM11BCountsPredicateIndexCandidates(t *testing.T) {
 	if got, want := plan.Diagnostics.CandidatePlans, 3; got != want {
 		t.Fatalf("candidate plans=%d want %d (row fallback + distinct kind/time_us B-tree candidates)", got, want)
 	}
+
+	req.CandidateIndexColumns = nil
+	req.Predicates = []ColumnQueryPredicate{{Column: "time_us", Operator: ColumnQueryPredicateGreaterOrEqual}}
+	plan = planColumnQueryForCatalog(catalog, identity, true, req)
+	if !plan.Supported || plan.Kind != ColumnQueryPlanBTreeIndexBaseline || plan.IndexField != "time_us" {
+		t.Fatalf("predicate-only index plan not selected: %+v", plan)
+	}
+	if got, want := plan.Diagnostics.CandidatePlans, 2; got != want {
+		t.Fatalf("predicate-only candidate plans=%d want %d (row fallback + time_us B-tree candidate)", got, want)
+	}
 }
 
 func TestColumnQueryPlannerM11BRejectsNonRecoveryAuthoritativeManifest(t *testing.T) {
@@ -545,6 +555,34 @@ func TestColumnQueryPlannerM11BRejectsUnknownAggregateMetadata(t *testing.T) {
 	}
 	if !strings.Contains(plan.Diagnostics.UnsupportedPlanReason, "unknown aggregate metadata") {
 		t.Fatalf("unsupported reason=%q", plan.Diagnostics.UnsupportedPlanReason)
+	}
+}
+
+func TestColumnQueryPlannerM11BReportsPhysicalGateBeforeMissingAggregateName(t *testing.T) {
+	catalog := &collectionCatalog{meta: CollectionMeta{
+		Name:    "events",
+		Options: CollectionOptions{ColumnStore: &ColumnStoreConfig{Enabled: true}},
+	}}
+	identity := ColumnStoreCacheIdentity{
+		Collection:                      "events",
+		ManifestRoot:                    99,
+		ManifestGeneration:              7,
+		RecoveryAuthoritativeGeneration: 7,
+	}
+	req := ColumnQueryPlanRequest{
+		Name:      "q5_metadata",
+		ForceKind: ColumnQueryPlanAggregateMetadata,
+		Capabilities: ColumnQueryPlannerCapabilities{
+			AggregateMetadata: true,
+		},
+	}
+
+	plan := planColumnQueryForCatalog(catalog, identity, true, req)
+	if plan.Supported {
+		t.Fatalf("expected aggregate metadata without physical assets to fail closed: %+v", plan)
+	}
+	if got, want := plan.Diagnostics.UnsupportedPlanReason, "no durable physical column assets are available"; got != want {
+		t.Fatalf("unsupported reason=%q want %q", got, want)
 	}
 }
 
@@ -824,6 +862,21 @@ func TestColumnSkipScanIntoM11BReusesScratchWithoutAllocating(t *testing.T) {
 	})
 	if allocs != 0 {
 		t.Fatalf("PlanColumnSkipScanInto allocations=%f want 0", allocs)
+	}
+
+	PlanColumnSkipScanInto(&result, []ColumnSkipScanPredicate{{
+		Position: 1,
+		Lower:    ColumnSkipScanBound{Key: []byte{0x10}, Inclusive: true},
+		Upper:    ColumnSkipScanBound{Key: []byte{0x20}, Inclusive: true},
+	}}, marks)
+	if result.LeftPrefixColumns != 0 {
+		t.Fatalf("stale scratch extended left prefix: %+v", result)
+	}
+	if got, want := result.ScheduledMarks, []int{0, 1, 2}; !equalInts(got, want) {
+		t.Fatalf("scheduled after sparse reuse=%v want %v", got, want)
+	}
+	if len(result.SkippedMarks) != 0 {
+		t.Fatalf("sparse reuse skipped marks with stale predicate scratch: %+v", result.SkippedMarks)
 	}
 }
 
