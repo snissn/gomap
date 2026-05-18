@@ -5,6 +5,7 @@ import (
 	"hash/crc32"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestTCS1ColumnPartAssetRoundTripsThroughMemoryStore(t *testing.T) {
@@ -166,6 +167,60 @@ func TestSegmentColumnAssetStoreSyncsNewSegmentDirectoryEntry(t *testing.T) {
 	if reopened.dirSyncRequired {
 		t.Fatal("reopened segment store still requires directory sync after Sync")
 	}
+}
+
+func TestSegmentColumnAssetStoreCloseWaitsForActiveVerifyIO(t *testing.T) {
+	store, err := OpenSegmentColumnAssetStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("OpenSegmentColumnAssetStore: %v", err)
+	}
+	ref, err := store.Put(ColumnAssetKindTCS1PartImage, []byte("payload"))
+	if err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if _, _, _, err := store.beginFileIO(); err != nil {
+		t.Fatalf("beginFileIO: %v", err)
+	}
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- store.Close()
+	}()
+	waitForSegmentStoreClosing(t, store)
+	select {
+	case err := <-closeDone:
+		t.Fatalf("Close returned before active file IO drained: %v", err)
+	default:
+	}
+	if _, err := store.Put(ColumnAssetKindTCS1PartImage, []byte("late payload")); err == nil || !strings.Contains(err.Error(), "closed segment asset store") {
+		t.Fatalf("Put during pending Close err=%v want closed segment asset store", err)
+	}
+	store.endFileIO()
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close did not return after active file IO drained")
+	}
+	if err := store.Verify(ref); err == nil || !strings.Contains(err.Error(), "closed segment asset store") {
+		t.Fatalf("Verify after Close err=%v want closed segment asset store", err)
+	}
+}
+
+func waitForSegmentStoreClosing(t *testing.T, store *SegmentColumnAssetStore) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		store.mu.Lock()
+		closing := store.closing
+		store.mu.Unlock()
+		if closing {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("segment store Close did not enter closing state")
 }
 
 func TestSegmentColumnAssetStoreRejectsOutOfRangeRefBeforeAllocation(t *testing.T) {

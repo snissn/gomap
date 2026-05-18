@@ -296,6 +296,20 @@ func TestColumnAssetManagerSyncPublishClosureRejectsPreparedAssetMismatch(t *tes
 	}
 }
 
+func TestColumnAssetManagerSyncPublishClosureRejectsUnpreparedNoopLiteral(t *testing.T) {
+	store := &syncProbeAssetStore{MemoryColumnAssetStore: NewMemoryColumnAssetStore()}
+	manager, err := NewColumnAssetManager(store)
+	if err != nil {
+		t.Fatalf("NewColumnAssetManager: %v", err)
+	}
+	if _, err := manager.SyncPublishClosure(ColumnAssetPublishClosure{}); err == nil || !strings.Contains(err.Error(), "not prepared by this manager") {
+		t.Fatalf("SyncPublishClosure zero literal err=%v want not prepared by this manager", err)
+	}
+	if got := store.syncCalls.Load(); got != 0 {
+		t.Fatalf("sync calls=%d want 0 after rejected zero literal closure", got)
+	}
+}
+
 func TestColumnAssetManagerPublishSucceededRequiresSyncedClosure(t *testing.T) {
 	store := NewMemoryColumnAssetStore()
 	manager, err := NewColumnAssetManager(store)

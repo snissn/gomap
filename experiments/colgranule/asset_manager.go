@@ -39,6 +39,7 @@ type ColumnAssetPublishClosure struct {
 	FlushRequired  bool                  `json:"flush_required,omitempty"`
 	SyncRequired   bool                  `json:"sync_required,omitempty"`
 
+	prepared         bool
 	preparedIdentity []ColumnPreparedAsset
 }
 
@@ -249,6 +250,7 @@ func prepareColumnAssetPublishClosure(store ColumnAssetStore, prepared []ColumnP
 	closure := ColumnAssetPublishClosure{
 		PreparedAssets: preparedClone,
 		FlushRequired:  len(preparedClone) > 0,
+		prepared:       true,
 		// Keep a private copy so caller mutations to PreparedAssets are caught.
 		preparedIdentity: cloneColumnPreparedAssets(preparedClone),
 	}
@@ -384,6 +386,9 @@ func (m *ColumnAssetManager) MarkPublishFailed(prepared []ColumnPreparedAsset, r
 	defer m.mu.Unlock()
 	m.publishEpoch++
 	for _, asset := range prepared {
+		if _, publishOwned := m.publishFailed[asset.Ref]; publishOwned {
+			continue
+		}
 		if _, quarantined := m.quarantine[asset.Ref]; quarantined {
 			continue
 		}
@@ -460,7 +465,7 @@ func validateColumnPreparedAsset(asset ColumnPreparedAsset) error {
 }
 
 func validateColumnAssetPublishClosureMatches(caller ColumnAssetPublishClosure, verified ColumnAssetPublishClosure) error {
-	if len(caller.PreparedAssets) > 0 && len(caller.preparedIdentity) == 0 {
+	if !caller.prepared {
 		return fmt.Errorf("colgranule: publish closure was not prepared by this manager")
 	}
 	if !columnPreparedAssetsEqual(caller.PreparedAssets, caller.preparedIdentity) {
