@@ -459,6 +459,9 @@ func TestColumnVectorDynamicGraphSearchAllocs(t *testing.T) {
 	} else if len(results) != opts.TopK {
 		t.Fatalf("warm results=%d want %d", len(results), opts.TopK)
 	}
+	// The parallel read/write benchmark intentionally includes writer publish
+	// allocations. This guard isolates the warmed hot read path and proves
+	// SearchCosine itself remains allocation-free with caller-owned scratch.
 	allocs := testing.AllocsPerRun(1000, func() {
 		results, trace, err := graph.SearchCosine(query, opts, &scratch)
 		if err != nil {
@@ -851,6 +854,10 @@ func benchmarkColumnVectorDynamicGraphSearchCosineParallelReadOnly(b *testing.B,
 	reportColumnVectorDynamicReadMetrics(b, elapsed, 0, 0, 0)
 }
 
+// benchmarkColumnVectorDynamicGraphSearchCosineParallelReadWrite measures
+// concurrent steady-state reads while one writer publishes copy-on-write overlay
+// generations. Reported B/op and allocs/op include writer publish work; the hot
+// read path is guarded separately by TestColumnVectorDynamicGraphSearchAllocs.
 func benchmarkColumnVectorDynamicGraphSearchCosineParallelReadWrite(b *testing.B, graph *ColumnVectorDynamicGraph, query []float32, opts ColumnVectorGraphSearchOptions, rows int, dims int) {
 	b.Helper()
 	b.SetParallelism(1)
@@ -1061,10 +1068,14 @@ func reportColumnVectorDynamicReadMetrics(b *testing.B, elapsed time.Duration, p
 	b.Helper()
 	if elapsed > 0 {
 		b.ReportMetric(float64(b.N)/elapsed.Seconds(), "read_qps")
+		if b.N > 0 {
+			b.ReportMetric(float64(elapsed.Nanoseconds())/float64(b.N), "read_ns/op")
+		}
 	}
 	if publishedBatches > 0 && elapsed > 0 {
 		b.ReportMetric(float64(publishedBatches)/elapsed.Seconds(), "publishes/s")
 		b.ReportMetric(float64(publishedMutations)/elapsed.Seconds(), "mutations/s")
+		b.ReportMetric(float64(publishedMutations)/float64(publishedBatches), "mutations/publish")
 		b.ReportMetric(float64(publishNanos)/float64(publishedBatches), "publish_ns/op")
 	}
 }
