@@ -194,8 +194,8 @@ func TestColumnManifestIdentityRecordRejectsNonZeroReserved(t *testing.T) {
 	record := encodeColumnManifestIdentityRecord(identity)
 	record[columnManifestIdentityReservedOffset+columnManifestIdentityReservedSize-1] = 1
 	decoded, err := decodeColumnManifestIdentityRecord(record)
-	if err == nil || !strings.Contains(err.Error(), "reserved") {
-		t.Fatalf("decodeColumnManifestIdentityRecord decoded=%+v err=%v want reserved-field rejection", decoded, err)
+	if err == nil || !strings.Contains(err.Error(), "reserved trailer field 0x00000001") {
+		t.Fatalf("decodeColumnManifestIdentityRecord decoded=%+v err=%v want hex reserved-field rejection", decoded, err)
 	}
 }
 
