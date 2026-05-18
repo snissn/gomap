@@ -876,7 +876,7 @@ func startCheckpointCPUProfile(cfg BenchConfig, testName, dbName string) (*os.Fi
 	if err != nil {
 		return nil, fmt.Errorf("checkpoint cpu profile (%s/%s): %w", testName, dbName, err)
 	}
-	if err := pprof.StartCPUProfile(f); err != nil {
+	if err := startCPUProfileFn(f); err != nil {
 		_ = f.Close()
 		return nil, fmt.Errorf("checkpoint cpu profile start: %w", err)
 	}
@@ -884,6 +884,7 @@ func startCheckpointCPUProfile(cfg BenchConfig, testName, dbName string) (*os.Fi
 }
 
 var (
+	startCPUProfileFn                 = pprof.StartCPUProfile
 	stopCPUProfileFn                  = pprof.StopCPUProfile
 	writeAllocsSnapshotTempFn         = writeAllocsSnapshotTemp
 	writeAllocsDeltaProfileFn         = writeAllocsDeltaProfile
@@ -3964,7 +3965,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					return BenchRun{}, fmt.Errorf("cpuprofile %s: %w", path, err)
 				}
 				cpuFile = f
-				if err := pprof.StartCPUProfile(cpuFile); err != nil {
+				if err := startCPUProfileFn(cpuFile); err != nil {
 					_ = cpuFile.Close()
 					return BenchRun{}, fmt.Errorf("cpuprofile start %s: %w", path, err)
 				}

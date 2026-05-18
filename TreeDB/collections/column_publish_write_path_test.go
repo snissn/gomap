@@ -452,7 +452,36 @@ func TestColumnStorePublishRejectsMissingCommandWALIntentM10B(t *testing.T) {
 	}
 }
 
-func TestAppendColumnManifestRootPublishBaseDeduplicatesM10B(t *testing.T) {
+func TestAppendColumnManifestRootPublishBaseAppendsColumnRootM10B(t *testing.T) {
+	columnRootName := collectionColumnManifestRootName("events")
+	primaryRootName := collectionPrimaryRootName("events")
+	rootNames := []string{primaryRootName}
+	baseRootIDs := map[string]uint64{
+		primaryRootName: 11,
+	}
+
+	gotNames, gotBases, err := appendColumnManifestRootPublishBase(rootNames, baseRootIDs, columnRootName, 33)
+	if err != nil {
+		t.Fatalf("appendColumnManifestRootPublishBase: %v", err)
+	}
+	wantNames := []string{primaryRootName, columnRootName}
+	if len(gotNames) != len(wantNames) {
+		t.Fatalf("root names len=%d want %d names=%v", len(gotNames), len(wantNames), gotNames)
+	}
+	for i := range wantNames {
+		if gotNames[i] != wantNames[i] {
+			t.Fatalf("rootNames[%d]=%q want %q", i, gotNames[i], wantNames[i])
+		}
+	}
+	if gotBases[columnRootName] != 33 {
+		t.Fatalf("column base root=%d want updated base 33", gotBases[columnRootName])
+	}
+	if gotBases[primaryRootName] != 11 {
+		t.Fatalf("primary base root changed: %v", gotBases)
+	}
+}
+
+func TestAppendColumnManifestRootPublishBaseRejectsDuplicateColumnRootM10B(t *testing.T) {
 	columnRootName := collectionColumnManifestRootName("events")
 	rootNames := []string{collectionPrimaryRootName("events"), columnRootName}
 	baseRootIDs := map[string]uint64{
@@ -460,20 +489,29 @@ func TestAppendColumnManifestRootPublishBaseDeduplicatesM10B(t *testing.T) {
 		columnRootName:                      22,
 	}
 
-	gotNames, gotBases := appendColumnManifestRootPublishBase(rootNames, baseRootIDs, columnRootName, 33)
-	if len(gotNames) != len(rootNames) {
-		t.Fatalf("root names len=%d want %d names=%v", len(gotNames), len(rootNames), gotNames)
+	gotNames, gotBases, err := appendColumnManifestRootPublishBase(rootNames, baseRootIDs, columnRootName, 33)
+	if err == nil || !strings.Contains(err.Error(), "must be published by the column context delta") {
+		t.Fatalf("appendColumnManifestRootPublishBase error=%v want duplicate column root rejection", err)
 	}
-	for i := range rootNames {
-		if gotNames[i] != rootNames[i] {
-			t.Fatalf("rootNames[%d]=%q want %q", i, gotNames[i], rootNames[i])
-		}
+	if gotNames != nil || gotBases != nil {
+		t.Fatalf("appendColumnManifestRootPublishBase returned names=%v bases=%v on rejection", gotNames, gotBases)
 	}
-	if gotBases[columnRootName] != 33 {
-		t.Fatalf("column base root=%d want updated base 33", gotBases[columnRootName])
-	}
-	if gotBases[collectionPrimaryRootName("events")] != 11 {
-		t.Fatalf("primary base root changed: %v", gotBases)
+}
+
+func TestEncodeColumnManifestIdentityForWriteRejectsNegativeBytesM10B(t *testing.T) {
+	_, err := encodeColumnManifestIdentityForWrite(ColumnPublishManifestEncodeInput{
+		Collection:        "events",
+		Operation:         ColumnPublishOperationInsert,
+		AppliedCommandLSN: 1,
+		Prepared: ColumnPublishPreparedAssets{
+			RowCount:           1,
+			CommandBytes:       12,
+			RowRemainderBytes:  -1,
+			ColumnPayloadBytes: 34,
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "byte counts cannot be negative") {
+		t.Fatalf("encodeColumnManifestIdentityForWrite error=%v want negative byte count rejection", err)
 	}
 }
 

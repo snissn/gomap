@@ -158,7 +158,7 @@ func TestColumnQueryPlannerM11BMatchesBTreeIndexesCaseSensitively(t *testing.T) 
 	}
 }
 
-func TestColumnQueryPlannerM11BDoesNotMatchPredicateColumnsAgainstIndexNames(t *testing.T) {
+func TestColumnQueryPlannerM11BMatchesBTreeIndexFieldsOnly(t *testing.T) {
 	catalog := &collectionCatalog{meta: CollectionMeta{
 		Name: "events",
 		Indexes: []IndexDefinition{
@@ -184,15 +184,15 @@ func TestColumnQueryPlannerM11BDoesNotMatchPredicateColumnsAgainstIndexNames(t *
 
 	req.CandidateIndexColumns = []string{"kind"}
 	plan = planColumnQueryForCatalog(catalog, identity, true, req)
-	if !plan.Supported || plan.IndexName != "kind" {
-		t.Fatalf("explicit candidate did not match index name: %+v", plan)
+	if plan.Supported {
+		t.Fatalf("candidate column matched unrelated index name: %+v", plan)
 	}
 
-	req.CandidateIndexColumns = nil
+	req.CandidateIndexColumns = []string{"kind"}
 	catalog.meta.Indexes = append(catalog.meta.Indexes, IndexDefinition{Name: "kind_idx", Field: "kind", ValueType: IndexValueString})
 	plan = planColumnQueryForCatalog(catalog, identity, true, req)
 	if !plan.Supported || plan.IndexName != "kind_idx" {
-		t.Fatalf("predicate column did not match index field: %+v", plan)
+		t.Fatalf("candidate column did not match index field: %+v", plan)
 	}
 }
 
@@ -225,6 +225,38 @@ func TestColumnQueryPlannerM11BRejectsNonRecoveryAuthoritativeManifest(t *testin
 		t.Fatalf("kind=%q want serial", plan.Kind)
 	}
 	if !strings.Contains(plan.Diagnostics.UnsupportedPlanReason, "recovery-authoritative") {
+		t.Fatalf("unsupported reason=%q", plan.Diagnostics.UnsupportedPlanReason)
+	}
+}
+
+func TestColumnQueryPlannerM11BReportsParallelShapeReason(t *testing.T) {
+	catalog := &collectionCatalog{meta: CollectionMeta{
+		Name:    "events",
+		Options: CollectionOptions{ColumnStore: &ColumnStoreConfig{Enabled: true}},
+	}}
+	identity := ColumnStoreCacheIdentity{
+		Collection:                      "events",
+		ManifestRoot:                    99,
+		ManifestGeneration:              7,
+		RecoveryAuthoritativeGeneration: 7,
+	}
+	req := ColumnQueryPlanRequest{
+		Name:      "q1",
+		ForceKind: ColumnQueryPlanParallelColumnScan,
+		Capabilities: ColumnQueryPlannerCapabilities{
+			ParallelColumnScan: true,
+			PhysicalAssetCount: 1,
+			PartCount:          1,
+			GranuleCount:       2,
+			MaxParallelWorkers: 4,
+		},
+	}
+
+	plan := planColumnQueryForCatalog(catalog, identity, true, req)
+	if plan.Supported {
+		t.Fatalf("expected undersized parallel shape to fail closed: %+v", plan)
+	}
+	if !strings.Contains(plan.Diagnostics.UnsupportedPlanReason, "more than one part or more granules than workers") {
 		t.Fatalf("unsupported reason=%q", plan.Diagnostics.UnsupportedPlanReason)
 	}
 }
@@ -302,7 +334,7 @@ func TestColumnQueryPlannerM11BRejectsUnknownAggregateMetadata(t *testing.T) {
 	}
 }
 
-func TestColumnQueryPlannerM11BMatchesAggregateMetadataNamesExactly(t *testing.T) {
+func TestColumnQueryPlannerM11BMatchesAggregateMetadataNamesCaseSensitivelyAfterTrim(t *testing.T) {
 	catalog := &collectionCatalog{meta: CollectionMeta{
 		Name: "events",
 		Options: CollectionOptions{ColumnStore: &ColumnStoreConfig{
@@ -401,17 +433,49 @@ func TestColumnSkipScanM11BPrunesOnlyLeftPrefixMarks(t *testing.T) {
 	if len(unboundedFirstColumn.SkippedMarks) != 0 {
 		t.Fatalf("unbounded-first skipped=%v want none", unboundedFirstColumn.SkippedMarks)
 	}
+
+	rangeThenLaterColumn := PlanColumnSkipScan([]ColumnSkipScanPredicate{
+		{
+			Position: 0,
+			Lower:    ColumnSkipScanBound{Key: []byte{0x10}, Inclusive: true},
+			Upper:    ColumnSkipScanBound{Key: []byte{0x30}, Inclusive: true},
+		},
+		{
+			Position: 1,
+			Lower:    ColumnSkipScanBound{Key: []byte{0x99}, Inclusive: true},
+			Upper:    ColumnSkipScanBound{Key: []byte{0xaa}, Inclusive: true},
+		},
+	}, []ColumnSkipScanMark{
+		{Name: "overlaps-first-column", Rows: 10, MinKeys: [][]byte{{0x12}, {0x01}}, MaxKeys: [][]byte{{0x20}, {0x09}}},
+	})
+	if got, want := rangeThenLaterColumn.LeftPrefixColumns, 1; got != want {
+		t.Fatalf("range-then-later left prefix=%d want %d", got, want)
+	}
+	if got, want := rangeThenLaterColumn.ScheduledMarks, []int{0}; !equalInts(got, want) {
+		t.Fatalf("range-then-later scheduled=%v want %v", got, want)
+	}
+	if len(rangeThenLaterColumn.SkippedMarks) != 0 {
+		t.Fatalf("range-then-later skipped=%v want none", rangeThenLaterColumn.SkippedMarks)
+	}
+
+	highPositionOnly := PlanColumnSkipScan([]ColumnSkipScanPredicate{{
+		Position: 1_000_000,
+		Lower:    ColumnSkipScanBound{Key: []byte{0x01}, Inclusive: true},
+	}}, marks)
+	if got, want := highPositionOnly.LeftPrefixColumns, 0; got != want {
+		t.Fatalf("high-position-only left prefix=%d want %d", got, want)
+	}
 }
 
 func TestColumnSkipScanIntoM11BReusesScratchWithoutAllocating(t *testing.T) {
 	marks := []ColumnSkipScanMark{
-		{Name: "before", Rows: 10, MinKeys: [][]byte{{0x01}, {0x01}}, MaxKeys: [][]byte{{0x09}, {0x09}}},
+		{Name: "before", Rows: 10, MinKeys: [][]byte{{0x10}, {0x01}}, MaxKeys: [][]byte{{0x10}, {0x09}}},
 		{Name: "inside", Rows: 10, MinKeys: [][]byte{{0x10}, {0x10}}, MaxKeys: [][]byte{{0x20}, {0x20}}},
-		{Name: "after", Rows: 10, MinKeys: [][]byte{{0x30}, {0x30}}, MaxKeys: [][]byte{{0x40}, {0x40}}},
+		{Name: "after", Rows: 10, MinKeys: [][]byte{{0x10}, {0x30}}, MaxKeys: [][]byte{{0x10}, {0x40}}},
 	}
 	predicates := []ColumnSkipScanPredicate{
 		{Position: 1, Lower: ColumnSkipScanBound{Key: []byte{0x10}, Inclusive: true}},
-		{Position: 0, Lower: ColumnSkipScanBound{Key: []byte{0x10}, Inclusive: true}, Upper: ColumnSkipScanBound{Key: []byte{0x35}, Inclusive: true}},
+		{Position: 0, Lower: ColumnSkipScanBound{Key: []byte{0x10}, Inclusive: true}, Upper: ColumnSkipScanBound{Key: []byte{0x10}, Inclusive: true}},
 	}
 	result := ColumnSkipScanResult{
 		ScheduledMarks: make([]int, 0, len(marks)),

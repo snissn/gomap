@@ -43,7 +43,7 @@ func (c *Collection) requireColumnStoreCommandWAL(meta CollectionMeta, commandWA
 		return errCollectionDBNil
 	}
 	if c.db.DurabilityMode() != backenddb.DurabilityDurable {
-		return fmt.Errorf("%w: column_store writes require durable command WAL profile support (durability=%s profile=%s)",
+		return fmt.Errorf("%w: column_store writes require durable DB durability mode for command WAL publication (durability=%s profile=%s)",
 			backenddb.ErrCommandWALRejected,
 			columnStoreDurabilityModeName(c.db.DurabilityMode()),
 			profileSupport,
@@ -72,7 +72,10 @@ func (c *Collection) publishRootDeltaGroupMaybeColumn(ordered []backenddb.Ordere
 	if input.catalog != nil {
 		columnBaseRoot = input.catalog.rootID(columnRootName)
 	}
-	rootNames, baseRootIDs := appendColumnManifestRootPublishBase(input.rootNames, input.baseRootIDs, columnRootName, columnBaseRoot)
+	rootNames, baseRootIDs, appendErr := appendColumnManifestRootPublishBase(input.rootNames, input.baseRootIDs, columnRootName, columnBaseRoot)
+	if appendErr != nil {
+		return 0, nil, CollectionMeta{}, nil, appendErr
+	}
 	var plan ColumnPublishPlan
 	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaGroupWithCommandWALContextRootBuilderAndSystemDeltaBuilder(
 		ordered,
@@ -125,7 +128,10 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 	if input.catalog != nil {
 		columnBaseRoot = input.catalog.rootID(columnRootName)
 	}
-	rootNames, baseRootIDs := appendColumnManifestRootPublishBase(input.rootNames, input.baseRootIDs, columnRootName, columnBaseRoot)
+	rootNames, baseRootIDs, appendErr := appendColumnManifestRootPublishBase(input.rootNames, input.baseRootIDs, columnRootName, columnBaseRoot)
+	if appendErr != nil {
+		return 0, nil, CollectionMeta{}, nil, appendErr
+	}
 	var plan ColumnPublishPlan
 	var cleanupColumnDelta func()
 	defer func() {
@@ -231,6 +237,9 @@ func (c *Collection) buildColumnPublishPlanForCommandWALContext(ctx backenddb.Co
 }
 
 func encodeColumnManifestIdentityForWrite(input ColumnPublishManifestEncodeInput) (ColumnPublishManifestEncodeResult, error) {
+	if err := validateColumnPublishPreparedAssets(input.Prepared); err != nil {
+		return ColumnPublishManifestEncodeResult{}, err
+	}
 	generation := uint64(1)
 	if input.CurrentManifest != nil {
 		generation = input.CurrentManifest.Generation + 1
@@ -286,29 +295,21 @@ func writeHashUint64(d *xxhash.Digest, value uint64) {
 	_, _ = d.Write(buf[:])
 }
 
-func appendColumnManifestRootPublishBase(rootNames []string, baseRootIDs map[string]uint64, columnRootName string, columnBaseRoot uint64) ([]string, map[string]uint64) {
-	hasColumnRoot := false
+func appendColumnManifestRootPublishBase(rootNames []string, baseRootIDs map[string]uint64, columnRootName string, columnBaseRoot uint64) ([]string, map[string]uint64, error) {
 	for _, rootName := range rootNames {
 		if rootName == columnRootName {
-			hasColumnRoot = true
-			break
+			return nil, nil, fmt.Errorf("collections: column manifest root %q must be published by the column context delta, not the row root group", columnRootName)
 		}
 	}
-	extra := 1
-	if hasColumnRoot {
-		extra = 0
-	}
-	nextRootNames := make([]string, 0, len(rootNames)+extra)
+	nextRootNames := make([]string, 0, len(rootNames)+1)
 	nextRootNames = append(nextRootNames, rootNames...)
-	if !hasColumnRoot {
-		nextRootNames = append(nextRootNames, columnRootName)
-	}
+	nextRootNames = append(nextRootNames, columnRootName)
 	nextBaseRootIDs := make(map[string]uint64, len(baseRootIDs)+1)
 	for rootName, rootID := range baseRootIDs {
 		nextBaseRootIDs[rootName] = rootID
 	}
 	nextBaseRootIDs[columnRootName] = columnBaseRoot
-	return nextRootNames, nextBaseRootIDs
+	return nextRootNames, nextBaseRootIDs, nil
 }
 
 func columnPublishPlanLSNMismatchError(meta CollectionMeta, expected, actual uint64) error {
