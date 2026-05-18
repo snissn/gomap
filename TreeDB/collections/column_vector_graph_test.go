@@ -390,7 +390,7 @@ func TestColumnVectorGraphSearchBoundsEqualDistanceBridgeTraversal(t *testing.T)
 		wantEdges      int
 	}{
 		{name: "ordinal", ids: sortedIDs, wantOrdinal: true, wantCandidates: 5, wantEdges: 4},
-		{name: "document", ids: outOfOrderIDs, wantOrdinal: false, wantCandidates: 6, wantEdges: 5},
+		{name: "document", ids: outOfOrderIDs, wantOrdinal: false, wantCandidates: 5, wantEdges: 4},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			vectors := make([]float32, 0, rows*2)
@@ -433,6 +433,74 @@ func TestColumnVectorGraphSearchBoundsEqualDistanceBridgeTraversal(t *testing.T)
 			}
 			if trace.CandidatesExamined != tc.wantCandidates || trace.EdgesVisited != tc.wantEdges {
 				t.Fatalf("trace=%+v want bounded bridge traversal with candidates=%d edges=%d", trace, tc.wantCandidates, tc.wantEdges)
+			}
+		})
+	}
+}
+
+func TestColumnVectorGraphSearchBoundsBetterEqualDistanceBridgeTraversal(t *testing.T) {
+	rows := 12
+	sortedIDs := make([][]byte, 0, rows)
+	reverseIDs := make([][]byte, 0, rows)
+	for i := 0; i < rows; i++ {
+		sortedIDs = append(sortedIDs, []byte(fmt.Sprintf("doc-%02d", i)))
+		reverseIDs = append(reverseIDs, []byte(fmt.Sprintf("doc-%02d", rows-1-i)))
+	}
+
+	for _, tc := range []struct {
+		name        string
+		ids         [][]byte
+		entryPoint  int
+		reverseEdge bool
+		wantOrdinal bool
+	}{
+		{name: "ordinal", ids: sortedIDs, entryPoint: rows - 1, reverseEdge: true, wantOrdinal: true},
+		{name: "document", ids: reverseIDs, entryPoint: 0, wantOrdinal: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			vectors := make([]float32, 0, rows*2)
+			invNorms := make([]float32, 0, rows)
+			neighbors := make([]uint32, 0, rows-1)
+			offsets := make([]uint32, rows+1)
+			for i := 0; i < rows; i++ {
+				vectors = append(vectors, 1, 0)
+				invNorms = append(invNorms, 1)
+				offsets[i] = uint32(len(neighbors))
+				switch {
+				case tc.reverseEdge && i > 0:
+					neighbors = append(neighbors, uint32(i-1))
+				case !tc.reverseEdge && i+1 < rows:
+					neighbors = append(neighbors, uint32(i+1))
+				}
+			}
+			offsets[rows] = uint32(len(neighbors))
+
+			graph, err := NewColumnVectorGraphFromColumns(ColumnVectorGraphColumns{
+				DocumentIDs:     tc.ids,
+				Vectors:         vectors,
+				InvNorms:        invNorms,
+				NeighborOffsets: offsets,
+				Neighbors:       neighbors,
+				Dimensions:      2,
+				EntryPoint:      tc.entryPoint,
+				EfSearch:        1,
+			})
+			if err != nil {
+				t.Fatalf("NewColumnVectorGraphFromColumns: %v", err)
+			}
+			if graph.ordinalTieOrder != tc.wantOrdinal {
+				t.Fatalf("ordinalTieOrder=%v want %v", graph.ordinalTieOrder, tc.wantOrdinal)
+			}
+
+			results, trace, err := graph.SearchCosine([]float32{1, 0}, ColumnVectorGraphSearchOptions{TopK: 1, EfSearch: 1}, &ColumnVectorGraphSearchScratch{})
+			if err != nil {
+				t.Fatalf("SearchCosine: %v", err)
+			}
+			if len(results) != 1 || !bytes.Equal(results[0].DocumentID, []byte("doc-09")) {
+				t.Fatalf("results=%+v want doc-09 after bounded better-tie traversal", results)
+			}
+			if trace.CandidatesExamined != 3 || trace.EdgesVisited != 2 {
+				t.Fatalf("trace=%+v want better-tie traversal bounded to candidates=3 edges=2", trace)
 			}
 		})
 	}

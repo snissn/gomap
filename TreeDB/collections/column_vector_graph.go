@@ -460,8 +460,13 @@ func (g *ColumnVectorGraph) searchCandidatesOrdinalTies(query []float32, queryIn
 			}
 			if candidate.distance == best[0].distance {
 				if vectorIndexCandidateLess(candidate, best[0]) {
-					queue.push(candidate)
+					// A better tie may still replace the result; the bridge
+					// budget only controls further equal-distance expansion.
 					best.pushBounded(candidate, limit)
+					if equalDistanceBridgeBudget > 0 {
+						queue.push(candidate)
+						equalDistanceBridgeBudget--
+					}
 				} else if equalDistanceBridgeBudget > 0 {
 					queue.push(candidate)
 					equalDistanceBridgeBudget--
@@ -520,8 +525,13 @@ func (g *ColumnVectorGraph) searchCandidatesDocumentTies(query []float32, queryI
 			}
 			if candidate.distance == best[0].distance {
 				if g.candidateLess(candidate, best[0]) {
-					queue.push(g, candidate)
+					// A better tie may still replace the result; the bridge
+					// budget only controls further equal-distance expansion.
 					best.pushBounded(g, candidate, limit)
+					if equalDistanceBridgeBudget > 0 {
+						queue.push(g, candidate)
+						equalDistanceBridgeBudget--
+					}
 				} else if equalDistanceBridgeBudget > 0 {
 					queue.push(g, candidate)
 					equalDistanceBridgeBudget--
