@@ -837,6 +837,7 @@ func TestColumnManifestRootDescriptorSystemDeltaDoesNotReadPublishedRootBeforeCo
 		map[string]uint64{rootName: 0},
 		[]uint64{123456789},
 		plan,
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("buildRootDescriptorAndColumnManifestSystemDeltaIteratorForMeta: %v", err)
