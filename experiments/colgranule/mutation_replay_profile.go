@@ -37,6 +37,7 @@ func (p ColumnMutationReplayProfile) ProductionSupported() bool {
 	return p.normalizedDurability() == ColumnMutationReplayDurable && !p.BenchmarkOnly
 }
 
+// Label returns the normalized profile label and is safe to call before Validate.
 func (p ColumnMutationReplayProfile) Label() string {
 	durability := p.normalizedDurability()
 	if p.BenchmarkOnly {
