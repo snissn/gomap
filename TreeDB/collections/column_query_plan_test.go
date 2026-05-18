@@ -289,6 +289,40 @@ func TestColumnQueryPlannerM11BPredicateOperatorOrdersIndexCandidates(t *testing
 	}
 }
 
+func TestColumnQueryPlannerM11BCountsPredicateIndexCandidates(t *testing.T) {
+	catalog := &collectionCatalog{meta: CollectionMeta{
+		Name: "events",
+		Indexes: []IndexDefinition{
+			{Name: "time_us_idx", Field: "time_us", ValueType: IndexValueInt64},
+			{Name: "kind_idx", Field: "kind", ValueType: IndexValueString},
+		},
+	}}
+	identity := ColumnStoreCacheIdentity{
+		Collection:                      "events",
+		ManifestRoot:                    99,
+		ManifestGeneration:              7,
+		RecoveryAuthoritativeGeneration: 7,
+	}
+	req := ColumnQueryPlanRequest{
+		Name:                  "q1",
+		CandidateIndexColumns: []string{"kind", "missing", " kind "},
+		Predicates: []ColumnQueryPredicate{
+			{Column: "kind", Operator: ColumnQueryPredicateEqual},
+			{Column: "time_us", Operator: ColumnQueryPredicateGreaterOrEqual},
+			{Column: "missing_predicate", Operator: ColumnQueryPredicateEqual},
+			{Column: "time_us", Operator: ColumnQueryPredicateOperator("contains")},
+		},
+	}
+
+	plan := planColumnQueryForCatalog(catalog, identity, true, req)
+	if !plan.Supported || plan.Kind != ColumnQueryPlanBTreeIndexBaseline {
+		t.Fatalf("predicate-driven B-tree plan not selected: %+v", plan)
+	}
+	if got, want := plan.Diagnostics.CandidatePlans, 3; got != want {
+		t.Fatalf("candidate plans=%d want %d (row fallback + distinct kind/time_us B-tree candidates)", got, want)
+	}
+}
+
 func TestColumnQueryPlannerM11BRejectsNonRecoveryAuthoritativeManifest(t *testing.T) {
 	catalog := &collectionCatalog{meta: CollectionMeta{
 		Name:    "events",
