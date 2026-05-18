@@ -268,31 +268,53 @@ func TestColumnVectorGraphDeep1BSphericalDirectScoreMatchesDecode(t *testing.T) 
 	decodedScores := make([]float32, rows)
 	columnVectorGraphDeep1BScorePrefixInto(query, queryInvNorm, decoded, invNorms, dims, dims, decodedScores)
 
-	directScores := make([]float32, rows)
-	bestScore, bestRow, metrics := columnVectorGraphDeep1BScoreSphericalShuffled(
-		query,
-		queryInvNorm,
-		encoded.Payload,
-		rows,
-		dims,
-		invNorms,
-		columnVectorGraphDeep1BSphericalDirectScoreExactMath,
-		0,
-		directScores,
-	)
-	if bestRow < 0 {
-		t.Fatal("direct spherical score returned no best row")
-	}
-	for row := 0; row < rows; row++ {
-		if diff := math.Abs(float64(directScores[row] - decodedScores[row])); diff > 2e-6 {
-			t.Fatalf("direct score row=%d got=%g decoded=%g diff=%g", row, directScores[row], decodedScores[row], diff)
-		}
-	}
-	if metrics.FallbackAngles != 0 {
-		t.Fatalf("exact scorer fallback angles=%d want 0", metrics.FallbackAngles)
-	}
-	if diff := math.Abs(float64(bestScore - decodedScores[bestRow])); diff > 2e-6 {
-		t.Fatalf("best score=%g decoded best row score=%g", bestScore, decodedScores[bestRow])
+	for _, tc := range []struct {
+		name      string
+		scorer    columnVectorGraphDeep1BSphericalDirectScoreKind
+		threshold float64
+		tolerance float64
+	}{
+		{name: "exact_math", scorer: columnVectorGraphDeep1BSphericalDirectScoreExactMath, tolerance: 2e-6},
+		{name: "halfpi_poly_with_fallback", scorer: columnVectorGraphDeep1BSphericalDirectScoreHalfPiPoly, threshold: 0.35, tolerance: 1e-4},
+	} {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			directScores := make([]float32, rows)
+			bestScore, bestRow, metrics, err := columnVectorGraphDeep1BScoreSphericalShuffled(
+				query,
+				queryInvNorm,
+				encoded.Payload,
+				rows,
+				dims,
+				invNorms,
+				tc.scorer,
+				tc.threshold,
+				directScores,
+			)
+			if err != nil {
+				t.Fatalf("direct spherical score: %v", err)
+			}
+			if bestRow < 0 {
+				t.Fatal("direct spherical score returned no best row")
+			}
+			for row := 0; row < rows; row++ {
+				if diff := math.Abs(float64(directScores[row] - decodedScores[row])); diff > tc.tolerance {
+					t.Fatalf("direct score row=%d got=%g decoded=%g diff=%g", row, directScores[row], decodedScores[row], diff)
+				}
+			}
+			if metrics.TerminalAngles != rows {
+				t.Fatalf("terminal angles=%d want %d", metrics.TerminalAngles, rows)
+			}
+			if tc.scorer == columnVectorGraphDeep1BSphericalDirectScoreExactMath && metrics.FallbackAngles != 0 {
+				t.Fatalf("exact scorer fallback angles=%d want 0", metrics.FallbackAngles)
+			}
+			if metrics.FallbackAngles > rows*(dims-2) {
+				t.Fatalf("fallback angles=%d exceeds non-terminal angle count %d", metrics.FallbackAngles, rows*(dims-2))
+			}
+			if diff := math.Abs(float64(bestScore - decodedScores[bestRow])); diff > tc.tolerance {
+				t.Fatalf("best score=%g decoded best row score=%g diff=%g", bestScore, decodedScores[bestRow], diff)
+			}
+		})
 	}
 }
 
@@ -866,8 +888,10 @@ func BenchmarkColumnVectorGraphDeep1BSphericalDirectScore(b *testing.B) {
 		b.ReportMetric(float64(overlap)/topK, "recall@10")
 		b.ReportMetric(float64(metrics.TotalAngles), "direct_score_angles")
 		b.ReportMetric(float64(metrics.FallbackAngles), "poly_fallback_angles")
+		b.ReportMetric(float64(metrics.TerminalAngles), "terminal_exact_angles")
 		if metrics.TotalAngles > 0 {
 			b.ReportMetric(float64(metrics.FallbackAngles)/float64(metrics.TotalAngles), "poly_fallback_angle_ratio")
+			b.ReportMetric(float64(metrics.TerminalAngles)/float64(metrics.TotalAngles), "terminal_exact_angle_ratio")
 		}
 		b.ReportMetric(halfPiFallbackThreshold, "poly_fallback_threshold_rad")
 		if warm.ActualCodec != warm.RequestedCodec {
@@ -895,7 +919,10 @@ func BenchmarkColumnVectorGraphDeep1BSphericalDirectScore(b *testing.B) {
 						b.Fatalf("spherical decode warm: %v", err)
 					}
 					warmScores := make([]float32, granuleRows)
-					bestScore, bestRow, warmMetrics := columnVectorGraphDeep1BScoreSphericalShuffled(query, queryInvNorm, raw, granuleRows, columnVectorGraphDeep1BDims, invNorms, scorer.kind, halfPiFallbackThreshold, warmScores)
+					bestScore, bestRow, warmMetrics, err := columnVectorGraphDeep1BScoreSphericalShuffled(query, queryInvNorm, raw, granuleRows, columnVectorGraphDeep1BDims, invNorms, scorer.kind, halfPiFallbackThreshold, warmScores)
+					if err != nil {
+						b.Fatalf("spherical direct score warm: %v", err)
+					}
 					warmTopRows := make([]int, topK)
 					warmTopScores := make([]float32, topK)
 					columnVectorGraphDeep1BTopKFromScores(warmScores, topK, warmTopRows, warmTopScores)
@@ -916,12 +943,15 @@ func BenchmarkColumnVectorGraphDeep1BSphericalDirectScore(b *testing.B) {
 						}
 						totalDecodeNanos += time.Since(decodeStart).Nanoseconds()
 						scoreStart := time.Now()
-						bestScore, bestRow, metrics = columnVectorGraphDeep1BScoreSphericalShuffled(query, queryInvNorm, raw, granuleRows, columnVectorGraphDeep1BDims, invNorms, scorer.kind, halfPiFallbackThreshold, nil)
+						bestScore, bestRow, metrics, err = columnVectorGraphDeep1BScoreSphericalShuffled(query, queryInvNorm, raw, granuleRows, columnVectorGraphDeep1BDims, invNorms, scorer.kind, halfPiFallbackThreshold, nil)
+						if err != nil {
+							b.Fatalf("spherical direct score: %v", err)
+						}
 						totalScoreNanos += time.Since(scoreStart).Nanoseconds()
 					}
 					elapsed := time.Since(start)
 					b.StopTimer()
-					benchSink += int64(bestRow) + int64(math.Float32bits(bestScore)) + int64(metrics.FallbackAngles)
+					benchSink += int64(bestRow) + int64(math.Float32bits(bestScore)) + int64(metrics.FallbackAngles) + int64(metrics.TerminalAngles)
 					if b.N == 0 {
 						metrics = warmMetrics
 					}
@@ -1565,6 +1595,7 @@ type columnVectorGraphDeep1BSphericalDirectScorer struct {
 type columnVectorGraphDeep1BSphericalDirectScoreMetrics struct {
 	TotalAngles    int
 	FallbackAngles int
+	TerminalAngles int
 }
 
 type columnVectorGraphDeep1BNeighborHeap []columnVectorGraphDeep1BNeighbor
@@ -2491,23 +2522,38 @@ func columnVectorGraphDeep1BScoreBlock(query []float32, queryInvNorm float32, ve
 	return bestScore, bestRow
 }
 
-func columnVectorGraphDeep1BScoreSphericalShuffled(query []float32, queryInvNorm float32, raw []byte, rows int, dims int, invNorms []float32, scorer columnVectorGraphDeep1BSphericalDirectScoreKind, halfPiFallbackThreshold float64, scores []float32) (float32, int, columnVectorGraphDeep1BSphericalDirectScoreMetrics) {
+func columnVectorGraphDeep1BScoreSphericalShuffled(query []float32, queryInvNorm float32, raw []byte, rows int, dims int, invNorms []float32, scorer columnVectorGraphDeep1BSphericalDirectScoreKind, halfPiFallbackThreshold float64, scores []float32) (float32, int, columnVectorGraphDeep1BSphericalDirectScoreMetrics, error) {
+	if rows <= 0 {
+		return 0, -1, columnVectorGraphDeep1BSphericalDirectScoreMetrics{}, fmt.Errorf("Deep1B spherical rows=%d want positive", rows)
+	}
+	if dims < 2 {
+		return 0, -1, columnVectorGraphDeep1BSphericalDirectScoreMetrics{}, fmt.Errorf("Deep1B spherical dims=%d want at least 2", dims)
+	}
 	angleDims := dims - 1
-	valueCount := rows * angleDims
-	rawBytes := valueCount * 4
+	valueCount, err := checkedMulInt(rows, angleDims, "Deep1B spherical direct angle values")
+	if err != nil {
+		return 0, -1, columnVectorGraphDeep1BSphericalDirectScoreMetrics{}, err
+	}
+	rawBytes, err := checkedMulInt(valueCount, 4, "Deep1B spherical direct raw bytes")
+	if err != nil {
+		return 0, -1, columnVectorGraphDeep1BSphericalDirectScoreMetrics{}, err
+	}
 	if len(raw) != rawBytes {
-		panic(fmt.Sprintf("Deep1B spherical raw bytes=%d want=%d", len(raw), rawBytes))
+		return 0, -1, columnVectorGraphDeep1BSphericalDirectScoreMetrics{}, fmt.Errorf("Deep1B spherical raw bytes=%d want=%d", len(raw), rawBytes)
 	}
 	if len(invNorms) < rows {
-		panic(fmt.Sprintf("Deep1B spherical invNorms=%d want at least %d", len(invNorms), rows))
+		return 0, -1, columnVectorGraphDeep1BSphericalDirectScoreMetrics{}, fmt.Errorf("Deep1B spherical invNorms=%d want at least %d", len(invNorms), rows)
 	}
 	if len(query) < dims {
-		panic(fmt.Sprintf("Deep1B spherical query dims=%d want at least %d", len(query), dims))
+		return 0, -1, columnVectorGraphDeep1BSphericalDirectScoreMetrics{}, fmt.Errorf("Deep1B spherical query dims=%d want at least %d", len(query), dims)
 	}
 	if scores != nil {
+		if len(scores) < rows {
+			return 0, -1, columnVectorGraphDeep1BSphericalDirectScoreMetrics{}, fmt.Errorf("Deep1B spherical score slots=%d want at least %d", len(scores), rows)
+		}
 		scores = scores[:rows]
 	}
-	metrics := columnVectorGraphDeep1BSphericalDirectScoreMetrics{TotalAngles: rows * angleDims}
+	metrics := columnVectorGraphDeep1BSphericalDirectScoreMetrics{TotalAngles: valueCount}
 	bestScore := float32(-math.MaxFloat32)
 	bestRow := -1
 	for row := 0; row < rows; row++ {
@@ -2524,9 +2570,7 @@ func columnVectorGraphDeep1BScoreSphericalShuffled(query []float32, queryInvNorm
 		}
 		theta := columnVectorGraphDeep1BSphericalShuffledAngle(raw, rows, angleDims, valueCount, row, angleDims-1)
 		sinTheta, cosTheta := math.Sincos(theta)
-		if scorer == columnVectorGraphDeep1BSphericalDirectScoreHalfPiPoly {
-			metrics.FallbackAngles++
-		}
+		metrics.TerminalAngles++
 		dot += float64(query[dims-2])*prod*cosTheta + float64(query[dims-1])*prod*sinTheta
 		score := float32(dot) * queryInvNorm * invNorms[row]
 		if scores != nil {
@@ -2537,7 +2581,7 @@ func columnVectorGraphDeep1BScoreSphericalShuffled(query []float32, queryInvNorm
 			bestRow = row
 		}
 	}
-	return bestScore, bestRow, metrics
+	return bestScore, bestRow, metrics, nil
 }
 
 func columnVectorGraphDeep1BSphericalShuffledAngle(raw []byte, rows int, angleDims int, valueCount int, row int, angle int) float64 {
