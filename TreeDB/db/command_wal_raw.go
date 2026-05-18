@@ -20,7 +20,7 @@ type commandWALBatchIntent struct {
 	payload            []byte
 	externalRefs       bool
 	externalRefFileIDs []uint32
-	replay             bool
+	fromReplay         bool
 	lsn                uint64
 	coveredRange       [1]CommandWALLSNRange
 	syncOnPublish      bool
@@ -46,7 +46,7 @@ func (intent *CommandWALIntent) AssignedLSN() uint64 {
 
 // ReplayAssignedLSN returns the assigned LSN only for replay-originated intents.
 func (intent *CommandWALIntent) ReplayAssignedLSN() uint64 {
-	if intent == nil || !intent.inner.replay {
+	if intent == nil || !intent.inner.fromReplay {
 		return 0
 	}
 	return intent.inner.lsn
@@ -127,7 +127,7 @@ func NewCommandWALReplayIntent(env commitlog.CommandEnvelope) *CommandWALIntent 
 		scope:         env.Scope,
 		payloadFormat: env.PayloadFormat,
 		payload:       env.Payload,
-		replay:        true,
+		fromReplay:    true,
 		lsn:           env.LSN,
 		coveredRange:  [1]CommandWALLSNRange{{First: env.LSN, Last: env.LSN}},
 		syncOnPublish: true,

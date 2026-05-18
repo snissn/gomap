@@ -30,10 +30,10 @@ func columnStoreWriteEnabled(meta CollectionMeta) bool {
 }
 
 func (c *Collection) requireColumnStoreCommandWAL(meta CollectionMeta, commandWALIntent *backenddb.CommandWALIntent) error {
-	cfg := meta.Options.ColumnStore
-	if cfg == nil || !cfg.Enabled {
+	if !columnStoreWriteEnabled(meta) {
 		return nil
 	}
+	cfg := meta.Options.ColumnStore
 	profileSupport := cfg.ProfileSupport
 	if profileSupport == "" {
 		profileSupport = ColumnStoreProfileDurableOnly
