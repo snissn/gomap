@@ -245,10 +245,10 @@ func TestColumnStoreActiveManifestFailsClosedOnInvalidRootRecordM10C(t *testing.
 		record        []byte
 		want          error
 	}{
-		{name: "missing identity record", want: errColumnManifestIdentityMissing},
-		{name: "short identity record", includeRecord: true, record: shortRecord, want: errColumnManifestIdentityMalformed},
-		{name: "bad identity magic", includeRecord: true, record: badMagic, want: errColumnManifestIdentityBadMagic},
-		{name: "unsupported identity record version", includeRecord: true, record: unsupportedRecordVersion, want: errColumnManifestIdentityUnsupportedVersion},
+		{name: "missing identity record", want: ErrColumnManifestIdentityMissing},
+		{name: "short identity record", includeRecord: true, record: shortRecord, want: ErrColumnManifestIdentityMalformed},
+		{name: "bad identity magic", includeRecord: true, record: badMagic, want: ErrColumnManifestIdentityBadMagic},
+		{name: "unsupported identity record version", includeRecord: true, record: unsupportedRecordVersion, want: ErrColumnManifestIdentityUnsupportedVersion},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -273,7 +273,7 @@ func TestColumnManifestIdentityRecordRejectsNonZeroReserved(t *testing.T) {
 	record := encodeColumnManifestIdentityRecord(identity)
 	record[columnManifestIdentityReservedOffset+columnManifestIdentityReservedSize-1] = 1
 	decoded, err := decodeColumnManifestIdentityRecord(record)
-	if !errors.Is(err, errColumnManifestIdentityNonZeroReserved) || !strings.Contains(err.Error(), "0x00000001") {
+	if !errors.Is(err, ErrColumnManifestIdentityNonZeroReserved) || !strings.Contains(err.Error(), "0x00000001") {
 		t.Fatalf("decodeColumnManifestIdentityRecord decoded=%+v err=%v want hex reserved-field rejection", decoded, err)
 	}
 }
