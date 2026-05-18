@@ -272,6 +272,9 @@ func prepareColumnAssetPublishClosure(store ColumnAssetStore, prepared []ColumnP
 			}
 			bytes = int(asset.Ref.Length)
 		}
+		if bytes > int(^uint(0)>>1)-closure.RequiredBytes {
+			return ColumnAssetPublishClosure{}, fmt.Errorf("colgranule: prepared asset required bytes overflow")
+		}
 		closure.RequiredBytes += bytes
 	}
 	return closure, nil
