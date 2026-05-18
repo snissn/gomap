@@ -370,7 +370,7 @@ func BuildColumnPublishPlan(input ColumnPublishPlanInput) (ColumnPublishPlan, er
 
 	if input.Hooks.BuildSystemDelta != nil {
 		start = time.Now()
-		if err := input.Hooks.BuildSystemDelta(ColumnPublishSystemDeltaInput{Plan: plan}); err != nil {
+		if err := input.Hooks.BuildSystemDelta(ColumnPublishSystemDeltaInput{Plan: cloneColumnPublishPlanForHook(plan)}); err != nil {
 			return ColumnPublishPlan{}, fmt.Errorf("collections: column publish system-delta construction failed: %w", err)
 		}
 		plan.StageMetrics.SystemDeltaConstruction = time.Since(start)
@@ -729,9 +729,6 @@ func validateColumnAssetRefForPlan(ref ColumnAssetRef) error {
 	if ref.Length <= 0 {
 		return fmt.Errorf("collections: column asset ref length=%d must be positive", ref.Length)
 	}
-	if ref.Checksum == 0 {
-		return errors.New("collections: column asset ref checksum is required")
-	}
 	return nil
 }
 
@@ -756,4 +753,9 @@ func cloneColumnPreparedAssets(assets []ColumnPreparedAsset) []ColumnPreparedAss
 		return assets
 	}
 	return append([]ColumnPreparedAsset(nil), assets...)
+}
+
+func cloneColumnPublishPlanForHook(plan ColumnPublishPlan) ColumnPublishPlan {
+	plan.PreparedAssets = cloneColumnPreparedAssets(plan.PreparedAssets)
+	return plan
 }
