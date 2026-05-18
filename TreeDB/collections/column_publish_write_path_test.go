@@ -739,8 +739,11 @@ func TestColumnManifestRootDescriptorSystemDeltaReturnsPreparedUpdatedMetaM10B(t
 		t.Fatalf("buildRootDescriptorAndColumnManifestSystemDeltaIteratorAndMetaForMeta: %v", err)
 	}
 	defer func() { _ = iter.Close() }()
-	if cfg := updatedMeta.Options.ColumnStore; cfg == nil || cfg.ActiveManifest == nil || *cfg.ActiveManifest != identity || cfg.RecoveryAuthoritativeAppliedCommandLSN != plan.AppliedCommandLSN {
-		t.Fatalf("updated meta column store=%+v want active identity %+v and recovery LSN %d", cfg, identity, plan.AppliedCommandLSN)
+	if cfg := updatedMeta.Options.ColumnStore; cfg == nil ||
+		cfg.ActiveManifest == nil || *cfg.ActiveManifest != identity ||
+		cfg.RecoveryAuthoritativeManifest == nil || *cfg.RecoveryAuthoritativeManifest != identity ||
+		cfg.RecoveryAuthoritativeAppliedCommandLSN != plan.AppliedCommandLSN {
+		t.Fatalf("updated meta column store=%+v want active/recovery identity %+v and recovery LSN %d", cfg, identity, plan.AppliedCommandLSN)
 	}
 
 	var encodedMeta []byte
