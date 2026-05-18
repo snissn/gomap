@@ -304,13 +304,7 @@ func (w *ColumnWorkspace) Manifest() ColumnWorkspaceManifest {
 	if w == nil {
 		return ColumnWorkspaceManifest{}
 	}
-	out := w.manifest
-	out.Parts = append([]ColumnWorkspacePartManifest(nil), w.manifest.Parts...)
-	for i := range out.Parts {
-		out.Parts[i].SortKey = append([]SortKeyColumn(nil), out.Parts[i].SortKey...)
-		out.Parts[i].Coverage = cloneColumnWorkspacePartCoverage(out.Parts[i].Coverage)
-	}
-	return out
+	return cloneColumnWorkspaceManifest(w.manifest)
 }
 
 func (w *ColumnWorkspace) CacheStats() ColumnWorkspaceCacheStats {
@@ -366,9 +360,14 @@ func (w *ColumnWorkspace) PublishPart(part *ColumnPart, dictionaries map[string]
 	}}
 	synced, tracked, err := w.syncPreparedAssetsForManifest(prepared)
 	if err != nil {
-		markErr := w.assets.MarkPublishFailed(prepared, "workspace part asset sync failed")
-		return ColumnWorkspacePartManifest{}, errors.Join(err, markErr)
+		if tracked {
+			markErr := w.assets.MarkPublishFailed(prepared, "workspace part asset sync failed")
+			return ColumnWorkspacePartManifest{}, errors.Join(err, markErr)
+		}
+		return ColumnWorkspacePartManifest{}, err
 	}
+	oldManifest := cloneColumnWorkspaceManifest(w.manifest)
+	oldPartByID := cloneColumnWorkspacePartIndex(w.partByID)
 	if idx, ok := w.partByID[entry.PartID]; ok {
 		w.manifest.Parts[idx] = entry
 	} else {
@@ -383,6 +382,8 @@ func (w *ColumnWorkspace) PublishPart(part *ColumnPart, dictionaries map[string]
 	})
 	w.rebuildPartIndex()
 	if err := w.saveManifest(); err != nil {
+		w.manifest = oldManifest
+		w.partByID = oldPartByID
 		if tracked {
 			if markErr := w.assets.MarkPublishFailed(prepared, "workspace part manifest publish failed"); markErr != nil {
 				return ColumnWorkspacePartManifest{}, errors.Join(err, markErr)
@@ -407,7 +408,7 @@ func (w *ColumnWorkspace) syncPreparedAssetsForManifest(prepared []ColumnPrepare
 	}
 	closure, err := w.assets.PreparePublishClosure(prepared)
 	if err != nil {
-		return ColumnAssetSyncedPublishClosure{}, true, err
+		return ColumnAssetSyncedPublishClosure{}, false, err
 	}
 	synced, err := w.assets.SyncPublishClosure(closure)
 	if err != nil {
@@ -699,6 +700,14 @@ func (w *ColumnWorkspace) rebuildPartIndex() {
 	}
 }
 
+func cloneColumnWorkspacePartIndex(index map[uint64]int) map[uint64]int {
+	out := make(map[uint64]int, len(index))
+	for partID, idx := range index {
+		out[partID] = idx
+	}
+	return out
+}
+
 func (w *ColumnWorkspace) validateManifestAssets() error {
 	for _, entry := range w.manifest.Parts {
 		switch w.validationMode {
@@ -881,6 +890,16 @@ func validateColumnPreparedAssetRegistry(registry ColumnPreparedAssetRegistry) e
 
 func cloneColumnPreparedAssets(assets []ColumnPreparedAsset) []ColumnPreparedAsset {
 	return append([]ColumnPreparedAsset(nil), assets...)
+}
+
+func cloneColumnWorkspaceManifest(manifest ColumnWorkspaceManifest) ColumnWorkspaceManifest {
+	out := manifest
+	out.Parts = append([]ColumnWorkspacePartManifest(nil), manifest.Parts...)
+	for i := range out.Parts {
+		out.Parts[i].SortKey = append([]SortKeyColumn(nil), out.Parts[i].SortKey...)
+		out.Parts[i].Coverage = cloneColumnWorkspacePartCoverage(out.Parts[i].Coverage)
+	}
+	return out
 }
 
 func columnWorkspaceSegmentFileID(name string) (uint32, bool) {
