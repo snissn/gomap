@@ -78,7 +78,7 @@ func (c *Collection) UpdateBSONSet(documentID []byte, fields []BSONSetField) (bo
 		matched, modified, err = c.updateBSONSetDirect(documentID, spec)
 	}
 	if err == nil && modified {
-		err = commitAmbiguousError("UpdateBSONSet vector index maintenance", c.notifyVectorIndexesUpsert([][]byte{documentID}))
+		err = commitAmbiguousError("UpdateBSONSet vector index maintenance", c.notifyAndPersistVectorIndexesUpsertForWAL([][]byte{documentID}))
 	}
 	return matched, modified, err
 }
@@ -129,7 +129,7 @@ func (c *Collection) updateBSONSetDirect(documentID []byte, spec bsonSetUpdate) 
 func (c *Collection) UpdateBSONSetBatchIfNoSecondaryUniqueIndexChanges(items []BSONSetUpdateBatchItem) ([]UpdateBatchResult, bool, error) {
 	results, batched, err := c.updateBSONSetBatch(items, updateBatchModeNoSecondaryUniqueIndexChanges)
 	if err == nil && batched {
-		err = commitAmbiguousError("UpdateBSONSetBatchIfNoSecondaryUniqueIndexChanges vector index maintenance", c.notifyVectorIndexesBSONSetUpdateBatch(items, results))
+		err = commitAmbiguousError("UpdateBSONSetBatchIfNoSecondaryUniqueIndexChanges vector index maintenance", c.notifyAndPersistVectorIndexesBSONSetUpdateBatchForWAL(items, results))
 	}
 	return results, batched, err
 }

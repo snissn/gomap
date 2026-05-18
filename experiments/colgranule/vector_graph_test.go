@@ -96,9 +96,9 @@ func TestColumnVectorGraphRejectsStaleInvNorm(t *testing.T) {
 
 func TestColumnVectorGraphRejectsLooseTinyInvNorm(t *testing.T) {
 	err := validateColumnVectorGraphStorage(
-		[]float32{1e7},
+		[]float32{1e20},
 		1,
-		[]float32{1e-8},
+		[]float32{1e-12},
 		[]uint32{0, 0},
 		nil,
 		1,

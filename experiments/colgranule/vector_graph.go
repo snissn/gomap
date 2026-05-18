@@ -355,10 +355,15 @@ func validateColumnVectorGraphStorage(vectors []float32, dims int, invNorms []fl
 
 func validateColumnVectorGraphInvNorm(row int, invNorm float32, normSquared float64) error {
 	expected := 1 / math.Sqrt(normSquared)
-	diff := math.Abs(float64(invNorm) - expected)
-	allowed := math.Max(1e-12, math.Abs(expected)*1e-4)
+	expected32 := float32(expected)
+	if expected32 <= 0 || !columnVectorGraphFinite(expected32) {
+		return fmt.Errorf("colgranule: graph inv-norm row=%d expected value=%g is not representable", row, expected)
+	}
+	expectedRepresentable := float64(expected32)
+	diff := math.Abs(float64(invNorm) - expectedRepresentable)
+	allowed := math.Abs(expectedRepresentable) * 1e-4
 	if diff > allowed {
-		return fmt.Errorf("colgranule: graph inv-norm row=%d value=%g does not match vector norm=%g", row, invNorm, expected)
+		return fmt.Errorf("colgranule: graph inv-norm row=%d value=%g does not match vector norm=%g", row, invNorm, expectedRepresentable)
 	}
 	return nil
 }

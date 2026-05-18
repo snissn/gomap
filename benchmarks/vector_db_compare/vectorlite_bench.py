@@ -152,9 +152,10 @@ def reopen_database(args: argparse.Namespace) -> tuple[sqlite3.Connection, dict[
     configure_sqlite(db, args.page_size, args.cache_mb)
     count = db.execute("select count(*) from documents").fetchone()[0]
     if count > 0:
-        payload = db.execute("select document from documents where rowid = 1").fetchone()[0]
-        probe_document = json.loads(bytes(payload))
-        probe = np.asarray(probe_document["embedding"], dtype="<f4").tobytes()
+        probe_row = db.execute("select embedding from vectors where rowid = 1").fetchone()
+        if probe_row is None:
+            raise RuntimeError("vectorlite reopen probe could not find vector rowid 1")
+        probe = bytes(probe_row[0])
         probe_rows = db.execute(
             "select rowid from vectors where knn_search(embedding, knn_param(?, 1, ?))",
             [probe, args.ef_search],
@@ -298,6 +299,16 @@ def main() -> None:
     parser.add_argument("--cache-mb", type=int, default=256)
     parser.add_argument("--min-recall", type=float, default=0.95)
     args = parser.parse_args()
+    if args.queries <= 0:
+        parser.error("--queries must be positive")
+    if args.validate_queries <= 0:
+        parser.error("--validate-queries must be positive")
+    if args.m <= 0:
+        parser.error("--m must be positive")
+    if args.ef_construction <= 0:
+        parser.error("--ef-construction must be positive")
+    if args.ef_search <= 0:
+        parser.error("--ef-search must be positive")
 
     dataset_dir = Path(args.dataset_dir)
     manifest = load_manifest(dataset_dir)

@@ -355,6 +355,236 @@ func (idx *VectorIndex) SaveNativeDeltaSnapshot() (VectorIndexLoadStatus, error)
 	return status, nil
 }
 
+type preparedNativeVectorIndexRootPublish struct {
+	index         *VectorIndex
+	rootName      string
+	baseRoot      uint64
+	publishBase   uint64
+	storagePolicy backenddb.OrderedRootStoragePolicy
+	table         memtable.Table
+	publishTable  memtable.Table
+	iter          iterator.UnsafeIterator
+	bytesDisk     int64
+	snapshotSeq   uint64
+}
+
+func (p *preparedNativeVectorIndexRootPublish) close() {
+	if p == nil {
+		return
+	}
+	if p.iter != nil {
+		_ = p.iter.Close()
+		p.iter = nil
+	}
+	if p.publishTable != nil && p.publishTable != p.table {
+		resetCollectionRunTable(p.publishTable)
+		p.publishTable = nil
+	}
+	if p.table != nil {
+		resetCollectionRunTable(p.table)
+		p.table = nil
+	}
+}
+
+func (c *Collection) persistDirtyNativeVectorIndexesBeforeWALUpsertAck(documentIDs [][]byte, replay *backenddb.CommandWALIntent) error {
+	if c == nil || c.db == nil || (!c.db.CommandWALEnabled() && replay == nil) {
+		return nil
+	}
+	if replay == nil && !c.hasDirtyNativeVectorIndex() {
+		return nil
+	}
+	intent, err := c.newCollectionVectorIndexUpsertCommandWALIntent(documentIDs, replay)
+	if err != nil {
+		return err
+	}
+	return c.persistDirtyNativeVectorIndexesWithCommandWALIntent(intent)
+}
+
+func (c *Collection) persistDirtyNativeVectorIndexesBeforeWALDeleteAck(documentIDs [][]byte, replay *backenddb.CommandWALIntent) error {
+	if c == nil || c.db == nil || (!c.db.CommandWALEnabled() && replay == nil) {
+		return nil
+	}
+	if replay == nil && !c.hasDirtyNativeVectorIndex() {
+		return nil
+	}
+	intent, err := c.newCollectionVectorIndexDeleteCommandWALIntent(documentIDs, replay)
+	if err != nil {
+		return err
+	}
+	return c.persistDirtyNativeVectorIndexesWithCommandWALIntent(intent)
+}
+
+func (c *Collection) persistDirtyNativeVectorIndexesWithCommandWALIntent(intent *backenddb.CommandWALIntent) error {
+	if c == nil {
+		return errCollectionNil
+	}
+	if c.db == nil {
+		return errCollectionDBNil
+	}
+	if intent == nil {
+		return nil
+	}
+	unlockMutation := c.lockMutation()
+	defer unlockMutation.Unlock()
+	if err := c.flushBufferedWrites(); err != nil {
+		return err
+	}
+
+	pin := c.db.AcquireSnapshot()
+	if pin == nil {
+		return backenddb.ErrClosed
+	}
+	defer func() { _ = pin.Close() }()
+	catalog, err := loadCollectionCatalog(pin, c.meta.Name)
+	if err != nil {
+		return err
+	}
+	if catalog == nil {
+		return errCollectionNotFound
+	}
+	c.meta = catalog.meta
+	baseSystemRoot := snapshotSystemRoot(pin)
+	baseCommitSeq := snapshotCommitSeq(pin)
+
+	indexes := c.registeredVectorIndexes()
+	prepared := make([]preparedNativeVectorIndexRootPublish, 0, len(indexes))
+	defer func() {
+		for i := range prepared {
+			prepared[i].close()
+		}
+	}()
+	rootNames := make([]string, 0, len(indexes))
+	baseRootIDs := make(map[string]uint64, len(indexes))
+	ordered := make([]backenddb.OrderedRootDeltaPublishInput, 0, len(indexes))
+	for _, index := range indexes {
+		if index == nil || !index.needsNativeAutoPersist() {
+			continue
+		}
+		item, ok, err := c.prepareNativeVectorIndexCommandWALRootPublish(catalog, index)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			continue
+		}
+		rootNames = append(rootNames, item.rootName)
+		baseRootIDs[item.rootName] = item.baseRoot
+		ordered = append(ordered, backenddb.OrderedRootDeltaPublishInput{
+			BaseRoot:      item.publishBase,
+			Iter:          item.iter,
+			StoragePolicy: item.storagePolicy,
+		})
+		prepared = append(prepared, item)
+	}
+	if len(prepared) == 0 {
+		return c.db.PublishCommandWALNoop(intent, false)
+	}
+
+	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaGroupWithCommandWALAndSystemDeltaBuilder(ordered, intent, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		return c.buildRootDescriptorSystemDeltaIteratorForMeta(catalog.meta, baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootIDs)
+	})
+	if err != nil {
+		return err
+	}
+	if len(rootIDs) != len(prepared) {
+		return unexpectedOrderedRootCountError(catalog.meta.Name, len(prepared), len(rootIDs))
+	}
+	for i := range prepared {
+		item := &prepared[i]
+		item.index.setNativePersistent(true)
+		item.index.recordPersistedSnapshot(rootIDs[i], item.bytesDisk, item.snapshotSeq)
+	}
+	nextCatalog := cloneCatalogWithRootUpdates(catalog, catalog.meta, rootNames, rootIDs)
+	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
+	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
+	if c.manager != nil && !c.hasDirtyNativeVectorIndex() {
+		c.manager.unregisterCollectionHandle(c)
+	}
+	return nil
+}
+
+func (c *Collection) prepareNativeVectorIndexCommandWALRootPublish(catalog *collectionCatalog, idx *VectorIndex) (preparedNativeVectorIndexRootPublish, bool, error) {
+	var item preparedNativeVectorIndexRootPublish
+	if c == nil {
+		return item, false, errCollectionNil
+	}
+	if c.db == nil {
+		return item, false, errCollectionDBNil
+	}
+	if catalog == nil {
+		return item, false, errCollectionNotFound
+	}
+	if idx == nil || !idx.needsNativeAutoPersist() {
+		return item, false, nil
+	}
+	def, ok := findVectorIndex(catalog.meta.VectorIndexes, idx.name)
+	if !ok {
+		return item, false, nil
+	}
+	if reason := idx.validateNativeSnapshotDefinition(def); reason != "" {
+		return item, false, fmt.Errorf("collections: vector index %q does not match collection metadata: %s", idx.name, reason)
+	}
+	rootName := collectionVectorIndexRootName(catalog.meta.Name, idx.name)
+	baseRoot := catalog.rootID(rootName)
+	policy, err := collectionRootStoragePolicyForDB(c.db, catalog.meta, rootName)
+	if err != nil {
+		return item, false, err
+	}
+
+	var table memtable.Table
+	var bytesDisk int64
+	var snapshotSeq uint64
+	publishBase := baseRoot
+	if !idx.isNativePersistent() || !idx.hasNativePersistedSnapshot() {
+		if baseEpoch := idx.nativeSnapshotBaseEpochForFullSave(); baseRoot != baseEpoch {
+			return item, false, fmt.Errorf("%w: index %q loaded epoch %d current root %d", errVectorIndexStaleNativeRoot, idx.name, baseEpoch, baseRoot)
+		}
+		snapshot, seq := idx.persistSnapshot()
+		table, bytesDisk, err = buildVectorIndexNativeSnapshotTable(snapshot)
+		if err != nil {
+			return item, false, err
+		}
+		snapshotSeq = seq
+		publishBase = 0
+	} else {
+		var persistedEpoch uint64
+		var hasWork bool
+		table, bytesDisk, snapshotSeq, persistedEpoch, hasWork, err = idx.persistNativeDeltaTable(baseRoot == 0)
+		if err != nil {
+			return item, false, err
+		}
+		if !hasWork {
+			return item, false, nil
+		}
+		if baseRoot != persistedEpoch {
+			resetCollectionRunTable(table)
+			return item, false, fmt.Errorf("%w: index %q loaded epoch %d current root %d", errVectorIndexStaleNativeRoot, idx.name, persistedEpoch, baseRoot)
+		}
+	}
+	table.Freeze()
+	publishTable, pointerized, err := pointerizeCollectionRunTableValues(c.db, table)
+	if err != nil {
+		resetCollectionRunTable(table)
+		return item, false, err
+	}
+	item = preparedNativeVectorIndexRootPublish{
+		index:         idx,
+		rootName:      rootName,
+		baseRoot:      baseRoot,
+		publishBase:   publishBase,
+		storagePolicy: policy,
+		table:         table,
+		publishTable:  publishTable,
+		iter:          publishTable.NewIterator(nil, nil),
+		bytesDisk:     bytesDisk,
+		snapshotSeq:   snapshotSeq,
+	}
+	if !pointerized {
+		item.publishTable = item.table
+	}
+	return item, true, nil
+}
+
 func (idx *VectorIndex) saveLegacySnapshot() (VectorIndexLoadStatus, error) {
 	status := VectorIndexLoadStatus{}
 	if idx == nil {
