@@ -256,6 +256,26 @@ func TestColumnVectorGraphCosineDistanceKeepsTrueOrthogonalDotFast(t *testing.T)
 	}
 }
 
+func TestColumnVectorGraphCosineDistanceClampsAcceptedInvNormDrift(t *testing.T) {
+	const driftedInvNorm = 1.00005
+	graph := &ColumnVectorGraph{
+		ids:              []int64{101, 202},
+		dims:             1,
+		vectors:          []float32{1, -1},
+		invNorms:         []float32{driftedInvNorm, driftedInvNorm},
+		neighborOffsets:  []uint32{0, 0, 0},
+		neighborOrdinals: nil,
+		entryOrdinal:     0,
+	}
+
+	if distance := graph.cosineDistance([]float32{1}, 1, 0); distance != 0 {
+		t.Fatalf("positive drift distance=%g want 0", distance)
+	}
+	if distance := graph.cosineDistance([]float32{1}, 1, 1); distance != 2 {
+		t.Fatalf("negative drift distance=%g want 2", distance)
+	}
+}
+
 func TestColumnVectorGraphSearchRejectsInvalidEntryDistance(t *testing.T) {
 	graph := &ColumnVectorGraph{
 		ids:              []int64{101},
@@ -603,14 +623,15 @@ func exactColumnVectorGraphDistance(t *testing.T, graph *ColumnVectorGraph, quer
 	if !ok {
 		return float32(math.Inf(1))
 	}
-	var dot float32
+	var dot float64
 	var normSquared float64
 	for dim, value := range vector {
-		dot += query[dim] * value
+		dot += float64(query[dim]) * float64(value)
 		normSquared += float64(value) * float64(value)
 	}
 	if normSquared == 0 {
 		return float32(math.Inf(1))
 	}
-	return 1 - dot*queryInvNorm*float32(1/math.Sqrt(normSquared))
+	cosine := dot * float64(queryInvNorm) * (1 / math.Sqrt(normSquared))
+	return float32(1 - cosine)
 }
