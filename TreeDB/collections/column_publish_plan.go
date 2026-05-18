@@ -535,6 +535,16 @@ func (c *Collection) buildColumnManifestPublishSystemDeltaIterator(input ColumnM
 		if baseRecoveryLSN != 0 && plan.RecoveryAuthoritativeAppliedCommandLSN < baseRecoveryLSN {
 			return nil, fmt.Errorf("collections: column publish recovery-authoritative AppliedCommandLSN regression for %q: plan %d < base %d", input.BaseMeta.Name, plan.RecoveryAuthoritativeAppliedCommandLSN, baseRecoveryLSN)
 		}
+		if baseRecoveryLSN != 0 && plan.AppliedCommandLSN < baseRecoveryLSN {
+			return nil, fmt.Errorf("collections: column publish AppliedCommandLSN regression for %q: plan %d < base recovery %d", input.BaseMeta.Name, plan.AppliedCommandLSN, baseRecoveryLSN)
+		}
+		if baseActive := input.BaseMeta.Options.ColumnStore.ActiveManifest; baseActive != nil {
+			normalizedBaseActive := *baseActive
+			normalizeColumnManifestIdentityDefaults(&normalizedBaseActive)
+			if activeIdentity.Generation <= normalizedBaseActive.Generation {
+				return nil, fmt.Errorf("collections: column publish manifest generation regression for %q: plan %d <= base %d", input.BaseMeta.Name, activeIdentity.Generation, normalizedBaseActive.Generation)
+			}
+		}
 	}
 	// The root IDs passed here were just built by the ordered-root publish path.
 	// Do not read them through the pre-commit snapshot: compressed roots may
