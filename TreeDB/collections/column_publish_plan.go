@@ -349,7 +349,7 @@ func BuildColumnPublishPlan(input ColumnPublishPlanInput) (ColumnPublishPlan, er
 		RecoveryAuthoritativeManifest:          manifest.Identity,
 		RecoveryAuthoritativeAppliedCommandLSN: input.AppliedCommandLSN,
 		RootDelta:                              rootDelta,
-		PreparedAssets:                         closure.PreparedAssets,
+		PreparedAssets:                         cloneColumnPreparedAssets(closure.PreparedAssets),
 		RequiredAssetCount:                     closure.RequiredAssets,
 		RequiredAssetBytes:                     closure.RequiredBytes,
 		RequiredAssetFlush:                     closure.FlushRequired,
@@ -798,6 +798,13 @@ func cloneColumnPublishPreparedAssets(prepared ColumnPublishPreparedAssets) Colu
 	if len(prepared.Assets) == 0 {
 		return prepared
 	}
-	prepared.Assets = append([]ColumnPreparedAsset(nil), prepared.Assets...)
+	prepared.Assets = cloneColumnPreparedAssets(prepared.Assets)
 	return prepared
+}
+
+func cloneColumnPreparedAssets(assets []ColumnPreparedAsset) []ColumnPreparedAsset {
+	if len(assets) == 0 {
+		return assets
+	}
+	return append([]ColumnPreparedAsset(nil), assets...)
 }
