@@ -36,6 +36,8 @@ type ColumnAssetPublishClosure struct {
 	RequiredBytes  int                   `json:"required_bytes"`
 	FlushRequired  bool                  `json:"flush_required,omitempty"`
 	SyncRequired   bool                  `json:"sync_required,omitempty"`
+
+	preparedIdentity []ColumnPreparedAsset
 }
 
 type ColumnAssetSyncedPublishClosure struct {
@@ -237,8 +239,9 @@ func prepareColumnAssetPublishClosure(store ColumnAssetStore, prepared []ColumnP
 		return ColumnAssetPublishClosure{}, fmt.Errorf("colgranule: closed column asset manager")
 	}
 	closure := ColumnAssetPublishClosure{
-		PreparedAssets: cloneColumnPreparedAssets(prepared),
-		FlushRequired:  len(prepared) > 0,
+		PreparedAssets:   cloneColumnPreparedAssets(prepared),
+		FlushRequired:    len(prepared) > 0,
+		preparedIdentity: cloneColumnPreparedAssets(prepared),
 	}
 	// Sync is tied to the explicit publish closure: unreferenced buffered
 	// assets are not made durable until a root-visible prepared ref names them.
@@ -421,6 +424,12 @@ func validateColumnPreparedAsset(asset ColumnPreparedAsset) error {
 }
 
 func validateColumnAssetPublishClosureMatches(caller ColumnAssetPublishClosure, verified ColumnAssetPublishClosure) error {
+	if !columnPreparedAssetsEqual(caller.PreparedAssets, caller.preparedIdentity) {
+		return fmt.Errorf("colgranule: publish closure prepared assets changed after prepare")
+	}
+	if !columnPreparedAssetsEqual(verified.PreparedAssets, caller.preparedIdentity) {
+		return fmt.Errorf("colgranule: publish closure verified prepared assets changed after prepare")
+	}
 	if caller.RequiredAssets != verified.RequiredAssets {
 		return fmt.Errorf("colgranule: publish closure required assets=%d want %d", caller.RequiredAssets, verified.RequiredAssets)
 	}
@@ -431,6 +440,18 @@ func validateColumnAssetPublishClosureMatches(caller ColumnAssetPublishClosure, 
 		return fmt.Errorf("colgranule: publish closure flush required=%t want %t", caller.FlushRequired, verified.FlushRequired)
 	}
 	return nil
+}
+
+func columnPreparedAssetsEqual(left, right []ColumnPreparedAsset) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func verifyColumnAssetStoreRef(store ColumnAssetStore, ref ColumnAssetRef) error {
