@@ -239,6 +239,69 @@ func TestColumnVectorGraphSearchHandlesUnderflowingFloat32Dot(t *testing.T) {
 	}
 }
 
+func TestColumnVectorGraphCosineDistanceKeepsTrueOrthogonalDotFast(t *testing.T) {
+	graph := &ColumnVectorGraph{
+		ids:              []int64{101},
+		dims:             2,
+		vectors:          []float32{1, 0},
+		invNorms:         []float32{1},
+		neighborOffsets:  []uint32{0, 0},
+		neighborOrdinals: nil,
+		entryOrdinal:     0,
+	}
+
+	distance := graph.cosineDistance([]float32{0, 1}, float32(math.NaN()), 0)
+	if distance != columnVectorGraphOrthogonalDistance {
+		t.Fatalf("distance=%g want orthogonal distance %g", distance, float32(columnVectorGraphOrthogonalDistance))
+	}
+}
+
+func TestColumnVectorGraphSearchRejectsInvalidEntryDistance(t *testing.T) {
+	graph := &ColumnVectorGraph{
+		ids:              []int64{101},
+		dims:             1,
+		vectors:          []float32{1},
+		invNorms:         []float32{float32(math.NaN())},
+		neighborOffsets:  []uint32{0, 0},
+		neighborOrdinals: nil,
+		entryOrdinal:     0,
+	}
+
+	results, _, err := graph.SearchCosine([]float32{1}, ColumnVectorGraphSearchOptions{TopK: 1, EfSearch: 1}, &ColumnVectorGraphSearchScratch{})
+	if err == nil {
+		t.Fatalf("SearchCosine returned results=%v with invalid entry distance; want error", results)
+	}
+	if !strings.Contains(err.Error(), "entry ordinal") {
+		t.Fatalf("error=%q want entry ordinal context", err)
+	}
+}
+
+func TestColumnVectorGraphSearchExploresEqualDistanceBridge(t *testing.T) {
+	graph := &ColumnVectorGraph{
+		ids:              []int64{100, 101, 102},
+		dims:             1,
+		vectors:          []float32{1, 1, 1},
+		invNorms:         []float32{1, 1, 1},
+		neighborOffsets:  []uint32{0, 0, 1, 2},
+		neighborOrdinals: []int64{2, 0},
+		entryOrdinal:     1,
+	}
+
+	results, stats, err := graph.SearchCosine([]float32{1}, ColumnVectorGraphSearchOptions{TopK: 1, EfSearch: 1}, &ColumnVectorGraphSearchScratch{})
+	if err != nil {
+		t.Fatalf("SearchCosine: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("results=%d want 1", len(results))
+	}
+	if results[0].Ordinal != 0 || results[0].PrimaryID != 100 {
+		t.Fatalf("result=(id=%d ord=%d) want bridge-reached ordinal 0", results[0].PrimaryID, results[0].Ordinal)
+	}
+	if stats.CandidatesExamined != 3 {
+		t.Fatalf("candidates examined=%d want 3", stats.CandidatesExamined)
+	}
+}
+
 func TestColumnVectorGraphScratchClearsFullVisitedCapacityOnWrap(t *testing.T) {
 	var scratch ColumnVectorGraphSearchScratch
 	visited, mark := scratch.nextVisitedEpoch(8)
@@ -254,6 +317,26 @@ func TestColumnVectorGraphScratchClearsFullVisitedCapacityOnWrap(t *testing.T) {
 	for i, value := range full {
 		if value != 0 {
 			t.Fatalf("visited epoch slot %d=%d after wrap; want 0", i, value)
+		}
+	}
+}
+
+func TestColumnVectorGraphScratchClearsNewlyExposedVisitedSlots(t *testing.T) {
+	var scratch ColumnVectorGraphSearchScratch
+	visited, mark := scratch.nextVisitedEpoch(8)
+	nextMark := mark + 1
+	for i := 4; i < len(visited); i++ {
+		visited[i] = nextMark
+	}
+
+	scratch.visitedEpochs = scratch.visitedEpochs[:4]
+	visited, mark = scratch.nextVisitedEpoch(8)
+	if mark != nextMark {
+		t.Fatalf("mark=%d want %d", mark, nextMark)
+	}
+	for i := 4; i < len(visited); i++ {
+		if visited[i] == mark {
+			t.Fatalf("newly exposed visited slot %d kept stale current mark %d", i, mark)
 		}
 	}
 }
