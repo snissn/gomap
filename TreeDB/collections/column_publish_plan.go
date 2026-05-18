@@ -12,8 +12,15 @@ import (
 
 const (
 	columnManifestRootSuffix = "/column/manifest"
+)
 
-	errColumnPublishPlanRequiresEnabledColumnStore = "collections: column publish plan requires enabled=true column_store"
+// ErrColumnPublishPlanRequiresEnabledColumnStore is returned when publish-plan
+// construction or publication sees non-empty column-store metadata that is not
+// enabled for column writes.
+var ErrColumnPublishPlanRequiresEnabledColumnStore = errors.New("collections: column publish plan requires enabled=true column_store")
+
+var (
+	errColumnPublishPlanRequiresEnabledColumnStore = ErrColumnPublishPlanRequiresEnabledColumnStore
 )
 
 type ColumnPublishOperation string
@@ -242,7 +249,7 @@ func BuildColumnPublishPlan(input ColumnPublishPlanInput) (ColumnPublishPlan, er
 		if columnStoreConfigEmpty(*input.ColumnStore) {
 			return ColumnPublishPlan{}, nil
 		}
-		return ColumnPublishPlan{}, errors.New(errColumnPublishPlanRequiresEnabledColumnStore)
+		return ColumnPublishPlan{}, errColumnPublishPlanRequiresEnabledColumnStore
 	}
 	if err := validateColumnPublishOperation(input.Operation); err != nil {
 		return ColumnPublishPlan{}, err
@@ -521,7 +528,7 @@ func (c *Collection) buildColumnManifestPublishSystemDeltaIterator(input ColumnM
 
 	updatedMeta := copyCollectionMeta(input.BaseMeta)
 	if updatedMeta.Options.ColumnStore == nil || !updatedMeta.Options.ColumnStore.Enabled {
-		return nil, errors.New(errColumnPublishPlanRequiresEnabledColumnStore)
+		return nil, errColumnPublishPlanRequiresEnabledColumnStore
 	}
 	cfg := updatedMeta.Options.ColumnStore.copy()
 	active := activeIdentity
@@ -628,7 +635,7 @@ func columnPublishHookConfig(cfg ColumnStoreConfig) ColumnStoreConfig {
 
 func validateColumnPublishPlanConfig(collection string, cfg *ColumnStoreConfig) error {
 	if cfg == nil || !cfg.Enabled {
-		return errors.New(errColumnPublishPlanRequiresEnabledColumnStore)
+		return errColumnPublishPlanRequiresEnabledColumnStore
 	}
 	if cfg.ManifestRoot == nil {
 		return errors.New("collections: column publish plan requires column manifest root descriptor")

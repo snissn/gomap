@@ -65,12 +65,11 @@ func TestColumnPublishPlanRejectsNonEmptyDisabledColumnStoreM10A(t *testing.T) {
 		Operation:         ColumnPublishOperationInsert,
 		AppliedCommandLSN: 101,
 	}
-	const want = "collections: column publish plan requires enabled=true column_store"
 	for _, normalized := range []bool{false, true} {
 		input.ColumnStoreNormalized = normalized
 		plan, err := BuildColumnPublishPlan(input)
-		if err == nil || err.Error() != want {
-			t.Fatalf("BuildColumnPublishPlan normalized=%v err=%v want %q", normalized, err, want)
+		if !errors.Is(err, ErrColumnPublishPlanRequiresEnabledColumnStore) {
+			t.Fatalf("BuildColumnPublishPlan normalized=%v err=%v want sentinel %v", normalized, err, ErrColumnPublishPlanRequiresEnabledColumnStore)
 		}
 		if plan.Enabled {
 			t.Fatalf("invalid disabled column_store returned enabled plan: %+v", plan)
