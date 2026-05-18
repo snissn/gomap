@@ -377,9 +377,10 @@ func columnVectorGraphDocumentIDRanks(ids [][]byte) []uint32 {
 // columnVectorGraphDocumentIDsMatchOrdinalTieOrder reports whether document IDs
 // are in non-decreasing (sorted) order. Non-decreasing order, including
 // duplicate adjacent IDs, is sufficient for the ordinal-tie fast path because:
-// - In the ordinal-tie path, equal-distance candidates are ordered by nodeID.
-// - In the document-tie path, columnVectorGraphDocumentIDRanks breaks equal-ID
-//   ties by ordinal position (lower ordinal = better rank).
+//   - In the ordinal-tie path, equal-distance candidates are ordered by nodeID.
+//   - In the document-tie path, columnVectorGraphDocumentIDRanks breaks equal-ID
+//     ties by ordinal position (lower ordinal = better rank).
+//
 // Both paths therefore produce identical ordering for equal document IDs, so
 // the ordinal-tie fast path is safe to use whenever IDs are non-decreasing.
 func columnVectorGraphDocumentIDsMatchOrdinalTieOrder(ids [][]byte) bool {
