@@ -207,7 +207,9 @@ func TestSegmentColumnAssetStoreCloseWaitsForActiveVerifyIO(t *testing.T) {
 	if _, err := store.Put(ColumnAssetKindTCS1PartImage, []byte("late payload")); err == nil || !strings.Contains(err.Error(), "closed segment asset store") {
 		t.Fatalf("Put during pending Close err=%v want closed segment asset store", err)
 	}
-	store.endFileIO()
+	if err := store.endFileIO(); err != nil {
+		t.Fatalf("endFileIO: %v", err)
+	}
 	select {
 	case err := <-closeDone:
 		if err != nil {
@@ -221,18 +223,15 @@ func TestSegmentColumnAssetStoreCloseWaitsForActiveVerifyIO(t *testing.T) {
 	}
 }
 
-func TestSegmentColumnAssetStoreEndFileIOPanicsWithoutBegin(t *testing.T) {
+func TestSegmentColumnAssetStoreEndFileIORejectsWithoutBegin(t *testing.T) {
 	store, err := OpenSegmentColumnAssetStore(t.TempDir())
 	if err != nil {
 		t.Fatalf("OpenSegmentColumnAssetStore: %v", err)
 	}
 	defer store.Close()
-	defer func() {
-		if recovered := recover(); recovered == nil {
-			t.Fatal("endFileIO without beginFileIO did not panic")
-		}
-	}()
-	store.endFileIO()
+	if err := store.endFileIO(); err == nil || !strings.Contains(err.Error(), "without matching begin") {
+		t.Fatalf("endFileIO without beginFileIO err=%v want without matching begin", err)
+	}
 }
 
 func waitForSegmentStoreClosing(t *testing.T, store *SegmentColumnAssetStore) {
