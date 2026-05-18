@@ -1347,6 +1347,11 @@ func vectorBenchmarkDocument(id, dims int) []byte {
 
 func vectorBenchmarkEmbedding(id, dims int) []float32 {
 	out := make([]float32, dims)
+	fillVectorBenchmarkEmbedding(out, id)
+	return out
+}
+
+func fillVectorBenchmarkEmbedding(out []float32, id int) {
 	var norm float64
 	x := float64(id + 1)
 	for i := range out {
@@ -1359,5 +1364,4 @@ func vectorBenchmarkEmbedding(id, dims int) []float32 {
 	for i := range out {
 		out[i] = float32(float64(out[i]) * scale)
 	}
-	return out
 }

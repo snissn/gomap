@@ -28,7 +28,7 @@ func TestColumnVectorGraphSearchMatchesExactCompleteGraph(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SearchCosine: %v", err)
 	}
-	if trace.ReturnedCount != 7 || trace.CandidatesExamined != graph.Rows() {
+	if trace.ReturnedCount != 7 || trace.CandidatesExamined != graph.Rows() || trace.CandidatesAfterFilter != graph.Rows() || trace.RerankCount != graph.Rows() {
 		t.Fatalf("trace=%+v want returned=7 candidates=%d", trace, graph.Rows())
 	}
 	exact := exactColumnVectorGraphCosine(t, graph, query, 7)
@@ -741,6 +741,200 @@ func BenchmarkColumnVectorGraphSearchCosineParallel(b *testing.B) {
 	b.ReportMetric(float64(graph.Edges())/float64(graph.Rows()), "edges/node")
 	b.ReportMetric(float64(warmTrace.CandidatesExamined), "candidates/search")
 	b.ReportMetric(float64(warmTrace.EdgesVisited), "edges/search")
+}
+
+func BenchmarkColumnVectorGraphSearchCosineScale(b *testing.B) {
+	cases := []struct {
+		name   string
+		rows   int
+		dims   int
+		degree int
+	}{
+		{name: "rows_100k_dims_128_degree_16", rows: 100_000, dims: 128, degree: 16},
+		{name: "rows_1m_dims_128_degree_16", rows: 1_000_000, dims: 128, degree: 16},
+	}
+	for _, tc := range cases {
+		tc := tc
+		b.Run(tc.name, func(b *testing.B) {
+			graph, query := openColumnVectorGraphScaleBenchmark(b, tc.rows, tc.dims, tc.degree)
+			opts := ColumnVectorGraphSearchOptions{TopK: 10, EfSearch: 128}
+			b.Run("serial", func(b *testing.B) {
+				benchmarkColumnVectorGraphSearchCosineScaleSerial(b, graph, query, opts)
+			})
+			b.Run("parallel", func(b *testing.B) {
+				benchmarkColumnVectorGraphSearchCosineScaleParallel(b, graph, query, opts)
+			})
+		})
+	}
+}
+
+func benchmarkColumnVectorGraphSearchCosineScaleSerial(b *testing.B, graph *ColumnVectorGraph, query []float32, opts ColumnVectorGraphSearchOptions) {
+	b.Helper()
+	var scratch ColumnVectorGraphSearchScratch
+	warm, warmTrace, err := graph.SearchCosine(query, opts, &scratch)
+	if err != nil {
+		b.Fatalf("warm SearchCosine: %v", err)
+	}
+	if len(warm) != opts.TopK {
+		b.Fatalf("warm results=%d want %d", len(warm), opts.TopK)
+	}
+	b.ReportAllocs()
+	b.SetBytes(int64(warmTrace.CandidatesExamined * graph.Dims() * 4))
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		results, trace, err := graph.SearchCosine(query, opts, &scratch)
+		if err != nil {
+			b.Fatalf("SearchCosine: %v", err)
+		}
+		if len(results) != opts.TopK {
+			b.Fatalf("results=%d want %d", len(results), opts.TopK)
+		}
+		columnVectorGraphBenchSink += int64(len(results[0].DocumentID) + trace.CandidatesExamined + trace.EdgesVisited)
+	}
+	reportColumnVectorGraphScaleMetrics(b, graph, warmTrace)
+}
+
+func benchmarkColumnVectorGraphSearchCosineScaleParallel(b *testing.B, graph *ColumnVectorGraph, query []float32, opts ColumnVectorGraphSearchOptions) {
+	b.Helper()
+	b.SetParallelism(1)
+	workers := runtime.GOMAXPROCS(0)
+	var warmTrace ColumnVectorGraphSearchTrace
+	scratches := make([]*ColumnVectorGraphSearchScratch, workers)
+	for i := 0; i < workers; i++ {
+		scratch := new(ColumnVectorGraphSearchScratch)
+		warm, trace, err := graph.SearchCosine(query, opts, scratch)
+		if err != nil {
+			b.Fatalf("warm SearchCosine worker %d: %v", i, err)
+		}
+		if len(warm) != opts.TopK {
+			b.Fatalf("warm worker %d results=%d want %d", i, len(warm), opts.TopK)
+		}
+		warmTrace = trace
+		scratches[i] = scratch
+	}
+	b.ReportAllocs()
+	b.SetBytes(int64(warmTrace.CandidatesExamined * graph.Dims() * 4))
+	b.ResetTimer()
+	var nextWorker uint64
+	b.RunParallel(func(pb *testing.PB) {
+		workerID := int(atomic.AddUint64(&nextWorker, 1)) - 1
+		if workerID >= len(scratches) {
+			panic(fmt.Sprintf("RunParallel spawned %d workers, but only %d scratches were prewarmed", workerID+1, len(scratches)))
+		}
+		scratch := scratches[workerID]
+		var localSink int64
+		for pb.Next() {
+			results, trace, err := graph.SearchCosine(query, opts, scratch)
+			if err != nil {
+				panic(err)
+			}
+			if len(results) != opts.TopK {
+				panic("unexpected column vector graph result count")
+			}
+			localSink += int64(len(results[0].DocumentID) + trace.CandidatesExamined + trace.EdgesVisited)
+		}
+		atomic.AddInt64(&columnVectorGraphBenchSink, localSink)
+	})
+	reportColumnVectorGraphScaleMetrics(b, graph, warmTrace)
+}
+
+func openColumnVectorGraphScaleBenchmark(b *testing.B, rows int, dims int, degree int) (*ColumnVectorGraph, []float32) {
+	b.Helper()
+	columns := columnVectorGraphScaleColumns(b, rows, dims, degree)
+	graph, err := NewColumnVectorGraphFromColumns(columns)
+	if err != nil {
+		b.Fatalf("NewColumnVectorGraphFromColumns: %v", err)
+	}
+	queryOrdinal := rows / 3
+	query, ok := graph.VectorAt(nil, queryOrdinal)
+	if !ok {
+		b.Fatalf("missing query vector ordinal %d", queryOrdinal)
+	}
+	return graph, query
+}
+
+func columnVectorGraphScaleColumns(tb testing.TB, rows int, dims int, degree int) ColumnVectorGraphColumns {
+	tb.Helper()
+	if rows <= 0 || dims <= 0 || degree <= 0 {
+		tb.Fatalf("invalid scale graph shape rows=%d dims=%d degree=%d", rows, dims, degree)
+	}
+	if uint64(rows)*uint64(degree) > columnVectorGraphMaxUint32 {
+		tb.Fatalf("scale graph shape rows=%d degree=%d overflows uint32 adjacency offsets", rows, degree)
+	}
+	ids := make([][]byte, rows)
+	const idWidth = len("doc-000000000")
+	idArena := make([]byte, rows*idWidth)
+	vectors := make([]float32, rows*dims)
+	invNorms := make([]float32, rows)
+	offsets := make([]uint32, rows+1)
+	neighbors := make([]uint32, rows*degree)
+	for row := 0; row < rows; row++ {
+		id := idArena[row*idWidth : (row+1)*idWidth]
+		fillColumnVectorGraphOrdinalID(id, row)
+		ids[row] = id
+
+		vector := vectors[row*dims : (row+1)*dims]
+		fillVectorBenchmarkEmbedding(vector, row)
+		invNorms[row] = float32(1 / math.Sqrt(vectorNormSquared(vector)))
+
+		edgeStart := row * degree
+		offsets[row] = uint32(edgeStart)
+		for edge := 0; edge < degree; edge++ {
+			step := edge/2 + 1
+			neighbor := row + step
+			if edge%2 == 1 {
+				neighbor = row - step
+			}
+			neighbor %= rows
+			if neighbor < 0 {
+				neighbor += rows
+			}
+			neighbors[edgeStart+edge] = uint32(neighbor)
+		}
+	}
+	offsets[rows] = uint32(len(neighbors))
+	return ColumnVectorGraphColumns{
+		DocumentIDs:     ids,
+		Vectors:         vectors,
+		InvNorms:        invNorms,
+		NeighborOffsets: offsets,
+		Neighbors:       neighbors,
+		Dimensions:      dims,
+		EntryPoint:      0,
+		EfSearch:        defaultVectorIndexEfSearch,
+	}
+}
+
+func fillColumnVectorGraphOrdinalID(dst []byte, ordinal int) {
+	copy(dst, "doc-")
+	for i, divisor := 4, 100_000_000; i < len(dst); i, divisor = i+1, divisor/10 {
+		dst[i] = byte('0' + (ordinal/divisor)%10)
+	}
+}
+
+func reportColumnVectorGraphScaleMetrics(b *testing.B, graph *ColumnVectorGraph, trace ColumnVectorGraphSearchTrace) {
+	b.Helper()
+	graphBytes := columnVectorGraphPayloadBytes(graph)
+	b.ReportMetric(float64(graph.Rows()), "rows")
+	b.ReportMetric(float64(graph.Dims()), "dims")
+	b.ReportMetric(float64(graph.Edges())/float64(graph.Rows()), "edges/node")
+	b.ReportMetric(float64(trace.CandidatesExamined), "candidates/search")
+	b.ReportMetric(float64(trace.EdgesVisited), "edges/search")
+	b.ReportMetric(float64(graphBytes), "graph_payload_bytes")
+	b.ReportMetric(float64(graphBytes)/float64(graph.Rows()), "graph_payload_bytes/node")
+}
+
+func columnVectorGraphPayloadBytes(graph *ColumnVectorGraph) int64 {
+	if graph == nil {
+		return 0
+	}
+	return int64(len(graph.vectors)*4 +
+		len(graph.invNorms)*4 +
+		len(graph.neighborOffsets)*4 +
+		len(graph.neighbors)*4 +
+		len(graph.idArena) +
+		len(graph.idOffsets)*4 +
+		len(graph.idRanks)*4)
 }
 
 func BenchmarkColumnVectorGraphBuildFromColumns(b *testing.B) {
