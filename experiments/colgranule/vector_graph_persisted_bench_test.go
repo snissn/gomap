@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -28,6 +29,9 @@ type columnVectorGraphPersistedFixture struct {
 	openNanos   int64
 	decodeNanos int64
 	accounting  columnVectorGraphPersistedAccounting
+	cleanupOnce sync.Once
+	cleanup     func() error
+	cleanupErr  error
 }
 
 type columnVectorGraphPersistedAccounting struct {
@@ -48,8 +52,30 @@ type columnVectorGraphPersistedAccounting struct {
 	compressionFallbackReasons map[string]int
 }
 
+func (f *columnVectorGraphPersistedFixture) Close() error {
+	if f == nil {
+		return nil
+	}
+	f.cleanupOnce.Do(func() {
+		if f.cleanup != nil {
+			f.cleanupErr = f.cleanup()
+		}
+	})
+	return f.cleanupErr
+}
+
+func registerColumnVectorGraphPersistedFixtureCleanup(tb testing.TB, fixture *columnVectorGraphPersistedFixture) {
+	tb.Helper()
+	tb.Cleanup(func() {
+		if err := fixture.Close(); err != nil {
+			tb.Fatalf("Close persisted vector graph fixture: %v", err)
+		}
+	})
+}
+
 func TestColumnVectorGraphPersistedReopenPath(t *testing.T) {
 	fixture := buildColumnVectorGraphPersistedFixture(t, 1024, 32, 8, 256, CompressionZSTD, columnVectorGraphPersistedOrderLocal)
+	registerColumnVectorGraphPersistedFixtureCleanup(t, fixture)
 	if fixture.graph.Rows() != 1024 || fixture.graph.Dims() != 32 {
 		t.Fatalf("graph shape rows=%d dims=%d want rows=1024 dims=32", fixture.graph.Rows(), fixture.graph.Dims())
 	}
@@ -95,6 +121,7 @@ func BenchmarkColumnVectorGraphPersistedSearchCosine(b *testing.B) {
 						compression := compression
 						b.Run(compression.String(), func(b *testing.B) {
 							fixture := buildColumnVectorGraphPersistedFixture(b, shape.rows, 128, 16, 8192, compression, order)
+							registerColumnVectorGraphPersistedFixtureCleanup(b, fixture)
 							b.Run("serial", func(b *testing.B) {
 								benchmarkColumnVectorGraphPersistedSearchSerial(b, fixture)
 							})
@@ -228,7 +255,30 @@ func reportColumnVectorGraphPersistedMetrics(b *testing.B, fixture *columnVector
 
 func buildColumnVectorGraphPersistedFixture(tb testing.TB, rows int, dims int, degree int, blockRows int, compression Compression, order columnVectorGraphPersistedOrder) *columnVectorGraphPersistedFixture {
 	tb.Helper()
-	dir := tb.TempDir()
+	dir, err := os.MkdirTemp("", "colgranule-vector-graph-*")
+	if err != nil {
+		tb.Fatalf("MkdirTemp: %v", err)
+	}
+	var reopened *ColumnWorkspace
+	cleanup := func() error {
+		var cleanupErr error
+		if reopened != nil {
+			if err := reopened.Close(); err != nil {
+				cleanupErr = err
+			}
+			reopened = nil
+		}
+		if err := os.RemoveAll(dir); err != nil && cleanupErr == nil {
+			cleanupErr = err
+		}
+		return cleanupErr
+	}
+	success := false
+	defer func() {
+		if !success {
+			_ = cleanup()
+		}
+	}()
 	opts := columnVectorGraphPersistedOptions(rows, dims, blockRows, compression)
 	rowsPerPart := columnVectorGraphPersistedRowsPerPart(rows)
 	ordinalBySource := columnVectorGraphPersistedOrdinalBySource(rows, order)
@@ -238,6 +288,12 @@ func buildColumnVectorGraphPersistedFixture(tb testing.TB, rows int, dims int, d
 	if err != nil {
 		tb.Fatalf("OpenColumnWorkspace(build): %v", err)
 	}
+	workspaceOpen := true
+	defer func() {
+		if workspaceOpen {
+			_ = workspace.Close()
+		}
+	}()
 	adapter, err := NewColumnMutationAdapter(workspace, ColumnMutationAdapterOptions{
 		Collection:        "persisted_vector_graph",
 		StoreOptions:      opts,
@@ -259,21 +315,18 @@ func buildColumnVectorGraphPersistedFixture(tb testing.TB, rows int, dims int, d
 			tb.Fatalf("PublishBaseBatch rows [%d,%d): %v", start, end, err)
 		}
 	}
-	if err := workspace.Close(); err != nil {
-		tb.Fatalf("Close build workspace: %v", err)
+	closeErr := workspace.Close()
+	workspaceOpen = false
+	if closeErr != nil {
+		tb.Fatalf("Close build workspace: %v", closeErr)
 	}
 	buildNanos := time.Since(buildStart).Nanoseconds()
 
 	openStart := time.Now()
-	reopened, err := OpenColumnWorkspace(dir, ColumnWorkspaceOptions{Collection: "persisted_vector_graph"})
+	reopened, err = OpenColumnWorkspace(dir, ColumnWorkspaceOptions{Collection: "persisted_vector_graph"})
 	if err != nil {
 		tb.Fatalf("OpenColumnWorkspace(reopen): %v", err)
 	}
-	tb.Cleanup(func() {
-		if err := reopened.Close(); err != nil {
-			tb.Fatalf("Close reopened workspace: %v", err)
-		}
-	})
 	manifest, err := reopened.LoadCollectionManifest()
 	if err != nil {
 		tb.Fatalf("LoadCollectionManifest: %v", err)
@@ -296,13 +349,14 @@ func buildColumnVectorGraphPersistedFixture(tb testing.TB, rows int, dims int, d
 	if !ok {
 		tb.Fatalf("missing query vector ordinal %d", queryOrdinal)
 	}
+	query = append([]float32(nil), query...)
 	accounting := columnVectorGraphPersistedByteAccounting(tb, reader)
 	settledDiskBytes, err := columnVectorGraphPersistedDirBytes(dir)
 	if err != nil {
 		tb.Fatalf("settled dir bytes: %v", err)
 	}
 	accounting.settledDiskBytes = settledDiskBytes
-	return &columnVectorGraphPersistedFixture{
+	fixture := &columnVectorGraphPersistedFixture{
 		graph:       graph,
 		query:       query,
 		opts:        ColumnVectorGraphSearchOptions{TopK: 10, EfSearch: 128},
@@ -311,7 +365,10 @@ func buildColumnVectorGraphPersistedFixture(tb testing.TB, rows int, dims int, d
 		openNanos:   openNanos,
 		decodeNanos: decodeNanos,
 		accounting:  accounting,
+		cleanup:     cleanup,
 	}
+	success = true
+	return fixture
 }
 
 func columnVectorGraphPersistedOptions(rows int, dims int, blockRows int, vectorCompression Compression) ColumnStoreOptions {
@@ -499,6 +556,11 @@ func BenchmarkColumnVectorGraphPersistedBuildOpenDecode(b *testing.B) {
 			for i := 0; i < b.N; i++ {
 				fixture := buildColumnVectorGraphPersistedFixture(b, 100_000, 128, 16, 8192, compression, columnVectorGraphPersistedOrderLocal)
 				benchSink += int64(fixture.graph.Rows() + fixture.loadStats.Edges)
+				b.StopTimer()
+				if err := fixture.Close(); err != nil {
+					b.Fatalf("Close persisted vector graph fixture: %v", err)
+				}
+				b.StartTimer()
 			}
 		})
 	}

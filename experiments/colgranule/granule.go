@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sync"
 	"time"
 
 	"github.com/golang/snappy"
@@ -13,6 +14,16 @@ import (
 )
 
 const DefaultRowsPerGranule = 8192
+
+var (
+	sharedZSTDEncoderOnce sync.Once
+	sharedZSTDEncoder     *zstd.Encoder
+	sharedZSTDEncoderErr  error
+
+	sharedZSTDDecoderOnce sync.Once
+	sharedZSTDDecoder     *zstd.Decoder
+	sharedZSTDDecoderErr  error
+)
 
 type Encoding uint8
 
@@ -605,19 +616,12 @@ func admitCompressionInto(dst []byte, raw []byte, encoding Encoding, compression
 		report.StoredBytes = len(out)
 		return CompressionSelection{Payload: out, Actual: CompressionLZ4, Scratch: out, Report: report}, nil
 	case CompressionZSTD:
-		start := time.Now()
-		enc, err := zstd.NewWriter(nil,
-			zstd.WithEncoderLevel(zstd.SpeedFastest),
-			zstd.WithEncoderCRC(false),
-			zstd.WithEncoderConcurrency(1),
-		)
+		enc, err := columnGranuleSharedZSTDEncoder()
 		if err != nil {
 			return CompressionSelection{}, err
 		}
+		start := time.Now()
 		out := enc.EncodeAll(raw, dst[:0])
-		if err := enc.Close(); err != nil {
-			return CompressionSelection{}, err
-		}
 		report.CompressionNanos = time.Since(start).Nanoseconds()
 		report.CompressionAttempted = true
 		if len(out) >= len(raw) {
@@ -633,6 +637,19 @@ func admitCompressionInto(dst []byte, raw []byte, encoding Encoding, compression
 	default:
 		return CompressionSelection{}, fmt.Errorf("colgranule: unsupported compression %d", compression)
 	}
+}
+
+func columnGranuleSharedZSTDEncoder() (*zstd.Encoder, error) {
+	sharedZSTDEncoderOnce.Do(func() {
+		// EncodeAll is concurrency-safe; keep the heavy encoder out of per-block
+		// admission so zstd build/open metrics measure compression work.
+		sharedZSTDEncoder, sharedZSTDEncoderErr = zstd.NewWriter(nil,
+			zstd.WithEncoderLevel(zstd.SpeedFastest),
+			zstd.WithEncoderCRC(false),
+			zstd.WithEncoderConcurrency(1),
+		)
+	})
+	return sharedZSTDEncoder, sharedZSTDEncoderErr
 }
 
 func compressPayload(raw []byte, encoding Encoding, compression Compression) (CompressionSelection, error) {
@@ -699,7 +716,7 @@ func (r *GranuleReader) decompressPayload(g EncodedGranule) ([]byte, error) {
 		}
 		return out, nil
 	case CompressionZSTD:
-		dec, err := zstd.NewReader(nil, zstd.WithDecoderConcurrency(1))
+		dec, err := columnGranuleSharedZSTDDecoder()
 		if err != nil {
 			return nil, err
 		}
@@ -709,7 +726,6 @@ func (r *GranuleReader) decompressPayload(g EncodedGranule) ([]byte, error) {
 			r.raw = r.raw[:0]
 		}
 		out, err := dec.DecodeAll(g.Payload, r.raw)
-		dec.Close()
 		if err != nil {
 			return nil, err
 		}
@@ -721,6 +737,15 @@ func (r *GranuleReader) decompressPayload(g EncodedGranule) ([]byte, error) {
 	default:
 		return nil, fmt.Errorf("colgranule: unsupported compression %d", g.Compression)
 	}
+}
+
+func columnGranuleSharedZSTDDecoder() (*zstd.Decoder, error) {
+	sharedZSTDDecoderOnce.Do(func() {
+		// DecodeAll is concurrency-safe; the reader keeps destination buffers
+		// local while the shared decoder avoids per-payload setup cost.
+		sharedZSTDDecoder, sharedZSTDDecoderErr = zstd.NewReader(nil, zstd.WithDecoderConcurrency(1))
+	})
+	return sharedZSTDDecoder, sharedZSTDDecoderErr
 }
 
 func validateGranule(g EncodedGranule) error {
