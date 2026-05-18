@@ -13,11 +13,14 @@ type ColumnAssetPin struct {
 }
 
 type ColumnAssetManager struct {
-	mu             sync.Mutex
-	store          ColumnAssetStore
-	pins           map[ColumnAssetRef]int
-	zombies        map[ColumnAssetRef]string
-	quarantine     map[ColumnAssetRef]string
+	mu         sync.Mutex
+	store      ColumnAssetStore
+	pins       map[ColumnAssetRef]int
+	zombies    map[ColumnAssetRef]string
+	quarantine map[ColumnAssetRef]string
+	// Direct quarantines are operator-owned and intentionally sticky until a
+	// future explicit unquarantine operation; publish-failure cleanup must not
+	// clear them just because a later publish retry succeeds.
 	operatorLocked map[ColumnAssetRef]struct{}
 	publishFailed  map[ColumnAssetRef]string
 	rewriteDebt    map[ColumnAssetRef]string
@@ -36,6 +39,10 @@ type ColumnAssetManagerReclamationPlan struct {
 	RewriteDebtBytes   int                                  `json:"rewrite_debt_bytes"`
 }
 
+// ColumnAssetPublishClosure is a single-process durability token returned by
+// PreparePublishClosure. JSON tags are for one-way diagnostics only: a
+// marshal/unmarshal round trip deliberately drops the private prepared identity
+// and is not accepted by SyncPublishClosure.
 type ColumnAssetPublishClosure struct {
 	PreparedAssets []ColumnPreparedAsset `json:"prepared_assets,omitempty"`
 	RequiredAssets int                   `json:"required_assets"`
@@ -247,6 +254,10 @@ func (m *ColumnAssetManager) PreparePublishClosure(prepared []ColumnPreparedAsse
 }
 
 func prepareColumnAssetPublishClosure(store ColumnAssetStore, prepared []ColumnPreparedAsset) (ColumnAssetPublishClosure, error) {
+	return deriveColumnAssetPublishClosure(store, prepared, true)
+}
+
+func deriveColumnAssetPublishClosure(store ColumnAssetStore, prepared []ColumnPreparedAsset, verifyRefs bool) (ColumnAssetPublishClosure, error) {
 	if store == nil {
 		return ColumnAssetPublishClosure{}, fmt.Errorf("colgranule: closed column asset manager")
 	}
@@ -258,6 +269,10 @@ func prepareColumnAssetPublishClosure(store ColumnAssetStore, prepared []ColumnP
 		// Keep a private copy so caller mutations to PreparedAssets are caught.
 		preparedIdentity: cloneColumnPreparedAssets(preparedClone),
 	}
+	if len(preparedClone) > maxColumnAssetInt {
+		return ColumnAssetPublishClosure{}, fmt.Errorf("colgranule: prepared asset count=%d exceeds host int", len(preparedClone))
+	}
+	closure.RequiredAssets = len(preparedClone)
 	// Sync is tied to the explicit publish closure: unreferenced buffered
 	// assets are not made durable until a root-visible prepared ref names them.
 	if _, ok := store.(columnAssetSyncer); ok && len(preparedClone) > 0 {
@@ -272,10 +287,11 @@ func prepareColumnAssetPublishClosure(store ColumnAssetStore, prepared []ColumnP
 			return ColumnAssetPublishClosure{}, fmt.Errorf("colgranule: duplicate prepared asset ref %+v", asset.Ref)
 		}
 		seen[asset.Ref] = struct{}{}
-		if err := verifyColumnAssetStoreRef(store, asset.Ref); err != nil {
-			return ColumnAssetPublishClosure{}, fmt.Errorf("colgranule: missing required prepared asset %+v: %w", asset.Ref, err)
+		if verifyRefs {
+			if err := verifyColumnAssetStoreRef(store, asset.Ref); err != nil {
+				return ColumnAssetPublishClosure{}, fmt.Errorf("colgranule: missing required prepared asset %+v: %w", asset.Ref, err)
+			}
 		}
-		closure.RequiredAssets++
 		bytes := asset.Bytes
 		if bytes == 0 {
 			if asset.Ref.Length > int64(maxColumnAssetInt) {
@@ -301,7 +317,7 @@ func (m *ColumnAssetManager) SyncPublishClosure(closure ColumnAssetPublishClosur
 	if store == nil {
 		return ColumnAssetSyncedPublishClosure{}, fmt.Errorf("colgranule: closed column asset manager")
 	}
-	verified, err := prepareColumnAssetPublishClosure(store, closure.PreparedAssets)
+	verified, err := deriveColumnAssetPublishClosure(store, closure.preparedIdentity, false)
 	if err != nil {
 		return ColumnAssetSyncedPublishClosure{}, err
 	}
@@ -373,6 +389,7 @@ func (m *ColumnAssetManager) MarkPublishSucceeded(synced ColumnAssetSyncedPublis
 			}
 			delete(m.publishFailed, asset.Ref)
 		}
+		delete(m.refFailedAt, asset.Ref)
 	}
 	return nil
 }
@@ -391,6 +408,9 @@ func (m *ColumnAssetManager) MarkPublishFailed(prepared []ColumnPreparedAsset, r
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if len(prepared) == 0 {
+		return nil
+	}
 	m.publishEpoch++
 	if m.refFailedAt == nil {
 		m.refFailedAt = make(map[ColumnAssetRef]uint64)

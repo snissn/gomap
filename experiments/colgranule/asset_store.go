@@ -215,7 +215,7 @@ func OpenSegmentColumnAssetStore(dir string) (*SegmentColumnAssetStore, error) {
 		return nil, err
 	}
 	path := filepath.Join(dir, "column-assets-000001.seg")
-	file, _, err := openOrCreateColumnAssetSegment(path)
+	file, err := openOrCreateColumnAssetSegment(path)
 	if err != nil {
 		return nil, err
 	}
@@ -237,19 +237,19 @@ func OpenSegmentColumnAssetStore(dir string) (*SegmentColumnAssetStore, error) {
 	}, nil
 }
 
-func openOrCreateColumnAssetSegment(path string) (*os.File, bool, error) {
+func openOrCreateColumnAssetSegment(path string) (*os.File, error) {
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o644)
 	if err == nil {
-		return file, true, nil
+		return file, nil
 	}
 	if !errors.Is(err, os.ErrExist) {
-		return nil, false, err
+		return nil, err
 	}
 	file, err = os.OpenFile(path, os.O_RDWR, 0o644)
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
-	return file, false, nil
+	return file, nil
 }
 
 func (s *SegmentColumnAssetStore) Close() error {
@@ -275,25 +275,23 @@ func (s *SegmentColumnAssetStore) Sync() error {
 	if s == nil {
 		return fmt.Errorf("colgranule: nil segment asset store")
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.closing || s.file == nil {
-		return fmt.Errorf("colgranule: closed segment asset store")
-	}
-	// Hold the mutex across fsync as a publish barrier: Sync must seal all
-	// prior Put calls without allowing later writes to be mistaken as covered.
-	if err := s.file.Sync(); err != nil {
+	file, dir, dirSyncRequired, err := s.beginFileSync()
+	if err != nil {
 		return err
 	}
-	if s.dirSyncRequired {
-		if err := syncColumnAssetDirectory(s.dir); err != nil {
+	if err := file.Sync(); err != nil {
+		_ = s.endFileIO()
+		return err
+	}
+	clearDirSync := false
+	if dirSyncRequired {
+		if err := syncColumnAssetDirectory(dir); err != nil {
+			_ = s.endFileIO()
 			return err
 		}
-		// On Windows this records the strongest platform-supported sync attempt;
-		// reopen still conservatively requires another directory sync attempt.
-		s.dirSyncRequired = false
+		clearDirSync = true
 	}
-	return nil
+	return s.finishFileIO(clearDirSync)
 }
 
 func syncColumnAssetDirectory(dir string) error {
@@ -424,7 +422,7 @@ func (s *SegmentColumnAssetStore) ReadRange(ref ColumnAssetRef, offset int64, le
 	return out, nil
 }
 
-func (s *SegmentColumnAssetStore) Verify(ref ColumnAssetRef) error {
+func (s *SegmentColumnAssetStore) Verify(ref ColumnAssetRef) (err error) {
 	if s == nil {
 		return fmt.Errorf("colgranule: nil segment asset store")
 	}
@@ -435,7 +433,11 @@ func (s *SegmentColumnAssetStore) Verify(ref ColumnAssetRef) error {
 	if err != nil {
 		return err
 	}
-	defer s.endFileIO()
+	defer func() {
+		if endErr := s.endFileIO(); err == nil && endErr != nil {
+			err = endErr
+		}
+	}()
 	if ref.FileID != fileID {
 		return fmt.Errorf("colgranule: asset file id=%d want %d", ref.FileID, fileID)
 	}
@@ -464,16 +466,38 @@ func (s *SegmentColumnAssetStore) beginFileIO() (*os.File, uint32, int64, error)
 	return s.file, s.fileID, s.size, nil
 }
 
-func (s *SegmentColumnAssetStore) endFileIO() {
+func (s *SegmentColumnAssetStore) beginFileSync() (*os.File, string, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closing || s.file == nil {
+		return nil, "", false, fmt.Errorf("colgranule: closed segment asset store")
+	}
+	// Snapshot the file after all prior Put calls have released the mutex, then
+	// drop the mutex during fsync so reads are not blocked by slow storage.
+	s.activeFileIO++
+	return s.file, s.dir, s.dirSyncRequired, nil
+}
+
+func (s *SegmentColumnAssetStore) endFileIO() error {
+	return s.finishFileIO(false)
+}
+
+func (s *SegmentColumnAssetStore) finishFileIO(clearDirSync bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.activeFileIO <= 0 {
-		panic("colgranule: segment asset store file IO ended without matching begin")
+		return fmt.Errorf("colgranule: segment asset store file IO ended without matching begin")
+	}
+	if clearDirSync {
+		// On Windows this records the strongest platform-supported sync attempt;
+		// reopen still conservatively requires another directory sync attempt.
+		s.dirSyncRequired = false
 	}
 	s.activeFileIO--
 	if s.activeFileIO == 0 && s.fileIOCond != nil {
 		s.fileIOCond.Broadcast()
 	}
+	return nil
 }
 
 func (s *SegmentColumnAssetStore) ensureFileIOCondLocked() *sync.Cond {
