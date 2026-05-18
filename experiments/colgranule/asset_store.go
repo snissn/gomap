@@ -400,14 +400,13 @@ func (s *SegmentColumnAssetStore) Verify(ref ColumnAssetRef) error {
 		return err
 	}
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.file == nil {
-		s.mu.Unlock()
 		return fmt.Errorf("colgranule: closed segment asset store")
 	}
 	file := s.file
 	fileID := s.fileID
 	size := s.size
-	s.mu.Unlock()
 	if ref.FileID != fileID {
 		return fmt.Errorf("colgranule: asset file id=%d want %d", ref.FileID, fileID)
 	}
