@@ -13,12 +13,21 @@ import (
 func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 	dir := t.TempDir()
 	cfg := BenchConfig{
-		Keys:      64,
-		BatchSize: 16,
-		DBsArg:    "treedb",
-		Profile:   "durable",
-		Progress:  false,
-		SeedUsed:  1,
+		Keys:                 64,
+		BatchSize:            16,
+		DBsArg:               "treedb",
+		Profile:              "durable",
+		Progress:             false,
+		SeedUsed:             1,
+		CPUProfile:           filepath.Join(dir, "cpu"),
+		AllocsProfile:        filepath.Join(dir, "allocs"),
+		AllocsProfileRate:    1,
+		CheckpointCPUProfile: filepath.Join(dir, "checkpoint_cpu"),
+		BlockProfile:         filepath.Join(dir, "block.pprof"),
+		BlockProfileRate:     1,
+		MutexProfile:         filepath.Join(dir, "mutex.pprof"),
+		MutexProfileFraction: 1,
+		TraceProfile:         filepath.Join(dir, "trace.out"),
 	}
 
 	out, err := runColumnStoreSuite(cfg, columnStoreSuiteOptions{
@@ -54,6 +63,12 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 		"column_store_results.json",
 		"column_store_results.md",
 		"column_store_results.html",
+		"cpu_column_store_treedb_column_store.pprof",
+		"allocs_column_store_treedb_column_store.pprof",
+		"checkpoint_cpu_checkpoint_post_run_treedb_column_store.pprof",
+		"block.pprof",
+		"mutex.pprof",
+		"trace.out",
 	} {
 		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
 			t.Fatalf("expected %s: %v", name, err)
@@ -87,13 +102,17 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 		if q.PlanLabel != columnStorePathRowStoreBaseline {
 			t.Fatalf("query %s plan_label=%q want %q", q.Name, q.PlanLabel, columnStorePathRowStoreBaseline)
 		}
-		if q.RowsPerSecond <= 0 {
-			t.Fatalf("query %s rows_per_second=%v", q.Name, q.RowsPerSecond)
+		if q.DurationMS < 0 || q.RowsPerSecond < 0 {
+			t.Fatalf("query %s has invalid timing metrics: %+v", q.Name, q)
+		}
+		if q.BytesRead <= 0 {
+			t.Fatalf("query %s bytes_read=%d", q.Name, q.BytesRead)
 		}
 		if q.RowMaterializations != report.Rows {
 			t.Fatalf("query %s row_materializations=%d want %d", q.Name, q.RowMaterializations, report.Rows)
 		}
 	}
+	assertColumnStoreParityCoverageM11A(t, report.Parity)
 	for name, parity := range report.Parity {
 		if !parity.Pass {
 			t.Fatalf("parity %s failed: %+v", name, parity)
@@ -104,6 +123,9 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 	}
 	if report.ByteAccounting.CommandWALBytes == 0 {
 		t.Fatalf("expected command WAL bytes in byte accounting: %+v", report.ByteAccounting)
+	}
+	if report.ByteAccounting.ManifestControlBytes == 0 || report.ByteAccounting.DBTotalBytes == 0 || report.ByteAccounting.DBTotalFiles == 0 {
+		t.Fatalf("expected measured manifest/control and DB byte accounting: %+v", report.ByteAccounting)
 	}
 	if report.Manifest.ActiveGeneration == 0 || report.Manifest.AppliedCommandLSN == 0 {
 		t.Fatalf("expected active/recovery-authoritative manifest identity: %+v", report.Manifest)
@@ -122,7 +144,7 @@ func TestColumnStoreSuiteRejectsForcedColumnPathM11A(t *testing.T) {
 		t.Fatal("expected forced serial column scan to fail closed")
 	}
 	msg := err.Error()
-	if !strings.Contains(msg, "serial_column_scan") || !strings.Contains(msg, "refusing to route through row store") {
+	if !strings.Contains(msg, "serial_column_scan") || !strings.Contains(msg, "not implemented") || !strings.Contains(msg, "supported=") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -151,8 +173,40 @@ func TestColumnStoreSuiteReportsParityMismatchM11A(t *testing.T) {
 	if err := json.Unmarshal(data, &report); err != nil {
 		t.Fatalf("unmarshal report: %v", err)
 	}
-	if report.Parity["q1"].Pass {
-		t.Fatalf("expected q1 parity to be recorded as failed: %+v", report.Parity["q1"])
+	assertColumnStoreParityCoverageM11A(t, report.Parity)
+	q1, ok := report.Parity["q1"]
+	if !ok {
+		t.Fatal("missing q1 parity entry")
+	}
+	if q1.Pass {
+		t.Fatalf("expected q1 parity to be recorded as failed: %+v", q1)
+	}
+}
+
+func TestColumnStoreSuiteRejectsMixedDBSelectionM11A(t *testing.T) {
+	err := validateColumnStoreSuiteDBSelection("treedb,leveldb", "")
+	if err == nil {
+		t.Fatal("expected mixed DB selection to fail")
+	}
+	if !strings.Contains(err.Error(), "only supports TreeDB") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestColumnStoreSuiteRejectsExcludedTreeDBM11A(t *testing.T) {
+	err := validateColumnStoreSuiteDBSelection("all", "treedb")
+	if err == nil {
+		t.Fatal("expected TreeDB exclusion to fail")
+	}
+	if !strings.Contains(err.Error(), "excludes it") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestColumnStoreSuiteDirUsageFailsOnMissingPathM11A(t *testing.T) {
+	_, _, err := columnStoreSuiteDirUsage(filepath.Join(t.TempDir(), "missing"))
+	if err == nil {
+		t.Fatal("expected missing path to fail")
 	}
 }
 
@@ -236,6 +290,22 @@ func BenchmarkColumnStoreSuiteRowBaselineQueriesM11A(b *testing.B) {
 				b.Fatalf("parity failed for %s: %+v", name, p)
 			}
 		}
+		if len(parity) != queryCount {
+			b.Fatalf("parity=%d want %d", len(parity), queryCount)
+		}
 	}
 	b.ReportMetric(float64(rows*queryCount), "rows/op")
+}
+
+func assertColumnStoreParityCoverageM11A(t *testing.T, parity map[string]columnStoreParity) {
+	t.Helper()
+	names := columnStoreQueryNames()
+	if len(parity) != len(names) {
+		t.Fatalf("parity entries=%d want %d", len(parity), len(names))
+	}
+	for _, name := range names {
+		if _, ok := parity[name]; !ok {
+			t.Fatalf("missing parity entry for %s", name)
+		}
+	}
 }
