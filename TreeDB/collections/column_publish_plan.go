@@ -15,17 +15,23 @@ const columnManifestRootSuffix = "/column/manifest"
 type ColumnPublishOperation string
 
 const (
+	// ColumnPublishOperationInsert publishes column assets for inserted rows.
 	ColumnPublishOperationInsert ColumnPublishOperation = "insert"
+	// ColumnPublishOperationUpdate publishes column assets for updated rows.
 	ColumnPublishOperationUpdate ColumnPublishOperation = "update"
+	// ColumnPublishOperationDelete publishes column tombstone/delete metadata.
 	ColumnPublishOperationDelete ColumnPublishOperation = "delete"
 )
 
+// ColumnAssetKind identifies the storage format behind a column asset ref.
 type ColumnAssetKind string
 
 const (
+	// ColumnAssetKindTCS1PartImage references an immutable TCS1 part image.
 	ColumnAssetKindTCS1PartImage ColumnAssetKind = "tcs1_part_image"
 )
 
+// ColumnAssetRef is the durable value-log-owned address of a column asset.
 type ColumnAssetRef struct {
 	Kind     ColumnAssetKind
 	FileID   uint32
@@ -34,6 +40,7 @@ type ColumnAssetRef struct {
 	Checksum uint32
 }
 
+// ColumnPreparedAsset describes an immutable asset staged for manifest publish.
 type ColumnPreparedAsset struct {
 	Ref          ColumnAssetRef
 	Bytes        int
@@ -42,6 +49,8 @@ type ColumnPreparedAsset struct {
 	Reason       string
 }
 
+// ColumnPublishPlanInput contains the normalized collection state and stage
+// hooks required to build an atomic column manifest publish plan.
 type ColumnPublishPlanInput struct {
 	Collection            string
 	ColumnStore           *ColumnStoreConfig
@@ -54,6 +63,7 @@ type ColumnPublishPlanInput struct {
 	Hooks                 ColumnPublishPlanHooks
 }
 
+// ColumnPublishPlanHooks provide the engine-specific stages for a publish plan.
 type ColumnPublishPlanHooks struct {
 	ExtractDocuments      func() error
 	EncodeDeclaredColumns func(ColumnPublishDeclaredColumnEncodeInput) error
@@ -64,12 +74,15 @@ type ColumnPublishPlanHooks struct {
 	BuildSystemDelta      func(ColumnPublishSystemDeltaInput) error
 }
 
+// ColumnPublishDeclaredColumnEncodeInput is passed to the declared-column
+// encoding stage.
 type ColumnPublishDeclaredColumnEncodeInput struct {
 	Collection  string
 	ColumnStore ColumnStoreConfig
 	Operation   ColumnPublishOperation
 }
 
+// ColumnPublishAssetPrepareInput is passed to the asset preparation stage.
 type ColumnPublishAssetPrepareInput struct {
 	Collection        string
 	ColumnStore       ColumnStoreConfig
@@ -78,6 +91,8 @@ type ColumnPublishAssetPrepareInput struct {
 	CurrentManifest   *ColumnManifestIdentity
 }
 
+// ColumnPublishPreparedAssets is the row/byte/accounting summary for staged
+// column assets before they are referenced by a manifest generation.
 type ColumnPublishPreparedAssets struct {
 	Assets             []ColumnPreparedAsset
 	RowCount           int
@@ -86,6 +101,7 @@ type ColumnPublishPreparedAssets struct {
 	ColumnPayloadBytes int
 }
 
+// ColumnPublishManifestEncodeInput is passed to the manifest encoding stage.
 type ColumnPublishManifestEncodeInput struct {
 	Collection        string
 	ColumnStore       ColumnStoreConfig
@@ -95,11 +111,14 @@ type ColumnPublishManifestEncodeInput struct {
 	Prepared          ColumnPublishPreparedAssets
 }
 
+// ColumnPublishManifestEncodeResult identifies the encoded manifest generation.
 type ColumnPublishManifestEncodeResult struct {
 	Identity      ColumnManifestIdentity
 	ManifestBytes int
 }
 
+// ColumnPublishClosureValidationInput is passed to the durability-closure
+// validation stage.
 type ColumnPublishClosureValidationInput struct {
 	Collection        string
 	ColumnStore       ColumnStoreConfig
@@ -109,9 +128,11 @@ type ColumnPublishClosureValidationInput struct {
 	Manifest          ColumnPublishManifestEncodeResult
 }
 
+// ColumnPublishDurabilityClosure records the assets that must be flushed and
+// synced before the manifest root can become authoritative.
 type ColumnPublishDurabilityClosure struct {
-	// PreparedAssets is owned by the closure/plan boundary; BuildColumnPublishPlan
-	// does not defensively clone it on the hot path.
+	// PreparedAssets is owned by the closure/plan boundary. BuildColumnPublishPlan
+	// compares it against the manifest snapshot before publishing.
 	PreparedAssets []ColumnPreparedAsset
 	RequiredAssets int
 	RequiredBytes  int
@@ -119,6 +140,7 @@ type ColumnPublishDurabilityClosure struct {
 	SyncRequired   bool
 }
 
+// ColumnPublishRootDeltaInput is passed to the manifest-root delta stage.
 type ColumnPublishRootDeltaInput struct {
 	Collection         string
 	ColumnStore        ColumnStoreConfig
@@ -127,10 +149,13 @@ type ColumnPublishRootDeltaInput struct {
 	Closure            ColumnPublishDurabilityClosure
 }
 
+// ColumnPublishSystemDeltaInput is passed to the metadata/system-root stage.
 type ColumnPublishSystemDeltaInput struct {
 	Plan ColumnPublishPlan
 }
 
+// ColumnManifestPublishSystemDeltaInput contains the collection metadata base
+// and publish plan used to build the atomic system-root update.
 type ColumnManifestPublishSystemDeltaInput struct {
 	BaseMeta           CollectionMeta
 	BaseCommitSeq      uint64
@@ -139,6 +164,8 @@ type ColumnManifestPublishSystemDeltaInput struct {
 	Plan               ColumnPublishPlan
 }
 
+// ColumnPublishPlan is the complete, validated plan for publishing a column
+// manifest generation and making it recovery-authoritative.
 type ColumnPublishPlan struct {
 	Enabled                                bool
 	Collection                             string
@@ -164,6 +191,8 @@ type ColumnPublishPlan struct {
 	StageMetrics                           ColumnPublishStageMetrics
 }
 
+// ColumnManifestRootDelta is the ordered-root publish descriptor for the
+// collection column manifest root.
 type ColumnManifestRootDelta struct {
 	RootName       string
 	BaseRootID     uint64
@@ -172,6 +201,8 @@ type ColumnManifestRootDelta struct {
 	IdentityRecord [columnManifestIdentityRecordSize]byte
 }
 
+// ColumnPublishLifecycleSummary summarizes lifecycle/GC-relevant asset effects
+// of the publish.
 type ColumnPublishLifecycleSummary struct {
 	PublishedRefs         int
 	PublishedBytes        int
@@ -185,6 +216,8 @@ type ColumnPublishLifecycleSummary struct {
 	RewriteDebtBytes      int
 }
 
+// ColumnPublishStageMetrics records stage timings and optional allocation
+// counters for publish-plan construction.
 type ColumnPublishStageMetrics struct {
 	DocumentExtraction      time.Duration
 	DeclaredColumnEncoding  time.Duration
@@ -197,9 +230,22 @@ type ColumnPublishStageMetrics struct {
 	Allocs                  uint64
 }
 
+// BuildColumnPublishPlan validates and stages an atomic column manifest publish
+// plan. A nil or completely empty disabled column_store is a zero-work fast path.
 func BuildColumnPublishPlan(input ColumnPublishPlanInput) (ColumnPublishPlan, error) {
-	if input.ColumnStore == nil || !input.ColumnStore.Enabled {
+	if input.ColumnStore == nil {
 		return ColumnPublishPlan{}, nil
+	}
+	if !input.ColumnStore.Enabled {
+		if columnStoreConfigEmpty(*input.ColumnStore) {
+			return ColumnPublishPlan{}, nil
+		}
+		if !input.ColumnStoreNormalized {
+			if _, err := normalizeColumnStoreConfig(input.Collection, input.ColumnStore); err != nil {
+				return ColumnPublishPlan{}, err
+			}
+		}
+		return ColumnPublishPlan{}, errors.New("collections: column publish plan requires enabled=true column_store")
 	}
 	if err := validateColumnPublishOperation(input.Operation); err != nil {
 		return ColumnPublishPlan{}, err
@@ -217,12 +263,6 @@ func BuildColumnPublishPlan(input ColumnPublishPlanInput) (ColumnPublishPlan, er
 	}
 	if err := validateColumnPublishPlanConfig(input.Collection, cfg); err != nil {
 		return ColumnPublishPlan{}, err
-	}
-	if cfg == nil || !cfg.Enabled {
-		return ColumnPublishPlan{}, errors.New("collections: column publish plan requires enabled column_store")
-	}
-	if cfg.ProfileSupport != ColumnStoreProfileDurableOnly {
-		return ColumnPublishPlan{}, fmt.Errorf("collections: column publish plan requires durable profile support, got %q", cfg.ProfileSupport)
 	}
 
 	var metrics ColumnPublishStageMetrics
@@ -258,9 +298,10 @@ func BuildColumnPublishPlan(input ColumnPublishPlanInput) (ColumnPublishPlan, er
 	if err := validateColumnPublishPreparedAssets(prepared); err != nil {
 		return ColumnPublishPlan{}, err
 	}
+	manifestPrepared := cloneColumnPublishPreparedAssets(prepared)
 
 	start = time.Now()
-	manifest, err := encodeColumnPublishManifest(input, *cfg, prepared)
+	manifest, err := encodeColumnPublishManifest(input, *cfg, manifestPrepared)
 	if err != nil {
 		return ColumnPublishPlan{}, fmt.Errorf("collections: column publish manifest encode failed: %w", err)
 	}
@@ -271,7 +312,11 @@ func BuildColumnPublishPlan(input ColumnPublishPlanInput) (ColumnPublishPlan, er
 	}
 
 	start = time.Now()
-	closure, err := validateColumnPublishClosure(input, *cfg, prepared, manifest)
+	closurePrepared := manifestPrepared
+	if input.Hooks.ValidateClosure != nil {
+		closurePrepared = cloneColumnPublishPreparedAssets(manifestPrepared)
+	}
+	closure, err := validateColumnPublishClosure(input, *cfg, closurePrepared, manifest)
 	if err != nil {
 		return ColumnPublishPlan{}, fmt.Errorf("collections: column publish asset-closure validation failed: %w", err)
 	}
@@ -279,7 +324,7 @@ func BuildColumnPublishPlan(input ColumnPublishPlanInput) (ColumnPublishPlan, er
 	if err := validateColumnPublishDurabilityClosure(closure); err != nil {
 		return ColumnPublishPlan{}, err
 	}
-	if err := validateColumnPublishClosureMatchesPrepared(prepared, closure); err != nil {
+	if err := validateColumnPublishClosureMatchesPrepared(manifestPrepared, closure); err != nil {
 		return ColumnPublishPlan{}, err
 	}
 
@@ -309,16 +354,16 @@ func BuildColumnPublishPlan(input ColumnPublishPlanInput) (ColumnPublishPlan, er
 		RequiredAssetBytes:                     closure.RequiredBytes,
 		RequiredAssetFlush:                     closure.FlushRequired,
 		RequiredAssetSync:                      closure.SyncRequired,
-		Rows:                                   prepared.RowCount,
-		CommandBytes:                           prepared.CommandBytes,
-		RowRemainderBytes:                      prepared.RowRemainderBytes,
-		ColumnPayloadBytes:                     prepared.ColumnPayloadBytes,
+		Rows:                                   manifestPrepared.RowCount,
+		CommandBytes:                           manifestPrepared.CommandBytes,
+		RowRemainderBytes:                      manifestPrepared.RowRemainderBytes,
+		ColumnPayloadBytes:                     manifestPrepared.ColumnPayloadBytes,
 		ManifestBytes:                          manifest.ManifestBytes,
 		Lifecycle: ColumnPublishLifecycleSummary{
 			PublishedRefs:  closure.RequiredAssets,
 			PublishedBytes: closure.RequiredBytes,
-			PreparedRefs:   len(prepared.Assets),
-			PreparedBytes:  sumColumnPreparedAssetBytes(prepared.Assets),
+			PreparedRefs:   len(manifestPrepared.Assets),
+			PreparedBytes:  sumColumnPreparedAssetBytes(manifestPrepared.Assets),
 		},
 		StageMetrics: metrics,
 	}
@@ -339,6 +384,8 @@ func BuildColumnPublishPlan(input ColumnPublishPlanInput) (ColumnPublishPlan, er
 	return plan, nil
 }
 
+// OrderedRootPublishInput converts the root delta into a backend ordered-root
+// publish input while preserving the already-validated identity record bytes.
 func (delta ColumnManifestRootDelta) OrderedRootPublishInput() (backenddb.OrderedRootPublishInput, error) {
 	if delta.RootName == "" {
 		return backenddb.OrderedRootPublishInput{}, errors.New("collections: column manifest root delta missing root name")
@@ -348,13 +395,16 @@ func (delta ColumnManifestRootDelta) OrderedRootPublishInput() (backenddb.Ordere
 	if err := validateColumnManifestIdentity(identity); err != nil {
 		return backenddb.OrderedRootPublishInput{}, err
 	}
+	if delta.IdentityRecord != encodeColumnManifestIdentityRecordArray(identity) {
+		return backenddb.OrderedRootPublishInput{}, errors.New("collections: column manifest root delta identity record does not match identity")
+	}
 	policy, err := backendRootStoragePolicy(delta.StoragePolicy)
 	if err != nil {
 		return backenddb.OrderedRootPublishInput{}, err
 	}
 	return backenddb.OrderedRootPublishInput{
 		BaseRoot:      delta.BaseRootID,
-		Iter:          columnManifestIdentityIterator(identity),
+		Iter:          columnManifestIdentityRecordIterator(delta.IdentityRecord),
 		StoragePolicy: policy,
 	}, nil
 }
@@ -431,12 +481,53 @@ func (c *Collection) buildColumnManifestPublishSystemDeltaIterator(input ColumnM
 	if rootName == "" {
 		return nil, errors.New("collections: column publish plan missing manifest root name")
 	}
+	if plan.Collection != input.BaseMeta.Name {
+		return nil, fmt.Errorf("collections: column publish plan collection %q does not match collection %q", plan.Collection, input.BaseMeta.Name)
+	}
+	expectedRootName := collectionColumnManifestRootName(input.BaseMeta.Name)
+	if rootName != expectedRootName {
+		return nil, fmt.Errorf("collections: column publish plan root %q does not match collection root %q", rootName, expectedRootName)
+	}
+	if plan.RootDelta.RootName != "" && plan.RootDelta.RootName != rootName {
+		return nil, fmt.Errorf("collections: column publish plan root %q does not match root delta %q", rootName, plan.RootDelta.RootName)
+	}
+	if input.BaseManifestRootID != plan.ManifestRootBaseID || input.BaseManifestRootID != plan.RootDelta.BaseRootID {
+		return nil, errConcurrentRootModification(input.BaseMeta.Name, rootName)
+	}
+	rootIdentity := plan.RootDelta.Identity
+	normalizeColumnManifestIdentityDefaults(&rootIdentity)
+	if err := validateColumnManifestIdentity(rootIdentity); err != nil {
+		return nil, err
+	}
+	if plan.RootDelta.IdentityRecord != encodeColumnManifestIdentityRecordArray(rootIdentity) {
+		return nil, errors.New("collections: column publish plan root identity record does not match root identity")
+	}
+	activeIdentity := plan.UpdatedActiveManifest
+	normalizeColumnManifestIdentityDefaults(&activeIdentity)
+	if activeIdentity != rootIdentity {
+		return nil, errors.New("collections: column publish plan active manifest identity does not match root delta identity")
+	}
+	recoveryIdentity := plan.RecoveryAuthoritativeManifest
+	normalizeColumnManifestIdentityDefaults(&recoveryIdentity)
+	if recoveryIdentity != rootIdentity {
+		return nil, errors.New("collections: column publish plan recovery-authoritative manifest identity does not match root delta identity")
+	}
+	if input.BaseCommitSeq != 0 || input.BaseSystemRoot != 0 {
+		state := c.db.State()
+		if (input.BaseCommitSeq != 0 && state.CommitSeq != input.BaseCommitSeq) ||
+			(input.BaseSystemRoot != 0 && state.SystemRootPageID != input.BaseSystemRoot) {
+			return nil, fmt.Errorf("collections: concurrent schema modification detected for %q", input.BaseMeta.Name)
+		}
+	}
 
 	current := c.db.AcquireSnapshot()
 	if current == nil {
 		return nil, backenddb.ErrClosed
 	}
 	defer func() { _ = current.Close() }()
+	if err := validateColumnManifestPublishedRoot(current, input.BaseMeta.Name, rootIDs[0], plan.RootDelta.IdentityRecord); err != nil {
+		return nil, err
+	}
 	catalog, err := loadCollectionCatalog(current, input.BaseMeta.Name)
 	if err != nil {
 		return nil, err
@@ -496,7 +587,7 @@ func prepareColumnPublishAssets(input ColumnPublishPlanInput, cfg ColumnStoreCon
 
 func encodeColumnPublishManifest(input ColumnPublishPlanInput, cfg ColumnStoreConfig, prepared ColumnPublishPreparedAssets) (ColumnPublishManifestEncodeResult, error) {
 	if input.Hooks.EncodeManifest == nil {
-		return ColumnPublishManifestEncodeResult{}, errors.New("manifest encode hook is required")
+		return ColumnPublishManifestEncodeResult{}, errors.New("collections: column publish manifest encode hook is required")
 	}
 	return input.Hooks.EncodeManifest(ColumnPublishManifestEncodeInput{
 		Collection:        input.Collection,
@@ -569,6 +660,11 @@ func validateColumnPublishPlanConfig(collection string, cfg *ColumnStoreConfig) 
 	}
 	if cfg.ProfileSupport == "" {
 		return errors.New("collections: column publish plan requires normalized profile support")
+	}
+	switch cfg.ProfileSupport {
+	case ColumnStoreProfileDurableOnly, ColumnStoreProfileBenchmarkRelaxed:
+	default:
+		return fmt.Errorf("collections: unsupported column profile support %q", cfg.ProfileSupport)
 	}
 	return nil
 }
@@ -696,4 +792,12 @@ func sumColumnPreparedAssetBytes(assets []ColumnPreparedAsset) int {
 		total += asset.Bytes
 	}
 	return total
+}
+
+func cloneColumnPublishPreparedAssets(prepared ColumnPublishPreparedAssets) ColumnPublishPreparedAssets {
+	if len(prepared.Assets) == 0 {
+		return prepared
+	}
+	prepared.Assets = append([]ColumnPreparedAsset(nil), prepared.Assets...)
+	return prepared
 }

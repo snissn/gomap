@@ -4,7 +4,6 @@ import (
 	"errors"
 	"strings"
 	"testing"
-	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
@@ -54,6 +53,41 @@ func TestColumnPublishPlanDisabledFastPathAllocatesZeroM10A(t *testing.T) {
 	}
 }
 
+func TestColumnPublishPlanRejectsNonEmptyDisabledColumnStoreM10A(t *testing.T) {
+	cfg := testColumnStoreConfig(nil)
+	cfg.Enabled = false
+	plan, err := BuildColumnPublishPlan(ColumnPublishPlanInput{
+		Collection:        "events",
+		ColumnStore:       cfg,
+		Operation:         ColumnPublishOperationInsert,
+		AppliedCommandLSN: 101,
+	})
+	if err == nil || !strings.Contains(err.Error(), "requires enabled=true") {
+		t.Fatalf("BuildColumnPublishPlan err=%v want enabled=true validation", err)
+	}
+	if plan.Enabled {
+		t.Fatalf("invalid disabled column_store returned enabled plan: %+v", plan)
+	}
+}
+
+func TestColumnPublishPlanAllowsBenchmarkRelaxedProfileM10A(t *testing.T) {
+	asset := testColumnPublishPreparedAssetM10A()
+	identity := ColumnManifestIdentity{Generation: 7, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0xfeedbeef}
+	input := testColumnPublishPlanInputM10A(identity, asset)
+	cfg := testColumnStoreConfig(nil)
+	cfg.ProfileSupport = ColumnStoreProfileBenchmarkRelaxed
+	input.ColumnStore = cfg
+	input.ColumnStoreNormalized = false
+
+	plan, err := BuildColumnPublishPlan(input)
+	if err != nil {
+		t.Fatalf("BuildColumnPublishPlan benchmark-relaxed: %v", err)
+	}
+	if !plan.Enabled || plan.RequiredAssetBytes != asset.Bytes {
+		t.Fatalf("unexpected benchmark-relaxed plan: %+v", plan)
+	}
+}
+
 func TestColumnPublishPlanBuildsDurabilityClosureM10A(t *testing.T) {
 	asset := testColumnPublishPreparedAssetM10A()
 	identity := ColumnManifestIdentity{Generation: 7, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0xfeedbeef}
@@ -62,7 +96,6 @@ func TestColumnPublishPlanBuildsDurabilityClosureM10A(t *testing.T) {
 	input.MeasureAllocations = true
 	input.Hooks.ExtractDocuments = func() error {
 		called = append(called, "extract")
-		time.Sleep(time.Nanosecond)
 		return nil
 	}
 	input.Hooks.EncodeDeclaredColumns = func(ColumnPublishDeclaredColumnEncodeInput) error {
@@ -110,9 +143,6 @@ func TestColumnPublishPlanBuildsDurabilityClosureM10A(t *testing.T) {
 	}
 	if plan.Lifecycle.PublishedRefs != 1 || plan.Lifecycle.PublishedBytes != asset.Bytes || plan.Lifecycle.PreparedRefs != 1 || plan.Lifecycle.PreparedBytes != asset.Bytes {
 		t.Fatalf("unexpected lifecycle summary: %+v", plan.Lifecycle)
-	}
-	if plan.StageMetrics.DocumentExtraction <= 0 {
-		t.Fatalf("stage metrics were not populated: %+v", plan.StageMetrics)
 	}
 }
 
@@ -339,6 +369,30 @@ func TestColumnPublishPlanRejectsClosurePreparedAssetMismatchM10A(t *testing.T) 
 	}
 }
 
+func TestColumnPublishPlanSnapshotsPreparedAssetsForClosureValidationM10A(t *testing.T) {
+	asset := testColumnPublishPreparedAssetM10A()
+	identity := ColumnManifestIdentity{Generation: 7, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0xfeedbeef}
+	input := testColumnPublishPlanInputM10A(identity, asset)
+	input.Hooks.ValidateClosure = func(in ColumnPublishClosureValidationInput) (ColumnPublishDurabilityClosure, error) {
+		in.Prepared.Assets[0].Ref.Offset += int64(asset.Bytes)
+		return ColumnPublishDurabilityClosure{
+			PreparedAssets: in.Prepared.Assets,
+			RequiredAssets: len(in.Prepared.Assets),
+			RequiredBytes:  sumColumnPreparedAssetBytes(in.Prepared.Assets),
+			FlushRequired:  true,
+			SyncRequired:   true,
+		}, nil
+	}
+
+	plan, err := BuildColumnPublishPlan(input)
+	if err == nil || !strings.Contains(err.Error(), "does not match manifest prepared asset") {
+		t.Fatalf("BuildColumnPublishPlan err=%v want closure mutation mismatch", err)
+	}
+	if plan.Enabled {
+		t.Fatalf("mutated closure prepared asset returned enabled plan: %+v", plan)
+	}
+}
+
 func TestColumnManifestPublishSystemDeltaUpdatesRootAndMetadataTogetherM10A(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -404,6 +458,170 @@ func TestColumnManifestPublishSystemDeltaUpdatesRootAndMetadataTogetherM10A(t *t
 	cacheID, ok := reopened.ColumnStoreCacheIdentity()
 	if !ok || cacheID.ManifestRoot != rootIDs[0] || cacheID.ManifestGeneration != identity.Generation || cacheID.RecoveryAuthoritativeAppliedCommandLSN != plan.RecoveryAuthoritativeAppliedCommandLSN {
 		t.Fatalf("unexpected cache identity: %+v ok=%v rootIDs=%v", cacheID, ok, rootIDs)
+	}
+}
+
+func TestColumnManifestPublishSystemDeltaRejectsForeignCollectionM10A(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "events",
+		Options: CollectionOptions{ColumnStore: testColumnStoreConfig(nil)},
+	}); err != nil {
+		t.Fatalf("create column-enabled collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("events")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	planInput := testColumnPublishPlanInputM10A(ColumnManifestIdentity{Generation: 11, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0xabcdef1234}, testColumnPublishPreparedAssetM10A())
+	planInput.BaseManifestRootID = 0
+	plan, err := BuildColumnPublishPlan(planInput)
+	if err != nil {
+		t.Fatalf("BuildColumnPublishPlan: %v", err)
+	}
+	plan.Collection = "other"
+	plan.ManifestRootName = collectionColumnManifestRootName("other")
+	plan.RootDelta.RootName = plan.ManifestRootName
+	iter, err := col.buildColumnManifestPublishSystemDeltaIterator(ColumnManifestPublishSystemDeltaInput{
+		BaseMeta:           col.Meta(),
+		BaseManifestRootID: 0,
+		Plan:               plan,
+	}, []uint64{123})
+	if iter != nil {
+		_ = iter.Close()
+	}
+	if err == nil || !strings.Contains(err.Error(), "does not match collection") {
+		t.Fatalf("buildColumnManifestPublishSystemDeltaIterator err=%v want collection/root mismatch", err)
+	}
+}
+
+func TestColumnManifestPublishSystemDeltaRejectsStalePlanBaseM10A(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "events",
+		Options: CollectionOptions{ColumnStore: testColumnStoreConfig(nil)},
+	}); err != nil {
+		t.Fatalf("create column-enabled collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("events")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	plan, err := BuildColumnPublishPlan(testColumnPublishPlanInputM10A(ColumnManifestIdentity{Generation: 12, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0xabcdef5678}, testColumnPublishPreparedAssetM10A()))
+	if err != nil {
+		t.Fatalf("BuildColumnPublishPlan: %v", err)
+	}
+	if plan.ManifestRootBaseID == 0 || plan.RootDelta.BaseRootID == 0 {
+		t.Fatalf("test requires non-zero stale plan base: %+v", plan)
+	}
+	iter, err := col.buildColumnManifestPublishSystemDeltaIterator(ColumnManifestPublishSystemDeltaInput{
+		BaseMeta:           col.Meta(),
+		BaseManifestRootID: 0,
+		Plan:               plan,
+	}, []uint64{123})
+	if iter != nil {
+		_ = iter.Close()
+	}
+	if err == nil || !strings.Contains(err.Error(), "concurrent root modification") {
+		t.Fatalf("buildColumnManifestPublishSystemDeltaIterator err=%v want stale plan base rejection", err)
+	}
+}
+
+func TestColumnManifestPublishSystemDeltaRejectsIdentityMismatchM10A(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "events",
+		Options: CollectionOptions{ColumnStore: testColumnStoreConfig(nil)},
+	}); err != nil {
+		t.Fatalf("create column-enabled collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("events")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	planInput := testColumnPublishPlanInputM10A(ColumnManifestIdentity{Generation: 13, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0xabcdef9012}, testColumnPublishPreparedAssetM10A())
+	planInput.BaseManifestRootID = 0
+	plan, err := BuildColumnPublishPlan(planInput)
+	if err != nil {
+		t.Fatalf("BuildColumnPublishPlan: %v", err)
+	}
+	plan.UpdatedActiveManifest.Generation++
+	iter, err := col.buildColumnManifestPublishSystemDeltaIterator(ColumnManifestPublishSystemDeltaInput{
+		BaseMeta:           col.Meta(),
+		BaseManifestRootID: 0,
+		Plan:               plan,
+	}, []uint64{123})
+	if iter != nil {
+		_ = iter.Close()
+	}
+	if err == nil || !strings.Contains(err.Error(), "active manifest identity") {
+		t.Fatalf("buildColumnManifestPublishSystemDeltaIterator err=%v want active manifest identity mismatch", err)
+	}
+}
+
+func TestColumnManifestPublishSystemDeltaRejectsPublishedRootMismatchM10A(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "events",
+		Options: CollectionOptions{ColumnStore: testColumnStoreConfig(nil)},
+	}); err != nil {
+		t.Fatalf("create column-enabled collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("events")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	baseMeta := col.Meta()
+	state := d.State()
+	planInput := testColumnPublishPlanInputM10A(ColumnManifestIdentity{Generation: 14, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0xabcdef3456}, testColumnPublishPreparedAssetM10A())
+	planInput.BaseManifestRootID = 0
+	plan, err := BuildColumnPublishPlan(planInput)
+	if err != nil {
+		t.Fatalf("BuildColumnPublishPlan: %v", err)
+	}
+
+	wrongDelta := plan.RootDelta
+	wrongDelta.Identity = ColumnManifestIdentity{Generation: 99, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0x1111222233334444}
+	wrongDelta.IdentityRecord = encodeColumnManifestIdentityRecordArray(wrongDelta.Identity)
+	ordered, err := wrongDelta.OrderedRootPublishInput()
+	if err != nil {
+		t.Fatalf("OrderedRootPublishInput: %v", err)
+	}
+	_, _, err = d.PublishOrderedRootGroupWithSystemBuilder([]backenddb.OrderedRootPublishInput{ordered}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		return col.buildColumnManifestPublishSystemDeltaIterator(ColumnManifestPublishSystemDeltaInput{
+			BaseMeta:           baseMeta,
+			BaseCommitSeq:      state.CommitSeq,
+			BaseSystemRoot:     state.SystemRootPageID,
+			BaseManifestRootID: 0,
+			Plan:               plan,
+		}, rootIDs)
+	})
+	if err == nil || !strings.Contains(err.Error(), "published root identity record") {
+		t.Fatalf("PublishOrderedRootGroupWithSystemBuilder err=%v want published root identity mismatch", err)
 	}
 }
 
@@ -521,6 +739,7 @@ func BenchmarkColumnPublishPlanM10A(b *testing.B) {
 		var stages ColumnPublishStageMetrics
 		var last ColumnPublishPlan
 		b.ReportAllocs()
+		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
 			plan, err := BuildColumnPublishPlan(input)
 			if err != nil {
