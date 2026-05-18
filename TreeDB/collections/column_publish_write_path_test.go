@@ -720,14 +720,19 @@ func TestColumnStoreRelaxedProfileWritesRejectedBeforeCommandAppendM10C(t *testi
 				t.Fatalf("command WAL frames after rejected write=%d, want %d", framesAfter, framesBefore)
 			}
 			deleted, err := col.DeleteDocument([]byte("missing"))
-			if !errors.Is(err, backenddb.ErrCommandWALRejected) {
-				t.Fatalf("DeleteDocument missing error=%v, want ErrCommandWALRejected", err)
+			if err != nil {
+				t.Fatalf("DeleteDocument missing: %v", err)
 			}
 			if deleted {
 				t.Fatalf("DeleteDocument missing deleted=true, want false")
 			}
-			if framesAfter := countCollectionCommandWALFrames(t, tt.opts.Dir); framesAfter != framesBefore {
-				t.Fatalf("command WAL frames after rejected no-op delete=%d, want %d", framesAfter, framesBefore)
+			framesAfterDelete := countCollectionCommandWALFrames(t, tt.opts.Dir)
+			wantFramesAfterDelete := framesBefore
+			if tt.commandWAL {
+				wantFramesAfterDelete++
+			}
+			if framesAfterDelete != wantFramesAfterDelete {
+				t.Fatalf("command WAL frames after no-op delete=%d, want %d", framesAfterDelete, wantFramesAfterDelete)
 			}
 			matched, modified, err := col.Update([]byte("missing"), func([]byte) ([]byte, bool, error) {
 				return nil, false, nil
@@ -738,8 +743,8 @@ func TestColumnStoreRelaxedProfileWritesRejectedBeforeCommandAppendM10C(t *testi
 			if matched || modified {
 				t.Fatalf("Update missing matched=%v modified=%v, want false/false", matched, modified)
 			}
-			if framesAfter := countCollectionCommandWALFrames(t, tt.opts.Dir); framesAfter != framesBefore {
-				t.Fatalf("command WAL frames after rejected no-op update=%d, want %d", framesAfter, framesBefore)
+			if framesAfter := countCollectionCommandWALFrames(t, tt.opts.Dir); framesAfter != framesAfterDelete {
+				t.Fatalf("command WAL frames after rejected no-op update=%d, want %d", framesAfter, framesAfterDelete)
 			}
 			if tt.commandWAL {
 				if err := d.CheckCommandWALPublishReady(); err != nil {
@@ -747,6 +752,31 @@ func TestColumnStoreRelaxedProfileWritesRejectedBeforeCommandAppendM10C(t *testi
 				}
 			}
 		})
+	}
+}
+
+func TestColumnStoreDeleteMissesDoNotRequireCommandWALM10C(t *testing.T) {
+	d, col := openBufferedBSONColumnStoreSeedM10B(t, false, ColumnStoreProfileBenchmarkRelaxed)
+	defer func() { _ = d.Close() }()
+
+	deleted, err := col.DeleteDocument([]byte("missing"))
+	if err != nil {
+		t.Fatalf("DeleteDocument missing: %v", err)
+	}
+	if deleted {
+		t.Fatal("DeleteDocument missing deleted=true, want false")
+	}
+	deletedBatch, err := col.DeleteBatch([][]byte{[]byte("missing")})
+	if err != nil {
+		t.Fatalf("DeleteBatch missing: %v", err)
+	}
+	if deletedBatch != 0 {
+		t.Fatalf("DeleteBatch missing deleted=%d, want 0", deletedBatch)
+	}
+	if got, err := col.Get([]byte("e1")); err != nil {
+		t.Fatalf("Get existing after missing deletes: %v", err)
+	} else if len(got) == 0 {
+		t.Fatal("Get existing after missing deletes returned empty document")
 	}
 }
 
