@@ -157,11 +157,13 @@ func planColumnQueryForCatalog(catalog *collectionCatalog, identity ColumnStoreC
 		return plan
 	}
 	if idx, ok := selectColumnQueryBTreeIndex(catalog, req); ok {
+		diag = clearColumnQueryUnsupportedDiagnostics(diag)
 		diag.SelectedIndexName = idx.Name
 		diag.SelectedIndexField = idx.Field
 		diag.Reason = "selected matching collection secondary index for full-scan B-tree baseline"
 		return ColumnQueryPlan{Kind: ColumnQueryPlanBTreeIndexBaseline, Supported: true, IndexName: idx.Name, IndexField: idx.Field, Diagnostics: diag}
 	}
+	diag = clearColumnQueryUnsupportedDiagnostics(diag)
 	diag.Reason = "row-store fallback"
 	return ColumnQueryPlan{Kind: ColumnQueryPlanRowStoreBaseline, Supported: true, Diagnostics: diag}
 }

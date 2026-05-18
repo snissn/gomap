@@ -1165,8 +1165,8 @@ func scanColumnStoreSuiteEventsByIndex(collection *collections.Collection, rows 
 	// the secondary structure traversed and write-amplification accounting, not
 	// read selectivity; range pushdown is deferred to M11C. The collection index
 	// implementation emits one secondary entry per document for these scalar
-	// fields, so rows+1 is a sentinel limit: materialized != rows catches an
-	// exact sentinel hit, while truncated catches entries beyond the sentinel.
+	// fields, so rows+1 is a sentinel limit: truncated catches the sentinel
+	// overflow boundary and materialized != rows catches underruns.
 	truncated, err := collection.ScanBorrowedDocumentsByIndexRange(indexName, collections.IndexRangeOptions{
 		Lower: collections.IndexRangeBound{Unbounded: true},
 		Upper: collections.IndexRangeBound{Unbounded: true},
@@ -1187,7 +1187,7 @@ func scanColumnStoreSuiteEventsByIndex(collection *collections.Collection, rows 
 		return nil, 0, 0, fmt.Errorf("column_store: scan B-tree index %s for %s: %w", indexName, queryName, err)
 	}
 	if truncated {
-		return nil, 0, 0, fmt.Errorf("column_store: B-tree index scan exceeded expected row count: materialized at least %d rows with sentinel limit %d; scalar index should emit one secondary entry per document", materialized, rows+1)
+		return nil, 0, 0, fmt.Errorf("column_store: B-tree index scan exceeded expected row count: expected exactly %d document entries, observed %d materialized rows at sentinel limit %d; scalar index should emit one secondary entry per document", rows, materialized, rows+1)
 	}
 	if materialized != rows {
 		return nil, 0, 0, fmt.Errorf("column_store: B-tree index scan materialized %d rows, want %d", materialized, rows)

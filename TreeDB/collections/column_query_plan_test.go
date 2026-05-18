@@ -648,6 +648,54 @@ func TestColumnQueryPlannerM11BForcedSourceBaselinesClearPhysicalDiagnostics(t *
 	}
 }
 
+func TestColumnQueryPlannerM11BSourceFallbacksClearPhysicalDiagnostics(t *testing.T) {
+	catalog := &collectionCatalog{meta: CollectionMeta{
+		Name: "events",
+		Indexes: []IndexDefinition{
+			{Name: "kind_idx", Field: "kind", ValueType: IndexValueString},
+		},
+		Options: CollectionOptions{ColumnStore: &ColumnStoreConfig{
+			Enabled: true,
+			Columns: []ColumnStoreColumn{
+				{Name: "kind", Path: "kind", ValueType: ColumnStoreValueString},
+			},
+		}},
+	}}
+	identity := ColumnStoreCacheIdentity{
+		Collection:                      "events",
+		ManifestRoot:                    99,
+		ManifestGeneration:              7,
+		RecoveryAuthoritativeGeneration: 7,
+	}
+	base := ColumnQueryPlanRequest{
+		Name:             "q1",
+		ProjectedColumns: []string{"missing_column"},
+		Capabilities: ColumnQueryPlannerCapabilities{
+			SerialColumnScan:   true,
+			PhysicalAssetCount: 1,
+			GranuleCount:       128,
+		},
+	}
+
+	btreeReq := base
+	btreeReq.CandidateIndexColumns = []string{"kind"}
+	btreePlan := planColumnQueryForCatalog(catalog, identity, true, btreeReq)
+	if !btreePlan.Supported || btreePlan.Kind != ColumnQueryPlanBTreeIndexBaseline || btreePlan.IndexName != "kind_idx" {
+		t.Fatalf("B-tree source fallback should remain supported without requested physical columns: %+v", btreePlan)
+	}
+	if btreePlan.Diagnostics.UnsupportedPlanKind != "" || btreePlan.Diagnostics.UnsupportedPlanReason != "" {
+		t.Fatalf("B-tree source fallback carried physical unsupported diagnostics: %+v", btreePlan.Diagnostics)
+	}
+
+	rowPlan := planColumnQueryForCatalog(catalog, identity, true, base)
+	if !rowPlan.Supported || rowPlan.Kind != ColumnQueryPlanRowStoreBaseline {
+		t.Fatalf("row source fallback should remain supported without requested physical columns: %+v", rowPlan)
+	}
+	if rowPlan.Diagnostics.UnsupportedPlanKind != "" || rowPlan.Diagnostics.UnsupportedPlanReason != "" {
+		t.Fatalf("row source fallback carried physical unsupported diagnostics: %+v", rowPlan.Diagnostics)
+	}
+}
+
 func TestColumnQueryPlannerM11BReportsSerialWorkerCount(t *testing.T) {
 	catalog := &collectionCatalog{meta: CollectionMeta{
 		Name:    "events",
@@ -736,10 +784,10 @@ func TestColumnQueryPlannerM11BRejectsMissingProjectedColumnForPhysicalPlans(t *
 	req.ForceKind = ""
 	plan = planColumnQueryForCatalog(catalog, identity, true, req)
 	if !plan.Supported || plan.Kind != ColumnQueryPlanRowStoreBaseline {
-		t.Fatalf("non-forced missing predicate should fall back to row store with diagnostics: %+v", plan)
+		t.Fatalf("non-forced missing predicate should fall back to row store: %+v", plan)
 	}
-	if !strings.Contains(plan.Diagnostics.UnsupportedPlanReason, `requested column "missing_predicate"`) {
-		t.Fatalf("fallback unsupported reason=%q", plan.Diagnostics.UnsupportedPlanReason)
+	if plan.Diagnostics.UnsupportedPlanKind != "" || plan.Diagnostics.UnsupportedPlanReason != "" {
+		t.Fatalf("row fallback carried physical unsupported diagnostics: %+v", plan.Diagnostics)
 	}
 
 	req.Predicates = nil
@@ -760,8 +808,8 @@ func TestColumnQueryPlannerM11BRejectsMissingProjectedColumnForPhysicalPlans(t *
 	if !plan.Supported || plan.Kind != ColumnQueryPlanRowStoreBaseline {
 		t.Fatalf("missing physical column should fall back to row baseline when not forced: %+v", plan)
 	}
-	if !strings.Contains(plan.Diagnostics.UnsupportedPlanReason, `requested column "missing"`) {
-		t.Fatalf("fallback unsupported reason=%q", plan.Diagnostics.UnsupportedPlanReason)
+	if plan.Diagnostics.UnsupportedPlanKind != "" || plan.Diagnostics.UnsupportedPlanReason != "" {
+		t.Fatalf("row fallback carried physical unsupported diagnostics: %+v", plan.Diagnostics)
 	}
 }
 
