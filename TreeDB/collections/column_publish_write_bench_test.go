@@ -325,8 +325,6 @@ func prepareColumnStoreCommandWALReplayBenchmarkDirM10C(b *testing.B, columnStor
 		b.Fatalf("Close setup DB: %v", err)
 	}
 
-	totalDocs := 0
-	totalEncodedPayloadBytes := 0
 	walDir := backenddb.WALDirPath(dir)
 	if err := os.MkdirAll(walDir, 0o755); err != nil {
 		b.Fatalf("MkdirAll wal: %v", err)
@@ -335,25 +333,32 @@ func prepareColumnStoreCommandWALReplayBenchmarkDirM10C(b *testing.B, columnStor
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		b.Fatalf("Remove existing command segment: %v", err)
 	}
+	totalDocs, totalEncodedPayloadBytes, err := writeColumnStoreCommandWALReplayFramesM10C(path, baseAppliedLSN, frames, batchSize)
+	if err != nil {
+		b.Fatalf("write command WAL replay frames: %v", err)
+	}
+	return dir, totalDocs, totalEncodedPayloadBytes, baseAppliedLSN + uint64(frames)
+}
+
+func writeColumnStoreCommandWALReplayFramesM10C(path string, baseAppliedLSN uint64, frames, batchSize int) (totalDocs int, totalEncodedPayloadBytes int, err error) {
 	w, err := commitlog.NewWriter(path)
 	if err != nil {
-		b.Fatalf("NewWriter: %v", err)
+		return 0, 0, fmt.Errorf("new writer: %w", err)
 	}
-	closeWriter := true
 	defer func() {
-		if closeWriter {
-			_ = w.Close()
+		if closeErr := w.Close(); err == nil && closeErr != nil {
+			err = fmt.Errorf("close writer: %w", closeErr)
 		}
 	}()
 	for i := 0; i < frames; i++ {
 		ids, documents, _, _ := columnStoreCommandWALBenchDocuments(i*batchSize, batchSize, 0)
 		docs, err := collectionDocumentsFromBatchInput(ids, documents)
 		if err != nil {
-			b.Fatalf("collectionDocumentsFromBatchInput: %v", err)
+			return 0, 0, fmt.Errorf("collection documents from batch input: %w", err)
 		}
 		payload, err := commitlog.EncodeCollectionInsertBatchByIDPayload("bench", docs)
 		if err != nil {
-			b.Fatalf("EncodeCollectionInsertBatchByIDPayload: %v", err)
+			return 0, 0, fmt.Errorf("encode collection insert batch by ID payload: %w", err)
 		}
 		if err := w.AppendCommand(commitlog.CommandEnvelope{
 			LSN:           baseAppliedLSN + uint64(i) + 1,
@@ -362,16 +367,12 @@ func prepareColumnStoreCommandWALReplayBenchmarkDirM10C(b *testing.B, columnStor
 			PayloadFormat: commitlog.PayloadFormatCollectionInsertBatchByIDV1,
 			Payload:       payload,
 		}); err != nil {
-			b.Fatalf("AppendCommand: %v", err)
+			return 0, 0, fmt.Errorf("append command: %w", err)
 		}
 		totalDocs += len(ids)
 		totalEncodedPayloadBytes += len(payload)
 	}
-	if err := w.Close(); err != nil {
-		b.Fatalf("Close writer: %v", err)
-	}
-	closeWriter = false
-	return dir, totalDocs, totalEncodedPayloadBytes, baseAppliedLSN + uint64(frames)
+	return totalDocs, totalEncodedPayloadBytes, nil
 }
 
 func copyColumnStoreCommandWALReplayBenchmarkDirM10C(tb testing.TB, src, dst string) {
@@ -385,6 +386,9 @@ func copyColumnStoreCommandWALReplayBenchmarkDirM10C(tb testing.TB, src, dst str
 			return err
 		}
 		target := filepath.Join(dst, rel)
+		if entry.Type()&fs.ModeSymlink != 0 {
+			return fmt.Errorf("symlink entries are not supported in replay benchmark fixtures: %s", path)
+		}
 		info, err := entry.Info()
 		if err != nil {
 			return err
