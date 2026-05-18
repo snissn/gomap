@@ -76,6 +76,28 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 		}
 	}
 
+	var benchprof benchprofExport
+	benchprofData, err := os.ReadFile(filepath.Join(dir, "benchprof_results.json"))
+	if err != nil {
+		t.Fatalf("read benchprof_results.json: %v", err)
+	}
+	if err := json.Unmarshal(benchprofData, &benchprof); err != nil {
+		t.Fatalf("unmarshal benchprof_results.json: %v", err)
+	}
+	if len(benchprof.Runs) != 1 {
+		t.Fatalf("benchprof runs=%d want 1", len(benchprof.Runs))
+	}
+	if got := benchprof.Runs[0].Results["column_store"]["TreeDB Column Store"]; got <= 0 {
+		t.Fatalf("benchprof column_store aggregate rows/sec=%f want positive", got)
+	}
+	benchprofMarkdown, err := os.ReadFile(filepath.Join(dir, "benchprof_results.md"))
+	if err != nil {
+		t.Fatalf("read benchprof_results.md: %v", err)
+	}
+	if !strings.Contains(string(benchprofMarkdown), "Column store query phase") {
+		t.Fatalf("benchprof markdown missing aggregate column_store display name:\n%s", benchprofMarkdown)
+	}
+
 	var report columnStoreSuiteReport
 	data, err := os.ReadFile(filepath.Join(dir, "column_store_results.json"))
 	if err != nil {
