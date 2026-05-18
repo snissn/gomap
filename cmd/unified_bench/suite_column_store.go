@@ -503,16 +503,19 @@ func columnStoreArtifactPathsForProfileDir(profileDir string, cfg BenchConfig) c
 	if shouldCheckpointCPUProfile(cfg, columnStoreSuiteBenchTestName) {
 		paths.CheckpointCPUProfile = fmt.Sprintf("%s_checkpoint_%s_%s.pprof", cfg.CheckpointCPUProfile, sanitizeProfileSegment(columnStoreSuiteBenchTestName), sanitizeProfileSegment(columnStoreSuiteBenchDBName))
 	}
-	if strings.TrimSpace(cfg.BlockProfile) != "" {
-		paths.BlockProfile = cfg.BlockProfile
-		paths.BlockDeltaProfile = contentionProfilePath(cfg.BlockProfile, "block", columnStoreSuiteBenchTestName, columnStoreSuiteBenchDBName)
+	blockProfile := strings.TrimSpace(cfg.BlockProfile)
+	if blockProfile != "" {
+		paths.BlockProfile = blockProfile
+		paths.BlockDeltaProfile = contentionProfilePath(blockProfile, "block", columnStoreSuiteBenchTestName, columnStoreSuiteBenchDBName)
 	}
-	if strings.TrimSpace(cfg.MutexProfile) != "" {
-		paths.MutexProfile = cfg.MutexProfile
-		paths.MutexDeltaProfile = contentionProfilePath(cfg.MutexProfile, "mutex", columnStoreSuiteBenchTestName, columnStoreSuiteBenchDBName)
+	mutexProfile := strings.TrimSpace(cfg.MutexProfile)
+	if mutexProfile != "" {
+		paths.MutexProfile = mutexProfile
+		paths.MutexDeltaProfile = contentionProfilePath(mutexProfile, "mutex", columnStoreSuiteBenchTestName, columnStoreSuiteBenchDBName)
 	}
-	if strings.TrimSpace(cfg.TraceProfile) != "" {
-		paths.TraceProfile = cfg.TraceProfile
+	traceProfile := strings.TrimSpace(cfg.TraceProfile)
+	if traceProfile != "" {
+		paths.TraceProfile = traceProfile
 	}
 	return paths
 }
@@ -756,7 +759,8 @@ func runColumnStoreSuiteQueriesProfiled(cfg BenchConfig, collection *collections
 		}
 	}
 	blockBasePath := ""
-	if cfg.BlockProfile != "" {
+	blockProfile := strings.TrimSpace(cfg.BlockProfile)
+	if blockProfile != "" {
 		blockBasePath, err = profileHooks.writeRuntimeProfileSnapshotTemp("unified_bench_column_store_block_base", "block")
 		if err != nil {
 			cleanup(allocBasePath)
@@ -764,7 +768,8 @@ func runColumnStoreSuiteQueriesProfiled(cfg BenchConfig, collection *collections
 		}
 	}
 	mutexBasePath := ""
-	if cfg.MutexProfile != "" {
+	mutexProfile := strings.TrimSpace(cfg.MutexProfile)
+	if mutexProfile != "" {
 		mutexBasePath, err = profileHooks.writeRuntimeProfileSnapshotTemp("unified_bench_column_store_mutex_base", "mutex")
 		if err != nil {
 			cleanup(allocBasePath, blockBasePath)
@@ -821,7 +826,7 @@ func runColumnStoreSuiteQueriesProfiled(cfg BenchConfig, collection *collections
 			cleanup(blockBasePath, mutexBasePath)
 			return nil, nil, nil, fmt.Errorf("column_store: blockprofile snapshot: %w", snapErr)
 		}
-		blockPath := contentionProfilePath(cfg.BlockProfile, "block", columnStoreSuiteBenchTestName, columnStoreSuiteBenchDBName)
+		blockPath := contentionProfilePath(blockProfile, "block", columnStoreSuiteBenchTestName, columnStoreSuiteBenchDBName)
 		wrote, deltaErr := profileHooks.writeRuntimeProfileDeltaProfile(blockBasePath, blockAfterPath, blockPath)
 		cleanup(blockBasePath, blockAfterPath)
 		if deltaErr != nil {
@@ -838,7 +843,7 @@ func runColumnStoreSuiteQueriesProfiled(cfg BenchConfig, collection *collections
 			cleanup(mutexBasePath)
 			return nil, nil, nil, fmt.Errorf("column_store: mutexprofile snapshot: %w", snapErr)
 		}
-		mutexPath := contentionProfilePath(cfg.MutexProfile, "mutex", columnStoreSuiteBenchTestName, columnStoreSuiteBenchDBName)
+		mutexPath := contentionProfilePath(mutexProfile, "mutex", columnStoreSuiteBenchTestName, columnStoreSuiteBenchDBName)
 		wrote, deltaErr := profileHooks.writeRuntimeProfileDeltaProfile(mutexBasePath, mutexAfterPath, mutexPath)
 		cleanup(mutexBasePath, mutexAfterPath)
 		if deltaErr != nil {
