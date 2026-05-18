@@ -241,8 +241,16 @@ func TestPublishOrderedRootDeltaBatchGroupWithCommandWALContextRejectsMissingFra
 func TestPublishOrderedRootDeltaBatchGroupWithCommandWALContextNilSystemBuilderNamesBatch(t *testing.T) {
 	var db *DB
 	_, _, err := db.PublishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilder(nil, nil, nil)
-	if !errors.Is(err, errOrderedRootDeltaBatchGroupCommandWALContextNilSystemBuilder) {
-		t.Fatalf("err=%v want %v", err, errOrderedRootDeltaBatchGroupCommandWALContextNilSystemBuilder)
+	if !errors.Is(err, ErrOrderedRootDeltaBatchGroupCommandWALContextNilSystemBuilder) {
+		t.Fatalf("err=%v want %v", err, ErrOrderedRootDeltaBatchGroupCommandWALContextNilSystemBuilder)
+	}
+}
+
+func TestPublishOrderedRootDeltaGroupWithCommandWALContextNilSystemBuilderIsExported(t *testing.T) {
+	var db *DB
+	_, _, err := db.PublishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBuilder(nil, nil, nil)
+	if !errors.Is(err, ErrOrderedRootGroupCommandWALContextNilSystemBuilder) {
+		t.Fatalf("err=%v want %v", err, ErrOrderedRootGroupCommandWALContextNilSystemBuilder)
 	}
 }
 

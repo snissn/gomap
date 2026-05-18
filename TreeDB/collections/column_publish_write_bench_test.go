@@ -405,12 +405,12 @@ func copyColumnStoreCommandWALReplayBenchmarkDirM10C(tb testing.TB, src, dst str
 			return err
 		}
 		if entry.IsDir() {
-			return os.MkdirAll(target, info.Mode())
+			return os.MkdirAll(target, info.Mode().Perm())
 		}
 		if !info.Mode().IsRegular() {
 			return fmt.Errorf("non-regular entries are not supported in replay benchmark fixtures: %s", path)
 		}
-		return copyColumnStoreCommandWALReplayBenchmarkFileM10C(path, target, info.Mode())
+		return copyColumnStoreCommandWALReplayBenchmarkFileM10C(path, target, info.Mode().Perm())
 	}); err != nil {
 		tb.Fatalf("copy replay benchmark dir: %v", err)
 	}

@@ -3,6 +3,7 @@ package db
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"sort"
 	"sync"
 	"time"
@@ -24,12 +25,19 @@ type orderedRootPublishPlan uint8
 // was called without the command frame that defines the publish LSN.
 var ErrCommandWALContextMissingFrame = errors.New("treedb: command WAL context publish requires a command frame")
 
+// ErrOrderedRootGroupCommandWALContextNilSystemBuilder reports a nil system
+// delta builder passed to an ordered-root command-WAL context publish API.
+var ErrOrderedRootGroupCommandWALContextNilSystemBuilder = errors.New("treedb: PublishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBuilder: nil system builder")
+
+// ErrOrderedRootDeltaBatchGroupCommandWALContextNilSystemBuilder reports a nil
+// system delta builder passed to the batch ordered-root command-WAL context
+// publish API.
+var ErrOrderedRootDeltaBatchGroupCommandWALContextNilSystemBuilder = errors.New("treedb: PublishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilder: nil system builder")
+
 var (
 	errCommandWALContextZeroLSN = errors.New("treedb: command WAL context publish appended zero LSN")
 
-	errOrderedRootGroupCommandWALContextNilSystemBuilder           = errors.New("treedb: PublishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBuilder: nil system builder")
-	errOrderedRootDeltaBatchGroupCommandWALContextNilSystemBuilder = errors.New("treedb: PublishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilder: nil system builder")
-	errOrderedRootPublishMissingIndex                              = errors.New("treedb: ordered root publish: missing index")
+	errOrderedRootPublishMissingIndex = errors.New("treedb: ordered root publish: missing index")
 )
 
 const (
@@ -1556,7 +1564,7 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered []Order
 
 func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBuilder(ordered []OrderedRootDeltaPublishInput, preflight OrderedRootGroupPreflight, commandWALIntent *CommandWALIntent, buildContextDeltas OrderedRootGroupCommandWALDeltaBuilder, buildSystemDeltaIter OrderedRootGroupCommandWALSystemBuilder) (newSystemRoot uint64, rootIDs []uint64, err error) {
 	if buildSystemDeltaIter == nil {
-		return 0, nil, errOrderedRootGroupCommandWALContextNilSystemBuilder
+		return 0, nil, ErrOrderedRootGroupCommandWALContextNilSystemBuilder
 	}
 	if commandWALIntent == nil {
 		return 0, nil, ErrCommandWALContextMissingFrame
@@ -1695,7 +1703,7 @@ func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBui
 		return 0, nil, err
 	}
 	if iter == nil {
-		err = errors.New("nil system root delta iterator")
+		err = errOrderedRootCommandWALContextNilSystemDeltaIterator("PublishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBuilder")
 		return 0, nil, err
 	}
 	phaseStart = time.Now()
@@ -1715,7 +1723,7 @@ func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBui
 	curSystemRoot := db.meta.SystemRootPageID
 	db.mu.RUnlock()
 	if curUserRoot != userRoot || curSystemRoot != baseSystemRoot {
-		err = errors.New("concurrent modification detected during ordered root group publish")
+		err = errOrderedRootCommandWALContextConcurrentModification("PublishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBuilder", userRoot, curUserRoot, baseSystemRoot, curSystemRoot)
 		return 0, nil, err
 	}
 
@@ -2129,7 +2137,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 
 func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilderSerialized(ordered []OrderedRootDeltaBatchPublishInput, preflight OrderedRootGroupPreflight, commandWALIntent *CommandWALIntent, buildContextDeltas OrderedRootDeltaBatchGroupCommandWALDeltaBuilder, buildSystemDeltaIter OrderedRootGroupCommandWALSystemBuilder) (newSystemRoot uint64, rootIDs []uint64, err error) {
 	if buildSystemDeltaIter == nil {
-		return 0, nil, errOrderedRootDeltaBatchGroupCommandWALContextNilSystemBuilder
+		return 0, nil, ErrOrderedRootDeltaBatchGroupCommandWALContextNilSystemBuilder
 	}
 	if commandWALIntent == nil {
 		return 0, nil, ErrCommandWALContextMissingFrame
@@ -2265,7 +2273,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 		return 0, nil, err
 	}
 	if iter == nil {
-		err = errors.New("nil system root delta iterator")
+		err = errOrderedRootCommandWALContextNilSystemDeltaIterator("PublishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilder")
 		return 0, nil, err
 	}
 	phaseStart = time.Now()
@@ -2285,7 +2293,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 	curSystemRoot := db.meta.SystemRootPageID
 	db.mu.RUnlock()
 	if curUserRoot != userRoot || curSystemRoot != baseSystemRoot {
-		err = errors.New("concurrent modification detected during ordered root group publish")
+		err = errOrderedRootCommandWALContextConcurrentModification("PublishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilder", userRoot, curUserRoot, baseSystemRoot, curSystemRoot)
 		return 0, nil, err
 	}
 
@@ -2302,6 +2310,14 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 	db.commitMu.Unlock()
 	db.finalizeCommitPostWork(post)
 	return newSystemRoot, rootIDs, nil
+}
+
+func errOrderedRootCommandWALContextNilSystemDeltaIterator(api string) error {
+	return fmt.Errorf("treedb: %s: system builder returned nil system root delta iterator", api)
+}
+
+func errOrderedRootCommandWALContextConcurrentModification(api string, wantUserRoot, gotUserRoot, wantSystemRoot, gotSystemRoot uint64) error {
+	return fmt.Errorf("treedb: %s: concurrent modification during ordered root publish: user_root want=%d got=%d system_root want=%d got=%d", api, wantUserRoot, gotUserRoot, wantSystemRoot, gotSystemRoot)
 }
 
 func (db *DB) finalizeOrderedRootPublishWithCommandWAL(newRootID uint64, sysRootID uint64, retired []uint64, sync bool, metrics adaptive.Metrics, touchedValueLogSegments []uint32, forceValueLogRefresh bool, vlogRefDelta *valueLogRefDelta, leafManifest *leafGenerationManifest, leafManifestRawFileIDs []uint32, intent *CommandWALIntent) error {
