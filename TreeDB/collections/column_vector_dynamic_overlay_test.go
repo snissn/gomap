@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"runtime"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -150,6 +151,65 @@ func TestColumnVectorDynamicGraphApplyBatchEmptyIsNoOp(t *testing.T) {
 	}
 }
 
+func TestColumnVectorDynamicGraphSnapshotStableAcrossOverlayPublishes(t *testing.T) {
+	base, err := NewColumnVectorGraphFromColumns(columnVectorGraphTestColumns(64, 16, 8, false))
+	if err != nil {
+		t.Fatalf("NewColumnVectorGraphFromColumns: %v", err)
+	}
+	graph, err := NewColumnVectorDynamicGraph(base)
+	if err != nil {
+		t.Fatalf("NewColumnVectorDynamicGraph: %v", err)
+	}
+	query, ok := base.VectorAt(nil, 7)
+	if !ok {
+		t.Fatal("missing query vector")
+	}
+	firstVector := append([]float32(nil), query...)
+	if _, err := graph.ApplyBatch([]ColumnVectorDynamicMutation{{
+		Kind:       ColumnVectorDynamicMutationInsert,
+		DocumentID: []byte("dyn-stable"),
+		Vector:     firstVector,
+	}}); err != nil {
+		t.Fatalf("seed overlay: %v", err)
+	}
+	previous := graph.Snapshot().Overlay()
+	if previous.Rows() != 1 || previous.LiveRows() != 1 {
+		t.Fatalf("previous overlay rows=%d live=%d, want 1/1", previous.Rows(), previous.LiveRows())
+	}
+
+	for i := 0; i < 32; i++ {
+		vector := vectorBenchmarkEmbedding(30_000+i, base.Dims())
+		mutations := []ColumnVectorDynamicMutation{{
+			Kind:       ColumnVectorDynamicMutationInsert,
+			DocumentID: []byte(fmt.Sprintf("dyn-next-%03d", i)),
+			Vector:     vector,
+		}}
+		if i == 0 {
+			mutations = append(mutations, ColumnVectorDynamicMutation{
+				Kind:       ColumnVectorDynamicMutationDelete,
+				DocumentID: []byte("dyn-stable"),
+			})
+		}
+		if _, err := graph.ApplyBatch(mutations); err != nil {
+			t.Fatalf("ApplyBatch %d: %v", i, err)
+		}
+	}
+
+	if previous.Rows() != 1 || previous.LiveRows() != 1 || !previous.live[0] {
+		t.Fatalf("previous overlay mutated rows=%d liveRows=%d live=%v", previous.Rows(), previous.LiveRows(), previous.live)
+	}
+	if got := previous.documentID(0); !bytes.Equal(got, []byte("dyn-stable")) {
+		t.Fatalf("previous documentID=%q want dyn-stable", got)
+	}
+	if got := previous.vectorAt(0); !slices.Equal(got, firstVector) {
+		t.Fatalf("previous vector mutated")
+	}
+	current := graph.Snapshot().Overlay()
+	if current.Rows() <= previous.Rows() || current.LiveRows() == 0 {
+		t.Fatalf("current overlay rows=%d live=%d, want later generation", current.Rows(), current.LiveRows())
+	}
+}
+
 func TestColumnVectorDynamicGraphRejectsEmptyBaseDocumentID(t *testing.T) {
 	columns := columnVectorGraphTestColumns(16, 16, 4, false)
 	columns.DocumentIDs[7] = nil
@@ -238,6 +298,18 @@ func TestColumnVectorDynamicGraphSearchAllocs(t *testing.T) {
 	})
 	if allocs != 0 {
 		t.Fatalf("hot dynamic SearchCosine allocs/run=%g want 0", allocs)
+	}
+}
+
+func TestColumnVectorDynamicBaseTopKCompensatesTombstonesOnly(t *testing.T) {
+	if got, want := columnVectorDynamicBaseTopK(100, 10, 0), 10; got != want {
+		t.Fatalf("without tombstones baseTopK=%d want %d", got, want)
+	}
+	if got, want := columnVectorDynamicBaseTopK(100, 10, 7), 17; got != want {
+		t.Fatalf("with tombstones baseTopK=%d want %d", got, want)
+	}
+	if got, want := columnVectorDynamicBaseTopK(100, 10, 95), 100; got != want {
+		t.Fatalf("capped baseTopK=%d want %d", got, want)
 	}
 }
 
@@ -415,7 +487,7 @@ func benchmarkColumnVectorDynamicGraphSearchCosineParallelReadWrite(b *testing.B
 		}
 		scratches[i] = scratch
 	}
-	batches := columnVectorDynamicBenchmarkMutationBatches(b, rows, dims, 4096)
+	batches := columnVectorDynamicBenchmarkMutationBatches(b, rows, dims, columnVectorDynamicBenchmarkBatchCount(b.N))
 	var publishedBatches atomic.Int64
 	var publishedMutations atomic.Int64
 	var publishNanos atomic.Int64
@@ -433,7 +505,14 @@ func benchmarkColumnVectorDynamicGraphSearchCosineParallelReadWrite(b *testing.B
 				return
 			default:
 			}
-			batch := batches[seq%len(batches)]
+			if seq >= len(batches) {
+				select {
+				case errs <- fmt.Errorf("exhausted %d prebuilt mutation batches during timed run; increase columnVectorDynamicBenchmarkBatchCount", len(batches)):
+				default:
+				}
+				return
+			}
+			batch := batches[seq]
 			stats, err := graph.ApplyBatch(batch)
 			if err != nil {
 				select {
@@ -490,6 +569,22 @@ func benchmarkColumnVectorDynamicGraphSearchCosineParallelReadWrite(b *testing.B
 	}
 	reportColumnVectorDynamicGraphMetrics(b, graph.Snapshot(), finalTrace)
 	reportColumnVectorDynamicReadMetrics(b, elapsed, publishedBatchCount, publishedMutationCount, publishNanoCount)
+}
+
+func columnVectorDynamicBenchmarkBatchCount(readIterations int) int {
+	const minBatches = 4096
+	const maxBatches = 65536
+	count := minBatches
+	if readIterations > 0 {
+		count = readIterations*4 + 1024
+	}
+	if count < minBatches {
+		return minBatches
+	}
+	if count > maxBatches {
+		return maxBatches
+	}
+	return count
 }
 
 func openColumnVectorDynamicGraphBenchmark(b *testing.B, base *ColumnVectorGraph, query []float32, overlayRows int) *ColumnVectorDynamicGraph {
