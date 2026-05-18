@@ -414,10 +414,6 @@ func verifyColumnAssetStoreRef(store ColumnAssetStore, ref ColumnAssetRef) error
 	if verifier, ok := store.(columnAssetVerifier); ok {
 		return verifier.Verify(ref)
 	}
-	if ranged, ok := store.(ColumnAssetRangeReader); ok {
-		_, err := ranged.ReadRange(ref, 0, 1)
-		return err
-	}
 	_, err := store.ReadTo(ref, nil)
 	return err
 }
