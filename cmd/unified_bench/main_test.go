@@ -2086,6 +2086,29 @@ func TestInstallAllocsProfileRateIgnoresFilteredTestsM11A(t *testing.T) {
 	}
 }
 
+func TestInstallAllocsProfileRateTreatsEmptyTestsAsFullSelectionM11A(t *testing.T) {
+	prevRate := runtime.MemProfileRate
+	t.Cleanup(func() {
+		runtime.MemProfileRate = prevRate
+	})
+	runtime.MemProfileRate = 4096
+
+	restore := installAllocsProfileRate(BenchConfig{
+		AllocsProfile:      filepath.Join(t.TempDir(), "allocs"),
+		AllocsProfileRate:  1,
+		TestsArg:           " \t ",
+		AllocsProfileTests: map[string]struct{}{"random_read": {}},
+	})
+	if got := runtime.MemProfileRate; got != 1 {
+		restore()
+		t.Fatalf("MemProfileRate was not set for default full test selection: got %d", got)
+	}
+	restore()
+	if got := runtime.MemProfileRate; got != 4096 {
+		t.Fatalf("MemProfileRate was not restored for default full test selection: got %d", got)
+	}
+}
+
 func TestInstallAllocsProfileRateAppliesMatchingTestFilterM11A(t *testing.T) {
 	prevRate := runtime.MemProfileRate
 	t.Cleanup(func() {

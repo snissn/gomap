@@ -877,6 +877,9 @@ func benchConfigUsesAllocsProfile(cfg BenchConfig) bool {
 		return true
 	}
 	tests := normalizeTests(parseList(cfg.TestsArg))
+	if len(tests) == 0 {
+		return true
+	}
 	if contains(tests, "all") {
 		return true
 	}

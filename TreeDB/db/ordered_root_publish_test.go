@@ -6,6 +6,7 @@ import (
 	"errors"
 	"reflect"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -107,6 +108,18 @@ func TestPublishOrderedRootDeltaGroupWithCommandWALContextPassesAssignedLSN(t *t
 	}
 	if got := db.State().AppliedCommandLSN; got != seenCtx.AppliedCommandLSN {
 		t.Fatalf("state AppliedCommandLSN=%d, want builder LSN %d", got, seenCtx.AppliedCommandLSN)
+	}
+}
+
+func TestErrOrderedRootCommandWALContextConcurrentModificationWrapsSentinel(t *testing.T) {
+	err := errOrderedRootCommandWALContextConcurrentModification(1, 2, 3, 4)
+	if !errors.Is(err, ErrConcurrentModification) {
+		t.Fatalf("err=%v want ErrConcurrentModification", err)
+	}
+	for _, want := range []string{"user_root want=1 got=2", "system_root want=3 got=4"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("err=%q missing %q", err, want)
+		}
 	}
 }
 

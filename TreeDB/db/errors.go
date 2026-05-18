@@ -14,6 +14,9 @@ var (
 	ErrReadOnly = errors.New("treedb: read-only")
 	// ErrClosed indicates the DB handle is closed or closing for reads.
 	ErrClosed = errors.New("treedb: db is closed")
+	// ErrConcurrentModification indicates a publish or maintenance operation
+	// observed that a root changed after its validation point.
+	ErrConcurrentModification = errors.New("treedb: concurrent modification")
 	// ErrRecoveryRequired indicates the DB must be opened read-write for recovery
 	// before the requested read-only or offline-maintenance operation can run.
 	ErrRecoveryRequired = collectionwal.ErrCollectionWALRecoveryRequired
