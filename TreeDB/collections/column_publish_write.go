@@ -147,6 +147,7 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 		newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaBatchGroupWithCommandWALContextRootBuilderAndSystemDeltaBuilder(ordered, input.commandWALIntent, buildColumnDelta, buildSystemDelta)
 	}
 	if err != nil {
+		cleanupColumnDelta = nil
 		return 0, nil, CollectionMeta{}, nil, err
 	}
 	updatedMeta, err := columnPublishUpdatedMeta(input.meta, plan)
