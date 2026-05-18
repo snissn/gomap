@@ -891,11 +891,10 @@ func benchConfigUsesAllocsProfile(cfg BenchConfig) bool {
 	return false
 }
 
-func installAllocsProfileRate(cfg BenchConfig) func() {
-	if !benchConfigUsesAllocsProfile(cfg) {
+func installAllocsProfileRateForEnabled(enabled bool, rate int) func() {
+	if !enabled {
 		return func() {}
 	}
-	rate := cfg.AllocsProfileRate
 	if rate <= 0 {
 		rate = 512 * 1024
 	}
@@ -904,6 +903,10 @@ func installAllocsProfileRate(cfg BenchConfig) func() {
 	return func() {
 		runtime.MemProfileRate = prevRate
 	}
+}
+
+func installAllocsProfileRate(cfg BenchConfig) func() {
+	return installAllocsProfileRateForEnabled(benchConfigUsesAllocsProfile(cfg), cfg.AllocsProfileRate)
 }
 
 func shouldCheckpointCPUProfile(cfg BenchConfig, testName string) bool {
@@ -3883,15 +3886,16 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		if rate <= 0 {
 			rate = 1
 		}
-		runtime.SetBlockProfileRate(rate)
-		defer runtime.SetBlockProfileRate(0)
-
 		f, err := os.Create(blockProfilePath)
 		if err != nil {
 			return BenchRun{}, fmt.Errorf("blockprofile: %w", err)
 		}
+		runtime.SetBlockProfileRate(rate)
 		defer func() {
-			_ = pprof.Lookup("block").WriteTo(f, 0)
+			runtime.SetBlockProfileRate(0)
+			if prof := pprof.Lookup("block"); prof != nil {
+				_ = prof.WriteTo(f, 0)
+			}
 			_ = f.Close()
 		}()
 	}
@@ -3901,16 +3905,18 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		if frac <= 0 {
 			frac = 1
 		}
-		runtime.SetMutexProfileFraction(frac)
-		defer runtime.SetMutexProfileFraction(0)
-
 		f, err := os.Create(mutexProfilePath)
 		if err != nil {
 			return BenchRun{}, fmt.Errorf("mutexprofile: %w", err)
 		}
+		prevFrac := runtime.SetMutexProfileFraction(frac)
 		defer func() {
-			_ = pprof.Lookup("mutex").WriteTo(f, 0)
+			runtime.SetMutexProfileFraction(0)
+			if prof := pprof.Lookup("mutex"); prof != nil {
+				_ = prof.WriteTo(f, 0)
+			}
 			_ = f.Close()
+			runtime.SetMutexProfileFraction(prevFrac)
 		}()
 	}
 
