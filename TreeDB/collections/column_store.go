@@ -1,7 +1,6 @@
 package collections
 
 import (
-	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -28,9 +27,9 @@ const (
 	columnManifestIdentityRecordKey             = "\x00column-manifest/identity"
 )
 
-// columnManifestIdentityRecordKeyBytes is shared read-only input for root lookup
-// and publish iterators; callers must not mutate it.
-var columnManifestIdentityRecordKeyBytes = []byte(columnManifestIdentityRecordKey)
+func columnManifestIdentityRecordKeyBytes() []byte {
+	return []byte(columnManifestIdentityRecordKey)
+}
 
 var (
 	errColumnManifestIdentityMissing            = errors.New("collections: column manifest missing identity record")
@@ -571,7 +570,7 @@ func validateColumnStoreCatalogRoot(snap *backenddb.Snapshot, catalog *collectio
 	if rootID == 0 {
 		return fmt.Errorf("collections: active column manifest generation %d for %q is missing root descriptor %q", identity.Generation, catalog.meta.Name, rootName)
 	}
-	entry, err := snap.GetEntryAtRoot(rootID, columnManifestIdentityRecordKeyBytes)
+	entry, err := snap.GetEntryAtRoot(rootID, columnManifestIdentityRecordKeyBytes())
 	if errors.Is(err, tree.ErrKeyNotFound) {
 		return fmt.Errorf("%w: active column manifest root %d for %q", errColumnManifestIdentityMissing, rootID, catalog.meta.Name)
 	}
@@ -587,29 +586,6 @@ func validateColumnStoreCatalogRoot(snap *backenddb.Snapshot, catalog *collectio
 	}
 	if record.Generation != identity.Generation || record.Version != identity.Version || record.Checksum != identity.Checksum {
 		return fmt.Errorf("collections: active column manifest identity mismatch for %q", catalog.meta.Name)
-	}
-	return nil
-}
-
-func validateColumnManifestPublishedRoot(snap *backenddb.Snapshot, collection string, rootID uint64, expected [columnManifestIdentityRecordSize]byte) error {
-	if rootID == 0 {
-		return fmt.Errorf("collections: missing published column manifest root for %q", collection)
-	}
-	entry, err := snap.GetEntryAtRoot(rootID, columnManifestIdentityRecordKeyBytes)
-	if errors.Is(err, tree.ErrKeyNotFound) {
-		return fmt.Errorf("%w: published column manifest root %d for %q", errColumnManifestIdentityMissing, rootID, collection)
-	}
-	if err != nil {
-		return fmt.Errorf("collections: published column manifest root %d for %q is unreadable: %w", rootID, collection, err)
-	}
-	if entry.Flags&node.FlagTombstone != 0 {
-		return fmt.Errorf("collections: published column manifest root %d for %q has deleted identity record", rootID, collection)
-	}
-	if _, err := decodeColumnManifestIdentityRecord(entry.Value); err != nil {
-		return fmt.Errorf("collections: published column manifest root %d for %q has invalid identity record: %w", rootID, collection, err)
-	}
-	if !bytes.Equal(entry.Value, expected[:]) {
-		return fmt.Errorf("collections: published root identity record mismatch: column manifest root %d for %q does not match column publish plan", rootID, collection)
 	}
 	return nil
 }
@@ -855,7 +831,7 @@ func columnManifestIdentityRecordIterator(record [columnManifestIdentityRecordSi
 	value := make([]byte, columnManifestIdentityRecordSize)
 	copy(value, record[:])
 	return &systemTargetIterator{entries: []systemTargetEntry{{
-		key:   columnManifestIdentityRecordKeyBytes,
+		key:   columnManifestIdentityRecordKeyBytes(),
 		value: value,
 	}}}
 }

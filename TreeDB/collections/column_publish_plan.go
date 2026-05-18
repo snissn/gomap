@@ -533,6 +533,9 @@ func (c *Collection) buildColumnManifestPublishSystemDeltaIterator(input ColumnM
 			return nil, fmt.Errorf("collections: column publish recovery-authoritative AppliedCommandLSN regression for %q: plan %d < base %d", input.BaseMeta.Name, plan.RecoveryAuthoritativeAppliedCommandLSN, baseRecoveryLSN)
 		}
 	}
+	// The root IDs passed here were just built by the ordered-root publish path.
+	// Do not read them through the pre-commit snapshot: compressed roots may
+	// depend on value-log segment visibility published by the enclosing commit.
 	current := c.db.AcquireSnapshot()
 	if current == nil {
 		return nil, backenddb.ErrClosed
@@ -544,9 +547,6 @@ func (c *Collection) buildColumnManifestPublishSystemDeltaIterator(input ColumnM
 			(input.BaseSystemRoot != 0 && state.SystemRootPageID != input.BaseSystemRoot) {
 			return nil, fmt.Errorf("collections: concurrent schema modification detected for %q", input.BaseMeta.Name)
 		}
-	}
-	if err := validateColumnManifestPublishedRoot(current, input.BaseMeta.Name, rootIDs[0], plan.RootDelta.IdentityRecord); err != nil {
-		return nil, err
 	}
 	catalog, err := loadCollectionCatalog(current, input.BaseMeta.Name)
 	if err != nil {

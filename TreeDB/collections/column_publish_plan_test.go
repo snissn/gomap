@@ -946,6 +946,51 @@ func TestColumnManifestPublishSystemDeltaRejectsInvalidRootIDsM10A(t *testing.T)
 	}
 }
 
+func TestColumnManifestPublishSystemDeltaDoesNotReadPublishedRootBeforeCommitM10A(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "events",
+		Options: CollectionOptions{ColumnStore: testColumnStoreConfig(nil)},
+	}); err != nil {
+		t.Fatalf("create column-enabled collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("events")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	planInput := testColumnPublishPlanInputM10A(
+		ColumnManifestIdentity{Generation: 15, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0xabcddcbd},
+		testColumnPublishPreparedAssetM10A(),
+	)
+	planInput.BaseManifestRootID = 0
+	plan, err := BuildColumnPublishPlan(planInput)
+	if err != nil {
+		t.Fatalf("BuildColumnPublishPlan: %v", err)
+	}
+	state := d.State()
+
+	iter, err := col.buildColumnManifestPublishSystemDeltaIterator(ColumnManifestPublishSystemDeltaInput{
+		BaseMeta:           col.Meta(),
+		BaseCommitSeq:      state.CommitSeq,
+		BaseSystemRoot:     state.SystemRootPageID,
+		BaseManifestRootID: 0,
+		Plan:               plan,
+	}, []uint64{123456789})
+	if err != nil {
+		t.Fatalf("buildColumnManifestPublishSystemDeltaIterator: %v", err)
+	}
+	if iter == nil {
+		t.Fatal("buildColumnManifestPublishSystemDeltaIterator returned nil iterator")
+	}
+	_ = iter.Close()
+}
+
 func TestColumnManifestPublishSystemDeltaRejectsMissingLSNM10A(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -1267,7 +1312,7 @@ func TestColumnManifestPublishSystemDeltaRejectsIdentityMismatchM10A(t *testing.
 	}
 }
 
-func TestColumnManifestPublishSystemDeltaRejectsPublishedRootMismatchM10A(t *testing.T) {
+func TestColumnManifestPublishSystemDeltaDefersPublishedRootMismatchToOpenM10A(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
@@ -1310,12 +1355,15 @@ func TestColumnManifestPublishSystemDeltaRejectsPublishedRootMismatchM10A(t *tes
 			Plan:               plan,
 		}, rootIDs)
 	})
-	if err == nil || !strings.Contains(err.Error(), "published root identity record") {
-		t.Fatalf("PublishOrderedRootGroupWithSystemBuilder err=%v want published root identity mismatch", err)
+	if err != nil {
+		t.Fatalf("PublishOrderedRootGroupWithSystemBuilder: %v", err)
+	}
+	if _, err := NewCollectionManager(d).OpenCollection("events"); err == nil || !strings.Contains(err.Error(), "identity mismatch") {
+		t.Fatalf("OpenCollection err=%v want committed root identity mismatch", err)
 	}
 }
 
-func TestColumnManifestPublishSystemDeltaRejectsMalformedPublishedRootIdentityM10A(t *testing.T) {
+func TestColumnManifestPublishSystemDeltaDefersMalformedPublishedRootIdentityToOpenM10A(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
@@ -1360,8 +1408,12 @@ func TestColumnManifestPublishSystemDeltaRejectsMalformedPublishedRootIdentityM1
 			Plan:               plan,
 		}, rootIDs)
 	})
+	if err != nil {
+		t.Fatalf("PublishOrderedRootGroupWithSystemBuilder: %v", err)
+	}
+	_, err = NewCollectionManager(d).OpenCollection("events")
 	if err == nil || !strings.Contains(err.Error(), "invalid identity record") || !strings.Contains(err.Error(), "malformed identity record length") {
-		t.Fatalf("PublishOrderedRootGroupWithSystemBuilder err=%v want malformed published root identity", err)
+		t.Fatalf("OpenCollection err=%v want malformed committed root identity", err)
 	}
 }
 
