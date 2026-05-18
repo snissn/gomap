@@ -3580,6 +3580,9 @@ func (c *Collection) revalidateBufferedWriteDomainLocked(domain *collectionWrite
 	if err := rejectCatalogRootOverlaysForIndexedBufferWrite(catalog); err != nil {
 		return nil, err
 	}
+	if err := c.requireColumnStoreCommandWAL(catalog.meta, nil); err != nil {
+		return nil, err
+	}
 	if !sameCollectionMeta(catalog.meta, domain.meta) {
 		return nil, fmt.Errorf("collections: concurrent schema modification detected for %q", domain.meta.Name)
 	}
@@ -3704,6 +3707,9 @@ func (c *Collection) flushBufferedNoIndexLocked(domain *collectionWriteDomain) e
 		return err
 	}
 	meta := catalog.meta
+	if err := c.requireColumnStoreCommandWAL(meta, nil); err != nil {
+		return err
+	}
 	if len(meta.Indexes) > 0 {
 		return errors.New("collections: buffered no-index writes cannot be flushed into indexed schema")
 	}

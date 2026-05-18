@@ -115,6 +115,56 @@ func TestColumnStoreStaleNoIndexBufferedInsertRechecksCommandWALAfterCatalogRefr
 	assertColumnStoreWriteDomainEmptyM10B(t, stale)
 }
 
+func TestColumnStoreStaleBufferedNoIndexFlushRechecksCommandWALM10B(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{
+		Dir:                    t.TempDir(),
+		Durability:             backenddb.DurabilityWALOffRelaxed,
+		DisableBackgroundPrune: true,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "events",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatBSON,
+		},
+	}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	stale, err := mgr.OpenCollection("events")
+	if err != nil {
+		t.Fatalf("OpenCollection stale: %v", err)
+	}
+	doc, err := bson.Marshal(bson.D{
+		{Key: "time_us", Value: int64(1)},
+		{Key: "kind", Value: "like"},
+		{Key: "did", Value: "d1"},
+	})
+	if err != nil {
+		t.Fatalf("bson.Marshal: %v", err)
+	}
+	insertedIDs, err := stale.InsertBatchValidatedBSON([][]byte{[]byte("e1")}, [][]byte{doc})
+	if err != nil {
+		t.Fatalf("InsertBatchValidatedBSON buffered: %v", err)
+	}
+	if len(insertedIDs) != 1 {
+		t.Fatalf("InsertBatchValidatedBSON buffered inserted=%d, want 1", len(insertedIDs))
+	}
+	if stale.writeDomain == nil || stale.writeDomain.count == 0 {
+		t.Fatalf("stale write domain was not buffered before column-store enablement")
+	}
+
+	enableColumnStoreForExistingCollectionM10B(t, d, "events", ColumnStoreProfileBenchmarkRelaxed, mgr)
+
+	err = stale.Flush()
+	assertColumnStoreCommandWALWriteRejectedM10B(t, err, "stale Flush")
+	assertColumnStorePersistedDocumentMissingM10B(t, d, "events", "e1")
+}
+
 func TestColumnStoreStaleUpdateCallbacksRecheckCommandWALAfterCatalogRefreshM10B(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{
 		Dir:                    t.TempDir(),
@@ -996,6 +1046,29 @@ func assertColumnStoreDocumentMissingM10B(t testing.TB, col *Collection, id stri
 	}
 	if got != nil {
 		t.Fatalf("Get(%q)=%q, want missing after rejected column-store write", id, string(got))
+	}
+}
+
+func assertColumnStorePersistedDocumentMissingM10B(t testing.TB, d *backenddb.DB, collectionName, id string) {
+	t.Helper()
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatalf("AcquireSnapshot: nil")
+	}
+	defer func() { _ = snap.Close() }()
+	catalog, err := loadCollectionCatalog(snap, collectionName)
+	if err != nil {
+		t.Fatalf("loadCollectionCatalog(%q): %v", collectionName, err)
+	}
+	if catalog == nil {
+		t.Fatalf("missing collection catalog for %q", collectionName)
+	}
+	got, found, err := collectionGetAppendAtCatalogRoot(snap, catalog, collectionPrimaryRootName(collectionName), []byte(id), nil)
+	if err != nil {
+		t.Fatalf("collectionGetAppendAtCatalogRoot(%q): %v", id, err)
+	}
+	if found {
+		t.Fatalf("persisted Get(%q)=%q, want missing after rejected column-store write", id, string(got))
 	}
 }
 
