@@ -256,6 +256,15 @@ binding, and index hints. Row ingestion may ignore undeclared fields or reject
 them according to collection options, but it must not create new physical
 columns lazily.
 
+The current collection metadata accepts scalar `float32` columns for compact
+cached numeric values such as vector inverse norms, `float32_vector` columns for
+fixed-width vector payloads, and `adjacency_list` columns for graph neighbor
+lists. Only `float32_vector` columns may set `vector_dims`; `float32_vector` and
+`adjacency_list` columns are structural vector-search payloads and are not
+sort-key, aggregate, or dictionary columns. Scalar `float32` columns follow the
+numeric scalar contract: they are orderable and aggregatable, but not
+dictionary-encoded.
+
 `SortKeyColumn.Column` may name a declared column or a reserved primary-id
 pseudo-column used only for deterministic tie-breaking.
 

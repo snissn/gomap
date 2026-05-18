@@ -23,6 +23,8 @@ func RegisterCommandWALReplayHandlers() {
 		backenddb.RegisterCommandWALReplayHandler(commitlog.CommandKindCollectionInsertBatchByID, replayCollectionInsertBatchByIDCommandWAL)
 		backenddb.RegisterCommandWALReplayHandler(commitlog.CommandKindCollectionDeleteBatchByID, replayCollectionDeleteBatchByIDCommandWAL)
 		backenddb.RegisterCommandWALReplayHandler(commitlog.CommandKindCollectionUpdateBatchByID, replayCollectionUpdateBatchByIDCommandWAL)
+		backenddb.RegisterCommandWALReplayHandler(commitlog.CommandKindCollectionVectorIndexUpsertBatchByID, replayCollectionVectorIndexUpsertBatchByIDCommandWAL)
+		backenddb.RegisterCommandWALReplayHandler(commitlog.CommandKindCollectionVectorIndexDeleteBatchByID, replayCollectionVectorIndexDeleteBatchByIDCommandWAL)
 		backenddb.RegisterCommandWALReplayHandlerWithOptions(
 			commitlog.CommandKindCatalogCreateCollection,
 			replayCatalogCreateCollectionCommandWAL,
@@ -88,6 +90,44 @@ func (c *Collection) newCollectionUpdateCommandWALIntent(docs []commitlog.Collec
 		commitlog.CommandKindCollectionUpdateBatchByID,
 		commitlog.CommandScopeCollection,
 		commitlog.PayloadFormatCollectionUpdateBatchByIDV1,
+		payload,
+	)
+}
+
+func (c *Collection) newCollectionVectorIndexUpsertCommandWALIntent(ids [][]byte, replay *backenddb.CommandWALIntent) (*backenddb.CommandWALIntent, error) {
+	if replay != nil {
+		return replay, nil
+	}
+	if c == nil || c.db == nil || !c.db.CommandWALEnabled() {
+		return nil, nil
+	}
+	payload, err := commitlog.EncodeCollectionVectorIndexUpsertBatchByIDPayload(c.meta.Name, ids)
+	if err != nil {
+		return nil, err
+	}
+	return c.db.NewCommandWALIntent(
+		commitlog.CommandKindCollectionVectorIndexUpsertBatchByID,
+		commitlog.CommandScopeCollection,
+		commitlog.PayloadFormatCollectionVectorIndexUpsertBatchByIDV1,
+		payload,
+	)
+}
+
+func (c *Collection) newCollectionVectorIndexDeleteCommandWALIntent(ids [][]byte, replay *backenddb.CommandWALIntent) (*backenddb.CommandWALIntent, error) {
+	if replay != nil {
+		return replay, nil
+	}
+	if c == nil || c.db == nil || !c.db.CommandWALEnabled() {
+		return nil, nil
+	}
+	payload, err := commitlog.EncodeCollectionVectorIndexDeleteBatchByIDPayload(c.meta.Name, ids)
+	if err != nil {
+		return nil, err
+	}
+	return c.db.NewCommandWALIntent(
+		commitlog.CommandKindCollectionVectorIndexDeleteBatchByID,
+		commitlog.CommandScopeCollection,
+		commitlog.PayloadFormatCollectionVectorIndexDeleteBatchByIDV1,
 		payload,
 	)
 }
@@ -262,6 +302,38 @@ func replayCollectionUpdateBatchByIDCommandWAL(db *backenddb.DB, env commitlog.C
 	}
 	_, _, err = collection.updateBatchOwnedItemsWithCommandWALIntent(items, updateBatchModeAny, intent)
 	return err
+}
+
+func replayCollectionVectorIndexUpsertBatchByIDCommandWAL(db *backenddb.DB, env commitlog.CommandEnvelope) error {
+	payload, err := commitlog.DecodeCollectionVectorIndexUpsertBatchByIDPayload(env.Payload)
+	if err != nil {
+		return err
+	}
+	if len(payload.IDs) == 0 {
+		return db.PublishCommandWALNoop(backenddb.NewCommandWALReplayIntent(env), false)
+	}
+	manager := NewCollectionManager(db)
+	collection, err := manager.OpenCollection(payload.Collection)
+	if err != nil {
+		return err
+	}
+	return collection.applyVectorIndexUpsertCommandWAL(payload.IDs, backenddb.NewCommandWALReplayIntent(env))
+}
+
+func replayCollectionVectorIndexDeleteBatchByIDCommandWAL(db *backenddb.DB, env commitlog.CommandEnvelope) error {
+	payload, err := commitlog.DecodeCollectionVectorIndexDeleteBatchByIDPayload(env.Payload)
+	if err != nil {
+		return err
+	}
+	if len(payload.IDs) == 0 {
+		return db.PublishCommandWALNoop(backenddb.NewCommandWALReplayIntent(env), false)
+	}
+	manager := NewCollectionManager(db)
+	collection, err := manager.OpenCollection(payload.Collection)
+	if err != nil {
+		return err
+	}
+	return collection.applyVectorIndexDeleteCommandWAL(payload.IDs, backenddb.NewCommandWALReplayIntent(env))
 }
 
 func replayCatalogCreateCollectionCommandWAL(db *backenddb.DB, env commitlog.CommandEnvelope) error {

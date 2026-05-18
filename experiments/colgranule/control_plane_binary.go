@@ -12,7 +12,7 @@ const (
 	columnCollectionManifestBinaryMagic   = "TCC2"
 	columnWorkspaceManifestBinaryMagic    = "TCW2"
 	columnWorkspacePreparedBinaryMagic    = "TCP2"
-	columnCollectionManifestBinaryVersion = 2
+	columnCollectionManifestBinaryVersion = 3
 	columnWorkspaceManifestBinaryVersion  = 2
 	columnWorkspacePreparedBinaryVersion  = 2
 	columnControlPlaneBinaryHeaderLen     = 32
@@ -581,6 +581,7 @@ func writeColumnDefinitionsBinary(w *columnBinaryWriter, defs []ColumnDefinition
 		w.u8(uint8(defs[i].Encoding))
 		w.u8(uint8(defs[i].Compression))
 		w.u32(defs[i].Cardinality)
+		w.intValue(defs[i].VectorDims, "vector dims")
 		w.intValue(defs[i].CodecBlockRows, "codec block rows")
 	}
 }
@@ -595,6 +596,7 @@ func readColumnDefinitionsBinary(r *columnBinaryReader) []ColumnDefinition {
 			Encoding:       Encoding(r.u8()),
 			Compression:    Compression(r.u8()),
 			Cardinality:    r.u32(),
+			VectorDims:     r.intValue("vector dims"),
 			CodecBlockRows: r.intValue("codec block rows"),
 		}
 	}
@@ -921,6 +923,10 @@ func mustColumnTypeCode(w *columnBinaryWriter, typ ColumnType) uint8 {
 		return 2
 	case ColumnTypeBool:
 		return 3
+	case ColumnTypeFloat32Vector:
+		return 4
+	case ColumnTypeAdjacencyList:
+		return 5
 	default:
 		w.fail("unsupported column type %s", typ)
 		return 0
@@ -935,6 +941,10 @@ func columnBinaryTypeFromCode(code uint8, r *columnBinaryReader) ColumnType {
 		return ColumnTypeLowCardinalityCode
 	case 3:
 		return ColumnTypeBool
+	case 4:
+		return ColumnTypeFloat32Vector
+	case 5:
+		return ColumnTypeAdjacencyList
 	default:
 		r.fail("unsupported column type code %d", code)
 		return ""

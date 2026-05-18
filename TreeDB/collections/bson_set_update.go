@@ -63,20 +63,24 @@ func (c *Collection) UpdateBSONSet(documentID []byte, fields []BSONSetField) (bo
 	if err != nil {
 		return false, false, err
 	}
+	var matched, modified bool
 	if c.commandWALActive(nil) {
-		return c.updateBSONSetDirect(documentID, spec)
-	}
-	if combiner, domain := c.updateFastPathWithoutCreatingCombiner(); combiner != nil {
-		return combiner.update(c, documentID, nil, spec, true)
+		matched, modified, err = c.updateBSONSetDirect(documentID, spec)
+	} else if combiner, domain := c.updateFastPathWithoutCreatingCombiner(); combiner != nil {
+		matched, modified, err = combiner.update(c, documentID, nil, spec, true)
 	} else if domain != nil {
 		defer domain.finishInlineUpdateWithoutCombiner()
 		domain.observeUpdateCombineInline()
-		return c.updateSingleInlineWithoutCombiner(domain, documentID, nil, spec, true)
+		matched, modified, err = c.updateSingleInlineWithoutCombiner(domain, documentID, nil, spec, true)
+	} else if combiner := c.updateCombiner(); combiner != nil {
+		matched, modified, err = combiner.update(c, documentID, nil, spec, true)
+	} else {
+		matched, modified, err = c.updateBSONSetDirect(documentID, spec)
 	}
-	if combiner := c.updateCombiner(); combiner != nil {
-		return combiner.update(c, documentID, nil, spec, true)
+	if err == nil && modified {
+		err = commitAmbiguousError("UpdateBSONSet vector index maintenance", c.notifyAndPersistVectorIndexesUpsertForWAL([][]byte{documentID}))
 	}
-	return c.updateBSONSetDirect(documentID, spec)
+	return matched, modified, err
 }
 
 func (c *Collection) validateBSONSetDocumentFormat() error {
@@ -123,7 +127,11 @@ func (c *Collection) updateBSONSetDirect(documentID []byte, spec bsonSetUpdate) 
 // value changes in the planning snapshot. This is the BSON-set equivalent of
 // UpdateBatchIfNoSecondaryUniqueIndexChanges.
 func (c *Collection) UpdateBSONSetBatchIfNoSecondaryUniqueIndexChanges(items []BSONSetUpdateBatchItem) ([]UpdateBatchResult, bool, error) {
-	return c.updateBSONSetBatch(items, updateBatchModeNoSecondaryUniqueIndexChanges)
+	results, batched, err := c.updateBSONSetBatch(items, updateBatchModeNoSecondaryUniqueIndexChanges)
+	if err == nil && batched {
+		err = commitAmbiguousError("UpdateBSONSetBatchIfNoSecondaryUniqueIndexChanges vector index maintenance", c.notifyAndPersistVectorIndexesBSONSetUpdateBatchForWAL(items, results))
+	}
+	return results, batched, err
 }
 
 func (c *Collection) updateBSONSetBatch(items []BSONSetUpdateBatchItem, mode updateBatchMode) ([]UpdateBatchResult, bool, error) {

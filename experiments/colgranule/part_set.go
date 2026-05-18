@@ -84,6 +84,20 @@ type ColumnPartSetScanResult struct {
 	Diagnostics ColumnPartSetScanDiagnostics
 }
 
+type ColumnPartSetFloat32VectorScanResult struct {
+	Rows        int
+	Dims        int
+	Values      []float32
+	Diagnostics ColumnPartSetScanDiagnostics
+}
+
+type ColumnPartSetAdjacencyListScanResult struct {
+	Rows        int
+	Offsets     []uint32
+	Values      []uint32
+	Diagnostics ColumnPartSetScanDiagnostics
+}
+
 type ColumnPartSetPointLookupScratch struct {
 	scanner ColumnPartScanner
 }
@@ -238,6 +252,76 @@ func (r *ColumnPartSetReader) ScanValueAtLatestWithScratch(primaryID int64, colu
 	return value, true, nil
 }
 
+func (r *ColumnPartSetReader) Float32VectorAtLatest(primaryID int64, columnName string, dst []float32) ([]float32, bool, error) {
+	return r.Float32VectorAtLatestWithScratch(primaryID, columnName, dst, nil)
+}
+
+func (r *ColumnPartSetReader) Float32VectorAtLatestWithScratch(primaryID int64, columnName string, dst []float32, scratch *ColumnPartSetPointLookupScratch) ([]float32, bool, error) {
+	if r == nil {
+		return nil, false, nil
+	}
+	ref, ok := r.latest[primaryID]
+	if !ok {
+		return nil, false, nil
+	}
+	value, err := r.float32VectorAtRowRef(ref, columnName, dst, scratch)
+	if err != nil {
+		return nil, false, err
+	}
+	return value, true, nil
+}
+
+func (r *ColumnPartSetReader) ScanFloat32VectorAtLatest(primaryID int64, columnName string, dst []float32) ([]float32, bool, error) {
+	return r.ScanFloat32VectorAtLatestWithScratch(primaryID, columnName, dst, nil)
+}
+
+func (r *ColumnPartSetReader) ScanFloat32VectorAtLatestWithScratch(primaryID int64, columnName string, dst []float32, scratch *ColumnPartSetPointLookupScratch) ([]float32, bool, error) {
+	ref, ok := r.scanLatestRowRef(primaryID)
+	if !ok {
+		return nil, false, nil
+	}
+	value, err := r.float32VectorAtRowRef(ref, columnName, dst, scratch)
+	if err != nil {
+		return nil, false, err
+	}
+	return value, true, nil
+}
+
+func (r *ColumnPartSetReader) AdjacencyListAtLatest(primaryID int64, columnName string, dst []uint32) ([]uint32, bool, error) {
+	return r.AdjacencyListAtLatestWithScratch(primaryID, columnName, dst, nil)
+}
+
+func (r *ColumnPartSetReader) AdjacencyListAtLatestWithScratch(primaryID int64, columnName string, dst []uint32, scratch *ColumnPartSetPointLookupScratch) ([]uint32, bool, error) {
+	if r == nil {
+		return nil, false, nil
+	}
+	ref, ok := r.latest[primaryID]
+	if !ok {
+		return nil, false, nil
+	}
+	value, err := r.adjacencyListAtRowRef(ref, columnName, dst, scratch)
+	if err != nil {
+		return nil, false, err
+	}
+	return value, true, nil
+}
+
+func (r *ColumnPartSetReader) ScanAdjacencyListAtLatest(primaryID int64, columnName string, dst []uint32) ([]uint32, bool, error) {
+	return r.ScanAdjacencyListAtLatestWithScratch(primaryID, columnName, dst, nil)
+}
+
+func (r *ColumnPartSetReader) ScanAdjacencyListAtLatestWithScratch(primaryID int64, columnName string, dst []uint32, scratch *ColumnPartSetPointLookupScratch) ([]uint32, bool, error) {
+	ref, ok := r.scanLatestRowRef(primaryID)
+	if !ok {
+		return nil, false, nil
+	}
+	value, err := r.adjacencyListAtRowRef(ref, columnName, dst, scratch)
+	if err != nil {
+		return nil, false, err
+	}
+	return value, true, nil
+}
+
 func (r *ColumnPartSetReader) ScanProjected(columns []string) (ColumnPartSetScanResult, error) {
 	return r.ScanProjectedInto(nil, columns)
 }
@@ -297,6 +381,107 @@ func (r *ColumnPartSetReader) ScanProjectedInto(dst map[string][]int64, columns 
 	return ColumnPartSetScanResult{
 		Rows:        diagnostics.RowsReturned,
 		Columns:     dst,
+		Diagnostics: diagnostics,
+	}, nil
+}
+
+func (r *ColumnPartSetReader) ScanFloat32VectorsInto(columnName string, dst []float32) (ColumnPartSetFloat32VectorScanResult, error) {
+	if r == nil {
+		return ColumnPartSetFloat32VectorScanResult{}, fmt.Errorf("colgranule: nil part set reader")
+	}
+	def, ok := r.columnDefinition(columnName)
+	if !ok {
+		return ColumnPartSetFloat32VectorScanResult{}, fmt.Errorf("colgranule: missing column %s", columnName)
+	}
+	if def.Type != ColumnTypeFloat32Vector {
+		return ColumnPartSetFloat32VectorScanResult{}, fmt.Errorf("colgranule: column %s type=%s is not %s", columnName, def.Type, ColumnTypeFloat32Vector)
+	}
+	valueCount, err := checkedMulInt(r.visibilityStat.VisibleRows, def.VectorDims, "part set float32 vector values")
+	if err != nil {
+		return ColumnPartSetFloat32VectorScanResult{}, err
+	}
+	if cap(dst) < valueCount {
+		dst = make([]float32, 0, valueCount)
+	} else {
+		dst = dst[:0]
+	}
+	diagnostics := r.newScanDiagnostics(nil)
+	for partIndex, loaded := range r.parts {
+		visible := r.visibleRowsForPart(partIndex)
+		if len(visible.Rows) == 0 {
+			continue
+		}
+		diagnostics.RowsScanned += loaded.Part.Descriptor.RowCount
+		diagnostics.GranulesConsidered += len(loaded.Part.Descriptor.Granules)
+		scanner := loaded.Part.NewScanner()
+		var columnDiagnostics PartScanDiagnostics
+		var dims int
+		dst, dims, columnDiagnostics, err = scanner.scanFloat32VectorRowsInto(columnName, dst, visible.Rows)
+		if err != nil {
+			return ColumnPartSetFloat32VectorScanResult{}, err
+		}
+		if dims != def.VectorDims {
+			return ColumnPartSetFloat32VectorScanResult{}, fmt.Errorf("colgranule: column %s dims=%d want=%d", columnName, dims, def.VectorDims)
+		}
+		diagnostics.BlocksDecoded += columnDiagnostics.BlocksDecoded
+		diagnostics.BytesDecoded += columnDiagnostics.BytesDecoded
+		diagnostics.RowsReturned += len(visible.Rows)
+	}
+	if len(dst) != valueCount {
+		return ColumnPartSetFloat32VectorScanResult{}, fmt.Errorf("colgranule: part set vector values=%d want=%d", len(dst), valueCount)
+	}
+	return ColumnPartSetFloat32VectorScanResult{
+		Rows:        diagnostics.RowsReturned,
+		Dims:        def.VectorDims,
+		Values:      dst,
+		Diagnostics: diagnostics,
+	}, nil
+}
+
+func (r *ColumnPartSetReader) ScanAdjacencyListsInto(columnName string, offsets []uint32, values []uint32) (ColumnPartSetAdjacencyListScanResult, error) {
+	if r == nil {
+		return ColumnPartSetAdjacencyListScanResult{}, fmt.Errorf("colgranule: nil part set reader")
+	}
+	def, ok := r.columnDefinition(columnName)
+	if !ok {
+		return ColumnPartSetAdjacencyListScanResult{}, fmt.Errorf("colgranule: missing column %s", columnName)
+	}
+	if def.Type != ColumnTypeAdjacencyList {
+		return ColumnPartSetAdjacencyListScanResult{}, fmt.Errorf("colgranule: column %s type=%s is not %s", columnName, def.Type, ColumnTypeAdjacencyList)
+	}
+	if cap(offsets) < r.visibilityStat.VisibleRows+1 {
+		offsets = make([]uint32, 1, r.visibilityStat.VisibleRows+1)
+	} else {
+		offsets = offsets[:1]
+		offsets[0] = 0
+	}
+	values = values[:0]
+	diagnostics := r.newScanDiagnostics(nil)
+	var err error
+	for partIndex, loaded := range r.parts {
+		visible := r.visibleRowsForPart(partIndex)
+		if len(visible.Rows) == 0 {
+			continue
+		}
+		diagnostics.RowsScanned += loaded.Part.Descriptor.RowCount
+		diagnostics.GranulesConsidered += len(loaded.Part.Descriptor.Granules)
+		scanner := loaded.Part.NewScanner()
+		var columnDiagnostics PartScanDiagnostics
+		offsets, values, columnDiagnostics, err = scanner.scanAdjacencyListRowsInto(columnName, offsets, values, visible.Rows)
+		if err != nil {
+			return ColumnPartSetAdjacencyListScanResult{}, err
+		}
+		diagnostics.BlocksDecoded += columnDiagnostics.BlocksDecoded
+		diagnostics.BytesDecoded += columnDiagnostics.BytesDecoded
+		diagnostics.RowsReturned += len(visible.Rows)
+	}
+	if len(offsets) != diagnostics.RowsReturned+1 {
+		return ColumnPartSetAdjacencyListScanResult{}, fmt.Errorf("colgranule: part set adjacency offsets=%d want=%d", len(offsets), diagnostics.RowsReturned+1)
+	}
+	return ColumnPartSetAdjacencyListScanResult{
+		Rows:        diagnostics.RowsReturned,
+		Offsets:     offsets,
+		Values:      values,
 		Diagnostics: diagnostics,
 	}, nil
 }
@@ -421,6 +606,61 @@ func (r *ColumnPartSetReader) valueAtRowRef(ref columnPartSetRowRef, columnName 
 	return scratch.scanner.ValueAt(ref.Locator, columnName)
 }
 
+func (r *ColumnPartSetReader) float32VectorAtRowRef(ref columnPartSetRowRef, columnName string, dst []float32, scratch *ColumnPartSetPointLookupScratch) ([]float32, error) {
+	if r == nil {
+		return nil, fmt.Errorf("colgranule: nil part set reader")
+	}
+	if ref.PartIndex < 0 || ref.PartIndex >= len(r.parts) {
+		return nil, fmt.Errorf("colgranule: row ref part index %d outside %d parts", ref.PartIndex, len(r.parts))
+	}
+	if scratch == nil {
+		scanner := ColumnPartScanner{part: r.parts[ref.PartIndex].Part}
+		return scanner.Float32VectorAt(ref.Locator, columnName, dst)
+	}
+	scratch.scanner.part = r.parts[ref.PartIndex].Part
+	return scratch.scanner.Float32VectorAt(ref.Locator, columnName, dst)
+}
+
+func (r *ColumnPartSetReader) adjacencyListAtRowRef(ref columnPartSetRowRef, columnName string, dst []uint32, scratch *ColumnPartSetPointLookupScratch) ([]uint32, error) {
+	if r == nil {
+		return nil, fmt.Errorf("colgranule: nil part set reader")
+	}
+	if ref.PartIndex < 0 || ref.PartIndex >= len(r.parts) {
+		return nil, fmt.Errorf("colgranule: row ref part index %d outside %d parts", ref.PartIndex, len(r.parts))
+	}
+	if scratch == nil {
+		scanner := ColumnPartScanner{part: r.parts[ref.PartIndex].Part}
+		return scanner.AdjacencyListAt(ref.Locator, columnName, dst)
+	}
+	scratch.scanner.part = r.parts[ref.PartIndex].Part
+	return scratch.scanner.AdjacencyListAt(ref.Locator, columnName, dst)
+}
+
+func (r *ColumnPartSetReader) columnDefinition(name string) (ColumnDefinition, bool) {
+	if r == nil {
+		return ColumnDefinition{}, false
+	}
+	for _, def := range r.manifest.DeclaredColumns {
+		if def.Name == name {
+			return def, true
+		}
+	}
+	return ColumnDefinition{}, false
+}
+
+func (r *ColumnPartSetReader) newScanDiagnostics(columns []string) ColumnPartSetScanDiagnostics {
+	return ColumnPartSetScanDiagnostics{
+		RowsSuperseded:   r.visibilityStat.SupersededRows,
+		RowsDeleted:      r.visibilityStat.DeletedRows,
+		PartsConsidered:  len(r.parts),
+		BaseParts:        r.visibilityStat.BaseParts,
+		DeltaParts:       r.visibilityStat.DeltaParts,
+		Tombstones:       r.visibilityStat.Tombstones,
+		ColumnsProjected: append([]string(nil), columns...),
+		CacheStats:       r.cacheStats,
+	}
+}
+
 func (r columnPartSetRowRef) newerThan(other columnPartSetRowRef) bool {
 	if r.GenerationID != other.GenerationID {
 		return r.GenerationID > other.GenerationID
@@ -519,18 +759,60 @@ func CompactColumnPartSet(workspace *ColumnWorkspace, reader *ColumnPartSetReade
 	if err != nil {
 		return ColumnPartSetCompactionResult{}, err
 	}
-	columnNames := make([]string, 0, len(normalized.Columns))
+	scalarNames := make([]string, 0, len(normalized.Columns))
+	vectorNames := make([]string, 0, len(normalized.Columns))
+	adjacencyNames := make([]string, 0, len(normalized.Columns))
 	for _, def := range normalized.Columns {
-		columnNames = append(columnNames, def.Name)
+		switch def.Type {
+		case ColumnTypeInt64, ColumnTypeLowCardinalityCode, ColumnTypeBool:
+			scalarNames = append(scalarNames, def.Name)
+		case ColumnTypeFloat32Vector:
+			vectorNames = append(vectorNames, def.Name)
+		case ColumnTypeAdjacencyList:
+			adjacencyNames = append(adjacencyNames, def.Name)
+		default:
+			return ColumnPartSetCompactionResult{}, fmt.Errorf("colgranule: unsupported column type %s for compaction column %s", def.Type, def.Name)
+		}
 	}
-	scan, err := reader.ScanProjected(columnNames)
-	if err != nil {
-		return ColumnPartSetCompactionResult{}, err
+	batch := ColumnBatch{Rows: reader.visibilityStat.VisibleRows}
+	if len(scalarNames) != 0 {
+		scan, err := reader.ScanProjected(scalarNames)
+		if err != nil {
+			return ColumnPartSetCompactionResult{}, err
+		}
+		batch.Rows = scan.Rows
+		batch.Columns = scan.Columns
 	}
-	if scan.Rows == 0 {
+	if batch.Rows == 0 {
 		return ColumnPartSetCompactionResult{}, fmt.Errorf("colgranule: cannot compact empty visible part set")
 	}
-	part, err := BuildColumnPart(newPartID, normalized, ColumnBatch{Rows: scan.Rows, Columns: scan.Columns})
+	if len(vectorNames) != 0 {
+		batch.Float32Vectors = make(map[string]Float32VectorColumn, len(vectorNames))
+		for _, name := range vectorNames {
+			scan, err := reader.ScanFloat32VectorsInto(name, nil)
+			if err != nil {
+				return ColumnPartSetCompactionResult{}, err
+			}
+			if scan.Rows != batch.Rows {
+				return ColumnPartSetCompactionResult{}, fmt.Errorf("colgranule: vector column %s rows=%d want=%d", name, scan.Rows, batch.Rows)
+			}
+			batch.Float32Vectors[name] = Float32VectorColumn{Dims: scan.Dims, Values: scan.Values}
+		}
+	}
+	if len(adjacencyNames) != 0 {
+		batch.AdjacencyLists = make(map[string]AdjacencyListColumn, len(adjacencyNames))
+		for _, name := range adjacencyNames {
+			scan, err := reader.ScanAdjacencyListsInto(name, nil, nil)
+			if err != nil {
+				return ColumnPartSetCompactionResult{}, err
+			}
+			if scan.Rows != batch.Rows {
+				return ColumnPartSetCompactionResult{}, fmt.Errorf("colgranule: adjacency-list column %s rows=%d want=%d", name, scan.Rows, batch.Rows)
+			}
+			batch.AdjacencyLists[name] = AdjacencyListColumn{Offsets: scan.Offsets, Values: scan.Values}
+		}
+	}
+	part, err := BuildColumnPart(newPartID, normalized, batch)
 	if err != nil {
 		return ColumnPartSetCompactionResult{}, err
 	}
@@ -580,8 +862,8 @@ func CompactColumnPartSet(workspace *ColumnWorkspace, reader *ColumnPartSetReade
 		Manifest:                manifest,
 		Part:                    entry,
 		InputRows:               reader.visibilityStat.InputRows,
-		VisibleRows:             scan.Rows,
-		DroppedRows:             reader.visibilityStat.InputRows - scan.Rows,
+		VisibleRows:             batch.Rows,
+		DroppedRows:             reader.visibilityStat.InputRows - batch.Rows,
 		SupersededRows:          reader.visibilityStat.SupersededRows,
 		DeletedRows:             reader.visibilityStat.DeletedRows,
 		OldAssetBytes:           oldAssetBytes,

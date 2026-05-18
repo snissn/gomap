@@ -29,7 +29,7 @@ import (
 )
 
 const (
-	collectionMetaVersion        = 2
+	collectionMetaVersion        = 3
 	maxCollectionMutationRetries = 64
 	// Bound stale buffered-read replans so a writer under constant buffered
 	// pressure eventually falls back to a publish boundary or outer retry.
@@ -145,6 +145,20 @@ func (e *CommitAmbiguousError) Unwrap() error {
 
 func (e *CommitAmbiguousError) Is(target error) bool {
 	return target == ErrCommitAmbiguous
+}
+
+func commitAmbiguousError(operation string, err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, ErrCommitAmbiguous) {
+		var existing *CommitAmbiguousError
+		if errors.As(err, &existing) {
+			return err
+		}
+		return &CommitAmbiguousError{Operation: operation, Err: err}
+	}
+	return &CommitAmbiguousError{Operation: operation, Err: err}
 }
 
 // UpdateBatchItem describes one document update in a batch. DocumentID must be
@@ -296,10 +310,13 @@ type CollectionManager struct {
 	updateBatchDetailedStats atomic.Bool
 	domainMu                 sync.RWMutex
 	domains                  map[string]*collectionWriteDomain
+	collectionsMu            sync.RWMutex
+	collections              map[*Collection]struct{}
 }
 
 type Collection struct {
 	db                *backenddb.DB
+	manager           *CollectionManager
 	writeDomain       *collectionWriteDomain
 	meta              CollectionMeta
 	catalogMu         sync.RWMutex
@@ -310,6 +327,9 @@ type Collection struct {
 	lastInsertStats   CollectionInsertStats
 	updateStatsMu     sync.RWMutex
 	lastUpdateStats   CollectionUpdateStats
+	vectorIndexLoadMu sync.Mutex
+	vectorIndexesMu   sync.RWMutex
+	vectorIndexes     map[string]*VectorIndex
 }
 
 type CollectionRootOverlayCompactionStats struct {
@@ -786,17 +806,34 @@ type IndexDefinition struct {
 	StoragePolicy RootStoragePolicy `json:"storage_policy,omitempty"`
 }
 
+// VectorIndexDefinition declares a document vector field as an ANN-capable
+// collection index. PRs after the metadata/API step persist and maintain the
+// HNSW graph through collection index roots.
+type VectorIndexDefinition struct {
+	Name             string              `json:"name"`
+	Field            string              `json:"field"`
+	Metric           VectorMetric        `json:"metric"`
+	Dimensions       int                 `json:"dimensions"`
+	M                int                 `json:"m,omitempty"`
+	EfConstruction   int                 `json:"ef_construction,omitempty"`
+	EfSearch         int                 `json:"ef_search,omitempty"`
+	Encoding         VectorIndexEncoding `json:"encoding,omitempty"`
+	SchemaGeneration uint64              `json:"schema_generation,omitempty"`
+}
+
 type CollectionMeta struct {
-	Name    string            `json:"name"`
-	Options CollectionOptions `json:"options,omitempty"`
-	Indexes []IndexDefinition `json:"indexes,omitempty"`
+	Name          string                  `json:"name"`
+	Options       CollectionOptions       `json:"options,omitempty"`
+	Indexes       []IndexDefinition       `json:"indexes,omitempty"`
+	VectorIndexes []VectorIndexDefinition `json:"vector_indexes,omitempty"`
 }
 
 type collectionMetaDisk struct {
-	Version int               `json:"version"`
-	Name    string            `json:"name"`
-	Options CollectionOptions `json:"options,omitempty"`
-	Indexes []IndexDefinition `json:"indexes,omitempty"`
+	Version       int                     `json:"version"`
+	Name          string                  `json:"name"`
+	Options       CollectionOptions       `json:"options,omitempty"`
+	Indexes       []IndexDefinition       `json:"indexes,omitempty"`
+	VectorIndexes []VectorIndexDefinition `json:"vector_indexes,omitempty"`
 }
 
 type collectionCatalog struct {
@@ -2454,9 +2491,10 @@ func (m *CollectionManager) existingWriteDomainForCollection(name string) *colle
 	return m.domains[name]
 }
 
-// FlushAll publishes buffered writes for every collection opened through this
-// manager. The backend DB also calls this as a close hook while write APIs are
-// still available.
+// FlushAll publishes buffered writes for every collection write domain known to
+// this manager, then persists dirty native vector indexes registered through
+// collection handles. The backend DB also calls this as a close hook while
+// write APIs are still available.
 func (m *CollectionManager) FlushAll() error {
 	if m == nil || m.db == nil {
 		return nil
@@ -2469,11 +2507,24 @@ func (m *CollectionManager) FlushAll() error {
 		}
 	}
 	m.domainMu.RUnlock()
+	m.collectionsMu.RLock()
+	collections := make([]*Collection, 0, len(m.collections))
+	for collection := range m.collections {
+		if collection != nil {
+			collections = append(collections, collection)
+		}
+	}
+	m.collectionsMu.RUnlock()
 
 	var errs []error
 	for _, domain := range domains {
 		domain.waitIndexedAsyncFlush()
 		if err := flushCollectionWriteDomain(m.db, domain); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	for _, collection := range collections {
+		if err := collection.persistDirtyNativeVectorIndexes(); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -2734,6 +2785,7 @@ func (m *CollectionManager) openCollectionWithCommandWALIntent(name string, comm
 	}
 	collection := &Collection{
 		db:          m.db,
+		manager:     m,
 		writeDomain: m.writeDomainForCollection(catalog.meta.Name),
 		// Collection catalogs are immutable once loaded; public Meta returns a
 		// defensive copy, so handles can keep the catalog meta value directly.
@@ -2745,6 +2797,27 @@ func (m *CollectionManager) openCollectionWithCommandWALIntent(name string, comm
 	collection.rememberCatalog(snap, catalog)
 	collection.noteWriteDomainCatalog(snapshotSystemRoot(snap), catalog)
 	return collection, nil
+}
+
+func (m *CollectionManager) registerCollectionHandle(collection *Collection) {
+	if m == nil || collection == nil {
+		return
+	}
+	m.collectionsMu.Lock()
+	defer m.collectionsMu.Unlock()
+	if m.collections == nil {
+		m.collections = make(map[*Collection]struct{})
+	}
+	m.collections[collection] = struct{}{}
+}
+
+func (m *CollectionManager) unregisterCollectionHandle(collection *Collection) {
+	if m == nil || collection == nil {
+		return
+	}
+	m.collectionsMu.Lock()
+	defer m.collectionsMu.Unlock()
+	delete(m.collections, collection)
 }
 
 func (m *CollectionManager) openCollectionFromWriteDomainCache(name string) (*Collection, bool) {
@@ -2771,6 +2844,7 @@ func (m *CollectionManager) openCollectionFromWriteDomainCache(name string) (*Co
 	}
 	collection := &Collection{
 		db:          m.db,
+		manager:     m,
 		writeDomain: domain,
 		// Collection catalogs are immutable once loaded; public Meta returns a
 		// defensive copy, so handles can keep the catalog meta value directly.
@@ -2976,6 +3050,166 @@ func (c *Collection) CreateIndex(def IndexDefinition) (*CollectionMeta, error) {
 	return newMeta.copy(), nil
 }
 
+// CreateVectorIndex adds vector index metadata to the collection schema.
+//
+// This metadata-only API makes vector fields declarable as document-store
+// indexes. Follow-on PRs persist and maintain the native HNSW graph under the
+// declared index.
+func (c *Collection) CreateVectorIndex(def VectorIndexDefinition) (*CollectionMeta, error) {
+	if c == nil {
+		return nil, errCollectionNil
+	}
+	if c.db == nil {
+		return nil, errCollectionDBNil
+	}
+	if c.db.CommandWALEnabled() {
+		return nil, fmt.Errorf("%w: collection catalog vector index mutation is rejected under command_wal_v1 until catalog vector index commands are supported", backenddb.ErrCommandWALRejected)
+	}
+	unlockMutation := c.lockMutation()
+	defer unlockMutation.Unlock()
+	if err := c.flushBufferedWrites(); err != nil {
+		return nil, err
+	}
+
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return nil, backenddb.ErrClosed
+	}
+	catalog, err := loadCollectionCatalog(snap, c.meta.Name)
+	if err != nil {
+		_ = snap.Close()
+		return nil, err
+	}
+	if catalog == nil {
+		_ = snap.Close()
+		return nil, errCollectionNotFound
+	}
+	if err := rejectCatalogRootOverlaysForWrite(catalog); err != nil {
+		_ = snap.Close()
+		return nil, err
+	}
+	baseMeta := catalog.meta
+	c.meta = baseMeta
+	primaryRootName := collectionPrimaryRootName(baseMeta.Name)
+	registerEmptyRuntime := catalog.rootID(primaryRootName) == 0 && len(catalog.overlayRootIDs(primaryRootName)) == 0
+	schemaGeneration := snapshotCommitSeq(snap) + 1
+	if schemaGeneration == 0 {
+		schemaGeneration = 1
+	}
+	_ = snap.Close()
+
+	def.SchemaGeneration = schemaGeneration
+	newMeta, normalizedDef, err := addVectorIndexToCollectionMeta(baseMeta, def)
+	if err != nil {
+		return nil, err
+	}
+	var runtime *VectorIndex
+	if registerEmptyRuntime {
+		runtime, err = newVectorIndex(c, vectorIndexOptionsFromDefinition(normalizedDef))
+		if err != nil {
+			return nil, err
+		}
+	}
+	encodedMeta, err := encodeCollectionMeta(newMeta)
+	if err != nil {
+		return nil, err
+	}
+	newSystemRoot, _, err := c.db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder(nil, func([]uint64) (iterator.UnsafeIterator, error) {
+		return c.buildSchemaOnlySystemDeltaIterator(baseMeta, encodedMeta, nil)
+	})
+	if err != nil {
+		return nil, err
+	}
+	c.meta = newMeta
+	nextCatalog := cloneCatalogWithRootUpdates(catalog, newMeta, nil, nil)
+	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
+	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
+	if registerEmptyRuntime {
+		c.RegisterVectorIndex(runtime)
+	}
+	return newMeta.copy(), nil
+}
+
+func (c *Collection) DropVectorIndex(name string) (*CollectionMeta, error) {
+	if err := ValidateIndexName(name); err != nil {
+		return nil, err
+	}
+	if c == nil {
+		return nil, errCollectionNil
+	}
+	if c.db == nil {
+		return nil, errCollectionDBNil
+	}
+	if c.db.CommandWALEnabled() {
+		return nil, fmt.Errorf("%w: collection catalog vector index mutation is rejected under command_wal_v1 until catalog vector index commands are supported", backenddb.ErrCommandWALRejected)
+	}
+	unlockMutation := c.lockMutation()
+	defer unlockMutation.Unlock()
+	if err := c.flushBufferedWrites(); err != nil {
+		return nil, err
+	}
+
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return nil, backenddb.ErrClosed
+	}
+	catalog, err := loadCollectionCatalog(snap, c.meta.Name)
+	if err != nil {
+		_ = snap.Close()
+		return nil, err
+	}
+	if catalog == nil {
+		_ = snap.Close()
+		return nil, errCollectionNotFound
+	}
+	if err := rejectCatalogRootOverlaysForWrite(catalog); err != nil {
+		_ = snap.Close()
+		return nil, err
+	}
+	baseMeta := catalog.meta
+	c.meta = baseMeta
+	_ = snap.Close()
+
+	nextIndexes := make([]VectorIndexDefinition, 0, len(baseMeta.VectorIndexes))
+	dropped := false
+	for _, idx := range baseMeta.VectorIndexes {
+		if idx.Name == name {
+			dropped = true
+			continue
+		}
+		nextIndexes = append(nextIndexes, idx)
+	}
+	if !dropped {
+		return nil, ErrIndexNotFound
+	}
+	newMeta, err := normalizeCollectionMeta(CollectionMeta{
+		Name:          baseMeta.Name,
+		Options:       baseMeta.Options,
+		Indexes:       baseMeta.Indexes,
+		VectorIndexes: nextIndexes,
+	})
+	if err != nil {
+		return nil, err
+	}
+	encodedMeta, err := encodeCollectionMeta(newMeta)
+	if err != nil {
+		return nil, err
+	}
+	clearedRootNames := []string{collectionVectorIndexRootName(baseMeta.Name, name)}
+	newSystemRoot, _, err := c.db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder(nil, func([]uint64) (iterator.UnsafeIterator, error) {
+		return c.buildSchemaOnlySystemDeltaIterator(baseMeta, encodedMeta, clearedRootNames)
+	})
+	if err != nil {
+		return nil, err
+	}
+	c.meta = newMeta
+	nextCatalog := cloneCatalogWithRootUpdates(catalog, newMeta, clearedRootNames, []uint64{0})
+	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
+	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
+	c.UnregisterVectorIndex(name)
+	return newMeta.copy(), nil
+}
+
 func (c *Collection) DropIndex(name string) (*CollectionMeta, error) {
 	if err := ValidateIndexName(name); err != nil {
 		return nil, err
@@ -3065,9 +3299,10 @@ func (c *Collection) dropIndexes(names map[string]struct{}, all bool) (*Collecti
 	}
 
 	newMeta, err := normalizeCollectionMeta(CollectionMeta{
-		Name:    baseMeta.Name,
-		Options: baseMeta.Options,
-		Indexes: nextIndexes,
+		Name:          baseMeta.Name,
+		Options:       baseMeta.Options,
+		Indexes:       nextIndexes,
+		VectorIndexes: baseMeta.VectorIndexes,
 	})
 	if err != nil {
 		return nil, err
@@ -3113,7 +3348,7 @@ func (c *Collection) Insert(id, document []byte) ([]byte, error) {
 	if err := c.requireColumnStoreCommandWAL(c.meta, nil); err != nil {
 		return nil, err
 	}
-	if len(c.meta.Indexes) == 0 && !c.db.CommandWALEnabled() {
+	if len(c.meta.Indexes) == 0 && len(c.meta.VectorIndexes) == 0 && !c.db.CommandWALEnabled() {
 		if c.hasBufferedNoIndexBSONRootRuns() {
 			if err := c.withMutationLock(func() error {
 				return c.flushBufferedWrites()
@@ -3125,6 +3360,9 @@ func (c *Collection) Insert(id, document []byte) ([]byte, error) {
 	}
 	ids, err := c.InsertBatch([][]byte{id}, [][]byte{document})
 	if err != nil {
+		if errors.Is(err, ErrCommitAmbiguous) && len(ids) == 1 {
+			return ids[0], err
+		}
 		return nil, err
 	}
 	if len(ids) != 1 {
@@ -3145,11 +3383,18 @@ func (c *Collection) Flush() error {
 	}
 	if c.writeDomain != nil {
 		unlockMutation := c.lockMutation()
-		defer unlockMutation.Unlock()
 		c.writeDomain.waitIndexedAsyncFlush()
-		return c.flushBufferedWrites()
+		err := c.flushBufferedWrites()
+		unlockMutation.Unlock()
+		if err != nil {
+			return err
+		}
+		return c.persistDirtyNativeVectorIndexes()
 	}
-	return c.flushBufferedWrites()
+	if err := c.flushBufferedWrites(); err != nil {
+		return err
+	}
+	return c.persistDirtyNativeVectorIndexes()
 }
 
 // CompactRootOverlays folds durable collection root overlays into their base
@@ -3293,7 +3538,7 @@ func (c *Collection) insertOneNoIndexBuffered(id, document []byte) ([]byte, erro
 		domain.mu.Unlock()
 		return nil, err
 	}
-	if indexed || plannerOptions.documentFormat != DocumentFormatJSON {
+	if indexed || len(catalog.meta.VectorIndexes) > 0 || plannerOptions.documentFormat != DocumentFormatJSON {
 		domain.mu.Unlock()
 		return c.insertOneViaBatch(id, document)
 	}
@@ -8061,7 +8306,7 @@ func (c *Collection) insertOneNoIndex(id, document []byte) ([]byte, error) {
 		return nil, err
 	}
 	c.meta = catalog.meta
-	if len(c.meta.Indexes) > 0 {
+	if len(c.meta.Indexes) > 0 || len(c.meta.VectorIndexes) > 0 {
 		_ = snap.Close()
 		return c.insertOneViaBatch(id, document)
 	}
@@ -8145,7 +8390,11 @@ func (c *Collection) insertOneViaBatch(id, document []byte) ([]byte, error) {
 // batch recoverable as one mutation boundary. Ordinary pre-commit errors expose
 // no partial batch. Post-commit failures must be reported as commit-ambiguous.
 func (c *Collection) InsertBatch(ids, documents [][]byte) ([][]byte, error) {
-	return c.insertBatch(ids, documents, false, nil)
+	resultIDs, err := c.insertBatch(ids, documents, false, nil)
+	if err == nil {
+		err = commitAmbiguousError("InsertBatch vector index maintenance", c.notifyAndPersistVectorIndexesUpsertForWAL(resultIDs))
+	}
+	return resultIDs, err
 }
 
 // InsertBatchWithTemplateV1Encoder inserts template-v1 documents and teaches
@@ -8156,7 +8405,11 @@ func (c *Collection) InsertBatchWithTemplateV1Encoder(ids, documents [][]byte, e
 	if encoder == nil {
 		return nil, errors.New("collections: template-v1 encoder cannot be nil")
 	}
-	return c.insertBatch(ids, documents, false, encoder)
+	resultIDs, err := c.insertBatch(ids, documents, false, encoder)
+	if err == nil {
+		err = commitAmbiguousError("InsertBatchWithTemplateV1Encoder vector index maintenance", c.notifyAndPersistVectorIndexesUpsertForWAL(resultIDs))
+	}
+	return resultIDs, err
 }
 
 // InsertBatchValidatedBSON inserts native BSON documents that the caller has
@@ -8164,7 +8417,11 @@ func (c *Collection) InsertBatchWithTemplateV1Encoder(ids, documents [][]byte, e
 // BSON while parsing the request and need to avoid a duplicate full-document
 // validation pass on the insert hot path.
 func (c *Collection) InsertBatchValidatedBSON(ids, documents [][]byte) ([][]byte, error) {
-	return c.insertBatch(ids, documents, true, nil)
+	resultIDs, err := c.insertBatch(ids, documents, true, nil)
+	if err == nil {
+		err = commitAmbiguousError("InsertBatchValidatedBSON vector index maintenance", c.notifyAndPersistVectorIndexesUpsertForWAL(resultIDs))
+	}
+	return resultIDs, err
 }
 
 func (c *Collection) insertBatch(ids, documents [][]byte, trustedValidBSON bool, templateEncoder *TemplateV1Encoder) ([][]byte, error) {
@@ -8531,6 +8788,10 @@ func (c *Collection) insertBatchOnceWithLockState(
 		})
 	}
 
+	clearedVectorRootNames := []string(nil)
+	if commandWALIntent != nil {
+		clearedVectorRootNames = collectionCommandWALVectorRootInvalidations(meta, currentCatalog, baseRootIDs)
+	}
 	publishStart := time.Now()
 	var newSystemRoot uint64
 	var rootIDs []uint64
@@ -8544,6 +8805,7 @@ func (c *Collection) insertBatchOnceWithLockState(
 			baseSystemRoot:   baseSystemRoot,
 			rootNames:        cloneColumnPublishRootNames(rootNames),
 			baseRootIDs:      cloneColumnPublishBaseRootIDs(baseRootIDs),
+			clearedRootNames: clearedVectorRootNames,
 			commandWALIntent: commandWALIntent,
 			operation:        ColumnPublishOperationInsert,
 			rows:             len(plan.resultIDs),
@@ -8552,7 +8814,8 @@ func (c *Collection) insertBatchOnceWithLockState(
 		publishMeta = meta
 		publishRootNames = rootNames
 		newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaGroupWithCommandWALAndSystemDeltaBuilder(ordered, commandWALIntent, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
-			return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootIDs)
+			descriptorRootNames, descriptorRootIDs := appendClearedCollectionRoots(rootNames, rootIDs, clearedVectorRootNames)
+			return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, descriptorRootNames, baseRootIDs, descriptorRootIDs)
 		})
 	} else {
 		publishMeta = meta
@@ -8572,6 +8835,7 @@ func (c *Collection) insertBatchOnceWithLockState(
 	c.meta = publishMeta
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
+	c.noteCommandWALVectorRootsCleared(meta, clearedVectorRootNames)
 	templateEncoder.learnTemplateV1Templates(c, plan.templateLearned)
 	c.setLastInsertStats(plan.stats.CollectionInsertStats)
 	return plan.resultIDs, nil
@@ -8983,6 +9247,11 @@ func (c *Collection) insertBatchNoIndex(
 		resetCollectionRunTable(table)
 	}()
 
+	baseRootIDs := map[string]uint64{rootName: baseRoot}
+	clearedVectorRootNames := []string(nil)
+	if commandWALIntent != nil {
+		clearedVectorRootNames = collectionCommandWALVectorRootInvalidations(c.meta, catalog, baseRootIDs)
+	}
 	publishStart := time.Now()
 	ordered := []backenddb.OrderedRootDeltaPublishInput{{
 		BaseRoot:      baseRoot,
@@ -8994,14 +9263,14 @@ func (c *Collection) insertBatchNoIndex(
 	if columnStoreWriteEnabled(c.meta) {
 		var publishMeta CollectionMeta
 		var publishRootNames []string
-		columnBaseRootIDs := map[string]uint64{rootName: baseRoot}
 		newSystemRoot, rootIDs, publishMeta, publishRootNames, err = c.publishRootDeltaGroupMaybeColumn(ordered, columnWritePublishInput{
 			meta:             c.meta,
 			catalog:          catalog,
 			baseCommitSeq:    baseCommitSeq,
 			baseSystemRoot:   baseSystemRoot,
 			rootNames:        []string{rootName},
-			baseRootIDs:      columnBaseRootIDs,
+			baseRootIDs:      cloneUint64Map(baseRootIDs),
+			clearedRootNames: clearedVectorRootNames,
 			commandWALIntent: commandWALIntent,
 			operation:        ColumnPublishOperationInsert,
 			rows:             len(entries),
@@ -9018,14 +9287,15 @@ func (c *Collection) insertBatchNoIndex(
 		c.meta = publishMeta
 		c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 		c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
+		c.noteCommandWALVectorRootsCleared(c.meta, clearedVectorRootNames)
 		c.setLastInsertStats(stats)
 		return resultIDs, nil
 	}
 
-	baseRootIDs := map[string]uint64{rootName: baseRoot}
 	if commandWALIntent != nil {
 		newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaGroupWithCommandWALAndSystemDeltaBuilder(ordered, commandWALIntent, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
-			return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, []string{rootName}, baseRootIDs, rootIDs)
+			descriptorRootNames, descriptorRootIDs := appendClearedCollectionRoots([]string{rootName}, rootIDs, clearedVectorRootNames)
+			return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, descriptorRootNames, baseRootIDs, descriptorRootIDs)
 		})
 	} else {
 		newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
@@ -9040,9 +9310,11 @@ func (c *Collection) insertBatchNoIndex(
 		return nil, unexpectedOrderedRootCountError(c.meta.Name, 1, len(rootIDs))
 	}
 	stats.Runs = 1
-	nextCatalog := cloneCatalogWithRootUpdates(catalog, c.meta, []string{rootName}, rootIDs)
+	catalogRootNames, catalogRootIDs := appendClearedCollectionRoots([]string{rootName}, rootIDs, clearedVectorRootNames)
+	nextCatalog := cloneCatalogWithRootUpdates(catalog, c.meta, catalogRootNames, catalogRootIDs)
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
+	c.noteCommandWALVectorRootsCleared(c.meta, clearedVectorRootNames)
 	c.setLastInsertStats(stats)
 	return resultIDs, nil
 }
@@ -9074,7 +9346,12 @@ func (c *Collection) DeleteDocument(documentID []byte) (bool, error) {
 		return false, errors.New("collections: document id cannot be empty")
 	}
 	unlockMutation := c.lockMutation()
-	defer unlockMutation.Unlock()
+	mutationLocked := true
+	defer func() {
+		if mutationLocked {
+			unlockMutation.Unlock()
+		}
+	}()
 	if c.commandWALActive(nil) || c.shouldFlushBeforeIndexedDelete(c.meta) {
 		if err := c.flushBufferedWrites(); err != nil {
 			return false, err
@@ -9091,6 +9368,11 @@ func (c *Collection) DeleteDocument(documentID []byte) (bool, error) {
 			}
 			waitBeforeCollectionMutationRetry(attempt)
 			continue
+		}
+		if err == nil && deleted {
+			unlockMutation.Unlock()
+			mutationLocked = false
+			err = commitAmbiguousError("DeleteDocument vector index maintenance", c.notifyAndPersistVectorIndexesDeleteForWAL([][]byte{documentID}))
 		}
 		return deleted, err
 	}
@@ -9136,13 +9418,24 @@ func (c *Collection) DeleteBatch(documentIDs [][]byte) (int, error) {
 		return 0, nil
 	}
 	unlockMutation := c.lockMutation()
-	defer unlockMutation.Unlock()
+	mutationLocked := true
+	defer func() {
+		if mutationLocked {
+			unlockMutation.Unlock()
+		}
+	}()
 	if c.commandWALActive(nil) || c.shouldFlushBeforeIndexedDelete(c.meta) {
 		if err := c.flushBufferedWrites(); err != nil {
 			return 0, err
 		}
 	}
-	return c.deleteBatchWithCommandWALIntent(ids, nil)
+	deleted, err := c.deleteBatchWithCommandWALIntent(ids, nil)
+	if err == nil && deleted > 0 {
+		unlockMutation.Unlock()
+		mutationLocked = false
+		err = commitAmbiguousError("DeleteBatch vector index maintenance", c.notifyAndPersistVectorIndexesDeleteForWAL(ids))
+	}
+	return deleted, err
 }
 
 func (c *Collection) deleteBatchWithCommandWALIntent(ids [][]byte, commandWALIntent *backenddb.CommandWALIntent) (int, error) {
@@ -9342,6 +9635,10 @@ func (c *Collection) deleteBatchOnce(documentIDs [][]byte, commandWALIntent *bac
 	if c.writeDomain != nil {
 		deltaStats = collectionRootDeltaPlanStatsFromOrdered(c.meta.Name, rootNames, ordered)
 	}
+	clearedVectorRootNames := []string(nil)
+	if commandWALIntent != nil {
+		clearedVectorRootNames = collectionCommandWALVectorRootInvalidations(c.meta, catalog, baseRootIDs)
+	}
 	var newSystemRoot uint64
 	var rootIDs []uint64
 	if columnStoreWriteEnabled(c.meta) {
@@ -9354,6 +9651,7 @@ func (c *Collection) deleteBatchOnce(documentIDs [][]byte, commandWALIntent *bac
 			baseSystemRoot:   baseSystemRoot,
 			rootNames:        cloneColumnPublishRootNames(rootNames),
 			baseRootIDs:      cloneColumnPublishBaseRootIDs(baseRootIDs),
+			clearedRootNames: clearedVectorRootNames,
 			commandWALIntent: commandWALIntent,
 			operation:        ColumnPublishOperationDelete,
 			rows:             len(existing),
@@ -9369,6 +9667,7 @@ func (c *Collection) deleteBatchOnce(documentIDs [][]byte, commandWALIntent *bac
 		c.meta = publishMeta
 		c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 		c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
+		c.noteCommandWALVectorRootsCleared(c.meta, clearedVectorRootNames)
 		c.clearWriteDomainPrimaryDocumentCache()
 		if c.writeDomain != nil {
 			c.writeDomain.observeRootDeltaPlan(deltaStats)
@@ -9376,7 +9675,8 @@ func (c *Collection) deleteBatchOnce(documentIDs [][]byte, commandWALIntent *bac
 		return len(existing), nil
 	} else if commandWALIntent != nil {
 		newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaBatchGroupWithCommandWALAndSystemDeltaBuilder(ordered, commandWALIntent, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
-			return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootIDs)
+			descriptorRootNames, descriptorRootIDs := appendClearedCollectionRoots(rootNames, rootIDs, clearedVectorRootNames)
+			return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, descriptorRootNames, baseRootIDs, descriptorRootIDs)
 		})
 	} else {
 		newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
@@ -9390,9 +9690,11 @@ func (c *Collection) deleteBatchOnce(documentIDs [][]byte, commandWALIntent *bac
 	if len(rootIDs) != len(rootNames) {
 		return 0, unexpectedOrderedRootCountError(c.meta.Name, len(rootNames), len(rootIDs))
 	}
-	nextCatalog := cloneCatalogWithRootUpdates(catalog, c.meta, rootNames, rootIDs)
+	catalogRootNames, catalogRootIDs := appendClearedCollectionRoots(rootNames, rootIDs, clearedVectorRootNames)
+	nextCatalog := cloneCatalogWithRootUpdates(catalog, c.meta, catalogRootNames, catalogRootIDs)
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
+	c.noteCommandWALVectorRootsCleared(c.meta, clearedVectorRootNames)
 	c.clearWriteDomainPrimaryDocumentCache()
 	if c.writeDomain != nil {
 		c.writeDomain.observeRootDeltaPlan(deltaStats)
@@ -9562,6 +9864,10 @@ func (c *Collection) deleteDocumentOnce(documentID []byte, commandWALIntent *bac
 	if c.writeDomain != nil {
 		deltaStats = collectionRootDeltaPlanStatsFromOrdered(c.meta.Name, rootNames, ordered)
 	}
+	clearedVectorRootNames := []string(nil)
+	if commandWALIntent != nil {
+		clearedVectorRootNames = collectionCommandWALVectorRootInvalidations(c.meta, catalog, baseRootIDs)
+	}
 	var newSystemRoot uint64
 	var rootIDs []uint64
 	var publishMeta CollectionMeta
@@ -9574,6 +9880,7 @@ func (c *Collection) deleteDocumentOnce(documentID []byte, commandWALIntent *bac
 			baseSystemRoot:   baseSystemRoot,
 			rootNames:        cloneColumnPublishRootNames(rootNames),
 			baseRootIDs:      cloneColumnPublishBaseRootIDs(baseRootIDs),
+			clearedRootNames: clearedVectorRootNames,
 			commandWALIntent: commandWALIntent,
 			operation:        ColumnPublishOperationDelete,
 			rows:             1,
@@ -9582,7 +9889,8 @@ func (c *Collection) deleteDocumentOnce(documentID []byte, commandWALIntent *bac
 		publishMeta = c.meta
 		publishRootNames = rootNames
 		newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaBatchGroupWithCommandWALAndSystemDeltaBuilder(ordered, commandWALIntent, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
-			return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootIDs)
+			descriptorRootNames, descriptorRootIDs := appendClearedCollectionRoots(rootNames, rootIDs, clearedVectorRootNames)
+			return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, descriptorRootNames, baseRootIDs, descriptorRootIDs)
 		})
 	} else {
 		publishMeta = c.meta
@@ -9602,6 +9910,7 @@ func (c *Collection) deleteDocumentOnce(documentID []byte, commandWALIntent *bac
 	c.meta = publishMeta
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
+	c.noteCommandWALVectorRootsCleared(c.meta, clearedVectorRootNames)
 	c.clearWriteDomainPrimaryDocumentCache()
 	if c.writeDomain != nil {
 		c.writeDomain.observeRootDeltaPlan(deltaStats)
@@ -9652,6 +9961,8 @@ func (c *Collection) Update(documentID []byte, update func(current []byte) (repl
 	if err := c.requireColumnStoreCommandWAL(c.meta, nil); err != nil {
 		return false, false, err
 	}
+	var matched, modified bool
+	var err error
 	if c.commandWALActive(nil) {
 		results, _, err := c.updateBatchOwnedItemsWithCommandWALIntent([]updateBatchItem{{
 			UpdateBatchItem: UpdateBatchItem{
@@ -9665,19 +9976,22 @@ func (c *Collection) Update(documentID []byte, update func(current []byte) (repl
 		if len(results) != 1 {
 			return false, false, fmt.Errorf("collections: update result count %d for single command WAL update", len(results))
 		}
-		return results[0].Matched, results[0].Modified, nil
-	}
-	if combiner, domain := c.updateFastPathWithoutCreatingCombiner(); combiner != nil {
-		return combiner.update(c, documentID, update, bsonSetUpdate{}, false)
+		matched, modified = results[0].Matched, results[0].Modified
+	} else if combiner, domain := c.updateFastPathWithoutCreatingCombiner(); combiner != nil {
+		matched, modified, err = combiner.update(c, documentID, update, bsonSetUpdate{}, false)
 	} else if domain != nil {
 		defer domain.finishInlineUpdateWithoutCombiner()
 		domain.observeUpdateCombineInline()
-		return c.updateSingleInlineWithoutCombiner(domain, documentID, update, bsonSetUpdate{}, false)
+		matched, modified, err = c.updateSingleInlineWithoutCombiner(domain, documentID, update, bsonSetUpdate{}, false)
+	} else if combiner := c.updateCombiner(); combiner != nil {
+		matched, modified, err = combiner.update(c, documentID, update, bsonSetUpdate{}, false)
+	} else {
+		matched, modified, err = c.updateDirect(documentID, update)
 	}
-	if combiner := c.updateCombiner(); combiner != nil {
-		return combiner.update(c, documentID, update, bsonSetUpdate{}, false)
+	if err == nil && modified {
+		err = commitAmbiguousError("Update vector index maintenance", c.notifyAndPersistVectorIndexesUpsertForWAL([][]byte{documentID}))
 	}
-	return c.updateDirect(documentID, update)
+	return matched, modified, err
 }
 
 func validateCollectionUpdateInput(c *Collection, documentID []byte, update func(current []byte) (replacement []byte, changed bool, err error)) error {
@@ -9760,6 +10074,9 @@ func (c *Collection) updateDirectBSONSet(documentID []byte, spec bsonSetUpdate) 
 // batch. Post-commit failures must be commit-ambiguous for the whole batch.
 func (c *Collection) UpdateBatch(items []UpdateBatchItem) ([]UpdateBatchResult, error) {
 	results, _, err := c.updateBatch(items, updateBatchModeAny)
+	if err == nil {
+		err = commitAmbiguousError("UpdateBatch vector index maintenance", c.notifyAndPersistVectorIndexesUpdateBatchForWAL(items, results))
+	}
 	return results, err
 }
 
@@ -9769,7 +10086,11 @@ func (c *Collection) UpdateBatch(items []UpdateBatchItem) ([]UpdateBatchResult, 
 // present so callers can preserve ordered per-document update semantics. When
 // batched=false and err=nil, the returned results are zero-valued with len(items).
 func (c *Collection) UpdateBatchIfNoSecondaryUniqueIndexes(items []UpdateBatchItem) ([]UpdateBatchResult, bool, error) {
-	return c.updateBatch(items, updateBatchModeNoSecondaryUniqueIndexes)
+	results, batched, err := c.updateBatch(items, updateBatchModeNoSecondaryUniqueIndexes)
+	if err == nil && batched {
+		err = commitAmbiguousError("UpdateBatchIfNoSecondaryUniqueIndexes vector index maintenance", c.notifyAndPersistVectorIndexesUpdateBatchForWAL(items, results))
+	}
+	return results, batched, err
 }
 
 // UpdateBatchIfNoSecondaryUniqueIndexChanges applies UpdateBatch only when no
@@ -9779,7 +10100,11 @@ func (c *Collection) UpdateBatchIfNoSecondaryUniqueIndexes(items []UpdateBatchIt
 // for unique value mutations. When batched=false and err=nil, the returned
 // results are zero-valued with len(items).
 func (c *Collection) UpdateBatchIfNoSecondaryUniqueIndexChanges(items []UpdateBatchItem) ([]UpdateBatchResult, bool, error) {
-	return c.updateBatch(items, updateBatchModeNoSecondaryUniqueIndexChanges)
+	results, batched, err := c.updateBatch(items, updateBatchModeNoSecondaryUniqueIndexChanges)
+	if err == nil && batched {
+		err = commitAmbiguousError("UpdateBatchIfNoSecondaryUniqueIndexChanges vector index maintenance", c.notifyAndPersistVectorIndexesUpdateBatchForWAL(items, results))
+	}
+	return results, batched, err
 }
 
 func (c *Collection) updateBatch(items []UpdateBatchItem, mode updateBatchMode) ([]UpdateBatchResult, bool, error) {
@@ -12202,6 +12527,10 @@ func (c *Collection) updateDocumentOnceApply(documentID []byte, update func(curr
 			return false, false, err
 		}
 	}
+	clearedVectorRootNames := []string(nil)
+	if commandWALIntent != nil {
+		clearedVectorRootNames = collectionCommandWALVectorRootInvalidations(c.meta, catalog, baseRootIDs)
+	}
 	phaseStart = updateBatchStatsNow(detailedStats)
 	var newSystemRoot uint64
 	var rootIDs []uint64
@@ -12215,6 +12544,7 @@ func (c *Collection) updateDocumentOnceApply(documentID []byte, update func(curr
 			baseSystemRoot:   baseSystemRoot,
 			rootNames:        cloneColumnPublishRootNames(rootNames),
 			baseRootIDs:      cloneColumnPublishBaseRootIDs(baseRootIDs),
+			clearedRootNames: clearedVectorRootNames,
 			commandWALIntent: commandWALIntent,
 			operation:        ColumnPublishOperationUpdate,
 			rows:             1,
@@ -12238,6 +12568,7 @@ func (c *Collection) updateDocumentOnceApply(documentID []byte, update func(curr
 	c.meta = publishMeta
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
+	c.noteCommandWALVectorRootsCleared(c.meta, clearedVectorRootNames)
 	if c.writeDomain != nil {
 		c.writeDomain.observeRootDeltaPlan(deltaStats)
 		if primaryOnlyUpdate {
@@ -14271,6 +14602,10 @@ func (c *Collection) publishUpdateBatchPlanLocked(plan *updateBatchPlan, command
 	}
 	detailedStats := c.updateBatchDetailedStatsEnabled()
 	publishStart := updateBatchStatsNow(detailedStats)
+	clearedVectorRootNames := []string(nil)
+	if commandWALIntent != nil {
+		clearedVectorRootNames = collectionCommandWALVectorRootInvalidations(plan.meta, plan.catalog, plan.baseRootIDs)
+	}
 	var newSystemRoot uint64
 	var rootIDs []uint64
 	if columnStoreWriteEnabled(plan.meta) {
@@ -14283,6 +14618,7 @@ func (c *Collection) publishUpdateBatchPlanLocked(plan *updateBatchPlan, command
 			baseSystemRoot:   plan.baseSystemRoot,
 			rootNames:        cloneColumnPublishRootNames(plan.rootNames),
 			baseRootIDs:      cloneColumnPublishBaseRootIDs(plan.baseRootIDs),
+			clearedRootNames: clearedVectorRootNames,
 			commandWALIntent: commandWALIntent,
 			operation:        ColumnPublishOperationUpdate,
 			rows:             plan.stats.Modified,
@@ -14299,6 +14635,7 @@ func (c *Collection) publishUpdateBatchPlanLocked(plan *updateBatchPlan, command
 		c.meta = publishMeta
 		c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 		c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
+		c.noteCommandWALVectorRootsCleared(c.meta, clearedVectorRootNames)
 		if c.writeDomain != nil {
 			c.writeDomain.observeRootDeltaPlan(deltaStats)
 			if len(plan.meta.Indexes) == 0 {
@@ -14308,7 +14645,8 @@ func (c *Collection) publishUpdateBatchPlanLocked(plan *updateBatchPlan, command
 		return plan.results, nil
 	} else if commandWALIntent != nil {
 		newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaBatchGroupWithPreflightCommandWALAndSystemDeltaBuilder(ordered, preflight, commandWALIntent, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
-			return c.buildRootDescriptorSystemDeltaIteratorForMeta(plan.meta, plan.baseCommitSeq, plan.baseSystemRoot, plan.rootNames, plan.baseRootIDs, rootIDs)
+			descriptorRootNames, descriptorRootIDs := appendClearedCollectionRoots(plan.rootNames, rootIDs, clearedVectorRootNames)
+			return c.buildRootDescriptorSystemDeltaIteratorForMeta(plan.meta, plan.baseCommitSeq, plan.baseSystemRoot, descriptorRootNames, plan.baseRootIDs, descriptorRootIDs)
 		})
 	} else {
 		newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaBatchGroupWithPreflightAndSystemDeltaBuilder(ordered, preflight, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
@@ -14323,10 +14661,12 @@ func (c *Collection) publishUpdateBatchPlanLocked(plan *updateBatchPlan, command
 	if len(rootIDs) != len(plan.rootNames) {
 		return nil, unexpectedOrderedRootCountError(plan.meta.Name, len(plan.rootNames), len(rootIDs))
 	}
-	nextCatalog := cloneCatalogWithRootUpdates(plan.catalog, plan.meta, plan.rootNames, rootIDs)
+	catalogRootNames, catalogRootIDs := appendClearedCollectionRoots(plan.rootNames, rootIDs, clearedVectorRootNames)
+	nextCatalog := cloneCatalogWithRootUpdates(plan.catalog, plan.meta, catalogRootNames, catalogRootIDs)
 	c.meta = plan.meta
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
+	c.noteCommandWALVectorRootsCleared(plan.meta, clearedVectorRootNames)
 	if c.writeDomain != nil {
 		c.writeDomain.observeRootDeltaPlan(deltaStats)
 		if len(plan.meta.Indexes) == 0 {
@@ -17763,6 +18103,11 @@ func collectionRootStoragePolicyForDB(db *backenddb.DB, meta CollectionMeta, roo
 			return backendRootStoragePolicy(idx.StoragePolicy)
 		}
 	}
+	for _, idx := range meta.VectorIndexes {
+		if rootName == collectionVectorIndexRootName(meta.Name, idx.Name) {
+			return backendRootStoragePolicy(meta.Options.IndexStateStoragePolicy)
+		}
+	}
 	return backenddb.OrderedRootStorageDefault, fmt.Errorf("collections: unknown collection root %q for %q", rootName, meta.Name)
 }
 
@@ -18146,10 +18491,11 @@ func encodeCollectionMeta(meta CollectionMeta) ([]byte, error) {
 // normalizeCollectionMeta so disk metadata preserves canonical defaults/order.
 func encodeNormalizedCollectionMeta(meta CollectionMeta) ([]byte, error) {
 	return json.Marshal(collectionMetaDisk{
-		Version: collectionMetaVersion,
-		Name:    meta.Name,
-		Options: meta.Options,
-		Indexes: meta.Indexes,
+		Version:       collectionMetaVersion,
+		Name:          meta.Name,
+		Options:       meta.Options,
+		Indexes:       meta.Indexes,
+		VectorIndexes: meta.VectorIndexes,
 	})
 }
 
@@ -18162,9 +18508,10 @@ func decodeCollectionMeta(raw []byte) (CollectionMeta, error) {
 		return CollectionMeta{}, fmt.Errorf("collections: unsupported collection metadata version %d", disk.Version)
 	}
 	return normalizeCollectionMeta(CollectionMeta{
-		Name:    disk.Name,
-		Options: disk.Options,
-		Indexes: disk.Indexes,
+		Name:          disk.Name,
+		Options:       disk.Options,
+		Indexes:       disk.Indexes,
+		VectorIndexes: disk.VectorIndexes,
 	})
 }
 
@@ -18236,13 +18583,35 @@ func normalizeCollectionMeta(meta CollectionMeta) (CollectionMeta, error) {
 		seen[indexes[i].Name] = struct{}{}
 	}
 	meta.Indexes = indexes
+	vectorIndexes := append([]VectorIndexDefinition(nil), meta.VectorIndexes...)
+	for i := range vectorIndexes {
+		normalized, err := normalizeVectorIndexDefinition(vectorIndexes[i])
+		if err != nil {
+			name := vectorIndexes[i].Name
+			if name == "" {
+				name = vectorIndexDefaultName(vectorIndexes[i].Field)
+			}
+			return CollectionMeta{}, fmt.Errorf("collections: invalid vector index %q: %w", name, err)
+		}
+		vectorIndexes[i] = normalized
+	}
+	sort.SliceStable(vectorIndexes, func(i, j int) bool {
+		return vectorIndexes[i].Name < vectorIndexes[j].Name
+	})
+	for i := range vectorIndexes {
+		if _, ok := seen[vectorIndexes[i].Name]; ok {
+			return CollectionMeta{}, fmt.Errorf("collections: duplicate index %q", vectorIndexes[i].Name)
+		}
+		seen[vectorIndexes[i].Name] = struct{}{}
+	}
+	meta.VectorIndexes = vectorIndexes
 	if meta.Options.DisableIndexedWriteMemtables {
 		meta.Options.BufferedIndexedWrites = false
 		meta.Options.BufferedIndexedWriteMaxDocuments = 0
 		meta.Options.BufferedIndexedWriteMaxBytes = 0
 		meta.Options.BufferedIndexedWriteMaxRootRuns = 0
 		meta.Options.BufferedIndexedOverlayRoots = false
-	} else if len(meta.Indexes) == 0 {
+	} else if len(meta.Indexes) == 0 && len(meta.VectorIndexes) == 0 {
 		meta.Options.BufferedIndexedWrites = false
 	} else {
 		meta.Options.BufferedIndexedWrites = true
@@ -18290,11 +18659,53 @@ func normalizeIndexValueType(valueType IndexValueType) (IndexValueType, error) {
 	}
 }
 
+func normalizeVectorIndexDefinition(def VectorIndexDefinition) (VectorIndexDefinition, error) {
+	if def.Name == "" {
+		def.Name = vectorIndexDefaultName(def.Field)
+	}
+	if err := ValidateIndexName(def.Name); err != nil {
+		return VectorIndexDefinition{}, err
+	}
+	if err := ValidateIndexPath(def.Field); err != nil {
+		return VectorIndexDefinition{}, fmt.Errorf("field: %w", err)
+	}
+	if _, err := parseVectorFieldPath(def.Field); err != nil {
+		return VectorIndexDefinition{}, err
+	}
+	if def.Dimensions <= 0 {
+		return VectorIndexDefinition{}, errors.New("dimensions must be positive")
+	}
+	metric, err := normalizeVectorMetric(def.Metric)
+	if err != nil {
+		return VectorIndexDefinition{}, err
+	}
+	encoding, err := normalizeVectorIndexEncoding(def.Encoding)
+	if err != nil {
+		return VectorIndexDefinition{}, err
+	}
+	def.Metric = metric
+	def.Encoding = encoding
+	if def.M <= 0 {
+		def.M = defaultVectorIndexM
+	}
+	if def.EfConstruction <= 0 {
+		def.EfConstruction = defaultVectorIndexEfConstruction
+	}
+	if def.EfConstruction < def.M {
+		def.EfConstruction = def.M
+	}
+	if def.EfSearch <= 0 {
+		def.EfSearch = defaultVectorIndexEfSearch
+	}
+	return def, nil
+}
+
 func (m CollectionMeta) copy() *CollectionMeta {
 	return &CollectionMeta{
-		Name:    m.Name,
-		Options: copyCollectionOptions(m.Options),
-		Indexes: append([]IndexDefinition(nil), m.Indexes...),
+		Name:          m.Name,
+		Options:       copyCollectionOptions(m.Options),
+		Indexes:       append([]IndexDefinition(nil), m.Indexes...),
+		VectorIndexes: append([]VectorIndexDefinition(nil), m.VectorIndexes...),
 	}
 }
 
@@ -18321,11 +18732,16 @@ func sameCollectionMeta(a, b CollectionMeta) bool {
 }
 
 func collectionMetaValuesEqual(a, b CollectionMeta) bool {
-	if a.Name != b.Name || !collectionOptionsEqual(a.Options, b.Options) || len(a.Indexes) != len(b.Indexes) {
+	if a.Name != b.Name || !collectionOptionsEqual(a.Options, b.Options) || len(a.Indexes) != len(b.Indexes) || len(a.VectorIndexes) != len(b.VectorIndexes) {
 		return false
 	}
 	for i := range a.Indexes {
 		if a.Indexes[i] != b.Indexes[i] {
+			return false
+		}
+	}
+	for i := range a.VectorIndexes {
+		if a.VectorIndexes[i] != b.VectorIndexes[i] {
 			return false
 		}
 	}
@@ -18341,14 +18757,45 @@ func collectionMetaHasSecondaryUniqueIndex(meta CollectionMeta) bool {
 	return false
 }
 
+func addVectorIndexToCollectionMeta(meta CollectionMeta, def VectorIndexDefinition) (CollectionMeta, VectorIndexDefinition, error) {
+	if _, ok := findIndex(meta.Indexes, def.Name); ok {
+		return CollectionMeta{}, VectorIndexDefinition{}, fmt.Errorf("collections: duplicate index %q", def.Name)
+	}
+	if _, ok := findVectorIndex(meta.VectorIndexes, def.Name); ok {
+		return CollectionMeta{}, VectorIndexDefinition{}, fmt.Errorf("collections: duplicate index %q", def.Name)
+	}
+	candidate := CollectionMeta{
+		Name:          meta.Name,
+		Options:       meta.Options,
+		Indexes:       append([]IndexDefinition(nil), meta.Indexes...),
+		VectorIndexes: append(append([]VectorIndexDefinition(nil), meta.VectorIndexes...), def),
+	}
+	normalized, err := normalizeCollectionMeta(candidate)
+	if err != nil {
+		return CollectionMeta{}, VectorIndexDefinition{}, err
+	}
+	normalizedDef, ok := findVectorIndex(normalized.VectorIndexes, def.Name)
+	if !ok && def.Name == "" {
+		normalizedDef, ok = findVectorIndex(normalized.VectorIndexes, vectorIndexDefaultName(def.Field))
+	}
+	if !ok {
+		return CollectionMeta{}, VectorIndexDefinition{}, fmt.Errorf("collections: normalized vector index %q not found", def.Name)
+	}
+	return normalized, normalizedDef, nil
+}
+
 func addIndexToCollectionMeta(meta CollectionMeta, def IndexDefinition) (CollectionMeta, IndexDefinition, error) {
 	if _, ok := findIndex(meta.Indexes, def.Name); ok {
 		return CollectionMeta{}, IndexDefinition{}, fmt.Errorf("collections: duplicate index %q", def.Name)
 	}
+	if _, ok := findVectorIndex(meta.VectorIndexes, def.Name); ok {
+		return CollectionMeta{}, IndexDefinition{}, fmt.Errorf("collections: duplicate index %q", def.Name)
+	}
 	candidate := CollectionMeta{
-		Name:    meta.Name,
-		Options: meta.Options,
-		Indexes: append(append([]IndexDefinition(nil), meta.Indexes...), def),
+		Name:          meta.Name,
+		Options:       meta.Options,
+		Indexes:       append(append([]IndexDefinition(nil), meta.Indexes...), def),
+		VectorIndexes: append([]VectorIndexDefinition(nil), meta.VectorIndexes...),
 	}
 	normalized, err := normalizeCollectionMeta(candidate)
 	if err != nil {
@@ -18434,6 +18881,15 @@ func findIndex(indexes []IndexDefinition, name string) (IndexDefinition, bool) {
 	return IndexDefinition{}, false
 }
 
+func findVectorIndex(indexes []VectorIndexDefinition, name string) (VectorIndexDefinition, bool) {
+	for _, idx := range indexes {
+		if idx.Name == name {
+			return idx, true
+		}
+	}
+	return VectorIndexDefinition{}, false
+}
+
 func collectionRootNames(meta CollectionMeta) []string {
 	out := []string{collectionPrimaryRootName(meta.Name)}
 	if normalizedDocumentFormat(meta.Options.DocumentFormat) == DocumentFormatTemplateV1 {
@@ -18448,7 +18904,49 @@ func collectionRootNames(meta CollectionMeta) []string {
 	for _, idx := range meta.Indexes {
 		out = append(out, collectionSecondaryRootName(meta.Name, idx.Name))
 	}
+	for _, idx := range meta.VectorIndexes {
+		out = append(out, collectionVectorIndexRootName(meta.Name, idx.Name))
+	}
 	return out
+}
+
+// Command-WAL row mutations clear declared vector roots in the same primary
+// publish boundary. The follow-up vector-maintenance command publishes a fresh
+// root; a crash between the two leaves a missing vector root instead of a stale
+// ready ANN graph.
+func collectionCommandWALVectorRootInvalidations(meta CollectionMeta, catalog *collectionCatalog, baseRootIDs map[string]uint64) []string {
+	if len(meta.VectorIndexes) == 0 {
+		return nil
+	}
+	rootNames := make([]string, 0, len(meta.VectorIndexes))
+	for _, idx := range meta.VectorIndexes {
+		rootName := collectionVectorIndexRootName(meta.Name, idx.Name)
+		if _, exists := baseRootIDs[rootName]; exists {
+			continue
+		}
+		var baseRoot uint64
+		if catalog != nil {
+			baseRoot = catalog.rootID(rootName)
+		}
+		baseRootIDs[rootName] = baseRoot
+		rootNames = append(rootNames, rootName)
+	}
+	return rootNames
+}
+
+func appendClearedCollectionRoots(rootNames []string, rootIDs []uint64, clearedRootNames []string) ([]string, []uint64) {
+	if len(clearedRootNames) == 0 {
+		return rootNames, rootIDs
+	}
+	combinedNames := make([]string, 0, len(rootNames)+len(clearedRootNames))
+	combinedNames = append(combinedNames, rootNames...)
+	combinedIDs := make([]uint64, 0, len(rootIDs)+len(clearedRootNames))
+	combinedIDs = append(combinedIDs, rootIDs...)
+	for _, rootName := range clearedRootNames {
+		combinedNames = append(combinedNames, rootName)
+		combinedIDs = append(combinedIDs, 0)
+	}
+	return combinedNames, combinedIDs
 }
 
 func collectionPrimaryRootName(collection string) string {
@@ -18469,6 +18967,10 @@ func collectionColumnManifestRootName(collection string) string {
 
 func collectionSecondaryRootName(collection, indexName string) string {
 	return collection + "/index/" + indexName
+}
+
+func collectionVectorIndexRootName(collection, indexName string) string {
+	return collection + "/vector-index/" + indexName
 }
 
 func systemCollectionMetaKey(collection string) string {

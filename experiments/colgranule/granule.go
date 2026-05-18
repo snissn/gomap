@@ -5,13 +5,25 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sync"
 	"time"
 
 	"github.com/golang/snappy"
 	"github.com/pierrec/lz4/v4"
+	"github.com/snissn/compress/zstd"
 )
 
 const DefaultRowsPerGranule = 8192
+
+var (
+	sharedZSTDEncoderOnce sync.Once
+	sharedZSTDEncoder     *zstd.Encoder
+	sharedZSTDEncoderErr  error
+
+	sharedZSTDDecoderOnce sync.Once
+	sharedZSTDDecoder     *zstd.Decoder
+	sharedZSTDDecoderErr  error
+)
 
 type Encoding uint8
 
@@ -22,6 +34,8 @@ const (
 	EncodingNullableInt64
 	EncodingBoolBitpackRLE
 	EncodingLowCardinalityUint32
+	EncodingRawFloat32Vector
+	EncodingRawUint32AdjacencyList
 )
 
 func (e Encoding) String() string {
@@ -38,6 +52,10 @@ func (e Encoding) String() string {
 		return "bool_bitpack_rle"
 	case EncodingLowCardinalityUint32:
 		return "low_cardinality_uint32"
+	case EncodingRawFloat32Vector:
+		return "raw_float32_vector"
+	case EncodingRawUint32AdjacencyList:
+		return "raw_uint32_adjacency_list"
 	default:
 		return fmt.Sprintf("encoding_%d", e)
 	}
@@ -165,13 +183,16 @@ func (b *GranuleBuilder) BuildInt64(values []int64) (EncodedGranule, error) {
 }
 
 type GranuleReader struct {
-	raw      []byte
-	values   []int64
-	stored64 []int64
-	bools    []bool
-	nulls    []bool
-	defaults []bool
-	codes    []uint32
+	raw         []byte
+	values      []int64
+	stored64    []int64
+	bools       []bool
+	nulls       []bool
+	defaults    []bool
+	codes       []uint32
+	vectors32   []float32
+	listOffsets []uint32
+	listValues  []uint32
 }
 
 func (r *GranuleReader) DecodeInt64(g EncodedGranule) ([]int64, error) {
@@ -594,9 +615,41 @@ func admitCompressionInto(dst []byte, raw []byte, encoding Encoding, compression
 		report.CompressionKept = true
 		report.StoredBytes = len(out)
 		return CompressionSelection{Payload: out, Actual: CompressionLZ4, Scratch: out, Report: report}, nil
+	case CompressionZSTD:
+		enc, err := columnGranuleSharedZSTDEncoder()
+		if err != nil {
+			return CompressionSelection{}, err
+		}
+		start := time.Now()
+		out := enc.EncodeAll(raw, dst[:0])
+		report.CompressionNanos = time.Since(start).Nanoseconds()
+		report.CompressionAttempted = true
+		if len(out) >= len(raw) {
+			report.ActualCompression = CompressionNone
+			report.CompressionFallbackReason = "not_smaller"
+			report.StoredBytes = len(raw)
+			return CompressionSelection{Payload: raw, Actual: CompressionNone, Scratch: out[:0], Report: report}, nil
+		}
+		report.ActualCompression = CompressionZSTD
+		report.CompressionKept = true
+		report.StoredBytes = len(out)
+		return CompressionSelection{Payload: out, Actual: CompressionZSTD, Scratch: out, Report: report}, nil
 	default:
 		return CompressionSelection{}, fmt.Errorf("colgranule: unsupported compression %d", compression)
 	}
+}
+
+func columnGranuleSharedZSTDEncoder() (*zstd.Encoder, error) {
+	sharedZSTDEncoderOnce.Do(func() {
+		// EncodeAll is concurrency-safe; keep the heavy encoder out of per-block
+		// admission so zstd build/open metrics measure compression work.
+		sharedZSTDEncoder, sharedZSTDEncoderErr = zstd.NewWriter(nil,
+			zstd.WithEncoderLevel(zstd.SpeedFastest),
+			zstd.WithEncoderCRC(false),
+			zstd.WithEncoderConcurrency(1),
+		)
+	})
+	return sharedZSTDEncoder, sharedZSTDEncoderErr
 }
 
 func compressPayload(raw []byte, encoding Encoding, compression Compression) (CompressionSelection, error) {
@@ -662,9 +715,43 @@ func (r *GranuleReader) decompressPayload(g EncodedGranule) ([]byte, error) {
 			return nil, fmt.Errorf("colgranule: lz4 decoded length=%d want=%d", n, g.RawBytes)
 		}
 		return out, nil
+	case CompressionZSTD:
+		dec, err := columnGranuleSharedZSTDDecoder()
+		if err != nil {
+			return nil, err
+		}
+		if cap(r.raw) < g.RawBytes {
+			r.raw = make([]byte, 0, g.RawBytes)
+		} else {
+			// WithDecodeAllCapLimit(true) uses cap(dst)-len(dst) as the
+			// output ceiling, so keep capacity pinned to the expected raw size.
+			r.raw = r.raw[:0:g.RawBytes]
+		}
+		out, err := dec.DecodeAll(g.Payload, r.raw)
+		if err != nil {
+			return nil, err
+		}
+		if len(out) != g.RawBytes {
+			return nil, fmt.Errorf("colgranule: zstd decoded length=%d want=%d", len(out), g.RawBytes)
+		}
+		r.raw = out
+		return out, nil
 	default:
 		return nil, fmt.Errorf("colgranule: unsupported compression %d", g.Compression)
 	}
+}
+
+func columnGranuleSharedZSTDDecoder() (*zstd.Decoder, error) {
+	sharedZSTDDecoderOnce.Do(func() {
+		// DecodeAll is concurrency-safe; the reader keeps destination buffers
+		// local while the shared decoder avoids per-payload setup cost.
+		sharedZSTDDecoder, sharedZSTDDecoderErr = zstd.NewReader(
+			nil,
+			zstd.WithDecoderConcurrency(1),
+			zstd.WithDecodeAllCapLimit(true),
+		)
+	})
+	return sharedZSTDDecoder, sharedZSTDDecoderErr
 }
 
 func validateGranule(g EncodedGranule) error {
