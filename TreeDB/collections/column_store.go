@@ -26,6 +26,7 @@ type ColumnStoreValueType string
 const (
 	ColumnStoreValueBool          ColumnStoreValueType = "bool"
 	ColumnStoreValueInt64         ColumnStoreValueType = "int64"
+	ColumnStoreValueFloat32       ColumnStoreValueType = "float32"
 	ColumnStoreValueDouble        ColumnStoreValueType = "double"
 	ColumnStoreValueString        ColumnStoreValueType = "string"
 	ColumnStoreValueFloat32Vector ColumnStoreValueType = "float32_vector"
@@ -486,7 +487,7 @@ func validateColumnStoreConfig(collection string, cfg ColumnStoreConfig) error {
 
 func normalizeColumnStoreValueType(valueType ColumnStoreValueType) (ColumnStoreValueType, error) {
 	switch valueType {
-	case ColumnStoreValueBool, ColumnStoreValueInt64, ColumnStoreValueDouble, ColumnStoreValueString, ColumnStoreValueFloat32Vector, ColumnStoreValueAdjacencyList:
+	case ColumnStoreValueBool, ColumnStoreValueInt64, ColumnStoreValueFloat32, ColumnStoreValueDouble, ColumnStoreValueString, ColumnStoreValueFloat32Vector, ColumnStoreValueAdjacencyList:
 		return valueType, nil
 	case "":
 		return "", errors.New("value_type is required")
@@ -501,7 +502,7 @@ func columnStoreValueTypeSupportsDictionary(valueType ColumnStoreValueType) bool
 
 func columnStoreValueTypeSupportsSort(valueType ColumnStoreValueType) bool {
 	switch valueType {
-	case ColumnStoreValueBool, ColumnStoreValueInt64, ColumnStoreValueDouble, ColumnStoreValueString:
+	case ColumnStoreValueBool, ColumnStoreValueInt64, ColumnStoreValueFloat32, ColumnStoreValueDouble, ColumnStoreValueString:
 		return true
 	default:
 		return false
@@ -513,7 +514,7 @@ func columnStoreValueTypeSupportsAggregate(valueType ColumnStoreValueType, kind 
 		return true
 	}
 	switch valueType {
-	case ColumnStoreValueBool, ColumnStoreValueInt64, ColumnStoreValueDouble, ColumnStoreValueString:
+	case ColumnStoreValueBool, ColumnStoreValueInt64, ColumnStoreValueFloat32, ColumnStoreValueDouble, ColumnStoreValueString:
 		return true
 	default:
 		return false
