@@ -176,13 +176,13 @@ func (g *ColumnVectorDynamicGraph) ApplyBatch(mutations []ColumnVectorDynamicMut
 	}
 
 	start := time.Now()
-	appendRows, appendIDBytes, appendTombstones, appendTombstoneIDBytes := columnVectorDynamicMutationAppendCapacity(mutations, g.baseDocIndex, current.overlay)
-	nextOverlay := current.overlay.clone(current.overlayGeneration+1, appendRows, appendIDBytes, appendTombstones, appendTombstoneIDBytes)
+	appendCapacity, err := columnVectorDynamicValidateMutationAppendCapacity(mutations, g.baseDocIndex, current.overlay, current.base.Dims())
+	if err != nil {
+		return stats, err
+	}
+	nextOverlay := current.overlay.clone(current.overlayGeneration+1, appendCapacity)
 	inserted, updated, deleted := 0, 0, 0
 	for mutationIndex, mutation := range mutations {
-		if len(mutation.DocumentID) == 0 {
-			return stats, fmt.Errorf("collections: dynamic mutation %d has empty document ID", mutationIndex)
-		}
 		switch mutation.Kind {
 		case ColumnVectorDynamicMutationInsert:
 			if err := g.applyInsert(nextOverlay, mutation.DocumentID, mutation.Vector); err != nil {
@@ -393,6 +393,13 @@ type ColumnVectorDynamicOverlaySnapshot struct {
 	tombstoneDocSet map[string]struct{}
 }
 
+type columnVectorDynamicOverlayAppendCapacity struct {
+	rows             int
+	idBytes          int
+	tombstones       int
+	tombstoneIDBytes int
+}
+
 func newColumnVectorDynamicOverlaySnapshot(dims int) *ColumnVectorDynamicOverlaySnapshot {
 	return &ColumnVectorDynamicOverlaySnapshot{
 		dims:            dims,
@@ -402,21 +409,21 @@ func newColumnVectorDynamicOverlaySnapshot(dims int) *ColumnVectorDynamicOverlay
 	}
 }
 
-func (o *ColumnVectorDynamicOverlaySnapshot) clone(generation uint64, appendRows int, appendIDBytes int, appendTombstones int, appendTombstoneIDBytes int) *ColumnVectorDynamicOverlaySnapshot {
-	appendValues := columnVectorDynamicOverlayVectorValueCapacity(appendRows, o.dims)
-	liveDocCapacity := columnVectorDynamicSliceCapacity(len(o.liveDocIndex), appendRows)
-	tombstoneSetCapacity := columnVectorDynamicSliceCapacity(max(len(o.tombstoneDocSet), len(o.tombstoneDocIDs)), appendTombstones)
+func (o *ColumnVectorDynamicOverlaySnapshot) clone(generation uint64, appendCapacity columnVectorDynamicOverlayAppendCapacity) *ColumnVectorDynamicOverlaySnapshot {
+	appendValues := columnVectorDynamicOverlayVectorValueCapacity(appendCapacity.rows, o.dims)
+	liveDocCapacity := columnVectorDynamicSliceCapacity(len(o.liveDocIndex), appendCapacity.rows)
+	tombstoneSetCapacity := columnVectorDynamicSliceCapacity(max(len(o.tombstoneDocSet), len(o.tombstoneDocIDs)), appendCapacity.tombstones)
 	next := &ColumnVectorDynamicOverlaySnapshot{
 		generation:      generation,
 		dims:            o.dims,
 		vectors:         cloneFloat32SliceWithExtraCapacity(o.vectors, appendValues),
-		invNorms:        cloneFloat32SliceWithExtraCapacity(o.invNorms, appendRows),
-		idArena:         cloneByteSliceWithExtraCapacity(o.idArena, appendIDBytes),
-		idOffsets:       cloneUint32SliceWithExtraCapacity(o.idOffsets, appendRows),
-		live:            cloneBoolSliceWithExtraCapacity(o.live, appendRows),
+		invNorms:        cloneFloat32SliceWithExtraCapacity(o.invNorms, appendCapacity.rows),
+		idArena:         cloneByteSliceWithExtraCapacity(o.idArena, appendCapacity.idBytes),
+		idOffsets:       cloneUint32SliceWithExtraCapacity(o.idOffsets, appendCapacity.rows),
+		live:            cloneBoolSliceWithExtraCapacity(o.live, appendCapacity.rows),
 		liveRows:        o.liveRows,
-		tombstoneArena:  make([]byte, 0, appendTombstoneIDBytes),
-		tombstoneDocIDs: cloneByteSlicesWithExtraCapacity(o.tombstoneDocIDs, appendTombstones),
+		tombstoneArena:  make([]byte, 0, appendCapacity.tombstoneIDBytes),
+		tombstoneDocIDs: cloneByteSlicesWithExtraCapacity(o.tombstoneDocIDs, appendCapacity.tombstones),
 		liveDocIndex:    make(map[string]int, liveDocCapacity),
 		tombstoneDocSet: make(map[string]struct{}, tombstoneSetCapacity),
 	}
@@ -435,22 +442,194 @@ func (o *ColumnVectorDynamicOverlaySnapshot) clone(generation uint64, appendRows
 	return next
 }
 
-func columnVectorDynamicMutationAppendCapacity(mutations []ColumnVectorDynamicMutation, baseDocIndex map[string]int, overlay *ColumnVectorDynamicOverlaySnapshot) (rows int, idBytes int, tombstones int, tombstoneIDBytes int) {
-	for _, mutation := range mutations {
-		switch mutation.Kind {
-		case ColumnVectorDynamicMutationInsert, ColumnVectorDynamicMutationUpdate:
-			rows++
-			idBytes += len(mutation.DocumentID)
+type columnVectorDynamicMutationValidationState struct {
+	baseDocIndex       map[string]int
+	overlay            *ColumnVectorDynamicOverlaySnapshot
+	overlayLiveSmall   [8]columnVectorDynamicOverlayLiveChange
+	overlayLive        []columnVectorDynamicOverlayLiveChange
+	overlayLiveMap     map[string]bool
+	baseTombstoneSmall [8]string
+	baseTombstones     []string
+	baseTombstoneMap   map[string]struct{}
+}
+
+type columnVectorDynamicOverlayLiveChange struct {
+	key  string
+	live bool
+}
+
+func columnVectorDynamicValidateMutationAppendCapacity(mutations []ColumnVectorDynamicMutation, baseDocIndex map[string]int, overlay *ColumnVectorDynamicOverlaySnapshot, dims int) (columnVectorDynamicOverlayAppendCapacity, error) {
+	var appendCapacity columnVectorDynamicOverlayAppendCapacity
+	state := columnVectorDynamicMutationValidationState{
+		baseDocIndex: baseDocIndex,
+		overlay:      overlay,
+	}
+	state.overlayLive = state.overlayLiveSmall[:0]
+	state.baseTombstones = state.baseTombstoneSmall[:0]
+	for mutationIndex, mutation := range mutations {
+		if len(mutation.DocumentID) == 0 {
+			return appendCapacity, fmt.Errorf("collections: dynamic mutation %d has empty document ID", mutationIndex)
 		}
+		key := string(mutation.DocumentID)
 		switch mutation.Kind {
-		case ColumnVectorDynamicMutationUpdate, ColumnVectorDynamicMutationDelete:
-			if _, baseFound := baseDocIndex[string(mutation.DocumentID)]; baseFound && !overlay.documentTombstonedWriter(mutation.DocumentID) {
-				tombstones++
-				tombstoneIDBytes += len(mutation.DocumentID)
+		case ColumnVectorDynamicMutationInsert:
+			if err := columnVectorDynamicValidateMutationVector("insert", mutationIndex, mutation.Vector, dims); err != nil {
+				return appendCapacity, err
+			}
+			if state.documentLiveInOverlay(mutation.DocumentID, key) {
+				return appendCapacity, fmt.Errorf("collections: dynamic insert mutation %d: document %q already exists in overlay", mutationIndex, mutation.DocumentID)
+			}
+			if state.documentLiveInBase(mutation.DocumentID, key) {
+				return appendCapacity, fmt.Errorf("collections: dynamic insert mutation %d: document %q already exists in base", mutationIndex, mutation.DocumentID)
+			}
+			state.setOverlayLive(key, true)
+			appendCapacity.rows++
+			appendCapacity.idBytes += len(mutation.DocumentID)
+		case ColumnVectorDynamicMutationUpdate:
+			if err := columnVectorDynamicValidateMutationVector("update", mutationIndex, mutation.Vector, dims); err != nil {
+				return appendCapacity, err
+			}
+			overlayFound := state.documentLiveInOverlay(mutation.DocumentID, key)
+			if overlayFound {
+				state.setOverlayLive(key, false)
+			}
+			baseLive := state.documentLiveInBase(mutation.DocumentID, key)
+			if !overlayFound && !baseLive {
+				return appendCapacity, fmt.Errorf("collections: dynamic update mutation %d: document %q does not exist", mutationIndex, mutation.DocumentID)
+			}
+			if baseLive && state.setBaseTombstoned(key) {
+				appendCapacity.tombstones++
+				appendCapacity.tombstoneIDBytes += len(mutation.DocumentID)
+			}
+			state.setOverlayLive(key, true)
+			appendCapacity.rows++
+			appendCapacity.idBytes += len(mutation.DocumentID)
+		case ColumnVectorDynamicMutationDelete:
+			overlayFound := state.documentLiveInOverlay(mutation.DocumentID, key)
+			if overlayFound {
+				state.setOverlayLive(key, false)
+			}
+			baseLive := state.documentLiveInBase(mutation.DocumentID, key)
+			if !overlayFound && !baseLive {
+				return appendCapacity, fmt.Errorf("collections: dynamic delete mutation %d: document %q does not exist", mutationIndex, mutation.DocumentID)
+			}
+			if baseLive && state.setBaseTombstoned(key) {
+				appendCapacity.tombstones++
+				appendCapacity.tombstoneIDBytes += len(mutation.DocumentID)
+			}
+		default:
+			return appendCapacity, fmt.Errorf("collections: dynamic mutation %d has unsupported kind %d", mutationIndex, mutation.Kind)
+		}
+	}
+	if uint64(len(overlay.idArena))+uint64(appendCapacity.idBytes) > columnVectorGraphMaxUint32 {
+		return appendCapacity, errors.New("collections: dynamic overlay document ID arena exceeds uint32 offsets")
+	}
+	return appendCapacity, nil
+}
+
+func columnVectorDynamicValidateMutationVector(kind string, mutationIndex int, vector []float32, dims int) error {
+	if len(vector) != dims {
+		return fmt.Errorf("collections: dynamic %s mutation %d: vector has dimension %d, want %d", kind, mutationIndex, len(vector), dims)
+	}
+	normSquared, badDim, badValue := columnVectorGraphNormSquared(vector)
+	if badDim >= 0 {
+		return fmt.Errorf("collections: dynamic %s mutation %d: vector dim %d is not finite: %g", kind, mutationIndex, badDim, badValue)
+	}
+	if _, err := validateColumnVectorGraphQueryInvNorm(normSquared); err != nil {
+		return fmt.Errorf("collections: dynamic %s mutation %d: %w", kind, mutationIndex, err)
+	}
+	return nil
+}
+
+func (s *columnVectorDynamicMutationValidationState) documentLiveInOverlay(documentID []byte, key string) bool {
+	if s.overlayLiveMap != nil {
+		if live, found := s.overlayLiveMap[key]; found {
+			return live
+		}
+	} else {
+		for i := range s.overlayLive {
+			change := s.overlayLive[i]
+			if change.key == key {
+				return change.live
 			}
 		}
 	}
-	return rows, idBytes, tombstones, tombstoneIDBytes
+	return s.overlay.HasLiveDocument(documentID)
+}
+
+func (s *columnVectorDynamicMutationValidationState) documentLiveInBase(documentID []byte, key string) bool {
+	if _, found := s.baseDocIndex[key]; !found {
+		return false
+	}
+	if s.overlay.documentTombstonedWriter(documentID) {
+		return false
+	}
+	if s.baseDocumentTombstoned(key) {
+		return false
+	}
+	return true
+}
+
+func (s *columnVectorDynamicMutationValidationState) setOverlayLive(key string, live bool) {
+	if s.overlayLiveMap != nil {
+		s.overlayLiveMap[key] = live
+		return
+	}
+	for i := range s.overlayLive {
+		if s.overlayLive[i].key == key {
+			s.overlayLive[i].live = live
+			return
+		}
+	}
+	if len(s.overlayLive) < cap(s.overlayLive) {
+		s.overlayLive = append(s.overlayLive, columnVectorDynamicOverlayLiveChange{key: key, live: live})
+		return
+	}
+	s.overlayLiveMap = make(map[string]bool, len(s.overlayLive)+1)
+	for _, change := range s.overlayLive {
+		s.overlayLiveMap[change.key] = change.live
+	}
+	s.overlayLive = nil
+	s.overlayLiveMap[key] = live
+}
+
+func (s *columnVectorDynamicMutationValidationState) setBaseTombstoned(key string) bool {
+	if s.baseTombstoneMap != nil {
+		if _, found := s.baseTombstoneMap[key]; found {
+			return false
+		}
+		s.baseTombstoneMap[key] = struct{}{}
+		return true
+	}
+	for _, tombstone := range s.baseTombstones {
+		if tombstone == key {
+			return false
+		}
+	}
+	if len(s.baseTombstones) < cap(s.baseTombstones) {
+		s.baseTombstones = append(s.baseTombstones, key)
+		return true
+	}
+	s.baseTombstoneMap = make(map[string]struct{}, len(s.baseTombstones)+1)
+	for _, tombstone := range s.baseTombstones {
+		s.baseTombstoneMap[tombstone] = struct{}{}
+	}
+	s.baseTombstones = nil
+	s.baseTombstoneMap[key] = struct{}{}
+	return true
+}
+
+func (s *columnVectorDynamicMutationValidationState) baseDocumentTombstoned(key string) bool {
+	if s.baseTombstoneMap != nil {
+		_, found := s.baseTombstoneMap[key]
+		return found
+	}
+	for _, tombstone := range s.baseTombstones {
+		if tombstone == key {
+			return true
+		}
+	}
+	return false
 }
 
 func columnVectorDynamicOverlayVectorValueCapacity(rows int, dims int) int {
