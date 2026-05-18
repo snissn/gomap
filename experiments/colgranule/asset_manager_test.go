@@ -280,6 +280,20 @@ func TestColumnAssetManagerSyncPublishClosureRejectsPreparedAssetMismatch(t *tes
 	if got := store.syncCalls.Load(); got != 0 {
 		t.Fatalf("sync calls=%d want 0 after rejected closure substitution", got)
 	}
+
+	literal := ColumnAssetPublishClosure{
+		PreparedAssets: []ColumnPreparedAsset{{Ref: refA, GenerationID: 7, PublishID: 11, Reason: "publish staged"}},
+		RequiredAssets: 1,
+		RequiredBytes:  int(refA.Length),
+		FlushRequired:  true,
+		SyncRequired:   true,
+	}
+	if _, err := manager.SyncPublishClosure(literal); err == nil || !strings.Contains(err.Error(), "not prepared by this manager") {
+		t.Fatalf("SyncPublishClosure literal err=%v, want not prepared by this manager", err)
+	}
+	if got := store.syncCalls.Load(); got != 0 {
+		t.Fatalf("sync calls=%d want 0 after rejected literal closure", got)
+	}
 }
 
 func TestColumnAssetManagerPublishSucceededRequiresSyncedClosure(t *testing.T) {
@@ -301,7 +315,7 @@ func TestColumnAssetManagerPublishSucceededRequiresSyncedClosure(t *testing.T) {
 	if err := manager.MarkPublishFailed([]ColumnPreparedAsset{prepared}, "root publish failed"); err != nil {
 		t.Fatalf("MarkPublishFailed: %v", err)
 	}
-	if err := manager.MarkPublishSucceeded(ColumnAssetSyncedPublishClosure{}, "root published"); err == nil {
+	if err := manager.MarkPublishSucceeded(ColumnAssetSyncedPublishClosure{}); err == nil {
 		t.Fatal("MarkPublishSucceeded accepted an unsealed publish closure")
 	}
 	closure, err := manager.PreparePublishClosure([]ColumnPreparedAsset{prepared})
@@ -316,16 +330,80 @@ func TestColumnAssetManagerPublishSucceededRequiresSyncedClosure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewColumnAssetManager other: %v", err)
 	}
-	if err := otherManager.MarkPublishSucceeded(synced, "root published"); err == nil {
+	if err := otherManager.MarkPublishSucceeded(synced); err == nil {
 		t.Fatal("MarkPublishSucceeded accepted a synced closure from another manager")
 	}
-	if err := manager.MarkPublishSucceeded(synced, "root published"); err != nil {
+	if err := manager.MarkPublishSucceeded(synced); err != nil {
 		t.Fatalf("MarkPublishSucceeded: %v", err)
 	}
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 	if len(manager.quarantine) != 0 || len(manager.zombies) != 0 || len(manager.rewriteDebt) != 0 {
 		t.Fatalf("manager state quarantine=%d zombies=%d rewrite=%d want all cleared", len(manager.quarantine), len(manager.zombies), len(manager.rewriteDebt))
+	}
+}
+
+func TestColumnAssetManagerPublishSucceededConsumesSyncedClosure(t *testing.T) {
+	store := NewMemoryColumnAssetStore()
+	manager, err := NewColumnAssetManager(store)
+	if err != nil {
+		t.Fatalf("NewColumnAssetManager: %v", err)
+	}
+	ref, err := manager.Put(ColumnAssetKindTCS1PartImage, make([]byte, tcs1HeaderBytes+16))
+	if err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	prepared := ColumnPreparedAsset{Ref: ref, GenerationID: 7, PublishID: 11, Reason: "publish staged"}
+	if err := manager.MarkPublishFailed([]ColumnPreparedAsset{prepared}, "root publish failed"); err != nil {
+		t.Fatalf("MarkPublishFailed: %v", err)
+	}
+	closure, err := manager.PreparePublishClosure([]ColumnPreparedAsset{prepared})
+	if err != nil {
+		t.Fatalf("PreparePublishClosure: %v", err)
+	}
+	synced, err := manager.SyncPublishClosure(closure)
+	if err != nil {
+		t.Fatalf("SyncPublishClosure: %v", err)
+	}
+	if err := manager.MarkPublishSucceeded(synced); err != nil {
+		t.Fatalf("MarkPublishSucceeded: %v", err)
+	}
+	if err := manager.MarkPublishSucceeded(synced); err == nil || !strings.Contains(err.Error(), "already consumed") {
+		t.Fatalf("second MarkPublishSucceeded err=%v, want already consumed", err)
+	}
+}
+
+func TestColumnAssetManagerPublishFailureInvalidatesOlderSyncedClosure(t *testing.T) {
+	store := NewMemoryColumnAssetStore()
+	manager, err := NewColumnAssetManager(store)
+	if err != nil {
+		t.Fatalf("NewColumnAssetManager: %v", err)
+	}
+	ref, err := manager.Put(ColumnAssetKindTCS1PartImage, make([]byte, tcs1HeaderBytes+16))
+	if err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	prepared := ColumnPreparedAsset{Ref: ref, GenerationID: 7, PublishID: 11, Reason: "publish staged"}
+	closure, err := manager.PreparePublishClosure([]ColumnPreparedAsset{prepared})
+	if err != nil {
+		t.Fatalf("PreparePublishClosure: %v", err)
+	}
+	synced, err := manager.SyncPublishClosure(closure)
+	if err != nil {
+		t.Fatalf("SyncPublishClosure: %v", err)
+	}
+	if err := manager.MarkPublishFailed([]ColumnPreparedAsset{prepared}, "root publish failed"); err != nil {
+		t.Fatalf("MarkPublishFailed: %v", err)
+	}
+	if err := manager.MarkPublishSucceeded(synced); err == nil || !strings.Contains(err.Error(), "predates a later publish failure") {
+		t.Fatalf("MarkPublishSucceeded after failure err=%v, want stale synced closure rejection", err)
+	}
+	manager.mu.Lock()
+	gotReason, quarantined := manager.quarantine[ref]
+	gotFailedReason, publishFailed := manager.publishFailed[ref]
+	manager.mu.Unlock()
+	if !quarantined || gotReason != "root publish failed" || !publishFailed || gotFailedReason != "root publish failed" {
+		t.Fatalf("manager state quarantine=(%q,%v) publishFailed=(%q,%v), want root publish failed retained", gotReason, quarantined, gotFailedReason, publishFailed)
 	}
 }
 
@@ -356,7 +434,7 @@ func TestColumnAssetManagerPublishSucceededPreservesUnrelatedQuarantine(t *testi
 	if err != nil {
 		t.Fatalf("SyncPublishClosure: %v", err)
 	}
-	if err := manager.MarkPublishSucceeded(synced, "root published"); err != nil {
+	if err := manager.MarkPublishSucceeded(synced); err != nil {
 		t.Fatalf("MarkPublishSucceeded: %v", err)
 	}
 	manager.mu.Lock()
@@ -430,7 +508,7 @@ func TestColumnAssetManagerPublishSucceededPreservesQuarantineAfterPublishFailur
 	if err != nil {
 		t.Fatalf("SyncPublishClosure: %v", err)
 	}
-	if err := manager.MarkPublishSucceeded(synced, "root published"); err != nil {
+	if err := manager.MarkPublishSucceeded(synced); err != nil {
 		t.Fatalf("MarkPublishSucceeded: %v", err)
 	}
 	manager.mu.Lock()
@@ -473,7 +551,7 @@ func TestColumnAssetManagerPublishSucceededPreservesSameReasonQuarantineAfterPub
 	if err != nil {
 		t.Fatalf("SyncPublishClosure: %v", err)
 	}
-	if err := manager.MarkPublishSucceeded(synced, "root published"); err != nil {
+	if err := manager.MarkPublishSucceeded(synced); err != nil {
 		t.Fatalf("MarkPublishSucceeded: %v", err)
 	}
 	manager.mu.Lock()
@@ -524,6 +602,32 @@ func TestColumnAssetManagerPreparedPublishFailureQuarantinesAssets(t *testing.T)
 	reclaim := manager.PlanReclamation(plan)
 	if len(reclaim.Entries) != 1 || !reclaim.Entries[0].Quarantined || reclaim.ReadyToDeleteBytes != 0 {
 		t.Fatalf("reclaim=%+v want quarantined and not ready", reclaim)
+	}
+}
+
+func TestColumnAssetManagerPublishFailurePreservesFirstReason(t *testing.T) {
+	store := NewMemoryColumnAssetStore()
+	manager, err := NewColumnAssetManager(store)
+	if err != nil {
+		t.Fatalf("NewColumnAssetManager: %v", err)
+	}
+	ref, err := manager.Put(ColumnAssetKindTCS1PartImage, make([]byte, tcs1HeaderBytes+16))
+	if err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	prepared := ColumnPreparedAsset{Ref: ref, GenerationID: 7, PublishID: 11, Reason: "publish staged"}
+	if err := manager.MarkPublishFailed([]ColumnPreparedAsset{prepared}, "first failure"); err != nil {
+		t.Fatalf("MarkPublishFailed first: %v", err)
+	}
+	if err := manager.MarkPublishFailed([]ColumnPreparedAsset{prepared}, "retry failure"); err != nil {
+		t.Fatalf("MarkPublishFailed retry: %v", err)
+	}
+	manager.mu.Lock()
+	gotReason := manager.quarantine[ref]
+	gotFailedReason := manager.publishFailed[ref]
+	manager.mu.Unlock()
+	if gotReason != "first failure" || gotFailedReason != "first failure" {
+		t.Fatalf("quarantine/publish failure reasons=(%q,%q) want first failure preserved", gotReason, gotFailedReason)
 	}
 }
 
