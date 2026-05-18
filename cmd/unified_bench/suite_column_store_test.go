@@ -543,6 +543,26 @@ func TestColumnStoreSuiteRuntimeDeltaSkipsEmptyOutputM11A(t *testing.T) {
 	}
 }
 
+func TestColumnStoreSuiteArtifactsOmitMissingRuntimeDeltaPathsM11A(t *testing.T) {
+	dir := t.TempDir()
+	blockDeltaPath := filepath.Join(dir, "block_delta.pprof")
+	mutexDeltaPath := filepath.Join(dir, "mutex_delta.pprof")
+	if err := os.WriteFile(blockDeltaPath, []byte("delta"), 0o644); err != nil {
+		t.Fatalf("write block delta: %v", err)
+	}
+
+	paths := columnStoreSuitePruneMissingRuntimeDeltaArtifacts(columnStoreArtifactPaths{
+		BlockDeltaProfile: blockDeltaPath,
+		MutexDeltaProfile: mutexDeltaPath,
+	})
+	if paths.BlockDeltaProfile != blockDeltaPath {
+		t.Fatalf("block delta path=%q want %q", paths.BlockDeltaProfile, blockDeltaPath)
+	}
+	if paths.MutexDeltaProfile != "" {
+		t.Fatalf("missing mutex delta path should be omitted, got %q", paths.MutexDeltaProfile)
+	}
+}
+
 func TestColumnStoreSuiteProfiledQueriesReturnHardErrorsSeparatelyM11A(t *testing.T) {
 	collection, events, rawHashes := newColumnStoreSuiteTestCollectionM11A(t, 4, 2)
 	queries, parity, parityErr, err := runColumnStoreSuiteQueriesProfiled(BenchConfig{}, collection, len(events)+1, rawHashes, columnStorePathRowStoreBaseline)

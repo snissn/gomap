@@ -420,6 +420,7 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 	run := columnStoreBenchRun(baseCfg, profile, dataDir, report, db.Stats(), checkpointDuration)
 	if strings.TrimSpace(opts.ProfileDir) != "" {
 		report.Artifacts = columnStoreArtifactPathsForProfileDir(opts.ProfileDir, baseCfg)
+		report.Artifacts = columnStoreSuitePruneMissingRuntimeDeltaArtifacts(report.Artifacts)
 		md = renderColumnStoreSuiteMarkdown(report)
 		if err := writeColumnStoreSuiteArtifacts(opts.ProfileDir, opts.ExecutionPath, report, md, run); err != nil {
 			return "", err
@@ -1354,6 +1355,24 @@ func columnStoreBenchRun(baseCfg BenchConfig, profile, dataDir string, report co
 	}
 }
 
+func columnStoreSuitePruneMissingRuntimeDeltaArtifacts(paths columnStoreArtifactPaths) columnStoreArtifactPaths {
+	paths.BlockDeltaProfile = columnStoreExistingOptionalArtifactPath(paths.BlockDeltaProfile)
+	paths.MutexDeltaProfile = columnStoreExistingOptionalArtifactPath(paths.MutexDeltaProfile)
+	return paths
+}
+
+func columnStoreExistingOptionalArtifactPath(path string) string {
+	if strings.TrimSpace(path) == "" {
+		return ""
+	}
+	if _, err := os.Stat(path); err == nil {
+		return path
+	} else if errors.Is(err, os.ErrNotExist) {
+		return ""
+	}
+	return path
+}
+
 func writeColumnStoreSuiteArtifacts(dir, executionPath string, report columnStoreSuiteReport, md string, run BenchRun) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("column_store: create profile dir: %w", err)
@@ -1362,17 +1381,27 @@ func writeColumnStoreSuiteArtifacts(dir, executionPath string, report columnStor
 	if err != nil {
 		return fmt.Errorf("column_store: marshal report: %w", err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "column_store_results.json"), js, 0o644); err != nil {
+	jsonPath := columnStoreArtifactPathOrFallback(report.Artifacts.ColumnJSON, dir, "column_store_results.json")
+	if err := os.WriteFile(jsonPath, js, 0o644); err != nil {
 		return fmt.Errorf("column_store: write json: %w", err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "column_store_results.md"), []byte(md), 0o644); err != nil {
+	markdownPath := columnStoreArtifactPathOrFallback(report.Artifacts.ColumnMarkdown, dir, "column_store_results.md")
+	if err := os.WriteFile(markdownPath, []byte(md), 0o644); err != nil {
 		return fmt.Errorf("column_store: write markdown: %w", err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "column_store_results.html"), []byte(renderColumnStoreSuiteHTML(report)), 0o644); err != nil {
+	htmlPath := columnStoreArtifactPathOrFallback(report.Artifacts.ColumnHTML, dir, "column_store_results.html")
+	if err := os.WriteFile(htmlPath, []byte(renderColumnStoreSuiteHTML(report)), 0o644); err != nil {
 		return fmt.Errorf("column_store: write html: %w", err)
 	}
 	if err := writeBenchprofArtifacts(dir, strings.TrimSpace(executionPath), []BenchRun{run}); err != nil {
 		return fmt.Errorf("column_store: write benchprof artifacts: %w", err)
 	}
 	return nil
+}
+
+func columnStoreArtifactPathOrFallback(path, dir, filename string) string {
+	if strings.TrimSpace(path) != "" {
+		return path
+	}
+	return filepath.Join(dir, filename)
 }
