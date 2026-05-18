@@ -88,6 +88,21 @@ func TestColumnPublishPlanAllowsBenchmarkRelaxedProfileM10A(t *testing.T) {
 	}
 }
 
+func TestColumnPublishPlanUsesFixedWidthAssetBytesM10A(t *testing.T) {
+	asset := testColumnPublishPreparedAssetM10A()
+	asset.Bytes = 1 << 33
+	asset.Ref.Length = asset.Bytes
+	identity := ColumnManifestIdentity{Generation: 7, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0xfeedbeef}
+
+	plan, err := BuildColumnPublishPlan(testColumnPublishPlanInputM10A(identity, asset))
+	if err != nil {
+		t.Fatalf("BuildColumnPublishPlan large asset: %v", err)
+	}
+	if plan.RequiredAssetBytes != asset.Bytes || plan.Lifecycle.PublishedBytes != asset.Bytes || plan.Lifecycle.PreparedBytes != asset.Bytes {
+		t.Fatalf("large byte counts not preserved: plan=%+v asset=%+v", plan, asset)
+	}
+}
+
 func TestColumnPublishPlanBuildsDurabilityClosureM10A(t *testing.T) {
 	asset := testColumnPublishPreparedAssetM10A()
 	identity := ColumnManifestIdentity{Generation: 7, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0xfeedbeef}
@@ -390,6 +405,35 @@ func TestColumnPublishPlanSnapshotsPreparedAssetsForClosureValidationM10A(t *tes
 	}
 	if plan.Enabled {
 		t.Fatalf("mutated closure prepared asset returned enabled plan: %+v", plan)
+	}
+}
+
+func TestColumnPublishPlanCopiesClosurePreparedAssetsM10A(t *testing.T) {
+	asset := testColumnPublishPreparedAssetM10A()
+	identity := ColumnManifestIdentity{Generation: 7, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0xfeedbeef}
+	input := testColumnPublishPlanInputM10A(identity, asset)
+	var closureAssets []ColumnPreparedAsset
+	input.Hooks.ValidateClosure = func(in ColumnPublishClosureValidationInput) (ColumnPublishDurabilityClosure, error) {
+		closureAssets = in.Prepared.Assets
+		return ColumnPublishDurabilityClosure{
+			PreparedAssets: closureAssets,
+			RequiredAssets: len(closureAssets),
+			RequiredBytes:  sumColumnPreparedAssetBytes(closureAssets),
+			FlushRequired:  true,
+			SyncRequired:   true,
+		}, nil
+	}
+
+	plan, err := BuildColumnPublishPlan(input)
+	if err != nil {
+		t.Fatalf("BuildColumnPublishPlan: %v", err)
+	}
+	if len(plan.PreparedAssets) != 1 {
+		t.Fatalf("prepared assets=%d want 1", len(plan.PreparedAssets))
+	}
+	closureAssets[0].Ref.Offset += int64(asset.Bytes)
+	if plan.PreparedAssets[0] != asset {
+		t.Fatalf("plan prepared asset changed after closure-owned slice mutation: got %+v want %+v", plan.PreparedAssets[0], asset)
 	}
 }
 
