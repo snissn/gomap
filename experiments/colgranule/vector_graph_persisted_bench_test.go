@@ -192,8 +192,7 @@ func benchmarkColumnVectorGraphPersistedSearchParallel(b *testing.B, fixture *co
 	b.RunParallel(func(pb *testing.PB) {
 		workerID := int(atomic.AddUint64(&nextWorker, 1)) - 1
 		if workerID >= len(scratches) {
-			b.Errorf("RunParallel spawned worker %d, but only %d scratches were prewarmed", workerID+1, len(scratches))
-			return
+			panic(fmt.Errorf("RunParallel spawned worker %d, but only %d scratches were prewarmed", workerID+1, len(scratches)))
 		}
 		scratch := scratches[workerID]
 		var localSink int64
