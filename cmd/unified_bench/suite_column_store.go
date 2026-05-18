@@ -116,15 +116,15 @@ type columnStoreParity struct {
 }
 
 type columnStoreByteAccounting struct {
-	SourceDocumentBytes       int64    `json:"source_document_bytes"`
-	RetainedPayloadBytes      int64    `json:"retained_payload_bytes"`
-	ColumnAssetBytes          int64    `json:"column_asset_bytes"`
-	ManifestControlBytes      int64    `json:"manifest_control_bytes"`
-	ManifestControlMissing    []string `json:"manifest_control_missing,omitempty"`
-	CommandWALBytes           int64    `json:"command_wal_bytes"`
-	TotalReconstructableBytes int64    `json:"total_reconstructable_bytes"`
-	DBTotalBytes              int64    `json:"db_total_bytes"`
-	DBTotalFiles              int      `json:"db_total_files"`
+	SourceDocumentBytes             int64    `json:"source_document_bytes"`
+	RetainedPayloadBytes            int64    `json:"retained_payload_bytes"`
+	ColumnAssetBytes                int64    `json:"column_asset_bytes"`
+	ManifestControlBytes            int64    `json:"manifest_control_bytes"`
+	ManifestControlMissing          []string `json:"manifest_control_missing,omitempty"`
+	CommandWALBytesBeforeCheckpoint int64    `json:"command_wal_bytes_before_checkpoint"`
+	TotalReconstructableBytes       int64    `json:"total_reconstructable_bytes"`
+	DBTotalBytes                    int64    `json:"db_total_bytes"`
+	DBTotalFiles                    int      `json:"db_total_files"`
 }
 
 type columnStoreManifestMetric struct {
@@ -368,15 +368,15 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 		Queries:                queries,
 		Parity:                 parity,
 		ByteAccounting: columnStoreByteAccounting{
-			SourceDocumentBytes:       sourceBytes,
-			RetainedPayloadBytes:      sourceBytes,
-			ColumnAssetBytes:          0,
-			ManifestControlBytes:      manifestControlBytes,
-			ManifestControlMissing:    manifestControlMissing,
-			CommandWALBytes:           commandWALBytesBeforeCheckpoint,
-			TotalReconstructableBytes: sourceBytes + manifestControlBytes,
-			DBTotalBytes:              totalBytes,
-			DBTotalFiles:              totalFiles,
+			SourceDocumentBytes:             sourceBytes,
+			RetainedPayloadBytes:            sourceBytes,
+			ColumnAssetBytes:                0,
+			ManifestControlBytes:            manifestControlBytes,
+			ManifestControlMissing:          manifestControlMissing,
+			CommandWALBytesBeforeCheckpoint: commandWALBytesBeforeCheckpoint,
+			TotalReconstructableBytes:       sourceBytes + manifestControlBytes,
+			DBTotalBytes:                    totalBytes,
+			DBTotalFiles:                    totalFiles,
 		},
 		Manifest: columnStoreManifestMetric{
 			ActiveGeneration:                manifestIdentity.ManifestGeneration,
@@ -531,8 +531,9 @@ func buildColumnStoreSyntheticFixture(rows int, seed int64) ([]columnStoreFixtur
 		kind := fmt.Sprintf("kind_%02d", i%8)
 		did := fmt.Sprintf("d%06d", i%1024)
 		id := fmt.Sprintf("e%09d", i)
+		payloadID := uint32(uint64(i) * uint64(2654435761))
 		doc := []byte(fmt.Sprintf(`{"time_us":%d,"kind":"%s","did":"%s","payload":"p%08x","group":%d}`,
-			timeUS, kind, did, uint32(i*2654435761), i%32))
+			timeUS, kind, did, payloadID, i%32))
 		out[i] = columnStoreFixtureEvent{ID: id, TimeUS: timeUS, Kind: kind, Did: did, Doc: doc}
 		bytesTotal += int64(len(doc))
 	}
@@ -1107,7 +1108,7 @@ func renderColumnStoreSuiteMarkdown(report columnStoreSuiteReport) string {
 	if len(report.ByteAccounting.ManifestControlMissing) != 0 {
 		sb.WriteString(fmt.Sprintf("- manifest_control_missing: `%s`\n", strings.Join(report.ByteAccounting.ManifestControlMissing, "`, `")))
 	}
-	sb.WriteString(fmt.Sprintf("- command_wal_bytes: %d\n", report.ByteAccounting.CommandWALBytes))
+	sb.WriteString(fmt.Sprintf("- command_wal_bytes_before_checkpoint: %d\n", report.ByteAccounting.CommandWALBytesBeforeCheckpoint))
 	sb.WriteString(fmt.Sprintf("- total_reconstructable_bytes: %d\n", report.ByteAccounting.TotalReconstructableBytes))
 	sb.WriteString(fmt.Sprintf("- db_total_bytes: %d across %d files\n\n", report.ByteAccounting.DBTotalBytes, report.ByteAccounting.DBTotalFiles))
 
