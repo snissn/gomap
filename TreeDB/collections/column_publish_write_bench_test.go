@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -114,6 +115,7 @@ func BenchmarkColumnStoreCommandWALReplayM10C(b *testing.B) {
 			b.SetBytes(int64(encodedPayloadBytesPerReplay))
 			b.StopTimer()
 			b.ResetTimer()
+			b.StopTimer()
 			for i := 0; i < b.N; i++ {
 				workDir := filepath.Join(workRoot, fmt.Sprintf("replay-work-%06d", i))
 				copyColumnStoreCommandWALReplayBenchmarkDirM10C(b, templateDir, workDir)
@@ -416,7 +418,7 @@ func copyColumnStoreCommandWALReplayBenchmarkDirM10C(tb testing.TB, src, dst str
 	}
 }
 
-func copyColumnStoreCommandWALReplayBenchmarkFileM10C(src, dst string, mode fs.FileMode) error {
+func copyColumnStoreCommandWALReplayBenchmarkFileM10C(src, dst string, mode fs.FileMode) (err error) {
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return err
 	}
@@ -429,11 +431,13 @@ func copyColumnStoreCommandWALReplayBenchmarkFileM10C(src, dst string, mode fs.F
 	if err != nil {
 		return err
 	}
-	if _, err := io.Copy(out, in); err != nil {
-		_ = out.Close()
-		return err
-	}
-	return out.Close()
+	defer func() {
+		if closeErr := out.Close(); closeErr != nil {
+			err = errors.Join(err, closeErr)
+		}
+	}()
+	_, err = io.Copy(out, in)
+	return err
 }
 
 func assertColumnManifestStateNoReopenM10C(tb testing.TB, col *Collection, generation, appliedLSN uint64) {

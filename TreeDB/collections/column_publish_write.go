@@ -59,7 +59,7 @@ func (c *Collection) requireColumnStoreCommandWAL(meta CollectionMeta, commandWA
 	if c.commandWALActive(commandWALIntent) {
 		return nil
 	}
-	return fmt.Errorf("%w: column-store writes require command WAL", backenddb.ErrCommandWALRejected)
+	return fmt.Errorf("%w: column-store writes require command WAL collection=%q", backenddb.ErrCommandWALRejected, meta.Name)
 }
 
 func (c *Collection) publishRootDeltaGroupMaybeColumn(ordered []backenddb.OrderedRootDeltaPublishInput, input columnWritePublishInput) (uint64, []uint64, CollectionMeta, []string, error) {
