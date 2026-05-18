@@ -541,16 +541,6 @@ func validateColumnManifestIdentityFor(label string, identity ColumnManifestIden
 	return nil
 }
 
-func normalizeColumnManifestIdentityDefaults(identity *ColumnManifestIdentity) {
-	if identity == nil {
-		return
-	}
-	normalizeColumnManifestIdentityFormat(identity)
-	if identity.Version == 0 {
-		identity.Version = columnManifestIdentityVersion
-	}
-}
-
 func normalizeColumnManifestIdentityFormat(identity *ColumnManifestIdentity) {
 	if identity == nil {
 		return
