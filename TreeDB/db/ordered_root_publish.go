@@ -3,7 +3,6 @@ package db
 import (
 	"bytes"
 	"errors"
-	"fmt"
 	"sort"
 	"sync"
 	"time"
@@ -20,6 +19,8 @@ import (
 )
 
 type orderedRootPublishPlan uint8
+
+var errCommandWALContextMissingFrame = errors.New("command wal context publish requires a command frame")
 
 const (
 	orderedRootPublishPlanColdBuild orderedRootPublishPlan = iota
@@ -1504,7 +1505,7 @@ func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBui
 		return 0, nil, errors.New("nil ordered root group command wal system delta builder")
 	}
 	if commandWALIntent == nil {
-		return 0, nil, fmt.Errorf("%w: command wal context publish requires a command frame", ErrCommandWALUnsupported)
+		return 0, nil, errCommandWALContextMissingFrame
 	}
 	if db == nil {
 		return 0, nil, ErrClosed
@@ -1580,7 +1581,7 @@ func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBui
 		return 0, nil, err
 	}
 	if lsn == 0 {
-		err = fmt.Errorf("%w: command wal context publish requires a command frame", ErrCommandWALUnsupported)
+		err = errCommandWALContextMissingFrame
 		return 0, nil, err
 	}
 	commandAppended = true
@@ -2071,7 +2072,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 		return 0, nil, errors.New("nil ordered root group command wal system delta builder")
 	}
 	if commandWALIntent == nil {
-		return 0, nil, fmt.Errorf("%w: command wal context publish requires a command frame", ErrCommandWALUnsupported)
+		return 0, nil, errCommandWALContextMissingFrame
 	}
 	if db == nil {
 		return 0, nil, ErrClosed
@@ -2142,7 +2143,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 		return 0, nil, err
 	}
 	if lsn == 0 {
-		err = fmt.Errorf("%w: command wal context publish requires a command frame", ErrCommandWALUnsupported)
+		err = errCommandWALContextMissingFrame
 		return 0, nil, err
 	}
 	commandAppended = true

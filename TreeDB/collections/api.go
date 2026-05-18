@@ -3098,6 +3098,9 @@ func (c *Collection) Insert(id, document []byte) ([]byte, error) {
 	if err := c.ensureWriteDomainOpen(); err != nil {
 		return nil, err
 	}
+	if err := c.requireColumnStoreCommandWAL(c.meta, nil); err != nil {
+		return nil, err
+	}
 	if len(c.meta.Indexes) == 0 && !c.db.CommandWALEnabled() {
 		if c.hasBufferedNoIndexBSONRootRuns() {
 			if err := c.withMutationLock(func() error {
@@ -8249,6 +8252,10 @@ func (c *Collection) insertBatchOnceWithLockState(
 	}
 	meta := catalog.meta
 	c.meta = meta
+	if err := c.requireColumnStoreCommandWAL(meta, commandWALIntent); err != nil {
+		closePlanningSnapshot()
+		return nil, err
+	}
 	plannerOptions, err := collectionPlannerOptionsForDB(c.db, meta)
 	if err != nil {
 		closePlanningSnapshot()
@@ -12132,6 +12139,16 @@ func (c *Collection) updateDocumentOnceApply(documentID []byte, update func(curr
 	preflight := func() error {
 		return c.validateMutationRootDescriptors(baseUserRoot, baseSystemRoot, baseCommitSeq)
 	}
+	var commandWALIntent *backenddb.CommandWALIntent
+	if columnStoreWriteEnabled(c.meta) && c.commandWALActive(nil) {
+		commandWALIntent, err = c.newCollectionUpdateCommandWALIntent([]commitlog.CollectionDocument{{
+			ID:       bytes.Clone(documentID),
+			Document: bytes.Clone(document),
+		}}, nil)
+		if err != nil {
+			return false, false, err
+		}
+	}
 	phaseStart = updateBatchStatsNow(detailedStats)
 	var newSystemRoot uint64
 	var rootIDs []uint64
@@ -12145,7 +12162,7 @@ func (c *Collection) updateDocumentOnceApply(documentID []byte, update func(curr
 			baseSystemRoot:   baseSystemRoot,
 			rootNames:        append([]string(nil), rootNames...),
 			baseRootIDs:      cloneUint64Map(baseRootIDs),
-			commandWALIntent: nil,
+			commandWALIntent: commandWALIntent,
 			operation:        ColumnPublishOperationUpdate,
 			rows:             1,
 		})
@@ -12983,6 +13000,9 @@ func (c *Collection) updateBatchOnce(items []updateBatchItem, mode updateBatchMo
 	var results []UpdateBatchResult
 	err = c.withMutationLock(func() error {
 		if !c.commandWALActive(commandWALIntent) {
+			if err := c.requireColumnStoreCommandWAL(plan.meta, commandWALIntent); err != nil {
+				return err
+			}
 			buffered, bufferErr := c.bufferUpdateBatchPlanLocked(plan)
 			if bufferErr != nil {
 				return bufferErr
