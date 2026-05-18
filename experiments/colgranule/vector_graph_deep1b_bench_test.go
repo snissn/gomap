@@ -17,7 +17,9 @@ import (
 	"testing"
 	"time"
 
+	axiomsimd "github.com/axiomhq/simd-go"
 	"github.com/golang/snappy"
+	kelindarsimd "github.com/kelindar/simd"
 	"github.com/pierrec/lz4/v4"
 	"github.com/snissn/compress/zstd"
 )
@@ -1365,6 +1367,171 @@ func BenchmarkColumnVectorGraphDeep1BGranuleNativeScore(b *testing.B) {
 				}
 			})
 		}
+	}
+}
+
+func BenchmarkColumnVectorGraphDeep1BGranuleNativeMicroKernels(b *testing.B) {
+	if os.Getenv("COLUMN_VECTOR_DEEP1B_NEIGHBORHOOD_SMOKE") != "1" {
+		b.Skip("set COLUMN_VECTOR_DEEP1B_NEIGHBORHOOD_SMOKE=1 to run the opt-in Deep1B granule-native micro-kernel benchmark")
+	}
+	const rows = 1_000_000
+	const topK = 10
+	data := columnVectorGraphDeep1BEnsureData(b, rows)
+	granuleRows := columnVectorGraphDeep1BEnvInt(b, "COLUMN_VECTOR_DEEP1B_NEIGHBORHOOD_ROWS", columnVectorGraphDeep1BBlockRows)
+	if granuleRows <= 0 {
+		b.Fatalf("COLUMN_VECTOR_DEEP1B_NEIGHBORHOOD_ROWS=%d must be positive", granuleRows)
+	}
+	if granuleRows > rows {
+		b.Fatalf("COLUMN_VECTOR_DEEP1B_NEIGHBORHOOD_ROWS=%d exceeds rows=%d", granuleRows, rows)
+	}
+	baseFile, err := os.Open(data.basePath)
+	if err != nil {
+		b.Fatalf("Open Deep1B base: %v", err)
+	}
+	defer baseFile.Close()
+
+	query := columnVectorGraphDeep1BReadQuery(b, data.queryPath, data.queryHeader, 0)
+	queryInvNorm := float32(columnVectorGraphDeep1BInvNorm(query))
+	nearest := columnVectorGraphDeep1BTopRowsByCosine(b, baseFile, data.baseHeader, rows, query, granuleRows)
+	nearestRankedRows := make([]int, len(nearest))
+	for i, neighbor := range nearest {
+		nearestRankedRows[i] = neighbor.row
+	}
+	vectors := columnVectorGraphDeep1BReadFbinRows(b, baseFile, data.baseHeader, nearestRankedRows)
+	invNorms := columnVectorGraphDeep1BInvNorms(vectors, columnVectorGraphDeep1BDims)
+
+	frameCodec := &columnVectorGraphDeep1BJZIPCodec{}
+	localVectors, centroid := frameCodec.householderCartesian(vectors, granuleRows, columnVectorGraphDeep1BDims)
+	localVectors = append([]float32(nil), localVectors...)
+	centroid = append([]float32(nil), centroid...)
+	localQuery := make([]float32, columnVectorGraphDeep1BDims)
+	frameCodec.applyHouseholder(query, localQuery, centroid, 1, columnVectorGraphDeep1BDims)
+
+	dimsList := columnVectorGraphDeep1BEnvIntList(b, "COLUMN_VECTOR_DEEP1B_GRANULE_NATIVE_DIMS", []int{columnVectorGraphDeep1BDims})
+	for _, dimsUsed := range dimsList {
+		dimsUsed := dimsUsed
+		if dimsUsed <= 0 || dimsUsed > columnVectorGraphDeep1BDims {
+			b.Fatalf("COLUMN_VECTOR_DEEP1B_GRANULE_NATIVE_DIMS includes %d outside [1,%d]", dimsUsed, columnVectorGraphDeep1BDims)
+		}
+		var int8Layout columnVectorGraphDeep1BGranuleNativeLayout
+		for _, layout := range columnVectorGraphDeep1BGranuleNativeLayouts(localVectors, granuleRows, columnVectorGraphDeep1BDims, dimsUsed) {
+			if layout.kind == columnVectorGraphDeep1BGranuleNativeInt8Columns {
+				int8Layout = layout
+				break
+			}
+		}
+		if int8Layout.raw == nil {
+			b.Fatalf("missing int8 granule-native layout for dims=%d", dimsUsed)
+		}
+
+		accum := make([]float32, granuleRows)
+		topRows := make([]int, topK)
+		topScores := make([]float32, topK)
+		columnVectorGraphDeep1BAccumulateGranuleNativeInt8(localQuery, int8Layout, int8Layout.raw, accum)
+		bestScore, bestRow := columnVectorGraphDeep1BFinalizeGranuleNativeScores(accum, queryInvNorm, invNorms, nil, nil, nil)
+		benchSink += int64(bestRow) + int64(math.Float32bits(bestScore))
+
+		int8Values := columnVectorGraphDeep1BBytesToInt8(int8Layout.raw)
+		int8QueryPayload := columnVectorGraphDeep1BRepeatInt8QueryCoefficients(localQuery, int8Layout.scales, granuleRows, dimsUsed)
+		int8Tmp := make([]int8, len(int8Values))
+		rowMajorInt16 := columnVectorGraphDeep1BGranuleNativeInt8ColumnBytesToRowMajorInt16(int8Layout.raw, granuleRows, dimsUsed)
+		queryInt16, queryInt16Scale := columnVectorGraphDeep1BQuantizeGranuleNativeQueryCoeffInt16(localQuery, int8Layout.scales, dimsUsed)
+		rowMajorFP32 := columnVectorGraphDeep1BLocalResidualRowMajorFP32(localVectors, granuleRows, columnVectorGraphDeep1BDims, dimsUsed)
+
+		b.Run(fmt.Sprintf("top%d", dimsUsed), func(b *testing.B) {
+			b.Run("current_fused_score_best", func(b *testing.B) {
+				b.ReportAllocs()
+				b.SetBytes(int64(int8Layout.valueBytes))
+				for i := 0; i < b.N; i++ {
+					bestScore, bestRow = columnVectorGraphDeep1BScoreGranuleNativeLayout(localQuery, queryInvNorm, invNorms, int8Layout, int8Layout.raw, accum, nil, nil, nil)
+				}
+				benchSink += int64(bestRow) + int64(math.Float32bits(bestScore))
+				columnVectorGraphDeep1BReportGranuleNativeMicroMetrics(b, granuleRows, dimsUsed, int8Layout.valueBytes, int8Layout.valueBytes)
+			})
+			b.Run("current_fused_score_top10", func(b *testing.B) {
+				b.ReportAllocs()
+				b.SetBytes(int64(int8Layout.valueBytes))
+				for i := 0; i < b.N; i++ {
+					bestScore, bestRow = columnVectorGraphDeep1BScoreGranuleNativeLayout(localQuery, queryInvNorm, invNorms, int8Layout, int8Layout.raw, accum, nil, topRows, topScores)
+				}
+				benchSink += int64(bestRow) + int64(math.Float32bits(bestScore))
+				columnVectorGraphDeep1BReportGranuleNativeMicroMetrics(b, granuleRows, dimsUsed, int8Layout.valueBytes, int8Layout.valueBytes)
+			})
+			b.Run("current_accumulate_only", func(b *testing.B) {
+				b.ReportAllocs()
+				b.SetBytes(int64(int8Layout.valueBytes))
+				for i := 0; i < b.N; i++ {
+					columnVectorGraphDeep1BAccumulateGranuleNativeInt8(localQuery, int8Layout, int8Layout.raw, accum)
+				}
+				benchSink += int64(math.Float32bits(accum[b.N%len(accum)]))
+				columnVectorGraphDeep1BReportGranuleNativeMicroMetrics(b, granuleRows, dimsUsed, int8Layout.valueBytes, int8Layout.valueBytes)
+			})
+			b.Run("current_finalize_best_only", func(b *testing.B) {
+				b.ReportAllocs()
+				b.SetBytes(int64(granuleRows * 8))
+				for i := 0; i < b.N; i++ {
+					bestScore, bestRow = columnVectorGraphDeep1BFinalizeGranuleNativeScores(accum, queryInvNorm, invNorms, nil, nil, nil)
+				}
+				benchSink += int64(bestRow) + int64(math.Float32bits(bestScore))
+				columnVectorGraphDeep1BReportGranuleNativeMicroMetrics(b, granuleRows, dimsUsed, int8Layout.valueBytes, granuleRows*8)
+			})
+			b.Run("current_finalize_top10_only", func(b *testing.B) {
+				b.ReportAllocs()
+				b.SetBytes(int64(granuleRows * 8))
+				for i := 0; i < b.N; i++ {
+					bestScore, bestRow = columnVectorGraphDeep1BFinalizeGranuleNativeScores(accum, queryInvNorm, invNorms, nil, topRows, topScores)
+				}
+				benchSink += int64(bestRow) + int64(math.Float32bits(bestScore))
+				columnVectorGraphDeep1BReportGranuleNativeMicroMetrics(b, granuleRows, dimsUsed, int8Layout.valueBytes, granuleRows*8)
+			})
+			b.Run("kelindar_sum_int8_columns", func(b *testing.B) {
+				var sum int64
+				b.ReportAllocs()
+				b.SetBytes(int64(len(int8Values)))
+				for i := 0; i < b.N; i++ {
+					for j := 0; j < dimsUsed; j++ {
+						sum += int64(kelindarsimd.SumInt8s(int8Values[j*granuleRows : (j+1)*granuleRows]))
+					}
+				}
+				benchSink += sum
+				columnVectorGraphDeep1BReportGranuleNativeMicroMetrics(b, granuleRows, dimsUsed, int8Layout.valueBytes, len(int8Values))
+			})
+			b.Run("kelindar_mul_int8_payload", func(b *testing.B) {
+				b.ReportAllocs()
+				b.SetBytes(int64(len(int8Values) * 3))
+				for i := 0; i < b.N; i++ {
+					kelindarsimd.MulInt8s(int8Tmp, int8Values, int8QueryPayload)
+				}
+				benchSink += int64(int8Tmp[b.N%len(int8Tmp)])
+				columnVectorGraphDeep1BReportGranuleNativeMicroMetrics(b, granuleRows, dimsUsed, int8Layout.valueBytes, len(int8Values)*3)
+			})
+			b.Run("axiomhq_dot_int16_row_major", func(b *testing.B) {
+				var dotSink int64
+				b.ReportAllocs()
+				b.SetBytes(int64(len(rowMajorInt16) * 2))
+				for i := 0; i < b.N; i++ {
+					for row := 0; row < granuleRows; row++ {
+						base := row * dimsUsed
+						dotSink += axiomsimd.DotProductInt16(queryInt16, rowMajorInt16[base:base+dimsUsed])
+					}
+				}
+				benchSink += dotSink
+				b.ReportMetric(float64(queryInt16Scale), "query_i16_scale")
+				columnVectorGraphDeep1BReportGranuleNativeMicroMetrics(b, granuleRows, dimsUsed, int8Layout.valueBytes, len(rowMajorInt16)*2)
+			})
+			b.Run("axiomhq_dot_fp32_row_major", func(b *testing.B) {
+				b.ReportAllocs()
+				b.SetBytes(int64(len(rowMajorFP32) * 4))
+				for i := 0; i < b.N; i++ {
+					for row := 0; row < granuleRows; row++ {
+						base := row * dimsUsed
+						accum[row] = localQuery[0] + axiomsimd.DotProductFloat32(localQuery[:dimsUsed], rowMajorFP32[base:base+dimsUsed])
+					}
+				}
+				benchSink += int64(math.Float32bits(accum[b.N%len(accum)]))
+				columnVectorGraphDeep1BReportGranuleNativeMicroMetrics(b, granuleRows, dimsUsed, int8Layout.valueBytes, len(rowMajorFP32)*4)
+			})
+		})
 	}
 }
 
@@ -3356,6 +3523,173 @@ func columnVectorGraphDeep1BScoreGranuleNativeLayout(query []float32, queryInvNo
 		return topScores[0], topRows[0]
 	}
 	return bestScore, bestRow
+}
+
+func columnVectorGraphDeep1BAccumulateGranuleNativeInt8(query []float32, layout columnVectorGraphDeep1BGranuleNativeLayout, raw []byte, accum []float32) {
+	rows := layout.rows
+	prefixDims := layout.prefixDims
+	if layout.kind != columnVectorGraphDeep1BGranuleNativeInt8Columns {
+		panic(fmt.Sprintf("Deep1B granule-native accumulate kind=%d want int8 columns", layout.kind))
+	}
+	if len(raw) != rows*prefixDims {
+		panic(fmt.Sprintf("Deep1B granule-native int8 raw bytes=%d want=%d", len(raw), rows*prefixDims))
+	}
+	if len(query) < prefixDims {
+		panic(fmt.Sprintf("Deep1B granule-native query dims=%d want at least %d", len(query), prefixDims))
+	}
+	if len(layout.scales) < prefixDims {
+		panic(fmt.Sprintf("Deep1B granule-native scales=%d want at least %d", len(layout.scales), prefixDims))
+	}
+	if len(accum) < rows {
+		panic(fmt.Sprintf("Deep1B granule-native accum rows=%d want at least %d", len(accum), rows))
+	}
+	accum = accum[:rows]
+	for row := range accum {
+		accum[row] = query[0]
+	}
+	for j := 0; j < prefixDims; j++ {
+		queryScale := query[j] * layout.scales[j]
+		colBase := j * rows
+		for row := 0; row < rows; row++ {
+			accum[row] += queryScale * float32(int8(raw[colBase+row]))
+		}
+	}
+}
+
+func columnVectorGraphDeep1BFinalizeGranuleNativeScores(accum []float32, queryInvNorm float32, invNorms []float32, scores []float32, topRows []int, topScores []float32) (float32, int) {
+	rows := len(accum)
+	if len(invNorms) < rows {
+		panic(fmt.Sprintf("Deep1B granule-native invNorms=%d want at least %d", len(invNorms), rows))
+	}
+	if scores != nil {
+		scores = scores[:rows]
+	}
+	useTopK := len(topRows) > 0 && len(topScores) > 0
+	if useTopK {
+		columnVectorGraphDeep1BResetTopK(topRows, topScores)
+	}
+	bestScore := float32(-math.MaxFloat32)
+	bestRow := -1
+	for row := 0; row < rows; row++ {
+		score := accum[row] * queryInvNorm * invNorms[row]
+		if scores != nil {
+			scores[row] = score
+		}
+		if useTopK {
+			columnVectorGraphDeep1BInsertTopK(row, score, topRows, topScores)
+			continue
+		}
+		if score > bestScore {
+			bestScore = score
+			bestRow = row
+		}
+	}
+	if useTopK {
+		return topScores[0], topRows[0]
+	}
+	return bestScore, bestRow
+}
+
+func columnVectorGraphDeep1BBytesToInt8(raw []byte) []int8 {
+	values := make([]int8, len(raw))
+	for i, value := range raw {
+		values[i] = int8(value)
+	}
+	return values
+}
+
+func columnVectorGraphDeep1BRepeatInt8QueryCoefficients(query []float32, scales []float32, rows int, prefixDims int) []int8 {
+	coeffs := make([]int8, rows*prefixDims)
+	var maxAbs float32
+	for j := 0; j < prefixDims; j++ {
+		absValue := float32(math.Abs(float64(query[j] * scales[j])))
+		if absValue > maxAbs {
+			maxAbs = absValue
+		}
+	}
+	if maxAbs == 0 {
+		return coeffs
+	}
+	scale := maxAbs / 127
+	for j := 0; j < prefixDims; j++ {
+		quantized := int(math.Round(float64((query[j] * scales[j]) / scale)))
+		if quantized < -127 {
+			quantized = -127
+		} else if quantized > 127 {
+			quantized = 127
+		}
+		for row := 0; row < rows; row++ {
+			coeffs[j*rows+row] = int8(quantized)
+		}
+	}
+	return coeffs
+}
+
+func columnVectorGraphDeep1BGranuleNativeInt8ColumnBytesToRowMajorInt16(raw []byte, rows int, prefixDims int) []int16 {
+	values := make([]int16, rows*prefixDims)
+	for j := 0; j < prefixDims; j++ {
+		colBase := j * rows
+		for row := 0; row < rows; row++ {
+			values[row*prefixDims+j] = int16(int8(raw[colBase+row]))
+		}
+	}
+	return values
+}
+
+func columnVectorGraphDeep1BQuantizeGranuleNativeQueryCoeffInt16(query []float32, scales []float32, prefixDims int) ([]int16, float32) {
+	values := make([]int16, prefixDims)
+	var maxAbs float32
+	for j := 0; j < prefixDims; j++ {
+		absValue := float32(math.Abs(float64(query[j] * scales[j])))
+		if absValue > maxAbs {
+			maxAbs = absValue
+		}
+	}
+	if maxAbs == 0 {
+		return values, 1
+	}
+	scale := maxAbs / 32767
+	for j := 0; j < prefixDims; j++ {
+		quantized := int(math.Round(float64((query[j] * scales[j]) / scale)))
+		if quantized < -32767 {
+			quantized = -32767
+		} else if quantized > 32767 {
+			quantized = 32767
+		}
+		values[j] = int16(quantized)
+	}
+	return values, scale
+}
+
+func columnVectorGraphDeep1BLocalResidualRowMajorFP32(localVectors []float32, rows int, dims int, prefixDims int) []float32 {
+	values := make([]float32, rows*prefixDims)
+	for row := 0; row < rows; row++ {
+		srcBase := row * dims
+		dstBase := row * prefixDims
+		for j := 0; j < prefixDims; j++ {
+			value := localVectors[srcBase+j]
+			if j == 0 {
+				value--
+			}
+			values[dstBase+j] = value
+		}
+	}
+	return values
+}
+
+func columnVectorGraphDeep1BReportGranuleNativeMicroMetrics(b *testing.B, rows int, dimsUsed int, nativeBytes int, scannedBytes int) {
+	b.Helper()
+	b.ReportMetric(float64(rows), "granule_rows")
+	b.ReportMetric(float64(dimsUsed), "dims_used")
+	b.ReportMetric(float64(nativeBytes)/float64(rows), "native_raw_B/entry")
+	b.ReportMetric(float64(scannedBytes)/float64(rows), "kernel_scan_B/entry")
+	if b.N > 0 {
+		nanosPerOp := float64(b.Elapsed().Nanoseconds()) / float64(b.N)
+		if nanosPerOp > 0 {
+			b.ReportMetric(nanosPerOp/1e6, "kernel_ms")
+			b.ReportMetric(float64(rows)/(nanosPerOp/1e9), "candidates/s")
+		}
+	}
 }
 
 func columnVectorGraphDeep1BFloat32ToFloat16Bits(value float32) uint16 {
