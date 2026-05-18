@@ -77,6 +77,8 @@ type ColumnVectorGraph struct {
 // NewColumnVectorGraphFromColumns validates column-store vector graph buffers
 // and returns a graph that borrows the vector/inv-norm/adjacency columns. Those
 // borrowed column buffers must remain immutable for the graph lifetime.
+// Self-loop neighbors are tolerated; search visited-epoch bookkeeping
+// deduplicates a row that re-encounters its own ordinal.
 func NewColumnVectorGraphFromColumns(columns ColumnVectorGraphColumns) (*ColumnVectorGraph, error) {
 	rows, err := validateColumnVectorGraphColumns(columns)
 	if err != nil {
@@ -691,13 +693,8 @@ func columnVectorGraphDotProductFloat64(left []float32, right []float32) float64
 }
 
 func columnVectorGraphCosineDistanceWide(query []float32, vector []float32, queryInvNorm float32, vectorInvNorm float32) float32 {
-	var cosine float64
-	queryScale := float64(queryInvNorm)
-	vectorScale := float64(vectorInvNorm)
-	for i := range query {
-		cosine += float64(query[i]) * queryScale * float64(vector[i]) * vectorScale
-	}
-	distance := 1 - cosine
+	dot := columnVectorGraphDotProductFloat64(query, vector)
+	distance := 1 - dot*float64(queryInvNorm)*float64(vectorInvNorm)
 	if math.IsNaN(distance) || math.IsInf(distance, 0) {
 		return float32(math.Inf(1))
 	}
