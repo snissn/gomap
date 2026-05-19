@@ -725,12 +725,13 @@ func (idx *VectorIndex) saveLegacySnapshot() (VectorIndexLoadStatus, error) {
 // with ExactFallbackReason set and no error, so callers can safely use exact
 // search as the correctness fallback.
 func (c *Collection) LoadVectorIndexSnapshot(opts VectorIndexOptions) (*VectorIndex, VectorIndexLoadStatus, error) {
+	if vectorIndexOptionsStrategy(opts) == VectorIndexStrategyColumnGraph {
+		_, status, err := c.LoadColumnGraphVectorIndexSnapshot(opts)
+		return nil, status, err
+	}
 	index, status, err := c.LoadNativeVectorIndexSnapshot(opts)
 	if err != nil {
 		return nil, status, err
-	}
-	if vectorIndexOptionsStrategy(opts) == VectorIndexStrategyColumnGraph {
-		return index, status, nil
 	}
 	if index != nil || status.Loaded || status.ExactFallbackReason != vectorIndexFallbackMissingVectorIndexMetadata {
 		return index, status, nil
@@ -740,7 +741,9 @@ func (c *Collection) LoadVectorIndexSnapshot(opts VectorIndexOptions) (*VectorIn
 
 // LoadNativeVectorIndexSnapshot loads a declared vector index from its TreeDB
 // collection root. Missing or invalid graph roots return a non-loaded status so
-// callers can safely fall back to exact search.
+// callers can safely fall back to exact search. Explicit column_graph indexes
+// are rejected with strategy_mismatch; use LoadColumnGraphVectorIndexSnapshot
+// or LoadVectorIndexSnapshot with Strategy: column_graph for that seam.
 func (c *Collection) LoadNativeVectorIndexSnapshot(opts VectorIndexOptions) (*VectorIndex, VectorIndexLoadStatus, error) {
 	status := VectorIndexLoadStatus{Strategy: VectorIndexStrategyNativeRuntime}
 	if c == nil {
@@ -768,8 +771,9 @@ func (c *Collection) LoadNativeVectorIndexSnapshot(opts VectorIndexOptions) (*Ve
 		return nil, status, nil
 	}
 	if vectorIndexDefinitionStrategy(def) == VectorIndexStrategyColumnGraph {
-		_, status, err = c.loadColumnGraphVectorIndexSnapshotFromCatalog(snap, catalog, def)
-		return nil, status, err
+		status.ExactFallbackReason = vectorIndexFallbackStrategyMismatch
+		status.RebuildNeeded = true
+		return nil, status, nil
 	}
 	if err := validateColumnStoreCatalogRoot(snap, catalog); err != nil {
 		return nil, status, err

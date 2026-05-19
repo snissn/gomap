@@ -60,6 +60,7 @@ column-graph availability:
 
 Current `column_graph` unavailable reasons include:
 
+- `column_graph_strategy_not_selected`
 - `physical_column_asset_support_missing`
 - `column_graph_manifest_root_missing`
 - `column_graph_manifest_root_mismatch`

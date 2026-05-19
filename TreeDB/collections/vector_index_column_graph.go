@@ -70,9 +70,9 @@ func (c *Collection) LoadColumnGraphVectorIndexSnapshot(opts VectorIndexOptions)
 }
 
 func (c *Collection) loadColumnGraphVectorIndexSnapshotFromCatalog(snap *backenddb.Snapshot, catalog *collectionCatalog, def VectorIndexDefinition) (*ColumnVectorGraph, VectorIndexLoadStatus, error) {
-	status := baseColumnGraphLoadStatus(catalog, def)
+	status := baseColumnGraphLoadStatus(catalog)
 	if vectorIndexDefinitionStrategy(def) != VectorIndexStrategyColumnGraph {
-		status = columnGraphUnavailableLoadStatus(vectorIndexFallbackColumnGraphPhysicalMissing)
+		status = columnGraphUnavailableLoadStatus(vectorIndexFallbackColumnGraphStrategyMissing)
 		status.RootName = collectionColumnManifestRootName(catalog.meta.Name)
 		status.RootID = catalog.rootID(status.RootName)
 		status.Epoch = status.RootID
@@ -95,7 +95,9 @@ func (c *Collection) loadColumnGraphVectorIndexSnapshotFromCatalog(snap *backend
 		setColumnGraphUnavailable(&status, vectorIndexFallbackColumnGraphManifestMissing)
 		return nil, status, nil
 	}
-	if err := validateColumnStoreCatalogRoot(snap, catalog); err != nil {
+	if validateColumnStoreCatalogRoot(snap, catalog) != nil {
+		// Report manifest/root mismatches as explicit status so operational
+		// callers can show rebuild-needed state instead of failing discovery.
 		setColumnGraphUnavailable(&status, vectorIndexFallbackColumnGraphManifestInvalid)
 		return nil, status, nil
 	}
@@ -128,7 +130,7 @@ func (c *Collection) loadColumnGraphVectorIndexSnapshotFromCatalog(snap *backend
 	return result.Graph, status, nil
 }
 
-func baseColumnGraphLoadStatus(catalog *collectionCatalog, def VectorIndexDefinition) VectorIndexLoadStatus {
+func baseColumnGraphLoadStatus(catalog *collectionCatalog) VectorIndexLoadStatus {
 	rootName := collectionColumnManifestRootName(catalog.meta.Name)
 	rootID := catalog.rootID(rootName)
 	return VectorIndexLoadStatus{
@@ -165,11 +167,16 @@ func mergeColumnGraphLoadStatus(status *VectorIndexLoadStatus, update VectorInde
 	if status == nil {
 		return
 	}
-	if update.ExactFallbackReason != "" {
-		setColumnGraphUnavailable(status, update.ExactFallbackReason)
+	reason := update.ColumnGraphUnavailableReason
+	if reason == "" {
+		reason = update.ExactFallbackReason
 	}
-	if update.ColumnGraphUnavailableReason != "" {
-		setColumnGraphUnavailable(status, update.ColumnGraphUnavailableReason)
+	if reason != "" {
+		setColumnGraphUnavailable(status, reason)
+		if update.BytesDisk != 0 {
+			status.BytesDisk = update.BytesDisk
+		}
+		return
 	}
 	if update.PhysicalColumnAssetsSupported {
 		status.PhysicalColumnAssetsSupported = true

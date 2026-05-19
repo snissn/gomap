@@ -50,6 +50,13 @@ func TestCollectionVectorIndexColumnGraphContractReportsPhysicalAssetsMissing(t 
 	if loadStatus.Strategy != VectorIndexStrategyColumnGraph || loadStatus.ExactFallbackReason != vectorIndexFallbackColumnGraphPhysicalMissing || loadStatus.ColumnGraphUnavailableReason != vectorIndexFallbackColumnGraphPhysicalMissing {
 		t.Fatalf("unexpected column_graph load status: %+v", loadStatus)
 	}
+	nativeLoaded, nativeStatus, err := col.LoadNativeVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		t.Fatalf("LoadNativeVectorIndexSnapshot: %v", err)
+	}
+	if nativeLoaded != nil || nativeStatus.Strategy != VectorIndexStrategyNativeRuntime || nativeStatus.ExactFallbackReason != vectorIndexFallbackStrategyMismatch {
+		t.Fatalf("native loader should reject column_graph definition, loaded=%v status=%+v", nativeLoaded != nil, nativeStatus)
+	}
 
 	rebuild, err := col.RebuildVectorIndex(def.Name)
 	if err != nil {
@@ -98,6 +105,58 @@ func TestCollectionVectorIndexColumnGraphReportsManifestRootMismatch(t *testing.
 	}
 	if status.RootID == 0 || status.ExactFallbackReason != vectorIndexFallbackColumnGraphManifestInvalid || status.ColumnGraphUnavailableReason != vectorIndexFallbackColumnGraphManifestInvalid {
 		t.Fatalf("unexpected mismatch status: %+v", status)
+	}
+}
+
+func TestCollectionVectorIndexColumnGraphOptionDoesNotLoadNativeIndex(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	def := VectorIndexDefinition{
+		Name:       "embedding",
+		Field:      "embedding",
+		Metric:     VectorMetricCosine,
+		Dimensions: 2,
+	}
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("a"), []byte("b")},
+		[][]byte{
+			[]byte(`{"embedding":[1,0]}`),
+			[]byte(`{"embedding":[0,1]}`),
+		},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if rebuild, err := col.RebuildVectorIndex(def.Name); err != nil || !rebuild.NativeRuntimeUsed || !rebuild.NativeRootLoaded {
+		t.Fatalf("native rebuild status=%+v err=%v", rebuild, err)
+	}
+
+	loaded, status, err := col.LoadVectorIndexSnapshot(VectorIndexOptions{
+		Name:       def.Name,
+		Field:      def.Field,
+		Metric:     def.Metric,
+		Dimensions: def.Dimensions,
+		Strategy:   VectorIndexStrategyColumnGraph,
+	})
+	if err != nil {
+		t.Fatalf("LoadVectorIndexSnapshot column_graph option: %v", err)
+	}
+	if loaded != nil {
+		t.Fatalf("column_graph option loaded native runtime")
+	}
+	if status.Strategy != VectorIndexStrategyColumnGraph || status.ExactFallbackReason != vectorIndexFallbackColumnGraphStrategyMissing || status.ColumnGraphUnavailableReason != vectorIndexFallbackColumnGraphStrategyMissing {
+		t.Fatalf("unexpected column_graph strategy-missing status: %+v", status)
 	}
 }
 

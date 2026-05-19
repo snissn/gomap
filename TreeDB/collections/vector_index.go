@@ -48,6 +48,8 @@ const (
 	vectorIndexFallbackInvalidEntry               = "invalid_entry"
 	vectorIndexFallbackMissingManifest            = "missing_manifest"
 	vectorIndexFallbackInvalidManifest            = "invalid_manifest"
+	vectorIndexFallbackStrategyMismatch           = "strategy_mismatch"
+	vectorIndexFallbackColumnGraphStrategyMissing = "column_graph_strategy_not_selected"
 	vectorIndexFallbackColumnGraphPhysicalMissing = "physical_column_asset_support_missing"
 	vectorIndexFallbackColumnGraphManifestMissing = "column_graph_manifest_root_missing"
 	vectorIndexFallbackColumnGraphManifestInvalid = "column_graph_manifest_root_mismatch"
