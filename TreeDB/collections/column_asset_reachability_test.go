@@ -452,6 +452,86 @@ func TestColumnAssetReachabilitySegmentFileIDRejectsNonCanonicalM15A(t *testing.
 	}
 }
 
+func TestColumnAssetReachabilityKnownSourcesHaveMasksM15B(t *testing.T) {
+	for _, source := range []ColumnAssetReachabilitySource{
+		ColumnAssetReachabilitySourceActiveManifest,
+		ColumnAssetReachabilitySourceRecoveryManifest,
+		ColumnAssetReachabilitySourceCandidate,
+		ColumnAssetReachabilitySourcePinnedSnapshot,
+		ColumnAssetReachabilitySourcePendingPublish,
+		ColumnAssetReachabilitySourcePreparedAsset,
+	} {
+		mask, ok := columnAssetReachabilitySourceBit(source)
+		if !ok || mask == 0 || mask == columnAssetReachabilitySourceUnknownMask {
+			t.Fatalf("source %q mask=%b ok=%t, want non-zero known mask", source, mask, ok)
+		}
+	}
+	mask, ok := columnAssetReachabilitySourceBit(ColumnAssetReachabilitySource("future_source"))
+	if ok || mask != columnAssetReachabilitySourceUnknownMask {
+		t.Fatalf("unknown source mask=%b ok=%t, want unknown mask and ok=false", mask, ok)
+	}
+}
+
+func TestColumnAssetReachabilityUnknownSourceFailsClosedM15B(t *testing.T) {
+	const namespaceName = "events/column-assets"
+	root := t.TempDir()
+	namespace, err := columnAssetManagerNamespaceForRoot(root, namespaceName)
+	if err != nil {
+		t.Fatalf("columnAssetManagerNamespaceForRoot: %v", err)
+	}
+	if err := ensureColumnAssetManagerNamespace(namespace); err != nil {
+		t.Fatalf("ensureColumnAssetManagerNamespace: %v", err)
+	}
+	payload := []byte("unknown-source-column-asset")
+	if err := os.WriteFile(filepath.Join(namespace.SegmentDir, columnAssetSegmentFileName(1)), payload, 0o600); err != nil {
+		t.Fatalf("WriteFile segment: %v", err)
+	}
+	ref := ColumnAssetRef{
+		Kind:       ColumnAssetKindTCS1PartImage,
+		Namespace:  namespaceName,
+		Generation: 1,
+		PartID:     1,
+		FileID:     1,
+		Length:     int64(len(payload)),
+		Checksum:   page.Checksum(payload),
+	}
+	input := columnAssetReachabilityInput{
+		rootDir:        root,
+		collection:     "events",
+		namespace:      namespaceName,
+		detailed:       true,
+		segmentDetails: true,
+		activeGen:      1,
+		recoveryGen:    1,
+	}
+	if !input.addRef(ref, ColumnAssetReachabilitySource("future_source")) {
+		t.Fatal("unknown source ref was dropped, want fail-closed retention")
+	}
+
+	plan, err := buildColumnAssetReachabilityPlan(context.Background(), input)
+	if err != nil {
+		t.Fatalf("buildColumnAssetReachabilityPlan: %v", err)
+	}
+	if plan.Complete {
+		t.Fatalf("plan marked complete with unknown source: %+v", plan)
+	}
+	if plan.Refs.Total != 1 || plan.Refs.Uncertain != 1 || plan.Refs.Protected != 0 || plan.Refs.Reclaimable != 0 {
+		t.Fatalf("ref stats=%+v want one uncertain unknown-source ref", plan.Refs)
+	}
+	if len(plan.Entries) != 1 || plan.Entries[0].Status != ColumnAssetReachabilityUncertain {
+		t.Fatalf("entries=%+v want one uncertain ref entry", plan.Entries)
+	}
+	if len(plan.Entries[0].Sources) != 1 || plan.Entries[0].Sources[0] != columnAssetReachabilitySourceUnknown {
+		t.Fatalf("entry sources=%v want unknown source marker", plan.Entries[0].Sources)
+	}
+	if plan.Segments.Unknown != 1 || plan.Segments.Protected != 0 || plan.Segments.Reclaimable != 0 {
+		t.Fatalf("segment stats=%+v want existing unknown-source segment retained as unknown", plan.Segments)
+	}
+	if len(plan.SegmentEntries) != 1 || plan.SegmentEntries[0].Status != ColumnAssetReachabilitySegmentUnknown {
+		t.Fatalf("segment entries=%+v want unknown segment entry", plan.SegmentEntries)
+	}
+}
+
 func TestColumnAssetReachabilityPlanMarksZeroByteUnknownSegmentIncompleteM15A(t *testing.T) {
 	const namespaceName = "events/column-assets"
 	root := t.TempDir()

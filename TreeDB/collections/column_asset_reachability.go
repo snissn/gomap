@@ -11,9 +11,11 @@ import (
 	"strings"
 )
 
-// ColumnAssetReachabilityOptions controls M15A protect-only reachability
-// planning. CandidateRefs are possible reclamation inputs supplied by a future
-// manager/catalog index; pending, prepared, and pinned refs are always retained.
+// ColumnAssetReachabilityOptions controls protect-only reachability planning.
+// CandidateRefs are possible reclamation inputs supplied by the typed column
+// asset manager/catalog index; pending, prepared, and pinned refs are always
+// retained. Detailed emits per-ref and per-segment entries. SegmentDetails
+// emits only per-segment entries and is implied by Detailed.
 type ColumnAssetReachabilityOptions struct {
 	Detailed       bool
 	SegmentDetails bool
@@ -50,6 +52,7 @@ const (
 	ColumnAssetReachabilitySourcePinnedSnapshot   ColumnAssetReachabilitySource = "pinned_snapshot"
 	ColumnAssetReachabilitySourcePendingPublish   ColumnAssetReachabilitySource = "pending_publish"
 	ColumnAssetReachabilitySourcePreparedAsset    ColumnAssetReachabilitySource = "prepared_asset"
+	columnAssetReachabilitySourceUnknown          ColumnAssetReachabilitySource = "unknown"
 )
 
 type ColumnAssetReachabilityPlan struct {
@@ -131,7 +134,7 @@ type columnAssetReachabilityRefBuilder struct {
 	sourceMask columnAssetReachabilitySourceMask
 }
 
-type columnAssetReachabilitySourceMask uint8
+type columnAssetReachabilitySourceMask uint32
 
 const (
 	columnAssetReachabilitySourceActiveManifestMask columnAssetReachabilitySourceMask = 1 << iota
@@ -140,6 +143,7 @@ const (
 	columnAssetReachabilitySourcePinnedSnapshotMask
 	columnAssetReachabilitySourcePendingPublishMask
 	columnAssetReachabilitySourcePreparedAssetMask
+	columnAssetReachabilitySourceUnknownMask
 )
 
 const columnAssetReachabilityProtectedSourceMask = columnAssetReachabilitySourceActiveManifestMask |
@@ -158,6 +162,7 @@ var columnAssetReachabilitySourceBits = [...]struct {
 	{ColumnAssetReachabilitySourcePinnedSnapshot, columnAssetReachabilitySourcePinnedSnapshotMask},
 	{ColumnAssetReachabilitySourcePendingPublish, columnAssetReachabilitySourcePendingPublishMask},
 	{ColumnAssetReachabilitySourcePreparedAsset, columnAssetReachabilitySourcePreparedAssetMask},
+	{columnAssetReachabilitySourceUnknown, columnAssetReachabilitySourceUnknownMask},
 }
 
 type columnAssetReachabilityRange struct {
@@ -290,7 +295,7 @@ func (in *columnAssetReachabilityInput) addRef(ref ColumnAssetRef, source Column
 	}
 	sourceMask, ok := columnAssetReachabilitySourceBit(source)
 	if !ok {
-		return false
+		sourceMask = columnAssetReachabilitySourceUnknownMask
 	}
 	mask := in.refs[ref]
 	if mask&sourceMask != 0 {
@@ -634,10 +639,13 @@ func columnAssetReachabilitySourceBit(source ColumnAssetReachabilitySource) (col
 			return entry.mask, true
 		}
 	}
-	return 0, false
+	return columnAssetReachabilitySourceUnknownMask, false
 }
 
 func columnAssetReachabilityStatusForSourceMask(mask columnAssetReachabilitySourceMask) ColumnAssetReachabilityStatus {
+	if mask&columnAssetReachabilitySourceUnknownMask != 0 {
+		return ColumnAssetReachabilityUncertain
+	}
 	if mask&columnAssetReachabilityProtectedSourceMask != 0 {
 		return ColumnAssetReachabilityProtected
 	}
@@ -701,10 +709,7 @@ func listColumnAssetReachabilitySegments(segmentDir string) ([]columnAssetReacha
 }
 
 func columnAssetReachabilitySegmentPath(segmentDir, name string) string {
-	if segmentDir == "" || strings.HasSuffix(segmentDir, string(os.PathSeparator)) {
-		return segmentDir + name
-	}
-	return segmentDir + string(os.PathSeparator) + name
+	return filepath.Join(segmentDir, name)
 }
 
 func columnAssetReachabilityRefCanContributeRange(ref ColumnAssetRef, namespace string) bool {
