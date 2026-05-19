@@ -474,7 +474,7 @@ func TestColumnStoreSupportMatrixRejectsNonJSONMutationsBeforeExecutionM12C(t *t
 	if deleted {
 		t.Fatal("DeleteDocument deleted=true, want rejected before delete")
 	}
-	deletedRows, err := col.DeleteBatch([][]byte{[]byte("e2")})
+	deletedRows, err := col.DeleteBatch([][]byte{[]byte("e2"), []byte("missing")})
 	assertColumnStoreCommandWALWriteRejectedM10B(t, err, "DeleteBatch")
 	if deletedRows != 0 {
 		t.Fatalf("DeleteBatch deleted=%d, want rejected before delete", deletedRows)
@@ -522,7 +522,7 @@ func TestColumnStoreMutationAssetsPublishAndReopenM12C(t *testing.T) {
 	}
 	assertColumnManifestStateM10B(t, col, 2, updateLSN)
 
-	deletedRows, err := col.DeleteBatch([][]byte{[]byte("e2")})
+	deletedRows, err := col.DeleteBatch([][]byte{[]byte("e2"), []byte("missing")})
 	if err != nil {
 		t.Fatalf("DeleteBatch: %v", err)
 	}
