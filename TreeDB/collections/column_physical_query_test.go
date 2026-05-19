@@ -101,6 +101,62 @@ func TestColumnPhysicalQueryAdapterExecutesJSONBenchShapesM13B(t *testing.T) {
 	}
 }
 
+func TestColumnPhysicalQueryAdapterUsesFloorHourForNegativeTimeUSM13B(t *testing.T) {
+	const hourUS = columnPhysicalQueryHourUS
+	events := []columnPhysicalQueryEventM13B{
+		{ID: "e1", TimeUS: -1, Kind: "like", Did: "d1"},
+		{ID: "e2", TimeUS: -hourUS, Kind: "post", Did: "d2"},
+		{ID: "e3", TimeUS: -hourUS - 1, Kind: "follow", Did: "d3"},
+		{ID: "e4", TimeUS: 0, Kind: "like", Did: "d4"},
+		{ID: "e5", TimeUS: hourUS, Kind: "post", Did: "d5"},
+	}
+	reopened, closeFn := openColumnPhysicalQueryFixtureM13B(t, events)
+	defer closeFn()
+
+	result, err := reopened.RunColumnPhysicalQuery(ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryHourCount, ValueColumn: "time_us"})
+	if err != nil {
+		t.Fatalf("RunColumnPhysicalQuery negative hours: %v", err)
+	}
+	got := make(map[string]int, len(result.Groups))
+	for _, group := range result.Groups {
+		got[group.Key] = group.Count
+	}
+	want := map[string]int{
+		"hour_00": 1,
+		"hour_01": 1,
+		"hour_22": 1,
+		"hour_23": 2,
+	}
+	if len(got) != len(want) {
+		t.Fatalf("hour groups=%v want %v", got, want)
+	}
+	for key, count := range want {
+		if got[key] != count {
+			t.Fatalf("hour group %s=%d want %d groups=%v", key, got[key], count, got)
+		}
+	}
+}
+
+func TestColumnPhysicalQueryUTCHourM13B(t *testing.T) {
+	const hourUS = columnPhysicalQueryHourUS
+	tests := []struct {
+		timeUS int64
+		want   int
+	}{
+		{timeUS: -hourUS - 1, want: 22},
+		{timeUS: -hourUS, want: 23},
+		{timeUS: -1, want: 23},
+		{timeUS: 0, want: 0},
+		{timeUS: hourUS - 1, want: 0},
+		{timeUS: hourUS, want: 1},
+	}
+	for _, tt := range tests {
+		if got := columnPhysicalQueryUTCHour(tt.timeUS); got != tt.want {
+			t.Fatalf("columnPhysicalQueryUTCHour(%d)=%d want %d", tt.timeUS, got, tt.want)
+		}
+	}
+}
+
 func TestColumnPhysicalQueryAdapterAppliesMutationVisibilityM13C(t *testing.T) {
 	dir, _ := prepareColumnStoreCommandWALDirM10B(t)
 	d := openCollectionCommandWALDB(t, dir)
@@ -1602,7 +1658,7 @@ func columnPhysicalQueryReferenceLinesM13B(name string, events []columnPhysicalQ
 	case "q3":
 		counts := make(map[string]int)
 		for _, event := range events {
-			counts[fmt.Sprintf("hour_%02d", (event.TimeUS/3_600_000_000)%24)]++
+			counts[columnPhysicalQueryHourKey(columnPhysicalQueryUTCHour(event.TimeUS))]++
 		}
 		return columnPhysicalQueryIntLinesM13B(name, counts)
 	case "q4a":
