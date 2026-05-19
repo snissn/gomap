@@ -463,7 +463,7 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 	if err != nil {
 		return ColumnPublishPreparedAssets{}, err
 	}
-	if err := validateColumnPhysicalAssetForManifest(encoded, ref, hookInput.ColumnStore); err != nil {
+	if err := validateColumnPhysicalAssetPreparedRefForManifest(ref, hookInput.ColumnStore, generation, partID, len(encoded)); err != nil {
 		return ColumnPublishPreparedAssets{}, err
 	}
 	if prepared.CommandBytes == 0 {
@@ -479,6 +479,31 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 		Reason:       string(input.operation),
 	}}
 	return prepared, nil
+}
+
+func validateColumnPhysicalAssetPreparedRefForManifest(ref ColumnAssetRef, cfg ColumnStoreConfig, generation, partID uint64, payloadLen int) error {
+	if err := validateColumnAssetRefForPlan(ref); err != nil {
+		return err
+	}
+	if cfg.AssetManager == nil {
+		return errors.New("collections: column physical asset manifest validation requires asset manager")
+	}
+	if ref.Kind != ColumnAssetKindTCS1PartImage {
+		return fmt.Errorf("collections: column physical asset kind=%q want %q", ref.Kind, ColumnAssetKindTCS1PartImage)
+	}
+	if ref.Namespace != cfg.AssetManager.Namespace {
+		return fmt.Errorf("collections: column physical asset namespace=%q want %q", ref.Namespace, cfg.AssetManager.Namespace)
+	}
+	if ref.Generation != generation {
+		return fmt.Errorf("collections: column physical asset generation=%d want %d", ref.Generation, generation)
+	}
+	if ref.PartID != partID {
+		return fmt.Errorf("collections: column physical asset part_id=%d want %d", ref.PartID, partID)
+	}
+	if ref.Length != int64(payloadLen) {
+		return fmt.Errorf("collections: column physical asset length=%d want %d", ref.Length, payloadLen)
+	}
+	return nil
 }
 
 func columnWriteDocumentsBytes(docs []columnWriteDocument) int64 {
