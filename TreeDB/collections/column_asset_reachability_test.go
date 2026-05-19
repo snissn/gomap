@@ -468,7 +468,7 @@ func TestColumnAssetReachabilitySegmentAccountingPreservesKnownBytesWhenUnknownM
 	}
 }
 
-func prepareColumnAssetReachabilityCommandWALDirM15A(t *testing.T) string {
+func prepareColumnAssetReachabilityCommandWALDirM15A(t testing.TB) string {
 	t.Helper()
 	dir, baseLSN := prepareColumnStoreCommandWALDirM10B(t)
 	if baseLSN == 0 {
@@ -477,7 +477,7 @@ func prepareColumnAssetReachabilityCommandWALDirM15A(t *testing.T) string {
 	return dir
 }
 
-func writeColumnAssetReachabilityCandidateM15A(t *testing.T, d *backenddb.DB, col *Collection, generation, partID uint64) ColumnAssetRef {
+func writeColumnAssetReachabilityCandidateM15A(t testing.TB, d *backenddb.DB, col *Collection, generation, partID uint64) ColumnAssetRef {
 	t.Helper()
 	cfg := col.Meta().Options.ColumnStore
 	if cfg == nil || cfg.AssetManager == nil {

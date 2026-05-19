@@ -1322,7 +1322,7 @@ func (db *DB) PublishOrderedRootDeltaGroupWithSystemBuilder(ordered []OrderedRoo
 // stream to the system root. The system delta should contain only changed
 // system-root entries; omitted system entries are preserved.
 func (db *DB) PublishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered []OrderedRootDeltaPublishInput, buildSystemDeltaIter OrderedRootGroupSystemBuilder) (uint64, []uint64, error) {
-	return db.publishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered, nil, nil, buildSystemDeltaIter)
+	return db.publishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered, nil, nil, buildSystemDeltaIter, false)
 }
 
 // PublishOrderedRootDeltaGroupWithCommandWALAndSystemDeltaBuilder applies the
@@ -1330,7 +1330,7 @@ func (db *DB) PublishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered []Order
 // while commit serialization is held and before publishing the metadata root
 // tuple that advances AppliedCommandLSN.
 func (db *DB) PublishOrderedRootDeltaGroupWithCommandWALAndSystemDeltaBuilder(ordered []OrderedRootDeltaPublishInput, intent *CommandWALIntent, buildSystemDeltaIter OrderedRootGroupSystemBuilder) (uint64, []uint64, error) {
-	return db.publishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered, nil, intent, buildSystemDeltaIter)
+	return db.publishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered, nil, intent, buildSystemDeltaIter, false)
 }
 
 // PublishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBuilder is
@@ -1373,7 +1373,16 @@ func (db *DB) PublishOrderedRootDeltaGroupWithPreflightCommandWALContextRootBuil
 // PublishOrderedRootDeltaGroupWithSystemDeltaBuilder, but runs preflight under
 // the DB write lock before applying root-local deltas.
 func (db *DB) PublishOrderedRootDeltaGroupWithPreflightAndSystemDeltaBuilder(ordered []OrderedRootDeltaPublishInput, preflight OrderedRootGroupPreflight, buildSystemDeltaIter OrderedRootGroupSystemBuilder) (uint64, []uint64, error) {
-	return db.publishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered, preflight, nil, buildSystemDeltaIter)
+	return db.publishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered, preflight, nil, buildSystemDeltaIter, false)
+}
+
+// PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder is like
+// PublishOrderedRootDeltaGroupWithPreflightAndSystemDeltaBuilder, but permits
+// storage-maintenance root rewrites while command-WAL mode is enabled. Callers
+// must not use it for logical user mutations; it does not append or advance a
+// command-WAL frame.
+func (db *DB) PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(ordered []OrderedRootDeltaPublishInput, preflight OrderedRootGroupPreflight, buildSystemDeltaIter OrderedRootGroupSystemBuilder) (uint64, []uint64, error) {
+	return db.publishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered, preflight, nil, buildSystemDeltaIter, true)
 }
 
 // PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder is like
@@ -1441,7 +1450,7 @@ func (db *DB) PublishOrderedRootDeltaBatchGroupWithPreflightAndSystemDeltaBuilde
 	return db.publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered, preflight, nil, buildSystemDeltaIter)
 }
 
-func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered []OrderedRootDeltaPublishInput, preflight OrderedRootGroupPreflight, commandWALIntent *CommandWALIntent, buildSystemDeltaIter OrderedRootGroupSystemBuilder) (newSystemRoot uint64, rootIDs []uint64, err error) {
+func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered []OrderedRootDeltaPublishInput, preflight OrderedRootGroupPreflight, commandWALIntent *CommandWALIntent, buildSystemDeltaIter OrderedRootGroupSystemBuilder, allowUnloggedMaintenance bool) (newSystemRoot uint64, rootIDs []uint64, err error) {
 	if buildSystemDeltaIter == nil {
 		return 0, nil, errors.New("nil ordered root group system delta builder")
 	}
@@ -1478,7 +1487,12 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered []Order
 		return 0, nil, err
 	}
 	if commandWALIntent == nil {
-		if err = db.rejectUnloggedCommandWALRootPublish(); err != nil {
+		if allowUnloggedMaintenance {
+			err = db.commandWALPoisonedError()
+		} else {
+			err = db.rejectUnloggedCommandWALRootPublish()
+		}
+		if err != nil {
 			return 0, nil, err
 		}
 	}

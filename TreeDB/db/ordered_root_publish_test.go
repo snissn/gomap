@@ -223,6 +223,57 @@ func TestPublishOrderedRootDeltaGroupWithCommandWALContextRejectsMissingFrame(t 
 	}
 }
 
+func TestPublishOrderedRootDeltaGroupMaintenanceAllowsCommandWALWithoutLogicalFrame(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	defer db.Close()
+
+	_, _, err := db.PublishOrderedRootDeltaGroupWithPreflightAndSystemDeltaBuilder(
+		nil,
+		nil,
+		func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+			t.Fatalf("ordinary unlogged system builder should not run in command WAL mode")
+			return nil, nil
+		},
+	)
+	if !errors.Is(err, ErrCommandWALUnsupported) {
+		t.Fatalf("ordinary publish error=%v want ErrCommandWALUnsupported", err)
+	}
+
+	newSystemRoot, rootIDs, err := db.PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(
+		nil,
+		nil,
+		func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+			if len(rootIDs) != 0 {
+				t.Fatalf("rootIDs=%v want none for system-only maintenance publish", rootIDs)
+			}
+			return mustFrozenSystemMemtable(t, "maintenance/column/rewrite", "ok").NewIterator(nil, nil), nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("maintenance publish: %v", err)
+	}
+	if len(rootIDs) != 0 {
+		t.Fatalf("rootIDs=%v want none", rootIDs)
+	}
+	if got := db.State().AppliedCommandLSN; got != 0 {
+		t.Fatalf("AppliedCommandLSN=%d want 0 for storage maintenance publish", got)
+	}
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("AcquireSnapshot returned nil")
+	}
+	defer func() { _ = snap.Close() }()
+	entry, err := snap.GetEntryAtRoot(newSystemRoot, []byte("maintenance/column/rewrite"))
+	if err != nil {
+		t.Fatalf("GetEntryAtRoot maintenance key: %v", err)
+	}
+	if got := string(entry.Value); got != "ok" {
+		t.Fatalf("maintenance value=%q want ok", got)
+	}
+}
+
 func TestPublishOrderedRootDeltaBatchGroupWithCommandWALContextRejectsMissingFrame(t *testing.T) {
 	dir := t.TempDir()
 	enableCommandWALFormat(t, dir)

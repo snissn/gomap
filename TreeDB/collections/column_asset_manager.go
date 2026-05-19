@@ -171,6 +171,10 @@ func columnAssetManagerNamespaceDirs(namespace columnAssetManagerNamespace) ([]s
 }
 
 func writeColumnPhysicalAssetToManager(rootDir string, cfg ColumnStoreConfig, payload []byte, generation, partID uint64) (ColumnAssetRef, error) {
+	return writeColumnPhysicalAssetToManagerSegment(rootDir, cfg, payload, generation, partID, columnAssetM12ASegmentFileID)
+}
+
+func writeColumnPhysicalAssetToManagerSegment(rootDir string, cfg ColumnStoreConfig, payload []byte, generation, partID uint64, fileID uint32) (ColumnAssetRef, error) {
 	if cfg.AssetManager == nil {
 		return ColumnAssetRef{}, errors.New("collections: column physical asset write requires asset manager")
 	}
@@ -186,6 +190,9 @@ func writeColumnPhysicalAssetToManager(rootDir string, cfg ColumnStoreConfig, pa
 	if generation == 0 || partID == 0 {
 		return ColumnAssetRef{}, errors.New("collections: column physical asset write requires generation and part_id")
 	}
+	if fileID == 0 {
+		return ColumnAssetRef{}, errors.New("collections: column physical asset write requires file_id")
+	}
 	checksum := page.Checksum(payload)
 	namespace, err := columnAssetManagerNamespaceForRoot(rootDir, cfg.AssetManager.Namespace)
 	if err != nil {
@@ -199,7 +206,7 @@ func writeColumnPhysicalAssetToManager(rootDir string, cfg ColumnStoreConfig, pa
 		Namespace:  cfg.AssetManager.Namespace,
 		Generation: generation,
 		PartID:     partID,
-		FileID:     columnAssetM12ASegmentFileID,
+		FileID:     fileID,
 		Length:     int64(len(payload)),
 		Checksum:   checksum,
 	}
@@ -243,6 +250,156 @@ func writeColumnPhysicalAssetToManager(rootDir string, cfg ColumnStoreConfig, pa
 	}
 	ref.Offset = offset
 	return ref, nil
+}
+
+func nextColumnAssetManagerSegmentFileID(rootDir string, cfg ColumnStoreConfig) (uint32, error) {
+	if cfg.AssetManager == nil {
+		return 0, errors.New("collections: column physical asset rewrite requires asset manager")
+	}
+	namespace, err := columnAssetManagerNamespaceForRoot(rootDir, cfg.AssetManager.Namespace)
+	if err != nil {
+		return 0, err
+	}
+	if err := ensureColumnAssetManagerNamespace(namespace); err != nil {
+		return 0, err
+	}
+	segments, err := listColumnAssetReachabilitySegments(namespace.SegmentDir)
+	if err != nil {
+		return 0, err
+	}
+	maxFileID := uint32(0)
+	for _, segment := range segments {
+		if segment.fileID > maxFileID {
+			maxFileID = segment.fileID
+		}
+	}
+	if maxFileID == ^uint32(0) {
+		return 0, errors.New("collections: column asset segment file_id exhausted")
+	}
+	return maxFileID + 1, nil
+}
+
+type columnPhysicalAssetSegmentAppender struct {
+	cfg        ColumnStoreConfig
+	namespace  columnAssetManagerNamespace
+	fileID     uint32
+	assetPath  string
+	file       *os.File
+	offset     int64
+	lock       *sync.Mutex
+	closeFile  bool
+	unlockLock bool
+}
+
+func newColumnPhysicalAssetSegmentAppender(rootDir string, cfg ColumnStoreConfig, fileID uint32) (*columnPhysicalAssetSegmentAppender, error) {
+	if cfg.AssetManager == nil {
+		return nil, errors.New("collections: column physical asset append requires asset manager")
+	}
+	if cfg.AssetManager.Kind != ColumnAssetManagerValueLogShaped {
+		return nil, fmt.Errorf("collections: unsupported column asset manager %q", cfg.AssetManager.Kind)
+	}
+	if !cfg.AssetManager.IsolatedNamespace {
+		return nil, errors.New("collections: column physical asset append requires isolated namespace")
+	}
+	if fileID == 0 {
+		return nil, errors.New("collections: column physical asset append requires file_id")
+	}
+	namespace, err := columnAssetManagerNamespaceForRoot(rootDir, cfg.AssetManager.Namespace)
+	if err != nil {
+		return nil, err
+	}
+	if err := ensureColumnAssetManagerNamespace(namespace); err != nil {
+		return nil, err
+	}
+	ref := ColumnAssetRef{
+		Kind:      ColumnAssetKindTCS1PartImage,
+		Namespace: cfg.AssetManager.Namespace,
+		FileID:    fileID,
+		Offset:    0,
+		Length:    1,
+	}
+	assetPath, err := columnAssetSegmentPath(rootDir, ref)
+	if err != nil {
+		return nil, err
+	}
+	segmentLock := columnAssetSegmentWriteLock(assetPath)
+	segmentLock.Lock()
+	appender := &columnPhysicalAssetSegmentAppender{
+		cfg:        cfg,
+		namespace:  namespace,
+		fileID:     fileID,
+		assetPath:  assetPath,
+		lock:       segmentLock,
+		unlockLock: true,
+	}
+	file, err := os.OpenFile(assetPath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
+	if err != nil {
+		appender.releaseLock()
+		return nil, err
+	}
+	appender.file = file
+	appender.closeFile = true
+	return appender, nil
+}
+
+func (a *columnPhysicalAssetSegmentAppender) append(payload []byte, generation, partID uint64) (ColumnAssetRef, error) {
+	if a == nil || a.file == nil {
+		return ColumnAssetRef{}, errors.New("collections: nil column physical asset appender")
+	}
+	if len(payload) == 0 {
+		return ColumnAssetRef{}, errors.New("collections: column physical asset payload is empty")
+	}
+	if generation == 0 || partID == 0 {
+		return ColumnAssetRef{}, errors.New("collections: column physical asset append requires generation and part_id")
+	}
+	ref := ColumnAssetRef{
+		Kind:       ColumnAssetKindTCS1PartImage,
+		Namespace:  a.cfg.AssetManager.Namespace,
+		Generation: generation,
+		PartID:     partID,
+		FileID:     a.fileID,
+		Offset:     a.offset,
+		Length:     int64(len(payload)),
+		Checksum:   page.Checksum(payload),
+	}
+	written, err := a.file.Write(payload)
+	if err != nil {
+		return ColumnAssetRef{}, err
+	}
+	if written != len(payload) {
+		return ColumnAssetRef{}, io.ErrShortWrite
+	}
+	a.offset += int64(written)
+	return ref, nil
+}
+
+func (a *columnPhysicalAssetSegmentAppender) close() error {
+	if a == nil {
+		return nil
+	}
+	var closeErr error
+	if a.file != nil && a.closeFile {
+		if err := a.file.Sync(); err != nil && closeErr == nil {
+			closeErr = err
+		}
+		if err := a.file.Close(); err != nil && closeErr == nil {
+			closeErr = err
+		}
+		a.closeFile = false
+		a.file = nil
+	}
+	if closeErr == nil {
+		closeErr = syncColumnAssetDir(a.namespace.SegmentDir)
+	}
+	a.releaseLock()
+	return closeErr
+}
+
+func (a *columnPhysicalAssetSegmentAppender) releaseLock() {
+	if a != nil && a.lock != nil && a.unlockLock {
+		a.lock.Unlock()
+		a.unlockLock = false
+	}
 }
 
 func readColumnPhysicalAssetFromManager(rootDir string, ref ColumnAssetRef) ([]byte, error) {

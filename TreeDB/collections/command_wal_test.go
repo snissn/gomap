@@ -1459,7 +1459,7 @@ func prepareCollectionCommandWALDir(t *testing.T, meta CollectionMeta, inserts .
 	return dir
 }
 
-func openCollectionCommandWALDB(t *testing.T, dir string) *backenddb.DB {
+func openCollectionCommandWALDB(t testing.TB, dir string) *backenddb.DB {
 	t.Helper()
 	d, err := backenddb.Open(backenddb.Options{Dir: dir, DisableBackgroundPrune: true})
 	if err != nil {
