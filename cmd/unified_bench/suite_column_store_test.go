@@ -176,6 +176,9 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 		if q.RowMaterializations != report.Rows {
 			t.Fatalf("query %s row_materializations=%d want %d", q.Name, q.RowMaterializations, report.Rows)
 		}
+		if !strings.Contains(q.ThroughputInterpretation, "decode-bound") {
+			t.Fatalf("query %s throughput_interpretation=%q want row-store decode-bound classification", q.Name, q.ThroughputInterpretation)
+		}
 	}
 	if q := queryMetrics["q5_metadata"]; q.AliasOf != "q5" || q.ImplementationNote == "" {
 		t.Fatalf("q5_metadata should be explicitly reported as a q5 alias placeholder: %+v", q)
@@ -377,6 +380,135 @@ func TestColumnStoreBenchRunUsesRowsProcessedForPhysicalAggregateM14B(t *testing
 	got := run.Results[columnStoreSuiteBenchTestName][columnStoreSuiteBenchDisplayName]
 	if math.Abs(got-1000) > 1e-9 {
 		t.Fatalf("aggregate rows/sec=%f want 1000 from physical rows processed", got)
+	}
+}
+
+func TestColumnStoreSuiteThroughputInterpretationM14C(t *testing.T) {
+	tests := []struct {
+		name string
+		q    columnStoreQueryMetric
+		want []string
+	}{
+		{
+			name: "row store decode baseline",
+			q: columnStoreQueryMetric{
+				Name:                columnStoreQueryQ1,
+				PlanLabel:           columnStorePathRowStoreBaseline,
+				RowsProcessed:       1024,
+				RowMaterializations: 1024,
+				BytesRead:           128 << 10,
+			},
+			want: []string{"decode-bound", "row materialization", "mark-pruning not active"},
+		},
+		{
+			name: "btree decode baseline",
+			q: columnStoreQueryMetric{
+				Name:                columnStoreQueryQ2,
+				PlanLabel:           columnStorePathBTreeIndexBaseline,
+				RowsProcessed:       1024,
+				RowMaterializations: 1024,
+				BytesRead:           128 << 10,
+			},
+			want: []string{"decode-bound", "B-tree baseline", "row materialization", "mark-pruning not active"},
+		},
+		{
+			name: "serial physical scan",
+			q: columnStoreQueryMetric{
+				Name:                columnStoreQueryQ3,
+				PlanLabel:           columnStorePathSerialColumnScan,
+				RowsProcessed:       1024,
+				RowMaterializations: 0,
+				BytesRead:           96 << 10,
+				ScheduledGranules:   2,
+			},
+			want: []string{"physical serial scan", "TCPA decode", "aggregation", "memory-bandwidth", "mark-pruning not active"},
+		},
+		{
+			name: "scan backed aggregate fallback",
+			q: columnStoreQueryMetric{
+				Name:                columnStoreQueryQ5Metadata,
+				PlanLabel:           columnStorePathAggregateMetadata,
+				RowsProcessed:       1024,
+				RowMaterializations: 0,
+				BytesRead:           96 << 10,
+				MetadataHits:        0,
+			},
+			want: []string{"fallback-bound", "scan-backed", "aggregate metadata", "mark-pruning not active"},
+		},
+		{
+			name: "metadata hit future path",
+			q: columnStoreQueryMetric{
+				Name:                columnStoreQueryQ5Metadata,
+				PlanLabel:           columnStorePathAggregateMetadata,
+				RowsProcessed:       1024,
+				RowMaterializations: 0,
+				MetadataHits:        4,
+			},
+			want: []string{"metadata-bound", "metadata hits", "mark-pruning active"},
+		},
+		{
+			name: "parallel physical scan",
+			q: columnStoreQueryMetric{
+				Name:                columnStoreQueryQ4A,
+				PlanLabel:           columnStorePathParallelColumnScan,
+				RowsProcessed:       1024,
+				RowMaterializations: 0,
+				BytesRead:           96 << 10,
+				WorkerCount:         2,
+			},
+			want: []string{"parallel physical scan", "manifest-ref partition", "overhead-bound", "memory-bandwidth", "mark-pruning not active"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := columnStoreQueryThroughputInterpretation(tc.q)
+			for _, want := range tc.want {
+				if !strings.Contains(got, want) {
+					t.Fatalf("interpretation %q missing %q", got, want)
+				}
+			}
+		})
+	}
+}
+
+func TestColumnStoreSuiteMarkdownRendersThroughputInterpretationM14C(t *testing.T) {
+	report := columnStoreSuiteReport{
+		Suite:      "column_store",
+		Profile:    "durable",
+		Fixture:    "synthetic",
+		ForcedPath: columnStorePathSerialColumnScan,
+		Rows:       1024,
+		Queries: []columnStoreQueryMetric{
+			{
+				Name:                     columnStoreQueryQ1,
+				PlanLabel:                columnStorePathSerialColumnScan,
+				RowsProcessed:            1024,
+				ThroughputInterpretation: "physical serial scan: TCPA decode plus reducer aggregation over declared columns; memory-bandwidth bound on asset bytes; mark-pruning not active",
+			},
+			{
+				Name:                     columnStoreQueryQ5Metadata,
+				PlanLabel:                columnStorePathAggregateMetadata,
+				RowsProcessed:            1024,
+				ThroughputInterpretation: "fallback-bound aggregate metadata label: no metadata hits yet, executes scan-backed physical reducer; mark-pruning not active",
+			},
+		},
+		Parity: map[string]columnStoreParity{
+			columnStoreQueryQ1:         {Pass: true},
+			columnStoreQueryQ5Metadata: {Pass: true},
+		},
+	}
+
+	md := renderColumnStoreSuiteMarkdown(report)
+	for _, want := range []string{
+		"## Throughput Interpretation",
+		"physical serial scan",
+		"fallback-bound aggregate metadata label",
+		"mark-pruning not active",
+	} {
+		if !strings.Contains(md, want) {
+			t.Fatalf("markdown missing %q:\n%s", want, md)
+		}
 	}
 }
 
@@ -1048,6 +1180,9 @@ func TestColumnStoreSuiteExecutesForcedSerialPhysicalPathM14B(t *testing.T) {
 		if q.BytesRead <= 0 || q.RowsPerSecond <= 0 || q.NsPerRow <= 0 {
 			t.Fatalf("query %s missing physical throughput metrics: %+v", q.Name, q)
 		}
+		if !strings.Contains(q.ThroughputInterpretation, "physical serial scan") {
+			t.Fatalf("query %s throughput_interpretation=%q want serial physical classification", q.Name, q.ThroughputInterpretation)
+		}
 	}
 	if got, want := queryMetrics[columnStoreQueryQ5Metadata].ProductionHash, queryMetrics[columnStoreQueryQ5].ProductionHash; got != want {
 		t.Fatalf("q5_metadata production hash=%016x want q5 hash=%016x", got, want)
@@ -1104,9 +1239,18 @@ func TestColumnStoreSuiteExecutesForcedAggregateAndParallelPhysicalPathsM14B(t *
 				if q.BytesRead <= 0 {
 					t.Fatalf("query %s bytes_read=%d want physical bytes", q.Name, q.BytesRead)
 				}
+				if q.ThroughputInterpretation == "" {
+					t.Fatalf("query %s missing throughput_interpretation", q.Name)
+				}
 				if tc.forcedPath == columnStorePathParallelColumnScan && q.WorkerCount != tc.wantWorker {
 					t.Fatalf("query %s worker_count=%d want %d for parallel path", q.Name, q.WorkerCount, tc.wantWorker)
 				}
+			}
+			if tc.forcedPath == columnStorePathAggregateMetadata && !strings.Contains(queryMetrics[columnStoreQueryQ5Metadata].ThroughputInterpretation, "fallback-bound") {
+				t.Fatalf("q5_metadata throughput_interpretation=%q want scan-backed aggregate fallback classification", queryMetrics[columnStoreQueryQ5Metadata].ThroughputInterpretation)
+			}
+			if tc.forcedPath == columnStorePathParallelColumnScan && !strings.Contains(queryMetrics[columnStoreQueryQ5Metadata].ThroughputInterpretation, "parallel physical scan") {
+				t.Fatalf("q5_metadata throughput_interpretation=%q want parallel physical classification", queryMetrics[columnStoreQueryQ5Metadata].ThroughputInterpretation)
 			}
 			if got := queryMetrics[columnStoreQueryQ5Metadata].PlanLabel; got != tc.q5Plan {
 				t.Fatalf("q5_metadata plan_label=%q want %q", got, tc.q5Plan)
@@ -1651,6 +1795,18 @@ func BenchmarkColumnStoreSuiteRowBaselineQueriesM11B(b *testing.B) {
 
 func BenchmarkColumnStoreSuiteBTreeIndexBaselineQueriesM11B(b *testing.B) {
 	benchmarkColumnStoreSuiteQueriesM11B(b, columnStorePathBTreeIndexBaseline)
+}
+
+func BenchmarkColumnStoreSuiteSerialPhysicalQueriesM14C(b *testing.B) {
+	benchmarkColumnStoreSuiteQueriesM11B(b, columnStorePathSerialColumnScan)
+}
+
+func BenchmarkColumnStoreSuiteAggregateMetadataQueriesM14C(b *testing.B) {
+	benchmarkColumnStoreSuiteQueriesM11B(b, columnStorePathAggregateMetadata)
+}
+
+func BenchmarkColumnStoreSuiteParallelPhysicalQueriesM14C(b *testing.B) {
+	benchmarkColumnStoreSuiteQueriesM11B(b, columnStorePathParallelColumnScan)
 }
 
 func benchmarkColumnStoreSuiteQueriesM11B(b *testing.B, path string) {

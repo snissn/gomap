@@ -140,34 +140,35 @@ type columnStoreStageMetric struct {
 }
 
 type columnStoreQueryMetric struct {
-	Name                 string  `json:"name"`
-	PlanLabel            string  `json:"plan_label"`
-	AliasOf              string  `json:"alias_of,omitempty"`
-	ImplementationNote   string  `json:"implementation_note,omitempty"`
-	DurationMS           float64 `json:"duration_ms"`
-	Rows                 int     `json:"rows"`
-	RowsProcessed        int     `json:"rows_processed"`
-	RowsPerSecond        float64 `json:"rows_per_second"`
-	MiBPerSecond         float64 `json:"mib_per_second"`
-	NsPerRow             float64 `json:"ns_per_row"`
-	BytesRead            int64   `json:"bytes_read"`
-	RowMaterializations  int     `json:"row_materializations"`
-	ResultCount          int     `json:"result_count"`
-	RawHash              uint64  `json:"raw_hash"`
-	ProductionHash       uint64  `json:"production_hash"`
-	MetadataHits         int     `json:"metadata_hits"`
-	SkippedGranules      int     `json:"skipped_granules"`
-	ScheduledGranules    int     `json:"scheduled_granules"`
-	WorkerCount          int     `json:"worker_count"`
-	PlannerDurationMS    float64 `json:"planner_duration_ms"`
-	ScanDurationMS       float64 `json:"scan_duration_ms"`
-	ReduceDurationMS     float64 `json:"reduce_duration_ms"`
-	ParityHashDurationMS float64 `json:"parity_hash_duration_ms"`
-	PlannerCandidates    int     `json:"planner_candidates"`
-	PlannerReason        string  `json:"planner_reason,omitempty"`
-	CacheHits            uint64  `json:"cache_hits"`
-	CacheMisses          uint64  `json:"cache_misses"`
-	CacheLabel           string  `json:"cache_label"`
+	Name                     string  `json:"name"`
+	PlanLabel                string  `json:"plan_label"`
+	AliasOf                  string  `json:"alias_of,omitempty"`
+	ImplementationNote       string  `json:"implementation_note,omitempty"`
+	ThroughputInterpretation string  `json:"throughput_interpretation,omitempty"`
+	DurationMS               float64 `json:"duration_ms"`
+	Rows                     int     `json:"rows"`
+	RowsProcessed            int     `json:"rows_processed"`
+	RowsPerSecond            float64 `json:"rows_per_second"`
+	MiBPerSecond             float64 `json:"mib_per_second"`
+	NsPerRow                 float64 `json:"ns_per_row"`
+	BytesRead                int64   `json:"bytes_read"`
+	RowMaterializations      int     `json:"row_materializations"`
+	ResultCount              int     `json:"result_count"`
+	RawHash                  uint64  `json:"raw_hash"`
+	ProductionHash           uint64  `json:"production_hash"`
+	MetadataHits             int     `json:"metadata_hits"`
+	SkippedGranules          int     `json:"skipped_granules"`
+	ScheduledGranules        int     `json:"scheduled_granules"`
+	WorkerCount              int     `json:"worker_count"`
+	PlannerDurationMS        float64 `json:"planner_duration_ms"`
+	ScanDurationMS           float64 `json:"scan_duration_ms"`
+	ReduceDurationMS         float64 `json:"reduce_duration_ms"`
+	ParityHashDurationMS     float64 `json:"parity_hash_duration_ms"`
+	PlannerCandidates        int     `json:"planner_candidates"`
+	PlannerReason            string  `json:"planner_reason,omitempty"`
+	CacheHits                uint64  `json:"cache_hits"`
+	CacheMisses              uint64  `json:"cache_misses"`
+	CacheLabel               string  `json:"cache_label"`
 
 	duration time.Duration
 }
@@ -1096,6 +1097,7 @@ func runColumnStoreSuiteQueries(collection *collections.Collection, rows int, ra
 			CacheMisses:          exec.CacheMisses,
 			CacheLabel:           "reopened_warm_process",
 		}
+		metric.ThroughputInterpretation = columnStoreQueryThroughputInterpretation(metric)
 		queries = append(queries, metric)
 	}
 	return queries, parity, firstErr
@@ -1493,7 +1495,7 @@ func columnStoreQueryAliasOf(name, path string) string {
 
 func columnStoreQueryImplementationNote(name, path string) string {
 	if name == columnStoreQueryQ5Metadata && path == columnStorePathAggregateMetadata {
-		return "q5_alias_scan_backed_physical_aggregate_metadata_m14b_metadata_only_fast_path_deferred"
+		return "q5_alias_scan_backed_physical_aggregate_metadata_m14c_metadata_only_fast_path_deferred"
 	}
 	if name == columnStoreQueryQ5Metadata && (path == columnStorePathSerialColumnScan || path == columnStorePathParallelColumnScan) {
 		return path + "_q5_alias_physical_column_scan"
@@ -1508,6 +1510,30 @@ func columnStoreQueryImplementationNote(name, path string) string {
 		return "full_unbounded_secondary_index_scan_no_predicate_pushdown_m11b"
 	}
 	return ""
+}
+
+func columnStoreQueryThroughputInterpretation(q columnStoreQueryMetric) string {
+	markPruning := "mark-pruning not active"
+	if q.SkippedGranules > 0 || q.MetadataHits > 0 {
+		markPruning = "mark-pruning active"
+	}
+	switch q.PlanLabel {
+	case columnStorePathRowStoreBaseline:
+		return "decode-bound row-store baseline: full JSON row materialization before reduction; " + markPruning
+	case columnStorePathBTreeIndexBaseline:
+		return "decode-bound B-tree baseline: full unbounded secondary-index walk plus JSON row materialization before reduction; " + markPruning
+	case columnStorePathSerialColumnScan:
+		return "physical serial scan: TCPA decode plus reducer aggregation over declared columns; memory-bandwidth bound on asset bytes when cache-warm; " + markPruning
+	case columnStorePathAggregateMetadata:
+		if q.MetadataHits > 0 {
+			return fmt.Sprintf("metadata-bound aggregate metadata path: %d metadata hits avoid full physical row scan; %s", q.MetadataHits, markPruning)
+		}
+		return "fallback-bound aggregate metadata label: no metadata hits yet, executes scan-backed physical reducer over declared columns; " + markPruning
+	case columnStorePathParallelColumnScan:
+		return fmt.Sprintf("parallel physical scan: manifest-ref partition across %d workers; overhead-bound on small fixtures and memory-bandwidth/TCPA-decode bound on larger asset bytes; %s", max(1, q.WorkerCount), markPruning)
+	default:
+		return "fallback/error-bound: unknown executed plan label; " + markPruning
+	}
 }
 
 func columnStoreQueryHash(name string, events []columnStoreDecodedEvent) (uint64, int, error) {
@@ -1779,6 +1805,18 @@ func renderColumnStoreSuiteMarkdown(report columnStoreSuiteReport) string {
 	}
 	sb.WriteString("\n")
 
+	sb.WriteString("## Throughput Interpretation\n\n")
+	sb.WriteString("| query | plan | interpretation |\n")
+	sb.WriteString("|---|---|---|\n")
+	for _, q := range report.Queries {
+		interpretation := q.ThroughputInterpretation
+		if interpretation == "" {
+			interpretation = columnStoreQueryThroughputInterpretation(q)
+		}
+		sb.WriteString(fmt.Sprintf("| `%s` | `%s` | %s |\n", q.Name, q.PlanLabel, markdownTableText(interpretation)))
+	}
+	sb.WriteString("\n")
+
 	sb.WriteString("## Byte Accounting\n\n")
 	sb.WriteString(fmt.Sprintf("- source_document_bytes: %d\n", report.ByteAccounting.SourceDocumentBytes))
 	sb.WriteString(fmt.Sprintf("- retained_payload_bytes: %d\n", report.ByteAccounting.RetainedPayloadBytes))
@@ -1853,6 +1891,16 @@ func markdownCodeList(values []string) string {
 		sb.WriteByte('`')
 	}
 	return sb.String()
+}
+
+func markdownTableText(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "-"
+	}
+	value = strings.ReplaceAll(value, "|", "\\|")
+	value = strings.ReplaceAll(value, "\n", " ")
+	return value
 }
 
 func renderColumnStoreSuiteHTML(report columnStoreSuiteReport) string {
