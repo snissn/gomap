@@ -1,0 +1,745 @@
+package collections
+
+import (
+	"context"
+	"errors"
+	"math"
+	"os"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+)
+
+// ColumnAssetReachabilityOptions controls M15A protect-only reachability
+// planning. CandidateRefs are possible reclamation inputs supplied by a future
+// manager/catalog index; pending, prepared, and pinned refs are always retained.
+type ColumnAssetReachabilityOptions struct {
+	Detailed      bool
+	CandidateRefs []ColumnAssetRef
+	PendingRefs   []ColumnAssetRef
+	PreparedRefs  []ColumnAssetRef
+	PinnedRefs    []ColumnAssetRef
+}
+
+type ColumnAssetReachabilityStatus string
+
+const (
+	ColumnAssetReachabilityProtected   ColumnAssetReachabilityStatus = "protected"
+	ColumnAssetReachabilityReclaimable ColumnAssetReachabilityStatus = "reclaimable"
+	ColumnAssetReachabilityUncertain   ColumnAssetReachabilityStatus = "uncertain"
+)
+
+type ColumnAssetReachabilitySegmentStatus string
+
+const (
+	ColumnAssetReachabilitySegmentProtected   ColumnAssetReachabilitySegmentStatus = "protected"
+	ColumnAssetReachabilitySegmentReclaimable ColumnAssetReachabilitySegmentStatus = "reclaimable"
+	ColumnAssetReachabilitySegmentMixed       ColumnAssetReachabilitySegmentStatus = "mixed"
+	ColumnAssetReachabilitySegmentUnknown     ColumnAssetReachabilitySegmentStatus = "unknown"
+)
+
+type ColumnAssetReachabilitySource string
+
+const (
+	ColumnAssetReachabilitySourceActiveManifest   ColumnAssetReachabilitySource = "active_manifest"
+	ColumnAssetReachabilitySourceRecoveryManifest ColumnAssetReachabilitySource = "recovery_manifest"
+	ColumnAssetReachabilitySourceCandidate        ColumnAssetReachabilitySource = "candidate"
+	ColumnAssetReachabilitySourcePinnedSnapshot   ColumnAssetReachabilitySource = "pinned_snapshot"
+	ColumnAssetReachabilitySourcePendingPublish   ColumnAssetReachabilitySource = "pending_publish"
+	ColumnAssetReachabilitySourcePreparedAsset    ColumnAssetReachabilitySource = "prepared_asset"
+)
+
+type ColumnAssetReachabilityPlan struct {
+	ProtectOnly                bool
+	Complete                   bool
+	Collection                 string
+	Namespace                  string
+	ActiveManifestGeneration   uint64
+	RecoveryManifestGeneration uint64
+	Sources                    ColumnAssetReachabilitySourceStats
+	Refs                       ColumnAssetReachabilityRefStats
+	Segments                   ColumnAssetReachabilitySegmentStats
+	RewriteDebtBytes           int64
+	Entries                    []ColumnAssetReachabilityRefEntry
+	SegmentEntries             []ColumnAssetReachabilitySegmentEntry
+}
+
+type ColumnAssetReachabilitySourceStats struct {
+	ManifestRoots        int
+	ManifestRecords      int
+	ActiveManifestRefs   int
+	RecoveryManifestRefs int
+	CandidateRefs        int
+	PendingRefs          int
+	PreparedRefs         int
+	PinnedRefs           int
+}
+
+type ColumnAssetReachabilityRefStats struct {
+	Total            int
+	Protected        int
+	Reclaimable      int
+	Uncertain        int
+	BytesTotal       int64
+	BytesProtected   int64
+	BytesReclaimable int64
+	BytesUncertain   int64
+}
+
+type ColumnAssetReachabilitySegmentStats struct {
+	Total            int
+	Protected        int
+	Reclaimable      int
+	Mixed            int
+	Unknown          int
+	Missing          int
+	BytesTotal       int64
+	BytesProtected   int64
+	BytesReclaimable int64
+	BytesUnknown     int64
+}
+
+type ColumnAssetReachabilityRefEntry struct {
+	Ref     ColumnAssetRef
+	Status  ColumnAssetReachabilityStatus
+	Sources []ColumnAssetReachabilitySource
+}
+
+type ColumnAssetReachabilitySegmentEntry struct {
+	Namespace        string
+	FileID           uint32
+	Path             string
+	Bytes            int64
+	Status           ColumnAssetReachabilitySegmentStatus
+	ProtectedBytes   int64
+	ReclaimableBytes int64
+	UnknownBytes     int64
+	RefCount         int
+}
+
+type columnAssetReachabilityRefBuilder struct {
+	ref     ColumnAssetRef
+	sources []ColumnAssetReachabilitySource
+	seen    map[ColumnAssetReachabilitySource]struct{}
+}
+
+type columnAssetReachabilityRange struct {
+	start  int64
+	end    int64
+	status ColumnAssetReachabilityStatus
+}
+
+type columnAssetReachabilityInterval struct {
+	start int64
+	end   int64
+}
+
+type columnAssetReachabilitySegment struct {
+	fileID uint32
+	path   string
+	bytes  int64
+}
+
+// PlanColumnAssetReachability builds the M15A dry-run/protect-only liveness
+// plan for the collection's isolated column asset namespace. It never deletes,
+// rewrites, or remaps assets; uncertain or untracked bytes are retained.
+func (c *Collection) PlanColumnAssetReachability(ctx context.Context, opts ColumnAssetReachabilityOptions) (ColumnAssetReachabilityPlan, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return ColumnAssetReachabilityPlan{ProtectOnly: true}, err
+	}
+	view, closeView, err := c.prepareColumnPhysicalScanSnapshotView()
+	if closeView != nil {
+		defer closeView()
+	}
+	if err != nil {
+		return ColumnAssetReachabilityPlan{ProtectOnly: true}, err
+	}
+
+	input := columnAssetReachabilityInput{
+		rootDir:      view.ColumnAssetRootDir,
+		collection:   view.CollectionName,
+		namespace:    view.AssetNamespace,
+		activeGen:    view.Diagnostics.ManifestGeneration,
+		recoveryGen:  view.Diagnostics.RecoveryManifestGeneration,
+		manifestRecs: view.Diagnostics.ManifestRecords,
+		detailed:     opts.Detailed,
+	}
+	for _, assetRef := range view.AssetRefs {
+		if err := ctx.Err(); err != nil {
+			return ColumnAssetReachabilityPlan{ProtectOnly: true}, err
+		}
+		input.addRef(assetRef.Ref, ColumnAssetReachabilitySourceActiveManifest)
+		input.addRef(assetRef.Ref, ColumnAssetReachabilitySourceRecoveryManifest)
+		input.activeRefs++
+		input.recoveryRefs++
+	}
+	input.addRefs(ctx, opts.CandidateRefs, ColumnAssetReachabilitySourceCandidate)
+	input.addRefs(ctx, opts.PendingRefs, ColumnAssetReachabilitySourcePendingPublish)
+	input.addRefs(ctx, opts.PreparedRefs, ColumnAssetReachabilitySourcePreparedAsset)
+	input.addRefs(ctx, opts.PinnedRefs, ColumnAssetReachabilitySourcePinnedSnapshot)
+	if err := ctx.Err(); err != nil {
+		return ColumnAssetReachabilityPlan{ProtectOnly: true}, err
+	}
+	return buildColumnAssetReachabilityPlan(ctx, input)
+}
+
+type columnAssetReachabilityInput struct {
+	rootDir      string
+	collection   string
+	namespace    string
+	activeGen    uint64
+	recoveryGen  uint64
+	manifestRecs int
+	activeRefs   int
+	recoveryRefs int
+	detailed     bool
+	refs         map[ColumnAssetRef]*columnAssetReachabilityRefBuilder
+	sourceCounts ColumnAssetReachabilitySourceStats
+}
+
+func (in *columnAssetReachabilityInput) addRefs(ctx context.Context, refs []ColumnAssetRef, source ColumnAssetReachabilitySource) {
+	for _, ref := range refs {
+		if ctx != nil && ctx.Err() != nil {
+			return
+		}
+		in.addRef(ref, source)
+	}
+	switch source {
+	case ColumnAssetReachabilitySourceCandidate:
+		in.sourceCounts.CandidateRefs += len(refs)
+	case ColumnAssetReachabilitySourcePendingPublish:
+		in.sourceCounts.PendingRefs += len(refs)
+	case ColumnAssetReachabilitySourcePreparedAsset:
+		in.sourceCounts.PreparedRefs += len(refs)
+	case ColumnAssetReachabilitySourcePinnedSnapshot:
+		in.sourceCounts.PinnedRefs += len(refs)
+	}
+}
+
+func (in *columnAssetReachabilityInput) addRef(ref ColumnAssetRef, source ColumnAssetReachabilitySource) {
+	if in.refs == nil {
+		in.refs = make(map[ColumnAssetRef]*columnAssetReachabilityRefBuilder)
+	}
+	builder := in.refs[ref]
+	if builder == nil {
+		builder = &columnAssetReachabilityRefBuilder{
+			ref:  ref,
+			seen: make(map[ColumnAssetReachabilitySource]struct{}, 2),
+		}
+		in.refs[ref] = builder
+	}
+	if _, ok := builder.seen[source]; ok {
+		return
+	}
+	builder.seen[source] = struct{}{}
+	builder.sources = append(builder.sources, source)
+}
+
+func buildColumnAssetReachabilityPlan(ctx context.Context, input columnAssetReachabilityInput) (ColumnAssetReachabilityPlan, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	plan := ColumnAssetReachabilityPlan{
+		ProtectOnly:                true,
+		Complete:                   true,
+		Collection:                 input.collection,
+		Namespace:                  input.namespace,
+		ActiveManifestGeneration:   input.activeGen,
+		RecoveryManifestGeneration: input.recoveryGen,
+		Sources: ColumnAssetReachabilitySourceStats{
+			ManifestRoots:        1,
+			ManifestRecords:      input.manifestRecs,
+			ActiveManifestRefs:   input.activeRefs,
+			RecoveryManifestRefs: input.recoveryRefs,
+			CandidateRefs:        input.sourceCounts.CandidateRefs,
+			PendingRefs:          input.sourceCounts.PendingRefs,
+			PreparedRefs:         input.sourceCounts.PreparedRefs,
+			PinnedRefs:           input.sourceCounts.PinnedRefs,
+		},
+	}
+	namespace, err := columnAssetManagerNamespaceForRoot(input.rootDir, input.namespace)
+	if err != nil {
+		plan.Complete = false
+		return plan, err
+	}
+	segments, err := listColumnAssetReachabilitySegments(namespace.SegmentDir)
+	if err != nil {
+		plan.Complete = false
+		return plan, err
+	}
+
+	rangeCounts := make(map[uint32]int, len(segments))
+	for _, builder := range input.refs {
+		if columnAssetReachabilityRefCanContributeRange(builder.ref, input.namespace) {
+			rangeCounts[builder.ref.FileID]++
+		}
+	}
+	rangesByFile := make(map[uint32][]columnAssetReachabilityRange, len(rangeCounts))
+	for fileID, count := range rangeCounts {
+		rangesByFile[fileID] = make([]columnAssetReachabilityRange, 0, count)
+	}
+	processRef := func(builder *columnAssetReachabilityRefBuilder) {
+		if err := ctx.Err(); err != nil {
+			return
+		}
+		status := columnAssetReachabilityStatusForSources(builder.sources)
+		if err := validateColumnAssetRefForPlan(builder.ref); err != nil {
+			status = ColumnAssetReachabilityUncertain
+		}
+		if builder.ref.Namespace != input.namespace {
+			status = ColumnAssetReachabilityUncertain
+		}
+		if builder.ref.Offset > math.MaxInt64-builder.ref.Length {
+			status = ColumnAssetReachabilityUncertain
+		}
+		plan.Refs.Total++
+		plan.Refs.BytesTotal += positiveColumnAssetReachabilityLength(builder.ref.Length)
+		switch status {
+		case ColumnAssetReachabilityProtected:
+			plan.Refs.Protected++
+			plan.Refs.BytesProtected += positiveColumnAssetReachabilityLength(builder.ref.Length)
+		case ColumnAssetReachabilityReclaimable:
+			plan.Refs.Reclaimable++
+			plan.Refs.BytesReclaimable += positiveColumnAssetReachabilityLength(builder.ref.Length)
+		default:
+			plan.Refs.Uncertain++
+			plan.Refs.BytesUncertain += positiveColumnAssetReachabilityLength(builder.ref.Length)
+			plan.Complete = false
+		}
+		if input.detailed {
+			plan.Entries = append(plan.Entries, ColumnAssetReachabilityRefEntry{
+				Ref:     builder.ref,
+				Status:  status,
+				Sources: append([]ColumnAssetReachabilitySource(nil), builder.sources...),
+			})
+		}
+		if status == ColumnAssetReachabilityUncertain {
+			return
+		}
+		rangesByFile[builder.ref.FileID] = append(rangesByFile[builder.ref.FileID], columnAssetReachabilityRange{
+			start:  builder.ref.Offset,
+			end:    builder.ref.Offset + builder.ref.Length,
+			status: status,
+		})
+	}
+	if input.detailed {
+		refBuilders := make([]*columnAssetReachabilityRefBuilder, 0, len(input.refs))
+		for _, builder := range input.refs {
+			refBuilders = append(refBuilders, builder)
+		}
+		sort.Slice(refBuilders, func(i, j int) bool {
+			return compareColumnAssetRefs(refBuilders[i].ref, refBuilders[j].ref) < 0
+		})
+		for _, builder := range refBuilders {
+			processRef(builder)
+		}
+	} else {
+		for _, builder := range input.refs {
+			processRef(builder)
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return plan, err
+	}
+
+	seenFiles := make(map[uint32]struct{}, len(segments))
+	for _, segment := range segments {
+		if err := ctx.Err(); err != nil {
+			return plan, err
+		}
+		seenFiles[segment.fileID] = struct{}{}
+		plan.Segments.Total++
+		plan.Segments.BytesTotal += segment.bytes
+		segmentPlan := classifyColumnAssetReachabilitySegment(segment, rangesByFile[segment.fileID])
+		if segmentPlan.outOfBoundsRefs != 0 {
+			plan.Segments.Missing += segmentPlan.outOfBoundsRefs
+			plan.Complete = false
+		}
+		if segmentPlan.unknownBytes != 0 {
+			plan.Complete = false
+		}
+		plan.Segments.BytesProtected += segmentPlan.protectedBytes
+		plan.Segments.BytesReclaimable += segmentPlan.reclaimableBytes
+		plan.Segments.BytesUnknown += segmentPlan.unknownBytes
+		switch segmentPlan.status {
+		case ColumnAssetReachabilitySegmentProtected:
+			plan.Segments.Protected++
+		case ColumnAssetReachabilitySegmentReclaimable:
+			plan.Segments.Reclaimable++
+		case ColumnAssetReachabilitySegmentMixed:
+			plan.Segments.Mixed++
+			plan.RewriteDebtBytes += segmentPlan.reclaimableBytes
+		default:
+			plan.Segments.Unknown++
+		}
+		if input.detailed {
+			plan.SegmentEntries = append(plan.SegmentEntries, ColumnAssetReachabilitySegmentEntry{
+				Namespace:        input.namespace,
+				FileID:           segment.fileID,
+				Path:             segment.path,
+				Bytes:            segment.bytes,
+				Status:           segmentPlan.status,
+				ProtectedBytes:   segmentPlan.protectedBytes,
+				ReclaimableBytes: segmentPlan.reclaimableBytes,
+				UnknownBytes:     segmentPlan.unknownBytes,
+				RefCount:         len(rangesByFile[segment.fileID]),
+			})
+		}
+	}
+	for fileID, ranges := range rangesByFile {
+		if _, ok := seenFiles[fileID]; ok {
+			continue
+		}
+		plan.Segments.Missing += len(ranges)
+		plan.Complete = false
+		if input.detailed {
+			plan.SegmentEntries = append(plan.SegmentEntries, ColumnAssetReachabilitySegmentEntry{
+				Namespace: input.namespace,
+				FileID:    fileID,
+				Path:      filepath.Join(namespace.SegmentDir, columnAssetSegmentFileName(fileID)),
+				Status:    ColumnAssetReachabilitySegmentUnknown,
+				RefCount:  len(ranges),
+			})
+		}
+	}
+	return plan, nil
+}
+
+type columnAssetReachabilitySegmentPlan struct {
+	status           ColumnAssetReachabilitySegmentStatus
+	protectedBytes   int64
+	reclaimableBytes int64
+	unknownBytes     int64
+	outOfBoundsRefs  int
+}
+
+func classifyColumnAssetReachabilitySegment(segment columnAssetReachabilitySegment, ranges []columnAssetReachabilityRange) columnAssetReachabilitySegmentPlan {
+	allProtected := true
+	allReclaimable := true
+	for _, r := range ranges {
+		if r.status != ColumnAssetReachabilityProtected {
+			allProtected = false
+		}
+		if r.status != ColumnAssetReachabilityReclaimable {
+			allReclaimable = false
+		}
+	}
+	if len(ranges) != 0 && (allProtected || allReclaimable) {
+		intervals, outOfBounds := clippedColumnAssetReachabilityIntervals(segment, ranges)
+		union := mergeColumnAssetReachabilityIntervals(intervals)
+		coveredBytes := columnAssetReachabilityIntervalsLength(union)
+		unknownBytes := segment.bytes - coveredBytes
+		if unknownBytes < 0 {
+			unknownBytes = 0
+		}
+		status := ColumnAssetReachabilitySegmentUnknown
+		protectedBytes := int64(0)
+		reclaimableBytes := int64(0)
+		switch {
+		case unknownBytes != 0 || outOfBounds != 0:
+			status = ColumnAssetReachabilitySegmentUnknown
+		case allProtected:
+			status = ColumnAssetReachabilitySegmentProtected
+			protectedBytes = coveredBytes
+		default:
+			status = ColumnAssetReachabilitySegmentReclaimable
+			reclaimableBytes = coveredBytes
+		}
+		return columnAssetReachabilitySegmentPlan{
+			status:           status,
+			protectedBytes:   protectedBytes,
+			reclaimableBytes: reclaimableBytes,
+			unknownBytes:     unknownBytes,
+			outOfBoundsRefs:  outOfBounds,
+		}
+	}
+
+	var protected []columnAssetReachabilityInterval
+	var reclaimable []columnAssetReachabilityInterval
+	all := make([]columnAssetReachabilityInterval, 0, len(ranges))
+	outOfBounds := 0
+	for _, r := range ranges {
+		if r.start < 0 || r.end <= r.start || r.start >= segment.bytes || r.end > segment.bytes {
+			outOfBounds++
+		}
+		start := r.start
+		if start < 0 {
+			start = 0
+		}
+		end := r.end
+		if end > segment.bytes {
+			end = segment.bytes
+		}
+		if start >= end {
+			continue
+		}
+		interval := columnAssetReachabilityInterval{start: start, end: end}
+		all = append(all, interval)
+		switch r.status {
+		case ColumnAssetReachabilityProtected:
+			protected = append(protected, interval)
+		case ColumnAssetReachabilityReclaimable:
+			reclaimable = append(reclaimable, interval)
+		}
+	}
+	allUnion := mergeColumnAssetReachabilityIntervals(all)
+	protectedUnion := mergeColumnAssetReachabilityIntervals(protected)
+	reclaimableUnion := subtractColumnAssetReachabilityIntervals(
+		mergeColumnAssetReachabilityIntervals(reclaimable),
+		protectedUnion,
+	)
+	protectedBytes := columnAssetReachabilityIntervalsLength(protectedUnion)
+	reclaimableBytes := columnAssetReachabilityIntervalsLength(reclaimableUnion)
+	coveredBytes := columnAssetReachabilityIntervalsLength(allUnion)
+	unknownBytes := segment.bytes - coveredBytes
+	if unknownBytes < 0 {
+		unknownBytes = 0
+	}
+	status := ColumnAssetReachabilitySegmentUnknown
+	switch {
+	case unknownBytes != 0 || outOfBounds != 0:
+		status = ColumnAssetReachabilitySegmentUnknown
+	case protectedBytes != 0 && reclaimableBytes != 0:
+		status = ColumnAssetReachabilitySegmentMixed
+	case protectedBytes != 0:
+		status = ColumnAssetReachabilitySegmentProtected
+	case reclaimableBytes != 0:
+		status = ColumnAssetReachabilitySegmentReclaimable
+	}
+	return columnAssetReachabilitySegmentPlan{
+		status:           status,
+		protectedBytes:   protectedBytes,
+		reclaimableBytes: reclaimableBytes,
+		unknownBytes:     unknownBytes,
+		outOfBoundsRefs:  outOfBounds,
+	}
+}
+
+func columnAssetReachabilityStatusForSources(sources []ColumnAssetReachabilitySource) ColumnAssetReachabilityStatus {
+	seenCandidate := false
+	for _, source := range sources {
+		switch source {
+		case ColumnAssetReachabilitySourceActiveManifest,
+			ColumnAssetReachabilitySourceRecoveryManifest,
+			ColumnAssetReachabilitySourcePinnedSnapshot,
+			ColumnAssetReachabilitySourcePendingPublish,
+			ColumnAssetReachabilitySourcePreparedAsset:
+			return ColumnAssetReachabilityProtected
+		case ColumnAssetReachabilitySourceCandidate:
+			seenCandidate = true
+		}
+	}
+	if seenCandidate {
+		return ColumnAssetReachabilityReclaimable
+	}
+	return ColumnAssetReachabilityUncertain
+}
+
+func listColumnAssetReachabilitySegments(segmentDir string) ([]columnAssetReachabilitySegment, error) {
+	entries, err := os.ReadDir(segmentDir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	segments := make([]columnAssetReachabilitySegment, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		path := filepath.Join(segmentDir, entry.Name())
+		info, err := entry.Info()
+		if err != nil {
+			return nil, err
+		}
+		fileID, ok := columnAssetReachabilitySegmentFileID(entry.Name())
+		if !ok {
+			segments = append(segments, columnAssetReachabilitySegment{path: path, bytes: info.Size()})
+			continue
+		}
+		segments = append(segments, columnAssetReachabilitySegment{fileID: fileID, path: path, bytes: info.Size()})
+	}
+	sort.Slice(segments, func(i, j int) bool {
+		return segments[i].fileID < segments[j].fileID || (segments[i].fileID == segments[j].fileID && segments[i].path < segments[j].path)
+	})
+	return segments, nil
+}
+
+func columnAssetReachabilityRefCanContributeRange(ref ColumnAssetRef, namespace string) bool {
+	return ref.Kind == ColumnAssetKindTCS1PartImage &&
+		ref.Namespace == namespace &&
+		ref.Generation != 0 &&
+		ref.PartID != 0 &&
+		ref.FileID != 0 &&
+		ref.Offset >= 0 &&
+		ref.Length > 0 &&
+		ref.Offset <= math.MaxInt64-ref.Length
+}
+
+func clippedColumnAssetReachabilityIntervals(segment columnAssetReachabilitySegment, ranges []columnAssetReachabilityRange) ([]columnAssetReachabilityInterval, int) {
+	intervals := make([]columnAssetReachabilityInterval, 0, len(ranges))
+	outOfBounds := 0
+	for _, r := range ranges {
+		if r.start < 0 || r.end <= r.start || r.start >= segment.bytes || r.end > segment.bytes {
+			outOfBounds++
+		}
+		start := r.start
+		if start < 0 {
+			start = 0
+		}
+		end := r.end
+		if end > segment.bytes {
+			end = segment.bytes
+		}
+		if start >= end {
+			continue
+		}
+		intervals = append(intervals, columnAssetReachabilityInterval{start: start, end: end})
+	}
+	return intervals, outOfBounds
+}
+
+func columnAssetReachabilitySegmentFileID(name string) (uint32, bool) {
+	if !strings.HasPrefix(name, columnAssetSegmentFilePrefix) || !strings.HasSuffix(name, columnAssetSegmentFileSuffix) {
+		return 0, false
+	}
+	raw := strings.TrimSuffix(strings.TrimPrefix(name, columnAssetSegmentFilePrefix), columnAssetSegmentFileSuffix)
+	id, err := strconv.ParseUint(raw, 10, 32)
+	if err != nil || id == 0 {
+		return 0, false
+	}
+	return uint32(id), true
+}
+
+func mergeColumnAssetReachabilityIntervals(in []columnAssetReachabilityInterval) []columnAssetReachabilityInterval {
+	if len(in) == 0 {
+		return nil
+	}
+	sort.Slice(in, func(i, j int) bool {
+		return in[i].start < in[j].start || (in[i].start == in[j].start && in[i].end < in[j].end)
+	})
+	merged := in[:0]
+	for _, interval := range in {
+		if interval.end <= interval.start {
+			continue
+		}
+		if len(merged) == 0 || interval.start > merged[len(merged)-1].end {
+			merged = append(merged, interval)
+			continue
+		}
+		if interval.end > merged[len(merged)-1].end {
+			merged[len(merged)-1].end = interval.end
+		}
+	}
+	return merged
+}
+
+func subtractColumnAssetReachabilityIntervals(in, exclude []columnAssetReachabilityInterval) []columnAssetReachabilityInterval {
+	if len(in) == 0 || len(exclude) == 0 {
+		return in
+	}
+	out := make([]columnAssetReachabilityInterval, 0, len(in))
+	excludeIdx := 0
+	for _, interval := range in {
+		start := interval.start
+		for excludeIdx < len(exclude) && exclude[excludeIdx].end <= start {
+			excludeIdx++
+		}
+		for j := excludeIdx; j < len(exclude) && exclude[j].start < interval.end; j++ {
+			if exclude[j].start > start {
+				out = append(out, columnAssetReachabilityInterval{start: start, end: minColumnAssetReachabilityInt64(exclude[j].start, interval.end)})
+			}
+			if exclude[j].end > start {
+				start = exclude[j].end
+			}
+			if start >= interval.end {
+				break
+			}
+		}
+		if start < interval.end {
+			out = append(out, columnAssetReachabilityInterval{start: start, end: interval.end})
+		}
+	}
+	return out
+}
+
+func columnAssetReachabilityIntervalsLength(intervals []columnAssetReachabilityInterval) int64 {
+	var total int64
+	for _, interval := range intervals {
+		if interval.end > interval.start {
+			total += interval.end - interval.start
+		}
+	}
+	return total
+}
+
+func compareColumnAssetRefs(a, b ColumnAssetRef) int {
+	if a.Kind != b.Kind {
+		if a.Kind < b.Kind {
+			return -1
+		}
+		return 1
+	}
+	if a.Namespace != b.Namespace {
+		if a.Namespace < b.Namespace {
+			return -1
+		}
+		return 1
+	}
+	if a.FileID != b.FileID {
+		if a.FileID < b.FileID {
+			return -1
+		}
+		return 1
+	}
+	if a.Offset != b.Offset {
+		if a.Offset < b.Offset {
+			return -1
+		}
+		return 1
+	}
+	if a.Length != b.Length {
+		if a.Length < b.Length {
+			return -1
+		}
+		return 1
+	}
+	if a.Generation != b.Generation {
+		if a.Generation < b.Generation {
+			return -1
+		}
+		return 1
+	}
+	if a.PartID != b.PartID {
+		if a.PartID < b.PartID {
+			return -1
+		}
+		return 1
+	}
+	if a.Checksum != b.Checksum {
+		if a.Checksum < b.Checksum {
+			return -1
+		}
+		return 1
+	}
+	return 0
+}
+
+func positiveColumnAssetReachabilityLength(length int64) int64 {
+	if length > 0 {
+		return length
+	}
+	return 0
+}
+
+func minColumnAssetReachabilityInt64(a, b int64) int64 {
+	if a < b {
+		return a
+	}
+	return b
+}
