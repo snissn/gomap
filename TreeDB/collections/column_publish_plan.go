@@ -68,14 +68,15 @@ type ColumnPreparedAsset struct {
 // ColumnPublishPlanInput contains the normalized collection state and stage
 // hooks required to build an atomic column manifest publish plan.
 type ColumnPublishPlanInput struct {
-	Collection            string
-	ColumnStore           *ColumnStoreConfig
-	ColumnStoreNormalized bool
-	Operation             ColumnPublishOperation
-	CurrentManifest       *ColumnManifestIdentity
-	AppliedCommandLSN     uint64
-	BaseManifestRootID    uint64
-	Hooks                 ColumnPublishPlanHooks
+	Collection             string
+	ColumnStore            *ColumnStoreConfig
+	ColumnStoreNormalized  bool
+	Operation              ColumnPublishOperation
+	CurrentManifest        *ColumnManifestIdentity
+	CurrentManifestRecords []columnManifestRecord
+	AppliedCommandLSN      uint64
+	BaseManifestRootID     uint64
+	Hooks                  ColumnPublishPlanHooks
 }
 
 // ColumnPublishPlanHooks provide the engine-specific stages for a publish plan.
@@ -118,12 +119,13 @@ type ColumnPublishPreparedAssets struct {
 
 // ColumnPublishManifestEncodeInput is passed to the manifest encoding stage.
 type ColumnPublishManifestEncodeInput struct {
-	Collection        string
-	ColumnStore       ColumnStoreConfig
-	Operation         ColumnPublishOperation
-	AppliedCommandLSN uint64
-	CurrentManifest   *ColumnManifestIdentity
-	Prepared          ColumnPublishPreparedAssets
+	Collection             string
+	ColumnStore            ColumnStoreConfig
+	Operation              ColumnPublishOperation
+	AppliedCommandLSN      uint64
+	CurrentManifest        *ColumnManifestIdentity
+	CurrentManifestRecords []columnManifestRecord
+	Prepared               ColumnPublishPreparedAssets
 }
 
 // ColumnPublishManifestEncodeResult identifies the encoded manifest generation.
@@ -641,12 +643,13 @@ func encodeColumnPublishManifest(input ColumnPublishPlanInput, cfg ColumnStoreCo
 		return ColumnPublishManifestEncodeResult{}, errors.New("collections: column publish manifest encode hook is required")
 	}
 	return input.Hooks.EncodeManifest(ColumnPublishManifestEncodeInput{
-		Collection:        input.Collection,
-		ColumnStore:       columnPublishHookConfig(cfg),
-		Operation:         input.Operation,
-		AppliedCommandLSN: input.AppliedCommandLSN,
-		CurrentManifest:   cloneColumnManifestIdentityPtr(input.CurrentManifest),
-		Prepared:          cloneColumnPublishPreparedAssets(prepared),
+		Collection:             input.Collection,
+		ColumnStore:            columnPublishHookConfig(cfg),
+		Operation:              input.Operation,
+		AppliedCommandLSN:      input.AppliedCommandLSN,
+		CurrentManifest:        cloneColumnManifestIdentityPtr(input.CurrentManifest),
+		CurrentManifestRecords: cloneColumnManifestRecords(input.CurrentManifestRecords),
+		Prepared:               cloneColumnPublishPreparedAssets(prepared),
 	})
 }
 

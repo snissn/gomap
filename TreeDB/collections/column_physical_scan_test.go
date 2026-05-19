@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"strings"
@@ -272,6 +273,109 @@ func TestColumnPhysicalAssetSerialScanRejectsV1DeleteOperationM13A(t *testing.T)
 	_, err = scanColumnPhysicalAssetRows(encoded, ref, "events", *normalized, projection, nil)
 	if err == nil || !strings.Contains(err.Error(), "legacy v1 column physical asset delete operation unsupported") {
 		t.Fatalf("scan err=%v want legacy v1 delete unsupported", err)
+	}
+}
+
+func TestColumnManifestAssetRefsForScanRetainsChecksumCoveredGenerationsM13A(t *testing.T) {
+	stale := testColumnPublishPreparedAssetM10A()
+	stale.Ref.Generation = 2
+	stale.Ref.PartID = 1
+	stale.GenerationID = stale.Ref.Generation
+	staleValue, err := encodeColumnManifestPartRecord(stale)
+	if err != nil {
+		t.Fatalf("encode stale part: %v", err)
+	}
+	active := testColumnPublishPreparedAssetM10A()
+	active.Ref.Generation = 3
+	active.Ref.PartID = 2
+	active.GenerationID = active.Ref.Generation
+	activeValue, err := encodeColumnManifestPartRecord(active)
+	if err != nil {
+		t.Fatalf("encode active part: %v", err)
+	}
+
+	refs, err := columnManifestAssetRefsFromRecordsForScan([]columnManifestRecord{
+		{key: []byte(columnManifestHeaderRecordKey), value: []byte("header ignored by ref extraction")},
+		{key: columnManifestPartRecordKey(stale.Ref.Generation, stale.Ref.PartID), value: staleValue},
+		{key: columnManifestPartRecordKey(active.Ref.Generation, active.Ref.PartID), value: activeValue},
+	}, active.Ref.Generation)
+	if err != nil {
+		t.Fatalf("columnManifestAssetRefsFromRecordsForScan: %v", err)
+	}
+	if len(refs) != 2 ||
+		refs[0].Generation != stale.Ref.Generation || refs[0].PartID != stale.Ref.PartID ||
+		refs[1].Generation != active.Ref.Generation || refs[1].PartID != active.Ref.PartID {
+		t.Fatalf("refs=%+v want retained stale ref %+v and active ref %+v", refs, stale.Ref, active.Ref)
+	}
+}
+
+func TestColumnManifestEncodeChecksumsRetainedPartRecordsM13A(t *testing.T) {
+	cfg, err := normalizeColumnStoreConfig("events", testColumnStoreConfig(nil))
+	if err != nil {
+		t.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+	retained := testColumnPublishPreparedAssetM10A()
+	retained.Ref.Generation = 1
+	retained.Ref.PartID = 1
+	retained.GenerationID = retained.Ref.Generation
+	retainedValue, err := encodeColumnManifestPartRecord(retained)
+	if err != nil {
+		t.Fatalf("encode retained part: %v", err)
+	}
+	next := testColumnPublishPreparedAssetM10A()
+	next.Ref.Generation = 2
+	next.Ref.PartID = 2
+	next.GenerationID = next.Ref.Generation
+	manifest, err := encodeColumnManifestForWrite(ColumnPublishManifestEncodeInput{
+		Collection:        "events",
+		ColumnStore:       *cfg,
+		Operation:         ColumnPublishOperationUpdate,
+		AppliedCommandLSN: 2,
+		CurrentManifest:   &ColumnManifestIdentity{Generation: 1, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 1},
+		CurrentManifestRecords: []columnManifestRecord{{
+			key:   columnManifestPartRecordKey(retained.Ref.Generation, retained.Ref.PartID),
+			value: retainedValue,
+		}},
+		Prepared: ColumnPublishPreparedAssets{
+			Assets:             []ColumnPreparedAsset{next},
+			RowCount:           1,
+			ColumnPayloadBytes: next.Bytes,
+		},
+	})
+	if err != nil {
+		t.Fatalf("encodeColumnManifestForWrite: %v", err)
+	}
+	if len(manifest.Records) != 3 {
+		t.Fatalf("manifest records=%d want header + retained + next", len(manifest.Records))
+	}
+	active, err := activeColumnManifestRecordsForScan(manifest.Records, manifest.Identity.Generation)
+	if err != nil {
+		t.Fatalf("activeColumnManifestRecordsForScan: %v", err)
+	}
+	checksum := checksumColumnManifestRecords(ColumnPublishManifestEncodeInput{
+		Collection:        "events",
+		ColumnStore:       ColumnStoreConfig{SchemaHash: cfg.SchemaHash},
+		Operation:         ColumnPublishOperationUpdate,
+		AppliedCommandLSN: 2,
+	}, manifest.Identity.Generation, active)
+	if checksum != manifest.Identity.Checksum {
+		t.Fatalf("checksum=%d want manifest identity checksum=%d", checksum, manifest.Identity.Checksum)
+	}
+	tampered := cloneColumnManifestRecords(active)
+	for i := range tampered {
+		if bytes.HasPrefix(tampered[i].key, []byte(columnManifestPartRecordPrefix)) && bytes.Contains(tampered[i].value, []byte(retained.Reason)) {
+			tampered[i].value[len(tampered[i].value)-1] ^= 0x01
+			break
+		}
+	}
+	tamperedChecksum := checksumColumnManifestRecords(ColumnPublishManifestEncodeInput{
+		Collection:        "events",
+		ColumnStore:       ColumnStoreConfig{SchemaHash: cfg.SchemaHash},
+		Operation:         ColumnPublishOperationUpdate,
+		AppliedCommandLSN: 2,
+	}, manifest.Identity.Generation, tampered)
+	if tamperedChecksum == manifest.Identity.Checksum {
+		t.Fatal("tampered retained manifest part did not change checksum")
 	}
 }
 

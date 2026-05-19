@@ -143,7 +143,7 @@ func (c *Collection) scanColumnPhysicalRows(req columnPhysicalScanRequest) (colu
 	if err := validateColumnManifestSnapshotForScan(manifest, records, cfg, *cfg.ActiveManifest, collectionName); err != nil {
 		return diag, err
 	}
-	refs, err := columnManifestAssetRefsFromRecordsForScan(records)
+	refs, err := columnManifestAssetRefsFromRecordsForScan(records, manifest.Generation)
 	if err != nil {
 		return diag, err
 	}
@@ -302,7 +302,7 @@ func activeColumnManifestRecordsForScan(records []columnManifestRecord, generati
 			if err != nil {
 				return nil, err
 			}
-			if part.AssetRef.Generation == generation {
+			if part.AssetRef.Generation <= generation {
 				active = append(active, record)
 			}
 		}
@@ -310,7 +310,7 @@ func activeColumnManifestRecordsForScan(records []columnManifestRecord, generati
 	return active, nil
 }
 
-func columnManifestAssetRefsFromRecordsForScan(records []columnManifestRecord) ([]ColumnAssetRef, error) {
+func columnManifestAssetRefsFromRecordsForScan(records []columnManifestRecord, generation uint64) ([]ColumnAssetRef, error) {
 	refs := make([]ColumnAssetRef, 0, len(records))
 	for _, record := range records {
 		if !bytes.HasPrefix(record.key, []byte(columnManifestPartRecordPrefix)) {
@@ -319,6 +319,9 @@ func columnManifestAssetRefsFromRecordsForScan(records []columnManifestRecord) (
 		part, err := decodeColumnManifestPartRecord(record.value)
 		if err != nil {
 			return nil, err
+		}
+		if part.AssetRef.Generation > generation {
+			continue
 		}
 		refs = append(refs, part.AssetRef)
 	}
