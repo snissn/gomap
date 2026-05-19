@@ -238,7 +238,6 @@ func writeColumnPhysicalAssetToManager(rootDir string, cfg ColumnStoreConfig, pa
 		return ColumnAssetRef{}, err
 	}
 	if err := file.Close(); err != nil {
-		closeFile = false
 		return ColumnAssetRef{}, err
 	}
 	closeFile = false
