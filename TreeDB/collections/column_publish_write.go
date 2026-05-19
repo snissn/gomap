@@ -62,6 +62,42 @@ func (c *Collection) requireColumnStoreCommandWAL(meta CollectionMeta, commandWA
 	return fmt.Errorf("%w: column-store writes require command WAL collection=%q", backenddb.ErrCommandWALRejected, meta.Name)
 }
 
+func requireColumnStoreWriteOperationSupported(meta CollectionMeta, operation ColumnPublishOperation) error {
+	if !columnStoreWriteEnabled(meta) {
+		return nil
+	}
+	switch operation {
+	case ColumnPublishOperationInsert:
+		if normalizedDocumentFormat(meta.Options.DocumentFormat) == DocumentFormatJSON {
+			return nil
+		}
+		return fmt.Errorf("%w: unsupported column-store write operation: M12B accepts only JSON insert writes before column assets are acknowledged collection=%q operation=%s document_format=%q",
+			backenddb.ErrCommandWALRejected,
+			meta.Name,
+			operation,
+			meta.Options.DocumentFormat,
+		)
+	case ColumnPublishOperationUpdate:
+		return fmt.Errorf("%w: unsupported column-store write operation: M12B rejects update writes until M12C delta-part staging is implemented collection=%q operation=%s",
+			backenddb.ErrCommandWALRejected,
+			meta.Name,
+			operation,
+		)
+	case ColumnPublishOperationDelete:
+		return fmt.Errorf("%w: unsupported column-store write operation: M12B rejects delete writes until M12C tombstone staging is implemented collection=%q operation=%s",
+			backenddb.ErrCommandWALRejected,
+			meta.Name,
+			operation,
+		)
+	default:
+		return fmt.Errorf("%w: unsupported column-store write operation collection=%q operation=%q",
+			backenddb.ErrCommandWALRejected,
+			meta.Name,
+			operation,
+		)
+	}
+}
+
 func columnStoreProfileAllowsForegroundCommandWAL(profileSupport ColumnStoreProfileSupport, durabilityMode backenddb.DurabilityMode) bool {
 	switch profileSupport {
 	case ColumnStoreProfileDurableOnly, ColumnStoreProfileBenchmarkRelaxed:
@@ -73,6 +109,9 @@ func columnStoreProfileAllowsForegroundCommandWAL(profileSupport ColumnStoreProf
 
 func (c *Collection) publishRootDeltaGroupMaybeColumn(ordered []backenddb.OrderedRootDeltaPublishInput, input columnWritePublishInput) (uint64, []uint64, CollectionMeta, []string, error) {
 	if err := c.requireColumnStoreCommandWAL(input.meta, input.commandWALIntent); err != nil {
+		return 0, nil, CollectionMeta{}, nil, err
+	}
+	if err := requireColumnStoreWriteOperationSupported(input.meta, input.operation); err != nil {
 		return 0, nil, CollectionMeta{}, nil, err
 	}
 	if !columnStoreWriteEnabled(input.meta) {
@@ -132,6 +171,9 @@ func (c *Collection) publishRootDeltaGroupMaybeColumn(ordered []backenddb.Ordere
 
 func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.OrderedRootDeltaBatchPublishInput, preflight backenddb.OrderedRootGroupPreflight, input columnWritePublishInput) (uint64, []uint64, CollectionMeta, []string, error) {
 	if err := c.requireColumnStoreCommandWAL(input.meta, input.commandWALIntent); err != nil {
+		return 0, nil, CollectionMeta{}, nil, err
+	}
+	if err := requireColumnStoreWriteOperationSupported(input.meta, input.operation); err != nil {
 		return 0, nil, CollectionMeta{}, nil, err
 	}
 	if !columnStoreWriteEnabled(input.meta) {

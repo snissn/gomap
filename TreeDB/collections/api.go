@@ -3113,6 +3113,9 @@ func (c *Collection) Insert(id, document []byte) ([]byte, error) {
 	if err := c.requireColumnStoreCommandWAL(c.meta, nil); err != nil {
 		return nil, err
 	}
+	if err := requireColumnStoreWriteOperationSupported(c.meta, ColumnPublishOperationInsert); err != nil {
+		return nil, err
+	}
 	if len(c.meta.Indexes) == 0 && !c.db.CommandWALEnabled() {
 		if c.hasBufferedNoIndexBSONRootRuns() {
 			if err := c.withMutationLock(func() error {
@@ -3273,6 +3276,9 @@ func (c *Collection) insertOneNoIndexBuffered(id, document []byte) ([]byte, erro
 	if err := c.requireColumnStoreCommandWAL(c.meta, nil); err != nil {
 		return nil, err
 	}
+	if err := requireColumnStoreWriteOperationSupported(c.meta, ColumnPublishOperationInsert); err != nil {
+		return nil, err
+	}
 	domain := c.writeDomain
 	if domain == nil {
 		return c.insertOneNoIndex(id, document)
@@ -3290,6 +3296,10 @@ func (c *Collection) insertOneNoIndexBuffered(id, document []byte) ([]byte, erro
 	}
 	c.meta = catalog.meta
 	if err := c.requireColumnStoreCommandWAL(catalog.meta, nil); err != nil {
+		domain.mu.Unlock()
+		return nil, err
+	}
+	if err := requireColumnStoreWriteOperationSupported(catalog.meta, ColumnPublishOperationInsert); err != nil {
 		domain.mu.Unlock()
 		return nil, err
 	}
@@ -3375,6 +3385,9 @@ func (c *Collection) bufferNoIndexInsertBatch(
 		return nil, false, nil
 	}
 	if err := c.requireColumnStoreCommandWAL(catalog.meta, nil); err != nil {
+		return nil, true, err
+	}
+	if err := requireColumnStoreWriteOperationSupported(catalog.meta, ColumnPublishOperationInsert); err != nil {
 		return nil, true, err
 	}
 	switch normalizedDocumentFormat(plannerOptions.documentFormat) {
@@ -8284,6 +8297,10 @@ func (c *Collection) insertBatchOnceWithLockState(
 		closePlanningSnapshot()
 		return nil, err
 	}
+	if err := requireColumnStoreWriteOperationSupported(meta, ColumnPublishOperationInsert); err != nil {
+		closePlanningSnapshot()
+		return nil, err
+	}
 	plannerOptions, err := collectionPlannerOptionsForDB(c.db, meta)
 	if err != nil {
 		closePlanningSnapshot()
@@ -9202,6 +9219,15 @@ func (c *Collection) deleteBatchOnce(documentIDs [][]byte, commandWALIntent *bac
 	baseSystemRoot := snapshotSystemRoot(snap)
 	baseCommitSeq := snapshotCommitSeq(snap)
 
+	if err := c.requireColumnStoreCommandWAL(c.meta, commandWALIntent); err != nil {
+		_ = snap.Close()
+		return 0, err
+	}
+	if err := requireColumnStoreWriteOperationSupported(c.meta, ColumnPublishOperationDelete); err != nil {
+		_ = snap.Close()
+		return 0, err
+	}
+
 	primaryRootName := collectionPrimaryRootName(c.meta.Name)
 	commandWALActive := c.commandWALActive(commandWALIntent)
 	if commandWALIntent == nil && commandWALActive {
@@ -9274,11 +9300,6 @@ func (c *Collection) deleteBatchOnce(documentIDs [][]byte, commandWALIntent *bac
 		}
 		return 0, nil
 	}
-	if err := c.requireColumnStoreCommandWAL(c.meta, commandWALIntent); err != nil {
-		_ = snap.Close()
-		return 0, err
-	}
-
 	deleteIDs := make([][]byte, len(existing))
 	for i := range existing {
 		deleteIDs[i] = existing[i].id
@@ -9440,6 +9461,15 @@ func (c *Collection) deleteDocumentOnce(documentID []byte, commandWALIntent *bac
 	baseSystemRoot := snapshotSystemRoot(snap)
 	baseCommitSeq := snapshotCommitSeq(snap)
 
+	if err := c.requireColumnStoreCommandWAL(c.meta, commandWALIntent); err != nil {
+		_ = snap.Close()
+		return false, err
+	}
+	if err := requireColumnStoreWriteOperationSupported(c.meta, ColumnPublishOperationDelete); err != nil {
+		_ = snap.Close()
+		return false, err
+	}
+
 	primaryRootName := collectionPrimaryRootName(c.meta.Name)
 	commandWALActive := c.commandWALActive(commandWALIntent)
 	if commandWALIntent == nil && commandWALActive {
@@ -9486,11 +9516,6 @@ func (c *Collection) deleteDocumentOnce(documentID []byte, commandWALIntent *bac
 		}
 		return false, nil
 	}
-	if err := c.requireColumnStoreCommandWAL(c.meta, commandWALIntent); err != nil {
-		_ = snap.Close()
-		return false, err
-	}
-
 	runtimes, err := (insertBatchPlanner{
 		collection: c.meta.Name,
 		indexes:    plannerIndexes(c.meta.Indexes),
@@ -9664,6 +9689,9 @@ func (c *Collection) Update(documentID []byte, update func(current []byte) (repl
 	if err := c.requireColumnStoreCommandWAL(c.meta, nil); err != nil {
 		return false, false, err
 	}
+	if err := requireColumnStoreWriteOperationSupported(c.meta, ColumnPublishOperationUpdate); err != nil {
+		return false, false, err
+	}
 	if c.commandWALActive(nil) {
 		results, _, err := c.updateBatchOwnedItemsWithCommandWALIntent([]updateBatchItem{{
 			UpdateBatchItem: UpdateBatchItem{
@@ -9813,6 +9841,9 @@ func (c *Collection) updateBatch(items []UpdateBatchItem, mode updateBatchMode) 
 		return nil, false, err
 	}
 	if err := c.requireColumnStoreCommandWAL(c.meta, nil); err != nil {
+		return nil, false, err
+	}
+	if err := requireColumnStoreWriteOperationSupported(c.meta, ColumnPublishOperationUpdate); err != nil {
 		return nil, false, err
 	}
 	return c.updateBatchOwnedItems(ownedItems, mode)
@@ -11903,6 +11934,10 @@ func (c *Collection) updateDocumentOnceApply(documentID []byte, update func(curr
 		_ = snap.Close()
 		return false, false, err
 	}
+	if err := requireColumnStoreWriteOperationSupported(c.meta, ColumnPublishOperationUpdate); err != nil {
+		_ = snap.Close()
+		return false, false, err
+	}
 	stats := CollectionUpdateStats{
 		Items:   1,
 		Indexes: len(c.meta.Indexes),
@@ -13604,6 +13639,10 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 	}
 	meta := catalog.meta
 	if err := c.requireColumnStoreCommandWAL(meta, commandWALIntent); err != nil {
+		_ = snap.Close()
+		return nil, err
+	}
+	if err := requireColumnStoreWriteOperationSupported(meta, ColumnPublishOperationUpdate); err != nil {
 		_ = snap.Close()
 		return nil, err
 	}
