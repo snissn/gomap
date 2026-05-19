@@ -217,7 +217,7 @@ func (c *Collection) deriveColumnQueryPlannerCapabilitiesM14B(collectionName str
 	}
 	defer func() { _ = snap.Close() }()
 
-	if err := validateColumnManifestIdentityAtRootForScan(snap, rootID, *cfg.ActiveManifest); err != nil {
+	if err := validateColumnManifestIdentityAtRoot(snap, rootID, *cfg.ActiveManifest); err != nil {
 		caps.CapabilityError = fmt.Sprintf("physical column query planner capability discovery failed: %v", err)
 		return caps
 	}
