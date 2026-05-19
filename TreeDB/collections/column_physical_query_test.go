@@ -196,6 +196,65 @@ func TestColumnPhysicalQueryKeepsInsertOnlyMultiGenerationOnDirectPathM13C(t *te
 	}
 }
 
+func TestColumnPhysicalQueryParallelMatchesSerialInsertOnlyM14B(t *testing.T) {
+	reopened, closeFn := openColumnPhysicalInsertMultiGenerationFixtureM14B(t, 8)
+	defer closeFn()
+
+	tests := []struct {
+		name string
+		req  ColumnPhysicalQueryRequest
+	}{
+		{
+			name: "count",
+			req:  ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "kind"},
+		},
+		{
+			name: "span",
+			req:  ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupInt64Span, GroupColumn: "did", ValueColumn: "time_us"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			serial, err := reopened.RunColumnPhysicalQuery(tc.req)
+			if err != nil {
+				t.Fatalf("serial RunColumnPhysicalQuery: %v", err)
+			}
+			parallel, err := reopened.RunColumnPhysicalQueryParallel(tc.req, 4)
+			if err != nil {
+				t.Fatalf("parallel RunColumnPhysicalQuery: %v", err)
+			}
+			if !reflect.DeepEqual(parallel.Groups, serial.Groups) {
+				t.Fatalf("parallel groups=%+v want serial %+v", parallel.Groups, serial.Groups)
+			}
+			if parallel.Diagnostics.RowMaterializations != 0 {
+				t.Fatalf("parallel row materializations=%d want zero diagnostics=%+v", parallel.Diagnostics.RowMaterializations, parallel.Diagnostics)
+			}
+			if got, want := parallel.Diagnostics.ReduceRows, serial.Diagnostics.ReduceRows; got != want {
+				t.Fatalf("parallel reduce rows=%d want serial %d diagnostics=%+v", got, want, parallel.Diagnostics)
+			}
+			if got, want := parallel.Diagnostics.ScheduledGranules, serial.Diagnostics.ScheduledGranules; got != want {
+				t.Fatalf("parallel scheduled granules=%d want serial %d diagnostics=%+v", got, want, parallel.Diagnostics)
+			}
+			if parallel.Diagnostics.PhysicalBytesScanned != serial.Diagnostics.PhysicalBytesScanned {
+				t.Fatalf("parallel bytes=%d want serial %d diagnostics=%+v", parallel.Diagnostics.PhysicalBytesScanned, serial.Diagnostics.PhysicalBytesScanned, parallel.Diagnostics)
+			}
+		})
+	}
+}
+
+func TestColumnPhysicalQueryParallelFailsClosedForMutationVisibilityM14B(t *testing.T) {
+	reopened, closeFn, _ := openColumnPhysicalMutationFixtureM13C(t, 64)
+	defer closeFn()
+
+	_, err := reopened.RunColumnPhysicalQueryParallel(ColumnPhysicalQueryRequest{
+		Kind:        ColumnPhysicalQueryGroupCount,
+		GroupColumn: "kind",
+	}, 4)
+	if !errors.Is(err, ErrColumnQueryPlanUnsupported) || !strings.Contains(err.Error(), "partitioned visibility execution") {
+		t.Fatalf("RunColumnPhysicalQueryParallel err=%v want fail-closed partitioned visibility error", err)
+	}
+}
+
 func TestColumnStoreGetReconstructsRetainedPayloadM13C(t *testing.T) {
 	dir, _ := prepareColumnStoreCommandWALDirM10B(t)
 	d := openCollectionCommandWALDB(t, dir)

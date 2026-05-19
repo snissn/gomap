@@ -148,7 +148,7 @@ func (c *Collection) PlanColumnQuery(req ColumnQueryPlanRequest) (ColumnQueryPla
 		return ColumnQueryPlan{}, errCollectionNotFound
 	}
 	if columnStoreEnabled && columnQueryRequestNeedsPhysicalCapabilityDiscovery(req) {
-		req.Capabilities = c.deriveColumnQueryPlannerCapabilitiesM14A(collectionName, rootID, cfg, columnStoreEnabled, req.Capabilities)
+		req.Capabilities = c.deriveColumnQueryPlannerCapabilitiesM14B(collectionName, rootID, cfg, columnStoreEnabled, req)
 	}
 	identity, identityOK := columnStoreCacheIdentity(catalog, systemRoot, commitSeq)
 	return planColumnQueryForCatalog(catalog, identity, identityOK, req), nil
@@ -167,8 +167,8 @@ func columnQueryRequestNeedsPhysicalCapabilityDiscovery(req ColumnQueryPlanReque
 	}
 }
 
-func (c *Collection) deriveColumnQueryPlannerCapabilitiesM14A(collectionName string, rootID uint64, cfg ColumnStoreConfig, columnStoreEnabled bool, requested ColumnQueryPlannerCapabilities) ColumnQueryPlannerCapabilities {
-	caps := requested
+func (c *Collection) deriveColumnQueryPlannerCapabilitiesM14B(collectionName string, rootID uint64, cfg ColumnStoreConfig, columnStoreEnabled bool, req ColumnQueryPlanRequest) ColumnQueryPlannerCapabilities {
+	caps := req.Capabilities
 	caps.SerialColumnScan = false
 	caps.AggregateMetadata = false
 	caps.ParallelColumnScan = false
@@ -234,7 +234,21 @@ func (c *Collection) deriveColumnQueryPlannerCapabilitiesM14A(collectionName str
 	caps.MutationParts = manifestCaps.MutationParts
 	caps.VisibilityMetadata = manifestCaps.MutationParts > 0 || cfg.PhysicalMutationParts > 0
 	caps.ParallelWorkUnits = columnQueryParallelWorkUnits(caps)
+	if columnQueryForcedPhysicalExecution(req.ForceKind) && caps.PhysicalAssetCount > 0 {
+		caps.SerialColumnScan = true
+		caps.AggregateMetadata = len(cfg.AggregateMetadata) > 0
+		caps.ParallelColumnScan = caps.MutationParts == 0 && columnQueryParallelWorkerCount(caps) > 1
+	}
 	return caps
+}
+
+func columnQueryForcedPhysicalExecution(kind ColumnQueryPlanKind) bool {
+	switch kind {
+	case ColumnQueryPlanSerialColumnScan, ColumnQueryPlanAggregateMetadata, ColumnQueryPlanParallelColumnScan:
+		return true
+	default:
+		return false
+	}
 }
 
 func planColumnQueryForCatalog(catalog *collectionCatalog, identity ColumnStoreCacheIdentity, identityOK bool, req ColumnQueryPlanRequest) ColumnQueryPlan {

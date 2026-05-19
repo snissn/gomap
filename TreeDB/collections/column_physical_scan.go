@@ -14,9 +14,11 @@ import (
 )
 
 type columnPhysicalScanRequest struct {
-	ProjectedColumns  []string
-	Visitor           func(columnPhysicalScanRowView) error
-	RequireInsertOnly bool
+	ProjectedColumns    []string
+	Visitor             func(columnPhysicalScanRowView) error
+	RequireInsertOnly   bool
+	RefOrdinalModulo    int
+	RefOrdinalRemainder int
 }
 
 type columnPhysicalScanDiagnostics struct {
@@ -184,9 +186,14 @@ func (c *Collection) scanColumnPhysicalRowsAtSnapshot(
 	}
 	diag.AssetRefs = len(refs)
 	diag.MutationParts = mutationParts
-	diag.ScheduledGranules = len(refs)
 	if req.RequireInsertOnly && mutationParts != 0 {
 		return diag, errColumnPhysicalQueryNeedsVisibility
+	}
+	if req.RefOrdinalModulo < 0 {
+		return diag, errors.New("collections: physical column scan ref ordinal modulo cannot be negative")
+	}
+	if req.RefOrdinalModulo > 0 && (req.RefOrdinalRemainder < 0 || req.RefOrdinalRemainder >= req.RefOrdinalModulo) {
+		return diag, fmt.Errorf("collections: physical column scan ref ordinal remainder=%d outside modulo=%d", req.RefOrdinalRemainder, req.RefOrdinalModulo)
 	}
 	columnAssetRootDir := c.db.ColumnAssetRootDir()
 	readCache, err := newColumnPhysicalAssetReadCache(columnAssetRootDir, cfg.AssetManager.Namespace)
@@ -195,7 +202,11 @@ func (c *Collection) scanColumnPhysicalRowsAtSnapshot(
 	}
 	defer func() { _ = readCache.close() }()
 	var rawScratch []byte
-	for _, assetRef := range refs {
+	for ordinal, assetRef := range refs {
+		if !columnPhysicalScanIncludesRefOrdinal(req, ordinal) {
+			continue
+		}
+		diag.ScheduledGranules++
 		ref := assetRef.Ref
 		if ref.Generation > cfg.ActiveManifest.Generation {
 			return diag, fmt.Errorf("collections: column physical scan ref generation=%d is newer than active manifest generation=%d", ref.Generation, cfg.ActiveManifest.Generation)
@@ -218,6 +229,13 @@ func (c *Collection) scanColumnPhysicalRowsAtSnapshot(
 		diag.DeletedRows += summary.deleted
 	}
 	return diag, nil
+}
+
+func columnPhysicalScanIncludesRefOrdinal(req columnPhysicalScanRequest, ordinal int) bool {
+	if req.RefOrdinalModulo <= 1 {
+		return true
+	}
+	return ordinal%req.RefOrdinalModulo == req.RefOrdinalRemainder
 }
 
 func newColumnPhysicalScanProjection(cfg ColumnStoreConfig, projected []string) (columnPhysicalScanProjection, error) {

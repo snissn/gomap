@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"sync"
 	"time"
 )
 
@@ -112,6 +113,76 @@ func (c *Collection) RunColumnPhysicalQuery(req ColumnPhysicalQueryRequest) (Col
 	return result, nil
 }
 
+// RunColumnPhysicalQueryParallel executes an insert-only physical query by
+// partitioning immutable manifest refs across worker-local serial scanners.
+// Mutation-bearing manifests stay fail-closed until partitioned visibility
+// reconstruction is available.
+func (c *Collection) RunColumnPhysicalQueryParallel(req ColumnPhysicalQueryRequest, maxWorkers int) (ColumnPhysicalQueryResult, error) {
+	if maxWorkers <= 1 {
+		return c.RunColumnPhysicalQuery(req)
+	}
+	cfg, err := c.columnPhysicalQueryColumnStoreConfig()
+	if err != nil {
+		return ColumnPhysicalQueryResult{}, err
+	}
+	if cfg.PhysicalMutationParts > 0 {
+		return ColumnPhysicalQueryResult{}, fmt.Errorf("%w: parallel physical column query requires insert-only manifest until partitioned visibility execution lands", ErrColumnQueryPlanUnsupported)
+	}
+	merged, err := newColumnPhysicalQueryExecutor(cfg, req)
+	if err != nil {
+		return ColumnPhysicalQueryResult{}, err
+	}
+
+	type workerResult struct {
+		exec *columnPhysicalQueryExecutor
+		diag columnPhysicalScanDiagnostics
+		err  error
+	}
+	results := make([]workerResult, maxWorkers)
+	start := time.Now()
+	var wg sync.WaitGroup
+	for worker := 0; worker < maxWorkers; worker++ {
+		worker := worker
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			exec, err := newColumnPhysicalQueryExecutor(cfg, req)
+			if err != nil {
+				results[worker].err = err
+				return
+			}
+			diag, err := c.scanColumnPhysicalRows(columnPhysicalScanRequest{
+				ProjectedColumns:    exec.projected,
+				Visitor:             exec.visit,
+				RequireInsertOnly:   true,
+				RefOrdinalModulo:    maxWorkers,
+				RefOrdinalRemainder: worker,
+			})
+			results[worker] = workerResult{exec: exec, diag: diag, err: err}
+		}()
+	}
+	wg.Wait()
+
+	result := ColumnPhysicalQueryResult{}
+	for worker := range results {
+		workerResult := results[worker]
+		result.Diagnostics = mergeColumnPhysicalQueryDiagnostics(result.Diagnostics, columnPhysicalQueryDiagnosticsFromScan(workerResult.diag))
+		if workerResult.err != nil {
+			result.Diagnostics.ScanNanos = time.Since(start).Nanoseconds()
+			return result, workerResult.err
+		}
+		if err := merged.mergeFrom(workerResult.exec); err != nil {
+			result.Diagnostics.ScanNanos = time.Since(start).Nanoseconds()
+			return result, err
+		}
+	}
+	result.Diagnostics.ScanNanos = time.Since(start).Nanoseconds()
+	result.Groups = merged.groups()
+	result.Diagnostics.ReduceRows = merged.reduceRows
+	result.Diagnostics.ResultGroups = len(result.Groups)
+	return result, nil
+}
+
 var errColumnPhysicalQueryNeedsVisibility = errors.New("collections: physical column query requires mutation visibility overlay")
 
 func (c *Collection) runColumnPhysicalQueryWithVisibility(cfg ColumnStoreConfig, req ColumnPhysicalQueryRequest) (ColumnPhysicalQueryResult, error) {
@@ -181,6 +252,39 @@ func columnPhysicalQueryDiagnosticsFromScan(diag columnPhysicalScanDiagnostics) 
 		RowMaterializations:        diag.RowMaterializations,
 		PhysicalBytesScanned:       diag.PhysicalBytesScanned,
 	}
+}
+
+func mergeColumnPhysicalQueryDiagnostics(left, right ColumnPhysicalQueryDiagnostics) ColumnPhysicalQueryDiagnostics {
+	if left.ManifestRoot == 0 {
+		left.ManifestRoot = right.ManifestRoot
+		left.ManifestGeneration = right.ManifestGeneration
+		left.RecoveryManifestGeneration = right.RecoveryManifestGeneration
+		left.AppliedCommandLSN = right.AppliedCommandLSN
+		left.ManifestRecords = right.ManifestRecords
+		left.AssetRefs = right.AssetRefs
+		left.ProjectedColumns = right.ProjectedColumns
+	}
+	if right.ManifestRecords > left.ManifestRecords {
+		left.ManifestRecords = right.ManifestRecords
+	}
+	if right.AssetRefs > left.AssetRefs {
+		left.AssetRefs = right.AssetRefs
+	}
+	if right.ProjectedColumns > left.ProjectedColumns {
+		left.ProjectedColumns = right.ProjectedColumns
+	}
+	left.MutationParts += right.MutationParts
+	left.DecodedBlocks += right.DecodedBlocks
+	left.ScheduledGranules += right.ScheduledGranules
+	left.SkippedGranules += right.SkippedGranules
+	left.RowsScanned += right.RowsScanned
+	left.DeletedRows += right.DeletedRows
+	left.RowMaterializations += right.RowMaterializations
+	left.PhysicalBytesScanned += right.PhysicalBytesScanned
+	left.ReduceRows += right.ReduceRows
+	left.VisibilityRows += right.VisibilityRows
+	left.ReconstructionRows += right.ReconstructionRows
+	return left
 }
 
 type columnPhysicalQueryExecutor struct {
@@ -404,6 +508,67 @@ func (e *columnPhysicalQueryExecutor) groups() []ColumnPhysicalQueryGroup {
 		return e.resultGroups[i].Key < e.resultGroups[j].Key
 	})
 	return e.resultGroups
+}
+
+func (e *columnPhysicalQueryExecutor) mergeFrom(other *columnPhysicalQueryExecutor) error {
+	if e == nil || other == nil {
+		return errors.New("collections: cannot merge nil physical column query executor")
+	}
+	if e.kind != other.kind {
+		return fmt.Errorf("collections: cannot merge physical column query kind %q into %q", other.kind, e.kind)
+	}
+	switch e.kind {
+	case ColumnPhysicalQueryGroupCount:
+		for key, count := range other.counts {
+			e.counts[key] += count
+		}
+	case ColumnPhysicalQueryGroupCountDistinct:
+		for key, otherSet := range other.distinct {
+			set := e.distinct[key]
+			if set == nil {
+				set = make(map[string]struct{}, len(otherSet))
+				e.distinct[key] = set
+			}
+			for value := range otherSet {
+				set[value] = struct{}{}
+			}
+		}
+	case ColumnPhysicalQueryHourCount:
+		for hour, count := range other.hourCounts {
+			e.hourCounts[hour] += count
+		}
+	case ColumnPhysicalQueryGroupMinInt64:
+		for key, value := range other.int64Values {
+			if cur, ok := e.int64Values[key]; !ok || value < cur {
+				e.int64Values[key] = value
+			}
+		}
+	case ColumnPhysicalQueryGroupMaxInt64:
+		for key, value := range other.int64Values {
+			if cur, ok := e.int64Values[key]; !ok || value > cur {
+				e.int64Values[key] = value
+			}
+		}
+	case ColumnPhysicalQueryGroupInt64Span:
+		for key, span := range other.int64Spans {
+			cur, ok := e.int64Spans[key]
+			if !ok {
+				e.int64Spans[key] = span
+				continue
+			}
+			if span.min < cur.min {
+				cur.min = span.min
+			}
+			if span.max > cur.max {
+				cur.max = span.max
+			}
+			e.int64Spans[key] = cur
+		}
+	default:
+		return fmt.Errorf("%w: unsupported physical column query kind %q", ErrColumnQueryPlanUnsupported, e.kind)
+	}
+	e.reduceRows += other.reduceRows
+	return nil
 }
 
 func columnPhysicalQueryStringBytes(value columnDeclaredValue) ([]byte, error) {

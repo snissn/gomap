@@ -227,7 +227,7 @@ func TestColumnPhysicalSerialScannerFailsClosedCorruptAssetM13A(t *testing.T) {
 	}
 }
 
-func TestColumnPhysicalSerialScannerDoesNotEnablePlannerRoutingM13A(t *testing.T) {
+func TestColumnPhysicalSerialScannerDoesNotEnableAutomaticPlannerRoutingM14B(t *testing.T) {
 	dir, _ := prepareColumnStoreCommandWALDirM10B(t)
 	d := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = d.Close() }()
@@ -238,16 +238,12 @@ func TestColumnPhysicalSerialScannerDoesNotEnablePlannerRoutingM13A(t *testing.T
 	plan, err := col.PlanColumnQuery(ColumnQueryPlanRequest{
 		Name:             "q1",
 		ProjectedColumns: []string{"time_us"},
-		ForceKind:        ColumnQueryPlanSerialColumnScan,
 	})
 	if err != nil {
 		t.Fatalf("PlanColumnQuery: %v", err)
 	}
-	if plan.Supported {
-		t.Fatalf("forced serial plan supported before M14 routing: %+v", plan)
-	}
-	if got := plan.Diagnostics.UnsupportedPlanReason; got != "serial physical column scan capability is disabled" {
-		t.Fatalf("unsupported reason=%q want physical scanner disabled", got)
+	if !plan.Supported || plan.Kind != ColumnQueryPlanRowStoreBaseline {
+		t.Fatalf("automatic physical routing should remain disabled without a forced physical label: %+v", plan)
 	}
 }
 
