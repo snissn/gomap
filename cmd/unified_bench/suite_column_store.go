@@ -427,7 +427,10 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 	if columnAssetBytes == 0 {
 		columnAssetBytesNote = "M12A expected isolated physical column assets; zero bytes means no column assets were published"
 	}
-	retainedPayloadBytes := sourceBytes
+	retainedPayloadBytes, retainedPayloadBytesNote, err := columnStoreSuiteRetainedPayloadAccounting(fixtureEvents, columnStoreSuiteConfigForPath(forcedPath), forcedPath)
+	if err != nil {
+		return "", fmt.Errorf("column_store: retained-payload byte accounting: %w", err)
+	}
 	totalReconstructableBytes := retainedPayloadBytes + columnAssetBytes + manifestControlBytes
 	report := columnStoreSuiteReport{
 		GeneratedAt:            time.Now().UTC().Format(time.RFC3339),
@@ -448,7 +451,7 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 		ByteAccounting: columnStoreByteAccounting{
 			SourceDocumentBytes:             sourceBytes,
 			RetainedPayloadBytes:            retainedPayloadBytes,
-			RetainedPayloadBytesNote:        "M12A retains the source JSONBench payload as the reconstructable row baseline; retained-payload stripping is a later milestone",
+			RetainedPayloadBytesNote:        retainedPayloadBytesNote,
 			ColumnAssetBytes:                columnAssetBytes,
 			ColumnAssetBytesNote:            columnAssetBytesNote,
 			ColumnAssetStoreBytes:           columnAssetBytes,
@@ -679,13 +682,25 @@ func columnStoreSuiteConfig() *collections.ColumnStoreConfig {
 	}
 }
 
+func columnStoreSuiteConfigForPath(path string) *collections.ColumnStoreConfig {
+	cfg := columnStoreSuiteConfig()
+	if path == columnStorePathBTreeIndexBaseline {
+		// Secondary-index write paths have not yet been wired to store only
+		// retained row payloads while building indexes from full documents.
+		// Keep this explicit comparison baseline full-retained until that
+		// production shape is supported.
+		cfg.RetainedPayload = collections.ColumnRetainedPayloadFull
+	}
+	return cfg
+}
+
 func columnStoreSuiteCollectionMeta(path string) *collections.CollectionMeta {
 	meta := &collections.CollectionMeta{
 		Name: "events",
 		Options: collections.CollectionOptions{
 			DocumentFormat:               collections.DocumentFormatJSON,
 			DisableIndexedWriteMemtables: true,
-			ColumnStore:                  columnStoreSuiteConfig(),
+			ColumnStore:                  columnStoreSuiteConfigForPath(path),
 		},
 	}
 	if path == columnStorePathBTreeIndexBaseline {
@@ -1156,13 +1171,20 @@ func scanColumnStoreSuiteEvents(collection *collections.Collection, rows int) ([
 	var materialized int
 	var bytesRead int64
 	truncated, err := collection.ScanDocumentsFunc(rows+1, func(record collections.DocumentRecord) (bool, error) {
+		document, err := collection.Get(record.ID)
+		if err != nil {
+			return false, err
+		}
+		if document == nil {
+			return false, fmt.Errorf("document %q disappeared during row baseline scan", string(record.ID))
+		}
 		var event columnStoreDecodedEvent
-		if err := json.Unmarshal(record.Document, &event); err != nil {
+		if err := json.Unmarshal(document, &event); err != nil {
 			return false, err
 		}
 		events = append(events, event)
 		materialized++
-		bytesRead += int64(len(record.Document))
+		bytesRead += int64(len(document))
 		return true, nil
 	})
 	if err != nil {
@@ -1222,6 +1244,71 @@ func scanColumnStoreSuiteEventsByIndex(collection *collections.Collection, rows 
 		return nil, 0, 0, fmt.Errorf("column_store: B-tree index scan materialized %d rows, want %d", materialized, rows)
 	}
 	return events, materialized, bytesRead, nil
+}
+
+func columnStoreSuiteRetainedPayloadAccounting(events []columnStoreFixtureEvent, cfg *collections.ColumnStoreConfig, path string) (int64, string, error) {
+	if cfg == nil || !cfg.Enabled || cfg.RetainedPayload == collections.ColumnRetainedPayloadFull {
+		var bytesTotal int64
+		for _, event := range events {
+			bytesTotal += int64(len(event.Doc))
+		}
+		if path == columnStorePathBTreeIndexBaseline {
+			return bytesTotal, "M13C b_tree_index_baseline keeps full row payload because retained-payload indexed writes remain fail-closed until secondary-index reconstruction is wired", nil
+		}
+		return bytesTotal, "full row payload retained", nil
+	}
+	var bytesTotal int64
+	for _, event := range events {
+		retained, err := columnStoreSuiteRetainedPayloadFromDocument(event.Doc, cfg)
+		if err != nil {
+			return 0, "", err
+		}
+		bytesTotal += int64(len(retained))
+	}
+	switch cfg.RetainedPayload {
+	case collections.ColumnRetainedPayloadNonColumn:
+		return bytesTotal, "M13C stores only non-column retained payload in the row lane; declared columns are reconstructed from physical column assets", nil
+	case collections.ColumnRetainedPayloadNone:
+		return bytesTotal, "M13C stores no row payload beyond an empty JSON object; declared columns are reconstructed from physical column assets", nil
+	default:
+		return 0, "", fmt.Errorf("unsupported retained-payload policy %q", cfg.RetainedPayload)
+	}
+}
+
+func columnStoreSuiteRetainedPayloadFromDocument(document []byte, cfg *collections.ColumnStoreConfig) ([]byte, error) {
+	switch cfg.RetainedPayload {
+	case collections.ColumnRetainedPayloadFull:
+		return append([]byte(nil), document...), nil
+	case collections.ColumnRetainedPayloadNone:
+		return []byte("{}"), nil
+	case collections.ColumnRetainedPayloadNonColumn:
+		var obj map[string]any
+		if err := json.Unmarshal(document, &obj); err != nil {
+			return nil, err
+		}
+		for _, col := range cfg.Columns {
+			columnStoreSuiteDeleteJSONPath(obj, col.Path)
+		}
+		return json.Marshal(obj)
+	default:
+		return nil, fmt.Errorf("unsupported retained-payload policy %q", cfg.RetainedPayload)
+	}
+}
+
+func columnStoreSuiteDeleteJSONPath(obj map[string]any, path string) {
+	parts := strings.Split(strings.TrimSpace(path), ".")
+	if len(parts) == 0 || parts[0] == "" {
+		return
+	}
+	cur := obj
+	for i := 0; i < len(parts)-1; i++ {
+		next, ok := cur[parts[i]].(map[string]any)
+		if !ok {
+			return
+		}
+		cur = next
+	}
+	delete(cur, parts[len(parts)-1])
 }
 
 var columnStoreQueryNameList = [...]string{

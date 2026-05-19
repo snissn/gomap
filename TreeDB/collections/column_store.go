@@ -839,6 +839,13 @@ func writeHashString(d *xxhash.Digest, s string) {
 	_, _ = d.WriteString(s)
 }
 
+func writeHashBytes(d *xxhash.Digest, b []byte) {
+	var lenBuf [8]byte
+	binary.LittleEndian.PutUint64(lenBuf[:], uint64(len(b)))
+	_, _ = d.Write(lenBuf[:])
+	_, _ = d.Write(b)
+}
+
 func writeHashUint64(d *xxhash.Digest, value uint64) {
 	var buf [8]byte
 	binary.LittleEndian.PutUint64(buf[:], value)

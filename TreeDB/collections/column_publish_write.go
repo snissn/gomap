@@ -66,6 +66,14 @@ func requireColumnStoreWriteOperationSupported(meta CollectionMeta, operation Co
 	if !columnStoreWriteEnabled(meta) {
 		return nil
 	}
+	if len(meta.Indexes) != 0 && columnStoreNeedsRetainedPayloadTransform(meta) {
+		return fmt.Errorf("%w: unsupported column-store write operation: M13C retained payload reconstruction is not wired to secondary indexes yet collection=%q operation=%s indexes=%d",
+			backenddb.ErrCommandWALRejected,
+			meta.Name,
+			operation,
+			len(meta.Indexes),
+		)
+	}
 	if normalizedDocumentFormat(meta.Options.DocumentFormat) != DocumentFormatJSON {
 		return fmt.Errorf("%w: unsupported column-store write operation: M12C physical column assets require JSON documents collection=%q operation=%s document_format=%q",
 			backenddb.ErrCommandWALRejected,

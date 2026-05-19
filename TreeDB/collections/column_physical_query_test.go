@@ -1,14 +1,22 @@
 package collections
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"io"
+	"math/rand"
+	"os"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 func TestColumnPhysicalQueryAdapterExecutesJSONBenchShapesM13B(t *testing.T) {
@@ -93,7 +101,7 @@ func TestColumnPhysicalQueryAdapterExecutesJSONBenchShapesM13B(t *testing.T) {
 	}
 }
 
-func TestColumnPhysicalQueryAdapterFailsClosedOnMutationRowsM13B(t *testing.T) {
+func TestColumnPhysicalQueryAdapterAppliesMutationVisibilityM13C(t *testing.T) {
 	dir, _ := prepareColumnStoreCommandWALDirM10B(t)
 	d := openCollectionCommandWALDB(t, dir)
 	col := openColumnStoreCollectionM10B(t, d)
@@ -105,10 +113,14 @@ func TestColumnPhysicalQueryAdapterFailsClosedOnMutationRowsM13B(t *testing.T) {
 		t.Fatalf("InsertBatch: %v", err)
 	}
 	if _, _, err := col.Update([]byte("e1"), func(current []byte) ([]byte, bool, error) {
-		return []byte(`{"time_us":3,"kind":"like","did":"d1"}`), true, nil
+		return []byte(`{"time_us":3,"kind":"share","did":"d1"}`), true, nil
 	}); err != nil {
 		_ = d.Close()
 		t.Fatalf("Update: %v", err)
+	}
+	if deleted, err := col.DeleteBatch([][]byte{[]byte("e2")}); err != nil || deleted != 1 {
+		_ = d.Close()
+		t.Fatalf("DeleteBatch deleted=%d err=%v, want one delete", deleted, err)
 	}
 	if err := d.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
@@ -117,13 +129,739 @@ func TestColumnPhysicalQueryAdapterFailsClosedOnMutationRowsM13B(t *testing.T) {
 	reopen := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = reopen.Close() }()
 	reopened := openColumnStoreCollectionM10B(t, reopen)
-	_, err := reopened.RunColumnPhysicalQuery(ColumnPhysicalQueryRequest{
+	result, err := reopened.RunColumnPhysicalQuery(ColumnPhysicalQueryRequest{
 		Kind:        ColumnPhysicalQueryGroupCount,
 		GroupColumn: "kind",
 	})
-	if !errors.Is(err, ErrColumnQueryPlanUnsupported) || !strings.Contains(err.Error(), "mutation visibility") {
-		t.Fatalf("mutation query err=%v want fail-closed mutation visibility unsupported", err)
+	if err != nil {
+		t.Fatalf("RunColumnPhysicalQuery: %v", err)
 	}
+	if got, want := columnPhysicalQueryLinesM13B("q1", result.Groups), []string{"q1:share=1"}; !equalStringSets(got, want) {
+		t.Fatalf("visibility query lines=%v want %v diagnostics=%+v", got, want, result.Diagnostics)
+	}
+	if result.Diagnostics.RowMaterializations != 0 || result.Diagnostics.ReconstructionRows != 0 {
+		t.Fatalf("aggregate diagnostics materialized/reconstructed rows: %+v", result.Diagnostics)
+	}
+	if result.Diagnostics.ReduceRows != 1 || result.Diagnostics.DeletedRows != 1 {
+		t.Fatalf("visibility diagnostics=%+v want one reduced live row and one tombstone", result.Diagnostics)
+	}
+}
+
+func TestColumnStoreGetReconstructsRetainedPayloadM13C(t *testing.T) {
+	dir, _ := prepareColumnStoreCommandWALDirM10B(t)
+	d := openCollectionCommandWALDB(t, dir)
+	col := openColumnStoreCollectionM10B(t, d)
+	if _, err := col.InsertBatch([][]byte{[]byte("e1")}, [][]byte{
+		[]byte(`{"time_us":1,"kind":"like","did":"d1","payload":"alpha","nested":{"keep":true}}`),
+	}); err != nil {
+		_ = d.Close()
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		_ = d.Close()
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopen := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopen.Close() }()
+	reopened := openColumnStoreCollectionM10B(t, reopen)
+	got, err := reopened.Get([]byte("e1"))
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	assertJSONEqualM13C(t, got, []byte(`{"time_us":1,"kind":"like","did":"d1","payload":"alpha","nested":{"keep":true}}`))
+
+	raw := readRawPrimaryDocumentForTestM13C(t, reopen, "events", []byte("e1"))
+	if strings.Contains(string(raw), "time_us") || strings.Contains(string(raw), "kind") || strings.Contains(string(raw), "did") {
+		t.Fatalf("raw retained payload still duplicates declared fields: %s", raw)
+	}
+	if !strings.Contains(string(raw), "payload") {
+		t.Fatalf("raw retained payload lost non-column field: %s", raw)
+	}
+}
+
+func TestColumnStoreReconstructionPreservesDeclaredAndRetainedUpdatesM13C(t *testing.T) {
+	dir, _ := prepareColumnStoreCommandWALDirM10B(t)
+	d := openCollectionCommandWALDB(t, dir)
+	col := openColumnStoreCollectionM10B(t, d)
+	if _, err := col.InsertBatch([][]byte{[]byte("e1")}, [][]byte{
+		[]byte(`{"time_us":1,"kind":"like","did":"d1","payload":"alpha"}`),
+	}); err != nil {
+		_ = d.Close()
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	if _, modified, err := col.Update([]byte("e1"), func(current []byte) ([]byte, bool, error) {
+		assertJSONEqualM13C(t, current, []byte(`{"time_us":1,"kind":"like","did":"d1","payload":"alpha"}`))
+		return []byte(`{"time_us":1,"kind":"like","did":"d1","payload":"beta"}`), true, nil
+	}); err != nil || !modified {
+		_ = d.Close()
+		t.Fatalf("retained Update modified=%t err=%v", modified, err)
+	}
+	if _, modified, err := col.Update([]byte("e1"), func(current []byte) ([]byte, bool, error) {
+		assertJSONEqualM13C(t, current, []byte(`{"time_us":1,"kind":"like","did":"d1","payload":"beta"}`))
+		return []byte(`{"time_us":3,"kind":"share","did":"d1","payload":"beta"}`), true, nil
+	}); err != nil || !modified {
+		_ = d.Close()
+		t.Fatalf("declared Update modified=%t err=%v", modified, err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopen := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopen.Close() }()
+	reopened := openColumnStoreCollectionM10B(t, reopen)
+	got, err := reopened.Get([]byte("e1"))
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	assertJSONEqualM13C(t, got, []byte(`{"time_us":3,"kind":"share","did":"d1","payload":"beta"}`))
+	result, err := reopened.RunColumnPhysicalQuery(ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "kind"})
+	if err != nil {
+		t.Fatalf("RunColumnPhysicalQuery: %v", err)
+	}
+	if got, want := columnPhysicalQueryLinesM13B("q1", result.Groups), []string{"q1:share=1"}; !equalStringSets(got, want) {
+		t.Fatalf("query lines=%v want %v diagnostics=%+v", got, want, result.Diagnostics)
+	}
+}
+
+func TestColumnStoreDeleteHidesRetainedAndDeclaredStateM13C(t *testing.T) {
+	dir, _ := prepareColumnStoreCommandWALDirM10B(t)
+	d := openCollectionCommandWALDB(t, dir)
+	col := openColumnStoreCollectionM10B(t, d)
+	if _, err := col.InsertBatch([][]byte{[]byte("e1")}, [][]byte{
+		[]byte(`{"time_us":1,"kind":"like","did":"d1","payload":"alpha"}`),
+	}); err != nil {
+		_ = d.Close()
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	if deleted, err := col.DeleteBatch([][]byte{[]byte("e1")}); err != nil || deleted != 1 {
+		_ = d.Close()
+		t.Fatalf("DeleteBatch deleted=%d err=%v", deleted, err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopen := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopen.Close() }()
+	reopened := openColumnStoreCollectionM10B(t, reopen)
+	if got, err := reopened.Get([]byte("e1")); err != nil || got != nil {
+		t.Fatalf("Get deleted got=%s err=%v, want nil nil", got, err)
+	}
+	result, err := reopened.RunColumnPhysicalQuery(ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "kind"})
+	if err != nil {
+		t.Fatalf("RunColumnPhysicalQuery: %v", err)
+	}
+	if len(result.Groups) != 0 || result.Diagnostics.ReduceRows != 0 || result.Diagnostics.DeletedRows != 1 {
+		t.Fatalf("delete visibility result=%+v diagnostics=%+v", result.Groups, result.Diagnostics)
+	}
+}
+
+func TestColumnStoreDeleteUpdatedRowM13C(t *testing.T) {
+	dir, _ := prepareColumnStoreCommandWALDirM10B(t)
+	d := openCollectionCommandWALDB(t, dir)
+	col := openColumnStoreCollectionM10B(t, d)
+	if _, err := col.InsertBatch([][]byte{[]byte("e1")}, [][]byte{
+		[]byte(`{"time_us":1,"kind":"like","did":"d1","payload":"alpha"}`),
+	}); err != nil {
+		_ = d.Close()
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	if _, modified, err := col.Update([]byte("e1"), func([]byte) ([]byte, bool, error) {
+		return []byte(`{"time_us":2,"kind":"share","did":"d1","payload":"beta"}`), true, nil
+	}); err != nil || !modified {
+		_ = d.Close()
+		t.Fatalf("Update modified=%t err=%v", modified, err)
+	}
+	if deleted, err := col.DeleteBatch([][]byte{[]byte("e1")}); err != nil || deleted != 1 {
+		_ = d.Close()
+		t.Fatalf("DeleteBatch updated row deleted=%d err=%v", deleted, err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopen := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopen.Close() }()
+	reopened := openColumnStoreCollectionM10B(t, reopen)
+	if got, err := reopened.Get([]byte("e1")); err != nil || got != nil {
+		t.Fatalf("Get deleted updated row got=%s err=%v, want nil nil", got, err)
+	}
+	result, err := reopened.RunColumnPhysicalQuery(ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "kind"})
+	if err != nil {
+		t.Fatalf("RunColumnPhysicalQuery: %v", err)
+	}
+	if len(result.Groups) != 0 || result.Diagnostics.ReduceRows != 0 || result.Diagnostics.DeletedRows != 1 {
+		t.Fatalf("delete updated visibility result=%+v diagnostics=%+v", result.Groups, result.Diagnostics)
+	}
+}
+
+func TestColumnStoreDeleteUpdatedRowAfterManyMutationsM13C(t *testing.T) {
+	col, closeFn, liveRows := openColumnPhysicalMutationFixtureM13C(t, 1024)
+	defer closeFn()
+	if liveRows != 921 {
+		t.Fatalf("liveRows=%d want 921", liveRows)
+	}
+	if got, err := col.Get([]byte("e000000")); err != nil || got != nil {
+		t.Fatalf("Get deleted updated row got=%s err=%v, want nil nil", got, err)
+	}
+	result, err := col.RunColumnPhysicalQuery(ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "kind"})
+	if err != nil {
+		t.Fatalf("RunColumnPhysicalQuery: %v", err)
+	}
+	if result.Diagnostics.DeletedRows != 103 {
+		t.Fatalf("deleted rows=%d want 103 diagnostics=%+v", result.Diagnostics.DeletedRows, result.Diagnostics)
+	}
+}
+
+func TestColumnPhysicalVisibilityInspectorValidatesManifestPartsM13C(t *testing.T) {
+	dir, _ := prepareColumnStoreCommandWALDirM10B(t)
+	d := openCollectionCommandWALDB(t, dir)
+	col := openColumnStoreCollectionM10B(t, d)
+	if _, err := col.InsertBatch([][]byte{[]byte("e1"), []byte("e2")}, [][]byte{
+		[]byte(`{"time_us":1,"kind":"like","did":"d1","payload":"a"}`),
+		[]byte(`{"time_us":2,"kind":"post","did":"d2","payload":"b"}`),
+	}); err != nil {
+		_ = d.Close()
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	if _, _, err := col.Update([]byte("e1"), func(current []byte) ([]byte, bool, error) {
+		assertJSONEqualM13C(t, current, []byte(`{"time_us":1,"kind":"like","did":"d1","payload":"a"}`))
+		return []byte(`{"time_us":3,"kind":"share","did":"d1","payload":"a2"}`), true, nil
+	}); err != nil {
+		_ = d.Close()
+		t.Fatalf("Update: %v", err)
+	}
+	if deleted, err := col.DeleteBatch([][]byte{[]byte("e2")}); err != nil || deleted != 1 {
+		_ = d.Close()
+		t.Fatalf("DeleteBatch deleted=%d err=%v", deleted, err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("e2")}, [][]byte{
+		[]byte(`{"time_us":4,"kind":"comment","did":"d2","payload":"b2"}`),
+	}); err != nil {
+		_ = d.Close()
+		t.Fatalf("reinsert InsertBatch: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopen := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopen.Close() }()
+	reopened := openColumnStoreCollectionM10B(t, reopen)
+	inspection := inspectColumnPhysicalVisibilityM13C(t, reopen, reopened)
+	if len(inspection.RawRows) != 5 {
+		t.Fatalf("raw physical rows=%d want insert/update/delete/reinsert rows: %+v", len(inspection.RawRows), inspection.RawRows)
+	}
+	if len(inspection.Visible) != 2 {
+		t.Fatalf("visible rows=%d want latest e1/e2 rows: %+v", len(inspection.Visible), inspection.Visible)
+	}
+	assertVisibleRowM13C(t, inspection.Visible["e1"], false, ColumnPublishOperationUpdate, int64(3), "share")
+	assertVisibleRowM13C(t, inspection.Visible["e2"], false, ColumnPublishOperationInsert, int64(4), "comment")
+	if inspection.Diagnostics.RowMaterializations != 0 {
+		t.Fatalf("visibility inspector materialized rows=%d want zero", inspection.Diagnostics.RowMaterializations)
+	}
+}
+
+func TestColumnStoreRandomizedMutationOracleM13C(t *testing.T) {
+	dir, _ := prepareColumnStoreCommandWALDirM10B(t)
+	d := openCollectionCommandWALDB(t, dir)
+	col := openColumnStoreCollectionM10B(t, d)
+	rng := rand.New(rand.NewSource(1621))
+	ids := []string{"e0", "e1", "e2", "e3", "e4", "e5"}
+	model := make(map[string]columnStoreOracleDocM13C)
+	touched := make(map[string]struct{})
+
+	for i, id := range ids {
+		doc := columnStoreOracleDocM13C{
+			TimeUS:  1_700_000_000_000_000 + int64(i),
+			Kind:    fmt.Sprintf("kind_%d", i%3),
+			Did:     fmt.Sprintf("did_%d", i%2),
+			Payload: fmt.Sprintf("seed_%d", i),
+			Extra:   i,
+		}
+		if _, err := col.InsertBatch([][]byte{[]byte(id)}, [][]byte{doc.JSON()}); err != nil {
+			_ = d.Close()
+			t.Fatalf("seed InsertBatch %s: %v", id, err)
+		}
+		model[id] = doc
+		touched[id] = struct{}{}
+	}
+
+	for step := 0; step < 80; step++ {
+		id := ids[rng.Intn(len(ids))]
+		current, alive := model[id]
+		switch rng.Intn(5) {
+		case 0:
+			if alive {
+				continue
+			}
+			doc := columnStoreOracleDocM13C{
+				TimeUS:  1_700_000_100_000_000 + int64(step),
+				Kind:    fmt.Sprintf("kind_%d", rng.Intn(4)),
+				Did:     fmt.Sprintf("did_%d", rng.Intn(3)),
+				Payload: fmt.Sprintf("reinsert_%02d", step),
+				Extra:   step,
+			}
+			if _, err := col.InsertBatch([][]byte{[]byte(id)}, [][]byte{doc.JSON()}); err != nil {
+				_ = d.Close()
+				t.Fatalf("reinsert step=%d id=%s: %v", step, id, err)
+			}
+			model[id] = doc
+			touched[id] = struct{}{}
+		case 1:
+			if !alive {
+				continue
+			}
+			next := current
+			next.Payload = fmt.Sprintf("payload_%02d_%d", step, rng.Intn(100))
+			next.Extra = step
+			if _, modified, err := col.Update([]byte(id), func(current []byte) ([]byte, bool, error) {
+				assertJSONEqualM13C(t, current, model[id].JSON())
+				return next.JSON(), true, nil
+			}); err != nil || !modified {
+				_ = d.Close()
+				t.Fatalf("retained update step=%d id=%s modified=%t err=%v", step, id, modified, err)
+			}
+			model[id] = next
+		case 2:
+			if !alive {
+				continue
+			}
+			next := current
+			next.TimeUS += int64(1000 + step)
+			next.Kind = fmt.Sprintf("kind_%d", rng.Intn(4))
+			next.Did = fmt.Sprintf("did_%d", rng.Intn(3))
+			if _, modified, err := col.Update([]byte(id), func(current []byte) ([]byte, bool, error) {
+				assertJSONEqualM13C(t, current, model[id].JSON())
+				return next.JSON(), true, nil
+			}); err != nil || !modified {
+				_ = d.Close()
+				t.Fatalf("declared update step=%d id=%s modified=%t err=%v", step, id, modified, err)
+			}
+			model[id] = next
+		case 3:
+			if !alive {
+				continue
+			}
+			if deleted, err := col.DeleteBatch([][]byte{[]byte(id)}); err != nil || deleted != 1 {
+				_ = d.Close()
+				t.Fatalf("delete step=%d id=%s deleted=%d err=%v", step, id, deleted, err)
+			}
+			delete(model, id)
+		case 4:
+			if err := d.Checkpoint(); err != nil {
+				_ = d.Close()
+				t.Fatalf("Checkpoint step=%d: %v", step, err)
+			}
+		}
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopen := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopen.Close() }()
+	reopened := openColumnStoreCollectionM10B(t, reopen)
+	for _, id := range ids {
+		got, err := reopened.Get([]byte(id))
+		if err != nil {
+			t.Fatalf("Get %s: %v", id, err)
+		}
+		doc, alive := model[id]
+		if !alive {
+			if got != nil {
+				t.Fatalf("Get %s=%s want deleted/missing nil", id, got)
+			}
+			continue
+		}
+		assertJSONEqualM13C(t, got, doc.JSON())
+		raw := readRawPrimaryDocumentForTestM13C(t, reopen, "events", []byte(id))
+		if strings.Contains(string(raw), "time_us") || strings.Contains(string(raw), "kind") || strings.Contains(string(raw), "did") {
+			t.Fatalf("raw retained payload for %s duplicates declared fields: %s", id, raw)
+		}
+		if !strings.Contains(string(raw), "payload") {
+			t.Fatalf("raw retained payload for %s lost retained field: %s", id, raw)
+		}
+	}
+	result, err := reopened.RunColumnPhysicalQuery(ColumnPhysicalQueryRequest{
+		Kind:        ColumnPhysicalQueryGroupCount,
+		GroupColumn: "kind",
+	})
+	if err != nil {
+		t.Fatalf("RunColumnPhysicalQuery: %v", err)
+	}
+	if got, want := columnPhysicalQueryLinesM13B("q1", result.Groups), columnStoreOracleGroupLinesM13C(model); !equalStringSets(got, want) {
+		t.Fatalf("oracle q1 lines=%v want %v diagnostics=%+v", got, want, result.Diagnostics)
+	}
+	if result.Diagnostics.RowMaterializations != 0 || result.Diagnostics.ReconstructionRows != 0 {
+		t.Fatalf("aggregate diagnostics materialized/reconstructed rows: %+v", result.Diagnostics)
+	}
+	inspection := inspectColumnPhysicalVisibilityM13C(t, reopen, reopened)
+	if len(inspection.Visible) != len(touched) {
+		t.Fatalf("visible latest rows=%d touched=%d", len(inspection.Visible), len(touched))
+	}
+}
+
+func TestColumnStoreReplayReconstructsRetainedPayloadM13C(t *testing.T) {
+	dir, baseLSN := prepareColumnStoreCommandWALDirM10B(t)
+	insertPayload, err := commitlog.EncodeCollectionInsertBatchByIDPayload("events", []commitlog.CollectionDocument{{
+		ID:       []byte("e1"),
+		Document: []byte(`{"time_us":1,"kind":"like","did":"d1","payload":"alpha"}`),
+	}})
+	if err != nil {
+		t.Fatalf("EncodeCollectionInsertBatchByIDPayload insert: %v", err)
+	}
+	updatePayload, err := commitlog.EncodeCollectionUpdateBatchByIDPayload("events", []commitlog.CollectionDocument{{
+		ID:       []byte("e1"),
+		Document: []byte(`{"time_us":2,"kind":"share","did":"d1","payload":"beta"}`),
+	}})
+	if err != nil {
+		t.Fatalf("EncodeCollectionUpdateBatchByIDPayload update: %v", err)
+	}
+	writeCollectionCommandWALFrame(t, dir, baseLSN+1, commitlog.CommandKindCollectionInsertBatchByID, commitlog.PayloadFormatCollectionInsertBatchByIDV1, insertPayload)
+	writeCollectionCommandWALFrame(t, dir, baseLSN+2, commitlog.CommandKindCollectionUpdateBatchByID, commitlog.PayloadFormatCollectionUpdateBatchByIDV1, updatePayload)
+
+	reopen := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopen.Close() }()
+	reopened := openColumnStoreCollectionM10B(t, reopen)
+	assertColumnManifestStateM10B(t, reopened, 2, baseLSN+2)
+	got, err := reopened.Get([]byte("e1"))
+	if err != nil {
+		t.Fatalf("Get replayed e1: %v", err)
+	}
+	assertJSONEqualM13C(t, got, []byte(`{"time_us":2,"kind":"share","did":"d1","payload":"beta"}`))
+	raw := readRawPrimaryDocumentForTestM13C(t, reopen, "events", []byte("e1"))
+	if strings.Contains(string(raw), "time_us") || strings.Contains(string(raw), "kind") || strings.Contains(string(raw), "did") || !strings.Contains(string(raw), "payload") {
+		t.Fatalf("replayed raw retained payload=%s, want retained-only payload", raw)
+	}
+	result, err := reopened.RunColumnPhysicalQuery(ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "kind"})
+	if err != nil {
+		t.Fatalf("RunColumnPhysicalQuery replayed: %v", err)
+	}
+	if got, want := columnPhysicalQueryLinesM13B("q1", result.Groups), []string{"q1:share=1"}; !equalStringSets(got, want) {
+		t.Fatalf("replayed q1 lines=%v want %v diagnostics=%+v", got, want, result.Diagnostics)
+	}
+}
+
+func TestColumnStoreQueryAndReconstructionFailClosedMissingAssetM13C(t *testing.T) {
+	dir, ref := prepareColumnPhysicalScannerCorruptionFixtureM13A(t)
+	assetPath, err := columnAssetSegmentPath(backenddb.ColumnAssetRootDirPath(dir), ref)
+	if err != nil {
+		t.Fatalf("columnAssetSegmentPath: %v", err)
+	}
+	if err := os.Remove(assetPath); err != nil {
+		t.Fatalf("Remove asset: %v", err)
+	}
+
+	reopen := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopen.Close() }()
+	reopened := openColumnStoreCollectionM10B(t, reopen)
+	if _, err := reopened.RunColumnPhysicalQuery(ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "kind"}); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("RunColumnPhysicalQuery missing asset err=%v want os.ErrNotExist", err)
+	}
+	if got, err := reopened.Get([]byte("e1")); !errors.Is(err, os.ErrNotExist) || got != nil {
+		t.Fatalf("Get missing asset got=%s err=%v want fail-closed os.ErrNotExist", got, err)
+	}
+}
+
+func TestColumnStoreQueryAndReconstructionFailClosedCorruptAssetM13C(t *testing.T) {
+	dir, ref := prepareColumnPhysicalScannerCorruptionFixtureM13A(t)
+	assetPath, err := columnAssetSegmentPath(backenddb.ColumnAssetRootDirPath(dir), ref)
+	if err != nil {
+		t.Fatalf("columnAssetSegmentPath: %v", err)
+	}
+	file, err := os.OpenFile(assetPath, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatalf("OpenFile asset: %v", err)
+	}
+	if _, err := file.WriteAt([]byte{0xff}, ref.Offset); err != nil {
+		_ = file.Close()
+		t.Fatalf("corrupt asset: %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("Close corrupt asset: %v", err)
+	}
+
+	reopen := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopen.Close() }()
+	reopened := openColumnStoreCollectionM10B(t, reopen)
+	if _, err := reopened.RunColumnPhysicalQuery(ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "kind"}); err == nil || !strings.Contains(err.Error(), "checksum") {
+		t.Fatalf("RunColumnPhysicalQuery corrupt asset err=%v want checksum failure", err)
+	}
+	if got, err := reopened.Get([]byte("e1")); err == nil || !strings.Contains(err.Error(), "checksum") || got != nil {
+		t.Fatalf("Get corrupt asset got=%s err=%v want fail-closed checksum failure", got, err)
+	}
+}
+
+func TestColumnStoreQueryAndReconstructionFailClosedTruncatedAssetM13C(t *testing.T) {
+	dir, ref := prepareColumnPhysicalScannerCorruptionFixtureM13A(t)
+	assetPath, err := columnAssetSegmentPath(backenddb.ColumnAssetRootDirPath(dir), ref)
+	if err != nil {
+		t.Fatalf("columnAssetSegmentPath: %v", err)
+	}
+	if err := os.Truncate(assetPath, ref.Offset+ref.Length-1); err != nil {
+		t.Fatalf("Truncate asset: %v", err)
+	}
+
+	reopen := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopen.Close() }()
+	reopened := openColumnStoreCollectionM10B(t, reopen)
+	if _, err := reopened.RunColumnPhysicalQuery(ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "kind"}); !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("RunColumnPhysicalQuery truncated asset err=%v want io.ErrUnexpectedEOF", err)
+	}
+	if got, err := reopened.Get([]byte("e1")); !errors.Is(err, io.ErrUnexpectedEOF) || got != nil {
+		t.Fatalf("Get truncated asset got=%s err=%v want fail-closed io.ErrUnexpectedEOF", got, err)
+	}
+}
+
+func TestColumnPhysicalAssetScanRejectsWrongNamespaceM13C(t *testing.T) {
+	normalized, rows := makeColumnPhysicalAssetBenchmarkRows(t, 4)
+	encoded, _, err := encodeColumnPhysicalAsset(columnPhysicalAssetEncodeInput{
+		Collection:        "events",
+		Namespace:         normalized.AssetManager.Namespace,
+		Generation:        1,
+		PartID:            1,
+		AppliedCommandLSN: 1,
+		Operation:         ColumnPublishOperationInsert,
+		SchemaHash:        normalized.SchemaHash,
+		Columns:           normalized.Columns,
+		Rows:              rows,
+	})
+	if err != nil {
+		t.Fatalf("encodeColumnPhysicalAsset: %v", err)
+	}
+	wrongNamespace := []byte("events/column-assetz")
+	mutated := bytes.Replace(encoded, []byte(normalized.AssetManager.Namespace), wrongNamespace, 1)
+	if bytes.Equal(mutated, encoded) {
+		t.Fatalf("test failed to mutate encoded namespace %q", normalized.AssetManager.Namespace)
+	}
+	ref := ColumnAssetRef{
+		Kind:       ColumnAssetKindTCS1PartImage,
+		Namespace:  normalized.AssetManager.Namespace,
+		Generation: 1,
+		PartID:     1,
+		FileID:     columnAssetM12ASegmentFileID,
+		Length:     int64(len(mutated)),
+		Checksum:   page.Checksum(mutated),
+	}
+	projection, err := newColumnPhysicalScanProjection(*normalized, nil)
+	if err != nil {
+		t.Fatalf("newColumnPhysicalScanProjection: %v", err)
+	}
+	if _, err := scanColumnPhysicalAssetRows(mutated, ref, "events", *normalized, projection, nil); err == nil || !strings.Contains(err.Error(), "namespace") {
+		t.Fatalf("scan wrong namespace err=%v want namespace failure", err)
+	}
+}
+
+func equalStringSets(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	gotCopy := append([]string(nil), got...)
+	wantCopy := append([]string(nil), want...)
+	sort.Strings(gotCopy)
+	sort.Strings(wantCopy)
+	for i := range gotCopy {
+		if gotCopy[i] != wantCopy[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func assertJSONEqualM13C(t *testing.T, got, want []byte) {
+	t.Helper()
+	var gotValue any
+	if err := json.Unmarshal(got, &gotValue); err != nil {
+		t.Fatalf("got invalid JSON %q: %v", got, err)
+	}
+	var wantValue any
+	if err := json.Unmarshal(want, &wantValue); err != nil {
+		t.Fatalf("want invalid JSON %q: %v", want, err)
+	}
+	if !reflect.DeepEqual(gotValue, wantValue) {
+		t.Fatalf("JSON mismatch\ngot:  %s\nwant: %s", got, want)
+	}
+}
+
+func readRawPrimaryDocumentForTestM13C(t *testing.T, d *backenddb.DB, collection string, id []byte) []byte {
+	t.Helper()
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatalf("AcquireSnapshot returned nil")
+	}
+	defer func() { _ = snap.Close() }()
+	catalog, err := loadCollectionCatalog(snap, collection)
+	if err != nil {
+		t.Fatalf("loadCollectionCatalog: %v", err)
+	}
+	if catalog == nil {
+		t.Fatalf("collection %q not found", collection)
+	}
+	raw, found, err := collectionGetAppendAtCatalogRoot(snap, catalog, collectionPrimaryRootName(collection), id, nil)
+	if err != nil {
+		t.Fatalf("raw primary read: %v", err)
+	}
+	if !found {
+		t.Fatalf("raw primary document %q not found", string(id))
+	}
+	return raw
+}
+
+type columnStoreOracleDocM13C struct {
+	TimeUS  int64
+	Kind    string
+	Did     string
+	Payload string
+	Extra   int
+}
+
+func (d columnStoreOracleDocM13C) JSON() []byte {
+	return []byte(fmt.Sprintf(`{"time_us":%d,"kind":"%s","did":"%s","payload":"%s","extra":%d}`,
+		d.TimeUS, d.Kind, d.Did, d.Payload, d.Extra))
+}
+
+func columnStoreOracleGroupLinesM13C(model map[string]columnStoreOracleDocM13C) []string {
+	counts := make(map[string]int)
+	for _, doc := range model {
+		counts[doc.Kind]++
+	}
+	return columnPhysicalQueryIntLinesM13B("q1", counts)
+}
+
+type columnPhysicalVisibilityInspectionM13C struct {
+	RawRows     []columnPhysicalVisibleRow
+	Visible     map[string]columnPhysicalVisibleRow
+	Diagnostics columnPhysicalScanDiagnostics
+}
+
+func inspectColumnPhysicalVisibilityM13C(t *testing.T, d *backenddb.DB, col *Collection) columnPhysicalVisibilityInspectionM13C {
+	t.Helper()
+	cfg := col.Meta().Options.ColumnStore
+	if cfg == nil || cfg.ActiveManifest == nil || cfg.AssetManager == nil {
+		t.Fatalf("missing column store manifest metadata: %+v", cfg)
+	}
+	refs := columnManifestAssetRefsForCollectionM12A(t, d, col)
+	seenRefs := make(map[[2]uint64]struct{}, len(refs))
+	for _, ref := range refs {
+		if ref.Namespace != cfg.AssetManager.Namespace {
+			t.Fatalf("manifest ref namespace=%q want %q: %+v", ref.Namespace, cfg.AssetManager.Namespace, ref)
+		}
+		if ref.Generation == 0 || ref.Generation > cfg.ActiveManifest.Generation || ref.PartID == 0 {
+			t.Fatalf("manifest ref has invalid generation/part for active generation %d: %+v", cfg.ActiveManifest.Generation, ref)
+		}
+		key := [2]uint64{ref.Generation, ref.PartID}
+		if _, ok := seenRefs[key]; ok {
+			t.Fatalf("duplicate manifest ref generation/part: %+v", ref)
+		}
+		seenRefs[key] = struct{}{}
+		raw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), ref)
+		if err != nil {
+			t.Fatalf("readColumnPhysicalAssetFromManager(%+v): %v", ref, err)
+		}
+		if int64(len(raw)) != ref.Length {
+			t.Fatalf("asset ref length=%d actual=%d for %+v", ref.Length, len(raw), ref)
+		}
+		if err := validateColumnPhysicalAssetForManifest(raw, ref, *cfg); err != nil {
+			t.Fatalf("validateColumnPhysicalAssetForManifest(%+v): %v", ref, err)
+		}
+	}
+
+	var rawRows []columnPhysicalVisibleRow
+	expected := make(map[string]columnPhysicalVisibleRow)
+	diag, err := col.scanColumnPhysicalRows(columnPhysicalScanRequest{
+		Visitor: func(row columnPhysicalScanRowView) error {
+			copied := columnPhysicalVisibleRow{
+				Generation:        row.Generation,
+				PartID:            row.PartID,
+				AppliedCommandLSN: row.AppliedCommandLSN,
+				Operation:         row.Operation,
+				RowIndex:          row.RowIndex,
+				ID:                bytes.Clone(row.ID),
+				Deleted:           row.Deleted,
+			}
+			if !row.Deleted {
+				copied.Values = cloneColumnDeclaredValues(row.Values)
+			}
+			rawRows = append(rawRows, copied)
+			key := string(row.ID)
+			if existing, ok := expected[key]; !ok || columnPhysicalVisibleRowNewer(copied, existing) {
+				expected[key] = copied
+			}
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("scanColumnPhysicalRows for visibility inspector: %v", err)
+	}
+	visible, err := col.scanColumnPhysicalVisibleRows(nil)
+	if err != nil {
+		t.Fatalf("scanColumnPhysicalVisibleRows: %v", err)
+	}
+	got := make(map[string]columnPhysicalVisibleRow, len(visible.Rows))
+	for _, row := range visible.Rows {
+		got[string(row.ID)] = row
+	}
+	if len(got) != len(expected) {
+		t.Fatalf("visible latest rows=%d want %d", len(got), len(expected))
+	}
+	for id, want := range expected {
+		assertVisibleRowsEquivalentM13C(t, id, got[id], want)
+	}
+	return columnPhysicalVisibilityInspectionM13C{
+		RawRows:     rawRows,
+		Visible:     got,
+		Diagnostics: diag,
+	}
+}
+
+func assertVisibleRowsEquivalentM13C(t *testing.T, id string, got, want columnPhysicalVisibleRow) {
+	t.Helper()
+	if string(got.ID) != id || string(want.ID) != id {
+		t.Fatalf("visible id mismatch key=%q got=%q want=%q", id, got.ID, want.ID)
+	}
+	if got.Generation != want.Generation || got.PartID != want.PartID ||
+		got.AppliedCommandLSN != want.AppliedCommandLSN ||
+		got.Operation != want.Operation || got.RowIndex != want.RowIndex ||
+		got.Deleted != want.Deleted || len(got.Values) != len(want.Values) {
+		t.Fatalf("visible row mismatch for %s\ngot:  %+v\nwant: %+v", id, got, want)
+	}
+	for i := range got.Values {
+		if !columnDeclaredValuesEquivalentM13C(got.Values[i], want.Values[i]) {
+			t.Fatalf("visible value[%d] mismatch for %s\ngot:  %+v\nwant: %+v", i, id, got.Values[i], want.Values[i])
+		}
+	}
+}
+
+func assertVisibleRowM13C(t *testing.T, row columnPhysicalVisibleRow, deleted bool, operation ColumnPublishOperation, timeUS int64, kind string) {
+	t.Helper()
+	if row.Deleted != deleted || row.Operation != operation {
+		t.Fatalf("visible row=%+v want deleted=%v operation=%s", row, deleted, operation)
+	}
+	if deleted {
+		return
+	}
+	if len(row.Values) < 2 {
+		t.Fatalf("visible row values=%+v want time_us and kind", row.Values)
+	}
+	if row.Values[0].Type != ColumnStoreValueInt64 || row.Values[0].Int64 != timeUS {
+		t.Fatalf("visible time_us=%+v want %d", row.Values[0], timeUS)
+	}
+	if columnPhysicalScanStringForTest(row.Values[1]) != kind {
+		t.Fatalf("visible kind=%+v want %q", row.Values[1], kind)
+	}
+}
+
+func columnDeclaredValuesEquivalentM13C(a, b columnDeclaredValue) bool {
+	if a.Type != b.Type || a.Null != b.Null || a.Bool != b.Bool || a.Int64 != b.Int64 || a.Double != b.Double {
+		return false
+	}
+	return columnPhysicalScanStringForTest(a) == columnPhysicalScanStringForTest(b)
 }
 
 func TestColumnPhysicalQueryAdapterRejectsUnsupportedShapeM13B(t *testing.T) {
@@ -248,6 +986,81 @@ func BenchmarkColumnPhysicalQueryAdapterM13B(b *testing.B) {
 	}
 }
 
+func BenchmarkColumnPhysicalQueryVisibilityM13C(b *testing.B) {
+	for _, rows := range []int{1024, 8192} {
+		b.Run(fmt.Sprintf("q1_rows_%d", rows), func(b *testing.B) {
+			collection, closeFn, liveRows := openColumnPhysicalMutationFixtureM13C(b, rows)
+			defer closeFn()
+			req := ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "kind"}
+			preview, err := collection.RunColumnPhysicalQuery(req)
+			if err != nil {
+				b.Fatalf("preview RunColumnPhysicalQuery: %v", err)
+			}
+			if preview.Diagnostics.ReconstructionRows != 0 || preview.Diagnostics.RowMaterializations != 0 {
+				b.Fatalf("preview diagnostics reconstructed/materialized rows: %+v", preview.Diagnostics)
+			}
+			b.SetBytes(preview.Diagnostics.PhysicalBytesScanned)
+			b.ReportAllocs()
+			b.ResetTimer()
+			var reducedRows int64
+			var visibilityRows int64
+			var scanNanos int64
+			var reduceNanos int64
+			for i := 0; i < b.N; i++ {
+				result, err := collection.RunColumnPhysicalQuery(req)
+				if err != nil {
+					b.Fatalf("RunColumnPhysicalQuery: %v", err)
+				}
+				if result.Diagnostics.ReduceRows != liveRows {
+					b.Fatalf("ReduceRows=%d want live rows %d diagnostics=%+v", result.Diagnostics.ReduceRows, liveRows, result.Diagnostics)
+				}
+				reducedRows += int64(result.Diagnostics.ReduceRows)
+				visibilityRows += int64(result.Diagnostics.VisibilityRows)
+				scanNanos += result.Diagnostics.VisibilityNanos
+				reduceNanos += result.Diagnostics.ReduceNanos
+			}
+			if reducedRows > 0 {
+				elapsed := b.Elapsed()
+				b.ReportMetric(float64(reducedRows)/elapsed.Seconds(), "rows/s")
+				b.ReportMetric(float64(elapsed.Nanoseconds())/float64(reducedRows), "ns/row")
+				b.ReportMetric(float64(visibilityRows)/float64(b.N), "visibility_rows/op")
+				b.ReportMetric(float64(scanNanos)/float64(b.N), "visibility_ns/op")
+				b.ReportMetric(float64(reduceNanos)/float64(b.N), "reduce_ns/op")
+			}
+		})
+	}
+}
+
+func BenchmarkColumnStoreGetReconstructionM13C(b *testing.B) {
+	for _, rows := range []int{1024, 8192} {
+		b.Run(fmt.Sprintf("rows_%d", rows), func(b *testing.B) {
+			collection, closeFn, _ := openColumnPhysicalMutationFixtureM13C(b, rows)
+			defer closeFn()
+			id := []byte("e000001")
+			if got, err := collection.Get(id); err != nil || got == nil {
+				b.Fatalf("preview Get got=%s err=%v", got, err)
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			var reconstructedRows int64
+			for i := 0; i < b.N; i++ {
+				got, err := collection.Get(id)
+				if err != nil {
+					b.Fatalf("Get: %v", err)
+				}
+				if len(got) == 0 {
+					b.Fatal("empty reconstructed document")
+				}
+				reconstructedRows++
+			}
+			elapsed := b.Elapsed()
+			b.ReportMetric(float64(reconstructedRows)/elapsed.Seconds(), "rows/s")
+			b.ReportMetric(float64(elapsed.Nanoseconds())/float64(reconstructedRows), "ns/row")
+			b.ReportMetric(float64(reconstructedRows)/float64(b.N), "reconstruction_rows/op")
+		})
+	}
+}
+
 type columnPhysicalQueryEventM13B struct {
 	ID     string
 	TimeUS int64
@@ -320,6 +1133,83 @@ func openColumnPhysicalQueryFixtureM13B(tb testing.TB, events []columnPhysicalQu
 		tb.Fatalf("OpenCollection reopened: %v", err)
 	}
 	return reopened, func() { _ = reopen.Close() }
+}
+
+func openColumnPhysicalMutationFixtureM13C(tb testing.TB, rows int) (*Collection, func(), int) {
+	tb.Helper()
+	if rows < 2 {
+		tb.Fatalf("rows=%d want at least two rows", rows)
+	}
+	dir := tb.TempDir()
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+		tb.Fatalf("SaveFormatConfig: %v", err)
+	}
+	d, err := backenddb.Open(backenddb.Options{Dir: dir, DisableBackgroundPrune: true})
+	if err != nil {
+		tb.Fatalf("Open mutation fixture DB: %v", err)
+	}
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "events",
+		Options: CollectionOptions{ColumnStore: testColumnStoreConfig(nil)},
+	}); err != nil {
+		_ = d.Close()
+		tb.Fatalf("CreateCollection mutation fixture: %v", err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		_ = d.Close()
+		tb.Fatalf("Checkpoint mutation fixture setup: %v", err)
+	}
+	col, err := mgr.OpenCollection("events")
+	if err != nil {
+		_ = d.Close()
+		tb.Fatalf("OpenCollection mutation fixture: %v", err)
+	}
+	ids := make([][]byte, rows)
+	docs := make([][]byte, rows)
+	for i := 0; i < rows; i++ {
+		ids[i] = []byte(fmt.Sprintf("e%06d", i))
+		docs[i] = []byte(fmt.Sprintf(`{"time_us":%d,"kind":"kind_%02d","did":"did_%02d","payload":"seed_%d"}`,
+			1_700_000_000_000_000+int64(i), i%8, i%64, i))
+	}
+	if _, err := col.InsertBatch(ids, docs); err != nil {
+		_ = d.Close()
+		tb.Fatalf("InsertBatch mutation fixture: %v", err)
+	}
+	liveRows := rows
+	for i := 0; i < rows; i += 4 {
+		id := []byte(fmt.Sprintf("e%06d", i))
+		doc := []byte(fmt.Sprintf(`{"time_us":%d,"kind":"kind_updated","did":"did_%02d","payload":"updated_%d"}`,
+			1_700_001_000_000_000+int64(i), i%64, i))
+		if _, modified, err := col.Update(id, func([]byte) ([]byte, bool, error) {
+			return doc, true, nil
+		}); err != nil || !modified {
+			_ = d.Close()
+			tb.Fatalf("Update mutation fixture id=%s modified=%t err=%v", id, modified, err)
+		}
+	}
+	for i := 0; i < rows; i += 10 {
+		id := []byte(fmt.Sprintf("e%06d", i))
+		deleted, err := col.DeleteBatch([][]byte{id})
+		if err != nil || deleted != 1 {
+			_ = d.Close()
+			tb.Fatalf("DeleteBatch mutation fixture id=%s deleted=%d err=%v", id, deleted, err)
+		}
+		liveRows--
+	}
+	if err := d.Close(); err != nil {
+		tb.Fatalf("Close mutation fixture: %v", err)
+	}
+	reopen, err := backenddb.Open(backenddb.Options{Dir: dir, DisableBackgroundPrune: true})
+	if err != nil {
+		tb.Fatalf("Open mutation fixture reopened DB: %v", err)
+	}
+	reopened, err := NewCollectionManager(reopen).OpenCollection("events")
+	if err != nil {
+		_ = reopen.Close()
+		tb.Fatalf("OpenCollection mutation fixture reopened: %v", err)
+	}
+	return reopened, func() { _ = reopen.Close() }, liveRows
 }
 
 func columnPhysicalQueryReferenceHashM13B(name string, events []columnPhysicalQueryEventM13B) uint64 {

@@ -8710,7 +8710,7 @@ func (c *Collection) refreshTemplateV1PlanningSnapshot(snap **backenddb.Snapshot
 		}
 	}
 	meta := catalog.meta
-	plannerOptions, err := collectionPlannerOptions(meta)
+	plannerOptions, err := collectionPlannerOptionsForDB(c.db, meta)
 	if err != nil {
 		return nil, CollectionMeta{}, collectionOptions{}, err
 	}
@@ -8993,8 +8993,18 @@ func (c *Collection) insertBatchNoIndex(
 
 	phaseStart = time.Now()
 	table := newCollectionRunTable(len(entries))
+	var rowRemainderBytes int64
 	for i := range entries {
-		setCollectionRunValue(table, entries[i].id, entries[i].document)
+		storedDocument := entries[i].document
+		if columnStoreNeedsRetainedPayloadTransform(c.meta) {
+			storedDocument, err = columnRetainedPayloadFromJSONDocument(*c.meta.Options.ColumnStore, entries[i].document)
+			if err != nil {
+				resetCollectionRunTable(table)
+				return nil, err
+			}
+		}
+		rowRemainderBytes = saturatingAddNonNegativeInt64(rowRemainderBytes, int64(len(entries[i].id)+len(storedDocument)))
+		setCollectionRunValue(table, entries[i].id, storedDocument)
 	}
 	table.Freeze()
 	stats.PrimaryRunBuild = time.Since(phaseStart)
@@ -9024,16 +9034,17 @@ func (c *Collection) insertBatchNoIndex(
 		var publishRootNames []string
 		columnBaseRootIDs := map[string]uint64{rootName: baseRoot}
 		newSystemRoot, rootIDs, publishMeta, publishRootNames, err = c.publishRootDeltaGroupMaybeColumn(ordered, columnWritePublishInput{
-			meta:             c.meta,
-			catalog:          catalog,
-			baseCommitSeq:    baseCommitSeq,
-			baseSystemRoot:   baseSystemRoot,
-			rootNames:        []string{rootName},
-			baseRootIDs:      columnBaseRootIDs,
-			commandWALIntent: commandWALIntent,
-			operation:        ColumnPublishOperationInsert,
-			documents:        columnWriteDocumentsFromNoIndexEntries(entries),
-			rows:             len(entries),
+			meta:              c.meta,
+			catalog:           catalog,
+			baseCommitSeq:     baseCommitSeq,
+			baseSystemRoot:    baseSystemRoot,
+			rootNames:         []string{rootName},
+			baseRootIDs:       columnBaseRootIDs,
+			commandWALIntent:  commandWALIntent,
+			operation:         ColumnPublishOperationInsert,
+			documents:         columnWriteDocumentsFromNoIndexEntries(entries),
+			rows:              len(entries),
+			rowRemainderBytes: rowRemainderBytes,
 		})
 		stats.Publish = time.Since(publishStart)
 		if err != nil {
@@ -9210,7 +9221,7 @@ func (c *Collection) deleteBatchOnce(documentIDs [][]byte, commandWALIntent *bac
 		return 0, err
 	}
 	c.meta = catalog.meta
-	plannerOptions, err := collectionPlannerOptions(c.meta)
+	plannerOptions, err := collectionPlannerOptionsForDB(c.db, c.meta)
 	if err != nil {
 		_ = snap.Close()
 		return 0, err
@@ -11967,6 +11978,13 @@ func (c *Collection) updateDocumentOnceApply(documentID []byte, update func(curr
 		return false, false, nil
 	}
 	stats.Matched = 1
+	if columnStoreCanReconstructDocument(c.meta) {
+		currentValue, err = c.reconstructColumnDocumentAtSnapshot(snap, catalog, documentID, currentValue)
+		if err != nil {
+			_ = snap.Close()
+			return false, false, err
+		}
+	}
 	primaryRoot := catalog.rootID(primaryRootName)
 
 	runtimes, err := (insertBatchPlanner{
@@ -12123,8 +12141,19 @@ func (c *Collection) updateDocumentOnceApply(documentID []byte, update func(curr
 	baseRootIDs[primaryRootName] = primaryRoot
 	policies = append(policies, plannerOptions.dataStoragePolicy)
 	phaseStart = updateBatchStatsNow(detailedStats)
+	primaryDocument := document
+	var rowRemainderBytes int64
+	if columnStoreNeedsRetainedPayloadTransform(c.meta) {
+		primaryDocument, err = columnRetainedPayloadFromJSONDocument(*c.meta.Options.ColumnStore, document)
+		if err != nil {
+			_ = snap.Close()
+			resetCollectionTables(deltaTables)
+			return false, false, err
+		}
+	}
+	rowRemainderBytes = int64(len(documentID) + len(primaryDocument))
 	primaryTable := newCollectionRunTable(1)
-	setCollectionRunValue(primaryTable, bytes.Clone(documentID), document)
+	setCollectionRunValue(primaryTable, bytes.Clone(documentID), primaryDocument)
 	primaryTable.Freeze()
 	if pointerizedPrimaryTable, pointerized, err := pointerizeCollectionRunTableValues(c.db, primaryTable); err != nil {
 		_ = snap.Close()
@@ -12261,16 +12290,17 @@ func (c *Collection) updateDocumentOnceApply(documentID []byte, update func(curr
 	var publishRootNames []string
 	if columnStoreWriteEnabled(c.meta) {
 		newSystemRoot, rootIDs, publishMeta, publishRootNames, err = c.publishRootDeltaBatchGroupMaybeColumn(ordered, preflight, columnWritePublishInput{
-			meta:             c.meta,
-			catalog:          catalog,
-			baseCommitSeq:    baseCommitSeq,
-			baseSystemRoot:   baseSystemRoot,
-			rootNames:        cloneColumnPublishRootNames(rootNames),
-			baseRootIDs:      cloneColumnPublishBaseRootIDs(baseRootIDs),
-			commandWALIntent: commandWALIntent,
-			operation:        ColumnPublishOperationUpdate,
-			documents:        columnDocuments,
-			rows:             1,
+			meta:              c.meta,
+			catalog:           catalog,
+			baseCommitSeq:     baseCommitSeq,
+			baseSystemRoot:    baseSystemRoot,
+			rootNames:         cloneColumnPublishRootNames(rootNames),
+			baseRootIDs:       cloneColumnPublishBaseRootIDs(baseRootIDs),
+			commandWALIntent:  commandWALIntent,
+			operation:         ColumnPublishOperationUpdate,
+			documents:         columnDocuments,
+			rows:              1,
+			rowRemainderBytes: rowRemainderBytes,
 		})
 	} else {
 		publishMeta = c.meta
@@ -12307,6 +12337,7 @@ type preparedBatchUpdate struct {
 	itemIndex                int
 	documentID               []byte
 	document                 []byte
+	primaryDocument          []byte
 	oldState                 orderedDocumentIndexState
 	newState                 orderedDocumentIndexState
 	changedIndexes           uint64
@@ -12329,6 +12360,7 @@ type updateBatchPlan struct {
 	policies                    []backenddb.OrderedRootStoragePolicy
 	deltaTables                 []memtable.Table
 	commandWALDocuments         []commitlog.CollectionDocument
+	rowRemainderBytes           int64
 	directBufferedUpdate        *directBufferedUpdatePlan
 	uniqueSecondaryIndexByRoot  []int
 	canBufferIndexedUpdateBatch bool
@@ -12414,11 +12446,26 @@ func buildDirectBufferedPrimaryRootEntries(changed []preparedBatchUpdate, scratc
 	for i := range changed {
 		entries[i] = directBufferedRootEntry{
 			key:   appendUpdateBatchPlanScratchKey(scratch, changed[i].documentID),
-			value: changed[i].document,
+			value: preparedBatchUpdatePrimaryDocument(changed[i]),
 			flags: node.FlagInline,
 		}
 	}
 	return entries
+}
+
+func preparedBatchUpdatePrimaryDocument(item preparedBatchUpdate) []byte {
+	if item.primaryDocument != nil {
+		return item.primaryDocument
+	}
+	return item.document
+}
+
+func preparedBatchUpdatesPrimaryDocumentBytes(changed []preparedBatchUpdate) int64 {
+	var total int64
+	for _, item := range changed {
+		total = saturatingAddNonNegativeInt64(total, int64(len(item.documentID)+len(preparedBatchUpdatePrimaryDocument(item))))
+	}
+	return total
 }
 
 func detachUpdateBatchPlanDocumentArena(scratch *updateBatchPlanScratch) []byte {
@@ -13781,6 +13828,14 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 		if !current.found {
 			continue
 		}
+		if columnStoreCanReconstructDocument(meta) {
+			current.value, err = c.reconstructColumnDocumentAtSnapshot(snap, catalog, item.DocumentID, current.value)
+			if err != nil {
+				_ = snap.Close()
+				return nil, updateBatchItemError(i, err)
+			}
+			current.buffered = false
+		}
 		results[i].Matched = true
 		prepared := preparedBatchUpdate{
 			itemIndex:  i,
@@ -13921,6 +13976,14 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 	}
 	for i := range changed {
 		changed[i].document = preparedDocuments[i]
+		if columnStoreNeedsRetainedPayloadTransform(meta) {
+			retained, err := columnRetainedPayloadFromJSONDocument(*meta.Options.ColumnStore, changed[i].document)
+			if err != nil {
+				_ = snap.Close()
+				return nil, updateBatchItemError(changed[i].itemIndex, err)
+			}
+			changed[i].primaryDocument = appendUpdateBatchPlanScratchDocument(scratch, retained)
+		}
 		if len(runtimes) > 0 {
 			if changed[i].knownAffectedIndexes && changed[i].affectedIndexRuntimeMask == 0 {
 				recordKnownUnaffectedIndexStats(runtimes, &stats)
@@ -13990,6 +14053,7 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 	if templateV1CommandWALDocuments != nil {
 		commandWALDocuments = templateV1CommandWALDocuments
 	}
+	rowRemainderBytes := preparedBatchUpdatesPrimaryDocumentBytes(changed)
 	if mode == updateBatchModeNoSecondaryUniqueIndexChanges && updateBatchChangesSecondaryUniqueIndex(runtimes, changed) {
 		_ = snap.Close()
 		return nil, errUpdateBatchChangesSecondaryUniqueIndex
@@ -14043,7 +14107,7 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 		}
 		for i := range changed {
 			results[changed[i].itemIndex].Modified = true
-			stagedBytes = saturatingAddNonNegativeInt64(stagedBytes, int64(len(changed[i].documentID)+len(changed[i].document)))
+			stagedBytes = saturatingAddNonNegativeInt64(stagedBytes, int64(len(changed[i].documentID)+len(preparedBatchUpdatePrimaryDocument(changed[i]))))
 		}
 		stats.PrimaryRunBuild += updateBatchStatsSince(detailedStats, phaseStart)
 
@@ -14089,6 +14153,7 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 			bufferedReadBlocked:         bufferedReadBlocked,
 			policies:                    policies,
 			commandWALDocuments:         commandWALDocuments,
+			rowRemainderBytes:           rowRemainderBytes,
 			directBufferedUpdate: &directBufferedUpdatePlan{
 				templateEntries:    templateEntries,
 				primaryEntries:     primaryEntries,
@@ -14146,7 +14211,8 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 	phaseStart = updateBatchStatsNow(detailedStats)
 	primaryTable := newCollectionRunTable(len(changed))
 	for _, item := range changed {
-		setCollectionRunCopiedValue(primaryTable, item.documentID, item.document)
+		primaryDocument := preparedBatchUpdatePrimaryDocument(item)
+		setCollectionRunCopiedValue(primaryTable, item.documentID, primaryDocument)
 		results[item.itemIndex].Modified = true
 	}
 	primaryTable.Freeze()
@@ -14290,6 +14356,7 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 		policies:                    policies,
 		deltaTables:                 deltaTables,
 		commandWALDocuments:         commandWALDocuments,
+		rowRemainderBytes:           rowRemainderBytes,
 		scratch:                     scratch,
 	}
 	scratchOwnedByPlan = true
@@ -14334,16 +14401,17 @@ func (c *Collection) publishUpdateBatchPlanLocked(plan *updateBatchPlan, command
 		var publishMeta CollectionMeta
 		var publishRootNames []string
 		newSystemRoot, rootIDs, publishMeta, publishRootNames, err = c.publishRootDeltaBatchGroupMaybeColumn(ordered, preflight, columnWritePublishInput{
-			meta:             plan.meta,
-			catalog:          plan.catalog,
-			baseCommitSeq:    plan.baseCommitSeq,
-			baseSystemRoot:   plan.baseSystemRoot,
-			rootNames:        cloneColumnPublishRootNames(plan.rootNames),
-			baseRootIDs:      cloneColumnPublishBaseRootIDs(plan.baseRootIDs),
-			commandWALIntent: commandWALIntent,
-			operation:        ColumnPublishOperationUpdate,
-			documents:        columnWriteDocumentsFromCommitLog(plan.commandWALDocuments),
-			rows:             plan.stats.Modified,
+			meta:              plan.meta,
+			catalog:           plan.catalog,
+			baseCommitSeq:     plan.baseCommitSeq,
+			baseSystemRoot:    plan.baseSystemRoot,
+			rootNames:         cloneColumnPublishRootNames(plan.rootNames),
+			baseRootIDs:       cloneColumnPublishBaseRootIDs(plan.baseRootIDs),
+			commandWALIntent:  commandWALIntent,
+			operation:         ColumnPublishOperationUpdate,
+			documents:         columnWriteDocumentsFromCommitLog(plan.commandWALDocuments),
+			rows:              plan.stats.Modified,
+			rowRemainderBytes: plan.rowRemainderBytes,
 		})
 		cleanupDeltas()
 		plan.stats.Publish += updateBatchStatsSince(detailedStats, publishStart)
@@ -16598,7 +16666,15 @@ func (c *Collection) GetInto(documentID []byte, dst []byte) ([]byte, bool, error
 	if catalog == nil {
 		return dst[:0], false, errCollectionNotFound
 	}
-	return collectionGetAppendAtCatalogRoot(snap, catalog, collectionPrimaryRootName(c.meta.Name), documentID, dst)
+	value, found, err := collectionGetAppendAtCatalogRoot(snap, catalog, collectionPrimaryRootName(c.meta.Name), documentID, dst)
+	if err != nil || !found || !columnStoreCanReconstructDocument(catalog.meta) {
+		return value, found, err
+	}
+	reconstructed, err := c.reconstructColumnDocumentAtSnapshot(snap, catalog, documentID, value)
+	if err != nil {
+		return dst[:0], false, err
+	}
+	return append(dst[:0], reconstructed...), true, nil
 }
 
 func (c *Collection) getBufferedDocumentInto(documentID []byte, dst []byte) ([]byte, bool, bool) {
