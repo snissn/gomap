@@ -116,6 +116,102 @@ func TestColumnAssetRewriteRemapsManifestRefsOutOfMixedSegmentM15C(t *testing.T)
 	}
 }
 
+func TestColumnAssetRewriteLifecycleSmokeWithMutationsM15C(t *testing.T) {
+	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col := openColumnStoreCollectionM10B(t, d)
+
+	if _, err := col.InsertBatch([][]byte{[]byte("e1"), []byte("e2")}, [][]byte{
+		[]byte(`{"time_us":1,"kind":"like","did":"d1","payload":"alpha"}`),
+		[]byte(`{"time_us":2,"kind":"post","did":"d2","payload":"beta"}`),
+	}); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	if _, modified, err := col.Update([]byte("e1"), func([]byte) ([]byte, bool, error) {
+		return []byte(`{"time_us":3,"kind":"share","did":"d1","payload":"alpha2"}`), true, nil
+	}); err != nil || !modified {
+		t.Fatalf("Update modified=%t err=%v, want modified update", modified, err)
+	}
+	if deleted, err := col.DeleteBatch([][]byte{[]byte("e2")}); err != nil || deleted != 1 {
+		t.Fatalf("DeleteBatch deleted=%d err=%v, want one delete", deleted, err)
+	}
+	beforeRefs := columnManifestAssetRefsForCollectionM12A(t, d, col)
+	if len(beforeRefs) < 3 {
+		t.Fatalf("manifest refs=%d want insert/update/delete assets", len(beforeRefs))
+	}
+	candidate := writeColumnAssetReachabilityCandidateM15A(t, d, col, 4, 99)
+	if candidate.FileID != beforeRefs[0].FileID {
+		t.Fatalf("candidate file_id=%d live file_id=%d, test requires mixed segment", candidate.FileID, beforeRefs[0].FileID)
+	}
+	oldSegmentPath, err := columnAssetSegmentPath(d.ColumnAssetRootDir(), candidate)
+	if err != nil {
+		t.Fatalf("columnAssetSegmentPath: %v", err)
+	}
+
+	rewrite, err := col.ColumnAssetRewrite(context.Background(), ColumnAssetRewriteOptions{
+		Detailed:      true,
+		CandidateRefs: []ColumnAssetRef{candidate},
+	})
+	if err != nil {
+		t.Fatalf("ColumnAssetRewrite: %v", err)
+	}
+	if rewrite.SegmentsRewritten != 1 || rewrite.RefsRemapped != len(beforeRefs) {
+		t.Fatalf("rewrite stats=%+v want one rewritten segment and %d remapped refs", rewrite, len(beforeRefs))
+	}
+	afterRefs := columnManifestAssetRefsForCollectionM12A(t, d, col)
+	assertColumnAssetRefsRemappedM15C(t, beforeRefs, afterRefs)
+	if _, err := os.Stat(oldSegmentPath); err != nil {
+		t.Fatalf("rewrite removed old mixed segment before GC: %v", err)
+	}
+
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close after rewrite: %v", err)
+	}
+	reopen := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopen.Close() }()
+	reopened := openColumnStoreCollectionM10B(t, reopen)
+	result, err := reopened.RunColumnPhysicalQuery(ColumnPhysicalQueryRequest{
+		Kind:        ColumnPhysicalQueryGroupCount,
+		GroupColumn: "kind",
+	})
+	if err != nil {
+		t.Fatalf("RunColumnPhysicalQuery after reopen: %v", err)
+	}
+	if got, want := columnPhysicalQueryLinesM13B("q1", result.Groups), []string{"q1:share=1"}; !equalStringSets(got, want) {
+		t.Fatalf("query lines=%v want %v diagnostics=%+v", got, want, result.Diagnostics)
+	}
+	if result.Diagnostics.RowMaterializations != 0 || result.Diagnostics.ReconstructionRows != 0 {
+		t.Fatalf("aggregate diagnostics materialized/reconstructed rows: %+v", result.Diagnostics)
+	}
+	if result.Diagnostics.ReduceRows != 1 || result.Diagnostics.DeletedRows != 1 {
+		t.Fatalf("visibility diagnostics=%+v want one reduced live row and one tombstone", result.Diagnostics)
+	}
+
+	gcStats, err := reopened.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{
+		CandidateRefs: append(append([]ColumnAssetRef(nil), rewrite.SupersededRefs...), candidate),
+	})
+	if err != nil {
+		t.Fatalf("ColumnAssetGC after lifecycle rewrite: %v", err)
+	}
+	if gcStats.SegmentsDeleted != 1 || gcStats.BytesDeleted == 0 {
+		t.Fatalf("gc stats=%+v want old mixed segment deleted after remap", gcStats)
+	}
+	if _, err := os.Stat(oldSegmentPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("old segment still exists or unexpected stat error: %v", err)
+	}
+	afterGC, err := reopened.RunColumnPhysicalQuery(ColumnPhysicalQueryRequest{
+		Kind:        ColumnPhysicalQueryGroupCount,
+		GroupColumn: "kind",
+	})
+	if err != nil {
+		t.Fatalf("RunColumnPhysicalQuery after GC: %v", err)
+	}
+	if got, want := columnPhysicalQueryLinesM13B("q1", afterGC.Groups), []string{"q1:share=1"}; !equalStringSets(got, want) {
+		t.Fatalf("post-GC query lines=%v want %v diagnostics=%+v", got, want, afterGC.Diagnostics)
+	}
+}
+
 func TestColumnAssetRewriteFailClosedOnIncompletePlanM15C(t *testing.T) {
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)
