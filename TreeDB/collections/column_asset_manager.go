@@ -35,13 +35,14 @@ const columnAssetSegmentWriteLockStripes = 64
 var columnAssetSegmentWriteLocks [columnAssetSegmentWriteLockStripes]sync.Mutex
 
 type columnAssetManagerNamespace struct {
-	RootDir       string
-	AssetDir      string
-	SegmentDir    string
-	IndexDir      string
-	PreparedDir   string
-	QuarantineDir string
-	TempDir       string
+	ManagerRootDir string
+	RootDir        string
+	AssetDir       string
+	SegmentDir     string
+	IndexDir       string
+	PreparedDir    string
+	QuarantineDir  string
+	TempDir        string
 }
 
 func columnAssetManagerNamespaceForRoot(rootDir, namespace string) (columnAssetManagerNamespace, error) {
@@ -55,13 +56,14 @@ func columnAssetManagerNamespaceForRoot(rootDir, namespace string) (columnAssetM
 	namespaceRoot := filepath.Join(rootDir, filepath.FromSlash(cleanNamespace))
 	assetDir := filepath.Join(namespaceRoot, columnAssetManagerAssetsDirName)
 	return columnAssetManagerNamespace{
-		RootDir:       namespaceRoot,
-		AssetDir:      assetDir,
-		SegmentDir:    filepath.Join(assetDir, columnAssetManagerSegmentsDirName),
-		IndexDir:      filepath.Join(assetDir, columnAssetManagerIndexesDirName),
-		PreparedDir:   filepath.Join(namespaceRoot, columnAssetManagerPreparedDirName),
-		QuarantineDir: filepath.Join(namespaceRoot, columnAssetManagerQuarantineDirName),
-		TempDir:       filepath.Join(namespaceRoot, columnAssetManagerTempDirName),
+		ManagerRootDir: rootDir,
+		RootDir:        namespaceRoot,
+		AssetDir:       assetDir,
+		SegmentDir:     filepath.Join(assetDir, columnAssetManagerSegmentsDirName),
+		IndexDir:       filepath.Join(assetDir, columnAssetManagerIndexesDirName),
+		PreparedDir:    filepath.Join(namespaceRoot, columnAssetManagerPreparedDirName),
+		QuarantineDir:  filepath.Join(namespaceRoot, columnAssetManagerQuarantineDirName),
+		TempDir:        filepath.Join(namespaceRoot, columnAssetManagerTempDirName),
 	}, nil
 }
 
@@ -86,24 +88,86 @@ func cleanColumnAssetNamespace(namespace string) (string, error) {
 }
 
 func ensureColumnAssetManagerNamespace(namespace columnAssetManagerNamespace) error {
-	dirs := []string{
-		namespace.RootDir,
+	dirs, err := columnAssetManagerNamespaceDirs(namespace)
+	if err != nil {
+		return err
+	}
+	syncParents := make([]string, 0, len(dirs))
+	seenSyncParents := make(map[string]struct{}, len(dirs))
+	for _, dir := range dirs {
+		if dir == "" {
+			return errors.New("collections: column asset manager namespace has empty dir")
+		}
+		info, err := os.Stat(dir)
+		if err == nil {
+			if !info.IsDir() {
+				return fmt.Errorf("collections: column asset manager path %q is not a directory", dir)
+			}
+			continue
+		}
+		if !os.IsNotExist(err) {
+			return err
+		}
+		if err := os.Mkdir(dir, 0o700); err != nil {
+			if !errors.Is(err, os.ErrExist) {
+				return err
+			}
+			info, statErr := os.Stat(dir)
+			if statErr != nil {
+				return statErr
+			}
+			if !info.IsDir() {
+				return fmt.Errorf("collections: column asset manager path %q is not a directory", dir)
+			}
+		}
+		parent := filepath.Dir(dir)
+		if parent != "" && parent != dir {
+			if _, ok := seenSyncParents[parent]; !ok {
+				seenSyncParents[parent] = struct{}{}
+				syncParents = append(syncParents, parent)
+			}
+		}
+	}
+	for _, parent := range syncParents {
+		if err := syncColumnAssetDir(parent); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func columnAssetManagerNamespaceDirs(namespace columnAssetManagerNamespace) ([]string, error) {
+	if namespace.ManagerRootDir == "" {
+		return nil, errors.New("collections: column asset manager root dir is required")
+	}
+	if namespace.RootDir == "" {
+		return nil, errors.New("collections: column asset manager namespace root dir is required")
+	}
+	dirs := []string{namespace.ManagerRootDir}
+	relRoot, err := filepath.Rel(namespace.ManagerRootDir, namespace.RootDir)
+	if err != nil {
+		return nil, err
+	}
+	if relRoot == "." || relRoot == ".." || strings.HasPrefix(relRoot, ".."+string(filepath.Separator)) || filepath.IsAbs(relRoot) {
+		return nil, fmt.Errorf("collections: column asset manager namespace root %q escapes manager root %q", namespace.RootDir, namespace.ManagerRootDir)
+	}
+	current := namespace.ManagerRootDir
+	for _, part := range strings.Split(relRoot, string(filepath.Separator)) {
+		if part == "" || part == "." {
+			continue
+		}
+		current = filepath.Join(current, part)
+		dirs = append(dirs, current)
+	}
+	dirs = append(dirs,
 		namespace.AssetDir,
 		namespace.SegmentDir,
 		namespace.IndexDir,
 		namespace.PreparedDir,
 		namespace.QuarantineDir,
 		namespace.TempDir,
-	}
-	for _, dir := range dirs {
-		if dir == "" {
-			return errors.New("collections: column asset manager namespace has empty dir")
-		}
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			return err
-		}
-	}
-	return nil
+	)
+	return dirs, nil
 }
 
 func writeColumnPhysicalAssetToManager(rootDir string, cfg ColumnStoreConfig, payload []byte, generation, partID uint64) (ColumnAssetRef, error) {

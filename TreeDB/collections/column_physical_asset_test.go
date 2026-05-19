@@ -171,6 +171,51 @@ func TestColumnAssetManagerWritesIsolatedSegmentAndValidatesM12A(t *testing.T) {
 	}
 }
 
+func TestColumnAssetManagerEnsuresNamespaceParentsM12A(t *testing.T) {
+	cfg := testColumnStoreConfig(nil)
+	cfg.AssetManager = &ColumnAssetManagerConfig{Namespace: "events/nested/column-assets"}
+	normalized, err := normalizeColumnStoreConfig("events", cfg)
+	if err != nil {
+		t.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+	root := backenddb.ColumnAssetRootDirPath(t.TempDir())
+	namespace, err := columnAssetManagerNamespaceForRoot(root, normalized.AssetManager.Namespace)
+	if err != nil {
+		t.Fatalf("columnAssetManagerNamespaceForRoot: %v", err)
+	}
+	dirs, err := columnAssetManagerNamespaceDirs(namespace)
+	if err != nil {
+		t.Fatalf("columnAssetManagerNamespaceDirs: %v", err)
+	}
+	wantDirs := []string{
+		root,
+		filepath.Join(root, "events"),
+		filepath.Join(root, "events", "nested"),
+		filepath.Join(root, "events", "nested", "column-assets"),
+		filepath.Join(root, "events", "nested", "column-assets", "assets"),
+		filepath.Join(root, "events", "nested", "column-assets", "assets", "segments"),
+		filepath.Join(root, "events", "nested", "column-assets", "assets", "indexes"),
+		filepath.Join(root, "events", "nested", "column-assets", "prepared"),
+		filepath.Join(root, "events", "nested", "column-assets", "quarantine"),
+		filepath.Join(root, "events", "nested", "column-assets", "tmp"),
+	}
+	if fmt.Sprint(dirs) != fmt.Sprint(wantDirs) {
+		t.Fatalf("namespace dirs=%v want %v", dirs, wantDirs)
+	}
+	if err := ensureColumnAssetManagerNamespace(namespace); err != nil {
+		t.Fatalf("ensureColumnAssetManagerNamespace: %v", err)
+	}
+	for _, dir := range wantDirs {
+		info, err := os.Stat(dir)
+		if err != nil {
+			t.Fatalf("Stat(%q): %v", dir, err)
+		}
+		if !info.IsDir() {
+			t.Fatalf("%q is not a directory", dir)
+		}
+	}
+}
+
 func TestColumnAssetManagerConcurrentWritesKeepOffsetsStableM12A(t *testing.T) {
 	cfg := testColumnStoreConfig(nil)
 	normalized, err := normalizeColumnStoreConfig("events", cfg)
