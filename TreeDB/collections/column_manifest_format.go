@@ -22,6 +22,11 @@ const (
 	columnManifestRecordVersion = uint16(1)
 )
 
+var (
+	columnManifestHeaderRecordKeyBytes  = []byte(columnManifestHeaderRecordKey)
+	columnManifestPartRecordPrefixBytes = []byte(columnManifestPartRecordPrefix)
+)
+
 type columnManifestRecord struct {
 	key   []byte
 	value []byte
