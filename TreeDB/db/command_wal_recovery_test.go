@@ -507,6 +507,65 @@ func TestCommandWALRegisteredReplayHandlerCanOptOutOfReplayLogSupport(t *testing
 	}
 }
 
+func TestCommandWALRegisteredReplayFrameRestoresStateOnSuccessM10C(t *testing.T) {
+	db, err := Open(Options{Dir: t.TempDir(), DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	db.commandWALReplayLSN.Store(41)
+	db.commandWALReplayToken.Store(42)
+
+	env := commitlog.CommandEnvelope{LSN: 77}
+	err = db.applyRegisteredCommandWALFrame(env, commandWALReplayHandlerRegistration{
+		handler: func(db *DB, env commitlog.CommandEnvelope) error {
+			if got := db.commandWALReplayLSN.Load(); got != env.LSN {
+				t.Fatalf("active replay LSN=%d, want %d", got, env.LSN)
+			}
+			if got := db.commandWALReplayToken.Load(); got == 0 || got == 42 {
+				t.Fatalf("active replay token=%d, want fresh non-zero token", got)
+			}
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("applyRegisteredCommandWALFrame: %v", err)
+	}
+	if got := db.commandWALReplayLSN.Load(); got != 41 {
+		t.Fatalf("restored replay LSN=%d, want 41", got)
+	}
+	if got := db.commandWALReplayToken.Load(); got != 42 {
+		t.Fatalf("restored replay token=%d, want 42", got)
+	}
+}
+
+func TestCommandWALRegisteredReplayFrameRestoresStateOnPanicM10C(t *testing.T) {
+	db, err := Open(Options{Dir: t.TempDir(), DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	db.commandWALReplayLSN.Store(41)
+	db.commandWALReplayToken.Store(42)
+
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("applyRegisteredCommandWALFrame did not repanic")
+		}
+		if got := db.commandWALReplayLSN.Load(); got != 41 {
+			t.Fatalf("restored replay LSN after panic=%d, want 41", got)
+		}
+		if got := db.commandWALReplayToken.Load(); got != 42 {
+			t.Fatalf("restored replay token after panic=%d, want 42", got)
+		}
+	}()
+	_ = db.applyRegisteredCommandWALFrame(commitlog.CommandEnvelope{LSN: 77}, commandWALReplayHandlerRegistration{
+		handler: func(db *DB, env commitlog.CommandEnvelope) error {
+			panic("replay handler panic")
+		},
+	})
+}
+
 func TestPublishCommandWALNoopRequiresCommandWALEnabled(t *testing.T) {
 	db, err := Open(Options{Dir: t.TempDir(), DisableBackgroundPrune: true})
 	if err != nil {

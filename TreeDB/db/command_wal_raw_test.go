@@ -90,12 +90,24 @@ func TestCommandWALReplayIntentConstructorRequiresActiveRecoveryFrameM10C(t *tes
 	defer func() { _ = d.Close() }()
 
 	if _, err := d.NewCommandWALReplayIntent(commitlog.CommandEnvelope{
+		Kind:          commitlog.CommandKindCollectionInsertBatchByID,
+		Scope:         commitlog.CommandScopeCollection,
+		PayloadFormat: commitlog.PayloadFormatCollectionInsertBatchByIDV1,
+	}); !errors.Is(err, ErrCommandWALRejected) {
+		t.Fatalf("NewCommandWALReplayIntent zero lsn error=%v, want ErrCommandWALRejected", err)
+	} else if !strings.Contains(err.Error(), "missing assigned lsn") {
+		t.Fatalf("NewCommandWALReplayIntent zero lsn error=%v, want missing assigned lsn", err)
+	}
+
+	if _, err := d.NewCommandWALReplayIntent(commitlog.CommandEnvelope{
 		LSN:           7,
 		Kind:          commitlog.CommandKindCollectionInsertBatchByID,
 		Scope:         commitlog.CommandScopeCollection,
 		PayloadFormat: commitlog.PayloadFormatCollectionInsertBatchByIDV1,
 	}); !errors.Is(err, ErrCommandWALRejected) {
 		t.Fatalf("NewCommandWALReplayIntent outside recovery error=%v, want ErrCommandWALRejected", err)
+	} else if !strings.Contains(err.Error(), "no active recovery frame") {
+		t.Fatalf("NewCommandWALReplayIntent outside recovery error=%v, want no active recovery frame", err)
 	}
 }
 
@@ -112,11 +124,36 @@ func TestCommandWALReplayIntentRequiresActiveRecoveryTokenM10C(t *testing.T) {
 	}
 	defer func() { _ = d.Close() }()
 	d.commandWALReplayLSN.Store(env.LSN)
+
+	if _, err := d.NewCommandWALReplayIntent(env); !errors.Is(err, ErrCommandWALRejected) {
+		t.Fatalf("NewCommandWALReplayIntent missing token error=%v, want ErrCommandWALRejected", err)
+	} else if !strings.Contains(err.Error(), "no active recovery token") {
+		t.Fatalf("NewCommandWALReplayIntent missing token error=%v, want no active recovery token", err)
+	}
+
+	d.commandWALReplayLSN.Store(env.LSN + 1)
+	d.commandWALReplayToken.Store(99)
+	if _, err := d.NewCommandWALReplayIntent(env); !errors.Is(err, ErrCommandWALRejected) {
+		t.Fatalf("NewCommandWALReplayIntent lsn mismatch error=%v, want ErrCommandWALRejected", err)
+	} else if !strings.Contains(err.Error(), "does not match active recovery frame lsn") {
+		t.Fatalf("NewCommandWALReplayIntent lsn mismatch error=%v, want active recovery frame lsn mismatch", err)
+	}
+
+	d.commandWALReplayLSN.Store(env.LSN)
 	d.commandWALReplayToken.Store(99)
 
 	forged := NewCommandWALReplayIntent(env)
 	if _, err := d.AppendCommandWALIntent(forged, false); !errors.Is(err, ErrCommandWALRejected) {
 		t.Fatalf("AppendCommandWALIntent forged replay error=%v, want ErrCommandWALRejected", err)
+	} else if !strings.Contains(err.Error(), "missing recovery token") {
+		t.Fatalf("AppendCommandWALIntent forged replay error=%v, want missing recovery token", err)
+	}
+
+	forged = newCommandWALReplayIntent(env, 100)
+	if _, err := d.AppendCommandWALIntent(forged, false); !errors.Is(err, ErrCommandWALRejected) {
+		t.Fatalf("AppendCommandWALIntent forged replay token mismatch error=%v, want ErrCommandWALRejected", err)
+	} else if !strings.Contains(err.Error(), "recovery token mismatch") {
+		t.Fatalf("AppendCommandWALIntent forged replay token mismatch error=%v, want recovery token mismatch", err)
 	}
 
 	authorized, err := d.NewCommandWALReplayIntent(env)
