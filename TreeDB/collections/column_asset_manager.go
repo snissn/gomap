@@ -27,10 +27,12 @@ const (
 	columnAssetM12ASegmentFileID        = uint32(1)
 )
 
-// columnAssetSegmentWriteLocks is keyed by canonical segment path so concurrent
-// appends share one process-local offset lock. Do not delete a lock immediately
-// after use; that can split writers racing on the same segment.
-var columnAssetSegmentWriteLocks sync.Map
+const columnAssetSegmentWriteLockStripes = 64
+
+// columnAssetSegmentWriteLocks is a bounded stripe set keyed by canonical
+// segment path. Writers to the same segment share a process-local offset lock
+// without retaining one mutex per temp dir or segment path forever.
+var columnAssetSegmentWriteLocks [columnAssetSegmentWriteLockStripes]sync.Mutex
 
 type columnAssetManagerNamespace struct {
 	RootDir       string
@@ -67,7 +69,8 @@ func cleanColumnAssetNamespace(namespace string) (string, error) {
 	if namespace == "" {
 		return "", errors.New("collections: column asset namespace is required")
 	}
-	if strings.Contains(namespace, `\`) || strings.Contains(namespace, ":") || strings.HasPrefix(namespace, "/") {
+	if strings.TrimSpace(namespace) != namespace || strings.Contains(namespace, "\x00") ||
+		strings.Contains(namespace, `\`) || strings.Contains(namespace, ":") || strings.HasPrefix(namespace, "/") {
 		return "", fmt.Errorf("collections: invalid column asset namespace %q", namespace)
 	}
 	clean := path.Clean(namespace)
@@ -231,8 +234,16 @@ func columnAssetSegmentFileName(fileID uint32) string {
 }
 
 func columnAssetSegmentWriteLock(assetPath string) *sync.Mutex {
-	value, _ := columnAssetSegmentWriteLocks.LoadOrStore(assetPath, &sync.Mutex{})
-	return value.(*sync.Mutex)
+	const (
+		fnvOffset64 = 14695981039346656037
+		fnvPrime64  = 1099511628211
+	)
+	hash := uint64(fnvOffset64)
+	for i := 0; i < len(assetPath); i++ {
+		hash ^= uint64(assetPath[i])
+		hash *= fnvPrime64
+	}
+	return &columnAssetSegmentWriteLocks[hash%uint64(len(columnAssetSegmentWriteLocks))]
 }
 
 func syncColumnAssetDir(dir string) error {

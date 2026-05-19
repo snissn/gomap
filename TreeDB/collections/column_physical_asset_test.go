@@ -321,6 +321,13 @@ func TestColumnManifestBinaryRecordsAndGCEnumerableAssetRefsM12A(t *testing.T) {
 	if manifest.ManifestBytes <= columnManifestIdentityRecordSize {
 		t.Fatalf("ManifestBytes=%d want binary manifest beyond identity record", manifest.ManifestBytes)
 	}
+	wantManifestBytes := int64(len(columnManifestIdentityRecordKey) + columnManifestIdentityRecordSize)
+	for _, record := range manifest.Records {
+		wantManifestBytes += int64(len(record.key) + len(record.value))
+	}
+	if manifest.ManifestBytes != wantManifestBytes {
+		t.Fatalf("ManifestBytes=%d want consistent key+value accounting %d", manifest.ManifestBytes, wantManifestBytes)
+	}
 	if len(manifest.Records) < 2 {
 		t.Fatalf("manifest records=%d want header + part records", len(manifest.Records))
 	}

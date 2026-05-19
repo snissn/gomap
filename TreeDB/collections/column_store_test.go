@@ -431,6 +431,24 @@ func TestColumnStoreMetadataValidation(t *testing.T) {
 			},
 			want: "invalid column asset namespace",
 		},
+		{
+			name: "invalid asset namespace whitespace",
+			cfg: &ColumnStoreConfig{
+				Enabled:      true,
+				Columns:      []ColumnStoreColumn{{Name: "time_us", Path: "time_us", ValueType: ColumnStoreValueInt64}},
+				AssetManager: &ColumnAssetManagerConfig{Namespace: " events/column-assets "},
+			},
+			want: "invalid column asset namespace",
+		},
+		{
+			name: "invalid asset namespace nul",
+			cfg: &ColumnStoreConfig{
+				Enabled:      true,
+				Columns:      []ColumnStoreColumn{{Name: "time_us", Path: "time_us", ValueType: ColumnStoreValueInt64}},
+				AssetManager: &ColumnAssetManagerConfig{Namespace: "events/\x00/column-assets"},
+			},
+			want: "invalid column asset namespace",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

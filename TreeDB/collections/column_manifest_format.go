@@ -364,7 +364,7 @@ func sortColumnManifestRecords(records []columnManifestRecord) {
 }
 
 func columnManifestRecordsBytes(records []columnManifestRecord) int64 {
-	total := int64(columnManifestIdentityRecordSize)
+	total := int64(len(columnManifestIdentityRecordKey) + columnManifestIdentityRecordSize)
 	for _, record := range records {
 		total += int64(len(record.key) + len(record.value))
 	}
