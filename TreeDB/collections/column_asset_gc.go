@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 )
 
 // ColumnAssetGCOptions controls safe M15B column asset segment reclamation.
@@ -109,13 +108,17 @@ func (c *Collection) columnAssetGC(ctx context.Context, opts ColumnAssetGCOption
 		stats.BytesEligible += entry.Bytes
 		eligible = append(eligible, entry)
 	}
-	if opts.DryRun || len(eligible) == 0 {
+	if opts.DryRun {
 		stats.Plan = columnAssetGCPlanForDetail(stats.Plan, opts.Detailed)
 		return stats, nil
 	}
 	if err := c.db.CheckStorageMaintenanceReady(); err != nil {
 		stats.Plan = columnAssetGCPlanForDetail(stats.Plan, opts.Detailed)
 		return stats, err
+	}
+	if len(eligible) == 0 {
+		stats.Plan = columnAssetGCPlanForDetail(stats.Plan, opts.Detailed)
+		return stats, nil
 	}
 
 	for _, entry := range eligible {
@@ -129,6 +132,8 @@ func (c *Collection) columnAssetGC(ctx context.Context, opts ColumnAssetGCOption
 		}
 		stats.SegmentsDeleted++
 		stats.BytesDeleted += entry.Bytes
+		stats.SegmentsRetained--
+		stats.BytesRetained -= entry.Bytes
 	}
 	if stats.SegmentsDeleted != 0 {
 		if err := syncColumnAssetDir(namespace.SegmentDir); err != nil {
@@ -136,8 +141,6 @@ func (c *Collection) columnAssetGC(ctx context.Context, opts ColumnAssetGCOption
 			return stats, err
 		}
 	}
-	stats.SegmentsRetained -= stats.SegmentsDeleted
-	stats.BytesRetained -= stats.BytesDeleted
 	stats.Plan = columnAssetGCPlanForDetail(stats.Plan, opts.Detailed)
 	return stats, nil
 }
@@ -153,13 +156,10 @@ func columnAssetGCSegmentEligibleForDelete(segmentDir string, entry ColumnAssetR
 		entry.ReclaimableBytes != entry.Bytes {
 		return false
 	}
-	if filepath.Base(entry.Path) != columnAssetSegmentFileName(entry.FileID) {
-		return false
-	}
 	cleanSegmentDir := filepath.Clean(segmentDir)
 	cleanPath := filepath.Clean(entry.Path)
-	rel, err := filepath.Rel(cleanSegmentDir, cleanPath)
-	if err != nil || rel == "." || rel == "" || filepath.IsAbs(rel) || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+	expected := filepath.Clean(filepath.Join(cleanSegmentDir, columnAssetSegmentFileName(entry.FileID)))
+	if cleanPath != expected {
 		return false
 	}
 	return true

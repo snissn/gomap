@@ -319,7 +319,7 @@ func (db *DB) ColumnAssetRootDir() string {
 // maintenance such as GC, rewrite cleanup, or typed column asset reclamation.
 func (db *DB) CheckStorageMaintenanceReady() error {
 	if db == nil {
-		return nil
+		return ErrClosed
 	}
 	if db.readOnly {
 		return ErrReadOnly

@@ -679,6 +679,9 @@ func clippedColumnAssetReachabilityIntervals(segment columnAssetReachabilitySegm
 	return intervals, outOfBounds
 }
 
+// columnAssetReachabilityRangesCoveredBytes computes covered bytes within the
+// segment bounds. It sorts ranges in place; callers must treat ranges as
+// consumed after calling.
 func columnAssetReachabilityRangesCoveredBytes(segment columnAssetReachabilitySegment, ranges []columnAssetReachabilityRange) (int64, int) {
 	sort.Slice(ranges, func(i, j int) bool {
 		return ranges[i].start < ranges[j].start || (ranges[i].start == ranges[j].start && ranges[i].end < ranges[j].end)
