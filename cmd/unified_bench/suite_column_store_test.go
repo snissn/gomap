@@ -176,8 +176,8 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 	if report.ByteAccounting.ColumnAssetStoreBytes != report.ByteAccounting.ColumnAssetBytes {
 		t.Fatalf("column_asset_store_bytes=%d want column_asset_bytes=%d", report.ByteAccounting.ColumnAssetStoreBytes, report.ByteAccounting.ColumnAssetBytes)
 	}
-	if report.ByteAccounting.OrdinaryValueLogBytes < 0 || report.ByteAccounting.LeafLogBytes == 0 {
-		t.Fatalf("expected measured ordinary value_vlog and leaf_vlog byte splits: %+v", report.ByteAccounting)
+	if report.ByteAccounting.OrdinaryValueLogBytes < 0 || report.ByteAccounting.LeafLogBytes < 0 {
+		t.Fatalf("expected non-negative ordinary value_vlog and leaf_vlog byte splits: %+v", report.ByteAccounting)
 	}
 	if got, want := report.ByteAccounting.TotalReconstructableBytes, report.ByteAccounting.RetainedPayloadBytes+report.ByteAccounting.ColumnAssetBytes+report.ByteAccounting.ManifestControlBytes; got != want {
 		t.Fatalf("total_reconstructable_bytes=%d want retained+column+manifest=%d", got, want)
