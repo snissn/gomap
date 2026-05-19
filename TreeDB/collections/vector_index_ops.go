@@ -10,17 +10,22 @@ import (
 // vector index. Status checks may inspect the persisted graph root and are
 // intended for operational paths, not search hot paths.
 type VectorIndexStatus struct {
-	Definition          VectorIndexDefinition
-	Name                string
-	RootName            string
-	RootID              uint64
-	NativeRootLoaded    bool
-	NativeRootBytes     int64
-	ExactFallbackReason string
-	Registered          bool
-	Stats               VectorIndexStats
-	RebuildNeeded       bool
-	Duration            time.Duration
+	Definition                    VectorIndexDefinition
+	Name                          string
+	RootName                      string
+	RootID                        uint64
+	Strategy                      VectorIndexStrategy
+	NativeRuntimeUsed             bool
+	NativeRootLoaded              bool
+	NativeRootBytes               int64
+	ExactFallbackReason           string
+	ColumnGraphLoaded             bool
+	ColumnGraphUnavailableReason  string
+	PhysicalColumnAssetsSupported bool
+	Registered                    bool
+	Stats                         VectorIndexStats
+	RebuildNeeded                 bool
+	Duration                      time.Duration
 }
 
 // VectorIndexStatus returns persisted-root and runtime status for a declared
@@ -57,6 +62,20 @@ func (c *Collection) RebuildVectorIndex(name string) (VectorIndexStatus, error) 
 	if err != nil {
 		return VectorIndexStatus{}, err
 	}
+	if vectorIndexDefinitionStrategy(def) == VectorIndexStrategyColumnGraph {
+		graph, loadStatus, err := c.LoadColumnGraphVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
+		if err != nil {
+			return VectorIndexStatus{}, err
+		}
+		if graph != nil {
+			status := vectorIndexStatusFromColumnGraphLoad(def, loadStatus)
+			status.Duration = collectionObservedElapsedSince(start)
+			return status, nil
+		}
+		status := columnGraphRebuildUnsupportedStatus(def, loadStatus)
+		status.Duration = collectionObservedElapsedSince(start)
+		return status, nil
+	}
 	index, err := c.buildVectorIndexPrepared(vectorIndexOptionsFromDefinition(def), false, false)
 	if err != nil {
 		return VectorIndexStatus{}, err
@@ -87,6 +106,8 @@ func (c *Collection) RebuildVectorIndex(name string) (VectorIndexStatus, error) 
 		Name:                def.Name,
 		RootName:            collectionVectorIndexRootName(c.meta.Name, def.Name),
 		RootID:              native.RootID,
+		Strategy:            VectorIndexStrategyNativeRuntime,
+		NativeRuntimeUsed:   true,
 		NativeRootLoaded:    native.Loaded,
 		NativeRootBytes:     native.BytesDisk,
 		ExactFallbackReason: native.ExactFallbackReason,
@@ -158,7 +179,7 @@ func (c *Collection) vectorIndexStatus(name string, inspectNativeRoot bool) (Vec
 		return VectorIndexStatus{}, backenddb.ErrClosed
 	}
 	defer func() { _ = snap.Close() }()
-	catalog, err := loadCollectionCatalog(snap, c.meta.Name)
+	catalog, err := loadCollectionCatalogWithoutColumnRootValidation(snap, c.meta.Name)
 	if err != nil {
 		return VectorIndexStatus{}, err
 	}
@@ -168,6 +189,12 @@ func (c *Collection) vectorIndexStatus(name string, inspectNativeRoot bool) (Vec
 	def, ok := findVectorIndex(catalog.meta.VectorIndexes, name)
 	if !ok {
 		return VectorIndexStatus{}, ErrIndexNotFound
+	}
+	if vectorIndexDefinitionStrategy(def) == VectorIndexStrategyColumnGraph {
+		return c.columnGraphVectorIndexStatusFromCatalog(snap, catalog, def)
+	}
+	if err := validateColumnStoreCatalogRoot(snap, catalog); err != nil {
+		return VectorIndexStatus{}, err
 	}
 
 	rootName := collectionVectorIndexRootName(catalog.meta.Name, def.Name)
@@ -181,12 +208,14 @@ func (c *Collection) vectorIndexStatus(name string, inspectNativeRoot bool) (Vec
 		Name:       def.Name,
 		RootName:   rootName,
 		RootID:     rootID,
+		Strategy:   VectorIndexStrategyNativeRuntime,
 	}
 	registeredRuntimeStale := false
 	if runtimeIdx := c.registeredVectorIndex(def.Name); runtimeIdx != nil {
 		status.Registered = true
 		registeredRuntimeStale = runtimeIdx.validateNativeSnapshotDefinition(def) != "" || rootID != runtimeIdx.nativeSnapshotBaseEpochForFullSave()
 		if !registeredRuntimeStale {
+			status.NativeRuntimeUsed = true
 			status.Stats = runtimeIdx.Stats()
 		}
 	}
@@ -220,6 +249,7 @@ func (c *Collection) vectorIndexStatus(name string, inspectNativeRoot bool) (Vec
 		return status, nil
 	}
 	probe.recordLoadedSnapshot(status.RootID, bytesDisk)
+	status.NativeRuntimeUsed = true
 	status.NativeRootLoaded = true
 	status.NativeRootBytes = bytesDisk
 	if !status.Registered || registeredRuntimeStale {

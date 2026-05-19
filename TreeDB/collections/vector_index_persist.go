@@ -56,6 +56,16 @@ type VectorIndexLoadStatus struct {
 	RootID              uint64
 	Epoch               uint64
 	BytesDisk           int64
+	Strategy            VectorIndexStrategy
+	NativeRuntimeUsed   bool
+	ColumnGraphLoaded   bool
+	// ColumnGraphUnavailableReason is set for explicit column_graph indexes
+	// when the persisted column-backed graph path cannot load. It intentionally
+	// mirrors ExactFallbackReason so older callers still see a safe fallback
+	// reason without understanding column_graph-specific status fields.
+	ColumnGraphUnavailableReason  string
+	PhysicalColumnAssetsSupported bool
+	RebuildNeeded                 bool
 }
 
 // VectorIndexPruneStatus reports persisted vector-index epoch cleanup.
@@ -719,6 +729,9 @@ func (c *Collection) LoadVectorIndexSnapshot(opts VectorIndexOptions) (*VectorIn
 	if err != nil {
 		return nil, status, err
 	}
+	if vectorIndexOptionsStrategy(opts) == VectorIndexStrategyColumnGraph {
+		return index, status, nil
+	}
 	if index != nil || status.Loaded || status.ExactFallbackReason != vectorIndexFallbackMissingVectorIndexMetadata {
 		return index, status, nil
 	}
@@ -729,7 +742,7 @@ func (c *Collection) LoadVectorIndexSnapshot(opts VectorIndexOptions) (*VectorIn
 // collection root. Missing or invalid graph roots return a non-loaded status so
 // callers can safely fall back to exact search.
 func (c *Collection) LoadNativeVectorIndexSnapshot(opts VectorIndexOptions) (*VectorIndex, VectorIndexLoadStatus, error) {
-	status := VectorIndexLoadStatus{}
+	status := VectorIndexLoadStatus{Strategy: VectorIndexStrategyNativeRuntime}
 	if c == nil {
 		return nil, status, errCollectionNil
 	}
@@ -742,7 +755,7 @@ func (c *Collection) LoadNativeVectorIndexSnapshot(opts VectorIndexOptions) (*Ve
 		return nil, status, backenddb.ErrClosed
 	}
 	defer func() { _ = snap.Close() }()
-	catalog, err := loadCollectionCatalog(snap, c.meta.Name)
+	catalog, err := loadCollectionCatalogWithoutColumnRootValidation(snap, c.meta.Name)
 	if err != nil {
 		return nil, status, err
 	}
@@ -753,6 +766,13 @@ func (c *Collection) LoadNativeVectorIndexSnapshot(opts VectorIndexOptions) (*Ve
 	if !ok {
 		status.ExactFallbackReason = vectorIndexFallbackMissingVectorIndexMetadata
 		return nil, status, nil
+	}
+	if vectorIndexDefinitionStrategy(def) == VectorIndexStrategyColumnGraph {
+		_, status, err = c.loadColumnGraphVectorIndexSnapshotFromCatalog(snap, catalog, def)
+		return nil, status, err
+	}
+	if err := validateColumnStoreCatalogRoot(snap, catalog); err != nil {
+		return nil, status, err
 	}
 	rootName := collectionVectorIndexRootName(catalog.meta.Name, def.Name)
 	status.RootName = rootName
@@ -778,6 +798,7 @@ func (c *Collection) LoadNativeVectorIndexSnapshot(opts VectorIndexOptions) (*Ve
 		return nil, status, nil
 	}
 	status.Loaded = true
+	status.NativeRuntimeUsed = true
 	status.RootID = rootID
 	status.Epoch = rootID
 	status.BytesDisk = bytesDisk
@@ -1459,6 +1480,7 @@ func vectorIndexOptionsFromDefinition(def VectorIndexDefinition) VectorIndexOpti
 		EfConstruction:   def.EfConstruction,
 		EfSearch:         def.EfSearch,
 		Encoding:         def.Encoding,
+		Strategy:         def.Strategy,
 		schemaGeneration: def.SchemaGeneration,
 	}
 }
@@ -1469,6 +1491,9 @@ func (idx *VectorIndex) validateNativeSnapshotDefinition(def VectorIndexDefiniti
 	}
 	if def.Field != idx.field {
 		return "field_mismatch"
+	}
+	if vectorIndexDefinitionStrategy(def) == VectorIndexStrategyColumnGraph {
+		return "strategy_mismatch"
 	}
 	if def.Metric != idx.metric {
 		return "metric_mismatch"

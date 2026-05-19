@@ -818,6 +818,7 @@ type VectorIndexDefinition struct {
 	EfConstruction   int                 `json:"ef_construction,omitempty"`
 	EfSearch         int                 `json:"ef_search,omitempty"`
 	Encoding         VectorIndexEncoding `json:"encoding,omitempty"`
+	Strategy         VectorIndexStrategy `json:"strategy,omitempty"`
 	SchemaGeneration uint64              `json:"schema_generation,omitempty"`
 }
 
@@ -3104,7 +3105,7 @@ func (c *Collection) CreateVectorIndex(def VectorIndexDefinition) (*CollectionMe
 		return nil, err
 	}
 	var runtime *VectorIndex
-	if registerEmptyRuntime {
+	if registerEmptyRuntime && vectorIndexDefinitionStrategy(normalizedDef) != VectorIndexStrategyColumnGraph {
 		runtime, err = newVectorIndex(c, vectorIndexOptionsFromDefinition(normalizedDef))
 		if err != nil {
 			return nil, err
@@ -3124,7 +3125,7 @@ func (c *Collection) CreateVectorIndex(def VectorIndexDefinition) (*CollectionMe
 	nextCatalog := cloneCatalogWithRootUpdates(catalog, newMeta, nil, nil)
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
-	if registerEmptyRuntime {
+	if runtime != nil {
 		c.RegisterVectorIndex(runtime)
 	}
 	return newMeta.copy(), nil
@@ -17944,6 +17945,17 @@ func (c *Collection) ScanDocumentsFunc(maxDocuments int, fn func(DocumentRecord)
 }
 
 func loadCollectionCatalog(snap *backenddb.Snapshot, name string) (*collectionCatalog, error) {
+	catalog, err := loadCollectionCatalogWithoutColumnRootValidation(snap, name)
+	if err != nil || catalog == nil {
+		return catalog, err
+	}
+	if err := validateColumnStoreCatalogRoot(snap, catalog); err != nil {
+		return nil, err
+	}
+	return catalog, nil
+}
+
+func loadCollectionCatalogWithoutColumnRootValidation(snap *backenddb.Snapshot, name string) (*collectionCatalog, error) {
 	raw, ok, err := getSystemValue(snap, systemCollectionMetaKey(name))
 	if err != nil || !ok {
 		return nil, err
@@ -17972,11 +17984,7 @@ func loadCollectionCatalog(snap *backenddb.Snapshot, name string) (*collectionCa
 	if err != nil {
 		return nil, err
 	}
-	catalog := newCollectionCatalogWithOverlays(meta, roots, rootOverlays)
-	if err := validateColumnStoreCatalogRoot(snap, catalog); err != nil {
-		return nil, err
-	}
-	return catalog, nil
+	return newCollectionCatalogWithOverlays(meta, roots, rootOverlays), nil
 }
 
 func loadCollectionCatalogRootOverlays(snap *backenddb.Snapshot, rootNames []string) (map[string][]uint64, error) {
@@ -18683,8 +18691,13 @@ func normalizeVectorIndexDefinition(def VectorIndexDefinition) (VectorIndexDefin
 	if err != nil {
 		return VectorIndexDefinition{}, err
 	}
+	strategy, err := normalizeVectorIndexStrategy(def.Strategy)
+	if err != nil {
+		return VectorIndexDefinition{}, err
+	}
 	def.Metric = metric
 	def.Encoding = encoding
+	def.Strategy = strategy
 	if def.M <= 0 {
 		def.M = defaultVectorIndexM
 	}
@@ -18905,6 +18918,9 @@ func collectionRootNames(meta CollectionMeta) []string {
 		out = append(out, collectionSecondaryRootName(meta.Name, idx.Name))
 	}
 	for _, idx := range meta.VectorIndexes {
+		if vectorIndexDefinitionStrategy(idx) == VectorIndexStrategyColumnGraph {
+			continue
+		}
 		out = append(out, collectionVectorIndexRootName(meta.Name, idx.Name))
 	}
 	return out
@@ -18920,6 +18936,9 @@ func collectionCommandWALVectorRootInvalidations(meta CollectionMeta, catalog *c
 	}
 	rootNames := make([]string, 0, len(meta.VectorIndexes))
 	for _, idx := range meta.VectorIndexes {
+		if vectorIndexDefinitionStrategy(idx) == VectorIndexStrategyColumnGraph {
+			continue
+		}
 		rootName := collectionVectorIndexRootName(meta.Name, idx.Name)
 		if _, exists := baseRootIDs[rootName]; exists {
 			continue

@@ -48,6 +48,11 @@ const (
 	vectorIndexFallbackInvalidEntry               = "invalid_entry"
 	vectorIndexFallbackMissingManifest            = "missing_manifest"
 	vectorIndexFallbackInvalidManifest            = "invalid_manifest"
+	vectorIndexFallbackColumnGraphPhysicalMissing = "physical_column_asset_support_missing"
+	vectorIndexFallbackColumnGraphManifestMissing = "column_graph_manifest_root_missing"
+	vectorIndexFallbackColumnGraphManifestInvalid = "column_graph_manifest_root_mismatch"
+	vectorIndexFallbackColumnGraphMetric          = "column_graph_requires_cosine"
+	vectorIndexFallbackColumnGraphEncoding        = "column_graph_requires_float32"
 )
 
 var errVectorIndexStaleRuntime = errors.New("collections: vector index runtime handle is stale")
@@ -106,6 +111,23 @@ func (e *VectorIndexEncoding) UnmarshalJSON(raw []byte) error {
 	return nil
 }
 
+// VectorIndexStrategy selects the physical/vector-search lifecycle backing a
+// declared collection vector index. The zero value is the existing native
+// runtime/native-root path so older metadata remains unchanged.
+type VectorIndexStrategy string
+
+const (
+	VectorIndexStrategyNativeRuntime VectorIndexStrategy = "native_runtime"
+	VectorIndexStrategyColumnGraph   VectorIndexStrategy = "column_graph"
+)
+
+func (s VectorIndexStrategy) String() string {
+	if s == "" {
+		return string(VectorIndexStrategyNativeRuntime)
+	}
+	return string(s)
+}
+
 // VectorIndexOptions configures an in-memory vector secondary index built from
 // collection rows. The index stores stable collection document IDs and vector
 // copies for graph search; TreeDB collection rows remain canonical for returned
@@ -120,6 +142,7 @@ type VectorIndexOptions struct {
 	EfSearch            int
 	RebuildDeletedRatio float64
 	Encoding            VectorIndexEncoding
+	Strategy            VectorIndexStrategy
 	schemaGeneration    uint64
 }
 
@@ -309,6 +332,13 @@ func newVectorIndex(c *Collection, opts VectorIndexOptions) (*VectorIndex, error
 	if opts.Name == "" {
 		opts.Name = vectorIndexDefaultName(opts.Field)
 	}
+	strategy, err := normalizeVectorIndexStrategy(opts.Strategy)
+	if err != nil {
+		return nil, err
+	}
+	if strategy == VectorIndexStrategyColumnGraph {
+		return nil, errors.New("collections: column_graph vector indexes require the column-backed graph loader, not the native runtime builder")
+	}
 	fieldPath, err := parseVectorFieldPath(opts.Field)
 	if err != nil {
 		return nil, err
@@ -385,6 +415,33 @@ func parseVectorIndexEncoding(value string) (VectorIndexEncoding, error) {
 	}
 }
 
+func normalizeVectorIndexStrategy(strategy VectorIndexStrategy) (VectorIndexStrategy, error) {
+	switch strings.TrimSpace(strings.ToLower(string(strategy))) {
+	case "", "native", "native_runtime", "ann_graph":
+		return "", nil
+	case string(VectorIndexStrategyColumnGraph):
+		return VectorIndexStrategyColumnGraph, nil
+	default:
+		return "", fmt.Errorf("collections: unsupported vector index strategy %q", strategy)
+	}
+}
+
+func vectorIndexDefinitionStrategy(def VectorIndexDefinition) VectorIndexStrategy {
+	strategy, err := normalizeVectorIndexStrategy(def.Strategy)
+	if err != nil {
+		return def.Strategy
+	}
+	return strategy
+}
+
+func vectorIndexOptionsStrategy(opts VectorIndexOptions) VectorIndexStrategy {
+	strategy, err := normalizeVectorIndexStrategy(opts.Strategy)
+	if err != nil {
+		return opts.Strategy
+	}
+	return strategy
+}
+
 // RegisterVectorIndex attaches an in-memory vector index to this collection so
 // successful collection inserts, updates, and deletes keep the index in sync.
 func (c *Collection) RegisterVectorIndex(index *VectorIndex) {
@@ -398,7 +455,11 @@ func (c *Collection) RegisterVectorIndex(index *VectorIndex) {
 	}
 	index.collection = c
 	if def, ok := findVectorIndex(c.meta.VectorIndexes, index.name); ok {
-		index.recordNativeDefinition(def)
+		if vectorIndexDefinitionStrategy(def) == VectorIndexStrategyColumnGraph {
+			index.setNativePersistent(false)
+		} else {
+			index.recordNativeDefinition(def)
+		}
 	} else {
 		index.setNativePersistent(false)
 	}
@@ -561,6 +622,9 @@ func (c *Collection) ensureDeclaredNativeVectorIndexesLoaded() error {
 		}
 	}
 	for _, def := range c.meta.VectorIndexes {
+		if vectorIndexDefinitionStrategy(def) == VectorIndexStrategyColumnGraph {
+			continue
+		}
 		if index := c.registeredVectorIndex(def.Name); index != nil {
 			continue
 		}
@@ -604,6 +668,12 @@ func (c *Collection) declaredNativeVectorIndexesLoadedForCurrentCatalog() bool {
 		return true
 	}
 	for _, def := range defs {
+		if vectorIndexDefinitionStrategy(def) == VectorIndexStrategyColumnGraph {
+			if index := c.registeredVectorIndex(def.Name); index != nil {
+				return false
+			}
+			continue
+		}
 		index := c.registeredVectorIndex(def.Name)
 		if index == nil || index.validateNativeSnapshotDefinition(def) != "" {
 			return false
@@ -885,8 +955,8 @@ func collectionMetaDeclaresVectorIndex(meta CollectionMeta, name string) bool {
 	if name == "" {
 		return false
 	}
-	_, ok := findVectorIndex(meta.VectorIndexes, name)
-	return ok
+	def, ok := findVectorIndex(meta.VectorIndexes, name)
+	return ok && vectorIndexDefinitionStrategy(def) != VectorIndexStrategyColumnGraph
 }
 
 // InsertDocument adds or replaces one committed collection document in the

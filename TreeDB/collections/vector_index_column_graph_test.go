@@ -1,0 +1,231 @@
+package collections
+
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+
+	backenddb "github.com/snissn/gomap/TreeDB/db"
+)
+
+func TestCollectionVectorIndexColumnGraphContractReportsPhysicalAssetsMissing(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	def := columnGraphVectorIndexTestDefinition()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "docs",
+		Options: CollectionOptions{
+			ColumnStore: columnGraphVectorIndexTestColumnStore(nil),
+		},
+		VectorIndexes: []VectorIndexDefinition{def},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+
+	status, err := col.VectorIndexStatus(def.Name)
+	if err != nil {
+		t.Fatalf("VectorIndexStatus: %v", err)
+	}
+	assertColumnGraphUnavailableStatus(t, status, vectorIndexFallbackColumnGraphPhysicalMissing)
+	if status.Registered || status.NativeRuntimeUsed || status.NativeRootLoaded {
+		t.Fatalf("column_graph status used native runtime/root: %+v", status)
+	}
+
+	loaded, loadStatus, err := col.LoadVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		t.Fatalf("LoadVectorIndexSnapshot: %v", err)
+	}
+	if loaded != nil {
+		t.Fatalf("LoadVectorIndexSnapshot returned native runtime for column_graph")
+	}
+	if loadStatus.Strategy != VectorIndexStrategyColumnGraph || loadStatus.ExactFallbackReason != vectorIndexFallbackColumnGraphPhysicalMissing || loadStatus.ColumnGraphUnavailableReason != vectorIndexFallbackColumnGraphPhysicalMissing {
+		t.Fatalf("unexpected column_graph load status: %+v", loadStatus)
+	}
+
+	rebuild, err := col.RebuildVectorIndex(def.Name)
+	if err != nil {
+		t.Fatalf("RebuildVectorIndex returned error instead of status: %v", err)
+	}
+	assertColumnGraphUnavailableStatus(t, rebuild, vectorIndexFallbackColumnGraphPhysicalMissing)
+	if col.hasRegisteredVectorIndex(def.Name) {
+		t.Fatalf("column_graph rebuild registered a native runtime")
+	}
+}
+
+func TestCollectionVectorIndexColumnGraphReportsManifestRootMismatch(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	def := columnGraphVectorIndexTestDefinition()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+
+	active := ColumnManifestIdentity{Generation: 7, Version: columnManifestIdentityVersion, Checksum: 0x1111}
+	rootIdentity := active
+	rootIdentity.Checksum = 0x2222
+	publishColumnStoreCatalogForTest(t, d, CollectionMeta{
+		Name: "docs",
+		Options: CollectionOptions{
+			ColumnStore: columnGraphVectorIndexTestColumnStore(&active),
+		},
+		VectorIndexes: []VectorIndexDefinition{def},
+	}, rootIdentity)
+
+	graph, status, err := col.LoadColumnGraphVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		t.Fatalf("LoadColumnGraphVectorIndexSnapshot: %v", err)
+	}
+	if graph != nil {
+		t.Fatalf("loaded graph despite manifest mismatch")
+	}
+	if status.RootID == 0 || status.ExactFallbackReason != vectorIndexFallbackColumnGraphManifestInvalid || status.ColumnGraphUnavailableReason != vectorIndexFallbackColumnGraphManifestInvalid {
+		t.Fatalf("unexpected mismatch status: %+v", status)
+	}
+}
+
+func TestCollectionVectorIndexColumnGraphMutationsRemainRebuildNeeded(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	def := columnGraphVectorIndexTestDefinition()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:          "docs",
+		VectorIndexes: []VectorIndexDefinition{def},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("a"), []byte("b")},
+		[][]byte{
+			[]byte(`{"embedding":[1,0]}`),
+			[]byte(`{"embedding":[0,1]}`),
+		},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if _, modified, err := col.Update([]byte("a"), func([]byte) ([]byte, bool, error) {
+		return []byte(`{"embedding":[0.9,0.1]}`), true, nil
+	}); err != nil || !modified {
+		t.Fatalf("update modified=%v err=%v", modified, err)
+	}
+	if deleted, err := col.DeleteDocument([]byte("b")); err != nil || !deleted {
+		t.Fatalf("delete deleted=%v err=%v", deleted, err)
+	}
+	status, err := col.VectorIndexStatus(def.Name)
+	if err != nil {
+		t.Fatalf("VectorIndexStatus: %v", err)
+	}
+	assertColumnGraphUnavailableStatus(t, status, vectorIndexFallbackColumnGraphPhysicalMissing)
+	if col.hasRegisteredVectorIndex(def.Name) {
+		t.Fatalf("mutations registered a native runtime for column_graph")
+	}
+}
+
+func TestCollectionVectorIndexColumnGraphStrategyJSON(t *testing.T) {
+	meta, err := normalizeCollectionMeta(CollectionMeta{
+		Name: "docs",
+		VectorIndexes: []VectorIndexDefinition{{
+			Name:       "embedding",
+			Field:      "embedding",
+			Metric:     VectorMetricCosine,
+			Dimensions: 2,
+			Strategy:   VectorIndexStrategyColumnGraph,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("normalize meta: %v", err)
+	}
+	raw, err := json.Marshal(meta)
+	if err != nil {
+		t.Fatalf("marshal meta: %v", err)
+	}
+	if !strings.Contains(string(raw), `"strategy":"column_graph"`) {
+		t.Fatalf("vector metadata JSON=%s want column_graph strategy", raw)
+	}
+	var decoded CollectionMeta
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("unmarshal meta: %v", err)
+	}
+	decoded, err = normalizeCollectionMeta(decoded)
+	if err != nil {
+		t.Fatalf("normalize decoded meta: %v", err)
+	}
+	got, ok := findVectorIndex(decoded.VectorIndexes, "embedding")
+	if !ok || got.Strategy != VectorIndexStrategyColumnGraph {
+		t.Fatalf("decoded vector index=%+v ok=%v", got, ok)
+	}
+}
+
+func columnGraphVectorIndexTestDefinition() VectorIndexDefinition {
+	return VectorIndexDefinition{
+		Name:       "embedding",
+		Field:      "embedding",
+		Metric:     VectorMetricCosine,
+		Dimensions: 2,
+		Strategy:   VectorIndexStrategyColumnGraph,
+	}
+}
+
+func columnGraphVectorIndexTestColumnStore(active *ColumnManifestIdentity) *ColumnStoreConfig {
+	var recovery *ColumnManifestIdentity
+	if active != nil {
+		copied := *active
+		recovery = &copied
+	}
+	cfg := &ColumnStoreConfig{
+		Enabled: true,
+		Columns: []ColumnStoreColumn{
+			{Name: "embedding", Path: "embedding", ValueType: ColumnStoreValueFloat32Vector, VectorDims: 2},
+			{Name: "embedding_inv_norm", Path: "embedding_inv_norm", ValueType: ColumnStoreValueFloat32},
+			{Name: "embedding_neighbors", Path: "embedding_neighbors", ValueType: ColumnStoreValueAdjacencyList},
+		},
+		ActiveManifest:                active,
+		RecoveryAuthoritativeManifest: recovery,
+	}
+	if active != nil {
+		cfg.RecoveryAuthoritativeAppliedCommandLSN = 1
+	}
+	return cfg
+}
+
+func assertColumnGraphUnavailableStatus(t *testing.T, status VectorIndexStatus, reason string) {
+	t.Helper()
+	if status.Strategy != VectorIndexStrategyColumnGraph {
+		t.Fatalf("strategy=%q want column_graph: %+v", status.Strategy, status)
+	}
+	if status.ColumnGraphLoaded || status.PhysicalColumnAssetsSupported {
+		t.Fatalf("column_graph unexpectedly loaded/supported: %+v", status)
+	}
+	if status.ExactFallbackReason != reason || status.ColumnGraphUnavailableReason != reason {
+		t.Fatalf("fallback reason=%q column reason=%q want %q: %+v", status.ExactFallbackReason, status.ColumnGraphUnavailableReason, reason, status)
+	}
+	if !status.RebuildNeeded {
+		t.Fatalf("column_graph status should be rebuild-needed: %+v", status)
+	}
+}
