@@ -55,35 +55,8 @@ func (c *Collection) RebuildVectorIndex(name string) (VectorIndexStatus, error) 
 	if err := ValidateIndexName(name); err != nil {
 		return VectorIndexStatus{}, err
 	}
-	snap := c.db.AcquireSnapshot()
-	if snap == nil {
-		return VectorIndexStatus{}, backenddb.ErrClosed
-	}
-	defer func() { _ = snap.Close() }()
-	catalog, err := loadCollectionCatalogWithoutColumnRootValidation(snap, c.meta.Name)
-	if err != nil {
-		return VectorIndexStatus{}, err
-	}
-	if catalog == nil {
-		return VectorIndexStatus{}, errCollectionNotFound
-	}
-	def, ok := findVectorIndex(catalog.meta.VectorIndexes, name)
-	if !ok {
-		return VectorIndexStatus{}, ErrIndexNotFound
-	}
-	if vectorIndexDefinitionStrategy(def) == VectorIndexStrategyColumnGraph {
-		graph, loadStatus, err := c.loadColumnGraphVectorIndexSnapshotFromCatalog(snap, catalog, def)
-		if err != nil {
-			return VectorIndexStatus{}, err
-		}
-		if graph != nil {
-			status := vectorIndexStatusFromColumnGraphLoad(def, loadStatus)
-			status.Duration = collectionObservedElapsedSince(start)
-			return status, nil
-		}
-		status := columnGraphRebuildUnsupportedStatus(def, loadStatus)
-		status.Duration = collectionObservedElapsedSince(start)
-		return status, nil
+	if status, handled, err := c.probeColumnGraphVectorIndexRebuild(name, start); err != nil || handled {
+		return status, err
 	}
 	// Native rebuild publishes a full replacement graph root. Hold the same
 	// mutation barrier used by writes across the primary scan and root publish
@@ -93,21 +66,18 @@ func (c *Collection) RebuildVectorIndex(name string) (VectorIndexStatus, error) 
 	if err := c.flushBufferedWrites(); err != nil {
 		return VectorIndexStatus{}, err
 	}
-	def, err = c.declaredVectorIndexDefinitionPrepared(name)
+	def, err := c.declaredVectorIndexDefinitionPrepared(name)
 	if err != nil {
 		return VectorIndexStatus{}, err
 	}
 	if vectorIndexDefinitionStrategy(def) == VectorIndexStrategyColumnGraph {
-		graph, loadStatus, err := c.LoadColumnGraphVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
-		if err != nil {
-			return VectorIndexStatus{}, err
-		}
-		if graph != nil {
-			status := vectorIndexStatusFromColumnGraphLoad(def, loadStatus)
-			status.Duration = collectionObservedElapsedSince(start)
-			return status, nil
-		}
-		status := columnGraphRebuildUnsupportedStatus(def, loadStatus)
+		// The definition can change while waiting for the native rebuild barrier.
+		// Do not run the column_graph loader with writers blocked; callers can
+		// re-probe status outside the native rebuild path.
+		status := columnGraphRebuildUnsupportedStatus(
+			def,
+			columnGraphUnavailableLoadStatus(vectorIndexFallbackColumnGraphPhysicalMissing),
+		)
 		status.Duration = collectionObservedElapsedSince(start)
 		return status, nil
 	}
@@ -152,6 +122,40 @@ func (c *Collection) RebuildVectorIndex(name string) (VectorIndexStatus, error) 
 		Duration:            duration,
 	}
 	return status, nil
+}
+
+func (c *Collection) probeColumnGraphVectorIndexRebuild(name string, start time.Time) (VectorIndexStatus, bool, error) {
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return VectorIndexStatus{}, true, backenddb.ErrClosed
+	}
+	defer func() { _ = snap.Close() }()
+	catalog, err := loadCollectionCatalogWithoutColumnRootValidation(snap, c.meta.Name)
+	if err != nil {
+		return VectorIndexStatus{}, true, err
+	}
+	if catalog == nil {
+		return VectorIndexStatus{}, true, errCollectionNotFound
+	}
+	def, ok := findVectorIndex(catalog.meta.VectorIndexes, name)
+	if !ok {
+		return VectorIndexStatus{}, true, ErrIndexNotFound
+	}
+	if vectorIndexDefinitionStrategy(def) != VectorIndexStrategyColumnGraph {
+		return VectorIndexStatus{}, false, nil
+	}
+	graph, loadStatus, err := c.loadColumnGraphVectorIndexSnapshotFromCatalog(snap, catalog, def)
+	if err != nil {
+		return VectorIndexStatus{}, true, err
+	}
+	if graph != nil {
+		status := vectorIndexStatusFromColumnGraphLoad(def, loadStatus)
+		status.Duration = collectionObservedElapsedSince(start)
+		return status, true, nil
+	}
+	status := columnGraphRebuildUnsupportedStatus(def, loadStatus)
+	status.Duration = collectionObservedElapsedSince(start)
+	return status, true, nil
 }
 
 func (c *Collection) declaredVectorIndexDefinition(name string) (VectorIndexDefinition, error) {
