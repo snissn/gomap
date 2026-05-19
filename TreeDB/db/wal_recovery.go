@@ -488,8 +488,19 @@ func (db *DB) applyRegisteredCommandWALFrame(env commitlog.CommandEnvelope, regi
 	previousReplayToken := db.commandWALReplayToken.Swap(replayToken)
 	// Keep the DB handle usable if an external replay handler panics and the
 	// caller recovers above the replay loop.
-	defer db.restoreCommandWALReplayFrame(previousReplayLSN, previousReplayToken)
-	return registration.handler(db, env)
+	restored := false
+	defer func() {
+		if r := recover(); r != nil {
+			if !restored {
+				db.restoreCommandWALReplayFrame(previousReplayLSN, previousReplayToken)
+			}
+			panic(r)
+		}
+	}()
+	err := registration.handler(db, env)
+	db.restoreCommandWALReplayFrame(previousReplayLSN, previousReplayToken)
+	restored = true
+	return err
 }
 
 func (db *DB) restoreCommandWALReplayFrame(previousReplayLSN, previousReplayToken uint64) {
