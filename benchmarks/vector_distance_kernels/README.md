@@ -20,6 +20,8 @@ It compares:
 - `github.com/ic-timon/da-hvri/simd` `DotProduct`
 - Apple Metal GPU execution for FP32 dot and query-batch kernels
   (`darwin && cgo` only)
+- NVIDIA CUDA/cuBLAS execution for FP32 dot and query-batch kernels
+  (`linux && cgo && cuda` build tag only)
 
 It also includes focused TreeDB rerank-shape benchmarks:
 
@@ -83,6 +85,27 @@ cd benchmarks/vector_distance_kernels
 GOWORK=off go test -run TestMetalDotKernelCandidateBatch128 -bench BenchmarkMetalDotCandidateBatch128 -benchmem -count=5 | tee /tmp/metal_dot_candidate_batch128.txt
 ```
 
+Focused CUDA GPU run on Linux with an NVIDIA GPU:
+
+```sh
+cd benchmarks/vector_distance_kernels
+GOWORK=off go test -tags cuda -run TestCUDADotKernelQueryBatch -bench BenchmarkCUDADotCandidateBatch128 -benchmem -count=5 | tee /tmp/cuda_dot_candidate_batch128.txt
+```
+
+CUDA raw dot-product batch-size sweep:
+
+```sh
+cd benchmarks/vector_distance_kernels
+GOWORK=off go test -tags cuda -run '^$' -bench BenchmarkCUDADotRawBatchSizes -benchmem -count=3 | tee /tmp/cuda_dot_raw_batch_sizes.txt
+```
+
+CUDA query-batch sweep for index-build/update shapes:
+
+```sh
+cd benchmarks/vector_distance_kernels
+GOWORK=off go test -tags cuda -run '^$' -bench BenchmarkCUDADotQueryBatchSizes -benchmem -count=3 | tee /tmp/cuda_dot_query_batch_sizes.txt
+```
+
 Raw dot-product batch-size sweep:
 
 ```sh
@@ -125,8 +148,9 @@ cd benchmarks/vector_distance_kernels
 GOWORK=off go test -run '^$' -bench 'BenchmarkMetalDotQueryBatchRealisticIndexShapes/.*dims_768' -benchmem -benchtime=1x -count=3
 ```
 
-Hardware-labeled benchmark notes live in `METAL_RESULTS.md`. Add new hardware
-runs there as separate dated sections instead of overwriting earlier results.
+Hardware-labeled Metal benchmark notes live in `METAL_RESULTS.md`, and CUDA
+notes live in `CUDA_RESULTS.md`. Add new hardware runs as separate dated
+sections instead of overwriting earlier results.
 
 The realistic-shape benchmark includes `32/128/512 x 8k/65k` at both 64 and
 768 dimensions by default and defines `32/128/512 x 1M` cases behind
@@ -180,6 +204,24 @@ baselines so GPU results are not compared only against one CPU core.
 `BenchmarkMetalDotQueryBatchSizes` adds larger `queries x candidates` shapes
 intended to model index creation and bulk index-update scoring, where one
 command can produce a full dot matrix.
+
+The CUDA benchmark is the Linux/NVIDIA counterpart to the Metal experiment. It
+is intentionally behind `-tags cuda` so ordinary Linux builds do not require
+CUDA headers or libraries. The current CUDA path uses cuBLAS `cublasSgemm` to
+compute the dense `queries x candidates` FP32 dot matrix, treating the
+row-major Go slices as column-major cuBLAS matrices with transposes arranged so
+the output still lands as `dots[query*candidateCount+candidate]`. It includes a
+staged case that copies candidates every batch and a resident-candidate case
+that keeps the candidate matrix on the GPU between calls. This makes PCIe
+copy cost visible while also showing the best-case shape for bulk index-build
+or update scoring. The CUDA sweeps include several CPU baselines: Axiom,
+gonum `blas32`, `vek32`, serial `tphakala/simd` batch dot, and persistent
+`tphakala/simd` worker-pool variants. The hardware report uses the
+`tphakala/simd` rows as the primary CPU comparison and the CUDA benchmark output
+also reports `dots/s`, `dot_GFLOP/s`, and `logical_GiB/s` throughput metrics. It
+is not yet a production TreeDB search path and does not yet include CUDA fused
+cosine, top-k, custom kernels, pinned host memory, or streamed async double
+buffering.
 
 `BenchmarkMetalDotQueryBatchRealisticIndexShapes` also includes a block top-k
 cosine benchmark. It computes per-query, per-1024-candidate-block top-k scores
