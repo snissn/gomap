@@ -21,6 +21,8 @@ const (
 	ColumnPhysicalQueryGroupInt64Span     ColumnPhysicalQueryKind = "group_int64_span"
 )
 
+const columnPhysicalQueryHourUS = int64(3_600_000_000)
+
 // ColumnPhysicalQueryRequest describes one explicit physical column query. It
 // does not invoke planner routing; M14 owns forced/automatic route selection.
 type ColumnPhysicalQueryRequest struct {
@@ -311,11 +313,7 @@ func (e *columnPhysicalQueryExecutor) visitValues(values []columnDeclaredValue) 
 		if err != nil {
 			return err
 		}
-		hour := int((value / 3_600_000_000) % 24)
-		if hour < 0 {
-			hour += 24
-		}
-		e.hourCounts[hour]++
+		e.hourCounts[columnPhysicalQueryUTCHour(value)]++
 	case ColumnPhysicalQueryGroupMinInt64:
 		key, value, err := e.stringInt64Values(values)
 		if err != nil {
@@ -427,6 +425,18 @@ func columnPhysicalQueryInt64Value(value columnDeclaredValue) (int64, error) {
 		return 0, fmt.Errorf("%w: physical column query does not support null int64 values yet", ErrColumnQueryPlanUnsupported)
 	}
 	return value.Int64, nil
+}
+
+func columnPhysicalQueryUTCHour(timeUS int64) int {
+	hours := timeUS / columnPhysicalQueryHourUS
+	if timeUS < 0 && timeUS%columnPhysicalQueryHourUS != 0 {
+		hours--
+	}
+	hour := int(hours % 24)
+	if hour < 0 {
+		hour += 24
+	}
+	return hour
 }
 
 func columnPhysicalQueryHourKey(hour int) string {
