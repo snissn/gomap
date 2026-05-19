@@ -315,6 +315,18 @@ func (db *DB) ColumnAssetRootDir() string {
 	return ColumnAssetRootDirPath(db.dir)
 }
 
+// CheckStorageMaintenanceReady verifies this handle may run destructive storage
+// maintenance such as GC, rewrite cleanup, or typed column asset reclamation.
+func (db *DB) CheckStorageMaintenanceReady() error {
+	if db == nil {
+		return nil
+	}
+	if db.readOnly {
+		return ErrReadOnly
+	}
+	return db.commandWALPoisonedError()
+}
+
 // GetAppend appends the value for the key to dst and returns the new slice.
 // If the key is not found, it returns dst and ErrKeyNotFound.
 func (db *DB) GetAppend(key, dst []byte) ([]byte, error) {
