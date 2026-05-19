@@ -134,6 +134,7 @@ func TestColumnPublishPlanAllowsZeroAssetChecksumM12A(t *testing.T) {
 func TestColumnPublishPlanBuildsDurabilityClosureM10A(t *testing.T) {
 	asset := testColumnPublishPreparedAssetM10A()
 	identity := ColumnManifestIdentity{Generation: 7, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0xfeedbeef}
+	wantIdentity := testColumnPublishExpectedManifestIdentityM10A(t, identity, asset)
 	var called []string
 	input := testColumnPublishPlanInputM10A(identity, asset)
 	input.Hooks.ExtractDocuments = func() error {
@@ -146,8 +147,8 @@ func TestColumnPublishPlanBuildsDurabilityClosureM10A(t *testing.T) {
 	}
 	input.Hooks.BuildSystemDelta = func(in ColumnPublishSystemDeltaInput) error {
 		called = append(called, "system_delta")
-		if in.Plan.UpdatedActiveManifest != identity {
-			t.Fatalf("system delta saw identity %+v want %+v", in.Plan.UpdatedActiveManifest, identity)
+		if in.Plan.UpdatedActiveManifest != wantIdentity {
+			t.Fatalf("system delta saw identity %+v want %+v", in.Plan.UpdatedActiveManifest, wantIdentity)
 		}
 		return nil
 	}
@@ -168,13 +169,13 @@ func TestColumnPublishPlanBuildsDurabilityClosureM10A(t *testing.T) {
 	if plan.AppliedCommandLSN != 101 || plan.RecoveryAuthoritativeAppliedCommandLSN != 101 {
 		t.Fatalf("unexpected applied LSNs: %+v", plan)
 	}
-	if plan.UpdatedActiveManifest != identity || plan.RecoveryAuthoritativeManifest != identity {
+	if plan.UpdatedActiveManifest != wantIdentity || plan.RecoveryAuthoritativeManifest != wantIdentity {
 		t.Fatalf("unexpected manifest identities: %+v", plan)
 	}
 	if plan.RootDelta.RootName != collectionColumnManifestRootName("events") || plan.RootDelta.BaseRootID != 44 {
 		t.Fatalf("unexpected root delta: %+v", plan.RootDelta)
 	}
-	if decoded, err := decodeColumnManifestIdentityRecord(plan.RootDelta.IdentityRecord[:]); err != nil || decoded.Generation != identity.Generation || decoded.Checksum != identity.Checksum {
+	if decoded, err := decodeColumnManifestIdentityRecord(plan.RootDelta.IdentityRecord[:]); err != nil || decoded.Generation != wantIdentity.Generation || decoded.Checksum != wantIdentity.Checksum {
 		t.Fatalf("bad deterministic identity record decoded=%+v err=%v", decoded, err)
 	}
 	if plan.RequiredAssetCount != 1 || plan.RequiredAssetBytes != asset.Bytes || !plan.RequiredAssetFlush || !plan.RequiredAssetSync {
@@ -348,6 +349,7 @@ func TestColumnPublishPlanFailsClosedBeforeRootPublishM10A(t *testing.T) {
 						StoragePolicy:  in.ColumnStore.ManifestRoot.StoragePolicy,
 						Identity:       in.Manifest.Identity,
 						IdentityRecord: encodeColumnManifestIdentityRecordArray(in.Manifest.Identity),
+						Records:        cloneColumnManifestRecords(in.Manifest.Records),
 					}, nil
 				}
 				input.Hooks.BuildSystemDelta = func(ColumnPublishSystemDeltaInput) error {
@@ -376,7 +378,7 @@ func TestColumnPublishPlanFailsClosedBeforeRootPublishM10A(t *testing.T) {
 			}
 			input.Hooks.EncodeManifest = func(in ColumnPublishManifestEncodeInput) (ColumnPublishManifestEncodeResult, error) {
 				calls = append(calls, "manifest_encode")
-				return ColumnPublishManifestEncodeResult{Identity: identity, ManifestBytes: 256}, nil
+				return testColumnPublishManifestResultM10A(t, in)
 			}
 			input.Hooks.ValidateClosure = func(in ColumnPublishClosureValidationInput) (ColumnPublishDurabilityClosure, error) {
 				calls = append(calls, "closure_validation")
@@ -445,6 +447,13 @@ func TestColumnPublishPlanRejectsInvalidRootDeltaM10A(t *testing.T) {
 			},
 			wantError: "identity record",
 		},
+		{
+			name: "missing manifest records",
+			mutate: func(delta *ColumnManifestRootDelta) {
+				delta.Records = nil
+			},
+			wantError: "manifest records omitted",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -456,6 +465,7 @@ func TestColumnPublishPlanRejectsInvalidRootDeltaM10A(t *testing.T) {
 					StoragePolicy:  in.ColumnStore.ManifestRoot.StoragePolicy,
 					Identity:       in.Manifest.Identity,
 					IdentityRecord: encodeColumnManifestIdentityRecordArray(in.Manifest.Identity),
+					Records:        cloneColumnManifestRecords(in.Manifest.Records),
 				}
 				tt.mutate(&delta)
 				return delta, nil
@@ -659,7 +669,7 @@ func TestColumnPublishPlanCopiesPreparedAssetsForManifestHookM10A(t *testing.T) 
 	input.Hooks.EncodeManifest = func(in ColumnPublishManifestEncodeInput) (ColumnPublishManifestEncodeResult, error) {
 		hookAssets = in.Prepared.Assets
 		in.Prepared.Assets[0].Ref.Offset += int64(asset.Bytes)
-		return ColumnPublishManifestEncodeResult{Identity: identity, ManifestBytes: 256}, nil
+		return testColumnPublishManifestResultM10A(t, in)
 	}
 
 	plan, err := BuildColumnPublishPlan(input)
@@ -722,8 +732,9 @@ func TestColumnPublishPlanCopiesCurrentManifestForHooksM10A(t *testing.T) {
 			t.Fatal("EncodeManifest CurrentManifest is nil")
 		}
 		manifestSeen = *in.CurrentManifest
+		manifest, err := testColumnPublishManifestResultM10A(t, in)
 		in.CurrentManifest.Generation = 100
-		return ColumnPublishManifestEncodeResult{Identity: identity, ManifestBytes: 256}, nil
+		return manifest, err
 	}
 
 	if _, err := BuildColumnPublishPlan(input); err != nil {
@@ -780,6 +791,7 @@ func TestColumnPublishPlanCopiesClosureForRootDeltaHookM10A(t *testing.T) {
 			StoragePolicy:  in.ColumnStore.ManifestRoot.StoragePolicy,
 			Identity:       in.Manifest.Identity,
 			IdentityRecord: encodeColumnManifestIdentityRecordArray(in.Manifest.Identity),
+			Records:        cloneColumnManifestRecords(in.Manifest.Records),
 		}, nil
 	}
 
@@ -819,6 +831,7 @@ func TestColumnPublishPlanPassesHookOwnedColumnStoreConfigM10A(t *testing.T) {
 			StoragePolicy:  storagePolicy,
 			Identity:       in.Manifest.Identity,
 			IdentityRecord: encodeColumnManifestIdentityRecordArray(in.Manifest.Identity),
+			Records:        cloneColumnManifestRecords(in.Manifest.Records),
 		}, nil
 	}
 
@@ -891,6 +904,7 @@ func TestColumnManifestPublishSystemDeltaUpdatesRootAndMetadataTogetherM10A(t *t
 	if err != nil {
 		t.Fatalf("BuildColumnPublishPlan: %v", err)
 	}
+	identity = plan.UpdatedActiveManifest
 	plan.UpdatedActiveManifest.Format = ""
 	plan.UpdatedActiveManifest.Version = 0
 	plan.RecoveryAuthoritativeManifest.Format = ""
@@ -1702,7 +1716,6 @@ func TestColumnManifestPublishSystemDeltaFailureLeavesRootsUnpublishedM10A(t *te
 
 func BenchmarkColumnPublishPlanM10A(b *testing.B) {
 	asset := testColumnPublishPreparedAssetM10A()
-	identity := ColumnManifestIdentity{Generation: 7, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0xfeedbeef}
 	b.Run("disabled_hook", func(b *testing.B) {
 		input := ColumnPublishPlanInput{Collection: "events", ColumnStore: nil}
 		b.ReportAllocs()
@@ -1742,8 +1755,8 @@ func BenchmarkColumnPublishPlanM10A(b *testing.B) {
 				PrepareAssets: func(ColumnPublishAssetPrepareInput) (ColumnPublishPreparedAssets, error) {
 					return prepared, nil
 				},
-				EncodeManifest: func(ColumnPublishManifestEncodeInput) (ColumnPublishManifestEncodeResult, error) {
-					return ColumnPublishManifestEncodeResult{Identity: identity, ManifestBytes: 256}, nil
+				EncodeManifest: func(in ColumnPublishManifestEncodeInput) (ColumnPublishManifestEncodeResult, error) {
+					return testColumnPublishManifestResultM10A(b, in)
 				},
 				ValidateClosure: func(ColumnPublishClosureValidationInput) (ColumnPublishDurabilityClosure, error) {
 					return closure, nil
@@ -1794,6 +1807,7 @@ func testColumnPublishPlanInputM10A(identity ColumnManifestIdentity, asset Colum
 	if err != nil {
 		panic(err)
 	}
+	asset = testColumnPublishPreparedAssetForIdentityM10A(asset, identity)
 	return ColumnPublishPlanInput{
 		Collection:            "events",
 		ColumnStore:           cfg,
@@ -1806,13 +1820,54 @@ func testColumnPublishPlanInputM10A(identity ColumnManifestIdentity, asset Colum
 				return ColumnPublishPreparedAssets{Assets: []ColumnPreparedAsset{asset}, RowCount: 10, ColumnPayloadBytes: asset.Bytes}, nil
 			},
 			EncodeManifest: func(in ColumnPublishManifestEncodeInput) (ColumnPublishManifestEncodeResult, error) {
-				return ColumnPublishManifestEncodeResult{Identity: identity, ManifestBytes: 256}, nil
+				return encodeColumnManifestForWrite(in)
 			},
 			ValidateClosure: func(in ColumnPublishClosureValidationInput) (ColumnPublishDurabilityClosure, error) {
 				return ColumnPublishDurabilityClosure{PreparedAssets: []ColumnPreparedAsset{asset}, RequiredAssets: 1, RequiredBytes: asset.Bytes, FlushRequired: true, SyncRequired: true}, nil
 			},
 		},
 	}
+}
+
+func testColumnPublishPreparedAssetForIdentityM10A(asset ColumnPreparedAsset, identity ColumnManifestIdentity) ColumnPreparedAsset {
+	if identity.Generation != 0 {
+		asset.Ref.Generation = identity.Generation
+		asset.GenerationID = identity.Generation
+	}
+	return asset
+}
+
+func testColumnPublishManifestResultM10A(t testing.TB, in ColumnPublishManifestEncodeInput) (ColumnPublishManifestEncodeResult, error) {
+	t.Helper()
+	manifest, err := encodeColumnManifestForWrite(in)
+	if err != nil {
+		t.Fatalf("encodeColumnManifestForWrite: %v", err)
+	}
+	return manifest, nil
+}
+
+func testColumnPublishExpectedManifestIdentityM10A(t testing.TB, identity ColumnManifestIdentity, asset ColumnPreparedAsset) ColumnManifestIdentity {
+	t.Helper()
+	cfg, err := normalizeColumnStoreConfig("events", testColumnStoreConfig(nil))
+	if err != nil {
+		t.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+	asset = testColumnPublishPreparedAssetForIdentityM10A(asset, identity)
+	manifest, err := encodeColumnManifestForWrite(ColumnPublishManifestEncodeInput{
+		Collection:        "events",
+		ColumnStore:       *cfg,
+		Operation:         ColumnPublishOperationInsert,
+		AppliedCommandLSN: 101,
+		Prepared: ColumnPublishPreparedAssets{
+			Assets:             []ColumnPreparedAsset{asset},
+			RowCount:           10,
+			ColumnPayloadBytes: asset.Bytes,
+		},
+	})
+	if err != nil {
+		t.Fatalf("encodeColumnManifestForWrite: %v", err)
+	}
+	return manifest.Identity
 }
 
 func mustSumColumnPreparedAssetBytes(t testing.TB, assets []ColumnPreparedAsset) int64 {
