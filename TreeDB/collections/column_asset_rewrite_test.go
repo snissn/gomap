@@ -521,13 +521,3 @@ func closeColumnAssetRewriteBenchmarkCaseM15C(tc columnAssetRewriteBenchmarkCase
 	}
 	return tc.d.Close()
 }
-
-func closeColumnAssetRewriteBenchmarkCasesM15C(b testing.TB, cases []columnAssetRewriteBenchmarkCaseM15C) {
-	b.Helper()
-	for i := range cases {
-		if err := closeColumnAssetRewriteBenchmarkCaseM15C(cases[i]); err != nil {
-			b.Fatalf("Close benchmark DB: %v", err)
-		}
-		cases[i].d = nil
-	}
-}
