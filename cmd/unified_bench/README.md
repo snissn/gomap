@@ -252,8 +252,11 @@ manifest/recovery identity, and the generated HTML artifact paths. If a forced
 physical column path is not implemented yet, the PR must call that out
 explicitly and include the fail-closed evidence. The suite reports measured
 `column_asset_bytes` from the isolated `column_assets/` tree after physical
-assets are published; `retained_payload_bytes` equals the source JSONBench
-payload until retained-payload stripping lands.
+assets are published, plus explicit `column_asset_store_bytes`,
+`ordinary_value_vlog_bytes`, and `leaf_vlog_bytes` splits so M12+ evidence does
+not confuse typed column assets with row value-log or leaf-log storage.
+`retained_payload_bytes` equals the source JSONBench payload until
+retained-payload stripping lands.
 
 ## Notes
 

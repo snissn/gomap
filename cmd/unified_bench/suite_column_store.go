@@ -182,8 +182,11 @@ type columnStoreByteAccounting struct {
 	RetainedPayloadBytesNote        string   `json:"retained_payload_bytes_note,omitempty"`
 	ColumnAssetBytes                int64    `json:"column_asset_bytes"`
 	ColumnAssetBytesNote            string   `json:"column_asset_bytes_note,omitempty"`
+	ColumnAssetStoreBytes           int64    `json:"column_asset_store_bytes"`
 	ManifestControlBytes            int64    `json:"manifest_control_bytes"`
 	ManifestControlMissing          []string `json:"manifest_control_missing,omitempty"`
+	OrdinaryValueLogBytes           int64    `json:"ordinary_value_vlog_bytes"`
+	LeafLogBytes                    int64    `json:"leaf_vlog_bytes"`
 	CommandWALBytesBeforeCheckpoint int64    `json:"command_wal_bytes_before_checkpoint"`
 	TotalReconstructableBytes       int64    `json:"total_reconstructable_bytes"`
 	DBTotalBytes                    int64    `json:"db_total_bytes"`
@@ -412,6 +415,14 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 	if err != nil {
 		return "", fmt.Errorf("column_store: column asset byte accounting: %w", err)
 	}
+	ordinaryValueLogBytes, err := columnStoreSuiteOptionalDirBytes(backenddb.ValueLogDirPath(dataDir))
+	if err != nil {
+		return "", fmt.Errorf("column_store: ordinary value_vlog byte accounting: %w", err)
+	}
+	leafLogBytes, err := columnStoreSuiteOptionalDirBytes(backenddb.LeafLogDirPath(dataDir))
+	if err != nil {
+		return "", fmt.Errorf("column_store: leaf_vlog byte accounting: %w", err)
+	}
 	columnAssetBytesNote := ""
 	if columnAssetBytes == 0 {
 		columnAssetBytesNote = "M12A expected isolated physical column assets; zero bytes means no column assets were published"
@@ -440,8 +451,11 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 			RetainedPayloadBytesNote:        "M12A retains the source JSONBench payload as the reconstructable row baseline; retained-payload stripping is a later milestone",
 			ColumnAssetBytes:                columnAssetBytes,
 			ColumnAssetBytesNote:            columnAssetBytesNote,
+			ColumnAssetStoreBytes:           columnAssetBytes,
 			ManifestControlBytes:            manifestControlBytes,
 			ManifestControlMissing:          manifestControlMissing,
+			OrdinaryValueLogBytes:           ordinaryValueLogBytes,
+			LeafLogBytes:                    leafLogBytes,
 			CommandWALBytesBeforeCheckpoint: commandWALBytesBeforeCheckpoint,
 			TotalReconstructableBytes:       totalReconstructableBytes,
 			DBTotalBytes:                    totalBytes,
@@ -1437,7 +1451,11 @@ func columnStoreSuiteDirUsage(root string) (int64, int, error) {
 
 func columnStoreSuiteColumnAssetUsage(root string) (int64, error) {
 	assetRoot := backenddb.ColumnAssetRootDirPath(root)
-	bytes, _, err := columnStoreSuiteDirUsage(assetRoot)
+	return columnStoreSuiteOptionalDirBytes(assetRoot)
+}
+
+func columnStoreSuiteOptionalDirBytes(root string) (int64, error) {
+	bytes, _, err := columnStoreSuiteDirUsage(root)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return 0, nil
@@ -1528,10 +1546,13 @@ func renderColumnStoreSuiteMarkdown(report columnStoreSuiteReport) string {
 	if report.ByteAccounting.ColumnAssetBytesNote != "" {
 		sb.WriteString(fmt.Sprintf("- column_asset_bytes_note: %s\n", report.ByteAccounting.ColumnAssetBytesNote))
 	}
+	sb.WriteString(fmt.Sprintf("- column_asset_store_bytes: %d\n", report.ByteAccounting.ColumnAssetStoreBytes))
 	sb.WriteString(fmt.Sprintf("- manifest_control_bytes: %d\n", report.ByteAccounting.ManifestControlBytes))
 	if len(report.ByteAccounting.ManifestControlMissing) != 0 {
 		sb.WriteString(fmt.Sprintf("- manifest_control_missing: %s\n", markdownCodeList(report.ByteAccounting.ManifestControlMissing)))
 	}
+	sb.WriteString(fmt.Sprintf("- ordinary_value_vlog_bytes: %d\n", report.ByteAccounting.OrdinaryValueLogBytes))
+	sb.WriteString(fmt.Sprintf("- leaf_vlog_bytes: %d\n", report.ByteAccounting.LeafLogBytes))
 	sb.WriteString(fmt.Sprintf("- command_wal_bytes_before_checkpoint: %d\n", report.ByteAccounting.CommandWALBytesBeforeCheckpoint))
 	sb.WriteString(fmt.Sprintf("- total_reconstructable_bytes: %d\n", report.ByteAccounting.TotalReconstructableBytes))
 	sb.WriteString(fmt.Sprintf("- db_total_bytes: %d across %d files\n\n", report.ByteAccounting.DBTotalBytes, report.ByteAccounting.DBTotalFiles))

@@ -173,6 +173,12 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 	if report.ByteAccounting.ColumnAssetBytes == 0 {
 		t.Fatalf("expected measured M12A physical column asset bytes: %+v", report.ByteAccounting)
 	}
+	if report.ByteAccounting.ColumnAssetStoreBytes != report.ByteAccounting.ColumnAssetBytes {
+		t.Fatalf("column_asset_store_bytes=%d want column_asset_bytes=%d", report.ByteAccounting.ColumnAssetStoreBytes, report.ByteAccounting.ColumnAssetBytes)
+	}
+	if report.ByteAccounting.OrdinaryValueLogBytes < 0 || report.ByteAccounting.LeafLogBytes == 0 {
+		t.Fatalf("expected measured ordinary value_vlog and leaf_vlog byte splits: %+v", report.ByteAccounting)
+	}
 	if got, want := report.ByteAccounting.TotalReconstructableBytes, report.ByteAccounting.RetainedPayloadBytes+report.ByteAccounting.ColumnAssetBytes+report.ByteAccounting.ManifestControlBytes; got != want {
 		t.Fatalf("total_reconstructable_bytes=%d want retained+column+manifest=%d", got, want)
 	}
@@ -191,7 +197,11 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 	if !strings.Contains(string(data), `"command_wal_bytes_before_checkpoint"`) {
 		t.Fatalf("column store JSON missing before-checkpoint command WAL label:\n%s", data)
 	}
-	if !strings.Contains(string(data), `"column_asset_bytes"`) || !strings.Contains(string(data), `"retained_payload_bytes_note"`) {
+	if !strings.Contains(string(data), `"column_asset_bytes"`) ||
+		!strings.Contains(string(data), `"column_asset_store_bytes"`) ||
+		!strings.Contains(string(data), `"ordinary_value_vlog_bytes"`) ||
+		!strings.Contains(string(data), `"leaf_vlog_bytes"`) ||
+		!strings.Contains(string(data), `"retained_payload_bytes_note"`) {
 		t.Fatalf("column store JSON missing byte-accounting notes:\n%s", data)
 	}
 	if strings.Contains(string(data), `"command_wal_bytes":`) {
@@ -204,7 +214,11 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 	if !strings.Contains(string(columnMarkdown), "command_wal_bytes_before_checkpoint") {
 		t.Fatalf("column store markdown missing before-checkpoint command WAL label:\n%s", columnMarkdown)
 	}
-	if !strings.Contains(string(columnMarkdown), "column_asset_bytes") || !strings.Contains(string(columnMarkdown), "retained_payload_bytes_note") {
+	if !strings.Contains(string(columnMarkdown), "column_asset_bytes") ||
+		!strings.Contains(string(columnMarkdown), "column_asset_store_bytes") ||
+		!strings.Contains(string(columnMarkdown), "ordinary_value_vlog_bytes") ||
+		!strings.Contains(string(columnMarkdown), "leaf_vlog_bytes") ||
+		!strings.Contains(string(columnMarkdown), "retained_payload_bytes_note") {
 		t.Fatalf("column store markdown missing byte-accounting notes:\n%s", columnMarkdown)
 	}
 	if strings.Contains(string(columnMarkdown), "| `` |") {
