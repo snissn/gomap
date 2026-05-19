@@ -7,6 +7,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -232,6 +233,9 @@ func columnAssetSegmentWriteLock(assetPath string) *sync.Mutex {
 }
 
 func syncColumnAssetDir(dir string) error {
+	if runtime.GOOS == "windows" || dir == "" {
+		return nil
+	}
 	file, err := os.Open(dir)
 	if err != nil {
 		return err
