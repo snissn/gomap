@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"strings"
 
@@ -82,6 +83,13 @@ func extractColumnDeclaredRowsFromJSONDocuments(cfg ColumnStoreConfig, docs []co
 		if err := decoder.Decode(&root); err != nil {
 			return nil, fmt.Errorf("%w: document[%d] invalid JSON: %v", ErrColumnDeclaredValueUnsupported, docIdx, err)
 		}
+		var trailing any
+		if err := decoder.Decode(&trailing); err != io.EOF {
+			if err == nil {
+				err = errors.New("trailing JSON value")
+			}
+			return nil, fmt.Errorf("%w: document[%d] invalid JSON: %v", ErrColumnDeclaredValueUnsupported, docIdx, err)
+		}
 		obj, ok := root.(map[string]any)
 		if !ok {
 			return nil, fmt.Errorf("%w: document[%d] root is not object", ErrColumnDeclaredValueUnsupported, docIdx)
@@ -107,8 +115,9 @@ func lookupColumnJSONPath(obj map[string]any, path string) (any, bool) {
 	if path == "" {
 		return nil, false
 	}
-	if value, ok := obj[path]; ok {
-		return value, true
+	if !strings.Contains(path, ".") {
+		value, ok := obj[path]
+		return value, ok
 	}
 	parts := strings.Split(path, ".")
 	var current any = obj

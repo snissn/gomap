@@ -64,7 +64,7 @@ func cleanColumnAssetNamespace(namespace string) (string, error) {
 	if namespace == "" {
 		return "", errors.New("collections: column asset namespace is required")
 	}
-	if strings.Contains(namespace, `\`) || strings.HasPrefix(namespace, "/") {
+	if strings.Contains(namespace, `\`) || strings.Contains(namespace, ":") || strings.HasPrefix(namespace, "/") {
 		return "", fmt.Errorf("collections: invalid column asset namespace %q", namespace)
 	}
 	clean := path.Clean(namespace)

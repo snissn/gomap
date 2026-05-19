@@ -413,6 +413,24 @@ func TestColumnStoreMetadataValidation(t *testing.T) {
 			},
 			want: "column manifest root descriptor",
 		},
+		{
+			name: "invalid asset namespace traversal",
+			cfg: &ColumnStoreConfig{
+				Enabled:      true,
+				Columns:      []ColumnStoreColumn{{Name: "time_us", Path: "time_us", ValueType: ColumnStoreValueInt64}},
+				AssetManager: &ColumnAssetManagerConfig{Namespace: "events/../escape"},
+			},
+			want: "invalid column asset namespace",
+		},
+		{
+			name: "invalid asset namespace windows volume",
+			cfg: &ColumnStoreConfig{
+				Enabled:      true,
+				Columns:      []ColumnStoreColumn{{Name: "time_us", Path: "time_us", ValueType: ColumnStoreValueInt64}},
+				AssetManager: &ColumnAssetManagerConfig{Namespace: "C:events/column-assets"},
+			},
+			want: "invalid column asset namespace",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

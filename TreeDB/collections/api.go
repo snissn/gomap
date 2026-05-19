@@ -8963,7 +8963,6 @@ func (c *Collection) insertBatchNoIndex(
 	}
 	stats.DuplicateDocumentPreflight = time.Since(phaseStart)
 	baseRoot := catalog.rootID(rootName)
-	columnDocuments := columnWriteDocumentsFromNoIndexEntries(entries)
 	if commandWALIntent == nil && c.commandWALActive(nil) {
 		commandWALIntent, err = c.newCollectionInsertCommandWALIntent(collectionDocumentsFromNoIndexEntries(entries), nil)
 		if err != nil {
@@ -9016,7 +9015,7 @@ func (c *Collection) insertBatchNoIndex(
 			baseRootIDs:      columnBaseRootIDs,
 			commandWALIntent: commandWALIntent,
 			operation:        ColumnPublishOperationInsert,
-			documents:        columnDocuments,
+			documents:        columnWriteDocumentsFromNoIndexEntries(entries),
 			rows:             len(entries),
 		})
 		stats.Publish = time.Since(publishStart)

@@ -260,7 +260,7 @@ func TestColumnDeclaredExtractionJSONBenchShapeM12A(t *testing.T) {
 	}
 	rows, err := extractColumnDeclaredRowsFromJSONDocuments(*normalized, []columnWriteDocument{{
 		ID:       []byte("evt-1"),
-		Document: []byte(`{"time_us":11,"kind":"commit","did":"did:plc:1","commit":{"repo_id":42,"author":{"time_us":9}},"payload":{"ignored":true}}`),
+		Document: []byte(`{"time_us":11,"kind":"commit","did":"did:plc:1","commit.repo_id":99,"commit":{"repo_id":42,"author":{"time_us":9}},"payload":{"ignored":true}}`),
 	}})
 	if err != nil {
 		t.Fatalf("extractColumnDeclaredRowsFromJSONDocuments: %v", err)
@@ -451,6 +451,15 @@ func TestColumnDeclaredExtractionFailsClosedOnUnsupportedShapeM12A(t *testing.T)
 	}
 	if !errors.Is(err, ErrColumnDeclaredValueUnsupported) {
 		t.Fatalf("extract error=%v want ErrColumnDeclaredValueUnsupported", err)
+	}
+	_, err = extractColumnDeclaredRowsFromJSONDocuments(*normalized, []columnWriteDocument{
+		{ID: []byte("e1"), Document: []byte(`{"time_us":1,"kind":"like","did":"d1"}{}`)},
+	})
+	if err == nil {
+		t.Fatal("extractColumnDeclaredRowsFromJSONDocuments accepted trailing JSON value")
+	}
+	if !errors.Is(err, ErrColumnDeclaredValueUnsupported) {
+		t.Fatalf("extract trailing JSON error=%v want ErrColumnDeclaredValueUnsupported", err)
 	}
 }
 

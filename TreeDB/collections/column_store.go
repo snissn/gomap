@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/cespare/xxhash/v2"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -445,8 +444,8 @@ func validateColumnStoreConfig(collection string, cfg ColumnStoreConfig) error {
 	if !cfg.AssetManager.IsolatedNamespace {
 		return errors.New("collections: column asset manager requires isolated namespace")
 	}
-	if strings.TrimSpace(cfg.AssetManager.Namespace) == "" || strings.Contains(cfg.AssetManager.Namespace, "\x00") {
-		return errors.New("collections: invalid column asset namespace")
+	if _, err := cleanColumnAssetNamespace(cfg.AssetManager.Namespace); err != nil {
+		return err
 	}
 	if cfg.ManifestRoot == nil {
 		return errors.New("collections: column_store requires column manifest root descriptor")
