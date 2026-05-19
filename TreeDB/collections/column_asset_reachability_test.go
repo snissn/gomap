@@ -11,7 +11,7 @@ import (
 )
 
 func TestColumnAssetReachabilityPlanProtectsActiveManifestRefsM15A(t *testing.T) {
-	dir, _ := prepareColumnStoreCommandWALDirM10B(t)
+	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = d.Close() }()
 	col := openColumnStoreCollectionM10B(t, d)
@@ -60,7 +60,7 @@ func TestColumnAssetReachabilityPlanProtectsActiveManifestRefsM15A(t *testing.T)
 }
 
 func TestColumnAssetReachabilityPlanClassifiesCandidateRefsAndPinsM15A(t *testing.T) {
-	dir, _ := prepareColumnStoreCommandWALDirM10B(t)
+	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = d.Close() }()
 	col := openColumnStoreCollectionM10B(t, d)
@@ -104,7 +104,7 @@ func TestColumnAssetReachabilityPlanClassifiesCandidateRefsAndPinsM15A(t *testin
 }
 
 func TestColumnAssetReachabilityPlanProtectsPendingPreparedRefsM15A(t *testing.T) {
-	dir, _ := prepareColumnStoreCommandWALDirM10B(t)
+	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = d.Close() }()
 	col := openColumnStoreCollectionM10B(t, d)
@@ -141,7 +141,7 @@ func TestColumnAssetReachabilityPlanProtectsPendingPreparedRefsM15A(t *testing.T
 }
 
 func TestColumnAssetReachabilityPlanRetainsUnknownSegmentsM15A(t *testing.T) {
-	dir, _ := prepareColumnStoreCommandWALDirM10B(t)
+	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = d.Close() }()
 	col := openColumnStoreCollectionM10B(t, d)
@@ -174,7 +174,7 @@ func TestColumnAssetReachabilityPlanRetainsUnknownSegmentsM15A(t *testing.T) {
 }
 
 func TestColumnAssetReachabilityPlanRetainsMissingLiveSegmentM15A(t *testing.T) {
-	dir, _ := prepareColumnStoreCommandWALDirM10B(t)
+	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = d.Close() }()
 	col := openColumnStoreCollectionM10B(t, d)
@@ -204,6 +204,15 @@ func TestColumnAssetReachabilityPlanRetainsMissingLiveSegmentM15A(t *testing.T) 
 	if plan.Segments.Missing == 0 || plan.Segments.Reclaimable != 0 {
 		t.Fatalf("segment stats=%+v want missing retained and no reclaimable segment", plan.Segments)
 	}
+}
+
+func prepareColumnAssetReachabilityCommandWALDirM15A(t *testing.T) string {
+	t.Helper()
+	dir, baseLSN := prepareColumnStoreCommandWALDirM10B(t)
+	if baseLSN == 0 {
+		t.Fatal("prepareColumnStoreCommandWALDirM10B returned base LSN 0")
+	}
+	return dir
 }
 
 func writeColumnAssetReachabilityCandidateM15A(t *testing.T, d *backenddb.DB, col *Collection, generation, partID uint64) ColumnAssetRef {

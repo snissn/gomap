@@ -616,6 +616,9 @@ func columnAssetReachabilitySegmentFileID(name string) (uint32, bool) {
 	return uint32(id), true
 }
 
+// mergeColumnAssetReachabilityIntervals returns non-overlapping intervals. It
+// sorts and reuses the input slice in place; callers must treat input as
+// consumed after calling it.
 func mergeColumnAssetReachabilityIntervals(in []columnAssetReachabilityInterval) []columnAssetReachabilityInterval {
 	if len(in) == 0 {
 		return nil
