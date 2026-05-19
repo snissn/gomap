@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"html"
+	"io"
 	"math"
 	"math/rand"
 	"os"
@@ -1280,6 +1281,13 @@ func columnStoreSuiteRetainedPayloadFromDocument(document []byte, cfg *collectio
 		decoder := json.NewDecoder(bytes.NewReader(document))
 		decoder.UseNumber()
 		if err := decoder.Decode(&obj); err != nil {
+			return nil, err
+		}
+		var trailing any
+		if err := decoder.Decode(&trailing); err != io.EOF {
+			if err == nil {
+				err = errors.New("trailing JSON value")
+			}
 			return nil, err
 		}
 		for _, col := range cfg.Columns {

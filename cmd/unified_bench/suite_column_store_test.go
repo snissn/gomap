@@ -39,6 +39,15 @@ func TestColumnStoreSuiteRetainedPayloadPreservesJSONNumbersM13C(t *testing.T) {
 	}
 }
 
+func TestColumnStoreSuiteRetainedPayloadRejectsTrailingJSONM13C(t *testing.T) {
+	cfg := columnStoreSuiteConfig()
+	if _, err := columnStoreSuiteRetainedPayloadFromDocument([]byte(`{"payload":1} {"payload":2}`), cfg); err == nil {
+		t.Fatal("columnStoreSuiteRetainedPayloadFromDocument accepted trailing JSON value")
+	} else if !strings.Contains(err.Error(), "trailing JSON value") {
+		t.Fatalf("columnStoreSuiteRetainedPayloadFromDocument err=%v want trailing JSON value", err)
+	}
+}
+
 func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 	dir := t.TempDir()
 	cfg := BenchConfig{
