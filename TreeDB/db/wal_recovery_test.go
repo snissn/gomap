@@ -2,8 +2,10 @@ package db
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
@@ -83,6 +85,67 @@ func TestNewReplayInlineAppender_ValueLogCompressionOff_DisablesBlockCompression
 
 	if app.writer.blockCompression {
 		t.Fatalf("expected replay writer block compression disabled")
+	}
+}
+
+func TestReplayInlineAppenderConcurrentAppendValuesM12A(t *testing.T) {
+	dir := t.TempDir()
+	if err := ensureStorageLayoutDirs(dir); err != nil {
+		t.Fatalf("ensureStorageLayoutDirs: %v", err)
+	}
+	db := &DB{
+		dir:                 dir,
+		valueLogCompression: ValueLogCompressionOff,
+	}
+	app, err := newReplayInlineAppender(db, nil, nil)
+	if err != nil {
+		t.Fatalf("newReplayInlineAppender: %v", err)
+	}
+	defer func() { _ = app.close() }()
+
+	const (
+		workers   = 8
+		perWorker = 64
+	)
+	ptrs := make(chan page.ValuePtr, workers*perWorker)
+	errs := make(chan error, workers)
+	var wg sync.WaitGroup
+	for worker := 0; worker < workers; worker++ {
+		worker := worker
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < perWorker; i++ {
+				values := [][]byte{[]byte(fmt.Sprintf("worker=%02d value=%02d", worker, i))}
+				batchPtrs, err := app.AppendValues(values)
+				if err != nil {
+					errs <- err
+					return
+				}
+				ptrs <- batchPtrs[0]
+			}
+		}()
+	}
+	wg.Wait()
+	close(ptrs)
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("AppendValues: %v", err)
+		}
+	}
+	if err := app.Sync(); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	seen := make(map[page.ValuePtr]struct{}, workers*perWorker)
+	for ptr := range ptrs {
+		if _, ok := seen[ptr]; ok {
+			t.Fatalf("duplicate value-log ptr from concurrent appends: %+v", ptr)
+		}
+		seen[ptr] = struct{}{}
+	}
+	if got, want := len(seen), workers*perWorker; got != want {
+		t.Fatalf("ptr count=%d, want %d", got, want)
 	}
 }
 
