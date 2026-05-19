@@ -995,6 +995,7 @@ func BenchmarkColumnPhysicalCollectionSerialScanM13A(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
+	// The preview scan provides the byte count; discard its visitor sum before timing.
 	sum = 0
 	b.ReportAllocs()
 	b.SetBytes(preview.PhysicalBytesScanned)

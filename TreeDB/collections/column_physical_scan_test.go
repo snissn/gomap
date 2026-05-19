@@ -243,6 +243,38 @@ func TestColumnPhysicalAssetSerialScanRejectsWrongCollectionM13A(t *testing.T) {
 	}
 }
 
+func TestColumnPhysicalAssetSerialScanRejectsV1DeleteOperationM13A(t *testing.T) {
+	normalized, rows := makeColumnPhysicalAssetBenchmarkRows(t, 1)
+	encoded := encodeColumnPhysicalAssetV1ForTest(t, columnPhysicalAssetEncodeInput{
+		Collection:        "events",
+		Namespace:         normalized.AssetManager.Namespace,
+		Generation:        1,
+		PartID:            1,
+		AppliedCommandLSN: 1,
+		Operation:         ColumnPublishOperationDelete,
+		SchemaHash:        normalized.SchemaHash,
+		Columns:           normalized.Columns,
+		Rows:              rows,
+	})
+	ref := ColumnAssetRef{
+		Kind:       ColumnAssetKindTCS1PartImage,
+		Namespace:  normalized.AssetManager.Namespace,
+		Generation: 1,
+		PartID:     1,
+		FileID:     columnAssetM12ASegmentFileID,
+		Length:     int64(len(encoded)),
+		Checksum:   page.Checksum(encoded),
+	}
+	projection, err := newColumnPhysicalScanProjection(*normalized, []string{"time_us"})
+	if err != nil {
+		t.Fatalf("newColumnPhysicalScanProjection: %v", err)
+	}
+	_, err = scanColumnPhysicalAssetRows(encoded, ref, "events", *normalized, projection, nil)
+	if err == nil || !strings.Contains(err.Error(), "legacy v1 column physical asset delete operation unsupported") {
+		t.Fatalf("scan err=%v want legacy v1 delete unsupported", err)
+	}
+}
+
 func TestColumnPhysicalAssetSerialScanNumericProjectionHasZeroAllocsM13A(t *testing.T) {
 	normalized, rows := makeColumnPhysicalAssetBenchmarkRows(t, 1024)
 	encoded, _, err := encodeColumnPhysicalAsset(columnPhysicalAssetEncodeInput{

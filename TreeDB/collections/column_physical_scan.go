@@ -184,15 +184,15 @@ func newColumnPhysicalScanProjection(cfg ColumnStoreConfig, projected []string) 
 			count:          len(cfg.Columns),
 		}, nil
 	}
-	seen := make(map[string]struct{}, len(projected))
 	for outIdx, name := range projected {
 		if name == "" {
 			return columnPhysicalScanProjection{}, errors.New("collections: physical column scan projection contains empty column")
 		}
-		if _, ok := seen[name]; ok {
-			return columnPhysicalScanProjection{}, fmt.Errorf("collections: physical column scan duplicate projected column %q", name)
+		for prev := 0; prev < outIdx; prev++ {
+			if projected[prev] == name {
+				return columnPhysicalScanProjection{}, fmt.Errorf("collections: physical column scan duplicate projected column %q", name)
+			}
 		}
-		seen[name] = struct{}{}
 		found := false
 		for colIdx, col := range cfg.Columns {
 			if col.Name == name {
@@ -339,7 +339,8 @@ func scanColumnPhysicalAssetRows(raw []byte, ref ColumnAssetRef, expectedCollect
 	generation := cur.u64()
 	partID := cur.u64()
 	appliedCommandLSN := cur.u64()
-	operation, operationOK := columnPhysicalScanOperationFromBytes(cur.stringBytes())
+	operationBytes := cur.stringBytes()
+	operation, operationOK := columnPhysicalScanOperationFromBytes(operationBytes)
 	schemaHash := cur.u64()
 	columnCount := cur.u64()
 	rowCount := cur.u64()
@@ -361,7 +362,10 @@ func scanColumnPhysicalAssetRows(raw []byte, ref ColumnAssetRef, expectedCollect
 		RowCount:          int(rowCount),
 	}
 	if !operationOK {
-		return columnPhysicalAssetScanSummary{}, fmt.Errorf("unsupported column physical asset operation %q", string(operation))
+		return columnPhysicalAssetScanSummary{}, fmt.Errorf("unsupported column physical asset operation %q", operationBytes)
+	}
+	if version == columnPhysicalAssetVersionV1 && header.Operation == ColumnPublishOperationDelete {
+		return columnPhysicalAssetScanSummary{}, errors.New("legacy v1 column physical asset delete operation unsupported")
 	}
 	if err := validateColumnPhysicalAssetScanHeader(header, ref, expectedCollection, cfg); err != nil {
 		return columnPhysicalAssetScanSummary{}, err
@@ -389,9 +393,6 @@ func scanColumnPhysicalAssetRows(raw []byte, ref ColumnAssetRef, expectedCollect
 		}
 	}
 	valuesBuf := projection.values
-	if len(valuesBuf) < projection.count {
-		valuesBuf = make([]columnDeclaredValue, projection.count)
-	}
 	var summary columnPhysicalAssetScanSummary
 	for rowIdx := 0; rowIdx < header.RowCount; rowIdx++ {
 		id := cur.bytesView()
@@ -477,7 +478,7 @@ func columnPhysicalScanOperationFromBytes(raw []byte) (ColumnPublishOperation, b
 	case columnPhysicalBytesEqualString(raw, string(ColumnPublishOperationDelete)):
 		return ColumnPublishOperationDelete, true
 	default:
-		return ColumnPublishOperation(string(raw)), false
+		return "", false
 	}
 }
 
