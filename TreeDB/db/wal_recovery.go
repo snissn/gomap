@@ -942,6 +942,9 @@ func (l replayInlineLeafPageLog) Sync() error {
 }
 
 func (l replayInlineLeafPageLog) CurrentValueLogSegment() (string, uint32, bool) {
+	if l.appender == nil {
+		return "", 0, false
+	}
 	return l.appender.currentLeafValueLogSegment()
 }
 

@@ -524,6 +524,13 @@ func TestCommandWALInstalledAppendersUseSplitValueAndLeafDirs(t *testing.T) {
 	}
 }
 
+func TestReplayInlineLeafPageLogCurrentSegmentNilAppenderM12A(t *testing.T) {
+	path, fileID, ok := (replayInlineLeafPageLog{}).CurrentValueLogSegment()
+	if ok || path != "" || fileID != 0 {
+		t.Fatalf("CurrentValueLogSegment with nil appender = (%q, %d, %v), want empty false", path, fileID, ok)
+	}
+}
+
 func TestCommandWALRegisteredReplayHandlerCanOptOutOfReplayLogSupport(t *testing.T) {
 	dir := t.TempDir()
 	enableCommandWALFormat(t, dir)

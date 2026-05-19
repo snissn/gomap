@@ -187,9 +187,6 @@ func writeColumnPhysicalAssetToManager(rootDir string, cfg ColumnStoreConfig, pa
 		return ColumnAssetRef{}, errors.New("collections: column physical asset write requires generation and part_id")
 	}
 	checksum := page.Checksum(payload)
-	if checksum == 0 {
-		return ColumnAssetRef{}, errors.New("collections: column physical asset checksum is zero")
-	}
 	namespace, err := columnAssetManagerNamespaceForRoot(rootDir, cfg.AssetManager.Namespace)
 	if err != nil {
 		return ColumnAssetRef{}, err

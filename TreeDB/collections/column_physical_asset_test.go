@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -175,8 +176,11 @@ func TestColumnAssetManagerWritesIsolatedSegmentAndValidatesM12A(t *testing.T) {
 	if err != nil {
 		t.Fatalf("writeColumnPhysicalAssetToManager: %v", err)
 	}
-	if ref.Namespace != normalized.AssetManager.Namespace || ref.Generation != 7 || ref.PartID != 3 || ref.FileID == 0 || ref.Length != int64(len(encoded)) || ref.Checksum == 0 {
+	if ref.Namespace != normalized.AssetManager.Namespace || ref.Generation != 7 || ref.PartID != 3 || ref.FileID == 0 || ref.Length != int64(len(encoded)) {
 		t.Fatalf("unexpected ref: %+v", ref)
+	}
+	if checksum := page.Checksum(encoded); checksum != ref.Checksum {
+		t.Fatalf("asset ref checksum=%d want encoded checksum=%d", ref.Checksum, checksum)
 	}
 	assetPath, err := columnAssetSegmentPath(root, ref)
 	if err != nil {
@@ -211,6 +215,33 @@ func TestColumnAssetManagerWritesIsolatedSegmentAndValidatesM12A(t *testing.T) {
 	}
 	if _, err := readColumnPhysicalAssetFromManager(root, ref); err == nil || !strings.Contains(err.Error(), "checksum") {
 		t.Fatalf("read corrupt asset err=%v want checksum failure", err)
+	}
+}
+
+func TestColumnAssetManagerWriteAllowsZeroChecksumM12A(t *testing.T) {
+	cfg := testColumnStoreConfig(nil)
+	normalized, err := normalizeColumnStoreConfig("events", cfg)
+	if err != nil {
+		t.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+	payload := []byte{0xab, 0x9b, 0xe0, 0x9b}
+	if checksum := page.Checksum(payload); checksum != 0 {
+		t.Fatalf("test payload checksum=%d, want 0", checksum)
+	}
+	root := backenddb.ColumnAssetRootDirPath(t.TempDir())
+	ref, err := writeColumnPhysicalAssetToManager(root, *normalized, payload, 7, 3)
+	if err != nil {
+		t.Fatalf("writeColumnPhysicalAssetToManager: %v", err)
+	}
+	if ref.Checksum != 0 || ref.Length != int64(len(payload)) {
+		t.Fatalf("unexpected zero-checksum ref: %+v", ref)
+	}
+	raw, err := readColumnPhysicalAssetFromManager(root, ref)
+	if err != nil {
+		t.Fatalf("readColumnPhysicalAssetFromManager: %v", err)
+	}
+	if !bytes.Equal(raw, payload) {
+		t.Fatalf("raw payload mismatch: got %x want %x", raw, payload)
 	}
 }
 

@@ -12,6 +12,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/node"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 func TestColumnStoreWritesRequireCommandWALM10B(t *testing.T) {
@@ -474,12 +475,15 @@ func TestColumnStoreCommandWALWritesPhysicalColumnAssetsM12A(t *testing.T) {
 		t.Fatalf("manifest refs=%+v, want one physical asset ref", refs)
 	}
 	ref := refs[0]
-	if ref.Namespace != col.Meta().Options.ColumnStore.AssetManager.Namespace || ref.Length <= 0 || ref.Checksum == 0 {
+	if ref.Namespace != col.Meta().Options.ColumnStore.AssetManager.Namespace || ref.Length <= 0 {
 		t.Fatalf("invalid physical asset ref: %+v", ref)
 	}
 	raw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), ref)
 	if err != nil {
 		t.Fatalf("readColumnPhysicalAssetFromManager: %v", err)
+	}
+	if checksum := page.Checksum(raw); checksum != ref.Checksum {
+		t.Fatalf("physical asset checksum=%d want ref checksum=%d", checksum, ref.Checksum)
 	}
 	if err := validateColumnPhysicalAssetForManifest(raw, ref, *col.Meta().Options.ColumnStore); err != nil {
 		t.Fatalf("validateColumnPhysicalAssetForManifest: %v", err)
