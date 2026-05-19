@@ -209,11 +209,11 @@ func (c *Collection) prepareColumnPhysicalScanSnapshotViewAtSnapshot(
 		AssetNamespace:     cfg.AssetManager.Namespace,
 	}
 
-	if err := validateColumnManifestIdentityAtRootForScan(snap, rootID, *cfg.ActiveManifest); err != nil {
+	if err := validateColumnManifestIdentityAtRoot(snap, rootID, *cfg.ActiveManifest); err != nil {
 		view.Diagnostics = diag
 		return view, err
 	}
-	records, err := loadColumnManifestRecordsFromRootForScan(snap, rootID)
+	records, err := loadColumnManifestRecordsFromRoot(snap, rootID)
 	if err != nil {
 		view.Diagnostics = diag
 		return view, err
@@ -224,7 +224,7 @@ func (c *Collection) prepareColumnPhysicalScanSnapshotViewAtSnapshot(
 		view.Diagnostics = diag
 		return view, err
 	}
-	if err := validateColumnManifestSnapshotForScan(manifest, records, cfg, *cfg.ActiveManifest, collectionName); err != nil {
+	if err := validateColumnManifestSnapshot(manifest, records, cfg, *cfg.ActiveManifest, collectionName, "physical column scan"); err != nil {
 		view.Diagnostics = diag
 		return view, err
 	}
@@ -285,9 +285,6 @@ func (c *Collection) scanColumnPhysicalRowsInSnapshotView(
 		}
 		diag.ScheduledGranules++
 		ref := assetRef.Ref
-		if ref.Generation > cfg.ActiveManifest.Generation {
-			return diag, fmt.Errorf("collections: column physical scan ref generation=%d is newer than active manifest generation=%d", ref.Generation, cfg.ActiveManifest.Generation)
-		}
 		raw, err := readCache.read(ref, rawScratch)
 		if err != nil {
 			return diag, fmt.Errorf("collections: column physical scan read generation=%d part_id=%d: %w", ref.Generation, ref.PartID, err)
@@ -358,31 +355,31 @@ func newColumnPhysicalScanProjection(cfg ColumnStoreConfig, projected []string) 
 	}, nil
 }
 
-func validateColumnManifestIdentityAtRootForScan(snap *backenddb.Snapshot, rootID uint64, identity ColumnManifestIdentity) error {
+func validateColumnManifestIdentityAtRoot(snap *backenddb.Snapshot, rootID uint64, identity ColumnManifestIdentity) error {
 	entry, err := snap.GetEntryAtRoot(rootID, newColumnManifestIdentityRecordKey())
 	if errors.Is(err, tree.ErrKeyNotFound) {
-		return fmt.Errorf("%w: physical column scan manifest root %d", ErrColumnManifestIdentityMissing, rootID)
+		return fmt.Errorf("%w: column manifest root %d", ErrColumnManifestIdentityMissing, rootID)
 	}
 	if err != nil {
-		return fmt.Errorf("collections: physical column scan manifest root %d identity unreadable: %w", rootID, err)
+		return fmt.Errorf("collections: column manifest root %d identity unreadable: %w", rootID, err)
 	}
 	if entry.Flags&node.FlagTombstone != 0 {
-		return fmt.Errorf("%w: physical column scan manifest root %d deleted identity", ErrColumnManifestIdentityMissing, rootID)
+		return fmt.Errorf("%w: column manifest root %d deleted identity", ErrColumnManifestIdentityMissing, rootID)
 	}
 	record, err := decodeColumnManifestIdentityRecord(entry.Value)
 	if err != nil {
-		return fmt.Errorf("collections: physical column scan manifest root %d invalid identity: %w", rootID, err)
+		return fmt.Errorf("collections: column manifest root %d invalid identity: %w", rootID, err)
 	}
 	if record.Generation != identity.Generation || record.Version != identity.Version || record.Checksum != identity.Checksum {
-		return fmt.Errorf("collections: physical column scan manifest identity mismatch root=%+v active=%+v", record, identity)
+		return fmt.Errorf("collections: column manifest identity mismatch root=%+v active=%+v", record, identity)
 	}
 	return nil
 }
 
-func loadColumnManifestRecordsFromRootForScan(snap *backenddb.Snapshot, rootID uint64) ([]columnManifestRecord, error) {
+func loadColumnManifestRecordsFromRoot(snap *backenddb.Snapshot, rootID uint64) ([]columnManifestRecord, error) {
 	iter, err := snap.IteratorAtRoot(rootID, columnManifestHeaderRecordKeyBytes, nil)
 	if err != nil {
-		return nil, fmt.Errorf("collections: physical column scan manifest root %d unreadable: %w", rootID, err)
+		return nil, fmt.Errorf("collections: column manifest root %d unreadable: %w", rootID, err)
 	}
 	defer func() { _ = iter.Close() }()
 	records := make([]columnManifestRecord, 0, 8)
@@ -397,7 +394,7 @@ func loadColumnManifestRecordsFromRootForScan(snap *backenddb.Snapshot, rootID u
 		}
 		value, _, flags := iter.UnsafeEntry()
 		if flags&node.FlagPointer != 0 {
-			return nil, fmt.Errorf("collections: physical column scan manifest record %q must be inline", key)
+			return nil, fmt.Errorf("collections: column manifest record %q must be inline", key)
 		}
 		records = append(records, columnManifestRecord{key: bytes.Clone(key), value: bytes.Clone(value)})
 		iter.Next()
@@ -408,18 +405,18 @@ func loadColumnManifestRecordsFromRootForScan(snap *backenddb.Snapshot, rootID u
 	return records, nil
 }
 
-func validateColumnManifestSnapshotForScan(snapshot columnManifestSnapshot, records []columnManifestRecord, cfg ColumnStoreConfig, identity ColumnManifestIdentity, collection string) error {
+func validateColumnManifestSnapshot(snapshot columnManifestSnapshot, records []columnManifestRecord, cfg ColumnStoreConfig, identity ColumnManifestIdentity, collection string, context string) error {
 	if snapshot.Collection != collection {
-		return fmt.Errorf("collections: physical column scan manifest collection=%q want %q", snapshot.Collection, collection)
+		return fmt.Errorf("collections: %s manifest collection=%q want %q", context, snapshot.Collection, collection)
 	}
 	if snapshot.Generation != identity.Generation {
-		return fmt.Errorf("collections: physical column scan manifest generation=%d want %d", snapshot.Generation, identity.Generation)
+		return fmt.Errorf("collections: %s manifest generation=%d want %d", context, snapshot.Generation, identity.Generation)
 	}
 	if snapshot.SchemaHash != cfg.SchemaHash {
-		return fmt.Errorf("collections: physical column scan manifest schema_hash=%d want %d", snapshot.SchemaHash, cfg.SchemaHash)
+		return fmt.Errorf("collections: %s manifest schema_hash=%d want %d", context, snapshot.SchemaHash, cfg.SchemaHash)
 	}
 	if snapshot.AppliedCommandLSN != cfg.RecoveryAuthoritativeAppliedCommandLSN {
-		return fmt.Errorf("collections: physical column scan manifest AppliedCommandLSN=%d want recovery %d", snapshot.AppliedCommandLSN, cfg.RecoveryAuthoritativeAppliedCommandLSN)
+		return fmt.Errorf("collections: %s manifest AppliedCommandLSN=%d want recovery %d", context, snapshot.AppliedCommandLSN, cfg.RecoveryAuthoritativeAppliedCommandLSN)
 	}
 	activeRecords, err := activeColumnManifestRecordsForScan(records, snapshot.Generation)
 	if err != nil {
@@ -432,7 +429,7 @@ func validateColumnManifestSnapshotForScan(snapshot columnManifestSnapshot, reco
 		AppliedCommandLSN: snapshot.AppliedCommandLSN,
 	}, snapshot.Generation, activeRecords)
 	if checksum != identity.Checksum {
-		return fmt.Errorf("collections: physical column scan manifest checksum=%d want active identity checksum=%d", checksum, identity.Checksum)
+		return fmt.Errorf("collections: %s manifest checksum=%d want active identity checksum=%d", context, checksum, identity.Checksum)
 	}
 	return nil
 }
