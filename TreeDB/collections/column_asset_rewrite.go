@@ -317,7 +317,7 @@ func (c *Collection) loadColumnAssetRewriteManifestState() (columnAssetRewriteMa
 	}, nil
 }
 
-func (c *Collection) copyColumnAssetRewriteRefs(ctx context.Context, cfg ColumnStoreConfig, refs []ColumnAssetRef) (columnAssetRewriteCopyResult, error) {
+func (c *Collection) copyColumnAssetRewriteRefs(ctx context.Context, cfg ColumnStoreConfig, refs []ColumnAssetRef) (out columnAssetRewriteCopyResult, retErr error) {
 	segmentFileID, err := nextColumnAssetManagerSegmentFileID(c.db.ColumnAssetRootDir(), cfg)
 	if err != nil {
 		return columnAssetRewriteCopyResult{}, err
@@ -336,11 +336,9 @@ func (c *Collection) copyColumnAssetRewriteRefs(ctx context.Context, cfg ColumnS
 		if closed {
 			return
 		}
-		_ = appender.close()
-		_ = os.Remove(appender.assetPath)
-		_ = syncColumnAssetDir(appender.namespace.SegmentDir)
+		retErr = errors.Join(retErr, cleanupColumnAssetRewriteOpenAppender(appender))
 	}()
-	out := columnAssetRewriteCopyResult{
+	out = columnAssetRewriteCopyResult{
 		oldRefs:       make([]ColumnAssetRef, 0, len(refs)),
 		newRefs:       make([]ColumnAssetRef, 0, len(refs)),
 		byOldRef:      make(map[ColumnAssetRef]ColumnAssetRef, len(refs)),
@@ -372,6 +370,19 @@ func (c *Collection) copyColumnAssetRewriteRefs(ctx context.Context, cfg ColumnS
 	}
 	closed = true
 	return out, nil
+}
+
+func cleanupColumnAssetRewriteOpenAppender(appender *columnPhysicalAssetSegmentAppender) error {
+	if appender == nil {
+		return nil
+	}
+	closeErr := appender.close()
+	removeErr := os.Remove(appender.assetPath)
+	if errors.Is(removeErr, os.ErrNotExist) {
+		removeErr = nil
+	}
+	syncErr := syncColumnAssetDir(appender.namespace.SegmentDir)
+	return errors.Join(closeErr, removeErr, syncErr)
 }
 
 func cleanupColumnAssetRewriteCopiedSegment(rootDir string, remap columnAssetRewriteCopyResult) error {
@@ -470,9 +481,10 @@ func (c *Collection) publishColumnAssetRewriteManifestState(state columnAssetRew
 	}
 	identityRecord := encodeColumnManifestIdentityRecordArray(updatedIdentity)
 	ordered := []backenddb.OrderedRootDeltaPublishInput{{
-		BaseRoot:      state.baseRoot,
-		Iter:          columnManifestRootRecordIterator(identityRecord, records),
-		StoragePolicy: policy,
+		BaseRoot:                  state.baseRoot,
+		Iter:                      columnManifestRootRecordIterator(identityRecord, records),
+		StoragePolicy:             policy,
+		StorageMaintenanceRewrite: true,
 	}}
 	return c.db.PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(
 		ordered,

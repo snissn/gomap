@@ -116,6 +116,11 @@ type OrderedRootDeltaPublishInput struct {
 	BaseRoot      uint64
 	Iter          iterator.UnsafeIterator
 	StoragePolicy OrderedRootStoragePolicy
+	// StorageMaintenanceRewrite marks this root delta as an unlogged physical
+	// storage-maintenance rewrite of the same logical root contents. It is only
+	// honored by PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder;
+	// logical user mutations must use command-WAL-covered publish APIs instead.
+	StorageMaintenanceRewrite bool
 }
 
 // OrderedRootDeltaBatchPublishInput describes a sorted root-local mutation
@@ -1379,10 +1384,19 @@ func (db *DB) PublishOrderedRootDeltaGroupWithPreflightAndSystemDeltaBuilder(ord
 // PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder is like
 // PublishOrderedRootDeltaGroupWithPreflightAndSystemDeltaBuilder, but permits
 // storage-maintenance root rewrites while command-WAL mode is enabled. Callers
-// must not use it for logical user mutations; it does not append or advance a
-// command-WAL frame.
+// must set StorageMaintenanceRewrite on every ordered input and must not use it
+// for logical user mutations; it does not append or advance a command-WAL frame.
 func (db *DB) PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(ordered []OrderedRootDeltaPublishInput, preflight OrderedRootGroupPreflight, buildSystemDeltaIter OrderedRootGroupSystemBuilder) (uint64, []uint64, error) {
 	return db.publishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered, preflight, nil, buildSystemDeltaIter, true)
+}
+
+func validateStorageMaintenanceOrderedRootDeltaInputs(ordered []OrderedRootDeltaPublishInput) error {
+	for idx := range ordered {
+		if !ordered[idx].StorageMaintenanceRewrite {
+			return fmt.Errorf("treedb: maintenance ordered-root publish input %d missing storage-maintenance rewrite marker", idx)
+		}
+	}
+	return nil
 }
 
 // PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder is like
@@ -1485,6 +1499,11 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered []Order
 	if db.readOnly {
 		err = ErrReadOnly
 		return 0, nil, err
+	}
+	if allowUnloggedMaintenance {
+		if err = validateStorageMaintenanceOrderedRootDeltaInputs(ordered); err != nil {
+			return 0, nil, err
+		}
 	}
 	if commandWALIntent == nil {
 		if allowUnloggedMaintenance {

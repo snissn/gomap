@@ -274,6 +274,29 @@ func TestPublishOrderedRootDeltaGroupMaintenanceAllowsCommandWALWithoutLogicalFr
 	}
 }
 
+func TestPublishOrderedRootDeltaGroupMaintenanceRejectsUnmarkedRootDelta(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	defer db.Close()
+
+	iter := mustFrozenSystemMemtable(t, "root/k", "v").NewIterator(nil, nil)
+	_, _, err := db.PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(
+		[]OrderedRootDeltaPublishInput{{
+			BaseRoot: 0,
+			Iter:     iter,
+		}},
+		nil,
+		func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+			t.Fatalf("maintenance system builder should not run for an unmarked root delta")
+			return nil, nil
+		},
+	)
+	if err == nil || !strings.Contains(err.Error(), "storage-maintenance rewrite marker") {
+		t.Fatalf("maintenance publish error=%v want missing storage-maintenance marker", err)
+	}
+}
+
 func TestPublishOrderedRootDeltaBatchGroupWithCommandWALContextRejectsMissingFrame(t *testing.T) {
 	dir := t.TempDir()
 	enableCommandWALFormat(t, dir)
