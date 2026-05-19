@@ -245,9 +245,10 @@ func TestColumnStoreRetainedPayloadDisablesDirectBufferedUpdateM13C(t *testing.T
 	}
 	opts := collectionOptions{documentFormat: DocumentFormatBSON}
 	changed := []preparedBatchUpdate{{
-		documentID:      []byte("e1"),
-		document:        []byte("full-document"),
-		primaryDocument: []byte("retained-document"),
+		documentID:         []byte("e1"),
+		document:           []byte("full-document"),
+		primaryDocument:    []byte("retained-document"),
+		hasPrimaryDocument: true,
 	}}
 	noColumnMeta := CollectionMeta{Name: "events"}
 	if !col.shouldUseDirectBufferedUpdatePlan(noColumnMeta, opts, true, updateBatchModeNoSecondaryUniqueIndexChanges, nil, changed, true) {
@@ -267,6 +268,21 @@ func TestColumnStoreRetainedPayloadDisablesDirectBufferedUpdateM13C(t *testing.T
 	}
 	if col.shouldUseDirectBufferedUpdatePlan(columnMeta, opts, true, updateBatchModeNoSecondaryUniqueIndexChanges, nil, changed, true) {
 		t.Fatal("retained-payload column store used direct buffered update plan")
+	}
+}
+
+func TestPreparedBatchUpdatePrimaryDocumentPreservesEmptyRetainedPayloadM13C(t *testing.T) {
+	update := preparedBatchUpdate{
+		document:           []byte(`{"time_us":1}`),
+		primaryDocument:    []byte{},
+		hasPrimaryDocument: true,
+	}
+	if got := preparedBatchUpdatePrimaryDocument(update); got == nil || len(got) != 0 {
+		t.Fatalf("preparedBatchUpdatePrimaryDocument len=%d nil=%v, want explicit empty retained payload", len(got), got == nil)
+	}
+	update.hasPrimaryDocument = false
+	if got := preparedBatchUpdatePrimaryDocument(update); !bytes.Equal(got, update.document) {
+		t.Fatalf("preparedBatchUpdatePrimaryDocument fallback=%s want full document", got)
 	}
 }
 
@@ -643,10 +659,12 @@ func TestColumnStoreDeleteUpdatedRowM13C(t *testing.T) {
 }
 
 func TestColumnStoreDeleteUpdatedRowAfterManyMutationsM13C(t *testing.T) {
-	col, closeFn, liveRows := openColumnPhysicalMutationFixtureM13C(t, 1024)
+	const rows = 1024
+	const deletedRows = 103 // delete every 10th index: 0,10,...,1020.
+	col, closeFn, liveRows := openColumnPhysicalMutationFixtureM13C(t, rows)
 	defer closeFn()
-	if liveRows != 921 {
-		t.Fatalf("liveRows=%d want 921", liveRows)
+	if liveRows != rows-deletedRows {
+		t.Fatalf("liveRows=%d want %d", liveRows, rows-deletedRows)
 	}
 	if got, err := col.Get([]byte("e000000")); err != nil || got != nil {
 		t.Fatalf("Get deleted updated row got=%s err=%v, want nil nil", got, err)
@@ -655,8 +673,8 @@ func TestColumnStoreDeleteUpdatedRowAfterManyMutationsM13C(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunColumnPhysicalQuery: %v", err)
 	}
-	if result.Diagnostics.DeletedRows != 103 {
-		t.Fatalf("deleted rows=%d want 103 diagnostics=%+v", result.Diagnostics.DeletedRows, result.Diagnostics)
+	if result.Diagnostics.DeletedRows != deletedRows {
+		t.Fatalf("deleted rows=%d want %d diagnostics=%+v", result.Diagnostics.DeletedRows, deletedRows, result.Diagnostics)
 	}
 }
 

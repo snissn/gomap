@@ -12341,6 +12341,7 @@ type preparedBatchUpdate struct {
 	documentID               []byte
 	document                 []byte
 	primaryDocument          []byte
+	hasPrimaryDocument       bool
 	oldState                 orderedDocumentIndexState
 	newState                 orderedDocumentIndexState
 	changedIndexes           uint64
@@ -12457,7 +12458,7 @@ func buildDirectBufferedPrimaryRootEntries(changed []preparedBatchUpdate, scratc
 }
 
 func preparedBatchUpdatePrimaryDocument(item preparedBatchUpdate) []byte {
-	if item.primaryDocument != nil {
+	if item.hasPrimaryDocument {
 		return item.primaryDocument
 	}
 	return item.document
@@ -14016,6 +14017,7 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 				return nil, updateBatchItemError(changed[i].itemIndex, err)
 			}
 			changed[i].primaryDocument = appendUpdateBatchPlanScratchDocument(scratch, retained)
+			changed[i].hasPrimaryDocument = true
 		}
 		if len(runtimes) > 0 {
 			if changed[i].knownAffectedIndexes && changed[i].affectedIndexRuntimeMask == 0 {
