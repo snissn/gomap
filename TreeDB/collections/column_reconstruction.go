@@ -61,6 +61,13 @@ func columnRetainedPayloadFromJSONDocument(cfg ColumnStoreConfig, document []byt
 	}
 }
 
+// ColumnRetainedPayloadFromJSONDocument applies the production retained-payload
+// transform used when column-store declared fields are stripped from primary
+// row payloads.
+func ColumnRetainedPayloadFromJSONDocument(cfg ColumnStoreConfig, document []byte) ([]byte, error) {
+	return columnRetainedPayloadFromJSONDocument(cfg, document)
+}
+
 func (c *Collection) reconstructColumnDocumentAtSnapshot(snap *backenddb.Snapshot, catalog *collectionCatalog, documentID []byte, retained []byte) ([]byte, error) {
 	out, _, err := c.reconstructColumnDocumentAtSnapshotWithDiagnostics(snap, catalog, documentID, retained)
 	return out, err

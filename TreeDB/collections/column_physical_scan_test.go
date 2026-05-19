@@ -55,6 +55,22 @@ func TestColumnManifestAssetRefsFromRecordsRejectsFutureGenerationM13C(t *testin
 	}
 }
 
+func TestColumnManifestAssetRefsRejectPartIDKeyMismatchM13C(t *testing.T) {
+	asset := columnManifestAssetRefFilterTestAssetM13C(2, 7, ColumnPublishOperationInsert)
+	record, err := encodeColumnManifestPartRecord(asset)
+	if err != nil {
+		t.Fatalf("encode part: %v", err)
+	}
+	records := []columnManifestRecord{{
+		key:   columnManifestPartRecordKey(asset.Ref.Generation, asset.Ref.PartID+1),
+		value: record,
+	}}
+	_, _, err = columnManifestAssetRefsFromRecordsForScan(records, asset.Ref.Generation, asset.Ref.Namespace)
+	if err == nil || !strings.Contains(err.Error(), "key part_id") {
+		t.Fatalf("columnManifestAssetRefsFromRecordsForScan err=%v want key part_id mismatch", err)
+	}
+}
+
 func columnManifestAssetRefFilterTestAssetM13C(generation, partID uint64, reason ColumnPublishOperation) ColumnPreparedAsset {
 	return ColumnPreparedAsset{
 		Ref: ColumnAssetRef{

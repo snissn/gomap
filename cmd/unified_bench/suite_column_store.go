@@ -1,14 +1,12 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"hash/fnv"
 	"html"
-	"io"
 	"math"
 	"math/rand"
 	"os"
@@ -1271,48 +1269,10 @@ func columnStoreSuiteRetainedPayloadAccounting(events []columnStoreFixtureEvent,
 }
 
 func columnStoreSuiteRetainedPayloadFromDocument(document []byte, cfg *collections.ColumnStoreConfig) ([]byte, error) {
-	switch cfg.RetainedPayload {
-	case collections.ColumnRetainedPayloadFull:
-		return append([]byte(nil), document...), nil
-	case collections.ColumnRetainedPayloadNone:
-		return []byte("{}"), nil
-	case collections.ColumnRetainedPayloadNonColumn:
-		var obj map[string]any
-		decoder := json.NewDecoder(bytes.NewReader(document))
-		decoder.UseNumber()
-		if err := decoder.Decode(&obj); err != nil {
-			return nil, err
-		}
-		var trailing any
-		if err := decoder.Decode(&trailing); err != io.EOF {
-			if err == nil {
-				err = errors.New("trailing JSON value")
-			}
-			return nil, err
-		}
-		for _, col := range cfg.Columns {
-			columnStoreSuiteDeleteJSONPath(obj, col.Path)
-		}
-		return json.Marshal(obj)
-	default:
-		return nil, fmt.Errorf("unsupported retained-payload policy %q", cfg.RetainedPayload)
+	if cfg == nil {
+		return nil, errors.New("column_store: retained-payload transform requires column-store config")
 	}
-}
-
-func columnStoreSuiteDeleteJSONPath(obj map[string]any, path string) {
-	parts := strings.Split(strings.TrimSpace(path), ".")
-	if len(parts) == 0 || parts[0] == "" {
-		return
-	}
-	cur := obj
-	for i := 0; i < len(parts)-1; i++ {
-		next, ok := cur[parts[i]].(map[string]any)
-		if !ok {
-			return
-		}
-		cur = next
-	}
-	delete(cur, parts[len(parts)-1])
+	return collections.ColumnRetainedPayloadFromJSONDocument(*cfg, document)
 }
 
 var columnStoreQueryNameList = [...]string{

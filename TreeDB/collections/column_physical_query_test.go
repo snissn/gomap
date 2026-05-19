@@ -288,6 +288,32 @@ func TestColumnStoreGetReconstructsRetainedPayloadM13C(t *testing.T) {
 	}
 }
 
+func TestColumnStoreRetainedPayloadRejectsCreateIndexOnDeclaredColumnM13C(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "events",
+		Options: CollectionOptions{ColumnStore: testColumnStoreConfig(nil)},
+	}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := mgr.OpenCollection("events")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	if _, err := col.CreateIndex(IndexDefinition{Name: "kind_idx", Field: "kind", ValueType: IndexValueString}); err == nil || !strings.Contains(err.Error(), "retained-payload column field") {
+		t.Fatalf("CreateIndex on declared column err=%v want retained-payload column rejection", err)
+	}
+	if _, err := col.CreateIndex(IndexDefinition{Name: "payload_idx", Field: "payload", ValueType: IndexValueString}); err != nil {
+		t.Fatalf("CreateIndex on retained payload field: %v", err)
+	}
+}
+
 func TestColumnStoreRetainedPayloadDisablesDirectBufferedUpdateM13C(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), Durability: backenddb.DurabilityWALOffRelaxed})
 	if err != nil {
