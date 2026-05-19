@@ -23,6 +23,7 @@ const (
 )
 
 var (
+	// Treat these shared key sentinels as read-only.
 	columnManifestHeaderRecordKeyBytes  = []byte(columnManifestHeaderRecordKey)
 	columnManifestPartRecordPrefixBytes = []byte(columnManifestPartRecordPrefix)
 )
@@ -407,6 +408,7 @@ func columnManifestRecordsBytes(records []columnManifestRecord) int64 {
 
 func checksumColumnManifestRecords(input ColumnPublishManifestEncodeInput, generation uint64, records []columnManifestRecord) uint64 {
 	var d xxhash.Digest
+	d.Reset()
 	writeHashString(&d, input.Collection)
 	writeHashString(&d, string(input.Operation))
 	writeHashUint64(&d, generation)

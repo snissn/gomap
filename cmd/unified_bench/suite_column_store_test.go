@@ -394,80 +394,108 @@ func TestColumnStoreSuiteThroughputInterpretationM14C(t *testing.T) {
 			q: columnStoreQueryMetric{
 				Name:                columnStoreQueryQ1,
 				PlanLabel:           columnStorePathRowStoreBaseline,
+				Rows:                1024,
 				RowsProcessed:       1024,
 				RowMaterializations: 1024,
 				BytesRead:           128 << 10,
 			},
-			want: []string{"decode-bound", "row materialization", "mark-pruning not active"},
+			want: []string{"decode-bound", "row materialization", "mark-pruning not active", "observed rows_processed=1024", "row_materializations=1024/1024", "bytes_read=131072"},
 		},
 		{
 			name: "btree decode baseline",
 			q: columnStoreQueryMetric{
 				Name:                columnStoreQueryQ2,
 				PlanLabel:           columnStorePathBTreeIndexBaseline,
+				Rows:                1024,
 				RowsProcessed:       1024,
 				RowMaterializations: 1024,
 				BytesRead:           128 << 10,
 			},
-			want: []string{"decode-bound", "B-tree baseline", "row materialization", "mark-pruning not active"},
+			want: []string{"decode-bound", "B-tree baseline", "row materialization", "mark-pruning not active", "observed rows_processed=1024", "row_materializations=1024/1024"},
 		},
 		{
 			name: "serial physical scan",
 			q: columnStoreQueryMetric{
 				Name:                columnStoreQueryQ3,
 				PlanLabel:           columnStorePathSerialColumnScan,
+				Rows:                1024,
 				RowsProcessed:       1024,
 				RowMaterializations: 0,
 				BytesRead:           96 << 10,
 				ScheduledGranules:   2,
 			},
-			want: []string{"physical serial scan", "TCPA decode", "aggregation", "memory-bandwidth", "mark-pruning not active"},
+			want: []string{"physical serial scan", "TCPA decode", "aggregation", "memory-bandwidth", "mark-pruning not active", "observed rows_processed=1024", "scheduled_granules=2"},
 		},
 		{
 			name: "scan backed aggregate fallback",
 			q: columnStoreQueryMetric{
 				Name:                columnStoreQueryQ5Metadata,
 				PlanLabel:           columnStorePathAggregateMetadata,
+				Rows:                1024,
 				RowsProcessed:       1024,
 				RowMaterializations: 0,
 				BytesRead:           96 << 10,
 				MetadataHits:        0,
 			},
-			want: []string{"fallback-bound", "scan-backed", "aggregate metadata", "mark-pruning not active"},
+			want: []string{"fallback-bound", "scan-backed", "aggregate metadata", "mark-pruning not active", "metadata_hits=0"},
 		},
 		{
 			name: "metadata hit future path",
 			q: columnStoreQueryMetric{
 				Name:                columnStoreQueryQ5Metadata,
 				PlanLabel:           columnStorePathAggregateMetadata,
+				Rows:                1024,
 				RowsProcessed:       1024,
 				RowMaterializations: 0,
 				MetadataHits:        4,
 			},
-			want: []string{"metadata-bound", "metadata hits", "mark-pruning not active"},
+			want: []string{"metadata-bound", "metadata hits", "mark-pruning not active", "metadata_hits=4"},
 		},
 		{
 			name: "granule pruning future path",
 			q: columnStoreQueryMetric{
 				Name:                columnStoreQueryQ1,
 				PlanLabel:           columnStorePathSerialColumnScan,
+				Rows:                1024,
 				RowsProcessed:       1024,
 				RowMaterializations: 0,
 				SkippedGranules:     3,
 			},
-			want: []string{"physical serial scan", "mark-pruning active"},
+			want: []string{"physical serial scan", "mark-pruning active", "skipped_granules=3"},
 		},
 		{
 			name: "parallel physical scan",
 			q: columnStoreQueryMetric{
 				Name:                columnStoreQueryQ4A,
 				PlanLabel:           columnStorePathParallelColumnScan,
+				Rows:                1024,
 				RowsProcessed:       1024,
 				RowMaterializations: 0,
 				BytesRead:           96 << 10,
 				WorkerCount:         2,
 			},
 			want: []string{"parallel physical scan", "manifest-ref partition", "overhead-bound", "memory-bandwidth", "mark-pruning not active"},
+		},
+		{
+			name: "parallel invalid worker count",
+			q: columnStoreQueryMetric{
+				Name:          columnStoreQueryQ4A,
+				PlanLabel:     columnStorePathParallelColumnScan,
+				Rows:          1024,
+				RowsProcessed: 1024,
+				WorkerCount:   0,
+			},
+			want: []string{"parallel physical scan", "invalid reported worker_count=0", "mark-pruning not active", "observed rows_processed=1024"},
+		},
+		{
+			name: "unknown plan includes labels",
+			q: columnStoreQueryMetric{
+				Name:          "q_custom",
+				PlanLabel:     "unknown_plan",
+				Rows:          1024,
+				RowsProcessed: 1024,
+			},
+			want: []string{"fallback/error-bound", "unknown_plan", "q_custom", "mark-pruning not active"},
 		},
 	}
 
@@ -503,6 +531,16 @@ func TestColumnStoreSuiteMarkdownRendersThroughputInterpretationM14C(t *testing.
 				RowsProcessed:            1024,
 				ThroughputInterpretation: "fallback-bound aggregate metadata label: no metadata hits yet, executes scan-backed physical reducer; mark-pruning not active",
 			},
+			{
+				Name:                     "q|pipe`tick",
+				PlanLabel:                "plan|pipe`tick",
+				ThroughputInterpretation: "line1\r\nline2|pipe",
+				ImplementationNote:       "note|pipe`tick",
+			},
+			{
+				Name:      "q_empty_interpretation",
+				PlanLabel: columnStorePathSerialColumnScan,
+			},
 		},
 		Parity: map[string]columnStoreParity{
 			columnStoreQueryQ1:         {Pass: true},
@@ -516,6 +554,11 @@ func TestColumnStoreSuiteMarkdownRendersThroughputInterpretationM14C(t *testing.
 		"physical serial scan",
 		"fallback-bound aggregate metadata label",
 		"mark-pruning not active",
+		"``q\\|pipe`tick``",
+		"``plan\\|pipe`tick``",
+		"``note\\|pipe`tick``",
+		"line1 line2\\|pipe",
+		"| `q_empty_interpretation` | `serial_column_scan` | - |",
 	} {
 		if !strings.Contains(md, want) {
 			t.Fatalf("markdown missing %q:\n%s", want, md)
@@ -1241,6 +1284,14 @@ func TestColumnStoreSuiteExecutesForcedAggregateAndParallelPhysicalPathsM14B(t *
 			}
 			queryMetrics := assertColumnStoreQueryMetricCoverageM11A(t, report.Queries)
 			for _, q := range report.Queries {
+				if tc.forcedPath == columnStorePathAggregateMetadata && q.Name != columnStoreQueryQ5Metadata {
+					if q.PlanLabel != columnStorePathSerialColumnScan {
+						t.Fatalf("query %s plan_label=%q want %q under aggregate_metadata forced path", q.Name, q.PlanLabel, columnStorePathSerialColumnScan)
+					}
+					if !strings.Contains(q.ImplementationNote, "rerouted_to_serial_column_scan") {
+						t.Fatalf("query %s missing aggregate reroute implementation note: %+v", q.Name, q)
+					}
+				}
 				if q.RowMaterializations != 0 {
 					t.Fatalf("query %s row_materializations=%d want zero physical row materialization", q.Name, q.RowMaterializations)
 				}
@@ -1257,8 +1308,15 @@ func TestColumnStoreSuiteExecutesForcedAggregateAndParallelPhysicalPathsM14B(t *
 					t.Fatalf("query %s worker_count=%d want %d for parallel path", q.Name, q.WorkerCount, tc.wantWorker)
 				}
 			}
-			if tc.forcedPath == columnStorePathAggregateMetadata && !strings.Contains(queryMetrics[columnStoreQueryQ5Metadata].ThroughputInterpretation, "fallback-bound") {
-				t.Fatalf("q5_metadata throughput_interpretation=%q want scan-backed aggregate fallback classification", queryMetrics[columnStoreQueryQ5Metadata].ThroughputInterpretation)
+			if tc.forcedPath == columnStorePathAggregateMetadata {
+				interpretation := queryMetrics[columnStoreQueryQ5Metadata].ThroughputInterpretation
+				if queryMetrics[columnStoreQueryQ5Metadata].MetadataHits > 0 {
+					if !strings.Contains(interpretation, "metadata-bound") {
+						t.Fatalf("q5_metadata throughput_interpretation=%q want metadata-bound aggregate classification", interpretation)
+					}
+				} else if !strings.Contains(interpretation, "fallback-bound") {
+					t.Fatalf("q5_metadata throughput_interpretation=%q want scan-backed aggregate fallback classification", interpretation)
+				}
 			}
 			if tc.forcedPath == columnStorePathParallelColumnScan && !strings.Contains(queryMetrics[columnStoreQueryQ5Metadata].ThroughputInterpretation, "parallel physical scan") {
 				t.Fatalf("q5_metadata throughput_interpretation=%q want parallel physical classification", queryMetrics[columnStoreQueryQ5Metadata].ThroughputInterpretation)
@@ -1552,12 +1610,61 @@ func TestColumnStoreSuitePhysicalPathFailsClosedOnMissingAssetsM14B(t *testing.T
 	if err != nil {
 		t.Fatalf("reference hashes: %v", err)
 	}
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close before recovery-authoritative reopen: %v", err)
+	}
+	db, err = openColumnStoreSuiteDB(dir)
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	manager = collections.NewCollectionManager(db)
+	collection, err = manager.OpenCollection("events")
+	if err != nil {
+		t.Fatalf("reopen collection: %v", err)
+	}
 	if err := os.RemoveAll(backenddb.ColumnAssetRootDirPath(dir)); err != nil {
 		t.Fatalf("remove column asset root: %v", err)
 	}
 	_, _, err = runColumnStoreSuiteQueries(collection, rows, rawHashes, columnStorePathSerialColumnScan)
 	if !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("missing physical assets err=%v want os.ErrNotExist without row fallback", err)
+	}
+}
+
+func TestColumnStoreSuiteQ3ReferenceUsesPhysicalHourSemanticsM14B(t *testing.T) {
+	events := []columnStoreDecodedEvent{
+		{TimeUS: -1},
+		{TimeUS: -3_600_000_000},
+		{TimeUS: -3_600_000_001},
+		{TimeUS: 0},
+	}
+	lines, err := columnStoreQueryLines(columnStoreQueryQ3, events)
+	if err != nil {
+		t.Fatalf("columnStoreQueryLines q3: %v", err)
+	}
+	got := strings.Join(lines, "\n")
+	for _, want := range []string{
+		"q3:hour_23=2",
+		"q3:hour_22=1",
+		"q3:hour_00=1",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("q3 lines missing %q: %v", want, lines)
+		}
+	}
+	if strings.Contains(got, "hour_-") {
+		t.Fatalf("q3 lines used truncating negative hour bucket: %v", lines)
+	}
+}
+
+func TestColumnStoreSuitePhysicalQueryLinesFailsClosedOnUnknownMappingM14B(t *testing.T) {
+	if _, err := columnStoreSuitePhysicalQueryLines("future", "future_query", nil); err == nil {
+		t.Fatal("expected unknown physical query line mapping to fail")
+	} else if !strings.Contains(err.Error(), "future_query") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
