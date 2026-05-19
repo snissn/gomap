@@ -296,6 +296,8 @@ static void splitmix_fill(SplitMix64 *rng, uint8_t *dst, size_t len) {
 static uint64_t load_be64_unaligned(const uint8_t *src) {
   uint64_t v = 0;
   memcpy(&v, src, sizeof(v));
+#if defined(__BYTE_ORDER__) && defined(__ORDER_LITTLE_ENDIAN__) && \
+    __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
 #if defined(__GNUC__) || defined(__clang__)
   return __builtin_bswap64(v);
 #else
@@ -303,6 +305,9 @@ static uint64_t load_be64_unaligned(const uint8_t *src) {
          ((v & 0x0000000000ff0000ULL) << 24) | ((v & 0x00000000ff000000ULL) << 8) |
          ((v & 0x000000ff00000000ULL) >> 8) | ((v & 0x0000ff0000000000ULL) >> 24) |
          ((v & 0x00ff000000000000ULL) >> 40) | ((v & 0xff00000000000000ULL) >> 56);
+#endif
+#else
+  return v;
 #endif
 }
 
