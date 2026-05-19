@@ -5,11 +5,40 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
+	"sync"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 )
+
+var columnAssetRewriteAfterCopyHook struct {
+	sync.Mutex
+	fn func() error
+}
+
+func setColumnAssetRewriteAfterCopyHookForTest(fn func() error) func() {
+	columnAssetRewriteAfterCopyHook.Lock()
+	prev := columnAssetRewriteAfterCopyHook.fn
+	columnAssetRewriteAfterCopyHook.fn = fn
+	columnAssetRewriteAfterCopyHook.Unlock()
+	return func() {
+		columnAssetRewriteAfterCopyHook.Lock()
+		columnAssetRewriteAfterCopyHook.fn = prev
+		columnAssetRewriteAfterCopyHook.Unlock()
+	}
+}
+
+func runColumnAssetRewriteAfterCopyHook() error {
+	columnAssetRewriteAfterCopyHook.Lock()
+	fn := columnAssetRewriteAfterCopyHook.fn
+	columnAssetRewriteAfterCopyHook.Unlock()
+	if fn == nil {
+		return nil
+	}
+	return fn()
+}
 
 // ColumnAssetRewriteOptions controls M15C mixed-segment rewrite/remap.
 type ColumnAssetRewriteOptions struct {
@@ -139,6 +168,10 @@ func (c *Collection) columnAssetRewrite(ctx context.Context, opts ColumnAssetRew
 		stats.Plan = columnAssetRewritePlanForDetail(stats.Plan, opts.Detailed)
 		return stats, err
 	}
+	if err := c.columnAssetRewriteRootDescriptorPreflight(state)(); err != nil {
+		stats.Plan = columnAssetRewritePlanForDetail(stats.Plan, opts.Detailed)
+		return stats, err
+	}
 	remap, err := c.copyColumnAssetRewriteRefs(ctx, state.cfg, refs)
 	if err != nil {
 		stats.Plan = columnAssetRewritePlanForDetail(stats.Plan, opts.Detailed)
@@ -148,33 +181,40 @@ func (c *Collection) columnAssetRewrite(ctx context.Context, opts ColumnAssetRew
 		stats.Plan = columnAssetRewritePlanForDetail(stats.Plan, opts.Detailed)
 		return stats, nil
 	}
-	stats.SupersededRefs = append(stats.SupersededRefs, remap.oldRefs...)
-	stats.RemappedRefs = append(stats.RemappedRefs, remap.newRefs...)
-	stats.RemapSegmentFileID = remap.segmentFileID
+	cleanupRemap := func(baseErr error) error {
+		if cleanupErr := cleanupColumnAssetRewriteCopiedSegment(c.db.ColumnAssetRootDir(), remap); cleanupErr != nil {
+			return errors.Join(baseErr, cleanupErr)
+		}
+		return baseErr
+	}
+	if err := runColumnAssetRewriteAfterCopyHook(); err != nil {
+		stats.Plan = columnAssetRewritePlanForDetail(stats.Plan, opts.Detailed)
+		return stats, cleanupRemap(err)
+	}
 
 	patchedRecords, patched, err := patchColumnAssetRewriteManifestRecords(state.records, remap.byOldRef)
 	if err != nil {
 		stats.Plan = columnAssetRewritePlanForDetail(stats.Plan, opts.Detailed)
-		return stats, err
+		return stats, cleanupRemap(err)
 	}
 	if patched != len(remap.oldRefs) {
 		stats.Plan = columnAssetRewritePlanForDetail(stats.Plan, opts.Detailed)
-		return stats, fmt.Errorf("collections: column asset rewrite patched %d manifest refs, want %d", patched, len(remap.oldRefs))
+		return stats, cleanupRemap(fmt.Errorf("collections: column asset rewrite patched %d manifest refs, want %d", patched, len(remap.oldRefs)))
 	}
 	updatedIdentity, err := columnAssetRewriteUpdatedIdentity(state, patchedRecords)
 	if err != nil {
 		stats.Plan = columnAssetRewritePlanForDetail(stats.Plan, opts.Detailed)
-		return stats, err
+		return stats, cleanupRemap(err)
 	}
 	updatedMeta, err := columnAssetRewriteUpdatedMeta(state.meta, updatedIdentity)
 	if err != nil {
 		stats.Plan = columnAssetRewritePlanForDetail(stats.Plan, opts.Detailed)
-		return stats, err
+		return stats, cleanupRemap(err)
 	}
 	newSystemRoot, rootIDs, err := c.publishColumnAssetRewriteManifestState(state, updatedMeta, updatedIdentity, patchedRecords)
 	if err != nil {
 		stats.Plan = columnAssetRewritePlanForDetail(stats.Plan, opts.Detailed)
-		return stats, err
+		return stats, cleanupRemap(err)
 	}
 	if len(rootIDs) != 1 || rootIDs[0] == 0 {
 		stats.Plan = columnAssetRewritePlanForDetail(stats.Plan, opts.Detailed)
@@ -183,8 +223,11 @@ func (c *Collection) columnAssetRewrite(ctx context.Context, opts ColumnAssetRew
 
 	stats.SegmentsRewritten = stats.SegmentsEligible
 	stats.RefsRemapped = len(remap.oldRefs)
+	stats.SupersededRefs = append(stats.SupersededRefs, remap.oldRefs...)
+	stats.RemappedRefs = append(stats.RemappedRefs, remap.newRefs...)
 	stats.RemapManifestRoot = rootIDs[0]
 	stats.RemapSystemRoot = newSystemRoot
+	stats.RemapSegmentFileID = remap.segmentFileID
 	nextCatalog := cloneCatalogWithRootUpdates(state.catalog, updatedMeta, []string{state.rootName}, rootIDs)
 	c.meta = updatedMeta
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
@@ -288,7 +331,15 @@ func (c *Collection) copyColumnAssetRewriteRefs(ctx context.Context, cfg ColumnS
 	if err != nil {
 		return columnAssetRewriteCopyResult{}, err
 	}
-	defer func() { _ = appender.close() }()
+	closed := false
+	defer func() {
+		if closed {
+			return
+		}
+		_ = appender.close()
+		_ = os.Remove(appender.assetPath)
+		_ = syncColumnAssetDir(appender.namespace.SegmentDir)
+	}()
 	out := columnAssetRewriteCopyResult{
 		oldRefs:       make([]ColumnAssetRef, 0, len(refs)),
 		newRefs:       make([]ColumnAssetRef, 0, len(refs)),
@@ -319,7 +370,28 @@ func (c *Collection) copyColumnAssetRewriteRefs(ctx context.Context, cfg ColumnS
 	if err := appender.close(); err != nil {
 		return columnAssetRewriteCopyResult{}, err
 	}
+	closed = true
 	return out, nil
+}
+
+func cleanupColumnAssetRewriteCopiedSegment(rootDir string, remap columnAssetRewriteCopyResult) error {
+	if len(remap.newRefs) == 0 {
+		return nil
+	}
+	segmentPath, err := columnAssetSegmentPath(rootDir, remap.newRefs[0])
+	if err != nil {
+		return err
+	}
+	namespace, nsErr := columnAssetManagerNamespaceForRoot(rootDir, remap.newRefs[0].Namespace)
+	removeErr := os.Remove(segmentPath)
+	if errors.Is(removeErr, os.ErrNotExist) {
+		removeErr = nil
+	}
+	var syncErr error
+	if nsErr == nil {
+		syncErr = syncColumnAssetDir(namespace.SegmentDir)
+	}
+	return errors.Join(removeErr, nsErr, syncErr)
 }
 
 func patchColumnAssetRewriteManifestRecords(records []columnManifestRecord, byOldRef map[ColumnAssetRef]ColumnAssetRef) ([]columnManifestRecord, int, error) {
@@ -402,17 +474,23 @@ func (c *Collection) publishColumnAssetRewriteManifestState(state columnAssetRew
 		Iter:          columnManifestRootRecordIterator(identityRecord, records),
 		StoragePolicy: policy,
 	}}
-	rootNames := []string{state.rootName}
-	baseRootIDs := map[string]uint64{state.rootName: state.baseRoot}
 	return c.db.PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(
 		ordered,
-		func() error {
-			return c.validateRootDescriptorSystemDeltaForMeta(state.meta, state.baseCommitSeq, state.baseSystemRoot, rootNames, baseRootIDs)
-		},
+		c.columnAssetRewriteRootDescriptorPreflight(state),
 		func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+			rootNames := []string{state.rootName}
+			baseRootIDs := map[string]uint64{state.rootName: state.baseRoot}
 			return c.buildColumnAssetRewriteSystemDeltaIteratorForMeta(state.meta, updatedMeta, state.baseCommitSeq, state.baseSystemRoot, rootNames, baseRootIDs, rootIDs)
 		},
 	)
+}
+
+func (c *Collection) columnAssetRewriteRootDescriptorPreflight(state columnAssetRewriteManifestState) backenddb.OrderedRootGroupPreflight {
+	rootNames := []string{state.rootName}
+	baseRootIDs := map[string]uint64{state.rootName: state.baseRoot}
+	return func() error {
+		return c.validateRootDescriptorSystemDeltaForMeta(state.meta, state.baseCommitSeq, state.baseSystemRoot, rootNames, baseRootIDs)
+	}
 }
 
 func (c *Collection) buildColumnAssetRewriteSystemDeltaIteratorForMeta(baseMeta, updatedMeta CollectionMeta, expectedCommitSeq, expectedSystemRoot uint64, rootNames []string, baseRootIDs map[string]uint64, rootIDs []uint64) (iterator.UnsafeIterator, error) {

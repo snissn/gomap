@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 )
 
 func TestColumnAssetRewriteRemapsManifestRefsOutOfMixedSegmentM15C(t *testing.T) {
@@ -162,6 +164,45 @@ func TestColumnAssetRewriteFailClosedOnIncompletePlanM15C(t *testing.T) {
 	}
 }
 
+func TestColumnAssetRewriteCleansCopiedSegmentOnStalePublishPreflightM15C(t *testing.T) {
+	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	col := openColumnStoreCollectionM10B(t, d, mgr)
+
+	if _, err := col.Insert([]byte("e1"), []byte(`{"time_us":1,"kind":"like","did":"d1"}`)); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	candidate := writeColumnAssetReachabilityCandidateM15A(t, d, col, 3, 99)
+	beforeSegments := columnAssetSegmentNamesM15C(t, d, col)
+
+	restoreHook := setColumnAssetRewriteAfterCopyHookForTest(func() error {
+		_, _, err := d.PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(nil, nil, func([]uint64) (iterator.UnsafeIterator, error) {
+			current := d.AcquireSnapshot()
+			if current == nil {
+				return nil, backenddb.ErrClosed
+			}
+			defer func() { _ = current.Close() }()
+			return buildSystemTargetIterator(current, map[string][]byte{
+				systemCollectionRootKey(collectionColumnManifestRootName("events")): encodeRootID(0),
+			})
+		})
+		return err
+	})
+	defer restoreHook()
+	stats, err := col.ColumnAssetRewrite(context.Background(), ColumnAssetRewriteOptions{
+		CandidateRefs: []ColumnAssetRef{candidate},
+	})
+	if err == nil {
+		t.Fatal("ColumnAssetRewrite stale publish unexpectedly succeeded")
+	}
+	if stats.SegmentsRewritten != 0 || stats.RefsRemapped != 0 || len(stats.SupersededRefs) != 0 {
+		t.Fatalf("stale publish reported successful rewrite stats=%+v", stats)
+	}
+	assertStringSlicesEqualM15C(t, beforeSegments, columnAssetSegmentNamesM15C(t, d, col))
+}
+
 func TestColumnAssetRewriteRejectsReadOnlyM15C(t *testing.T) {
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)
@@ -192,6 +233,43 @@ func TestColumnAssetRewriteRejectsReadOnlyM15C(t *testing.T) {
 	}
 	afterRefs := columnManifestAssetRefsForCollectionM12A(t, readonly, readonlyCol)
 	assertColumnAssetRefsEqualM15C(t, beforeRefs, afterRefs)
+}
+
+func columnAssetSegmentNamesM15C(t testing.TB, d *backenddb.DB, col *Collection) []string {
+	t.Helper()
+	cfg := col.Meta().Options.ColumnStore
+	if cfg == nil || cfg.AssetManager == nil {
+		t.Fatalf("missing column-store asset manager config")
+	}
+	namespace, err := columnAssetManagerNamespaceForRoot(d.ColumnAssetRootDir(), cfg.AssetManager.Namespace)
+	if err != nil {
+		t.Fatalf("columnAssetManagerNamespaceForRoot: %v", err)
+	}
+	entries, err := os.ReadDir(namespace.SegmentDir)
+	if err != nil {
+		t.Fatalf("ReadDir segment dir: %v", err)
+	}
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		names = append(names, entry.Name())
+	}
+	sort.Strings(names)
+	return names
+}
+
+func assertStringSlicesEqualM15C(t testing.TB, before, after []string) {
+	t.Helper()
+	if len(before) != len(after) {
+		t.Fatalf("slice length after=%d want %d: after=%v before=%v", len(after), len(before), after, before)
+	}
+	for i := range before {
+		if before[i] != after[i] {
+			t.Fatalf("slice[%d]=%q want %q: after=%v before=%v", i, after[i], before[i], after, before)
+		}
+	}
 }
 
 func assertColumnAssetRefsRemappedM15C(t testing.TB, before, after []ColumnAssetRef) {
