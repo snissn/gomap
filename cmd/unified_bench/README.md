@@ -250,10 +250,10 @@ planner time, scan time, reduce time, worker count, scheduled/skipped granules,
 cache hit/miss counters, materialized-row count, parity status, byte accounting,
 manifest/recovery identity, and the generated HTML artifact paths. If a forced
 physical column path is not implemented yet, the PR must call that out
-explicitly and include the fail-closed evidence. The suite reports
-`column_asset_bytes=0` with a note until physical column assets are published;
-`retained_payload_bytes` equals the source JSONBench payload until compressed
-retained-payload accounting lands.
+explicitly and include the fail-closed evidence. The suite reports measured
+`column_asset_bytes` from the isolated `column_assets/` tree after physical
+assets are published; `retained_payload_bytes` equals the source JSONBench
+payload until retained-payload stripping lands.
 
 ## Notes
 

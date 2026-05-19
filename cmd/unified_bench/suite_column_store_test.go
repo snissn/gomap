@@ -167,8 +167,11 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 	if report.ByteAccounting.CommandWALBytesBeforeCheckpoint == 0 {
 		t.Fatalf("expected command WAL bytes in byte accounting: %+v", report.ByteAccounting)
 	}
-	if report.ByteAccounting.RetainedPayloadBytesNote == "" || report.ByteAccounting.ColumnAssetBytesNote == "" {
-		t.Fatalf("expected M11A byte-accounting placeholder notes: %+v", report.ByteAccounting)
+	if report.ByteAccounting.RetainedPayloadBytesNote == "" {
+		t.Fatalf("expected retained-payload byte-accounting note: %+v", report.ByteAccounting)
+	}
+	if report.ByteAccounting.ColumnAssetBytes == 0 {
+		t.Fatalf("expected measured M12A physical column asset bytes: %+v", report.ByteAccounting)
 	}
 	if got, want := report.ByteAccounting.TotalReconstructableBytes, report.ByteAccounting.RetainedPayloadBytes+report.ByteAccounting.ColumnAssetBytes+report.ByteAccounting.ManifestControlBytes; got != want {
 		t.Fatalf("total_reconstructable_bytes=%d want retained+column+manifest=%d", got, want)
@@ -188,7 +191,7 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 	if !strings.Contains(string(data), `"command_wal_bytes_before_checkpoint"`) {
 		t.Fatalf("column store JSON missing before-checkpoint command WAL label:\n%s", data)
 	}
-	if !strings.Contains(string(data), `"column_asset_bytes_note"`) || !strings.Contains(string(data), `"retained_payload_bytes_note"`) {
+	if !strings.Contains(string(data), `"column_asset_bytes"`) || !strings.Contains(string(data), `"retained_payload_bytes_note"`) {
 		t.Fatalf("column store JSON missing byte-accounting notes:\n%s", data)
 	}
 	if strings.Contains(string(data), `"command_wal_bytes":`) {
@@ -201,7 +204,7 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 	if !strings.Contains(string(columnMarkdown), "command_wal_bytes_before_checkpoint") {
 		t.Fatalf("column store markdown missing before-checkpoint command WAL label:\n%s", columnMarkdown)
 	}
-	if !strings.Contains(string(columnMarkdown), "column_asset_bytes_note") || !strings.Contains(string(columnMarkdown), "retained_payload_bytes_note") {
+	if !strings.Contains(string(columnMarkdown), "column_asset_bytes") || !strings.Contains(string(columnMarkdown), "retained_payload_bytes_note") {
 		t.Fatalf("column store markdown missing byte-accounting notes:\n%s", columnMarkdown)
 	}
 	if strings.Contains(string(columnMarkdown), "| `` |") {
@@ -953,7 +956,7 @@ func TestColumnStoreSuiteRejectsForcedColumnPathM11B(t *testing.T) {
 	if !strings.Contains(msg, "serial_column_scan") ||
 		!strings.Contains(msg, "unsupported") ||
 		!strings.Contains(msg, "refusing to route through row store") ||
-		!strings.Contains(msg, "reason=no durable physical column assets are available") {
+		!strings.Contains(msg, "reason=physical column scanner is not implemented yet") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

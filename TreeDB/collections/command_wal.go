@@ -126,6 +126,31 @@ func collectionDocumentsFromNoIndexEntries(entries []noIndexBatchEntry) []commit
 	return docs
 }
 
+func columnWriteDocumentsFromNoIndexEntries(entries []noIndexBatchEntry) []columnWriteDocument {
+	docs := make([]columnWriteDocument, len(entries))
+	for i := range entries {
+		docs[i] = columnWriteDocument{
+			ID:       entries[i].id,
+			Document: entries[i].document,
+		}
+	}
+	return docs
+}
+
+func columnWriteDocumentsFromCommitLog(docs []commitlog.CollectionDocument) []columnWriteDocument {
+	if len(docs) == 0 {
+		return nil
+	}
+	out := make([]columnWriteDocument, len(docs))
+	for i := range docs {
+		out[i] = columnWriteDocument{
+			ID:       docs[i].ID,
+			Document: docs[i].Document,
+		}
+	}
+	return out
+}
+
 func collectionDocumentsFromBatchInput(ids, documents [][]byte) ([]commitlog.CollectionDocument, error) {
 	if len(ids) != len(documents) {
 		return nil, fmt.Errorf("collections: command wal batch ids length mismatch: ids=%d documents=%d", len(ids), len(documents))

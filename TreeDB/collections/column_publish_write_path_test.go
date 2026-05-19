@@ -445,6 +445,99 @@ func TestColumnStoreCommandWALMutationsPublishManifestM10B(t *testing.T) {
 	}
 }
 
+func TestColumnStoreCommandWALWritesPhysicalColumnAssetsM12A(t *testing.T) {
+	dir, _ := prepareColumnStoreCommandWALDirM10B(t)
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() {
+		if d != nil {
+			_ = d.Close()
+		}
+	}()
+
+	mgr := NewCollectionManager(d)
+	col := openColumnStoreCollectionM10B(t, d, mgr)
+	insertedIDs, err := col.InsertBatch([][]byte{[]byte("e1"), []byte("e2")}, [][]byte{
+		[]byte(`{"time_us":1,"kind":"like","did":"d1","commit":{"repo_id":10}}`),
+		[]byte(`{"time_us":2,"kind":"post","did":"d2","commit":{"repo_id":11}}`),
+	})
+	if err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	if len(insertedIDs) != 2 {
+		t.Fatalf("InsertBatch inserted=%d, want 2", len(insertedIDs))
+	}
+	insertLSN := d.State().AppliedCommandLSN
+	assertColumnManifestStateM10B(t, col, 1, insertLSN, mgr)
+	refs := columnManifestAssetRefsForCollectionM12A(t, d, col)
+	if len(refs) != 1 {
+		t.Fatalf("manifest refs=%+v, want one physical asset ref", refs)
+	}
+	ref := refs[0]
+	if ref.Namespace != col.Meta().Options.ColumnStore.AssetManager.Namespace || ref.Length <= 0 || ref.Checksum == 0 {
+		t.Fatalf("invalid physical asset ref: %+v", ref)
+	}
+	raw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), ref)
+	if err != nil {
+		t.Fatalf("readColumnPhysicalAssetFromManager: %v", err)
+	}
+	if err := validateColumnPhysicalAssetForManifest(raw, ref, *col.Meta().Options.ColumnStore); err != nil {
+		t.Fatalf("validateColumnPhysicalAssetForManifest: %v", err)
+	}
+	assetPath, err := columnAssetSegmentPath(d.ColumnAssetRootDir(), ref)
+	if err != nil {
+		t.Fatalf("columnAssetSegmentPath: %v", err)
+	}
+	if strings.Contains(assetPath, "value_vlog") || strings.Contains(assetPath, "leaf_vlog") {
+		t.Fatalf("column asset path must be isolated from row value/leaf logs: %q", assetPath)
+	}
+
+	matched, modified, err := col.Update([]byte("e1"), func([]byte) ([]byte, bool, error) {
+		return []byte(`{"time_us":3,"kind":"like","did":"d1","commit":{"repo_id":12}}`), true, nil
+	})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if !matched || !modified {
+		t.Fatalf("Update matched=%v modified=%v, want true true", matched, modified)
+	}
+	updateLSN := d.State().AppliedCommandLSN
+	assertColumnManifestStateM10B(t, col, 2, updateLSN, mgr)
+	updateRefs := columnManifestAssetRefsForCollectionM12A(t, d, col)
+	if len(updateRefs) != 2 {
+		t.Fatalf("update manifest refs=%+v, want accumulated insert+update asset refs", updateRefs)
+	}
+	if updateRefs[0].Generation != 1 || updateRefs[1].Generation != 2 {
+		t.Fatalf("update manifest refs=%+v, want generations 1 and 2", updateRefs)
+	}
+	updateRaw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), updateRefs[1])
+	if err != nil {
+		t.Fatalf("update readColumnPhysicalAssetFromManager: %v", err)
+	}
+	if err := validateColumnPhysicalAssetForManifest(updateRaw, updateRefs[1], *col.Meta().Options.ColumnStore); err != nil {
+		t.Fatalf("update validateColumnPhysicalAssetForManifest: %v", err)
+	}
+
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	d = nil
+	reopen := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopen.Close() }()
+	reopened := openColumnStoreCollectionM10B(t, reopen)
+	assertColumnManifestStateM10B(t, reopened, 2, updateLSN)
+	reopenRefs := columnManifestAssetRefsForCollectionM12A(t, reopen, reopened)
+	if len(reopenRefs) != 2 || reopenRefs[0] != updateRefs[0] || reopenRefs[1] != updateRefs[1] {
+		t.Fatalf("reopen refs=%+v want %+v", reopenRefs, updateRefs)
+	}
+	reopenRaw, err := readColumnPhysicalAssetFromManager(reopen.ColumnAssetRootDir(), reopenRefs[1])
+	if err != nil {
+		t.Fatalf("reopen readColumnPhysicalAssetFromManager: %v", err)
+	}
+	if err := validateColumnPhysicalAssetForManifest(reopenRaw, reopenRefs[1], *reopened.Meta().Options.ColumnStore); err != nil {
+		t.Fatalf("reopen validateColumnPhysicalAssetForManifest: %v", err)
+	}
+}
+
 func TestColumnStoreCommandWALReplayPublishesManifestM10B(t *testing.T) {
 	dir, _ := prepareColumnStoreCommandWALDirM10B(t)
 	d := openCollectionCommandWALDB(t, dir)
@@ -1439,4 +1532,27 @@ func assertColumnManifestStateM10B(t testing.TB, col *Collection, generation, ap
 	if record.Generation != generation || record.Version != columnManifestIdentityVersion || record.Checksum != cfg.ActiveManifest.Checksum {
 		t.Fatalf("manifest root record=%+v active=%+v", record, cfg.ActiveManifest)
 	}
+}
+
+func columnManifestAssetRefsForCollectionM12A(t testing.TB, d *backenddb.DB, col *Collection) []ColumnAssetRef {
+	t.Helper()
+	id, ok := col.ColumnStoreCacheIdentity()
+	if !ok || id.ManifestRoot == 0 {
+		t.Fatalf("ColumnStoreCacheIdentity=%+v ok=%v, want manifest root", id, ok)
+	}
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatalf("AcquireSnapshot returned nil")
+	}
+	defer func() { _ = snap.Close() }()
+	iter, err := snap.IteratorAtRoot(id.ManifestRoot, []byte(columnManifestPartRecordPrefix), nil)
+	if err != nil {
+		t.Fatalf("IteratorAtRoot manifest root: %v", err)
+	}
+	defer func() { _ = iter.Close() }()
+	refs, err := enumerateColumnManifestAssetRefs(iter)
+	if err != nil {
+		t.Fatalf("enumerateColumnManifestAssetRefs: %v", err)
+	}
+	return refs
 }

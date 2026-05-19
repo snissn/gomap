@@ -1132,7 +1132,7 @@ func TestCollectionCommandWALReplayMutationsBypassOpenProfileGate(t *testing.T) 
 				t.Helper()
 				payload, err := commitlog.EncodeCollectionInsertBatchByIDPayload("events", []commitlog.CollectionDocument{{
 					ID:       []byte("e3"),
-					Document: []byte(`{"time_us":3,"kind":"share"}`),
+					Document: []byte(`{"time_us":3,"kind":"share","did":"d3"}`),
 				}})
 				if err != nil {
 					t.Fatalf("EncodeCollectionInsertBatchByIDPayload: %v", err)
@@ -1141,7 +1141,7 @@ func TestCollectionCommandWALReplayMutationsBypassOpenProfileGate(t *testing.T) 
 			},
 			verify: func(t *testing.T, col *Collection) {
 				t.Helper()
-				assertCollectionDocument(t, col, "e3", `{"time_us":3,"kind":"share"}`)
+				assertCollectionDocument(t, col, "e3", `{"time_us":3,"kind":"share","did":"d3"}`)
 			},
 		},
 		{
@@ -1152,7 +1152,7 @@ func TestCollectionCommandWALReplayMutationsBypassOpenProfileGate(t *testing.T) 
 				t.Helper()
 				payload, err := commitlog.EncodeCollectionUpdateBatchByIDPayload("events", []commitlog.CollectionDocument{{
 					ID:       []byte("e1"),
-					Document: []byte(`{"time_us":10,"kind":"edited"}`),
+					Document: []byte(`{"time_us":10,"kind":"edited","did":"d1"}`),
 				}})
 				if err != nil {
 					t.Fatalf("EncodeCollectionUpdateBatchByIDPayload: %v", err)
@@ -1161,7 +1161,7 @@ func TestCollectionCommandWALReplayMutationsBypassOpenProfileGate(t *testing.T) 
 			},
 			verify: func(t *testing.T, col *Collection) {
 				t.Helper()
-				assertCollectionDocument(t, col, "e1", `{"time_us":10,"kind":"edited"}`)
+				assertCollectionDocument(t, col, "e1", `{"time_us":10,"kind":"edited","did":"d1"}`)
 			},
 		},
 		{
@@ -1399,8 +1399,8 @@ func prepareDurableColumnStoreCommandReplayDir(t *testing.T) (string, uint64) {
 		t.Fatalf("OpenCollection setup: %v", err)
 	}
 	if _, err := col.InsertBatch([][]byte{[]byte("e1"), []byte("e2")}, [][]byte{
-		[]byte(`{"time_us":1,"kind":"like"}`),
-		[]byte(`{"time_us":2,"kind":"post"}`),
+		[]byte(`{"time_us":1,"kind":"like","did":"d1"}`),
+		[]byte(`{"time_us":2,"kind":"post","did":"d2"}`),
 	}); err != nil {
 		_ = d.Close()
 		t.Fatalf("InsertBatch setup: %v", err)

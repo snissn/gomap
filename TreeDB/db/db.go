@@ -1631,6 +1631,12 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		db.Close()
 		return nil, err
 	}
+	if opts.CommandWAL {
+		if err := db.installCommandWALValueLogAppender(); err != nil {
+			db.Close()
+			return nil, err
+		}
+	}
 
 	db.pruner.Start(db, pruneWorkerOptions{
 		enabled:     !opts.DisableBackgroundPrune,

@@ -286,7 +286,7 @@ func replayCommandWALIntoBackend(db *DB, segments []logSegment, maxSegmentBytes 
 		}
 		db.SetValueLogAppender(inlineAppender)
 		valueLogAppenderInstalled = true
-		db.SetLeafPageLog(inlineAppender)
+		db.SetLeafPageLog(replayInlineLeafPageLog{appender: inlineAppender})
 		leafPageLogInstalled = true
 		return ridMap, inlineAppender, nil
 	}
@@ -651,7 +651,7 @@ func replayCommitLogSegments(db *DB, segments []logSegment, ridMap map[uint64]pa
 	}
 	defer func() { _ = inlineAppender.close() }()
 	if db != nil && db.indexOuterLeavesInValueLog {
-		db.SetLeafPageLog(inlineAppender)
+		db.SetLeafPageLog(replayInlineLeafPageLog{appender: inlineAppender})
 	}
 	for _, batch := range legacyBatches {
 		if err := applyCommitBatch(db, batch.records, ridMap, inlineAppender); err != nil {
@@ -747,9 +747,7 @@ func newReplayInlineAppender(db *DB, segments []logSegment, ridMap map[uint64]pa
 	}
 	layout := resolveStorageLayout(db.dir)
 	writer := newRewriteWriter(layout.valueVLogDir, 0, maxLane0Seq, maxSegmentBytes)
-	if db.indexOuterLeavesInValueLog {
-		writer.ConfigureLeafLog(layout.leafVLogDir, rewriteLeafLogLaneID, maxRewriteLaneSeq(segments, rewriteLeafLogLaneID))
-	}
+	writer.ConfigureLeafLog(layout.leafVLogDir, rewriteLeafLogLaneID, maxRewriteLaneSeq(segments, rewriteLeafLogLaneID))
 	writer.blockCompression = db.valueLogCompression != ValueLogCompressionOff
 	writer.blockCodec = valuelogBlockCodecFromDB(db.valueLogBlockCodec)
 	writer.leafBlockCodec = leafPageBlockCodecFromOptions(db.valueLogCompression, db.valueLogAutoPolicy, db.valueLogBlockCodec, db.indexOuterLeavesInValueLog)
@@ -831,7 +829,7 @@ func (a *replayInlineAppender) CurrentValueLogSegment() (string, uint32, bool) {
 	if a == nil || a.writer == nil {
 		return "", 0, false
 	}
-	return a.writer.CurrentValueLogSegment()
+	return a.writer.currentPrimaryValueLogSegment()
 }
 
 func (a *replayInlineAppender) syncIfDirty() error {
@@ -855,6 +853,45 @@ func (a *replayInlineAppender) close() error {
 	a.writer = nil
 	a.dirty = false
 	return nil
+}
+
+type replayInlineLeafPageLog struct {
+	appender *replayInlineAppender
+}
+
+func (l replayInlineLeafPageLog) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, error) {
+	if l.appender == nil {
+		return page.LeafLogPtr{}, fmt.Errorf("commitlog: replay leaf-page log unavailable")
+	}
+	return l.appender.AppendLeafPage(leafPage)
+}
+
+func (l replayInlineLeafPageLog) Flush() error {
+	if l.appender == nil {
+		return nil
+	}
+	return l.appender.Flush()
+}
+
+func (l replayInlineLeafPageLog) Sync() error {
+	if l.appender == nil {
+		return nil
+	}
+	return l.appender.Sync()
+}
+
+func (l replayInlineLeafPageLog) CurrentValueLogSegment() (string, uint32, bool) {
+	if l.appender == nil || l.appender.writer == nil {
+		return "", 0, false
+	}
+	return l.appender.writer.currentLeafValueLogSegment()
+}
+
+func (l replayInlineLeafPageLog) LastLeafPageRecordLength() uint32 {
+	if l.appender == nil {
+		return 0
+	}
+	return l.appender.LastLeafPageRecordLength()
 }
 
 func applyCommitBatch(db *DB, records []commitlog.Record, ridMap map[uint64]page.ValuePtr, inlineAppender *replayInlineAppender) error {

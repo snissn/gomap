@@ -67,3 +67,29 @@ func (db *DB) AppendValueLogValues(values [][]byte) ([]page.ValuePtr, error) {
 	}
 	return appender.AppendValues(values)
 }
+
+func (db *DB) installCommandWALValueLogAppender() error {
+	if db == nil {
+		return ErrClosed
+	}
+	segments, err := listRecoverySegments(db.dir)
+	if err != nil {
+		return err
+	}
+	ridMap, err := scanValueLogSegments(segments, db.valueLogDictLookup)
+	if err != nil {
+		return err
+	}
+	appender, err := newReplayInlineAppender(db, segments, ridMap)
+	if err != nil {
+		return err
+	}
+	db.SetValueLogAppender(appender)
+	db.SetLeafPageLog(replayInlineLeafPageLog{appender: appender})
+	db.RegisterCloseHook(func() error {
+		db.SetLeafPageLog(nil)
+		db.SetValueLogAppender(nil)
+		return appender.close()
+	})
+	return nil
+}

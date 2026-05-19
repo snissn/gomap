@@ -121,17 +121,14 @@ func TestColumnPublishPlanUsesFixedWidthAssetBytesM10A(t *testing.T) {
 	}
 }
 
-func TestColumnPublishPlanAllowsZeroAssetChecksumM10A(t *testing.T) {
+func TestColumnPublishPlanRejectsZeroAssetChecksumM12A(t *testing.T) {
 	asset := testColumnPublishPreparedAssetM10A()
 	asset.Ref.Checksum = 0
 	identity := ColumnManifestIdentity{Generation: 7, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0xfeedbeef}
 
-	plan, err := BuildColumnPublishPlan(testColumnPublishPlanInputM10A(identity, asset))
-	if err != nil {
-		t.Fatalf("BuildColumnPublishPlan zero asset checksum: %v", err)
-	}
-	if len(plan.PreparedAssets) != 1 || plan.PreparedAssets[0].Ref.Checksum != 0 {
-		t.Fatalf("zero asset checksum was not preserved: %+v", plan.PreparedAssets)
+	_, err := BuildColumnPublishPlan(testColumnPublishPlanInputM10A(identity, asset))
+	if err == nil || !strings.Contains(err.Error(), "checksum") {
+		t.Fatalf("BuildColumnPublishPlan zero asset checksum err=%v want checksum rejection", err)
 	}
 }
 
@@ -496,10 +493,12 @@ func TestColumnPublishPlanRejectsPreparedAssetByteOverflowM10A(t *testing.T) {
 	asset := testColumnPublishPreparedAssetM10A()
 	hugeAsset := asset
 	hugeAsset.Ref.FileID = 8
+	hugeAsset.Ref.PartID = 2
 	hugeAsset.Ref.Length = math.MaxInt64
 	hugeAsset.Bytes = math.MaxInt64
 	oneByteAsset := asset
 	oneByteAsset.Ref.FileID = 9
+	oneByteAsset.Ref.PartID = 3
 	oneByteAsset.Ref.Length = 1
 	oneByteAsset.Bytes = 1
 
@@ -571,6 +570,7 @@ func TestColumnPublishPlanReportsClosureAssetValidationBeforeByteSumM10A(t *test
 	invalid.Bytes = math.MaxInt64
 	overflow := asset
 	overflow.Ref.FileID = 8
+	overflow.Ref.PartID = 2
 	overflow.Ref.Offset = math.MaxInt64
 	overflow.Ref.Length = 1
 	overflow.Bytes = 1
@@ -597,6 +597,7 @@ func TestColumnPublishPlanAllowsReorderedClosurePreparedAssetsM10A(t *testing.T)
 	asset := testColumnPublishPreparedAssetM10A()
 	second := asset
 	second.Ref.FileID = 8
+	second.Ref.PartID = 2
 	second.Ref.Offset += asset.Bytes
 	second.PublishID++
 	second.GenerationID++
@@ -1827,11 +1828,14 @@ func mustSumColumnPreparedAssetBytes(t testing.TB, assets []ColumnPreparedAsset)
 func testColumnPublishPreparedAssetM10A() ColumnPreparedAsset {
 	return ColumnPreparedAsset{
 		Ref: ColumnAssetRef{
-			Kind:     ColumnAssetKindTCS1PartImage,
-			FileID:   7,
-			Offset:   4096,
-			Length:   8192,
-			Checksum: 0xdecafbad,
+			Kind:       ColumnAssetKindTCS1PartImage,
+			Namespace:  "events/column-assets",
+			Generation: 7,
+			PartID:     1,
+			FileID:     7,
+			Offset:     4096,
+			Length:     8192,
+			Checksum:   0xdecafbad,
 		},
 		Bytes:        8192,
 		PublishID:    3,

@@ -408,8 +408,15 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 	if err != nil {
 		return "", fmt.Errorf("column_store: manifest/control byte accounting: %w", err)
 	}
+	columnAssetBytes, err := columnStoreSuiteColumnAssetUsage(dataDir)
+	if err != nil {
+		return "", fmt.Errorf("column_store: column asset byte accounting: %w", err)
+	}
+	columnAssetBytesNote := ""
+	if columnAssetBytes == 0 {
+		columnAssetBytesNote = "M12A expected isolated physical column assets; zero bytes means no column assets were published"
+	}
 	retainedPayloadBytes := sourceBytes
-	columnAssetBytes := int64(0)
 	totalReconstructableBytes := retainedPayloadBytes + columnAssetBytes + manifestControlBytes
 	report := columnStoreSuiteReport{
 		GeneratedAt:            time.Now().UTC().Format(time.RFC3339),
@@ -430,9 +437,9 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 		ByteAccounting: columnStoreByteAccounting{
 			SourceDocumentBytes:             sourceBytes,
 			RetainedPayloadBytes:            retainedPayloadBytes,
-			RetainedPayloadBytesNote:        "M11B retains the source JSONBench payload as the reconstructable row baseline; compressed retained payload accounting is future work",
+			RetainedPayloadBytesNote:        "M12A retains the source JSONBench payload as the reconstructable row baseline; retained-payload stripping is a later milestone",
 			ColumnAssetBytes:                columnAssetBytes,
-			ColumnAssetBytesNote:            "not measured in M11B because physical column assets are not published yet",
+			ColumnAssetBytesNote:            columnAssetBytesNote,
 			ManifestControlBytes:            manifestControlBytes,
 			ManifestControlMissing:          manifestControlMissing,
 			CommandWALBytesBeforeCheckpoint: commandWALBytesBeforeCheckpoint,
@@ -447,8 +454,8 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 			ManifestRoot:                    manifestIdentity.ManifestRoot,
 			SchemaHash:                      manifestIdentity.SchemaHash,
 		},
-		ProductionScope:        "production column-enabled TreeDB collection manifest/control-plane path plus M11B planner diagnostics",
-		PhysicalColumnQuery:    "physical column assets/scanners are not implemented in M11B; serial/aggregate/parallel physical labels fail closed through the planner",
+		ProductionScope:        "production column-enabled TreeDB collection manifest/control-plane path plus M12A isolated physical column asset writer",
+		PhysicalColumnQuery:    "M12A publishes physical column assets but physical scanners are not implemented yet; serial/aggregate/parallel physical labels fail closed through the planner",
 		BenchmarkOnlyRelaxed:   false,
 		StageSeparatedBoundary: "fixture generation, collection create, insert, checkpoint, reopen/recovery, planner, scan, reduce, and parity hash stages are timed separately for the forced execution label",
 	}
@@ -1076,9 +1083,9 @@ func columnStoreSuitePlanRequest(name string, rows int, forceKind collections.Co
 		EstimatedRows:         rows,
 		ForceKind:             forceKind,
 		Capabilities: collections.ColumnQueryPlannerCapabilities{
-			// M11B deliberately has no physical column assets yet; this keeps
-			// recovery-authoritative physical planner gates unreachable until
-			// a later physical-asset scanner milestone wires real assets.
+			// M12A publishes physical column assets but deliberately has no
+			// scanner yet; keep physical planner gates unreachable until a
+			// later scanner milestone wires real asset reads.
 			SerialColumnScan:       true,
 			AggregateMetadata:      true,
 			ParallelColumnScan:     true,
@@ -1426,6 +1433,18 @@ func columnStoreSuiteDirUsage(root string) (int64, int, error) {
 		return 0, 0, err
 	}
 	return bytes, files, nil
+}
+
+func columnStoreSuiteColumnAssetUsage(root string) (int64, error) {
+	assetRoot := backenddb.ColumnAssetRootDirPath(root)
+	bytes, _, err := columnStoreSuiteDirUsage(assetRoot)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	return bytes, nil
 }
 
 func columnStoreSuiteManifestControlUsage(root string) (int64, []string, error) {

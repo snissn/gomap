@@ -1,0 +1,584 @@
+package collections
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+
+	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/page"
+)
+
+var (
+	columnPhysicalAssetBenchBytes []byte
+	columnPhysicalAssetBenchRows  []columnDeclaredRow
+	columnPhysicalAssetBenchAsset columnPhysicalAsset
+	columnPhysicalAssetBenchRef   ColumnAssetRef
+)
+
+func TestColumnPhysicalAssetCodecRoundTripM12A(t *testing.T) {
+	cfg := testColumnStoreConfig(nil)
+	normalized, err := normalizeColumnStoreConfig("events", cfg)
+	if err != nil {
+		t.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+	rows, err := extractColumnDeclaredRowsFromJSONDocuments(*normalized, []columnWriteDocument{
+		{ID: []byte("e1"), Document: []byte(`{"time_us":1,"kind":"like","did":"d1","extra":"ignored"}`)},
+		{ID: []byte("e2"), Document: []byte(`{"time_us":2,"kind":"post","did":"d2"}`)},
+	})
+	if err != nil {
+		t.Fatalf("extractColumnDeclaredRowsFromJSONDocuments: %v", err)
+	}
+	if len(rows) != 2 || len(rows[0].Values) != len(normalized.Columns) {
+		t.Fatalf("unexpected extracted rows: %+v", rows)
+	}
+
+	encoded, summary, err := encodeColumnPhysicalAsset(columnPhysicalAssetEncodeInput{
+		Collection:        "events",
+		Namespace:         normalized.AssetManager.Namespace,
+		Generation:        7,
+		PartID:            3,
+		AppliedCommandLSN: 101,
+		Operation:         ColumnPublishOperationInsert,
+		SchemaHash:        normalized.SchemaHash,
+		Columns:           normalized.Columns,
+		Rows:              rows,
+	})
+	if err != nil {
+		t.Fatalf("encodeColumnPhysicalAsset: %v", err)
+	}
+	if len(encoded) == 0 || summary.RowCount != 2 || summary.ColumnCount != 3 || summary.PayloadBytes != int64(len(encoded)) {
+		t.Fatalf("unexpected asset summary=%+v len=%d", summary, len(encoded))
+	}
+
+	decoded, err := decodeColumnPhysicalAsset(encoded)
+	if err != nil {
+		t.Fatalf("decodeColumnPhysicalAsset: %v", err)
+	}
+	if decoded.Header.Collection != "events" || decoded.Header.Namespace != normalized.AssetManager.Namespace || decoded.Header.Generation != 7 || decoded.Header.PartID != 3 {
+		t.Fatalf("unexpected decoded header: %+v", decoded.Header)
+	}
+	if got := decoded.Rows[0].Values[0].Int64; got != 1 {
+		t.Fatalf("time_us row0=%d want 1", got)
+	}
+	if got := decoded.Rows[1].Values[1].String; got != "post" {
+		t.Fatalf("kind row1=%q want post", got)
+	}
+
+	ref := ColumnAssetRef{
+		Kind:       ColumnAssetKindTCS1PartImage,
+		Namespace:  normalized.AssetManager.Namespace,
+		Generation: 7,
+		PartID:     3,
+		FileID:     9,
+		Offset:     4096,
+		Length:     int64(len(encoded)),
+		Checksum:   page.Checksum(encoded),
+	}
+	if err := validateColumnPhysicalAssetForManifest(encoded, ref, *normalized); err != nil {
+		t.Fatalf("validateColumnPhysicalAssetForManifest: %v", err)
+	}
+	wrongSchema := *normalized
+	wrongSchema.Columns = append([]ColumnStoreColumn(nil), normalized.Columns...)
+	wrongSchema.Columns[0].Path = "wrong_time_us"
+	if err := validateColumnPhysicalAssetForManifest(encoded, ref, wrongSchema); err == nil || !strings.Contains(err.Error(), "column[0]") {
+		t.Fatalf("validate wrong schema err=%v want column mismatch failure", err)
+	}
+	ref.Namespace = "other/column-assets"
+	if err := validateColumnPhysicalAssetForManifest(encoded, ref, *normalized); err == nil || !strings.Contains(err.Error(), "namespace") {
+		t.Fatalf("validate wrong namespace err=%v want namespace failure", err)
+	}
+	corrupt := append([]byte(nil), encoded...)
+	corrupt[len(corrupt)-1] ^= 0x7f
+	ref.Namespace = normalized.AssetManager.Namespace
+	if err := validateColumnPhysicalAssetForManifest(corrupt, ref, *normalized); err == nil || !strings.Contains(err.Error(), "checksum") {
+		t.Fatalf("validate corrupt asset err=%v want checksum failure", err)
+	}
+}
+
+func TestColumnAssetManagerWritesIsolatedSegmentAndValidatesM12A(t *testing.T) {
+	cfg := testColumnStoreConfig(nil)
+	normalized, err := normalizeColumnStoreConfig("events", cfg)
+	if err != nil {
+		t.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+	rows, err := extractColumnDeclaredRowsFromJSONDocuments(*normalized, []columnWriteDocument{
+		{ID: []byte("e1"), Document: []byte(`{"time_us":1,"kind":"like","did":"d1","extra":"ignored"}`)},
+	})
+	if err != nil {
+		t.Fatalf("extractColumnDeclaredRowsFromJSONDocuments: %v", err)
+	}
+	encoded, _, err := encodeColumnPhysicalAsset(columnPhysicalAssetEncodeInput{
+		Collection:        "events",
+		Namespace:         normalized.AssetManager.Namespace,
+		Generation:        7,
+		PartID:            3,
+		AppliedCommandLSN: 101,
+		Operation:         ColumnPublishOperationInsert,
+		SchemaHash:        normalized.SchemaHash,
+		Columns:           normalized.Columns,
+		Rows:              rows,
+	})
+	if err != nil {
+		t.Fatalf("encodeColumnPhysicalAsset: %v", err)
+	}
+
+	root := backenddb.ColumnAssetRootDirPath(t.TempDir())
+	ref, err := writeColumnPhysicalAssetToManager(root, *normalized, encoded, 7, 3)
+	if err != nil {
+		t.Fatalf("writeColumnPhysicalAssetToManager: %v", err)
+	}
+	if ref.Namespace != normalized.AssetManager.Namespace || ref.Generation != 7 || ref.PartID != 3 || ref.FileID == 0 || ref.Length != int64(len(encoded)) || ref.Checksum == 0 {
+		t.Fatalf("unexpected ref: %+v", ref)
+	}
+	assetPath, err := columnAssetSegmentPath(root, ref)
+	if err != nil {
+		t.Fatalf("columnAssetSegmentPath: %v", err)
+	}
+	wantDir := filepath.Join(root, "events", "column-assets", "assets", "segments")
+	if filepath.Dir(assetPath) != wantDir {
+		t.Fatalf("asset path=%q want dir %q", assetPath, wantDir)
+	}
+	if strings.Contains(assetPath, "value_vlog") || strings.Contains(assetPath, "leaf_vlog") {
+		t.Fatalf("column asset path must be isolated from value/leaf logs: %q", assetPath)
+	}
+
+	raw, err := readColumnPhysicalAssetFromManager(root, ref)
+	if err != nil {
+		t.Fatalf("readColumnPhysicalAssetFromManager: %v", err)
+	}
+	if err := validateColumnPhysicalAssetForManifest(raw, ref, *normalized); err != nil {
+		t.Fatalf("validateColumnPhysicalAssetForManifest: %v", err)
+	}
+
+	file, err := os.OpenFile(assetPath, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatalf("OpenFile corrupt target: %v", err)
+	}
+	if _, err := file.WriteAt([]byte{raw[0] ^ 0x7f}, ref.Offset); err != nil {
+		_ = file.Close()
+		t.Fatalf("WriteAt corrupt target: %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("Close corrupt target: %v", err)
+	}
+	if _, err := readColumnPhysicalAssetFromManager(root, ref); err == nil || !strings.Contains(err.Error(), "checksum") {
+		t.Fatalf("read corrupt asset err=%v want checksum failure", err)
+	}
+}
+
+func TestColumnAssetManagerConcurrentWritesKeepOffsetsStableM12A(t *testing.T) {
+	cfg := testColumnStoreConfig(nil)
+	normalized, err := normalizeColumnStoreConfig("events", cfg)
+	if err != nil {
+		t.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+	root := backenddb.ColumnAssetRootDirPath(t.TempDir())
+	const writers = 16
+	refs := make([]ColumnAssetRef, writers)
+	payloads := make([][]byte, writers)
+	var wg sync.WaitGroup
+	errs := make(chan error, writers)
+	for i := 0; i < writers; i++ {
+		i := i
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			rows, err := extractColumnDeclaredRowsFromJSONDocuments(*normalized, []columnWriteDocument{
+				{ID: []byte(fmt.Sprintf("e%d", i)), Document: []byte(fmt.Sprintf(`{"time_us":%d,"kind":"like","did":"d%d"}`, i, i))},
+			})
+			if err != nil {
+				errs <- err
+				return
+			}
+			encoded, _, err := encodeColumnPhysicalAsset(columnPhysicalAssetEncodeInput{
+				Collection:        "events",
+				Namespace:         normalized.AssetManager.Namespace,
+				Generation:        uint64(i + 1),
+				PartID:            1,
+				AppliedCommandLSN: uint64(i + 1),
+				Operation:         ColumnPublishOperationInsert,
+				SchemaHash:        normalized.SchemaHash,
+				Columns:           normalized.Columns,
+				Rows:              rows,
+			})
+			if err != nil {
+				errs <- err
+				return
+			}
+			ref, err := writeColumnPhysicalAssetToManager(root, *normalized, encoded, uint64(i+1), 1)
+			if err != nil {
+				errs <- err
+				return
+			}
+			payloads[i] = encoded
+			refs[i] = ref
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent write: %v", err)
+		}
+	}
+	seenOffsets := make(map[int64]bool, writers)
+	for i, ref := range refs {
+		if seenOffsets[ref.Offset] {
+			t.Fatalf("duplicate offset for ref[%d]=%+v", i, ref)
+		}
+		seenOffsets[ref.Offset] = true
+		raw, err := readColumnPhysicalAssetFromManager(root, ref)
+		if err != nil {
+			t.Fatalf("read ref[%d]=%+v: %v", i, ref, err)
+		}
+		if string(raw) != string(payloads[i]) {
+			t.Fatalf("payload[%d] read from offset=%d does not match original", i, ref.Offset)
+		}
+	}
+}
+
+func TestColumnDeclaredExtractionJSONBenchShapeM12A(t *testing.T) {
+	cfg := &ColumnStoreConfig{
+		Enabled: true,
+		Columns: []ColumnStoreColumn{
+			{Name: "time_us", Path: "time_us", ValueType: ColumnStoreValueInt64},
+			{Name: "kind", Path: "kind", ValueType: ColumnStoreValueString, Dictionary: true},
+			{Name: "did", Path: "did", ValueType: ColumnStoreValueString, Dictionary: true},
+			{Name: "repo_id", Path: "commit.repo_id", ValueType: ColumnStoreValueInt64},
+			{Name: "author_time_us", Path: "commit.author.time_us", ValueType: ColumnStoreValueInt64},
+		},
+		SortKey: []ColumnSortKey{{Column: "time_us"}},
+	}
+	normalized, err := normalizeColumnStoreConfig("events", cfg)
+	if err != nil {
+		t.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+	rows, err := extractColumnDeclaredRowsFromJSONDocuments(*normalized, []columnWriteDocument{{
+		ID:       []byte("evt-1"),
+		Document: []byte(`{"time_us":11,"kind":"commit","did":"did:plc:1","commit":{"repo_id":42,"author":{"time_us":9}},"payload":{"ignored":true}}`),
+	}})
+	if err != nil {
+		t.Fatalf("extractColumnDeclaredRowsFromJSONDocuments: %v", err)
+	}
+	if len(rows) != 1 || len(rows[0].Values) != len(normalized.Columns) {
+		t.Fatalf("unexpected rows: %+v", rows)
+	}
+	if got := rows[0].Values[0].Int64; got != 11 {
+		t.Fatalf("time_us=%d want 11", got)
+	}
+	if got := rows[0].Values[3].Int64; got != 42 {
+		t.Fatalf("commit.repo_id=%d want 42", got)
+	}
+	if got := rows[0].Values[4].Int64; got != 9 {
+		t.Fatalf("commit.author.time_us=%d want 9", got)
+	}
+}
+
+func TestColumnManifestBinaryRecordsAndGCEnumerableAssetRefsM12A(t *testing.T) {
+	cfg := testColumnStoreConfig(nil)
+	normalized, err := normalizeColumnStoreConfig("events", cfg)
+	if err != nil {
+		t.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+	ref := ColumnAssetRef{
+		Kind:       ColumnAssetKindTCS1PartImage,
+		Namespace:  normalized.AssetManager.Namespace,
+		Generation: 5,
+		PartID:     1,
+		FileID:     4,
+		Offset:     8192,
+		Length:     1024,
+		Checksum:   0xdecafbad,
+	}
+	prepared := ColumnPublishPreparedAssets{
+		Assets: []ColumnPreparedAsset{{
+			Ref:          ref,
+			Bytes:        ref.Length,
+			PublishID:    1,
+			GenerationID: ref.Generation,
+			Reason:       "insert",
+		}},
+		RowCount:           12,
+		CommandBytes:       4096,
+		RowRemainderBytes:  2048,
+		ColumnPayloadBytes: ref.Length,
+	}
+	manifest, err := encodeColumnManifestForWrite(ColumnPublishManifestEncodeInput{
+		Collection:        "events",
+		ColumnStore:       *normalized,
+		Operation:         ColumnPublishOperationInsert,
+		AppliedCommandLSN: 99,
+		Prepared:          prepared,
+	})
+	if err != nil {
+		t.Fatalf("encodeColumnManifestForWrite: %v", err)
+	}
+	if manifest.ManifestBytes <= columnManifestIdentityRecordSize {
+		t.Fatalf("ManifestBytes=%d want binary manifest beyond identity record", manifest.ManifestBytes)
+	}
+	if len(manifest.Records) < 2 {
+		t.Fatalf("manifest records=%d want header + part records", len(manifest.Records))
+	}
+	snapshot, err := decodeColumnManifestRecords(manifest.Records)
+	if err != nil {
+		t.Fatalf("decodeColumnManifestRecords: %v", err)
+	}
+	if snapshot.Generation != 5 || snapshot.AppliedCommandLSN != 99 || snapshot.RowCount != 12 || len(snapshot.Parts) != 1 {
+		t.Fatalf("unexpected manifest snapshot: %+v", snapshot)
+	}
+	if snapshot.Parts[0].AssetRef != ref {
+		t.Fatalf("manifest asset ref=%+v want %+v", snapshot.Parts[0].AssetRef, ref)
+	}
+
+	delta := ColumnManifestRootDelta{
+		RootName:       collectionColumnManifestRootName("events"),
+		BaseRootID:     44,
+		StoragePolicy:  RootStorageFast,
+		Identity:       manifest.Identity,
+		IdentityRecord: encodeColumnManifestIdentityRecordArray(manifest.Identity),
+		Records:        manifest.Records,
+	}
+	ordered, err := delta.OrderedRootDeltaPublishInput()
+	if err != nil {
+		t.Fatalf("OrderedRootDeltaPublishInput: %v", err)
+	}
+	defer func() { _ = ordered.Iter.Close() }()
+	assetRefs, err := enumerateColumnManifestAssetRefs(ordered.Iter)
+	if err != nil {
+		t.Fatalf("enumerateColumnManifestAssetRefs: %v", err)
+	}
+	if len(assetRefs) != 1 || assetRefs[0] != ref {
+		t.Fatalf("enumerated refs=%+v want %+v", assetRefs, ref)
+	}
+	ordered.Iter.Seek(columnManifestPartRecordKey(ref.Generation, ref.PartID))
+	if !ordered.Iter.Valid() {
+		t.Fatal("missing asset part record")
+	}
+	value, ptr, flags := ordered.Iter.UnsafeEntry()
+	if flags != 0 {
+		t.Fatalf("asset part record flags=%#x want inline", flags)
+	}
+	if ptr.FileID != 0 || ptr.Offset != 0 || ptr.Length != 0 {
+		t.Fatalf("asset part record has pointer=%+v, want typed inline ColumnAssetRef only", ptr)
+	}
+	if len(value) == 0 {
+		t.Fatal("asset part record is empty")
+	}
+
+	batched, cleanup, err := delta.OrderedRootDeltaBatchPublishInput()
+	if err != nil {
+		t.Fatalf("OrderedRootDeltaBatchPublishInput: %v", err)
+	}
+	defer cleanup()
+	var sawPart bool
+	for _, entry := range batched.Delta.SortedEntries() {
+		if string(entry.Key) == string(columnManifestPartRecordKey(ref.Generation, ref.PartID)) {
+			sawPart = !entry.IsPtr && len(entry.Value) != 0
+		}
+	}
+	if !sawPart {
+		t.Fatalf("delta batch did not preserve inline manifest asset ref record")
+	}
+
+	corruptRecords := cloneColumnManifestRecords(manifest.Records)
+	for i := range corruptRecords {
+		if string(corruptRecords[i].key) == columnManifestHeaderRecordKey {
+			corruptRecords[i].value = append(corruptRecords[i].value, 0)
+		}
+	}
+	if _, err := decodeColumnManifestRecords(corruptRecords); err == nil || !strings.Contains(err.Error(), "trailing") {
+		t.Fatalf("decode corrupt manifest records err=%v want trailing-bytes failure", err)
+	}
+
+	badIdentity := manifest.Identity
+	badIdentity.Checksum++
+	badDelta := delta
+	badDelta.Identity = badIdentity
+	badDelta.IdentityRecord = encodeColumnManifestIdentityRecordArray(badIdentity)
+	badDelta.StoragePolicy = normalized.ManifestRoot.StoragePolicy
+	if err := validateColumnManifestRootDeltaForPlan(badDelta, delta.BaseRootID, *normalized, badIdentity); err == nil || !strings.Contains(err.Error(), "checksum") {
+		t.Fatalf("validate bad manifest checksum err=%v want checksum failure", err)
+	}
+}
+
+func TestColumnAssetRefRequiresNamespaceGenerationAndSegmentIDM12A(t *testing.T) {
+	ref := ColumnAssetRef{
+		Kind:       ColumnAssetKindTCS1PartImage,
+		Namespace:  "events/column-assets",
+		Generation: 1,
+		PartID:     1,
+		FileID:     1,
+		Offset:     128,
+		Length:     64,
+		Checksum:   1,
+	}
+	if err := validateColumnAssetRefForPlan(ref); err != nil {
+		t.Fatalf("validateColumnAssetRefForPlan valid ref: %v", err)
+	}
+	for name, mutate := range map[string]func(*ColumnAssetRef){
+		"namespace":  func(r *ColumnAssetRef) { r.Namespace = "" },
+		"generation": func(r *ColumnAssetRef) { r.Generation = 0 },
+		"part_id":    func(r *ColumnAssetRef) { r.PartID = 0 },
+		"segment_id": func(r *ColumnAssetRef) { r.FileID = 0 },
+		"checksum":   func(r *ColumnAssetRef) { r.Checksum = 0 },
+	} {
+		t.Run(name, func(t *testing.T) {
+			bad := ref
+			mutate(&bad)
+			if err := validateColumnAssetRefForPlan(bad); err == nil {
+				t.Fatalf("validateColumnAssetRefForPlan accepted bad %s ref: %+v", name, bad)
+			}
+		})
+	}
+}
+
+func TestColumnDeclaredExtractionFailsClosedOnUnsupportedShapeM12A(t *testing.T) {
+	cfg := testColumnStoreConfig(nil)
+	normalized, err := normalizeColumnStoreConfig("events", cfg)
+	if err != nil {
+		t.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+	_, err = extractColumnDeclaredRowsFromJSONDocuments(*normalized, []columnWriteDocument{
+		{ID: []byte("e1"), Document: []byte(`{"time_us":"not-int","kind":"like","did":"d1"}`)},
+	})
+	if err == nil {
+		t.Fatal("extractColumnDeclaredRowsFromJSONDocuments accepted invalid declared int64")
+	}
+	if !errors.Is(err, ErrColumnDeclaredValueUnsupported) {
+		t.Fatalf("extract error=%v want ErrColumnDeclaredValueUnsupported", err)
+	}
+}
+
+func BenchmarkColumnDeclaredExtractionJSONM12A(b *testing.B) {
+	normalized, docs, docBytes := makeColumnPhysicalAssetBenchmarkDocs(b, 1024)
+	b.ReportAllocs()
+	b.SetBytes(docBytes)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		rows, err := extractColumnDeclaredRowsFromJSONDocuments(*normalized, docs)
+		if err != nil {
+			b.Fatal(err)
+		}
+		columnPhysicalAssetBenchRows = rows
+	}
+}
+
+func BenchmarkColumnPhysicalAssetEncodeM12A(b *testing.B) {
+	normalized, rows := makeColumnPhysicalAssetBenchmarkRows(b, 1024)
+	preview := makeColumnPhysicalAssetBenchmarkPayload(b, 1024)
+	b.ReportAllocs()
+	b.SetBytes(int64(len(preview)))
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		encoded, _, err := encodeColumnPhysicalAsset(columnPhysicalAssetEncodeInput{
+			Collection:        "events",
+			Namespace:         normalized.AssetManager.Namespace,
+			Generation:        uint64(i + 1),
+			PartID:            1,
+			AppliedCommandLSN: uint64(i + 1),
+			Operation:         ColumnPublishOperationInsert,
+			SchemaHash:        normalized.SchemaHash,
+			Columns:           normalized.Columns,
+			Rows:              rows,
+		})
+		if err != nil {
+			b.Fatal(err)
+		}
+		columnPhysicalAssetBenchBytes = encoded
+	}
+}
+
+func BenchmarkColumnPhysicalAssetDecodeM12A(b *testing.B) {
+	encoded := makeColumnPhysicalAssetBenchmarkPayload(b, 1024)
+	b.ReportAllocs()
+	b.SetBytes(int64(len(encoded)))
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		asset, err := decodeColumnPhysicalAsset(encoded)
+		if err != nil {
+			b.Fatal(err)
+		}
+		columnPhysicalAssetBenchAsset = asset
+	}
+}
+
+func BenchmarkColumnAssetManagerWriteM12A(b *testing.B) {
+	normalized, rows := makeColumnPhysicalAssetBenchmarkRows(b, 256)
+	encoded, _, err := encodeColumnPhysicalAsset(columnPhysicalAssetEncodeInput{
+		Collection:        "events",
+		Namespace:         normalized.AssetManager.Namespace,
+		Generation:        1,
+		PartID:            1,
+		AppliedCommandLSN: 1,
+		Operation:         ColumnPublishOperationInsert,
+		SchemaHash:        normalized.SchemaHash,
+		Columns:           normalized.Columns,
+		Rows:              rows,
+	})
+	if err != nil {
+		b.Fatal(err)
+	}
+	root := backenddb.ColumnAssetRootDirPath(b.TempDir())
+	b.ReportAllocs()
+	b.SetBytes(int64(len(encoded)))
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		ref, err := writeColumnPhysicalAssetToManager(root, *normalized, encoded, uint64(i+1), 1)
+		if err != nil {
+			b.Fatal(err)
+		}
+		columnPhysicalAssetBenchRef = ref
+	}
+}
+
+func makeColumnPhysicalAssetBenchmarkDocs(tb testing.TB, rows int) (*ColumnStoreConfig, []columnWriteDocument, int64) {
+	tb.Helper()
+	normalized, err := normalizeColumnStoreConfig("events", testColumnStoreConfig(nil))
+	if err != nil {
+		tb.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+	docs := make([]columnWriteDocument, rows)
+	var docBytes int64
+	for i := range docs {
+		id := []byte(fmt.Sprintf("e%09d", i))
+		doc := []byte(fmt.Sprintf(`{"time_us":%d,"kind":"kind_%d","did":"d%06d","payload":"ignored_%d"}`, i, i%8, i%1024, i))
+		docs[i] = columnWriteDocument{ID: id, Document: doc}
+		docBytes += int64(len(id) + len(doc))
+	}
+	return normalized, docs, docBytes
+}
+
+func makeColumnPhysicalAssetBenchmarkRows(tb testing.TB, rows int) (*ColumnStoreConfig, []columnDeclaredRow) {
+	tb.Helper()
+	normalized, docs, _ := makeColumnPhysicalAssetBenchmarkDocs(tb, rows)
+	extracted, err := extractColumnDeclaredRowsFromJSONDocuments(*normalized, docs)
+	if err != nil {
+		tb.Fatalf("extractColumnDeclaredRowsFromJSONDocuments: %v", err)
+	}
+	return normalized, extracted
+}
+
+func makeColumnPhysicalAssetBenchmarkPayload(tb testing.TB, rows int) []byte {
+	tb.Helper()
+	normalized, extracted := makeColumnPhysicalAssetBenchmarkRows(tb, rows)
+	encoded, _, err := encodeColumnPhysicalAsset(columnPhysicalAssetEncodeInput{
+		Collection:        "events",
+		Namespace:         normalized.AssetManager.Namespace,
+		Generation:        1,
+		PartID:            1,
+		AppliedCommandLSN: 1,
+		Operation:         ColumnPublishOperationInsert,
+		SchemaHash:        normalized.SchemaHash,
+		Columns:           normalized.Columns,
+		Rows:              extracted,
+	})
+	if err != nil {
+		tb.Fatalf("encodeColumnPhysicalAsset: %v", err)
+	}
+	return encoded
+}

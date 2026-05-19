@@ -19,6 +19,7 @@ type columnWritePublishInput struct {
 	baseRootIDs        map[string]uint64
 	commandWALIntent   *backenddb.CommandWALIntent
 	operation          ColumnPublishOperation
+	documents          []columnWriteDocument
 	rows               int
 	commandBytes       int64
 	rowRemainderBytes  int64
@@ -312,37 +313,92 @@ func (c *Collection) buildColumnPublishPlanForCommandWALContext(ctx backenddb.Co
 		AppliedCommandLSN:     ctx.AppliedCommandLSN,
 		BaseManifestRootID:    baseManifestRootID,
 		Hooks: ColumnPublishPlanHooks{
-			PrepareAssets: func(ColumnPublishAssetPrepareInput) (ColumnPublishPreparedAssets, error) {
-				return ColumnPublishPreparedAssets{
-					RowCount:           input.rows,
-					CommandBytes:       input.commandBytes,
-					RowRemainderBytes:  input.rowRemainderBytes,
-					ColumnPayloadBytes: input.columnPayloadBytes,
-				}, nil
+			PrepareAssets: func(hookInput ColumnPublishAssetPrepareInput) (ColumnPublishPreparedAssets, error) {
+				return c.prepareColumnPhysicalAssetsForCommand(input, hookInput)
 			},
 			EncodeManifest: encodeColumnManifestIdentityForWrite,
 		},
 	})
 }
 
+func (c *Collection) prepareColumnPhysicalAssetsForCommand(input columnWritePublishInput, hookInput ColumnPublishAssetPrepareInput) (ColumnPublishPreparedAssets, error) {
+	prepared := ColumnPublishPreparedAssets{
+		RowCount:           input.rows,
+		CommandBytes:       input.commandBytes,
+		RowRemainderBytes:  input.rowRemainderBytes,
+		ColumnPayloadBytes: input.columnPayloadBytes,
+	}
+	switch input.operation {
+	case ColumnPublishOperationInsert, ColumnPublishOperationUpdate:
+		if input.rows == 0 {
+			return prepared, nil
+		}
+		if len(input.documents) != input.rows {
+			return ColumnPublishPreparedAssets{}, fmt.Errorf("collections: column physical asset %s documents=%d rows=%d", input.operation, len(input.documents), input.rows)
+		}
+		if normalizedDocumentFormat(input.meta.Options.DocumentFormat) != DocumentFormatJSON {
+			return ColumnPublishPreparedAssets{}, fmt.Errorf("collections: column physical asset %s requires JSON document format in M12A, got %q", input.operation, input.meta.Options.DocumentFormat)
+		}
+		rows, err := extractColumnDeclaredRowsFromJSONDocuments(hookInput.ColumnStore, input.documents)
+		if err != nil {
+			return ColumnPublishPreparedAssets{}, err
+		}
+		generation := uint64(1)
+		if hookInput.CurrentManifest != nil {
+			generation = hookInput.CurrentManifest.Generation + 1
+		}
+		const partID = uint64(1)
+		encoded, summary, err := encodeColumnPhysicalAsset(columnPhysicalAssetEncodeInput{
+			Collection:        hookInput.Collection,
+			Namespace:         hookInput.ColumnStore.AssetManager.Namespace,
+			Generation:        generation,
+			PartID:            partID,
+			AppliedCommandLSN: hookInput.AppliedCommandLSN,
+			Operation:         hookInput.Operation,
+			SchemaHash:        hookInput.ColumnStore.SchemaHash,
+			Columns:           hookInput.ColumnStore.Columns,
+			Rows:              rows,
+		})
+		if err != nil {
+			return ColumnPublishPreparedAssets{}, err
+		}
+		ref, err := writeColumnPhysicalAssetToManager(c.db.ColumnAssetRootDir(), hookInput.ColumnStore, encoded, generation, partID)
+		if err != nil {
+			return ColumnPublishPreparedAssets{}, err
+		}
+		if err := validateColumnPhysicalAssetForManifest(encoded, ref, hookInput.ColumnStore); err != nil {
+			return ColumnPublishPreparedAssets{}, err
+		}
+		if prepared.CommandBytes == 0 {
+			prepared.CommandBytes = columnWriteDocumentsBytes(input.documents)
+		}
+		prepared.RowCount = summary.RowCount
+		prepared.ColumnPayloadBytes = summary.PayloadBytes
+		prepared.Assets = []ColumnPreparedAsset{{
+			Ref:          ref,
+			Bytes:        ref.Length,
+			PublishID:    hookInput.AppliedCommandLSN,
+			GenerationID: generation,
+			Reason:       string(input.operation),
+		}}
+		return prepared, nil
+	case ColumnPublishOperationDelete:
+		return prepared, nil
+	default:
+		return ColumnPublishPreparedAssets{}, fmt.Errorf("collections: unsupported column publish operation %q", input.operation)
+	}
+}
+
+func columnWriteDocumentsBytes(docs []columnWriteDocument) int64 {
+	var total int64
+	for _, doc := range docs {
+		total += int64(len(doc.ID) + len(doc.Document))
+	}
+	return total
+}
+
 func encodeColumnManifestIdentityForWrite(input ColumnPublishManifestEncodeInput) (ColumnPublishManifestEncodeResult, error) {
-	if err := validateColumnPublishPreparedAssets(input.Prepared); err != nil {
-		return ColumnPublishManifestEncodeResult{}, err
-	}
-	generation := uint64(1)
-	if input.CurrentManifest != nil {
-		generation = input.CurrentManifest.Generation + 1
-	}
-	identity := ColumnManifestIdentity{
-		Generation: generation,
-		Format:     columnManifestFormatTCS1,
-		Version:    columnManifestIdentityVersion,
-		Checksum:   checksumColumnManifestIdentityForWrite(input, generation),
-	}
-	return ColumnPublishManifestEncodeResult{
-		Identity:      identity,
-		ManifestBytes: columnManifestIdentityRecordSize,
-	}, nil
+	return encodeColumnManifestForWrite(input)
 }
 
 func checksumColumnManifestIdentityForWrite(input ColumnPublishManifestEncodeInput, generation uint64) uint64 {
@@ -362,6 +418,9 @@ func checksumColumnManifestIdentityForWrite(input ColumnPublishManifestEncodeInp
 	writeHashUint64(&d, uint64(input.Prepared.ColumnPayloadBytes))
 	for _, asset := range input.Prepared.Assets {
 		writeHashString(&d, string(asset.Ref.Kind))
+		writeHashString(&d, asset.Ref.Namespace)
+		writeHashUint64(&d, asset.Ref.Generation)
+		writeHashUint64(&d, asset.Ref.PartID)
 		writeHashUint64(&d, uint64(asset.Ref.FileID))
 		writeHashUint64(&d, uint64(asset.Ref.Offset))
 		writeHashUint64(&d, uint64(asset.Ref.Length))

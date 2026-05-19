@@ -7,24 +7,27 @@ import (
 )
 
 const (
-	walDirName       = "wal"
-	valueVLogDirName = "value_vlog"
-	leafVLogDirName  = "leaf_vlog"
+	walDirName         = "wal"
+	valueVLogDirName   = "value_vlog"
+	leafVLogDirName    = "leaf_vlog"
+	columnAssetDirName = "column_assets"
 )
 
 type storageLayout struct {
-	rootDir      string
-	walDir       string
-	valueVLogDir string
-	leafVLogDir  string
+	rootDir        string
+	walDir         string
+	valueVLogDir   string
+	leafVLogDir    string
+	columnAssetDir string
 }
 
 func resolveStorageLayout(dir string) storageLayout {
 	return storageLayout{
-		rootDir:      dir,
-		walDir:       filepath.Join(dir, walDirName),
-		valueVLogDir: filepath.Join(dir, valueVLogDirName),
-		leafVLogDir:  filepath.Join(dir, leafVLogDirName),
+		rootDir:        dir,
+		walDir:         filepath.Join(dir, walDirName),
+		valueVLogDir:   filepath.Join(dir, valueVLogDirName),
+		leafVLogDir:    filepath.Join(dir, leafVLogDirName),
+		columnAssetDir: filepath.Join(dir, columnAssetDirName),
 	}
 }
 
@@ -40,9 +43,13 @@ func LeafLogDirPath(dir string) string {
 	return resolveStorageLayout(dir).leafVLogDir
 }
 
+func ColumnAssetRootDirPath(dir string) string {
+	return resolveStorageLayout(dir).columnAssetDir
+}
+
 func ensureStorageLayoutDirs(dir string) error {
 	layout := resolveStorageLayout(dir)
-	for _, path := range []string{layout.walDir, layout.valueVLogDir, layout.leafVLogDir} {
+	for _, path := range []string{layout.walDir, layout.valueVLogDir, layout.leafVLogDir, layout.columnAssetDir} {
 		if err := os.MkdirAll(path, 0o700); err != nil {
 			return err
 		}
