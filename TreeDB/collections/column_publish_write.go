@@ -377,7 +377,7 @@ func (c *Collection) publishRootDeltaBatchGroupWithoutColumn(ordered []backenddb
 }
 
 func (c *Collection) buildColumnPublishPlanForCommandWALContext(ctx backenddb.CommandWALPublishContext, input columnWritePublishInput, baseManifestRootID uint64) (ColumnPublishPlan, error) {
-	currentRecords, err := c.loadColumnManifestRecordsForPublish(baseManifestRootID)
+	currentRecords, err := c.loadColumnManifestRecordsForPublish(baseManifestRootID, input.meta.Name, *input.meta.Options.ColumnStore)
 	if err != nil {
 		return ColumnPublishPlan{}, err
 	}
@@ -399,18 +399,31 @@ func (c *Collection) buildColumnPublishPlanForCommandWALContext(ctx backenddb.Co
 	})
 }
 
-func (c *Collection) loadColumnManifestRecordsForPublish(rootID uint64) ([]columnManifestRecord, error) {
+func (c *Collection) loadColumnManifestRecordsForPublish(rootID uint64, collectionName string, cfg ColumnStoreConfig) ([]columnManifestRecord, error) {
 	if rootID == 0 {
 		return nil, nil
+	}
+	if cfg.ActiveManifest == nil {
+		return nil, errors.New("collections: column publish existing manifest root requires active manifest identity")
 	}
 	snap := c.db.AcquireSnapshot()
 	if snap == nil {
 		return nil, errCollectionDBNil
 	}
 	defer func() { _ = snap.Close() }()
-	records, err := loadColumnManifestRecordsFromRootForScan(snap, rootID)
+	if err := validateColumnManifestIdentityAtRoot(snap, rootID, *cfg.ActiveManifest); err != nil {
+		return nil, fmt.Errorf("collections: validate existing column manifest identity for publish: %w", err)
+	}
+	records, err := loadColumnManifestRecordsFromRoot(snap, rootID)
 	if err != nil {
 		return nil, fmt.Errorf("collections: load existing column manifest records: %w", err)
+	}
+	manifest, err := decodeColumnManifestRecords(records)
+	if err != nil {
+		return nil, fmt.Errorf("collections: decode existing column manifest records for publish: %w", err)
+	}
+	if err := validateColumnManifestSnapshot(manifest, records, cfg, *cfg.ActiveManifest, collectionName, "column publish"); err != nil {
+		return nil, err
 	}
 	return records, nil
 }

@@ -466,7 +466,7 @@ func (c *manifestCursor) bool() bool {
 
 func (c *manifestCursor) bytes() []byte {
 	value := c.bytesView()
-	if value == nil {
+	if c.err != nil {
 		return nil
 	}
 	return bytes.Clone(value)
