@@ -89,11 +89,15 @@ func (c *Collection) scanColumnPhysicalRows(req columnPhysicalScanRequest) (colu
 	if c.db == nil {
 		return columnPhysicalScanDiagnostics{}, errCollectionDBNil
 	}
-	c.catalogMu.RLock()
-	catalog := c.catalog
-	if catalog == nil {
-		c.catalogMu.RUnlock()
-		return columnPhysicalScanDiagnostics{}, errCollectionNotFound
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return columnPhysicalScanDiagnostics{}, errCollectionDBNil
+	}
+	defer func() { _ = snap.Close() }()
+
+	catalog, err := c.catalogForSnapshot(snap)
+	if err != nil {
+		return columnPhysicalScanDiagnostics{}, err
 	}
 	collectionName := catalog.meta.Name
 	rootName := collectionColumnManifestRootName(collectionName)
@@ -104,13 +108,7 @@ func (c *Collection) scanColumnPhysicalRows(req columnPhysicalScanRequest) (colu
 	if cfgPtr != nil {
 		cfg = cfgPtr.copy()
 	}
-	c.catalogMu.RUnlock()
 
-	snap := c.db.AcquireSnapshot()
-	if snap == nil {
-		return columnPhysicalScanDiagnostics{}, errCollectionDBNil
-	}
-	defer func() { _ = snap.Close() }()
 	return c.scanColumnPhysicalRowsAtSnapshot(snap, catalog, collectionName, rootID, cfg, columnStoreEnabled, req)
 }
 
@@ -206,7 +204,7 @@ func (c *Collection) scanColumnPhysicalRowsAtSnapshot(
 		}
 		rawScratch = raw
 		diag.PhysicalBytesScanned += int64(len(raw))
-		summary, err := scanColumnPhysicalAssetRowsWithManifestOperation(raw, ref, collectionName, cfg, projection, assetRef.Reason, req.Visitor)
+		summary, err := scanColumnPhysicalAssetRowsWithManifestOperation(raw, ref, collectionName, &cfg, projection, assetRef.Reason, req.Visitor)
 		if err != nil {
 			if req.RequireInsertOnly && errors.Is(err, errColumnPhysicalAssetManifestOperationMismatch) {
 				return diag, errColumnPhysicalQueryNeedsVisibility
@@ -235,15 +233,15 @@ func newColumnPhysicalScanProjection(cfg ColumnStoreConfig, projected []string) 
 			count:          len(cfg.Columns),
 		}, nil
 	}
-	seen := make(map[string]struct{}, len(projected))
 	for outIdx, name := range projected {
 		if name == "" {
 			return columnPhysicalScanProjection{}, errors.New("collections: physical column scan projection contains empty column")
 		}
-		if _, ok := seen[name]; ok {
-			return columnPhysicalScanProjection{}, fmt.Errorf("collections: physical column scan duplicate projected column %q", name)
+		for prev := 0; prev < outIdx; prev++ {
+			if projected[prev] == name {
+				return columnPhysicalScanProjection{}, fmt.Errorf("collections: physical column scan duplicate projected column %q", name)
+			}
 		}
-		seen[name] = struct{}{}
 		found := false
 		for colIdx, col := range cfg.Columns {
 			if col.Name == name {
@@ -433,10 +431,10 @@ func loadColumnManifestPlannerCapabilitiesForScan(snap *backenddb.Snapshot, root
 			if operation != ColumnPublishOperationInsert {
 				caps.MutationParts++
 			}
+			writeHashBytes(&d, key)
+			writeHashBytes(&d, value)
 			if keyGeneration == header.generation {
 				activeParts++
-				writeHashBytes(&d, key)
-				writeHashBytes(&d, value)
 			}
 		}
 		iter.Next()
@@ -522,7 +520,7 @@ func activeColumnManifestRecordsForScan(records []columnManifestRecord, generati
 			if err != nil {
 				return nil, err
 			}
-			if partGeneration == generation {
+			if partGeneration <= generation {
 				active = append(active, record)
 			}
 		}
@@ -675,11 +673,11 @@ func decodeColumnManifestPartRefForScan(raw []byte, expectedNamespace string) (C
 	return ref, reason, nil
 }
 
-func scanColumnPhysicalAssetRows(raw []byte, ref ColumnAssetRef, expectedCollection string, cfg ColumnStoreConfig, projection columnPhysicalScanProjection, visitor func(columnPhysicalScanRowView) error) (columnPhysicalAssetScanSummary, error) {
+func scanColumnPhysicalAssetRows(raw []byte, ref ColumnAssetRef, expectedCollection string, cfg *ColumnStoreConfig, projection columnPhysicalScanProjection, visitor func(columnPhysicalScanRowView) error) (columnPhysicalAssetScanSummary, error) {
 	return scanColumnPhysicalAssetRowsWithManifestOperation(raw, ref, expectedCollection, cfg, projection, "", visitor)
 }
 
-func scanColumnPhysicalAssetRowsWithManifestOperation(raw []byte, ref ColumnAssetRef, expectedCollection string, cfg ColumnStoreConfig, projection columnPhysicalScanProjection, expectedOperation ColumnPublishOperation, visitor func(columnPhysicalScanRowView) error) (columnPhysicalAssetScanSummary, error) {
+func scanColumnPhysicalAssetRowsWithManifestOperation(raw []byte, ref ColumnAssetRef, expectedCollection string, cfg *ColumnStoreConfig, projection columnPhysicalScanProjection, expectedOperation ColumnPublishOperation, visitor func(columnPhysicalScanRowView) error) (columnPhysicalAssetScanSummary, error) {
 	cur := manifestCursor{raw: raw}
 	if magic := cur.u32(); magic != columnPhysicalAssetMagic {
 		return columnPhysicalAssetScanSummary{}, fmt.Errorf("bad column physical asset magic=0x%08x", magic)
@@ -693,15 +691,19 @@ func scanColumnPhysicalAssetRowsWithManifestOperation(raw []byte, ref ColumnAsse
 	generation := cur.u64()
 	partID := cur.u64()
 	appliedCommandLSN := cur.u64()
-	operation, operationOK := columnPhysicalScanOperationFromBytes(cur.stringBytes())
+	operationBytes := cur.stringBytes()
+	operation, operationOK := columnPhysicalScanOperationFromBytes(operationBytes)
 	schemaHash := cur.u64()
 	columnCount := cur.u64()
 	rowCount := cur.u64()
 	if err := cur.err; err != nil {
 		return columnPhysicalAssetScanSummary{}, err
 	}
-	if columnCount > uint64(maxCollectionInt) || rowCount > uint64(maxCollectionInt) {
-		return columnPhysicalAssetScanSummary{}, errors.New("column physical asset dimensions overflow int")
+	if columnCount > uint64(maxCollectionInt) {
+		return columnPhysicalAssetScanSummary{}, fmt.Errorf("column physical asset column_count=%d overflows int max=%d", columnCount, maxCollectionInt)
+	}
+	if rowCount > uint64(maxCollectionInt) {
+		return columnPhysicalAssetScanSummary{}, fmt.Errorf("column physical asset row_count=%d overflows int max=%d", rowCount, maxCollectionInt)
 	}
 	header := columnPhysicalAssetScanHeader{
 		Collection:        collection,
@@ -715,7 +717,10 @@ func scanColumnPhysicalAssetRowsWithManifestOperation(raw []byte, ref ColumnAsse
 		RowCount:          int(rowCount),
 	}
 	if !operationOK {
-		return columnPhysicalAssetScanSummary{}, fmt.Errorf("unsupported column physical asset operation %q", string(operation))
+		return columnPhysicalAssetScanSummary{}, fmt.Errorf("unsupported column physical asset operation %q", operationBytes)
+	}
+	if version == columnPhysicalAssetVersionV1 && header.Operation == ColumnPublishOperationDelete {
+		return columnPhysicalAssetScanSummary{}, errors.New("legacy v1 column physical asset delete operation unsupported")
 	}
 	if err := validateColumnPhysicalAssetScanHeader(header, ref, expectedCollection, cfg); err != nil {
 		return columnPhysicalAssetScanSummary{}, err
@@ -746,9 +751,6 @@ func scanColumnPhysicalAssetRowsWithManifestOperation(raw []byte, ref ColumnAsse
 		}
 	}
 	valuesBuf := projection.values
-	if len(valuesBuf) < projection.count {
-		valuesBuf = make([]columnDeclaredValue, projection.count)
-	}
 	var summary columnPhysicalAssetScanSummary
 	for rowIdx := 0; rowIdx < header.RowCount; rowIdx++ {
 		id := cur.bytesView()
@@ -777,6 +779,7 @@ func scanColumnPhysicalAssetRowsWithManifestOperation(raw []byte, ref ColumnAsse
 		}
 		summary.rows++
 		if visitor != nil {
+			// ID and Values alias the asset buffer and scanner scratch; visitors must copy to retain them.
 			if err := visitor(columnPhysicalScanRowView{
 				Generation:        header.Generation,
 				PartID:            header.PartID,
@@ -800,7 +803,10 @@ func scanColumnPhysicalAssetRowsWithManifestOperation(raw []byte, ref ColumnAsse
 	return summary, nil
 }
 
-func validateColumnPhysicalAssetScanHeader(header columnPhysicalAssetScanHeader, ref ColumnAssetRef, expectedCollection string, cfg ColumnStoreConfig) error {
+func validateColumnPhysicalAssetScanHeader(header columnPhysicalAssetScanHeader, ref ColumnAssetRef, expectedCollection string, cfg *ColumnStoreConfig) error {
+	if cfg == nil {
+		return errors.New("column physical asset scan requires column store config")
+	}
 	if cfg.AssetManager == nil {
 		return errors.New("column physical asset scan requires asset manager")
 	}
@@ -834,11 +840,11 @@ func columnPhysicalScanOperationFromBytes(raw []byte) (ColumnPublishOperation, b
 	case columnPhysicalBytesEqualString(raw, string(ColumnPublishOperationDelete)):
 		return ColumnPublishOperationDelete, true
 	default:
-		return ColumnPublishOperation(string(raw)), false
+		return "", false
 	}
 }
 
-func scanColumnPhysicalRowValues(cur *manifestCursor, version uint16, cfg ColumnStoreConfig, projection columnPhysicalScanProjection, rowValues []columnDeclaredValue) error {
+func scanColumnPhysicalRowValues(cur *manifestCursor, version uint16, cfg *ColumnStoreConfig, projection columnPhysicalScanProjection, rowValues []columnDeclaredValue) error {
 	for colIdx, col := range cfg.Columns {
 		typeBytes := cur.stringBytes()
 		if cur.err != nil {
