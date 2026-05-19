@@ -25,12 +25,13 @@ type columnPhysicalScanDiagnostics struct {
 	AssetRefs                  int
 	DecodedBlocks              int
 	ScheduledGranules          int
-	SkippedGranules            int
-	RowsScanned                int
-	DeletedRows                int
-	ProjectedColumns           int
-	RowMaterializations        int
-	PhysicalBytesScanned       int64
+	// Reserved for M14 predicate pushdown; M13A schedules every manifest ref.
+	SkippedGranules      int
+	RowsScanned          int
+	DeletedRows          int
+	ProjectedColumns     int
+	RowMaterializations  int
+	PhysicalBytesScanned int64
 }
 
 type columnPhysicalScanRowView struct {
@@ -39,10 +40,11 @@ type columnPhysicalScanRowView struct {
 	AppliedCommandLSN uint64
 	Operation         ColumnPublishOperation
 	RowIndex          int
-	// ID and Values are valid only until the visitor returns.
-	ID      []byte
-	Deleted bool
+	// ID aliases the raw asset buffer and is valid only until the visitor returns.
+	ID []byte
+	// Values aliases scanner scratch and is valid only until the visitor returns.
 	Values  []columnDeclaredValue
+	Deleted bool
 }
 
 type columnPhysicalScanProjection struct {
@@ -155,7 +157,7 @@ func (c *Collection) scanColumnPhysicalRows(req columnPhysicalScanRequest) (colu
 			return diag, fmt.Errorf("collections: column physical scan read generation=%d part_id=%d: %w", ref.Generation, ref.PartID, err)
 		}
 		diag.PhysicalBytesScanned += int64(len(raw))
-		summary, err := scanColumnPhysicalAssetRows(raw, ref, cfg, projection, req.Visitor)
+		summary, err := scanColumnPhysicalAssetRows(raw, ref, collectionName, cfg, projection, req.Visitor)
 		if err != nil {
 			return diag, fmt.Errorf("collections: column physical scan decode generation=%d part_id=%d: %w", ref.Generation, ref.PartID, err)
 		}
@@ -322,7 +324,7 @@ func columnManifestAssetRefsFromRecordsForScan(records []columnManifestRecord) (
 	return refs, nil
 }
 
-func scanColumnPhysicalAssetRows(raw []byte, ref ColumnAssetRef, cfg ColumnStoreConfig, projection columnPhysicalScanProjection, visitor func(columnPhysicalScanRowView) error) (columnPhysicalAssetScanSummary, error) {
+func scanColumnPhysicalAssetRows(raw []byte, ref ColumnAssetRef, expectedCollection string, cfg ColumnStoreConfig, projection columnPhysicalScanProjection, visitor func(columnPhysicalScanRowView) error) (columnPhysicalAssetScanSummary, error) {
 	cur := manifestCursor{raw: raw}
 	if magic := cur.u32(); magic != columnPhysicalAssetMagic {
 		return columnPhysicalAssetScanSummary{}, fmt.Errorf("bad column physical asset magic=0x%08x", magic)
@@ -360,7 +362,7 @@ func scanColumnPhysicalAssetRows(raw []byte, ref ColumnAssetRef, cfg ColumnStore
 	if !operationOK {
 		return columnPhysicalAssetScanSummary{}, fmt.Errorf("unsupported column physical asset operation %q", string(operation))
 	}
-	if err := validateColumnPhysicalAssetScanHeader(header, ref, cfg); err != nil {
+	if err := validateColumnPhysicalAssetScanHeader(header, ref, expectedCollection, cfg); err != nil {
 		return columnPhysicalAssetScanSummary{}, err
 	}
 	if header.ColumnCount != len(cfg.Columns) {
@@ -404,6 +406,7 @@ func scanColumnPhysicalAssetRows(raw []byte, ref ColumnAssetRef, cfg ColumnStore
 			if header.Operation != ColumnPublishOperationDelete {
 				return columnPhysicalAssetScanSummary{}, fmt.Errorf("column physical asset %s row[%d] is marked deleted", header.Operation, rowIdx)
 			}
+			// Delete assets encode no column values for deleted rows; trailing bytes fail closed below.
 			summary.deleted++
 		} else {
 			if header.Operation == ColumnPublishOperationDelete {
@@ -439,9 +442,12 @@ func scanColumnPhysicalAssetRows(raw []byte, ref ColumnAssetRef, cfg ColumnStore
 	return summary, nil
 }
 
-func validateColumnPhysicalAssetScanHeader(header columnPhysicalAssetScanHeader, ref ColumnAssetRef, cfg ColumnStoreConfig) error {
+func validateColumnPhysicalAssetScanHeader(header columnPhysicalAssetScanHeader, ref ColumnAssetRef, expectedCollection string, cfg ColumnStoreConfig) error {
 	if cfg.AssetManager == nil {
 		return errors.New("column physical asset scan requires asset manager")
+	}
+	if !columnPhysicalBytesEqualString(header.Collection, expectedCollection) {
+		return fmt.Errorf("column physical asset collection=%q want %q", string(header.Collection), expectedCollection)
 	}
 	if !columnPhysicalBytesEqualString(header.Namespace, cfg.AssetManager.Namespace) || ref.Namespace != cfg.AssetManager.Namespace {
 		return fmt.Errorf("column physical asset namespace=%q ref_namespace=%q want %q", string(header.Namespace), ref.Namespace, cfg.AssetManager.Namespace)
@@ -534,6 +540,7 @@ func scanColumnPhysicalRowValues(cur *manifestCursor, cfg ColumnStoreConfig, pro
 }
 
 func columnPhysicalBytesEqualString(b []byte, s string) bool {
+	// Keep the scanner's success path independent of []byte->string conversion allocation behavior.
 	if len(b) != len(s) {
 		return false
 	}

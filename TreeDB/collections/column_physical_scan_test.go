@@ -208,6 +208,41 @@ func TestColumnPhysicalSerialScannerRejectsInvalidProjectionM13A(t *testing.T) {
 	}
 }
 
+func TestColumnPhysicalAssetSerialScanRejectsWrongCollectionM13A(t *testing.T) {
+	normalized, rows := makeColumnPhysicalAssetBenchmarkRows(t, 4)
+	encoded, _, err := encodeColumnPhysicalAsset(columnPhysicalAssetEncodeInput{
+		Collection:        "events",
+		Namespace:         normalized.AssetManager.Namespace,
+		Generation:        1,
+		PartID:            1,
+		AppliedCommandLSN: 1,
+		Operation:         ColumnPublishOperationInsert,
+		SchemaHash:        normalized.SchemaHash,
+		Columns:           normalized.Columns,
+		Rows:              rows,
+	})
+	if err != nil {
+		t.Fatalf("encodeColumnPhysicalAsset: %v", err)
+	}
+	ref := ColumnAssetRef{
+		Kind:       ColumnAssetKindTCS1PartImage,
+		Namespace:  normalized.AssetManager.Namespace,
+		Generation: 1,
+		PartID:     1,
+		FileID:     columnAssetM12ASegmentFileID,
+		Length:     int64(len(encoded)),
+		Checksum:   page.Checksum(encoded),
+	}
+	projection, err := newColumnPhysicalScanProjection(*normalized, []string{"time_us"})
+	if err != nil {
+		t.Fatalf("newColumnPhysicalScanProjection: %v", err)
+	}
+	_, err = scanColumnPhysicalAssetRows(encoded, ref, "other_events", *normalized, projection, nil)
+	if err == nil || !strings.Contains(err.Error(), "collection") {
+		t.Fatalf("scan err=%v want collection mismatch", err)
+	}
+}
+
 func TestColumnPhysicalAssetSerialScanNumericProjectionHasZeroAllocsM13A(t *testing.T) {
 	normalized, rows := makeColumnPhysicalAssetBenchmarkRows(t, 1024)
 	encoded, _, err := encodeColumnPhysicalAsset(columnPhysicalAssetEncodeInput{
@@ -243,7 +278,7 @@ func TestColumnPhysicalAssetSerialScanNumericProjectionHasZeroAllocsM13A(t *test
 		if scanErr != nil {
 			return
 		}
-		summary, err := scanColumnPhysicalAssetRows(encoded, ref, *normalized, projection, func(row columnPhysicalScanRowView) error {
+		summary, err := scanColumnPhysicalAssetRows(encoded, ref, "events", *normalized, projection, func(row columnPhysicalScanRowView) error {
 			sum += row.Values[0].Int64
 			return nil
 		})
