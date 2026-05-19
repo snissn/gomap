@@ -108,6 +108,19 @@ func TestColumnAssetGCRetainedStatsUpdateOnPartialContextCancelM15B(t *testing.T
 	if err != nil {
 		t.Fatalf("second columnAssetSegmentPath: %v", err)
 	}
+	namespace, err := columnAssetManagerNamespaceForRoot(d.ColumnAssetRootDir(), first.Namespace)
+	if err != nil {
+		t.Fatalf("columnAssetManagerNamespaceForRoot: %v", err)
+	}
+	var syncedDirs []string
+	prevSync := syncColumnAssetGCDeletedSegmentsDir
+	syncColumnAssetGCDeletedSegmentsDir = func(dir string) error {
+		syncedDirs = append(syncedDirs, dir)
+		return nil
+	}
+	defer func() {
+		syncColumnAssetGCDeletedSegmentsDir = prevSync
+	}()
 
 	stats, err := col.ColumnAssetGC(cancelAfterPathRemovedContextM15B{
 		Context: context.Background(),
@@ -131,6 +144,9 @@ func TestColumnAssetGCRetainedStatsUpdateOnPartialContextCancelM15B(t *testing.T
 	}
 	if _, err := os.Stat(secondPath); err != nil {
 		t.Fatalf("second candidate removed despite context cancellation: %v", err)
+	}
+	if len(syncedDirs) != 1 || syncedDirs[0] != namespace.SegmentDir {
+		t.Fatalf("sync dirs=%v want one sync of %q after partial delete", syncedDirs, namespace.SegmentDir)
 	}
 }
 
