@@ -19,6 +19,7 @@ type columnPhysicalScanRequest struct {
 	RequireInsertOnly   bool
 	RefOrdinalModulo    int
 	RefOrdinalRemainder int
+	ShouldCancel        func() bool
 }
 
 type columnPhysicalScanDiagnostics struct {
@@ -280,6 +281,9 @@ func (c *Collection) scanColumnPhysicalRowsInSnapshotView(
 	defer func() { _ = readCache.close() }()
 	var rawScratch []byte
 	for ordinal, assetRef := range view.AssetRefs {
+		if req.ShouldCancel != nil && req.ShouldCancel() {
+			return diag, errColumnPhysicalScanCancelled
+		}
 		if !columnPhysicalScanIncludesRefOrdinal(req, ordinal) {
 			continue
 		}

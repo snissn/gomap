@@ -1095,6 +1095,14 @@ func TestColumnStoreSuiteExecutesForcedAggregateAndParallelPhysicalPathsM14B(t *
 			}
 			queryMetrics := assertColumnStoreQueryMetricCoverageM11A(t, report.Queries)
 			for _, q := range report.Queries {
+				if tc.forcedPath == columnStorePathAggregateMetadata && q.Name != columnStoreQueryQ5Metadata {
+					if q.PlanLabel != columnStorePathSerialColumnScan {
+						t.Fatalf("query %s plan_label=%q want %q under aggregate_metadata forced path", q.Name, q.PlanLabel, columnStorePathSerialColumnScan)
+					}
+					if !strings.Contains(q.ImplementationNote, "rerouted_to_serial_column_scan") {
+						t.Fatalf("query %s missing aggregate reroute implementation note: %+v", q.Name, q)
+					}
+				}
 				if q.RowMaterializations != 0 {
 					t.Fatalf("query %s row_materializations=%d want zero physical row materialization", q.Name, q.RowMaterializations)
 				}
@@ -1394,12 +1402,61 @@ func TestColumnStoreSuitePhysicalPathFailsClosedOnMissingAssetsM14B(t *testing.T
 	if err != nil {
 		t.Fatalf("reference hashes: %v", err)
 	}
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close before recovery-authoritative reopen: %v", err)
+	}
+	db, err = openColumnStoreSuiteDB(dir)
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	manager = collections.NewCollectionManager(db)
+	collection, err = manager.OpenCollection("events")
+	if err != nil {
+		t.Fatalf("reopen collection: %v", err)
+	}
 	if err := os.RemoveAll(backenddb.ColumnAssetRootDirPath(dir)); err != nil {
 		t.Fatalf("remove column asset root: %v", err)
 	}
 	_, _, err = runColumnStoreSuiteQueries(collection, rows, rawHashes, columnStorePathSerialColumnScan)
 	if !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("missing physical assets err=%v want os.ErrNotExist without row fallback", err)
+	}
+}
+
+func TestColumnStoreSuiteQ3ReferenceUsesPhysicalHourSemanticsM14B(t *testing.T) {
+	events := []columnStoreDecodedEvent{
+		{TimeUS: -1},
+		{TimeUS: -3_600_000_000},
+		{TimeUS: -3_600_000_001},
+		{TimeUS: 0},
+	}
+	lines, err := columnStoreQueryLines(columnStoreQueryQ3, events)
+	if err != nil {
+		t.Fatalf("columnStoreQueryLines q3: %v", err)
+	}
+	got := strings.Join(lines, "\n")
+	for _, want := range []string{
+		"q3:hour_23=2",
+		"q3:hour_22=1",
+		"q3:hour_00=1",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("q3 lines missing %q: %v", want, lines)
+		}
+	}
+	if strings.Contains(got, "hour_-") {
+		t.Fatalf("q3 lines used truncating negative hour bucket: %v", lines)
+	}
+}
+
+func TestColumnStoreSuitePhysicalQueryLinesFailsClosedOnUnknownMappingM14B(t *testing.T) {
+	if _, err := columnStoreSuitePhysicalQueryLines("future", "future_query", nil); err == nil {
+		t.Fatal("expected unknown physical query line mapping to fail")
+	} else if !strings.Contains(err.Error(), "future_query") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

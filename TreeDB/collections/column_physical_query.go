@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -76,6 +77,8 @@ type ColumnPhysicalQueryResult struct {
 	Diagnostics ColumnPhysicalQueryDiagnostics
 }
 
+var errColumnPhysicalScanCancelled = errors.New("collections: physical column scan cancelled")
+
 // RunColumnPhysicalQuery executes an explicit serial physical column query over
 // the recovery-authoritative manifest. Insert-only manifests use the direct
 // scanner path; mutation-bearing manifests fall back to the M13C visibility
@@ -133,6 +136,12 @@ func (c *Collection) RunColumnPhysicalQueryParallel(req ColumnPhysicalQueryReque
 	if view.MutationParts > 0 {
 		return ColumnPhysicalQueryResult{}, fmt.Errorf("%w: parallel physical column query requires insert-only manifest until partitioned visibility execution lands", ErrColumnQueryPlanUnsupported)
 	}
+	workers := maxWorkers
+	if refs := len(view.AssetRefs); refs <= 1 {
+		return c.RunColumnPhysicalQuery(req)
+	} else if workers > refs {
+		workers = refs
+	}
 	cfg := view.Config
 	merged, err := newColumnPhysicalQueryExecutor(cfg, req)
 	if err != nil {
@@ -144,16 +153,18 @@ func (c *Collection) RunColumnPhysicalQueryParallel(req ColumnPhysicalQueryReque
 		diag columnPhysicalScanDiagnostics
 		err  error
 	}
-	results := make([]workerResult, maxWorkers)
+	results := make([]workerResult, workers)
 	start := time.Now()
+	var cancel atomic.Bool
 	var wg sync.WaitGroup
-	for worker := 0; worker < maxWorkers; worker++ {
+	for worker := 0; worker < workers; worker++ {
 		worker := worker
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			exec, err := newColumnPhysicalQueryExecutor(cfg, req)
 			if err != nil {
+				cancel.Store(true)
 				results[worker].err = err
 				return
 			}
@@ -161,21 +172,28 @@ func (c *Collection) RunColumnPhysicalQueryParallel(req ColumnPhysicalQueryReque
 				ProjectedColumns:    exec.projected,
 				Visitor:             exec.visit,
 				RequireInsertOnly:   true,
-				RefOrdinalModulo:    maxWorkers,
+				RefOrdinalModulo:    workers,
 				RefOrdinalRemainder: worker,
+				ShouldCancel:        cancel.Load,
 			})
+			if err != nil {
+				cancel.Store(true)
+			}
 			results[worker] = workerResult{exec: exec, diag: diag, err: err}
 		}()
 	}
 	wg.Wait()
 
 	result := ColumnPhysicalQueryResult{}
+	var firstErr error
 	for worker := range results {
 		workerResult := results[worker]
 		result.Diagnostics = mergeColumnPhysicalQueryDiagnostics(result.Diagnostics, columnPhysicalQueryDiagnosticsFromScan(workerResult.diag))
 		if workerResult.err != nil {
-			result.Diagnostics.ScanNanos = time.Since(start).Nanoseconds()
-			return result, workerResult.err
+			if firstErr == nil || errors.Is(firstErr, errColumnPhysicalScanCancelled) {
+				firstErr = workerResult.err
+			}
+			continue
 		}
 		if err := merged.mergeFrom(workerResult.exec); err != nil {
 			result.Diagnostics.ScanNanos = time.Since(start).Nanoseconds()
@@ -183,6 +201,9 @@ func (c *Collection) RunColumnPhysicalQueryParallel(req ColumnPhysicalQueryReque
 		}
 	}
 	result.Diagnostics.ScanNanos = time.Since(start).Nanoseconds()
+	if firstErr != nil {
+		return result, firstErr
+	}
 	result.Groups = merged.groups()
 	result.Diagnostics.ReduceRows = merged.reduceRows
 	result.Diagnostics.ResultGroups = len(result.Groups)
@@ -279,7 +300,9 @@ func mergeColumnPhysicalQueryDiagnostics(left, right ColumnPhysicalQueryDiagnost
 	if right.ProjectedColumns > left.ProjectedColumns {
 		left.ProjectedColumns = right.ProjectedColumns
 	}
-	left.MutationParts += right.MutationParts
+	if right.MutationParts > left.MutationParts {
+		left.MutationParts = right.MutationParts
+	}
 	left.DecodedBlocks += right.DecodedBlocks
 	left.ScheduledGranules += right.ScheduledGranules
 	left.SkippedGranules += right.SkippedGranules

@@ -294,6 +294,13 @@ func TestColumnPhysicalQueryParallelMatchesSerialInsertOnlyM14B(t *testing.T) {
 			if parallel.Diagnostics.PhysicalBytesScanned != serial.Diagnostics.PhysicalBytesScanned {
 				t.Fatalf("parallel bytes=%d want serial %d diagnostics=%+v", parallel.Diagnostics.PhysicalBytesScanned, serial.Diagnostics.PhysicalBytesScanned, parallel.Diagnostics)
 			}
+			overPartitioned, err := reopened.RunColumnPhysicalQueryParallel(tc.req, 128)
+			if err != nil {
+				t.Fatalf("over-partitioned RunColumnPhysicalQueryParallel: %v", err)
+			}
+			if !reflect.DeepEqual(overPartitioned.Groups, serial.Groups) {
+				t.Fatalf("over-partitioned groups=%+v want serial %+v", overPartitioned.Groups, serial.Groups)
+			}
 		})
 	}
 }
@@ -308,6 +315,46 @@ func TestColumnPhysicalQueryParallelFailsClosedForMutationVisibilityM14B(t *test
 	}, 4)
 	if !errors.Is(err, ErrColumnQueryPlanUnsupported) || !strings.Contains(err.Error(), "partitioned visibility execution") {
 		t.Fatalf("RunColumnPhysicalQueryParallel err=%v want fail-closed partitioned visibility error", err)
+	}
+}
+
+func TestColumnPhysicalScanHonorsCancellationBeforeSchedulingRefsM14B(t *testing.T) {
+	reopened, closeFn := openColumnPhysicalInsertMultiGenerationFixtureM14B(t, 4)
+	defer closeFn()
+
+	view, closeView, err := reopened.prepareColumnPhysicalScanSnapshotView()
+	if closeView != nil {
+		defer closeView()
+	}
+	if err != nil {
+		t.Fatalf("prepareColumnPhysicalScanSnapshotView: %v", err)
+	}
+	diag, err := reopened.scanColumnPhysicalRowsInSnapshotView(view, columnPhysicalScanRequest{
+		ProjectedColumns: []string{"kind"},
+		Visitor: func(columnPhysicalScanRowView) error {
+			t.Fatal("visitor should not run after cancellation")
+			return nil
+		},
+		RequireInsertOnly: true,
+		ShouldCancel:      func() bool { return true },
+	})
+	if !errors.Is(err, errColumnPhysicalScanCancelled) {
+		t.Fatalf("scan err=%v want cancellation", err)
+	}
+	if diag.ScheduledGranules != 0 || diag.DecodedBlocks != 0 || diag.RowsScanned != 0 {
+		t.Fatalf("cancelled scan scheduled work: %+v", diag)
+	}
+}
+
+func TestMergeColumnPhysicalQueryDiagnosticsTreatsMutationPartsAsViewLevelM14B(t *testing.T) {
+	left := ColumnPhysicalQueryDiagnostics{MutationParts: 2, DecodedBlocks: 1}
+	right := ColumnPhysicalQueryDiagnostics{MutationParts: 2, DecodedBlocks: 3}
+	merged := mergeColumnPhysicalQueryDiagnostics(left, right)
+	if got, want := merged.MutationParts, 2; got != want {
+		t.Fatalf("mutation parts=%d want view-level max %d", got, want)
+	}
+	if got, want := merged.DecodedBlocks, 4; got != want {
+		t.Fatalf("decoded blocks=%d want summed work %d", got, want)
 	}
 }
 
