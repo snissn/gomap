@@ -131,12 +131,23 @@ func TestColumnAssetReachabilityPlanProtectsPendingPreparedRefsM15A(t *testing.T
 	if plan.Refs.Reclaimable != 1 || plan.Refs.BytesReclaimable != reclaimable.Length {
 		t.Fatalf("ref stats=%+v want only unprotected candidate reclaimable", plan.Refs)
 	}
+	foundPending := false
+	foundPrepared := false
 	for _, entry := range plan.Entries {
 		if entry.Ref == pending || entry.Ref == prepared {
+			if entry.Ref == pending {
+				foundPending = true
+			}
+			if entry.Ref == prepared {
+				foundPrepared = true
+			}
 			if entry.Status != ColumnAssetReachabilityProtected {
 				t.Fatalf("pending/prepared entry %+v status=%q want protected", entry.Ref, entry.Status)
 			}
 		}
+	}
+	if !foundPending || !foundPrepared {
+		t.Fatalf("missing pending/prepared entries in detailed plan: pending=%t prepared=%t", foundPending, foundPrepared)
 	}
 }
 

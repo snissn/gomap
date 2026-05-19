@@ -474,21 +474,13 @@ func classifyColumnAssetReachabilitySegment(segment columnAssetReachabilitySegme
 	all := make([]columnAssetReachabilityInterval, 0, len(ranges))
 	outOfBounds := 0
 	for _, r := range ranges {
-		if r.start < 0 || r.end <= r.start || r.start >= segment.bytes || r.end > segment.bytes {
+		interval, outOfBoundsRange, ok := clipColumnAssetReachabilityRange(segment.bytes, r)
+		if outOfBoundsRange {
 			outOfBounds++
 		}
-		start := r.start
-		if start < 0 {
-			start = 0
-		}
-		end := r.end
-		if end > segment.bytes {
-			end = segment.bytes
-		}
-		if start >= end {
+		if !ok {
 			continue
 		}
-		interval := columnAssetReachabilityInterval{start: start, end: end}
 		all = append(all, interval)
 		switch r.status {
 		case ColumnAssetReachabilityProtected:
@@ -596,23 +588,32 @@ func clippedColumnAssetReachabilityIntervals(segment columnAssetReachabilitySegm
 	intervals := make([]columnAssetReachabilityInterval, 0, len(ranges))
 	outOfBounds := 0
 	for _, r := range ranges {
-		if r.start < 0 || r.end <= r.start || r.start >= segment.bytes || r.end > segment.bytes {
+		interval, outOfBoundsRange, ok := clipColumnAssetReachabilityRange(segment.bytes, r)
+		if outOfBoundsRange {
 			outOfBounds++
 		}
-		start := r.start
-		if start < 0 {
-			start = 0
-		}
-		end := r.end
-		if end > segment.bytes {
-			end = segment.bytes
-		}
-		if start >= end {
+		if !ok {
 			continue
 		}
-		intervals = append(intervals, columnAssetReachabilityInterval{start: start, end: end})
+		intervals = append(intervals, interval)
 	}
 	return intervals, outOfBounds
+}
+
+func clipColumnAssetReachabilityRange(segmentBytes int64, r columnAssetReachabilityRange) (columnAssetReachabilityInterval, bool, bool) {
+	outOfBounds := r.start < 0 || r.end <= r.start || r.start >= segmentBytes || r.end > segmentBytes
+	start := r.start
+	if start < 0 {
+		start = 0
+	}
+	end := r.end
+	if end > segmentBytes {
+		end = segmentBytes
+	}
+	if start >= end {
+		return columnAssetReachabilityInterval{}, outOfBounds, false
+	}
+	return columnAssetReachabilityInterval{start: start, end: end}, outOfBounds, true
 }
 
 func columnAssetReachabilitySegmentFileID(name string) (uint32, bool) {
