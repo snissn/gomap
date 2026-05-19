@@ -17,6 +17,8 @@ const (
 	ColumnQueryPlanParallelColumnScan ColumnQueryPlanKind = "parallel_column_scan"
 )
 
+const columnQueryUnsupportedNoPhysicalAssetsReason = "physical column query has no physical assets available"
+
 var ErrColumnQueryPlanUnsupported = errors.New("collections: column query plan unsupported")
 
 type ColumnQueryPredicateOperator string
@@ -265,7 +267,7 @@ func physicalColumnQuerySupported(catalog *collectionCatalog, identity ColumnSto
 func physicalColumnQueryUnsupportedReason(identity ColumnStoreCacheIdentity, identityOK bool, req ColumnQueryPlanRequest, kind ColumnQueryPlanKind) string {
 	switch {
 	case req.Capabilities.PhysicalAssetCount <= 0:
-		return "physical column query routing is disabled until physical asset capabilities are advertised"
+		return columnQueryUnsupportedNoPhysicalAssetsReason
 	case !columnQueryManifestRecoveryAuthoritative(identity, identityOK):
 		return "active column manifest is not recovery-authoritative"
 	}
