@@ -460,7 +460,7 @@ u64      SchemaHash
 u64      ColumnCount
 u64      RowCount
 columns  declared column descriptors
-rows     row id + row payload
+rows     versioned row payloads
 ```
 
 Version 2 row payloads are:
