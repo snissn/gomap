@@ -151,6 +151,36 @@ func TestColumnAssetReachabilityPlanProtectsPendingPreparedRefsM15A(t *testing.T
 	}
 }
 
+func TestColumnAssetReachabilityPlanCountsUniqueSourceRefsM15A(t *testing.T) {
+	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col := openColumnStoreCollectionM10B(t, d)
+
+	if _, err := col.Insert([]byte("e1"), []byte(`{"time_us":1,"kind":"like","did":"d1"}`)); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	candidate := writeColumnAssetReachabilityCandidateM15A(t, d, col, 2, 99)
+
+	plan, err := col.PlanColumnAssetReachability(context.Background(), ColumnAssetReachabilityOptions{
+		Detailed:      true,
+		CandidateRefs: []ColumnAssetRef{candidate, candidate},
+		PendingRefs:   []ColumnAssetRef{candidate, candidate},
+		PreparedRefs:  []ColumnAssetRef{candidate, candidate},
+		PinnedRefs:    []ColumnAssetRef{candidate, candidate},
+	})
+	if err != nil {
+		t.Fatalf("PlanColumnAssetReachability: %v", err)
+	}
+	if plan.Sources.CandidateRefs != 1 || plan.Sources.PendingRefs != 1 ||
+		plan.Sources.PreparedRefs != 1 || plan.Sources.PinnedRefs != 1 {
+		t.Fatalf("source stats=%+v want one contribution per duplicated source", plan.Sources)
+	}
+	if plan.Refs.Reclaimable != 0 || plan.Refs.Protected == 0 {
+		t.Fatalf("ref stats=%+v want duplicated pinned candidate protected once", plan.Refs)
+	}
+}
+
 func TestColumnAssetReachabilityPlanRetainsUnknownSegmentsM15A(t *testing.T) {
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)

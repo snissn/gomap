@@ -173,10 +173,16 @@ func (c *Collection) PlanColumnAssetReachability(ctx context.Context, opts Colum
 		if err := ctx.Err(); err != nil {
 			return ColumnAssetReachabilityPlan{ProtectOnly: true}, err
 		}
-		input.addRef(assetRef.Ref, ColumnAssetReachabilitySourceActiveManifest)
-		input.addRef(assetRef.Ref, ColumnAssetReachabilitySourceRecoveryManifest)
-		input.activeRefs++
-		input.recoveryRefs++
+		// prepareColumnPhysicalScanSnapshotView already requires the active and
+		// recovery-authoritative manifest identities to match. The same refs are
+		// therefore reachable through both logical roots and must be protected as
+		// both sources until M15B/M15C introduce destructive actions.
+		if input.addRef(assetRef.Ref, ColumnAssetReachabilitySourceActiveManifest) {
+			input.activeRefs++
+		}
+		if input.addRef(assetRef.Ref, ColumnAssetReachabilitySourceRecoveryManifest) {
+			input.recoveryRefs++
+		}
 	}
 	input.addRefs(ctx, opts.CandidateRefs, ColumnAssetReachabilitySourceCandidate)
 	input.addRefs(ctx, opts.PendingRefs, ColumnAssetReachabilitySourcePendingPublish)
@@ -203,25 +209,28 @@ type columnAssetReachabilityInput struct {
 }
 
 func (in *columnAssetReachabilityInput) addRefs(ctx context.Context, refs []ColumnAssetRef, source ColumnAssetReachabilitySource) {
+	added := 0
 	for _, ref := range refs {
 		if ctx != nil && ctx.Err() != nil {
 			return
 		}
-		in.addRef(ref, source)
+		if in.addRef(ref, source) {
+			added++
+		}
 	}
 	switch source {
 	case ColumnAssetReachabilitySourceCandidate:
-		in.sourceCounts.CandidateRefs += len(refs)
+		in.sourceCounts.CandidateRefs += added
 	case ColumnAssetReachabilitySourcePendingPublish:
-		in.sourceCounts.PendingRefs += len(refs)
+		in.sourceCounts.PendingRefs += added
 	case ColumnAssetReachabilitySourcePreparedAsset:
-		in.sourceCounts.PreparedRefs += len(refs)
+		in.sourceCounts.PreparedRefs += added
 	case ColumnAssetReachabilitySourcePinnedSnapshot:
-		in.sourceCounts.PinnedRefs += len(refs)
+		in.sourceCounts.PinnedRefs += added
 	}
 }
 
-func (in *columnAssetReachabilityInput) addRef(ref ColumnAssetRef, source ColumnAssetReachabilitySource) {
+func (in *columnAssetReachabilityInput) addRef(ref ColumnAssetRef, source ColumnAssetReachabilitySource) bool {
 	if in.refs == nil {
 		in.refs = make(map[ColumnAssetRef]*columnAssetReachabilityRefBuilder)
 	}
@@ -234,10 +243,11 @@ func (in *columnAssetReachabilityInput) addRef(ref ColumnAssetRef, source Column
 		in.refs[ref] = builder
 	}
 	if _, ok := builder.seen[source]; ok {
-		return
+		return false
 	}
 	builder.seen[source] = struct{}{}
 	builder.sources = append(builder.sources, source)
+	return true
 }
 
 func buildColumnAssetReachabilityPlan(ctx context.Context, input columnAssetReachabilityInput) (ColumnAssetReachabilityPlan, error) {
