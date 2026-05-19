@@ -390,6 +390,75 @@ func TestColumnStoreScanDocumentsReconstructsRetainedPayloadM13C(t *testing.T) {
 	}
 }
 
+func TestColumnStoreScanDocumentsLimitFiltersVisibilityRowsM13C(t *testing.T) {
+	dir, _ := prepareColumnStoreCommandWALDirM10B(t)
+	d := openCollectionCommandWALDB(t, dir)
+	col := openColumnStoreCollectionM10B(t, d)
+	if _, err := col.InsertBatch([][]byte{[]byte("e1"), []byte("e2"), []byte("e3")}, [][]byte{
+		[]byte(`{"time_us":1,"kind":"like","did":"d1","payload":"alpha"}`),
+		[]byte(`{"time_us":2,"kind":"comment","did":"d2","payload":"beta"}`),
+		[]byte(`{"time_us":3,"kind":"share","did":"d3","payload":"gamma"}`),
+	}); err != nil {
+		_ = d.Close()
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		_ = d.Close()
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopen := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopen.Close() }()
+	reopened := openColumnStoreCollectionM10B(t, reopen)
+	records, truncated, err := reopened.ScanDocuments(1)
+	if err != nil {
+		t.Fatalf("ScanDocuments: %v", err)
+	}
+	if !truncated {
+		t.Fatalf("ScanDocuments truncated=false want true")
+	}
+	if len(records) != 1 {
+		t.Fatalf("ScanDocuments records=%d want 1", len(records))
+	}
+	assertJSONEqualM13C(t, records[0].Document, []byte(`{"time_us":1,"kind":"like","did":"d1","payload":"alpha"}`))
+
+	snap := reopen.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("AcquireSnapshot returned nil")
+	}
+	defer func() { _ = snap.Close() }()
+	catalog, err := reopened.catalogForSnapshot(snap)
+	if err != nil {
+		t.Fatalf("catalogForSnapshot: %v", err)
+	}
+	cfg := catalog.meta.Options.ColumnStore.copy()
+	visible, err := reopened.scanColumnPhysicalVisibleRowsAtSnapshotForTargets(
+		snap,
+		catalog,
+		catalog.meta.Name,
+		catalog.rootID(collectionColumnManifestRootName(catalog.meta.Name)),
+		cfg,
+		true,
+		newColumnPhysicalVisibilityTargetIDs([][]byte{[]byte("e2")}),
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("scanColumnPhysicalVisibleRowsAtSnapshotForTargets: %v", err)
+	}
+	if got, want := len(visible.Rows), 1; got != want {
+		t.Fatalf("visible rows=%d want %d", got, want)
+	}
+	if got, want := string(visible.Rows[0].ID), "e2"; got != want {
+		t.Fatalf("visible id=%q want %q", got, want)
+	}
+	if visible.Diagnostics.RowsScanned < 3 {
+		t.Fatalf("diagnostic rows scanned=%d want at least 3", visible.Diagnostics.RowsScanned)
+	}
+}
+
 func TestColumnStoreReconstructionPreservesDeclaredAndRetainedUpdatesM13C(t *testing.T) {
 	dir, _ := prepareColumnStoreCommandWALDirM10B(t)
 	d := openCollectionCommandWALDB(t, dir)

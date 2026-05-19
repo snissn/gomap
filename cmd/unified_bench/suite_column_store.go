@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -1276,7 +1277,9 @@ func columnStoreSuiteRetainedPayloadFromDocument(document []byte, cfg *collectio
 		return []byte("{}"), nil
 	case collections.ColumnRetainedPayloadNonColumn:
 		var obj map[string]any
-		if err := json.Unmarshal(document, &obj); err != nil {
+		decoder := json.NewDecoder(bytes.NewReader(document))
+		decoder.UseNumber()
+		if err := decoder.Decode(&obj); err != nil {
 			return nil, err
 		}
 		for _, col := range cfg.Columns {

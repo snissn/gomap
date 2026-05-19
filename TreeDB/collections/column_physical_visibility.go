@@ -64,10 +64,26 @@ func (c *Collection) scanColumnPhysicalVisibleRowsAtSnapshot(
 	columnStoreEnabled bool,
 	projected []string,
 ) (columnPhysicalVisibilityResult, error) {
+	return c.scanColumnPhysicalVisibleRowsAtSnapshotForTargets(snap, catalog, collectionName, rootID, cfg, columnStoreEnabled, nil, projected)
+}
+
+func (c *Collection) scanColumnPhysicalVisibleRowsAtSnapshotForTargets(
+	snap *backenddb.Snapshot,
+	catalog *collectionCatalog,
+	collectionName string,
+	rootID uint64,
+	cfg ColumnStoreConfig,
+	columnStoreEnabled bool,
+	targets *columnPhysicalVisibilityTargetIDs,
+	projected []string,
+) (columnPhysicalVisibilityResult, error) {
 	var latest columnPhysicalVisibilityIndex
 	diag, err := c.scanColumnPhysicalRowsAtSnapshot(snap, catalog, collectionName, rootID, cfg, columnStoreEnabled, columnPhysicalScanRequest{
 		ProjectedColumns: projected,
 		Visitor: func(row columnPhysicalScanRowView) error {
+			if targets != nil && !targets.contains(row.ID) {
+				return nil
+			}
 			latest.upsert(row)
 			return nil
 		},
@@ -83,6 +99,37 @@ func (c *Collection) scanColumnPhysicalVisibleRowsAtSnapshot(
 		Rows:        rows,
 		Diagnostics: diag,
 	}, nil
+}
+
+type columnPhysicalVisibilityTargetIDs struct {
+	byHash map[uint64][][]byte
+}
+
+func newColumnPhysicalVisibilityTargetIDs(ids [][]byte) *columnPhysicalVisibilityTargetIDs {
+	if len(ids) == 0 {
+		return nil
+	}
+	targets := &columnPhysicalVisibilityTargetIDs{
+		byHash: make(map[uint64][][]byte, len(ids)),
+	}
+	for _, id := range ids {
+		hash := columnPhysicalQueryHashBytes(id)
+		targets.byHash[hash] = append(targets.byHash[hash], id)
+	}
+	return targets
+}
+
+func (targets *columnPhysicalVisibilityTargetIDs) contains(id []byte) bool {
+	if targets == nil {
+		return true
+	}
+	candidates := targets.byHash[columnPhysicalQueryHashBytes(id)]
+	for _, candidate := range candidates {
+		if bytes.Equal(candidate, id) {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Collection) latestColumnPhysicalVisibleRowAtSnapshot(

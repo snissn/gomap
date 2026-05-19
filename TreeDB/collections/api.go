@@ -17710,27 +17710,11 @@ func (c *Collection) ScanDocumentsFunc(maxDocuments int, fn func(DocumentRecord)
 	}
 	defer func() { _ = it.Close() }()
 	reconstructDocuments := columnStoreCanReconstructDocument(catalog.meta)
-	var columnStoreConfig ColumnStoreConfig
-	var visibleRows []columnPhysicalVisibleRow
 	if reconstructDocuments {
-		columnStoreConfig = catalog.meta.Options.ColumnStore.copy()
-		visible, err := c.scanColumnPhysicalVisibleRowsAtSnapshot(
-			snap,
-			catalog,
-			catalog.meta.Name,
-			catalog.rootID(collectionColumnManifestRootName(catalog.meta.Name)),
-			columnStoreConfig,
-			true,
-			nil,
-		)
-		if err != nil {
-			return false, err
-		}
-		visibleRows = visible.Rows
+		return c.scanDocumentsFuncWithColumnReconstruction(snap, catalog, it, maxDocuments, fn)
 	}
 	truncated := false
 	scanned := 0
-	visiblePos := 0
 	for it.Valid() {
 		if it.IsDeleted() {
 			it.Next()
@@ -17744,19 +17728,6 @@ func (c *Collection) ScanDocumentsFunc(maxDocuments int, fn func(DocumentRecord)
 			ID:       bytes.Clone(it.UnsafeKey()),
 			Document: it.ValueCopy(nil),
 		}
-		if reconstructDocuments {
-			for visiblePos < len(visibleRows) && bytes.Compare(visibleRows[visiblePos].ID, record.ID) < 0 {
-				visiblePos++
-			}
-			if visiblePos >= len(visibleRows) || !bytes.Equal(visibleRows[visiblePos].ID, record.ID) {
-				return false, fmt.Errorf("collections: column reconstruction missing visible physical row for id %q", string(record.ID))
-			}
-			reconstructed, err := reconstructColumnDocumentFromVisibleRow(columnStoreConfig, record.Document, visibleRows[visiblePos])
-			if err != nil {
-				return false, err
-			}
-			record.Document = reconstructed
-		}
 		scanned++
 		next, err := fn(record)
 		if err != nil {
@@ -17769,6 +17740,92 @@ func (c *Collection) ScanDocumentsFunc(maxDocuments int, fn func(DocumentRecord)
 	}
 	if err := it.Error(); err != nil {
 		return false, err
+	}
+	return truncated, nil
+}
+
+func (c *Collection) scanDocumentsFuncWithColumnReconstruction(
+	snap *backenddb.Snapshot,
+	catalog *collectionCatalog,
+	it iterator.UnsafeIterator,
+	maxDocuments int,
+	fn func(DocumentRecord) (bool, error),
+) (bool, error) {
+	columnStoreConfig := catalog.meta.Options.ColumnStore.copy()
+	capacity := maxDocuments
+	if capacity > 256 {
+		capacity = 256
+	}
+	records := make([]DocumentRecord, 0, capacity)
+	for it.Valid() {
+		if it.IsDeleted() {
+			it.Next()
+			continue
+		}
+		if len(records) >= maxDocuments {
+			break
+		}
+		records = append(records, DocumentRecord{
+			ID:       bytes.Clone(it.UnsafeKey()),
+			Document: it.ValueCopy(nil),
+		})
+		it.Next()
+	}
+	if err := it.Error(); err != nil {
+		return false, err
+	}
+	truncated := false
+	for it.Valid() {
+		if !it.IsDeleted() {
+			truncated = true
+			break
+		}
+		it.Next()
+	}
+	if err := it.Error(); err != nil {
+		return false, err
+	}
+	if len(records) == 0 {
+		return truncated, nil
+	}
+	ids := make([][]byte, len(records))
+	for i := range records {
+		ids[i] = records[i].ID
+	}
+	visible, err := c.scanColumnPhysicalVisibleRowsAtSnapshotForTargets(
+		snap,
+		catalog,
+		catalog.meta.Name,
+		catalog.rootID(collectionColumnManifestRootName(catalog.meta.Name)),
+		columnStoreConfig,
+		true,
+		newColumnPhysicalVisibilityTargetIDs(ids),
+		nil,
+	)
+	if err != nil {
+		return false, err
+	}
+	visibleRows := visible.Rows
+	visiblePos := 0
+	for _, record := range records {
+		for visiblePos < len(visibleRows) && bytes.Compare(visibleRows[visiblePos].ID, record.ID) < 0 {
+			visiblePos++
+		}
+		if visiblePos >= len(visibleRows) || !bytes.Equal(visibleRows[visiblePos].ID, record.ID) {
+			return false, fmt.Errorf("collections: column reconstruction missing visible physical row for id %q", string(record.ID))
+		}
+		reconstructed, err := reconstructColumnDocumentFromVisibleRow(columnStoreConfig, record.Document, visibleRows[visiblePos])
+		if err != nil {
+			return false, err
+		}
+		record.Document = reconstructed
+		next, err := fn(record)
+		if err != nil {
+			return false, err
+		}
+		if !next {
+			return false, nil
+		}
 	}
 	return truncated, nil
 }
