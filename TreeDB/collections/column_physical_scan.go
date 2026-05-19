@@ -567,13 +567,19 @@ func decodeColumnManifestSnapshotForScan(records []columnManifestRecord) (column
 }
 
 func columnManifestPartGenerationFromRecordKeyForScan(key []byte) (uint64, error) {
+	generation, _, err := columnManifestPartKeyFromRecordKeyForScan(key)
+	return generation, err
+}
+
+func columnManifestPartKeyFromRecordKeyForScan(key []byte) (uint64, uint64, error) {
 	if !bytes.HasPrefix(key, columnManifestPartRecordPrefixBytes) {
-		return 0, fmt.Errorf("collections: column manifest part key %q missing prefix", string(key))
+		return 0, 0, fmt.Errorf("collections: column manifest part key %q missing prefix", string(key))
 	}
 	if len(key) != len(columnManifestPartRecordPrefix)+16 {
-		return 0, fmt.Errorf("collections: column manifest part key length=%d want %d", len(key), len(columnManifestPartRecordPrefix)+16)
+		return 0, 0, fmt.Errorf("collections: column manifest part key length=%d want %d", len(key), len(columnManifestPartRecordPrefix)+16)
 	}
-	return binary.BigEndian.Uint64(key[len(columnManifestPartRecordPrefix):]), nil
+	return binary.BigEndian.Uint64(key[len(columnManifestPartRecordPrefix):]),
+		binary.BigEndian.Uint64(key[len(columnManifestPartRecordPrefix)+8:]), nil
 }
 
 func columnManifestAssetRefsFromRecordsForScan(records []columnManifestRecord, activeGeneration uint64, expectedNamespace string) ([]columnManifestAssetRefForScan, int, error) {
@@ -583,7 +589,7 @@ func columnManifestAssetRefsFromRecordsForScan(records []columnManifestRecord, a
 		if !bytes.HasPrefix(record.key, columnManifestPartRecordPrefixBytes) {
 			continue
 		}
-		keyGeneration, err := columnManifestPartGenerationFromRecordKeyForScan(record.key)
+		keyGeneration, keyPartID, err := columnManifestPartKeyFromRecordKeyForScan(record.key)
 		if err != nil {
 			return nil, 0, err
 		}
@@ -600,6 +606,9 @@ func columnManifestAssetRefsFromRecordsForScan(records []columnManifestRecord, a
 		}
 		if ref.Generation != keyGeneration {
 			return nil, 0, fmt.Errorf("collections: column manifest part key generation=%d does not match ref generation=%d", keyGeneration, ref.Generation)
+		}
+		if ref.PartID != keyPartID {
+			return nil, 0, fmt.Errorf("collections: column manifest part key part_id=%d does not match ref part_id=%d", keyPartID, ref.PartID)
 		}
 		operation, ok := columnPhysicalScanOperationFromBytes(reason)
 		if !ok {

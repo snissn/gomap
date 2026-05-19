@@ -288,6 +288,32 @@ func TestColumnStoreGetReconstructsRetainedPayloadM13C(t *testing.T) {
 	}
 }
 
+func TestColumnStoreRetainedPayloadRejectsCreateIndexOnDeclaredColumnM13C(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "events",
+		Options: CollectionOptions{ColumnStore: testColumnStoreConfig(nil)},
+	}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := mgr.OpenCollection("events")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	if _, err := col.CreateIndex(IndexDefinition{Name: "kind_idx", Field: "kind", ValueType: IndexValueString}); err == nil || !strings.Contains(err.Error(), "retained-payload column field") {
+		t.Fatalf("CreateIndex on declared column err=%v want retained-payload column rejection", err)
+	}
+	if _, err := col.CreateIndex(IndexDefinition{Name: "payload_idx", Field: "payload", ValueType: IndexValueString}); err != nil {
+		t.Fatalf("CreateIndex on retained payload field: %v", err)
+	}
+}
+
 func TestColumnStoreRetainedPayloadDisablesDirectBufferedUpdateM13C(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), Durability: backenddb.DurabilityWALOffRelaxed})
 	if err != nil {
@@ -1314,6 +1340,60 @@ func TestColumnPhysicalQueryAdapterRejectsUnsupportedShapeM13B(t *testing.T) {
 				t.Fatalf("RunColumnPhysicalQuery err=%v want %q", err, tc.want)
 			}
 		})
+	}
+}
+
+func TestColumnPhysicalQueryValueValidationM13B(t *testing.T) {
+	var exec columnPhysicalQueryExecutor
+	if got, err := exec.stringKey(columnDeclaredValue{Type: ColumnStoreValueString, StringBytes: []byte("alpha")}); err != nil || got != "alpha" {
+		t.Fatalf("stringKey bytes got %q err=%v", got, err)
+	}
+	if got, err := exec.stringKey(columnDeclaredValue{Type: ColumnStoreValueString, String: "beta"}); err != nil || got != "beta" {
+		t.Fatalf("stringKey string got %q err=%v", got, err)
+	}
+	if _, err := exec.stringKey(columnDeclaredValue{Type: ColumnStoreValueInt64, Int64: 7}); !errors.Is(err, ErrColumnQueryPlanUnsupported) || !strings.Contains(err.Error(), "expected string") {
+		t.Fatalf("wrong-type stringKey err=%v want expected string unsupported", err)
+	}
+	if _, err := exec.stringKey(columnDeclaredValue{Type: ColumnStoreValueString, Null: true}); !errors.Is(err, ErrColumnQueryPlanUnsupported) || !strings.Contains(err.Error(), "null string") {
+		t.Fatalf("null stringKey err=%v want null string unsupported", err)
+	}
+	if got, err := columnPhysicalQueryInt64Value(columnDeclaredValue{Type: ColumnStoreValueInt64, Int64: 42}); err != nil || got != 42 {
+		t.Fatalf("int64 value got %d err=%v", got, err)
+	}
+	if _, err := columnPhysicalQueryInt64Value(columnDeclaredValue{Type: ColumnStoreValueString, String: "42"}); !errors.Is(err, ErrColumnQueryPlanUnsupported) || !strings.Contains(err.Error(), "expected int64") {
+		t.Fatalf("wrong-type int64 err=%v want expected int64 unsupported", err)
+	}
+	if _, err := columnPhysicalQueryInt64Value(columnDeclaredValue{Type: ColumnStoreValueInt64, Null: true}); !errors.Is(err, ErrColumnQueryPlanUnsupported) || !strings.Contains(err.Error(), "null int64") {
+		t.Fatalf("null int64 err=%v want null int64 unsupported", err)
+	}
+}
+
+func TestColumnPhysicalQueryStringKeyFallbackAllocationsM13B(t *testing.T) {
+	var exec columnPhysicalQueryExecutor
+	bytesValue := columnDeclaredValue{Type: ColumnStoreValueString, StringBytes: []byte("alpha")}
+	stringValue := columnDeclaredValue{Type: ColumnStoreValueString, String: "beta"}
+	if _, err := exec.stringKey(bytesValue); err != nil {
+		t.Fatalf("warm bytes stringKey: %v", err)
+	}
+	if _, err := exec.stringKey(stringValue); err != nil {
+		t.Fatalf("warm string stringKey: %v", err)
+	}
+
+	if allocs := testing.AllocsPerRun(100, func() {
+		got, err := exec.stringKey(bytesValue)
+		if err != nil || got != "alpha" {
+			panic(fmt.Sprintf("bytes stringKey got %q err=%v", got, err))
+		}
+	}); allocs != 0 {
+		t.Fatalf("bytes stringKey allocs/run=%.2f want 0", allocs)
+	}
+	if allocs := testing.AllocsPerRun(100, func() {
+		got, err := exec.stringKey(stringValue)
+		if err != nil || got != "beta" {
+			panic(fmt.Sprintf("string stringKey got %q err=%v", got, err))
+		}
+	}); allocs != 0 {
+		t.Fatalf("string fallback allocs/run=%.2f want 0", allocs)
 	}
 }
 

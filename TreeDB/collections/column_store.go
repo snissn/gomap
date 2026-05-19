@@ -128,7 +128,7 @@ type ColumnStoreConfig struct {
 	ActiveManifest                         *ColumnManifestIdentity       `json:"active_manifest,omitempty"`
 	RecoveryAuthoritativeManifest          *ColumnManifestIdentity       `json:"recovery_authoritative_manifest,omitempty"`
 	RecoveryAuthoritativeAppliedCommandLSN uint64                        `json:"recovery_authoritative_applied_command_lsn,omitempty"`
-	PhysicalMutationParts                  int                           `json:"physical_mutation_parts,omitempty"`
+	PhysicalMutationParts                  uint64                        `json:"physical_mutation_parts,omitempty"`
 	ProfileSupport                         ColumnStoreProfileSupport     `json:"profile_support,omitempty"`
 	Locator                                *ColumnLocatorConfig          `json:"locator,omitempty"`
 	ControlRootStoragePolicy               RootStoragePolicy             `json:"control_root_storage_policy,omitempty"`
@@ -460,9 +460,6 @@ func validateColumnStoreConfig(collection string, cfg ColumnStoreConfig) error {
 	}
 	if cfg.ManifestRoot.StoragePolicy != cfg.ControlRootStoragePolicy {
 		return fmt.Errorf("collections: column manifest root descriptor storage policy %q does not match control root storage policy %q", cfg.ManifestRoot.StoragePolicy, cfg.ControlRootStoragePolicy)
-	}
-	if cfg.PhysicalMutationParts < 0 {
-		return fmt.Errorf("collections: physical mutation parts=%d must be non-negative", cfg.PhysicalMutationParts)
 	}
 	switch cfg.ProfileSupport {
 	case ColumnStoreProfileDurableOnly, ColumnStoreProfileBenchmarkRelaxed:

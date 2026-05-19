@@ -650,20 +650,28 @@ func columnPublishUpdatedMeta(base CollectionMeta, plan ColumnPublishPlan) (Coll
 	cfg.ActiveManifest = &active
 	cfg.RecoveryAuthoritativeManifest = &recovery
 	cfg.RecoveryAuthoritativeAppliedCommandLSN = plan.RecoveryAuthoritativeAppliedCommandLSN
-	cfg.PhysicalMutationParts = columnPublishPhysicalMutationParts(base.Options.ColumnStore, plan)
+	mutationParts, err := columnPublishPhysicalMutationParts(base.Options.ColumnStore, plan)
+	if err != nil {
+		return CollectionMeta{}, err
+	}
+	cfg.PhysicalMutationParts = mutationParts
 	updated.Options.ColumnStore = &cfg
 	return normalizeCollectionMeta(updated)
 }
 
-func columnPublishPhysicalMutationParts(base *ColumnStoreConfig, plan ColumnPublishPlan) int {
-	parts := 0
+func columnPublishPhysicalMutationParts(base *ColumnStoreConfig, plan ColumnPublishPlan) (uint64, error) {
+	var parts uint64
 	if base != nil {
 		parts = base.PhysicalMutationParts
 	}
 	if plan.Operation != ColumnPublishOperationInsert {
-		parts += len(plan.PreparedAssets)
+		add := uint64(len(plan.PreparedAssets))
+		if ^uint64(0)-parts < add {
+			return 0, errors.New("collections: physical mutation part count overflow")
+		}
+		parts += add
 	}
-	return parts
+	return parts, nil
 }
 
 func (c *Collection) buildRootDescriptorAndColumnManifestSystemDeltaIteratorForMeta(meta CollectionMeta, expectedCommitSeq, expectedSystemRoot uint64, rootNames []string, baseRootIDs map[string]uint64, rootIDs []uint64, plan ColumnPublishPlan) (iterator.UnsafeIterator, error) {
