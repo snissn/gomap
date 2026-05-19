@@ -1938,6 +1938,21 @@ func TestWriteRuntimeProfileDeltaProfile_EmptyOutputSkipsFile(t *testing.T) {
 	}
 }
 
+func TestGoToolExecutableFallsBackToRuntimeGOROOTWhenPATHMissing(t *testing.T) {
+	t.Setenv("PATH", "")
+
+	path := goToolExecutable()
+	if path == "go" || path == "" {
+		t.Fatalf("goToolExecutable()=%q, want runtime GOROOT fallback", path)
+	}
+	if !filepath.IsAbs(path) {
+		t.Fatalf("goToolExecutable()=%q, want absolute fallback path", path)
+	}
+	if info, err := os.Stat(path); err != nil || info.IsDir() {
+		t.Fatalf("goToolExecutable()=%q stat=(%v, %v), want executable file", path, info, err)
+	}
+}
+
 func TestRunBenchmark_ContentionAfterSnapshotsBeforeAllocsPostProcessing(t *testing.T) {
 	var events []string
 	profileTmpDir := t.TempDir()

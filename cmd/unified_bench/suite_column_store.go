@@ -146,6 +146,7 @@ type columnStoreQueryMetric struct {
 	ImplementationNote   string  `json:"implementation_note,omitempty"`
 	DurationMS           float64 `json:"duration_ms"`
 	Rows                 int     `json:"rows"`
+	RowsProcessed        int     `json:"rows_processed"`
 	RowsPerSecond        float64 `json:"rows_per_second"`
 	MiBPerSecond         float64 `json:"mib_per_second"`
 	NsPerRow             float64 `json:"ns_per_row"`
@@ -1072,6 +1073,7 @@ func runColumnStoreSuiteQueries(collection *collections.Collection, rows int, ra
 			DurationMS:           durationMS(elapsed),
 			duration:             elapsed,
 			Rows:                 rows,
+			RowsProcessed:        exec.RowsProcessed,
 			RowsPerSecond:        ratePerSecond(float64(exec.RowsProcessed), elapsed),
 			MiBPerSecond:         ratePerSecond(float64(exec.BytesRead)/(1024*1024), elapsed),
 			NsPerRow:             nsPerRow(elapsed, exec.RowsProcessed),
@@ -1908,7 +1910,7 @@ func columnStoreBenchRun(baseCfg BenchConfig, profile, dataDir string, report co
 	}
 	byName := make(map[string]columnStoreQueryMetric, len(report.Queries))
 	var queryDuration time.Duration
-	var queryMaterializations int
+	var queryRowsProcessed int
 	for _, q := range report.Queries {
 		byName[q.Name] = q
 		duration := q.duration
@@ -1916,11 +1918,11 @@ func columnStoreBenchRun(baseCfg BenchConfig, profile, dataDir string, report co
 			duration = time.Duration(q.DurationMS * float64(time.Millisecond))
 		}
 		queryDuration += duration
-		queryMaterializations += q.RowMaterializations
+		queryRowsProcessed += q.RowsProcessed
 		results[columnStoreSuiteBenchMetricPrefix+q.Name] = map[string]float64{columnStoreSuiteBenchDisplayName: q.RowsPerSecond}
 	}
 	if queryDuration > 0 {
-		results[columnStoreSuiteBenchTestName] = map[string]float64{columnStoreSuiteBenchDisplayName: float64(queryMaterializations) / queryDuration.Seconds()}
+		results[columnStoreSuiteBenchTestName] = map[string]float64{columnStoreSuiteBenchDisplayName: float64(queryRowsProcessed) / queryDuration.Seconds()}
 	}
 	if q, ok := byName[columnStoreQueryQ1]; ok {
 		results[columnStoreSuiteAliasFullScanQ1] = map[string]float64{columnStoreSuiteBenchDisplayName: q.RowsPerSecond}

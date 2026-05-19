@@ -353,14 +353,30 @@ func TestColumnStoreBenchRunUsesDurationForAggregateM11A(t *testing.T) {
 		Rows:      30,
 		BatchSize: 10,
 		Queries: []columnStoreQueryMetric{
-			{Name: "q1", RowMaterializations: 10, RowsPerSecond: 1, duration: 10 * time.Millisecond},
-			{Name: "q2", RowMaterializations: 20, RowsPerSecond: 1, duration: 20 * time.Millisecond},
+			{Name: "q1", RowsProcessed: 10, RowMaterializations: 10, RowsPerSecond: 1, duration: 10 * time.Millisecond},
+			{Name: "q2", RowsProcessed: 20, RowMaterializations: 20, RowsPerSecond: 1, duration: 20 * time.Millisecond},
 		},
 	}, nil, 0)
 
 	got := run.Results[columnStoreSuiteBenchTestName][columnStoreSuiteBenchDisplayName]
 	if math.Abs(got-1000) > 1e-9 {
 		t.Fatalf("aggregate rows/sec=%f want 1000 from exact durations", got)
+	}
+}
+
+func TestColumnStoreBenchRunUsesRowsProcessedForPhysicalAggregateM14B(t *testing.T) {
+	run := columnStoreBenchRun(BenchConfig{}, "durable", t.TempDir(), columnStoreSuiteReport{
+		Rows:      30,
+		BatchSize: 10,
+		Queries: []columnStoreQueryMetric{
+			{Name: "q1", RowsProcessed: 10, RowMaterializations: 0, RowsPerSecond: 1, duration: 10 * time.Millisecond},
+			{Name: "q2", RowsProcessed: 20, RowMaterializations: 0, RowsPerSecond: 1, duration: 20 * time.Millisecond},
+		},
+	}, nil, 0)
+
+	got := run.Results[columnStoreSuiteBenchTestName][columnStoreSuiteBenchDisplayName]
+	if math.Abs(got-1000) > 1e-9 {
+		t.Fatalf("aggregate rows/sec=%f want 1000 from physical rows processed", got)
 	}
 }
 
@@ -1023,6 +1039,9 @@ func TestColumnStoreSuiteExecutesForcedSerialPhysicalPathM14B(t *testing.T) {
 		if q.PlanLabel != columnStorePathSerialColumnScan {
 			t.Fatalf("query %s plan_label=%q want %q", q.Name, q.PlanLabel, columnStorePathSerialColumnScan)
 		}
+		if q.RowsProcessed != report.Rows {
+			t.Fatalf("query %s rows_processed=%d want %d", q.Name, q.RowsProcessed, report.Rows)
+		}
 		if q.RowMaterializations != 0 {
 			t.Fatalf("query %s row_materializations=%d want zero physical row materialization", q.Name, q.RowMaterializations)
 		}
@@ -1078,6 +1097,9 @@ func TestColumnStoreSuiteExecutesForcedAggregateAndParallelPhysicalPathsM14B(t *
 			for _, q := range report.Queries {
 				if q.RowMaterializations != 0 {
 					t.Fatalf("query %s row_materializations=%d want zero physical row materialization", q.Name, q.RowMaterializations)
+				}
+				if q.RowsProcessed != report.Rows {
+					t.Fatalf("query %s rows_processed=%d want %d", q.Name, q.RowsProcessed, report.Rows)
 				}
 				if q.BytesRead <= 0 {
 					t.Fatalf("query %s bytes_read=%d want physical bytes", q.Name, q.BytesRead)

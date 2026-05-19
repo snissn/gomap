@@ -1102,13 +1102,30 @@ func writePprofDeltaProfileWithRunner(basePath, afterPath, outPath string, runne
 func runPprofDeltaCommand(basePath, afterPath string) ([]byte, string, error) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	cmd := exec.Command("go", "tool", "pprof", "-proto", "-base", basePath, afterPath)
+	cmd := exec.Command(goToolExecutable(), "tool", "pprof", "-proto", "-base", basePath, afterPath)
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
 		return nil, stderr.String(), err
 	}
 	return stdout.Bytes(), stderr.String(), nil
+}
+
+func goToolExecutable() string {
+	if path, err := exec.LookPath("go"); err == nil {
+		return path
+	}
+	name := "go"
+	if runtime.GOOS == "windows" {
+		name = "go.exe"
+	}
+	if goroot := runtime.GOROOT(); goroot != "" {
+		candidate := filepath.Join(goroot, "bin", name)
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+			return candidate
+		}
+	}
+	return "go"
 }
 
 func contentionProfilePath(globalPath, kind, testName, dbName string) string {
