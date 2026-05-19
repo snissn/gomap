@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/collections"
@@ -442,7 +443,7 @@ func printBoxedTable(title string, headers []string, rows [][]string) {
 
 	separators := make([]string, len(widths))
 	for i, width := range widths {
-		separators[i] = strings.Repeat("-", width)
+		separators[i] = strings.Repeat("─", width)
 	}
 
 	lines := make([]string, 0, len(rows)+2)
@@ -470,34 +471,33 @@ func formatTableRow(cells []string, widths []int, header bool) string {
 }
 
 func printBox(title string, lines []string) {
-	width := visibleLen(" " + title + " ")
-	for _, line := range lines {
+	boxLines := lines
+	if title != "" {
+		boxLines = make([]string, 0, len(lines)+2)
+		boxLines = append(boxLines, bold(title), "")
+		boxLines = append(boxLines, lines...)
+	}
+
+	width := 0
+	for _, line := range boxLines {
 		if lineWidth := visibleLen(line); lineWidth > width {
 			width = lineWidth
 		}
 	}
 
-	fmt.Println(boxTop(title, width))
-	for _, line := range lines {
-		fmt.Printf("| %s%s |\n", line, strings.Repeat(" ", width-visibleLen(line)))
+	fmt.Println(boxTop(width))
+	for _, line := range boxLines {
+		fmt.Printf("│  %s%s  │\n", line, strings.Repeat(" ", width-visibleLen(line)))
 	}
 	fmt.Println(boxBottom(width))
 }
 
-func boxTop(title string, width int) string {
-	if title == "" {
-		return boxBottom(width)
-	}
-	label := " " + bold(title) + " "
-	labelWidth := visibleLen(label)
-	if width < labelWidth {
-		width = labelWidth
-	}
-	return "+--" + label + strings.Repeat("-", width-labelWidth) + "+"
+func boxTop(width int) string {
+	return "╭" + strings.Repeat("─", width+4) + "╮"
 }
 
 func boxBottom(width int) string {
-	return "+" + strings.Repeat("-", width+2) + "+"
+	return "╰" + strings.Repeat("─", width+4) + "╯"
 }
 
 func padRight(s string, width int) string {
@@ -521,6 +521,10 @@ func visibleLen(s string) int {
 				inEscape = false
 			}
 		default:
+			_, size := utf8.DecodeRuneInString(s[i:])
+			if size > 1 {
+				i += size - 1
+			}
 			width++
 		}
 	}
