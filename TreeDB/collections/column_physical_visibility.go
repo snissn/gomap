@@ -30,13 +30,21 @@ func (c *Collection) scanColumnPhysicalVisibleRows(projected []string) (columnPh
 	if c.db == nil {
 		return columnPhysicalVisibilityResult{}, errCollectionDBNil
 	}
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return columnPhysicalVisibilityResult{}, errCollectionDBNil
+	}
+	defer func() { _ = snap.Close() }()
 	c.catalogMu.RLock()
-	catalog := c.catalog
+	collectionName := c.meta.Name
+	c.catalogMu.RUnlock()
+	catalog, err := loadCollectionCatalog(snap, collectionName)
+	if err != nil {
+		return columnPhysicalVisibilityResult{}, err
+	}
 	if catalog == nil {
-		c.catalogMu.RUnlock()
 		return columnPhysicalVisibilityResult{}, errCollectionNotFound
 	}
-	collectionName := catalog.meta.Name
 	rootName := collectionColumnManifestRootName(collectionName)
 	rootID := catalog.rootID(rootName)
 	cfgPtr := catalog.meta.Options.ColumnStore
@@ -45,13 +53,6 @@ func (c *Collection) scanColumnPhysicalVisibleRows(projected []string) (columnPh
 	if cfgPtr != nil {
 		cfg = cfgPtr.copy()
 	}
-	c.catalogMu.RUnlock()
-
-	snap := c.db.AcquireSnapshot()
-	if snap == nil {
-		return columnPhysicalVisibilityResult{}, errCollectionDBNil
-	}
-	defer func() { _ = snap.Close() }()
 	return c.scanColumnPhysicalVisibleRowsAtSnapshot(snap, catalog, collectionName, rootID, cfg, columnStoreEnabled, projected)
 }
 

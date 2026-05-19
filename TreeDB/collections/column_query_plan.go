@@ -17,6 +17,8 @@ const (
 	ColumnQueryPlanParallelColumnScan ColumnQueryPlanKind = "parallel_column_scan"
 )
 
+const columnQueryUnsupportedNoPhysicalAssetsReason = "physical column query has no physical assets available"
+
 var ErrColumnQueryPlanUnsupported = errors.New("collections: column query plan unsupported")
 
 type ColumnQueryPredicateOperator string
@@ -148,7 +150,7 @@ func (c *Collection) PlanColumnQuery(req ColumnQueryPlanRequest) (ColumnQueryPla
 		return ColumnQueryPlan{}, errCollectionNotFound
 	}
 	if columnStoreEnabled && columnQueryRequestNeedsPhysicalCapabilityDiscovery(req) {
-		req.Capabilities = c.deriveColumnQueryPlannerCapabilitiesM14B(collectionName, rootID, cfg, columnStoreEnabled, req)
+		req.Capabilities = c.deriveColumnQueryPlannerCapabilitiesM14B(collectionName, rootID, cfg, req)
 	}
 	identity, identityOK := columnStoreCacheIdentity(catalog, systemRoot, commitSeq)
 	return planColumnQueryForCatalog(catalog, identity, identityOK, req), nil
@@ -167,7 +169,7 @@ func columnQueryRequestNeedsPhysicalCapabilityDiscovery(req ColumnQueryPlanReque
 	}
 }
 
-func (c *Collection) deriveColumnQueryPlannerCapabilitiesM14B(collectionName string, rootID uint64, cfg ColumnStoreConfig, columnStoreEnabled bool, req ColumnQueryPlanRequest) ColumnQueryPlannerCapabilities {
+func (c *Collection) deriveColumnQueryPlannerCapabilitiesM14B(collectionName string, rootID uint64, cfg ColumnStoreConfig, req ColumnQueryPlanRequest) ColumnQueryPlannerCapabilities {
 	caps := req.Capabilities
 	caps.SerialColumnScan = false
 	caps.AggregateMetadata = false
@@ -182,7 +184,7 @@ func (c *Collection) deriveColumnQueryPlannerCapabilitiesM14B(collectionName str
 	caps.VisibilityMetadata = false
 	caps.ParallelWorkUnits = 0
 
-	if !columnStoreEnabled || !cfg.Enabled {
+	if !cfg.Enabled {
 		return caps
 	}
 	if c == nil || c.db == nil {
@@ -401,7 +403,7 @@ func physicalColumnQueryUnsupportedReason(identity ColumnStoreCacheIdentity, ide
 	case strings.TrimSpace(req.Capabilities.CapabilityError) != "":
 		return strings.TrimSpace(req.Capabilities.CapabilityError)
 	case req.Capabilities.PhysicalAssetCount <= 0:
-		return "physical column query routing is disabled until physical asset capabilities are advertised"
+		return columnQueryUnsupportedNoPhysicalAssetsReason
 	case !columnQueryManifestRecoveryAuthoritative(identity, identityOK):
 		return "active column manifest is not recovery-authoritative"
 	}

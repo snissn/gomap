@@ -526,6 +526,24 @@ func TestColumnAssetManagerWriteAllowsZeroChecksumM12A(t *testing.T) {
 	}
 }
 
+func TestColumnAssetManagerReadRejectsLengthOverflowM13C(t *testing.T) {
+	maxInt := int64(maxCollectionInt)
+	if maxInt == math.MaxInt64 {
+		t.Skip("int64 builds cannot represent a ColumnAssetRef length larger than max int")
+	}
+	ref := ColumnAssetRef{
+		Kind:       ColumnAssetKindTCS1PartImage,
+		Namespace:  "events/column-assets",
+		Generation: 1,
+		PartID:     1,
+		FileID:     1,
+		Length:     maxInt + 1,
+	}
+	if _, err := readColumnPhysicalAssetFromManagerInto(t.TempDir(), ref, nil); err == nil || !strings.Contains(err.Error(), "overflows int") {
+		t.Fatalf("readColumnPhysicalAssetFromManagerInto err=%v want length overflow", err)
+	}
+}
+
 func TestColumnAssetManagerEnsuresNamespaceParentsM12A(t *testing.T) {
 	cfg := testColumnStoreConfig(nil)
 	cfg.AssetManager = &ColumnAssetManagerConfig{Namespace: "events/nested/column-assets"}
