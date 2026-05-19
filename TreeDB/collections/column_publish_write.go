@@ -77,7 +77,7 @@ func requireColumnStoreWriteOperationSupported(meta CollectionMeta, operation Co
 		)
 	}
 	if normalizedDocumentFormat(meta.Options.DocumentFormat) != DocumentFormatJSON {
-		return fmt.Errorf("%w: unsupported column-store write operation: M12C physical column assets require JSON documents collection=%q operation=%s document_format=%q",
+		return fmt.Errorf("%w: M12C unsupported column-store write collection=%q operation=%s document_format=%q",
 			backenddb.ErrCommandWALRejected,
 			meta.Name,
 			operation,
@@ -343,6 +343,9 @@ func prepareColumnWritePublishInputBeforeCommandWAL(input columnWritePublishInpu
 		input.declaredRowsReady = true
 		return input, nil
 	case ColumnPublishOperationDelete:
+		if len(input.documents) != input.rows {
+			return columnWritePublishInput{}, fmt.Errorf("collections: column physical asset delete documents=%d rows=%d", len(input.documents), input.rows)
+		}
 		input.declaredRowsReady = true
 		return input, nil
 	default:
@@ -426,11 +429,11 @@ func (c *Collection) prepareColumnPhysicalAssetsForCommand(input columnWritePubl
 		}
 		return c.prepareColumnPhysicalAssetRowsForCommand(prepared, input, hookInput, rows)
 	case ColumnPublishOperationDelete:
-		if input.rows == 0 {
-			return prepared, nil
-		}
 		if len(input.documents) != input.rows {
 			return ColumnPublishPreparedAssets{}, fmt.Errorf("collections: column physical asset delete documents=%d rows=%d", len(input.documents), input.rows)
+		}
+		if input.rows == 0 {
+			return prepared, nil
 		}
 		rows := make([]columnDeclaredRow, len(input.documents))
 		for i, doc := range input.documents {
