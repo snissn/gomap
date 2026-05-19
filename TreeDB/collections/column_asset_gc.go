@@ -2,6 +2,7 @@ package collections
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -31,6 +32,8 @@ type ColumnAssetGCStats struct {
 	BytesDeleted     int64
 	BytesRetained    int64
 }
+
+var syncColumnAssetGCDeletedSegmentsDir = syncColumnAssetDir
 
 // ColumnAssetGC reclaims only complete, canonical column asset segments that
 // M15A reachability proves wholly reclaimable. Mixed segments remain rewrite
@@ -120,26 +123,34 @@ func (c *Collection) columnAssetGC(ctx context.Context, opts ColumnAssetGCOption
 		stats.Plan = columnAssetGCPlanForDetail(stats.Plan, opts.Detailed)
 		return stats, nil
 	}
+	syncDeletedSegmentsDir := func(retErr error) error {
+		if stats.SegmentsDeleted == 0 {
+			return retErr
+		}
+		syncErr := syncColumnAssetGCDeletedSegmentsDir(namespace.SegmentDir)
+		if retErr != nil {
+			return errors.Join(retErr, syncErr)
+		}
+		return syncErr
+	}
 
 	for _, entry := range eligible {
 		if err := ctx.Err(); err != nil {
 			stats.Plan = columnAssetGCPlanForDetail(stats.Plan, opts.Detailed)
-			return stats, err
+			return stats, syncDeletedSegmentsDir(err)
 		}
 		if err := os.Remove(entry.Path); err != nil {
 			stats.Plan = columnAssetGCPlanForDetail(stats.Plan, opts.Detailed)
-			return stats, err
+			return stats, syncDeletedSegmentsDir(err)
 		}
 		stats.SegmentsDeleted++
 		stats.BytesDeleted += entry.Bytes
 		stats.SegmentsRetained--
 		stats.BytesRetained -= entry.Bytes
 	}
-	if stats.SegmentsDeleted != 0 {
-		if err := syncColumnAssetDir(namespace.SegmentDir); err != nil {
-			stats.Plan = columnAssetGCPlanForDetail(stats.Plan, opts.Detailed)
-			return stats, err
-		}
+	if err := syncDeletedSegmentsDir(nil); err != nil {
+		stats.Plan = columnAssetGCPlanForDetail(stats.Plan, opts.Detailed)
+		return stats, err
 	}
 	stats.Plan = columnAssetGCPlanForDetail(stats.Plan, opts.Detailed)
 	return stats, nil

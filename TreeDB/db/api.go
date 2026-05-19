@@ -318,7 +318,7 @@ func (db *DB) ColumnAssetRootDir() string {
 // CheckStorageMaintenanceReady verifies this handle may run destructive storage
 // maintenance such as GC, rewrite cleanup, or typed column asset reclamation.
 func (db *DB) CheckStorageMaintenanceReady() error {
-	if db == nil {
+	if db == nil || db.closing.Load() {
 		return ErrClosed
 	}
 	if db.readOnly {
