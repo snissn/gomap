@@ -16,7 +16,12 @@ import (
 func TestColumnAssetRewriteRemapsManifestRefsOutOfMixedSegmentM15C(t *testing.T) {
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)
-	defer func() { _ = d.Close() }()
+	dClosed := false
+	defer func() {
+		if !dClosed {
+			_ = d.Close()
+		}
+	}()
 	col := openColumnStoreCollectionM10B(t, d)
 
 	if _, err := col.InsertBatch([][]byte{[]byte("e1"), []byte("e2")}, [][]byte{
@@ -84,6 +89,7 @@ func TestColumnAssetRewriteRemapsManifestRefsOutOfMixedSegmentM15C(t *testing.T)
 	if err := d.Close(); err != nil {
 		t.Fatalf("Close after rewrite: %v", err)
 	}
+	dClosed = true
 	reopen := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = reopen.Close() }()
 	reopened := openColumnStoreCollectionM10B(t, reopen)
@@ -119,7 +125,12 @@ func TestColumnAssetRewriteRemapsManifestRefsOutOfMixedSegmentM15C(t *testing.T)
 func TestColumnAssetRewriteLifecycleSmokeWithMutationsM15C(t *testing.T) {
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)
-	defer func() { _ = d.Close() }()
+	dClosed := false
+	defer func() {
+		if !dClosed {
+			_ = d.Close()
+		}
+	}()
 	col := openColumnStoreCollectionM10B(t, d)
 
 	if _, err := col.InsertBatch([][]byte{[]byte("e1"), []byte("e2")}, [][]byte{
@@ -168,6 +179,7 @@ func TestColumnAssetRewriteLifecycleSmokeWithMutationsM15C(t *testing.T) {
 	if err := d.Close(); err != nil {
 		t.Fatalf("Close after rewrite: %v", err)
 	}
+	dClosed = true
 	reopen := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = reopen.Close() }()
 	reopened := openColumnStoreCollectionM10B(t, reopen)
@@ -296,6 +308,9 @@ func TestColumnAssetRewriteCleansCopiedSegmentOnStalePublishPreflightM15C(t *tes
 	if stats.SegmentsRewritten != 0 || stats.RefsRemapped != 0 || len(stats.SupersededRefs) != 0 {
 		t.Fatalf("stale publish reported successful rewrite stats=%+v", stats)
 	}
+	if stats.BytesCopied != 0 {
+		t.Fatalf("stale publish reported copied bytes stats=%+v", stats)
+	}
 	assertStringSlicesEqualM15C(t, beforeSegments, columnAssetSegmentNamesM15C(t, d, col))
 }
 
@@ -417,28 +432,17 @@ func columnAssetRefsSameLogicalAssetM15C(left, right ColumnAssetRef) bool {
 func BenchmarkColumnAssetRewriteMixedSegmentM15C(b *testing.B) {
 	for _, refs := range []int{1, 128} {
 		b.Run(fmt.Sprintf("refs_%d", refs), func(b *testing.B) {
+			bytesCopiedPerRun := columnAssetRewriteBenchmarkBytesPerRunM15C(b, refs)
+			b.SetBytes(bytesCopiedPerRun)
 			b.ReportAllocs()
 			ctx := context.Background()
 			for i := 0; i < b.N; i++ {
 				b.StopTimer()
-				dir := prepareColumnAssetReachabilityCommandWALDirM15A(b)
-				d := openCollectionCommandWALDB(b, dir)
-				col := openColumnStoreCollectionM10B(b, d)
-				for refIdx := 0; refIdx < refs; refIdx++ {
-					id := []byte(fmt.Sprintf("e%06d", refIdx))
-					doc := []byte(fmt.Sprintf(`{"time_us":%d,"kind":"like","did":"d%d"}`, refIdx, refIdx))
-					if _, err := col.Insert(id, doc); err != nil {
-						_ = d.Close()
-						b.Fatalf("Insert ref=%d: %v", refIdx, err)
-					}
+				d, col, candidate, liveRefs, bytesCopied := prepareColumnAssetRewriteBenchmarkCaseM15C(b, refs)
+				if bytesCopied != bytesCopiedPerRun {
+					_ = d.Close()
+					b.Fatalf("bytesCopied=%d want stable benchmark bytes=%d", bytesCopied, bytesCopiedPerRun)
 				}
-				liveRefs := columnManifestAssetRefsForCollectionM12A(b, d, col)
-				candidate := writeColumnAssetReachabilityCandidateM15A(b, d, col, uint64(refs+2), 99)
-				var bytesCopied int64
-				for _, ref := range liveRefs {
-					bytesCopied += ref.Length
-				}
-				b.SetBytes(bytesCopied)
 				b.StartTimer()
 				stats, err := col.ColumnAssetRewrite(ctx, ColumnAssetRewriteOptions{
 					CandidateRefs: []ColumnAssetRef{candidate},
@@ -448,9 +452,9 @@ func BenchmarkColumnAssetRewriteMixedSegmentM15C(b *testing.B) {
 					_ = d.Close()
 					b.Fatalf("ColumnAssetRewrite refs=%d: %v", refs, err)
 				}
-				if stats.RefsRemapped != len(liveRefs) || stats.SegmentsRewritten != 1 || stats.BytesCopied != bytesCopied {
+				if stats.RefsRemapped != len(liveRefs) || stats.SegmentsRewritten != 1 || stats.BytesCopied != bytesCopiedPerRun {
 					_ = d.Close()
-					b.Fatalf("stats=%+v liveRefs=%d bytesCopied=%d", stats, len(liveRefs), bytesCopied)
+					b.Fatalf("stats=%+v liveRefs=%d bytesCopied=%d", stats, len(liveRefs), bytesCopiedPerRun)
 				}
 				if err := d.Close(); err != nil {
 					b.Fatalf("Close: %v", err)
@@ -458,4 +462,39 @@ func BenchmarkColumnAssetRewriteMixedSegmentM15C(b *testing.B) {
 			}
 		})
 	}
+}
+
+func columnAssetRewriteBenchmarkBytesPerRunM15C(b *testing.B, refs int) int64 {
+	b.Helper()
+	d, _, _, _, bytesCopied := prepareColumnAssetRewriteBenchmarkCaseM15C(b, refs)
+	if err := d.Close(); err != nil {
+		b.Fatalf("Close benchmark sizing DB: %v", err)
+	}
+	return bytesCopied
+}
+
+func prepareColumnAssetRewriteBenchmarkCaseM15C(b testing.TB, refs int) (*backenddb.DB, *Collection, ColumnAssetRef, []ColumnAssetRef, int64) {
+	b.Helper()
+	dir := prepareColumnAssetReachabilityCommandWALDirM15A(b)
+	d := openCollectionCommandWALDB(b, dir)
+	col := openColumnStoreCollectionM10B(b, d)
+	for refIdx := 0; refIdx < refs; refIdx++ {
+		id := []byte(fmt.Sprintf("e%06d", refIdx))
+		doc := []byte(fmt.Sprintf(`{"time_us":%d,"kind":"like","did":"d%d"}`, refIdx, refIdx))
+		if _, err := col.Insert(id, doc); err != nil {
+			_ = d.Close()
+			b.Fatalf("Insert ref=%d: %v", refIdx, err)
+		}
+	}
+	liveRefs := columnManifestAssetRefsForCollectionM12A(b, d, col)
+	candidate := writeColumnAssetReachabilityCandidateM15A(b, d, col, uint64(refs+2), 99)
+	var bytesCopied int64
+	for _, ref := range liveRefs {
+		bytesCopied += ref.Length
+	}
+	if bytesCopied <= 0 {
+		_ = d.Close()
+		b.Fatalf("benchmark bytesCopied=%d for refs=%d", bytesCopied, refs)
+	}
+	return d, col, candidate, liveRefs, bytesCopied
 }

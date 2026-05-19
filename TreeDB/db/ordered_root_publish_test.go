@@ -281,6 +281,7 @@ func TestPublishOrderedRootDeltaGroupMaintenanceRejectsUnmarkedRootDelta(t *test
 	defer db.Close()
 
 	iter := mustFrozenSystemMemtable(t, "root/k", "v").NewIterator(nil, nil)
+	defer iter.Close()
 	_, _, err := db.PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(
 		[]OrderedRootDeltaPublishInput{{
 			BaseRoot: 0,

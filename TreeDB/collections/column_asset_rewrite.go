@@ -57,13 +57,15 @@ type ColumnAssetRewriteStats struct {
 
 	Plan ColumnAssetReachabilityPlan
 
-	SegmentsEligible   int
-	SegmentsRewritten  int
-	SegmentsRetained   int
-	RefsEligible       int
-	RefsRemapped       int
-	RefsRetained       int
-	BytesEligible      int64
+	SegmentsEligible  int
+	SegmentsRewritten int
+	SegmentsRetained  int
+	RefsEligible      int
+	RefsRemapped      int
+	RefsRetained      int
+	BytesEligible     int64
+	// BytesCopied is committed copied bytes for destructive rewrites. Dry-run
+	// reports the bytes that would be copied.
 	BytesCopied        int64
 	BytesReclaimable   int64
 	BytesRetained      int64
@@ -93,6 +95,9 @@ func (c *Collection) ColumnAssetRewrite(ctx context.Context, opts ColumnAssetRew
 		return stats, err
 	}
 	if !opts.DryRun {
+		if err := c.db.CheckStorageMaintenanceReady(); err != nil {
+			return stats, err
+		}
 		unlock := c.lockMutation()
 		defer unlock.Unlock()
 	}
@@ -147,10 +152,12 @@ func (c *Collection) columnAssetRewrite(ctx context.Context, opts ColumnAssetRew
 		stats.BytesReclaimable += entry.ReclaimableBytes
 	}
 	stats.RefsEligible = len(refs)
+	var bytesToCopy int64
 	for _, ref := range refs {
-		stats.BytesCopied += ref.Length
+		bytesToCopy += ref.Length
 	}
 	if opts.DryRun {
+		stats.BytesCopied = bytesToCopy
 		stats.Plan = columnAssetRewritePlanForDetail(stats.Plan, opts.Detailed)
 		return stats, nil
 	}
@@ -191,6 +198,12 @@ func (c *Collection) columnAssetRewrite(ctx context.Context, opts ColumnAssetRew
 		stats.Plan = columnAssetRewritePlanForDetail(stats.Plan, opts.Detailed)
 		return stats, cleanupRemap(err)
 	}
+	// This preflight still runs before the publish attempt, so copied segments
+	// can be safely removed when the root descriptor has already moved.
+	if err := c.columnAssetRewriteRootDescriptorPreflight(state)(); err != nil {
+		stats.Plan = columnAssetRewritePlanForDetail(stats.Plan, opts.Detailed)
+		return stats, cleanupRemap(err)
+	}
 
 	patchedRecords, patched, err := patchColumnAssetRewriteManifestRecords(state.records, remap.byOldRef)
 	if err != nil {
@@ -213,8 +226,10 @@ func (c *Collection) columnAssetRewrite(ctx context.Context, opts ColumnAssetRew
 	}
 	newSystemRoot, rootIDs, err := c.publishColumnAssetRewriteManifestState(state, updatedMeta, updatedIdentity, patchedRecords)
 	if err != nil {
+		// Publish errors can be ambiguous after root/system application starts;
+		// retain the copied segment as fail-closed maintenance debt.
 		stats.Plan = columnAssetRewritePlanForDetail(stats.Plan, opts.Detailed)
-		return stats, cleanupRemap(err)
+		return stats, err
 	}
 	if len(rootIDs) != 1 || rootIDs[0] == 0 {
 		stats.Plan = columnAssetRewritePlanForDetail(stats.Plan, opts.Detailed)
@@ -223,6 +238,9 @@ func (c *Collection) columnAssetRewrite(ctx context.Context, opts ColumnAssetRew
 
 	stats.SegmentsRewritten = stats.SegmentsEligible
 	stats.RefsRemapped = len(remap.oldRefs)
+	for _, ref := range remap.newRefs {
+		stats.BytesCopied += ref.Length
+	}
 	stats.SupersededRefs = append(stats.SupersededRefs, remap.oldRefs...)
 	stats.RemappedRefs = append(stats.RemappedRefs, remap.newRefs...)
 	stats.RemapManifestRoot = rootIDs[0]
@@ -318,16 +336,12 @@ func (c *Collection) loadColumnAssetRewriteManifestState() (columnAssetRewriteMa
 }
 
 func (c *Collection) copyColumnAssetRewriteRefs(ctx context.Context, cfg ColumnStoreConfig, refs []ColumnAssetRef) (out columnAssetRewriteCopyResult, retErr error) {
-	segmentFileID, err := nextColumnAssetManagerSegmentFileID(c.db.ColumnAssetRootDir(), cfg)
-	if err != nil {
-		return columnAssetRewriteCopyResult{}, err
-	}
 	readCache, err := newColumnPhysicalAssetReadCache(c.db.ColumnAssetRootDir(), cfg.AssetManager.Namespace)
 	if err != nil {
 		return columnAssetRewriteCopyResult{}, err
 	}
 	defer func() { _ = readCache.close() }()
-	appender, err := newColumnPhysicalAssetSegmentAppender(c.db.ColumnAssetRootDir(), cfg, segmentFileID)
+	appender, err := newNextColumnPhysicalAssetSegmentAppender(c.db.ColumnAssetRootDir(), cfg)
 	if err != nil {
 		return columnAssetRewriteCopyResult{}, err
 	}
@@ -342,7 +356,7 @@ func (c *Collection) copyColumnAssetRewriteRefs(ctx context.Context, cfg ColumnS
 		oldRefs:       make([]ColumnAssetRef, 0, len(refs)),
 		newRefs:       make([]ColumnAssetRef, 0, len(refs)),
 		byOldRef:      make(map[ColumnAssetRef]ColumnAssetRef, len(refs)),
-		segmentFileID: segmentFileID,
+		segmentFileID: appender.fileID,
 	}
 	var rawScratch []byte
 	for _, oldRef := range refs {
@@ -376,7 +390,9 @@ func cleanupColumnAssetRewriteOpenAppender(appender *columnPhysicalAssetSegmentA
 	if appender == nil {
 		return nil
 	}
-	closeErr := appender.close()
+	// Abandoned partial copies are removed immediately; syncing the file before
+	// deletion would add write amplification without strengthening recovery.
+	closeErr := appender.abort()
 	removeErr := os.Remove(appender.assetPath)
 	if errors.Is(removeErr, os.ErrNotExist) {
 		removeErr = nil

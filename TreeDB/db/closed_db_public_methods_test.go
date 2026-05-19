@@ -355,7 +355,8 @@ func TestClosedDB_PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDelt
 		iter := table.NewIterator(nil, nil)
 		defer iter.Close()
 		_, _, err := d.PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder([]OrderedRootDeltaPublishInput{{
-			Iter: iter,
+			Iter:                      iter,
+			StorageMaintenanceRewrite: true,
 		}}, nil, func([]uint64) (iterator.UnsafeIterator, error) {
 			return mustFrozenSystemMemtable(t, "sys/k", "v").NewIterator(nil, nil), nil
 		})

@@ -34,6 +34,11 @@ const columnAssetSegmentWriteLockStripes = 64
 // without retaining one mutex per temp dir or segment path forever.
 var columnAssetSegmentWriteLocks [columnAssetSegmentWriteLockStripes]sync.Mutex
 
+// columnAssetSegmentFileIDAllocationMu serializes max(existing)+1 allocation
+// for new immutable segment files inside this process. O_EXCL still protects
+// against external process races.
+var columnAssetSegmentFileIDAllocationMu sync.Mutex
+
 type columnAssetManagerNamespace struct {
 	ManagerRootDir string
 	RootDir        string
@@ -279,6 +284,29 @@ func nextColumnAssetManagerSegmentFileID(rootDir string, cfg ColumnStoreConfig) 
 	return maxFileID + 1, nil
 }
 
+func newNextColumnPhysicalAssetSegmentAppender(rootDir string, cfg ColumnStoreConfig) (*columnPhysicalAssetSegmentAppender, error) {
+	columnAssetSegmentFileIDAllocationMu.Lock()
+	defer columnAssetSegmentFileIDAllocationMu.Unlock()
+
+	fileID, err := nextColumnAssetManagerSegmentFileID(rootDir, cfg)
+	if err != nil {
+		return nil, err
+	}
+	for {
+		appender, err := newColumnPhysicalAssetSegmentAppender(rootDir, cfg, fileID)
+		if err == nil {
+			return appender, nil
+		}
+		if !errors.Is(err, os.ErrExist) {
+			return nil, err
+		}
+		if fileID == ^uint32(0) {
+			return nil, errors.New("collections: column asset segment file_id exhausted")
+		}
+		fileID++
+	}
+}
+
 type columnPhysicalAssetSegmentAppender struct {
 	cfg        ColumnStoreConfig
 	namespace  columnAssetManagerNamespace
@@ -377,19 +405,28 @@ func (a *columnPhysicalAssetSegmentAppender) close() error {
 	if a == nil {
 		return nil
 	}
-	var closeErr error
+	var fileSyncErr error
+	var fileCloseErr error
 	if a.file != nil && a.closeFile {
-		if err := a.file.Sync(); err != nil && closeErr == nil {
-			closeErr = err
-		}
-		if err := a.file.Close(); err != nil && closeErr == nil {
-			closeErr = err
-		}
+		fileSyncErr = a.file.Sync()
+		fileCloseErr = a.file.Close()
 		a.closeFile = false
 		a.file = nil
 	}
-	if closeErr == nil {
-		closeErr = syncColumnAssetDir(a.namespace.SegmentDir)
+	dirSyncErr := syncColumnAssetDir(a.namespace.SegmentDir)
+	a.releaseLock()
+	return errors.Join(fileSyncErr, fileCloseErr, dirSyncErr)
+}
+
+func (a *columnPhysicalAssetSegmentAppender) abort() error {
+	if a == nil {
+		return nil
+	}
+	var closeErr error
+	if a.file != nil && a.closeFile {
+		closeErr = a.file.Close()
+		a.closeFile = false
+		a.file = nil
 	}
 	a.releaseLock()
 	return closeErr

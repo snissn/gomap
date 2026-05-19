@@ -660,6 +660,69 @@ func TestColumnAssetManagerConcurrentWritesKeepOffsetsStableM12A(t *testing.T) {
 	}
 }
 
+func TestColumnAssetManagerAllocatesDistinctNewSegmentsConcurrentlyM15C(t *testing.T) {
+	cfg := testColumnStoreConfig(nil)
+	normalized, err := normalizeColumnStoreConfig("events", cfg)
+	if err != nil {
+		t.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+	root := backenddb.ColumnAssetRootDirPath(t.TempDir())
+	const writers = 8
+	refs := make([]ColumnAssetRef, writers)
+	payloads := make([][]byte, writers)
+	var wg sync.WaitGroup
+	errs := make(chan error, writers)
+	for i := 0; i < writers; i++ {
+		i := i
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			appender, err := newNextColumnPhysicalAssetSegmentAppender(root, *normalized)
+			if err != nil {
+				errs <- err
+				return
+			}
+			payload := []byte(fmt.Sprintf("payload-%02d", i))
+			ref, err := appender.append(payload, uint64(i+1), 1)
+			if err != nil {
+				_ = cleanupColumnAssetRewriteOpenAppender(appender)
+				errs <- err
+				return
+			}
+			if err := appender.close(); err != nil {
+				errs <- err
+				return
+			}
+			payloads[i] = payload
+			refs[i] = ref
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent segment allocation: %v", err)
+		}
+	}
+	seenFileIDs := make(map[uint32]bool, writers)
+	for i, ref := range refs {
+		if ref.FileID == 0 {
+			t.Fatalf("ref[%d]=%+v has zero file_id", i, ref)
+		}
+		if seenFileIDs[ref.FileID] {
+			t.Fatalf("duplicate file_id for ref[%d]=%+v refs=%+v", i, ref, refs)
+		}
+		seenFileIDs[ref.FileID] = true
+		raw, err := readColumnPhysicalAssetFromManager(root, ref)
+		if err != nil {
+			t.Fatalf("read ref[%d]=%+v: %v", i, ref, err)
+		}
+		if !bytes.Equal(raw, payloads[i]) {
+			t.Fatalf("payload[%d]=%q want %q", i, raw, payloads[i])
+		}
+	}
+}
+
 func TestColumnDeclaredExtractionJSONBenchShapeM12A(t *testing.T) {
 	cfg := &ColumnStoreConfig{
 		Enabled: true,
