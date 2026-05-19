@@ -26,10 +26,11 @@ type columnPhysicalScanDiagnostics struct {
 	DecodedBlocks              int
 	ScheduledGranules          int
 	// Reserved for M14 predicate pushdown; M13A schedules every manifest ref.
-	SkippedGranules      int
-	RowsScanned          int
-	DeletedRows          int
-	ProjectedColumns     int
+	SkippedGranules  int
+	RowsScanned      int
+	DeletedRows      int
+	ProjectedColumns int
+	// Counts full-document row materialization; M13A emits declared-column row views only.
 	RowMaterializations  int
 	PhysicalBytesScanned int64
 }
@@ -40,9 +41,9 @@ type columnPhysicalScanRowView struct {
 	AppliedCommandLSN uint64
 	Operation         ColumnPublishOperation
 	RowIndex          int
-	// ID aliases the raw asset buffer and is valid only until the visitor returns.
+	// ID is passed by value but aliases the raw asset buffer; copy to retain it.
 	ID []byte
-	// Values aliases scanner scratch and is valid only until the visitor returns.
+	// Values aliases scanner scratch; copy before the visitor returns to retain it.
 	Values  []columnDeclaredValue
 	Deleted bool
 }
@@ -403,10 +404,10 @@ func scanColumnPhysicalAssetRows(raw []byte, ref ColumnAssetRef, expectedCollect
 		}
 		rowValues := valuesBuf[:0]
 		if deleted {
+			// Delete assets encode no column values; the operation check enforces that contract.
 			if header.Operation != ColumnPublishOperationDelete {
 				return columnPhysicalAssetScanSummary{}, fmt.Errorf("column physical asset %s row[%d] is marked deleted", header.Operation, rowIdx)
 			}
-			// Delete assets encode no column values for deleted rows; trailing bytes fail closed below.
 			summary.deleted++
 		} else {
 			if header.Operation == ColumnPublishOperationDelete {

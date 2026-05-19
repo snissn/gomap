@@ -983,10 +983,11 @@ func BenchmarkColumnPhysicalCollectionSerialScanM13A(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
+	var sum int64
 	req := columnPhysicalScanRequest{
 		ProjectedColumns: []string{"time_us"},
 		Visitor: func(row columnPhysicalScanRowView) error {
-			columnPhysicalScanBenchSum += row.Values[0].Int64
+			sum += row.Values[0].Int64
 			return nil
 		},
 	}
@@ -994,7 +995,7 @@ func BenchmarkColumnPhysicalCollectionSerialScanM13A(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	columnPhysicalScanBenchSum = 0
+	sum = 0
 	b.ReportAllocs()
 	b.SetBytes(preview.PhysicalBytesScanned)
 	b.ResetTimer()
@@ -1007,6 +1008,7 @@ func BenchmarkColumnPhysicalCollectionSerialScanM13A(b *testing.B) {
 		rows += int64(diag.RowsScanned)
 	}
 	columnPhysicalScanBenchRows = rows
+	columnPhysicalScanBenchSum = sum
 }
 
 func BenchmarkColumnAssetManagerWriteM12A(b *testing.B) {
