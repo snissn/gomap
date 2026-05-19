@@ -55,12 +55,16 @@ func (c *Collection) RebuildVectorIndex(name string) (VectorIndexStatus, error) 
 	if err := ValidateIndexName(name); err != nil {
 		return VectorIndexStatus{}, err
 	}
+	if err := c.flushBufferedWrites(); err != nil {
+		return VectorIndexStatus{}, err
+	}
 	if status, handled, err := c.probeColumnGraphVectorIndexRebuild(name, start); err != nil || handled {
 		return status, err
 	}
 	// Native rebuild publishes a full replacement graph root. Hold the same
 	// mutation barrier used by writes across the primary scan and root publish
-	// so no committed write can be skipped by the clean replacement snapshot.
+	// so no committed write after the pre-lock probe can be skipped by the clean
+	// replacement snapshot.
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()
 	if err := c.flushBufferedWrites(); err != nil {
