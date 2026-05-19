@@ -119,12 +119,18 @@ func main() {
 	}
 
 	printTitle("Activity event column store")
-	printNarrative("Write a short activity stream as JSON, keep the hot dimensions in column lanes, then reopen it and scan those lanes for rollups.")
+	printNarrative("Scenario: a feed service receives activity events from web, iOS, and Android clients. Each row records when something happened, who acted, what action they took, which client sent it, and which feed item was touched.")
+	fmt.Println()
+	printNarrative("Why collect it: the application still needs exact event reads by id for debugging and user-facing workflows, while operators need fast rollups over a slice of the feed to see activity mix and actor spread.")
+	fmt.Println()
+	printNarrative("Storage shape: TreeDB stores the full event as JSON, then promotes time_us, action, and actor into physical column lanes because those are the fields scanned by the rollups below. Client and subject stay in the retained JSON payload.")
 	fmt.Println()
 	printBox("Dataset", keyValueLines([][2]string{
 		{"db", absDir},
 		{"collection", collectionName},
 		{"rows ingested", fmt.Sprintf("%d", len(events))},
+		{"source", "feed activity events from app clients"},
+		{"row shape", "time_us, action, actor, client, subject"},
 		{"column lanes", "time_us, action, actor"},
 		{"retained JSON", "client, subject"},
 	}))

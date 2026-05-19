@@ -1,8 +1,15 @@
 # TreeDB Activity Event Column Store
 
 Activity streams are a natural fit for a collection that needs both primary
-reads and scan-friendly analytics. Each event is stored as JSON so the original
-row can be read back by key, while a few high-value fields are also written into
+reads and scan-friendly analytics. In this walkthrough, a feed service receives
+events from web, iOS, and Android clients. Each event records when something
+happened, who acted, what action they took, which client sent it, and which feed
+item was touched.
+
+That shape is useful in two different ways. Product and debugging paths often
+need the complete event by id. Operational questions usually scan the same few
+dimensions: event time, action type, and actor. TreeDB stores the full row as
+JSON for the primary read path, while also writing those scan-heavy fields into
 physical column lanes.
 
 The command writes a small activity feed into TreeDB, checkpoints it, reopens
@@ -57,8 +64,17 @@ The output keeps the read path and scan path visible:
 
 ```text
 Activity event column store
-Write a short activity stream as JSON, keep the hot dimensions in column lanes, then reopen it
-and scan those lanes for rollups.
+Scenario: a feed service receives activity events from web, iOS, and Android clients. Each row
+records when something happened, who acted, what action they took, which client sent it, and
+which feed item was touched.
+
+Why collect it: the application still needs exact event reads by id for debugging and
+user-facing workflows, while operators need fast rollups over a slice of the feed to see
+activity mix and actor spread.
+
+Storage shape: TreeDB stores the full event as JSON, then promotes time_us, action, and actor
+into physical column lanes because those are the fields scanned by the rollups below. Client
+and subject stay in the retained JSON payload.
 
 ╭──────────────────────────────────────────────────────────╮
 │  Dataset                                                 │
@@ -66,6 +82,8 @@ and scan those lanes for rollups.
 │  db:             /tmp/gomap-column-store-quickstart-...  │
 │  collection:     activity_events                         │
 │  rows ingested:  48                                      │
+│  source:         feed activity events from app clients    │
+│  row shape:      time_us, action, actor, client, subject  │
 │  column lanes:   time_us, action, actor                  │
 │  retained JSON:  client, subject                         │
 ╰──────────────────────────────────────────────────────────╯
