@@ -94,6 +94,7 @@ type ColumnAssetReachabilitySegmentStats struct {
 	Mixed            int
 	Unknown          int
 	Missing          int
+	OutOfBoundsRefs  int
 	BytesTotal       int64
 	BytesProtected   int64
 	BytesReclaimable int64
@@ -356,7 +357,7 @@ func buildColumnAssetReachabilityPlan(ctx context.Context, input columnAssetReac
 		plan.Segments.BytesTotal += segment.bytes
 		segmentPlan := classifyColumnAssetReachabilitySegment(segment, rangesByFile[segment.fileID])
 		if segmentPlan.outOfBoundsRefs != 0 {
-			plan.Segments.Missing += segmentPlan.outOfBoundsRefs
+			plan.Segments.OutOfBoundsRefs += segmentPlan.outOfBoundsRefs
 			plan.Complete = false
 		}
 		if segmentPlan.unknownBytes != 0 {
@@ -402,7 +403,7 @@ func buildColumnAssetReachabilityPlan(ctx context.Context, input columnAssetReac
 	})
 	for _, fileID := range missingFileIDs {
 		ranges := rangesByFile[fileID]
-		plan.Segments.Missing += len(ranges)
+		plan.Segments.Missing++
 		plan.Complete = false
 		if input.detailed {
 			plan.SegmentEntries = append(plan.SegmentEntries, ColumnAssetReachabilitySegmentEntry{

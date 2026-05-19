@@ -311,6 +311,85 @@ func TestColumnAssetReachabilityPlanOrdersMissingSegmentEntriesM15A(t *testing.T
 	}
 }
 
+func TestColumnAssetReachabilityPlanCountsMissingSegmentsOnceM15A(t *testing.T) {
+	const namespace = "events/column-assets"
+	input := columnAssetReachabilityInput{
+		rootDir:     t.TempDir(),
+		collection:  "events",
+		namespace:   namespace,
+		detailed:    true,
+		activeGen:   1,
+		recoveryGen: 1,
+	}
+	for partID := uint64(1); partID <= 2; partID++ {
+		input.addRef(ColumnAssetRef{
+			Kind:       ColumnAssetKindTCS1PartImage,
+			Namespace:  namespace,
+			Generation: 1,
+			PartID:     partID,
+			FileID:     7,
+			Offset:     int64(partID-1) * 64,
+			Length:     64,
+		}, ColumnAssetReachabilitySourceActiveManifest)
+	}
+
+	plan, err := buildColumnAssetReachabilityPlan(context.Background(), input)
+	if err != nil {
+		t.Fatalf("buildColumnAssetReachabilityPlan: %v", err)
+	}
+	if plan.Complete || plan.Segments.Missing != 1 || plan.Segments.OutOfBoundsRefs != 0 {
+		t.Fatalf("segments=%+v complete=%t want one missing segment and no out-of-bounds refs", plan.Segments, plan.Complete)
+	}
+	if len(plan.SegmentEntries) != 1 || plan.SegmentEntries[0].FileID != 7 || plan.SegmentEntries[0].RefCount != 2 {
+		t.Fatalf("segment entries=%+v want one missing segment entry with two refs", plan.SegmentEntries)
+	}
+}
+
+func TestColumnAssetReachabilityPlanSeparatesOutOfBoundsRefsFromMissingSegmentsM15A(t *testing.T) {
+	const namespaceName = "events/column-assets"
+	root := t.TempDir()
+	namespace, err := columnAssetManagerNamespaceForRoot(root, namespaceName)
+	if err != nil {
+		t.Fatalf("columnAssetManagerNamespaceForRoot: %v", err)
+	}
+	if err := ensureColumnAssetManagerNamespace(namespace); err != nil {
+		t.Fatalf("ensureColumnAssetManagerNamespace: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(namespace.SegmentDir, columnAssetSegmentFileName(1)), make([]byte, 32), 0o600); err != nil {
+		t.Fatalf("WriteFile segment: %v", err)
+	}
+	input := columnAssetReachabilityInput{
+		rootDir:     root,
+		collection:  "events",
+		namespace:   namespaceName,
+		detailed:    true,
+		activeGen:   1,
+		recoveryGen: 1,
+	}
+	input.addRef(ColumnAssetRef{
+		Kind:       ColumnAssetKindTCS1PartImage,
+		Namespace:  namespaceName,
+		Generation: 1,
+		PartID:     1,
+		FileID:     1,
+		Length:     64,
+	}, ColumnAssetReachabilitySourceActiveManifest)
+
+	plan, err := buildColumnAssetReachabilityPlan(context.Background(), input)
+	if err != nil {
+		t.Fatalf("buildColumnAssetReachabilityPlan: %v", err)
+	}
+	if plan.Complete || plan.Segments.Missing != 0 || plan.Segments.OutOfBoundsRefs != 1 {
+		t.Fatalf("segments=%+v complete=%t want existing out-of-bounds ref without missing segment", plan.Segments, plan.Complete)
+	}
+	if plan.Segments.Unknown != 1 || plan.Segments.BytesProtected != 32 || plan.Segments.BytesUnknown != 0 {
+		t.Fatalf("segments=%+v want unknown existing segment with clipped protected bytes", plan.Segments)
+	}
+	if len(plan.SegmentEntries) != 1 || plan.SegmentEntries[0].Status != ColumnAssetReachabilitySegmentUnknown || plan.SegmentEntries[0].RefCount != 1 {
+		t.Fatalf("segment entries=%+v want one unknown existing segment entry", plan.SegmentEntries)
+	}
+}
+
 func TestColumnAssetReachabilitySegmentFileIDRejectsNonCanonicalM15A(t *testing.T) {
 	fileID, ok := columnAssetReachabilitySegmentFileID(columnAssetSegmentFileName(1))
 	if !ok || fileID != 1 {
