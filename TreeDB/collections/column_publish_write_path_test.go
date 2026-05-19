@@ -732,6 +732,34 @@ func TestColumnStoreCommandWALWritesPhysicalColumnAssetsM12A(t *testing.T) {
 	}
 }
 
+func TestColumnStoreInvalidDeclaredColumnRejectedBeforeCommandWALM12A(t *testing.T) {
+	dir, _ := prepareColumnStoreCommandWALDirM10B(t)
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	col := openColumnStoreCollectionM10B(t, d, mgr)
+	framesBefore := countCollectionCommandWALFrames(t, dir)
+	appliedBefore := d.State().AppliedCommandLSN
+	_, err := col.InsertBatch([][]byte{[]byte("bad")}, [][]byte{
+		[]byte(`{"time_us":"not-an-int","kind":"like","did":"d1"}`),
+	})
+	if !errors.Is(err, ErrColumnDeclaredValueUnsupported) {
+		t.Fatalf("InsertBatch error=%v, want ErrColumnDeclaredValueUnsupported", err)
+	}
+	if got := countCollectionCommandWALFrames(t, dir); got != framesBefore {
+		t.Fatalf("command WAL frames after invalid declared column=%d, want %d", got, framesBefore)
+	}
+	if got := d.State().AppliedCommandLSN; got != appliedBefore {
+		t.Fatalf("AppliedCommandLSN after invalid declared column=%d, want %d", got, appliedBefore)
+	}
+	assertColumnStoreDocumentMissingM10B(t, col, "bad")
+	assertColumnStorePersistedDocumentMissingM10B(t, d, "events", "bad")
+	if err := d.CheckCommandWALPublishReady(); err != nil {
+		t.Fatalf("CheckCommandWALPublishReady after rejected declared column: %v", err)
+	}
+}
+
 func TestColumnStoreCommandWALReplayPublishesManifestM10B(t *testing.T) {
 	dir, _ := prepareColumnStoreCommandWALDirM10B(t)
 	d := openCollectionCommandWALDB(t, dir)
@@ -843,7 +871,11 @@ func TestColumnStoreStaleColumnRootPreflightDoesNotAppendCommandWALM10B(t *testi
 				baseSystemRoot:   staleSystemRoot,
 				commandWALIntent: intent,
 				operation:        ColumnPublishOperationInsert,
-				rows:             1,
+				documents: []columnWriteDocument{{
+					ID:       []byte("stale"),
+					Document: []byte(`{"time_us":2,"kind":"post","did":"d2"}`),
+				}},
+				rows: 1,
 			})
 			if !errors.Is(err, ErrConcurrentMutation) {
 				t.Fatalf("stale column-root publish error=%v, want ErrConcurrentMutation", err)
