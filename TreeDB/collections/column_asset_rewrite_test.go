@@ -285,22 +285,21 @@ func TestColumnAssetRewriteCleansCopiedSegmentOnStalePublishPreflightM15C(t *tes
 	candidate := writeColumnAssetReachabilityCandidateM15A(t, d, col, 3, 99)
 	beforeSegments := columnAssetSegmentNamesM15C(t, d, col)
 
-	restoreHook := setColumnAssetRewriteAfterCopyHookForTest(func() error {
-		_, _, err := d.PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(nil, nil, func([]uint64) (iterator.UnsafeIterator, error) {
-			current := d.AcquireSnapshot()
-			if current == nil {
-				return nil, backenddb.ErrClosed
-			}
-			defer func() { _ = current.Close() }()
-			return buildSystemTargetIterator(current, map[string][]byte{
-				systemCollectionRootKey(collectionColumnManifestRootName("events")): encodeRootID(0),
-			})
-		})
-		return err
-	})
-	defer restoreHook()
 	stats, err := col.ColumnAssetRewrite(context.Background(), ColumnAssetRewriteOptions{
 		CandidateRefs: []ColumnAssetRef{candidate},
+		afterCopyHookForTest: func() error {
+			_, _, err := d.PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(nil, nil, func([]uint64) (iterator.UnsafeIterator, error) {
+				current := d.AcquireSnapshot()
+				if current == nil {
+					return nil, backenddb.ErrClosed
+				}
+				defer func() { _ = current.Close() }()
+				return buildSystemTargetIterator(current, map[string][]byte{
+					systemCollectionRootKey(collectionColumnManifestRootName("events")): encodeRootID(0),
+				})
+			})
+			return err
+		},
 	})
 	if err == nil {
 		t.Fatal("ColumnAssetRewrite stale publish unexpectedly succeeded")
@@ -435,27 +434,30 @@ func BenchmarkColumnAssetRewriteMixedSegmentM15C(b *testing.B) {
 			bytesCopiedPerRun := columnAssetRewriteBenchmarkBytesPerRunM15C(b, refs)
 			b.SetBytes(bytesCopiedPerRun)
 			b.ReportAllocs()
-			cases := make([]columnAssetRewriteBenchmarkCaseM15C, b.N)
-			for i := range cases {
-				cases[i] = prepareColumnAssetRewriteBenchmarkCaseM15C(b, refs)
-				if cases[i].bytesCopied != bytesCopiedPerRun {
-					closeColumnAssetRewriteBenchmarkCasesM15C(b, cases[:i+1])
-					b.Fatalf("bytesCopied=%d want stable benchmark bytes=%d", cases[i].bytesCopied, bytesCopiedPerRun)
-				}
-			}
-			defer closeColumnAssetRewriteBenchmarkCasesM15C(b, cases)
 			ctx := context.Background()
 			b.ResetTimer()
+			b.StopTimer()
 			for i := 0; i < b.N; i++ {
-				tc := cases[i]
+				tc := prepareColumnAssetRewriteBenchmarkCaseM15C(b, refs)
+				if tc.bytesCopied != bytesCopiedPerRun {
+					if err := closeColumnAssetRewriteBenchmarkCaseM15C(tc); err != nil {
+						b.Fatalf("close benchmark case after unstable bytes: %v", err)
+					}
+					b.Fatalf("bytesCopied=%d want stable benchmark bytes=%d", tc.bytesCopied, bytesCopiedPerRun)
+				}
+				b.StartTimer()
 				stats, err := tc.col.ColumnAssetRewrite(ctx, ColumnAssetRewriteOptions{
 					CandidateRefs: []ColumnAssetRef{tc.candidate},
 				})
+				b.StopTimer()
 				if err != nil {
 					b.Fatalf("ColumnAssetRewrite refs=%d: %v", refs, err)
 				}
 				if stats.RefsRemapped != len(tc.liveRefs) || stats.SegmentsRewritten != 1 || stats.BytesCopied != bytesCopiedPerRun {
 					b.Fatalf("stats=%+v liveRefs=%d bytesCopied=%d", stats, len(tc.liveRefs), bytesCopiedPerRun)
+				}
+				if err := closeColumnAssetRewriteBenchmarkCaseM15C(tc); err != nil {
+					b.Fatalf("close benchmark case: %v", err)
 				}
 			}
 		})
@@ -473,7 +475,11 @@ type columnAssetRewriteBenchmarkCaseM15C struct {
 func columnAssetRewriteBenchmarkBytesPerRunM15C(b *testing.B, refs int) int64 {
 	b.Helper()
 	tc := prepareColumnAssetRewriteBenchmarkCaseM15C(b, refs)
-	defer closeColumnAssetRewriteBenchmarkCasesM15C(b, []columnAssetRewriteBenchmarkCaseM15C{tc})
+	defer func() {
+		if err := closeColumnAssetRewriteBenchmarkCaseM15C(tc); err != nil {
+			b.Fatalf("close benchmark probe: %v", err)
+		}
+	}()
 	return tc.bytesCopied
 }
 
@@ -509,13 +515,17 @@ func prepareColumnAssetRewriteBenchmarkCaseM15C(b testing.TB, refs int) columnAs
 	}
 }
 
+func closeColumnAssetRewriteBenchmarkCaseM15C(tc columnAssetRewriteBenchmarkCaseM15C) error {
+	if tc.d == nil {
+		return nil
+	}
+	return tc.d.Close()
+}
+
 func closeColumnAssetRewriteBenchmarkCasesM15C(b testing.TB, cases []columnAssetRewriteBenchmarkCaseM15C) {
 	b.Helper()
 	for i := range cases {
-		if cases[i].d == nil {
-			continue
-		}
-		if err := cases[i].d.Close(); err != nil {
+		if err := closeColumnAssetRewriteBenchmarkCaseM15C(cases[i]); err != nil {
 			b.Fatalf("Close benchmark DB: %v", err)
 		}
 		cases[i].d = nil

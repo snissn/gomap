@@ -36,6 +36,10 @@ var ErrOrderedRootGroupCommandWALContextNilSystemBuilder = errors.New("treedb: P
 // publish API.
 var ErrOrderedRootDeltaBatchGroupCommandWALContextNilSystemBuilder = errors.New("treedb: PublishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilder: nil system builder")
 
+// ErrStorageMaintenanceRewriteMarkerMissing reports a maintenance ordered-root
+// publish input that is not explicitly marked as storage-maintenance.
+var ErrStorageMaintenanceRewriteMarkerMissing = errors.New("treedb: storage-maintenance rewrite marker missing")
+
 var (
 	errCommandWALContextZeroLSN = errors.New("treedb: command WAL context publish appended zero LSN")
 
@@ -1391,8 +1395,10 @@ func (db *DB) PublishOrderedRootDeltaGroupWithPreflightAndSystemDeltaBuilder(ord
 // PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder is like
 // PublishOrderedRootDeltaGroupWithPreflightAndSystemDeltaBuilder, but permits
 // storage-maintenance root rewrites while command-WAL mode is enabled. Callers
-// must set StorageMaintenanceRewrite on every ordered input and must not use it
-// for logical user mutations; it does not append or advance a command-WAL frame.
+// must set StorageMaintenanceRewrite on every ordered input when ordered inputs
+// are present; system-only maintenance publishes are allowed. Callers must not
+// use it for logical user mutations; it does not append or advance a command-WAL
+// frame.
 func (db *DB) PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(ordered []OrderedRootDeltaPublishInput, preflight OrderedRootGroupPreflight, buildSystemDeltaIter OrderedRootGroupSystemBuilder) (uint64, []uint64, error) {
 	return db.publishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered, preflight, nil, buildSystemDeltaIter, orderedRootDeltaGroupSystemPublishStorageMaintenance)
 }
@@ -1400,7 +1406,7 @@ func (db *DB) PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBui
 func validateStorageMaintenanceOrderedRootDeltaInputs(ordered []OrderedRootDeltaPublishInput) error {
 	for idx := range ordered {
 		if !ordered[idx].StorageMaintenanceRewrite {
-			return fmt.Errorf("maintenance ordered-root publish input %d missing storage-maintenance rewrite marker", idx)
+			return fmt.Errorf("%w: ordered input %d", ErrStorageMaintenanceRewriteMarkerMissing, idx)
 		}
 	}
 	return nil

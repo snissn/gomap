@@ -34,10 +34,17 @@ const columnAssetSegmentWriteLockStripes = 64
 // without retaining one mutex per temp dir or segment path forever.
 var columnAssetSegmentWriteLocks [columnAssetSegmentWriteLockStripes]sync.Mutex
 
-// columnAssetSegmentFileIDAllocationMu serializes max(existing)+1 allocation
-// for new immutable segment files inside this process. O_EXCL still protects
-// against external process races.
-var columnAssetSegmentFileIDAllocationMu sync.Mutex
+// columnAssetSegmentFileIDAllocators cache the next segment file id per
+// namespace after a one-time directory scan. O_EXCL still protects against
+// external process races.
+var columnAssetSegmentFileIDAllocators sync.Map
+
+type columnAssetSegmentFileIDAllocator struct {
+	mu          sync.Mutex
+	initialized bool
+	next        uint32
+	exhausted   bool
+}
 
 type columnAssetManagerNamespace struct {
 	ManagerRootDir string
@@ -257,20 +264,10 @@ func writeColumnPhysicalAssetToManagerSegment(rootDir string, cfg ColumnStoreCon
 	return ref, nil
 }
 
-func nextColumnAssetManagerSegmentFileID(rootDir string, cfg ColumnStoreConfig) (uint32, error) {
-	if cfg.AssetManager == nil {
-		return 0, errors.New("collections: column physical asset rewrite requires asset manager")
-	}
-	namespace, err := columnAssetManagerNamespaceForRoot(rootDir, cfg.AssetManager.Namespace)
-	if err != nil {
-		return 0, err
-	}
-	if err := ensureColumnAssetManagerNamespace(namespace); err != nil {
-		return 0, err
-	}
+func initializeColumnAssetSegmentFileIDAllocator(namespace columnAssetManagerNamespace, allocator *columnAssetSegmentFileIDAllocator) error {
 	segments, err := listColumnAssetReachabilitySegments(namespace.SegmentDir)
 	if err != nil {
-		return 0, err
+		return err
 	}
 	maxFileID := uint32(0)
 	for _, segment := range segments {
@@ -279,31 +276,56 @@ func nextColumnAssetManagerSegmentFileID(rootDir string, cfg ColumnStoreConfig) 
 		}
 	}
 	if maxFileID == ^uint32(0) {
-		return 0, errors.New("collections: column asset segment file_id exhausted")
+		allocator.exhausted = true
+		return errors.New("collections: column asset segment file_id exhausted")
 	}
-	return maxFileID + 1, nil
+	allocator.next = maxFileID + 1
+	allocator.initialized = true
+	return nil
 }
 
 func newNextColumnPhysicalAssetSegmentAppender(rootDir string, cfg ColumnStoreConfig) (*columnPhysicalAssetSegmentAppender, error) {
-	columnAssetSegmentFileIDAllocationMu.Lock()
-	defer columnAssetSegmentFileIDAllocationMu.Unlock()
-
-	fileID, err := nextColumnAssetManagerSegmentFileID(rootDir, cfg)
+	if cfg.AssetManager == nil {
+		return nil, errors.New("collections: column physical asset rewrite requires asset manager")
+	}
+	namespace, err := columnAssetManagerNamespaceForRoot(rootDir, cfg.AssetManager.Namespace)
 	if err != nil {
 		return nil, err
 	}
+	if err := ensureColumnAssetManagerNamespace(namespace); err != nil {
+		return nil, err
+	}
+	loaded, _ := columnAssetSegmentFileIDAllocators.LoadOrStore(filepath.Clean(namespace.SegmentDir), &columnAssetSegmentFileIDAllocator{})
+	allocator := loaded.(*columnAssetSegmentFileIDAllocator)
+	allocator.mu.Lock()
+	defer allocator.mu.Unlock()
+	if !allocator.initialized && !allocator.exhausted {
+		if err := initializeColumnAssetSegmentFileIDAllocator(namespace, allocator); err != nil {
+			return nil, err
+		}
+	}
+	if allocator.exhausted {
+		return nil, errors.New("collections: column asset segment file_id exhausted")
+	}
 	for {
+		fileID := allocator.next
 		appender, err := newColumnPhysicalAssetSegmentAppender(rootDir, cfg, fileID)
 		if err == nil {
+			if fileID == ^uint32(0) {
+				allocator.exhausted = true
+			} else {
+				allocator.next = fileID + 1
+			}
 			return appender, nil
 		}
 		if !errors.Is(err, os.ErrExist) {
 			return nil, err
 		}
 		if fileID == ^uint32(0) {
+			allocator.exhausted = true
 			return nil, errors.New("collections: column asset segment file_id exhausted")
 		}
-		fileID++
+		allocator.next = fileID + 1
 	}
 }
 

@@ -293,8 +293,8 @@ func TestPublishOrderedRootDeltaGroupMaintenanceRejectsUnmarkedRootDelta(t *test
 			return nil, nil
 		},
 	)
-	if err == nil || !strings.Contains(err.Error(), "storage-maintenance rewrite marker") {
-		t.Fatalf("maintenance publish error=%v want missing storage-maintenance marker", err)
+	if !errors.Is(err, ErrStorageMaintenanceRewriteMarkerMissing) {
+		t.Fatalf("maintenance publish error=%v want ErrStorageMaintenanceRewriteMarkerMissing", err)
 	}
 }
 

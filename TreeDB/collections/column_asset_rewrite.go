@@ -7,38 +7,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sync"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 )
-
-var columnAssetRewriteAfterCopyHook struct {
-	sync.Mutex
-	fn func() error
-}
-
-func setColumnAssetRewriteAfterCopyHookForTest(fn func() error) func() {
-	columnAssetRewriteAfterCopyHook.Lock()
-	prev := columnAssetRewriteAfterCopyHook.fn
-	columnAssetRewriteAfterCopyHook.fn = fn
-	columnAssetRewriteAfterCopyHook.Unlock()
-	return func() {
-		columnAssetRewriteAfterCopyHook.Lock()
-		columnAssetRewriteAfterCopyHook.fn = prev
-		columnAssetRewriteAfterCopyHook.Unlock()
-	}
-}
-
-func runColumnAssetRewriteAfterCopyHook() error {
-	columnAssetRewriteAfterCopyHook.Lock()
-	fn := columnAssetRewriteAfterCopyHook.fn
-	columnAssetRewriteAfterCopyHook.Unlock()
-	if fn == nil {
-		return nil
-	}
-	return fn()
-}
 
 // ColumnAssetRewriteOptions controls M15C mixed-segment rewrite/remap.
 type ColumnAssetRewriteOptions struct {
@@ -49,6 +21,8 @@ type ColumnAssetRewriteOptions struct {
 	PendingRefs   []ColumnAssetRef
 	PreparedRefs  []ColumnAssetRef
 	PinnedRefs    []ColumnAssetRef
+
+	afterCopyHookForTest func() error
 }
 
 // ColumnAssetRewriteStats summarizes mixed-segment rewrite/remap.
@@ -161,6 +135,9 @@ func (c *Collection) columnAssetRewrite(ctx context.Context, opts ColumnAssetRew
 		stats.Plan = columnAssetRewritePlanForDetail(stats.Plan, opts.Detailed)
 		return stats, nil
 	}
+	// Re-check after reachability planning and immediately before writing copied
+	// assets; DB maintenance readiness can change independently of this
+	// collection's mutation lock.
 	if err := c.db.CheckStorageMaintenanceReady(); err != nil {
 		stats.Plan = columnAssetRewritePlanForDetail(stats.Plan, opts.Detailed)
 		return stats, err
@@ -194,7 +171,13 @@ func (c *Collection) columnAssetRewrite(ctx context.Context, opts ColumnAssetRew
 		}
 		return baseErr
 	}
-	if err := runColumnAssetRewriteAfterCopyHook(); err != nil {
+	if opts.afterCopyHookForTest != nil {
+		if err := opts.afterCopyHookForTest(); err != nil {
+			stats.Plan = columnAssetRewritePlanForDetail(stats.Plan, opts.Detailed)
+			return stats, cleanupRemap(err)
+		}
+	}
+	if err := ctx.Err(); err != nil {
 		stats.Plan = columnAssetRewritePlanForDetail(stats.Plan, opts.Detailed)
 		return stats, cleanupRemap(err)
 	}
