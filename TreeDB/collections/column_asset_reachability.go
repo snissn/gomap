@@ -19,10 +19,15 @@ import (
 type ColumnAssetReachabilityOptions struct {
 	Detailed       bool
 	SegmentDetails bool
-	CandidateRefs  []ColumnAssetRef
-	PendingRefs    []ColumnAssetRef
-	PreparedRefs   []ColumnAssetRef
-	PinnedRefs     []ColumnAssetRef
+	// ProtectCandidateRefsForOlderSnapshots conservatively treats candidate
+	// refs as pinned while any active TreeDB snapshot predates the planning
+	// snapshot. Destructive GC enables this; non-destructive rewrite leaves it
+	// off so it can remap current manifest refs while retaining old segments.
+	ProtectCandidateRefsForOlderSnapshots bool
+	CandidateRefs                         []ColumnAssetRef
+	PendingRefs                           []ColumnAssetRef
+	PreparedRefs                          []ColumnAssetRef
+	PinnedRefs                            []ColumnAssetRef
 }
 
 type ColumnAssetReachabilityStatus string
@@ -234,6 +239,11 @@ func (c *Collection) PlanColumnAssetReachability(ctx context.Context, opts Colum
 	if err := input.addRefs(ctx, opts.CandidateRefs, ColumnAssetReachabilitySourceCandidate); err != nil {
 		return columnAssetReachabilityPlanIdentity(input), err
 	}
+	if opts.ProtectCandidateRefsForOlderSnapshots && c.columnAssetReachabilityOlderSnapshotPinned(view.CommitSeq) {
+		if err := input.addRefs(ctx, opts.CandidateRefs, ColumnAssetReachabilitySourcePinnedSnapshot); err != nil {
+			return columnAssetReachabilityPlanIdentity(input), err
+		}
+	}
 	if err := input.addRefs(ctx, opts.PendingRefs, ColumnAssetReachabilitySourcePendingPublish); err != nil {
 		return columnAssetReachabilityPlanIdentity(input), err
 	}
@@ -247,6 +257,13 @@ func (c *Collection) PlanColumnAssetReachability(ctx context.Context, opts Colum
 		return columnAssetReachabilityPlanIdentity(input), err
 	}
 	return buildColumnAssetReachabilityPlan(ctx, input)
+}
+
+func (c *Collection) columnAssetReachabilityOlderSnapshotPinned(planCommitSeq uint64) bool {
+	if c == nil || c.db == nil {
+		return false
+	}
+	return c.db.MinPinnedSnapshotCommitSeq() < planCommitSeq
 }
 
 type columnAssetReachabilityInput struct {

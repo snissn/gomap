@@ -87,6 +87,7 @@ type columnPhysicalScanSnapshotView struct {
 	CollectionName     string
 	Config             ColumnStoreConfig
 	ColumnStoreEnabled bool
+	CommitSeq          uint64
 	AssetRefs          []columnManifestAssetRefForScan
 	MutationParts      int
 	Diagnostics        columnPhysicalScanDiagnostics
@@ -194,6 +195,10 @@ func (c *Collection) prepareColumnPhysicalScanSnapshotViewAtSnapshot(
 	if rootID == 0 {
 		return columnPhysicalScanSnapshotView{}, fmt.Errorf("collections: physical column scan missing manifest root %q", collectionColumnManifestRootName(collectionName))
 	}
+	snapshotState := snap.State()
+	if snapshotState == nil {
+		return columnPhysicalScanSnapshotView{}, errCollectionDBNil
+	}
 
 	diag := columnPhysicalScanDiagnostics{
 		ManifestRoot:               rootID,
@@ -205,6 +210,7 @@ func (c *Collection) prepareColumnPhysicalScanSnapshotViewAtSnapshot(
 		CollectionName:     collectionName,
 		Config:             cfg,
 		ColumnStoreEnabled: columnStoreEnabled,
+		CommitSeq:          snapshotState.CommitSeq,
 		Diagnostics:        diag,
 		ColumnAssetRootDir: c.db.ColumnAssetRootDir(),
 		AssetNamespace:     cfg.AssetManager.Namespace,

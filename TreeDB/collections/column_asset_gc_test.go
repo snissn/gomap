@@ -214,6 +214,114 @@ func TestColumnAssetGCProtectsPinnedCandidateM15B(t *testing.T) {
 	}
 }
 
+func TestColumnAssetGCRetainsSupersededSegmentWhileOlderSnapshotPinnedM15C(t *testing.T) {
+	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col := openColumnStoreCollectionM10B(t, d)
+
+	if _, err := col.InsertBatch([][]byte{[]byte("e1"), []byte("e2")}, [][]byte{
+		[]byte(`{"time_us":1,"kind":"like","did":"d1"}`),
+		[]byte(`{"time_us":2,"kind":"post","did":"d2"}`),
+	}); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	beforeRefs := columnManifestAssetRefsForCollectionM12A(t, d, col)
+	if len(beforeRefs) == 0 {
+		t.Fatal("manifest refs empty, test requires live physical assets")
+	}
+	candidate := writeColumnAssetReachabilityCandidateM15A(t, d, col, 3, 99)
+	if candidate.FileID != beforeRefs[0].FileID {
+		t.Fatalf("candidate file_id=%d live file_id=%d, test requires mixed segment", candidate.FileID, beforeRefs[0].FileID)
+	}
+	oldSegmentPath, err := columnAssetSegmentPath(d.ColumnAssetRootDir(), candidate)
+	if err != nil {
+		t.Fatalf("columnAssetSegmentPath: %v", err)
+	}
+
+	pinned := d.AcquireSnapshot()
+	if pinned == nil {
+		t.Fatal("AcquireSnapshot returned nil")
+	}
+	pinnedClosed := false
+	defer func() {
+		if !pinnedClosed {
+			_ = pinned.Close()
+		}
+	}()
+	pinnedCatalog, err := col.catalogForSnapshot(pinned)
+	if err != nil {
+		t.Fatalf("catalogForSnapshot pinned: %v", err)
+	}
+	if pinnedCatalog == nil || pinnedCatalog.meta.Options.ColumnStore == nil {
+		t.Fatalf("pinned catalog missing column store metadata: %+v", pinnedCatalog)
+	}
+	pinnedCollection := pinnedCatalog.meta.Name
+	pinnedRootID := pinnedCatalog.rootID(collectionColumnManifestRootName(pinnedCollection))
+	pinnedCfg := pinnedCatalog.meta.Options.ColumnStore.copy()
+
+	rewrite, err := col.ColumnAssetRewrite(context.Background(), ColumnAssetRewriteOptions{
+		Detailed:      true,
+		CandidateRefs: []ColumnAssetRef{candidate},
+	})
+	if err != nil {
+		t.Fatalf("ColumnAssetRewrite: %v", err)
+	}
+	if rewrite.SegmentsRewritten != 1 || rewrite.RefsRemapped != len(beforeRefs) {
+		t.Fatalf("rewrite stats=%+v want one rewritten segment and %d remapped refs", rewrite, len(beforeRefs))
+	}
+	candidates := append(append([]ColumnAssetRef(nil), rewrite.SupersededRefs...), candidate)
+
+	pinnedStats, err := col.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{
+		Detailed:      true,
+		CandidateRefs: candidates,
+	})
+	if err != nil {
+		t.Fatalf("ColumnAssetGC while older snapshot pinned: %v", err)
+	}
+	if pinnedStats.SegmentsEligible != 0 || pinnedStats.SegmentsDeleted != 0 || pinnedStats.Plan.Refs.Reclaimable != 0 {
+		t.Fatalf("pinned GC stats=%+v refs=%+v want no eligible/reclaimable refs", pinnedStats, pinnedStats.Plan.Refs)
+	}
+	if pinnedStats.Plan.Sources.PinnedRefs != len(candidates) {
+		t.Fatalf("pinned refs=%d want %d in plan sources", pinnedStats.Plan.Sources.PinnedRefs, len(candidates))
+	}
+	if _, err := os.Stat(oldSegmentPath); err != nil {
+		t.Fatalf("old segment removed while older snapshot pinned: %v", err)
+	}
+	diag, err := col.scanColumnPhysicalRowsAtSnapshot(
+		pinned,
+		pinnedCatalog,
+		pinnedCollection,
+		pinnedRootID,
+		pinnedCfg,
+		true,
+		columnPhysicalScanRequest{},
+	)
+	if err != nil {
+		t.Fatalf("scanColumnPhysicalRowsAtSnapshot pinned: %v", err)
+	}
+	if diag.RowsScanned != 2 || diag.AssetRefs != len(beforeRefs) {
+		t.Fatalf("pinned diag=%+v want 2 rows and %d old refs", diag, len(beforeRefs))
+	}
+	if err := pinned.Close(); err != nil {
+		t.Fatalf("Close pinned snapshot: %v", err)
+	}
+	pinnedClosed = true
+
+	drainedStats, err := col.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{
+		CandidateRefs: candidates,
+	})
+	if err != nil {
+		t.Fatalf("ColumnAssetGC after snapshot drain: %v", err)
+	}
+	if drainedStats.SegmentsDeleted != 1 || drainedStats.BytesDeleted == 0 {
+		t.Fatalf("drained GC stats=%+v want old mixed segment deleted", drainedStats)
+	}
+	if _, err := os.Stat(oldSegmentPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("old segment still exists after snapshot drain or unexpected stat error: %v", err)
+	}
+}
+
 func TestColumnAssetGCFailClosedOnIncompletePlanM15B(t *testing.T) {
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)
@@ -511,6 +619,49 @@ func BenchmarkColumnAssetGCDryRunTenKRefsOneSegmentM15B(b *testing.B) {
 		}
 		if !stats.Plan.Complete || stats.SegmentsEligible != 1 || stats.BytesEligible != refs*refBytes {
 			b.Fatalf("unexpected stats: complete=%t eligible=%d bytes=%d plan=%+v", stats.Plan.Complete, stats.SegmentsEligible, stats.BytesEligible, stats.Plan.Segments)
+		}
+	}
+}
+
+func BenchmarkColumnAssetGCDryRunTenKCandidatesOlderSnapshotM15C(b *testing.B) {
+	const refs = 10_000
+	const refBytes = 64
+	d, col := prepareColumnAssetGCBenchmarkCollectionM15B(b)
+	defer func() { _ = d.Close() }()
+	payload := make([]byte, refBytes)
+	candidates := make([]ColumnAssetRef, 0, refs)
+	for i := 0; i < refs; i++ {
+		payload[0] = byte(i)
+		candidates = append(candidates, writeColumnAssetGCCandidateSegmentM15B(b, d.ColumnAssetRootDir(), col, uint32(i+2), payload))
+	}
+	pinned := d.AcquireSnapshot()
+	if pinned == nil {
+		b.Fatal("AcquireSnapshot returned nil")
+	}
+	defer func() { _ = pinned.Close() }()
+	if _, err := col.Insert([]byte("live-after-pinned-snapshot"), []byte(`{"time_us":2,"kind":"post","did":"did_after"}`)); err != nil {
+		b.Fatalf("Insert after pinned snapshot: %v", err)
+	}
+
+	b.ReportAllocs()
+	b.SetBytes(refs * refBytes)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		stats, err := col.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{
+			DryRun:        true,
+			CandidateRefs: candidates,
+		})
+		if err != nil {
+			b.Fatal(err)
+		}
+		if !stats.Plan.Complete || stats.SegmentsEligible != 0 || stats.Plan.Refs.Reclaimable != 0 || stats.Plan.Sources.PinnedRefs != refs {
+			b.Fatalf("unexpected pinned stats: complete=%t eligible=%d reclaimable_refs=%d pinned_refs=%d plan=%+v",
+				stats.Plan.Complete,
+				stats.SegmentsEligible,
+				stats.Plan.Refs.Reclaimable,
+				stats.Plan.Sources.PinnedRefs,
+				stats.Plan.Segments,
+			)
 		}
 	}
 }

@@ -75,6 +75,61 @@ func TestAcquireSnapshot_UsesPublishedCoherentView(t *testing.T) {
 	}
 }
 
+func TestMinPinnedSnapshotCommitSeqTracksCurrentAndRetiredGenerations(t *testing.T) {
+	idx1 := &indexGen{registry: lifecycle.NewReaderRegistry()}
+	idx1.id = 1
+	idx1.refs.Store(1)
+	idx2 := &indexGen{registry: lifecycle.NewReaderRegistry()}
+	idx2.id = 2
+	idx2.refs.Store(1)
+
+	state1 := &DBState{CommitSeq: 101, RootPageID: 11}
+	state2 := &DBState{CommitSeq: 202, RootPageID: 22}
+
+	db := &DB{snapPool: NewSnapshotPool()}
+	db.idx.Store(idx1)
+	db.state.Store(state1)
+	db.trackIndex(idx1)
+	db.trackIndex(idx2)
+
+	if got := db.MinPinnedSnapshotCommitSeq(); got != math.MaxUint64 {
+		t.Fatalf("MinPinnedSnapshotCommitSeq without snapshots=%d, want MaxUint64", got)
+	}
+
+	db.publishSnapshotView(idx1, state1, nil)
+	snap1 := db.AcquireSnapshot()
+	if snap1 == nil {
+		t.Fatal("AcquireSnapshot returned nil for first view")
+	}
+	if got := db.MinPinnedSnapshotCommitSeq(); got != state1.CommitSeq {
+		t.Fatalf("MinPinnedSnapshotCommitSeq with first snapshot=%d, want %d", got, state1.CommitSeq)
+	}
+
+	db.idx.Store(idx2)
+	db.state.Store(state2)
+	db.publishSnapshotView(idx2, state2, nil)
+	snap2 := db.AcquireSnapshot()
+	if snap2 == nil {
+		t.Fatal("AcquireSnapshot returned nil for second view")
+	}
+	if got := db.MinPinnedSnapshotCommitSeq(); got != state1.CommitSeq {
+		t.Fatalf("MinPinnedSnapshotCommitSeq with retired snapshot=%d, want oldest %d", got, state1.CommitSeq)
+	}
+
+	if err := snap1.Close(); err != nil {
+		t.Fatalf("Close first snapshot: %v", err)
+	}
+	if got := db.MinPinnedSnapshotCommitSeq(); got != state2.CommitSeq {
+		t.Fatalf("MinPinnedSnapshotCommitSeq after first close=%d, want %d", got, state2.CommitSeq)
+	}
+	if err := snap2.Close(); err != nil {
+		t.Fatalf("Close second snapshot: %v", err)
+	}
+	if got := db.MinPinnedSnapshotCommitSeq(); got != math.MaxUint64 {
+		t.Fatalf("MinPinnedSnapshotCommitSeq after drain=%d, want MaxUint64", got)
+	}
+}
+
 func TestAcquireSnapshot_ReleasesPinnedValueLogSetOnRegistryNil(t *testing.T) {
 	idx := &indexGen{}
 	idx.refs.Store(1)

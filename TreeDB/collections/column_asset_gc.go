@@ -67,12 +67,13 @@ func (c *Collection) columnAssetGC(ctx context.Context, opts ColumnAssetGCOption
 		stats.Plan = columnAssetGCPlanForDetail(stats.Plan, opts.Detailed)
 	}()
 	plan, err := c.PlanColumnAssetReachability(ctx, ColumnAssetReachabilityOptions{
-		Detailed:       opts.Detailed,
-		SegmentDetails: true,
-		CandidateRefs:  opts.CandidateRefs,
-		PendingRefs:    opts.PendingRefs,
-		PreparedRefs:   opts.PreparedRefs,
-		PinnedRefs:     opts.PinnedRefs,
+		Detailed:                              opts.Detailed,
+		SegmentDetails:                        true,
+		ProtectCandidateRefsForOlderSnapshots: true,
+		CandidateRefs:                         opts.CandidateRefs,
+		PendingRefs:                           opts.PendingRefs,
+		PreparedRefs:                          opts.PreparedRefs,
+		PinnedRefs:                            opts.PinnedRefs,
 	})
 	stats = ColumnAssetGCStats{
 		DryRun:           opts.DryRun,
