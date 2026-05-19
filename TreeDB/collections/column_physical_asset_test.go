@@ -101,6 +101,83 @@ func TestColumnPhysicalAssetCodecRoundTripM12A(t *testing.T) {
 	}
 }
 
+func TestColumnPhysicalAssetDeleteRowsM12C(t *testing.T) {
+	cfg := testColumnStoreConfig(nil)
+	normalized, err := normalizeColumnStoreConfig("events", cfg)
+	if err != nil {
+		t.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+	rows := []columnDeclaredRow{
+		{ID: []byte("e1"), Deleted: true},
+		{ID: []byte("e2"), Deleted: true},
+	}
+	encoded, summary, err := encodeColumnPhysicalAsset(columnPhysicalAssetEncodeInput{
+		Collection:        "events",
+		Namespace:         normalized.AssetManager.Namespace,
+		Generation:        8,
+		PartID:            1,
+		AppliedCommandLSN: 102,
+		Operation:         ColumnPublishOperationDelete,
+		SchemaHash:        normalized.SchemaHash,
+		Columns:           normalized.Columns,
+		Rows:              rows,
+	})
+	if err != nil {
+		t.Fatalf("encodeColumnPhysicalAsset delete: %v", err)
+	}
+	if summary.RowCount != 2 || summary.ColumnCount != len(normalized.Columns) || summary.PayloadBytes != int64(len(encoded)) {
+		t.Fatalf("unexpected delete asset summary=%+v len=%d", summary, len(encoded))
+	}
+	decoded, err := decodeColumnPhysicalAsset(encoded)
+	if err != nil {
+		t.Fatalf("decodeColumnPhysicalAsset delete: %v", err)
+	}
+	if decoded.Header.Operation != ColumnPublishOperationDelete || len(decoded.Rows) != 2 {
+		t.Fatalf("unexpected decoded delete asset: header=%+v rows=%+v", decoded.Header, decoded.Rows)
+	}
+	for i, row := range decoded.Rows {
+		if !row.Deleted || len(row.Values) != 0 {
+			t.Fatalf("decoded delete row[%d]=%+v, want deleted row without values", i, row)
+		}
+	}
+	ref := ColumnAssetRef{
+		Kind:       ColumnAssetKindTCS1PartImage,
+		Namespace:  normalized.AssetManager.Namespace,
+		Generation: 8,
+		PartID:     1,
+		FileID:     1,
+		Offset:     0,
+		Length:     int64(len(encoded)),
+		Checksum:   page.Checksum(encoded),
+	}
+	if err := validateColumnPhysicalAssetForManifest(encoded, ref, *normalized); err != nil {
+		t.Fatalf("validateColumnPhysicalAssetForManifest delete: %v", err)
+	}
+
+	insertInput := columnPhysicalAssetEncodeInput{
+		Collection:        "events",
+		Namespace:         normalized.AssetManager.Namespace,
+		Generation:        9,
+		PartID:            1,
+		AppliedCommandLSN: 103,
+		Operation:         ColumnPublishOperationInsert,
+		SchemaHash:        normalized.SchemaHash,
+		Columns:           normalized.Columns,
+		Rows:              rows[:1],
+	}
+	if _, _, err := encodeColumnPhysicalAsset(insertInput); err == nil || !strings.Contains(err.Error(), "marked deleted") {
+		t.Fatalf("encode insert with deleted row err=%v want marked deleted failure", err)
+	}
+	deleteWithValues := rows[:1]
+	deleteWithValues[0].Values = []columnDeclaredValue{{Type: ColumnStoreValueInt64, Int64: 1}}
+	deleteInput := insertInput
+	deleteInput.Operation = ColumnPublishOperationDelete
+	deleteInput.Rows = deleteWithValues
+	if _, _, err := encodeColumnPhysicalAsset(deleteInput); err == nil || !strings.Contains(err.Error(), "values=1 want 0") {
+		t.Fatalf("encode delete with values err=%v want values failure", err)
+	}
+}
+
 func TestColumnPhysicalAssetRejectsNonNullableNullM12A(t *testing.T) {
 	cfg := testColumnStoreConfig(nil)
 	normalized, err := normalizeColumnStoreConfig("events", cfg)

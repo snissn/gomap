@@ -14,7 +14,7 @@ import (
 
 const (
 	columnPhysicalAssetMagic   = uint32(0x54435041) // TCPA
-	columnPhysicalAssetVersion = uint16(1)
+	columnPhysicalAssetVersion = uint16(2)
 )
 
 var ErrColumnDeclaredValueUnsupported = errors.New("collections: unsupported column declared value")
@@ -34,8 +34,9 @@ type columnDeclaredValue struct {
 }
 
 type columnDeclaredRow struct {
-	ID     []byte
-	Values []columnDeclaredValue
+	ID      []byte
+	Deleted bool
+	Values  []columnDeclaredValue
 }
 
 type columnPhysicalAssetEncodeInput struct {
@@ -190,8 +191,23 @@ func encodeColumnPhysicalAsset(input columnPhysicalAssetEncodeInput) ([]byte, co
 		return nil, columnPhysicalAssetSummary{}, errors.New("collections: column physical asset missing collection, namespace, generation, or part_id")
 	}
 	for rowIdx, row := range input.Rows {
-		if len(row.Values) != len(input.Columns) {
-			return nil, columnPhysicalAssetSummary{}, fmt.Errorf("collections: column physical asset row[%d] values=%d columns=%d", rowIdx, len(row.Values), len(input.Columns))
+		switch input.Operation {
+		case ColumnPublishOperationInsert, ColumnPublishOperationUpdate:
+			if row.Deleted {
+				return nil, columnPhysicalAssetSummary{}, fmt.Errorf("collections: column physical asset %s row[%d] is marked deleted", input.Operation, rowIdx)
+			}
+			if len(row.Values) != len(input.Columns) {
+				return nil, columnPhysicalAssetSummary{}, fmt.Errorf("collections: column physical asset row[%d] values=%d columns=%d", rowIdx, len(row.Values), len(input.Columns))
+			}
+		case ColumnPublishOperationDelete:
+			if !row.Deleted {
+				return nil, columnPhysicalAssetSummary{}, fmt.Errorf("collections: column physical asset delete row[%d] is not marked deleted", rowIdx)
+			}
+			if len(row.Values) != 0 {
+				return nil, columnPhysicalAssetSummary{}, fmt.Errorf("collections: column physical asset delete row[%d] values=%d want 0", rowIdx, len(row.Values))
+			}
+		default:
+			return nil, columnPhysicalAssetSummary{}, fmt.Errorf("collections: unsupported column physical asset operation %q", input.Operation)
 		}
 	}
 	var b bytes.Buffer
@@ -215,6 +231,10 @@ func encodeColumnPhysicalAsset(input columnPhysicalAssetEncodeInput) ([]byte, co
 	}
 	for _, row := range input.Rows {
 		writeManifestBytes(&b, row.ID)
+		writeManifestBool(&b, row.Deleted)
+		if row.Deleted {
+			continue
+		}
 		for _, value := range row.Values {
 			writeManifestString(&b, string(value.Type))
 			writeManifestBool(&b, value.Null)
@@ -286,29 +306,32 @@ func decodeColumnPhysicalAsset(raw []byte) (columnPhysicalAsset, error) {
 	}
 	for rowIdx := 0; rowIdx < int(rowCount); rowIdx++ {
 		row := columnDeclaredRow{
-			ID:     cur.bytes(),
-			Values: make([]columnDeclaredValue, int(columnCount)),
+			ID:      cur.bytes(),
+			Deleted: cur.bool(),
 		}
-		for colIdx := 0; colIdx < int(columnCount); colIdx++ {
-			value := columnDeclaredValue{
-				Type: ColumnStoreValueType(cur.string()),
-				Null: cur.bool(),
-			}
-			if !value.Null {
-				switch value.Type {
-				case ColumnStoreValueBool:
-					value.Bool = cur.bool()
-				case ColumnStoreValueInt64:
-					value.Int64 = int64(cur.u64())
-				case ColumnStoreValueDouble:
-					value.Double = math.Float64frombits(cur.u64())
-				case ColumnStoreValueString:
-					value.String = cur.string()
-				default:
-					return columnPhysicalAsset{}, fmt.Errorf("collections: unsupported column physical value type %q", value.Type)
+		if !row.Deleted {
+			row.Values = make([]columnDeclaredValue, int(columnCount))
+			for colIdx := 0; colIdx < int(columnCount); colIdx++ {
+				value := columnDeclaredValue{
+					Type: ColumnStoreValueType(cur.string()),
+					Null: cur.bool(),
 				}
+				if !value.Null {
+					switch value.Type {
+					case ColumnStoreValueBool:
+						value.Bool = cur.bool()
+					case ColumnStoreValueInt64:
+						value.Int64 = int64(cur.u64())
+					case ColumnStoreValueDouble:
+						value.Double = math.Float64frombits(cur.u64())
+					case ColumnStoreValueString:
+						value.String = cur.string()
+					default:
+						return columnPhysicalAsset{}, fmt.Errorf("collections: unsupported column physical value type %q", value.Type)
+					}
+				}
+				row.Values[colIdx] = value
 			}
-			row.Values[colIdx] = value
 		}
 		asset.Rows = append(asset.Rows, row)
 	}
@@ -362,6 +385,22 @@ func validateColumnPhysicalAssetForManifest(raw []byte, ref ColumnAssetRef, cfg 
 		return fmt.Errorf("collections: column physical asset row_count=%d rows=%d", asset.Header.RowCount, len(asset.Rows))
 	}
 	for rowIdx, row := range asset.Rows {
+		switch asset.Header.Operation {
+		case ColumnPublishOperationInsert, ColumnPublishOperationUpdate:
+			if row.Deleted {
+				return fmt.Errorf("collections: column physical asset %s row[%d] is marked deleted", asset.Header.Operation, rowIdx)
+			}
+		case ColumnPublishOperationDelete:
+			if !row.Deleted {
+				return fmt.Errorf("collections: column physical asset delete row[%d] is not marked deleted", rowIdx)
+			}
+			if len(row.Values) != 0 {
+				return fmt.Errorf("collections: column physical asset delete row[%d] values=%d want 0", rowIdx, len(row.Values))
+			}
+			continue
+		default:
+			return fmt.Errorf("collections: unsupported column physical asset operation %q", asset.Header.Operation)
+		}
 		if len(row.Values) != len(cfg.Columns) {
 			return fmt.Errorf("collections: column physical asset row[%d] values=%d want %d", rowIdx, len(row.Values), len(cfg.Columns))
 		}

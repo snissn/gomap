@@ -151,6 +151,17 @@ func columnWriteDocumentsFromCommitLog(docs []commitlog.CollectionDocument) []co
 	return out
 }
 
+func columnWriteDocumentsFromIDs(ids [][]byte) []columnWriteDocument {
+	if len(ids) == 0 {
+		return nil
+	}
+	docs := make([]columnWriteDocument, len(ids))
+	for i := range ids {
+		docs[i] = columnWriteDocument{ID: ids[i]}
+	}
+	return docs
+}
+
 func collectionDocumentsFromBatchInput(ids, documents [][]byte) ([]commitlog.CollectionDocument, error) {
 	if len(ids) != len(documents) {
 		return nil, fmt.Errorf("collections: command wal batch ids length mismatch: ids=%d documents=%d", len(ids), len(documents))
