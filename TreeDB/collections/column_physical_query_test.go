@@ -270,6 +270,51 @@ func TestColumnStoreRetainedPayloadDisablesDirectBufferedUpdateM13C(t *testing.T
 	}
 }
 
+func TestColumnStoreRetainedPayloadDisablesBufferedUpdateReadsM13C(t *testing.T) {
+	columnMeta, err := normalizeCollectionMeta(CollectionMeta{
+		Name: "events",
+		Options: CollectionOptions{
+			ColumnStore: testColumnStoreConfig(nil),
+		},
+	})
+	if err != nil {
+		t.Fatalf("normalize column meta: %v", err)
+	}
+	if !columnStoreNeedsRetainedPayloadTransform(columnMeta) {
+		t.Fatalf("column metadata does not require retained payload transform: %+v", columnMeta.Options.ColumnStore)
+	}
+	const baseSystemRoot = 7
+	domain := &collectionWriteDomain{
+		loaded:                 true,
+		meta:                   columnMeta,
+		catalog:                &collectionCatalog{meta: columnMeta},
+		baseSystemRoot:         baseSystemRoot,
+		count:                  1,
+		primaryOverlay:         newBufferedPrimaryOverlay(1),
+		primaryCache:           newBufferedPrimaryOverlay(1),
+		primaryCacheSystemRoot: baseSystemRoot,
+		primaryCacheCollection: columnMeta.Name,
+	}
+	entry := directBufferedRootEntry{key: []byte("e1"), value: []byte(`{"payload":"retained"}`)}
+	domain.primaryOverlay.addEntry(entry)
+	domain.primaryCache.addEntry(entry)
+	items := []updateBatchItem{{UpdateBatchItem: UpdateBatchItem{DocumentID: []byte("e1")}}}
+
+	if cached := snapshotUpdateBatchPrimaryCache(domain, columnMeta, baseSystemRoot, items); cached.enabled {
+		defer putUpdateBatchBufferedEntries(cached.primaryEntries, cached.primaryBuffer)
+		t.Fatal("retained-payload column store used primary cache for update planning")
+	}
+	read, templateRuns, blocked, stale, needIndex, err := snapshotUpdateBatchBufferedReadLocked(domain, columnMeta, 1, baseSystemRoot, items, DocumentFormatJSON, false)
+	defer resetCollectionTables(templateRuns)
+	defer putUpdateBatchBufferedEntries(read.primaryEntries, read.primaryBuffer)
+	if err != nil {
+		t.Fatalf("snapshotUpdateBatchBufferedReadLocked: %v", err)
+	}
+	if read.enabled || blocked || stale || needIndex {
+		t.Fatalf("retained-payload column store used buffered read: enabled=%v blocked=%v stale=%v needIndex=%v", read.enabled, blocked, stale, needIndex)
+	}
+}
+
 func TestColumnStoreReconstructionPreservesMissingNullableColumnsM13C(t *testing.T) {
 	cfg := ColumnStoreConfig{
 		Enabled:         true,
@@ -333,6 +378,27 @@ func TestColumnStoreReconstructionPreservesMissingNullableColumnsM13C(t *testing
 			}
 			assertJSONEqualM13C(t, got, tt.doc)
 		})
+	}
+}
+
+func TestColumnStoreReconstructionFailsClosedOnScalarAncestorM13C(t *testing.T) {
+	cfg := ColumnStoreConfig{
+		Enabled:         true,
+		RetainedPayload: ColumnRetainedPayloadNonColumn,
+		Reconstruction:  ColumnReconstructionRetainedPayloadAndColumns,
+		Columns: []ColumnStoreColumn{
+			{Name: "nested", Path: "a.b", ValueType: ColumnStoreValueString, Nullable: true},
+		},
+	}
+	retained := []byte(`{"a":"keep","payload":1}`)
+	values := []columnDeclaredValue{{
+		Type:    ColumnStoreValueString,
+		Present: true,
+		Null:    false,
+		String:  "value",
+	}}
+	if _, err := reconstructColumnJSONDocument(cfg, retained, values); err == nil || !strings.Contains(err.Error(), `non-object ancestor "a"`) {
+		t.Fatalf("reconstruct scalar ancestor err=%v want non-object ancestor failure", err)
 	}
 }
 

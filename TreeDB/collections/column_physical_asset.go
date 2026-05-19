@@ -210,10 +210,10 @@ func encodeColumnPhysicalAsset(input columnPhysicalAssetEncodeInput) ([]byte, co
 				return nil, columnPhysicalAssetSummary{}, fmt.Errorf("collections: column physical asset row[%d] values=%d columns=%d", rowIdx, len(row.Values), len(input.Columns))
 			}
 			for colIdx, value := range row.Values {
-				if !columnDeclaredValuePresentForEncode(value) && !value.Null {
+				if !value.Present && !value.Null {
 					return nil, columnPhysicalAssetSummary{}, fmt.Errorf("collections: column physical asset row[%d] column[%d] absent value is not null", rowIdx, colIdx)
 				}
-				if !columnDeclaredValuePresentForEncode(value) && !input.Columns[colIdx].Nullable {
+				if !value.Present && !input.Columns[colIdx].Nullable {
 					return nil, columnPhysicalAssetSummary{}, fmt.Errorf("collections: column physical asset row[%d] column[%d] is absent but column is not nullable", rowIdx, colIdx)
 				}
 			}
@@ -448,10 +448,10 @@ func validateColumnPhysicalAssetForManifest(raw []byte, ref ColumnAssetRef, cfg 
 			if value.Type != cfg.Columns[colIdx].ValueType {
 				return fmt.Errorf("collections: column physical asset row[%d] column[%d] type=%q want %q", rowIdx, colIdx, value.Type, cfg.Columns[colIdx].ValueType)
 			}
-			if !columnDeclaredValuePresentForEncode(value) && !value.Null {
+			if !value.Present && !value.Null {
 				return fmt.Errorf("collections: column physical asset row[%d] column[%d] absent value is not null", rowIdx, colIdx)
 			}
-			if !columnDeclaredValuePresentForEncode(value) && !cfg.Columns[colIdx].Nullable {
+			if !value.Present && !cfg.Columns[colIdx].Nullable {
 				return fmt.Errorf("collections: column physical asset row[%d] column[%d] is absent but column is not nullable", rowIdx, colIdx)
 			}
 			if value.Null && !cfg.Columns[colIdx].Nullable {
@@ -472,7 +472,7 @@ func isSupportedColumnPhysicalAssetVersion(version uint16) bool {
 }
 
 func columnDeclaredValuePresentForEncode(value columnDeclaredValue) bool {
-	return value.Present || !value.Null
+	return value.Present
 }
 
 func isSupportedColumnPhysicalAssetOperation(operation ColumnPublishOperation) bool {

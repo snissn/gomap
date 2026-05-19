@@ -243,6 +243,48 @@ func TestColumnPhysicalAssetSerialScanRejectsWrongCollectionM13A(t *testing.T) {
 	}
 }
 
+func TestColumnPhysicalSerialScannerRejectsManifestReasonOperationMismatchM13C(t *testing.T) {
+	normalized, rows := makeColumnPhysicalAssetBenchmarkRows(t, 4)
+	encoded, _, err := encodeColumnPhysicalAsset(columnPhysicalAssetEncodeInput{
+		Collection:        "events",
+		Namespace:         normalized.AssetManager.Namespace,
+		Generation:        1,
+		PartID:            1,
+		AppliedCommandLSN: 1,
+		Operation:         ColumnPublishOperationUpdate,
+		SchemaHash:        normalized.SchemaHash,
+		Columns:           normalized.Columns,
+		Rows:              rows,
+	})
+	if err != nil {
+		t.Fatalf("encodeColumnPhysicalAsset: %v", err)
+	}
+	ref := ColumnAssetRef{
+		Kind:       ColumnAssetKindTCS1PartImage,
+		Namespace:  normalized.AssetManager.Namespace,
+		Generation: 1,
+		PartID:     1,
+		FileID:     columnAssetM12ASegmentFileID,
+		Length:     int64(len(encoded)),
+		Checksum:   page.Checksum(encoded),
+	}
+	projection, err := newColumnPhysicalScanProjection(*normalized, []string{"time_us"})
+	if err != nil {
+		t.Fatalf("newColumnPhysicalScanProjection: %v", err)
+	}
+	visited := false
+	_, err = scanColumnPhysicalAssetRowsWithManifestOperation(encoded, ref, "events", *normalized, projection, ColumnPublishOperationInsert, func(row columnPhysicalScanRowView) error {
+		visited = true
+		return nil
+	})
+	if !errors.Is(err, errColumnPhysicalAssetManifestOperationMismatch) {
+		t.Fatalf("scan mismatched manifest operation err=%v want mismatch", err)
+	}
+	if visited {
+		t.Fatal("scanner visited rows before rejecting manifest operation mismatch")
+	}
+}
+
 func TestColumnPhysicalAssetSerialScanNumericProjectionHasZeroAllocsM13A(t *testing.T) {
 	normalized, rows := makeColumnPhysicalAssetBenchmarkRows(t, 1024)
 	encoded, _, err := encodeColumnPhysicalAsset(columnPhysicalAssetEncodeInput{

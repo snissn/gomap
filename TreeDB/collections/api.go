@@ -6087,6 +6087,9 @@ func snapshotUpdateBatchPrimaryCache(domain *collectionWriteDomain, meta Collect
 	if domain == nil || baseSystemRoot == 0 || len(items) == 0 {
 		return updateBatchBufferedRead{}
 	}
+	if columnStoreNeedsRetainedPayloadTransform(meta) {
+		return updateBatchBufferedRead{}
+	}
 	domain.mu.RLock()
 	defer domain.mu.RUnlock()
 	cache := domain.primaryCache
@@ -13613,6 +13616,9 @@ func snapshotUpdateBatchBufferedRead(domain *collectionWriteDomain, meta Collect
 }
 
 func snapshotUpdateBatchBufferedReadLocked(domain *collectionWriteDomain, meta CollectionMeta, baseCommitSeq uint64, baseSystemRoot uint64, items []updateBatchItem, documentFormat DocumentFormat, allowPrimaryRunIndexBuild bool) (updateBatchBufferedRead, []memtable.Table, bool, bool, bool, error) {
+	if columnStoreNeedsRetainedPayloadTransform(meta) {
+		return updateBatchBufferedRead{}, nil, false, false, false, nil
+	}
 	if updateBatchCanReadBufferedDomainLocked(domain, meta, baseSystemRoot) {
 		bufferedCollectionName := bufferedDomainCollectionName(domain, meta.Name)
 		if allowPrimaryRunIndexBuild && domain.primaryRunIndex == nil && hasBufferedPrimaryRootRuns(domain, bufferedCollectionName) {
@@ -13707,7 +13713,9 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 		_ = snap.Close()
 		return nil, errUpdateBatchHasSecondaryUniqueIndex
 	}
-	canBufferIndexedUpdateBatch := len(meta.Indexes) > 0 &&
+	retainedPayloadTransform := columnStoreNeedsRetainedPayloadTransform(meta)
+	canBufferIndexedUpdateBatch := !retainedPayloadTransform &&
+		len(meta.Indexes) > 0 &&
 		(!collectionMetaHasSecondaryUniqueIndex(meta) ||
 			mode == updateBatchModeNoSecondaryUniqueIndexes ||
 			mode == updateBatchModeNoSecondaryUniqueIndexChanges)
@@ -13727,13 +13735,16 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 	baseUserRoot := snapshotUserRoot(snap)
 	baseSystemRoot := snapshotSystemRoot(snap)
 	baseCommitSeq := snapshotCommitSeq(snap)
-	cachedPrimaryRead := snapshotUpdateBatchPrimaryCache(c.writeDomain, meta, baseSystemRoot, items)
+	var cachedPrimaryRead updateBatchBufferedRead
+	if !retainedPayloadTransform {
+		cachedPrimaryRead = snapshotUpdateBatchPrimaryCache(c.writeDomain, meta, baseSystemRoot, items)
+	}
 	defer putUpdateBatchBufferedEntries(cachedPrimaryRead.primaryEntries, cachedPrimaryRead.primaryBuffer)
 	var bufferedRead updateBatchBufferedRead
 	var bufferedTemplateRuns []memtable.Table
 	defer func() { resetCollectionTables(bufferedTemplateRuns) }()
 	bufferedReadBlocked := false
-	if domain := c.writeDomain; useBufferedRead && domain != nil {
+	if domain := c.writeDomain; useBufferedRead && !retainedPayloadTransform && domain != nil {
 		var staleBufferedSnapshot bool
 		bufferedRead, bufferedTemplateRuns, bufferedReadBlocked, staleBufferedSnapshot, err = snapshotUpdateBatchBufferedRead(domain, meta, baseCommitSeq, baseSystemRoot, items, plannerOptions.documentFormat)
 		if err != nil {

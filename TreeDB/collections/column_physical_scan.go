@@ -74,6 +74,13 @@ type columnPhysicalAssetScanHeader struct {
 	ColumnCount       int
 }
 
+type columnManifestAssetRefForScan struct {
+	Ref    ColumnAssetRef
+	Reason ColumnPublishOperation
+}
+
+var errColumnPhysicalAssetManifestOperationMismatch = errors.New("collections: column physical asset operation does not match manifest reason")
+
 func (c *Collection) scanColumnPhysicalRows(req columnPhysicalScanRequest) (columnPhysicalScanDiagnostics, error) {
 	if c == nil {
 		return columnPhysicalScanDiagnostics{}, errCollectionNil
@@ -187,7 +194,8 @@ func (c *Collection) scanColumnPhysicalRowsAtSnapshot(
 	}
 	defer func() { _ = readCache.close() }()
 	var rawScratch []byte
-	for _, ref := range refs {
+	for _, assetRef := range refs {
+		ref := assetRef.Ref
 		if ref.Generation > cfg.ActiveManifest.Generation {
 			return diag, fmt.Errorf("collections: column physical scan ref generation=%d is newer than active manifest generation=%d", ref.Generation, cfg.ActiveManifest.Generation)
 		}
@@ -197,8 +205,11 @@ func (c *Collection) scanColumnPhysicalRowsAtSnapshot(
 		}
 		rawScratch = raw
 		diag.PhysicalBytesScanned += int64(len(raw))
-		summary, err := scanColumnPhysicalAssetRows(raw, ref, collectionName, cfg, projection, req.Visitor)
+		summary, err := scanColumnPhysicalAssetRowsWithManifestOperation(raw, ref, collectionName, cfg, projection, assetRef.Reason, req.Visitor)
 		if err != nil {
+			if req.RequireInsertOnly && errors.Is(err, errColumnPhysicalAssetManifestOperationMismatch) {
+				return diag, errColumnPhysicalQueryNeedsVisibility
+			}
 			return diag, fmt.Errorf("collections: column physical scan decode generation=%d part_id=%d: %w", ref.Generation, ref.PartID, err)
 		}
 		diag.DecodedBlocks++
@@ -400,8 +411,8 @@ func columnManifestPartGenerationFromRecordKeyForScan(key []byte) (uint64, error
 	return binary.BigEndian.Uint64(key[len(columnManifestPartRecordPrefix):]), nil
 }
 
-func columnManifestAssetRefsFromRecordsForScan(records []columnManifestRecord, expectedNamespace string) ([]ColumnAssetRef, int, error) {
-	refs := make([]ColumnAssetRef, 0, len(records))
+func columnManifestAssetRefsFromRecordsForScan(records []columnManifestRecord, expectedNamespace string) ([]columnManifestAssetRefForScan, int, error) {
+	refs := make([]columnManifestAssetRefForScan, 0, len(records))
 	mutationParts := 0
 	for _, record := range records {
 		if !bytes.HasPrefix(record.key, []byte(columnManifestPartRecordPrefix)) {
@@ -418,8 +429,12 @@ func columnManifestAssetRefsFromRecordsForScan(records []columnManifestRecord, e
 		if ref.Generation != keyGeneration {
 			return nil, 0, fmt.Errorf("collections: column manifest part key generation=%d does not match ref generation=%d", keyGeneration, ref.Generation)
 		}
-		refs = append(refs, ref)
-		if !columnPhysicalBytesEqualString(reason, string(ColumnPublishOperationInsert)) {
+		operation, ok := columnPhysicalScanOperationFromBytes(reason)
+		if !ok {
+			return nil, 0, fmt.Errorf("collections: unsupported column manifest part reason %q", string(reason))
+		}
+		refs = append(refs, columnManifestAssetRefForScan{Ref: ref, Reason: operation})
+		if operation != ColumnPublishOperationInsert {
 			mutationParts++
 		}
 	}
@@ -484,6 +499,10 @@ func decodeColumnManifestPartRefForScan(raw []byte, expectedNamespace string) (C
 }
 
 func scanColumnPhysicalAssetRows(raw []byte, ref ColumnAssetRef, expectedCollection string, cfg ColumnStoreConfig, projection columnPhysicalScanProjection, visitor func(columnPhysicalScanRowView) error) (columnPhysicalAssetScanSummary, error) {
+	return scanColumnPhysicalAssetRowsWithManifestOperation(raw, ref, expectedCollection, cfg, projection, "", visitor)
+}
+
+func scanColumnPhysicalAssetRowsWithManifestOperation(raw []byte, ref ColumnAssetRef, expectedCollection string, cfg ColumnStoreConfig, projection columnPhysicalScanProjection, expectedOperation ColumnPublishOperation, visitor func(columnPhysicalScanRowView) error) (columnPhysicalAssetScanSummary, error) {
 	cur := manifestCursor{raw: raw}
 	if magic := cur.u32(); magic != columnPhysicalAssetMagic {
 		return columnPhysicalAssetScanSummary{}, fmt.Errorf("bad column physical asset magic=0x%08x", magic)
@@ -523,6 +542,9 @@ func scanColumnPhysicalAssetRows(raw []byte, ref ColumnAssetRef, expectedCollect
 	}
 	if err := validateColumnPhysicalAssetScanHeader(header, ref, expectedCollection, cfg); err != nil {
 		return columnPhysicalAssetScanSummary{}, err
+	}
+	if expectedOperation != "" && header.Operation != expectedOperation {
+		return columnPhysicalAssetScanSummary{}, fmt.Errorf("%w: manifest reason=%q asset operation=%q", errColumnPhysicalAssetManifestOperationMismatch, expectedOperation, header.Operation)
 	}
 	if header.ColumnCount != len(cfg.Columns) {
 		return columnPhysicalAssetScanSummary{}, fmt.Errorf("column physical asset columns=%d want %d", header.ColumnCount, len(cfg.Columns))

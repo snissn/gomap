@@ -732,6 +732,14 @@ func TestColumnStoreConfigEmptyIncludesPhysicalMutationPartsM13C(t *testing.T) {
 	if _, err := normalizeColumnStoreConfig("events", &ColumnStoreConfig{PhysicalMutationParts: 1}); err == nil || !strings.Contains(err.Error(), "enabled=true") {
 		t.Fatalf("normalize disabled physical mutation metadata err=%v want enabled=true rejection", err)
 	}
+	if columnStoreConfigEmpty(ColumnStoreConfig{PhysicalMutationParts: -1}) {
+		t.Fatal("columnStoreConfigEmpty ignored negative physical mutation parts")
+	}
+	invalid := testColumnStoreConfig(nil)
+	invalid.PhysicalMutationParts = -1
+	if _, err := normalizeColumnStoreConfig("events", invalid); err == nil || !strings.Contains(err.Error(), "non-negative") {
+		t.Fatalf("normalize negative physical mutation metadata err=%v want non-negative rejection", err)
+	}
 }
 
 func assertNormalizedColumnStoreMeta(t *testing.T, meta CollectionMeta) {

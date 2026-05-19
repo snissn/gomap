@@ -389,6 +389,42 @@ func TestColumnPhysicalAssetRejectsNonNullableNullM12A(t *testing.T) {
 	}
 }
 
+func TestColumnPhysicalAssetRejectsInvalidAbsentValueM13C(t *testing.T) {
+	cfg := &ColumnStoreConfig{
+		Enabled: true,
+		Columns: []ColumnStoreColumn{
+			{Name: "kind", Path: "kind", ValueType: ColumnStoreValueString, Nullable: true},
+		},
+		SortKey: []ColumnSortKey{{Column: "kind"}},
+	}
+	normalized, err := normalizeColumnStoreConfig("events", cfg)
+	if err != nil {
+		t.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+	rows := []columnDeclaredRow{{
+		ID: []byte("e1"),
+		Values: []columnDeclaredValue{{
+			Type:    ColumnStoreValueString,
+			Present: false,
+			Null:    false,
+			String:  "invalid",
+		}},
+	}}
+	if _, _, err := encodeColumnPhysicalAsset(columnPhysicalAssetEncodeInput{
+		Collection:        "events",
+		Namespace:         normalized.AssetManager.Namespace,
+		Generation:        1,
+		PartID:            1,
+		AppliedCommandLSN: 1,
+		Operation:         ColumnPublishOperationInsert,
+		SchemaHash:        normalized.SchemaHash,
+		Columns:           normalized.Columns,
+		Rows:              rows,
+	}); err == nil || !strings.Contains(err.Error(), "absent value is not null") {
+		t.Fatalf("encode invalid absent value err=%v want absent value failure", err)
+	}
+}
+
 func TestColumnAssetManagerWritesIsolatedSegmentAndValidatesM12A(t *testing.T) {
 	cfg := testColumnStoreConfig(nil)
 	normalized, err := normalizeColumnStoreConfig("events", cfg)
