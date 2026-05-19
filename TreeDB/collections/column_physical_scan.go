@@ -136,6 +136,9 @@ func (c *Collection) scanColumnPhysicalRowsAtSnapshot(
 	if !columnManifestIdentityValueEqual(*cfg.ActiveManifest, *cfg.RecoveryAuthoritativeManifest) {
 		return columnPhysicalScanDiagnostics{}, errors.New("collections: physical column scan requires active recovery-authoritative manifest")
 	}
+	if cfg.AssetManager == nil {
+		return columnPhysicalScanDiagnostics{}, errors.New("collections: physical column scan requires column asset manager metadata")
+	}
 	if rootID == 0 {
 		return columnPhysicalScanDiagnostics{}, fmt.Errorf("collections: physical column scan missing manifest root %q", collectionColumnManifestRootName(collectionName))
 	}
@@ -486,7 +489,7 @@ func scanColumnPhysicalAssetRows(raw []byte, ref ColumnAssetRef, expectedCollect
 		return columnPhysicalAssetScanSummary{}, fmt.Errorf("bad column physical asset magic=0x%08x", magic)
 	}
 	version := cur.u16()
-	if version != columnPhysicalAssetVersionV1 && version != columnPhysicalAssetVersion {
+	if !isSupportedColumnPhysicalAssetVersion(version) {
 		return columnPhysicalAssetScanSummary{}, fmt.Errorf("unsupported column physical asset version=%d", version)
 	}
 	collection := cur.stringBytes()
@@ -551,7 +554,7 @@ func scanColumnPhysicalAssetRows(raw []byte, ref ColumnAssetRef, expectedCollect
 	for rowIdx := 0; rowIdx < header.RowCount; rowIdx++ {
 		id := cur.bytesView()
 		deleted := false
-		if version >= columnPhysicalAssetVersion {
+		if version >= columnPhysicalAssetVersionV2 {
 			deleted = cur.bool()
 		}
 		if cur.err != nil {
@@ -569,7 +572,7 @@ func scanColumnPhysicalAssetRows(raw []byte, ref ColumnAssetRef, expectedCollect
 				return columnPhysicalAssetScanSummary{}, fmt.Errorf("column physical asset delete row[%d] is not marked deleted", rowIdx)
 			}
 			rowValues = valuesBuf[:projection.count]
-			if err := scanColumnPhysicalRowValues(&cur, cfg, projection, rowValues); err != nil {
+			if err := scanColumnPhysicalRowValues(&cur, version, cfg, projection, rowValues); err != nil {
 				return columnPhysicalAssetScanSummary{}, fmt.Errorf("row[%d]: %w", rowIdx, err)
 			}
 		}
@@ -636,7 +639,7 @@ func columnPhysicalScanOperationFromBytes(raw []byte) (ColumnPublishOperation, b
 	}
 }
 
-func scanColumnPhysicalRowValues(cur *manifestCursor, cfg ColumnStoreConfig, projection columnPhysicalScanProjection, rowValues []columnDeclaredValue) error {
+func scanColumnPhysicalRowValues(cur *manifestCursor, version uint16, cfg ColumnStoreConfig, projection columnPhysicalScanProjection, rowValues []columnDeclaredValue) error {
 	for colIdx, col := range cfg.Columns {
 		typeBytes := cur.stringBytes()
 		if cur.err != nil {
@@ -649,13 +652,30 @@ func scanColumnPhysicalRowValues(cur *manifestCursor, cfg ColumnStoreConfig, pro
 		if cur.err != nil {
 			return cur.err
 		}
+		present := true
+		if version >= columnPhysicalAssetVersion {
+			present = cur.bool()
+			if cur.err != nil {
+				return cur.err
+			}
+		}
 		outputIdx := projection.outputByColumn[colIdx]
 		selected := outputIdx >= 0
 		if selected {
 			rowValues[outputIdx] = columnDeclaredValue{
-				Type: col.ValueType,
-				Null: null,
+				Type:    col.ValueType,
+				Present: present,
+				Null:    null,
 			}
+		}
+		if !present {
+			if !null {
+				return fmt.Errorf("column[%d] absent value is not null", colIdx)
+			}
+			if !col.Nullable {
+				return fmt.Errorf("column[%d] is absent but column is not nullable", colIdx)
+			}
+			continue
 		}
 		if null {
 			if !col.Nullable {

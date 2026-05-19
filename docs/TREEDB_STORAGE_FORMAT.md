@@ -65,11 +65,11 @@ Column manifest records stored in B-tree/root metadata hold durable
 offset, length, and checksum. GC/rewrite must enumerate those refs from
 manifest/control roots, not by scanning row documents.
 
-The current physical part payload uses the `TCPA` envelope, version 2:
+The current physical part payload uses the `TCPA` envelope, version 3:
 
 ```text
 u32      Magic = "TCPA"
-u16      Version = 2
+u16      Version = 3
 string   Collection
 string   Namespace
 u64      Generation
@@ -84,7 +84,10 @@ rows     row id + deleted flag + optional declared column values
 ```
 
 Insert and update rows must have `deleted=false` and one declared value per
-column. Delete/tombstone rows must have `deleted=true` and no column values.
+column. Each declared value stores its type, null bit, and present bit; the
+present bit distinguishes an omitted nullable JSON path from an explicit JSON
+`null` so retained-payload reconstruction remains lossless. Delete/tombstone
+rows must have `deleted=true` and no column values.
 Readers validate namespace, generation, part id, schema hash, column
 descriptors, length, and checksum before accepting an asset ref.
 

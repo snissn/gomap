@@ -669,6 +669,7 @@ func columnStoreConfigEmpty(cfg ColumnStoreConfig) bool {
 		cfg.ActiveManifest == nil &&
 		cfg.RecoveryAuthoritativeManifest == nil &&
 		cfg.RecoveryAuthoritativeAppliedCommandLSN == 0 &&
+		cfg.PhysicalMutationParts == 0 &&
 		cfg.ProfileSupport == "" &&
 		cfg.Locator == nil &&
 		cfg.ControlRootStoragePolicy == "" &&

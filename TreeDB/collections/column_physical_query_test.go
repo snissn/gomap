@@ -270,6 +270,72 @@ func TestColumnStoreRetainedPayloadDisablesDirectBufferedUpdateM13C(t *testing.T
 	}
 }
 
+func TestColumnStoreReconstructionPreservesMissingNullableColumnsM13C(t *testing.T) {
+	cfg := ColumnStoreConfig{
+		Enabled:         true,
+		RetainedPayload: ColumnRetainedPayloadNonColumn,
+		Reconstruction:  ColumnReconstructionRetainedPayloadAndColumns,
+		Columns: []ColumnStoreColumn{
+			{Name: "nested", Path: "a.b", ValueType: ColumnStoreValueString, Nullable: true},
+			{Name: "top", Path: "top", ValueType: ColumnStoreValueString, Nullable: true},
+		},
+	}
+	tests := []struct {
+		name string
+		doc  []byte
+	}{
+		{
+			name: "missing nested under scalar ancestor stays omitted",
+			doc:  []byte(`{"a":"keep","payload":1}`),
+		},
+		{
+			name: "explicit nested null stays explicit",
+			doc:  []byte(`{"a":{"b":null},"payload":1}`),
+		},
+		{
+			name: "explicit top-level null stays explicit",
+			doc:  []byte(`{"top":null,"payload":1}`),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			retained, err := columnRetainedPayloadFromJSONDocument(cfg, tt.doc)
+			if err != nil {
+				t.Fatalf("columnRetainedPayloadFromJSONDocument: %v", err)
+			}
+			rows, err := extractColumnDeclaredRowsFromJSONDocuments(cfg, []columnWriteDocument{{
+				ID:       []byte("e1"),
+				Document: tt.doc,
+			}})
+			if err != nil {
+				t.Fatalf("extractColumnDeclaredRowsFromJSONDocuments: %v", err)
+			}
+			encoded, _, err := encodeColumnPhysicalAsset(columnPhysicalAssetEncodeInput{
+				Collection:        "events",
+				Namespace:         "events/column-assets",
+				Generation:        1,
+				PartID:            1,
+				AppliedCommandLSN: 1,
+				Operation:         ColumnPublishOperationInsert,
+				Columns:           cfg.Columns,
+				Rows:              rows,
+			})
+			if err != nil {
+				t.Fatalf("encodeColumnPhysicalAsset: %v", err)
+			}
+			asset, err := decodeColumnPhysicalAsset(encoded)
+			if err != nil {
+				t.Fatalf("decodeColumnPhysicalAsset: %v", err)
+			}
+			got, err := reconstructColumnJSONDocument(cfg, retained, asset.Rows[0].Values)
+			if err != nil {
+				t.Fatalf("reconstructColumnJSONDocument: %v", err)
+			}
+			assertJSONEqualM13C(t, got, tt.doc)
+		})
+	}
+}
+
 func TestColumnStoreScanDocumentsReconstructsRetainedPayloadM13C(t *testing.T) {
 	dir, _ := prepareColumnStoreCommandWALDirM10B(t)
 	d := openCollectionCommandWALDB(t, dir)
@@ -915,7 +981,7 @@ func inspectColumnPhysicalVisibilityM13C(t *testing.T, d *backenddb.DB, col *Col
 
 	var rawRows []columnPhysicalVisibleRow
 	expected := make(map[string]columnPhysicalVisibleRow)
-	diag, err := col.scanColumnPhysicalRows(columnPhysicalScanRequest{
+	_, err := col.scanColumnPhysicalRows(columnPhysicalScanRequest{
 		Visitor: func(row columnPhysicalScanRowView) error {
 			copied := columnPhysicalVisibleRow{
 				Generation:        row.Generation,
@@ -957,7 +1023,7 @@ func inspectColumnPhysicalVisibilityM13C(t *testing.T, d *backenddb.DB, col *Col
 	return columnPhysicalVisibilityInspectionM13C{
 		RawRows:     rawRows,
 		Visible:     got,
-		Diagnostics: diag,
+		Diagnostics: visible.Diagnostics,
 	}
 }
 
@@ -999,7 +1065,7 @@ func assertVisibleRowM13C(t *testing.T, row columnPhysicalVisibleRow, deleted bo
 }
 
 func columnDeclaredValuesEquivalentM13C(a, b columnDeclaredValue) bool {
-	if a.Type != b.Type || a.Null != b.Null || a.Bool != b.Bool || a.Int64 != b.Int64 || a.Double != b.Double {
+	if a.Type != b.Type || a.Present != b.Present || a.Null != b.Null || a.Bool != b.Bool || a.Int64 != b.Int64 || a.Double != b.Double {
 		return false
 	}
 	return columnPhysicalScanStringForTest(a) == columnPhysicalScanStringForTest(b)

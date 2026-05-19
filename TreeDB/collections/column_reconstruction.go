@@ -23,6 +23,7 @@ func columnStoreCanReconstructDocument(meta CollectionMeta) bool {
 	return cfg != nil &&
 		cfg.Enabled &&
 		cfg.RetainedPayload != ColumnRetainedPayloadFull &&
+		cfg.Reconstruction == ColumnReconstructionRetainedPayloadAndColumns &&
 		cfg.ActiveManifest != nil &&
 		cfg.RecoveryAuthoritativeManifest != nil &&
 		normalizedDocumentFormat(meta.Options.DocumentFormat) == DocumentFormatJSON
@@ -122,15 +123,23 @@ func reconstructColumnJSONDocument(cfg ColumnStoreConfig, retained []byte, value
 	if len(values) != len(cfg.Columns) {
 		return nil, fmt.Errorf("collections: column reconstruction values=%d columns=%d", len(values), len(cfg.Columns))
 	}
-	declared := make([]any, len(cfg.Columns))
+	declared := make([]columnReconstructedDeclaredValue, len(cfg.Columns))
 	for i, col := range cfg.Columns {
 		raw, err := columnDeclaredValueToJSON(values[i])
 		if err != nil {
 			return nil, fmt.Errorf("collections: column reconstruction column %q: %w", col.Name, err)
 		}
-		declared[i] = raw
+		declared[i] = columnReconstructedDeclaredValue{
+			Value:   raw,
+			Present: values[i].Present,
+		}
+		if !values[i].Present {
+			continue
+		}
 		if strings.Contains(col.Path, ".") {
-			setColumnJSONPath(obj, col.Path, raw)
+			if err := setColumnJSONPath(obj, col.Path, raw); err != nil {
+				return nil, fmt.Errorf("collections: column reconstruction column %q: %w", col.Name, err)
+			}
 		}
 	}
 	out, err := marshalColumnReconstructedJSONObject(cfg, obj, declared)
@@ -140,7 +149,12 @@ func reconstructColumnJSONDocument(cfg ColumnStoreConfig, retained []byte, value
 	return out, nil
 }
 
-func marshalColumnReconstructedJSONObject(cfg ColumnStoreConfig, retained map[string]any, declared []any) ([]byte, error) {
+type columnReconstructedDeclaredValue struct {
+	Value   any
+	Present bool
+}
+
+func marshalColumnReconstructedJSONObject(cfg ColumnStoreConfig, retained map[string]any, declared []columnReconstructedDeclaredValue) ([]byte, error) {
 	var b bytes.Buffer
 	b.WriteByte('{')
 	written := make(map[string]struct{}, len(cfg.Columns))
@@ -167,7 +181,10 @@ func marshalColumnReconstructedJSONObject(cfg ColumnStoreConfig, retained map[st
 		if strings.Contains(col.Path, ".") {
 			continue
 		}
-		if err := writeField(col.Path, declared[i]); err != nil {
+		if !declared[i].Present {
+			continue
+		}
+		if err := writeField(col.Path, declared[i].Value); err != nil {
 			return nil, err
 		}
 		written[col.Path] = struct{}{}
@@ -226,21 +243,28 @@ func deleteColumnJSONPath(obj map[string]any, path string) {
 	delete(current, parts[len(parts)-1])
 }
 
-func setColumnJSONPath(obj map[string]any, path string, value any) {
+func setColumnJSONPath(obj map[string]any, path string, value any) error {
 	if obj == nil || path == "" {
-		return
+		return nil
 	}
 	parts := strings.Split(path, ".")
 	current := obj
 	for _, part := range parts[:len(parts)-1] {
-		next, ok := current[part].(map[string]any)
+		existing, ok := current[part]
 		if !ok {
-			next = make(map[string]any)
+			next := make(map[string]any)
 			current[part] = next
+			current = next
+			continue
+		}
+		next, ok := existing.(map[string]any)
+		if !ok {
+			return fmt.Errorf("path %q has non-object ancestor %q", path, part)
 		}
 		current = next
 	}
 	current[parts[len(parts)-1]] = value
+	return nil
 }
 
 func columnDeclaredValueToJSON(value columnDeclaredValue) (any, error) {
