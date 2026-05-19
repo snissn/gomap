@@ -560,7 +560,7 @@ func TestColumnQueryPlannerM11BRecoveryAuthoritativeDoesNotRequireManifestRoot(t
 	if !plan.Diagnostics.RecoveryAuthoritative {
 		t.Fatalf("zero manifest root should not hide recovery-authoritative generation match: %+v", plan.Diagnostics)
 	}
-	if got, want := plan.Diagnostics.UnsupportedPlanReason, "physical column scanner is not implemented yet"; got != want {
+	if got, want := plan.Diagnostics.UnsupportedPlanReason, "physical column query routing is disabled until physical asset capabilities are advertised"; got != want {
 		t.Fatalf("unsupported reason=%q want %q", got, want)
 	}
 }
@@ -878,13 +878,13 @@ func TestColumnQueryPlannerM11BReportsPhysicalGateBeforeMissingAggregateName(t *
 	if plan.Supported {
 		t.Fatalf("expected aggregate metadata without physical assets to fail closed: %+v", plan)
 	}
-	if got, want := plan.Diagnostics.UnsupportedPlanReason, "physical column scanner is not implemented yet"; got != want {
+	if got, want := plan.Diagnostics.UnsupportedPlanReason, "physical column query routing is disabled until physical asset capabilities are advertised"; got != want {
 		t.Fatalf("unsupported reason=%q want %q", got, want)
 	}
 
 	identity.ManifestRoot = 0
 	plan = planColumnQueryForCatalog(catalog, identity, true, req)
-	if got, want := plan.Diagnostics.UnsupportedPlanReason, "physical column scanner is not implemented yet"; got != want {
+	if got, want := plan.Diagnostics.UnsupportedPlanReason, "physical column query routing is disabled until physical asset capabilities are advertised"; got != want {
 		t.Fatalf("zero-root/no-assets unsupported reason=%q want %q", got, want)
 	}
 }

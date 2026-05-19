@@ -526,7 +526,7 @@ func scanColumnPhysicalRowValues(cur *manifestCursor, cfg ColumnStoreConfig, pro
 			}
 		case ColumnStoreValueString:
 			if selected {
-				rowValues[outputIdx].String = cur.string()
+				rowValues[outputIdx].StringBytes = cur.stringBytes()
 			} else {
 				_ = cur.stringBytes()
 			}
