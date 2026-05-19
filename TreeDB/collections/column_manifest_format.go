@@ -458,18 +458,26 @@ func (c *manifestCursor) u64() uint64 {
 }
 
 func (c *manifestCursor) string() string {
-	if c.err != nil {
+	value := c.stringBytes()
+	if value == nil {
 		return ""
+	}
+	return string(value)
+}
+
+func (c *manifestCursor) stringBytes() []byte {
+	if c.err != nil {
+		return nil
 	}
 	n := c.u64()
 	if c.err != nil {
-		return ""
+		return nil
 	}
 	if n > uint64(len(c.raw)-c.pos) {
 		c.err = errors.New("collections: short column manifest string")
-		return ""
+		return nil
 	}
-	value := string(c.raw[c.pos : c.pos+int(n)])
+	value := c.raw[c.pos : c.pos+int(n)]
 	c.pos += int(n)
 	return value
 }

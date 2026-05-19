@@ -20,6 +20,8 @@ var (
 	columnPhysicalAssetBenchRows  []columnDeclaredRow
 	columnPhysicalAssetBenchAsset columnPhysicalAsset
 	columnPhysicalAssetBenchRef   ColumnAssetRef
+	columnPhysicalScanBenchRows   int64
+	columnPhysicalScanBenchSum    int64
 )
 
 func encodeColumnPhysicalAssetV1ForTest(t *testing.T, input columnPhysicalAssetEncodeInput) []byte {
@@ -882,6 +884,128 @@ func BenchmarkColumnPhysicalAssetDecodeM12A(b *testing.B) {
 		}
 		columnPhysicalAssetBenchAsset = asset
 	}
+}
+
+func BenchmarkColumnPhysicalAssetSerialScanM13A(b *testing.B) {
+	for _, rows := range []int{1024, 8192} {
+		b.Run(fmt.Sprintf("rows_%d", rows), func(b *testing.B) {
+			normalized, extracted := makeColumnPhysicalAssetBenchmarkRows(b, rows)
+			encoded, _, err := encodeColumnPhysicalAsset(columnPhysicalAssetEncodeInput{
+				Collection:        "events",
+				Namespace:         normalized.AssetManager.Namespace,
+				Generation:        1,
+				PartID:            1,
+				AppliedCommandLSN: 1,
+				Operation:         ColumnPublishOperationInsert,
+				SchemaHash:        normalized.SchemaHash,
+				Columns:           normalized.Columns,
+				Rows:              extracted,
+			})
+			if err != nil {
+				b.Fatal(err)
+			}
+			ref := ColumnAssetRef{
+				Kind:       ColumnAssetKindTCS1PartImage,
+				Namespace:  normalized.AssetManager.Namespace,
+				Generation: 1,
+				PartID:     1,
+				FileID:     columnAssetM12ASegmentFileID,
+				Length:     int64(len(encoded)),
+				Checksum:   page.Checksum(encoded),
+			}
+			projection, err := newColumnPhysicalScanProjection(*normalized, []string{"time_us"})
+			if err != nil {
+				b.Fatal(err)
+			}
+			var scanned int64
+			var sum int64
+			b.ReportAllocs()
+			b.SetBytes(int64(len(encoded)))
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				summary, err := scanColumnPhysicalAssetRows(encoded, ref, *normalized, projection, func(row columnPhysicalScanRowView) error {
+					if len(row.Values) != 1 {
+						return fmt.Errorf("values=%d want one projected value", len(row.Values))
+					}
+					sum += row.Values[0].Int64
+					return nil
+				})
+				if err != nil {
+					b.Fatal(err)
+				}
+				scanned += int64(summary.rows)
+			}
+			columnPhysicalScanBenchRows = scanned
+			columnPhysicalScanBenchSum = sum
+		})
+	}
+}
+
+func BenchmarkColumnPhysicalCollectionSerialScanM13A(b *testing.B) {
+	dir := b.TempDir()
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+		b.Fatal(err)
+	}
+	d, err := backenddb.Open(backenddb.Options{Dir: dir, DisableBackgroundPrune: true})
+	if err != nil {
+		b.Fatal(err)
+	}
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "events",
+		Options: CollectionOptions{ColumnStore: testColumnStoreConfig(nil)},
+	}); err != nil {
+		b.Fatal(err)
+	}
+	col, err := mgr.OpenCollection("events")
+	if err != nil {
+		b.Fatal(err)
+	}
+	_, docs, _ := makeColumnPhysicalAssetBenchmarkDocs(b, 1024)
+	ids := make([][]byte, len(docs))
+	values := make([][]byte, len(docs))
+	for i := range docs {
+		ids[i] = docs[i].ID
+		values[i] = docs[i].Document
+	}
+	if _, err := col.InsertBatch(ids, values); err != nil {
+		b.Fatal(err)
+	}
+	if err := d.Close(); err != nil {
+		b.Fatal(err)
+	}
+	reopen, err := backenddb.Open(backenddb.Options{Dir: dir, DisableBackgroundPrune: true})
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Cleanup(func() { _ = reopen.Close() })
+	reopened, err := NewCollectionManager(reopen).OpenCollection("events")
+	if err != nil {
+		b.Fatal(err)
+	}
+	req := columnPhysicalScanRequest{
+		ProjectedColumns: []string{"time_us"},
+		Visitor: func(row columnPhysicalScanRowView) error {
+			columnPhysicalScanBenchSum += row.Values[0].Int64
+			return nil
+		},
+	}
+	preview, err := reopened.scanColumnPhysicalRows(req)
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.SetBytes(preview.PhysicalBytesScanned)
+	b.ResetTimer()
+	var rows int64
+	for i := 0; i < b.N; i++ {
+		diag, err := reopened.scanColumnPhysicalRows(req)
+		if err != nil {
+			b.Fatal(err)
+		}
+		rows += int64(diag.RowsScanned)
+	}
+	columnPhysicalScanBenchRows = rows
 }
 
 func BenchmarkColumnAssetManagerWriteM12A(b *testing.B) {
