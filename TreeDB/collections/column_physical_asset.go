@@ -369,6 +369,9 @@ func validateColumnPhysicalAssetForManifest(raw []byte, ref ColumnAssetRef, cfg 
 			if value.Type != cfg.Columns[colIdx].ValueType {
 				return fmt.Errorf("collections: column physical asset row[%d] column[%d] type=%q want %q", rowIdx, colIdx, value.Type, cfg.Columns[colIdx].ValueType)
 			}
+			if value.Null && !cfg.Columns[colIdx].Nullable {
+				return fmt.Errorf("collections: column physical asset row[%d] column[%d] is null but column is not nullable", rowIdx, colIdx)
+			}
 		}
 	}
 	return nil

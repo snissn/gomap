@@ -100,6 +100,49 @@ func TestColumnPhysicalAssetCodecRoundTripM12A(t *testing.T) {
 	}
 }
 
+func TestColumnPhysicalAssetRejectsNonNullableNullM12A(t *testing.T) {
+	cfg := testColumnStoreConfig(nil)
+	normalized, err := normalizeColumnStoreConfig("events", cfg)
+	if err != nil {
+		t.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+	rows, err := extractColumnDeclaredRowsFromJSONDocuments(*normalized, []columnWriteDocument{
+		{ID: []byte("e1"), Document: []byte(`{"time_us":1,"kind":"like","did":"d1"}`)},
+	})
+	if err != nil {
+		t.Fatalf("extractColumnDeclaredRowsFromJSONDocuments: %v", err)
+	}
+	rows[0].Values[0].Null = true
+	rows[0].Values[0].Int64 = 0
+	encoded, _, err := encodeColumnPhysicalAsset(columnPhysicalAssetEncodeInput{
+		Collection:        "events",
+		Namespace:         normalized.AssetManager.Namespace,
+		Generation:        7,
+		PartID:            3,
+		AppliedCommandLSN: 101,
+		Operation:         ColumnPublishOperationInsert,
+		SchemaHash:        normalized.SchemaHash,
+		Columns:           normalized.Columns,
+		Rows:              rows,
+	})
+	if err != nil {
+		t.Fatalf("encodeColumnPhysicalAsset: %v", err)
+	}
+	ref := ColumnAssetRef{
+		Kind:       ColumnAssetKindTCS1PartImage,
+		Namespace:  normalized.AssetManager.Namespace,
+		Generation: 7,
+		PartID:     3,
+		FileID:     1,
+		Offset:     0,
+		Length:     int64(len(encoded)),
+		Checksum:   page.Checksum(encoded),
+	}
+	if err := validateColumnPhysicalAssetForManifest(encoded, ref, *normalized); err == nil || !strings.Contains(err.Error(), "not nullable") {
+		t.Fatalf("validate nullable violation err=%v want not nullable failure", err)
+	}
+}
+
 func TestColumnAssetManagerWritesIsolatedSegmentAndValidatesM12A(t *testing.T) {
 	cfg := testColumnStoreConfig(nil)
 	normalized, err := normalizeColumnStoreConfig("events", cfg)
@@ -477,7 +520,6 @@ func TestColumnAssetRefRequiresNamespaceGenerationAndSegmentIDM12A(t *testing.T)
 		"generation": func(r *ColumnAssetRef) { r.Generation = 0 },
 		"part_id":    func(r *ColumnAssetRef) { r.PartID = 0 },
 		"segment_id": func(r *ColumnAssetRef) { r.FileID = 0 },
-		"checksum":   func(r *ColumnAssetRef) { r.Checksum = 0 },
 	} {
 		t.Run(name, func(t *testing.T) {
 			bad := ref

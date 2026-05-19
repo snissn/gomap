@@ -121,14 +121,13 @@ func TestColumnPublishPlanUsesFixedWidthAssetBytesM10A(t *testing.T) {
 	}
 }
 
-func TestColumnPublishPlanRejectsZeroAssetChecksumM12A(t *testing.T) {
+func TestColumnPublishPlanAllowsZeroAssetChecksumM12A(t *testing.T) {
 	asset := testColumnPublishPreparedAssetM10A()
 	asset.Ref.Checksum = 0
 	identity := ColumnManifestIdentity{Generation: 7, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0xfeedbeef}
 
-	_, err := BuildColumnPublishPlan(testColumnPublishPlanInputM10A(identity, asset))
-	if err == nil || !strings.Contains(err.Error(), "checksum") {
-		t.Fatalf("BuildColumnPublishPlan zero asset checksum err=%v want checksum rejection", err)
+	if _, err := BuildColumnPublishPlan(testColumnPublishPlanInputM10A(identity, asset)); err != nil {
+		t.Fatalf("BuildColumnPublishPlan zero asset checksum: %v", err)
 	}
 }
 

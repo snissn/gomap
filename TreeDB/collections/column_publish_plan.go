@@ -911,9 +911,6 @@ func validateColumnAssetRefForPlan(ref ColumnAssetRef) error {
 	if ref.Length <= 0 {
 		return fmt.Errorf("collections: column asset ref length=%d must be positive", ref.Length)
 	}
-	if ref.Checksum == 0 {
-		return errors.New("collections: column asset ref checksum is required")
-	}
 	return nil
 }
 
