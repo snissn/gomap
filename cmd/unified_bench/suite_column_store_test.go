@@ -444,7 +444,18 @@ func TestColumnStoreSuiteThroughputInterpretationM14C(t *testing.T) {
 				RowMaterializations: 0,
 				MetadataHits:        4,
 			},
-			want: []string{"metadata-bound", "metadata hits", "mark-pruning active"},
+			want: []string{"metadata-bound", "metadata hits", "mark-pruning not active"},
+		},
+		{
+			name: "granule pruning future path",
+			q: columnStoreQueryMetric{
+				Name:                columnStoreQueryQ1,
+				PlanLabel:           columnStorePathSerialColumnScan,
+				RowsProcessed:       1024,
+				RowMaterializations: 0,
+				SkippedGranules:     3,
+			},
+			want: []string{"physical serial scan", "mark-pruning active"},
 		},
 		{
 			name: "parallel physical scan",
@@ -1479,6 +1490,9 @@ func TestColumnStoreSuiteQueriesNormalizeForcedPathAliasesM11B(t *testing.T) {
 		}
 		if q.WorkerCount != 1 {
 			t.Fatalf("query %s worker_count=%d want 1 for caller-thread row baseline", q.Name, q.WorkerCount)
+		}
+		if q.ThroughputInterpretation != "" {
+			t.Fatalf("query %s raw query loop throughput_interpretation=%q want empty until report/artifact rendering", q.Name, q.ThroughputInterpretation)
 		}
 	}
 

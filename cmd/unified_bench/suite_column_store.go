@@ -501,6 +501,7 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 	if profileFinalizeErr != nil {
 		report.ProfileFinalizeError = profileFinalizeErr.Error()
 	}
+	populateColumnStoreThroughputInterpretations(report.Queries)
 
 	md := renderColumnStoreSuiteMarkdown(report)
 	run := columnStoreBenchRun(baseCfg, profile, dataDir, report, db.Stats(), checkpointDuration)
@@ -1097,7 +1098,6 @@ func runColumnStoreSuiteQueries(collection *collections.Collection, rows int, ra
 			CacheMisses:          exec.CacheMisses,
 			CacheLabel:           "reopened_warm_process",
 		}
-		metric.ThroughputInterpretation = columnStoreQueryThroughputInterpretation(metric)
 		queries = append(queries, metric)
 	}
 	return queries, parity, firstErr
@@ -1514,7 +1514,7 @@ func columnStoreQueryImplementationNote(name, path string) string {
 
 func columnStoreQueryThroughputInterpretation(q columnStoreQueryMetric) string {
 	markPruning := "mark-pruning not active"
-	if q.SkippedGranules > 0 || q.MetadataHits > 0 {
+	if q.SkippedGranules > 0 {
 		markPruning = "mark-pruning active"
 	}
 	switch q.PlanLabel {
@@ -1530,9 +1530,17 @@ func columnStoreQueryThroughputInterpretation(q columnStoreQueryMetric) string {
 		}
 		return "fallback-bound aggregate metadata label: no metadata hits yet, executes scan-backed physical reducer over declared columns; " + markPruning
 	case columnStorePathParallelColumnScan:
-		return fmt.Sprintf("parallel physical scan: manifest-ref partition across %d workers; overhead-bound on small fixtures and memory-bandwidth/TCPA-decode bound on larger asset bytes; %s", max(1, q.WorkerCount), markPruning)
+		return fmt.Sprintf("parallel physical scan: manifest-ref partition across %d workers; overhead-bound on small fixtures and memory-bandwidth/TCPA-decode bound on larger asset bytes; %s", q.WorkerCount, markPruning)
 	default:
 		return "fallback/error-bound: unknown executed plan label; " + markPruning
+	}
+}
+
+func populateColumnStoreThroughputInterpretations(queries []columnStoreQueryMetric) {
+	for i := range queries {
+		if strings.TrimSpace(queries[i].ThroughputInterpretation) == "" {
+			queries[i].ThroughputInterpretation = columnStoreQueryThroughputInterpretation(queries[i])
+		}
 	}
 }
 
