@@ -38,7 +38,7 @@ var ErrOrderedRootDeltaBatchGroupCommandWALContextNilSystemBuilder = errors.New(
 
 // ErrStorageMaintenanceRewriteMarkerMissing reports a maintenance ordered-root
 // publish input that is not explicitly marked as storage-maintenance.
-var ErrStorageMaintenanceRewriteMarkerMissing = errors.New("treedb: storage-maintenance rewrite marker missing")
+var ErrStorageMaintenanceRewriteMarkerMissing = errors.New("treedb: storage-maintenance rewrite marker missing: set OrderedRootDeltaPublishInput.StorageMaintenanceRewrite=true for every ordered input when using the storage-maintenance publish API")
 
 var (
 	errCommandWALContextZeroLSN = errors.New("treedb: command WAL context publish appended zero LSN")

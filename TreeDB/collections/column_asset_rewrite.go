@@ -392,16 +392,12 @@ func cleanupColumnAssetRewriteCopiedSegment(rootDir string, remap columnAssetRew
 	if err != nil {
 		return err
 	}
-	namespace, nsErr := columnAssetManagerNamespaceForRoot(rootDir, remap.newRefs[0].Namespace)
 	removeErr := os.Remove(segmentPath)
 	if errors.Is(removeErr, os.ErrNotExist) {
 		removeErr = nil
 	}
-	var syncErr error
-	if nsErr == nil {
-		syncErr = syncColumnAssetDir(namespace.SegmentDir)
-	}
-	return errors.Join(removeErr, nsErr, syncErr)
+	syncErr := syncColumnAssetDir(filepath.Dir(segmentPath))
+	return errors.Join(removeErr, syncErr)
 }
 
 func patchColumnAssetRewriteManifestRecords(records []columnManifestRecord, byOldRef map[ColumnAssetRef]ColumnAssetRef) ([]columnManifestRecord, int, error) {
