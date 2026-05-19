@@ -569,11 +569,16 @@ func TestColumnManifestEncodeChecksumsRetainedPartRecordsM13A(t *testing.T) {
 		t.Fatalf("checksum=%d want manifest identity checksum=%d", checksum, manifest.Identity.Checksum)
 	}
 	tampered := cloneColumnManifestRecords(active)
+	tamperedCount := 0
 	for i := range tampered {
 		if bytes.HasPrefix(tampered[i].key, []byte(columnManifestPartRecordPrefix)) && bytes.Contains(tampered[i].value, []byte(retained.Reason)) {
 			tampered[i].value[len(tampered[i].value)-1] ^= 0x01
+			tamperedCount++
 			break
 		}
+	}
+	if tamperedCount != 1 {
+		t.Fatalf("tampered retained manifest records=%d want 1", tamperedCount)
 	}
 	tamperedChecksum := checksumColumnManifestRecords(ColumnPublishManifestEncodeInput{
 		Collection:        "events",
@@ -584,6 +589,80 @@ func TestColumnManifestEncodeChecksumsRetainedPartRecordsM13A(t *testing.T) {
 	if tamperedChecksum == manifest.Identity.Checksum {
 		t.Fatal("tampered retained manifest part did not change checksum")
 	}
+}
+
+func TestColumnPublishRejectsTamperedExistingManifestBeforeCarryM13A(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	cfg, err := normalizeColumnStoreConfig("events", testColumnStoreConfig(nil))
+	if err != nil {
+		t.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+	asset := testColumnPublishPreparedAssetM10A()
+	asset.Ref.Generation = 1
+	asset.Ref.PartID = 1
+	asset.GenerationID = 1
+	asset.Reason = string(ColumnPublishOperationInsert)
+	manifest, err := encodeColumnManifestForWrite(ColumnPublishManifestEncodeInput{
+		Collection:        "events",
+		ColumnStore:       *cfg,
+		Operation:         ColumnPublishOperationInsert,
+		AppliedCommandLSN: 1,
+		Prepared: ColumnPublishPreparedAssets{
+			Assets:             []ColumnPreparedAsset{asset},
+			RowCount:           1,
+			ColumnPayloadBytes: asset.Bytes,
+		},
+	})
+	if err != nil {
+		t.Fatalf("encodeColumnManifestForWrite: %v", err)
+	}
+	active := manifest.Identity
+	cfg.ActiveManifest = &active
+	cfg.RecoveryAuthoritativeManifest = &active
+	cfg.RecoveryAuthoritativeAppliedCommandLSN = 1
+
+	rootID := publishColumnManifestRecordsForScanTestM13A(t, d, manifest.Identity, manifest.Records)
+	col := &Collection{db: d}
+	if _, err := col.loadColumnManifestRecordsForPublish(rootID, "events", *cfg); err != nil {
+		t.Fatalf("load untampered manifest for publish: %v", err)
+	}
+
+	tampered := cloneColumnManifestRecords(manifest.Records)
+	tamperedCount := 0
+	for i := range tampered {
+		if bytes.HasPrefix(tampered[i].key, []byte(columnManifestPartRecordPrefix)) {
+			tampered[i].value[len(tampered[i].value)-1] ^= 0x01
+			tamperedCount++
+			break
+		}
+	}
+	if tamperedCount != 1 {
+		t.Fatalf("tampered manifest part records=%d want 1", tamperedCount)
+	}
+	corruptRootID := publishColumnManifestRecordsForScanTestM13A(t, d, manifest.Identity, tampered)
+	_, err = col.loadColumnManifestRecordsForPublish(corruptRootID, "events", *cfg)
+	if err == nil || !strings.Contains(err.Error(), "column publish manifest checksum") {
+		t.Fatalf("load tampered manifest for publish err=%v want checksum rejection", err)
+	}
+}
+
+func publishColumnManifestRecordsForScanTestM13A(t testing.TB, d *backenddb.DB, identity ColumnManifestIdentity, records []columnManifestRecord) uint64 {
+	t.Helper()
+	iter := columnManifestRootRecordIterator(encodeColumnManifestIdentityRecordArray(identity), records)
+	defer func() { _ = iter.Close() }()
+	rootID, err := d.PublishOrderedRootIterator(0, iter)
+	if err != nil {
+		t.Fatalf("PublishOrderedRootIterator: %v", err)
+	}
+	if rootID == 0 {
+		t.Fatal("PublishOrderedRootIterator returned root 0")
+	}
+	return rootID
 }
 
 func TestColumnPhysicalAssetSerialScanNumericProjectionHasZeroAllocsM13A(t *testing.T) {
