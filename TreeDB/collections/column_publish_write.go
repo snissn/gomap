@@ -377,14 +377,19 @@ func (c *Collection) publishRootDeltaBatchGroupWithoutColumn(ordered []backenddb
 }
 
 func (c *Collection) buildColumnPublishPlanForCommandWALContext(ctx backenddb.CommandWALPublishContext, input columnWritePublishInput, baseManifestRootID uint64) (ColumnPublishPlan, error) {
+	currentRecords, err := c.loadColumnManifestRecordsForPublish(baseManifestRootID)
+	if err != nil {
+		return ColumnPublishPlan{}, err
+	}
 	return BuildColumnPublishPlan(ColumnPublishPlanInput{
-		Collection:            input.meta.Name,
-		ColumnStore:           input.meta.Options.ColumnStore,
-		ColumnStoreNormalized: true,
-		Operation:             input.operation,
-		CurrentManifest:       input.meta.Options.ColumnStore.ActiveManifest,
-		AppliedCommandLSN:     ctx.AppliedCommandLSN,
-		BaseManifestRootID:    baseManifestRootID,
+		Collection:             input.meta.Name,
+		ColumnStore:            input.meta.Options.ColumnStore,
+		ColumnStoreNormalized:  true,
+		Operation:              input.operation,
+		CurrentManifest:        input.meta.Options.ColumnStore.ActiveManifest,
+		CurrentManifestRecords: currentRecords,
+		AppliedCommandLSN:      ctx.AppliedCommandLSN,
+		BaseManifestRootID:     baseManifestRootID,
 		Hooks: ColumnPublishPlanHooks{
 			PrepareAssets: func(hookInput ColumnPublishAssetPrepareInput) (ColumnPublishPreparedAssets, error) {
 				return c.prepareColumnPhysicalAssetsForCommand(input, hookInput)
@@ -392,6 +397,22 @@ func (c *Collection) buildColumnPublishPlanForCommandWALContext(ctx backenddb.Co
 			EncodeManifest: encodeColumnManifestIdentityForWrite,
 		},
 	})
+}
+
+func (c *Collection) loadColumnManifestRecordsForPublish(rootID uint64) ([]columnManifestRecord, error) {
+	if rootID == 0 {
+		return nil, nil
+	}
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return nil, errCollectionDBNil
+	}
+	defer func() { _ = snap.Close() }()
+	records, err := loadColumnManifestRecordsFromRootForScan(snap, rootID)
+	if err != nil {
+		return nil, fmt.Errorf("collections: load existing column manifest records: %w", err)
+	}
+	return records, nil
 }
 
 func (c *Collection) prepareColumnPhysicalAssetsForCommand(input columnWritePublishInput, hookInput ColumnPublishAssetPrepareInput) (ColumnPublishPreparedAssets, error) {
