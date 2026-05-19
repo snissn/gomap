@@ -11,6 +11,7 @@ import (
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/storagemaintenance"
 )
 
 func TestColumnAssetRewriteRemapsManifestRefsOutOfMixedSegmentM15C(t *testing.T) {
@@ -288,7 +289,7 @@ func TestColumnAssetRewriteCleansCopiedSegmentOnStalePublishPreflightM15C(t *tes
 	stats, err := col.ColumnAssetRewrite(context.Background(), ColumnAssetRewriteOptions{
 		CandidateRefs: []ColumnAssetRef{candidate},
 		afterCopyHookForTest: func() error {
-			_, _, err := d.PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(nil, nil, func([]uint64) (iterator.UnsafeIterator, error) {
+			_, _, err := d.PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(storagemaintenance.ColumnAssetRewrite(), nil, nil, func([]uint64) (iterator.UnsafeIterator, error) {
 				current := d.AcquireSnapshot()
 				if current == nil {
 					return nil, backenddb.ErrClosed

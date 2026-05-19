@@ -16,6 +16,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/internal/storagemaintenance"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -242,6 +243,7 @@ func TestPublishOrderedRootDeltaGroupMaintenanceAllowsCommandWALWithoutLogicalFr
 	}
 
 	newSystemRoot, rootIDs, err := db.PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(
+		storagemaintenance.ColumnAssetRewrite(),
 		nil,
 		nil,
 		func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
@@ -259,6 +261,9 @@ func TestPublishOrderedRootDeltaGroupMaintenanceAllowsCommandWALWithoutLogicalFr
 	}
 	if got := db.State().AppliedCommandLSN; got != 0 {
 		t.Fatalf("AppliedCommandLSN=%d want 0 for storage maintenance publish", got)
+	}
+	if err := db.CheckCommandWALPublishReady(); err != nil {
+		t.Fatalf("CheckCommandWALPublishReady after maintenance publish: %v", err)
 	}
 	snap := db.AcquireSnapshot()
 	if snap == nil {
@@ -283,6 +288,7 @@ func TestPublishOrderedRootDeltaGroupMaintenanceRejectsUnmarkedRootDelta(t *test
 	iter := mustFrozenSystemMemtable(t, "root/k", "v").NewIterator(nil, nil)
 	defer iter.Close()
 	_, _, err := db.PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(
+		storagemaintenance.ColumnAssetRewrite(),
 		[]OrderedRootDeltaPublishInput{{
 			BaseRoot: 0,
 			Iter:     iter,
@@ -295,6 +301,26 @@ func TestPublishOrderedRootDeltaGroupMaintenanceRejectsUnmarkedRootDelta(t *test
 	)
 	if !errors.Is(err, ErrStorageMaintenanceRewriteMarkerMissing) {
 		t.Fatalf("maintenance publish error=%v want ErrStorageMaintenanceRewriteMarkerMissing", err)
+	}
+}
+
+func TestPublishOrderedRootDeltaGroupMaintenanceRejectsMissingPlan(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	defer db.Close()
+
+	_, _, err := db.PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(
+		storagemaintenance.Plan{},
+		nil,
+		nil,
+		func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+			t.Fatalf("maintenance system builder should not run without a maintenance plan")
+			return nil, nil
+		},
+	)
+	if !errors.Is(err, ErrStorageMaintenancePlanMissing) {
+		t.Fatalf("maintenance publish error=%v want ErrStorageMaintenancePlanMissing", err)
 	}
 }
 

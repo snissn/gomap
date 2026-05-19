@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/storagemaintenance"
 )
 
 func newClosedDBForPublicMethodTest(t *testing.T) *DB {
@@ -354,7 +355,7 @@ func TestClosedDB_PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDelt
 		table := mustFrozenSystemMemtable(t, "root/k", "v")
 		iter := table.NewIterator(nil, nil)
 		defer iter.Close()
-		_, _, err := d.PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder([]OrderedRootDeltaPublishInput{{
+		_, _, err := d.PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(storagemaintenance.ColumnAssetRewrite(), []OrderedRootDeltaPublishInput{{
 			Iter:                      iter,
 			StorageMaintenanceRewrite: true,
 		}}, nil, func([]uint64) (iterator.UnsafeIterator, error) {

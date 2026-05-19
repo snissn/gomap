@@ -10,6 +10,7 @@ import (
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/storagemaintenance"
 )
 
 // ColumnAssetRewriteOptions controls M15C mixed-segment rewrite/remap.
@@ -482,6 +483,7 @@ func (c *Collection) publishColumnAssetRewriteManifestState(state columnAssetRew
 		StorageMaintenanceRewrite: true,
 	}}
 	return c.db.PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(
+		storagemaintenance.ColumnAssetRewrite(),
 		ordered,
 		c.columnAssetRewriteRootDescriptorPreflight(state),
 		func(rootIDs []uint64) (iterator.UnsafeIterator, error) {

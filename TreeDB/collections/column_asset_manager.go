@@ -275,6 +275,9 @@ func initializeColumnAssetSegmentFileIDAllocator(namespace columnAssetManagerNam
 			maxFileID = segment.fileID
 		}
 	}
+	if maxFileID < columnAssetM12ASegmentFileID {
+		maxFileID = columnAssetM12ASegmentFileID
+	}
 	if maxFileID == ^uint32(0) {
 		allocator.exhausted = true
 		return errors.New("collections: column asset segment file_id exhausted")
