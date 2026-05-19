@@ -753,25 +753,26 @@ func validateColumnManifestRootDeltaForPlan(delta ColumnManifestRootDelta, baseR
 	if delta.IdentityRecord != encodeColumnManifestIdentityRecordArray(identity) {
 		return errors.New("identity record does not match manifest identity")
 	}
-	if len(delta.Records) != 0 {
-		snapshot, err := decodeColumnManifestRecords(delta.Records)
-		if err != nil {
-			return err
-		}
-		if snapshot.Generation != identity.Generation {
-			return fmt.Errorf("manifest records generation=%d does not match identity generation=%d", snapshot.Generation, identity.Generation)
-		}
-		checksum := checksumColumnManifestRecords(ColumnPublishManifestEncodeInput{
-			Collection: snapshot.Collection,
-			ColumnStore: ColumnStoreConfig{
-				SchemaHash: snapshot.SchemaHash,
-			},
-			Operation:         snapshot.Operation,
-			AppliedCommandLSN: snapshot.AppliedCommandLSN,
-		}, snapshot.Generation, delta.Records)
-		if checksum != identity.Checksum {
-			return fmt.Errorf("manifest records checksum=%d does not match identity checksum=%d", checksum, identity.Checksum)
-		}
+	if len(delta.Records) == 0 {
+		return errors.New("manifest records omitted")
+	}
+	snapshot, err := decodeColumnManifestRecords(delta.Records)
+	if err != nil {
+		return err
+	}
+	if snapshot.Generation != identity.Generation {
+		return fmt.Errorf("manifest records generation=%d does not match identity generation=%d", snapshot.Generation, identity.Generation)
+	}
+	checksum := checksumColumnManifestRecords(ColumnPublishManifestEncodeInput{
+		Collection: snapshot.Collection,
+		ColumnStore: ColumnStoreConfig{
+			SchemaHash: snapshot.SchemaHash,
+		},
+		Operation:         snapshot.Operation,
+		AppliedCommandLSN: snapshot.AppliedCommandLSN,
+	}, snapshot.Generation, delta.Records)
+	if checksum != identity.Checksum {
+		return fmt.Errorf("manifest records checksum=%d does not match identity checksum=%d", checksum, identity.Checksum)
 	}
 	return nil
 }
