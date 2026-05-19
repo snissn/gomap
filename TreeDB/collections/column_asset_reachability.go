@@ -390,10 +390,18 @@ func buildColumnAssetReachabilityPlan(ctx context.Context, input columnAssetReac
 			})
 		}
 	}
-	for fileID, ranges := range rangesByFile {
+	var missingFileIDs []uint32
+	for fileID := range rangesByFile {
 		if _, ok := seenFiles[fileID]; ok {
 			continue
 		}
+		missingFileIDs = append(missingFileIDs, fileID)
+	}
+	sort.Slice(missingFileIDs, func(i, j int) bool {
+		return missingFileIDs[i] < missingFileIDs[j]
+	})
+	for _, fileID := range missingFileIDs {
+		ranges := rangesByFile[fileID]
 		plan.Segments.Missing += len(ranges)
 		plan.Complete = false
 		if input.detailed {

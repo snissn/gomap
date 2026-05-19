@@ -206,6 +206,44 @@ func TestColumnAssetReachabilityPlanRetainsMissingLiveSegmentM15A(t *testing.T) 
 	}
 }
 
+func TestColumnAssetReachabilityPlanOrdersMissingSegmentEntriesM15A(t *testing.T) {
+	const namespace = "events/column-assets"
+	input := columnAssetReachabilityInput{
+		rootDir:     t.TempDir(),
+		collection:  "events",
+		namespace:   namespace,
+		detailed:    true,
+		activeGen:   1,
+		recoveryGen: 1,
+	}
+	for _, fileID := range []uint32{3, 1, 2} {
+		input.addRef(ColumnAssetRef{
+			Kind:       ColumnAssetKindTCS1PartImage,
+			Namespace:  namespace,
+			Generation: 1,
+			PartID:     uint64(fileID),
+			FileID:     fileID,
+			Length:     64,
+		}, ColumnAssetReachabilitySourceActiveManifest)
+	}
+
+	plan, err := buildColumnAssetReachabilityPlan(context.Background(), input)
+	if err != nil {
+		t.Fatalf("buildColumnAssetReachabilityPlan: %v", err)
+	}
+	if plan.Complete || plan.Segments.Missing != 3 {
+		t.Fatalf("plan complete=%t missing=%d want incomplete with three missing segments", plan.Complete, plan.Segments.Missing)
+	}
+	if len(plan.SegmentEntries) != 3 {
+		t.Fatalf("segment entries=%d want 3", len(plan.SegmentEntries))
+	}
+	for i, want := range []uint32{1, 2, 3} {
+		if got := plan.SegmentEntries[i].FileID; got != want {
+			t.Fatalf("segment entry %d fileID=%d want %d; entries=%+v", i, got, want, plan.SegmentEntries)
+		}
+	}
+}
+
 func TestColumnAssetReachabilitySegmentAccountingPreservesKnownBytesWhenUnknownM15A(t *testing.T) {
 	protected := classifyColumnAssetReachabilitySegment(columnAssetReachabilitySegment{fileID: 1, bytes: 100}, []columnAssetReachabilityRange{{
 		start:  0,
