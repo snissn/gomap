@@ -47,12 +47,25 @@ type columnPhysicalScanRowView struct {
 
 type columnPhysicalScanProjection struct {
 	outputByColumn []int
+	values         []columnDeclaredValue
 	count          int
 }
 
 type columnPhysicalAssetScanSummary struct {
 	rows    int
 	deleted int
+}
+
+type columnPhysicalAssetScanHeader struct {
+	Collection        []byte
+	Namespace         []byte
+	Generation        uint64
+	PartID            uint64
+	AppliedCommandLSN uint64
+	Operation         ColumnPublishOperation
+	SchemaHash        uint64
+	RowCount          int
+	ColumnCount       int
 }
 
 func (c *Collection) scanColumnPhysicalRows(req columnPhysicalScanRequest) (columnPhysicalScanDiagnostics, error) {
@@ -162,7 +175,11 @@ func newColumnPhysicalScanProjection(cfg ColumnStoreConfig, projected []string) 
 		for i := range cfg.Columns {
 			outputByColumn[i] = i
 		}
-		return columnPhysicalScanProjection{outputByColumn: outputByColumn, count: len(cfg.Columns)}, nil
+		return columnPhysicalScanProjection{
+			outputByColumn: outputByColumn,
+			values:         make([]columnDeclaredValue, len(cfg.Columns)),
+			count:          len(cfg.Columns),
+		}, nil
 	}
 	seen := make(map[string]struct{}, len(projected))
 	for outIdx, name := range projected {
@@ -185,7 +202,11 @@ func newColumnPhysicalScanProjection(cfg ColumnStoreConfig, projected []string) 
 			return columnPhysicalScanProjection{}, fmt.Errorf("collections: physical column scan requested undeclared column %q", name)
 		}
 	}
-	return columnPhysicalScanProjection{outputByColumn: outputByColumn, count: len(projected)}, nil
+	return columnPhysicalScanProjection{
+		outputByColumn: outputByColumn,
+		values:         make([]columnDeclaredValue, len(projected)),
+		count:          len(projected),
+	}, nil
 }
 
 func validateColumnManifestIdentityAtRootForScan(snap *backenddb.Snapshot, rootID uint64, identity ColumnManifestIdentity) error {
@@ -310,15 +331,13 @@ func scanColumnPhysicalAssetRows(raw []byte, ref ColumnAssetRef, cfg ColumnStore
 	if version != columnPhysicalAssetVersionV1 && version != columnPhysicalAssetVersion {
 		return columnPhysicalAssetScanSummary{}, fmt.Errorf("unsupported column physical asset version=%d", version)
 	}
-	header := columnPhysicalAssetHeader{
-		Collection:        cur.string(),
-		Namespace:         cur.string(),
-		Generation:        cur.u64(),
-		PartID:            cur.u64(),
-		AppliedCommandLSN: cur.u64(),
-		Operation:         ColumnPublishOperation(cur.string()),
-		SchemaHash:        cur.u64(),
-	}
+	collection := cur.stringBytes()
+	namespace := cur.stringBytes()
+	generation := cur.u64()
+	partID := cur.u64()
+	appliedCommandLSN := cur.u64()
+	operation, operationOK := columnPhysicalScanOperationFromBytes(cur.stringBytes())
+	schemaHash := cur.u64()
 	columnCount := cur.u64()
 	rowCount := cur.u64()
 	if err := cur.err; err != nil {
@@ -327,8 +346,20 @@ func scanColumnPhysicalAssetRows(raw []byte, ref ColumnAssetRef, cfg ColumnStore
 	if columnCount > uint64(maxCollectionInt) || rowCount > uint64(maxCollectionInt) {
 		return columnPhysicalAssetScanSummary{}, errors.New("column physical asset dimensions overflow int")
 	}
-	header.ColumnCount = int(columnCount)
-	header.RowCount = int(rowCount)
+	header := columnPhysicalAssetScanHeader{
+		Collection:        collection,
+		Namespace:         namespace,
+		Generation:        generation,
+		PartID:            partID,
+		AppliedCommandLSN: appliedCommandLSN,
+		Operation:         operation,
+		SchemaHash:        schemaHash,
+		ColumnCount:       int(columnCount),
+		RowCount:          int(rowCount),
+	}
+	if !operationOK {
+		return columnPhysicalAssetScanSummary{}, fmt.Errorf("unsupported column physical asset operation %q", string(operation))
+	}
 	if err := validateColumnPhysicalAssetScanHeader(header, ref, cfg); err != nil {
 		return columnPhysicalAssetScanSummary{}, err
 	}
@@ -336,21 +367,28 @@ func scanColumnPhysicalAssetRows(raw []byte, ref ColumnAssetRef, cfg ColumnStore
 		return columnPhysicalAssetScanSummary{}, fmt.Errorf("column physical asset columns=%d want %d", header.ColumnCount, len(cfg.Columns))
 	}
 	for colIdx := 0; colIdx < header.ColumnCount; colIdx++ {
-		got := ColumnStoreColumn{
-			Name:       cur.string(),
-			Path:       cur.string(),
-			ValueType:  ColumnStoreValueType(cur.string()),
-			Nullable:   cur.bool(),
-			Dictionary: cur.bool(),
-		}
+		name := cur.stringBytes()
+		path := cur.stringBytes()
+		valueType := cur.stringBytes()
+		nullable := cur.bool()
+		dictionary := cur.bool()
 		if cur.err != nil {
 			return columnPhysicalAssetScanSummary{}, cur.err
 		}
-		if got != cfg.Columns[colIdx] {
-			return columnPhysicalAssetScanSummary{}, fmt.Errorf("column physical asset column[%d]=%+v want %+v", colIdx, got, cfg.Columns[colIdx])
+		want := cfg.Columns[colIdx]
+		if !columnPhysicalBytesEqualString(name, want.Name) ||
+			!columnPhysicalBytesEqualString(path, want.Path) ||
+			!columnPhysicalBytesEqualString(valueType, string(want.ValueType)) ||
+			nullable != want.Nullable ||
+			dictionary != want.Dictionary {
+			return columnPhysicalAssetScanSummary{}, fmt.Errorf("column physical asset column[%d]={Name:%q Path:%q ValueType:%q Nullable:%t Dictionary:%t} want %+v",
+				colIdx, string(name), string(path), string(valueType), nullable, dictionary, want)
 		}
 	}
-	valuesBuf := make([]columnDeclaredValue, projection.count)
+	valuesBuf := projection.values
+	if len(valuesBuf) < projection.count {
+		valuesBuf = make([]columnDeclaredValue, projection.count)
+	}
 	var summary columnPhysicalAssetScanSummary
 	for rowIdx := 0; rowIdx < header.RowCount; rowIdx++ {
 		id := cur.bytesView()
@@ -401,12 +439,12 @@ func scanColumnPhysicalAssetRows(raw []byte, ref ColumnAssetRef, cfg ColumnStore
 	return summary, nil
 }
 
-func validateColumnPhysicalAssetScanHeader(header columnPhysicalAssetHeader, ref ColumnAssetRef, cfg ColumnStoreConfig) error {
+func validateColumnPhysicalAssetScanHeader(header columnPhysicalAssetScanHeader, ref ColumnAssetRef, cfg ColumnStoreConfig) error {
 	if cfg.AssetManager == nil {
 		return errors.New("column physical asset scan requires asset manager")
 	}
-	if header.Namespace != cfg.AssetManager.Namespace || ref.Namespace != cfg.AssetManager.Namespace {
-		return fmt.Errorf("column physical asset namespace=%q ref_namespace=%q want %q", header.Namespace, ref.Namespace, cfg.AssetManager.Namespace)
+	if !columnPhysicalBytesEqualString(header.Namespace, cfg.AssetManager.Namespace) || ref.Namespace != cfg.AssetManager.Namespace {
+		return fmt.Errorf("column physical asset namespace=%q ref_namespace=%q want %q", string(header.Namespace), ref.Namespace, cfg.AssetManager.Namespace)
 	}
 	if header.Generation != ref.Generation {
 		return fmt.Errorf("column physical asset generation=%d does not match ref generation=%d", header.Generation, ref.Generation)
@@ -421,6 +459,19 @@ func validateColumnPhysicalAssetScanHeader(header columnPhysicalAssetHeader, ref
 		return fmt.Errorf("unsupported column physical asset operation %q", header.Operation)
 	}
 	return nil
+}
+
+func columnPhysicalScanOperationFromBytes(raw []byte) (ColumnPublishOperation, bool) {
+	switch {
+	case columnPhysicalBytesEqualString(raw, string(ColumnPublishOperationInsert)):
+		return ColumnPublishOperationInsert, true
+	case columnPhysicalBytesEqualString(raw, string(ColumnPublishOperationUpdate)):
+		return ColumnPublishOperationUpdate, true
+	case columnPhysicalBytesEqualString(raw, string(ColumnPublishOperationDelete)):
+		return ColumnPublishOperationDelete, true
+	default:
+		return ColumnPublishOperation(string(raw)), false
+	}
 }
 
 func scanColumnPhysicalRowValues(cur *manifestCursor, cfg ColumnStoreConfig, projection columnPhysicalScanProjection, rowValues []columnDeclaredValue) error {

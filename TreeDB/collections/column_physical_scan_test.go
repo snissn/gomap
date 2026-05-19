@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 func TestColumnPhysicalSerialScannerReadsReopenedAssetsM13A(t *testing.T) {
@@ -204,6 +205,64 @@ func TestColumnPhysicalSerialScannerRejectsInvalidProjectionM13A(t *testing.T) {
 				t.Fatalf("projection err=%v want %q", err, tc.want)
 			}
 		})
+	}
+}
+
+func TestColumnPhysicalAssetSerialScanNumericProjectionHasZeroAllocsM13A(t *testing.T) {
+	normalized, rows := makeColumnPhysicalAssetBenchmarkRows(t, 1024)
+	encoded, _, err := encodeColumnPhysicalAsset(columnPhysicalAssetEncodeInput{
+		Collection:        "events",
+		Namespace:         normalized.AssetManager.Namespace,
+		Generation:        1,
+		PartID:            1,
+		AppliedCommandLSN: 1,
+		Operation:         ColumnPublishOperationInsert,
+		SchemaHash:        normalized.SchemaHash,
+		Columns:           normalized.Columns,
+		Rows:              rows,
+	})
+	if err != nil {
+		t.Fatalf("encodeColumnPhysicalAsset: %v", err)
+	}
+	ref := ColumnAssetRef{
+		Kind:       ColumnAssetKindTCS1PartImage,
+		Namespace:  normalized.AssetManager.Namespace,
+		Generation: 1,
+		PartID:     1,
+		FileID:     columnAssetM12ASegmentFileID,
+		Length:     int64(len(encoded)),
+		Checksum:   page.Checksum(encoded),
+	}
+	projection, err := newColumnPhysicalScanProjection(*normalized, []string{"time_us"})
+	if err != nil {
+		t.Fatalf("newColumnPhysicalScanProjection: %v", err)
+	}
+	var scanErr error
+	var sum int64
+	allocs := testing.AllocsPerRun(100, func() {
+		if scanErr != nil {
+			return
+		}
+		summary, err := scanColumnPhysicalAssetRows(encoded, ref, *normalized, projection, func(row columnPhysicalScanRowView) error {
+			sum += row.Values[0].Int64
+			return nil
+		})
+		if err != nil {
+			scanErr = err
+			return
+		}
+		if summary.rows != len(rows) {
+			scanErr = errors.New("unexpected scanned row count")
+		}
+	})
+	if scanErr != nil {
+		t.Fatalf("scanColumnPhysicalAssetRows: %v", scanErr)
+	}
+	if allocs != 0 {
+		t.Fatalf("allocs/run=%v want zero for numeric physical asset scan", allocs)
+	}
+	if sum == 0 {
+		t.Fatal("scan sum stayed zero")
 	}
 }
 
