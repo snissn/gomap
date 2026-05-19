@@ -1069,7 +1069,7 @@ func TestColumnPhysicalAssetScanRejectsWrongNamespaceM13C(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newColumnPhysicalScanProjection: %v", err)
 	}
-	if _, err := scanColumnPhysicalAssetRows(mutated, ref, "events", *normalized, projection, nil); err == nil || !strings.Contains(err.Error(), "namespace") {
+	if _, err := scanColumnPhysicalAssetRows(mutated, ref, "events", normalized, projection, nil); err == nil || !strings.Contains(err.Error(), "namespace") {
 		t.Fatalf("scan wrong namespace err=%v want namespace failure", err)
 	}
 }
