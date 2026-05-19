@@ -106,6 +106,13 @@ func TestCollectionVectorIndexColumnGraphReportsManifestRootMismatch(t *testing.
 	if status.RootID == 0 || status.ExactFallbackReason != vectorIndexFallbackColumnGraphManifestInvalid || status.ColumnGraphUnavailableReason != vectorIndexFallbackColumnGraphManifestInvalid {
 		t.Fatalf("unexpected mismatch status: %+v", status)
 	}
+	rebuild, err := col.RebuildVectorIndex(def.Name)
+	if err != nil {
+		t.Fatalf("RebuildVectorIndex should report mismatch status, not error: %v", err)
+	}
+	if rebuild.ExactFallbackReason != vectorIndexFallbackColumnGraphManifestInvalid || rebuild.ColumnGraphUnavailableReason != vectorIndexFallbackColumnGraphManifestInvalid || !rebuild.RebuildNeeded {
+		t.Fatalf("unexpected rebuild mismatch status: %+v", rebuild)
+	}
 }
 
 func TestCollectionVectorIndexColumnGraphOptionDoesNotLoadNativeIndex(t *testing.T) {

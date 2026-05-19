@@ -60,12 +60,27 @@ func (c *Collection) RebuildVectorIndex(name string) (VectorIndexStatus, error) 
 	if err := c.flushBufferedWrites(); err != nil {
 		return VectorIndexStatus{}, err
 	}
-	def, err := c.declaredVectorIndexDefinitionPrepared(name)
+	if err := ValidateIndexName(name); err != nil {
+		return VectorIndexStatus{}, err
+	}
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return VectorIndexStatus{}, backenddb.ErrClosed
+	}
+	defer func() { _ = snap.Close() }()
+	catalog, err := loadCollectionCatalogWithoutColumnRootValidation(snap, c.meta.Name)
 	if err != nil {
 		return VectorIndexStatus{}, err
 	}
+	if catalog == nil {
+		return VectorIndexStatus{}, errCollectionNotFound
+	}
+	def, ok := findVectorIndex(catalog.meta.VectorIndexes, name)
+	if !ok {
+		return VectorIndexStatus{}, ErrIndexNotFound
+	}
 	if vectorIndexDefinitionStrategy(def) == VectorIndexStrategyColumnGraph {
-		graph, loadStatus, err := c.LoadColumnGraphVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
+		graph, loadStatus, err := c.loadColumnGraphVectorIndexSnapshotFromCatalog(snap, catalog, def)
 		if err != nil {
 			return VectorIndexStatus{}, err
 		}
@@ -77,6 +92,9 @@ func (c *Collection) RebuildVectorIndex(name string) (VectorIndexStatus, error) 
 		status := columnGraphRebuildUnsupportedStatus(def, loadStatus)
 		status.Duration = collectionObservedElapsedSince(start)
 		return status, nil
+	}
+	if err := validateColumnStoreCatalogRoot(snap, catalog); err != nil {
+		return VectorIndexStatus{}, err
 	}
 	index, err := c.buildVectorIndexPrepared(vectorIndexOptionsFromDefinition(def), false, false)
 	if err != nil {
