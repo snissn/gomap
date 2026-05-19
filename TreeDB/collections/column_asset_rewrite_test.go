@@ -435,45 +435,49 @@ func BenchmarkColumnAssetRewriteMixedSegmentM15C(b *testing.B) {
 			bytesCopiedPerRun := columnAssetRewriteBenchmarkBytesPerRunM15C(b, refs)
 			b.SetBytes(bytesCopiedPerRun)
 			b.ReportAllocs()
-			ctx := context.Background()
-			for i := 0; i < b.N; i++ {
-				b.StopTimer()
-				d, col, candidate, liveRefs, bytesCopied := prepareColumnAssetRewriteBenchmarkCaseM15C(b, refs)
-				if bytesCopied != bytesCopiedPerRun {
-					_ = d.Close()
-					b.Fatalf("bytesCopied=%d want stable benchmark bytes=%d", bytesCopied, bytesCopiedPerRun)
+			cases := make([]columnAssetRewriteBenchmarkCaseM15C, b.N)
+			for i := range cases {
+				cases[i] = prepareColumnAssetRewriteBenchmarkCaseM15C(b, refs)
+				if cases[i].bytesCopied != bytesCopiedPerRun {
+					closeColumnAssetRewriteBenchmarkCasesM15C(b, cases[:i+1])
+					b.Fatalf("bytesCopied=%d want stable benchmark bytes=%d", cases[i].bytesCopied, bytesCopiedPerRun)
 				}
-				b.StartTimer()
-				stats, err := col.ColumnAssetRewrite(ctx, ColumnAssetRewriteOptions{
-					CandidateRefs: []ColumnAssetRef{candidate},
+			}
+			defer closeColumnAssetRewriteBenchmarkCasesM15C(b, cases)
+			ctx := context.Background()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				tc := cases[i]
+				stats, err := tc.col.ColumnAssetRewrite(ctx, ColumnAssetRewriteOptions{
+					CandidateRefs: []ColumnAssetRef{tc.candidate},
 				})
-				b.StopTimer()
 				if err != nil {
-					_ = d.Close()
 					b.Fatalf("ColumnAssetRewrite refs=%d: %v", refs, err)
 				}
-				if stats.RefsRemapped != len(liveRefs) || stats.SegmentsRewritten != 1 || stats.BytesCopied != bytesCopiedPerRun {
-					_ = d.Close()
-					b.Fatalf("stats=%+v liveRefs=%d bytesCopied=%d", stats, len(liveRefs), bytesCopiedPerRun)
-				}
-				if err := d.Close(); err != nil {
-					b.Fatalf("Close: %v", err)
+				if stats.RefsRemapped != len(tc.liveRefs) || stats.SegmentsRewritten != 1 || stats.BytesCopied != bytesCopiedPerRun {
+					b.Fatalf("stats=%+v liveRefs=%d bytesCopied=%d", stats, len(tc.liveRefs), bytesCopiedPerRun)
 				}
 			}
 		})
 	}
 }
 
-func columnAssetRewriteBenchmarkBytesPerRunM15C(b *testing.B, refs int) int64 {
-	b.Helper()
-	d, _, _, _, bytesCopied := prepareColumnAssetRewriteBenchmarkCaseM15C(b, refs)
-	if err := d.Close(); err != nil {
-		b.Fatalf("Close benchmark sizing DB: %v", err)
-	}
-	return bytesCopied
+type columnAssetRewriteBenchmarkCaseM15C struct {
+	d           *backenddb.DB
+	col         *Collection
+	candidate   ColumnAssetRef
+	liveRefs    []ColumnAssetRef
+	bytesCopied int64
 }
 
-func prepareColumnAssetRewriteBenchmarkCaseM15C(b testing.TB, refs int) (*backenddb.DB, *Collection, ColumnAssetRef, []ColumnAssetRef, int64) {
+func columnAssetRewriteBenchmarkBytesPerRunM15C(b *testing.B, refs int) int64 {
+	b.Helper()
+	tc := prepareColumnAssetRewriteBenchmarkCaseM15C(b, refs)
+	defer closeColumnAssetRewriteBenchmarkCasesM15C(b, []columnAssetRewriteBenchmarkCaseM15C{tc})
+	return tc.bytesCopied
+}
+
+func prepareColumnAssetRewriteBenchmarkCaseM15C(b testing.TB, refs int) columnAssetRewriteBenchmarkCaseM15C {
 	b.Helper()
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(b)
 	d := openCollectionCommandWALDB(b, dir)
@@ -496,5 +500,24 @@ func prepareColumnAssetRewriteBenchmarkCaseM15C(b testing.TB, refs int) (*backen
 		_ = d.Close()
 		b.Fatalf("benchmark bytesCopied=%d for refs=%d", bytesCopied, refs)
 	}
-	return d, col, candidate, liveRefs, bytesCopied
+	return columnAssetRewriteBenchmarkCaseM15C{
+		d:           d,
+		col:         col,
+		candidate:   candidate,
+		liveRefs:    liveRefs,
+		bytesCopied: bytesCopied,
+	}
+}
+
+func closeColumnAssetRewriteBenchmarkCasesM15C(b testing.TB, cases []columnAssetRewriteBenchmarkCaseM15C) {
+	b.Helper()
+	for i := range cases {
+		if cases[i].d == nil {
+			continue
+		}
+		if err := cases[i].d.Close(); err != nil {
+			b.Fatalf("Close benchmark DB: %v", err)
+		}
+		cases[i].d = nil
+	}
 }
