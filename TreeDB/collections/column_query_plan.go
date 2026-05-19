@@ -147,7 +147,7 @@ func (c *Collection) PlanColumnQuery(req ColumnQueryPlanRequest) (ColumnQueryPla
 	if catalog == nil {
 		return ColumnQueryPlan{}, errCollectionNotFound
 	}
-	if c.db != nil && columnStoreEnabled && columnQueryRequestNeedsPhysicalCapabilityDiscovery(req) {
+	if columnStoreEnabled && columnQueryRequestNeedsPhysicalCapabilityDiscovery(req) {
 		req.Capabilities = c.deriveColumnQueryPlannerCapabilitiesM14A(collectionName, rootID, cfg, columnStoreEnabled, req.Capabilities)
 	}
 	identity, identityOK := columnStoreCacheIdentity(catalog, systemRoot, commitSeq)

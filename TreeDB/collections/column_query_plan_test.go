@@ -1316,6 +1316,55 @@ func TestColumnQueryPlannerM14APopulatesMutationVisibilityCapabilities(t *testin
 	}
 }
 
+func TestColumnQueryPlannerM14AFailsClosedWhenDBUnavailable(t *testing.T) {
+	reopened, closeFn := openColumnPhysicalQueryFixtureM13B(t, columnPhysicalQueryFixtureEventsM13B(16))
+	defer closeFn()
+
+	reopened.catalogMu.RLock()
+	catalog := reopened.catalog
+	systemRoot := reopened.catalogSystemRoot
+	commitSeq := reopened.catalogCommitSeq
+	reopened.catalogMu.RUnlock()
+
+	unavailable := &Collection{
+		catalog:           catalog,
+		catalogSystemRoot: systemRoot,
+		catalogCommitSeq:  commitSeq,
+	}
+	plan, err := unavailable.PlanColumnQuery(ColumnQueryPlanRequest{
+		Name:             "m14a_unavailable_db",
+		ProjectedColumns: []string{"time_us", "kind"},
+		ForceKind:        ColumnQueryPlanSerialColumnScan,
+		Capabilities: ColumnQueryPlannerCapabilities{
+			SerialColumnScan:   true,
+			AggregateMetadata:  true,
+			ParallelColumnScan: true,
+			PhysicalAssetCount: 999,
+			PartCount:          999,
+			GranuleCount:       999,
+			MaxParallelWorkers: 4,
+		},
+	})
+	if err != nil {
+		t.Fatalf("PlanColumnQuery: %v", err)
+	}
+	if plan.Supported {
+		t.Fatalf("forced physical plan unexpectedly used caller capabilities with unavailable DB: %+v", plan)
+	}
+	if got, want := plan.Diagnostics.UnsupportedPlanReason, errCollectionDBNil.Error(); got != want {
+		t.Fatalf("unsupported reason=%q want %q diagnostics=%+v", got, want, plan.Diagnostics)
+	}
+	if got, want := plan.Diagnostics.CapabilityError, errCollectionDBNil.Error(); got != want {
+		t.Fatalf("capability error=%q want %q diagnostics=%+v", got, want, plan.Diagnostics)
+	}
+	if got := plan.Diagnostics.PhysicalAssetCount; got != 0 {
+		t.Fatalf("physical asset count=%d want caller-supplied count cleared", got)
+	}
+	if got, want := plan.Diagnostics.DeclaredColumnCount, 3; got != want {
+		t.Fatalf("declared column count=%d want %d", got, want)
+	}
+}
+
 func BenchmarkColumnQueryPlannerCapabilitiesM14A(b *testing.B) {
 	b.Run("insert_manifest_rows_1024", func(b *testing.B) {
 		reopened, closeFn := openColumnPhysicalQueryFixtureM13B(b, columnPhysicalQueryFixtureEventsM13B(1024))
