@@ -1356,6 +1356,7 @@ func TestColumnManifestRootDescriptorSystemDeltaReturnsPreparedUpdatedMetaM10B(t
 	if err != nil {
 		t.Fatalf("BuildColumnPublishPlan: %v", err)
 	}
+	identity = plan.UpdatedActiveManifest
 
 	rootName := collectionColumnManifestRootName("events")
 	iter, updatedMeta, err := col.buildRootDescriptorAndColumnManifestSystemDeltaIteratorAndMetaForMeta(
