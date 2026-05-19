@@ -472,11 +472,16 @@ func (e *columnPhysicalQueryExecutor) stringInt64Values(values []columnDeclaredV
 }
 
 func (e *columnPhysicalQueryExecutor) stringKey(value columnDeclaredValue) (string, error) {
-	raw, err := columnPhysicalQueryStringBytes(value)
-	if err != nil {
-		return "", err
+	if value.Type != ColumnStoreValueString {
+		return "", fmt.Errorf("%w: physical column query expected string value, got %q", ErrColumnQueryPlanUnsupported, value.Type)
 	}
-	return e.interner.intern(raw), nil
+	if value.Null {
+		return "", fmt.Errorf("%w: physical column query does not support null string group values yet", ErrColumnQueryPlanUnsupported)
+	}
+	if value.StringBytes != nil {
+		return e.interner.internBytes(value.StringBytes), nil
+	}
+	return e.interner.internString(value.String), nil
 }
 
 func (e *columnPhysicalQueryExecutor) groups() []ColumnPhysicalQueryGroup {
@@ -573,19 +578,6 @@ func (e *columnPhysicalQueryExecutor) mergeFrom(other *columnPhysicalQueryExecut
 	return nil
 }
 
-func columnPhysicalQueryStringBytes(value columnDeclaredValue) ([]byte, error) {
-	if value.Type != ColumnStoreValueString {
-		return nil, fmt.Errorf("%w: physical column query expected string value, got %q", ErrColumnQueryPlanUnsupported, value.Type)
-	}
-	if value.Null {
-		return nil, fmt.Errorf("%w: physical column query does not support null string group values yet", ErrColumnQueryPlanUnsupported)
-	}
-	if value.StringBytes != nil {
-		return value.StringBytes, nil
-	}
-	return []byte(value.String), nil
-}
-
 func columnPhysicalQueryInt64Value(value columnDeclaredValue) (int64, error) {
 	if value.Type != ColumnStoreValueInt64 {
 		return 0, fmt.Errorf("%w: physical column query expected int64 value, got %q", ErrColumnQueryPlanUnsupported, value.Type)
@@ -628,7 +620,7 @@ type columnPhysicalQueryStringEntry struct {
 	key string
 }
 
-func (i *columnPhysicalQueryStringInterner) intern(raw []byte) string {
+func (i *columnPhysicalQueryStringInterner) internBytes(raw []byte) string {
 	if i.buckets == nil {
 		i.buckets = make(map[uint64][]columnPhysicalQueryStringEntry, 16)
 	}
@@ -644,6 +636,21 @@ func (i *columnPhysicalQueryStringInterner) intern(raw []byte) string {
 	return key
 }
 
+func (i *columnPhysicalQueryStringInterner) internString(raw string) string {
+	if i.buckets == nil {
+		i.buckets = make(map[uint64][]columnPhysicalQueryStringEntry, 16)
+	}
+	hash := columnPhysicalQueryHashString(raw)
+	bucket := i.buckets[hash]
+	for _, entry := range bucket {
+		if entry.key == raw {
+			return entry.key
+		}
+	}
+	i.buckets[hash] = append(bucket, columnPhysicalQueryStringEntry{key: raw})
+	return raw
+}
+
 func columnPhysicalQueryHashBytes(raw []byte) uint64 {
 	const (
 		offset64 = 14695981039346656037
@@ -652,6 +659,19 @@ func columnPhysicalQueryHashBytes(raw []byte) uint64 {
 	hash := uint64(offset64)
 	for _, b := range raw {
 		hash ^= uint64(b)
+		hash *= prime64
+	}
+	return hash
+}
+
+func columnPhysicalQueryHashString(raw string) uint64 {
+	const (
+		offset64 = 14695981039346656037
+		prime64  = 1099511628211
+	)
+	hash := uint64(offset64)
+	for i := 0; i < len(raw); i++ {
+		hash ^= uint64(raw[i])
 		hash *= prime64
 	}
 	return hash

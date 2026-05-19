@@ -462,6 +462,7 @@ func loadColumnManifestPlannerCapabilitiesForScan(snap *backenddb.Snapshot, root
 	var caps columnManifestPlannerCapabilitiesForScan
 	var header columnManifestHeaderRecordForScan
 	var d xxhash.Digest
+	d.Reset()
 	sawHeader := false
 	activeParts := uint64(0)
 	for iter.Valid() {
@@ -521,6 +522,10 @@ func loadColumnManifestPlannerCapabilitiesForScan(snap *backenddb.Snapshot, root
 			if !ok {
 				return columnManifestPlannerCapabilitiesForScan{}, fmt.Errorf("collections: unsupported column manifest part reason %q", string(reason))
 			}
+			// Capability counts describe the refs a physical scan would read:
+			// all reachable lineage through the active generation. The header
+			// expected-parts check below is generation-local and intentionally
+			// only counts current-generation records.
 			caps.PhysicalAssetCount++
 			if operation != ColumnPublishOperationInsert {
 				caps.MutationParts++
@@ -547,7 +552,7 @@ func loadColumnManifestPlannerCapabilitiesForScan(snap *backenddb.Snapshot, root
 		checksum = 1
 	}
 	if checksum != identity.Checksum {
-		return columnManifestPlannerCapabilitiesForScan{}, fmt.Errorf("collections: physical column scan manifest checksum=%d want active identity checksum=%d", checksum, identity.Checksum)
+		return columnManifestPlannerCapabilitiesForScan{}, fmt.Errorf("collections: physical column planner manifest checksum=%d want active identity checksum=%d", checksum, identity.Checksum)
 	}
 	return caps, nil
 }
@@ -575,6 +580,8 @@ func decodeColumnManifestHeaderRecordForScan(raw []byte) (columnManifestHeaderRe
 	if err := cur.err; err != nil {
 		return columnManifestHeaderRecordForScan{}, err
 	}
+	header.collection = bytes.Clone(header.collection)
+	header.operation = bytes.Clone(header.operation)
 	if header.rowCount > uint64(maxCollectionInt) {
 		return columnManifestHeaderRecordForScan{}, errors.New("collections: column manifest row count overflows int")
 	}
@@ -589,16 +596,16 @@ func decodeColumnManifestHeaderRecordForScan(raw []byte) (columnManifestHeaderRe
 
 func validateColumnManifestHeaderRecordForScan(header columnManifestHeaderRecordForScan, cfg ColumnStoreConfig, identity ColumnManifestIdentity, collection string) error {
 	if !columnPhysicalBytesEqualString(header.collection, collection) {
-		return fmt.Errorf("collections: physical column scan manifest collection=%q want %q", string(header.collection), collection)
+		return fmt.Errorf("collections: physical column planner manifest collection=%q want %q", string(header.collection), collection)
 	}
 	if header.generation != identity.Generation {
-		return fmt.Errorf("collections: physical column scan manifest generation=%d want %d", header.generation, identity.Generation)
+		return fmt.Errorf("collections: physical column planner manifest generation=%d want %d", header.generation, identity.Generation)
 	}
 	if header.schemaHash != cfg.SchemaHash {
-		return fmt.Errorf("collections: physical column scan manifest schema_hash=%d want %d", header.schemaHash, cfg.SchemaHash)
+		return fmt.Errorf("collections: physical column planner manifest schema_hash=%d want %d", header.schemaHash, cfg.SchemaHash)
 	}
 	if header.appliedCommandLSN != cfg.RecoveryAuthoritativeAppliedCommandLSN {
-		return fmt.Errorf("collections: physical column scan manifest AppliedCommandLSN=%d want recovery %d", header.appliedCommandLSN, cfg.RecoveryAuthoritativeAppliedCommandLSN)
+		return fmt.Errorf("collections: physical column planner manifest applied_command_lsn=%d want recovery_authoritative_applied_command_lsn=%d", header.appliedCommandLSN, cfg.RecoveryAuthoritativeAppliedCommandLSN)
 	}
 	return nil
 }
@@ -664,13 +671,19 @@ func decodeColumnManifestSnapshotForScan(records []columnManifestRecord) (column
 }
 
 func columnManifestPartGenerationFromRecordKeyForScan(key []byte) (uint64, error) {
+	generation, _, err := columnManifestPartKeyFromRecordKeyForScan(key)
+	return generation, err
+}
+
+func columnManifestPartKeyFromRecordKeyForScan(key []byte) (uint64, uint64, error) {
 	if !bytes.HasPrefix(key, columnManifestPartRecordPrefixBytes) {
-		return 0, fmt.Errorf("collections: column manifest part key %q missing prefix", string(key))
+		return 0, 0, fmt.Errorf("collections: column manifest part key %q missing prefix", string(key))
 	}
 	if len(key) != len(columnManifestPartRecordPrefix)+16 {
-		return 0, fmt.Errorf("collections: column manifest part key length=%d want %d", len(key), len(columnManifestPartRecordPrefix)+16)
+		return 0, 0, fmt.Errorf("collections: column manifest part key length=%d want %d", len(key), len(columnManifestPartRecordPrefix)+16)
 	}
-	return binary.BigEndian.Uint64(key[len(columnManifestPartRecordPrefix):]), nil
+	return binary.BigEndian.Uint64(key[len(columnManifestPartRecordPrefix):]),
+		binary.BigEndian.Uint64(key[len(columnManifestPartRecordPrefix)+8:]), nil
 }
 
 func columnManifestAssetRefsFromRecordsForScan(records []columnManifestRecord, activeGeneration uint64, expectedNamespace string) ([]columnManifestAssetRefForScan, int, error) {
@@ -680,7 +693,7 @@ func columnManifestAssetRefsFromRecordsForScan(records []columnManifestRecord, a
 		if !bytes.HasPrefix(record.key, columnManifestPartRecordPrefixBytes) {
 			continue
 		}
-		keyGeneration, err := columnManifestPartGenerationFromRecordKeyForScan(record.key)
+		keyGeneration, keyPartID, err := columnManifestPartKeyFromRecordKeyForScan(record.key)
 		if err != nil {
 			return nil, 0, err
 		}
@@ -697,6 +710,9 @@ func columnManifestAssetRefsFromRecordsForScan(records []columnManifestRecord, a
 		}
 		if ref.Generation != keyGeneration {
 			return nil, 0, fmt.Errorf("collections: column manifest part key generation=%d does not match ref generation=%d", keyGeneration, ref.Generation)
+		}
+		if ref.PartID != keyPartID {
+			return nil, 0, fmt.Errorf("collections: column manifest part key part_id=%d does not match ref part_id=%d", keyPartID, ref.PartID)
 		}
 		operation, ok := columnPhysicalScanOperationFromBytes(reason)
 		if !ok {
