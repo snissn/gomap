@@ -13,8 +13,9 @@ import (
 )
 
 const (
-	columnPhysicalAssetMagic   = uint32(0x54435041) // TCPA
-	columnPhysicalAssetVersion = uint16(2)
+	columnPhysicalAssetMagic     = uint32(0x54435041) // TCPA
+	columnPhysicalAssetVersionV1 = uint16(1)
+	columnPhysicalAssetVersion   = uint16(2)
 )
 
 var ErrColumnDeclaredValueUnsupported = errors.New("collections: unsupported column declared value")
@@ -268,7 +269,8 @@ func decodeColumnPhysicalAsset(raw []byte) (columnPhysicalAsset, error) {
 	if magic := cur.u32(); magic != columnPhysicalAssetMagic {
 		return columnPhysicalAsset{}, fmt.Errorf("collections: bad column physical asset magic=0x%08x", magic)
 	}
-	if version := cur.u16(); version != columnPhysicalAssetVersion {
+	version := cur.u16()
+	if version != columnPhysicalAssetVersionV1 && version != columnPhysicalAssetVersion {
 		return columnPhysicalAsset{}, fmt.Errorf("collections: unsupported column physical asset version=%d", version)
 	}
 	header := columnPhysicalAssetHeader{
@@ -306,8 +308,10 @@ func decodeColumnPhysicalAsset(raw []byte) (columnPhysicalAsset, error) {
 	}
 	for rowIdx := 0; rowIdx < int(rowCount); rowIdx++ {
 		row := columnDeclaredRow{
-			ID:      cur.bytes(),
-			Deleted: cur.bool(),
+			ID: cur.bytes(),
+		}
+		if version >= columnPhysicalAssetVersion {
+			row.Deleted = cur.bool()
 		}
 		if !row.Deleted {
 			row.Values = make([]columnDeclaredValue, int(columnCount))

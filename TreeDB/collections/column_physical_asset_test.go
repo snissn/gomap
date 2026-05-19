@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,6 +21,58 @@ var (
 	columnPhysicalAssetBenchAsset columnPhysicalAsset
 	columnPhysicalAssetBenchRef   ColumnAssetRef
 )
+
+func encodeColumnPhysicalAssetV1ForTest(t *testing.T, input columnPhysicalAssetEncodeInput) []byte {
+	t.Helper()
+	var b bytes.Buffer
+	writeManifestUint32(&b, columnPhysicalAssetMagic)
+	writeManifestUint16(&b, columnPhysicalAssetVersionV1)
+	writeManifestString(&b, input.Collection)
+	writeManifestString(&b, input.Namespace)
+	writeManifestUint64(&b, input.Generation)
+	writeManifestUint64(&b, input.PartID)
+	writeManifestUint64(&b, input.AppliedCommandLSN)
+	writeManifestString(&b, string(input.Operation))
+	writeManifestUint64(&b, input.SchemaHash)
+	writeManifestUint64(&b, uint64(len(input.Columns)))
+	writeManifestUint64(&b, uint64(len(input.Rows)))
+	for _, col := range input.Columns {
+		writeManifestString(&b, col.Name)
+		writeManifestString(&b, col.Path)
+		writeManifestString(&b, string(col.ValueType))
+		writeManifestBool(&b, col.Nullable)
+		writeManifestBool(&b, col.Dictionary)
+	}
+	for rowIdx, row := range input.Rows {
+		if row.Deleted {
+			t.Fatalf("v1 compatibility asset row[%d] is deleted", rowIdx)
+		}
+		if len(row.Values) != len(input.Columns) {
+			t.Fatalf("v1 compatibility asset row[%d] values=%d columns=%d", rowIdx, len(row.Values), len(input.Columns))
+		}
+		writeManifestBytes(&b, row.ID)
+		for _, value := range row.Values {
+			writeManifestString(&b, string(value.Type))
+			writeManifestBool(&b, value.Null)
+			if value.Null {
+				continue
+			}
+			switch value.Type {
+			case ColumnStoreValueBool:
+				writeManifestBool(&b, value.Bool)
+			case ColumnStoreValueInt64:
+				writeManifestUint64(&b, uint64(value.Int64))
+			case ColumnStoreValueDouble:
+				writeManifestUint64(&b, math.Float64bits(value.Double))
+			case ColumnStoreValueString:
+				writeManifestString(&b, value.String)
+			default:
+				t.Fatalf("unsupported v1 compatibility value type %q", value.Type)
+			}
+		}
+	}
+	return b.Bytes()
+}
 
 func TestColumnPhysicalAssetCodecRoundTripM12A(t *testing.T) {
 	cfg := testColumnStoreConfig(nil)
@@ -98,6 +151,64 @@ func TestColumnPhysicalAssetCodecRoundTripM12A(t *testing.T) {
 	ref.Namespace = normalized.AssetManager.Namespace
 	if err := validateColumnPhysicalAssetForManifest(corrupt, ref, *normalized); err == nil || !strings.Contains(err.Error(), "checksum") {
 		t.Fatalf("validate corrupt asset err=%v want checksum failure", err)
+	}
+}
+
+func TestColumnPhysicalAssetDecodeV1CompatibilityM12C(t *testing.T) {
+	cfg := testColumnStoreConfig(nil)
+	normalized, err := normalizeColumnStoreConfig("events", cfg)
+	if err != nil {
+		t.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+	rows, err := extractColumnDeclaredRowsFromJSONDocuments(*normalized, []columnWriteDocument{
+		{ID: []byte("e1"), Document: []byte(`{"time_us":1,"kind":"like","did":"d1"}`)},
+		{ID: []byte("e2"), Document: []byte(`{"time_us":2,"kind":"post","did":"d2"}`)},
+	})
+	if err != nil {
+		t.Fatalf("extractColumnDeclaredRowsFromJSONDocuments: %v", err)
+	}
+	encoded := encodeColumnPhysicalAssetV1ForTest(t, columnPhysicalAssetEncodeInput{
+		Collection:        "events",
+		Namespace:         normalized.AssetManager.Namespace,
+		Generation:        7,
+		PartID:            3,
+		AppliedCommandLSN: 101,
+		Operation:         ColumnPublishOperationInsert,
+		SchemaHash:        normalized.SchemaHash,
+		Columns:           normalized.Columns,
+		Rows:              rows,
+	})
+
+	decoded, err := decodeColumnPhysicalAsset(encoded)
+	if err != nil {
+		t.Fatalf("decodeColumnPhysicalAsset v1: %v", err)
+	}
+	if decoded.Header.Operation != ColumnPublishOperationInsert || len(decoded.Rows) != 2 {
+		t.Fatalf("unexpected v1 decoded asset: header=%+v rows=%+v", decoded.Header, decoded.Rows)
+	}
+	for i, row := range decoded.Rows {
+		if row.Deleted {
+			t.Fatalf("v1 decoded row[%d] marked deleted", i)
+		}
+		if len(row.Values) != len(normalized.Columns) {
+			t.Fatalf("v1 decoded row[%d] values=%d want %d", i, len(row.Values), len(normalized.Columns))
+		}
+	}
+	if got := decoded.Rows[1].Values[1].String; got != "post" {
+		t.Fatalf("v1 decoded kind row1=%q want post", got)
+	}
+	ref := ColumnAssetRef{
+		Kind:       ColumnAssetKindTCS1PartImage,
+		Namespace:  normalized.AssetManager.Namespace,
+		Generation: 7,
+		PartID:     3,
+		FileID:     1,
+		Offset:     0,
+		Length:     int64(len(encoded)),
+		Checksum:   page.Checksum(encoded),
+	}
+	if err := validateColumnPhysicalAssetForManifest(encoded, ref, *normalized); err != nil {
+		t.Fatalf("validateColumnPhysicalAssetForManifest v1: %v", err)
 	}
 }
 

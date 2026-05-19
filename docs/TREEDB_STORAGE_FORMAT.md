@@ -53,7 +53,7 @@ maps to:
 
 ```text
 Dir/maindb/column_assets/events/column-assets/
-  assets/segments/segment-0000000001.tca
+  assets/segments/segment-000001.tca
   assets/indexes/
   prepared/
   quarantine/

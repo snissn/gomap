@@ -21,6 +21,9 @@ A TreeDB deployment uses:
 - value-log segments under `value_vlog/value-l*.log`,
 - optional split outer-leaf value-log segments under `leaf_vlog/value-l*.log`
   when `IndexOuterLeavesInValueLog` is enabled,
+- typed column asset manager segments under
+  `column_assets/<namespace>/assets/segments/segment-*.tca` for production
+  column-store physical assets,
 - optional side-store DBs (`dictdb`, `templatedb`) using their own `index.db` files.
 
 The old collection root-delta WAL storage class (`wal/collection-l*.log`,
@@ -415,6 +418,74 @@ Encoding rules:
   page checksum before storing `Prefix` and `Suffix`,
 - if compact encoding is not smaller than the raw page, TreeDB stores the raw
   page payload instead.
+
+### 7.3 Column Asset Manager and TCPA Physical Assets
+
+Production column-store physical data is stored in typed column asset manager
+segments. These assets are value-log-shaped durable payloads, but they are not
+ordinary row `value_vlog` values and they are not split-leaf `leaf_vlog`
+records. Manifest/control roots can live in B-tree/root metadata; analytical
+column payloads, tombstones, marks, dictionaries, locators, and aggregate
+metadata belong under the isolated column asset manager namespace.
+
+A collection namespace such as `events/column-assets` maps to:
+
+```text
+Dir/maindb/column_assets/events/column-assets/
+  assets/segments/segment-000001.tca
+  assets/indexes/
+  prepared/
+  quarantine/
+  tmp/
+```
+
+Segment file names use `segment-%06d.tca`. Durable manifest records store
+typed `ColumnAssetRef` values containing kind, namespace, generation, part id,
+segment file id, offset, length, and checksum. GC/rewrite must enumerate these
+refs from manifest/control roots and snapshots; it must not scan row documents
+to discover column assets.
+
+Current physical part payloads use the `TCPA` envelope:
+
+```text
+u32      Magic = "TCPA"
+u16      Version
+string   Collection
+string   Namespace
+u64      Generation
+u64      PartID
+u64      AppliedCommandLSN
+string   Operation        // insert, update, or delete
+u64      SchemaHash
+u64      ColumnCount
+u64      RowCount
+columns  declared column descriptors
+rows     row id + row payload
+```
+
+Version 2 row payloads are:
+
+```text
+bytes    RowID
+bool     Deleted
+values   declared column values when Deleted=false
+```
+
+Insert/update rows must have `Deleted=false` and exactly one value per declared
+column. Delete/tombstone rows must have `Deleted=true` and zero column values.
+Readers validate namespace, generation, part id, schema hash, declared column
+descriptors, length, and checksum before accepting an asset ref.
+
+Version 1 row payloads omitted the `Deleted` flag and represented only live
+insert/update rows:
+
+```text
+bytes    RowID
+values   declared column values
+```
+
+M12C and later decoders may read version 1 as `Deleted=false` for pre-v2 assets.
+Writers emit version 2.
 
 ## 8. Commit-Log Segment Format
 
