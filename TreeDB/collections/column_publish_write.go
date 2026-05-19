@@ -19,6 +19,8 @@ type columnWritePublishInput struct {
 	operation          ColumnPublishOperation
 	documents          []columnWriteDocument
 	rows               int
+	declaredRows       []columnDeclaredRow
+	declaredRowsReady  bool
 	commandBytes       int64
 	rowRemainderBytes  int64
 	columnPayloadBytes int64
@@ -121,6 +123,11 @@ func (c *Collection) publishRootDeltaGroupMaybeColumn(ordered []backenddb.Ordere
 	if input.commandWALIntent == nil {
 		return 0, nil, CollectionMeta{}, nil, fmt.Errorf("%w: column-store publish requires command WAL intent", backenddb.ErrCommandWALContextMissingFrame)
 	}
+	preparedInput, err := prepareColumnWritePublishInputBeforeCommandWAL(input)
+	if err != nil {
+		return 0, nil, CollectionMeta{}, nil, err
+	}
+	input = preparedInput
 	columnRootName := collectionColumnManifestRootName(input.meta.Name)
 	columnBaseRoot := uint64(0)
 	if input.catalog != nil {
@@ -183,6 +190,11 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 	if input.commandWALIntent == nil {
 		return 0, nil, CollectionMeta{}, nil, fmt.Errorf("%w: column-store publish requires command WAL intent", backenddb.ErrCommandWALContextMissingFrame)
 	}
+	preparedInput, err := prepareColumnWritePublishInputBeforeCommandWAL(input)
+	if err != nil {
+		return 0, nil, CollectionMeta{}, nil, err
+	}
+	input = preparedInput
 	columnRootName := collectionColumnManifestRootName(input.meta.Name)
 	columnBaseRoot := uint64(0)
 	if input.catalog != nil {
@@ -221,7 +233,6 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 	}
 	var newSystemRoot uint64
 	var rootIDs []uint64
-	var err error
 	newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaBatchGroupWithPreflightCommandWALContextRootBuilderAndSystemDeltaBuilder(ordered, preflight, input.commandWALIntent, buildColumnDelta, buildSystemDelta)
 	if err != nil {
 		return 0, nil, CollectionMeta{}, nil, err
@@ -311,6 +322,37 @@ func combineOrderedRootGroupPreflight(first, second backenddb.OrderedRootGroupPr
 	}
 }
 
+func prepareColumnWritePublishInputBeforeCommandWAL(input columnWritePublishInput) (columnWritePublishInput, error) {
+	switch input.operation {
+	case ColumnPublishOperationInsert, ColumnPublishOperationUpdate:
+		if input.rows == 0 {
+			input.declaredRowsReady = true
+			return input, nil
+		}
+		if len(input.documents) != input.rows {
+			return columnWritePublishInput{}, fmt.Errorf("collections: column physical asset %s documents=%d rows=%d", input.operation, len(input.documents), input.rows)
+		}
+		if normalizedDocumentFormat(input.meta.Options.DocumentFormat) != DocumentFormatJSON {
+			return columnWritePublishInput{}, fmt.Errorf("collections: column physical asset %s requires JSON document format in M12A, got %q", input.operation, input.meta.Options.DocumentFormat)
+		}
+		if input.meta.Options.ColumnStore == nil {
+			return columnWritePublishInput{}, fmt.Errorf("collections: column physical asset %s missing column-store config", input.operation)
+		}
+		rows, err := extractColumnDeclaredRowsFromJSONDocuments(*input.meta.Options.ColumnStore, input.documents)
+		if err != nil {
+			return columnWritePublishInput{}, err
+		}
+		input.declaredRows = rows
+		input.declaredRowsReady = true
+		return input, nil
+	case ColumnPublishOperationDelete:
+		input.declaredRowsReady = true
+		return input, nil
+	default:
+		return columnWritePublishInput{}, fmt.Errorf("collections: unsupported column publish operation %q", input.operation)
+	}
+}
+
 func (c *Collection) publishRootDeltaGroupWithoutColumn(ordered []backenddb.OrderedRootDeltaPublishInput, input columnWritePublishInput) (uint64, []uint64, error) {
 	if input.commandWALIntent != nil {
 		return c.db.PublishOrderedRootDeltaGroupWithCommandWALAndSystemDeltaBuilder(ordered, input.commandWALIntent, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
@@ -373,15 +415,17 @@ func (c *Collection) prepareColumnPhysicalAssetsForCommand(input columnWritePubl
 		if input.rows == 0 {
 			return prepared, nil
 		}
-		if len(input.documents) != input.rows {
-			return ColumnPublishPreparedAssets{}, fmt.Errorf("collections: column physical asset %s documents=%d rows=%d", input.operation, len(input.documents), input.rows)
+		rows := input.declaredRows
+		if !input.declaredRowsReady {
+			var err error
+			fallback, err := prepareColumnWritePublishInputBeforeCommandWAL(input)
+			if err != nil {
+				return ColumnPublishPreparedAssets{}, err
+			}
+			rows = fallback.declaredRows
 		}
-		if normalizedDocumentFormat(input.meta.Options.DocumentFormat) != DocumentFormatJSON {
-			return ColumnPublishPreparedAssets{}, fmt.Errorf("collections: column physical asset %s requires JSON document format in M12A, got %q", input.operation, input.meta.Options.DocumentFormat)
-		}
-		rows, err := extractColumnDeclaredRowsFromJSONDocuments(hookInput.ColumnStore, input.documents)
-		if err != nil {
-			return ColumnPublishPreparedAssets{}, err
+		if len(rows) != input.rows {
+			return ColumnPublishPreparedAssets{}, fmt.Errorf("collections: column physical asset %s prepared rows=%d rows=%d", input.operation, len(rows), input.rows)
 		}
 		generation := uint64(1)
 		if hookInput.CurrentManifest != nil {
