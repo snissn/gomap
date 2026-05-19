@@ -1,11 +1,9 @@
 package collections
 
 import (
-	"encoding/binary"
 	"errors"
 	"fmt"
 
-	"github.com/cespare/xxhash/v2"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 )
@@ -399,48 +397,6 @@ func columnWriteDocumentsBytes(docs []columnWriteDocument) int64 {
 
 func encodeColumnManifestIdentityForWrite(input ColumnPublishManifestEncodeInput) (ColumnPublishManifestEncodeResult, error) {
 	return encodeColumnManifestForWrite(input)
-}
-
-func checksumColumnManifestIdentityForWrite(input ColumnPublishManifestEncodeInput, generation uint64) uint64 {
-	var d xxhash.Digest
-	writeHashString(&d, input.Collection)
-	writeHashString(&d, string(input.Operation))
-	writeHashUint64(&d, generation)
-	writeHashUint64(&d, input.AppliedCommandLSN)
-	writeHashUint64(&d, input.ColumnStore.SchemaHash)
-	if input.CurrentManifest != nil {
-		writeHashUint64(&d, input.CurrentManifest.Generation)
-		writeHashUint64(&d, input.CurrentManifest.Checksum)
-	}
-	writeHashUint64(&d, uint64(input.Prepared.RowCount))
-	writeHashUint64(&d, uint64(input.Prepared.CommandBytes))
-	writeHashUint64(&d, uint64(input.Prepared.RowRemainderBytes))
-	writeHashUint64(&d, uint64(input.Prepared.ColumnPayloadBytes))
-	for _, asset := range input.Prepared.Assets {
-		writeHashString(&d, string(asset.Ref.Kind))
-		writeHashString(&d, asset.Ref.Namespace)
-		writeHashUint64(&d, asset.Ref.Generation)
-		writeHashUint64(&d, asset.Ref.PartID)
-		writeHashUint64(&d, uint64(asset.Ref.FileID))
-		writeHashUint64(&d, uint64(asset.Ref.Offset))
-		writeHashUint64(&d, uint64(asset.Ref.Length))
-		writeHashUint64(&d, uint64(asset.Ref.Checksum))
-		writeHashUint64(&d, uint64(asset.Bytes))
-		writeHashUint64(&d, asset.PublishID)
-		writeHashUint64(&d, asset.GenerationID)
-		writeHashString(&d, asset.Reason)
-	}
-	sum := d.Sum64()
-	if sum == 0 {
-		return 1
-	}
-	return sum
-}
-
-func writeHashUint64(d *xxhash.Digest, value uint64) {
-	var buf [8]byte
-	binary.LittleEndian.PutUint64(buf[:], value)
-	_, _ = d.Write(buf[:])
 }
 
 func appendColumnManifestRootPublishBase(rootNames []string, baseRootIDs map[string]uint64, columnRootName string, columnBaseRoot uint64) ([]string, map[string]uint64, error) {

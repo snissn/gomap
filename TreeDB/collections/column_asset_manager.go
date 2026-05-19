@@ -27,6 +27,9 @@ const (
 	columnAssetM12ASegmentFileID        = uint32(1)
 )
 
+// columnAssetSegmentWriteLocks is keyed by canonical segment path so concurrent
+// appends share one process-local offset lock. Do not delete a lock immediately
+// after use; that can split writers racing on the same segment.
 var columnAssetSegmentWriteLocks sync.Map
 
 type columnAssetManagerNamespace struct {
@@ -246,7 +249,7 @@ func syncColumnAssetDir(dir string) error {
 		// payload itself is already fsync'd; keep directory sync best-effort rather
 		// than making the column manager unusable there.
 		lowerErr := strings.ToLower(err.Error())
-		if errors.Is(err, syscall.EINVAL) || strings.Contains(lowerErr, "not supported") {
+		if errors.Is(err, syscall.EINVAL) || errors.Is(err, syscall.EPERM) || strings.Contains(lowerErr, "not supported") {
 			return nil
 		}
 		return err

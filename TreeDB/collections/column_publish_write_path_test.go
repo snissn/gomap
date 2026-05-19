@@ -11,6 +11,7 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/node"
 )
 
 func TestColumnStoreWritesRequireCommandWALM10B(t *testing.T) {
@@ -509,6 +510,10 @@ func TestColumnStoreCommandWALWritesPhysicalColumnAssetsM12A(t *testing.T) {
 	if updateRefs[0].Generation != 1 || updateRefs[1].Generation != 2 {
 		t.Fatalf("update manifest refs=%+v, want generations 1 and 2", updateRefs)
 	}
+	updateSnapshot := columnManifestSnapshotForCollectionM12A(t, d, col)
+	if updateSnapshot.Generation != 2 || len(updateSnapshot.Parts) != 1 || updateSnapshot.Parts[0].AssetRef != updateRefs[1] {
+		t.Fatalf("update snapshot generation=%d parts=%+v, want only active generation ref %+v", updateSnapshot.Generation, updateSnapshot.Parts, updateRefs[1])
+	}
 	updateRaw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), updateRefs[1])
 	if err != nil {
 		t.Fatalf("update readColumnPhysicalAssetFromManager: %v", err)
@@ -528,6 +533,10 @@ func TestColumnStoreCommandWALWritesPhysicalColumnAssetsM12A(t *testing.T) {
 	reopenRefs := columnManifestAssetRefsForCollectionM12A(t, reopen, reopened)
 	if len(reopenRefs) != 2 || reopenRefs[0] != updateRefs[0] || reopenRefs[1] != updateRefs[1] {
 		t.Fatalf("reopen refs=%+v want %+v", reopenRefs, updateRefs)
+	}
+	reopenSnapshot := columnManifestSnapshotForCollectionM12A(t, reopen, reopened)
+	if reopenSnapshot.Generation != 2 || len(reopenSnapshot.Parts) != 1 || reopenSnapshot.Parts[0].AssetRef != reopenRefs[1] {
+		t.Fatalf("reopen snapshot generation=%d parts=%+v, want only active generation ref %+v", reopenSnapshot.Generation, reopenSnapshot.Parts, reopenRefs[1])
 	}
 	reopenRaw, err := readColumnPhysicalAssetFromManager(reopen.ColumnAssetRootDir(), reopenRefs[1])
 	if err != nil {
@@ -1555,4 +1564,47 @@ func columnManifestAssetRefsForCollectionM12A(t testing.TB, d *backenddb.DB, col
 		t.Fatalf("enumerateColumnManifestAssetRefs: %v", err)
 	}
 	return refs
+}
+
+func columnManifestSnapshotForCollectionM12A(t testing.TB, d *backenddb.DB, col *Collection) columnManifestSnapshot {
+	t.Helper()
+	id, ok := col.ColumnStoreCacheIdentity()
+	if !ok || id.ManifestRoot == 0 {
+		t.Fatalf("ColumnStoreCacheIdentity=%+v ok=%v, want manifest root", id, ok)
+	}
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatalf("AcquireSnapshot returned nil")
+	}
+	defer func() { _ = snap.Close() }()
+	iter, err := snap.IteratorAtRoot(id.ManifestRoot, []byte(columnManifestHeaderRecordKey), nil)
+	if err != nil {
+		t.Fatalf("IteratorAtRoot manifest root: %v", err)
+	}
+	defer func() { _ = iter.Close() }()
+	records := make([]columnManifestRecord, 0, 4)
+	for iter.Valid() {
+		key := iter.UnsafeKey()
+		if !bytes.Equal(key, []byte(columnManifestHeaderRecordKey)) && !bytes.HasPrefix(key, []byte(columnManifestPartRecordPrefix)) {
+			break
+		}
+		if iter.IsDeleted() {
+			iter.Next()
+			continue
+		}
+		value, _, flags := iter.UnsafeEntry()
+		if flags&node.FlagPointer != 0 {
+			t.Fatalf("manifest record %q must be inline", key)
+		}
+		records = append(records, columnManifestRecord{key: bytes.Clone(key), value: bytes.Clone(value)})
+		iter.Next()
+	}
+	if err := iter.Error(); err != nil {
+		t.Fatalf("manifest iterator: %v", err)
+	}
+	snapshot, err := decodeColumnManifestRecords(records)
+	if err != nil {
+		t.Fatalf("decodeColumnManifestRecords: %v", err)
+	}
+	return snapshot
 }

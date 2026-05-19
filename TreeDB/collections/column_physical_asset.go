@@ -115,6 +115,8 @@ func lookupColumnJSONPath(obj map[string]any, path string) (any, bool) {
 	if path == "" {
 		return nil, false
 	}
+	// Dotted column paths mirror collection/index path semantics: they traverse
+	// nested objects and do not address literal top-level keys containing dots.
 	if !strings.Contains(path, ".") {
 		value, ok := obj[path]
 		return value, ok

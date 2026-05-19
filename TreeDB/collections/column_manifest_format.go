@@ -153,10 +153,14 @@ func encodeColumnManifestPartRecord(asset ColumnPreparedAsset) ([]byte, error) {
 
 func decodeColumnManifestRecords(records []columnManifestRecord) (columnManifestSnapshot, error) {
 	var snapshot columnManifestSnapshot
+	var parts []columnManifestPartSnapshot
 	sawHeader := false
 	for _, record := range records {
 		switch {
 		case bytes.Equal(record.key, []byte(columnManifestHeaderRecordKey)):
+			if sawHeader {
+				return columnManifestSnapshot{}, errors.New("collections: duplicate column manifest binary header record")
+			}
 			header, err := decodeColumnManifestHeaderRecord(record.value)
 			if err != nil {
 				return columnManifestSnapshot{}, err
@@ -168,11 +172,19 @@ func decodeColumnManifestRecords(records []columnManifestRecord) (columnManifest
 			if err != nil {
 				return columnManifestSnapshot{}, err
 			}
-			snapshot.Parts = append(snapshot.Parts, part)
+			parts = append(parts, part)
 		}
 	}
 	if !sawHeader {
 		return columnManifestSnapshot{}, errors.New("collections: column manifest missing binary header record")
+	}
+	for _, part := range parts {
+		if part.AssetRef.Generation > snapshot.Generation {
+			return columnManifestSnapshot{}, fmt.Errorf("collections: column manifest part generation=%d is newer than header generation=%d", part.AssetRef.Generation, snapshot.Generation)
+		}
+		if part.AssetRef.Generation == snapshot.Generation {
+			snapshot.Parts = append(snapshot.Parts, part)
+		}
 	}
 	if uint64(len(snapshot.Parts)) != snapshot.ExpectedParts {
 		return columnManifestSnapshot{}, fmt.Errorf("collections: invalid column manifest part count=%d want %d", len(snapshot.Parts), snapshot.ExpectedParts)
