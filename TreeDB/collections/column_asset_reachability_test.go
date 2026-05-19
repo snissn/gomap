@@ -395,12 +395,16 @@ func TestColumnAssetReachabilitySegmentFileIDRejectsNonCanonicalM15A(t *testing.
 	if !ok || fileID != 1 {
 		t.Fatalf("canonical segment file parsed as fileID=%d ok=%t, want 1 true", fileID, ok)
 	}
+	fileID, ok = columnAssetReachabilitySegmentFileID(columnAssetSegmentFileName(1_000_000))
+	if !ok || fileID != 1_000_000 {
+		t.Fatalf("canonical wide segment file parsed as fileID=%d ok=%t, want 1000000 true", fileID, ok)
+	}
 	for _, name := range []string{
 		"segment-1.tca",
 		"segment-000000.tca",
 		"segment-000001.extra",
 		"segment-000001.tca.bak",
-		"segment-0000010.tca",
+		"segment-0000001.tca",
 	} {
 		if fileID, ok := columnAssetReachabilitySegmentFileID(name); ok {
 			t.Fatalf("non-canonical segment file %q parsed as fileID=%d", name, fileID)

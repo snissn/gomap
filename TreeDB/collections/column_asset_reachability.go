@@ -622,7 +622,7 @@ func columnAssetReachabilitySegmentFileID(name string) (uint32, bool) {
 		return 0, false
 	}
 	raw := strings.TrimSuffix(strings.TrimPrefix(name, columnAssetSegmentFilePrefix), columnAssetSegmentFileSuffix)
-	if len(raw) != 6 {
+	if len(raw) < 6 || (len(raw) > 6 && raw[0] == '0') {
 		return 0, false
 	}
 	id, err := strconv.ParseUint(raw, 10, 32)
