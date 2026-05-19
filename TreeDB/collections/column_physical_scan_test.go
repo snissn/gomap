@@ -10,6 +10,69 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
+func TestColumnManifestAssetRefsFromRecordsRejectsFutureGenerationM13C(t *testing.T) {
+	oldAsset := columnManifestAssetRefFilterTestAssetM13C(1, 1, ColumnPublishOperationInsert)
+	activeAsset := columnManifestAssetRefFilterTestAssetM13C(2, 1, ColumnPublishOperationUpdate)
+	futureAsset := columnManifestAssetRefFilterTestAssetM13C(3, 1, ColumnPublishOperationDelete)
+	oldRecord, err := encodeColumnManifestPartRecord(oldAsset)
+	if err != nil {
+		t.Fatalf("encode old part: %v", err)
+	}
+	activeRecord, err := encodeColumnManifestPartRecord(activeAsset)
+	if err != nil {
+		t.Fatalf("encode active part: %v", err)
+	}
+	futureRecord, err := encodeColumnManifestPartRecord(futureAsset)
+	if err != nil {
+		t.Fatalf("encode future part: %v", err)
+	}
+	records := []columnManifestRecord{
+		{key: columnManifestPartRecordKey(oldAsset.Ref.Generation, oldAsset.Ref.PartID), value: oldRecord},
+		{key: columnManifestPartRecordKey(activeAsset.Ref.Generation, activeAsset.Ref.PartID), value: activeRecord},
+	}
+
+	refs, mutationParts, err := columnManifestAssetRefsFromRecordsForScan(records, activeAsset.Ref.Generation, activeAsset.Ref.Namespace)
+	if err != nil {
+		t.Fatalf("columnManifestAssetRefsFromRecordsForScan reachable lineage: %v", err)
+	}
+	if len(refs) != 2 {
+		t.Fatalf("refs=%d want old base plus active delta", len(refs))
+	}
+	if refs[0].Ref.Generation != oldAsset.Ref.Generation || refs[0].Reason != ColumnPublishOperationInsert {
+		t.Fatalf("unexpected base ref: %+v", refs[0])
+	}
+	if refs[1].Ref.Generation != activeAsset.Ref.Generation || refs[1].Reason != ColumnPublishOperationUpdate {
+		t.Fatalf("unexpected active delta ref: %+v", refs[1])
+	}
+	if mutationParts != 1 {
+		t.Fatalf("mutation parts=%d want one active update part", mutationParts)
+	}
+
+	records = append(records, columnManifestRecord{key: columnManifestPartRecordKey(futureAsset.Ref.Generation, futureAsset.Ref.PartID), value: futureRecord})
+	if _, _, err := columnManifestAssetRefsFromRecordsForScan(records, activeAsset.Ref.Generation, activeAsset.Ref.Namespace); err == nil {
+		t.Fatal("columnManifestAssetRefsFromRecordsForScan accepted future-generation part")
+	}
+}
+
+func columnManifestAssetRefFilterTestAssetM13C(generation, partID uint64, reason ColumnPublishOperation) ColumnPreparedAsset {
+	return ColumnPreparedAsset{
+		Ref: ColumnAssetRef{
+			Kind:       ColumnAssetKindTCS1PartImage,
+			Namespace:  "events/column-assets",
+			Generation: generation,
+			PartID:     partID,
+			FileID:     1,
+			Offset:     int64((generation - 1) * 128),
+			Length:     64,
+			Checksum:   uint32(1000 + generation),
+		},
+		Bytes:        64,
+		PublishID:    generation,
+		GenerationID: generation,
+		Reason:       string(reason),
+	}
+}
+
 func TestColumnPhysicalSerialScannerReadsReopenedAssetsM13A(t *testing.T) {
 	dir, _ := prepareColumnStoreCommandWALDirM10B(t)
 	d := openCollectionCommandWALDB(t, dir)

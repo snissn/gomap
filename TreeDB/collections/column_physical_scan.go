@@ -177,7 +177,7 @@ func (c *Collection) scanColumnPhysicalRowsAtSnapshot(
 	if err := validateColumnManifestSnapshotForScan(manifest, records, cfg, *cfg.ActiveManifest, collectionName); err != nil {
 		return diag, err
 	}
-	refs, mutationParts, err := columnManifestAssetRefsFromRecordsForScan(records, cfg.AssetManager.Namespace)
+	refs, mutationParts, err := columnManifestAssetRefsFromRecordsForScan(records, manifest.Generation, cfg.AssetManager.Namespace)
 	if err != nil {
 		return diag, err
 	}
@@ -411,7 +411,7 @@ func columnManifestPartGenerationFromRecordKeyForScan(key []byte) (uint64, error
 	return binary.BigEndian.Uint64(key[len(columnManifestPartRecordPrefix):]), nil
 }
 
-func columnManifestAssetRefsFromRecordsForScan(records []columnManifestRecord, expectedNamespace string) ([]columnManifestAssetRefForScan, int, error) {
+func columnManifestAssetRefsFromRecordsForScan(records []columnManifestRecord, activeGeneration uint64, expectedNamespace string) ([]columnManifestAssetRefForScan, int, error) {
 	refs := make([]columnManifestAssetRefForScan, 0, len(records))
 	mutationParts := 0
 	for _, record := range records {
@@ -421,6 +421,13 @@ func columnManifestAssetRefsFromRecordsForScan(records []columnManifestRecord, e
 		keyGeneration, err := columnManifestPartGenerationFromRecordKeyForScan(record.key)
 		if err != nil {
 			return nil, 0, err
+		}
+		// The active manifest root contains the reachable immutable lineage:
+		// the original base parts plus later delta/tombstone parts. Older
+		// generations are therefore live until compaction publishes a root
+		// that omits them; only future-generation records are impossible here.
+		if keyGeneration > activeGeneration {
+			return nil, 0, fmt.Errorf("collections: column manifest part generation=%d is newer than active manifest generation=%d", keyGeneration, activeGeneration)
 		}
 		ref, reason, err := decodeColumnManifestPartRefForScan(record.value, expectedNamespace)
 		if err != nil {

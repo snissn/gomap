@@ -13617,6 +13617,9 @@ func snapshotUpdateBatchBufferedRead(domain *collectionWriteDomain, meta Collect
 
 func snapshotUpdateBatchBufferedReadLocked(domain *collectionWriteDomain, meta CollectionMeta, baseCommitSeq uint64, baseSystemRoot uint64, items []updateBatchItem, documentFormat DocumentFormat, allowPrimaryRunIndexBuild bool) (updateBatchBufferedRead, []memtable.Table, bool, bool, bool, error) {
 	if columnStoreNeedsRetainedPayloadTransform(meta) {
+		if domain != nil && domain.count > 0 {
+			return updateBatchBufferedRead{}, nil, true, false, false, nil
+		}
 		return updateBatchBufferedRead{}, nil, false, false, false, nil
 	}
 	if updateBatchCanReadBufferedDomainLocked(domain, meta, baseSystemRoot) {
@@ -13744,7 +13747,7 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 	var bufferedTemplateRuns []memtable.Table
 	defer func() { resetCollectionTables(bufferedTemplateRuns) }()
 	bufferedReadBlocked := false
-	if domain := c.writeDomain; useBufferedRead && !retainedPayloadTransform && domain != nil {
+	if domain := c.writeDomain; useBufferedRead && domain != nil {
 		var staleBufferedSnapshot bool
 		bufferedRead, bufferedTemplateRuns, bufferedReadBlocked, staleBufferedSnapshot, err = snapshotUpdateBatchBufferedRead(domain, meta, baseCommitSeq, baseSystemRoot, items, plannerOptions.documentFormat)
 		if err != nil {
@@ -13758,6 +13761,22 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 		defer putUpdateBatchBufferedEntries(bufferedRead.primaryEntries, bufferedRead.primaryBuffer)
 		if len(bufferedTemplateRuns) > 0 {
 			plannerOptions = collectionOptionsWithBufferedTemplateV1RunsResolver(plannerOptions, bufferedTemplateRuns)
+		}
+		if bufferedReadBlocked && retainedPayloadTransform {
+			plan := newUpdateBatchPlan()
+			*plan = updateBatchPlan{
+				results:                results,
+				stats:                  stats,
+				meta:                   meta,
+				catalog:                catalog,
+				snap:                   snap,
+				baseUserRoot:           baseUserRoot,
+				baseSystemRoot:         baseSystemRoot,
+				baseCommitSeq:          baseCommitSeq,
+				bufferedReadGeneration: bufferedRead.writeGeneration,
+				bufferedReadBlocked:    true,
+			}
+			return plan, nil
 		}
 	}
 

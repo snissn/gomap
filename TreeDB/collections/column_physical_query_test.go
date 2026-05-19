@@ -310,8 +310,8 @@ func TestColumnStoreRetainedPayloadDisablesBufferedUpdateReadsM13C(t *testing.T)
 	if err != nil {
 		t.Fatalf("snapshotUpdateBatchBufferedReadLocked: %v", err)
 	}
-	if read.enabled || blocked || stale || needIndex {
-		t.Fatalf("retained-payload column store used buffered read: enabled=%v blocked=%v stale=%v needIndex=%v", read.enabled, blocked, stale, needIndex)
+	if read.enabled || !blocked || stale || needIndex {
+		t.Fatalf("retained-payload column store did not fail closed on buffered read: enabled=%v blocked=%v stale=%v needIndex=%v", read.enabled, blocked, stale, needIndex)
 	}
 }
 
