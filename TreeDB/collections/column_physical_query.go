@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -76,6 +77,8 @@ type ColumnPhysicalQueryResult struct {
 	Diagnostics ColumnPhysicalQueryDiagnostics
 }
 
+var errColumnPhysicalScanCancelled = errors.New("collections: physical column scan cancelled")
+
 // RunColumnPhysicalQuery executes an explicit serial physical column query over
 // the recovery-authoritative manifest. Insert-only manifests use the direct
 // scanner path; mutation-bearing manifests fall back to the M13C visibility
@@ -133,6 +136,12 @@ func (c *Collection) RunColumnPhysicalQueryParallel(req ColumnPhysicalQueryReque
 	if view.MutationParts > 0 {
 		return ColumnPhysicalQueryResult{}, fmt.Errorf("%w: parallel physical column query requires insert-only manifest until partitioned visibility execution lands", ErrColumnQueryPlanUnsupported)
 	}
+	workers := maxWorkers
+	if refs := len(view.AssetRefs); refs <= 1 {
+		return c.RunColumnPhysicalQuery(req)
+	} else if workers > refs {
+		workers = refs
+	}
 	cfg := view.Config
 	merged, err := newColumnPhysicalQueryExecutor(cfg, req)
 	if err != nil {
@@ -144,16 +153,18 @@ func (c *Collection) RunColumnPhysicalQueryParallel(req ColumnPhysicalQueryReque
 		diag columnPhysicalScanDiagnostics
 		err  error
 	}
-	results := make([]workerResult, maxWorkers)
+	results := make([]workerResult, workers)
 	start := time.Now()
+	var cancel atomic.Bool
 	var wg sync.WaitGroup
-	for worker := 0; worker < maxWorkers; worker++ {
+	for worker := 0; worker < workers; worker++ {
 		worker := worker
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			exec, err := newColumnPhysicalQueryExecutor(cfg, req)
 			if err != nil {
+				cancel.Store(true)
 				results[worker].err = err
 				return
 			}
@@ -161,21 +172,28 @@ func (c *Collection) RunColumnPhysicalQueryParallel(req ColumnPhysicalQueryReque
 				ProjectedColumns:    exec.projected,
 				Visitor:             exec.visit,
 				RequireInsertOnly:   true,
-				RefOrdinalModulo:    maxWorkers,
+				RefOrdinalModulo:    workers,
 				RefOrdinalRemainder: worker,
+				ShouldCancel:        cancel.Load,
 			})
+			if err != nil {
+				cancel.Store(true)
+			}
 			results[worker] = workerResult{exec: exec, diag: diag, err: err}
 		}()
 	}
 	wg.Wait()
 
 	result := ColumnPhysicalQueryResult{}
+	var firstErr error
 	for worker := range results {
 		workerResult := results[worker]
 		result.Diagnostics = mergeColumnPhysicalQueryDiagnostics(result.Diagnostics, columnPhysicalQueryDiagnosticsFromScan(workerResult.diag))
 		if workerResult.err != nil {
-			result.Diagnostics.ScanNanos = time.Since(start).Nanoseconds()
-			return result, workerResult.err
+			if firstErr == nil || errors.Is(firstErr, errColumnPhysicalScanCancelled) {
+				firstErr = workerResult.err
+			}
+			continue
 		}
 		if err := merged.mergeFrom(workerResult.exec); err != nil {
 			result.Diagnostics.ScanNanos = time.Since(start).Nanoseconds()
@@ -183,6 +201,9 @@ func (c *Collection) RunColumnPhysicalQueryParallel(req ColumnPhysicalQueryReque
 		}
 	}
 	result.Diagnostics.ScanNanos = time.Since(start).Nanoseconds()
+	if firstErr != nil {
+		return result, firstErr
+	}
 	result.Groups = merged.groups()
 	result.Diagnostics.ReduceRows = merged.reduceRows
 	result.Diagnostics.ResultGroups = len(result.Groups)
@@ -279,7 +300,9 @@ func mergeColumnPhysicalQueryDiagnostics(left, right ColumnPhysicalQueryDiagnost
 	if right.ProjectedColumns > left.ProjectedColumns {
 		left.ProjectedColumns = right.ProjectedColumns
 	}
-	left.MutationParts += right.MutationParts
+	if right.MutationParts > left.MutationParts {
+		left.MutationParts = right.MutationParts
+	}
 	left.DecodedBlocks += right.DecodedBlocks
 	left.ScheduledGranules += right.ScheduledGranules
 	left.SkippedGranules += right.SkippedGranules
@@ -472,11 +495,16 @@ func (e *columnPhysicalQueryExecutor) stringInt64Values(values []columnDeclaredV
 }
 
 func (e *columnPhysicalQueryExecutor) stringKey(value columnDeclaredValue) (string, error) {
-	raw, err := columnPhysicalQueryStringBytes(value)
-	if err != nil {
-		return "", err
+	if value.Type != ColumnStoreValueString {
+		return "", fmt.Errorf("%w: physical column query expected string value, got %q", ErrColumnQueryPlanUnsupported, value.Type)
 	}
-	return e.interner.intern(raw), nil
+	if value.Null {
+		return "", fmt.Errorf("%w: physical column query does not support null string group values yet", ErrColumnQueryPlanUnsupported)
+	}
+	if value.StringBytes != nil {
+		return e.interner.internBytes(value.StringBytes), nil
+	}
+	return e.interner.internString(value.String), nil
 }
 
 func (e *columnPhysicalQueryExecutor) groups() []ColumnPhysicalQueryGroup {
@@ -573,19 +601,6 @@ func (e *columnPhysicalQueryExecutor) mergeFrom(other *columnPhysicalQueryExecut
 	return nil
 }
 
-func columnPhysicalQueryStringBytes(value columnDeclaredValue) ([]byte, error) {
-	if value.Type != ColumnStoreValueString {
-		return nil, fmt.Errorf("%w: physical column query expected string value, got %q", ErrColumnQueryPlanUnsupported, value.Type)
-	}
-	if value.Null {
-		return nil, fmt.Errorf("%w: physical column query does not support null string group values yet", ErrColumnQueryPlanUnsupported)
-	}
-	if value.StringBytes != nil {
-		return value.StringBytes, nil
-	}
-	return []byte(value.String), nil
-}
-
 func columnPhysicalQueryInt64Value(value columnDeclaredValue) (int64, error) {
 	if value.Type != ColumnStoreValueInt64 {
 		return 0, fmt.Errorf("%w: physical column query expected int64 value, got %q", ErrColumnQueryPlanUnsupported, value.Type)
@@ -628,7 +643,7 @@ type columnPhysicalQueryStringEntry struct {
 	key string
 }
 
-func (i *columnPhysicalQueryStringInterner) intern(raw []byte) string {
+func (i *columnPhysicalQueryStringInterner) internBytes(raw []byte) string {
 	if i.buckets == nil {
 		i.buckets = make(map[uint64][]columnPhysicalQueryStringEntry, 16)
 	}
@@ -644,6 +659,21 @@ func (i *columnPhysicalQueryStringInterner) intern(raw []byte) string {
 	return key
 }
 
+func (i *columnPhysicalQueryStringInterner) internString(raw string) string {
+	if i.buckets == nil {
+		i.buckets = make(map[uint64][]columnPhysicalQueryStringEntry, 16)
+	}
+	hash := columnPhysicalQueryHashString(raw)
+	bucket := i.buckets[hash]
+	for _, entry := range bucket {
+		if entry.key == raw {
+			return entry.key
+		}
+	}
+	i.buckets[hash] = append(bucket, columnPhysicalQueryStringEntry{key: raw})
+	return raw
+}
+
 func columnPhysicalQueryHashBytes(raw []byte) uint64 {
 	const (
 		offset64 = 14695981039346656037
@@ -652,6 +682,19 @@ func columnPhysicalQueryHashBytes(raw []byte) uint64 {
 	hash := uint64(offset64)
 	for _, b := range raw {
 		hash ^= uint64(b)
+		hash *= prime64
+	}
+	return hash
+}
+
+func columnPhysicalQueryHashString(raw string) uint64 {
+	const (
+		offset64 = 14695981039346656037
+		prime64  = 1099511628211
+	)
+	hash := uint64(offset64)
+	for i := 0; i < len(raw); i++ {
+		hash ^= uint64(raw[i])
 		hash *= prime64
 	}
 	return hash

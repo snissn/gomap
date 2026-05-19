@@ -53,13 +53,19 @@ func (c *Collection) ColumnAssetGC(ctx context.Context, opts ColumnAssetGCOption
 		return stats, err
 	}
 	if !opts.DryRun {
+		if err := c.db.CheckStorageMaintenanceReady(); err != nil {
+			return stats, err
+		}
 		unlock := c.lockMutation()
 		defer unlock.Unlock()
 	}
 	return c.columnAssetGC(ctx, opts)
 }
 
-func (c *Collection) columnAssetGC(ctx context.Context, opts ColumnAssetGCOptions) (ColumnAssetGCStats, error) {
+func (c *Collection) columnAssetGC(ctx context.Context, opts ColumnAssetGCOptions) (stats ColumnAssetGCStats, err error) {
+	defer func() {
+		stats.Plan = columnAssetGCPlanForDetail(stats.Plan, opts.Detailed)
+	}()
 	plan, err := c.PlanColumnAssetReachability(ctx, ColumnAssetReachabilityOptions{
 		Detailed:       opts.Detailed,
 		SegmentDetails: true,
@@ -68,18 +74,16 @@ func (c *Collection) columnAssetGC(ctx context.Context, opts ColumnAssetGCOption
 		PreparedRefs:   opts.PreparedRefs,
 		PinnedRefs:     opts.PinnedRefs,
 	})
-	stats := ColumnAssetGCStats{
+	stats = ColumnAssetGCStats{
 		DryRun:           opts.DryRun,
 		Plan:             plan,
 		SegmentsRetained: plan.Segments.Total,
 		BytesRetained:    plan.Segments.BytesTotal,
 	}
 	if err != nil {
-		stats.Plan = columnAssetGCPlanForDetail(stats.Plan, opts.Detailed)
 		return stats, err
 	}
 	if !plan.Complete {
-		stats.Plan = columnAssetGCPlanForDetail(stats.Plan, opts.Detailed)
 		if opts.DryRun {
 			return stats, nil
 		}
@@ -95,13 +99,11 @@ func (c *Collection) columnAssetGC(ctx context.Context, opts ColumnAssetGCOption
 
 	namespace, err := columnAssetManagerNamespaceForRoot(c.db.ColumnAssetRootDir(), plan.Namespace)
 	if err != nil {
-		stats.Plan = columnAssetGCPlanForDetail(stats.Plan, opts.Detailed)
 		return stats, err
 	}
 	eligible := make([]ColumnAssetReachabilitySegmentEntry, 0, plan.Segments.Reclaimable)
 	for _, entry := range plan.SegmentEntries {
 		if err := ctx.Err(); err != nil {
-			stats.Plan = columnAssetGCPlanForDetail(stats.Plan, opts.Detailed)
 			return stats, err
 		}
 		if !columnAssetGCSegmentEligibleForDelete(namespace.SegmentDir, entry) {
@@ -112,15 +114,12 @@ func (c *Collection) columnAssetGC(ctx context.Context, opts ColumnAssetGCOption
 		eligible = append(eligible, entry)
 	}
 	if opts.DryRun {
-		stats.Plan = columnAssetGCPlanForDetail(stats.Plan, opts.Detailed)
 		return stats, nil
 	}
 	if err := c.db.CheckStorageMaintenanceReady(); err != nil {
-		stats.Plan = columnAssetGCPlanForDetail(stats.Plan, opts.Detailed)
 		return stats, err
 	}
 	if len(eligible) == 0 {
-		stats.Plan = columnAssetGCPlanForDetail(stats.Plan, opts.Detailed)
 		return stats, nil
 	}
 	syncDeletedSegmentsDir := func(retErr error) error {
@@ -136,11 +135,9 @@ func (c *Collection) columnAssetGC(ctx context.Context, opts ColumnAssetGCOption
 
 	for _, entry := range eligible {
 		if err := ctx.Err(); err != nil {
-			stats.Plan = columnAssetGCPlanForDetail(stats.Plan, opts.Detailed)
 			return stats, syncDeletedSegmentsDir(err)
 		}
 		if err := os.Remove(entry.Path); err != nil {
-			stats.Plan = columnAssetGCPlanForDetail(stats.Plan, opts.Detailed)
 			return stats, syncDeletedSegmentsDir(err)
 		}
 		stats.SegmentsDeleted++
@@ -149,10 +146,8 @@ func (c *Collection) columnAssetGC(ctx context.Context, opts ColumnAssetGCOption
 		stats.BytesRetained -= entry.Bytes
 	}
 	if err := syncDeletedSegmentsDir(nil); err != nil {
-		stats.Plan = columnAssetGCPlanForDetail(stats.Plan, opts.Detailed)
 		return stats, err
 	}
-	stats.Plan = columnAssetGCPlanForDetail(stats.Plan, opts.Detailed)
 	return stats, nil
 }
 

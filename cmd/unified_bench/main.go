@@ -1113,7 +1113,9 @@ func runPprofDeltaCommand(basePath, afterPath string) ([]byte, string, error) {
 
 func goToolExecutable() string {
 	if path, err := exec.LookPath("go"); err == nil {
-		return path
+		if filepath.IsAbs(path) {
+			return path
+		}
 	}
 	name := "go"
 	if runtime.GOOS == "windows" {

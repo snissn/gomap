@@ -1,14 +1,12 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"hash/fnv"
 	"html"
-	"io"
 	"math"
 	"math/rand"
 	"os"
@@ -491,9 +489,9 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 			SchemaHash:                      manifestIdentity.SchemaHash,
 		},
 		ProductionScope:        "production column-enabled TreeDB collection manifest/control-plane path plus isolated physical column assets and M14B planner-routed physical query execution",
-		PhysicalColumnQuery:    "M14B routes forced serial, scan-backed aggregate_metadata, and insert-only parallel_column_scan labels through the TreeDB physical query adapter; unsupported prerequisites fail closed before row fallback",
+		PhysicalColumnQuery:    "M14B routes forced serial, scan-backed aggregate_metadata, and insert-only parallel_column_scan labels through the TreeDB physical query adapter; forced aggregate_metadata is executable only for q5_metadata and other queries reroute to serial physical scan; unsupported prerequisites fail closed before row fallback",
 		BenchmarkOnlyRelaxed:   false,
-		StageSeparatedBoundary: "fixture generation, collection create, insert, checkpoint, reopen/recovery, planner, scan, reduce, and parity hash stages are timed separately for the forced execution label",
+		StageSeparatedBoundary: "fixture generation, collection create, insert, checkpoint, reopen/recovery, planner, physical scan/reducer execution, row/B-tree reduce, and parity hash stages are timed separately for the forced execution label; M14B direct physical reducers are fused into scan timing unless visibility reconstruction reports a separate reduce phase",
 	}
 	if baseCfg.KeepDir {
 		report.DataDir = dataDir
@@ -1071,7 +1069,7 @@ func runColumnStoreSuiteQueries(collection *collections.Collection, rows int, ra
 			// normalization, not necessarily the raw requested path string.
 			PlanLabel:            planLabel,
 			AliasOf:              columnStoreQueryAliasOf(name, planLabel),
-			ImplementationNote:   columnStoreQueryImplementationNote(name, planLabel),
+			ImplementationNote:   columnStoreQueryImplementationNote(name, path, planLabel),
 			DurationMS:           durationMS(elapsed),
 			duration:             elapsed,
 			Rows:                 rows,
@@ -1247,11 +1245,22 @@ func executeColumnStoreSuitePhysicalQuery(collection *collections.Collection, qu
 	if err != nil {
 		return columnStoreQueryExecution{}, fmt.Errorf("column_store: physical query %s via %s: %w", queryName, plan.Kind, err)
 	}
-	lines := columnStoreSuitePhysicalQueryLines(columnStoreQueryHashLineName(queryName), queryName, result.Groups)
+	lines, err := columnStoreSuitePhysicalQueryLines(columnStoreQueryHashLineName(queryName), queryName, result.Groups)
+	if err != nil {
+		return columnStoreQueryExecution{}, err
+	}
 	diag := result.Diagnostics
 	workers := plan.Diagnostics.WorkerCount
 	if workers <= 0 {
 		workers = 1
+	}
+	scanDuration := elapsed
+	if diag.ScanNanos > 0 {
+		scanDuration = time.Duration(diag.ScanNanos)
+	}
+	reduceDuration := time.Duration(0)
+	if diag.ReduceNanos > 0 {
+		reduceDuration = time.Duration(diag.ReduceNanos)
 	}
 	return columnStoreQueryExecution{
 		Lines:               lines,
@@ -1259,25 +1268,19 @@ func executeColumnStoreSuitePhysicalQuery(collection *collections.Collection, qu
 		BytesRead:           diag.PhysicalBytesScanned,
 		RowMaterializations: diag.RowMaterializations,
 		ResultCount:         len(lines),
-		MetadataHits:        columnStoreSuitePhysicalMetadataHits(plan, diag),
-		SkippedGranules:     diag.SkippedGranules,
-		ScheduledGranules:   diag.ScheduledGranules,
-		WorkerCount:         workers,
-		CacheHits:           plan.Diagnostics.DecodedBlockCacheHits,
-		CacheMisses:         plan.Diagnostics.DecodedBlockCacheMisses,
-		ScanDuration:        elapsed,
+		// M14B routes the aggregate_metadata label through the physical query
+		// adapter but still scans column assets. Metadata-only reads remain an
+		// M14C measurement gate, so hits stay zero instead of pretending a fast
+		// path ran.
+		MetadataHits:      0,
+		SkippedGranules:   diag.SkippedGranules,
+		ScheduledGranules: diag.ScheduledGranules,
+		WorkerCount:       workers,
+		CacheHits:         plan.Diagnostics.DecodedBlockCacheHits,
+		CacheMisses:       plan.Diagnostics.DecodedBlockCacheMisses,
+		ScanDuration:      scanDuration,
+		ReduceDuration:    reduceDuration,
 	}, nil
-}
-
-func columnStoreSuitePhysicalMetadataHits(plan collections.ColumnQueryPlan, diag collections.ColumnPhysicalQueryDiagnostics) int {
-	if plan.Kind != collections.ColumnQueryPlanAggregateMetadata {
-		return 0
-	}
-	// M14B routes the aggregate_metadata label through the physical query
-	// adapter but still scans column assets. Metadata-only reads remain an M14C
-	// measurement gate, so hits stay zero instead of pretending a fast path ran.
-	_ = diag
-	return 0
 }
 
 func columnStoreSuitePhysicalQueryRequest(name string) (collections.ColumnPhysicalQueryRequest, error) {
@@ -1299,7 +1302,7 @@ func columnStoreSuitePhysicalQueryRequest(name string) (collections.ColumnPhysic
 	}
 }
 
-func columnStoreSuitePhysicalQueryLines(prefix, queryName string, groups []collections.ColumnPhysicalQueryGroup) []string {
+func columnStoreSuitePhysicalQueryLines(prefix, queryName string, groups []collections.ColumnPhysicalQueryGroup) ([]string, error) {
 	lines := make([]string, 0, len(groups))
 	switch queryName {
 	case columnStoreQueryQ1, columnStoreQueryQ2, columnStoreQueryQ3:
@@ -1311,9 +1314,9 @@ func columnStoreSuitePhysicalQueryLines(prefix, queryName string, groups []colle
 			lines = append(lines, fmt.Sprintf("%s:%s=%d", prefix, group.Key, group.Int64))
 		}
 	default:
-		return nil
+		return nil, fmt.Errorf("column_store: unsupported physical query line mapping %q", queryName)
 	}
-	return lines
+	return lines, nil
 }
 
 func scanColumnStoreSuiteEvents(collection *collections.Collection, rows int) ([]columnStoreDecodedEvent, int, int64, error) {
@@ -1419,48 +1422,10 @@ func columnStoreSuiteRetainedPayloadAccounting(events []columnStoreFixtureEvent,
 }
 
 func columnStoreSuiteRetainedPayloadFromDocument(document []byte, cfg *collections.ColumnStoreConfig) ([]byte, error) {
-	switch cfg.RetainedPayload {
-	case collections.ColumnRetainedPayloadFull:
-		return append([]byte(nil), document...), nil
-	case collections.ColumnRetainedPayloadNone:
-		return []byte("{}"), nil
-	case collections.ColumnRetainedPayloadNonColumn:
-		var obj map[string]any
-		decoder := json.NewDecoder(bytes.NewReader(document))
-		decoder.UseNumber()
-		if err := decoder.Decode(&obj); err != nil {
-			return nil, err
-		}
-		var trailing any
-		if err := decoder.Decode(&trailing); err != io.EOF {
-			if err == nil {
-				err = errors.New("trailing JSON value")
-			}
-			return nil, err
-		}
-		for _, col := range cfg.Columns {
-			columnStoreSuiteDeleteJSONPath(obj, col.Path)
-		}
-		return json.Marshal(obj)
-	default:
-		return nil, fmt.Errorf("unsupported retained-payload policy %q", cfg.RetainedPayload)
+	if cfg == nil {
+		return nil, errors.New("column_store: retained-payload transform requires column-store config")
 	}
-}
-
-func columnStoreSuiteDeleteJSONPath(obj map[string]any, path string) {
-	parts := strings.Split(strings.TrimSpace(path), ".")
-	if len(parts) == 0 || parts[0] == "" {
-		return
-	}
-	cur := obj
-	for i := 0; i < len(parts)-1; i++ {
-		next, ok := cur[parts[i]].(map[string]any)
-		if !ok {
-			return
-		}
-		cur = next
-	}
-	delete(cur, parts[len(parts)-1])
+	return collections.ColumnRetainedPayloadFromJSONDocument(*cfg, document)
 }
 
 var columnStoreQueryNameList = [...]string{
@@ -1493,20 +1458,23 @@ func columnStoreQueryAliasOf(name, path string) string {
 	return ""
 }
 
-func columnStoreQueryImplementationNote(name, path string) string {
-	if name == columnStoreQueryQ5Metadata && path == columnStorePathAggregateMetadata {
+func columnStoreQueryImplementationNote(name, requestedPath, planPath string) string {
+	if requestedPath == columnStorePathAggregateMetadata && planPath == columnStorePathSerialColumnScan && name != columnStoreQueryQ5Metadata {
+		return "aggregate_metadata_forced_path_rerouted_to_serial_column_scan_no_metadata_asset_for_query_m14b"
+	}
+	if name == columnStoreQueryQ5Metadata && planPath == columnStorePathAggregateMetadata {
 		return "q5_alias_scan_backed_physical_aggregate_metadata_m14c_metadata_only_fast_path_deferred"
 	}
-	if name == columnStoreQueryQ5Metadata && (path == columnStorePathSerialColumnScan || path == columnStorePathParallelColumnScan) {
-		return path + "_q5_alias_physical_column_scan"
+	if name == columnStoreQueryQ5Metadata && (planPath == columnStorePathSerialColumnScan || planPath == columnStorePathParallelColumnScan) {
+		return planPath + "_q5_alias_physical_column_scan"
 	}
-	if name == columnStoreQueryQ5Metadata && path == columnStorePathBTreeIndexBaseline {
+	if name == columnStoreQueryQ5Metadata && planPath == columnStorePathBTreeIndexBaseline {
 		return "q5_alias_full_unbounded_secondary_index_scan_no_predicate_pushdown_until_physical_aggregate_metadata_path"
 	}
-	if name == columnStoreQueryQ5Metadata && path == columnStorePathRowStoreBaseline {
-		return path + "_alias_until_physical_aggregate_metadata_path"
+	if name == columnStoreQueryQ5Metadata && planPath == columnStorePathRowStoreBaseline {
+		return planPath + "_alias_until_physical_aggregate_metadata_path"
 	}
-	if path == columnStorePathBTreeIndexBaseline {
+	if planPath == columnStorePathBTreeIndexBaseline {
 		return "full_unbounded_secondary_index_scan_no_predicate_pushdown_m11b"
 	}
 	return ""
@@ -1517,23 +1485,31 @@ func columnStoreQueryThroughputInterpretation(q columnStoreQueryMetric) string {
 	if q.SkippedGranules > 0 {
 		markPruning = "mark-pruning active"
 	}
+	evidence := columnStoreQueryInterpretationEvidence(q)
 	switch q.PlanLabel {
 	case columnStorePathRowStoreBaseline:
-		return "decode-bound row-store baseline: full JSON row materialization before reduction; " + markPruning
+		return "decode-bound row-store baseline: full JSON row materialization before reduction; " + markPruning + evidence
 	case columnStorePathBTreeIndexBaseline:
-		return "decode-bound B-tree baseline: full unbounded secondary-index walk plus JSON row materialization before reduction; " + markPruning
+		return "decode-bound B-tree baseline: full unbounded secondary-index walk plus JSON row materialization before reduction; " + markPruning + evidence
 	case columnStorePathSerialColumnScan:
-		return "physical serial scan: TCPA decode plus reducer aggregation over declared columns; memory-bandwidth bound on asset bytes when cache-warm; " + markPruning
+		return "physical serial scan: TCPA decode plus reducer aggregation over declared columns; memory-bandwidth bound on asset bytes when cache-warm; " + markPruning + evidence
 	case columnStorePathAggregateMetadata:
 		if q.MetadataHits > 0 {
-			return fmt.Sprintf("metadata-bound aggregate metadata path: %d metadata hits avoid full physical row scan; %s", q.MetadataHits, markPruning)
+			return fmt.Sprintf("metadata-bound aggregate metadata path: %d metadata hits avoid full physical row scan; %s%s", q.MetadataHits, markPruning, evidence)
 		}
-		return "fallback-bound aggregate metadata label: no metadata hits yet, executes scan-backed physical reducer over declared columns; " + markPruning
+		return "fallback-bound aggregate metadata label: no metadata hits yet, executes scan-backed physical reducer over declared columns; " + markPruning + evidence
 	case columnStorePathParallelColumnScan:
-		return fmt.Sprintf("parallel physical scan: manifest-ref partition across %d workers; overhead-bound on small fixtures and memory-bandwidth/TCPA-decode bound on larger asset bytes; %s", q.WorkerCount, markPruning)
+		if q.WorkerCount <= 0 {
+			return fmt.Sprintf("parallel physical scan: invalid reported worker_count=%d; overhead-bound interpretation is unavailable until worker diagnostics are valid; %s%s", q.WorkerCount, markPruning, evidence)
+		}
+		return fmt.Sprintf("parallel physical scan: manifest-ref partition across reported worker_count=%d; overhead-bound on small fixtures and memory-bandwidth/TCPA-decode bound on larger asset bytes; %s%s", q.WorkerCount, markPruning, evidence)
 	default:
-		return "fallback/error-bound: unknown executed plan label; " + markPruning
+		return fmt.Sprintf("fallback/error-bound: unknown executed plan label %q for query %q; %s%s", q.PlanLabel, q.Name, markPruning, evidence)
 	}
+}
+
+func columnStoreQueryInterpretationEvidence(q columnStoreQueryMetric) string {
+	return fmt.Sprintf("; observed rows_processed=%d row_materializations=%d/%d bytes_read=%d metadata_hits=%d scheduled_granules=%d skipped_granules=%d", q.RowsProcessed, q.RowMaterializations, q.Rows, q.BytesRead, q.MetadataHits, q.ScheduledGranules, q.SkippedGranules)
 }
 
 func populateColumnStoreThroughputInterpretations(queries []columnStoreQueryMetric) {
@@ -1574,6 +1550,26 @@ func columnStoreQueryHashLineName(name string) string {
 	return name
 }
 
+func columnStoreSuiteUTCHour(timeUS int64) int {
+	const hourUS = int64(3_600_000_000)
+	hours := timeUS / hourUS
+	if timeUS < 0 && timeUS%hourUS != 0 {
+		hours--
+	}
+	hour := int(hours % 24)
+	if hour < 0 {
+		hour += 24
+	}
+	return hour
+}
+
+func columnStoreSuiteHourKey(hour int) string {
+	if hour < 0 || hour >= 24 {
+		return "hour_invalid"
+	}
+	return fmt.Sprintf("hour_%02d", hour)
+}
+
 func columnStoreQueryLines(name string, events []columnStoreDecodedEvent) ([]string, error) {
 	switch name {
 	case columnStoreQueryQ1:
@@ -1600,8 +1596,7 @@ func columnStoreQueryLines(name string, events []columnStoreDecodedEvent) ([]str
 	case columnStoreQueryQ3:
 		counts := make(map[string]int)
 		for _, event := range events {
-			hour := (event.TimeUS / 3_600_000_000) % 24
-			counts[fmt.Sprintf("hour_%02d", hour)]++
+			counts[columnStoreSuiteHourKey(columnStoreSuiteUTCHour(event.TimeUS))]++
 		}
 		return formatIntMapLines(name, counts), nil
 	case columnStoreQueryQ4A:
@@ -1806,10 +1801,10 @@ func renderColumnStoreSuiteMarkdown(report columnStoreSuiteReport) string {
 		}
 		noteCell := "-"
 		if note != "" {
-			noteCell = "`" + note + "`"
+			noteCell = markdownCodeTableText(note)
 		}
-		sb.WriteString(fmt.Sprintf("| `%s` | `%s` | %.3f | %.3f | %.1f | %.3f | %.3f | %.3f | %.3f | %d | %d | %d | %d | %d | %d | %d/%d | %s | %s |\n",
-			q.Name, q.PlanLabel, q.RowsPerSecond, q.MiBPerSecond, q.NsPerRow, q.PlannerDurationMS, q.ScanDurationMS, q.ReduceDurationMS, q.ParityHashDurationMS, q.WorkerCount, q.ScheduledGranules, q.SkippedGranules, q.MetadataHits, q.BytesRead, q.RowMaterializations, q.CacheHits, q.CacheMisses, parity, noteCell))
+		sb.WriteString(fmt.Sprintf("| %s | %s | %.3f | %.3f | %.1f | %.3f | %.3f | %.3f | %.3f | %d | %d | %d | %d | %d | %d | %d/%d | %s | %s |\n",
+			markdownCodeTableText(q.Name), markdownCodeTableText(q.PlanLabel), q.RowsPerSecond, q.MiBPerSecond, q.NsPerRow, q.PlannerDurationMS, q.ScanDurationMS, q.ReduceDurationMS, q.ParityHashDurationMS, q.WorkerCount, q.ScheduledGranules, q.SkippedGranules, q.MetadataHits, q.BytesRead, q.RowMaterializations, q.CacheHits, q.CacheMisses, parity, noteCell))
 	}
 	sb.WriteString("\n")
 
@@ -1817,11 +1812,7 @@ func renderColumnStoreSuiteMarkdown(report columnStoreSuiteReport) string {
 	sb.WriteString("| query | plan | interpretation |\n")
 	sb.WriteString("|---|---|---|\n")
 	for _, q := range report.Queries {
-		interpretation := q.ThroughputInterpretation
-		if interpretation == "" {
-			interpretation = columnStoreQueryThroughputInterpretation(q)
-		}
-		sb.WriteString(fmt.Sprintf("| `%s` | `%s` | %s |\n", q.Name, q.PlanLabel, markdownTableText(interpretation)))
+		sb.WriteString(fmt.Sprintf("| %s | %s | %s |\n", markdownCodeTableText(q.Name), markdownCodeTableText(q.PlanLabel), markdownTableText(q.ThroughputInterpretation)))
 	}
 	sb.WriteString("\n")
 
@@ -1907,8 +1898,26 @@ func markdownTableText(value string) string {
 		return "-"
 	}
 	value = strings.ReplaceAll(value, "|", "\\|")
+	value = strings.ReplaceAll(value, "\r\n", " ")
+	value = strings.ReplaceAll(value, "\r", " ")
 	value = strings.ReplaceAll(value, "\n", " ")
 	return value
+}
+
+func markdownCodeTableText(value string) string {
+	value = markdownTableText(value)
+	if value == "-" {
+		return "-"
+	}
+	delimiter := "`"
+	for strings.Contains(value, delimiter) {
+		delimiter += "`"
+	}
+	padding := ""
+	if strings.HasPrefix(value, "`") || strings.HasSuffix(value, "`") || strings.HasPrefix(value, " ") || strings.HasSuffix(value, " ") {
+		padding = " "
+	}
+	return delimiter + padding + value + padding + delimiter
 }
 
 func renderColumnStoreSuiteHTML(report columnStoreSuiteReport) string {

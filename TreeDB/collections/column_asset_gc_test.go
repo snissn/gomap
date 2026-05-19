@@ -315,11 +315,33 @@ func TestColumnAssetGCRejectsReadOnlyDestructiveMaintenanceM15B(t *testing.T) {
 	if !errors.Is(err, backenddb.ErrReadOnly) {
 		t.Fatalf("ColumnAssetGC readonly error=%v want ErrReadOnly", err)
 	}
-	if stats.SegmentsEligible != 1 || stats.SegmentsDeleted != 0 {
-		t.Fatalf("stats=%+v want eligible but not deleted on readonly handle", stats)
+	if stats.SegmentsEligible != 0 || stats.SegmentsDeleted != 0 || stats.Plan.ProtectOnly {
+		t.Fatalf("stats=%+v want readiness rejection before reachability planning", stats)
 	}
 	if _, err := os.Stat(candidatePath); err != nil {
 		t.Fatalf("readonly destructive GC removed candidate segment: %v", err)
+	}
+}
+
+func TestColumnAssetGCRejectsClosedDestructiveMaintenanceBeforePlanningM15B(t *testing.T) {
+	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
+	d := openCollectionCommandWALDB(t, dir)
+	col := openColumnStoreCollectionM10B(t, d)
+
+	if _, err := col.Insert([]byte("e1"), []byte(`{"time_us":1,"kind":"like","did":"d1"}`)); err != nil {
+		_ = d.Close()
+		t.Fatalf("Insert: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close setup DB: %v", err)
+	}
+
+	stats, err := col.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{})
+	if !errors.Is(err, backenddb.ErrClosed) {
+		t.Fatalf("ColumnAssetGC closed error=%v want ErrClosed", err)
+	}
+	if stats.Plan.ProtectOnly || stats.Plan.Collection != "" || stats.SegmentsEligible != 0 || stats.SegmentsDeleted != 0 {
+		t.Fatalf("stats=%+v want readiness rejection before reachability planning", stats)
 	}
 }
 
