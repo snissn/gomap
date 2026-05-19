@@ -1,22 +1,23 @@
 # TreeDB Activity Event Column Store
 
-Activity streams are a natural fit for a collection that needs both primary
-reads and scan-friendly analytics. In this walkthrough, a feed service receives
-events from web, iOS, and Android clients. Each event records when something
-happened, who acted, what action they took, which client sent it, and which feed
-item was touched.
+This command models a small feed-service activity stream. The service receives
+events from web, iOS, and Android clients whenever someone posts, likes,
+reposts, or follows. Each row records when the event happened, who acted, what
+they did, which client sent it, and which feed item was touched.
 
-That shape is useful in two different ways. Product and debugging paths often
-need the complete event by id. Operational questions usually scan the same few
-dimensions: event time, action type, and actor. TreeDB stores the full row as
-JSON for the primary read path, while also writing those scan-heavy fields into
-physical column lanes.
+The storage goal is deliberately mixed:
 
-The command writes a small activity feed into TreeDB, checkpoints it, reopens
-the database, reads one event back by id, and runs two column scans over the
-same data.
+- Keep the full event available by id for product paths, debugging, and audit
+  views.
+- Keep the hot rollup dimensions scan-friendly for operational questions over a
+  slice of the feed.
 
-Run it from the repository root:
+TreeDB supports that shape by storing each event as JSON while also writing a
+few selected fields into physical column lanes.
+
+## Run
+
+Run from the repository root:
 
 ```sh
 GOWORK=off go run ./examples/column_store_quickstart
@@ -29,9 +30,9 @@ GOWORK=off go run ./examples/column_store_quickstart -rows 1000
 GOWORK=off go run ./examples/column_store_quickstart -dir /tmp/gomap-column-demo -keep
 ```
 
-## Data Shape
+## Event Shape
 
-Rows model activity events such as posts, likes, reposts, and follows:
+Rows model activity events:
 
 ```json
 {
@@ -43,24 +44,45 @@ Rows model activity events such as posts, likes, reposts, and follows:
 }
 ```
 
-The collection keeps three fields in the column store:
+## Storage Layout
 
-- `time_us`: ordered `int64` event time
-- `action`: dictionary-capable string for event mix queries
-- `actor`: dictionary-capable string for per-actor rollups
+The collection stores the complete JSON row, then promotes the fields that are
+useful for scans:
 
-The remaining JSON fields stay in the retained payload. A primary read can
-still reconstruct the full event from the retained payload and the column lanes.
+| Field | Storage | Motivation |
+| --- | --- | --- |
+| `time_us` | `int64` column, sort key | Event ordering and per-actor time spans. |
+| `action` | Dictionary-capable string column | Group the feed slice by activity type. |
+| `actor` | Dictionary-capable string column | Roll up activity by identity. |
+| `client` | Retained JSON payload | Useful on primary reads, not scanned here. |
+| `subject` | Retained JSON payload | Useful on primary reads, not scanned here. |
+
+Primary reads reconstruct the full document from the retained payload plus the
+column lanes. Column scans can answer rollup questions without reconstructing
+every JSON row.
+
+## Flow
+
+The command performs the full lifecycle that a small application path would
+exercise:
+
+1. Generate activity-event JSON rows.
+2. Create a durable TreeDB collection with column storage enabled.
+3. Insert the batch and checkpoint the database.
+4. Reopen the database to prove the persisted shape is readable.
+5. Fetch one event by id.
+6. Run two explicit physical column scans.
 
 ## Queries
 
-`events_by_action` answers the operational question, "What kind of activity is
-dominating this slice of the feed?"
+| Query | Column Work | Question |
+| --- | --- | --- |
+| `events_by_action` | Group-count on `action`. | What kind of activity is dominating this feed slice? |
+| `active_window_by_actor` | Group by `actor`; compute `max(time_us)-min(time_us)`. | How spread out is each actor's activity in the batch? |
 
-`active_window_by_actor` groups by actor and calculates the observed time span
-between that actor's first and last event in the batch.
+## Output Excerpt
 
-The output keeps the read path and scan path visible:
+The terminal output starts by making the read path and scan path visible:
 
 ```text
 Activity event column store
@@ -116,18 +138,6 @@ The plan is forced to serial_column_scan so the physical column path is explicit
 │  events_by_action        serial_column_scan  48    4       ...    ...    0          1         │
 │  active_window_by_actor  serial_column_scan  48    9       ...    ...    0          1         │
 ╰───────────────────────────────────────────────────────────────────────────────────────────────╯
-
-What activity is in this feed slice?
-The first scan groups on the dictionary-coded action lane.
-
-╭─────────────────────────╮
-│  Events by Action       │
-│                         │
-│  action         events  │
-│  ─────────────  ──────  │
-│  graph.follow   8       │
-│  post.created   19      │
-╰─────────────────────────╯
 ```
 
 Headings and box labels are bold in a normal terminal. Set `NO_COLOR=1` to
