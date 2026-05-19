@@ -2921,6 +2921,10 @@ func (c *Collection) CreateIndex(def IndexDefinition) (*CollectionMeta, error) {
 		_ = snap.Close()
 		return nil, err
 	}
+	if err := rejectCreateIndexOnRetainedColumnField(baseMeta, normalizedDef); err != nil {
+		_ = snap.Close()
+		return nil, err
+	}
 	newRuntime, err := singleIndexRuntime(normalizedDef)
 	if err != nil {
 		_ = snap.Close()
@@ -2975,6 +2979,22 @@ func (c *Collection) CreateIndex(def IndexDefinition) (*CollectionMeta, error) {
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
 	return newMeta.copy(), nil
+}
+
+func rejectCreateIndexOnRetainedColumnField(meta CollectionMeta, def IndexDefinition) error {
+	if !columnStoreNeedsRetainedPayloadTransform(meta) || meta.Options.ColumnStore == nil {
+		return nil
+	}
+	field := strings.TrimSpace(def.Field)
+	if field == "" {
+		return nil
+	}
+	for _, col := range meta.Options.ColumnStore.Columns {
+		if field == strings.TrimSpace(col.Path) {
+			return fmt.Errorf("collections: CreateIndex on retained-payload column field %q is unsupported because primary rows omit declared column payloads", field)
+		}
+	}
+	return nil
 }
 
 func (c *Collection) DropIndex(name string) (*CollectionMeta, error) {
@@ -12788,8 +12808,13 @@ func putUpdateBatchPlanScratch(scratch *updateBatchPlanScratch) {
 }
 
 func appendUpdateBatchPlanScratchDocument(scratch *updateBatchPlanScratch, document []byte) []byte {
-	if scratch == nil || len(document) == 0 {
+	if scratch == nil {
 		return nil
+	}
+	if len(document) == 0 {
+		start := len(scratch.documentArena)
+		scratch.documentArena = append(scratch.documentArena, 0)
+		return scratch.documentArena[start:start:start]
 	}
 	start := len(scratch.documentArena)
 	scratch.documentArena = append(scratch.documentArena, document...)
