@@ -52,14 +52,6 @@ func (c *Collection) RebuildVectorIndex(name string) (VectorIndexStatus, error) 
 	if c.db == nil {
 		return VectorIndexStatus{}, errCollectionDBNil
 	}
-	// Rebuild publishes a full replacement graph root. Hold the same mutation
-	// barrier used by writes across the primary scan and root publish so no
-	// committed write can be skipped by the clean replacement snapshot.
-	unlockMutation := c.lockMutation()
-	defer unlockMutation.Unlock()
-	if err := c.flushBufferedWrites(); err != nil {
-		return VectorIndexStatus{}, err
-	}
 	if err := ValidateIndexName(name); err != nil {
 		return VectorIndexStatus{}, err
 	}
@@ -93,8 +85,31 @@ func (c *Collection) RebuildVectorIndex(name string) (VectorIndexStatus, error) 
 		status.Duration = collectionObservedElapsedSince(start)
 		return status, nil
 	}
-	if err := validateColumnStoreCatalogRoot(snap, catalog); err != nil {
+	// Native rebuild publishes a full replacement graph root. Hold the same
+	// mutation barrier used by writes across the primary scan and root publish
+	// so no committed write can be skipped by the clean replacement snapshot.
+	unlockMutation := c.lockMutation()
+	defer unlockMutation.Unlock()
+	if err := c.flushBufferedWrites(); err != nil {
 		return VectorIndexStatus{}, err
+	}
+	def, err = c.declaredVectorIndexDefinitionPrepared(name)
+	if err != nil {
+		return VectorIndexStatus{}, err
+	}
+	if vectorIndexDefinitionStrategy(def) == VectorIndexStrategyColumnGraph {
+		graph, loadStatus, err := c.LoadColumnGraphVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
+		if err != nil {
+			return VectorIndexStatus{}, err
+		}
+		if graph != nil {
+			status := vectorIndexStatusFromColumnGraphLoad(def, loadStatus)
+			status.Duration = collectionObservedElapsedSince(start)
+			return status, nil
+		}
+		status := columnGraphRebuildUnsupportedStatus(def, loadStatus)
+		status.Duration = collectionObservedElapsedSince(start)
+		return status, nil
 	}
 	index, err := c.buildVectorIndexPrepared(vectorIndexOptionsFromDefinition(def), false, false)
 	if err != nil {
