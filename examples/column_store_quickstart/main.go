@@ -120,6 +120,7 @@ func main() {
 
 	printTitle("Activity event column store")
 	printNarrative("Write a short activity stream as JSON, keep the hot dimensions in column lanes, then reopen it and scan those lanes for rollups.")
+	fmt.Println()
 	printBox("Dataset", keyValueLines([][2]string{
 		{"db", absDir},
 		{"collection", collectionName},
@@ -175,6 +176,7 @@ func main() {
 	fmt.Println()
 	printTitle("Primary read after reopen")
 	printNarrative("The row is still fetched by id as a complete JSON document; the columnized fields are stitched back into the document.")
+	fmt.Println()
 	printBox("Reconstructed row", keyValueLines([][2]string{
 		{"id", string(sampleID)},
 		{"time_us", fmt.Sprintf("%d", sample.TimeUS)},
@@ -320,6 +322,7 @@ func printQuerySummary(runs []queryRun) {
 	printTitle("Column scans over the same rows")
 	printNarrative("Both scans read the physical column lanes directly, so the rollups avoid reconstructing every JSON document.")
 	printNarrative("The plan is forced to serial_column_scan so the physical column path is explicit.")
+	fmt.Println()
 
 	rows := make([][]string, 0, len(runs))
 	for _, run := range runs {
@@ -351,11 +354,14 @@ func printGroupTable(run queryRun) {
 	case "events_by_action":
 		printTitle("What activity is in this feed slice?")
 		printNarrative("The first scan groups on the dictionary-coded action lane.")
+		fmt.Println()
 	case "active_window_by_actor":
 		printTitle("How spread out is each actor's activity?")
 		printNarrative("The second scan groups on actor and computes max(time_us)-min(time_us) for each actor.")
+		fmt.Println()
 	default:
 		printTitle(run.Spec.Title)
+		fmt.Println()
 	}
 
 	rows := make([][]string, 0, limit)

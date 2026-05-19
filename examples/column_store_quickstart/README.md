@@ -59,6 +59,7 @@ The output keeps the read path and scan path visible:
 Activity event column store
 Write a short activity stream as JSON, keep the hot dimensions in column lanes, then reopen it
 and scan those lanes for rollups.
+
 ╭──────────────────────────────────────────────────────────╮
 │  Dataset                                                 │
 │                                                          │
@@ -72,6 +73,7 @@ and scan those lanes for rollups.
 Primary read after reopen
 The row is still fetched by id as a complete JSON document; the columnized fields are stitched
 back into the document.
+
 ╭──────────────────────────────────╮
 │  Reconstructed row               │
 │                                  │
@@ -87,6 +89,7 @@ Column scans over the same rows
 Both scans read the physical column lanes directly, so the rollups avoid reconstructing every
 JSON document.
 The plan is forced to serial_column_scan so the physical column path is explicit.
+
 ╭───────────────────────────────────────────────────────────────────────────────────────────────╮
 │  Scan plan and counters                                                                       │
 │                                                                                               │
@@ -98,6 +101,7 @@ The plan is forced to serial_column_scan so the physical column path is explicit
 
 What activity is in this feed slice?
 The first scan groups on the dictionary-coded action lane.
+
 ╭─────────────────────────╮
 │  Events by Action       │
 │                         │
