@@ -73,20 +73,20 @@ func requireColumnStoreWriteOperationSupported(meta CollectionMeta, operation Co
 		if normalizedDocumentFormat(meta.Options.DocumentFormat) == DocumentFormatJSON {
 			return nil
 		}
-		return fmt.Errorf("%w: unsupported column-store write operation: M12B accepts only JSON insert writes before column assets are acknowledged collection=%q operation=%s document_format=%q",
+		return fmt.Errorf("%w: M12B unsupported column-store write collection=%q operation=%s document_format=%q",
 			backenddb.ErrCommandWALRejected,
 			meta.Name,
 			operation,
 			meta.Options.DocumentFormat,
 		)
 	case ColumnPublishOperationUpdate:
-		return fmt.Errorf("%w: unsupported column-store write operation: M12B rejects update writes until M12C delta-part staging is implemented collection=%q operation=%s",
+		return fmt.Errorf("%w: M12B unsupported column-store write collection=%q operation=%s",
 			backenddb.ErrCommandWALRejected,
 			meta.Name,
 			operation,
 		)
 	case ColumnPublishOperationDelete:
-		return fmt.Errorf("%w: unsupported column-store write operation: M12B rejects delete writes until M12C tombstone staging is implemented collection=%q operation=%s",
+		return fmt.Errorf("%w: M12B unsupported column-store write collection=%q operation=%s",
 			backenddb.ErrCommandWALRejected,
 			meta.Name,
 			operation,

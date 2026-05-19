@@ -104,7 +104,7 @@ func BenchmarkColumnStoreCommandWALRootPublicationM10B(b *testing.B) {
 		backend, collection := openColumnStoreCommandWALRootPublicationBenchmark(b, true)
 		seedColumnStoreCommandWALBenchBatches(b, collection, 0, 1, commandWALBenchBatchSize)
 		batch := makeColumnStoreCommandWALBenchBatch(b, 0, commandWALBenchBatchSize, true)
-		framesBefore := uint64(backend.State().AppliedCommandLSN)
+		lsnBefore := uint64(backend.State().AppliedCommandLSN)
 
 		b.ReportAllocs()
 		b.ResetTimer()
@@ -119,8 +119,8 @@ func BenchmarkColumnStoreCommandWALRootPublicationM10B(b *testing.B) {
 		}
 		b.StopTimer()
 
-		if got := uint64(backend.State().AppliedCommandLSN); got != framesBefore {
-			b.Fatalf("AppliedCommandLSN after rejected updates=%d, want %d", got, framesBefore)
+		if got := uint64(backend.State().AppliedCommandLSN); got != lsnBefore {
+			b.Fatalf("AppliedCommandLSN after rejected updates=%d, want %d", got, lsnBefore)
 		}
 	})
 
@@ -128,7 +128,7 @@ func BenchmarkColumnStoreCommandWALRootPublicationM10B(b *testing.B) {
 		backend, collection := openColumnStoreCommandWALRootPublicationBenchmark(b, true)
 		seedColumnStoreCommandWALBenchBatches(b, collection, 0, 1, commandWALBenchBatchSize)
 		batch := makeColumnStoreCommandWALBenchBatch(b, 0, commandWALBenchBatchSize, false)
-		framesBefore := uint64(backend.State().AppliedCommandLSN)
+		lsnBefore := uint64(backend.State().AppliedCommandLSN)
 
 		b.ReportAllocs()
 		b.ResetTimer()
@@ -143,8 +143,8 @@ func BenchmarkColumnStoreCommandWALRootPublicationM10B(b *testing.B) {
 		}
 		b.StopTimer()
 
-		if got := uint64(backend.State().AppliedCommandLSN); got != framesBefore {
-			b.Fatalf("AppliedCommandLSN after rejected deletes=%d, want %d", got, framesBefore)
+		if got := uint64(backend.State().AppliedCommandLSN); got != lsnBefore {
+			b.Fatalf("AppliedCommandLSN after rejected deletes=%d, want %d", got, lsnBefore)
 		}
 	})
 }

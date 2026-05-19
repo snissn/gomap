@@ -1204,8 +1204,10 @@ func TestCollectionCommandWALReplayMutationsBypassOpenProfileGate(t *testing.T) 
 				DisableBackgroundPrune: true,
 			})
 			if tt.unsupportedM12B {
-				if err == nil {
+				if reopen != nil {
 					_ = reopen.Close()
+				}
+				if err == nil {
 					t.Fatalf("Open relaxed command WAL DB after unsupported %s replay succeeded, want ErrCommandWALRejected", tt.name)
 				}
 				if !errors.Is(err, backenddb.ErrCommandWALRejected) || !strings.Contains(err.Error(), "M12B") {
