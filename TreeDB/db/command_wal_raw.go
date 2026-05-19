@@ -151,14 +151,14 @@ func (db *DB) NewCommandWALReplayIntent(env commitlog.CommandEnvelope) (*Command
 	}
 	activeLSN := db.commandWALReplayLSN.Load()
 	activeToken := db.commandWALReplayToken.Load()
-	if env.LSN == 0 || activeLSN != env.LSN || activeToken == 0 {
-		return nil, fmt.Errorf("%w: replay intent lsn %d is not the active recovery frame lsn %d", ErrCommandWALRejected, env.LSN, activeLSN)
+	if err := checkCommandWALReplayFrameActive(env.LSN, activeLSN, activeToken); err != nil {
+		return nil, err
 	}
 	return newCommandWALReplayIntent(env, activeToken), nil
 }
 
 func (db *DB) checkCommandWALReplayIntentActive(intent *commandWALBatchIntent) error {
-	if intent == nil || !intent.fromReplay || intent.lsn == 0 {
+	if intent == nil || !intent.fromReplay {
 		return nil
 	}
 	active := uint64(0)
@@ -167,8 +167,30 @@ func (db *DB) checkCommandWALReplayIntentActive(intent *commandWALBatchIntent) e
 		active = db.commandWALReplayLSN.Load()
 		activeToken = db.commandWALReplayToken.Load()
 	}
-	if active != intent.lsn || activeToken == 0 || activeToken != intent.replayToken {
-		return fmt.Errorf("%w: replay intent lsn %d is not the active recovery frame lsn %d", ErrCommandWALRejected, intent.lsn, active)
+	if err := checkCommandWALReplayFrameActive(intent.lsn, active, activeToken); err != nil {
+		return err
+	}
+	if intent.replayToken == 0 {
+		return fmt.Errorf("%w: replay intent missing recovery token for lsn %d", ErrCommandWALRejected, intent.lsn)
+	}
+	if activeToken != intent.replayToken {
+		return fmt.Errorf("%w: replay intent recovery token mismatch for lsn %d", ErrCommandWALRejected, intent.lsn)
+	}
+	return nil
+}
+
+func checkCommandWALReplayFrameActive(intentLSN, activeLSN, activeToken uint64) error {
+	if intentLSN == 0 {
+		return fmt.Errorf("%w: replay intent missing assigned lsn", ErrCommandWALRejected)
+	}
+	if activeLSN == 0 {
+		return fmt.Errorf("%w: replay intent lsn %d has no active recovery frame", ErrCommandWALRejected, intentLSN)
+	}
+	if activeLSN != intentLSN {
+		return fmt.Errorf("%w: replay intent lsn %d does not match active recovery frame lsn %d", ErrCommandWALRejected, intentLSN, activeLSN)
+	}
+	if activeToken == 0 {
+		return fmt.Errorf("%w: replay intent lsn %d has no active recovery token", ErrCommandWALRejected, intentLSN)
 	}
 	return nil
 }
