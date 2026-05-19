@@ -366,7 +366,7 @@ func decodeColumnManifestSnapshotForScan(records []columnManifestRecord) (column
 	activeParts := 0
 	for _, record := range records {
 		switch {
-		case bytes.Equal(record.key, []byte(columnManifestHeaderRecordKey)):
+		case bytes.Equal(record.key, columnManifestHeaderRecordKeyScanBytes):
 			if sawHeader {
 				return columnManifestSnapshot{}, errors.New("collections: duplicate column manifest binary header record")
 			}
@@ -376,7 +376,7 @@ func decodeColumnManifestSnapshotForScan(records []columnManifestRecord) (column
 			}
 			snapshot = header
 			sawHeader = true
-		case bytes.HasPrefix(record.key, []byte(columnManifestPartRecordPrefix)):
+		case bytes.HasPrefix(record.key, columnManifestPartRecordPrefixScanBytes):
 			if !sawHeader {
 				continue
 			}
@@ -407,7 +407,7 @@ func columnManifestPartGenerationFromRecordKeyForScan(key []byte) (uint64, error
 }
 
 func columnManifestPartKeyFromRecordKeyForScan(key []byte) (uint64, uint64, error) {
-	if !bytes.HasPrefix(key, []byte(columnManifestPartRecordPrefix)) {
+	if !bytes.HasPrefix(key, columnManifestPartRecordPrefixScanBytes) {
 		return 0, 0, fmt.Errorf("collections: column manifest part key %q missing prefix", string(key))
 	}
 	if len(key) != len(columnManifestPartRecordPrefix)+16 {
