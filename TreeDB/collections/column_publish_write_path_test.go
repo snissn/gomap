@@ -428,7 +428,6 @@ func TestColumnStoreSupportMatrixRejectsNonJSONMutationsBeforeExecutionM12C(t *t
 		Name: "events",
 		Options: CollectionOptions{
 			DocumentFormat: DocumentFormatBSON,
-			ColumnStore:    testColumnStoreConfig(nil),
 		},
 	}); err != nil {
 		t.Fatalf("CreateCollection: %v", err)
@@ -437,6 +436,21 @@ func TestColumnStoreSupportMatrixRejectsNonJSONMutationsBeforeExecutionM12C(t *t
 	if err != nil {
 		t.Fatalf("OpenCollection: %v", err)
 	}
+	doc, err := bson.Marshal(bson.D{
+		{Key: "time_us", Value: int64(1)},
+		{Key: "kind", Value: "like"},
+		{Key: "did", Value: "d1"},
+	})
+	if err != nil {
+		t.Fatalf("bson.Marshal: %v", err)
+	}
+	if _, err := col.InsertBatchValidatedBSON([][]byte{[]byte("e1"), []byte("e2")}, [][]byte{doc, doc}); err != nil {
+		t.Fatalf("InsertBatchValidatedBSON seed: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("Flush seed: %v", err)
+	}
+	installSyntheticNonJSONColumnStoreCatalogM12C(t, d, col)
 	framesBefore := countCollectionCommandWALFrames(t, dir)
 	appliedBefore := d.State().AppliedCommandLSN
 
@@ -547,9 +561,9 @@ func TestColumnStoreMutationAssetsPublishAndReopenM12C(t *testing.T) {
 	if len(parts) != 3 {
 		t.Fatalf("manifest parts=%+v, want insert/update/delete parts", parts)
 	}
-	assertColumnPhysicalAssetRowsM12C(t, d, col, parts[0], ColumnPublishOperationInsert, []string{"e1", "e2"}, []bool{false, false})
-	assertColumnPhysicalAssetRowsM12C(t, d, col, parts[1], ColumnPublishOperationUpdate, []string{"e1"}, []bool{false})
-	assertColumnPhysicalAssetRowsM12C(t, d, col, parts[2], ColumnPublishOperationDelete, []string{"e2"}, []bool{true})
+	assertColumnPhysicalAssetRowsM12C(t, d, col, columnManifestPartByReasonM12C(t, parts, ColumnPublishOperationInsert), ColumnPublishOperationInsert, []string{"e1", "e2"}, []bool{false, false})
+	assertColumnPhysicalAssetRowsM12C(t, d, col, columnManifestPartByReasonM12C(t, parts, ColumnPublishOperationUpdate), ColumnPublishOperationUpdate, []string{"e1"}, []bool{false})
+	assertColumnPhysicalAssetRowsM12C(t, d, col, columnManifestPartByReasonM12C(t, parts, ColumnPublishOperationDelete), ColumnPublishOperationDelete, []string{"e2"}, []bool{true})
 
 	if err := d.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
@@ -1890,6 +1904,48 @@ func columnManifestAllPartsForCollectionM12C(t testing.TB, d *backenddb.DB, col 
 		t.Fatalf("manifest part iterator: %v", err)
 	}
 	return parts
+}
+
+func columnManifestPartByReasonM12C(t testing.TB, parts []columnManifestPartSnapshot, operation ColumnPublishOperation) columnManifestPartSnapshot {
+	t.Helper()
+	var matches []columnManifestPartSnapshot
+	for _, part := range parts {
+		if part.Reason == string(operation) {
+			matches = append(matches, part)
+		}
+	}
+	if len(matches) != 1 {
+		t.Fatalf("manifest parts with reason %q=%d want 1; parts=%+v", operation, len(matches), parts)
+	}
+	return matches[0]
+}
+
+func installSyntheticNonJSONColumnStoreCatalogM12C(t testing.TB, d *backenddb.DB, col *Collection) {
+	t.Helper()
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("AcquireSnapshot: nil")
+	}
+	catalog, err := col.catalogForSnapshot(snap)
+	systemRoot := snapshotSystemRoot(snap)
+	_ = snap.Close()
+	if err != nil {
+		t.Fatalf("catalogForSnapshot: %v", err)
+	}
+	if catalog == nil {
+		t.Fatal("catalogForSnapshot: nil catalog")
+	}
+	meta := catalog.meta
+	meta.Options.ColumnStore = testColumnStoreConfig(nil)
+	normalized, err := normalizeCollectionMeta(meta)
+	if err != nil {
+		t.Fatalf("normalizeCollectionMeta: %v", err)
+	}
+	// This is intentionally a handle-local catalog install: the test exercises
+	// the public write preflight for a BSON column-enabled collection with real
+	// existing rows, not catalog metadata publication.
+	col.meta = normalized
+	col.rememberCatalogAtSystemRoot(systemRoot, cloneCatalogWithRootUpdates(catalog, normalized, nil, nil))
 }
 
 func assertColumnPhysicalAssetRowsM12C(t testing.TB, d *backenddb.DB, col *Collection, part columnManifestPartSnapshot, operation ColumnPublishOperation, wantIDs []string, wantDeleted []bool) {
