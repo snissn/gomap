@@ -149,6 +149,41 @@ func TestReplayInlineAppenderConcurrentAppendValuesM12A(t *testing.T) {
 	}
 }
 
+func TestReplayInlineAppenderFlushKeepsDirtyUntilSyncM12A(t *testing.T) {
+	dir := t.TempDir()
+	if err := ensureStorageLayoutDirs(dir); err != nil {
+		t.Fatalf("ensureStorageLayoutDirs: %v", err)
+	}
+	db := &DB{
+		dir:                 dir,
+		valueLogCompression: ValueLogCompressionOff,
+	}
+	app, err := newReplayInlineAppender(db, nil, nil)
+	if err != nil {
+		t.Fatalf("newReplayInlineAppender: %v", err)
+	}
+	defer func() { _ = app.close() }()
+
+	if _, err := app.AppendValues([][]byte{[]byte("unsynced-value")}); err != nil {
+		t.Fatalf("AppendValues: %v", err)
+	}
+	if !app.dirty {
+		t.Fatalf("AppendValues left appender clean, want dirty until Sync")
+	}
+	if err := app.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	if !app.dirty {
+		t.Fatalf("Flush cleared dirty state before Sync")
+	}
+	if err := app.Sync(); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	if app.dirty {
+		t.Fatalf("Sync left appender dirty")
+	}
+}
+
 func TestReplayInlineAppender_LeafPagesUseConfiguredLeafLogDir(t *testing.T) {
 	dir := t.TempDir()
 	if err := ensureStorageLayoutDirs(dir); err != nil {

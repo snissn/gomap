@@ -848,7 +848,6 @@ func (a *replayInlineAppender) Flush() error {
 	if err := a.writer.Flush(); err != nil {
 		return err
 	}
-	a.dirty = false
 	return nil
 }
 
