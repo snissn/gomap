@@ -290,10 +290,10 @@ func (c *Collection) loadColumnAssetRewriteManifestState() (columnAssetRewriteMa
 	if baseRoot == 0 {
 		return columnAssetRewriteManifestState{}, fmt.Errorf("collections: column asset rewrite missing manifest root %q", rootName)
 	}
-	if err := validateColumnManifestIdentityAtRootForScan(snap, baseRoot, *cfg.ActiveManifest); err != nil {
+	if err := validateColumnManifestIdentityAtRoot(snap, baseRoot, *cfg.ActiveManifest); err != nil {
 		return columnAssetRewriteManifestState{}, err
 	}
-	records, err := loadColumnManifestRecordsFromRootForScan(snap, baseRoot)
+	records, err := loadColumnManifestRecordsFromRoot(snap, baseRoot)
 	if err != nil {
 		return columnAssetRewriteManifestState{}, err
 	}
@@ -301,7 +301,7 @@ func (c *Collection) loadColumnAssetRewriteManifestState() (columnAssetRewriteMa
 	if err != nil {
 		return columnAssetRewriteManifestState{}, err
 	}
-	if err := validateColumnManifestSnapshotForScan(manifest, records, cfg, *cfg.ActiveManifest, meta.Name); err != nil {
+	if err := validateColumnManifestSnapshot(manifest, records, cfg, *cfg.ActiveManifest, meta.Name, "column asset rewrite"); err != nil {
 		return columnAssetRewriteManifestState{}, err
 	}
 	return columnAssetRewriteManifestState{
