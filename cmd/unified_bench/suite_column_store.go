@@ -1171,20 +1171,13 @@ func scanColumnStoreSuiteEvents(collection *collections.Collection, rows int) ([
 	var materialized int
 	var bytesRead int64
 	truncated, err := collection.ScanDocumentsFunc(rows+1, func(record collections.DocumentRecord) (bool, error) {
-		document, err := collection.Get(record.ID)
-		if err != nil {
-			return false, err
-		}
-		if document == nil {
-			return false, fmt.Errorf("document %q disappeared during row baseline scan", string(record.ID))
-		}
 		var event columnStoreDecodedEvent
-		if err := json.Unmarshal(document, &event); err != nil {
+		if err := json.Unmarshal(record.Document, &event); err != nil {
 			return false, err
 		}
 		events = append(events, event)
 		materialized++
-		bytesRead += int64(len(document))
+		bytesRead += int64(len(record.Document))
 		return true, nil
 	})
 	if err != nil {

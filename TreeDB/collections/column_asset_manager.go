@@ -363,6 +363,8 @@ func (c *columnPhysicalAssetReadCache) fileForRef(ref ColumnAssetRef) (*os.File,
 		c.files = make(map[uint32]*os.File, 2)
 		if c.file != nil {
 			c.files[c.fileID] = c.file
+			c.file = nil
+			c.fileID = 0
 		}
 	}
 	c.files[ref.FileID] = file

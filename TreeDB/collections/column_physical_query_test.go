@@ -147,6 +147,55 @@ func TestColumnPhysicalQueryAdapterAppliesMutationVisibilityM13C(t *testing.T) {
 	}
 }
 
+func TestColumnPhysicalQueryKeepsInsertOnlyMultiGenerationOnDirectPathM13C(t *testing.T) {
+	dir, _ := prepareColumnStoreCommandWALDirM10B(t)
+	d := openCollectionCommandWALDB(t, dir)
+	col := openColumnStoreCollectionM10B(t, d)
+	if _, err := col.InsertBatch([][]byte{[]byte("e1")}, [][]byte{
+		[]byte(`{"time_us":1,"kind":"like","did":"d1","payload":"alpha"}`),
+	}); err != nil {
+		_ = d.Close()
+		t.Fatalf("InsertBatch e1: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("e2")}, [][]byte{
+		[]byte(`{"time_us":2,"kind":"comment","did":"d2","payload":"beta"}`),
+	}); err != nil {
+		_ = d.Close()
+		t.Fatalf("InsertBatch e2: %v", err)
+	}
+	if got := col.meta.Options.ColumnStore.ActiveManifest.Generation; got <= 1 {
+		_ = d.Close()
+		t.Fatalf("manifest generation=%d want > 1", got)
+	}
+	if got := col.meta.Options.ColumnStore.PhysicalMutationParts; got != 0 {
+		_ = d.Close()
+		t.Fatalf("physical mutation parts=%d want 0", got)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopen := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopen.Close() }()
+	reopened := openColumnStoreCollectionM10B(t, reopen)
+	result, err := reopened.RunColumnPhysicalQuery(ColumnPhysicalQueryRequest{
+		Kind:        ColumnPhysicalQueryGroupCount,
+		GroupColumn: "kind",
+	})
+	if err != nil {
+		t.Fatalf("RunColumnPhysicalQuery: %v", err)
+	}
+	if result.Diagnostics.VisibilityRows != 0 || result.Diagnostics.ReconstructionRows != 0 {
+		t.Fatalf("insert-only diagnostics used visibility/reconstruction: %+v", result.Diagnostics)
+	}
+	if result.Diagnostics.MutationParts != 0 || result.Diagnostics.RowsScanned != 2 {
+		t.Fatalf("insert-only diagnostics=%+v want two direct rows and zero mutation parts", result.Diagnostics)
+	}
+	if got, want := columnPhysicalQueryLinesM13B("q1", result.Groups), []string{"q1:comment=1", "q1:like=1"}; !equalStringSets(got, want) {
+		t.Fatalf("query lines=%v want %v diagnostics=%+v", got, want, result.Diagnostics)
+	}
+}
+
 func TestColumnStoreGetReconstructsRetainedPayloadM13C(t *testing.T) {
 	dir, _ := prepareColumnStoreCommandWALDirM10B(t)
 	d := openCollectionCommandWALDB(t, dir)
@@ -180,6 +229,60 @@ func TestColumnStoreGetReconstructsRetainedPayloadM13C(t *testing.T) {
 	}
 	if !strings.Contains(string(raw), "payload") {
 		t.Fatalf("raw retained payload lost non-column field: %s", raw)
+	}
+}
+
+func TestColumnStoreScanDocumentsReconstructsRetainedPayloadM13C(t *testing.T) {
+	dir, _ := prepareColumnStoreCommandWALDirM10B(t)
+	d := openCollectionCommandWALDB(t, dir)
+	col := openColumnStoreCollectionM10B(t, d)
+	if _, err := col.InsertBatch([][]byte{[]byte("e1"), []byte("e2")}, [][]byte{
+		[]byte(`{"time_us":1,"kind":"like","did":"d1","payload":"alpha"}`),
+		[]byte(`{"time_us":2,"kind":"comment","did":"d2","payload":"beta"}`),
+	}); err != nil {
+		_ = d.Close()
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	if _, modified, err := col.Update([]byte("e1"), func(current []byte) ([]byte, bool, error) {
+		assertJSONEqualM13C(t, current, []byte(`{"time_us":1,"kind":"like","did":"d1","payload":"alpha"}`))
+		return []byte(`{"time_us":3,"kind":"share","did":"d1","payload":"alpha2"}`), true, nil
+	}); err != nil || !modified {
+		_ = d.Close()
+		t.Fatalf("Update modified=%t err=%v", modified, err)
+	}
+	if deleted, err := col.DeleteBatch([][]byte{[]byte("e2")}); err != nil || deleted != 1 {
+		_ = d.Close()
+		t.Fatalf("DeleteBatch deleted=%d err=%v", deleted, err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		_ = d.Close()
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopen := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopen.Close() }()
+	reopened := openColumnStoreCollectionM10B(t, reopen)
+	records, truncated, err := reopened.ScanDocuments(10)
+	if err != nil {
+		t.Fatalf("ScanDocuments: %v", err)
+	}
+	if truncated {
+		t.Fatalf("ScanDocuments truncated")
+	}
+	if len(records) != 1 {
+		t.Fatalf("ScanDocuments records=%d want 1", len(records))
+	}
+	if got, want := string(records[0].ID), "e1"; got != want {
+		t.Fatalf("ScanDocuments id=%q want %q", got, want)
+	}
+	assertJSONEqualM13C(t, records[0].Document, []byte(`{"time_us":3,"kind":"share","did":"d1","payload":"alpha2"}`))
+
+	raw := readRawPrimaryDocumentForTestM13C(t, reopen, "events", []byte("e1"))
+	if strings.Contains(string(raw), "time_us") || strings.Contains(string(raw), "kind") || strings.Contains(string(raw), "did") {
+		t.Fatalf("raw retained payload still duplicates declared fields: %s", raw)
 	}
 }
 

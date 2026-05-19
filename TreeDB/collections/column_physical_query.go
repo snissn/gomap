@@ -82,7 +82,7 @@ func (c *Collection) RunColumnPhysicalQuery(req ColumnPhysicalQueryRequest) (Col
 	if err != nil {
 		return ColumnPhysicalQueryResult{}, err
 	}
-	if cfg.ActiveManifest != nil && cfg.ActiveManifest.Generation > 1 {
+	if cfg.PhysicalMutationParts > 0 {
 		return c.runColumnPhysicalQueryWithVisibility(cfg, req)
 	}
 	exec, err := newColumnPhysicalQueryExecutor(cfg, req)

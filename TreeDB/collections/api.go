@@ -17706,8 +17706,28 @@ func (c *Collection) ScanDocumentsFunc(maxDocuments int, fn func(DocumentRecord)
 		return false, nil
 	}
 	defer func() { _ = it.Close() }()
+	reconstructDocuments := columnStoreCanReconstructDocument(catalog.meta)
+	var columnStoreConfig ColumnStoreConfig
+	var visibleRows []columnPhysicalVisibleRow
+	if reconstructDocuments {
+		columnStoreConfig = catalog.meta.Options.ColumnStore.copy()
+		visible, err := c.scanColumnPhysicalVisibleRowsAtSnapshot(
+			snap,
+			catalog,
+			catalog.meta.Name,
+			catalog.rootID(collectionColumnManifestRootName(catalog.meta.Name)),
+			columnStoreConfig,
+			true,
+			nil,
+		)
+		if err != nil {
+			return false, err
+		}
+		visibleRows = visible.Rows
+	}
 	truncated := false
 	scanned := 0
+	visiblePos := 0
 	for it.Valid() {
 		if it.IsDeleted() {
 			it.Next()
@@ -17720,6 +17740,19 @@ func (c *Collection) ScanDocumentsFunc(maxDocuments int, fn func(DocumentRecord)
 		record := DocumentRecord{
 			ID:       bytes.Clone(it.UnsafeKey()),
 			Document: it.ValueCopy(nil),
+		}
+		if reconstructDocuments {
+			for visiblePos < len(visibleRows) && bytes.Compare(visibleRows[visiblePos].ID, record.ID) < 0 {
+				visiblePos++
+			}
+			if visiblePos >= len(visibleRows) || !bytes.Equal(visibleRows[visiblePos].ID, record.ID) {
+				return false, fmt.Errorf("collections: column reconstruction missing visible physical row for id %q", string(record.ID))
+			}
+			reconstructed, err := reconstructColumnDocumentFromVisibleRow(columnStoreConfig, record.Document, visibleRows[visiblePos])
+			if err != nil {
+				return false, err
+			}
+			record.Document = reconstructed
 		}
 		scanned++
 		next, err := fn(record)

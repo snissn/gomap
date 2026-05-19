@@ -603,6 +603,7 @@ func (c *Collection) buildColumnManifestPublishSystemDeltaIterator(input ColumnM
 	cfg.ActiveManifest = &active
 	cfg.RecoveryAuthoritativeManifest = &recovery
 	cfg.RecoveryAuthoritativeAppliedCommandLSN = plan.RecoveryAuthoritativeAppliedCommandLSN
+	cfg.PhysicalMutationParts = columnPublishPhysicalMutationParts(input.BaseMeta.Options.ColumnStore, plan)
 	updatedMeta.Options.ColumnStore = &cfg
 	encodedMeta, err := encodeCollectionMeta(updatedMeta)
 	if err != nil {

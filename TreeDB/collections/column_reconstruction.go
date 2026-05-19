@@ -92,13 +92,20 @@ func (c *Collection) reconstructColumnDocumentAtSnapshotWithDiagnostics(snap *ba
 		return nil, diag, fmt.Errorf("collections: column reconstruction latest physical row is deleted for id %q", string(documentID))
 	}
 	reconstructionStart := time.Now()
-	out, err := reconstructColumnJSONDocument(cfg, retained, row.Values)
+	out, err := reconstructColumnDocumentFromVisibleRow(cfg, retained, row)
 	if err != nil {
 		return nil, diag, err
 	}
 	diag.ReconstructionNanos = time.Since(reconstructionStart).Nanoseconds()
 	diag.ReconstructionRows = 1
 	return out, diag, nil
+}
+
+func reconstructColumnDocumentFromVisibleRow(cfg ColumnStoreConfig, retained []byte, row columnPhysicalVisibleRow) ([]byte, error) {
+	if row.Deleted {
+		return nil, errors.New("collections: column reconstruction latest physical row is deleted")
+	}
+	return reconstructColumnJSONDocument(cfg, retained, row.Values)
 }
 
 func reconstructColumnJSONDocument(cfg ColumnStoreConfig, retained []byte, values []columnDeclaredValue) ([]byte, error) {

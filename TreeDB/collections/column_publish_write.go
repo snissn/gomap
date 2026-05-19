@@ -287,6 +287,7 @@ func clearColumnManifestProgress(meta CollectionMeta) CollectionMeta {
 	cfg.ActiveManifest = nil
 	cfg.RecoveryAuthoritativeManifest = nil
 	cfg.RecoveryAuthoritativeAppliedCommandLSN = 0
+	cfg.PhysicalMutationParts = 0
 	copied.Options.ColumnStore = &cfg
 	return copied
 }
@@ -543,8 +544,20 @@ func columnPublishUpdatedMeta(base CollectionMeta, plan ColumnPublishPlan) (Coll
 	cfg.ActiveManifest = &active
 	cfg.RecoveryAuthoritativeManifest = &recovery
 	cfg.RecoveryAuthoritativeAppliedCommandLSN = plan.RecoveryAuthoritativeAppliedCommandLSN
+	cfg.PhysicalMutationParts = columnPublishPhysicalMutationParts(base.Options.ColumnStore, plan)
 	updated.Options.ColumnStore = &cfg
 	return normalizeCollectionMeta(updated)
+}
+
+func columnPublishPhysicalMutationParts(base *ColumnStoreConfig, plan ColumnPublishPlan) int {
+	parts := 0
+	if base != nil {
+		parts = base.PhysicalMutationParts
+	}
+	if plan.Operation != ColumnPublishOperationInsert {
+		parts += len(plan.PreparedAssets)
+	}
+	return parts
 }
 
 func (c *Collection) buildRootDescriptorAndColumnManifestSystemDeltaIteratorForMeta(meta CollectionMeta, expectedCommitSeq, expectedSystemRoot uint64, rootNames []string, baseRootIDs map[string]uint64, rootIDs []uint64, plan ColumnPublishPlan) (iterator.UnsafeIterator, error) {
