@@ -621,6 +621,9 @@ func columnAssetReachabilitySegmentFileID(name string) (uint32, bool) {
 		return 0, false
 	}
 	raw := strings.TrimSuffix(strings.TrimPrefix(name, columnAssetSegmentFilePrefix), columnAssetSegmentFileSuffix)
+	if len(raw) != 6 {
+		return 0, false
+	}
 	id, err := strconv.ParseUint(raw, 10, 32)
 	if err != nil || id == 0 {
 		return 0, false
@@ -654,6 +657,10 @@ func mergeColumnAssetReachabilityIntervals(in []columnAssetReachabilityInterval)
 	return merged
 }
 
+// subtractColumnAssetReachabilityIntervals returns intervals from in with
+// exclude removed. Both inputs must already be sorted by start and
+// non-overlapping, for example as returned by
+// mergeColumnAssetReachabilityIntervals; behavior is undefined otherwise.
 func subtractColumnAssetReachabilityIntervals(in, exclude []columnAssetReachabilityInterval) []columnAssetReachabilityInterval {
 	if len(in) == 0 || len(exclude) == 0 {
 		return in

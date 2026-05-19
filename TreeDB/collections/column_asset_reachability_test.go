@@ -184,6 +184,62 @@ func TestColumnAssetReachabilityPlanRetainsUnknownSegmentsM15A(t *testing.T) {
 	}
 }
 
+func TestColumnAssetReachabilityPlanRetainsNonCanonicalSegmentFileM15A(t *testing.T) {
+	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col := openColumnStoreCollectionM10B(t, d)
+
+	if _, err := col.Insert([]byte("e1"), []byte(`{"time_us":1,"kind":"like","did":"d1"}`)); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	refs := columnManifestAssetRefsForCollectionM12A(t, d, col)
+	if len(refs) == 0 {
+		t.Fatal("manifest refs empty")
+	}
+	assetPath, err := columnAssetSegmentPath(d.ColumnAssetRootDir(), refs[0])
+	if err != nil {
+		t.Fatalf("columnAssetSegmentPath: %v", err)
+	}
+	info, err := os.Stat(assetPath)
+	if err != nil {
+		t.Fatalf("Stat live segment: %v", err)
+	}
+	cfg := col.Meta().Options.ColumnStore
+	namespace, err := columnAssetManagerNamespaceForRoot(d.ColumnAssetRootDir(), cfg.AssetManager.Namespace)
+	if err != nil {
+		t.Fatalf("columnAssetManagerNamespaceForRoot: %v", err)
+	}
+	nonCanonicalPath := filepath.Join(namespace.SegmentDir, "segment-1.tca")
+	if err := os.WriteFile(nonCanonicalPath, make([]byte, info.Size()), 0o600); err != nil {
+		t.Fatalf("WriteFile non-canonical segment: %v", err)
+	}
+
+	plan, err := col.PlanColumnAssetReachability(context.Background(), ColumnAssetReachabilityOptions{Detailed: true})
+	if err != nil {
+		t.Fatalf("PlanColumnAssetReachability: %v", err)
+	}
+	if plan.Complete {
+		t.Fatalf("plan marked complete despite non-canonical segment file: %+v", plan.Segments)
+	}
+	if plan.Segments.Unknown != 1 || plan.Segments.BytesUnknown != info.Size() {
+		t.Fatalf("segment stats=%+v want one unknown non-canonical segment with %d bytes", plan.Segments, info.Size())
+	}
+	found := false
+	for _, entry := range plan.SegmentEntries {
+		if entry.Path != nonCanonicalPath {
+			continue
+		}
+		found = true
+		if entry.FileID != 0 || entry.Status != ColumnAssetReachabilitySegmentUnknown || entry.UnknownBytes != info.Size() {
+			t.Fatalf("non-canonical entry=%+v want fileID=0 unknown bytes=%d", entry, info.Size())
+		}
+	}
+	if !found {
+		t.Fatalf("missing non-canonical segment entry for %s in %+v", nonCanonicalPath, plan.SegmentEntries)
+	}
+}
+
 func TestColumnAssetReachabilityPlanRetainsMissingLiveSegmentM15A(t *testing.T) {
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)
@@ -251,6 +307,24 @@ func TestColumnAssetReachabilityPlanOrdersMissingSegmentEntriesM15A(t *testing.T
 	for i, want := range []uint32{1, 2, 3} {
 		if got := plan.SegmentEntries[i].FileID; got != want {
 			t.Fatalf("segment entry %d fileID=%d want %d; entries=%+v", i, got, want, plan.SegmentEntries)
+		}
+	}
+}
+
+func TestColumnAssetReachabilitySegmentFileIDRejectsNonCanonicalM15A(t *testing.T) {
+	fileID, ok := columnAssetReachabilitySegmentFileID(columnAssetSegmentFileName(1))
+	if !ok || fileID != 1 {
+		t.Fatalf("canonical segment file parsed as fileID=%d ok=%t, want 1 true", fileID, ok)
+	}
+	for _, name := range []string{
+		"segment-1.tca",
+		"segment-000000.tca",
+		"segment-000001.extra",
+		"segment-000001.tca.bak",
+		"segment-0000010.tca",
+	} {
+		if fileID, ok := columnAssetReachabilitySegmentFileID(name); ok {
+			t.Fatalf("non-canonical segment file %q parsed as fileID=%d", name, fileID)
 		}
 	}
 }
