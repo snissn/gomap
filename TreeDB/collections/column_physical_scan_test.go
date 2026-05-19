@@ -247,6 +247,50 @@ func TestColumnPhysicalSerialScannerDoesNotEnableAutomaticPlannerRoutingM14B(t *
 	}
 }
 
+func TestColumnPhysicalScanSnapshotViewPinsManifestRefsM14B(t *testing.T) {
+	reopened, closeFn := openColumnPhysicalInsertMultiGenerationFixtureM14B(t, 4)
+	defer closeFn()
+
+	view, closeView, err := reopened.prepareColumnPhysicalScanSnapshotView()
+	if err != nil {
+		t.Fatalf("prepareColumnPhysicalScanSnapshotView: %v", err)
+	}
+	defer closeView()
+	if got, want := len(view.AssetRefs), 4; got != want {
+		t.Fatalf("prepared refs=%d want %d", got, want)
+	}
+	preparedGeneration := view.Diagnostics.ManifestGeneration
+	if _, err := reopened.InsertBatch([][]byte{[]byte("new")}, [][]byte{
+		[]byte(`{"time_us":99,"kind":"kind_new","did":"did_new","payload":"after_view"}`),
+	}); err != nil {
+		t.Fatalf("InsertBatch after prepared view: %v", err)
+	}
+	if got := reopened.meta.Options.ColumnStore.ActiveManifest.Generation; got <= preparedGeneration {
+		t.Fatalf("active generation=%d did not advance past prepared generation %d", got, preparedGeneration)
+	}
+
+	var scanned int
+	diag, err := reopened.scanColumnPhysicalRowsInSnapshotView(view, columnPhysicalScanRequest{
+		ProjectedColumns: []string{"time_us", "kind"},
+		Visitor: func(row columnPhysicalScanRowView) error {
+			scanned++
+			if string(row.ID) == "new" {
+				t.Fatalf("prepared scan view observed row inserted after view preparation")
+			}
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("scanColumnPhysicalRowsInSnapshotView: %v", err)
+	}
+	if scanned != 4 || diag.RowsScanned != 4 || diag.ScheduledGranules != 4 || diag.AssetRefs != 4 {
+		t.Fatalf("scan diagnostics=%+v scanned=%d want only the four prepared refs", diag, scanned)
+	}
+	if diag.ManifestGeneration != preparedGeneration {
+		t.Fatalf("scan generation=%d want prepared generation %d", diag.ManifestGeneration, preparedGeneration)
+	}
+}
+
 func TestColumnPhysicalSerialScannerRejectsInvalidProjectionM13A(t *testing.T) {
 	cfg := *testColumnStoreConfig(nil)
 	for _, tc := range []struct {

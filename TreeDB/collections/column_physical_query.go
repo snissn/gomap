@@ -121,13 +121,17 @@ func (c *Collection) RunColumnPhysicalQueryParallel(req ColumnPhysicalQueryReque
 	if maxWorkers <= 1 {
 		return c.RunColumnPhysicalQuery(req)
 	}
-	cfg, err := c.columnPhysicalQueryColumnStoreConfig()
+	view, closeView, err := c.prepareColumnPhysicalScanSnapshotView()
+	if closeView != nil {
+		defer closeView()
+	}
 	if err != nil {
 		return ColumnPhysicalQueryResult{}, err
 	}
-	if cfg.PhysicalMutationParts > 0 {
+	if view.MutationParts > 0 {
 		return ColumnPhysicalQueryResult{}, fmt.Errorf("%w: parallel physical column query requires insert-only manifest until partitioned visibility execution lands", ErrColumnQueryPlanUnsupported)
 	}
+	cfg := view.Config
 	merged, err := newColumnPhysicalQueryExecutor(cfg, req)
 	if err != nil {
 		return ColumnPhysicalQueryResult{}, err
@@ -151,7 +155,7 @@ func (c *Collection) RunColumnPhysicalQueryParallel(req ColumnPhysicalQueryReque
 				results[worker].err = err
 				return
 			}
-			diag, err := c.scanColumnPhysicalRows(columnPhysicalScanRequest{
+			diag, err := c.scanColumnPhysicalRowsInSnapshotView(view, columnPhysicalScanRequest{
 				ProjectedColumns:    exec.projected,
 				Visitor:             exec.visit,
 				RequireInsertOnly:   true,
