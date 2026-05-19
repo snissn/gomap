@@ -334,6 +334,9 @@ func prepareColumnWritePublishInputBeforeCommandWAL(input columnWritePublishInpu
 		input.declaredRowsReady = true
 		return input, nil
 	case ColumnPublishOperationDelete:
+		if len(input.documents) != input.rows {
+			return columnWritePublishInput{}, fmt.Errorf("collections: column physical asset delete documents=%d rows=%d", len(input.documents), input.rows)
+		}
 		input.declaredRowsReady = true
 		return input, nil
 	default:
