@@ -65,6 +65,11 @@ type ColumnAssetReachabilityPlan struct {
 	SegmentEntries             []ColumnAssetReachabilitySegmentEntry
 }
 
+// ColumnAssetReachabilitySourceStats counts unique ref contributions by
+// logical reachability source. M15A only plans from an active
+// recovery-authoritative manifest view, so active and recovery manifest refs
+// are intentionally the same logical liveness set unless a future milestone
+// introduces distinct roots.
 type ColumnAssetReachabilitySourceStats struct {
 	ManifestRoots        int
 	ManifestRecords      int
