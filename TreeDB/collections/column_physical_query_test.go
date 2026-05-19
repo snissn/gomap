@@ -232,6 +232,44 @@ func TestColumnStoreGetReconstructsRetainedPayloadM13C(t *testing.T) {
 	}
 }
 
+func TestColumnStoreRetainedPayloadDisablesDirectBufferedUpdateM13C(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), Durability: backenddb.DurabilityWALOffRelaxed})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	col := &Collection{
+		db:          d,
+		writeDomain: &collectionWriteDomain{},
+	}
+	opts := collectionOptions{documentFormat: DocumentFormatBSON}
+	changed := []preparedBatchUpdate{{
+		documentID:      []byte("e1"),
+		document:        []byte("full-document"),
+		primaryDocument: []byte("retained-document"),
+	}}
+	noColumnMeta := CollectionMeta{Name: "events"}
+	if !col.shouldUseDirectBufferedUpdatePlan(noColumnMeta, opts, true, updateBatchModeNoSecondaryUniqueIndexChanges, nil, changed, true) {
+		t.Fatal("control metadata did not use direct buffered update plan")
+	}
+	columnMeta, err := normalizeCollectionMeta(CollectionMeta{
+		Name: "events",
+		Options: CollectionOptions{
+			ColumnStore: testColumnStoreConfig(nil),
+		},
+	})
+	if err != nil {
+		t.Fatalf("normalize column meta: %v", err)
+	}
+	if !columnStoreNeedsRetainedPayloadTransform(columnMeta) {
+		t.Fatalf("column metadata does not require retained payload transform: %+v", columnMeta.Options.ColumnStore)
+	}
+	if col.shouldUseDirectBufferedUpdatePlan(columnMeta, opts, true, updateBatchModeNoSecondaryUniqueIndexChanges, nil, changed, true) {
+		t.Fatal("retained-payload column store used direct buffered update plan")
+	}
+}
+
 func TestColumnStoreScanDocumentsReconstructsRetainedPayloadM13C(t *testing.T) {
 	dir, _ := prepareColumnStoreCommandWALDirM10B(t)
 	d := openCollectionCommandWALDB(t, dir)

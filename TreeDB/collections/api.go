@@ -12963,6 +12963,9 @@ func (c *Collection) shouldUseDirectBufferedUpdatePlan(meta CollectionMeta, opts
 	if len(changed) == 0 {
 		return false
 	}
+	if columnStoreNeedsRetainedPayloadTransform(meta) {
+		return false
+	}
 	if len(meta.Indexes) == 0 {
 		return c.canBufferDirectUpdateAck() &&
 			mode == updateBatchModeNoSecondaryUniqueIndexChanges &&
