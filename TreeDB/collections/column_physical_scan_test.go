@@ -119,6 +119,61 @@ func TestColumnPhysicalSerialScannerExposesMutationRowsM13A(t *testing.T) {
 	assertColumnPhysicalScanRowM13A(t, rows[3], ColumnPublishOperationDelete, "e2", true, 0, "")
 }
 
+func TestColumnPhysicalSerialScannerUsesSnapshotCatalogM13A(t *testing.T) {
+	dir, _ := prepareColumnStoreCommandWALDirM10B(t)
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+
+	col := openColumnStoreCollectionM10B(t, d)
+	if _, err := col.Insert([]byte("e1"), []byte(`{"time_us":1,"kind":"like","did":"d1"}`)); err != nil {
+		t.Fatalf("first Insert: %v", err)
+	}
+
+	staleSnap := d.AcquireSnapshot()
+	if staleSnap == nil {
+		t.Fatal("AcquireSnapshot returned nil")
+	}
+	staleCatalog, err := loadCollectionCatalog(staleSnap, "events")
+	if err != nil {
+		_ = staleSnap.Close()
+		t.Fatalf("load stale catalog: %v", err)
+	}
+	staleSystemRoot := snapshotSystemRoot(staleSnap)
+	staleCommitSeq := snapshotCommitSeq(staleSnap)
+	if err := staleSnap.Close(); err != nil {
+		t.Fatalf("close stale snapshot: %v", err)
+	}
+
+	if _, err := col.Insert([]byte("e2"), []byte(`{"time_us":2,"kind":"post","did":"d2"}`)); err != nil {
+		t.Fatalf("second Insert: %v", err)
+	}
+	col.catalogMu.Lock()
+	col.catalog = staleCatalog
+	col.catalogSystemRoot = staleSystemRoot
+	col.catalogCommitSeq = staleCommitSeq
+	col.catalogMu.Unlock()
+
+	var rows []columnPhysicalScanRowForTest
+	diag, err := col.scanColumnPhysicalRows(columnPhysicalScanRequest{
+		ProjectedColumns: []string{"time_us"},
+		Visitor: func(row columnPhysicalScanRowView) error {
+			rows = append(rows, copyColumnPhysicalScanRowForTest(row))
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("scanColumnPhysicalRows: %v", err)
+	}
+	if diag.ManifestGeneration != 2 || diag.AssetRefs != 2 || diag.RowsScanned != 2 {
+		t.Fatalf("scan diagnostics=%+v want latest snapshot generation=2 with two rows", diag)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("rows=%d want latest snapshot rows", len(rows))
+	}
+	assertColumnPhysicalScanRowM13A(t, rows[0], ColumnPublishOperationInsert, "e1", false, int64(1), "")
+	assertColumnPhysicalScanRowM13A(t, rows[1], ColumnPublishOperationInsert, "e2", false, int64(2), "")
+}
+
 func TestColumnPhysicalSerialScannerFailsClosedMissingAssetM13A(t *testing.T) {
 	dir, ref := prepareColumnPhysicalScannerCorruptionFixtureM13A(t)
 	assetPath, err := columnAssetSegmentPath(backenddb.ColumnAssetRootDirPath(dir), ref)
@@ -238,7 +293,7 @@ func TestColumnPhysicalAssetSerialScanRejectsWrongCollectionM13A(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newColumnPhysicalScanProjection: %v", err)
 	}
-	_, err = scanColumnPhysicalAssetRows(encoded, ref, "other_events", *normalized, projection, nil)
+	_, err = scanColumnPhysicalAssetRows(encoded, ref, "other_events", normalized, projection, nil)
 	if err == nil || !strings.Contains(err.Error(), "collection") {
 		t.Fatalf("scan err=%v want collection mismatch", err)
 	}
@@ -270,7 +325,7 @@ func TestColumnPhysicalAssetSerialScanRejectsV1DeleteOperationM13A(t *testing.T)
 	if err != nil {
 		t.Fatalf("newColumnPhysicalScanProjection: %v", err)
 	}
-	_, err = scanColumnPhysicalAssetRows(encoded, ref, "events", *normalized, projection, nil)
+	_, err = scanColumnPhysicalAssetRows(encoded, ref, "events", normalized, projection, nil)
 	if err == nil || !strings.Contains(err.Error(), "legacy v1 column physical asset delete operation unsupported") {
 		t.Fatalf("scan err=%v want legacy v1 delete unsupported", err)
 	}
@@ -414,7 +469,7 @@ func TestColumnPhysicalAssetSerialScanNumericProjectionHasZeroAllocsM13A(t *test
 		if scanErr != nil {
 			return
 		}
-		summary, err := scanColumnPhysicalAssetRows(encoded, ref, "events", *normalized, projection, func(row columnPhysicalScanRowView) error {
+		summary, err := scanColumnPhysicalAssetRows(encoded, ref, "events", normalized, projection, func(row columnPhysicalScanRowView) error {
 			sum += row.Values[0].Int64
 			return nil
 		})

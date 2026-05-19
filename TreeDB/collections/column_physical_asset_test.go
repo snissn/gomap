@@ -923,7 +923,7 @@ func BenchmarkColumnPhysicalAssetSerialScanM13A(b *testing.B) {
 			b.SetBytes(int64(len(encoded)))
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				summary, err := scanColumnPhysicalAssetRows(encoded, ref, "events", *normalized, projection, func(row columnPhysicalScanRowView) error {
+				summary, err := scanColumnPhysicalAssetRows(encoded, ref, "events", normalized, projection, func(row columnPhysicalScanRowView) error {
 					if len(row.Values) != 1 {
 						return fmt.Errorf("values=%d want one projected value", len(row.Values))
 					}
@@ -1005,6 +1005,9 @@ func BenchmarkColumnPhysicalCollectionSerialScanM13A(b *testing.B) {
 		diag, err := reopened.scanColumnPhysicalRows(req)
 		if err != nil {
 			b.Fatal(err)
+		}
+		if diag.PhysicalBytesScanned != preview.PhysicalBytesScanned {
+			b.Fatalf("physical bytes scanned=%d want preview %d", diag.PhysicalBytesScanned, preview.PhysicalBytesScanned)
 		}
 		rows += int64(diag.RowsScanned)
 	}
