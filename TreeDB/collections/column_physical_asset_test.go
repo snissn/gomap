@@ -212,6 +212,61 @@ func TestColumnPhysicalAssetDecodeV1CompatibilityM12C(t *testing.T) {
 	}
 }
 
+func TestColumnPhysicalAssetRejectsUnsupportedOperationEmptyRowsM12C(t *testing.T) {
+	cfg := testColumnStoreConfig(nil)
+	normalized, err := normalizeColumnStoreConfig("events", cfg)
+	if err != nil {
+		t.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+	badOperation := ColumnPublishOperation("rewrite")
+	if _, _, err := encodeColumnPhysicalAsset(columnPhysicalAssetEncodeInput{
+		Collection:        "events",
+		Namespace:         normalized.AssetManager.Namespace,
+		Generation:        10,
+		PartID:            1,
+		AppliedCommandLSN: 104,
+		Operation:         badOperation,
+		SchemaHash:        normalized.SchemaHash,
+		Columns:           normalized.Columns,
+	}); err == nil || !strings.Contains(err.Error(), "unsupported column physical asset operation") {
+		t.Fatalf("encode unsupported operation err=%v want unsupported operation failure", err)
+	}
+
+	var raw bytes.Buffer
+	writeManifestUint32(&raw, columnPhysicalAssetMagic)
+	writeManifestUint16(&raw, columnPhysicalAssetVersion)
+	writeManifestString(&raw, "events")
+	writeManifestString(&raw, normalized.AssetManager.Namespace)
+	writeManifestUint64(&raw, 10)
+	writeManifestUint64(&raw, 1)
+	writeManifestUint64(&raw, 104)
+	writeManifestString(&raw, string(badOperation))
+	writeManifestUint64(&raw, normalized.SchemaHash)
+	writeManifestUint64(&raw, uint64(len(normalized.Columns)))
+	writeManifestUint64(&raw, 0)
+	for _, col := range normalized.Columns {
+		writeManifestString(&raw, col.Name)
+		writeManifestString(&raw, col.Path)
+		writeManifestString(&raw, string(col.ValueType))
+		writeManifestBool(&raw, col.Nullable)
+		writeManifestBool(&raw, col.Dictionary)
+	}
+	encoded := raw.Bytes()
+	ref := ColumnAssetRef{
+		Kind:       ColumnAssetKindTCS1PartImage,
+		Namespace:  normalized.AssetManager.Namespace,
+		Generation: 10,
+		PartID:     1,
+		FileID:     1,
+		Offset:     0,
+		Length:     int64(len(encoded)),
+		Checksum:   page.Checksum(encoded),
+	}
+	if err := validateColumnPhysicalAssetForManifest(encoded, ref, *normalized); err == nil || !strings.Contains(err.Error(), "unsupported column physical asset operation") {
+		t.Fatalf("validate unsupported operation err=%v want unsupported operation failure", err)
+	}
+}
+
 func TestColumnPhysicalAssetDeleteRowsM12C(t *testing.T) {
 	cfg := testColumnStoreConfig(nil)
 	normalized, err := normalizeColumnStoreConfig("events", cfg)

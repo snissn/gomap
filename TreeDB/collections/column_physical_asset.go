@@ -191,6 +191,9 @@ func encodeColumnPhysicalAsset(input columnPhysicalAssetEncodeInput) ([]byte, co
 	if input.Collection == "" || input.Namespace == "" || input.Generation == 0 || input.PartID == 0 {
 		return nil, columnPhysicalAssetSummary{}, errors.New("collections: column physical asset missing collection, namespace, generation, or part_id")
 	}
+	if !isSupportedColumnPhysicalAssetOperation(input.Operation) {
+		return nil, columnPhysicalAssetSummary{}, fmt.Errorf("collections: unsupported column physical asset operation %q", input.Operation)
+	}
 	for rowIdx, row := range input.Rows {
 		switch input.Operation {
 		case ColumnPublishOperationInsert, ColumnPublishOperationUpdate:
@@ -388,6 +391,9 @@ func validateColumnPhysicalAssetForManifest(raw []byte, ref ColumnAssetRef, cfg 
 	if asset.Header.RowCount != len(asset.Rows) {
 		return fmt.Errorf("collections: column physical asset row_count=%d rows=%d", asset.Header.RowCount, len(asset.Rows))
 	}
+	if !isSupportedColumnPhysicalAssetOperation(asset.Header.Operation) {
+		return fmt.Errorf("collections: unsupported column physical asset operation %q", asset.Header.Operation)
+	}
 	for rowIdx, row := range asset.Rows {
 		switch asset.Header.Operation {
 		case ColumnPublishOperationInsert, ColumnPublishOperationUpdate:
@@ -418,6 +424,15 @@ func validateColumnPhysicalAssetForManifest(raw []byte, ref ColumnAssetRef, cfg 
 		}
 	}
 	return nil
+}
+
+func isSupportedColumnPhysicalAssetOperation(operation ColumnPublishOperation) bool {
+	switch operation {
+	case ColumnPublishOperationInsert, ColumnPublishOperationUpdate, ColumnPublishOperationDelete:
+		return true
+	default:
+		return false
+	}
 }
 
 func writeManifestBool(b *bytes.Buffer, value bool) {
