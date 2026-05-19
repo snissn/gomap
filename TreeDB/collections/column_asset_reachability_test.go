@@ -206,6 +206,32 @@ func TestColumnAssetReachabilityPlanRetainsMissingLiveSegmentM15A(t *testing.T) 
 	}
 }
 
+func TestColumnAssetReachabilitySegmentAccountingPreservesKnownBytesWhenUnknownM15A(t *testing.T) {
+	protected := classifyColumnAssetReachabilitySegment(columnAssetReachabilitySegment{fileID: 1, bytes: 100}, []columnAssetReachabilityRange{{
+		start:  0,
+		end:    40,
+		status: ColumnAssetReachabilityProtected,
+	}})
+	if protected.status != ColumnAssetReachabilitySegmentUnknown ||
+		protected.protectedBytes != 40 ||
+		protected.reclaimableBytes != 0 ||
+		protected.unknownBytes != 60 {
+		t.Fatalf("protected unknown segment plan=%+v want protected=40 unknown=60", protected)
+	}
+
+	reclaimable := classifyColumnAssetReachabilitySegment(columnAssetReachabilitySegment{fileID: 1, bytes: 100}, []columnAssetReachabilityRange{{
+		start:  10,
+		end:    50,
+		status: ColumnAssetReachabilityReclaimable,
+	}})
+	if reclaimable.status != ColumnAssetReachabilitySegmentUnknown ||
+		reclaimable.protectedBytes != 0 ||
+		reclaimable.reclaimableBytes != 40 ||
+		reclaimable.unknownBytes != 60 {
+		t.Fatalf("reclaimable unknown segment plan=%+v want reclaimable=40 unknown=60", reclaimable)
+	}
+}
+
 func prepareColumnAssetReachabilityCommandWALDirM15A(t *testing.T) string {
 	t.Helper()
 	dir, baseLSN := prepareColumnStoreCommandWALDirM10B(t)

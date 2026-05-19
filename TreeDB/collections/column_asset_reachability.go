@@ -439,15 +439,18 @@ func classifyColumnAssetReachabilitySegment(segment columnAssetReachabilitySegme
 		status := ColumnAssetReachabilitySegmentUnknown
 		protectedBytes := int64(0)
 		reclaimableBytes := int64(0)
+		if allProtected {
+			protectedBytes = coveredBytes
+		} else {
+			reclaimableBytes = coveredBytes
+		}
 		switch {
 		case unknownBytes != 0 || outOfBounds != 0:
 			status = ColumnAssetReachabilitySegmentUnknown
 		case allProtected:
 			status = ColumnAssetReachabilitySegmentProtected
-			protectedBytes = coveredBytes
 		default:
 			status = ColumnAssetReachabilitySegmentReclaimable
-			reclaimableBytes = coveredBytes
 		}
 		return columnAssetReachabilitySegmentPlan{
 			status:           status,
