@@ -163,6 +163,19 @@ type columnVectorGraphDeep1BGroundtruthMethodReport struct {
 	EstimatedRowCodeBytesPerQuery   float64 `json:"estimated_row_code_bytes_per_query,omitempty"`
 	EstimatedTotalBytesPerQuery     float64 `json:"estimated_total_bytes_per_query,omitempty"`
 	EstimatedBytesReadStatus        string  `json:"estimated_bytes_read_status,omitempty"`
+	CandidateRows                   int     `json:"candidate_rows,omitempty"`
+	CompressedScanNanosPerQuery     float64 `json:"compressed_scan_nanos_per_query,omitempty"`
+	ExactFP32RerankNanosPerVector   float64 `json:"exact_fp32_rerank_nanos_per_vector,omitempty"`
+	CascadeFP32Top20NanosPerQuery   float64 `json:"cascade_fp32_top20_nanos_per_query,omitempty"`
+	CascadeFP32Top50NanosPerQuery   float64 `json:"cascade_fp32_top50_nanos_per_query,omitempty"`
+	CascadeFP32Top100NanosPerQuery  float64 `json:"cascade_fp32_top100_nanos_per_query,omitempty"`
+	FP32RerankTop20BytesPerQuery    float64 `json:"fp32_rerank_top20_bytes_per_query,omitempty"`
+	FP32RerankTop50BytesPerQuery    float64 `json:"fp32_rerank_top50_bytes_per_query,omitempty"`
+	FP32RerankTop100BytesPerQuery   float64 `json:"fp32_rerank_top100_bytes_per_query,omitempty"`
+	CascadeFP32Top20BytesPerQuery   float64 `json:"cascade_fp32_top20_bytes_per_query,omitempty"`
+	CascadeFP32Top50BytesPerQuery   float64 `json:"cascade_fp32_top50_bytes_per_query,omitempty"`
+	CascadeFP32Top100BytesPerQuery  float64 `json:"cascade_fp32_top100_bytes_per_query,omitempty"`
+	CascadeEstimateStatus           string  `json:"cascade_estimate_status,omitempty"`
 	BuildNanos                      int64   `json:"build_nanos"`
 	ScanNanosPerVector              float64 `json:"scan_nanos_per_vector"`
 	Top10Overlap                    int     `json:"top10_overlap"`
@@ -826,9 +839,32 @@ func columnVectorGraphDeep1BSetEstimatedCandidateBytesRead(method *columnVectorG
 		return
 	}
 	rows := float64(candidateRows)
+	method.CandidateRows = candidateRows
 	method.EstimatedRowCodeBytesPerQuery = method.RowCodeBytesPerVector * rows
 	method.EstimatedTotalBytesPerQuery = method.TotalBytesPerVector * rows
 	method.EstimatedBytesReadStatus = "selected_candidate_row_codes_plus_metadata_amortized_bytes_not_cache_aware_io"
+}
+
+func columnVectorGraphDeep1BSetCascadeFP32RerankEstimate(method *columnVectorGraphDeep1BGroundtruthMethodReport, candidateRows int, dims int, exactFP32RerankNanosPerVector float64) {
+	if candidateRows <= 0 || dims <= 0 {
+		return
+	}
+	if method.CandidateRows == 0 {
+		method.CandidateRows = candidateRows
+	}
+	method.CompressedScanNanosPerQuery = method.ScanNanosPerVector * float64(candidateRows)
+	method.ExactFP32RerankNanosPerVector = exactFP32RerankNanosPerVector
+	method.CascadeFP32Top20NanosPerQuery = method.CompressedScanNanosPerQuery + exactFP32RerankNanosPerVector*float64(min(20, candidateRows))
+	method.CascadeFP32Top50NanosPerQuery = method.CompressedScanNanosPerQuery + exactFP32RerankNanosPerVector*float64(min(50, candidateRows))
+	method.CascadeFP32Top100NanosPerQuery = method.CompressedScanNanosPerQuery + exactFP32RerankNanosPerVector*float64(min(100, candidateRows))
+	fp32BytesPerVector := float64(dims*4 + 4)
+	method.FP32RerankTop20BytesPerQuery = fp32BytesPerVector * float64(min(20, candidateRows))
+	method.FP32RerankTop50BytesPerQuery = fp32BytesPerVector * float64(min(50, candidateRows))
+	method.FP32RerankTop100BytesPerQuery = fp32BytesPerVector * float64(min(100, candidateRows))
+	method.CascadeFP32Top20BytesPerQuery = method.EstimatedTotalBytesPerQuery + method.FP32RerankTop20BytesPerQuery
+	method.CascadeFP32Top50BytesPerQuery = method.EstimatedTotalBytesPerQuery + method.FP32RerankTop50BytesPerQuery
+	method.CascadeFP32Top100BytesPerQuery = method.EstimatedTotalBytesPerQuery + method.FP32RerankTop100BytesPerQuery
+	method.CascadeEstimateStatus = "estimated_from_measured_compressed_scan_kernel_and_measured_resident_fp32_rowid_rerank_kernel_excludes_topk_selection_io_and_cache_effects"
 }
 
 func columnVectorGraphDeep1BFillGroundtruthMethodMetrics(method *columnVectorGraphDeep1BGroundtruthMethodReport, exact []float32, approximate []float32, margins map[string]float64) {

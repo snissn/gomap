@@ -1071,6 +1071,8 @@ func columnVectorGraphDeep1BAnalyzeBuildableGranuleSelection(tb testing.TB, vect
 	q.RoutingRecallAt10 = float64(q.RoutingTop10InCandidates) / float64(min(10, len(globalTopRows)))
 	q.RoutingRecallAt20 = float64(q.RoutingTop20InCandidates) / float64(min(20, len(globalTopRows)))
 	q.RoutingRecallAt50 = float64(q.RoutingTop50InCandidates) / float64(min(50, len(globalTopRows)))
+	rowIDs := columnVectorGraphDeep1BSelectedRowIDs(selected)
+	exactFP32RerankNanosPerVector := columnVectorGraphDeep1BMeasureBuildableExactFP32Rerank(vectors, invNorms, query, queryInvNorm, rowIDs, scanIters)
 	q.Methods = append(q.Methods, columnVectorGraphDeep1BEvaluateBuildableScalarMethod(vectors, invNorms, query, queryInvNorm, candidateExact, q.CandidateExactMargins, selected, builder, 8, "per_dim", "reconstructed", scanIters))
 	q.Methods = append(q.Methods, columnVectorGraphDeep1BEvaluateBuildableScalarMethod(vectors, invNorms, query, queryInvNorm, candidateExact, q.CandidateExactMargins, selected, builder, 4, "per_dim", "reconstructed", scanIters))
 	for _, model := range pqModels {
@@ -1089,7 +1091,29 @@ func columnVectorGraphDeep1BAnalyzeBuildableGranuleSelection(tb testing.TB, vect
 	for _, rank := range columnVectorGraphDeep1BFilterRanksForRows(tb, ranks, minSelectedRows, dims) {
 		q.Methods = append(q.Methods, columnVectorGraphDeep1BEvaluateBuildablePCAMethod(tb, vectors, invNorms, query, queryInvNorm, candidateExact, q.CandidateExactMargins, selected, builder, rank, scanIters))
 	}
+	for i := range q.Methods {
+		columnVectorGraphDeep1BSetCascadeFP32RerankEstimate(&q.Methods[i], candidateRows, dims, exactFP32RerankNanosPerVector)
+	}
 	return q
+}
+
+func columnVectorGraphDeep1BMeasureBuildableExactFP32Rerank(vectors []float32, invNorms []float32, query []float32, queryInvNorm float32, rowIDs []int, scanIters int) float64 {
+	rows := min(100, len(rowIDs))
+	if rows <= 0 {
+		return 0
+	}
+	dims := columnVectorGraphDeep1BDims
+	return columnVectorGraphDeep1BMeasureGroundtruthScan(rows, scanIters, func(dst []float32) {
+		for i := 0; i < rows; i++ {
+			rowID := rowIDs[i]
+			base := rowID * dims
+			var dot float32
+			for j := 0; j < dims; j++ {
+				dot += query[j] * vectors[base+j]
+			}
+			dst[i] = dot * queryInvNorm * invNorms[rowID]
+		}
+	})
 }
 
 func columnVectorGraphDeep1BEvaluateBuildableScalarMethod(vectors []float32, invNorms []float32, query []float32, queryInvNorm float32, exactScores []float32, margins map[string]float64, selected []columnVectorGraphDeep1BBuildableGranule, builder string, bits int, policy string, normMode string, scanIters int) columnVectorGraphDeep1BGroundtruthMethodReport {
@@ -1478,11 +1502,11 @@ func columnVectorGraphDeep1BRenderBuildableGranuleScoutMarkdown(report columnVec
 	}
 	fmt.Fprintf(&b, "\n## Conditional Codec Results\n\n")
 	fmt.Fprintf(&b, "These codec metrics are conditional on the selected buildable granules. A method can look good here while the routing row above still fails to bring global winners into the candidate set.\n\n")
-	fmt.Fprintf(&b, "| Query | Top granules | Method | Row-code B/vector | Metadata B/vector | Build ms | Compressed top10 | Top10 in approx@20 | Top10 in approx@50 | Top10 in approx@100 | Top20 in approx@50 | Top20 in approx@100 | Rerank@50 recall@10 | Rerank@100 recall@10 | Mean score err | Err/gap10 | Err/gap20 | Err/gap50 | Scan ns/vector |\n")
-	fmt.Fprintf(&b, "| ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
+	fmt.Fprintf(&b, "| Query | Top granules | Method | Row-code B/vector | Metadata B/vector | Build ms | Compressed top10 | Top10 in approx@20 | Top10 in approx@50 | Top10 in approx@100 | Top20 in approx@50 | Top20 in approx@100 | Rerank@50 recall@10 | Rerank@100 recall@10 | Mean score err | Err/gap10 | Err/gap20 | Err/gap50 | Scan ns/vector | Cascade@50 us | Cascade@100 us | Cascade@50 KiB |\n")
+	fmt.Fprintf(&b, "| ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
 	for _, q := range report.Queries {
 		for _, method := range q.Methods {
-			fmt.Fprintf(&b, "| %d | %d | `%s` | %.2f | %.2f | %.3f | %d/10 | %s | %s | %s | %s | %s | %.2f | %.2f | %.5f | %.2f | %.2f | %.2f | %.2f |\n",
+			fmt.Fprintf(&b, "| %d | %d | `%s` | %.2f | %.2f | %.3f | %d/10 | %s | %s | %s | %s | %s | %.2f | %.2f | %.5f | %.2f | %.2f | %.2f | %.2f | %.2f | %.2f | %.1f |\n",
 				q.QueryIndex,
 				q.TopGranules,
 				method.Name,
@@ -1502,6 +1526,9 @@ func columnVectorGraphDeep1BRenderBuildableGranuleScoutMarkdown(report columnVec
 				method.MeanErrorOverGap20,
 				method.MeanErrorOverGap50,
 				method.ScanNanosPerVector,
+				method.CascadeFP32Top50NanosPerQuery/1e3,
+				method.CascadeFP32Top100NanosPerQuery/1e3,
+				method.CascadeFP32Top50BytesPerQuery/1024,
 			)
 		}
 	}
@@ -1639,6 +1666,15 @@ func columnVectorGraphDeep1BRenderBuildableAggregateMarkdown(b *strings.Builder,
 		rerank20   []float64
 		rerank50   []float64
 		rerank100  []float64
+		candidates []int
+		scanQuery  []float64
+		exactFP32  float64
+		cascade20  []float64
+		cascade50  []float64
+		cascade100 []float64
+		bytes20    float64
+		bytes50    float64
+		bytes100   float64
 	}
 	byName := make(map[string]*aggregate)
 	var names []string
@@ -1671,6 +1707,15 @@ func columnVectorGraphDeep1BRenderBuildableAggregateMarkdown(b *strings.Builder,
 			agg.rerank20 = append(agg.rerank20, method.ExactRerankRecallAt10FromTop20)
 			agg.rerank50 = append(agg.rerank50, method.ExactRerankRecallAt10FromTop50)
 			agg.rerank100 = append(agg.rerank100, method.ExactRerankRecallAt10FromTop100)
+			agg.candidates = append(agg.candidates, method.CandidateRows)
+			agg.scanQuery = append(agg.scanQuery, method.CompressedScanNanosPerQuery)
+			agg.exactFP32 += method.ExactFP32RerankNanosPerVector
+			agg.cascade20 = append(agg.cascade20, method.CascadeFP32Top20NanosPerQuery)
+			agg.cascade50 = append(agg.cascade50, method.CascadeFP32Top50NanosPerQuery)
+			agg.cascade100 = append(agg.cascade100, method.CascadeFP32Top100NanosPerQuery)
+			agg.bytes20 += method.CascadeFP32Top20BytesPerQuery
+			agg.bytes50 += method.CascadeFP32Top50BytesPerQuery
+			agg.bytes100 += method.CascadeFP32Top100BytesPerQuery
 		}
 	}
 	sort.Slice(names, func(i, j int) bool {
@@ -1698,6 +1743,11 @@ func columnVectorGraphDeep1BRenderBuildableAggregateMarkdown(b *strings.Builder,
 		sort.Float64s(agg.rerank20)
 		sort.Float64s(agg.rerank50)
 		sort.Float64s(agg.rerank100)
+		sort.Ints(agg.candidates)
+		sort.Float64s(agg.scanQuery)
+		sort.Float64s(agg.cascade20)
+		sort.Float64s(agg.cascade50)
+		sort.Float64s(agg.cascade100)
 		count := float64(max(1, agg.count))
 		fmt.Fprintf(b, "| `%s` | %d | %.2f | %.2f | %.1f | %.1f | %.3f | %d/10 | %d/10 | %d/10 | %d/10 | %d/10 | %d/10 | %d/10 | %d/10 | %d/10 | %d/10 | %d/10 | %d/10 | %d/20 | %d/20 | %d/20 | %d/20 | %d/20 | %d/20 | %.2f | %.2f | %.2f | %.2f | %.2f | %.2f | %.2f | %.2f | %.2f | %.5f | %.2f | %.2f | %.2f | %.2f |\n",
 			agg.name,
@@ -1739,6 +1789,33 @@ func columnVectorGraphDeep1BRenderBuildableAggregateMarkdown(b *strings.Builder,
 			agg.gap20/count,
 			agg.gap50/count,
 			agg.scanNanos/count,
+		)
+	}
+	fmt.Fprintf(b, "\n## Aggregate Cascade Cost Estimates\n\n")
+	fmt.Fprintf(b, "These are first-order cascade estimates, not full end-to-end query latency: compressed scan time is measured with each method's scan kernel, fp32 rerank time is measured with a resident row-id dot scorer, and the estimate excludes topK selection, I/O, decompression, and cache effects. Bytes are selected compressed-code bytes plus fp32 vector+invNorm bytes for the reranked shortlist.\n\n")
+	fmt.Fprintf(b, "| Method | Queries | p50 candidate rows | p95 candidate rows | Avg selected-code KiB/query | Avg exact-fp32 rerank ns/vector | p50 scan us | p95 scan us | p50 cascade@20 us | p95 cascade@20 us | Avg cascade@20 KiB | p50 cascade@50 us | p95 cascade@50 us | Avg cascade@50 KiB | p50 cascade@100 us | p95 cascade@100 us | Avg cascade@100 KiB |\n")
+	fmt.Fprintf(b, "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
+	for _, name := range names {
+		agg := byName[name]
+		count := float64(max(1, agg.count))
+		fmt.Fprintf(b, "| `%s` | %d | %d | %d | %.1f | %.2f | %.2f | %.2f | %.2f | %.2f | %.1f | %.2f | %.2f | %.1f | %.2f | %.2f | %.1f |\n",
+			agg.name,
+			agg.count,
+			columnVectorGraphDeep1BIntQuantile(agg.candidates, 0.50),
+			columnVectorGraphDeep1BIntQuantile(agg.candidates, 0.95),
+			agg.totalRead/count/1024,
+			agg.exactFP32/count,
+			columnVectorGraphDeep1BFloatQuantile(agg.scanQuery, 0.50)/1e3,
+			columnVectorGraphDeep1BFloatQuantile(agg.scanQuery, 0.95)/1e3,
+			columnVectorGraphDeep1BFloatQuantile(agg.cascade20, 0.50)/1e3,
+			columnVectorGraphDeep1BFloatQuantile(agg.cascade20, 0.95)/1e3,
+			agg.bytes20/count/1024,
+			columnVectorGraphDeep1BFloatQuantile(agg.cascade50, 0.50)/1e3,
+			columnVectorGraphDeep1BFloatQuantile(agg.cascade50, 0.95)/1e3,
+			agg.bytes50/count/1024,
+			columnVectorGraphDeep1BFloatQuantile(agg.cascade100, 0.50)/1e3,
+			columnVectorGraphDeep1BFloatQuantile(agg.cascade100, 0.95)/1e3,
+			agg.bytes100/count/1024,
 		)
 	}
 }
