@@ -330,6 +330,12 @@ func cloneColumnDeclaredValuesInto(out []columnDeclaredValue, values []columnDec
 			out[i].String = string(values[i].StringBytes)
 			out[i].StringBytes = nil
 		}
+		if values[i].Float32Vector != nil {
+			out[i].Float32Vector = append([]float32(nil), values[i].Float32Vector...)
+		}
+		if values[i].AdjacencyList != nil {
+			out[i].AdjacencyList = append([]uint32(nil), values[i].AdjacencyList...)
+		}
 	}
 	return out
 }

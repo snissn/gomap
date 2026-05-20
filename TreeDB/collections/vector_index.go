@@ -55,6 +55,10 @@ const (
 	vectorIndexFallbackColumnGraphManifestRootMismatch = "column_graph_manifest_root_mismatch"
 	vectorIndexFallbackColumnGraphMetric               = "column_graph_requires_cosine"
 	vectorIndexFallbackColumnGraphEncoding             = "column_graph_requires_float32"
+	vectorIndexFallbackColumnGraphSchema               = "column_graph_physical_schema_mismatch"
+	vectorIndexFallbackColumnGraphVisibility           = "column_graph_requires_insert_only_manifest"
+	vectorIndexFallbackColumnGraphEmpty                = "column_graph_empty"
+	vectorIndexFallbackColumnGraphInvalid              = "column_graph_physical_graph_invalid"
 	vectorIndexFallbackColumnGraphReprobeRequired      = "column_graph_reprobe_outside_native_rebuild"
 	vectorIndexFallbackColumnGraphHandleMissing        = "column_graph_requires_column_graph_handle"
 )

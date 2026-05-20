@@ -1,7 +1,10 @@
 package collections
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"os"
 	"strings"
 	"testing"
 
@@ -391,6 +394,228 @@ func TestCollectionVectorIndexColumnGraphMutationsRemainRebuildNeeded(t *testing
 	}
 }
 
+func TestCollectionVectorIndexColumnGraphLoadsPhysicalAssets(t *testing.T) {
+	reopened, closeFn := openColumnGraphPhysicalAssetFixture(t)
+	defer closeFn()
+
+	def := columnGraphVectorIndexTestDefinition()
+	graph, status, err := reopened.LoadColumnGraphVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		t.Fatalf("LoadColumnGraphVectorIndexSnapshot: %v", err)
+	}
+	if graph == nil {
+		t.Fatalf("graph not loaded status=%+v", status)
+	}
+	if !status.Loaded || !status.ColumnGraphLoaded || !status.PhysicalColumnAssetsSupported || status.RebuildNeeded || status.ExactFallbackReason != "" {
+		t.Fatalf("unexpected loaded status: %+v", status)
+	}
+	if status.BytesDisk <= 0 {
+		t.Fatalf("loaded status bytes_disk=%d want physical bytes", status.BytesDisk)
+	}
+	if graph.Rows() != 2 || graph.Dims() != 2 || graph.Edges() != 2 {
+		t.Fatalf("graph rows=%d dims=%d edges=%d", graph.Rows(), graph.Dims(), graph.Edges())
+	}
+
+	var scratch ColumnVectorGraphSearchScratch
+	results, trace, err := graph.SearchCosine([]float32{1, 0}, ColumnVectorGraphSearchOptions{TopK: 2}, &scratch)
+	if err != nil {
+		t.Fatalf("SearchCosine: %v", err)
+	}
+	if len(results) != 2 || string(results[0].DocumentID) != "a" {
+		t.Fatalf("results=%+v trace=%+v want doc a first", results, trace)
+	}
+	if trace.ReturnedCount != 2 || trace.CandidatesExamined == 0 || trace.EdgesVisited == 0 {
+		t.Fatalf("unexpected trace: %+v", trace)
+	}
+
+	opStatus, err := reopened.VectorIndexStatus(def.Name)
+	if err != nil {
+		t.Fatalf("VectorIndexStatus: %v", err)
+	}
+	if !opStatus.ColumnGraphLoaded || !opStatus.PhysicalColumnAssetsSupported || opStatus.RebuildNeeded || opStatus.ExactFallbackReason != "" {
+		t.Fatalf("unexpected operational status: %+v", opStatus)
+	}
+	if opStatus.Registered || opStatus.NativeRuntimeUsed || opStatus.NativeRootLoaded {
+		t.Fatalf("column_graph status used native runtime/root: %+v", opStatus)
+	}
+}
+
+func TestCollectionSearchVectorIndexUsesColumnGraphPhysicalAssets(t *testing.T) {
+	reopened, closeFn := openColumnGraphPhysicalAssetFixture(t)
+	defer closeFn()
+
+	results, trace, err := reopened.SearchVectorIndex("embedding", []float32{1, 0}, VectorIndexSearchOptions{
+		TopK:                 2,
+		DisableExactFallback: true,
+	})
+	if err != nil {
+		t.Fatalf("SearchVectorIndex: %v", err)
+	}
+	if trace.Strategy != columnVectorGraphStrategyCosine || trace.ExactFallbackReason != "" {
+		t.Fatalf("trace=%+v want column graph without exact fallback", trace)
+	}
+	if len(results) != 2 || string(results[0].DocumentID) != "a" || len(results[0].Document) == 0 {
+		t.Fatalf("results=%+v trace=%+v want materialized doc a first", results, trace)
+	}
+}
+
+func TestCollectionVectorIndexColumnGraphPhysicalMutationManifestReportsRebuildNeeded(t *testing.T) {
+	reopened, closeFn := openColumnGraphPhysicalAssetFixture(t)
+	defer closeFn()
+
+	def := columnGraphVectorIndexTestDefinition()
+	if _, _, err := reopened.Update([]byte("a"), func([]byte) ([]byte, bool, error) {
+		return []byte(`{"embedding":[1,0],"embedding_inv_norm":1,"embedding_neighbors":[1]}`), true, nil
+	}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	status, err := reopened.VectorIndexStatus(def.Name)
+	if err != nil {
+		t.Fatalf("VectorIndexStatus: %v", err)
+	}
+	if status.Strategy != VectorIndexStrategyColumnGraph || !status.PhysicalColumnAssetsSupported || status.ColumnGraphLoaded || !status.RebuildNeeded {
+		t.Fatalf("unexpected mutation status flags: %+v", status)
+	}
+	if status.ExactFallbackReason != vectorIndexFallbackColumnGraphVisibility || status.ColumnGraphUnavailableReason != vectorIndexFallbackColumnGraphVisibility {
+		t.Fatalf("mutation fallback reason=%q column reason=%q want %q: %+v", status.ExactFallbackReason, status.ColumnGraphUnavailableReason, vectorIndexFallbackColumnGraphVisibility, status)
+	}
+	if status.Registered || status.NativeRuntimeUsed || status.NativeRootLoaded {
+		t.Fatalf("mutation status used native runtime/root: %+v", status)
+	}
+}
+
+func TestCollectionSearchVectorIndexColumnGraphFallsBackAfterMutation(t *testing.T) {
+	reopened, closeFn := openColumnGraphPhysicalAssetFixture(t)
+	defer closeFn()
+
+	if _, _, err := reopened.Update([]byte("a"), func([]byte) ([]byte, bool, error) {
+		return []byte(`{"embedding":[0,1],"embedding_inv_norm":1,"embedding_neighbors":[1]}`), true, nil
+	}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	results, trace, err := reopened.SearchVectorIndex("embedding", []float32{1, 0}, VectorIndexSearchOptions{TopK: 2})
+	if err != nil {
+		t.Fatalf("SearchVectorIndex fallback: %v", err)
+	}
+	if trace.Strategy != "vector_index_exact_fallback" || trace.ExactFallbackReason != vectorIndexFallbackColumnGraphVisibility {
+		t.Fatalf("trace=%+v want exact fallback for mutation-bearing column graph", trace)
+	}
+	if len(results) != 2 || string(results[0].DocumentID) != "a" || string(results[1].DocumentID) != "b" {
+		t.Fatalf("fallback results=%+v trace=%+v", results, trace)
+	}
+
+	_, disabledTrace, err := reopened.SearchVectorIndex("embedding", []float32{1, 0}, VectorIndexSearchOptions{
+		TopK:                 2,
+		DisableExactFallback: true,
+	})
+	if err == nil || disabledTrace.ExactFallbackReason != vectorIndexFallbackColumnGraphVisibility {
+		t.Fatalf("disabled fallback err=%v trace=%+v want column_graph visibility error", err, disabledTrace)
+	}
+}
+
+func TestCollectionSearchVectorIndexColumnGraphSurvivesColumnAssetRewriteAndGC(t *testing.T) {
+	dir, reopened, closeFn := openColumnGraphPhysicalAssetFixtureWithDir(t)
+	closed := false
+	defer func() {
+		if !closed {
+			closeFn()
+		}
+	}()
+
+	beforeRefs := columnManifestAssetRefsForCollectionM12A(t, reopened.db, reopened)
+	if len(beforeRefs) == 0 {
+		t.Fatal("manifest refs empty, test requires live vector physical assets")
+	}
+	candidate := writeColumnGraphVectorAssetRewriteCandidate(t, reopened.db, reopened, 3, 99)
+	if candidate.FileID != beforeRefs[0].FileID {
+		t.Fatalf("candidate file_id=%d live file_id=%d, test requires mixed segment", candidate.FileID, beforeRefs[0].FileID)
+	}
+	oldSegmentPath, err := columnAssetSegmentPath(reopened.db.ColumnAssetRootDir(), candidate)
+	if err != nil {
+		t.Fatalf("columnAssetSegmentPath: %v", err)
+	}
+
+	rewrite, err := reopened.ColumnAssetRewrite(context.Background(), ColumnAssetRewriteOptions{
+		Detailed:      true,
+		CandidateRefs: []ColumnAssetRef{candidate},
+	})
+	if err != nil {
+		t.Fatalf("ColumnAssetRewrite: %v", err)
+	}
+	if rewrite.SegmentsRewritten != 1 || rewrite.RefsRemapped != len(beforeRefs) {
+		t.Fatalf("rewrite stats=%+v want one rewritten segment and %d remapped refs", rewrite, len(beforeRefs))
+	}
+	afterRefs := columnManifestAssetRefsForCollectionM12A(t, reopened.db, reopened)
+	assertColumnAssetRefsRemappedM15C(t, beforeRefs, afterRefs)
+	assertColumnGraphSearchUsesPhysicalAssets(t, reopened)
+	if _, err := os.Stat(oldSegmentPath); err != nil {
+		t.Fatalf("rewrite removed old mixed segment before GC: %v", err)
+	}
+
+	closeFn()
+	closed = true
+	reopen := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopen.Close() }()
+	reopenedAfterRewrite, err := NewCollectionManager(reopen).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection after rewrite: %v", err)
+	}
+	reopenRefs := columnManifestAssetRefsForCollectionM12A(t, reopen, reopenedAfterRewrite)
+	assertColumnAssetRefsEqualM15C(t, afterRefs, reopenRefs)
+	assertColumnGraphSearchUsesPhysicalAssets(t, reopenedAfterRewrite)
+
+	gcStats, err := reopenedAfterRewrite.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{
+		CandidateRefs: append(append([]ColumnAssetRef(nil), rewrite.SupersededRefs...), candidate),
+	})
+	if err != nil {
+		t.Fatalf("ColumnAssetGC after vector rewrite: %v", err)
+	}
+	if gcStats.SegmentsDeleted != 1 || gcStats.BytesDeleted == 0 {
+		t.Fatalf("gc stats=%+v want old mixed segment deleted after remap", gcStats)
+	}
+	if _, err := os.Stat(oldSegmentPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("old segment still exists or unexpected stat error: %v", err)
+	}
+	assertColumnGraphSearchUsesPhysicalAssets(t, reopenedAfterRewrite)
+}
+
+func TestCollectionVectorIndexColumnGraphReportsPhysicalSchemaMismatch(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	def := columnGraphVectorIndexTestDefinition()
+	active := ColumnManifestIdentity{Generation: 7, Version: columnManifestIdentityVersion, Checksum: 0x1111}
+	cfg := columnGraphVectorIndexTestColumnStore(&active)
+	cfg.Columns = cfg.Columns[:1]
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	publishColumnStoreCatalogForTest(t, d, CollectionMeta{
+		Name:          "docs",
+		Options:       CollectionOptions{ColumnStore: cfg},
+		VectorIndexes: []VectorIndexDefinition{def},
+	}, active)
+
+	graph, status, err := col.LoadColumnGraphVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		t.Fatalf("LoadColumnGraphVectorIndexSnapshot: %v", err)
+	}
+	if graph != nil {
+		t.Fatalf("loaded graph despite physical schema mismatch")
+	}
+	if !status.PhysicalColumnAssetsSupported || status.ExactFallbackReason != vectorIndexFallbackColumnGraphSchema || status.ColumnGraphUnavailableReason != vectorIndexFallbackColumnGraphSchema || !status.RebuildNeeded {
+		t.Fatalf("unexpected schema mismatch status: %+v", status)
+	}
+}
+
 func TestCollectionVectorIndexColumnGraphStrategyJSON(t *testing.T) {
 	meta, err := normalizeCollectionMeta(CollectionMeta{
 		Name: "docs",
@@ -456,6 +681,114 @@ func columnGraphVectorIndexTestColumnStore(active *ColumnManifestIdentity) *Colu
 		cfg.RecoveryAuthoritativeAppliedCommandLSN = 1
 	}
 	return cfg
+}
+
+func openColumnGraphPhysicalAssetFixture(t *testing.T) (*Collection, func()) {
+	t.Helper()
+	_, reopened, closeFn := openColumnGraphPhysicalAssetFixtureWithDir(t)
+	return reopened, closeFn
+}
+
+func openColumnGraphPhysicalAssetFixtureWithDir(t *testing.T) (string, *Collection, func()) {
+	t.Helper()
+	dir := t.TempDir()
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+		t.Fatalf("SaveFormatConfig: %v", err)
+	}
+	d := openCollectionCommandWALDB(t, dir)
+	def := columnGraphVectorIndexTestDefinition()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "docs",
+		Options: CollectionOptions{
+			ColumnStore: columnGraphVectorIndexTestColumnStore(nil),
+		},
+		VectorIndexes: []VectorIndexDefinition{def},
+	}); err != nil {
+		_ = d.Close()
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		_ = d.Close()
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("a"), []byte("b")},
+		[][]byte{
+			[]byte(`{"embedding":[1,0],"embedding_inv_norm":1,"embedding_neighbors":[1]}`),
+			[]byte(`{"embedding":[0,1],"embedding_inv_norm":1,"embedding_neighbors":[0]}`),
+		},
+	); err != nil {
+		_ = d.Close()
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		_ = d.Close()
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close seed DB: %v", err)
+	}
+
+	reopen := openCollectionCommandWALDB(t, dir)
+	reopened, err := NewCollectionManager(reopen).OpenCollection("docs")
+	if err != nil {
+		_ = reopen.Close()
+		t.Fatalf("OpenCollection reopened: %v", err)
+	}
+	return dir, reopened, func() { _ = reopen.Close() }
+}
+
+func writeColumnGraphVectorAssetRewriteCandidate(t testing.TB, d *backenddb.DB, col *Collection, generation, partID uint64) ColumnAssetRef {
+	t.Helper()
+	cfg := col.Meta().Options.ColumnStore
+	if cfg == nil || cfg.AssetManager == nil {
+		t.Fatalf("missing column store config: %+v", cfg)
+	}
+	encoded, _, err := encodeColumnPhysicalAsset(columnPhysicalAssetEncodeInput{
+		Collection:        col.Meta().Name,
+		Namespace:         cfg.AssetManager.Namespace,
+		Generation:        generation,
+		PartID:            partID,
+		AppliedCommandLSN: d.State().AppliedCommandLSN + 1,
+		Operation:         ColumnPublishOperationInsert,
+		SchemaHash:        cfg.SchemaHash,
+		Columns:           cfg.Columns,
+		Rows: []columnDeclaredRow{{
+			ID: []byte("candidate"),
+			Values: []columnDeclaredValue{
+				{Type: ColumnStoreValueFloat32Vector, Present: true, Float32Vector: []float32{1, 0}},
+				{Type: ColumnStoreValueFloat32, Present: true, Float32: 1},
+				{Type: ColumnStoreValueAdjacencyList, Present: true, AdjacencyList: []uint32{0}},
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("encodeColumnPhysicalAsset: %v", err)
+	}
+	ref, err := writeColumnPhysicalAssetToManager(d.ColumnAssetRootDir(), *cfg, encoded, generation, partID)
+	if err != nil {
+		t.Fatalf("writeColumnPhysicalAssetToManager: %v", err)
+	}
+	return ref
+}
+
+func assertColumnGraphSearchUsesPhysicalAssets(t testing.TB, col *Collection) {
+	t.Helper()
+	results, trace, err := col.SearchVectorIndex("embedding", []float32{1, 0}, VectorIndexSearchOptions{
+		TopK:                 2,
+		DisableExactFallback: true,
+	})
+	if err != nil {
+		t.Fatalf("SearchVectorIndex: %v", err)
+	}
+	if trace.Strategy != columnVectorGraphStrategyCosine || trace.ExactFallbackReason != "" {
+		t.Fatalf("trace=%+v want column graph without exact fallback", trace)
+	}
+	if len(results) != 2 || string(results[0].DocumentID) != "a" || len(results[0].Document) == 0 {
+		t.Fatalf("results=%+v trace=%+v want materialized doc a first", results, trace)
+	}
 }
 
 type testColumnVectorGraphIndexLoader struct {

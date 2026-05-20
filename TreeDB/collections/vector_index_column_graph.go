@@ -2,6 +2,7 @@ package collections
 
 import (
 	"errors"
+	"fmt"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
@@ -38,12 +39,239 @@ func (unsupportedColumnVectorGraphIndexLoader) LoadColumnVectorGraphIndex(Column
 	}, nil
 }
 
-var defaultColumnVectorGraphIndexLoader ColumnVectorGraphIndexLoader = unsupportedColumnVectorGraphIndexLoader{}
+type physicalColumnVectorGraphIndexLoader struct{}
+
+var errColumnVectorGraphPhysicalLoadUnavailable = errors.New("collections: column graph physical load unavailable")
+
+var defaultColumnVectorGraphIndexLoader ColumnVectorGraphIndexLoader = physicalColumnVectorGraphIndexLoader{}
+
+func (physicalColumnVectorGraphIndexLoader) LoadColumnVectorGraphIndex(input ColumnVectorGraphIndexLoadInput) (ColumnVectorGraphIndexLoadResult, error) {
+	status := VectorIndexLoadStatus{
+		Strategy:                      VectorIndexStrategyColumnGraph,
+		PhysicalColumnAssetsSupported: true,
+		RebuildNeeded:                 true,
+	}
+	if input.Collection == nil {
+		return ColumnVectorGraphIndexLoadResult{Status: status}, errCollectionNil
+	}
+	if input.Snapshot == nil || input.Collection.db == nil {
+		return ColumnVectorGraphIndexLoadResult{Status: status}, errCollectionDBNil
+	}
+	if !input.ColumnStore.Enabled || input.ColumnStore.ActiveManifest == nil {
+		return ColumnVectorGraphIndexLoadResult{Status: columnGraphUnavailableLoadStatus(vectorIndexFallbackColumnGraphPhysicalMissing)}, nil
+	}
+	if input.ColumnStore.PhysicalMutationParts > 0 {
+		status = columnGraphPhysicalUnavailableLoadStatus(vectorIndexFallbackColumnGraphVisibility)
+		return ColumnVectorGraphIndexLoadResult{Status: status}, nil
+	}
+	columns, reason := resolveColumnVectorGraphPhysicalColumns(input.Definition, input.ColumnStore)
+	if reason != "" {
+		status = columnGraphPhysicalUnavailableLoadStatus(reason)
+		return ColumnVectorGraphIndexLoadResult{Status: status}, nil
+	}
+	catalog, err := loadCollectionCatalogWithoutColumnRootValidation(input.Snapshot, input.Collection.meta.Name)
+	if err != nil {
+		return ColumnVectorGraphIndexLoadResult{Status: status}, err
+	}
+	if catalog == nil {
+		return ColumnVectorGraphIndexLoadResult{Status: status}, errCollectionNotFound
+	}
+	state := columnVectorGraphPhysicalLoadState{
+		dimensions: input.Definition.Dimensions,
+		offsets:    []uint32{0},
+	}
+	diag, err := input.Collection.scanColumnPhysicalRowsAtSnapshot(
+		input.Snapshot,
+		catalog,
+		catalog.meta.Name,
+		input.ColumnManifestRootID,
+		input.ColumnStore,
+		true,
+		columnPhysicalScanRequest{
+			ProjectedColumns:  []string{columns.vector, columns.invNorm, columns.neighbors},
+			Visitor:           state.visit,
+			RequireInsertOnly: true,
+		},
+	)
+	status.BytesDisk = diag.PhysicalBytesScanned
+	if err != nil {
+		if errors.Is(err, errColumnPhysicalQueryNeedsVisibility) {
+			status = columnGraphPhysicalUnavailableLoadStatus(vectorIndexFallbackColumnGraphVisibility)
+			status.BytesDisk = diag.PhysicalBytesScanned
+			return ColumnVectorGraphIndexLoadResult{Status: status}, nil
+		}
+		if errors.Is(err, errColumnVectorGraphPhysicalLoadUnavailable) {
+			reason := state.unavailableReason
+			if reason == "" {
+				reason = vectorIndexFallbackColumnGraphInvalid
+			}
+			status = columnGraphPhysicalUnavailableLoadStatus(reason)
+			status.BytesDisk = diag.PhysicalBytesScanned
+			return ColumnVectorGraphIndexLoadResult{Status: status}, nil
+		}
+		return ColumnVectorGraphIndexLoadResult{Status: status}, err
+	}
+	if len(state.documentIDs) == 0 {
+		status = columnGraphPhysicalUnavailableLoadStatus(vectorIndexFallbackColumnGraphEmpty)
+		status.BytesDisk = diag.PhysicalBytesScanned
+		return ColumnVectorGraphIndexLoadResult{Status: status}, nil
+	}
+	graph, err := NewColumnVectorGraphFromColumns(ColumnVectorGraphColumns{
+		DocumentIDs:     state.documentIDs,
+		Vectors:         state.vectors,
+		InvNorms:        state.invNorms,
+		NeighborOffsets: state.offsets,
+		Neighbors:       state.neighbors,
+		Dimensions:      input.Definition.Dimensions,
+		EntryPoint:      0,
+		EfSearch:        input.Definition.EfSearch,
+	})
+	if err != nil {
+		status = columnGraphPhysicalUnavailableLoadStatus(vectorIndexFallbackColumnGraphInvalid)
+		status.BytesDisk = diag.PhysicalBytesScanned
+		return ColumnVectorGraphIndexLoadResult{Status: status}, nil
+	}
+	status.Loaded = true
+	status.ColumnGraphLoaded = true
+	status.RebuildNeeded = false
+	return ColumnVectorGraphIndexLoadResult{Graph: graph, Status: status}, nil
+}
+
+type columnVectorGraphPhysicalColumns struct {
+	vector    string
+	invNorm   string
+	neighbors string
+}
+
+func resolveColumnVectorGraphPhysicalColumns(def VectorIndexDefinition, cfg ColumnStoreConfig) (columnVectorGraphPhysicalColumns, string) {
+	if def.Dimensions <= 0 {
+		return columnVectorGraphPhysicalColumns{}, vectorIndexFallbackColumnGraphSchema
+	}
+	vectorName, ok := findColumnVectorGraphPhysicalColumn(cfg, ColumnStoreValueFloat32Vector, def.Dimensions, columnGraphVectorColumnCandidates(def)...)
+	if !ok {
+		return columnVectorGraphPhysicalColumns{}, vectorIndexFallbackColumnGraphSchema
+	}
+	invNormName, ok := findColumnVectorGraphPhysicalColumn(cfg, ColumnStoreValueFloat32, 0, columnGraphSideColumnCandidates(def, vectorName, "_inv_norm")...)
+	if !ok {
+		return columnVectorGraphPhysicalColumns{}, vectorIndexFallbackColumnGraphSchema
+	}
+	neighborsName, ok := findColumnVectorGraphPhysicalColumn(cfg, ColumnStoreValueAdjacencyList, 0, columnGraphSideColumnCandidates(def, vectorName, "_neighbors")...)
+	if !ok {
+		return columnVectorGraphPhysicalColumns{}, vectorIndexFallbackColumnGraphSchema
+	}
+	return columnVectorGraphPhysicalColumns{
+		vector:    vectorName,
+		invNorm:   invNormName,
+		neighbors: neighborsName,
+	}, ""
+}
+
+func findColumnVectorGraphPhysicalColumn(cfg ColumnStoreConfig, valueType ColumnStoreValueType, vectorDims int, candidates ...string) (string, bool) {
+	for _, candidate := range candidates {
+		if candidate == "" {
+			continue
+		}
+		for _, col := range cfg.Columns {
+			if col.Name != candidate && col.Path != candidate {
+				continue
+			}
+			if col.ValueType != valueType {
+				continue
+			}
+			if valueType == ColumnStoreValueFloat32Vector && col.VectorDims != vectorDims {
+				continue
+			}
+			return col.Name, true
+		}
+	}
+	return "", false
+}
+
+func columnGraphVectorColumnCandidates(def VectorIndexDefinition) []string {
+	var candidates []string
+	candidates = appendUniqueColumnGraphCandidate(candidates, def.Field)
+	candidates = appendUniqueColumnGraphCandidate(candidates, def.Name)
+	return candidates
+}
+
+func columnGraphSideColumnCandidates(def VectorIndexDefinition, vectorName string, suffix string) []string {
+	var candidates []string
+	candidates = appendUniqueColumnGraphCandidate(candidates, def.Name+suffix)
+	candidates = appendUniqueColumnGraphCandidate(candidates, def.Field+suffix)
+	candidates = appendUniqueColumnGraphCandidate(candidates, vectorName+suffix)
+	return candidates
+}
+
+func appendUniqueColumnGraphCandidate(candidates []string, candidate string) []string {
+	if candidate == "" {
+		return candidates
+	}
+	for _, existing := range candidates {
+		if existing == candidate {
+			return candidates
+		}
+	}
+	return append(candidates, candidate)
+}
+
+type columnVectorGraphPhysicalLoadState struct {
+	dimensions        int
+	documentIDs       [][]byte
+	vectors           []float32
+	invNorms          []float32
+	offsets           []uint32
+	neighbors         []uint32
+	unavailableReason string
+}
+
+func (s *columnVectorGraphPhysicalLoadState) visit(row columnPhysicalScanRowView) error {
+	if row.Deleted || row.Operation != ColumnPublishOperationInsert {
+		return s.fail(vectorIndexFallbackColumnGraphVisibility, "row requires mutation visibility")
+	}
+	if len(row.Values) != 3 {
+		return s.fail(vectorIndexFallbackColumnGraphInvalid, "projected value count mismatch")
+	}
+	vector := row.Values[0]
+	if vector.Type != ColumnStoreValueFloat32Vector || !vector.Present || vector.Null || len(vector.Float32Vector) != s.dimensions {
+		return s.fail(vectorIndexFallbackColumnGraphInvalid, "invalid vector column value")
+	}
+	invNorm := row.Values[1]
+	if invNorm.Type != ColumnStoreValueFloat32 || !invNorm.Present || invNorm.Null {
+		return s.fail(vectorIndexFallbackColumnGraphInvalid, "invalid inverse norm column value")
+	}
+	adjacency := row.Values[2]
+	if adjacency.Type != ColumnStoreValueAdjacencyList || !adjacency.Present || adjacency.Null {
+		return s.fail(vectorIndexFallbackColumnGraphInvalid, "invalid adjacency column value")
+	}
+	if uint64(len(s.documentIDs)) >= columnVectorGraphMaxUint32 {
+		return s.fail(vectorIndexFallbackColumnGraphInvalid, "row ordinal space exhausted")
+	}
+	if uint64(len(s.neighbors))+uint64(len(adjacency.AdjacencyList)) > columnVectorGraphMaxUint32 {
+		return s.fail(vectorIndexFallbackColumnGraphInvalid, "neighbor ordinal space exhausted")
+	}
+	s.documentIDs = append(s.documentIDs, append([]byte(nil), row.ID...))
+	s.vectors = append(s.vectors, vector.Float32Vector...)
+	s.invNorms = append(s.invNorms, invNorm.Float32)
+	s.neighbors = append(s.neighbors, adjacency.AdjacencyList...)
+	s.offsets = append(s.offsets, uint32(len(s.neighbors)))
+	return nil
+}
+
+func (s *columnVectorGraphPhysicalLoadState) fail(reason string, detail string) error {
+	if s.unavailableReason == "" {
+		s.unavailableReason = reason
+	}
+	if detail == "" {
+		return errColumnVectorGraphPhysicalLoadUnavailable
+	}
+	return fmt.Errorf("%w: %s", errColumnVectorGraphPhysicalLoadUnavailable, detail)
+}
 
 // LoadColumnGraphVectorIndexSnapshot loads an explicit column_graph vector
-// index through the column-backed graph seam. Until physical column assets can
-// be scanned into ColumnVectorGraphColumns, this reports a precise unavailable
-// status instead of falling back to the native runtime graph.
+// index through the column-backed graph seam. The default loader scans
+// projected vector, inverse-norm, and adjacency physical columns into an
+// immutable ColumnVectorGraph without fetching full documents. Mutation-bearing
+// manifests remain rebuild-needed until dynamic overlay maintenance lands.
 func (c *Collection) LoadColumnGraphVectorIndexSnapshot(opts VectorIndexOptions) (*ColumnVectorGraph, VectorIndexLoadStatus, error) {
 	return c.loadColumnGraphVectorIndexSnapshot(opts, defaultColumnVectorGraphIndexLoader)
 }
@@ -165,6 +393,16 @@ func columnGraphUnavailableLoadStatus(reason string) VectorIndexLoadStatus {
 	status := VectorIndexLoadStatus{
 		Strategy:      VectorIndexStrategyColumnGraph,
 		RebuildNeeded: true,
+	}
+	setColumnGraphUnavailable(&status, reason)
+	return status
+}
+
+func columnGraphPhysicalUnavailableLoadStatus(reason string) VectorIndexLoadStatus {
+	status := VectorIndexLoadStatus{
+		Strategy:                      VectorIndexStrategyColumnGraph,
+		PhysicalColumnAssetsSupported: true,
+		RebuildNeeded:                 true,
 	}
 	setColumnGraphUnavailable(&status, reason)
 	return status
