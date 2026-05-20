@@ -6,7 +6,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -471,8 +471,8 @@ func buildColumnAssetReachabilityPlan(ctx context.Context, input columnAssetReac
 		for ref, sourceMask := range input.refs {
 			refBuilders = append(refBuilders, columnAssetReachabilityRefBuilder{ref: ref, sourceMask: sourceMask})
 		}
-		sort.Slice(refBuilders, func(i, j int) bool {
-			return compareColumnAssetRefs(refBuilders[i].ref, refBuilders[j].ref) < 0
+		slices.SortFunc(refBuilders, func(a, b columnAssetReachabilityRefBuilder) int {
+			return compareColumnAssetRefs(a.ref, b.ref)
 		})
 		for i, builder := range refBuilders {
 			if i%columnAssetReachabilityContextCheckInterval == 0 {
@@ -548,9 +548,7 @@ func buildColumnAssetReachabilityPlan(ctx context.Context, input columnAssetReac
 	for fileID := range rangesByFile {
 		missingFileIDs = append(missingFileIDs, fileID)
 	}
-	sort.Slice(missingFileIDs, func(i, j int) bool {
-		return missingFileIDs[i] < missingFileIDs[j]
-	})
+	slices.Sort(missingFileIDs)
 	for i, fileID := range missingFileIDs {
 		if i%columnAssetReachabilityContextCheckInterval == 0 {
 			if err := ctx.Err(); err != nil {
@@ -849,8 +847,20 @@ func listColumnAssetReachabilitySegments(segmentDir string) ([]columnAssetReacha
 		}
 		segments = append(segments, columnAssetReachabilitySegment{fileID: fileID, name: name, bytes: info.Size()})
 	}
-	sort.Slice(segments, func(i, j int) bool {
-		return segments[i].fileID < segments[j].fileID || (segments[i].fileID == segments[j].fileID && segments[i].name < segments[j].name)
+	slices.SortFunc(segments, func(a, b columnAssetReachabilitySegment) int {
+		if a.fileID < b.fileID {
+			return -1
+		}
+		if a.fileID > b.fileID {
+			return 1
+		}
+		if a.name < b.name {
+			return -1
+		}
+		if a.name > b.name {
+			return 1
+		}
+		return 0
 	})
 	return segments, nil
 }
@@ -901,8 +911,8 @@ func columnAssetReachabilityRangesCoveredBytes(segment columnAssetReachabilitySe
 		}
 		return covered, plan.outOfBoundsRefs
 	}
-	sort.Slice(ranges, func(i, j int) bool {
-		return ranges[i].start < ranges[j].start || (ranges[i].start == ranges[j].start && ranges[i].end < ranges[j].end)
+	slices.SortFunc(ranges, func(a, b columnAssetReachabilityRange) int {
+		return compareColumnAssetReachabilityIntervalBounds(a.start, a.end, b.start, b.end)
 	})
 	var covered int64
 	var cur columnAssetReachabilityInterval
@@ -984,8 +994,8 @@ func mergeColumnAssetReachabilityIntervals(in []columnAssetReachabilityInterval)
 		}
 		return in
 	}
-	sort.Slice(in, func(i, j int) bool {
-		return in[i].start < in[j].start || (in[i].start == in[j].start && in[i].end < in[j].end)
+	slices.SortFunc(in, func(a, b columnAssetReachabilityInterval) int {
+		return compareColumnAssetReachabilityIntervalBounds(a.start, a.end, b.start, b.end)
 	})
 	merged := in[:0]
 	for _, interval := range in {
@@ -1001,6 +1011,22 @@ func mergeColumnAssetReachabilityIntervals(in []columnAssetReachabilityInterval)
 		}
 	}
 	return merged
+}
+
+func compareColumnAssetReachabilityIntervalBounds(aStart, aEnd, bStart, bEnd int64) int {
+	if aStart < bStart {
+		return -1
+	}
+	if aStart > bStart {
+		return 1
+	}
+	if aEnd < bEnd {
+		return -1
+	}
+	if aEnd > bEnd {
+		return 1
+	}
+	return 0
 }
 
 // subtractColumnAssetReachabilityIntervals returns intervals from in with
