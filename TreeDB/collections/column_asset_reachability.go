@@ -822,6 +822,9 @@ func listColumnAssetReachabilitySegments(segmentDir string) ([]columnAssetReacha
 	infos, readErr := dir.Readdir(-1)
 	closeErr := dir.Close()
 	if readErr != nil {
+		if closeErr != nil {
+			return nil, errors.Join(readErr, closeErr)
+		}
 		return nil, readErr
 	}
 	if closeErr != nil {

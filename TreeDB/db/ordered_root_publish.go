@@ -1513,7 +1513,7 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilderWithMaintenanceP
 		if err == nil || !storageMaintenance {
 			return err
 		}
-		return fmt.Errorf("%w: %w", ErrStorageMaintenancePublishPreApplyFailed, err)
+		return errors.Join(ErrStorageMaintenancePublishPreApplyFailed, err)
 	}
 	if buildSystemDeltaIter == nil {
 		return 0, nil, preApplyErr(errors.New("nil ordered root group system delta builder"))

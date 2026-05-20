@@ -337,7 +337,7 @@ func TestColumnAssetRewriteCleansCopiedSegmentOnPublishPreflightRaceM15C(t *test
 }
 
 func TestColumnAssetRewriteRecognizesBackendPreApplyFailureM15C(t *testing.T) {
-	err := fmt.Errorf("%w: %w", backenddb.ErrStorageMaintenancePublishPreApplyFailed, backenddb.ErrRecoveryRequired)
+	err := errors.Join(backenddb.ErrStorageMaintenancePublishPreApplyFailed, backenddb.ErrRecoveryRequired)
 	if !columnAssetRewritePublishFailedBeforeApply(err) {
 		t.Fatalf("columnAssetRewritePublishFailedBeforeApply(%v)=false, want true", err)
 	}

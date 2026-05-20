@@ -531,7 +531,7 @@ func (c *Collection) columnAssetRewriteRootDescriptorPreflight(state columnAsset
 	baseRootIDs := map[string]uint64{state.rootName: state.baseRoot}
 	return func() error {
 		if err := c.validateRootDescriptorSystemDeltaForMeta(state.meta, state.baseCommitSeq, state.baseSystemRoot, rootNames, baseRootIDs); err != nil {
-			return fmt.Errorf("%w: %w", errColumnAssetRewritePublishPreflightFailed, err)
+			return errors.Join(errColumnAssetRewritePublishPreflightFailed, err)
 		}
 		return nil
 	}
