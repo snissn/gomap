@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -436,6 +437,38 @@ func TestColumnAssetGCFailClosedOnIncompletePlanM15B(t *testing.T) {
 	}
 	if _, err := os.Stat(candidatePath); err != nil {
 		t.Fatalf("candidate segment was removed after incomplete plan: %v", err)
+	}
+}
+
+func TestColumnAssetGCIncompletePlanReportsUncertainRefsM15B(t *testing.T) {
+	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col := openColumnStoreCollectionM10B(t, d)
+	if _, err := col.Insert([]byte("e1"), []byte(`{"time_us":1,"kind":"like","did":"d1"}`)); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+
+	cfg := col.Meta().Options.ColumnStore
+	stats, err := col.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{
+		CandidateRefs: []ColumnAssetRef{{
+			Kind:       ColumnAssetKindTCS1PartImage,
+			Namespace:  cfg.AssetManager.Namespace,
+			Generation: 1,
+			PartID:     1,
+			FileID:     1,
+			Offset:     -1,
+			Length:     64,
+		}},
+	})
+	if !errors.Is(err, ErrColumnAssetReachabilityIncomplete) || !strings.Contains(err.Error(), "uncertain_refs=1") {
+		t.Fatalf("ColumnAssetGC error=%v want incomplete error with uncertain_refs=1", err)
+	}
+	if stats.Plan.Complete || stats.Plan.Refs.Uncertain != 1 {
+		t.Fatalf("plan complete=%t refs=%+v want one uncertain ref", stats.Plan.Complete, stats.Plan.Refs)
+	}
+	if stats.Plan.Segments.Unknown != 0 || stats.Plan.Segments.Missing != 0 || stats.Plan.Segments.OutOfBoundsRefs != 0 {
+		t.Fatalf("invalid ref produced segment counters: %+v", stats.Plan.Segments)
 	}
 }
 
