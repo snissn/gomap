@@ -448,6 +448,63 @@ func TestPublishOrderedRootDeltaGroupMaintenanceReadOnlyClosesIterators(t *testi
 	}
 }
 
+func TestPublishOrderedRootDeltaGroupMaintenancePreLockFailuresCloseIterators(t *testing.T) {
+	closingDB := &DB{}
+	closingDB.closing.Store(true)
+	nonnullBuilder := func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		t.Fatalf("maintenance system builder should not run for pre-lock failure")
+		return nil, nil
+	}
+	tests := []struct {
+		name    string
+		db      *DB
+		builder OrderedRootGroupSystemBuilder
+		wantErr error
+	}{
+		{
+			name:    "nil builder",
+			db:      &DB{},
+			builder: nil,
+			wantErr: ErrStorageMaintenancePublishPreApplyFailed,
+		},
+		{
+			name:    "nil db",
+			db:      nil,
+			builder: nonnullBuilder,
+			wantErr: ErrClosed,
+		},
+		{
+			name:    "closing db",
+			db:      closingDB,
+			builder: nonnullBuilder,
+			wantErr: ErrClosed,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			iter := &closeCountingUnsafeIterator{}
+			_, _, err := tt.db.PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(
+				storagemaintenance.ColumnAssetRewritePlan(),
+				[]StorageMaintenanceRootDeltaPublishInput{{
+					BaseRoot: 0,
+					Iter:     iter,
+				}},
+				nil,
+				tt.builder,
+			)
+			if !errors.Is(err, tt.wantErr) {
+				t.Fatalf("maintenance publish error=%v want %v", err, tt.wantErr)
+			}
+			if !errors.Is(err, ErrStorageMaintenancePublishPreApplyFailed) {
+				t.Fatalf("maintenance publish error=%v want ErrStorageMaintenancePublishPreApplyFailed", err)
+			}
+			if iter.closes != 1 {
+				t.Fatalf("iterator closes=%d want 1", iter.closes)
+			}
+		})
+	}
+}
+
 func TestPublishOrderedRootDeltaGroupMaintenanceRejectsTypedNilPlan(t *testing.T) {
 	dir := t.TempDir()
 	enableCommandWALFormat(t, dir)
