@@ -19,12 +19,19 @@ func (c *Collection) SearchVectorIndex(name string, query []float32, opts Vector
 	if err := ValidateIndexName(name); err != nil {
 		return nil, trace, err
 	}
-	def, err := c.declaredVectorIndexDefinition(name)
+	if err := c.flushBufferedWrites(); err != nil {
+		return nil, trace, err
+	}
+	def, err := c.declaredVectorIndexDefinitionPreparedWithoutColumnRootValidation(name)
 	if err != nil {
 		return nil, trace, err
 	}
 	if vectorIndexDefinitionStrategy(def) == VectorIndexStrategyColumnGraph {
 		return c.searchColumnGraphVectorIndex(def, query, opts)
+	}
+	def, err = c.declaredVectorIndexDefinitionPrepared(name)
+	if err != nil {
+		return nil, trace, err
 	}
 
 	index := c.registeredVectorIndex(def.Name)
@@ -70,9 +77,6 @@ func (c *Collection) searchColumnGraphVectorIndex(def VectorIndexDefinition, que
 		return nil, trace, err
 	}
 	trace.ReturnedCount = len(attached)
-	if len(attached) < opts.TopK {
-		return c.searchVectorIndexExactFallback(def, query, opts, trace, "column_graph_underfilled_results")
-	}
 	return attached, trace, nil
 }
 
@@ -85,7 +89,11 @@ func (c *Collection) searchVectorIndexExactFallback(def VectorIndexDefinition, q
 	if opts.DisableExactFallback {
 		return nil, trace, fmt.Errorf("collections: vector index %q unavailable: %s", def.Name, reason)
 	}
-	exact, err := c.SearchVectorsExact(query, VectorSearchOptions{
+	searchExact := c.SearchVectorsExact
+	if vectorIndexDefinitionStrategy(def) == VectorIndexStrategyColumnGraph {
+		searchExact = c.searchVectorsExactWithoutColumnRootValidation
+	}
+	exact, err := searchExact(query, VectorSearchOptions{
 		Field:            def.Field,
 		Metric:           def.Metric,
 		TopK:             opts.TopK,
