@@ -397,6 +397,38 @@ func TestColumnAssetReachabilityPlanCountsMissingSegmentsOnceM15A(t *testing.T) 
 	}
 }
 
+func TestColumnAssetReachabilityInvalidRefDoesNotContributeSegmentRangeM15A(t *testing.T) {
+	const namespace = "events/column-assets"
+	input := columnAssetReachabilityInput{
+		rootDir:     t.TempDir(),
+		collection:  "events",
+		namespace:   namespace,
+		detailed:    true,
+		activeGen:   1,
+		recoveryGen: 1,
+	}
+	input.addRef(ColumnAssetRef{
+		Kind:       ColumnAssetKindTCS1PartImage,
+		Namespace:  namespace,
+		Generation: 1,
+		PartID:     1,
+		FileID:     7,
+		Offset:     -1,
+		Length:     64,
+	}, ColumnAssetReachabilitySourceActiveManifest)
+
+	plan, err := buildColumnAssetReachabilityPlan(context.Background(), input)
+	if err != nil {
+		t.Fatalf("buildColumnAssetReachabilityPlan: %v", err)
+	}
+	if plan.Complete || plan.Refs.Uncertain != 1 {
+		t.Fatalf("plan complete=%t refs=%+v want one uncertain invalid ref", plan.Complete, plan.Refs)
+	}
+	if plan.Segments.Missing != 0 || plan.Segments.OutOfBoundsRefs != 0 || len(plan.SegmentEntries) != 0 {
+		t.Fatalf("invalid ref contributed segment work: segments=%+v entries=%+v", plan.Segments, plan.SegmentEntries)
+	}
+}
+
 func TestColumnAssetReachabilityPlanSeparatesOutOfBoundsRefsFromMissingSegmentsM15A(t *testing.T) {
 	const namespaceName = "events/column-assets"
 	root := t.TempDir()
