@@ -49,8 +49,8 @@ func TestColumnVectorGraphDeep1BBuildableGranuleScout(t *testing.T) {
 	if selection != "centroid_blocks" && selection != "graph_visited_blocks" {
 		t.Fatalf("unknown COLUMN_VECTOR_DEEP1B_BUILDABLE_SELECTION=%q; supported: centroid_blocks, graph_visited_blocks", selection)
 	}
-	if selection == "graph_visited_blocks" && builder != "ivf_graph_sorted_blocks" {
-		t.Fatalf("COLUMN_VECTOR_DEEP1B_BUILDABLE_SELECTION=graph_visited_blocks currently requires COLUMN_VECTOR_DEEP1B_BUILDABLE_BUILDER=ivf_graph_sorted_blocks")
+	if selection == "graph_visited_blocks" && !columnVectorGraphDeep1BSupportsGraphVisitedSelection(builder) {
+		t.Fatalf("COLUMN_VECTOR_DEEP1B_BUILDABLE_SELECTION=graph_visited_blocks currently requires COLUMN_VECTOR_DEEP1B_BUILDABLE_BUILDER=ivf_graph_sorted_blocks or ivf_exact_graph_sorted_blocks")
 	}
 	codebookEnabled := len(pqBytes) > 0 || len(opqBytes) > 0 || len(residualPQBytes) > 0
 	if codebookEnabled {
@@ -112,17 +112,22 @@ func TestColumnVectorGraphDeep1BBuildableGranuleScout(t *testing.T) {
 	baseRows = min(baseRows, availableEvalRows)
 	vectors := allVectors[evalOffset*columnVectorGraphDeep1BDims : (evalOffset+baseRows)*columnVectorGraphDeep1BDims]
 	invNorms := columnVectorGraphDeep1BInvNorms(vectors, columnVectorGraphDeep1BDims)
+	granuleBuildStart := time.Now()
 	granules, builderNotes := columnVectorGraphDeep1BBuildableGranules(t, builder, vectors, invNorms, baseRows, columnVectorGraphDeep1BDims, granuleRows, kmeansIters, graphDegree)
+	granuleBuildNanos := time.Since(granuleBuildStart).Nanoseconds()
 	if len(granules) == 0 {
 		t.Fatalf("no granules for builder=%s baseRows=%d granuleRows=%d", builder, baseRows, granuleRows)
 	}
 	var graphRouting columnVectorGraphDeep1BGraphBlockRoutingIndex
+	var routingBuildNanos int64
 	if selection == "graph_visited_blocks" {
-		graphRouting = columnVectorGraphDeep1BBuildIVFGraphBlockRoutingIndex(t, vectors, invNorms, granules, baseRows, columnVectorGraphDeep1BDims, granuleRows, kmeansIters, graphDegree)
-		builderNotes += "; selection=graph_visited_blocks uses a query-time greedy expansion over the same query-independent IVF-window row graph, then expands visited rows to their sealed graph-sorted storage blocks"
+		routingBuildStart := time.Now()
+		graphRouting = columnVectorGraphDeep1BBuildGraphBlockRoutingIndex(t, builder, vectors, invNorms, granules, baseRows, columnVectorGraphDeep1BDims, granuleRows, kmeansIters, graphDegree)
+		routingBuildNanos = time.Since(routingBuildStart).Nanoseconds()
+		builderNotes += "; selection=graph_visited_blocks uses a query-time greedy expansion over the same query-independent row graph, then expands visited rows to their sealed graph-sorted storage blocks"
 	}
 	reportGraphDegree := 0
-	if builder == "ivf_graph_neighborhood_blocks" || builder == "ivf_graph_sorted_blocks" {
+	if columnVectorGraphDeep1BBuilderUsesGraph(builder) {
 		reportGraphDegree = graphDegree
 	}
 	pqModels := columnVectorGraphDeep1BFitBuildablePQModels(t, trainVectors, pqBytes, pqTrainRows, baseRows, columnVectorGraphDeep1BDims, pqTrainIters)
@@ -147,6 +152,8 @@ func TestColumnVectorGraphDeep1BBuildableGranuleScout(t *testing.T) {
 		Selection:               selection,
 		GranuleRows:             granuleRows,
 		GranuleCount:            len(granules),
+		GranuleBuildNanos:       granuleBuildNanos,
+		RoutingBuildNanos:       routingBuildNanos,
 		KMeansIters:             kmeansIters,
 		GraphDegree:             reportGraphDegree,
 		GraphEntryClusters:      graphEntryClusters,
@@ -213,6 +220,8 @@ type columnVectorGraphDeep1BBuildableGranuleScoutReport struct {
 	Selection               string                                               `json:"selection"`
 	GranuleRows             int                                                  `json:"granule_rows"`
 	GranuleCount            int                                                  `json:"granule_count"`
+	GranuleBuildNanos       int64                                                `json:"granule_build_nanos,omitempty"`
+	RoutingBuildNanos       int64                                                `json:"routing_build_nanos,omitempty"`
 	KMeansIters             int                                                  `json:"kmeans_iters,omitempty"`
 	GraphDegree             int                                                  `json:"graph_degree,omitempty"`
 	GraphEntryClusters      int                                                  `json:"graph_entry_clusters,omitempty"`
@@ -311,9 +320,47 @@ func columnVectorGraphDeep1BBuildableGranules(tb testing.TB, builder string, vec
 			tb.Fatalf("COLUMN_VECTOR_DEEP1B_BUILDABLE_GRAPH_DEGREE=%d must be positive for ivf_graph_sorted_blocks", graphDegree)
 		}
 		return columnVectorGraphDeep1BBuildIVFGraphSortedBlockGranules(vectors, invNorms, rows, dims, granuleRows, kmeansIters, graphDegree), "production/buildable graph-sorted row-adjacent scout; ivf_graph_sorted_blocks trains deterministic cosine k-means centroids, builds a query-independent local nearest-neighbor graph inside IVF-sorted windows, materializes a deterministic graph traversal order, and chunks adjacent rows in that graph order into fixed-size TreeDB-style blocks"
+	case "ivf_exact_graph_neighborhood_blocks":
+		if kmeansIters <= 0 {
+			tb.Fatalf("COLUMN_VECTOR_DEEP1B_BUILDABLE_KMEANS_ITERS=%d must be positive for ivf_exact_graph_neighborhood_blocks", kmeansIters)
+		}
+		if graphDegree <= 0 {
+			tb.Fatalf("COLUMN_VECTOR_DEEP1B_BUILDABLE_GRAPH_DEGREE=%d must be positive for ivf_exact_graph_neighborhood_blocks", graphDegree)
+		}
+		return columnVectorGraphDeep1BBuildIVFExactGraphNeighborhoodBlockGranules(vectors, invNorms, rows, dims, granuleRows, kmeansIters, graphDegree), "production/buildable exact-graph-neighborhood scout; ivf_exact_graph_neighborhood_blocks trains deterministic cosine k-means centroids, builds exact in-cluster kNN adjacency for the eval slice, and chunks graph BFS neighborhoods into fixed-size TreeDB-style blocks"
+	case "ivf_exact_graph_sorted_blocks":
+		if kmeansIters <= 0 {
+			tb.Fatalf("COLUMN_VECTOR_DEEP1B_BUILDABLE_KMEANS_ITERS=%d must be positive for ivf_exact_graph_sorted_blocks", kmeansIters)
+		}
+		if graphDegree <= 0 {
+			tb.Fatalf("COLUMN_VECTOR_DEEP1B_BUILDABLE_GRAPH_DEGREE=%d must be positive for ivf_exact_graph_sorted_blocks", graphDegree)
+		}
+		return columnVectorGraphDeep1BBuildIVFExactGraphSortedBlockGranules(vectors, invNorms, rows, dims, granuleRows, kmeansIters, graphDegree), "production/buildable exact-graph-sorted row-adjacent scout; ivf_exact_graph_sorted_blocks trains deterministic cosine k-means centroids, builds exact in-cluster kNN adjacency for the eval slice, materializes a deterministic graph traversal order, and chunks adjacent rows in that graph order into fixed-size TreeDB-style blocks"
 	default:
-		tb.Fatalf("unknown COLUMN_VECTOR_DEEP1B_BUILDABLE_BUILDER=%q; supported: row_id_contiguous, ivf_kmeans, ivf_kmeans_sorted_blocks, ivf_graph_neighborhood_blocks, ivf_graph_sorted_blocks", builder)
+		tb.Fatalf("unknown COLUMN_VECTOR_DEEP1B_BUILDABLE_BUILDER=%q; supported: row_id_contiguous, ivf_kmeans, ivf_kmeans_sorted_blocks, ivf_graph_neighborhood_blocks, ivf_graph_sorted_blocks, ivf_exact_graph_neighborhood_blocks, ivf_exact_graph_sorted_blocks", builder)
 		return nil, ""
+	}
+}
+
+func columnVectorGraphDeep1BSupportsGraphVisitedSelection(builder string) bool {
+	return builder == "ivf_graph_sorted_blocks" || builder == "ivf_exact_graph_sorted_blocks"
+}
+
+func columnVectorGraphDeep1BBuilderUsesGraph(builder string) bool {
+	switch builder {
+	case "ivf_graph_neighborhood_blocks", "ivf_graph_sorted_blocks", "ivf_exact_graph_neighborhood_blocks", "ivf_exact_graph_sorted_blocks":
+		return true
+	default:
+		return false
+	}
+}
+
+func columnVectorGraphDeep1BBuilderUsesKMeans(builder string) bool {
+	switch builder {
+	case "ivf_kmeans", "ivf_kmeans_sorted_blocks", "ivf_graph_neighborhood_blocks", "ivf_graph_sorted_blocks", "ivf_exact_graph_neighborhood_blocks", "ivf_exact_graph_sorted_blocks":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -613,6 +660,88 @@ func columnVectorGraphDeep1BBuildIVFGraphSortedBlockGranules(vectors []float32, 
 	return granules
 }
 
+func columnVectorGraphDeep1BBuildIVFExactGraphNeighborhoodBlockGranules(vectors []float32, invNorms []float32, rows int, dims int, targetRows int, iterations int, graphDegree int) []columnVectorGraphDeep1BBuildableGranule {
+	centroids, assignments, clusterCount := columnVectorGraphDeep1BFitIVFKMeansAssignments(vectors, invNorms, rows, dims, targetRows, iterations)
+	centroidInvNorms := columnVectorGraphDeep1BCentroidInvNorms(centroids, dims)
+	order := columnVectorGraphDeep1BIVFSortedRows(vectors, invNorms, centroids, centroidInvNorms, assignments, rows, dims)
+	adjacency := columnVectorGraphDeep1BBuildIVFExactClusterGraph(vectors, invNorms, assignments, clusterCount, rows, dims, graphDegree)
+	assigned := make([]bool, rows)
+	assignedCount := 0
+	nextSeed := 0
+	granules := make([]columnVectorGraphDeep1BBuildableGranule, 0, (rows+targetRows-1)/targetRows)
+	for assignedCount < rows {
+		rowIDs := make([]int, 0, min(targetRows, rows-assignedCount))
+		queue := make([]int, 0, targetRows+graphDegree)
+		queueHead := 0
+		for len(rowIDs) < targetRows && assignedCount < rows {
+			if queueHead >= len(queue) {
+				queue = queue[:0]
+				queueHead = 0
+				for nextSeed < len(order) && assigned[order[nextSeed].row] {
+					nextSeed++
+				}
+				if nextSeed >= len(order) {
+					break
+				}
+				queue = append(queue, order[nextSeed].row)
+				nextSeed++
+			}
+			row := queue[queueHead]
+			queueHead++
+			if assigned[row] {
+				continue
+			}
+			assigned[row] = true
+			assignedCount++
+			rowIDs = append(rowIDs, row)
+			for _, neighbor := range adjacency[row] {
+				if !assigned[neighbor] {
+					queue = append(queue, neighbor)
+				}
+			}
+		}
+		if len(rowIDs) == 0 {
+			break
+		}
+		centroid := columnVectorGraphDeep1BCentroidForRowIDs(vectors, rowIDs, dims)
+		granules = append(granules, columnVectorGraphDeep1BBuildableGranule{
+			Builder:     "ivf_exact_graph_neighborhood_blocks",
+			Ordinal:     len(granules),
+			FirstRow:    rowIDs[0],
+			Rows:        len(rowIDs),
+			RowIDs:      rowIDs,
+			Centroid:    centroid,
+			CentroidInv: float32(columnVectorGraphDeep1BInvNorm(centroid)),
+		})
+	}
+	return granules
+}
+
+func columnVectorGraphDeep1BBuildIVFExactGraphSortedBlockGranules(vectors []float32, invNorms []float32, rows int, dims int, targetRows int, iterations int, graphDegree int) []columnVectorGraphDeep1BBuildableGranule {
+	centroids, assignments, clusterCount := columnVectorGraphDeep1BFitIVFKMeansAssignments(vectors, invNorms, rows, dims, targetRows, iterations)
+	centroidInvNorms := columnVectorGraphDeep1BCentroidInvNorms(centroids, dims)
+	order := columnVectorGraphDeep1BIVFSortedRows(vectors, invNorms, centroids, centroidInvNorms, assignments, rows, dims)
+	adjacency := columnVectorGraphDeep1BBuildIVFExactClusterGraph(vectors, invNorms, assignments, clusterCount, rows, dims, graphDegree)
+	graphOrder := columnVectorGraphDeep1BIVFGraphTraversalOrder(order, adjacency, rows)
+	granules := make([]columnVectorGraphDeep1BBuildableGranule, 0, (rows+targetRows-1)/targetRows)
+	for first := 0; first < len(graphOrder); first += targetRows {
+		count := min(targetRows, len(graphOrder)-first)
+		rowIDs := make([]int, count)
+		copy(rowIDs, graphOrder[first:first+count])
+		centroid := columnVectorGraphDeep1BCentroidForRowIDs(vectors, rowIDs, dims)
+		granules = append(granules, columnVectorGraphDeep1BBuildableGranule{
+			Builder:     "ivf_exact_graph_sorted_blocks",
+			Ordinal:     len(granules),
+			FirstRow:    rowIDs[0],
+			Rows:        count,
+			RowIDs:      rowIDs,
+			Centroid:    centroid,
+			CentroidInv: float32(columnVectorGraphDeep1BInvNorm(centroid)),
+		})
+	}
+	return granules
+}
+
 func columnVectorGraphDeep1BIVFGraphTraversalOrder(order []columnVectorGraphDeep1BIVFSortedRow, adjacency [][]int, rows int) []int {
 	visited := make([]bool, rows)
 	queued := make([]bool, rows)
@@ -688,6 +817,52 @@ func columnVectorGraphDeep1BBuildIVFWindowGraph(vectors []float32, invNorms []fl
 			}
 		}
 		first = last
+	}
+	return adjacency
+}
+
+func columnVectorGraphDeep1BBuildIVFExactClusterGraph(vectors []float32, invNorms []float32, assignments []int, clusterCount int, rows int, dims int, graphDegree int) [][]int {
+	rowIDsByCluster := make([][]int, clusterCount)
+	for row, cluster := range assignments {
+		if cluster < 0 || cluster >= clusterCount {
+			continue
+		}
+		rowIDsByCluster[cluster] = append(rowIDsByCluster[cluster], row)
+	}
+	adjacency := make([][]int, rows)
+	for _, clusterRows := range rowIDsByCluster {
+		for _, row := range clusterRows {
+			if len(clusterRows) <= 1 {
+				continue
+			}
+			left := vectors[row*dims : (row+1)*dims]
+			neighbors := make([]columnVectorGraphDeep1BIVFWindowNeighbor, 0, len(clusterRows)-1)
+			for _, other := range clusterRows {
+				if other == row {
+					continue
+				}
+				right := vectors[other*dims : (other+1)*dims]
+				var dot float32
+				for j := 0; j < dims; j++ {
+					dot += left[j] * right[j]
+				}
+				neighbors = append(neighbors, columnVectorGraphDeep1BIVFWindowNeighbor{
+					row:   other,
+					score: dot * invNorms[row] * invNorms[other],
+				})
+			}
+			sort.Slice(neighbors, func(i, j int) bool {
+				if neighbors[i].score == neighbors[j].score {
+					return neighbors[i].row < neighbors[j].row
+				}
+				return neighbors[i].score > neighbors[j].score
+			})
+			limit := min(graphDegree, len(neighbors))
+			adjacency[row] = make([]int, limit)
+			for i := 0; i < limit; i++ {
+				adjacency[row][i] = neighbors[i].row
+			}
+		}
 	}
 	return adjacency
 }
@@ -856,12 +1031,40 @@ type columnVectorGraphDeep1BGraphBlockRoutingIndex struct {
 	rowToGranule     []int
 }
 
+func columnVectorGraphDeep1BBuildGraphBlockRoutingIndex(tb testing.TB, builder string, vectors []float32, invNorms []float32, granules []columnVectorGraphDeep1BBuildableGranule, rows int, dims int, targetRows int, iterations int, graphDegree int) columnVectorGraphDeep1BGraphBlockRoutingIndex {
+	tb.Helper()
+	switch builder {
+	case "ivf_graph_sorted_blocks":
+		return columnVectorGraphDeep1BBuildIVFGraphBlockRoutingIndex(tb, vectors, invNorms, granules, rows, dims, targetRows, iterations, graphDegree)
+	case "ivf_exact_graph_sorted_blocks":
+		return columnVectorGraphDeep1BBuildIVFExactGraphBlockRoutingIndex(tb, vectors, invNorms, granules, rows, dims, targetRows, iterations, graphDegree)
+	default:
+		tb.Fatalf("builder=%s does not support graph_visited_blocks selection", builder)
+		return columnVectorGraphDeep1BGraphBlockRoutingIndex{}
+	}
+}
+
 func columnVectorGraphDeep1BBuildIVFGraphBlockRoutingIndex(tb testing.TB, vectors []float32, invNorms []float32, granules []columnVectorGraphDeep1BBuildableGranule, rows int, dims int, targetRows int, iterations int, graphDegree int) columnVectorGraphDeep1BGraphBlockRoutingIndex {
+	tb.Helper()
+	centroids, assignments, _ := columnVectorGraphDeep1BFitIVFKMeansAssignments(vectors, invNorms, rows, dims, targetRows, iterations)
+	centroidInvNorms := columnVectorGraphDeep1BCentroidInvNorms(centroids, dims)
+	order := columnVectorGraphDeep1BIVFSortedRows(vectors, invNorms, centroids, centroidInvNorms, assignments, rows, dims)
+	adjacency := columnVectorGraphDeep1BBuildIVFWindowGraph(vectors, invNorms, order, rows, dims, graphDegree)
+	return columnVectorGraphDeep1BNewGraphBlockRoutingIndex(tb, centroids, centroidInvNorms, order, adjacency, granules, rows)
+}
+
+func columnVectorGraphDeep1BBuildIVFExactGraphBlockRoutingIndex(tb testing.TB, vectors []float32, invNorms []float32, granules []columnVectorGraphDeep1BBuildableGranule, rows int, dims int, targetRows int, iterations int, graphDegree int) columnVectorGraphDeep1BGraphBlockRoutingIndex {
 	tb.Helper()
 	centroids, assignments, clusterCount := columnVectorGraphDeep1BFitIVFKMeansAssignments(vectors, invNorms, rows, dims, targetRows, iterations)
 	centroidInvNorms := columnVectorGraphDeep1BCentroidInvNorms(centroids, dims)
 	order := columnVectorGraphDeep1BIVFSortedRows(vectors, invNorms, centroids, centroidInvNorms, assignments, rows, dims)
-	adjacency := columnVectorGraphDeep1BBuildIVFWindowGraph(vectors, invNorms, order, rows, dims, graphDegree)
+	adjacency := columnVectorGraphDeep1BBuildIVFExactClusterGraph(vectors, invNorms, assignments, clusterCount, rows, dims, graphDegree)
+	return columnVectorGraphDeep1BNewGraphBlockRoutingIndex(tb, centroids, centroidInvNorms, order, adjacency, granules, rows)
+}
+
+func columnVectorGraphDeep1BNewGraphBlockRoutingIndex(tb testing.TB, centroids []float32, centroidInvNorms []float32, order []columnVectorGraphDeep1BIVFSortedRow, adjacency [][]int, granules []columnVectorGraphDeep1BBuildableGranule, rows int) columnVectorGraphDeep1BGraphBlockRoutingIndex {
+	tb.Helper()
+	clusterCount := len(centroidInvNorms)
 	clusterEntryRows := make([]int, clusterCount)
 	for i := range clusterEntryRows {
 		clusterEntryRows[i] = -1
@@ -1407,11 +1610,15 @@ func columnVectorGraphDeep1BRenderBuildableGranuleScoutMarkdown(report columnVec
 	fmt.Fprintf(&b, "- Dims: `%d`\n", report.Dims)
 	fmt.Fprintf(&b, "- Granule rows: `%d`\n", report.GranuleRows)
 	fmt.Fprintf(&b, "- Granules: `%d`\n", report.GranuleCount)
+	fmt.Fprintf(&b, "- Granule build ms: `%.3f`\n", float64(report.GranuleBuildNanos)/1e6)
 	fmt.Fprintf(&b, "- Selection: `%s`\n", report.Selection)
-	if report.Builder == "ivf_kmeans" || report.Builder == "ivf_kmeans_sorted_blocks" || report.Builder == "ivf_graph_neighborhood_blocks" || report.Builder == "ivf_graph_sorted_blocks" {
+	if report.RoutingBuildNanos > 0 {
+		fmt.Fprintf(&b, "- Routing graph build ms: `%.3f`\n", float64(report.RoutingBuildNanos)/1e6)
+	}
+	if columnVectorGraphDeep1BBuilderUsesKMeans(report.Builder) {
 		fmt.Fprintf(&b, "- K-means iterations: `%d`\n", report.KMeansIters)
 	}
-	if report.Builder == "ivf_graph_neighborhood_blocks" || report.Builder == "ivf_graph_sorted_blocks" {
+	if columnVectorGraphDeep1BBuilderUsesGraph(report.Builder) {
 		fmt.Fprintf(&b, "- Graph degree: `%d`\n", report.GraphDegree)
 	}
 	if report.Selection == "graph_visited_blocks" {
@@ -1443,7 +1650,14 @@ func columnVectorGraphDeep1BRenderBuildableGranuleScoutMarkdown(report columnVec
 	fmt.Fprintf(&b, "- Scan iterations: `%d`\n\n", report.ScanIters)
 	fmt.Fprintf(&b, "%s\n\n", columnVectorGraphDeep1BBuildableBuilderMarkdown(report))
 	if report.Selection == "graph_visited_blocks" {
-		fmt.Fprintf(&b, "Selection mode `graph_visited_blocks` is a query-time graph-routing scout: it starts from static IVF centroid entry rows, greedily expands the query-independent row graph using exact query-to-row scores, then reads the sealed graph-sorted storage blocks containing the visited rows. This is closer to an actual graph visited-set route than centroid-ranked block selection, but it is still not a full production HNSW/TreeDB graph implementation.\n\n")
+		graphKind := "IVF-window"
+		if report.Builder == "ivf_exact_graph_sorted_blocks" {
+			graphKind = "exact in-cluster kNN"
+		}
+		fmt.Fprintf(&b, "Selection mode `graph_visited_blocks` is a query-time graph-routing scout: it starts from static IVF centroid entry rows, greedily expands the query-independent %s row graph using exact query-to-row scores, then reads the sealed graph-sorted storage blocks containing the visited rows. This is closer to an actual graph visited-set route than centroid-ranked block selection, but it is still not a full production HNSW/TreeDB graph implementation.\n\n", graphKind)
+	}
+	if strings.Contains(report.Builder, "exact_graph") {
+		fmt.Fprintf(&b, "The exact in-cluster graph builders are intentionally stronger research proxies: they build exact kNN adjacency inside each IVF cluster, so build cost is expected to scale roughly with the sum of squared cluster sizes times dimension. Treat their build timing as scout evidence, not as a proposed production graph-construction path.\n\n")
 	}
 	if len(report.PQTraining) > 0 {
 		fmt.Fprintf(&b, "## PQ/OPQ/Residual-PQ Training\n\n")
@@ -1666,6 +1880,16 @@ func columnVectorGraphDeep1BBuildableBuilderMarkdown(report columnVectorGraphDee
 			return "This is a **production/buildable granule** scout using deterministic cosine `ivf_graph_sorted_blocks`: rows are assigned to k-means centroids, a query-independent local nearest-neighbor graph is built inside IVF-sorted windows, a deterministic graph traversal order is materialized, and adjacent rows in that graph order are chunked into fixed-size storage blocks. This is a buildable graph-sorted row-adjacent TreeDB-granule proxy, unlike the official top100 oracle clouds. It is still not a full production HNSW/TreeDB graph-visited-set result. Global PQ/OPQ/residual-PQ rows use held-out global codebooks when enabled; local residual PQ and local OPQ train per sealed graph-sorted block with metadata amortized over those block rows."
 		}
 		return "This is a **production/buildable granule** scout using deterministic cosine `ivf_graph_sorted_blocks`: rows are assigned to k-means centroids, a query-independent local nearest-neighbor graph is built inside IVF-sorted windows, a deterministic graph traversal order is materialized, and adjacent rows in that graph order are chunked into fixed-size storage blocks. This is a buildable graph-sorted row-adjacent TreeDB-granule proxy, not an official top100 oracle cloud and not a full production HNSW/TreeDB graph-visited-set result."
+	case "ivf_exact_graph_neighborhood_blocks":
+		if len(report.PQTraining) > 0 || len(report.LocalResidualPQBytes) > 0 || len(report.LocalOPQBytes) > 0 {
+			return "This is a **production/buildable granule** scout using deterministic cosine `ivf_exact_graph_neighborhood_blocks`: rows are assigned to k-means centroids, an exact in-cluster kNN graph is built over the eval slice, and fixed-size storage blocks are formed by graph BFS. This is a stronger buildable graph-neighborhood proxy than the IVF-window graph, unlike the official top100 oracle clouds. It is still not a full production HNSW/TreeDB graph build. Global PQ/OPQ/residual-PQ rows use held-out global codebooks when enabled; local residual PQ and local OPQ train per sealed exact-graph-neighborhood block with metadata amortized over those block rows."
+		}
+		return "This is a **production/buildable granule** scout using deterministic cosine `ivf_exact_graph_neighborhood_blocks`: rows are assigned to k-means centroids, an exact in-cluster kNN graph is built over the eval slice, and fixed-size storage blocks are formed by graph BFS. This is a stronger buildable graph-neighborhood proxy than the IVF-window graph, not an official top100 oracle cloud and not a full production HNSW/TreeDB graph build."
+	case "ivf_exact_graph_sorted_blocks":
+		if len(report.PQTraining) > 0 || len(report.LocalResidualPQBytes) > 0 || len(report.LocalOPQBytes) > 0 {
+			return "This is a **production/buildable granule** scout using deterministic cosine `ivf_exact_graph_sorted_blocks`: rows are assigned to k-means centroids, an exact in-cluster kNN graph is built over the eval slice, a deterministic graph traversal order is materialized, and adjacent rows in that graph order are chunked into fixed-size storage blocks. This is a stronger buildable graph-sorted TreeDB-granule proxy than the IVF-window graph, unlike the official top100 oracle clouds. It is still not a full production HNSW/TreeDB graph-visited-set result. Global PQ/OPQ/residual-PQ rows use held-out global codebooks when enabled; local residual PQ and local OPQ train per sealed exact-graph-sorted block with metadata amortized over those block rows."
+		}
+		return "This is a **production/buildable granule** scout using deterministic cosine `ivf_exact_graph_sorted_blocks`: rows are assigned to k-means centroids, an exact in-cluster kNN graph is built over the eval slice, a deterministic graph traversal order is materialized, and adjacent rows in that graph order are chunked into fixed-size storage blocks. This is a stronger buildable graph-sorted TreeDB-granule proxy than the IVF-window graph, not an official top100 oracle cloud and not a full production HNSW/TreeDB graph-visited-set result."
 	default:
 		return fmt.Sprintf("This is a **production/buildable granule** scout using `%s`. Codec metrics are conditional on the routed candidate union, and trained-codebook methods still require separate train/eval discipline before production claims.", report.Builder)
 	}
