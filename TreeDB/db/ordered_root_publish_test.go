@@ -242,13 +242,18 @@ func TestPublishOrderedRootDeltaGroupMaintenanceAllowsCommandWALWithoutLogicalFr
 		t.Fatalf("ordinary publish error=%v want ErrCommandWALUnsupported", err)
 	}
 
+	rootDelta := mustFrozenSystemMemtable(t, "root/k", "v")
 	newSystemRoot, rootIDs, err := db.PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(
 		storagemaintenance.ColumnAssetRewrite(),
-		nil,
+		[]OrderedRootDeltaPublishInput{{
+			BaseRoot:                  0,
+			Iter:                      rootDelta.NewIterator(nil, nil),
+			StorageMaintenanceRewrite: true,
+		}},
 		nil,
 		func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
-			if len(rootIDs) != 0 {
-				t.Fatalf("rootIDs=%v want none for system-only maintenance publish", rootIDs)
+			if len(rootIDs) != 1 || rootIDs[0] == 0 {
+				t.Fatalf("rootIDs=%v want one non-zero root", rootIDs)
 			}
 			return mustFrozenSystemMemtable(t, "maintenance/column/rewrite", "ok").NewIterator(nil, nil), nil
 		},
@@ -256,8 +261,8 @@ func TestPublishOrderedRootDeltaGroupMaintenanceAllowsCommandWALWithoutLogicalFr
 	if err != nil {
 		t.Fatalf("maintenance publish: %v", err)
 	}
-	if len(rootIDs) != 0 {
-		t.Fatalf("rootIDs=%v want none", rootIDs)
+	if len(rootIDs) != 1 || rootIDs[0] == 0 {
+		t.Fatalf("rootIDs=%v want one non-zero root", rootIDs)
 	}
 	if got := db.State().AppliedCommandLSN; got != 0 {
 		t.Fatalf("AppliedCommandLSN=%d want 0 for storage maintenance publish", got)
@@ -321,6 +326,26 @@ func TestPublishOrderedRootDeltaGroupMaintenanceRejectsMissingPlan(t *testing.T)
 	)
 	if !errors.Is(err, ErrStorageMaintenancePlanMissing) {
 		t.Fatalf("maintenance publish error=%v want ErrStorageMaintenancePlanMissing", err)
+	}
+}
+
+func TestPublishOrderedRootDeltaGroupMaintenanceRejectsSystemOnly(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	defer db.Close()
+
+	_, _, err := db.PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(
+		storagemaintenance.ColumnAssetRewrite(),
+		nil,
+		nil,
+		func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+			t.Fatalf("maintenance system builder should not run for system-only maintenance publish")
+			return nil, nil
+		},
+	)
+	if !errors.Is(err, ErrStorageMaintenanceRootDeltaMissing) {
+		t.Fatalf("maintenance publish error=%v want ErrStorageMaintenanceRootDeltaMissing", err)
 	}
 }
 

@@ -7,11 +7,12 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
-	"github.com/snissn/gomap/TreeDB/internal/storagemaintenance"
 )
 
 func TestColumnAssetRewriteRemapsManifestRefsOutOfMixedSegmentM15C(t *testing.T) {
@@ -289,7 +290,19 @@ func TestColumnAssetRewriteCleansCopiedSegmentOnStalePublishPreflightM15C(t *tes
 	stats, err := col.ColumnAssetRewrite(context.Background(), ColumnAssetRewriteOptions{
 		CandidateRefs: []ColumnAssetRef{candidate},
 		afterCopyHookForTest: func() error {
-			_, _, err := d.PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(storagemaintenance.ColumnAssetRewrite(), nil, nil, func([]uint64) (iterator.UnsafeIterator, error) {
+			payload, err := commitlog.EncodeRawKVBatchPayload([]commitlog.RawKVOperation{{
+				Op:    commitlog.RawKVOpSet,
+				Key:   []byte("column/rewrite/stale-publish-test"),
+				Value: []byte("1"),
+			}})
+			if err != nil {
+				return err
+			}
+			intent, err := d.NewCommandWALIntent(commitlog.CommandKindRawKVBatch, commitlog.CommandScopeRawKV, commitlog.PayloadFormatRawKVBatchV1, payload)
+			if err != nil {
+				return err
+			}
+			_, _, err = d.PublishOrderedRootDeltaGroupWithPreflightCommandWALContextAndSystemDeltaBuilder(nil, nil, intent, func(_ backenddb.CommandWALPublishContext, _ []uint64) (iterator.UnsafeIterator, error) {
 				current := d.AcquireSnapshot()
 				if current == nil {
 					return nil, backenddb.ErrClosed
@@ -344,6 +357,15 @@ func TestColumnAssetRewriteRejectsReadOnlyM15C(t *testing.T) {
 	}
 	afterRefs := columnManifestAssetRefsForCollectionM12A(t, readonly, readonlyCol)
 	assertColumnAssetRefsEqualM15C(t, beforeRefs, afterRefs)
+}
+
+func TestColumnAssetRewriteRejectsUnsupportedRefKindM15C(t *testing.T) {
+	err := validateColumnAssetRewriteRefKinds([]ColumnAssetRef{{
+		Kind: ColumnAssetKind("future-kind"),
+	}})
+	if err == nil || !strings.Contains(err.Error(), "supports only") {
+		t.Fatalf("validateColumnAssetRewriteRefKinds error=%v want unsupported kind", err)
+	}
 }
 
 func columnAssetSegmentNamesM15C(t testing.TB, d *backenddb.DB, col *Collection) []string {

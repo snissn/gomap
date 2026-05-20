@@ -709,6 +709,9 @@ func TestColumnAssetManagerAllocatesDistinctNewSegmentsConcurrentlyM15C(t *testi
 		if ref.FileID == 0 {
 			t.Fatalf("ref[%d]=%+v has zero file_id", i, ref)
 		}
+		if ref.FileID == columnAssetM12ASegmentFileID {
+			t.Fatalf("ref[%d]=%+v used reserved file_id %d", i, ref, columnAssetM12ASegmentFileID)
+		}
 		if seenFileIDs[ref.FileID] {
 			t.Fatalf("duplicate file_id for ref[%d]=%+v refs=%+v", i, ref, refs)
 		}

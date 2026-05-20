@@ -197,7 +197,7 @@ func (c *Collection) prepareColumnPhysicalScanSnapshotViewAtSnapshot(
 	}
 	snapshotState := snap.State()
 	if snapshotState == nil {
-		return columnPhysicalScanSnapshotView{}, errCollectionDBNil
+		return columnPhysicalScanSnapshotView{}, backenddb.ErrClosed
 	}
 
 	diag := columnPhysicalScanDiagnostics{

@@ -320,6 +320,9 @@ func (c *Collection) loadColumnAssetRewriteManifestState() (columnAssetRewriteMa
 }
 
 func (c *Collection) copyColumnAssetRewriteRefs(ctx context.Context, cfg ColumnStoreConfig, refs []ColumnAssetRef) (out columnAssetRewriteCopyResult, retErr error) {
+	if err := validateColumnAssetRewriteRefKinds(refs); err != nil {
+		return columnAssetRewriteCopyResult{}, err
+	}
 	readCache, err := newColumnPhysicalAssetReadCache(c.db.ColumnAssetRootDir(), cfg.AssetManager.Namespace)
 	if err != nil {
 		return columnAssetRewriteCopyResult{}, err
@@ -399,6 +402,15 @@ func cleanupColumnAssetRewriteCopiedSegment(rootDir string, remap columnAssetRew
 	}
 	syncErr := syncColumnAssetDir(filepath.Dir(segmentPath))
 	return errors.Join(removeErr, syncErr)
+}
+
+func validateColumnAssetRewriteRefKinds(refs []ColumnAssetRef) error {
+	for idx, ref := range refs {
+		if ref.Kind != ColumnAssetKindTCS1PartImage {
+			return fmt.Errorf("collections: column asset rewrite supports only %s refs: ref %d kind %q", ColumnAssetKindTCS1PartImage, idx, ref.Kind)
+		}
+	}
+	return nil
 }
 
 func patchColumnAssetRewriteManifestRecords(records []columnManifestRecord, byOldRef map[ColumnAssetRef]ColumnAssetRef) ([]columnManifestRecord, int, error) {

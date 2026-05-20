@@ -45,6 +45,11 @@ var ErrStorageMaintenanceRewriteMarkerMissing = errors.New("treedb: storage-main
 // that was called without a TreeDB-internal storage-maintenance plan token.
 var ErrStorageMaintenancePlanMissing = errors.New("treedb: storage-maintenance publish requires a TreeDB-internal maintenance plan")
 
+// ErrStorageMaintenanceRootDeltaMissing reports a maintenance publish with no
+// root delta to rewrite. System-only logical changes must use command-WAL
+// covered publish APIs.
+var ErrStorageMaintenanceRootDeltaMissing = errors.New("treedb: storage-maintenance publish requires at least one maintenance root delta")
+
 var (
 	errCommandWALContextZeroLSN = errors.New("treedb: command WAL context publish appended zero LSN")
 
@@ -1400,11 +1405,10 @@ func (db *DB) PublishOrderedRootDeltaGroupWithPreflightAndSystemDeltaBuilder(ord
 // PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder is like
 // PublishOrderedRootDeltaGroupWithPreflightAndSystemDeltaBuilder, but permits
 // TreeDB-internal storage-maintenance root rewrites while command-WAL mode is
-// enabled. Callers must provide an internal maintenance plan and must set
-// StorageMaintenanceRewrite on every ordered input when ordered inputs are
-// present; system-only maintenance publishes are allowed. Callers must not use
-// it for logical user mutations; it does not append or advance a command-WAL
-// frame.
+// enabled. Callers must provide an internal maintenance plan and at least one
+// ordered input, and must set StorageMaintenanceRewrite on every ordered input.
+// System-only logical changes must use command-WAL-covered publish APIs. This
+// path does not append or advance a command-WAL frame.
 func (db *DB) PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(plan storagemaintenance.Plan, ordered []OrderedRootDeltaPublishInput, preflight OrderedRootGroupPreflight, buildSystemDeltaIter OrderedRootGroupSystemBuilder) (uint64, []uint64, error) {
 	return db.publishOrderedRootDeltaGroupWithSystemDeltaBuilderWithMaintenancePlan(plan, ordered, preflight, nil, buildSystemDeltaIter, orderedRootDeltaGroupSystemPublishStorageMaintenance)
 }
@@ -1412,6 +1416,9 @@ func (db *DB) PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBui
 func validateStorageMaintenanceOrderedRootDeltaInputs(plan storagemaintenance.Plan, ordered []OrderedRootDeltaPublishInput) error {
 	if !plan.Valid() {
 		return ErrStorageMaintenancePlanMissing
+	}
+	if len(ordered) == 0 {
+		return ErrStorageMaintenanceRootDeltaMissing
 	}
 	for idx := range ordered {
 		if !ordered[idx].StorageMaintenanceRewrite {
