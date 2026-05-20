@@ -331,6 +331,14 @@ func columnVectorGraphDeep1BBuildableGranules(tb testing.TB, builder string, vec
 			tb.Fatalf("COLUMN_VECTOR_DEEP1B_BUILDABLE_GRAPH_DEGREE=%d must be positive for ivf_graph_sorted_blocks", graphDegree)
 		}
 		return columnVectorGraphDeep1BBuildIVFGraphSortedBlockGranules(vectors, invNorms, rows, dims, granuleRows, kmeansIters, graphDegree), "production/buildable graph-sorted row-adjacent scout; ivf_graph_sorted_blocks trains deterministic cosine k-means centroids, builds a query-independent local nearest-neighbor graph inside IVF-sorted windows, materializes a deterministic graph traversal order, and chunks adjacent rows in that graph order into fixed-size TreeDB-style blocks"
+	case "treedb_graph_sorted_part_granules":
+		if kmeansIters <= 0 {
+			tb.Fatalf("COLUMN_VECTOR_DEEP1B_BUILDABLE_KMEANS_ITERS=%d must be positive for treedb_graph_sorted_part_granules", kmeansIters)
+		}
+		if graphDegree <= 0 {
+			tb.Fatalf("COLUMN_VECTOR_DEEP1B_BUILDABLE_GRAPH_DEGREE=%d must be positive for treedb_graph_sorted_part_granules", graphDegree)
+		}
+		return columnVectorGraphDeep1BBuildTreeDBGraphSortedPartGranules(tb, vectors, invNorms, rows, dims, granuleRows, kmeansIters, graphDegree), "production/buildable TreeDB part-granule scout; treedb_graph_sorted_part_granules trains deterministic cosine k-means centroids, builds a query-independent local nearest-neighbor graph inside IVF-sorted windows, materializes that graph traversal order through BuildColumnPart, and derives candidate blocks from ColumnPart.Descriptor.Granules"
 	case "ivf_exact_graph_neighborhood_blocks":
 		if kmeansIters <= 0 {
 			tb.Fatalf("COLUMN_VECTOR_DEEP1B_BUILDABLE_KMEANS_ITERS=%d must be positive for ivf_exact_graph_neighborhood_blocks", kmeansIters)
@@ -348,7 +356,7 @@ func columnVectorGraphDeep1BBuildableGranules(tb testing.TB, builder string, vec
 		}
 		return columnVectorGraphDeep1BBuildIVFExactGraphSortedBlockGranules(vectors, invNorms, rows, dims, granuleRows, kmeansIters, graphDegree), "production/buildable exact-graph-sorted row-adjacent scout; ivf_exact_graph_sorted_blocks trains deterministic cosine k-means centroids, builds exact in-cluster kNN adjacency for the eval slice, materializes a deterministic graph traversal order, and chunks adjacent rows in that graph order into fixed-size TreeDB-style blocks"
 	default:
-		tb.Fatalf("unknown COLUMN_VECTOR_DEEP1B_BUILDABLE_BUILDER=%q; supported: row_id_contiguous, ivf_kmeans, ivf_kmeans_sorted_blocks, ivf_graph_neighborhood_blocks, ivf_graph_sorted_blocks, ivf_exact_graph_neighborhood_blocks, ivf_exact_graph_sorted_blocks", builder)
+		tb.Fatalf("unknown COLUMN_VECTOR_DEEP1B_BUILDABLE_BUILDER=%q; supported: row_id_contiguous, ivf_kmeans, ivf_kmeans_sorted_blocks, ivf_graph_neighborhood_blocks, ivf_graph_sorted_blocks, treedb_graph_sorted_part_granules, ivf_exact_graph_neighborhood_blocks, ivf_exact_graph_sorted_blocks", builder)
 		return nil, ""
 	}
 }
@@ -363,7 +371,7 @@ func columnVectorGraphDeep1BIsGraphVisitedSelection(selection string) bool {
 
 func columnVectorGraphDeep1BBuilderUsesGraph(builder string) bool {
 	switch builder {
-	case "ivf_graph_neighborhood_blocks", "ivf_graph_sorted_blocks", "ivf_exact_graph_neighborhood_blocks", "ivf_exact_graph_sorted_blocks":
+	case "ivf_graph_neighborhood_blocks", "ivf_graph_sorted_blocks", "treedb_graph_sorted_part_granules", "ivf_exact_graph_neighborhood_blocks", "ivf_exact_graph_sorted_blocks":
 		return true
 	default:
 		return false
@@ -372,7 +380,7 @@ func columnVectorGraphDeep1BBuilderUsesGraph(builder string) bool {
 
 func columnVectorGraphDeep1BBuilderUsesKMeans(builder string) bool {
 	switch builder {
-	case "ivf_kmeans", "ivf_kmeans_sorted_blocks", "ivf_graph_neighborhood_blocks", "ivf_graph_sorted_blocks", "ivf_exact_graph_neighborhood_blocks", "ivf_exact_graph_sorted_blocks":
+	case "ivf_kmeans", "ivf_kmeans_sorted_blocks", "ivf_graph_neighborhood_blocks", "ivf_graph_sorted_blocks", "treedb_graph_sorted_part_granules", "ivf_exact_graph_neighborhood_blocks", "ivf_exact_graph_sorted_blocks":
 		return true
 	default:
 		return false
@@ -673,6 +681,79 @@ func columnVectorGraphDeep1BBuildIVFGraphSortedBlockGranules(vectors []float32, 
 		})
 	}
 	return granules
+}
+
+func columnVectorGraphDeep1BBuildTreeDBGraphSortedPartGranules(tb testing.TB, vectors []float32, invNorms []float32, rows int, dims int, targetRows int, iterations int, graphDegree int) []columnVectorGraphDeep1BBuildableGranule {
+	tb.Helper()
+	centroids, assignments, _ := columnVectorGraphDeep1BFitIVFKMeansAssignments(vectors, invNorms, rows, dims, targetRows, iterations)
+	centroidInvNorms := columnVectorGraphDeep1BCentroidInvNorms(centroids, dims)
+	order := columnVectorGraphDeep1BIVFSortedRows(vectors, invNorms, centroids, centroidInvNorms, assignments, rows, dims)
+	adjacency := columnVectorGraphDeep1BBuildIVFWindowGraph(vectors, invNorms, order, rows, dims, graphDegree)
+	graphOrder := columnVectorGraphDeep1BIVFGraphTraversalOrder(order, adjacency, rows)
+	return columnVectorGraphDeep1BBuildTreeDBPartGranulesFromOrder(tb, vectors, invNorms, graphOrder, "treedb_graph_sorted_part_granules", dims, targetRows)
+}
+
+func columnVectorGraphDeep1BBuildTreeDBPartGranulesFromOrder(tb testing.TB, vectors []float32, invNorms []float32, rowOrder []int, builder string, dims int, rowsPerGranule int) []columnVectorGraphDeep1BBuildableGranule {
+	tb.Helper()
+	rows := len(rowOrder)
+	ids := make([]int64, rows)
+	storageVectors := make([]float32, rows*dims)
+	storageInvNorms := make([]float32, rows)
+	for storageRow, sourceRow := range rowOrder {
+		if sourceRow < 0 || sourceRow >= len(invNorms) {
+			tb.Fatalf("%s row order contains source row %d outside [0,%d)", builder, sourceRow, len(invNorms))
+		}
+		ids[storageRow] = int64(storageRow)
+		copy(storageVectors[storageRow*dims:(storageRow+1)*dims], vectors[sourceRow*dims:(sourceRow+1)*dims])
+		storageInvNorms[storageRow] = invNorms[sourceRow]
+	}
+	part, err := BuildColumnPart(1, columnVectorGraphDeep1BTreeDBPartOptions(dims, rowsPerGranule), ColumnBatch{
+		Rows:    rows,
+		Columns: map[string][]int64{"id": ids},
+		Float32Vectors: map[string]Float32VectorColumn{
+			"embedding":          {Dims: dims, Values: storageVectors},
+			"embedding_inv_norm": {Dims: 1, Values: storageInvNorms},
+		},
+	})
+	if err != nil {
+		tb.Fatalf("BuildColumnPart(%s): %v", builder, err)
+	}
+	granules := make([]columnVectorGraphDeep1BBuildableGranule, 0, len(part.Descriptor.Granules))
+	for _, descriptor := range part.Descriptor.Granules {
+		if descriptor.FirstRow < 0 || descriptor.RowCount <= 0 || descriptor.FirstRow+descriptor.RowCount > len(rowOrder) {
+			tb.Fatalf("%s descriptor granule ordinal=%d has invalid first_row=%d row_count=%d for rows=%d", builder, descriptor.Ordinal, descriptor.FirstRow, descriptor.RowCount, len(rowOrder))
+		}
+		rowIDs := append([]int(nil), rowOrder[descriptor.FirstRow:descriptor.FirstRow+descriptor.RowCount]...)
+		centroid := columnVectorGraphDeep1BCentroidForRowIDs(vectors, rowIDs, dims)
+		granules = append(granules, columnVectorGraphDeep1BBuildableGranule{
+			Builder:     builder,
+			Ordinal:     descriptor.Ordinal,
+			FirstRow:    descriptor.FirstRow,
+			Rows:        descriptor.RowCount,
+			RowIDs:      rowIDs,
+			Centroid:    centroid,
+			CentroidInv: float32(columnVectorGraphDeep1BInvNorm(centroid)),
+		})
+	}
+	return granules
+}
+
+func columnVectorGraphDeep1BTreeDBPartOptions(dims int, rowsPerGranule int) ColumnStoreOptions {
+	return ColumnStoreOptions{
+		SchemaVersion: 1,
+		SchemaMode:    ColumnSchemaFixed,
+		Columns: []ColumnDefinition{
+			{Name: "id", Type: ColumnTypeInt64, Encoding: EncodingRawInt64, Compression: CompressionNone, CodecBlockRows: rowsPerGranule},
+			{Name: "embedding", Type: ColumnTypeFloat32Vector, VectorDims: dims, Compression: CompressionNone, CodecBlockRows: rowsPerGranule},
+			{Name: "embedding_inv_norm", Type: ColumnTypeFloat32Vector, VectorDims: 1, Compression: CompressionNone, CodecBlockRows: rowsPerGranule},
+		},
+		LogicalPrimaryKey: LogicalPrimaryKey{Columns: []string{"id"}},
+		SortKey:           SortKey{Columns: []SortKeyColumn{{Column: "id"}}},
+		PartPolicy: ColumnPartPolicy{
+			RowsPerGranule:        rowsPerGranule,
+			DefaultCodecBlockRows: rowsPerGranule,
+		},
+	}
 }
 
 func columnVectorGraphDeep1BBuildIVFExactGraphNeighborhoodBlockGranules(vectors []float32, invNorms []float32, rows int, dims int, targetRows int, iterations int, graphDegree int) []columnVectorGraphDeep1BBuildableGranule {
@@ -2010,6 +2091,11 @@ func columnVectorGraphDeep1BBuildableBuilderMarkdown(report columnVectorGraphDee
 			return "This is a **production/buildable granule** scout using deterministic cosine `ivf_graph_sorted_blocks`: rows are assigned to k-means centroids, a query-independent local nearest-neighbor graph is built inside IVF-sorted windows, a deterministic graph traversal order is materialized, and adjacent rows in that graph order are chunked into fixed-size storage blocks. This is a buildable graph-sorted row-adjacent TreeDB-granule proxy, unlike the official top100 oracle clouds. It is still not a full production HNSW/TreeDB graph-visited-set result. Global PQ/OPQ/residual-PQ rows use held-out global codebooks when enabled; local residual PQ and local OPQ train per sealed graph-sorted block with metadata amortized over those block rows."
 		}
 		return "This is a **production/buildable granule** scout using deterministic cosine `ivf_graph_sorted_blocks`: rows are assigned to k-means centroids, a query-independent local nearest-neighbor graph is built inside IVF-sorted windows, a deterministic graph traversal order is materialized, and adjacent rows in that graph order are chunked into fixed-size storage blocks. This is a buildable graph-sorted row-adjacent TreeDB-granule proxy, not an official top100 oracle cloud and not a full production HNSW/TreeDB graph-visited-set result."
+	case "treedb_graph_sorted_part_granules":
+		if len(report.PQTraining) > 0 || len(report.LocalResidualPQBytes) > 0 || len(report.LocalOPQBytes) > 0 {
+			return "This is a **production/buildable TreeDB part-granule** scout using deterministic cosine `treedb_graph_sorted_part_granules`: rows are assigned to k-means centroids, a query-independent local nearest-neighbor graph is built inside IVF-sorted windows, the deterministic graph traversal order is materialized through `BuildColumnPart`, and candidate blocks are derived from `ColumnPart.Descriptor.Granules`. This is closer to actual TreeDB storage granules than hand-chunked block proxies, but it is still not a full production HNSW/TreeDB graph-visited-set result. The part uses uncompressed float32 vector columns for descriptor materialization; compressed-code rows are the tournament payloads being evaluated. Global PQ/OPQ/residual-PQ rows use held-out global codebooks when enabled; local residual PQ and local OPQ train per actual descriptor granule with metadata amortized over those granule rows."
+		}
+		return "This is a **production/buildable TreeDB part-granule** scout using deterministic cosine `treedb_graph_sorted_part_granules`: rows are assigned to k-means centroids, a query-independent local nearest-neighbor graph is built inside IVF-sorted windows, the deterministic graph traversal order is materialized through `BuildColumnPart`, and candidate blocks are derived from `ColumnPart.Descriptor.Granules`. This is closer to actual TreeDB storage granules than hand-chunked block proxies, not an official top100 oracle cloud and not a full production HNSW/TreeDB graph-visited-set result."
 	case "ivf_exact_graph_neighborhood_blocks":
 		if len(report.PQTraining) > 0 || len(report.LocalResidualPQBytes) > 0 || len(report.LocalOPQBytes) > 0 {
 			return "This is a **production/buildable granule** scout using deterministic cosine `ivf_exact_graph_neighborhood_blocks`: rows are assigned to k-means centroids, an exact in-cluster kNN graph is built over the eval slice, and fixed-size storage blocks are formed by graph BFS. This is a stronger buildable graph-neighborhood proxy than the IVF-window graph, unlike the official top100 oracle clouds. It is still not a full production HNSW/TreeDB graph build. Global PQ/OPQ/residual-PQ rows use held-out global codebooks when enabled; local residual PQ and local OPQ train per sealed exact-graph-neighborhood block with metadata amortized over those block rows."

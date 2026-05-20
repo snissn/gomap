@@ -402,8 +402,8 @@ Interpretation:
 The follow-on run adds one learned residual OPQ rotation per buildable IVF
 granule before the local PQ codebooks. This is the first LOPQ-style scout: the
 rotation and codebooks belong to the sealed granule being stored, but the
-granules are still IVF/k-means blocks over a 32K Deep1B slice rather than graph
-neighborhoods or actual TreeDB granules.
+granules in this run are still IVF/k-means blocks over a 32K Deep1B slice rather
+than graph neighborhoods or actual TreeDB descriptor granules.
 
 Run artifact:
 
@@ -1409,6 +1409,88 @@ Interpretation:
   scan path. That is a kernel implementation fact, not a proof scalar codecs
   are intrinsically slow.
 
+## Actual TreeDB Part-Granule Scout q0..24
+
+The earlier buildable scouts chunked a derived row order directly. This pass
+adds a narrower but more storage-faithful scout: it takes the deterministic
+k-means plus local graph-sorted order, materializes that vector order through
+`BuildColumnPart`, and derives candidate units from
+`ColumnPart.Descriptor.Granules`.
+
+This is closer to actual TreeDB storage granules than hand-chunked fixed-block
+proxies. It is still not a full production HNSW/TreeDB graph-visited-set
+result. The part uses uncompressed float32 vector columns only to materialize
+descriptor granules; the tournament rows below are the compressed candidate
+representations measured over those selected descriptor granules.
+
+Run artifact:
+
+```text
+/tmp/gomap_deep1b_treedb_part_granules_q0_24_20260520_070733/report.md
+```
+
+Run shape:
+
+| Field | Value |
+| --- | ---: |
+| Regime | `buildable_granule_scout` |
+| Builder | `treedb_graph_sorted_part_granules` |
+| Selection | `centroid_blocks` |
+| Eval rows | `32768` |
+| Eval row offset | `8192` |
+| Dims | `96` |
+| Actual `ColumnPart` descriptor granules | `8` |
+| Rows per descriptor granule | `4096` |
+| Granule build ms | `842.447` |
+| K-means iterations | `8` |
+| Graph degree | `16` |
+| Queries | `0..24` |
+| Top granules | `1,4` |
+| PQ train rows | `8192` |
+| PQ budgets | `32,48,64,80,96 B/vector` |
+| PQ iterations | `4` |
+| Scan iterations | `1` |
+
+Routing remains the first production gate. Top4 descriptor-granule routing is
+p50-perfect for top10/top20 containment, but the worst query still loses most
+winners before compression.
+
+| Selection | Queries | Avg candidate rows | p50 top10 routed | p90 top10 routed | Worst top10 routed | p50 top20 routed | p90 top20 routed | Worst top20 routed | p50 top50 routed | Worst top50 routed |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| top1 descriptor granule | `25` | `4096.0` | `8/10` | `10/10` | `0/10` | `15/20` | `20/20` | `2/20` | `33/50` | `6/50` |
+| top4 descriptor granules | `25` | `16384.0` | `10/10` | `10/10` | `4/10` | `20/20` | `20/20` | `9/20` | `49/50` | `31/50` |
+
+Selected aggregate codec rows:
+
+| Selection | Method | Row-code B/vector | Metadata B/vector | Avg total KiB/query | Worst top10@20 | Worst top10@50 | Worst top20@50 | Worst rerank@20 recall@10 | Avg score err | Scan ns/vector |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| top1 | `global_pq_32B` | `32` | `3.50` | `142.0` | `6/10` | `10/10` | `17/20` | `0.60` | `0.01800` | `19.07` |
+| top1 | `local_pca_rank32` | `32` | `3.56` | `142.2` | `2/10` | `2/10` | `11/20` | `0.20` | `0.02481` | `31.46` |
+| top4 | `global_pq_32B` | `32` | `3.50` | `568.0` | `7/10` | `10/10` | `17/20` | `0.70` | `0.01715` | `16.99` |
+| top1 | `global_pq_48B` | `48` | `3.50` | `206.0` | `8/10` | `10/10` | `19/20` | `0.80` | `0.00843` | `27.57` |
+| top1 | `scalar_u4` | `48` | `0.19` | `192.8` | `9/10` | `10/10` | `20/20` | `0.90` | `0.00975` | `1060.79` |
+| top4 | `global_pq_48B` | `48` | `3.50` | `824.0` | `8/10` | `10/10` | `20/20` | `0.80` | `0.00810` | `26.50` |
+| top1 | `global_pq_64B` | `64` | `3.50` | `270.0` | `9/10` | `10/10` | `19/20` | `0.90` | `0.00706` | `40.77` |
+| top4 | `global_pq_64B` | `64` | `3.50` | `1080.0` | `9/10` | `10/10` | `20/20` | `0.90` | `0.00676` | `41.00` |
+| top1 | `global_pq_80B` | `80` | `3.50` | `334.0` | `10/10` | `10/10` | `19/20` | `1.00` | `0.00512` | `49.85` |
+| top4 | `global_pq_80B` | `80` | `3.50` | `1336.0` | `10/10` | `10/10` | `20/20` | `1.00` | `0.00492` | `49.99` |
+| top1 | `global_pq_96B` | `96` | `3.50` | `398.0` | `10/10` | `10/10` | `20/20` | `1.00` | `0.00158` | `58.52` |
+| top4 | `scalar_u8` | `96` | `0.19` | `1539.0` | `10/10` | `10/10` | `20/20` | `1.00` | `0.00058` | `1043.11` |
+
+Interpretation:
+
+- This is the first q0..24 scout that derives candidate units from actual
+  `ColumnPart.Descriptor.Granules` rather than direct hand-chunking.
+- Routing is still the limiting production problem. Top4 descriptor-granule
+  routing has p50-perfect top10/top20 containment, but the worst query routes
+  only `4/10` top10 and `9/20` top20 winners before compression.
+- Conditional on routed descriptor granules, global PQ48 is again the clean
+  low-metadata candidate-generator baseline. Global PQ80 is the first strict
+  top10@20 gate-clearer in this run.
+- Local PCA at matched bytes is not competitive on hard routed unions. Scalar
+  u4/u8 preserve candidate gates well, but the current reconstructed Go scorer
+  is much slower than PQ lanes.
+
 ## Dynamic Graph-Visited Row Scout q0..24
 
 The graph-visited block pass above expands a graph route to sealed storage
@@ -1771,11 +1853,11 @@ The current evidence map is:
 | --- | --- | --- |
 | Separate official top100 oracle locality from production/buildable locality | Top100 sections are labeled as oracle local-neighborhood upper-bound probes. Buildable sections are separated into row-id, IVF/k-means, IVF-sorted fixed blocks, graph-neighborhood fixed blocks, graph-sorted row-adjacent fixed blocks, graph-visited block-routing over sealed graph-sorted blocks, the q0..24 graph-visited PQ/local-residual-PQ stress pass, a q0..24 dynamic graph-visited row scout that is explicitly not sealed-granule proof, and an exact in-cluster graph-visited smoke. | Satisfied for current report wording. |
 | Primary metric is candidate survival, not compressed final top10 order | Tables report exact top10/top20 containment at approx@20/@50 and rerank@20/@50 recall@10. The conclusion keeps exact rerank mandatory. | Satisfied for measured rows. |
-| Fixed byte-budget comparisons | Top100 and buildable runs cover the 32/48/64/80/96-byte ladder where the lane exists. The q0..9 graph-visited full-ladder scout covers 32/48/64/80/96 for PQ, residual-PQ, OPQ-style, local residual-PQ, and local residual-OPQ lanes, and compares them against local PCA and scalar lanes at the same row-code budgets. The broader q0..24 graph-visited stress pass covers PQ at 32/48/64/80/96 and local residual-PQ at 32/48/64, plus local PCA and scalar baselines. The dynamic graph-visited row scout covers PQ at 32/48/64/80/96 plus scalar u4/u8, with local per-granule lanes disabled because dynamic visited sets are not sealed storage granules. The exact in-cluster graph smoke currently covers only 32/48/64/96 selected rows, so it is locality/routing instrumentation rather than a full budget ladder. | Satisfied for the measured scout lanes; still partial for production because larger/full TreeDB granules remain unmeasured. |
+| Fixed byte-budget comparisons | Top100 and buildable runs cover the 32/48/64/80/96-byte ladder where the lane exists. The q0..9 graph-visited full-ladder scout covers 32/48/64/80/96 for PQ, residual-PQ, OPQ-style, local residual-PQ, and local residual-OPQ lanes, and compares them against local PCA and scalar lanes at the same row-code budgets. The broader q0..24 graph-visited stress pass covers PQ at 32/48/64/80/96 and local residual-PQ at 32/48/64, plus local PCA and scalar baselines. The dynamic graph-visited row scout covers PQ at 32/48/64/80/96 plus scalar u4/u8, with local per-granule lanes disabled because dynamic visited sets are not sealed storage granules. The TreeDB descriptor-granule scout covers PQ at 32/48/64/80/96 plus local PCA and scalar baselines over actual `ColumnPart.Descriptor.Granules`. The exact in-cluster graph smoke currently covers only 32/48/64/96 selected rows, so it is locality/routing instrumentation rather than a full budget ladder. | Satisfied for the measured scout lanes; still partial for production because full graph-neighborhood and full TreeDB routing layouts remain unmeasured. |
 | Metadata-amortized accounting | Buildable codebook tables split row-code bytes and metadata bytes. Top100 oracle rows are explicitly row-code payload probes; their metadata amortization is not production evidence. | Satisfied for buildable codebook lanes; top100 metadata remains intentionally unproven. |
 | Train/eval discipline for PQ/OPQ/residual-PQ | PQ, residual-PQ, OPQ-style, local residual-PQ, and local residual-OPQ rows are trained on buildable train samples and evaluated on held-out eval/query slices, not on a single top100 cloud. | Satisfied for measured codebook lanes. |
 | Top100-only method coverage | Measured local PCA int8, adaptive rank, full-dim SQ8, scalar low-bit lanes, scale-policy probes, norm-explicit correction, boundary-weighted PCA, pairwise-difference PCA, query-centered oracle projection, random-rotation scalar/sign probes, PCA plus tiny residual correction, and PCA Cauchy-tail safe-bound/progressive-refinement probes. | Satisfied for top100 oracle method triage. |
-| Production/buildable granule coverage | Measured row-id controls, IVF clusters, IVF-sorted fixed blocks, graph-neighborhood fixed blocks, graph-sorted row-adjacent fixed blocks, a graph-visited block-routing scout over sealed graph-sorted storage blocks, a broader q0..24 graph-visited PQ/local-residual-PQ stress pass, a dynamic q0..24 graph-visited row scout to separate route quality from block expansion, and an exact in-cluster graph-visited smoke over exact graph-sorted blocks. | Partial; dynamic visited rows are not sealed storage granules, and full HNSW/TreeDB graph visited sets plus actual TreeDB granules are not measured. |
+| Production/buildable granule coverage | Measured row-id controls, IVF clusters, IVF-sorted fixed blocks, graph-neighborhood fixed blocks, graph-sorted row-adjacent fixed blocks, a graph-visited block-routing scout over sealed graph-sorted storage blocks, a broader q0..24 graph-visited PQ/local-residual-PQ stress pass, a dynamic q0..24 graph-visited row scout to separate route quality from block expansion, an exact in-cluster graph-visited smoke over exact graph-sorted blocks, and a q0..24 TreeDB `ColumnPart.Descriptor.Granules` scout over graph-sorted vector order. | Partial; dynamic visited rows are not sealed storage granules, the descriptor-granule scout is centroid-routed rather than full graph-routed, and full HNSW/TreeDB graph visited sets plus production graph-neighborhood layouts are not measured. |
 | Cascade architecture | Existing rows report compressed shortlist containment and exact rerank@20/@50 recall. The buildable scout renderer now emits staged cascade measurements: measured compressed scan cost, measured approximate topK selection over materialized scores, a measured resident-fp32 row-id rerank kernel, and a measured resident full-dim SQ8/int8 rerank kernel at top20/top50/top100, with selected-code bytes plus fp32 or full-int8 rerank bytes. | Partial; this is still not full end-to-end latency because I/O, decompression, cache effects, fused scan+topK executor effects, optimized int8 scoring, and optional fp32-after-int8 rerank are not measured. |
 | p50/p90/worst-query behavior | Top100 adaptive-rank tables include p50/p90/worst K. The q0..24 graph-visited block stress pass and dynamic row scout add broader p50/p90/worst routing and conditional-codec evidence for promoted PQ/local-residual-PQ/global-PQ lanes. The buildable scout renderer now emits aggregate routing and conditional-codec p50/p90/worst tables for new artifacts. The curated historical sections in this report still emphasize p50/worst unless regenerated from those artifacts. | Partial; larger buildable runs should be regenerated or summarized with the new p90 tables before final promotion. |
 | Production promotion criteria | Current report does not promote spherical hot scoring, local PCA as a final ranker, OPQ as a winner, graph-visited block routing as a production route, exact in-cluster graph construction as a production builder, or top100-only oracle projections as production methods. It promotes global PQ48/PQ64 as the simplest measured low-byte trained-codebook candidate-generator baseline, global PQ80/PQ96 as clean high-byte error-reduction baselines, and local residual-PQ as a metadata-heavy challenger that improves hard conditional shortlist gates at extra metadata cost. | Satisfied for current evidence, but not final until full graph visited sets and TreeDB granules are measured. |
@@ -1783,18 +1865,21 @@ The current evidence map is:
 The most important remaining gap is production locality. The report has measured
 several buildable fixed-block proxies, graph-visited block-routing scouts, and a
 dynamic graph-visited row scout up to q0..24 for the current PQ/local-residual-PQ
-frontier, but it still has not shown that actual TreeDB storage granules, full
-graph visited sets, or production graph-neighborhood layouts preserve the same
-candidate-survival frontier. Until that is measured, the current result is a
-strong research frontier, not a production format decision.
+frontier, plus a q0..24 actual `ColumnPart.Descriptor.Granules` scout. It still
+has not shown that full graph visited sets or production graph-neighborhood
+layouts preserve the same candidate-survival frontier, and the descriptor-granule
+run is centroid-routed with hard-query misses. Until those routes are measured,
+the current result is a strong research frontier, not a production format
+decision.
 
 ## Recommended Next Work
 
 1. Extend the trained graph-neighborhood, graph-sorted, and graph-visited
    block-routing runs beyond the current q0..24 graph-visited block and dynamic
    row scouts to larger query coverage and larger train/eval slices, then add
-   full HNSW/TreeDB graph-visited-set and actual TreeDB granule builders. This
-   is the next required step before any production compression claim.
+   full HNSW/TreeDB graph-visited-set routing and graph-routed TreeDB descriptor
+   granule builders. This is the next required step before any production
+   compression claim.
 2. Repeat the PQ/residual-PQ/OPQ/local-residual-PQ/local-residual-OPQ
    same-byte tournament with broader train/eval coverage and stricter metadata
    amortization checks. Do not train codebooks on a single official top100
