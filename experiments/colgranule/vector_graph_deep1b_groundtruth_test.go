@@ -153,61 +153,68 @@ type columnVectorGraphDeep1BGroundtruthPCAQueryRankReport struct {
 }
 
 type columnVectorGraphDeep1BGroundtruthMethodReport struct {
-	Regime                          string  `json:"regime"`
-	Family                          string  `json:"family"`
-	Name                            string  `json:"name"`
-	RowCodeBytesPerVector           float64 `json:"row_code_bytes_per_vector"`
-	MetadataBytesPerVector          float64 `json:"metadata_bytes_per_vector"`
-	TotalBytesPerVector             float64 `json:"total_bytes_per_vector"`
-	MetadataStatus                  string  `json:"metadata_status"`
-	EstimatedRowCodeBytesPerQuery   float64 `json:"estimated_row_code_bytes_per_query,omitempty"`
-	EstimatedTotalBytesPerQuery     float64 `json:"estimated_total_bytes_per_query,omitempty"`
-	EstimatedBytesReadStatus        string  `json:"estimated_bytes_read_status,omitempty"`
-	CandidateRows                   int     `json:"candidate_rows,omitempty"`
-	CompressedScanNanosPerQuery     float64 `json:"compressed_scan_nanos_per_query,omitempty"`
-	ExactFP32RerankNanosPerVector   float64 `json:"exact_fp32_rerank_nanos_per_vector,omitempty"`
-	CascadeFP32Top20NanosPerQuery   float64 `json:"cascade_fp32_top20_nanos_per_query,omitempty"`
-	CascadeFP32Top50NanosPerQuery   float64 `json:"cascade_fp32_top50_nanos_per_query,omitempty"`
-	CascadeFP32Top100NanosPerQuery  float64 `json:"cascade_fp32_top100_nanos_per_query,omitempty"`
-	FP32RerankTop20BytesPerQuery    float64 `json:"fp32_rerank_top20_bytes_per_query,omitempty"`
-	FP32RerankTop50BytesPerQuery    float64 `json:"fp32_rerank_top50_bytes_per_query,omitempty"`
-	FP32RerankTop100BytesPerQuery   float64 `json:"fp32_rerank_top100_bytes_per_query,omitempty"`
-	CascadeFP32Top20BytesPerQuery   float64 `json:"cascade_fp32_top20_bytes_per_query,omitempty"`
-	CascadeFP32Top50BytesPerQuery   float64 `json:"cascade_fp32_top50_bytes_per_query,omitempty"`
-	CascadeFP32Top100BytesPerQuery  float64 `json:"cascade_fp32_top100_bytes_per_query,omitempty"`
-	CascadeEstimateStatus           string  `json:"cascade_estimate_status,omitempty"`
-	BuildNanos                      int64   `json:"build_nanos"`
-	ScanNanosPerVector              float64 `json:"scan_nanos_per_vector"`
-	Top10Overlap                    int     `json:"top10_overlap"`
-	RecallAt10                      float64 `json:"recall_at_10"`
-	Top20Overlap                    int     `json:"top20_overlap,omitempty"`
-	RecallAt20                      float64 `json:"recall_at_20,omitempty"`
-	Top50Overlap                    int     `json:"top50_overlap,omitempty"`
-	RecallAt50                      float64 `json:"recall_at_50,omitempty"`
-	Top10InApproxTop20              int     `json:"top10_in_approx_top20,omitempty"`
-	Top10RecallAt20                 float64 `json:"top10_recall_at_20,omitempty"`
-	Top10InApproxTop50              int     `json:"top10_in_approx_top50,omitempty"`
-	Top10RecallAt50                 float64 `json:"top10_recall_at_50,omitempty"`
-	Top10InApproxTop100             int     `json:"top10_in_approx_top100,omitempty"`
-	Top10RecallAt100                float64 `json:"top10_recall_at_100,omitempty"`
-	Top20InApproxTop50              int     `json:"top20_in_approx_top50,omitempty"`
-	Top20RecallAt50                 float64 `json:"top20_recall_at_50,omitempty"`
-	Top20InApproxTop100             int     `json:"top20_in_approx_top100,omitempty"`
-	Top20RecallAt100                float64 `json:"top20_recall_at_100,omitempty"`
-	ExactRerankRecallAt10FromTop20  float64 `json:"exact_rerank_recall_at_10_from_top20,omitempty"`
-	ExactRerankRecallAt10FromTop50  float64 `json:"exact_rerank_recall_at_10_from_top50,omitempty"`
-	ExactRerankRecallAt10FromTop100 float64 `json:"exact_rerank_recall_at_10_from_top100,omitempty"`
-	MeanScoreError                  float64 `json:"mean_score_error"`
-	MaxScoreError                   float64 `json:"max_score_error"`
-	MeanErrorOverGap10              float64 `json:"mean_error_over_gap_10_11,omitempty"`
-	MaxErrorOverGap10               float64 `json:"max_error_over_gap_10_11,omitempty"`
-	MeanErrorOverGap20              float64 `json:"mean_error_over_gap_20_21,omitempty"`
-	MaxErrorOverGap20               float64 `json:"max_error_over_gap_20_21,omitempty"`
-	MeanErrorOverGap50              float64 `json:"mean_error_over_gap_50_51,omitempty"`
-	MaxErrorOverGap50               float64 `json:"max_error_over_gap_50_51,omitempty"`
-	MeanRelativeL2                  float64 `json:"mean_relative_l2,omitempty"`
-	MaxRelativeL2                   float64 `json:"max_relative_l2,omitempty"`
-	Notes                           string  `json:"notes,omitempty"`
+	Regime                                 string  `json:"regime"`
+	Family                                 string  `json:"family"`
+	Name                                   string  `json:"name"`
+	RowCodeBytesPerVector                  float64 `json:"row_code_bytes_per_vector"`
+	MetadataBytesPerVector                 float64 `json:"metadata_bytes_per_vector"`
+	TotalBytesPerVector                    float64 `json:"total_bytes_per_vector"`
+	MetadataStatus                         string  `json:"metadata_status"`
+	EstimatedRowCodeBytesPerQuery          float64 `json:"estimated_row_code_bytes_per_query,omitempty"`
+	EstimatedTotalBytesPerQuery            float64 `json:"estimated_total_bytes_per_query,omitempty"`
+	EstimatedBytesReadStatus               string  `json:"estimated_bytes_read_status,omitempty"`
+	CandidateRows                          int     `json:"candidate_rows,omitempty"`
+	CompressedScanNanosPerQuery            float64 `json:"compressed_scan_nanos_per_query,omitempty"`
+	ApproxTop20SelectionNanosPerQuery      float64 `json:"approx_top20_selection_nanos_per_query,omitempty"`
+	ApproxTop50SelectionNanosPerQuery      float64 `json:"approx_top50_selection_nanos_per_query,omitempty"`
+	ApproxTop100SelectionNanosPerQuery     float64 `json:"approx_top100_selection_nanos_per_query,omitempty"`
+	ExactFP32RerankNanosPerVector          float64 `json:"exact_fp32_rerank_nanos_per_vector,omitempty"`
+	CascadeFP32Top20NanosPerQuery          float64 `json:"cascade_fp32_top20_nanos_per_query,omitempty"`
+	CascadeFP32Top50NanosPerQuery          float64 `json:"cascade_fp32_top50_nanos_per_query,omitempty"`
+	CascadeFP32Top100NanosPerQuery         float64 `json:"cascade_fp32_top100_nanos_per_query,omitempty"`
+	MeasuredCascadeFP32Top20NanosPerQuery  float64 `json:"measured_cascade_fp32_top20_nanos_per_query,omitempty"`
+	MeasuredCascadeFP32Top50NanosPerQuery  float64 `json:"measured_cascade_fp32_top50_nanos_per_query,omitempty"`
+	MeasuredCascadeFP32Top100NanosPerQuery float64 `json:"measured_cascade_fp32_top100_nanos_per_query,omitempty"`
+	FP32RerankTop20BytesPerQuery           float64 `json:"fp32_rerank_top20_bytes_per_query,omitempty"`
+	FP32RerankTop50BytesPerQuery           float64 `json:"fp32_rerank_top50_bytes_per_query,omitempty"`
+	FP32RerankTop100BytesPerQuery          float64 `json:"fp32_rerank_top100_bytes_per_query,omitempty"`
+	CascadeFP32Top20BytesPerQuery          float64 `json:"cascade_fp32_top20_bytes_per_query,omitempty"`
+	CascadeFP32Top50BytesPerQuery          float64 `json:"cascade_fp32_top50_bytes_per_query,omitempty"`
+	CascadeFP32Top100BytesPerQuery         float64 `json:"cascade_fp32_top100_bytes_per_query,omitempty"`
+	CascadeEstimateStatus                  string  `json:"cascade_estimate_status,omitempty"`
+	MeasuredCascadeStatus                  string  `json:"measured_cascade_status,omitempty"`
+	BuildNanos                             int64   `json:"build_nanos"`
+	ScanNanosPerVector                     float64 `json:"scan_nanos_per_vector"`
+	Top10Overlap                           int     `json:"top10_overlap"`
+	RecallAt10                             float64 `json:"recall_at_10"`
+	Top20Overlap                           int     `json:"top20_overlap,omitempty"`
+	RecallAt20                             float64 `json:"recall_at_20,omitempty"`
+	Top50Overlap                           int     `json:"top50_overlap,omitempty"`
+	RecallAt50                             float64 `json:"recall_at_50,omitempty"`
+	Top10InApproxTop20                     int     `json:"top10_in_approx_top20,omitempty"`
+	Top10RecallAt20                        float64 `json:"top10_recall_at_20,omitempty"`
+	Top10InApproxTop50                     int     `json:"top10_in_approx_top50,omitempty"`
+	Top10RecallAt50                        float64 `json:"top10_recall_at_50,omitempty"`
+	Top10InApproxTop100                    int     `json:"top10_in_approx_top100,omitempty"`
+	Top10RecallAt100                       float64 `json:"top10_recall_at_100,omitempty"`
+	Top20InApproxTop50                     int     `json:"top20_in_approx_top50,omitempty"`
+	Top20RecallAt50                        float64 `json:"top20_recall_at_50,omitempty"`
+	Top20InApproxTop100                    int     `json:"top20_in_approx_top100,omitempty"`
+	Top20RecallAt100                       float64 `json:"top20_recall_at_100,omitempty"`
+	ExactRerankRecallAt10FromTop20         float64 `json:"exact_rerank_recall_at_10_from_top20,omitempty"`
+	ExactRerankRecallAt10FromTop50         float64 `json:"exact_rerank_recall_at_10_from_top50,omitempty"`
+	ExactRerankRecallAt10FromTop100        float64 `json:"exact_rerank_recall_at_10_from_top100,omitempty"`
+	MeanScoreError                         float64 `json:"mean_score_error"`
+	MaxScoreError                          float64 `json:"max_score_error"`
+	MeanErrorOverGap10                     float64 `json:"mean_error_over_gap_10_11,omitempty"`
+	MaxErrorOverGap10                      float64 `json:"max_error_over_gap_10_11,omitempty"`
+	MeanErrorOverGap20                     float64 `json:"mean_error_over_gap_20_21,omitempty"`
+	MaxErrorOverGap20                      float64 `json:"max_error_over_gap_20_21,omitempty"`
+	MeanErrorOverGap50                     float64 `json:"mean_error_over_gap_50_51,omitempty"`
+	MaxErrorOverGap50                      float64 `json:"max_error_over_gap_50_51,omitempty"`
+	MeanRelativeL2                         float64 `json:"mean_relative_l2,omitempty"`
+	MaxRelativeL2                          float64 `json:"max_relative_l2,omitempty"`
+	Notes                                  string  `json:"notes,omitempty"`
 }
 
 type columnVectorGraphDeep1BRemoteRowCache struct {
@@ -865,6 +872,18 @@ func columnVectorGraphDeep1BSetCascadeFP32RerankEstimate(method *columnVectorGra
 	method.CascadeFP32Top50BytesPerQuery = method.EstimatedTotalBytesPerQuery + method.FP32RerankTop50BytesPerQuery
 	method.CascadeFP32Top100BytesPerQuery = method.EstimatedTotalBytesPerQuery + method.FP32RerankTop100BytesPerQuery
 	method.CascadeEstimateStatus = "estimated_from_measured_compressed_scan_kernel_and_measured_resident_fp32_rowid_rerank_kernel_excludes_topk_selection_io_and_cache_effects"
+	if method.ApproxTop20SelectionNanosPerQuery > 0 {
+		method.MeasuredCascadeFP32Top20NanosPerQuery = method.CompressedScanNanosPerQuery + method.ApproxTop20SelectionNanosPerQuery + exactFP32RerankNanosPerVector*float64(min(20, candidateRows))
+	}
+	if method.ApproxTop50SelectionNanosPerQuery > 0 {
+		method.MeasuredCascadeFP32Top50NanosPerQuery = method.CompressedScanNanosPerQuery + method.ApproxTop50SelectionNanosPerQuery + exactFP32RerankNanosPerVector*float64(min(50, candidateRows))
+	}
+	if method.ApproxTop100SelectionNanosPerQuery > 0 {
+		method.MeasuredCascadeFP32Top100NanosPerQuery = method.CompressedScanNanosPerQuery + method.ApproxTop100SelectionNanosPerQuery + exactFP32RerankNanosPerVector*float64(min(100, candidateRows))
+	}
+	if method.MeasuredCascadeFP32Top20NanosPerQuery > 0 || method.MeasuredCascadeFP32Top50NanosPerQuery > 0 || method.MeasuredCascadeFP32Top100NanosPerQuery > 0 {
+		method.MeasuredCascadeStatus = "measured_compressed_scan_kernel_plus_measured_approx_topk_selection_over_materialized_scores_plus_measured_resident_fp32_rowid_rerank_excludes_io_decompression_cache_and_fused_executor_effects"
+	}
 }
 
 func columnVectorGraphDeep1BFillGroundtruthMethodMetrics(method *columnVectorGraphDeep1BGroundtruthMethodReport, exact []float32, approximate []float32, margins map[string]float64) {
@@ -912,6 +931,30 @@ func columnVectorGraphDeep1BMeasureGroundtruthScan(rows int, iters int, score fu
 	}
 	elapsed := time.Since(start)
 	return float64(elapsed.Nanoseconds()) / float64(rows*iters)
+}
+
+func columnVectorGraphDeep1BSetApproxTopKSelectionTimings(method *columnVectorGraphDeep1BGroundtruthMethodReport, approximate []float32, iters int) {
+	if len(approximate) == 0 || iters <= 0 {
+		return
+	}
+	method.ApproxTop20SelectionNanosPerQuery = columnVectorGraphDeep1BMeasureApproxTopKSelection(approximate, 20, iters)
+	method.ApproxTop50SelectionNanosPerQuery = columnVectorGraphDeep1BMeasureApproxTopKSelection(approximate, 50, iters)
+	method.ApproxTop100SelectionNanosPerQuery = columnVectorGraphDeep1BMeasureApproxTopKSelection(approximate, 100, iters)
+}
+
+func columnVectorGraphDeep1BMeasureApproxTopKSelection(approximate []float32, topK int, iters int) float64 {
+	if len(approximate) == 0 || topK <= 0 || iters <= 0 {
+		return 0
+	}
+	topK = min(topK, len(approximate))
+	topRows := make([]int, topK)
+	topScores := make([]float32, topK)
+	start := time.Now()
+	for i := 0; i < iters; i++ {
+		columnVectorGraphDeep1BTopKFromScores(approximate, topK, topRows, topScores)
+	}
+	elapsed := time.Since(start)
+	return float64(elapsed.Nanoseconds()) / float64(iters)
 }
 
 type columnVectorGraphDeep1BLocalPCAScorer struct {

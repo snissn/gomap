@@ -1316,7 +1316,7 @@ The current evidence map is:
 | Train/eval discipline for PQ/OPQ/residual-PQ | PQ, residual-PQ, OPQ-style, local residual-PQ, and local residual-OPQ rows are trained on buildable train samples and evaluated on held-out eval/query slices, not on a single top100 cloud. | Satisfied for measured codebook lanes. |
 | Top100-only method coverage | Measured local PCA int8, adaptive rank, full-dim SQ8, scalar low-bit lanes, scale-policy probes, norm-explicit correction, boundary-weighted PCA, pairwise-difference PCA, query-centered oracle projection, random-rotation scalar/sign probes, and PCA plus tiny residual correction. | Broadly satisfied; low-rank-plus-tail progressive bounds remain open. |
 | Production/buildable granule coverage | Measured row-id controls, IVF clusters, IVF-sorted fixed blocks, graph-neighborhood fixed blocks, graph-sorted row-adjacent fixed blocks, and a graph-visited block-routing scout over sealed graph-sorted storage blocks. | Partial; full HNSW/TreeDB graph visited sets and actual TreeDB granules are not measured. |
-| Cascade architecture | Existing rows report compressed shortlist containment and exact rerank@20/@50 recall. The buildable scout renderer now also emits first-order cascade estimates: measured compressed scan cost plus a measured resident-fp32 row-id rerank kernel at top20/top50/top100, with selected-code bytes plus fp32 vector+invNorm rerank bytes. | Partial; this is still not full end-to-end latency because topK selection, I/O, decompression, cache effects, and optional fp32-after-int8 rerank are not measured. |
+| Cascade architecture | Existing rows report compressed shortlist containment and exact rerank@20/@50 recall. The buildable scout renderer now emits staged cascade measurements: measured compressed scan cost, measured approximate topK selection over materialized scores, and a measured resident-fp32 row-id rerank kernel at top20/top50/top100, with selected-code bytes plus fp32 vector+invNorm rerank bytes. | Partial; this is still not full end-to-end latency because I/O, decompression, cache effects, fused scan+topK executor effects, and optional fp32-after-int8 rerank are not measured. |
 | p50/p90/worst-query behavior | Top100 adaptive-rank tables include p50/p90/worst K. The buildable scout renderer now emits aggregate routing and conditional-codec p50/p90/worst tables for new artifacts. The curated historical sections in this report still emphasize p50/worst unless regenerated from those artifacts. | Partial; larger buildable runs should be regenerated or summarized with the new p90 tables before final promotion. |
 | Production promotion criteria | Current report does not promote spherical hot scoring, local PCA as a final ranker, OPQ as a winner, graph-visited block routing as a production route, or top100-only oracle projections as production methods. It promotes global PQ48/PQ64 as the simplest measured trained-codebook candidate-generator baseline and local residual-PQ as a low-byte-plus-metadata challenger. | Satisfied for current evidence, but not final until full graph visited sets and TreeDB granules are measured. |
 
@@ -1339,10 +1339,10 @@ strong research frontier, not a production format decision.
    train codebooks on a single official top100 cloud.
 3. Extend local OPQ/LOPQ to production-plausible graph/TreeDB granules and add
    PCA plus residual correction if local PCA remains promising.
-4. Extend the cascade benchmark beyond the current first-order scan-plus-fp32
-   rerank estimates: add topK selection, full-dim int8 rerank, optional exact
-   fp32 rerank, p50/p95 end-to-end latency, decompression/I/O/cache effects,
-   and cache-aware bytes read/query.
+4. Extend the cascade benchmark beyond the current staged scan-plus-topK-plus
+   fp32 rerank measurements: add full-dim int8 rerank, optional exact fp32
+   rerank, p50/p95 end-to-end latency, decompression/I/O/cache effects, a fused
+   scan+topK executor, and cache-aware bytes read/query.
 5. Finish safe/progressive low-rank-plus-tail bounds only if the top100 oracle
    path remains needed for method triage; the tiny residual sketch has now been
    rerun on queries `0..99` and is not promoted above the current oracle

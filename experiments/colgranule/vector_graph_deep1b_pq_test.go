@@ -546,6 +546,7 @@ func columnVectorGraphDeep1BEvaluateBuildablePQMethod(vectors []float32, invNorm
 	method.MaxRelativeL2 = encoding.maxRelativeL2
 	columnVectorGraphDeep1BSetEstimatedCandidateBytesRead(&method, len(rowIDs))
 	columnVectorGraphDeep1BFillGroundtruthMethodMetrics(&method, exactScores, encoding.approxScores, margins)
+	columnVectorGraphDeep1BSetApproxTopKSelectionTimings(&method, encoding.approxScores, scanIters)
 	return method
 }
 
