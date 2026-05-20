@@ -248,6 +248,12 @@ func (idx *columnPhysicalVisibilityIndex) cloneColumnDeclaredValues(values []col
 			out[i].StringBytes = idx.cloneBytes(out[i].StringBytes)
 			out[i].String = ""
 		}
+		if out[i].Float32Vector != nil {
+			out[i].Float32Vector = append([]float32(nil), out[i].Float32Vector...)
+		}
+		if out[i].AdjacencyList != nil {
+			out[i].AdjacencyList = append([]uint32(nil), out[i].AdjacencyList...)
+		}
 	}
 	return out
 }
