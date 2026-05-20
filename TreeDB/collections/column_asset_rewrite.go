@@ -264,8 +264,8 @@ func (c *Collection) columnAssetRewrite(ctx context.Context, opts columnAssetRew
 	for _, ref := range remap.newRefs {
 		stats.BytesCopied += ref.Length
 	}
-	stats.SupersededRefs = append(stats.SupersededRefs, remap.oldRefs...)
-	stats.RemappedRefs = append(stats.RemappedRefs, remap.newRefs...)
+	stats.SupersededRefs = remap.oldRefs
+	stats.RemappedRefs = remap.newRefs
 	stats.RemapManifestRoot = rootIDs[0]
 	stats.RemapSystemRoot = newSystemRoot
 	stats.RemapSegmentFileID = remap.segmentFileID
