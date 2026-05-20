@@ -375,26 +375,38 @@ func buildColumnAssetReachabilityPlan(ctx context.Context, input columnAssetReac
 		return plan, err
 	}
 
-	rangeCounts := make(map[uint32]int, len(segments))
-	i := 0
-	for ref := range input.refs {
-		if i%columnAssetReachabilityContextCheckInterval == 0 {
-			if err := ctx.Err(); err != nil {
-				return columnAssetReachabilityPlanIdentity(input), err
+	var rangesByFile map[uint32]columnAssetReachabilityRangeSet
+	if precountColumnAssetReachabilityRanges(len(input.refs), len(segments)) {
+		rangeCountsCap := len(segments)
+		if rangeCountsCap < 1 {
+			rangeCountsCap = 1
+		}
+		if rangeCountsCap > len(input.refs) {
+			rangeCountsCap = len(input.refs)
+		}
+		rangeCounts := make(map[uint32]int, rangeCountsCap)
+		i := 0
+		for ref := range input.refs {
+			if i%columnAssetReachabilityContextCheckInterval == 0 {
+				if err := ctx.Err(); err != nil {
+					return columnAssetReachabilityPlanIdentity(input), err
+				}
+			}
+			i++
+			if columnAssetReachabilityRefCanContributeRange(ref, input.namespace) {
+				rangeCounts[ref.FileID]++
 			}
 		}
-		i++
-		if columnAssetReachabilityRefCanContributeRange(ref, input.namespace) {
-			rangeCounts[ref.FileID]++
-		}
-	}
-	rangesByFile := make(map[uint32]columnAssetReachabilityRangeSet, len(rangeCounts))
-	for fileID, count := range rangeCounts {
-		if count > 1 {
-			rangesByFile[fileID] = columnAssetReachabilityRangeSet{
-				ranges: make([]columnAssetReachabilityRange, 0, count),
+		rangesByFile = make(map[uint32]columnAssetReachabilityRangeSet, len(rangeCounts))
+		for fileID, count := range rangeCounts {
+			if count > 1 {
+				rangesByFile[fileID] = columnAssetReachabilityRangeSet{
+					ranges: make([]columnAssetReachabilityRange, 0, count),
+				}
 			}
 		}
+	} else if len(input.refs) != 0 {
+		rangesByFile = make(map[uint32]columnAssetReachabilityRangeSet, len(input.refs))
 	}
 	if input.detailed {
 		plan.Entries = make([]ColumnAssetReachabilityRefEntry, 0, len(input.refs))
@@ -554,6 +566,20 @@ func buildColumnAssetReachabilityPlan(ctx context.Context, input columnAssetReac
 		}
 	}
 	return plan, nil
+}
+
+// Pre-counting keeps dense multi-ref segments allocation-stable by pre-sizing
+// range slices. Sparse one-ref-per-segment GC plans skip it to avoid a second
+// large map and pass over the same refs.
+func precountColumnAssetReachabilityRanges(refCount, segmentCount int) bool {
+	if refCount == 0 {
+		return false
+	}
+	if segmentCount == 0 {
+		return true
+	}
+	refsPerSegment := refCount / segmentCount
+	return refsPerSegment > 4 || (refsPerSegment == 4 && refCount%segmentCount != 0)
 }
 
 func columnAssetReachabilityPlanIdentity(input columnAssetReachabilityInput) ColumnAssetReachabilityPlan {
