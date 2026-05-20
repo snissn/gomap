@@ -348,6 +348,21 @@ func TestColumnPhysicalQuerySnapshotViewSingleRefUsesPinnedManifestM14B(t *testi
 	}
 }
 
+func TestColumnPhysicalQueryParallelFailsClosedForSerialShapesM14B(t *testing.T) {
+	req := ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "kind"}
+	multiRef, closeMulti := openColumnPhysicalInsertMultiGenerationFixtureM14B(t, 4)
+	defer closeMulti()
+	if _, err := multiRef.RunColumnPhysicalQueryParallel(req, 1); !errors.Is(err, ErrColumnQueryPlanUnsupported) || !strings.Contains(err.Error(), "at least two workers") {
+		t.Fatalf("RunColumnPhysicalQueryParallel one worker err=%v want fail-closed worker-count error", err)
+	}
+
+	singleRef, closeSingle := openColumnPhysicalQueryFixtureM13B(t, columnPhysicalQueryFixtureEventsM13B(16))
+	defer closeSingle()
+	if _, err := singleRef.RunColumnPhysicalQueryParallel(req, 4); !errors.Is(err, ErrColumnQueryPlanUnsupported) || !strings.Contains(err.Error(), "more than one asset ref") {
+		t.Fatalf("RunColumnPhysicalQueryParallel one ref err=%v want fail-closed asset-ref error", err)
+	}
+}
+
 func TestColumnPhysicalQueryParallelFailsClosedForMutationVisibilityM14B(t *testing.T) {
 	reopened, closeFn, _ := openColumnPhysicalMutationFixtureM13C(t, 64)
 	defer closeFn()

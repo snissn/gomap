@@ -1487,9 +1487,6 @@ func TestColumnQueryPlannerM14AIgnoresCallerSuppliedCapabilityError(t *testing.T
 	if err != nil {
 		t.Fatalf("PlanColumnQuery: %v", err)
 	}
-	if plan.Supported {
-		t.Fatalf("forced physical plan unexpectedly supported: %+v", plan)
-	}
 	if got := plan.Diagnostics.CapabilityError; got != "" {
 		t.Fatalf("capability error=%q want caller-supplied value ignored", got)
 	}

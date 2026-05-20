@@ -1123,11 +1123,21 @@ func goToolExecutable() string {
 	}
 	if goroot := runtime.GOROOT(); goroot != "" {
 		candidate := filepath.Join(goroot, "bin", name)
-		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+		if info, err := os.Stat(candidate); err == nil && goToolCandidateExecutable(info) {
 			return candidate
 		}
 	}
 	return "go"
+}
+
+func goToolCandidateExecutable(info os.FileInfo) bool {
+	if info == nil || info.IsDir() {
+		return false
+	}
+	if runtime.GOOS == "windows" {
+		return true
+	}
+	return info.Mode().Perm()&0o111 != 0
 }
 
 func contentionProfilePath(globalPath, kind, testName, dbName string) string {
