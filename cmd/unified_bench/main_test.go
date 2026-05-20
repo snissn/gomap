@@ -1939,6 +1939,18 @@ func TestWriteRuntimeProfileDeltaProfile_EmptyOutputSkipsFile(t *testing.T) {
 }
 
 func TestGoToolExecutableFallsBackToRuntimeGOROOTWhenPATHMissing(t *testing.T) {
+	goroot := runtime.GOROOT()
+	if goroot == "" {
+		t.Skip("runtime GOROOT unavailable")
+	}
+	name := "go"
+	if runtime.GOOS == "windows" {
+		name = "go.exe"
+	}
+	candidate := filepath.Join(goroot, "bin", name)
+	if info, err := os.Stat(candidate); err != nil || info.IsDir() {
+		t.Skipf("runtime GOROOT go tool unavailable at %s: stat=(%v, %v)", candidate, info, err)
+	}
 	t.Setenv("PATH", "")
 
 	path := goToolExecutable()
