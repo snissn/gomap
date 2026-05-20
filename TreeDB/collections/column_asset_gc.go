@@ -59,6 +59,10 @@ func (c *Collection) ColumnAssetGC(ctx context.Context, opts ColumnAssetGCOption
 		if err := c.db.CheckStorageMaintenanceReady(); err != nil {
 			return stats, err
 		}
+		// V1 destructive GC keeps planning under the mutation lock so the
+		// candidate/protection view cannot race with collection writes. A later
+		// planner snapshot handoff can narrow this lock once benchmark evidence
+		// justifies the extra complexity.
 		unlock := c.lockMutation()
 		defer unlock.Unlock()
 	}
