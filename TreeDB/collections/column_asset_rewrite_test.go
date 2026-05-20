@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -50,6 +51,82 @@ func TestColumnAssetRewriteEligibleRefsAreDeterministicM15C(t *testing.T) {
 	}
 	if compareColumnAssetRefs(refs[0], older) != 0 || compareColumnAssetRefs(refs[1], newer) != 0 {
 		t.Fatalf("eligible refs order=%+v want [%+v %+v]", refs, older, newer)
+	}
+}
+
+func TestPatchColumnAssetRewriteManifestRecordsRemapsOnlyRefFieldsM15C(t *testing.T) {
+	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col := openColumnStoreCollectionM10B(t, d)
+	if _, err := col.InsertBatch([][]byte{[]byte("e1"), []byte("e2")}, [][]byte{
+		[]byte(`{"time_us":1,"kind":"like","did":"d1"}`),
+		[]byte(`{"time_us":2,"kind":"post","did":"d2"}`),
+	}); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+
+	state, err := col.loadColumnAssetRewriteManifestState()
+	if err != nil {
+		t.Fatalf("loadColumnAssetRewriteManifestState: %v", err)
+	}
+	originalRecords := cloneColumnManifestRecords(state.records)
+	var oldPart columnManifestPartSnapshot
+	var oldRecordIdx int
+	found := false
+	for i, record := range state.records {
+		if !bytes.HasPrefix(record.key, columnManifestPartRecordPrefixBytes) {
+			continue
+		}
+		part, err := decodeColumnManifestPartRecord(record.value)
+		if err != nil {
+			t.Fatalf("decodeColumnManifestPartRecord: %v", err)
+		}
+		oldPart = part
+		oldRecordIdx = i
+		found = true
+		break
+	}
+	if !found {
+		t.Fatal("no manifest part record found")
+	}
+	newRef := oldPart.AssetRef
+	newRef.FileID += 17
+	newRef.Offset += oldPart.AssetRef.Length + 11
+
+	patched, count, err := patchColumnAssetRewriteManifestRecords(
+		state.records,
+		map[ColumnAssetRef]ColumnAssetRef{oldPart.AssetRef: newRef},
+		state.cfg.AssetManager.Namespace,
+	)
+	if err != nil {
+		t.Fatalf("patchColumnAssetRewriteManifestRecords: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("patch count=%d want 1", count)
+	}
+	if len(patched) != len(state.records) {
+		t.Fatalf("patched records=%d want %d", len(patched), len(state.records))
+	}
+	for i := range patched {
+		if !bytes.Equal(patched[i].key, state.records[i].key) {
+			t.Fatalf("patched key[%d]=%x want %x", i, patched[i].key, state.records[i].key)
+		}
+		if !bytes.Equal(state.records[i].key, originalRecords[i].key) || !bytes.Equal(state.records[i].value, originalRecords[i].value) {
+			t.Fatalf("input record[%d] mutated", i)
+		}
+	}
+
+	patchedPart, err := decodeColumnManifestPartRecord(patched[oldRecordIdx].value)
+	if err != nil {
+		t.Fatalf("decode patched part: %v", err)
+	}
+	if patchedPart.AssetRef != newRef {
+		t.Fatalf("patched ref=%+v want %+v", patchedPart.AssetRef, newRef)
+	}
+	if patchedPart.Bytes != oldPart.Bytes || patchedPart.PublishID != oldPart.PublishID ||
+		patchedPart.GenerationID != oldPart.GenerationID || patchedPart.Reason != oldPart.Reason {
+		t.Fatalf("patched metadata=%+v want original metadata=%+v", patchedPart, oldPart)
 	}
 }
 

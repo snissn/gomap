@@ -3,8 +3,10 @@ package collections
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -222,7 +224,7 @@ func (c *Collection) columnAssetRewrite(ctx context.Context, opts columnAssetRew
 		}
 	}
 
-	patchedRecords, patched, err := patchColumnAssetRewriteManifestRecords(state.records, remap.byOldRef)
+	patchedRecords, patched, err := patchColumnAssetRewriteManifestRecords(state.records, remap.byOldRef, state.cfg.AssetManager.Namespace)
 	if err != nil {
 		stats.Plan = columnAssetRewritePlanForDetail(stats.Plan, opts.Detailed)
 		return stats, cleanupRemap(err)
@@ -357,7 +359,7 @@ func (c *Collection) loadColumnAssetRewriteManifestState() (columnAssetRewriteMa
 		baseCommitSeq:  snapshotCommitSeq(snap),
 		baseSystemRoot: snapshotSystemRoot(snap),
 		manifest:       manifest,
-		records:        cloneColumnManifestRecords(records),
+		records:        records,
 	}, nil
 }
 
@@ -449,36 +451,118 @@ func validateColumnAssetRewriteRefKinds(refs []ColumnAssetRef) error {
 	return nil
 }
 
-func patchColumnAssetRewriteManifestRecords(records []columnManifestRecord, byOldRef map[ColumnAssetRef]ColumnAssetRef) ([]columnManifestRecord, int, error) {
-	patched := cloneColumnManifestRecords(records)
+func patchColumnAssetRewriteManifestRecords(records []columnManifestRecord, byOldRef map[ColumnAssetRef]ColumnAssetRef, expectedNamespace string) ([]columnManifestRecord, int, error) {
+	if len(records) == 0 {
+		return nil, 0, nil
+	}
+	patched := make([]columnManifestRecord, len(records))
 	count := 0
-	for i := range patched {
-		if !bytes.HasPrefix(patched[i].key, columnManifestPartRecordPrefixBytes) {
+	for i, record := range records {
+		patched[i] = record
+		if !bytes.HasPrefix(record.key, columnManifestPartRecordPrefixBytes) {
 			continue
 		}
-		part, err := decodeColumnManifestPartRecord(patched[i].value)
+		oldRef, offsets, err := columnAssetRewriteManifestPartRefForPatch(record.value, expectedNamespace)
 		if err != nil {
 			return nil, 0, err
 		}
-		newRef, ok := byOldRef[part.AssetRef]
+		keyGeneration, keyPartID, err := columnManifestPartKeyFromRecordKeyForScan(record.key)
+		if err != nil {
+			return nil, 0, err
+		}
+		if oldRef.Generation != keyGeneration {
+			return nil, 0, fmt.Errorf("collections: column asset rewrite part key generation=%d does not match ref generation=%d", keyGeneration, oldRef.Generation)
+		}
+		if oldRef.PartID != keyPartID {
+			return nil, 0, fmt.Errorf("collections: column asset rewrite part key part_id=%d does not match ref part_id=%d", keyPartID, oldRef.PartID)
+		}
+		newRef, ok := byOldRef[oldRef]
 		if !ok {
 			continue
 		}
-		value, err := encodeColumnManifestPartRecord(ColumnPreparedAsset{
-			Ref:          newRef,
-			Bytes:        part.Bytes,
-			PublishID:    part.PublishID,
-			GenerationID: part.GenerationID,
-			Reason:       part.Reason,
-		})
-		if err != nil {
+		if !columnAssetRewriteSameLogicalRef(oldRef, newRef) {
+			return nil, 0, fmt.Errorf("collections: column asset rewrite cannot remap non-equivalent manifest ref %+v to %+v", oldRef, newRef)
+		}
+		if err := validateColumnAssetRefForPlan(newRef); err != nil {
 			return nil, 0, err
 		}
+		value := bytes.Clone(record.value)
+		binary.BigEndian.PutUint64(value[offsets.fileID:], uint64(newRef.FileID))
+		binary.BigEndian.PutUint64(value[offsets.offset:], uint64(newRef.Offset))
+		binary.BigEndian.PutUint64(value[offsets.length:], uint64(newRef.Length))
+		binary.BigEndian.PutUint64(value[offsets.checksum:], uint64(newRef.Checksum))
 		patched[i].value = value
 		count++
 	}
-	sortColumnManifestRecords(patched)
 	return patched, count, nil
+}
+
+type columnAssetRewriteManifestPartPatchOffsets struct {
+	fileID   int
+	offset   int
+	length   int
+	checksum int
+}
+
+func columnAssetRewriteManifestPartRefForPatch(raw []byte, expectedNamespace string) (ColumnAssetRef, columnAssetRewriteManifestPartPatchOffsets, error) {
+	cur := manifestCursor{raw: raw}
+	if magic := cur.u32(); magic != columnManifestPartMagic {
+		return ColumnAssetRef{}, columnAssetRewriteManifestPartPatchOffsets{}, fmt.Errorf("collections: bad column manifest part magic=0x%08x", magic)
+	}
+	if version := cur.u16(); version != columnManifestRecordVersion {
+		return ColumnAssetRef{}, columnAssetRewriteManifestPartPatchOffsets{}, fmt.Errorf("collections: unsupported column manifest part version=%d", version)
+	}
+	kindBytes := cur.stringBytes()
+	namespaceBytes := cur.stringBytes()
+	generation := cur.u64()
+	partID := cur.u64()
+	offsets := columnAssetRewriteManifestPartPatchOffsets{fileID: cur.pos}
+	fileID64 := cur.u64()
+	offsets.offset = cur.pos
+	offset64 := cur.u64()
+	offsets.length = cur.pos
+	length64 := cur.u64()
+	offsets.checksum = cur.pos
+	checksum64 := cur.u64()
+	bytes64 := cur.u64()
+	_ = cur.u64() // publish_id; rewrite preserves the original field bytes.
+	_ = cur.u64() // generation_id; rewrite preserves the original field bytes.
+	_ = cur.stringBytes()
+	if err := cur.err; err != nil {
+		return ColumnAssetRef{}, columnAssetRewriteManifestPartPatchOffsets{}, err
+	}
+	if cur.pos != len(raw) {
+		return ColumnAssetRef{}, columnAssetRewriteManifestPartPatchOffsets{}, errors.New("collections: trailing bytes in column manifest part record")
+	}
+	if !columnPhysicalBytesEqualString(kindBytes, string(ColumnAssetKindTCS1PartImage)) {
+		return ColumnAssetRef{}, columnAssetRewriteManifestPartPatchOffsets{}, fmt.Errorf("collections: unsupported column manifest part asset kind %q", string(kindBytes))
+	}
+	if !columnPhysicalBytesEqualString(namespaceBytes, expectedNamespace) {
+		return ColumnAssetRef{}, columnAssetRewriteManifestPartPatchOffsets{}, fmt.Errorf("collections: column manifest part namespace=%q want %q", string(namespaceBytes), expectedNamespace)
+	}
+	if fileID64 > uint64(math.MaxUint32) {
+		return ColumnAssetRef{}, columnAssetRewriteManifestPartPatchOffsets{}, errors.New("collections: column manifest part file_id overflows uint32")
+	}
+	if checksum64 > uint64(math.MaxUint32) {
+		return ColumnAssetRef{}, columnAssetRewriteManifestPartPatchOffsets{}, errors.New("collections: column manifest part checksum overflows uint32")
+	}
+	if offset64 > uint64(math.MaxInt64) || length64 > uint64(math.MaxInt64) || bytes64 > uint64(math.MaxInt64) {
+		return ColumnAssetRef{}, columnAssetRewriteManifestPartPatchOffsets{}, errors.New("collections: column manifest part offsets or byte counts overflow int64")
+	}
+	ref := ColumnAssetRef{
+		Kind:       ColumnAssetKindTCS1PartImage,
+		Namespace:  expectedNamespace,
+		Generation: generation,
+		PartID:     partID,
+		FileID:     uint32(fileID64),
+		Offset:     int64(offset64),
+		Length:     int64(length64),
+		Checksum:   uint32(checksum64),
+	}
+	if err := validateColumnPreparedAssetForPlan(ColumnPreparedAsset{Ref: ref, Bytes: int64(bytes64)}); err != nil {
+		return ColumnAssetRef{}, columnAssetRewriteManifestPartPatchOffsets{}, err
+	}
+	return ref, offsets, nil
 }
 
 func columnAssetRewriteUpdatedIdentity(state columnAssetRewriteManifestState, records []columnManifestRecord) (ColumnManifestIdentity, error) {
@@ -530,7 +614,7 @@ func (c *Collection) publishColumnAssetRewriteManifestState(state columnAssetRew
 	identityRecord := encodeColumnManifestIdentityRecordArray(updatedIdentity)
 	ordered := []backenddb.StorageMaintenanceRootDeltaPublishInput{{
 		BaseRoot:      state.baseRoot,
-		Iter:          columnManifestRootRecordIterator(identityRecord, records),
+		Iter:          columnManifestRootRecordIteratorOwned(identityRecord, records),
 		StoragePolicy: policy,
 	}}
 	return c.db.PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(
