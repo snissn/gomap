@@ -659,7 +659,7 @@ func TestMarkdownTableTextHandlesEscapedPipesAndBlankNewlinesM14C(t *testing.T) 
 	if got, want := markdownTableText(`a\\\\\\\\|b|c`), `a\\\\\\\\\|b\|c`; got != want {
 		t.Fatalf("markdownTableText long backslash run=%q want %q", got, want)
 	}
-	if got := markdownCodeTableText("\r\n"); got != markdownTableEmptyCell {
+	if got, want := markdownCodeTableText("\r\n"), "`"+markdownTableEmptyCell+"`"; got != want {
 		t.Fatalf("markdownCodeTableText blank newline=%q want empty marker", got)
 	}
 }
@@ -1397,7 +1397,8 @@ func TestColumnStoreSuiteExecutesForcedAggregateAndParallelPhysicalPathsM14B(t *
 				if q.RowsProcessed != report.Rows {
 					t.Fatalf("query %s rows_processed=%d want %d", q.Name, q.RowsProcessed, report.Rows)
 				}
-				if q.BytesRead <= 0 {
+				metadataHitAggregate := tc.forcedPath == columnStorePathAggregateMetadata && q.MetadataHits > 0
+				if !metadataHitAggregate && q.BytesRead <= 0 {
 					t.Fatalf("query %s bytes_read=%d want physical bytes", q.Name, q.BytesRead)
 				}
 				if q.ThroughputInterpretation == "" {

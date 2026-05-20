@@ -155,7 +155,7 @@ type columnStoreQueryMetric struct {
 	DurationMS               float64 `json:"duration_ms"`
 	Rows                     int     `json:"rows"`
 	RowsProcessed            int     `json:"rows_processed"`
-	RowsProcessedKnown       bool    `json:"rows_processed_known,omitempty"`
+	RowsProcessedKnown       bool    `json:"rows_processed_known"`
 	RowsPerSecond            float64 `json:"rows_per_second"`
 	MiBPerSecond             float64 `json:"mib_per_second"`
 	NsPerRow                 float64 `json:"ns_per_row"`
@@ -1940,7 +1940,7 @@ func markdownTableText(value string) string {
 func markdownCodeTableText(value string) string {
 	value = markdownNormalizeTableCellLineBreaks(value)
 	if strings.TrimSpace(value) == "" {
-		return markdownTableEmptyCell
+		return "`" + markdownTableEmptyCell + "`"
 	}
 	value = markdownNormalizeTableCell(value, false)
 	delimiter := "`"
