@@ -290,29 +290,7 @@ func TestColumnAssetRewriteCleansCopiedSegmentOnStalePublishPreflightM15C(t *tes
 	stats, err := col.ColumnAssetRewrite(context.Background(), ColumnAssetRewriteOptions{
 		CandidateRefs: []ColumnAssetRef{candidate},
 		afterCopyHookForTest: func() error {
-			payload, err := commitlog.EncodeRawKVBatchPayload([]commitlog.RawKVOperation{{
-				Op:    commitlog.RawKVOpSet,
-				Key:   []byte("column/rewrite/stale-publish-test"),
-				Value: []byte("1"),
-			}})
-			if err != nil {
-				return err
-			}
-			intent, err := d.NewCommandWALIntent(commitlog.CommandKindRawKVBatch, commitlog.CommandScopeRawKV, commitlog.PayloadFormatRawKVBatchV1, payload)
-			if err != nil {
-				return err
-			}
-			_, _, err = d.PublishOrderedRootDeltaGroupWithPreflightCommandWALContextAndSystemDeltaBuilder(nil, nil, intent, func(_ backenddb.CommandWALPublishContext, _ []uint64) (iterator.UnsafeIterator, error) {
-				current := d.AcquireSnapshot()
-				if current == nil {
-					return nil, backenddb.ErrClosed
-				}
-				defer func() { _ = current.Close() }()
-				return buildSystemTargetIterator(current, map[string][]byte{
-					systemCollectionRootKey(collectionColumnManifestRootName("events")): encodeRootID(0),
-				})
-			})
-			return err
+			return staleColumnAssetRewriteManifestRootM15C(d)
 		},
 	})
 	if err == nil {
@@ -325,6 +303,63 @@ func TestColumnAssetRewriteCleansCopiedSegmentOnStalePublishPreflightM15C(t *tes
 		t.Fatalf("stale publish reported copied bytes stats=%+v", stats)
 	}
 	assertStringSlicesEqualM15C(t, beforeSegments, columnAssetSegmentNamesM15C(t, d, col))
+}
+
+func TestColumnAssetRewriteCleansCopiedSegmentOnPublishPreflightRaceM15C(t *testing.T) {
+	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	col := openColumnStoreCollectionM10B(t, d, mgr)
+
+	if _, err := col.Insert([]byte("e1"), []byte(`{"time_us":1,"kind":"like","did":"d1"}`)); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	candidate := writeColumnAssetReachabilityCandidateM15A(t, d, col, 3, 99)
+	beforeSegments := columnAssetSegmentNamesM15C(t, d, col)
+
+	stats, err := col.ColumnAssetRewrite(context.Background(), ColumnAssetRewriteOptions{
+		CandidateRefs: []ColumnAssetRef{candidate},
+		afterPrePublishHookForTest: func() error {
+			return staleColumnAssetRewriteManifestRootM15C(d)
+		},
+	})
+	if err == nil {
+		t.Fatal("ColumnAssetRewrite stale publish unexpectedly succeeded")
+	}
+	if stats.SegmentsRewritten != 0 || stats.RefsRemapped != 0 || len(stats.SupersededRefs) != 0 {
+		t.Fatalf("stale publish reported successful rewrite stats=%+v", stats)
+	}
+	if stats.BytesCopied != 0 {
+		t.Fatalf("stale publish reported copied bytes stats=%+v", stats)
+	}
+	assertStringSlicesEqualM15C(t, beforeSegments, columnAssetSegmentNamesM15C(t, d, col))
+}
+
+func staleColumnAssetRewriteManifestRootM15C(d *backenddb.DB) error {
+	payload, err := commitlog.EncodeRawKVBatchPayload([]commitlog.RawKVOperation{{
+		Op:    commitlog.RawKVOpSet,
+		Key:   []byte("column/rewrite/stale-publish-test"),
+		Value: []byte("1"),
+	}})
+	if err != nil {
+		return err
+	}
+	intent, err := d.NewCommandWALIntent(commitlog.CommandKindRawKVBatch, commitlog.CommandScopeRawKV, commitlog.PayloadFormatRawKVBatchV1, payload)
+	if err != nil {
+		return err
+	}
+	_, _, err = d.PublishOrderedRootDeltaGroupWithPreflightCommandWALContextAndSystemDeltaBuilder(nil, nil, intent, func(_ backenddb.CommandWALPublishContext, _ []uint64) (iterator.UnsafeIterator, error) {
+		current := d.AcquireSnapshot()
+		if current == nil {
+			return nil, backenddb.ErrClosed
+		}
+		defer func() { _ = current.Close() }()
+		return buildSystemTargetIterator(current, map[string][]byte{
+			systemCollectionRootKey(collectionColumnManifestRootName("events")): encodeRootID(0),
+		})
+	})
+	return err
 }
 
 func TestColumnAssetRewriteRejectsReadOnlyM15C(t *testing.T) {

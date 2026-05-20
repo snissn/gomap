@@ -13,6 +13,8 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/storagemaintenance"
 )
 
+var errColumnAssetRewritePublishPreflightFailed = errors.New("collections: column asset rewrite publish preflight failed")
+
 // ColumnAssetRewriteOptions controls M15C mixed-segment rewrite/remap.
 type ColumnAssetRewriteOptions struct {
 	DryRun bool
@@ -23,7 +25,8 @@ type ColumnAssetRewriteOptions struct {
 	PreparedRefs  []ColumnAssetRef
 	PinnedRefs    []ColumnAssetRef
 
-	afterCopyHookForTest func() error
+	afterCopyHookForTest       func() error
+	afterPrePublishHookForTest func() error
 }
 
 // ColumnAssetRewriteStats summarizes mixed-segment rewrite/remap.
@@ -188,6 +191,12 @@ func (c *Collection) columnAssetRewrite(ctx context.Context, opts ColumnAssetRew
 		stats.Plan = columnAssetRewritePlanForDetail(stats.Plan, opts.Detailed)
 		return stats, cleanupRemap(err)
 	}
+	if opts.afterPrePublishHookForTest != nil {
+		if err := opts.afterPrePublishHookForTest(); err != nil {
+			stats.Plan = columnAssetRewritePlanForDetail(stats.Plan, opts.Detailed)
+			return stats, cleanupRemap(err)
+		}
+	}
 
 	patchedRecords, patched, err := patchColumnAssetRewriteManifestRecords(state.records, remap.byOldRef)
 	if err != nil {
@@ -210,6 +219,10 @@ func (c *Collection) columnAssetRewrite(ctx context.Context, opts ColumnAssetRew
 	}
 	newSystemRoot, rootIDs, err := c.publishColumnAssetRewriteManifestState(state, updatedMeta, updatedIdentity, patchedRecords)
 	if err != nil {
+		if errors.Is(err, errColumnAssetRewritePublishPreflightFailed) {
+			stats.Plan = columnAssetRewritePlanForDetail(stats.Plan, opts.Detailed)
+			return stats, cleanupRemap(err)
+		}
 		// Publish errors can be ambiguous after root/system application starts;
 		// retain the copied segment as fail-closed maintenance debt.
 		stats.Plan = columnAssetRewritePlanForDetail(stats.Plan, opts.Detailed)
@@ -510,7 +523,10 @@ func (c *Collection) columnAssetRewriteRootDescriptorPreflight(state columnAsset
 	rootNames := []string{state.rootName}
 	baseRootIDs := map[string]uint64{state.rootName: state.baseRoot}
 	return func() error {
-		return c.validateRootDescriptorSystemDeltaForMeta(state.meta, state.baseCommitSeq, state.baseSystemRoot, rootNames, baseRootIDs)
+		if err := c.validateRootDescriptorSystemDeltaForMeta(state.meta, state.baseCommitSeq, state.baseSystemRoot, rootNames, baseRootIDs); err != nil {
+			return fmt.Errorf("%w: %w", errColumnAssetRewritePublishPreflightFailed, err)
+		}
+		return nil
 	}
 }
 
