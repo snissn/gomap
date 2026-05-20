@@ -1461,6 +1461,7 @@ func columnVectorGraphDeep1BRenderBuildableGranuleScoutMarkdown(report columnVec
 		}
 		fmt.Fprintf(&b, "\n")
 	}
+	columnVectorGraphDeep1BRenderBuildableRoutingAggregateMarkdown(&b, report)
 	fmt.Fprintf(&b, "## Routing\n\n")
 	fmt.Fprintf(&b, "| Query | Builder | Top granules | Candidate rows | Global top10 routed | Global top20 routed | Global top50 routed |\n")
 	fmt.Fprintf(&b, "| ---: | --- | ---: | ---: | ---: | ---: | ---: |\n")
@@ -1525,6 +1526,62 @@ func columnVectorGraphDeep1BRenderBuildableGranuleScoutMarkdown(report columnVec
 		}
 	}
 	return b.String()
+}
+
+func columnVectorGraphDeep1BRenderBuildableRoutingAggregateMarkdown(b *strings.Builder, report columnVectorGraphDeep1BBuildableGranuleScoutReport) {
+	type routingAggregate struct {
+		topGranules   int
+		count         int
+		candidateRows float64
+		top10         []int
+		top20         []int
+		top50         []int
+	}
+	byTopGranules := make(map[int]*routingAggregate)
+	var keys []int
+	for _, q := range report.Queries {
+		agg := byTopGranules[q.TopGranules]
+		if agg == nil {
+			agg = &routingAggregate{topGranules: q.TopGranules}
+			byTopGranules[q.TopGranules] = agg
+			keys = append(keys, q.TopGranules)
+		}
+		agg.count++
+		agg.candidateRows += float64(q.CandidateRows)
+		agg.top10 = append(agg.top10, q.RoutingTop10InCandidates)
+		agg.top20 = append(agg.top20, q.RoutingTop20InCandidates)
+		agg.top50 = append(agg.top50, q.RoutingTop50InCandidates)
+	}
+	sort.Ints(keys)
+	if len(keys) == 0 {
+		return
+	}
+	fmt.Fprintf(b, "## Aggregate Routing Gates\n\n")
+	fmt.Fprintf(b, "These routing gates are codec-independent. If routing does not bring exact winners into the selected buildable blocks, no conditional codec or exact rerank can recover them. For overlap metrics, p90 is the 90th-percentile success count and worst is the lower-tail query.\n\n")
+	fmt.Fprintf(b, "| Top granules | Queries | Avg candidate rows | p50 top10 routed | p90 top10 routed | worst top10 routed | p50 top20 routed | p90 top20 routed | worst top20 routed | p50 top50 routed | p90 top50 routed | worst top50 routed |\n")
+	fmt.Fprintf(b, "| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
+	for _, key := range keys {
+		agg := byTopGranules[key]
+		sort.Ints(agg.top10)
+		sort.Ints(agg.top20)
+		sort.Ints(agg.top50)
+		count := float64(max(1, agg.count))
+		fmt.Fprintf(b, "| %d | %d | %.1f | %d/10 | %d/10 | %d/10 | %d/20 | %d/20 | %d/20 | %d/50 | %d/50 | %d/50 |\n",
+			agg.topGranules,
+			agg.count,
+			agg.candidateRows/count,
+			columnVectorGraphDeep1BIntQuantile(agg.top10, 0.50),
+			columnVectorGraphDeep1BIntQuantile(agg.top10, 0.90),
+			columnVectorGraphDeep1BIntQuantile(agg.top10, 0),
+			columnVectorGraphDeep1BIntQuantile(agg.top20, 0.50),
+			columnVectorGraphDeep1BIntQuantile(agg.top20, 0.90),
+			columnVectorGraphDeep1BIntQuantile(agg.top20, 0),
+			columnVectorGraphDeep1BIntQuantile(agg.top50, 0.50),
+			columnVectorGraphDeep1BIntQuantile(agg.top50, 0.90),
+			columnVectorGraphDeep1BIntQuantile(agg.top50, 0),
+		)
+	}
+	fmt.Fprintf(b, "\n")
 }
 
 func columnVectorGraphDeep1BBuildableBuilderMarkdown(report columnVectorGraphDeep1BBuildableGranuleScoutReport) string {
@@ -1627,8 +1684,9 @@ func columnVectorGraphDeep1BRenderBuildableAggregateMarkdown(b *strings.Builder,
 		return left.name < right.name
 	})
 	fmt.Fprintf(b, "\n## Aggregate Conditional Codec Gates\n\n")
-	fmt.Fprintf(b, "| Method | Queries | Row-code B/vector | Metadata B/vector | Avg row-code KiB/query | Avg total KiB/query | Avg build ms | p50 compressed top10 | worst compressed top10 | p50 top10@20 | worst top10@20 | p50 top10@50 | worst top10@50 | p50 top10@100 | worst top10@100 | p50 top20@50 | worst top20@50 | p50 top20@100 | worst top20@100 | p50 rerank@20 recall@10 | worst rerank@20 recall@10 | p50 rerank@50 recall@10 | worst rerank@50 recall@10 | p50 rerank@100 recall@10 | worst rerank@100 recall@10 | Avg score err | Avg err/gap10 | Avg err/gap20 | Avg err/gap50 | Avg scan ns/vector |\n")
-	fmt.Fprintf(b, "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
+	fmt.Fprintf(b, "For overlap and rerank-recall metrics, p90 is the 90th-percentile success value and worst is the lower-tail query. These codec metrics remain conditional on the routed buildable block union.\n\n")
+	fmt.Fprintf(b, "| Method | Queries | Row-code B/vector | Metadata B/vector | Avg row-code KiB/query | Avg total KiB/query | Avg build ms | p50 compressed top10 | p90 compressed top10 | worst compressed top10 | p50 top10@20 | p90 top10@20 | worst top10@20 | p50 top10@50 | p90 top10@50 | worst top10@50 | p50 top10@100 | p90 top10@100 | worst top10@100 | p50 top20@50 | p90 top20@50 | worst top20@50 | p50 top20@100 | p90 top20@100 | worst top20@100 | p50 rerank@20 recall@10 | p90 rerank@20 recall@10 | worst rerank@20 recall@10 | p50 rerank@50 recall@10 | p90 rerank@50 recall@10 | worst rerank@50 recall@10 | p50 rerank@100 recall@10 | p90 rerank@100 recall@10 | worst rerank@100 recall@10 | Avg score err | Avg err/gap10 | Avg err/gap20 | Avg err/gap50 | Avg scan ns/vector |\n")
+	fmt.Fprintf(b, "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
 	for _, name := range names {
 		agg := byName[name]
 		sort.Ints(agg.top10)
@@ -1641,7 +1699,7 @@ func columnVectorGraphDeep1BRenderBuildableAggregateMarkdown(b *strings.Builder,
 		sort.Float64s(agg.rerank50)
 		sort.Float64s(agg.rerank100)
 		count := float64(max(1, agg.count))
-		fmt.Fprintf(b, "| `%s` | %d | %.2f | %.2f | %.1f | %.1f | %.3f | %d/10 | %d/10 | %d/10 | %d/10 | %d/10 | %d/10 | %d/10 | %d/10 | %d/20 | %d/20 | %d/20 | %d/20 | %.2f | %.2f | %.2f | %.2f | %.2f | %.2f | %.5f | %.2f | %.2f | %.2f | %.2f |\n",
+		fmt.Fprintf(b, "| `%s` | %d | %.2f | %.2f | %.1f | %.1f | %.3f | %d/10 | %d/10 | %d/10 | %d/10 | %d/10 | %d/10 | %d/10 | %d/10 | %d/10 | %d/10 | %d/10 | %d/10 | %d/20 | %d/20 | %d/20 | %d/20 | %d/20 | %d/20 | %.2f | %.2f | %.2f | %.2f | %.2f | %.2f | %.2f | %.2f | %.2f | %.5f | %.2f | %.2f | %.2f | %.2f |\n",
 			agg.name,
 			agg.count,
 			agg.rowBytes/count,
@@ -1650,22 +1708,31 @@ func columnVectorGraphDeep1BRenderBuildableAggregateMarkdown(b *strings.Builder,
 			agg.totalRead/count/1024,
 			agg.buildNanos/count/1e6,
 			columnVectorGraphDeep1BIntQuantile(agg.top10, 0.50),
+			columnVectorGraphDeep1BIntQuantile(agg.top10, 0.90),
 			columnVectorGraphDeep1BIntQuantile(agg.top10, 0),
 			columnVectorGraphDeep1BIntQuantile(agg.top10At20, 0.50),
+			columnVectorGraphDeep1BIntQuantile(agg.top10At20, 0.90),
 			columnVectorGraphDeep1BIntQuantile(agg.top10At20, 0),
 			columnVectorGraphDeep1BIntQuantile(agg.top10At50, 0.50),
+			columnVectorGraphDeep1BIntQuantile(agg.top10At50, 0.90),
 			columnVectorGraphDeep1BIntQuantile(agg.top10At50, 0),
 			columnVectorGraphDeep1BIntQuantile(agg.top10At100, 0.50),
+			columnVectorGraphDeep1BIntQuantile(agg.top10At100, 0.90),
 			columnVectorGraphDeep1BIntQuantile(agg.top10At100, 0),
 			columnVectorGraphDeep1BIntQuantile(agg.top20At50, 0.50),
+			columnVectorGraphDeep1BIntQuantile(agg.top20At50, 0.90),
 			columnVectorGraphDeep1BIntQuantile(agg.top20At50, 0),
 			columnVectorGraphDeep1BIntQuantile(agg.top20At100, 0.50),
+			columnVectorGraphDeep1BIntQuantile(agg.top20At100, 0.90),
 			columnVectorGraphDeep1BIntQuantile(agg.top20At100, 0),
 			columnVectorGraphDeep1BFloatQuantile(agg.rerank20, 0.50),
+			columnVectorGraphDeep1BFloatQuantile(agg.rerank20, 0.90),
 			columnVectorGraphDeep1BFloatQuantile(agg.rerank20, 0),
 			columnVectorGraphDeep1BFloatQuantile(agg.rerank50, 0.50),
+			columnVectorGraphDeep1BFloatQuantile(agg.rerank50, 0.90),
 			columnVectorGraphDeep1BFloatQuantile(agg.rerank50, 0),
 			columnVectorGraphDeep1BFloatQuantile(agg.rerank100, 0.50),
+			columnVectorGraphDeep1BFloatQuantile(agg.rerank100, 0.90),
 			columnVectorGraphDeep1BFloatQuantile(agg.rerank100, 0),
 			agg.scoreError/count,
 			agg.gap10/count,
