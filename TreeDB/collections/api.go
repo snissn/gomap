@@ -8987,7 +8987,8 @@ func (c *Collection) insertBatchOnceWithLockState(
 
 	clearedVectorRootNames := []string(nil)
 	if commandWALIntent != nil {
-		clearedVectorRootNames = collectionCommandWALVectorRootInvalidations(meta, currentCatalog, baseRootIDs)
+		mutatedNativeVectorIndexNames := collectionNativeVectorIndexMutationNamesForInsertedDocuments(meta, plannerOptions, commandWALDocuments)
+		clearedVectorRootNames = collectionCommandWALVectorRootInvalidations(meta, currentCatalog, baseRootIDs, mutatedNativeVectorIndexNames)
 	}
 	publishStart := time.Now()
 	var newSystemRoot uint64
@@ -9458,7 +9459,8 @@ func (c *Collection) insertBatchNoIndex(
 	baseRootIDs := map[string]uint64{rootName: baseRoot}
 	clearedVectorRootNames := []string(nil)
 	if commandWALIntent != nil {
-		clearedVectorRootNames = collectionCommandWALVectorRootInvalidations(c.meta, catalog, baseRootIDs)
+		mutatedNativeVectorIndexNames := collectionNativeVectorIndexMutationNamesForNoIndexInsertedDocuments(c.meta, plannerOptions, entries)
+		clearedVectorRootNames = collectionCommandWALVectorRootInvalidations(c.meta, catalog, baseRootIDs, mutatedNativeVectorIndexNames)
 	}
 	publishStart := time.Now()
 	ordered := []backenddb.OrderedRootDeltaPublishInput{{
@@ -9731,8 +9733,9 @@ func (c *Collection) deleteBatchOnce(documentIDs [][]byte, commandWALIntent *bac
 	}
 
 	type existingDelete struct {
-		id    []byte
-		state documentIndexState
+		id       []byte
+		document []byte
+		state    documentIndexState
 	}
 	existing := make([]existingDelete, 0, len(documentIDs))
 	for _, documentID := range documentIDs {
@@ -9756,6 +9759,9 @@ func (c *Collection) deleteBatchOnce(documentIDs [][]byte, commandWALIntent *bac
 			continue
 		}
 		item := existingDelete{id: documentID}
+		if commandWALIntent != nil {
+			item.document = entry.Value
+		}
 		if len(runtimes) > 0 {
 			item.state, err = loadDeleteIndexState(snap, catalog, documentID, entry.Value, runtimes, plannerOptions)
 			if err != nil {
@@ -9851,7 +9857,12 @@ func (c *Collection) deleteBatchOnce(documentIDs [][]byte, commandWALIntent *bac
 	}
 	clearedVectorRootNames := []string(nil)
 	if commandWALIntent != nil {
-		clearedVectorRootNames = collectionCommandWALVectorRootInvalidations(c.meta, catalog, baseRootIDs)
+		existingDocuments := make([][]byte, len(existing))
+		for i := range existing {
+			existingDocuments[i] = existing[i].document
+		}
+		mutatedNativeVectorIndexNames := collectionNativeVectorIndexMutationNamesForDeletedDocuments(c.meta, plannerOptions, existingDocuments)
+		clearedVectorRootNames = collectionCommandWALVectorRootInvalidations(c.meta, catalog, baseRootIDs, mutatedNativeVectorIndexNames)
 	}
 	var newSystemRoot uint64
 	var rootIDs []uint64
@@ -10085,7 +10096,8 @@ func (c *Collection) deleteDocumentOnce(documentID []byte, commandWALIntent *bac
 	}
 	clearedVectorRootNames := []string(nil)
 	if commandWALIntent != nil {
-		clearedVectorRootNames = collectionCommandWALVectorRootInvalidations(c.meta, catalog, baseRootIDs)
+		mutatedNativeVectorIndexNames := collectionNativeVectorIndexMutationNamesForDeletedDocuments(c.meta, plannerOptions, [][]byte{entry.Value})
+		clearedVectorRootNames = collectionCommandWALVectorRootInvalidations(c.meta, catalog, baseRootIDs, mutatedNativeVectorIndexNames)
 	}
 	var newSystemRoot uint64
 	var rootIDs []uint64
@@ -12780,7 +12792,11 @@ func (c *Collection) updateDocumentOnceApply(documentID []byte, update func(curr
 	}
 	clearedVectorRootNames := []string(nil)
 	if commandWALIntent != nil {
-		clearedVectorRootNames = collectionCommandWALVectorRootInvalidations(c.meta, catalog, baseRootIDs)
+		mutatedNativeVectorIndexNames := collectionNativeVectorIndexMutationNamesForUpdatedDocuments(c.meta, plannerOptions, []collectionVectorIndexDocumentUpdate{{
+			oldDocument: currentValue,
+			newDocument: document,
+		}})
+		clearedVectorRootNames = collectionCommandWALVectorRootInvalidations(c.meta, catalog, baseRootIDs, mutatedNativeVectorIndexNames)
 	}
 	phaseStart = updateBatchStatsNow(detailedStats)
 	var newSystemRoot uint64
@@ -12837,6 +12853,7 @@ func (c *Collection) updateDocumentOnceApply(documentID []byte, update func(curr
 type preparedBatchUpdate struct {
 	itemIndex                int
 	documentID               []byte
+	oldDocument              []byte
 	document                 []byte
 	primaryDocument          []byte
 	hasPrimaryDocument       bool
@@ -12862,6 +12879,7 @@ type updateBatchPlan struct {
 	policies                    []backenddb.OrderedRootStoragePolicy
 	deltaTables                 []memtable.Table
 	commandWALDocuments         []commitlog.CollectionDocument
+	mutatedNativeVectorIndexes  map[string]struct{}
 	rowRemainderBytes           int64
 	directBufferedUpdate        *directBufferedUpdatePlan
 	uniqueSecondaryIndexByRoot  []int
@@ -14207,6 +14225,7 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 		_ = snap.Close()
 		return nil, err
 	}
+	commandWALMutationTracking := commandWALIntent != nil || c.commandWALActive(nil)
 	if err := requireColumnStoreWriteOperationSupported(meta, ColumnPublishOperationUpdate); err != nil {
 		_ = snap.Close()
 		return nil, err
@@ -14446,6 +14465,9 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 				return nil, updateBatchItemError(i, err)
 			}
 		}
+		if commandWALMutationTracking {
+			prepared.oldDocument = appendUpdateBatchPlanScratchDocument(scratch, current.value)
+		}
 		changed = append(changed, prepared)
 		changedDocuments = append(changedDocuments, appendUpdateBatchPlanScratchDocument(scratch, document))
 		if !current.buffered {
@@ -14591,6 +14613,10 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 	if templateV1CommandWALDocuments != nil {
 		commandWALDocuments = templateV1CommandWALDocuments
 	}
+	var mutatedNativeVectorIndexes map[string]struct{}
+	if commandWALMutationTracking {
+		mutatedNativeVectorIndexes = collectionNativeVectorIndexMutationNamesForPreparedUpdates(meta, plannerOptions, changed)
+	}
 	rowRemainderBytes := preparedBatchUpdatesPrimaryDocumentBytes(changed)
 	if mode == updateBatchModeNoSecondaryUniqueIndexChanges && updateBatchChangesSecondaryUniqueIndex(runtimes, changed) {
 		_ = snap.Close()
@@ -14691,6 +14717,7 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 			bufferedReadBlocked:         bufferedReadBlocked,
 			policies:                    policies,
 			commandWALDocuments:         commandWALDocuments,
+			mutatedNativeVectorIndexes:  mutatedNativeVectorIndexes,
 			rowRemainderBytes:           rowRemainderBytes,
 			directBufferedUpdate: &directBufferedUpdatePlan{
 				templateEntries:    templateEntries,
@@ -14894,6 +14921,7 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 		policies:                    policies,
 		deltaTables:                 deltaTables,
 		commandWALDocuments:         commandWALDocuments,
+		mutatedNativeVectorIndexes:  mutatedNativeVectorIndexes,
 		rowRemainderBytes:           rowRemainderBytes,
 		scratch:                     scratch,
 	}
@@ -14935,7 +14963,7 @@ func (c *Collection) publishUpdateBatchPlanLocked(plan *updateBatchPlan, command
 	publishStart := updateBatchStatsNow(detailedStats)
 	clearedVectorRootNames := []string(nil)
 	if commandWALIntent != nil {
-		clearedVectorRootNames = collectionCommandWALVectorRootInvalidations(plan.meta, plan.catalog, plan.baseRootIDs)
+		clearedVectorRootNames = collectionCommandWALVectorRootInvalidations(plan.meta, plan.catalog, plan.baseRootIDs, plan.mutatedNativeVectorIndexes)
 	}
 	var newSystemRoot uint64
 	var rootIDs []uint64
@@ -19356,17 +19384,196 @@ func collectionRootNames(meta CollectionMeta) []string {
 	return out
 }
 
-// Command-WAL row mutations clear declared vector roots in the same primary
-// publish boundary. The follow-up vector-maintenance command publishes a fresh
-// root; a crash between the two leaves a missing vector root instead of a stale
-// ready ANN graph.
-func collectionCommandWALVectorRootInvalidations(meta CollectionMeta, catalog *collectionCatalog, baseRootIDs map[string]uint64) []string {
-	if len(meta.VectorIndexes) == 0 {
+type collectionVectorIndexDocumentUpdate struct {
+	oldDocument []byte
+	newDocument []byte
+}
+
+type collectionVectorFieldState struct {
+	present bool
+	invalid bool
+	vector  []float32
+}
+
+func collectionNativeVectorIndexMutationNamesForInsertedDocuments(meta CollectionMeta, options collectionOptions, docs []commitlog.CollectionDocument) map[string]struct{} {
+	if len(docs) == 0 {
+		return nil
+	}
+	documents := make([][]byte, len(docs))
+	for i := range docs {
+		documents[i] = docs[i].Document
+	}
+	return collectionNativeVectorIndexMutationNamesForInsertedDocumentBytes(meta, options, documents)
+}
+
+func collectionNativeVectorIndexMutationNamesForNoIndexInsertedDocuments(meta CollectionMeta, options collectionOptions, entries []noIndexBatchEntry) map[string]struct{} {
+	if len(entries) == 0 {
+		return nil
+	}
+	documents := make([][]byte, len(entries))
+	for i := range entries {
+		documents[i] = entries[i].document
+	}
+	return collectionNativeVectorIndexMutationNamesForInsertedDocumentBytes(meta, options, documents)
+}
+
+func collectionNativeVectorIndexMutationNamesForInsertedDocumentBytes(meta CollectionMeta, options collectionOptions, documents [][]byte) map[string]struct{} {
+	if len(meta.VectorIndexes) == 0 || len(documents) == 0 {
+		return nil
+	}
+	materializer := collectionVectorMutationMaterializer(options)
+	var mutated map[string]struct{}
+	for _, idx := range meta.VectorIndexes {
+		if vectorIndexDefinitionStrategy(idx) == VectorIndexStrategyColumnGraph {
+			continue
+		}
+		fieldPath, err := parseVectorFieldPath(idx.Field)
+		if err != nil {
+			mutated = markCollectionNativeVectorIndexMutated(mutated, idx.Name)
+			continue
+		}
+		for _, document := range documents {
+			state := collectionStoredDocumentVectorFieldState(materializer, document, fieldPath)
+			if state.present || state.invalid {
+				mutated = markCollectionNativeVectorIndexMutated(mutated, idx.Name)
+				break
+			}
+		}
+	}
+	return mutated
+}
+
+func collectionNativeVectorIndexMutationNamesForDeletedDocuments(meta CollectionMeta, options collectionOptions, documents [][]byte) map[string]struct{} {
+	if len(meta.VectorIndexes) == 0 || len(documents) == 0 {
+		return nil
+	}
+	materializer := collectionVectorMutationMaterializer(options)
+	var mutated map[string]struct{}
+	for _, idx := range meta.VectorIndexes {
+		if vectorIndexDefinitionStrategy(idx) == VectorIndexStrategyColumnGraph {
+			continue
+		}
+		fieldPath, err := parseVectorFieldPath(idx.Field)
+		if err != nil {
+			mutated = markCollectionNativeVectorIndexMutated(mutated, idx.Name)
+			continue
+		}
+		for _, document := range documents {
+			state := collectionStoredDocumentVectorFieldState(materializer, document, fieldPath)
+			if state.present || state.invalid {
+				mutated = markCollectionNativeVectorIndexMutated(mutated, idx.Name)
+				break
+			}
+		}
+	}
+	return mutated
+}
+
+func collectionNativeVectorIndexMutationNamesForPreparedUpdates(meta CollectionMeta, options collectionOptions, updates []preparedBatchUpdate) map[string]struct{} {
+	if len(updates) == 0 {
+		return nil
+	}
+	converted := make([]collectionVectorIndexDocumentUpdate, len(updates))
+	for i := range updates {
+		converted[i] = collectionVectorIndexDocumentUpdate{
+			oldDocument: updates[i].oldDocument,
+			newDocument: updates[i].document,
+		}
+	}
+	return collectionNativeVectorIndexMutationNamesForUpdatedDocuments(meta, options, converted)
+}
+
+func collectionNativeVectorIndexMutationNamesForUpdatedDocuments(meta CollectionMeta, options collectionOptions, updates []collectionVectorIndexDocumentUpdate) map[string]struct{} {
+	if len(meta.VectorIndexes) == 0 || len(updates) == 0 {
+		return nil
+	}
+	materializer := collectionVectorMutationMaterializer(options)
+	var mutated map[string]struct{}
+	for _, idx := range meta.VectorIndexes {
+		if vectorIndexDefinitionStrategy(idx) == VectorIndexStrategyColumnGraph {
+			continue
+		}
+		fieldPath, err := parseVectorFieldPath(idx.Field)
+		if err != nil {
+			mutated = markCollectionNativeVectorIndexMutated(mutated, idx.Name)
+			continue
+		}
+		for _, update := range updates {
+			oldState := collectionStoredDocumentVectorFieldState(materializer, update.oldDocument, fieldPath)
+			newState := collectionStoredDocumentVectorFieldState(materializer, update.newDocument, fieldPath)
+			if !collectionVectorFieldStatesEqual(oldState, newState) {
+				mutated = markCollectionNativeVectorIndexMutated(mutated, idx.Name)
+				break
+			}
+		}
+	}
+	return mutated
+}
+
+func collectionVectorMutationMaterializer(options collectionOptions) *StoredDocumentJSONMaterializer {
+	return &StoredDocumentJSONMaterializer{
+		documentFormat:   normalizedDocumentFormat(options.documentFormat),
+		templateResolver: options.templateResolver,
+	}
+}
+
+func collectionStoredDocumentVectorFieldState(materializer *StoredDocumentJSONMaterializer, document []byte, fieldPath []string) collectionVectorFieldState {
+	if len(document) == 0 {
+		return collectionVectorFieldState{}
+	}
+	vector, ok, err := vectorFromStoredDocument(materializer, document, fieldPath)
+	if err != nil && materializer != nil && materializer.DocumentFormat() == DocumentFormatTemplateV1 {
+		vector, ok, err = vectorFromJSONField(document, fieldPath)
+	}
+	if err != nil {
+		return collectionVectorFieldState{present: true, invalid: true}
+	}
+	return collectionVectorFieldState{present: ok, vector: vector}
+}
+
+func collectionVectorFieldStatesEqual(left, right collectionVectorFieldState) bool {
+	if left.invalid || right.invalid {
+		return false
+	}
+	if left.present != right.present {
+		return false
+	}
+	if !left.present {
+		return true
+	}
+	if len(left.vector) != len(right.vector) {
+		return false
+	}
+	for i := range left.vector {
+		if left.vector[i] != right.vector[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func markCollectionNativeVectorIndexMutated(mutated map[string]struct{}, name string) map[string]struct{} {
+	if mutated == nil {
+		mutated = make(map[string]struct{})
+	}
+	mutated[name] = struct{}{}
+	return mutated
+}
+
+// Command-WAL row mutations clear only vector roots whose indexed vector field
+// changed in the same primary publish boundary. The follow-up vector-maintenance
+// command publishes a fresh root; a crash between the two leaves a missing
+// vector root instead of a stale ready ANN graph.
+func collectionCommandWALVectorRootInvalidations(meta CollectionMeta, catalog *collectionCatalog, baseRootIDs map[string]uint64, mutatedNativeVectorIndexes map[string]struct{}) []string {
+	if len(meta.VectorIndexes) == 0 || len(mutatedNativeVectorIndexes) == 0 {
 		return nil
 	}
 	rootNames := make([]string, 0, len(meta.VectorIndexes))
 	for _, idx := range meta.VectorIndexes {
 		if vectorIndexDefinitionStrategy(idx) == VectorIndexStrategyColumnGraph {
+			continue
+		}
+		if _, mutated := mutatedNativeVectorIndexes[idx.Name]; !mutated {
 			continue
 		}
 		rootName := collectionVectorIndexRootName(meta.Name, idx.Name)

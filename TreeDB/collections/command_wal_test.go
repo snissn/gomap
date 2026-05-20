@@ -1508,6 +1508,115 @@ func TestCollectionCommandWALIndexedInsertClearsCachedNativeVectorRoot(t *testin
 	assertCollectionCommandWALCachedVectorRootCleared(t, d, col, def, seedStatus)
 }
 
+func TestCollectionCommandWALInsertWithoutVectorPreservesCachedNativeVectorRoot(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		indexes []IndexDefinition
+	}{
+		{name: "no_secondary_indexes"},
+		{name: "with_secondary_index", indexes: []IndexDefinition{
+			{Name: "kind", Field: "kind", ValueType: IndexValueString},
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir, def, seedStatus := prepareCollectionCommandWALNativeVectorRootDir(t, tc.indexes)
+			d := openCollectionCommandWALDB(t, dir)
+			col, err := NewCollectionManager(d).OpenCollection("docs")
+			if err != nil {
+				_ = d.Close()
+				t.Fatalf("OpenCollection command WAL: %v", err)
+			}
+
+			if _, err := col.insertBatch(
+				[][]byte{[]byte("c")},
+				[][]byte{[]byte(`{"kind":"new","note":"metadata-only"}`)},
+				false,
+				nil,
+			); err != nil {
+				_ = d.Close()
+				t.Fatalf("insertBatch row commit: %v", err)
+			}
+			assertCollectionDocument(t, col, "c", `{"kind":"new","note":"metadata-only"}`)
+			assertCollectionCommandWALCachedVectorRootPreserved(t, d, col, def, seedStatus)
+			if err := d.Close(); err != nil {
+				t.Fatalf("Close command WAL DB: %v", err)
+			}
+
+			reopened := openCollectionCommandWALDB(t, dir)
+			defer func() { _ = reopened.Close() }()
+			reopenedCol, err := NewCollectionManager(reopened).OpenCollection("docs")
+			if err != nil {
+				t.Fatalf("OpenCollection reopened: %v", err)
+			}
+			assertCollectionDocument(t, reopenedCol, "c", `{"kind":"new","note":"metadata-only"}`)
+			loaded, status, err := reopenedCol.LoadNativeVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
+			if err != nil {
+				t.Fatalf("LoadNativeVectorIndexSnapshot: %v", err)
+			}
+			if loaded == nil || !status.Loaded || status.RootID != seedStatus.RootID {
+				t.Fatalf("vector root not preserved after non-vector insert loaded=%v status=%+v seed=%+v", loaded != nil, status, seedStatus)
+			}
+			results, _, err := loaded.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 2, DisableExactFallback: true})
+			if err != nil {
+				t.Fatalf("search loaded vector index: %v", err)
+			}
+			requireVectorResultIDs(t, results, "a", "b")
+		})
+	}
+}
+
+func TestCollectionCommandWALUpdateWithoutVectorChangePreservesCachedNativeVectorRoot(t *testing.T) {
+	dir, def, seedStatus := prepareCollectionCommandWALNativeVectorRootDir(t, []IndexDefinition{
+		{Name: "kind", Field: "kind", ValueType: IndexValueString},
+	})
+	d := openCollectionCommandWALDB(t, dir)
+	col, err := NewCollectionManager(d).OpenCollection("docs")
+	if err != nil {
+		_ = d.Close()
+		t.Fatalf("OpenCollection command WAL: %v", err)
+	}
+
+	results, err := col.UpdateBatch([]UpdateBatchItem{{
+		DocumentID: []byte("a"),
+		Update: func(current []byte) ([]byte, bool, error) {
+			return []byte(`{"kind":"seed","embedding":[1,0],"note":"updated"}`), true, nil
+		},
+	}})
+	if err != nil {
+		_ = d.Close()
+		t.Fatalf("UpdateBatch row commit: %v", err)
+	}
+	if len(results) != 1 || !results[0].Matched || !results[0].Modified {
+		_ = d.Close()
+		t.Fatalf("UpdateBatch results=%+v, want one matched update", results)
+	}
+	assertCollectionDocument(t, col, "a", `{"kind":"seed","embedding":[1,0],"note":"updated"}`)
+	assertCollectionCommandWALCachedVectorRootPreserved(t, d, col, def, seedStatus)
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close command WAL DB: %v", err)
+	}
+
+	reopened := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopened.Close() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection reopened: %v", err)
+	}
+	assertCollectionDocument(t, reopenedCol, "a", `{"kind":"seed","embedding":[1,0],"note":"updated"}`)
+	loaded, status, err := reopenedCol.LoadNativeVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		t.Fatalf("LoadNativeVectorIndexSnapshot: %v", err)
+	}
+	if loaded == nil || !status.Loaded || status.RootID != seedStatus.RootID {
+		t.Fatalf("vector root not preserved after non-vector update loaded=%v status=%+v seed=%+v", loaded != nil, status, seedStatus)
+	}
+	resultsAfterSearch, _, err := loaded.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 2, DisableExactFallback: true})
+	if err != nil {
+		t.Fatalf("search loaded vector index: %v", err)
+	}
+	requireVectorResultIDs(t, resultsAfterSearch, "a", "b")
+}
+
 func TestCollectionCommandWALSingleDeleteClearsCachedNativeVectorRoot(t *testing.T) {
 	dir, def, seedStatus := prepareCollectionCommandWALNativeVectorRootDir(t, nil)
 	d := openCollectionCommandWALDB(t, dir)
@@ -1811,6 +1920,23 @@ func assertCollectionCommandWALCachedVectorRootCleared(t *testing.T, d *backendd
 	rootName := collectionVectorIndexRootName("docs", def.Name)
 	if got := catalog.rootID(rootName); got != 0 {
 		t.Fatalf("cached catalog vector root %q=%d, want cleared root 0 after row commit; seed=%+v", rootName, got, seedStatus)
+	}
+}
+
+func assertCollectionCommandWALCachedVectorRootPreserved(t *testing.T, d *backenddb.DB, col *Collection, def VectorIndexDefinition, seedStatus VectorIndexLoadStatus) {
+	t.Helper()
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("AcquireSnapshot returned nil")
+	}
+	defer func() { _ = snap.Close() }()
+	catalog, err := col.catalogForSnapshot(snap)
+	if err != nil {
+		t.Fatalf("catalogForSnapshot: %v", err)
+	}
+	rootName := collectionVectorIndexRootName("docs", def.Name)
+	if got := catalog.rootID(rootName); got != seedStatus.RootID {
+		t.Fatalf("cached catalog vector root %q=%d, want preserved seed root %d after non-vector row commit; seed=%+v", rootName, got, seedStatus.RootID, seedStatus)
 	}
 }
 
