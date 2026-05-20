@@ -179,6 +179,7 @@ func TestColumnGraphUnavailableStatusPreservesPhysicalSupportForLoaderFailures(t
 	mergeColumnGraphLoadStatus(&status, VectorIndexLoadStatus{
 		PhysicalColumnAssetsSupported: true,
 		ColumnGraphUnavailableReason:  vectorIndexFallbackColumnGraphManifestRootMismatch,
+		ColumnGraphUnavailableDetail:  "test detail",
 		BytesDisk:                     4096,
 	})
 	if status.PhysicalColumnAssetsSupported == false {
@@ -189,6 +190,9 @@ func TestColumnGraphUnavailableStatusPreservesPhysicalSupportForLoaderFailures(t
 	}
 	if status.BytesDisk != 4096 || !status.RebuildNeeded {
 		t.Fatalf("unexpected status accounting: %+v", status)
+	}
+	if status.ColumnGraphUnavailableDetail != "test detail" {
+		t.Fatalf("unavailable detail=%q want test detail", status.ColumnGraphUnavailableDetail)
 	}
 }
 
