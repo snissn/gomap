@@ -35,6 +35,8 @@ const columnAssetSegmentWriteLockStripes = 64
 // without retaining one mutex per temp dir or segment path forever.
 var columnAssetSegmentWriteLocks [columnAssetSegmentWriteLockStripes]sync.Mutex
 
+var columnPhysicalAssetReadScratchPool sync.Pool
+
 // columnAssetSegmentAllocationLocks serialize same-process segment file-id
 // allocation by namespace without retaining one lock per temp dir forever.
 // O_EXCL still protects against external process races.
@@ -597,6 +599,7 @@ type columnPhysicalAssetReadCache struct {
 	fileID     uint32
 	file       *os.File
 	files      map[uint32]*os.File
+	scratch    []byte
 	hits       uint64
 	misses     uint64
 }
@@ -617,6 +620,10 @@ func newColumnPhysicalAssetReadCache(rootDir string, namespace string) (columnPh
 
 func (c *columnPhysicalAssetReadCache) close() error {
 	var closeErr error
+	if c.scratch != nil {
+		columnPhysicalAssetReadScratchPool.Put(c.scratch[:0])
+		c.scratch = nil
+	}
 	if c.file != nil {
 		if err := c.file.Close(); err != nil && closeErr == nil {
 			closeErr = err
@@ -645,6 +652,22 @@ func (c *columnPhysicalAssetReadCache) read(ref ColumnAssetRef, dst []byte) ([]b
 	file, err := c.fileForRef(ref)
 	if err != nil {
 		return nil, err
+	}
+	if ref.Length >= 0 && ref.Length <= int64(maxCollectionInt) && cap(dst) < int(ref.Length) {
+		if cap(c.scratch) < int(ref.Length) {
+			if c.scratch != nil {
+				columnPhysicalAssetReadScratchPool.Put(c.scratch[:0])
+			}
+			if pooled, ok := columnPhysicalAssetReadScratchPool.Get().([]byte); ok && cap(pooled) >= int(ref.Length) {
+				c.scratch = pooled[:0]
+			} else {
+				if ok && pooled != nil {
+					columnPhysicalAssetReadScratchPool.Put(pooled[:0])
+				}
+				c.scratch = make([]byte, int(ref.Length))
+			}
+		}
+		dst = c.scratch
 	}
 	return readColumnPhysicalAssetFromFile(file, ref, dst)
 }

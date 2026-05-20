@@ -25,16 +25,18 @@ func TestColumnPhysicalQueryAdapterExecutesJSONBenchShapesM13B(t *testing.T) {
 	defer closeFn()
 
 	tests := []struct {
-		name      string
-		hashName  string
-		req       ColumnPhysicalQueryRequest
-		wantCount int
+		name       string
+		hashName   string
+		req        ColumnPhysicalQueryRequest
+		wantCount  int
+		wantDirect bool
 	}{
 		{
-			name:      "q1",
-			hashName:  "q1",
-			req:       ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "kind"},
-			wantCount: 4,
+			name:       "q1",
+			hashName:   "q1",
+			req:        ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "kind"},
+			wantCount:  4,
+			wantDirect: true,
 		},
 		{
 			name:      "q2",
@@ -61,16 +63,18 @@ func TestColumnPhysicalQueryAdapterExecutesJSONBenchShapesM13B(t *testing.T) {
 			wantCount: 12,
 		},
 		{
-			name:      "q5",
-			hashName:  "q5",
-			req:       ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupInt64Span, GroupColumn: "did", ValueColumn: "time_us"},
-			wantCount: 12,
+			name:       "q5",
+			hashName:   "q5",
+			req:        ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupInt64Span, GroupColumn: "did", ValueColumn: "time_us"},
+			wantCount:  12,
+			wantDirect: true,
 		},
 		{
-			name:      "q5_metadata",
-			hashName:  "q5",
-			req:       ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupInt64Span, GroupColumn: "did", ValueColumn: "time_us"},
-			wantCount: 12,
+			name:       "q5_metadata",
+			hashName:   "q5",
+			req:        ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupInt64Span, GroupColumn: "did", ValueColumn: "time_us"},
+			wantCount:  12,
+			wantDirect: true,
 		},
 	}
 
@@ -93,6 +97,12 @@ func TestColumnPhysicalQueryAdapterExecutesJSONBenchShapesM13B(t *testing.T) {
 			}
 			if result.Diagnostics.AssetRefs == 0 || result.Diagnostics.DecodedBlocks == 0 || result.Diagnostics.PhysicalBytesScanned <= 0 {
 				t.Fatalf("%s missing physical diagnostics: %+v", tc.name, result.Diagnostics)
+			}
+			if tc.wantDirect && result.Diagnostics.DirectReduceBlocks != result.Diagnostics.DecodedBlocks {
+				t.Fatalf("%s direct reduce blocks=%d want decoded blocks=%d diagnostics=%+v", tc.name, result.Diagnostics.DirectReduceBlocks, result.Diagnostics.DecodedBlocks, result.Diagnostics)
+			}
+			if !tc.wantDirect && result.Diagnostics.DirectReduceBlocks != 0 {
+				t.Fatalf("%s direct reduce blocks=%d want zero for non-vectorized shape diagnostics=%+v", tc.name, result.Diagnostics.DirectReduceBlocks, result.Diagnostics)
 			}
 			if result.Diagnostics.ReduceRows != len(events) {
 				t.Fatalf("%s reduce rows=%d want %d", tc.name, result.Diagnostics.ReduceRows, len(events))
@@ -284,6 +294,9 @@ func TestColumnPhysicalQueryParallelMatchesSerialInsertOnlyM14B(t *testing.T) {
 			}
 			if parallel.Diagnostics.RowMaterializations != 0 {
 				t.Fatalf("parallel row materializations=%d want zero diagnostics=%+v", parallel.Diagnostics.RowMaterializations, parallel.Diagnostics)
+			}
+			if parallel.Diagnostics.DirectReduceBlocks != parallel.Diagnostics.DecodedBlocks {
+				t.Fatalf("parallel direct reduce blocks=%d want decoded blocks=%d diagnostics=%+v", parallel.Diagnostics.DirectReduceBlocks, parallel.Diagnostics.DecodedBlocks, parallel.Diagnostics)
 			}
 			if got, want := parallel.Diagnostics.ReduceRows, serial.Diagnostics.ReduceRows; got != want {
 				t.Fatalf("parallel reduce rows=%d want serial %d diagnostics=%+v", got, want, parallel.Diagnostics)

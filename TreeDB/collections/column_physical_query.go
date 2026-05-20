@@ -53,6 +53,7 @@ type ColumnPhysicalQueryDiagnostics struct {
 	AssetRefs                  int
 	MutationParts              int
 	DecodedBlocks              int
+	DirectReduceBlocks         int
 	ScheduledGranules          int
 	SkippedGranules            int
 	RowsScanned                int
@@ -87,38 +88,117 @@ var errColumnPhysicalScanCancelled = errors.New("collections: physical column sc
 // scanner path; mutation-bearing manifests fall back to the M13C visibility
 // overlay before reducing.
 func (c *Collection) RunColumnPhysicalQuery(req ColumnPhysicalQueryRequest) (ColumnPhysicalQueryResult, error) {
-	cfg, err := c.columnPhysicalQueryColumnStoreConfig()
+	view, closeView, err := c.prepareColumnPhysicalScanSnapshotView()
+	if closeView != nil {
+		defer closeView()
+	}
 	if err != nil {
 		return ColumnPhysicalQueryResult{}, err
 	}
-	if cfg.PhysicalMutationParts > 0 {
-		return c.runColumnPhysicalQueryWithVisibility(cfg, req)
+	if view.MutationParts > 0 {
+		return c.runColumnPhysicalQueryWithVisibility(view.Config, req)
 	}
-	exec, err := newColumnPhysicalQueryExecutor(cfg, req)
+	return c.runColumnPhysicalQueryInSnapshotView(view, req)
+}
+
+func (c *Collection) runColumnPhysicalQueryDirectInSnapshotView(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest, refModulo, refRemainder int, shouldCancel func() bool) (ColumnPhysicalQueryResult, bool, error) {
+	exec, err := newColumnPhysicalQueryExecutor(view.Config, req)
 	if err != nil {
-		return ColumnPhysicalQueryResult{}, err
+		return ColumnPhysicalQueryResult{}, false, err
+	}
+	if !exec.supportsDirectAssetReduce() {
+		return ColumnPhysicalQueryResult{}, false, nil
 	}
 	scanStart := time.Now()
-	diag, err := c.scanColumnPhysicalRows(columnPhysicalScanRequest{
-		ProjectedColumns:  exec.projected,
-		Visitor:           exec.visit,
-		RequireInsertOnly: true,
-	})
+	diag, err := c.scanColumnPhysicalQueryDirectInSnapshotView(view, exec, refModulo, refRemainder, shouldCancel)
 	scanNanos := time.Since(scanStart).Nanoseconds()
 	result := ColumnPhysicalQueryResult{
 		Diagnostics: columnPhysicalQueryDiagnosticsFromScan(diag),
 	}
+	result.Diagnostics.DirectReduceBlocks = diag.DecodedBlocks
 	result.Diagnostics.ScanNanos = scanNanos
 	result.Diagnostics.ReduceRows = exec.reduceRows
 	if err != nil {
 		if errors.Is(err, errColumnPhysicalQueryNeedsVisibility) {
-			return c.runColumnPhysicalQueryWithVisibility(cfg, req)
+			return result, true, err
 		}
-		return result, err
+		return result, true, err
 	}
 	result.Groups = exec.groups()
 	result.Diagnostics.ResultGroups = len(result.Groups)
-	return result, nil
+	return result, true, nil
+}
+
+func (c *Collection) scanColumnPhysicalQueryDirectInSnapshotView(
+	view columnPhysicalScanSnapshotView,
+	exec *columnPhysicalQueryExecutor,
+	refModulo int,
+	refRemainder int,
+	shouldCancel func() bool,
+) (columnPhysicalScanDiagnostics, error) {
+	cfg := view.Config
+	diag := view.Diagnostics
+	if c == nil {
+		return diag, errCollectionNil
+	}
+	if c.db == nil {
+		return diag, errCollectionDBNil
+	}
+	if !view.ColumnStoreEnabled || !cfg.Enabled {
+		return diag, errors.New("collections: physical column scan requires enabled column_store")
+	}
+	if cfg.ActiveManifest == nil {
+		return diag, errors.New("collections: physical column scan requires active column manifest")
+	}
+	if view.MutationParts != 0 {
+		return diag, errColumnPhysicalQueryNeedsVisibility
+	}
+	if refModulo < 0 {
+		return diag, errors.New("collections: physical column scan ref ordinal modulo cannot be negative")
+	}
+	if refModulo == 0 && refRemainder != 0 {
+		return diag, fmt.Errorf("collections: physical column scan ref ordinal remainder=%d requires non-zero modulo", refRemainder)
+	}
+	if refModulo > 0 && (refRemainder < 0 || refRemainder >= refModulo) {
+		return diag, fmt.Errorf("collections: physical column scan ref ordinal remainder=%d outside modulo=%d", refRemainder, refModulo)
+	}
+	diag.ProjectedColumns = len(exec.projected)
+	readCache, err := newColumnPhysicalAssetReadCache(view.ColumnAssetRootDir, view.AssetNamespace)
+	if err != nil {
+		return diag, err
+	}
+	defer func() { _ = readCache.close() }()
+	var rawScratch []byte
+	start, step := columnPhysicalScanRefOrdinalPartition(columnPhysicalScanRequest{RefOrdinalModulo: refModulo, RefOrdinalRemainder: refRemainder})
+	for ordinal := start; ordinal < len(view.AssetRefs); ordinal += step {
+		assetRef := view.AssetRefs[ordinal]
+		if shouldCancel != nil && shouldCancel() {
+			return diag, errColumnPhysicalScanCancelled
+		}
+		diag.ScheduledGranules++
+		ref := assetRef.Ref
+		raw, err := readCache.read(ref, rawScratch)
+		diag.SegmentFileCacheHits = readCache.hits
+		diag.SegmentFileCacheMisses = readCache.misses
+		if err != nil {
+			return diag, fmt.Errorf("collections: column physical scan read generation=%d part_id=%d: %w", ref.Generation, ref.PartID, err)
+		}
+		rawScratch = raw
+		diag.PhysicalBytesScanned += int64(len(raw))
+		summary, err := reduceColumnPhysicalAssetDirect(raw, ref, view.CollectionName, &cfg, assetRef.Reason, exec)
+		if err != nil {
+			if errors.Is(err, errColumnPhysicalAssetManifestOperationMismatch) {
+				return diag, errColumnPhysicalQueryNeedsVisibility
+			}
+			return diag, fmt.Errorf("collections: column physical direct reduce generation=%d part_id=%d: %w", ref.Generation, ref.PartID, err)
+		}
+		diag.DecodedBlocks++
+		diag.RowsScanned += summary.rows
+		diag.DeletedRows += summary.deleted
+	}
+	diag.SegmentFileCacheHits = readCache.hits
+	diag.SegmentFileCacheMisses = readCache.misses
+	return diag, nil
 }
 
 // RunColumnPhysicalQueryParallel executes an insert-only physical query by
@@ -151,11 +231,13 @@ func (c *Collection) RunColumnPhysicalQueryParallel(req ColumnPhysicalQueryReque
 	if err != nil {
 		return ColumnPhysicalQueryResult{}, err
 	}
+	direct := merged.supportsDirectAssetReduce()
 
 	type workerResult struct {
-		exec *columnPhysicalQueryExecutor
-		diag columnPhysicalScanDiagnostics
-		err  error
+		exec         *columnPhysicalQueryExecutor
+		diag         columnPhysicalScanDiagnostics
+		directBlocks int
+		err          error
 	}
 	results := make([]workerResult, workers)
 	start := time.Now()
@@ -172,18 +254,25 @@ func (c *Collection) RunColumnPhysicalQueryParallel(req ColumnPhysicalQueryReque
 				results[worker].err = err
 				return
 			}
-			diag, err := c.scanColumnPhysicalRowsInSnapshotView(view, columnPhysicalScanRequest{
-				ProjectedColumns:    exec.projected,
-				Visitor:             exec.visit,
-				RequireInsertOnly:   true,
-				RefOrdinalModulo:    workers,
-				RefOrdinalRemainder: worker,
-				ShouldCancel:        cancel.Load,
-			})
+			var diag columnPhysicalScanDiagnostics
+			var directBlocks int
+			if direct {
+				diag, err = c.scanColumnPhysicalQueryDirectInSnapshotView(view, exec, workers, worker, cancel.Load)
+				directBlocks = diag.DecodedBlocks
+			} else {
+				diag, err = c.scanColumnPhysicalRowsInSnapshotView(view, columnPhysicalScanRequest{
+					ProjectedColumns:    exec.projected,
+					Visitor:             exec.visit,
+					RequireInsertOnly:   true,
+					RefOrdinalModulo:    workers,
+					RefOrdinalRemainder: worker,
+					ShouldCancel:        cancel.Load,
+				})
+			}
 			if err != nil {
 				cancel.Store(true)
 			}
-			results[worker] = workerResult{exec: exec, diag: diag, err: err}
+			results[worker] = workerResult{exec: exec, diag: diag, directBlocks: directBlocks, err: err}
 		}()
 	}
 	wg.Wait()
@@ -193,6 +282,7 @@ func (c *Collection) RunColumnPhysicalQueryParallel(req ColumnPhysicalQueryReque
 	for worker := range results {
 		workerResult := results[worker]
 		result.Diagnostics = mergeColumnPhysicalQueryDiagnostics(result.Diagnostics, columnPhysicalQueryDiagnosticsFromScan(workerResult.diag))
+		result.Diagnostics.DirectReduceBlocks += workerResult.directBlocks
 		if workerResult.err != nil {
 			if firstErr == nil || errors.Is(firstErr, errColumnPhysicalScanCancelled) {
 				firstErr = workerResult.err
@@ -218,6 +308,13 @@ func (c *Collection) RunColumnPhysicalQueryParallel(req ColumnPhysicalQueryReque
 }
 
 func (c *Collection) runColumnPhysicalQueryInSnapshotView(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest) (ColumnPhysicalQueryResult, error) {
+	if result, ok, err := c.runColumnPhysicalQueryDirectInSnapshotView(view, req, 0, 0, nil); ok {
+		if err != nil {
+			return result, err
+		}
+		result.Diagnostics.WorkerCount = 1
+		return result, nil
+	}
 	exec, err := newColumnPhysicalQueryExecutor(view.Config, req)
 	if err != nil {
 		return ColumnPhysicalQueryResult{}, err
@@ -340,6 +437,7 @@ func mergeColumnPhysicalQueryDiagnostics(left, right ColumnPhysicalQueryDiagnost
 		left.MutationParts = right.MutationParts
 	}
 	left.DecodedBlocks += right.DecodedBlocks
+	left.DirectReduceBlocks += right.DirectReduceBlocks
 	left.ScheduledGranules += right.ScheduledGranules
 	left.SkippedGranules += right.SkippedGranules
 	left.RowsScanned += right.RowsScanned
@@ -355,12 +453,14 @@ func mergeColumnPhysicalQueryDiagnostics(left, right ColumnPhysicalQueryDiagnost
 }
 
 type columnPhysicalQueryExecutor struct {
-	kind        ColumnPhysicalQueryKind
-	projected   []string
-	groupIdx    int
-	valueIdx    int
-	distinctIdx int
-	interner    columnPhysicalQueryStringInterner
+	kind           ColumnPhysicalQueryKind
+	projected      []string
+	groupIdx       int
+	valueIdx       int
+	distinctIdx    int
+	groupColumnIdx int
+	valueColumnIdx int
+	interner       columnPhysicalQueryStringInterner
 
 	counts       map[string]int
 	distinct     map[string]map[string]struct{}
@@ -378,54 +478,56 @@ type columnPhysicalQuerySpan struct {
 
 func newColumnPhysicalQueryExecutor(cfg ColumnStoreConfig, req ColumnPhysicalQueryRequest) (*columnPhysicalQueryExecutor, error) {
 	exec := &columnPhysicalQueryExecutor{
-		kind:        req.Kind,
-		groupIdx:    -1,
-		valueIdx:    -1,
-		distinctIdx: -1,
+		kind:           req.Kind,
+		groupIdx:       -1,
+		valueIdx:       -1,
+		distinctIdx:    -1,
+		groupColumnIdx: -1,
+		valueColumnIdx: -1,
 	}
-	addProjection := func(name string, wantType ColumnStoreValueType, role string) (int, error) {
+	addProjection := func(name string, wantType ColumnStoreValueType, role string) (int, int, error) {
 		if name == "" {
-			return -1, fmt.Errorf("%w: physical column query %s column is required", ErrColumnQueryPlanUnsupported, role)
+			return -1, -1, fmt.Errorf("%w: physical column query %s column is required", ErrColumnQueryPlanUnsupported, role)
 		}
-		col, ok := columnPhysicalQueryDeclaredColumn(cfg, name)
+		col, columnIdx, ok := columnPhysicalQueryDeclaredColumn(cfg, name)
 		if !ok {
-			return -1, fmt.Errorf("%w: physical column query requested undeclared column %q", ErrColumnQueryPlanUnsupported, name)
+			return -1, -1, fmt.Errorf("%w: physical column query requested undeclared column %q", ErrColumnQueryPlanUnsupported, name)
 		}
 		if col.ValueType != wantType {
-			return -1, fmt.Errorf("%w: physical column query %s column %q has type %q, want %q", ErrColumnQueryPlanUnsupported, role, name, col.ValueType, wantType)
+			return -1, -1, fmt.Errorf("%w: physical column query %s column %q has type %q, want %q", ErrColumnQueryPlanUnsupported, role, name, col.ValueType, wantType)
 		}
 		for idx, existing := range exec.projected {
 			if existing == name {
-				return idx, nil
+				return idx, columnIdx, nil
 			}
 		}
 		exec.projected = append(exec.projected, name)
-		return len(exec.projected) - 1, nil
+		return len(exec.projected) - 1, columnIdx, nil
 	}
 
 	var err error
 	switch req.Kind {
 	case ColumnPhysicalQueryGroupCount:
-		exec.groupIdx, err = addProjection(req.GroupColumn, ColumnStoreValueString, "group")
+		exec.groupIdx, exec.groupColumnIdx, err = addProjection(req.GroupColumn, ColumnStoreValueString, "group")
 		exec.counts = make(map[string]int)
 	case ColumnPhysicalQueryGroupCountDistinct:
-		exec.groupIdx, err = addProjection(req.GroupColumn, ColumnStoreValueString, "group")
+		exec.groupIdx, exec.groupColumnIdx, err = addProjection(req.GroupColumn, ColumnStoreValueString, "group")
 		if err == nil {
-			exec.distinctIdx, err = addProjection(req.DistinctColumn, ColumnStoreValueString, "distinct")
+			exec.distinctIdx, _, err = addProjection(req.DistinctColumn, ColumnStoreValueString, "distinct")
 		}
 		exec.distinct = make(map[string]map[string]struct{})
 	case ColumnPhysicalQueryHourCount:
-		exec.valueIdx, err = addProjection(req.ValueColumn, ColumnStoreValueInt64, "value")
+		exec.valueIdx, exec.valueColumnIdx, err = addProjection(req.ValueColumn, ColumnStoreValueInt64, "value")
 	case ColumnPhysicalQueryGroupMinInt64, ColumnPhysicalQueryGroupMaxInt64:
-		exec.groupIdx, err = addProjection(req.GroupColumn, ColumnStoreValueString, "group")
+		exec.groupIdx, exec.groupColumnIdx, err = addProjection(req.GroupColumn, ColumnStoreValueString, "group")
 		if err == nil {
-			exec.valueIdx, err = addProjection(req.ValueColumn, ColumnStoreValueInt64, "value")
+			exec.valueIdx, exec.valueColumnIdx, err = addProjection(req.ValueColumn, ColumnStoreValueInt64, "value")
 		}
 		exec.int64Values = make(map[string]int64)
 	case ColumnPhysicalQueryGroupInt64Span:
-		exec.groupIdx, err = addProjection(req.GroupColumn, ColumnStoreValueString, "group")
+		exec.groupIdx, exec.groupColumnIdx, err = addProjection(req.GroupColumn, ColumnStoreValueString, "group")
 		if err == nil {
-			exec.valueIdx, err = addProjection(req.ValueColumn, ColumnStoreValueInt64, "value")
+			exec.valueIdx, exec.valueColumnIdx, err = addProjection(req.ValueColumn, ColumnStoreValueInt64, "value")
 		}
 		exec.int64Spans = make(map[string]columnPhysicalQuerySpan)
 	default:
@@ -437,13 +539,27 @@ func newColumnPhysicalQueryExecutor(cfg ColumnStoreConfig, req ColumnPhysicalQue
 	return exec, nil
 }
 
-func columnPhysicalQueryDeclaredColumn(cfg ColumnStoreConfig, name string) (ColumnStoreColumn, bool) {
-	for _, col := range cfg.Columns {
+func columnPhysicalQueryDeclaredColumn(cfg ColumnStoreConfig, name string) (ColumnStoreColumn, int, bool) {
+	for idx, col := range cfg.Columns {
 		if col.Name == name {
-			return col, true
+			return col, idx, true
 		}
 	}
-	return ColumnStoreColumn{}, false
+	return ColumnStoreColumn{}, -1, false
+}
+
+func (e *columnPhysicalQueryExecutor) supportsDirectAssetReduce() bool {
+	if e == nil {
+		return false
+	}
+	switch e.kind {
+	case ColumnPhysicalQueryGroupCount:
+		return e.groupColumnIdx >= 0
+	case ColumnPhysicalQueryGroupInt64Span:
+		return e.groupColumnIdx >= 0 && e.valueColumnIdx >= 0
+	default:
+		return false
+	}
 }
 
 func (e *columnPhysicalQueryExecutor) visit(row columnPhysicalScanRowView) error {
@@ -517,6 +633,242 @@ func (e *columnPhysicalQueryExecutor) visitValues(values []columnDeclaredValue) 
 		}
 		e.int64Spans[key] = cur
 	}
+	return nil
+}
+
+func reduceColumnPhysicalAssetDirect(raw []byte, ref ColumnAssetRef, expectedCollection string, cfg *ColumnStoreConfig, expectedOperation ColumnPublishOperation, exec *columnPhysicalQueryExecutor) (columnPhysicalAssetScanSummary, error) {
+	cur := manifestCursor{raw: raw}
+	if magic := cur.u32(); magic != columnPhysicalAssetMagic {
+		return columnPhysicalAssetScanSummary{}, fmt.Errorf("bad column physical asset magic=0x%08x", magic)
+	}
+	version := cur.u16()
+	if !isSupportedColumnPhysicalAssetVersion(version) {
+		return columnPhysicalAssetScanSummary{}, fmt.Errorf("unsupported column physical asset version=%d", version)
+	}
+	collection := cur.stringBytes()
+	namespace := cur.stringBytes()
+	generation := cur.u64()
+	partID := cur.u64()
+	appliedCommandLSN := cur.u64()
+	operationBytes := cur.stringBytes()
+	operation, operationOK := columnPhysicalScanOperationFromBytes(operationBytes)
+	schemaHash := cur.u64()
+	columnCount := cur.u64()
+	rowCount := cur.u64()
+	if err := cur.err; err != nil {
+		return columnPhysicalAssetScanSummary{}, err
+	}
+	if columnCount > uint64(maxCollectionInt) {
+		return columnPhysicalAssetScanSummary{}, fmt.Errorf("column physical asset column_count=%d overflows int max=%d", columnCount, maxCollectionInt)
+	}
+	if rowCount > uint64(maxCollectionInt) {
+		return columnPhysicalAssetScanSummary{}, fmt.Errorf("column physical asset row_count=%d overflows int max=%d", rowCount, maxCollectionInt)
+	}
+	header := columnPhysicalAssetScanHeader{
+		Collection:        collection,
+		Namespace:         namespace,
+		Generation:        generation,
+		PartID:            partID,
+		AppliedCommandLSN: appliedCommandLSN,
+		Operation:         operation,
+		SchemaHash:        schemaHash,
+		ColumnCount:       int(columnCount),
+		RowCount:          int(rowCount),
+	}
+	if !operationOK {
+		return columnPhysicalAssetScanSummary{}, fmt.Errorf("unsupported column physical asset operation %q", operationBytes)
+	}
+	if version == columnPhysicalAssetVersionV1 && header.Operation == ColumnPublishOperationDelete {
+		return columnPhysicalAssetScanSummary{}, errors.New("legacy v1 column physical asset delete operation unsupported")
+	}
+	if err := validateColumnPhysicalAssetScanHeader(header, ref, expectedCollection, cfg); err != nil {
+		return columnPhysicalAssetScanSummary{}, err
+	}
+	if expectedOperation != "" && header.Operation != expectedOperation {
+		return columnPhysicalAssetScanSummary{}, fmt.Errorf("%w: manifest reason=%q asset operation=%q", errColumnPhysicalAssetManifestOperationMismatch, expectedOperation, header.Operation)
+	}
+	if header.Operation != ColumnPublishOperationInsert {
+		return columnPhysicalAssetScanSummary{}, errColumnPhysicalQueryNeedsVisibility
+	}
+	if header.ColumnCount != len(cfg.Columns) {
+		return columnPhysicalAssetScanSummary{}, fmt.Errorf("column physical asset columns=%d want %d", header.ColumnCount, len(cfg.Columns))
+	}
+	for colIdx := 0; colIdx < header.ColumnCount; colIdx++ {
+		name := cur.stringBytes()
+		path := cur.stringBytes()
+		valueType := cur.stringBytes()
+		nullable := cur.bool()
+		dictionary := cur.bool()
+		if cur.err != nil {
+			return columnPhysicalAssetScanSummary{}, cur.err
+		}
+		want := cfg.Columns[colIdx]
+		if !columnPhysicalBytesEqualString(name, want.Name) ||
+			!columnPhysicalBytesEqualString(path, want.Path) ||
+			!columnPhysicalBytesEqualString(valueType, string(want.ValueType)) ||
+			nullable != want.Nullable ||
+			dictionary != want.Dictionary {
+			return columnPhysicalAssetScanSummary{}, fmt.Errorf("column physical asset column[%d]={Name:%q Path:%q ValueType:%q Nullable:%t Dictionary:%t} want %+v",
+				colIdx, string(name), string(path), string(valueType), nullable, dictionary, want)
+		}
+	}
+	var summary columnPhysicalAssetScanSummary
+	for rowIdx := 0; rowIdx < header.RowCount; rowIdx++ {
+		_ = cur.bytesView()
+		deleted := false
+		if version >= columnPhysicalAssetVersionV2 {
+			deleted = cur.bool()
+		}
+		if cur.err != nil {
+			return columnPhysicalAssetScanSummary{}, cur.err
+		}
+		if deleted {
+			return columnPhysicalAssetScanSummary{}, fmt.Errorf("%w: operation=%s deleted=%v", errColumnPhysicalQueryNeedsVisibility, header.Operation, deleted)
+		}
+		group, groupOK, value, valueOK, err := scanColumnPhysicalDirectQueryRowValues(&cur, version, cfg, exec)
+		if err != nil {
+			return columnPhysicalAssetScanSummary{}, fmt.Errorf("row[%d]: %w", rowIdx, err)
+		}
+		switch exec.kind {
+		case ColumnPhysicalQueryGroupCount:
+			if err := exec.visitDirectGroupCount(group, groupOK); err != nil {
+				return columnPhysicalAssetScanSummary{}, err
+			}
+		case ColumnPhysicalQueryGroupInt64Span:
+			if err := exec.visitDirectGroupInt64Span(group, groupOK, value, valueOK); err != nil {
+				return columnPhysicalAssetScanSummary{}, err
+			}
+		default:
+			return columnPhysicalAssetScanSummary{}, fmt.Errorf("%w: unsupported direct physical column query kind %q", ErrColumnQueryPlanUnsupported, exec.kind)
+		}
+		summary.rows++
+	}
+	if cur.err != nil {
+		return columnPhysicalAssetScanSummary{}, cur.err
+	}
+	if cur.pos != len(raw) {
+		return columnPhysicalAssetScanSummary{}, errors.New("trailing bytes in column physical asset")
+	}
+	return summary, nil
+}
+
+func scanColumnPhysicalDirectQueryRowValues(cur *manifestCursor, version uint16, cfg *ColumnStoreConfig, exec *columnPhysicalQueryExecutor) ([]byte, bool, int64, bool, error) {
+	var group []byte
+	var groupOK bool
+	var value int64
+	var valueOK bool
+	for colIdx, col := range cfg.Columns {
+		typeBytes := cur.stringBytes()
+		if cur.err != nil {
+			return nil, false, 0, false, cur.err
+		}
+		if !columnPhysicalBytesEqualString(typeBytes, string(col.ValueType)) {
+			return nil, false, 0, false, fmt.Errorf("column[%d] type=%q want %q", colIdx, string(typeBytes), col.ValueType)
+		}
+		null := cur.bool()
+		if cur.err != nil {
+			return nil, false, 0, false, cur.err
+		}
+		present := true
+		if version >= columnPhysicalAssetVersion {
+			present = cur.bool()
+			if cur.err != nil {
+				return nil, false, 0, false, cur.err
+			}
+		}
+		selectedGroup := colIdx == exec.groupColumnIdx
+		selectedValue := colIdx == exec.valueColumnIdx
+		if !present {
+			if !null {
+				return nil, false, 0, false, fmt.Errorf("column[%d] absent value is not null", colIdx)
+			}
+			if !col.Nullable {
+				return nil, false, 0, false, fmt.Errorf("column[%d] is absent but column is not nullable", colIdx)
+			}
+			if selectedGroup || selectedValue {
+				return nil, false, 0, false, columnPhysicalQueryNullDirectError(col.ValueType)
+			}
+			continue
+		}
+		if null {
+			if !col.Nullable {
+				return nil, false, 0, false, fmt.Errorf("column[%d] is null but column is not nullable", colIdx)
+			}
+			if selectedGroup || selectedValue {
+				return nil, false, 0, false, columnPhysicalQueryNullDirectError(col.ValueType)
+			}
+			continue
+		}
+		switch col.ValueType {
+		case ColumnStoreValueBool:
+			_ = cur.bool()
+		case ColumnStoreValueInt64:
+			v := int64(cur.u64())
+			if selectedValue {
+				value = v
+				valueOK = true
+			}
+		case ColumnStoreValueDouble:
+			_ = cur.u64()
+		case ColumnStoreValueString:
+			v := cur.stringBytes()
+			if selectedGroup {
+				group = v
+				groupOK = true
+			}
+		default:
+			return nil, false, 0, false, fmt.Errorf("unsupported column physical value type %q", col.ValueType)
+		}
+		if cur.err != nil {
+			return nil, false, 0, false, cur.err
+		}
+	}
+	return group, groupOK, value, valueOK, nil
+}
+
+func columnPhysicalQueryNullDirectError(valueType ColumnStoreValueType) error {
+	switch valueType {
+	case ColumnStoreValueString:
+		return fmt.Errorf("%w: physical column query does not support null string group values yet", ErrColumnQueryPlanUnsupported)
+	case ColumnStoreValueInt64:
+		return fmt.Errorf("%w: physical column query does not support null int64 values yet", ErrColumnQueryPlanUnsupported)
+	default:
+		return fmt.Errorf("%w: physical column query does not support null %s values yet", ErrColumnQueryPlanUnsupported, valueType)
+	}
+}
+
+func (e *columnPhysicalQueryExecutor) visitDirectGroupCount(group []byte, groupOK bool) error {
+	if !groupOK {
+		return fmt.Errorf("%w: physical column query missing string group value", ErrColumnQueryPlanUnsupported)
+	}
+	key := e.interner.internBytes(group)
+	e.counts[key]++
+	e.reduceRows++
+	return nil
+}
+
+func (e *columnPhysicalQueryExecutor) visitDirectGroupInt64Span(group []byte, groupOK bool, value int64, valueOK bool) error {
+	if !groupOK {
+		return fmt.Errorf("%w: physical column query missing string group value", ErrColumnQueryPlanUnsupported)
+	}
+	if !valueOK {
+		return fmt.Errorf("%w: physical column query missing int64 value", ErrColumnQueryPlanUnsupported)
+	}
+	key := e.interner.internBytes(group)
+	cur, ok := e.int64Spans[key]
+	if !ok {
+		e.int64Spans[key] = columnPhysicalQuerySpan{min: value, max: value}
+		e.reduceRows++
+		return nil
+	}
+	if value < cur.min {
+		cur.min = value
+	}
+	if value > cur.max {
+		cur.max = value
+	}
+	e.int64Spans[key] = cur
+	e.reduceRows++
 	return nil
 }
 
