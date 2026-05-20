@@ -2988,6 +2988,9 @@ func rejectCreateIndexOnRetainedColumnField(meta CollectionMeta, def IndexDefini
 	if field == "" {
 		return nil
 	}
+	if meta.Options.ColumnStore.RetainedPayload == ColumnRetainedPayloadNone {
+		return fmt.Errorf("collections: CreateIndex on retained-payload-none collection field %q is unsupported because primary rows omit indexed payload fields", field)
+	}
 	for _, col := range meta.Options.ColumnStore.Columns {
 		if field == strings.TrimSpace(col.Path) {
 			return fmt.Errorf("collections: CreateIndex on retained-payload column field %q is unsupported because primary rows omit declared column payloads", field)
