@@ -200,9 +200,6 @@ func (set *columnAssetReachabilityRangeSet) appendRange(r columnAssetReachabilit
 	case 1:
 		set.ranges = append([]columnAssetReachabilityRange{set.first}, r)
 		set.count = 2
-	default:
-		set.ranges = append(set.ranges, r)
-		set.count++
 	}
 }
 
@@ -820,6 +817,7 @@ func listColumnAssetReachabilitySegments(segmentDir string) ([]columnAssetReacha
 		return nil, err
 	}
 	infos, readErr := dir.Readdir(-1)
+	// Close before handling readErr so failed directory reads do not leak an fd.
 	closeErr := dir.Close()
 	if readErr != nil {
 		if closeErr != nil {
