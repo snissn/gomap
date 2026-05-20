@@ -740,6 +740,46 @@ func TestColumnAssetReachabilityPlanCancellationBeforeSnapshotM15A(t *testing.T)
 	}
 }
 
+func TestColumnAssetReachabilityPlanPreservesIdentityOnSnapshotViewErrorM15A(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	active := ColumnManifestIdentity{
+		Generation: 7,
+		Format:     columnManifestFormatTCS1,
+		Version:    columnManifestIdentityVersion,
+		Checksum:   0xabcddcbe,
+	}
+	meta, err := normalizeCollectionMeta(CollectionMeta{Name: "events", Options: CollectionOptions{ColumnStore: testColumnStoreConfig(&active)}})
+	if err != nil {
+		t.Fatalf("normalizeCollectionMeta: %v", err)
+	}
+	cfg := meta.Options.ColumnStore
+	if cfg == nil || cfg.ActiveManifest == nil || cfg.AssetManager == nil {
+		t.Fatalf("missing column store metadata: %+v", cfg)
+	}
+	publishColumnStoreCatalogForTest(t, d, meta, active)
+
+	col := &Collection{db: d, meta: CollectionMeta{Name: "events"}}
+	plan, err := col.PlanColumnAssetReachability(context.Background(), ColumnAssetReachabilityOptions{Detailed: true})
+	if err == nil {
+		t.Fatal("PlanColumnAssetReachability err=nil, want fail-closed incomplete manifest error")
+	}
+	if !plan.ProtectOnly || plan.Complete {
+		t.Fatalf("plan=%+v want protect-only incomplete identity", plan)
+	}
+	if plan.Collection != "events" || plan.Namespace != cfg.AssetManager.Namespace ||
+		plan.ActiveManifestGeneration != active.Generation || plan.RecoveryManifestGeneration != active.Generation {
+		t.Fatalf("plan identity=%+v want collection/namespace/generation preserved", plan)
+	}
+	if plan.Sources.ManifestRecords != 0 || plan.Refs.Total != 0 || plan.Segments.Total != 0 || len(plan.Entries) != 0 || len(plan.SegmentEntries) != 0 {
+		t.Fatalf("failed plan should not expose partial stats: %+v", plan)
+	}
+}
+
 func TestColumnAssetReachabilityListSegmentsCancellationM15A(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

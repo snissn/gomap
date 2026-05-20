@@ -164,18 +164,10 @@ func (c *Collection) PlanColumnAssetReachability(ctx context.Context, opts Colum
 		defer closeView()
 	}
 	if err != nil {
-		return ColumnAssetReachabilityPlan{ProtectOnly: true}, err
+		return columnAssetReachabilityPlanIdentity(columnAssetReachabilityInputFromSnapshotView(view, opts)), err
 	}
 
-	input := columnAssetReachabilityInput{
-		rootDir:      view.ColumnAssetRootDir,
-		collection:   view.CollectionName,
-		namespace:    view.AssetNamespace,
-		activeGen:    view.Diagnostics.ManifestGeneration,
-		recoveryGen:  view.Diagnostics.RecoveryManifestGeneration,
-		manifestRecs: view.Diagnostics.ManifestRecords,
-		detailed:     opts.Detailed,
-	}
+	input := columnAssetReachabilityInputFromSnapshotView(view, opts)
 	for i, assetRef := range view.AssetRefs {
 		if i%columnAssetReachabilityContextCheckInterval == 0 {
 			if err := ctx.Err(); err != nil {
@@ -209,6 +201,18 @@ func (c *Collection) PlanColumnAssetReachability(ctx context.Context, opts Colum
 		return columnAssetReachabilityPlanIdentity(input), err
 	}
 	return buildColumnAssetReachabilityPlan(ctx, input)
+}
+
+func columnAssetReachabilityInputFromSnapshotView(view columnPhysicalScanSnapshotView, opts ColumnAssetReachabilityOptions) columnAssetReachabilityInput {
+	return columnAssetReachabilityInput{
+		rootDir:      view.ColumnAssetRootDir,
+		collection:   view.CollectionName,
+		namespace:    view.AssetNamespace,
+		activeGen:    view.Diagnostics.ManifestGeneration,
+		recoveryGen:  view.Diagnostics.RecoveryManifestGeneration,
+		manifestRecs: view.Diagnostics.ManifestRecords,
+		detailed:     opts.Detailed,
+	}
 }
 
 type columnAssetReachabilityInput struct {
