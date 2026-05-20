@@ -92,6 +92,7 @@ type columnPhysicalScanSnapshotView struct {
 	ColumnStoreEnabled bool
 	CommitSeq          uint64
 	AssetRefs          []columnManifestAssetRefForScan
+	GraphAssetRefs     []ColumnAssetRef
 	MutationParts      int
 	Diagnostics        columnPhysicalScanDiagnostics
 	ColumnAssetRootDir string
@@ -267,9 +268,15 @@ func (c *Collection) prepareColumnPhysicalScanSnapshotViewAtSnapshot(
 		view.Diagnostics = diag
 		return view, err
 	}
+	graphRefs, err := columnVectorGraphAssetRefsFromManifestRecordsForReachability(records, manifest.Generation, cfg.AssetManager.Namespace)
+	if err != nil {
+		view.Diagnostics = diag
+		return view, err
+	}
 	diag.AssetRefs = len(refs)
 	diag.MutationParts = mutationParts
 	view.AssetRefs = refs
+	view.GraphAssetRefs = graphRefs
 	view.MutationParts = mutationParts
 	view.Diagnostics = diag
 	return view, nil

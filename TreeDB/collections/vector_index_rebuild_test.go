@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -45,6 +46,7 @@ func TestColumnGraphRebuildVectorIndexPublishesPhysicalManifestV2A(t *testing.T)
 	if graph.RowCount != len(rows) {
 		t.Fatalf("graph row count=%d want %d", graph.RowCount, len(rows))
 	}
+	assertColumnAssetReachabilityProtectsGraphRefV2A(t, col, graph.AssetRef)
 	if len(scanned) != len(rows) {
 		t.Fatalf("scanned graph rows=%d want %d", len(scanned), len(rows))
 	}
@@ -135,6 +137,62 @@ func TestColumnGraphRebuildVectorIndexMarksStaleAfterMutationV2A(t *testing.T) {
 	default:
 		t.Fatalf("status reason after mutation=%q, want rebuild-needed or asset-mismatch", status.Reason)
 	}
+}
+
+func TestColumnGraphRebuildVectorIndexAdjacencyUsesBoundedTopKV2A(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0}},
+		{id: "doc-b", vector: []float32{0.99, 0.01}},
+		{id: "doc-c", vector: []float32{0.75, 0.25}},
+		{id: "doc-d", vector: []float32{0, 1}},
+	}
+	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 2, 2, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	graph, scanned := loadAndScanColumnGraphRebuildRowsV2A(t, d, "docs", def)
+	if graph.AssetRef.Namespace != col.Meta().Options.ColumnStore.AssetManager.Namespace {
+		t.Fatalf("graph namespace=%q want base namespace=%q", graph.AssetRef.Namespace, col.Meta().Options.ColumnStore.AssetManager.Namespace)
+	}
+	if got := scanned[0].adjacency; len(got) != 2 || got[0] != 1 || got[1] != 2 {
+		t.Fatalf("doc-a adjacency=%v, want bounded top-k [1 2]", got)
+	}
+}
+
+func TestColumnGraphRebuildVectorIndexReachabilityReclaimsSupersededGraphSegmentV2A(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, 0}},
+		{id: "doc-b", vector: []float32{0.9, 0.1, 0}},
+		{id: "doc-c", vector: []float32{0, 1, 0}},
+		{id: "doc-d", vector: []float32{0, 0, 1}},
+	}
+	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 2, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("first RebuildVectorIndex: %v", err)
+	}
+	first, _ := loadAndScanColumnGraphRebuildRowsV2A(t, d, "docs", def)
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("second RebuildVectorIndex: %v", err)
+	}
+	second, _ := loadAndScanColumnGraphRebuildRowsV2A(t, d, "docs", def)
+	if first.AssetRef == second.AssetRef {
+		t.Fatalf("second rebuild reused graph asset ref %+v", first.AssetRef)
+	}
+	if first.AssetRef.FileID == second.AssetRef.FileID {
+		t.Fatalf("second rebuild reused graph segment file_id=%d; want fresh segment for whole-segment reclaim", first.AssetRef.FileID)
+	}
+
+	plan, err := col.PlanColumnAssetReachability(context.Background(), ColumnAssetReachabilityOptions{Detailed: true})
+	if err != nil {
+		t.Fatalf("PlanColumnAssetReachability: %v", err)
+	}
+	if !plan.Complete {
+		t.Fatalf("reachability plan incomplete: refs=%+v segments=%+v", plan.Refs, plan.Segments)
+	}
+	assertColumnGraphReachabilityEntryV2A(t, plan, second.AssetRef)
+	assertColumnGraphSegmentStatusV2A(t, plan, first.AssetRef.FileID, ColumnAssetReachabilitySegmentReclaimable)
 }
 
 func TestColumnGraphRebuildVectorIndexCommandWALReplayV2A(t *testing.T) {
@@ -384,6 +442,62 @@ func assertColumnGraphRebuildLoadedStatusV2A(tb testing.TB, status VectorIndexSt
 		status.RebuildNeeded {
 		tb.Fatalf("status=%+v, want loaded column_graph index %q", status, indexName)
 	}
+}
+
+func assertColumnAssetReachabilityProtectsGraphRefV2A(tb testing.TB, col *Collection, graphRef ColumnAssetRef) {
+	tb.Helper()
+	plan, err := col.PlanColumnAssetReachability(context.Background(), ColumnAssetReachabilityOptions{Detailed: true})
+	if err != nil {
+		tb.Fatalf("PlanColumnAssetReachability: %v", err)
+	}
+	if !plan.Complete {
+		tb.Fatalf("reachability plan incomplete: refs=%+v segments=%+v", plan.Refs, plan.Segments)
+	}
+	assertColumnGraphReachabilityEntryV2A(tb, plan, graphRef)
+}
+
+func assertColumnGraphReachabilityEntryV2A(tb testing.TB, plan ColumnAssetReachabilityPlan, graphRef ColumnAssetRef) {
+	tb.Helper()
+	for _, entry := range plan.Entries {
+		if entry.Ref != graphRef {
+			continue
+		}
+		if entry.Status != ColumnAssetReachabilityProtected {
+			tb.Fatalf("graph ref reachability status=%q want protected", entry.Status)
+		}
+		if !columnGraphReachabilitySourcesContainV2A(entry.Sources, ColumnAssetReachabilitySourceActiveManifest) ||
+			!columnGraphReachabilitySourcesContainV2A(entry.Sources, ColumnAssetReachabilitySourceRecoveryManifest) {
+			tb.Fatalf("graph ref sources=%v want active and recovery manifest", entry.Sources)
+		}
+		return
+	}
+	tb.Fatalf("graph ref %+v missing from reachability entries=%+v", graphRef, plan.Entries)
+}
+
+func assertColumnGraphSegmentStatusV2A(tb testing.TB, plan ColumnAssetReachabilityPlan, fileID uint32, want ColumnAssetReachabilitySegmentStatus) {
+	tb.Helper()
+	for _, entry := range plan.SegmentEntries {
+		if entry.FileID != fileID {
+			continue
+		}
+		if entry.Status != want {
+			tb.Fatalf("segment file_id=%d status=%q want %q entry=%+v", fileID, entry.Status, want, entry)
+		}
+		if want == ColumnAssetReachabilitySegmentReclaimable && (entry.ProtectedBytes != 0 || entry.UnknownBytes != 0 || entry.ReclaimableBytes != entry.Bytes) {
+			tb.Fatalf("segment file_id=%d reclaim accounting=%+v, want whole segment reclaimable", fileID, entry)
+		}
+		return
+	}
+	tb.Fatalf("segment file_id=%d missing from reachability segment entries=%+v", fileID, plan.SegmentEntries)
+}
+
+func columnGraphReachabilitySourcesContainV2A(sources []ColumnAssetReachabilitySource, want ColumnAssetReachabilitySource) bool {
+	for _, source := range sources {
+		if source == want {
+			return true
+		}
+	}
+	return false
 }
 
 func columnGraphRebuildScannedIDsV2A(rows []columnGraphRebuildScannedRowV2A) []string {

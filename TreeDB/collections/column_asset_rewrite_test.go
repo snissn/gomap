@@ -130,6 +130,77 @@ func TestPatchColumnAssetRewriteManifestRecordsRemapsOnlyRefFieldsM15C(t *testin
 	}
 }
 
+func TestPatchColumnAssetRewriteManifestRecordsRemapsVectorGraphRefsV2A(t *testing.T) {
+	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col := openColumnStoreCollectionM10B(t, d)
+	if _, err := col.InsertBatch([][]byte{[]byte("e1"), []byte("e2")}, [][]byte{
+		[]byte(`{"time_us":1,"kind":"like","did":"d1"}`),
+		[]byte(`{"time_us":2,"kind":"post","did":"d2"}`),
+	}); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+
+	state, err := col.loadColumnAssetRewriteManifestState()
+	if err != nil {
+		t.Fatalf("loadColumnAssetRewriteManifestState: %v", err)
+	}
+	var oldPart columnManifestPartSnapshot
+	for _, record := range state.records {
+		if !bytes.HasPrefix(record.key, columnManifestPartRecordPrefixBytes) {
+			continue
+		}
+		part, err := decodeColumnManifestPartRecord(record.value)
+		if err != nil {
+			t.Fatalf("decodeColumnManifestPartRecord: %v", err)
+		}
+		oldPart = part
+		break
+	}
+	if oldPart.AssetRef == (ColumnAssetRef{}) {
+		t.Fatal("no manifest part record found")
+	}
+	oldGraphRef := oldPart.AssetRef
+	oldGraphRef.PartID += 100
+	oldGraphRef.Offset += oldPart.AssetRef.Length + 37
+	oldGraphRecord := testColumnVectorGraphManifestRecordV2A(t, &state.cfg, testColumnGraphVectorIndexDefinitionV2A(), *state.cfg.ActiveManifest, oldGraphRef)
+	records := append(cloneColumnManifestRecords(state.records), oldGraphRecord)
+	sortColumnManifestRecords(records)
+
+	newPartRef := oldPart.AssetRef
+	newPartRef.FileID += 17
+	newPartRef.Offset += oldPart.AssetRef.Length + 11
+	newGraphRef := oldGraphRef
+	newGraphRef.FileID += 19
+	newGraphRef.Offset += oldGraphRef.Length + 13
+	patched, count, err := patchColumnAssetRewriteManifestRecords(
+		records,
+		map[ColumnAssetRef]ColumnAssetRef{
+			oldPart.AssetRef: newPartRef,
+			oldGraphRef:      newGraphRef,
+		},
+		state.cfg.AssetManager.Namespace,
+	)
+	if err != nil {
+		t.Fatalf("patchColumnAssetRewriteManifestRecords: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("patch count=%d want 2", count)
+	}
+	graphRecord, ok := findColumnVectorGraphManifestRecord(patched, testColumnGraphVectorIndexDefinitionV2A().Name)
+	if !ok {
+		t.Fatal("patched graph record missing")
+	}
+	graph, err := decodeColumnVectorGraphManifestRecord(graphRecord.value)
+	if err != nil {
+		t.Fatalf("decode patched graph record: %v", err)
+	}
+	if graph.AssetRef != newGraphRef {
+		t.Fatalf("patched graph ref=%+v want %+v", graph.AssetRef, newGraphRef)
+	}
+}
+
 func TestPatchColumnAssetRewriteManifestRecordsInPlaceM15C(t *testing.T) {
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)

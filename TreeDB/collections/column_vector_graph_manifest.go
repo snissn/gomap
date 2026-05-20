@@ -238,7 +238,7 @@ func columnVectorGraphPhysicalColumnStoreConfig(collection string, base ColumnSt
 		Reconstruction:  ColumnReconstructionRetainedPayloadAndColumns,
 		AssetManager: &ColumnAssetManagerConfig{
 			Kind:      base.AssetManager.Kind,
-			Namespace: base.AssetManager.Namespace + "/vector_graph/" + normalizedDef.Name,
+			Namespace: base.AssetManager.Namespace,
 		},
 	})
 	if err != nil {
@@ -293,7 +293,7 @@ func prepareColumnVectorGraphPhysicalAsset(assetRootDir, collection string, base
 	if err != nil {
 		return columnVectorGraphPreparedPhysicalAsset{}, err
 	}
-	ref, err := writeColumnPhysicalAssetToManager(assetRootDir, graphCfg, encoded, generation, partID)
+	ref, err := writeColumnVectorGraphPhysicalAssetToManager(assetRootDir, graphCfg, encoded, generation, partID)
 	if err != nil {
 		return columnVectorGraphPreparedPhysicalAsset{}, err
 	}
@@ -304,6 +304,19 @@ func prepareColumnVectorGraphPhysicalAsset(assetRootDir, collection string, base
 		Bytes:        summary.PayloadBytes,
 		RowCount:     summary.RowCount,
 	}, nil
+}
+
+func writeColumnVectorGraphPhysicalAssetToManager(rootDir string, cfg ColumnStoreConfig, payload []byte, generation, partID uint64) (ColumnAssetRef, error) {
+	appender, err := newNextColumnPhysicalAssetSegmentAppender(rootDir, cfg)
+	if err != nil {
+		return ColumnAssetRef{}, err
+	}
+	ref, appendErr := appender.append(payload, generation, partID)
+	closeErr := appender.close()
+	if appendErr != nil {
+		return ColumnAssetRef{}, errors.Join(appendErr, closeErr)
+	}
+	return ref, closeErr
 }
 
 func (c *Collection) columnGraphVectorIndexStatus(def VectorIndexDefinition, cfg *ColumnStoreConfig) (VectorIndexStatus, error) {
@@ -451,6 +464,30 @@ func columnVectorGraphBaseManifestChecksum(manifest columnManifestSnapshot, reco
 		Operation:         manifest.Operation,
 		AppliedCommandLSN: manifest.AppliedCommandLSN,
 	}, manifest.Generation, baseRecords), nil
+}
+
+func columnVectorGraphAssetRefsFromManifestRecordsForReachability(records []columnManifestRecord, activeGeneration uint64, expectedNamespace string) ([]ColumnAssetRef, error) {
+	var refs []ColumnAssetRef
+	for _, record := range records {
+		if !bytes.HasPrefix(record.key, columnManifestVectorGraphRecordPrefixBytes) {
+			continue
+		}
+		graph, err := decodeColumnVectorGraphManifestRecord(record.value)
+		if err != nil {
+			return nil, err
+		}
+		if graph.AssetRef.Generation > activeGeneration {
+			return nil, fmt.Errorf("collections: column vector graph asset generation=%d is newer than active manifest generation=%d", graph.AssetRef.Generation, activeGeneration)
+		}
+		if graph.AssetRef.Namespace != expectedNamespace {
+			return nil, fmt.Errorf("collections: column vector graph asset namespace=%q want %q", graph.AssetRef.Namespace, expectedNamespace)
+		}
+		if err := validateColumnAssetRefForPlan(graph.AssetRef); err != nil {
+			return nil, err
+		}
+		refs = append(refs, graph.AssetRef)
+	}
+	return refs, nil
 }
 
 func validateColumnVectorGraphAssetRefAvailable(rootDir string, ref ColumnAssetRef) error {

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"sort"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
@@ -302,7 +301,7 @@ func buildColumnVectorGraphAdjacency(rows []columnVectorGraphAssetRow, def Vecto
 			rows[i].Adjacency = nil
 			continue
 		}
-		candidates := make([]columnVectorGraphNeighbor, 0, len(rows)-1)
+		candidates := make([]columnVectorGraphNeighbor, 0, degree)
 		for j := range rows {
 			if i == j {
 				continue
@@ -311,16 +310,8 @@ func buildColumnVectorGraphAdjacency(rows []columnVectorGraphAssetRow, def Vecto
 			if math.IsNaN(score) {
 				return fmt.Errorf("collections: column vector graph cosine row[%d,%d] is NaN", i, j)
 			}
-			candidates = append(candidates, columnVectorGraphNeighbor{ordinal: j, score: score})
+			candidates = insertColumnVectorGraphTopNeighbor(candidates, degree, columnVectorGraphNeighbor{ordinal: j, score: score})
 		}
-		sort.Slice(candidates, func(a, b int) bool {
-			left := candidates[a]
-			right := candidates[b]
-			if left.score == right.score {
-				return left.ordinal < right.ordinal
-			}
-			return left.score > right.score
-		})
 		neighbors := make([]uint32, degree)
 		for n := 0; n < degree; n++ {
 			neighbors[n] = uint32(candidates[n].ordinal)
@@ -333,6 +324,32 @@ func buildColumnVectorGraphAdjacency(rows []columnVectorGraphAssetRow, def Vecto
 type columnVectorGraphNeighbor struct {
 	ordinal int
 	score   float64
+}
+
+func insertColumnVectorGraphTopNeighbor(top []columnVectorGraphNeighbor, limit int, candidate columnVectorGraphNeighbor) []columnVectorGraphNeighbor {
+	if limit <= 0 {
+		return top
+	}
+	pos := len(top)
+	for pos > 0 && columnVectorGraphNeighborLess(candidate, top[pos-1]) {
+		pos--
+	}
+	if pos >= limit {
+		return top
+	}
+	if len(top) < limit {
+		top = append(top, columnVectorGraphNeighbor{})
+	}
+	copy(top[pos+1:], top[pos:len(top)-1])
+	top[pos] = candidate
+	return top
+}
+
+func columnVectorGraphNeighborLess(left, right columnVectorGraphNeighbor) bool {
+	if left.score == right.score {
+		return left.ordinal < right.ordinal
+	}
+	return left.score > right.score
 }
 
 func columnVectorGraphCosine(left, right columnVectorGraphAssetRow) float64 {
@@ -423,6 +440,14 @@ func replaceColumnVectorGraphManifestRecord(records []columnManifestRecord, gene
 func nextColumnVectorGraphPartID(records []columnManifestRecord, indexName string) uint64 {
 	next := uint64(1)
 	for _, record := range records {
+		if bytes.HasPrefix(record.key, columnManifestPartRecordPrefixBytes) {
+			_, partID, err := columnManifestPartKeyFromRecordKeyForScan(record.key)
+			if err != nil {
+				continue
+			}
+			next = nextColumnVectorGraphPartIDAfter(next, partID)
+			continue
+		}
 		if !bytes.Equal(record.key, columnVectorGraphManifestRecordKey(indexName)) {
 			continue
 		}
@@ -430,14 +455,16 @@ func nextColumnVectorGraphPartID(records []columnManifestRecord, indexName strin
 		if err != nil {
 			continue
 		}
-		if graph.AssetRef.PartID >= next {
-			if graph.AssetRef.PartID == ^uint64(0) {
-				return next
-			}
-			next = graph.AssetRef.PartID + 1
-		}
+		next = nextColumnVectorGraphPartIDAfter(next, graph.AssetRef.PartID)
 	}
 	return next
+}
+
+func nextColumnVectorGraphPartIDAfter(next, observed uint64) uint64 {
+	if observed < next || observed == ^uint64(0) {
+		return next
+	}
+	return observed + 1
 }
 
 func columnGraphRebuildUpdatedMeta(base CollectionMeta, identity ColumnManifestIdentity) (CollectionMeta, error) {
