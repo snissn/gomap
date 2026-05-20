@@ -1589,12 +1589,7 @@ func (s *Server) dropIndexesResponse(command wire.Document) (wire.Document, erro
 		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
 	}
 	if all {
-		for _, index := range metaBefore.VectorIndexes {
-			if _, err := col.DropVectorIndex(index.Name); err != nil {
-				return commandError(commandCodeBadValue, "BadValue", fmt.Sprintf("dropIndexes partially applied before vector index %q failed: %v", index.Name, err))
-			}
-		}
-		if _, err := col.DropAllIndexes(); err != nil {
+		if _, err := col.DropAllIndexesAndVectorIndexes(); err != nil {
 			return commandError(commandCodeBadValue, "BadValue", err.Error())
 		}
 	} else {
@@ -1605,21 +1600,11 @@ func (s *Server) dropIndexesResponse(command wire.Document) (wire.Document, erro
 			}
 			return commandError(commandCodeBadValue, "BadValue", err.Error())
 		}
-		if len(scalarNames) > 0 {
-			if _, err := col.DropIndexes(scalarNames); err != nil {
-				if errors.Is(err, collections.ErrIndexNotFound) {
-					return commandError(commandCodeIndexNotFound, "IndexNotFound", "index not found")
-				}
-				return commandError(commandCodeBadValue, "BadValue", err.Error())
+		if _, err := col.DropIndexesAndVectorIndexes(scalarNames, vectorNames); err != nil {
+			if errors.Is(err, collections.ErrIndexNotFound) {
+				return commandError(commandCodeIndexNotFound, "IndexNotFound", "index not found")
 			}
-		}
-		for _, indexName := range vectorNames {
-			if _, err := col.DropVectorIndex(indexName); err != nil {
-				if errors.Is(err, collections.ErrIndexNotFound) {
-					return commandError(commandCodeIndexNotFound, "IndexNotFound", "index not found")
-				}
-				return commandError(commandCodeBadValue, "BadValue", err.Error())
-			}
+			return commandError(commandCodeBadValue, "BadValue", err.Error())
 		}
 	}
 	return marshalDocument(bson.D{

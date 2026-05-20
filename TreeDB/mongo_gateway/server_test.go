@@ -2175,6 +2175,11 @@ func TestServerVectorIndexMetadataExtension(t *testing.T) {
 
 	server := NewServer()
 	server.Collections = collections.NewCollectionManager(db)
+	scalarIndex := bson.D{
+		{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}},
+		{Key: "name", Value: "email_1"},
+		{Key: "treedbValueType", Value: "string"},
+	}
 	vectorIndex := bson.D{
 		{Key: "key", Value: bson.D{{Key: "embedding", Value: "vector"}}},
 		{Key: "name", Value: "embedding_vector"},
@@ -2191,11 +2196,7 @@ func TestServerVectorIndexMetadataExtension(t *testing.T) {
 	createResponse := serveCommand(t, server, 23101, bson.D{
 		{Key: "createIndexes", Value: "users"},
 		{Key: "indexes", Value: bson.A{
-			bson.D{
-				{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}},
-				{Key: "name", Value: "email_1"},
-				{Key: "treedbValueType", Value: "string"},
-			},
+			scalarIndex,
 			vectorIndex,
 		}},
 		{Key: "$db", Value: "app"},
@@ -2340,14 +2341,35 @@ func TestServerVectorIndexMetadataExtension(t *testing.T) {
 		{Key: "indexes", Value: bson.A{vectorIndex}},
 		{Key: "$db", Value: "app"},
 	}))
-	dropAllResponse := serveCommand(t, server, 23112, bson.D{
+	mixedDropResponse := serveCommand(t, server, 23112, bson.D{
+		{Key: "dropIndexes", Value: "users"},
+		{Key: "index", Value: bson.A{"email_1", "embedding_vector"}},
+		{Key: "$db", Value: "app"},
+	})
+	assertOK(t, mixedDropResponse)
+	assertInt32(t, mixedDropResponse, "nIndexesWas", 3)
+	afterMixedDrop := cursorFirstBatch(t, serveCommand(t, server, 23113, bson.D{
+		{Key: "listIndexes", Value: "users"},
+		{Key: "$db", Value: "app"},
+	}))
+	if got, want := len(afterMixedDrop), 1; got != want {
+		t.Fatalf("index batch after mixed scalar/vector drop len=%d want %d", got, want)
+	}
+	assertIndexName(t, afterMixedDrop[0], "_id_")
+
+	assertOK(t, serveCommand(t, server, 23114, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{scalarIndex, vectorIndex}},
+		{Key: "$db", Value: "app"},
+	}))
+	dropAllResponse := serveCommand(t, server, 23115, bson.D{
 		{Key: "dropIndexes", Value: "users"},
 		{Key: "index", Value: "*"},
 		{Key: "$db", Value: "app"},
 	})
 	assertOK(t, dropAllResponse)
 	assertInt32(t, dropAllResponse, "nIndexesWas", 3)
-	afterDropAll := cursorFirstBatch(t, serveCommand(t, server, 23113, bson.D{
+	afterDropAll := cursorFirstBatch(t, serveCommand(t, server, 23116, bson.D{
 		{Key: "listIndexes", Value: "users"},
 		{Key: "$db", Value: "app"},
 	}))

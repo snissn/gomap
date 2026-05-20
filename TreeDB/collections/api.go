@@ -3257,6 +3257,31 @@ func (c *Collection) DropAllIndexes() (*CollectionMeta, error) {
 	return c.dropIndexes(nil, true)
 }
 
+func (c *Collection) DropIndexesAndVectorIndexes(indexNames []string, vectorIndexNames []string) (*CollectionMeta, error) {
+	if len(indexNames) == 0 && len(vectorIndexNames) == 0 {
+		return nil, ErrIndexNotFound
+	}
+	indexNameSet := make(map[string]struct{}, len(indexNames))
+	for _, name := range indexNames {
+		if err := ValidateIndexName(name); err != nil {
+			return nil, err
+		}
+		indexNameSet[name] = struct{}{}
+	}
+	vectorIndexNameSet := make(map[string]struct{}, len(vectorIndexNames))
+	for _, name := range vectorIndexNames {
+		if err := ValidateIndexName(name); err != nil {
+			return nil, err
+		}
+		vectorIndexNameSet[name] = struct{}{}
+	}
+	return c.dropIndexesAndVectorIndexes(indexNameSet, vectorIndexNameSet, false)
+}
+
+func (c *Collection) DropAllIndexesAndVectorIndexes() (*CollectionMeta, error) {
+	return c.dropIndexesAndVectorIndexes(nil, nil, true)
+}
+
 func (c *Collection) dropIndexes(names map[string]struct{}, all bool) (*CollectionMeta, error) {
 	if c == nil {
 		return nil, errCollectionNil
@@ -3347,6 +3372,120 @@ func (c *Collection) dropIndexes(names map[string]struct{}, all bool) (*Collecti
 	nextCatalog := cloneCatalogWithRootUpdates(catalog, newMeta, clearedRootNames, clearedRootIDs)
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
+	return newMeta.copy(), nil
+}
+
+func (c *Collection) dropIndexesAndVectorIndexes(indexNames map[string]struct{}, vectorIndexNames map[string]struct{}, all bool) (*CollectionMeta, error) {
+	if c == nil {
+		return nil, errCollectionNil
+	}
+	if c.db == nil {
+		return nil, errCollectionDBNil
+	}
+	if c.db.CommandWALEnabled() {
+		return nil, fmt.Errorf("%w: collection catalog index mutation is rejected under command_wal_v1 until catalog index commands are supported", backenddb.ErrCommandWALRejected)
+	}
+	unlockMutation := c.lockMutation()
+	defer unlockMutation.Unlock()
+	if err := c.flushBufferedWrites(); err != nil {
+		return nil, err
+	}
+
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return nil, backenddb.ErrClosed
+	}
+	catalog, err := loadCollectionCatalog(snap, c.meta.Name)
+	if err != nil {
+		_ = snap.Close()
+		return nil, err
+	}
+	if catalog == nil {
+		_ = snap.Close()
+		return nil, errCollectionNotFound
+	}
+	if err := rejectCatalogRootOverlaysForWrite(catalog); err != nil {
+		_ = snap.Close()
+		return nil, err
+	}
+	baseMeta := catalog.meta
+	c.meta = baseMeta
+	baseSystemRoot := snapshotSystemRoot(snap)
+	_ = snap.Close()
+
+	nextIndexes := make([]IndexDefinition, 0, len(baseMeta.Indexes))
+	nextVectorIndexes := make([]VectorIndexDefinition, 0, len(baseMeta.VectorIndexes))
+	clearedRootNames := make([]string, 0, len(baseMeta.Indexes)+len(baseMeta.VectorIndexes)+1)
+	droppedIndexes := 0
+	droppedVectorIndexes := 0
+	droppedVectorNames := make([]string, 0, len(baseMeta.VectorIndexes))
+	for _, idx := range baseMeta.Indexes {
+		if all {
+			droppedIndexes++
+			clearedRootNames = append(clearedRootNames, collectionSecondaryRootName(baseMeta.Name, idx.Name))
+			continue
+		}
+		if _, ok := indexNames[idx.Name]; ok {
+			droppedIndexes++
+			clearedRootNames = append(clearedRootNames, collectionSecondaryRootName(baseMeta.Name, idx.Name))
+			continue
+		}
+		nextIndexes = append(nextIndexes, idx)
+	}
+	for _, idx := range baseMeta.VectorIndexes {
+		if all {
+			droppedVectorIndexes++
+			droppedVectorNames = append(droppedVectorNames, idx.Name)
+			clearedRootNames = append(clearedRootNames, collectionVectorIndexRootName(baseMeta.Name, idx.Name))
+			continue
+		}
+		if _, ok := vectorIndexNames[idx.Name]; ok {
+			droppedVectorIndexes++
+			droppedVectorNames = append(droppedVectorNames, idx.Name)
+			clearedRootNames = append(clearedRootNames, collectionVectorIndexRootName(baseMeta.Name, idx.Name))
+			continue
+		}
+		nextVectorIndexes = append(nextVectorIndexes, idx)
+	}
+	if !all && (droppedIndexes != len(indexNames) || droppedVectorIndexes != len(vectorIndexNames)) {
+		return nil, ErrIndexNotFound
+	}
+	if droppedIndexes == 0 && droppedVectorIndexes == 0 {
+		c.meta = baseMeta
+		c.rememberCatalogAtSystemRoot(baseSystemRoot, catalog)
+		return baseMeta.copy(), nil
+	}
+
+	newMeta, err := normalizeCollectionMeta(CollectionMeta{
+		Name:          baseMeta.Name,
+		Options:       baseMeta.Options,
+		Indexes:       nextIndexes,
+		VectorIndexes: nextVectorIndexes,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(newMeta.Indexes) == 0 && persistIndexStateForDocumentFormat(baseMeta.Options.DocumentFormat) {
+		clearedRootNames = append(clearedRootNames, collectionIndexStateRootName(baseMeta.Name))
+	}
+	encodedMeta, err := encodeCollectionMeta(newMeta)
+	if err != nil {
+		return nil, err
+	}
+	newSystemRoot, _, err := c.db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder(nil, func([]uint64) (iterator.UnsafeIterator, error) {
+		return c.buildSchemaOnlySystemDeltaIterator(baseMeta, encodedMeta, clearedRootNames)
+	})
+	if err != nil {
+		return nil, err
+	}
+	c.meta = newMeta
+	clearedRootIDs := make([]uint64, len(clearedRootNames))
+	nextCatalog := cloneCatalogWithRootUpdates(catalog, newMeta, clearedRootNames, clearedRootIDs)
+	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
+	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
+	for _, name := range droppedVectorNames {
+		c.UnregisterVectorIndex(name)
+	}
 	return newMeta.copy(), nil
 }
 

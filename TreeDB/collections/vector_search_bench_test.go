@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -527,6 +528,195 @@ func BenchmarkCollectionVectorIndexNativeRootSearchParallel(b *testing.B) {
 		}
 		return nil
 	})
+}
+
+func BenchmarkCollectionVectorIndexColumnGraphMainPathLoad(b *testing.B) {
+	docs := vectorBenchmarkDocs(b)
+	dims := vectorBenchmarkDims(b)
+	indexName := "embedding_column_graph_load"
+	d, col, graph, loadStatus := openColumnGraphVectorBenchmarkMainPath(b, docs, dims, indexName)
+	defer func() { _ = d.Close() }()
+
+	loader := testColumnVectorGraphIndexLoader{
+		result: ColumnVectorGraphIndexLoadResult{
+			Graph: graph,
+			Status: VectorIndexLoadStatus{
+				Strategy:                      VectorIndexStrategyColumnGraph,
+				PhysicalColumnAssetsSupported: true,
+				BytesDisk:                     loadStatus.BytesDisk,
+			},
+		},
+	}
+	opts := VectorIndexOptions{
+		Name:       indexName,
+		Field:      "embedding",
+		Metric:     VectorMetricCosine,
+		Dimensions: dims,
+		Strategy:   VectorIndexStrategyColumnGraph,
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		loaded, status, err := col.loadColumnGraphVectorIndexSnapshot(opts, loader)
+		if err != nil {
+			b.Fatalf("load column graph vector index: %v", err)
+		}
+		if loaded == nil || !status.ColumnGraphLoaded || !status.PhysicalColumnAssetsSupported {
+			b.Fatalf("unexpected column_graph load status loaded=%v status=%+v", loaded != nil, status)
+		}
+		columnVectorGraphBenchSink += int64(loaded.Rows()) + int64(status.RootID)
+	}
+	b.ReportMetric(float64(docs), "docs/index")
+	b.ReportMetric(float64(dims), "dims")
+	b.ReportMetric(float64(loadStatus.RootID), "manifest_root_id")
+	b.ReportMetric(float64(loadStatus.BytesDisk), "column_graph_bytes")
+}
+
+func BenchmarkCollectionVectorIndexColumnGraphMainPathSearch(b *testing.B) {
+	docs := vectorBenchmarkDocs(b)
+	dims := vectorBenchmarkDims(b)
+	d, _, graph, loadStatus := openColumnGraphVectorBenchmarkMainPath(b, docs, dims, "embedding_column_graph_search")
+	defer func() { _ = d.Close() }()
+	query, ok := graph.VectorAt(nil, docs/3)
+	if !ok {
+		b.Fatal("missing query vector")
+	}
+	opts := ColumnVectorGraphSearchOptions{TopK: vectorBenchmarkTopK, EfSearch: 128}
+	var scratch ColumnVectorGraphSearchScratch
+	warm, warmTrace, err := graph.SearchCosine(query, opts, &scratch)
+	if err != nil {
+		b.Fatalf("warm column_graph main-path search: %v", err)
+	}
+	if len(warm) != opts.TopK {
+		b.Fatalf("warm results=%d want %d", len(warm), opts.TopK)
+	}
+
+	b.ReportAllocs()
+	b.SetBytes(int64(warmTrace.CandidatesExamined * graph.Dims() * 4))
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		results, trace, err := graph.SearchCosine(query, opts, &scratch)
+		if err != nil {
+			b.Fatalf("column_graph main-path search: %v", err)
+		}
+		if len(results) != opts.TopK {
+			b.Fatalf("results=%d want %d", len(results), opts.TopK)
+		}
+		columnVectorGraphBenchSink += int64(len(results[0].DocumentID) + trace.CandidatesExamined + trace.EdgesVisited)
+	}
+	b.ReportMetric(float64(docs), "docs/index")
+	b.ReportMetric(float64(dims), "dims")
+	b.ReportMetric(float64(loadStatus.RootID), "manifest_root_id")
+	b.ReportMetric(float64(loadStatus.BytesDisk), "column_graph_bytes")
+	b.ReportMetric(float64(graph.Edges())/float64(graph.Rows()), "edges/node")
+	b.ReportMetric(float64(warmTrace.CandidatesExamined), "candidates/search")
+	b.ReportMetric(float64(warmTrace.EdgesVisited), "edges/search")
+}
+
+func BenchmarkCollectionVectorIndexColumnGraphMainPathSearchParallel(b *testing.B) {
+	docs := vectorBenchmarkDocs(b)
+	dims := vectorBenchmarkDims(b)
+	d, _, graph, loadStatus := openColumnGraphVectorBenchmarkMainPath(b, docs, dims, "embedding_column_graph_search_parallel")
+	defer func() { _ = d.Close() }()
+	query, ok := graph.VectorAt(nil, docs/3)
+	if !ok {
+		b.Fatal("missing query vector")
+	}
+	opts := ColumnVectorGraphSearchOptions{TopK: vectorBenchmarkTopK, EfSearch: 128}
+	b.SetParallelism(1)
+	workers := runtime.GOMAXPROCS(0)
+	scratches := make([]*ColumnVectorGraphSearchScratch, workers)
+	var warmTrace ColumnVectorGraphSearchTrace
+	for worker := 0; worker < workers; worker++ {
+		scratch := new(ColumnVectorGraphSearchScratch)
+		warm, trace, err := graph.SearchCosine(query, opts, scratch)
+		if err != nil {
+			b.Fatalf("warm column_graph main-path worker %d: %v", worker, err)
+		}
+		if len(warm) != opts.TopK {
+			b.Fatalf("warm worker %d results=%d want %d", worker, len(warm), opts.TopK)
+		}
+		warmTrace = trace
+		scratches[worker] = scratch
+	}
+
+	b.ReportAllocs()
+	b.SetBytes(int64(warmTrace.CandidatesExamined * graph.Dims() * 4))
+	b.ResetTimer()
+	var nextWorker uint64
+	b.RunParallel(func(pb *testing.PB) {
+		workerID := int(atomic.AddUint64(&nextWorker, 1)) - 1
+		if workerID >= len(scratches) {
+			b.Errorf("RunParallel spawned worker %d, but only %d scratches were prewarmed", workerID+1, len(scratches))
+			return
+		}
+		scratch := scratches[workerID]
+		var localSink int64
+		for pb.Next() {
+			results, trace, err := graph.SearchCosine(query, opts, scratch)
+			if err != nil {
+				panic(err)
+			}
+			if len(results) != opts.TopK {
+				panic("unexpected column_graph main-path result count")
+			}
+			localSink += int64(len(results[0].DocumentID) + trace.CandidatesExamined + trace.EdgesVisited)
+		}
+		atomic.AddInt64(&columnVectorGraphBenchSink, localSink)
+	})
+	b.ReportMetric(float64(docs), "docs/index")
+	b.ReportMetric(float64(dims), "dims")
+	b.ReportMetric(float64(loadStatus.RootID), "manifest_root_id")
+	b.ReportMetric(float64(loadStatus.BytesDisk), "column_graph_bytes")
+	b.ReportMetric(float64(graph.Edges())/float64(graph.Rows()), "edges/node")
+	b.ReportMetric(float64(warmTrace.CandidatesExamined), "candidates/search")
+	b.ReportMetric(float64(warmTrace.EdgesVisited), "edges/search")
+}
+
+func BenchmarkCollectionVectorIndexColumnGraphMainPathSearchWithDocumentFetch(b *testing.B) {
+	docs := vectorBenchmarkDocs(b)
+	dims := vectorBenchmarkDims(b)
+	d, col, graph, loadStatus := openColumnGraphVectorBenchmarkMainPath(b, docs, dims, "embedding_column_graph_search_docs")
+	defer func() { _ = d.Close() }()
+	query, ok := graph.VectorAt(nil, docs/3)
+	if !ok {
+		b.Fatal("missing query vector")
+	}
+	opts := ColumnVectorGraphSearchOptions{TopK: vectorBenchmarkTopK, EfSearch: 128}
+	var scratch ColumnVectorGraphSearchScratch
+	warm, warmTrace, err := graph.SearchCosine(query, opts, &scratch)
+	if err != nil {
+		b.Fatalf("warm column_graph main-path document search: %v", err)
+	}
+	if len(warm) != opts.TopK {
+		b.Fatalf("warm results=%d want %d", len(warm), opts.TopK)
+	}
+	var documentBuf []byte
+	warmBytes := fetchColumnGraphBenchmarkDocuments(b, col, warm, &documentBuf)
+
+	b.ReportAllocs()
+	b.SetBytes(int64(warmTrace.CandidatesExamined * graph.Dims() * 4))
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		results, trace, err := graph.SearchCosine(query, opts, &scratch)
+		if err != nil {
+			b.Fatalf("column_graph main-path document search: %v", err)
+		}
+		if len(results) != opts.TopK {
+			b.Fatalf("results=%d want %d", len(results), opts.TopK)
+		}
+		documentBytes := fetchColumnGraphBenchmarkDocuments(b, col, results, &documentBuf)
+		columnVectorGraphBenchSink += int64(documentBytes + trace.CandidatesExamined + trace.EdgesVisited)
+	}
+	b.ReportMetric(float64(docs), "docs/index")
+	b.ReportMetric(float64(dims), "dims")
+	b.ReportMetric(float64(loadStatus.RootID), "manifest_root_id")
+	b.ReportMetric(float64(loadStatus.BytesDisk), "column_graph_bytes")
+	b.ReportMetric(float64(graph.Edges())/float64(graph.Rows()), "edges/node")
+	b.ReportMetric(float64(warmTrace.CandidatesExamined), "candidates/search")
+	b.ReportMetric(float64(warmTrace.EdgesVisited), "edges/search")
+	b.ReportMetric(float64(warmBytes), "document_bytes/search")
 }
 
 func BenchmarkCollectionVectorIndexIncrementalWrite(b *testing.B) {
@@ -1203,6 +1393,144 @@ func openLoadedNativeVectorBenchmarkIndex(tb testing.TB, docs, dims int, name st
 		tb.Fatalf("unexpected native load status loaded=%v status=%+v save=%+v", loaded != nil, loadStatus, saveStatus)
 	}
 	return d, loaded, loadStatus
+}
+
+func openColumnGraphVectorBenchmarkMainPath(tb testing.TB, docs, dims int, name string) (*backenddb.DB, *Collection, *ColumnVectorGraph, VectorIndexLoadStatus) {
+	tb.Helper()
+	dir := tb.TempDir()
+	def := VectorIndexDefinition{
+		Name:       name,
+		Field:      "embedding",
+		Metric:     VectorMetricCosine,
+		Dimensions: dims,
+		M:          16,
+		EfSearch:   128,
+		Strategy:   VectorIndexStrategyColumnGraph,
+	}
+	active := ColumnManifestIdentity{
+		Generation: 1,
+		Version:    columnManifestIdentityVersion,
+		Checksum:   0x434f4c4752415048,
+	}
+	d, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		tb.Fatalf("open db: %v", err)
+	}
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:          "docs",
+		VectorIndexes: []VectorIndexDefinition{def},
+	}); err != nil {
+		_ = d.Close()
+		tb.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		_ = d.Close()
+		tb.Fatalf("open collection: %v", err)
+	}
+	ids, documents := vectorBenchmarkWriteBatch(docs, dims)
+	vectorBenchmarkInsertBatches(tb, col, ids, documents, 512)
+	if err := col.Flush(); err != nil {
+		_ = d.Close()
+		tb.Fatalf("flush benchmark collection: %v", err)
+	}
+	publishColumnStoreCatalogForTest(tb, d, CollectionMeta{
+		Name: "docs",
+		Options: CollectionOptions{
+			ColumnStore: columnGraphVectorBenchmarkColumnStore(&active, dims),
+		},
+		VectorIndexes: []VectorIndexDefinition{def},
+	}, active)
+	if err := d.Close(); err != nil {
+		tb.Fatalf("close setup db: %v", err)
+	}
+
+	columns := columnVectorGraphTestColumns(docs, dims, 16, false)
+	graph, err := NewColumnVectorGraphFromColumns(columns)
+	if err != nil {
+		tb.Fatalf("NewColumnVectorGraphFromColumns: %v", err)
+	}
+
+	d, err = backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		tb.Fatalf("reopen db: %v", err)
+	}
+	col, err = NewCollectionManager(d).OpenCollection("docs")
+	if err != nil {
+		_ = d.Close()
+		tb.Fatalf("open reopened collection: %v", err)
+	}
+	loader := testColumnVectorGraphIndexLoader{
+		result: ColumnVectorGraphIndexLoadResult{
+			Graph: graph,
+			Status: VectorIndexLoadStatus{
+				Strategy:                      VectorIndexStrategyColumnGraph,
+				PhysicalColumnAssetsSupported: true,
+				BytesDisk:                     columnGraphVectorBenchmarkBytes(columns),
+			},
+		},
+	}
+	loaded, status, err := col.loadColumnGraphVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def), loader)
+	if err != nil {
+		_ = d.Close()
+		tb.Fatalf("load column_graph vector index: %v", err)
+	}
+	if loaded == nil || loaded != graph || !status.ColumnGraphLoaded || !status.PhysicalColumnAssetsSupported || status.RootID == 0 {
+		_ = d.Close()
+		tb.Fatalf("unexpected column_graph benchmark load status loaded=%v same=%v status=%+v", loaded != nil, loaded == graph, status)
+	}
+	return d, col, graph, status
+}
+
+func columnGraphVectorBenchmarkColumnStore(active *ColumnManifestIdentity, dims int) *ColumnStoreConfig {
+	var recovery *ColumnManifestIdentity
+	if active != nil {
+		copied := *active
+		recovery = &copied
+	}
+	cfg := &ColumnStoreConfig{
+		Enabled: true,
+		// Keep source documents readable through the normal Collection.Get path
+		// while this benchmark isolates the column_graph loader/search seam.
+		RetainedPayload: ColumnRetainedPayloadFull,
+		Columns: []ColumnStoreColumn{
+			{Name: "embedding", Path: "embedding", ValueType: ColumnStoreValueFloat32Vector, VectorDims: dims},
+			{Name: "embedding_inv_norm", Path: "embedding_inv_norm", ValueType: ColumnStoreValueFloat32},
+			{Name: "embedding_neighbors", Path: "embedding_neighbors", ValueType: ColumnStoreValueAdjacencyList},
+		},
+		ActiveManifest:                active,
+		RecoveryAuthoritativeManifest: recovery,
+	}
+	if active != nil {
+		cfg.RecoveryAuthoritativeAppliedCommandLSN = 1
+	}
+	return cfg
+}
+
+func columnGraphVectorBenchmarkBytes(columns ColumnVectorGraphColumns) int64 {
+	var documentIDBytes int
+	for _, id := range columns.DocumentIDs {
+		documentIDBytes += len(id)
+	}
+	return int64(len(columns.Vectors)*4 + len(columns.InvNorms)*4 + len(columns.NeighborOffsets)*4 + len(columns.Neighbors)*4 + documentIDBytes)
+}
+
+func fetchColumnGraphBenchmarkDocuments(tb testing.TB, col *Collection, results []VectorSearchResult, buf *[]byte) int {
+	tb.Helper()
+	total := 0
+	for _, result := range results {
+		document, found, err := col.GetInto(result.DocumentID, (*buf)[:0])
+		if err != nil {
+			tb.Fatalf("get result document %q: %v", result.DocumentID, err)
+		}
+		if !found {
+			tb.Fatalf("missing result document %q", result.DocumentID)
+		}
+		total += len(document)
+		*buf = document
+	}
+	return total
 }
 
 func runParallelVectorSearchBenchmark(b *testing.B, search func() error) {
