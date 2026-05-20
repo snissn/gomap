@@ -252,10 +252,10 @@ frontier:
   for 9 of 10 queries, but query 6 routed only `6/10`. Codec recall cannot
   recover winners that never reach the selected granule union.
 
-This fixed-budget global-codebook run does not validate true LOPQ,
-ScaNN/AVQ, QINCo, or Matryoshka. Local residual-PQ is measured separately
-below as a per-buildable-granule LOPQ-lite lane; it still does not include a
-local OPQ rotation.
+This fixed-budget global-codebook run does not validate ScaNN/AVQ, QINCo, or
+Matryoshka. Local residual-PQ and local residual-OPQ are measured separately
+below as per-buildable-granule lanes; they are buildable-granule evidence, not
+official top100 oracle fits.
 
 ## Buildable Local Residual-PQ / LOPQ-Lite Lane
 
@@ -334,9 +334,79 @@ Interpretation:
 - At 80B/96B the quality edge narrows. Full-dim scalar and full-rank local
   coordinates remain the safer near-final rerank baselines, while exact rerank
   is still mandatory.
-- This result upgrades Track C from pending to measured LOPQ-lite. The
-  remaining local-codebook work is true local OPQ/LOPQ, larger train/eval
-  coverage, and actual graph/TreeDB granules.
+- This result upgrades Track C from pending to measured local residual coding.
+  The follow-on section adds local OPQ/LOPQ-style evidence; larger train/eval
+  coverage and actual graph/TreeDB granules still remain.
+
+## Buildable Local OPQ / LOPQ-Style Scout
+
+The follow-on run adds one learned residual OPQ rotation per buildable IVF
+granule before the local PQ codebooks. This is the first LOPQ-style scout: the
+rotation and codebooks belong to the sealed granule being stored, but the
+granules are still IVF/k-means blocks over a 32K Deep1B slice rather than graph
+neighborhoods or actual TreeDB granules.
+
+Run artifact:
+
+```text
+/tmp/gomap_deep1b_buildable_local_opq_ivf_q0_9_20260519_225007/report.md
+```
+
+Run shape:
+
+| Parameter | Value |
+| --- | ---: |
+| Eval rows | `32768` |
+| Eval row offset | `8192` |
+| IVF granule target rows | `4096` |
+| IVF granules | `8` |
+| K-means iterations | `8` |
+| Queries | `0..9` |
+| Top centroid-routed granules | `1, 4` |
+| Local PCA ranks | `32, 48, 64` |
+| Global PQ budgets | `32, 48, 64 B/vector` |
+| Local residual-PQ budgets | `32, 48, 64 B/vector` |
+| Local residual-OPQ budgets | `32, 48, 64 B/vector` |
+| PQ iterations | `4` |
+| OPQ outer iterations | `3` |
+
+Training and metadata:
+
+| Lane | 32B train | 48B train | 64B train | Metadata B/eval-vector |
+| --- | ---: | ---: | ---: | ---: |
+| global PQ | `715 ms` | `952 ms` | `1045 ms` | `1.50` |
+| local residual-PQ | `2860 ms` | `3830 ms` | `4163 ms` | `12.05` |
+| local residual-OPQ | `12448 ms` | `16682 ms` | `19174 ms` | `16.55` |
+
+Selected aggregate rows:
+
+| Method | Top granules | Row-code B/vector | Metadata B/vector | p50 compressed top10 | Worst compressed top10 | Worst top10@20 | Worst top10@50 | Worst top20@50 | Avg score err | Avg scan ns/vector |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| global PQ 32B x8 | 1 | `32` | `3.50` | `7/10` | `5/10` | `7/10` | `10/10` | `19/20` | `0.01829` | `16.00` |
+| local residual PQ 32B x8 | 1 | `32` | `13.51` | `8/10` | `7/10` | `9/10` | `10/10` | `20/20` | `0.01396` | `15.81` |
+| local residual OPQ 32B x8 | 1 | `32` | `17.81` | `8/10` | `7/10` | `8/10` | `10/10` | `20/20` | `0.01380` | `15.79` |
+| local residual PQ 48B x8 | 1 | `48` | `13.51` | `9/10` | `8/10` | `9/10` | `10/10` | `20/20` | `0.00673` | `25.46` |
+| local residual OPQ 48B x8 | 1 | `48` | `17.81` | `9/10` | `8/10` | `10/10` | `10/10` | `20/20` | `0.00661` | `25.34` |
+| local residual PQ 64B x8 | 1 | `64` | `13.51` | `9/10` | `8/10` | `10/10` | `10/10` | `20/20` | `0.00552` | `36.70` |
+| local residual OPQ 64B x8 | 1 | `64` | `17.81` | `9/10` | `9/10` | `10/10` | `10/10` | `20/20` | `0.00540` | `36.52` |
+| local residual PQ 32B x8 | 4 | `32` | `14.13` | `8/10` | `6/10` | `9/10` | `10/10` | `20/20` | `0.01374` | `16.21` |
+| local residual OPQ 32B x8 | 4 | `32` | `18.66` | `8/10` | `6/10` | `9/10` | `10/10` | `19/20` | `0.01354` | `15.92` |
+| local residual PQ 64B x8 | 4 | `64` | `14.13` | `9/10` | `8/10` | `10/10` | `10/10` | `20/20` | `0.00543` | `37.18` |
+| local residual OPQ 64B x8 | 4 | `64` | `18.66` | `9/10` | `8/10` | `10/10` | `10/10` | `20/20` | `0.00531` | `36.83` |
+
+Interpretation:
+
+- Local residual-OPQ reduces mean score error slightly versus local residual-PQ
+  at matched budgets and improves the top1/64B worst compressed top10 row from
+  `8/10` to `9/10`.
+- It does not materially move the candidate-survival frontier. The important
+  top10@50/top20@50 gates are already mostly cleared by local residual-PQ, and
+  the top4/32B OPQ row slips to `19/20` top20@50.
+- The added rotation is expensive: about `4-5x` the local residual-PQ training
+  time in this run and about `4.5 B/eval-vector` more metadata.
+- Conclusion: local OPQ/LOPQ-style coding is now measured, but it is not
+  promoted yet. Local residual-PQ remains the better local-codebook lane until
+  larger or actual-granule runs show OPQ wins that justify its cost.
 
 ## Final Ranking Versus Candidate Generation
 
@@ -379,7 +449,7 @@ prove otherwise.
 | B | Full-dimension granule-local int8 residual/scalar quantization, dim-major on disk | Conservative candidate generation; possible near-final rerank lane | Prior int8 tournament stores the 96D dim-major int8 matrix at `85.9-86.7 B/vector` with zstd-better/ClickHouse whole-granule `String CODEC(ZSTD(1))` | Build this first as the robust compressed hot/candidate representation. It has the simplest native scoring path and best measured storage-to-quality balance. |
 | C | Low-rank local PCA int8 codes: centroid + basis + per-row coordinates | Compact candidate generation only | Prior 8192-row storage curve: rank32 `31.51 B/vector`, rank64 `59.65 B/vector`. Groundtruth top100, 100-query run: rank64 final top10 `7.79/10`, exact top10 in approx@50 `9.97/10`, and rank80 exact top10 in approx@50 `10.00/10` | Do not use for final ranking. Promote only as a candidate-generation experiment with exact-rerank gates. |
 | D | Cascade: low-rank PCA prefilter, then full-dim int8/fp16 or fp32 rerank | Best near-term architecture | The groundtruth data says rank64/rank80 can preserve winners in a wider shortlist while failing exact final ranking | Most promising product path: scan `C`, rerank survivors with `B` or `A`, measure recall/cost at fixed rerank budgets. |
-| E | PQ/residual-PQ/LUT scorer, ideally residualized by granule centroid or segment cluster | Candidate generation at fixed byte budgets | Global 8-bit PQ, global centroid-residual PQ, OPQ-style lanes, and per-buildable-granule local residual-PQ are measured on buildable IVF granules at 32/48/64/80/96B. PQ32 beats same-byte local PCA rank32 on candidate survival and scan cost; PQ48/PQ64/PQ80/PQ96 are strong same-byte competitors. OPQ does not clearly beat PQ on this sample after metadata and training cost. Global centroid-residual PQ overlaps global PQ. Local residual-PQ improves candidate gates and score error at 32/48/64B, but pays about `12 B/eval-vector` extra codebook metadata and is still LOPQ-lite, not full local OPQ/LOPQ. | Keep global PQ as the simplest low-metadata codebook baseline. Promote local residual-PQ only when its stronger candidate gates justify the extra metadata/build cost. Next test true local OPQ/LOPQ and actual graph/TreeDB granules, then compare against scalar u4/full int8 and local PCA at matched total bytes. |
+| E | PQ/residual-PQ/LUT scorer, ideally residualized by granule centroid or segment cluster | Candidate generation at fixed byte budgets | Global 8-bit PQ, global centroid-residual PQ, OPQ-style lanes, per-buildable-granule local residual-PQ, and per-buildable-granule local residual-OPQ are measured on buildable IVF granules. PQ32 beats same-byte local PCA rank32 on candidate survival and scan cost; PQ48/PQ64/PQ80/PQ96 are strong same-byte competitors. OPQ does not clearly beat PQ on this sample after metadata and training cost. Global centroid-residual PQ overlaps global PQ. Local residual-PQ improves candidate gates and score error at 32/48/64B with about `12 B/eval-vector` extra codebook metadata. Local residual-OPQ slightly improves score error and one 64B worst-row result, but pays about `16.5 B/eval-vector` metadata and much higher training time. | Keep global PQ as the simplest low-metadata codebook baseline. Promote local residual-PQ only when its stronger candidate gates justify the extra metadata/build cost. Do not promote local OPQ yet; it needs larger/actual-granule evidence to justify the extra rotation. Next test actual graph/TreeDB granules and larger train/eval slices, then compare against scalar u4/full int8 and local PCA at matched total bytes. |
 
 ## Literature-Backed Synthesis
 
@@ -569,7 +639,8 @@ The interpretation is deliberately conservative:
   metadata-amortized bytes before they can make production claims. The
   fixed-budget PQ/OPQ/residual-PQ rows above add that first trained-codebook
   evidence; the later local residual-PQ section adds the first per-granule
-  residual-codebook lane, while true local OPQ/LOPQ remains pending.
+  residual-codebook lane, and the local residual-OPQ section adds the first
+  LOPQ-style per-granule rotation scout.
 
 ## IVF/K-Means Buildable Granule Scout
 
@@ -636,10 +707,11 @@ The production interpretation is:
   top10 is still not reliable.
 - Local PCA rank32 is too fragile on these less coherent buildable unions unless
   paired with a refinement/residual stage.
-- The later local residual-PQ section starts the residual-stage comparison. The
-  next production tournament step is to broaden global PQ, OPQ, and local
-  residual-PQ to more queries and add true local OPQ/LOPQ, then compare them
-  against scalar u4/u8 and PCA64 at matched total bytes.
+- The later local residual-PQ and local residual-OPQ sections start the
+  residual-stage comparison. The next production tournament step is to broaden
+  global PQ, OPQ, local residual-PQ, and local residual-OPQ to more queries and
+  actual graph/TreeDB granules, then compare them against scalar u4/u8 and
+  PCA64 at matched total bytes.
 
 ## Concrete Research Tracks
 
@@ -683,13 +755,15 @@ centroid-residual PQ, and OPQ-style lanes have been compared against local PCA
 granules. PQ is currently the simpler trained-codebook baseline; OPQ is a
 measured challenger without a decisive Pareto win yet; and global residual PQ
 does not beat global PQ in this shape. Per-buildable-granule local residual-PQ
-is now measured as a LOPQ-lite lane and improves candidate gates at extra
-metadata cost. Track B still needs larger query coverage, larger train/eval
-slices, true local OPQ/LOPQ, and actual graph/TreeDB granule layouts.
+and local residual-OPQ are now measured. Local residual-PQ improves candidate
+gates at extra metadata cost; local residual-OPQ slightly lowers score error but
+has not yet justified the additional rotation metadata and build time. Track B
+still needs larger query coverage, larger train/eval slices, production-grade
+local OPQ/LOPQ amortization, and actual graph/TreeDB granule layouts.
 
 Track C is the granule-local residual encoding tournament. The first measured
-lane is local residual-PQ without local OPQ rotation. For each buildable
-granule or cell, the remaining tournament should compare:
+lanes are local residual-PQ and local residual-OPQ. For each buildable granule
+or cell, the remaining tournament should compare:
 
 ```text
 centroid
@@ -705,11 +779,11 @@ local residual after the coarse locality unit, not the raw global vector.
 1. Add production-plausible granule builders and run the same candidate-recall
    tables on their blocks. This is the next required step before any production
    compression claim.
-2. Extend the PQ/residual-PQ/OPQ/local-residual-PQ same-byte tournament to more
-   queries and larger train/eval slices. Do not train codebooks on a single
-   official top100 cloud.
-3. Add true granule-local OPQ/LOPQ and PCA plus residual correction if local
-   PCA remains promising.
+2. Extend the PQ/residual-PQ/OPQ/local-residual-PQ/local-residual-OPQ
+   same-byte tournament to more queries and larger train/eval slices. Do not
+   train codebooks on a single official top100 cloud.
+3. Extend local OPQ/LOPQ to production-plausible graph/TreeDB granules and add
+   PCA plus residual correction if local PCA remains promising.
 4. Benchmark the full cascade: compressed scan top50/top100, full-dim int8
    rerank, then optional exact fp32 rerank.
 5. Finish the remaining top100-only probes only if they are still needed for

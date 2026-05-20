@@ -26,6 +26,7 @@ func TestColumnVectorGraphDeep1BBuildableGranuleScout(t *testing.T) {
 	opqBytes := columnVectorGraphDeep1BEnvIntList(t, "COLUMN_VECTOR_DEEP1B_BUILDABLE_OPQ_BYTES", nil)
 	residualPQBytes := columnVectorGraphDeep1BEnvIntList(t, "COLUMN_VECTOR_DEEP1B_BUILDABLE_RESIDUAL_PQ_BYTES", nil)
 	localResidualPQBytes := columnVectorGraphDeep1BEnvIntList(t, "COLUMN_VECTOR_DEEP1B_BUILDABLE_LOCAL_RESIDUAL_PQ_BYTES", nil)
+	localOPQBytes := columnVectorGraphDeep1BEnvIntList(t, "COLUMN_VECTOR_DEEP1B_BUILDABLE_LOCAL_OPQ_BYTES", nil)
 	pqTrainRows := columnVectorGraphDeep1BEnvInt(t, "COLUMN_VECTOR_DEEP1B_BUILDABLE_PQ_TRAIN_ROWS", 8192)
 	pqTrainIters := columnVectorGraphDeep1BEnvInt(t, "COLUMN_VECTOR_DEEP1B_BUILDABLE_PQ_ITERS", 4)
 	opqIters := columnVectorGraphDeep1BEnvInt(t, "COLUMN_VECTOR_DEEP1B_BUILDABLE_OPQ_ITERS", 3)
@@ -50,6 +51,14 @@ func TestColumnVectorGraphDeep1BBuildableGranuleScout(t *testing.T) {
 	}
 	if len(localResidualPQBytes) > 0 && pqTrainIters <= 0 {
 		t.Fatalf("COLUMN_VECTOR_DEEP1B_BUILDABLE_PQ_ITERS=%d must be positive for local residual PQ", pqTrainIters)
+	}
+	if len(localOPQBytes) > 0 {
+		if pqTrainIters <= 0 {
+			t.Fatalf("COLUMN_VECTOR_DEEP1B_BUILDABLE_PQ_ITERS=%d must be positive for local OPQ", pqTrainIters)
+		}
+		if opqIters <= 0 {
+			t.Fatalf("COLUMN_VECTOR_DEEP1B_BUILDABLE_OPQ_ITERS=%d must be positive for local OPQ", opqIters)
+		}
 	}
 	outDir := strings.TrimSpace(os.Getenv("COLUMN_VECTOR_DEEP1B_BUILDABLE_OUT"))
 	if outDir == "" {
@@ -96,6 +105,7 @@ func TestColumnVectorGraphDeep1BBuildableGranuleScout(t *testing.T) {
 	residualPQModels := columnVectorGraphDeep1BFitBuildableResidualPQModels(t, trainVectors, residualPQBytes, pqTrainRows, baseRows, columnVectorGraphDeep1BDims, pqTrainIters)
 	opqModels := columnVectorGraphDeep1BFitBuildableOPQModels(t, trainVectors, opqBytes, pqTrainRows, baseRows, columnVectorGraphDeep1BDims, pqTrainIters, opqIters)
 	localResidualPQModels := columnVectorGraphDeep1BFitBuildableLocalResidualPQModels(t, vectors, invNorms, granules, localResidualPQBytes, baseRows, columnVectorGraphDeep1BDims, pqTrainIters)
+	localOPQModels := columnVectorGraphDeep1BFitBuildableLocalOPQModels(t, vectors, invNorms, granules, localOPQBytes, baseRows, columnVectorGraphDeep1BDims, pqTrainIters, opqIters)
 	codebookModels := make([]columnVectorGraphDeep1BPQModel, 0, len(pqModels)+len(residualPQModels)+len(opqModels))
 	codebookModels = append(codebookModels, pqModels...)
 	codebookModels = append(codebookModels, residualPQModels...)
@@ -117,11 +127,13 @@ func TestColumnVectorGraphDeep1BBuildableGranuleScout(t *testing.T) {
 		ResidualPQBytes:         append([]int(nil), residualPQBytes...),
 		OPQBytes:                append([]int(nil), opqBytes...),
 		LocalResidualPQBytes:    append([]int(nil), localResidualPQBytes...),
+		LocalOPQBytes:           append([]int(nil), localOPQBytes...),
 		PQTrainRows:             len(trainVectors) / columnVectorGraphDeep1BDims,
 		PQTrainIters:            pqTrainIters,
 		OPQIterations:           opqIters,
 		PQTraining:              columnVectorGraphDeep1BPQTrainingReports(codebookModels),
 		LocalResidualPQTraining: localResidualPQModels.training,
+		LocalOPQTraining:        localOPQModels.training,
 		RequestedQueries:        append([]int(nil), queryIndexes...),
 		TopGranules:             append([]int(nil), topGranulesList...),
 		Ranks:                   append([]int(nil), ranks...),
@@ -145,7 +157,7 @@ func TestColumnVectorGraphDeep1BBuildableGranuleScout(t *testing.T) {
 				t.Fatalf("topGranules=%d must be positive", topGranules)
 			}
 			selected := columnVectorGraphDeep1BSelectGranules(granules, granuleOrder, topGranules)
-			queryReport := columnVectorGraphDeep1BAnalyzeBuildableGranuleSelection(t, vectors, invNorms, query, queryInvNorm, globalScores, globalTopRows, selected, queryIndex, topGranules, ranks, codebookModels, localResidualPQModels, scanIters)
+			queryReport := columnVectorGraphDeep1BAnalyzeBuildableGranuleSelection(t, vectors, invNorms, query, queryInvNorm, globalScores, globalTopRows, selected, queryIndex, topGranules, ranks, codebookModels, localResidualPQModels, localOPQModels, scanIters)
 			report.Queries = append(report.Queries, queryReport)
 		}
 	}
@@ -174,11 +186,13 @@ type columnVectorGraphDeep1BBuildableGranuleScoutReport struct {
 	ResidualPQBytes         []int                                                `json:"residual_pq_bytes,omitempty"`
 	OPQBytes                []int                                                `json:"opq_bytes,omitempty"`
 	LocalResidualPQBytes    []int                                                `json:"local_residual_pq_bytes,omitempty"`
+	LocalOPQBytes           []int                                                `json:"local_opq_bytes,omitempty"`
 	PQTrainRows             int                                                  `json:"pq_train_rows,omitempty"`
 	PQTrainIters            int                                                  `json:"pq_train_iters,omitempty"`
 	OPQIterations           int                                                  `json:"opq_iterations,omitempty"`
 	PQTraining              []columnVectorGraphDeep1BPQTrainingReport            `json:"pq_training,omitempty"`
 	LocalResidualPQTraining []columnVectorGraphDeep1BPQTrainingReport            `json:"local_residual_pq_training,omitempty"`
+	LocalOPQTraining        []columnVectorGraphDeep1BPQTrainingReport            `json:"local_opq_training,omitempty"`
 	RequestedQueries        []int                                                `json:"requested_queries"`
 	TopGranules             []int                                                `json:"top_granules"`
 	Ranks                   []int                                                `json:"ranks"`
@@ -291,6 +305,55 @@ func columnVectorGraphDeep1BFitBuildableLocalResidualPQModels(tb testing.TB, vec
 			CodebookMetadataBytes:        metadataBytes,
 			CodebookMetadataBytesPerEval: float64(metadataBytes) / float64(max(1, amortizeRows)),
 			Notes:                        "per-buildable-granule f16 residual centroid plus 8-bit residual PQ codebooks trained on the rows in each sealed granule; LOPQ-lite without OPQ rotation, not an official top100 oracle fit",
+		})
+	}
+	return models
+}
+
+func columnVectorGraphDeep1BFitBuildableLocalOPQModels(tb testing.TB, vectors []float32, invNorms []float32, granules []columnVectorGraphDeep1BBuildableGranule, rowCodeBytes []int, amortizeRows int, dims int, pqIterations int, opqIterations int) columnVectorGraphDeep1BLocalResidualPQModels {
+	tb.Helper()
+	budgets := columnVectorGraphDeep1BFilterPQBudgetsForDims(tb, "local OPQ", rowCodeBytes, dims)
+	if len(budgets) == 0 {
+		return columnVectorGraphDeep1BLocalResidualPQModels{}
+	}
+	models := columnVectorGraphDeep1BLocalResidualPQModels{
+		budgets:   budgets,
+		byGranule: make(map[int]map[int]columnVectorGraphDeep1BPQModel, len(granules)),
+		training:  make([]columnVectorGraphDeep1BPQTrainingReport, 0, len(budgets)),
+	}
+	for _, budget := range budgets {
+		var trainRows int
+		var trainNanos int64
+		var metadataBytes int
+		for _, granule := range granules {
+			if granule.Rows < columnVectorGraphDeep1BPQCodebookSize {
+				tb.Fatalf("local OPQ granule=%d rows=%d must be at least codebook size=%d", granule.Ordinal, granule.Rows, columnVectorGraphDeep1BPQCodebookSize)
+			}
+			gVectors, _ := columnVectorGraphDeep1BGatherRows(vectors, invNorms, granule.RowIDs, dims)
+			model := columnVectorGraphDeep1BFitResidualOPQModel(tb, gVectors, granule.Rows, dims, budget, pqIterations, opqIterations, granule.Rows)
+			model.method = "local_residual_opq"
+			model.family = "local_residual_optimized_product_quantization"
+			model.amortizeRows = granule.Rows
+			if models.byGranule[granule.Ordinal] == nil {
+				models.byGranule[granule.Ordinal] = make(map[int]columnVectorGraphDeep1BPQModel, len(budgets))
+			}
+			models.byGranule[granule.Ordinal][budget] = model
+			trainRows += granule.Rows
+			trainNanos += model.trainNanos
+			metadataBytes += model.codebookMetadataBytes
+		}
+		models.training = append(models.training, columnVectorGraphDeep1BPQTrainingReport{
+			Method:                       "local_residual_opq",
+			RowCodeBytes:                 budget,
+			Subquantizers:                budget,
+			CodebookSize:                 columnVectorGraphDeep1BPQCodebookSize,
+			TrainRows:                    trainRows,
+			TrainIterations:              pqIterations,
+			OPQIterations:                opqIterations,
+			TrainNanos:                   trainNanos,
+			CodebookMetadataBytes:        metadataBytes,
+			CodebookMetadataBytesPerEval: float64(metadataBytes) / float64(max(1, amortizeRows)),
+			Notes:                        "per-buildable-granule f16 residual centroid, f16 OPQ rotation, and 8-bit residual OPQ/PQ codebooks trained on the rows in each sealed granule; production/buildable LOPQ-style lane, not an official top100 oracle fit",
 		})
 	}
 	return models
@@ -498,7 +561,7 @@ func columnVectorGraphDeep1BSelectGranules(granules []columnVectorGraphDeep1BBui
 	return selected
 }
 
-func columnVectorGraphDeep1BAnalyzeBuildableGranuleSelection(tb testing.TB, vectors []float32, invNorms []float32, query []float32, queryInvNorm float32, globalScores []float32, globalTopRows []int, selected []columnVectorGraphDeep1BBuildableGranule, queryIndex int, topGranules int, ranks []int, pqModels []columnVectorGraphDeep1BPQModel, localResidualPQModels columnVectorGraphDeep1BLocalResidualPQModels, scanIters int) columnVectorGraphDeep1BBuildableGranuleQueryReport {
+func columnVectorGraphDeep1BAnalyzeBuildableGranuleSelection(tb testing.TB, vectors []float32, invNorms []float32, query []float32, queryInvNorm float32, globalScores []float32, globalTopRows []int, selected []columnVectorGraphDeep1BBuildableGranule, queryIndex int, topGranules int, ranks []int, pqModels []columnVectorGraphDeep1BPQModel, localResidualPQModels columnVectorGraphDeep1BLocalResidualPQModels, localOPQModels columnVectorGraphDeep1BLocalResidualPQModels, scanIters int) columnVectorGraphDeep1BBuildableGranuleQueryReport {
 	tb.Helper()
 	dims := columnVectorGraphDeep1BDims
 	candidateRows := 0
@@ -551,7 +614,10 @@ func columnVectorGraphDeep1BAnalyzeBuildableGranuleSelection(tb testing.TB, vect
 		q.Methods = append(q.Methods, columnVectorGraphDeep1BEvaluateBuildablePQMethod(vectors, invNorms, query, queryInvNorm, candidateExact, q.CandidateExactMargins, selected, builder, model, scanIters))
 	}
 	for _, budget := range localResidualPQModels.budgets {
-		q.Methods = append(q.Methods, columnVectorGraphDeep1BEvaluateBuildableLocalResidualPQMethod(tb, vectors, invNorms, query, queryInvNorm, candidateExact, q.CandidateExactMargins, selected, builder, localResidualPQModels, budget, scanIters))
+		q.Methods = append(q.Methods, columnVectorGraphDeep1BEvaluateBuildableLocalCodebookMethod(tb, vectors, invNorms, query, queryInvNorm, candidateExact, q.CandidateExactMargins, selected, builder, localResidualPQModels, budget, scanIters))
+	}
+	for _, budget := range localOPQModels.budgets {
+		q.Methods = append(q.Methods, columnVectorGraphDeep1BEvaluateBuildableLocalCodebookMethod(tb, vectors, invNorms, query, queryInvNorm, candidateExact, q.CandidateExactMargins, selected, builder, localOPQModels, budget, scanIters))
 	}
 	minSelectedRows := candidateRows
 	for _, granule := range selected {
@@ -660,7 +726,7 @@ func columnVectorGraphDeep1BEvaluateBuildablePCAMethod(tb testing.TB, vectors []
 	return method
 }
 
-func columnVectorGraphDeep1BEvaluateBuildableLocalResidualPQMethod(tb testing.TB, vectors []float32, invNorms []float32, query []float32, queryInvNorm float32, exactScores []float32, margins map[string]float64, selected []columnVectorGraphDeep1BBuildableGranule, builder string, models columnVectorGraphDeep1BLocalResidualPQModels, rowCodeBytes int, scanIters int) columnVectorGraphDeep1BGroundtruthMethodReport {
+func columnVectorGraphDeep1BEvaluateBuildableLocalCodebookMethod(tb testing.TB, vectors []float32, invNorms []float32, query []float32, queryInvNorm float32, exactScores []float32, margins map[string]float64, selected []columnVectorGraphDeep1BBuildableGranule, builder string, models columnVectorGraphDeep1BLocalResidualPQModels, rowCodeBytes int, scanIters int) columnVectorGraphDeep1BGroundtruthMethodReport {
 	tb.Helper()
 	dims := columnVectorGraphDeep1BDims
 	approxScores := make([]float32, 0, len(exactScores))
@@ -671,13 +737,19 @@ func columnVectorGraphDeep1BEvaluateBuildableLocalResidualPQMethod(tb testing.TB
 	var scanNanos float64
 	var meanRelL2 float64
 	var maxRelL2 float64
+	methodName := ""
+	family := ""
 	for _, granule := range selected {
 		gVectors, gInvNorms := columnVectorGraphDeep1BGatherRows(vectors, invNorms, granule.RowIDs, dims)
 		localRows := columnVectorGraphDeep1BSequentialRowIDs(granule.Rows)
 		granuleModels := models.byGranule[granule.Ordinal]
 		model, ok := granuleModels[rowCodeBytes]
 		if !ok {
-			tb.Fatalf("missing local residual PQ model for granule=%d row-code budget=%d", granule.Ordinal, rowCodeBytes)
+			tb.Fatalf("missing local codebook model for granule=%d row-code budget=%d", granule.Ordinal, rowCodeBytes)
+		}
+		if methodName == "" {
+			methodName = model.method
+			family = model.family
 		}
 		buildStart := time.Now()
 		encoding := columnVectorGraphDeep1BEncodePQRows(gVectors, gInvNorms, localRows, model, dims)
@@ -694,24 +766,42 @@ func columnVectorGraphDeep1BEvaluateBuildableLocalResidualPQMethod(tb testing.TB
 		maxRelL2 = math.Max(maxRelL2, encoding.maxRelativeL2)
 		totalRows += granule.Rows
 	}
+	if methodName == "" {
+		methodName = "local_residual_pq"
+		family = "local_residual_product_quantization"
+	}
 	if totalRows == 0 {
 		totalRows = 1
 	}
 	method := columnVectorGraphDeep1BNewCompressionMethodReport(
 		"buildable_granule_scout",
-		"local_f16_centroid_and_residual_pq_codebooks_amortized_over_selected_buildable_granules_plus_f16_inv_norm_per_row",
-		"local_residual_product_quantization",
-		fmt.Sprintf("buildable_%s_local_residual_pq_%dB_x8", builder, rowCodeBytes),
+		columnVectorGraphDeep1BLocalCodebookStorageNotes(methodName),
+		family,
+		fmt.Sprintf("buildable_%s_%s_%dB_x8", builder, methodName, rowCodeBytes),
 		rowCodeBytesTotal/float64(totalRows),
 		metadataBytes/float64(totalRows),
 		buildNanos,
-		fmt.Sprintf("production/buildable scout over %s granules; local residual PQ codebooks were prefitted per buildable granule on the rows they encode; this is LOPQ-lite without OPQ rotation, and codec recall is conditional on centroid-routed candidate union", builder),
+		columnVectorGraphDeep1BLocalCodebookMethodNotes(builder, methodName),
 	)
 	method.ScanNanosPerVector = scanNanos / float64(totalRows)
 	method.MeanRelativeL2 = meanRelL2 / float64(totalRows)
 	method.MaxRelativeL2 = maxRelL2
 	columnVectorGraphDeep1BFillGroundtruthMethodMetrics(&method, exactScores, approxScores, margins)
 	return method
+}
+
+func columnVectorGraphDeep1BLocalCodebookStorageNotes(method string) string {
+	if method == "local_residual_opq" {
+		return "local_f16_centroid_opq_rotation_and_residual_opq_codebooks_amortized_over_selected_buildable_granules_plus_f16_inv_norm_per_row"
+	}
+	return "local_f16_centroid_and_residual_pq_codebooks_amortized_over_selected_buildable_granules_plus_f16_inv_norm_per_row"
+}
+
+func columnVectorGraphDeep1BLocalCodebookMethodNotes(builder string, method string) string {
+	if method == "local_residual_opq" {
+		return fmt.Sprintf("production/buildable scout over %s granules; local residual OPQ rotations and PQ codebooks were prefitted per buildable granule on the rows they encode; this is a LOPQ-style lane, and codec recall is conditional on centroid-routed candidate union", builder)
+	}
+	return fmt.Sprintf("production/buildable scout over %s granules; local residual PQ codebooks were prefitted per buildable granule on the rows they encode; this is LOPQ-lite without OPQ rotation, and codec recall is conditional on centroid-routed candidate union", builder)
 }
 
 func columnVectorGraphDeep1BSequentialRowIDs(rows int) []int {
@@ -826,6 +916,11 @@ func columnVectorGraphDeep1BRenderBuildableGranuleScoutMarkdown(report columnVec
 		fmt.Fprintf(&b, "- Local residual PQ row-code byte budgets: `%v`\n", report.LocalResidualPQBytes)
 		fmt.Fprintf(&b, "- Local residual PQ k-means iterations: `%d`\n", report.PQTrainIters)
 	}
+	if len(report.LocalOPQBytes) > 0 {
+		fmt.Fprintf(&b, "- Local OPQ row-code byte budgets: `%v`\n", report.LocalOPQBytes)
+		fmt.Fprintf(&b, "- Local OPQ PQ k-means iterations: `%d`\n", report.PQTrainIters)
+		fmt.Fprintf(&b, "- Local OPQ outer iterations: `%d`\n", report.OPQIterations)
+	}
 	fmt.Fprintf(&b, "- Scan iterations: `%d`\n\n", report.ScanIters)
 	fmt.Fprintf(&b, "%s\n\n", columnVectorGraphDeep1BBuildableBuilderMarkdown(report))
 	if len(report.PQTraining) > 0 {
@@ -862,6 +957,27 @@ func columnVectorGraphDeep1BRenderBuildableGranuleScoutMarkdown(report columnVec
 				training.CodebookSize,
 				training.TrainRows,
 				training.TrainIterations,
+				float64(training.TrainNanos)/1e6,
+				training.CodebookMetadataBytes,
+				training.CodebookMetadataBytesPerEval,
+			)
+		}
+		fmt.Fprintf(&b, "\n")
+	}
+	if len(report.LocalOPQTraining) > 0 {
+		fmt.Fprintf(&b, "## Local OPQ/LOPQ-Style Training\n\n")
+		fmt.Fprintf(&b, "These are per-buildable-granule residual OPQ rotations plus PQ codebooks trained once for each sealed granule, then reused by every query that routes to that granule. This is a production/buildable local-codebook lane and is closer to LOPQ than local residual-PQ, but it is still a scout implementation rather than a production codec. Metadata is counted as one f16 residual centroid, one f16 OPQ rotation, and f16 residual-OPQ/PQ codebooks per granule, amortized over eval rows in this training table and over selected candidate rows in method rows; per-row f16 inverse norms are counted in method metadata.\n\n")
+		fmt.Fprintf(&b, "| Method | Row-code B/vector | Subquantizers | Codebook size | Granule train rows | PQ train iters | OPQ outer iters | Train ms | Codebook metadata B | Codebook metadata B/eval-vector |\n")
+		fmt.Fprintf(&b, "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
+		for _, training := range report.LocalOPQTraining {
+			fmt.Fprintf(&b, "| `%s` | %d | %d | %d | %d | %d | %d | %.3f | %d | %.3f |\n",
+				training.Method,
+				training.RowCodeBytes,
+				training.Subquantizers,
+				training.CodebookSize,
+				training.TrainRows,
+				training.TrainIterations,
+				training.OPQIterations,
 				float64(training.TrainNanos)/1e6,
 				training.CodebookMetadataBytes,
 				training.CodebookMetadataBytesPerEval,
@@ -938,13 +1054,13 @@ func columnVectorGraphDeep1BRenderBuildableGranuleScoutMarkdown(report columnVec
 func columnVectorGraphDeep1BBuildableBuilderMarkdown(report columnVectorGraphDeep1BBuildableGranuleScoutReport) string {
 	switch report.Builder {
 	case "row_id_contiguous":
-		if len(report.PQTraining) > 0 || len(report.LocalResidualPQBytes) > 0 {
-			return "This is a **production/buildable granule** scout using `row_id_contiguous` blocks. They are real storage units TreeDB can build without oracle labels, but they are intentionally a weak locality control. The result separates routing/locality failure from codec failure. Global PQ/OPQ/residual-PQ rows use a held-out train/eval split when enabled; local residual PQ rows use prefitted per-granule residual codebooks as a LOPQ-lite lane."
+		if len(report.PQTraining) > 0 || len(report.LocalResidualPQBytes) > 0 || len(report.LocalOPQBytes) > 0 {
+			return "This is a **production/buildable granule** scout using `row_id_contiguous` blocks. They are real storage units TreeDB can build without oracle labels, but they are intentionally a weak locality control. The result separates routing/locality failure from codec failure. Global PQ/OPQ/residual-PQ rows use a held-out train/eval split when enabled; local residual PQ rows use prefitted per-granule residual codebooks as a LOPQ-lite lane; local OPQ rows add a per-granule residual OPQ rotation and are the first LOPQ-style scout lane."
 		}
 		return "This is a **production/buildable granule** scout using `row_id_contiguous` blocks. They are real storage units TreeDB can build without oracle labels, but they are intentionally a weak locality control. The result separates routing/locality failure from codec failure; it should not be read as evidence that row-id order is a good ANN granule builder. PQ/OPQ/residual-PQ/LOPQ are still pending because they require real train/eval splits and trained codebooks."
 	case "ivf_kmeans":
-		if len(report.PQTraining) > 0 || len(report.LocalResidualPQBytes) > 0 {
-			return "This is a **production/buildable granule** scout using deterministic cosine `ivf_kmeans` clusters trained on the eval slice. It is a buildable locality probe, unlike the official top100 oracle clouds. Global PQ/OPQ/residual-PQ rows use held-out global codebooks when enabled; local residual PQ uses separate prefitted residual codebooks per buildable granule as a LOPQ-lite lane, with metadata amortized over those granule rows."
+		if len(report.PQTraining) > 0 || len(report.LocalResidualPQBytes) > 0 || len(report.LocalOPQBytes) > 0 {
+			return "This is a **production/buildable granule** scout using deterministic cosine `ivf_kmeans` clusters trained on the eval slice. It is a buildable locality probe, unlike the official top100 oracle clouds. Global PQ/OPQ/residual-PQ rows use held-out global codebooks when enabled; local residual PQ uses separate prefitted residual codebooks per buildable granule as a LOPQ-lite lane; local OPQ adds a per-granule residual OPQ rotation and is the first LOPQ-style scout lane, with metadata amortized over those granule rows."
 		}
 		return "This is a **production/buildable granule** scout using deterministic cosine `ivf_kmeans` clusters trained on the base prefix. It is a buildable locality probe, unlike the official top100 oracle clouds, but it is still not a PQ/OPQ/residual-PQ tournament: codebook methods still require separate train/eval discipline and metadata accounting."
 	default:

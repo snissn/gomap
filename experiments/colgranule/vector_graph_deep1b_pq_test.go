@@ -246,6 +246,26 @@ func columnVectorGraphDeep1BFitResidualPQModel(tb testing.TB, vectors []float32,
 	}
 }
 
+func columnVectorGraphDeep1BFitResidualOPQModel(tb testing.TB, vectors []float32, rows int, dims int, rowCodeBytes int, pqIterations int, opqIterations int, amortizeRows int) columnVectorGraphDeep1BPQModel {
+	tb.Helper()
+	if rows < columnVectorGraphDeep1BPQCodebookSize {
+		tb.Fatalf("residual OPQ train rows=%d must be at least codebook size=%d", rows, columnVectorGraphDeep1BPQCodebookSize)
+	}
+	start := time.Now()
+	center := columnVectorGraphDeep1BMeanVector(vectors, rows, dims)
+	for i, value := range center {
+		center[i] = columnVectorGraphDeep1BFloat16BitsToFloat32(columnVectorGraphDeep1BFloat32ToFloat16Bits(value))
+	}
+	residuals := columnVectorGraphDeep1BSubtractCenterRows(vectors, rows, dims, center)
+	model := columnVectorGraphDeep1BFitOPQModel(tb, residuals, rows, dims, rowCodeBytes, pqIterations, opqIterations, amortizeRows)
+	model.method = "global_residual_opq"
+	model.family = "residual_optimized_product_quantization"
+	model.residualCenter = center
+	model.trainNanos = time.Since(start).Nanoseconds()
+	model.codebookMetadataBytes += dims * 2
+	return model
+}
+
 func columnVectorGraphDeep1BFitOPQModel(tb testing.TB, vectors []float32, rows int, dims int, rowCodeBytes int, pqIterations int, opqIterations int, amortizeRows int) columnVectorGraphDeep1BPQModel {
 	tb.Helper()
 	if rows < columnVectorGraphDeep1BPQCodebookSize {
