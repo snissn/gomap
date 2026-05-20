@@ -191,6 +191,7 @@ type columnStoreParity struct {
 type columnStoreQueryExecution struct {
 	Lines                  []string
 	RowsProcessed          int
+	RowsProcessedKnown     bool
 	BytesRead              int64
 	RowMaterializations    int
 	ResultCount            int
@@ -1086,7 +1087,7 @@ func runColumnStoreSuiteQueries(collection *collections.Collection, rows int, ra
 			duration:               elapsed,
 			Rows:                   rows,
 			RowsProcessed:          exec.RowsProcessed,
-			RowsProcessedKnown:     true,
+			RowsProcessedKnown:     exec.RowsProcessedKnown,
 			RowsPerSecond:          ratePerSecond(float64(exec.RowsProcessed), elapsed),
 			MiBPerSecond:           ratePerSecond(float64(exec.BytesRead)/(1024*1024), elapsed),
 			NsPerRow:               nsPerRow(elapsed, exec.RowsProcessed),
@@ -1191,6 +1192,7 @@ func executeColumnStoreSuiteQueryWithPlan(collection *collections.Collection, ro
 		return columnStoreQueryExecution{
 			Lines:                  lines,
 			RowsProcessed:          materialized,
+			RowsProcessedKnown:     true,
 			BytesRead:              bytesRead,
 			RowMaterializations:    materialized,
 			ResultCount:            len(lines),
@@ -1218,6 +1220,7 @@ func executeColumnStoreSuiteQueryWithPlan(collection *collections.Collection, ro
 		return columnStoreQueryExecution{
 			Lines:                  lines,
 			RowsProcessed:          materialized,
+			RowsProcessedKnown:     true,
 			BytesRead:              bytesRead,
 			RowMaterializations:    materialized,
 			ResultCount:            len(lines),
@@ -1284,6 +1287,7 @@ func executeColumnStoreSuitePhysicalQuery(collection *collections.Collection, qu
 	return columnStoreQueryExecution{
 		Lines:               lines,
 		RowsProcessed:       diag.ReduceRows,
+		RowsProcessedKnown:  true,
 		BytesRead:           diag.PhysicalBytesScanned,
 		RowMaterializations: diag.RowMaterializations,
 		ResultCount:         len(lines),
