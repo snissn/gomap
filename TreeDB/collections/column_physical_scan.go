@@ -843,14 +843,14 @@ func scanColumnPhysicalAssetRows(raw []byte, ref ColumnAssetRef, expectedCollect
 	return scanColumnPhysicalAssetRowsWithManifestOperation(raw, ref, expectedCollection, cfg, projection, "", visitor)
 }
 
-func scanColumnPhysicalAssetRowsWithManifestOperation(raw []byte, ref ColumnAssetRef, expectedCollection string, cfg *ColumnStoreConfig, projection columnPhysicalScanProjection, expectedOperation ColumnPublishOperation, visitor func(columnPhysicalScanRowView) error) (columnPhysicalAssetScanSummary, error) {
+func parseColumnPhysicalAssetScanHeader(raw []byte, ref ColumnAssetRef, expectedCollection string, cfg *ColumnStoreConfig, expectedOperation ColumnPublishOperation) (columnPhysicalAssetScanHeader, uint16, int, error) {
 	cur := manifestCursor{raw: raw}
 	if magic := cur.u32(); magic != columnPhysicalAssetMagic {
-		return columnPhysicalAssetScanSummary{}, fmt.Errorf("bad column physical asset magic=0x%08x", magic)
+		return columnPhysicalAssetScanHeader{}, 0, 0, fmt.Errorf("bad column physical asset magic=0x%08x", magic)
 	}
 	version := cur.u16()
 	if !isSupportedColumnPhysicalAssetVersion(version) {
-		return columnPhysicalAssetScanSummary{}, fmt.Errorf("unsupported column physical asset version=%d", version)
+		return columnPhysicalAssetScanHeader{}, 0, 0, fmt.Errorf("unsupported column physical asset version=%d", version)
 	}
 	collection := cur.stringBytes()
 	namespace := cur.stringBytes()
@@ -863,13 +863,13 @@ func scanColumnPhysicalAssetRowsWithManifestOperation(raw []byte, ref ColumnAsse
 	columnCount := cur.u64()
 	rowCount := cur.u64()
 	if err := cur.err; err != nil {
-		return columnPhysicalAssetScanSummary{}, err
+		return columnPhysicalAssetScanHeader{}, 0, 0, err
 	}
 	if columnCount > uint64(maxCollectionInt) {
-		return columnPhysicalAssetScanSummary{}, fmt.Errorf("column physical asset column_count=%d overflows int max=%d", columnCount, maxCollectionInt)
+		return columnPhysicalAssetScanHeader{}, 0, 0, fmt.Errorf("column physical asset column_count=%d overflows int max=%d", columnCount, maxCollectionInt)
 	}
 	if rowCount > uint64(maxCollectionInt) {
-		return columnPhysicalAssetScanSummary{}, fmt.Errorf("column physical asset row_count=%d overflows int max=%d", rowCount, maxCollectionInt)
+		return columnPhysicalAssetScanHeader{}, 0, 0, fmt.Errorf("column physical asset row_count=%d overflows int max=%d", rowCount, maxCollectionInt)
 	}
 	header := columnPhysicalAssetScanHeader{
 		Collection:        collection,
@@ -883,19 +883,19 @@ func scanColumnPhysicalAssetRowsWithManifestOperation(raw []byte, ref ColumnAsse
 		RowCount:          int(rowCount),
 	}
 	if !operationOK {
-		return columnPhysicalAssetScanSummary{}, fmt.Errorf("unsupported column physical asset operation %q", operationBytes)
+		return columnPhysicalAssetScanHeader{}, 0, 0, fmt.Errorf("unsupported column physical asset operation %q", operationBytes)
 	}
 	if version == columnPhysicalAssetVersionV1 && header.Operation == ColumnPublishOperationDelete {
-		return columnPhysicalAssetScanSummary{}, errors.New("legacy v1 column physical asset delete operation unsupported")
+		return columnPhysicalAssetScanHeader{}, 0, 0, errors.New("legacy v1 column physical asset delete operation unsupported")
 	}
 	if err := validateColumnPhysicalAssetScanHeader(header, ref, expectedCollection, cfg); err != nil {
-		return columnPhysicalAssetScanSummary{}, err
+		return columnPhysicalAssetScanHeader{}, 0, 0, err
 	}
 	if expectedOperation != "" && header.Operation != expectedOperation {
-		return columnPhysicalAssetScanSummary{}, fmt.Errorf("%w: manifest reason=%q asset operation=%q", errColumnPhysicalAssetManifestOperationMismatch, expectedOperation, header.Operation)
+		return columnPhysicalAssetScanHeader{}, 0, 0, fmt.Errorf("%w: manifest reason=%q asset operation=%q", errColumnPhysicalAssetManifestOperationMismatch, expectedOperation, header.Operation)
 	}
 	if header.ColumnCount != len(cfg.Columns) {
-		return columnPhysicalAssetScanSummary{}, fmt.Errorf("column physical asset columns=%d want %d", header.ColumnCount, len(cfg.Columns))
+		return columnPhysicalAssetScanHeader{}, 0, 0, fmt.Errorf("column physical asset columns=%d want %d", header.ColumnCount, len(cfg.Columns))
 	}
 	for colIdx := 0; colIdx < header.ColumnCount; colIdx++ {
 		name := cur.stringBytes()
@@ -907,12 +907,12 @@ func scanColumnPhysicalAssetRowsWithManifestOperation(raw []byte, ref ColumnAsse
 		if version >= columnPhysicalAssetVersionV4 {
 			rawVectorDims := cur.u64()
 			if rawVectorDims > uint64(maxCollectionInt) {
-				return columnPhysicalAssetScanSummary{}, errors.New("column physical asset vector_dims overflows int")
+				return columnPhysicalAssetScanHeader{}, 0, 0, errors.New("column physical asset vector_dims overflows int")
 			}
 			vectorDims = int(rawVectorDims)
 		}
 		if cur.err != nil {
-			return columnPhysicalAssetScanSummary{}, cur.err
+			return columnPhysicalAssetScanHeader{}, 0, 0, cur.err
 		}
 		want := cfg.Columns[colIdx]
 		if !columnPhysicalBytesEqualString(name, want.Name) ||
@@ -921,10 +921,19 @@ func scanColumnPhysicalAssetRowsWithManifestOperation(raw []byte, ref ColumnAsse
 			nullable != want.Nullable ||
 			dictionary != want.Dictionary ||
 			vectorDims != want.VectorDims {
-			return columnPhysicalAssetScanSummary{}, fmt.Errorf("column physical asset column[%d]={Name:%q Path:%q ValueType:%q Nullable:%t Dictionary:%t VectorDims:%d} want %+v",
+			return columnPhysicalAssetScanHeader{}, 0, 0, fmt.Errorf("column physical asset column[%d]={Name:%q Path:%q ValueType:%q Nullable:%t Dictionary:%t VectorDims:%d} want %+v",
 				colIdx, string(name), string(path), string(valueType), nullable, dictionary, vectorDims, want)
 		}
 	}
+	return header, version, cur.pos, nil
+}
+
+func scanColumnPhysicalAssetRowsWithManifestOperation(raw []byte, ref ColumnAssetRef, expectedCollection string, cfg *ColumnStoreConfig, projection columnPhysicalScanProjection, expectedOperation ColumnPublishOperation, visitor func(columnPhysicalScanRowView) error) (columnPhysicalAssetScanSummary, error) {
+	header, version, rowsOffset, err := parseColumnPhysicalAssetScanHeader(raw, ref, expectedCollection, cfg, expectedOperation)
+	if err != nil {
+		return columnPhysicalAssetScanSummary{}, err
+	}
+	cur := manifestCursor{raw: raw, pos: rowsOffset}
 	valuesBuf := projection.values
 	var summary columnPhysicalAssetScanSummary
 	for rowIdx := 0; rowIdx < header.RowCount; rowIdx++ {

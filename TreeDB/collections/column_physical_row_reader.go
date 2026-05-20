@@ -249,7 +249,7 @@ func (r *columnPhysicalRowReader) buildOrdinalRanges() error {
 		rawScratch = raw
 		r.stats.OpenGranulesRead++
 		r.stats.OpenPhysicalBytesRead += int64(len(raw))
-		header, version, _, rowsOffset, err := parseColumnPhysicalAssetReaderHeader(raw, ref, r.view.CollectionName, &r.view.Config, assetRef.Reason)
+		header, version, rowsOffset, err := parseColumnPhysicalAssetScanHeader(raw, ref, r.view.CollectionName, &r.view.Config, assetRef.Reason)
 		if err != nil {
 			return fmt.Errorf("collections: physical column row reader open decode generation=%d part_id=%d: %w", ref.Generation, ref.PartID, err)
 		}
@@ -425,91 +425,6 @@ func (r *columnPhysicalRowReader) decodeRowFromBlock(block *columnPhysicalRowRea
 		Values:            scratch.Values,
 		Deleted:           deleted,
 	}, nil
-}
-
-func parseColumnPhysicalAssetReaderHeader(raw []byte, ref ColumnAssetRef, expectedCollection string, cfg *ColumnStoreConfig, expectedOperation ColumnPublishOperation) (columnPhysicalAssetScanHeader, uint16, uint64, int, error) {
-	cur := manifestCursor{raw: raw}
-	if magic := cur.u32(); magic != columnPhysicalAssetMagic {
-		return columnPhysicalAssetScanHeader{}, 0, 0, 0, fmt.Errorf("bad column physical asset magic=0x%08x", magic)
-	}
-	version := cur.u16()
-	if !isSupportedColumnPhysicalAssetVersion(version) {
-		return columnPhysicalAssetScanHeader{}, 0, 0, 0, fmt.Errorf("unsupported column physical asset version=%d", version)
-	}
-	collection := cur.stringBytes()
-	namespace := cur.stringBytes()
-	generation := cur.u64()
-	partID := cur.u64()
-	appliedCommandLSN := cur.u64()
-	operationBytes := cur.stringBytes()
-	operation, operationOK := columnPhysicalScanOperationFromBytes(operationBytes)
-	schemaHash := cur.u64()
-	columnCount := cur.u64()
-	rowCount := cur.u64()
-	if err := cur.err; err != nil {
-		return columnPhysicalAssetScanHeader{}, 0, 0, 0, err
-	}
-	if columnCount > uint64(maxCollectionInt) {
-		return columnPhysicalAssetScanHeader{}, 0, 0, 0, fmt.Errorf("column physical asset column_count=%d overflows int max=%d", columnCount, maxCollectionInt)
-	}
-	if rowCount > uint64(maxCollectionInt) {
-		return columnPhysicalAssetScanHeader{}, 0, 0, 0, fmt.Errorf("column physical asset row_count=%d overflows int max=%d", rowCount, maxCollectionInt)
-	}
-	header := columnPhysicalAssetScanHeader{
-		Collection:        collection,
-		Namespace:         namespace,
-		Generation:        generation,
-		PartID:            partID,
-		AppliedCommandLSN: appliedCommandLSN,
-		Operation:         operation,
-		SchemaHash:        schemaHash,
-		ColumnCount:       int(columnCount),
-		RowCount:          int(rowCount),
-	}
-	if !operationOK {
-		return columnPhysicalAssetScanHeader{}, 0, 0, 0, fmt.Errorf("unsupported column physical asset operation %q", operationBytes)
-	}
-	if version == columnPhysicalAssetVersionV1 && header.Operation == ColumnPublishOperationDelete {
-		return columnPhysicalAssetScanHeader{}, 0, 0, 0, errors.New("legacy v1 column physical asset delete operation unsupported")
-	}
-	if err := validateColumnPhysicalAssetScanHeader(header, ref, expectedCollection, cfg); err != nil {
-		return columnPhysicalAssetScanHeader{}, 0, 0, 0, err
-	}
-	if expectedOperation != "" && header.Operation != expectedOperation {
-		return columnPhysicalAssetScanHeader{}, 0, 0, 0, fmt.Errorf("%w: manifest reason=%q asset operation=%q", errColumnPhysicalAssetManifestOperationMismatch, expectedOperation, header.Operation)
-	}
-	if header.ColumnCount != len(cfg.Columns) {
-		return columnPhysicalAssetScanHeader{}, 0, 0, 0, fmt.Errorf("column physical asset columns=%d want %d", header.ColumnCount, len(cfg.Columns))
-	}
-	for colIdx := 0; colIdx < header.ColumnCount; colIdx++ {
-		name := cur.stringBytes()
-		path := cur.stringBytes()
-		valueType := cur.stringBytes()
-		nullable := cur.bool()
-		dictionary := cur.bool()
-		vectorDims := 0
-		if version >= columnPhysicalAssetVersionV4 {
-			rawVectorDims := cur.u64()
-			if rawVectorDims > uint64(maxCollectionInt) {
-				return columnPhysicalAssetScanHeader{}, 0, 0, 0, errors.New("column physical asset vector_dims overflows int")
-			}
-			vectorDims = int(rawVectorDims)
-		}
-		if cur.err != nil {
-			return columnPhysicalAssetScanHeader{}, 0, 0, 0, cur.err
-		}
-		want := cfg.Columns[colIdx]
-		if !columnPhysicalBytesEqualString(name, want.Name) ||
-			!columnPhysicalBytesEqualString(path, want.Path) ||
-			!columnPhysicalBytesEqualString(valueType, string(want.ValueType)) ||
-			nullable != want.Nullable ||
-			dictionary != want.Dictionary ||
-			vectorDims != want.VectorDims {
-			return columnPhysicalAssetScanHeader{}, 0, 0, 0, fmt.Errorf("column physical asset column[%d]={Name:%q Path:%q ValueType:%q Nullable:%t Dictionary:%t VectorDims:%d} want %+v",
-				colIdx, string(name), string(path), string(valueType), nullable, dictionary, vectorDims, want)
-		}
-	}
-	return header, version, rowCount, cur.pos, nil
 }
 
 func indexColumnPhysicalAssetReaderRows(raw []byte, version uint16, rowsOffset int, header columnPhysicalAssetScanHeader, cfg *ColumnStoreConfig) ([]int, error) {
