@@ -1,6 +1,10 @@
 package db
 
-import "github.com/snissn/gomap/TreeDB/internal/storagemaintenance"
+import (
+	"reflect"
+
+	"github.com/snissn/gomap/TreeDB/internal/storagemaintenance"
+)
 
 // StorageMaintenancePlan authorizes a physical storage-maintenance publish. It
 // is intentionally opaque at the DB package boundary; recognized values are
@@ -11,5 +15,18 @@ type StorageMaintenancePlan interface {
 }
 
 func validStorageMaintenancePlan(plan StorageMaintenancePlan) bool {
-	return plan != nil && storagemaintenance.IsColumnAssetRewritePlan(plan.StorageMaintenancePlanToken())
+	if plan == nil {
+		return false
+	}
+	if token, ok := plan.(storagemaintenance.Plan); ok {
+		return storagemaintenance.IsColumnAssetRewritePlan(token)
+	}
+	value := reflect.ValueOf(plan)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		if value.IsNil() {
+			return false
+		}
+	}
+	return storagemaintenance.IsColumnAssetRewritePlan(plan.StorageMaintenancePlanToken())
 }
