@@ -677,7 +677,7 @@ func TestColumnAssetReachabilityKnownSourcesHaveMasksM15B(t *testing.T) {
 			t.Fatalf("source %q duplicates mask %b already used by %q", entry.source, entry.mask, prev)
 		}
 		seen[entry.mask] = entry.source
-		if !ok || mask != entry.mask || mask == columnAssetReachabilitySourceUnknownMask {
+		if !ok || mask == 0 || entry.mask == 0 || mask != entry.mask || mask == columnAssetReachabilitySourceUnknownMask {
 			t.Fatalf("source %q mask=%b ok=%t, want table mask %b", entry.source, mask, ok, entry.mask)
 		}
 	}
