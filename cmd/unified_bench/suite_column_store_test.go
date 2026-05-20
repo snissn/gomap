@@ -542,6 +542,14 @@ func TestColumnStoreSuiteThroughputInterpretationM14C(t *testing.T) {
 			want: []string{"parallel physical scan", "invalid reported worker_count=0", "mark-pruning not active", "effective_rows_processed=1024"},
 		},
 		{
+			name: "unknown effective rows are explicit",
+			q: columnStoreQueryMetric{
+				Name:      columnStoreQueryQ1,
+				PlanLabel: columnStorePathSerialColumnScan,
+			},
+			want: []string{"physical serial scan", "effective_rows_processed=unknown", "row_materializations=0/unknown"},
+		},
+		{
 			name: "unknown plan includes labels",
 			q: columnStoreQueryMetric{
 				Name:          "q_custom",
