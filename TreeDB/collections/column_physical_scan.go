@@ -1046,12 +1046,9 @@ func scanColumnPhysicalRowValues(cur *manifestCursor, version uint16, cfg *Colum
 			}
 		case ColumnStoreValueFloat32Vector:
 			if selected {
-				value := cur.float32Slice()
+				value := cur.float32SliceWithExpectedLength(col.VectorDims)
 				if cur.err != nil {
 					return cur.err
-				}
-				if len(value) != col.VectorDims {
-					return fmt.Errorf("column[%d] float32_vector length=%d want vector_dims=%d", colIdx, len(value), col.VectorDims)
 				}
 				rowValues[outputIdx].Float32Vector = value
 			} else {

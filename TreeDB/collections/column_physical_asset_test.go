@@ -256,6 +256,42 @@ func TestColumnPhysicalAssetVectorValueTypesRoundTrip(t *testing.T) {
 	}
 }
 
+func TestEncodeColumnPhysicalAssetRejectsMismatchedVectorLength(t *testing.T) {
+	cfg := &ColumnStoreConfig{
+		Enabled: true,
+		Columns: []ColumnStoreColumn{
+			{Name: "embedding", Path: "embedding", ValueType: ColumnStoreValueFloat32Vector, VectorDims: 3},
+			{Name: "embedding_inv_norm", Path: "embedding_inv_norm", ValueType: ColumnStoreValueFloat32},
+			{Name: "embedding_neighbors", Path: "embedding_neighbors", ValueType: ColumnStoreValueAdjacencyList},
+		},
+	}
+	normalized, err := normalizeColumnStoreConfig("vectors", cfg)
+	if err != nil {
+		t.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+	_, _, err = encodeColumnPhysicalAsset(columnPhysicalAssetEncodeInput{
+		Collection:        "vectors",
+		Namespace:         normalized.AssetManager.Namespace,
+		Generation:        2,
+		PartID:            1,
+		AppliedCommandLSN: 9,
+		Operation:         ColumnPublishOperationInsert,
+		SchemaHash:        normalized.SchemaHash,
+		Columns:           normalized.Columns,
+		Rows: []columnDeclaredRow{{
+			ID: []byte("v1"),
+			Values: []columnDeclaredValue{
+				{Type: ColumnStoreValueFloat32Vector, Present: true, Float32Vector: []float32{1, 2}},
+				{Type: ColumnStoreValueFloat32, Present: true, Float32: 0.5},
+				{Type: ColumnStoreValueAdjacencyList, Present: true, AdjacencyList: []uint32{7, 11}},
+			},
+		}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "row[0] column[0]: float32_vector length=2 want dims=3") {
+		t.Fatalf("encodeColumnPhysicalAsset err=%v want vector length mismatch", err)
+	}
+}
+
 func TestManifestCursorVectorSlicesRejectShortPayload(t *testing.T) {
 	t.Run("float32", func(t *testing.T) {
 		var raw bytes.Buffer
@@ -279,6 +315,17 @@ func TestManifestCursorVectorSlicesRejectShortPayload(t *testing.T) {
 		}
 		if cur.err == nil || !strings.Contains(cur.err.Error(), "short column uint32 slice") {
 			t.Fatalf("uint32Slice err=%v want short payload", cur.err)
+		}
+	})
+	t.Run("float32_expected_length_mismatch", func(t *testing.T) {
+		var raw bytes.Buffer
+		writeManifestUint64(&raw, uint64(maxCollectionInt))
+		cur := manifestCursor{raw: raw.Bytes()}
+		if got := cur.float32SliceWithExpectedLength(3); got != nil {
+			t.Fatalf("float32SliceWithExpectedLength=%v want nil", got)
+		}
+		if cur.err == nil || !strings.Contains(cur.err.Error(), "want 3") {
+			t.Fatalf("float32SliceWithExpectedLength err=%v want length mismatch", cur.err)
 		}
 	})
 }
@@ -346,6 +393,73 @@ func TestColumnPhysicalAssetScannerRejectsMismatchedUnprojectedVectorLength(t *t
 		return nil
 	})
 	if err == nil || !strings.Contains(err.Error(), "float32_vector length=2 want vector_dims=3") {
+		t.Fatalf("scanColumnPhysicalAssetRows err=%v want vector length mismatch", err)
+	}
+}
+
+func TestColumnPhysicalAssetScannerRejectsMismatchedProjectedVectorLength(t *testing.T) {
+	cfg := &ColumnStoreConfig{
+		Enabled: true,
+		Columns: []ColumnStoreColumn{
+			{Name: "embedding", Path: "embedding", ValueType: ColumnStoreValueFloat32Vector, VectorDims: 3},
+			{Name: "score", Path: "score", ValueType: ColumnStoreValueFloat32},
+		},
+	}
+	normalized, err := normalizeColumnStoreConfig("vectors", cfg)
+	if err != nil {
+		t.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+
+	var raw bytes.Buffer
+	writeManifestUint32(&raw, columnPhysicalAssetMagic)
+	writeManifestUint16(&raw, columnPhysicalAssetVersion)
+	writeManifestString(&raw, "vectors")
+	writeManifestString(&raw, normalized.AssetManager.Namespace)
+	writeManifestUint64(&raw, 2)
+	writeManifestUint64(&raw, 1)
+	writeManifestUint64(&raw, 9)
+	writeManifestString(&raw, string(ColumnPublishOperationInsert))
+	writeManifestUint64(&raw, normalized.SchemaHash)
+	writeManifestUint64(&raw, uint64(len(normalized.Columns)))
+	writeManifestUint64(&raw, 1)
+	for _, col := range normalized.Columns {
+		writeManifestString(&raw, col.Name)
+		writeManifestString(&raw, col.Path)
+		writeManifestString(&raw, string(col.ValueType))
+		writeManifestBool(&raw, col.Nullable)
+		writeManifestBool(&raw, col.Dictionary)
+		writeManifestUint64(&raw, uint64(col.VectorDims))
+	}
+	writeManifestBytes(&raw, []byte("v1"))
+	writeManifestBool(&raw, false)
+	writeManifestString(&raw, string(ColumnStoreValueFloat32Vector))
+	writeManifestBool(&raw, false)
+	writeManifestBool(&raw, true)
+	writeManifestFloat32Slice(&raw, []float32{1, 2})
+	writeManifestString(&raw, string(ColumnStoreValueFloat32))
+	writeManifestBool(&raw, false)
+	writeManifestBool(&raw, true)
+	writeManifestUint32(&raw, math.Float32bits(0.5))
+
+	encoded := raw.Bytes()
+	ref := ColumnAssetRef{
+		Kind:       ColumnAssetKindTCS1PartImage,
+		Namespace:  normalized.AssetManager.Namespace,
+		Generation: 2,
+		PartID:     1,
+		FileID:     columnAssetM12ASegmentFileID,
+		Length:     int64(len(encoded)),
+		Checksum:   page.Checksum(encoded),
+	}
+	projection, err := newColumnPhysicalScanProjection(*normalized, []string{"embedding"})
+	if err != nil {
+		t.Fatalf("newColumnPhysicalScanProjection: %v", err)
+	}
+	_, err = scanColumnPhysicalAssetRows(encoded, ref, "vectors", normalized, projection, func(row columnPhysicalScanRowView) error {
+		t.Fatalf("visitor should not run for mismatched vector length: %+v", row)
+		return nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "column float32 slice length=2 want 3") {
 		t.Fatalf("scanColumnPhysicalAssetRows err=%v want vector length mismatch", err)
 	}
 }
@@ -555,7 +669,7 @@ func TestColumnPhysicalAssetRejectsNonNullableNullM12A(t *testing.T) {
 	}
 	rows[0].Values[0].Null = true
 	rows[0].Values[0].Int64 = 0
-	encoded, _, err := encodeColumnPhysicalAsset(columnPhysicalAssetEncodeInput{
+	_, _, err = encodeColumnPhysicalAsset(columnPhysicalAssetEncodeInput{
 		Collection:        "events",
 		Namespace:         normalized.AssetManager.Namespace,
 		Generation:        7,
@@ -566,21 +680,8 @@ func TestColumnPhysicalAssetRejectsNonNullableNullM12A(t *testing.T) {
 		Columns:           normalized.Columns,
 		Rows:              rows,
 	})
-	if err != nil {
-		t.Fatalf("encodeColumnPhysicalAsset: %v", err)
-	}
-	ref := ColumnAssetRef{
-		Kind:       ColumnAssetKindTCS1PartImage,
-		Namespace:  normalized.AssetManager.Namespace,
-		Generation: 7,
-		PartID:     3,
-		FileID:     1,
-		Offset:     0,
-		Length:     int64(len(encoded)),
-		Checksum:   page.Checksum(encoded),
-	}
-	if err := validateColumnPhysicalAssetForManifest(encoded, ref, *normalized); err == nil || !strings.Contains(err.Error(), "not nullable") {
-		t.Fatalf("validate nullable violation err=%v want not nullable failure", err)
+	if err == nil || !strings.Contains(err.Error(), "not nullable") {
+		t.Fatalf("encodeColumnPhysicalAsset err=%v want not nullable failure", err)
 	}
 }
 

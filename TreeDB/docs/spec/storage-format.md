@@ -476,7 +476,7 @@ bool     Dictionary
 u64      VectorDims         // non-zero only for float32_vector
 ```
 
-Version 4 row values are:
+Within each non-deleted version 4 row, every declared column value entry is:
 
 ```text
 string   ValueType

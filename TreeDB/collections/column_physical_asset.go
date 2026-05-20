@@ -301,8 +301,19 @@ func encodeColumnPhysicalAsset(input columnPhysicalAssetEncodeInput) ([]byte, co
 				if !value.Present && !value.Null {
 					return nil, columnPhysicalAssetSummary{}, fmt.Errorf("collections: column physical asset row[%d] column[%d] absent value is not null", rowIdx, colIdx)
 				}
+				if value.Type != input.Columns[colIdx].ValueType {
+					return nil, columnPhysicalAssetSummary{}, fmt.Errorf("collections: column physical asset row[%d] column[%d] type=%q want %q", rowIdx, colIdx, value.Type, input.Columns[colIdx].ValueType)
+				}
 				if !value.Present && !input.Columns[colIdx].Nullable {
 					return nil, columnPhysicalAssetSummary{}, fmt.Errorf("collections: column physical asset row[%d] column[%d] is absent but column is not nullable", rowIdx, colIdx)
+				}
+				if value.Null && !input.Columns[colIdx].Nullable {
+					return nil, columnPhysicalAssetSummary{}, fmt.Errorf("collections: column physical asset row[%d] column[%d] is null but column is not nullable", rowIdx, colIdx)
+				}
+				if !value.Null && value.Present {
+					if err := validateColumnDeclaredPhysicalValueShape(input.Columns[colIdx], value); err != nil {
+						return nil, columnPhysicalAssetSummary{}, fmt.Errorf("collections: column physical asset row[%d] column[%d]: %w", rowIdx, colIdx, err)
+					}
 				}
 			}
 		case ColumnPublishOperationDelete:
@@ -681,6 +692,26 @@ func (c *manifestCursor) float32Slice() []float32 {
 	if c.err != nil {
 		return nil
 	}
+	return c.float32SliceAfterLength(n)
+}
+
+func (c *manifestCursor) float32SliceWithExpectedLength(expected int) []float32 {
+	n := c.u64()
+	if c.err != nil {
+		return nil
+	}
+	if expected < 0 {
+		c.err = errors.New("collections: column float32 slice expected length is negative")
+		return nil
+	}
+	if n != uint64(expected) {
+		c.err = fmt.Errorf("collections: column float32 slice length=%d want %d", n, expected)
+		return nil
+	}
+	return c.float32SliceAfterLength(n)
+}
+
+func (c *manifestCursor) float32SliceAfterLength(n uint64) []float32 {
 	if n > uint64(maxCollectionInt) {
 		c.err = errors.New("collections: column float32 slice length overflows int")
 		return nil
@@ -719,6 +750,10 @@ func (c *manifestCursor) uint32Slice() []uint32 {
 func (c *manifestCursor) skipUint32Slice() uint64 {
 	n := c.u64()
 	if c.err != nil {
+		return 0
+	}
+	if n > uint64(maxCollectionInt) {
+		c.err = errors.New("collections: column uint32 slice length overflows int")
 		return 0
 	}
 	if n > uint64((len(c.raw)-c.pos)/4) {
