@@ -64,8 +64,8 @@ type ColumnPhysicalQueryDiagnostics struct {
 	VisibilityRows             int
 	ReconstructionRows         int
 	ResultGroups               int
-	DecodedBlockCacheHits      uint64
-	DecodedBlockCacheMisses    uint64
+	SegmentFileCacheHits       uint64
+	SegmentFileCacheMisses     uint64
 	ScanNanos                  int64
 	VisibilityNanos            int64
 	ReduceNanos                int64
@@ -161,6 +161,7 @@ func (c *Collection) RunColumnPhysicalQueryParallel(req ColumnPhysicalQueryReque
 	var cancel atomic.Bool
 	var wg sync.WaitGroup
 	for worker := 0; worker < workers; worker++ {
+		worker := worker
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -307,8 +308,8 @@ func columnPhysicalQueryDiagnosticsFromScan(diag columnPhysicalScanDiagnostics) 
 		ProjectedColumns:           diag.ProjectedColumns,
 		RowMaterializations:        diag.RowMaterializations,
 		PhysicalBytesScanned:       diag.PhysicalBytesScanned,
-		DecodedBlockCacheHits:      diag.DecodedBlockCacheHits,
-		DecodedBlockCacheMisses:    diag.DecodedBlockCacheMisses,
+		SegmentFileCacheHits:       diag.SegmentFileCacheHits,
+		SegmentFileCacheMisses:     diag.SegmentFileCacheMisses,
 	}
 }
 
@@ -344,8 +345,8 @@ func mergeColumnPhysicalQueryDiagnostics(left, right ColumnPhysicalQueryDiagnost
 	left.ReduceRows += right.ReduceRows
 	left.VisibilityRows += right.VisibilityRows
 	left.ReconstructionRows += right.ReconstructionRows
-	left.DecodedBlockCacheHits += right.DecodedBlockCacheHits
-	left.DecodedBlockCacheMisses += right.DecodedBlockCacheMisses
+	left.SegmentFileCacheHits += right.SegmentFileCacheHits
+	left.SegmentFileCacheMisses += right.SegmentFileCacheMisses
 	return left
 }
 
