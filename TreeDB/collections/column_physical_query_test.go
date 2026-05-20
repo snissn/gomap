@@ -437,14 +437,20 @@ func TestColumnPhysicalScanRejectsRemainderWithoutModuloM14B(t *testing.T) {
 }
 
 func TestMergeColumnPhysicalQueryDiagnosticsTreatsMutationPartsAsViewLevelM14B(t *testing.T) {
-	left := ColumnPhysicalQueryDiagnostics{MutationParts: 2, DecodedBlocks: 1}
-	right := ColumnPhysicalQueryDiagnostics{MutationParts: 2, DecodedBlocks: 3}
+	left := ColumnPhysicalQueryDiagnostics{MutationParts: 2, DecodedBlocks: 1, DecodedBlockCacheHits: 2, DecodedBlockCacheMisses: 3}
+	right := ColumnPhysicalQueryDiagnostics{MutationParts: 2, DecodedBlocks: 3, DecodedBlockCacheHits: 5, DecodedBlockCacheMisses: 7}
 	merged := mergeColumnPhysicalQueryDiagnostics(left, right)
 	if got, want := merged.MutationParts, 2; got != want {
 		t.Fatalf("mutation parts=%d want view-level max %d", got, want)
 	}
 	if got, want := merged.DecodedBlocks, 4; got != want {
 		t.Fatalf("decoded blocks=%d want summed work %d", got, want)
+	}
+	if got, want := merged.DecodedBlockCacheHits, uint64(7); got != want {
+		t.Fatalf("cache hits=%d want summed %d", got, want)
+	}
+	if got, want := merged.DecodedBlockCacheMisses, uint64(10); got != want {
+		t.Fatalf("cache misses=%d want summed %d", got, want)
 	}
 }
 

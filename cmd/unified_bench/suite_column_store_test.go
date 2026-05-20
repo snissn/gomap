@@ -170,6 +170,9 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 		if q.ScanDurationMS < 0 {
 			t.Fatalf("query %s scan_duration_ms=%v", q.Name, q.ScanDurationMS)
 		}
+		if q.AdapterDurationMS < 0 {
+			t.Fatalf("query %s adapter_duration_ms=%v", q.Name, q.AdapterDurationMS)
+		}
 		if q.PlannerCandidates == 0 || q.PlannerReason == "" {
 			t.Fatalf("query %s missing planner diagnostics: %+v", q.Name, q)
 		}
