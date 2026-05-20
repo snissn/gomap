@@ -53,16 +53,18 @@ func TestColumnPhysicalQueryAdapterExecutesJSONBenchShapesM13B(t *testing.T) {
 			wantDirect: true,
 		},
 		{
-			name:      "q4a",
-			hashName:  "q4a",
-			req:       ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupMinInt64, GroupColumn: "did", ValueColumn: "time_us"},
-			wantCount: 12,
+			name:       "q4a",
+			hashName:   "q4a",
+			req:        ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupMinInt64, GroupColumn: "did", ValueColumn: "time_us"},
+			wantCount:  12,
+			wantDirect: true,
 		},
 		{
-			name:      "q4b",
-			hashName:  "q4b",
-			req:       ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupMaxInt64, GroupColumn: "did", ValueColumn: "time_us"},
-			wantCount: 12,
+			name:       "q4b",
+			hashName:   "q4b",
+			req:        ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupMaxInt64, GroupColumn: "did", ValueColumn: "time_us"},
+			wantCount:  12,
+			wantDirect: true,
 		},
 		{
 			name:       "q5",
@@ -283,6 +285,14 @@ func TestColumnPhysicalQueryParallelMatchesSerialInsertOnlyM14B(t *testing.T) {
 		{
 			name: "hour_count",
 			req:  ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryHourCount, ValueColumn: "time_us"},
+		},
+		{
+			name: "min",
+			req:  ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupMinInt64, GroupColumn: "did", ValueColumn: "time_us"},
+		},
+		{
+			name: "max",
+			req:  ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupMaxInt64, GroupColumn: "did", ValueColumn: "time_us"},
 		},
 		{
 			name: "span",
@@ -1717,6 +1727,8 @@ func BenchmarkColumnPhysicalQueryAdapterM13B(b *testing.B) {
 			{name: "q1", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "kind"}},
 			{name: "q2", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCountDistinct, GroupColumn: "kind", DistinctColumn: "did"}},
 			{name: "q3", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryHourCount, ValueColumn: "time_us"}},
+			{name: "q4a", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupMinInt64, GroupColumn: "did", ValueColumn: "time_us"}},
+			{name: "q4b", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupMaxInt64, GroupColumn: "did", ValueColumn: "time_us"}},
 			{name: "q5", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupInt64Span, GroupColumn: "did", ValueColumn: "time_us"}},
 		}
 		for _, tc := range cases {
