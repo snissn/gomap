@@ -339,6 +339,7 @@ func TestPublishOrderedRootDeltaGroupMaintenanceSystemBuilderErrorClosesReturned
 	if errors.Is(err, ErrStorageMaintenancePublishPreApplyFailed) {
 		t.Fatalf("maintenance publish error=%v must not be marked pre-apply after root delta apply", err)
 	}
+	requireCommandWALPublishReady(t, db, "maintenance system builder failure")
 	if systemIter.closes != 1 {
 		t.Fatalf("system iterator closes=%d want 1", systemIter.closes)
 	}
@@ -642,6 +643,7 @@ func TestPublishOrderedRootDeltaGroupMaintenanceDoesNotMarkPostRootApplyErrorPre
 	if errors.Is(err, ErrStorageMaintenancePublishPreApplyFailed) {
 		t.Fatalf("maintenance publish error=%v must not be marked pre-apply after a root delta was applied", err)
 	}
+	requireCommandWALPublishReady(t, db, "post-root-apply maintenance failure")
 	if iter.closes != 1 {
 		t.Fatalf("root delta iterator closes=%d want 1", iter.closes)
 	}

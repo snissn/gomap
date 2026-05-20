@@ -236,7 +236,7 @@ func writeColumnPhysicalAssetToManagerSegment(rootDir string, cfg ColumnStoreCon
 	if err != nil {
 		return ColumnAssetRef{}, err
 	}
-	written, err := file.Write(payload)
+	written, err := writeColumnAssetSegmentPayload(file, payload)
 	if err != nil {
 		return ColumnAssetRef{}, err
 	}
