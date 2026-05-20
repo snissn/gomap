@@ -3,6 +3,7 @@ package collections
 import (
 	"context"
 	"errors"
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
@@ -268,6 +269,52 @@ func TestColumnAssetReachabilityPlanRetainsNonCanonicalSegmentFileM15A(t *testin
 	}
 	if !found {
 		t.Fatalf("missing non-canonical segment entry for %s in %+v", nonCanonicalPath, plan.SegmentEntries)
+	}
+}
+
+func TestColumnAssetReachabilityPlanRetainsCanonicalSymlinkAsUnknownM15A(t *testing.T) {
+	root := t.TempDir()
+	const namespaceName = "events/column-assets"
+	namespace, err := columnAssetManagerNamespaceForRoot(root, namespaceName)
+	if err != nil {
+		t.Fatalf("columnAssetManagerNamespaceForRoot: %v", err)
+	}
+	if err := ensureColumnAssetManagerNamespace(namespace); err != nil {
+		t.Fatalf("ensureColumnAssetManagerNamespace: %v", err)
+	}
+	targetPath := filepath.Join(root, "outside-target")
+	if err := os.WriteFile(targetPath, []byte("not-a-column-segment"), 0o600); err != nil {
+		t.Fatalf("WriteFile symlink target: %v", err)
+	}
+	linkPath := filepath.Join(namespace.SegmentDir, columnAssetSegmentFileName(7))
+	if err := os.Symlink(targetPath, linkPath); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+
+	input := columnAssetReachabilityInput{
+		rootDir:    root,
+		collection: "events",
+		namespace:  namespaceName,
+		detailed:   true,
+	}
+	plan, err := buildColumnAssetReachabilityPlan(context.Background(), input)
+	if err != nil {
+		t.Fatalf("buildColumnAssetReachabilityPlan: %v", err)
+	}
+	if plan.Complete || plan.Segments.Unknown != 1 || plan.Segments.Reclaimable != 0 {
+		t.Fatalf("segments=%+v complete=%t want symlink retained as unknown", plan.Segments, plan.Complete)
+	}
+	foundSymlink := false
+	for _, entry := range plan.SegmentEntries {
+		if entry.Path == linkPath {
+			foundSymlink = true
+			if entry.FileID != 0 || entry.Status != ColumnAssetReachabilitySegmentUnknown {
+				t.Fatalf("symlink entry=%+v want non-canonical unknown", entry)
+			}
+		}
+	}
+	if !foundSymlink {
+		t.Fatalf("missing symlink entry for %s in %+v", linkPath, plan.SegmentEntries)
 	}
 }
 
@@ -643,6 +690,24 @@ func TestColumnAssetReachabilitySegmentAccountingPreservesKnownBytesWhenUnknownM
 		reclaimable.reclaimableBytes != 40 ||
 		reclaimable.unknownBytes != 60 {
 		t.Fatalf("reclaimable unknown segment plan=%+v want reclaimable=40 unknown=60", reclaimable)
+	}
+}
+
+func TestColumnAssetReachabilityByteAccountingSaturatesM15A(t *testing.T) {
+	if got := addColumnAssetReachabilityBytes(math.MaxInt64-3, 2); got != math.MaxInt64-1 {
+		t.Fatalf("non-overflow add=%d want %d", got, int64(math.MaxInt64-1))
+	}
+	if got := addColumnAssetReachabilityBytes(math.MaxInt64-3, 4); got != math.MaxInt64 {
+		t.Fatalf("overflow add=%d want MaxInt64", got)
+	}
+	if got := addColumnAssetReachabilityBytes(7, -1); got != 7 {
+		t.Fatalf("negative add=%d want unchanged", got)
+	}
+	if got := columnAssetReachabilityIntervalsLength([]columnAssetReachabilityInterval{
+		{start: 0, end: math.MaxInt64},
+		{start: 0, end: 1},
+	}); got != math.MaxInt64 {
+		t.Fatalf("interval length=%d want saturated MaxInt64", got)
 	}
 }
 
