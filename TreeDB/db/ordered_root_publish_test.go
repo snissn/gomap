@@ -65,6 +65,12 @@ func (*typedNilStorageMaintenancePlan) StorageMaintenancePlanToken() storagemain
 	panic("typed nil maintenance plan should fail closed before token access")
 }
 
+type panickingStorageMaintenancePlan struct{}
+
+func (panickingStorageMaintenancePlan) StorageMaintenancePlanToken() storagemaintenance.Plan {
+	panic("panicking maintenance plan should fail closed")
+}
+
 func mustRawKVCommandWALIntent(tb testing.TB, db *DB, key, value string) *CommandWALIntent {
 	tb.Helper()
 	payload, err := commitlog.EncodeRawKVBatchPayload([]commitlog.RawKVOperation{{
@@ -422,6 +428,34 @@ func TestPublishOrderedRootDeltaGroupMaintenanceRejectsTypedNilPlan(t *testing.T
 		t.Fatalf("maintenance publish error=%v want ErrStorageMaintenancePublishPreApplyFailed", err)
 	}
 	requireCommandWALPublishReady(t, db, "typed nil maintenance plan rejection")
+}
+
+func TestPublishOrderedRootDeltaGroupMaintenanceRejectsPanickingPlan(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	defer db.Close()
+
+	_, _, err := db.PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(
+		panickingStorageMaintenancePlan{},
+		[]OrderedRootDeltaPublishInput{{
+			BaseRoot:                  0,
+			Iter:                      mustFrozenSystemMemtable(t, "root/k", "v").NewIterator(nil, nil),
+			StorageMaintenanceRewrite: true,
+		}},
+		nil,
+		func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+			t.Fatalf("maintenance system builder should not run for a panicking maintenance plan")
+			return nil, nil
+		},
+	)
+	if !errors.Is(err, ErrStorageMaintenancePlanMissing) {
+		t.Fatalf("maintenance publish error=%v want ErrStorageMaintenancePlanMissing", err)
+	}
+	if !errors.Is(err, ErrStorageMaintenancePublishPreApplyFailed) {
+		t.Fatalf("maintenance publish error=%v want ErrStorageMaintenancePublishPreApplyFailed", err)
+	}
+	requireCommandWALPublishReady(t, db, "panicking maintenance plan rejection")
 }
 
 func TestPublishOrderedRootDeltaGroupMaintenanceRejectsMissingPlan(t *testing.T) {
