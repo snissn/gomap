@@ -36,10 +36,6 @@ var ErrOrderedRootGroupCommandWALContextNilSystemBuilder = errors.New("treedb: P
 // publish API.
 var ErrOrderedRootDeltaBatchGroupCommandWALContextNilSystemBuilder = errors.New("treedb: PublishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilder: nil system builder")
 
-// ErrStorageMaintenanceRewriteMarkerMissing reports a maintenance ordered-root
-// publish input that is not explicitly marked as storage-maintenance.
-var ErrStorageMaintenanceRewriteMarkerMissing = errors.New("treedb: storage-maintenance rewrite marker missing: set OrderedRootDeltaPublishInput.StorageMaintenanceRewrite=true for every ordered input when using the storage-maintenance publish API")
-
 // ErrStorageMaintenancePlanMissing reports a maintenance ordered-root publish
 // that was called without a recognized storage-maintenance plan token.
 var ErrStorageMaintenancePlanMissing = errors.New("treedb: storage-maintenance publish requires a recognized maintenance plan")
@@ -147,11 +143,16 @@ type OrderedRootDeltaPublishInput struct {
 	BaseRoot      uint64
 	Iter          iterator.UnsafeIterator
 	StoragePolicy OrderedRootStoragePolicy
-	// StorageMaintenanceRewrite marks this root delta as an unlogged physical
-	// storage-maintenance rewrite of the same logical root contents. It is only
-	// honored by PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder;
-	// logical user mutations must use command-WAL-covered publish APIs instead.
-	StorageMaintenanceRewrite bool
+}
+
+// StorageMaintenanceRootDeltaPublishInput describes a root-local physical
+// storage-maintenance rewrite. It is intentionally separate from
+// OrderedRootDeltaPublishInput so ordinary logical root-delta callers do not
+// inherit maintenance-only fields or semantics.
+type StorageMaintenanceRootDeltaPublishInput struct {
+	BaseRoot      uint64
+	Iter          iterator.UnsafeIterator
+	StoragePolicy OrderedRootStoragePolicy
 }
 
 // OrderedRootDeltaBatchPublishInput describes a sorted root-local mutation
@@ -1419,11 +1420,11 @@ func (db *DB) PublishOrderedRootDeltaGroupWithPreflightAndSystemDeltaBuilder(ord
 // PublishOrderedRootDeltaGroupWithPreflightAndSystemDeltaBuilder, but permits
 // TreeDB-internal storage-maintenance root rewrites while command-WAL mode is
 // enabled. Callers must provide an internal maintenance plan and at least one
-// ordered input, and must set StorageMaintenanceRewrite on every ordered input.
-// System-only logical changes must use command-WAL-covered publish APIs. This
-// path does not append or advance a command-WAL frame.
-func (db *DB) PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(plan StorageMaintenancePlan, ordered []OrderedRootDeltaPublishInput, preflight OrderedRootGroupPreflight, buildSystemDeltaIter OrderedRootGroupSystemBuilder) (uint64, []uint64, error) {
-	return db.publishOrderedRootDeltaGroupWithSystemDeltaBuilderWithMaintenancePlan(plan, ordered, preflight, nil, buildSystemDeltaIter, orderedRootDeltaGroupSystemPublishStorageMaintenance)
+// maintenance root-delta input. System-only logical changes must use
+// command-WAL-covered publish APIs. This path does not append or advance a
+// command-WAL frame.
+func (db *DB) PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(plan StorageMaintenancePlan, ordered []StorageMaintenanceRootDeltaPublishInput, preflight OrderedRootGroupPreflight, buildSystemDeltaIter OrderedRootGroupSystemBuilder) (uint64, []uint64, error) {
+	return db.publishOrderedRootDeltaGroupWithSystemDeltaBuilderWithMaintenancePlan(plan, storageMaintenanceRootDeltaInputsToOrdered(ordered), preflight, nil, buildSystemDeltaIter, orderedRootDeltaGroupSystemPublishStorageMaintenance)
 }
 
 func validateStorageMaintenanceOrderedRootDeltaInputs(plan StorageMaintenancePlan, ordered []OrderedRootDeltaPublishInput) error {
@@ -1433,12 +1434,22 @@ func validateStorageMaintenanceOrderedRootDeltaInputs(plan StorageMaintenancePla
 	if len(ordered) == 0 {
 		return ErrStorageMaintenanceRootDeltaMissing
 	}
+	return nil
+}
+
+func storageMaintenanceRootDeltaInputsToOrdered(ordered []StorageMaintenanceRootDeltaPublishInput) []OrderedRootDeltaPublishInput {
+	if len(ordered) == 0 {
+		return nil
+	}
+	converted := make([]OrderedRootDeltaPublishInput, len(ordered))
 	for idx := range ordered {
-		if !ordered[idx].StorageMaintenanceRewrite {
-			return fmt.Errorf("%w: ordered input %d", ErrStorageMaintenanceRewriteMarkerMissing, idx)
+		converted[idx] = OrderedRootDeltaPublishInput{
+			BaseRoot:      ordered[idx].BaseRoot,
+			Iter:          ordered[idx].Iter,
+			StoragePolicy: ordered[idx].StoragePolicy,
 		}
 	}
-	return nil
+	return converted
 }
 
 // PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder is like

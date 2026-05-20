@@ -514,11 +514,10 @@ func (c *Collection) publishColumnAssetRewriteManifestState(state columnAssetRew
 		return 0, nil, err
 	}
 	identityRecord := encodeColumnManifestIdentityRecordArray(updatedIdentity)
-	ordered := []backenddb.OrderedRootDeltaPublishInput{{
-		BaseRoot:                  state.baseRoot,
-		Iter:                      columnManifestRootRecordIterator(identityRecord, records),
-		StoragePolicy:             policy,
-		StorageMaintenanceRewrite: true,
+	ordered := []backenddb.StorageMaintenanceRootDeltaPublishInput{{
+		BaseRoot:      state.baseRoot,
+		Iter:          columnManifestRootRecordIterator(identityRecord, records),
+		StoragePolicy: policy,
 	}}
 	return c.db.PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(
 		storagemaintenance.ColumnAssetRewritePlan(),

@@ -271,10 +271,9 @@ func TestPublishOrderedRootDeltaGroupMaintenanceAllowsCommandWALWithoutLogicalFr
 	rootDelta := mustFrozenSystemMemtable(t, "root/k", "v")
 	newSystemRoot, rootIDs, err := db.PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(
 		storagemaintenance.ColumnAssetRewritePlan(),
-		[]OrderedRootDeltaPublishInput{{
-			BaseRoot:                  0,
-			Iter:                      rootDelta.NewIterator(nil, nil),
-			StorageMaintenanceRewrite: true,
+		[]StorageMaintenanceRootDeltaPublishInput{{
+			BaseRoot: 0,
+			Iter:     rootDelta.NewIterator(nil, nil),
 		}},
 		nil,
 		func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
@@ -320,10 +319,9 @@ func TestPublishOrderedRootDeltaGroupMaintenanceSystemBuilderErrorClosesReturned
 	wantErr := errors.New("maintenance system builder returned iterator with error")
 	_, _, err := db.PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(
 		storagemaintenance.ColumnAssetRewritePlan(),
-		[]OrderedRootDeltaPublishInput{{
-			BaseRoot:                  0,
-			Iter:                      mustFrozenSystemMemtable(t, "root/k", "v").NewIterator(nil, nil),
-			StorageMaintenanceRewrite: true,
+		[]StorageMaintenanceRootDeltaPublishInput{{
+			BaseRoot: 0,
+			Iter:     mustFrozenSystemMemtable(t, "root/k", "v").NewIterator(nil, nil),
 		}},
 		nil,
 		func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
@@ -345,35 +343,6 @@ func TestPublishOrderedRootDeltaGroupMaintenanceSystemBuilderErrorClosesReturned
 	}
 }
 
-func TestPublishOrderedRootDeltaGroupMaintenanceRejectsUnmarkedRootDelta(t *testing.T) {
-	dir := t.TempDir()
-	enableCommandWALFormat(t, dir)
-	db := openCommandWALDB(t, dir)
-	defer db.Close()
-
-	iter := mustFrozenSystemMemtable(t, "root/k", "v").NewIterator(nil, nil)
-	defer iter.Close()
-	_, _, err := db.PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(
-		storagemaintenance.ColumnAssetRewritePlan(),
-		[]OrderedRootDeltaPublishInput{{
-			BaseRoot: 0,
-			Iter:     iter,
-		}},
-		nil,
-		func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
-			t.Fatalf("maintenance system builder should not run for an unmarked root delta")
-			return nil, nil
-		},
-	)
-	if !errors.Is(err, ErrStorageMaintenanceRewriteMarkerMissing) {
-		t.Fatalf("maintenance publish error=%v want ErrStorageMaintenanceRewriteMarkerMissing", err)
-	}
-	if !errors.Is(err, ErrStorageMaintenancePublishPreApplyFailed) {
-		t.Fatalf("maintenance publish error=%v want ErrStorageMaintenancePublishPreApplyFailed", err)
-	}
-	requireCommandWALPublishReady(t, db, "unmarked maintenance rejection")
-}
-
 func TestPublishOrderedRootDeltaGroupMaintenanceRejectsForgedPlan(t *testing.T) {
 	dir := t.TempDir()
 	enableCommandWALFormat(t, dir)
@@ -382,10 +351,9 @@ func TestPublishOrderedRootDeltaGroupMaintenanceRejectsForgedPlan(t *testing.T) 
 
 	_, _, err := db.PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(
 		forgedStorageMaintenancePlan{},
-		[]OrderedRootDeltaPublishInput{{
-			BaseRoot:                  0,
-			Iter:                      mustFrozenSystemMemtable(t, "root/k", "v").NewIterator(nil, nil),
-			StorageMaintenanceRewrite: true,
+		[]StorageMaintenanceRootDeltaPublishInput{{
+			BaseRoot: 0,
+			Iter:     mustFrozenSystemMemtable(t, "root/k", "v").NewIterator(nil, nil),
 		}},
 		nil,
 		func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
@@ -411,10 +379,9 @@ func TestPublishOrderedRootDeltaGroupMaintenanceRejectsTypedNilPlan(t *testing.T
 	var plan *typedNilStorageMaintenancePlan
 	_, _, err := db.PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(
 		plan,
-		[]OrderedRootDeltaPublishInput{{
-			BaseRoot:                  0,
-			Iter:                      mustFrozenSystemMemtable(t, "root/k", "v").NewIterator(nil, nil),
-			StorageMaintenanceRewrite: true,
+		[]StorageMaintenanceRootDeltaPublishInput{{
+			BaseRoot: 0,
+			Iter:     mustFrozenSystemMemtable(t, "root/k", "v").NewIterator(nil, nil),
 		}},
 		nil,
 		func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
@@ -439,10 +406,9 @@ func TestPublishOrderedRootDeltaGroupMaintenanceRejectsPanickingPlan(t *testing.
 
 	_, _, err := db.PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(
 		panickingStorageMaintenancePlan{},
-		[]OrderedRootDeltaPublishInput{{
-			BaseRoot:                  0,
-			Iter:                      mustFrozenSystemMemtable(t, "root/k", "v").NewIterator(nil, nil),
-			StorageMaintenanceRewrite: true,
+		[]StorageMaintenanceRootDeltaPublishInput{{
+			BaseRoot: 0,
+			Iter:     mustFrozenSystemMemtable(t, "root/k", "v").NewIterator(nil, nil),
 		}},
 		nil,
 		func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
@@ -528,10 +494,9 @@ func TestPublishOrderedRootDeltaGroupMaintenanceRejectsEmptyRootDelta(t *testing
 	emptyDelta := mustFrozenSystemMemtable(t)
 	_, _, err = db.PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(
 		storagemaintenance.ColumnAssetRewritePlan(),
-		[]OrderedRootDeltaPublishInput{{
-			BaseRoot:                  baseRoot,
-			Iter:                      emptyDelta.NewIterator(nil, nil),
-			StorageMaintenanceRewrite: true,
+		[]StorageMaintenanceRootDeltaPublishInput{{
+			BaseRoot: baseRoot,
+			Iter:     emptyDelta.NewIterator(nil, nil),
 		}},
 		nil,
 		func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
@@ -570,10 +535,9 @@ func TestPublishOrderedRootDeltaGroupMaintenanceWrapsRootDeltaIteratorErrorPreAp
 	iter := &closeCountingUnsafeIterator{err: wantErr}
 	_, _, err = db.PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(
 		storagemaintenance.ColumnAssetRewritePlan(),
-		[]OrderedRootDeltaPublishInput{{
-			BaseRoot:                  baseRoot,
-			Iter:                      iter,
-			StorageMaintenanceRewrite: true,
+		[]StorageMaintenanceRootDeltaPublishInput{{
+			BaseRoot: baseRoot,
+			Iter:     iter,
 		}},
 		nil,
 		func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
@@ -619,16 +583,14 @@ func TestPublishOrderedRootDeltaGroupMaintenanceDoesNotMarkPostRootApplyErrorPre
 	iter := &closeCountingUnsafeIterator{err: wantErr}
 	_, _, err = db.PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(
 		storagemaintenance.ColumnAssetRewritePlan(),
-		[]OrderedRootDeltaPublishInput{
+		[]StorageMaintenanceRootDeltaPublishInput{
 			{
-				BaseRoot:                  baseRootA,
-				Iter:                      mustFrozenSystemMemtable(t, "root/a", "value-a").NewIterator(nil, nil),
-				StorageMaintenanceRewrite: true,
+				BaseRoot: baseRootA,
+				Iter:     mustFrozenSystemMemtable(t, "root/a", "value-a").NewIterator(nil, nil),
 			},
 			{
-				BaseRoot:                  baseRootB,
-				Iter:                      iter,
-				StorageMaintenanceRewrite: true,
+				BaseRoot: baseRootB,
+				Iter:     iter,
 			},
 		},
 		nil,
