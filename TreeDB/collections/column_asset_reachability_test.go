@@ -586,15 +586,18 @@ func TestColumnAssetReachabilityAddRefsCancellationKeepsPartialCountsConsistentM
 		FileID:     1,
 		Length:     64,
 	}
-	ref2 := ref1
-	ref2.PartID = 2
+	refs := make([]ColumnAssetRef, columnAssetReachabilityContextCheckInterval+1)
+	for i := range refs {
+		refs[i] = ref1
+		refs[i].PartID = uint64(i + 1)
+	}
 	input := columnAssetReachabilityInput{}
 
-	err := input.addRefs(ctx, []ColumnAssetRef{ref1, ref2}, ColumnAssetReachabilitySourceCandidate)
+	err := input.addRefs(ctx, refs, ColumnAssetReachabilitySourceCandidate)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("err=%v want context.Canceled", err)
 	}
-	if len(input.refs) != 1 || input.sourceCounts.CandidateRefs != 1 {
+	if len(input.refs) != columnAssetReachabilityContextCheckInterval || input.sourceCounts.CandidateRefs != columnAssetReachabilityContextCheckInterval {
 		t.Fatalf("partial input inconsistent: refs=%d sources=%+v", len(input.refs), input.sourceCounts)
 	}
 	builder := input.refs[ref1]
