@@ -814,6 +814,10 @@ fixed-block layout makes the storage tradeoff clearer:
 - Local PCA rank80 can match candidate-survival gates, but it scans at
   `~85 ns/vector` and still needs exact rerank. PQ/local residual-PQ are now the
   stronger 32/48/64B buildable-lane candidates.
+- The report renderer now summarizes p50/worst exact-rerank recall@10 from
+  approx@20, approx@50, and approx@100 in the aggregate tables. Those columns
+  make the cascade contract explicit: compressed codes generate a shortlist,
+  then the full-fidelity lane decides final rank.
 
 ## Concrete Research Tracks
 
@@ -891,8 +895,9 @@ local residual after the coarse locality unit, not the raw global vector.
    train codebooks on a single official top100 cloud.
 3. Extend local OPQ/LOPQ to production-plausible graph/TreeDB granules and add
    PCA plus residual correction if local PCA remains promising.
-4. Benchmark the full cascade: compressed scan top50/top100, full-dim int8
-   rerank, then optional exact fp32 rerank.
+4. Extend the cascade benchmark beyond the existing rerank-recall gates:
+   compressed scan top50/top100, full-dim int8 rerank, optional exact fp32
+   rerank, plus p50/p95 latency and bytes read/query.
 5. Finish the remaining top100-only probes only if they are still needed for
    method triage: PCA plus tiny residual correction and safe/progressive
    low-rank-plus-tail bounds.

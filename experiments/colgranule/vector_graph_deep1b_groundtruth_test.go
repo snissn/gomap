@@ -1889,7 +1889,12 @@ func columnVectorGraphDeep1BRenderGroundtruthMethodAggregateMarkdown(b *strings.
 		top10      []int
 		top10At20  []int
 		top10At50  []int
+		top10At100 []int
 		top20At50  []int
+		top20At100 []int
+		rerank20   []float64
+		rerank50   []float64
+		rerank100  []float64
 		meanGap10  float64
 		meanGap20  float64
 		meanGap50  float64
@@ -1917,7 +1922,12 @@ func columnVectorGraphDeep1BRenderGroundtruthMethodAggregateMarkdown(b *strings.
 			agg.top10 = append(agg.top10, method.Top10Overlap)
 			agg.top10At20 = append(agg.top10At20, method.Top10InApproxTop20)
 			agg.top10At50 = append(agg.top10At50, method.Top10InApproxTop50)
+			agg.top10At100 = append(agg.top10At100, method.Top10InApproxTop100)
 			agg.top20At50 = append(agg.top20At50, method.Top20InApproxTop50)
+			agg.top20At100 = append(agg.top20At100, method.Top20InApproxTop100)
+			agg.rerank20 = append(agg.rerank20, method.ExactRerankRecallAt10FromTop20)
+			agg.rerank50 = append(agg.rerank50, method.ExactRerankRecallAt10FromTop50)
+			agg.rerank100 = append(agg.rerank100, method.ExactRerankRecallAt10FromTop100)
 		}
 	}
 	sort.Slice(names, func(i, j int) bool {
@@ -1934,8 +1944,8 @@ func columnVectorGraphDeep1BRenderGroundtruthMethodAggregateMarkdown(b *strings.
 		return left.name < right.name
 	})
 	fmt.Fprintf(b, "\n## Aggregate Top100 Oracle Method Candidate Gates\n\n")
-	fmt.Fprintf(b, "| Method | Family | Row-code B/vector | Metadata B/vector | Queries | Avg build ms | p50 compressed top10 | worst compressed top10 | p50 top10@20 | p90 top10@20 | worst top10@20 | p50 top10@50 | p90 top10@50 | worst top10@50 | p50 top20@50 | worst top20@50 | Avg score err | Avg err/gap10 | Avg err/gap20 | Avg err/gap50 | Avg scan ns/vector |\n")
-	fmt.Fprintf(b, "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
+	fmt.Fprintf(b, "| Method | Family | Row-code B/vector | Metadata B/vector | Queries | Avg build ms | p50 compressed top10 | worst compressed top10 | p50 top10@20 | p90 top10@20 | worst top10@20 | p50 top10@50 | p90 top10@50 | worst top10@50 | p50 top10@100 | worst top10@100 | p50 top20@50 | worst top20@50 | p50 top20@100 | worst top20@100 | p50 rerank@20 recall@10 | worst rerank@20 recall@10 | p50 rerank@50 recall@10 | worst rerank@50 recall@10 | p50 rerank@100 recall@10 | worst rerank@100 recall@10 | Avg score err | Avg err/gap10 | Avg err/gap20 | Avg err/gap50 | Avg scan ns/vector |\n")
+	fmt.Fprintf(b, "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
 	for _, name := range names {
 		agg := byName[name]
 		if agg.count == 0 {
@@ -1944,9 +1954,14 @@ func columnVectorGraphDeep1BRenderGroundtruthMethodAggregateMarkdown(b *strings.
 		sort.Ints(agg.top10)
 		sort.Ints(agg.top10At20)
 		sort.Ints(agg.top10At50)
+		sort.Ints(agg.top10At100)
 		sort.Ints(agg.top20At50)
+		sort.Ints(agg.top20At100)
+		sort.Float64s(agg.rerank20)
+		sort.Float64s(agg.rerank50)
+		sort.Float64s(agg.rerank100)
 		count := float64(agg.count)
-		fmt.Fprintf(b, "| `%s` | `%s` | %.2f | %.2f | %d | %.3f | %d/10 | %d/10 | %d/10 | %d/10 | %d/10 | %d/10 | %d/10 | %d/10 | %d/20 | %d/20 | %.5f | %.2f | %.2f | %.2f | %.2f |\n",
+		fmt.Fprintf(b, "| `%s` | `%s` | %.2f | %.2f | %d | %.3f | %d/10 | %d/10 | %d/10 | %d/10 | %d/10 | %d/10 | %d/10 | %d/10 | %d/10 | %d/10 | %d/20 | %d/20 | %d/20 | %d/20 | %.2f | %.2f | %.2f | %.2f | %.2f | %.2f | %.5f | %.2f | %.2f | %.2f | %.2f |\n",
 			agg.name,
 			agg.family,
 			agg.rowBytes/count,
@@ -1961,8 +1976,18 @@ func columnVectorGraphDeep1BRenderGroundtruthMethodAggregateMarkdown(b *strings.
 			columnVectorGraphDeep1BIntQuantile(agg.top10At50, 0.50),
 			columnVectorGraphDeep1BIntQuantile(agg.top10At50, 0.90),
 			columnVectorGraphDeep1BIntQuantile(agg.top10At50, 0),
+			columnVectorGraphDeep1BIntQuantile(agg.top10At100, 0.50),
+			columnVectorGraphDeep1BIntQuantile(agg.top10At100, 0),
 			columnVectorGraphDeep1BIntQuantile(agg.top20At50, 0.50),
 			columnVectorGraphDeep1BIntQuantile(agg.top20At50, 0),
+			columnVectorGraphDeep1BIntQuantile(agg.top20At100, 0.50),
+			columnVectorGraphDeep1BIntQuantile(agg.top20At100, 0),
+			columnVectorGraphDeep1BFloatQuantile(agg.rerank20, 0.50),
+			columnVectorGraphDeep1BFloatQuantile(agg.rerank20, 0),
+			columnVectorGraphDeep1BFloatQuantile(agg.rerank50, 0.50),
+			columnVectorGraphDeep1BFloatQuantile(agg.rerank50, 0),
+			columnVectorGraphDeep1BFloatQuantile(agg.rerank100, 0.50),
+			columnVectorGraphDeep1BFloatQuantile(agg.rerank100, 0),
 			agg.scoreError/count,
 			agg.meanGap10/count,
 			agg.meanGap20/count,
@@ -1970,6 +1995,26 @@ func columnVectorGraphDeep1BRenderGroundtruthMethodAggregateMarkdown(b *strings.
 			agg.scanNanos/count,
 		)
 	}
+}
+
+func columnVectorGraphDeep1BFloatQuantile(values []float64, quantile float64) float64 {
+	if len(values) == 0 {
+		return math.NaN()
+	}
+	if quantile <= 0 {
+		return values[0]
+	}
+	if quantile >= 1 {
+		return values[len(values)-1]
+	}
+	index := int(math.Ceil(quantile*float64(len(values)))) - 1
+	if index < 0 {
+		index = 0
+	}
+	if index >= len(values) {
+		index = len(values) - 1
+	}
+	return values[index]
 }
 
 func columnVectorGraphDeep1BIntQuantile(values []int, quantile float64) int {
