@@ -628,12 +628,22 @@ func classifyColumnAssetReachabilitySegment(segment columnAssetReachabilitySegme
 }
 
 func columnAssetReachabilitySourceBit(source ColumnAssetReachabilitySource) (columnAssetReachabilitySourceMask, bool) {
-	for _, entry := range columnAssetReachabilitySourceBits {
-		if entry.source == source {
-			return entry.mask, true
-		}
+	switch source {
+	case ColumnAssetReachabilitySourceCandidate:
+		return columnAssetReachabilitySourceCandidateMask, true
+	case ColumnAssetReachabilitySourceActiveManifest:
+		return columnAssetReachabilitySourceActiveManifestMask, true
+	case ColumnAssetReachabilitySourceRecoveryManifest:
+		return columnAssetReachabilitySourceRecoveryManifestMask, true
+	case ColumnAssetReachabilitySourcePendingPublish:
+		return columnAssetReachabilitySourcePendingPublishMask, true
+	case ColumnAssetReachabilitySourcePreparedAsset:
+		return columnAssetReachabilitySourcePreparedAssetMask, true
+	case ColumnAssetReachabilitySourcePinnedSnapshot:
+		return columnAssetReachabilitySourcePinnedSnapshotMask, true
+	default:
+		return columnAssetReachabilitySourceUnknownMask, false
 	}
-	return columnAssetReachabilitySourceUnknownMask, false
 }
 
 func columnAssetReachabilityStatusForSourceMask(mask columnAssetReachabilitySourceMask) ColumnAssetReachabilityStatus {
@@ -703,6 +713,8 @@ func listColumnAssetReachabilitySegments(segmentDir string) ([]columnAssetReacha
 }
 
 func columnAssetReachabilitySegmentPath(segmentDir, name string) string {
+	// Keep segment path construction behind one helper so GC/rewrite path
+	// canonicalization and tests use the same join semantics.
 	return filepath.Join(segmentDir, name)
 }
 
