@@ -308,6 +308,8 @@ func columnPhysicalQueryDiagnosticsFromScan(diag columnPhysicalScanDiagnostics) 
 		ProjectedColumns:           diag.ProjectedColumns,
 		RowMaterializations:        diag.RowMaterializations,
 		PhysicalBytesScanned:       diag.PhysicalBytesScanned,
+		DecodedBlockCacheHits:      diag.DecodedBlockCacheHits,
+		DecodedBlockCacheMisses:    diag.DecodedBlockCacheMisses,
 	}
 }
 

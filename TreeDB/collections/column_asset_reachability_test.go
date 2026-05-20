@@ -552,6 +552,9 @@ func TestColumnAssetReachabilitySegmentFileIDRejectsNonCanonicalM15A(t *testing.
 }
 
 func TestColumnAssetReachabilityKnownSourcesHaveMasksM15B(t *testing.T) {
+	if len(columnAssetReachabilitySourceBits) >= 64 {
+		t.Fatalf("source mask table has %d entries; uint64 mask needs an explicit overflow strategy", len(columnAssetReachabilitySourceBits))
+	}
 	seen := make(map[columnAssetReachabilitySourceMask]ColumnAssetReachabilitySource, len(columnAssetReachabilitySourceBits))
 	for _, entry := range columnAssetReachabilitySourceBits {
 		mask, ok := columnAssetReachabilitySourceBit(entry.source)
@@ -881,6 +884,51 @@ func TestColumnAssetReachabilitySegmentAccountingPreservesKnownBytesWhenUnknownM
 		reclaimable.reclaimableBytes != 40 ||
 		reclaimable.unknownBytes != 60 {
 		t.Fatalf("reclaimable unknown segment plan=%+v want reclaimable=40 unknown=60", reclaimable)
+	}
+}
+
+func TestColumnAssetReachabilityPlanClassifiesFullCandidateSegmentReclaimableM15A(t *testing.T) {
+	root := t.TempDir()
+	namespace, err := columnAssetManagerNamespaceForRoot(root, "events/column-assets")
+	if err != nil {
+		t.Fatalf("columnAssetManagerNamespaceForRoot: %v", err)
+	}
+	if err := os.MkdirAll(namespace.SegmentDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll segment dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(namespace.SegmentDir, columnAssetSegmentFileName(22)), make([]byte, 100), 0o600); err != nil {
+		t.Fatalf("WriteFile segment: %v", err)
+	}
+	ref := ColumnAssetRef{
+		Namespace:  "events/column-assets",
+		Kind:       ColumnAssetKindTCS1PartImage,
+		Generation: 1,
+		PartID:     1,
+		FileID:     22,
+		Offset:     0,
+		Length:     100,
+	}
+	input := columnAssetReachabilityInput{
+		rootDir:    root,
+		collection: "events",
+		namespace:  "events/column-assets",
+		detailed:   true,
+	}
+	if err := input.addRefs(context.Background(), []ColumnAssetRef{ref}, ColumnAssetReachabilitySourceCandidate); err != nil {
+		t.Fatalf("addRefs: %v", err)
+	}
+	plan, err := buildColumnAssetReachabilityPlan(context.Background(), input)
+	if err != nil {
+		t.Fatalf("buildColumnAssetReachabilityPlan: %v", err)
+	}
+	if !plan.Complete || plan.Segments.Reclaimable != 1 || plan.Segments.Unknown != 0 || plan.Segments.Mixed != 0 {
+		t.Fatalf("segment stats=%+v complete=%t want one fully reclaimable segment", plan.Segments, plan.Complete)
+	}
+	if plan.RewriteDebtBytes != 0 {
+		t.Fatalf("rewrite debt=%d want 0 for fully reclaimable segment", plan.RewriteDebtBytes)
+	}
+	if len(plan.SegmentEntries) != 1 || plan.SegmentEntries[0].Status != ColumnAssetReachabilitySegmentReclaimable {
+		t.Fatalf("segment entries=%+v want reclaimable", plan.SegmentEntries)
 	}
 }
 

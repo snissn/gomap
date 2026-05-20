@@ -1912,6 +1912,7 @@ func markdownCodeList(values []string) string {
 const markdownTableEmptyCell = "(empty)"
 
 func markdownTableText(value string) string {
+	value = markdownNormalizeTableCellLineBreaks(value)
 	value = strings.TrimSpace(value)
 	if value == "" {
 		return markdownTableEmptyCell
@@ -1920,6 +1921,7 @@ func markdownTableText(value string) string {
 }
 
 func markdownCodeTableText(value string) string {
+	value = markdownNormalizeTableCellLineBreaks(value)
 	if strings.TrimSpace(value) == "" {
 		return markdownTableEmptyCell
 	}
@@ -1936,14 +1938,42 @@ func markdownCodeTableText(value string) string {
 }
 
 func markdownNormalizeTableCell(value string, escapeHTML bool) string {
-	value = strings.ReplaceAll(value, "\r\n", " ")
-	value = strings.ReplaceAll(value, "\r", " ")
-	value = strings.ReplaceAll(value, "\n", " ")
-	value = strings.ReplaceAll(value, "|", "\\|")
+	value = markdownNormalizeTableCellLineBreaks(value)
+	value = markdownEscapeTablePipes(value)
 	if escapeHTML {
 		value = html.EscapeString(value)
 	}
 	return value
+}
+
+func markdownNormalizeTableCellLineBreaks(value string) string {
+	value = strings.ReplaceAll(value, "\r\n", " ")
+	value = strings.ReplaceAll(value, "\r", " ")
+	value = strings.ReplaceAll(value, "\n", " ")
+	return value
+}
+
+func markdownEscapeTablePipes(value string) string {
+	if !strings.Contains(value, "|") {
+		return value
+	}
+	var out strings.Builder
+	out.Grow(len(value) + strings.Count(value, "|"))
+	for i := 0; i < len(value); i++ {
+		if value[i] != '|' {
+			out.WriteByte(value[i])
+			continue
+		}
+		backslashes := 0
+		for j := i - 1; j >= 0 && value[j] == '\\'; j-- {
+			backslashes++
+		}
+		if backslashes%2 == 0 {
+			out.WriteByte('\\')
+		}
+		out.WriteByte('|')
+	}
+	return out.String()
 }
 
 func renderColumnStoreSuiteHTML(report columnStoreSuiteReport) string {

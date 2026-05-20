@@ -597,6 +597,8 @@ type columnPhysicalAssetReadCache struct {
 	fileID     uint32
 	file       *os.File
 	files      map[uint32]*os.File
+	hits       uint64
+	misses     uint64
 }
 
 func newColumnPhysicalAssetReadCache(rootDir string, namespace string) (columnPhysicalAssetReadCache, error) {
@@ -652,10 +654,12 @@ func (c *columnPhysicalAssetReadCache) fileForRef(ref ColumnAssetRef) (*os.File,
 		return nil, err
 	}
 	if c.file != nil && c.fileID == ref.FileID {
+		c.hits++
 		return c.file, nil
 	}
 	if c.files != nil {
 		if file := c.files[ref.FileID]; file != nil {
+			c.hits++
 			return file, nil
 		}
 	}
@@ -663,6 +667,7 @@ func (c *columnPhysicalAssetReadCache) fileForRef(ref ColumnAssetRef) (*os.File,
 	if err != nil {
 		return nil, err
 	}
+	c.misses++
 	if c.file == nil && c.files == nil {
 		c.fileID = ref.FileID
 		c.file = file

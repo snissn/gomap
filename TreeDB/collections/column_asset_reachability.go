@@ -146,7 +146,7 @@ type columnAssetReachabilityRefBuilder struct {
 	sourceMask columnAssetReachabilitySourceMask
 }
 
-type columnAssetReachabilitySourceMask uint32
+type columnAssetReachabilitySourceMask uint64
 
 const (
 	columnAssetReachabilitySourceActiveManifestMask columnAssetReachabilitySourceMask = 1 << iota
@@ -896,6 +896,14 @@ func listColumnAssetReachabilitySegments(ctx context.Context, segmentDir string)
 			continue
 		}
 		name := info.Name()
+		if info.Mode()&os.ModeSymlink != 0 {
+			symlinkInfo, err := os.Lstat(columnAssetReachabilitySegmentPath(segmentDir, name))
+			if err != nil {
+				return nil, err
+			}
+			segments = append(segments, columnAssetReachabilitySegment{name: name, bytes: symlinkInfo.Size()})
+			continue
+		}
 		if !info.Mode().IsRegular() {
 			segments = append(segments, columnAssetReachabilitySegment{name: name, bytes: info.Size()})
 			continue
