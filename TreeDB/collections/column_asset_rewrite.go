@@ -224,7 +224,7 @@ func (c *Collection) columnAssetRewrite(ctx context.Context, opts columnAssetRew
 		}
 	}
 
-	patchedRecords, patched, err := patchColumnAssetRewriteManifestRecords(state.records, remap.byOldRef, state.cfg.AssetManager.Namespace)
+	patchedRecords, patched, err := patchColumnAssetRewriteManifestRecordsInPlace(state.records, remap.byOldRef, state.cfg.AssetManager.Namespace)
 	if err != nil {
 		stats.Plan = columnAssetRewritePlanForDetail(stats.Plan, opts.Detailed)
 		return stats, cleanupRemap(err)
@@ -452,13 +452,28 @@ func validateColumnAssetRewriteRefKinds(refs []ColumnAssetRef) error {
 }
 
 func patchColumnAssetRewriteManifestRecords(records []columnManifestRecord, byOldRef map[ColumnAssetRef]ColumnAssetRef, expectedNamespace string) ([]columnManifestRecord, int, error) {
+	return patchColumnAssetRewriteManifestRecordsWithMode(records, byOldRef, expectedNamespace, false)
+}
+
+func patchColumnAssetRewriteManifestRecordsInPlace(records []columnManifestRecord, byOldRef map[ColumnAssetRef]ColumnAssetRef, expectedNamespace string) ([]columnManifestRecord, int, error) {
+	return patchColumnAssetRewriteManifestRecordsWithMode(records, byOldRef, expectedNamespace, true)
+}
+
+// patchColumnAssetRewriteManifestRecordsWithMode mutates part values only when
+// the caller owns records, as loadColumnAssetRewriteManifestState does.
+func patchColumnAssetRewriteManifestRecordsWithMode(records []columnManifestRecord, byOldRef map[ColumnAssetRef]ColumnAssetRef, expectedNamespace string, inPlace bool) ([]columnManifestRecord, int, error) {
 	if len(records) == 0 {
 		return nil, 0, nil
 	}
-	patched := make([]columnManifestRecord, len(records))
+	patched := records
+	if !inPlace {
+		patched = make([]columnManifestRecord, len(records))
+	}
 	count := 0
 	for i, record := range records {
-		patched[i] = record
+		if !inPlace {
+			patched[i] = record
+		}
 		if !bytes.HasPrefix(record.key, columnManifestPartRecordPrefixBytes) {
 			continue
 		}
@@ -486,7 +501,10 @@ func patchColumnAssetRewriteManifestRecords(records []columnManifestRecord, byOl
 		if err := validateColumnAssetRefForPlan(newRef); err != nil {
 			return nil, 0, err
 		}
-		value := bytes.Clone(record.value)
+		value := record.value
+		if !inPlace {
+			value = bytes.Clone(record.value)
+		}
 		binary.BigEndian.PutUint64(value[offsets.fileID:], uint64(newRef.FileID))
 		binary.BigEndian.PutUint64(value[offsets.offset:], uint64(newRef.Offset))
 		binary.BigEndian.PutUint64(value[offsets.length:], uint64(newRef.Length))

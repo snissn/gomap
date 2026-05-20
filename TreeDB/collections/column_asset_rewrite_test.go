@@ -130,6 +130,70 @@ func TestPatchColumnAssetRewriteManifestRecordsRemapsOnlyRefFieldsM15C(t *testin
 	}
 }
 
+func TestPatchColumnAssetRewriteManifestRecordsInPlaceM15C(t *testing.T) {
+	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col := openColumnStoreCollectionM10B(t, d)
+	if _, err := col.Insert([]byte("e1"), []byte(`{"time_us":1,"kind":"like","did":"d1"}`)); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+
+	state, err := col.loadColumnAssetRewriteManifestState()
+	if err != nil {
+		t.Fatalf("loadColumnAssetRewriteManifestState: %v", err)
+	}
+	var oldPart columnManifestPartSnapshot
+	oldRecordIdx := -1
+	for i, record := range state.records {
+		if !bytes.HasPrefix(record.key, columnManifestPartRecordPrefixBytes) {
+			continue
+		}
+		part, err := decodeColumnManifestPartRecord(record.value)
+		if err != nil {
+			t.Fatalf("decodeColumnManifestPartRecord: %v", err)
+		}
+		oldPart = part
+		oldRecordIdx = i
+		break
+	}
+	if oldRecordIdx < 0 {
+		t.Fatal("no manifest part record found")
+	}
+	newRef := oldPart.AssetRef
+	newRef.FileID += 23
+	newRef.Offset += oldPart.AssetRef.Length + 7
+
+	patched, count, err := patchColumnAssetRewriteManifestRecordsInPlace(
+		state.records,
+		map[ColumnAssetRef]ColumnAssetRef{oldPart.AssetRef: newRef},
+		state.cfg.AssetManager.Namespace,
+	)
+	if err != nil {
+		t.Fatalf("patchColumnAssetRewriteManifestRecordsInPlace: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("patch count=%d want 1", count)
+	}
+	if len(patched) != len(state.records) {
+		t.Fatalf("patched records=%d want %d", len(patched), len(state.records))
+	}
+	if len(patched) != 0 && &patched[0] != &state.records[0] {
+		t.Fatal("in-place patch returned a copied record slice")
+	}
+	patchedPart, err := decodeColumnManifestPartRecord(state.records[oldRecordIdx].value)
+	if err != nil {
+		t.Fatalf("decode patched part: %v", err)
+	}
+	if patchedPart.AssetRef != newRef {
+		t.Fatalf("patched ref=%+v want %+v", patchedPart.AssetRef, newRef)
+	}
+	if patchedPart.Bytes != oldPart.Bytes || patchedPart.PublishID != oldPart.PublishID ||
+		patchedPart.GenerationID != oldPart.GenerationID || patchedPart.Reason != oldPart.Reason {
+		t.Fatalf("patched metadata=%+v want original metadata=%+v", patchedPart, oldPart)
+	}
+}
+
 func TestColumnAssetRewriteRemapsManifestRefsOutOfMixedSegmentM15C(t *testing.T) {
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)
