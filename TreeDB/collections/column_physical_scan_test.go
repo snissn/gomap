@@ -727,6 +727,42 @@ func TestColumnManifestPlannerCapabilitiesRejectPartIDKeyMismatchM14A(t *testing
 	}
 }
 
+func TestColumnManifestPlannerCapabilitiesRejectHeaderOperationM14A(t *testing.T) {
+	cfg, err := normalizeColumnStoreConfig("events", testColumnStoreConfig(nil))
+	if err != nil {
+		t.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+	cfg.RecoveryAuthoritativeAppliedCommandLSN = 1
+	header, err := decodeColumnManifestHeaderRecordForScan(mustEncodeColumnManifestHeaderRecordForScanTestM14A(t, ColumnPublishManifestEncodeInput{
+		Collection:        "events",
+		ColumnStore:       *cfg,
+		Operation:         ColumnPublishOperation("rewrite"),
+		AppliedCommandLSN: 1,
+		Prepared: ColumnPublishPreparedAssets{
+			RowCount: 1,
+		},
+	}))
+	if err != nil {
+		t.Fatalf("decodeColumnManifestHeaderRecordForScan: %v", err)
+	}
+
+	err = validateColumnManifestHeaderRecordForScan(header, *cfg, ColumnManifestIdentity{
+		Generation: 1,
+	}, "events")
+	if err == nil || !strings.Contains(err.Error(), "unsupported column manifest header operation") {
+		t.Fatalf("validateColumnManifestHeaderRecordForScan err=%v want unsupported operation", err)
+	}
+}
+
+func mustEncodeColumnManifestHeaderRecordForScanTestM14A(t testing.TB, input ColumnPublishManifestEncodeInput) []byte {
+	t.Helper()
+	header, err := encodeColumnManifestHeaderRecord(input, 1)
+	if err != nil {
+		t.Fatalf("encodeColumnManifestHeaderRecord: %v", err)
+	}
+	return header
+}
+
 func publishColumnManifestRecordsForScanTestM13A(t testing.TB, d *backenddb.DB, identity ColumnManifestIdentity, records []columnManifestRecord) uint64 {
 	t.Helper()
 	iter := columnManifestRootRecordIterator(encodeColumnManifestIdentityRecordArray(identity), records)
