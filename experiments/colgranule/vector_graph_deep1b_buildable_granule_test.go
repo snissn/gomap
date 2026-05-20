@@ -256,8 +256,13 @@ func columnVectorGraphDeep1BBuildableGranules(tb testing.TB, builder string, vec
 			tb.Fatalf("COLUMN_VECTOR_DEEP1B_BUILDABLE_KMEANS_ITERS=%d must be positive for ivf_kmeans", kmeansIters)
 		}
 		return columnVectorGraphDeep1BBuildIVFKMeansGranules(vectors, invNorms, rows, dims, granuleRows, kmeansIters), "production/buildable granule scout; ivf_kmeans trains deterministic cosine k-means centroids on the base prefix and assigns rows to buildable IVF-style granules"
+	case "ivf_kmeans_sorted_blocks":
+		if kmeansIters <= 0 {
+			tb.Fatalf("COLUMN_VECTOR_DEEP1B_BUILDABLE_KMEANS_ITERS=%d must be positive for ivf_kmeans_sorted_blocks", kmeansIters)
+		}
+		return columnVectorGraphDeep1BBuildIVFKMeansSortedBlockGranules(vectors, invNorms, rows, dims, granuleRows, kmeansIters), "production/buildable granule scout; ivf_kmeans_sorted_blocks trains deterministic cosine k-means centroids, sorts rows by assigned centroid locality, and chunks that storage order into fixed-size TreeDB-style blocks"
 	default:
-		tb.Fatalf("unknown COLUMN_VECTOR_DEEP1B_BUILDABLE_BUILDER=%q; supported: row_id_contiguous, ivf_kmeans", builder)
+		tb.Fatalf("unknown COLUMN_VECTOR_DEEP1B_BUILDABLE_BUILDER=%q; supported: row_id_contiguous, ivf_kmeans, ivf_kmeans_sorted_blocks", builder)
 		return nil, ""
 	}
 }
@@ -390,6 +395,87 @@ func columnVectorGraphDeep1BBuildRowIDContiguousGranules(vectors []float32, rows
 }
 
 func columnVectorGraphDeep1BBuildIVFKMeansGranules(vectors []float32, invNorms []float32, rows int, dims int, targetRows int, iterations int) []columnVectorGraphDeep1BBuildableGranule {
+	_, assignments, clusterCount := columnVectorGraphDeep1BFitIVFKMeansAssignments(vectors, invNorms, rows, dims, targetRows, iterations)
+	rowIDsByCluster := make([][]int, clusterCount)
+	for row, cluster := range assignments {
+		rowIDsByCluster[cluster] = append(rowIDsByCluster[cluster], row)
+	}
+	granules := make([]columnVectorGraphDeep1BBuildableGranule, 0, clusterCount)
+	for cluster, rowIDs := range rowIDsByCluster {
+		if len(rowIDs) == 0 {
+			continue
+		}
+		centroid := columnVectorGraphDeep1BCentroidForRowIDs(vectors, rowIDs, dims)
+		sort.Ints(rowIDs)
+		granules = append(granules, columnVectorGraphDeep1BBuildableGranule{
+			Builder:     "ivf_kmeans",
+			Ordinal:     cluster,
+			FirstRow:    rowIDs[0],
+			Rows:        len(rowIDs),
+			RowIDs:      rowIDs,
+			Centroid:    centroid,
+			CentroidInv: float32(columnVectorGraphDeep1BInvNorm(centroid)),
+		})
+	}
+	return granules
+}
+
+func columnVectorGraphDeep1BBuildIVFKMeansSortedBlockGranules(vectors []float32, invNorms []float32, rows int, dims int, targetRows int, iterations int) []columnVectorGraphDeep1BBuildableGranule {
+	centroids, assignments, _ := columnVectorGraphDeep1BFitIVFKMeansAssignments(vectors, invNorms, rows, dims, targetRows, iterations)
+	centroidInvNorms := columnVectorGraphDeep1BCentroidInvNorms(centroids, dims)
+	type sortedRow struct {
+		row     int
+		cluster int
+		score   float32
+	}
+	order := make([]sortedRow, rows)
+	for row := 0; row < rows; row++ {
+		cluster := assignments[row]
+		vector := vectors[row*dims : (row+1)*dims]
+		centroid := centroids[cluster*dims : (cluster+1)*dims]
+		var dot float32
+		for j := 0; j < dims; j++ {
+			dot += vector[j] * centroid[j]
+		}
+		order[row] = sortedRow{
+			row:     row,
+			cluster: cluster,
+			score:   dot * invNorms[row] * centroidInvNorms[cluster],
+		}
+	}
+	sort.Slice(order, func(i, j int) bool {
+		left := order[i]
+		right := order[j]
+		if left.cluster != right.cluster {
+			return left.cluster < right.cluster
+		}
+		if left.score != right.score {
+			return left.score > right.score
+		}
+		return left.row < right.row
+	})
+	granules := make([]columnVectorGraphDeep1BBuildableGranule, 0, (rows+targetRows-1)/targetRows)
+	for first := 0; first < rows; first += targetRows {
+		count := min(targetRows, rows-first)
+		rowIDs := make([]int, count)
+		for i := 0; i < count; i++ {
+			rowIDs[i] = order[first+i].row
+		}
+		centroid := columnVectorGraphDeep1BCentroidForRowIDs(vectors, rowIDs, dims)
+		granules = append(granules, columnVectorGraphDeep1BBuildableGranule{
+			Builder:     "ivf_kmeans_sorted_blocks",
+			Ordinal:     len(granules),
+			FirstRow:    rowIDs[0],
+			Rows:        count,
+			RowIDs:      rowIDs,
+			Centroid:    centroid,
+			CentroidInv: float32(columnVectorGraphDeep1BInvNorm(centroid)),
+		})
+	}
+	return granules
+}
+
+func columnVectorGraphDeep1BFitIVFKMeansAssignments(vectors []float32, invNorms []float32, rows int, dims int, targetRows int, iterations int) ([]float32, []int, int) {
 	clusterCount := max(1, (rows+targetRows-1)/targetRows)
 	centroids := columnVectorGraphDeep1BInitKMeansCentroids(vectors, invNorms, rows, dims, clusterCount)
 	assignments := make([]int, rows)
@@ -429,28 +515,7 @@ func columnVectorGraphDeep1BBuildIVFKMeansGranules(vectors []float32, invNorms [
 	for row := 0; row < rows; row++ {
 		assignments[row] = columnVectorGraphDeep1BNearestCentroid(vectors[row*dims:(row+1)*dims], invNorms[row], centroids, centroidInvNorms, dims)
 	}
-	rowIDsByCluster := make([][]int, clusterCount)
-	for row, cluster := range assignments {
-		rowIDsByCluster[cluster] = append(rowIDsByCluster[cluster], row)
-	}
-	granules := make([]columnVectorGraphDeep1BBuildableGranule, 0, clusterCount)
-	for cluster, rowIDs := range rowIDsByCluster {
-		if len(rowIDs) == 0 {
-			continue
-		}
-		centroid := columnVectorGraphDeep1BCentroidForRowIDs(vectors, rowIDs, dims)
-		sort.Ints(rowIDs)
-		granules = append(granules, columnVectorGraphDeep1BBuildableGranule{
-			Builder:     "ivf_kmeans",
-			Ordinal:     cluster,
-			FirstRow:    rowIDs[0],
-			Rows:        len(rowIDs),
-			RowIDs:      rowIDs,
-			Centroid:    centroid,
-			CentroidInv: float32(columnVectorGraphDeep1BInvNorm(centroid)),
-		})
-	}
-	return granules
+	return centroids, assignments, clusterCount
 }
 
 func columnVectorGraphDeep1BInitKMeansCentroids(vectors []float32, invNorms []float32, rows int, dims int, clusterCount int) []float32 {
@@ -895,7 +960,7 @@ func columnVectorGraphDeep1BRenderBuildableGranuleScoutMarkdown(report columnVec
 	fmt.Fprintf(&b, "- Dims: `%d`\n", report.Dims)
 	fmt.Fprintf(&b, "- Granule rows: `%d`\n", report.GranuleRows)
 	fmt.Fprintf(&b, "- Granules: `%d`\n", report.GranuleCount)
-	if report.Builder == "ivf_kmeans" {
+	if report.Builder == "ivf_kmeans" || report.Builder == "ivf_kmeans_sorted_blocks" {
 		fmt.Fprintf(&b, "- K-means iterations: `%d`\n", report.KMeansIters)
 	}
 	if len(report.PQTraining) > 0 {
@@ -1063,6 +1128,11 @@ func columnVectorGraphDeep1BBuildableBuilderMarkdown(report columnVectorGraphDee
 			return "This is a **production/buildable granule** scout using deterministic cosine `ivf_kmeans` clusters trained on the eval slice. It is a buildable locality probe, unlike the official top100 oracle clouds. Global PQ/OPQ/residual-PQ rows use held-out global codebooks when enabled; local residual PQ uses separate prefitted residual codebooks per buildable granule as a LOPQ-lite lane; local OPQ adds a per-granule residual OPQ rotation and is the first LOPQ-style scout lane, with metadata amortized over those granule rows."
 		}
 		return "This is a **production/buildable granule** scout using deterministic cosine `ivf_kmeans` clusters trained on the base prefix. It is a buildable locality probe, unlike the official top100 oracle clouds, but it is still not a PQ/OPQ/residual-PQ tournament: codebook methods still require separate train/eval discipline and metadata accounting."
+	case "ivf_kmeans_sorted_blocks":
+		if len(report.PQTraining) > 0 || len(report.LocalResidualPQBytes) > 0 || len(report.LocalOPQBytes) > 0 {
+			return "This is a **production/buildable granule** scout using deterministic cosine `ivf_kmeans_sorted_blocks`: rows are assigned to k-means centroids, sorted by assigned centroid locality, and then chunked into fixed-size storage blocks. This is a buildable locality-sorted TreeDB-granule proxy, unlike the official top100 oracle clouds. It is not a graph-neighborhood proof, but it tests whether locality-ordered row-adjacent blocks can support the same compressed-code tournament. Global PQ/OPQ/residual-PQ rows use held-out global codebooks when enabled; local residual PQ and local OPQ train per sealed block with metadata amortized over those block rows."
+		}
+		return "This is a **production/buildable granule** scout using deterministic cosine `ivf_kmeans_sorted_blocks`: rows are assigned to k-means centroids, sorted by assigned centroid locality, and chunked into fixed-size storage blocks. This is a buildable locality-sorted TreeDB-granule proxy, not an official top100 oracle cloud and not a graph-neighborhood proof."
 	default:
 		return fmt.Sprintf("This is a **production/buildable granule** scout using `%s`. Codec metrics are conditional on the routed candidate union, and trained-codebook methods still require separate train/eval discipline before production claims.", report.Builder)
 	}

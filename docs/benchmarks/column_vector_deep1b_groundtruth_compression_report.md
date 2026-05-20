@@ -449,7 +449,7 @@ prove otherwise.
 | B | Full-dimension granule-local int8 residual/scalar quantization, dim-major on disk | Conservative candidate generation; possible near-final rerank lane | Prior int8 tournament stores the 96D dim-major int8 matrix at `85.9-86.7 B/vector` with zstd-better/ClickHouse whole-granule `String CODEC(ZSTD(1))` | Build this first as the robust compressed hot/candidate representation. It has the simplest native scoring path and best measured storage-to-quality balance. |
 | C | Low-rank local PCA int8 codes: centroid + basis + per-row coordinates | Compact candidate generation only | Prior 8192-row storage curve: rank32 `31.51 B/vector`, rank64 `59.65 B/vector`. Groundtruth top100, 100-query run: rank64 final top10 `7.79/10`, exact top10 in approx@50 `9.97/10`, and rank80 exact top10 in approx@50 `10.00/10` | Do not use for final ranking. Promote only as a candidate-generation experiment with exact-rerank gates. |
 | D | Cascade: low-rank PCA prefilter, then full-dim int8/fp16 or fp32 rerank | Best near-term architecture | The groundtruth data says rank64/rank80 can preserve winners in a wider shortlist while failing exact final ranking | Most promising product path: scan `C`, rerank survivors with `B` or `A`, measure recall/cost at fixed rerank budgets. |
-| E | PQ/residual-PQ/LUT scorer, ideally residualized by granule centroid or segment cluster | Candidate generation at fixed byte budgets | Global 8-bit PQ, global centroid-residual PQ, OPQ-style lanes, per-buildable-granule local residual-PQ, and per-buildable-granule local residual-OPQ are measured on buildable IVF granules. PQ32 beats same-byte local PCA rank32 on candidate survival and scan cost; PQ48/PQ64/PQ80/PQ96 are strong same-byte competitors. OPQ does not clearly beat PQ on this sample after metadata and training cost. Global centroid-residual PQ overlaps global PQ. Local residual-PQ improves candidate gates and score error at 32/48/64B with about `12 B/eval-vector` extra codebook metadata. Local residual-OPQ slightly improves score error and one 64B worst-row result, but pays about `16.5 B/eval-vector` metadata and much higher training time. | Keep global PQ as the simplest low-metadata codebook baseline. Promote local residual-PQ only when its stronger candidate gates justify the extra metadata/build cost. Do not promote local OPQ yet; it needs larger/actual-granule evidence to justify the extra rotation. Next test actual graph/TreeDB granules and larger train/eval slices, then compare against scalar u4/full int8 and local PCA at matched total bytes. |
+| E | PQ/residual-PQ/LUT scorer, ideally residualized by granule centroid or segment cluster | Candidate generation at fixed byte budgets | Global 8-bit PQ, global centroid-residual PQ, OPQ-style lanes, per-buildable-granule local residual-PQ, and per-buildable-granule local residual-OPQ are measured on buildable IVF granules and IVF-sorted fixed blocks. PQ32 beats same-byte local PCA rank32 on candidate survival and scan cost; PQ48/PQ64/PQ80/PQ96 are strong same-byte competitors. OPQ does not clearly beat PQ on this sample after metadata and training cost. Global centroid-residual PQ overlaps global PQ. Local residual-PQ improves candidate gates and score error at 32/48/64B with about `12-14 B/eval-vector` extra codebook metadata. Local residual-OPQ slightly improves score error and some worst-query gates, but pays about `16.5-18.6 B/eval-vector` metadata and much higher training time. IVF-sorted fixed blocks improve buildable routing: top4 blocks routed all exact top10/top20 rows for queries `0..9`, but still scan `16K` rows. | Keep global PQ as the simplest low-metadata codebook baseline. Promote local residual-PQ only when its stronger candidate gates justify the extra metadata/build cost. Do not promote local OPQ yet; it needs larger/actual-granule evidence to justify the extra rotation. Next test actual graph/TreeDB granules and larger train/eval slices, then compare against scalar u4/full int8 and local PCA at matched total bytes. |
 
 ## Literature-Backed Synthesis
 
@@ -538,9 +538,11 @@ rank-fragile granules escalate to more bytes or to full-dim int8/fp16.
   the tested block.
 - Granule construction matters. The official top100 cloud is a best-case
   locality probe, not a storage layout TreeDB can directly build at ingest time.
-  Production-plausible builders need their own rows: IVF/k-means cluster
-  blocks, graph-neighborhood blocks, row-id-adjacent blocks after graph sort,
-  and actual graph visited sets.
+  The current report now has rows for row-id-contiguous blocks, IVF/k-means
+  variable-size clusters, and IVF/k-means locality-sorted fixed blocks. The
+  remaining production-plausible builders that still need their own rows are
+  graph-neighborhood blocks, actual graph visited sets, row-id-adjacent blocks
+  after graph sort, and actual TreeDB granules.
 
 ## Actionable Gates
 
@@ -713,6 +715,106 @@ The production interpretation is:
   actual graph/TreeDB granules, then compare them against scalar u4/u8 and
   PCA64 at matched total bytes.
 
+## IVF/K-Means Sorted-Block Buildable Granule Scout
+
+The harness now supports
+`COLUMN_VECTOR_DEEP1B_BUILDABLE_BUILDER=ivf_kmeans_sorted_blocks`. It trains the
+same deterministic cosine k-means model, assigns every row to a centroid, sorts
+rows by assigned centroid and within-centroid similarity, and then chunks that
+storage order into fixed-size blocks. This is a TreeDB-buildable
+locality-sorted storage-block proxy. It is not an official top100 oracle cloud,
+and it is not a graph-neighborhood proof.
+
+Run artifact:
+
+```text
+/tmp/gomap_deep1b_buildable_sorted_blocks_q0_9_20260519_230642/report.md
+```
+
+Run shape:
+
+| Field | Value |
+| --- | ---: |
+| Regime | `buildable_granule_scout` |
+| Builder | `ivf_kmeans_sorted_blocks` |
+| Eval rows | `32768` |
+| Eval offset | `8192` |
+| PQ train rows | `8192` |
+| Dims | `96` |
+| Granule rows | `4096` |
+| Granules | `8` |
+| K-means iterations | `8` |
+| Queries | `0..9` |
+| Top granules | `1,4` |
+
+Routing is the main reason to add this builder. Top1 fixed blocks are still
+uneven, but top4 locality-sorted blocks route all exact top10 and top20 rows for
+the ten-query sample:
+
+| Selection | Queries | Candidate rows | p50 top10 routed | Worst top10 routed | p50 top20 routed | Worst top20 routed | p50 top50 routed | Worst top50 routed |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| top1 sorted block | `10` | `4096` | `8/10` | `3/10` | `16/20` | `4/20` | `38/50` | `9/50` |
+| top4 sorted blocks | `10` | `16384` | `10/10` | `10/10` | `20/20` | `20/20` | `50/50` | `48/50` |
+
+The codebook training/accounting remains separate from the top100 oracle probe:
+
+| Lane | Bytes | Train ms | Metadata B/eval-vector |
+| --- | ---: | ---: | ---: |
+| global PQ | `32/48/64` | `713/947/1046` | `1.500` |
+| global residual PQ | `32/48/64` | `711/948/1039` | `1.506` |
+| global OPQ | `32/48/64` | `3102/4172/4779` | `2.062` |
+| local residual-PQ | `32/48/64` | `2838/3787/4171` | `12.047` |
+| local residual-OPQ | `32/48/64` | `12419/16665/19110` | `16.547` |
+
+Selected conditional codec rows:
+
+| Selection | Method | Row-code B/vector | Metadata B/vector | p50 compressed top10 | Worst compressed top10 | p50 top10@20 | Worst top10@20 | p50 top20@50 | Worst top20@50 | Avg score err | Scan ns/vector |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| top1 | `global_pq_32B` | `32` | `3.50` | `8/10` | `5/10` | `9/10` | `6/10` | `20/20` | `19/20` | `0.01823` | `16.97` |
+| top1 | `local_residual_pq_32B` | `32` | `14.05` | `8/10` | `7/10` | `10/10` | `8/10` | `20/20` | `19/20` | `0.01432` | `16.68` |
+| top1 | `local_residual_opq_32B` | `32` | `18.55` | `8/10` | `7/10` | `10/10` | `9/10` | `20/20` | `20/20` | `0.01396` | `16.68` |
+| top1 | `local_pca_rank32` | `32` | `3.56` | `7/10` | `6/10` | `9/10` | `6/10` | `20/20` | `17/20` | `0.02251` | `27.79` |
+| top4 | `global_pq_32B` | `32` | `3.50` | `6/10` | `5/10` | `9/10` | `7/10` | `20/20` | `19/20` | `0.01717` | `16.47` |
+| top4 | `local_residual_pq_32B` | `32` | `14.05` | `8/10` | `7/10` | `10/10` | `9/10` | `20/20` | `19/20` | `0.01414` | `16.63` |
+| top4 | `local_residual_opq_32B` | `32` | `18.55` | `8/10` | `7/10` | `10/10` | `9/10` | `20/20` | `19/20` | `0.01391` | `16.22` |
+| top4 | `local_pca_rank32` | `32` | `3.56` | `6/10` | `4/10` | `7/10` | `5/10` | `17/20` | `12/20` | `0.02843` | `27.99` |
+| top1 | `global_pq_48B` | `48` | `3.50` | `8/10` | `7/10` | `10/10` | `10/10` | `20/20` | `20/20` | `0.00855` | `25.95` |
+| top1 | `local_residual_pq_48B` | `48` | `14.05` | `9/10` | `8/10` | `10/10` | `10/10` | `20/20` | `20/20` | `0.00684` | `27.51` |
+| top1 | `local_residual_opq_48B` | `48` | `18.55` | `9/10` | `8/10` | `10/10` | `10/10` | `20/20` | `20/20` | `0.00672` | `25.45` |
+| top1 | `scalar_u4` | `48` | `0.19` | `9/10` | `8/10` | `10/10` | `9/10` | `20/20` | `20/20` | `0.00972` | `979.91` |
+| top4 | `global_pq_48B` | `48` | `3.50` | `8/10` | `7/10` | `10/10` | `10/10` | `20/20` | `20/20` | `0.00811` | `26.71` |
+| top4 | `local_residual_pq_48B` | `48` | `14.05` | `9/10` | `8/10` | `10/10` | `10/10` | `20/20` | `20/20` | `0.00681` | `26.22` |
+| top4 | `local_residual_opq_48B` | `48` | `18.55` | `9/10` | `7/10` | `10/10` | `10/10` | `20/20` | `20/20` | `0.00669` | `26.34` |
+| top4 | `scalar_u4` | `48` | `0.19` | `9/10` | `8/10` | `10/10` | `10/10` | `20/20` | `20/20` | `0.00977` | `977.96` |
+| top1 | `global_pq_64B` | `64` | `3.50` | `8/10` | `7/10` | `10/10` | `10/10` | `20/20` | `20/20` | `0.00696` | `35.57` |
+| top1 | `local_residual_pq_64B` | `64` | `14.05` | `9/10` | `7/10` | `10/10` | `10/10` | `20/20` | `20/20` | `0.00560` | `34.19` |
+| top1 | `local_residual_opq_64B` | `64` | `18.55` | `9/10` | `8/10` | `10/10` | `10/10` | `20/20` | `20/20` | `0.00549` | `34.98` |
+| top4 | `global_pq_64B` | `64` | `3.50` | `9/10` | `7/10` | `10/10` | `10/10` | `20/20` | `20/20` | `0.00662` | `34.57` |
+| top4 | `local_residual_pq_64B` | `64` | `14.05` | `9/10` | `7/10` | `10/10` | `10/10` | `20/20` | `20/20` | `0.00559` | `34.97` |
+| top4 | `local_residual_opq_64B` | `64` | `18.55` | `9/10` | `8/10` | `10/10` | `10/10` | `20/20` | `20/20` | `0.00547` | `35.01` |
+| top1 | `local_pca_rank80` | `80` | `5.84` | `9/10` | `7/10` | `10/10` | `9/10` | `20/20` | `20/20` | `0.00519` | `86.53` |
+| top4 | `local_pca_rank80` | `80` | `5.84` | `9/10` | `8/10` | `10/10` | `10/10` | `20/20` | `20/20` | `0.00641` | `84.48` |
+
+The interpretation is consistent with the variable-size IVF scout, but the
+fixed-block layout makes the storage tradeoff clearer:
+
+- Sorting rows by buildable IVF locality improves top4 routing enough that all
+  exact top10/top20 rows survive routing for queries `0..9`; top1 still has
+  severe worst-query misses.
+- This is a routing/layout win, not a codec win by itself, because top4 scans
+  exactly four fixed 4096-row blocks.
+- At 32B, global PQ and local residual-PQ beat local PCA rank32 on both
+  candidate survival and scan cost. Local residual-PQ is the better codebook
+  lane when its `~14 B/vector` selected-metadata cost is acceptable.
+- Local residual-OPQ slightly lowers score error and sometimes improves a
+  worst gate, but the extra `~4.5 B/vector` metadata and roughly `4-5x`
+  training cost versus local residual-PQ are not justified yet.
+- Scalar u4 remains a strong candidate-survival baseline at 48B row-code bytes,
+  but this Go scorer is reconstruction-heavy and about `~1 us/vector`.
+- Local PCA rank80 can match candidate-survival gates, but it scans at
+  `~85 ns/vector` and still needs exact rerank. PQ/local residual-PQ are now the
+  stronger 32/48/64B buildable-lane candidates.
+
 ## Concrete Research Tracks
 
 Track A now has a first completed top100-only tournament for queries `0..99`.
@@ -744,22 +846,26 @@ top100-only probes worth adding, if this path remains decision-relevant, are
 PCA plus tiny residual correction and low-rank-plus-tail progressive bound
 tests.
 
-Track A.5 is now started: buildable-granule scouts over both
-row-id-contiguous blocks and IVF/k-means clusters. Row-id order is a weak
-control; IVF/k-means gives the first buildable locality signal and shows why the
-codebook stages need real train/eval splits rather than top100 oracle fits.
+Track A.5 is now started: buildable-granule scouts over row-id-contiguous
+blocks, IVF/k-means variable-size clusters, and IVF/k-means locality-sorted
+fixed blocks. Row-id order is a weak control. IVF/k-means gives the first
+buildable locality signal, and the sorted-block variant shows that a buildable
+locality order can feed fixed TreeDB-style storage blocks. These results also
+show why codebook stages need real train/eval splits rather than top100 oracle
+fits.
 
 Track B now covers the fixed Deep1B budget ladder. Global PQ, global
 centroid-residual PQ, and OPQ-style lanes have been compared against local PCA
 `K=32/48/64/80/96` at 32/48/64/80/96-byte budgets on buildable IVF/k-means
-granules. PQ is currently the simpler trained-codebook baseline; OPQ is a
-measured challenger without a decisive Pareto win yet; and global residual PQ
-does not beat global PQ in this shape. Per-buildable-granule local residual-PQ
-and local residual-OPQ are now measured. Local residual-PQ improves candidate
-gates at extra metadata cost; local residual-OPQ slightly lowers score error but
-has not yet justified the additional rotation metadata and build time. Track B
-still needs larger query coverage, larger train/eval slices, production-grade
-local OPQ/LOPQ amortization, and actual graph/TreeDB granule layouts.
+granules and IVF-sorted fixed blocks. PQ is currently the simpler trained
+codebook baseline; OPQ is a measured challenger without a decisive Pareto win
+yet; and global residual PQ does not beat global PQ in this shape.
+Per-buildable-granule local residual-PQ and local residual-OPQ are now measured.
+Local residual-PQ improves candidate gates at extra metadata cost; local
+residual-OPQ slightly lowers score error but has not yet justified the
+additional rotation metadata and build time. Track B still needs larger query
+coverage, larger train/eval slices, production-grade local OPQ/LOPQ
+amortization, graph-neighborhood blocks, and actual TreeDB granule layouts.
 
 Track C is the granule-local residual encoding tournament. The first measured
 lanes are local residual-PQ and local residual-OPQ. For each buildable granule
@@ -776,8 +882,9 @@ local residual after the coarse locality unit, not the raw global vector.
 
 ## Recommended Next Work
 
-1. Add production-plausible granule builders and run the same candidate-recall
-   tables on their blocks. This is the next required step before any production
+1. Add graph-neighborhood, graph-visited-set, graph-sorted row-adjacent, and
+   actual TreeDB granule builders, then run the same candidate-recall tables on
+   their blocks. This is the next required step before any production
    compression claim.
 2. Extend the PQ/residual-PQ/OPQ/local-residual-PQ/local-residual-OPQ
    same-byte tournament to more queries and larger train/eval slices. Do not

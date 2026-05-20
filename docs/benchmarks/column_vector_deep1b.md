@@ -158,10 +158,12 @@ ScaNN/AVQ, QINCo, or Matryoshka.
 
 `TestColumnVectorGraphDeep1BBuildableGranuleScout` is an opt-in
 production/buildable granule scout. It supports `row_id_contiguous` as a weak
-storage-order control and `ivf_kmeans` as a deterministic cosine k-means
-locality builder over the base prefix. In both modes, it ranks granules by
-centroid similarity and reports routing recall separately from codec recall
-inside the selected granule union. The codec rows include full-dim
+storage-order control, `ivf_kmeans` as a deterministic cosine k-means locality
+builder over the base prefix, and `ivf_kmeans_sorted_blocks` as a fixed-size
+TreeDB-style storage-block proxy that sorts rows by assigned k-means locality
+before chunking. In all modes, it ranks granules by centroid similarity and
+reports routing recall separately from codec recall inside the selected granule
+union. The codec rows include full-dim
 per-dimension scalar u8/u4, local PCA int8 ranks, optional trained global
 8-bit PQ/OPQ-style lanes, an optional per-buildable-granule local residual-PQ
 lane, and an optional per-buildable-granule local residual-OPQ/LOPQ-style lane.
