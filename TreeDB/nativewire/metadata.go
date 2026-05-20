@@ -17,6 +17,7 @@ const (
 	minEncodedIndexDefinitionLen         = 6
 	minEncodedVectorIndexDefinitionLen   = 8
 	minEncodedVectorIndexDefinitionV3Len = 9
+	minEncodedVectorIndexDefinitionV4Len = 10
 	collectionRefTagName                 = 1
 	collectionRefTagHandle               = 2
 )
@@ -50,7 +51,7 @@ func appendCollectionHandleRefPayload(dst []byte, handle CollectionHandle) []byt
 }
 
 func encodeCollectionMeta(meta collections.CollectionMeta) []byte {
-	dst := binary.AppendUvarint(nil, 3)
+	dst := binary.AppendUvarint(nil, 4)
 	dst = appendString(dst, meta.Name)
 	dst = binary.AppendUvarint(dst, uint64(encodeDocumentFormat(meta.Options.DocumentFormat)))
 	dst = binary.AppendUvarint(dst, uint64(encodeRootStorage(meta.Options.DataRootStoragePolicy)))
@@ -70,7 +71,7 @@ func encodeCollectionMeta(meta collections.CollectionMeta) []byte {
 	}
 	dst = binary.AppendUvarint(dst, uint64(len(meta.VectorIndexes)))
 	for _, def := range meta.VectorIndexes {
-		dst = appendVectorIndexDefinition(dst, def, false)
+		dst = appendVectorIndexDefinition(dst, def, false, true)
 	}
 	return dst
 }
@@ -80,7 +81,7 @@ func decodeCollectionMeta(src []byte) (collections.CollectionMeta, error) {
 	if err != nil {
 		return collections.CollectionMeta{}, err
 	}
-	if version != 1 && version != 2 && version != 3 {
+	if version != 1 && version != 2 && version != 3 && version != 4 {
 		return collections.CollectionMeta{}, protocolError(iwire.ErrUnsupportedVersion, "collection_meta version %d", version)
 	}
 	name, err := readString(src, &off)
@@ -213,12 +214,15 @@ func decodeCollectionMeta(src []byte) (collections.CollectionMeta, error) {
 		if version >= 3 {
 			minVectorDefinitionLen = minEncodedVectorIndexDefinitionV3Len
 		}
+		if version >= 4 {
+			minVectorDefinitionLen = minEncodedVectorIndexDefinitionV4Len
+		}
 		if vectorIndexCount > uint64((len(src)-off)/minVectorDefinitionLen) {
 			return collections.CollectionMeta{}, protocolError(iwire.ErrMalformedFrame, "vector index count %d exceeds remaining collection_meta payload", vectorIndexCount)
 		}
 		meta.VectorIndexes = make([]collections.VectorIndexDefinition, 0, int(vectorIndexCount))
 		for i := uint64(0); i < vectorIndexCount; i++ {
-			def, next, err := decodeVectorIndexDefinitionAt(src, off, false, version >= 3)
+			def, next, err := decodeVectorIndexDefinitionAt(src, off, false, version >= 3, version >= 4)
 			if err != nil {
 				return collections.CollectionMeta{}, err
 			}
@@ -313,9 +317,13 @@ func decodeIndexDefinitionAt(src []byte, off int, withVersion bool) (collections
 	}, off, nil
 }
 
-func appendVectorIndexDefinition(dst []byte, def collections.VectorIndexDefinition, withVersion bool) []byte {
+func appendVectorIndexDefinition(dst []byte, def collections.VectorIndexDefinition, withVersion bool, withStrategy bool) []byte {
 	if withVersion && len(dst) == 0 {
-		dst = binary.AppendUvarint(dst, 2)
+		if withStrategy {
+			dst = binary.AppendUvarint(dst, 3)
+		} else {
+			dst = binary.AppendUvarint(dst, 2)
+		}
 	}
 	dst = appendString(dst, def.Name)
 	dst = appendString(dst, def.Field)
@@ -326,10 +334,13 @@ func appendVectorIndexDefinition(dst []byte, def collections.VectorIndexDefiniti
 	dst = binary.AppendVarint(dst, int64(def.EfSearch))
 	dst = binary.AppendUvarint(dst, encodeVectorIndexEncoding(def.Encoding))
 	dst = binary.AppendUvarint(dst, def.SchemaGeneration)
+	if withStrategy {
+		dst = binary.AppendUvarint(dst, encodeVectorIndexStrategy(def.Strategy))
+	}
 	return dst
 }
 
-func decodeVectorIndexDefinitionAt(src []byte, off int, withVersion bool, withSchemaGeneration bool) (collections.VectorIndexDefinition, int, error) {
+func decodeVectorIndexDefinitionAt(src []byte, off int, withVersion bool, withSchemaGeneration bool, withStrategy bool) (collections.VectorIndexDefinition, int, error) {
 	if withVersion {
 		version, n, err := readUvarint(src[off:])
 		if err != nil {
@@ -339,6 +350,9 @@ func decodeVectorIndexDefinitionAt(src []byte, off int, withVersion bool, withSc
 		case 1:
 		case 2:
 			withSchemaGeneration = true
+		case 3:
+			withSchemaGeneration = true
+			withStrategy = true
 		default:
 			return collections.VectorIndexDefinition{}, 0, protocolError(iwire.ErrUnsupportedVersion, "vector_index_definition version %d", version)
 		}
@@ -383,6 +397,17 @@ func decodeVectorIndexDefinitionAt(src []byte, off int, withVersion bool, withSc
 			return collections.VectorIndexDefinition{}, 0, err
 		}
 	}
+	var strategy collections.VectorIndexStrategy
+	if withStrategy {
+		rawStrategy, err := readEnum(src, &off)
+		if err != nil {
+			return collections.VectorIndexDefinition{}, 0, err
+		}
+		strategy, err = decodeVectorIndexStrategyStrict(rawStrategy)
+		if err != nil {
+			return collections.VectorIndexDefinition{}, 0, err
+		}
+	}
 	if err := ensureNonNegativeIntCapacity("vector_index dimensions", dimensions); err != nil {
 		return collections.VectorIndexDefinition{}, 0, err
 	}
@@ -412,6 +437,7 @@ func decodeVectorIndexDefinitionAt(src []byte, off int, withVersion bool, withSc
 		EfConstruction:   int(efConstruction),
 		EfSearch:         int(efSearch),
 		Encoding:         decodedEncoding,
+		Strategy:         strategy,
 		SchemaGeneration: schemaGeneration,
 	}, off, nil
 }
@@ -649,7 +675,7 @@ func encodeVectorMetric(metric collections.VectorMetric) uint64 {
 	case collections.VectorMetricInnerProduct:
 		return 3
 	default:
-		return 0
+		panic(fmt.Sprintf("nativewire: unsupported vector metric %d", metric))
 	}
 }
 
@@ -673,7 +699,7 @@ func encodeVectorIndexEncoding(encoding collections.VectorIndexEncoding) uint64 
 	case collections.VectorIndexEncodingInt8:
 		return 2
 	default:
-		return 0
+		panic(fmt.Sprintf("nativewire: unsupported vector index encoding %d", encoding))
 	}
 }
 
@@ -685,6 +711,28 @@ func decodeVectorIndexEncodingStrict(encoding uint64) (collections.VectorIndexEn
 		return collections.VectorIndexEncodingInt8, nil
 	default:
 		return collections.VectorIndexEncodingFloat32, protocolError(iwire.ErrInvalidCommand, "unsupported vector_index_encoding enum %d", encoding)
+	}
+}
+
+func encodeVectorIndexStrategy(strategy collections.VectorIndexStrategy) uint64 {
+	switch strategy {
+	case "", collections.VectorIndexStrategyNativeRuntime:
+		return 1
+	case collections.VectorIndexStrategyColumnGraph:
+		return 2
+	default:
+		panic(fmt.Sprintf("nativewire: unsupported vector index strategy %q", strategy))
+	}
+}
+
+func decodeVectorIndexStrategyStrict(strategy uint64) (collections.VectorIndexStrategy, error) {
+	switch strategy {
+	case 1:
+		return "", nil
+	case 2:
+		return collections.VectorIndexStrategyColumnGraph, nil
+	default:
+		return "", protocolError(iwire.ErrInvalidCommand, "unsupported vector_index_strategy enum %d", strategy)
 	}
 }
 
@@ -1093,6 +1141,33 @@ func ensureKnownIndexValueType(valueType collections.IndexValueType) error {
 	}
 }
 
+func ensureKnownVectorMetric(metric collections.VectorMetric) error {
+	switch metric {
+	case collections.VectorMetricCosine, collections.VectorMetricL2, collections.VectorMetricInnerProduct:
+		return nil
+	default:
+		return invalidMetadata("unsupported vector metric %d", metric)
+	}
+}
+
+func ensureKnownVectorIndexEncoding(encoding collections.VectorIndexEncoding) error {
+	switch encoding {
+	case collections.VectorIndexEncodingFloat32, collections.VectorIndexEncodingInt8:
+		return nil
+	default:
+		return invalidMetadata("unsupported vector index encoding %d", encoding)
+	}
+}
+
+func ensureKnownVectorIndexStrategy(strategy collections.VectorIndexStrategy) error {
+	switch strategy {
+	case "", collections.VectorIndexStrategyNativeRuntime, collections.VectorIndexStrategyColumnGraph:
+		return nil
+	default:
+		return invalidMetadata("unsupported vector index strategy %q", strategy)
+	}
+}
+
 func normalizeClientIndexDefinition(def collections.IndexDefinition) error {
 	if err := ensureIndexName(def.Name); err != nil {
 		return err
@@ -1104,6 +1179,36 @@ func normalizeClientIndexDefinition(def collections.IndexDefinition) error {
 		return err
 	}
 	return ensureKnownRootStoragePolicy(def.StoragePolicy)
+}
+
+func normalizeClientVectorIndexDefinition(def collections.VectorIndexDefinition) error {
+	if def.Name != "" {
+		if err := ensureIndexName(def.Name); err != nil {
+			return err
+		}
+	}
+	if err := collections.ValidateIndexPath(def.Field); err != nil {
+		return invalidMetadata("%v", err)
+	}
+	if def.Dimensions <= 0 {
+		return invalidMetadata("vector index dimensions must be positive")
+	}
+	if def.M < 0 {
+		return invalidMetadata("vector index m must be non-negative")
+	}
+	if def.EfConstruction < 0 {
+		return invalidMetadata("vector index ef_construction must be non-negative")
+	}
+	if def.EfSearch < 0 {
+		return invalidMetadata("vector index ef_search must be non-negative")
+	}
+	if err := ensureKnownVectorMetric(def.Metric); err != nil {
+		return err
+	}
+	if err := ensureKnownVectorIndexEncoding(def.Encoding); err != nil {
+		return err
+	}
+	return ensureKnownVectorIndexStrategy(def.Strategy)
 }
 
 func normalizeClientCollectionMeta(meta collections.CollectionMeta) (collections.CollectionMeta, error) {
@@ -1133,6 +1238,11 @@ func normalizeClientCollectionMeta(meta collections.CollectionMeta) (collections
 	}
 	for _, def := range meta.Indexes {
 		if err := normalizeClientIndexDefinition(def); err != nil {
+			return collections.CollectionMeta{}, err
+		}
+	}
+	for _, def := range meta.VectorIndexes {
+		if err := normalizeClientVectorIndexDefinition(def); err != nil {
 			return collections.CollectionMeta{}, err
 		}
 	}

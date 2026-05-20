@@ -100,55 +100,69 @@ func BenchmarkCollectionVectorSearchExact(b *testing.B) {
 func BenchmarkCollectionVectorIndexBuild(b *testing.B) {
 	docs := vectorBenchmarkDocs(b)
 	dims := vectorBenchmarkDims(b)
-	d, col := openVectorBenchmarkCollection(b, docs, dims)
-	defer func() { _ = d.Close() }()
 
 	b.ReportMetric(float64(docs), "docs/index")
 	b.ReportMetric(float64(dims), "dims")
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
+		b.StopTimer()
+		d, col := openVectorBenchmarkCollection(b, docs, dims)
+		b.StartTimer()
 		index, err := col.BuildVectorIndex(VectorIndexOptions{
-			Name:   fmt.Sprintf("embedding_build_%d", i),
+			Name:   "embedding_build",
 			Field:  "embedding",
 			Metric: VectorMetricCosine,
 			M:      16,
 		})
 		if err != nil {
+			_ = d.Close()
 			b.Fatalf("build vector index: %v", err)
 		}
 		stats := index.Stats()
 		if stats.LiveDocs != docs {
+			_ = d.Close()
 			b.Fatalf("built index live docs=%d want %d", stats.LiveDocs, docs)
 		}
 		b.ReportMetric(float64(stats.BytesMemory), "index_bytes")
+		b.StopTimer()
+		if err := d.Close(); err != nil {
+			b.Fatalf("close db: %v", err)
+		}
 	}
 }
 
 func BenchmarkCollectionVectorIndexBuildInt8(b *testing.B) {
 	docs := vectorBenchmarkDocs(b)
 	dims := vectorBenchmarkDims(b)
-	d, col := openVectorBenchmarkCollection(b, docs, dims)
-	defer func() { _ = d.Close() }()
 
 	b.ReportMetric(float64(docs), "docs/index")
 	b.ReportMetric(float64(dims), "dims")
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
+		b.StopTimer()
+		d, col := openVectorBenchmarkCollection(b, docs, dims)
+		b.StartTimer()
 		index, err := col.BuildVectorIndex(VectorIndexOptions{
-			Name:     fmt.Sprintf("embedding_build_i8_%d", i),
+			Name:     "embedding_build_i8",
 			Field:    "embedding",
 			Metric:   VectorMetricCosine,
 			M:        16,
 			Encoding: VectorIndexEncodingInt8,
 		})
 		if err != nil {
+			_ = d.Close()
 			b.Fatalf("build int8 vector index: %v", err)
 		}
 		stats := index.Stats()
 		if stats.LiveDocs != docs {
+			_ = d.Close()
 			b.Fatalf("built int8 index live docs=%d want %d", stats.LiveDocs, docs)
 		}
 		b.ReportMetric(float64(stats.BytesMemory), "index_bytes")
+		b.StopTimer()
+		if err := d.Close(); err != nil {
+			b.Fatalf("close db: %v", err)
+		}
 	}
 }
 

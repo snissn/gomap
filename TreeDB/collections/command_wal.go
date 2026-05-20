@@ -374,7 +374,7 @@ func replayCollectionVectorIndexUpsertBatchByIDCommandWAL(db *backenddb.DB, env 
 		return err
 	}
 	manager := NewCollectionManager(db)
-	collection, err := manager.OpenCollection(payload.Collection)
+	collection, err := manager.openCollectionWithCommandWALIntent(payload.Collection, intent)
 	if err != nil {
 		return err
 	}
@@ -398,7 +398,7 @@ func replayCollectionVectorIndexDeleteBatchByIDCommandWAL(db *backenddb.DB, env 
 		return err
 	}
 	manager := NewCollectionManager(db)
-	collection, err := manager.OpenCollection(payload.Collection)
+	collection, err := manager.openCollectionWithCommandWALIntent(payload.Collection, intent)
 	if err != nil {
 		return err
 	}

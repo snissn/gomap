@@ -1514,7 +1514,11 @@ func (s *Server) createIndexesResponse(command wire.Document) (wire.Document, er
 		}
 		next, err := col.CreateVectorIndex(def)
 		if err != nil {
-			return commandError(commandCodeBadValue, "BadValue", err.Error())
+			code, codeName := commandCodeBadValue, "BadValue"
+			if collections.IsDuplicateKeyError(err) {
+				code, codeName = commandCodeDuplicateKey, "DuplicateKey"
+			}
+			return commandError(code, codeName, err.Error())
 		}
 		meta = *next
 	}

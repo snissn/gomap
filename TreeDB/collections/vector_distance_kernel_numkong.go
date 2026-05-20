@@ -2,11 +2,7 @@
 
 package collections
 
-import (
-	"math"
-
-	nk "github.com/ashvardanian/NumKong/golang"
-)
+import nk "github.com/ashvardanian/NumKong/golang"
 
 // dotProductFloat32 requires equal-length vectors and returns a float64
 // accumulator-compatible result, matching the pure-Go fallback contract.
@@ -28,7 +24,7 @@ func angularDistancesFloat32Batch(queries, documents []float32, queryCount, docu
 			document := documents[docIndex*dims : (docIndex+1)*dims]
 			documentNorm := vectorNormSquared(document)
 			dot := dotProductFloat32Wide(query, document)
-			row[docIndex] = 1 - dot/(math.Sqrt(queryNorm)*math.Sqrt(documentNorm))
+			row[docIndex] = angularDistanceFromDot(dot, queryNorm, documentNorm)
 		}
 	}
 }

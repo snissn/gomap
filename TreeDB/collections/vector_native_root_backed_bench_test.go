@@ -1115,9 +1115,15 @@ func parseVectorIndexTemplateV1RawNeighbors(data []byte, dst []int) ([]int, erro
 	if err != nil {
 		return dst, err
 	}
-	rawNeighbors, _, err := readTemplateV1RawBytes(data, pos)
+	rawNeighbors, pos, err := readTemplateV1RawBytes(data, pos)
 	if err != nil {
 		return dst, err
+	}
+	if _, pos, err = readTemplateV1RawFloat64(data, pos); err != nil {
+		return dst, err
+	}
+	if pos != len(data) {
+		return dst, errors.New("collections: template-v1 raw edge document has trailing bytes")
 	}
 	if len(rawNeighbors)%4 != 0 {
 		return dst, errors.New("collections: malformed template-v1 raw neighbor bytes")

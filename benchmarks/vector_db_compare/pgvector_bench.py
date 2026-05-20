@@ -99,15 +99,15 @@ def build_database(args: argparse.Namespace, manifest: dict[str, Any], docs: np.
         insert_start = time.perf_counter()
         prepare_seconds = 0.0
         copy_write_seconds = 0.0
-        with conn.transaction():
-            with conn.cursor().copy(f"copy {qualified_table} (doc_id, id, grp, embedding) from stdin") as copy:
-                for i in range(doc_count):
-                    prepare_start = time.perf_counter()
-                    row = (i + 1, f"doc-{i:06d}", i % 16, vector_literal(docs[i]))
-                    prepare_seconds += time.perf_counter() - prepare_start
-                    copy_write_start = time.perf_counter()
-                    copy.write_row(row)
-                    copy_write_seconds += time.perf_counter() - copy_write_start
+        copy_sql = f"copy {qualified_table} (doc_id, id, grp, embedding) from stdin"
+        with conn.transaction(), conn.cursor().copy(copy_sql) as copy:
+            for i in range(doc_count):
+                prepare_start = time.perf_counter()
+                row = (i + 1, f"doc-{i:06d}", i % 16, vector_literal(docs[i]))
+                prepare_seconds += time.perf_counter() - prepare_start
+                copy_write_start = time.perf_counter()
+                copy.write_row(row)
+                copy_write_seconds += time.perf_counter() - copy_write_start
         insert_phase = phase(insert_start)
         insert_phase["client_prepare"] = {
             "duration_nanos": int(prepare_seconds * 1_000_000_000),

@@ -2,8 +2,6 @@
 
 package collections
 
-import "math"
-
 // dotProductFloat32 requires equal-length vectors and accumulates in float64 so
 // cosine scoring stays stable across pure-Go and native-kernel builds.
 func dotProductFloat32(left, right []float32) float64 {
@@ -26,7 +24,7 @@ func angularDistancesFloat32Batch(queries, documents []float32, queryCount, docu
 			document := documents[docIndex*dims : (docIndex+1)*dims]
 			documentNorm := vectorNormSquared(document)
 			dot := dotProductFloat32(query, document)
-			row[docIndex] = 1 - dot/(math.Sqrt(queryNorm)*math.Sqrt(documentNorm))
+			row[docIndex] = angularDistanceFromDot(dot, queryNorm, documentNorm)
 		}
 	}
 }

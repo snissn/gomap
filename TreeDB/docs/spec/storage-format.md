@@ -635,6 +635,8 @@ Current command kinds:
 | 100 | `CollectionInsertBatchByID` | collection | `CollectionInsertBatchByIDV1` | deterministic collection insert/upsert-by-id batch |
 | 101 | `CollectionDeleteBatchByID` | collection | `CollectionDeleteBatchByIDV1` | deterministic collection delete-by-id batch |
 | 102 | `CollectionUpdateBatchByID` | collection | `CollectionUpdateBatchByIDV1` | deterministic collection update/replace-by-id batch |
+| 103 | `CollectionVectorIndexUpsertBatchByID` | collection | `CollectionVectorIndexUpsertBatchByIDV1` | deterministic vector-index maintenance upsert-by-id batch |
+| 104 | `CollectionVectorIndexDeleteBatchByID` | collection | `CollectionVectorIndexDeleteBatchByIDV1` | deterministic vector-index maintenance delete-by-id batch |
 | 200 | `CatalogCreateCollection` | catalog | `CatalogCreateCollectionV1` | deterministic catalog create-collection command; old placeholder name is an alias only |
 
 Current payload format IDs:
@@ -647,6 +649,8 @@ Current payload format IDs:
 | 4 | `CollectionDeleteBatchByIDV1` |
 | 5 | `CollectionUpdateBatchByIDV1` |
 | 6 | `CatalogCreateCollectionV1` |
+| 7 | `CollectionVectorIndexUpsertBatchByIDV1` |
+| 8 | `CollectionVectorIndexDeleteBatchByIDV1` |
 
 `RawKVBatchV1` payload:
 
@@ -813,6 +817,15 @@ ID:
 u32 IDLen
 bytes ID[IDLen]
 ```
+
+`CollectionVectorIndexUpsertBatchByIDV1` and
+`CollectionVectorIndexDeleteBatchByIDV1` use the same canonical payload layout
+as `CollectionDeleteBatchByIDV1`: the collection name plus a sorted non-empty
+set of document IDs. The upsert command rebuilds or refreshes vector-index
+entries for the listed documents after row mutations reach the collection root.
+The delete command removes vector-index entries for the listed document IDs.
+Both commands advance the collection command-WAL boundary through vector
+maintenance replay rather than publishing row-root deltas directly.
 
 Collection batch payloads require a non-empty collection name and non-empty
 document IDs. Encoders canonicalize entries by strictly increasing document ID

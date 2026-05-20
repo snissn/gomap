@@ -154,7 +154,7 @@ func (c *Collection) SearchVectorsExact(query []float32, opts VectorSearchOption
 	}
 	processRecord := func(record DocumentRecord) error {
 		if opts.Filter != nil {
-			include, err := opts.Filter(record)
+			include, err := opts.Filter(cloneDocumentRecord(record))
 			if err != nil || !include {
 				return err
 			}
@@ -213,6 +213,13 @@ func (c *Collection) SearchVectorsExact(query []float32, opts VectorSearchOption
 		return []VectorSearchResult{}, nil
 	}
 	return matches, nil
+}
+
+func cloneDocumentRecord(record DocumentRecord) DocumentRecord {
+	return DocumentRecord{
+		ID:       bytes.Clone(record.ID),
+		Document: bytes.Clone(record.Document),
+	}
 }
 
 func (c *Collection) vectorSearchIndexRangeDocumentIDs(filter *VectorIndexRangeFilter, limit int) ([][]byte, bool, error) {
@@ -405,6 +412,17 @@ func exactVectorDistance(left, right []float32, metric VectorMetric) (float32, e
 		return float32(-dot), nil
 	default:
 		return 0, fmt.Errorf("collections: unsupported vector metric %d", metric)
+	}
+}
+
+func angularDistanceFromDot(dot, leftNorm, rightNorm float64) float64 {
+	switch {
+	case leftNorm == 0 && rightNorm == 0:
+		return 0
+	case leftNorm == 0 || rightNorm == 0:
+		return 1
+	default:
+		return 1 - dot/(math.Sqrt(leftNorm)*math.Sqrt(rightNorm))
 	}
 }
 

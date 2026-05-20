@@ -892,14 +892,14 @@ func benchmarkColumnVectorDynamicGraphSearchCosineParallelReadWrite(b *testing.B
 				return
 			default:
 			}
-			if seq >= len(batches) {
+			if len(batches) == 0 {
 				select {
-				case errs <- fmt.Errorf("exhausted %d prebuilt mutation batches during timed run; increase columnVectorDynamicBenchmarkBatchCount", len(batches)):
+				case errs <- fmt.Errorf("no prebuilt mutation batches"):
 				default:
 				}
 				return
 			}
-			batch := batches[seq]
+			batch := batches[seq%len(batches)]
 			stats, err := graph.ApplyBatch(batch)
 			if err != nil {
 				select {

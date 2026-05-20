@@ -102,6 +102,44 @@ func TestCollectionSearchVectorsExactFiltersAndDeletes(t *testing.T) {
 	}
 }
 
+func TestCollectionSearchVectorsExactFilterReceivesOwnedBytes(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("doc")},
+		[][]byte{[]byte(`{"embedding":[1,0],"tag":"keep"}`)},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	results, err := col.SearchVectorsExact([]float32{1, 0}, VectorSearchOptions{
+		Field:  "embedding",
+		Metric: VectorMetricCosine,
+		TopK:   1,
+		Filter: func(record DocumentRecord) (bool, error) {
+			record.ID[0] = 'x'
+			record.Document[0] = '['
+			return true, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("search vectors: %v", err)
+	}
+	requireVectorResultIDs(t, results, "doc")
+}
+
 func TestCollectionSearchVectorsExactIndexRangeFilter(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

@@ -170,6 +170,23 @@ func TestMetadataCommandsPreserveVectorIndexes(t *testing.T) {
 	if metas[0].VectorIndexes[0] != got {
 		t.Fatalf("listed vector index=%+v want %+v", metas[0].VectorIndexes[0], got)
 	}
+
+	columnMeta, err := client.CreateCollection(ctx, collections.CollectionMeta{
+		Name: "column_docs",
+		VectorIndexes: []collections.VectorIndexDefinition{{
+			Name:       "embedding_column",
+			Field:      "embedding",
+			Metric:     collections.VectorMetricCosine,
+			Dimensions: 3,
+			Strategy:   collections.VectorIndexStrategyColumnGraph,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("CreateCollection column vector: %v", err)
+	}
+	if len(columnMeta.VectorIndexes) != 1 || columnMeta.VectorIndexes[0].Strategy != collections.VectorIndexStrategyColumnGraph {
+		t.Fatalf("created column vector index=%+v", columnMeta.VectorIndexes)
+	}
 }
 
 func TestMetadataHandleRefWorksForListIndexes(t *testing.T) {
@@ -742,6 +759,48 @@ func TestNormalizeClientCollectionMetaRejectsInvalidOptions(t *testing.T) {
 			meta: collections.CollectionMeta{
 				Name:    "users",
 				Indexes: []collections.IndexDefinition{{Name: "email", Field: "email", ValueType: collections.IndexValueString, StoragePolicy: collections.RootStoragePolicy("mystery")}},
+			},
+		},
+		{
+			name: "vector_field",
+			meta: collections.CollectionMeta{
+				Name:          "users",
+				VectorIndexes: []collections.VectorIndexDefinition{{Name: "embedding", Field: ".embedding", Dimensions: 3}},
+			},
+		},
+		{
+			name: "vector_dimensions",
+			meta: collections.CollectionMeta{
+				Name:          "users",
+				VectorIndexes: []collections.VectorIndexDefinition{{Name: "embedding", Field: "embedding", Dimensions: 0}},
+			},
+		},
+		{
+			name: "vector_metric",
+			meta: collections.CollectionMeta{
+				Name:          "users",
+				VectorIndexes: []collections.VectorIndexDefinition{{Name: "embedding", Field: "embedding", Metric: collections.VectorMetric(99), Dimensions: 3}},
+			},
+		},
+		{
+			name: "vector_encoding",
+			meta: collections.CollectionMeta{
+				Name:          "users",
+				VectorIndexes: []collections.VectorIndexDefinition{{Name: "embedding", Field: "embedding", Dimensions: 3, Encoding: collections.VectorIndexEncoding(99)}},
+			},
+		},
+		{
+			name: "vector_strategy",
+			meta: collections.CollectionMeta{
+				Name:          "users",
+				VectorIndexes: []collections.VectorIndexDefinition{{Name: "embedding", Field: "embedding", Dimensions: 3, Strategy: collections.VectorIndexStrategy("mystery")}},
+			},
+		},
+		{
+			name: "vector_m",
+			meta: collections.CollectionMeta{
+				Name:          "users",
+				VectorIndexes: []collections.VectorIndexDefinition{{Name: "embedding", Field: "embedding", Dimensions: 3, M: -1}},
 			},
 		},
 	} {
