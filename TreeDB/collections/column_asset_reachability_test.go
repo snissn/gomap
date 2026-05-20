@@ -544,7 +544,7 @@ func TestColumnAssetReachabilitySegmentFileIDRejectsNonCanonicalM15A(t *testing.
 }
 
 func TestColumnAssetReachabilityKnownSourcesHaveMasksM15B(t *testing.T) {
-	if len(columnAssetReachabilitySourceBits) >= 64 {
+	if len(columnAssetReachabilitySourceBits) > 64 {
 		t.Fatalf("source mask table has %d entries; uint64 mask needs an explicit overflow strategy", len(columnAssetReachabilitySourceBits))
 	}
 	seen := make(map[columnAssetReachabilitySourceMask]ColumnAssetReachabilitySource, len(columnAssetReachabilitySourceBits))
@@ -567,6 +567,20 @@ func TestColumnAssetReachabilityKnownSourcesHaveMasksM15B(t *testing.T) {
 	mask, ok := columnAssetReachabilitySourceBit(ColumnAssetReachabilitySource("future_source"))
 	if ok || mask != columnAssetReachabilitySourceUnknownMask {
 		t.Fatalf("unknown source mask=%b ok=%t, want unknown mask and ok=false", mask, ok)
+	}
+	knownSources := columnAssetReachabilitySourcesForMaskWithUnknown(
+		columnAssetReachabilitySourceCandidateMask,
+		[]ColumnAssetReachabilitySource{"future_source"},
+	)
+	if !reflect.DeepEqual(knownSources, []ColumnAssetReachabilitySource{ColumnAssetReachabilitySourceCandidate}) {
+		t.Fatalf("known source list=%v want candidate only without stray unknown sources", knownSources)
+	}
+	unknownSources := columnAssetReachabilitySourcesForMaskWithUnknown(
+		columnAssetReachabilitySourceCandidateMask|columnAssetReachabilitySourceUnknownMask,
+		[]ColumnAssetReachabilitySource{"future_source"},
+	)
+	if !reflect.DeepEqual(unknownSources, []ColumnAssetReachabilitySource{ColumnAssetReachabilitySourceCandidate, "future_source"}) {
+		t.Fatalf("unknown source list=%v want candidate plus original unknown source", unknownSources)
 	}
 }
 

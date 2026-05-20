@@ -693,19 +693,22 @@ func columnAssetReachabilitySourcesForMaskWithUnknown(mask columnAssetReachabili
 		return nil
 	}
 	count := columnAssetReachabilitySourceMaskCount(mask)
-	if len(unknownSources) != 0 {
+	hasUnknown := mask&columnAssetReachabilitySourceUnknownMask != 0
+	if hasUnknown && len(unknownSources) != 0 {
 		count += len(unknownSources) - 1
 	}
 	sources := make([]ColumnAssetReachabilitySource, 0, count)
 	for _, entry := range columnAssetReachabilitySourceBits {
-		if entry.source == columnAssetReachabilitySourceUnknown && len(unknownSources) != 0 {
+		if entry.source == columnAssetReachabilitySourceUnknown && hasUnknown && len(unknownSources) != 0 {
 			continue
 		}
 		if mask&entry.mask != 0 {
 			sources = append(sources, entry.source)
 		}
 	}
-	sources = append(sources, unknownSources...)
+	if hasUnknown {
+		sources = append(sources, unknownSources...)
+	}
 	return sources
 }
 
