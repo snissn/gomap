@@ -491,6 +491,9 @@ func loadColumnManifestPlannerCapabilitiesForScan(snap *backenddb.Snapshot, root
 			if sawHeader {
 				return columnManifestPlannerCapabilitiesForScan{}, errors.New("collections: duplicate column manifest binary header record")
 			}
+			// The decoded byte slices alias the inline manifest record; the
+			// planner scan validates and hashes them before advancing the
+			// iterator and never retains them.
 			header, err = decodeColumnManifestHeaderRecordForScan(value)
 			if err != nil {
 				return columnManifestPlannerCapabilitiesForScan{}, err
@@ -536,8 +539,14 @@ func loadColumnManifestPlannerCapabilitiesForScan(snap *backenddb.Snapshot, root
 			// all reachable lineage through the active generation. The header
 			// expected-parts check below is generation-local and intentionally
 			// only counts current-generation records.
+			if caps.PhysicalAssetCount == maxCollectionInt {
+				return columnManifestPlannerCapabilitiesForScan{}, errors.New("collections: column manifest physical asset count overflows int")
+			}
 			caps.PhysicalAssetCount++
 			if operation != ColumnPublishOperationInsert {
+				if caps.MutationParts == maxCollectionInt {
+					return columnManifestPlannerCapabilitiesForScan{}, errors.New("collections: column manifest mutation part count overflows int")
+				}
 				caps.MutationParts++
 			}
 			writeHashBytes(&d, key)
@@ -605,6 +614,9 @@ func decodeColumnManifestHeaderRecordForScan(raw []byte) (columnManifestHeaderRe
 func validateColumnManifestHeaderRecordForScan(header columnManifestHeaderRecordForScan, cfg ColumnStoreConfig, identity ColumnManifestIdentity, collection string) error {
 	if !columnPhysicalBytesEqualString(header.collection, collection) {
 		return fmt.Errorf("collections: physical column planner manifest collection=%q want %q", string(header.collection), collection)
+	}
+	if _, ok := columnPhysicalScanOperationFromBytes(header.operation); !ok {
+		return fmt.Errorf("collections: unsupported column manifest header operation %q", string(header.operation))
 	}
 	if header.generation != identity.Generation {
 		return fmt.Errorf("collections: physical column planner manifest generation=%d want %d", header.generation, identity.Generation)
