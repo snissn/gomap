@@ -903,31 +903,19 @@ func listColumnAssetReachabilitySegments(ctx context.Context, segmentDir string)
 			}
 			return nil, err
 		}
-		if info.IsDir() {
-			continue
-		}
 		fileID, ok := columnAssetReachabilitySegmentFileID(name)
-		if info.Mode()&os.ModeSymlink != 0 {
+		appendSegment := func(bytes int64) {
 			if ok {
-				segments = append(segments, columnAssetReachabilitySegment{fileID: fileID, name: name})
+				segments = append(segments, columnAssetReachabilitySegment{fileID: fileID, name: name, bytes: bytes})
 			} else {
-				segments = append(segments, columnAssetReachabilitySegment{name: name})
+				segments = append(segments, columnAssetReachabilitySegment{name: name, bytes: bytes})
 			}
+		}
+		if info.IsDir() || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			appendSegment(0)
 			continue
 		}
-		if !info.Mode().IsRegular() {
-			if ok {
-				segments = append(segments, columnAssetReachabilitySegment{fileID: fileID, name: name})
-			} else {
-				segments = append(segments, columnAssetReachabilitySegment{name: name})
-			}
-			continue
-		}
-		if !ok {
-			segments = append(segments, columnAssetReachabilitySegment{name: name, bytes: info.Size()})
-			continue
-		}
-		segments = append(segments, columnAssetReachabilitySegment{fileID: fileID, name: name, bytes: info.Size()})
+		appendSegment(info.Size())
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err

@@ -112,6 +112,11 @@ func (c *Collection) columnAssetGC(ctx context.Context, opts ColumnAssetGCOption
 			plan.Segments.OutOfBoundsRefs,
 		)
 	}
+	if opts.DryRun && !needSegmentEntries {
+		stats.SegmentsEligible = plan.Segments.Reclaimable
+		stats.BytesEligible = plan.Segments.BytesReclaimable
+		return stats, nil
+	}
 
 	if opts.DryRun {
 		if len(plan.SegmentEntries) == 0 {
