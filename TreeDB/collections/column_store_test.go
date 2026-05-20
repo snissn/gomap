@@ -374,6 +374,24 @@ func TestColumnStoreMetadataValidation(t *testing.T) {
 			want: "does not support",
 		},
 		{
+			name: "string sum aggregate rejected",
+			cfg: &ColumnStoreConfig{
+				Enabled:           true,
+				Columns:           []ColumnStoreColumn{{Name: "kind", Path: "kind", ValueType: ColumnStoreValueString}},
+				AggregateMetadata: []ColumnAggregateMetadata{{Name: "sum_kind", Column: "kind", Kind: ColumnAggregateSum}},
+			},
+			want: "does not support",
+		},
+		{
+			name: "adjacency count distinct aggregate rejected",
+			cfg: &ColumnStoreConfig{
+				Enabled:           true,
+				Columns:           []ColumnStoreColumn{{Name: "neighbors", Path: "neighbors", ValueType: ColumnStoreValueAdjacencyList}},
+				AggregateMetadata: []ColumnAggregateMetadata{{Name: "distinct_neighbors", Column: "neighbors", Kind: ColumnAggregateCountDistinct}},
+			},
+			want: "does not support",
+		},
+		{
 			name: "vector dictionary rejected",
 			cfg: &ColumnStoreConfig{
 				Enabled: true,

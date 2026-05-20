@@ -554,12 +554,25 @@ func columnStoreValueTypeSupportsSort(valueType ColumnStoreValueType) bool {
 }
 
 func columnStoreValueTypeSupportsAggregate(valueType ColumnStoreValueType, kind ColumnAggregateKind) bool {
-	if kind == ColumnAggregateCount {
+	switch kind {
+	case ColumnAggregateCount:
 		return true
-	}
-	switch valueType {
-	case ColumnStoreValueBool, ColumnStoreValueInt64, ColumnStoreValueFloat32, ColumnStoreValueDouble, ColumnStoreValueString:
-		return true
+	case ColumnAggregateMin, ColumnAggregateMax:
+		return columnStoreValueTypeSupportsSort(valueType)
+	case ColumnAggregateSum:
+		switch valueType {
+		case ColumnStoreValueInt64, ColumnStoreValueFloat32, ColumnStoreValueDouble:
+			return true
+		default:
+			return false
+		}
+	case ColumnAggregateCountDistinct:
+		switch valueType {
+		case ColumnStoreValueBool, ColumnStoreValueInt64, ColumnStoreValueFloat32, ColumnStoreValueDouble, ColumnStoreValueString:
+			return true
+		default:
+			return false
+		}
 	default:
 		return false
 	}

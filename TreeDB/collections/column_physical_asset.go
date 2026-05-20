@@ -479,7 +479,11 @@ func decodeColumnPhysicalAsset(raw []byte) (columnPhysicalAsset, error) {
 					case ColumnStoreValueString:
 						value.String = cur.string()
 					case ColumnStoreValueFloat32Vector:
-						value.Float32Vector = cur.float32Slice()
+						if version >= columnPhysicalAssetVersionV4 {
+							value.Float32Vector = cur.float32SliceWithExpectedLength(asset.Columns[colIdx].VectorDims)
+						} else {
+							value.Float32Vector = cur.float32Slice()
+						}
 					case ColumnStoreValueAdjacencyList:
 						value.AdjacencyList = cur.uint32Slice()
 					default:

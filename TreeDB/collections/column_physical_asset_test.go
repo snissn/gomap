@@ -292,6 +292,38 @@ func TestEncodeColumnPhysicalAssetRejectsMismatchedVectorLength(t *testing.T) {
 	}
 }
 
+func TestDecodeColumnPhysicalAssetRejectsMismatchedVectorLength(t *testing.T) {
+	var raw bytes.Buffer
+	writeManifestUint32(&raw, columnPhysicalAssetMagic)
+	writeManifestUint16(&raw, columnPhysicalAssetVersion)
+	writeManifestString(&raw, "vectors")
+	writeManifestString(&raw, "vectors/column-assets")
+	writeManifestUint64(&raw, 2)
+	writeManifestUint64(&raw, 1)
+	writeManifestUint64(&raw, 9)
+	writeManifestString(&raw, string(ColumnPublishOperationInsert))
+	writeManifestUint64(&raw, 123)
+	writeManifestUint64(&raw, 1)
+	writeManifestUint64(&raw, 1)
+	writeManifestString(&raw, "embedding")
+	writeManifestString(&raw, "embedding")
+	writeManifestString(&raw, string(ColumnStoreValueFloat32Vector))
+	writeManifestBool(&raw, false)
+	writeManifestBool(&raw, false)
+	writeManifestUint64(&raw, 3)
+	writeManifestBytes(&raw, []byte("v1"))
+	writeManifestBool(&raw, false)
+	writeManifestString(&raw, string(ColumnStoreValueFloat32Vector))
+	writeManifestBool(&raw, false)
+	writeManifestBool(&raw, true)
+	writeManifestFloat32Slice(&raw, []float32{1, 2})
+
+	_, err := decodeColumnPhysicalAsset(raw.Bytes())
+	if err == nil || !strings.Contains(err.Error(), "column float32 slice length=2 want 3") {
+		t.Fatalf("decodeColumnPhysicalAsset err=%v want vector length mismatch", err)
+	}
+}
+
 func TestManifestCursorVectorSlicesRejectShortPayload(t *testing.T) {
 	t.Run("float32", func(t *testing.T) {
 		var raw bytes.Buffer
