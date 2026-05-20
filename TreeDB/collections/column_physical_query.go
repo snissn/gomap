@@ -64,6 +64,8 @@ type ColumnPhysicalQueryDiagnostics struct {
 	VisibilityRows             int
 	ReconstructionRows         int
 	ResultGroups               int
+	DecodedBlockCacheHits      uint64
+	DecodedBlockCacheMisses    uint64
 	ScanNanos                  int64
 	VisibilityNanos            int64
 	ReduceNanos                int64
@@ -133,10 +135,14 @@ func (c *Collection) RunColumnPhysicalQueryParallel(req ColumnPhysicalQueryReque
 	if view.MutationParts > 0 {
 		return ColumnPhysicalQueryResult{}, fmt.Errorf("%w: parallel physical column query requires insert-only manifest until partitioned visibility execution lands", ErrColumnQueryPlanUnsupported)
 	}
+	if maxWorkers <= 1 {
+		return ColumnPhysicalQueryResult{}, fmt.Errorf("%w: parallel physical column query requires at least two workers", ErrColumnQueryPlanUnsupported)
+	}
+	if len(view.AssetRefs) <= 1 {
+		return ColumnPhysicalQueryResult{}, fmt.Errorf("%w: parallel physical column query requires more than one asset ref", ErrColumnQueryPlanUnsupported)
+	}
 	workers := maxWorkers
-	if refs := len(view.AssetRefs); maxWorkers <= 1 || refs <= 1 {
-		return c.runColumnPhysicalQueryInSnapshotView(view, req)
-	} else if workers > refs {
+	if refs := len(view.AssetRefs); workers > refs {
 		workers = refs
 	}
 	cfg := view.Config
