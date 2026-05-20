@@ -165,7 +165,7 @@ func columnQueryRequestNeedsPhysicalCapabilityDiscovery(req ColumnQueryPlanReque
 	case "":
 		return true
 	default:
-		return false
+		return true
 	}
 }
 
@@ -234,7 +234,7 @@ func (c *Collection) deriveColumnQueryPlannerCapabilitiesM14B(collectionName str
 	// replace this fallback with finer granule counts when they land.
 	caps.GranuleCount = manifestCaps.PhysicalAssetCount
 	caps.MutationParts = manifestCaps.MutationParts
-	caps.VisibilityMetadata = manifestCaps.MutationParts > 0 || cfg.PhysicalMutationParts > 0
+	caps.VisibilityMetadata = caps.MutationParts > 0
 	caps.ParallelWorkUnits = columnQueryParallelWorkUnits(caps)
 	if columnQueryForcedPhysicalExecution(req.ForceKind) && caps.PhysicalAssetCount > 0 {
 		caps.SerialColumnScan = true
