@@ -249,25 +249,11 @@ func (c *Collection) planColumnAssetReachability(ctx context.Context, opts colum
 		defer closeView()
 	}
 	if err != nil {
-		return ColumnAssetReachabilityPlan{ProtectOnly: true}, nil, err
+		input := columnAssetReachabilityInputFromSnapshotView(view, opts)
+		return columnAssetReachabilityPlanIdentity(input), input.refs, err
 	}
 
-	expectedRefs := len(view.AssetRefs) + len(opts.CandidateRefs) + len(opts.PendingRefs) + len(opts.PreparedRefs) + len(opts.PinnedRefs)
-	input := columnAssetReachabilityInput{
-		rootDir:        view.ColumnAssetRootDir,
-		collection:     view.CollectionName,
-		namespace:      view.AssetNamespace,
-		activeGen:      view.Diagnostics.ManifestGeneration,
-		recoveryGen:    view.Diagnostics.RecoveryManifestGeneration,
-		manifestRecs:   view.Diagnostics.ManifestRecords,
-		detailed:       opts.Detailed,
-		segmentDetails: opts.Detailed || opts.SegmentDetails,
-		omitSources:    opts.omitDetailedEntrySources,
-		omitSort:       opts.omitDetailedEntrySort,
-	}
-	if expectedRefs > 0 {
-		input.refs = make(map[ColumnAssetRef]columnAssetReachabilitySourceMask, expectedRefs)
-	}
+	input := columnAssetReachabilityInputFromSnapshotView(view, opts)
 	for i, assetRef := range view.AssetRefs {
 		if i%columnAssetReachabilityContextCheckInterval == 0 {
 			if err := ctx.Err(); err != nil {
@@ -314,6 +300,26 @@ func (c *Collection) columnAssetReachabilityOlderSnapshotPinned(planCommitSeq ui
 		return false
 	}
 	return c.db.MinPinnedSnapshotCommitSeq() < planCommitSeq
+}
+
+func columnAssetReachabilityInputFromSnapshotView(view columnPhysicalScanSnapshotView, opts columnAssetReachabilityOptionsInternal) columnAssetReachabilityInput {
+	expectedRefs := len(view.AssetRefs) + len(opts.CandidateRefs) + len(opts.PendingRefs) + len(opts.PreparedRefs) + len(opts.PinnedRefs)
+	input := columnAssetReachabilityInput{
+		rootDir:        view.ColumnAssetRootDir,
+		collection:     view.CollectionName,
+		namespace:      view.AssetNamespace,
+		activeGen:      view.Diagnostics.ManifestGeneration,
+		recoveryGen:    view.Diagnostics.RecoveryManifestGeneration,
+		manifestRecs:   view.Diagnostics.ManifestRecords,
+		detailed:       opts.Detailed,
+		segmentDetails: opts.Detailed || opts.SegmentDetails,
+		omitSources:    opts.omitDetailedEntrySources,
+		omitSort:       opts.omitDetailedEntrySort,
+	}
+	if expectedRefs > 0 {
+		input.refs = make(map[ColumnAssetRef]columnAssetReachabilitySourceMask, expectedRefs)
+	}
+	return input
 }
 
 type columnAssetReachabilityInput struct {
@@ -370,6 +376,14 @@ func (in *columnAssetReachabilityInput) addRef(ref ColumnAssetRef, source Column
 	}
 	sourceMask, ok := columnAssetReachabilitySourceBit(source)
 	if !ok {
+		if !in.detailed {
+			mask := in.refs[ref]
+			if mask&columnAssetReachabilitySourceUnknownMask != 0 {
+				return false
+			}
+			in.refs[ref] = mask | columnAssetReachabilitySourceUnknownMask
+			return true
+		}
 		if !in.addUnknownRefSource(ref, source) {
 			return false
 		}
@@ -454,11 +468,12 @@ func buildColumnAssetReachabilityPlan(ctx context.Context, input columnAssetReac
 		plan.Entries = make([]ColumnAssetReachabilityRefEntry, 0, len(input.refs))
 	}
 	if input.detailed || input.segmentDetails {
-		plan.SegmentEntries = make([]ColumnAssetReachabilitySegmentEntry, 0, len(segments))
+		plan.SegmentEntries = make([]ColumnAssetReachabilitySegmentEntry, 0, len(segments)+len(rangesByFile))
 	}
 	processRef := func(ref ColumnAssetRef, sourceMask columnAssetReachabilitySourceMask) {
 		status := columnAssetReachabilityStatusForSourceMask(sourceMask)
-		if !columnAssetReachabilityRefCanContributeRange(ref, input.namespace) {
+		canContributeRange := columnAssetReachabilityRefCanContributeRange(ref, input.namespace)
+		if !canContributeRange {
 			status = ColumnAssetReachabilityUncertain
 		}
 		plan.Refs.Total++
@@ -486,7 +501,7 @@ func buildColumnAssetReachabilityPlan(ctx context.Context, input columnAssetReac
 			}
 			plan.Entries = append(plan.Entries, entry)
 		}
-		if status == ColumnAssetReachabilityUncertain {
+		if !canContributeRange {
 			return
 		}
 		set := rangesByFile[ref.FileID]
