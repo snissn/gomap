@@ -862,7 +862,9 @@ func hashColumnStoreSchema(cfg *ColumnStoreConfig) uint64 {
 		writeHashString(&d, string(col.ValueType))
 		writeHashBool(&d, col.Nullable)
 		writeHashBool(&d, col.Dictionary)
-		writeHashInt(&d, col.VectorDims)
+		if col.ValueType == ColumnStoreValueFloat32Vector {
+			writeHashInt(&d, col.VectorDims)
+		}
 	}
 	for _, sortKey := range cfg.SortKey {
 		writeHashString(&d, sortKey.Column)
