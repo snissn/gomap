@@ -37,7 +37,7 @@ meta := collections.CollectionMeta{
 					Name:       "embedding",
 					Path:       "embedding",
 					ValueType:  collections.ColumnStoreValueFloat32Vector,
-					VectorDims: 128,
+					VectorDims: 3,
 				},
 				{
 					Name:      "embedding_inv_norm",
@@ -62,13 +62,17 @@ meta := collections.CollectionMeta{
 		Name:       "embedding",
 		Field:      "embedding",
 		Metric:     collections.VectorMetricCosine,
-		Dimensions: 128,
+		Dimensions: 3,
 		M:          16,
 		EfSearch:   128,
 		Strategy:   collections.VectorIndexStrategyColumnGraph,
 	}},
 }
 ```
+
+This quickstart uses a tiny 3-dimensional graph so the example document is
+literal rather than abbreviated. Production and benchmark configurations should
+set `VectorDims` and `Dimensions` to the actual embedding width.
 
 Documents must include the source vector plus graph side columns until the
 column-graph build/rebuild seam lands:
@@ -112,7 +116,10 @@ GOWORK=off go run ./cmd/treedb_column_graph_demo -json
 The demo creates a database, inserts a tiny graph, checkpoints, reopens, and
 searches through the public collection API. It intentionally writes the
 inverse-norm and adjacency columns in the documents so it can prove the
-persisted column-asset loader without adding fake vector persistence.
+persisted column-asset loader without adding fake vector persistence. By
+default it requires the persisted `column_graph` path; pass `-allow-fallback`
+when you want the demo to print exact-fallback diagnostics instead of failing
+closed.
 
 ## Real Public Dataset
 

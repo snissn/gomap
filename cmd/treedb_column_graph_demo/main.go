@@ -17,6 +17,7 @@ type demoOutput struct {
 	Status  demoStatus                   `json:"status"`
 	Trace   collections.VectorIndexTrace `json:"trace"`
 	Results []demoResult                 `json:"results"`
+	Error   string                       `json:"error,omitempty"`
 }
 
 type demoStatus struct {
@@ -41,6 +42,7 @@ func main() {
 	dir := flag.String("dir", "", "TreeDB directory to create; defaults to a temporary directory")
 	keepDir := flag.Bool("keep-dir", false, "keep the temporary directory after the demo")
 	jsonOut := flag.Bool("json", false, "emit JSON instead of text")
+	allowFallback := flag.Bool("allow-fallback", false, "allow exact fallback instead of requiring the persisted column_graph path")
 	flag.Parse()
 
 	dbDir := *dir
@@ -56,12 +58,12 @@ func main() {
 	if tempDir && !*keepDir {
 		defer func() { _ = os.RemoveAll(dbDir) }()
 	}
-	if err := runDemo(dbDir, *jsonOut); err != nil {
+	if err := runDemo(dbDir, *jsonOut, *allowFallback); err != nil {
 		log.Fatal(err)
 	}
 }
 
-func runDemo(dir string, jsonOut bool) error {
+func runDemo(dir string, jsonOut bool, allowFallback bool) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create db dir: %w", err)
 	}
@@ -140,15 +142,25 @@ func runDemo(dir string, jsonOut bool) error {
 	if err != nil {
 		return fmt.Errorf("vector status: %w", err)
 	}
+	out := demoOutput{Dir: filepath.Clean(dir), Status: demoStatusFromVectorStatus(status)}
 	results, trace, err := reopened.SearchVectorIndex("embedding", []float32{1, 0, 0}, collections.VectorIndexSearchOptions{
-		TopK:     2,
-		EfSearch: 16,
+		TopK:                 2,
+		EfSearch:             16,
+		DisableExactFallback: !allowFallback,
 	})
 	if err != nil {
+		out.Trace = trace
+		out.Error = err.Error()
+		_ = writeDemoOutput(out, jsonOut)
 		return fmt.Errorf("column graph search: %w", err)
 	}
 
-	out := demoOutput{Dir: filepath.Clean(dir), Status: demoStatusFromVectorStatus(status), Trace: trace, Results: demoResults(results)}
+	out.Trace = trace
+	out.Results = demoResults(results)
+	return writeDemoOutput(out, jsonOut)
+}
+
+func writeDemoOutput(out demoOutput, jsonOut bool) error {
 	if jsonOut {
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
@@ -164,12 +176,15 @@ func runDemo(dir string, jsonOut bool) error {
 		out.Status.RootID,
 	)
 	fmt.Printf("trace: strategy=%s candidates=%d returned=%d fallback=%q\n",
-		trace.Strategy,
-		trace.CandidatesExamined,
-		trace.ReturnedCount,
-		trace.ExactFallbackReason,
+		out.Trace.Strategy,
+		out.Trace.CandidatesExamined,
+		out.Trace.ReturnedCount,
+		out.Trace.ExactFallbackReason,
 	)
-	for i, result := range results {
+	if out.Error != "" {
+		fmt.Printf("error: %s\n", out.Error)
+	}
+	for i, result := range out.Results {
 		fmt.Printf("%d. id=%s distance=%.6f doc=%s\n", i+1, result.DocumentID, result.Distance, result.Document)
 	}
 	return nil
