@@ -347,6 +347,30 @@ func TestColumnAssetRewriteRecognizesBackendPreApplyFailureM15C(t *testing.T) {
 	}
 }
 
+func TestColumnAssetRewriteManifestRootStoragePolicyM15C(t *testing.T) {
+	if _, err := columnAssetRewriteManifestRootStoragePolicy(columnAssetRewriteManifestState{}); err == nil {
+		t.Fatal("columnAssetRewriteManifestRootStoragePolicy missing manifest root err=nil, want error")
+	}
+	if _, err := columnAssetRewriteManifestRootStoragePolicy(columnAssetRewriteManifestState{
+		cfg: ColumnStoreConfig{
+			ManifestRoot: &ColumnManifestRootDescriptor{StoragePolicy: RootStoragePolicy("unsupported")},
+		},
+	}); err == nil {
+		t.Fatal("columnAssetRewriteManifestRootStoragePolicy unsupported storage policy err=nil, want error")
+	}
+	policy, err := columnAssetRewriteManifestRootStoragePolicy(columnAssetRewriteManifestState{
+		cfg: ColumnStoreConfig{
+			ManifestRoot: &ColumnManifestRootDescriptor{StoragePolicy: RootStorageCompressed},
+		},
+	})
+	if err != nil {
+		t.Fatalf("columnAssetRewriteManifestRootStoragePolicy compressed: %v", err)
+	}
+	if policy != backenddb.OrderedRootStorageValueLogLeaves {
+		t.Fatalf("policy=%v want OrderedRootStorageValueLogLeaves", policy)
+	}
+}
+
 func staleColumnAssetRewriteManifestRootM15C(d *backenddb.DB) error {
 	payload, err := commitlog.EncodeRawKVBatchPayload([]commitlog.RawKVOperation{{
 		Op:    commitlog.RawKVOpSet,
