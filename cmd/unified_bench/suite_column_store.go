@@ -72,19 +72,26 @@ var (
 		"Forced column-store execution label for -suite column_store (canonical: %s; aliases: %s; executable: %s; accepted labels: row_store_baseline, b_tree_index_baseline, serial_column_scan, aggregate_metadata, parallel_column_scan; aggregate_metadata currently executes only q5_metadata and remains scan-backed until real metadata assets land)",
 		columnStoreSuitePathCanonicalHelp,
 		columnStoreSuitePathAliasHelp(columnStoreSuitePathAliases),
-		columnStoreSuitePathCanonicalHelp,
+		columnStoreSuitePathList(columnStoreSuiteExecutableForcedPaths),
 	)
 	columnStoreSuitePathArg    = flag.String("column-store-path", columnStorePathRowStoreBaseline, columnStoreSuitePathUsage)
 	columnStoreSuiteFixtureArg = flag.String("column-store-fixture", "synthetic", "Fixture for -suite column_store (synthetic; JSONBENCH_DATA mode is reserved for the large local gate)")
 
-	columnStoreSuiteSupportedForcedPaths = []string{
+	columnStoreSuiteAcceptedForcedPaths = []string{
 		columnStorePathRowStoreBaseline,
 		columnStorePathBTreeIndexBaseline,
 		columnStorePathSerialColumnScan,
 		columnStorePathAggregateMetadata,
 		columnStorePathParallelColumnScan,
 	}
-	columnStoreSuiteUnsupportedForcedPaths = []string{}
+	columnStoreSuiteExecutableForcedPaths = []string{
+		columnStorePathRowStoreBaseline,
+		columnStorePathBTreeIndexBaseline,
+		columnStorePathSerialColumnScan,
+		columnStorePathAggregateMetadata,
+		columnStorePathParallelColumnScan,
+	}
+	columnStoreSuiteFailClosedForcedPaths = []string{}
 	// These files are opportunistic control-plane telemetry for the benchmark
 	// report. Missing files are reported, not fatal, because the exact set can
 	// vary as TreeDB control metadata evolves.
@@ -463,8 +470,8 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 		BatchSize:             batchSize,
 		Seed:                  seed,
 		CacheLabel:            "reopened_warm_process",
-		AcceptedForcedPaths:   cloneStringSlice(columnStoreSuiteSupportedForcedPaths),
-		FailClosedForcedPaths: cloneStringSlice(columnStoreSuiteUnsupportedForcedPaths),
+		AcceptedForcedPaths:   cloneStringSlice(columnStoreSuiteAcceptedForcedPaths),
+		FailClosedForcedPaths: cloneStringSlice(columnStoreSuiteFailClosedForcedPaths),
 		Stages:                stages,
 		Queries:               queries,
 		Parity:                parity,
@@ -588,7 +595,7 @@ func columnStoreSuitePlanKind(path string) (collections.ColumnQueryPlanKind, err
 	case columnStorePathParallelColumnScan:
 		return collections.ColumnQueryPlanParallelColumnScan, nil
 	default:
-		return "", fmt.Errorf("column_store: unknown forced path %q; supported=%s aliases=%s fail_closed=%s; see -column-store-path help", path, columnStoreSuitePathList(columnStoreSuiteSupportedForcedPaths), columnStoreSuitePathAliasHelp(columnStoreSuitePathAliases), columnStoreSuitePathList(columnStoreSuiteUnsupportedForcedPaths))
+		return "", fmt.Errorf("column_store: unknown forced path %q; supported=%s aliases=%s fail_closed=%s; see -column-store-path help", path, columnStoreSuitePathList(columnStoreSuiteAcceptedForcedPaths), columnStoreSuitePathAliasHelp(columnStoreSuitePathAliases), columnStoreSuitePathList(columnStoreSuiteFailClosedForcedPaths))
 	}
 }
 
@@ -1525,7 +1532,7 @@ func columnStoreQueryInterpretationEvidence(q columnStoreQueryMetric) string {
 	if rowDenominator > 0 {
 		rowMaterializations = fmt.Sprintf("%d/%d", q.RowMaterializations, rowDenominator)
 	}
-	return fmt.Sprintf("; observed rows_processed=%d row_materializations=%s bytes_read=%d metadata_hits=%d scheduled_granules=%d skipped_granules=%d", rowsProcessed, rowMaterializations, q.BytesRead, q.MetadataHits, q.ScheduledGranules, q.SkippedGranules)
+	return fmt.Sprintf("; effective_rows_processed=%d row_materializations=%s bytes_read=%d metadata_hits=%d scheduled_granules=%d skipped_granules=%d", rowsProcessed, rowMaterializations, q.BytesRead, q.MetadataHits, q.ScheduledGranules, q.SkippedGranules)
 }
 
 func populateColumnStoreThroughputInterpretations(queries []columnStoreQueryMetric) {
@@ -1938,7 +1945,6 @@ func markdownCodeTableText(value string) string {
 }
 
 func markdownNormalizeTableCell(value string, escapeHTML bool) string {
-	value = markdownNormalizeTableCellLineBreaks(value)
 	value = markdownEscapeTablePipes(value)
 	if escapeHTML {
 		value = html.EscapeString(value)
