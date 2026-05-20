@@ -441,9 +441,16 @@ func (a *columnPhysicalAssetSegmentAppender) close() error {
 		a.closeFile = false
 		a.file = nil
 	}
+	var removeErr error
+	if a.failed && a.assetPath != "" {
+		removeErr = os.Remove(a.assetPath)
+		if errors.Is(removeErr, os.ErrNotExist) {
+			removeErr = nil
+		}
+	}
 	dirSyncErr := syncColumnAssetDir(a.namespace.SegmentDir)
 	a.releaseLock()
-	return errors.Join(appenderErr, fileSyncErr, fileCloseErr, dirSyncErr)
+	return errors.Join(appenderErr, fileSyncErr, fileCloseErr, removeErr, dirSyncErr)
 }
 
 func (a *columnPhysicalAssetSegmentAppender) abort() error {
@@ -456,8 +463,16 @@ func (a *columnPhysicalAssetSegmentAppender) abort() error {
 		a.closeFile = false
 		a.file = nil
 	}
+	var removeErr error
+	if a.assetPath != "" {
+		removeErr = os.Remove(a.assetPath)
+		if errors.Is(removeErr, os.ErrNotExist) {
+			removeErr = nil
+		}
+	}
+	syncErr := syncColumnAssetDir(a.namespace.SegmentDir)
 	a.releaseLock()
-	return closeErr
+	return errors.Join(closeErr, removeErr, syncErr)
 }
 
 func (a *columnPhysicalAssetSegmentAppender) releaseLock() {

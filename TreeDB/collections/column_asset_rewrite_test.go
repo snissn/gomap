@@ -124,6 +124,47 @@ func TestColumnAssetRewriteRemapsManifestRefsOutOfMixedSegmentM15C(t *testing.T)
 	}
 }
 
+func TestColumnAssetRewriteSkipsSegmentWhenManifestRefAlsoProtectedByPinnedSourceM15C(t *testing.T) {
+	namespace := "collections/events/column-assets"
+	segmentDir := t.TempDir()
+	ref := ColumnAssetRef{
+		Kind:       ColumnAssetKindTCS1PartImage,
+		Namespace:  namespace,
+		Generation: 7,
+		PartID:     3,
+		FileID:     2,
+		Offset:     0,
+		Length:     10,
+		Checksum:   99,
+	}
+	plan := ColumnAssetReachabilityPlan{
+		Namespace: namespace,
+		Segments:  ColumnAssetReachabilitySegmentStats{Mixed: 1},
+		SegmentEntries: []ColumnAssetReachabilitySegmentEntry{{
+			Namespace:        namespace,
+			FileID:           ref.FileID,
+			Path:             filepath.Join(segmentDir, columnAssetSegmentFileName(ref.FileID)),
+			Bytes:            20,
+			Status:           ColumnAssetReachabilitySegmentMixed,
+			ProtectedBytes:   ref.Length,
+			ReclaimableBytes: 10,
+			RefCount:         2,
+		}},
+	}
+	sourceMasks := map[ColumnAssetRef]columnAssetReachabilitySourceMask{
+		ref: columnAssetReachabilitySourceActiveManifestMask | columnAssetReachabilitySourcePinnedSnapshotMask,
+	}
+
+	segments := columnAssetRewriteEligibleSegments(segmentDir, plan, sourceMasks)
+	if len(segments) != 0 {
+		t.Fatalf("eligible segments=%v want none when manifest ref is also pinned", segments)
+	}
+	refs := columnAssetRewriteEligibleRefs(plan, sourceMasks, segments)
+	if len(refs) != 0 {
+		t.Fatalf("eligible refs=%v want none when manifest ref is also pinned", refs)
+	}
+}
+
 func TestColumnAssetRewriteLifecycleSmokeWithMutationsM15C(t *testing.T) {
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)

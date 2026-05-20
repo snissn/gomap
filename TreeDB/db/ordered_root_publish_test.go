@@ -422,6 +422,32 @@ func TestPublishOrderedRootDeltaGroupMaintenanceRejectsInvalidInputBeforeWriteLo
 	requireCommandWALPublishReady(t, db, "pre-lock forged maintenance plan rejection")
 }
 
+func TestPublishOrderedRootDeltaGroupMaintenanceReadOnlyClosesIterators(t *testing.T) {
+	iter := &closeCountingUnsafeIterator{}
+	db := &DB{readOnly: true}
+	_, _, err := db.PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(
+		storagemaintenance.ColumnAssetRewritePlan(),
+		[]StorageMaintenanceRootDeltaPublishInput{{
+			BaseRoot: 0,
+			Iter:     iter,
+		}},
+		nil,
+		func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+			t.Fatalf("maintenance system builder should not run on read-only DB")
+			return nil, nil
+		},
+	)
+	if !errors.Is(err, ErrReadOnly) {
+		t.Fatalf("maintenance publish read-only error=%v want ErrReadOnly", err)
+	}
+	if !errors.Is(err, ErrStorageMaintenancePublishPreApplyFailed) {
+		t.Fatalf("maintenance publish read-only error=%v want ErrStorageMaintenancePublishPreApplyFailed", err)
+	}
+	if iter.closes != 1 {
+		t.Fatalf("iterator closes=%d want 1", iter.closes)
+	}
+}
+
 func TestPublishOrderedRootDeltaGroupMaintenanceRejectsTypedNilPlan(t *testing.T) {
 	dir := t.TempDir()
 	enableCommandWALFormat(t, dir)

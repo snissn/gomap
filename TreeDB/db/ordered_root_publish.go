@@ -1434,6 +1434,7 @@ func (db *DB) PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBui
 		return 0, nil, storageMaintenancePreApplyError(ErrClosed)
 	}
 	if db.readOnly {
+		closeStorageMaintenanceRootDeltaPublishIterators(ordered)
 		return 0, nil, storageMaintenancePreApplyError(ErrReadOnly)
 	}
 	if err := validateStorageMaintenanceRootDeltaPublishInputs(plan, len(ordered)); err != nil {

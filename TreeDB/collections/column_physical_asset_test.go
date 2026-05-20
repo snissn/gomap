@@ -727,6 +727,50 @@ func TestColumnAssetManagerAllocatesDistinctNewSegmentsConcurrentlyM15C(t *testi
 	}
 }
 
+func TestColumnAssetSegmentAppenderAbortRemovesSegmentM15C(t *testing.T) {
+	cfg := testColumnStoreConfig(nil)
+	normalized, err := normalizeColumnStoreConfig("events", cfg)
+	if err != nil {
+		t.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+	root := backenddb.ColumnAssetRootDirPath(t.TempDir())
+	appender, err := newNextColumnPhysicalAssetSegmentAppender(root, *normalized)
+	if err != nil {
+		t.Fatalf("newNextColumnPhysicalAssetSegmentAppender: %v", err)
+	}
+	assetPath := appender.assetPath
+	if _, err := os.Stat(assetPath); err != nil {
+		t.Fatalf("segment before abort stat: %v", err)
+	}
+	if err := appender.abort(); err != nil {
+		t.Fatalf("abort: %v", err)
+	}
+	if _, err := os.Stat(assetPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("segment after abort stat=%v want not exist", err)
+	}
+}
+
+func TestColumnAssetSegmentAppenderFailedCloseRemovesSegmentM15C(t *testing.T) {
+	cfg := testColumnStoreConfig(nil)
+	normalized, err := normalizeColumnStoreConfig("events", cfg)
+	if err != nil {
+		t.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+	root := backenddb.ColumnAssetRootDirPath(t.TempDir())
+	appender, err := newNextColumnPhysicalAssetSegmentAppender(root, *normalized)
+	if err != nil {
+		t.Fatalf("newNextColumnPhysicalAssetSegmentAppender: %v", err)
+	}
+	assetPath := appender.assetPath
+	appender.failed = true
+	if err := appender.close(); err == nil || !strings.Contains(err.Error(), "appender is failed") {
+		t.Fatalf("failed close err=%v want appender failed", err)
+	}
+	if _, err := os.Stat(assetPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("segment after failed close stat=%v want not exist", err)
+	}
+}
+
 type chunkedColumnAssetWriter struct {
 	chunks []int
 	buf    bytes.Buffer

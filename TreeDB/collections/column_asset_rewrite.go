@@ -411,13 +411,7 @@ func cleanupColumnAssetRewriteOpenAppender(appender *columnPhysicalAssetSegmentA
 	}
 	// Abandoned partial copies are removed immediately; syncing the file before
 	// deletion would add write amplification without strengthening recovery.
-	closeErr := appender.abort()
-	removeErr := os.Remove(appender.assetPath)
-	if errors.Is(removeErr, os.ErrNotExist) {
-		removeErr = nil
-	}
-	syncErr := syncColumnAssetDir(appender.namespace.SegmentDir)
-	return errors.Join(closeErr, removeErr, syncErr)
+	return appender.abort()
 }
 
 func cleanupColumnAssetRewriteCopiedSegment(rootDir string, remap columnAssetRewriteCopyResult) error {
@@ -631,14 +625,19 @@ func columnAssetRewriteSegmentEligible(segmentDir string, entry ColumnAssetReach
 }
 
 func columnAssetRewriteSourceMaskIncludesManifest(sourceMask columnAssetReachabilitySourceMask) bool {
-	return sourceMask&(columnAssetReachabilitySourceActiveManifestMask|columnAssetReachabilitySourceRecoveryManifestMask) != 0
+	return sourceMask&columnAssetRewriteManifestSourceMask() != 0
 }
 
 func columnAssetRewriteSourceMaskIsProtectedNonManifest(sourceMask columnAssetReachabilitySourceMask) bool {
-	if sourceMask == 0 || columnAssetRewriteSourceMaskIncludesManifest(sourceMask) {
-		return false
-	}
-	return sourceMask&columnAssetReachabilityProtectedSourceMask != 0
+	return sourceMask&columnAssetRewriteProtectedNonManifestSourceMask() != 0
+}
+
+func columnAssetRewriteManifestSourceMask() columnAssetReachabilitySourceMask {
+	return columnAssetReachabilitySourceActiveManifestMask | columnAssetReachabilitySourceRecoveryManifestMask
+}
+
+func columnAssetRewriteProtectedNonManifestSourceMask() columnAssetReachabilitySourceMask {
+	return columnAssetReachabilityProtectedSourceMask &^ columnAssetRewriteManifestSourceMask()
 }
 
 func columnAssetRewriteSameLogicalRef(left, right ColumnAssetRef) bool {
