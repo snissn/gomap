@@ -385,6 +385,7 @@ func columnVectorGraphDeep1BAnalyzeGroundtruthQuery(tb testing.TB, baseFile *os.
 	report.Methods = append(report.Methods, columnVectorGraphDeep1BEvaluateGroundtruthScalarMethods(vectors, invNorms, query, queryInvNorm, exactScores, report.ScoreMargins, rows, dims, scanIters)...)
 	report.Methods = append(report.Methods, columnVectorGraphDeep1BEvaluateGroundtruthQueryAxisOracle(vectors, invNorms, query, queryInvNorm, exactScores, report.ScoreMargins, rows, dims, scanIters)...)
 	report.Methods = append(report.Methods, columnVectorGraphDeep1BEvaluateGroundtruthRandomRotationMethods(vectors, invNorms, query, queryInvNorm, exactScores, report.ScoreMargins, rows, dims, scanIters, int64(queryIndex))...)
+	report.Methods = append(report.Methods, columnVectorGraphDeep1BEvaluateGroundtruthFloatQuantizationTournament(vectors, invNorms, query, queryInvNorm, exactScores, report.ScoreMargins, rows, dims, scanIters, int64(queryIndex))...)
 	return report
 }
 
@@ -2279,6 +2280,7 @@ func columnVectorGraphDeep1BRenderGroundtruthLocalityMarkdown(report columnVecto
 	}
 	columnVectorGraphDeep1BRenderGroundtruthAggregateMarkdown(&b, report)
 	columnVectorGraphDeep1BRenderGroundtruthMethodAggregateMarkdown(&b, report)
+	columnVectorGraphDeep1BRenderFloatQuantGateSummaryMarkdown(&b, report)
 	columnVectorGraphDeep1BRenderGroundtruthBoundAggregateMarkdown(&b, report)
 	fmt.Fprintf(&b, "\n## Exact Score Margins\n\n")
 	fmt.Fprintf(&b, "| Query | Gap 1/2 | Gap 5/6 | Gap 10/11 | Gap 20/21 | Gap 50/51 | Adjacent p50 | Adjacent p90 | Adjacent max |\n")
