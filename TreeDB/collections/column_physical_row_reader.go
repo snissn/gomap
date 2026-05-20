@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strconv"
 )
 
 const defaultColumnPhysicalRowReaderMaxDecodedBlocks = 4
@@ -67,9 +68,11 @@ type columnPhysicalRowReader struct {
 type columnPhysicalRowReaderRange struct {
 	assetOrdinal int
 	ref          ColumnAssetRef
-	reason       ColumnPublishOperation
 	startOrdinal int
 	rowCount     int
+	version      uint16
+	header       columnPhysicalAssetScanHeader
+	rowsOffset   int
 }
 
 type columnPhysicalRowReaderBlock struct {
@@ -77,7 +80,6 @@ type columnPhysicalRowReaderBlock struct {
 	raw           []byte
 	version       uint16
 	header        columnPhysicalAssetScanHeader
-	rowsOffset    int
 	rowOffsets    []int
 	residentBytes int64
 }
@@ -116,15 +118,12 @@ func newColumnPhysicalRowReaderFromSnapshotView(view columnPhysicalScanSnapshotV
 	if opts.RequireInsertOnly && view.MutationParts != 0 {
 		return nil, errColumnPhysicalQueryNeedsVisibility
 	}
+	if opts.MaxDecodedBlocks < 0 {
+		return nil, errors.New("collections: physical column row reader max decoded blocks cannot be negative")
+	}
 	maxBlocks := opts.MaxDecodedBlocks
 	if maxBlocks == 0 {
 		maxBlocks = defaultColumnPhysicalRowReaderMaxDecodedBlocks
-	}
-	if maxBlocks < 0 {
-		return nil, errors.New("collections: physical column row reader max decoded blocks cannot be negative")
-	}
-	if maxBlocks == 0 {
-		return nil, errors.New("collections: physical column row reader requires bounded decoded-block cache")
 	}
 	projection, err := newColumnPhysicalScanProjection(cfg, opts.ProjectedColumns)
 	if err != nil {
@@ -250,20 +249,21 @@ func (r *columnPhysicalRowReader) buildOrdinalRanges() error {
 		rawScratch = raw
 		r.stats.OpenGranulesRead++
 		r.stats.OpenPhysicalBytesRead += int64(len(raw))
-		header, _, _, rowsOffset, err := parseColumnPhysicalAssetReaderHeader(raw, ref, r.view.CollectionName, &r.view.Config, assetRef.Reason)
+		header, version, _, rowsOffset, err := parseColumnPhysicalAssetReaderHeader(raw, ref, r.view.CollectionName, &r.view.Config, assetRef.Reason)
 		if err != nil {
 			return fmt.Errorf("collections: physical column row reader open decode generation=%d part_id=%d: %w", ref.Generation, ref.PartID, err)
 		}
 		if header.RowCount > maxCollectionInt-totalRows {
 			return errors.New("collections: physical column row reader row count overflows int")
 		}
-		_ = rowsOffset
 		ranges = append(ranges, columnPhysicalRowReaderRange{
 			assetOrdinal: assetOrdinal,
 			ref:          ref,
-			reason:       assetRef.Reason,
 			startOrdinal: totalRows,
 			rowCount:     header.RowCount,
+			version:      version,
+			header:       header,
+			rowsOffset:   rowsOffset,
 		})
 		totalRows += header.RowCount
 	}
@@ -279,7 +279,7 @@ func (r *columnPhysicalRowReader) fetchRow(ordinal int, scratch *columnPhysicalR
 		return columnPhysicalRowReaderRow{}, fmt.Errorf("collections: physical column row ordinal=%d outside row_count=%d", ordinal, r.totalRows)
 	}
 	rowRange := r.ranges[rangeIdx]
-	block, err := r.loadBlock(rowRange.assetOrdinal)
+	block, err := r.loadBlock(rowRange)
 	if err != nil {
 		return columnPhysicalRowReaderRow{}, err
 	}
@@ -311,7 +311,8 @@ func (r *columnPhysicalRowReader) rangeIndexForOrdinal(ordinal int) int {
 	return -1
 }
 
-func (r *columnPhysicalRowReader) loadBlock(assetOrdinal int) (*columnPhysicalRowReaderBlock, error) {
+func (r *columnPhysicalRowReader) loadBlock(rowRange columnPhysicalRowReaderRange) (*columnPhysicalRowReaderBlock, error) {
+	assetOrdinal := rowRange.assetOrdinal
 	if block := r.blocks[assetOrdinal]; block != nil {
 		r.stats.CacheHits++
 		r.touchBlock(assetOrdinal)
@@ -321,28 +322,22 @@ func (r *columnPhysicalRowReader) loadBlock(assetOrdinal int) (*columnPhysicalRo
 	if assetOrdinal < 0 || assetOrdinal >= len(r.view.AssetRefs) {
 		return nil, fmt.Errorf("collections: physical column row reader asset ordinal=%d outside refs=%d", assetOrdinal, len(r.view.AssetRefs))
 	}
-	assetRef := r.view.AssetRefs[assetOrdinal]
-	raw, err := r.readCache.read(assetRef.Ref, nil)
+	raw, err := r.readCache.read(rowRange.ref, nil)
 	if err != nil {
-		return nil, fmt.Errorf("collections: physical column row reader read generation=%d part_id=%d: %w", assetRef.Ref.Generation, assetRef.Ref.PartID, err)
+		return nil, fmt.Errorf("collections: physical column row reader read generation=%d part_id=%d: %w", rowRange.ref.Generation, rowRange.ref.PartID, err)
 	}
-	header, version, _, rowsOffset, err := parseColumnPhysicalAssetReaderHeader(raw, assetRef.Ref, r.view.CollectionName, &r.view.Config, assetRef.Reason)
+	rowOffsets, err := indexColumnPhysicalAssetReaderRows(raw, rowRange.version, rowRange.rowsOffset, rowRange.header, &r.view.Config)
 	if err != nil {
-		return nil, fmt.Errorf("collections: physical column row reader decode generation=%d part_id=%d: %w", assetRef.Ref.Generation, assetRef.Ref.PartID, err)
-	}
-	rowOffsets, err := indexColumnPhysicalAssetReaderRows(raw, version, rowsOffset, header, &r.view.Config)
-	if err != nil {
-		return nil, fmt.Errorf("collections: physical column row reader index generation=%d part_id=%d: %w", assetRef.Ref.Generation, assetRef.Ref.PartID, err)
+		return nil, fmt.Errorf("collections: physical column row reader index generation=%d part_id=%d: %w", rowRange.ref.Generation, rowRange.ref.PartID, err)
 	}
 	block := &columnPhysicalRowReaderBlock{
 		assetOrdinal: assetOrdinal,
 		raw:          raw,
-		version:      version,
-		header:       header,
-		rowsOffset:   rowsOffset,
+		version:      rowRange.version,
+		header:       rowRange.header,
 		rowOffsets:   rowOffsets,
 	}
-	block.residentBytes = int64(len(block.raw)) + int64(len(block.rowOffsets))*8
+	block.residentBytes = int64(len(block.raw)) + int64(len(block.rowOffsets))*(strconv.IntSize/8)
 	r.evictBlocksForInsert()
 	r.blocks[assetOrdinal] = block
 	r.lru = append(r.lru, assetOrdinal)
@@ -365,7 +360,7 @@ func (r *columnPhysicalRowReader) touchBlock(assetOrdinal int) {
 		r.lru[len(r.lru)-1] = assetOrdinal
 		return
 	}
-	r.lru = append(r.lru, assetOrdinal)
+	panic(fmt.Sprintf("collections: physical column row reader LRU missing cached asset ordinal=%d", assetOrdinal))
 }
 
 func (r *columnPhysicalRowReader) evictBlocksForInsert() {

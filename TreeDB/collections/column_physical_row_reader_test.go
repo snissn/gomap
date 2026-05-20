@@ -2,6 +2,7 @@ package collections
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"math"
 	"strings"
@@ -112,6 +113,16 @@ func TestColumnPhysicalRowReaderRejectsMutationPartsV1(t *testing.T) {
 	}
 }
 
+func TestColumnPhysicalRowReaderRejectsNegativeMaxDecodedBlocksV1(t *testing.T) {
+	normalized := testColumnPhysicalRowReaderConfigV1(t)
+	root := backenddb.ColumnAssetRootDirPath(t.TempDir())
+	view := columnPhysicalRowReaderViewForTestV1(root, normalized)
+	_, err := newColumnPhysicalRowReaderFromSnapshotView(view, columnPhysicalRowReaderOptions{MaxDecodedBlocks: -1})
+	if err == nil || !strings.Contains(err.Error(), "max decoded blocks cannot be negative") {
+		t.Fatalf("newColumnPhysicalRowReaderFromSnapshotView err=%v want negative max decoded blocks failure", err)
+	}
+}
+
 func TestColumnPhysicalRowReaderRejectsOutOfRangeOrdinalV1(t *testing.T) {
 	normalized := testColumnPhysicalRowReaderConfigV1(t)
 	root := backenddb.ColumnAssetRootDirPath(t.TempDir())
@@ -130,6 +141,77 @@ func TestColumnPhysicalRowReaderRejectsOutOfRangeOrdinalV1(t *testing.T) {
 	}
 	if _, err := reader.FetchRow(-1, &scratch); err == nil {
 		t.Fatal("FetchRow accepted negative ordinal")
+	}
+}
+
+func TestColumnPhysicalRowReaderRejectsUseAfterCloseV1(t *testing.T) {
+	normalized := testColumnPhysicalRowReaderConfigV1(t)
+	root := backenddb.ColumnAssetRootDirPath(t.TempDir())
+	ref := writeColumnPhysicalRowReaderAssetForTestV1(t, root, normalized, 14, 1, testColumnPhysicalRowReaderRowsV1(0, 1, normalized))
+	reader, err := newColumnPhysicalRowReaderFromSnapshotView(columnPhysicalRowReaderViewForTestV1(root, normalized, ref), columnPhysicalRowReaderOptions{
+		ProjectedColumns:  []string{"doc_ordinal"},
+		RequireInsertOnly: true,
+	})
+	if err != nil {
+		t.Fatalf("newColumnPhysicalRowReaderFromSnapshotView: %v", err)
+	}
+	if err := reader.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	var scratch columnPhysicalRowReaderScratch
+	if _, err := reader.FetchRow(0, &scratch); err == nil || !strings.Contains(err.Error(), "closed") {
+		t.Fatalf("FetchRow after Close err=%v want closed failure", err)
+	}
+	if err := reader.FetchBatch([]int{0}, &scratch, func(columnPhysicalRowReaderRow) error { return nil }); err == nil || !strings.Contains(err.Error(), "closed") {
+		t.Fatalf("FetchBatch after Close err=%v want closed failure", err)
+	}
+}
+
+func TestColumnPhysicalRowReaderNilReceiverGuardsV1(t *testing.T) {
+	var reader *columnPhysicalRowReader
+	if got := reader.RowCount(); got != 0 {
+		t.Fatalf("nil RowCount=%d want 0", got)
+	}
+	if got := reader.Stats(); got != (columnPhysicalRowReaderStats{}) {
+		t.Fatalf("nil Stats=%+v want zero", got)
+	}
+	if err := reader.Close(); err != nil {
+		t.Fatalf("nil Close err=%v want nil", err)
+	}
+	var scratch columnPhysicalRowReaderScratch
+	if _, err := reader.FetchRow(0, &scratch); err == nil || !strings.Contains(err.Error(), "nil physical column row reader") {
+		t.Fatalf("nil FetchRow err=%v want nil-reader failure", err)
+	}
+	if err := reader.FetchBatch([]int{0}, &scratch, func(columnPhysicalRowReaderRow) error { return nil }); err == nil || !strings.Contains(err.Error(), "nil physical column row reader") {
+		t.Fatalf("nil FetchBatch err=%v want nil-reader failure", err)
+	}
+}
+
+func TestColumnPhysicalRowReaderBatchVisitorErrorV1(t *testing.T) {
+	normalized := testColumnPhysicalRowReaderConfigV1(t)
+	root := backenddb.ColumnAssetRootDirPath(t.TempDir())
+	ref := writeColumnPhysicalRowReaderAssetForTestV1(t, root, normalized, 16, 1, testColumnPhysicalRowReaderRowsV1(0, 2, normalized))
+	reader, err := newColumnPhysicalRowReaderFromSnapshotView(columnPhysicalRowReaderViewForTestV1(root, normalized, ref), columnPhysicalRowReaderOptions{
+		ProjectedColumns:  []string{"doc_ordinal"},
+		RequireInsertOnly: true,
+	})
+	if err != nil {
+		t.Fatalf("newColumnPhysicalRowReaderFromSnapshotView: %v", err)
+	}
+	defer func() { _ = reader.Close() }()
+	sentinel := errors.New("stop visitor")
+	var scratch columnPhysicalRowReaderScratch
+	err = reader.FetchBatch([]int{0, 1}, &scratch, func(row columnPhysicalRowReaderRow) error {
+		if row.Ordinal != 0 {
+			t.Fatalf("visitor reached ordinal=%d after sentinel", row.Ordinal)
+		}
+		return sentinel
+	})
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("FetchBatch err=%v want sentinel", err)
+	}
+	if stats := reader.Stats(); stats.RowsFetched != 1 {
+		t.Fatalf("stats=%+v want exactly one fetched row before visitor error", stats)
 	}
 }
 
