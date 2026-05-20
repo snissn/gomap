@@ -497,8 +497,13 @@ u64 + u32[N]     float32_vector bits
 u64 + u32[N]     adjacency_list uint32 ordinals
 ```
 
-Version 3 row values added the `Present` flag but did not encode
-`vector_dims` in column descriptors. Version 2 row values are otherwise:
+Version 3 row value entries added the `Present` flag shown above but did not
+encode `vector_dims` in column descriptors. Version 2 row value entries omitted
+`Present`; every non-deleted declared-column entry was encoded as `ValueType`,
+`Null`, and an optional payload when `Null=false`. Version 4 keeps the version 3
+row value-entry layout and extends each column descriptor with `VectorDims`.
+
+Version 2 and later row records include delete state:
 
 ```text
 bytes    RowID
