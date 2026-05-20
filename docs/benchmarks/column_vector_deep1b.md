@@ -725,6 +725,26 @@ misses are expected. But the same rank64 representation retained the exact top10
 inside approximate top50 for every sampled query, which is the right shape for a
 compressed shortlist followed by exact rerank.
 
+The follow-on literature synthesis in the full report sharpens the next
+benchmark path:
+
+- Use candidate-recall gates as the promotion target: `exact top10 in
+  approx@50/@100`, then exact rerank, rather than compressed top10 order alone.
+- Add same-byte PQ/OPQ baselines for Deep1B `D=96`: local PCA `K=32/48/64`
+  should compete against 32/48/64-byte PQ/OPQ codes, not just against fp32.
+- Prioritize granule-local residual encoders: `centroid + residual code +
+  compressed scan + exact rerank`, which matches the LOPQ-style lesson that
+  local residuals are easier to encode than raw global vectors.
+- Add score-aware paths after the first baseline frontier: pairwise-difference
+  PCA, boundary-weighted PCA, reduced-rank score approximation, and later
+  ScaNN/AVQ or query-aware quantization when representative queries exist.
+- Treat LVQ/SVS, RaBitQ, and TurboQuant as CPU-friendly or low-build
+  challengers; treat QINCo/QINCo2 and Matryoshka as later research/model-owned
+  tracks.
+
+The product-shaped output should be `quality gate -> minimum bytes/vector`,
+with p50/p90/worst query and per-granule escalation statistics.
+
 Granule-native int8 micro-kernel smoke:
 
 ```sh

@@ -102,6 +102,57 @@ until broader query and production-granule validation proves otherwise.
 | D | Cascade: low-rank PCA prefilter, then full-dim int8/fp16 or fp32 rerank | Best near-term architecture | The groundtruth data says rank64 can preserve winners in a wider shortlist while failing exact final ranking | Most promising product path: scan `C`, rerank survivors with `B` or `A`, measure recall/cost at fixed rerank budgets. |
 | E | PQ/residual-PQ/LUT scorer, ideally residualized by granule centroid or segment cluster | Candidate generation at fixed byte budgets | Not measured in this PR yet. It is the relevant same-byte competitor to local PCA | Add as the next tournament lane. Compare against rank32/rank64 PCA at `~32-64 B/vector`, not against fp32. |
 
+## Literature-Backed Synthesis
+
+The follow-on literature changes the roadmap more than the measured conclusion.
+The state of practice is not "PCA but better." It is:
+
+```text
+compressed score estimation optimized for candidate recall
+  -> larger shortlist
+  -> higher-fidelity rerank
+```
+
+That matches the Deep1B groundtruth result. Rank64 local PCA is too noisy for
+final top10 ordering because score margins are tiny, but it is interesting if it
+keeps the exact winners inside a rerankable shortlist.
+
+| Principle | Representative literature | TreeDB consequence |
+| --- | --- | --- |
+| Candidate generation and rerank is the default shape | Faiss `IndexRefine` explicitly combines a fast inaccurate index with a slower accurate shortlist search and treats recall at the shortlist size as the first-stage metric | Promote compressed lanes by `exact top10 in approx@50/@100`, not by final compressed top10 order alone. |
+| Same-byte baselines are mandatory | PQ is the classic compact-code baseline; OPQ improves it by optimizing both the space decomposition and codebooks | Compare local PCA rank32/rank48/rank64 against PQ/OPQ 32/48/64 byte codes. Do not compare only against fp32. |
+| Granules should encode residuals, not raw global vectors | LOPQ learns local product quantizers per coarse cell because residuals inside a cell are more unimodal than the original distribution | Test `granule centroid + residual encoder + compressed scan + exact rerank` as the main granule-native path. |
+| Score-aware losses matter | ScaNN/AVQ, QUIP, NEQ, and query-aware quantization all move from reconstruction error toward inner-product or query-weighted error | Add score-error and margin-normalized diagnostics; later train projections/codebooks against score error or query logs. |
+| Low-rank projection can be search-aware | LeanVec and LoRANN/RRR treat dimensionality reduction or low-rank factors as score-computation tools, not only reconstruction tools | Keep PCA as baseline, then test score-aware local projections such as pairwise-difference PCA, boundary-weighted PCA, or reduced-rank score approximation. |
+| CPU-friendly scalar/low-build codecs are serious challengers | LVQ/SVS, RaBitQ, and TurboQuant target fast compressed scoring with less or no heavy codebook training | Add them as engineering challengers after the PQ/OPQ baseline, especially if training cost or graph random access dominates. |
+| Neural and model-side compression are later tracks | QINCo/QINCo2 are promising learned residual compressors; Matryoshka is a model-side prefix-training strategy | Treat QINCo as a research ceiling and Matryoshka as relevant only when TreeDB owns or can choose the embedding model. |
+
+For Deep1B `D=96`, the first same-byte tournament should be:
+
+| Budget | Local basis lane | Quantizer lane | Conservative lane |
+| ---: | --- | --- | --- |
+| `32 B/vector` | local PCA `K=32` int8 | PQ/OPQ 32-byte code, e.g. `M=32`, 8-bit subcodes | - |
+| `48 B/vector` | local PCA `K=48` int8 | PQ/OPQ 48-byte code, e.g. `M=48`, 8-bit subcodes | - |
+| `64 B/vector` | local PCA `K=64` int8 | compatible 64-byte PQ/OPQ/residual-code layout | rank64 plus residual correction |
+| `96 B/vector` | full-rank local coordinates | full int8/SQ8 | current robust compressed candidate lane |
+
+The most product-useful output is inverted from a normal compression table:
+
+```text
+quality gate -> minimum bytes/vector
+```
+
+Examples:
+
+```text
+smallest bytes where exact top10 is contained in approx@50
+smallest bytes where exact top10 is contained in approx@100
+smallest bytes where final recall@10 after exact rerank meets target
+```
+
+That turns the benchmark into a storage policy: easy granules get small codes;
+rank-fragile granules escalate to more bytes or to full-dim int8/fp16.
+
 ## Other Designs
 
 - Spherical/JZIP remains a storage/cold-decode candidate. It wins vector-column
@@ -112,6 +163,12 @@ until broader query and production-granule validation proves otherwise.
 - Matryoshka prefixes are attractive if the embedding model supports them. They
   are not proven by this Deep1B result, and should be benchmarked as a separate
   model-aware candidate lane.
+- LVQ/SVS-style scalar compression, RaBitQ, and TurboQuant are useful
+  low-build or CPU-friendly challengers. They should be measured after the
+  local-PCA and PQ/OPQ rows establish the first Pareto frontier.
+- QINCo/QINCo2 are useful research ceilings for very small codes, but they add
+  neural training and decoder complexity. They should not be the first TreeDB
+  production primitive.
 - Binary/sign sketches and tail-norm bounds may still be useful as early
   rejection filters, but the previous safe-bound result pruned no candidates on
   the tested block.
@@ -144,6 +201,7 @@ Suggested gates before a compressed lane can be called promising:
 | Byte budget | Compare PCA and PQ at the same `B/vector` |
 | Granule realism | Compare official top100 clouds with TreeDB-buildable granules |
 | Margin diagnosis | Always report score error versus top-k boundary gaps |
+| Adaptive policy | Report p50/p90/worst minimum bytes or rank needed to clear each gate |
 
 ## Recommended Next Work
 
@@ -151,11 +209,34 @@ Suggested gates before a compressed lane can be called promising:
    report p50, p90, and worst-query candidate survival.
 2. Add production-plausible granule builders and run the same candidate-recall
    tables on their blocks.
-3. Add PQ/residual-PQ as a same-byte competitor to local PCA rank32/rank64.
-4. Benchmark the full cascade: rank64 PCA top50/top100, full-dim int8 rerank,
+3. Add PQ and OPQ as same-byte competitors to local PCA rank32/rank48/rank64.
+4. Add granule-local residual encoders: local residual PQ/OPQ, then PCA plus
+   residual correction if local PCA remains promising.
+5. Benchmark the full cascade: rank64 PCA top50/top100, full-dim int8 rerank,
    then exact fp32 rerank.
-5. Keep spherical and byte-shuffle codecs in the storage/cold-decode track
+6. Add score-aware projection experiments: pairwise-difference PCA,
+   boundary-weighted PCA, and a reduced-rank score-approximation baseline.
+7. Add CPU-friendly scalar/low-build challengers after the first PQ/OPQ
+   frontier: LVQ/SVS-style scalar compression, RaBitQ, and TurboQuant.
+8. Keep spherical and byte-shuffle codecs in the storage/cold-decode track
    unless direct scoring materially changes their throughput.
+
+## Reading List
+
+- Faiss overview and `IndexRefine`: https://arxiv.org/html/2401.08281v4
+- OPQ: https://www.microsoft.com/en-us/research/publication/optimized-product-quantization-for-approximate-nearest-neighbor-search/
+- LOPQ: https://openaccess.thecvf.com/content_cvpr_2014/papers/Kalantidis_Locally_Optimized_Product_2014_CVPR_paper.pdf
+- ScaNN/AVQ: https://proceedings.mlr.press/v119/guo20h.html
+- Query-aware quantization: https://ojs.aaai.org/index.php/AAAI/article/view/25613/25385
+- NEQ: https://ojs.aaai.org/index.php/AAAI/article/view/5333
+- LeanVec: https://arxiv.org/html/2312.16335v2
+- LoRANN/RRR: https://proceedings.neurips.cc/paper_files/paper/2024/hash/b939da3932e88ded5e9b08026e35069d-Abstract-Conference.html
+- LVQ/SVS: https://www.vldb.org/pvldb/vol16/p3433-aguerrebere.pdf
+- RaBitQ: https://arxiv.org/abs/2405.12497
+- TurboQuant: https://arxiv.org/abs/2504.19874
+- QINCo: https://proceedings.mlr.press/v235/huijben24a.html
+- QINCo2: https://arxiv.org/html/2501.03078v1
+- Matryoshka Representation Learning: https://arxiv.org/abs/2205.13147
 
 The current result is therefore not "local PCA is enough." The sharper result
 is:
