@@ -468,6 +468,16 @@ func TestColumnStoreSuiteThroughputInterpretationM14C(t *testing.T) {
 			want: []string{"physical serial scan", "row_materializations=0/1024"},
 		},
 		{
+			name: "legacy materialized row evidence",
+			q: columnStoreQueryMetric{
+				Name:                columnStoreQueryQ1,
+				PlanLabel:           columnStorePathRowStoreBaseline,
+				Rows:                1024,
+				RowMaterializations: 1024,
+			},
+			want: []string{"decode-bound", "observed rows_processed=1024", "row_materializations=1024/1024"},
+		},
+		{
 			name: "scan backed aggregate fallback",
 			q: columnStoreQueryMetric{
 				Name:                columnStoreQueryQ5Metadata,
