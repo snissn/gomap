@@ -3197,7 +3197,8 @@ func sameVectorIndexDefinition(left, right collections.VectorIndexDefinition) bo
 		left.M == right.M &&
 		left.EfConstruction == right.EfConstruction &&
 		left.EfSearch == right.EfSearch &&
-		left.Encoding == right.Encoding
+		left.Encoding == right.Encoding &&
+		left.Strategy == right.Strategy
 }
 
 func validateCreateIndexesRequestDuplicates(scalarDefs []collections.IndexDefinition, vectorDefs []collections.VectorIndexDefinition) error {

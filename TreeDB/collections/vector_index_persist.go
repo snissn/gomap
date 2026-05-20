@@ -265,7 +265,7 @@ func (c *Collection) currentNativeVectorIndexRootID(name string) (uint64, error)
 	if catalog == nil {
 		return 0, errCollectionNotFound
 	}
-	return catalog.rootID(collectionVectorIndexRootName(catalog.meta.Name, name)), nil
+	return catalog.effectiveRootID(collectionVectorIndexRootName(catalog.meta.Name, name)), nil
 }
 
 // SaveNativeDeltaSnapshot persists dirty graph records for a declared vector
@@ -804,8 +804,8 @@ func (c *Collection) LoadNativeVectorIndexSnapshot(opts VectorIndexOptions) (*Ve
 	}
 	rootName := collectionVectorIndexRootName(catalog.meta.Name, def.Name)
 	status.RootName = rootName
-	rootID := catalog.rootID(rootName)
-	if rootID == 0 && len(catalog.overlayRootIDs(rootName)) == 0 {
+	rootID := catalog.effectiveRootID(rootName)
+	if rootID == 0 {
 		status.ExactFallbackReason = vectorIndexFallbackMissingGraphRoot
 		return nil, status, nil
 	}

@@ -533,13 +533,13 @@ func (c *Collection) registeredVectorIndexNativeRuntimeIsStale(index *VectorInde
 		if reason == "schema_generation_mismatch" && !wasNativePersistent {
 			index.recordNativeDefinition(def)
 			rootName := collectionVectorIndexRootName(catalog.meta.Name, index.name)
-			return catalog.rootID(rootName) != index.nativeSnapshotBaseEpochForFullSave(), nil
+			return catalog.effectiveRootID(rootName) != index.nativeSnapshotBaseEpochForFullSave(), nil
 		}
 		return true, nil
 	}
 	index.recordNativeDefinition(def)
 	rootName := collectionVectorIndexRootName(catalog.meta.Name, index.name)
-	return catalog.rootID(rootName) != index.nativeSnapshotBaseEpochForFullSave(), nil
+	return catalog.effectiveRootID(rootName) != index.nativeSnapshotBaseEpochForFullSave(), nil
 }
 
 // UnregisterVectorIndex detaches a registered in-memory vector index.

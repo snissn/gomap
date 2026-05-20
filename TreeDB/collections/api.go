@@ -18522,6 +18522,16 @@ func (c *collectionCatalog) overlayRootIDs(rootName string) []uint64 {
 	return c.rootOverlays[rootName]
 }
 
+func (c *collectionCatalog) effectiveRootID(rootName string) uint64 {
+	if c == nil {
+		return 0
+	}
+	if overlays := c.overlayRootIDs(rootName); len(overlays) != 0 {
+		return overlays[0]
+	}
+	return c.rootID(rootName)
+}
+
 func (c *collectionCatalog) overlayRootMayContainKey(rootName string, rootID uint64, key []byte) bool {
 	if c == nil || rootID == 0 || len(c.rootOverlayFilters) == 0 {
 		return true

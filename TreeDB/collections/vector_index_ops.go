@@ -271,11 +271,7 @@ func (c *Collection) vectorIndexStatus(name string, inspectNativeRoot bool) (Vec
 	}
 
 	rootName := collectionVectorIndexRootName(catalog.meta.Name, def.Name)
-	rootID := catalog.rootID(rootName)
-	overlayRootIDs := catalog.overlayRootIDs(rootName)
-	if rootID == 0 && len(overlayRootIDs) != 0 {
-		rootID = overlayRootIDs[len(overlayRootIDs)-1]
-	}
+	rootID := catalog.effectiveRootID(rootName)
 	status := VectorIndexStatus{
 		Definition: def,
 		Name:       def.Name,
@@ -292,13 +288,13 @@ func (c *Collection) vectorIndexStatus(name string, inspectNativeRoot bool) (Vec
 			status.Stats = runtimeIdx.Stats()
 		}
 	}
-	if status.RootID == 0 && len(overlayRootIDs) == 0 {
+	if status.RootID == 0 {
 		status.ExactFallbackReason = vectorIndexFallbackMissingGraphRoot
 		status.RebuildNeeded = true
 		return status, nil
 	}
 	if !inspectNativeRoot {
-		status.NativeRootLoaded = status.RootID != 0 || len(overlayRootIDs) != 0
+		status.NativeRootLoaded = status.RootID != 0
 		status.RebuildNeeded = status.Stats.RebuildNeeded || status.Stats.SnapshotDirty
 		return status, nil
 	}
