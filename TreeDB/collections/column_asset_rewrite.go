@@ -89,7 +89,7 @@ func (c *Collection) ColumnAssetRewrite(ctx context.Context, opts ColumnAssetRew
 func (c *Collection) columnAssetRewrite(ctx context.Context, opts ColumnAssetRewriteOptions) (ColumnAssetRewriteStats, error) {
 	plan, sourceMasks, err := c.planColumnAssetReachability(ctx, columnAssetReachabilityOptionsInternal{
 		ColumnAssetReachabilityOptions: ColumnAssetReachabilityOptions{
-			Detailed:       true,
+			Detailed:       opts.Detailed,
 			SegmentDetails: true,
 			CandidateRefs:  opts.CandidateRefs,
 			PendingRefs:    opts.PendingRefs,
@@ -572,34 +572,34 @@ func columnAssetRewriteEligibleSegments(segmentDir string, plan ColumnAssetReach
 			eligible[entry.FileID] = entry
 		}
 	}
-	for _, entry := range plan.Entries {
-		if entry.Status != ColumnAssetReachabilityProtected {
+	for ref, sourceMask := range sourceMasks {
+		if !columnAssetRewriteSourceMaskIsProtectedNonManifest(sourceMask) {
 			continue
 		}
-		if _, ok := eligible[entry.Ref.FileID]; !ok {
+		if _, ok := eligible[ref.FileID]; !ok {
 			continue
 		}
-		if columnAssetRewriteRefEntrySourcesIncludeManifest(entry, sourceMasks[entry.Ref]) {
+		if !columnAssetReachabilityRefCanContributeRange(ref, plan.Namespace) {
 			continue
 		}
-		delete(eligible, entry.Ref.FileID)
+		delete(eligible, ref.FileID)
 	}
 	return eligible
 }
 
 func columnAssetRewriteEligibleRefs(plan ColumnAssetReachabilityPlan, sourceMasks map[ColumnAssetRef]columnAssetReachabilitySourceMask, segments map[uint32]ColumnAssetReachabilitySegmentEntry) []ColumnAssetRef {
-	refs := make([]ColumnAssetRef, 0, len(plan.Entries))
-	for _, entry := range plan.Entries {
-		if entry.Status != ColumnAssetReachabilityProtected {
+	refs := make([]ColumnAssetRef, 0, len(sourceMasks))
+	for ref, sourceMask := range sourceMasks {
+		if !columnAssetRewriteSourceMaskIncludesManifest(sourceMask) {
 			continue
 		}
-		if _, ok := segments[entry.Ref.FileID]; !ok {
+		if _, ok := segments[ref.FileID]; !ok {
 			continue
 		}
-		if !columnAssetRewriteRefEntrySourcesIncludeManifest(entry, sourceMasks[entry.Ref]) {
+		if !columnAssetReachabilityRefCanContributeRange(ref, plan.Namespace) {
 			continue
 		}
-		refs = append(refs, entry.Ref)
+		refs = append(refs, ref)
 	}
 	return refs
 }
@@ -621,20 +621,15 @@ func columnAssetRewriteSegmentEligible(segmentDir string, entry ColumnAssetReach
 	return cleanPath == expected
 }
 
-func columnAssetRewriteSourcesIncludeManifest(sources []ColumnAssetReachabilitySource) bool {
-	for _, source := range sources {
-		if source == ColumnAssetReachabilitySourceActiveManifest || source == ColumnAssetReachabilitySourceRecoveryManifest {
-			return true
-		}
-	}
-	return false
+func columnAssetRewriteSourceMaskIncludesManifest(sourceMask columnAssetReachabilitySourceMask) bool {
+	return sourceMask&(columnAssetReachabilitySourceActiveManifestMask|columnAssetReachabilitySourceRecoveryManifestMask) != 0
 }
 
-func columnAssetRewriteRefEntrySourcesIncludeManifest(entry ColumnAssetReachabilityRefEntry, sourceMask columnAssetReachabilitySourceMask) bool {
-	if sourceMask != 0 {
-		return sourceMask&(columnAssetReachabilitySourceActiveManifestMask|columnAssetReachabilitySourceRecoveryManifestMask) != 0
+func columnAssetRewriteSourceMaskIsProtectedNonManifest(sourceMask columnAssetReachabilitySourceMask) bool {
+	if sourceMask == 0 || columnAssetRewriteSourceMaskIncludesManifest(sourceMask) {
+		return false
 	}
-	return columnAssetRewriteSourcesIncludeManifest(entry.Sources)
+	return sourceMask&columnAssetReachabilityProtectedSourceMask != 0
 }
 
 func columnAssetRewriteSameLogicalRef(left, right ColumnAssetRef) bool {

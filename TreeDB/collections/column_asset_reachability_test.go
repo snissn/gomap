@@ -519,7 +519,7 @@ func TestColumnAssetReachabilityCanElideDiagnosticSourcesForRewriteM15C(t *testi
 	if len(plan.Entries[0].Sources) != 0 {
 		t.Fatalf("diagnostic sources=%v want elided", plan.Entries[0].Sources)
 	}
-	if !columnAssetRewriteRefEntrySourcesIncludeManifest(plan.Entries[0], input.refs[plan.Entries[0].Ref]) {
+	if !columnAssetRewriteSourceMaskIncludesManifest(input.refs[plan.Entries[0].Ref]) {
 		t.Fatalf("entry source mask did not preserve manifest-source classification: %+v", plan.Entries[0])
 	}
 }
