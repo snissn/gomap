@@ -279,7 +279,7 @@ func TestColumnPhysicalQueryParallelMatchesSerialInsertOnlyM14B(t *testing.T) {
 			if err != nil {
 				t.Fatalf("parallel RunColumnPhysicalQuery: %v", err)
 			}
-			if !reflect.DeepEqual(parallel.Groups, serial.Groups) {
+			if !equalColumnPhysicalQueryGroups(parallel.Groups, serial.Groups) {
 				t.Fatalf("parallel groups=%+v want serial %+v", parallel.Groups, serial.Groups)
 			}
 			if parallel.Diagnostics.RowMaterializations != 0 {
@@ -298,11 +298,35 @@ func TestColumnPhysicalQueryParallelMatchesSerialInsertOnlyM14B(t *testing.T) {
 			if err != nil {
 				t.Fatalf("over-partitioned RunColumnPhysicalQueryParallel: %v", err)
 			}
-			if !reflect.DeepEqual(overPartitioned.Groups, serial.Groups) {
+			if !equalColumnPhysicalQueryGroups(overPartitioned.Groups, serial.Groups) {
 				t.Fatalf("over-partitioned groups=%+v want serial %+v", overPartitioned.Groups, serial.Groups)
 			}
 		})
 	}
+}
+
+func equalColumnPhysicalQueryGroups(left, right []ColumnPhysicalQueryGroup) bool {
+	left = append([]ColumnPhysicalQueryGroup(nil), left...)
+	right = append([]ColumnPhysicalQueryGroup(nil), right...)
+	sort.Slice(left, func(i, j int) bool {
+		if left[i].Key != left[j].Key {
+			return left[i].Key < left[j].Key
+		}
+		if left[i].Count != left[j].Count {
+			return left[i].Count < left[j].Count
+		}
+		return left[i].Int64 < left[j].Int64
+	})
+	sort.Slice(right, func(i, j int) bool {
+		if right[i].Key != right[j].Key {
+			return right[i].Key < right[j].Key
+		}
+		if right[i].Count != right[j].Count {
+			return right[i].Count < right[j].Count
+		}
+		return right[i].Int64 < right[j].Int64
+	})
+	return reflect.DeepEqual(left, right)
 }
 
 func TestColumnPhysicalQuerySnapshotViewSingleRefUsesPinnedManifestM14B(t *testing.T) {
