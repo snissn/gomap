@@ -64,6 +64,7 @@ type VectorIndexLoadStatus struct {
 	// mirrors ExactFallbackReason so older callers still see a safe fallback
 	// reason without understanding column_graph-specific status fields.
 	ColumnGraphUnavailableReason  string
+	ColumnGraphUnavailableDetail  string
 	PhysicalColumnAssetsSupported bool
 	RebuildNeeded                 bool
 }

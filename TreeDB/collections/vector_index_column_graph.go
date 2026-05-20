@@ -116,7 +116,7 @@ func (physicalColumnVectorGraphIndexLoader) LoadColumnVectorGraphIndex(input Col
 		status.BytesDisk = diag.PhysicalBytesScanned
 		return ColumnVectorGraphIndexLoadResult{Status: status}, nil
 	}
-	graph, err := NewColumnVectorGraphFromColumns(ColumnVectorGraphColumns{
+	graph, graphErr := NewColumnVectorGraphFromColumns(ColumnVectorGraphColumns{
 		DocumentIDs:     state.documentIDs,
 		Vectors:         state.vectors,
 		InvNorms:        state.invNorms,
@@ -126,9 +126,10 @@ func (physicalColumnVectorGraphIndexLoader) LoadColumnVectorGraphIndex(input Col
 		EntryPoint:      0,
 		EfSearch:        input.Definition.EfSearch,
 	})
-	if err != nil {
+	if graphErr != nil {
 		status = columnGraphPhysicalUnavailableLoadStatus(vectorIndexFallbackColumnGraphInvalid)
 		status.BytesDisk = diag.PhysicalBytesScanned
+		status.ColumnGraphUnavailableDetail = graphErr.Error()
 		return ColumnVectorGraphIndexLoadResult{Status: status}, nil
 	}
 	status.Loaded = true
@@ -371,6 +372,7 @@ func (c *Collection) loadColumnGraphVectorIndexSnapshotFromCatalogWithLoader(sna
 	status.Loaded = true
 	status.ColumnGraphLoaded = true
 	status.ColumnGraphUnavailableReason = ""
+	status.ColumnGraphUnavailableDetail = ""
 	status.ExactFallbackReason = ""
 	status.PhysicalColumnAssetsSupported = true
 	status.RebuildNeeded = false
@@ -439,6 +441,9 @@ func mergeColumnGraphLoadStatus(status *VectorIndexLoadStatus, update VectorInde
 		if update.BytesDisk != 0 {
 			status.BytesDisk = update.BytesDisk
 		}
+		if update.ColumnGraphUnavailableDetail != "" {
+			status.ColumnGraphUnavailableDetail = update.ColumnGraphUnavailableDetail
+		}
 		return
 	}
 	if update.PhysicalColumnAssetsSupported {
@@ -485,6 +490,7 @@ func vectorIndexStatusFromColumnGraphLoad(def VectorIndexDefinition, loadStatus 
 		ExactFallbackReason:           loadStatus.ExactFallbackReason,
 		ColumnGraphLoaded:             loadStatus.ColumnGraphLoaded,
 		ColumnGraphUnavailableReason:  loadStatus.ColumnGraphUnavailableReason,
+		ColumnGraphUnavailableDetail:  loadStatus.ColumnGraphUnavailableDetail,
 		PhysicalColumnAssetsSupported: loadStatus.PhysicalColumnAssetsSupported,
 		RebuildNeeded:                 loadStatus.RebuildNeeded || !loadStatus.ColumnGraphLoaded || loadStatus.ExactFallbackReason != "",
 	}

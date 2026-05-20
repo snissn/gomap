@@ -21,6 +21,7 @@ type VectorIndexStatus struct {
 	ExactFallbackReason           string
 	ColumnGraphLoaded             bool
 	ColumnGraphUnavailableReason  string
+	ColumnGraphUnavailableDetail  string
 	PhysicalColumnAssetsSupported bool
 	Registered                    bool
 	Stats                         VectorIndexStats
