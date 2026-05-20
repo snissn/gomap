@@ -12,12 +12,13 @@ separate two questions:
 Deep1B vectors in this benchmark are `D=96`. The principal run below used
 queries `0..99`, loaded each query's official top100 database rows from
 `base.1B.fbin` by HTTP range request when the row was not present in the local
-first-1M cache, and fit local PCA on each top100 cloud.
+first-1M cache, fit local PCA on each top100 cloud, and ran the first
+top100-only oracle compression tournament.
 
 Run artifact:
 
 ```text
-/tmp/gomap_deep1b_groundtruth_tracka_q0_99_20260519_181941/report.md
+/tmp/gomap_deep1b_top100_tournament_ext_q0_99_20260519_202521/report.md
 ```
 
 ## What The Probe Establishes
@@ -96,6 +97,54 @@ approximate top50 at `19/20` or better for every query.
 measured universe is the official top100. The actionable candidate-generation
 signals here are `approx@20` and `approx@50`; production granules need the same
 metric at wider row counts.
+
+## Official Top100 Oracle Method Tournament
+
+These rows are **official top100 local-neighborhood upper-bound probes**. They
+are valid only for methods that need one query and its 100 official nearest
+neighbor vectors. They are not production granule proof, and they do not
+validate codebook or model-trained methods such as PQ, OPQ, residual PQ, LOPQ,
+ScaNN/AVQ, query-aware quantization, QINCo, or Matryoshka. Metadata bytes below
+are top100-local accounting; row-code bytes are the cleaner comparison until
+TreeDB-buildable granules establish real amortization.
+
+Selected aggregate rows across queries `0..99`:
+
+| Method | Row-code B/vector | Metadata B/vector | Avg build ms | p50 compressed top10 | Worst compressed top10 | p50 top10@20 | Worst top10@20 | p50 top10@50 | Worst top10@50 | p50 top20@50 | Worst top20@50 | Avg score err | Avg err/gap10 | Avg scan ns/vector | Interpretation |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| `scalar_u8_affine_per_dim_reconstructed` | `96` | `7.68` | `0.251` | `10/10` | `9/10` | `10/10` | `10/10` | `10/10` | `10/10` | `20/20` | `20/20` | `0.00011` | `0.36` | `1114` | Conservative full-dim SQ8 lane; strong candidate survival and near-final quality. |
+| `scalar_u4_affine_per_dim_reconstructed` | `48` | `7.68` | `0.237` | `9/10` | `7/10` | `10/10` | `10/10` | `10/10` | `10/10` | `20/20` | `20/20` | `0.00201` | `6.19` | `1077` | Strongest simple 48B top100 scalar lane; not a final ranker, but excellent candidate survival in this oracle universe. |
+| `scalar_u2_affine_per_dim_reconstructed` | `24` | `7.68` | `0.230` | `6/10` | `2/10` | `8/10` | `5/10` | `10/10` | `7/10` | `18/20` | `13/20` | `0.02048` | `66.42` | `1052` | Too lossy; not safe even for top50 candidate survival. |
+| `random_rotation_scalar_u4_affine_per_dim_reconstructed` | `48` | `7.76` | `1.653` | `9/10` | `7/10` | `10/10` | `9/10` | `10/10` | `10/10` | `20/20` | `19/20` | `0.00199` | `6.30` | `990` | Similar to plain u4; random rotation is worth keeping as a low-build challenger, but it is not a clear oracle win here. |
+| `local_pca_i8_rank64` | `64` | `128.08` | `5.711` | `8/10` | `4/10` | `10/10` | `7/10` | `10/10` | `9/10` | `20/20` | `18/20` | `0.00341` | `11.26` | `96` | Good scan shape and useful candidate generation, but worse candidate robustness than simple u4 scalar in this top100 probe. |
+| `boundary_weighted_pca_top20_hardneg_i8_rank64` | `64` | `128.08` | `4.451` | `9/10` | `6/10` | `10/10` | `9/10` | `10/10` | `10/10` | `20/20` | `20/20` | `0.00342` | `11.68` | `70` | Recall-aware weighting improves candidate gates over variance PCA at the same rank, but it is oracle-trained on top100 boundaries. |
+| `pairwise_diff_pca_top10_vs_11_100_i8_rank64` | `64` | `128.08` | `10.595` | `9/10` | `6/10` | `10/10` | `10/10` | `10/10` | `10/10` | `20/20` | `17/20` | `0.00327` | `10.91` | `64` | Boundary-separating directions improve top10 survival, but top20 worst-case is weaker than boundary-weighted PCA. Oracle only. |
+| `query_axis_oracle_i8_projection_f16_norm` | `1` | `2.02` | `0.001` | `10/10` | `10/10` | `10/10` | `10/10` | `10/10` | `10/10` | `20/20` | `20/20` | `0.00175` | `6.43` | `0.74` | Non-deployable query-specific upper bound. It proves score-aware projection has headroom, not that this exact method can ship. |
+
+The top100-only tournament changes the immediate emphasis:
+
+- Full-dim SQ8 remains the conservative compressed candidate/rerank lane.
+- Plain per-dimension u4 scalar quantization is the most interesting simple
+  48B oracle result. It keeps exact top10 inside approx@50 for all 100 queries
+  and exact top20 inside approx@50 for all 100 queries in this top100 universe.
+- u2 and binary/sign variants are not safe enough. The score error is one to
+  two orders of magnitude larger than the ranking margins.
+- Random rotation does not rescue u2/sign and does not clearly beat plain u4 on
+  this sample, though it remains useful as a low-build challenger for
+  production-scale tests.
+- Boundary-weighted PCA and pairwise-difference PCA support the literature
+  thesis: the basis objective matters. They improve rank64 candidate gates over
+  plain variance PCA, but because they are trained on the oracle top100 ranking
+  boundary, they are only upper-bound probes.
+- The query-axis oracle is intentionally non-deployable. It estimates the
+  amount of headroom available if a production method can learn a score-aware
+  projection from real training data.
+
+Current scalar scan times are from straightforward Go reconstruct-and-score
+probes. They are useful for relative implementation shape, not as a final SIMD
+kernel ceiling. The existing local-PCA scorer is much faster in Go because it
+scores directly from low-rank coordinates instead of reconstructing every
+dimension.
 
 ## Final Ranking Versus Candidate Generation
 
@@ -257,9 +306,13 @@ Suggested gates before a compressed lane can be called promising:
 
 ## Concrete Research Tracks
 
-Track A is now complete for queries `0..99`. It evaluated ranks
-`8,16,24,32,40,48,56,64,80,96` and reported the minimum rank/bytes needed for
-each gate:
+Track A now has a first completed top100-only tournament for queries `0..99`.
+It evaluated local PCA ranks `8,16,24,32,40,48,56,64,80,96`, adaptive rank
+gates, full-dim SQ8, int4/int2/sign scalar variants, per-dimension/per-vector/
+global scale policies, norm-explicit variants, boundary-weighted PCA,
+pairwise-difference PCA, query-axis oracle projections, and random-rotation
+scalar/sign probes. For the PCA ladder, it reported the minimum rank/bytes
+needed for each gate:
 
 ```text
 exact top10 in approx@50 = 10/10
@@ -272,6 +325,15 @@ The headline result is that final compressed top10 order needs almost full rank
 much cheaper (`p50 K=24`, `p90 K=56`, worst `K=80` for exact top10 in
 approx@50). For exact top20 in approx@50 at 19/20 or better, the gate is
 `p50 K=40`, `p90 K=64`, worst `K=80`.
+
+The scalar and basis-objective probes sharpen that conclusion. Full SQ8 is the
+conservative compressed lane; plain per-dimension int4 is the strongest simple
+48B top100 oracle candidate-survival result; int2/sign are too lossy; and
+boundary-weighted or pairwise-difference PCA improves rank64 candidate gates
+over variance PCA but remains an oracle-locality result. The remaining
+top100-only probes worth adding, if this path remains decision-relevant, are
+PCA plus tiny residual correction and low-rank-plus-tail progressive bound
+tests.
 
 Track B is the same-byte PQ/OPQ tournament. Compare local PCA `K=32/48/64`
 against PQ/OPQ/residual-code layouts at the same byte budgets using the same
@@ -292,17 +354,22 @@ local residual after the coarse locality unit, not the raw global vector.
 ## Recommended Next Work
 
 1. Add production-plausible granule builders and run the same candidate-recall
-   tables on their blocks.
+   tables on their blocks. This is the next required step before any production
+   compression claim.
 2. Add PQ and OPQ as same-byte competitors to local PCA rank32/rank48/rank64
-   and rank80.
+   and rank80, using a real train/eval split. Do not train codebooks on a
+   single official top100 cloud.
 3. Add granule-local residual encoders: local residual PQ/OPQ, then PCA plus
    residual correction if local PCA remains promising.
-4. Benchmark the full cascade: rank64/rank80 PCA top50/top100, full-dim int8
-   rerank, then exact fp32 rerank.
-5. Add score-aware projection experiments: pairwise-difference PCA,
-   boundary-weighted PCA, and a reduced-rank score-approximation baseline.
-6. Add CPU-friendly scalar/low-build challengers after the first PQ/OPQ
-   frontier: LVQ/SVS-style scalar compression, RaBitQ, and TurboQuant.
+4. Benchmark the full cascade: compressed scan top50/top100, full-dim int8
+   rerank, then optional exact fp32 rerank.
+5. Finish the remaining top100-only probes only if they are still needed for
+   method triage: PCA plus tiny residual correction and safe/progressive
+   low-rank-plus-tail bounds.
+6. Add CPU-friendly scalar/low-build challengers after the first production
+   frontier: LVQ/SVS-style scalar compression, RaBitQ-inspired and
+   TurboQuant-inspired lanes, with honest labels when the implementation is
+   only an approximation.
 7. Keep spherical and byte-shuffle codecs in the storage/cold-decode track
    unless direct scoring materially changes their throughput.
 

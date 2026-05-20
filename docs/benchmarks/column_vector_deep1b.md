@@ -143,6 +143,19 @@ row-major dot loops. The third-party rows are implementation-shape probes:
 they measure SIMD headroom, not a drop-in scorer for the transposed int8
 residual layout.
 
+`TestColumnVectorGraphDeep1BGroundtruthLocality` is an opt-in official
+Deep1B top100 locality and oracle compression tournament. It reads
+`groundtruth.public.10K.ibin`, loads each query's official top100 database
+rows, and reports locality, PCA/adaptive-rank gates, full-dim scalar int8,
+lower-bit scalar int4/int2/sign variants, scale-policy variants,
+norm-explicit variants, boundary-weighted PCA, pairwise-difference PCA,
+query-axis oracle projections, and random-rotation scalar/sign probes. These
+rows are explicitly labeled as official top100 local-neighborhood upper-bound
+probes: they are valid for one query plus its 100 nearest-neighbor vectors,
+but they do not prove TreeDB can build equivalent production granules and they
+do not validate codebook-trained methods such as PQ, OPQ, residual PQ, LOPQ,
+ScaNN/AVQ, QINCo, or Matryoshka.
+
 ## Manual Commands
 
 Search-only benchmark:
@@ -226,6 +239,31 @@ GOWORK=off go test ./experiments/colgranule \
   -benchtime 200ms \
   -count 1
 ```
+
+Official groundtruth top100 oracle-locality tournament:
+
+```sh
+OUT=/tmp/gomap_deep1b_top100_tournament_ext_q0_99_$(date +%Y%m%d_%H%M%S)
+COLUMN_VECTOR_DEEP1B_GROUNDTRUTH_LOCALITY=1 \
+COLUMN_VECTOR_DEEP1B_DOWNLOAD=1 \
+COLUMN_VECTOR_DEEP1B_DIR=/private/tmp/gomap-deep1b-cache \
+COLUMN_VECTOR_DEEP1B_GROUNDTRUTH_FETCH_BASE1B=1 \
+COLUMN_VECTOR_DEEP1B_GROUNDTRUTH_FETCH_CONCURRENCY=16 \
+COLUMN_VECTOR_DEEP1B_GROUNDTRUTH_QUERIES=$(seq -s, 0 99) \
+COLUMN_VECTOR_DEEP1B_GROUNDTRUTH_PCA_RANKS=8,16,24,32,40,48,56,64,80,96 \
+COLUMN_VECTOR_DEEP1B_GROUNDTRUTH_SCAN_ITERS=8 \
+COLUMN_VECTOR_DEEP1B_GROUNDTRUTH_OUT="$OUT" \
+GOWORK=off go test ./experiments/colgranule \
+  -run '^TestColumnVectorGraphDeep1BGroundtruthLocality$' \
+  -count 1 \
+  -v
+```
+
+The run writes `results.json` and `report.md` under `$OUT`. The report's
+candidate-survival gates are the promotion metrics: exact top10 contained in
+approx@20/approx@50, exact top20 contained in approx@50, and final recall after
+exact rerank from fixed shortlists. Compressed final top10 order is diagnostic,
+not the primary promotion gate.
 
 ## Scope
 
