@@ -128,7 +128,6 @@ type ColumnAssetReachabilitySegmentEntry struct {
 type columnAssetReachabilityRefBuilder struct {
 	ref     ColumnAssetRef
 	sources []ColumnAssetReachabilitySource
-	seen    map[ColumnAssetReachabilitySource]struct{}
 }
 
 type columnAssetReachabilityRange struct {
@@ -263,15 +262,15 @@ func (in *columnAssetReachabilityInput) addRef(ref ColumnAssetRef, source Column
 	builder := in.refs[ref]
 	if builder == nil {
 		builder = &columnAssetReachabilityRefBuilder{
-			ref:  ref,
-			seen: make(map[ColumnAssetReachabilitySource]struct{}, 2),
+			ref: ref,
 		}
 		in.refs[ref] = builder
 	}
-	if _, ok := builder.seen[source]; ok {
-		return false
+	for _, seen := range builder.sources {
+		if seen == source {
+			return false
+		}
 	}
-	builder.seen[source] = struct{}{}
 	builder.sources = append(builder.sources, source)
 	return true
 }
@@ -643,6 +642,14 @@ func listColumnAssetReachabilitySegments(ctx context.Context, segmentDir string)
 			continue
 		}
 		path := filepath.Join(segmentDir, entry.Name())
+		if entry.Type()&os.ModeSymlink != 0 {
+			info, err := os.Lstat(path)
+			if err != nil {
+				return nil, err
+			}
+			segments = append(segments, columnAssetReachabilitySegment{path: path, bytes: info.Size()})
+			continue
+		}
 		info, err := entry.Info()
 		if err != nil {
 			return nil, err
