@@ -185,6 +185,61 @@ func TestColumnAssetGCDeletesCompleteReclaimableSegmentM15B(t *testing.T) {
 	}
 }
 
+func TestColumnAssetGCTreatsMissingEligibleSegmentAsDeletedM15B(t *testing.T) {
+	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col := openColumnStoreCollectionM10B(t, d)
+
+	if _, err := col.Insert([]byte("e1"), []byte(`{"time_us":1,"kind":"like","did":"d1"}`)); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	candidate := writeColumnAssetGCCandidateSegmentM15B(t, d.ColumnAssetRootDir(), col, 89, []byte("missing-after-plan"))
+	candidatePath, err := columnAssetSegmentPath(d.ColumnAssetRootDir(), candidate)
+	if err != nil {
+		t.Fatalf("columnAssetSegmentPath: %v", err)
+	}
+	namespace, err := columnAssetManagerNamespaceForRoot(d.ColumnAssetRootDir(), candidate.Namespace)
+	if err != nil {
+		t.Fatalf("columnAssetManagerNamespaceForRoot: %v", err)
+	}
+	var syncedDirs []string
+	restoreHooks := setColumnAssetGCTestHooks(func(path string) error {
+		if path != candidatePath {
+			t.Fatalf("remove path=%q want %q", path, candidatePath)
+		}
+		if err := os.Remove(path); err != nil {
+			t.Fatalf("pre-remove candidate: %v", err)
+		}
+		return os.ErrNotExist
+	}, func(dir string) error {
+		syncedDirs = append(syncedDirs, dir)
+		return nil
+	})
+	defer restoreHooks()
+
+	stats, err := col.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{
+		CandidateRefs: []ColumnAssetRef{candidate},
+	})
+	if err != nil {
+		t.Fatalf("ColumnAssetGC: %v", err)
+	}
+	if stats.SegmentsEligible != 1 || stats.BytesEligible != candidate.Length ||
+		stats.SegmentsDeleted != 1 || stats.BytesDeleted != candidate.Length {
+		t.Fatalf("stats=%+v want missing eligible segment counted deleted with %d bytes", stats, candidate.Length)
+	}
+	if stats.SegmentsRetained != columnAssetGCExistingSegmentCount(stats.Plan)-stats.SegmentsDeleted ||
+		stats.BytesRetained != stats.Plan.Segments.BytesTotal-stats.BytesDeleted {
+		t.Fatalf("retained stats=%+v planSegments=%+v want retained decremented after missing delete", stats, stats.Plan.Segments)
+	}
+	if len(syncedDirs) != 1 || syncedDirs[0] != namespace.SegmentDir {
+		t.Fatalf("sync dirs=%v want one sync of %q after missing delete", syncedDirs, namespace.SegmentDir)
+	}
+	if _, err := os.Stat(candidatePath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("candidate segment still exists or unexpected stat error: %v", err)
+	}
+}
+
 func TestColumnAssetGCRetainedStatsUpdateOnPartialContextCancelM15B(t *testing.T) {
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)
