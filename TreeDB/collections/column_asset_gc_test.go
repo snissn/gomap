@@ -212,6 +212,66 @@ func TestColumnAssetGCDeletesCompleteReclaimableSegmentM15B(t *testing.T) {
 	}
 }
 
+func TestColumnAssetGCRetainsPreparedUnpublishedSegmentAfterReopenM15C(t *testing.T) {
+	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
+	d := openCollectionCommandWALDB(t, dir)
+	closed := false
+	defer func() {
+		if !closed {
+			_ = d.Close()
+		}
+	}()
+	col := openColumnStoreCollectionM10B(t, d)
+
+	if _, err := col.Insert([]byte("e1"), []byte(`{"time_us":1,"kind":"like","did":"d1"}`)); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	prepared := writeColumnAssetGCCandidateSegmentM15B(t, d.ColumnAssetRootDir(), col, 87, []byte("prepared-before-manifest-publish"))
+	preparedPath, err := columnAssetSegmentPath(d.ColumnAssetRootDir(), prepared)
+	if err != nil {
+		t.Fatalf("columnAssetSegmentPath: %v", err)
+	}
+	stats, err := col.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{
+		Detailed:      true,
+		CandidateRefs: []ColumnAssetRef{prepared},
+		PreparedRefs:  []ColumnAssetRef{prepared},
+	})
+	if err != nil {
+		t.Fatalf("ColumnAssetGC with prepared ref: %v", err)
+	}
+	if stats.SegmentsEligible != 0 || stats.SegmentsDeleted != 0 || stats.Plan.Sources.PreparedRefs != 1 {
+		t.Fatalf("stats=%+v plan=%+v want prepared ref retained and not deleted", stats, stats.Plan)
+	}
+	if _, err := os.Stat(preparedPath); err != nil {
+		t.Fatalf("prepared segment removed before reopen: %v", err)
+	}
+	if raw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), prepared); err != nil || string(raw) != "prepared-before-manifest-publish" {
+		t.Fatalf("prepared asset read before reopen raw=%q err=%v", raw, err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close before reopen: %v", err)
+	}
+	closed = true
+
+	reopen := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopen.Close() }()
+	reopened := openColumnStoreCollectionM10B(t, reopen)
+	reopenedStats, err := reopened.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{
+		Detailed:      true,
+		CandidateRefs: []ColumnAssetRef{prepared},
+		PreparedRefs:  []ColumnAssetRef{prepared},
+	})
+	if err != nil {
+		t.Fatalf("ColumnAssetGC after reopen with prepared ref: %v", err)
+	}
+	if reopenedStats.SegmentsEligible != 0 || reopenedStats.SegmentsDeleted != 0 || reopenedStats.Plan.Sources.PreparedRefs != 1 {
+		t.Fatalf("reopened stats=%+v plan=%+v want prepared ref retained and not deleted", reopenedStats, reopenedStats.Plan)
+	}
+	if raw, err := readColumnPhysicalAssetFromManager(reopen.ColumnAssetRootDir(), prepared); err != nil || string(raw) != "prepared-before-manifest-publish" {
+		t.Fatalf("prepared asset read after reopen raw=%q err=%v", raw, err)
+	}
+}
+
 func TestColumnAssetGCTreatsMissingEligibleSegmentAsDeletedM15B(t *testing.T) {
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)
