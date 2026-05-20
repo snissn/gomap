@@ -407,7 +407,7 @@ func TestColumnStoreBenchRunDoesNotFallbackForZeroProcessedPhysicalRowsM14B(t *t
 		Rows:      30,
 		BatchSize: 10,
 		Queries: []columnStoreQueryMetric{
-			{Name: "q1", Rows: 30, RowsProcessed: 0, RowMaterializations: 0, RowsPerSecond: 0, duration: 30 * time.Millisecond},
+			{Name: "q1", Rows: 30, RowsProcessed: 0, RowsProcessedKnown: true, RowMaterializations: 0, RowsPerSecond: 0, duration: 30 * time.Millisecond},
 		},
 	}, nil, 0)
 
@@ -1407,6 +1407,9 @@ func TestColumnStoreSuiteExecutesForcedAggregateAndParallelPhysicalPathsM14B(t *
 				if tc.forcedPath == columnStorePathParallelColumnScan && q.WorkerCount != tc.wantWorker {
 					t.Fatalf("query %s worker_count=%d want %d for parallel path", q.Name, q.WorkerCount, tc.wantWorker)
 				}
+				if tc.forcedPath == columnStorePathParallelColumnScan && !strings.Contains(q.ThroughputInterpretation, "parallel physical scan") {
+					t.Fatalf("query %s throughput_interpretation=%q want parallel physical classification", q.Name, q.ThroughputInterpretation)
+				}
 			}
 			if tc.forcedPath == columnStorePathAggregateMetadata {
 				interpretation := queryMetrics[columnStoreQueryQ5Metadata].ThroughputInterpretation
@@ -1417,9 +1420,6 @@ func TestColumnStoreSuiteExecutesForcedAggregateAndParallelPhysicalPathsM14B(t *
 				} else if !strings.Contains(interpretation, "fallback-bound") {
 					t.Fatalf("q5_metadata throughput_interpretation=%q want scan-backed aggregate fallback classification", interpretation)
 				}
-			}
-			if tc.forcedPath == columnStorePathParallelColumnScan && !strings.Contains(queryMetrics[columnStoreQueryQ5Metadata].ThroughputInterpretation, "parallel physical scan") {
-				t.Fatalf("q5_metadata throughput_interpretation=%q want parallel physical classification", queryMetrics[columnStoreQueryQ5Metadata].ThroughputInterpretation)
 			}
 			if got := queryMetrics[columnStoreQueryQ5Metadata].PlanLabel; got != tc.q5Plan {
 				t.Fatalf("q5_metadata plan_label=%q want %q", got, tc.q5Plan)
