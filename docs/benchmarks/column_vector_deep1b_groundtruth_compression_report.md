@@ -1200,6 +1200,31 @@ encode residuals with PCA K, PQ, OPQ/PQ, and PCA + residual correction
 This is the closest TreeDB-native version of the LOPQ/RVQ lesson: compress the
 local residual after the coarse locality unit, not the raw global vector.
 
+## Evidence Contract Audit
+
+This report is now a tournament artifact, not a single-method benchmark note.
+The current evidence map is:
+
+| Requirement | Current evidence | Status |
+| --- | --- | --- |
+| Separate official top100 oracle locality from production/buildable locality | Top100 sections are labeled as oracle local-neighborhood upper-bound probes. Buildable sections are separated into row-id, IVF/k-means, IVF-sorted fixed blocks, graph-neighborhood fixed blocks, and graph-sorted row-adjacent fixed blocks. | Satisfied for current report wording. |
+| Primary metric is candidate survival, not compressed final top10 order | Tables report exact top10/top20 containment at approx@20/@50 and rerank@20/@50 recall@10. The conclusion keeps exact rerank mandatory. | Satisfied for measured rows. |
+| Fixed byte-budget comparisons | Top100 and buildable runs cover the 32/48/64/80/96-byte ladder where the lane exists. The latest graph-sorted codebook run covers 32/48/64 only, so it should not be used for 80/96-byte conclusions. | Partial. |
+| Metadata-amortized accounting | Buildable codebook tables split row-code bytes and metadata bytes. Top100 oracle rows are explicitly row-code payload probes; their metadata amortization is not production evidence. | Satisfied for buildable codebook lanes; top100 metadata remains intentionally unproven. |
+| Train/eval discipline for PQ/OPQ/residual-PQ | PQ, residual-PQ, OPQ-style, local residual-PQ, and local residual-OPQ rows are trained on buildable train samples and evaluated on held-out eval/query slices, not on a single top100 cloud. | Satisfied for measured codebook lanes. |
+| Top100-only method coverage | Measured local PCA int8, adaptive rank, full-dim SQ8, scalar low-bit lanes, scale-policy probes, norm-explicit correction, boundary-weighted PCA, pairwise-difference PCA, query-centered oracle projection, random-rotation scalar/sign probes, and PCA plus tiny residual correction. | Broadly satisfied; low-rank-plus-tail progressive bounds remain open. |
+| Production/buildable granule coverage | Measured row-id controls, IVF clusters, IVF-sorted fixed blocks, graph-neighborhood fixed blocks, and graph-sorted row-adjacent fixed blocks. | Partial; actual graph visited sets and actual TreeDB granules are not measured. |
+| Cascade architecture | Existing rows report compressed shortlist containment and exact rerank@20/@50 recall. | Partial; p50/p95 end-to-end latency, bytes read/query, and optional fp32-after-int8 rerank are still missing. |
+| p50/p90/worst-query behavior | Top100 adaptive-rank tables include p50/p90/worst K. Buildable tables emphasize p50/worst and selected worst-query gates. | Partial; buildable p90 summaries should be added for larger runs. |
+| Production promotion criteria | Current report does not promote spherical hot scoring, local PCA as a final ranker, OPQ as a winner, or top100-only oracle projections as production methods. It promotes global PQ48/PQ64 as the simplest measured trained-codebook candidate-generator baseline and local residual-PQ as a low-byte-plus-metadata challenger. | Satisfied for current evidence, but not final until actual graph visited sets and TreeDB granules are measured. |
+
+The most important remaining gap is production locality. The report has measured
+several buildable fixed-block proxies, but it still has not shown that actual
+TreeDB storage granules, graph visited sets, or production graph-neighborhood
+layouts preserve the same candidate-survival frontier. Until that is measured,
+the current result is a strong research frontier, not a production format
+decision.
+
 ## Recommended Next Work
 
 1. Extend the trained graph-neighborhood and graph-sorted codebook runs to
