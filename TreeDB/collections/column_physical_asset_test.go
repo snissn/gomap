@@ -8,6 +8,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -881,6 +882,9 @@ func TestColumnAssetSegmentAppenderRemoveOnCloseErrorsM15C(t *testing.T) {
 }
 
 func TestColumnAssetSegmentAppenderDirSyncErrorRemovesSegmentM15C(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("directory fsync is intentionally a no-op on windows")
+	}
 	root := t.TempDir()
 	assetPath := filepath.Join(root, "segment-1.tca")
 	if err := os.WriteFile(assetPath, []byte("unpublished"), 0o600); err != nil {
