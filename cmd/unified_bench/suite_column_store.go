@@ -70,7 +70,7 @@ var (
 		{alias: "parallel", canonical: columnStorePathParallelColumnScan},
 	}
 	columnStoreSuitePathUsage = fmt.Sprintf(
-		"Forced column-store execution label for -suite column_store (canonical: %s; aliases: %s; executable: %s; accepted labels: row_store_baseline, b_tree_index_baseline, serial_column_scan, aggregate_metadata, parallel_column_scan; aggregate_metadata executes q5_metadata through typed aggregate metadata assets when available; other queries reroute to serial physical scan)",
+		"Forced column-store execution label for -suite column_store (canonical: %s; aliases: %s; executable: %s; accepted labels: row_store_baseline, b_tree_index_baseline, serial_column_scan, aggregate_metadata, parallel_column_scan; aggregate_metadata executes q4b and q5_metadata through typed aggregate metadata assets when available; other queries reroute to serial physical scan)",
 		columnStoreSuitePathCanonicalHelp,
 		columnStoreSuitePathAliasHelp(columnStoreSuitePathAliases),
 		columnStoreSuitePathList(columnStoreSuiteExecutableForcedPaths),
@@ -502,7 +502,7 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 			SchemaHash:                      manifestIdentity.SchemaHash,
 		},
 		ProductionScope:        "production column-enabled TreeDB collection manifest/control-plane path plus isolated physical column assets and M14B planner-routed physical query execution",
-		PhysicalColumnQuery:    "M14B routes forced serial and insert-only parallel_column_scan labels through the TreeDB physical query adapter; forced aggregate_metadata is executable for q5_metadata through typed aggregate metadata assets and other queries reroute to serial physical scan; unsupported prerequisites fail closed before row fallback",
+		PhysicalColumnQuery:    "M14B routes forced serial and insert-only parallel_column_scan labels through the TreeDB physical query adapter; forced aggregate_metadata is executable for q4b and q5_metadata through typed aggregate metadata assets and other queries reroute to serial physical scan; unsupported prerequisites fail closed before row fallback",
 		BenchmarkOnlyRelaxed:   false,
 		StageSeparatedBoundary: "fixture generation, collection create, insert, checkpoint, reopen/recovery, planner, physical scan/reducer execution, row/B-tree reduce, and parity hash stages are timed separately for the forced execution label; M14B direct physical reducers are fused into scan timing unless visibility reconstruction reports a separate reduce phase",
 	}
@@ -1140,7 +1140,7 @@ func columnStoreSuitePlanRequest(name string, rows int, forceKind collections.Co
 }
 
 func columnStoreSuitePlanKindForQuery(path, name string, forceKind collections.ColumnQueryPlanKind) collections.ColumnQueryPlanKind {
-	if path == columnStorePathAggregateMetadata && name != columnStoreQueryQ5Metadata {
+	if path == columnStorePathAggregateMetadata && columnStoreSuiteAggregateMetadataName(name) == "" {
 		return collections.ColumnQueryPlanSerialColumnScan
 	}
 	return forceKind
@@ -1165,10 +1165,14 @@ func columnStoreSuiteQueryIndexCandidates(name string) []string {
 }
 
 func columnStoreSuiteAggregateMetadataName(name string) string {
-	if name == columnStoreQueryQ5Metadata {
+	switch name {
+	case columnStoreQueryQ4B:
+		return columnStoreSuiteQ5AggregateMax
+	case columnStoreQueryQ5Metadata:
 		return columnStoreSuiteQ5AggregateMin
+	default:
+		return ""
 	}
-	return ""
 }
 
 func executeColumnStoreSuiteQueryWithPlan(collection *collections.Collection, rows int, queryName string, plan collections.ColumnQueryPlan) (columnStoreQueryExecution, error) {
@@ -1481,8 +1485,11 @@ func columnStoreQueryAliasOf(name, path string) string {
 }
 
 func columnStoreQueryImplementationNote(name, requestedPath, planPath string) string {
-	if requestedPath == columnStorePathAggregateMetadata && planPath == columnStorePathSerialColumnScan && name != columnStoreQueryQ5Metadata {
+	if requestedPath == columnStorePathAggregateMetadata && planPath == columnStorePathSerialColumnScan && columnStoreSuiteAggregateMetadataName(name) == "" {
 		return "aggregate_metadata_forced_path_rerouted_to_serial_column_scan_no_metadata_asset_for_query_m14b"
+	}
+	if name == columnStoreQueryQ4B && planPath == columnStorePathAggregateMetadata {
+		return "q4b_physical_aggregate_metadata_asset_fast_path"
 	}
 	if name == columnStoreQueryQ5Metadata && planPath == columnStorePathAggregateMetadata {
 		return "q5_metadata_physical_aggregate_metadata_asset_fast_path"
