@@ -44,9 +44,13 @@ type ColumnAssetRewriteStats struct {
 	BytesEligible     int64
 	// BytesCopied is committed copied bytes for destructive rewrites. Dry-run
 	// reports the bytes that would be copied.
-	BytesCopied        int64
-	BytesReclaimable   int64
-	BytesRetained      int64
+	BytesCopied      int64
+	BytesReclaimable int64
+	// BytesRetained is the pre-GC physical bytes in segments observed by the
+	// reachability plan. Successful rewrite remaps protected refs, but the old
+	// mixed segment remains on disk until ColumnAssetGC reclaims SupersededRefs.
+	BytesRetained int64
+
 	SupersededRefs     []ColumnAssetRef
 	RemappedRefs       []ColumnAssetRef
 	RemapManifestRoot  uint64
