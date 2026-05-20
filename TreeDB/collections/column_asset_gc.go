@@ -111,6 +111,9 @@ func (c *Collection) columnAssetGC(ctx context.Context, opts ColumnAssetGCOption
 			return stats, err
 		}
 		for _, entry := range plan.SegmentEntries {
+			if err := ctx.Err(); err != nil {
+				return stats, err
+			}
 			if !columnAssetGCSegmentEligibleForDelete(namespace.SegmentDir, entry) {
 				continue
 			}

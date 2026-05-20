@@ -85,6 +85,13 @@ func mustRawKVCommandWALIntent(tb testing.TB, db *DB, key, value string) *Comman
 	return intent
 }
 
+func requireCommandWALPublishReady(tb testing.TB, db *DB, label string) {
+	tb.Helper()
+	if err := db.CheckCommandWALPublishReady(); err != nil {
+		tb.Fatalf("CheckCommandWALPublishReady after %s: %v", label, err)
+	}
+}
+
 func TestPublishOrderedRootDeltaGroupWithCommandWALContextPassesAssignedLSN(t *testing.T) {
 	dir := t.TempDir()
 	enableCommandWALFormat(t, dir)
@@ -323,6 +330,7 @@ func TestPublishOrderedRootDeltaGroupMaintenanceRejectsUnmarkedRootDelta(t *test
 	if !errors.Is(err, ErrStorageMaintenancePublishPreApplyFailed) {
 		t.Fatalf("maintenance publish error=%v want ErrStorageMaintenancePublishPreApplyFailed", err)
 	}
+	requireCommandWALPublishReady(t, db, "unmarked maintenance rejection")
 }
 
 func TestPublishOrderedRootDeltaGroupMaintenanceRejectsForgedPlan(t *testing.T) {
@@ -350,6 +358,7 @@ func TestPublishOrderedRootDeltaGroupMaintenanceRejectsForgedPlan(t *testing.T) 
 	if !errors.Is(err, ErrStorageMaintenancePublishPreApplyFailed) {
 		t.Fatalf("maintenance publish error=%v want ErrStorageMaintenancePublishPreApplyFailed", err)
 	}
+	requireCommandWALPublishReady(t, db, "forged maintenance plan rejection")
 }
 
 func TestPublishOrderedRootDeltaGroupMaintenanceRejectsTypedNilPlan(t *testing.T) {
@@ -378,6 +387,7 @@ func TestPublishOrderedRootDeltaGroupMaintenanceRejectsTypedNilPlan(t *testing.T
 	if !errors.Is(err, ErrStorageMaintenancePublishPreApplyFailed) {
 		t.Fatalf("maintenance publish error=%v want ErrStorageMaintenancePublishPreApplyFailed", err)
 	}
+	requireCommandWALPublishReady(t, db, "typed nil maintenance plan rejection")
 }
 
 func TestPublishOrderedRootDeltaGroupMaintenanceRejectsMissingPlan(t *testing.T) {
@@ -401,6 +411,7 @@ func TestPublishOrderedRootDeltaGroupMaintenanceRejectsMissingPlan(t *testing.T)
 	if !errors.Is(err, ErrStorageMaintenancePublishPreApplyFailed) {
 		t.Fatalf("maintenance publish error=%v want ErrStorageMaintenancePublishPreApplyFailed", err)
 	}
+	requireCommandWALPublishReady(t, db, "missing maintenance plan rejection")
 }
 
 func TestPublishOrderedRootDeltaGroupMaintenanceRejectsSystemOnly(t *testing.T) {
@@ -424,6 +435,7 @@ func TestPublishOrderedRootDeltaGroupMaintenanceRejectsSystemOnly(t *testing.T) 
 	if !errors.Is(err, ErrStorageMaintenancePublishPreApplyFailed) {
 		t.Fatalf("maintenance publish error=%v want ErrStorageMaintenancePublishPreApplyFailed", err)
 	}
+	requireCommandWALPublishReady(t, db, "system-only maintenance rejection")
 }
 
 func TestPublishOrderedRootDeltaGroupMaintenanceRejectsEmptyRootDelta(t *testing.T) {
@@ -464,6 +476,7 @@ func TestPublishOrderedRootDeltaGroupMaintenanceRejectsEmptyRootDelta(t *testing
 	if !errors.Is(err, ErrStorageMaintenancePublishPreApplyFailed) {
 		t.Fatalf("maintenance publish error=%v want ErrStorageMaintenancePublishPreApplyFailed", err)
 	}
+	requireCommandWALPublishReady(t, db, "empty maintenance root delta rejection")
 }
 
 func TestPublishOrderedRootDeltaGroupMaintenanceWrapsRootDeltaIteratorErrorPreApply(t *testing.T) {
@@ -505,6 +518,7 @@ func TestPublishOrderedRootDeltaGroupMaintenanceWrapsRootDeltaIteratorErrorPreAp
 	if !errors.Is(err, ErrStorageMaintenancePublishPreApplyFailed) {
 		t.Fatalf("maintenance publish error=%v want ErrStorageMaintenancePublishPreApplyFailed", err)
 	}
+	requireCommandWALPublishReady(t, db, "maintenance root delta iterator failure")
 	if iter.closes != 1 {
 		t.Fatalf("root delta iterator closes=%d want 1", iter.closes)
 	}
