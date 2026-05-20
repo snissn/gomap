@@ -160,7 +160,7 @@ func (c *Collection) PlanColumnAssetReachability(ctx context.Context, opts Colum
 	if err := ctx.Err(); err != nil {
 		return ColumnAssetReachabilityPlan{ProtectOnly: true}, err
 	}
-	view, closeView, err := c.prepareColumnPhysicalScanSnapshotView()
+	view, closeView, err := c.prepareColumnPhysicalScanSnapshotViewWithContext(ctx)
 	if closeView != nil {
 		defer closeView()
 	}
@@ -289,7 +289,7 @@ func buildColumnAssetReachabilityPlan(ctx context.Context, input columnAssetReac
 		plan.Complete = false
 		return plan, err
 	}
-	segments, err := listColumnAssetReachabilitySegments(namespace.SegmentDir)
+	segments, err := listColumnAssetReachabilitySegments(ctx, namespace.SegmentDir)
 	if err != nil {
 		plan.Complete = false
 		return plan, err
@@ -615,7 +615,13 @@ func columnAssetReachabilityStatusForSources(sources []ColumnAssetReachabilitySo
 	return ColumnAssetReachabilityUncertain
 }
 
-func listColumnAssetReachabilitySegments(segmentDir string) ([]columnAssetReachabilitySegment, error) {
+func listColumnAssetReachabilitySegments(ctx context.Context, segmentDir string) ([]columnAssetReachabilitySegment, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	entries, err := os.ReadDir(segmentDir)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -623,8 +629,16 @@ func listColumnAssetReachabilitySegments(segmentDir string) ([]columnAssetReacha
 		}
 		return nil, err
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	segments := make([]columnAssetReachabilitySegment, 0, len(entries))
-	for _, entry := range entries {
+	for i, entry := range entries {
+		if i%columnAssetReachabilityContextCheckInterval == 0 {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+		}
 		if entry.IsDir() {
 			continue
 		}
@@ -643,6 +657,9 @@ func listColumnAssetReachabilitySegments(segmentDir string) ([]columnAssetReacha
 			continue
 		}
 		segments = append(segments, columnAssetReachabilitySegment{fileID: fileID, path: path, bytes: info.Size()})
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	sort.Slice(segments, func(i, j int) bool {
 		return segments[i].fileID < segments[j].fileID || (segments[i].fileID == segments[j].fileID && segments[i].path < segments[j].path)

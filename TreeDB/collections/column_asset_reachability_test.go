@@ -602,6 +602,36 @@ func TestColumnAssetReachabilityCancelledBuildReturnsIdentityOnlyM15A(t *testing
 	}
 }
 
+func TestColumnAssetReachabilityPlanCancellationBeforeSnapshotM15A(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	col := &Collection{}
+	plan, err := col.PlanColumnAssetReachability(ctx, ColumnAssetReachabilityOptions{Detailed: true})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err=%v want context.Canceled", err)
+	}
+	if !plan.ProtectOnly || plan.Complete || plan.Collection != "" || plan.Namespace != "" {
+		t.Fatalf("canceled plan=%+v want protect-only identity", plan)
+	}
+	if plan.Sources.ManifestRecords != 0 || plan.Refs.Total != 0 || plan.Segments.Total != 0 || len(plan.Entries) != 0 || len(plan.SegmentEntries) != 0 {
+		t.Fatalf("canceled plan should not expose partial stats: %+v", plan)
+	}
+}
+
+func TestColumnAssetReachabilityListSegmentsCancellationM15A(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	segments, err := listColumnAssetReachabilitySegments(ctx, t.TempDir())
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err=%v want context.Canceled", err)
+	}
+	if len(segments) != 0 {
+		t.Fatalf("segments=%+v want none after cancellation", segments)
+	}
+}
+
 func TestColumnAssetReachabilityAddRefsCancellationDoesNotPartiallyCountM15A(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
