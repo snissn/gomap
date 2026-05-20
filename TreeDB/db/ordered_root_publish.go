@@ -13,7 +13,6 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/bulk"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
-	"github.com/snissn/gomap/TreeDB/internal/storagemaintenance"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/tree"
@@ -42,8 +41,8 @@ var ErrOrderedRootDeltaBatchGroupCommandWALContextNilSystemBuilder = errors.New(
 var ErrStorageMaintenanceRewriteMarkerMissing = errors.New("treedb: storage-maintenance rewrite marker missing: set OrderedRootDeltaPublishInput.StorageMaintenanceRewrite=true for every ordered input when using the storage-maintenance publish API")
 
 // ErrStorageMaintenancePlanMissing reports a maintenance ordered-root publish
-// that was called without a TreeDB-internal storage-maintenance plan token.
-var ErrStorageMaintenancePlanMissing = errors.New("treedb: storage-maintenance publish requires a TreeDB-internal maintenance plan")
+// that was called without a recognized storage-maintenance plan token.
+var ErrStorageMaintenancePlanMissing = errors.New("treedb: storage-maintenance publish requires a recognized maintenance plan")
 
 // ErrStorageMaintenanceRootDeltaMissing reports a maintenance publish with no
 // root delta to rewrite. System-only logical changes must use command-WAL
@@ -1409,12 +1408,12 @@ func (db *DB) PublishOrderedRootDeltaGroupWithPreflightAndSystemDeltaBuilder(ord
 // ordered input, and must set StorageMaintenanceRewrite on every ordered input.
 // System-only logical changes must use command-WAL-covered publish APIs. This
 // path does not append or advance a command-WAL frame.
-func (db *DB) PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(plan storagemaintenance.Plan, ordered []OrderedRootDeltaPublishInput, preflight OrderedRootGroupPreflight, buildSystemDeltaIter OrderedRootGroupSystemBuilder) (uint64, []uint64, error) {
+func (db *DB) PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(plan StorageMaintenancePlan, ordered []OrderedRootDeltaPublishInput, preflight OrderedRootGroupPreflight, buildSystemDeltaIter OrderedRootGroupSystemBuilder) (uint64, []uint64, error) {
 	return db.publishOrderedRootDeltaGroupWithSystemDeltaBuilderWithMaintenancePlan(plan, ordered, preflight, nil, buildSystemDeltaIter, orderedRootDeltaGroupSystemPublishStorageMaintenance)
 }
 
-func validateStorageMaintenanceOrderedRootDeltaInputs(plan storagemaintenance.Plan, ordered []OrderedRootDeltaPublishInput) error {
-	if !plan.Valid() {
+func validateStorageMaintenanceOrderedRootDeltaInputs(plan StorageMaintenancePlan, ordered []OrderedRootDeltaPublishInput) error {
+	if !validStorageMaintenancePlan(plan) {
 		return ErrStorageMaintenancePlanMissing
 	}
 	if len(ordered) == 0 {
@@ -1494,10 +1493,10 @@ func (db *DB) PublishOrderedRootDeltaBatchGroupWithPreflightAndSystemDeltaBuilde
 }
 
 func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered []OrderedRootDeltaPublishInput, preflight OrderedRootGroupPreflight, commandWALIntent *CommandWALIntent, buildSystemDeltaIter OrderedRootGroupSystemBuilder, mode orderedRootDeltaGroupSystemPublishMode) (newSystemRoot uint64, rootIDs []uint64, err error) {
-	return db.publishOrderedRootDeltaGroupWithSystemDeltaBuilderWithMaintenancePlan(storagemaintenance.Plan{}, ordered, preflight, commandWALIntent, buildSystemDeltaIter, mode)
+	return db.publishOrderedRootDeltaGroupWithSystemDeltaBuilderWithMaintenancePlan(nil, ordered, preflight, commandWALIntent, buildSystemDeltaIter, mode)
 }
 
-func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilderWithMaintenancePlan(plan storagemaintenance.Plan, ordered []OrderedRootDeltaPublishInput, preflight OrderedRootGroupPreflight, commandWALIntent *CommandWALIntent, buildSystemDeltaIter OrderedRootGroupSystemBuilder, mode orderedRootDeltaGroupSystemPublishMode) (newSystemRoot uint64, rootIDs []uint64, err error) {
+func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilderWithMaintenancePlan(plan StorageMaintenancePlan, ordered []OrderedRootDeltaPublishInput, preflight OrderedRootGroupPreflight, commandWALIntent *CommandWALIntent, buildSystemDeltaIter OrderedRootGroupSystemBuilder, mode orderedRootDeltaGroupSystemPublishMode) (newSystemRoot uint64, rootIDs []uint64, err error) {
 	if buildSystemDeltaIter == nil {
 		return 0, nil, errors.New("nil ordered root group system delta builder")
 	}

@@ -10,6 +10,8 @@ func (db *DB) MinPinnedSnapshotCommitSeq() uint64 {
 		return math.MaxUint64
 	}
 
+	// idxMu is a Mutex rather than an RWMutex, so this read-only walk must take
+	// the exclusive generation-list lock.
 	db.idxMu.Lock()
 	defer db.idxMu.Unlock()
 

@@ -10,7 +10,6 @@ import (
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
-	"github.com/snissn/gomap/TreeDB/internal/storagemaintenance"
 )
 
 var errColumnAssetRewritePublishPreflightFailed = errors.New("collections: column asset rewrite publish preflight failed")
@@ -508,7 +507,7 @@ func (c *Collection) publishColumnAssetRewriteManifestState(state columnAssetRew
 		StorageMaintenanceRewrite: true,
 	}}
 	return c.db.PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(
-		storagemaintenance.ColumnAssetRewrite(),
+		backenddb.ColumnAssetRewriteStorageMaintenancePlan(),
 		ordered,
 		c.columnAssetRewriteRootDescriptorPreflight(state),
 		func(rootIDs []uint64) (iterator.UnsafeIterator, error) {

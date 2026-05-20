@@ -16,7 +16,6 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
-	"github.com/snissn/gomap/TreeDB/internal/storagemaintenance"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -244,7 +243,7 @@ func TestPublishOrderedRootDeltaGroupMaintenanceAllowsCommandWALWithoutLogicalFr
 
 	rootDelta := mustFrozenSystemMemtable(t, "root/k", "v")
 	newSystemRoot, rootIDs, err := db.PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(
-		storagemaintenance.ColumnAssetRewrite(),
+		ColumnAssetRewriteStorageMaintenancePlan(),
 		[]OrderedRootDeltaPublishInput{{
 			BaseRoot:                  0,
 			Iter:                      rootDelta.NewIterator(nil, nil),
@@ -293,7 +292,7 @@ func TestPublishOrderedRootDeltaGroupMaintenanceRejectsUnmarkedRootDelta(t *test
 	iter := mustFrozenSystemMemtable(t, "root/k", "v").NewIterator(nil, nil)
 	defer iter.Close()
 	_, _, err := db.PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(
-		storagemaintenance.ColumnAssetRewrite(),
+		ColumnAssetRewriteStorageMaintenancePlan(),
 		[]OrderedRootDeltaPublishInput{{
 			BaseRoot: 0,
 			Iter:     iter,
@@ -316,7 +315,7 @@ func TestPublishOrderedRootDeltaGroupMaintenanceRejectsMissingPlan(t *testing.T)
 	defer db.Close()
 
 	_, _, err := db.PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(
-		storagemaintenance.Plan{},
+		nil,
 		nil,
 		nil,
 		func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
@@ -336,7 +335,7 @@ func TestPublishOrderedRootDeltaGroupMaintenanceRejectsSystemOnly(t *testing.T) 
 	defer db.Close()
 
 	_, _, err := db.PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(
-		storagemaintenance.ColumnAssetRewrite(),
+		ColumnAssetRewriteStorageMaintenancePlan(),
 		nil,
 		nil,
 		func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
