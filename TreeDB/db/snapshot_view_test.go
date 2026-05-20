@@ -159,6 +159,7 @@ func TestMinPinnedSnapshotCommitSeqRescansAcquireCompletedDuringScan(t *testing.
 
 	var snap *Snapshot
 	hookCalls := 0
+	minPinnedSnapshotCommitSeqAfterScanForTestingMu.Lock()
 	prevHook := minPinnedSnapshotCommitSeqAfterScanForTesting
 	minPinnedSnapshotCommitSeqAfterScanForTesting = func() {
 		hookCalls++
@@ -170,8 +171,11 @@ func TestMinPinnedSnapshotCommitSeqRescansAcquireCompletedDuringScan(t *testing.
 			t.Fatal("AcquireSnapshot during min-pinned scan returned nil")
 		}
 	}
+	minPinnedSnapshotCommitSeqAfterScanForTestingMu.Unlock()
 	defer func() {
+		minPinnedSnapshotCommitSeqAfterScanForTestingMu.Lock()
 		minPinnedSnapshotCommitSeqAfterScanForTesting = prevHook
+		minPinnedSnapshotCommitSeqAfterScanForTestingMu.Unlock()
 		if snap != nil {
 			_ = snap.Close()
 		}
@@ -189,6 +193,7 @@ func TestMinPinnedSnapshotCommitSeqToleratesShortSnapshotAcquireChurn(t *testing
 	db := &DB{snapPool: NewSnapshotPool()}
 	churnScans := minPinnedSnapshotCommitSeqMaxAttempts / 2
 	hookCalls := 0
+	minPinnedSnapshotCommitSeqAfterScanForTestingMu.Lock()
 	prevHook := minPinnedSnapshotCommitSeqAfterScanForTesting
 	minPinnedSnapshotCommitSeqAfterScanForTesting = func() {
 		hookCalls++
@@ -196,8 +201,11 @@ func TestMinPinnedSnapshotCommitSeqToleratesShortSnapshotAcquireChurn(t *testing
 			db.snapshotAcquireEpoch.Add(1)
 		}
 	}
+	minPinnedSnapshotCommitSeqAfterScanForTestingMu.Unlock()
 	defer func() {
+		minPinnedSnapshotCommitSeqAfterScanForTestingMu.Lock()
 		minPinnedSnapshotCommitSeqAfterScanForTesting = prevHook
+		minPinnedSnapshotCommitSeqAfterScanForTestingMu.Unlock()
 	}()
 
 	if got := db.MinPinnedSnapshotCommitSeq(); got != math.MaxUint64 {

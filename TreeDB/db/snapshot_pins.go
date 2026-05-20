@@ -3,9 +3,11 @@ package db
 import (
 	"math"
 	"runtime"
+	"sync"
 )
 
 var minPinnedSnapshotCommitSeqAfterScanForTesting func()
+var minPinnedSnapshotCommitSeqAfterScanForTestingMu sync.RWMutex
 
 const minPinnedSnapshotCommitSeqMaxAttempts = 64
 
@@ -34,7 +36,10 @@ func (db *DB) MinPinnedSnapshotCommitSeq() uint64 {
 		min = minPinnedSnapshotCommitSeqForIndexGen(min, db.idx.Load())
 		db.idxMu.Unlock()
 
-		if hook := minPinnedSnapshotCommitSeqAfterScanForTesting; hook != nil {
+		minPinnedSnapshotCommitSeqAfterScanForTestingMu.RLock()
+		hook := minPinnedSnapshotCommitSeqAfterScanForTesting
+		minPinnedSnapshotCommitSeqAfterScanForTestingMu.RUnlock()
+		if hook != nil {
 			hook()
 		}
 		if db.snapshotAcquireInFlight() > 0 {
