@@ -536,8 +536,8 @@ func TestColumnAssetGCFailClosedOnIncompletePlanM15B(t *testing.T) {
 	if err != nil {
 		t.Fatalf("columnAssetManagerNamespaceForRoot: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(namespace.SegmentDir, columnAssetSegmentFileName(99)), []byte("unknown-bytes"), 0o600); err != nil {
-		t.Fatalf("WriteFile unknown segment: %v", err)
+	if err := os.Mkdir(filepath.Join(namespace.SegmentDir, columnAssetSegmentFileName(99)), 0o700); err != nil {
+		t.Fatalf("Mkdir unknown segment: %v", err)
 	}
 	candidate := writeColumnAssetGCCandidateSegmentM15B(t, d.ColumnAssetRootDir(), col, 90, []byte("complete-but-plan-is-incomplete"))
 	candidatePath, err := columnAssetSegmentPath(d.ColumnAssetRootDir(), candidate)
