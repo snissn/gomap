@@ -75,6 +75,36 @@ func TestColumnAssetGCDryRunReportsReclaimableButDoesNotDeleteM15B(t *testing.T)
 	}
 }
 
+func TestColumnAssetGCDryRunCanReturnSegmentDetailsWithoutRefEntriesM15B(t *testing.T) {
+	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col := openColumnStoreCollectionM10B(t, d)
+
+	if _, err := col.Insert([]byte("e1"), []byte(`{"time_us":1,"kind":"like","did":"d1"}`)); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	candidate := writeColumnAssetGCCandidateSegmentM15B(t, d.ColumnAssetRootDir(), col, 78, []byte("segment-detail-without-ref-detail"))
+
+	stats, err := col.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{
+		DryRun:         true,
+		SegmentDetails: true,
+		CandidateRefs:  []ColumnAssetRef{candidate},
+	})
+	if err != nil {
+		t.Fatalf("ColumnAssetGC dry-run: %v", err)
+	}
+	if len(stats.Plan.Entries) != 0 {
+		t.Fatalf("plan kept %d ref entries without Detailed=true", len(stats.Plan.Entries))
+	}
+	if len(stats.Plan.SegmentEntries) == 0 {
+		t.Fatalf("plan omitted segment entries despite SegmentDetails=true: %+v", stats.Plan.Segments)
+	}
+	if stats.SegmentsEligible != 1 || stats.BytesEligible != candidate.Length {
+		t.Fatalf("stats=%+v want one eligible segment of %d bytes", stats, candidate.Length)
+	}
+}
+
 func TestColumnAssetGCDeletesCompleteReclaimableSegmentM15B(t *testing.T) {
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)

@@ -12,11 +12,14 @@ import (
 type ColumnAssetGCOptions struct {
 	DryRun bool
 	// Detailed keeps detailed ref and segment entries in the returned plan.
-	Detailed      bool
-	CandidateRefs []ColumnAssetRef
-	PendingRefs   []ColumnAssetRef
-	PreparedRefs  []ColumnAssetRef
-	PinnedRefs    []ColumnAssetRef
+	Detailed bool
+	// SegmentDetails keeps segment-level entries in the returned plan without
+	// retaining per-ref entries.
+	SegmentDetails bool
+	CandidateRefs  []ColumnAssetRef
+	PendingRefs    []ColumnAssetRef
+	PreparedRefs   []ColumnAssetRef
+	PinnedRefs     []ColumnAssetRef
 }
 
 // ColumnAssetGCStats summarizes safe whole-segment column asset reclamation.
@@ -64,11 +67,11 @@ func (c *Collection) ColumnAssetGC(ctx context.Context, opts ColumnAssetGCOption
 
 func (c *Collection) columnAssetGC(ctx context.Context, opts ColumnAssetGCOptions) (stats ColumnAssetGCStats, err error) {
 	defer func() {
-		stats.Plan = columnAssetGCPlanForDetail(stats.Plan, opts.Detailed)
+		stats.Plan = columnAssetGCPlanForDetail(stats.Plan, opts.Detailed, opts.SegmentDetails)
 	}()
 	plan, err := c.PlanColumnAssetReachability(ctx, ColumnAssetReachabilityOptions{
 		Detailed:                              opts.Detailed,
-		SegmentDetails:                        opts.Detailed || !opts.DryRun,
+		SegmentDetails:                        opts.Detailed || opts.SegmentDetails || !opts.DryRun,
 		ProtectCandidateRefsForOlderSnapshots: true,
 		CandidateRefs:                         opts.CandidateRefs,
 		PendingRefs:                           opts.PendingRefs,
@@ -139,6 +142,9 @@ func (c *Collection) columnAssetGC(ctx context.Context, opts ColumnAssetGCOption
 		stats.BytesEligible += entry.Bytes
 		eligible = append(eligible, entry)
 	}
+	// Re-check after planning and after taking the mutation lock so destructive
+	// deletion cannot proceed if the handle became closed, read-only, or
+	// command-WAL-poisoned while reachability was being computed.
 	if err := c.db.CheckStorageMaintenanceReady(); err != nil {
 		return stats, err
 	}
@@ -194,11 +200,13 @@ func columnAssetGCSegmentEligibleForDelete(segmentDir string, entry ColumnAssetR
 	return true
 }
 
-func columnAssetGCPlanForDetail(plan ColumnAssetReachabilityPlan, detailed bool) ColumnAssetReachabilityPlan {
+func columnAssetGCPlanForDetail(plan ColumnAssetReachabilityPlan, detailed, segmentDetails bool) ColumnAssetReachabilityPlan {
 	if detailed {
 		return plan
 	}
 	plan.Entries = nil
-	plan.SegmentEntries = nil
+	if !segmentDetails {
+		plan.SegmentEntries = nil
+	}
 	return plan
 }
