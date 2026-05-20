@@ -55,6 +55,7 @@ const (
 	vectorIndexFallbackColumnGraphManifestInvalid = "column_graph_manifest_root_mismatch"
 	vectorIndexFallbackColumnGraphMetric          = "column_graph_requires_cosine"
 	vectorIndexFallbackColumnGraphEncoding        = "column_graph_requires_float32"
+	vectorIndexFallbackColumnGraphReprobeRequired = "column_graph_reprobe_outside_native_rebuild"
 )
 
 var errVectorIndexStaleRuntime = errors.New("collections: vector index runtime handle is stale")

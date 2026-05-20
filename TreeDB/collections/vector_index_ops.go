@@ -70,7 +70,7 @@ func (c *Collection) RebuildVectorIndex(name string) (VectorIndexStatus, error) 
 	if err := c.flushBufferedWrites(); err != nil {
 		return VectorIndexStatus{}, err
 	}
-	def, err := c.declaredVectorIndexDefinitionPrepared(name)
+	def, err := c.declaredVectorIndexDefinitionPreparedWithoutColumnRootValidation(name)
 	if err != nil {
 		return VectorIndexStatus{}, err
 	}
@@ -78,10 +78,7 @@ func (c *Collection) RebuildVectorIndex(name string) (VectorIndexStatus, error) 
 		// The definition can change while waiting for the native rebuild barrier.
 		// Do not run the column_graph loader with writers blocked; callers can
 		// re-probe status outside the native rebuild path.
-		status := columnGraphRebuildUnsupportedStatus(
-			def,
-			columnGraphUnavailableLoadStatus(vectorIndexFallbackColumnGraphPhysicalMissing),
-		)
+		status := columnGraphRebuildUnsupportedStatus(def, columnGraphUnavailableLoadStatus(vectorIndexFallbackColumnGraphReprobeRequired))
 		status.Duration = collectionObservedElapsedSince(start)
 		return status, nil
 	}
@@ -176,6 +173,14 @@ func (c *Collection) declaredVectorIndexDefinition(name string) (VectorIndexDefi
 }
 
 func (c *Collection) declaredVectorIndexDefinitionPrepared(name string) (VectorIndexDefinition, error) {
+	return c.declaredVectorIndexDefinitionPreparedFromCatalog(name, loadCollectionCatalog)
+}
+
+func (c *Collection) declaredVectorIndexDefinitionPreparedWithoutColumnRootValidation(name string) (VectorIndexDefinition, error) {
+	return c.declaredVectorIndexDefinitionPreparedFromCatalog(name, loadCollectionCatalogWithoutColumnRootValidation)
+}
+
+func (c *Collection) declaredVectorIndexDefinitionPreparedFromCatalog(name string, loadCatalog func(*backenddb.Snapshot, string) (*collectionCatalog, error)) (VectorIndexDefinition, error) {
 	if c == nil {
 		return VectorIndexDefinition{}, errCollectionNil
 	}
@@ -190,7 +195,7 @@ func (c *Collection) declaredVectorIndexDefinitionPrepared(name string) (VectorI
 		return VectorIndexDefinition{}, backenddb.ErrClosed
 	}
 	defer func() { _ = snap.Close() }()
-	catalog, err := loadCollectionCatalog(snap, c.meta.Name)
+	catalog, err := loadCatalog(snap, c.meta.Name)
 	if err != nil {
 		return VectorIndexDefinition{}, err
 	}

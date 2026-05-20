@@ -68,6 +68,17 @@ func TestCollectionVectorIndexColumnGraphContractReportsPhysicalAssetsMissing(t 
 	}
 }
 
+func TestColumnGraphRebuildUnsupportedStatusPreservesReprobeReason(t *testing.T) {
+	def := columnGraphVectorIndexTestDefinition()
+	status := columnGraphRebuildUnsupportedStatus(def, columnGraphUnavailableLoadStatus(vectorIndexFallbackColumnGraphReprobeRequired))
+	if status.ExactFallbackReason != vectorIndexFallbackColumnGraphReprobeRequired || status.ColumnGraphUnavailableReason != vectorIndexFallbackColumnGraphReprobeRequired {
+		t.Fatalf("rebuild status reason=%q column reason=%q want %q: %+v", status.ExactFallbackReason, status.ColumnGraphUnavailableReason, vectorIndexFallbackColumnGraphReprobeRequired, status)
+	}
+	if !status.RebuildNeeded || status.ColumnGraphLoaded || status.PhysicalColumnAssetsSupported {
+		t.Fatalf("unexpected rebuild status flags: %+v", status)
+	}
+}
+
 func TestCollectionVectorIndexColumnGraphReportsManifestRootMismatch(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
