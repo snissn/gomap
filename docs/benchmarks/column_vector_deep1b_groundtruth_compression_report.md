@@ -1290,6 +1290,125 @@ Interpretation:
   exact winner never enters the routed storage-block union, no compressed scan
   or rerank lane can recover it.
 
+## Graph-Visited PQ/Local-Residual-PQ q0..24 Stress Pass
+
+The q0..9 graph-visited artifact above is the full method ladder, including
+OPQ-style and local residual-OPQ lanes. The broader q0..24 stress pass covers
+the currently most decision-relevant lanes: global PQ and local
+residual-PQ, plus the existing scalar and local-PCA baselines emitted by the
+harness. A q0..99 full-ladder run and a q0..99 focused run were too large for
+the interactive timeout before producing a report, so this q0..24 pass is
+broader than q0..9 but still not final production coverage.
+
+Run artifact:
+
+```text
+/tmp/gomap_deep1b_buildable_graph_visited_pq_lrpq_q0_24_20260520_062116/report.md
+```
+
+Run shape:
+
+| Field | Value |
+| --- | ---: |
+| Regime | `buildable_granule_scout` |
+| Builder | `ivf_graph_sorted_blocks` |
+| Selection | `graph_visited_blocks` |
+| Eval rows | `32768` |
+| Eval row offset | `8192` |
+| Dims | `96` |
+| Granule rows | `4096` |
+| Granules | `8` |
+| Granule build ms | `778.625` |
+| Routing graph build ms | `758.292` |
+| K-means iterations | `6` |
+| Graph degree | `16` |
+| Graph entry clusters | `4` |
+| Queries | `0..24` |
+| Top granules | `1,4` |
+| PQ train rows | `8192` |
+| PQ budgets | `32,48,64,80,96 B/vector` |
+| Local residual-PQ budgets | `32,48,64 B/vector` |
+| PQ iterations | `4` |
+| Scan iterations | `1` |
+
+Training cost and metadata for the focused trained-codebook lanes:
+
+| Method family | Budgets | Train ms | Metadata B/eval-vector | Interpretation |
+| --- | --- | ---: | ---: | --- |
+| global PQ | `32/48/64/80/96` | `780.4-1377.7` | `1.50` | simple fixed-byte trained baseline |
+| local residual-PQ | `32/48/64` | `3070.7-4557.9` | `12.05` | local residual challenger with real metadata cost |
+
+The broader query slice makes the routing failure mode much clearer than q0..9.
+Top4 graph-visited blocks usually route the exact winners, but hard queries now
+miss winners before compression. That means the codec tables below are
+conditional on the selected block union; they are not full search recall.
+
+| Selection | Queries | Candidate rows | p50 top10 routed | p90 top10 routed | Worst top10 routed | p50 top20 routed | p90 top20 routed | Worst top20 routed | p50 top50 routed | Worst top50 routed |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| top1 graph-visited block | `25` | `4096` | `5/10` | `10/10` | `0/10` | `8/20` | `20/20` | `0/20` | `22/50` | `0/50` |
+| top4 graph-visited blocks | `25` | `16384` | `10/10` | `10/10` | `6/10` | `20/20` | `20/20` | `10/20` | `48/50` | `29/50` |
+
+Selected aggregate codec rows:
+
+| Selection | Method | Row-code B/vector | Metadata B/vector | Avg total KiB/query | Worst top10@20 | Worst top10@50 | Worst top20@50 | Worst rerank@20 recall@10 | Avg score err | Scan ns/vector |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| top1 | `global_pq_32B` | `32` | `3.50` | `142.0` | `6/10` | `10/10` | `17/20` | `0.60` | `0.01762` | `27.77` |
+| top1 | `local_residual_pq_32B` | `32` | `14.05` | `184.2` | `8/10` | `10/10` | `19/20` | `0.80` | `0.01418` | `27.17` |
+| top1 | `global_pq_48B` | `48` | `3.50` | `206.0` | `8/10` | `10/10` | `20/20` | `0.80` | `0.00829` | `51.17` |
+| top1 | `local_residual_pq_48B` | `48` | `14.05` | `248.2` | `10/10` | `10/10` | `20/20` | `1.00` | `0.00681` | `42.63` |
+| top1 | `global_pq_64B` | `64` | `3.50` | `270.0` | `9/10` | `10/10` | `20/20` | `0.90` | `0.00694` | `54.55` |
+| top1 | `local_residual_pq_64B` | `64` | `14.05` | `312.2` | `10/10` | `10/10` | `20/20` | `1.00` | `0.00570` | `59.36` |
+| top1 | `global_pq_80B` | `80` | `3.50` | `334.0` | `10/10` | `10/10` | `20/20` | `1.00` | `0.00500` | `71.53` |
+| top1 | `global_pq_96B` | `96` | `3.50` | `398.0` | `10/10` | `10/10` | `20/20` | `1.00` | `0.00153` | `98.16` |
+| top1 | `scalar_u8` | `96` | `0.19` | `384.8` | `10/10` | `10/10` | `20/20` | `1.00` | `0.00057` | `1665.34` |
+| top4 | `global_pq_32B` | `32` | `3.50` | `568.0` | `7/10` | `10/10` | `17/20` | `0.70` | `0.01707` | `27.35` |
+| top4 | `local_residual_pq_32B` | `32` | `14.05` | `736.8` | `8/10` | `9/10` | `18/20` | `0.80` | `0.01408` | `28.07` |
+| top4 | `local_pca_rank32` | `32` | `3.56` | `569.0` | `0/10` | `3/10` | `5/20` | `0.00` | `0.02911` | `51.74` |
+| top4 | `global_pq_48B` | `48` | `3.50` | `824.0` | `8/10` | `10/10` | `20/20` | `0.80` | `0.00808` | `42.61` |
+| top4 | `local_residual_pq_48B` | `48` | `14.05` | `992.8` | `10/10` | `10/10` | `20/20` | `1.00` | `0.00679` | `45.90` |
+| top4 | `scalar_u4` | `48` | `0.19` | `771.0` | `9/10` | `10/10` | `19/20` | `0.90` | `0.00978` | `1637.58` |
+| top4 | `global_pq_64B` | `64` | `3.50` | `1080.0` | `9/10` | `10/10` | `20/20` | `0.90` | `0.00674` | `60.36` |
+| top4 | `local_residual_pq_64B` | `64` | `14.05` | `1248.8` | `10/10` | `10/10` | `19/20` | `1.00` | `0.00569` | `64.53` |
+| top4 | `local_pca_rank64` | `64` | `5.08` | `1105.2` | `7/10` | `10/10` | `19/20` | `0.70` | `0.01230` | `130.32` |
+| top4 | `global_pq_80B` | `80` | `3.50` | `1336.0` | `10/10` | `10/10` | `20/20` | `1.00` | `0.00490` | `74.10` |
+| top4 | `local_pca_rank80` | `80` | `5.84` | `1373.4` | `9/10` | `10/10` | `19/20` | `0.90` | `0.00690` | `162.98` |
+| top4 | `global_pq_96B` | `96` | `3.50` | `1592.0` | `10/10` | `10/10` | `20/20` | `1.00` | `0.00145` | `99.60` |
+| top4 | `local_pca_rank96` | `96` | `6.59` | `1641.5` | `10/10` | `10/10` | `20/20` | `1.00` | `0.00081` | `196.55` |
+| top4 | `scalar_u8` | `96` | `0.19` | `1539.0` | `10/10` | `10/10` | `20/20` | `1.00` | `0.00058` | `1588.22` |
+
+Selected cascade rows:
+
+| Selection | Method | Selected-code KiB/query | p50 scan us | p90 scan us | p50 measured cascade@50 us | p90 measured cascade@50 us | p50 int8 cascade@50 us | p90 int8 cascade@50 us |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| top4 | `global_pq_48B` | `824.0` | `706.21` | `972.88` | `818.13` | `1111.88` | `984.84` | `1275.11` |
+| top4 | `local_residual_pq_48B` | `992.8` | `667.00` | `1248.08` | `778.29` | `1498.71` | `986.80` | `1592.85` |
+| top4 | `global_pq_80B` | `1336.0` | n/a | n/a | `1247.50` | `2026.42` | n/a | n/a |
+| top4 | `global_pq_96B` | `1592.0` | n/a | n/a | `1615.29` | `3001.75` | n/a | n/a |
+| top4 | `scalar_u8` | `1539.0` | n/a | n/a | `23660.42` | `39442.00` | n/a | n/a |
+
+Interpretation:
+
+- The q0..24 pass confirms that routing is the first production gate. Top4
+  graph-visited routing has p50-perfect top10/top20 containment, but worst
+  queries route only `6/10` top10 and `10/20` top20 winners. No codec or rerank
+  stage can recover winners that never enter the selected block union.
+- Conditional on routed blocks, global PQ48 remains a clean low-metadata
+  candidate generator: `48 B` row code, `3.50 B/vector` selected metadata,
+  worst `10/10` top10@50 and `20/20` top20@50, but only `8/10` worst top10@20.
+- Local residual-PQ48 repairs the conditional worst top10@20 and rerank@20 gates
+  in this run, but it spends about `10.55 B/vector` more selected metadata than
+  global PQ. That makes it a real challenger, not a free upgrade.
+- Global PQ80/PQ96 saturate the measured conditional gates with low metadata.
+  The additional bytes mostly buy lower score error and safer compressed
+  ranking, not a fix for routing misses.
+- Local PCA remains weak on hard graph-visited unions. Rank32 collapses, rank64
+  still misses top10@20 badly, and rank96 is accurate but slower than PQ and no
+  smaller than full SQ8.
+- Scalar u4/u8 quality is useful as a conservative reference, but the current
+  reconstructed Go scorer is one to two orders of magnitude slower than the PQ
+  scan path. That is a kernel implementation fact, not a proof scalar codecs
+  are intrinsically slow.
+
 ## Exact In-Cluster Graph-Visited Buildable Smoke
 
 The harness now also supports exact in-cluster graph builders:
@@ -1416,17 +1535,20 @@ Track A.5 is now started: buildable-granule scouts over row-id-contiguous
 blocks, IVF/k-means variable-size clusters, IVF/k-means locality-sorted fixed
 blocks, IVF-window graph-neighborhood fixed blocks, IVF-window graph-sorted
 row-adjacent fixed blocks, a graph-visited block-routing scout over the sealed
-graph-sorted storage blocks, and an exact in-cluster graph-visited smoke over
-exact graph-sorted blocks. Row-id order is a weak control. IVF/k-means gives
-the first buildable locality signal, the sorted-block variants show that a
-buildable locality order can feed fixed TreeDB-style storage blocks, and the
+graph-sorted storage blocks, a q0..24 focused graph-visited stress pass over
+global PQ/local-residual-PQ lanes, and an exact in-cluster graph-visited smoke
+over exact graph-sorted blocks. Row-id order is a weak control. IVF/k-means
+gives the first buildable locality signal, the sorted-block variants show that
+a buildable locality order can feed fixed TreeDB-style storage blocks, and the
 graph proxies add query-independent graph locality without claiming full
 HNSW/TreeDB graph behavior. The graph-visited scouts now make the routing
 failure mode explicit: they are closer to visited-set paths, but still miss
-winners on hard queries before compression. The exact in-cluster graph smoke
-also shows that stronger locality proxies must carry build-cost accounting.
-These results show why codebook stages need real train/eval splits rather than
-top100 oracle fits.
+winners on hard queries before compression. The q0..24 pass strengthens that
+conclusion: top4 graph-visited routing has p50-perfect top10/top20 containment,
+but worst queries still route only `6/10` top10 and `10/20` top20 winners. The
+exact in-cluster graph smoke also shows that stronger locality proxies must
+carry build-cost accounting. These results show why codebook stages need real
+train/eval splits rather than top100 oracle fits.
 
 Track B now covers the fixed Deep1B budget ladder. Global PQ, global
 centroid-residual PQ, and OPQ-style lanes have been compared against local PCA
@@ -1437,11 +1559,15 @@ trained codebook baseline; OPQ is a measured challenger without a decisive
 Pareto win yet; and global residual PQ does not beat global PQ in this shape.
 Per-buildable-granule local residual-PQ and local residual-OPQ are now measured
 on sorted fixed blocks, graph-neighborhood blocks, graph-sorted row-adjacent
-blocks, and graph-visited selections over sealed graph-sorted blocks. Local
-residual-PQ improves candidate gates at extra metadata cost; local residual-OPQ
-slightly lowers score error but has not yet justified the additional rotation
-metadata and build time. Track B still needs larger query coverage, larger
-train/eval slices, production-grade local OPQ/LOPQ amortization, full
+blocks, and graph-visited selections over sealed graph-sorted blocks, with
+broader q0..24 graph-visited coverage for the PQ/local-residual-PQ frontier.
+Local residual-PQ improves candidate gates at extra metadata cost; in the
+q0..24 graph-visited pass, local residual-PQ48 repairs the conditional worst
+top10@20 and rerank@20 gates that global PQ48 misses, but spends about
+`10.55 B/vector` more selected metadata. Local residual-OPQ slightly lowers
+score error in the q0..9 full ladder but has not yet justified the additional
+rotation metadata and build time. Track B still needs larger query coverage,
+larger train/eval slices, production-grade local OPQ/LOPQ amortization, full
 HNSW/TreeDB graph visited sets, and actual TreeDB granule layouts.
 
 Track C is the granule-local residual encoding tournament. The first measured
@@ -1524,31 +1650,32 @@ The current evidence map is:
 
 | Requirement | Current evidence | Status |
 | --- | --- | --- |
-| Separate official top100 oracle locality from production/buildable locality | Top100 sections are labeled as oracle local-neighborhood upper-bound probes. Buildable sections are separated into row-id, IVF/k-means, IVF-sorted fixed blocks, graph-neighborhood fixed blocks, graph-sorted row-adjacent fixed blocks, graph-visited block-routing over sealed graph-sorted blocks, and an exact in-cluster graph-visited smoke. | Satisfied for current report wording. |
+| Separate official top100 oracle locality from production/buildable locality | Top100 sections are labeled as oracle local-neighborhood upper-bound probes. Buildable sections are separated into row-id, IVF/k-means, IVF-sorted fixed blocks, graph-neighborhood fixed blocks, graph-sorted row-adjacent fixed blocks, graph-visited block-routing over sealed graph-sorted blocks, the q0..24 graph-visited PQ/local-residual-PQ stress pass, and an exact in-cluster graph-visited smoke. | Satisfied for current report wording. |
 | Primary metric is candidate survival, not compressed final top10 order | Tables report exact top10/top20 containment at approx@20/@50 and rerank@20/@50 recall@10. The conclusion keeps exact rerank mandatory. | Satisfied for measured rows. |
-| Fixed byte-budget comparisons | Top100 and buildable runs cover the 32/48/64/80/96-byte ladder where the lane exists. The graph-visited full-ladder scout covers 32/48/64/80/96 for PQ, residual-PQ, OPQ-style, local residual-PQ, and local residual-OPQ lanes, and compares them against local PCA and scalar lanes at the same row-code budgets. The exact in-cluster graph smoke currently covers only 32/48/64/96 selected rows, so it is locality/routing instrumentation rather than a full budget ladder. | Satisfied for the measured scout lanes; still partial for production because larger/full TreeDB granules remain unmeasured. |
+| Fixed byte-budget comparisons | Top100 and buildable runs cover the 32/48/64/80/96-byte ladder where the lane exists. The q0..9 graph-visited full-ladder scout covers 32/48/64/80/96 for PQ, residual-PQ, OPQ-style, local residual-PQ, and local residual-OPQ lanes, and compares them against local PCA and scalar lanes at the same row-code budgets. The broader q0..24 graph-visited stress pass covers PQ at 32/48/64/80/96 and local residual-PQ at 32/48/64, plus local PCA and scalar baselines. The exact in-cluster graph smoke currently covers only 32/48/64/96 selected rows, so it is locality/routing instrumentation rather than a full budget ladder. | Satisfied for the measured scout lanes; still partial for production because larger/full TreeDB granules remain unmeasured. |
 | Metadata-amortized accounting | Buildable codebook tables split row-code bytes and metadata bytes. Top100 oracle rows are explicitly row-code payload probes; their metadata amortization is not production evidence. | Satisfied for buildable codebook lanes; top100 metadata remains intentionally unproven. |
 | Train/eval discipline for PQ/OPQ/residual-PQ | PQ, residual-PQ, OPQ-style, local residual-PQ, and local residual-OPQ rows are trained on buildable train samples and evaluated on held-out eval/query slices, not on a single top100 cloud. | Satisfied for measured codebook lanes. |
 | Top100-only method coverage | Measured local PCA int8, adaptive rank, full-dim SQ8, scalar low-bit lanes, scale-policy probes, norm-explicit correction, boundary-weighted PCA, pairwise-difference PCA, query-centered oracle projection, random-rotation scalar/sign probes, PCA plus tiny residual correction, and PCA Cauchy-tail safe-bound/progressive-refinement probes. | Satisfied for top100 oracle method triage. |
-| Production/buildable granule coverage | Measured row-id controls, IVF clusters, IVF-sorted fixed blocks, graph-neighborhood fixed blocks, graph-sorted row-adjacent fixed blocks, a graph-visited block-routing scout over sealed graph-sorted storage blocks, and an exact in-cluster graph-visited smoke over exact graph-sorted blocks. | Partial; full HNSW/TreeDB graph visited sets and actual TreeDB granules are not measured. |
+| Production/buildable granule coverage | Measured row-id controls, IVF clusters, IVF-sorted fixed blocks, graph-neighborhood fixed blocks, graph-sorted row-adjacent fixed blocks, a graph-visited block-routing scout over sealed graph-sorted storage blocks, a broader q0..24 graph-visited PQ/local-residual-PQ stress pass, and an exact in-cluster graph-visited smoke over exact graph-sorted blocks. | Partial; full HNSW/TreeDB graph visited sets and actual TreeDB granules are not measured. |
 | Cascade architecture | Existing rows report compressed shortlist containment and exact rerank@20/@50 recall. The buildable scout renderer now emits staged cascade measurements: measured compressed scan cost, measured approximate topK selection over materialized scores, a measured resident-fp32 row-id rerank kernel, and a measured resident full-dim SQ8/int8 rerank kernel at top20/top50/top100, with selected-code bytes plus fp32 or full-int8 rerank bytes. | Partial; this is still not full end-to-end latency because I/O, decompression, cache effects, fused scan+topK executor effects, optimized int8 scoring, and optional fp32-after-int8 rerank are not measured. |
-| p50/p90/worst-query behavior | Top100 adaptive-rank tables include p50/p90/worst K. The buildable scout renderer now emits aggregate routing and conditional-codec p50/p90/worst tables for new artifacts. The curated historical sections in this report still emphasize p50/worst unless regenerated from those artifacts. | Partial; larger buildable runs should be regenerated or summarized with the new p90 tables before final promotion. |
-| Production promotion criteria | Current report does not promote spherical hot scoring, local PCA as a final ranker, OPQ as a winner, graph-visited block routing as a production route, exact in-cluster graph construction as a production builder, or top100-only oracle projections as production methods. It promotes global PQ48/PQ64 as the simplest measured low-byte trained-codebook candidate-generator baseline, global PQ80/PQ96 as clean high-byte error-reduction baselines, and local residual-PQ as a metadata-heavy challenger. | Satisfied for current evidence, but not final until full graph visited sets and TreeDB granules are measured. |
+| p50/p90/worst-query behavior | Top100 adaptive-rank tables include p50/p90/worst K. The q0..24 graph-visited stress pass adds broader p50/p90/worst routing and conditional-codec evidence for promoted PQ/local-residual-PQ lanes. The buildable scout renderer now emits aggregate routing and conditional-codec p50/p90/worst tables for new artifacts. The curated historical sections in this report still emphasize p50/worst unless regenerated from those artifacts. | Partial; larger buildable runs should be regenerated or summarized with the new p90 tables before final promotion. |
+| Production promotion criteria | Current report does not promote spherical hot scoring, local PCA as a final ranker, OPQ as a winner, graph-visited block routing as a production route, exact in-cluster graph construction as a production builder, or top100-only oracle projections as production methods. It promotes global PQ48/PQ64 as the simplest measured low-byte trained-codebook candidate-generator baseline, global PQ80/PQ96 as clean high-byte error-reduction baselines, and local residual-PQ as a metadata-heavy challenger that improves hard conditional shortlist gates at extra metadata cost. | Satisfied for current evidence, but not final until full graph visited sets and TreeDB granules are measured. |
 
 The most important remaining gap is production locality. The report has measured
-several buildable fixed-block proxies and a graph-visited block-routing scout,
-but it still has not shown that actual TreeDB storage granules, full graph
-visited sets, or production graph-neighborhood layouts preserve the same
-candidate-survival frontier. Until that is measured, the current result is a
-strong research frontier, not a production format decision.
+several buildable fixed-block proxies and graph-visited block-routing scouts up
+to q0..24 for the current PQ/local-residual-PQ frontier, but it still has not
+shown that actual TreeDB storage granules, full graph visited sets, or
+production graph-neighborhood layouts preserve the same candidate-survival
+frontier. Until that is measured, the current result is a strong research
+frontier, not a production format decision.
 
 ## Recommended Next Work
 
 1. Extend the trained graph-neighborhood, graph-sorted, and graph-visited
-   block-routing runs from this fixed-byte scout to larger query coverage and
-   larger train/eval slices, then add full HNSW/TreeDB graph-visited-set and
-   actual TreeDB granule builders. This is the next required step before any
-   production compression claim.
+   block-routing runs beyond the current q0..24 graph-visited stress pass to
+   larger query coverage and larger train/eval slices, then add full
+   HNSW/TreeDB graph-visited-set and actual TreeDB granule builders. This is
+   the next required step before any production compression claim.
 2. Repeat the PQ/residual-PQ/OPQ/local-residual-PQ/local-residual-OPQ
    same-byte tournament with broader train/eval coverage and stricter metadata
    amortization checks. Do not train codebooks on a single official top100
@@ -1603,6 +1730,8 @@ rank64 local PCA is not a final ranker,
 rank64/rank80 local PCA are plausible compact candidate generators,
 global PQ is the strongest measured trained-codebook buildable baseline so far,
 graph-sorted and graph-visited block proxies are measured but not a new routing frontier,
+q0..24 graph-visited stress confirms routing is the first production gate,
+local residual-PQ can repair hard conditional shortlist gates at extra metadata cost,
 exact in-cluster graph proxies are useful stronger locality scouts but too expensive as built,
 global PQ48/PQ64 are the cleanest low-byte codebook frontier points,
 global PQ80/PQ96 are clean high-byte error-reduction baselines,
