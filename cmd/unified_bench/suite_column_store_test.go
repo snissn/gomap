@@ -623,6 +623,14 @@ func TestColumnStoreSuiteMarkdownRendersThroughputInterpretationM14C(t *testing.
 	}
 }
 
+func TestMarkdownCodeTableTextPreservesBoundaryWhitespaceM14C(t *testing.T) {
+	got := markdownCodeTableText(" value|with`tick ")
+	want := "``  value\\|with`tick  ``"
+	if got != want {
+		t.Fatalf("markdownCodeTableText=%q want %q", got, want)
+	}
+}
+
 func TestRenderColumnStoreSuiteMarkdownCodeListsM11A(t *testing.T) {
 	md := renderColumnStoreSuiteMarkdown(columnStoreSuiteReport{
 		Profile:                "durable",
@@ -1571,7 +1579,8 @@ func TestColumnStoreSuiteRunsBTreeIndexBaselineM11B(t *testing.T) {
 func TestColumnStoreSuiteQueriesNormalizeForcedPathAliasesM11B(t *testing.T) {
 	const rows = 16
 	events, _ := buildColumnStoreSyntheticFixture(rows, 1)
-	db, err := openColumnStoreSuiteDB(t.TempDir())
+	dir := t.TempDir()
+	db, err := openColumnStoreSuiteDB(dir)
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
@@ -1609,6 +1618,21 @@ func TestColumnStoreSuiteQueriesNormalizeForcedPathAliasesM11B(t *testing.T) {
 		if q.ThroughputInterpretation != "" {
 			t.Fatalf("query %s raw query loop throughput_interpretation=%q want empty until report/artifact rendering", q.Name, q.ThroughputInterpretation)
 		}
+	}
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint before physical aliases: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close before physical aliases: %v", err)
+	}
+	db, err = openColumnStoreSuiteDB(dir)
+	if err != nil {
+		t.Fatalf("reopen before physical aliases: %v", err)
+	}
+	manager = collections.NewCollectionManager(db)
+	collection, err = manager.OpenCollection("events")
+	if err != nil {
+		t.Fatalf("reopen collection before physical aliases: %v", err)
 	}
 
 	physicalAliases := map[string]collections.ColumnQueryPlanKind{
