@@ -1261,7 +1261,10 @@ func executeColumnStoreSuitePhysicalQuery(collection *collections.Collection, qu
 		return columnStoreQueryExecution{}, fmt.Errorf("column_store: physical query %s via %s line mapping: %w", queryName, plan.Kind, err)
 	}
 	diag := result.Diagnostics
-	workers := plan.Diagnostics.WorkerCount
+	workers := diag.WorkerCount
+	if workers <= 0 {
+		workers = plan.Diagnostics.WorkerCount
+	}
 	if workers <= 0 {
 		workers = 1
 	}
@@ -1950,8 +1953,8 @@ func columnStoreQueryEffectiveRowsProcessed(q columnStoreQueryMetric) int {
 	if q.RowsProcessed != 0 {
 		return q.RowsProcessed
 	}
-	if q.Rows > 0 && q.RowMaterializations > 0 {
-		return q.Rows
+	if q.RowMaterializations > 0 {
+		return q.RowMaterializations
 	}
 	return 0
 }
