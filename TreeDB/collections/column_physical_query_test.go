@@ -101,6 +101,37 @@ func TestColumnPhysicalQueryAdapterExecutesJSONBenchShapesM13B(t *testing.T) {
 	}
 }
 
+func TestColumnPhysicalVisibilityIndexClonesVectorAndAdjacencyValues(t *testing.T) {
+	var idx columnPhysicalVisibilityIndex
+	id := []byte("doc-a")
+	vector := []float32{1, 2, 3}
+	adjacency := []uint32{4, 5, 6}
+	idx.upsert(columnPhysicalScanRowView{
+		Generation: 1,
+		PartID:     1,
+		Operation:  ColumnPublishOperationInsert,
+		ID:         id,
+		Values: []columnDeclaredValue{
+			{Type: ColumnStoreValueFloat32Vector, Present: true, Float32Vector: vector},
+			{Type: ColumnStoreValueAdjacencyList, Present: true, AdjacencyList: adjacency},
+		},
+	})
+
+	id[0] = 'X'
+	vector[0] = 99
+	adjacency[0] = 99
+
+	if got, want := string(idx.rows[0].ID), "doc-a"; got != want {
+		t.Fatalf("visible row id=%q want %q", got, want)
+	}
+	if got, want := idx.rows[0].Values[0].Float32Vector, []float32{1, 2, 3}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("visible vector=%v want %v", got, want)
+	}
+	if got, want := idx.rows[0].Values[1].AdjacencyList, []uint32{4, 5, 6}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("visible adjacency=%v want %v", got, want)
+	}
+}
+
 func TestColumnPhysicalQueryAdapterUsesFloorHourForNegativeTimeUSM13B(t *testing.T) {
 	const hourUS = columnPhysicalQueryHourUS
 	events := []columnPhysicalQueryEventM13B{

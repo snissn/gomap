@@ -819,7 +819,7 @@ func BenchmarkCollectionVectorIndexColumnGraphMainPathPublicSearch(b *testing.B)
 	}
 
 	b.ReportAllocs()
-	b.SetBytes(int64(kernelTrace.CandidatesExamined * graph.Dims() * 4))
+	b.SetBytes(int64(warmTrace.CandidatesExamined * graph.Dims() * 4))
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		results, trace, err := col.SearchVectorIndex(indexName, query, opts)
@@ -836,7 +836,7 @@ func BenchmarkCollectionVectorIndexColumnGraphMainPathPublicSearch(b *testing.B)
 	b.ReportMetric(float64(loadStatus.RootID), "manifest_root_id")
 	b.ReportMetric(float64(loadStatus.BytesDisk), "column_graph_bytes")
 	b.ReportMetric(float64(graph.Edges())/float64(graph.Rows()), "edges/node")
-	b.ReportMetric(float64(kernelTrace.CandidatesExamined), "candidates/search")
+	b.ReportMetric(float64(warmTrace.CandidatesExamined), "candidates/search")
 	b.ReportMetric(float64(kernelTrace.EdgesVisited), "edges/search")
 }
 
@@ -1637,6 +1637,10 @@ func setupColumnGraphVectorBenchmarkMainPath(tb testing.TB, docs, dims int, name
 	columns := columnVectorGraphTestColumns(docs, dims, 16, false)
 	ids, documents := vectorGraphBenchmarkWriteBatch(columns)
 	vectorBenchmarkInsertBatches(tb, col, ids, documents, 512)
+	if err := col.Flush(); err != nil {
+		_ = d.Close()
+		tb.Fatalf("flush benchmark collection: %v", err)
+	}
 	if err := d.Checkpoint(); err != nil {
 		_ = d.Close()
 		tb.Fatalf("checkpoint benchmark collection: %v", err)
@@ -1720,16 +1724,20 @@ func vectorGraphBenchmarkWriteBatch(columns ColumnVectorGraphColumns) ([][]byte,
 	return ids, documents
 }
 
-func vectorGraphBenchmarkDocument(id int, vector []float32, invNorm float32, neighbors []uint32) []byte {
+func vectorGraphBenchmarkDocument(row int, vector []float32, invNorm float32, neighbors []uint32) []byte {
 	out := make([]byte, 0, 64+len(vector)*10+len(neighbors)*4)
-	out = append(out, fmt.Sprintf(`{"group":%d,"embedding":[`, id%16)...)
+	out = append(out, `{"group":`...)
+	out = strconv.AppendInt(out, int64(row%16), 10)
+	out = append(out, `,"embedding":[`...)
 	for i, value := range vector {
 		if i > 0 {
 			out = append(out, ',')
 		}
-		out = append(out, fmt.Sprintf("%.7g", value)...)
+		out = strconv.AppendFloat(out, float64(value), 'g', 7, 32)
 	}
-	out = append(out, fmt.Sprintf(`],"embedding_inv_norm":%.7g,"embedding_neighbors":[`, invNorm)...)
+	out = append(out, `],"embedding_inv_norm":`...)
+	out = strconv.AppendFloat(out, float64(invNorm), 'g', 7, 32)
+	out = append(out, `,"embedding_neighbors":[`...)
 	for i, neighbor := range neighbors {
 		if i > 0 {
 			out = append(out, ',')
