@@ -858,7 +858,7 @@ func scanColumnPhysicalAssetRowsWithManifestOperation(raw []byte, ref ColumnAsse
 		nullable := cur.bool()
 		dictionary := cur.bool()
 		vectorDims := 0
-		if version >= columnPhysicalAssetVersion {
+		if version >= columnPhysicalAssetVersionV4 {
 			rawVectorDims := cur.u64()
 			if rawVectorDims > uint64(maxCollectionInt) {
 				return columnPhysicalAssetScanSummary{}, errors.New("column physical asset vector_dims overflow int")

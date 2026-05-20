@@ -19,7 +19,8 @@ const (
 	columnPhysicalAssetVersionV1 = uint16(1)
 	columnPhysicalAssetVersionV2 = uint16(2)
 	columnPhysicalAssetVersionV3 = uint16(3)
-	columnPhysicalAssetVersion   = uint16(4)
+	columnPhysicalAssetVersionV4 = uint16(4)
+	columnPhysicalAssetVersion   = columnPhysicalAssetVersionV4
 )
 
 var ErrColumnDeclaredValueUnsupported = errors.New("collections: unsupported column declared value")
@@ -420,7 +421,7 @@ func decodeColumnPhysicalAsset(raw []byte) (columnPhysicalAsset, error) {
 			Nullable:   cur.bool(),
 			Dictionary: cur.bool(),
 		}
-		if version >= columnPhysicalAssetVersion {
+		if version >= columnPhysicalAssetVersionV4 {
 			vectorDims := cur.u64()
 			if vectorDims > uint64(maxCollectionInt) {
 				return columnPhysicalAsset{}, errors.New("collections: column physical asset vector_dims overflow int")
@@ -684,6 +685,10 @@ func (c *manifestCursor) float32Slice() []float32 {
 		c.err = errors.New("collections: column float32 slice length overflows int")
 		return nil
 	}
+	if n > uint64((len(c.raw)-c.pos)/4) {
+		c.err = errors.New("collections: short column float32 slice")
+		return nil
+	}
 	values := make([]float32, int(n))
 	for i := range values {
 		values[i] = math.Float32frombits(c.u32())
@@ -698,6 +703,10 @@ func (c *manifestCursor) uint32Slice() []uint32 {
 	}
 	if n > uint64(maxCollectionInt) {
 		c.err = errors.New("collections: column uint32 slice length overflows int")
+		return nil
+	}
+	if n > uint64((len(c.raw)-c.pos)/4) {
+		c.err = errors.New("collections: short column uint32 slice")
 		return nil
 	}
 	values := make([]uint32, int(n))

@@ -256,6 +256,33 @@ func TestColumnPhysicalAssetVectorValueTypesRoundTrip(t *testing.T) {
 	}
 }
 
+func TestManifestCursorVectorSlicesRejectShortPayload(t *testing.T) {
+	t.Run("float32", func(t *testing.T) {
+		var raw bytes.Buffer
+		writeManifestUint64(&raw, 2)
+		raw.Write([]byte{0, 0, 0, 0})
+		cur := manifestCursor{raw: raw.Bytes()}
+		if got := cur.float32Slice(); got != nil {
+			t.Fatalf("float32Slice=%v want nil", got)
+		}
+		if cur.err == nil || !strings.Contains(cur.err.Error(), "short column float32 slice") {
+			t.Fatalf("float32Slice err=%v want short payload", cur.err)
+		}
+	})
+	t.Run("uint32", func(t *testing.T) {
+		var raw bytes.Buffer
+		writeManifestUint64(&raw, 2)
+		raw.Write([]byte{0, 0, 0, 0})
+		cur := manifestCursor{raw: raw.Bytes()}
+		if got := cur.uint32Slice(); got != nil {
+			t.Fatalf("uint32Slice=%v want nil", got)
+		}
+		if cur.err == nil || !strings.Contains(cur.err.Error(), "short column uint32 slice") {
+			t.Fatalf("uint32Slice err=%v want short payload", cur.err)
+		}
+	})
+}
+
 func TestColumnPhysicalAssetDecodeV1CompatibilityM12C(t *testing.T) {
 	cfg := testColumnStoreConfig(nil)
 	normalized, err := normalizeColumnStoreConfig("events", cfg)
