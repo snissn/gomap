@@ -878,7 +878,7 @@ func scanColumnPhysicalDirectQueryRowValues(cur *manifestCursor, version uint16,
 func columnPhysicalQueryNullDirectError(valueType ColumnStoreValueType) error {
 	switch valueType {
 	case ColumnStoreValueString:
-		return fmt.Errorf("%w: physical column query does not support null string group values yet", ErrColumnQueryPlanUnsupported)
+		return fmt.Errorf("%w: physical column query does not support null string values yet", ErrColumnQueryPlanUnsupported)
 	case ColumnStoreValueInt64:
 		return fmt.Errorf("%w: physical column query does not support null int64 values yet", ErrColumnQueryPlanUnsupported)
 	default:
