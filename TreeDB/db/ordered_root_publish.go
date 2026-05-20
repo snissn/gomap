@@ -1509,8 +1509,9 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered []Order
 
 func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilderWithMaintenancePlan(plan StorageMaintenancePlan, ordered []OrderedRootDeltaPublishInput, preflight OrderedRootGroupPreflight, commandWALIntent *CommandWALIntent, buildSystemDeltaIter OrderedRootGroupSystemBuilder, mode orderedRootDeltaGroupSystemPublishMode) (newSystemRoot uint64, rootIDs []uint64, err error) {
 	storageMaintenance := mode == orderedRootDeltaGroupSystemPublishStorageMaintenance
+	rootsObserved := 0
 	preApplyErr := func(err error) error {
-		if err == nil || !storageMaintenance {
+		if err == nil || !storageMaintenance || rootsObserved != 0 {
 			return err
 		}
 		return errors.Join(ErrStorageMaintenancePublishPreApplyFailed, err)
@@ -1529,7 +1530,6 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilderWithMaintenanceP
 	db.writeMu.Lock()
 	holdStart := time.Now()
 	wait := holdStart.Sub(lockStart)
-	rootsObserved := 0
 	phaseStats := orderedRootDeltaGroupPublishPhaseStats{}
 	finished := false
 	finishPublish := func() {

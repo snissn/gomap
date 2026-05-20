@@ -103,7 +103,7 @@ func (c *Collection) columnAssetGC(ctx context.Context, opts ColumnAssetGCOption
 			// Non-detailed dry-runs keep the allocation profile bounded by using
 			// the canonical segment summary instead of materializing entries.
 			stats.SegmentsEligible = plan.Segments.Reclaimable
-			stats.BytesEligible = plan.Segments.BytesReclaimable
+			stats.BytesEligible = plan.Segments.BytesWholeReclaimable
 			return stats, nil
 		}
 		namespace, err := columnAssetManagerNamespaceForRoot(c.db.ColumnAssetRootDir(), plan.Namespace)
@@ -111,6 +111,9 @@ func (c *Collection) columnAssetGC(ctx context.Context, opts ColumnAssetGCOption
 			return stats, err
 		}
 		for _, entry := range plan.SegmentEntries {
+			if err := ctx.Err(); err != nil {
+				return stats, err
+			}
 			if !columnAssetGCSegmentEligibleForDelete(namespace.SegmentDir, entry) {
 				continue
 			}
