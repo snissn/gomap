@@ -138,7 +138,7 @@ func (c *Collection) RunColumnPhysicalQueryParallel(req ColumnPhysicalQueryReque
 	}
 	workers := maxWorkers
 	if refs := len(view.AssetRefs); refs <= 1 {
-		return c.RunColumnPhysicalQuery(req)
+		return c.runColumnPhysicalQueryInSnapshotView(view, req)
 	} else if workers > refs {
 		workers = refs
 	}
@@ -206,6 +206,31 @@ func (c *Collection) RunColumnPhysicalQueryParallel(req ColumnPhysicalQueryReque
 	}
 	result.Groups = merged.groups()
 	result.Diagnostics.ReduceRows = merged.reduceRows
+	result.Diagnostics.ResultGroups = len(result.Groups)
+	return result, nil
+}
+
+func (c *Collection) runColumnPhysicalQueryInSnapshotView(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest) (ColumnPhysicalQueryResult, error) {
+	exec, err := newColumnPhysicalQueryExecutor(view.Config, req)
+	if err != nil {
+		return ColumnPhysicalQueryResult{}, err
+	}
+	scanStart := time.Now()
+	diag, err := c.scanColumnPhysicalRowsInSnapshotView(view, columnPhysicalScanRequest{
+		ProjectedColumns:  exec.projected,
+		Visitor:           exec.visit,
+		RequireInsertOnly: true,
+	})
+	scanNanos := time.Since(scanStart).Nanoseconds()
+	result := ColumnPhysicalQueryResult{
+		Diagnostics: columnPhysicalQueryDiagnosticsFromScan(diag),
+	}
+	result.Diagnostics.ScanNanos = scanNanos
+	result.Diagnostics.ReduceRows = exec.reduceRows
+	if err != nil {
+		return result, err
+	}
+	result.Groups = exec.groups()
 	result.Diagnostics.ResultGroups = len(result.Groups)
 	return result, nil
 }

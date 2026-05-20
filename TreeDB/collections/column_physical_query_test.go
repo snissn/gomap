@@ -305,6 +305,49 @@ func TestColumnPhysicalQueryParallelMatchesSerialInsertOnlyM14B(t *testing.T) {
 	}
 }
 
+func TestColumnPhysicalQuerySnapshotViewSingleRefUsesPinnedManifestM14B(t *testing.T) {
+	reopened, closeFn := openColumnPhysicalQueryFixtureM13B(t, columnPhysicalQueryFixtureEventsM13B(16))
+	defer closeFn()
+
+	view, closeView, err := reopened.prepareColumnPhysicalScanSnapshotView()
+	if closeView != nil {
+		defer closeView()
+	}
+	if err != nil {
+		t.Fatalf("prepareColumnPhysicalScanSnapshotView: %v", err)
+	}
+	if got, want := len(view.AssetRefs), 1; got != want {
+		t.Fatalf("asset refs=%d want single-ref fixture", got)
+	}
+	if _, err := reopened.InsertBatch([][]byte{[]byte("e_published_after_pin")}, [][]byte{
+		[]byte(`{"time_us":1700000000000999,"kind":"after_pin","did":"did_after","payload":"ignored"}`),
+	}); err != nil {
+		t.Fatalf("InsertBatch after pinned view: %v", err)
+	}
+
+	req := ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "kind"}
+	pinned, err := reopened.runColumnPhysicalQueryInSnapshotView(view, req)
+	if err != nil {
+		t.Fatalf("runColumnPhysicalQueryInSnapshotView: %v", err)
+	}
+	latest, err := reopened.RunColumnPhysicalQuery(req)
+	if err != nil {
+		t.Fatalf("latest RunColumnPhysicalQuery: %v", err)
+	}
+	if got, want := pinned.Diagnostics.ReduceRows, 16; got != want {
+		t.Fatalf("pinned reduce rows=%d want %d diagnostics=%+v", got, want, pinned.Diagnostics)
+	}
+	if got, want := latest.Diagnostics.ReduceRows, 17; got != want {
+		t.Fatalf("latest reduce rows=%d want %d diagnostics=%+v", got, want, latest.Diagnostics)
+	}
+	if _, ok := columnPhysicalQueryGroupCountsM14B(pinned.Groups)["after_pin"]; ok {
+		t.Fatalf("pinned view included post-pin row: groups=%+v diagnostics=%+v", pinned.Groups, pinned.Diagnostics)
+	}
+	if got := columnPhysicalQueryGroupCountsM14B(latest.Groups)["after_pin"]; got != 1 {
+		t.Fatalf("latest view after_pin count=%d want 1 groups=%+v diagnostics=%+v", got, latest.Groups, latest.Diagnostics)
+	}
+}
+
 func TestColumnPhysicalQueryParallelFailsClosedForMutationVisibilityM14B(t *testing.T) {
 	reopened, closeFn, _ := openColumnPhysicalMutationFixtureM13C(t, 64)
 	defer closeFn()
@@ -316,6 +359,14 @@ func TestColumnPhysicalQueryParallelFailsClosedForMutationVisibilityM14B(t *test
 	if !errors.Is(err, ErrColumnQueryPlanUnsupported) || !strings.Contains(err.Error(), "partitioned visibility execution") {
 		t.Fatalf("RunColumnPhysicalQueryParallel err=%v want fail-closed partitioned visibility error", err)
 	}
+}
+
+func columnPhysicalQueryGroupCountsM14B(groups []ColumnPhysicalQueryGroup) map[string]int {
+	out := make(map[string]int, len(groups))
+	for _, group := range groups {
+		out[group.Key] = group.Count
+	}
+	return out
 }
 
 func TestColumnPhysicalScanHonorsCancellationBeforeSchedulingRefsM14B(t *testing.T) {
