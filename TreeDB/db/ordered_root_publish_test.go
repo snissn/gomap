@@ -370,6 +370,58 @@ func TestPublishOrderedRootDeltaGroupMaintenanceRejectsForgedPlan(t *testing.T) 
 	requireCommandWALPublishReady(t, db, "forged maintenance plan rejection")
 }
 
+func TestPublishOrderedRootDeltaGroupMaintenanceRejectsInvalidInputBeforeWriteLock(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	defer db.Close()
+
+	db.writeMu.Lock()
+	locked := true
+	unlock := func() {
+		if locked {
+			locked = false
+			db.writeMu.Unlock()
+		}
+	}
+	defer unlock()
+
+	var systemBuilderRan atomic.Bool
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := db.PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(
+			forgedStorageMaintenancePlan{},
+			[]StorageMaintenanceRootDeltaPublishInput{{
+				BaseRoot: 0,
+				Iter:     mustFrozenSystemMemtable(t, "root/k", "v").NewIterator(nil, nil),
+			}},
+			nil,
+			func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+				systemBuilderRan.Store(true)
+				return nil, nil
+			},
+		)
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		unlock()
+		if !errors.Is(err, ErrStorageMaintenancePlanMissing) {
+			t.Fatalf("maintenance publish error=%v want ErrStorageMaintenancePlanMissing", err)
+		}
+		if !errors.Is(err, ErrStorageMaintenancePublishPreApplyFailed) {
+			t.Fatalf("maintenance publish error=%v want ErrStorageMaintenancePublishPreApplyFailed", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("invalid maintenance input blocked behind writeMu")
+	}
+	if systemBuilderRan.Load() {
+		t.Fatalf("maintenance system builder ran for invalid maintenance input")
+	}
+	requireCommandWALPublishReady(t, db, "pre-lock forged maintenance plan rejection")
+}
+
 func TestPublishOrderedRootDeltaGroupMaintenanceRejectsTypedNilPlan(t *testing.T) {
 	dir := t.TempDir()
 	enableCommandWALFormat(t, dir)

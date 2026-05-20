@@ -1424,17 +1424,52 @@ func (db *DB) PublishOrderedRootDeltaGroupWithPreflightAndSystemDeltaBuilder(ord
 // command-WAL-covered publish APIs. This path does not append or advance a
 // command-WAL frame.
 func (db *DB) PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(plan StorageMaintenancePlan, ordered []StorageMaintenanceRootDeltaPublishInput, preflight OrderedRootGroupPreflight, buildSystemDeltaIter OrderedRootGroupSystemBuilder) (uint64, []uint64, error) {
+	if buildSystemDeltaIter == nil {
+		return 0, nil, storageMaintenancePreApplyError(errors.New("nil ordered root group system delta builder"))
+	}
+	if db == nil {
+		return 0, nil, storageMaintenancePreApplyError(ErrClosed)
+	}
+	if db.closing.Load() {
+		return 0, nil, storageMaintenancePreApplyError(ErrClosed)
+	}
+	if db.readOnly {
+		return 0, nil, storageMaintenancePreApplyError(ErrReadOnly)
+	}
+	if err := validateStorageMaintenanceRootDeltaPublishInputs(plan, len(ordered)); err != nil {
+		closeStorageMaintenanceRootDeltaPublishIterators(ordered)
+		return 0, nil, storageMaintenancePreApplyError(err)
+	}
 	return db.publishOrderedRootDeltaGroupWithSystemDeltaBuilderWithMaintenancePlan(plan, storageMaintenanceRootDeltaInputsToOrdered(ordered), preflight, nil, buildSystemDeltaIter, orderedRootDeltaGroupSystemPublishStorageMaintenance)
 }
 
 func validateStorageMaintenanceOrderedRootDeltaInputs(plan StorageMaintenancePlan, ordered []OrderedRootDeltaPublishInput) error {
+	return validateStorageMaintenanceRootDeltaPublishInputs(plan, len(ordered))
+}
+
+func validateStorageMaintenanceRootDeltaPublishInputs(plan StorageMaintenancePlan, rootDeltaCount int) error {
 	if !validStorageMaintenancePlan(plan) {
 		return ErrStorageMaintenancePlanMissing
 	}
-	if len(ordered) == 0 {
+	if rootDeltaCount == 0 {
 		return ErrStorageMaintenanceRootDeltaMissing
 	}
 	return nil
+}
+
+func storageMaintenancePreApplyError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return errors.Join(ErrStorageMaintenancePublishPreApplyFailed, err)
+}
+
+func closeStorageMaintenanceRootDeltaPublishIterators(ordered []StorageMaintenanceRootDeltaPublishInput) {
+	for idx := range ordered {
+		if ordered[idx].Iter != nil {
+			_ = ordered[idx].Iter.Close()
+		}
+	}
 }
 
 func storageMaintenanceRootDeltaInputsToOrdered(ordered []StorageMaintenanceRootDeltaPublishInput) []OrderedRootDeltaPublishInput {
