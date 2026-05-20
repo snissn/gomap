@@ -521,6 +521,67 @@ func TestColumnAssetReachabilityPlanSeparatesOutOfBoundsRefsFromMissingSegmentsM
 	}
 }
 
+func TestColumnAssetReachabilityUnknownSegmentCountsKnownRewriteDebtM15A(t *testing.T) {
+	const namespaceName = "events/column-assets"
+	root := t.TempDir()
+	namespace, err := columnAssetManagerNamespaceForRoot(root, namespaceName)
+	if err != nil {
+		t.Fatalf("columnAssetManagerNamespaceForRoot: %v", err)
+	}
+	if err := ensureColumnAssetManagerNamespace(namespace); err != nil {
+		t.Fatalf("ensureColumnAssetManagerNamespace: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(namespace.SegmentDir, columnAssetSegmentFileName(1)), make([]byte, 64), 0o600); err != nil {
+		t.Fatalf("WriteFile segment: %v", err)
+	}
+	input := columnAssetReachabilityInput{
+		rootDir:     root,
+		collection:  "events",
+		namespace:   namespaceName,
+		detailed:    true,
+		activeGen:   1,
+		recoveryGen: 1,
+	}
+	input.addRef(ColumnAssetRef{
+		Kind:       ColumnAssetKindTCS1PartImage,
+		Namespace:  namespaceName,
+		Generation: 1,
+		PartID:     1,
+		FileID:     1,
+		Offset:     0,
+		Length:     16,
+	}, ColumnAssetReachabilitySourceActiveManifest)
+	input.addRef(ColumnAssetRef{
+		Kind:       ColumnAssetKindTCS1PartImage,
+		Namespace:  namespaceName,
+		Generation: 1,
+		PartID:     2,
+		FileID:     1,
+		Offset:     16,
+		Length:     16,
+	}, ColumnAssetReachabilitySourceCandidate)
+	input.addRef(ColumnAssetRef{
+		Kind:       ColumnAssetKindTCS1PartImage,
+		Namespace:  namespaceName,
+		Generation: 1,
+		PartID:     3,
+		FileID:     1,
+		Offset:     60,
+		Length:     8,
+	}, ColumnAssetReachabilitySourceActiveManifest)
+
+	plan, err := buildColumnAssetReachabilityPlan(context.Background(), input)
+	if err != nil {
+		t.Fatalf("buildColumnAssetReachabilityPlan: %v", err)
+	}
+	if plan.Complete || plan.Segments.Unknown != 1 || plan.Segments.OutOfBoundsRefs != 1 {
+		t.Fatalf("segments=%+v complete=%t want one unknown out-of-bounds segment", plan.Segments, plan.Complete)
+	}
+	if plan.RewriteDebtBytes != 16 {
+		t.Fatalf("rewrite debt=%d want known reclaimable bytes preserved", plan.RewriteDebtBytes)
+	}
+}
+
 func TestColumnAssetReachabilitySegmentFileIDRejectsNonCanonicalM15A(t *testing.T) {
 	fileID, ok := columnAssetReachabilitySegmentFileID(columnAssetSegmentFileName(1))
 	if !ok || fileID != 1 {
