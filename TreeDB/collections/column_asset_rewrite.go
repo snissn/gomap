@@ -168,6 +168,12 @@ func (c *Collection) columnAssetRewrite(ctx context.Context, opts ColumnAssetRew
 		stats.Plan = columnAssetRewritePlanForDetail(stats.Plan, opts.Detailed)
 		return stats, err
 	}
+	// Validate publish-only manifest root state before copying assets so local
+	// descriptor corruption cannot leave behind an otherwise avoidable segment.
+	if _, err := columnAssetRewriteManifestRootStoragePolicy(state); err != nil {
+		stats.Plan = columnAssetRewritePlanForDetail(stats.Plan, opts.Detailed)
+		return stats, err
+	}
 	remap, err := c.copyColumnAssetRewriteRefs(ctx, state.cfg, refs)
 	if err != nil {
 		stats.Plan = columnAssetRewritePlanForDetail(stats.Plan, opts.Detailed)
@@ -505,20 +511,23 @@ func columnAssetRewriteUpdatedMeta(base CollectionMeta, identity ColumnManifestI
 	return normalizeCollectionMeta(updated)
 }
 
-func (c *Collection) publishColumnAssetRewriteManifestState(state columnAssetRewriteManifestState, updatedMeta CollectionMeta, updatedIdentity ColumnManifestIdentity, records []columnManifestRecord) (uint64, []uint64, error) {
+func columnAssetRewriteManifestRootStoragePolicy(state columnAssetRewriteManifestState) (backenddb.OrderedRootStoragePolicy, error) {
 	if state.cfg.ManifestRoot == nil {
-		return 0, nil, errors.New("collections: column asset rewrite requires manifest root descriptor")
+		return backenddb.OrderedRootStorageDefault, errors.New("collections: column asset rewrite requires manifest root descriptor")
 	}
-	policy, err := backendRootStoragePolicy(state.cfg.ManifestRoot.StoragePolicy)
+	return backendRootStoragePolicy(state.cfg.ManifestRoot.StoragePolicy)
+}
+
+func (c *Collection) publishColumnAssetRewriteManifestState(state columnAssetRewriteManifestState, updatedMeta CollectionMeta, updatedIdentity ColumnManifestIdentity, records []columnManifestRecord) (uint64, []uint64, error) {
+	policy, err := columnAssetRewriteManifestRootStoragePolicy(state)
 	if err != nil {
 		return 0, nil, err
 	}
 	identityRecord := encodeColumnManifestIdentityRecordArray(updatedIdentity)
-	ordered := []backenddb.OrderedRootDeltaPublishInput{{
-		BaseRoot:                  state.baseRoot,
-		Iter:                      columnManifestRootRecordIterator(identityRecord, records),
-		StoragePolicy:             policy,
-		StorageMaintenanceRewrite: true,
+	ordered := []backenddb.StorageMaintenanceRootDeltaPublishInput{{
+		BaseRoot:      state.baseRoot,
+		Iter:          columnManifestRootRecordIterator(identityRecord, records),
+		StoragePolicy: policy,
 	}}
 	return c.db.PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(
 		storagemaintenance.ColumnAssetRewritePlan(),
