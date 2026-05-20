@@ -65,6 +65,12 @@ func (*typedNilStorageMaintenancePlan) StorageMaintenancePlanToken() storagemain
 	panic("typed nil maintenance plan should fail closed before token access")
 }
 
+type panickingStorageMaintenancePlan struct{}
+
+func (panickingStorageMaintenancePlan) StorageMaintenancePlanToken() storagemaintenance.Plan {
+	panic("panicking maintenance plan should fail closed")
+}
+
 func mustRawKVCommandWALIntent(tb testing.TB, db *DB, key, value string) *CommandWALIntent {
 	tb.Helper()
 	payload, err := commitlog.EncodeRawKVBatchPayload([]commitlog.RawKVOperation{{
@@ -304,6 +310,41 @@ func TestPublishOrderedRootDeltaGroupMaintenanceAllowsCommandWALWithoutLogicalFr
 	}
 }
 
+func TestPublishOrderedRootDeltaGroupMaintenanceSystemBuilderErrorClosesReturnedIterator(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	defer db.Close()
+
+	systemIter := &closeCountingUnsafeIterator{}
+	wantErr := errors.New("maintenance system builder returned iterator with error")
+	_, _, err := db.PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(
+		storagemaintenance.ColumnAssetRewritePlan(),
+		[]OrderedRootDeltaPublishInput{{
+			BaseRoot:                  0,
+			Iter:                      mustFrozenSystemMemtable(t, "root/k", "v").NewIterator(nil, nil),
+			StorageMaintenanceRewrite: true,
+		}},
+		nil,
+		func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+			if len(rootIDs) != 1 || rootIDs[0] == 0 {
+				t.Fatalf("rootIDs=%v want one non-zero root", rootIDs)
+			}
+			return systemIter, wantErr
+		},
+	)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("maintenance publish error=%v want %v", err, wantErr)
+	}
+	if errors.Is(err, ErrStorageMaintenancePublishPreApplyFailed) {
+		t.Fatalf("maintenance publish error=%v must not be marked pre-apply after root delta apply", err)
+	}
+	requireCommandWALPublishReady(t, db, "maintenance system builder failure")
+	if systemIter.closes != 1 {
+		t.Fatalf("system iterator closes=%d want 1", systemIter.closes)
+	}
+}
+
 func TestPublishOrderedRootDeltaGroupMaintenanceRejectsUnmarkedRootDelta(t *testing.T) {
 	dir := t.TempDir()
 	enableCommandWALFormat(t, dir)
@@ -388,6 +429,34 @@ func TestPublishOrderedRootDeltaGroupMaintenanceRejectsTypedNilPlan(t *testing.T
 		t.Fatalf("maintenance publish error=%v want ErrStorageMaintenancePublishPreApplyFailed", err)
 	}
 	requireCommandWALPublishReady(t, db, "typed nil maintenance plan rejection")
+}
+
+func TestPublishOrderedRootDeltaGroupMaintenanceRejectsPanickingPlan(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	defer db.Close()
+
+	_, _, err := db.PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(
+		panickingStorageMaintenancePlan{},
+		[]OrderedRootDeltaPublishInput{{
+			BaseRoot:                  0,
+			Iter:                      mustFrozenSystemMemtable(t, "root/k", "v").NewIterator(nil, nil),
+			StorageMaintenanceRewrite: true,
+		}},
+		nil,
+		func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+			t.Fatalf("maintenance system builder should not run for a panicking maintenance plan")
+			return nil, nil
+		},
+	)
+	if !errors.Is(err, ErrStorageMaintenancePlanMissing) {
+		t.Fatalf("maintenance publish error=%v want ErrStorageMaintenancePlanMissing", err)
+	}
+	if !errors.Is(err, ErrStorageMaintenancePublishPreApplyFailed) {
+		t.Fatalf("maintenance publish error=%v want ErrStorageMaintenancePublishPreApplyFailed", err)
+	}
+	requireCommandWALPublishReady(t, db, "panicking maintenance plan rejection")
 }
 
 func TestPublishOrderedRootDeltaGroupMaintenanceRejectsMissingPlan(t *testing.T) {
@@ -574,6 +643,7 @@ func TestPublishOrderedRootDeltaGroupMaintenanceDoesNotMarkPostRootApplyErrorPre
 	if errors.Is(err, ErrStorageMaintenancePublishPreApplyFailed) {
 		t.Fatalf("maintenance publish error=%v must not be marked pre-apply after a root delta was applied", err)
 	}
+	requireCommandWALPublishReady(t, db, "post-root-apply maintenance failure")
 	if iter.closes != 1 {
 		t.Fatalf("root delta iterator closes=%d want 1", iter.closes)
 	}
@@ -818,6 +888,73 @@ func TestPublishOrderedRootDeltaBatchGroupWithCommandWALContextSystemBuilderErro
 	}
 	if err := db.CheckCommandWALPublishReady(); !errors.Is(err, ErrRecoveryRequired) {
 		t.Fatalf("CheckCommandWALPublishReady error=%v, want ErrRecoveryRequired", err)
+	}
+}
+
+func TestPublishOrderedRootDeltaBatchGroupWithSystemBuilderErrorClosesReturnedIterator(t *testing.T) {
+	db, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	iter := &closeCountingUnsafeIterator{}
+	wantErr := errors.New("batch system builder returned iterator with error")
+	_, _, err = db.PublishOrderedRootDeltaBatchGroupWithPreflightAndSystemDeltaBuilder(
+		nil,
+		func() error { return nil },
+		func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+			if len(rootIDs) != 0 {
+				t.Fatalf("rootIDs=%v, want empty roots", rootIDs)
+			}
+			return iter, wantErr
+		},
+	)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("publish error=%v, want %v", err, wantErr)
+	}
+	if iter.closes != 1 {
+		t.Fatalf("system iterator closes=%d, want 1", iter.closes)
+	}
+}
+
+func TestPublishOrderedRootDeltaBatchGroupOptimisticSystemBuilderErrorClosesReturnedIterator(t *testing.T) {
+	db, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	_, _, err = db.PublishOrderedRootDeltaBatchGroupWithPreflightAndSystemDeltaBuilder(
+		nil,
+		func() error { return nil },
+		func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+			if len(rootIDs) != 0 {
+				t.Fatalf("rootIDs=%v, want empty roots", rootIDs)
+			}
+			return mustFrozenSystemMemtable(t, "sys/init", "1").NewIterator(nil, nil), nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("seed system root: %v", err)
+	}
+
+	iter := &closeCountingUnsafeIterator{}
+	wantErr := errors.New("optimistic batch system builder returned iterator with error")
+	_, _, err = db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(
+		nil,
+		func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+			if len(rootIDs) != 0 {
+				t.Fatalf("rootIDs=%v, want empty roots", rootIDs)
+			}
+			return iter, wantErr
+		},
+	)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("publish error=%v, want %v", err, wantErr)
+	}
+	if iter.closes != 1 {
+		t.Fatalf("system iterator closes=%d, want 1", iter.closes)
 	}
 }
 
@@ -1668,15 +1805,19 @@ func TestPublishOrderedRootDeltaGroupSystemBuilderFailureDoesNotCountRoots(t *te
 		t.Fatalf("publish base root: %v", err)
 	}
 	delta := mustFrozenSystemMemtable(t, "root/b", "vb")
+	systemIter := &closeCountingUnsafeIterator{}
 	wantErr := errors.New("system builder failed")
 	_, _, err = db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder([]OrderedRootDeltaPublishInput{{
 		BaseRoot: baseRoot,
 		Iter:     delta.NewIterator(nil, nil),
 	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
-		return nil, wantErr
+		return systemIter, wantErr
 	})
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("err=%v want %v", err, wantErr)
+	}
+	if systemIter.closes != 1 {
+		t.Fatalf("system iterator closes=%d want 1", systemIter.closes)
 	}
 
 	stats := db.Stats()
@@ -1697,6 +1838,37 @@ func TestPublishOrderedRootDeltaGroupSystemBuilderFailureDoesNotCountRoots(t *te
 	}
 	if got := stats["treedb.publish.ordered_root_delta_group.finalize_calls_total"]; got != "0" {
 		t.Fatalf("finalize calls stat=%q want 0", got)
+	}
+}
+
+func TestPublishOrderedRootDeltaGroupWithSystemBuilderErrorClosesReturnedIterator(t *testing.T) {
+	db, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	baseRoot, err := db.PublishOrderedRootIterator(0, mustFrozenSystemMemtable(t, "root/a", "va").NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("publish base root: %v", err)
+	}
+	delta := mustFrozenSystemMemtable(t, "root/b", "vb")
+	systemIter := &closeCountingUnsafeIterator{}
+	wantErr := errors.New("system builder returned iterator with error")
+	_, _, err = db.PublishOrderedRootDeltaGroupWithSystemBuilder([]OrderedRootDeltaPublishInput{{
+		BaseRoot: baseRoot,
+		Iter:     delta.NewIterator(nil, nil),
+	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		if len(rootIDs) != 1 || rootIDs[0] == 0 {
+			t.Fatalf("rootIDs=%v want one non-zero root", rootIDs)
+		}
+		return systemIter, wantErr
+	})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("err=%v want %v", err, wantErr)
+	}
+	if systemIter.closes != 1 {
+		t.Fatalf("system iterator closes=%d want 1", systemIter.closes)
 	}
 }
 
@@ -3127,15 +3299,19 @@ func TestPublishOrderedRootGroupWithSystemBuilder_ErrorLeavesMetaRootsUnchanged(
 	}
 
 	var builderRootIDs []uint64
+	systemIter := &closeCountingUnsafeIterator{}
 	_, _, err = db.PublishOrderedRootGroupWithSystemBuilder([]OrderedRootPublishInput{{
 		BaseRoot: 0,
 		Iter:     mustFrozenSystemMemtable(t, "doc/u1", "document").NewIterator(nil, nil),
 	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 		builderRootIDs = append([]uint64(nil), rootIDs...)
-		return nil, errors.New("system descriptor build failed")
+		return systemIter, errors.New("system descriptor build failed")
 	})
 	if err == nil {
 		t.Fatal("expected system builder error")
+	}
+	if systemIter.closes != 1 {
+		t.Fatalf("system iterator closes=%d want 1", systemIter.closes)
 	}
 	if len(builderRootIDs) != 1 || builderRootIDs[0] == 0 {
 		t.Fatalf("builder root IDs=%v want one non-zero root", builderRootIDs)

@@ -28,5 +28,14 @@ func validStorageMaintenancePlan(plan StorageMaintenancePlan) bool {
 			return false
 		}
 	}
+	return validStorageMaintenancePlanToken(plan)
+}
+
+func validStorageMaintenancePlanToken(plan StorageMaintenancePlan) (ok bool) {
+	defer func() {
+		if recover() != nil {
+			ok = false
+		}
+	}()
 	return storagemaintenance.IsColumnAssetRewritePlan(plan.StorageMaintenancePlanToken())
 }

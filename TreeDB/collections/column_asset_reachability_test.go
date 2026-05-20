@@ -11,6 +11,18 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
+func TestPrecountColumnAssetReachabilityRangesSkipsMissingSegmentsM15C(t *testing.T) {
+	if precountColumnAssetReachabilityRanges(8, 0) {
+		t.Fatal("precount=true for refs with no segment files; missing-segment plans should skip the extra pass")
+	}
+	if precountColumnAssetReachabilityRanges(0, 0) {
+		t.Fatal("precount=true for empty refs")
+	}
+	if !precountColumnAssetReachabilityRanges(10, 2) {
+		t.Fatal("precount=false for dense refs with existing segment files")
+	}
+}
+
 func TestColumnAssetReachabilityPlanProtectsActiveManifestRefsM15A(t *testing.T) {
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)

@@ -581,7 +581,7 @@ func precountColumnAssetReachabilityRanges(refCount, segmentCount int) bool {
 		return false
 	}
 	if segmentCount == 0 {
-		return true
+		return false
 	}
 	refsPerSegment := refCount / segmentCount
 	return refsPerSegment > 4 || (refsPerSegment == 4 && refCount%segmentCount != 0)

@@ -1294,6 +1294,9 @@ func (db *DB) PublishOrderedRootDeltaGroupWithSystemBuilder(ordered []OrderedRoo
 	iter, err := buildSystemIter(append([]uint64(nil), rootIDs...))
 	phaseStats.systemBuildNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	if err != nil {
+		if iter != nil {
+			_ = iter.Close()
+		}
 		return 0, nil, err
 	}
 	if iter == nil {
@@ -1609,6 +1612,9 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilderWithMaintenanceP
 	iter, err := buildSystemDeltaIter(append([]uint64(nil), rootIDs...))
 	phaseStats.systemBuildNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	if err != nil {
+		if iter != nil {
+			_ = iter.Close()
+		}
 		return 0, nil, err
 	}
 	if iter == nil {
@@ -2018,6 +2024,9 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 		iter, err := buildSystemDeltaIter(append([]uint64(nil), rootIDs...))
 		phaseStats.systemBuildNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 		if err != nil {
+			if iter != nil {
+				_ = iter.Close()
+			}
 			return 0, nil, false, err
 		}
 		if iter == nil {
@@ -2181,6 +2190,9 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 	iter, err := buildSystemDeltaIter(append([]uint64(nil), rootIDs...))
 	phaseStats.systemBuildNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	if err != nil {
+		if iter != nil {
+			_ = iter.Close()
+		}
 		return 0, nil, err
 	}
 	if iter == nil {
@@ -2502,6 +2514,9 @@ func (db *DB) publishOrderedRootGroup(systemIter iterator.UnsafeIterator, ordere
 		builtRootIDs := append([]uint64(nil), rootIDs...)
 		iter, err := buildSystemIter(builtRootIDs)
 		if err != nil {
+			if iter != nil {
+				_ = iter.Close()
+			}
 			return 0, nil, err
 		}
 		if iter == nil {
