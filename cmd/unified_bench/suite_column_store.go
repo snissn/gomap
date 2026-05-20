@@ -15,6 +15,7 @@ import (
 	"runtime/pprof"
 	"runtime/trace"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -1523,7 +1524,7 @@ func columnStoreQueryThroughputInterpretation(q columnStoreQueryMetric) string {
 }
 
 func columnStoreQueryInterpretationEvidence(q columnStoreQueryMetric) string {
-	rowsProcessed := columnStoreQueryEffectiveRowsProcessed(q)
+	rowsProcessed, rowsProcessedOK := columnStoreQueryEffectiveRowsProcessed(q)
 	rowDenominator := q.Rows
 	if rowDenominator <= 0 {
 		rowDenominator = rowsProcessed
@@ -1532,7 +1533,11 @@ func columnStoreQueryInterpretationEvidence(q columnStoreQueryMetric) string {
 	if rowDenominator > 0 {
 		rowMaterializations = fmt.Sprintf("%d/%d", q.RowMaterializations, rowDenominator)
 	}
-	return fmt.Sprintf("; effective_rows_processed=%d row_materializations=%s bytes_read=%d metadata_hits=%d scheduled_granules=%d skipped_granules=%d", rowsProcessed, rowMaterializations, q.BytesRead, q.MetadataHits, q.ScheduledGranules, q.SkippedGranules)
+	rowsProcessedText := "unknown"
+	if rowsProcessedOK {
+		rowsProcessedText = strconv.Itoa(rowsProcessed)
+	}
+	return fmt.Sprintf("; effective_rows_processed=%s row_materializations=%s bytes_read=%d metadata_hits=%d scheduled_granules=%d skipped_granules=%d", rowsProcessedText, rowMaterializations, q.BytesRead, q.MetadataHits, q.ScheduledGranules, q.SkippedGranules)
 }
 
 func populateColumnStoreThroughputInterpretations(queries []columnStoreQueryMetric) {
@@ -2045,7 +2050,9 @@ func columnStoreBenchRun(baseCfg BenchConfig, profile, dataDir string, report co
 			duration = time.Duration(q.DurationMS * float64(time.Millisecond))
 		}
 		queryDuration += duration
-		queryRowsProcessed += columnStoreQueryEffectiveRowsProcessed(q)
+		if rowsProcessed, ok := columnStoreQueryEffectiveRowsProcessed(q); ok {
+			queryRowsProcessed += rowsProcessed
+		}
 		results[columnStoreSuiteBenchMetricPrefix+q.Name] = map[string]float64{columnStoreSuiteBenchDisplayName: q.RowsPerSecond}
 	}
 	if queryDuration > 0 {
@@ -2071,14 +2078,14 @@ func columnStoreBenchRun(baseCfg BenchConfig, profile, dataDir string, report co
 	}
 }
 
-func columnStoreQueryEffectiveRowsProcessed(q columnStoreQueryMetric) int {
+func columnStoreQueryEffectiveRowsProcessed(q columnStoreQueryMetric) (int, bool) {
 	if q.RowsProcessed != 0 {
-		return q.RowsProcessed
+		return q.RowsProcessed, true
 	}
 	if q.Rows > 0 && q.RowMaterializations > 0 {
-		return q.Rows
+		return q.Rows, true
 	}
-	return 0
+	return 0, false
 }
 
 func columnStoreSuitePruneMissingRuntimeDeltaArtifacts(paths columnStoreArtifactPaths) columnStoreArtifactPaths {
