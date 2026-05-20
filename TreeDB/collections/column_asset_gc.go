@@ -114,7 +114,7 @@ func (c *Collection) columnAssetGC(ctx context.Context, opts ColumnAssetGCOption
 	}
 	if opts.DryRun && !needSegmentEntries {
 		stats.SegmentsEligible = plan.Segments.Reclaimable
-		stats.BytesEligible = plan.Segments.BytesReclaimable
+		stats.BytesEligible = plan.Segments.BytesWholeReclaimable
 		return stats, nil
 	}
 
