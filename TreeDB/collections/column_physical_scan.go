@@ -519,7 +519,7 @@ func loadColumnManifestPlannerCapabilitiesForScan(snap *backenddb.Snapshot, root
 				iter.Next()
 				continue
 			}
-			keyGeneration, err := columnManifestPartGenerationFromRecordKeyForScan(key)
+			keyGeneration, keyPartID, err := columnManifestPartKeyFromRecordKeyForScan(key)
 			if err != nil {
 				return columnManifestPlannerCapabilitiesForScan{}, err
 			}
@@ -532,6 +532,9 @@ func loadColumnManifestPlannerCapabilitiesForScan(snap *backenddb.Snapshot, root
 			}
 			if ref.Generation != keyGeneration {
 				return columnManifestPlannerCapabilitiesForScan{}, fmt.Errorf("collections: column manifest part key generation=%d does not match ref generation=%d", keyGeneration, ref.Generation)
+			}
+			if ref.PartID != keyPartID {
+				return columnManifestPlannerCapabilitiesForScan{}, fmt.Errorf("collections: column manifest part key part_id=%d does not match ref part_id=%d", keyPartID, ref.PartID)
 			}
 			operation, ok := columnPhysicalScanOperationFromBytes(reason)
 			if !ok {
