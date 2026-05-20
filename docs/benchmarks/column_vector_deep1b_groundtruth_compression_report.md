@@ -131,6 +131,24 @@ local-neighborhood upper-bound probe; the archived `0..99` aggregate table
 above should be regenerated with the Deep1B groundtruth cache before drawing a
 Pareto conclusion from those rows.
 
+A single-query smoke run verified the lane and gives a first, deliberately weak
+signal:
+
+```text
+/tmp/gomap_deep1b_top100_residual_sketch_q0_20260519_233746/report.md
+```
+
+For query `0`, `rank64 + residual_rp_i8_8` improved compressed top10 from
+`7/10` to `8/10`, exact top20 in approx@50 from `19/20` to `20/20`, and mean
+score error from `0.00527` to `0.00512` at `72 B/vector` row-code. `rank64 +
+residual_rp_i8_16` improved exact top10 in approx@20 from `9/10` to `10/10`,
+but did not improve compressed top10. `rank80 + residual_rp_i8_16` lowered mean
+score error from `0.00198` to `0.00182`, with candidate gates unchanged because
+rank80 already cleared them for this query. This is not a promotion result yet:
+it says a tiny residual sketch can move individual boundary metrics, so it
+deserves the cached `0..99` rerun before deciding whether it belongs on the
+frontier.
+
 The top100-only tournament changes the immediate emphasis:
 
 - Full-dim SQ8 remains the conservative compressed candidate/rerank lane.
@@ -860,7 +878,8 @@ conservative compressed lane; plain per-dimension int4 is the strongest simple
 boundary-weighted or pairwise-difference PCA improves rank64 candidate gates
 over variance PCA but remains an oracle-locality result. The PCA plus tiny
 residual-correction lane is now present in the harness as
-`pca_residual_random_projection`; it still needs a full cached `0..99` rerun
+`pca_residual_random_projection`. A query-0 smoke shows small boundary-metric
+improvements at rank64/rank80, but it still needs a full cached `0..99` rerun
 before it can be included in the frontier. The remaining top100-only probe worth
 adding, if this path remains decision-relevant, is a low-rank-plus-tail
 progressive bound test.
