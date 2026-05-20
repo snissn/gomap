@@ -22,6 +22,7 @@ const (
 	columnQueryUnsupportedSerialPhysicalDisabledReason    = "serial physical column scan capability is disabled"
 	columnQueryUnsupportedAggregateMetadataDisabledReason = "aggregate metadata capability is disabled"
 	columnQueryUnsupportedParallelPhysicalDisabledReason  = "parallel physical column scan capability is disabled"
+	columnQueryUnsupportedParallelMutationPartsReason     = "parallel physical column scan is disabled for mutation visibility metadata"
 )
 
 var ErrColumnQueryPlanUnsupported = errors.New("collections: column query plan unsupported")
@@ -430,6 +431,9 @@ func physicalColumnQueryUnsupportedReason(identity ColumnStoreCacheIdentity, ide
 			return "query did not request aggregate metadata"
 		}
 	case ColumnQueryPlanParallelColumnScan:
+		if req.Capabilities.MutationParts > 0 {
+			return columnQueryUnsupportedParallelMutationPartsReason
+		}
 		if !req.Capabilities.ParallelColumnScan {
 			return columnQueryUnsupportedParallelPhysicalDisabledReason
 		}
