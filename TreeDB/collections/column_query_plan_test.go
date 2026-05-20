@@ -560,7 +560,7 @@ func TestColumnQueryPlannerM11BRecoveryAuthoritativeDoesNotRequireManifestRoot(t
 	if !plan.Diagnostics.RecoveryAuthoritative {
 		t.Fatalf("zero manifest root should not hide recovery-authoritative generation match: %+v", plan.Diagnostics)
 	}
-	if got, want := plan.Diagnostics.UnsupportedPlanReason, ColumnQueryUnsupportedNoPhysicalAssetsReason; got != want {
+	if got, want := plan.Diagnostics.UnsupportedPlanReason, columnQueryUnsupportedNoPhysicalAssetsReason; got != want {
 		t.Fatalf("unsupported reason=%q want %q", got, want)
 	}
 }
@@ -878,13 +878,13 @@ func TestColumnQueryPlannerM11BReportsPhysicalGateBeforeMissingAggregateName(t *
 	if plan.Supported {
 		t.Fatalf("expected aggregate metadata without physical assets to fail closed: %+v", plan)
 	}
-	if got, want := plan.Diagnostics.UnsupportedPlanReason, ColumnQueryUnsupportedNoPhysicalAssetsReason; got != want {
+	if got, want := plan.Diagnostics.UnsupportedPlanReason, columnQueryUnsupportedNoPhysicalAssetsReason; got != want {
 		t.Fatalf("unsupported reason=%q want %q", got, want)
 	}
 
 	identity.ManifestRoot = 0
 	plan = planColumnQueryForCatalog(catalog, identity, true, req)
-	if got, want := plan.Diagnostics.UnsupportedPlanReason, ColumnQueryUnsupportedNoPhysicalAssetsReason; got != want {
+	if got, want := plan.Diagnostics.UnsupportedPlanReason, columnQueryUnsupportedNoPhysicalAssetsReason; got != want {
 		t.Fatalf("zero-root/no-assets unsupported reason=%q want %q", got, want)
 	}
 }
@@ -1240,7 +1240,7 @@ func TestColumnQueryPlannerM14APopulatesManifestCapabilitiesButKeepsForcedPhysic
 	if plan.Supported {
 		t.Fatalf("forced physical plan unexpectedly supported: %+v", plan)
 	}
-	if got, want := plan.Diagnostics.UnsupportedPlanReason, ColumnQueryUnsupportedSerialPhysicalDisabledReason; got != want {
+	if got, want := plan.Diagnostics.UnsupportedPlanReason, columnQueryUnsupportedSerialPhysicalDisabledReason; got != want {
 		t.Fatalf("unsupported reason=%q want %q diagnostics=%+v", got, want, plan.Diagnostics)
 	}
 	if got := plan.Diagnostics.PhysicalAssetCount; got <= 0 || got == 999 {
@@ -1296,7 +1296,7 @@ func TestColumnQueryPlannerM14APopulatesMutationVisibilityCapabilities(t *testin
 	if plan.Supported {
 		t.Fatalf("forced physical mutation plan unexpectedly supported before M14B: %+v", plan)
 	}
-	if got, want := plan.Diagnostics.UnsupportedPlanReason, ColumnQueryUnsupportedSerialPhysicalDisabledReason; got != want {
+	if got, want := plan.Diagnostics.UnsupportedPlanReason, columnQueryUnsupportedSerialPhysicalDisabledReason; got != want {
 		t.Fatalf("unsupported reason=%q want %q diagnostics=%+v", got, want, plan.Diagnostics)
 	}
 	if got := plan.Diagnostics.PhysicalAssetCount; got <= 1 || got == 999 {
@@ -1426,7 +1426,7 @@ func BenchmarkColumnQueryPlannerCapabilitiesM14A(b *testing.B) {
 			if err != nil {
 				b.Fatal(err)
 			}
-			if plan.Supported || plan.Diagnostics.UnsupportedPlanReason != ColumnQueryUnsupportedSerialPhysicalDisabledReason {
+			if plan.Supported || plan.Diagnostics.UnsupportedPlanReason != columnQueryUnsupportedSerialPhysicalDisabledReason {
 				b.Fatalf("unexpected plan: %+v", plan)
 			}
 			assets += plan.Diagnostics.PhysicalAssetCount
