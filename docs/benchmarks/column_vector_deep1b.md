@@ -695,6 +695,36 @@ Groundtruth locality interpretation:
   such as IVF/k-means clusters, graph-neighborhood blocks, and actual graph
   visited sets.
 
+Follow-up candidate-generation report:
+
+- Full report: `docs/benchmarks/column_vector_deep1b_groundtruth_compression_report.md`.
+- Command variant: same opt-in probe, with
+  `COLUMN_VECTOR_DEEP1B_GROUNDTRUTH_QUERIES=0,1,2,3,4`.
+- Result path for this run:
+  `/tmp/gomap_deep1b_groundtruth_locality_multi_20260519_145758/report.md`.
+
+Five-query summary over official full-1B groundtruth top100 neighborhoods:
+
+| Metric | Result |
+| --- | ---: |
+| Loaded groundtruth rows | `500/500` |
+| Average centroid norm | `0.8779` |
+| Average centroid cos(query) | `0.9297` |
+| Average pairwise cosine | `0.7708` |
+| Rank64 average PCA variance | `99.05%` |
+| Rank64 final top10 recall | `6.8/10` average, `5/10` worst |
+| Rank64 exact top10 in approx@20 | `8.8/10` average, `7/10` worst |
+| Rank64 exact top10 in approx@50 | `10/10` average, `10/10` worst |
+| Rank64 mean score error | `0.00403` average |
+| Exact rank10/rank11 score gap | `0.000922` average, `0.000057` minimum |
+
+This changes the local-PCA interpretation from "not enough for final ranking" to
+"potentially useful for candidate generation." Rank64 score error is larger
+than the score margins deciding final top10 membership, so exact final ranking
+misses are expected. But the same rank64 representation retained the exact top10
+inside approximate top50 for every sampled query, which is the right shape for a
+compressed shortlist followed by exact rerank.
+
 Granule-native int8 micro-kernel smoke:
 
 ```sh

@@ -109,6 +109,7 @@ type columnVectorGraphDeep1BGroundtruthQueryReport struct {
 	CentroidCosineToQuery     float64                                                `json:"centroid_cosine_to_query"`
 	AveragePairwiseCosine     float64                                                `json:"average_pairwise_cosine"`
 	ScoreQuantiles            map[string]float64                                     `json:"score_quantiles"`
+	ScoreMargins              map[string]float64                                     `json:"score_margins"`
 	MinRankRecallAt10Full     int                                                    `json:"min_rank_recall_at_10_full,omitempty"`
 	MinRankRecallAt10GE90     int                                                    `json:"min_rank_recall_at_10_ge_90,omitempty"`
 	PCA                       []columnVectorGraphDeep1BGroundtruthPCAQueryRankReport `json:"pca"`
@@ -116,18 +117,24 @@ type columnVectorGraphDeep1BGroundtruthQueryReport struct {
 }
 
 type columnVectorGraphDeep1BGroundtruthPCAQueryRankReport struct {
-	Rank             int     `json:"rank"`
-	VarianceCaptured float64 `json:"variance_captured"`
-	Top10Overlap     int     `json:"top10_overlap"`
-	RecallAt10       float64 `json:"recall_at_10"`
-	Top20Overlap     int     `json:"top20_overlap,omitempty"`
-	RecallAt20       float64 `json:"recall_at_20,omitempty"`
-	Top50Overlap     int     `json:"top50_overlap,omitempty"`
-	RecallAt50       float64 `json:"recall_at_50,omitempty"`
-	MeanScoreError   float64 `json:"mean_score_error"`
-	MaxScoreError    float64 `json:"max_score_error"`
-	MeanRelativeL2   float64 `json:"mean_relative_l2"`
-	MaxRelativeL2    float64 `json:"max_relative_l2"`
+	Rank                int     `json:"rank"`
+	VarianceCaptured    float64 `json:"variance_captured"`
+	Top10Overlap        int     `json:"top10_overlap"`
+	RecallAt10          float64 `json:"recall_at_10"`
+	Top20Overlap        int     `json:"top20_overlap,omitempty"`
+	RecallAt20          float64 `json:"recall_at_20,omitempty"`
+	Top50Overlap        int     `json:"top50_overlap,omitempty"`
+	RecallAt50          float64 `json:"recall_at_50,omitempty"`
+	Top10InApproxTop20  int     `json:"top10_in_approx_top20,omitempty"`
+	Top10RecallAt20     float64 `json:"top10_recall_at_20,omitempty"`
+	Top10InApproxTop50  int     `json:"top10_in_approx_top50,omitempty"`
+	Top10RecallAt50     float64 `json:"top10_recall_at_50,omitempty"`
+	Top10InApproxTop100 int     `json:"top10_in_approx_top100,omitempty"`
+	Top10RecallAt100    float64 `json:"top10_recall_at_100,omitempty"`
+	MeanScoreError      float64 `json:"mean_score_error"`
+	MaxScoreError       float64 `json:"max_score_error"`
+	MeanRelativeL2      float64 `json:"mean_relative_l2"`
+	MaxRelativeL2       float64 `json:"max_relative_l2"`
 }
 
 type columnVectorGraphDeep1BRemoteRowCache struct {
@@ -184,6 +191,7 @@ func columnVectorGraphDeep1BAnalyzeGroundtruthQuery(tb testing.TB, baseFile *os.
 	report.GroundtruthTop10Agreement = columnVectorGraphDeep1BGroundtruthAgreement(loadedRows, exactTop10, len(exactTop10))
 	report.CentroidNorm, report.CentroidCosineToQuery, report.AveragePairwiseCosine = columnVectorGraphDeep1BLocalityMetrics(query, vectors, dims)
 	report.ScoreQuantiles = columnVectorGraphDeep1BQuantiles(exactScores, []float64{0, 0.1, 0.25, 0.5, 0.75, 0.9, 1})
+	report.ScoreMargins = columnVectorGraphDeep1BScoreMarginMetrics(exactScores)
 
 	validRanks := columnVectorGraphDeep1BFilterRanksForRows(tb, ranks, rows, dims)
 	model := columnVectorGraphDeep1BFitLocalPCAModel(tb, vectors, rows, dims, validRanks)
@@ -201,9 +209,14 @@ func columnVectorGraphDeep1BAnalyzeGroundtruthQuery(tb testing.TB, baseFile *os.
 		row.Top10Overlap, row.RecallAt10 = columnVectorGraphDeep1BApproxRecall(exactScores, encoding.approxScores, 10)
 		if rows >= 20 {
 			row.Top20Overlap, row.RecallAt20 = columnVectorGraphDeep1BApproxRecall(exactScores, encoding.approxScores, 20)
+			row.Top10InApproxTop20, row.Top10RecallAt20 = columnVectorGraphDeep1BCandidateRecall(exactScores, encoding.approxScores, 10, 20)
 		}
 		if rows >= 50 {
 			row.Top50Overlap, row.RecallAt50 = columnVectorGraphDeep1BApproxRecall(exactScores, encoding.approxScores, 50)
+			row.Top10InApproxTop50, row.Top10RecallAt50 = columnVectorGraphDeep1BCandidateRecall(exactScores, encoding.approxScores, 10, 50)
+		}
+		if rows >= 100 {
+			row.Top10InApproxTop100, row.Top10RecallAt100 = columnVectorGraphDeep1BCandidateRecall(exactScores, encoding.approxScores, 10, 100)
 		}
 		if row.RecallAt10 == 1 && report.MinRankRecallAt10Full < 0 {
 			report.MinRankRecallAt10Full = rank
@@ -492,6 +505,32 @@ func columnVectorGraphDeep1BQuantiles(values []float32, quantiles []float64) map
 	return out
 }
 
+func columnVectorGraphDeep1BScoreMarginMetrics(scores []float32) map[string]float64 {
+	topK := min(100, len(scores))
+	out := make(map[string]float64)
+	if topK < 2 {
+		return out
+	}
+	topRows := make([]int, topK)
+	topScores := make([]float32, topK)
+	columnVectorGraphDeep1BTopKFromScores(scores, topK, topRows, topScores)
+	cutoffs := []int{1, 5, 10, 20, 50}
+	for _, cutoff := range cutoffs {
+		if cutoff < topK {
+			out[fmt.Sprintf("gap_%d_%d", cutoff, cutoff+1)] = float64(topScores[cutoff-1] - topScores[cutoff])
+		}
+	}
+	gaps := make([]float32, topK-1)
+	for i := 0; i < topK-1; i++ {
+		gaps[i] = topScores[i] - topScores[i+1]
+	}
+	quantiles := columnVectorGraphDeep1BQuantiles(gaps, []float64{0.5, 0.9, 1})
+	out["adjacent_gap_p50"] = quantiles["0.50"]
+	out["adjacent_gap_p90"] = quantiles["0.90"]
+	out["adjacent_gap_max"] = quantiles["1"]
+	return out
+}
+
 func columnVectorGraphDeep1BFilterRanksForRows(tb testing.TB, ranks []int, rows int, dims int) []int {
 	tb.Helper()
 	limit := min(rows, dims)
@@ -528,6 +567,22 @@ func columnVectorGraphDeep1BApproxRecall(exact []float32, approximate []float32,
 	columnVectorGraphDeep1BTopKFromScores(approximate, topK, approxRows, approxScores)
 	overlap := columnVectorGraphDeep1BTopKOverlap(exactRows, approxRows)
 	return overlap, float64(overlap) / float64(topK)
+}
+
+func columnVectorGraphDeep1BCandidateRecall(exact []float32, approximate []float32, targetK int, candidateK int) (int, float64) {
+	targetK = min(targetK, len(exact))
+	candidateK = min(candidateK, len(exact))
+	if targetK <= 0 || candidateK <= 0 {
+		return 0, 0
+	}
+	exactRows := make([]int, targetK)
+	exactScores := make([]float32, targetK)
+	candidateRows := make([]int, candidateK)
+	candidateScores := make([]float32, candidateK)
+	columnVectorGraphDeep1BTopKFromScores(exact, targetK, exactRows, exactScores)
+	columnVectorGraphDeep1BTopKFromScores(approximate, candidateK, candidateRows, candidateScores)
+	overlap := columnVectorGraphDeep1BTopKOverlap(exactRows, candidateRows)
+	return overlap, float64(overlap) / float64(targetK)
 }
 
 func columnVectorGraphDeep1BGroundtruthAgreement(loadedRows []int, exactTopRows []int, topK int) int {
@@ -578,22 +633,41 @@ func columnVectorGraphDeep1BRenderGroundtruthLocalityMarkdown(report columnVecto
 		)
 	}
 	fmt.Fprintf(&b, "\n## PCA Recall Curve\n\n")
-	fmt.Fprintf(&b, "| Query | Rank | PCA variance | Recall@10 | Recall@20 | Recall@50 | Mean rel L2 | Mean score error | Max score error |\n")
-	fmt.Fprintf(&b, "| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
+	fmt.Fprintf(&b, "| Query | Rank | PCA variance | Recall@10 | Recall@20 | Recall@50 | Top10 in approx@20 | Top10 in approx@50 | Top10 in approx@100 | Mean rel L2 | Mean score error | Max score error |\n")
+	fmt.Fprintf(&b, "| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
 	for _, q := range report.Queries {
 		for _, pca := range q.PCA {
-			fmt.Fprintf(&b, "| %d | %d | %.2f%% | %d/10 | %s | %s | %.4f | %.5f | %.5f |\n",
+			fmt.Fprintf(&b, "| %d | %d | %.2f%% | %d/10 | %s | %s | %s | %s | %s | %.4f | %.5f | %.5f |\n",
 				q.QueryIndex,
 				pca.Rank,
 				pca.VarianceCaptured*100,
 				pca.Top10Overlap,
 				columnVectorGraphDeep1BFormatOverlap(pca.Top20Overlap, pca.RecallAt20, 20),
 				columnVectorGraphDeep1BFormatOverlap(pca.Top50Overlap, pca.RecallAt50, 50),
+				columnVectorGraphDeep1BFormatOverlap(pca.Top10InApproxTop20, pca.Top10RecallAt20, 10),
+				columnVectorGraphDeep1BFormatOverlap(pca.Top10InApproxTop50, pca.Top10RecallAt50, 10),
+				columnVectorGraphDeep1BFormatOverlap(pca.Top10InApproxTop100, pca.Top10RecallAt100, 10),
 				pca.MeanRelativeL2,
 				pca.MeanScoreError,
 				pca.MaxScoreError,
 			)
 		}
+	}
+	fmt.Fprintf(&b, "\n## Exact Score Margins\n\n")
+	fmt.Fprintf(&b, "| Query | Gap 1/2 | Gap 5/6 | Gap 10/11 | Gap 20/21 | Gap 50/51 | Adjacent p50 | Adjacent p90 | Adjacent max |\n")
+	fmt.Fprintf(&b, "| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
+	for _, q := range report.Queries {
+		fmt.Fprintf(&b, "| %d | %.6f | %.6f | %.6f | %.6f | %.6f | %.6f | %.6f | %.6f |\n",
+			q.QueryIndex,
+			q.ScoreMargins["gap_1_2"],
+			q.ScoreMargins["gap_5_6"],
+			q.ScoreMargins["gap_10_11"],
+			q.ScoreMargins["gap_20_21"],
+			q.ScoreMargins["gap_50_51"],
+			q.ScoreMargins["adjacent_gap_p50"],
+			q.ScoreMargins["adjacent_gap_p90"],
+			q.ScoreMargins["adjacent_gap_max"],
+		)
 	}
 	return b.String()
 }
