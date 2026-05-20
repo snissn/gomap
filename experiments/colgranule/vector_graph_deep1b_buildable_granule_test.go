@@ -1,6 +1,7 @@
 package colgranule
 
 import (
+	"container/heap"
 	"fmt"
 	"math"
 	"os"
@@ -46,11 +47,14 @@ func TestColumnVectorGraphDeep1BBuildableGranuleScout(t *testing.T) {
 	if graphEntryClusters <= 0 {
 		t.Fatalf("COLUMN_VECTOR_DEEP1B_BUILDABLE_GRAPH_ENTRY_CLUSTERS=%d must be positive", graphEntryClusters)
 	}
-	if selection != "centroid_blocks" && selection != "graph_visited_blocks" {
-		t.Fatalf("unknown COLUMN_VECTOR_DEEP1B_BUILDABLE_SELECTION=%q; supported: centroid_blocks, graph_visited_blocks", selection)
+	if selection != "centroid_blocks" && selection != "graph_visited_blocks" && selection != "graph_visited_rows" {
+		t.Fatalf("unknown COLUMN_VECTOR_DEEP1B_BUILDABLE_SELECTION=%q; supported: centroid_blocks, graph_visited_blocks, graph_visited_rows", selection)
 	}
-	if selection == "graph_visited_blocks" && !columnVectorGraphDeep1BSupportsGraphVisitedSelection(builder) {
-		t.Fatalf("COLUMN_VECTOR_DEEP1B_BUILDABLE_SELECTION=graph_visited_blocks currently requires COLUMN_VECTOR_DEEP1B_BUILDABLE_BUILDER=ivf_graph_sorted_blocks or ivf_exact_graph_sorted_blocks")
+	if columnVectorGraphDeep1BIsGraphVisitedSelection(selection) && !columnVectorGraphDeep1BSupportsGraphVisitedSelection(builder) {
+		t.Fatalf("COLUMN_VECTOR_DEEP1B_BUILDABLE_SELECTION=%s currently requires COLUMN_VECTOR_DEEP1B_BUILDABLE_BUILDER=ivf_graph_sorted_blocks or ivf_exact_graph_sorted_blocks", selection)
+	}
+	if selection == "graph_visited_rows" && (len(localResidualPQBytes) > 0 || len(localOPQBytes) > 0) {
+		t.Fatalf("COLUMN_VECTOR_DEEP1B_BUILDABLE_SELECTION=graph_visited_rows does not support local residual-PQ/local OPQ budgets; those codebooks are valid only for sealed storage granules")
 	}
 	codebookEnabled := len(pqBytes) > 0 || len(opqBytes) > 0 || len(residualPQBytes) > 0
 	if codebookEnabled {
@@ -120,11 +124,15 @@ func TestColumnVectorGraphDeep1BBuildableGranuleScout(t *testing.T) {
 	}
 	var graphRouting columnVectorGraphDeep1BGraphBlockRoutingIndex
 	var routingBuildNanos int64
-	if selection == "graph_visited_blocks" {
+	if columnVectorGraphDeep1BIsGraphVisitedSelection(selection) {
 		routingBuildStart := time.Now()
 		graphRouting = columnVectorGraphDeep1BBuildGraphBlockRoutingIndex(t, builder, vectors, invNorms, granules, baseRows, columnVectorGraphDeep1BDims, granuleRows, kmeansIters, graphDegree)
 		routingBuildNanos = time.Since(routingBuildStart).Nanoseconds()
-		builderNotes += "; selection=graph_visited_blocks uses a query-time greedy expansion over the same query-independent row graph, then expands visited rows to their sealed graph-sorted storage blocks"
+		if selection == "graph_visited_blocks" {
+			builderNotes += "; selection=graph_visited_blocks uses a query-time greedy expansion over the same query-independent row graph, then expands visited rows to their sealed graph-sorted storage blocks"
+		} else {
+			builderNotes += "; selection=graph_visited_rows uses a query-time greedy expansion over the same query-independent row graph and evaluates only the visited rows; local per-granule codecs are intentionally skipped because the candidate set is dynamic rather than a sealed storage block"
+		}
 	}
 	reportGraphDegree := 0
 	if columnVectorGraphDeep1BBuilderUsesGraph(builder) {
@@ -193,6 +201,9 @@ func TestColumnVectorGraphDeep1BBuildableGranuleScout(t *testing.T) {
 			selected := columnVectorGraphDeep1BSelectGranules(granules, granuleOrder, topGranules)
 			if selection == "graph_visited_blocks" {
 				selected = columnVectorGraphDeep1BSelectGraphVisitedBlocks(query, queryInvNorm, vectors, invNorms, granules, graphRouting, topGranules, graphEntryClusters, columnVectorGraphDeep1BDims)
+				selected = columnVectorGraphDeep1BSelectedWithSelectionBuilder(selected, selection)
+			} else if selection == "graph_visited_rows" {
+				selected = columnVectorGraphDeep1BSelectGraphVisitedRows(query, queryInvNorm, vectors, invNorms, builder, graphRouting, topGranules*granuleRows, graphEntryClusters, columnVectorGraphDeep1BDims)
 				selected = columnVectorGraphDeep1BSelectedWithSelectionBuilder(selected, selection)
 			}
 			queryReport := columnVectorGraphDeep1BAnalyzeBuildableGranuleSelection(t, vectors, invNorms, query, queryInvNorm, globalScores, globalTopRows, selected, queryIndex, topGranules, ranks, codebookModels, localResidualPQModels, localOPQModels, scanIters)
@@ -344,6 +355,10 @@ func columnVectorGraphDeep1BBuildableGranules(tb testing.TB, builder string, vec
 
 func columnVectorGraphDeep1BSupportsGraphVisitedSelection(builder string) bool {
 	return builder == "ivf_graph_sorted_blocks" || builder == "ivf_exact_graph_sorted_blocks"
+}
+
+func columnVectorGraphDeep1BIsGraphVisitedSelection(selection string) bool {
+	return selection == "graph_visited_blocks" || selection == "graph_visited_rows"
 }
 
 func columnVectorGraphDeep1BBuilderUsesGraph(builder string) bool {
@@ -1178,9 +1193,100 @@ func columnVectorGraphDeep1BSelectGraphVisitedBlocks(query []float32, queryInvNo
 	return selected
 }
 
+func columnVectorGraphDeep1BSelectGraphVisitedRows(query []float32, queryInvNorm float32, vectors []float32, invNorms []float32, builder string, routing columnVectorGraphDeep1BGraphBlockRoutingIndex, targetRows int, entryClusters int, dims int) []columnVectorGraphDeep1BBuildableGranule {
+	targetRows = min(targetRows, len(routing.adjacency))
+	if targetRows <= 0 {
+		return nil
+	}
+	centroidOrder := columnVectorGraphDeep1BRankRawCentroidsByQuery(query, queryInvNorm, routing.centroids, routing.centroidInvNorms, dims)
+	entryClusters = min(entryClusters, len(centroidOrder))
+	expanded := make([]bool, len(routing.adjacency))
+	queued := make([]bool, len(routing.adjacency))
+	candidates := make(columnVectorGraphDeep1BGraphVisitHeap, 0, entryClusters*max(1, len(routing.adjacency[0])+1))
+	for _, cluster := range centroidOrder[:entryClusters] {
+		if cluster < 0 || cluster >= len(routing.clusterEntryRows) {
+			continue
+		}
+		row := routing.clusterEntryRows[cluster]
+		if row < 0 || row >= len(routing.adjacency) || queued[row] {
+			continue
+		}
+		queued[row] = true
+		heap.Push(&candidates, columnVectorGraphDeep1BGraphVisitCandidate{
+			row:   row,
+			score: columnVectorGraphDeep1BScoreRow(query, queryInvNorm, vectors, invNorms, row, dims),
+		})
+	}
+	rowIDs := make([]int, 0, targetRows)
+	for len(rowIDs) < targetRows && candidates.Len() > 0 {
+		candidate := heap.Pop(&candidates).(columnVectorGraphDeep1BGraphVisitCandidate)
+		row := candidate.row
+		if row < 0 || row >= len(routing.adjacency) || expanded[row] {
+			continue
+		}
+		expanded[row] = true
+		rowIDs = append(rowIDs, row)
+		for _, neighbor := range routing.adjacency[row] {
+			if neighbor < 0 || neighbor >= len(routing.adjacency) || expanded[neighbor] || queued[neighbor] {
+				continue
+			}
+			queued[neighbor] = true
+			heap.Push(&candidates, columnVectorGraphDeep1BGraphVisitCandidate{
+				row:   neighbor,
+				score: columnVectorGraphDeep1BScoreRow(query, queryInvNorm, vectors, invNorms, neighbor, dims),
+			})
+		}
+	}
+	if len(rowIDs) == 0 {
+		return nil
+	}
+	firstRow, _ := columnVectorGraphDeep1BRowIDRange(rowIDs)
+	centroid := columnVectorGraphDeep1BCentroidForRowIDs(vectors, rowIDs, dims)
+	centroidInv := float32(columnVectorGraphDeep1BInvNorm(centroid))
+	var dot float32
+	for j := 0; j < dims; j++ {
+		dot += query[j] * centroid[j]
+	}
+	return []columnVectorGraphDeep1BBuildableGranule{{
+		Ordinal:       0,
+		Builder:       builder,
+		FirstRow:      firstRow,
+		Rows:          len(rowIDs),
+		RowIDs:        rowIDs,
+		Centroid:      centroid,
+		CentroidInv:   centroidInv,
+		CentroidScore: float64(dot * queryInvNorm * centroidInv),
+	}}
+}
+
 type columnVectorGraphDeep1BGraphVisitCandidate struct {
 	row   int
 	score float32
+}
+
+type columnVectorGraphDeep1BGraphVisitHeap []columnVectorGraphDeep1BGraphVisitCandidate
+
+func (h columnVectorGraphDeep1BGraphVisitHeap) Len() int { return len(h) }
+
+func (h columnVectorGraphDeep1BGraphVisitHeap) Less(i, j int) bool {
+	if h[i].score == h[j].score {
+		return h[i].row < h[j].row
+	}
+	return h[i].score > h[j].score
+}
+
+func (h columnVectorGraphDeep1BGraphVisitHeap) Swap(i, j int) { h[i], h[j] = h[j], h[i] }
+
+func (h *columnVectorGraphDeep1BGraphVisitHeap) Push(x any) {
+	*h = append(*h, x.(columnVectorGraphDeep1BGraphVisitCandidate))
+}
+
+func (h *columnVectorGraphDeep1BGraphVisitHeap) Pop() any {
+	old := *h
+	n := len(old)
+	item := old[n-1]
+	*h = old[:n-1]
+	return item
 }
 
 func columnVectorGraphDeep1BRankRawCentroidsByQuery(query []float32, queryInvNorm float32, centroids []float32, centroidInvNorms []float32, dims int) []int {
@@ -1259,6 +1365,11 @@ func columnVectorGraphDeep1BAnalyzeBuildableGranuleSelection(tb testing.TB, vect
 	if len(selected) > 0 {
 		builder = selected[0].Builder
 	}
+	dynamicVisitedRows := strings.Contains(builder, "graph_visited_rows")
+	notes := "buildable granule scout; codec recalls are conditional on the routed candidate union, while routing recalls measure how many global exact winners reached that union"
+	if dynamicVisitedRows {
+		notes = "dynamic graph visited-row scout; global scalar/PQ codec recalls are conditional on the graph-visited row union. Local PCA and local per-granule codebooks are intentionally skipped because this selection is not a sealed storage granule and would otherwise become a query-time/oracle fit."
+	}
 	q := columnVectorGraphDeep1BBuildableGranuleQueryReport{
 		QueryIndex:            queryIndex,
 		Builder:               builder,
@@ -1266,7 +1377,7 @@ func columnVectorGraphDeep1BAnalyzeBuildableGranuleSelection(tb testing.TB, vect
 		CandidateRows:         candidateRows,
 		SelectedGranules:      selectedReports,
 		CandidateExactMargins: columnVectorGraphDeep1BScoreMarginMetrics(candidateExact),
-		Notes:                 "buildable granule scout; codec recalls are conditional on the routed candidate union, while routing recalls measure how many global exact winners reached that union",
+		Notes:                 notes,
 	}
 	q.RoutingTop10InCandidates = columnVectorGraphDeep1BCountRowsInSet(globalTopRows, 10, candidateSet)
 	q.RoutingTop20InCandidates = columnVectorGraphDeep1BCountRowsInSet(globalTopRows, 20, candidateSet)
@@ -1282,18 +1393,20 @@ func columnVectorGraphDeep1BAnalyzeBuildableGranuleSelection(tb testing.TB, vect
 	for _, model := range pqModels {
 		q.Methods = append(q.Methods, columnVectorGraphDeep1BEvaluateBuildablePQMethod(vectors, invNorms, query, queryInvNorm, candidateExact, q.CandidateExactMargins, selected, builder, model, scanIters))
 	}
-	for _, budget := range localResidualPQModels.budgets {
-		q.Methods = append(q.Methods, columnVectorGraphDeep1BEvaluateBuildableLocalCodebookMethod(tb, vectors, invNorms, query, queryInvNorm, candidateExact, q.CandidateExactMargins, selected, builder, localResidualPQModels, budget, scanIters))
-	}
-	for _, budget := range localOPQModels.budgets {
-		q.Methods = append(q.Methods, columnVectorGraphDeep1BEvaluateBuildableLocalCodebookMethod(tb, vectors, invNorms, query, queryInvNorm, candidateExact, q.CandidateExactMargins, selected, builder, localOPQModels, budget, scanIters))
-	}
-	minSelectedRows := candidateRows
-	for _, granule := range selected {
-		minSelectedRows = min(minSelectedRows, granule.Rows)
-	}
-	for _, rank := range columnVectorGraphDeep1BFilterRanksForRows(tb, ranks, minSelectedRows, dims) {
-		q.Methods = append(q.Methods, columnVectorGraphDeep1BEvaluateBuildablePCAMethod(tb, vectors, invNorms, query, queryInvNorm, candidateExact, q.CandidateExactMargins, selected, builder, rank, scanIters))
+	if !dynamicVisitedRows {
+		for _, budget := range localResidualPQModels.budgets {
+			q.Methods = append(q.Methods, columnVectorGraphDeep1BEvaluateBuildableLocalCodebookMethod(tb, vectors, invNorms, query, queryInvNorm, candidateExact, q.CandidateExactMargins, selected, builder, localResidualPQModels, budget, scanIters))
+		}
+		for _, budget := range localOPQModels.budgets {
+			q.Methods = append(q.Methods, columnVectorGraphDeep1BEvaluateBuildableLocalCodebookMethod(tb, vectors, invNorms, query, queryInvNorm, candidateExact, q.CandidateExactMargins, selected, builder, localOPQModels, budget, scanIters))
+		}
+		minSelectedRows := candidateRows
+		for _, granule := range selected {
+			minSelectedRows = min(minSelectedRows, granule.Rows)
+		}
+		for _, rank := range columnVectorGraphDeep1BFilterRanksForRows(tb, ranks, minSelectedRows, dims) {
+			q.Methods = append(q.Methods, columnVectorGraphDeep1BEvaluateBuildablePCAMethod(tb, vectors, invNorms, query, queryInvNorm, candidateExact, q.CandidateExactMargins, selected, builder, rank, scanIters))
+		}
 	}
 	for i := range q.Methods {
 		columnVectorGraphDeep1BSetCascadeFP32RerankEstimate(&q.Methods[i], candidateRows, dims, exactFP32RerankNanosPerVector)
@@ -1376,7 +1489,7 @@ func columnVectorGraphDeep1BEvaluateBuildableScalarMethod(vectors []float32, inv
 		rowCodeBytes/float64(totalRows),
 		metadataBytes/float64(totalRows),
 		buildNanos,
-		fmt.Sprintf("production/buildable scout over %s granules; codec recall is conditional on centroid-routed candidate union", builder),
+		columnVectorGraphDeep1BBuildableScalarMethodNotes(builder),
 	)
 	method.ScanNanosPerVector = scanNanos / float64(totalRows)
 	method.MeanRelativeL2 = meanRelL2 / float64(totalRows)
@@ -1385,6 +1498,13 @@ func columnVectorGraphDeep1BEvaluateBuildableScalarMethod(vectors []float32, inv
 	columnVectorGraphDeep1BFillGroundtruthMethodMetrics(&method, exactScores, approxScores, margins)
 	columnVectorGraphDeep1BSetApproxTopKSelectionTimings(&method, approxScores, scanIters)
 	return method
+}
+
+func columnVectorGraphDeep1BBuildableScalarMethodNotes(builder string) string {
+	if strings.Contains(builder, "graph_visited_rows") {
+		return fmt.Sprintf("dynamic graph visited-row scout over %s; scalar metadata is amortized over the dynamic candidate row set, and codec recall is conditional on graph routing", builder)
+	}
+	return fmt.Sprintf("production/buildable scout over %s granules; codec recall is conditional on centroid-routed candidate union", builder)
 }
 
 func columnVectorGraphDeep1BEvaluateBuildablePCAMethod(tb testing.TB, vectors []float32, invNorms []float32, query []float32, queryInvNorm float32, exactScores []float32, margins map[string]float64, selected []columnVectorGraphDeep1BBuildableGranule, builder string, rank int, scanIters int) columnVectorGraphDeep1BGroundtruthMethodReport {
@@ -1621,7 +1741,7 @@ func columnVectorGraphDeep1BRenderBuildableGranuleScoutMarkdown(report columnVec
 	if columnVectorGraphDeep1BBuilderUsesGraph(report.Builder) {
 		fmt.Fprintf(&b, "- Graph degree: `%d`\n", report.GraphDegree)
 	}
-	if report.Selection == "graph_visited_blocks" {
+	if columnVectorGraphDeep1BIsGraphVisitedSelection(report.Selection) {
 		fmt.Fprintf(&b, "- Graph entry clusters: `%d`\n", report.GraphEntryClusters)
 	}
 	if len(report.PQTraining) > 0 {
@@ -1655,6 +1775,12 @@ func columnVectorGraphDeep1BRenderBuildableGranuleScoutMarkdown(report columnVec
 			graphKind = "exact in-cluster kNN"
 		}
 		fmt.Fprintf(&b, "Selection mode `graph_visited_blocks` is a query-time graph-routing scout: it starts from static IVF centroid entry rows, greedily expands the query-independent %s row graph using exact query-to-row scores, then reads the sealed graph-sorted storage blocks containing the visited rows. This is closer to an actual graph visited-set route than centroid-ranked block selection, but it is still not a full production HNSW/TreeDB graph implementation.\n\n", graphKind)
+	} else if report.Selection == "graph_visited_rows" {
+		graphKind := "IVF-window"
+		if report.Builder == "ivf_exact_graph_sorted_blocks" {
+			graphKind = "exact in-cluster kNN"
+		}
+		fmt.Fprintf(&b, "Selection mode `graph_visited_rows` is a dynamic graph-routing scout: it starts from static IVF centroid entry rows, greedily expands the query-independent %s row graph using exact query-to-row scores, and evaluates only the visited rows. This tests actual visited-set quality before storage-block expansion. It is not a sealed TreeDB granule proof; local per-granule PCA and local codebook lanes are intentionally skipped for this mode because fitting them on the dynamic visited set would be a query-time/oracle fit.\n\n", graphKind)
 	}
 	if strings.Contains(report.Builder, "exact_graph") {
 		fmt.Fprintf(&b, "The exact in-cluster graph builders are intentionally stronger research proxies: they build exact kNN adjacency inside each IVF cluster, so build cost is expected to scale roughly with the sum of squared cluster sizes times dimension. Treat their build timing as scout evidence, not as a proposed production graph-construction path.\n\n")
@@ -1826,7 +1952,11 @@ func columnVectorGraphDeep1BRenderBuildableRoutingAggregateMarkdown(b *strings.B
 		return
 	}
 	fmt.Fprintf(b, "## Aggregate Routing Gates\n\n")
-	fmt.Fprintf(b, "These routing gates are codec-independent. If routing does not bring exact winners into the selected buildable blocks, no conditional codec or exact rerank can recover them. For overlap metrics, p90 is the 90th-percentile success count and worst is the lower-tail query.\n\n")
+	selectionUnit := "selected buildable blocks"
+	if report.Selection == "graph_visited_rows" {
+		selectionUnit = "dynamic graph-visited row set"
+	}
+	fmt.Fprintf(b, "These routing gates are codec-independent. If routing does not bring exact winners into the %s, no conditional codec or exact rerank can recover them. For overlap metrics, p90 is the 90th-percentile success count and worst is the lower-tail query.\n\n", selectionUnit)
 	fmt.Fprintf(b, "| Top granules | Queries | Avg candidate rows | p50 top10 routed | p90 top10 routed | worst top10 routed | p50 top20 routed | p90 top20 routed | worst top20 routed | p50 top50 routed | p90 top50 routed | worst top50 routed |\n")
 	fmt.Fprintf(b, "| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
 	for _, key := range keys {

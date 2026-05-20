@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -561,6 +562,15 @@ func columnVectorGraphDeep1BPQStorageNotes(model columnVectorGraphDeep1BPQModel)
 }
 
 func columnVectorGraphDeep1BPQMethodNotes(builder string, model columnVectorGraphDeep1BPQModel) string {
+	if strings.Contains(builder, "graph_visited_rows") {
+		if model.method == "global_opq" {
+			return fmt.Sprintf("dynamic graph visited-row scout over %s; global OPQ-style rotation plus PQ codebooks trained on %d held-out rows for %d OPQ iterations and %d PQ k-means iterations, then evaluated on disjoint eval rows; codec recall is conditional on graph routing", builder, model.trainRows, model.opqIterations, model.trainIterations)
+		}
+		if model.method == "global_residual_pq" {
+			return fmt.Sprintf("dynamic graph visited-row scout over %s; global centroid-residual PQ codebooks trained on %d held-out rows for %d iterations and evaluated on disjoint eval rows; this is a residual-codebook baseline, not local LOPQ; codec recall is conditional on graph routing", builder, model.trainRows, model.trainIterations)
+		}
+		return fmt.Sprintf("dynamic graph visited-row scout over %s; global PQ codebooks trained on %d held-out rows for %d iterations and evaluated on disjoint eval rows; codec recall is conditional on graph routing", builder, model.trainRows, model.trainIterations)
+	}
 	if model.method == "global_opq" {
 		return fmt.Sprintf("production/buildable scout over %s granules; global OPQ-style rotation plus PQ codebooks trained on %d held-out rows for %d OPQ iterations and %d PQ k-means iterations, then evaluated on disjoint eval rows; codec recall is conditional on centroid-routed candidate union", builder, model.trainRows, model.opqIterations, model.trainIterations)
 	}
