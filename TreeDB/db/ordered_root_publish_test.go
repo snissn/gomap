@@ -16,6 +16,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/internal/storagemaintenance"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -243,7 +244,7 @@ func TestPublishOrderedRootDeltaGroupMaintenanceAllowsCommandWALWithoutLogicalFr
 
 	rootDelta := mustFrozenSystemMemtable(t, "root/k", "v")
 	newSystemRoot, rootIDs, err := db.PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(
-		ColumnAssetRewriteStorageMaintenancePlan(),
+		storagemaintenance.ColumnAssetRewritePlan(),
 		[]OrderedRootDeltaPublishInput{{
 			BaseRoot:                  0,
 			Iter:                      rootDelta.NewIterator(nil, nil),
@@ -292,7 +293,7 @@ func TestPublishOrderedRootDeltaGroupMaintenanceRejectsUnmarkedRootDelta(t *test
 	iter := mustFrozenSystemMemtable(t, "root/k", "v").NewIterator(nil, nil)
 	defer iter.Close()
 	_, _, err := db.PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(
-		ColumnAssetRewriteStorageMaintenancePlan(),
+		storagemaintenance.ColumnAssetRewritePlan(),
 		[]OrderedRootDeltaPublishInput{{
 			BaseRoot: 0,
 			Iter:     iter,
@@ -305,6 +306,32 @@ func TestPublishOrderedRootDeltaGroupMaintenanceRejectsUnmarkedRootDelta(t *test
 	)
 	if !errors.Is(err, ErrStorageMaintenanceRewriteMarkerMissing) {
 		t.Fatalf("maintenance publish error=%v want ErrStorageMaintenanceRewriteMarkerMissing", err)
+	}
+}
+
+func TestPublishOrderedRootDeltaGroupMaintenanceRejectsForgedPlan(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	defer db.Close()
+
+	_, _, err := db.PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(
+		struct {
+			kind string
+		}{kind: "column_asset_rewrite"},
+		[]OrderedRootDeltaPublishInput{{
+			BaseRoot:                  0,
+			Iter:                      mustFrozenSystemMemtable(t, "root/k", "v").NewIterator(nil, nil),
+			StorageMaintenanceRewrite: true,
+		}},
+		nil,
+		func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+			t.Fatalf("maintenance system builder should not run for a forged maintenance plan")
+			return nil, nil
+		},
+	)
+	if !errors.Is(err, ErrStorageMaintenancePlanMissing) {
+		t.Fatalf("maintenance publish error=%v want ErrStorageMaintenancePlanMissing", err)
 	}
 }
 
@@ -335,7 +362,7 @@ func TestPublishOrderedRootDeltaGroupMaintenanceRejectsSystemOnly(t *testing.T) 
 	defer db.Close()
 
 	_, _, err := db.PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(
-		ColumnAssetRewriteStorageMaintenancePlan(),
+		storagemaintenance.ColumnAssetRewritePlan(),
 		nil,
 		nil,
 		func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
@@ -368,7 +395,7 @@ func TestPublishOrderedRootDeltaGroupMaintenanceRejectsEmptyRootDelta(t *testing
 
 	emptyDelta := mustFrozenSystemMemtable(t)
 	_, _, err = db.PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(
-		ColumnAssetRewriteStorageMaintenancePlan(),
+		storagemaintenance.ColumnAssetRewritePlan(),
 		[]OrderedRootDeltaPublishInput{{
 			BaseRoot:                  baseRoot,
 			Iter:                      emptyDelta.NewIterator(nil, nil),
