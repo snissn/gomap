@@ -352,12 +352,14 @@ func TestColumnPhysicalQueryParallelFailsClosedForMutationVisibilityM14B(t *test
 	reopened, closeFn, _ := openColumnPhysicalMutationFixtureM13C(t, 64)
 	defer closeFn()
 
-	_, err := reopened.RunColumnPhysicalQueryParallel(ColumnPhysicalQueryRequest{
-		Kind:        ColumnPhysicalQueryGroupCount,
-		GroupColumn: "kind",
-	}, 4)
-	if !errors.Is(err, ErrColumnQueryPlanUnsupported) || !strings.Contains(err.Error(), "partitioned visibility execution") {
-		t.Fatalf("RunColumnPhysicalQueryParallel err=%v want fail-closed partitioned visibility error", err)
+	for _, workers := range []int{1, 4} {
+		_, err := reopened.RunColumnPhysicalQueryParallel(ColumnPhysicalQueryRequest{
+			Kind:        ColumnPhysicalQueryGroupCount,
+			GroupColumn: "kind",
+		}, workers)
+		if !errors.Is(err, ErrColumnQueryPlanUnsupported) || !strings.Contains(err.Error(), "partitioned visibility execution") {
+			t.Fatalf("RunColumnPhysicalQueryParallel workers=%d err=%v want fail-closed partitioned visibility error", workers, err)
+		}
 	}
 }
 

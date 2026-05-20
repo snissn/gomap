@@ -123,9 +123,6 @@ func (c *Collection) RunColumnPhysicalQuery(req ColumnPhysicalQueryRequest) (Col
 // Mutation-bearing manifests stay fail-closed until partitioned visibility
 // reconstruction is available.
 func (c *Collection) RunColumnPhysicalQueryParallel(req ColumnPhysicalQueryRequest, maxWorkers int) (ColumnPhysicalQueryResult, error) {
-	if maxWorkers <= 1 {
-		return c.RunColumnPhysicalQuery(req)
-	}
 	view, closeView, err := c.prepareColumnPhysicalScanSnapshotView()
 	if closeView != nil {
 		defer closeView()
@@ -137,7 +134,7 @@ func (c *Collection) RunColumnPhysicalQueryParallel(req ColumnPhysicalQueryReque
 		return ColumnPhysicalQueryResult{}, fmt.Errorf("%w: parallel physical column query requires insert-only manifest until partitioned visibility execution lands", ErrColumnQueryPlanUnsupported)
 	}
 	workers := maxWorkers
-	if refs := len(view.AssetRefs); refs <= 1 {
+	if refs := len(view.AssetRefs); maxWorkers <= 1 || refs <= 1 {
 		return c.runColumnPhysicalQueryInSnapshotView(view, req)
 	} else if workers > refs {
 		workers = refs
