@@ -347,6 +347,7 @@ func TestCommandWALFormatV1CollectionRebuildVectorIndex(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncodeCommandFrame: %v", err)
 	}
+	assertGoldenHex(t, "command_wal_v1_collection_rebuild_vector_index.hex", frame)
 	got, err := DecodeCommandFrame(frame)
 	if err != nil {
 		t.Fatalf("DecodeCommandFrame: %v", err)
