@@ -307,13 +307,7 @@ func buildColumnAssetReachabilityPlan(ctx context.Context, input columnAssetReac
 	}
 	processRef := func(builder *columnAssetReachabilityRefBuilder) {
 		status := columnAssetReachabilityStatusForSources(builder.sources)
-		if err := validateColumnAssetRefForPlan(builder.ref); err != nil {
-			status = ColumnAssetReachabilityUncertain
-		}
-		if builder.ref.Namespace != input.namespace {
-			status = ColumnAssetReachabilityUncertain
-		}
-		if builder.ref.Offset > math.MaxInt64-builder.ref.Length {
+		if !columnAssetReachabilityRefCanContributeRange(builder.ref, input.namespace) {
 			status = ColumnAssetReachabilityUncertain
 		}
 		plan.Refs.Total++
