@@ -25,8 +25,10 @@ import (
 )
 
 const (
+	columnVectorGraphDeep1BBase1BURL  = "https://storage.yandexcloud.net/yandex-research/ann-datasets/DEEP/base.1B.fbin"
 	columnVectorGraphDeep1BBase10MURL = "https://storage.yandexcloud.net/yandex-research/ann-datasets/DEEP/base.10M.fbin"
 	columnVectorGraphDeep1BQueryURL   = "https://storage.yandexcloud.net/yandex-research/ann-datasets/DEEP/query.public.10K.fbin"
+	columnVectorGraphDeep1BTruthURL   = "https://storage.yandexcloud.net/yandex-research/ann-datasets/DEEP/groundtruth.public.10K.ibin"
 	columnVectorGraphDeep1BDims       = 96
 	columnVectorGraphDeep1BDegree     = 16
 	columnVectorGraphDeep1BBlockRows  = 8192

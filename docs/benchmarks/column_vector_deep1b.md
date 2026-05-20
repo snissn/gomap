@@ -640,6 +640,61 @@ Local PCA interpretation:
   variant, has enough candidate recall at wider cutoffs such as recall@100 or
   recall@1000 before exact rerank.
 
+Groundtruth top100 locality probe:
+
+```sh
+OUT=/tmp/gomap_deep1b_groundtruth_locality_$(date +%Y%m%d_%H%M%S)
+COLUMN_VECTOR_DEEP1B_GROUNDTRUTH_LOCALITY=1 \
+COLUMN_VECTOR_DEEP1B_DOWNLOAD=1 \
+COLUMN_VECTOR_DEEP1B_DIR=/private/tmp/gomap-deep1b-cache \
+COLUMN_VECTOR_DEEP1B_GROUNDTRUTH_FETCH_BASE1B=1 \
+COLUMN_VECTOR_DEEP1B_GROUNDTRUTH_QUERIES=0 \
+COLUMN_VECTOR_DEEP1B_GROUNDTRUTH_OUT="$OUT" \
+GOWORK=off go test ./experiments/colgranule \
+  -run '^TestColumnVectorGraphDeep1BGroundtruthLocality$' \
+  -count 1 \
+  -v
+```
+
+This opt-in probe reads `groundtruth.public.10K.ibin`, loads each selected
+query's top100 full-1B neighbor vectors, and computes locality plus local-PCA
+ranking quality. It can use locally available base rows first; with
+`COLUMN_VECTOR_DEEP1B_GROUNDTRUTH_FETCH_BASE1B=1`, missing rows are read from
+`base.1B.fbin` by HTTP byte range so the run does not require downloading the
+full 1B base file. The output is `$OUT/results.json` and `$OUT/report.md`.
+
+Initial query-0 full-1B groundtruth top100 run:
+
+| Query | Loaded top100 | Local | Remote | Missing | Centroid norm | Centroid cos(query) | Avg pairwise cos | Score p50 | Score p90 | GT top10 agreement |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 0 | 100/100 | 0 | 100 | 0 | 0.7997 | 0.8960 | 0.6359 | 0.7128 | 0.7326 | 10/10 |
+
+Local PCA recall curve on the same query-0 top100:
+
+| Rank | PCA variance | Recall@10 | Recall@20 | Recall@50 | Mean rel L2 | Mean score error | Max score error |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 8 | 51.12% | 3/10 | 5/20 | 30/50 | 0.4127 | 0.00941 | 0.04309 |
+| 16 | 72.16% | 2/10 | 7/20 | 33/50 | 0.3111 | 0.00884 | 0.04297 |
+| 32 | 90.91% | 5/10 | 11/20 | 36/50 | 0.1791 | 0.00757 | 0.03497 |
+| 64 | 99.37% | 7/10 | 14/20 | 37/50 | 0.0469 | 0.00527 | 0.01722 |
+| 96 | 100.00% | 9/10 | 20/20 | 50/50 | 0.0038 | 0.00007 | 0.00027 |
+
+Groundtruth locality interpretation:
+
+- The true full-1B query-neighbor cloud is much tighter than the earlier
+  first-1M top8192 oracle block: query-0 top100 has average pairwise cosine
+  `0.6359` and centroid norm `0.7997`, versus the broader top8192 smoke's
+  average pairwise cosine around `0.278`.
+- Even in this tight top100 cloud, ranking remains sensitive. Rank 64 captures
+  `99.37%` of local variance but recovers only `7/10` exact top10 rows. The
+  full-rank fp16-metadata/int8-code path reaches `9/10` top10 and perfect
+  top20/top50 recall, so the remaining top10 miss is quantization/metadata
+  noise rather than low-rank truncation.
+- This makes the next locality gate clear: run several groundtruth queries, then
+  compare true top100 locality against production-plausible granule builders
+  such as IVF/k-means clusters, graph-neighborhood blocks, and actual graph
+  visited sets.
+
 Granule-native int8 micro-kernel smoke:
 
 ```sh
