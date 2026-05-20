@@ -1365,6 +1365,44 @@ func TestColumnQueryPlannerM14AFailsClosedWhenDBUnavailable(t *testing.T) {
 	}
 }
 
+func TestColumnQueryPlannerM14AFailsClosedUnknownForceKindClearsCallerCapabilities(t *testing.T) {
+	reopened, closeFn := openColumnPhysicalQueryFixtureM13B(t, columnPhysicalQueryFixtureEventsM13B(16))
+	defer closeFn()
+
+	plan, err := reopened.PlanColumnQuery(ColumnQueryPlanRequest{
+		Name:             "m14a_unknown_force",
+		ProjectedColumns: []string{"time_us", "kind"},
+		ForceKind:        ColumnQueryPlanKind("unknown_physical_force"),
+		Capabilities: ColumnQueryPlannerCapabilities{
+			SerialColumnScan:   true,
+			AggregateMetadata:  true,
+			ParallelColumnScan: true,
+			PhysicalAssetCount: 999,
+			PartCount:          999,
+			GranuleCount:       999,
+			MaxParallelWorkers: 4,
+		},
+	})
+	if err != nil {
+		t.Fatalf("PlanColumnQuery: %v", err)
+	}
+	if plan.Supported {
+		t.Fatalf("unknown forced physical plan unexpectedly supported: %+v", plan)
+	}
+	if got := plan.Diagnostics.UnsupportedPlanReason; !strings.Contains(got, "unknown column query plan kind") {
+		t.Fatalf("unsupported reason=%q want unknown force-kind rejection diagnostics=%+v", got, plan.Diagnostics)
+	}
+	if got := plan.Diagnostics.PhysicalAssetCount; got <= 0 || got == 999 {
+		t.Fatalf("physical asset count=%d want manifest-derived count, not caller-supplied capabilities", got)
+	}
+	if got := plan.Diagnostics.UnsupportedPlanKind; got != ColumnQueryPlanKind("unknown_physical_force") {
+		t.Fatalf("unsupported plan kind=%q want unknown forced kind diagnostics=%+v", got, plan.Diagnostics)
+	}
+	if plan.Diagnostics.ScheduledGranules != 0 || plan.Diagnostics.WorkerCount != 0 {
+		t.Fatalf("unknown forced kind should not schedule physical work: %+v", plan.Diagnostics)
+	}
+}
+
 func BenchmarkColumnQueryPlannerCapabilitiesM14A(b *testing.B) {
 	b.Run("insert_manifest_rows_1024", func(b *testing.B) {
 		reopened, closeFn := openColumnPhysicalQueryFixtureM13B(b, columnPhysicalQueryFixtureEventsM13B(1024))
