@@ -662,6 +662,9 @@ func TestColumnAssetReachabilityUnknownSourceFailsClosedM15B(t *testing.T) {
 	if !input.addRef(ref, ColumnAssetReachabilitySource("future_source")) {
 		t.Fatal("unknown source ref was dropped, want fail-closed retention")
 	}
+	if !input.addRef(ref, ColumnAssetReachabilitySource("future_source_2")) {
+		t.Fatal("second unknown source ref was dropped, want diagnostics to retain distinct sources")
+	}
 
 	plan, err := buildColumnAssetReachabilityPlan(context.Background(), input)
 	if err != nil {
@@ -676,8 +679,10 @@ func TestColumnAssetReachabilityUnknownSourceFailsClosedM15B(t *testing.T) {
 	if len(plan.Entries) != 1 || plan.Entries[0].Status != ColumnAssetReachabilityUncertain {
 		t.Fatalf("entries=%+v want one uncertain ref entry", plan.Entries)
 	}
-	if len(plan.Entries[0].Sources) != 1 || plan.Entries[0].Sources[0] != columnAssetReachabilitySourceUnknown {
-		t.Fatalf("entry sources=%v want unknown source marker", plan.Entries[0].Sources)
+	if len(plan.Entries[0].Sources) != 2 ||
+		plan.Entries[0].Sources[0] != ColumnAssetReachabilitySource("future_source") ||
+		plan.Entries[0].Sources[1] != ColumnAssetReachabilitySource("future_source_2") {
+		t.Fatalf("entry sources=%v want original unknown source values", plan.Entries[0].Sources)
 	}
 	if plan.Segments.Unknown != 1 || plan.Segments.Protected != 0 || plan.Segments.Reclaimable != 0 {
 		t.Fatalf("segment stats=%+v want existing unknown-source segment retained as unknown", plan.Segments)
