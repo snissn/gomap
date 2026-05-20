@@ -51,7 +51,7 @@ func TestColumnVectorGraphDeep1BBuildableGranuleScout(t *testing.T) {
 		t.Fatalf("unknown COLUMN_VECTOR_DEEP1B_BUILDABLE_SELECTION=%q; supported: centroid_blocks, graph_visited_blocks, graph_visited_rows", selection)
 	}
 	if columnVectorGraphDeep1BIsGraphVisitedSelection(selection) && !columnVectorGraphDeep1BSupportsGraphVisitedSelection(builder) {
-		t.Fatalf("COLUMN_VECTOR_DEEP1B_BUILDABLE_SELECTION=%s currently requires COLUMN_VECTOR_DEEP1B_BUILDABLE_BUILDER=ivf_graph_sorted_blocks or ivf_exact_graph_sorted_blocks", selection)
+		t.Fatalf("COLUMN_VECTOR_DEEP1B_BUILDABLE_SELECTION=%s currently requires COLUMN_VECTOR_DEEP1B_BUILDABLE_BUILDER=ivf_graph_sorted_blocks, treedb_graph_sorted_part_granules, or ivf_exact_graph_sorted_blocks", selection)
 	}
 	if selection == "graph_visited_rows" && (len(localResidualPQBytes) > 0 || len(localOPQBytes) > 0) {
 		t.Fatalf("COLUMN_VECTOR_DEEP1B_BUILDABLE_SELECTION=graph_visited_rows does not support local residual-PQ/local OPQ budgets; those codebooks are valid only for sealed storage granules")
@@ -362,7 +362,7 @@ func columnVectorGraphDeep1BBuildableGranules(tb testing.TB, builder string, vec
 }
 
 func columnVectorGraphDeep1BSupportsGraphVisitedSelection(builder string) bool {
-	return builder == "ivf_graph_sorted_blocks" || builder == "ivf_exact_graph_sorted_blocks"
+	return builder == "ivf_graph_sorted_blocks" || builder == "treedb_graph_sorted_part_granules" || builder == "ivf_exact_graph_sorted_blocks"
 }
 
 func columnVectorGraphDeep1BIsGraphVisitedSelection(selection string) bool {
@@ -1131,6 +1131,8 @@ func columnVectorGraphDeep1BBuildGraphBlockRoutingIndex(tb testing.TB, builder s
 	tb.Helper()
 	switch builder {
 	case "ivf_graph_sorted_blocks":
+		return columnVectorGraphDeep1BBuildIVFGraphBlockRoutingIndex(tb, vectors, invNorms, granules, rows, dims, targetRows, iterations, graphDegree)
+	case "treedb_graph_sorted_part_granules":
 		return columnVectorGraphDeep1BBuildIVFGraphBlockRoutingIndex(tb, vectors, invNorms, granules, rows, dims, targetRows, iterations, graphDegree)
 	case "ivf_exact_graph_sorted_blocks":
 		return columnVectorGraphDeep1BBuildIVFExactGraphBlockRoutingIndex(tb, vectors, invNorms, granules, rows, dims, targetRows, iterations, graphDegree)
