@@ -22,6 +22,7 @@ import (
 
 type closeCountingUnsafeIterator struct {
 	closes int
+	err    error
 }
 
 func (it *closeCountingUnsafeIterator) Valid() bool { return false }
@@ -45,7 +46,7 @@ func (it *closeCountingUnsafeIterator) ValueCopy(dst []byte) []byte {
 	return dst
 }
 func (it *closeCountingUnsafeIterator) IsDeleted() bool { return false }
-func (it *closeCountingUnsafeIterator) Error() error    { return nil }
+func (it *closeCountingUnsafeIterator) Error() error    { return it.err }
 func (it *closeCountingUnsafeIterator) Close() error {
 	it.closes++
 	return nil
@@ -424,6 +425,50 @@ func TestPublishOrderedRootDeltaGroupMaintenanceRejectsEmptyRootDelta(t *testing
 	}
 	if errors.Is(err, ErrStorageMaintenancePublishPreApplyFailed) {
 		t.Fatalf("maintenance publish error=%v unexpectedly marked pre-apply after root apply", err)
+	}
+}
+
+func TestPublishOrderedRootDeltaGroupMaintenanceWrapsRootDeltaIteratorErrorPreApply(t *testing.T) {
+	dir := t.TempDir()
+	setupDB, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open setup DB: %v", err)
+	}
+	baseRoot, err := setupDB.PublishOrderedRootIterator(0, mustFrozenSystemMemtable(t, "root/k", "v").NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("publish base root: %v", err)
+	}
+	if err := setupDB.Close(); err != nil {
+		t.Fatalf("close setup DB: %v", err)
+	}
+
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	defer db.Close()
+
+	wantErr := errors.New("maintenance root delta iterator materialization failure")
+	iter := &closeCountingUnsafeIterator{err: wantErr}
+	_, _, err = db.PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(
+		storagemaintenance.ColumnAssetRewritePlan(),
+		[]OrderedRootDeltaPublishInput{{
+			BaseRoot:                  baseRoot,
+			Iter:                      iter,
+			StorageMaintenanceRewrite: true,
+		}},
+		nil,
+		func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+			t.Fatalf("maintenance system builder should not run after root delta iterator failure")
+			return nil, nil
+		},
+	)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("maintenance publish error=%v want %v", err, wantErr)
+	}
+	if !errors.Is(err, ErrStorageMaintenancePublishPreApplyFailed) {
+		t.Fatalf("maintenance publish error=%v want ErrStorageMaintenancePublishPreApplyFailed", err)
+	}
+	if iter.closes != 1 {
+		t.Fatalf("root delta iterator closes=%d want 1", iter.closes)
 	}
 }
 

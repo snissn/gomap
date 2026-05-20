@@ -147,6 +147,44 @@ func TestMinPinnedSnapshotCommitSeqProtectsInFlightSnapshotAcquire(t *testing.T)
 	}
 }
 
+func TestMinPinnedSnapshotCommitSeqRescansAcquireCompletedDuringScan(t *testing.T) {
+	idx := &indexGen{registry: lifecycle.NewReaderRegistry()}
+	idx.id = 1
+	idx.refs.Store(1)
+	state := &DBState{CommitSeq: 313, RootPageID: 11}
+	db := &DB{snapPool: NewSnapshotPool()}
+	db.idx.Store(idx)
+	db.trackIndex(idx)
+	db.publishSnapshotView(idx, state, nil)
+
+	var snap *Snapshot
+	hookCalls := 0
+	prevHook := minPinnedSnapshotCommitSeqAfterScanForTesting
+	minPinnedSnapshotCommitSeqAfterScanForTesting = func() {
+		hookCalls++
+		if hookCalls != 1 {
+			return
+		}
+		snap = db.AcquireSnapshot()
+		if snap == nil {
+			t.Fatal("AcquireSnapshot during min-pinned scan returned nil")
+		}
+	}
+	defer func() {
+		minPinnedSnapshotCommitSeqAfterScanForTesting = prevHook
+		if snap != nil {
+			_ = snap.Close()
+		}
+	}()
+
+	if got := db.MinPinnedSnapshotCommitSeq(); got != state.CommitSeq {
+		t.Fatalf("MinPinnedSnapshotCommitSeq=%d want snapshot commit seq %d", got, state.CommitSeq)
+	}
+	if hookCalls < 2 {
+		t.Fatalf("min-pinned scan hook calls=%d want rescan after acquire epoch changed", hookCalls)
+	}
+}
+
 func TestAcquireSnapshot_ReleasesPinnedValueLogSetOnRegistryNil(t *testing.T) {
 	idx := &indexGen{}
 	idx.refs.Store(1)

@@ -43,6 +43,16 @@ func TestColumnAssetGCDryRunReportsReclaimableButDoesNotDeleteM15B(t *testing.T)
 	if stats.Plan.Segments.Reclaimable != 1 || stats.Plan.Segments.Unknown != 0 || !stats.Plan.Complete {
 		t.Fatalf("plan segments=%+v complete=%t want one complete reclaimable segment", stats.Plan.Segments, stats.Plan.Complete)
 	}
+	foundCandidateEntry := false
+	for _, entry := range stats.Plan.SegmentEntries {
+		if entry.FileID == candidate.FileID && entry.Status == ColumnAssetReachabilitySegmentReclaimable {
+			foundCandidateEntry = true
+			break
+		}
+	}
+	if !foundCandidateEntry {
+		t.Fatalf("dry-run detailed segment entries=%+v want reclaimable candidate file %d", stats.Plan.SegmentEntries, candidate.FileID)
+	}
 	if _, err := os.Stat(candidatePath); err != nil {
 		t.Fatalf("dry-run removed candidate segment %q: %v", candidatePath, err)
 	}

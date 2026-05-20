@@ -1593,7 +1593,7 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilderWithMaintenanceP
 		phaseStats.rootApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 		phaseStats.rootApplyCalls++
 		if err != nil {
-			return 0, nil, err
+			return 0, nil, preApplyErr(err)
 		}
 		if storageMaintenance && rootID == ordered[idx].BaseRoot {
 			return 0, nil, fmt.Errorf("%w: ordered input %d", ErrStorageMaintenanceRootDeltaEmpty, idx)

@@ -68,7 +68,7 @@ func (c *Collection) columnAssetGC(ctx context.Context, opts ColumnAssetGCOption
 	}()
 	plan, err := c.PlanColumnAssetReachability(ctx, ColumnAssetReachabilityOptions{
 		Detailed:                              opts.Detailed,
-		SegmentDetails:                        !opts.DryRun,
+		SegmentDetails:                        opts.Detailed || !opts.DryRun,
 		ProtectCandidateRefsForOlderSnapshots: true,
 		CandidateRefs:                         opts.CandidateRefs,
 		PendingRefs:                           opts.PendingRefs,

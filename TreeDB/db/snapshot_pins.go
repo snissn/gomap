@@ -2,6 +2,8 @@ package db
 
 import "math"
 
+var minPinnedSnapshotCommitSeqAfterScanForTesting func()
+
 // MinPinnedSnapshotCommitSeq returns the oldest commit sequence currently held
 // by any active snapshot reader across the current and still-tracked retired
 // index generations. In-flight snapshot acquisitions conservatively return 0
@@ -11,24 +13,33 @@ func (db *DB) MinPinnedSnapshotCommitSeq() uint64 {
 	if db == nil {
 		return math.MaxUint64
 	}
-	if db.snapshotAcquireInFlight() > 0 {
-		return 0
-	}
+	for attempts := 0; attempts < 4; attempts++ {
+		if db.snapshotAcquireInFlight() > 0 {
+			return 0
+		}
+		acquireEpoch := db.snapshotAcquireEpoch.Load()
 
-	// idxMu is a Mutex rather than an RWMutex, so this read-only walk must take
-	// the exclusive generation-list lock.
-	db.idxMu.Lock()
-	defer db.idxMu.Unlock()
+		// idxMu is a Mutex rather than an RWMutex, so this read-only walk must take
+		// the exclusive generation-list lock.
+		db.idxMu.Lock()
+		min := uint64(math.MaxUint64)
+		for _, gen := range db.idxAll {
+			min = minPinnedSnapshotCommitSeqForIndexGen(min, gen)
+		}
+		min = minPinnedSnapshotCommitSeqForIndexGen(min, db.idx.Load())
+		db.idxMu.Unlock()
 
-	min := uint64(math.MaxUint64)
-	for _, gen := range db.idxAll {
-		min = minPinnedSnapshotCommitSeqForIndexGen(min, gen)
+		if hook := minPinnedSnapshotCommitSeqAfterScanForTesting; hook != nil {
+			hook()
+		}
+		if db.snapshotAcquireInFlight() > 0 {
+			return 0
+		}
+		if db.snapshotAcquireEpoch.Load() == acquireEpoch {
+			return min
+		}
 	}
-	min = minPinnedSnapshotCommitSeqForIndexGen(min, db.idx.Load())
-	if db.snapshotAcquireInFlight() > 0 {
-		return 0
-	}
-	return min
+	return 0
 }
 
 func minPinnedSnapshotCommitSeqForIndexGen(min uint64, gen *indexGen) uint64 {
