@@ -1509,15 +1509,16 @@ func columnStoreQueryThroughputInterpretation(q columnStoreQueryMetric) string {
 }
 
 func columnStoreQueryInterpretationEvidence(q columnStoreQueryMetric) string {
+	rowsProcessed := columnStoreQueryEffectiveRowsProcessed(q)
 	rowDenominator := q.Rows
 	if rowDenominator <= 0 {
-		rowDenominator = q.RowsProcessed
+		rowDenominator = rowsProcessed
 	}
 	rowMaterializations := fmt.Sprintf("%d/unknown", q.RowMaterializations)
 	if rowDenominator > 0 {
 		rowMaterializations = fmt.Sprintf("%d/%d", q.RowMaterializations, rowDenominator)
 	}
-	return fmt.Sprintf("; observed rows_processed=%d row_materializations=%s bytes_read=%d metadata_hits=%d scheduled_granules=%d skipped_granules=%d", q.RowsProcessed, rowMaterializations, q.BytesRead, q.MetadataHits, q.ScheduledGranules, q.SkippedGranules)
+	return fmt.Sprintf("; observed rows_processed=%d row_materializations=%s bytes_read=%d metadata_hits=%d scheduled_granules=%d skipped_granules=%d", rowsProcessed, rowMaterializations, q.BytesRead, q.MetadataHits, q.ScheduledGranules, q.SkippedGranules)
 }
 
 func populateColumnStoreThroughputInterpretations(queries []columnStoreQueryMetric) {
