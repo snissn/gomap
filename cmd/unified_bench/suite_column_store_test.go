@@ -443,6 +443,16 @@ func TestColumnStoreSuiteThroughputInterpretationM14C(t *testing.T) {
 			want: []string{"physical serial scan", "TCPA decode", "aggregation", "memory-bandwidth", "mark-pruning not active", "observed rows_processed=1024", "scheduled_granules=2"},
 		},
 		{
+			name: "missing source row count falls back to processed rows",
+			q: columnStoreQueryMetric{
+				Name:                columnStoreQueryQ3,
+				PlanLabel:           columnStorePathSerialColumnScan,
+				RowsProcessed:       1024,
+				RowMaterializations: 0,
+			},
+			want: []string{"physical serial scan", "row_materializations=0/1024"},
+		},
+		{
 			name: "scan backed aggregate fallback",
 			q: columnStoreQueryMetric{
 				Name:                columnStoreQueryQ5Metadata,
@@ -557,6 +567,11 @@ func TestColumnStoreSuiteMarkdownRendersThroughputInterpretationM14C(t *testing.
 				Name:      "q_empty_interpretation",
 				PlanLabel: columnStorePathSerialColumnScan,
 			},
+			{
+				Name:                     "-",
+				PlanLabel:                "-",
+				ThroughputInterpretation: "-",
+			},
 		},
 		Parity: map[string]columnStoreParity{
 			columnStoreQueryQ1:         {Pass: true},
@@ -574,7 +589,8 @@ func TestColumnStoreSuiteMarkdownRendersThroughputInterpretationM14C(t *testing.
 		"``plan\\|pipe`tick``",
 		"``note\\|pipe`tick``",
 		"line1 line2\\|pipe",
-		"| `q_empty_interpretation` | `serial_column_scan` | - |",
+		"| `q_empty_interpretation` | `serial_column_scan` | (empty) |",
+		"| `-` | `-` | - |",
 	} {
 		if !strings.Contains(md, want) {
 			t.Fatalf("markdown missing %q:\n%s", want, md)
