@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"math/bits"
 	"os"
 	"path/filepath"
 	"sort"
@@ -716,12 +717,7 @@ func columnAssetReachabilitySourcesForMaskWithUnknown(mask columnAssetReachabili
 }
 
 func columnAssetReachabilitySourceMaskCount(mask columnAssetReachabilitySourceMask) int {
-	count := 0
-	for mask != 0 {
-		count++
-		mask &= mask - 1
-	}
-	return count
+	return bits.OnesCount64(uint64(mask))
 }
 
 func listColumnAssetReachabilitySegments(ctx context.Context, segmentDir string) ([]columnAssetReachabilitySegment, error) {
