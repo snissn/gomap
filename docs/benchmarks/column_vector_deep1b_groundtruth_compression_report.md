@@ -117,13 +117,22 @@ That matches the Deep1B groundtruth result. Rank64 local PCA is too noisy for
 final top10 ordering because score margins are tiny, but it is interesting if it
 keeps the exact winners inside a rerankable shortlist.
 
+The dimensionality-reduction literature also gives a useful vocabulary for this
+TreeDB design choice: a compressed representation can be an in-place replacement
+for the stored vector, or it can be an out-of-place acceleration layer that only
+generates candidates before a higher-fidelity rerank. The current Deep1B result
+supports the second interpretation. Local PCA is a baseline acceleration layer,
+not a validated final-ranking representation.
+
 | Principle | Representative literature | TreeDB consequence |
 | --- | --- | --- |
+| Dimensionality reduction is a baseline, not the objective | ANN dimensionality-reduction surveys separate in-place transforms from out-of-place acceleration and compare PCA with vector-quantization and learned methods | Treat local PCA as one candidate-generation lane. Promote it only through shortlist containment and rerank quality. |
 | Candidate generation and rerank is the default shape | Faiss `IndexRefine` explicitly combines a fast inaccurate index with a slower accurate shortlist search and treats recall at the shortlist size as the first-stage metric | Promote compressed lanes by `exact top10 in approx@50/@100`, not by final compressed top10 order alone. |
 | Same-byte baselines are mandatory | PQ is the classic compact-code baseline; OPQ improves it by optimizing both the space decomposition and codebooks | Compare local PCA rank32/rank48/rank64 against PQ/OPQ 32/48/64 byte codes. Do not compare only against fp32. |
 | Granules should encode residuals, not raw global vectors | LOPQ learns local product quantizers per coarse cell because residuals inside a cell are more unimodal than the original distribution | Test `granule centroid + residual encoder + compressed scan + exact rerank` as the main granule-native path. |
 | Score-aware losses matter | ScaNN/AVQ, QUIP, NEQ, and query-aware quantization all move from reconstruction error toward inner-product or query-weighted error | Add score-error and margin-normalized diagnostics; later train projections/codebooks against score error or query logs. |
 | Low-rank projection can be search-aware | LeanVec and LoRANN/RRR treat dimensionality reduction or low-rank factors as score-computation tools, not only reconstruction tools | Keep PCA as baseline, then test score-aware local projections such as pairwise-difference PCA, boundary-weighted PCA, or reduced-rank score approximation. |
+| Supervised proximity objectives support boundary-aware projections | Metric learning and learning-to-hash methods train low-dimensional or compact representations to preserve task-specific proximity | If query logs, labels, or groundtruth pairs are available, add weighted PCA, pairwise-difference PCA, or local metric-learning projections as research lanes. |
 | CPU-friendly scalar/low-build codecs are serious challengers | LVQ/SVS, RaBitQ, and TurboQuant target fast compressed scoring with less or no heavy codebook training | Add them as engineering challengers after the PQ/OPQ baseline, especially if training cost or graph random access dominates. |
 | Neural and model-side compression are later tracks | QINCo/QINCo2 are promising learned residual compressors; Matryoshka is a model-side prefix-training strategy | Treat QINCo as a research ceiling and Matryoshka as relevant only when TreeDB owns or can choose the embedding model. |
 
@@ -135,6 +144,11 @@ For Deep1B `D=96`, the first same-byte tournament should be:
 | `48 B/vector` | local PCA `K=48` int8 | PQ/OPQ 48-byte code, e.g. `M=48`, 8-bit subcodes | - |
 | `64 B/vector` | local PCA `K=64` int8 | compatible 64-byte PQ/OPQ/residual-code layout | rank64 plus residual correction |
 | `96 B/vector` | full-rank local coordinates | full int8/SQ8 | current robust compressed candidate lane |
+
+For standard PQ, the subquantizer count must be compatible with `D=96` unless
+the implementation uses OPQ/projection, uneven groups, residual/additive codes,
+or another layout that permits the byte budget directly. The important benchmark
+rule is same-byte comparison, not a specific `M` spelling.
 
 The most product-useful output is inverted from a normal compression table:
 
@@ -203,6 +217,37 @@ Suggested gates before a compressed lane can be called promising:
 | Margin diagnosis | Always report score error versus top-k boundary gaps |
 | Adaptive policy | Report p50/p90/worst minimum bytes or rank needed to clear each gate |
 
+## Concrete Research Tracks
+
+Track A is the minimum-rank quality-gate run. For queries `0..100`, evaluate
+ranks `8,16,24,32,40,48,56,64,80,96` and report the minimum rank/bytes needed
+for each gate:
+
+```text
+exact top10 in approx@50 = 10/10
+exact top10 in approx@100 = 10/10
+exact top20 in approx@100 >= 19/20
+```
+
+The output should be p50, p90, and worst-query `K_min`, plus the corresponding
+metadata-amortized bytes/vector.
+
+Track B is the same-byte PQ/OPQ tournament. Compare local PCA `K=32/48/64`
+against PQ/OPQ/residual-code layouts at the same byte budgets using the same
+candidate-recall gates and exact rerank.
+
+Track C is the granule-local residual encoding tournament. For each buildable
+granule or cell:
+
+```text
+centroid
+residuals = x - centroid
+encode residuals with PCA K, PQ, OPQ/PQ, and PCA + residual correction
+```
+
+This is the closest TreeDB-native version of the LOPQ/RVQ lesson: compress the
+local residual after the coarse locality unit, not the raw global vector.
+
 ## Recommended Next Work
 
 1. Expand the groundtruth run from queries `0..4` to at least 100 queries and
@@ -223,14 +268,20 @@ Suggested gates before a compressed lane can be called promising:
 
 ## Reading List
 
+- ANN dimensionality-reduction survey: https://arxiv.org/html/2403.13491v2
 - Faiss overview and `IndexRefine`: https://arxiv.org/html/2401.08281v4
+- Product Quantization: https://inria.hal.science/inria-00514462/document
 - OPQ: https://www.microsoft.com/en-us/research/publication/optimized-product-quantization-for-approximate-nearest-neighbor-search/
 - LOPQ: https://openaccess.thecvf.com/content_cvpr_2014/papers/Kalantidis_Locally_Optimized_Product_2014_CVPR_paper.pdf
+- Residual Vector Quantization: https://pmc.ncbi.nlm.nih.gov/articles/PMC3231071/
+- Google ScaNN overview: https://research.google/blog/announcing-scann-efficient-vector-similarity-search/
 - ScaNN/AVQ: https://proceedings.mlr.press/v119/guo20h.html
 - Query-aware quantization: https://ojs.aaai.org/index.php/AAAI/article/view/25613/25385
 - NEQ: https://ojs.aaai.org/index.php/AAAI/article/view/5333
 - LeanVec: https://arxiv.org/html/2312.16335v2
 - LoRANN/RRR: https://proceedings.neurips.cc/paper_files/paper/2024/hash/b939da3932e88ded5e9b08026e35069d-Abstract-Conference.html
+- Learning to Hash survey: https://arxiv.org/abs/1509.05472
+- Metric Learning survey: https://www.emerald.com/ftmal/article/5/4/287/1331280/Metric-Learning-A-Survey
 - LVQ/SVS: https://www.vldb.org/pvldb/vol16/p3433-aguerrebere.pdf
 - RaBitQ: https://arxiv.org/abs/2405.12497
 - TurboQuant: https://arxiv.org/abs/2504.19874

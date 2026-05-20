@@ -730,6 +730,9 @@ benchmark path:
 
 - Use candidate-recall gates as the promotion target: `exact top10 in
   approx@50/@100`, then exact rerank, rather than compressed top10 order alone.
+- Treat dimensionality reduction as an out-of-place acceleration layer unless it
+  proves final-ranking quality. Local PCA is a baseline candidate generator, not
+  the objective.
 - Add same-byte PQ/OPQ baselines for Deep1B `D=96`: local PCA `K=32/48/64`
   should compete against 32/48/64-byte PQ/OPQ codes, not just against fp32.
 - Prioritize granule-local residual encoders: `centroid + residual code +
@@ -738,6 +741,10 @@ benchmark path:
 - Add score-aware paths after the first baseline frontier: pairwise-difference
   PCA, boundary-weighted PCA, reduced-rank score approximation, and later
   ScaNN/AVQ or query-aware quantization when representative queries exist.
+- Separate true-neighborhood probes from production-buildable granules:
+  official top100 clouds are an upper-bound locality test, while IVF/k-means,
+  graph-neighborhood, visited-set, and actual stored granules need their own
+  candidate-recall rows.
 - Treat LVQ/SVS, RaBitQ, and TurboQuant as CPU-friendly or low-build
   challengers; treat QINCo/QINCo2 and Matryoshka as later research/model-owned
   tracks.
