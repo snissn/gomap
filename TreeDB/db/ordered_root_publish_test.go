@@ -512,16 +512,18 @@ func TestPublishOrderedRootDeltaGroupMaintenancePreLockFailuresCloseIterators(t 
 		return nil, nil
 	}
 	tests := []struct {
-		name    string
-		db      *DB
-		builder OrderedRootGroupSystemBuilder
-		wantErr error
+		name      string
+		db        *DB
+		builder   OrderedRootGroupSystemBuilder
+		wantErr   error
+		wantCause error
 	}{
 		{
-			name:    "nil builder",
-			db:      &DB{},
-			builder: nil,
-			wantErr: ErrStorageMaintenancePublishPreApplyFailed,
+			name:      "nil builder",
+			db:        &DB{},
+			builder:   nil,
+			wantErr:   ErrStorageMaintenancePublishPreApplyFailed,
+			wantCause: ErrStorageMaintenanceSystemBuilderMissing,
 		},
 		{
 			name:    "nil db",
@@ -550,6 +552,9 @@ func TestPublishOrderedRootDeltaGroupMaintenancePreLockFailuresCloseIterators(t 
 			)
 			if !errors.Is(err, tt.wantErr) {
 				t.Fatalf("maintenance publish error=%v want %v", err, tt.wantErr)
+			}
+			if tt.wantCause != nil && !errors.Is(err, tt.wantCause) {
+				t.Fatalf("maintenance publish error=%v want cause %v", err, tt.wantCause)
 			}
 			if !errors.Is(err, ErrStorageMaintenancePublishPreApplyFailed) {
 				t.Fatalf("maintenance publish error=%v want ErrStorageMaintenancePublishPreApplyFailed", err)

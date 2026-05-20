@@ -53,6 +53,10 @@ var ErrStorageMaintenanceRootDeltaEmpty = errors.New("treedb: storage-maintenanc
 // whose marked root delta has no iterator to apply.
 var ErrStorageMaintenanceRootDeltaIteratorMissing = errors.New("treedb: storage-maintenance publish requires every maintenance root delta to include an iterator")
 
+// ErrStorageMaintenanceSystemBuilderMissing reports a maintenance publish with
+// no system-root delta builder to atomically publish rewritten root IDs.
+var ErrStorageMaintenanceSystemBuilderMissing = errors.New("treedb: storage-maintenance publish requires a system-delta builder")
+
 // ErrStorageMaintenancePublishPreApplyFailed marks a storage-maintenance
 // publish failure that happened before any root or system-root delta was
 // applied. Maintenance callers may use this to clean newly copied physical
@@ -1430,7 +1434,7 @@ func (db *DB) PublishOrderedRootDeltaGroupWithPreflightAndSystemDeltaBuilder(ord
 func (db *DB) PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(plan StorageMaintenancePlan, ordered []StorageMaintenanceRootDeltaPublishInput, preflight OrderedRootGroupPreflight, buildSystemDeltaIter OrderedRootGroupSystemBuilder) (uint64, []uint64, error) {
 	if buildSystemDeltaIter == nil {
 		closeStorageMaintenanceRootDeltaPublishIterators(ordered)
-		return 0, nil, storageMaintenancePreApplyError(errors.New("nil ordered root group system delta builder"))
+		return 0, nil, storageMaintenancePreApplyError(ErrStorageMaintenanceSystemBuilderMissing)
 	}
 	if db == nil {
 		closeStorageMaintenanceRootDeltaPublishIterators(ordered)
@@ -1452,23 +1456,23 @@ func (db *DB) PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBui
 }
 
 func validateStorageMaintenanceOrderedRootDeltaInputs(plan StorageMaintenancePlan, ordered []OrderedRootDeltaPublishInput) error {
-	if err := validateStorageMaintenanceRootDeltaCount(plan, len(ordered)); err != nil {
-		return err
-	}
-	for idx := range ordered {
-		if ordered[idx].Iter == nil {
-			return fmt.Errorf("%w: ordered input %d", ErrStorageMaintenanceRootDeltaIteratorMissing, idx)
-		}
-	}
-	return nil
+	return validateStorageMaintenanceRootDeltaInputs(plan, len(ordered), func(idx int) bool {
+		return ordered[idx].Iter != nil
+	})
 }
 
 func validateStorageMaintenanceRootDeltaPublishInputs(plan StorageMaintenancePlan, ordered []StorageMaintenanceRootDeltaPublishInput) error {
-	if err := validateStorageMaintenanceRootDeltaCount(plan, len(ordered)); err != nil {
+	return validateStorageMaintenanceRootDeltaInputs(plan, len(ordered), func(idx int) bool {
+		return ordered[idx].Iter != nil
+	})
+}
+
+func validateStorageMaintenanceRootDeltaInputs(plan StorageMaintenancePlan, rootDeltaCount int, hasIterator func(int) bool) error {
+	if err := validateStorageMaintenanceRootDeltaCount(plan, rootDeltaCount); err != nil {
 		return err
 	}
-	for idx := range ordered {
-		if ordered[idx].Iter == nil {
+	for idx := 0; idx < rootDeltaCount; idx++ {
+		if !hasIterator(idx) {
 			return fmt.Errorf("%w: ordered input %d", ErrStorageMaintenanceRootDeltaIteratorMissing, idx)
 		}
 	}
