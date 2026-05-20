@@ -19,8 +19,10 @@ func TestColumnVectorGraphDeep1BBuildableGranuleScout(t *testing.T) {
 	baseRows := columnVectorGraphDeep1BEnvInt(t, "COLUMN_VECTOR_DEEP1B_BUILDABLE_BASE_ROWS", 100_000)
 	granuleRows := columnVectorGraphDeep1BEnvInt(t, "COLUMN_VECTOR_DEEP1B_BUILDABLE_GRANULE_ROWS", 8192)
 	builder := columnVectorGraphDeep1BEnvString("COLUMN_VECTOR_DEEP1B_BUILDABLE_BUILDER", "row_id_contiguous")
+	selection := columnVectorGraphDeep1BEnvString("COLUMN_VECTOR_DEEP1B_BUILDABLE_SELECTION", "centroid_blocks")
 	kmeansIters := columnVectorGraphDeep1BEnvInt(t, "COLUMN_VECTOR_DEEP1B_BUILDABLE_KMEANS_ITERS", 8)
 	graphDegree := columnVectorGraphDeep1BEnvInt(t, "COLUMN_VECTOR_DEEP1B_BUILDABLE_GRAPH_DEGREE", 16)
+	graphEntryClusters := columnVectorGraphDeep1BEnvInt(t, "COLUMN_VECTOR_DEEP1B_BUILDABLE_GRAPH_ENTRY_CLUSTERS", 4)
 	topGranulesList := columnVectorGraphDeep1BEnvIntList(t, "COLUMN_VECTOR_DEEP1B_BUILDABLE_TOP_GRANULES", []int{1, 4})
 	ranks := columnVectorGraphDeep1BEnvIntList(t, "COLUMN_VECTOR_DEEP1B_BUILDABLE_PCA_RANKS", []int{32, 48, 64, 80, columnVectorGraphDeep1BDims})
 	pqBytes := columnVectorGraphDeep1BEnvIntList(t, "COLUMN_VECTOR_DEEP1B_BUILDABLE_PQ_BYTES", nil)
@@ -40,6 +42,15 @@ func TestColumnVectorGraphDeep1BBuildableGranuleScout(t *testing.T) {
 	}
 	if graphDegree <= 0 {
 		t.Fatalf("COLUMN_VECTOR_DEEP1B_BUILDABLE_GRAPH_DEGREE=%d must be positive", graphDegree)
+	}
+	if graphEntryClusters <= 0 {
+		t.Fatalf("COLUMN_VECTOR_DEEP1B_BUILDABLE_GRAPH_ENTRY_CLUSTERS=%d must be positive", graphEntryClusters)
+	}
+	if selection != "centroid_blocks" && selection != "graph_visited_blocks" {
+		t.Fatalf("unknown COLUMN_VECTOR_DEEP1B_BUILDABLE_SELECTION=%q; supported: centroid_blocks, graph_visited_blocks", selection)
+	}
+	if selection == "graph_visited_blocks" && builder != "ivf_graph_sorted_blocks" {
+		t.Fatalf("COLUMN_VECTOR_DEEP1B_BUILDABLE_SELECTION=graph_visited_blocks currently requires COLUMN_VECTOR_DEEP1B_BUILDABLE_BUILDER=ivf_graph_sorted_blocks")
 	}
 	codebookEnabled := len(pqBytes) > 0 || len(opqBytes) > 0 || len(residualPQBytes) > 0
 	if codebookEnabled {
@@ -105,6 +116,11 @@ func TestColumnVectorGraphDeep1BBuildableGranuleScout(t *testing.T) {
 	if len(granules) == 0 {
 		t.Fatalf("no granules for builder=%s baseRows=%d granuleRows=%d", builder, baseRows, granuleRows)
 	}
+	var graphRouting columnVectorGraphDeep1BGraphBlockRoutingIndex
+	if selection == "graph_visited_blocks" {
+		graphRouting = columnVectorGraphDeep1BBuildIVFGraphBlockRoutingIndex(t, vectors, invNorms, granules, baseRows, columnVectorGraphDeep1BDims, granuleRows, kmeansIters, graphDegree)
+		builderNotes += "; selection=graph_visited_blocks uses a query-time greedy expansion over the same query-independent IVF-window row graph, then expands visited rows to their sealed graph-sorted storage blocks"
+	}
 	reportGraphDegree := 0
 	if builder == "ivf_graph_neighborhood_blocks" || builder == "ivf_graph_sorted_blocks" {
 		reportGraphDegree = graphDegree
@@ -128,10 +144,12 @@ func TestColumnVectorGraphDeep1BBuildableGranuleScout(t *testing.T) {
 		EvalRowOffset:           evalOffset,
 		Dims:                    columnVectorGraphDeep1BDims,
 		Builder:                 builder,
+		Selection:               selection,
 		GranuleRows:             granuleRows,
 		GranuleCount:            len(granules),
 		KMeansIters:             kmeansIters,
 		GraphDegree:             reportGraphDegree,
+		GraphEntryClusters:      graphEntryClusters,
 		PQBytes:                 append([]int(nil), pqBytes...),
 		ResidualPQBytes:         append([]int(nil), residualPQBytes...),
 		OPQBytes:                append([]int(nil), opqBytes...),
@@ -166,6 +184,10 @@ func TestColumnVectorGraphDeep1BBuildableGranuleScout(t *testing.T) {
 				t.Fatalf("topGranules=%d must be positive", topGranules)
 			}
 			selected := columnVectorGraphDeep1BSelectGranules(granules, granuleOrder, topGranules)
+			if selection == "graph_visited_blocks" {
+				selected = columnVectorGraphDeep1BSelectGraphVisitedBlocks(query, queryInvNorm, vectors, invNorms, granules, graphRouting, topGranules, graphEntryClusters, columnVectorGraphDeep1BDims)
+				selected = columnVectorGraphDeep1BSelectedWithSelectionBuilder(selected, selection)
+			}
 			queryReport := columnVectorGraphDeep1BAnalyzeBuildableGranuleSelection(t, vectors, invNorms, query, queryInvNorm, globalScores, globalTopRows, selected, queryIndex, topGranules, ranks, codebookModels, localResidualPQModels, localOPQModels, scanIters)
 			report.Queries = append(report.Queries, queryReport)
 		}
@@ -188,10 +210,12 @@ type columnVectorGraphDeep1BBuildableGranuleScoutReport struct {
 	EvalRowOffset           int                                                  `json:"eval_row_offset,omitempty"`
 	Dims                    int                                                  `json:"dims"`
 	Builder                 string                                               `json:"builder"`
+	Selection               string                                               `json:"selection"`
 	GranuleRows             int                                                  `json:"granule_rows"`
 	GranuleCount            int                                                  `json:"granule_count"`
 	KMeansIters             int                                                  `json:"kmeans_iters,omitempty"`
 	GraphDegree             int                                                  `json:"graph_degree,omitempty"`
+	GraphEntryClusters      int                                                  `json:"graph_entry_clusters,omitempty"`
 	PQBytes                 []int                                                `json:"pq_bytes,omitempty"`
 	ResidualPQBytes         []int                                                `json:"residual_pq_bytes,omitempty"`
 	OPQBytes                []int                                                `json:"opq_bytes,omitempty"`
@@ -824,6 +848,182 @@ func columnVectorGraphDeep1BSelectGranules(granules []columnVectorGraphDeep1BBui
 	return selected
 }
 
+type columnVectorGraphDeep1BGraphBlockRoutingIndex struct {
+	centroids        []float32
+	centroidInvNorms []float32
+	clusterEntryRows []int
+	adjacency        [][]int
+	rowToGranule     []int
+}
+
+func columnVectorGraphDeep1BBuildIVFGraphBlockRoutingIndex(tb testing.TB, vectors []float32, invNorms []float32, granules []columnVectorGraphDeep1BBuildableGranule, rows int, dims int, targetRows int, iterations int, graphDegree int) columnVectorGraphDeep1BGraphBlockRoutingIndex {
+	tb.Helper()
+	centroids, assignments, clusterCount := columnVectorGraphDeep1BFitIVFKMeansAssignments(vectors, invNorms, rows, dims, targetRows, iterations)
+	centroidInvNorms := columnVectorGraphDeep1BCentroidInvNorms(centroids, dims)
+	order := columnVectorGraphDeep1BIVFSortedRows(vectors, invNorms, centroids, centroidInvNorms, assignments, rows, dims)
+	adjacency := columnVectorGraphDeep1BBuildIVFWindowGraph(vectors, invNorms, order, rows, dims, graphDegree)
+	clusterEntryRows := make([]int, clusterCount)
+	for i := range clusterEntryRows {
+		clusterEntryRows[i] = -1
+	}
+	for _, row := range order {
+		if clusterEntryRows[row.cluster] < 0 {
+			clusterEntryRows[row.cluster] = row.row
+		}
+	}
+	rowToGranule := make([]int, rows)
+	for i := range rowToGranule {
+		rowToGranule[i] = -1
+	}
+	for granuleIndex, granule := range granules {
+		for _, row := range granule.RowIDs {
+			if row < 0 || row >= rows {
+				tb.Fatalf("granule=%d row=%d outside rows=%d", granule.Ordinal, row, rows)
+			}
+			rowToGranule[row] = granuleIndex
+		}
+	}
+	for row, granuleIndex := range rowToGranule {
+		if granuleIndex < 0 {
+			tb.Fatalf("row=%d is not assigned to a graph-routed storage block", row)
+		}
+	}
+	return columnVectorGraphDeep1BGraphBlockRoutingIndex{
+		centroids:        centroids,
+		centroidInvNorms: centroidInvNorms,
+		clusterEntryRows: clusterEntryRows,
+		adjacency:        adjacency,
+		rowToGranule:     rowToGranule,
+	}
+}
+
+func columnVectorGraphDeep1BSelectGraphVisitedBlocks(query []float32, queryInvNorm float32, vectors []float32, invNorms []float32, granules []columnVectorGraphDeep1BBuildableGranule, routing columnVectorGraphDeep1BGraphBlockRoutingIndex, topGranules int, entryClusters int, dims int) []columnVectorGraphDeep1BBuildableGranule {
+	topGranules = min(topGranules, len(granules))
+	if topGranules <= 0 {
+		return nil
+	}
+	centroidOrder := columnVectorGraphDeep1BRankRawCentroidsByQuery(query, queryInvNorm, routing.centroids, routing.centroidInvNorms, dims)
+	entryClusters = min(entryClusters, len(centroidOrder))
+	expanded := make([]bool, len(routing.adjacency))
+	queued := make([]bool, len(routing.adjacency))
+	candidates := make([]columnVectorGraphDeep1BGraphVisitCandidate, 0, entryClusters*max(1, len(routing.adjacency[0])+1))
+	for _, cluster := range centroidOrder[:entryClusters] {
+		if cluster < 0 || cluster >= len(routing.clusterEntryRows) {
+			continue
+		}
+		row := routing.clusterEntryRows[cluster]
+		if row < 0 || row >= len(routing.adjacency) || queued[row] {
+			continue
+		}
+		queued[row] = true
+		candidates = append(candidates, columnVectorGraphDeep1BGraphVisitCandidate{
+			row:   row,
+			score: columnVectorGraphDeep1BScoreRow(query, queryInvNorm, vectors, invNorms, row, dims),
+		})
+	}
+	selectedOrdinals := make([]int, 0, topGranules)
+	selectedSet := make(map[int]struct{}, topGranules)
+	for len(selectedOrdinals) < topGranules {
+		best := -1
+		for i, candidate := range candidates {
+			if expanded[candidate.row] {
+				continue
+			}
+			if best < 0 || candidate.score > candidates[best].score || (candidate.score == candidates[best].score && candidate.row < candidates[best].row) {
+				best = i
+			}
+		}
+		if best < 0 {
+			break
+		}
+		row := candidates[best].row
+		expanded[row] = true
+		if granuleIndex := routing.rowToGranule[row]; granuleIndex >= 0 {
+			if _, ok := selectedSet[granuleIndex]; !ok {
+				selectedSet[granuleIndex] = struct{}{}
+				selectedOrdinals = append(selectedOrdinals, granuleIndex)
+			}
+		}
+		for _, neighbor := range routing.adjacency[row] {
+			if neighbor < 0 || neighbor >= len(routing.adjacency) || expanded[neighbor] || queued[neighbor] {
+				continue
+			}
+			queued[neighbor] = true
+			candidates = append(candidates, columnVectorGraphDeep1BGraphVisitCandidate{
+				row:   neighbor,
+				score: columnVectorGraphDeep1BScoreRow(query, queryInvNorm, vectors, invNorms, neighbor, dims),
+			})
+		}
+	}
+	if len(selectedOrdinals) < topGranules {
+		blockOrder := columnVectorGraphDeep1BRankGranulesByCentroid(query, queryInvNorm, granules, dims)
+		for _, granuleIndex := range blockOrder {
+			if _, ok := selectedSet[granuleIndex]; ok {
+				continue
+			}
+			selectedSet[granuleIndex] = struct{}{}
+			selectedOrdinals = append(selectedOrdinals, granuleIndex)
+			if len(selectedOrdinals) >= topGranules {
+				break
+			}
+		}
+	}
+	selected := make([]columnVectorGraphDeep1BBuildableGranule, 0, len(selectedOrdinals))
+	for _, granuleIndex := range selectedOrdinals {
+		selected = append(selected, granules[granuleIndex])
+	}
+	return selected
+}
+
+type columnVectorGraphDeep1BGraphVisitCandidate struct {
+	row   int
+	score float32
+}
+
+func columnVectorGraphDeep1BRankRawCentroidsByQuery(query []float32, queryInvNorm float32, centroids []float32, centroidInvNorms []float32, dims int) []int {
+	clusterCount := len(centroidInvNorms)
+	order := make([]int, clusterCount)
+	scores := make([]float32, clusterCount)
+	for cluster := 0; cluster < clusterCount; cluster++ {
+		order[cluster] = cluster
+		centroid := centroids[cluster*dims : (cluster+1)*dims]
+		var dot float32
+		for j := 0; j < dims; j++ {
+			dot += query[j] * centroid[j]
+		}
+		scores[cluster] = dot * queryInvNorm * centroidInvNorms[cluster]
+	}
+	sort.Slice(order, func(i, j int) bool {
+		left := order[i]
+		right := order[j]
+		if scores[left] == scores[right] {
+			return left < right
+		}
+		return scores[left] > scores[right]
+	})
+	return order
+}
+
+func columnVectorGraphDeep1BScoreRow(query []float32, queryInvNorm float32, vectors []float32, invNorms []float32, row int, dims int) float32 {
+	vector := vectors[row*dims : (row+1)*dims]
+	var dot float32
+	for j := 0; j < dims; j++ {
+		dot += query[j] * vector[j]
+	}
+	return dot * queryInvNorm * invNorms[row]
+}
+
+func columnVectorGraphDeep1BSelectedWithSelectionBuilder(selected []columnVectorGraphDeep1BBuildableGranule, selection string) []columnVectorGraphDeep1BBuildableGranule {
+	if selection == "centroid_blocks" {
+		return selected
+	}
+	out := append([]columnVectorGraphDeep1BBuildableGranule(nil), selected...)
+	for i := range out {
+		out[i].Builder = out[i].Builder + "_" + selection
+	}
+	return out
+}
+
 func columnVectorGraphDeep1BAnalyzeBuildableGranuleSelection(tb testing.TB, vectors []float32, invNorms []float32, query []float32, queryInvNorm float32, globalScores []float32, globalTopRows []int, selected []columnVectorGraphDeep1BBuildableGranule, queryIndex int, topGranules int, ranks []int, pqModels []columnVectorGraphDeep1BPQModel, localResidualPQModels columnVectorGraphDeep1BLocalResidualPQModels, localOPQModels columnVectorGraphDeep1BLocalResidualPQModels, scanIters int) columnVectorGraphDeep1BBuildableGranuleQueryReport {
 	tb.Helper()
 	dims := columnVectorGraphDeep1BDims
@@ -1161,11 +1361,15 @@ func columnVectorGraphDeep1BRenderBuildableGranuleScoutMarkdown(report columnVec
 	fmt.Fprintf(&b, "- Dims: `%d`\n", report.Dims)
 	fmt.Fprintf(&b, "- Granule rows: `%d`\n", report.GranuleRows)
 	fmt.Fprintf(&b, "- Granules: `%d`\n", report.GranuleCount)
+	fmt.Fprintf(&b, "- Selection: `%s`\n", report.Selection)
 	if report.Builder == "ivf_kmeans" || report.Builder == "ivf_kmeans_sorted_blocks" || report.Builder == "ivf_graph_neighborhood_blocks" || report.Builder == "ivf_graph_sorted_blocks" {
 		fmt.Fprintf(&b, "- K-means iterations: `%d`\n", report.KMeansIters)
 	}
 	if report.Builder == "ivf_graph_neighborhood_blocks" || report.Builder == "ivf_graph_sorted_blocks" {
 		fmt.Fprintf(&b, "- Graph degree: `%d`\n", report.GraphDegree)
+	}
+	if report.Selection == "graph_visited_blocks" {
+		fmt.Fprintf(&b, "- Graph entry clusters: `%d`\n", report.GraphEntryClusters)
 	}
 	if len(report.PQTraining) > 0 {
 		fmt.Fprintf(&b, "- PQ train rows: `%d`\n", report.PQTrainRows)
@@ -1192,6 +1396,9 @@ func columnVectorGraphDeep1BRenderBuildableGranuleScoutMarkdown(report columnVec
 	}
 	fmt.Fprintf(&b, "- Scan iterations: `%d`\n\n", report.ScanIters)
 	fmt.Fprintf(&b, "%s\n\n", columnVectorGraphDeep1BBuildableBuilderMarkdown(report))
+	if report.Selection == "graph_visited_blocks" {
+		fmt.Fprintf(&b, "Selection mode `graph_visited_blocks` is a query-time graph-routing scout: it starts from static IVF centroid entry rows, greedily expands the query-independent row graph using exact query-to-row scores, then reads the sealed graph-sorted storage blocks containing the visited rows. This is closer to an actual graph visited-set route than centroid-ranked block selection, but it is still not a full production HNSW/TreeDB graph implementation.\n\n")
+	}
 	if len(report.PQTraining) > 0 {
 		fmt.Fprintf(&b, "## PQ/OPQ/Residual-PQ Training\n\n")
 		fmt.Fprintf(&b, "These are global 8-bit PQ-family codebooks trained on held-out base-prefix rows and evaluated on a disjoint eval slice. They are production/buildable codebook lanes, not official top100 oracle fits. Codebook metadata is counted as f16 centroids, f16 residual centroids for residual PQ, and f16 rotation metadata for OPQ, amortized over all eval rows; per-row f16 inverse norms are counted in method metadata.\n\n")
