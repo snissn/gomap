@@ -818,6 +818,9 @@ fixed-block layout makes the storage tradeoff clearer:
   approx@20, approx@50, and approx@100 in the aggregate tables. Those columns
   make the cascade contract explicit: compressed codes generate a shortlist,
   then the full-fidelity lane decides final rank.
+- Buildable aggregate tables also estimate selected-candidate row-code
+  KiB/query and metadata-amortized total KiB/query. This is a storage-footprint
+  estimate for the routed candidate union, not a cache-aware physical I/O model.
 
 ## Concrete Research Tracks
 
@@ -897,7 +900,7 @@ local residual after the coarse locality unit, not the raw global vector.
    PCA plus residual correction if local PCA remains promising.
 4. Extend the cascade benchmark beyond the existing rerank-recall gates:
    compressed scan top50/top100, full-dim int8 rerank, optional exact fp32
-   rerank, plus p50/p95 latency and bytes read/query.
+   rerank, plus p50/p95 latency and cache-aware bytes read/query.
 5. Finish the remaining top100-only probes only if they are still needed for
    method triage: PCA plus tiny residual correction and safe/progressive
    low-rank-plus-tail bounds.

@@ -737,6 +737,7 @@ func columnVectorGraphDeep1BEvaluateBuildableScalarMethod(vectors []float32, inv
 	method.ScanNanosPerVector = scanNanos / float64(totalRows)
 	method.MeanRelativeL2 = meanRelL2 / float64(totalRows)
 	method.MaxRelativeL2 = maxRelL2
+	columnVectorGraphDeep1BSetEstimatedCandidateBytesRead(&method, totalRows)
 	columnVectorGraphDeep1BFillGroundtruthMethodMetrics(&method, exactScores, approxScores, margins)
 	return method
 }
@@ -787,6 +788,7 @@ func columnVectorGraphDeep1BEvaluateBuildablePCAMethod(tb testing.TB, vectors []
 	method.ScanNanosPerVector = scanNanos / float64(totalRows)
 	method.MeanRelativeL2 = meanRelL2 / float64(totalRows)
 	method.MaxRelativeL2 = maxRelL2
+	columnVectorGraphDeep1BSetEstimatedCandidateBytesRead(&method, totalRows)
 	columnVectorGraphDeep1BFillGroundtruthMethodMetrics(&method, exactScores, approxScores, margins)
 	return method
 }
@@ -851,6 +853,7 @@ func columnVectorGraphDeep1BEvaluateBuildableLocalCodebookMethod(tb testing.TB, 
 	method.ScanNanosPerVector = scanNanos / float64(totalRows)
 	method.MeanRelativeL2 = meanRelL2 / float64(totalRows)
 	method.MaxRelativeL2 = maxRelL2
+	columnVectorGraphDeep1BSetEstimatedCandidateBytesRead(&method, totalRows)
 	columnVectorGraphDeep1BFillGroundtruthMethodMetrics(&method, exactScores, approxScores, margins)
 	return method
 }
@@ -1146,6 +1149,8 @@ func columnVectorGraphDeep1BRenderBuildableAggregateMarkdown(b *strings.Builder,
 		metaBytes  float64
 		buildNanos float64
 		scanNanos  float64
+		rowRead    float64
+		totalRead  float64
 		scoreError float64
 		gap10      float64
 		gap20      float64
@@ -1176,6 +1181,8 @@ func columnVectorGraphDeep1BRenderBuildableAggregateMarkdown(b *strings.Builder,
 			agg.metaBytes += method.MetadataBytesPerVector
 			agg.buildNanos += float64(method.BuildNanos)
 			agg.scanNanos += method.ScanNanosPerVector
+			agg.rowRead += method.EstimatedRowCodeBytesPerQuery
+			agg.totalRead += method.EstimatedTotalBytesPerQuery
 			agg.scoreError += method.MeanScoreError
 			agg.gap10 += method.MeanErrorOverGap10
 			agg.gap20 += method.MeanErrorOverGap20
@@ -1202,8 +1209,8 @@ func columnVectorGraphDeep1BRenderBuildableAggregateMarkdown(b *strings.Builder,
 		return left.name < right.name
 	})
 	fmt.Fprintf(b, "\n## Aggregate Conditional Codec Gates\n\n")
-	fmt.Fprintf(b, "| Method | Queries | Row-code B/vector | Metadata B/vector | Avg build ms | p50 compressed top10 | worst compressed top10 | p50 top10@20 | worst top10@20 | p50 top10@50 | worst top10@50 | p50 top10@100 | worst top10@100 | p50 top20@50 | worst top20@50 | p50 top20@100 | worst top20@100 | p50 rerank@20 recall@10 | worst rerank@20 recall@10 | p50 rerank@50 recall@10 | worst rerank@50 recall@10 | p50 rerank@100 recall@10 | worst rerank@100 recall@10 | Avg score err | Avg err/gap10 | Avg err/gap20 | Avg err/gap50 | Avg scan ns/vector |\n")
-	fmt.Fprintf(b, "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
+	fmt.Fprintf(b, "| Method | Queries | Row-code B/vector | Metadata B/vector | Avg row-code KiB/query | Avg total KiB/query | Avg build ms | p50 compressed top10 | worst compressed top10 | p50 top10@20 | worst top10@20 | p50 top10@50 | worst top10@50 | p50 top10@100 | worst top10@100 | p50 top20@50 | worst top20@50 | p50 top20@100 | worst top20@100 | p50 rerank@20 recall@10 | worst rerank@20 recall@10 | p50 rerank@50 recall@10 | worst rerank@50 recall@10 | p50 rerank@100 recall@10 | worst rerank@100 recall@10 | Avg score err | Avg err/gap10 | Avg err/gap20 | Avg err/gap50 | Avg scan ns/vector |\n")
+	fmt.Fprintf(b, "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
 	for _, name := range names {
 		agg := byName[name]
 		sort.Ints(agg.top10)
@@ -1216,11 +1223,13 @@ func columnVectorGraphDeep1BRenderBuildableAggregateMarkdown(b *strings.Builder,
 		sort.Float64s(agg.rerank50)
 		sort.Float64s(agg.rerank100)
 		count := float64(max(1, agg.count))
-		fmt.Fprintf(b, "| `%s` | %d | %.2f | %.2f | %.3f | %d/10 | %d/10 | %d/10 | %d/10 | %d/10 | %d/10 | %d/10 | %d/10 | %d/20 | %d/20 | %d/20 | %d/20 | %.2f | %.2f | %.2f | %.2f | %.2f | %.2f | %.5f | %.2f | %.2f | %.2f | %.2f |\n",
+		fmt.Fprintf(b, "| `%s` | %d | %.2f | %.2f | %.1f | %.1f | %.3f | %d/10 | %d/10 | %d/10 | %d/10 | %d/10 | %d/10 | %d/10 | %d/10 | %d/20 | %d/20 | %d/20 | %d/20 | %.2f | %.2f | %.2f | %.2f | %.2f | %.2f | %.5f | %.2f | %.2f | %.2f | %.2f |\n",
 			agg.name,
 			agg.count,
 			agg.rowBytes/count,
 			agg.metaBytes/count,
+			agg.rowRead/count/1024,
+			agg.totalRead/count/1024,
 			agg.buildNanos/count/1e6,
 			columnVectorGraphDeep1BIntQuantile(agg.top10, 0.50),
 			columnVectorGraphDeep1BIntQuantile(agg.top10, 0),

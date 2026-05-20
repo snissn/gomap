@@ -160,6 +160,9 @@ type columnVectorGraphDeep1BGroundtruthMethodReport struct {
 	MetadataBytesPerVector          float64 `json:"metadata_bytes_per_vector"`
 	TotalBytesPerVector             float64 `json:"total_bytes_per_vector"`
 	MetadataStatus                  string  `json:"metadata_status"`
+	EstimatedRowCodeBytesPerQuery   float64 `json:"estimated_row_code_bytes_per_query,omitempty"`
+	EstimatedTotalBytesPerQuery     float64 `json:"estimated_total_bytes_per_query,omitempty"`
+	EstimatedBytesReadStatus        string  `json:"estimated_bytes_read_status,omitempty"`
 	BuildNanos                      int64   `json:"build_nanos"`
 	ScanNanosPerVector              float64 `json:"scan_nanos_per_vector"`
 	Top10Overlap                    int     `json:"top10_overlap"`
@@ -815,6 +818,16 @@ func columnVectorGraphDeep1BNewCompressionMethodReport(regime string, metadataSt
 		BuildNanos:             buildNanos,
 		Notes:                  notes,
 	}
+}
+
+func columnVectorGraphDeep1BSetEstimatedCandidateBytesRead(method *columnVectorGraphDeep1BGroundtruthMethodReport, candidateRows int) {
+	if candidateRows <= 0 {
+		return
+	}
+	rows := float64(candidateRows)
+	method.EstimatedRowCodeBytesPerQuery = method.RowCodeBytesPerVector * rows
+	method.EstimatedTotalBytesPerQuery = method.TotalBytesPerVector * rows
+	method.EstimatedBytesReadStatus = "selected_candidate_row_codes_plus_metadata_amortized_bytes_not_cache_aware_io"
 }
 
 func columnVectorGraphDeep1BFillGroundtruthMethodMetrics(method *columnVectorGraphDeep1BGroundtruthMethodReport, exact []float32, approximate []float32, margins map[string]float64) {
