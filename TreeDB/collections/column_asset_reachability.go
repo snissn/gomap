@@ -745,6 +745,14 @@ func listColumnAssetReachabilitySegments(ctx context.Context, segmentDir string)
 			continue
 		}
 		path := columnAssetReachabilitySegmentPath(segmentDir, entry.Name())
+		if entry.Type()&os.ModeSymlink != 0 {
+			info, err := os.Lstat(path)
+			if err != nil {
+				return nil, err
+			}
+			segments = append(segments, columnAssetReachabilitySegment{path: path, bytes: info.Size()})
+			continue
+		}
 		info, err := entry.Info()
 		if err != nil {
 			return nil, err
