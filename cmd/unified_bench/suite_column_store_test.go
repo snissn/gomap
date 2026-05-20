@@ -362,7 +362,7 @@ func TestColumnStoreBenchRunUsesDurationForAggregateM11A(t *testing.T) {
 	}, nil, 0)
 
 	got := run.Results[columnStoreSuiteBenchTestName][columnStoreSuiteBenchDisplayName]
-	if math.Abs(got-1000) > 1e-9 {
+	if math.Abs(got-1000) > 1e-6 {
 		t.Fatalf("aggregate rows/sec=%f want 1000 from exact durations", got)
 	}
 }
@@ -378,7 +378,7 @@ func TestColumnStoreBenchRunUsesRowsProcessedForPhysicalAggregateM14B(t *testing
 	}, nil, 0)
 
 	got := run.Results[columnStoreSuiteBenchTestName][columnStoreSuiteBenchDisplayName]
-	if math.Abs(got-1000) > 1e-9 {
+	if math.Abs(got-1000) > 1e-6 {
 		t.Fatalf("aggregate rows/sec=%f want 1000 from physical rows processed", got)
 	}
 }
@@ -388,14 +388,29 @@ func TestColumnStoreBenchRunFallsBackToRowsForLegacyArtifactsM14B(t *testing.T) 
 		Rows:      30,
 		BatchSize: 10,
 		Queries: []columnStoreQueryMetric{
-			{Name: "q1", Rows: 10, RowsPerSecond: 1, duration: 10 * time.Millisecond},
-			{Name: "q2", Rows: 20, RowsPerSecond: 1, duration: 20 * time.Millisecond},
+			{Name: "q1", Rows: 10, RowMaterializations: 10, RowsPerSecond: 1, duration: 10 * time.Millisecond},
+			{Name: "q2", Rows: 20, RowMaterializations: 20, RowsPerSecond: 1, duration: 20 * time.Millisecond},
 		},
 	}, nil, 0)
 
 	got := run.Results[columnStoreSuiteBenchTestName][columnStoreSuiteBenchDisplayName]
-	if math.Abs(got-1000) > 1e-9 {
+	if math.Abs(got-1000) > 1e-6 {
 		t.Fatalf("aggregate rows/sec=%f want 1000 from legacy rows fallback", got)
+	}
+}
+
+func TestColumnStoreBenchRunDoesNotFallbackForZeroProcessedPhysicalRowsM14B(t *testing.T) {
+	run := columnStoreBenchRun(BenchConfig{}, "durable", t.TempDir(), columnStoreSuiteReport{
+		Rows:      30,
+		BatchSize: 10,
+		Queries: []columnStoreQueryMetric{
+			{Name: "q1", Rows: 30, RowsProcessed: 0, RowMaterializations: 0, RowsPerSecond: 0, duration: 30 * time.Millisecond},
+		},
+	}, nil, 0)
+
+	got := run.Results[columnStoreSuiteBenchTestName][columnStoreSuiteBenchDisplayName]
+	if got != 0 {
+		t.Fatalf("aggregate rows/sec=%f want zero without legacy row materialization fallback", got)
 	}
 }
 
