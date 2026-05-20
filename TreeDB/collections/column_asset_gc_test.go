@@ -658,6 +658,20 @@ func TestColumnAssetGCSegmentEligibleRequiresExactCanonicalPathM15B(t *testing.T
 	}
 }
 
+func TestColumnAssetGCSegmentEligibleAcceptsUnreferencedCanonicalSegmentM15B(t *testing.T) {
+	segmentDir := filepath.Join(t.TempDir(), "segments")
+	entry := ColumnAssetReachabilitySegmentEntry{
+		FileID:           9,
+		Path:             filepath.Join(segmentDir, columnAssetSegmentFileName(9)),
+		Bytes:            96,
+		Status:           ColumnAssetReachabilitySegmentReclaimable,
+		ReclaimableBytes: 96,
+	}
+	if !columnAssetGCSegmentEligibleForDelete(segmentDir, entry) {
+		t.Fatalf("unreferenced canonical reclaimable segment was rejected: %+v", entry)
+	}
+}
+
 func TestColumnAssetGCByteAccountingSaturatesM15B(t *testing.T) {
 	stats := ColumnAssetGCStats{BytesRetained: 3}
 	stats.BytesEligible = addColumnAssetReachabilityBytes(math.MaxInt64-1, 2)

@@ -212,7 +212,6 @@ func columnAssetGCSegmentEligibleForDelete(segmentDir string, entry ColumnAssetR
 		entry.FileID == 0 ||
 		entry.Path == "" ||
 		entry.Bytes <= 0 ||
-		entry.RefCount == 0 ||
 		entry.ProtectedBytes != 0 ||
 		entry.UnknownBytes != 0 ||
 		entry.ReclaimableBytes != entry.Bytes {
