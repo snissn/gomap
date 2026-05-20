@@ -903,6 +903,14 @@ func scanColumnPhysicalAssetRowsWithManifestOperation(raw []byte, ref ColumnAsse
 		valueType := cur.stringBytes()
 		nullable := cur.bool()
 		dictionary := cur.bool()
+		vectorDims := 0
+		if version >= columnPhysicalAssetVersionV4 {
+			rawVectorDims := cur.u64()
+			if rawVectorDims > uint64(maxCollectionInt) {
+				return columnPhysicalAssetScanSummary{}, errors.New("column physical asset vector_dims overflows int")
+			}
+			vectorDims = int(rawVectorDims)
+		}
 		if cur.err != nil {
 			return columnPhysicalAssetScanSummary{}, cur.err
 		}
@@ -911,9 +919,10 @@ func scanColumnPhysicalAssetRowsWithManifestOperation(raw []byte, ref ColumnAsse
 			!columnPhysicalBytesEqualString(path, want.Path) ||
 			!columnPhysicalBytesEqualString(valueType, string(want.ValueType)) ||
 			nullable != want.Nullable ||
-			dictionary != want.Dictionary {
-			return columnPhysicalAssetScanSummary{}, fmt.Errorf("column physical asset column[%d]={Name:%q Path:%q ValueType:%q Nullable:%t Dictionary:%t} want %+v",
-				colIdx, string(name), string(path), string(valueType), nullable, dictionary, want)
+			dictionary != want.Dictionary ||
+			vectorDims != want.VectorDims {
+			return columnPhysicalAssetScanSummary{}, fmt.Errorf("column physical asset column[%d]={Name:%q Path:%q ValueType:%q Nullable:%t Dictionary:%t VectorDims:%d} want %+v",
+				colIdx, string(name), string(path), string(valueType), nullable, dictionary, vectorDims, want)
 		}
 	}
 	valuesBuf := projection.values
@@ -1024,7 +1033,7 @@ func scanColumnPhysicalRowValues(cur *manifestCursor, version uint16, cfg *Colum
 			return cur.err
 		}
 		present := true
-		if version >= columnPhysicalAssetVersion {
+		if version >= columnPhysicalAssetVersionV3 {
 			present = cur.bool()
 			if cur.err != nil {
 				return cur.err
@@ -1065,6 +1074,11 @@ func scanColumnPhysicalRowValues(cur *manifestCursor, version uint16, cfg *Colum
 			if selected {
 				rowValues[outputIdx].Int64 = value
 			}
+		case ColumnStoreValueFloat32:
+			value := math.Float32frombits(cur.u32())
+			if selected {
+				rowValues[outputIdx].Float32 = value
+			}
 		case ColumnStoreValueDouble:
 			value := math.Float64frombits(cur.u64())
 			if selected {
@@ -1075,6 +1089,34 @@ func scanColumnPhysicalRowValues(cur *manifestCursor, version uint16, cfg *Colum
 				rowValues[outputIdx].StringBytes = cur.stringBytes()
 			} else {
 				_ = cur.stringBytes()
+			}
+		case ColumnStoreValueFloat32Vector:
+			if selected {
+				value := cur.float32SliceWithExpectedLength(col.VectorDims)
+				if cur.err != nil {
+					return cur.err
+				}
+				rowValues[outputIdx].Float32Vector = value
+			} else {
+				n := cur.skipUint32Slice()
+				if cur.err != nil {
+					return cur.err
+				}
+				if n != uint64(col.VectorDims) {
+					return fmt.Errorf("column[%d] float32_vector length=%d want vector_dims=%d", colIdx, n, col.VectorDims)
+				}
+			}
+		case ColumnStoreValueAdjacencyList:
+			if selected {
+				rowValues[outputIdx].AdjacencyList = cur.uint32Slice()
+				if cur.err != nil {
+					return cur.err
+				}
+			} else {
+				cur.skipUint32Slice()
+				if cur.err != nil {
+					return cur.err
+				}
 			}
 		default:
 			return fmt.Errorf("unsupported column physical value type %q", col.ValueType)
