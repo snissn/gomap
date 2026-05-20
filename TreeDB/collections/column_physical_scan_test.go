@@ -687,6 +687,88 @@ func TestColumnManifestPlannerCapabilitiesRejectPartIDKeyMismatchM14A(t *testing
 	}
 }
 
+func TestColumnManifestPlannerCapabilitiesRejectActivePartCountMismatchM14A(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	cfg, input, manifest, _ := columnManifestPlannerOnePartFixtureM14A(t)
+	headerInput := input
+	extra := input.Prepared.Assets[0]
+	extra.Ref.PartID++
+	headerInput.Prepared.Assets = append(append([]ColumnPreparedAsset(nil), input.Prepared.Assets...), extra)
+	header, err := encodeColumnManifestHeaderRecord(headerInput, manifest.Identity.Generation)
+	if err != nil {
+		t.Fatalf("encode tampered header: %v", err)
+	}
+	tampered := cloneColumnManifestRecords(manifest.Records)
+	replaced := false
+	for i := range tampered {
+		if bytes.Equal(tampered[i].key, columnManifestHeaderRecordKeyBytes) {
+			tampered[i].value = header
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		t.Fatal("manifest header record not found")
+	}
+	tamperedIdentity := manifest.Identity
+	tamperedIdentity.Checksum = checksumColumnManifestRecords(headerInput, tamperedIdentity.Generation, tampered)
+	rootID := publishColumnManifestRecordsForScanTestM13A(t, d, tamperedIdentity, tampered)
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("AcquireSnapshot returned nil")
+	}
+	defer func() { _ = snap.Close() }()
+
+	_, err = loadColumnManifestPlannerCapabilitiesForScan(snap, rootID, *cfg, tamperedIdentity, "events")
+	if err == nil || !strings.Contains(err.Error(), "invalid column manifest part count=1 want 2") {
+		t.Fatalf("loadColumnManifestPlannerCapabilitiesForScan err=%v want active part-count mismatch", err)
+	}
+}
+
+func TestColumnManifestPlannerCapabilitiesRejectChecksumMismatchM14A(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	cfg, _, manifest, asset := columnManifestPlannerOnePartFixtureM14A(t)
+	tampered := cloneColumnManifestRecords(manifest.Records)
+	tamperedAsset := asset
+	tamperedAsset.Ref.Checksum++
+	tamperedValue, err := encodeColumnManifestPartRecord(tamperedAsset)
+	if err != nil {
+		t.Fatalf("encode tampered part: %v", err)
+	}
+	tamperedCount := 0
+	for i := range tampered {
+		if bytes.HasPrefix(tampered[i].key, columnManifestPartRecordPrefixBytes) {
+			tampered[i].value = tamperedValue
+			tamperedCount++
+			break
+		}
+	}
+	if tamperedCount != 1 {
+		t.Fatalf("tampered part records=%d want 1", tamperedCount)
+	}
+	rootID := publishColumnManifestRecordsForScanTestM13A(t, d, manifest.Identity, tampered)
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("AcquireSnapshot returned nil")
+	}
+	defer func() { _ = snap.Close() }()
+
+	_, err = loadColumnManifestPlannerCapabilitiesForScan(snap, rootID, *cfg, manifest.Identity, "events")
+	if err == nil || !strings.Contains(err.Error(), "physical column planner manifest checksum") {
+		t.Fatalf("loadColumnManifestPlannerCapabilitiesForScan err=%v want checksum mismatch", err)
+	}
+}
+
 func TestColumnManifestPlannerCapabilitiesRejectHeaderOperationM14A(t *testing.T) {
 	cfg, err := normalizeColumnStoreConfig("events", testColumnStoreConfig(nil))
 	if err != nil {
@@ -712,6 +794,36 @@ func TestColumnManifestPlannerCapabilitiesRejectHeaderOperationM14A(t *testing.T
 	if err == nil || !strings.Contains(err.Error(), "unsupported column manifest header operation") {
 		t.Fatalf("validateColumnManifestHeaderRecordForScan err=%v want unsupported operation", err)
 	}
+}
+
+func columnManifestPlannerOnePartFixtureM14A(t testing.TB) (*ColumnStoreConfig, ColumnPublishManifestEncodeInput, ColumnPublishManifestEncodeResult, ColumnPreparedAsset) {
+	t.Helper()
+	cfg, err := normalizeColumnStoreConfig("events", testColumnStoreConfig(nil))
+	if err != nil {
+		t.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+	cfg.RecoveryAuthoritativeAppliedCommandLSN = 1
+	asset := testColumnPublishPreparedAssetM10A()
+	asset.Ref.Generation = 1
+	asset.Ref.PartID = 1
+	asset.GenerationID = 1
+	asset.Reason = string(ColumnPublishOperationInsert)
+	input := ColumnPublishManifestEncodeInput{
+		Collection:        "events",
+		ColumnStore:       *cfg,
+		Operation:         ColumnPublishOperationInsert,
+		AppliedCommandLSN: 1,
+		Prepared: ColumnPublishPreparedAssets{
+			Assets:             []ColumnPreparedAsset{asset},
+			RowCount:           1,
+			ColumnPayloadBytes: asset.Bytes,
+		},
+	}
+	manifest, err := encodeColumnManifestForWrite(input)
+	if err != nil {
+		t.Fatalf("encodeColumnManifestForWrite: %v", err)
+	}
+	return cfg, input, manifest, asset
 }
 
 func mustEncodeColumnManifestHeaderRecordForScanTestM14A(t testing.TB, input ColumnPublishManifestEncodeInput) []byte {
