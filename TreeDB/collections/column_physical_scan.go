@@ -38,8 +38,10 @@ type columnPhysicalScanDiagnostics struct {
 	DeletedRows      int
 	ProjectedColumns int
 	// Counts full-document row materialization; M13A emits declared-column row views only.
-	RowMaterializations  int
-	PhysicalBytesScanned int64
+	RowMaterializations     int
+	PhysicalBytesScanned    int64
+	DecodedBlockCacheHits   uint64
+	DecodedBlockCacheMisses uint64
 }
 
 type columnPhysicalScanRowView struct {
@@ -293,6 +295,8 @@ func (c *Collection) scanColumnPhysicalRowsInSnapshotView(
 		diag.ScheduledGranules++
 		ref := assetRef.Ref
 		raw, err := readCache.read(ref, rawScratch)
+		diag.DecodedBlockCacheHits = readCache.hits
+		diag.DecodedBlockCacheMisses = readCache.misses
 		if err != nil {
 			return diag, fmt.Errorf("collections: column physical scan read generation=%d part_id=%d: %w", ref.Generation, ref.PartID, err)
 		}
@@ -309,6 +313,8 @@ func (c *Collection) scanColumnPhysicalRowsInSnapshotView(
 		diag.RowsScanned += summary.rows
 		diag.DeletedRows += summary.deleted
 	}
+	diag.DecodedBlockCacheHits = readCache.hits
+	diag.DecodedBlockCacheMisses = readCache.misses
 	return diag, nil
 }
 
