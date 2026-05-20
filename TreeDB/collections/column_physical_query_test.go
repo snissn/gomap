@@ -496,6 +496,19 @@ func TestColumnStoreRetainedPayloadNoneRejectsCreateIndexOnAnyFieldM13C(t *testi
 	}
 }
 
+func TestColumnStoreRetainedPayloadNoneAllowsIndexWhenColumnStoreDisabledM13C(t *testing.T) {
+	meta := CollectionMeta{
+		Name: "events",
+		Options: CollectionOptions{ColumnStore: &ColumnStoreConfig{
+			RetainedPayload: ColumnRetainedPayloadNone,
+		}},
+	}
+	err := rejectCreateIndexOnRetainedColumnField(meta, IndexDefinition{Name: "payload_idx", Field: "payload", ValueType: IndexValueString})
+	if err != nil {
+		t.Fatalf("disabled column_store CreateIndex rejection err=%v want nil", err)
+	}
+}
+
 func TestColumnStoreRetainedPayloadDisablesDirectBufferedUpdateM13C(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), Durability: backenddb.DurabilityWALOffRelaxed})
 	if err != nil {
