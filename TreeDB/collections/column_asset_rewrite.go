@@ -83,13 +83,15 @@ func (c *Collection) ColumnAssetRewrite(ctx context.Context, opts ColumnAssetRew
 }
 
 func (c *Collection) columnAssetRewrite(ctx context.Context, opts ColumnAssetRewriteOptions) (ColumnAssetRewriteStats, error) {
-	plan, err := c.PlanColumnAssetReachability(ctx, ColumnAssetReachabilityOptions{
-		Detailed:                 true,
-		SegmentDetails:           true,
-		CandidateRefs:            opts.CandidateRefs,
-		PendingRefs:              opts.PendingRefs,
-		PreparedRefs:             opts.PreparedRefs,
-		PinnedRefs:               opts.PinnedRefs,
+	plan, sourceMasks, err := c.planColumnAssetReachability(ctx, columnAssetReachabilityOptionsInternal{
+		ColumnAssetReachabilityOptions: ColumnAssetReachabilityOptions{
+			Detailed:       true,
+			SegmentDetails: true,
+			CandidateRefs:  opts.CandidateRefs,
+			PendingRefs:    opts.PendingRefs,
+			PreparedRefs:   opts.PreparedRefs,
+			PinnedRefs:     opts.PinnedRefs,
+		},
 		omitDetailedEntrySources: true,
 		omitDetailedEntrySort:    true,
 	})
@@ -124,8 +126,8 @@ func (c *Collection) columnAssetRewrite(ctx context.Context, opts ColumnAssetRew
 		stats.Plan = columnAssetRewritePlanForDetail(stats.Plan, opts.Detailed)
 		return stats, err
 	}
-	segments := columnAssetRewriteEligibleSegments(namespace.SegmentDir, plan)
-	refs := columnAssetRewriteEligibleRefs(plan, segments)
+	segments := columnAssetRewriteEligibleSegments(namespace.SegmentDir, plan, sourceMasks)
+	refs := columnAssetRewriteEligibleRefs(plan, sourceMasks, segments)
 	for _, entry := range segments {
 		stats.SegmentsEligible++
 		stats.BytesEligible += entry.ProtectedBytes
@@ -559,7 +561,7 @@ func (c *Collection) buildColumnAssetRewriteSystemDeltaIteratorForMeta(baseMeta,
 	return buildSystemDeltaIterator(updates)
 }
 
-func columnAssetRewriteEligibleSegments(segmentDir string, plan ColumnAssetReachabilityPlan) map[uint32]ColumnAssetReachabilitySegmentEntry {
+func columnAssetRewriteEligibleSegments(segmentDir string, plan ColumnAssetReachabilityPlan, sourceMasks map[ColumnAssetRef]columnAssetReachabilitySourceMask) map[uint32]ColumnAssetReachabilitySegmentEntry {
 	eligible := make(map[uint32]ColumnAssetReachabilitySegmentEntry, plan.Segments.Mixed)
 	for _, entry := range plan.SegmentEntries {
 		if columnAssetRewriteSegmentEligible(segmentDir, entry) {
@@ -573,7 +575,7 @@ func columnAssetRewriteEligibleSegments(segmentDir string, plan ColumnAssetReach
 		if _, ok := eligible[entry.Ref.FileID]; !ok {
 			continue
 		}
-		if columnAssetRewriteRefEntrySourcesIncludeManifest(entry) {
+		if columnAssetRewriteRefEntrySourcesIncludeManifest(entry, sourceMasks[entry.Ref]) {
 			continue
 		}
 		delete(eligible, entry.Ref.FileID)
@@ -581,7 +583,7 @@ func columnAssetRewriteEligibleSegments(segmentDir string, plan ColumnAssetReach
 	return eligible
 }
 
-func columnAssetRewriteEligibleRefs(plan ColumnAssetReachabilityPlan, segments map[uint32]ColumnAssetReachabilitySegmentEntry) []ColumnAssetRef {
+func columnAssetRewriteEligibleRefs(plan ColumnAssetReachabilityPlan, sourceMasks map[ColumnAssetRef]columnAssetReachabilitySourceMask, segments map[uint32]ColumnAssetReachabilitySegmentEntry) []ColumnAssetRef {
 	refs := make([]ColumnAssetRef, 0, len(plan.Entries))
 	for _, entry := range plan.Entries {
 		if entry.Status != ColumnAssetReachabilityProtected {
@@ -590,7 +592,7 @@ func columnAssetRewriteEligibleRefs(plan ColumnAssetReachabilityPlan, segments m
 		if _, ok := segments[entry.Ref.FileID]; !ok {
 			continue
 		}
-		if !columnAssetRewriteRefEntrySourcesIncludeManifest(entry) {
+		if !columnAssetRewriteRefEntrySourcesIncludeManifest(entry, sourceMasks[entry.Ref]) {
 			continue
 		}
 		refs = append(refs, entry.Ref)
@@ -624,9 +626,9 @@ func columnAssetRewriteSourcesIncludeManifest(sources []ColumnAssetReachabilityS
 	return false
 }
 
-func columnAssetRewriteRefEntrySourcesIncludeManifest(entry ColumnAssetReachabilityRefEntry) bool {
-	if entry.sourceMask != 0 {
-		return entry.sourceMask&(columnAssetReachabilitySourceActiveManifestMask|columnAssetReachabilitySourceRecoveryManifestMask) != 0
+func columnAssetRewriteRefEntrySourcesIncludeManifest(entry ColumnAssetReachabilityRefEntry, sourceMask columnAssetReachabilitySourceMask) bool {
+	if sourceMask != 0 {
+		return sourceMask&(columnAssetReachabilitySourceActiveManifestMask|columnAssetReachabilitySourceRecoveryManifestMask) != 0
 	}
 	return columnAssetRewriteSourcesIncludeManifest(entry.Sources)
 }

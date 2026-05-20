@@ -28,7 +28,10 @@ type ColumnAssetReachabilityOptions struct {
 	PendingRefs                           []ColumnAssetRef
 	PreparedRefs                          []ColumnAssetRef
 	PinnedRefs                            []ColumnAssetRef
+}
 
+type columnAssetReachabilityOptionsInternal struct {
+	ColumnAssetReachabilityOptions
 	omitDetailedEntrySources bool
 	omitDetailedEntrySort    bool
 }
@@ -123,8 +126,6 @@ type ColumnAssetReachabilityRefEntry struct {
 	Ref     ColumnAssetRef
 	Status  ColumnAssetReachabilityStatus
 	Sources []ColumnAssetReachabilitySource
-
-	sourceMask columnAssetReachabilitySourceMask
 }
 
 type ColumnAssetReachabilitySegmentEntry struct {
@@ -220,18 +221,25 @@ const columnAssetReachabilityContextCheckInterval = 256
 // plan for the collection's isolated column asset namespace. It never deletes,
 // rewrites, or remaps assets; uncertain or untracked bytes are retained.
 func (c *Collection) PlanColumnAssetReachability(ctx context.Context, opts ColumnAssetReachabilityOptions) (ColumnAssetReachabilityPlan, error) {
+	plan, _, err := c.planColumnAssetReachability(ctx, columnAssetReachabilityOptionsInternal{
+		ColumnAssetReachabilityOptions: opts,
+	})
+	return plan, err
+}
+
+func (c *Collection) planColumnAssetReachability(ctx context.Context, opts columnAssetReachabilityOptionsInternal) (ColumnAssetReachabilityPlan, map[ColumnAssetRef]columnAssetReachabilitySourceMask, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if err := ctx.Err(); err != nil {
-		return ColumnAssetReachabilityPlan{ProtectOnly: true}, err
+		return ColumnAssetReachabilityPlan{ProtectOnly: true}, nil, err
 	}
 	view, closeView, err := c.prepareColumnPhysicalScanSnapshotView()
 	if closeView != nil {
 		defer closeView()
 	}
 	if err != nil {
-		return ColumnAssetReachabilityPlan{ProtectOnly: true}, err
+		return ColumnAssetReachabilityPlan{ProtectOnly: true}, nil, err
 	}
 
 	expectedRefs := len(view.AssetRefs) + len(opts.CandidateRefs) + len(opts.PendingRefs) + len(opts.PreparedRefs) + len(opts.PinnedRefs)
@@ -252,7 +260,7 @@ func (c *Collection) PlanColumnAssetReachability(ctx context.Context, opts Colum
 	}
 	for _, assetRef := range view.AssetRefs {
 		if err := ctx.Err(); err != nil {
-			return columnAssetReachabilityPlanIdentity(input), err
+			return columnAssetReachabilityPlanIdentity(input), input.refs, err
 		}
 		// prepareColumnPhysicalScanSnapshotView already requires the active and
 		// recovery-authoritative manifest identities to match. The same refs are
@@ -266,26 +274,27 @@ func (c *Collection) PlanColumnAssetReachability(ctx context.Context, opts Colum
 		}
 	}
 	if err := input.addRefs(ctx, opts.CandidateRefs, ColumnAssetReachabilitySourceCandidate); err != nil {
-		return columnAssetReachabilityPlanIdentity(input), err
+		return columnAssetReachabilityPlanIdentity(input), input.refs, err
 	}
 	if opts.ProtectCandidateRefsForOlderSnapshots && c.columnAssetReachabilityOlderSnapshotPinned(view.CommitSeq) {
 		if err := input.addRefs(ctx, opts.CandidateRefs, ColumnAssetReachabilitySourcePinnedSnapshot); err != nil {
-			return columnAssetReachabilityPlanIdentity(input), err
+			return columnAssetReachabilityPlanIdentity(input), input.refs, err
 		}
 	}
 	if err := input.addRefs(ctx, opts.PendingRefs, ColumnAssetReachabilitySourcePendingPublish); err != nil {
-		return columnAssetReachabilityPlanIdentity(input), err
+		return columnAssetReachabilityPlanIdentity(input), input.refs, err
 	}
 	if err := input.addRefs(ctx, opts.PreparedRefs, ColumnAssetReachabilitySourcePreparedAsset); err != nil {
-		return columnAssetReachabilityPlanIdentity(input), err
+		return columnAssetReachabilityPlanIdentity(input), input.refs, err
 	}
 	if err := input.addRefs(ctx, opts.PinnedRefs, ColumnAssetReachabilitySourcePinnedSnapshot); err != nil {
-		return columnAssetReachabilityPlanIdentity(input), err
+		return columnAssetReachabilityPlanIdentity(input), input.refs, err
 	}
 	if err := ctx.Err(); err != nil {
-		return columnAssetReachabilityPlanIdentity(input), err
+		return columnAssetReachabilityPlanIdentity(input), input.refs, err
 	}
-	return buildColumnAssetReachabilityPlan(ctx, input)
+	plan, err := buildColumnAssetReachabilityPlan(ctx, input)
+	return plan, input.refs, err
 }
 
 func (c *Collection) columnAssetReachabilityOlderSnapshotPinned(planCommitSeq uint64) bool {
@@ -438,9 +447,8 @@ func buildColumnAssetReachabilityPlan(ctx context.Context, input columnAssetReac
 		}
 		if input.detailed {
 			entry := ColumnAssetReachabilityRefEntry{
-				Ref:        ref,
-				Status:     status,
-				sourceMask: sourceMask,
+				Ref:    ref,
+				Status: status,
 			}
 			if !input.omitSources {
 				entry.Sources = columnAssetReachabilitySourcesForMask(sourceMask)
