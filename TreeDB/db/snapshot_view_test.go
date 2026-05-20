@@ -130,6 +130,23 @@ func TestMinPinnedSnapshotCommitSeqTracksCurrentAndRetiredGenerations(t *testing
 	}
 }
 
+func TestMinPinnedSnapshotCommitSeqProtectsInFlightSnapshotAcquire(t *testing.T) {
+	db := &DB{snapPool: NewSnapshotPool()}
+	if got := db.MinPinnedSnapshotCommitSeq(); got != math.MaxUint64 {
+		t.Fatalf("MinPinnedSnapshotCommitSeq without snapshots=%d, want MaxUint64", got)
+	}
+
+	db.snapshotAcquireRO[0].Store(1)
+	if got := db.MinPinnedSnapshotCommitSeq(); got != 0 {
+		t.Fatalf("MinPinnedSnapshotCommitSeq with in-flight acquire=%d, want 0", got)
+	}
+
+	db.snapshotAcquireRO[0].Store(0)
+	if got := db.MinPinnedSnapshotCommitSeq(); got != math.MaxUint64 {
+		t.Fatalf("MinPinnedSnapshotCommitSeq after acquire drain=%d, want MaxUint64", got)
+	}
+}
+
 func TestAcquireSnapshot_ReleasesPinnedValueLogSetOnRegistryNil(t *testing.T) {
 	idx := &indexGen{}
 	idx.refs.Store(1)

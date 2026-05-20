@@ -4,10 +4,15 @@ import "math"
 
 // MinPinnedSnapshotCommitSeq returns the oldest commit sequence currently held
 // by any active snapshot reader across the current and still-tracked retired
-// index generations. math.MaxUint64 means no snapshot reader is pinned.
+// index generations. In-flight snapshot acquisitions conservatively return 0
+// because they may have loaded a view that is not registered yet.
+// math.MaxUint64 means no snapshot reader is pinned.
 func (db *DB) MinPinnedSnapshotCommitSeq() uint64 {
 	if db == nil {
 		return math.MaxUint64
+	}
+	if db.snapshotAcquireInFlight() > 0 {
+		return 0
 	}
 
 	// idxMu is a Mutex rather than an RWMutex, so this read-only walk must take
@@ -20,6 +25,9 @@ func (db *DB) MinPinnedSnapshotCommitSeq() uint64 {
 		min = minPinnedSnapshotCommitSeqForIndexGen(min, gen)
 	}
 	min = minPinnedSnapshotCommitSeqForIndexGen(min, db.idx.Load())
+	if db.snapshotAcquireInFlight() > 0 {
+		return 0
+	}
 	return min
 }
 
