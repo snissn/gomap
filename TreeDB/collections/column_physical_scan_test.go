@@ -667,6 +667,66 @@ func TestColumnPublishRejectsTamperedExistingManifestBeforeCarryM13A(t *testing.
 	}
 }
 
+func TestColumnManifestPlannerCapabilitiesRejectPartIDKeyMismatchM14A(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	cfg, err := normalizeColumnStoreConfig("events", testColumnStoreConfig(nil))
+	if err != nil {
+		t.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+	cfg.RecoveryAuthoritativeAppliedCommandLSN = 1
+	asset := testColumnPublishPreparedAssetM10A()
+	asset.Ref.Generation = 1
+	asset.Ref.PartID = 1
+	asset.GenerationID = 1
+	asset.Reason = string(ColumnPublishOperationInsert)
+	input := ColumnPublishManifestEncodeInput{
+		Collection:        "events",
+		ColumnStore:       *cfg,
+		Operation:         ColumnPublishOperationInsert,
+		AppliedCommandLSN: 1,
+		Prepared: ColumnPublishPreparedAssets{
+			Assets:             []ColumnPreparedAsset{asset},
+			RowCount:           1,
+			ColumnPayloadBytes: asset.Bytes,
+		},
+	}
+	manifest, err := encodeColumnManifestForWrite(input)
+	if err != nil {
+		t.Fatalf("encodeColumnManifestForWrite: %v", err)
+	}
+
+	tampered := cloneColumnManifestRecords(manifest.Records)
+	tamperedCount := 0
+	for i := range tampered {
+		if bytes.HasPrefix(tampered[i].key, columnManifestPartRecordPrefixBytes) {
+			tampered[i].key = columnManifestPartRecordKey(asset.Ref.Generation, asset.Ref.PartID+1)
+			tamperedCount++
+			break
+		}
+	}
+	if tamperedCount != 1 {
+		t.Fatalf("tampered manifest part keys=%d want 1", tamperedCount)
+	}
+	tamperedIdentity := manifest.Identity
+	tamperedIdentity.Checksum = checksumColumnManifestRecords(input, tamperedIdentity.Generation, tampered)
+	rootID := publishColumnManifestRecordsForScanTestM13A(t, d, tamperedIdentity, tampered)
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("AcquireSnapshot returned nil")
+	}
+	defer func() { _ = snap.Close() }()
+
+	_, err = loadColumnManifestPlannerCapabilitiesForScan(snap, rootID, *cfg, tamperedIdentity, "events")
+	if err == nil || !strings.Contains(err.Error(), "key part_id") {
+		t.Fatalf("loadColumnManifestPlannerCapabilitiesForScan err=%v want key part_id mismatch", err)
+	}
+}
+
 func publishColumnManifestRecordsForScanTestM13A(t testing.TB, d *backenddb.DB, identity ColumnManifestIdentity, records []columnManifestRecord) uint64 {
 	t.Helper()
 	iter := columnManifestRootRecordIterator(encodeColumnManifestIdentityRecordArray(identity), records)
