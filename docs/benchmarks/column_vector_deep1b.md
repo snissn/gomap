@@ -161,10 +161,12 @@ production/buildable granule scout. It supports `row_id_contiguous` as a weak
 storage-order control and `ivf_kmeans` as a deterministic cosine k-means
 locality builder over the base prefix. In both modes, it ranks granules by
 centroid similarity and reports routing recall separately from codec recall
-inside the selected granule union. The initial codec rows are full-dim
-per-dimension scalar u8/u4 and local PCA int8 ranks. The scout is deliberately
-not a PQ/OPQ/residual-PQ tournament yet; those methods require real train/eval
-splits and trained codebooks.
+inside the selected granule union. The codec rows include full-dim
+per-dimension scalar u8/u4, local PCA int8 ranks, and optional trained global
+8-bit PQ lanes. The PQ lanes use held-out base-prefix rows for codebook
+training and evaluate on a disjoint base slice; they are production/buildable
+codebook probes, not top100 oracle fits. OPQ, residual-PQ, and LOPQ are still
+pending.
 
 ## Manual Commands
 
@@ -324,6 +326,80 @@ GOWORK=off go test ./experiments/colgranule \
 This builder is buildable from the base prefix and is a stronger production
 locality scout than row-id order, but it is still not a trained-codebook PQ/OPQ
 result.
+
+IVF/k-means buildable granule scout with trained global PQ lanes:
+
+```sh
+OUT=/tmp/gomap_deep1b_buildable_pq_ivf_q0_9_$(date +%Y%m%d_%H%M%S)
+COLUMN_VECTOR_DEEP1B_DOWNLOAD=1 \
+COLUMN_VECTOR_DEEP1B_BUILDABLE_GRANULE_SCOUT=1 \
+COLUMN_VECTOR_DEEP1B_BUILDABLE_BUILDER=ivf_kmeans \
+COLUMN_VECTOR_DEEP1B_BUILDABLE_BASE_ROWS=32768 \
+COLUMN_VECTOR_DEEP1B_BUILDABLE_GRANULE_ROWS=4096 \
+COLUMN_VECTOR_DEEP1B_BUILDABLE_KMEANS_ITERS=8 \
+COLUMN_VECTOR_DEEP1B_BUILDABLE_QUERIES=0,1,2,3,4,5,6,7,8,9 \
+COLUMN_VECTOR_DEEP1B_BUILDABLE_TOP_GRANULES=1,4 \
+COLUMN_VECTOR_DEEP1B_BUILDABLE_PCA_RANKS=32,64 \
+COLUMN_VECTOR_DEEP1B_BUILDABLE_PQ_BYTES=32,48,64 \
+COLUMN_VECTOR_DEEP1B_BUILDABLE_PQ_TRAIN_ROWS=8192 \
+COLUMN_VECTOR_DEEP1B_BUILDABLE_PQ_ITERS=4 \
+COLUMN_VECTOR_DEEP1B_BUILDABLE_SCAN_ITERS=4 \
+COLUMN_VECTOR_DEEP1B_BUILDABLE_OUT="$OUT" \
+GOWORK=off go test ./experiments/colgranule \
+  -run '^TestColumnVectorGraphDeep1BBuildableGranuleScout$' \
+  -count 1 \
+  -timeout=30m \
+  -v
+```
+
+This is the first trained-codebook production lane in this PR. It trains global
+8-bit PQ codebooks on held-out rows and evaluates them on disjoint IVF/k-means
+granules. It does not claim OPQ, residual-PQ, LOPQ, ScaNN/AVQ, or QINCo
+coverage.
+
+Representative artifact:
+
+```text
+/tmp/gomap_deep1b_buildable_pq_ivf_q0_9_20260519_211250/report.md
+```
+
+Key aggregate conditional codec gates, queries `0..9`, `32768` eval rows,
+`8192` held-out PQ training rows, top `1` and top `4` centroid-routed IVF
+granules:
+
+| Method | Top granules | Row-code B/vector | Metadata B/vector | p50 compressed top10 | Worst compressed top10 | Worst top10@50 | Worst top10@100 | Worst top20@100 | Avg score err | Avg scan ns/vector |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| global PQ 32B x8 | 1 | 32 | 3.50 | 7/10 | 5/10 | 10/10 | 10/10 | 20/20 | 0.01829 | 19.05 |
+| local PCA rank32 int8 | 1 | 32 | 3.49 | 6/10 | 5/10 | 7/10 | 9/10 | 18/20 | 0.02206 | 26.62 |
+| global PQ 48B x8 | 1 | 48 | 3.50 | 8/10 | 7/10 | 10/10 | 10/10 | 20/20 | 0.00851 | 28.81 |
+| scalar u4 per-dim reconstructed | 1 | 48 | 0.18 | 9/10 | 8/10 | 10/10 | 10/10 | 20/20 | 0.00961 | 1044.37 |
+| global PQ 64B x8 | 1 | 64 | 3.50 | 8/10 | 7/10 | 10/10 | 10/10 | 20/20 | 0.00686 | 40.30 |
+| local PCA rank64 int8 | 1 | 64 | 4.94 | 9/10 | 8/10 | 10/10 | 10/10 | 20/20 | 0.00849 | 61.41 |
+| global PQ 32B x8 | 4 | 32 | 3.50 | 6/10 | 5/10 | 10/10 | 10/10 | 20/20 | 0.01717 | 16.60 |
+| local PCA rank32 int8 | 4 | 32 | 3.57 | 6/10 | 4/10 | 9/10 | 10/10 | 17/20 | 0.02646 | 26.80 |
+| global PQ 48B x8 | 4 | 48 | 3.50 | 8/10 | 7/10 | 10/10 | 10/10 | 20/20 | 0.00811 | 29.98 |
+| scalar u4 per-dim reconstructed | 4 | 48 | 0.19 | 9/10 | 8/10 | 10/10 | 10/10 | 20/20 | 0.00957 | 1032.29 |
+| global PQ 64B x8 | 4 | 64 | 3.50 | 9/10 | 7/10 | 10/10 | 10/10 | 20/20 | 0.00662 | 38.60 |
+| local PCA rank64 int8 | 4 | 64 | 5.10 | 9/10 | 8/10 | 10/10 | 10/10 | 20/20 | 0.01114 | 57.85 |
+
+Interpretation:
+
+- Routing is still the first-order production risk. Top4 IVF routed all global
+  top10 for 9 of 10 queries, but query 6 routed only `6/10`, so codec success
+  remains conditional on the selected granule union.
+- At the same 32B row-code budget, trained global PQ beats local PCA rank32 on
+  candidate survival and scan cost. PQ32 kept exact top10 inside approx@50 for
+  every routed candidate set; PCA32 did not.
+- At 48B, global PQ and scalar u4 both preserve candidate gates in this run.
+  PQ's current LUT scorer is about `30 ns/vector`, while the scalar u4 lane is
+  still a reconstructed Go scorer around `1 us/vector`.
+- At 64B, global PQ is a stronger same-byte competitor to rank64 local PCA on
+  score error and scan cost, though neither should be treated as a final ranker
+  without exact rerank.
+- PQ training for 32B/48B/64B on 8192 rows and 4 iterations took about
+  `708 ms`, `947 ms`, and `1035 ms` respectively in this harness. The method
+  build milliseconds in the table are per-run encode costs for selected rows;
+  production query-time would read stored codes instead.
 
 ## Scope
 

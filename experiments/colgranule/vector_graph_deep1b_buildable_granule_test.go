@@ -22,12 +22,23 @@ func TestColumnVectorGraphDeep1BBuildableGranuleScout(t *testing.T) {
 	kmeansIters := columnVectorGraphDeep1BEnvInt(t, "COLUMN_VECTOR_DEEP1B_BUILDABLE_KMEANS_ITERS", 8)
 	topGranulesList := columnVectorGraphDeep1BEnvIntList(t, "COLUMN_VECTOR_DEEP1B_BUILDABLE_TOP_GRANULES", []int{1, 4})
 	ranks := columnVectorGraphDeep1BEnvIntList(t, "COLUMN_VECTOR_DEEP1B_BUILDABLE_PCA_RANKS", []int{32, 48, 64, 80, columnVectorGraphDeep1BDims})
+	pqBytes := columnVectorGraphDeep1BEnvIntList(t, "COLUMN_VECTOR_DEEP1B_BUILDABLE_PQ_BYTES", nil)
+	pqTrainRows := columnVectorGraphDeep1BEnvInt(t, "COLUMN_VECTOR_DEEP1B_BUILDABLE_PQ_TRAIN_ROWS", 8192)
+	pqTrainIters := columnVectorGraphDeep1BEnvInt(t, "COLUMN_VECTOR_DEEP1B_BUILDABLE_PQ_ITERS", 4)
 	scanIters := columnVectorGraphDeep1BEnvInt(t, "COLUMN_VECTOR_DEEP1B_BUILDABLE_SCAN_ITERS", 8)
 	if baseRows <= 0 {
 		t.Fatalf("COLUMN_VECTOR_DEEP1B_BUILDABLE_BASE_ROWS=%d must be positive", baseRows)
 	}
 	if granuleRows <= 0 {
 		t.Fatalf("COLUMN_VECTOR_DEEP1B_BUILDABLE_GRANULE_ROWS=%d must be positive", granuleRows)
+	}
+	if len(pqBytes) > 0 {
+		if pqTrainRows < 256 {
+			t.Fatalf("COLUMN_VECTOR_DEEP1B_BUILDABLE_PQ_TRAIN_ROWS=%d must be at least 256 for 8-bit PQ codebooks", pqTrainRows)
+		}
+		if pqTrainIters <= 0 {
+			t.Fatalf("COLUMN_VECTOR_DEEP1B_BUILDABLE_PQ_ITERS=%d must be positive", pqTrainIters)
+		}
 	}
 	outDir := strings.TrimSpace(os.Getenv("COLUMN_VECTOR_DEEP1B_BUILDABLE_OUT"))
 	if outDir == "" {
@@ -37,23 +48,40 @@ func TestColumnVectorGraphDeep1BBuildableGranuleScout(t *testing.T) {
 		t.Fatalf("create buildable granule scout output dir: %v", err)
 	}
 
-	data := columnVectorGraphDeep1BEnsureData(t, baseRows)
-	baseRows = min(baseRows, data.baseHeader.Rows)
+	totalRows := baseRows
+	if len(pqBytes) > 0 {
+		totalRows += pqTrainRows
+	}
+	data := columnVectorGraphDeep1BEnsureData(t, totalRows)
 	baseFile, err := os.Open(data.basePath)
 	if err != nil {
 		t.Fatalf("open Deep1B base: %v", err)
 	}
 	defer baseFile.Close()
 	var raw []byte
-	_, vectors, err := columnVectorGraphDeep1BReadFbinVectorsAt(baseFile, data.baseHeader, 0, baseRows, raw, nil)
-	if err != nil {
-		t.Fatalf("read Deep1B base prefix rows=%d: %v", baseRows, err)
+	totalRows = min(totalRows, data.baseHeader.Rows)
+	if len(pqBytes) > 0 && totalRows <= pqTrainRows {
+		t.Fatalf("Deep1B base rows=%d are insufficient for pqTrainRows=%d plus eval rows", totalRows, pqTrainRows)
 	}
+	_, allVectors, err := columnVectorGraphDeep1BReadFbinVectorsAt(baseFile, data.baseHeader, 0, totalRows, raw, nil)
+	if err != nil {
+		t.Fatalf("read Deep1B base prefix rows=%d: %v", totalRows, err)
+	}
+	var trainVectors []float32
+	evalOffset := 0
+	if len(pqBytes) > 0 {
+		trainVectors = allVectors[:pqTrainRows*columnVectorGraphDeep1BDims]
+		evalOffset = pqTrainRows
+	}
+	availableEvalRows := totalRows - evalOffset
+	baseRows = min(baseRows, availableEvalRows)
+	vectors := allVectors[evalOffset*columnVectorGraphDeep1BDims : (evalOffset+baseRows)*columnVectorGraphDeep1BDims]
 	invNorms := columnVectorGraphDeep1BInvNorms(vectors, columnVectorGraphDeep1BDims)
 	granules, builderNotes := columnVectorGraphDeep1BBuildableGranules(t, builder, vectors, invNorms, baseRows, columnVectorGraphDeep1BDims, granuleRows, kmeansIters)
 	if len(granules) == 0 {
 		t.Fatalf("no granules for builder=%s baseRows=%d granuleRows=%d", builder, baseRows, granuleRows)
 	}
+	pqModels := columnVectorGraphDeep1BFitBuildablePQModels(t, trainVectors, pqBytes, pqTrainRows, baseRows, columnVectorGraphDeep1BDims, pqTrainIters)
 
 	report := columnVectorGraphDeep1BBuildableGranuleScoutReport{
 		GeneratedAt:      time.Now().UTC().Format(time.RFC3339),
@@ -61,11 +89,16 @@ func TestColumnVectorGraphDeep1BBuildableGranuleScout(t *testing.T) {
 		BasePath:         data.basePath,
 		QueryPath:        data.queryPath,
 		BaseRows:         baseRows,
+		EvalRowOffset:    evalOffset,
 		Dims:             columnVectorGraphDeep1BDims,
 		Builder:          builder,
 		GranuleRows:      granuleRows,
 		GranuleCount:     len(granules),
 		KMeansIters:      kmeansIters,
+		PQBytes:          append([]int(nil), pqBytes...),
+		PQTrainRows:      len(trainVectors) / columnVectorGraphDeep1BDims,
+		PQTrainIters:     pqTrainIters,
+		PQTraining:       columnVectorGraphDeep1BPQTrainingReports(pqModels),
 		RequestedQueries: append([]int(nil), queryIndexes...),
 		TopGranules:      append([]int(nil), topGranulesList...),
 		Ranks:            append([]int(nil), ranks...),
@@ -89,7 +122,7 @@ func TestColumnVectorGraphDeep1BBuildableGranuleScout(t *testing.T) {
 				t.Fatalf("topGranules=%d must be positive", topGranules)
 			}
 			selected := columnVectorGraphDeep1BSelectGranules(granules, granuleOrder, topGranules)
-			queryReport := columnVectorGraphDeep1BAnalyzeBuildableGranuleSelection(t, vectors, invNorms, query, queryInvNorm, globalScores, globalTopRows, selected, queryIndex, topGranules, ranks, scanIters)
+			queryReport := columnVectorGraphDeep1BAnalyzeBuildableGranuleSelection(t, vectors, invNorms, query, queryInvNorm, globalScores, globalTopRows, selected, queryIndex, topGranules, ranks, pqModels, scanIters)
 			report.Queries = append(report.Queries, queryReport)
 		}
 	}
@@ -108,11 +141,16 @@ type columnVectorGraphDeep1BBuildableGranuleScoutReport struct {
 	BasePath         string                                               `json:"base_path"`
 	QueryPath        string                                               `json:"query_path"`
 	BaseRows         int                                                  `json:"base_rows"`
+	EvalRowOffset    int                                                  `json:"eval_row_offset,omitempty"`
 	Dims             int                                                  `json:"dims"`
 	Builder          string                                               `json:"builder"`
 	GranuleRows      int                                                  `json:"granule_rows"`
 	GranuleCount     int                                                  `json:"granule_count"`
 	KMeansIters      int                                                  `json:"kmeans_iters,omitempty"`
+	PQBytes          []int                                                `json:"pq_bytes,omitempty"`
+	PQTrainRows      int                                                  `json:"pq_train_rows,omitempty"`
+	PQTrainIters     int                                                  `json:"pq_train_iters,omitempty"`
+	PQTraining       []columnVectorGraphDeep1BPQTrainingReport            `json:"pq_training,omitempty"`
 	RequestedQueries []int                                                `json:"requested_queries"`
 	TopGranules      []int                                                `json:"top_granules"`
 	Ranks            []int                                                `json:"ranks"`
@@ -378,7 +416,7 @@ func columnVectorGraphDeep1BSelectGranules(granules []columnVectorGraphDeep1BBui
 	return selected
 }
 
-func columnVectorGraphDeep1BAnalyzeBuildableGranuleSelection(tb testing.TB, vectors []float32, invNorms []float32, query []float32, queryInvNorm float32, globalScores []float32, globalTopRows []int, selected []columnVectorGraphDeep1BBuildableGranule, queryIndex int, topGranules int, ranks []int, scanIters int) columnVectorGraphDeep1BBuildableGranuleQueryReport {
+func columnVectorGraphDeep1BAnalyzeBuildableGranuleSelection(tb testing.TB, vectors []float32, invNorms []float32, query []float32, queryInvNorm float32, globalScores []float32, globalTopRows []int, selected []columnVectorGraphDeep1BBuildableGranule, queryIndex int, topGranules int, ranks []int, pqModels []columnVectorGraphDeep1BPQModel, scanIters int) columnVectorGraphDeep1BBuildableGranuleQueryReport {
 	tb.Helper()
 	dims := columnVectorGraphDeep1BDims
 	candidateRows := 0
@@ -427,6 +465,9 @@ func columnVectorGraphDeep1BAnalyzeBuildableGranuleSelection(tb testing.TB, vect
 	q.RoutingRecallAt50 = float64(q.RoutingTop50InCandidates) / float64(min(50, len(globalTopRows)))
 	q.Methods = append(q.Methods, columnVectorGraphDeep1BEvaluateBuildableScalarMethod(vectors, invNorms, query, queryInvNorm, candidateExact, q.CandidateExactMargins, selected, builder, 8, "per_dim", "reconstructed", scanIters))
 	q.Methods = append(q.Methods, columnVectorGraphDeep1BEvaluateBuildableScalarMethod(vectors, invNorms, query, queryInvNorm, candidateExact, q.CandidateExactMargins, selected, builder, 4, "per_dim", "reconstructed", scanIters))
+	for _, model := range pqModels {
+		q.Methods = append(q.Methods, columnVectorGraphDeep1BEvaluateBuildablePQMethod(vectors, invNorms, query, queryInvNorm, candidateExact, q.CandidateExactMargins, selected, builder, model, scanIters))
+	}
 	minSelectedRows := candidateRows
 	for _, granule := range selected {
 		minSelectedRows = min(minSelectedRows, granule.Rows)
@@ -587,15 +628,42 @@ func columnVectorGraphDeep1BRenderBuildableGranuleScoutMarkdown(report columnVec
 	fmt.Fprintf(&b, "- Regime: `buildable_granule_scout`\n")
 	fmt.Fprintf(&b, "- Builder: `%s`\n", report.Builder)
 	fmt.Fprintf(&b, "- Base path: `%s`\n", report.BasePath)
-	fmt.Fprintf(&b, "- Base rows: `%d`\n", report.BaseRows)
+	fmt.Fprintf(&b, "- Eval rows: `%d`\n", report.BaseRows)
+	if report.EvalRowOffset > 0 {
+		fmt.Fprintf(&b, "- Eval row offset: `%d` (rows before this offset are held out for training)\n", report.EvalRowOffset)
+	}
 	fmt.Fprintf(&b, "- Dims: `%d`\n", report.Dims)
 	fmt.Fprintf(&b, "- Granule rows: `%d`\n", report.GranuleRows)
 	fmt.Fprintf(&b, "- Granules: `%d`\n", report.GranuleCount)
 	if report.Builder == "ivf_kmeans" {
 		fmt.Fprintf(&b, "- K-means iterations: `%d`\n", report.KMeansIters)
 	}
+	if len(report.PQTraining) > 0 {
+		fmt.Fprintf(&b, "- PQ train rows: `%d`\n", report.PQTrainRows)
+		fmt.Fprintf(&b, "- PQ train iterations: `%d`\n", report.PQTrainIters)
+		fmt.Fprintf(&b, "- PQ row-code byte budgets: `%v`\n", report.PQBytes)
+	}
 	fmt.Fprintf(&b, "- Scan iterations: `%d`\n\n", report.ScanIters)
 	fmt.Fprintf(&b, "%s\n\n", columnVectorGraphDeep1BBuildableBuilderMarkdown(report))
+	if len(report.PQTraining) > 0 {
+		fmt.Fprintf(&b, "## PQ Training\n\n")
+		fmt.Fprintf(&b, "These are global 8-bit PQ codebooks trained on held-out base-prefix rows and evaluated on a disjoint eval slice. They are production/buildable codebook lanes, not official top100 oracle fits. Codebook metadata is counted as f16 centroids amortized over all eval rows; per-row f16 inverse norms are counted in method metadata.\n\n")
+		fmt.Fprintf(&b, "| Row-code B/vector | Subquantizers | Codebook size | Train rows | Train iters | Train ms | Codebook metadata B | Codebook metadata B/eval-vector |\n")
+		fmt.Fprintf(&b, "| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
+		for _, training := range report.PQTraining {
+			fmt.Fprintf(&b, "| %d | %d | %d | %d | %d | %.3f | %d | %.3f |\n",
+				training.RowCodeBytes,
+				training.Subquantizers,
+				training.CodebookSize,
+				training.TrainRows,
+				training.TrainIterations,
+				float64(training.TrainNanos)/1e6,
+				training.CodebookMetadataBytes,
+				training.CodebookMetadataBytesPerEval,
+			)
+		}
+		fmt.Fprintf(&b, "\n")
+	}
 	fmt.Fprintf(&b, "## Routing\n\n")
 	fmt.Fprintf(&b, "| Query | Builder | Top granules | Candidate rows | Global top10 routed | Global top20 routed | Global top50 routed |\n")
 	fmt.Fprintf(&b, "| ---: | --- | ---: | ---: | ---: | ---: | ---: |\n")
@@ -612,11 +680,11 @@ func columnVectorGraphDeep1BRenderBuildableGranuleScoutMarkdown(report columnVec
 	}
 	fmt.Fprintf(&b, "\n## Conditional Codec Results\n\n")
 	fmt.Fprintf(&b, "These codec metrics are conditional on the selected buildable granules. A method can look good here while the routing row above still fails to bring global winners into the candidate set.\n\n")
-	fmt.Fprintf(&b, "| Query | Top granules | Method | Row-code B/vector | Metadata B/vector | Build ms | Compressed top10 | Top10 in approx@20 | Top10 in approx@50 | Top20 in approx@50 | Rerank@50 recall@10 | Mean score err | Err/gap10 | Scan ns/vector |\n")
-	fmt.Fprintf(&b, "| ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
+	fmt.Fprintf(&b, "| Query | Top granules | Method | Row-code B/vector | Metadata B/vector | Build ms | Compressed top10 | Top10 in approx@20 | Top10 in approx@50 | Top10 in approx@100 | Top20 in approx@50 | Top20 in approx@100 | Rerank@50 recall@10 | Rerank@100 recall@10 | Mean score err | Err/gap10 | Err/gap20 | Err/gap50 | Scan ns/vector |\n")
+	fmt.Fprintf(&b, "| ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
 	for _, q := range report.Queries {
 		for _, method := range q.Methods {
-			fmt.Fprintf(&b, "| %d | %d | `%s` | %.2f | %.2f | %.3f | %d/10 | %s | %s | %s | %.2f | %.5f | %.2f | %.2f |\n",
+			fmt.Fprintf(&b, "| %d | %d | `%s` | %.2f | %.2f | %.3f | %d/10 | %s | %s | %s | %s | %s | %.2f | %.2f | %.5f | %.2f | %.2f | %.2f | %.2f |\n",
 				q.QueryIndex,
 				q.TopGranules,
 				method.Name,
@@ -626,10 +694,15 @@ func columnVectorGraphDeep1BRenderBuildableGranuleScoutMarkdown(report columnVec
 				method.Top10Overlap,
 				columnVectorGraphDeep1BFormatOverlap(method.Top10InApproxTop20, method.Top10RecallAt20, 10),
 				columnVectorGraphDeep1BFormatOverlap(method.Top10InApproxTop50, method.Top10RecallAt50, 10),
+				columnVectorGraphDeep1BFormatOverlap(method.Top10InApproxTop100, method.Top10RecallAt100, 10),
 				columnVectorGraphDeep1BFormatOverlap(method.Top20InApproxTop50, method.Top20RecallAt50, 20),
+				columnVectorGraphDeep1BFormatOverlap(method.Top20InApproxTop100, method.Top20RecallAt100, 20),
 				method.ExactRerankRecallAt10FromTop50,
+				method.ExactRerankRecallAt10FromTop100,
 				method.MeanScoreError,
 				method.MeanErrorOverGap10,
+				method.MeanErrorOverGap20,
+				method.MeanErrorOverGap50,
 				method.ScanNanosPerVector,
 			)
 		}
@@ -660,8 +733,14 @@ func columnVectorGraphDeep1BRenderBuildableGranuleScoutMarkdown(report columnVec
 func columnVectorGraphDeep1BBuildableBuilderMarkdown(report columnVectorGraphDeep1BBuildableGranuleScoutReport) string {
 	switch report.Builder {
 	case "row_id_contiguous":
+		if len(report.PQTraining) > 0 {
+			return "This is a **production/buildable granule** scout using `row_id_contiguous` blocks. They are real storage units TreeDB can build without oracle labels, but they are intentionally a weak locality control. The result separates routing/locality failure from codec failure. The PQ rows are trained-codebook lanes with a held-out train/eval split; OPQ/residual-PQ/LOPQ are still pending."
+		}
 		return "This is a **production/buildable granule** scout using `row_id_contiguous` blocks. They are real storage units TreeDB can build without oracle labels, but they are intentionally a weak locality control. The result separates routing/locality failure from codec failure; it should not be read as evidence that row-id order is a good ANN granule builder. PQ/OPQ/residual-PQ/LOPQ are still pending because they require real train/eval splits and trained codebooks."
 	case "ivf_kmeans":
+		if len(report.PQTraining) > 0 {
+			return "This is a **production/buildable granule** scout using deterministic cosine `ivf_kmeans` clusters trained on the eval slice. It is a buildable locality probe, unlike the official top100 oracle clouds. The PQ rows use global codebooks trained on held-out rows before the eval slice, so they are the first trained-codebook production lane; OPQ/residual-PQ/LOPQ are still pending."
+		}
 		return "This is a **production/buildable granule** scout using deterministic cosine `ivf_kmeans` clusters trained on the base prefix. It is a buildable locality probe, unlike the official top100 oracle clouds, but it is still not a PQ/OPQ/residual-PQ tournament: codebook methods still require separate train/eval discipline and metadata accounting."
 	default:
 		return fmt.Sprintf("This is a **production/buildable granule** scout using `%s`. Codec metrics are conditional on the routed candidate union, and trained-codebook methods still require separate train/eval discipline before production claims.", report.Builder)
@@ -678,10 +757,14 @@ func columnVectorGraphDeep1BRenderBuildableAggregateMarkdown(b *strings.Builder,
 		scanNanos  float64
 		scoreError float64
 		gap10      float64
+		gap20      float64
+		gap50      float64
 		top10      []int
 		top10At20  []int
 		top10At50  []int
+		top10At100 []int
 		top20At50  []int
+		top20At100 []int
 	}
 	byName := make(map[string]*aggregate)
 	var names []string
@@ -701,10 +784,14 @@ func columnVectorGraphDeep1BRenderBuildableAggregateMarkdown(b *strings.Builder,
 			agg.scanNanos += method.ScanNanosPerVector
 			agg.scoreError += method.MeanScoreError
 			agg.gap10 += method.MeanErrorOverGap10
+			agg.gap20 += method.MeanErrorOverGap20
+			agg.gap50 += method.MeanErrorOverGap50
 			agg.top10 = append(agg.top10, method.Top10Overlap)
 			agg.top10At20 = append(agg.top10At20, method.Top10InApproxTop20)
 			agg.top10At50 = append(agg.top10At50, method.Top10InApproxTop50)
+			agg.top10At100 = append(agg.top10At100, method.Top10InApproxTop100)
 			agg.top20At50 = append(agg.top20At50, method.Top20InApproxTop50)
+			agg.top20At100 = append(agg.top20At100, method.Top20InApproxTop100)
 		}
 	}
 	sort.Slice(names, func(i, j int) bool {
@@ -718,16 +805,18 @@ func columnVectorGraphDeep1BRenderBuildableAggregateMarkdown(b *strings.Builder,
 		return left.name < right.name
 	})
 	fmt.Fprintf(b, "\n## Aggregate Conditional Codec Gates\n\n")
-	fmt.Fprintf(b, "| Method | Queries | Row-code B/vector | Metadata B/vector | Avg build ms | p50 compressed top10 | worst compressed top10 | p50 top10@20 | worst top10@20 | p50 top10@50 | worst top10@50 | p50 top20@50 | worst top20@50 | Avg score err | Avg err/gap10 | Avg scan ns/vector |\n")
-	fmt.Fprintf(b, "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
+	fmt.Fprintf(b, "| Method | Queries | Row-code B/vector | Metadata B/vector | Avg build ms | p50 compressed top10 | worst compressed top10 | p50 top10@20 | worst top10@20 | p50 top10@50 | worst top10@50 | p50 top10@100 | worst top10@100 | p50 top20@50 | worst top20@50 | p50 top20@100 | worst top20@100 | Avg score err | Avg err/gap10 | Avg err/gap20 | Avg err/gap50 | Avg scan ns/vector |\n")
+	fmt.Fprintf(b, "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
 	for _, name := range names {
 		agg := byName[name]
 		sort.Ints(agg.top10)
 		sort.Ints(agg.top10At20)
 		sort.Ints(agg.top10At50)
+		sort.Ints(agg.top10At100)
 		sort.Ints(agg.top20At50)
+		sort.Ints(agg.top20At100)
 		count := float64(max(1, agg.count))
-		fmt.Fprintf(b, "| `%s` | %d | %.2f | %.2f | %.3f | %d/10 | %d/10 | %d/10 | %d/10 | %d/10 | %d/10 | %d/20 | %d/20 | %.5f | %.2f | %.2f |\n",
+		fmt.Fprintf(b, "| `%s` | %d | %.2f | %.2f | %.3f | %d/10 | %d/10 | %d/10 | %d/10 | %d/10 | %d/10 | %d/10 | %d/10 | %d/20 | %d/20 | %d/20 | %d/20 | %.5f | %.2f | %.2f | %.2f | %.2f |\n",
 			agg.name,
 			agg.count,
 			agg.rowBytes/count,
@@ -739,10 +828,16 @@ func columnVectorGraphDeep1BRenderBuildableAggregateMarkdown(b *strings.Builder,
 			columnVectorGraphDeep1BIntQuantile(agg.top10At20, 0),
 			columnVectorGraphDeep1BIntQuantile(agg.top10At50, 0.50),
 			columnVectorGraphDeep1BIntQuantile(agg.top10At50, 0),
+			columnVectorGraphDeep1BIntQuantile(agg.top10At100, 0.50),
+			columnVectorGraphDeep1BIntQuantile(agg.top10At100, 0),
 			columnVectorGraphDeep1BIntQuantile(agg.top20At50, 0.50),
 			columnVectorGraphDeep1BIntQuantile(agg.top20At50, 0),
+			columnVectorGraphDeep1BIntQuantile(agg.top20At100, 0.50),
+			columnVectorGraphDeep1BIntQuantile(agg.top20At100, 0),
 			agg.scoreError/count,
 			agg.gap10/count,
+			agg.gap20/count,
+			agg.gap50/count,
 			agg.scanNanos/count,
 		)
 	}
