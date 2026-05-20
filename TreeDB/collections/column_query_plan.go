@@ -18,10 +18,10 @@ const (
 )
 
 const (
-	ColumnQueryUnsupportedNoPhysicalAssetsReason          = "physical column query has no physical assets available"
-	ColumnQueryUnsupportedSerialPhysicalDisabledReason    = "serial physical column scan capability is disabled"
-	ColumnQueryUnsupportedAggregateMetadataDisabledReason = "aggregate metadata capability is disabled"
-	ColumnQueryUnsupportedParallelPhysicalDisabledReason  = "parallel physical column scan capability is disabled"
+	columnQueryUnsupportedNoPhysicalAssetsReason          = "physical column query has no physical assets available"
+	columnQueryUnsupportedSerialPhysicalDisabledReason    = "serial physical column scan capability is disabled"
+	columnQueryUnsupportedAggregateMetadataDisabledReason = "aggregate metadata capability is disabled"
+	columnQueryUnsupportedParallelPhysicalDisabledReason  = "parallel physical column scan capability is disabled"
 )
 
 var ErrColumnQueryPlanUnsupported = errors.New("collections: column query plan unsupported")
@@ -399,25 +399,25 @@ func physicalColumnQueryUnsupportedReason(identity ColumnStoreCacheIdentity, ide
 	case strings.TrimSpace(req.Capabilities.CapabilityError) != "":
 		return strings.TrimSpace(req.Capabilities.CapabilityError)
 	case req.Capabilities.PhysicalAssetCount <= 0:
-		return ColumnQueryUnsupportedNoPhysicalAssetsReason
+		return columnQueryUnsupportedNoPhysicalAssetsReason
 	case !columnQueryManifestRecoveryAuthoritative(identity, identityOK):
 		return "active column manifest is not recovery-authoritative"
 	}
 	switch kind {
 	case ColumnQueryPlanSerialColumnScan:
 		if !req.Capabilities.SerialColumnScan {
-			return ColumnQueryUnsupportedSerialPhysicalDisabledReason
+			return columnQueryUnsupportedSerialPhysicalDisabledReason
 		}
 	case ColumnQueryPlanAggregateMetadata:
 		if !req.Capabilities.AggregateMetadata {
-			return ColumnQueryUnsupportedAggregateMetadataDisabledReason
+			return columnQueryUnsupportedAggregateMetadataDisabledReason
 		}
 		if strings.TrimSpace(req.AggregateMetadataName) == "" {
 			return "query did not request aggregate metadata"
 		}
 	case ColumnQueryPlanParallelColumnScan:
 		if !req.Capabilities.ParallelColumnScan {
-			return ColumnQueryUnsupportedParallelPhysicalDisabledReason
+			return columnQueryUnsupportedParallelPhysicalDisabledReason
 		}
 		if reason := parallelColumnQueryShapeUnsupportedReason(req); reason != "" {
 			return reason
