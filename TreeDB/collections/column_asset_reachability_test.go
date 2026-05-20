@@ -322,6 +322,51 @@ func TestColumnAssetReachabilityPlanRetainsCanonicalSymlinkAsUnknownM15A(t *test
 	}
 }
 
+func TestColumnAssetReachabilityPlanRetainsCanonicalDirectoryAsUnknownM15A(t *testing.T) {
+	root := t.TempDir()
+	const namespaceName = "events/column-assets"
+	namespace, err := columnAssetManagerNamespaceForRoot(root, namespaceName)
+	if err != nil {
+		t.Fatalf("columnAssetManagerNamespaceForRoot: %v", err)
+	}
+	if err := ensureColumnAssetManagerNamespace(namespace); err != nil {
+		t.Fatalf("ensureColumnAssetManagerNamespace: %v", err)
+	}
+	dirPath := filepath.Join(namespace.SegmentDir, columnAssetSegmentFileName(9))
+	if err := os.Mkdir(dirPath, 0o700); err != nil {
+		t.Fatalf("Mkdir canonical segment directory: %v", err)
+	}
+
+	input := columnAssetReachabilityInput{
+		rootDir:    root,
+		collection: "events",
+		namespace:  namespaceName,
+		detailed:   true,
+	}
+	plan, err := buildColumnAssetReachabilityPlan(context.Background(), input)
+	if err != nil {
+		t.Fatalf("buildColumnAssetReachabilityPlan: %v", err)
+	}
+	if plan.Complete || plan.Segments.Unknown != 1 || plan.Segments.Reclaimable != 0 {
+		t.Fatalf("segments=%+v complete=%t want directory retained as unknown", plan.Segments, plan.Complete)
+	}
+	if plan.Segments.BytesUnknown != 0 {
+		t.Fatalf("segments=%+v want directory bytes omitted from unknown byte totals", plan.Segments)
+	}
+	foundDir := false
+	for _, entry := range plan.SegmentEntries {
+		if entry.Path == dirPath {
+			foundDir = true
+			if entry.FileID != 9 || entry.Status != ColumnAssetReachabilitySegmentUnknown || entry.Bytes != 0 || entry.UnknownBytes != 0 {
+				t.Fatalf("directory entry=%+v want canonical fileID with zero-byte unknown diagnostics", entry)
+			}
+		}
+	}
+	if !foundDir {
+		t.Fatalf("missing directory entry for %s in %+v", dirPath, plan.SegmentEntries)
+	}
+}
+
 func TestColumnAssetReachabilityPlanRetainsMissingLiveSegmentM15A(t *testing.T) {
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)
