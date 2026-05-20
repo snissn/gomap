@@ -1,6 +1,11 @@
 package collections
 
-import backenddb "github.com/snissn/gomap/TreeDB/db"
+import (
+	"errors"
+	"strings"
+
+	backenddb "github.com/snissn/gomap/TreeDB/db"
+)
 
 // ColumnVectorGraphIndexLoader is the product-contract boundary for the future
 // physical column asset implementation. The loader must read vector, invNorm,
@@ -103,10 +108,14 @@ func (c *Collection) loadColumnGraphVectorIndexSnapshotFromCatalogWithLoader(sna
 		setColumnGraphUnavailable(&status, vectorIndexFallbackColumnGraphManifestMissing)
 		return nil, status, nil
 	}
-	if validateColumnStoreCatalogRoot(snap, catalog) != nil {
+	if err := validateColumnStoreCatalogRoot(snap, catalog); err != nil {
+		reason := columnGraphCatalogRootUnavailableReason(err)
+		if reason == "" {
+			return nil, status, err
+		}
 		// Report manifest/root mismatches as explicit status so operational
 		// callers can show rebuild-needed state instead of failing discovery.
-		setColumnGraphUnavailable(&status, vectorIndexFallbackColumnGraphManifestInvalid)
+		setColumnGraphUnavailable(&status, reason)
 		return nil, status, nil
 	}
 	if loader == nil {
@@ -168,7 +177,9 @@ func setColumnGraphUnavailable(status *VectorIndexLoadStatus, reason string) {
 	}
 	status.Loaded = false
 	status.ColumnGraphLoaded = false
-	status.PhysicalColumnAssetsSupported = false
+	if reason == vectorIndexFallbackColumnGraphPhysicalMissing {
+		status.PhysicalColumnAssetsSupported = false
+	}
 	status.ExactFallbackReason = reason
 	status.ColumnGraphUnavailableReason = reason
 	status.RebuildNeeded = true
@@ -183,7 +194,11 @@ func mergeColumnGraphLoadStatus(status *VectorIndexLoadStatus, update VectorInde
 		reason = update.ExactFallbackReason
 	}
 	if reason != "" {
+		supported := status.PhysicalColumnAssetsSupported || update.PhysicalColumnAssetsSupported
 		setColumnGraphUnavailable(status, reason)
+		if reason != vectorIndexFallbackColumnGraphPhysicalMissing {
+			status.PhysicalColumnAssetsSupported = supported
+		}
 		if update.BytesDisk != 0 {
 			status.BytesDisk = update.BytesDisk
 		}
@@ -195,6 +210,27 @@ func mergeColumnGraphLoadStatus(status *VectorIndexLoadStatus, update VectorInde
 	if update.BytesDisk != 0 {
 		status.BytesDisk = update.BytesDisk
 	}
+}
+
+func columnGraphCatalogRootUnavailableReason(err error) string {
+	if err == nil {
+		return ""
+	}
+	if errors.Is(err, errColumnManifestIdentityMissing) ||
+		errors.Is(err, errColumnManifestIdentityMalformed) ||
+		errors.Is(err, errColumnManifestIdentityBadMagic) ||
+		errors.Is(err, errColumnManifestIdentityUnsupportedVersion) ||
+		errors.Is(err, errColumnManifestIdentityNonZeroReserved) {
+		return vectorIndexFallbackColumnGraphManifestInvalid
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "missing root descriptor") ||
+		strings.Contains(msg, "deleted identity record") ||
+		strings.Contains(msg, "invalid identity record") ||
+		strings.Contains(msg, "identity mismatch") {
+		return vectorIndexFallbackColumnGraphManifestInvalid
+	}
+	return ""
 }
 
 func (c *Collection) columnGraphVectorIndexStatusFromCatalog(snap *backenddb.Snapshot, catalog *collectionCatalog, def VectorIndexDefinition) (VectorIndexStatus, error) {

@@ -123,14 +123,35 @@ func TestLoadVectorIndexSnapshotColumnGraphDoesNotReportNativeLoaded(t *testing.
 	if err != nil {
 		t.Fatalf("LoadVectorIndexSnapshot: %v", err)
 	}
-	if loaded != nil || status.Loaded || status.ColumnGraphLoaded {
-		t.Fatalf("generic loader must not report a usable native index for column_graph, loaded=%v status=%+v", loaded != nil, status)
+	if loaded != nil || status.Loaded || !status.ColumnGraphLoaded {
+		t.Fatalf("generic loader must not report a usable native index while preserving column graph status, loaded=%v status=%+v", loaded != nil, status)
 	}
-	if status.ExactFallbackReason != vectorIndexFallbackColumnGraphHandleMissing || status.ColumnGraphUnavailableReason != vectorIndexFallbackColumnGraphHandleMissing {
+	if status.ExactFallbackReason != vectorIndexFallbackColumnGraphHandleMissing || status.ColumnGraphUnavailableReason != "" {
 		t.Fatalf("unexpected generic column_graph load reason: %+v", status)
 	}
 	if !status.PhysicalColumnAssetsSupported || status.RebuildNeeded {
 		t.Fatalf("generic column_graph status lost physical support or requested rebuild: %+v", status)
+	}
+}
+
+func TestColumnGraphUnavailableStatusPreservesPhysicalSupportForLoaderFailures(t *testing.T) {
+	status := VectorIndexLoadStatus{
+		Strategy:                      VectorIndexStrategyColumnGraph,
+		PhysicalColumnAssetsSupported: true,
+	}
+	mergeColumnGraphLoadStatus(&status, VectorIndexLoadStatus{
+		PhysicalColumnAssetsSupported: true,
+		ColumnGraphUnavailableReason:  vectorIndexFallbackColumnGraphManifestInvalid,
+		BytesDisk:                     4096,
+	})
+	if status.PhysicalColumnAssetsSupported == false {
+		t.Fatalf("loader failure discarded physical column support: %+v", status)
+	}
+	if status.ExactFallbackReason != vectorIndexFallbackColumnGraphManifestInvalid || status.ColumnGraphUnavailableReason != vectorIndexFallbackColumnGraphManifestInvalid {
+		t.Fatalf("unexpected fallback reason: %+v", status)
+	}
+	if status.BytesDisk != 4096 || !status.RebuildNeeded {
+		t.Fatalf("unexpected status accounting: %+v", status)
 	}
 }
 
@@ -248,6 +269,45 @@ func TestCollectionVectorIndexColumnGraphOptionDoesNotLoadNativeIndex(t *testing
 	}
 	if status.Strategy != VectorIndexStrategyColumnGraph || status.ExactFallbackReason != vectorIndexFallbackColumnGraphStrategyMissing || status.ColumnGraphUnavailableReason != vectorIndexFallbackColumnGraphStrategyMissing {
 		t.Fatalf("unexpected column_graph strategy-missing status: %+v", status)
+	}
+}
+
+func TestLoadVectorIndexSnapshotRejectsInvalidStrategyOption(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "docs",
+		VectorIndexes: []VectorIndexDefinition{{
+			Name:       "embedding",
+			Field:      "embedding",
+			Metric:     VectorMetricCosine,
+			Dimensions: 2,
+		}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+
+	loaded, status, err := col.LoadVectorIndexSnapshot(VectorIndexOptions{
+		Name:       "embedding",
+		Field:      "embedding",
+		Metric:     VectorMetricCosine,
+		Dimensions: 2,
+		Strategy:   "bogus",
+	})
+	if err == nil || !strings.Contains(err.Error(), "unsupported vector index strategy") {
+		t.Fatalf("LoadVectorIndexSnapshot err=%v want unsupported strategy", err)
+	}
+	if loaded != nil || status.Loaded {
+		t.Fatalf("invalid strategy should not load an index: loaded=%v status=%+v", loaded != nil, status)
 	}
 }
 

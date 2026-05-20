@@ -82,6 +82,15 @@ func (c *Collection) RebuildVectorIndex(name string) (VectorIndexStatus, error) 
 		status.Duration = collectionObservedElapsedSince(start)
 		return status, nil
 	}
+	def, err = c.declaredVectorIndexDefinitionPrepared(name)
+	if err != nil {
+		return VectorIndexStatus{}, err
+	}
+	if vectorIndexDefinitionStrategy(def) == VectorIndexStrategyColumnGraph {
+		status := columnGraphRebuildUnsupportedStatus(def, columnGraphUnavailableLoadStatus(vectorIndexFallbackColumnGraphReprobeRequired))
+		status.Duration = collectionObservedElapsedSince(start)
+		return status, nil
+	}
 	index, err := c.buildVectorIndexPrepared(vectorIndexOptionsFromDefinition(def), false, false)
 	if err != nil {
 		return VectorIndexStatus{}, err

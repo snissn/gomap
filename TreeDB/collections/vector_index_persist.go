@@ -736,7 +736,11 @@ func (c *Collection) LoadVectorIndexSnapshot(opts VectorIndexOptions) (*VectorIn
 }
 
 func (c *Collection) loadVectorIndexSnapshot(opts VectorIndexOptions, loader ColumnVectorGraphIndexLoader) (*VectorIndex, VectorIndexLoadStatus, error) {
-	if vectorIndexOptionsStrategy(opts) == VectorIndexStrategyColumnGraph {
+	strategy, err := normalizeVectorIndexStrategy(opts.Strategy)
+	if err != nil {
+		return nil, nativeRuntimeVectorIndexLoadStatus(), err
+	}
+	if strategy == VectorIndexStrategyColumnGraph {
 		graph, status, err := c.loadColumnGraphVectorIndexSnapshot(opts, loader)
 		if graph != nil {
 			// This API can only return a native *VectorIndex handle. Keep a
@@ -744,9 +748,7 @@ func (c *Collection) loadVectorIndexSnapshot(opts VectorIndexOptions, loader Col
 			// VectorIndex; callers that need the graph must use the explicit
 			// column_graph loader/search path.
 			status.Loaded = false
-			status.ColumnGraphLoaded = false
 			status.ExactFallbackReason = vectorIndexFallbackColumnGraphHandleMissing
-			status.ColumnGraphUnavailableReason = vectorIndexFallbackColumnGraphHandleMissing
 			status.RebuildNeeded = false
 		}
 		return nil, status, err
