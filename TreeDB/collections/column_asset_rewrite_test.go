@@ -336,6 +336,17 @@ func TestColumnAssetRewriteCleansCopiedSegmentOnPublishPreflightRaceM15C(t *test
 	assertStringSlicesEqualM15C(t, beforeSegments, columnAssetSegmentNamesM15C(t, d, col))
 }
 
+func TestColumnAssetRewriteRecognizesBackendPreApplyFailureM15C(t *testing.T) {
+	err := fmt.Errorf("%w: %w", backenddb.ErrStorageMaintenancePublishPreApplyFailed, backenddb.ErrRecoveryRequired)
+	if !columnAssetRewritePublishFailedBeforeApply(err) {
+		t.Fatalf("columnAssetRewritePublishFailedBeforeApply(%v)=false, want true", err)
+	}
+	ambiguousErr := backenddb.ErrRecoveryRequired
+	if columnAssetRewritePublishFailedBeforeApply(ambiguousErr) {
+		t.Fatalf("columnAssetRewritePublishFailedBeforeApply(%v)=true, want false", ambiguousErr)
+	}
+}
+
 func staleColumnAssetRewriteManifestRootM15C(d *backenddb.DB) error {
 	payload, err := commitlog.EncodeRawKVBatchPayload([]commitlog.RawKVOperation{{
 		Op:    commitlog.RawKVOpSet,

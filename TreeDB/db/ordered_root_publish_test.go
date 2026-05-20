@@ -307,6 +307,9 @@ func TestPublishOrderedRootDeltaGroupMaintenanceRejectsUnmarkedRootDelta(t *test
 	if !errors.Is(err, ErrStorageMaintenanceRewriteMarkerMissing) {
 		t.Fatalf("maintenance publish error=%v want ErrStorageMaintenanceRewriteMarkerMissing", err)
 	}
+	if !errors.Is(err, ErrStorageMaintenancePublishPreApplyFailed) {
+		t.Fatalf("maintenance publish error=%v want ErrStorageMaintenancePublishPreApplyFailed", err)
+	}
 }
 
 func TestPublishOrderedRootDeltaGroupMaintenanceRejectsForgedPlan(t *testing.T) {
@@ -333,6 +336,9 @@ func TestPublishOrderedRootDeltaGroupMaintenanceRejectsForgedPlan(t *testing.T) 
 	if !errors.Is(err, ErrStorageMaintenancePlanMissing) {
 		t.Fatalf("maintenance publish error=%v want ErrStorageMaintenancePlanMissing", err)
 	}
+	if !errors.Is(err, ErrStorageMaintenancePublishPreApplyFailed) {
+		t.Fatalf("maintenance publish error=%v want ErrStorageMaintenancePublishPreApplyFailed", err)
+	}
 }
 
 func TestPublishOrderedRootDeltaGroupMaintenanceRejectsMissingPlan(t *testing.T) {
@@ -353,6 +359,9 @@ func TestPublishOrderedRootDeltaGroupMaintenanceRejectsMissingPlan(t *testing.T)
 	if !errors.Is(err, ErrStorageMaintenancePlanMissing) {
 		t.Fatalf("maintenance publish error=%v want ErrStorageMaintenancePlanMissing", err)
 	}
+	if !errors.Is(err, ErrStorageMaintenancePublishPreApplyFailed) {
+		t.Fatalf("maintenance publish error=%v want ErrStorageMaintenancePublishPreApplyFailed", err)
+	}
 }
 
 func TestPublishOrderedRootDeltaGroupMaintenanceRejectsSystemOnly(t *testing.T) {
@@ -372,6 +381,9 @@ func TestPublishOrderedRootDeltaGroupMaintenanceRejectsSystemOnly(t *testing.T) 
 	)
 	if !errors.Is(err, ErrStorageMaintenanceRootDeltaMissing) {
 		t.Fatalf("maintenance publish error=%v want ErrStorageMaintenanceRootDeltaMissing", err)
+	}
+	if !errors.Is(err, ErrStorageMaintenancePublishPreApplyFailed) {
+		t.Fatalf("maintenance publish error=%v want ErrStorageMaintenancePublishPreApplyFailed", err)
 	}
 }
 
@@ -409,6 +421,9 @@ func TestPublishOrderedRootDeltaGroupMaintenanceRejectsEmptyRootDelta(t *testing
 	)
 	if !errors.Is(err, ErrStorageMaintenanceRootDeltaEmpty) {
 		t.Fatalf("maintenance publish error=%v want ErrStorageMaintenanceRootDeltaEmpty", err)
+	}
+	if errors.Is(err, ErrStorageMaintenancePublishPreApplyFailed) {
+		t.Fatalf("maintenance publish error=%v unexpectedly marked pre-apply after root apply", err)
 	}
 }
 

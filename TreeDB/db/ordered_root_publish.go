@@ -53,6 +53,13 @@ var ErrStorageMaintenanceRootDeltaMissing = errors.New("treedb: storage-maintena
 // marked root delta did not actually rewrite its root.
 var ErrStorageMaintenanceRootDeltaEmpty = errors.New("treedb: storage-maintenance publish requires every maintenance root delta to rewrite its root")
 
+// ErrStorageMaintenancePublishPreApplyFailed marks a storage-maintenance
+// publish failure that happened before any root or system-root delta was
+// applied. Maintenance callers may use this to clean newly copied physical
+// assets without risking removal of data that a partially-applied root can
+// reach.
+var ErrStorageMaintenancePublishPreApplyFailed = errors.New("treedb: storage-maintenance publish failed before root apply")
+
 var (
 	errCommandWALContextZeroLSN = errors.New("treedb: command WAL context publish appended zero LSN")
 
@@ -1501,14 +1508,21 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered []Order
 }
 
 func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilderWithMaintenancePlan(plan StorageMaintenancePlan, ordered []OrderedRootDeltaPublishInput, preflight OrderedRootGroupPreflight, commandWALIntent *CommandWALIntent, buildSystemDeltaIter OrderedRootGroupSystemBuilder, mode orderedRootDeltaGroupSystemPublishMode) (newSystemRoot uint64, rootIDs []uint64, err error) {
+	storageMaintenance := mode == orderedRootDeltaGroupSystemPublishStorageMaintenance
+	preApplyErr := func(err error) error {
+		if err == nil || !storageMaintenance {
+			return err
+		}
+		return fmt.Errorf("%w: %w", ErrStorageMaintenancePublishPreApplyFailed, err)
+	}
 	if buildSystemDeltaIter == nil {
-		return 0, nil, errors.New("nil ordered root group system delta builder")
+		return 0, nil, preApplyErr(errors.New("nil ordered root group system delta builder"))
 	}
 	if db == nil {
-		return 0, nil, ErrClosed
+		return 0, nil, preApplyErr(ErrClosed)
 	}
 	if db.closing.Load() {
-		return 0, nil, ErrClosed
+		return 0, nil, preApplyErr(ErrClosed)
 	}
 
 	lockStart := time.Now()
@@ -1534,12 +1548,11 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilderWithMaintenanceP
 
 	if db.readOnly {
 		err = ErrReadOnly
-		return 0, nil, err
+		return 0, nil, preApplyErr(err)
 	}
-	storageMaintenance := mode == orderedRootDeltaGroupSystemPublishStorageMaintenance
 	if storageMaintenance {
 		if err = validateStorageMaintenanceOrderedRootDeltaInputs(plan, ordered); err != nil {
-			return 0, nil, err
+			return 0, nil, preApplyErr(err)
 		}
 	}
 	if commandWALIntent == nil {
@@ -1549,7 +1562,7 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilderWithMaintenanceP
 			err = db.rejectUnloggedCommandWALRootPublish()
 		}
 		if err != nil {
-			return 0, nil, err
+			return 0, nil, preApplyErr(err)
 		}
 	}
 
@@ -1561,7 +1574,7 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilderWithMaintenanceP
 		phaseStart := time.Now()
 		if err = preflight(); err != nil {
 			phaseStats.preflightNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
-			return 0, nil, err
+			return 0, nil, preApplyErr(err)
 		}
 		phaseStats.preflightNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	}
@@ -1572,7 +1585,7 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilderWithMaintenanceP
 	for idx := range ordered {
 		opts, err := db.orderedRootPublishOptionsForPolicy(ordered[idx].StoragePolicy)
 		if err != nil {
-			return 0, nil, err
+			return 0, nil, preApplyErr(err)
 		}
 		orderedConsumed[idx] = true
 		phaseStart := time.Now()

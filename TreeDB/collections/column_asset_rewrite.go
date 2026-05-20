@@ -221,7 +221,7 @@ func (c *Collection) columnAssetRewrite(ctx context.Context, opts ColumnAssetRew
 	}
 	newSystemRoot, rootIDs, err := c.publishColumnAssetRewriteManifestState(state, updatedMeta, updatedIdentity, patchedRecords)
 	if err != nil {
-		if errors.Is(err, errColumnAssetRewritePublishPreflightFailed) {
+		if columnAssetRewritePublishFailedBeforeApply(err) {
 			stats.Plan = columnAssetRewritePlanForDetail(stats.Plan, opts.Detailed)
 			return stats, cleanupRemap(err)
 		}
@@ -251,6 +251,11 @@ func (c *Collection) columnAssetRewrite(ctx context.Context, opts ColumnAssetRew
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
 	stats.Plan = columnAssetRewritePlanForDetail(stats.Plan, opts.Detailed)
 	return stats, nil
+}
+
+func columnAssetRewritePublishFailedBeforeApply(err error) bool {
+	return errors.Is(err, errColumnAssetRewritePublishPreflightFailed) ||
+		errors.Is(err, backenddb.ErrStorageMaintenancePublishPreApplyFailed)
 }
 
 type columnAssetRewriteManifestState struct {
