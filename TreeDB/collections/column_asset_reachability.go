@@ -165,6 +165,14 @@ var columnAssetReachabilitySourceBits = [...]struct {
 	{columnAssetReachabilitySourceUnknown, columnAssetReachabilitySourceUnknownMask},
 }
 
+var columnAssetReachabilitySourceMaskBySource = func() map[ColumnAssetReachabilitySource]columnAssetReachabilitySourceMask {
+	masks := make(map[ColumnAssetReachabilitySource]columnAssetReachabilitySourceMask, len(columnAssetReachabilitySourceBits))
+	for _, entry := range columnAssetReachabilitySourceBits {
+		masks[entry.source] = entry.mask
+	}
+	return masks
+}()
+
 type columnAssetReachabilityRange struct {
 	start  int64
 	end    int64
@@ -263,6 +271,7 @@ type columnAssetReachabilityInput struct {
 	detailed       bool
 	segmentDetails bool
 	refs           map[ColumnAssetRef]columnAssetReachabilitySourceMask
+	unknownSources map[ColumnAssetRef][]ColumnAssetReachabilitySource
 	sourceCounts   ColumnAssetReachabilitySourceStats
 }
 
@@ -302,13 +311,31 @@ func (in *columnAssetReachabilityInput) addRef(ref ColumnAssetRef, source Column
 	}
 	sourceMask, ok := columnAssetReachabilitySourceBit(source)
 	if !ok {
-		sourceMask = columnAssetReachabilitySourceUnknownMask
+		if !in.addUnknownRefSource(ref, source) {
+			return false
+		}
+		in.refs[ref] = in.refs[ref] | columnAssetReachabilitySourceUnknownMask
+		return true
 	}
 	mask := in.refs[ref]
 	if mask&sourceMask != 0 {
 		return false
 	}
 	in.refs[ref] = mask | sourceMask
+	return true
+}
+
+func (in *columnAssetReachabilityInput) addUnknownRefSource(ref ColumnAssetRef, source ColumnAssetReachabilitySource) bool {
+	if in.unknownSources == nil {
+		in.unknownSources = make(map[ColumnAssetRef][]ColumnAssetReachabilitySource)
+	}
+	sources := in.unknownSources[ref]
+	for _, existing := range sources {
+		if existing == source {
+			return false
+		}
+	}
+	in.unknownSources[ref] = append(sources, source)
 	return true
 }
 
@@ -378,7 +405,7 @@ func buildColumnAssetReachabilityPlan(ctx context.Context, input columnAssetReac
 			plan.Entries = append(plan.Entries, ColumnAssetReachabilityRefEntry{
 				Ref:     ref,
 				Status:  status,
-				Sources: columnAssetReachabilitySourcesForMask(sourceMask),
+				Sources: columnAssetReachabilitySourcesForMaskWithUnknown(sourceMask, input.unknownSources[ref]),
 			})
 		}
 		if status == ColumnAssetReachabilityUncertain {
@@ -636,12 +663,11 @@ func classifyColumnAssetReachabilitySegment(segment columnAssetReachabilitySegme
 }
 
 func columnAssetReachabilitySourceBit(source ColumnAssetReachabilitySource) (columnAssetReachabilitySourceMask, bool) {
-	for _, entry := range columnAssetReachabilitySourceBits {
-		if entry.source == source {
-			return entry.mask, source != columnAssetReachabilitySourceUnknown
-		}
+	mask, ok := columnAssetReachabilitySourceMaskBySource[source]
+	if !ok {
+		return columnAssetReachabilitySourceUnknownMask, false
 	}
-	return columnAssetReachabilitySourceUnknownMask, false
+	return mask, source != columnAssetReachabilitySourceUnknown
 }
 
 func columnAssetReachabilityStatusForSourceMask(mask columnAssetReachabilitySourceMask) ColumnAssetReachabilityStatus {
@@ -658,15 +684,27 @@ func columnAssetReachabilityStatusForSourceMask(mask columnAssetReachabilitySour
 }
 
 func columnAssetReachabilitySourcesForMask(mask columnAssetReachabilitySourceMask) []ColumnAssetReachabilitySource {
+	return columnAssetReachabilitySourcesForMaskWithUnknown(mask, nil)
+}
+
+func columnAssetReachabilitySourcesForMaskWithUnknown(mask columnAssetReachabilitySourceMask, unknownSources []ColumnAssetReachabilitySource) []ColumnAssetReachabilitySource {
 	if mask == 0 {
 		return nil
 	}
-	sources := make([]ColumnAssetReachabilitySource, 0, columnAssetReachabilitySourceMaskCount(mask))
+	count := columnAssetReachabilitySourceMaskCount(mask)
+	if len(unknownSources) != 0 {
+		count += len(unknownSources) - 1
+	}
+	sources := make([]ColumnAssetReachabilitySource, 0, count)
 	for _, entry := range columnAssetReachabilitySourceBits {
+		if entry.source == columnAssetReachabilitySourceUnknown && len(unknownSources) != 0 {
+			continue
+		}
 		if mask&entry.mask != 0 {
 			sources = append(sources, entry.source)
 		}
 	}
+	sources = append(sources, unknownSources...)
 	return sources
 }
 

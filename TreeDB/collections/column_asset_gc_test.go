@@ -419,7 +419,8 @@ func TestColumnAssetGCRejectsClosedDestructiveMaintenanceBeforePlanningM15B(t *t
 }
 
 func TestColumnAssetGCSegmentEligibleRequiresExactCanonicalPathM15B(t *testing.T) {
-	segmentDir := t.TempDir()
+	baseDir := t.TempDir()
+	segmentDir := filepath.Join(baseDir, "segments")
 	entry := ColumnAssetReachabilitySegmentEntry{
 		FileID:           7,
 		Path:             filepath.Join(segmentDir, columnAssetSegmentFileName(7)),
@@ -435,9 +436,27 @@ func TestColumnAssetGCSegmentEligibleRequiresExactCanonicalPathM15B(t *testing.T
 	if columnAssetGCSegmentEligibleForDelete(segmentDir, entry) {
 		t.Fatalf("nested canonical basename was accepted: %+v", entry)
 	}
+	entry.Path = segmentDir + string(os.PathSeparator) + ".." + string(os.PathSeparator) + filepath.Base(segmentDir) + string(os.PathSeparator) + columnAssetSegmentFileName(7)
+	if columnAssetGCSegmentEligibleForDelete(segmentDir, entry) {
+		t.Fatalf("non-canonical equivalent path was accepted: %+v", entry)
+	}
 	entry.Path = filepath.Join(segmentDir, columnAssetSegmentFileName(8))
 	if columnAssetGCSegmentEligibleForDelete(segmentDir, entry) {
 		t.Fatalf("wrong canonical file id was accepted: %+v", entry)
+	}
+}
+
+func TestColumnAssetGCClosedDuringPlanningReturnsErrClosedM15B(t *testing.T) {
+	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
+	d := openCollectionCommandWALDB(t, dir)
+	col := openColumnStoreCollectionM10B(t, d)
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	_, err := col.columnAssetGC(context.Background(), ColumnAssetGCOptions{})
+	if !errors.Is(err, backenddb.ErrClosed) {
+		t.Fatalf("columnAssetGC err=%v want ErrClosed", err)
 	}
 }
 

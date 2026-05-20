@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
 // ColumnAssetGCOptions controls safe M15B column asset segment reclamation.
@@ -91,7 +93,7 @@ func (c *Collection) columnAssetGC(ctx context.Context, opts ColumnAssetGCOption
 		BytesRetained:    plan.Segments.BytesTotal,
 	}
 	if err != nil {
-		return stats, err
+		return stats, c.columnAssetGCNormalizeMaintenanceRaceError(err)
 	}
 	if !plan.Complete {
 		if opts.DryRun {
@@ -176,13 +178,22 @@ func columnAssetGCSegmentEligibleForDelete(segmentDir string, entry ColumnAssetR
 		entry.ReclaimableBytes != entry.Bytes {
 		return false
 	}
-	cleanSegmentDir := filepath.Clean(segmentDir)
-	cleanPath := filepath.Clean(entry.Path)
-	expected := filepath.Clean(filepath.Join(cleanSegmentDir, columnAssetSegmentFileName(entry.FileID)))
-	if cleanPath != expected {
+	expected := filepath.Join(segmentDir, columnAssetSegmentFileName(entry.FileID))
+	if entry.Path != expected {
 		return false
 	}
 	return true
+}
+
+func (c *Collection) columnAssetGCNormalizeMaintenanceRaceError(err error) error {
+	if err == nil || c == nil || c.db == nil {
+		return err
+	}
+	maintenanceErr := c.db.CheckStorageMaintenanceReady()
+	if errors.Is(maintenanceErr, backenddb.ErrClosed) {
+		return maintenanceErr
+	}
+	return err
 }
 
 func columnAssetGCPlanForDetail(plan ColumnAssetReachabilityPlan, detailed, segmentDetails bool) ColumnAssetReachabilityPlan {
