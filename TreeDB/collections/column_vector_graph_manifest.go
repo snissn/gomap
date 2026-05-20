@@ -379,7 +379,7 @@ func (c *Collection) columnGraphVectorIndexStatus(def VectorIndexDefinition, cfg
 		status.RebuildNeeded = true
 		return status, nil
 	}
-	if !columnVectorGraphManifestMatchesDefinition(c.meta.Name, graph, def, *cfg) {
+	if !columnVectorGraphManifestMatchesDefinition(c.meta.Name, graph, def, *cfg, manifest, records) {
 		status.State = VectorIndexStateColumnGraphRebuildNeeded
 		status.Reason = VectorIndexReasonColumnGraphAssetMismatch
 		status.RebuildNeeded = true
@@ -396,11 +396,15 @@ func (c *Collection) columnGraphVectorIndexStatus(def VectorIndexDefinition, cfg
 	return status, nil
 }
 
-func columnVectorGraphManifestMatchesDefinition(collection string, graph columnVectorGraphManifestSnapshot, def VectorIndexDefinition, cfg ColumnStoreConfig) bool {
+func columnVectorGraphManifestMatchesDefinition(collection string, graph columnVectorGraphManifestSnapshot, def VectorIndexDefinition, cfg ColumnStoreConfig, manifest columnManifestSnapshot, records []columnManifestRecord) bool {
 	if cfg.ActiveManifest == nil {
 		return false
 	}
 	graphCfg, err := columnVectorGraphPhysicalColumnStoreConfig(collection, cfg, def)
+	if err != nil {
+		return false
+	}
+	baseChecksum, err := columnVectorGraphBaseManifestChecksum(manifest, records, cfg)
 	if err != nil {
 		return false
 	}
@@ -413,10 +417,32 @@ func columnVectorGraphManifestMatchesDefinition(collection string, graph columnV
 		graph.EfConstruction == def.EfConstruction &&
 		graph.EfSearch == def.EfSearch &&
 		graph.BaseManifestGeneration == cfg.ActiveManifest.Generation &&
+		graph.BaseManifestChecksum == baseChecksum &&
 		graph.BaseSchemaHash == cfg.SchemaHash &&
 		graph.GraphSchemaHash == graphCfg.SchemaHash &&
 		graph.AssetRef.Namespace == graphCfg.AssetManager.Namespace &&
 		graph.AssetRef.Generation == graph.BaseManifestGeneration
+}
+
+func columnVectorGraphBaseManifestChecksum(manifest columnManifestSnapshot, records []columnManifestRecord, cfg ColumnStoreConfig) (uint64, error) {
+	activeRecords, err := activeColumnManifestRecordsForScan(records, manifest.Generation)
+	if err != nil {
+		return 0, err
+	}
+	baseRecords := activeRecords[:0]
+	for _, record := range activeRecords {
+		if bytes.HasPrefix(record.key, columnManifestVectorGraphRecordPrefixBytes) {
+			continue
+		}
+		baseRecords = append(baseRecords, record)
+	}
+	sortColumnManifestRecords(baseRecords)
+	return checksumColumnManifestRecords(ColumnPublishManifestEncodeInput{
+		Collection:        manifest.Collection,
+		ColumnStore:       cfg,
+		Operation:         manifest.Operation,
+		AppliedCommandLSN: manifest.AppliedCommandLSN,
+	}, manifest.Generation, baseRecords), nil
 }
 
 func validateColumnVectorGraphAssetRefAvailable(rootDir string, ref ColumnAssetRef) error {

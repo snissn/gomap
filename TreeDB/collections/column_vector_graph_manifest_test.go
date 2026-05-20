@@ -296,6 +296,44 @@ func TestColumnGraphVectorIndexStatusFailsClosedOnMissingOrMismatchedAssetV2A(t 
 		}
 	})
 
+	t.Run("base_manifest_checksum_mismatch", func(t *testing.T) {
+		records, goodIdentity := testColumnGraphManifestRecordsV2A(t, *baseCfg, def, identity, prepared.Ref, prepared.Bytes, prepared.RowCount)
+		for i := range records {
+			if !bytes.HasPrefix(records[i].key, columnManifestVectorGraphRecordPrefixBytes) {
+				continue
+			}
+			graph, err := decodeColumnVectorGraphManifestRecord(records[i].value)
+			if err != nil {
+				t.Fatalf("decode graph record: %v", err)
+			}
+			graph.BaseManifestChecksum++
+			records[i].value, err = encodeColumnVectorGraphManifestRecord(graph)
+			if err != nil {
+				t.Fatalf("encode graph record: %v", err)
+			}
+		}
+		sortColumnManifestRecords(records)
+		badIdentity := goodIdentity
+		badIdentity.Checksum = checksumColumnManifestRecords(ColumnPublishManifestEncodeInput{
+			Collection:        "docs",
+			ColumnStore:       *baseCfg,
+			Operation:         ColumnPublishOperationInsert,
+			AppliedCommandLSN: 1,
+		}, badIdentity.Generation, records)
+		publishColumnGraphCatalogForTestV2A(t, d, meta, badIdentity, records)
+		col, err := NewCollectionManager(d).OpenCollection("docs")
+		if err != nil {
+			t.Fatalf("open collection: %v", err)
+		}
+		status, err := col.VectorIndexStatus(def.Name)
+		if err != nil {
+			t.Fatalf("VectorIndexStatus: %v", err)
+		}
+		if status.State != VectorIndexStateColumnGraphRebuildNeeded || status.Reason != VectorIndexReasonColumnGraphAssetMismatch || !status.RebuildNeeded {
+			t.Fatalf("status=%+v want checksum mismatch rebuild-needed", status)
+		}
+	})
+
 	t.Run("missing_asset", func(t *testing.T) {
 		records, goodIdentity := testColumnGraphManifestRecordsV2A(t, *baseCfg, def, identity, prepared.Ref, prepared.Bytes, prepared.RowCount)
 		publishColumnGraphCatalogForTestV2A(t, d, meta, goodIdentity, records)
@@ -394,14 +432,32 @@ func testColumnGraphVectorIndexDefinitionV2A() VectorIndexDefinition {
 
 func testColumnVectorGraphManifestRecordV2A(tb testing.TB, baseCfg *ColumnStoreConfig, def VectorIndexDefinition, identity ColumnManifestIdentity, ref ColumnAssetRef) columnManifestRecord {
 	tb.Helper()
-	records, _ := testColumnGraphManifestRecordsV2A(tb, *baseCfg, def, identity, ref, ref.Length, 1)
-	for _, record := range records {
-		if bytes.HasPrefix(record.key, columnManifestVectorGraphRecordPrefixBytes) {
-			return record
-		}
+	graphCfg, err := columnVectorGraphPhysicalColumnStoreConfig("events", *baseCfg, def)
+	if err != nil {
+		tb.Fatalf("columnVectorGraphPhysicalColumnStoreConfig: %v", err)
 	}
-	tb.Fatal("missing graph manifest record")
-	return columnManifestRecord{}
+	record := columnVectorGraphManifestSnapshot{
+		IndexName:              def.Name,
+		Field:                  def.Field,
+		Metric:                 def.Metric,
+		Encoding:               def.Encoding,
+		Dimensions:             def.Dimensions,
+		M:                      def.M,
+		EfConstruction:         def.EfConstruction,
+		EfSearch:               def.EfSearch,
+		BaseManifestGeneration: identity.Generation,
+		BaseManifestChecksum:   identity.Checksum,
+		BaseSchemaHash:         baseCfg.SchemaHash,
+		GraphSchemaHash:        graphCfg.SchemaHash,
+		RowCount:               1,
+		AssetRef:               ref,
+		AssetBytes:             ref.Length,
+	}
+	encoded, err := encodeColumnVectorGraphManifestRecord(record)
+	if err != nil {
+		tb.Fatalf("encodeColumnVectorGraphManifestRecord: %v", err)
+	}
+	return columnManifestRecord{key: columnVectorGraphManifestRecordKey(def.Name), value: encoded}
 }
 
 func testColumnGraphManifestRecordsV2A(tb testing.TB, baseCfg ColumnStoreConfig, def VectorIndexDefinition, identity ColumnManifestIdentity, ref ColumnAssetRef, assetBytes int64, rows int) ([]columnManifestRecord, ColumnManifestIdentity) {
@@ -424,6 +480,11 @@ func testColumnGraphManifestRecordsV2A(tb testing.TB, baseCfg ColumnStoreConfig,
 	if err != nil {
 		tb.Fatalf("encodeColumnManifestHeaderRecord: %v", err)
 	}
+	baseRecords := []columnManifestRecord{
+		{key: []byte(columnManifestHeaderRecordKey), value: header},
+	}
+	sortColumnManifestRecords(baseRecords)
+	baseChecksum := checksumColumnManifestRecords(input, identity.Generation, baseRecords)
 	record := columnVectorGraphManifestSnapshot{
 		IndexName:              def.Name,
 		Field:                  def.Field,
@@ -434,7 +495,7 @@ func testColumnGraphManifestRecordsV2A(tb testing.TB, baseCfg ColumnStoreConfig,
 		EfConstruction:         def.EfConstruction,
 		EfSearch:               def.EfSearch,
 		BaseManifestGeneration: identity.Generation,
-		BaseManifestChecksum:   identity.Checksum,
+		BaseManifestChecksum:   baseChecksum,
 		BaseSchemaHash:         baseCfg.SchemaHash,
 		GraphSchemaHash:        graphCfg.SchemaHash,
 		RowCount:               rows,
