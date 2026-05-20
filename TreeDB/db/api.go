@@ -317,6 +317,9 @@ func (db *DB) ColumnAssetRootDir() string {
 
 // CheckStorageMaintenanceReady verifies this handle may run destructive storage
 // maintenance such as GC, rewrite cleanup, or typed column asset reclamation.
+// It returns ErrClosed for nil or closing handles, ErrReadOnly for read-only
+// handles, and otherwise returns any command-WAL poison error that would make
+// storage maintenance unsafe.
 func (db *DB) CheckStorageMaintenanceReady() error {
 	if db == nil || db.closing.Load() {
 		return ErrClosed

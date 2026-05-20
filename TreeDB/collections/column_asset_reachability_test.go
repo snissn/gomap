@@ -766,6 +766,30 @@ func TestColumnAssetReachabilityUnknownSourceFailsClosedM15B(t *testing.T) {
 	}
 }
 
+func TestColumnAssetReachabilityInputSkipsUnknownSourceDetailsWhenNotDetailedM15B(t *testing.T) {
+	ref := ColumnAssetRef{
+		Kind:      ColumnAssetKindTCS1PartImage,
+		FileID:    1,
+		Offset:    8,
+		Length:    64,
+		Checksum:  99,
+		Namespace: "events/column-assets",
+	}
+	input := columnAssetReachabilityInput{segmentDetails: true}
+	if !input.addRef(ref, ColumnAssetReachabilitySource("future_source")) {
+		t.Fatal("first unknown source ref was dropped")
+	}
+	if input.addRef(ref, ColumnAssetReachabilitySource("future_source_2")) {
+		t.Fatal("second unknown source ref should be collapsed when detailed diagnostics are disabled")
+	}
+	if input.unknownSources != nil {
+		t.Fatalf("unknownSources allocated in non-detailed mode: %+v", input.unknownSources)
+	}
+	if got := input.refs[ref]; got&columnAssetReachabilitySourceUnknownMask == 0 {
+		t.Fatalf("ref source mask=%b want unknown bit", got)
+	}
+}
+
 func TestColumnAssetReachabilityPlanMarksZeroByteUnknownSegmentIncompleteM15A(t *testing.T) {
 	const namespaceName = "events/column-assets"
 	root := t.TempDir()
@@ -851,6 +875,46 @@ func TestColumnAssetReachabilityPlanCancellationBeforeSnapshotM15A(t *testing.T)
 	}
 	if plan.Sources.ManifestRecords != 0 || plan.Refs.Total != 0 || plan.Segments.Total != 0 || len(plan.Entries) != 0 || len(plan.SegmentEntries) != 0 {
 		t.Fatalf("canceled plan should not expose partial stats: %+v", plan)
+	}
+}
+
+func TestColumnAssetReachabilityPlanPreservesIdentityOnSnapshotViewErrorM15A(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	active := ColumnManifestIdentity{
+		Generation: 7,
+		Format:     columnManifestFormatTCS1,
+		Version:    columnManifestIdentityVersion,
+		Checksum:   0xabcddcbe,
+	}
+	meta, err := normalizeCollectionMeta(CollectionMeta{Name: "events", Options: CollectionOptions{ColumnStore: testColumnStoreConfig(&active)}})
+	if err != nil {
+		t.Fatalf("normalizeCollectionMeta: %v", err)
+	}
+	cfg := meta.Options.ColumnStore
+	if cfg == nil || cfg.ActiveManifest == nil || cfg.AssetManager == nil {
+		t.Fatalf("missing column store metadata: %+v", cfg)
+	}
+	publishColumnStoreCatalogForTest(t, d, meta, active)
+
+	col := &Collection{db: d, meta: CollectionMeta{Name: "events"}}
+	plan, err := col.PlanColumnAssetReachability(context.Background(), ColumnAssetReachabilityOptions{Detailed: true})
+	if err == nil {
+		t.Fatal("PlanColumnAssetReachability err=nil, want fail-closed incomplete manifest error")
+	}
+	if !plan.ProtectOnly || plan.Complete {
+		t.Fatalf("plan=%+v want protect-only incomplete identity", plan)
+	}
+	if plan.Collection != "events" || plan.Namespace != cfg.AssetManager.Namespace ||
+		plan.ActiveManifestGeneration != active.Generation || plan.RecoveryManifestGeneration != active.Generation {
+		t.Fatalf("plan identity=%+v want collection/namespace/generation preserved", plan)
+	}
+	if plan.Sources.ManifestRecords != 0 || plan.Refs.Total != 0 || plan.Segments.Total != 0 || len(plan.Entries) != 0 || len(plan.SegmentEntries) != 0 {
+		t.Fatalf("failed plan should not expose partial stats: %+v", plan)
 	}
 }
 
