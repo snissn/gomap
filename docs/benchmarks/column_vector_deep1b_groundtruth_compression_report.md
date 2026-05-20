@@ -150,6 +150,35 @@ as evidence that small residual corrections can move boundary metrics, but do
 not promote it above SQ8, u4 scalar, boundary-weighted PCA, or
 pairwise-difference PCA from the top100 oracle frontier.
 
+The harness now also emits a `pca_cauchy_bound_cascade` family for safe
+low-rank-plus-tail pruning. It scores the local PCA representation, stores an
+extra fp16 residual norm per row, and uses a conservative Cauchy tail bound:
+prune a row only when `approx + bound` cannot beat the target lower-bound
+threshold. This is still an official top100 local-neighborhood upper-bound
+probe, not a TreeDB production executor.
+
+Focused q0/q1 smoke artifact:
+
+```text
+/tmp/gomap_deep1b_top100_bound_smoke_20260520_021918/report.md
+```
+
+Selected aggregate rows:
+
+| Method | Row-code B/vector | Metadata B/vector | p50 pruned | p50 survivors | total FN top10 | total FN top20 | total FN top50 | p50 top10@50 after prune | p50 top20@50 after prune | Avg mean bound | Avg scan ns/vector | Interpretation |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| `local_pca_i8_rank32_cauchy_tail_bound_top50` | `34` | `66.00` | `0` | `100` | `0` | `0` | `0` | `10/10` | `18/20` | `0.18686` | `102.19` | Safe in the smoke, but the bound is too loose to prune useful low-rank work. |
+| `local_pca_i8_rank64_cauchy_tail_bound_top50` | `66` | `128.08` | `0` | `100` | `0` | `0` | `0` | `10/10` | `19/20` | `0.05288` | `140.51` | Same story at the main low-rank budget: safe, no pruning. |
+| `local_pca_i8_rank96_cauchy_tail_bound_top20` | `98` | `190.16` | `58` | `39` | `0` | `0` | `19` | `10/10` | `20/20` | `0.00357` | `157.17` | Near-full-rank pruning can preserve top10/top20, but drops some exact top50 rows and costs more row bytes than SQ8. |
+| `local_pca_i8_rank96_cauchy_tail_bound_top50` | `98` | `190.16` | `14` | `81` | `0` | `0` | `0` | `10/10` | `20/20` | `0.00357` | `174.36` | Safe for the measured top50 survivor gate, but too high-byte to promote. |
+
+The result closes the immediate progressive-bound question for the top100
+oracle pass: the bound is mechanically conservative in this smoke, but it does
+not prune at the useful 32B/64B ranks. It only begins to remove rows near
+full-rank, where the row-code budget is already worse than the conservative
+SQ8 lane. Keep it as a diagnostic and broaden it to q0..99 only if a complete
+oracle-frontier table is needed.
+
 The top100-only tournament changes the immediate emphasis:
 
 - Full-dim SQ8 remains the conservative compressed candidate/rerank lane.
@@ -1499,7 +1528,7 @@ The current evidence map is:
 | Fixed byte-budget comparisons | Top100 and buildable runs cover the 32/48/64/80/96-byte ladder where the lane exists. The graph-visited full-ladder scout covers 32/48/64/80/96 for PQ, residual-PQ, OPQ-style, local residual-PQ, and local residual-OPQ lanes, and compares them against local PCA and scalar lanes at the same row-code budgets. The exact in-cluster graph smoke currently covers only 32/48/64/96 selected rows, so it is locality/routing instrumentation rather than a full budget ladder. | Satisfied for the measured scout lanes; still partial for production because larger/full TreeDB granules remain unmeasured. |
 | Metadata-amortized accounting | Buildable codebook tables split row-code bytes and metadata bytes. Top100 oracle rows are explicitly row-code payload probes; their metadata amortization is not production evidence. | Satisfied for buildable codebook lanes; top100 metadata remains intentionally unproven. |
 | Train/eval discipline for PQ/OPQ/residual-PQ | PQ, residual-PQ, OPQ-style, local residual-PQ, and local residual-OPQ rows are trained on buildable train samples and evaluated on held-out eval/query slices, not on a single top100 cloud. | Satisfied for measured codebook lanes. |
-| Top100-only method coverage | Measured local PCA int8, adaptive rank, full-dim SQ8, scalar low-bit lanes, scale-policy probes, norm-explicit correction, boundary-weighted PCA, pairwise-difference PCA, query-centered oracle projection, random-rotation scalar/sign probes, and PCA plus tiny residual correction. | Broadly satisfied; low-rank-plus-tail progressive bounds remain open. |
+| Top100-only method coverage | Measured local PCA int8, adaptive rank, full-dim SQ8, scalar low-bit lanes, scale-policy probes, norm-explicit correction, boundary-weighted PCA, pairwise-difference PCA, query-centered oracle projection, random-rotation scalar/sign probes, PCA plus tiny residual correction, and a q0/q1 PCA Cauchy-tail safe-bound smoke. | Broadly satisfied for method triage; the safe-bound lane is only a focused smoke, not yet a q0..99 aggregate. |
 | Production/buildable granule coverage | Measured row-id controls, IVF clusters, IVF-sorted fixed blocks, graph-neighborhood fixed blocks, graph-sorted row-adjacent fixed blocks, a graph-visited block-routing scout over sealed graph-sorted storage blocks, and an exact in-cluster graph-visited smoke over exact graph-sorted blocks. | Partial; full HNSW/TreeDB graph visited sets and actual TreeDB granules are not measured. |
 | Cascade architecture | Existing rows report compressed shortlist containment and exact rerank@20/@50 recall. The buildable scout renderer now emits staged cascade measurements: measured compressed scan cost, measured approximate topK selection over materialized scores, a measured resident-fp32 row-id rerank kernel, and a measured resident full-dim SQ8/int8 rerank kernel at top20/top50/top100, with selected-code bytes plus fp32 or full-int8 rerank bytes. | Partial; this is still not full end-to-end latency because I/O, decompression, cache effects, fused scan+topK executor effects, optimized int8 scoring, and optional fp32-after-int8 rerank are not measured. |
 | p50/p90/worst-query behavior | Top100 adaptive-rank tables include p50/p90/worst K. The buildable scout renderer now emits aggregate routing and conditional-codec p50/p90/worst tables for new artifacts. The curated historical sections in this report still emphasize p50/worst unless regenerated from those artifacts. | Partial; larger buildable runs should be regenerated or summarized with the new p90 tables before final promotion. |
@@ -1530,10 +1559,10 @@ strong research frontier, not a production format decision.
    kernel, optional exact fp32 rerank after int8, p50/p95 end-to-end latency,
    decompression/I/O/cache effects, a fused scan+topK executor, and cache-aware
    bytes read/query.
-5. Finish safe/progressive low-rank-plus-tail bounds only if the top100 oracle
-   path remains needed for method triage; the tiny residual sketch has now been
-   rerun on queries `0..99` and is not promoted above the current oracle
-   frontier.
+5. Broaden the safe/progressive low-rank-plus-tail bound lane to q0..99 only if
+   a complete oracle-frontier table is needed. The current q0/q1 smoke says the
+   bound is safe but too loose at useful 32B/64B ranks, and only starts pruning
+   near full-rank/high-byte settings that do not beat SQ8.
 6. Add CPU-friendly scalar/low-build challengers after the first production
    frontier: LVQ/SVS-style scalar compression, RaBitQ-inspired and
    TurboQuant-inspired lanes, with honest labels when the implementation is

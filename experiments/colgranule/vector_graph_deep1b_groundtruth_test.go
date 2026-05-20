@@ -232,6 +232,18 @@ type columnVectorGraphDeep1BGroundtruthMethodReport struct {
 	MaxErrorOverGap50                      float64   `json:"max_error_over_gap_50_51,omitempty"`
 	MeanRelativeL2                         float64   `json:"mean_relative_l2,omitempty"`
 	MaxRelativeL2                          float64   `json:"max_relative_l2,omitempty"`
+	BoundTargetK                           int       `json:"bound_target_k,omitempty"`
+	BoundPrunedRows                        int       `json:"bound_pruned_rows,omitempty"`
+	BoundSurvivorRows                      int       `json:"bound_survivor_rows,omitempty"`
+	BoundSurvivorTop10                     int       `json:"bound_survivor_top10,omitempty"`
+	BoundSurvivorTop20                     int       `json:"bound_survivor_top20,omitempty"`
+	BoundSurvivorTop50                     int       `json:"bound_survivor_top50,omitempty"`
+	BoundFalseNegativesTop10               int       `json:"bound_false_negatives_top10,omitempty"`
+	BoundFalseNegativesTop20               int       `json:"bound_false_negatives_top20,omitempty"`
+	BoundFalseNegativesTop50               int       `json:"bound_false_negatives_top50,omitempty"`
+	BoundThreshold                         float64   `json:"bound_threshold,omitempty"`
+	MeanBound                              float64   `json:"mean_bound,omitempty"`
+	MaxBound                               float64   `json:"max_bound,omitempty"`
 	Notes                                  string    `json:"notes,omitempty"`
 }
 
@@ -367,6 +379,7 @@ func columnVectorGraphDeep1BAnalyzeGroundtruthQuery(tb testing.TB, baseFile *os.
 		columnVectorGraphDeep1BFillGroundtruthMethodMetrics(&method, exactScores, encoding.approxScores, report.ScoreMargins)
 		report.Methods = append(report.Methods, method)
 	}
+	report.Methods = append(report.Methods, columnVectorGraphDeep1BEvaluateGroundtruthPCABoundCascadeMethods(tb, vectors, invNorms, query, queryInvNorm, exactScores, report.ScoreMargins, model, pcaBuildNanos, rows, dims, validRanks, scanIters)...)
 	report.Methods = append(report.Methods, columnVectorGraphDeep1BEvaluateGroundtruthPCABasisVariants(tb, vectors, invNorms, query, queryInvNorm, exactScores, report.ScoreMargins, rows, dims, validRanks, scanIters)...)
 	report.Methods = append(report.Methods, columnVectorGraphDeep1BEvaluateGroundtruthPCAResidualSketchMethods(tb, vectors, invNorms, query, queryInvNorm, exactScores, report.ScoreMargins, rows, dims, validRanks, scanIters, int64(queryIndex))...)
 	report.Methods = append(report.Methods, columnVectorGraphDeep1BEvaluateGroundtruthScalarMethods(vectors, invNorms, query, queryInvNorm, exactScores, report.ScoreMargins, rows, dims, scanIters)...)
@@ -1088,6 +1101,177 @@ func (scorer columnVectorGraphDeep1BLocalPCAScorer) scoreInto(encoding columnVec
 		}
 		scores[row] = dot * queryInvNorm * encoding.invNorms[row]
 	}
+}
+
+type columnVectorGraphDeep1BPCABoundScratch struct {
+	lower         []float32
+	upper         []float32
+	lowerTopRows  []int
+	lowerTopScore []float32
+}
+
+type columnVectorGraphDeep1BPCABoundStats struct {
+	targetK      int
+	threshold    float32
+	prunedRows   int
+	survivorRows int
+}
+
+func columnVectorGraphDeep1BEvaluateGroundtruthPCABoundCascadeMethods(tb testing.TB, vectors []float32, invNorms []float32, query []float32, queryInvNorm float32, exactScores []float32, margins map[string]float64, model columnVectorGraphDeep1BLocalPCAModel, modelBuildNanos int64, rows int, dims int, ranks []int, scanIters int) []columnVectorGraphDeep1BGroundtruthMethodReport {
+	tb.Helper()
+	targetKs := []int{20, 50}
+	validRanks := columnVectorGraphDeep1BFilterRanksForRows(tb, ranks, rows, dims)
+	out := make([]columnVectorGraphDeep1BGroundtruthMethodReport, 0, len(validRanks)*len(targetKs))
+	for _, rank := range validRanks {
+		encodeStart := time.Now()
+		encoding := columnVectorGraphDeep1BEncodeLocalPCARank(vectors, invNorms, model, rank, query, queryInvNorm, rows, dims)
+		encodeNanos := time.Since(encodeStart).Nanoseconds()
+		boundStart := time.Now()
+		bounds, meanBound, maxBound := columnVectorGraphDeep1BLocalPCAResidualCosineBounds(vectors, model, encoding, rows, dims)
+		boundBuildNanos := time.Since(boundStart).Nanoseconds()
+		scorer := columnVectorGraphDeep1BPrepareLocalPCAScorer(model, encoding, query, rows, dims)
+		for _, targetK := range targetKs {
+			if targetK > rows {
+				continue
+			}
+			scratch := columnVectorGraphDeep1BMakePCABoundScratch(rows, targetK)
+			boundedScores := make([]float32, rows)
+			stats := columnVectorGraphDeep1BApplyPCACauchyBoundPruneInto(encoding.approxScores, bounds, targetK, scratch, boundedScores)
+			method := columnVectorGraphDeep1BNewGroundtruthMethodReport(
+				"pca_cauchy_bound_cascade",
+				fmt.Sprintf("local_pca_i8_rank%d_cauchy_tail_bound_top%d", rank, targetK),
+				float64(rank+2),
+				float64(model.centroidMetaBytes+rank*dims*2+rank*2+rows*2)/float64(rows),
+				modelBuildNanos+encodeNanos+boundBuildNanos,
+				"official top100 oracle progressive-refinement probe; scores low-rank PCA, stores an extra fp16 residual norm per row, uses a conservative Cauchy tail bound to prune rows whose upper bound cannot beat the target lower-bound threshold, and leaves survivors ranked by the low-rank score; this is not a production executor or proof of buildable TreeDB granules",
+			)
+			method.ScanNanosPerVector = columnVectorGraphDeep1BMeasureGroundtruthScan(rows, scanIters, func(dst []float32) {
+				scorer.scoreInto(encoding, queryInvNorm, rows, dst)
+				columnVectorGraphDeep1BApplyPCACauchyBoundPruneInto(dst, bounds, targetK, scratch, dst)
+			})
+			method.MeanRelativeL2 = encoding.meanRelativeL2
+			method.MaxRelativeL2 = encoding.maxRelativeL2
+			method.BoundTargetK = targetK
+			method.BoundPrunedRows = stats.prunedRows
+			method.BoundSurvivorRows = stats.survivorRows
+			method.BoundThreshold = float64(stats.threshold)
+			method.MeanBound = meanBound
+			method.MaxBound = maxBound
+			method.BoundSurvivorTop10 = columnVectorGraphDeep1BCountBoundSurvivingExactTopK(exactScores, boundedScores, 10)
+			method.BoundFalseNegativesTop10 = min(10, rows) - method.BoundSurvivorTop10
+			if rows >= 20 {
+				method.BoundSurvivorTop20 = columnVectorGraphDeep1BCountBoundSurvivingExactTopK(exactScores, boundedScores, 20)
+				method.BoundFalseNegativesTop20 = min(20, rows) - method.BoundSurvivorTop20
+			}
+			if rows >= 50 {
+				method.BoundSurvivorTop50 = columnVectorGraphDeep1BCountBoundSurvivingExactTopK(exactScores, boundedScores, 50)
+				method.BoundFalseNegativesTop50 = min(50, rows) - method.BoundSurvivorTop50
+			}
+			columnVectorGraphDeep1BFillGroundtruthMethodMetrics(&method, exactScores, boundedScores, margins)
+			method.MaxScoreError, method.MeanScoreError = columnVectorGraphDeep1BScoreErrorMetrics(exactScores, encoding.approxScores)
+			method.MeanErrorOverGap10 = columnVectorGraphDeep1BRatioOrZero(method.MeanScoreError, margins["gap_10_11"])
+			method.MaxErrorOverGap10 = columnVectorGraphDeep1BRatioOrZero(method.MaxScoreError, margins["gap_10_11"])
+			method.MeanErrorOverGap20 = columnVectorGraphDeep1BRatioOrZero(method.MeanScoreError, margins["gap_20_21"])
+			method.MaxErrorOverGap20 = columnVectorGraphDeep1BRatioOrZero(method.MaxScoreError, margins["gap_20_21"])
+			method.MeanErrorOverGap50 = columnVectorGraphDeep1BRatioOrZero(method.MeanScoreError, margins["gap_50_51"])
+			method.MaxErrorOverGap50 = columnVectorGraphDeep1BRatioOrZero(method.MaxScoreError, margins["gap_50_51"])
+			out = append(out, method)
+		}
+	}
+	return out
+}
+
+func columnVectorGraphDeep1BMakePCABoundScratch(rows int, targetK int) *columnVectorGraphDeep1BPCABoundScratch {
+	targetK = min(targetK, rows)
+	return &columnVectorGraphDeep1BPCABoundScratch{
+		lower:         make([]float32, rows),
+		upper:         make([]float32, rows),
+		lowerTopRows:  make([]int, targetK),
+		lowerTopScore: make([]float32, targetK),
+	}
+}
+
+func columnVectorGraphDeep1BLocalPCAResidualCosineBounds(vectors []float32, model columnVectorGraphDeep1BLocalPCAModel, encoding columnVectorGraphDeep1BLocalPCAEncoding, rows int, dims int) ([]float32, float64, float64) {
+	if len(vectors) != rows*dims {
+		panic(fmt.Sprintf("local PCA residual-bound vectors=%d want=%d", len(vectors), rows*dims))
+	}
+	bounds := make([]float32, rows)
+	recon := make([]float32, dims)
+	var sum float64
+	var maxBound float64
+	for row := 0; row < rows; row++ {
+		columnVectorGraphDeep1BReconstructLocalPCARow(recon, model, encoding, row, dims)
+		srcBase := row * dims
+		var residualNormSquared float64
+		for j := 0; j < dims; j++ {
+			diff := float64(vectors[srcBase+j] - recon[j])
+			residualNormSquared += diff * diff
+		}
+		residualNorm := float32(math.Sqrt(residualNormSquared))
+		residualNorm = columnVectorGraphDeep1BFloat16BitsToFloat32(columnVectorGraphDeep1BFloat32ToFloat16Bits(residualNorm))
+		bound := residualNorm * encoding.invNorms[row]
+		bounds[row] = bound
+		sum += float64(bound)
+		if float64(bound) > maxBound {
+			maxBound = float64(bound)
+		}
+	}
+	if rows == 0 {
+		return bounds, 0, 0
+	}
+	return bounds, sum / float64(rows), maxBound
+}
+
+func columnVectorGraphDeep1BApplyPCACauchyBoundPruneInto(approximate []float32, bounds []float32, targetK int, scratch *columnVectorGraphDeep1BPCABoundScratch, scores []float32) columnVectorGraphDeep1BPCABoundStats {
+	rows := len(approximate)
+	if len(bounds) != rows || len(scores) < rows {
+		panic(fmt.Sprintf("PCA bound prune shape mismatch approx=%d bounds=%d scores=%d", rows, len(bounds), len(scores)))
+	}
+	if rows == 0 || targetK <= 0 {
+		return columnVectorGraphDeep1BPCABoundStats{}
+	}
+	targetK = min(targetK, rows)
+	if scratch == nil || len(scratch.lower) < rows || len(scratch.upper) < rows || len(scratch.lowerTopRows) < targetK || len(scratch.lowerTopScore) < targetK {
+		scratch = columnVectorGraphDeep1BMakePCABoundScratch(rows, targetK)
+	}
+	for row := 0; row < rows; row++ {
+		bound := bounds[row]
+		scratch.lower[row] = approximate[row] - bound
+		scratch.upper[row] = approximate[row] + bound
+	}
+	columnVectorGraphDeep1BTopKFromScores(scratch.lower[:rows], targetK, scratch.lowerTopRows[:targetK], scratch.lowerTopScore[:targetK])
+	threshold := scratch.lowerTopScore[targetK-1]
+	stats := columnVectorGraphDeep1BPCABoundStats{
+		targetK:   targetK,
+		threshold: threshold,
+	}
+	for row := 0; row < rows; row++ {
+		if scratch.upper[row] < threshold {
+			scores[row] = -math.MaxFloat32
+			stats.prunedRows++
+			continue
+		}
+		scores[row] = approximate[row]
+		stats.survivorRows++
+	}
+	return stats
+}
+
+func columnVectorGraphDeep1BCountBoundSurvivingExactTopK(exact []float32, boundedScores []float32, topK int) int {
+	topK = min(topK, len(exact))
+	if topK <= 0 || len(boundedScores) != len(exact) {
+		return 0
+	}
+	topRows := make([]int, topK)
+	topScores := make([]float32, topK)
+	columnVectorGraphDeep1BTopKFromScores(exact, topK, topRows, topScores)
+	var surviving int
+	for _, row := range topRows {
+		if row >= 0 && row < len(boundedScores) && boundedScores[row] > -math.MaxFloat32 {
+			surviving++
+		}
+	}
+	return surviving
 }
 
 type columnVectorGraphDeep1BPCAResidualSketch struct {
@@ -2095,6 +2279,7 @@ func columnVectorGraphDeep1BRenderGroundtruthLocalityMarkdown(report columnVecto
 	}
 	columnVectorGraphDeep1BRenderGroundtruthAggregateMarkdown(&b, report)
 	columnVectorGraphDeep1BRenderGroundtruthMethodAggregateMarkdown(&b, report)
+	columnVectorGraphDeep1BRenderGroundtruthBoundAggregateMarkdown(&b, report)
 	fmt.Fprintf(&b, "\n## Exact Score Margins\n\n")
 	fmt.Fprintf(&b, "| Query | Gap 1/2 | Gap 5/6 | Gap 10/11 | Gap 20/21 | Gap 50/51 | Adjacent p50 | Adjacent p90 | Adjacent max |\n")
 	fmt.Fprintf(&b, "| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
@@ -2343,6 +2528,123 @@ func columnVectorGraphDeep1BRenderGroundtruthMethodAggregateMarkdown(b *strings.
 			agg.meanGap10/count,
 			agg.meanGap20/count,
 			agg.meanGap50/count,
+			agg.scanNanos/count,
+		)
+	}
+}
+
+func columnVectorGraphDeep1BRenderGroundtruthBoundAggregateMarkdown(b *strings.Builder, report columnVectorGraphDeep1BGroundtruthLocalityReport) {
+	type aggregate struct {
+		name          string
+		count         int
+		rowBytes      float64
+		metaBytes     float64
+		buildNanos    float64
+		scanNanos     float64
+		meanBound     float64
+		maxBound      float64
+		pruned        []int
+		survivors     []int
+		survivorTop10 []int
+		survivorTop20 []int
+		survivorTop50 []int
+		falseTop10    int
+		falseTop20    int
+		falseTop50    int
+		top10At20     []int
+		top10At50     []int
+		top20At50     []int
+	}
+	byName := make(map[string]*aggregate)
+	var names []string
+	for _, q := range report.Queries {
+		for _, method := range q.Methods {
+			if method.BoundTargetK == 0 {
+				continue
+			}
+			key := fmt.Sprintf("%s/target%d", method.Name, method.BoundTargetK)
+			agg := byName[key]
+			if agg == nil {
+				agg = &aggregate{name: method.Name}
+				byName[key] = agg
+				names = append(names, key)
+			}
+			agg.count++
+			agg.rowBytes += method.RowCodeBytesPerVector
+			agg.metaBytes += method.MetadataBytesPerVector
+			agg.buildNanos += float64(method.BuildNanos)
+			agg.scanNanos += method.ScanNanosPerVector
+			agg.meanBound += method.MeanBound
+			agg.maxBound += method.MaxBound
+			agg.pruned = append(agg.pruned, method.BoundPrunedRows)
+			agg.survivors = append(agg.survivors, method.BoundSurvivorRows)
+			agg.survivorTop10 = append(agg.survivorTop10, method.BoundSurvivorTop10)
+			agg.survivorTop20 = append(agg.survivorTop20, method.BoundSurvivorTop20)
+			agg.survivorTop50 = append(agg.survivorTop50, method.BoundSurvivorTop50)
+			agg.falseTop10 += method.BoundFalseNegativesTop10
+			agg.falseTop20 += method.BoundFalseNegativesTop20
+			agg.falseTop50 += method.BoundFalseNegativesTop50
+			agg.top10At20 = append(agg.top10At20, method.Top10InApproxTop20)
+			agg.top10At50 = append(agg.top10At50, method.Top10InApproxTop50)
+			agg.top20At50 = append(agg.top20At50, method.Top20InApproxTop50)
+		}
+	}
+	if len(names) == 0 {
+		return
+	}
+	sort.Slice(names, func(i, j int) bool {
+		left := byName[names[i]]
+		right := byName[names[j]]
+		leftBytes := left.rowBytes / float64(max(1, left.count))
+		rightBytes := right.rowBytes / float64(max(1, right.count))
+		if leftBytes != rightBytes {
+			return leftBytes < rightBytes
+		}
+		return names[i] < names[j]
+	})
+	fmt.Fprintf(b, "\n## Aggregate PCA Safe-Bound Progressive Refinement\n\n")
+	fmt.Fprintf(b, "These rows simulate a conservative low-rank-plus-tail cascade on official top100 oracle clouds. The Cauchy bound uses the stored PCA reconstruction residual norm; a row is pruned only when its upper bound cannot beat the target lower-bound threshold. This section measures whether the bound removes work without dropping exact winners. It is still an oracle-locality probe, not a TreeDB production executor.\n\n")
+	fmt.Fprintf(b, "| Method | Row-code B/vector | Metadata B/vector | Queries | Avg build ms | p50 pruned | min pruned | p50 survivors | max survivors | p50 survivor top10 | worst survivor top10 | p50 survivor top20 | worst survivor top20 | total FN top10 | total FN top20 | total FN top50 | p50 top10@20 after prune | worst top10@20 after prune | p50 top10@50 after prune | worst top10@50 after prune | p50 top20@50 after prune | worst top20@50 after prune | Avg mean bound | Avg max bound | Avg scan ns/vector |\n")
+	fmt.Fprintf(b, "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
+	for _, name := range names {
+		agg := byName[name]
+		if agg.count == 0 {
+			continue
+		}
+		sort.Ints(agg.pruned)
+		sort.Ints(agg.survivors)
+		sort.Ints(agg.survivorTop10)
+		sort.Ints(agg.survivorTop20)
+		sort.Ints(agg.survivorTop50)
+		sort.Ints(agg.top10At20)
+		sort.Ints(agg.top10At50)
+		sort.Ints(agg.top20At50)
+		count := float64(agg.count)
+		fmt.Fprintf(b, "| `%s` | %.2f | %.2f | %d | %.3f | %d | %d | %d | %d | %d/10 | %d/10 | %d/20 | %d/20 | %d | %d | %d | %d/10 | %d/10 | %d/10 | %d/10 | %d/20 | %d/20 | %.5f | %.5f | %.2f |\n",
+			agg.name,
+			agg.rowBytes/count,
+			agg.metaBytes/count,
+			agg.count,
+			agg.buildNanos/count/1e6,
+			columnVectorGraphDeep1BIntQuantile(agg.pruned, 0.50),
+			columnVectorGraphDeep1BIntQuantile(agg.pruned, 0),
+			columnVectorGraphDeep1BIntQuantile(agg.survivors, 0.50),
+			columnVectorGraphDeep1BIntQuantile(agg.survivors, 1),
+			columnVectorGraphDeep1BIntQuantile(agg.survivorTop10, 0.50),
+			columnVectorGraphDeep1BIntQuantile(agg.survivorTop10, 0),
+			columnVectorGraphDeep1BIntQuantile(agg.survivorTop20, 0.50),
+			columnVectorGraphDeep1BIntQuantile(agg.survivorTop20, 0),
+			agg.falseTop10,
+			agg.falseTop20,
+			agg.falseTop50,
+			columnVectorGraphDeep1BIntQuantile(agg.top10At20, 0.50),
+			columnVectorGraphDeep1BIntQuantile(agg.top10At20, 0),
+			columnVectorGraphDeep1BIntQuantile(agg.top10At50, 0.50),
+			columnVectorGraphDeep1BIntQuantile(agg.top10At50, 0),
+			columnVectorGraphDeep1BIntQuantile(agg.top20At50, 0.50),
+			columnVectorGraphDeep1BIntQuantile(agg.top20At50, 0),
+			agg.meanBound/count,
+			agg.maxBound/count,
 			agg.scanNanos/count,
 		)
 	}
