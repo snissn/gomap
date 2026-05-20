@@ -146,35 +146,35 @@ type columnStoreStageMetric struct {
 }
 
 type columnStoreQueryMetric struct {
-	Name                 string  `json:"name"`
-	PlanLabel            string  `json:"plan_label"`
-	AliasOf              string  `json:"alias_of,omitempty"`
-	ImplementationNote   string  `json:"implementation_note,omitempty"`
-	DurationMS           float64 `json:"duration_ms"`
-	Rows                 int     `json:"rows"`
-	RowsProcessed        int     `json:"rows_processed"`
-	RowsPerSecond        float64 `json:"rows_per_second"`
-	MiBPerSecond         float64 `json:"mib_per_second"`
-	NsPerRow             float64 `json:"ns_per_row"`
-	BytesRead            int64   `json:"bytes_read"`
-	RowMaterializations  int     `json:"row_materializations"`
-	ResultCount          int     `json:"result_count"`
-	RawHash              uint64  `json:"raw_hash"`
-	ProductionHash       uint64  `json:"production_hash"`
-	MetadataHits         int     `json:"metadata_hits"`
-	SkippedGranules      int     `json:"skipped_granules"`
-	ScheduledGranules    int     `json:"scheduled_granules"`
-	WorkerCount          int     `json:"worker_count"`
-	PlannerDurationMS    float64 `json:"planner_duration_ms"`
-	ScanDurationMS       float64 `json:"scan_duration_ms"`
-	ReduceDurationMS     float64 `json:"reduce_duration_ms"`
-	AdapterDurationMS    float64 `json:"adapter_duration_ms"`
-	ParityHashDurationMS float64 `json:"parity_hash_duration_ms"`
-	PlannerCandidates    int     `json:"planner_candidates"`
-	PlannerReason        string  `json:"planner_reason,omitempty"`
-	CacheHits            uint64  `json:"cache_hits"`
-	CacheMisses          uint64  `json:"cache_misses"`
-	CacheLabel           string  `json:"cache_label"`
+	Name                   string  `json:"name"`
+	PlanLabel              string  `json:"plan_label"`
+	AliasOf                string  `json:"alias_of,omitempty"`
+	ImplementationNote     string  `json:"implementation_note,omitempty"`
+	DurationMS             float64 `json:"duration_ms"`
+	Rows                   int     `json:"rows"`
+	RowsProcessed          int     `json:"rows_processed"`
+	RowsPerSecond          float64 `json:"rows_per_second"`
+	MiBPerSecond           float64 `json:"mib_per_second"`
+	NsPerRow               float64 `json:"ns_per_row"`
+	BytesRead              int64   `json:"bytes_read"`
+	RowMaterializations    int     `json:"row_materializations"`
+	ResultCount            int     `json:"result_count"`
+	RawHash                uint64  `json:"raw_hash"`
+	ProductionHash         uint64  `json:"production_hash"`
+	MetadataHits           int     `json:"metadata_hits"`
+	SkippedGranules        int     `json:"skipped_granules"`
+	ScheduledGranules      int     `json:"scheduled_granules"`
+	WorkerCount            int     `json:"worker_count"`
+	PlannerDurationMS      float64 `json:"planner_duration_ms"`
+	ScanDurationMS         float64 `json:"scan_duration_ms"`
+	ReduceDurationMS       float64 `json:"reduce_duration_ms"`
+	AdapterDurationMS      float64 `json:"adapter_duration_ms"`
+	ParityHashDurationMS   float64 `json:"parity_hash_duration_ms"`
+	PlannerCandidates      int     `json:"planner_candidates"`
+	PlannerReason          string  `json:"planner_reason,omitempty"`
+	SegmentFileCacheHits   uint64  `json:"segment_file_cache_hits"`
+	SegmentFileCacheMisses uint64  `json:"segment_file_cache_misses"`
+	CacheLabel             string  `json:"cache_label"`
 
 	duration time.Duration
 }
@@ -186,20 +186,20 @@ type columnStoreParity struct {
 }
 
 type columnStoreQueryExecution struct {
-	Lines               []string
-	RowsProcessed       int
-	BytesRead           int64
-	RowMaterializations int
-	ResultCount         int
-	MetadataHits        int
-	SkippedGranules     int
-	ScheduledGranules   int
-	WorkerCount         int
-	CacheHits           uint64
-	CacheMisses         uint64
-	ScanDuration        time.Duration
-	ReduceDuration      time.Duration
-	AdapterDuration     time.Duration
+	Lines                  []string
+	RowsProcessed          int
+	BytesRead              int64
+	RowMaterializations    int
+	ResultCount            int
+	MetadataHits           int
+	SkippedGranules        int
+	ScheduledGranules      int
+	WorkerCount            int
+	SegmentFileCacheHits   uint64
+	SegmentFileCacheMisses uint64
+	ScanDuration           time.Duration
+	ReduceDuration         time.Duration
+	AdapterDuration        time.Duration
 }
 
 type columnStoreByteAccounting struct {
@@ -1075,35 +1075,35 @@ func runColumnStoreSuiteQueries(collection *collections.Collection, rows int, ra
 			Name: name,
 			// PlanLabel records the executed planner kind after alias
 			// normalization, not necessarily the raw requested path string.
-			PlanLabel:            planLabel,
-			AliasOf:              columnStoreQueryAliasOf(name, planLabel),
-			ImplementationNote:   columnStoreQueryImplementationNote(name, path, planLabel),
-			DurationMS:           durationMS(elapsed),
-			duration:             elapsed,
-			Rows:                 rows,
-			RowsProcessed:        exec.RowsProcessed,
-			RowsPerSecond:        ratePerSecond(float64(exec.RowsProcessed), elapsed),
-			MiBPerSecond:         ratePerSecond(float64(exec.BytesRead)/(1024*1024), elapsed),
-			NsPerRow:             nsPerRow(elapsed, exec.RowsProcessed),
-			BytesRead:            exec.BytesRead,
-			RowMaterializations:  exec.RowMaterializations,
-			ResultCount:          exec.ResultCount,
-			RawHash:              rawHash,
-			ProductionHash:       hash,
-			MetadataHits:         exec.MetadataHits,
-			SkippedGranules:      exec.SkippedGranules,
-			ScheduledGranules:    exec.ScheduledGranules,
-			WorkerCount:          exec.WorkerCount,
-			PlannerDurationMS:    durationMS(plannerElapsed),
-			ScanDurationMS:       durationMS(exec.ScanDuration),
-			ReduceDurationMS:     durationMS(exec.ReduceDuration),
-			AdapterDurationMS:    durationMS(exec.AdapterDuration),
-			ParityHashDurationMS: durationMS(parityHashElapsed),
-			PlannerCandidates:    plan.Diagnostics.CandidatePlans,
-			PlannerReason:        plan.Diagnostics.Reason,
-			CacheHits:            exec.CacheHits,
-			CacheMisses:          exec.CacheMisses,
-			CacheLabel:           "reopened_warm_process",
+			PlanLabel:              planLabel,
+			AliasOf:                columnStoreQueryAliasOf(name, planLabel),
+			ImplementationNote:     columnStoreQueryImplementationNote(name, path, planLabel),
+			DurationMS:             durationMS(elapsed),
+			duration:               elapsed,
+			Rows:                   rows,
+			RowsProcessed:          exec.RowsProcessed,
+			RowsPerSecond:          ratePerSecond(float64(exec.RowsProcessed), elapsed),
+			MiBPerSecond:           ratePerSecond(float64(exec.BytesRead)/(1024*1024), elapsed),
+			NsPerRow:               nsPerRow(elapsed, exec.RowsProcessed),
+			BytesRead:              exec.BytesRead,
+			RowMaterializations:    exec.RowMaterializations,
+			ResultCount:            exec.ResultCount,
+			RawHash:                rawHash,
+			ProductionHash:         hash,
+			MetadataHits:           exec.MetadataHits,
+			SkippedGranules:        exec.SkippedGranules,
+			ScheduledGranules:      exec.ScheduledGranules,
+			WorkerCount:            exec.WorkerCount,
+			PlannerDurationMS:      durationMS(plannerElapsed),
+			ScanDurationMS:         durationMS(exec.ScanDuration),
+			ReduceDurationMS:       durationMS(exec.ReduceDuration),
+			AdapterDurationMS:      durationMS(exec.AdapterDuration),
+			ParityHashDurationMS:   durationMS(parityHashElapsed),
+			PlannerCandidates:      plan.Diagnostics.CandidatePlans,
+			PlannerReason:          plan.Diagnostics.Reason,
+			SegmentFileCacheHits:   exec.SegmentFileCacheHits,
+			SegmentFileCacheMisses: exec.SegmentFileCacheMisses,
+			CacheLabel:             "reopened_warm_process",
 		}
 		queries = append(queries, metric)
 	}
@@ -1184,18 +1184,18 @@ func executeColumnStoreSuiteQueryWithPlan(collection *collections.Collection, ro
 			return columnStoreQueryExecution{}, fmt.Errorf("column_store: reduce %s: %w", queryName, err)
 		}
 		return columnStoreQueryExecution{
-			Lines:               lines,
-			RowsProcessed:       materialized,
-			BytesRead:           bytesRead,
-			RowMaterializations: materialized,
-			ResultCount:         len(lines),
-			ScheduledGranules:   plan.Diagnostics.ScheduledGranules,
-			SkippedGranules:     plan.Diagnostics.SkippedGranules,
-			WorkerCount:         1,
-			CacheHits:           plan.Diagnostics.DecodedBlockCacheHits,
-			CacheMisses:         plan.Diagnostics.DecodedBlockCacheMisses,
-			ScanDuration:        scanElapsed,
-			ReduceDuration:      reduceElapsed,
+			Lines:                  lines,
+			RowsProcessed:          materialized,
+			BytesRead:              bytesRead,
+			RowMaterializations:    materialized,
+			ResultCount:            len(lines),
+			ScheduledGranules:      plan.Diagnostics.ScheduledGranules,
+			SkippedGranules:        plan.Diagnostics.SkippedGranules,
+			WorkerCount:            1,
+			SegmentFileCacheHits:   plan.Diagnostics.SegmentFileCacheHits,
+			SegmentFileCacheMisses: plan.Diagnostics.SegmentFileCacheMisses,
+			ScanDuration:           scanElapsed,
+			ReduceDuration:         reduceElapsed,
 		}, nil
 	case collections.ColumnQueryPlanBTreeIndexBaseline:
 		scanStart := time.Now()
@@ -1211,18 +1211,18 @@ func executeColumnStoreSuiteQueryWithPlan(collection *collections.Collection, ro
 			return columnStoreQueryExecution{}, fmt.Errorf("column_store: reduce %s: %w", queryName, err)
 		}
 		return columnStoreQueryExecution{
-			Lines:               lines,
-			RowsProcessed:       materialized,
-			BytesRead:           bytesRead,
-			RowMaterializations: materialized,
-			ResultCount:         len(lines),
-			ScheduledGranules:   plan.Diagnostics.ScheduledGranules,
-			SkippedGranules:     plan.Diagnostics.SkippedGranules,
-			WorkerCount:         1,
-			CacheHits:           plan.Diagnostics.DecodedBlockCacheHits,
-			CacheMisses:         plan.Diagnostics.DecodedBlockCacheMisses,
-			ScanDuration:        scanElapsed,
-			ReduceDuration:      reduceElapsed,
+			Lines:                  lines,
+			RowsProcessed:          materialized,
+			BytesRead:              bytesRead,
+			RowMaterializations:    materialized,
+			ResultCount:            len(lines),
+			ScheduledGranules:      plan.Diagnostics.ScheduledGranules,
+			SkippedGranules:        plan.Diagnostics.SkippedGranules,
+			WorkerCount:            1,
+			SegmentFileCacheHits:   plan.Diagnostics.SegmentFileCacheHits,
+			SegmentFileCacheMisses: plan.Diagnostics.SegmentFileCacheMisses,
+			ScanDuration:           scanElapsed,
+			ReduceDuration:         reduceElapsed,
 		}, nil
 	case collections.ColumnQueryPlanSerialColumnScan, collections.ColumnQueryPlanAggregateMetadata, collections.ColumnQueryPlanParallelColumnScan:
 		return executeColumnStoreSuitePhysicalQuery(collection, queryName, plan)
@@ -1283,15 +1283,15 @@ func executeColumnStoreSuitePhysicalQuery(collection *collections.Collection, qu
 		// adapter but still scans column assets. Metadata-only reads remain an
 		// M14C measurement gate, so hits stay zero instead of pretending a fast
 		// path ran.
-		MetadataHits:      0,
-		SkippedGranules:   diag.SkippedGranules,
-		ScheduledGranules: diag.ScheduledGranules,
-		WorkerCount:       workers,
-		CacheHits:         diag.DecodedBlockCacheHits,
-		CacheMisses:       diag.DecodedBlockCacheMisses,
-		ScanDuration:      scanDuration,
-		ReduceDuration:    reduceDuration,
-		AdapterDuration:   adapterElapsed,
+		MetadataHits:           0,
+		SkippedGranules:        diag.SkippedGranules,
+		ScheduledGranules:      diag.ScheduledGranules,
+		WorkerCount:            workers,
+		SegmentFileCacheHits:   diag.SegmentFileCacheHits,
+		SegmentFileCacheMisses: diag.SegmentFileCacheMisses,
+		ScanDuration:           scanDuration,
+		ReduceDuration:         reduceDuration,
+		AdapterDuration:        adapterElapsed,
 	}, nil
 }
 
@@ -1760,7 +1760,7 @@ func renderColumnStoreSuiteMarkdown(report columnStoreSuiteReport) string {
 	sb.WriteString("\n")
 
 	sb.WriteString("## Query Throughput And Parity\n\n")
-	sb.WriteString("| query | plan | rows/s | MiB/s | ns/row | planner ms | scan ms | reduce ms | adapter ms | parity hash ms | workers | scheduled granules | skipped granules | metadata hits | B/read | rows materialized | cache hit/miss | hash parity | note |\n")
+	sb.WriteString("| query | plan | rows/s | MiB/s | ns/row | planner ms | scan ms | reduce ms | adapter ms | parity hash ms | workers | scheduled granules | skipped granules | metadata hits | B/read | rows materialized | segment file cache hit/miss | hash parity | note |\n")
 	sb.WriteString("|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|\n")
 	for _, q := range report.Queries {
 		parity := "pass"
@@ -1776,7 +1776,7 @@ func renderColumnStoreSuiteMarkdown(report columnStoreSuiteReport) string {
 			noteCell = "`" + note + "`"
 		}
 		sb.WriteString(fmt.Sprintf("| `%s` | `%s` | %.3f | %.3f | %.1f | %.3f | %.3f | %.3f | %.3f | %.3f | %d | %d | %d | %d | %d | %d | %d/%d | %s | %s |\n",
-			q.Name, q.PlanLabel, q.RowsPerSecond, q.MiBPerSecond, q.NsPerRow, q.PlannerDurationMS, q.ScanDurationMS, q.ReduceDurationMS, q.AdapterDurationMS, q.ParityHashDurationMS, q.WorkerCount, q.ScheduledGranules, q.SkippedGranules, q.MetadataHits, q.BytesRead, q.RowMaterializations, q.CacheHits, q.CacheMisses, parity, noteCell))
+			q.Name, q.PlanLabel, q.RowsPerSecond, q.MiBPerSecond, q.NsPerRow, q.PlannerDurationMS, q.ScanDurationMS, q.ReduceDurationMS, q.AdapterDurationMS, q.ParityHashDurationMS, q.WorkerCount, q.ScheduledGranules, q.SkippedGranules, q.MetadataHits, q.BytesRead, q.RowMaterializations, q.SegmentFileCacheHits, q.SegmentFileCacheMisses, parity, noteCell))
 	}
 	sb.WriteString("\n")
 
