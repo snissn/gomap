@@ -155,6 +155,7 @@ type columnStoreQueryMetric struct {
 	DurationMS               float64 `json:"duration_ms"`
 	Rows                     int     `json:"rows"`
 	RowsProcessed            int     `json:"rows_processed"`
+	RowsProcessedKnown       bool    `json:"rows_processed_known,omitempty"`
 	RowsPerSecond            float64 `json:"rows_per_second"`
 	MiBPerSecond             float64 `json:"mib_per_second"`
 	NsPerRow                 float64 `json:"ns_per_row"`
@@ -1085,6 +1086,7 @@ func runColumnStoreSuiteQueries(collection *collections.Collection, rows int, ra
 			duration:               elapsed,
 			Rows:                   rows,
 			RowsProcessed:          exec.RowsProcessed,
+			RowsProcessedKnown:     true,
 			RowsPerSecond:          ratePerSecond(float64(exec.RowsProcessed), elapsed),
 			MiBPerSecond:           ratePerSecond(float64(exec.BytesRead)/(1024*1024), elapsed),
 			NsPerRow:               nsPerRow(elapsed, exec.RowsProcessed),
@@ -1264,7 +1266,10 @@ func executeColumnStoreSuitePhysicalQuery(collection *collections.Collection, qu
 		return columnStoreQueryExecution{}, fmt.Errorf("column_store: physical query %s via %s line mapping: %w", queryName, plan.Kind, err)
 	}
 	diag := result.Diagnostics
-	workers := plan.Diagnostics.WorkerCount
+	workers := diag.WorkerCount
+	if workers <= 0 {
+		workers = plan.Diagnostics.WorkerCount
+	}
 	if workers <= 0 {
 		workers = 1
 	}
@@ -1970,19 +1975,21 @@ func markdownEscapeTablePipes(value string) string {
 	}
 	var out strings.Builder
 	out.Grow(len(value) + strings.Count(value, "|"))
+	backslashes := 0
 	for i := 0; i < len(value); i++ {
-		if value[i] != '|' {
+		switch value[i] {
+		case '\\':
+			backslashes++
 			out.WriteByte(value[i])
 			continue
+		case '|':
+			if backslashes%2 == 0 {
+				out.WriteByte('\\')
+			}
+		default:
 		}
-		backslashes := 0
-		for j := i - 1; j >= 0 && value[j] == '\\'; j-- {
-			backslashes++
-		}
-		if backslashes%2 == 0 {
-			out.WriteByte('\\')
-		}
-		out.WriteByte('|')
+		backslashes = 0
+		out.WriteByte(value[i])
 	}
 	return out.String()
 }
@@ -2079,11 +2086,14 @@ func columnStoreBenchRun(baseCfg BenchConfig, profile, dataDir string, report co
 }
 
 func columnStoreQueryEffectiveRowsProcessed(q columnStoreQueryMetric) (int, bool) {
+	if q.RowsProcessedKnown {
+		return q.RowsProcessed, true
+	}
 	if q.RowsProcessed != 0 {
 		return q.RowsProcessed, true
 	}
-	if q.Rows > 0 && q.RowMaterializations > 0 {
-		return q.Rows, true
+	if q.RowMaterializations > 0 {
+		return q.RowMaterializations, true
 	}
 	return 0, false
 }
