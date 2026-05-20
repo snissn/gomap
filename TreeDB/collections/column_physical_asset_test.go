@@ -807,6 +807,30 @@ func TestColumnAssetSegmentAppenderFailedCloseRemovesSegmentM15C(t *testing.T) {
 	}
 }
 
+func TestColumnAssetSegmentAppenderRemoveOnCloseErrorsM15C(t *testing.T) {
+	ioErr := errors.New("close-time io")
+	tests := []struct {
+		name         string
+		failed       bool
+		fileSyncErr  error
+		fileCloseErr error
+		want         bool
+	}{
+		{name: "clean", want: false},
+		{name: "failed", failed: true, want: true},
+		{name: "sync_error", fileSyncErr: ioErr, want: true},
+		{name: "close_error", fileCloseErr: ioErr, want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := columnPhysicalAssetSegmentAppenderRemoveOnClose(tt.failed, tt.fileSyncErr, tt.fileCloseErr)
+			if got != tt.want {
+				t.Fatalf("columnPhysicalAssetSegmentAppenderRemoveOnClose=%v want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 type chunkedColumnAssetWriter struct {
 	chunks []int
 	buf    bytes.Buffer

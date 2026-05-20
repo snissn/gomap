@@ -108,8 +108,8 @@ func (c *Collection) columnAssetRewrite(ctx context.Context, opts columnAssetRew
 			PreparedRefs:   opts.PreparedRefs,
 			PinnedRefs:     opts.PinnedRefs,
 		},
-		omitDetailedEntrySources: true,
-		omitDetailedEntrySort:    true,
+		omitDetailedEntrySources: !opts.Detailed,
+		omitDetailedEntrySort:    !opts.Detailed,
 	})
 	stats := ColumnAssetRewriteStats{
 		DryRun:           opts.DryRun,

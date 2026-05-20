@@ -174,6 +174,17 @@ func TestColumnAssetRewriteRemapsManifestRefsOutOfMixedSegmentM15C(t *testing.T)
 	if dry.Plan.Segments.Mixed != 1 || dry.Plan.RewriteDebtBytes != candidate.Length {
 		t.Fatalf("dry-run plan segments=%+v debt=%d want one mixed segment with candidate debt %d", dry.Plan.Segments, dry.Plan.RewriteDebtBytes, candidate.Length)
 	}
+	if len(dry.Plan.Entries) == 0 {
+		t.Fatal("detailed dry-run rewrite plan omitted ref entries")
+	}
+	for i, entry := range dry.Plan.Entries {
+		if len(entry.Sources) == 0 {
+			t.Fatalf("detailed dry-run entry[%d] ref=%+v omitted sources", i, entry.Ref)
+		}
+		if i > 0 && compareColumnAssetRefs(dry.Plan.Entries[i-1].Ref, entry.Ref) > 0 {
+			t.Fatalf("detailed dry-run entries are not sorted at %d: prev=%+v current=%+v", i, dry.Plan.Entries[i-1].Ref, entry.Ref)
+		}
+	}
 
 	stats, err := col.ColumnAssetRewrite(context.Background(), ColumnAssetRewriteOptions{
 		Detailed:      true,

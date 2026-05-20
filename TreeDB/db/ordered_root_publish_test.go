@@ -422,6 +422,62 @@ func TestPublishOrderedRootDeltaGroupMaintenanceRejectsInvalidInputBeforeWriteLo
 	requireCommandWALPublishReady(t, db, "pre-lock forged maintenance plan rejection")
 }
 
+func TestPublishOrderedRootDeltaGroupMaintenanceRejectsNilIteratorBeforeWriteLock(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	defer db.Close()
+
+	db.writeMu.Lock()
+	locked := true
+	unlock := func() {
+		if locked {
+			locked = false
+			db.writeMu.Unlock()
+		}
+	}
+	defer unlock()
+
+	iter := &closeCountingUnsafeIterator{}
+	var systemBuilderRan atomic.Bool
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := db.PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(
+			storagemaintenance.ColumnAssetRewritePlan(),
+			[]StorageMaintenanceRootDeltaPublishInput{
+				{BaseRoot: 0, Iter: iter},
+				{BaseRoot: 0, Iter: nil},
+			},
+			nil,
+			func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+				systemBuilderRan.Store(true)
+				return nil, nil
+			},
+		)
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		unlock()
+		if !errors.Is(err, ErrStorageMaintenanceRootDeltaIteratorMissing) {
+			t.Fatalf("maintenance publish error=%v want ErrStorageMaintenanceRootDeltaIteratorMissing", err)
+		}
+		if !errors.Is(err, ErrStorageMaintenancePublishPreApplyFailed) {
+			t.Fatalf("maintenance publish error=%v want ErrStorageMaintenancePublishPreApplyFailed", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("nil-iterator maintenance input blocked behind writeMu")
+	}
+	if systemBuilderRan.Load() {
+		t.Fatalf("maintenance system builder ran for nil-iterator maintenance input")
+	}
+	if iter.closes != 1 {
+		t.Fatalf("input iterator closes=%d want 1", iter.closes)
+	}
+	requireCommandWALPublishReady(t, db, "nil-iterator maintenance input rejection")
+}
+
 func TestPublishOrderedRootDeltaGroupMaintenanceReadOnlyClosesIterators(t *testing.T) {
 	iter := &closeCountingUnsafeIterator{}
 	db := &DB{readOnly: true}
