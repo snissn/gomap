@@ -1983,7 +1983,11 @@ func columnStoreBenchRun(baseCfg BenchConfig, profile, dataDir string, report co
 			duration = time.Duration(q.DurationMS * float64(time.Millisecond))
 		}
 		queryDuration += duration
-		queryRowsProcessed += q.RowsProcessed
+		rowsProcessed := q.RowsProcessed
+		if rowsProcessed == 0 {
+			rowsProcessed = q.Rows
+		}
+		queryRowsProcessed += rowsProcessed
 		results[columnStoreSuiteBenchMetricPrefix+q.Name] = map[string]float64{columnStoreSuiteBenchDisplayName: q.RowsPerSecond}
 	}
 	if queryDuration > 0 {
