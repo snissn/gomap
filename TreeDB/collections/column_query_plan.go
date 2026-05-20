@@ -162,16 +162,7 @@ func (c *Collection) PlanColumnQuery(req ColumnQueryPlanRequest) (ColumnQueryPla
 }
 
 func columnQueryRequestNeedsPhysicalCapabilityDiscovery(req ColumnQueryPlanRequest) bool {
-	switch req.ForceKind {
-	case ColumnQueryPlanRowStoreBaseline, ColumnQueryPlanBTreeIndexBaseline:
-		return false
-	case ColumnQueryPlanSerialColumnScan, ColumnQueryPlanAggregateMetadata, ColumnQueryPlanParallelColumnScan:
-		return true
-	case "":
-		return true
-	default:
-		return true
-	}
+	return req.ForceKind != ColumnQueryPlanRowStoreBaseline && req.ForceKind != ColumnQueryPlanBTreeIndexBaseline
 }
 
 func (c *Collection) deriveColumnQueryPlannerCapabilitiesM14A(collectionName string, rootID uint64, cfg ColumnStoreConfig, requested ColumnQueryPlannerCapabilities) ColumnQueryPlannerCapabilities {
