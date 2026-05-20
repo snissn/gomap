@@ -416,22 +416,46 @@ func TestColumnAssetRewriteLifecycleSmokeWithMutationsM15C(t *testing.T) {
 	reopen := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = reopen.Close() }()
 	reopened := openColumnStoreCollectionM10B(t, reopen)
-	result, err := reopened.RunColumnPhysicalQuery(ColumnPhysicalQueryRequest{
-		Kind:        ColumnPhysicalQueryGroupCount,
-		GroupColumn: "kind",
-	})
-	if err != nil {
-		t.Fatalf("RunColumnPhysicalQuery after reopen: %v", err)
+	liveEvents := []columnPhysicalQueryEventM13B{{
+		ID:     "e1",
+		TimeUS: 3,
+		Kind:   "share",
+		Did:    "d1",
+	}}
+	assertLifecycleQueries := func(label string) {
+		t.Helper()
+		tests := []struct {
+			name     string
+			hashName string
+			req      ColumnPhysicalQueryRequest
+		}{
+			{name: "q1", hashName: "q1", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "kind"}},
+			{name: "q2", hashName: "q2", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCountDistinct, GroupColumn: "kind", DistinctColumn: "did"}},
+			{name: "q3", hashName: "q3", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryHourCount, ValueColumn: "time_us"}},
+			{name: "q4a", hashName: "q4a", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupMinInt64, GroupColumn: "did", ValueColumn: "time_us"}},
+			{name: "q4b", hashName: "q4b", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupMaxInt64, GroupColumn: "did", ValueColumn: "time_us"}},
+			{name: "q5", hashName: "q5", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupInt64Span, GroupColumn: "did", ValueColumn: "time_us"}},
+			{name: "q5_metadata", hashName: "q5", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupInt64Span, GroupColumn: "did", ValueColumn: "time_us"}},
+		}
+		for _, tc := range tests {
+			result, err := reopened.RunColumnPhysicalQuery(tc.req)
+			if err != nil {
+				t.Fatalf("%s RunColumnPhysicalQuery(%s): %v", label, tc.name, err)
+			}
+			got := columnPhysicalQueryHashLinesM13B(columnPhysicalQueryLinesM13B(tc.name, result.Groups))
+			want := columnPhysicalQueryReferenceHashM13B(tc.hashName, liveEvents)
+			if got != want {
+				t.Fatalf("%s %s hash=%016x want %016x lines=%v diagnostics=%+v", label, tc.name, got, want, columnPhysicalQueryLinesM13B(tc.name, result.Groups), result.Diagnostics)
+			}
+			if result.Diagnostics.RowMaterializations != 0 || result.Diagnostics.ReconstructionRows != 0 {
+				t.Fatalf("%s %s diagnostics materialized/reconstructed rows: %+v", label, tc.name, result.Diagnostics)
+			}
+			if result.Diagnostics.ReduceRows != 1 || result.Diagnostics.DeletedRows != 1 {
+				t.Fatalf("%s %s visibility diagnostics=%+v want one reduced live row and one tombstone", label, tc.name, result.Diagnostics)
+			}
+		}
 	}
-	if got, want := columnPhysicalQueryLinesM13B("q1", result.Groups), []string{"q1:share=1"}; !equalStringSets(got, want) {
-		t.Fatalf("query lines=%v want %v diagnostics=%+v", got, want, result.Diagnostics)
-	}
-	if result.Diagnostics.RowMaterializations != 0 || result.Diagnostics.ReconstructionRows != 0 {
-		t.Fatalf("aggregate diagnostics materialized/reconstructed rows: %+v", result.Diagnostics)
-	}
-	if result.Diagnostics.ReduceRows != 1 || result.Diagnostics.DeletedRows != 1 {
-		t.Fatalf("visibility diagnostics=%+v want one reduced live row and one tombstone", result.Diagnostics)
-	}
+	assertLifecycleQueries("after reopen")
 
 	gcStats, err := reopened.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{
 		CandidateRefs: append(append([]ColumnAssetRef(nil), rewrite.SupersededRefs...), candidate),
@@ -445,16 +469,7 @@ func TestColumnAssetRewriteLifecycleSmokeWithMutationsM15C(t *testing.T) {
 	if _, err := os.Stat(oldSegmentPath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("old segment still exists or unexpected stat error: %v", err)
 	}
-	afterGC, err := reopened.RunColumnPhysicalQuery(ColumnPhysicalQueryRequest{
-		Kind:        ColumnPhysicalQueryGroupCount,
-		GroupColumn: "kind",
-	})
-	if err != nil {
-		t.Fatalf("RunColumnPhysicalQuery after GC: %v", err)
-	}
-	if got, want := columnPhysicalQueryLinesM13B("q1", afterGC.Groups), []string{"q1:share=1"}; !equalStringSets(got, want) {
-		t.Fatalf("post-GC query lines=%v want %v diagnostics=%+v", got, want, afterGC.Diagnostics)
-	}
+	assertLifecycleQueries("after GC")
 }
 
 func TestColumnAssetRewriteFailClosedOnIncompletePlanM15C(t *testing.T) {
