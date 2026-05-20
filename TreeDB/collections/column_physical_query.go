@@ -200,11 +200,13 @@ func (c *Collection) RunColumnPhysicalQueryParallel(req ColumnPhysicalQueryReque
 		}
 		if err := merged.mergeFrom(workerResult.exec); err != nil {
 			result.Diagnostics.ScanNanos = time.Since(start).Nanoseconds()
+			result.Diagnostics.ReduceRows = merged.reduceRows
 			return result, err
 		}
 	}
 	result.Diagnostics.ScanNanos = time.Since(start).Nanoseconds()
 	if firstErr != nil {
+		result.Diagnostics.ReduceRows = merged.reduceRows
 		return result, firstErr
 	}
 	result.Groups = merged.groups()
