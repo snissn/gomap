@@ -8865,11 +8865,11 @@ func (c *Collection) insertBatchOnceWithLockState(
 		})
 	} else if commandWALIntent != nil {
 		publishMeta = meta
-		publishRootNames = rootNames
 		newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaGroupWithCommandWALAndSystemDeltaBuilder(ordered, commandWALIntent, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 			descriptorRootNames, descriptorRootIDs := appendClearedCollectionRoots(rootNames, rootIDs, clearedVectorRootNames)
 			return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, descriptorRootNames, baseRootIDs, descriptorRootIDs)
 		})
+		publishRootNames, rootIDs = appendClearedCollectionRoots(rootNames, rootIDs, clearedVectorRootNames)
 	} else {
 		publishMeta = meta
 		publishRootNames = rootNames
@@ -9962,11 +9962,11 @@ func (c *Collection) deleteDocumentOnce(documentID []byte, commandWALIntent *bac
 		})
 	} else if commandWALIntent != nil {
 		publishMeta = c.meta
-		publishRootNames = rootNames
 		newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaBatchGroupWithCommandWALAndSystemDeltaBuilder(ordered, commandWALIntent, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 			descriptorRootNames, descriptorRootIDs := appendClearedCollectionRoots(rootNames, rootIDs, clearedVectorRootNames)
 			return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, descriptorRootNames, baseRootIDs, descriptorRootIDs)
 		})
+		publishRootNames, rootIDs = appendClearedCollectionRoots(rootNames, rootIDs, clearedVectorRootNames)
 	} else {
 		publishMeta = c.meta
 		publishRootNames = rootNames

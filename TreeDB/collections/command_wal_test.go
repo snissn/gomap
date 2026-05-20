@@ -1486,6 +1486,47 @@ func TestCollectionCommandWALInsertBatchPersistsNativeVectorDeltaBeforeAck(t *te
 	requireVectorResultIDs(t, results, "a", "c", "b")
 }
 
+func TestCollectionCommandWALIndexedInsertClearsCachedNativeVectorRoot(t *testing.T) {
+	dir, def, seedStatus := prepareCollectionCommandWALNativeVectorRootDir(t, []IndexDefinition{
+		{Name: "kind", Field: "kind", ValueType: IndexValueString},
+	})
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col, err := NewCollectionManager(d).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection command WAL: %v", err)
+	}
+
+	if _, err := col.insertBatch(
+		[][]byte{[]byte("c")},
+		[][]byte{[]byte(`{"kind":"new","embedding":[0.9,0.1]}`)},
+		false,
+		nil,
+	); err != nil {
+		t.Fatalf("insertBatch row commit: %v", err)
+	}
+	assertCollectionCommandWALCachedVectorRootCleared(t, d, col, def, seedStatus)
+}
+
+func TestCollectionCommandWALSingleDeleteClearsCachedNativeVectorRoot(t *testing.T) {
+	dir, def, seedStatus := prepareCollectionCommandWALNativeVectorRootDir(t, nil)
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col, err := NewCollectionManager(d).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection command WAL: %v", err)
+	}
+
+	deleted, err := col.deleteDocumentOnce([]byte("a"), nil)
+	if err != nil {
+		t.Fatalf("deleteDocumentOnce row commit: %v", err)
+	}
+	if !deleted {
+		t.Fatal("deleteDocumentOnce deleted=false, want true")
+	}
+	assertCollectionCommandWALCachedVectorRootCleared(t, d, col, def, seedStatus)
+}
+
 func TestCollectionCommandWALVectorIndexMaintenanceReplayRecoversUnappliedFrame(t *testing.T) {
 	dir := t.TempDir()
 	def := VectorIndexDefinition{
@@ -1683,6 +1724,93 @@ func TestCollectionCommandWALPrimaryReplayClearsNativeVectorRootBeforeMaintenanc
 	}
 	if loaded != nil || status.ExactFallbackReason != vectorIndexFallbackMissingGraphRoot {
 		t.Fatalf("primary replay loaded stale vector root loaded=%v status=%+v seed=%+v", loaded != nil, status, seedStatus)
+	}
+}
+
+func prepareCollectionCommandWALNativeVectorRootDir(t *testing.T, indexes []IndexDefinition) (string, VectorIndexDefinition, VectorIndexLoadStatus) {
+	t.Helper()
+	dir := t.TempDir()
+	def := VectorIndexDefinition{
+		Name:       "embedding",
+		Field:      "embedding",
+		Metric:     VectorMetricCosine,
+		Dimensions: 2,
+		M:          4,
+	}
+	setup, err := backenddb.Open(backenddb.Options{
+		Dir:                    dir,
+		Durability:             backenddb.DurabilityWALOffRelaxed,
+		DisableBackgroundPrune: true,
+	})
+	if err != nil {
+		t.Fatalf("Open setup DB: %v", err)
+	}
+	setupMgr := NewCollectionManager(setup)
+	if _, err := setupMgr.CreateCollection(&CollectionMeta{
+		Name:          "docs",
+		Options:       CollectionOptions{DocumentFormat: DocumentFormatJSON},
+		Indexes:       append([]IndexDefinition(nil), indexes...),
+		VectorIndexes: []VectorIndexDefinition{def},
+	}); err != nil {
+		_ = setup.Close()
+		t.Fatalf("CreateCollection setup: %v", err)
+	}
+	setupCol, err := setupMgr.OpenCollection("docs")
+	if err != nil {
+		_ = setup.Close()
+		t.Fatalf("OpenCollection setup: %v", err)
+	}
+	if _, err := setupCol.InsertBatch(
+		[][]byte{[]byte("a"), []byte("b")},
+		[][]byte{
+			[]byte(`{"kind":"seed","embedding":[1,0]}`),
+			[]byte(`{"kind":"seed","embedding":[0,1]}`),
+		},
+	); err != nil {
+		_ = setup.Close()
+		t.Fatalf("InsertBatch setup: %v", err)
+	}
+	index, err := setupCol.BuildVectorIndex(vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		_ = setup.Close()
+		t.Fatalf("BuildVectorIndex setup: %v", err)
+	}
+	seedStatus, err := index.SaveSnapshot()
+	if err != nil {
+		_ = setup.Close()
+		t.Fatalf("SaveSnapshot setup: %v", err)
+	}
+	if !seedStatus.Loaded || seedStatus.RootID == 0 {
+		_ = setup.Close()
+		t.Fatalf("seed vector snapshot status=%+v", seedStatus)
+	}
+	if err := setup.Checkpoint(); err != nil {
+		_ = setup.Close()
+		t.Fatalf("Checkpoint setup DB: %v", err)
+	}
+	if err := setup.Close(); err != nil {
+		t.Fatalf("Close setup DB: %v", err)
+	}
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+		t.Fatalf("SaveFormatConfig: %v", err)
+	}
+	return dir, def, seedStatus
+}
+
+func assertCollectionCommandWALCachedVectorRootCleared(t *testing.T, d *backenddb.DB, col *Collection, def VectorIndexDefinition, seedStatus VectorIndexLoadStatus) {
+	t.Helper()
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("AcquireSnapshot returned nil")
+	}
+	defer func() { _ = snap.Close() }()
+	catalog, err := col.catalogForSnapshot(snap)
+	if err != nil {
+		t.Fatalf("catalogForSnapshot: %v", err)
+	}
+	rootName := collectionVectorIndexRootName("docs", def.Name)
+	if got := catalog.rootID(rootName); got != 0 {
+		t.Fatalf("cached catalog vector root %q=%d, want cleared root 0 after row commit; seed=%+v", rootName, got, seedStatus)
 	}
 }
 
