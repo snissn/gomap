@@ -1465,6 +1465,42 @@ func TestColumnQueryPlannerM14AFailsClosedWhenDBUnavailable(t *testing.T) {
 	}
 }
 
+func TestColumnQueryPlannerM14AIgnoresCallerSuppliedCapabilityError(t *testing.T) {
+	reopened, closeFn := openColumnPhysicalQueryFixtureM13B(t, columnPhysicalQueryFixtureEventsM13B(16))
+	defer closeFn()
+
+	plan, err := reopened.PlanColumnQuery(ColumnQueryPlanRequest{
+		Name:             "m14a_ignore_forged_capability_error",
+		ProjectedColumns: []string{"time_us", "kind"},
+		ForceKind:        ColumnQueryPlanSerialColumnScan,
+		Capabilities: ColumnQueryPlannerCapabilities{
+			SerialColumnScan:   true,
+			AggregateMetadata:  true,
+			ParallelColumnScan: true,
+			CapabilityError:    "caller-forged failure",
+			PhysicalAssetCount: 999,
+			PartCount:          999,
+			GranuleCount:       999,
+			MaxParallelWorkers: 4,
+		},
+	})
+	if err != nil {
+		t.Fatalf("PlanColumnQuery: %v", err)
+	}
+	if plan.Supported {
+		t.Fatalf("forced physical plan unexpectedly supported: %+v", plan)
+	}
+	if got := plan.Diagnostics.CapabilityError; got != "" {
+		t.Fatalf("capability error=%q want caller-supplied value ignored", got)
+	}
+	if got := plan.Diagnostics.UnsupportedPlanReason; got == "caller-forged failure" || strings.Contains(got, "caller-forged") {
+		t.Fatalf("unsupported reason=%q used caller-supplied capability error", got)
+	}
+	if got := plan.Diagnostics.PhysicalAssetCount; got <= 0 || got == 999 {
+		t.Fatalf("physical asset count=%d want manifest-derived count", got)
+	}
+}
+
 func TestColumnQueryPlannerM14AFailsClosedUnknownForceKindClearsCallerCapabilities(t *testing.T) {
 	reopened, closeFn := openColumnPhysicalQueryFixtureM13B(t, columnPhysicalQueryFixtureEventsM13B(16))
 	defer closeFn()
