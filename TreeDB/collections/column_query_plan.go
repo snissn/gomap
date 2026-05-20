@@ -337,7 +337,7 @@ func forcedColumnQueryPlan(catalog *collectionCatalog, identity ColumnStoreCache
 		return unsupportedColumnQueryPlan(ColumnQueryPlanSerialColumnScan, physicalColumnQueryUnsupportedReasonForCatalog(catalog, identity, identityOK, req, ColumnQueryPlanSerialColumnScan), diag)
 	case ColumnQueryPlanAggregateMetadata:
 		if ok, plan := aggregateColumnQueryPlan(catalog, identity, identityOK, req, diag); ok {
-			plan.Diagnostics.Reason = "forced aggregate metadata plan"
+			plan.Diagnostics.Reason = "forced scan-backed aggregate metadata plan"
 			return plan
 		}
 		return unsupportedColumnQueryPlan(ColumnQueryPlanAggregateMetadata, aggregateColumnQueryUnsupportedReason(catalog, identity, identityOK, req), diag)
