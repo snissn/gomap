@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -723,6 +724,52 @@ func TestColumnAssetManagerAllocatesDistinctNewSegmentsConcurrentlyM15C(t *testi
 		if !bytes.Equal(raw, payloads[i]) {
 			t.Fatalf("payload[%d]=%q want %q", i, raw, payloads[i])
 		}
+	}
+}
+
+type chunkedColumnAssetWriter struct {
+	chunks []int
+	buf    bytes.Buffer
+}
+
+func (w *chunkedColumnAssetWriter) Write(p []byte) (int, error) {
+	if len(w.chunks) == 0 {
+		return w.buf.Write(p)
+	}
+	n := w.chunks[0]
+	w.chunks = w.chunks[1:]
+	if n > len(p) {
+		n = len(p)
+	}
+	if n > 0 {
+		_, _ = w.buf.Write(p[:n])
+	}
+	return n, nil
+}
+
+func TestColumnAssetSegmentPayloadWriteRetriesShortWritesM15C(t *testing.T) {
+	writer := &chunkedColumnAssetWriter{chunks: []int{2, 1, 99}}
+	payload := []byte("column-payload")
+	written, err := writeColumnAssetSegmentPayload(writer, payload)
+	if err != nil {
+		t.Fatalf("writeColumnAssetSegmentPayload: %v", err)
+	}
+	if written != len(payload) {
+		t.Fatalf("written=%d want %d", written, len(payload))
+	}
+	if !bytes.Equal(writer.buf.Bytes(), payload) {
+		t.Fatalf("payload=%q want %q", writer.buf.Bytes(), payload)
+	}
+}
+
+func TestColumnAssetSegmentPayloadWriteRejectsNoProgressM15C(t *testing.T) {
+	writer := &chunkedColumnAssetWriter{chunks: []int{0}}
+	written, err := writeColumnAssetSegmentPayload(writer, []byte("payload"))
+	if !errors.Is(err, io.ErrShortWrite) {
+		t.Fatalf("writeColumnAssetSegmentPayload err=%v want io.ErrShortWrite", err)
+	}
+	if written != 0 {
+		t.Fatalf("written=%d want 0", written)
 	}
 }
 

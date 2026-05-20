@@ -176,6 +176,31 @@ type columnAssetReachabilityRange struct {
 	status ColumnAssetReachabilityStatus
 }
 
+type columnAssetReachabilityRangeSet struct {
+	first  columnAssetReachabilityRange
+	ranges []columnAssetReachabilityRange
+	count  int
+}
+
+func (set *columnAssetReachabilityRangeSet) appendRange(r columnAssetReachabilityRange) {
+	if set.ranges != nil {
+		set.ranges = append(set.ranges, r)
+		set.count++
+		return
+	}
+	switch set.count {
+	case 0:
+		set.first = r
+		set.count = 1
+	case 1:
+		set.ranges = append([]columnAssetReachabilityRange{set.first}, r)
+		set.count = 2
+	default:
+		set.ranges = append(set.ranges, r)
+		set.count++
+	}
+}
+
 type columnAssetReachabilityInterval struct {
 	start int64
 	end   int64
@@ -183,7 +208,7 @@ type columnAssetReachabilityInterval struct {
 
 type columnAssetReachabilitySegment struct {
 	fileID uint32
-	path   string
+	name   string
 	bytes  int64
 }
 
@@ -354,9 +379,13 @@ func buildColumnAssetReachabilityPlan(ctx context.Context, input columnAssetReac
 			rangeCounts[ref.FileID]++
 		}
 	}
-	rangesByFile := make(map[uint32][]columnAssetReachabilityRange, len(rangeCounts))
+	rangesByFile := make(map[uint32]columnAssetReachabilityRangeSet, len(rangeCounts))
 	for fileID, count := range rangeCounts {
-		rangesByFile[fileID] = make([]columnAssetReachabilityRange, 0, count)
+		if count > 1 {
+			rangesByFile[fileID] = columnAssetReachabilityRangeSet{
+				ranges: make([]columnAssetReachabilityRange, 0, count),
+			}
+		}
 	}
 	if input.detailed {
 		plan.Entries = make([]ColumnAssetReachabilityRefEntry, 0, len(input.refs))
@@ -399,11 +428,13 @@ func buildColumnAssetReachabilityPlan(ctx context.Context, input columnAssetReac
 		if status == ColumnAssetReachabilityUncertain {
 			return
 		}
-		rangesByFile[ref.FileID] = append(rangesByFile[ref.FileID], columnAssetReachabilityRange{
+		set := rangesByFile[ref.FileID]
+		set.appendRange(columnAssetReachabilityRange{
 			start:  ref.Offset,
 			end:    ref.Offset + ref.Length,
 			status: status,
 		})
+		rangesByFile[ref.FileID] = set
 	}
 	if input.detailed {
 		refBuilders := make([]columnAssetReachabilityRefBuilder, 0, len(input.refs))
@@ -437,17 +468,17 @@ func buildColumnAssetReachabilityPlan(ctx context.Context, input columnAssetReac
 		return columnAssetReachabilityPlanIdentity(input), err
 	}
 
-	seenFiles := make(map[uint32]struct{}, len(segments))
 	for i, segment := range segments {
 		if i%columnAssetReachabilityContextCheckInterval == 0 {
 			if err := ctx.Err(); err != nil {
 				return columnAssetReachabilityPlanIdentity(input), err
 			}
 		}
-		seenFiles[segment.fileID] = struct{}{}
+		rangeSet := rangesByFile[segment.fileID]
+		delete(rangesByFile, segment.fileID)
 		plan.Segments.Total++
 		plan.Segments.BytesTotal += segment.bytes
-		segmentPlan := classifyColumnAssetReachabilitySegment(segment, rangesByFile[segment.fileID])
+		segmentPlan := classifyColumnAssetReachabilitySegmentSet(segment, rangeSet)
 		if segmentPlan.outOfBoundsRefs != 0 {
 			plan.Segments.OutOfBoundsRefs += segmentPlan.outOfBoundsRefs
 			plan.Complete = false
@@ -473,21 +504,18 @@ func buildColumnAssetReachabilityPlan(ctx context.Context, input columnAssetReac
 			plan.SegmentEntries = append(plan.SegmentEntries, ColumnAssetReachabilitySegmentEntry{
 				Namespace:        input.namespace,
 				FileID:           segment.fileID,
-				Path:             segment.path,
+				Path:             columnAssetReachabilitySegmentPath(namespace.SegmentDir, segment.name),
 				Bytes:            segment.bytes,
 				Status:           segmentPlan.status,
 				ProtectedBytes:   segmentPlan.protectedBytes,
 				ReclaimableBytes: segmentPlan.reclaimableBytes,
 				UnknownBytes:     segmentPlan.unknownBytes,
-				RefCount:         len(rangesByFile[segment.fileID]),
+				RefCount:         rangeSet.count,
 			})
 		}
 	}
 	var missingFileIDs []uint32
 	for fileID := range rangesByFile {
-		if _, ok := seenFiles[fileID]; ok {
-			continue
-		}
 		missingFileIDs = append(missingFileIDs, fileID)
 	}
 	sort.Slice(missingFileIDs, func(i, j int) bool {
@@ -506,9 +534,9 @@ func buildColumnAssetReachabilityPlan(ctx context.Context, input columnAssetReac
 			plan.SegmentEntries = append(plan.SegmentEntries, ColumnAssetReachabilitySegmentEntry{
 				Namespace: input.namespace,
 				FileID:    fileID,
-				Path:      filepath.Join(namespace.SegmentDir, columnAssetSegmentFileName(fileID)),
+				Path:      columnAssetReachabilitySegmentPath(namespace.SegmentDir, columnAssetSegmentFileName(fileID)),
 				Status:    ColumnAssetReachabilitySegmentMissing,
-				RefCount:  len(ranges),
+				RefCount:  ranges.count,
 			})
 		}
 	}
@@ -556,6 +584,9 @@ type columnAssetReachabilitySegmentPlan struct {
 }
 
 func classifyColumnAssetReachabilitySegment(segment columnAssetReachabilitySegment, ranges []columnAssetReachabilityRange) columnAssetReachabilitySegmentPlan {
+	if len(ranges) == 1 {
+		return classifyColumnAssetReachabilitySingleRangeSegment(segment, ranges[0])
+	}
 	allProtected := true
 	allReclaimable := true
 	for _, r := range ranges {
@@ -650,6 +681,53 @@ func classifyColumnAssetReachabilitySegment(segment columnAssetReachabilitySegme
 	}
 }
 
+func classifyColumnAssetReachabilitySegmentSet(segment columnAssetReachabilitySegment, ranges columnAssetReachabilityRangeSet) columnAssetReachabilitySegmentPlan {
+	if ranges.count == 1 && ranges.ranges == nil {
+		return classifyColumnAssetReachabilitySingleRangeSegment(segment, ranges.first)
+	}
+	return classifyColumnAssetReachabilitySegment(segment, ranges.ranges)
+}
+
+func classifyColumnAssetReachabilitySingleRangeSegment(segment columnAssetReachabilitySegment, r columnAssetReachabilityRange) columnAssetReachabilitySegmentPlan {
+	interval, outOfBoundsRange, ok := clipColumnAssetReachabilityRange(segment.bytes, r)
+	outOfBounds := 0
+	if outOfBoundsRange {
+		outOfBounds = 1
+	}
+	coveredBytes := int64(0)
+	if ok {
+		coveredBytes = interval.end - interval.start
+	}
+	unknownBytes := segment.bytes - coveredBytes
+	if unknownBytes < 0 {
+		unknownBytes = 0
+	}
+	protectedBytes := int64(0)
+	reclaimableBytes := int64(0)
+	switch r.status {
+	case ColumnAssetReachabilityProtected:
+		protectedBytes = coveredBytes
+	case ColumnAssetReachabilityReclaimable:
+		reclaimableBytes = coveredBytes
+	}
+	status := ColumnAssetReachabilitySegmentUnknown
+	switch {
+	case unknownBytes != 0 || outOfBounds != 0:
+		status = ColumnAssetReachabilitySegmentUnknown
+	case r.status == ColumnAssetReachabilityProtected:
+		status = ColumnAssetReachabilitySegmentProtected
+	case r.status == ColumnAssetReachabilityReclaimable:
+		status = ColumnAssetReachabilitySegmentReclaimable
+	}
+	return columnAssetReachabilitySegmentPlan{
+		status:           status,
+		protectedBytes:   protectedBytes,
+		reclaimableBytes: reclaimableBytes,
+		unknownBytes:     unknownBytes,
+		outOfBoundsRefs:  outOfBounds,
+	}
+}
+
 func columnAssetReachabilitySourceBit(source ColumnAssetReachabilitySource) (columnAssetReachabilitySourceMask, bool) {
 	for _, entry := range columnAssetReachabilitySourceBits {
 		if entry.source == source {
@@ -695,32 +773,36 @@ func columnAssetReachabilitySourceMaskCount(mask columnAssetReachabilitySourceMa
 }
 
 func listColumnAssetReachabilitySegments(segmentDir string) ([]columnAssetReachabilitySegment, error) {
-	entries, err := os.ReadDir(segmentDir)
+	dir, err := os.Open(segmentDir)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
 		}
 		return nil, err
 	}
-	segments := make([]columnAssetReachabilitySegment, 0, len(entries))
-	for _, entry := range entries {
-		if entry.IsDir() {
+	infos, readErr := dir.Readdir(-1)
+	closeErr := dir.Close()
+	if readErr != nil {
+		return nil, readErr
+	}
+	if closeErr != nil {
+		return nil, closeErr
+	}
+	segments := make([]columnAssetReachabilitySegment, 0, len(infos))
+	for _, info := range infos {
+		if info.IsDir() {
 			continue
 		}
-		path := columnAssetReachabilitySegmentPath(segmentDir, entry.Name())
-		info, err := entry.Info()
-		if err != nil {
-			return nil, err
-		}
-		fileID, ok := columnAssetReachabilitySegmentFileID(entry.Name())
+		name := info.Name()
+		fileID, ok := columnAssetReachabilitySegmentFileID(name)
 		if !ok {
-			segments = append(segments, columnAssetReachabilitySegment{path: path, bytes: info.Size()})
+			segments = append(segments, columnAssetReachabilitySegment{name: name, bytes: info.Size()})
 			continue
 		}
-		segments = append(segments, columnAssetReachabilitySegment{fileID: fileID, path: path, bytes: info.Size()})
+		segments = append(segments, columnAssetReachabilitySegment{fileID: fileID, name: name, bytes: info.Size()})
 	}
 	sort.Slice(segments, func(i, j int) bool {
-		return segments[i].fileID < segments[j].fileID || (segments[i].fileID == segments[j].fileID && segments[i].path < segments[j].path)
+		return segments[i].fileID < segments[j].fileID || (segments[i].fileID == segments[j].fileID && segments[i].name < segments[j].name)
 	})
 	return segments, nil
 }
@@ -760,6 +842,17 @@ func clippedColumnAssetReachabilityIntervals(segment columnAssetReachabilitySegm
 // segment bounds. It sorts ranges in place; callers must treat ranges as
 // consumed after calling.
 func columnAssetReachabilityRangesCoveredBytes(segment columnAssetReachabilitySegment, ranges []columnAssetReachabilityRange) (int64, int) {
+	if len(ranges) == 1 {
+		plan := classifyColumnAssetReachabilitySingleRangeSegment(segment, ranges[0])
+		covered := plan.protectedBytes + plan.reclaimableBytes
+		if ranges[0].status != ColumnAssetReachabilityProtected && ranges[0].status != ColumnAssetReachabilityReclaimable {
+			covered = segment.bytes - plan.unknownBytes
+			if covered < 0 {
+				covered = 0
+			}
+		}
+		return covered, plan.outOfBoundsRefs
+	}
 	sort.Slice(ranges, func(i, j int) bool {
 		return ranges[i].start < ranges[j].start || (ranges[i].start == ranges[j].start && ranges[i].end < ranges[j].end)
 	})
@@ -816,12 +909,15 @@ func columnAssetReachabilitySegmentFileID(name string) (uint32, bool) {
 		return 0, false
 	}
 	raw := strings.TrimSuffix(strings.TrimPrefix(name, columnAssetSegmentFilePrefix), columnAssetSegmentFileSuffix)
+	if len(raw) < 6 || (len(raw) > 6 && raw[0] == '0') {
+		return 0, false
+	}
 	id, err := strconv.ParseUint(raw, 10, 32)
 	if err != nil || id == 0 {
 		return 0, false
 	}
 	fileID := uint32(id)
-	if name != columnAssetSegmentFileName(fileID) {
+	if fileID < 1_000_000 && len(raw) != 6 {
 		return 0, false
 	}
 	return fileID, true
@@ -833,6 +929,12 @@ func columnAssetReachabilitySegmentFileID(name string) (uint32, bool) {
 func mergeColumnAssetReachabilityIntervals(in []columnAssetReachabilityInterval) []columnAssetReachabilityInterval {
 	if len(in) == 0 {
 		return nil
+	}
+	if len(in) == 1 {
+		if in[0].end <= in[0].start {
+			return nil
+		}
+		return in
 	}
 	sort.Slice(in, func(i, j int) bool {
 		return in[i].start < in[j].start || (in[i].start == in[j].start && in[i].end < in[j].end)

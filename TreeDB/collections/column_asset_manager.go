@@ -317,6 +317,7 @@ type columnPhysicalAssetSegmentAppender struct {
 	assetPath  string
 	file       *os.File
 	offset     int64
+	failed     bool
 	lock       *sync.Mutex
 	closeFile  bool
 	unlockLock bool
@@ -377,6 +378,9 @@ func (a *columnPhysicalAssetSegmentAppender) append(payload []byte, generation, 
 	if a == nil || a.file == nil {
 		return ColumnAssetRef{}, errors.New("collections: nil column physical asset appender")
 	}
+	if a.failed {
+		return ColumnAssetRef{}, errors.New("collections: column physical asset appender is failed")
+	}
 	if len(payload) == 0 {
 		return ColumnAssetRef{}, errors.New("collections: column physical asset payload is empty")
 	}
@@ -393,32 +397,53 @@ func (a *columnPhysicalAssetSegmentAppender) append(payload []byte, generation, 
 		Length:     int64(len(payload)),
 		Checksum:   page.Checksum(payload),
 	}
-	written, err := a.file.Write(payload)
+	written, err := writeColumnAssetSegmentPayload(a.file, payload)
+	a.offset += int64(written)
 	if err != nil {
+		a.failed = true
 		return ColumnAssetRef{}, err
 	}
-	if written != len(payload) {
-		return ColumnAssetRef{}, io.ErrShortWrite
-	}
-	a.offset += int64(written)
 	return ref, nil
+}
+
+func writeColumnAssetSegmentPayload(w io.Writer, payload []byte) (int, error) {
+	written := 0
+	for written < len(payload) {
+		n, err := w.Write(payload[written:])
+		if n > 0 {
+			written += n
+		}
+		if err != nil {
+			return written, err
+		}
+		if n == 0 {
+			return written, io.ErrShortWrite
+		}
+	}
+	return written, nil
 }
 
 func (a *columnPhysicalAssetSegmentAppender) close() error {
 	if a == nil {
 		return nil
 	}
+	var appenderErr error
 	var fileSyncErr error
 	var fileCloseErr error
+	if a.failed {
+		appenderErr = errors.New("collections: column physical asset appender is failed")
+	}
 	if a.file != nil && a.closeFile {
-		fileSyncErr = a.file.Sync()
+		if !a.failed {
+			fileSyncErr = a.file.Sync()
+		}
 		fileCloseErr = a.file.Close()
 		a.closeFile = false
 		a.file = nil
 	}
 	dirSyncErr := syncColumnAssetDir(a.namespace.SegmentDir)
 	a.releaseLock()
-	return errors.Join(fileSyncErr, fileCloseErr, dirSyncErr)
+	return errors.Join(appenderErr, fileSyncErr, fileCloseErr, dirSyncErr)
 }
 
 func (a *columnPhysicalAssetSegmentAppender) abort() error {

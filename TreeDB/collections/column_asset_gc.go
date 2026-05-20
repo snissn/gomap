@@ -68,7 +68,7 @@ func (c *Collection) columnAssetGC(ctx context.Context, opts ColumnAssetGCOption
 	}()
 	plan, err := c.PlanColumnAssetReachability(ctx, ColumnAssetReachabilityOptions{
 		Detailed:                              opts.Detailed,
-		SegmentDetails:                        true,
+		SegmentDetails:                        !opts.DryRun,
 		ProtectCandidateRefsForOlderSnapshots: true,
 		CandidateRefs:                         opts.CandidateRefs,
 		PendingRefs:                           opts.PendingRefs,
@@ -96,6 +96,12 @@ func (c *Collection) columnAssetGC(ctx context.Context, opts ColumnAssetGCOption
 			plan.Segments.Missing,
 			plan.Segments.OutOfBoundsRefs,
 		)
+	}
+
+	if opts.DryRun {
+		stats.SegmentsEligible = plan.Segments.Reclaimable
+		stats.BytesEligible = plan.Segments.BytesReclaimable
+		return stats, nil
 	}
 
 	namespace, err := columnAssetManagerNamespaceForRoot(c.db.ColumnAssetRootDir(), plan.Namespace)
