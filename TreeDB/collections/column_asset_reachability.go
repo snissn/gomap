@@ -687,6 +687,9 @@ func classifyColumnAssetReachabilitySegment(segment columnAssetReachabilitySegme
 	}
 }
 
+// columnAssetReachabilitySourceBit returns ok only for recognized non-unknown
+// sources. The unknown sentinel still maps to the unknown mask, but ok is false
+// so callers do not accidentally treat it as a precise durable source.
 func columnAssetReachabilitySourceBit(source ColumnAssetReachabilitySource) (columnAssetReachabilitySourceMask, bool) {
 	mask, ok := columnAssetReachabilitySourceMaskBySource[source]
 	if !ok {

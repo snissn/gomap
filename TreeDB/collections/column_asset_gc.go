@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"os"
 	"sync"
-
-	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
 // ColumnAssetGCOptions controls safe M15B column asset segment reclamation.
@@ -206,7 +204,7 @@ func (c *Collection) columnAssetGCNormalizeMaintenanceRaceError(err error) error
 		return err
 	}
 	maintenanceErr := c.db.CheckStorageMaintenanceReady()
-	if errors.Is(maintenanceErr, backenddb.ErrClosed) {
+	if maintenanceErr != nil {
 		return maintenanceErr
 	}
 	return err

@@ -3,6 +3,8 @@ package db
 import (
 	"errors"
 	"testing"
+
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 )
 
 func TestCheckStorageMaintenanceReadyNilDBFailsClosed(t *testing.T) {
@@ -44,5 +46,22 @@ func TestCheckStorageMaintenanceReadyReadOnlyDBFailsClosed(t *testing.T) {
 
 	if err := readonly.CheckStorageMaintenanceReady(); !errors.Is(err, ErrReadOnly) {
 		t.Fatalf("CheckStorageMaintenanceReady read-only DB error=%v want ErrReadOnly", err)
+	}
+}
+
+func TestCheckStorageMaintenanceReadyPoisonedCommandWALFailsClosed(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	d := openCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+
+	d.testFailCommandWALFlush.Store(true)
+	if _, err := d.AppendRawKVPointCommandWALTrusted(commitlog.RawKVOpSet, []byte("k"), []byte("v"), false); !errors.Is(err, errTestCommandWALFlushFailpoint) {
+		t.Fatalf("AppendRawKVPointCommandWALTrusted error=%v want command WAL flush failpoint", err)
+	}
+	d.testFailCommandWALFlush.Store(false)
+
+	if err := d.CheckStorageMaintenanceReady(); !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("CheckStorageMaintenanceReady poisoned command WAL error=%v want ErrRecoveryRequired", err)
 	}
 }
