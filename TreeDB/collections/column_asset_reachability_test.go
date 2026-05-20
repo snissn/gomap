@@ -184,7 +184,7 @@ func TestColumnAssetReachabilityPlanCountsUniqueSourceRefsM15A(t *testing.T) {
 	}
 }
 
-func TestColumnAssetReachabilityPlanRetainsUnknownSegmentsM15A(t *testing.T) {
+func TestColumnAssetReachabilityPlanClassifiesUnreferencedCanonicalSegmentReclaimableM15A(t *testing.T) {
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = d.Close() }()
@@ -198,22 +198,33 @@ func TestColumnAssetReachabilityPlanRetainsUnknownSegmentsM15A(t *testing.T) {
 	if err != nil {
 		t.Fatalf("columnAssetManagerNamespaceForRoot: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(namespace.SegmentDir, columnAssetSegmentFileName(99)), []byte("untracked-column-asset-bytes"), 0o600); err != nil {
-		t.Fatalf("WriteFile unknown segment: %v", err)
+	segmentPath := filepath.Join(namespace.SegmentDir, columnAssetSegmentFileName(99))
+	if err := os.WriteFile(segmentPath, []byte("untracked-column-asset-bytes"), 0o600); err != nil {
+		t.Fatalf("WriteFile unreferenced segment: %v", err)
 	}
 
 	plan, err := col.PlanColumnAssetReachability(context.Background(), ColumnAssetReachabilityOptions{Detailed: true})
 	if err != nil {
 		t.Fatalf("PlanColumnAssetReachability: %v", err)
 	}
-	if plan.Complete {
-		t.Fatalf("plan marked complete despite untracked segment: %+v", plan.Segments)
+	if !plan.Complete {
+		t.Fatalf("plan marked incomplete despite unreferenced canonical segment: %+v", plan.Segments)
 	}
-	if plan.Segments.Unknown != 1 || plan.Segments.BytesUnknown == 0 {
-		t.Fatalf("segment stats=%+v want one retained unknown segment with bytes", plan.Segments)
+	if plan.Segments.Reclaimable != 1 || plan.Segments.BytesReclaimable == 0 || plan.Segments.Unknown != 0 {
+		t.Fatalf("segment stats=%+v want one reclaimable unreferenced canonical segment", plan.Segments)
 	}
-	if plan.Segments.Reclaimable != 0 {
-		t.Fatalf("unknown segment was treated as reclaimable: %+v", plan.Segments)
+	found := false
+	for _, entry := range plan.SegmentEntries {
+		if entry.Path != segmentPath {
+			continue
+		}
+		found = true
+		if entry.FileID != 99 || entry.Status != ColumnAssetReachabilitySegmentReclaimable || entry.ReclaimableBytes == 0 || entry.UnknownBytes != 0 {
+			t.Fatalf("unreferenced canonical entry=%+v want reclaimable bytes and no unknown bytes", entry)
+		}
+	}
+	if !found {
+		t.Fatalf("missing unreferenced segment entry for %s in %+v", segmentPath, plan.SegmentEntries)
 	}
 }
 

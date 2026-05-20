@@ -502,6 +502,12 @@ type columnAssetReachabilitySegmentPlan struct {
 }
 
 func classifyColumnAssetReachabilitySegment(segment columnAssetReachabilitySegment, ranges []columnAssetReachabilityRange) columnAssetReachabilitySegmentPlan {
+	if len(ranges) == 0 && segment.fileID != 0 && segment.bytes > 0 {
+		return columnAssetReachabilitySegmentPlan{
+			status:           ColumnAssetReachabilitySegmentReclaimable,
+			reclaimableBytes: segment.bytes,
+		}
+	}
 	allProtected := true
 	allReclaimable := true
 	for _, r := range ranges {
