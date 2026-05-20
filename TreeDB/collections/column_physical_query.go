@@ -64,6 +64,7 @@ type ColumnPhysicalQueryDiagnostics struct {
 	VisibilityRows             int
 	ReconstructionRows         int
 	ResultGroups               int
+	WorkerCount                int
 	SegmentFileCacheHits       uint64
 	SegmentFileCacheMisses     uint64
 	ScanNanos                  int64
@@ -205,6 +206,7 @@ func (c *Collection) RunColumnPhysicalQueryParallel(req ColumnPhysicalQueryReque
 		}
 	}
 	result.Diagnostics.ScanNanos = time.Since(start).Nanoseconds()
+	result.Diagnostics.WorkerCount = workers
 	if firstErr != nil {
 		result.Diagnostics.ReduceRows = merged.reduceRows
 		return result, firstErr
@@ -230,6 +232,7 @@ func (c *Collection) runColumnPhysicalQueryInSnapshotView(view columnPhysicalSca
 	result := ColumnPhysicalQueryResult{
 		Diagnostics: columnPhysicalQueryDiagnosticsFromScan(diag),
 	}
+	result.Diagnostics.WorkerCount = 1
 	result.Diagnostics.ScanNanos = scanNanos
 	result.Diagnostics.ReduceRows = exec.reduceRows
 	if err != nil {
@@ -253,6 +256,7 @@ func (c *Collection) runColumnPhysicalQueryWithVisibility(cfg ColumnStoreConfig,
 	result := ColumnPhysicalQueryResult{
 		Diagnostics: columnPhysicalQueryDiagnosticsFromScan(visible.Diagnostics),
 	}
+	result.Diagnostics.WorkerCount = 1
 	result.Diagnostics.VisibilityRows = len(visible.Rows)
 	result.Diagnostics.ScanNanos = visibilityNanos
 	result.Diagnostics.VisibilityNanos = visibilityNanos

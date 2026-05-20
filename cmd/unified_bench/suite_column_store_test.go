@@ -550,6 +550,15 @@ func TestColumnStoreSuiteThroughputInterpretationM14C(t *testing.T) {
 			want: []string{"physical serial scan", "effective_rows_processed=unknown", "row_materializations=0/unknown"},
 		},
 		{
+			name: "known zero effective rows are explicit",
+			q: columnStoreQueryMetric{
+				Name:               columnStoreQueryQ1,
+				PlanLabel:          columnStorePathSerialColumnScan,
+				RowsProcessedKnown: true,
+			},
+			want: []string{"physical serial scan", "effective_rows_processed=0", "row_materializations=0/unknown"},
+		},
+		{
 			name: "unknown plan includes labels",
 			q: columnStoreQueryMetric{
 				Name:          "q_custom",
@@ -646,6 +655,9 @@ func TestMarkdownCodeTableTextPreservesBoundaryWhitespaceM14C(t *testing.T) {
 func TestMarkdownTableTextHandlesEscapedPipesAndBlankNewlinesM14C(t *testing.T) {
 	if got, want := markdownTableText(`a\|b|c\\|d`), `a\|b\|c\\\|d`; got != want {
 		t.Fatalf("markdownTableText escaped pipes=%q want %q", got, want)
+	}
+	if got, want := markdownTableText(`a\\\\\\\\|b|c`), `a\\\\\\\\\|b\|c`; got != want {
+		t.Fatalf("markdownTableText long backslash run=%q want %q", got, want)
 	}
 	if got := markdownCodeTableText("\r\n"); got != markdownTableEmptyCell {
 		t.Fatalf("markdownCodeTableText blank newline=%q want empty marker", got)
