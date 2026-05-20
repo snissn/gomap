@@ -41,6 +41,10 @@ var defaultColumnVectorGraphIndexLoader ColumnVectorGraphIndexLoader = unsupport
 // be scanned into ColumnVectorGraphColumns, this reports a precise unavailable
 // status instead of falling back to the native runtime graph.
 func (c *Collection) LoadColumnGraphVectorIndexSnapshot(opts VectorIndexOptions) (*ColumnVectorGraph, VectorIndexLoadStatus, error) {
+	return c.loadColumnGraphVectorIndexSnapshot(opts, defaultColumnVectorGraphIndexLoader)
+}
+
+func (c *Collection) loadColumnGraphVectorIndexSnapshot(opts VectorIndexOptions, loader ColumnVectorGraphIndexLoader) (*ColumnVectorGraph, VectorIndexLoadStatus, error) {
 	status := VectorIndexLoadStatus{Strategy: VectorIndexStrategyColumnGraph, RebuildNeeded: true}
 	if c == nil {
 		return nil, status, errCollectionNil
@@ -66,10 +70,14 @@ func (c *Collection) LoadColumnGraphVectorIndexSnapshot(opts VectorIndexOptions)
 		status = columnGraphUnavailableLoadStatus(vectorIndexFallbackMissingVectorIndexMetadata)
 		return nil, status, nil
 	}
-	return c.loadColumnGraphVectorIndexSnapshotFromCatalog(snap, catalog, def)
+	return c.loadColumnGraphVectorIndexSnapshotFromCatalogWithLoader(snap, catalog, def, loader)
 }
 
 func (c *Collection) loadColumnGraphVectorIndexSnapshotFromCatalog(snap *backenddb.Snapshot, catalog *collectionCatalog, def VectorIndexDefinition) (*ColumnVectorGraph, VectorIndexLoadStatus, error) {
+	return c.loadColumnGraphVectorIndexSnapshotFromCatalogWithLoader(snap, catalog, def, defaultColumnVectorGraphIndexLoader)
+}
+
+func (c *Collection) loadColumnGraphVectorIndexSnapshotFromCatalogWithLoader(snap *backenddb.Snapshot, catalog *collectionCatalog, def VectorIndexDefinition, loader ColumnVectorGraphIndexLoader) (*ColumnVectorGraph, VectorIndexLoadStatus, error) {
 	status := baseColumnGraphLoadStatus(catalog)
 	if vectorIndexDefinitionStrategy(def) != VectorIndexStrategyColumnGraph {
 		status = columnGraphUnavailableLoadStatus(vectorIndexFallbackColumnGraphStrategyMissing)
@@ -101,8 +109,11 @@ func (c *Collection) loadColumnGraphVectorIndexSnapshotFromCatalog(snap *backend
 		setColumnGraphUnavailable(&status, vectorIndexFallbackColumnGraphManifestInvalid)
 		return nil, status, nil
 	}
+	if loader == nil {
+		loader = unsupportedColumnVectorGraphIndexLoader{}
+	}
 
-	result, err := defaultColumnVectorGraphIndexLoader.LoadColumnVectorGraphIndex(ColumnVectorGraphIndexLoadInput{
+	result, err := loader.LoadColumnVectorGraphIndex(ColumnVectorGraphIndexLoadInput{
 		Collection:             c,
 		Snapshot:               snap,
 		Definition:             def,

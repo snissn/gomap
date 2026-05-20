@@ -732,8 +732,12 @@ func (idx *VectorIndex) saveLegacySnapshot() (VectorIndexLoadStatus, error) {
 // with ExactFallbackReason set and no error, so callers can safely use exact
 // search as the correctness fallback.
 func (c *Collection) LoadVectorIndexSnapshot(opts VectorIndexOptions) (*VectorIndex, VectorIndexLoadStatus, error) {
+	return c.loadVectorIndexSnapshot(opts, defaultColumnVectorGraphIndexLoader)
+}
+
+func (c *Collection) loadVectorIndexSnapshot(opts VectorIndexOptions, loader ColumnVectorGraphIndexLoader) (*VectorIndex, VectorIndexLoadStatus, error) {
 	if vectorIndexOptionsStrategy(opts) == VectorIndexStrategyColumnGraph {
-		graph, status, err := c.LoadColumnGraphVectorIndexSnapshot(opts)
+		graph, status, err := c.loadColumnGraphVectorIndexSnapshot(opts, loader)
 		if graph != nil {
 			// This API can only return a native *VectorIndex handle. Keep a
 			// successfully loaded column graph from being reported as a usable

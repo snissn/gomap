@@ -100,7 +100,7 @@ func TestLoadVectorIndexSnapshotColumnGraphDoesNotReportNativeLoaded(t *testing.
 	}
 
 	graph := newColumnGraphVectorIndexTestGraph(t)
-	withColumnVectorGraphIndexLoaderForTest(t, testColumnVectorGraphIndexLoader{
+	loader := testColumnVectorGraphIndexLoader{
 		result: ColumnVectorGraphIndexLoadResult{
 			Graph: graph,
 			Status: VectorIndexLoadStatus{
@@ -109,9 +109,9 @@ func TestLoadVectorIndexSnapshotColumnGraphDoesNotReportNativeLoaded(t *testing.
 				BytesDisk:                     123,
 			},
 		},
-	})
+	}
 
-	loadedGraph, graphStatus, err := col.LoadColumnGraphVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
+	loadedGraph, graphStatus, err := col.loadColumnGraphVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def), loader)
 	if err != nil {
 		t.Fatalf("LoadColumnGraphVectorIndexSnapshot: %v", err)
 	}
@@ -119,7 +119,7 @@ func TestLoadVectorIndexSnapshotColumnGraphDoesNotReportNativeLoaded(t *testing.
 		t.Fatalf("explicit column_graph loader did not report loaded graph: graph=%v status=%+v", loadedGraph != nil, graphStatus)
 	}
 
-	loaded, status, err := col.LoadVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
+	loaded, status, err := col.loadVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def), loader)
 	if err != nil {
 		t.Fatalf("LoadVectorIndexSnapshot: %v", err)
 	}
@@ -371,15 +371,6 @@ type testColumnVectorGraphIndexLoader struct {
 
 func (l testColumnVectorGraphIndexLoader) LoadColumnVectorGraphIndex(ColumnVectorGraphIndexLoadInput) (ColumnVectorGraphIndexLoadResult, error) {
 	return l.result, l.err
-}
-
-func withColumnVectorGraphIndexLoaderForTest(t *testing.T, loader ColumnVectorGraphIndexLoader) {
-	t.Helper()
-	previous := defaultColumnVectorGraphIndexLoader
-	defaultColumnVectorGraphIndexLoader = loader
-	t.Cleanup(func() {
-		defaultColumnVectorGraphIndexLoader = previous
-	})
 }
 
 func newColumnGraphVectorIndexTestGraph(t *testing.T) *ColumnVectorGraph {
