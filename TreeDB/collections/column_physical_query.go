@@ -88,6 +88,17 @@ var errColumnPhysicalScanCancelled = errors.New("collections: physical column sc
 // scanner path; mutation-bearing manifests fall back to the M13C visibility
 // overlay before reducing.
 func (c *Collection) RunColumnPhysicalQuery(req ColumnPhysicalQueryRequest) (ColumnPhysicalQueryResult, error) {
+	mutationParts, err := c.columnPhysicalQueryMutationPartsHint()
+	if err != nil {
+		return ColumnPhysicalQueryResult{}, err
+	}
+	if mutationParts > 0 {
+		cfg, err := c.columnPhysicalQueryColumnStoreConfig()
+		if err != nil {
+			return ColumnPhysicalQueryResult{}, err
+		}
+		return c.runColumnPhysicalQueryWithVisibility(cfg, req)
+	}
 	view, closeView, err := c.prepareColumnPhysicalScanSnapshotView()
 	if closeView != nil {
 		defer closeView()
@@ -119,9 +130,6 @@ func (c *Collection) runColumnPhysicalQueryDirectInSnapshotView(view columnPhysi
 	result.Diagnostics.ScanNanos = scanNanos
 	result.Diagnostics.ReduceRows = exec.reduceRows
 	if err != nil {
-		if errors.Is(err, errColumnPhysicalQueryNeedsVisibility) {
-			return result, true, err
-		}
 		return result, true, err
 	}
 	result.Groups = exec.groups()
@@ -183,6 +191,7 @@ func (c *Collection) scanColumnPhysicalQueryDirectInSnapshotView(
 		if err != nil {
 			return diag, fmt.Errorf("collections: column physical scan read generation=%d part_id=%d: %w", ref.Generation, ref.PartID, err)
 		}
+		// rawScratch may alias readCache.scratch; the direct reducer consumes raw synchronously and does not retain it.
 		rawScratch = raw
 		diag.PhysicalBytesScanned += int64(len(raw))
 		summary, err := reduceColumnPhysicalAssetDirect(raw, ref, view.CollectionName, &cfg, assetRef.Reason, exec)
@@ -310,6 +319,9 @@ func (c *Collection) RunColumnPhysicalQueryParallel(req ColumnPhysicalQueryReque
 func (c *Collection) runColumnPhysicalQueryInSnapshotView(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest) (ColumnPhysicalQueryResult, error) {
 	if result, ok, err := c.runColumnPhysicalQueryDirectInSnapshotView(view, req, 0, 0, nil); ok {
 		if err != nil {
+			if errors.Is(err, errColumnPhysicalQueryNeedsVisibility) {
+				return c.runColumnPhysicalQueryWithVisibility(view.Config, req)
+			}
 			return result, err
 		}
 		result.Diagnostics.WorkerCount = 1
@@ -390,6 +402,22 @@ func (c *Collection) columnPhysicalQueryColumnStoreConfig() (ColumnStoreConfig, 
 		return ColumnStoreConfig{}, fmt.Errorf("%w: physical column query requires enabled column_store", ErrColumnQueryPlanUnsupported)
 	}
 	return cfg.copy(), nil
+}
+
+func (c *Collection) columnPhysicalQueryMutationPartsHint() (uint64, error) {
+	if c == nil {
+		return 0, errCollectionNil
+	}
+	c.catalogMu.RLock()
+	defer c.catalogMu.RUnlock()
+	if c.catalog == nil {
+		return 0, errCollectionNotFound
+	}
+	cfg := c.catalog.meta.Options.ColumnStore
+	if cfg == nil || !cfg.Enabled {
+		return 0, fmt.Errorf("%w: physical column query requires enabled column_store", ErrColumnQueryPlanUnsupported)
+	}
+	return cfg.PhysicalMutationParts, nil
 }
 
 func columnPhysicalQueryDiagnosticsFromScan(diag columnPhysicalScanDiagnostics) ColumnPhysicalQueryDiagnostics {

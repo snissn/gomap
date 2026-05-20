@@ -29,6 +29,7 @@ const (
 )
 
 const columnAssetSegmentWriteLockStripes = 64
+const columnPhysicalAssetReadScratchPoolMaxRetainBytes = 16 << 20
 
 // columnAssetSegmentWriteLocks is a bounded stripe set keyed by canonical
 // segment path. Writers to the same segment share a process-local offset lock
@@ -621,7 +622,7 @@ func newColumnPhysicalAssetReadCache(rootDir string, namespace string) (columnPh
 func (c *columnPhysicalAssetReadCache) close() error {
 	var closeErr error
 	if c.scratch != nil {
-		columnPhysicalAssetReadScratchPool.Put(c.scratch[:0])
+		putColumnPhysicalAssetReadScratch(c.scratch)
 		c.scratch = nil
 	}
 	if c.file != nil {
@@ -656,20 +657,32 @@ func (c *columnPhysicalAssetReadCache) read(ref ColumnAssetRef, dst []byte) ([]b
 	if ref.Length >= 0 && ref.Length <= int64(maxCollectionInt) && cap(dst) < int(ref.Length) {
 		if cap(c.scratch) < int(ref.Length) {
 			if c.scratch != nil {
-				columnPhysicalAssetReadScratchPool.Put(c.scratch[:0])
+				putColumnPhysicalAssetReadScratch(c.scratch)
 			}
-			if pooled, ok := columnPhysicalAssetReadScratchPool.Get().([]byte); ok && cap(pooled) >= int(ref.Length) {
-				c.scratch = pooled[:0]
-			} else {
-				if ok && pooled != nil {
-					columnPhysicalAssetReadScratchPool.Put(pooled[:0])
-				}
-				c.scratch = make([]byte, int(ref.Length))
-			}
+			c.scratch = getColumnPhysicalAssetReadScratch(int(ref.Length))
 		}
 		dst = c.scratch
 	}
 	return readColumnPhysicalAssetFromFile(file, ref, dst)
+}
+
+func getColumnPhysicalAssetReadScratch(minLen int) []byte {
+	if minLen <= columnPhysicalAssetReadScratchPoolMaxRetainBytes {
+		if pooled, ok := columnPhysicalAssetReadScratchPool.Get().([]byte); ok {
+			if cap(pooled) >= minLen {
+				return pooled[:0]
+			}
+			putColumnPhysicalAssetReadScratch(pooled)
+		}
+	}
+	return make([]byte, 0, minLen)
+}
+
+func putColumnPhysicalAssetReadScratch(scratch []byte) {
+	if scratch == nil || cap(scratch) > columnPhysicalAssetReadScratchPoolMaxRetainBytes {
+		return
+	}
+	columnPhysicalAssetReadScratchPool.Put(scratch[:0])
 }
 
 func (c *columnPhysicalAssetReadCache) fileForRef(ref ColumnAssetRef) (*os.File, error) {
